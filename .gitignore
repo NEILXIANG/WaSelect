@@ -1,0 +1,22 @@
+# ── 环境变量（绝不入库：AppSecret / 支付密钥 / R2 密钥）──
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ── 依赖与构建产物 ──
+node_modules/
+dist/
+build/
+*.log
+*.tsbuildinfo
+
+# ── 小程序构建产物 ──
+miniprogram/miniprogram_npm/
+
+# ── 测试与覆盖率 ──
+coverage/
+
+# ── 系统文件 ──
+.DS_Store
+Thumbs.db
