@@ -1,0 +1,110 @@
+/**
+ * 职责：运行日志（流 A）的唯一出口（F5）——结构化 JSON、统一字段、强制脱敏、自动带上下文。
+ * 边界：只管"怎么记"；"记什么"（审计流 B、用户行为流 C）在 F7/F10 落库，不在本文件。
+ *
+ * @why 三条硬要求决定了这个封装的形态：
+ *      ① 能通过日志定位问题 → 必须有 trace_id 把一次操作的日志串起来（靠 context.ts 的 ALS 自动注入）；
+ *      ② 能捕获代码运行信息 → 统一字段（module/event/duration_ms/result/err）+ JSON 便于检索；
+ *      ③ 不丢用户行为 → 事件名 `event` 是一等公民（强制非空），否则日志无法按行为聚合。
+ *
+ * @limitation 一：脱敏由 `redact()` 统一做，但它对"字符串里嵌着敏感内容"的形态（SQL、回调原文）无能为力——
+ *              规范禁止把回调原文写日志，本封装兜不住这种误用（见 redact.ts @limitation 三）。
+ * @limitation 二：`event` 非字符串或空串会**抛 TypeError**。这是刻意的硬失败：事件名写错等于这条日志白记，
+ *              宁可在测试期炸掉，也不要在生产里产生一堆无法聚合的 `undefined` 事件。
+ *              代价：生产若真有这种调用点，会变成 500（被 F6 的全局兜底捕获并记为 50000）。
+ * @limitation 三：pino 默认异步写（sonic-boom）。进程被 SIGKILL 时最后几条日志可能丢；
+ *              本项目的关单/退款是关键路径，F13 调度器会在关键事件上**额外**落 `order_events`（流 B，同步事务内）。
+ *
+ * @tradeoff 自己包一层 `WaLogger` 而不是直接用 pino.Logger：
+ *           换来"脱敏与 event 校验无处可绕"（直接拿 raw 写入是唯一逃生舱，且要写理由），
+ *           代价是失去 pino 原生 child 的一部分灵活性，用 `child()` 补回来。
+ *
+ * @see docs/代码注释规范与日志体系设计.md（流 A）、docs/地基搭建清单.md F5、server/src/redact.ts
+ */
+import pino, { type DestinationStream, type Logger as PinoLogger } from 'pino';
+import { redact } from './redact.js';
+import { currentContext, type LogContext } from './context.js';
+
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+
+/** 传给日志方法的字段（除 event 外全部可选，且会被脱敏）。 */
+export type LogFields = Record<string, unknown>;
+
+export interface Logger {
+  trace(event: string, fields?: LogFields): void;
+  debug(event: string, fields?: LogFields): void;
+  info(event: string, fields?: LogFields): void;
+  warn(event: string, fields?: LogFields): void;
+  error(event: string, fields?: LogFields): void;
+  fatal(event: string, fields?: LogFields): void;
+  /** 派生一个带固定字段的子日志器（如 `module: 'payment'`），字段会被子日志器自动带上。 */
+  child(base: LogFields): Logger;
+  /**
+   * 逃生舱：绕过封装直接写 pino。**禁止**用于业务日志（会跳过脱敏与 event 校验），
+   * 仅给第三方库集成 / 启动期极端场景使用，使用时必须写注释说明理由。
+   */
+  readonly raw: PinoLogger;
+}
+
+export interface CreateLoggerOptions {
+  env: 'development' | 'staging' | 'production';
+  /** 覆盖默认级别（默认：development=debug，其余=info）。 */
+  level?: LogLevel;
+  service?: string;
+  /** 固定字段（如 version、region）。 */
+  base?: LogFields;
+  /** 输出目标；默认 stdout。测试注入内存流用。 */
+  destination?: DestinationStream;
+}
+
+/** 环境 → 默认级别：生产不输出 debug（debug 里常有完整对象，既是噪音也是泄漏面）。 */
+export function levelForEnv(env: CreateLoggerOptions['env']): LogLevel {
+  return env === 'development' ? 'debug' : 'info';
+}
+
+function assertEvent(event: string): void {
+  if (typeof event !== 'string' || event.trim().length === 0) {
+    throw new TypeError('日志 event 必须是非空字符串——事件名是日志聚合的唯一维度，不能为空');
+  }
+}
+
+export function createLogger(opts: CreateLoggerOptions): Logger {
+  const level = opts.level ?? levelForEnv(opts.env);
+  const p = pino(
+    {
+      level,
+      // event 作为消息键：pino 会把它提升为 msg 并从对象里移除，日志既可读又可聚合
+      messageKey: 'event',
+      // ISO 时间（pino 默认是毫秒时间戳，人不可读，也不便于按时间筛选）
+      timestamp: () => `,"ts":"${new Date().toISOString()}"`,
+      // 级别用文字而非数字，便于在检索端直接写 level:error
+      formatters: { level: (label: string) => ({ level: label }) },
+      base: { service: opts.service ?? 'waselect-server', env: opts.env, ...(opts.base ?? {}) },
+      // 每条日志自动并入当前异步链的上下文（trace_id / req_id / user_id …）
+      mixin: () => currentContext() as LogContext,
+      // 每条日志自动并入当前异步链的上下文（trace_id / req_id / user_id …）
+    },
+    opts.destination,
+  );
+
+  const make = (pinoLogger: PinoLogger, base: LogFields): Logger => {
+    const emit = (levelName: LogLevel) => (event: string, fields?: LogFields) => {
+      assertEvent(event);
+      const payload: LogFields = { ...base, event, ...(redact(fields ?? {}) as LogFields) };
+      pinoLogger[levelName](payload);
+    };
+    return {
+      trace: emit('trace'),
+      debug: emit('debug'),
+      info: emit('info'),
+      warn: emit('warn'),
+      error: emit('error'),
+      fatal: emit('fatal'),
+      child: (extra: LogFields) =>
+        make(pinoLogger.child(redact(extra) as LogFields), { ...base, ...extra }),
+      raw: pinoLogger,
+    };
+  };
+
+  return make(p, {});
+}
