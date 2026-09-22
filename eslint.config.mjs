@@ -23,6 +23,18 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   prettier,
   {
+    // Node 运行时全局：flat config 默认不给 no-undef 声明控制台与 process，脚本文件会被误报
+    files: ['**/*.ts', '**/*.mjs'],
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        Buffer: 'readonly',
+        structuredClone: 'readonly',
+      },
+    },
+  },
+  {
     files: ['**/*.ts'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'error',

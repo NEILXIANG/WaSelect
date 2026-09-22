@@ -24,7 +24,8 @@
     "test:contract": "vitest run --project contract",
     "test:e2e": "vitest run --project e2e",
     "cov": "vitest run --project unit --coverage",
-    "gate": "npm run lint && npm run typecheck && npm run test:unit && npm run test:db && npm run test:contract && npm run test:e2e && npm run cov"
+    "check:contract": "node scripts/check-contract.mjs",
+    "gate": "npm run lint && npm run typecheck && npm run check:contract && npm run test:unit && npm run test:db && npm run test:contract && npm run test:e2e && npm run cov"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
