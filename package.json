@@ -2,6 +2,7 @@
   "name": "waselect",
   "private": true,
   "version": "0.0.0",
+  "type": "module",
   "description": "WaSelect 日本直邮跨境电商 monorepo（契约：WaSelectDoc 技术文档 v0.5 / api-contract 0.5.0）",
   "engines": {
     "node": ">=22 <23",
@@ -25,6 +26,8 @@
     "test:e2e": "vitest run --project e2e",
     "cov": "vitest run --project unit --coverage",
     "check:contract": "node scripts/check-contract.mjs",
+    "db:migrate": "node node_modules/node-pg-migrate/bin/node-pg-migrate.js -m migrations up",
+    "db:migrate:down": "node node_modules/node-pg-migrate/bin/node-pg-migrate.js -m migrations down",
     "gate": "npm run lint && npm run typecheck && npm run check:contract && npm run test:unit && npm run test:db && npm run test:contract && npm run test:e2e && npm run cov"
   },
   "devDependencies": {
