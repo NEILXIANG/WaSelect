@@ -41,7 +41,9 @@
   },
   "dependencies": {
     "@types/express": "^5.0.6",
+    "bcryptjs": "^3.0.3",
     "express": "^5.2.1",
+    "jose": "^6.2.12",
     "pino": "^10.3.1"
   }
 }
