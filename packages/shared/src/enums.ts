@@ -1,8 +1,8 @@
 /**
- * 职责：跨端枚举与常量（订单状态 / 支付通道 / 币种 / 国家 / 前端展示映射）。
+ * 职责：跨端共享枚举与展示映射（订单状态 / 支付通道 / 币种 / 国家）。
  * 边界：只放常量与纯映射，不含状态迁移规则（那是业务，属 F10 通用执行器之上的具体规则）。
  * @see 技术文档 v0.5 §1（状态机，10 态）、§2（通道）、ADR-09（JPY 唯一锚）
- * @limitation 状态"能迁到哪"不在这里——`ALLOWED_TRANSITIONS` 属于业务第一批，地基只保证枚举与展示映射齐全。
+ * @limitation 状态"能迁到哪"不在这里——迁移表属业务第一批；地基只保证枚举与展示映射齐全且不漂移。
  */
 
 /** 订单状态（10 态，与技术文档 §1 逐字一致）。 */
@@ -20,7 +20,10 @@ export const ORDER_STATUS = [
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUS)[number];
 
-/** 支付通道（注册表里的可用实现；`mock` 仅供审核期与测试）。 */
+/** 已终态：不可再迁移（关单与守卫判断的公共部分）。 */
+export const TERMINAL_ORDER_STATUS = ['completed', 'cancelled', 'expired', 'refunded'] as const;
+
+/** 支付通道（注册表里的 key；`mock` 仅供审核期与测试）。 */
 export const PAYMENT_CHANNEL = ['mock', 'wechat', 'stripe'] as const;
 export type PaymentChannel = (typeof PAYMENT_CHANNEL)[number];
 
@@ -28,7 +31,7 @@ export type PaymentChannel = (typeof PAYMENT_CHANNEL)[number];
 export const CURRENCY = ['JPY', 'CNY', 'USD'] as const;
 export type Currency = (typeof CURRENCY)[number];
 
-/** MVP 只发美国（ADR-28：`country_profiles` 将来扩展）。 */
+/** MVP 只涉及日本原产（JP）与美国收货（US）。 */
 export const COUNTRY = ['JP', 'US'] as const;
 export type Country = (typeof COUNTRY)[number];
 
@@ -48,3 +51,8 @@ export const ORDER_STATUS_DISPLAY: Readonly<Record<OrderStatus, string>> = {
   refunding: '退款中',
   refunded: '已退款',
 };
+
+/** 运行时校验：判断字符串是否属于某枚举（替代 `as` 强转，防止脏数据穿透）。 */
+export function isOneOf<T extends readonly string[]>(list: T, value: unknown): value is T[number] {
+  return typeof value === 'string' && (list as readonly string[]).includes(value);
+}
