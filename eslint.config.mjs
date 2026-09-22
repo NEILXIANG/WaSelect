@@ -1,0 +1,32 @@
+// F0 工程底座：统一静态检查。红线：any / 未使用变量必须报红（见 docs/地基搭建清单 F0 验证项）。
+// @see CLAUDE.md 约束二（小步）与约束六（注释）。
+// @tradeoff 未引入 eslint-plugin-jsdoc：本机实测「jsdoc + typescript-eslint」同进程 import 会被
+//   资源看门狗 SIGKILL（二分定位确认），而 jsdoc 规则只是 warn 级便利项，不是红线；
+//   注释纪律改由「单元完成标准（CLAUDE.md）+ review」兜底。后续资源放宽后可再加回。
+import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
+import prettier from 'eslint-config-prettier';
+
+export default tseslint.config(
+  {
+    ignores: [
+      'node_modules/**',
+      '**/node_modules/**',
+      'dist/**',
+      'coverage/**',
+      '**/*.config.js',
+      '**/*.config.mjs',
+      'miniprogram/miniprogram_npm/**',
+    ],
+  },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  prettier,
+  {
+    files: ['**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    },
+  },
+);

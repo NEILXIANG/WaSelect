@@ -1,0 +1,8 @@
+{
+  "name": "@waselect/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "前后端共享契约包：错误码注册表 / 枚举 / 由 api-contract.yaml 生成的 API 类型（F2 接入生成）"
+}

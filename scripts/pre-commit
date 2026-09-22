@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# F0 提交门禁（薄转发，单一事实来源 = 根 package.json 的 scripts）：
+# 只跑快速检查；完整门禁是 npm run gate（F1 起接入测试），由 CI 与交付前执行。
+# @see docs/地基搭建清单.md F0/F1
+set -e
+cd "$(dirname "$0")/.."
+npm run lint
+npm run typecheck

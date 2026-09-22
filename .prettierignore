@@ -1,0 +1,7 @@
+node_modules
+dist
+coverage
+package-lock.json
+**/*.min.js
+# 文档格式由治理规范（check-docs）与人工维护，prettier 不管 markdown
+**/*.md
