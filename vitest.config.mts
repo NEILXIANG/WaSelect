@@ -20,7 +20,10 @@ export default defineConfig({
         test: { name: 'unit', include: ['**/*.unit.test.ts'] },
       },
       {
-        test: { name: 'db', include: ['**/*.db.test.ts'] },
+        // db 层必须**串行**：所有 db 用例共用一个测试库，且用例之间靠 TRUNCATE 重置；
+        // 并行时两个文件会互删对方刚写入的数据（实测：提交后数据可见 / 幂等并发两条同时变红），
+        // 这类红灯是环境导致的假失败，最难排查。串行换来确定性，代价是 db 层慢一点（当前 3s 内）。
+        test: { name: 'db', include: ['**/*.db.test.ts'], fileParallelism: false },
       },
       {
         test: { name: 'contract', include: ['**/*.contract.test.ts'] },
