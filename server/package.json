@@ -6,6 +6,7 @@
   "description": "Node.ts 后端（domain/ports/adapters/app 分层，见 docs/可扩展架构设计）",
   "dependencies": {
     "@waselect/shared": "*",
+    "express": "^5.2.1",
     "zod": "^4.6.5"
   }
 }

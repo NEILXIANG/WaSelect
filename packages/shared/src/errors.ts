@@ -29,6 +29,11 @@ export const ERROR_CODES = {
   40101: { code: 40101, message: '未登录或登录已过期', action: '静默重新登录并重放请求' },
   40102: { code: 40102, message: '支付链接无效或已失效', action: '回小程序重新发起支付' },
   40301: { code: 40301, message: '无权限', action: '隐藏入口' },
+  40400: {
+    code: 40400,
+    message: '请求的资源不存在',
+    action: '接口路径写错或版本不匹配，前端不应重试',
+  },
   40401: { code: 40401, message: '商品不存在或已下架', action: '提示并刷新' },
   40901: { code: 40901, message: '库存不足', action: '提示并刷新' },
   40902: { code: 40902, message: '订单状态不允许此操作', action: '刷新订单' },

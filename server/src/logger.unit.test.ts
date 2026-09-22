@@ -4,22 +4,9 @@
  * @see docs/代码注释规范与日志体系设计.md（统一字段）；docs/地基搭建清单.md F5
  */
 import { describe, expect, it } from 'vitest';
-import type { DestinationStream } from 'pino';
 import { createLogger, levelForEnv, type Logger } from './logger.js';
 import { currentContext, runWithContext } from './context.js';
-
-/** 内存 sink：收集 pino 写出的每一行 JSON。 */
-class MemorySink implements DestinationStream {
-  readonly lines: string[] = [];
-  write(line: string): void {
-    this.lines.push(line.trim());
-  }
-  last(): Record<string, unknown> {
-    const line = this.lines[this.lines.length - 1];
-    if (line === undefined) throw new Error('还没有任何日志输出');
-    return JSON.parse(line) as Record<string, unknown>;
-  }
-}
+import { MemorySink, type LogRow } from '../../test/helpers/memory-sink.js';
 
 function setup(env: 'development' | 'production' = 'development'): {
   sink: MemorySink;
@@ -34,7 +21,7 @@ describe('输出形状', () => {
   it('每行是合法 JSON，含统一字段', () => {
     const { sink, log } = setup();
     log.info('order_created', { order_id: 'W20260922-000001', duration_ms: 12 });
-    const row = sink.last();
+    const row: LogRow = sink.last();
     expect(row.event).toBe('order_created');
     expect(row.order_id).toBe('W20260922-000001');
     expect(row.duration_ms).toBe(12);
@@ -59,7 +46,7 @@ describe('上下文自动注入（ALS）', () => {
     runWithContext({ trace_id: 'trace-1', order_id: 'W1', module: 'payment' }, () => {
       log.info('pay_started', { channel: 'stripe' });
     });
-    const row = sink.last();
+    const row: LogRow = sink.last();
     expect(row.trace_id).toBe('trace-1');
     expect(row.order_id).toBe('W1');
     expect(row.module).toBe('payment');
@@ -119,7 +106,7 @@ describe('级别与派生', () => {
     const { sink, log } = setup();
     const payment = log.child({ module: 'payment' });
     payment.warn('provider_slow', { duration_ms: 3000 });
-    const row = sink.last();
+    const row: LogRow = sink.last();
     expect(row.module).toBe('payment');
     expect(row.event).toBe('provider_slow');
     expect(row.service).toBe('waselect-server');

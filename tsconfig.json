@@ -17,6 +17,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["packages/**/*.ts", "server/**/*.ts"],
+  "include": ["packages/**/*.ts", "server/**/*.ts", "test/**/*.ts"],
   "exclude": ["node_modules", "dist", "coverage"]
 }
