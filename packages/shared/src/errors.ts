@@ -16,7 +16,9 @@ export interface ErrorSpec {
   action: string;
 }
 
-export const ERROR_CODES: Readonly<Record<number, ErrorSpec>> = {
+/* `as const satisfies` 而不是 `Readonly<Record<number, ErrorSpec>>`：
+ * 前者保留每个码的字面量类型，才能导出 ErrorCode 联合类型，让调用处拼写错误在编译期就报红（见下方 ErrorCode）。 */
+export const ERROR_CODES = {
   40001: { code: 40001, message: '参数缺失或格式错误', action: '前端校验' },
   40002: { code: 40002, message: '地址须为英文/拼音或电话格式错误', action: '表单提示' },
   40011: {
@@ -34,13 +36,25 @@ export const ERROR_CODES: Readonly<Record<number, ErrorSpec>> = {
   40904: { code: 40904, message: '订单已过期', action: '重新下单' },
   40905: { code: 40905, message: '价格已变动', action: '提示刷新确认页' },
   40906: { code: 40906, message: '订单金额超过上限，请拆单', action: '提示拆分订单' },
-  40907: { code: 40907, message: '该支付存在进行中的拒付，暂不可退款', action: '等争议结案后再操作' },
+  40907: {
+    code: 40907,
+    message: '该支付存在进行中的拒付，暂不可退款',
+    action: '等争议结案后再操作',
+  },
   42901: { code: 42901, message: '请求过于频繁', action: '稍后重试' },
+  50000: {
+    code: 50000,
+    message: '服务器内部错误',
+    action: '未归类异常的兜底码；响应体只给本文案，细节仅进日志',
+  },
   50001: { code: 50001, message: '支付创建失败', action: '重试或切换支付方式' },
   50002: { code: 50002, message: '回调验签失败', action: '记录日志，人工核对' },
   50003: { code: 50003, message: '汇率不可用', action: '阻止下单，管理员维护汇率' },
   50004: { code: 50004, message: '运费不可计算', action: '阻止下单，管理员补齐参数' },
-};
+} as const satisfies Record<number, ErrorSpec>;
+
+/** 已登记错误码的联合类型（字面量）：调用处传错码在**编译期**就报红，而不是运行时回落 500 才发现。 */
+export type ErrorCode = keyof typeof ERROR_CODES;
 
 /**
  * 由错误码推导 HTTP 状态码（码前三位数即状态）。
@@ -52,12 +66,12 @@ export function httpStatusOf(code: number): number {
   return status >= 400 && status <= 599 ? status : 500;
 }
 
-/** 判断一个数字是否是已登记的错误码。 */
-export function isErrorCode(value: number): boolean {
+/** 判断一个数字是否是已登记的错误码（类型守卫，命中后收窄为 ErrorCode 字面量联合）。 */
+export function isErrorCode(value: number): value is ErrorCode {
   return Object.prototype.hasOwnProperty.call(ERROR_CODES, value);
 }
 
-/** 取错误码定义；未登记时返回 undefined（调用方应映射 500 并记录告警）。 */
+/** 取错误码定义；未登记时返回 undefined（调用方应映射 50000 并记录告警）。 */
 export function errorSpec(code: number): ErrorSpec | undefined {
-  return ERROR_CODES[code];
+  return (ERROR_CODES as Record<number, ErrorSpec | undefined>)[code];
 }

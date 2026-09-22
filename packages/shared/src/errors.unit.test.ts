@@ -23,13 +23,19 @@ describe('httpStatusOf', () => {
 });
 
 describe('注册表完整性', () => {
-  it('技术文档 §7 的 19 个码全部登记', () => {
+  it('技术文档 §7 的 20 个码全部登记，且不多不少', () => {
     const expected = [
       40001, 40002, 40011, 40101, 40102, 40301, 40401, 40901, 40902, 40903, 40904, 40905, 40906,
-      40907, 42901, 50001, 50002, 50003, 50004,
+      40907, 42901, 50000, 50001, 50002, 50003, 50004,
     ];
     expect(expected.every((c) => isErrorCode(c))).toBe(true);
     expect(Object.keys(ERROR_CODES).length).toBe(expected.length);
+  });
+
+  it('50000 是未归类异常的兜底码，HTTP 500', () => {
+    const spec = errorSpec(50000);
+    expect(spec?.message).toBe('服务器内部错误');
+    expect(httpStatusOf(50000)).toBe(500);
   });
 
   it('每个码都有文案与处理动作，且 code 字段自洽', () => {

@@ -3,5 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Node.ts 后端（domain/ports/adapters/app 分层，见 docs/可扩展架构设计）"
+  "description": "Node.ts 后端（domain/ports/adapters/app 分层，见 docs/可扩展架构设计）",
+  "dependencies": {
+    "@waselect/shared": "*",
+    "zod": "^4.6.5"
+  }
 }

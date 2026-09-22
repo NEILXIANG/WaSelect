@@ -64,9 +64,7 @@ export function allocate(total: number, weights: readonly number[]): number[] {
   const raw = weights.map((w) => (total * w) / sum);
   const floors = raw.map((v) => Math.floor(v));
   let remainder = total - floors.reduce((acc, v) => acc + v, 0);
-  const order = raw
-    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
-    .sort((a, b) => b.frac - a.frac);
+  const order = raw.map((v, i) => ({ i, frac: v - Math.floor(v) })).sort((a, b) => b.frac - a.frac);
   const out = [...floors];
   for (const { i } of order) {
     if (remainder <= 0) break;

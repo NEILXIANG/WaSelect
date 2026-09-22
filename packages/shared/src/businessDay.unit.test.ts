@@ -4,7 +4,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { isSameJstDay, jstDate, jstDateCompact, startOfJstDayUtc, toJstParts } from './businessDay.js';
+import {
+  isSameJstDay,
+  jstDate,
+  jstDateCompact,
+  startOfJstDayUtc,
+  toJstParts,
+} from './businessDay.js';
 
 describe('JST 偏移', () => {
   it('UTC 15:00 = 次日 JST 00:00（跨日边界）', () => {

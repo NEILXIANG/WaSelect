@@ -24,7 +24,7 @@ export function createIdFactory(seed: number): () => string {
   // ⚠️ 曾用手写 xorshift128+，被单测「1 万次不重复」抓出周期塌缩（只产出 64 个不同值）：
   //    32 位半字实现把状态压成了短周期。改 mulberry32（周期 2^32，单状态字、无塌缩风险）。
   // @see 这个 bug 本身就是 F1「先红后绿」的证据——断言先写，实现的问题当天暴露。
-  let a = (seed >>> 0) || 0x9e3779b9;
+  let a = seed >>> 0 || 0x9e3779b9;
 
   const next32 = (): number => {
     a = (a + 0x6d2b79f5) >>> 0;

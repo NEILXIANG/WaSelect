@@ -3,13 +3,7 @@
  * @see 技术文档 v0.5 §1；docs/地基搭建清单.md F2
  */
 import { describe, expect, it } from 'vitest';
-import {
-  COUNTRY,
-  CURRENCY,
-  ORDER_STATUS,
-  ORDER_STATUS_DISPLAY,
-  PAYMENT_CHANNEL,
-} from './enums.js';
+import { COUNTRY, CURRENCY, ORDER_STATUS, ORDER_STATUS_DISPLAY, PAYMENT_CHANNEL } from './enums.js';
 
 describe('订单状态', () => {
   it('恰好 10 个状态，与技术文档 §1 一致', () => {

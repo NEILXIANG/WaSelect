@@ -62,12 +62,20 @@ describe('convert（唯一取整入口）', () => {
 });
 
 describe('allocate（最大余额法拆分）', () => {
+  /**
+   * 属性：各项之和恒等于总额，绝不差 1 分钱。
+   *
+   * @limitation 权重全为 0 是**契约外输入**（allocate 会抛 RangeError，见下一条用例），
+   *             必须用 `fc.pre` 排除——否则属性测试会把"拒绝非法输入"误报成属性失败，
+   *             而且是**偶发**的（实测跑 148 次才撞上一次全零权重），这类红灯最难复现。
+   */
   it('属性：各项之和恒等于总额，绝不差 1 分钱', () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 1, max: 100_000_000 }),
         fc.array(fc.integer({ min: 0, max: 1_000_000 }), { minLength: 1, maxLength: 12 }),
         (total, weights) => {
+          fc.pre(weights.some((w) => w > 0)); // 权重和为 0 属非法输入，不在本属性范围内
           const parts = allocate(total, weights);
           expect(parts.reduce((a, b) => a + b, 0)).toBe(total);
           expect(parts).toHaveLength(weights.length);
@@ -76,6 +84,11 @@ describe('allocate（最大余额法拆分）', () => {
       ),
       { numRuns: 300 },
     );
+  });
+
+  it('含零权重的合法拆分：零权重项分到 0，其余照比例', () => {
+    expect(allocate(17, [0, 1])).toEqual([0, 17]);
+    expect(allocate(10, [1, 0, 1])).toEqual([5, 0, 5]);
   });
 
   it('权重之和为 0 时拒绝（避免除零产生 NaN 静默扩散）', () => {
