@@ -230,6 +230,71 @@ describe('行走骨架：一条链路走到底', () => {
 });
 
 /**
+ * 资源归属（D7）：`order_id` 是标识符，不是能力凭证。
+ *
+ * @why 骨架的 GET 与 simulate-paid 此前只鉴权"你是登录用户"，不校验"这张单是不是你的"。
+ *      后果有两层：① 别人的单号能读到地址/金额快照；② 骨架期更严重——
+ *      simulate-paid 能把**别人**的单直接改成已支付。
+ *      UUID 不可猜 ≠ 不可泄漏：单号会出现在日志、邮件、客服对话、浏览器历史里。
+ * @why 归属不符一律 **404 而不是 403**：403 会确认"这个 id 存在"，
+ *      于是攻击者可以用 403/404 的差异枚举出全站有效订单号（存在性探测）。
+ *      代价是真正的用户看到"订单不存在"而不是"没权限"，排障时略难——
+ *      用**日志**区分（details 带 `owner_mismatch`），不靠响应体区分。
+ */
+describe('资源归属：order_id 不是能力凭证（D7）', () => {
+  const OTHER = 'u-e2e-other';
+
+  beforeEach(async () => {
+    // orders.user_id 有外键，第二个用户也要先存在
+    await db`insert into users (id, openid) values (${OTHER}, 'o-e2e-other') on conflict (id) do nothing`;
+  });
+
+  it('别人读我的单 → 40400（不是 403）', async () => {
+    const mine = await userToken();
+    const other = await userToken(OTHER);
+    const created = (await (await createOrder(mine, 'key-own-get')).json()) as { order_id: string };
+
+    const res = await fetch(`${base}/api/v1/skeleton/orders/${created.order_id}`, {
+      headers: { authorization: `Bearer ${other}`, 'x-trace-id': TRACE },
+    });
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toMatchObject({ code: 40400 });
+  });
+
+  it('别人把我的单改成已支付 → 40400，订单状态与事件都不动', async () => {
+    const mine = await userToken();
+    const other = await userToken(OTHER);
+    const created = (await (await createOrder(mine, 'key-own-pay')).json()) as { order_id: string };
+
+    const res = await fetch(`${base}/api/v1/skeleton/orders/${created.order_id}/simulate-paid`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${other}`, 'x-trace-id': TRACE },
+    });
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toMatchObject({ code: 40400 });
+
+    const rows = await db`select status from orders where id = ${created.order_id}`;
+    expect(rows[0]?.status).toBe('created');
+    expect(await db`select id from order_events where status = 'paid'`).toHaveLength(0);
+  });
+
+  it('归属不符只在日志里可辨（响应体不能泄漏这个区别）', async () => {
+    const mine = await userToken();
+    const other = await userToken(OTHER);
+    const created = (await (await createOrder(mine, 'key-own-log')).json()) as { order_id: string };
+
+    await fetch(`${base}/api/v1/skeleton/orders/${created.order_id}`, {
+      headers: { authorization: `Bearer ${other}`, 'x-trace-id': TRACE },
+    });
+
+    const rejected = sink.find('request_rejected').at(-1);
+    expect(rejected?.err_code).toBe(40400);
+    // details 只进日志，不进响应体——这是"用日志区分 404 的两种成因"的兑现
+    expect(JSON.stringify(rejected?.details ?? {})).toContain('owner_mismatch');
+  });
+});
+
+/**
  * 「故意断掉任一一环，测试必须失败」——这里断的是**最容易漏配的那一环**：
  * 回调路由没登记到 `rawBodyPaths`，body 会被 JSON 解析掉，验签必然失败。
  * @why 配错时的症状是"验签永远失败"，而排查时会去怀疑密钥、怀疑机构，

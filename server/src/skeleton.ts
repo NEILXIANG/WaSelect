@@ -88,6 +88,40 @@ async function markPaid(db: Db, orderId: string): Promise<void> {
 }
 
 /**
+ * 读一张**确定属于该用户**的订单。
+ *
+ * @why `order_id` 是标识符，不是能力凭证。只鉴权"你是登录用户"不校验"这张单是不是你的"，
+ *      后果是任何人拿到别人的单号就能读地址/金额快照；骨架期更严重——
+ *      `simulate-paid` 能把**别人**的单直接改成已支付。
+ *      UUID 不可猜 ≠ 不可泄漏：单号会出现在日志、邮件、客服对话、浏览器历史里。
+ *
+ * @tradeoff 归属不符一律抛 **40400 而不是 40300**：403 会确认"这个 id 存在"，
+ *           于是攻击者可用 403/404 的差异枚举出全站有效订单号（存在性探测）。
+ *           代价：真正的用户看到"订单不存在"而不是"没权限"，自排障时略难——
+ *           用**日志**区分（details 里记 `owner_mismatch`），不靠响应体区分。
+ * @limitation 一次 SELECT 后再比对 user_id，而不是把 user_id 直接写进 WHERE 后再判"不存在"。
+ *            后者少一次分支但**无法区分两种成因**，日志里就只剩一个 40400，
+ *            排障时无法回答"这张单不存在"还是"这张单不是他的"。
+ *
+ * @throws {AppError} 40400（不存在，或存在但不属于该用户）
+ */
+async function readOwnedOrder(
+  db: Db,
+  orderId: string,
+  userId: string,
+): Promise<{ id: string; order_no: string; status: string }> {
+  const rows = await db`
+    select id, order_no, status, user_id from orders where id = ${orderId}
+  `;
+  const row = rows[0];
+  if (row === undefined) throw new AppError(40400, { order_id: orderId });
+  if (String(row.user_id) !== userId) {
+    throw new AppError(40400, { order_id: orderId, reason: 'owner_mismatch' });
+  }
+  return { id: String(row.id), order_no: String(row.order_no), status: String(row.status) };
+}
+
+/**
  * 收敛路径参数。
  * @why Express 5 的类型里 `req.params.x` 是 `string | string[]`（通配/重复参数会产生数组），
  *      `noUncheckedIndexedAccess` 下还可能是 `undefined`。直接拼进 SQL 会有两种静默后果：
@@ -191,7 +225,11 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
   app.post(`${PREFIX}/orders/:id/simulate-paid`, requireRole('user', deps.auth), (req, res, next) => {
     void (async () => {
       try {
+        const sub = req.auth?.sub;
+        if (sub === undefined) throw new AppError(40101);
         const orderId = paramId(req.params.id);
+        // 先确认"这张单是他的"再改状态：否则这个骨架端点等于"任何人都能把别人的单改成已支付"
+        await readOwnedOrder(deps.db, orderId, sub);
         await markPaid(deps.db, orderId);
         deps.logger.info('skeleton_simulate_paid', { order_id: orderId, result: 'paid' });
         res.json({ order_id: orderId, status: 'paid' });
@@ -205,17 +243,15 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
   app.get(`${PREFIX}/orders/:id`, requireRole('user', deps.auth), (req, res, next) => {
     void (async () => {
       try {
+        const sub = req.auth?.sub;
+        if (sub === undefined) throw new AppError(40101);
         const orderId = paramId(req.params.id);
-        const rows = await deps.db`
-          select id, order_no, status from orders where id = ${orderId}
-        `;
-        const row = rows[0];
-        if (row === undefined) throw new AppError(40400, { order_id: orderId });
+        const row = await readOwnedOrder(deps.db, orderId, sub);
         // 顺带把当前 trace_id 回给调用方：便于端到端断言"日志与响应是同一条链"
         res.json({
-          order_id: String(row.id),
-          order_no: String(row.order_no),
-          status: String(row.status),
+          order_id: row.id,
+          order_no: row.order_no,
+          status: row.status,
           trace_id: currentContext().trace_id,
         });
       } catch (e) {
