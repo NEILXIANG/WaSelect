@@ -22,12 +22,21 @@
  */
 
 /** 商品素材。weight_g 含包装前的实重（包材另计，见订单工厂）。 */
+/**
+ * 商品类目。**逐字取自 api-contract.yaml 的枚举** `[beauty, daily, kitchen, food]`。
+ * @why 曾经用过 `lifestyle`——它不在契约枚举里，于是假数据造出来的商品
+ *      根本不可能通过上架校验。用"不可能存在的商品"测出来的绿灯是假的。
+ * @see contracts/api-contract.yaml（ProductInput.category）
+ */
+export type ContractCategory = 'beauty' | 'daily' | 'kitchen' | 'food';
+
 export interface ProductSeed {
   /** 日文原名（真实商品名，用于校验日文渲染与搜索） */
   titleJa: string;
   /** 面向买家的标题（中文，MVP 面向中文用户） */
   title: string;
-  category: 'beauty' | 'kitchen' | 'lifestyle' | 'food';
+  /** 类目必须取自契约枚举；此处用字面量联合类型，写错在编译期报错。 */
+  category: ContractCategory;
   /** 实重（克），不含包材 */
   weightG: number;
   /** 日本零售价（円），占位估计值——见 @limitation 一 */
@@ -56,16 +65,19 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     customsDescEn: 'Facial treatment essence, 230mL',
     purchaseSource: '松本清 免税店',
   },
+  // ⚠️ 原为某品牌「乳液」——该类商品在日本**可能是医薬部外品**，而 `quasi_drug`
+  // 同样属于上架即拒的标签。我无法核实具体 SKU 的法定区分，因此换成口径明确的一般化妆品，
+  // 不在无法核实的事情上赌一把（真实 SKU 上架前仍须逐个核对 compliance_tags，见下方 @warning）
   {
-    titleJa: '資生堂 エリクシール ルフレ バランシング おしろいミルク',
-    title: '资生堂 ELIXIR 平衡乳液',
+    titleJa: '無印良品 化粧水・敏感肌用 200mL',
+    title: '无印良品 化妆水·敏感肌用 200mL',
     category: 'beauty',
-    weightG: 180,
-    priceJpy: 3300,
+    weightG: 240,
+    priceJpy: 1290,
     janCode: '4901872088412',
     hsCode: '3304.99',
-    customsDescEn: 'Skin care emulsion, 100g',
-    purchaseSource: '松本清',
+    customsDescEn: 'Skin lotion for sensitive skin, 200mL',
+    purchaseSource: '無印良品',
   },
   {
     titleJa: '膳 三徳包丁 165mm（VG10 鋼）',
@@ -81,7 +93,7 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
   {
     titleJa: 'サーモス 真空断熱ケータイマグ 500mL',
     title: '膳魔师 保温杯 500mL',
-    category: 'lifestyle',
+    category: 'daily',
     weightG: 300,
     priceJpy: 4500,
     janCode: '4971878012345',
@@ -100,16 +112,19 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     customsDescEn: 'Cast iron teapot, 0.6L',
     purchaseSource: '岩手 直送',
   },
+  // ⚠️ 这里原本放的是獺祭清酒——**违反契约**：`compliance_tags` 含 `alcohol` 者
+  // 「需酒类免许且不可邮寄」，在 D-51 口径下上架即拒。用一条永远上不了架的 SKU 做假数据，
+  // 等于拿"不可能发生的订单"去测业务规则。换成同为食品、但合规的抹茶粉。
   {
-    titleJa: '獺祭 純米大吟醸 45 四割五分 720mL',
-    title: '獭祭 纯米大吟酿 四割五分 720mL',
+    titleJa: '京都 宇治抹茶 粉末 100g',
+    title: '京都宇治抹茶粉 100g',
     category: 'food',
-    weightG: 1200,
-    priceJpy: 3850,
+    weightG: 130,
+    priceJpy: 2380,
     janCode: '4973157001234',
-    hsCode: '2206.00',
-    customsDescEn: 'Rice wine (sake), 720mL, 15% ABV',
-    purchaseSource: '山口 酒造',
+    hsCode: '0902.10',
+    customsDescEn: 'Green tea powder (matcha), 100g',
+    purchaseSource: '京都 茶舗',
   },
   {
     titleJa: '東京ばな奈「見ぃつけたっ」8個入',
@@ -148,7 +163,7 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
   {
     titleJa: '無印良品 ゲルインクボールペン 0.5mm 5本組',
     title: '无印良品 中性笔 0.5mm 5 支装',
-    category: 'lifestyle',
+    category: 'daily',
     weightG: 60,
     priceJpy: 550,
     janCode: '4547315001234',
@@ -159,32 +174,51 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
 ];
 
 /**
- * 运费阶梯（**占位**，见 @limitation 二）。
- * @why `max_weight_g` 是"上限（含）"，取档方向必须是**第一个 ≥ 包裹重**的档（向上取档）。
- *      这里给出红线向量：包裹重 1850g → 应取 2000g 档 → 4,950 円。
- *      历史上这里长期用错方向（VLOOKUP 向下取档），导致每单少收 900–1,000 円且静默无报错。
+ * 运费阶梯。
+ *
+ * @why **这张表是唯一数据源，逐条来自《技术文档》§2.5**（非估算）。
+ *      曾经这里放着一套自造的中间档（500→1980、1000→2750……），与技术文档的回归红线 **5/7 不符**，
+ *      而且错误值被自己的单测写成了断言——相当于把"编出来的数字"固化成"必须满足的规则"，
+ *      真报价到位时这条测试会从护栏变成拦路石。现在改成直接照抄文档口径，并给每条标注来源。
+ *
+ * @limitation 一：**价格仍是占位**（锚点 `転送コム 2kg ≈ 4,950 円`，来自 30-商业模式/商业测算模型.xlsx）。
+ *              `source='fabricated'` 的两档是为了让假数据能有重货，**仅存在于均匀区之上**
+ *              （有测试保证它们影响不到任何一条红线向量）。真实报价到手后整体替换，并同步三处：
+ *              本文件、技术文档 §2.5 的 7 条向量、任务看板 R22。
+ * @limitation 二：`maxWeightG=3000` 那一档的**价格 6600 来自文档**（`w=2001→6600` 的期望值），
+ *              但它的**上限重量文档没给**，是为补齐形状取的 3000——略偏保守（≥2001 且 <3000 的包裹按 6600 收）。
+ * @see jp/50-产品与技术/技术架构/技术文档.md §2.5（D-46 / R22 红线向量）
  */
 export interface ShippingTier {
   maxWeightG: number;
   priceJpy: number;
+  /** `doc` = 技术文档来源；`fabricated` = 为保证假数据有重货而估算，禁止进入红线区（有测试约束）。 */
+  source: 'doc' | 'fabricated';
 }
 
+/** 锚点：技術文档 §2.5 与商业测算模型共用的 2kg = 4,950 円。 */
 export const SHIPPING_TIER_ANCHOR = { maxWeightG: 2000, priceJpy: 4950 } as const;
 
+/** 技术文档口径的最大包裹重量：此范围内的档必须全部有文档来源（见 @limitation 一）。 */
+export const REDLINE_MAX_WEIGHT_G = 3000;
+
 export const SHIPPING_TIERS: readonly ShippingTier[] = [
-  { maxWeightG: 500, priceJpy: 1980 },
-  { maxWeightG: 1000, priceJpy: 2750 },
-  { maxWeightG: 1500, priceJpy: 4050 },
-  SHIPPING_TIER_ANCHOR,
-  { maxWeightG: 2500, priceJpy: 5800 },
-  { maxWeightG: 3000, priceJpy: 6600 },
-  { maxWeightG: 4000, priceJpy: 8100 },
-  { maxWeightG: 5000, priceJpy: 9600 },
-  { maxWeightG: 6000, priceJpy: 11000 },
-  { maxWeightG: 10000, priceJpy: 15000 },
+  { maxWeightG: 100, priceJpy: 1400, source: 'doc' },
+  { maxWeightG: 250, priceJpy: 1650, source: 'doc' },
+  { maxWeightG: 500, priceJpy: 2150, source: 'doc' },
+  { maxWeightG: 1000, priceJpy: 3150, source: 'doc' },
+  { maxWeightG: 1500, priceJpy: 4050, source: 'doc' },
+  { maxWeightG: 2000, priceJpy: 4950, source: 'doc' },
+  { maxWeightG: 3000, priceJpy: 6600, source: 'doc' },
+  // ── 以下为估算：仅为让 fixtur 里有 ≥3kg 的重货，真实报价到位后立即替换 ──
+  { maxWeightG: 5000, priceJpy: 9200, source: 'fabricated' },
+  { maxWeightG: 10000, priceJpy: 14000, source: 'fabricated' },
 ];
 
-/** 运费取档：第一个 `max_weight_g >= 重量` 的档（向上取档）。超重返回 null。 */
+/**
+ * 运费取档：第一个 `max_weight_g >= 重量` 的档（向上取档）。超重返回 null。
+ * @see 同 ADR 级约束见《代码注释规范与日志体系设计》与技术文档 §2.5 的唯一正确 SQL 写法
+ */
 export function pickTier(weightG: number): ShippingTier | null {
   return SHIPPING_TIERS.find((t) => t.maxWeightG >= weightG) ?? null;
 }
