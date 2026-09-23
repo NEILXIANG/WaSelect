@@ -53,8 +53,19 @@ export default defineConfig({
          *      否则会被 unit 的 include 模式（通配的 `.unit.test.ts`）一并收走，白白多付一次 15s。
          *      ⚠️ 注释里不要原样抄那个通配模式——它含「星号+斜杠」这两个连续字符，
          *         会把这段块注释提前结束（我就这么把配置文件写坏过两次）。
+         *
+         * ⚠️ `fileParallelism: false` 是实测出来的，不是保守：
+         *      本层每个文件都要各自建一个 TS Program（ESLint 类型感知）或全量扫描源码，
+         *      并行时两个进程抢 CPU，单文件耗时从 1.8s 涨到 **超过默认 5s 超时**——
+         *      表现为"单跑这个文件绿、跑全层随机超时"。这类红灯是环境导致的假失败，最难排查，
+         *      所以串行；`testTimeout` 再放宽到 30s，覆盖慢机器上的抖动。
          */
-        test: { name: 'lint', include: ['**/*.lint.test.ts'] },
+        test: {
+          name: 'lint',
+          include: ['**/*.lint.test.ts'],
+          fileParallelism: false,
+          testTimeout: 30_000,
+        },
       },
     ],
     coverage: {

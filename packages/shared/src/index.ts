@@ -5,6 +5,8 @@
  * @see api-contract.yaml 0.5.0；docs/地基搭建清单.md F2、技术文档 v0.5 §7（错误码）
  * @limitation API 类型自动生成（openapi-typescript）尚未接入：
  *             在此之前三端共用本包的常量部分，接口结构仍以 yaml 为准，由 scripts/check-contract.mjs 防漂移。
+ * @why 给三端一个稳定的导入入口：各端若直接引用内部文件路径，内部重构时会被静默打破。
+ *      barrel 的代价是 tree-shaking 变差，MVP 规模下可以忽略。
  */
 export * from './errors.js';
 export * from './enums.js';

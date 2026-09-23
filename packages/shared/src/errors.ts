@@ -6,6 +6,8 @@
  *             漏改 api-contract 会被 `scripts/check-contract.mjs` 拦下（gate 报红）。
  * @tradeoff 用"码前三位数 = HTTP 状态"的约定换取零映射表（40001→400、40905→409、50003→500）：
  *           代价是错误码空间被 HTTP 状态绑住，自定义码必须以真实 HTTP 语义开头。
+ * @why 错误码如果散落在各端，前端拿到的码与后端抛的码会对不上，且没有一处能回答"现在一共有多少个码"。
+ *      集中成注册表之后，"漏改契约"这件事才有地方可以被脚本拦住（check-contract.mjs）。
  */
 export interface ErrorSpec {
   /** 业务错误码（前三位数即 HTTP 状态） */

@@ -5,6 +5,8 @@
  * @limitation 固定 +09:00 偏移，**不使用 IANA tz 数据库**：日本自 1951 年后无夏令时，故 MVP 安全；
  *             若将来要处理历史日期或日本改行夏令时，必须换成 `Intl.DateTimeFormat` 并补属性测试。
  * @tradeoff 不引入 date-fns/tz：省一个依赖 + 行为完全可预测；代价是不支持任意时区（MVP 只需要 JST 与 UTC）。
+ * @why 结算周期、调度窗口、单号里的日期都必须按 **JST**，而运行环境的本地时区是不确定的
+ *      （Render 上是 UTC，本机是 Asia/Shanghai）。各处自己 `new Date()` 会得到不同的日历日。
  */
 
 export const JST_OFFSET_MIN = 9 * 60;
