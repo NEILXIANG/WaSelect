@@ -34,16 +34,18 @@ const event = (eventId: string) => ({
 
 describe('claimWebhookEvent', () => {
   it('首次投递 = new，处理完成后重复投递 = handled（去重靠唯一约束，不是先查后插）', async () => {
-    await expect(claimWebhookEvent(db, event('evt-1'))).resolves.toBe('new');
+    await expect(claimWebhookEvent(db, event('evt-1'))).resolves.toMatchObject({ state: 'new' });
     await finishWebhookEvent(db, { ...event('evt-1'), result: 'paid' });
-    await expect(claimWebhookEvent(db, event('evt-1'))).resolves.toBe('handled');
+    await expect(claimWebhookEvent(db, event('evt-1'))).resolves.toMatchObject({
+      state: 'handled',
+    });
   });
 
   it('不同 provider 的同名事件互不干扰', async () => {
-    await expect(claimWebhookEvent(db, event('evt-1'))).resolves.toBe('new');
-    await expect(claimWebhookEvent(db, { ...event('evt-1'), provider: 'stripe' })).resolves.toBe(
-      'new',
-    );
+    await expect(claimWebhookEvent(db, event('evt-1'))).resolves.toMatchObject({ state: 'new' });
+    await expect(
+      claimWebhookEvent(db, { ...event('evt-1'), provider: 'stripe' }),
+    ).resolves.toMatchObject({ state: 'new' });
   });
 
   it('并发投递只有一个拿到 new（竞态下也不能重复处理）', async () => {
@@ -52,7 +54,19 @@ describe('claimWebhookEvent', () => {
       claimWebhookEvent(db, event('evt-race')),
       claimWebhookEvent(db, event('evt-race')),
     ]);
-    expect(results.filter((r) => r === 'new')).toHaveLength(1);
+    expect(results.filter((r) => r.state === 'new')).toHaveLength(1);
+  });
+
+  /**
+   * firstReceivedAt 是宽限期的锚点（AJ-32）：无论重发多少次，都必须一直是**首次**到达时间。
+   * @why 宽限期判断"距首次到达是否超时"依赖这个值；若它在重发时被刷新，
+   *      机构每次重发都会把宽限期重新归零 → 脏回调永远走 503、永远落不了 unmatched。
+   */
+  it('firstReceivedAt 始终是首次到达时间（重发不刷新宽限期锚点）', async () => {
+    const first = await claimWebhookEvent(db, event('evt-anchor'));
+    await new Promise((r) => setTimeout(r, 50));
+    const second = await claimWebhookEvent(db, event('evt-anchor'));
+    expect(second.firstReceivedAt.getTime()).toBe(first.firstReceivedAt.getTime());
   });
 
   /**
@@ -60,22 +74,32 @@ describe('claimWebhookEvent', () => {
    * @why 见 webhooks.ts 的 @why：回调比订单先到时，机构重发的是**同一个** event_id。
    *      若按"见过就算重复"直接返回，这张单永远不会被标记成已支付——
    *      那是"钱到了但订单没变 paid"，最贵的一类事故。去重要给它让路。
+   *      AJ-32 之后 retry 的唯一来源是 `processed_at IS NULL`
+   *      （处理中途崩溃 / 宽限期内 503 主动不封口）。
    */
-  it('上次是 order_not_found → 重发时可以再处理一次', async () => {
-    await expect(claimWebhookEvent(db, event('evt-late'))).resolves.toBe('new');
-    await finishWebhookEvent(db, { ...event('evt-late'), result: 'ignored:order_not_found' });
-    await expect(claimWebhookEvent(db, event('evt-late'))).resolves.toBe('retry');
+  it('上次处理到一半崩了（processed_at 为空）→ 重发时可以再处理', async () => {
+    await expect(claimWebhookEvent(db, event('evt-crash'))).resolves.toMatchObject({
+      state: 'new',
+    });
+    await expect(claimWebhookEvent(db, event('evt-crash'))).resolves.toMatchObject({
+      state: 'retry',
+    });
   });
 
-  it('上次处理到一半崩了（processed_at 为空）→ 也可以再处理', async () => {
-    await expect(claimWebhookEvent(db, event('evt-crash'))).resolves.toBe('new');
-    await expect(claimWebhookEvent(db, event('evt-crash'))).resolves.toBe('retry');
+  it('超过宽限期落了 unmatched → 终态 handled，不再重试（转对账而非重发）', async () => {
+    await claimWebhookEvent(db, event('evt-late'));
+    await finishWebhookEvent(db, { ...event('evt-late'), result: 'unmatched:order_not_found' });
+    await expect(claimWebhookEvent(db, event('evt-late'))).resolves.toMatchObject({
+      state: 'handled',
+    });
   });
 
   it('状态冲突（status_conflict）不重试——重发一万次也不会变', async () => {
     await claimWebhookEvent(db, event('evt-conflict'));
     await finishWebhookEvent(db, { ...event('evt-conflict'), result: 'ignored:status_conflict' });
-    await expect(claimWebhookEvent(db, event('evt-conflict'))).resolves.toBe('handled');
+    await expect(claimWebhookEvent(db, event('evt-conflict'))).resolves.toMatchObject({
+      state: 'handled',
+    });
   });
 });
 
@@ -88,15 +112,15 @@ describe('finishWebhookEvent', () => {
     expect(rows[0]?.processed_at).not.toBeNull();
   });
 
-  it('业务冲突同样留痕（result 带 ignored: 前缀，供对账区分"处理过"与"没处理"）', async () => {
+  it('业务冲突同样留痕（result 供对账区分"处理过"与"没处理"）', async () => {
     await claimWebhookEvent(db, event('evt-3'));
     await finishWebhookEvent(db, {
       ...event('evt-3'),
-      result: 'ignored:order_not_found',
+      result: 'unmatched:order_not_found',
       note: '订单不存在',
     });
     const rows = await db`select result, note from webhook_events where event_id = 'evt-3'`;
-    expect(rows[0]?.result).toBe('ignored:order_not_found');
+    expect(rows[0]?.result).toBe('unmatched:order_not_found');
     expect(rows[0]?.note).toBe('订单不存在');
   });
 

@@ -33,7 +33,7 @@ export interface SkeletonServer {
 
 export async function startSkeleton(
   db: Db,
-  opts: { withRawBody?: boolean } = {},
+  opts: { withRawBody?: boolean; graceMs?: number } = {},
 ): Promise<SkeletonServer> {
   const sink = new MemorySink();
   const logger = createLogger({ env: 'development', destination: sink });
@@ -49,6 +49,8 @@ export async function startSkeleton(
         auth: E2E_AUTH,
         callbackSecret: E2E_CALLBACK_SECRET,
         env: 'development',
+        // 默认与生产一致（AJ-32 的 15 分钟）；需要"立即超过宽限期"的用例传 0
+        callbackOrderGraceMs: opts.graceMs ?? 900_000,
       }),
   });
   const server = await listen(app);

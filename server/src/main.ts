@@ -121,6 +121,8 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           //    MOCK_CALLBACK_SECRET——所以这里的回落值只在开发/测试到达。
           callbackSecret:
             config.MOCK_CALLBACK_SECRET ?? 'dev-mock-callback-secret-do-not-use-in-prod',
+          // AJ-32：回调早到宽限期（配置驱动，校准不发版）
+          callbackOrderGraceMs: config.CALLBACK_ORDER_GRACE_MS,
           env: config.NODE_ENV,
           // D25：带上身份状态查询，改密 / 封禁后才能真的把旧 token 挡在门外
           identity: withIdentityCache(createIdentityCheck(db)),

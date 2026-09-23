@@ -177,6 +177,14 @@ const schema = z.object({
 
   // ── 订单生命周期 ────────────────────────────────────────────────────────
   ORDER_PAYMENT_TTL_MIN: int(30, 1),
+  /**
+   * 回调早到宽限期（毫秒，AJ-32）：回调到达时订单不存在，
+   * 距事件首次到达 ≤ 此值 → 503 让机构重发；超过 → 2xx + error 告警 + 落 unmatched 转对账。
+   * @why 15 分钟是**拍的**（无机构实测数据）：远大于建单链路 P99 延迟（秒级），
+   *      远小于机构放弃重发的窗口（小时级～3 天）。上线后拿到真实回调延迟分布再校准——
+   *      它是配置项，调整不发版。
+   */
+  CALLBACK_ORDER_GRACE_MS: int(900_000, 0),
   /** 常驻调度器 tick 间隔（D-43：web 进程内 setInterval + pg_try_advisory_lock；不是 Render Cron Job）。 */
   SCHEDULER_TICK_MS: int(60000, 1000),
   AUTO_DELIVER_DAYS: int(30, 1),

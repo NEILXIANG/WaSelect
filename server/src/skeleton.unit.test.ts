@@ -32,6 +32,7 @@ function deps(env: SkeletonDeps['env']): { d: SkeletonDeps; sink: MemorySink } {
       }),
       auth: AUTH,
       callbackSecret: 'gate-secret',
+      callbackOrderGraceMs: 900_000,
       env,
     },
   };

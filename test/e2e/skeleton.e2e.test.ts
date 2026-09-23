@@ -206,31 +206,75 @@ describe('行走骨架：一条链路走到底', () => {
       await db`select status from order_events where order_id = ${created.order_id} order by id`;
     expect(events.map((r) => r.status)).toEqual(['created', 'paid']);
 
-    // 之后再走真实回调（状态已不是 created）→ 业务冲突，按 D5 范式收下并告警，不再回 409
+    // 之后再走真实回调（状态已是 paid）→ N13/AJ-32：这不是异常，paid:already + info，不再告警
     const cb = await signedCallback({ order_id: created.order_id });
     expect(cb.status).toBe(200);
-    await expect(cb.json()).resolves.toMatchObject({ received: true, ignored: 'status_conflict' });
-    // 且必须有我方告警——"收下"不等于"忽略"
-    expect(sink.find('callback_conflict')).toHaveLength(1);
+    await expect(cb.json()).resolves.toMatchObject({ received: true, ignored: 'paid:already' });
+    expect(sink.find('paid_already')).toHaveLength(1);
+    expect(sink.find('paid_already')[0]?.level).toBe('info');
+    expect(sink.find('callback_conflict')).toHaveLength(0);
     // 状态没被二次改动（仍然只有一条 paid 事件）
     const eventsAfter =
       await db`select status from order_events where order_id = ${created.order_id} order by id`;
     expect(eventsAfter.map((r) => r.status)).toEqual(['created', 'paid']);
   });
 
-  it('回调给了不存在的 order_id → 2xx 收下 + 我方告警，不能静默吞掉', async () => {
-    // @why 机构回调里出现我们没见过的单号是**真实会发生**的（测试环境串号、机构重放历史单）。
-    //      但也不能回 404：机构对任何非 2xx 都会重发，而"这张单不存在"重发一万次也不会变。
-    //      正确姿势：2xx 收下 + 落一条可检索的告警（"钱到了但没单"是最贵的一类事故）。
-    const res = await signedCallback({ order_id: 'sk-does-not-exist' });
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({ received: true, ignored: 'order_not_found' });
-    const warn = sink.find('callback_conflict')[0];
-    expect(warn?.level).toBe('warn');
-    expect(warn?.conflict).toBe('order_not_found');
-    // 一次坏回调不能写出任何事件
+  /**
+   * N4/AJ-32（宽限期内）：回调先到、订单还没落库 → **503 让机构重发**，
+   * 且 `processed_at` 保持 NULL（对账信号 + 同一 event_id 重发能补上的前提）。
+   * @why 旧行为是一律 2xx + warn，但"可重试"的登记被 200 回应抵消——机构永不重发，
+   *      "钱到单未付"只剩一条 warn。宽限期内回 503 是让机构的重发机制替我们兜底。
+   */
+  it('宽限期内回调先到（order_not_found）→ 503 + processed_at 保持 NULL，不静默吞掉', async () => {
+    const res = await signedCallback({ order_id: 'sk-does-not-exist', event_id: 'evt-grace' });
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBe('30');
+    await expect(res.json()).resolves.toMatchObject({
+      received: false,
+      reason: 'order_not_found_yet',
+    });
+    expect(sink.find('callback_early')).toHaveLength(1);
+    expect(sink.find('callback_early')[0]?.level).toBe('warn');
+    // processed_at 必须保持 NULL：这是对账信号，也是"同一 event_id 重发时能补上"的前提
+    const rows = await db`select processed_at from webhook_events where event_id = 'evt-grace'`;
+    expect(rows[0]?.processed_at).toBeNull();
+    // 一次早到的回调不能写出任何业务事件
     const events = await db`select id from order_events`;
     expect(events).toHaveLength(0);
+  });
+
+  /**
+   * N4/AJ-32（超过宽限期）：订单一直没出现 → 2xx 收下（机构不必再重发）+
+   * **error 级**告警 + `processed_at` 落 `unmatched:order_not_found`（转入对账视野）。
+   * @why 宽限期外还回 503 会让"确实不存在的脏回调"占用机构重发队列；
+   *      但"钱到单未付"又绝不能静默——所以这一层用 error 告警 + 对账兜底（F13）。
+   */
+  it('超过宽限期订单仍不存在 → 2xx + error 告警 + 落 unmatched 待对账', async () => {
+    // 独立起一个 graceMs=0 的服务：任何回调都立即"超过宽限期"
+    const s = await startSkeleton(db, { withRawBody: true, graceMs: 0 });
+    try {
+      const raw = JSON.stringify({ order_id: 'sk-never', event_id: 'evt-late' });
+      const sig = createHmac('sha256', CALLBACK_SECRET).update(raw).digest('hex');
+      const res = await fetch(`${s.base}${MOCK_CALLBACK_PATH}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-mock-signature': sig,
+          'x-trace-id': TRACE,
+        },
+        body: raw,
+      });
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({ received: true, ignored: 'unmatched' });
+      const alert = s.sink.find('callback_unmatched')[0];
+      expect(alert?.level).toBe('error');
+      const rows =
+        await db`select processed_at, result from webhook_events where event_id = 'evt-late'`;
+      expect(rows[0]?.processed_at).not.toBeNull();
+      expect(rows[0]?.result).toBe('unmatched:order_not_found');
+    } finally {
+      await s.server.close();
+    }
   });
 
   /**
@@ -287,8 +331,8 @@ describe('行走骨架：一条链路走到底', () => {
     expect(events.filter((r) => r.status === 'paid')).toHaveLength(1);
   });
 
-  /** 不同的事件（不同 event_id）落在已支付的订单上 → 才是真正的业务冲突。 */
-  it('另一个事件（不同 event_id）落在已支付订单 → 2xx 收下 + 告警，不产生第二条 paid 事件', async () => {
+  /** 不同的事件（不同 event_id）落在已支付的订单上 → N13：paid:already + info，不是异常。 */
+  it('另一个事件（不同 event_id）落在已支付订单 → paid:already + info，不产生第二条 paid 事件', async () => {
     const token = await userToken();
     const created = (await (await createOrder(token, 'key-conflict')).json()) as {
       order_id: string;
@@ -300,26 +344,32 @@ describe('行走骨架：一条链路走到底', () => {
     expect(second.status).toBe(200);
     await expect(second.json()).resolves.toMatchObject({
       received: true,
-      ignored: 'status_conflict',
+      ignored: 'paid:already',
     });
-    expect(sink.find('callback_conflict')).toHaveLength(1);
+    expect(sink.find('paid_already')).toHaveLength(1);
+    expect(sink.find('paid_already')[0]?.level).toBe('info');
+    expect(sink.find('callback_conflict')).toHaveLength(0);
     const events = await db`select status from order_events where order_id = ${created.order_id}`;
     expect(events.filter((r) => r.status === 'paid')).toHaveLength(1);
+    // 登记结果也要是 paid:already（对账时能区分"正常重发"与"真冲突"）
+    const rows = await db`select result from webhook_events where event_id = 'evt-b'`;
+    expect(rows[0]?.result).toBe('paid:already');
   });
 
   /**
-   * 回调比订单先到 → 首轮 order_not_found，**同一 event_id 重发时必须能再处理一次**。
+   * 回调比订单先到 → 宽限期内 503（机构会重发），**同一 event_id 重发时必须能再处理一次**。
    * @why 这是"去重 vs 正确性"冲突时的裁决场景：去重只是优化，
-   *      "钱到了但订单没变成 paid"是事故。三态里的 `retry` 就是为它存在的。
+   *      "钱到了但订单没变成 paid"是事故。503 期间 processed_at 保持 NULL，
+   *      重发时 claim 得到 `retry`，于是业务再跑一遍（AJ-32 双层结构的第一层）。
    */
-  it('回调先到（order_not_found）→ 同一个 event_id 重发时能补上', async () => {
+  it('回调先到（宽限期内 503）→ 订单出现后同一个 event_id 重发时能补上', async () => {
     const token = await userToken();
-    // 先发一个指向尚未创建订单的回调
+    // 先发一个指向尚未创建订单的回调 → 宽限期内 503
     const early = await signedCallback({ order_id: 'sk-later', event_id: 'evt-early' });
-    expect(early.status).toBe(200);
+    expect(early.status).toBe(503);
     await expect(early.json()).resolves.toMatchObject({
-      received: true,
-      ignored: 'order_not_found',
+      received: false,
+      reason: 'order_not_found_yet',
     });
 
     // 订单随后建好

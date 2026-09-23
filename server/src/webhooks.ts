@@ -19,7 +19,8 @@
  *              `processed_at IS NULL`——这正是"待对账"的信号（003 建的部分索引就是给它用的）。
  *              本文件**不负责**重试或补处理：那属于每日对账任务（F13）。
  *
- * @see migrations/003_idempotency_and_identity.sql；docs/基座评审复核意见-2026-09-23.md（D3）
+ * @see migrations/003_idempotency_and_identity.sql；docs/基座评审复核意见-2026-09-23.md（D3）；
+ *      docs/自主决策记录.md AJ-32（回调早到宽限期，二审 N4）
  */
 import { createHash } from 'node:crypto';
 import type { Db } from './db.js';
@@ -43,7 +44,7 @@ export interface WebhookEventInput {
  *
  * - `new`：首次收到，应当处理
  * - `handled`：已经处理过（成功或被明确忽略），重复投递 → 直接 2xx 返回，不再处理
- * - `retry`：登记过但**上次没处理成功**，应当再处理一次
+ * - `retry`：登记过但**上次没处理完**（`processed_at IS NULL`），应当再处理一次
  *
  * @why 二态（"见过 = 重复"）会吞掉一类真实场景：**回调比订单先到**。
  *      机构在下单事务提交前就把回调打过来（或我们这侧延迟可见），首轮处理得到
@@ -51,36 +52,52 @@ export interface WebhookEventInput {
  *      若按"见过就算重复"直接返回，这张单就永远不会被标记为已支付。
  *      "钱到了但订单没变成 paid"是最贵的一类事故，而去重只是性能优化，
  *      两者冲突时**必须让位给正确性**。
- * @why `retry` 也覆盖"上次处理到一半进程崩了"（`processed_at IS NULL`）的情形——
- *      那一行本来就是留给对账任务的信号，顺手在这里变成"可以重试"是自洽的。
+ * @why `retry` 只认 `processed_at IS NULL`（处理中途崩溃 / 宽限期内 503 主动不封口），
+ *      不再有"按 result 值放行重试"的清单——AJ-32 之后，`order_not_found` 在宽限期内
+ *      不封口（走 503 让机构重发），超过宽限期落 `unmatched:*` 是**终态**（转对账，不 retry），
+ *      原来的 RETRYABLE_RESULTS 机制随之失去存在意义（N4 修复的一部分）。
  */
 export type ClaimState = 'new' | 'handled' | 'retry';
 
-/** 上次结果是"订单不存在"时允许重试：见 {@link ClaimState} 的 @why。 */
-const RETRYABLE_RESULTS = ['ignored:order_not_found'];
+export interface ClaimResult {
+  state: ClaimState;
+  /**
+   * 本事件**首次**到达时间（宽限期计算的起点，DB 时钟）。
+   * @why 用"我们首次收到的时间"而不是机构报文里的时间戳：后者依赖机构时钟，
+   *      且骨架的模拟回调根本没有时间戳字段；前者单调、无时钟偏移问题。
+   */
+  firstReceivedAt: Date;
+}
 
-export async function claimWebhookEvent(db: Db, input: WebhookEventInput): Promise<ClaimState> {
+export async function claimWebhookEvent(db: Db, input: WebhookEventInput): Promise<ClaimResult> {
   const inserted = await db`
     insert into webhook_events (provider, event_id, event_type, payload_hash)
     values (${input.provider}, ${input.eventId}, ${input.eventType ?? null}, ${input.hash})
     on conflict (provider, event_id) do nothing
-    returning id
+    returning received_at
   `;
-  if (inserted.length > 0) return 'new';
+  if (inserted.length > 0) {
+    return { state: 'new', firstReceivedAt: inserted[0]?.received_at as Date };
+  }
 
   const rows = await db`
-    select processed_at, result from webhook_events
+    select processed_at, received_at from webhook_events
      where provider = ${input.provider} and event_id = ${input.eventId}
   `;
   const row = rows[0];
-  if (row === undefined) return 'new'; // 理论上不可能（刚插入或已存在），保守当作首次
-  if (row.processed_at === null) return 'retry';
-  return RETRYABLE_RESULTS.includes(String(row.result)) ? 'retry' : 'handled';
+  // 理论上不可能走到（刚插入或已存在）；保守当作首次、起点给当前时间（宽限期从零算起）
+  if (row === undefined) return { state: 'new', firstReceivedAt: new Date() };
+  return {
+    state: row.processed_at === null ? 'retry' : 'handled',
+    firstReceivedAt: row.received_at as Date,
+  };
 }
 
 /**
  * 标记处理结果。
- * @param result 短标识：`paid` / `ignored:order_not_found` / `ignored:status_conflict` / `failed`
+ * @param result 短标识：`paid` / `paid:already` / `unmatched:order_not_found` /
+ *        `ignored:status_conflict` / `failed`（宽限期内 503 的早到回调**不调用本函数**——
+ *        processed_at 保持 NULL 是对账信号，见 AJ-32）
  */
 export async function finishWebhookEvent(
   db: Db,

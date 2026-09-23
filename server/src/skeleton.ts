@@ -42,6 +42,12 @@ export interface SkeletonDeps {
   /** 模拟回调的 HMAC 密钥（骨架期；真实通道验签在 F11，见 @limitation 二）。 */
   callbackSecret: string;
   /**
+   * 回调早到的宽限期（毫秒，AJ-32）：回调到达时订单不存在，
+   * 距事件**首次**到达不超过这个时长 → 503 让机构重发（processed_at 保持 NULL）；
+   * 超过 → 2xx 收下 + error 告警 + 落 `unmatched:*` 转对账。
+   */
+  callbackOrderGraceMs: number;
+  /**
    * 运行环境。**刻意作为显式入参而不是读 `process.env.NODE_ENV`**：
    * 隐式全局会让"这个行为由谁决定"不可见，也让测试必须改进程环境才能覆盖另一分支；
    * 显式入参则逼调用方在装配时回答一次"这是什么环境"。
@@ -275,7 +281,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           hash: payloadHash(raw),
         };
         const claim = await claimWebhookEvent(deps.db, webhook);
-        if (claim === 'handled') {
+        if (claim.state === 'handled') {
           // 重复投递：直接收下，不重复处理——但必须留一条可检索的日志，
           // 否则"机构在重发"这件事会被当成"一切正常"
           deps.logger.info('webhook_duplicate', {
@@ -287,32 +293,77 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           res.json({ received: true, order_id: orderId, duplicate: true });
           return;
         }
-        // claim === 'retry'：上次没处理成功（订单当时还不存在 / 进程崩了），这一次重新走一遍
+        // claim.state === 'retry'：上次没处理完（订单当时不存在 / 进程崩了），这一次重新走一遍
 
-        // ── 业务冲突：一律 2xx + 我方告警，绝不回 4xx/5xx ──────────────────────
-        // @why 机构对**任何非 2xx**都会按退避重发（Stripe 重试 3 天、微信同理）。
-        //      "这张单不存在"/"已经是 paid 了"这类冲突**重发一万次也不会变**，
-        //      回 404/409 等于让机构无限重发，把它的重试队列和我们的错误率一起打满。
-        //      正确做法：收下（2xx），自己记 warn 告警，由人/对账任务去查。
-        // @limitation "收下"不等于"忽略"：必须落一条可检索的告警日志，
-        //             否则"钱到了但没单"（订单不存在）会彻底静默——那是最贵的一类事故。
+        // ── 冲突分层（AJ-32/N4/N13，取代旧的"一律 2xx + warn"）────────────────
+        // ① 订单不存在 + 宽限期内 → **503**：让机构的重发机制替我们兜底，
+        //    processed_at 保持 NULL（对账信号 + 重发能补上）。
+        //    旧行为是一律 2xx——"可重试"的登记被 200 抵消，机构永不重发（N4）。
+        // ② 订单不存在 + 超过宽限期 → 2xx + **error** 告警 + 落 unmatched 转对账：
+        //    脏回调不该无限占用机构重发队列，但"钱到单未付"也绝不能静默。
+        // ③ 订单已是 paid → paid:already + **info**：同一订单的另一事件类型到达是
+        //    正常形态（N13：先 payment_intent.succeeded 后 checkout.session.completed），
+        //    告警会淹没真正的冲突。
+        // ④ 其余状态冲突（expired/cancelled 等）→ 2xx + warn：重发不会变，靠人查。
         try {
           await markPaid(deps.db, orderId);
         } catch (e) {
           const code = e instanceof AppError ? e.code : 0;
-          if (code === 40400 || code === 40902) {
-            const conflict = code === 40400 ? 'order_not_found' : 'status_conflict';
+          if (code === 40400) {
+            const elapsedMs = Date.now() - claim.firstReceivedAt.getTime();
+            if (elapsedMs <= deps.callbackOrderGraceMs) {
+              deps.logger.warn('callback_early', {
+                order_id: orderId,
+                result: 'retry_scheduled',
+                ctx: { event_id: webhook.eventId, grace_ms: deps.callbackOrderGraceMs },
+              });
+              // Retry-After 给机构一个重发节奏提示（30s 远小于宽限期，又不至于打爆我们）
+              res
+                .status(503)
+                .set('retry-after', '30')
+                .json({ received: false, order_id: orderId, reason: 'order_not_found_yet' });
+              return;
+            }
+            deps.logger.error('callback_unmatched', {
+              order_id: orderId,
+              result: 'unmatched',
+              ctx: { event_id: webhook.eventId, elapsed_ms: elapsedMs },
+            });
+            await finishWebhookEvent(deps.db, {
+              ...webhook,
+              result: 'unmatched:order_not_found',
+              note: '超过宽限期订单仍不存在：转入对账任务（F13），机构不必再重发',
+            });
+            res.json({ received: true, order_id: orderId, ignored: 'unmatched' });
+            return;
+          }
+          if (code === 40902) {
+            const from = (e as AppError).details as { from?: unknown } | undefined;
+            if (from?.from === 'paid') {
+              deps.logger.info('paid_already', {
+                order_id: orderId,
+                result: 'ignored',
+                ctx: { event_id: webhook.eventId },
+              });
+              await finishWebhookEvent(deps.db, {
+                ...webhook,
+                result: 'paid:already',
+                note: '同单另一事件类型到达，订单已是 paid（N13：正常形态，不是异常）',
+              });
+              res.json({ received: true, order_id: orderId, ignored: 'paid:already' });
+              return;
+            }
             deps.logger.warn('callback_conflict', {
               order_id: orderId,
-              conflict,
+              conflict: 'status_conflict',
               result: 'ignored',
             });
             await finishWebhookEvent(deps.db, {
               ...webhook,
-              result: `ignored:${conflict}`,
+              result: 'ignored:status_conflict',
               note: '业务冲突：重发也不会变，靠对账而非重试',
             });
-            res.json({ received: true, order_id: orderId, ignored: conflict });
+            res.json({ received: true, order_id: orderId, ignored: 'status_conflict' });
             return;
           }
           throw e;
