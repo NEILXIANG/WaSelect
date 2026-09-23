@@ -67,10 +67,63 @@ function deriveAdminUrl(): string {
   return `postgres://${localRole()}@localhost:5432/postgres`;
 }
 
+/**
+ * 校验"这一串一定指向测试库"。
+ *
+ * @why `resetTestDb()` 会对库里**所有业务表**执行 `TRUNCATE … CASCADE`。
+ *      而 `TEST_DATABASE_URL` 是环境变量，配错一次（比如指到开发库 `japan_shop`）
+ *      就会把真实数据全清掉，且**没有任何警告**——这是"一次手滑清零全部数据"级别的风险。
+ *      之前的防线只校验了**表名**形状，没校验**库名**，等于门没关上。
+ *
+ * @limitation 一是"看起来是测试库"的启发式判断，不是权限隔离：
+ *              真正的隔离应当由**数据库角色**（测试角色只对 `*_test` 有写权限）来做，
+ *              那条要在 CI/生产库上配，本函数只是最后一道廉价保险。
+ * @limitation 二：CI 上若把测试库放到独立实例（非 localhost），需显式设 `ALLOW_REMOTE_TEST_DB=1`，
+ *              并接受"这串指向的库会被清空"——明文写出来，避免误设。
+ */
+export function assertIsTestDatabaseUrl(url: string, opts: { allowRemote?: boolean } = {}): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`测试库连接串无法解析：${url}`);
+  }
+  const allowRemote = opts.allowRemote ?? process.env.ALLOW_REMOTE_TEST_DB === '1';
+  const name = parsed.pathname.replace(/^\//, '');
+  // ⚠️ `new URL('postgres://u@[::1]:5432/x').hostname` 返回 **'[::1]'**（带方括号），
+  //    直接和 '::1' 比会把 IPv6 回环判成远端——这条是被自己的用例抓出来的。
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+
+  if (name.length === 0) throw new Error(`测试库连接串没有指定库名：${url}`);
+  if (!name.endsWith('_test')) {
+    throw new Error(
+      `拒绝使用「${name}」当作测试库：库名必须以 _test 结尾。` +
+        `（resetTestDb 会 TRUNCATE 所有业务表；若确实是测试库，请改名或显式设 ALLOW_REMOTE_TEST_DB=1 前先想清楚）`,
+    );
+  }
+  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  if (!isLocal && !allowRemote) {
+    throw new Error(
+      `拒绝在非本机主机「${host}」上跑测试：会清空 ${name}。确为专用测试实例请设 ALLOW_REMOTE_TEST_DB=1。`,
+    );
+  }
+  return url;
+}
+
 /** 测试库连接串（与开发库 japan_shop 分开，避免误删真实数据）。 */
-export const TEST_DB_URL = process.env.TEST_DATABASE_URL ?? deriveTestUrl();
-/** 用来建库的管理库连接串。 */
-const ADMIN_DB_URL = process.env.TEST_ADMIN_DB_URL ?? deriveAdminUrl();
+export const TEST_DB_URL = assertIsTestDatabaseUrl(
+  process.env.TEST_DATABASE_URL ?? deriveTestUrl(),
+);
+/** 用来建库的管理库连接串（本身不会被清空，但仍要求本机）。 */
+const ADMIN_DB_URL = ((): string => {
+  const url = process.env.TEST_ADMIN_DB_URL ?? deriveAdminUrl();
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  if (!isLocal && process.env.ALLOW_REMOTE_TEST_DB !== '1') {
+    throw new Error(`管理库连接串指向非本机主机「${host}」，拒绝继续。`);
+  }
+  return url;
+})();
 
 let ready: Promise<void> | undefined;
 let cachedTables: readonly string[] | undefined;
