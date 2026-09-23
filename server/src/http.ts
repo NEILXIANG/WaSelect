@@ -127,6 +127,19 @@ function responseBytes(res: Response): number | undefined {
  * @limitation 不支持通配（`*.example.com`）：子域名枚举是常见的越权来源。
  *             需要多域名就在配置里逐个列全，`CORS_ORIGINS` 是逗号分隔的。
  */
+/**
+ * 路径前缀匹配（CORS 与 raw-body 共用）。
+ * @why 不能是裸 `startsWith(p)`（基座自查 P1-3）：`/api/v1/adminx` 会命中 `/api/v1/admin`、
+ *      `/pay/callback/stripe-v2` 会命中 `/pay/callback/stripe`——前者给非管理端路径发跨域通行证，
+ *      后者让 handler 拿到 Buffer 而不是解析后的 JSON。两种都不报错，只在"将来加了名字相近的路由"
+ *      那天才爆。所以必须要求前缀后**恰好是路径分隔符**（或完全相等）。
+ */
+function pathMatchesPrefix(path: string, prefix: string): boolean {
+  if (path === prefix) return true;
+  const normalized = prefix.endsWith('/') ? prefix : `${prefix}/`;
+  return path.startsWith(normalized);
+}
+
 function corsMiddleware(opts: CorsOptions): RequestHandler {
   const prefixes = opts.pathPrefixes ?? ['/api/v1/admin'];
   return (req, res, next) => {
@@ -135,7 +148,7 @@ function corsMiddleware(opts: CorsOptions): RequestHandler {
       next();
       return;
     }
-    if (!prefixes.some((p) => req.path === p || req.path.startsWith(p))) {
+    if (!prefixes.some((p) => pathMatchesPrefix(req.path, p))) {
       next();
       return;
     }
@@ -225,8 +238,7 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
   // ── 3. 报文解析：raw 优先（回调验签），其余走 JSON ────────────────────────
   const rawParser = express.raw({ type: () => true, limit: RAW_BODY_LIMIT });
   app.use((req, res, next) => {
-    if (rawBodyPaths.some((p) => req.path === p || req.path.startsWith(p)))
-      return rawParser(req, res, next);
+    if (rawBodyPaths.some((p) => pathMatchesPrefix(req.path, p))) return rawParser(req, res, next);
     next();
   });
   app.use(express.json({ limit: JSON_BODY_LIMIT, type: 'application/json' }) as RequestHandler);

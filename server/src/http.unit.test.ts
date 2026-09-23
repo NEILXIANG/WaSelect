@@ -192,6 +192,17 @@ describe('CORS 与就绪探针（D21）', () => {
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
   });
 
+  it('前缀共享但路径不同的路由不开放 CORS（P1-3：`/adminx` 不是 `/admin`）', async () => {
+    // 与上一条互补：误放行的方向同样要钉死——`/api/v1/adminx` 若命中 `/api/v1/admin`，
+    // 等于给一条根本不属于管理端的路径发了跨域通行证。
+    const { baseUrl } = await serve({ cors: { origins: ['https://admin.example.com'] } });
+    const res = await fetch(`${baseUrl}/api/v1/adminx/reports`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://admin.example.com', 'access-control-request-method': 'GET' },
+    });
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
   it('/readyz：依赖正常 200，依赖不可用 503（不能只看进程活着）', async () => {
     let ok = true;
     const { baseUrl } = await serve({ readiness: async () => ok });
@@ -306,6 +317,23 @@ describe('回调原文（验签前提）', () => {
       body: JSON.stringify({ sku: 'S1' }),
     });
     await expect(res.json()).resolves.toEqual({ body: { sku: 'S1' } });
+  });
+
+  it('前缀共享但路径不同的路由不被误伤（P1-3：`/callback/stripe-v2` 不是 `/callback/stripe`）', async () => {
+    // ⚠️ 基座自查 P1-3：`startsWith(p)` 会让 `/api/v1/pay/callback/stripe-v2`
+    //    命中 raw-body 前缀 `/api/v1/pay/callback/stripe`——handler 拿到 Buffer 而不是对象。
+    //    这类误匹配不报错，只在"将来加了名字相近的路由"那天才爆。
+    const { baseUrl } = await serve((app) => {
+      app.post(`${RAW_CALLBACK_PATH}-v2`, (req, res) =>
+        res.json({ isBuffer: Buffer.isBuffer(req.body) }),
+      );
+    });
+    const res = await fetch(`${baseUrl}${RAW_CALLBACK_PATH}-v2`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'evt_2' }),
+    });
+    await expect(res.json()).resolves.toEqual({ isBuffer: false });
   });
 });
 
