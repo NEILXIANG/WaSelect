@@ -52,6 +52,15 @@ describe('createIdentityCheck（真库）', () => {
   it('用户不存在 → null（不是抛错：调用方按"凭证失效"处理）', async () => {
     await expect(createIdentityCheck(db).load('u-nope')).resolves.toBeNull();
   });
+
+  it('is_admin 读回来是 boolean（N9：管理员撤权要回源校验，读漏了就是 12 小时越权窗口）', async () => {
+    const before = await createIdentityCheck(db).load('u-1');
+    expect(before?.isAdmin).toBe(false);
+    await db`update users set is_admin = true where id = 'u-1'`;
+    const after = await createIdentityCheck(db).load('u-1');
+    expect(after?.isAdmin).toBe(true);
+    expect(typeof after?.isAdmin).toBe('boolean');
+  });
 });
 
 describe('withIdentityCache', () => {

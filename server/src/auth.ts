@@ -215,6 +215,13 @@ export function requireRole(
             next(new AppError(40101, { reason: 'token_version_mismatch' }));
             return;
           }
+          if (role === 'admin' && !record.isAdmin) {
+            // N9：token 里的 role 是签发时写死的，"撤销管理员"改的是库里的 is_admin——
+            // 不回源比对，撤权要等 token 自然过期（12 小时越权窗口）。
+            // 40301 与"角色不符"同码：已认证但无权，语义一致
+            next(new AppError(40301, { reason: 'not_admin' }));
+            return;
+          }
         }
         req.auth = principal;
         // 写进日志上下文：此后这条请求链路上的所有日志都带 user_id，无需每个 handler 手动传。

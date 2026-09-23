@@ -25,6 +25,12 @@ export interface IdentityRecord {
   tokenVer: number;
   /** 封禁时间；null = 未封禁。 */
   blockedAt: Date | null;
+  /**
+   * 是否管理员（users.is_admin）。
+   * @why token 里的 role 是签发时写死的，"撤销某人的管理员权限"改的是库里的这一列——
+   *      不回源带上它，撤权要等 token 自然过期（12 小时越权窗口，二审 N9）。
+   */
+  isAdmin: boolean;
 }
 
 /**
@@ -49,12 +55,13 @@ export const IDENTITY_CACHE_TTL_MS = 60_000;
 export function createIdentityCheck(db: Db): IdentityCheck {
   return {
     async load(sub: string): Promise<IdentityRecord | null> {
-      const rows = await db`select token_ver, blocked_at from users where id = ${sub}`;
+      const rows = await db`select token_ver, blocked_at, is_admin from users where id = ${sub}`;
       const row = rows[0];
       if (row === undefined) return null;
       return {
         tokenVer: Number(row.token_ver),
         blockedAt: (row.blocked_at as Date | null) ?? null,
+        isAdmin: row.is_admin === true,
       };
     },
   };

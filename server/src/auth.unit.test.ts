@@ -251,10 +251,14 @@ describe('requireRole 中间件（真 HTTP）', () => {
 
   describe('身份状态回源校验（D25）', () => {
     /** 固定身份：未封禁、ver=1。 */
-    const alive: IdentityCheck = { load: async () => ({ tokenVer: 1, blockedAt: null }) };
+    const alive: IdentityCheck = {
+      load: async () => ({ tokenVer: 1, blockedAt: null, isAdmin: true }),
+    };
 
     it('ver 对不上 → 40101（改密后旧 token 必须失效）', async () => {
-      const { baseUrl } = await serve({ load: async () => ({ tokenVer: 2, blockedAt: null }) });
+      const { baseUrl } = await serve({
+        load: async () => ({ tokenVer: 2, blockedAt: null, isAdmin: true }),
+      });
       const res = await fetch(`${baseUrl}/api/v1/me`, {
         headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
       });
@@ -264,13 +268,36 @@ describe('requireRole 中间件（真 HTTP）', () => {
 
     it('已封禁 → 40301 而不是 401（401 会让前端陷入无限重登）', async () => {
       const { baseUrl } = await serve({
-        load: async () => ({ tokenVer: 1, blockedAt: new Date() }),
+        load: async () => ({ tokenVer: 1, blockedAt: new Date(), isAdmin: true }),
       });
       const res = await fetch(`${baseUrl}/api/v1/me`, {
         headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
       });
       expect(res.status).toBe(403);
       await expect(res.json()).resolves.toMatchObject({ code: 40301 });
+    });
+
+    it('admin token 但库里 is_admin=false → 40301（N9：撤权必须回源拦截，不是只 +token_ver）', async () => {
+      // @why token 里的 role 是签发时写死的，"撤销某人的管理员权限"改的是库里的 is_admin——
+      //      不回源校验的话，撤销要等 token 自然过期（12 小时越权窗口）。
+      const { baseUrl } = await serve({
+        load: async () => ({ tokenVer: 1, blockedAt: null, isAdmin: false }),
+      });
+      const res = await fetch(`${baseUrl}/admin/orders`, {
+        headers: { authorization: `Bearer ${await signToken(admin, cfg)}` },
+      });
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({ code: 40301 });
+    });
+
+    it('admin token 且库里 is_admin=true → 放行（不能误伤正常管理员）', async () => {
+      const { baseUrl } = await serve({
+        load: async () => ({ tokenVer: 1, blockedAt: null, isAdmin: true }),
+      });
+      const res = await fetch(`${baseUrl}/admin/orders`, {
+        headers: { authorization: `Bearer ${await signToken(admin, cfg)}` },
+      });
+      expect(res.status).toBe(200);
     });
 
     it('用户已不存在 → 40101（token 合法但主体没了）', async () => {
