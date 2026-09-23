@@ -224,7 +224,14 @@ export function requireRole(
         patchContext({ user_id: principal.sub, actor: `${principal.role}:${principal.sub}` });
         next();
       })
-      .catch((e: unknown) => next(e instanceof AppError ? e : new AppError(40101)));
+      // ⚠️ 只能透传，不能再折叠成 40101（基座自查 P1-1，曾折叠）：
+      //    verifyToken / toPrincipal 的一切失败**已经**在抛出点转成 AppError(40101)，
+      //    能走到这个 catch 的非 AppError 只剩两类——`identity.load()` 的基础设施异常
+      //    （DB 连接失败等）与代码 bug。把前者折叠成 40101 的后果是：
+      //    DB 抖动期间全站用户收到"登录过期"，前端按 action「静默重新登录并重放」
+      //    形成无限重登风暴，而日志里一个 500 都没有——监控完全看不见真正的故障。
+      //    透传后由全局兜底折叠成 50000 + error 级日志（http.ts unhandled_error）。
+      .catch((e: unknown) => next(e));
   };
 }
 

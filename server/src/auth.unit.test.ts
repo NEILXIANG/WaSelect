@@ -281,6 +281,25 @@ describe('requireRole 中间件（真 HTTP）', () => {
       expect(res.status).toBe(401);
     });
 
+    it('identity 查询本身故障（DB 异常）→ 50000，绝不能折叠成 40101', async () => {
+      // ⚠️ 基座自查 P1-1：折叠成 40101 的话，DB 抖动期间全站用户收到"登录过期"，
+      //    前端按 action「静默重新登录并重放」陷入无限重登风暴，
+      //    而真正的故障（DB 不可达）在日志里一个 500 都没有——监控完全看不见。
+      const { baseUrl, sink } = await serve({
+        load: async () => {
+          throw new Error('connection refused');
+        },
+      });
+      const res = await fetch(`${baseUrl}/api/v1/me`, {
+        headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+      });
+      expect(res.status).toBe(500);
+      await expect(res.json()).resolves.toMatchObject({ code: 50000 });
+      // 且日志里必须是 error 级、err_type 不是 AppError——监控靠它发现"这是基础设施故障"
+      const errRow = sink.find('unhandled_error').at(-1);
+      expect(errRow?.err_type).toBe('Error');
+    });
+
     it('状态正常时放行（不能误伤）', async () => {
       const { baseUrl } = await serve(alive);
       const res = await fetch(`${baseUrl}/api/v1/me`, {
