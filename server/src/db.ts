@@ -86,6 +86,30 @@ export const INT8_AS_SAFE_NUMBER: postgres.PostgresType<number> = {
  */
 export const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;
 
+/**
+ * 锁等待超时（毫秒，N32）。
+ *
+ * @why statement_timeout 管"语句总共跑多久"，不管"等锁等了多久"——一个长事务持锁不放时，
+ *      等待方只能等满 15s，期间所有日志都像"慢"而不是"被堵"。5s 的锁超时把"堵"
+ *      提前暴露成 `55P03 lock_not_available`（可被检索、可告警），
+ *      也让"排队等锁"的请求把连接让出来去服务别人。
+ * @limitation `withIdempotencyTx` 会按等待预算用 `SET LOCAL lock_timeout` 覆盖本值——
+ *             两者不冲突：本值是兜底，SET LOCAL 是按需收窄。
+ */
+export const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+
+/**
+ * 空闲事务超时（毫秒，N32）。
+ *
+ * @why 代码 bug（忘了 await、事件循环卡死）会把事务晾在半开状态：行锁一直扣着，
+ *      等待方排队、连接一直占着——从监控上看是"全站变慢"，根因只是一个没提交的事务。
+ *      60s 空闲后 PG 自动杀掉这条连接，把"全表锁死"降级成"一条请求失败"。
+ * @limitation 正常事务的**语句之间**间隔超过 60s 也会被误杀（如事务内调外部接口）——
+ *             这正是"事务内禁止外部调用"（idempotency.ts @limitation 二）要防的形态，
+ *             两个约束互相印证；真需要长事务的作业应显式 SET 覆盖。
+ */
+export const DEFAULT_IDLE_IN_TX_TIMEOUT_MS = 60_000;
+
 export interface CreateDbOptions {
   url: string;
   /** 最大连接数（默认 10）。 */
@@ -94,6 +118,10 @@ export interface CreateDbOptions {
   connectTimeoutSec?: number;
   /** 单条语句超时（毫秒，默认 {@link DEFAULT_STATEMENT_TIMEOUT_MS}）；0 = 不限时（不推荐）。 */
   statementTimeoutMs?: number;
+  /** 锁等待超时（毫秒，默认 {@link DEFAULT_LOCK_TIMEOUT_MS}）。 */
+  lockTimeoutMs?: number;
+  /** 空闲事务超时（毫秒，默认 {@link DEFAULT_IDLE_IN_TX_TIMEOUT_MS}）。 */
+  idleInTxTimeoutMs?: number;
 }
 
 /**
@@ -109,7 +137,14 @@ export function createDb(opts: CreateDbOptions): Db {
     types: { int8: INT8_AS_SAFE_NUMBER },
     // 单条语句超时（D20）：作为**连接参数**下发，池里每条连接都带上，
     // 因此新连接（重连、扩容）也不会漏——比"建池后跑一次 SET"可靠（那条 SET 只影响当时的连接）。
-    connection: { statement_timeout: opts.statementTimeoutMs ?? DEFAULT_STATEMENT_TIMEOUT_MS },
+    // N32 同源：lock_timeout（等锁 5s）与 idle_in_transaction_session_timeout（闲事务 60s）
+    // 也走连接参数，理由相同。
+    connection: {
+      statement_timeout: opts.statementTimeoutMs ?? DEFAULT_STATEMENT_TIMEOUT_MS,
+      lock_timeout: opts.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
+      idle_in_transaction_session_timeout:
+        opts.idleInTxTimeoutMs ?? DEFAULT_IDLE_IN_TX_TIMEOUT_MS,
+    },
   }) as Db;
 }
 

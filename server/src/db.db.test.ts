@@ -76,6 +76,29 @@ describe('连接与探活', () => {
     }
   }, 15_000);
 
+  /**
+   * N32：`lock_timeout` 与 `idle_in_transaction_session_timeout` 不能靠 statement_timeout 兜底。
+   * @why ① 锁等待：一个长事务持锁不放，等待方只能等满 15s 语句超时——
+   *      期间该请求的所有日志都像"慢"而不是"被堵"，5s 的锁超时把"堵"提前暴露成 55P03。
+   *      ② 闲事务：代码 bug（忘了 await、事件循环卡死）把事务晾在半开状态，
+   *      行锁会一直扣着——60s 后 PG 杀掉这条连接，把事故从"全表锁死"降级成"一条请求失败"。
+   *      （withIdempotencyTx 按等待预算用 SET LOCAL 覆盖 lock_timeout，两者不冲突。）
+   */
+  it('默认连接池带 lock_timeout 与 idle_in_transaction_session_timeout（N32）', async () => {
+    const parseMs = (raw: string): number => {
+      const m = /^(\d+)(ms|s|min)?$/.exec(raw);
+      const n = Number(m?.[1] ?? '0');
+      const unit = m?.[2];
+      return unit === 'ms' ? n : unit === 'min' ? n * 60_000 : unit === 's' ? n * 1000 : n;
+    };
+    const lock = await db`show lock_timeout`;
+    expect(parseMs(String(lock[0]?.lock_timeout ?? '0'))).toBeGreaterThan(0);
+    const idle = await db`show idle_in_transaction_session_timeout`;
+    expect(parseMs(String(idle[0]?.idle_in_transaction_session_timeout ?? '0'))).toBeGreaterThan(
+      0,
+    );
+  });
+
   it(`Postgres 大版本 >= ${MIN_POSTGRES_MAJOR}（与生产一致，代码里有硬闸门）`, async () => {
     await expect(postgresMajorVersion(db)).resolves.toBeGreaterThanOrEqual(MIN_POSTGRES_MAJOR);
     await expect(assertPostgresMajor(db)).resolves.toBeGreaterThanOrEqual(MIN_POSTGRES_MAJOR);
