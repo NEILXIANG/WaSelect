@@ -41,4 +41,21 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
+  {
+    // 小程序端：宿主注入的全局（wx / App / Page / getApp）不在 Node 全局里，
+    // flat config 默认不认，会被 no-undef 误报。这里按小程序运行时声明。
+    files: ['miniprogram/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        wx: 'readonly',
+        App: 'readonly',
+        Page: 'readonly',
+        Component: 'readonly',
+        getApp: 'readonly',
+        console: 'readonly',
+      },
+    },
+  },
 );

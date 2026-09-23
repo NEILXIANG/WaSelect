@@ -1,0 +1,56 @@
+/**
+ * 全局样式 + design token（约束五：UI 不写死）。
+ *
+ * @why 颜色、间距、圆角一律走 CSS 变量：改版式时只改这一处，
+ *      不需要动任何页面样式，也不会出现"这个页面的间距忘了改"。
+ * @limitation 小程序对 CSS 变量的支持要求基础库 >= 2.9.0；低于此版本会整体失效（回落到无样式），
+ *              不是"部分生效"，所以要么全用要么全不用，不要混写。
+ */
+page {
+  --ws-color-bg: #f6f6f6;
+  --ws-color-card: #ffffff;
+  --ws-color-fg: #1a1a1a;
+  --ws-color-muted: #8a8a8a;
+  --ws-color-error: #c0392b;
+
+  --ws-space: 24rpx;
+  --ws-radius: 12rpx;
+  --ws-font: 28rpx;
+  --ws-font-sm: 24rpx;
+
+  background: var(--ws-color-bg);
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font);
+}
+
+.card {
+  margin: var(--ws-space);
+  padding: var(--ws-space);
+  background: var(--ws-color-card);
+  border-radius: var(--ws-radius);
+}
+
+.btn {
+  margin-top: var(--ws-space);
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8rpx 0;
+}
+
+.label {
+  color: var(--ws-color-muted);
+  font-size: var(--ws-font-sm);
+}
+
+.value {
+  font-size: var(--ws-font-sm);
+  word-break: break-all;
+}
+
+.error {
+  color: var(--ws-color-error);
+  font-size: var(--ws-font-sm);
+}

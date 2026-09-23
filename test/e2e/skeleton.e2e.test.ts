@@ -12,37 +12,31 @@
  */
 import { createHmac } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { signToken, type AuthConfig } from '../../server/src/auth.js';
 import type { Db } from '../../server/src/db.js';
-import { createHttpApp, listen, type StartedServer } from '../../server/src/http.js';
-import { createLogger } from '../../server/src/logger.js';
-import { MOCK_CALLBACK_PATH, mountSkeleton } from '../../server/src/skeleton.js';
-import { MemorySink } from '../helpers/memory-sink.js';
+import { MOCK_CALLBACK_PATH } from '../../server/src/skeleton.js';
+import type { MemorySink } from '../helpers/memory-sink.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
-
-const auth: AuthConfig = { secret: 'e2e-jwt-secret-'.repeat(3), issuer: 'waselect-e2e' };
-const CALLBACK_SECRET = 'mock-callback-secret';
-/** 全程只用一个链路 ID，便于断言"两跳的日志是同一条链"。 */
-const TRACE = 'e2e-trace-0001';
-const USER = 'u-e2e';
+import {
+  E2E_CALLBACK_SECRET as CALLBACK_SECRET,
+  E2E_TRACE as TRACE,
+  E2E_USER as USER,
+  startSkeleton,
+  userToken,
+  type SkeletonServer,
+} from './harness.js';
 
 let db: Db;
-let server: StartedServer;
+let current: SkeletonServer;
+let sink: MemorySink;
 let base = '';
-let sink = new MemorySink();
 
 /** 起一个真实服务；`rawBodyPaths` 可关掉，用于验证"少配一环就断链"。 */
-async function startServer(opts: { withRawBody: boolean }): Promise<StartedServer> {
-  const s = new MemorySink();
-  sink = s;
-  const logger = createLogger({ env: 'development', destination: s });
-  const app = createHttpApp({
-    logger,
-    rawBodyPaths: opts.withRawBody ? [MOCK_CALLBACK_PATH] : [],
-    silentPaths: ['/healthz'],
-    mount: (a) => mountSkeleton(a, { db, logger, auth, callbackSecret: CALLBACK_SECRET }),
-  });
-  return listen(app);
+async function startServer(opts: { withRawBody: boolean }): Promise<SkeletonServer> {
+  const s = await startSkeleton(db, { withRawBody: opts.withRawBody });
+  sink = s.sink;
+  base = s.base;
+  current = s;
+  return s;
 }
 
 /** 用给定的 trace 调建单。 */
@@ -77,12 +71,11 @@ function signedCallback(payload: unknown, secret = CALLBACK_SECRET, trace = TRAC
 beforeAll(async () => {
   await ensureTestDb();
   db = testDb();
-  server = await startServer({ withRawBody: true });
-  base = `http://127.0.0.1:${server.port}`;
+  await startServer({ withRawBody: true });
 }, 30_000);
 
 afterAll(async () => {
-  await server.close();
+  await current.server.close();
   await db.end();
 });
 
@@ -95,7 +88,7 @@ beforeEach(async () => {
 
 describe('行走骨架：一条链路走到底', () => {
   it('建单 → 回调 → 状态回写 → 全程同一 trace_id', async () => {
-    const token = await signToken({ sub: USER, role: 'user' }, auth);
+    const token = await userToken();
 
     // ── 1. 建单 ──────────────────────────────────────────────────────────
     const createRes = await createOrder(token, 'key-chain-1');
@@ -139,7 +132,7 @@ describe('行走骨架：一条链路走到底', () => {
   });
 
   it('同一个 Idempotency-Key 重放：只建一张单，返回首次结果', async () => {
-    const token = await signToken({ sub: USER, role: 'user' }, auth);
+    const token = await userToken();
     const first = await createOrder(token, 'key-replay-1');
     const firstBody = (await first.json()) as { order_id: string };
     const second = await createOrder(token, 'key-replay-1');
@@ -162,7 +155,7 @@ describe('行走骨架：一条链路走到底', () => {
   });
 
   it('缺少 Idempotency-Key 直接拒绝（防重复下单是硬要求，不是可选项）', async () => {
-    const token = await signToken({ sub: USER, role: 'user' }, auth);
+    const token = await userToken();
     const res = await fetch(`${base}/api/v1/skeleton/orders`, {
       method: 'POST',
       headers: {
@@ -176,8 +169,46 @@ describe('行走骨架：一条链路走到底', () => {
     await expect(res.json()).resolves.toMatchObject({ code: 40001 });
   });
 
+  it('骨架专用：模拟支付成功端点同样走 markPaid（与回调共用一套状态回写）', async () => {
+    const token = await userToken();
+    const created = (await (await createOrder(token, 'key-sim')).json()) as { order_id: string };
+
+    const res = await fetch(`${base}/api/v1/skeleton/orders/${created.order_id}/simulate-paid`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'x-trace-id': TRACE },
+    });
+    expect(res.status).toBe(200);
+
+    const rows = await db`select status from orders where id = ${created.order_id}`;
+    expect(rows[0]?.status).toBe('paid');
+    const events = await db`select status from order_events where order_id = ${created.order_id} order by id`;
+    expect(events.map((r) => r.status)).toEqual(['created', 'paid']);
+
+    // 之后再走真实回调会被拒（状态已不是 created）——证明两条路径落到同一个状态机约束上
+    const cb = await signedCallback({ order_id: created.order_id });
+    expect(cb.status).toBe(409);
+    await expect(cb.json()).resolves.toMatchObject({ code: 40902 });
+  });
+
+  it('回调给了不存在的 order_id → 40400，不能静默吞掉', async () => {
+    // @why 机构回调里出现我们没见过的单号是**真实会发生**的（测试环境串号、机构重放历史单）。
+    //      吞掉它表现为"钱到了但没单"，且没有任何日志；抛出来至少能被监控看到。
+    const res = await signedCallback({ order_id: 'sk-does-not-exist' });
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toMatchObject({ code: 40400 });
+    // 一次坏回调不能写出任何事件
+    const events = await db`select id from order_events`;
+    expect(events).toHaveLength(0);
+  });
+
+  it('回调体缺 order_id → 40001（脏输入不能落到 SQL 里）', async () => {
+    const res = await signedCallback({ wrong_field: 1 });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ code: 40001 });
+  });
+
   it('回调验签失败 → 50002 且订单状态不变（错误签名不能改状态）', async () => {
-    const token = await signToken({ sub: USER, role: 'user' }, auth);
+    const token = await userToken();
     const created = (await (await createOrder(token, 'key-badsig')).json()) as { order_id: string };
     const res = await signedCallback({ order_id: created.order_id }, 'wrong-secret');
     expect(res.status).toBe(500);
@@ -187,7 +218,7 @@ describe('行走骨架：一条链路走到底', () => {
   });
 
   it('重复回调（已 paid）→ 40902，不产生第二条 paid 事件', async () => {
-    const token = await signToken({ sub: USER, role: 'user' }, auth);
+    const token = await userToken();
     const created = (await (await createOrder(token, 'key-dupcb')).json()) as { order_id: string };
     expect((await signedCallback({ order_id: created.order_id })).status).toBe(200);
     const dup = await signedCallback({ order_id: created.order_id });
@@ -207,9 +238,9 @@ describe('行走骨架：一条链路走到底', () => {
 describe('断链验证：少配一环就必须失败', () => {
   it('回调路由没登记 rawBodyPaths → 验签失败（证明原始报文这一环不可省）', async () => {
     const broken = await startServer({ withRawBody: false });
-    const brokenBase = `http://127.0.0.1:${broken.port}`;
+    const brokenBase = broken.base;
     try {
-      const token = await signToken({ sub: USER, role: 'user' }, auth);
+      const token = await userToken();
       const createRes = await fetch(`${brokenBase}/api/v1/skeleton/orders`, {
         method: 'POST',
         headers: {
@@ -238,10 +269,9 @@ describe('断链验证：少配一环就必须失败', () => {
       expect(res.status).toBe(500);
       await expect(res.json()).resolves.toMatchObject({ code: 50002 });
     } finally {
-      await broken.close();
+      await broken.server.close();
       // 还原到"正常"的服务，避免影响后续用例
-      server = await startServer({ withRawBody: true });
-      base = `http://127.0.0.1:${server.port}`;
+      await startServer({ withRawBody: true });
     }
   });
 });

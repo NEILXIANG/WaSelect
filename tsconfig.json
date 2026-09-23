@@ -15,8 +15,10 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": false
   },
-  "include": ["packages/**/*.ts", "server/**/*.ts", "test/**/*.ts"],
+  "include": ["packages/**/*.ts", "server/**/*.ts", "test/**/*.ts", "miniprogram/**/*.ts"],
   "exclude": ["node_modules", "dist", "coverage"]
 }

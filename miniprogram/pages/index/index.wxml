@@ -1,0 +1,41 @@
+<!-- 骨架演示页：三个按钮对应链路的三个环节。刻意不做视觉打磨——它不是产品页面。 -->
+<view class="page">
+  <view class="card">
+    <text class="label">调试 token（骨架期手动粘贴，F6b 登录后自动换取）</text>
+    <input
+      class="input"
+      value="{{token}}"
+      placeholder="粘贴服务端签发的 user token"
+      bindinput="onTokenInput"
+    />
+  </view>
+
+  <view class="card">
+    <button class="btn" type="primary" loading="{{loading}}" bindtap="onCreate">
+      1 · 建单（落库一行）
+    </button>
+    <button class="btn" disabled="{{!orderId || loading}}" bindtap="onSimulate">
+      2 · 触发模拟支付回调
+    </button>
+    <button class="btn" disabled="{{!orderId || loading}}" bindtap="onRefresh">3 · 刷新状态</button>
+  </view>
+
+  <view class="card" wx:if="{{orderId}}">
+    <view class="row">
+      <text class="label">订单号</text>
+      <text class="value">{{orderNo}}</text>
+    </view>
+    <view class="row">
+      <text class="label">状态</text>
+      <text class="value">{{status}}</text>
+    </view>
+    <view class="row">
+      <text class="label">trace_id</text>
+      <text class="value">{{traceId}}</text>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{error}}">
+    <text class="error">{{error}}</text>
+  </view>
+</view>

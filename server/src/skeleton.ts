@@ -64,6 +64,45 @@ function newOrderNo(): string {
   return formatOrderNo(jstDateShort(new Date()), randomOrderSeq());
 }
 
+/**
+ * 把订单置为 paid（事务 + `for update` + 追加审计事件）。
+ *
+ * @why 抽成共用函数是因为**两个入口都要做同一件事**：真实回调（验签后）与骨架的"模拟触发"。
+ *      若各写一份，改一处漏一处就会出现"模拟能过、真实回调失败"这类只在生产暴露的差异。
+ * @throws {AppError} 40400（订单不存在）/ 40902（状态不是 created，多半是回调重发）
+ */
+async function markPaid(db: Db, orderId: string): Promise<void> {
+  await withTransaction(db, async (tx) => {
+    // for update：并发回调（机构重发）时排队，避免两次都读到 'created' 各写一次事件
+    const rows = await tx`select status from orders where id = ${orderId} for update`;
+    const current = rows[0]?.status;
+    if (current === undefined) throw new AppError(40400, { order_id: orderId });
+    if (current !== 'created') throw new AppError(40902, { from: current, to: 'paid' });
+    await tx`
+      update orders set status = 'paid', paid_at = now(), updated_at = now() where id = ${orderId}
+    `;
+    await tx`
+      insert into order_events (order_id, status, actor) values (${orderId}, 'paid', 'system')
+    `;
+  });
+}
+
+/**
+ * 收敛路径参数。
+ * @why Express 5 的类型里 `req.params.x` 是 `string | string[]`（通配/重复参数会产生数组），
+ *      `noUncheckedIndexedAccess` 下还可能是 `undefined`。直接拼进 SQL 会有两种静默后果：
+ *      ① `undefined` 被 postgres.js 当 NULL → 查询返回空，错误从 400 变成 404，排查方向全错；
+ *      ② 数组被转成字符串 → 查到一个根本不存在的 id。
+ *      所以在**所有**用到 params 的地方统一先收敛，而不是在每个 handler 里各判一次。
+ */
+function paramId(value: string | string[] | undefined): string {
+  const one = Array.isArray(value) ? value[0] : value;
+  if (typeof one !== 'string' || one.length === 0) {
+    throw new AppError(40001, { reason: '缺少或非法路径参数' });
+  }
+  return one;
+}
+
 export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
   // ── 1. 建单：鉴权 + 幂等 + 事务写库 ──────────────────────────────────────
   app.post(`${PREFIX}/orders`, requireRole('user', deps.auth), (req, res, next) => {
@@ -135,20 +174,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           throw new AppError(40001, { reason: '回调缺少 order_id' });
         }
 
-        await withTransaction(deps.db, async (tx) => {
-          // for update：并发回调（机构重发）时排队，避免两次都读到 'created' 各写一次事件
-          const rows = await tx`select status from orders where id = ${orderId} for update`;
-          const current = rows[0]?.status;
-          if (current === undefined) throw new AppError(40400, { order_id: orderId });
-          if (current !== 'created') throw new AppError(40902, { from: current, to: 'paid' });
-          await tx`
-            update orders set status = 'paid', paid_at = now(), updated_at = now() where id = ${orderId}
-          `;
-          await tx`
-            insert into order_events (order_id, status, actor) values (${orderId}, 'paid', 'system')
-          `;
-        });
-
+        await markPaid(deps.db, orderId);
         deps.logger.info('skeleton_payment_callback', { order_id: orderId, result: 'paid' });
         res.json({ received: true, order_id: orderId });
       } catch (e) {
@@ -157,15 +183,29 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
     })();
   });
 
-  // ── 3. 读回：证明状态真的回写了（端到端测试的最后一环）────────────────────
+  // ── 3. 模拟触发支付成功（骨架专用，供小程序壳按钮调用）─────────────────────
+  // @why F6c 要求"小程序壳按钮 → 落库 → 触发模拟支付回调 → 状态回写"能在真机上走一遍。
+  //      真实的回调是机构打给我们的（小程序端签不了名），所以骨架期需要这个入口代替机构。
+  // @limitation **业务期必须删除**：它会绕过验签直接改订单状态，留在生产等于任何人都能把单改成已支付。
+  //              同 markPaid() 复用状态回写逻辑，避免"模拟能过、真实回调失败"的分叉。
+  app.post(`${PREFIX}/orders/:id/simulate-paid`, requireRole('user', deps.auth), (req, res, next) => {
+    void (async () => {
+      try {
+        const orderId = paramId(req.params.id);
+        await markPaid(deps.db, orderId);
+        deps.logger.info('skeleton_simulate_paid', { order_id: orderId, result: 'paid' });
+        res.json({ order_id: orderId, status: 'paid' });
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  // ── 4. 读回：证明状态真的回写了（端到端测试的最后一环）────────────────────
   app.get(`${PREFIX}/orders/:id`, requireRole('user', deps.auth), (req, res, next) => {
     void (async () => {
       try {
-        // noUncheckedIndexedAccess 下 req.params.id 是 string | undefined：
-        // 必须先收敛再拼进 SQL——undefined 进查询会被 postgres.js 当成 NULL，
-        // 于是"路径参数缺失"会变成"查不到"，错误从 400 变成 404，误导排查。
-        const orderId = req.params.id;
-        if (orderId === undefined) throw new AppError(40001, { reason: '缺少订单 id' });
+        const orderId = paramId(req.params.id);
         const rows = await deps.db`
           select id, order_no, status from orders where id = ${orderId}
         `;

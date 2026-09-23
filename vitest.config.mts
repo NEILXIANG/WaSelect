@@ -29,7 +29,10 @@ export default defineConfig({
         test: { name: 'contract', include: ['**/*.contract.test.ts'] },
       },
       {
-        test: { name: 'e2e', include: ['test/e2e/**/*.test.ts'] },
+        // e2e 层同样必须**串行**，理由比 db 层更隐蔽：两个文件各起一个服务，各自 `resetTestDb()` 会
+        // 把对方的库清空；表现出来是"单跑这个文件绿、跑全套就随机红"，极难复现。
+        // @limitation 串行的代价是 e2e 变慢；当前只有一个文件（~1s），可接受。文件多了再考虑分库。
+        test: { name: 'e2e', include: ['test/e2e/**/*.test.ts'], fileParallelism: false },
       },
     ],
     coverage: {
