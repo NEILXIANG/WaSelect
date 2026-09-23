@@ -51,41 +51,93 @@ export interface PaymentIntentSeed {
   metadata?: Record<string, string>;
 }
 
+/** Checkout Session 的字段子集。 */
+export interface CheckoutSessionSeed {
+  id?: string;
+  /** `paid` / `unpaid` / `no_payment_required` */
+  paymentStatus?: string;
+  /** `complete` / `expired` / `open` */
+  status?: string;
+  amountTotal?: number;
+  currency?: string;
+  paymentIntent?: string | null;
+  metadata?: Record<string, string>;
+}
+
 /**
- * 造一个 Stripe 事件（形状与官方一致，字段可覆盖）。
- * @param type 事件类型，如 `payment_intent.succeeded`
- * @param pi   `data.object` 的内容
+ * 覆盖项。**语义刻意收窄**：只能改顶层字段与 `dataObject`，且 `dataObject` 是**深合并**。
+ * @why 上一版直接把 `Partial<StripeEvent>` 铺在最后（`...overrides`），于是传
+ *      `{ data: { object: { id } } }` 会把合并好的 `data.object` **整体替换**掉，
+ *      造出一条只有 id 的残缺回调——而用它测出来的解析代码会在真环境里取不到任何字段。
+ *      覆盖语义含糊（"这是替换还是合并？"）本身就是缺陷来源，所以从 API 上消除它。
+ */
+export interface StripeEventOverrides {
+  id?: string;
+  created?: number;
+  livemode?: boolean;
+  /** 深合并进 `data.object`，不会替换掉默认字段。 */
+  dataObject?: Record<string, unknown>;
+}
+
+/** `data.object` = PaymentIntent 的形状（含我们会读的字段）。 */
+export function paymentIntent(seed: PaymentIntentSeed = {}): Record<string, unknown> {
+  return {
+    id: seed.id ?? 'pi_3P0000000000000000000000',
+    object: 'payment_intent',
+    amount: seed.amount ?? 12_000,
+    currency: seed.currency ?? 'jpy',
+    status: seed.status ?? 'succeeded',
+    metadata: seed.metadata ?? {},
+    // 下面两个是"我们会用到但容易漏"的字段
+    capture_method: 'automatic',
+    last_payment_error: null,
+  };
+}
+
+/**
+ * `data.object` = Checkout Session 的形状。
+ * @why D-49（2026-09-22）把银行卡入口改成 **Stripe Checkout 托管页**，
+ *      所以主事件是 `checkout.session.*` 而不是 `payment_intent.*`。
+ *      （更早的 D-31 定的是自建 H5 + Payment Element，已被 D-49 推翻；
+ *        `docs/开发前审计报告-2026-09-19.md` 第 15 条据此要求"改用 payment_intent"，
+ *        现在属**反向错误指引**，不要照它改。）
+ */
+export function checkoutSession(seed: CheckoutSessionSeed = {}): Record<string, unknown> {
+  return {
+    id: seed.id ?? 'cs_test_a1B2c3D4e5F6g7H8',
+    object: 'checkout.session',
+    status: seed.status ?? 'complete',
+    payment_status: seed.paymentStatus ?? 'paid',
+    amount_total: seed.amountTotal ?? 12_000,
+    currency: seed.currency ?? 'jpy',
+    payment_intent: seed.paymentIntent ?? 'pi_3P0000000000000000000000',
+    metadata: seed.metadata ?? {},
+  };
+}
+
+/**
+ * 造一个 Stripe 事件（形状与官方一致）。
+ * @param type 事件类型
+ * @param object 该事件的 `data.object` 内容（用 `paymentIntent()` / `checkoutSession()` 造）
+ * @param overrides 覆盖项，见 `StripeEventOverrides`（`dataObject` 为深合并）
  */
 export function stripeEvent(
   type: string,
-  pi: PaymentIntentSeed = {},
-  overrides: Partial<StripeEvent> = {},
+  object: Record<string, unknown>,
+  overrides: StripeEventOverrides = {},
 ): StripeEvent {
   const created = overrides.created ?? 1_700_000_000;
-  const intent: Record<string, unknown> = {
-    id: pi.id ?? 'pi_3P0000000000000000000000',
-    object: 'payment_intent',
-    amount: pi.amount ?? 12_000,
-    currency: pi.currency ?? 'jpy',
-    status: pi.status ?? 'succeeded',
-    metadata: pi.metadata ?? {},
-    // 下面三个是"我们会用到但容易漏"的字段：捕获方式、最新错误、创建时间
-    capture_method: 'automatic',
-    last_payment_error: null,
-    created,
-  };
-  const base: StripeEvent = {
-    id: 'evt_00000000000000',
+  return {
+    id: overrides.id ?? 'evt_00000000000000',
     object: 'event',
     api_version: '2024-06-20',
     created,
-    livemode: false,
+    livemode: overrides.livemode ?? false,
     pending_webhooks: 0,
     request: { id: null, idempotency_key: null },
     type,
-    data: { object: intent },
+    data: { object: { ...object, ...(overrides.dataObject ?? {}) } },
   };
-  return { ...base, data: { object: { ...intent, ...(overrides.data?.object ?? {}) } }, ...overrides };
 }
 
 /**
@@ -133,10 +185,43 @@ export function verifyStripeSignature(
   return { ok: true };
 }
 
-/** 常用事件类型（只列我们真会处理的；其余按官方清单补）。 */
+/**
+ * 我们会处理的事件类型。
+ * @why **逐条抄自 `contracts/api-contract.yaml` 的 `/pay/callback/stripe`**，
+ *      那里标注了 `（D-49/D-50）`。判定口径不必查外部资料——本仓库的契约自己写着，
+ *      而且 `stripe.contract.test.ts` 会反过来要求：契约里列出的事件，样本工厂必须都造得出来。
+ * @limitation `charge.refund.updated` / `refund.failed` 与 `charge.dispute.closed` 等
+ *      在契约里列了但尚未造样本（当前业务用不到）；契约测试里走豁免名单并写明原因，
+ *      用到时必须补，不能永久豁免。
+ */
 export const STRIPE_EVENT_TYPES = {
+  // ── 主路径：Checkout 托管页（D-49）──
+  checkoutCompleted: 'checkout.session.completed',
+  checkoutExpired: 'checkout.session.expired',
+  checkoutAsyncSucceeded: 'checkout.session.async_payment_succeeded',
+  checkoutAsyncFailed: 'checkout.session.async_payment_failed',
+  // ── 次路径：PaymentIntent（托管页背后的对象，也要能处理）──
   paySucceeded: 'payment_intent.succeeded',
   payFailed: 'payment_intent.payment_failed',
+  payCanceled: 'payment_intent.canceled',
+  // ── 售后 ──
   refundSucceeded: 'charge.refunded',
   disputeCreated: 'charge.dispute.created',
 } as const;
+
+/** 尚未造样本、但契约已列出的事件（用到时必须补，不能永久豁免）。 */
+export const STRIPE_EVENTS_NOT_SAMPLED: readonly string[] = [
+  'refund.updated',
+  'refund.failed',
+  'charge.dispute.closed',
+  'charge.dispute.funds_withdrawn',
+  'charge.dispute.funds_reinstated',
+];
+
+/** 每个事件对应的 `data.object` 形状工厂：造样本时不必自己判断该用哪个。 */
+export function objectForEvent(type: string): Record<string, unknown> {
+  if (type.startsWith('checkout.session.')) return checkoutSession();
+  if (type.startsWith('payment_intent.')) return paymentIntent();
+  if (type.startsWith('charge.')) return { id: 'ch_3P0000000000000000000000', object: 'charge' };
+  throw new Error(`未知事件类型，未定义样本形状：${type}`);
+}
