@@ -203,6 +203,33 @@ describe('CORS 与就绪探针（D21）', () => {
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
   });
 
+  it('预检放行 idempotency-key（N8：管理端写操作必须带幂等键，缺了浏览器预检就拦下）', async () => {
+    const { baseUrl } = await serve({ cors: { origins: ['https://admin.example.com'] } });
+    const res = await fetch(`${baseUrl}/api/v1/admin/orders`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://admin.example.com',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'authorization,content-type,idempotency-key',
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-headers')).toContain('idempotency-key');
+  });
+
+  it('真实响应带 expose-headers（N8：前端要读得到 x-trace-id 才能报障）', async () => {
+    const { baseUrl } = await serve({
+      cors: { origins: ['https://admin.example.com'] },
+      mount: (a) => {
+        a.get('/api/v1/admin/ping', (_req, res) => res.json({ ok: 1 }));
+      },
+    });
+    const res = await fetch(`${baseUrl}/api/v1/admin/ping`, {
+      headers: { origin: 'https://admin.example.com' },
+    });
+    expect(res.headers.get('access-control-expose-headers')).toContain('x-trace-id');
+  });
+
   it('/readyz：依赖正常 200，依赖不可用 503（不能只看进程活着）', async () => {
     let ok = true;
     const { baseUrl } = await serve({ readiness: async () => ok });

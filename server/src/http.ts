@@ -159,12 +159,20 @@ function corsMiddleware(opts: CorsOptions): RequestHandler {
       return;
     }
     res.setHeader('access-control-allow-origin', origin);
+    // expose-headers 要挂在**真实响应**上（预检响应带它也合法）：
+    // 管理端前端需要读到 x-trace-id 才能报障（N8）；x-request-id 同理
+    res.setHeader('access-control-expose-headers', 'x-trace-id, x-request-id');
     if (req.method !== 'OPTIONS') {
       next();
       return;
     }
     res.setHeader('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
-    res.setHeader('access-control-allow-headers', 'authorization,content-type,x-trace-id');
+    // idempotency-key 必须在列（N8）：管理端写操作（发货/退款）按规范要带幂等键，
+    // 预检不放行它，浏览器在预检阶段就把请求拦下——管理端连试错的余地都没有
+    res.setHeader(
+      'access-control-allow-headers',
+      'authorization,content-type,x-trace-id,idempotency-key',
+    );
     res.setHeader('access-control-max-age', '600');
     res.status(204).end();
   };
