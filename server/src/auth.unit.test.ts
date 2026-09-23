@@ -10,7 +10,9 @@ import { createHttpApp, listen } from './http.js';
 import { createLogger } from './logger.js';
 import { SignJWT } from 'jose';
 import {
+  AUDIENCE,
   bearerOf,
+  DEFAULT_TTL_SEC,
   hashPassword,
   requireRole,
   signToken,
@@ -19,6 +21,7 @@ import {
   type AuthConfig,
   type Principal,
 } from './auth.js';
+import { decodeJwt } from 'jose';
 
 const cfg: AuthConfig = { secret: 'a'.repeat(40), issuer: 'waselect-test' };
 const otherSecret: AuthConfig = { secret: 'b'.repeat(40), issuer: 'waselect-test' };
@@ -41,6 +44,52 @@ describe('signToken / verifyToken', () => {
   it('过期 token 拒绝（返回 40101，且不区分失败原因）', async () => {
     const token = await signToken(user, { ...cfg, ttlSec: -10 });
     await expect(verifyToken(token, cfg)).rejects.toMatchObject({ code: 40101 });
+  });
+
+  /**
+   * `aud` 与有效期（技术文档 v0.5 §5 口径）。
+   * @why 这两条都是"代码与文档差一点不会让任何测试变红"的典型：数值写错、aud 漏设，
+   *      系统照样跑得很好。只能靠**直接断言文档里写的那个数**来钉住。
+   */
+  it('aud 按角色区分：用户 mp / 管理员 admin（技术文档 §5）', async () => {
+    expect(AUDIENCE).toEqual({ user: 'mp', admin: 'admin' });
+    expect(decodeJwt(await signToken(user, cfg)).aud).toBe('mp');
+    expect(decodeJwt(await signToken(admin, cfg)).aud).toBe('admin');
+  });
+
+  it('有效期符合文档：用户 7 天、管理员 12 小时（43200 秒）', async () => {
+    expect(DEFAULT_TTL_SEC.user).toBe(7 * 24 * 3600);
+    expect(DEFAULT_TTL_SEC.admin).toBe(12 * 3600);
+
+    const now = Math.floor(Date.now() / 1000);
+    const adminToken = decodeJwt(await signToken(admin, cfg));
+    expect((adminToken.exp as number) - (adminToken.iat as number)).toBe(43200);
+    expect((adminToken.iat as number) - now).toBeLessThanOrEqual(2);
+  });
+
+  it('受众不符 → 40301（已验签但不属于该入口，不能让前端误判为"登录失效"）', async () => {
+    const userToken = await signToken(user, cfg);
+    // 不传 expect 时仍能解出身份（供"先拿身份再分流"的调用点）
+    await expect(verifyToken(userToken, cfg)).resolves.toMatchObject({ role: 'user' });
+    // 传了 expect=admin 就因 aud 不符被拒；是 403 不是 401
+    await expect(verifyToken(userToken, cfg, 'admin')).rejects.toMatchObject({ code: 40301 });
+  });
+
+  it('管理员 token 反向也进不了 user 入口', async () => {
+    const adminToken = await signToken(admin, cfg);
+    await expect(verifyToken(adminToken, cfg, 'user')).rejects.toMatchObject({ code: 40301 });
+  });
+
+  it('受众不是本项目取值（另一服务共用密钥）→ 40101', async () => {
+    const foreign = await new SignJWT({ role: 'user' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('u-x')
+      .setIssuer('waselect-test')
+      .setAudience('some-other-service')
+      .setIssuedAt(Math.floor(Date.now() / 1000))
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 600)
+      .sign(new TextEncoder().encode('a'.repeat(40)));
+    await expect(verifyToken(foreign, cfg)).rejects.toMatchObject({ code: 40101 });
   });
 
   it('换密钥签发的 token 拒绝（环境隔离）', async () => {

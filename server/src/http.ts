@@ -57,10 +57,29 @@ export interface CreateHttpAppOptions {
   mount?: ((app: Express) => void) | undefined;
 }
 
-/** 从请求头取链路 ID：上游（小程序 / 定时任务）传来的要沿用，否则新建。 */
+/**
+ * 上游 `x-trace-id` 允许的字符集与长度。
+ * @why 曾经只判"非空就用"，等于把**客户端完全可控的字符串**直接写进每一条日志。实际风险有三条：
+ *      ① 超长值污染日志、撑爆检索字段；② 客户端把任意内容（邮箱、手机号、内部标识）塞进我们的日志系统——
+ *      这些内容不受 redact 保护（键名叫 trace_id，不在敏感名单里，值又是"合法"字符串）；
+ *      ③ 链路串不起来（上游传了垃圾值，整条链的日志都挂在同一个垃圾 ID 上，等于没有 ID）。
+ *      形状不符一律丢弃并新建——链路断在这一跳，也比让可控内容进日志好。
+ *
+ * @limitation 一：**换行注入不由本校验兜住**。含裸换行的头值在到达本进程前就被 Node 的 HTTP 解析器
+ *              （llhttp）按协议非法拒绝了——测试里用 fetch 发这种头会直接抛错，根本发不出来。
+ *              所以本校验解决的是"合法字节但形状危险"，不是"协议层攻击"。这一点写清楚，
+ *              免得后来者以为有了这个正则就不需要别的防护（或反过来，以为它没用）。
+ * @limitation 二：丢弃**不记日志**：否则攻击者可以用畸形头刷满日志（拒绝服务）。
+ *              代价是"上游传了但被丢弃"这件事在本地不可见，只能靠响应头里的 x-trace-id 是否为新值来判断。
+ */
+const TRACE_ID_PATTERN = /^[A-Za-z0-9._:-]{8,64}$/;
+
+/** 从请求头取链路 ID：符合形状才沿用，否则新建。 */
 function traceIdFrom(req: Request): string {
   const header = req.header('x-trace-id');
-  return header !== undefined && header.trim().length > 0 ? header.trim() : newTraceId();
+  if (header === undefined) return newTraceId();
+  const trimmed = header.trim();
+  return TRACE_ID_PATTERN.test(trimmed) ? trimmed : newTraceId();
 }
 
 export function createHttpApp(opts: CreateHttpAppOptions): Express {
@@ -156,20 +175,51 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
   return app;
 }
 
+/**
+ * 是否**报文解析**阶段抛的错（JSON 语法错 / 体积超限）。
+ *
+ * @why 曾经只判 `err instanceof SyntaxError`——那会把**业务代码里任何一处** `JSON.parse` 失败、
+ *      甚至动态 `import()` 的语法错，全都归成 40001（参数格式错误）。
+ *      后果：一个真实的后端 bug 会被当成"用户传参有问题"报给用户和监控，
+ *      于是线上出现 40001 时没人会去查服务端，真正的 bug 就长期潜伏。
+ *      现在只认快递解析器自己打的标记（`type` / `status=400`），其余一律落到 50000。
+ * @limitation 依赖 express 内部错误对象的形状（body-parser 约定）。
+ *              升级 express 大版本时应重跑本文件的"报文解析错误"用例确认标记未变。
+ */
+function isBodyParseError(err: unknown): boolean {
+  const e = err as { type?: string; status?: number; statusCode?: number } | null;
+  if (e?.type === 'entity.too.large') return true;
+  return (
+    err instanceof SyntaxError &&
+    (e?.type === 'entity.parse.failed' || e?.status === 400 || e?.statusCode === 400)
+  );
+}
+
+/**
+ * 解析错误的日志摘要。**刻意不带原始 message**——
+ * SyntaxError 的 message 里含请求体片段（`Unexpected token a in JSON at position 12`），
+ * 而请求体是客户端可控内容：可能含卡号、地址、姓名。把原文写进日志等于绕过 redact。
+ */
+function parseErrorReason(err: unknown): string {
+  return (err as { type?: string } | null)?.type === 'entity.too.large'
+    ? '请求体超过大小上限'
+    : 'JSON 格式错误';
+}
+
 /** 把各类异常归一成 {status, body, logFields}：解析错误也要有业务码，不能裸 500。 */
 function normalizeError(err: unknown): {
   status: number;
   body: { code: number; message: string };
   logFields: Record<string, unknown>;
 } {
-  // JSON 解析失败 / 体积超限：express 抛的是带 status 的普通错误，按 40001（参数格式错误）归一
-  if (
-    err instanceof SyntaxError ||
-    (err as { type?: string } | null)?.type === 'entity.too.large'
-  ) {
-    const appErr = new AppError(40001, { reason: (err as Error).message });
+  if (isBodyParseError(err)) {
+    const appErr = new AppError(40001, { reason: parseErrorReason(err) });
     const { status, body } = toErrorResponse(appErr);
-    return { status, body, logFields: { err_code: appErr.code, err_message: appErr.message } };
+    return {
+      status,
+      body,
+      logFields: { err_code: appErr.code, err_message: appErr.message, reason: appErr.details },
+    };
   }
   const { status, body } = toErrorResponse(err);
   const e = err as Error | undefined;

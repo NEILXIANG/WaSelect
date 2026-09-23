@@ -148,18 +148,125 @@ describe('DB 级约束真的生效（不靠应用层自觉）', () => {
 describe('迁移本身', () => {
   it('001_init 已应用，且 13 张业务表齐全', async () => {
     const applied = await db`select name from pgmigrations order by name`;
-    expect(applied.map((r) => r.name)).toContain('001_init');
+    const appliedNames = applied.map((r) => r.name);
+    expect(appliedNames).toContain('001_init');
+    expect(appliedNames).toContain('002_hardening');
 
     const tables = (
       await db`select tablename from pg_tables where schemaname = 'public' and tablename <> 'pgmigrations' order by tablename`
     ).map((r) => r.tablename);
-    expect(tables).toHaveLength(13);
+    // 13（001）+ 2（002 的 user_events / admin_audit，ADR-29 流 B/C 落点）。
+    // ⚠️ 技术文档 v0.5 §3 仍写"13 张表"，需同步补这两张——见 002_hardening.sql @limitation 二。
+    expect(tables).toHaveLength(15);
     expect(tables).toContain('orders');
     expect(tables).toContain('job_runs');
+    expect(tables).toContain('user_events');
+    expect(tables).toContain('admin_audit');
   });
 
   it('job_runs 有 seed（否则看门狗永远读不到心跳）', async () => {
     const rows = await db`select name from job_runs order by name`;
     expect(rows.map((r) => r.name)).toEqual(['daily', 'tick']);
+  });
+});
+
+/**
+ * 002 加固迁移（P1）：外键索引 / 状态域约束 / append-only / ADR-29 审计表。
+ * @why 这些约束的失败形态是"缺了也不报错"，只能用真库断言"它真的会拒绝/真的存在"。
+ */
+describe('002 加固：约束真的会拦', () => {
+  /** 每条用例前 beforeEach 都会 TRUNCATE，所以依赖 users 的用例必须自己建用户。 */
+  async function ensureUser(): Promise<void> {
+    await db`insert into users (id, openid) values ('u-1', 'o-1') on conflict (id) do nothing`;
+  }
+
+  it('orders.status 写入未登记状态被拒（否则订单会从所有查询里静默消失）', async () => {
+    await ensureUser();
+    await expect(
+      db`insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, fx_snapshot, address_snapshot, terms_version, expires_at)
+         values ('o-1', '260923-K7Q2MN', 'u-1', 'payed', 100, 100, '{}', '{}', 'TOS', now())`,
+    ).rejects.toThrow(/orders_status_domain/);
+  });
+
+  it('orders.status 写入 10 个登记状态都通过（约束没有误伤合法值）', async () => {
+    await ensureUser();
+    const statuses = [
+      'created',
+      'pending_payment',
+      'paid',
+      'shipped',
+      'delivered',
+      'completed',
+      'cancelled',
+      'expired',
+      'refunding',
+      'refunded',
+    ];
+    for (const [i, status] of statuses.entries()) {
+      await db`insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, fx_snapshot, address_snapshot, terms_version, expires_at)
+         values (${`o-s-${i}`}, ${`260923-K7Q2M${i}`}, 'u-1', ${status}, 100, 100, '{}', '{}', 'TOS', now())`;
+    }
+    const rows = await db`select status from orders where id like 'o-s-%'`;
+    expect(rows).toHaveLength(statuses.length);
+  });
+
+  it('审计表 append-only：order_events 的 UPDATE / DELETE 都被拒', async () => {
+    await ensureUser();
+    await db`insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, fx_snapshot, address_snapshot, terms_version, expires_at)
+       values ('o-2', '260923-K7Q2MP', 'u-1', 'created', 100, 100, '{}', '{}', 'TOS', now())`;
+    await db`insert into order_events (order_id, status, actor) values ('o-2', 'created', 'user')`;
+    await expect(
+      db`update order_events set note = 'tampered' where order_id = 'o-2'`,
+    ).rejects.toThrow(/只允许 INSERT/);
+    await expect(db`delete from order_events where order_id = 'o-2'`).rejects.toThrow(
+      /只允许 INSERT/,
+    );
+  });
+
+  it('user_events / admin_audit 可写且同样 append-only（ADR-29 流 B/C 的落点）', async () => {
+    await ensureUser();
+    await db`insert into user_events (user_id, event, props, trace_id) values ('u-1', 'view_product', '{"sku":"p-1"}', 't-1')`;
+    await db`insert into admin_audit (actor, action, target, after) values ('admin@x.com', 'product.update', 'p-1', '{"price":100}')`;
+    const ue = await db`select event from user_events where trace_id = 't-1'`;
+    expect(ue[0]?.event).toBe('view_product');
+    await expect(db`update admin_audit set action = 'x' where target = 'p-1'`).rejects.toThrow(
+      /只允许 INSERT/,
+    );
+  });
+
+  it('外键列都有索引（否则父表删改会退化成子表全表扫描）', async () => {
+    const rows = await db`
+      select c.conrelid::regclass::text as tbl, a.attname as col
+      from pg_constraint c
+      join unnest(c.conkey) k(attnum) on true
+      join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum
+      where c.contype = 'f' and c.connamespace = 'public'::regnamespace
+    `;
+    // ⚠️ 必须排除**部分索引**（indpred is not null）：payments 上有个
+    //    `uq_payments_one_initiated ... WHERE status='initiated'` 的部分唯一索引，首列也是 order_id。
+    //    不排除的话，把通用外键索引删掉这条用例**仍然全绿**——看起来在验，其实没验到。
+    //    这是本次写测试时真实踩到的：注回缺陷后未变红，才回头发现的。
+    const indexed = await db`
+      select t.relname as tbl, a.attname as col
+      from pg_index i
+      join pg_class t on t.oid = i.indrelid
+      join pg_attribute a on a.attrelid = t.oid and a.attnum = i.indkey[0]
+      where t.relnamespace = 'public'::regnamespace
+        and i.indpred is null
+        and i.indisvalid
+    `;
+    const have = new Set(indexed.map((r) => `${r.tbl}.${r.col}`));
+    // orders.user_id / order_events.order_id 在 001 已建复合索引，前缀列即生效
+    const expectIdx = [
+      'addresses.user_id',
+      'order_items.order_id',
+      'order_items.product_id',
+      'payments.order_id',
+      'shipments.order_id',
+      'orders.user_id',
+      'order_events.order_id',
+    ];
+    for (const key of expectIdx) expect(have.has(key)).toBe(true);
+    expect(rows.length).toBeGreaterThan(0);
   });
 });

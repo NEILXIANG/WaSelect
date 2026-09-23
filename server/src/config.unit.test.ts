@@ -11,7 +11,7 @@ import { ConfigError, loadConfig, redactConfig, SECRET_KEYS } from './config.js'
 
 /** 最小可启动环境：必填项齐备（PAYMENT_CHANNELS 刻意必填，见 config.ts @tradeoff）。 */
 const baseEnv: NodeJS.ProcessEnv = {
-  DATABASE_URL: 'postgresql://neilxiang@localhost:5432/japan_shop',
+  DATABASE_URL: 'postgresql://app@localhost:5432/japan_shop',
   JWT_SECRET: 'a'.repeat(32),
   PAYMENT_CHANNELS: 'mock,stripe',
   TERMS_VERSION: 'TOS-2026-09-20',
@@ -154,5 +154,91 @@ describe('redactConfig 脱敏', () => {
   it('密钥名单本身不为空——新增密钥类变量必须同步维护', () => {
     expect(SECRET_KEYS.length).toBeGreaterThan(5);
     expect(SECRET_KEYS).toContain('JWT_SECRET');
+  });
+});
+
+/**
+ * 跨字段校验（P1）。
+ * @why 逐字段校验回答不了"这套配置放在一起能不能收钱"：下面每一条里**没有一个字段是非法值**，
+ *      但每一种组合都是线上事故，且都不会报错——只会表现为"下单失败"或"钱没到账"。
+ */
+describe('跨字段校验：单项合法但组合成事故', () => {
+  const prod = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
+    ...baseEnv,
+    NODE_ENV: 'production',
+    DATABASE_URL: 'postgresql://app@db.internal:5432/japan_shop',
+    PAYMENT_CHANNELS: 'stripe',
+    STRIPE_SECRET_KEY: 'sk_live_x',
+    STRIPE_WEBHOOK_SECRET: 'whsec_x',
+    CORS_ORIGINS: 'https://admin.example.com',
+    ...extra,
+  });
+
+  it('生产 + mock 通道 → 拒绝（会收真钱走假支付）', () => {
+    const issues = expectReject(prod({ PAYMENT_CHANNELS: 'mock,stripe' }));
+    expect(issues.join('\n')).toContain('PAYMENT_CHANNELS');
+  });
+
+  it('生产 + mock + 审核模式 → 放行（审核期是唯一合法场景）', () => {
+    const c = loadConfig(
+      prod({ PAYMENT_CHANNELS: 'mock', REVIEW_MODE: 'on', REVIEW_SKU_ID: 'sku-1' }),
+    );
+    expect(c.REVIEW_MODE).toBe('on');
+  });
+
+  it('审核模式开了却没指定 SKU → 拒绝（否则审核期全站下不了单）', () => {
+    const issues = expectReject(prod({ REVIEW_MODE: 'on' }));
+    expect(issues.join('\n')).toContain('REVIEW_SKU_ID');
+  });
+
+  it('生产启用 stripe 却缺密钥 → 拒绝（缺密钥的表现是下单 500，不是启动报错）', () => {
+    expect(expectReject(prod({ STRIPE_SECRET_KEY: '' })).join('\n')).toContain('STRIPE_SECRET_KEY');
+    expect(expectReject(prod({ STRIPE_WEBHOOK_SECRET: '' })).join('\n')).toContain(
+      'STRIPE_WEBHOOK_SECRET',
+    );
+  });
+
+  it('生产启用 wechat 却缺机构配置 → 拒绝', () => {
+    const issues = expectReject(prod({ PAYMENT_CHANNELS: 'wechat' }));
+    expect(issues.join('\n')).toContain('WECHAT_INSTITUTION_MERCHANT_ID');
+    expect(issues.join('\n')).toContain('WECHAT_INSTITUTION_API_KEY');
+  });
+
+  it('生产 DATABASE_URL 指向 localhost → 拒绝（漏配环境变量的典型症状）', () => {
+    expect(
+      expectReject(prod({ DATABASE_URL: 'postgresql://app@localhost:5432/japan_shop' })).join('\n'),
+    ).toContain('DATABASE_URL');
+  });
+
+  it('生产未声明 CORS_ORIGINS → 拒绝（管理端所有跨域请求都会被拒）', () => {
+    expect(expectReject(prod({ CORS_ORIGINS: '' })).join('\n')).toContain('CORS_ORIGINS');
+  });
+
+  it('开发环境不受生产规则约束（占位期还没签约，不能一上来就启动不了）', () => {
+    expect(loadConfig(baseEnv).PAYMENT_CHANNELS).toEqual(['mock', 'stripe']);
+  });
+});
+
+/** 数值下限：挡住"值合法但量纲荒谬"的配置（曾经全部能正常启动）。 */
+describe('数值型配置的下限', () => {
+  const bad: ReadonlyArray<[string, string]> = [
+    ['SCHEDULER_TICK_MS', '0'], // 每 0ms 一次 tick，打满 CPU
+    ['ORDER_PAYMENT_TTL_MIN', '0'], // 订单刚建就过期
+    ['RATE_LIMIT_LOGIN_PER_15MIN', '0'], // 等于全站禁登录
+    ['RATE_LIMIT_QUOTE_PER_MIN', '0'],
+    ['MAX_ORDER_JPY', '0'],
+    ['AUTO_DELIVER_DAYS', '0'],
+    ['PORT', '0'],
+  ];
+  for (const [key, value] of bad) {
+    it(`${key}=${value} 拒绝启动`, () => {
+      expect(expectReject({ ...baseEnv, [key]: value }).join('\n')).toContain(key);
+    });
+  }
+
+  it('SCHEDULER_TICK_MS 低于 1000ms 也拒绝（常驻调度器的最小 sane 间隔）', () => {
+    expect(expectReject({ ...baseEnv, SCHEDULER_TICK_MS: '999' }).join('\n')).toContain(
+      'SCHEDULER_TICK_MS',
+    );
   });
 });

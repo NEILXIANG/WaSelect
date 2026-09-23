@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Express } from 'express';
 import { Buffer } from 'node:buffer';
+import { connect } from 'node:net';
 import { MemorySink } from '../../test/helpers/memory-sink.js';
 import { createHttpApp, defaultHost, installShutdownHandlers, listen } from './http.js';
 import { createLogger } from './logger.js';
@@ -337,5 +338,103 @@ describe('优雅关闭', () => {
     uninstall();
     expect(process.listeners('SIGTERM')).toHaveLength(0);
     await started.close();
+  });
+});
+
+/**
+ * `x-trace-id` 的形状校验（P1）。
+ *
+ * @why 这个头的值会写进**每一条日志**，且键名不在 redact 的敏感名单里——
+ *      不校验就等于让客户端往我们的日志里写任意内容，且绕过脱敏。
+ * @limitation 含裸换行的头值**发不出来**（fetch 与 Node 的 HTTP 解析器都会先拒），
+ *      所以这里用**原始 socket**测的是"合法字节但形状危险"的那几种：超长、含空格、空值。
+ *      换行场景另有一条用例，断言它根本到不了应用层。
+ */
+describe('x-trace-id 必须是安全的形状', () => {
+  /** 原始 socket 发请求：绕过 fetch/undici 对头值的合法性校验，模拟真实畸形输入。 */
+  function rawGet(port: number, headerLine: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const sock = connect(port, '127.0.0.1', () => {
+        sock.write(
+          `GET /healthz HTTP/1.1\r\nHost: t\r\nx-trace-id: ${headerLine}\r\nConnection: close\r\n\r\n`,
+        );
+      });
+      let buf = '';
+      sock.setTimeout(3000, () => sock.destroy());
+      sock.on('data', (d: Buffer) => {
+        buf += d.toString();
+      });
+      sock.on('end', () => resolve(buf));
+      sock.on('error', reject);
+    });
+  }
+
+  it('合法值沿用并回传（跨服务链路不能断）', async () => {
+    const { baseUrl } = await serve();
+    const res = await fetch(`${baseUrl}/healthz`, { headers: { 'x-trace-id': 'trace-abc-123' } });
+    expect(res.headers.get('x-trace-id')).toBe('trace-abc-123');
+  });
+
+  it('超长 / 含空格 / 空值一律丢弃并新建（原始 socket 直发）', async () => {
+    const { baseUrl, sink } = await serve();
+    const port = Number(new URL(baseUrl).port);
+    for (const bad of ['x'.repeat(200), 'has space here', '', '   ', 'a']) {
+      const raw = await rawGet(port, bad);
+      const got = /x-trace-id: (\S+)/.exec(raw)?.[1];
+      expect(got).toBeDefined();
+      expect(got).toMatch(/^[A-Za-z0-9._:-]{8,64}$/);
+      expect(got).not.toBe(bad.trim());
+    }
+    // 并且日志里没有出现那些畸形值
+    const all = sink.lines.join('\n');
+    expect(all).not.toContain('x'.repeat(200));
+    expect(all).not.toContain('has space here');
+  });
+
+  it('换行注入到不了应用层：HTTP 解析器先拒（本校验不是这层的防线）', async () => {
+    // fetch 会在客户端直接抛错——证明裸换行根本发不出去
+    await expect(
+      fetch(`${(await serve()).baseUrl}/healthz`, {
+        headers: { 'x-trace-id': 'abc\n{"event":"pay_succeeded"}' },
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+/** 报文解析错误的归类精度（P1）。 */
+describe('错误归类：解析错误 vs 服务端 bug', () => {
+  it('JSON 语法错 → 40001（参数格式错误）', async () => {
+    const { baseUrl } = await serve();
+    const res = await fetch(`${baseUrl}/healthz`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{ bad json',
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ code: 40001 });
+  });
+
+  it('解析错误的日志不带请求体片段（请求体是客户端可控内容）', async () => {
+    const { baseUrl, sink } = await serve();
+    await fetch(`${baseUrl}/healthz`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"card":"4242424242424242"',
+    });
+    expect(sink.lines.join('\n')).not.toContain('4242424242424242');
+  });
+
+  it('业务代码抛的 SyntaxError → 50000，不能被误判成"用户传参错"', async () => {
+    const { baseUrl, sink } = await serve((app) => {
+      app.get('/bug', () => {
+        // 模拟后端自己的 JSON.parse 失败：这是 bug，不是用户问题
+        JSON.parse('{oops');
+      });
+    });
+    const res = await fetch(`${baseUrl}/bug`);
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toMatchObject({ code: 50000 });
+    // 且必须记为 unhandled_error（要人来看），而不是 request_rejected
+    expect(sink.find('unhandled_error').length).toBeGreaterThan(0);
   });
 });

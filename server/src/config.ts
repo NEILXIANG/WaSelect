@@ -55,11 +55,18 @@ function num(defaultValue: number) {
   );
 }
 
-/** 整数：同上，额外要求整数（Infinity / NaN 都会被拒）。 */
-function int(defaultValue: number) {
+/**
+ * 整数：同上，额外要求整数（Infinity / NaN 都会被拒）。
+ * @param min 下限。**必须给**：曾经所有数值只有"能解析成数字"这一层校验，
+ *            于是 `SCHEDULER_TICK_MS=0`（每 0ms 跑一次，打满 CPU）、`RATE_LIMIT_LOGIN_PER_15MIN=0`
+ *            （等于全站禁登录）、`ORDER_PAYMENT_TTL_MIN=0`（订单刚建就过期）都能正常启动，
+ *            且每一种都表现为"线上怪异但不报错"。数值型配置的量纲错误必须挡在启动阶段。
+ */
+function int(defaultValue: number, min?: number) {
+  const base = z.number().int();
   return z.preprocess(
     (v) => (v === undefined || v === '' ? undefined : Number(v)),
-    z.number().int().default(defaultValue),
+    (min === undefined ? base : base.min(min)).default(defaultValue),
   );
 }
 
@@ -93,7 +100,7 @@ function csv() {
 const schema = z.object({
   // ── 运行时 ──────────────────────────────────────────────────────────────
   NODE_ENV: z.enum(['development', 'staging', 'production']).default('development'),
-  PORT: int(3000),
+  PORT: int(3000, 1),
 
   // ── 微信小程序 ──────────────────────────────────────────────────────────
   APP_ID: optionalText(),
@@ -130,15 +137,15 @@ const schema = z.object({
   /** 包邮阈值（整数円）；空 = 不包邮。 */
   FREE_SHIPPING_JPY: optionalInt(),
   /** 单笔上限（D-42）：低于 ¥200,000 出口申报阈值与 Zonos 预付上限；超出 → 40906。 */
-  MAX_ORDER_JPY: int(180000),
-  PACKAGING_WEIGHT_G: int(250),
+  MAX_ORDER_JPY: int(180000, 1),
+  PACKAGING_WEIGHT_G: int(250, 0),
 
   // ── 订单生命周期 ────────────────────────────────────────────────────────
-  ORDER_PAYMENT_TTL_MIN: int(30),
+  ORDER_PAYMENT_TTL_MIN: int(30, 1),
   /** 常驻调度器 tick 间隔（D-43：web 进程内 setInterval + pg_try_advisory_lock；不是 Render Cron Job）。 */
-  SCHEDULER_TICK_MS: int(60000),
-  AUTO_DELIVER_DAYS: int(30),
-  AUTO_COMPLETE_DAYS: int(7),
+  SCHEDULER_TICK_MS: int(60000, 1000),
+  AUTO_DELIVER_DAYS: int(30, 1),
+  AUTO_COMPLETE_DAYS: int(7, 1),
   /** 建单必传且必须与服务端相等，否则 40011（D-43）。必填 → 忘了配就启动失败，而不是全站下单失败。 */
   TERMS_VERSION: z.string().min(1, 'TERMS_VERSION 必填（建单比对，D-43）'),
 
@@ -169,8 +176,8 @@ const schema = z.object({
   REVIEW_SKU_ID: optionalText(),
 
   // ── 限流与内部任务（D-52 / D-43）────────────────────────────────────────
-  RATE_LIMIT_LOGIN_PER_15MIN: int(5),
-  RATE_LIMIT_QUOTE_PER_MIN: int(30),
+  RATE_LIMIT_LOGIN_PER_15MIN: int(5, 1),
+  RATE_LIMIT_QUOTE_PER_MIN: int(30, 1),
   /** Cron Job 调 POST /internal/jobs/daily 的共享密钥；留空时该端点在启动时关闭（F6 接入）。 */
   INTERNAL_JOB_SECRET: optionalText(),
 
@@ -189,6 +196,71 @@ const schema = z.object({
   R2_BUCKET: optionalText(),
   IMG_BASE_URL: optionalText(),
   PUBLIC_API_BASE: optionalText(),
+});
+
+/**
+ * 跨字段校验——**单项都合法、组合起来是事故**的那一类。
+ *
+ * @why 逐字段 schema 只能回答"这个值本身对不对"，回答不了"这套配置放在一起能不能收钱"。
+ *      真实事故形态全部落在组合里：生产开了 `mock` 通道（收真钱、走假支付）、
+ *      开了 stripe 却没配密钥（下单必失败且报的是泛化 500）、审核模式开了却没指定 SKU（全站下不了单）。
+ *      这些组合里没有一个字段是"非法值"，所以只能靠跨字段规则拦。
+ *
+ * @limitation 只拦"确定错误"的组合，不做"提醒级"校验（例如建议配 Sentry）。
+ *              提醒一旦进启动校验就会被当成噪音忽略，宁可少而硬。
+ */
+const crossField = schema.superRefine((c, ctx) => {
+  const isProd = c.NODE_ENV === 'production';
+  const add = (path: string, message: string): void => {
+    ctx.addIssue({ code: 'custom', path: [path], message });
+  };
+
+  // 1. 生产跑假支付：最危险的一条——用户能正常下单、钱不到账，且日志里长得跟"放弃支付"一样
+  if (isProd && c.PAYMENT_CHANNELS.includes('mock') && c.REVIEW_MODE !== 'on') {
+    add(
+      'PAYMENT_CHANNELS',
+      '生产环境不得启用 mock 通道（会收真钱走假支付）。审核期确需时须同时设 REVIEW_MODE=on 与 REVIEW_SKU_ID',
+    );
+  }
+
+  // 2. 审核模式必须指定 SKU，否则所有商品都不能用 mock 下单，等于审核期全站不可用
+  if (c.REVIEW_MODE === 'on' && c.REVIEW_SKU_ID === undefined) {
+    add('REVIEW_SKU_ID', 'REVIEW_MODE=on 时必须指定 REVIEW_SKU_ID（否则审核期没有任何商品可下单）');
+  }
+
+  // 3. 启用真实通道就必须有对应密钥：缺密钥的表现是"下单报 500"，而不是"启动时告诉我少配了东西"
+  if (isProd) {
+    if (c.PAYMENT_CHANNELS.includes('stripe')) {
+      if (c.STRIPE_SECRET_KEY === undefined) {
+        add('STRIPE_SECRET_KEY', '启用了 stripe 通道：生产环境必须配置 STRIPE_SECRET_KEY');
+      }
+      if (c.STRIPE_WEBHOOK_SECRET === undefined) {
+        add(
+          'STRIPE_WEBHOOK_SECRET',
+          '启用了 stripe 通道：生产环境必须配置 STRIPE_WEBHOOK_SECRET（回调验签）',
+        );
+      }
+    }
+    if (c.PAYMENT_CHANNELS.includes('wechat')) {
+      if (c.WECHAT_INSTITUTION_MERCHANT_ID === undefined) {
+        add('WECHAT_INSTITUTION_MERCHANT_ID', '启用了 wechat 通道：生产环境必须配置机构商户号');
+      }
+      if (c.WECHAT_INSTITUTION_API_KEY === undefined) {
+        add('WECHAT_INSTITUTION_API_KEY', '启用了 wechat 通道：生产环境必须配置机构 API Key');
+      }
+    }
+    // 4. 生产连到本地库：漏配 DATABASE_URL 时最典型的静默错误——服务起得来、写的却是另一个库
+    if (/(localhost|127\.0\.0\.1)/.test(c.DATABASE_URL)) {
+      add(
+        'DATABASE_URL',
+        '生产环境的 DATABASE_URL 不得指向 localhost/127.0.0.1（漏配环境变量的典型症状）',
+      );
+    }
+    // 5. 生产必须声明 CORS 源：不声明 = 管理端所有跨域请求被拒，且只在浏览器里才看得出来
+    if (c.CORS_ORIGINS.length === 0) {
+      add('CORS_ORIGINS', '生产环境必须配置 CORS_ORIGINS（管理端 Web 的域名）');
+    }
+  }
 });
 
 export type AppConfig = z.infer<typeof schema>;
@@ -211,7 +283,7 @@ export class ConfigError extends Error {
  * @throws {ConfigError} 校验失败时，issues 里列出全部问题（不是第一条就停）。
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const parsed = schema.safeParse(env);
+  const parsed = crossField.safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
     throw new ConfigError('配置校验失败，服务拒绝启动', issues);
