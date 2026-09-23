@@ -158,6 +158,26 @@ describe('allocate（最大余额法拆分）', () => {
     expect(() => allocate(100, [0, 0])).toThrow(RangeError);
   });
 
+  it('负权重拒绝（N14：负权重会摊出负数项，而和仍等于总额——静默错）', () => {
+    expect(() => allocate(100, [-1, 3])).toThrow(RangeError);
+    expect(() => allocate(100, [1, -0.5, 1])).toThrow(RangeError);
+  });
+
+  it('非整数总额拒绝（N14：0.5 会被 floor 静默抹掉，合计亏 0.5）', () => {
+    expect(() => allocate(100.5, [1, 1])).toThrow(RangeError);
+    expect(() => allocate(-100.5, [1, 1])).toThrow(RangeError);
+  });
+
+  it('负总额合法（退款拆分场景，D18 复核结论），但权重仍不得为负', () => {
+    expect(allocate(-100, [1, 3])).toEqual([-25, -75]);
+    expect(() => allocate(-100, [-1, 3])).toThrow(RangeError);
+  });
+
+  it('非有限权重拒绝（NaN/Infinity 会绕过 sum<=0 检查静默扩散）', () => {
+    expect(() => allocate(100, [NaN, 1])).toThrow(RangeError);
+    expect(() => allocate(100, [Infinity, 1])).toThrow(RangeError);
+  });
+
   it('含零权重的合法拆分：零权重项分到 0，其余照比例', () => {
     expect(allocate(17, [0, 1])).toEqual([0, 17]);
     expect(allocate(10, [1, 0, 1])).toEqual([5, 0, 5]);

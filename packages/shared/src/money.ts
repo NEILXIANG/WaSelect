@@ -115,9 +115,22 @@ export function toMinor(jpy: number, rateInt: number): number {
 /**
  * 按权重把总额**精确拆分**到各项（最大余额法），保证各项之和 === 总额，不产生 1 分钱误差。
  * 用途：把订单总额按商品金额占比摊到申报价值 / 退款拆分等场景。
+ * @param total 整数（最小货币单位）；负总额合法（退款拆分，D18 复核结论）
+ * @param weights 各项权重，**不得为负**（N14：负权重会摊出负数项、而和仍等于总额——静默错）
  * @returns 与 weights 等长的整数数组，其和恒等于 total
+ * @throws {RangeError} 总额非整数（floor 会静默抹掉小数）、权重为负或非有限数、权重之和为 0
  */
 export function allocate(total: number, weights: readonly number[]): number[] {
+  // N14：输入校验必须在分摊之前。这两类非法输入的共同点是**不抛错、结果还自洽**：
+  // 负权重摊出的数组和仍等于总额；非整数总额被 floor 抹掉后各项都是整数——
+  // 下游任何"和校验"都发现不了，只能在这里挡。
+  if (!Number.isInteger(total)) {
+    throw new RangeError(`总额必须是整数（最小货币单位），收到 ${total}`);
+  }
+  for (const w of weights) {
+    if (!Number.isFinite(w)) throw new RangeError(`权重必须是有限数，收到 ${w}`);
+    if (w < 0) throw new RangeError(`权重不得为负（会摊出负数项），收到 ${w}`);
+  }
   const sum = weights.reduce((acc, w) => acc + w, 0);
   if (sum <= 0) throw new RangeError('权重之和必须为正');
   const raw = weights.map((w) => (total * w) / sum);
