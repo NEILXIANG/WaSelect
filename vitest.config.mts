@@ -43,6 +43,19 @@ export default defineConfig({
         // @limitation 串行的代价是 e2e 变慢；当前只有一个文件（~1s），可接受。文件多了再考虑分库。
         test: { name: 'e2e', include: ['test/e2e/**/*.test.ts'], fileParallelism: false },
       },
+      {
+        /**
+         * lint 层：跑 ESLint 的 Node API，断言"类型感知规则真的在起作用"（A5 的门禁的门禁）。
+         * @why 必须**独立成 project**而不是塞进 unit：跑一次要建 TS Program（~15s），
+         *      放进 unit 会把 2s 的快反馈环拖到 17s，代价远大于收益。
+         *      独立之后它只在 `npm run test:lint` / `npm run gate` 里跑——那正是"慢但必须跑"的地方。
+         * @limitation 文件名必须是 `*.lint.test.ts` 而不是 `*.unit.test.ts`：
+         *      否则会被 unit 的 include 模式（通配的 `.unit.test.ts`）一并收走，白白多付一次 15s。
+         *      ⚠️ 注释里不要原样抄那个通配模式——它含「星号+斜杠」这两个连续字符，
+         *         会把这段块注释提前结束（我就这么把配置文件写坏过两次）。
+         */
+        test: { name: 'lint', include: ['**/*.lint.test.ts'] },
+      },
     ],
     coverage: {
       provider: 'v8',
