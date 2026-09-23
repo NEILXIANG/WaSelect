@@ -64,6 +64,7 @@ describe('NODE_ENV（D17）', () => {
       PAYMENT_CHANNELS: 'stripe',
       STRIPE_SECRET_KEY: 'sk_live_dummy',
       STRIPE_WEBHOOK_SECRET: 'whsec_dummy',
+      CHECKOUT_BASE_URL: 'https://checkout.example.com',
     };
     expect(loadConfig(prod).NODE_ENV).toBe('production');
   });
@@ -208,6 +209,7 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     PAYMENT_CHANNELS: 'stripe',
     STRIPE_SECRET_KEY: 'sk_live_x',
     STRIPE_WEBHOOK_SECRET: 'whsec_x',
+    CHECKOUT_BASE_URL: 'https://checkout.example.com',
     CORS_ORIGINS: 'https://admin.example.com',
     ...extra,
   });
@@ -219,9 +221,44 @@ describe('跨字段校验：单项合法但组合成事故', () => {
 
   it('生产 + mock + 审核模式 → 放行（审核期是唯一合法场景）', () => {
     const c = loadConfig(
-      prod({ PAYMENT_CHANNELS: 'mock', REVIEW_MODE: 'on', REVIEW_SKU_ID: 'sku-1' }),
+      prod({
+        PAYMENT_CHANNELS: 'mock',
+        REVIEW_MODE: 'on',
+        REVIEW_SKU_ID: 'sku-1',
+        MOCK_CALLBACK_SECRET: 'review-mock-secret',
+      }),
     );
     expect(c.REVIEW_MODE).toBe('on');
+  });
+
+  it('生产启用 stripe 却缺 CHECKOUT_BASE_URL → 拒绝（D-49 收银链接拼不出来，运行时才暴露）', () => {
+    const issues = expectReject(prod({ CHECKOUT_BASE_URL: '' }));
+    expect(issues.join('\n')).toContain('CHECKOUT_BASE_URL');
+  });
+
+  it('生产审核模式（mock 的唯一合法场景）缺 MOCK_CALLBACK_SECRET → 拒绝（P1-4）', () => {
+    const issues = expectReject(
+      prod({ PAYMENT_CHANNELS: 'mock', REVIEW_MODE: 'on', REVIEW_SKU_ID: 'sku-1' }),
+    );
+    expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');
+  });
+
+  it('MOCK_CALLBACK_SECRET 与 JWT_SECRET 相同 → 拒绝（回调密钥与登录密钥的泄露半径必须不同）', () => {
+    const issues = expectReject(
+      prod({
+        PAYMENT_CHANNELS: 'mock',
+        REVIEW_MODE: 'on',
+        REVIEW_SKU_ID: 'sku-1',
+        MOCK_CALLBACK_SECRET: 'a'.repeat(32), // 与 baseEnv.JWT_SECRET 相同
+      }),
+    );
+    expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');
+  });
+
+  it('REVIEW_MODE=on 时仍启用真实通道 → 拒绝（审核期只能跑 mock，AJ-30）', () => {
+    // 审核模式是"上线前"状态：真实通道若同时在线，审核人员的测试下单会产生真实扣款
+    const issues = expectReject(prod({ REVIEW_MODE: 'on', REVIEW_SKU_ID: 'sku-1' }));
+    expect(issues.join('\n')).toContain('PAYMENT_CHANNELS');
   });
 
   it('审核模式开了却没指定 SKU → 拒绝（否则审核期全站下不了单）', () => {
@@ -267,6 +304,7 @@ describe('数值型配置的下限', () => {
     ['MAX_ORDER_JPY', '0'],
     ['AUTO_DELIVER_DAYS', '0'],
     ['PORT', '0'],
+    ['PACKAGING_WEIGHT_G', '0'], // 包材 0 克会让运费向下取错档（D-46 同源的方向性错误）
   ];
   for (const [key, value] of bad) {
     it(`${key}=${value} 拒绝启动`, () => {

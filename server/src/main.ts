@@ -115,7 +115,12 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           db,
           logger,
           auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-          callbackSecret: config.JWT_SECRET,
+          // ⚠️ mock 回调密钥**独立**于 JWT_SECRET（P1-4）：曾经直接复用 JWT_SECRET，
+          //    意味着①回调密钥与登录密钥泄露半径相同②JWT 轮换当天所有模拟回调失效。
+          //    生产启用 mock 只可能是审核模式，而跨字段规则已强制那时必须显式配置
+          //    MOCK_CALLBACK_SECRET——所以这里的回落值只在开发/测试到达。
+          callbackSecret:
+            config.MOCK_CALLBACK_SECRET ?? 'dev-mock-callback-secret-do-not-use-in-prod',
           env: config.NODE_ENV,
           // D25：带上身份状态查询，改密 / 封禁后才能真的把旧 token 挡在门外
           identity: withIdentityCache(createIdentityCheck(db)),

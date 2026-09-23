@@ -33,6 +33,7 @@ export const SECRET_KEYS = [
   'APP_SECRET',
   'STRIPE_SECRET_KEY',
   'STRIPE_WEBHOOK_SECRET',
+  'MOCK_CALLBACK_SECRET',
   'WECHAT_INSTITUTION_API_KEY',
   'WECHAT_INSTITUTION_MERCHANT_ID',
   'INTERNAL_JOB_SECRET',
@@ -171,7 +172,8 @@ const schema = z.object({
   FREE_SHIPPING_JPY: optionalInt(),
   /** 单笔上限（D-42）：低于 ¥200,000 出口申报阈值与 Zonos 预付上限；超出 → 40906。 */
   MAX_ORDER_JPY: int(180000, 1),
-  PACKAGING_WEIGHT_G: int(250, 0),
+  /** 包材自重（D-42）。下限 1：0 克在业务上无意义，且会让运费向下取错档（D-46 同源的方向性错误）。 */
+  PACKAGING_WEIGHT_G: int(250, 1),
 
   // ── 订单生命周期 ────────────────────────────────────────────────────────
   ORDER_PAYMENT_TTL_MIN: int(30, 1),
@@ -202,6 +204,14 @@ const schema = z.object({
   CHECKOUT_BASE_URL: optionalText(),
   STRIPE_SECRET_KEY: optionalText(),
   STRIPE_WEBHOOK_SECRET: optionalText(),
+  /**
+   * mock 回调的 HMAC 密钥（骨架期 / 审核期专用）。
+   * @why 独立字段、**绝不默认复用 JWT_SECRET**（基座自查 P1-4）：
+   *      ① 回调密钥与登录密钥的泄露半径不同——回调密钥要配给模拟器/审核脚本，JWT 密钥哪都不该去；
+   *      ② JWT 密钥轮换是既定需求，若回调验签挂在同一把钥匙上，轮换当天所有模拟回调全部失效。
+   *      非生产环境可留空（装配层回落到开发占位值）；生产启用 mock（= 审核模式）时必填。
+   */
+  MOCK_CALLBACK_SECRET: optionalText(),
   WECHAT_INSTITUTION_MERCHANT_ID: optionalText(),
   WECHAT_INSTITUTION_API_KEY: optionalText(),
   /** on 时仅 REVIEW_SKU_ID 商品允许 channel=mock（审核期用）。 */
@@ -261,6 +271,18 @@ const crossField = schema.superRefine((c, ctx) => {
     add('REVIEW_SKU_ID', 'REVIEW_MODE=on 时必须指定 REVIEW_SKU_ID（否则审核期没有任何商品可下单）');
   }
 
+  // 2b. 审核模式 = 上线前状态：只允许 mock 通道（AJ-30）。
+  //     若真实通道同时在线，审核人员的测试下单会产生真实扣款；
+  //     商店已上线后不需要也不应再开 REVIEW_MODE（那是首版审核专用状态，见 AJ-30 的权衡）。
+  if (c.REVIEW_MODE === 'on' && c.PAYMENT_CHANNELS.some((ch) => ch !== 'mock')) {
+    add('PAYMENT_CHANNELS', 'REVIEW_MODE=on 时仅允许 mock 通道（审核期真实通道必须离线，AJ-30）');
+  }
+
+  // 2c. mock 密钥独立（P1-4）：与 JWT_SECRET 相同 = 回调验签挂在登录密钥上，轮换/泄露互相牵连
+  if (c.MOCK_CALLBACK_SECRET !== undefined && c.MOCK_CALLBACK_SECRET === c.JWT_SECRET) {
+    add('MOCK_CALLBACK_SECRET', 'MOCK_CALLBACK_SECRET 不得与 JWT_SECRET 相同（泄露半径与轮换周期都不同）');
+  }
+
   // 3. 启用真实通道就必须有对应密钥：缺密钥的表现是"下单报 500"，而不是"启动时告诉我少配了东西"
   if (isProd) {
     if (c.PAYMENT_CHANNELS.includes('stripe')) {
@@ -273,6 +295,20 @@ const crossField = schema.superRefine((c, ctx) => {
           '启用了 stripe 通道：生产环境必须配置 STRIPE_WEBHOOK_SECRET（回调验签）',
         );
       }
+      // D-49 的 H5 收银依赖它拼支付链接；缺了的表现是"小程序外支付链接拼不出来"——运行时才暴露
+      if (c.CHECKOUT_BASE_URL === undefined) {
+        add(
+          'CHECKOUT_BASE_URL',
+          '启用了 stripe 通道：生产环境必须配置 CHECKOUT_BASE_URL（D-49 短链域名）',
+        );
+      }
+    }
+    // 生产启用 mock 只可能发生在审核模式（规则 1 已拦其它情况）：此时必须有**独立的**回调密钥
+    if (c.PAYMENT_CHANNELS.includes('mock') && c.MOCK_CALLBACK_SECRET === undefined) {
+      add(
+        'MOCK_CALLBACK_SECRET',
+        '生产环境启用 mock（审核模式）必须显式配置 MOCK_CALLBACK_SECRET，不得回落到开发占位值',
+      );
     }
     if (c.PAYMENT_CHANNELS.includes('wechat')) {
       if (c.WECHAT_INSTITUTION_MERCHANT_ID === undefined) {
