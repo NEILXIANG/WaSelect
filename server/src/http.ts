@@ -148,7 +148,17 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
   // ── 6. 兜底错误：统一形状 + 落日志 ────────────────────────────────────────
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     const normalized = normalizeError(err);
-    if (!(err instanceof AppError)) {
+    // ⚠️ 判定顺序不能改：必须先判"是不是报文解析错"，再判"是不是 AppError"。
+    //    解析错的**原始** err 是 SyntaxError（不是 AppError），若按 `instanceof AppError` 先判，
+    //    它会落进 unhandled_error 的 error 通道——客户端畸形请求天天有，直接淹没真实的 5xx。
+    if (isBodyParseError(err)) {
+      // 客户端可控输入导致的失败：不是我们的故障 → warn 级，且 normalizeError 已确保不带堆栈
+      opts.logger.warn('request_rejected', {
+        http_method: req.method,
+        http_path: req.path,
+        ...normalized.logFields,
+      });
+    } else if (!(err instanceof AppError)) {
       // 未知异常：这是需要人看的，必须 error 级且带原始堆栈（只在日志里）
       opts.logger.error('unhandled_error', {
         http_method: req.method,

@@ -424,6 +424,39 @@ describe('错误归类：解析错误 vs 服务端 bug', () => {
     expect(sink.lines.join('\n')).not.toContain('4242424242424242');
   });
 
+  /**
+   * @why 客户端可控的输入（畸形 JSON、超大报文）不该占用 **error 通道**。
+   *      错误码虽已是 40001，但日志事件曾是 `unhandled_error` 且带堆栈——
+   *      后果：扫描器/爬虫每天刷几百条畸形请求，就把真正要看的 5xx 全淹了，
+   *      而且 `err_stack` 里带的是客户端报文的解析上下文。
+   */
+  it('JSON 语法错记 warn（request_rejected），不进 unhandled_error，也不带堆栈', async () => {
+    const { baseUrl, sink } = await serve();
+    await fetch(`${baseUrl}/healthz`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{ bad json',
+    });
+    expect(sink.find('unhandled_error')).toHaveLength(0);
+    const rejected = sink.find('request_rejected');
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.level).toBe('warn');
+    expect(rejected[0]?.err_stack).toBeUndefined();
+  });
+
+  it('请求体超限同样是客户端问题：warn 而非 error', async () => {
+    const { baseUrl, sink } = await serve();
+    await fetch(`${baseUrl}/healthz`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pad: 'x'.repeat(120 * 1024) }),
+    });
+    expect(sink.find('unhandled_error')).toHaveLength(0);
+    const rejected = sink.find('request_rejected');
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.level).toBe('warn');
+  });
+
   it('业务代码抛的 SyntaxError → 50000，不能被误判成"用户传参错"', async () => {
     const { baseUrl, sink } = await serve((app) => {
       app.get('/bug', () => {
