@@ -242,6 +242,55 @@ describe('保留字段不可被调用点改写（D8 / D9）', () => {
   });
 });
 
+/**
+ * N30：child() 的绑定字段过去**不过 splitReserved**——调用点有守卫、child 没有，
+ * 等于在身份字段的防线上留了一扇没锁的门。
+ *
+ * @why 这条在无请求上下文的地方最危险（调度器、启动期、脚本）：那里没有上下文中间件
+ *      写入 trace_id，`log.child({ trace_id: 'FORGED' })` 的伪造值会原样落在每一行日志上，
+ *      而 emit 里"上下文覆盖 base"的优先级规则救不了场（没有上下文可覆盖）。
+ *      修好前这些测试全红：child 想绑什么身份就绑什么，日志系统无法察觉。
+ *
+ * 策略与调用点一致：非生产抛错早炸，生产改名留痕不炸请求。
+ * 唯一差异：child 有**合法身份通道**（见 logger.ts CHILD_BINDABLE_KEYS 的 @why）。
+ */
+describe('child 的身份字段约束（N30）', () => {
+  it('非生产：child 传 trace_id / user_id 直接抛错', () => {
+    const { log } = setup('development');
+    expect(() => log.child({ trace_id: 'FORGED' })).toThrow(/保留键/);
+    expect(() => log.child({ user_id: 'u-fake' })).toThrow(/保留键/);
+    expect(() => log.child({ ts: 0 })).toThrow(/保留键/);
+  });
+
+  it('生产：child 传保留键不炸请求，但伪造值被改名、留痕可检索', () => {
+    const { sink, log } = setup('production');
+    const child = log.child({ trace_id: 'FORGED', module: 'payment' });
+    child.info('provider_called');
+    const row = sink.last();
+    // 无上下文时伪造值绝不能出现在聚合字段上（修好前这里会是 FORGED）
+    expect(row.trace_id).toBeUndefined();
+    expect(row.field_trace_id).toBe('FORGED');
+    expect(row.reserved_dropped).toEqual(['trace_id']);
+    // module 是 child 的合法绑定通道（D9），不受影响
+    expect(row.module).toBe('payment');
+  });
+
+  it('child 可合法绑定 module / actor——无上下文处（调度器）确立归属的唯一通道', () => {
+    const { sink, log } = setup('development');
+    const sched = log.child({ module: 'scheduler', actor: 'scheduler' });
+    sched.info('job_started', { job: 'order-expiry' });
+    const row = sink.last();
+    expect(row.module).toBe('scheduler');
+    expect(row.actor).toBe('scheduler');
+  });
+
+  it('child 的 event 与调用点一致：静默丢弃，事件名只能由方法参数决定', () => {
+    const { sink, log } = setup('development');
+    log.child({ event: 'from_child' }).info('order_created');
+    expect(sink.last().event).toBe('order_created');
+  });
+});
+
 describe('级别与派生', () => {
   it('生产默认 info，debug 不输出；开发默认 debug', () => {
     expect(levelForEnv('production')).toBe('info');

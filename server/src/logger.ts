@@ -77,6 +77,19 @@ const RESERVED_KEYS: ReadonlySet<string> = new Set([
  */
 const SILENT_DROP_KEYS: ReadonlySet<string> = new Set(['event']);
 
+/**
+ * child() 的**合法身份通道**——这些保留键允许由 child 绑定，不受保留键约束。
+ *
+ * @why 与调用点不同，child 是身份系统的一等通道（见 RESERVED_KEYS @why 第一句），但只能绑两样：
+ *      - `module`：模块归属本来就是 child 的职责（D9 确立了它优先于上下文）；
+ *      - `actor`：调度器 / 启动期 / 脚本这类**没有请求上下文**的地方，actor 没有任何其他来源，
+ *        禁止 child 绑定等于让这批日志永远没有追责维度。
+ * @why 其余保留键**刻意不开放**：trace_id / req_id 必须由 `runWithContext()` 在每一跳开头现取
+ *      （调度器每个 job 建自己的链），user_id 由登录态决定，service/env/level/ts 是基础设施字段——
+ *      允许 child 绑定它们，等于允许一段代码永久伪造一整片日志的身份，且无上下文处无人能纠正（N30）。
+ */
+const CHILD_BINDABLE_KEYS: ReadonlySet<string> = new Set(['module', 'actor']);
+
 export interface Logger {
   trace(event: string, fields?: LogFields): void;
   debug(event: string, fields?: LogFields): void;
@@ -125,12 +138,15 @@ function assertEvent(event: string): void {
  *      改名保留既不污染聚合字段，又留下线索。同行的 `reserved_dropped` 数组让这件事**可在日志里被检索**。
  * @returns dropped 为空表示没有违规
  */
-function splitReserved(fields: LogFields): { safe: LogFields; dropped: string[] } {
+function splitReserved(
+  fields: LogFields,
+  allow: ReadonlySet<string> = new Set(),
+): { safe: LogFields; dropped: string[] } {
   const safe: LogFields = {};
   const dropped: string[] = [];
   for (const [key, value] of Object.entries(fields)) {
     if (SILENT_DROP_KEYS.has(key)) continue;
-    if (RESERVED_KEYS.has(key)) {
+    if (RESERVED_KEYS.has(key) && !allow.has(key)) {
       dropped.push(key);
       safe[`field_${key}`] = value;
     } else {
@@ -226,7 +242,28 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
       //      于是 `log.child({ token: 'sk_live_xxx' })` 的明文会随每次 emit 直接进日志（复现缺陷 #3）。
       //      同时刻意不调 `pinoLogger.child(...)`：否则同一键在 JSON 里出现两次，
       //      pino 侧的绑定与 base 侧的值谁生效取决于序列化顺序，属于不该存在的隐式行为。
-      child: (extra: LogFields) => make(pinoLogger, { ...base, ...(redact(extra) as LogFields) }),
+      child: (extra: LogFields) => {
+        // N30：child 曾经**不过 splitReserved**——调用点有守卫、child 没有，
+        // 无请求上下文处（调度器/启动期）`log.child({ trace_id: 'FORGED' })` 能把伪造身份
+        // 烙进每一行日志且无人纠正。现在与调用点同策略：非生产抛错、生产改名留痕，
+        // 仅放行 CHILD_BINDABLE_KEYS（module/actor 这两个合法身份通道）。
+        const { safe, dropped } = splitReserved(
+          redact(extra) as LogFields,
+          CHILD_BINDABLE_KEYS,
+        );
+        if (dropped.length > 0) {
+          if (strict) {
+            throw new TypeError(
+              `logger.child() 不得绑定保留键 ${dropped.join(', ')}：` +
+                'child 只能绑定 module / actor（见 CHILD_BINDABLE_KEYS）；' +
+                'trace_id 请用 runWithContext()，user_id 由登录态决定。',
+            );
+          }
+          // 生产：与调用点同策略——不炸，但每一行都带上 reserved_dropped 供检索
+          safe.reserved_dropped = dropped;
+        }
+        return make(pinoLogger, { ...base, ...safe });
+      },
       raw: pinoLogger,
     };
   };
