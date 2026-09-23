@@ -26,6 +26,8 @@
  * @see docs/地基搭建清单.md F6 / A1；server/src/http.ts（createHttpApp / installShutdownHandlers）
  */
 import { closeDb, createDb, assertPostgresMajor, ping, type Db } from './db.js';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { loadConfig, redactConfig, ConfigError, type AppConfig } from './config.js';
 import { createHttpApp, installShutdownHandlers, listen, type StartedServer } from './http.js';
 import { createLogger, type Logger } from './logger.js';
@@ -181,13 +183,29 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
   }
 }
 
+/**
+ * N21：判断 `argv[1]` 是否就是本模块——比**真实路径**，不比文件名后缀。
+ *
+ * @why 旧实现 `entry.endsWith('/main.js')` 是假阳性制造机：任何叫 main.js 的脚本被直接执行、
+ *      且间接 import 了本模块时，都会误触 bootstrap() 自启服务（工具脚本突然开始监听端口）。
+ *      `new URL().pathname` 另一头也不可靠：不解码转义字符、Windows 盘符下直接错。
+ * @why 双边都过 realpathSync：npm link / bin 软链场景 argv[1] 是软链；
+ *      macOS 的 tmpdir 本身也是软链（/var → /private/var），只解一边会比不过。
+ * @limitation realpathSync 失败（路径不存在/不可读）一律按"不是入口"处理——
+ *             宁可不启动，也不能在判不准的时候自启。
+ */
+export function isSelfEntry(self: string, argv1: string | undefined): boolean {
+  if (argv1 === undefined) return false;
+  try {
+    return realpathSync(argv1) === realpathSync(self);
+  } catch {
+    return false;
+  }
+}
+
 /** 是否作为进程入口直接运行（ESM 下没有 require.main，只能比 argv[1]）。 */
 function isEntryPoint(): boolean {
-  const entry = process.argv[1];
-  if (entry === undefined) return false;
-  const self = new URL(import.meta.url).pathname;
-  // 编译产物在 dist/ 下，源文件在 src/ 下：两边都要认，否则 `npm start` 不会自启
-  return entry === self || entry.endsWith('/dist/main.js') || entry.endsWith('/main.js');
+  return isSelfEntry(fileURLToPath(import.meta.url), process.argv[1]);
 }
 
 /**

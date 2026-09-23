@@ -3,8 +3,11 @@
  * 需要真库的部分在 main.db.test.ts。
  */
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ConfigError } from './config.js';
-import { formatStartupError } from './main.js';
+import { formatStartupError, isSelfEntry } from './main.js';
 
 /**
  * N10：启动失败的 stderr 输出必须**逐行列出全部配置问题**。
@@ -39,5 +42,43 @@ describe('formatStartupError（N10）', () => {
     const lines = formatStartupError('weird throw');
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('weird throw');
+  });
+});
+
+/**
+ * N21：入口判断要"比真实路径"，不是"比文件名后缀"。
+ *
+ * @why 旧实现 `entry.endsWith('/main.js')` 是**假阳性制造机**：任何叫 main.js 的文件
+ *      （脚本、工具、别的包）被 node 直接执行时，只要它间接 import 了本模块，
+ *      就会误触 `bootstrap()` 自启服务——一个工具脚本突然开始监听端口。
+ *      另一头 `new URL().pathname` 不解码转义、Windows 下直接错（C:\...）。
+ *      正解：`fileURLToPath` + `realpathSync` 双边比真实路径（npm link/软链场景也能认）。
+ */
+describe('isSelfEntry（N21）', () => {
+  const self = join(mkdtempSync(join(tmpdir(), 'entry-')), 'main.js');
+  writeFileSync(self, '// placeholder');
+
+  it('argv[1] 就是自身 → true', () => {
+    expect(isSelfEntry(self, self)).toBe(true);
+  });
+
+  it('argv[1] 是指向自身的软链 → true（npm link / bin 软链场景）', () => {
+    const link = join(tmpdir(), `entry-link-${process.pid}.js`);
+    symlinkSync(self, link);
+    expect(isSelfEntry(self, link)).toBe(true);
+  });
+
+  it('argv[1] 是**另一个**同名 main.js → false（旧 endsWith 实现的假阳性回归）', () => {
+    const other = join(mkdtempSync(join(tmpdir(), 'other-')), 'main.js');
+    writeFileSync(other, '// different file, same name');
+    expect(isSelfEntry(self, other)).toBe(false);
+  });
+
+  it('argv[1] 为 undefined（REPL / 被 import）→ false', () => {
+    expect(isSelfEntry(self, undefined)).toBe(false);
+  });
+
+  it('argv[1] 指向不存在的路径 → false，不抛（realpathSync 失败必须被吞）', () => {
+    expect(isSelfEntry(self, '/nonexistent/path/main.js')).toBe(false);
   });
 });
