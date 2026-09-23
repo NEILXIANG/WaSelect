@@ -320,3 +320,25 @@ describe('数值型配置的下限', () => {
     );
   });
 });
+
+/**
+ * N10：ConfigError.issues 会**逐行打到 stderr**（main.ts），所以它们绝不能携带原始值——
+ * 一条 "received 'sk_live_...'" 就能把密钥写进平台日志。
+ *
+ * @why 现状靠 zod v4 默认消息**碰巧**不含值（v4 移除了 v3 的 ", received 'x'"），
+ *      但"碰巧安全"不是安全：升级 zod、自定义 error map、或哪个字段写了
+ *      `message: \`...${input}...\`` 就会破。这条用例把"值不出现"变成硬约束。
+ */
+describe('issues 不携带原始值（N10）', () => {
+  it('非法枚举值与过短密钥的原始值都不出现在 issues 里', () => {
+    const issues = expectReject({
+      ...baseEnv,
+      NODE_ENV: 'secret-value-must-not-appear-1',
+      JWT_SECRET: 'secret-value-must-not-appear-2',
+    });
+    const all = issues.join('\n');
+    expect(all).toContain('NODE_ENV');
+    expect(all).toContain('JWT_SECRET');
+    expect(all).not.toContain('secret-value-must-not-appear');
+  });
+});

@@ -26,7 +26,7 @@
  * @see docs/地基搭建清单.md F6 / A1；server/src/http.ts（createHttpApp / installShutdownHandlers）
  */
 import { closeDb, createDb, assertPostgresMajor, ping, type Db } from './db.js';
-import { loadConfig, redactConfig, type AppConfig } from './config.js';
+import { loadConfig, redactConfig, ConfigError, type AppConfig } from './config.js';
 import { createHttpApp, installShutdownHandlers, listen, type StartedServer } from './http.js';
 import { createLogger, type Logger } from './logger.js';
 import { MOCK_CALLBACK_PATH, mountSkeleton } from './skeleton.js';
@@ -190,6 +190,22 @@ function isEntryPoint(): boolean {
   return entry === self || entry.endsWith('/dist/main.js') || entry.endsWith('/main.js');
 }
 
+/**
+ * 把启动失败格式化成 stderr 行（N10）。抽成纯函数：不启进程即可断言输出形状。
+ *
+ * @why ConfigError 必须**逐行列出全部 issues**：只打 message 的话运维只能改一个变量、
+ *      重启、再改一个——配置层"一次列全"的设计就白费了（config.ts ConfigError 的 @why）。
+ * @limitation 安全性依赖 issues 本身不含原始值（zod v4 默认消息不带 received 值，
+ *             且有 config.unit.test.ts 的 N10 守卫锁死）；本函数不再做二次过滤。
+ */
+export function formatStartupError(e: unknown): string[] {
+  const head = `启动失败：${e instanceof Error ? e.message : String(e)}`;
+  if (e instanceof ConfigError) {
+    return [head, ...e.issues.map((issue) => `  - ${issue}`)];
+  }
+  return [head];
+}
+
 async function main(): Promise<void> {
   await bootstrap();
 }
@@ -197,7 +213,7 @@ async function main(): Promise<void> {
 if (isEntryPoint()) {
   main().catch((e: unknown) => {
     // 启动失败必须能被人看见：这里还没有 logger（可能在 loadConfig 就炸了），只能写 stderr
-    process.stderr.write(`启动失败：${e instanceof Error ? e.message : String(e)}\n`);
+    for (const line of formatStartupError(e)) process.stderr.write(`${line}\n`);
     process.exitCode = 1;
   });
 }
