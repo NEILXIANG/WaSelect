@@ -40,7 +40,7 @@ async function startServer(opts: { withRawBody: boolean }): Promise<SkeletonServ
 }
 
 /** 用给定的 trace 调建单。 */
-function createOrder(token: string, idempotencyKey: string, trace = TRACE) {
+function createOrder(token: string, idempotencyKey: string, trace = TRACE, body = '{}') {
   return fetch(`${base}/api/v1/skeleton/orders`, {
     method: 'POST',
     headers: {
@@ -49,7 +49,7 @@ function createOrder(token: string, idempotencyKey: string, trace = TRACE) {
       'idempotency-key': idempotencyKey,
       'x-trace-id': trace,
     },
-    body: '{}',
+    body,
   });
 }
 
@@ -144,6 +144,23 @@ describe('行走骨架：一条链路走到底', () => {
 
     expect(second.status).toBe(201);
     expect(secondBody.order_id).toBe(firstBody.order_id);
+    const rows = await db`select id from orders`;
+    expect(rows).toHaveLength(1);
+  });
+
+  /**
+   * N3（二审 P0-2）：同一个键但请求体**不同** → 40908，而不是错误地返回首次结果。
+   * @why skeleton 此前调 withIdempotency 时没传 `request`，指纹恒为 ''，
+   *      40908 整条是死代码：客户端复用键的 bug 会被静默吞掉（用户以为下了第二单）。
+   */
+  it('同一个 Idempotency-Key 但请求体不同 → 40908（N3：指纹校验必须真的接线）', async () => {
+    const token = await userToken();
+    const first = await createOrder(token, 'key-fp-1', TRACE, '{"qty":1}');
+    expect(first.status).toBe(201);
+    const second = await createOrder(token, 'key-fp-1', TRACE, '{"qty":99}');
+    expect(second.status).toBe(409);
+    await expect(second.json()).resolves.toMatchObject({ code: 40908 });
+    // 且绝不能因为第二个请求再建一张单
     const rows = await db`select id from orders`;
     expect(rows).toHaveLength(1);
   });

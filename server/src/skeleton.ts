@@ -30,7 +30,7 @@ import { requireRole, type AuthConfig } from './auth.js';
 import { currentContext } from './context.js';
 import { withTransaction, type Db } from './db.js';
 import { AppError } from './errors.js';
-import { scopeKey, withIdempotency } from './idempotency.js';
+import { scopeKey, withIdempotencyTx } from './idempotency.js';
 import type { Logger } from './logger.js';
 import type { IdentityCheck } from './identity.js';
 import { claimWebhookEvent, finishWebhookEvent, payloadHash } from './webhooks.js';
@@ -186,31 +186,33 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
             throw new AppError(40001, { reason: '缺少 Idempotency-Key 头' });
           }
 
-          const result = await withIdempotency(
+          const result = await withIdempotencyTx(
             deps.db,
             {
               key: scopeKey({ userId: sub, route: 'skeleton.createOrder', clientKey }),
               userId: sub,
               route: 'skeleton.createOrder',
+              // N3：指纹素材必须传——不传则指纹恒为 ''，40908 是死代码，
+              //     客户端复用键的 bug 会被静默吞掉（机制与接线必须成对存在）
+              request: req.body,
               // 租约易主等并发事故必须落 error 日志（idempotency.ts @limitation 四）
               logger: deps.logger,
             },
-            async () => {
+            // N2：单事务模式——占位、建单、事件、结果写回同一事务，崩溃 = 整体回滚。
+            // handler 内只用 tx（db.ts @limitation 二），禁止再开嵌套事务。
+            async (tx) => {
               // id 与 order_no 分开：order_no 是给用户看的（YYMMDD-XXXXXX），id 是内部键
               const orderId = `sk-${randomUUID()}`;
               const orderNo = newOrderNo();
-              // 事务内只用 tx（@see db.ts @limitation 二：用外层 db 会取到另一条连接、看不到未提交数据）
-              await withTransaction(deps.db, async (tx) => {
-                await tx`
+              await tx`
                 insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
                                     total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
                 values (${orderId}, ${orderNo}, ${sub}, 'created', 1000, 0, 0, 1000, 500,
                         '{}'::jsonb, '{}'::jsonb, 'SKELETON', now() + interval '30 minutes')
               `;
-                await tx`
+              await tx`
                 insert into order_events (order_id, status, actor) values (${orderId}, 'created', ${`user:${sub}`})
               `;
-              });
               deps.logger.info('skeleton_order_created', {
                 order_id: orderId,
                 replayed: false,

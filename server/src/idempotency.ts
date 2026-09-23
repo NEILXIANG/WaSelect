@@ -1,6 +1,8 @@
 /**
  * 职责：幂等执行器（F8）——同一个 Idempotency-Key 只真正执行一次，重放返回首次结果。
  * 边界：只管"执行一次"这件事；key 从哪个头来、哪些路由需要幂等，由路由层决定。
+ * 两种模式：**单事务**（{@link withIdempotencyTx}，handler 只做 DB 写入，首选）
+ * 与**非事务**（{@link withIdempotency}，handler 含外部副作用时用）。
  *
  * @why 支付链路里重试是常态：网络抖动、用户狂点、前端超时重发。
  *      没有幂等，一次"用户以为没成功"的重试就会建出第二张单、扣第二次款——
@@ -27,11 +29,12 @@
  *           过期清理交给调度器（idempotency_keys.created_at 24h），不在此处做 TTL。
  *
  * @see 技术文档 v0.5 §3（idempotency_keys）；docs/地基搭建清单.md F8；D-29；评审 D3/D4；
- *      docs/二审意见甄别报告-2026-09-23.md §1 N1（栅栏令牌）；migrations/004_idempotency_fencing.sql
+ *      docs/二审意见甄别报告-2026-09-23.md §1 N1（栅栏令牌）/ N2（单事务模式）；
+ *      migrations/004_idempotency_fencing.sql
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
-import type { Db } from './db.js';
+import { withTransaction, type Db } from './db.js';
 import type { Logger } from './logger.js';
 
 /** 占位行的状态码：0 表示"抢到了但还没执行完"，不是真实 HTTP 状态。 */
@@ -216,6 +219,110 @@ export async function withIdempotency<T>(
     }
     await sleep(pollMs);
   }
+}
+
+/**
+ * 单事务幂等（N2）：占位、业务写入、结果写回在**同一个事务**里完成。
+ *
+ * @why 非事务模式（withIdempotency）里"handler 的业务事务"和"结果写回"是两个事务，
+ *      进程在两者之间崩溃 → 业务已提交（单建了）、幂等行还停在占位态 →
+ *      同一键的后续请求要么接管再执行一次（重复建单），要么永久 40903。
+ *      单事务模式把崩溃语义变成最朴素的一种：**崩溃 = 整体回滚**——
+ *      占位从未存在过，键自动释放，不存在两个事务之间的窗口。
+ *
+ * @why 并发靠 `INSERT ... ON CONFLICT DO NOTHING` 撞上**未提交**冲突行时的阻塞实现自然串行：
+ *      第二个请求阻塞到第一个提交（→ 读到结果重放）或回滚（→ 自己拿到占位执行）。
+ *      阻塞时长由事务内 `SET LOCAL lock_timeout` 约束（取剩余等待预算），
+ *      超时抛 55P03 → 走冲突路径 → 超过 waitMs 给 40903，与 withIdempotency 外部语义一致。
+ *      @measured lock_timeout 对 ON CONFLICT 的**投机插入等待**确实生效（PG16 实测：
+ *      持有方事务内 pg_sleep(1)，等待方预算 200ms → 准时抛 55P03 而非阻塞到对方提交；
+ *      测试「lock_timeout 到点放手」）。这条曾是我的不确定点——投机插入等待走不走
+ *      lock 管理器不能只凭记忆下结论。
+ *
+ * @limitation 一：**handler 里禁止再开事务**（`withTransaction(tx, …)` 会抛 "db.begin is not a function"），
+ *              需要嵌套单元时用 `withSavepoint(tx, …)`。
+ * @limitation 二：**handler 必须只做 DB 写入**。调外部服务（创建支付单、发邮件）不要放进这里——
+ *              那会把 DB 事务和行锁架在一次 HTTP 调用上（连接被占、锁被拉长、对方抖动直接放大成
+ *              本库压力）。有外部副作用的 handler 用 {@link withIdempotency}（非事务模式）。
+ * @limitation 三：`leaseMs` / `renew` 参数在本模式下**无意义**（事务本身就是栅栏，
+ *              回滚即释放，不存在"过期占位"）；传了也不会生效。同理本模式不产生
+ *              `idempotency_lease_lost`——读到过期占位只可能来自非事务模式的写入，等超时后 40903。
+ * @limitation 四：handler 内的慢语句仍受连接级 `statement_timeout`（15s，D20）约束；
+ *              `lock_timeout` 只管"等锁"，不管"执行慢"。
+ *
+ * @see docs/二审意见甄别报告-2026-09-23.md §1 N2；migrations/003_idempotency_and_identity.sql
+ */
+export async function withIdempotencyTx<T>(
+  db: Db,
+  args: IdempotencyArgs,
+  handler: (tx: Db) => Promise<HandlerResult<T>>,
+): Promise<IdempotencyResult<T>> {
+  const waitMs = args.waitMs ?? 2000;
+  const pollMs = args.pollMs ?? 50;
+  const hash = args.request === undefined ? '' : requestFingerprint(args.request);
+  const deadline = Date.now() + waitMs;
+
+  type Outcome = { kind: 'executed'; result: HandlerResult<T> } | { kind: 'conflict' };
+
+  for (;;) {
+    let outcome: Outcome;
+    try {
+      outcome = await withTransaction(db, async (tx): Promise<Outcome> => {
+        // 等锁预算 = 剩余的等待额度：占不到锁（别人正在执行）到点放手，走 40903 路径
+        const remaining = Math.max(1, Math.floor(deadline - Date.now()));
+        await tx`select set_config('lock_timeout', ${String(remaining)}, true)`;
+        // 占位与后续的业务写、结果写在同一事务：任何一步失败/进程崩溃 = 整体回滚
+        const claimed = await tx`
+          insert into idempotency_keys (key, user_id, route, status_code, response, request_hash, locked_until, lease_token)
+          values (${args.key}, ${args.userId ?? null}, ${args.route}, ${PENDING_STATUS_CODE}, '{}'::jsonb, ${hash}, null, ${randomUUID()})
+          on conflict (key) do nothing
+          returning key
+        `;
+        if (claimed.length === 0) return { kind: 'conflict' };
+        const result = await handler(tx);
+        await tx`
+          update idempotency_keys
+             set status_code = ${result.status},
+                 response = ${result.body as never},
+                 completed_at = now()
+           where key = ${args.key}
+        `;
+        return { kind: 'executed', result };
+      });
+    } catch (e) {
+      // 等锁超时（55P03）不是失败，是"别人还在做"——落到冲突路径按等待/超时处理
+      if (isLockTimeout(e)) {
+        outcome = { kind: 'conflict' };
+      } else {
+        throw e;
+      }
+    }
+    if (outcome.kind === 'executed') return { ...outcome.result, replayed: false };
+
+    // 冲突路径：要么已有结果（重放），要么别人正在做（等到出结果或超时）
+    const row = await readRow(db, args.key);
+    if (row !== undefined) {
+      if (hash !== '' && row.request_hash !== '' && row.request_hash !== hash) {
+        throw new AppError(40908, { key: args.key, route: args.route });
+      }
+      if (row.completed_at !== null) {
+        return { status: row.status_code, body: row.response as T, replayed: true };
+      }
+    }
+    if (Date.now() >= deadline) {
+      throw new AppError(40903, { key: args.key, route: args.route, waited_ms: waitMs });
+    }
+    await sleep(pollMs);
+  }
+}
+
+/**
+ * postgres.js 的错误对象在 `.code` 上带 SQLSTATE；55P03 = lock_not_available。
+ * @why 不写进 message 匹配：`message` 的措辞随 PG 版本变，SQLSTATE 是协议级稳定标识
+ *      （§2 诚实清单第 3 条：SQLSTATE 只在 .code 上，message 里没有）。
+ */
+function isLockTimeout(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === '55P03';
 }
 
 /**
