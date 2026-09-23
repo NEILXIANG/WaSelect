@@ -455,6 +455,53 @@ describe('优雅关闭', () => {
     expect(performance.now() - closedAt).toBeLessThan(1000);
   });
 
+  it('超时强制关闭后，清扫器 interval 不再运行（P3-4：open handle 泄漏）', async () => {
+    // ⚠️ 基座自查 P3-4：超时分支曾经只置 settled 标志不清 sweeper——
+    //    每秒 10 次的 interval 会一直挂到进程退出，测试里表现为 vitest 残留 open handle。
+    //    验证方式：给 setInterval 打间谍、包装 100ms 档的回调计数，
+    //    拒绝之后再等 3 个周期，计数必须**不再增长**。
+    let entered: () => void = () => undefined;
+    const enteredHandler = new Promise<void>((r) => {
+      entered = r;
+    });
+    const app = createHttpApp({
+      logger: createLogger({ env: 'development', destination: new MemorySink() }),
+      mount: (a) => {
+        a.get('/hang', (_req, _res) => {
+          entered();
+          // 永不响应——模拟"有请求卡住"的最坏情况，逼出超时分支
+        });
+      },
+    });
+    const started = await listen(app, { graceMs: 200 });
+    const inflight = fetch(`http://127.0.0.1:${started.port}/hang`).catch(() => undefined);
+    await enteredHandler;
+
+    const originalSetInterval = globalThis.setInterval;
+    let sweepCalls = 0;
+    const spy = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockImplementation(((handler: () => void, ms?: number) => {
+        // 只包装 100ms 这一档（sweeper 的周期），其余原样放行
+        if (ms === 100) {
+          return originalSetInterval(() => {
+            sweepCalls += 1;
+            handler();
+          }, ms);
+        }
+        return originalSetInterval(handler, ms);
+      }) as typeof setInterval);
+    try {
+      await expect(started.close()).rejects.toThrow(/超时/);
+      const callsAtRejection = sweepCalls;
+      await new Promise((r) => setTimeout(r, 350));
+      expect(sweepCalls).toBe(callsAtRejection);
+    } finally {
+      spy.mockRestore();
+      await inflight;
+    }
+  });
+
   it('SIGTERM 触发关闭并退出码 0，钩子顺序为 摘流量 → 排空 → 关资源', async () => {
     const sink = new MemorySink();
     const logger = createLogger({ env: 'development', destination: sink });

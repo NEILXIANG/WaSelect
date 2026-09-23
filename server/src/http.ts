@@ -448,6 +448,10 @@ async function closeServer(server: Server, graceMs: number): Promise<void> {
     const sweeper = setInterval(() => server.closeIdleConnections?.(), 100);
     const timer = setTimeout(() => {
       settled = true;
+      // ⚠️ 必须在这里清 sweeper（P3-4，曾漏）：done() 看到 settled=true 会早退、不再清理，
+      //      于是这条每秒 10 次的 interval 会一直挂到进程退出——生产里进程随即退出所以无症状，
+      //      但测试/长生命周期调用方会残留 open handle。
+      clearInterval(sweeper);
       server.closeAllConnections?.();
       reject(new Error(`优雅关闭超时（${graceMs}ms）：仍有请求未结束，已强制断开连接`));
     }, graceMs);
@@ -471,8 +475,8 @@ export interface ShutdownHooks {
    * @why `close()` 只停止**接受新连接**并等存量请求，它管不到"平台还在往我这儿发新请求"
    *      （Render 有自己的 drain 窗口，SIGTERM 之后仍会路由一段时间）。
    *      所以必须先对外声明"我不再接了"，否则表现为"关了半天还在进新请求"，排空永远结束不了。
-   * @limitation 本仓库目前还没有 `/readyz`（属 D21/F7），所以这个钩子暂时没有内置实现可用；
-   *              保留它是为了让装配层将来**有地方挂**，而不是到那时再改这里的调用顺序。
+   * @limitation `/readyz` 已实现（见上文 4b，D21）：装配层（main.ts）把"翻转为 503"
+   *              挂在这个钩子上。它不内置默认实现——"什么叫不想接流量"只有装配层知道。
    */
   beforeDrain?: (() => Promise<void>) | undefined;
   /**
