@@ -22,12 +22,79 @@ import {
 const ASCII = /^[ -~]+$/;
 const POSTAL = /^[0-9]{5}(-[0-9]{4})?$/;
 const PHONE = /^\+1[0-9]{10}$/;
-/** 美国州缩写（含 DC）：防止把 CA 写成 CL 这类不会被任何 CHECK 拦住的笔误。 */
-const US_STATES = new Set([
-  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'DC', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN',
-  'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH',
-  'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT',
-  'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+/**
+ * **USPS 收件州码**（不是"美国州"）：防止把 CA 写成 CL 这类不会被任何 CHECK 拦住的笔误。
+ *
+ * @why 名字必须叫"州码"而不是"州"——清单里有三组**不是州**的码，缺了就会误杀真实地址：
+ *      ① 军邮 AA / AE / AP（Americas / Europe / Pacific，FX5 边界样本在用）；
+ *      ② 属地 PR / VI / GU / AS / MP（波多黎各、关岛等，都是 USPS 合法收件目的地）；
+ *      ③ DC（哥伦比亚特区）。
+ *      ⚠️ 如果哪天有人"清理"这个清单只留 50 州，军邮样本会立刻红——那是**正确信号**，别去改样本。
+ * @limitation 这里只保证"码本身合法"，不保证"该州可送达"（可达性规则尚未定）。
+ */
+const USPS_STATE_CODES = new Set([
+  // 50 州 + DC
+  'AL',
+  'AK',
+  'AZ',
+  'AR',
+  'CA',
+  'CO',
+  'CT',
+  'DE',
+  'DC',
+  'FL',
+  'GA',
+  'HI',
+  'ID',
+  'IL',
+  'IN',
+  'IA',
+  'KS',
+  'KY',
+  'LA',
+  'ME',
+  'MD',
+  'MA',
+  'MI',
+  'MN',
+  'MS',
+  'MO',
+  'MT',
+  'NE',
+  'NV',
+  'NH',
+  'NJ',
+  'NM',
+  'NY',
+  'NC',
+  'ND',
+  'OH',
+  'OK',
+  'OR',
+  'PA',
+  'RI',
+  'SC',
+  'SD',
+  'TN',
+  'TX',
+  'UT',
+  'VT',
+  'VA',
+  'WA',
+  'WV',
+  'WI',
+  'WY',
+  // 军邮（APO / FPO / DPO）——不是州，但是 USPS 合法收件码
+  'AA',
+  'AE',
+  'AP',
+  // 属地
+  'PR',
+  'VI',
+  'GU',
+  'AS',
+  'MP',
 ]);
 
 describe('商品素材', () => {
@@ -96,7 +163,10 @@ describe('商品素材', () => {
     const ALCOHOL_HS = ['2203', '2204', '2205', '2206', '2207', '2208'];
     for (const p of JP_PRODUCTS) {
       const hs = p.hsCode.replace('.', '');
-      expect(ALCOHOL_HS.some((h) => hs.startsWith(h)), `商品「${p.titleJa}」的 HS 属酒类：${p.hsCode}`).toBe(false);
+      expect(
+        ALCOHOL_HS.some((h) => hs.startsWith(h)),
+        `商品「${p.titleJa}」的 HS 属酒类：${p.hsCode}`,
+      ).toBe(false);
     }
   });
 
@@ -128,8 +198,8 @@ describe('地址素材', () => {
       if (a.line2 !== null) expect(a.line2, a.city).toMatch(ASCII);
       // CHECK (postal_code ~ '^[0-9]{5}(-[0-9]{4})?$')
       expect(a.postalCode, a.city).toMatch(POSTAL);
-      // state 真实存在于美国（不会被 CHECK 拦住的笔误，只能靠清单）
-      expect(US_STATES.has(a.state), `州缩写可疑：${a.state}`).toBe(true);
+      // state 是合法的 USPS 收件州码（不会被 CHECK 拦住的笔误，只能靠清单）
+      expect(USPS_STATE_CODES.has(a.state), `州码可疑：${a.state}`).toBe(true);
       expect(a.areaCode).toMatch(/^[2-9][0-9]{2}$/);
     }
   });
@@ -137,6 +207,24 @@ describe('地址素材', () => {
   it('同时覆盖 ZIP5 与 ZIP+4 两种形态', () => {
     expect(US_ADDRESSES.some((a) => a.postalCode.length === 5)).toBe(true);
     expect(US_ADDRESSES.some((a) => a.postalCode.includes('-'))).toBe(true);
+  });
+
+  /**
+   * 军邮州码与军邮城市必须**成对出现**。
+   * @why 这是 USPS 的双向不变量：`AA/AE/AP` 只能配 `APO/FPO/DPO`，反之亦然。
+   *      写反了（state='AE' 但 city='Berlin'、或 city='APO' 但 state='CA'）
+   *      不会触发任何一个 CHECK——地址在库里看起来完全正常，
+   *      直到打面单时承运商 API 才拒。这类"字段之间"的约束只能靠断言钉住。
+   */
+  it('军邮州码 AA/AE/AP 与军邮城市 APO/FPO/DPO 必须成对出现', () => {
+    for (const a of US_ADDRESSES) {
+      const militaryState = ['AA', 'AE', 'AP'].includes(a.state);
+      const militaryCity = ['APO', 'FPO', 'DPO'].includes(a.city);
+      expect(
+        militaryState === militaryCity,
+        `${a.city}, ${a.state} ${a.postalCode}：军邮州码与城市不匹配`,
+      ).toBe(true);
+    }
   });
 
   it('生成的电话满足 CHECK：+1 后跟 10 位数字', () => {
@@ -194,7 +282,11 @@ describe('运费阶梯与取档方向', () => {
     expect(inRedline.length).toBeGreaterThan(0);
     expect(inRedline.filter((t) => t.source !== 'doc')).toEqual([]);
     // 反过来说：估算档必须全部在红线区之上
-    expect(SHIPPING_TIERS.filter((t) => t.source === 'fabricated').every((t) => t.maxWeightG > redlineMax)).toBe(true);
+    expect(
+      SHIPPING_TIERS.filter((t) => t.source === 'fabricated').every(
+        (t) => t.maxWeightG > redlineMax,
+      ),
+    ).toBe(true);
   });
 
   it('阶梯锚点与技术文档 / 商业测算模型的 2kg=4,950 円一致', () => {

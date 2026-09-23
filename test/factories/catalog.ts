@@ -18,6 +18,12 @@
  *      不含"液体 / 含酒精 / 管制刀具"等需要额外合规判断的品类——
  *      这些品类的合规规则尚未定（R1 相关），先不进假数据，免得长出假的安全感。
  *
+ * @limitation 四（⚠️ 已知缺口，不是期望行为）：`addresses.state` 与 `country` 在 DB 层**没有任何 CHECK**——
+ *      `state` 能写 'ZZ'、'  '，`country` 能写 'XX'。按 ADR-28「多国家由配置驱动、不发版」，
+ *      不该在 DB 层硬编码国家/州白名单；但**应用层校验目前不存在**，
+ *      于是"一条假地址能安静入库"。修的位置是地址校验单元（业务期，按 country 取配置校验），
+ *      不是这里。相关回归样本已备好：军邮州码 AA/AE/AP 三条在 `US_ADDRESSES` 里。
+ *
  * @see migrations/001_init.sql（CHECK 约束是本文件的硬边界）；docs/地基搭建清单.md F9
  */
 
@@ -235,17 +241,179 @@ export interface AddressSeed {
   areaCode: string;
 }
 
+/**
+ * @why 前 9 条是"普通本土地址"，后 6 条是**边界样本**（FX5）。
+ *      它们共用同一个池子是有意的：`makeAddress()` 随机取一条，
+ *      于是"连插 100 条"这种用例会顺带扫到军邮与外岛，
+ *      不需要每个用例都记得单独造边界数据。
+ *
+ *      ⚠️ 缺边界样本的代价是**静默的**：全是"本土 48 州 + 5 位邮编 + 无符号姓名"的数据，
+ *      会让"运费按同一张表算""邮编只有 5 位"这类假设看起来成立，
+ *      等真实订单出现 APO / 夏威夷时才发现报价与可达性都不对。
+ */
 export const US_ADDRESSES: readonly AddressSeed[] = [
-  { recipient: 'Zhang Wei', line1: '350 5th Ave Apt 12B', line2: null, city: 'New York', state: 'NY', postalCode: '10118', areaCode: '212' },
-  { recipient: 'Li Na', line1: '1234 Wilshire Blvd Unit 305', line2: 'Floor 3', city: 'Los Angeles', state: 'CA', postalCode: '90017', areaCode: '213' },
-  { recipient: 'Chen Hao', line1: '233 S Wacker Dr Ste 800', line2: null, city: 'Chicago', state: 'IL', postalCode: '60606', areaCode: '312' },
-  { recipient: 'Wang Fang', line1: '1201 Louisiana St', line2: 'Apt 2204', city: 'Houston', state: 'TX', postalCode: '77002', areaCode: '713' },
-  { recipient: 'Liu Yang', line1: '600 4th Ave', line2: null, city: 'Seattle', state: 'WA', postalCode: '98104', areaCode: '206' },
-  { recipient: 'Zhao Min', line1: '200 NE 1st St', line2: 'Unit 15', city: 'Miami', state: 'FL', postalCode: '33132', areaCode: '305' },
-  { recipient: 'Sun Qi', line1: '1 Beacon St', line2: null, city: 'Boston', state: 'MA', postalCode: '02108', areaCode: '617' },
-  { recipient: 'Zhou Lei', line1: '1601 Larimer St', line2: 'Apt 907', city: 'Denver', state: 'CO', postalCode: '80202', areaCode: '303' },
+  {
+    recipient: 'Zhang Wei',
+    line1: '350 5th Ave Apt 12B',
+    line2: null,
+    city: 'New York',
+    state: 'NY',
+    postalCode: '10118',
+    areaCode: '212',
+  },
+  {
+    recipient: 'Li Na',
+    line1: '1234 Wilshire Blvd Unit 305',
+    line2: 'Floor 3',
+    city: 'Los Angeles',
+    state: 'CA',
+    postalCode: '90017',
+    areaCode: '213',
+  },
+  {
+    recipient: 'Chen Hao',
+    line1: '233 S Wacker Dr Ste 800',
+    line2: null,
+    city: 'Chicago',
+    state: 'IL',
+    postalCode: '60606',
+    areaCode: '312',
+  },
+  {
+    recipient: 'Wang Fang',
+    line1: '1201 Louisiana St',
+    line2: 'Apt 2204',
+    city: 'Houston',
+    state: 'TX',
+    postalCode: '77002',
+    areaCode: '713',
+  },
+  {
+    recipient: 'Liu Yang',
+    line1: '600 4th Ave',
+    line2: null,
+    city: 'Seattle',
+    state: 'WA',
+    postalCode: '98104',
+    areaCode: '206',
+  },
+  {
+    recipient: 'Zhao Min',
+    line1: '200 NE 1st St',
+    line2: 'Unit 15',
+    city: 'Miami',
+    state: 'FL',
+    postalCode: '33132',
+    areaCode: '305',
+  },
+  {
+    recipient: 'Sun Qi',
+    line1: '1 Beacon St',
+    line2: null,
+    city: 'Boston',
+    state: 'MA',
+    postalCode: '02108',
+    areaCode: '617',
+  },
+  {
+    recipient: 'Zhou Lei',
+    line1: '1601 Larimer St',
+    line2: 'Apt 907',
+    city: 'Denver',
+    state: 'CO',
+    postalCode: '80202',
+    areaCode: '303',
+  },
   // 刻意包含 ZIP+4 形态：覆盖 postal_code CHECK 的可选后缀分支
-  { recipient: 'Wu Jing', line1: '88 Kearny St', line2: null, city: 'San Francisco', state: 'CA', postalCode: '94108-4567', areaCode: '415' },
+  {
+    recipient: 'Wu Jing',
+    line1: '88 Kearny St',
+    line2: null,
+    city: 'San Francisco',
+    state: 'CA',
+    postalCode: '94108-4567',
+    areaCode: '415',
+  },
+
+  // ─────────────── 以下为 FX5 边界样本（都是现实里真实存在的收件形态）───────────────
+
+  // ① 姓名含撇号。`recipient` 的 CHECK 是 `^[ -~]+$`，撇号（0x27）在区间内——
+  //    它常被误当成"需要转义/会被过滤"的字符，于是姓名在入库时被改成 OBrien，
+  //    收件人姓名与证件不符。留这条是为了钉住"ASCII 校验不等于要清洗标点"。
+  {
+    recipient: "Sean O'Brien",
+    line1: '89 Broad St',
+    line2: 'Apt 4R',
+    city: 'Boston',
+    state: 'MA',
+    postalCode: '02110',
+    areaCode: '617',
+  },
+
+  // ② 军邮（APO / FPO / DPO）。州码是 **AA / AE / AP**（军邮州码，不是真实州）：
+  //    AA=Americas、AE=Europe/Middle East、AP=Pacific。city 必须是 APO/FPO/DPO 之一。
+  //    ⚠️ 这三个州码最容易被"州码白名单"误杀——本表 `state` 在 DB 层没有 CHECK（见 @limitation 四），
+  //    所以现在不会被拦；将来应用层加州码校验时，这三条就是回归样本。
+  {
+    recipient: 'CPT J. Rivera',
+    line1: 'PSC 4512 Box 7300',
+    line2: null,
+    city: 'APO',
+    state: 'AE',
+    postalCode: '09123-7300',
+    areaCode: '212',
+  },
+  {
+    recipient: 'SFC K. Tanaka',
+    line1: 'PSC 476 Box 1234',
+    line2: null,
+    city: 'FPO',
+    state: 'AP',
+    postalCode: '96322-1234',
+    areaCode: '808',
+  },
+  {
+    recipient: 'SSG M. Alvarez',
+    line1: 'Unit 5000 Box 12',
+    line2: null,
+    city: 'DPO',
+    state: 'AA',
+    postalCode: '34035',
+    areaCode: '305',
+  },
+
+  // ③ PO Box：line1 是 "PO Box N"，**没有街道号**。
+  //    真实约束：部分承运商（需签收货件）不送 PO Box——这条样本是给"可达性校验"留的钩子。
+  {
+    recipient: 'Grace Nakamura',
+    line1: 'PO Box 1071',
+    line2: null,
+    city: 'Portland',
+    state: 'OR',
+    postalCode: '97207',
+    areaCode: '503',
+  },
+
+  // ④⑤ 夏威夷 / 阿拉斯加：邮编 967xx / 995xx，且**不在本土 48 州的运费区间内**
+  //    （见 SHIPPING_TIERS 的 @limitation——同一张表不区分目的地，这两个州会被按本土价报价）。
+  {
+    recipient: 'Keoni Akana',
+    line1: '1159 Nuuanu Ave',
+    line2: 'Apt 1802',
+    city: 'Honolulu',
+    state: 'HI',
+    postalCode: '96817',
+    areaCode: '808',
+  },
+  {
+    recipient: 'Maya Kowalski',
+    line1: '400 D St',
+    line2: 'Suite 210',
+    city: 'Anchorage',
+    state: 'AK',
+    postalCode: '99501',
+    areaCode: '907',
+  },
 ];
 
 /** 生成一个满足 `^\+1[0-9]{10}$` 的电话。区号取自素材，后 7 位来自传入的随机源。 */
@@ -253,3 +421,100 @@ export function formatUsPhone(areaCode: string, sevenDigits: number): string {
   const tail = String(sevenDigits).padStart(7, '0').slice(-7);
   return `+1${areaCode}${tail}`;
 }
+
+/**
+ * `line2` 的 DDL 长度上限（VARCHAR(200)）。
+ * @why 这个数字**必须与 DDL 一致**，但 TS 里没法从 SQL 推导，所以由 db 测试反向断言
+ *      （查 `information_schema.columns` 比对）——DDL 一改，那条测试立刻红，
+ *      不会出现"字段扩到 300 了、假数据还在测 200"这种脱节。
+ */
+export const ADDRESS_LINE2_MAX_CHARS = 200;
+
+/**
+ * 造一段**恰好 n 字符**的 line2。
+ * @limitation 前缀之后是机械填充，不是真实地址文本——这里被测的是**长度边界**，
+ *             不是真实感；真实感由 `US_ADDRESSES` 里的样本负责。别把这个函数
+ *             拿去生成随机池里的地址（会污染"假数据像真的"这条要求）。
+ */
+export function makeLongLine2(chars: number): string {
+  const prefix = 'C/O Receiving Dept, ';
+  const filler = 'Bldg 27 Dock 4, ';
+  let s = prefix;
+  while (s.length + filler.length <= chars) s += filler;
+  if (s.length < chars) s += 'X'.repeat(chars - s.length);
+  return s.slice(0, chars);
+}
+
+/** 恰好在上限的 line2（应能入库）。 */
+export const LINE2_AT_LIMIT = makeLongLine2(ADDRESS_LINE2_MAX_CHARS);
+/** 超出上限 1 字符的 line2（应被 22001 拒绝）。 */
+export const LINE2_OVER_LIMIT = makeLongLine2(ADDRESS_LINE2_MAX_CHARS + 1);
+
+/**
+ * 地址反例（FX5）——每一条都对应一种"真实用户会填成这样"的脏输入。
+ *
+ * @why 只造合法样本会让人误以为 CHECK 约束在保护我们。
+ *      约束是否**真的生效**，只有拿反例去撞才知道：约束名写错、字段改名后约束悬空、
+ *      迁移被跳过——这些情况下"合法样本全绿"依旧全绿。
+ *      所以反例与正例成对出现，数量对齐。
+ */
+export interface InvalidAddressCase {
+  /** 反例名，测试失败时直接指出是哪一类 */
+  name: string;
+  /** 为什么真实世界里会出现这种输入 */
+  why: string;
+  /** 覆盖到合法基线上的字段（未列出的字段沿用基线） */
+  patch: {
+    recipient?: string;
+    phone?: string;
+    line1?: string;
+    line2?: string | null;
+    city?: string;
+    postal_code?: string;
+  };
+  /** 期望命中的约束名（超长类错误没有约束名，用 SQLSTATE 22001） */
+  expect: string;
+}
+
+export const US_ADDRESS_INVALID: readonly InvalidAddressCase[] = [
+  {
+    name: '收件人含中文',
+    why: '买家用微信地址簿导入，收件人常是中文名；DB 的 recipient CHECK 要求 ASCII',
+    patch: { recipient: '李雷' },
+    expect: 'addresses_recipient_check',
+  },
+  {
+    name: '电话填成 212-555-0000（带连字符、缺 +1）',
+    why: '美国用户最常填的形态就是带连字符的本土号码，不是 E.164',
+    patch: { phone: '212-555-0000' },
+    expect: 'addresses_phone_check',
+  },
+  {
+    name: '邮编只有 4 位',
+    why: '新英格兰邮编以 0 开头（02108），前端若用数字类型承载会被吃掉前导零',
+    patch: { postal_code: '0210' },
+    expect: 'addresses_postal_code_check',
+  },
+  {
+    // ⚠️ 这里**刻意不用** `94108-45670`（后缀写 5 位）：那是 11 字符，
+    //    会先撞 `VARCHAR(10)` 的长度限制报 22001，**根本到不了格式 CHECK**——
+    //    于是这条反例实际测的是长度而不是邮编格式，名不副实（我第一版就是这么写错的）。
+    //    用空格代替连字符才是真实且能命中正则可选后缀分支的输入。
+    name: 'ZIP+4 用空格代替连字符',
+    why: '用户手打邮编时最爱用空格分隔：94108 4567（正好 10 字符，能到达格式校验）',
+    patch: { postal_code: '94108 4567' },
+    expect: 'addresses_postal_code_check',
+  },
+  {
+    name: 'line1 含中文',
+    why: '与收件人同理，街道也常是中文',
+    patch: { line1: '南京东路 100 号' },
+    expect: 'addresses_line1_check',
+  },
+  {
+    name: `line2 超过 ${ADDRESS_LINE2_MAX_CHARS} 字符`,
+    why: '备注栏让用户写配送指示，容易写满；VARCHAR 超限是 SQLSTATE 22001，不是 CHECK',
+    patch: { line2: LINE2_OVER_LIMIT },
+    expect: '22001',
+  },
+];
