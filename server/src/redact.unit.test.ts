@@ -38,6 +38,108 @@ describe('键名脱敏（主要手段）', () => {
   });
 });
 
+/**
+ * 三类脱敏口径（二审 N5/N6，AJ-33）。
+ *
+ * @why 旧实现对所有敏感键一律"保留尾 4 位数字"：那是为卡号/电话设计的（排查要关联），
+ *      但作用在口令/密钥上时，`password:'Summer2024'` → `***2024`、密钥尾号 → `***9876`——
+ *      尾 4 位数字恰是撞库高价值片段（N5）。反过来，收货人 PII（姓名/地址/邮编）
+ *      根本不在词表里，会明文落盘（N6）。三类的泄露后果与排查需求都不同，一刀切两头都错。
+ */
+describe('三类脱敏口径（N5/N6，AJ-33）', () => {
+  it('SECRET 类：整值 ***，任何片段都不保留（口令里的年份、密钥尾号都是撞库素材）', () => {
+    const out = redact({
+      password: 'Summer2024',
+      api_key: 'sk_live_1234567890abcdef9876',
+      stripe_secret: 'whsec_abcd1234',
+      token: 'tok-987654',
+      authorization: 'Bearer abc.def.ghi',
+      credential: 'cred-2024',
+      signature: 'sig9876',
+      nonce: 'n-998877',
+      cvv: 123,
+      cookie: 'session=abc123',
+    }) as Record<string, unknown>;
+    for (const k of [
+      'password',
+      'api_key',
+      'stripe_secret',
+      'token',
+      'authorization',
+      'credential',
+      'signature',
+      'nonce',
+      'cvv',
+      'cookie',
+    ]) {
+      expect(out[k], `key=${k} 不得保留任何片段`).toBe('***');
+    }
+  });
+
+  it('IDENTIFIER 类：保留尾 4 位 / 邮箱域名（对账排障要对得上号，且片段单独不构成凭证）', () => {
+    const out = redact({
+      phone: '09012345678',
+      card_no: '4242424242424242',
+      email: 'hanako@example.com',
+      mobile: '+81 90-1234-5678',
+    }) as Record<string, unknown>;
+    expect(out.phone).toBe('***5678');
+    expect(out.card_no).toBe('***4242');
+    expect(out.email).toBe('h***@example.com');
+    expect(out.mobile).toBe('***5678');
+  });
+
+  it('PII 类：地址行/邮编整值遮蔽，姓名保留首字母，address_snapshot 整对象遮蔽', () => {
+    const out = redact({
+      recipient: 'Tanaka Hanako',
+      first_name: 'Hanako',
+      last_name: 'Tanaka',
+      line1: '1-2-3 Sakura Ave',
+      line2: 'Apt 501',
+      street: 'Sakura Ave',
+      postal_code: '100-0001',
+      zip: '94108',
+      address_snapshot: { recipient: 'Tanaka', line1: '1-2-3', postal_code: '100-0001' },
+      // AJ-33 的两个保守边界：城市保留（不构成个人识别，运费/关税排查要看）；裸 name 不入表（防误伤业务字段）
+      city: 'Tokyo',
+      product_name: '三德厨刀',
+    }) as Record<string, unknown>;
+    expect(out.recipient).toBe('T***');
+    expect(out.first_name).toBe('H***');
+    expect(out.last_name).toBe('T***');
+    expect(out.line1).toBe('***');
+    expect(out.line2).toBe('***');
+    expect(out.street).toBe('***');
+    expect(out.postal_code).toBe('***');
+    expect(out.zip).toBe('***');
+    expect(out.address_snapshot).toBe('***');
+    expect(out.city).toBe('Tokyo');
+    expect(out.product_name).toBe('三德厨刀');
+  });
+
+  it('嵌套对象里的收货人字段同样按 PII 遮蔽（N6 的真实形态：地址对象在 ctx/details 里）', () => {
+    const out = redact({
+      ctx: { recipient: 'Tanaka', line1: '1-2-3 Sakura', zip: '94108', city: 'SF' },
+    }) as Record<string, unknown>;
+    const ctx = out.ctx as Record<string, unknown>;
+    expect(ctx.recipient).toBe('T***');
+    expect(ctx.line1).toBe('***');
+    expect(ctx.zip).toBe('***');
+    expect(ctx.city).toBe('SF');
+  });
+
+  it('PII 的空值不产生掩码噪音', () => {
+    const out = redact({ recipient: '', line1: null }) as Record<string, unknown>;
+    expect(out.recipient).toBe('');
+    expect(out.line1).toBeNull();
+  });
+
+  it('last_login 不被误伤（last 太通用，只有整键 lastname 才算姓名）', () => {
+    const out = redact({ last_login: '2026-09-23T10:00:00Z' }) as Record<string, unknown>;
+    expect(out.last_login).toBe('2026-09-23T10:00:00Z');
+  });
+});
+
 describe('文本兜底正则', () => {
   it('自由文本里的卡号只留后 4 位', () => {
     expect(maskText('card 4242424242424242 used')).toContain('***4242');

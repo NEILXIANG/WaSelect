@@ -18,24 +18,42 @@
  *              它必然在"漏掩码"与"误掩码"之间取一个平衡点；13 位与 14 位条码是这个平衡的主要代价区。
  *              结论：**结构化字段优先**——把值放在正确键名下，比让正则去猜可靠得多。
  *
- * @tradeoff 邮箱保留域名（`a***@example.com`）、卡号/电话保留后 4 位：牺牲"完全不可识别"换取排障时的可关联性
- *           （同一个用户多次报错能否串起来）。若将来合规要求收紧，改 `maskTail` 的 keepLast 为 0 即可，单点改动。
+ * @tradeoff 三类口径（AJ-33）的各自取舍：SECRET 整值遮蔽放弃"对尾号"的便利（口令/密钥本就不该对）；
+ *           IDENTIFIER 保留尾 4 位/域名牺牲部分不可识别性换取对账可关联；
+ *           PII 姓名保留首字母是辨识度与匿名的折中。
+ *           若将来合规要求收紧，把 IDENTIFIER 的 `maskTail` keepLast 改 0 即可，单点改动。
  *
- * @see docs/代码注释规范与日志体系设计.md（脱敏红线）、docs/地基搭建清单.md F5、ADR-29
+ * @see docs/代码注释规范与日志体系设计.md（脱敏红线）、docs/地基搭建清单.md F5、ADR-29；
+ *      docs/自主决策记录.md AJ-33（三类口径，二审 N5/N6）
  */
 
 /**
- * 敏感键名判定：**整词**匹配（先切词，再逐个比对）。
+ * 敏感键名判定：**整词**匹配（先切词，再逐个比对），并分出**三类**（AJ-33，二审 N5/N6）。
  *
  * @why 曾经是子串正则，于是 `company` 命中 `pan`、`hotel_name` 命中 `tel`、`discard_reason` 命中 `card`
  *      ——这些业务字段被整片打码，日志里再也查不到"哪家公司 / 为什么废弃"（复现缺陷 D10）。
  *      过度脱敏和漏脱敏同样是事故，而且**没人会报**：日志少了一块内容，只有真要查的时候才发现。
  *
+ * @why 三类而不是一类（N5/N6）：旧实现对所有敏感键一律"保留尾 4 位数字"——
+ *      那是为卡号/电话设计的，但作用在口令/密钥上时尾 4 位数字恰是撞库高价值片段
+ *      （`password:'Summer2024'` → `***2024`）；而收货人 PII（姓名/地址/邮编）不在词表里会明文落盘。
+ *      - **SECRET**（口令/密钥/token/签名/cookie/cvv…）：整值 `***`，任何片段都是撞库素材；
+ *      - **IDENTIFIER**（卡号/电话/邮箱/openid…）：保留尾 4 位或域名——对账排障要对得上号，
+ *        且尾 4 位单独不构成可利用凭证（行业惯例）；
+ *      - **PII**（收货人姓名/地址行/邮编）：整值遮蔽，姓名保留首字母（`Tanaka` → `T***`，
+ *        给"这批日志大致是哪个客户的"留人工辨识度）。美国地址行+邮编+姓氏即可指向具体住户，
+ *        而排查订单问题靠的是 order_id 与 trace_id，**从不需要**在日志里看到完整地址。
+ *
  * @limitation 切词靠命名规范。若哪个键写成全小写连写（`apisecret`），切词只能切出一个词
  *              （`apisecret`）从而漏判——因此短语表额外对"去掉分隔符后的整键"再比一次，
  *              但仍覆盖不到自造拼写。缓解：新增敏感字段时**必须**在本文件加一条测试。
+ * @limitation PII 词表的两个刻意保守边界（防止误伤业务字段，AJ-33）：
+ *              ① 裸 `name` **不入**表（会误伤 `product_name`/`channel_name`）；
+ *              ② `city` 保留明文（城市级粒度不构成个人识别，运费/关税排查要看）。
+ *              姓名类只认整词 `recipient`/`fullname` 与整键 `firstname`/`lastname` 等——
+ *              `first`/`last` 单独太通用（`last_login` 是审计字段，不能误伤）。
  */
-const SENSITIVE_WORDS: ReadonlySet<string> = new Set([
+const SECRET_WORDS: ReadonlySet<string> = new Set([
   'secret',
   'token',
   'password',
@@ -43,12 +61,17 @@ const SENSITIVE_WORDS: ReadonlySet<string> = new Set([
   'authorization',
   'cookie',
   'credential',
-  // 卡与支付
-  'card',
-  'pan',
+  'signature',
+  'nonce',
   'cvv',
   'cvc',
   'iban',
+]);
+
+const IDENTIFIER_WORDS: ReadonlySet<string> = new Set([
+  // 卡与支付标识
+  'card',
+  'pan',
   // 联系方式
   'phone',
   'telephone',
@@ -58,13 +81,34 @@ const SENSITIVE_WORDS: ReadonlySet<string> = new Set([
   // 微信身份
   'openid',
   'unionid',
-  // 签名与散列
-  'signature',
-  'nonce',
+]);
+
+/** PII-姓名类：保留首字母。 */
+const PII_NAME_WORDS: ReadonlySet<string> = new Set(['recipient', 'fullname']);
+/** PII-姓名类（整键去分隔符后比对）：`first_name` → `firstname`。 */
+const PII_NAME_PHRASES: ReadonlySet<string> = new Set([
+  'firstname',
+  'lastname',
+  'givenname',
+  'familyname',
+  'surname',
+  'recipientname',
+  'fullname',
+]);
+/** PII-地址/邮编类：整值遮蔽。`address_snapshot` 经切词命中 `address`，整对象 `***`。 */
+const PII_ADDRESS_WORDS: ReadonlySet<string> = new Set([
+  'line1',
+  'line2',
+  'street',
+  'postal',
+  'zipcode',
+  'zip',
+  'address',
+  'addr',
 ]);
 
 /**
- * 敏感短语（整键去分隔符后比对）。
+ * 敏感短语（整键去分隔符后比对），全部归 SECRET 类。
  * @why `key` 是极通用的词（`idempotency_key` / `sort_key` / `primary_key` 都不是秘密），
  *      不能进单词表；但 `api_key` / `private_key` 这类是硬凭证。用短语表精确列举，
  *      换来的是"幂等键仍可在日志里查到"——排查重复下单时它是唯一线索。
@@ -82,6 +126,9 @@ const SENSITIVE_PHRASES: ReadonlySet<string> = new Set([
   'accountnumber',
 ]);
 
+/** 敏感键的类别。判定优先级：SECRET > IDENTIFIER > PII-name > PII-address。 */
+export type SensitiveClass = 'secret' | 'identifier' | 'pii-name' | 'pii';
+
 /** 把键名切成小写单词：`apiKey` / `api_key` / `api-key` / `APIKey` → ['api','key']。 */
 function splitWords(key: string): string[] {
   return key
@@ -92,10 +139,21 @@ function splitWords(key: string): string[] {
     .map((w) => w.toLowerCase());
 }
 
-export function isSensitiveKey(key: string): boolean {
+export function classifyKey(key: string): SensitiveClass | undefined {
   const squeezed = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (SENSITIVE_PHRASES.has(squeezed)) return true;
-  return splitWords(key).some((w) => SENSITIVE_WORDS.has(w));
+  if (SENSITIVE_PHRASES.has(squeezed)) return 'secret';
+  const words = splitWords(key);
+  if (words.some((w) => SECRET_WORDS.has(w))) return 'secret';
+  if (words.some((w) => IDENTIFIER_WORDS.has(w))) return 'identifier';
+  if (PII_NAME_PHRASES.has(squeezed) || words.some((w) => PII_NAME_WORDS.has(w))) {
+    return 'pii-name';
+  }
+  if (words.some((w) => PII_ADDRESS_WORDS.has(w))) return 'pii';
+  return undefined;
+}
+
+export function isSensitiveKey(key: string): boolean {
+  return classifyKey(key) !== undefined;
 }
 
 /**
@@ -244,22 +302,44 @@ export function redact(value: unknown, depth = 0, seen = new WeakSet<object>()):
 
   const out: Record<string, unknown> = {};
   for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = isSensitiveKey(key) ? maskByKey(v) : redact(v, depth + 1, seen);
+    const cls = classifyKey(key);
+    out[key] = cls === undefined ? redact(v, depth + 1, seen) : maskByClass(cls, v);
   }
   return out;
 }
 
 /**
- * 键名命中敏感名单时的处理：字符串 / 数字保留尾 4 位，其余一律整体掩码。
+ * 键名命中敏感名单时的处理：按类别分档（AJ-33）。
  *
- * @why 数字分支是缺陷 D12 的另一半：`{ card_no: 4242424242424242 }`（数字）曾经因为
+ * - `secret`：整值 `***`——口令/密钥的任何片段（尾 4 位数字、年份）都是撞库素材（N5）；
+ * - `pii`：整值 `***`——地址行/邮编组合即可指向具体住户（N6），排障不需要它们；
+ * - `pii-name`：保留首字母——`Tanaka` → `T***`，首字母单独无法定位个人，
+ *   但给"这批日志大致是哪个客户的"留人工辨识度；
+ * - `identifier`：字符串 / 数字保留尾 4 位（邮箱保留域名）——对账排障要对得上号。
+ *
+ * @why IDENTIFIER 的数字分支是缺陷 D12 的另一半：`{ card_no: 4242424242424242 }`（数字）曾经因为
  *      `typeof value === 'string'` 判不中而落到 `'***'` 之外、甚至原样输出。
  * @limitation 小数与非整数一律整值掩码（无法判断"尾 4 位"的语义）。
  */
-function maskByKey(value: unknown): unknown {
+function maskByClass(cls: SensitiveClass, value: unknown): unknown {
   if (value === null || value === undefined) return value;
+  // 空字符串不产生掩码噪音（空值掩码会误导排查——"有值被抹了"和"本来就没值"是两回事）
+  if (typeof value === 'string' && value.length === 0) return value;
+  switch (cls) {
+    case 'secret':
+    case 'pii':
+      return '***';
+    case 'pii-name':
+      // 姓名保留首字母（AJ-33）；非字符串形态（意外传入对象/数字）整值掩码
+      return typeof value === 'string' ? `${value[0] ?? ''}***` : '***';
+    case 'identifier':
+      return maskIdentifier(value);
+  }
+}
+
+/** IDENTIFIER 类（旧 maskByKey 的行为）：字符串/数字保留尾 4 位，邮箱保留域名，其余整体掩码。 */
+function maskIdentifier(value: unknown): unknown {
   if (typeof value === 'string') {
-    if (value.length === 0) return value;
     // 邮箱走专门的掩码（保留域名），其余保留后 4 位
     if (value.includes('@')) return maskText(value);
     return maskTail(value);
