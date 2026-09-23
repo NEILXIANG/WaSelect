@@ -64,7 +64,11 @@ describe('文本兜底正则', () => {
     fc.assert(
       fc.property(
         fc.string({ minLength: 0, maxLength: 30 }),
-        fc.emailAddress(),
+        // ⚠️ 必须排除本地部分含 `*` 的邮箱：掩码本身就是 `****`，
+        //    若原主体是 `**`，则 `**@` 作为子串必然仍出现在 `****@` 里——
+        //    不变式被"掩码字符与输入字符同字母表"破坏，不是脱敏失效。
+        //    （实测命中：local='**' 时 masked='****@a.aa' 含 '**@'，偶发假红灯。）
+        fc.emailAddress().filter((e) => !e.slice(0, e.indexOf('@')).includes('*')),
         (prefix, email) => {
           const text = `${prefix} ${email} tail`;
           const masked = maskText(text);

@@ -118,6 +118,8 @@ describe('迁移 up → down → up', () => {
     expect(names).toContain('request_hash');
     expect(names).toContain('locked_until');
     expect(names).toContain('completed_at');
+    // 004：栅栏令牌列——往返后仍在，证明 down/up 都带它（二审 N1）
+    expect(names).toContain('lease_token');
     expect(await businessTables()).toContain('webhook_events');
   });
 });

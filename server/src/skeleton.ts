@@ -192,6 +192,8 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
               key: scopeKey({ userId: sub, route: 'skeleton.createOrder', clientKey }),
               userId: sub,
               route: 'skeleton.createOrder',
+              // 租约易主等并发事故必须落 error 日志（idempotency.ts @limitation 四）
+              logger: deps.logger,
             },
             async () => {
               // id 与 order_no 分开：order_no 是给用户看的（YYMMDD-XXXXXX），id 是内部键

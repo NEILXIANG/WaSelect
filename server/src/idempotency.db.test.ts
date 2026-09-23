@@ -7,7 +7,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from './db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../test/db/test-db.js';
-import { scopeKey, withIdempotency } from './idempotency.js';
+import { requestFingerprint, scopeKey, withIdempotency } from './idempotency.js';
+import { createLogger } from './logger.js';
+import { MemorySink } from '../../test/helpers/memory-sink.js';
 
 let db: Db;
 
@@ -233,5 +235,136 @@ describe('scopeKey', () => {
     expect(scopeKey({ userId: 'u-2', route: 'POST /orders', clientKey: 'abc' })).not.toBe(
       scopeKey({ userId: 'u-1', route: 'POST /orders', clientKey: 'abc' }),
     );
+  });
+});
+
+/**
+ * N1（二审 P0-1）：租约被接管后，旧持有者的迟到写/删不得碰到新持有者的占位行。
+ *
+ * @why 交错剧本：A 抢到占位但慢于租约 → B 接管并执行 → A 迟到失败。
+ *      没有栅栏令牌时，A 的"失败删占位"按 key 定位，会把**B 的**占位行删掉——
+ *      随后 C 进入抢不到任何记录，handler 被执行第 3 次（同一幂等键建了三张单）。
+ *      修复：写结果/删占位都必须携带本次抢占返回的 lease_token，0 行命中 = 租约已易主，
+ *      只准落 error 日志，**不准**动那行数据。
+ */
+describe('租约栅栏（N1）', () => {
+  it('A 慢于租约被 B 接管后，A 迟到失败不得删掉 B 的占位（handler 不得执行第 3 次）', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    let executions = 0;
+    const KEY = 'k-fence';
+
+    // A：租约 150ms，续期关闭（模拟事件循环卡死导致续期停滞），handler 跑 400ms 后失败
+    const a = withIdempotency(
+      db,
+      { ...args(KEY), leaseMs: 150, renew: false, logger },
+      async () => {
+        executions += 1;
+        await new Promise((r) => setTimeout(r, 400));
+        throw new Error('A late failure');
+      },
+    );
+    // 等 A 的占位行真的出现（不依赖"sleep 一个应该够了的时间"）
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      const rows = await db`select key from idempotency_keys where key = ${KEY}`;
+      if (rows.length > 0 || Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    // B：claim 循环会在租约过期后接管；handler 同样跑 400ms（A 失败时 B 仍在执行中）
+    const b = withIdempotency(db, { ...args(KEY), leaseMs: 150, waitMs: 3000 }, async () => {
+      executions += 1;
+      await new Promise((r) => setTimeout(r, 400));
+      return { status: 201, body: { by: 'B' } };
+    });
+
+    await expect(a).rejects.toThrow('A late failure');
+    // C：在 A 失败之后进入。修复前 A 已把 B 的占位删掉 → C 会第三次执行 handler
+    const c = await withIdempotency(db, { ...args(KEY), waitMs: 3000 }, async () => {
+      executions += 1;
+      return { status: 201, body: { by: 'C' } };
+    });
+    const bResult = await b;
+
+    expect(executions).toBe(2); // 关键断言：只有 A 和 B 执行过
+    expect(bResult.body).toEqual({ by: 'B' });
+    expect(c.replayed).toBe(true);
+    expect(c.body).toEqual({ by: 'B' }); // C 重放的是 B 的结果，不是自己又跑了一次
+    // A 的迟到删除被栅栏拦下时必须落 error 日志（租约易主是异常，不能静默）
+    expect(sink.find('idempotency_lease_lost').length).toBeGreaterThan(0);
+  });
+
+  it('结果写回时租约已易主 → 抛 50000 + error 日志，不覆盖他人结果', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const KEY = 'k-fence-write';
+    await expect(
+      withIdempotency(db, { ...args(KEY), leaseMs: 5000, renew: false, logger }, async () => {
+        // 模拟"handler 执行期间租约被接管"：直接把行的 lease_token 换掉
+        await new Promise((r) => setTimeout(r, 50));
+        await db`update idempotency_keys set lease_token = gen_random_uuid() where key = ${KEY}`;
+        return { status: 201, body: { by: 'A' } };
+      }),
+    ).rejects.toMatchObject({ code: 50000 });
+    expect(sink.find('idempotency_lease_lost').length).toBeGreaterThan(0);
+  });
+
+  it('接管过期占位时指纹不符 → 40908（不得覆盖指纹后执行）', async () => {
+    await db.unsafe(
+      `insert into idempotency_keys (key, user_id, route, status_code, response, request_hash, locked_until)
+       values ('k-fence-fp', 'u-1', 'POST /orders', 0, '{}'::jsonb, '${requestFingerprint({ sku: 'S1' })}', now() - interval '1 minute')`,
+    );
+    await expect(
+      withIdempotency(db, { ...args('k-fence-fp'), request: { sku: 'S2' } }, async () => ({
+        status: 201,
+        body: { by: 'takeover' },
+      })),
+    ).rejects.toMatchObject({ code: 40908 });
+  });
+
+  it('占位仍在租约内但指纹不符 → 立即 40908（而不是等超时给 40903）', async () => {
+    // 先入一条"正在执行中"的占位（租约远未到期），指纹属于请求 1
+    await db.unsafe(
+      `insert into idempotency_keys (key, user_id, route, status_code, response, request_hash, locked_until)
+       values ('k-fence-live', 'u-1', 'POST /orders', 0, '{}'::jsonb, '${requestFingerprint({ sku: 'S1' })}', now() + interval '1 hour')`,
+    );
+    // 同一个键发**另一个**请求：结果永远不可能合法重放给我们，等再久也是 40908，不该拿 40903 拖延
+    await expect(
+      withIdempotency(
+        db,
+        { ...args('k-fence-live'), request: { sku: 'S2' }, waitMs: 100, pollMs: 20 },
+        async () => ({ status: 201, body: { by: 'other' } }),
+      ),
+    ).rejects.toMatchObject({ code: 40908 });
+  });
+});
+
+/**
+ * 租约续期：handler 活着但慢于租约时，续期让占位不被接管。
+ * @why 栅栏令牌（上一条）解决的是"接管后不乱删"，但没有续期时，
+ *      凡是 handler 超过租约时长的正常请求都会被接管 → 重复执行。
+ *      续期把"慢"和"死"区分开：活着的 handler 定期刷新租约，死掉的才轮到别人接管。
+ */
+describe('租约续期', () => {
+  it('handler 超过租约时长但持续续期 → 不被接管，并发方重放同一结果', async () => {
+    let executions = 0;
+    const run = () =>
+      withIdempotency(db, { ...args('k-renew'), leaseMs: 200, waitMs: 3000 }, async () => {
+        executions += 1;
+        await new Promise((r) => setTimeout(r, 800)); // 4 倍于租约：续期生效才能不被接管
+        return { status: 201, body: { order_no: 'W-RENEW' } };
+      });
+    const p = run();
+    // 等占位行出现再发第二个
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      const rows = await db`select key from idempotency_keys where key = 'k-renew'`;
+      if (rows.length > 0 || Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const [first, second] = await Promise.all([p, run()]);
+    expect(executions).toBe(1); // 没有续期时第二个会在 200ms 后接管并再执行一次
+    expect(first.body).toEqual(second.body);
+    expect([first.replayed, second.replayed].sort()).toEqual([false, true]);
   });
 });

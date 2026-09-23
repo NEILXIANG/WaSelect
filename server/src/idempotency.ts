@@ -19,15 +19,20 @@
  *              这是"永久卡死"与"偶发重复"之间的取舍：前者必然发生且不可逆，后者只在
  *              "handler 超过租约时长"时才发生，且可以通过把租约设得比 handler 的最坏耗时更长来避免。
  *              真要杜绝仍需 handler 自身可重入（同 @limitation 二）。
+ *              缓解手段有两层，都已实现：① 续期（活着的 handler 每 leaseMs/3 刷新租约，
+ *              把"慢"和"死"区分开）；② 栅栏令牌（lease_token，接管后旧持有者的写/删 0 行命中，
+ *              落 `idempotency_lease_lost` error 日志——二审 N1：曾按 key 定位删掉新持有者的占位）。
  *
  * @tradeoff 用数据库行而不是 Redis：多一个 DB 往返，换来零额外组件（Render 上没有托管 Redis）。
  *           过期清理交给调度器（idempotency_keys.created_at 24h），不在此处做 TTL。
  *
- * @see 技术文档 v0.5 §3（idempotency_keys）；docs/地基搭建清单.md F8；D-29；评审 D3/D4
+ * @see 技术文档 v0.5 §3（idempotency_keys）；docs/地基搭建清单.md F8；D-29；评审 D3/D4；
+ *      docs/二审意见甄别报告-2026-09-23.md §1 N1（栅栏令牌）；migrations/004_idempotency_fencing.sql
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
 import type { Db } from './db.js';
+import type { Logger } from './logger.js';
 
 /** 占位行的状态码：0 表示"抢到了但还没执行完"，不是真实 HTTP 状态。 */
 const PENDING_STATUS_CODE = 0;
@@ -88,6 +93,18 @@ export interface IdempotencyArgs {
   pollMs?: number;
   /** 占位租约时长（毫秒，默认 {@link DEFAULT_LEASE_MS}）。测试里设短值来验证接管。 */
   leaseMs?: number;
+  /**
+   * 租约续期开关（默认开）。handler 执行期间每 `leaseMs/3` 刷新一次 `locked_until`，
+   * 把"慢"和"死"区分开：活着的 handler 不会被接管，死掉的才轮到别人。
+   * 测试里设 `false` 模拟"事件循环卡死导致续期停滞"（栅栏令牌防的正是这种场景）。
+   */
+  renew?: boolean;
+  /**
+   * 日志器：租约易主（`idempotency_lease_lost`）等异常必须落 error——
+   * 它意味着"两个持有者同时认为自己是主人"，是并发事故的信号，不能静默。
+   * 可选只是因为本层拿不到装配期的 logger；生产调用方（skeleton/业务路由）必须传。
+   */
+  logger?: Logger;
 }
 
 export interface IdempotencyResult<T> {
@@ -109,7 +126,11 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * 以幂等方式执行 handler。
  *
  * @throws {AppError} 40903（重复提交）：首次请求仍在执行（租约未过期）且超过 `waitMs` 未出结果
- * @throws {AppError} 40908（幂等键复用但内容不同）：同一个键传了不一样的请求——客户端的 bug
+ * @throws {AppError} 40908（幂等键复用但内容不同）：同一个键传了不一样的请求——客户端的 bug。
+ *         无论占位是已完成还是仍在执行中都立即抛：指纹不符时那行的结果永远不可能合法重放给我们，
+ *         等超时再给 40903 只是拖延，还把"客户端 bug"误报成"服务端忙"。
+ * @throws {AppError} 50000（idempotency_lease_lost）：handler 执行期间租约被接管，
+ *         本次结果写不回（写了会覆盖新持有者）——租约易主是并发事故，调用方应重试
  */
 export async function withIdempotency<T>(
   db: Db,
@@ -123,34 +144,72 @@ export async function withIdempotency<T>(
   const deadline = Date.now() + waitMs;
 
   for (;;) {
-    // ① 抢占位（新键）或接管过期占位（崩溃遗留）——两条路径都可能拿到执行权
-    if (await claim(db, args, hash, leaseMs)) {
+    // ① 抢占位（新键）或接管过期占位（崩溃遗留）——两条路径都可能拿到执行权。
+    //    拿到执行权的同时拿到本次的栅栏令牌（lease_token），之后所有写/删都凭令牌进行。
+    const token = await claim(db, args, hash, leaseMs);
+    if (token !== undefined) {
+      const stopRenew = args.renew === false ? undefined : startRenewal(db, args, token, leaseMs);
+      // 结果写回时若令牌已易主，走另一条抛出路径，不进"删占位"分支（会重复打日志）
+      let leaseLost = false;
       try {
         const result = await handler();
-        await db`
+        // 栅栏（N1）：update 携带 lease_token。0 行命中 = 执行期间租约被接管，
+        // 此时**绝不能**按 key 覆盖（会把新持有者的状态冲掉）。
+        const written = await db`
           update idempotency_keys
              set status_code = ${result.status},
                  response = ${result.body as never},
                  completed_at = now(),
                  locked_until = null
-           where key = ${args.key}
+           where key = ${args.key} and lease_token = ${token}
+          returning key
         `;
+        if (written.length === 0) {
+          leaseLost = true;
+          args.logger?.error('idempotency_lease_lost', {
+            route: args.route,
+            result: 'result_not_written',
+            ctx: { key: args.key },
+          });
+          throw new AppError(50000, { reason: 'idempotency_lease_lost', route: args.route });
+        }
         return { ...result, replayed: false };
       } catch (e) {
-        // 删掉占位行：否则一次失败会把这个 key 永久毒化，用户再也下不了单（@limitation 二）
-        await db`delete from idempotency_keys where key = ${args.key} and completed_at is null`;
+        if (!leaseLost) {
+          // 删占位行：否则一次失败会把这个 key 永久毒化（@limitation 二）。
+          // 栅栏（N1）：同样携带 lease_token——迟到失败的旧持有者**不准**删新持有者的占位。
+          // 0 行命中 = 租约已易主，那行数据不归我们管，只准落日志。
+          const deleted = await db`
+            delete from idempotency_keys
+             where key = ${args.key} and lease_token = ${token} and completed_at is null
+            returning key
+          `;
+          if (deleted.length === 0) {
+            args.logger?.error('idempotency_lease_lost', {
+              route: args.route,
+              result: 'placeholder_not_deleted',
+              ctx: { key: args.key },
+            });
+          }
+        }
         throw e;
+      } finally {
+        stopRenew?.();
       }
     }
 
     // ② 没抢到：要么已有结果（重放），要么别人正在做（等到租约过期或超时）
     const row = await readRow(db, args.key);
-    if (row !== undefined && row.completed_at !== null) {
-      // 指纹不符 = 客户端拿同一个键发了**另一个**请求：必须报错而不是返回首次结果（D4）
+    if (row !== undefined) {
+      // 指纹不符 = 客户端拿同一个键发了**另一个**请求：无论那行完成与否都必须报错（D4）。
+      // 未完成时等下去也只有两个结局：完成后因指纹不符 40908，或超时 40903——
+      // 两个结局都比"立即 40908"差，所以提前抛。
       if (hash !== '' && row.request_hash !== '' && row.request_hash !== hash) {
         throw new AppError(40908, { key: args.key, route: args.route });
       }
-      return { status: row.status_code, body: row.response as T, replayed: true };
+      if (row.completed_at !== null) {
+        return { status: row.status_code, body: row.response as T, replayed: true };
+      }
     }
     if (Date.now() >= deadline) {
       throw new AppError(40903, { key: args.key, route: args.route, waited_ms: waitMs });
@@ -160,36 +219,90 @@ export async function withIdempotency<T>(
 }
 
 /**
+ * 租约续期：handler 执行期间每 `leaseMs/3` 刷新一次 `locked_until`。
+ *
+ * @why 没有续期时，凡是 handler 超过租约时长的**正常**请求都会被接管、重复执行——
+ *      租约设多长是在"崩溃后多快恢复"和"正常请求被误接管"之间做交易。
+ *      续期把这个交易解掉：活着的 handler 持续证明"我还活着"，租约只需覆盖
+ *      "续期间隔 + 一次 DB 往返"的抖动，而不是 handler 的最坏耗时。
+ * @limitation 续期只能减少接管、不能杜绝：事件循环卡死超过一个租约时长（长 GC、同步阻塞），
+ *             续期本身也跑不动。所以栅栏令牌（lease_token）仍然是最后一道防线，两者是
+ *             "减少发生"与"发生了不出错"的关系，缺一不可。
+ * @tradeoff 续期是**尽力而为**：续不上（0 行命中 = 已易主）只打 warn 不打断 handler——
+ *           handler 已经在跑了，打断它也撤销不了已产生的副作用；
+ *           结果写回时的栅栏检查会兜住"易主"这件事（0 行命中 → 50000 + error 日志）。
+ */
+function startRenewal(db: Db, args: IdempotencyArgs, token: string, leaseMs: number): () => void {
+  const intervalMs = Math.max(50, Math.floor(leaseMs / 3));
+  const timer = setInterval(() => {
+    void (async () => {
+      try {
+        const rows = await db`
+          update idempotency_keys
+             set locked_until = ${new Date(Date.now() + leaseMs)}
+           where key = ${args.key} and lease_token = ${token} and completed_at is null
+          returning key
+        `;
+        if (rows.length === 0) {
+          args.logger?.warn('idempotency_lease_renew_lost', {
+            route: args.route,
+            result: 'lease_lost_during_renew',
+            ctx: { key: args.key },
+          });
+        }
+      } catch (e) {
+        args.logger?.warn('idempotency_lease_renew_failed', {
+          route: args.route,
+          result: 'renew_failed',
+          err: e instanceof Error ? e.message : String(e),
+          ctx: { key: args.key },
+        });
+      }
+    })();
+  }, intervalMs);
+  // unref：测试/CLI 场景里不退出的定时器会拖住进程；续期的存亡不该决定进程存亡
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+/**
  * 抢执行权：插入新占位，或接管"已完成时间为空且租约已过期"的遗留占位。
+ * 抢到返回本次的**栅栏令牌**（lease_token），抢不到返回 undefined。
  *
  * @why 接管用 `UPDATE ... WHERE ... RETURNING` 而不是"先查再插"：后者两步之间有竞态，
  *      两个等待者可能同时判定"租约过期"然后都去执行。Postgres 的 UPDATE 在
  *      `locked_until < now()` 这一行条件上是原子的，第二个 UPDATE 匹配不到行（租约已被刷新）。
+ * @why 接管时校验既有指纹（`request_hash = '' or request_hash = hash`）：
+ *      旧占位登记的请求内容若与新请求不同，这是"客户端复用了幂等键"，
+ *      必须走 40908（在 readRow 分支抛出）而不是覆盖指纹后执行——
+ *      覆盖指纹等于销毁"键被复用过"的证据（二审 N1 的另一半）。
  */
 async function claim(
   db: Db,
   args: IdempotencyArgs,
   hash: string,
   leaseMs: number,
-): Promise<boolean> {
+): Promise<string | undefined> {
   const lockedUntil = new Date(Date.now() + leaseMs);
+  const token = randomUUID();
   const inserted = await db`
-    insert into idempotency_keys (key, user_id, route, status_code, response, request_hash, locked_until)
-    values (${args.key}, ${args.userId ?? null}, ${args.route}, ${PENDING_STATUS_CODE}, '{}'::jsonb, ${hash}, ${lockedUntil})
+    insert into idempotency_keys (key, user_id, route, status_code, response, request_hash, locked_until, lease_token)
+    values (${args.key}, ${args.userId ?? null}, ${args.route}, ${PENDING_STATUS_CODE}, '{}'::jsonb, ${hash}, ${lockedUntil}, ${token})
     on conflict (key) do nothing
-    returning key
+    returning lease_token
   `;
-  if (inserted.length > 0) return true;
+  if (inserted.length > 0) return String(inserted[0]?.lease_token);
 
   const taken = await db`
     update idempotency_keys
-       set locked_until = ${lockedUntil}, request_hash = ${hash}
+       set locked_until = ${lockedUntil}, request_hash = ${hash}, lease_token = ${token}
      where key = ${args.key}
        and completed_at is null
        and (locked_until is null or locked_until < now())
-     returning key
+       and (request_hash = '' or request_hash = ${hash})
+     returning lease_token
   `;
-  return taken.length > 0;
+  return taken.length > 0 ? String(taken[0]?.lease_token) : undefined;
 }
 
 interface IdempotencyRow {
