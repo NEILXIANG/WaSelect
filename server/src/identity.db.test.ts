@@ -106,4 +106,32 @@ describe('withIdentityCache', () => {
     await cached.load('u-nope');
     expect(inner.calls()).toBe(1);
   });
+
+  it('缓存超过上限时逐出最久未用条目（N29：无界 Map 是内存泄漏面，越权/封禁状态也会永久滞留）', async () => {
+    const inner = counting(createIdentityCheck(db));
+    const cached = withIdentityCache(inner.check, 60_000, 2); // cap=2 便于验证
+    await cached.load('u-1');
+    await db`insert into users (id, openid) values ('u-2', 'o-2') on conflict (id) do nothing`;
+    await db`insert into users (id, openid) values ('u-3', 'o-3') on conflict (id) do nothing`;
+    await cached.load('u-2');
+    await cached.load('u-3'); // 写入第 3 条：u-1 应被逐出
+    expect(inner.calls()).toBe(3);
+    await cached.load('u-1'); // 已被逐出 → 重新查库
+    expect(inner.calls()).toBe(4);
+    await cached.load('u-3'); // 仍在缓存 → 不查库
+    expect(inner.calls()).toBe(4);
+  });
+
+  it('命中会刷新新旧（热点用户不该被逐出）', async () => {
+    const inner = counting(createIdentityCheck(db));
+    const cached = withIdentityCache(inner.check, 60_000, 2);
+    await cached.load('u-1');
+    await db`insert into users (id, openid) values ('u-2', 'o-2') on conflict (id) do nothing`;
+    await db`insert into users (id, openid) values ('u-3', 'o-3') on conflict (id) do nothing`;
+    await cached.load('u-2');
+    await cached.load('u-1'); // 命中刷新：u-1 变最新，u-2 变最旧
+    await cached.load('u-3'); // 逐出的应是 u-2 而不是 u-1
+    await cached.load('u-1');
+    expect(inner.calls()).toBe(3); // u-1 没被逐出，没再查库
+  });
 });

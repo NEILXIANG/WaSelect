@@ -45,6 +45,15 @@ export interface IdentityCheck {
 export const IDENTITY_CACHE_TTL_MS = 60_000;
 
 /**
+ * 缓存条目上限（N29）。
+ * @why 无界 Map 是内存泄漏面：每个不同的 sub（包括恶意伪造的不存在用户——
+ *      "查不到"也会被缓存，见 withIdentityCache @limitation）都永久占一格。
+ *      10k 条 × 每条几十字节 ≈ 不到 1MB，而攻击者要灌爆它得先造 10k 个合法签名的 token——
+ *      造价远高于收益。
+ */
+export const IDENTITY_CACHE_MAX_ENTRIES = 10_000;
+
+/**
  * Postgres 实现。
  *
  * @why 只查两列、走主键：这是**每个请求**都可能走的路径（有缓存时是每 60 秒），
@@ -68,11 +77,13 @@ export function createIdentityCheck(db: Db): IdentityCheck {
 }
 
 /**
- * 给任意 IdentityCheck 加一层进程内 TTL 缓存。
+ * 给任意 IdentityCheck 加一层进程内 TTL 缓存（带上限的 LRU）。
  *
  * @why 不加缓存时，每个带 token 的请求都要查一次库——而 JWT 的全部优点（零 IO）就被抵消了。
  *      60 秒 TTL 的语义是"最坏情况：改密后 60 秒内旧 token 仍可用"，把这个数字显式写出来，
  *      比"默认缓存一下"更容易被日后重新评估。
+ * @why LRU 用 Map 的插入序实现（命中时 delete+set 提到最新）：零依赖、O(1)，
+ *      代价是"近似 LRU"——过期但未访问的条目要等逐出时才清，不主动扫描。
  * @limitation 缓存的是**成功**结果，也缓存"查不到"（null）——
  *              否则"不存在的用户"会被每个请求打一次库，成为放大攻击面。
  *              代价：刚被创建的用户最多 60 秒后才认得（登录流程本身会走非缓存路径）。
@@ -80,14 +91,25 @@ export function createIdentityCheck(db: Db): IdentityCheck {
 export function withIdentityCache(
   check: IdentityCheck,
   ttlMs: number = IDENTITY_CACHE_TTL_MS,
+  maxEntries: number = IDENTITY_CACHE_MAX_ENTRIES,
 ): IdentityCheck {
   const cache = new Map<string, { at: number; record: IdentityRecord | null }>();
   return {
     async load(sub: string): Promise<IdentityRecord | null> {
       const hit = cache.get(sub);
       const now = Date.now();
-      if (hit !== undefined && now - hit.at < ttlMs) return hit.record;
+      if (hit !== undefined && now - hit.at < ttlMs) {
+        // 命中刷新新旧（Map 迭代序 = 插入序，尾部最新）：热点用户不该被逐出
+        cache.delete(sub);
+        cache.set(sub, hit);
+        return hit.record;
+      }
       const record = await check.load(sub);
+      if (cache.size >= maxEntries) {
+        // 逐出最久未用（迭代序第一个）。过期但未被访问的条目排在最前，会被最先带走
+        const oldest = cache.keys().next().value;
+        if (oldest !== undefined) cache.delete(oldest);
+      }
       cache.set(sub, { at: now, record });
       return record;
     },
