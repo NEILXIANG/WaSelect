@@ -14,6 +14,10 @@
  *              代价：生产若真有这种调用点，会变成 500（被 F6 的全局兜底捕获并记为 50000）。
  * @limitation 三：pino 默认异步写（sonic-boom）。进程被 SIGKILL 时最后几条日志可能丢；
  *              本项目的关单/退款是关键路径，F13 调度器会在关键事件上**额外**落 `order_events`（流 B，同步事务内）。
+ * @limitation 四：**不用 pino 的 `mixin` 注入上下文，也不给 child 建 pino 级绑定**（见 createLogger 内注释）。
+ *              两者的代价都是：pino 会把两处同名字段**先后写进同一行 JSON**（重复键），
+ *              `JSON.parse` 取后者 → 一旦我们漏脱敏一边，明文就会覆盖掉脱敏值，且肉眼在单行 JSON 里看不出来。
+ *              副作用：`raw`（逃生舱）不自动带上下文与 child 绑定，需要时调用方自己拼。
  *
  * @tradeoff 自己包一层 `WaLogger` 而不是直接用 pino.Logger：
  *           换来"脱敏与 event 校验无处可绕"（直接拿 raw 写入是唯一逃生舱，且要写理由），
@@ -23,7 +27,7 @@
  */
 import pino, { type DestinationStream, type Logger as PinoLogger } from 'pino';
 import { redact } from './redact.js';
-import { currentContext, type LogContext } from './context.js';
+import { currentContext } from './context.js';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
@@ -80,19 +84,33 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
       // 级别用文字而非数字，便于在检索端直接写 level:error
       formatters: { level: (label: string) => ({ level: label }) },
       base: { service: opts.service ?? 'waselect-server', env: opts.env, ...(opts.base ?? {}) },
-      // 每条日志自动并入当前异步链的上下文（trace_id / req_id / user_id …）
-      mixin: () => currentContext() as LogContext,
-      // 每条日志自动并入当前异步链的上下文（trace_id / req_id / user_id …）
+      // 刻意**不用** mixin 注入上下文：mixin 会在 pino 层再写一份同名字段，
+      // 与我们自己在 emit 里注入的那份形成重复键（见 @limitation 四）。上下文改由 emit 单点注入。
     },
     opts.destination,
   );
 
+  /**
+   * @param base **已经脱敏过**的固定字段。约定：传入前必须过 `redact()`，emit 不再重复脱敏。
+   */
   const make = (pinoLogger: PinoLogger, base: LogFields): Logger => {
-    const emit = (levelName: LogLevel) => (event: string, fields?: LogFields) => {
-      assertEvent(event);
-      const payload: LogFields = { ...base, event, ...(redact(fields ?? {}) as LogFields) };
-      pinoLogger[levelName](payload);
-    };
+    const emit =
+      (levelName: LogLevel) =>
+      (event: string, fields?: LogFields): void => {
+        assertEvent(event);
+        // 字段优先级（后者覆盖前者）：child 绑定 < 请求上下文 < 调用点字段 < event。
+        // @why event 必须放最后：曾经写成 `{ ...base, event, ...fields }`，调用点传 `{ event: 'x' }`
+        //      就能把事件名改掉（复现缺陷 #6）——日志按 event 聚合，事件名被改写等于这条日志从聚合里消失。
+        // @why 上下文与调用点字段都要过 redact：`actor: 'admin:bob@example.com'` 这类值键名不敏感、
+        //      值敏感（复现缺陷 #4），键名名单制抓不到，只能靠字符串正则兜底。
+        const payload: LogFields = {
+          ...base,
+          ...(redact(currentContext()) as LogFields),
+          ...(redact(fields ?? {}) as LogFields),
+          event,
+        };
+        pinoLogger[levelName](payload);
+      };
     return {
       trace: emit('trace'),
       debug: emit('debug'),
@@ -100,8 +118,11 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
       warn: emit('warn'),
       error: emit('error'),
       fatal: emit('fatal'),
-      child: (extra: LogFields) =>
-        make(pinoLogger.child(redact(extra) as LogFields), { ...base, ...extra }),
+      // @why base 里存的是**脱敏后**的 extra：曾经这里传的是原始 extra（`{ ...base, ...extra }`），
+      //      于是 `log.child({ token: 'sk_live_xxx' })` 的明文会随每次 emit 直接进日志（复现缺陷 #3）。
+      //      同时刻意不调 `pinoLogger.child(...)`：否则同一键在 JSON 里出现两次，
+      //      pino 侧的绑定与 base 侧的值谁生效取决于序列化顺序，属于不该存在的隐式行为。
+      child: (extra: LogFields) => make(pinoLogger, { ...base, ...(redact(extra) as LogFields) }),
       raw: pinoLogger,
     };
   };

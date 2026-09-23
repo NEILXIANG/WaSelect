@@ -9,7 +9,9 @@
     "bcryptjs": "^3.0.3",
     "express": "^5.2.1",
     "jose": "^6.2.12",
+    "pino": "^10.3.1",
     "postgres": "^3.4.9",
     "zod": "^4.6.5"
-  }
+  },
+  "//": "依赖以**本包实际 import** 为准：pino 之前只在根 package.json 里声明（靠 workspaces 提升才可用），npm ci 在只装本包时会缺。node-pg-migrate 是迁移 CLI，属于工具链，声明在根 devDependencies。"
 }

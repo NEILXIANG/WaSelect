@@ -42,6 +42,40 @@ export function createDb(opts: CreateDbOptions): Db {
   }) as Db;
 }
 
+/**
+ * 要求的最小 Postgres 大版本。
+ * @why 这是**"与生产一致"**的版本锁定，不是语法要求（迁移用到的 gen_random_uuid / identity 列在 13+ 就有）。
+ *      真正要防的是"本地 16、生产 14"这类环境错位：排序规则、JSONB 行为、并行计划的差异
+ *      只在数据量上来后才暴露，届时排查成本极高。因此把版本写进代码而不是写进文档。
+ * @limitation 只卡下限（>=16）。上限不卡：平台（Render）升级小版本/大版本时不应让启动失败；
+ *              若将来出现"只有 16 才对"的特性，再改成区间并在注释里写明原因。
+ */
+export const MIN_POSTGRES_MAJOR = 16;
+
+/** 读取服务端大版本号（`server_version_num` 形如 160015 → 16）。 */
+export async function postgresMajorVersion(db: Db): Promise<number> {
+  const rows = await db`select current_setting('server_version_num') as num`;
+  const num = Number(rows[0]?.num);
+  if (!Number.isInteger(num) || num <= 0) {
+    throw new Error(`无法读取 Postgres 版本：server_version_num = ${String(rows[0]?.num)}`);
+  }
+  return Math.floor(num / 10_000);
+}
+
+/**
+ * 启动/测试前置断言：版本不足直接抛错，而不是带着隐患跑起来。
+ * @returns 实际大版本号（供日志）
+ */
+export async function assertPostgresMajor(db: Db, min = MIN_POSTGRES_MAJOR): Promise<number> {
+  const major = await postgresMajorVersion(db);
+  if (major < min) {
+    throw new Error(
+      `Postgres 版本过低：需要 >= ${min}，实际 ${major}。请升级本地库或设置 DATABASE_URL 指向合规实例`,
+    );
+  }
+  return major;
+}
+
 /** 探活：`SELECT 1`。用于 /readyz 与启动自检——连不上库的服务不该接流量。 */
 export async function ping(db: Db): Promise<boolean> {
   try {

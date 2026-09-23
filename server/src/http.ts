@@ -14,12 +14,16 @@
  *              因此"服务真的收到过多少次外部请求"不能只看访问日志，要看限流与业务事件。
  * @limitation 三：raw body 路由按**路径前缀**匹配，路径写错就会静默退化成 JSON 解析（验签必然失败且不报明确错）。
  *              缓解：`rawBodyPaths` 由配置/常量集中给出，并有测试断言该路径确实拿到 Buffer。
+ * @limitation 四：优雅关闭依赖 `closeIdleConnections` / `closeAllConnections`（Node 18.2+）。
+ *              更低版本上这两个方法是 undefined，会退化成"只停止接新请求"，进程可能挂到 keep-alive 超时；
+ *              engines 已锁 `node >=22`，实际不会遇到，但不做运行时兜底。
  *
  * @tradeoff 用 Express 而非 Fastify：生态与资料最多（团队零小程序/Node 后端经验），
  *           代价是没有内建的 schema 校验与更慢的序列化——校验由 zod 在路由层做（F6c 起），性能在日百单量级无差异。
  *
  * @see docs/可扩展架构设计（app 层）、docs/代码注释规范与日志体系设计.md（流 C 请求日志）、技术文档 v0.5 §8
  */
+import type { Server } from 'node:http';
 import express, {
   type Express,
   type NextFunction,
@@ -180,24 +184,154 @@ function normalizeError(err: unknown): {
 }
 
 /**
- * 启动监听（测试与生产共用同一条路径，避免"测试用 supertest、生产用 listen"两套行为）。
- * @returns 实际端口与关闭函数（优雅关闭：先停止接新请求，再等存量请求结束）
+ * 默认监听地址。
+ *
+ * @why 曾经硬绑 `127.0.0.1`：本地测试一切正常，但 Render / 任何容器平台是从**宿主机外部**探端口的，
+ *      绑回环地址意味着外部永远连不上 → 表现是"部署成功但健康检查超时/发布失败"，
+ *      且本地无法复现（本地就是本机连本机）。这类"只在部署环境才暴露"的缺陷必须靠默认值消除，
+ *      而不是靠部署文档里的一行提醒。
+ * @limitation 监听 0.0.0.0 等于对机器所在网络的**所有网卡**开放；
+ *              端口暴露面由平台防火墙（Render/安全组）控制，不由本进程控制——不要把它当访问控制手段。
  */
-export async function listen(
-  app: Express,
-  port = 0,
-): Promise<{ port: number; close: () => Promise<void> }> {
-  const server = await new Promise<ReturnType<Express['listen']>>((resolve, reject) => {
-    const s = app.listen(port, '127.0.0.1', () => resolve(s));
+export function defaultHost(): string {
+  const fromEnv = process.env.HOST;
+  return fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv.trim() : '0.0.0.0';
+}
+
+export interface ListenOptions {
+  /** 0 = 由系统分配空闲端口（测试用）。 */
+  port?: number;
+  /** 缺省取 {@link defaultHost}。 */
+  host?: string;
+  /** 优雅关闭等待存量请求的上限（毫秒），超时强制断开。默认 10s（Render 给 30s，留足余量）。 */
+  graceMs?: number;
+}
+
+export interface StartedServer {
+  port: number;
+  host: string;
+  /** 优雅关闭：停止接新请求 → 断开空闲长连接 → 等存量请求结束；超时则强制断开并抛错。 */
+  close: () => Promise<void>;
+}
+
+/**
+ * 启动监听（测试与生产共用同一条路径，避免"测试用 supertest、生产用 listen"两套行为）。
+ */
+export async function listen(app: Express, opts: ListenOptions = {}): Promise<StartedServer> {
+  const host = opts.host ?? defaultHost();
+  const graceMs = opts.graceMs ?? 10_000;
+  const server = await new Promise<Server>((resolve, reject) => {
+    const s = app.listen(opts.port ?? 0, host, () => resolve(s as unknown as Server));
     s.on('error', reject);
   });
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('无法获取监听端口');
   return {
     port: address.port,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((e) => (e ? reject(e) : resolve()));
-      }),
+    host,
+    close: () => closeServer(server, graceMs),
+  };
+}
+
+/**
+ * 优雅关闭。
+ * @why 直接 `server.close()` 在 HTTP keep-alive 下会一直等**（浏览器/小程序复用连接），
+ *      进程不退出 → 平台判定"停止失败"后发 SIGKILL，正在处理的下单/回调请求被腰斩。
+ *      所以必须先 `closeIdleConnections()` 断掉空闲连接，再等存量请求。
+ * @limitation 超时后是**强制断开**而非等待：此时正在处理的请求会被中断（应答写不回去）。
+ *              这是刻意的取舍——宁可丢一个请求，也不要让部署永远卡住；
+ *              真正需要"绝不能断"的写操作（支付回调）应靠幂等 + 回调重放来恢复，而不是靠等。
+ */
+async function closeServer(server: Server, graceMs: number): Promise<void> {
+  // 先清一次：此刻就空闲的 keep-alive 连接直接断开
+  server.closeIdleConnections?.();
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    // @why 光在开头清一次**不够**：存量请求处理完那一刻连接才变空闲，而那之后没人再清，
+    //      `server.close()` 就要一直等到客户端自己超时（实测 undici 默认 keep-alive 约 4s → 关闭耗时 3.1s，
+    //      部署窗口被白白占掉）。所以按 100ms 反复清扫，直到 close 回调触发。
+    const sweeper = setInterval(() => server.closeIdleConnections?.(), 100);
+    const timer = setTimeout(() => {
+      settled = true;
+      server.closeAllConnections?.();
+      reject(new Error(`优雅关闭超时（${graceMs}ms）：仍有请求未结束，已强制断开连接`));
+    }, graceMs);
+    const done = (e?: Error | undefined): void => {
+      if (settled) return;
+      settled = true;
+      clearInterval(sweeper);
+      clearTimeout(timer);
+      if (e) reject(e);
+      else resolve();
+    };
+    server.close((e) => done(e ?? undefined));
+  });
+}
+
+export interface ShutdownHooks {
+  logger: Logger;
+  /** 关闭监听**之前**要做的事（关 DB 池、停调度器定时器）。 */
+  beforeClose?: (() => Promise<void>) | undefined;
+  /**
+   * 退出函数。**仅为测试注入**（process.exit 会把 vitest 进程一起杀掉，无法断言）。
+   * @limitation 生产代码不要传这个参数。
+   */
+  exit?: ((code: number) => void) | undefined;
+  /** 设置退出码后到真正 exit 的宽限时间（默认 2000ms，给日志排空；测试注入 10ms 缩短等待）。 */
+  exitDelayMs?: number;
+}
+
+/**
+ * 注册 SIGTERM / SIGINT 优雅关闭，返回卸载函数。
+ *
+ * @why Render/容器停止实例时发的是 SIGTERM，默认行为是**立刻**终止进程——
+ *      正在进行的事务、正在写的回调应答会直接消失。支付回调丢了虽然能靠重放补，
+ *      但关单/发货这类我们自己发起的写操作没有重放者，必须由我们自己在退出前收尾。
+ * @limitation 一：只处理 SIGTERM/SIGINT。**不处理 SIGKILL**（OS 级，无法捕获）——
+ *              OOM 被杀时本函数无效，靠 order_events（流 B）事后对账。
+ * @limitation 二：退出用 `process.exitCode` 而不是 `process.exit()`，让 Node 自然排空 stdout
+ *              （pino 走 sonic-boom 异步写，立即 exit 会丢最后几条日志）。
+ *              代价：若有句柄忘了关（DB 池没 end），进程会挂住——因此加了 2s 硬退出的兜底定时器。
+ * @returns uninstall（测试用；生产一般不卸载）
+ */
+export function installShutdownHandlers(started: StartedServer, hooks: ShutdownHooks): () => void {
+  const signals = ['SIGTERM', 'SIGINT'] as const;
+  const exit = hooks.exit ?? process.exit;
+  const delayMs = hooks.exitDelayMs ?? 2000;
+  let closing = false;
+
+  /** 先设 exitCode 让进程自然退出（不丢日志），delayMs 后若仍未退出则强制 exit。 */
+  const finish = (code: number): void => {
+    process.exitCode = code;
+    const hard = setTimeout(() => exit(code), delayMs);
+    hard.unref();
+  };
+
+  const handler = (signal: string): void => {
+    // 平台常连发多次信号（SIGTERM 后紧跟 SIGINT），第二次必须忽略，否则会重复关 DB 池并覆盖退出码
+    if (closing) return;
+    closing = true;
+    void (async () => {
+      const startedAt = performance.now();
+      const duration = (): number => Math.round(performance.now() - startedAt);
+      try {
+        await hooks.beforeClose?.();
+        await started.close();
+        hooks.logger.info('server_stopped', { signal, duration_ms: duration() });
+        finish(0);
+      } catch (e) {
+        hooks.logger.error('server_stop_failed', {
+          signal,
+          duration_ms: duration(),
+          err: e instanceof Error ? e : new Error(String(e)),
+        });
+        finish(1);
+      }
+    })();
+  };
+
+  for (const s of signals) process.on(s, handler);
+  return () => {
+    for (const s of signals) process.off(s, handler);
   };
 }

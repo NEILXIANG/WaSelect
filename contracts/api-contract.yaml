@@ -1,0 +1,265 @@
+openapi: 3.0.3
+info:
+  title: 日本直邮小程序 API
+  version: 0.5.0
+  description: |
+    与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
+    鉴权：Bearer JWT（小程序 aud=mp；管理端 aud=admin）。D-49 起没有 H5 身份：银行卡支付在 Stripe Checkout 托管页完成。写接口支持 Idempotency-Key 头（24 小时内重复返回原响应）。
+    展示价只由后端计算（display 对象），前端不做汇率乘法。
+servers:
+  - url: https://api.example.com/api/v1
+security:
+  - bearerAuth: []
+x-error-codes:
+  description: 业务错误码注册表（唯一真源 = 技术文档 v0.5 §7）；码前三位即 HTTP 状态。packages/shared/src/errors.ts 必须与本表一致，由 scripts/check-contract.mjs 防漂移。
+  codes:
+    40001: 参数缺失或格式错误
+    40002: 地址须为英文/拼音或电话格式错误
+    40011: 条款版本缺失或已过期
+    40101: 未登录或登录已过期
+    40102: 支付链接无效或已失效
+    40301: 无权限
+    40400: 请求的资源不存在
+    40401: 商品不存在或已下架
+    40901: 库存不足
+    40902: 订单状态不允许此操作
+    40903: 重复提交
+    40904: 订单已过期
+    40905: 价格已变动
+    40906: 订单金额超过上限，请拆单
+    40907: 该支付存在进行中的拒付，暂不可退款
+    42901: 请求过于频繁
+    50000: 服务器内部错误
+    50001: 支付创建失败
+    50002: 回调验签失败
+    50003: 汇率不可用
+    50004: 运费不可计算
+paths:
+  /auth/wechat/login:
+    post:
+      security: []
+      summary: 小程序登录（wx.login code 换 token）
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [code], properties: {code: {type: string}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AuthResp'}}}}}
+  /auth/admin/login:
+    post:
+      security: []
+      summary: 管理端（admin-web）邮箱密码登录；仅 is_admin 账号，JWT 12 小时（aud=admin）；连续失败 5 次锁 15 分钟
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 10}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {token: {type: string}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+  /fx:
+    get:
+      security: []
+      summary: 当日展示汇率（含缓冲），仅供文案展示
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {base: {type: string, example: JPY}, rates: {type: object, additionalProperties: {type: number}}, asOf: {type: string, format: date-time}}}}}}}
+  /terms:
+    get:
+      security: []
+      summary: 当前生效条款版本与法务页地址（D-45）；小程序法务页与建单前调用，建单时把 version 回传
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {version: {type: string, example: TOS-2026-09-20}, updated_at: {type: string, format: date-time}, urls: {type: object, properties: {zh: {type: string}, ja: {type: string}, en: {type: string}}}}}}}}}
+  /healthz:
+    get:
+      security: []
+      summary: 健康检查（Render）+ 调度看门狗（D-43/D-45）：读 job_runs，tick 最近成功超过 5 个周期或 daily 超过 26 小时则 503
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {ok: {type: boolean}, db: {type: boolean}, scheduler: {type: object, properties: {last_tick_at: {type: string, format: date-time}, last_tick_error: {type: string}, last_daily_at: {type: string, format: date-time}}}}}}}}, '503': {description: 数据库不可达或调度停摆}}
+  /internal/jobs/daily:
+    post:
+      security: [{internalSecret: []}]
+      summary: 每日作业触发（Render Cron Job 调用）：立即 202，进程内异步执行对账 / 汇率刷新 / 存活校验，结果写 job_runs('daily')（D-45；经 Cloudflare 代理有 100 秒上限，不得同步执行）
+      responses: {'202': {description: Accepted, content: {application/json: {schema: {type: object, properties: {run_id: {type: string}, started_at: {type: string, format: date-time}}}}}}, '401': {$ref: '#/components/responses/Err'}}
+  /home:
+    get:
+      security: []
+      summary: 首页数据（D-51）：生效中的 Banner（active 且在 starts_at/ends_at 内，按 sort）+ 分类
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {banners: {type: array, items: {$ref: '#/components/schemas/Banner'}}, categories: {type: array, items: {type: string}}}}}}}}
+  /products:
+    get:
+      security: []
+      parameters:
+        - {name: page, in: query, schema: {type: integer, default: 1}}
+        - {name: size, in: query, schema: {type: integer, default: 20, maximum: 50}}
+        - {name: category, in: query, schema: {type: string, enum: [beauty, daily, kitchen, food]}}
+        - {name: keyword, in: query, schema: {type: string}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/ProductCard'}}, total: {type: integer}}}}}}}
+  /products/{id}:
+    get:
+      security: []
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Product'}}}}, '404': {$ref: '#/components/responses/Err'}}
+  /addresses:
+    get: {summary: 我的地址, responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Address'}}}}}}}
+    post:
+      summary: 新增地址（美国格式，ASCII）
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Address'}}}}, '400': {$ref: '#/components/responses/Err'}}
+  /addresses/{id}:
+    put:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Address'}}}}}
+    delete:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: Deleted}}
+  /orders/quote:
+    post:
+      summary: 报价（购物车 / 确认页；不落库、不扣库存）
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Quote'}}}}, '409': {$ref: '#/components/responses/Err'}}
+  /orders:
+    get:
+      parameters: [{name: status, in: query, schema: {type: string, enum: [unpaid, paid, shipped, delivered, closed]}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/OrderSummary'}}}}}}}}
+    post:
+      summary: 建单（不含支付；扣减 stock；写 fx_snapshot 与 expires_at）
+      parameters: [{$ref: '#/components/parameters/IdemKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items, address_id, terms_version], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}, address_id: {type: string}, expected_total_jpy: {type: integer, description: '可选：前端确认页看到的合计；不等则 40905 价格已变动'}, contact_email: {type: string, format: email, description: '可选：收货通知兜底邮箱（D-39）'}, terms_version: {type: string, description: '建单时刻生效的条款版本（如 TOS-2026-09-20）；服务端与 TERMS_VERSION（GET /terms 返回的 version）不一致则 40011，缺失或不匹配一律拒单（D-43）'}}}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/OrderCreated'}}}}, '409': {$ref: '#/components/responses/Err'}}
+  /orders/{id}:
+    get:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Order'}}}}}
+  /orders/{id}/pay:
+    post:
+      summary: 发起支付（选通道）。同订单同通道未支付期内幂等返回同一意图；换通道先取消旧意图（D-33）。stripe 返回短链 pay_url（D-49），小程序不接收 client_secret
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdemKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [channel], properties: {channel: {type: string, enum: [mock, wechat, stripe]}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/PaymentIntent'}}}}, '409': {$ref: '#/components/responses/Err'}}
+  /pay/link/{id}:
+    get:
+      security: []
+      summary: 短链落地（D-49）：校验 t=token 与订单状态后 302 到 Stripe Checkout Session URL；token 不符或订单已终态 → 302 到静态失效页（40102）。按 IP 限流；不放行 CORS；不记录 query
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: t, in: query, required: true, schema: {type: string}}]
+      responses: {'302': {description: Location = Stripe Checkout Session URL 或失效页}}
+  /orders/{id}/cancel:
+    post:
+      summary: 取消（仅 created / pending_payment；同时取消未完成支付意图）
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/orders:
+    get:
+      parameters:
+        - {name: status, in: query, schema: {$ref: '#/components/schemas/OrderStatus'}}
+        - {name: keyword, in: query, schema: {type: string, description: order_no / 收件人 / 运单号}}
+        - {name: page, in: query, schema: {type: integer, default: 1}}
+        - {name: size, in: query, schema: {type: integer, default: 20, maximum: 100}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/Order'}}, total: {type: integer}}}}}}}
+  /admin/orders/{id}:
+    get:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AdminOrder'}}}}}
+  /admin/orders/{id}/ship:
+    post:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [carrier, tracking_no], properties: {carrier: {type: string}, tracking_no: {type: string}}}}}}
+      responses: {'200': {description: OK}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/orders/{id}/refund:
+    post:
+      description: 订单 has_dispute=true 时拒绝（40907，D-50）
+      summary: 全额退款（MVP；按 charge_currency / charge_amount 原币退；缺货场景整单退款）
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string}}}}}}
+      responses: {'202': {description: Accepted}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/orders/{id}/address:
+    post:
+      summary: 发货前改址（仅 paid 未发货；重写 address_snapshot 并记 order_events，D-39）
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
+      responses: {'200': {description: OK}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/products:
+    get:
+      parameters: [{name: status, in: query, schema: {type: string, enum: [active, offline]}}, {name: page, in: query, schema: {type: integer, default: 1}}, {name: size, in: query, schema: {type: integer, default: 50}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminProduct'}}, total: {type: integer}}}}}}}
+    post:
+      summary: 管理员建商品
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProductInput'}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}}
+  /admin/products/{id}:
+    put:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProductInput'}}}}
+      responses: {'200': {description: OK}}
+  /admin/products/{id}/status:
+    patch:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {status: {type: string, enum: [active, offline]}}}}}}
+      responses: {'200': {description: OK}}
+  /admin/upload:
+    post:
+      summary: 图片上传（multipart，服务端写 R2 并生成 thumb/card/detail 三档）
+      requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, properties: {file: {type: string, format: binary}}}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ImageSet'}}}}}
+  /admin/fx:
+    get:
+      summary: 当前生效展示汇率
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/FxRate'}}}}}}
+    post:
+      summary: 管理员维护展示汇率
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [quote, raw_rate], properties: {quote: {type: string, enum: [CNY, USD]}, raw_rate: {type: number}, effective_from: {type: string, format: date-time}}}}}}
+      responses: {'201': {description: Created}}
+  /admin/shipping-rates:
+    get:
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ShippingRate'}}}}}}
+    put:
+      summary: 整表替换运费分档
+      requestBody: {required: true, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ShippingRate'}}}}}
+      responses: {'200': {description: OK}}
+  /admin/banners:
+    get:
+      summary: Banner 列表（D-51）
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Banner'}}}}}}
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BannerInput'}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Banner'}}}}, '400': {$ref: '#/components/responses/Err'}}
+  /admin/banners/{id}:
+    put:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BannerInput'}}}}
+      responses: {'200': {description: OK}}
+    delete:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: Deleted}}
+  /admin/disputes:
+    get:
+      summary: 拒付列表（D-50）：payments.dispute_status；证据在 Stripe Dashboard 提交，后台只标红、锁退款、拉黑
+      parameters: [{name: status, in: query, schema: {type: string, enum: [open, won, lost]}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Dispute'}}}}}}
+  /admin/users/{id}/block:
+    post:
+      summary: 拉黑用户（D-50）：users.blocked_at；此后建单 40301
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK}}
+  /pay/callback/wechat:
+    post: {security: [], summary: 日本收单机构 webhook（验签、幂等）, responses: {'200': {description: 机构要求的应答体}}}
+  /pay/callback/stripe:
+    post: {security: [], summary: 'Stripe webhook（raw body + Stripe-Signature 验签）：checkout.session.completed / checkout.session.expired / payment_intent.succeeded / payment_intent.payment_failed / payment_intent.canceled / charge.refunded / refund.updated / refund.failed / charge.dispute.created / charge.dispute.closed / charge.dispute.funds_withdrawn / charge.dispute.funds_reinstated（D-49/D-50）', responses: {'200': {description: OK}}}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+    internalSecret: {type: apiKey, in: header, name: X-Internal-Job-Secret, description: 与 INTERNAL_JOB_SECRET 相等；仅 /internal/* 使用，不放行 CORS 与小程序}
+  parameters:
+    IdemKey: {name: Idempotency-Key, in: header, required: false, schema: {type: string}}
+  responses:
+    Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}
+  schemas:
+    AuthResp: {type: object, properties: {token: {type: string}, user: {type: object, properties: {id: {type: string}, isAdmin: {type: boolean}}}}}
+    Display: {type: object, description: 展示价，整数分（后端按当日汇率计算）, properties: {USD: {type: integer}, CNY: {type: integer}}}
+    ImageSet: {type: object, properties: {thumb: {type: string}, card: {type: string}, detail: {type: string}}}
+    ProductCard: {type: object, properties: {id: {type: string}, title: {type: string}, category: {type: string}, price_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, image: {$ref: '#/components/schemas/ImageSet'}, stock: {type: integer}, status: {type: string}}}
+    Product: {allOf: [{$ref: '#/components/schemas/ProductCard'}, {type: object, properties: {description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, weight_g: {type: integer}, compliance_tags: {type: array, items: {type: string}}, hs_code: {type: string}, customs_desc_en: {type: string}, origin_country: {type: string}}}]}
+    AdminProduct: {allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time}}}]}
+    ProductInput: {type: object, required: [title, category, price_jpy, weight_g, customs_desc_en, origin_country], properties: {title: {type: string}, category: {type: string}, description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, price_jpy: {type: integer, minimum: 1}, cost_jpy: {type: integer}, weight_g: {type: integer, minimum: 1}, stock: {type: integer}, compliance_tags: {type: array, items: {type: string, enum: [liquid, battery, cosmetic, food, flammable, aerosol, electrical, quasi_drug, sunscreen, children_product, alcohol]}, description: 'flammable / aerosol / electrical / quasi_drug / sunscreen / children_product / alcohol 七个标签上架即拒（40001）：前两者为日本邮便航空禁寄品（D-42），electrical 为 MVP 不上电器（D-45），quasi_drug（医薬部外品/薬用）与 sunscreen（SPF）在美国 FDA 口径属 OTC 药品、children_product 需 CPSIA 检测、alcohol 需酒类免许且不可邮寄（D-51）；customs_desc_en 含 medicated/whitening/SPF/sunscreen/drug 亦拒'}, hs_code: {type: string, description: '报关 HS 码；缺省时由 Zonos 自动识别、管理员核对；食品/化妆品必填（D-39/D-42）'}, customs_desc_en: {type: string, description: '英文报关品名，上架必填（D-39）'}, origin_country: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', enum: [JP], description: '原产地 ISO 3166-1 alpha-2，必填无默认，按商品包装实录；MVP 仅接受 JP——非 JP 一律 400 拒绝上架（D-42/D-43）'}, title_ja: {type: string, description: '日文品名（采购用）'}, jan_code: {type: string, description: 'JAN 码'}, purchase_source: {type: string, description: '采购渠道'}}}
+    AddressInput: {type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, pattern: '^[ -~]+$'}, phone: {type: string, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, pattern: '^[ -~]+$'}, line2: {type: string, pattern: '^[ -~]*$'}, city: {type: string, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2}, postal_code: {type: string, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
+    Address: {allOf: [{$ref: '#/components/schemas/AddressInput'}, {type: object, properties: {id: {type: string}}}]}
+    OrderItemsInput: {type: array, minItems: 1, items: {type: object, required: [product_id, qty], properties: {product_id: {type: string}, qty: {type: integer, minimum: 1}}}}
+    Quote: {type: object, properties: {items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer, description: 信息字段，不计入 total（D-32）}, total_jpy: {type: integer}, weight_g: {type: integer, description: 含 PACKAGING_WEIGHT_G 包材重量（D-42）}, display: {$ref: '#/components/schemas/Display'}, free_shipping_remaining_jpy: {type: integer}, split_hint: {type: boolean, description: 金额超 MAX_ORDER_JPY 时为 true，提示拆单（D-42；建单时硬拦 40906）}}}
+    OrderStatus: {type: string, enum: [created, pending_payment, paid, shipped, delivered, completed, cancelled, expired, refunding, refunded]}
+    OrderCreated: {allOf: [{$ref: '#/components/schemas/Quote'}, {type: object, properties: {order_id: {type: string}, order_no: {type: string}, fx_snapshot: {type: object, properties: {USD: {type: number}, CNY: {type: number}}}, status: {$ref: '#/components/schemas/OrderStatus'}, expires_at: {type: string, format: date-time}}}]}
+    OrderSummary: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, total_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, status: {$ref: '#/components/schemas/OrderStatus'}, created_at: {type: string, format: date-time}}}
+    Order: {allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, properties: {contact_email: {type: string, format: email, description: '可选收货通知邮箱（D-42 补入）'}, terms_version: {type: string, description: '建单时写入的条款版本（只读，D-43）'}, items: {type: array, items: {type: object, properties: {product_id: {type: string}, title: {type: string}, qty: {type: integer}, unit_price_jpy: {type: integer}, image: {$ref: '#/components/schemas/ImageSet'}}}}, address: {$ref: '#/components/schemas/Address'}, items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer}, expires_at: {type: string, format: date-time}, carrier: {type: string}, tracking_no: {type: string}, timeline: {type: array, items: {type: object, properties: {status: {type: string}, at: {type: string, format: date-time}}}}, payment: {type: object, properties: {channel: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, paid_amount: {type: integer}, paid_currency: {type: string}}}}}]}
+    AdminOrder: {allOf: [{$ref: '#/components/schemas/Order'}, {type: object, properties: {user_id: {type: string}, contact_email: {type: string, format: email, description: '客服可见（D-42）'}, is_test: {type: boolean, description: '审核期 mock 通道测试单；管理端列表默认过滤'}, has_dispute: {type: boolean, description: '存在进行中的拒付（D-50）；退款 40907'}, fx_snapshot: {type: object}, payments: {type: array, items: {type: object, properties: {provider: {type: string}, provider_ref: {type: string}, transaction_id: {type: string}, status: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, settled_jpy: {type: integer}, fee_jpy: {type: integer}}}}, events: {type: array, items: {type: object, properties: {status: {type: string}, note: {type: string}, actor: {type: string}, at: {type: string, format: date-time}}}}}}]}
+    PaymentIntent: {type: object, properties: {channel: {type: string, enum: [mock, wechat, stripe]}, charge: {type: object, properties: {currency: {type: string, enum: [JPY, USD]}, amount: {type: integer}}}, payload: {type: object, additionalProperties: true, description: 'wechat: wx.requestPayment 五参数；stripe: {pay_url, expires_at}（D-49 短链）；mock: {auto:true}'}, expires_at: {type: string, format: date-time}}}
+    BannerInput: {type: object, required: [image_key], properties: {image_key: {type: string}, link_type: {type: string, enum: [none, product, category], default: none}, link_id: {type: string}, sort: {type: integer, default: 0}, active: {type: boolean, default: true}, starts_at: {type: string, format: date-time}, ends_at: {type: string, format: date-time}}}
+    Banner: {allOf: [{$ref: '#/components/schemas/BannerInput'}, {type: object, properties: {id: {type: string}, image: {type: string, description: 'img.<domain> 完整 URL'}}}]}
+    Dispute: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, payment_id: {type: string}, dispute_id: {type: string}, dispute_status: {type: string, enum: [open, won, lost]}, dispute_amount: {type: integer}, charge_currency: {type: string}, opened_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time}}}
+    FxRate: {type: object, properties: {quote: {type: string}, rate: {type: number}, raw_rate: {type: number}, buffer: {type: number}, effective_from: {type: string, format: date-time}}}
+    ShippingRate: {type: object, required: [carrier, max_weight_g, price_jpy], properties: {carrier: {type: string}, max_weight_g: {type: integer}, price_jpy: {type: integer}, active: {type: boolean, default: true}}}

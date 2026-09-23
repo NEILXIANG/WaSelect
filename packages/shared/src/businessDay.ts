@@ -33,9 +33,17 @@ export function jstDate(at: Date): string {
   return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
 }
 
-/** JST 日期紧凑串 YYYYMMDD（订单号用）。 */
+/** JST 日期紧凑串 YYYYMMDD。 */
 export function jstDateCompact(at: Date): string {
   return jstDate(at).replaceAll('-', '');
+}
+
+/**
+ * JST 日期的 **YYMMDD**（6 位）——订单号日期段用。
+ * @see 技术文档 v0.5 §1：`order_no` = `YYMMDD` + 6 位 base32（例 `260919-K7Q2ML`）
+ */
+export function jstDateShort(at: Date): string {
+  return jstDateCompact(at).slice(2);
 }
 
 /** JST 当日 00:00 对应的 UTC 时刻（用于按日分组与调度窗口）。 */

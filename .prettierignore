@@ -5,3 +5,6 @@ package-lock.json
 **/*.min.js
 # 文档格式由治理规范（check-docs）与人工维护，prettier 不管 markdown
 **/*.md
+# 契约是从文档库镜像过来的**逐字节副本**：prettier 一旦重排，就会与文档库那份不一致，
+# 契约漂移检查（scripts/check-contract.mjs）会误报。格式化请在权威源那边做。
+contracts/

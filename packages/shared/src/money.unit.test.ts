@@ -1,11 +1,25 @@
 /**
- * 职责：Money 值对象与取整/拆分的 L0 单测 + **属性测试**（fast-check）。
+ * 职责：Money 值对象与换算/拆分的 L0 单测 + **属性测试**（fast-check）。
  * @why 评审 #5：金额与取整必须"永不差 1 分钱"，靠几条样例测不出来，必须用随机大样本。
- * @see docs/测试策略与验证门禁.md §6（必测 16）
+ * @why 本文件在外部审查后重写了换算部分：原 `convert()` 用浮点乘法，属性测试只验了"汇率越高结果越大"，
+ *      没有和精确值对拍，因此放过了 1250×0.0676 得 84（应为 85）这类边界错误。
+ *      现在的属性测试一律与 **BigInt 参考实现**对拍——这是唯一能证明"不差 1 分钱"的方式。
+ * @see docs/测试策略与验证门禁.md §6（必测 16）；技术文档 v0.5 §0（×1e8 整数）
  */
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { addMoney, allocate, convert, money, sumMoney } from './money.js';
+import { addMoney, allocate, money, sumMoney, toMinor, toRateInt } from './money.js';
+
+/** 参考实现：用 BigInt 做精确整数运算（不受 double 精度影响），只用于测试对拍。 */
+function referenceToMinor(jpy: number, rateInt: number): number {
+  const product = BigInt(jpy) * BigInt(rateInt);
+  const divisor = 1_000_000n;
+  const sign = product < 0n ? -1n : 1n;
+  const abs = product < 0n ? -product : product;
+  const q = abs / divisor;
+  const r = abs % divisor;
+  return Number(sign * (q + (r * 2n >= divisor ? 1n : 0n)));
+}
 
 describe('Money 构造与运算', () => {
   it('非整数 / 非法数值一律拒绝（把脏数据挡在边界）', () => {
@@ -17,6 +31,17 @@ describe('Money 构造与运算', () => {
 
   it('跨币种相加被禁止（禁止隐式换算）', () => {
     expect(() => addMoney(money(100, 'JPY'), money(100, 'USD'))).toThrow(TypeError);
+  });
+
+  it('同币种相加成功路径', () => {
+    expect(addMoney(money(100, 'JPY'), money(250, 'JPY'))).toEqual({
+      amount: 350,
+      currency: 'JPY',
+    });
+  });
+
+  it('求和时币种不一致拒绝（静默混算会让总额凭空多出一截）', () => {
+    expect(() => sumMoney([money(100, 'JPY'), money(200, 'USD')], 'JPY')).toThrow(TypeError);
   });
 
   it('求和满足交换律与结合律', () => {
@@ -37,26 +62,69 @@ describe('Money 构造与运算', () => {
   });
 });
 
-describe('convert（唯一取整入口）', () => {
-  it('结果恒为整数，且 half-up（0.5 向上）', () => {
-    expect(convert(100, 0.005)).toBe(1); // 0.5 → 1
-    expect(convert(100, 0.004)).toBe(0); // 0.4 → 0
-    expect(convert(0, 0.0067)).toBe(0);
+describe('toRateInt（汇率 ×1e8 整数化）', () => {
+  it('小数与 NUMERIC 字符串都转成整数', () => {
+    expect(toRateInt(0.00676)).toBe(676_000);
+    expect(toRateInt('0.00676')).toBe(676_000); // postgres.js 把 NUMERIC(18,8) 返回成 string
+    expect(toRateInt(0.0488)).toBe(4_880_000);
+    expect(toRateInt(1)).toBe(100_000_000);
   });
 
-  it('属性：任意金额与汇率，输出都是整数；汇率单调 ⇒ 结果单调不减', () => {
+  it('非法与超限汇率拒绝（超限会丢整数精度）', () => {
+    expect(() => toRateInt(Number.NaN)).toThrow(RangeError);
+    expect(() => toRateInt('abc')).toThrow(RangeError);
+    expect(() => toRateInt(2_000_000)).toThrow(RangeError);
+  });
+});
+
+describe('toMinor（唯一换算入口，整数运算）', () => {
+  it('基本换算：¥12,800 → 8653 美分（0.00676）', () => {
+    expect(toMinor(12_800, toRateInt(0.00676))).toBe(8653);
+  });
+
+  it('曾出错的边界：1250 × 0.0676 — 整数化后是 8450 分（84.50 美元），不再有 half-up 歧义', () => {
+    // 旧浮点实现：1250 * 0.0676 = 84.4999… → half-up 得 84（错）。
+    // 整数化后：1250 × 6_760_000 = 8,450,000,000；/1e6 = 8450 分，整除无歧义。
+    expect(toMinor(1250, toRateInt(0.0676))).toBe(8450);
+  });
+
+  it('负数对称（退款方向）', () => {
+    const rateInt = toRateInt(0.00676);
+    expect(toMinor(-12_800, rateInt)).toBe(-toMinor(12_800, rateInt));
+  });
+
+  it('非整数入参与溢出乘积一律拒绝', () => {
+    expect(() => toMinor(10.5, 676_000)).toThrow(RangeError);
+    expect(() => toMinor(100, 1.5)).toThrow(RangeError);
+    expect(() => toMinor(Number.MAX_SAFE_INTEGER, 676_000)).toThrow(RangeError);
+  });
+
+  it('属性：与 BigInt 参考实现逐一对拍（金额覆盖到 MAX_ORDER_JPY 之上）', () => {
     fc.assert(
       fc.property(
-        fc.integer({ min: 0, max: 100_000_000 }),
-        fc.double({ min: 0, max: 0.1, noNaN: true }),
-        (amount, rate) => {
-          const out = convert(amount, rate);
-          expect(Number.isInteger(out)).toBe(true);
-          expect(out).toBeGreaterThanOrEqual(0);
-          expect(convert(amount, rate + 0.001)).toBeGreaterThanOrEqual(out);
+        fc.integer({ min: 0, max: 200_000 }), // 覆盖 MAX_ORDER_JPY=180,000 附近
+        fc.integer({ min: 1, max: 100_000_000 }), // rateInt：rate ∈ (0, 1]
+        (jpy, rateInt) => {
+          expect(toMinor(jpy, rateInt)).toBe(referenceToMinor(jpy, rateInt));
         },
       ),
-      { numRuns: 300 },
+      { numRuns: 2000 },
+    );
+  });
+
+  it('属性：half-up 边界——余数恰为半个除数时进位', () => {
+    // rateInt=500_000（rate=0.005），jpy 为奇数时乘积尾数恰为 500_000，正好落在 .5 边界
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 999 }).filter((n) => n % 2 === 1),
+        (jpy) => {
+          const rateInt = 500_000; // = rate 0.005
+          expect(toMinor(jpy, rateInt)).toBe(referenceToMinor(jpy, rateInt));
+          // 奇数 × 0.005 → 最小单位是 x.5 分 → half-up 进位，故结果是 (jpy + 1) / 2
+          expect(toMinor(jpy, rateInt)).toBe((jpy + 1) / 2);
+        },
+      ),
+      { numRuns: 200 },
     );
   });
 });
@@ -86,12 +154,12 @@ describe('allocate（最大余额法拆分）', () => {
     );
   });
 
+  it('权重之和为 0 时拒绝（避免除零产生 NaN 静默扩散）', () => {
+    expect(() => allocate(100, [0, 0])).toThrow(RangeError);
+  });
+
   it('含零权重的合法拆分：零权重项分到 0，其余照比例', () => {
     expect(allocate(17, [0, 1])).toEqual([0, 17]);
     expect(allocate(10, [1, 0, 1])).toEqual([5, 0, 5]);
-  });
-
-  it('权重之和为 0 时拒绝（避免除零产生 NaN 静默扩散）', () => {
-    expect(() => allocate(100, [0, 0])).toThrow(RangeError);
   });
 });

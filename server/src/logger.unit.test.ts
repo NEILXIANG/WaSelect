@@ -87,6 +87,96 @@ describe('脱敏在日志出口强制生效', () => {
   });
 });
 
+/**
+ * 缺陷 #3/#4 的回归护栏。
+ * @why 这两个缺陷的共同点是"输出里**有**脱敏后的值，所以按值断言能过"——明文是作为**重复键**
+ *      追加在同一行 JSON 里的，`JSON.parse` 取最后一个键，恰好取到明文。
+ *      因此这里除了断言"明文不出现"，还必须断言"同一行里同一个键只出现一次"。
+ */
+describe('脱敏护栏：child 与上下文（缺陷 #3/#4）', () => {
+  /** 统计某个顶层键在**原始 JSON 文本**里出现的次数——重复键只能靠文本层发现。 */
+  function countKey(line: string, key: string): number {
+    return line.split(`"${key}":`).length - 1;
+  }
+
+  it('child 传进来的敏感值不会以明文出现，且不产生重复键', () => {
+    const { sink, log } = setup();
+    const pay = log.child({ module: 'payment', token: 'sk_live_plain', card: '4242424242424242' });
+    pay.info('provider_called');
+
+    const line = sink.lines[0] ?? '';
+    expect(line).not.toContain('sk_live_plain');
+    expect(line).not.toContain('4242424242424242');
+    expect(countKey(line, 'token')).toBe(1);
+    expect(countKey(line, 'card')).toBe(1);
+    // 脱敏后仍要保留可关联性（后 4 位），否则排障时无法把多次报错串起来
+    expect(sink.last().card).toBe('***4242');
+    expect(sink.last().module).toBe('payment');
+  });
+
+  it('child 再 child（多层派生）也不会漏脱敏', () => {
+    const { sink, log } = setup();
+    const deep = log
+      .child({ module: 'payment' })
+      .child({ channel: 'stripe' })
+      .child({ api_key: 'sk_test_deep' });
+    deep.info('nested');
+    expect(sink.lines.join('\n')).not.toContain('sk_test_deep');
+  });
+
+  it('上下文里的 actor 邮箱被脱敏（键名不敏感、值敏感）', () => {
+    const { sink, log } = setup();
+    runWithContext({ actor: 'admin:bob@example.com', user_id: 'u-1' }, () => {
+      log.info('admin_action');
+    });
+    const line = sink.lines[0] ?? '';
+    expect(line).not.toContain('bob@');
+    expect(sink.last().actor).toBe('admin:b***@example.com');
+  });
+
+  it('上下文与调用点字段都不会绕过脱敏（同一行内不出现重复键）', () => {
+    const { sink, log } = setup();
+    runWithContext({ actor: 'admin:bob@example.com' }, () => {
+      log.info('admin_action', { token: 'sk_live_plain' });
+    });
+    const line = sink.lines[0] ?? '';
+    expect(countKey(line, 'actor')).toBe(1);
+    expect(countKey(line, 'token')).toBe(1);
+    expect(line).not.toContain('bob@');
+    expect(line).not.toContain('sk_live_plain');
+  });
+});
+
+/** 缺陷 #6：事件名必须不可被调用点字段改写。 */
+describe('event 不可被覆盖（缺陷 #6）', () => {
+  it('调用点传 `{ event: ... }` 不能改写事件名', () => {
+    const { sink, log } = setup();
+    log.info('order_created', { event: 'hijacked' });
+    expect(sink.last().event).toBe('order_created');
+  });
+
+  it('child 绑定里写 event 也不能改写事件名', () => {
+    const { sink, log } = setup();
+    log.child({ event: 'from_child' }).info('order_created');
+    expect(sink.last().event).toBe('order_created');
+  });
+});
+
+/** 字段优先级必须显式、可测，否则后来者会靠猜。 */
+describe('字段优先级', () => {
+  it('调用点字段 > 请求上下文 > child 绑定，event 恒为最优先', () => {
+    const { sink, log } = setup();
+    const child = log.child({ module: 'payment', channel: 'mock' });
+    runWithContext({ channel: 'wechat', module: 'ctx-module' }, () => {
+      child.info('pay_started', { channel: 'stripe' });
+    });
+    const row = sink.last();
+    expect(row.channel).toBe('stripe');
+    expect(row.module).toBe('ctx-module');
+    expect(row.event).toBe('pay_started');
+  });
+});
+
 describe('级别与派生', () => {
   it('生产默认 info，debug 不输出；开发默认 debug', () => {
     expect(levelForEnv('production')).toBe('info');

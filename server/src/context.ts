@@ -10,6 +10,8 @@
  *              必须由调度方显式把 trace_id 存进任务行再 `runWithContext` 包一层（F13 调度器会这么做）。
  * @limitation 二：ALS 有轻微性能开销（每个请求一次 store 切换）。对本项目的量级（日百单）可忽略；
  *              若将来到日十万单量级需要重新评估。
+ * @limitation 三：**值为 undefined 的键会被丢弃**，不写进 store。这是刻意的（见 compact 的 @why），
+ *              副作用是本模块**没有"清空某个字段"的能力**——需要清空就重新 `runWithContext` 建一条链。
  * @tradeoff 用隐式上下文换取调用点整洁：代价是"日志里为什么会有这个字段"不再是本地可见的，
  *           必须在规范里写明上下文来自中间件，否则后来者会困惑。
  *
@@ -38,6 +40,24 @@ export interface LogContext {
 
 const storage = new AsyncLocalStorage<LogContext>();
 
+/**
+ * 丢掉值为 undefined 的键。
+ *
+ * @why 曾经写成 `{ trace_id: ctx.trace_id ?? randomUUID(), ...ctx }`：当调用方传
+ *      `{ trace_id: undefined }`（类型上被 `as LogContext` 绕过、或上游字段就是 undefined）时，
+ *      展开的 `undefined` 会把刚生成好的 trace_id **覆盖回 undefined**，于是整条链的日志全部失去
+ *      追踪 ID——而且不报错、不为空、看起来"日志正常"，是最难查的一类静默失效（复现缺陷 #5）。
+ *      先 compact 再补默认值，顺序上让"显式有值"永远赢过"隐式生成"。
+ */
+function compact(ctx: LogContext): LogContext {
+  const out: LogContext = {};
+  for (const key of Object.keys(ctx) as (keyof LogContext)[]) {
+    const value = ctx[key] as string | undefined;
+    if (typeof value === 'string') out[key] = value;
+  }
+  return out;
+}
+
 /** 当前异步链的上下文（无上下文时返回空对象，绝不是 undefined——避免调用点到处判空）。 */
 export function currentContext(): LogContext {
   return storage.getStore() ?? {};
@@ -45,17 +65,22 @@ export function currentContext(): LogContext {
 
 /**
  * 在指定上下文中执行 fn；fn 内（含其派生的所有异步操作）的日志都会自动带上这些字段。
- * @param ctx 上下文；若未提供 trace_id 会自动生成，保证"只要有上下文就有 trace_id"
+ * @param ctx 上下文；若未提供 trace_id 会自动生成，保证"只要有上下文就有 trace_id"。
+ *            传入 `undefined` 等价于"没传"，不会把生成的 ID 冲掉（见 compact 的 @why）。
  */
 export function runWithContext<T>(ctx: LogContext, fn: () => T): T {
-  const merged: LogContext = { trace_id: ctx.trace_id ?? randomUUID(), ...ctx };
+  const merged = compact(ctx);
+  if (merged.trace_id === undefined) merged.trace_id = randomUUID();
   return storage.run(merged, fn);
 }
 
-/** 在当前链上补充字段（例如登录成功后才知道 user_id）。无上下文时等价于无操作。 */
+/**
+ * 在当前链上补充字段（例如登录成功后才知道 user_id）。无上下文时等价于无操作。
+ * @limitation undefined 值会被忽略（compact），因此 patch 只能"补"不能"清"。
+ */
 export function patchContext(patch: LogContext): void {
   const current = storage.getStore();
-  if (current) Object.assign(current, patch);
+  if (current) Object.assign(current, compact(patch));
 }
 
 /** 生成一个新的 trace_id（跨进程传递时用，如把 trace_id 写进任务行）。 */

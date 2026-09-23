@@ -4,11 +4,11 @@
  *      用 supertest 或 mock 掉一层就测不到中间件顺序这类问题。
  * @see server/src/http.ts @why；docs/地基搭建清单.md F6
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Express } from 'express';
 import { Buffer } from 'node:buffer';
 import { MemorySink } from '../../test/helpers/memory-sink.js';
-import { createHttpApp, listen } from './http.js';
+import { createHttpApp, defaultHost, installShutdownHandlers, listen } from './http.js';
 import { createLogger } from './logger.js';
 import { AppError } from './errors.js';
 
@@ -28,7 +28,7 @@ async function start(mount?: (app: Express) => void): Promise<{
     silentPaths: ['/healthz'],
     mount,
   });
-  const { port, close } = await listen(app, 0);
+  const { port, close } = await listen(app);
   return { baseUrl: `http://127.0.0.1:${port}`, sink, close };
 }
 
@@ -180,5 +180,162 @@ describe('访问日志（请求维度）', () => {
     const levels = Object.fromEntries(sink.rows().map((r) => [r.event, r.level]));
     expect(levels.request_rejected).toBe('warn');
     expect(levels.request_failed).toBe('error');
+  });
+});
+
+/**
+ * 监听地址与优雅关闭（P0 修复项）。
+ * @why 「硬绑 127.0.0.1」和「没有 SIGTERM 处理」都不会在本地红灯——本地永远是"能连上、能 Ctrl-C"，
+ *      只有在容器平台上才表现为"发布超时"和"部署时请求被腰斩"。
+ *      所以这两条必须用**真实端口 + 真实信号**钉死，不能只测逻辑分支。
+ */
+describe('监听地址', () => {
+  it('默认监听 0.0.0.0——容器平台从外部探端口，绑回环会导致部署健康检查超时', async () => {
+    const app = createHttpApp({
+      logger: createLogger({ env: 'development', destination: new MemorySink() }),
+    });
+    const started = await listen(app);
+    current = started;
+    expect(started.host).toBe('0.0.0.0');
+    // 从 127.0.0.1 能连上，证明不是只绑了某个外网 IP
+    const res = await fetch(`http://127.0.0.1:${started.port}/healthz`);
+    expect(res.status).toBe(200);
+  });
+
+  it('HOST 环境变量可覆盖默认地址（本地只想绑回环时用）', async () => {
+    const prev = process.env.HOST;
+    process.env.HOST = '127.0.0.1';
+    try {
+      expect(defaultHost()).toBe('127.0.0.1');
+    } finally {
+      if (prev === undefined) delete process.env.HOST;
+      else process.env.HOST = prev;
+    }
+  });
+
+  it('HOST 为空串时回落到 0.0.0.0（空串比"没配"更危险：容易误判为已配置）', () => {
+    const prev = process.env.HOST;
+    process.env.HOST = '   ';
+    try {
+      expect(defaultHost()).toBe('0.0.0.0');
+    } finally {
+      if (prev === undefined) delete process.env.HOST;
+      else process.env.HOST = prev;
+    }
+  });
+});
+
+describe('优雅关闭', () => {
+  it('close() 之后端口不再接受连接', async () => {
+    const app = createHttpApp({
+      logger: createLogger({ env: 'development', destination: new MemorySink() }),
+    });
+    const started = await listen(app);
+    await started.close();
+    await expect(fetch(`http://127.0.0.1:${started.port}/healthz`)).rejects.toThrow();
+  });
+
+  it('存量请求不被腰斩：关闭期间已在处理中的请求仍能正常返回', async () => {
+    // ⚠️ 路由必须挂在 mount 里，不能在 createHttpApp 之后再 app.get：
+    //    兜底 404 是在 mount 之后注册的，事后补的路由会被它先吃掉（返回 404，handler 永不执行）。
+    //    这是本骨架的真实陷阱——第一次写这个用例就踩了（表现为 await enteredHandler 永久挂起、用例 5s 超时）。
+    // @why 另外必须等请求**真的进到 handler** 再发起关闭：fetch 的连接建立是异步的，
+    //      若不等就 close()，测到的是"新连接被拒"（ECONNREFUSED）而不是"存量请求被腰斩"——
+    //      那不是本用例想验的行为，红灯会误导人以为是优雅关闭坏了。
+    let entered: () => void = () => undefined;
+    const enteredHandler = new Promise<void>((r) => {
+      entered = r;
+    });
+    const app = createHttpApp({
+      logger: createLogger({ env: 'development', destination: new MemorySink() }),
+      mount: (a) => {
+        a.get('/slow', async (_req, res) => {
+          entered();
+          await new Promise((r) => setTimeout(r, 120));
+          res.json({ ok: true });
+        });
+      },
+    });
+    const started = await listen(app);
+    const inflight = fetch(`http://127.0.0.1:${started.port}/slow`).then((r) => r.status);
+    await enteredHandler;
+    // 此刻请求正在处理中——这正是"部署时被 SIGTERM"的真实时序
+    const closedAt = performance.now();
+    const closing = started.close();
+    await expect(inflight).resolves.toBe(200);
+    await expect(closing).resolves.toBeUndefined();
+    // 关闭必须在存量请求结束后**立刻**完成：若等到客户端 keep-alive 自己超时，
+    // 关闭耗时会变成 3s 级（实测未加清扫器时 3128ms），白白吃掉部署窗口。
+    expect(performance.now() - closedAt).toBeLessThan(1000);
+  });
+
+  it('SIGTERM 触发关闭并退出码 0（beforeClose 先于 close 执行）', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const app = createHttpApp({ logger });
+    const started = await listen(app);
+    const order: string[] = [];
+    const exits: number[] = [];
+
+    const uninstall = installShutdownHandlers(started, {
+      logger,
+      beforeClose: async () => {
+        order.push('beforeClose');
+      },
+      exit: (code) => exits.push(code),
+      exitDelayMs: 10,
+    });
+    try {
+      expect(process.listeners('SIGTERM')).toHaveLength(1);
+      expect(process.listeners('SIGINT')).toHaveLength(1);
+
+      // 真实信号投递会把信号名作为第一个参数传给监听器，这里必须显式带上，
+      // 否则 handler 收到 undefined，日志里的 signal 字段就空了（与生产不一致）
+      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      await vi.waitFor(() => expect(exits).toEqual([0]), { timeout: 1000 });
+      expect(order).toEqual(['beforeClose']);
+      expect(sink.find('server_stopped')[0]?.signal).toBe('SIGTERM');
+    } finally {
+      uninstall();
+      await started.close().catch(() => undefined);
+    }
+  });
+
+  it('重复信号只处理一次（平台常 SIGTERM 后紧跟 SIGINT）', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const started = await listen(createHttpApp({ logger }));
+    let beforeCloseCalls = 0;
+    const exits: number[] = [];
+    const uninstall = installShutdownHandlers(started, {
+      logger,
+      beforeClose: async () => {
+        beforeCloseCalls += 1;
+      },
+      exit: (code) => exits.push(code),
+      exitDelayMs: 10,
+    });
+    try {
+      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      process.emit('SIGINT' as NodeJS.Signals, 'SIGINT');
+      await vi.waitFor(() => expect(exits.length).toBeGreaterThan(0), { timeout: 1000 });
+      expect(beforeCloseCalls).toBe(1);
+    } finally {
+      uninstall();
+      await started.close().catch(() => undefined);
+    }
+  });
+
+  it('卸载后不再响应信号（避免测试之间互相干扰）', async () => {
+    const logger = createLogger({ env: 'development', destination: new MemorySink() });
+    const started = await listen(createHttpApp({ logger }));
+    const uninstall = installShutdownHandlers(started, {
+      logger,
+      exit: () => undefined,
+      exitDelayMs: 10,
+    });
+    uninstall();
+    expect(process.listeners('SIGTERM')).toHaveLength(0);
+    await started.close();
   });
 });

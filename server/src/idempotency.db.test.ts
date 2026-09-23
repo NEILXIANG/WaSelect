@@ -106,6 +106,14 @@ describe('并发', () => {
     expect([a.replayed, b.replayed].sort()).toEqual([false, true]);
   });
 
+  /**
+   * 首次执行超时未出结果 → 第二个请求拿 40903（不重复下单，宁可提示处理中）。
+   *
+   * @why 这里必须**等占位行真的出现**再发起第二个请求：两个 `withIdempotency` 都是异步的，
+   *      谁先抢到占位行取决于 DB 往返的调度——在 unit+db 合并跑（机器更忙）时，
+   *      `impatient()` 会先抢到，于是它自己执行了 handler，`rejects` 变成 `resolves`，
+   *      表现为**偶发红灯**。测试不能依赖调度顺序，只能依赖可观测的状态（占位行是否已写入）。
+   */
   it('首次执行超时未出结果 → 第二个请求拿 40903（不重复下单，宁可提示处理中）', async () => {
     const slow = (): Promise<{ status: number; body: { done: boolean } }> =>
       withIdempotency(db, args('k-slow'), async () => {
@@ -119,6 +127,14 @@ describe('并发', () => {
       }));
 
     const p = slow();
+    // 轮询直到 slow 抢到占位行（而不是 sleep 一个"应该够了"的时间）
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      const rows = await db`select key from idempotency_keys where key = 'k-slow'`;
+      if (rows.length > 0 || Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
     await expect(impatient()).rejects.toMatchObject({ code: 40903 });
     await p; // 让慢的那个跑完，避免影响后续用例
   });

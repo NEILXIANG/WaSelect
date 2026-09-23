@@ -145,7 +145,7 @@ describe('requireRole 中间件（真 HTTP）', () => {
         );
       },
     });
-    const started = await listen(app, 0);
+    const started = await listen(app);
     close = started.close;
     return { baseUrl: `http://127.0.0.1:${started.port}`, sink };
   }

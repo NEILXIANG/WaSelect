@@ -6,8 +6,18 @@
  * @see migrations/001_init.sql；docs/地基搭建清单.md F7
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { closeDb, createDb, ping, withSavepoint, withTransaction, type Db } from './db.js';
-import { ensureTestDb, resetTestDb, testDb } from '../../test/db/test-db.js';
+import {
+  assertPostgresMajor,
+  closeDb,
+  createDb,
+  MIN_POSTGRES_MAJOR,
+  ping,
+  postgresMajorVersion,
+  withSavepoint,
+  withTransaction,
+  type Db,
+} from './db.js';
+import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../test/db/test-db.js';
 
 let db: Db;
 
@@ -31,12 +41,24 @@ describe('连接与探活', () => {
   });
 
   it('连错库时 ping 返回 false 而不是抛异常（/readyz 需要稳定的布尔值）', async () => {
-    const bad = createDb({ url: 'postgres://neilxiang@localhost:5432/no_such_db_xyz', max: 1 });
+    // 库名故意不存在；主机/角色沿用测试库连接串，避免把本机用户名写死在测试里
+    const bad = createDb({ url: TEST_DB_URL.replace(/\/[^/]+$/, '/no_such_db_xyz'), max: 1 });
     try {
       await expect(ping(bad)).resolves.toBe(false);
     } finally {
       await closeDb(bad);
     }
+  });
+
+  it(`Postgres 大版本 >= ${MIN_POSTGRES_MAJOR}（与生产一致，代码里有硬闸门）`, async () => {
+    await expect(postgresMajorVersion(db)).resolves.toBeGreaterThanOrEqual(MIN_POSTGRES_MAJOR);
+    await expect(assertPostgresMajor(db)).resolves.toBeGreaterThanOrEqual(MIN_POSTGRES_MAJOR);
+  });
+
+  it('版本闸门在版本不足时抛错而不是静默放行', async () => {
+    // 用一个必然不可能满足的下限（当前版本 + 1）验证闸门真的会拦
+    const actual = await postgresMajorVersion(db);
+    await expect(assertPostgresMajor(db, actual + 1)).rejects.toThrow(/版本过低/);
   });
 });
 

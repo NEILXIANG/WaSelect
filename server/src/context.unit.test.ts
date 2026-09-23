@@ -4,7 +4,13 @@
  * @see server/src/context.ts @limitation
  */
 import { describe, expect, it } from 'vitest';
-import { currentContext, newTraceId, patchContext, runWithContext } from './context.js';
+import {
+  currentContext,
+  newTraceId,
+  patchContext,
+  runWithContext,
+  type LogContext,
+} from './context.js';
 
 describe('runWithContext', () => {
   it('同步与 await 之后上下文依然在（异步链穿透）', async () => {
@@ -41,6 +47,28 @@ describe('runWithContext', () => {
   it('上下文外返回空对象而不是 undefined（调用点不必判空）', () => {
     expect(currentContext()).toEqual({});
   });
+
+  /**
+   * 缺陷 #5 的回归护栏。
+   * @why 曾经的写法 `{ trace_id: ctx.trace_id ?? randomUUID(), ...ctx }` 里，
+   *      展开的 `trace_id: undefined` 会把刚生成的 ID 覆盖掉。这类失效不抛错、不为空字符串，
+   *      表现为"日志里没有 trace_id"，在排查线上问题时才会被发现——所以必须在单测层钉死。
+   *      测试里用 `as LogContext` 绕过 exactOptionalPropertyTypes，模拟"上游字段就是 undefined"的真实来源
+   *      （例如从请求头读到的值是 undefined）。
+   */
+  it('trace_id 显式传 undefined 时仍然自动生成（不被 undefined 冲掉）', () => {
+    runWithContext({ trace_id: undefined } as unknown as LogContext, () => {
+      const id = currentContext().trace_id;
+      expect(typeof id).toBe('string');
+      expect((id as string).length).toBeGreaterThan(10);
+    });
+  });
+
+  it('其它字段传 undefined 也不会写进 store（避免日志里出现 null/undefined 噪音）', () => {
+    runWithContext({ trace_id: 't-1', actor: undefined } as unknown as LogContext, () => {
+      expect(currentContext()).toEqual({ trace_id: 't-1' });
+    });
+  });
 });
 
 describe('patchContext', () => {
@@ -54,6 +82,13 @@ describe('patchContext', () => {
 
   it('无上下文时 patch 不抛错（定时任务里可能没有上下文）', () => {
     expect(() => patchContext({ actor: 'system' })).not.toThrow();
+  });
+
+  it('patch 传 undefined 不会把已有字段清成 undefined（见 @limitation 三）', () => {
+    runWithContext({ trace_id: 't-1', actor: 'user' }, () => {
+      patchContext({ actor: undefined } as unknown as LogContext);
+      expect(currentContext().actor).toBe('user');
+    });
   });
 });
 

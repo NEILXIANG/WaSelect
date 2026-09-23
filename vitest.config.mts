@@ -42,6 +42,24 @@ export default defineConfig({
         functions: 85,
         branches: 85,
         statements: 85,
+        // 《测试策略与验证门禁》§4.2 要求关键模块分支 100%，这里把它变成门禁而不是口头要求。
+        // 审查指出：money.ts 分支只有 75% 也能过 gate——就是因为门槛只设了全局值。
+        'packages/shared/src/money.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100,
+        },
+        'packages/shared/src/orderNo.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100,
+        },
+        // 日志与上下文：脱敏是"漏一行就出事故"的能力，且缺陷形态是"重复键覆盖"（见 logger.ts @limitation 四），
+        // 靠肉眼 review 看不出来。用 100% 闸门把它钉住——新增分支必须补测试，不能靠全局均值蒙混。
+        'server/src/logger.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'server/src/context.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
       },
     },
   },
