@@ -96,6 +96,15 @@ export default defineConfig({
         // 靠肉眼 review 看不出来。用 100% 闸门把它钉住——新增分支必须补测试，不能靠全局均值蒙混。
         'server/src/logger.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'server/src/context.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        // N16：脱敏 / 幂等 / 回调台账同属"错一处就是资金或合规事故"的模块，提到同一强度。
+        // 真防御分支（竞态窗口、类型守卫的唯一调用方已保证）允许 `v8 ignore` + 中文理由注释，
+        // 但不允许为凑覆盖率写假测试或删防御代码（见 docs/自主决策记录.md AJ-37）。
+        'server/src/redact.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'server/src/idempotency.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'server/src/webhooks.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
+        // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
+        'server/src/auth.ts': { branches: 95 },
       },
     },
   },

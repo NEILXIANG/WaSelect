@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { maskText, redact } from './redact.js';
+import { isSensitiveKey, maskText, redact } from './redact.js';
 
 describe('键名脱敏（主要手段）', () => {
   it('敏感键名的值被掩码，非敏感键名原样保留', () => {
@@ -332,5 +332,47 @@ describe('结构安全（日志进程不能被日志本身搞死）', () => {
   it('幂等：脱敏两次结果相同（日志重复处理不会越抹越乱）', () => {
     const once = redact({ token: 'abcdef', email: 'x@y.com', n: 1 });
     expect(redact(once)).toEqual(once);
+  });
+});
+
+/**
+ * N16 覆盖率缺口的定向补齐——每一条例都对应 v8 报告里一个真实未走的分支。
+ * 不是为凑数字：这些分支（function/symbol/无栈 Error/非字符串姓名/小数标识符）
+ * 都是"意外类型流入日志"时的行为，不钉住就可能在某次重构里悄悄改变。
+ */
+describe('意外类型的脱敏行为（N16 定向）', () => {
+  it('isSensitiveKey 直接可调（与 classifyKey 一致的布尔视图）', () => {
+    expect(isSensitiveKey('password')).toBe(true);
+    expect(isSensitiveKey('openid')).toBe(true);
+    expect(isSensitiveKey('product_name')).toBe(false);
+  });
+
+  it('function 值 → 占位串（函数进日志没有可读形态，但不能原样序列化）', () => {
+    const out = redact({ callback: () => undefined }) as Record<string, unknown>;
+    expect(out.callback).toBe('[Function]');
+  });
+
+  it('symbol 值 → toString（ Symbol 不能 JSON 序列化，原样会让 pino 丢字段）', () => {
+    const out = redact({ sym: Symbol('trace-marker') }) as Record<string, unknown>;
+    expect(out.sym).toBe('Symbol(trace-marker)');
+  });
+
+  it('Error 没有 stack 时不产出 err_stack 键（不能假设所有 Error 都带栈）', () => {
+    const e = new Error('no stack here');
+    delete e.stack;
+    const out = redact({ err: e }) as { err: { err_stack?: string } };
+    expect(out.err.err_stack).toBeUndefined();
+  });
+
+  it('PII 姓名键收到非字符串（意外传对象/数字）→ 整值掩码而不是取"首字母"', () => {
+    const out = redact({ recipient: 123456, fullname: { nested: true } }) as Record<string, unknown>;
+    expect(out.recipient).toBe('***');
+    expect(out.fullname).toBe('***');
+  });
+
+  it('IDENTIFIER 键收到小数 → 整值掩码（"尾 4 位"对小数没有语义）', () => {
+    const out = redact({ card_no: 1.5, phone: true }) as Record<string, unknown>;
+    expect(out.card_no).toBe('***');
+    expect(out.phone).toBe('***');
   });
 });

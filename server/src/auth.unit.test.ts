@@ -396,3 +396,124 @@ describe('bearerOf', () => {
     expect(bearerOf(mk('Basic abc') as never)).toBeUndefined();
   });
 });
+
+/**
+ * N16 定向：toPrincipal / requireRole 里"伪造载荷形状"的分支。
+ * @why jose 层强制 aud ∈ {mp, admin}，所以"role 非法 / 无 sub"要走到 toPrincipal，
+ *      伪造 token 必须**带合法 aud**——否则在 jose 层就被拒，测的是另一条路径。
+ */
+describe('伪造载荷的形状防线（N16 定向）', () => {
+  it('aud 合法但 role 不是 user/admin → 40101（toPrincipal 拒绝，不是 jose 拒绝）', async () => {
+    const withSub = await new SignJWT({ role: 'root' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('u-1')
+      .setIssuer(cfg.issuer ?? 'waselect')
+      .setAudience('mp')
+      .setIssuedAt(Math.floor(Date.now() / 1000))
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 600)
+      .sign(new TextEncoder().encode(cfg.secret));
+    await expect(verifyToken(withSub, cfg)).rejects.toMatchObject({ code: 40101 });
+  });
+
+  it('aud 合法但无 sub → 40101（同上，必须是 toPrincipal 这条路径）', async () => {
+    const forged = await new SignJWT({ role: 'user' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuer(cfg.issuer ?? 'waselect')
+      .setAudience('mp')
+      .setIssuedAt(Math.floor(Date.now() / 1000))
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 600)
+      .sign(new TextEncoder().encode(cfg.secret));
+    await expect(verifyToken(forged, cfg)).rejects.toMatchObject({ code: 40101 });
+  });
+
+  it('无 ver claim 的老 token → principal.ver 为 undefined（requireRole 侧按 1 处理）', async () => {
+    const forged = await new SignJWT({ role: 'user' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('u-1')
+      .setIssuer(cfg.issuer ?? 'waselect')
+      .setAudience('mp')
+      .setIssuedAt(Math.floor(Date.now() / 1000))
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 600)
+      .sign(new TextEncoder().encode(cfg.secret));
+    const principal = await verifyToken(forged, cfg);
+    expect(principal.ver).toBeUndefined();
+  });
+});
+
+describe('requireRole 的伪造形状分支（N16 定向）', () => {
+  let close: (() => Promise<void>) | undefined;
+  afterEach(async () => {
+    await close?.();
+    close = undefined;
+  });
+
+  async function serve(identity?: IdentityCheck) {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const app = createHttpApp({
+      logger,
+      mount: (a: Express) => {
+        a.get('/admin/orders', requireRole('admin', cfg, { identity }), (req, res) =>
+          res.json({ sub: req.auth?.sub }),
+        );
+        a.get('/api/v1/me', requireRole('user', cfg, { identity }), (req, res) =>
+          res.json({ sub: req.auth?.sub }),
+        );
+      },
+    });
+    const started = await listen(app);
+    close = started.close;
+    return { baseUrl: `http://127.0.0.1:${started.port}` };
+  }
+
+  it('aud 与入口匹配但 role 不符（伪造 admin-aud + user-role）→ 40301 expected/actual', async () => {
+    // @why verifyToken 的 aud 检查管"进没进对门"，管不到"门里身份对不对"——
+    //      这条分支只有"aud 匹配但 role 不符"的伪造 token 能走到。
+    const { baseUrl } = await serve();
+    const forged = await new SignJWT({ role: 'user' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('u-1')
+      .setIssuer(cfg.issuer ?? 'waselect')
+      .setAudience('admin')
+      .setIssuedAt(Math.floor(Date.now() / 1000))
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 600)
+      .sign(new TextEncoder().encode(cfg.secret));
+    const res = await fetch(`${baseUrl}/admin/orders`, {
+      headers: { authorization: `Bearer ${forged}` },
+    });
+    expect(res.status).toBe(403);
+    // details（expected/actual）按设计不进响应体（errors.ts 不外泄细节），只断言错误码
+    await expect(res.json()).resolves.toMatchObject({ code: 40301 });
+  });
+
+  it('无 ver 的老 token + 库里 tokenVer=2 → 40101（`ver ?? 1` 的回落侧）', async () => {
+    const { baseUrl } = await serve({
+      load: async () => ({ tokenVer: 2, blockedAt: null, isAdmin: true }),
+    });
+    const forged = await new SignJWT({ role: 'user' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('u-1')
+      .setIssuer(cfg.issuer ?? 'waselect')
+      .setAudience('mp')
+      .setIssuedAt(Math.floor(Date.now() / 1000))
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 600)
+      .sign(new TextEncoder().encode(cfg.secret));
+    const res = await fetch(`${baseUrl}/api/v1/me`, {
+      headers: { authorization: `Bearer ${forged}` },
+    });
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toMatchObject({ code: 40101 });
+  });
+});
+
+describe('verifyPassword 的异常兜底（N16 定向）', () => {
+  it('库里哈希损坏（bcrypt.compare 抛错）→ false，不抛细节', async () => {
+    // @why 校验侧绝不把"哈希坏了"和"口令错了"区分开——区分等于泄露系统内部状态。
+    // ⚠️ 不是任意坏串都会让 compare 抛：'not-a-bcrypt-hash' 这类它只是返回 false；
+    //    结构合法但 cost 非法（99 轮）才会真抛——本例必须用后者，否则测不到 catch 分支。
+    const illegalCostHash = `$2b$99$${'x'.repeat(53)}`;
+    await expect(verifyPassword('whatever', illegalCostHash)).resolves.toBe(false);
+    // 普通坏串不抛、直接 false 的行为也顺手钉住（两条路径对外语义一致）
+    await expect(verifyPassword('whatever', 'not-a-bcrypt-hash')).resolves.toBe(false);
+  });
+});

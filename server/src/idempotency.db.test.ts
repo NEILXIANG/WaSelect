@@ -496,3 +496,179 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
     expect(replay.body).toEqual({ v: 1 });
   });
 });
+
+/**
+ * N16 定向：覆盖率报告钉出的真实未走分支。每一条都对应一个具体场景，
+ * 不是为凑数字——默认参数、竞态窗口、续期失败这三类恰好是"平时不炸、
+ * 炸了看不懂"的地方（续期是后台定时器，错了没有调用栈可追，只有日志）。
+ */
+describe('默认参数与竞态窗口（N16 定向）', () => {
+  it('非事务模式不显式传 waitMs/pollMs/userId 也能跑通（`??` 回落分支）', async () => {
+    let calls = 0;
+    const run = () =>
+      withIdempotency(db, { key: 'k-defaults', route: 'POST /orders' }, async () => {
+        calls += 1;
+        return { status: 200, body: { ok: true } };
+      });
+    const first = await run();
+    const second = await run();
+    expect(calls).toBe(1);
+    expect(first.replayed).toBe(false);
+    expect(second.replayed).toBe(true);
+    // userId 未传 → 落 NULL 而不是崩（claim 的 `args.userId ?? null`）
+    const rows = await db`select user_id from idempotency_keys where key = 'k-defaults'`;
+    expect(rows[0]?.user_id).toBeNull();
+  });
+
+  it('claim 失败与 readRow 之间行被并发删除（竞态窗口）→ 按"无行"继续循环，最终自己抢到执行', async () => {
+    // @why 这条分支在真库里只能靠编排到达：预置"别人正在执行"的占位（租约远未到期，
+    //      接管必 0 行），然后在**接管返回之后、readRow 之前**把行删掉
+    //      （模拟清理任务恰好落在这个窗口）。防御语义：不是抛错，而是当成"没行"继续循环——
+    //      下一轮 claim 自然抢到执行权。
+    await db`
+      insert into idempotency_keys (key, user_id, route, status_code, response, request_hash, locked_until, lease_token)
+      values ('k-race', 'u-1', 'POST /orders', 0, '{}'::jsonb, '', now() + interval '1 hour', gen_random_uuid())
+    `;
+    let executions = 0;
+    let queries = 0;
+    const raceDb = ((strings: TemplateStringsArray, ...vals: unknown[]) => {
+      queries += 1;
+      const p = (
+        db as unknown as (s: TemplateStringsArray, ...v: unknown[]) => Promise<unknown[]>
+      )(strings, ...vals);
+      if (queries === 2) {
+        // 第 2 个查询 = 接管 update（0 行命中）。它返回后立刻删行 → 紧随的 readRow 查不到
+        return p.then(async (rows) => {
+          await db`delete from idempotency_keys where key = 'k-race'`;
+          return rows;
+        });
+      }
+      return p;
+    }) as unknown as Db;
+
+    const r = await withIdempotency(
+      raceDb,
+      { key: 'k-race', route: 'POST /orders', waitMs: 1000, pollMs: 20, renew: false },
+      async () => {
+        executions += 1;
+        return { status: 201, body: { by: 'me' } };
+      },
+    );
+    expect(executions).toBe(1);
+    expect(r.replayed).toBe(false);
+  });
+});
+
+describe('tx 模式的默认形状与等待路径（N16 定向）', () => {
+  it('不传 request 与 userId：指纹为空串、user_id 落 NULL，执行 + 重放', async () => {
+    let calls = 0;
+    const run = () =>
+      withIdempotencyTx(db, { key: 'k-tx-noreq', route: 'POST /internal/x' }, async () => {
+        calls += 1;
+        return { status: 200, body: { ok: true } };
+      });
+    await run();
+    const second = await run();
+    expect(calls).toBe(1);
+    expect(second.replayed).toBe(true);
+    const rows = await db`select user_id, request_hash from idempotency_keys where key = 'k-tx-noreq'`;
+    expect(rows[0]?.user_id).toBeNull();
+    expect(rows[0]?.request_hash).toBe('');
+  });
+
+  it('冲突到"别人正在做"（已提交占位）→ 轮询等待（sleep 分支）→ 对方完成后重放', async () => {
+    // 预置已提交的占位行（模拟另一个进程正在执行，tx 模式的 ON CONFLICT 只阻塞未提交行）
+    await db`
+      insert into idempotency_keys (key, user_id, route, status_code, response, request_hash, locked_until, lease_token)
+      values ('k-tx-wait', null, 'POST /x', 0, '{}'::jsonb, '', null, gen_random_uuid())
+    `;
+    const finisher = (async () => {
+      await new Promise((r) => setTimeout(r, 200));
+      await db`
+        update idempotency_keys
+           set status_code = 201, response = '{"by":"other"}'::jsonb, completed_at = now()
+         where key = 'k-tx-wait'
+      `;
+    })();
+    const r = await withIdempotencyTx(
+      db,
+      { key: 'k-tx-wait', route: 'POST /x', request: { a: 1 }, waitMs: 2000, pollMs: 50 },
+      async () => ({ status: 200, body: { by: 'me' } }),
+    );
+    await finisher;
+    // 等到了对方的结果：pending → completed 的等待循环真的走了 sleep，而不是立刻 40903
+    expect(r).toEqual({ status: 201, body: { by: 'other' }, replayed: true });
+  });
+});
+
+describe('续期的失败留痕（N16 定向）', () => {
+  it('续期时发现租约已易主（0 行命中）→ warn idempotency_lease_renew_lost，结果写回仍被栅栏兜住', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const KEY = 'k-renew-lost';
+    await expect(
+      // leaseMs 150 → 续期间隔 50ms；renew 默认开启
+      withIdempotency(db, { ...args(KEY), leaseMs: 150, logger }, async () => {
+        await new Promise((r) => setTimeout(r, 60));
+        // handler 执行期间租约被接管（token 换人）：下一次续期 update 命中 0 行
+        await db`update idempotency_keys set lease_token = gen_random_uuid() where key = ${KEY}`;
+        await new Promise((r) => setTimeout(r, 150)); // 让续期至少 tick 两次
+        return { status: 201, body: { by: 'A' } };
+      }),
+    ).rejects.toMatchObject({ code: 50000 });
+    expect(sink.find('idempotency_lease_renew_lost').length).toBeGreaterThan(0);
+  });
+
+  /** 包一个只让"续期那句 SQL"失败的 db：续期失败绝不能拖垮 handler 本身。 */
+  function flakyDb(failWith: () => unknown, shouldFail: () => boolean): Db {
+    return ((strings: TemplateStringsArray, ...vals: unknown[]) => {
+      if (shouldFail() && strings.join('?').includes('locked_until')) {
+        return Promise.reject(failWith());
+      }
+      return (db as unknown as (s: TemplateStringsArray, ...v: unknown[]) => Promise<unknown[]>)(
+        strings,
+        ...vals,
+      );
+    }) as unknown as Db;
+  }
+
+  it('续期查询抛 Error → warn idempotency_lease_renew_failed，handler 与结果写回不受影响', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    let failing = false;
+    const r = await withIdempotency(
+      flakyDb(() => new Error('conn reset'), () => failing),
+      { ...args('k-renew-fail'), leaseMs: 150, logger },
+      async () => {
+        failing = true; // claim 已成功，之后续期每 tick 都抛
+        await new Promise((res) => setTimeout(res, 180));
+        failing = false; // 结果写回前恢复，验证"续期失败不影响主流程"
+        return { status: 201, body: { ok: true } };
+      },
+    );
+    expect(r.replayed).toBe(false);
+    const rows = sink.find('idempotency_lease_renew_failed');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.err).toBe('conn reset');
+  });
+
+  it('续期抛**非 Error** 值 → warn 的 err 字段是 String(reason)（`instanceof` 另一支）', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    let failing = false;
+    const r = await withIdempotency(
+      flakyDb(() => 'string-boom', () => failing),
+      { ...args('k-renew-fail-str'), leaseMs: 150, logger },
+      async () => {
+        failing = true;
+        await new Promise((res) => setTimeout(res, 180));
+        failing = false;
+        return { status: 201, body: { ok: true } };
+      },
+    );
+    expect(r.replayed).toBe(false);
+    const rows = sink.find('idempotency_lease_renew_failed');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.err).toBe('string-boom');
+  });
+});

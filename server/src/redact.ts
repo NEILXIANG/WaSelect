@@ -198,6 +198,9 @@ function isLuhn(digits: string): boolean {
  *      两种算法同时通过的概率约 1/10，但**先用 GTIN 排除真条码**能保住绝大多数商品条码。
  */
 function isGtin13(digits: string): boolean {
+  // 防御分支（N16/AJ-37）：唯一调用方 isCardLike 已保证 13 位，长度守卫只防未来新增调用方，
+  // 覆盖率上是不可达分支——显式 ignore 并在此留理由，而不是写假测试或删防御。
+  /* v8 ignore next */
   if (digits.length !== 13) return false;
   let sum = 0;
   for (let i = 0; i < 12; i += 1) sum += (digits.charCodeAt(i) - 48) * (i % 2 === 0 ? 1 : 3);
@@ -330,7 +333,10 @@ function maskByClass(cls: SensitiveClass, value: unknown): unknown {
     case 'pii':
       return '***';
     case 'pii-name':
-      // 姓名保留首字母（AJ-33）；非字符串形态（意外传入对象/数字）整值掩码
+      // 姓名保留首字母（AJ-33）；非字符串形态（意外传入对象/数字）整值掩码。
+      // `?? ''` 是类型守卫（noUncheckedIndexedAccess 下 value[0] 是 string|undefined），
+      // 运行期不可达——空字符串已在上面提前 return（N16/AJ-37 显式 ignore，非静默跳过）。
+      /* v8 ignore next */
       return typeof value === 'string' ? `${value[0] ?? ''}***` : '***';
     case 'identifier':
       return maskIdentifier(value);
