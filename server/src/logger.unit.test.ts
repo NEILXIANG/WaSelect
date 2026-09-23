@@ -164,16 +164,81 @@ describe('event 不可被覆盖（缺陷 #6）', () => {
 
 /** 字段优先级必须显式、可测，否则后来者会靠猜。 */
 describe('字段优先级', () => {
-  it('调用点字段 > 请求上下文 > child 绑定，event 恒为最优先', () => {
+  it('业务维度：调用点 > 请求上下文 > child 绑定；module 反过来（child 最优先）', () => {
     const { sink, log } = setup();
     const child = log.child({ module: 'payment', channel: 'mock' });
     runWithContext({ channel: 'wechat', module: 'ctx-module' }, () => {
       child.info('pay_started', { channel: 'stripe' });
     });
     const row = sink.last();
+    // channel 是业务维度：调用点最具体，赢
     expect(row.channel).toBe('stripe');
-    expect(row.module).toBe('ctx-module');
+    // module 是归属维度：child 绑定（写这行代码的模块）赢过上下文（传输层）
+    expect(row.module).toBe('payment');
     expect(row.event).toBe('pay_started');
+  });
+
+  it('order_id 允许由调用点给出——下单那一刻上下文里还没有它', () => {
+    const { sink, log } = setup();
+    runWithContext({ trace_id: 't1' }, () => {
+      log.info('order_created', { order_id: 'W20260922-000001' });
+    });
+    const row = sink.last();
+    expect(row.order_id).toBe('W20260922-000001');
+    expect(row.trace_id).toBe('t1');
+  });
+});
+
+/**
+ * D8 / D9：调用点不得改写"身份与归属"字段。
+ *
+ * @why 这两条都属于"日志本身被污染"，比"日志少记了"更危险：
+ *      排障时按 trace_id 串链、按 user_id 追责、按 module 过滤，
+ *      任意一行代码能改写这些字段，等于让日志系统自己说谎——而且**看不出来**。
+ */
+describe('保留字段不可被调用点改写（D8 / D9）', () => {
+  it('D8：调用点传 trace_id / user_id 不能改写链路与归属', () => {
+    const { sink, log } = setup('production'); // 生产走"改名留痕"，不抛错
+    runWithContext({ trace_id: 'trace-real', user_id: 'u-real' }, () => {
+      log.info('pay_started', { trace_id: 'FORGED', user_id: 'u-fake' });
+    });
+    const row = sink.last();
+    expect(row.trace_id).toBe('trace-real');
+    expect(row.user_id).toBe('u-real');
+    // 被丢弃的值不死掉，改名留下：既不污染聚合字段，也不丢排查线索
+    expect(row.field_trace_id).toBe('FORGED');
+    expect(row.field_user_id).toBe('u-fake');
+    expect(row.reserved_dropped).toEqual(['trace_id', 'user_id']);
+  });
+
+  it('D9：module 由 child 绑定决定，不被请求上下文覆盖', () => {
+    const { sink, log } = setup();
+    const payment = log.child({ module: 'payment' });
+    runWithContext({ module: 'http' }, () => {
+      payment.info('provider_called');
+    });
+    // 修好前这里会是 "http"：请求内所有模块都被记成 http，按模块过滤彻底失效
+    expect(sink.last().module).toBe('payment');
+  });
+
+  it('非生产：调用点传保留键直接抛错——早炸比上线后静默污染好', () => {
+    const { log } = setup('development');
+    expect(() => log.info('pay_started', { trace_id: 'FORGED' })).toThrow(/保留键/);
+    expect(() => log.info('pay_started', { module: 'whatever' })).toThrow(/保留键/);
+  });
+
+  it('生产：不改行为、不让请求失败（一条日志不该让下单挂掉）', () => {
+    const { sink, log } = setup('production');
+    expect(() => log.info('pay_started', { trace_id: 'FORGED' })).not.toThrow();
+    expect(sink.lines).toHaveLength(1);
+  });
+
+  it('非保留键照常由调用点决定（order_id 之外的业务字段不受影响）', () => {
+    const { sink, log } = setup();
+    log.info('order_created', { attempt: 2, provider: 'stripe' });
+    const row = sink.last();
+    expect(row.attempt).toBe(2);
+    expect(row.provider).toBe('stripe');
   });
 });
 

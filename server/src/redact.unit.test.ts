@@ -77,6 +77,124 @@ describe('文本兜底正则', () => {
   });
 });
 
+/**
+ * D10：键名匹配必须**整词**，不能子串。
+ * @why `company` 含 `pan`、`hotel_name` 含 `tel`、`discard_reason` 含 `card`——
+ *      子串匹配会把这些业务字段全打码，日志里再也查不到"哪家公司、为什么废弃"，
+ *      而它们根本不是敏感信息。过度脱敏和漏脱敏一样是事故：前者天天发生且无人察觉。
+ */
+describe('键名整词匹配（D10）', () => {
+  it('业务字段不被敏感词的子串误伤', () => {
+    const out = redact({
+      company: 'WaSelect',
+      japan_post_no: '1234567',
+      hotel_name: 'Tokyo Inn',
+      panel: 'admin',
+      discard_reason: 'damaged in transit',
+      telemetry: { duration_ms: 12 },
+    }) as Record<string, unknown>;
+    expect(out.company).toBe('WaSelect');
+    expect(out.japan_post_no).toBe('1234567');
+    expect(out.hotel_name).toBe('Tokyo Inn');
+    expect(out.panel).toBe('admin');
+    expect(out.discard_reason).toBe('damaged in transit');
+    expect(out.telemetry).toEqual({ duration_ms: 12 });
+  });
+
+  it('真敏感键名仍然认得（下划线 / 驼峰 / 连字符三种写法）', () => {
+    const out = redact({
+      api_key: 'sk_live_1',
+      apiKey: 'sk_live_2',
+      'api-key': 'sk_live_3',
+      card_no: '4242424242424242',
+      cardNumber: '4242424242424242',
+      userEmail: 'hanako@example.com',
+      accessKey: 'AKIA1',
+      privateKey: 'pk1',
+      sessionKey: 'sess1',
+    }) as Record<string, unknown>;
+    for (const k of [
+      'api_key',
+      'apiKey',
+      'api-key',
+      'card_no',
+      'cardNumber',
+      'userEmail',
+      'accessKey',
+      'privateKey',
+      'sessionKey',
+    ]) {
+      expect(String(out[k]), `key=${k}`).not.toMatch(/sk_live_[123]|4242424242424242|hanako@|AKIA1|^pk1$|^sess1$/);
+    }
+  });
+
+  it('idempotency_key 不被打码——它是排查重复下单的唯一线索', () => {
+    const out = redact({ idempotency_key: 'mpord-ABCDEF012345' }) as Record<string, unknown>;
+    expect(out.idempotency_key).toBe('mpord-ABCDEF012345');
+  });
+});
+
+/**
+ * D11：自由文本正则不能误伤条码 / 时间戳 / 内部 ID。
+ * @why 这三类都是"长得像卡号"的合法业务值。JAN 条码是本项目商品的唯一标识，
+ *      被打码后日志里只剩 `***7894`，排查"哪个商品算错了价"直接失去线索。
+ */
+describe('文本正则精准度（D11）', () => {
+  it('JAN-13 条码原样保留（日本商品条码，45x / 49x 开头）', () => {
+    expect(maskText('jan=4901234567894')).toContain('4901234567894');
+    expect(maskText('jan=4569951116179')).toContain('4569951116179');
+  });
+
+  it('毫秒时间戳原样保留', () => {
+    expect(maskText('ts=1788591675300')).toContain('1788591675300');
+    expect(maskText('ts=1788591675301')).toContain('1788591675301');
+  });
+
+  it('o_ 前缀的内部 ID 不当成 openid', () => {
+    const id = 'o_01J8ZK3M7N5P9QRSTVWXY';
+    expect(maskText(`id=${id}`)).toContain(id);
+  });
+
+  it('真 openid 仍然被掩码（28 位、第二位是字母数字）', () => {
+    const openid = 'o6_bmjrPTlm6_2sgVt7hMZOPfL2M';
+    expect(maskText(`openid=${openid}`)).not.toContain(openid);
+  });
+
+  it('真卡号仍然被掩码（含空格 / 连字符分隔）', () => {
+    expect(maskText('pan 4242 4242 4242 4242')).toContain('***4242');
+    expect(maskText('pan 4242-4242-4242-4242')).toContain('***4242');
+    expect(maskText('amex 378282246310005')).toContain('***0005');
+    expect(maskText('jcb 3530111333300000')).toContain('***0000');
+  });
+});
+
+/** D12：数字形态的敏感值不能被"只处理字符串"漏掉。 */
+describe('数字形态（D12）', () => {
+  it('数字卡号在非敏感键名下也被掩码', () => {
+    const out = redact({ note: 4242424242424242 }) as Record<string, unknown>;
+    expect(out.note).toBe('***4242');
+  });
+
+  it('敏感键名下的数字（电话 / 卡号）保留后 4 位', () => {
+    const out = redact({ phone: 9012345678, card_no: 4242424242424242 }) as Record<string, unknown>;
+    expect(out.phone).toBe('***5678');
+    expect(out.card_no).toBe('***4242');
+  });
+
+  it('金额与时间戳数字不受影响', () => {
+    const out = redact({
+      amount_jpy: 12800,
+      duration_ms: 1788591675300,
+      count: 7,
+      ratio: 0.15,
+    }) as Record<string, unknown>;
+    expect(out.amount_jpy).toBe(12800);
+    expect(out.duration_ms).toBe(1788591675300);
+    expect(out.count).toBe(7);
+    expect(out.ratio).toBe(0.15);
+  });
+});
+
 describe('结构安全（日志进程不能被日志本身搞死）', () => {
   it('循环引用不栈溢出', () => {
     const a: Record<string, unknown> = { name: 'a' };

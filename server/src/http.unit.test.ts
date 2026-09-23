@@ -10,27 +10,43 @@ import { Buffer } from 'node:buffer';
 import { connect } from 'node:net';
 import { MemorySink } from '../../test/helpers/memory-sink.js';
 import { createHttpApp, defaultHost, installShutdownHandlers, listen } from './http.js';
-import { createLogger } from './logger.js';
+import { createLogger, type Logger } from './logger.js';
 import { AppError } from './errors.js';
+import { requireRole, signToken, type AuthConfig } from './auth.js';
 
 const RAW_CALLBACK_PATH = '/api/v1/pay/callback/stripe';
 
+/** 鉴权用例用的配置（密钥长度满足 ≥32 的约束）。 */
+const AUTH: AuthConfig = { secret: 'x'.repeat(40) };
+
+interface ServeOpts {
+  mount?: ((app: Express, logger: Logger) => void) | undefined;
+  /** CORS 白名单（D21）。 */
+  cors?: { origins: readonly string[]; pathPrefixes?: readonly string[] } | undefined;
+  /** 就绪探针（D21）。 */
+  readiness?: (() => Promise<boolean>) | undefined;
+}
+
 /** 起一个真实服务，返回 baseUrl；用例结束后关闭。 */
-async function start(mount?: (app: Express) => void): Promise<{
+async function start(arg?: ServeOpts | ((app: Express, logger: Logger) => void)): Promise<{
   baseUrl: string;
   sink: MemorySink;
+  logger: Logger;
   close: () => Promise<void>;
 }> {
+  const opts: ServeOpts = typeof arg === 'function' ? { mount: arg } : (arg ?? {});
   const sink = new MemorySink();
   const logger = createLogger({ env: 'development', destination: sink });
   const app = createHttpApp({
     logger,
     rawBodyPaths: [RAW_CALLBACK_PATH],
     silentPaths: ['/healthz'],
-    mount,
+    ...(opts.mount ? { mount: (a: Express) => (opts.mount as NonNullable<ServeOpts['mount']>)(a, logger) } : {}),
+    ...(opts.cors ? { cors: opts.cors } : {}),
+    ...(opts.readiness ? { readiness: opts.readiness } : {}),
   });
   const { port, close } = await listen(app);
-  return { baseUrl: `http://127.0.0.1:${port}`, sink, close };
+  return { baseUrl: `http://127.0.0.1:${port}`, sink, logger, close };
 }
 
 let current: { close: () => Promise<void> } | undefined;
@@ -40,11 +56,150 @@ afterEach(async () => {
 });
 
 /** start 的包装：记录句柄以便 afterEach 关闭。 */
-async function serve(mount?: (app: Express) => void) {
-  const s = await start(mount);
+async function serve(arg?: ServeOpts | ((app: Express, logger: Logger) => void)) {
+  const s = await start(arg);
   current = s;
   return s;
 }
+
+/**
+ * D9：请求上下文**不得**压掉业务模块名。
+ * @why 中间件曾经往上下文写 `module: 'http'`，于是请求内 payment 模块的日志全被记成 http——
+ *      "哪个模块在报错"是最常用的一类日志查询，它被污染等于这一维过滤彻底失效。
+ */
+describe('模块归属不被传输层覆盖（D9）', () => {
+  it('业务 child 绑定的 module 在请求内依然生效', async () => {
+    const { baseUrl, sink } = await serve((app, logger) => {
+      const payment = logger.child({ module: 'payment' });
+      app.get('/pay', (_req, res) => {
+        payment.info('provider_called');
+        res.json({ ok: true });
+      });
+    });
+    await fetch(`${baseUrl}/pay`);
+    const rows = sink.find('provider_called');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.module).toBe('payment');
+  });
+
+  it('未绑定模块的业务日志不会被"挂"到 http 上（归属宁可空着，也不能错）', async () => {
+    const { baseUrl, sink } = await serve((app, logger) => {
+      app.get('/plain', (_req, res) => {
+        logger.info('something_happened');
+        res.json({ ok: true });
+      });
+    });
+    await fetch(`${baseUrl}/plain`);
+    const rows = sink.find('something_happened');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.module).toBeUndefined();
+  });
+
+  it('骨架自己的访问日志仍标 module:http（不靠上下文污染，而靠自己的绑定）', async () => {
+    const { baseUrl, sink } = await serve();
+    await fetch(`${baseUrl}/not-found`);
+    const rows = sink.find('http_request');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.module).toBe('http');
+  });
+});
+
+/**
+ * D22：访问日志必须能回答"谁、从哪个 IP、多久、多大"。
+ * @why 限流按 IP 计时、风控看异常来源、审计要还原"谁干的"——这三件都离不开 client_ip 与真实 actor。
+ *      只记 `actor: 'user'` 等于"有个用户干了某事"，出事后无法定位到人。
+ */
+describe('访问日志字段完整（D22）', () => {
+  it('带客户端 IP（走 X-Forwarded-For，容器平台后面才有真 IP）', async () => {
+    const { baseUrl, sink } = await serve();
+    await fetch(`${baseUrl}/anything`, { headers: { 'x-forwarded-for': '203.0.113.9' } });
+    const rows = sink.find('http_request');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.client_ip).toBe('203.0.113.9');
+  });
+
+  it('带响应字节数（异常大响应 / 空响应靠它发现）', async () => {
+    const { baseUrl, sink } = await serve();
+    await fetch(`${baseUrl}/anything`);
+    const rows = sink.find('http_request');
+    expect(typeof rows[0]?.resp_bytes).toBe('number');
+    expect((rows[0]?.resp_bytes as number) > 0).toBe(true);
+  });
+
+  it('actor 记到具体的人（`user:<id>`），不只是角色', async () => {
+    const { baseUrl, sink } = await serve((app) => {
+      app.get('/me', requireRole('user', AUTH), (_req, res) => res.json({ ok: true }));
+    });
+    const token = await signToken({ sub: 'u-1', role: 'user' }, AUTH);
+    await fetch(`${baseUrl}/me`, { headers: { authorization: `Bearer ${token}` } });
+    const rows = sink.find('http_request');
+    expect(rows[0]?.actor).toBe('user:u-1');
+    expect(rows[0]?.user_id).toBe('u-1');
+  });
+});
+
+/**
+ * D23：`trust proxy` 必须是**层数**，不能是 `true`。
+ * @why `true` 表示"信任 X-Forwarded-For 的每一跳"，于是客户端自己在请求里加一个
+ *      `X-Forwarded-For: 1.1.1.1` 就能让服务端把 1.1.1.1 当真——将来按 IP 限流/锁定可以一秒钟绕过。
+ *      取层数时用的是"可信代理写入的那一跳"，客户端伪造的前缀全部作废。
+ */
+describe('trust proxy 只信平台那几跳（D23）', () => {
+  it('客户端伪造的 XFF 前缀不被采信', async () => {
+    const { baseUrl, sink } = await serve();
+    await fetch(`${baseUrl}/anything`, {
+      headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2, 3.3.3.3' },
+    });
+    // 只有最后一跳是可信代理写的；前面的都是客户端自己塞的
+    expect(sink.find('http_request')[0]?.client_ip).toBe('3.3.3.3');
+  });
+});
+
+/**
+ * D21：管理端是独立 Web（ADR-21），必然跨域；平台也需要一个"能否接流量"的探针。
+ */
+describe('CORS 与就绪探针（D21）', () => {
+  it('白名单来源的预检请求被放行', async () => {
+    const { baseUrl } = await serve({ cors: { origins: ['https://admin.example.com'] } });
+    const res = await fetch(`${baseUrl}/api/v1/admin/orders`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://admin.example.com',
+        'access-control-request-method': 'GET',
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://admin.example.com');
+  });
+
+  it('不在白名单的来源拿不到 CORS 头（跨域调用会被浏览器拒）', async () => {
+    const { baseUrl } = await serve({ cors: { origins: ['https://admin.example.com'] } });
+    const res = await fetch(`${baseUrl}/api/v1/admin/orders`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://evil.example.com', 'access-control-request-method': 'GET' },
+    });
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('CORS 只对管理端路径开放——小程序与回调不需要，开了就是白送攻击面', async () => {
+    const { baseUrl } = await serve({ cors: { origins: ['https://admin.example.com'] } });
+    const res = await fetch(`${baseUrl}/api/v1/orders`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://admin.example.com', 'access-control-request-method': 'GET' },
+    });
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('/readyz：依赖正常 200，依赖不可用 503（不能只看进程活着）', async () => {
+    let ok = true;
+    const { baseUrl } = await serve({ readiness: async () => ok });
+    const up = await fetch(`${baseUrl}/readyz`);
+    expect(up.status).toBe(200);
+    ok = false;
+    const down = await fetch(`${baseUrl}/readyz`);
+    expect(down.status).toBe(503);
+  });
+});
 
 describe('健康检查与请求标识', () => {
   it('GET /healthz 返回 200 且带请求标识头', async () => {

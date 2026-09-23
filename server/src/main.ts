@@ -16,15 +16,16 @@
  *   3. **骨架只在非生产挂载**。骨架能绕过验签改订单状态（SEC2 闸门），
  *      生产环境连挂都不挂——比"挂了再被闸门拦下启动失败"更早一步，也更不容易误判为故障。
  *
- * @limitation 一：`beforeDrain` 目前只落一条审计日志，还没有真实的"摘流量"动作。
- *      真正该做的是让 `/readyz` 开始返回 503（属 D21）；在那之前，排空期间平台仍可能
- *      往这里发新请求，表现为"关了半天还在进请求"。这是已知缺口，不是遗漏的 bug。
+ * @limitation 一：摘流量只做**本地标记**（`/readyz` 转 503）。平台是否真的把流量摘走取决于它自己的
+ *      健康检查周期——Render 的 drain 窗口内仍可能有新请求进来。彻底解决要靠平台侧的
+ *      pre-stop hook，本项目把"本地已经声明不接了"这件事做对就够了：
+ *      至少排空不会永远结束不了，且 `/readyz` 的状态可被外部观测。
  * @limitation 二：进程级退出码由 `installShutdownHandlers` 决定，本文件不调用 `process.exit()`
  *      （@see http.ts @limitation 二：立即 exit 会丢最后几条日志）。
  *
  * @see docs/地基搭建清单.md F6 / A1；server/src/http.ts（createHttpApp / installShutdownHandlers）
  */
-import { closeDb, createDb, assertPostgresMajor, type Db } from './db.js';
+import { closeDb, createDb, assertPostgresMajor, ping, type Db } from './db.js';
 import { loadConfig, redactConfig, type AppConfig } from './config.js';
 import { createHttpApp, installShutdownHandlers, listen, type StartedServer } from './http.js';
 import { createLogger, type Logger } from './logger.js';
@@ -88,11 +89,25 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
     const major = await assertPostgresMajor(db);
     logger.info('postgres_checked', { major, result: 'ok' });
 
+    /**
+     * 是否还对外宣称"可以接流量"。停机时先置 false，`/readyz` 随即返回 503。
+     * @why 用一个闭包变量而不是全局：状态属于**这一次装配**，测试里可以起多个 Runtime 互不干扰。
+     */
+    let acceptingTraffic = true;
+
     const app = createHttpApp({
       logger,
       // 回调验签必须用原始字节：路径集中登记在这里，避免"某个回调忘了配就永远验签失败"
       rawBodyPaths: [MOCK_CALLBACK_PATH],
       silentPaths: ['/healthz', '/readyz'],
+      // D23：层数来自配置，绝不能写死 true（客户端可伪造 X-Forwarded-For）
+      trustProxyHops: config.TRUST_PROXY_HOPS,
+      // D21：跨域只对管理端开放；没配 CORS_ORIGINS 就完全不开放（比"全部放行"安全）
+      ...(config.CORS_ORIGINS.length > 0
+        ? { cors: { origins: config.CORS_ORIGINS, pathPrefixes: ['/api/v1/admin'] } }
+        : {}),
+      // D21：就绪 = "我自己还想接" 且 "数据库连通"。缺任一条都不该收新流量
+      readiness: async () => acceptingTraffic && (await ping(db)),
       mount: (a) => {
         if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见文件头取舍 3）
         mountSkeleton(a, {
@@ -109,9 +124,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
 
     const uninstallSignals = installShutdownHandlers(server, {
       logger,
-      // 摘流量：目前只有审计价值（标记"从此刻起不再接新请求"），
-      // 真实动作等 D21 的 /readyz 就位后再接上（见文件头 @limitation 一）
+      // 摘流量（D1 的第一段）：先让 /readyz 转 503，再等存量请求排空。
+      // 顺序反过来就是"发布窗口内一批 500"——@see http.ts ShutdownHooks.beforeDrain 的 @why
       beforeDrain: async () => {
+        acceptingTraffic = false;
         logger.warn('traffic_draining', { result: 'ok', ctx: { port: config.PORT } });
       },
       // 关资源必须在排空之后（D1）：放在前面会让存量请求拿到"连接池已关闭"
@@ -121,10 +137,12 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       ...(opts.exit !== undefined ? { exit: opts.exit } : {}),
     });
 
+    // ⚠️ 刻意**不传 env**：`env` 是 logger 的基础字段（每行都有），调用点传它会被保留键规则拒绝，
+    //    而放行则会让"这条日志的 env"与"logger 的 env"抢同一个键——后者是启动期决定的，前者是运行期值，
+    //    两者一旦不一致，按 env 过滤日志就会得到互相矛盾的结果。
     logger.info('server_started', {
       port: config.PORT,
       host: config.HOST,
-      env: config.NODE_ENV,
       result: 'ok',
     });
 

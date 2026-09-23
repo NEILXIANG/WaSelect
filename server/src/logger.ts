@@ -34,6 +34,49 @@ export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 /** 传给日志方法的字段（除 event 外全部可选，且会被脱敏）。 */
 export type LogFields = Record<string, unknown>;
 
+/**
+ * 调用点**不得**提供的保留键——身份与归属字段。
+ *
+ * @why 日志的价值在于**可被信任**：trace_id 串链、user_id/actor 追责、module 过滤。
+ *      如果任意一行 `log.info(..., { trace_id: 'FORGED' })` 都能改写它们，日志系统就会自己说谎，
+ *      而且**看不出来**——出事后按 trace_id 查出来的链是假的，比没有日志更糟（复现缺陷 D8/D9）。
+ *      这些字段只能由**上下文中间件**（请求级身份）或 **child 绑定**（模块级归属）决定。
+ *
+ * @why **刻意不含** `order_id` / `channel`：这两个是业务维度，且 `log.info('order_created', { order_id })`
+ *      是最高频的合法写法（下单那一刻上下文里还没有 order_id）。把它们列成保留键会让正常代码报错，
+ *      属于"为了纯洁性牺牲可用性"——它们的取值冲突危害也小得多（最多是归因错一行，不会让链断掉）。
+ *
+ * @tradeoff 保留了"调用点字段覆盖一切"的灵活性，换来身份字段的可靠性。
+ *           想记"另一个用户"就用 `target_user_id`——多一个键名，比让聚合字段可被改写便宜得多。
+ *
+ * @limitation 一：只挡**顶层**键。`{ ctx: { trace_id: 'x' } }` 这种嵌套不会被拦
+ *             （嵌套里的 trace_id 本就不参与聚合，语义上是数据不是字段；拦了会误伤"把上下文整个打出来"的排障写法）。
+ * @limitation 二：`order_id` / `channel` 仍遵循"上下文 > 调用点"，即上下文有值时调用点的值会被**静默忽略**。
+ *             这是既有优先级规则的延续；若哪天出现"同一个请求里记两个订单"的需求，应改用 `related_order_id`。
+ */
+const RESERVED_KEYS: ReadonlySet<string> = new Set([
+  // 请求级身份：由上下文中间件写入，调用点改了链就断了
+  'trace_id',
+  'req_id',
+  // 归属：审计与过滤的维度，必须可信
+  'user_id',
+  'actor',
+  'module',
+  // 基础设施字段：pino 或 base 负责，调用点绝不能碰
+  'service',
+  'env',
+  'level',
+  'ts',
+]);
+
+/**
+ * 静默丢弃的键：`event`。
+ * @why 与保留键不同，**不改名、不留痕、不抛错**——事件名由方法参数唯一决定，
+ *      调用点传 `{ event: 'x' }` 一律当作没写（缺陷 #6 确立的行为）。
+ *      若在这里抛错，会把"多传了一个字段"变成"请求失败"，收益与代价不成比例。
+ */
+const SILENT_DROP_KEYS: ReadonlySet<string> = new Set(['event']);
+
 export interface Logger {
   trace(event: string, fields?: LogFields): void;
   debug(event: string, fields?: LogFields): void;
@@ -75,6 +118,28 @@ function assertEvent(event: string): void {
   }
 }
 
+/**
+ * 把调用点字段拆成「可用字段」与「被丢弃的保留键」，后者改名为 `field_<key>` 保留下来。
+ *
+ * @why 直接丢掉会让调用方"记了但查不到"，排查时误以为日志系统丢了数据；
+ *      改名保留既不污染聚合字段，又留下线索。同行的 `reserved_dropped` 数组让这件事**可在日志里被检索**。
+ * @returns dropped 为空表示没有违规
+ */
+function splitReserved(fields: LogFields): { safe: LogFields; dropped: string[] } {
+  const safe: LogFields = {};
+  const dropped: string[] = [];
+  for (const [key, value] of Object.entries(fields)) {
+    if (SILENT_DROP_KEYS.has(key)) continue;
+    if (RESERVED_KEYS.has(key)) {
+      dropped.push(key);
+      safe[`field_${key}`] = value;
+    } else {
+      safe[key] = value;
+    }
+  }
+  return { safe, dropped };
+}
+
 export function createLogger(opts: CreateLoggerOptions): Logger {
   const level = opts.level ?? levelForEnv(opts.env);
   const p = pino(
@@ -94,6 +159,19 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
   );
 
   /**
+   * 是否"严格模式"：非生产环境下调用点传保留键**直接抛错**。
+   *
+   * @why 两种环境的最优解不同，这不是偷懒而是有理由的两套行为：
+   *      - 开发 / 测试 / 预发：越早炸越好。一个 `log.info('x', { trace_id })` 在测试里就报错，
+   *        五分钟能改完；上线后它只会静默地污染聚合字段，可能几个月后才在一次事故复盘里被发现。
+   *      - 生产：**一条日志绝不能让请求失败**。为了日志字段的纯洁性把下单接口打挂，
+   *        是典型的"监控害死业务"——所以生产改为改名留痕（见 splitReserved），行为不变、可检索。
+   * @limitation 生产里的违规不会实时告警，只能靠检索 `reserved_dropped` 发现。
+   *             若将来接了 Sentry，这里可以顺手 `raw.warn` 一次（注意别递归）。
+   */
+  const strict = opts.env !== 'production';
+
+  /**
    * @param base **已经脱敏过**的固定字段。约定：传入前必须过 `redact()`，emit 不再重复脱敏。
    */
   const make = (pinoLogger: PinoLogger, base: LogFields): Logger => {
@@ -101,17 +179,40 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
       (levelName: LogLevel) =>
       (event: string, fields?: LogFields): void => {
         assertEvent(event);
-        // 字段优先级（后者覆盖前者）：child 绑定 < 请求上下文 < 调用点字段 < event。
-        // @why event 必须放最后：曾经写成 `{ ...base, event, ...fields }`，调用点传 `{ event: 'x' }`
-        //      就能把事件名改掉（复现缺陷 #6）——日志按 event 聚合，事件名被改写等于这条日志从聚合里消失。
         // @why 上下文与调用点字段都要过 redact：`actor: 'admin:bob@example.com'` 这类值键名不敏感、
         //      值敏感（复现缺陷 #4），键名名单制抓不到，只能靠字符串正则兜底。
+        const ctx = redact(currentContext()) as LogFields;
+        const { safe, dropped } = splitReserved(redact(fields ?? {}) as LogFields);
+        if (dropped.length > 0) {
+          if (strict) {
+            throw new TypeError(
+              `日志调用点不得提供保留键 ${dropped.join(', ')}：` +
+                '这些字段由请求上下文或 logger.child() 决定，改写了日志就不可信。' +
+                '要记"另一个对象"请换键名（如 target_user_id / related_order_id），要改身份请用 patchContext()。',
+            );
+          }
+          // 生产：不抛错，但必须留痕——否则这类调用永远不会被发现
+          safe.reserved_dropped = dropped;
+        }
+
+        // 字段优先级（后者覆盖前者）：child 绑定 < 请求上下文 < 调用点安全字段 < event < module 例外。
+        // @why event 必须放最后：曾经写成 `{ ...base, event, ...fields }`，调用点传 `{ event: 'x' }`
+        //      就能把事件名改掉（复现缺陷 #6）——日志按 event 聚合，事件名被改写等于这条日志从聚合里消失。
         const payload: LogFields = {
           ...base,
-          ...(redact(currentContext()) as LogFields),
-          ...(redact(fields ?? {}) as LogFields),
+          ...ctx,
+          ...safe,
           event,
         };
+        // @why module 是**唯一的例外**：child 绑定优先于上下文（复现缺陷 D9）。
+        //      HTTP 中间件曾经往上下文写 `module: 'http'`，于是请求内 `log.child({ module: 'payment' })`
+        //      产出的每一行 module 都是 http——按模块过滤彻底失效，而"哪个模块在报错"正是最常用的一类查询。
+        //      理由：上下文是"这一跳属于哪个传输层"，child 是"这段代码属于哪个业务模块"，
+        //      后者更贴近写这行日志的人的意图，所以后者赢。
+        // @limitation 这条例外让优先级规则从"一层压一层"变成"一层压一层 + 一个特例"。
+        //             若将来还要加第二个特例，说明模型错了，应改成按键分层的显式 merge 表。
+        const moduleFromChild = base.module;
+        if (typeof moduleFromChild === 'string') payload.module = moduleFromChild;
         pinoLogger[levelName](payload);
       };
     return {

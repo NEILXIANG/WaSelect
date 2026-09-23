@@ -40,6 +40,19 @@ const JSON_BODY_LIMIT = '100kb';
 /** 回调原文上限（Stripe/WeChat 回调体都很小）。 */
 const RAW_BODY_LIMIT = '256kb';
 
+/**
+ * CORS 配置（D21）。
+ * @why 管理端是**独立 Web**（ADR-21），域名与 API 不同源，跨域是必然的；
+ *      而小程序请求走的是微信客户端、回调来自机构服务器，**都不需要 CORS**——
+ *      所以这里刻意按路径前缀收窄到管理端，而不是全局开放。全局开等于白送一张"任意站点可调用"的门票。
+ */
+export interface CorsOptions {
+  /** 允许的来源（**精确匹配**，不支持通配）。 */
+  origins: readonly string[];
+  /** 生效的路径前缀，默认 `/api/v1/admin`。 */
+  pathPrefixes?: readonly string[] | undefined;
+}
+
 export interface CreateHttpAppOptions {
   logger: Logger;
   /**
@@ -49,6 +62,23 @@ export interface CreateHttpAppOptions {
   rawBodyPaths?: readonly string[] | undefined;
   /** 不打访问日志的路径（健康检查等高频探活）。 */
   silentPaths?: readonly string[] | undefined;
+  /** CORS 白名单；不传 = 完全不开放跨域（D21）。 */
+  cors?: CorsOptions | undefined;
+  /**
+   * 就绪探针：返回 false 时 `/readyz` 给 503，平台据此不再把流量打进来（D21）。
+   * @limitation 不传时 `/readyz` 等价于 `/healthz`（只代表进程活着）——
+   *             真正的价值在装配层把 DB 探活接进来之后（main.ts）。
+   */
+  readiness?: (() => Promise<boolean>) | undefined;
+  /**
+   * 可信反代层数（D23）。默认 **1**。
+   * @why `true` 表示"信任 X-Forwarded-For 的每一跳"，客户端自己加一个 `X-Forwarded-For: 1.1.1.1`
+   *      就能让服务端把伪造值当真（实测：层数=true 取最左 = 客户端可控；层数=1 取最右 = 可信代理写的那一跳）。
+   *      将来按 IP 做限流 / 登录锁定时，伪造 IP 就是一秒钟绕过。
+   * @limitation 层数**少于**实际代理数时，取到的是中间代理的 IP（错，但至少不可伪造）；
+   *              层数多于实际时才会重新变得可伪造。所以这个数宁小勿大，按平台实际拓扑配（Render=1）。
+   */
+  trustProxyHops?: number | undefined;
   /**
    * 挂载业务路由；在兜底中间件之前调用。
    * 显式声明 `| undefined`：`exactOptionalPropertyTypes` 下调用方传 `{ mount: maybe }` 会被判不兼容，
@@ -74,6 +104,59 @@ export interface CreateHttpAppOptions {
  */
 const TRACE_ID_PATTERN = /^[A-Za-z0-9._:-]{8,64}$/;
 
+/**
+ * 取响应字节数（D22）：读 `content-length`，读不到就是 undefined。
+ * @why 用响应头而不是 `socket.bytesWritten`：后者是**连接级累计值**，
+ *      keep-alive 下第二条请求会把第一条的字节数一起算上，数字随连接复用次数增长，完全是错的。
+ * @limitation 分块传输（chunked）时 Express 不发 content-length，此时无此字段——
+ *             可接受：我们的响应都是 `res.json()`，长度已知。
+ */
+function responseBytes(res: Response): number | undefined {
+  const header = res.getHeader('content-length');
+  const value = typeof header === 'number' ? header : Number(header);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * CORS 中间件（D21）：只对管理端路径、只对白名单来源。
+ *
+ * @why 手写而不用 `cors` 包：我们只需要"精确白名单 + 固定路径前缀 + 不发送凭证"这一小片行为，
+ *      引一个包就要跟着它的默认策略（默认 `*`、`preflightContinue` 等）走，反而更容易开错。
+ * @why 不在白名单时**不回任何 CORS 头**而不是回 403：跨域失败应该由浏览器判定并拦下，
+ *      服务端在预检阶段就报错会让前端看到"网络错误"而不是"CORS 被拒"，更难排查。
+ * @limitation 不支持通配（`*.example.com`）：子域名枚举是常见的越权来源。
+ *             需要多域名就在配置里逐个列全，`CORS_ORIGINS` 是逗号分隔的。
+ */
+function corsMiddleware(opts: CorsOptions): RequestHandler {
+  const prefixes = opts.pathPrefixes ?? ['/api/v1/admin'];
+  return (req, res, next) => {
+    const origin = req.header('origin');
+    if (origin === undefined) {
+      next();
+      return;
+    }
+    if (!prefixes.some((p) => req.path === p || req.path.startsWith(p))) {
+      next();
+      return;
+    }
+    // 只要按 Origin 变化响应，就必须声明 Vary——否则 CDN/浏览器缓存会把给 A 源的响应发给 B 源
+    res.appendHeader('vary', 'Origin');
+    if (!opts.origins.includes(origin)) {
+      next();
+      return;
+    }
+    res.setHeader('access-control-allow-origin', origin);
+    if (req.method !== 'OPTIONS') {
+      next();
+      return;
+    }
+    res.setHeader('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    res.setHeader('access-control-allow-headers', 'authorization,content-type,x-trace-id');
+    res.setHeader('access-control-max-age', '600');
+    res.status(204).end();
+  };
+}
+
 /** 从请求头取链路 ID：符合形状才沿用，否则新建。 */
 function traceIdFrom(req: Request): string {
   const header = req.header('x-trace-id');
@@ -85,11 +168,21 @@ function traceIdFrom(req: Request): string {
 export function createHttpApp(opts: CreateHttpAppOptions): Express {
   const app = express();
   const rawBodyPaths = opts.rawBodyPaths ?? [];
-  const silentPaths = opts.silentPaths ?? ['/healthz'];
+  // /readyz 与 /healthz 一样会被平台高频轮询，默认不打访问日志（失败另有 warn）
+  const silentPaths = opts.silentPaths ?? ['/healthz', '/readyz'];
 
   // 反代后面取真实客户端 IP（限流与审计用）；不得用于鉴权（@limitation 一）
-  app.set('trust proxy', true);
+  // 层数而非 true：见 trustProxyHops 的 @why（D23，伪造 IP 可绕过未来的限流/锁定）
+  app.set('trust proxy', opts.trustProxyHops ?? 1);
   app.disable('x-powered-by');
+
+  /**
+   * 骨架自己的日志器：绑定 `module: 'http'`。
+   * @why 曾经是往**请求上下文**里写 `module: 'http'`，结果请求内所有业务日志的 module 全被压成 http
+   *      ——支付模块报的错在日志里显示为 http 模块，按模块过滤彻底失效（复现缺陷 D9）。
+   *      module 属于"这段代码属于谁"，应该由**写这行日志的 logger** 声明，而不是由传输层中间件声明。
+   */
+  const httpLog = opts.logger.child({ module: 'http' });
 
   // ── 1. 请求上下文：后续所有日志自动带 trace_id / req_id ────────────────────
   app.use((req, res, next) => {
@@ -97,7 +190,8 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
     const req_id = newTraceId();
     res.setHeader('x-request-id', req_id);
     res.setHeader('x-trace-id', trace_id);
-    runWithContext({ trace_id, req_id, module: 'http' }, () => next());
+    // 刻意**不写 module**：module 的归属见上方 httpLog（D9）
+    runWithContext({ trace_id, req_id }, () => next());
   });
 
   // ── 2. 访问日志（请求维度，属用户行为流的一部分）───────────────────────────
@@ -113,13 +207,20 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
         duration_ms: Math.round(performance.now() - startedAt),
         result: status >= 500 ? 'error' : status >= 400 ? 'client_error' : 'ok',
         user_agent: req.header('user-agent'),
+        // D22：限流按 IP 计时、风控看来源、审计要还原"谁从哪来"——三者都靠 client_ip。
+        // 注意它**只在访问日志里出现**，不进业务事件，避免 PII 扩散到各处。
+        client_ip: req.ip,
+        resp_bytes: responseBytes(res),
       };
-      if (status >= 500) opts.logger.error('http_request', fields);
-      else if (status >= 400) opts.logger.warn('http_request', fields);
-      else opts.logger.info('http_request', fields);
+      if (status >= 500) httpLog.error('http_request', fields);
+      else if (status >= 400) httpLog.warn('http_request', fields);
+      else httpLog.info('http_request', fields);
     });
     next();
   });
+
+  // ── 2b. CORS（管理端跨域，D21）────────────────────────────────────────────
+  if (opts.cors !== undefined) app.use(corsMiddleware(opts.cors));
 
   // ── 3. 报文解析：raw 优先（回调验签），其余走 JSON ────────────────────────
   const rawParser = express.raw({ type: () => true, limit: RAW_BODY_LIMIT });
@@ -135,6 +236,28 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
   // 若绑死 DB，一次 DB 抖动会导致整个服务被重启，把小故障放大成全站不可用。
   app.get('/healthz', (_req, res) => {
     res.json({ status: 'ok' });
+  });
+
+  /**
+   * ── 4b. 就绪探针 /readyz（D21）─────────────────────────────────────────
+   * 与 /healthz 的区别是**语义**，不是实现细节：
+   *   /healthz = 进程活着吗？死了就重启（不查依赖，避免 DB 抖动引发全站重启）
+   *   /readyz  = 能接流量吗？不能就把我从负载均衡里摘出去（查依赖）
+   * 两者混用的典型事故：把存活探针绑到 DB 上，一次 DB 抖动把整个服务重启一轮。
+   *
+   * @limitation 只反映"探针此刻的结果"，不做连续失败 N 次才置为不就绪的抖动抑制——
+   *             那属于平台侧策略（Render 有自己的健康检查阈值），此处不重复实现。
+   */
+  app.get('/readyz', (_req, res) => {
+    void (async () => {
+      try {
+        const ok = (await opts.readiness?.()) ?? true;
+        res.status(ok ? 200 : 503).json({ status: ok ? 'ok' : 'degraded' });
+      } catch (e) {
+        httpLog.warn('readiness_failed', { err: e instanceof Error ? e : new Error(String(e)) });
+        res.status(503).json({ status: 'degraded' });
+      }
+    })();
   });
 
   // ── 5. 业务路由 ──────────────────────────────────────────────────────────
@@ -153,26 +276,26 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
     //    它会落进 unhandled_error 的 error 通道——客户端畸形请求天天有，直接淹没真实的 5xx。
     if (isBodyParseError(err)) {
       // 客户端可控输入导致的失败：不是我们的故障 → warn 级，且 normalizeError 已确保不带堆栈
-      opts.logger.warn('request_rejected', {
+      httpLog.warn('request_rejected', {
         http_method: req.method,
         http_path: req.path,
         ...normalized.logFields,
       });
     } else if (!(err instanceof AppError)) {
       // 未知异常：这是需要人看的，必须 error 级且带原始堆栈（只在日志里）
-      opts.logger.error('unhandled_error', {
+      httpLog.error('unhandled_error', {
         http_method: req.method,
         http_path: req.path,
         ...normalized.logFields,
       });
     } else if (normalized.status >= 500) {
-      opts.logger.error('request_failed', {
+      httpLog.error('request_failed', {
         http_method: req.method,
         http_path: req.path,
         ...normalized.logFields,
       });
     } else {
-      opts.logger.warn('request_rejected', {
+      httpLog.warn('request_rejected', {
         http_method: req.method,
         http_path: req.path,
         ...normalized.logFields,

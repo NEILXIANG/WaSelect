@@ -244,7 +244,8 @@ describe('requireRole 中间件（真 HTTP）', () => {
     await expect(res.json()).resolves.toEqual({ sub: 'u-1' });
     const row = sink.find('http_request').at(-1);
     expect(row?.user_id).toBe('u-1');
-    expect(row?.actor).toBe('user');
+    // D22：actor 记到具体的人，只记角色无法追责
+    expect(row?.actor).toBe('user:u-1');
   });
 });
 

@@ -50,6 +50,32 @@ describe('连接与探活', () => {
     }
   });
 
+  /**
+   * D20：连接池必须带 `statement_timeout`。
+   * @why 默认是 0（不限时）。一条慢查询（缺索引、锁等待、笛卡尔积）会**永久**占住连接，
+   *      连接池耗尽后表现是"全站下单超时"，而根因在十几分钟前那一条查询——日志上完全看不出来。
+   *      设了超时，它至少会以 `57014 query_canceled` 的形式报错，能在日志里被检索到。
+   */
+  it('默认连接池带 statement_timeout（不能是 0 = 不限时）', async () => {
+    const rows = await db`show statement_timeout`;
+    // `show` 的取值形态随服务端而定：'15s' / '300ms' / '0'，三种都要解析得对
+    const raw = String(rows[0]?.statement_timeout ?? '0');
+    const m = /^(\d+)(ms|s|min)?$/.exec(raw);
+    const n = Number(m?.[1] ?? '0');
+    const unit = m?.[2];
+    const ms = unit === 'ms' ? n : unit === 'min' ? n * 60_000 : unit === 's' ? n * 1000 : n;
+    expect(ms).toBeGreaterThan(0);
+  });
+
+  it('超时真的会被取消：pg_sleep 超过限制时抛 57014（不是挂到平台超时）', async () => {
+    const limited = createDb({ url: TEST_DB_URL, statementTimeoutMs: 300, max: 1 });
+    try {
+      await expect(limited`select pg_sleep(3) as slept`).rejects.toThrow(/57014|cancel/i);
+    } finally {
+      await closeDb(limited);
+    }
+  }, 15_000);
+
   it(`Postgres 大版本 >= ${MIN_POSTGRES_MAJOR}（与生产一致，代码里有硬闸门）`, async () => {
     await expect(postgresMajorVersion(db)).resolves.toBeGreaterThanOrEqual(MIN_POSTGRES_MAJOR);
     await expect(assertPostgresMajor(db)).resolves.toBeGreaterThanOrEqual(MIN_POSTGRES_MAJOR);

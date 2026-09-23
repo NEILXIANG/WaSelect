@@ -125,6 +125,16 @@ const schema = z.object({
       'HOST 必须是 IP 地址或 localhost（拼错会静默回落到默认值，不会报错）',
     ),
 
+  /**
+   * 可信反向代理层数（D23）。
+   * @why 必须是**层数**而不是布尔：Express 的 `trust proxy = true` 会采信 `X-Forwarded-For` 最左值，
+   *      而最左值是客户端自己能填的——一旦将来按 IP 做限流 / 登录锁定，伪造一个头就绕过去了
+   *      （实测：true 取最左 1.1.1.1；1 取最右 3.3.3.3，即平台那一跳写入的值）。
+   * @limitation 取值宁小勿大：小于实际层数时取到中间代理的 IP（错，但至少不可伪造）；
+   *              大于实际层数才会重新变得可伪造。Render 前一层 = 1，本机无代理 = 0。
+   */
+  TRUST_PROXY_HOPS: int(1, 0),
+
   // ── 微信小程序 ──────────────────────────────────────────────────────────
   APP_ID: optionalText(),
   APP_SECRET: optionalText(),

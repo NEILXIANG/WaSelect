@@ -187,8 +187,11 @@ export function requireRole(role: Role, cfg: AuthConfig): RequestHandler {
           return;
         }
         req.auth = principal;
-        // 写进日志上下文：此后这条请求链路上的所有日志都带 user_id，无需每个 handler 手动传
-        patchContext({ user_id: principal.sub, actor: principal.role });
+        // 写进日志上下文：此后这条请求链路上的所有日志都带 user_id，无需每个 handler 手动传。
+        // @why actor 记成 `user:<id>` 而不是只记角色（D22）：只记 `actor: 'user'` 等于
+        //      "有个用户干了某事"——出事后要还原"谁干的"就得到处翻。角色与身份是两个维度，
+        //      分别落在 `actor`（可读的归属串）与 `user_id`（可检索的 ID）上。
+        patchContext({ user_id: principal.sub, actor: `${principal.role}:${principal.sub}` });
         next();
       })
       .catch((e: unknown) => next(e instanceof AppError ? e : new AppError(40101)));

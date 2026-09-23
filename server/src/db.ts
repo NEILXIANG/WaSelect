@@ -70,12 +70,30 @@ export const INT8_AS_SAFE_NUMBER: postgres.PostgresType<number> = {
   },
 };
 
+/**
+ * 单条语句超时（毫秒）。
+ *
+ * @why Postgres 默认 `statement_timeout = 0`（不限时）。一条慢查询（缺索引、锁等待、笛卡尔积）
+ *      会**永久**占住连接；连接耗尽后表现是"全站下单超时"，而根因在十几分钟前那一条查询里，
+ *      从日志上完全看不出来。设了超时，它至少以 `57014 canceling statement due to statement timeout`
+ *      的形式报错——能被检索、能被告警（复现缺陷 D20）。
+ * @why 15 秒而不是更小：调度器一次批量关单要遍历一批订单并逐条 savepoint，
+ *      以及管理端导出/对账类查询都可能超过几秒。宁可"慢查询慢一点但能完成"，
+ *      也不要让正常批量任务被自己的超时打断（那会变成另一种静默失败）。
+ * @limitation 这是**连接级**设置，对该池上的所有语句生效，包括事务内的每一条。
+ *              若将来出现"就是要跑 60 秒"的作业，应在作业内显式 `SET statement_timeout` 覆盖，
+ *              而不是把全局值调大——调大等于让所有查询一起失去保护。
+ */
+export const DEFAULT_STATEMENT_TIMEOUT_MS = 15_000;
+
 export interface CreateDbOptions {
   url: string;
   /** 最大连接数（默认 10）。 */
   max?: number;
   /** 连接超时（秒，默认 10）。 */
   connectTimeoutSec?: number;
+  /** 单条语句超时（毫秒，默认 {@link DEFAULT_STATEMENT_TIMEOUT_MS}）；0 = 不限时（不推荐）。 */
+  statementTimeoutMs?: number;
 }
 
 /**
@@ -89,6 +107,9 @@ export function createDb(opts: CreateDbOptions): Db {
     // ⚠️ 必须配 int8 → number：默认返回 string，`a + b` 会变成字符串拼接（金额静默十倍）。
     //    numeric **不**在这里转（保持 string 交给 toRateInt），理由见 INT8_AS_SAFE_NUMBER 的注释。
     types: { int8: INT8_AS_SAFE_NUMBER },
+    // 单条语句超时（D20）：作为**连接参数**下发，池里每条连接都带上，
+    // 因此新连接（重连、扩容）也不会漏——比"建池后跑一次 SET"可靠（那条 SET 只影响当时的连接）。
+    connection: { statement_timeout: opts.statementTimeoutMs ?? DEFAULT_STATEMENT_TIMEOUT_MS },
   }) as Db;
 }
 
