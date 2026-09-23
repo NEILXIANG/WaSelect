@@ -414,6 +414,29 @@ export const US_ADDRESSES: readonly AddressSeed[] = [
     postalCode: '99501',
     areaCode: '907',
   },
+  {
+    // ⑥ 收件人是公司/机构名：报关口径与"自然人自用"不同，签收主体也不是个人。
+    //    这条是 `test/factories/manifest/us-address.ts` 建清单时**先判红、再补进来**的——
+    //    清单的价值就在这里：没有清单时，没人会意识到样本里缺了一整类收件人。
+    recipient: 'Sakura Trading LLC',
+    line1: '2101 L St NW',
+    line2: 'Suite 800',
+    city: 'Washington',
+    state: 'DC',
+    postalCode: '20037',
+    areaCode: '202',
+  },
+  {
+    // ⑦ 属地（波多黎各）：USPS 合法收件目的地，州码 PR 不在 50 州里，清关口径与本土不同。
+    //    同上，是形态清单判红后补进来的。
+    recipient: 'Carlos Ruiz',
+    line1: '1451 Ashford Ave',
+    line2: 'Apt 12C',
+    city: 'San Juan',
+    state: 'PR',
+    postalCode: '00907',
+    areaCode: '787',
+  },
 ];
 
 /** 生成一个满足 `^\+1[0-9]{10}$` 的电话。区号取自素材，后 7 位来自传入的随机源。 */
