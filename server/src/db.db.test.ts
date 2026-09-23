@@ -140,7 +140,8 @@ describe('int8 / numeric 映射（D2）', () => {
   it('写入方向不受影响：numeric / double / int4 参数仍按各自类型落库', async () => {
     // @why 自定义 int8 类型若劫持了"所有 number 参数"的序列化，
     //      这条用例会红（汇率 0.0067 会被当成 bigint 写入而变 0 或报错）。
-    const rows = await db`select ${0.0067}::numeric(12,6) as n, ${1.5}::double precision as d, ${42}::integer as i`;
+    const rows =
+      await db`select ${0.0067}::numeric(12,6) as n, ${1.5}::double precision as d, ${42}::integer as i`;
     expect(String(rows[0]?.n)).toBe('0.006700');
     expect(rows[0]?.d).toBe(1.5);
     expect(rows[0]?.i).toBe(42);

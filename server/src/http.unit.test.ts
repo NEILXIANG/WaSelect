@@ -41,7 +41,9 @@ async function start(arg?: ServeOpts | ((app: Express, logger: Logger) => void))
     logger,
     rawBodyPaths: [RAW_CALLBACK_PATH],
     silentPaths: ['/healthz'],
-    ...(opts.mount ? { mount: (a: Express) => (opts.mount as NonNullable<ServeOpts['mount']>)(a, logger) } : {}),
+    ...(opts.mount
+      ? { mount: (a: Express) => (opts.mount as NonNullable<ServeOpts['mount']>)(a, logger) }
+      : {}),
     ...(opts.cors ? { cors: opts.cors } : {}),
     ...(opts.readiness ? { readiness: opts.readiness } : {}),
   });

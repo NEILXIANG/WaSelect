@@ -172,57 +172,61 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
   }
 
   // ── 1. 建单：鉴权 + 幂等 + 事务写库 ──────────────────────────────────────
-  app.post(`${PREFIX}/orders`, requireRole('user', deps.auth, { identity: deps.identity }), (req, res, next) => {
-    void (async () => {
-      try {
-        const sub = req.auth?.sub;
-        if (sub === undefined) throw new AppError(40101);
+  app.post(
+    `${PREFIX}/orders`,
+    requireRole('user', deps.auth, { identity: deps.identity }),
+    (req, res, next) => {
+      void (async () => {
+        try {
+          const sub = req.auth?.sub;
+          if (sub === undefined) throw new AppError(40101);
 
-        const clientKey = req.header('idempotency-key');
-        if (clientKey === undefined || clientKey.trim().length === 0) {
-          throw new AppError(40001, { reason: '缺少 Idempotency-Key 头' });
-        }
+          const clientKey = req.header('idempotency-key');
+          if (clientKey === undefined || clientKey.trim().length === 0) {
+            throw new AppError(40001, { reason: '缺少 Idempotency-Key 头' });
+          }
 
-        const result = await withIdempotency(
-          deps.db,
-          {
-            key: scopeKey({ userId: sub, route: 'skeleton.createOrder', clientKey }),
-            userId: sub,
-            route: 'skeleton.createOrder',
-          },
-          async () => {
-            // id 与 order_no 分开：order_no 是给用户看的（YYMMDD-XXXXXX），id 是内部键
-            const orderId = `sk-${randomUUID()}`;
-            const orderNo = newOrderNo();
-            // 事务内只用 tx（@see db.ts @limitation 二：用外层 db 会取到另一条连接、看不到未提交数据）
-            await withTransaction(deps.db, async (tx) => {
-              await tx`
+          const result = await withIdempotency(
+            deps.db,
+            {
+              key: scopeKey({ userId: sub, route: 'skeleton.createOrder', clientKey }),
+              userId: sub,
+              route: 'skeleton.createOrder',
+            },
+            async () => {
+              // id 与 order_no 分开：order_no 是给用户看的（YYMMDD-XXXXXX），id 是内部键
+              const orderId = `sk-${randomUUID()}`;
+              const orderNo = newOrderNo();
+              // 事务内只用 tx（@see db.ts @limitation 二：用外层 db 会取到另一条连接、看不到未提交数据）
+              await withTransaction(deps.db, async (tx) => {
+                await tx`
                 insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
                                     total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
                 values (${orderId}, ${orderNo}, ${sub}, 'created', 1000, 0, 0, 1000, 500,
                         '{}'::jsonb, '{}'::jsonb, 'SKELETON', now() + interval '30 minutes')
               `;
-              await tx`
+                await tx`
                 insert into order_events (order_id, status, actor) values (${orderId}, 'created', ${`user:${sub}`})
               `;
-            });
-            deps.logger.info('skeleton_order_created', {
-              order_id: orderId,
-              replayed: false,
-              result: 'ok',
-            });
-            return {
-              status: 201,
-              body: { order_id: orderId, order_no: orderNo, status: 'created' as const },
-            };
-          },
-        );
-        res.status(result.status).json(result.body);
-      } catch (e) {
-        next(e);
-      }
-    })();
-  });
+              });
+              deps.logger.info('skeleton_order_created', {
+                order_id: orderId,
+                replayed: false,
+                result: 'ok',
+              });
+              return {
+                status: 201,
+                body: { order_id: orderId, order_no: orderNo, status: 'created' as const },
+              };
+            },
+          );
+          res.status(result.status).json(result.body);
+        } catch (e) {
+          next(e);
+        }
+      })();
+    },
+  );
 
   // ── 2. 模拟支付回调：原始报文验签 + 事务状态回写 ──────────────────────────
   app.post(MOCK_CALLBACK_PATH, (req, res, next) => {
@@ -323,41 +327,49 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
   //      真实的回调是机构打给我们的（小程序端签不了名），所以骨架期需要这个入口代替机构。
   // @limitation **业务期必须删除**：它会绕过验签直接改订单状态，留在生产等于任何人都能把单改成已支付。
   //              同 markPaid() 复用状态回写逻辑，避免"模拟能过、真实回调失败"的分叉。
-  app.post(`${PREFIX}/orders/:id/simulate-paid`, requireRole('user', deps.auth, { identity: deps.identity }), (req, res, next) => {
-    void (async () => {
-      try {
-        const sub = req.auth?.sub;
-        if (sub === undefined) throw new AppError(40101);
-        const orderId = paramId(req.params.id);
-        // 先确认"这张单是他的"再改状态：否则这个骨架端点等于"任何人都能把别人的单改成已支付"
-        await readOwnedOrder(deps.db, orderId, sub);
-        await markPaid(deps.db, orderId);
-        deps.logger.info('skeleton_simulate_paid', { order_id: orderId, result: 'paid' });
-        res.json({ order_id: orderId, status: 'paid' });
-      } catch (e) {
-        next(e);
-      }
-    })();
-  });
+  app.post(
+    `${PREFIX}/orders/:id/simulate-paid`,
+    requireRole('user', deps.auth, { identity: deps.identity }),
+    (req, res, next) => {
+      void (async () => {
+        try {
+          const sub = req.auth?.sub;
+          if (sub === undefined) throw new AppError(40101);
+          const orderId = paramId(req.params.id);
+          // 先确认"这张单是他的"再改状态：否则这个骨架端点等于"任何人都能把别人的单改成已支付"
+          await readOwnedOrder(deps.db, orderId, sub);
+          await markPaid(deps.db, orderId);
+          deps.logger.info('skeleton_simulate_paid', { order_id: orderId, result: 'paid' });
+          res.json({ order_id: orderId, status: 'paid' });
+        } catch (e) {
+          next(e);
+        }
+      })();
+    },
+  );
 
   // ── 4. 读回：证明状态真的回写了（端到端测试的最后一环）────────────────────
-  app.get(`${PREFIX}/orders/:id`, requireRole('user', deps.auth, { identity: deps.identity }), (req, res, next) => {
-    void (async () => {
-      try {
-        const sub = req.auth?.sub;
-        if (sub === undefined) throw new AppError(40101);
-        const orderId = paramId(req.params.id);
-        const row = await readOwnedOrder(deps.db, orderId, sub);
-        // 顺带把当前 trace_id 回给调用方：便于端到端断言"日志与响应是同一条链"
-        res.json({
-          order_id: row.id,
-          order_no: row.order_no,
-          status: row.status,
-          trace_id: currentContext().trace_id,
-        });
-      } catch (e) {
-        next(e);
-      }
-    })();
-  });
+  app.get(
+    `${PREFIX}/orders/:id`,
+    requireRole('user', deps.auth, { identity: deps.identity }),
+    (req, res, next) => {
+      void (async () => {
+        try {
+          const sub = req.auth?.sub;
+          if (sub === undefined) throw new AppError(40101);
+          const orderId = paramId(req.params.id);
+          const row = await readOwnedOrder(deps.db, orderId, sub);
+          // 顺带把当前 trace_id 回给调用方：便于端到端断言"日志与响应是同一条链"
+          res.json({
+            order_id: row.id,
+            order_no: row.order_no,
+            status: row.status,
+            trace_id: currentContext().trace_id,
+          });
+        } catch (e) {
+          next(e);
+        }
+      })();
+    },
+  );
 }

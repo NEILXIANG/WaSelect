@@ -26,7 +26,10 @@ function deps(env: SkeletonDeps['env']): { d: SkeletonDeps; sink: MemorySink } {
     d: {
       // 闸门在挂载前就抛错，不会真的用到 db——空壳只为满足类型
       db: {} as unknown as Db,
-      logger: createLogger({ env: env === 'production' ? 'production' : 'development', destination: sink }),
+      logger: createLogger({
+        env: env === 'production' ? 'production' : 'development',
+        destination: sink,
+      }),
       auth: AUTH,
       callbackSecret: 'gate-secret',
       env,

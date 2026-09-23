@@ -30,7 +30,8 @@ const documented = new Set(
 const TEST_ONLY_KEYS: Readonly<Record<string, string>> = {
   TEST_DATABASE_URL: '测试库连接串，由 test/db/test-db.ts 读取，不属于服务端运行配置',
   TEST_ADMIN_DB_URL: '建测试库用的管理库连接串，同上',
-  ALLOW_REMOTE_TEST_DB: '测试库安全闸门的开关，由 test/db/test-db.ts 读取；设为 1 才允许连远端测试实例',
+  ALLOW_REMOTE_TEST_DB:
+    '测试库安全闸门的开关，由 test/db/test-db.ts 读取；设为 1 才允许连远端测试实例',
 };
 
 describe('.env.example ↔ 配置 schema 键集合一致', () => {

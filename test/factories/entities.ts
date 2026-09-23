@@ -98,7 +98,11 @@ function hash(text: string): number {
  * 造一个买家。
  * @param overrides 覆盖任意字段（用例要造"被封禁用户"等特例时用）
  */
-export function makeUser(rng: Rng, nextId: () => string, overrides: Partial<UserRow> = {}): UserRow {
+export function makeUser(
+  rng: Rng,
+  nextId: () => string,
+  overrides: Partial<UserRow> = {},
+): UserRow {
   const seq = rng.int(1, 999999);
   const base: UserRow = {
     id: nextId(),

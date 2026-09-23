@@ -21,7 +21,9 @@ describe('测试库连接串闸门', () => {
   });
 
   it('开发库（不以 _test 结尾）直接拒绝——这是防"清空真实数据"的核心一条', () => {
-    expect(() => assertIsTestDatabaseUrl('postgres://u@localhost:5432/japan_shop')).toThrow(/_test/);
+    expect(() => assertIsTestDatabaseUrl('postgres://u@localhost:5432/japan_shop')).toThrow(
+      /_test/,
+    );
     // 大小写/前缀都不算数：必须是后缀
     expect(() => assertIsTestDatabaseUrl('postgres://u@localhost:5432/test_japan_shop')).toThrow(
       /_test/,

@@ -72,14 +72,14 @@ export function createRng(seed: number | string): Rng {
     return min + Math.floor(next() * (max - min + 1));
   };
 
-  const pick = <T,>(items: readonly T[]): T => {
+  const pick = <T>(items: readonly T[]): T => {
     const item = items[int(0, items.length - 1)];
     // 空数组时 int(0,-1) 会先抛错，这里只是让类型系统满意
     if (item === undefined) throw new Error('pick() 收到空数组');
     return item;
   };
 
-  const shuffle = <T,>(items: readonly T[]): T[] => {
+  const shuffle = <T>(items: readonly T[]): T[] => {
     const out = [...items];
     // Fisher–Yates：从后往前换，保证每个排列等概率（正向换会有偏）
     for (let i = out.length - 1; i > 0; i -= 1) {
@@ -99,7 +99,7 @@ export function createRng(seed: number | string): Rng {
     pick,
     bool: (p = 0.5) => next() < p,
     shuffle,
-    sample: <T,>(items: readonly T[], k: number): T[] => {
+    sample: <T>(items: readonly T[], k: number): T[] => {
       if (k > items.length) {
         throw new Error(`sample() 取 ${k} 个但只有 ${items.length} 个可选`);
       }

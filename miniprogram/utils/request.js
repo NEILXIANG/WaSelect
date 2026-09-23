@@ -101,7 +101,12 @@ export function createRequester(deps = {}) {
           reject(new ApiError(errCode, message));
         },
         fail: (err) => {
-          log({ event: 'api_network_error', trace_id: traceId, url: opts.url, err_msg: err?.errMsg });
+          log({
+            event: 'api_network_error',
+            trace_id: traceId,
+            url: opts.url,
+            err_msg: err?.errMsg,
+          });
           reject(new ApiError(NETWORK_ERROR_CODE, err?.errMsg ?? '网络请求失败'));
         },
       });

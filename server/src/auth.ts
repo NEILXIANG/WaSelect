@@ -264,7 +264,9 @@ function preHash(plain: string): string {
  */
 export async function hashPassword(plain: string): Promise<string> {
   if (plain.length > PASSWORD_MAX_CHARS) {
-    throw new Error(`口令过长：最多 ${PASSWORD_MAX_CHARS} 个字符（超出部分是白白浪费 CPU，不是安全问题）`);
+    throw new Error(
+      `口令过长：最多 ${PASSWORD_MAX_CHARS} 个字符（超出部分是白白浪费 CPU，不是安全问题）`,
+    );
   }
   return bcrypt.hash(preHash(plain), BCRYPT_COST);
 }

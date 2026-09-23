@@ -53,7 +53,9 @@ describe('收敛错误', () => {
   it('2xx 且无 code → 成功，直接返回响应体', async () => {
     const wx = fakeWx({ statusCode: 200, data: { order_no: '260923-K7Q2MN' } });
     const api = createRequester({ request: wx.request as never, log: () => undefined });
-    await expect(api({ url: 'https://api.test/x' })).resolves.toEqual({ order_no: '260923-K7Q2MN' });
+    await expect(api({ url: 'https://api.test/x' })).resolves.toEqual({
+      order_no: '260923-K7Q2MN',
+    });
   });
 
   it('HTTP 200 但响应体带 code → 按业务错误抛（这才是服务端真正的错误通道）', async () => {
@@ -90,7 +92,9 @@ describe('token 与埋点', () => {
       log: () => undefined,
     });
     await api({ url: 'https://api.test/x' });
-    expect((wx.calls[0] as { header: Record<string, string> }).header.authorization).toBeUndefined();
+    expect(
+      (wx.calls[0] as { header: Record<string, string> }).header.authorization,
+    ).toBeUndefined();
 
     const withToken = createRequester({
       request: wx.request as never,
@@ -109,7 +113,10 @@ describe('token 与埋点', () => {
     const bad = fakeWx({ statusCode: 200, data: { code: 40902, message: '状态不允许' } });
     const traceId = newTraceId();
 
-    await createRequester({ request: ok.request as never, log })({ url: 'https://api.test/a', traceId });
+    await createRequester({ request: ok.request as never, log })({
+      url: 'https://api.test/a',
+      traceId,
+    });
     await createRequester({ request: bad.request as never, log })({
       url: 'https://api.test/b',
       traceId,

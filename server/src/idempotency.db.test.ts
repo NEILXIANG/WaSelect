@@ -170,11 +170,10 @@ describe('崩溃遗留的占位行（D3）', () => {
   it('租约**未**过期时不得接管（否则就是重复执行 handler）', async () => {
     await insertStalePlaceholder('k-live', "now() + interval '1 hour'");
     await expect(
-      withIdempotency(
-        db,
-        { ...args('k-live'), waitMs: 80, pollMs: 20 },
-        async () => ({ status: 201, body: { order_no: 'SHOULD-NOT-RUN' } }),
-      ),
+      withIdempotency(db, { ...args('k-live'), waitMs: 80, pollMs: 20 }, async () => ({
+        status: 201,
+        body: { order_no: 'SHOULD-NOT-RUN' },
+      })),
     ).rejects.toMatchObject({ code: 40903 });
   });
 });
@@ -194,20 +193,18 @@ describe('请求指纹（D4）', () => {
     expect(first.replayed).toBe(false);
 
     await expect(
-      withIdempotency(
-        db,
-        { ...args('k-fp'), request: { sku: 'S2', qty: 9 } },
-        async () => ({ status: 201, body: { order_no: 'W-SECOND' } }),
-      ),
+      withIdempotency(db, { ...args('k-fp'), request: { sku: 'S2', qty: 9 } }, async () => ({
+        status: 201,
+        body: { order_no: 'W-SECOND' },
+      })),
     ).rejects.toMatchObject({ code: 40908 });
   });
 
   it('键顺序不同但内容相同 → 仍算同一次请求（指纹必须稳定）', async () => {
-    await withIdempotency(
-      db,
-      { ...args('k-fp2'), request: { sku: 'S1', qty: 1 } },
-      async () => ({ status: 201, body: { order_no: 'W-ORDER-A' } }),
-    );
+    await withIdempotency(db, { ...args('k-fp2'), request: { sku: 'S1', qty: 1 } }, async () => ({
+      status: 201,
+      body: { order_no: 'W-ORDER-A' },
+    }));
     const replay = await withIdempotency(
       db,
       { ...args('k-fp2'), request: { qty: 1, sku: 'S1' } }, // 键顺序反了

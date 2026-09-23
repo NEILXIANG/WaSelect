@@ -185,7 +185,8 @@ describe('行走骨架：一条链路走到底', () => {
 
     const rows = await db`select status from orders where id = ${created.order_id}`;
     expect(rows[0]?.status).toBe('paid');
-    const events = await db`select status from order_events where order_id = ${created.order_id} order by id`;
+    const events =
+      await db`select status from order_events where order_id = ${created.order_id} order by id`;
     expect(events.map((r) => r.status)).toEqual(['created', 'paid']);
 
     // 之后再走真实回调（状态已不是 created）→ 业务冲突，按 D5 范式收下并告警，不再回 409
@@ -275,9 +276,9 @@ describe('行走骨架：一条链路走到底', () => {
     const created = (await (await createOrder(token, 'key-conflict')).json()) as {
       order_id: string;
     };
-    expect(
-      (await signedCallback({ order_id: created.order_id, event_id: 'evt-a' })).status,
-    ).toBe(200);
+    expect((await signedCallback({ order_id: created.order_id, event_id: 'evt-a' })).status).toBe(
+      200,
+    );
     const second = await signedCallback({ order_id: created.order_id, event_id: 'evt-b' });
     expect(second.status).toBe(200);
     await expect(second.json()).resolves.toMatchObject({

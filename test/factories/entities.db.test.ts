@@ -91,7 +91,8 @@ describe('工厂产物能进真库', () => {
 
   it('products：默认产物直接插入成功，且 origin_country 被 DB 锁成 JP', async () => {
     const p = await insertProduct();
-    const rows = await db`select origin_country, price_jpy, weight_g from products where id = ${p.id}`;
+    const rows =
+      await db`select origin_country, price_jpy, weight_g from products where id = ${p.id}`;
     expect(rows[0]?.origin_country).toBe('JP');
     expect(Number(rows[0]?.price_jpy)).toBeGreaterThan(0);
   });

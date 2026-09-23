@@ -249,54 +249,54 @@ describe('requireRole 中间件（真 HTTP）', () => {
     expect(row?.actor).toBe('user:u-1');
   });
 
-describe('身份状态回源校验（D25）', () => {
-  /** 固定身份：未封禁、ver=1。 */
-  const alive: IdentityCheck = { load: async () => ({ tokenVer: 1, blockedAt: null }) };
+  describe('身份状态回源校验（D25）', () => {
+    /** 固定身份：未封禁、ver=1。 */
+    const alive: IdentityCheck = { load: async () => ({ tokenVer: 1, blockedAt: null }) };
 
-  it('ver 对不上 → 40101（改密后旧 token 必须失效）', async () => {
-    const { baseUrl } = await serve({ load: async () => ({ tokenVer: 2, blockedAt: null }) });
-    const res = await fetch(`${baseUrl}/api/v1/me`, {
-      headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+    it('ver 对不上 → 40101（改密后旧 token 必须失效）', async () => {
+      const { baseUrl } = await serve({ load: async () => ({ tokenVer: 2, blockedAt: null }) });
+      const res = await fetch(`${baseUrl}/api/v1/me`, {
+        headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+      });
+      expect(res.status).toBe(401);
+      await expect(res.json()).resolves.toMatchObject({ code: 40101 });
     });
-    expect(res.status).toBe(401);
-    await expect(res.json()).resolves.toMatchObject({ code: 40101 });
-  });
 
-  it('已封禁 → 40301 而不是 401（401 会让前端陷入无限重登）', async () => {
-    const { baseUrl } = await serve({
-      load: async () => ({ tokenVer: 1, blockedAt: new Date() }),
+    it('已封禁 → 40301 而不是 401（401 会让前端陷入无限重登）', async () => {
+      const { baseUrl } = await serve({
+        load: async () => ({ tokenVer: 1, blockedAt: new Date() }),
+      });
+      const res = await fetch(`${baseUrl}/api/v1/me`, {
+        headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+      });
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({ code: 40301 });
     });
-    const res = await fetch(`${baseUrl}/api/v1/me`, {
-      headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
-    });
-    expect(res.status).toBe(403);
-    await expect(res.json()).resolves.toMatchObject({ code: 40301 });
-  });
 
-  it('用户已不存在 → 40101（token 合法但主体没了）', async () => {
-    const { baseUrl } = await serve({ load: async () => null });
-    const res = await fetch(`${baseUrl}/api/v1/me`, {
-      headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+    it('用户已不存在 → 40101（token 合法但主体没了）', async () => {
+      const { baseUrl } = await serve({ load: async () => null });
+      const res = await fetch(`${baseUrl}/api/v1/me`, {
+        headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+      });
+      expect(res.status).toBe(401);
     });
-    expect(res.status).toBe(401);
-  });
 
-  it('状态正常时放行（不能误伤）', async () => {
-    const { baseUrl } = await serve(alive);
-    const res = await fetch(`${baseUrl}/api/v1/me`, {
-      headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+    it('状态正常时放行（不能误伤）', async () => {
+      const { baseUrl } = await serve(alive);
+      const res = await fetch(`${baseUrl}/api/v1/me`, {
+        headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+      });
+      expect(res.status).toBe(200);
     });
-    expect(res.status).toBe(200);
-  });
 
-  it('不传 identity 时不查库（骨架期与单元测试的口子，行为与改造前一致）', async () => {
-    const { baseUrl } = await serve(undefined);
-    const res = await fetch(`${baseUrl}/api/v1/me`, {
-      headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+    it('不传 identity 时不查库（骨架期与单元测试的口子，行为与改造前一致）', async () => {
+      const { baseUrl } = await serve(undefined);
+      const res = await fetch(`${baseUrl}/api/v1/me`, {
+        headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+      });
+      expect(res.status).toBe(200);
     });
-    expect(res.status).toBe(200);
   });
-});
 });
 
 /**

@@ -41,7 +41,10 @@ describe('事件形状', () => {
   });
 
   it('JPY 金额不做 /100：amount=12000 就是 12,000 円（跨境最常见的金额事故）', () => {
-    const e = stripeEvent(STRIPE_EVENT_TYPES.paySucceeded, paymentIntent({ amount: 12_000, currency: 'jpy' }));
+    const e = stripeEvent(
+      STRIPE_EVENT_TYPES.paySucceeded,
+      paymentIntent({ amount: 12_000, currency: 'jpy' }),
+    );
     expect(e.data.object.amount).toBe(12_000);
     expect(e.data.object.currency).toBe('jpy');
   });

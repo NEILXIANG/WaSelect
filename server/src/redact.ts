@@ -217,7 +217,9 @@ export function redact(value: unknown, depth = 0, seen = new WeakSet<object>()):
   // 数字也要判卡号：`{ note: 4111111111111111 }` 曾经**原样**进日志（复现缺陷 D12）。
   // 只判整数且必须是安全整数——小数（金额汇率）与超大整数（BigInt 另走分支）都不可能是卡号。
   if (typeof value === 'number') {
-    return Number.isSafeInteger(value) && isCardLike(String(value)) ? maskTail(String(value)) : value;
+    return Number.isSafeInteger(value) && isCardLike(String(value))
+      ? maskTail(String(value))
+      : value;
   }
   if (typeof value === 'boolean' || typeof value === 'bigint') return value;
   if (typeof value === 'function') return '[Function]';

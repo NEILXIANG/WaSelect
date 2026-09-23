@@ -46,7 +46,11 @@ describe('组装根 bootstrap（A1）', () => {
     const { lines, write } = sink();
     let rt: Runtime | undefined;
     try {
-      rt = await bootstrap({ env: baseEnv(PORT_DEV), logDestination: { write }, exit: () => undefined });
+      rt = await bootstrap({
+        env: baseEnv(PORT_DEV),
+        logDestination: { write },
+        exit: () => undefined,
+      });
       const res = await fetch(`http://127.0.0.1:${PORT_DEV}/healthz`);
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toMatchObject({ status: 'ok' });
@@ -178,7 +182,11 @@ describe('组装根 bootstrap（A1）', () => {
     const { write } = sink();
     let rt: Runtime | undefined;
     try {
-      rt = await bootstrap({ env: baseEnv(PORT_DEV), logDestination: { write }, exit: () => undefined });
+      rt = await bootstrap({
+        env: baseEnv(PORT_DEV),
+        logDestination: { write },
+        exit: () => undefined,
+      });
       const res = await fetch(`http://127.0.0.1:${PORT_DEV}/api/v1/admin/orders`, {
         method: 'OPTIONS',
         headers: { origin: 'https://any.example.com', 'access-control-request-method': 'GET' },
@@ -194,9 +202,9 @@ describe('组装根 bootstrap（A1）', () => {
   it('配置不合法时启动失败，且不会留下没关的连接池（否则进程挂住、端口还占着）', async () => {
     const { write } = sink();
     const bad = { ...baseEnv(PORT_PROD), JWT_SECRET: 'short' };
-    await expect(bootstrap({ env: bad, logDestination: { write }, exit: () => undefined })).rejects.toThrow(
-      /配置校验失败|JWT_SECRET/,
-    );
+    await expect(
+      bootstrap({ env: bad, logDestination: { write }, exit: () => undefined }),
+    ).rejects.toThrow(/配置校验失败|JWT_SECRET/);
   });
 });
 

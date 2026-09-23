@@ -38,7 +38,8 @@ function eventsInContract(): string[] {
     // checkout.session 单独出现是"对象名"不是事件名，事件名至少 3 段
     (t) => !(t.startsWith('checkout.') && t.split('.').length < 3),
   );
-  if (events.length === 0) throw new Error(`在 /pay/callback/stripe 区块里没抽到任何事件名，正则可能失效：\n${block}`);
+  if (events.length === 0)
+    throw new Error(`在 /pay/callback/stripe 区块里没抽到任何事件名，正则可能失效：\n${block}`);
   return events;
 }
 
@@ -47,7 +48,9 @@ describe('样本工厂覆盖契约声明的 Stripe 事件', () => {
     const declared = eventsInContract();
     expect(declared.length).toBeGreaterThan(0);
     const sampled = Object.values(STRIPE_EVENT_TYPES) as readonly string[];
-    const missing = declared.filter((e) => !sampled.includes(e) && !STRIPE_EVENTS_NOT_SAMPLED.includes(e));
+    const missing = declared.filter(
+      (e) => !sampled.includes(e) && !STRIPE_EVENTS_NOT_SAMPLED.includes(e),
+    );
     expect(missing, `这些事件契约里声明了却没有样本：${missing.join(', ')}`).toEqual([]);
   });
 

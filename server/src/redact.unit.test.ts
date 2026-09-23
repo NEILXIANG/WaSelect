@@ -124,7 +124,9 @@ describe('键名整词匹配（D10）', () => {
       'privateKey',
       'sessionKey',
     ]) {
-      expect(String(out[k]), `key=${k}`).not.toMatch(/sk_live_[123]|4242424242424242|hanako@|AKIA1|^pk1$|^sess1$/);
+      expect(String(out[k]), `key=${k}`).not.toMatch(
+        /sk_live_[123]|4242424242424242|hanako@|AKIA1|^pk1$|^sess1$/,
+      );
     }
   });
 
