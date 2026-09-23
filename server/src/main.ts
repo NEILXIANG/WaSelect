@@ -31,6 +31,7 @@ import { createHttpApp, installShutdownHandlers, listen, type StartedServer } fr
 import { createLogger, type Logger } from './logger.js';
 import { MOCK_CALLBACK_PATH, mountSkeleton } from './skeleton.js';
 import { createIdentityCheck, withIdentityCache } from './identity.js';
+import { installProcessErrorHandlers } from './process-errors.js';
 
 /**
  * 是否挂载骨架路由。**生产不挂。**
@@ -61,6 +62,8 @@ export interface Runtime {
   server: StartedServer;
   /** 卸载信号处理器（生产不调用）。 */
   uninstallSignals: () => void;
+  /** 卸载进程级错误处理器（uncaughtException/unhandledRejection；测试必须调，防监听器叠加）。 */
+  uninstallProcessErrors: () => void;
 }
 
 /**
@@ -132,7 +135,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
 
     const server = await listen(app, { port: config.PORT, host: config.HOST });
 
-    const uninstallSignals = installShutdownHandlers(server, {
+    const shutdown = installShutdownHandlers(server, {
       logger,
       // 摘流量（D1 的第一段）：先让 /readyz 转 503，再等存量请求排空。
       // 顺序反过来就是"发布窗口内一批 500"——@see http.ts ShutdownHooks.beforeDrain 的 @why
@@ -147,6 +150,13 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       ...(opts.exit !== undefined ? { exit: opts.exit } : {}),
     });
 
+    // N25：进程级错误的最后一道网——结构化 fatal（可检索）+ 同一停机流 + 退出码 1。
+    // 装在停机流**之后**：beginShutdown 需要 trigger；装配期失败不在此覆盖（见 process-errors.ts @limitation 二）
+    const uninstallProcessErrors = installProcessErrorHandlers({
+      logger,
+      beginShutdown: (signal, code) => shutdown.trigger(signal, code),
+    });
+
     // ⚠️ 刻意**不传 env**：`env` 是 logger 的基础字段（每行都有），调用点传它会被保留键规则拒绝，
     //    而放行则会让"这条日志的 env"与"logger 的 env"抢同一个键——后者是启动期决定的，前者是运行期值，
     //    两者一旦不一致，按 env 过滤日志就会得到互相矛盾的结果。
@@ -156,7 +166,14 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       result: 'ok',
     });
 
-    return { config, logger, db, server, uninstallSignals };
+    return {
+      config,
+      logger,
+      db,
+      server,
+      uninstallSignals: shutdown.uninstall,
+      uninstallProcessErrors,
+    };
   } catch (e) {
     // 装配半途失败时必须关掉连接池：否则进程会挂住，表现为"启动失败但端口还占着"
     await closeDb(db).catch(() => undefined);

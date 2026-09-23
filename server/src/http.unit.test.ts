@@ -538,7 +538,7 @@ describe('优雅关闭', () => {
     const order: string[] = [];
     const exits: number[] = [];
 
-    const uninstall = installShutdownHandlers(started, {
+    const { uninstall } = installShutdownHandlers(started, {
       logger,
       beforeDrain: async () => {
         order.push('beforeDrain');
@@ -591,7 +591,7 @@ describe('优雅关闭', () => {
     });
     const started = await listen(app);
     const exits: number[] = [];
-    const uninstall = installShutdownHandlers(started, {
+    const { uninstall } = installShutdownHandlers(started, {
       logger,
       afterDrain: async () => {
         resourceOpen = false;
@@ -622,7 +622,7 @@ describe('优雅关闭', () => {
     const started = await listen(createHttpApp({ logger }));
     let drainCalls = 0;
     const exits: number[] = [];
-    const uninstall = installShutdownHandlers(started, {
+    const { uninstall } = installShutdownHandlers(started, {
       logger,
       beforeDrain: async () => {
         drainCalls += 1;
@@ -644,7 +644,7 @@ describe('优雅关闭', () => {
   it('卸载后不再响应信号（避免测试之间互相干扰）', async () => {
     const logger = createLogger({ env: 'development', destination: new MemorySink() });
     const started = await listen(createHttpApp({ logger }));
-    const uninstall = installShutdownHandlers(started, {
+    const { uninstall } = installShutdownHandlers(started, {
       logger,
       exit: () => undefined,
       exitDelayMs: 10,
@@ -652,6 +652,40 @@ describe('优雅关闭', () => {
     uninstall();
     expect(process.listeners('SIGTERM')).toHaveLength(0);
     await started.close();
+  });
+
+  /**
+   * N25：进程级错误（uncaughtException / unhandledRejection）要走**同一条**优雅停机流，
+   * 但退出码必须非 0——否则平台把一次崩溃当成正常退出，不会按异常重启策略告警。
+   * trigger() 就是那条内部通道：不走 OS 信号，直接复用「摘流量 → 排空 → 关资源」。
+   */
+  it('trigger() 复用同一停机流且可指定非零退出码；重复触发被忽略', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const started = await listen(createHttpApp({ logger }));
+    const order: string[] = [];
+    const exits: number[] = [];
+    const { uninstall, trigger } = installShutdownHandlers(started, {
+      logger,
+      beforeDrain: async () => {
+        order.push('beforeDrain');
+      },
+      afterDrain: async () => {
+        order.push('afterDrain');
+      },
+      exit: (code) => exits.push(code),
+      exitDelayMs: 10,
+    });
+    try {
+      trigger('uncaughtException', 1);
+      trigger('uncaughtException', 1); // closing 守卫：第二次必须被忽略
+      await vi.waitFor(() => expect(exits).toEqual([1]), { timeout: 1000 });
+      expect(order).toEqual(['beforeDrain', 'afterDrain']);
+      expect(sink.find('server_stopped')[0]?.signal).toBe('uncaughtException');
+    } finally {
+      uninstall();
+      await started.close().catch(() => undefined);
+    }
   });
 });
 

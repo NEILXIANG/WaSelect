@@ -63,6 +63,7 @@ describe('组装根 bootstrap（A1）', () => {
       expect(lines.some((l) => l.includes('server_started'))).toBe(true);
     } finally {
       rt?.uninstallSignals();
+      rt?.uninstallProcessErrors();
       await rt?.server.close().catch(() => undefined);
       await rt?.db.end().catch(() => undefined);
     }
@@ -89,6 +90,7 @@ describe('组装根 bootstrap（A1）', () => {
       await expect(rt.db`select 1 as ok`).rejects.toThrow();
     } finally {
       rt.uninstallSignals();
+      rt.uninstallProcessErrors();
     }
   });
 
@@ -118,6 +120,7 @@ describe('组装根 bootstrap（A1）', () => {
       await expect(res.json()).resolves.toMatchObject({ code: 40101 });
     } finally {
       rt?.uninstallSignals();
+      rt?.uninstallProcessErrors();
       await rt?.server.close().catch(() => undefined);
       await rt?.db.end().catch(() => undefined);
     }
@@ -145,6 +148,7 @@ describe('组装根 bootstrap（A1）', () => {
       await expect((await fetch(`http://127.0.0.1:${PORT_DEV}/healthz`)).status).toBe(200);
     } finally {
       rt.uninstallSignals();
+      rt.uninstallProcessErrors();
       await rt.server.close().catch(() => undefined);
       await rt.db.end().catch(() => undefined);
     }
@@ -172,6 +176,7 @@ describe('组装根 bootstrap（A1）', () => {
       expect(draining).toBeLessThan(drained);
     } finally {
       rt.uninstallSignals();
+      rt.uninstallProcessErrors();
       await rt.server.close().catch(() => undefined);
       await rt.db.end().catch(() => undefined);
     }
@@ -194,6 +199,7 @@ describe('组装根 bootstrap（A1）', () => {
       expect(res.headers.get('access-control-allow-origin')).toBeNull();
     } finally {
       rt?.uninstallSignals();
+      rt?.uninstallProcessErrors();
       await rt?.server.close().catch(() => undefined);
       await rt?.db.end().catch(() => undefined);
     }

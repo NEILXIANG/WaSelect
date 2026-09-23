@@ -507,8 +507,26 @@ export interface ShutdownHooks {
   exitDelayMs?: number;
 }
 
+/** installShutdownHandlers 的返回：卸载 + 内部触发通道。 */
+export interface ShutdownControl {
+  /** 卸载信号处理器（测试用；生产一般不卸载）。 */
+  uninstall: () => void;
+  /**
+   * 不走 OS 信号、直接触发**同一条**优雅停机流（摘流量 → 排空 → 关资源）。
+   *
+   * @why N25：uncaughtException / unhandledRejection 也必须走这条流收尾（见 process-errors.ts），
+   *      但它们不是 OS 信号、且退出码必须非 0——否则平台把崩溃当正常退出，
+   *      不按异常重启策略告警。这个通道让"进程级错误"与"平台信号"共用一套收尾代码，
+   *      避免两条停机流漂移（关 DB 池的顺序只有一份才可信）。
+   * @param signal 写入日志的来源名（如 'uncaughtException'），与 OS 信号名同字段
+   * @param successExitCode 停机**成功**时的退出码（fatal 场景传 1；默认 0）。
+   *        失败路径（排空/清理抛错）恒为 1，不受此参数影响。
+   */
+  trigger: (signal: string, successExitCode?: number) => void;
+}
+
 /**
- * 注册 SIGTERM / SIGINT 优雅关闭，返回卸载函数。
+ * 注册 SIGTERM / SIGINT 优雅关闭，返回 ShutdownControl。
  *
  * @why Render/容器停止实例时发的是 SIGTERM，默认行为是**立刻**终止进程——
  *      正在进行的事务、正在写的回调应答会直接消失。支付回调丢了虽然能靠重放补，
@@ -518,9 +536,8 @@ export interface ShutdownHooks {
  * @limitation 二：退出用 `process.exitCode` 而不是 `process.exit()`，让 Node 自然排空 stdout
  *              （pino 走 sonic-boom 异步写，立即 exit 会丢最后几条日志）。
  *              代价：若有句柄忘了关（DB 池没 end），进程会挂住——因此加了 2s 硬退出的兜底定时器。
- * @returns uninstall（测试用；生产一般不卸载）
  */
-export function installShutdownHandlers(started: StartedServer, hooks: ShutdownHooks): () => void {
+export function installShutdownHandlers(started: StartedServer, hooks: ShutdownHooks): ShutdownControl {
   const signals = ['SIGTERM', 'SIGINT'] as const;
   const exit = hooks.exit ?? process.exit;
   const delayMs = hooks.exitDelayMs ?? 2000;
@@ -533,7 +550,7 @@ export function installShutdownHandlers(started: StartedServer, hooks: ShutdownH
     hard.unref();
   };
 
-  const handler = (signal: string): void => {
+  const handler = (signal: string, successExitCode = 0): void => {
     // 平台常连发多次信号（SIGTERM 后紧跟 SIGINT），第二次必须忽略，否则会重复关 DB 池并覆盖退出码
     if (closing) return;
     closing = true;
@@ -558,7 +575,7 @@ export function installShutdownHandlers(started: StartedServer, hooks: ShutdownH
       try {
         await hooks.afterDrain?.();
         hooks.logger.info('server_stopped', { signal, duration_ms: duration() });
-        finish(0);
+        finish(successExitCode);
       } catch (e) {
         // 排空已成功，但清理没干净：单独记一条，别和"排空失败"混成一个事件
         hooks.logger.error('shutdown_cleanup_failed', {
@@ -572,7 +589,10 @@ export function installShutdownHandlers(started: StartedServer, hooks: ShutdownH
   };
 
   for (const s of signals) process.on(s, handler);
-  return () => {
-    for (const s of signals) process.off(s, handler);
+  return {
+    uninstall: () => {
+      for (const s of signals) process.off(s, handler);
+    },
+    trigger: (signal, successExitCode) => handler(signal, successExitCode),
   };
 }
