@@ -175,17 +175,21 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
   );
 
   /**
-   * 是否"严格模式"：非生产环境下调用点传保留键**直接抛错**。
+   * 是否"严格模式"：**仅** development / test 下调用点传保留键直接抛错。
    *
    * @why 两种环境的最优解不同，这不是偷懒而是有理由的两套行为：
-   *      - 开发 / 测试 / 预发：越早炸越好。一个 `log.info('x', { trace_id })` 在测试里就报错，
+   *      - 开发 / 测试：越早炸越好。一个 `log.info('x', { trace_id })` 在测试里就报错，
    *        五分钟能改完；上线后它只会静默地污染聚合字段，可能几个月后才在一次事故复盘里被发现。
-   *      - 生产：**一条日志绝不能让请求失败**。为了日志字段的纯洁性把下单接口打挂，
-   *        是典型的"监控害死业务"——所以生产改为改名留痕（见 splitReserved），行为不变、可检索。
-   * @limitation 生产里的违规不会实时告警，只能靠检索 `reserved_dropped` 发现。
+   *      - 生产 / 预发：**一条日志绝不能让请求失败**。为了日志字段的纯洁性把下单接口打挂，
+   *        是典型的"监控害死业务"——所以改为改名留痕（见 splitReserved），行为不变、可检索。
+   * @why N23：staging **刻意与生产同组**而不与开发同组——预发存在的全部意义是预演生产路径
+   *      （接真实渠道、跑真实数据彩排）。staging 抛错等于预发跑的不是生产那套行为：
+   *      彩排时违规把请求打挂，或者彩排没踩到的路径上线后才露出另一副面孔。
+   *      "早炸"有 development/test 两层兜底，不需要第三层。
+   * @limitation 生产与预发里的违规不会实时告警，只能靠检索 `reserved_dropped` 发现。
    *             若将来接了 Sentry，这里可以顺手 `raw.warn` 一次（注意别递归）。
    */
-  const strict = opts.env !== 'production';
+  const strict = opts.env === 'development' || opts.env === 'test';
 
   /**
    * @param base **已经脱敏过**的固定字段。约定：传入前必须过 `redact()`，emit 不再重复脱敏。

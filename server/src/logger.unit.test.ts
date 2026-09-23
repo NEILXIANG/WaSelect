@@ -8,7 +8,7 @@ import { createLogger, levelForEnv, type Logger } from './logger.js';
 import { currentContext, runWithContext } from './context.js';
 import { MemorySink, type LogRow } from '../../test/helpers/memory-sink.js';
 
-function setup(env: 'development' | 'production' = 'development'): {
+function setup(env: 'development' | 'staging' | 'production' = 'development'): {
   sink: MemorySink;
   log: Logger;
 } {
@@ -231,6 +231,30 @@ describe('保留字段不可被调用点改写（D8 / D9）', () => {
     const { sink, log } = setup('production');
     expect(() => log.info('pay_started', { trace_id: 'FORGED' })).not.toThrow();
     expect(sink.lines).toHaveLength(1);
+  });
+
+  /**
+   * N23：staging 必须与生产同行为（改名留痕），而非与开发同行为（抛错）。
+   * @why 预发存在的全部意义是**预演生产路径**——它接真实渠道、跑真实数据彩排。
+   *      若 staging 对保留键抛错，等于预发跑的不是生产那套代码路径：
+   *      彩排时把请求打挂（监控害死业务的预演版），或更糟——彩排没踩到的违规
+   *      上线后以另一种行为出现。要"早炸"有 development/test 两层，不需要第三层。
+   */
+  it('N23：staging 与生产同行为——保留键改名留痕、不抛错', () => {
+    const { sink, log } = setup('staging');
+    expect(() => log.info('pay_started', { trace_id: 'FORGED' })).not.toThrow();
+    const row = sink.last();
+    expect(row.trace_id).toBeUndefined();
+    expect(row.field_trace_id).toBe('FORGED');
+    expect(row.reserved_dropped).toEqual(['trace_id']);
+  });
+
+  it('N23：严格模式只剩 development / test 两层（早炸留给真正的开发环）', () => {
+    const { log: devLog } = setup('development');
+    expect(() => devLog.info('x', { trace_id: 'F' })).toThrow(/保留键/);
+    const testSink = new MemorySink();
+    const testLog = createLogger({ env: 'test', destination: testSink });
+    expect(() => testLog.info('x', { trace_id: 'F' })).toThrow(/保留键/);
   });
 
   it('非保留键照常由调用点决定（order_id 之外的业务字段不受影响）', () => {
