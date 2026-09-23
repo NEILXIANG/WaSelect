@@ -28,6 +28,8 @@ function baseEnv(port: number): Record<string, string> {
     JWT_SECRET: 'main-test-jwt-secret-'.repeat(3),
     PAYMENT_CHANNELS: 'mock',
     TERMS_VERSION: 'TOS-TEST-1',
+    // N7 默认 5s 会拖慢全部停机用例；测试统一压到 50ms（专门测等待的那条自己覆盖）
+    SHUTDOWN_READY_DELAY_MS: '50',
   };
 }
 
@@ -174,6 +176,41 @@ describe('组装根 bootstrap（A1）', () => {
       expect(draining).toBeGreaterThanOrEqual(0);
       expect(drained).toBeGreaterThanOrEqual(0);
       expect(draining).toBeLessThan(drained);
+    } finally {
+      rt.uninstallSignals();
+      rt.uninstallProcessErrors();
+      await rt.server.close().catch(() => undefined);
+      await rt.db.end().catch(() => undefined);
+    }
+  });
+
+  /**
+   * N7 端到端：SIGTERM → /readyz 立刻 503 → **等待窗口内**仍然 503（平台靠它摘流）
+   * → 窗口结束后才排空关资源。这条证明配置真的流到了停机流（SHUTDOWN_READY_DELAY_MS → readyDelayMs），
+   * 且窗口期 /readyz 的语义正确——这是"平台按 503 优雅摘流"成立的全部前提。
+   */
+  it('N7：摘流等待窗口内 /readyz 持续 503，窗口结束后才完成停机', async () => {
+    const { lines, write } = sink();
+    const rt = await bootstrap({
+      env: { ...baseEnv(PORT_DEV), SHUTDOWN_READY_DELAY_MS: '400' },
+      logDestination: { write },
+      exit: () => undefined,
+    });
+    try {
+      await expect((await fetch(`http://127.0.0.1:${PORT_DEV}/readyz`)).status).toBe(200);
+      const t0 = performance.now();
+      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      // 窗口期（400ms 内）：/readyz 必须已经是 503，且停机还没完成
+      await new Promise((r) => setTimeout(r, 120));
+      await expect((await fetch(`http://127.0.0.1:${PORT_DEV}/readyz`)).status).toBe(503);
+      expect(lines.some((l) => l.includes('server_drained'))).toBe(false);
+      // 等它自己走完
+      for (let i = 0; i < 200 && !lines.some((l) => l.includes('server_stopped')); i += 1) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(performance.now() - t0).toBeGreaterThanOrEqual(380);
+      expect(lines.some((l) => l.includes('drain_ready_waited'))).toBe(true);
+      expect(lines.some((l) => l.includes('server_stopped'))).toBe(true);
     } finally {
       rt.uninstallSignals();
       rt.uninstallProcessErrors();

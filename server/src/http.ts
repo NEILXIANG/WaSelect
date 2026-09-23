@@ -488,6 +488,18 @@ export interface ShutdownHooks {
    */
   beforeDrain?: (() => Promise<void>) | undefined;
   /**
+   * N7：摘流量之后、close 之前的等待毫秒数（缺省/0 = 不等）。
+   *
+   * @why `beforeDrain` 只把 /readyz 翻成 503——但平台健康检查有**周期**（秒级），
+   *      立即 close 的话 503 窗口≈0，平台是靠"连接失败"而不是 503 发现摘流的，
+   *      窗口内的新请求会被腰斩。等这一段，是给平台一个"按 503 优雅摘流"的机会。
+   * @tradeoff 等待会拉长每次发布的停机耗时（默认 5s × 每次部署）。
+   *           换来发布窗口内几乎不丢请求——对支付回调这类"丢了要靠重放补"的流量值得。
+   * @limitation 平台不读 /readyz（或健康检查周期远大于此值）时这段等待纯属成本；
+   *             是否有效取决于平台行为，所以做成配置项（SHUTDOWN_READY_DELAY_MS）可不发版调整。
+   */
+  readyDelayMs?: number | undefined;
+  /**
    * 排空**之后**：**关资源**——关 DB 池、关 HTTP 客户端、flush 日志。
    *
    * @why 顺序绝不能反：若把"关 DB 池"放在排空之前，正在处理的请求会拿到
@@ -558,9 +570,15 @@ export function installShutdownHandlers(started: StartedServer, hooks: ShutdownH
       const startedAt = performance.now();
       const duration = (): number => Math.round(performance.now() - startedAt);
       try {
-        // ── ① 摘流量 → ② 排空存量请求 → ③ 关资源 ──────────────────────────
+        // ── ① 摘流量 → ①.5 等平台发现（N7）→ ② 排空存量请求 → ③ 关资源 ──────
         //    顺序反了（先关资源再排空）的表现是"部署窗口内一批 500"，本地无法复现。
         await hooks.beforeDrain?.();
+        const readyDelayMs = hooks.readyDelayMs ?? 0;
+        if (readyDelayMs > 0) {
+          // /readyz 已是 503，但平台健康检查有周期——给它时间真的把流量摘走再 close
+          await new Promise((r) => setTimeout(r, readyDelayMs));
+          hooks.logger.info('drain_ready_waited', { signal, delay_ms: readyDelayMs });
+        }
         await started.close();
         hooks.logger.info('server_drained', { signal, duration_ms: duration() });
       } catch (e) {

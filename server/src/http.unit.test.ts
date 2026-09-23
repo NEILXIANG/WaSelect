@@ -687,6 +687,65 @@ describe('优雅关闭', () => {
       await started.close().catch(() => undefined);
     }
   });
+
+  /**
+   * N7：摘流量（/readyz 转 503）之后必须**等一段**再 close——平台健康检查有周期，
+   * 立即 close 的话 503 窗口≈0，平台是靠"连接失败"而不是 503 发现摘流的，
+   * 窗口内的在途请求会被腰斩。延迟时长来自配置（SHUTDOWN_READY_DELAY_MS），
+   * http 层只认注入值，自己不知道策略。
+   */
+  it('N7：beforeDrain 与 close 之间等待 readyDelayMs（窗口内 /readyz 已是 503 语义）', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const started = await listen(createHttpApp({ logger }));
+    const order: string[] = [];
+    const exits: number[] = [];
+    const { uninstall } = installShutdownHandlers(started, {
+      logger,
+      beforeDrain: async () => {
+        order.push('beforeDrain');
+      },
+      readyDelayMs: 200,
+      afterDrain: async () => {
+        order.push('afterDrain');
+      },
+      exit: (code) => exits.push(code),
+      exitDelayMs: 10,
+    });
+    try {
+      const t0 = performance.now();
+      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      await vi.waitFor(() => expect(exits).toEqual([0]), { timeout: 2000 });
+      const elapsed = performance.now() - t0;
+      // 等待必须真实发生（留 10% 调度误差下限），且顺序仍是 摘流量 → 排空 → 关资源
+      expect(elapsed).toBeGreaterThanOrEqual(180);
+      expect(order).toEqual(['beforeDrain', 'afterDrain']);
+      expect(sink.find('drain_ready_waited')[0]?.delay_ms).toBe(200);
+    } finally {
+      uninstall();
+      await started.close().catch(() => undefined);
+    }
+  });
+
+  it('N7：readyDelayMs 缺省为 0（不注入就维持旧行为，测试与本地不被拖慢）', async () => {
+    const logger = createLogger({ env: 'development', destination: new MemorySink() });
+    const started = await listen(createHttpApp({ logger }));
+    const exits: number[] = [];
+    const { uninstall } = installShutdownHandlers(started, {
+      logger,
+      exit: (code) => exits.push(code),
+      exitDelayMs: 10,
+    });
+    try {
+      const t0 = performance.now();
+      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      await vi.waitFor(() => expect(exits).toEqual([0]), { timeout: 1000 });
+      expect(performance.now() - t0).toBeLessThan(500);
+    } finally {
+      uninstall();
+      await started.close().catch(() => undefined);
+    }
+  });
 });
 
 /**

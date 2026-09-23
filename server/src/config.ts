@@ -187,6 +187,13 @@ const schema = z.object({
   CALLBACK_ORDER_GRACE_MS: int(900_000, 0),
   /** 常驻调度器 tick 间隔（D-43：web 进程内 setInterval + pg_try_advisory_lock；不是 Render Cron Job）。 */
   SCHEDULER_TICK_MS: int(60000, 1000),
+  /**
+   * N7：停机时摘流量（/readyz 转 503）后、close 前的等待毫秒数。
+   * @why 平台健康检查有周期，立即 close 则 503 窗口≈0、在途请求被腰斩。
+   *      5s 是**拍的**（Render 健康检查间隔量级为几秒）：够平台发现，又不至于显著拖慢发布。
+   *      拿到平台真实摘流延迟后再校准——配置项，调整不发版。0 合法（开发/测试不等）。
+   */
+  SHUTDOWN_READY_DELAY_MS: int(5_000, 0),
   AUTO_DELIVER_DAYS: int(30, 1),
   AUTO_COMPLETE_DAYS: int(7, 1),
   /** 建单必传且必须与服务端相等，否则 40011（D-43）。必填 → 忘了配就启动失败，而不是全站下单失败。 */

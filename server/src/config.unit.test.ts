@@ -85,6 +85,7 @@ describe('loadConfig 正常路径', () => {
     expect(c.ORDER_PAYMENT_TTL_MIN).toBe(30);
     expect(c.CALLBACK_ORDER_GRACE_MS).toBe(900_000);
     expect(c.SCHEDULER_TICK_MS).toBe(60000);
+    expect(c.SHUTDOWN_READY_DELAY_MS).toBe(5_000);
     expect(c.FX_BUFFER_RATE).toBeCloseTo(0.03, 10);
   });
 
@@ -307,6 +308,7 @@ describe('数值型配置的下限', () => {
     ['PORT', '0'],
     ['PACKAGING_WEIGHT_G', '0'], // 包材 0 克会让运费向下取错档（D-46 同源的方向性错误）
     ['CALLBACK_ORDER_GRACE_MS', '-1'], // 负宽限期无意义（0 合法 = 不要宽限期）
+    ['SHUTDOWN_READY_DELAY_MS', '-1'], // 负摘流等待无意义（0 合法 = 不等，开发用）
   ];
   for (const [key, value] of bad) {
     it(`${key}=${value} 拒绝启动`, () => {

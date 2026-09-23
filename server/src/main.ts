@@ -145,6 +145,8 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
         acceptingTraffic = false;
         logger.warn('traffic_draining', { result: 'ok', ctx: { port: config.PORT } });
       },
+      // N7：摘流量后等平台健康检查发现 503 再 close（时长配置驱动，校准不发版）
+      readyDelayMs: config.SHUTDOWN_READY_DELAY_MS,
       // 关资源必须在排空之后（D1）：放在前面会让存量请求拿到"连接池已关闭"
       afterDrain: async () => {
         await closeDb(db);
