@@ -17,8 +17,9 @@ describe('AppError', () => {
 
   it('登记码的 HTTP 状态与业务码一致，不做二次映射表', () => {
     expect(new AppError(40907).httpStatus).toBe(409);
-    expect(new AppError(50002).httpStatus).toBe(500);
     expect(new AppError(42901).httpStatus).toBe(429);
+    // 回调验签失败（40103，D6 由 50002 迁来）必须是 4xx：入站方的问题不算服务端故障
+    expect(new AppError(40103).httpStatus).toBe(401);
   });
 });
 

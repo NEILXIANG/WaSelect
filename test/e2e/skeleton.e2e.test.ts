@@ -55,7 +55,11 @@ function createOrder(token: string, idempotencyKey: string, trace = TRACE) {
 
 /** 按骨架的约定给回调报文签名（HMAC-SHA256 hex）。 */
 function signedCallback(payload: unknown, secret = CALLBACK_SECRET, trace = TRACE) {
-  const body = JSON.stringify(payload);
+  return signedRaw(JSON.stringify(payload), secret, trace);
+}
+
+/** 发一段**任意原文**（可故意不是合法 JSON），签名照算——用于验证坏报文的处理。 */
+function signedRaw(body: string, secret = CALLBACK_SECRET, trace = TRACE) {
   const signature = createHmac('sha256', secret).update(Buffer.from(body)).digest('hex');
   return fetch(`${base}${MOCK_CALLBACK_PATH}`, {
     method: 'POST',
@@ -184,21 +188,45 @@ describe('行走骨架：一条链路走到底', () => {
     const events = await db`select status from order_events where order_id = ${created.order_id} order by id`;
     expect(events.map((r) => r.status)).toEqual(['created', 'paid']);
 
-    // 之后再走真实回调会被拒（状态已不是 created）——证明两条路径落到同一个状态机约束上
+    // 之后再走真实回调（状态已不是 created）→ 业务冲突，按 D5 范式收下并告警，不再回 409
     const cb = await signedCallback({ order_id: created.order_id });
-    expect(cb.status).toBe(409);
-    await expect(cb.json()).resolves.toMatchObject({ code: 40902 });
+    expect(cb.status).toBe(200);
+    await expect(cb.json()).resolves.toMatchObject({ received: true, ignored: 'status_conflict' });
+    // 且必须有我方告警——"收下"不等于"忽略"
+    expect(sink.find('callback_conflict')).toHaveLength(1);
+    // 状态没被二次改动（仍然只有一条 paid 事件）
+    const eventsAfter =
+      await db`select status from order_events where order_id = ${created.order_id} order by id`;
+    expect(eventsAfter.map((r) => r.status)).toEqual(['created', 'paid']);
   });
 
-  it('回调给了不存在的 order_id → 40400，不能静默吞掉', async () => {
+  it('回调给了不存在的 order_id → 2xx 收下 + 我方告警，不能静默吞掉', async () => {
     // @why 机构回调里出现我们没见过的单号是**真实会发生**的（测试环境串号、机构重放历史单）。
-    //      吞掉它表现为"钱到了但没单"，且没有任何日志；抛出来至少能被监控看到。
+    //      但也不能回 404：机构对任何非 2xx 都会重发，而"这张单不存在"重发一万次也不会变。
+    //      正确姿势：2xx 收下 + 落一条可检索的告警（"钱到了但没单"是最贵的一类事故）。
     const res = await signedCallback({ order_id: 'sk-does-not-exist' });
-    expect(res.status).toBe(404);
-    await expect(res.json()).resolves.toMatchObject({ code: 40400 });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ received: true, ignored: 'order_not_found' });
+    const warn = sink.find('callback_conflict')[0];
+    expect(warn?.level).toBe('warn');
+    expect(warn?.conflict).toBe('order_not_found');
     // 一次坏回调不能写出任何事件
     const events = await db`select id from order_events`;
     expect(events).toHaveLength(0);
+  });
+
+  /**
+   * @why D6 的真实形态：`JSON.parse` 抛的是**我们自己的** SyntaxError，
+   *      不带 body-parser 的 `type`/`status` 标记，http.ts 的 isBodyParseError 认不出来
+   *      → 折叠成 50000（HTTP 500）。机构收到 500 就会按退避重发 3 天，
+   *      而"这段报文永远解析不了"重发也不会变。必须回 4xx。
+   */
+  it('签名正确但报文是坏 JSON → 40001（4xx，机构不必重试），不是 50000', async () => {
+    const res = await signedRaw('{ not json at all');
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ code: 40001 });
+    // 且不能占用 5xx 通道
+    expect(sink.find('unhandled_error')).toHaveLength(0);
   });
 
   it('回调体缺 order_id → 40001（脏输入不能落到 SQL 里）', async () => {
@@ -207,23 +235,24 @@ describe('行走骨架：一条链路走到底', () => {
     await expect(res.json()).resolves.toMatchObject({ code: 40001 });
   });
 
-  it('回调验签失败 → 50002 且订单状态不变（错误签名不能改状态）', async () => {
+  it('回调验签失败 → 40103（4xx：入站方的问题，不占 5xx），订单状态不变', async () => {
     const token = await userToken();
     const created = (await (await createOrder(token, 'key-badsig')).json()) as { order_id: string };
     const res = await signedCallback({ order_id: created.order_id }, 'wrong-secret');
-    expect(res.status).toBe(500);
-    await expect(res.json()).resolves.toMatchObject({ code: 50002 });
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toMatchObject({ code: 40103 });
     const rows = await db`select status from orders where id = ${created.order_id}`;
     expect(rows[0]?.status).toBe('created');
   });
 
-  it('重复回调（已 paid）→ 40902，不产生第二条 paid 事件', async () => {
+  it('重复回调（已 paid）→ 2xx 收下 + 告警，不产生第二条 paid 事件', async () => {
     const token = await userToken();
     const created = (await (await createOrder(token, 'key-dupcb')).json()) as { order_id: string };
     expect((await signedCallback({ order_id: created.order_id })).status).toBe(200);
     const dup = await signedCallback({ order_id: created.order_id });
-    expect(dup.status).toBe(409);
-    await expect(dup.json()).resolves.toMatchObject({ code: 40902 });
+    expect(dup.status).toBe(200);
+    await expect(dup.json()).resolves.toMatchObject({ received: true, ignored: 'status_conflict' });
+    expect(sink.find('callback_conflict')).toHaveLength(1);
     const events = await db`select status from order_events where order_id = ${created.order_id}`;
     expect(events.filter((r) => r.status === 'paid')).toHaveLength(1);
   });
@@ -331,8 +360,9 @@ describe('断链验证：少配一环就必须失败', () => {
         },
         body,
       });
-      expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toMatchObject({ code: 50002 });
+      // 验签失败 = 40103（D6 后是 4xx）；这里断言的是"验签没过"，不是具体状态码
+      expect(res.status).toBe(401);
+      await expect(res.json()).resolves.toMatchObject({ code: 40103 });
     } finally {
       await broken.server.close();
       // 还原到"正常"的服务，避免影响后续用例

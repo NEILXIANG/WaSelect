@@ -224,16 +224,46 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
         const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
         const signature = req.header('x-mock-signature') ?? '';
         if (!verifySignature(raw, signature, deps.callbackSecret)) {
-          // 验签失败绝不回显细节（50002）
-          throw new AppError(50002);
+          // 40103：入站方的问题，不是我们的故障（@see shared/errors.ts 40103 的注释）
+          throw new AppError(40103);
         }
-        const parsed: unknown = JSON.parse(raw.toString('utf8'));
+
+        // ⚠️ 必须自己 try：这里的 JSON.parse 抛的是**我们自己的** SyntaxError，
+        //    不带 body-parser 的 `type` / `status` 标记，所以 http.ts 的 isBodyParseError
+        //    认不出来，会被当成未归类异常折叠成 50000 → 机构收到 500 就会一直重试。
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw.toString('utf8'));
+        } catch {
+          throw new AppError(40001, { reason: '回调报文不是合法 JSON' });
+        }
         const orderId = (parsed as { order_id?: unknown } | null)?.order_id;
         if (typeof orderId !== 'string' || orderId.length === 0) {
           throw new AppError(40001, { reason: '回调缺少 order_id' });
         }
 
-        await markPaid(deps.db, orderId);
+        // ── 业务冲突：一律 2xx + 我方告警，绝不回 4xx/5xx ──────────────────────
+        // @why 机构对**任何非 2xx**都会按退避重发（Stripe 重试 3 天、微信同理）。
+        //      "这张单不存在"/"已经是 paid 了"这类冲突**重发一万次也不会变**，
+        //      回 404/409 等于让机构无限重发，把它的重试队列和我们的错误率一起打满。
+        //      正确做法：收下（2xx），自己记 warn 告警，由人/对账任务去查。
+        // @limitation "收下"不等于"忽略"：必须落一条可检索的告警日志，
+        //             否则"钱到了但没单"（订单不存在）会彻底静默——那是最贵的一类事故。
+        try {
+          await markPaid(deps.db, orderId);
+        } catch (e) {
+          const code = e instanceof AppError ? e.code : 0;
+          if (code === 40400 || code === 40902) {
+            deps.logger.warn('callback_conflict', {
+              order_id: orderId,
+              conflict: code === 40400 ? 'order_not_found' : 'status_conflict',
+              result: 'ignored',
+            });
+            res.json({ received: true, order_id: orderId, ignored: code === 40400 ? 'order_not_found' : 'status_conflict' });
+            return;
+          }
+          throw e;
+        }
         deps.logger.info('skeleton_payment_callback', { order_id: orderId, result: 'paid' });
         res.json({ received: true, order_id: orderId });
       } catch (e) {

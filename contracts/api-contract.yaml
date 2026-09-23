@@ -18,6 +18,7 @@ x-error-codes:
     40011: 条款版本缺失或已过期
     40101: 未登录或登录已过期
     40102: 支付链接无效或已失效
+    40103: 回调验签失败（D6：入站方问题，4xx，不占 5xx 通道）
     40301: 无权限
     40400: 请求的资源不存在
     40401: 商品不存在或已下架
@@ -31,7 +32,6 @@ x-error-codes:
     42901: 请求过于频繁
     50000: 服务器内部错误
     50001: 支付创建失败
-    50002: 回调验签失败
     50003: 汇率不可用
     50004: 运费不可计算
 paths:
@@ -229,9 +229,9 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       responses: {'200': {description: OK}}
   /pay/callback/wechat:
-    post: {security: [], summary: 日本收单机构 webhook（验签、幂等）, responses: {'200': {description: 机构要求的应答体}}}
+    post: {security: [], summary: '日本收单机构 webhook（验签、幂等）。响应范式（D5/D6）：业务冲突（单不存在 / 状态不符）一律 200 + 我方告警，绝不回 4xx / 5xx——机构对任何非 2xx 都会重发，而这类冲突重发一万次也不会变；只有验签失败（40103）与报文不可解析（40001）才回 4xx。', responses: {'200': {description: 机构要求的应答体}}}
   /pay/callback/stripe:
-    post: {security: [], summary: 'Stripe webhook（raw body + Stripe-Signature 验签）：checkout.session.completed / checkout.session.expired / payment_intent.succeeded / payment_intent.payment_failed / payment_intent.canceled / charge.refunded / refund.updated / refund.failed / charge.dispute.created / charge.dispute.closed / charge.dispute.funds_withdrawn / charge.dispute.funds_reinstated（D-49/D-50）', responses: {'200': {description: OK}}}
+    post: {security: [], summary: 'Stripe webhook（raw body + Stripe-Signature 验签）：checkout.session.completed / checkout.session.expired / payment_intent.succeeded / payment_intent.payment_failed / payment_intent.canceled / charge.refunded / refund.updated / refund.failed / charge.dispute.created / charge.dispute.closed / charge.dispute.funds_withdrawn / charge.dispute.funds_reinstated（D-49/D-50）；响应范式（D5/D6）：业务冲突一律 200 + 我方告警，验签失败 40103、报文不可解析 40001', responses: {'200': {description: OK}}}
 components:
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
