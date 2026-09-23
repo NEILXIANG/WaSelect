@@ -20,7 +20,55 @@
  */
 import postgres, { type Sql } from 'postgres';
 
-export type Db = Sql<Record<string, never>>;
+/**
+ * 连接池类型。第二个泛型是**自定义类型解析后的值类型映射**——
+ * 因为下面注册了 `int8 → number`，所以这里是 `{ int8: number }` 而不是 `Record<string, never>`；
+ * 写成 `never` 会让 `createDb` 的返回值需要 `as unknown as Db` 才能编译通过，
+ * 那等于把"我们确实改了类型映射"这件事藏起来。
+ */
+export type Db = Sql<{ int8: number }>;
+
+/**
+ * `bigint`（int8）在 pg_type 里的 oid。
+ * @why 自定义类型**靠 `from` 里的 oid 匹配，不靠键名**——实测：`types: { int8: {...} }` 与
+ *      `{ bigint: {...} }` 效果完全相同，键名只是标签；而 `from: []` 会导致解析器**永远不被调用**
+ *      （我第一次探针就踩了这个坑，症状是"配了但没生效"）。oid 20 是 int8 的固定值。
+ */
+const INT8_OID = 20;
+
+/**
+ * int8 → number，**带安全整数守卫**。
+ *
+ * @why postgres.js 默认把 int8 / numeric 都返回成 **string**（因为 JS number 装不下 64 位）。
+ *      于是 `row.items_jpy + row.shipping_jpy` 从"相加"变成"字符串拼接"：
+ *      实测 `1000 + 1000` 得到 `"10001000"`——不报错、不崩溃，金额静默变成十倍。
+ *      本项目的金额字段（`items_jpy` / `total_jpy` …）全是 BIGINT，且 JPY 金额量级远小于 2^53，
+ *      所以解析成 number 是安全的，且与 `shared/money.ts`（用 number 运算）保持一致。
+ *
+ * @limitation 超出安全整数范围时**抛错而不是返回近似值**：宁可让这一条查询失败，
+ *              也不要让 `pg_table_size` 这类大数静默丢精度。真需要大数时，在 SQL 里
+ *              显式 `::text` 取回字符串，或在调用点自行 `BigInt()`。
+ * @limitation 只覆盖 int8。`numeric`(oid 1700) **刻意保持 string**——汇率要 8 位小数精度，
+ *              `Number('0.00670000')` 会在高位精度上丢信息；换算统一走
+ *              `shared/money.ts` 的 `toRateInt()`（它接受 string），不要在业务代码里直接 `Number()`。
+ * @tradeoff 序列化方向统一 `String(v)`：实测只有真正推断为 int8 的参数才会走这里，
+ *              numeric / double / int4 的参数仍由 postgres.js 自行推断（不受影响，已实测）。
+ */
+export const INT8_AS_SAFE_NUMBER: postgres.PostgresType<number> = {
+  to: INT8_OID,
+  from: [INT8_OID],
+  serialize: (value: number) => String(value),
+  parse: (raw: string): number => {
+    const asBig = BigInt(raw);
+    if (asBig > BigInt(Number.MAX_SAFE_INTEGER) || asBig < BigInt(Number.MIN_SAFE_INTEGER)) {
+      throw new Error(
+        `int8 值超出 JS 安全整数范围（${raw}）：拒绝静默丢精度。` +
+          `请在 SQL 里改用 ::text 取回，或在调用点用 BigInt 处理`,
+      );
+    }
+    return Number(asBig);
+  },
+};
 
 export interface CreateDbOptions {
   url: string;
@@ -38,7 +86,9 @@ export function createDb(opts: CreateDbOptions): Db {
   return postgres(opts.url, {
     max: opts.max ?? 10,
     connect_timeout: opts.connectTimeoutSec ?? 10,
-    // 不配置 transform：金额一律以整数（BIGINT）进出，不做任何驱动层数值转换（避免隐式取整）
+    // ⚠️ 必须配 int8 → number：默认返回 string，`a + b` 会变成字符串拼接（金额静默十倍）。
+    //    numeric **不**在这里转（保持 string 交给 toRateInt），理由见 INT8_AS_SAFE_NUMBER 的注释。
+    types: { int8: INT8_AS_SAFE_NUMBER },
   }) as Db;
 }
 

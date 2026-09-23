@@ -62,6 +62,65 @@ describe('连接与探活', () => {
   });
 });
 
+/**
+ * int8 / numeric 的类型映射（D2）。
+ *
+ * @why postgres.js 默认把 int8 与 numeric 都返回 **string**。于是业务代码里
+ *      `items_jpy + shipping_jpy` 从"相加"变成"字符串拼接"——实测 `1000 + 1000`
+ *      得到 `"10001000"`：不报错、类型检查也过（列值是动态类型），金额静默变十倍。
+ *      这类缺陷不会在测试里表现为红灯，除非**专门断言算术结果**。
+ */
+describe('int8 / numeric 映射（D2）', () => {
+  it('int8 读回来是 number，且相加是算术而不是拼接', async () => {
+    const rows = await db`select 1000::int8 as a, 1000::int8 as b`;
+    const a = rows[0]?.a;
+    const b = rows[0]?.b;
+    expect(typeof a).toBe('number');
+    // 这一条就是缺陷本身：string + string = '10001000'
+    expect((a as number) + (b as number)).toBe(2000);
+  });
+
+  it('count(*) 是 number 而不是字符串（"3" 会让计数比较全部失配）', async () => {
+    await db`insert into users (id, openid) values ('u-c1', 'o-c1')`;
+    await db`insert into users (id, openid) values ('u-c2', 'o-c2')`;
+    const rows = await db`select count(*) as c from users`;
+    expect(rows[0]?.c).toBe(2);
+  });
+
+  it('订单金额列读回是 number（金额字段全为 BIGINT）', async () => {
+    await db`insert into users (id, openid) values ('u-amt', 'o-amt')`;
+    await db`insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, total_jpy, fx_snapshot, address_snapshot, terms_version, expires_at)
+             values ('o-amt', '260923-K7Q2MQ', 'u-amt', 'created', 1000, 500, 1500, '{}', '{}', 'TOS', now())`;
+    const rows = await db`select items_jpy, shipping_jpy, total_jpy from orders where id = 'o-amt'`;
+    const row = rows[0];
+    expect(row?.items_jpy).toBe(1000);
+    expect(row?.shipping_jpy).toBe(500);
+    // 若还是 string，这里会得到 1000500 或 '1000500' 之外的拼接结果
+    expect((row?.items_jpy as number) + (row?.shipping_jpy as number)).toBe(1500);
+    expect(row?.total_jpy).toBe(1500);
+  });
+
+  it('超出 JS 安全整数范围时抛错，而不是静默丢精度', async () => {
+    await expect(db`select 9223372036854775807::int8 as huge`).rejects.toThrow(/安全整数/);
+  });
+
+  it('numeric 仍然是 string（汇率精度不能交给 number）', async () => {
+    // @why 汇率是 numeric(…,8)；Number('0.00670000') 之后再做 ×1e8 的换算会在高位丢精度。
+    //      换算统一走 shared/money.ts 的 toRateInt()（它接受 string）。
+    const rows = await db`select 0.00670000::numeric(12,8) as rate`;
+    expect(typeof rows[0]?.rate).toBe('string');
+  });
+
+  it('写入方向不受影响：numeric / double / int4 参数仍按各自类型落库', async () => {
+    // @why 自定义 int8 类型若劫持了"所有 number 参数"的序列化，
+    //      这条用例会红（汇率 0.0067 会被当成 bigint 写入而变 0 或报错）。
+    const rows = await db`select ${0.0067}::numeric(12,6) as n, ${1.5}::double precision as d, ${42}::integer as i`;
+    expect(String(rows[0]?.n)).toBe('0.006700');
+    expect(rows[0]?.d).toBe(1.5);
+    expect(rows[0]?.i).toBe(42);
+  });
+});
+
 describe('事务', () => {
   it('提交后数据可见', async () => {
     await withTransaction(db, async (tx) => {
