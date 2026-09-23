@@ -140,6 +140,93 @@ describe('并发', () => {
   });
 });
 
+/**
+ * D3：崩溃遗留的占位行必须能被接管。
+ *
+ * @why 没有租约时，"抢到占位之后、写回结果之前"进程崩溃，那行会永远停在占位态——
+ *      同一个幂等键**永久**返回 40903。崩溃在小内存实例上是常态（OOM / 平台重启 / 部署），
+ *      而这事的后果是"用户这一单再也下不了"，且服务端看不出任何异常（只是又一个 40903）。
+ */
+describe('崩溃遗留的占位行（D3）', () => {
+  /** 手工造一条"抢到占位后进程就没了"的行：占位态 + 租约已过期。 */
+  async function insertStalePlaceholder(key: string, lockedUntilSql: string): Promise<void> {
+    await db.unsafe(
+      `insert into idempotency_keys (key, user_id, route, status_code, response, request_hash, locked_until)
+       values ('${key}', 'u-1', 'POST /orders', 0, '{}'::jsonb, '', ${lockedUntilSql})`,
+    );
+  }
+
+  it('租约已过期的占位可以被接管，键不会永久卡死', async () => {
+    await insertStalePlaceholder('k-crash', "now() - interval '1 minute'");
+    const result = await withIdempotency(
+      db,
+      { ...args('k-crash'), waitMs: 300, pollMs: 20 },
+      async () => ({ status: 201, body: { order_no: 'W20260922-000003' } }),
+    );
+    expect(result.replayed).toBe(false);
+    expect(result.body).toEqual({ order_no: 'W20260922-000003' });
+  });
+
+  it('租约**未**过期时不得接管（否则就是重复执行 handler）', async () => {
+    await insertStalePlaceholder('k-live', "now() + interval '1 hour'");
+    await expect(
+      withIdempotency(
+        db,
+        { ...args('k-live'), waitMs: 80, pollMs: 20 },
+        async () => ({ status: 201, body: { order_no: 'SHOULD-NOT-RUN' } }),
+      ),
+    ).rejects.toMatchObject({ code: 40903 });
+  });
+});
+
+/**
+ * D4：同一个键换了内容，必须报错而不是返回首次结果。
+ * @why 不比对指纹时，客户端复用键的 bug 会被静默吞掉：用户以为下了第二单，
+ *      实际上第二单从未创建——而这条日志与正常重放**长得一模一样**，事后无从分辨。
+ */
+describe('请求指纹（D4）', () => {
+  it('同键不同内容 → 40908，绝不返回首次结果', async () => {
+    const first = await withIdempotency(
+      db,
+      { ...args('k-fp'), request: { sku: 'S1', qty: 1 } },
+      async () => ({ status: 201, body: { order_no: 'W-FIRST' } }),
+    );
+    expect(first.replayed).toBe(false);
+
+    await expect(
+      withIdempotency(
+        db,
+        { ...args('k-fp'), request: { sku: 'S2', qty: 9 } },
+        async () => ({ status: 201, body: { order_no: 'W-SECOND' } }),
+      ),
+    ).rejects.toMatchObject({ code: 40908 });
+  });
+
+  it('键顺序不同但内容相同 → 仍算同一次请求（指纹必须稳定）', async () => {
+    await withIdempotency(
+      db,
+      { ...args('k-fp2'), request: { sku: 'S1', qty: 1 } },
+      async () => ({ status: 201, body: { order_no: 'W-ORDER-A' } }),
+    );
+    const replay = await withIdempotency(
+      db,
+      { ...args('k-fp2'), request: { qty: 1, sku: 'S1' } }, // 键顺序反了
+      async () => ({ status: 201, body: { order_no: 'W-ORDER-B' } }),
+    );
+    expect(replay.replayed).toBe(true);
+    expect(replay.body).toEqual({ order_no: 'W-ORDER-A' });
+  });
+
+  it('不传 request 时不校验指纹（给确实没有入参的接口留口子）', async () => {
+    await withIdempotency(db, args('k-noreq'), async () => ({ status: 200, body: { ok: 1 } }));
+    const replay = await withIdempotency(db, args('k-noreq'), async () => ({
+      status: 200,
+      body: { ok: 2 },
+    }));
+    expect(replay.replayed).toBe(true);
+  });
+});
+
 describe('scopeKey', () => {
   it('按用户 + 路由 + 客户端键分作用域，避免跨用户撞键', () => {
     expect(scopeKey({ userId: 'u-1', route: 'POST /orders', clientKey: 'abc' })).toBe(

@@ -12,10 +12,31 @@
  * @limitation 必须在 db project（串行）里跑：它会把整库 DROP 再建回来，
  *              并行会让别的用例读到"表不存在"。
  */
+import { readdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from '../../server/src/db.js';
 import { closeDb } from '../../server/src/db.js';
 import { ensureTestDb, runMigrations, testDb } from './test-db.js';
+
+/**
+ * 迁移文件名（不含扩展名），即 `pgmigrations.name`。
+ *
+ * @why 曾经在测试里写死 `['001_init', '002_hardening']` 和 `down 2`：
+ *      新增 003 之后这两处**同时**变红，而它们红的理由跟"迁移写得对不对"毫无关系——
+ *      纯粹是计数漂移。这类断言会让"加一张迁移"变成"改测试"的心理负担，
+ *      久而久之有人会为了不改测试而把改动塞进旧迁移（那才是真正危险的做法）。
+ *      从目录推导，加迁移时本测试自动跟随，只有 down 脚本真写错时它才会红。
+ */
+function migrationNames(): string[] {
+  // ESM 下没有 __dirname：用 import.meta.url 推导（比 `import.meta.dirname` 兼容性更好）
+  const dir = resolve(dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .map((f) => f.replace(/\.sql$/, ''))
+    .sort();
+}
 
 let db: Db;
 
@@ -61,7 +82,7 @@ describe('迁移 up → down → up', () => {
     const before = await businessTables();
     expect(before.length).toBeGreaterThan(10);
 
-    runMigrations('down', 2);
+    runMigrations('down', migrationNames().length);
     expect(await businessTables()).toEqual([]);
 
     runMigrations('up');
@@ -81,8 +102,22 @@ describe('迁移 up → down → up', () => {
     expect(rows.map((r) => String(r.name))).toEqual(['daily', 'tick']);
   });
 
-  it('迁移账本只记录两张迁移，没有重复条目', async () => {
+  it('迁移账本与 migrations/ 目录一一对应，没有重复也没有遗漏', async () => {
     const rows = await db`select name from pgmigrations order by name`;
-    expect(rows.map((r) => String(r.name))).toEqual(['001_init', '002_hardening']);
+    expect(rows.map((r) => String(r.name))).toEqual(migrationNames());
+  });
+
+  it('003 的加列与索引在往返之后仍然都在（漏 DROP 会让二次 up 失败）', async () => {
+    const cols = await db`
+      select column_name from information_schema.columns
+      where table_name in ('users','idempotency_keys')
+      order by column_name
+    `;
+    const names = cols.map((r) => String(r.column_name));
+    expect(names).toContain('token_ver');
+    expect(names).toContain('request_hash');
+    expect(names).toContain('locked_until');
+    expect(names).toContain('completed_at');
+    expect(await businessTables()).toContain('webhook_events');
   });
 });

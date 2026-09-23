@@ -32,6 +32,8 @@ import { withTransaction, type Db } from './db.js';
 import { AppError } from './errors.js';
 import { scopeKey, withIdempotency } from './idempotency.js';
 import type { Logger } from './logger.js';
+import type { IdentityCheck } from './identity.js';
+import { claimWebhookEvent, finishWebhookEvent, payloadHash } from './webhooks.js';
 
 export interface SkeletonDeps {
   db: Db;
@@ -47,6 +49,11 @@ export interface SkeletonDeps {
    * `test` 与 `development` 同级（D17）——Vitest 会把 NODE_ENV 设成 test。
    */
   env: 'development' | 'staging' | 'test' | 'production';
+  /**
+   * 身份状态查询（D25）。**可选**：不传则只验 JWT、不查库（骨架期与单元测试用）。
+   * 生产装配必须传，否则改密 / 封禁后旧 token 在有效期内仍可用。
+   */
+  identity?: IdentityCheck | undefined;
 }
 
 /** 骨架路由前缀：显式标注"脚手架"，防止被误当成正式 API。 */
@@ -165,7 +172,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
   }
 
   // ── 1. 建单：鉴权 + 幂等 + 事务写库 ──────────────────────────────────────
-  app.post(`${PREFIX}/orders`, requireRole('user', deps.auth), (req, res, next) => {
+  app.post(`${PREFIX}/orders`, requireRole('user', deps.auth, { identity: deps.identity }), (req, res, next) => {
     void (async () => {
       try {
         const sub = req.auth?.sub;
@@ -243,6 +250,37 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           throw new AppError(40001, { reason: '回调缺少 order_id' });
         }
 
+        // ── 回调登记（D3）：先落一行"我们收到过"，再去处理 ──────────────────────
+        // @why 登记必须在**处理之前**：只有"收到"这件事是确定的，处理结果可能失败、可能冲突。
+        //      反过来（处理完才登记）会让"处理崩溃的回调"在表里彻底消失，
+        //      于是对账任务永远看不到它——那正是最需要被看到的那一类。
+        const eventIdRaw = (parsed as { event_id?: unknown } | null)?.event_id;
+        const webhook = {
+          provider: 'mock',
+          // 机构没给 event_id 时（骨架的模拟回调就没有），用原文摘要兜底：
+          // 内容完全相同的重复投递因此也能被识别
+          eventId:
+            typeof eventIdRaw === 'string' && eventIdRaw.length > 0
+              ? eventIdRaw
+              : `sha256:${payloadHash(raw)}`,
+          eventType: 'payment.succeeded',
+          hash: payloadHash(raw),
+        };
+        const claim = await claimWebhookEvent(deps.db, webhook);
+        if (claim === 'handled') {
+          // 重复投递：直接收下，不重复处理——但必须留一条可检索的日志，
+          // 否则"机构在重发"这件事会被当成"一切正常"
+          deps.logger.info('webhook_duplicate', {
+            order_id: orderId,
+            provider: webhook.provider,
+            result: 'ignored',
+            ctx: { event_id: webhook.eventId },
+          });
+          res.json({ received: true, order_id: orderId, duplicate: true });
+          return;
+        }
+        // claim === 'retry'：上次没处理成功（订单当时还不存在 / 进程崩了），这一次重新走一遍
+
         // ── 业务冲突：一律 2xx + 我方告警，绝不回 4xx/5xx ──────────────────────
         // @why 机构对**任何非 2xx**都会按退避重发（Stripe 重试 3 天、微信同理）。
         //      "这张单不存在"/"已经是 paid 了"这类冲突**重发一万次也不会变**，
@@ -255,16 +293,23 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
         } catch (e) {
           const code = e instanceof AppError ? e.code : 0;
           if (code === 40400 || code === 40902) {
+            const conflict = code === 40400 ? 'order_not_found' : 'status_conflict';
             deps.logger.warn('callback_conflict', {
               order_id: orderId,
-              conflict: code === 40400 ? 'order_not_found' : 'status_conflict',
+              conflict,
               result: 'ignored',
             });
-            res.json({ received: true, order_id: orderId, ignored: code === 40400 ? 'order_not_found' : 'status_conflict' });
+            await finishWebhookEvent(deps.db, {
+              ...webhook,
+              result: `ignored:${conflict}`,
+              note: '业务冲突：重发也不会变，靠对账而非重试',
+            });
+            res.json({ received: true, order_id: orderId, ignored: conflict });
             return;
           }
           throw e;
         }
+        await finishWebhookEvent(deps.db, { ...webhook, result: 'paid' });
         deps.logger.info('skeleton_payment_callback', { order_id: orderId, result: 'paid' });
         res.json({ received: true, order_id: orderId });
       } catch (e) {
@@ -278,7 +323,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
   //      真实的回调是机构打给我们的（小程序端签不了名），所以骨架期需要这个入口代替机构。
   // @limitation **业务期必须删除**：它会绕过验签直接改订单状态，留在生产等于任何人都能把单改成已支付。
   //              同 markPaid() 复用状态回写逻辑，避免"模拟能过、真实回调失败"的分叉。
-  app.post(`${PREFIX}/orders/:id/simulate-paid`, requireRole('user', deps.auth), (req, res, next) => {
+  app.post(`${PREFIX}/orders/:id/simulate-paid`, requireRole('user', deps.auth, { identity: deps.identity }), (req, res, next) => {
     void (async () => {
       try {
         const sub = req.auth?.sub;
@@ -296,7 +341,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
   });
 
   // ── 4. 读回：证明状态真的回写了（端到端测试的最后一环）────────────────────
-  app.get(`${PREFIX}/orders/:id`, requireRole('user', deps.auth), (req, res, next) => {
+  app.get(`${PREFIX}/orders/:id`, requireRole('user', deps.auth, { identity: deps.identity }), (req, res, next) => {
     void (async () => {
       try {
         const sub = req.auth?.sub;

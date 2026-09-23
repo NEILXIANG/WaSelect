@@ -21,6 +21,7 @@ import {
   type AuthConfig,
   type Principal,
 } from './auth.js';
+import type { IdentityCheck } from './identity.js';
 import { decodeJwt } from 'jose';
 
 const cfg: AuthConfig = { secret: 'a'.repeat(40), issuer: 'waselect-test' };
@@ -180,16 +181,16 @@ describe('requireRole 中间件（真 HTTP）', () => {
     close = undefined;
   });
 
-  async function serve() {
+  async function serve(identity?: IdentityCheck) {
     const sink = new MemorySink();
     const logger = createLogger({ env: 'development', destination: sink });
     const app = createHttpApp({
       logger,
       mount: (a: Express) => {
-        a.get('/api/v1/me', requireRole('user', cfg), (req, res) =>
+        a.get('/api/v1/me', requireRole('user', cfg, { identity }), (req, res) =>
           res.json({ sub: req.auth?.sub }),
         );
-        a.get('/admin/orders', requireRole('admin', cfg), (req, res) =>
+        a.get('/admin/orders', requireRole('admin', cfg, { identity }), (req, res) =>
           res.json({ sub: req.auth?.sub }),
         );
       },
@@ -247,7 +248,96 @@ describe('requireRole 中间件（真 HTTP）', () => {
     // D22：actor 记到具体的人，只记角色无法追责
     expect(row?.actor).toBe('user:u-1');
   });
+
+describe('身份状态回源校验（D25）', () => {
+  /** 固定身份：未封禁、ver=1。 */
+  const alive: IdentityCheck = { load: async () => ({ tokenVer: 1, blockedAt: null }) };
+
+  it('ver 对不上 → 40101（改密后旧 token 必须失效）', async () => {
+    const { baseUrl } = await serve({ load: async () => ({ tokenVer: 2, blockedAt: null }) });
+    const res = await fetch(`${baseUrl}/api/v1/me`, {
+      headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+    });
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toMatchObject({ code: 40101 });
+  });
+
+  it('已封禁 → 40301 而不是 401（401 会让前端陷入无限重登）', async () => {
+    const { baseUrl } = await serve({
+      load: async () => ({ tokenVer: 1, blockedAt: new Date() }),
+    });
+    const res = await fetch(`${baseUrl}/api/v1/me`, {
+      headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+    });
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({ code: 40301 });
+  });
+
+  it('用户已不存在 → 40101（token 合法但主体没了）', async () => {
+    const { baseUrl } = await serve({ load: async () => null });
+    const res = await fetch(`${baseUrl}/api/v1/me`, {
+      headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('状态正常时放行（不能误伤）', async () => {
+    const { baseUrl } = await serve(alive);
+    const res = await fetch(`${baseUrl}/api/v1/me`, {
+      headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('不传 identity 时不查库（骨架期与单元测试的口子，行为与改造前一致）', async () => {
+    const { baseUrl } = await serve(undefined);
+    const res = await fetch(`${baseUrl}/api/v1/me`, {
+      headers: { authorization: `Bearer ${await signToken(user, cfg)}` },
+    });
+    expect(res.status).toBe(200);
+  });
 });
+});
+
+/**
+ * D15：bcrypt 只取前 **72 字节**，超长口令的尾部不参与校验。
+ * @why 曾经 `hashPassword('a'*72 + 'SUFFIX1')` 与 `'a'*72 + 'DIFFERENT'` 互相都能校验通过
+ *      ——两个**不同**的口令被当成同一个（复现缺陷 D15）。管理员用长 passphrase 时尤其危险：
+ *      他以为自己设了 20 个词的口令，实际只有前 72 字节生效，而这件事没有任何提示。
+ */
+describe('口令哈希：72 字节截断（D15）', () => {
+  it('72 字节之后的差异也必须参与校验', async () => {
+    const hash = await hashPassword(`${'a'.repeat(72)}SUFFIX1`);
+    await expect(verifyPassword(`${'a'.repeat(72)}DIFFERENT`, hash)).resolves.toBe(false);
+    await expect(verifyPassword(`${'a'.repeat(72)}SUFFIX1`, hash)).resolves.toBe(true);
+  });
+
+  it('多字节口令（日本語）按**字节**而非字符截断', async () => {
+    // 25 个 'あ' = 75 字节，差异在第 76 字节——若按字符数算（25 < 72）会以为没超限而漏判
+    const hash = await hashPassword(`${'あ'.repeat(25)}X`);
+    await expect(verifyPassword(`${'あ'.repeat(25)}X`, hash)).resolves.toBe(true);
+    await expect(verifyPassword(`${'あ'.repeat(25)}Y`, hash)).resolves.toBe(false);
+  });
+
+  it('超长输入被拒（防 DoS，不是安全上限）', async () => {
+    await expect(hashPassword('x'.repeat(1025))).rejects.toThrow(/过长|1024/);
+    // 校验侧不抛错，一律按"不匹配"处理——避免用异常内容探测出系统行为
+    await expect(verifyPassword('x'.repeat(1025), 'whatever')).resolves.toBe(false);
+  });
+
+  it('空口令仍然可用（不替调用方做业务判断）', async () => {
+    const hash = await hashPassword('');
+    await expect(verifyPassword('', hash)).resolves.toBe(true);
+  });
+});
+
+/**
+ * D25：JWT 验签通过 ≠ 这个人现在还能用。
+ *
+ * @why token 里早就有 `ver` 字段、users 表早就有 `blocked_at`，但校验时**两个都不看**——
+ *      于是改密之后旧 token 依然能进后台（管理员有效期 12 小时），
+ *      凭据泄露的处置窗口被硬生生拉到 12 小时。这是"字段都齐了、就差一步比对"的典型。
+ */
 
 describe('bearerOf', () => {
   it('大小写不敏感地识别 Bearer，缺失时返回 undefined', () => {

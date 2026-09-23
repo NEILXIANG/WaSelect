@@ -30,6 +30,7 @@ import { loadConfig, redactConfig, type AppConfig } from './config.js';
 import { createHttpApp, installShutdownHandlers, listen, type StartedServer } from './http.js';
 import { createLogger, type Logger } from './logger.js';
 import { MOCK_CALLBACK_PATH, mountSkeleton } from './skeleton.js';
+import { createIdentityCheck, withIdentityCache } from './identity.js';
 
 /**
  * 是否挂载骨架路由。**生产不挂。**
@@ -116,6 +117,8 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
           callbackSecret: config.JWT_SECRET,
           env: config.NODE_ENV,
+          // D25：带上身份状态查询，改密 / 封禁后才能真的把旧 token 挡在门外
+          identity: withIdentityCache(createIdentityCheck(db)),
         });
       },
     });

@@ -245,16 +245,73 @@ describe('行走骨架：一条链路走到底', () => {
     expect(rows[0]?.status).toBe('created');
   });
 
-  it('重复回调（已 paid）→ 2xx 收下 + 告警，不产生第二条 paid 事件', async () => {
+  /**
+   * 重复投递（**同一个 event_id**）→ 在回调层就被识别，不再碰业务。
+   *
+   * @why 机构的重发是**同一个事件**的同一份报文；把它一路放进业务逻辑再靠状态冲突挡住，
+   *      等于每次重发都要走一遍事务、并在日志里留一条 warn——
+   *      于是"机构在重发"（完全正常）会把真正的冲突告警淹没。
+   *      去重放在最外层，告警才有信噪比。
+   */
+  it('同一 event_id 重投 → duplicate:true，业务层不再执行', async () => {
     const token = await userToken();
     const created = (await (await createOrder(token, 'key-dupcb')).json()) as { order_id: string };
-    expect((await signedCallback({ order_id: created.order_id })).status).toBe(200);
-    const dup = await signedCallback({ order_id: created.order_id });
+    const payload = { order_id: created.order_id, event_id: 'evt-dup-1' };
+    expect((await signedCallback(payload)).status).toBe(200);
+
+    const dup = await signedCallback(payload);
     expect(dup.status).toBe(200);
-    await expect(dup.json()).resolves.toMatchObject({ received: true, ignored: 'status_conflict' });
+    await expect(dup.json()).resolves.toMatchObject({ received: true, duplicate: true });
+    // 业务层根本没被调用：没有冲突告警、没有第二条 paid 事件
+    expect(sink.find('callback_conflict')).toHaveLength(0);
+    expect(sink.find('webhook_duplicate')).toHaveLength(1);
+    const events = await db`select status from order_events where order_id = ${created.order_id}`;
+    expect(events.filter((r) => r.status === 'paid')).toHaveLength(1);
+  });
+
+  /** 不同的事件（不同 event_id）落在已支付的订单上 → 才是真正的业务冲突。 */
+  it('另一个事件（不同 event_id）落在已支付订单 → 2xx 收下 + 告警，不产生第二条 paid 事件', async () => {
+    const token = await userToken();
+    const created = (await (await createOrder(token, 'key-conflict')).json()) as {
+      order_id: string;
+    };
+    expect(
+      (await signedCallback({ order_id: created.order_id, event_id: 'evt-a' })).status,
+    ).toBe(200);
+    const second = await signedCallback({ order_id: created.order_id, event_id: 'evt-b' });
+    expect(second.status).toBe(200);
+    await expect(second.json()).resolves.toMatchObject({
+      received: true,
+      ignored: 'status_conflict',
+    });
     expect(sink.find('callback_conflict')).toHaveLength(1);
     const events = await db`select status from order_events where order_id = ${created.order_id}`;
     expect(events.filter((r) => r.status === 'paid')).toHaveLength(1);
+  });
+
+  /**
+   * 回调比订单先到 → 首轮 order_not_found，**同一 event_id 重发时必须能再处理一次**。
+   * @why 这是"去重 vs 正确性"冲突时的裁决场景：去重只是优化，
+   *      "钱到了但订单没变成 paid"是事故。三态里的 `retry` 就是为它存在的。
+   */
+  it('回调先到（order_not_found）→ 同一个 event_id 重发时能补上', async () => {
+    const token = await userToken();
+    // 先发一个指向尚未创建订单的回调
+    const early = await signedCallback({ order_id: 'sk-later', event_id: 'evt-early' });
+    expect(early.status).toBe(200);
+    await expect(early.json()).resolves.toMatchObject({
+      received: true,
+      ignored: 'order_not_found',
+    });
+
+    // 订单随后建好
+    const created = (await (await createOrder(token, 'key-late')).json()) as { order_id: string };
+    // 机构重发**同一个** event_id（这次带上真实单号）
+    const retry = await signedCallback({ order_id: created.order_id, event_id: 'evt-early' });
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({ received: true });
+    const rows = await db`select status from orders where id = ${created.order_id}`;
+    expect(rows[0]?.status).toBe('paid');
   });
 });
 

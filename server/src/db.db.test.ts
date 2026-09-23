@@ -240,13 +240,14 @@ describe('迁移本身', () => {
     const tables = (
       await db`select tablename from pg_tables where schemaname = 'public' and tablename <> 'pgmigrations' order by tablename`
     ).map((r) => r.tablename);
-    // 13（001）+ 2（002 的 user_events / admin_audit，ADR-29 流 B/C 落点）。
-    // ⚠️ 技术文档 v0.5 §3 仍写"13 张表"，需同步补这两张——见 002_hardening.sql @limitation 二。
-    expect(tables).toHaveLength(15);
+    // 13（001）+ 2（002 的 user_events / admin_audit，ADR-29 流 B/C 落点）+ 1（003 的 webhook_events）。
+    // ⚠️ 技术文档 v0.5 §3 仍写"13 张表"，需同步补这三张——见 002_hardening.sql @limitation 二。
+    expect(tables).toHaveLength(16);
     expect(tables).toContain('orders');
     expect(tables).toContain('job_runs');
     expect(tables).toContain('user_events');
     expect(tables).toContain('admin_audit');
+    expect(tables).toContain('webhook_events');
   });
 
   it('job_runs 有 seed（否则看门狗永远读不到心跳）', async () => {
@@ -293,6 +294,26 @@ describe('002 加固：约束真的会拦', () => {
     }
     const rows = await db`select status from orders where id like 'o-s-%'`;
     expect(rows).toHaveLength(statuses.length);
+  });
+
+  /**
+   * D19：邮箱唯一必须**大小写不敏感**。
+   * @why `UNIQUE(email)` 只保证精确唯一：`Bob@Example.com` 与 `bob@example.com` 能共存，
+   *      于是同一个管理员有两个账号，登录时大小写不一致还会"找不到人"。
+   *      这类问题在 seed 阶段看不出来（seed 只用一种写法），要到第二个管理员加入时才暴露。
+   */
+  it('email 仅大小写不同也算重复（lower(email) 唯一索引）', async () => {
+    await db`insert into users (id, email) values ('u-mail-1', 'Bob@Example.com')`;
+    await expect(
+      db`insert into users (id, email) values ('u-mail-2', 'bob@example.com')`,
+    ).rejects.toThrow(/users_email_lower_key|duplicate key/i);
+  });
+
+  it('email 为 NULL 时不触发唯一冲突（多人没填邮箱是正常的）', async () => {
+    await db`insert into users (id, openid) values ('u-no-mail-1', 'o-nm-1')`;
+    await db`insert into users (id, openid) values ('u-no-mail-2', 'o-nm-2')`;
+    const rows = await db`select id from users where id like 'u-no-mail-%'`;
+    expect(rows).toHaveLength(2);
   });
 
   it('审计表 append-only：order_events 的 UPDATE / DELETE 都被拒', async () => {

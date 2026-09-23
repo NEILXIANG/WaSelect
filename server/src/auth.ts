@@ -19,11 +19,13 @@
  *
  * @see 技术文档 v0.5 §5（鉴权）、D-52（管理端在 Cloudflare Access 之后）、docs/地基搭建清单.md F6b
  */
+import { createHash } from 'node:crypto';
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import bcrypt from 'bcryptjs';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { AppError } from './errors.js';
 import { patchContext } from './context.js';
+import type { IdentityCheck } from './identity.js';
 
 /** 角色：小程序用户与管理员是两套完全独立的入口（ADR-21：管理端为独立 Web）。 */
 export type Role = 'user' | 'admin';
@@ -169,9 +171,17 @@ export function bearerOf(req: Request): string | undefined {
 
 /**
  * 角色守卫中间件：校验通过后在 `req.auth` 上挂身份，并把 user_id/actor 写进日志上下文。
+ *
  * @param role 期望角色；`user` 路由用 'user'，管理端路由一律 'admin'
+ * @param cfg 鉴权配置
+ * @param identity 身份状态查询（D25）。**不传则不查库**——保留给"还没接库"的骨架期与单元测试；
+ *                 生产装配必须传（main.ts），否则改密/封禁无法即时生效。
  */
-export function requireRole(role: Role, cfg: AuthConfig): RequestHandler {
+export function requireRole(
+  role: Role,
+  cfg: AuthConfig,
+  opts?: { identity?: IdentityCheck | undefined },
+): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
     const token = bearerOf(req);
     if (token === undefined) {
@@ -180,11 +190,31 @@ export function requireRole(role: Role, cfg: AuthConfig): RequestHandler {
     }
     // 把期望角色传下去：`aud` 由 jose 在验签阶段强制比对，比"验完再看 role"早一步拒绝
     verifyToken(token, cfg, role)
-      .then((principal) => {
+      .then(async (principal) => {
         if (principal.role !== role) {
           // 角色不符是 403 而不是 401：已认证但无权，前端应隐藏入口而不是重新登录
           next(new AppError(40301, { expected: role, actual: principal.role }));
           return;
+        }
+        // ── 回源查身份状态（D25）：JWT 验签通过 ≠ 这个人现在还能用 ──────────────
+        if (opts?.identity !== undefined) {
+          const record = await opts.identity.load(principal.sub);
+          if (record === null) {
+            // 人没了（注销 / 数据清理）：token 本身是合法签发的，但指向的主体已不存在
+            next(new AppError(40101));
+            return;
+          }
+          if (record.blockedAt !== null) {
+            // 封禁：403 而不是 401。返回 401 会让前端"静默重新登录并重放"，
+            // 于是被封禁的用户会陷入无限重登循环——而"你被封禁了"这个事实被完全掩盖。
+            next(new AppError(40301, { reason: 'blocked' }));
+            return;
+          }
+          if (record.tokenVer !== (principal.ver ?? 1)) {
+            // 改密 / 主动下线：token 已过期，重新登录是正确动作
+            next(new AppError(40101, { reason: 'token_version_mismatch' }));
+            return;
+          }
         }
         req.auth = principal;
         // 写进日志上下文：此后这条请求链路上的所有日志都带 user_id，无需每个 handler 手动传。
@@ -199,17 +229,55 @@ export function requireRole(role: Role, cfg: AuthConfig): RequestHandler {
 }
 
 /**
- * 口令哈希（管理员登录用）。
- * @limitation bcrypt 截断 72 字节，超长口令会被静默截断——入口处应限制口令长度 ≤ 72 字节。
+ * 口令长度上限（**字符数**，非字节）：1024。
+ * @why 有了预哈希之后长度不再受 bcrypt 的 72 字节限制，但仍要挡住"传 10MB 字符串进来"这种
+ *      输入——那不是安全问题（bcrypt 成本仍在），而是白白的 CPU/内存浪费（DoS 面）。
+ *      取 1024 是因为它远超任何真实口令/passphrase 的长度，不会误伤。
  */
-export async function hashPassword(plain: string): Promise<string> {
-  return bcrypt.hash(plain, BCRYPT_COST);
+export const PASSWORD_MAX_CHARS = 1024;
+
+/**
+ * 预哈希：把任意长度口令压成 64 个十六进制字符（< 72 字节），**彻底**绕开 bcrypt 的截断。
+ *
+ * @why 直接用 bcrypt 时，`'a'*72 + 'SUFFIX1'` 与 `'a'*72 + 'DIFFERENT'` 会互相校验通过——
+ *      两个不同的口令被当成同一个，且全程没有任何提示（复现缺陷 D15）。
+ *      对管理员用长 passphrase（20 个词）的场景，这等于"以为设了强口令，实际只用了前 72 字节"。
+ *
+ * @why 用 **SHA-256 而不是 HMAC-SHA256**：HMAC 需要一把密钥，而密钥一旦轮换（JWT_SECRET 轮换是既定需求）
+ *      **所有人的口令会同时失效**——那是"改密钥 → 全站强制重置密码"的耦合，代价远大于收益。
+ *      无盐预哈希是否削弱安全性？不削弱：bcrypt 自带每哈希随机盐，最终哈希仍互不相同；
+ *      攻击者拿到库后对每个候选口令仍要付一次完整的 bcrypt 成本，预哈希只是把"超长输入"变短。
+ *
+ * @limitation 与"标准 bcrypt 哈希"不再兼容。若将来要导入外部系统导出的 `$2b$` 哈希，
+ *             不能直接喂给 verifyPassword（它期待的是 sha256 之后的 bcrypt）。
+ *             届时的做法是在哈希串上加前缀（如 `v2$`）做版本区分，而不是退回无预哈希。
+ * @tradeoff 换来"任意长度口令都完整参与校验"，代价是"口令熵实际上限 256 位"（无实际影响）
+ *           与上面那条兼容性代价。
+ */
+function preHash(plain: string): string {
+  return createHash('sha256').update(plain, 'utf8').digest('hex');
 }
 
-/** 校验口令；任何异常（哈希损坏）都按"不匹配"处理，不抛细节。 */
+/**
+ * 口令哈希（管理员登录用）。
+ * @throws {Error} 口令超过 {@link PASSWORD_MAX_CHARS} 字符
+ */
+export async function hashPassword(plain: string): Promise<string> {
+  if (plain.length > PASSWORD_MAX_CHARS) {
+    throw new Error(`口令过长：最多 ${PASSWORD_MAX_CHARS} 个字符（超出部分是白白浪费 CPU，不是安全问题）`);
+  }
+  return bcrypt.hash(preHash(plain), BCRYPT_COST);
+}
+
+/**
+ * 校验口令；任何异常（哈希损坏、输入过长）都按"不匹配"处理，不抛细节。
+ * @why 校验侧刻意**不抛**超长错误：抛错等于告诉调用方"你的输入触发了长度分支"，
+ *      属于可以被用来探测系统行为的信息；登录结果只有"通过 / 不通过"两种。
+ */
 export async function verifyPassword(plain: string, hash: string): Promise<boolean> {
+  if (plain.length > PASSWORD_MAX_CHARS) return false;
   try {
-    return await bcrypt.compare(plain, hash);
+    return await bcrypt.compare(preHash(plain), hash);
   } catch {
     return false;
   }
