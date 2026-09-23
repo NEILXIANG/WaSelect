@@ -11,9 +11,7 @@
  *
  * @see server/src/http.ts（TRACE_ID_PATTERN）；docs/代码注释规范与日志体系设计.md（统一字段）
  */
-
-/** Crockford Base32：去掉 I / L / O / U，避免手抄时与 1 / 0 混淆。 */
-const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+import { randomId } from './random-id.js';
 
 /** 前缀 `mp-` 标明来源端，便于在聚合日志里一眼区分"小程序发起"与"服务端/回调"。 */
 const PREFIX = 'mp-';
@@ -23,9 +21,5 @@ const PREFIX = 'mp-';
  * @returns 形如 `mp-7QK3M9VZ2RX8T4YB6N0C`（总长 23，落在服务端 8–64 的区间内）
  */
 export function newTraceId() {
-  let out = PREFIX;
-  for (let i = 0; i < 20; i += 1) {
-    out += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
-  }
-  return out;
+  return randomId(PREFIX, 20);
 }

@@ -22,6 +22,7 @@ import { E2E_USER, startSkeleton, userToken, type SkeletonServer } from './harne
 
 // 被直接测的是小程序源码本身（js，非 ts）——allowJs 已开，v8 覆盖率也会统计到它
 import { ApiError, NETWORK_ERROR_CODE, createRequester } from '../../miniprogram/utils/request.js';
+import { createIntentIdempotency } from '../../miniprogram/utils/idempotency.js';
 import { newTraceId } from '../../miniprogram/utils/trace.js';
 
 let db: Db;
@@ -140,6 +141,53 @@ describe('小程序壳 → 真服务端：一条链路走到底', () => {
     const second = (await api(opts)) as { order_id: string };
     expect(second.order_id).toBe(first.order_id);
     expect(await db`select id from orders`).toHaveLength(1);
+  });
+
+  /**
+   * @why D32 的缺陷（每次点击 `mp-${Date.now()}`）在 L0/L3 现有用例里都测不出来：
+   *      L0 只测键的生成与生命周期（不经过服务端），L3 的「连点两次」是**手工传同一个键**——
+   *      页面到底传什么键，那条用例管不着。所以必须有一条走完整生命周期的真链路用例：
+   *      「首试失败 → 重试」服务端必须认成同一个意图，而「成功后」必须真的是新单。
+   */
+  it('一次意图一个键：首试网络失败后重试仍是同一张单；成功后换键才是第二张', async () => {
+    const intent = createIntentIdempotency();
+    const post = (key: string) =>
+      api({
+        url: `${app.base}/api/v1/skeleton/orders`,
+        method: 'POST',
+        data: {},
+        idempotencyKey: key,
+      }) as Promise<{ order_id: string }>;
+
+    // 1) 首试：故意打到没人听的端口，模拟网络抖动（服务端根本没收到请求）
+    const first = intent.acquire();
+    expect(first.isRetry).toBe(false);
+    await expect(
+      api({
+        url: 'http://127.0.0.1:1/api/v1/skeleton/orders',
+        method: 'POST',
+        data: {},
+        idempotencyKey: first.key,
+      }),
+    ).rejects.toMatchObject({ code: NETWORK_ERROR_CODE });
+
+    // 2) 重试：键必须还是同一个——这是 D32 的核心断言
+    const retry = intent.acquire();
+    expect(retry.key).toBe(first.key);
+    expect(retry.isRetry).toBe(true);
+    const created = await post(retry.key);
+    expect(await db`select id from orders`).toHaveLength(1);
+
+    // 3) 结果回来之前用户又点了一次（并发连点）→ 服务端重放，仍只有一张单
+    const replayed = await post(intent.acquire().key);
+    expect(replayed.order_id).toBe(created.order_id);
+    expect(await db`select id from orders`).toHaveLength(1);
+
+    // 4) 成功后 retire：下一次点击是**新意图**，必须建出第二张不同的单
+    intent.retire();
+    const next = await post(intent.acquire().key);
+    expect(next.order_id).not.toBe(created.order_id);
+    expect(await db`select id from orders`).toHaveLength(2);
   });
 
   it('ApiError 的 message 来自服务端错误体，不是占位符（否则用户看到的是空提示）', async () => {

@@ -33,6 +33,10 @@
       <text class="label">trace_id</text>
       <text class="value">{{traceId}}</text>
     </view>
+    <view class="row" wx:if="{{retrying}}">
+      <text class="label">幂等</text>
+      <text class="value">本次沿用上次未完成的键（重试）</text>
+    </view>
   </view>
 
   <view class="card" wx:if="{{error}}">
