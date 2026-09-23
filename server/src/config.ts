@@ -280,7 +280,10 @@ const crossField = schema.superRefine((c, ctx) => {
 
   // 2c. mock 密钥独立（P1-4）：与 JWT_SECRET 相同 = 回调验签挂在登录密钥上，轮换/泄露互相牵连
   if (c.MOCK_CALLBACK_SECRET !== undefined && c.MOCK_CALLBACK_SECRET === c.JWT_SECRET) {
-    add('MOCK_CALLBACK_SECRET', 'MOCK_CALLBACK_SECRET 不得与 JWT_SECRET 相同（泄露半径与轮换周期都不同）');
+    add(
+      'MOCK_CALLBACK_SECRET',
+      'MOCK_CALLBACK_SECRET 不得与 JWT_SECRET 相同（泄露半径与轮换周期都不同）',
+    );
   }
 
   // 3. 启用真实通道就必须有对应密钥：缺密钥的表现是"下单报 500"，而不是"启动时告诉我少配了东西"

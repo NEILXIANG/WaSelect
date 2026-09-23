@@ -479,18 +479,19 @@ describe('优雅关闭', () => {
 
     const originalSetInterval = globalThis.setInterval;
     let sweepCalls = 0;
-    const spy = vi
-      .spyOn(globalThis, 'setInterval')
-      .mockImplementation(((handler: () => void, ms?: number) => {
-        // 只包装 100ms 这一档（sweeper 的周期），其余原样放行
-        if (ms === 100) {
-          return originalSetInterval(() => {
-            sweepCalls += 1;
-            handler();
-          }, ms);
-        }
-        return originalSetInterval(handler, ms);
-      }) as typeof setInterval);
+    const spy = vi.spyOn(globalThis, 'setInterval').mockImplementation(((
+      handler: () => void,
+      ms?: number,
+    ) => {
+      // 只包装 100ms 这一档（sweeper 的周期），其余原样放行
+      if (ms === 100) {
+        return originalSetInterval(() => {
+          sweepCalls += 1;
+          handler();
+        }, ms);
+      }
+      return originalSetInterval(handler, ms);
+    }) as typeof setInterval);
     try {
       await expect(started.close()).rejects.toThrow(/超时/);
       const callsAtRejection = sweepCalls;
