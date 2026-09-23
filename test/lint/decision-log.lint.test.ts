@@ -1,0 +1,96 @@
+/**
+ * 职责：把「自主决策必须入档」从要求变成**会红的检查**（LM 层第三项）。
+ *
+ * @why 用户 2026-09-23 明确要求：AI 自行拍板的取舍都要进文档记录。
+ *      而这类要求的失效方式和前面几条一模一样——**不做也不会有任何东西报错**，
+ *      忙起来就变成"回头补"，而"回头补"从来没有回头过。
+ *      所以这里至少把"写进去了的必须写全"变成机器能验的：
+ *      七项字段缺一项就红，编号重复就红，文档被清空或章节被删就红。
+ *
+ * @limitation 一（重要）：**它管不了"该记的有没有记"**。
+ *              我无法让脚本判断"这次改动里有没有发生自主决策"——那是语义判断。
+ *              所以这条门禁的真实作用是：保证**已经写进去的条目是完整的**，
+ *              以及防止文档被悄悄清空/瘦身。"别忘了写"仍然依赖 CLAUDE.md 抬头那条硬要求与 review。
+ * @limitation 二：只校验字段的**存在**，不校验内容质量。
+ *              "- **反向风险**：无" 这种敷衍写法照样过——那是 H3 人工项的职责。
+ *
+ * @see ../../docs/自主决策记录.md §4（维护约定）；CLAUDE.md 抬头（自主决策必须入档）
+ */
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+const DOC = resolve(import.meta.dirname, '../../docs/自主决策记录.md');
+
+/** 每条决策必须写全的七项（与文档 §4 的约定一致，改这里必须同步改文档）。 */
+const REQUIRED_FIELDS = ['场景', '可选', '选择', '依据', '反向风险', '回滚', '下游'] as const;
+
+interface Entry {
+  id: string;
+  body: string;
+}
+
+function readDoc(): string {
+  expect(existsSync(DOC), `缺少 ${DOC}`).toBe(true);
+  return readFileSync(DOC, 'utf8');
+}
+
+/** 只解析 §1（决策台账），§2/§3 单独校验。 */
+function entries(doc: string): Entry[] {
+  const section1 = doc.split(/^## 2\./m)[0] ?? '';
+  return section1
+    .split(/^### /m)
+    .slice(1)
+    .map((block) => ({
+      id: block.split('\n')[0]?.trim() ?? '',
+      body: block,
+    }));
+}
+
+describe('自主决策记录（docs/自主决策记录.md）', () => {
+  it('文档存在且不是空壳（条目数有下限）', () => {
+    const doc = readDoc();
+    const list = entries(doc);
+    // 数量下限不是精确指标，是防"文档被瘦身到只剩几条然后全绿"
+    expect(list.length, '决策条目被大量删除，或解析规则失效').toBeGreaterThanOrEqual(10);
+  });
+
+  it('每条决策七项字段齐全（场景/可选/选择/依据/反向风险/回滚/下游）', () => {
+    const list = entries(readDoc());
+    const missing: string[] = [];
+    for (const e of list) {
+      for (const f of REQUIRED_FIELDS) {
+        if (!e.body.includes(`- **${f}`)) missing.push(`${e.id} 缺「${f}」`);
+      }
+    }
+    expect(missing, `字段不全：\n${missing.join('\n')}`).toEqual([]);
+  });
+
+  it('每条的「依据」不是空话（长度下限，防止写成"依据：经验"）', () => {
+    const list = entries(readDoc());
+    const thin: string[] = [];
+    for (const e of list) {
+      const line = e.body.split('\n').find((l) => l.startsWith('- **依据'));
+      const text = (line ?? '').replace(/^- \*\*依据[^*]*\*\*[：:]?\s*/u, '');
+      // 依据通常要跨行写，这里只看首行；首行过短基本可以判定是敷衍
+      if (text.trim().length < 10) thin.push(`${e.id}：${text.trim()}`);
+    }
+    expect(thin, `依据写得太短，读它的人还原不出判断：\n${thin.join('\n')}`).toEqual([]);
+  });
+
+  it('编号 AJ-xx 唯一（编号不回收，重复说明有人插错了位置）', () => {
+    const list = entries(readDoc());
+    const ids = list.map((e) => (e.id.match(/^AJ-\d+/) ?? [''])[0] ?? '');
+    expect(ids.filter((i) => i.length > 0).length, '有条目没有 AJ-xx 编号').toBe(list.length);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('「被实测推翻的判断」与「仍需人拍板」两节都在（区分"我定了"和"该你定"）', () => {
+    const doc = readDoc();
+    expect(doc).toMatch(/^## 2\./m);
+    expect(doc).toMatch(/^## 3\./m);
+    // §2 是本文件最有资料价值的一节：记录"我容易在什么地方错"
+    expect(doc, '§2 被删了——那是记录失败模式的一节').toContain('被实测推翻的判断');
+    expect(doc, '§3 被删了——会让人误以为所有事项都已由 AI 决定').toContain('仍然需要人拍板');
+  });
+});
