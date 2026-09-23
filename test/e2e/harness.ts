@@ -42,7 +42,14 @@ export async function startSkeleton(
     rawBodyPaths: (opts.withRawBody ?? true) ? [MOCK_CALLBACK_PATH] : [],
     silentPaths: ['/healthz'],
     mount: (a) =>
-      mountSkeleton(a, { db, logger, auth: E2E_AUTH, callbackSecret: E2E_CALLBACK_SECRET }),
+      // env 显式给 development：骨架在 production 下会拒绝挂载（SEC2 闸门），装配处必须回答一次
+      mountSkeleton(a, {
+        db,
+        logger,
+        auth: E2E_AUTH,
+        callbackSecret: E2E_CALLBACK_SECRET,
+        env: 'development',
+      }),
   });
   const server = await listen(app);
   return { server, base: `http://127.0.0.1:${server.port}`, sink };

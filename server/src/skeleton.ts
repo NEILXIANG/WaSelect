@@ -39,6 +39,13 @@ export interface SkeletonDeps {
   auth: AuthConfig;
   /** 模拟回调的 HMAC 密钥（骨架期；真实通道验签在 F11，见 @limitation 二）。 */
   callbackSecret: string;
+  /**
+   * 运行环境。**刻意作为显式入参而不是读 `process.env.NODE_ENV`**：
+   * 隐式全局会让"这个行为由谁决定"不可见，也让测试必须改进程环境才能覆盖另一分支；
+   * 显式入参则逼调用方在装配时回答一次"这是什么环境"。
+   * `production` 下 `mountSkeleton` 直接抛错（见 SEC2 闸门）。
+   */
+  env: 'development' | 'staging' | 'production';
 }
 
 /** 骨架路由前缀：显式标注"脚手架"，防止被误当成正式 API。 */
@@ -138,6 +145,24 @@ function paramId(value: string | string[] | undefined): string {
 }
 
 export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
+  // ── 0. 环境闸门：骨架**进不了生产**（SEC2）────────────────────────────────
+  // @why `/skeleton/orders/:id/simulate-paid` 会绕过机构验签直接把订单改成 paid，
+  //      `/pay/callback/mock` 只认我们自己约定的 HMAC。这两条一旦进生产，
+  //      等于"任何人/任何脚本都能把任意订单标记成已支付"——不是信息泄漏，是**可以直接骗取发货**。
+  //      骨架在业务期（I1）要整体删除，在那之前靠这道闸门兜住。
+  // @tradeoff 选择"启动时抛错"而不是"挂上后返回 404"：抛错是**最大声**的失败，
+  //           符合本项目"配置错必须在进程启动时就炸"的既有原则（见 config.ts 抬头）。
+  //           代价：生产误挂载 = 发布失败（Render 会继续跑旧版本）而不是"骨架不可用"——
+  //           这个代价是刻意接受的：宁可发布失败，也不要留一条能改订单状态的口子。
+  // @limitation 抛错发生在**挂载之前**，所以不会留下"部分注册"的路由。
+  if (deps.env === 'production') {
+    deps.logger.error('skeleton_mount_refused', { env: deps.env, result: 'refused' });
+    throw new Error(
+      '骨架路由不得挂载到生产环境：/api/v1/skeleton/* 与 /api/v1/pay/callback/mock ' +
+        '可绕过机构验签改订单状态（业务期 I1 应整体删除本文件）',
+    );
+  }
+
   // ── 1. 建单：鉴权 + 幂等 + 事务写库 ──────────────────────────────────────
   app.post(`${PREFIX}/orders`, requireRole('user', deps.auth), (req, res, next) => {
     void (async () => {
