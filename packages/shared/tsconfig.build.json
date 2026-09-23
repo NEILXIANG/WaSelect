@@ -1,0 +1,21 @@
+/**
+ * shared 包的**构建**配置（与根 tsconfig 分开：根那份是 noEmit 的类型检查配置）。
+ *
+ * @why 存在两份是为了让"类型检查"与"产出 JS"互不干扰：
+ *      根 `tsconfig.json` 覆盖全仓库（含 miniprogram 与所有测试）且不产出文件；
+ *      这份只编译 shared 的运行时代码，产出到 `dist/` 供 Node 加载。
+ * @limitation `dist/` 不入库（.gitignore 已忽略），部署前必须先 `npm run build`。
+ */
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

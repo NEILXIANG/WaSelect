@@ -1,0 +1,28 @@
+/**
+ * server 的**构建**配置（A1）：产出 Node 可直接运行的 JS 到 `server/dist`。
+ *
+ * @why `packages/shared` 的运行时入口是 TS 源码（`main: "src/index.ts"`），
+ *      生产 Node 加载不了。这里只编译 server 自身；shared 由 `build:shared` 单独编译，
+ *      运行时靠 `exports` 的 `waselect-runtime` 条件导出指到它的 `dist`。
+ *
+ * @why 用**自定义条件**而不是把 `default` 直接指到 dist：
+ *      改 `default` 会让 Vitest 也去解析 `dist/index.js`，于是"没先 build 就跑测试"直接崩。
+ *      现在的安排是——测试与类型检查永远用 TS 源码（行为单一真源），
+ *      只有 `npm start` 用 `--conditions=waselect-runtime` 才加载构建产物。
+ *
+ * @limitation 测试文件必须排除：它们依赖 vitest 与测试库连接串，编译进产物会
+ *             让 `dist` 里出现需要 `TEST_DATABASE_URL` 的代码，且体积无意义地变大。
+ */
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

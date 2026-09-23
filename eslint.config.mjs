@@ -12,7 +12,10 @@ export default tseslint.config(
     ignores: [
       'node_modules/**',
       '**/node_modules/**',
-      'dist/**',
+      // ⚠️ 必须写 `**/dist/**`：`dist/**` 只匹配**根级**的 dist，
+      //    A1 之后构建产物落在 server/dist 与 packages/shared/dist，
+      //    只写前者会让 ESLint 去 lint 编译后的 JS（报一堆 process/Buffer is not defined）。
+      '**/dist/**',
       'coverage/**',
       '**/*.config.js',
       '**/*.config.mjs',

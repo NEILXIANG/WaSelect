@@ -1,0 +1,158 @@
+/**
+ * 职责：组装根（A1）——**唯一**一处把"配置 / 日志 / 数据库 / HTTP / 路由 / 停机"拼起来的地方。
+ *
+ * @why 评审 A1 指出：`createHttpApp()` 这个工厂有了，但"谁来组装依赖"只在测试 harness 里
+ *      写过一次。后果是**生产没有入口**：没有 `main.ts`、没有 `build`/`start` 脚本，
+ *      而且 `packages/shared` 的 `main` 指向 TS 源码，Node 跑不起来。
+ *      更隐蔽的代价是"测试与生产两条装配路径"：测试 harness 少配了 `rawBodyPaths` 这种事，
+ *      在生产会以另一种方式再错一次。现在两边都走 `bootstrap()`。
+ *
+ * 设计取舍（我自己拍的，理由写在下面，便于日后被推翻时知道当初为什么）：
+ *   1. **不引入打包器**（esbuild/tsup）。全仓库只有一处跨包 import（`@waselect/shared`），
+ *      用 `tsc` 双输出 + `exports` 条件导出即可。打包器换来的是"产物不可读、栈追踪错行"，
+ *      而栈追踪正是 ADR-29 流 A 排障的主要依据——不划算。
+ *   2. **`bootstrap()` 导出、`main()` 只在直接运行时执行**。这样测试能用同一条装配路径
+ *      起一个真实服务，不复制一遍依赖拼接。
+ *   3. **骨架只在非生产挂载**。骨架能绕过验签改订单状态（SEC2 闸门），
+ *      生产环境连挂都不挂——比"挂了再被闸门拦下启动失败"更早一步，也更不容易误判为故障。
+ *
+ * @limitation 一：`beforeDrain` 目前只落一条审计日志，还没有真实的"摘流量"动作。
+ *      真正该做的是让 `/readyz` 开始返回 503（属 D21）；在那之前，排空期间平台仍可能
+ *      往这里发新请求，表现为"关了半天还在进请求"。这是已知缺口，不是遗漏的 bug。
+ * @limitation 二：进程级退出码由 `installShutdownHandlers` 决定，本文件不调用 `process.exit()`
+ *      （@see http.ts @limitation 二：立即 exit 会丢最后几条日志）。
+ *
+ * @see docs/地基搭建清单.md F6 / A1；server/src/http.ts（createHttpApp / installShutdownHandlers）
+ */
+import { closeDb, createDb, assertPostgresMajor, type Db } from './db.js';
+import { loadConfig, redactConfig, type AppConfig } from './config.js';
+import { createHttpApp, installShutdownHandlers, listen, type StartedServer } from './http.js';
+import { createLogger, type Logger } from './logger.js';
+import { MOCK_CALLBACK_PATH, mountSkeleton } from './skeleton.js';
+
+/**
+ * 是否挂载骨架路由。**生产不挂。**
+ *
+ * @why 抽成一个函数不是因为它复杂，而是因为它是**一条策略**——策略要能被单独断言。
+ *      否则只能"起一个完整生产服务再打请求"来验证，而那需要一整套合法的生产环境变量
+ *      （生产闸门还会拒绝指向 localhost 的 DATABASE_URL），测试成本远高于收益。
+ * @limitation 这是第二道防线，不是唯一一道：`mountSkeleton()` 自己在 production 下
+ *             也会抛错（SEC2）。两道都在，是因为"生产能改订单状态的端点"值得双保险。
+ */
+export function shouldMountSkeleton(env: AppConfig['NODE_ENV']): boolean {
+  return env !== 'production';
+}
+
+export interface BootstrapOptions {
+  /** 环境变量来源（测试注入用，生产走 process.env）。 */
+  env?: NodeJS.ProcessEnv | undefined;
+  /** 日志输出目标（测试注入内存流；生产不传，走 stdout）。 */
+  logDestination?: Parameters<typeof createLogger>[0]['destination'];
+  /** 停机时的退出函数，仅测试注入（@see http.ts ShutdownHooks.exit）。 */
+  exit?: ((code: number) => void) | undefined;
+}
+
+export interface Runtime {
+  config: AppConfig;
+  logger: Logger;
+  db: Db;
+  server: StartedServer;
+  /** 卸载信号处理器（生产不调用）。 */
+  uninstallSignals: () => void;
+}
+
+/**
+ * 装配并**启动监听**。测试与生产共用这一条路径。
+ *
+ * @throws {ConfigError} 配置不合法（启动期硬失败，见 config.ts 抬头）
+ * @throws {Error} Postgres 版本不足，或生产环境误挂载骨架
+ */
+export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
+  const config = loadConfig(opts.env ?? process.env);
+  // ⚠️ `exactOptionalPropertyTypes` 下不能写 `destination: undefined`——
+  //    必须条件展开，否则"不传"和"传 undefined"被当成两回事（pino 会把后者当显式空目标）。
+  const logger = createLogger({
+    env: config.NODE_ENV,
+    ...(opts.logDestination !== undefined ? { destination: opts.logDestination } : {}),
+  });
+
+  // ⚠️ 配置要在**用之前**打印一次（脱敏后）："少配了某个变量"在日志里长得和
+  //    "用户自己放弃支付"一模一样，启动时打一行是最便宜的自证。
+  // ⚠️ 刻意**嵌套在 `config` 键里**而不是展开：直接展开会让配置字段与 logger 的
+  //    固定字段（service / env）抢键名——实测 `env` 就被 NODE_ENV 盖了一次。
+  //    平铺还会让"这条日志到底属于哪个维度"在检索端无法区分。
+  logger.info('config_loaded', { config: redactConfig(config), result: 'ok' });
+
+  const db = createDb({ url: config.DATABASE_URL });
+  try {
+    const major = await assertPostgresMajor(db);
+    logger.info('postgres_checked', { major, result: 'ok' });
+
+    const app = createHttpApp({
+      logger,
+      // 回调验签必须用原始字节：路径集中登记在这里，避免"某个回调忘了配就永远验签失败"
+      rawBodyPaths: [MOCK_CALLBACK_PATH],
+      silentPaths: ['/healthz', '/readyz'],
+      mount: (a) => {
+        if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见文件头取舍 3）
+        mountSkeleton(a, {
+          db,
+          logger,
+          auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+          callbackSecret: config.JWT_SECRET,
+          env: config.NODE_ENV,
+        });
+      },
+    });
+
+    const server = await listen(app, { port: config.PORT, host: config.HOST });
+
+    const uninstallSignals = installShutdownHandlers(server, {
+      logger,
+      // 摘流量：目前只有审计价值（标记"从此刻起不再接新请求"），
+      // 真实动作等 D21 的 /readyz 就位后再接上（见文件头 @limitation 一）
+      beforeDrain: async () => {
+        logger.warn('traffic_draining', { result: 'ok', ctx: { port: config.PORT } });
+      },
+      // 关资源必须在排空之后（D1）：放在前面会让存量请求拿到"连接池已关闭"
+      afterDrain: async () => {
+        await closeDb(db);
+      },
+      ...(opts.exit !== undefined ? { exit: opts.exit } : {}),
+    });
+
+    logger.info('server_started', {
+      port: config.PORT,
+      host: config.HOST,
+      env: config.NODE_ENV,
+      result: 'ok',
+    });
+
+    return { config, logger, db, server, uninstallSignals };
+  } catch (e) {
+    // 装配半途失败时必须关掉连接池：否则进程会挂住，表现为"启动失败但端口还占着"
+    await closeDb(db).catch(() => undefined);
+    throw e;
+  }
+}
+
+/** 是否作为进程入口直接运行（ESM 下没有 require.main，只能比 argv[1]）。 */
+function isEntryPoint(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  const self = new URL(import.meta.url).pathname;
+  // 编译产物在 dist/ 下，源文件在 src/ 下：两边都要认，否则 `npm start` 不会自启
+  return entry === self || entry.endsWith('/dist/main.js') || entry.endsWith('/main.js');
+}
+
+async function main(): Promise<void> {
+  await bootstrap();
+}
+
+if (isEntryPoint()) {
+  main().catch((e: unknown) => {
+    // 启动失败必须能被人看见：这里还没有 logger（可能在 loadConfig 就炸了），只能写 stderr
+    process.stderr.write(`启动失败：${e instanceof Error ? e.message : String(e)}\n`);
+    process.exitCode = 1;
+  });
+}

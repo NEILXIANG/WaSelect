@@ -3,6 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
-  "description": "前后端共享契约包：错误码注册表 / 枚举 / 由 api-contract.yaml 生成的 API 类型（F2 接入生成）"
+  "description": "前后端共享契约包：错误码注册表 / 枚举 / 由 api-contract.yaml 生成的 API 类型（F2 接入生成）",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "waselect-runtime": "./dist/index.js",
+      "default": "./src/index.ts"
+    }
+  },
+  "//exports": "顺序不能改：Node 按**对象书写顺序**取第一个命中的条件，default 永远命中所以必须放最后。types 给 TS；waselect-runtime 只在 `node --conditions=waselect-runtime` 时命中（npm start）；其余情况（Vitest / tsc）走 default 的 TS 源码——这样没先 build 也能跑测试。理由详见 server/tsconfig.build.json 的 @why。",
+  "//no-main": "有 exports 后 main 会被忽略，不再写 main，免得让人以为它在生效。"
 }
