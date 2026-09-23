@@ -1,0 +1,41 @@
+{
+  "description": "WaSelect 日本直邮跨境电商（地基骨架期）",
+  "compileType": "miniprogram",
+  "libVersion": "3.5.5",
+  "appid": "touristappid",
+  "projectname": "waselect",
+  "packOptions": {
+    "ignore": [
+      {
+        "type": "file",
+        "value": "**/*.unit.test.ts"
+      }
+    ],
+    "include": []
+  },
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "newFeature": true,
+    "coverView": true,
+    "nodeModules": false,
+    "autoAudits": false,
+    "showShadowRootInWxmlPanel": true,
+    "scopeCheck": false,
+    "checkSiteMap": true,
+    "compileHotReLoad": false,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
+  },
+  "condition": {
+    "miniprogram": {
+      "list": []
+    }
+  }
+}
