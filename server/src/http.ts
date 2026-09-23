@@ -330,8 +330,27 @@ async function closeServer(server: Server, graceMs: number): Promise<void> {
 
 export interface ShutdownHooks {
   logger: Logger;
-  /** 关闭监听**之前**要做的事（关 DB 池、停调度器定时器）。 */
-  beforeClose?: (() => Promise<void>) | undefined;
+  /**
+   * 排空**之前**：**摘流量**——把就绪状态置为不可用、让调度器不再接新任务。
+   *
+   * @why `close()` 只停止**接受新连接**并等存量请求，它管不到"平台还在往我这儿发新请求"
+   *      （Render 有自己的 drain 窗口，SIGTERM 之后仍会路由一段时间）。
+   *      所以必须先对外声明"我不再接了"，否则表现为"关了半天还在进新请求"，排空永远结束不了。
+   * @limitation 本仓库目前还没有 `/readyz`（属 D21/F7），所以这个钩子暂时没有内置实现可用；
+   *              保留它是为了让装配层将来**有地方挂**，而不是到那时再改这里的调用顺序。
+   */
+  beforeDrain?: (() => Promise<void>) | undefined;
+  /**
+   * 排空**之后**：**关资源**——关 DB 池、关 HTTP 客户端、flush 日志。
+   *
+   * @why 顺序绝不能反：若把"关 DB 池"放在排空之前，正在处理的请求会拿到
+   *      「连接池已关闭」，表现为**部署窗口内一批 500**（本地永远复现不了，
+   *      因为本地没有"发布时被 SIGTERM"这回事）。曾经的 `beforeClose` 就是这个名字——
+   *      名字本身在暗示"关之前"，于是调用方很自然地把关 DB 池写进去了。
+   * @limitation 这里失败不会回滚已经完成的排空（进程已经不接请求了），
+   *              只记 `shutdown_cleanup_failed` 并以退出码 1 结束，便于平台察觉"清理没干净"。
+   */
+  afterDrain?: (() => Promise<void>) | undefined;
   /**
    * 退出函数。**仅为测试注入**（process.exit 会把 vitest 进程一起杀掉，无法断言）。
    * @limitation 生产代码不要传这个参数。
@@ -375,12 +394,27 @@ export function installShutdownHandlers(started: StartedServer, hooks: ShutdownH
       const startedAt = performance.now();
       const duration = (): number => Math.round(performance.now() - startedAt);
       try {
-        await hooks.beforeClose?.();
+        // ── ① 摘流量 → ② 排空存量请求 → ③ 关资源 ──────────────────────────
+        //    顺序反了（先关资源再排空）的表现是"部署窗口内一批 500"，本地无法复现。
+        await hooks.beforeDrain?.();
         await started.close();
+        hooks.logger.info('server_drained', { signal, duration_ms: duration() });
+      } catch (e) {
+        hooks.logger.error('server_stop_failed', {
+          signal,
+          duration_ms: duration(),
+          err: e instanceof Error ? e : new Error(String(e)),
+        });
+        finish(1);
+        return;
+      }
+      try {
+        await hooks.afterDrain?.();
         hooks.logger.info('server_stopped', { signal, duration_ms: duration() });
         finish(0);
       } catch (e) {
-        hooks.logger.error('server_stop_failed', {
+        // 排空已成功，但清理没干净：单独记一条，别和"排空失败"混成一个事件
+        hooks.logger.error('shutdown_cleanup_failed', {
           signal,
           duration_ms: duration(),
           err: e instanceof Error ? e : new Error(String(e)),

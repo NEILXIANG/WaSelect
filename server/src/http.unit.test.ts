@@ -270,7 +270,7 @@ describe('优雅关闭', () => {
     expect(performance.now() - closedAt).toBeLessThan(1000);
   });
 
-  it('SIGTERM 触发关闭并退出码 0（beforeClose 先于 close 执行）', async () => {
+  it('SIGTERM 触发关闭并退出码 0，钩子顺序为 摘流量 → 排空 → 关资源', async () => {
     const sink = new MemorySink();
     const logger = createLogger({ env: 'development', destination: sink });
     const app = createHttpApp({ logger });
@@ -280,8 +280,11 @@ describe('优雅关闭', () => {
 
     const uninstall = installShutdownHandlers(started, {
       logger,
-      beforeClose: async () => {
-        order.push('beforeClose');
+      beforeDrain: async () => {
+        order.push('beforeDrain');
+      },
+      afterDrain: async () => {
+        order.push('afterDrain');
       },
       exit: (code) => exits.push(code),
       exitDelayMs: 10,
@@ -294,8 +297,59 @@ describe('优雅关闭', () => {
       // 否则 handler 收到 undefined，日志里的 signal 字段就空了（与生产不一致）
       process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
       await vi.waitFor(() => expect(exits).toEqual([0]), { timeout: 1000 });
-      expect(order).toEqual(['beforeClose']);
+      expect(order).toEqual(['beforeDrain', 'afterDrain']);
+      expect(sink.find('server_drained')[0]?.signal).toBe('SIGTERM');
       expect(sink.find('server_stopped')[0]?.signal).toBe('SIGTERM');
+    } finally {
+      uninstall();
+      await started.close().catch(() => undefined);
+    }
+  });
+
+  /**
+   * @why D1 的核心：曾经的 `beforeClose` 在排空**之前**执行，于是把"关 DB 池"
+   *      写进去是自然的——结果正在排空的请求全部拿到「连接池已关闭」，
+   *      表现为**部署窗口内一批 500**，而本地永远复现不了（本地没有发布期 SIGTERM）。
+   *      这条用例用一个"资源开关"把那个顺序缺陷变成红灯。
+   */
+  it('排空期间的存量请求仍能用到资源（关资源必须在排空之后）', async () => {
+    const logger = createLogger({ env: 'development', destination: new MemorySink() });
+    let resourceOpen = true;
+    const app = createHttpApp({
+      logger,
+      mount: (a) => {
+        a.get('/needs-resource', async (_req, res) => {
+          await new Promise((r) => setTimeout(r, 250));
+          // 模拟"这一步要查库"：资源若已关就只能 500
+          if (!resourceOpen) {
+            res.status(500).json({ code: 50000, message: '服务器内部错误' });
+            return;
+          }
+          res.json({ ok: true });
+        });
+      },
+    });
+    const started = await listen(app);
+    const exits: number[] = [];
+    const uninstall = installShutdownHandlers(started, {
+      logger,
+      afterDrain: async () => {
+        resourceOpen = false;
+      },
+      exit: (code) => exits.push(code),
+      exitDelayMs: 10,
+    });
+    try {
+      const inflight = fetch(`${`http://127.0.0.1:${started.port}`}/needs-resource`);
+      // 等请求确实进了 handler 再发信号，否则测的是"还没到就关了"
+      await new Promise((r) => setTimeout(r, 60));
+      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+
+      const res = await inflight;
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(exits).toEqual([0]), { timeout: 2000 });
+      expect(resourceOpen).toBe(false);
     } finally {
       uninstall();
       await started.close().catch(() => undefined);
@@ -306,12 +360,12 @@ describe('优雅关闭', () => {
     const sink = new MemorySink();
     const logger = createLogger({ env: 'development', destination: sink });
     const started = await listen(createHttpApp({ logger }));
-    let beforeCloseCalls = 0;
+    let drainCalls = 0;
     const exits: number[] = [];
     const uninstall = installShutdownHandlers(started, {
       logger,
-      beforeClose: async () => {
-        beforeCloseCalls += 1;
+      beforeDrain: async () => {
+        drainCalls += 1;
       },
       exit: (code) => exits.push(code),
       exitDelayMs: 10,
@@ -320,7 +374,7 @@ describe('优雅关闭', () => {
       process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
       process.emit('SIGINT' as NodeJS.Signals, 'SIGINT');
       await vi.waitFor(() => expect(exits.length).toBeGreaterThan(0), { timeout: 1000 });
-      expect(beforeCloseCalls).toBe(1);
+      expect(drainCalls).toBe(1);
     } finally {
       uninstall();
       await started.close().catch(() => undefined);
