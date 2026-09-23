@@ -101,6 +101,22 @@ const schema = z.object({
   // ── 运行时 ──────────────────────────────────────────────────────────────
   NODE_ENV: z.enum(['development', 'staging', 'production']).default('development'),
   PORT: int(3000, 1),
+  /**
+   * 监听地址。**生产必须 0.0.0.0**（容器平台从宿主机外部探端口，绑回环 → 健康检查超时、发布失败）。
+   * @why 曾经过 `process.env.HOST` 裸读、schema 里根本没有这一项：
+   *      结果 `.env.example` 写了 HOST 但配置层不认识它——拼成 `HOST=0.0.0.O`（字母 O）也不会报错，
+   *      只会静默回落到默认值。这类"文档有、代码没有"的键正是配置漂移的入口，
+   *      现在由 `config.contract.test.ts` 的"文档 ↔ schema 键集合必须一致"自动兜住。
+   */
+  HOST: z
+    .preprocess(
+      (v) => (v === undefined || v === '' ? undefined : String(v).trim()),
+      z.string().min(1).default('0.0.0.0'),
+    )
+    .refine(
+      (v) => v === 'localhost' || /^\d{1,3}(\.\d{1,3}){3}$/.test(v) || v === '::' || v === '::1',
+      'HOST 必须是 IP 地址或 localhost（拼错会静默回落到默认值，不会报错）',
+    ),
 
   // ── 微信小程序 ──────────────────────────────────────────────────────────
   APP_ID: optionalText(),
@@ -264,6 +280,14 @@ const crossField = schema.superRefine((c, ctx) => {
 });
 
 export type AppConfig = z.infer<typeof schema>;
+
+/**
+ * schema 认识的全部环境变量名。
+ * @why 供"`.env.example` ↔ schema 键集合必须一致"的测试使用。zod 默认 strip 未知键，
+ *      所以**变量名拼错会被静默忽略**（`JWT_SECRECT=` 不报错、直接用默认值），
+ *      单看代码永远发现不了——只能靠"文档里写的名字"和"代码认识的名字"做集合比对来兜。
+ */
+export const CONFIG_KEYS: readonly string[] = Object.keys(schema.shape);
 
 /** 配置校验失败：携带结构化 issues，供启动日志一次列全（不逐个试错重启）。 */
 export class ConfigError extends Error {

@@ -270,3 +270,78 @@ describe('002 加固：约束真的会拦', () => {
     expect(rows.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * 结构不变量（防复发机制）。
+ *
+ * @why 002 是"补"上了外键索引与状态域约束，但**补只管得了一批**。
+ *      下一次有人加 003 迁移、建一张带外键和 `status` 列的表，同样的缺陷会一模一样地再发生一次——
+ *      因为没有任何东西会提醒他。所以这里不写"这几张表要有索引"，而写
+ *      "**任何**外键列都必须有索引、**任何** status 列都必须有域约束"：
+ *      断言的是不变量而不是清单，于是新表自动进入覆盖范围，漏了就红。
+ *
+ * @limitation 豁免名单必须**逐条写原因**。没有原因的豁免会让这个机制在几张表之后失效。
+ */
+describe('结构不变量：对新表自动生效', () => {
+  /** 豁免：契约（api-contract.yaml）尚未枚举这两个状态域。等 0.6 补枚举后加约束并从这里移除。 */
+  const STATUS_EXEMPT: Readonly<Record<string, string>> = {
+    'payments.status': '契约未枚举该状态域；编一套取值会在契约补全后开始误拒合法数据',
+    'shipments.status': '同上',
+    'order_events.status':
+      '审计快照：CHECK 作用于全部历史行，一旦将来收敛状态枚举就会立刻违反约束，反而让枚举无法演进',
+  };
+
+  const keyOf = (tbl: unknown, col: unknown): string => `${String(tbl)}.${String(col)}`;
+
+  it('任何外键列都有（非部分）索引', async () => {
+    const fks = await db`
+      select c.conrelid::regclass::text as tbl, a.attname as col
+      from pg_constraint c
+      join unnest(c.conkey) k(attnum) on true
+      join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum
+      where c.contype = 'f' and c.connamespace = 'public'::regnamespace
+    `;
+    const indexed = await db`
+      select t.relname as tbl, a.attname as col
+      from pg_index i
+      join pg_class t on t.oid = i.indrelid
+      join pg_attribute a on a.attrelid = t.oid and a.attnum = i.indkey[0]
+      where t.relnamespace = 'public'::regnamespace
+        and i.indpred is null
+        and i.indisvalid
+    `;
+    const have = new Set(indexed.map((r) => keyOf(r.tbl, r.col)));
+    const missing = fks.map((r) => keyOf(r.tbl, r.col)).filter((key) => !have.has(key));
+    expect(missing).toEqual([]);
+    expect(fks.length).toBeGreaterThan(5);
+  });
+
+  it('任何 status 列都有域约束（或在豁免名单里并写明原因）', async () => {
+    const cols = await db`
+      select c.relname as tbl, a.attname as col
+      from pg_attribute a
+      join pg_class c on c.oid = a.attrelid
+      where c.relnamespace = 'public'::regnamespace
+        and a.attnum > 0 and not a.attisdropped
+        and a.attname = 'status'
+        -- 只看普通表：索引在 pg_class 里也是一条关系、也有名为 status 的属性，
+        -- 不过滤会把 idx_orders_open_status 当成一张"缺约束的表"（实测踩到）
+        and c.relkind in ('r', 'p')
+    `;
+    const checks = await db`
+      select con.conrelid::regclass::text as tbl, pg_get_constraintdef(con.oid) as def
+      from pg_constraint con
+      where con.contype = 'c' and con.connamespace = 'public'::regnamespace
+    `;
+    const constrained = new Set(
+      checks.filter((r) => String(r.def).includes('status')).map((r) => String(r.tbl)),
+    );
+    const keys = cols.map((r) => keyOf(r.tbl, r.col));
+    const missing = keys.filter(
+      (key) => !constrained.has(key.split('.')[0] ?? '') && STATUS_EXEMPT[key] === undefined,
+    );
+    expect(missing).toEqual([]);
+    // 豁免名单里的键必须真的存在（防止名字写错后豁免永久失效）
+    for (const key of Object.keys(STATUS_EXEMPT)) expect(keys).toContain(key);
+  });
+});
