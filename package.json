@@ -24,7 +24,7 @@
     "test:db": "vitest run --project db",
     "test:contract": "vitest run --project contract",
     "test:e2e": "vitest run --project e2e",
-    "cov": "vitest run --project unit --project db --coverage",
+    "cov": "vitest run --project unit --project db --project e2e --coverage",
     "check:contract": "node scripts/check-contract.mjs",
     "db:migrate": "node node_modules/node-pg-migrate/bin/node-pg-migrate.js -m migrations up",
     "db:migrate:down": "node node_modules/node-pg-migrate/bin/node-pg-migrate.js -m migrations down",
