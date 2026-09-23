@@ -33,7 +33,7 @@
     "start": "node --conditions=waselect-runtime server/dist/main.js",
     "db:migrate": "node node_modules/node-pg-migrate/bin/node-pg-migrate.js -m migrations up",
     "db:migrate:down": "node node_modules/node-pg-migrate/bin/node-pg-migrate.js -m migrations down",
-    "gate": "npm run lint && npm run typecheck && npm run build && npm run check:contract && npm run test:unit && npm run test:db && npm run test:contract && npm run test:e2e && npm run test:lint && npm run cov"
+    "gate": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run check:contract && npm run test:unit && npm run test:db && npm run test:contract && npm run test:e2e && npm run test:lint && npm run cov"
   },
   "comment:deps": "运行时依赖一律声明在**用到它的那个 workspace**（server / packages/shared），根 package.json 只放工具链。@why 曾经把 express/jose/bcryptjs/pino 装在根上：靠 npm workspaces 的扁平提升能跑，但 ① 谁依赖什么不可见，删模块时不敢删依赖；② node-pg-migrate 根本没进 package.json（装的时候被信号打断），npm ci 会装不出迁移工具——这个坑已经踩过一次。",
   "devDependencies": {

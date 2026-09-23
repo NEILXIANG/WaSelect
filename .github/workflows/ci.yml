@@ -1,0 +1,101 @@
+name: CI
+
+# 职责：在远端把 `npm run gate` 原样跑一遍（A6 / F16）。
+#
+# @why 本项目此前所有验证都只在**一台 mac 上**跑过。本地绿的真正含义是"在向的机器上绿"，
+#      而 gate 里有三类东西天生依赖机器：① Postgres 版本与本地角色（本机的 brew 免密登录，
+#      CI 上没有）；② `npm ci` 能否从 lockfile 装出全部依赖（node-pg-migrate 曾经漏装，
+#      本地靠扁平提升侥幸跑通）；③ 文件路径大小写（mac 默认不敏感，Linux 敏感）。
+#      这三类都只在别人/CI 的机器上才暴露——所以 CI 不是"锦上添花"，是唯一能提前看见它们的地方。
+#
+# @tradeoff 只跑 **一个 job、一条命令**，不拆成 lint/test/db 多个并行 job。
+#      拆开能快几十秒、也能更快看出"是哪一块红了"，但代价是 CI 与本地跑的不再是同一条命令，
+#      于是会出现第二种"本地绿 CI 红"：命令本身不一样。这类分歧比慢 30 秒贵得多。
+#      同理，这里**不**用矩阵（多 Node 版本 / 多 OS）：engines 已限定 >=22 <23，
+#      多版本只会带来"某个版本挂了但生产不是它"的噪音；Windows 上 `localRole()` 的
+#      USER/LOGNAME 回落本来就没验证过（见 test/db/test-db.ts 的 @limitation），
+#      加一个 Windows job 等于把已知未验证项变成必红的门禁，那是自欺欺人。
+#
+# @limitation 一：**只在 Linux 上跑**。Windows/macOS runner 未覆盖（理由见上）。
+# @limitation 二：Postgres 用 service container，`localhost:5432` 可达，
+#      因此测试库的"必须连本机"闸门（assertIsTestDatabaseUrl）天然满足，
+#      **不需要**设 ALLOW_REMOTE_TEST_DB——如果哪天看到有人加了这个变量，那说明
+#      拓扑被改成了远端实例，此时"跑测试会清空那个库"的风险要重新评估。
+# @limitation 三：CI 拿不到微信/Stripe 凭据，所以只覆盖到 mock 通道；
+#      真实机构回调的联调仍然只能人工做（属地基搭建清单 I1 之后的手工验证项）。
+#
+# @see docs/测试策略与验证门禁.md §4；CLAUDE.md（gate 定义）；.env.example（环境变量口径）
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同一分支上新推送到来时，取消还在跑的旧 run。
+# @why 本仓提交节奏是"一个单元一次 commit"，连续推送时旧 run 的结果已经没有意义，
+#      留着只会占着 runner 并让 PR 上挂一串过期红灯。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Postgres 必须 16：server/src/db.ts 有 assertPostgresMajor(>=16)，版本不符直接启动失败。
+    # 与生产（Render Postgres 16）保持一致，避免"CI 上过、生产上挂"。
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # 只注入 gate 真正需要的三项，其余留空由配置层的默认值兜底。
+      # @why 故意**不**把 .env.example 整份搬进来：那样会让"哪些变量是测试必需的"变得不可见，
+      #      而且某个变量哪天变成必填时，CI 因为有这份大而全的配置而照样绿，本地却会红——
+      #      又制造一处"本地与 CI 不一致"。少即是准。
+      #
+      # DATABASE_URL：test/db/test-db.ts 会由它推导出 japan_shop_test（换库名）与
+      #   管理库 postgres（换库名）。所以这里指向 postgres 库即可，不要手填 _test 库名。
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      # JWT_SECRET：config.ts 要求 >=32 字符。CI 上用一次性随机值，
+      #   不设固定值——固定等于把一把（虽然是测试的）密钥写进公开仓库的历史里。
+      JWT_SECRET: ci-only-not-a-real-secret-0123456789abcdef
+      TERMS_VERSION: TOS-CI-1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` 而不是 `npm install`：lockfile 与 package.json 不一致时**直接失败**，
+      # 而不是悄悄装出一个和本地不同的依赖树。这正是 CI 该抓的一类问题
+      # （node-pg-migrate 曾经没进 package.json，靠扁平提升在本地能跑、换台机器就装不出）。
+      - name: 安装依赖（严格按 lockfile）
+        run: npm ci
+
+      - name: 确认 Postgres 版本（防止 service 镜像被改动后静默降级）
+        run: |
+          psql "$DATABASE_URL" -tAc 'SHOW server_version;'
+          psql "$DATABASE_URL" -tAc "SHOW server_version;" \
+            | grep -E '^16\.' \
+            || { echo "期望 Postgres 16，实际不是——db.ts 的 assertPostgresMajor 会拒绝启动"; exit 1; }
+
+      # 与本地完全同一条命令。任何"只在 CI 上加的额外步骤"都会重新制造本地/CI 分歧。
+      - name: gate（与本地完全一致）
+        run: npm run gate
