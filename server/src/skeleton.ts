@@ -44,8 +44,9 @@ export interface SkeletonDeps {
    * 隐式全局会让"这个行为由谁决定"不可见，也让测试必须改进程环境才能覆盖另一分支；
    * 显式入参则逼调用方在装配时回答一次"这是什么环境"。
    * `production` 下 `mountSkeleton` 直接抛错（见 SEC2 闸门）。
+   * `test` 与 `development` 同级（D17）——Vitest 会把 NODE_ENV 设成 test。
    */
-  env: 'development' | 'staging' | 'production';
+  env: 'development' | 'staging' | 'test' | 'production';
 }
 
 /** 骨架路由前缀：显式标注"脚手架"，防止被误当成正式 API。 */

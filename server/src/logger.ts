@@ -51,7 +51,7 @@ export interface Logger {
 }
 
 export interface CreateLoggerOptions {
-  env: 'development' | 'staging' | 'production';
+  env: 'development' | 'staging' | 'test' | 'production';
   /** 覆盖默认级别（默认：development=debug，其余=info）。 */
   level?: LogLevel;
   service?: string;
@@ -61,9 +61,12 @@ export interface CreateLoggerOptions {
   destination?: DestinationStream;
 }
 
-/** 环境 → 默认级别：生产不输出 debug（debug 里常有完整对象，既是噪音也是泄漏面）。 */
+/**
+ * 环境 → 默认级别：生产不输出 debug（debug 里常有完整对象，既是噪音也是泄漏面）。
+ * `test` 与 `development` 同级（debug）——测试里要看全字段才定位得到问题。
+ */
 export function levelForEnv(env: CreateLoggerOptions['env']): LogLevel {
-  return env === 'development' ? 'debug' : 'info';
+  return env === 'development' || env === 'test' ? 'debug' : 'info';
 }
 
 function assertEvent(event: string): void {

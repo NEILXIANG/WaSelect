@@ -35,6 +35,44 @@ function expectReject(env: NodeJS.ProcessEnv): readonly string[] {
   throw new Error('期望 loadConfig 抛出 ConfigError，但解析通过了');
 }
 
+/**
+ * @why Vitest 启动时会把 `NODE_ENV` 设成 `test`。配置层若不认这个值，
+ *      测试里一调 `loadConfig(process.env)` 就失败（D17）——
+ *      而"测试与生产共用同一条装配路径"（A1）之后，这是必然撞上的第一类问题。
+ */
+describe('NODE_ENV（D17）', () => {
+  it('接受 test：Vitest 自动设的值不能让配置校验失败', () => {
+    const c = loadConfig({ ...baseEnv, NODE_ENV: 'test' });
+    expect(c.NODE_ENV).toBe('test');
+  });
+
+  it('三个非生产值都合法', () => {
+    for (const env of ['development', 'staging', 'test']) {
+      expect(loadConfig({ ...baseEnv, NODE_ENV: env }).NODE_ENV).toBe(env);
+    }
+  });
+
+  it('production 同样是已登记值（用一套合法生产配置验证，避免被跨字段规则误判）', () => {
+    // ⚠️ production 有独立的跨字段规则（不许连 localhost、必须声明 CORS_ORIGINS、
+    //    启用 stripe 必须有密钥），所以这里必须给一套**完整合法**的生产配置，
+    //    否则失败的是别的规则，测不到"production 是否被认得"这一件事。
+    const prod = {
+      ...baseEnv,
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgres://u@db.internal.example:5432/waselect',
+      CORS_ORIGINS: 'https://admin.example.com',
+      PAYMENT_CHANNELS: 'stripe',
+      STRIPE_SECRET_KEY: 'sk_live_dummy',
+      STRIPE_WEBHOOK_SECRET: 'whsec_dummy',
+    };
+    expect(loadConfig(prod).NODE_ENV).toBe('production');
+  });
+
+  it('拼错的值一律拒绝，不能静默回落到 development', () => {
+    expect(expectReject({ ...baseEnv, NODE_ENV: 'prod' }).join('\n')).toContain('NODE_ENV');
+  });
+});
+
 describe('loadConfig 正常路径', () => {
   it('最小环境即可启动，其余取默认值', () => {
     const c = loadConfig(baseEnv);

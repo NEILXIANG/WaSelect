@@ -128,6 +128,34 @@ const ADMIN_DB_URL = ((): string => {
 let ready: Promise<void> | undefined;
 let cachedTables: readonly string[] | undefined;
 
+/**
+ * 跑一次迁移（子进程调 node-pg-migrate）。
+ *
+ * @why 抽成函数一是为了 `up` 与 `down` 共用同一套错误处理，二是 T7 的
+ *      "up → down → up" 用例需要显式指定方向——写死 `up` 就测不了回滚脚本。
+ * @limitation 用 `execFileSync` 而不是异步：迁移必须在任何测试用它之前完成，
+ *             异步化只会带来"谁等谁"的问题，没有收益。
+ */
+export function runMigrations(direction: 'up' | 'down', count?: number): void {
+  const args = [MIGRATE_BIN, '-m', 'migrations', direction];
+  if (count !== undefined) args.push(String(count));
+  try {
+    execFileSync(process.execPath, args, {
+      cwd: root,
+      env: { ...process.env, DATABASE_URL: TEST_DB_URL },
+      // ⚠️ 不能 'ignore'（D29）：迁移失败时**看不到任何原因**，
+      //    症状会变成"测试库里没这张表"这种完全指不向迁移的错误，排查方向从一开始就错。
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    const err = e as { stdout?: Buffer; stderr?: Buffer; message?: string };
+    const detail = [err.stdout?.toString(), err.stderr?.toString()].filter(Boolean).join('\n');
+    throw new Error(
+      `迁移（${direction}）失败：${err.message ?? String(e)}${detail.length > 0 ? `\n${detail}` : ''}`,
+    );
+  }
+}
+
 /** 确保测试库存在且迁移到最新；进程内只做一次。 */
 export function ensureTestDb(): Promise<void> {
   ready ??= (async () => {
@@ -144,11 +172,7 @@ export function ensureTestDb(): Promise<void> {
     } finally {
       await admin.end();
     }
-    execFileSync(process.execPath, [MIGRATE_BIN, '-m', 'migrations', 'up'], {
-      cwd: root,
-      env: { ...process.env, DATABASE_URL: TEST_DB_URL },
-      stdio: 'ignore',
-    });
+    runMigrations('up');
 
     // 版本闸门：库版本不符合要求就在这里炸，而不是让某个 SQL 行为差异变成"偶发红灯"
     const probe = createDb({ url: TEST_DB_URL, max: 1 });

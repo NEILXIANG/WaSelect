@@ -99,7 +99,14 @@ function csv() {
 
 const schema = z.object({
   // ── 运行时 ──────────────────────────────────────────────────────────────
-  NODE_ENV: z.enum(['development', 'staging', 'production']).default('development'),
+  /**
+   * 运行环境。**必须接受 `test`**（D17）：Vitest 启动时就会把 `NODE_ENV` 设成 `test`，
+   *      而组装根一接进来，测试里调 `loadConfig(process.env)` 就会因这个值未登记而直接失败——
+   *      属于"测试与生产共用同一条装配路径"之后必然撞上的第一类问题。
+   * @limitation `test` 与 `development` 走同一套"非生产"规则（骨架照挂、日志 debug 级）。
+   *              刻意不把它单独成一类：那会让"测试环境的特殊行为"成为长期的隐藏分支。
+   */
+  NODE_ENV: z.enum(['development', 'staging', 'test', 'production']).default('development'),
   PORT: int(3000, 1),
   /**
    * 监听地址。**生产必须 0.0.0.0**（容器平台从宿主机外部探端口，绑回环 → 健康检查超时、发布失败）。

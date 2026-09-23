@@ -12,7 +12,16 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    passWithNoTests: true,
+    /**
+     * ⚠️ 关掉 `passWithNoTests`（T4）。
+     * @why 打开它的理由曾经成立（F1 阶段四层都还没有测试文件），现在不成立：
+     *      留着的后果是"include 模式写错 / 目录改名 / 文件名拼错 → 一个测试都没匹配上"
+     *      也照样绿灯——这是最危险的一类假绿灯，因为它看起来和真绿灯一模一样。
+     * @limitation `npm run test:fast`（带 `--changed`）在没有改动测试文件时会因此失败，
+     *              所以那个脚本单独加了 `--passWithNoTests`：它本来就是"没改动就什么都不跑"的
+     *              便利命令，不是门禁。门禁用 `npm run gate`，不含 --changed。
+     */
+    passWithNoTests: false,
     environment: 'node',
     exclude: ['**/node_modules/**', '**/dist/**'],
     projects: [
