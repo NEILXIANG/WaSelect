@@ -18,6 +18,8 @@ import { createLogger } from '../../server/src/logger.js';
 import { MOCK_CALLBACK_PATH, mountSkeleton } from '../../server/src/skeleton.js';
 import { createWebhookStore } from '../../server/src/adapters/webhooks.js';
 import { createIdempotencyExecutor } from '../../server/src/adapters/idempotency.js';
+import { createEventBus } from '../../server/src/adapters/event-bus.js';
+import { registerBusinessEventLog } from '../../server/src/app/business-events.js';
 import { MemorySink } from '../helpers/memory-sink.js';
 
 export const E2E_AUTH: AuthConfig = { secret: 'e2e-jwt-secret-'.repeat(3), issuer: 'waselect-e2e' };
@@ -43,20 +45,25 @@ export async function startSkeleton(
     logger,
     rawBodyPaths: (opts.withRawBody ?? true) ? [MOCK_CALLBACK_PATH] : [],
     silentPaths: ['/healthz'],
-    mount: (a) =>
+    mount: (a) => {
+      // 与生产同一条装配路径：总线与订阅者都在装配处接好（不复制一份"测试专用总线"）
+      const events = createEventBus(logger);
+      registerBusinessEventLog(events, logger);
       // env 显式给 development：骨架在 production 下会拒绝挂载（SEC2 闸门），装配处必须回答一次
       mountSkeleton(a, {
         db,
         // 与生产同一条装配路径：实现在装配处注入，业务侧只见端口
         webhooks: createWebhookStore(db),
         idempotency: createIdempotencyExecutor(db),
+        events,
         logger,
         auth: E2E_AUTH,
         callbackSecret: E2E_CALLBACK_SECRET,
         env: 'development',
         // 默认与生产一致（AJ-32 的 15 分钟）；需要"立即超过宽限期"的用例传 0
         callbackOrderGraceMs: opts.graceMs ?? 900_000,
-      }),
+      });
+    },
   });
   const server = await listen(app);
   return { server, base: `http://127.0.0.1:${server.port}`, sink };

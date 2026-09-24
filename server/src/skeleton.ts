@@ -28,9 +28,11 @@ import type { Express } from 'express';
 import { formatOrderNo, jstDateShort, randomOrderSeq } from '@waselect/shared';
 import { requireRole, type AuthConfig } from './app/auth.js';
 import { currentContext } from './context.js';
-import { withTransaction, type Db } from './adapters/db.js';
+import type { Db } from './adapters/db.js';
 import { AppError } from './errors.js';
 import { scopeKey, type IdempotencyExecutor } from './ports/idempotency.js';
+import type { DomainEvent, EventBus } from './ports/events.js';
+import { withUnitOfWork } from './app/unit-of-work.js';
 import type { Logger } from './logger.js';
 import type { IdentityCheck } from './adapters/identity.js';
 import { payloadHash, type WebhookStore } from './ports/webhooks.js';
@@ -56,6 +58,13 @@ export interface SkeletonDeps {
    *             真正的 Db 端口等 domain 出现后按真实用法提炼。
    */
   idempotency: IdempotencyExecutor<Db>;
+  /**
+   * 领域事件总线（F10 端口）。**必填**：装配时由 `createEventBus(logger)` 注入。
+   *
+   * @why 同 webhooks / idempotency：可选就一定有人不传。
+   *      而且总线**必须带 logger**（订阅者失败要落 error），装配处不传就是"静默吞异常"。
+   */
+  events: EventBus;
   logger: Logger;
   auth: AuthConfig;
   /** 模拟回调的 HMAC 密钥（骨架期；真实通道验签在 F11，见 @limitation 二）。 */
@@ -109,10 +118,13 @@ function newOrderNo(): string {
  *
  * @why 抽成共用函数是因为**两个入口都要做同一件事**：真实回调（验签后）与骨架的"模拟触发"。
  *      若各写一份，改一处漏一处就会出现"模拟能过、真实回调失败"这类只在生产暴露的差异。
+ *
+ * @why 走 `withUnitOfWork`（而不是 `withTransaction`）：置为已支付要发 `order.paid` 事件，
+ *      而事件**必须在事务提交之后**分发——否则回滚了订阅者却已经跑过（见 app/unit-of-work.ts）。
  * @throws {AppError} 40400（订单不存在）/ 40902（状态不是 created，多半是回调重发）
  */
-async function markPaid(db: Db, orderId: string): Promise<void> {
-  await withTransaction(db, async (tx) => {
+async function markPaid(db: Db, events: EventBus, orderId: string): Promise<void> {
+  await withUnitOfWork(db, events, async (tx, emit) => {
     // for update：并发回调（机构重发）时排队，避免两次都读到 'created' 各写一次事件
     const rows = await tx`select status from orders where id = ${orderId} for update`;
     const current = rows[0]?.status;
@@ -124,6 +136,8 @@ async function markPaid(db: Db, orderId: string): Promise<void> {
     await tx`
       insert into order_events (order_id, status, actor) values (${orderId}, 'paid', 'system')
     `;
+    // 登记（不是分发）：只有这个事务提交成功，订阅者才会收到 order.paid
+    emit({ name: 'order.paid', at: new Date().toISOString(), orderId });
   });
 }
 
@@ -211,6 +225,11 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
             throw new AppError(40001, { reason: '缺少 Idempotency-Key 头' });
           }
 
+          // 建单的事件在这里收集：**幂等重放时 handler 根本不执行 → 天然不会重复发**。
+          // @why 不能用 withUnitOfWork 包一层：runInTx 自己就是事务，
+          //      而事务里禁止再开事务（adapters/db.ts @limitation 二）。
+          //      所以这里用"手工收集 + 提交后分发"，与 withUnitOfWork 是同一个语义的两种写法。
+          const pendingEvents: DomainEvent[] = [];
           const result = await deps.idempotency.runInTx(
             {
               key: scopeKey({ userId: sub, route: 'skeleton.createOrder', clientKey }),
@@ -242,12 +261,21 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
                 replayed: false,
                 result: 'ok',
               });
+              pendingEvents.push({
+                name: 'order.created',
+                at: new Date().toISOString(),
+                orderId,
+                payload: { order_no: orderNo },
+              });
               return {
                 status: 201,
                 body: { order_id: orderId, order_no: orderNo, status: 'created' as const },
               };
             },
           );
+          // 同上：事务已提交（或本次是重放）之后才分发。
+          // 重放时 pendingEvents 为空 → 不会把"订单已创建"说两遍。
+          deps.events.publishAll(pendingEvents);
           res.status(result.status).json(result.body);
         } catch (e) {
           next(e);
@@ -348,7 +376,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
         //    告警会淹没真正的冲突。
         // ④ 其余状态冲突（expired/cancelled 等）→ 2xx + warn：重发不会变，靠人查。
         try {
-          await markPaid(deps.db, orderId);
+          await markPaid(deps.db, deps.events, orderId);
         } catch (e) {
           const code = e instanceof AppError ? e.code : 0;
           if (code === 40400) {
@@ -466,7 +494,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           const orderId = paramId(req.params.id);
           // 先确认"这张单是他的"再改状态：否则这个骨架端点等于"任何人都能把别人的单改成已支付"
           await readOwnedOrder(deps.db, orderId, sub);
-          await markPaid(deps.db, orderId);
+          await markPaid(deps.db, deps.events, orderId);
           deps.logger.info('skeleton_simulate_paid', { order_id: orderId, result: 'paid' });
           res.json({ order_id: orderId, status: 'paid' });
         } catch (e) {

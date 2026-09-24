@@ -133,6 +133,31 @@ describe('行走骨架：一条链路走到底', () => {
     expect(sink.find('skeleton_payment_callback')).toHaveLength(1);
     // 访问日志（流 C 的请求维度）也在同一条链上
     expect(sink.find('http_request').length).toBeGreaterThanOrEqual(3);
+
+    // ── 6. 领域事件：总线真的在流（订阅者把事件落成了日志）────────────────
+    //    @why 只测"发布方没报错"是假绿：总线一个订阅者都没有时发布照样成功。
+    //         这里断言的是**订阅者确实收到了**，即总线 + 装配 + 发布三方都接上了。
+    const business = sink.find('business_event');
+    const names = business.map(
+      (r) => (r.ctx as { domain_event?: string } | undefined)?.domain_event,
+    );
+    expect(names).toEqual(['order.created', 'order.paid']);
+    expect(business[0]?.order_id).toBe(created.order_id);
+  });
+
+  it('幂等重放**不会**重复发领域事件（重放时 handler 不执行 → 没有事件可发）', async () => {
+    const token = await userToken();
+    const first = await createOrder(token, 'key-event-replay');
+    expect(first.status).toBe(201);
+    const replay = await createOrder(token, 'key-event-replay');
+    expect(replay.status).toBe(201);
+
+    const created2 = sink.find('business_event').filter((r) => {
+      const ctx = r.ctx as { domain_event?: string } | undefined;
+      return ctx?.domain_event === 'order.created';
+    });
+    // 两次请求、一张订单 → "订单已创建"只准说一次
+    expect(created2).toHaveLength(1);
   });
 
   it('同一个 Idempotency-Key 重放：只建一张单，返回首次结果', async () => {
