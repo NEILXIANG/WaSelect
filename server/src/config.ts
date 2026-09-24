@@ -125,27 +125,47 @@ function csv() {
 }
 
 /**
- * CORS 源列表（N11）：每项必须是带 scheme 的 http(s) origin，禁止通配。
+ * CORS 源列表（N11）：每项必须是带 scheme 的 http(s) origin，禁止通配、禁止带路径。
  * @why `CORS_ORIGINS=*` 不会真的生效（http.ts 按白名单逐项匹配），但也**不报错**——
  *      静默通过等于"你以为配上了"。缺 scheme 的 `admin.example.com` 同理。
+ * @why 还必须**拒绝带路径/查询/哈希/用户信息的值**（2026-09-23 自查发现）：
+ *      浏览器发的 `Origin` 头只有 `scheme://host[:port]`，永远不带路径。
+ *      配成 `https://admin.example.com/app` 的后果不是"更精确"而是**永不匹配**——
+ *      管理端所有跨域请求全被拒，而配置看起来是配好的。"配了但不生效"比"没配"更难查。
+ * @limitation 尾斜杠（`https://a.com/`）按合法处理并**归一化**成 `https://a.com`：
+ *             它是 origin 的等价写法，拒绝它会让"看起来最正常的写法"启不来。
  */
 function corsOrigins() {
-  return csv().refine(
-    (items) =>
-      items.every((o) => {
-        // 注：不需要单独的通配符判断——'*' 不是合法 URL host，new URL 会先抛
-        // （'CORS_ORIGINS=* 拒启'用例钉住这个行为；曾有一行 includes('*') 守卫，实测是冗余分支）
-        try {
-          const u = new URL(o);
-          return (u.protocol === 'https:' || u.protocol === 'http:') && u.host.length > 0;
-        } catch {
-          return false;
-        }
-      }),
-    {
-      message:
-        'CORS_ORIGINS 每项必须是带 scheme 的 http(s) origin（如 https://admin.example.com），禁止通配符',
-    },
+  return (
+    csv()
+      .refine(
+        (items) =>
+          items.every((o) => {
+            // 注：不需要单独的通配符判断——'*' 不是合法 URL host，new URL 会先抛
+            // （'CORS_ORIGINS=* 拒启'用例钉住这个行为；曾有一行 includes('*') 守卫，实测是冗余分支）
+            try {
+              const u = new URL(o);
+              if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+              if (u.host.length === 0) return false;
+              // origin 只由 scheme/host/port 组成：其余部分一律视为"配错了"
+              return (
+                u.username === '' &&
+                u.password === '' &&
+                u.search === '' &&
+                u.hash === '' &&
+                (u.pathname === '' || u.pathname === '/')
+              );
+            } catch {
+              return false;
+            }
+          }),
+        {
+          message:
+            'CORS_ORIGINS 每项必须是带 scheme 的 http(s) origin（如 https://admin.example.com）：禁止通配符、路径、查询串与用户信息（Origin 头不含这些，配了也永不匹配）',
+        },
+      )
+      // 归一化：'https://a.com/' → 'https://a.com'，与浏览器实际发送的 Origin 头严格相等
+      .transform((items) => items.map((o) => new URL(o).origin))
   );
 }
 

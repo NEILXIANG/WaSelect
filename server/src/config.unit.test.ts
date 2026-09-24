@@ -394,6 +394,33 @@ describe('配置形状（N11）', () => {
     expect(issues.join('\n')).toContain('CORS_ORIGINS');
   });
 
+  /**
+   * @why 浏览器发的 `Origin` 头**只有** `scheme://host[:port]`，永远不带路径。
+   *      所以配成 `https://admin.example.com/app` 的后果不是"更精确"，而是
+   *      **永不匹配**：服务端的精确白名单比对必然落空，管理端所有跨域请求全被拒，
+   *      而配置看起来是"配好了"——这类"配了但不生效"比"没配"更难查（后者至少会报跨域错）。
+   *      同理带查询串、哈希、用户信息（user:pass@）的值都不是合法 origin。
+   */
+  it('CORS_ORIGINS 条目带路径/查询/用户信息 → 拒启（配了也永不匹配，静默失效）', () => {
+    for (const bad of [
+      'https://admin.example.com/app',
+      'https://admin.example.com/app/',
+      'https://admin.example.com/?a=1',
+      'https://admin.example.com/#x',
+      'https://user:pw@admin.example.com',
+    ]) {
+      const issues = expectReject({ ...baseEnv, CORS_ORIGINS: bad });
+      expect(issues.join('\n'), `「${bad}」应当被拒`).toContain('CORS_ORIGINS');
+    }
+    // 尾斜杠是合法写法（origin 归一化后一致），带端口的也必须放行——两者都不该误伤
+    expect(
+      loadConfig({ ...baseEnv, CORS_ORIGINS: 'https://admin.example.com/' }).CORS_ORIGINS,
+    ).toEqual(['https://admin.example.com']);
+    expect(loadConfig({ ...baseEnv, CORS_ORIGINS: 'http://localhost:5173' }).CORS_ORIGINS).toEqual([
+      'http://localhost:5173',
+    ]);
+  });
+
   it('生产 DATABASE_URL 指向 [::1] / 127.x 都拒启（本机判定按 URL hostname 解析，不是正则碰运气）', () => {
     expect(
       expectReject(prodLike({ DATABASE_URL: 'postgresql://app@[::1]:5432/japan_shop' })).join('\n'),
