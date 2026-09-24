@@ -365,7 +365,10 @@ describe('意外类型的脱敏行为（N16 定向）', () => {
   });
 
   it('PII 姓名键收到非字符串（意外传对象/数字）→ 整值掩码而不是取"首字母"', () => {
-    const out = redact({ recipient: 123456, fullname: { nested: true } }) as Record<string, unknown>;
+    const out = redact({ recipient: 123456, fullname: { nested: true } }) as Record<
+      string,
+      unknown
+    >;
     expect(out.recipient).toBe('***');
     expect(out.fullname).toBe('***');
   });

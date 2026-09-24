@@ -12,10 +12,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createLogger } from './logger.js';
-import {
-  installProcessErrorHandlers,
-  makeProcessErrorHandlers,
-} from './process-errors.js';
+import { installProcessErrorHandlers, makeProcessErrorHandlers } from './process-errors.js';
 import { MemorySink } from '../../test/helpers/memory-sink.js';
 
 function setup() {

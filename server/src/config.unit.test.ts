@@ -376,7 +376,11 @@ describe('配置形状（N11）', () => {
   });
 
   it('合法 URL 通过（staging 允许 http://localhost 调试用；回归：不能把正常配置拦死）', () => {
-    const c = loadConfig({ ...baseEnv, NODE_ENV: 'staging', CHECKOUT_BASE_URL: 'http://localhost:4000' });
+    const c = loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'staging',
+      CHECKOUT_BASE_URL: 'http://localhost:4000',
+    });
     expect(c.CHECKOUT_BASE_URL).toBe('http://localhost:4000');
   });
 

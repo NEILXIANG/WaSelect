@@ -533,9 +533,10 @@ describe('默认参数与竞态窗口（N16 定向）', () => {
     let queries = 0;
     const raceDb = ((strings: TemplateStringsArray, ...vals: unknown[]) => {
       queries += 1;
-      const p = (
-        db as unknown as (s: TemplateStringsArray, ...v: unknown[]) => Promise<unknown[]>
-      )(strings, ...vals);
+      const p = (db as unknown as (s: TemplateStringsArray, ...v: unknown[]) => Promise<unknown[]>)(
+        strings,
+        ...vals,
+      );
       if (queries === 2) {
         // 第 2 个查询 = 接管 update（0 行命中）。它返回后立刻删行 → 紧随的 readRow 查不到
         return p.then(async (rows) => {
@@ -571,7 +572,8 @@ describe('tx 模式的默认形状与等待路径（N16 定向）', () => {
     const second = await run();
     expect(calls).toBe(1);
     expect(second.replayed).toBe(true);
-    const rows = await db`select user_id, request_hash from idempotency_keys where key = 'k-tx-noreq'`;
+    const rows =
+      await db`select user_id, request_hash from idempotency_keys where key = 'k-tx-noreq'`;
     expect(rows[0]?.user_id).toBeNull();
     expect(rows[0]?.request_hash).toBe('');
   });
@@ -637,7 +639,10 @@ describe('续期的失败留痕（N16 定向）', () => {
     const logger = createLogger({ env: 'development', destination: sink });
     let failing = false;
     const r = await withIdempotency(
-      flakyDb(() => new Error('conn reset'), () => failing),
+      flakyDb(
+        () => new Error('conn reset'),
+        () => failing,
+      ),
       { ...args('k-renew-fail'), leaseMs: 150, logger },
       async () => {
         failing = true; // claim 已成功，之后续期每 tick 都抛
@@ -657,7 +662,10 @@ describe('续期的失败留痕（N16 定向）', () => {
     const logger = createLogger({ env: 'development', destination: sink });
     let failing = false;
     const r = await withIdempotency(
-      flakyDb(() => 'string-boom', () => failing),
+      flakyDb(
+        () => 'string-boom',
+        () => failing,
+      ),
       { ...args('k-renew-fail-str'), leaseMs: 150, logger },
       async () => {
         failing = true;

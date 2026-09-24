@@ -251,10 +251,7 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
         // 无请求上下文处（调度器/启动期）`log.child({ trace_id: 'FORGED' })` 能把伪造身份
         // 烙进每一行日志且无人纠正。现在与调用点同策略：非生产抛错、生产改名留痕，
         // 仅放行 CHILD_BINDABLE_KEYS（module/actor 这两个合法身份通道）。
-        const { safe, dropped } = splitReserved(
-          redact(extra) as LogFields,
-          CHILD_BINDABLE_KEYS,
-        );
+        const { safe, dropped } = splitReserved(redact(extra) as LogFields, CHILD_BINDABLE_KEYS);
         if (dropped.length > 0) {
           if (strict) {
             throw new TypeError(

@@ -142,8 +142,7 @@ export function createDb(opts: CreateDbOptions): Db {
     connection: {
       statement_timeout: opts.statementTimeoutMs ?? DEFAULT_STATEMENT_TIMEOUT_MS,
       lock_timeout: opts.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
-      idle_in_transaction_session_timeout:
-        opts.idleInTxTimeoutMs ?? DEFAULT_IDLE_IN_TX_TIMEOUT_MS,
+      idle_in_transaction_session_timeout: opts.idleInTxTimeoutMs ?? DEFAULT_IDLE_IN_TX_TIMEOUT_MS,
     },
   }) as Db;
 }

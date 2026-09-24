@@ -94,9 +94,7 @@ describe('连接与探活', () => {
     const lock = await db`show lock_timeout`;
     expect(parseMs(String(lock[0]?.lock_timeout ?? '0'))).toBeGreaterThan(0);
     const idle = await db`show idle_in_transaction_session_timeout`;
-    expect(parseMs(String(idle[0]?.idle_in_transaction_session_timeout ?? '0'))).toBeGreaterThan(
-      0,
-    );
+    expect(parseMs(String(idle[0]?.idle_in_transaction_session_timeout ?? '0'))).toBeGreaterThan(0);
   });
 
   it(`Postgres 大版本 >= ${MIN_POSTGRES_MAJOR}（与生产一致，代码里有硬闸门）`, async () => {
