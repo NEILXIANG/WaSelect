@@ -136,6 +136,16 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
   },
   'server/src/app/mark-paid.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
 
+  // F12 重试判定：**唯一一种"加了会让事情更糟"的容错**——不重试最多是失败，
+  // 而错的重试会制造出本来不存在的第二次扣款，且上下游都认为自己是第一次。
+  // 这一组纯函数就是那条红线的全部实现，必须 100%，且每个分类都要有对应用例。
+  'server/src/ports/http-client.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
   'server/src/app/auth.ts': { branches: 95 },
