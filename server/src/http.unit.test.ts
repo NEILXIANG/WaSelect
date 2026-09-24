@@ -9,6 +9,7 @@ import type { Express } from 'express';
 import { Buffer } from 'node:buffer';
 import { connect } from 'node:net';
 import { MemorySink } from '../../test/helpers/memory-sink.js';
+import { emitRealSignal } from '../../test/signal-harness.js';
 import { createHttpApp, defaultHost, installShutdownHandlers, listen } from './http.js';
 import { createLogger, type Logger } from './logger.js';
 import { AppError } from './errors.js';
@@ -553,13 +554,37 @@ describe('优雅关闭', () => {
       expect(process.listeners('SIGTERM')).toHaveLength(1);
       expect(process.listeners('SIGINT')).toHaveLength(1);
 
-      // 真实信号投递会把信号名作为第一个参数传给监听器，这里必须显式带上，
-      // 否则 handler 收到 undefined，日志里的 signal 字段就空了（与生产不一致）
-      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      // 用真实投递形状发信号：(信号名, 信号编号)——单参数的旧写法测不到编号泄漏类缺陷
+      emitRealSignal('SIGTERM');
       await vi.waitFor(() => expect(exits).toEqual([0]), { timeout: 1000 });
       expect(order).toEqual(['beforeDrain', 'afterDrain']);
       expect(sink.find('server_drained')[0]?.signal).toBe('SIGTERM');
       expect(sink.find('server_stopped')[0]?.signal).toBe('SIGTERM');
+    } finally {
+      uninstall();
+      await started.close().catch(() => undefined);
+    }
+  });
+
+  /**
+   * 回归（dist-boot e2e 抓到的真缺陷）：Node **真实投递**信号时，回调入参是
+   * `(信号名, 信号编号)` 两个值（实测 Node 22.22 / 25.3：`('SIGTERM', 15)`、`('SIGINT', 2)`）。
+   * 曾经信号监听器直接挂 `handler(signal, successExitCode = 0)`，第二个入参 15 顶掉默认值，
+   * 于是 OS 信号触发的**正常**停机退出码变成 15——平台会把每次部署当异常退出。
+   * 这条用例必须用真实投递形状发信号；只发一个参数的旧写法测不到这个缺陷。
+   */
+  it('真实信号投递形状（信号名 + 信号编号）下，正常停机退出码仍为 0', async () => {
+    const logger = createLogger({ env: 'development', destination: new MemorySink() });
+    const started = await listen(createHttpApp({ logger }));
+    const exits: number[] = [];
+    const { uninstall } = installShutdownHandlers(started, {
+      logger,
+      exit: (code) => exits.push(code),
+      exitDelayMs: 10,
+    });
+    try {
+      emitRealSignal('SIGTERM');
+      await vi.waitFor(() => expect(exits).toEqual([0]), { timeout: 1000 });
     } finally {
       uninstall();
       await started.close().catch(() => undefined);
@@ -603,7 +628,8 @@ describe('优雅关闭', () => {
       const inflight = fetch(`${`http://127.0.0.1:${started.port}`}/needs-resource`);
       // 等请求确实进了 handler 再发信号，否则测的是"还没到就关了"
       await new Promise((r) => setTimeout(r, 60));
-      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      // 形状与 Node 真实投递一致：(信号名, 信号编号)——编号漏进退出码会变 15（见上文回归用例）
+      emitRealSignal('SIGTERM');
 
       const res = await inflight;
       expect(res.status).toBe(200);
@@ -631,8 +657,9 @@ describe('优雅关闭', () => {
       exitDelayMs: 10,
     });
     try {
-      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
-      process.emit('SIGINT' as NodeJS.Signals, 'SIGINT');
+      // 形状与 Node 真实投递一致：(信号名, 信号编号)——编号漏进退出码会变 15（见上文回归用例）
+      emitRealSignal('SIGTERM');
+      emitRealSignal('SIGINT');
       await vi.waitFor(() => expect(exits.length).toBeGreaterThan(0), { timeout: 1000 });
       expect(drainCalls).toBe(1);
     } finally {
@@ -714,7 +741,8 @@ describe('优雅关闭', () => {
     });
     try {
       const t0 = performance.now();
-      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      // 形状与 Node 真实投递一致：(信号名, 信号编号)——编号漏进退出码会变 15（见上文回归用例）
+      emitRealSignal('SIGTERM');
       await vi.waitFor(() => expect(exits).toEqual([0]), { timeout: 2000 });
       const elapsed = performance.now() - t0;
       // 等待必须真实发生（留 10% 调度误差下限），且顺序仍是 摘流量 → 排空 → 关资源
@@ -738,7 +766,8 @@ describe('优雅关闭', () => {
     });
     try {
       const t0 = performance.now();
-      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      // 形状与 Node 真实投递一致：(信号名, 信号编号)——编号漏进退出码会变 15（见上文回归用例）
+      emitRealSignal('SIGTERM');
       await vi.waitFor(() => expect(exits).toEqual([0]), { timeout: 1000 });
       expect(performance.now() - t0).toBeLessThan(500);
     } finally {

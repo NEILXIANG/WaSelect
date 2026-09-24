@@ -71,6 +71,9 @@ async function boot(): Promise<Booted> {
       JWT_SECRET: 'dist-boot-jwt-secret-'.repeat(3),
       PAYMENT_CHANNELS: 'mock',
       TERMS_VERSION: 'TOS-TEST-1',
+      // N7 默认 5s 会把"SIGTERM→退出"拖到 ~7s（+exitDelay 2s），远超测试超时；
+      // 这里验证的是"停机流存在且顺序对"，不是等待时长本身（时长在 main.db.test 的 N7 端到端里验）
+      SHUTDOWN_READY_DELAY_MS: '50',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -191,10 +194,21 @@ describe('编译产物能被 npm start 那条命令真正启动（A1）', () => 
     const r = await b.stop();
     // 之后不再重复 stop
     booted = null;
-    // 优雅停机是**自己调 process.exit(0) 退出**的，signal 为 null；
+    // 优雅停机是**自己设 exitCode 后自然退出**的，signal 为 null；
     // 若这里是被 SIGKILL 强杀，上面的 stop() 已经抛错了，不会走到这一行。
     // 所以判据是"退出码 0 且没有残留信号"，而不是"signal === SIGTERM"。
-    expect(r.code, `退出码不是 0：${r.code} / ${r.signal}`).toBe(0);
+    //
+    // ⚠️ 这条断言是**唯一能抓到「退出码 15」缺陷**的地方（2026-09-23 实抓）：
+    //    Node 真实投递信号时回调入参是 (信号名, 信号编号)，曾经信号监听器直接挂
+    //    `handler(signal, successExitCode = 0)`，于是 15 顶掉默认值 → 每次正常部署
+    //    都以退出码 15 结束，平台会按"异常退出"处理。单测里用 process.emit 单参数
+    //    模拟信号测不出这个差异，**只有真发信号的产物级用例能抓到**——这就是本文件存在的理由。
+    //    修复与回归测试见 http.ts（注册处包箭头函数）与 http.unit.test.ts。
+    // 失败信息里带上 stdout/stderr：产物侧排障只有这两个东西，空断言消息等于二次排查
+    expect(
+      r.code,
+      `退出码不是 0：${r.code} / ${r.signal}\n── stdout ──\n${r.stdout}\n── stderr ──\n${b.stderr}`,
+    ).toBe(0);
     expect(r.stdout).toContain('traffic_draining');
     expect(r.stdout).toContain('server_drained');
   });

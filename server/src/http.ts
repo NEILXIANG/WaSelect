@@ -610,10 +610,23 @@ export function installShutdownHandlers(
     })();
   };
 
-  for (const s of signals) process.on(s, handler);
+  /**
+   * ⚠️ 绝不能写成 `process.on(s, handler)`：Node **真实投递**信号时回调入参是两个值
+   *    `(信号名, 信号编号)`（实测 Node 22.22 / 25.3：`('SIGTERM', 15)`、`('SIGINT', 2)`），
+   *    第二个入参会顶掉 `successExitCode` 的默认值 0——OS 信号触发的**正常**停机
+   *    会以退出码 15/2 结束，平台（Render）会把每次例行部署误判成异常退出。
+   *    （dist-boot e2e 抓到的真缺陷：`finish(15)`。）
+   *    所以包一层箭头函数，只把信号名喂给 handler；
+   *    `successExitCode` 只允许经 `trigger()` 由代码显式给出（如进程级错误传 1）。
+   */
+  const wrapped: Array<readonly [(typeof signals)[number], () => void]> = signals.map((s) => {
+    const fn = (): void => handler(s);
+    process.on(s, fn);
+    return [s, fn] as const;
+  });
   return {
     uninstall: () => {
-      for (const s of signals) process.off(s, handler);
+      for (const [s, fn] of wrapped) process.off(s, fn);
     },
     trigger: (signal, successExitCode) => handler(signal, successExitCode),
   };

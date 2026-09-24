@@ -8,12 +8,15 @@
  *
  * @limitation 走 db project（串行）：bootstrap 会占用固定端口，并行会撞端口。
  *             端口在测试里显式分配，不用 0——`PORT` 的 schema 下限是 1（0 会被判非法）。
- * @limitation 不覆盖"进程收到真信号后退出码"那一段（已在 http.unit.test.ts 覆盖），
- *             这里只验"组装出来的东西能用"。
+ * @limitation 真信号投递（OS → Node 回调）那一层由 http.unit.test.ts（模拟投递形状）
+ *             与 dist-boot.e2e.test.ts（真发 SIGTERM 给产物）覆盖，这里不发真信号；
+ *             但停机用例会**断言退出码是 0**——"信号编号漏进退出码"这类缺陷在装配层
+ *             看得见，不该只留给产物级用例去抓（2026-09-23 实抓一次）。
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { bootstrap, shouldMountSkeleton, type Runtime } from './main.js';
 import { ensureTestDb, TEST_DB_URL } from '../../test/db/test-db.js';
+import { emitRealSignal } from '../../test/signal-harness.js';
 
 /** 组装根测试专用端口（与 e2e 的 0 端口不冲突；db project 串行，彼此也不撞）。 */
 const PORT_DEV = 4611;
@@ -163,8 +166,12 @@ describe('组装根 bootstrap（A1）', () => {
       logDestination: { write },
       exit: () => undefined,
     });
+    // 清掉上一次停机留下的退出码，保证下面的断言只反映**本次**停机
+    const prevExitCode = process.exitCode;
+    process.exitCode = undefined;
     try {
-      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      // 形状与 Node 真实投递一致：(信号名, 信号编号)
+      emitRealSignal('SIGTERM');
       // ⚠️ 这里**不能**自己再调 server.close()：那会让停机处理器撞上"已关闭的 server"，
       //    于是它走的是 server_stop_failed 分支，测出来的顺序是假的。
       //    正确做法：等它自己走完。
@@ -176,7 +183,12 @@ describe('组装根 bootstrap（A1）', () => {
       expect(draining).toBeGreaterThanOrEqual(0);
       expect(drained).toBeGreaterThanOrEqual(0);
       expect(draining).toBeLessThan(drained);
+      // 正常停机的退出码必须是 0，**不能是信号编号 15**：
+      // 生产靠 process.exitCode 自然退出（不调 process.exit，否则会丢日志），
+      // 所以这里断言 exitCode 才是与生产一致的判据（注入的 exit 只在 2s 兜底时才被调）。
+      await vi.waitFor(() => expect(process.exitCode).toBe(0), { timeout: 1000 });
     } finally {
+      process.exitCode = prevExitCode;
       rt.uninstallSignals();
       rt.uninstallProcessErrors();
       await rt.server.close().catch(() => undefined);
@@ -196,10 +208,12 @@ describe('组装根 bootstrap（A1）', () => {
       logDestination: { write },
       exit: () => undefined,
     });
+    const prevExitCode = process.exitCode;
+    process.exitCode = undefined;
     try {
       await expect((await fetch(`http://127.0.0.1:${PORT_DEV}/readyz`)).status).toBe(200);
       const t0 = performance.now();
-      process.emit('SIGTERM' as NodeJS.Signals, 'SIGTERM');
+      emitRealSignal('SIGTERM');
       // 窗口期（400ms 内）：/readyz 必须已经是 503，且停机还没完成
       await new Promise((r) => setTimeout(r, 120));
       await expect((await fetch(`http://127.0.0.1:${PORT_DEV}/readyz`)).status).toBe(503);
@@ -211,7 +225,9 @@ describe('组装根 bootstrap（A1）', () => {
       expect(performance.now() - t0).toBeGreaterThanOrEqual(380);
       expect(lines.some((l) => l.includes('drain_ready_waited'))).toBe(true);
       expect(lines.some((l) => l.includes('server_stopped'))).toBe(true);
+      await vi.waitFor(() => expect(process.exitCode).toBe(0), { timeout: 1000 });
     } finally {
+      process.exitCode = prevExitCode;
       rt.uninstallSignals();
       rt.uninstallProcessErrors();
       await rt.server.close().catch(() => undefined);
