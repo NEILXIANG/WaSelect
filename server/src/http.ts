@@ -8,8 +8,9 @@
  *      ③ 访问日志一旦漏配，"用户操作行为"这条需求就只剩业务事件，缺了请求维度（耗时/状态码/路径）；
  *      ④ raw body 顺序一旦错了，回调验签永远失败（签名必须用**未被解析的原文**验）。
  *
- * @limitation 一：`trust proxy` 全开。Render / Cloudflare 后面 req.ip 才正确（限流与审计依赖它），
- *              但代价是 `X-Forwarded-For` 可伪造——仅用于限流与日志，**绝不用于鉴权**。
+ * @limitation 一：`trust proxy` **层数由配置决定**（D23，`TRUST_PROXY_HOPS`，绝不是全开）——
+ *              全开会信客户端自报的 `X-Forwarded-For`，req.ip 可伪造（限流与审计依赖它）。
+ *              即便按层数取，ip 也只用于限流与日志，**绝不用于鉴权**。
  * @limitation 二：健康检查默认不打访问日志（Render 每 30s 探活会淹没日志），
  *              因此"服务真的收到过多少次外部请求"不能只看访问日志，要看限流与业务事件。
  * @limitation 三：raw body 路由按**路径前缀**匹配，路径写错就会静默退化成 JSON 解析（验签必然失败且不报明确错）。
@@ -549,7 +550,10 @@ export interface ShutdownControl {
  *              （pino 走 sonic-boom 异步写，立即 exit 会丢最后几条日志）。
  *              代价：若有句柄忘了关（DB 池没 end），进程会挂住——因此加了 2s 硬退出的兜底定时器。
  */
-export function installShutdownHandlers(started: StartedServer, hooks: ShutdownHooks): ShutdownControl {
+export function installShutdownHandlers(
+  started: StartedServer,
+  hooks: ShutdownHooks,
+): ShutdownControl {
   const signals = ['SIGTERM', 'SIGINT'] as const;
   const exit = hooks.exit ?? process.exit;
   const delayMs = hooks.exitDelayMs ?? 2000;

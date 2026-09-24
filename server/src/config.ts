@@ -92,7 +92,9 @@ function optionalText() {
 function optionalUrl() {
   return z.preprocess(
     (v) => (v === undefined || v === '' ? undefined : v),
-    z.url({ protocol: /^https?$/, error: '必须是 http(s) URL（如 https://checkout.example.com）' }).optional(),
+    z
+      .url({ protocol: /^https?$/, error: '必须是 http(s) URL（如 https://checkout.example.com）' })
+      .optional(),
   );
 }
 
@@ -140,7 +142,10 @@ function corsOrigins() {
           return false;
         }
       }),
-    { message: 'CORS_ORIGINS 每项必须是带 scheme 的 http(s) origin（如 https://admin.example.com），禁止通配符' },
+    {
+      message:
+        'CORS_ORIGINS 每项必须是带 scheme 的 http(s) origin（如 https://admin.example.com），禁止通配符',
+    },
   );
 }
 

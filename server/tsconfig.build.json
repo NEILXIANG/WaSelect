@@ -1,7 +1,7 @@
 /**
  * server 的**构建**配置（A1）：产出 Node 可直接运行的 JS 到 `server/dist`。
  *
- * @why `packages/shared` 的运行时入口是 TS 源码（`main: "src/index.ts"`），
+ * @why `packages/shared` 的默认解析入口是 TS 源码（`exports` 的 `default` 条件指向 `src/index.ts`），
  *      生产 Node 加载不了。这里只编译 server 自身；shared 由 `build:shared` 单独编译，
  *      运行时靠 `exports` 的 `waselect-runtime` 条件导出指到它的 `dist`。
  *

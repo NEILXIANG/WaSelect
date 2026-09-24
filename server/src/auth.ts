@@ -35,7 +35,7 @@ export interface Principal {
   /** 内部用户 ID（users.id 或 admins.id），不是 openid——openid 不进 token（脱敏红线）。 */
   sub: string;
   role: Role;
-  /** 签发时写入的 token 版本，将来做即时失效用（当前恒为 1）。 */
+  /** 签发时写入的 token 版本：改密/封禁/撤权后回源比对 `users.token_ver`，不等自然过期（D25，已生效）。 */
   ver?: number | undefined;
 }
 
