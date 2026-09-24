@@ -5,9 +5,9 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Express } from 'express';
-import { MemorySink } from '../../test/helpers/memory-sink.js';
-import { createHttpApp, listen } from './http.js';
-import { createLogger } from './logger.js';
+import { MemorySink } from '../../../test/helpers/memory-sink.js';
+import { createHttpApp, listen } from '../http.js';
+import { createLogger } from '../logger.js';
 import { SignJWT } from 'jose';
 import {
   AUDIENCE,
@@ -21,7 +21,7 @@ import {
   type AuthConfig,
   type Principal,
 } from './auth.js';
-import type { IdentityCheck } from './adapters/identity.js';
+import type { IdentityCheck } from '../adapters/identity.js';
 import { decodeJwt } from 'jose';
 
 const cfg: AuthConfig = { secret: 'a'.repeat(40), issuer: 'waselect-test' };

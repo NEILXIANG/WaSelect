@@ -5,7 +5,7 @@
  * @limitation 这是**全局**增强：任何路由都能写 req.auth。因此约定只有 `requireRole` 会写它，
  *             代码评审时把"req.auth =" 当作红线（除中间件外出现即为违规）。
  */
-import type { Principal } from './auth.js';
+import type { Principal } from './app/auth.js';
 
 declare global {
   namespace Express {

@@ -11,7 +11,7 @@
  *              "配错"时的症状是验签永远失败，排查会误导向密钥/机构——
  *              所以 `skeleton.e2e.test.ts` 里有一条专门的断链用例把它钉住。
  */
-import { signToken, type AuthConfig } from '../../server/src/auth.js';
+import { signToken, type AuthConfig } from '../../server/src/app/auth.js';
 import type { Db } from '../../server/src/adapters/db.js';
 import { createHttpApp, listen, type StartedServer } from '../../server/src/http.js';
 import { createLogger } from '../../server/src/logger.js';

@@ -26,7 +26,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Express } from 'express';
 import { formatOrderNo, jstDateShort, randomOrderSeq } from '@waselect/shared';
-import { requireRole, type AuthConfig } from './auth.js';
+import { requireRole, type AuthConfig } from './app/auth.js';
 import { currentContext } from './context.js';
 import { withTransaction, type Db } from './adapters/db.js';
 import { AppError } from './errors.js';

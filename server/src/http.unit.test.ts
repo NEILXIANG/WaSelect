@@ -13,7 +13,7 @@ import { emitRealSignal } from '../../test/signal-harness.js';
 import { createHttpApp, defaultHost, installShutdownHandlers, listen } from './http.js';
 import { createLogger, type Logger } from './logger.js';
 import { AppError } from './errors.js';
-import { requireRole, signToken, type AuthConfig } from './auth.js';
+import { requireRole, signToken, type AuthConfig } from './app/auth.js';
 
 const RAW_CALLBACK_PATH = '/api/v1/pay/callback/stripe';
 
