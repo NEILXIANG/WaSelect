@@ -247,6 +247,38 @@ describe('getForRefund（下线语义：禁用只影响新单，不影响老单�
   });
 });
 
+describe('getForCallback（回调语义：比退款更根本，禁用**也不**拦）', () => {
+  /**
+   * @why 这一组是本次新增，理由值得单独写：
+   *      回调对应的是**钱已经收了、要落账**的事件，比退款更根本——
+   *      退款是我们要主动退钱（不做，用户可以来问）；
+   *      回调不做，就是"用户付了钱、订单永远是未支付、货不发、也没人报警"。
+   *      所以 `getForCallback` **连 `refundableWhenDisabled` 都不看**：
+   *      那条能力声明说的是"退款"，管不到"已经付成功的通知"。
+   */
+  it('已禁用 → **仍可取到**（禁用只阻止新单，不阻止已发生支付的回调落账）', () => {
+    const r = createPaymentRegistry({ configs: [cfg({ channel: 'a', enabled: false })] });
+    r.register('a', (c) => stub(c.channel));
+    expect(r.getForCallback('a').channel).toBe('a');
+    // 对照：同一通道在建单路径上不可用（三条路径的边界就靠这几行钉住）
+    expectChannelError(() => r.get('a'), 'channel_disabled');
+  });
+
+  it('已禁用且 refundableWhenDisabled=false → **照样可取**（该声明只管退款，管不到回调）', () => {
+    const r = createPaymentRegistry({ configs: [cfg({ channel: 'a', enabled: false })] });
+    r.register('a', (c) => stub(c.channel, { refundableWhenDisabled: false }));
+    expect(r.getForCallback('a').channel).toBe('a');
+    // 对照：退款路径上这同一条配置是**拒绝**的
+    expectChannelError(() => r.getForRefund('a'), 'channel_disabled_and_not_refundable');
+  });
+
+  it('未配置 / 未注册工厂 → 抛（验不了签就必须响亮地失败，不能静默收下）', () => {
+    const r = createPaymentRegistry({ configs: [cfg({ channel: 'nofactory' })] });
+    expectChannelError(() => r.getForCallback('nope'), 'channel_not_configured');
+    expectChannelError(() => r.getForCallback('nofactory'), 'channel_not_registered');
+  });
+});
+
 describe('注册期不变式（声明必须与实现一致）', () => {
   it('重复注册同名通道 → 抛（静默覆盖会让"生效的是谁"变成谜）', () => {
     const r = createPaymentRegistry({ configs: [] });

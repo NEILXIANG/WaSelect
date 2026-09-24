@@ -129,6 +129,19 @@ export function createPaymentRegistry(opts: RegistryOptions): PaymentRegistry {
       return provider;
     },
 
+    /**
+     * ⚠️ 这里**刻意不判 `enabled`**：见端口上 `getForCallback` 的 @why。
+     *    与 `getForRefund` 的差别只有一处——它还要看 `refundableWhenDisabled`，这里不看；
+     *    因为那条能力声明说的是"退款"，管不到"已经付成功的通知"。
+     */
+    getForCallback(channel) {
+      const cfg = configs.get(channel);
+      if (cfg === undefined) throw channelUnavailable(channel, 'channel_not_configured');
+      const provider = resolve(channel);
+      if (provider === undefined) throw channelUnavailable(channel, 'channel_not_registered');
+      return provider;
+    },
+
     listAvailable(query: ChannelQuery): ChannelView[] {
       const out: Array<{ view: ChannelView; priority: number; channel: string }> = [];
       for (const cfg of configs.values()) {

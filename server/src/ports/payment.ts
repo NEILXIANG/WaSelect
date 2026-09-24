@@ -218,6 +218,25 @@ export interface PaymentRegistry {
    * 但仅当 `capabilities.refundableWhenDisabled === true`（见该字段的 @why）。
    */
   getForRefund(channel: string): PaymentProvider;
+  /**
+   * 取**用于解析已发生支付的回调**的通道。
+   *
+   * @why 这是第三个取用方法，**不是** `get()` 或 `getForRefund()` 的别名——
+   *      三条路径对应三件不同的事，混用任何两条都会出事故：
+   *        · `get()`           = **新单**：禁用即不可用（下线后不再有新的钱走这条路）
+   *        · `getForRefund()`  = **老单退款**：禁用仍可用，但要 `refundableWhenDisabled`
+   *        · `getForCallback()`= **老单回调**：禁用**也不拦**，且连 `refundableWhenDisabled` 都不看
+   *      回调比退款更根本：退款不做，用户可以来问、客服可以补；
+   *      回调不做，就是"用户付了钱、订单永远停在未支付、货不发、也没有任何告警"——
+   *      而触发它的往往正是"通道刚被下线"这一刻（还有一批在路上、在宽限期内的支付）。
+   *      用 `get()` 接回调 = 每下线一个通道就静默吞掉一批已付款的订单。
+   *
+   * @limitation **不检查 enabled**，因此一个被永久下线且代码已删除的通道，
+   *             其迟到回调会拿到 40001（`channel_not_registered`）而不是被静默忽略。
+   *             这是刻意的：验不了签就必须响亮地失败，让"还有钱在路上"变成一条可检索的告警，
+   *             而不是变成对账时才发现的差额。
+   */
+  getForCallback(channel: string): PaymentProvider;
   /** 按 `(目的国, 金额, 币种, 优先级)` 过滤并排序；禁用项不出现。 */
   listAvailable(query: ChannelQuery): ChannelView[];
 }

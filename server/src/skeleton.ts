@@ -26,6 +26,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Express } from 'express';
 import { requireRole, type AuthConfig } from './app/auth.js';
+import { handleProviderCallback } from './app/pay-callback.js';
 import { currentContext } from './context.js';
 import type { Db } from './adapters/db.js';
 import { buildOrderNo } from './domain/order-no.js';
@@ -335,168 +336,50 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           throw new AppError(40001, { reason: '回调缺少 order_id' });
         }
 
-        // ── 回调登记（D3）：先落一行"我们收到过"，再去处理 ──────────────────────
-        // @why 登记必须在**处理之前**：只有"收到"这件事是确定的，处理结果可能失败、可能冲突。
-        //      反过来（处理完才登记）会让"处理崩溃的回调"在表里彻底消失，
-        //      于是对账任务永远看不到它——那正是最需要被看到的那一类。
-        const eventIdRaw = (parsed as { event_id?: unknown } | null)?.event_id;
-        const webhook = {
-          provider: 'mock',
-          // 机构没给 event_id 时（骨架的模拟回调就没有），用原文摘要兜底：
-          // 内容完全相同的重复投递因此也能被识别
-          eventId:
-            typeof eventIdRaw === 'string' && eventIdRaw.length > 0
-              ? eventIdRaw
-              : `sha256:${payloadHash(raw)}`,
-          eventType: 'payment.succeeded',
-          hash: payloadHash(raw),
-        };
-        const claim = await deps.webhooks.claim(webhook);
-        if (claim.state === 'handled') {
-          // 重复投递：直接收下，不重复处理——但必须留一条可检索的日志，
-          // 否则"机构在重发"这件事会被当成"一切正常"
-          deps.logger.info('webhook_duplicate', {
-            order_id: orderId,
-            provider: webhook.provider,
-            result: 'ignored',
-            ctx: { event_id: webhook.eventId },
-          });
-          res.json({ received: true, order_id: orderId, duplicate: true });
-          return;
-        }
         /**
-         * N22：`inflight` = **另一个请求正在处理这个事件**（租约未过期）。
-         * @why 这里必须回 503 而不是 2xx：2xx 会让机构认为"处理完了"从而停止重发，
-         *      而我们这侧若那一次处理最终失败（进程崩了），就没有第二次机会了
-         *      ——只能等每日对账（F13），而"钱到单未付"多滞留一天是不可接受的。
-         *      503 + Retry-After 让机构稍后重发，届时要么读到结果（handled → 2xx），
-         *      要么租约已过期可以接管（retry）——两条路都通向正确处理。
-         * @why 不在这里**等待**对方处理完（像幂等那样轮询）：
-         *      回调的响应时间要尽量短（机构侧通常有 5–30s 超时），
-         *      而机构的重发机制本来就是为"稍后再试"设计的，等它重发比我们占着连接更划算。
+         * ── 交给**统一处理管线**（F11）─────────────────────────────────────
+         * @why 登记 / 冲突分层 / 封口这一段曾经就写在这里。它现在只有一份，在
+         *      `app/pay-callback.ts`——骨架与 `/pay/callback/:channel` 共用。
+         *      理由见那个文件的抬头：这段逻辑每一条都是踩过坑才定下来的
+         *      （宽限期用 DB 时钟、"已是 paid"不算冲突、早到要交还租约），
+         *      复制两份之后改一份忘一份，表现就是"模拟回调能过、真实回调不落账"。
+         * @limitation 骨架自己**仍然做** HMAC 验签与 JSON 解析，不走 Provider：
+         *      这条路径是脚手架（业务期 I1 整体删除），
+         *      真正的 mock 通道走 `/pay/callback/mock`（注册表里的 `mock` Provider）。
+         *      两边刻意保持同一套报文约定（`x-mock-signature` + `{order_id,event_id,type}`），
+         *      这样迁移到统一分发时测试只需换路径、不用改报文。
          */
-        if (claim.state === 'inflight') {
-          deps.logger.info('webhook_inflight', {
-            provider: webhook.provider,
-            result: 'deferred',
-            ctx: { event_id: webhook.eventId },
-          });
-          res
-            .status(503)
-            .set('retry-after', '10')
-            .json({ received: false, reason: 'already_processing' });
-          return;
+        const eventIdRaw = (parsed as { event_id?: unknown } | null)?.event_id;
+        const typeRaw = (parsed as { type?: unknown } | null)?.type;
+        const outcome = await handleProviderCallback(
+          {
+            webhooks: deps.webhooks,
+            logger: deps.logger,
+            graceMs: deps.callbackOrderGraceMs,
+            apply: async (e) => markPaid(deps.db, deps.events, deps.clock, e.orderId),
+          },
+          'mock',
+          raw,
+          {
+            // 机构没给 event_id 时（骨架的模拟回调就没有），用原文摘要兜底：
+            // 内容完全相同的重复投递因此也能被识别
+            eventId:
+              typeof eventIdRaw === 'string' && eventIdRaw.length > 0
+                ? eventIdRaw
+                : `sha256:${payloadHash(raw)}`,
+            rawType:
+              typeof typeRaw === 'string' && typeRaw.length > 0 ? typeRaw : 'payment.succeeded',
+            // 骨架的模拟回调只表达"付成功了"这一件事
+            outcome: 'succeeded',
+            orderId,
+            providerRef: '',
+          },
+        );
+        if (outcome.disposition === 'paid') {
+          deps.logger.info('skeleton_payment_callback', { order_id: orderId, result: 'paid' });
         }
-        // 走到这里：claim.state 是 'new' 或 'retry'，且 claim.token 一定存在——
-        // 本次是唯一持有者，处理结果由它携带令牌写回（N22 栅栏）
-
-        // ── 冲突分层（AJ-32/N4/N13，取代旧的"一律 2xx + warn"）────────────────
-        // ① 订单不存在 + 宽限期内 → **503**：让机构的重发机制替我们兜底，
-        //    processed_at 保持 NULL（对账信号 + 重发能补上）。
-        //    旧行为是一律 2xx——"可重试"的登记被 200 抵消，机构永不重发（N4）。
-        // ② 订单不存在 + 超过宽限期 → 2xx + **error** 告警 + 落 unmatched 转对账：
-        //    脏回调不该无限占用机构重发队列，但"钱到单未付"也绝不能静默。
-        // ③ 订单已是 paid → paid:already + **info**：同一订单的另一事件类型到达是
-        //    正常形态（N13：先 payment_intent.succeeded 后 checkout.session.completed），
-        //    告警会淹没真正的冲突。
-        // ④ 其余状态冲突（expired/cancelled 等）→ 2xx + warn：重发不会变，靠人查。
-        try {
-          await markPaid(deps.db, deps.events, deps.clock, orderId);
-        } catch (e) {
-          const code = e instanceof AppError ? e.code : 0;
-          if (code === 40400) {
-            // ⚠️ 用 **DB 时钟**做减法（claim.nowAt 与 firstReceivedAt 同源）：
-            //    应用时钟与 DB 时钟不同源，拿 Date.now() 减 received_at 会让宽限期被时钟偏移扭曲
-            //    ——最坏情况是"钱到单未付"被静默判成超期（@see webhooks.ts ClaimResult.nowAt）
-            const elapsedMs = claim.nowAt.getTime() - claim.firstReceivedAt.getTime();
-            // ⚠️ 用严格小于（`elapsedMs < graceMs`），不是 `<=`：
-            //    "宽限期 = 0"的语义必须是**零宽限**（任何早到都立即转 unmatched），
-            //    若写成 `<=`，则 elapsed 恰好为 0 时仍算宽限期内——
-            //    在 DB 时钟下"刚到"的 elapsed 就是 0，于是零宽限配置永远走不到超期分支
-            //    （本文件那条 graceMs=0 的用例原先是靠"应用时钟比 DB 时钟快几毫秒"才偶然成立的）。
-            if (elapsedMs < deps.callbackOrderGraceMs) {
-              deps.logger.warn('callback_early', {
-                order_id: orderId,
-                result: 'retry_scheduled',
-                ctx: { event_id: webhook.eventId, grace_ms: deps.callbackOrderGraceMs },
-              });
-              /**
-               * ⚠️ **必须交还租约**（N22 的补丁，被自己的 e2e 抓出来）：
-               *    这个请求到此就结束了，它并不在"处理中"，租约却还挂在它名下 10 秒。
-               *    不交还的话，机构按 Retry-After 发来的重投会被判成 `inflight`（再吃一个 503），
-               *    "早到 → 重发 → 补上"这条链被租约自己掐断——而它正是"钱到单未付"的兜底。
-               *    `processed_at` 保持 NULL 不变：那才是"待办"信号（对账 + 允许被接管）。
-               */
-              await deps.webhooks.releaseLease({ ...webhook, token: claim.token ?? '' });
-              // Retry-After 给机构一个重发节奏提示（30s 远小于宽限期，又不至于打爆我们）
-              res
-                .status(503)
-                .set('retry-after', '30')
-                .json({ received: false, order_id: orderId, reason: 'order_not_found_yet' });
-              return;
-            }
-            deps.logger.error('callback_unmatched', {
-              order_id: orderId,
-              result: 'unmatched',
-              ctx: { event_id: webhook.eventId, elapsed_ms: elapsedMs },
-            });
-            await deps.webhooks.finish({
-              ...webhook,
-              result: 'unmatched:order_not_found',
-              token: claim.token ?? '',
-              note: '超过宽限期订单仍不存在：转入对账任务（F13），机构不必再重发',
-            });
-            res.json({ received: true, order_id: orderId, ignored: 'unmatched' });
-            return;
-          }
-          if (code === 40902) {
-            const from = (e as AppError).details as { from?: unknown } | undefined;
-            if (from?.from === 'paid') {
-              deps.logger.info('paid_already', {
-                order_id: orderId,
-                result: 'ignored',
-                ctx: { event_id: webhook.eventId },
-              });
-              await deps.webhooks.finish({
-                ...webhook,
-                result: 'paid:already',
-                token: claim.token ?? '',
-                note: '同单另一事件类型到达，订单已是 paid（N13：正常形态，不是异常）',
-              });
-              res.json({ received: true, order_id: orderId, ignored: 'paid:already' });
-              return;
-            }
-            deps.logger.warn('callback_conflict', {
-              order_id: orderId,
-              conflict: 'status_conflict',
-              result: 'ignored',
-            });
-            await deps.webhooks.finish({
-              ...webhook,
-              result: 'ignored:status_conflict',
-              token: claim.token ?? '',
-              note: '业务冲突：重发也不会变，靠对账而非重试',
-            });
-            res.json({ received: true, order_id: orderId, ignored: 'status_conflict' });
-            return;
-          }
-          throw e;
-        }
-        // 栅栏（N22）：带令牌写结果；false = 租约已易主，我们是迟到的旧持有者
-        const wrote = await deps.webhooks.finish({
-          ...webhook,
-          result: 'paid',
-          token: claim.token ?? '',
-        });
-        if (!wrote) {
-          deps.logger.warn('webhook_result_not_written', {
-            provider: webhook.provider,
-            result: 'lease_lost',
-            ctx: { event_id: webhook.eventId },
-          });
-        }
-        deps.logger.info('skeleton_payment_callback', { order_id: orderId, result: 'paid' });
-        res.json({ received: true, order_id: orderId });
+        if (outcome.retryAfter !== undefined) res.set('retry-after', String(outcome.retryAfter));
+        res.status(outcome.status).json(outcome.body);
       } catch (e) {
         next(e);
       }
