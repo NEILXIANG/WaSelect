@@ -9,6 +9,14 @@
  *             后续每加一个模块，阈值约束自动生效（include 已含 server/src/**）。
  */
 import { defineConfig } from 'vitest/config';
+// 阈值表单独成文件（唯一事实来源）：它还要被 test/config/coverage-threshold.unit.test.ts 读去验证
+// "每条阈值都还命中真实文件"。用 `.ts` 而不是 `.js` 是因为本文件由 esbuild 直接解析，
+// 不做 NodeNext 的 `.js → .ts` 映射。@see vitest.coverage-gates.ts 文件头
+import {
+  COVERAGE_EXCLUDE,
+  COVERAGE_INCLUDE,
+  COVERAGE_THRESHOLDS,
+} from './vitest.coverage-gates.ts';
 
 export default defineConfig({
   test: {
@@ -71,41 +79,16 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],
-      include: ['packages/shared/src/**/*.ts', 'server/src/**/*.ts'],
-      exclude: ['**/*.test.ts'],
-      thresholds: {
-        lines: 85,
-        functions: 85,
-        branches: 85,
-        statements: 85,
-        // 《测试策略与验证门禁》§4.2 要求关键模块分支 100%，这里把它变成门禁而不是口头要求。
-        // 审查指出：money.ts 分支只有 75% 也能过 gate——就是因为门槛只设了全局值。
-        'packages/shared/src/money.ts': {
-          lines: 100,
-          functions: 100,
-          branches: 100,
-          statements: 100,
-        },
-        'packages/shared/src/orderNo.ts': {
-          lines: 100,
-          functions: 100,
-          branches: 100,
-          statements: 100,
-        },
-        // 日志与上下文：脱敏是"漏一行就出事故"的能力，且缺陷形态是"重复键覆盖"（见 logger.ts @limitation 四），
-        // 靠肉眼 review 看不出来。用 100% 闸门把它钉住——新增分支必须补测试，不能靠全局均值蒙混。
-        'server/src/logger.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-        'server/src/context.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-        // N16：脱敏 / 幂等 / 回调台账同属"错一处就是资金或合规事故"的模块，提到同一强度。
-        // 真防御分支（竞态窗口、类型守卫的唯一调用方已保证）允许 `v8 ignore` + 中文理由注释，
-        // 但不允许为凑覆盖率写假测试或删防御代码（见 docs/自主决策记录.md AJ-37）。
-        'server/src/redact.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-        'server/src/idempotency.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-        'server/src/webhooks.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-        // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
-        // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
-        'server/src/auth.ts': { branches: 95 },
-      },
+      include: COVERAGE_INCLUDE,
+      exclude: COVERAGE_EXCLUDE,
+      // 阈值表与它的全部理由都在 vitest.coverage-gates.ts（唯一事实来源）。
+      // ⚠️ 里面的**路径必须跟着文件走**（R2-1 教训）：2026-09-24 发现 auth.ts / webhooks.ts
+      //    分别搬进 app/ 与 adapters/ 之后，那两条阈值**静默失效**——
+      //    vitest 对"匹配不到任何文件的阈值"既不报错也不生效，全局 85% 还在，
+      //    于是"webhooks 必须 100%"这条最硬的约束悄悄消失了，而 gate 一直是绿的。
+      //    这类失效比阈值写错更危险：它表现为"我明明设了门禁"，实际门是开着的。
+      //    防复发靠 test/config/coverage-threshold.unit.test.ts（断言每个键至少命中一个真文件）。
+      thresholds: COVERAGE_THRESHOLDS,
     },
   },
 });

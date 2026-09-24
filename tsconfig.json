@@ -19,6 +19,6 @@
     "allowJs": true,
     "checkJs": false
   },
-  "include": ["packages/**/*.ts", "server/**/*.ts", "test/**/*.ts", "miniprogram/**/*.ts"],
+  "include": ["packages/**/*.ts", "server/**/*.ts", "test/**/*.ts", "miniprogram/**/*.ts", "*.ts"],
   "exclude": ["node_modules", "dist", "coverage"]
 }
