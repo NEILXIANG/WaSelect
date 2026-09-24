@@ -24,6 +24,23 @@
  * @see migrations/003_idempotency_and_identity.sql；migrations/005_webhook_processing_lease.sql；
  *      docs/基座评审复核意见-2026-09-23.md（D3）；docs/自主决策记录.md AJ-32（回调早到宽限期，二审 N4）
  */
+import { createHash } from 'node:crypto';
+
+/**
+ * 回调原文 → 64 位十六进制摘要（**不落原文**，见本文件 @limitation 一）。
+ *
+ * @why 放在**端口**而不是适配器：它不是"顺手的哈希工具"，而是**证据的形状**——
+ *      摘要的算法一旦变了，历史所有行的 `hash` 就都变得无法与新的比对，
+ *      于是"这个事件我们收到过没有"这件唯一的举证手段当场作废。
+ *      放进 utils 会让它看起来像个无害的小函数，改它的人不会想到后果
+ *      （与 `ports/idempotency.ts` 里 `requestFingerprint` 同理，见 AJ-47）。
+ * @why 接受 `Buffer | string`：回调原文在验签阶段必须是**原始字节**（改一个字节签名就不对），
+ *      所以调用方手里常常是 Buffer；摘要前不做任何规范化（trim / 转码都不做），
+ *      否则"同一个原文"会因入口不同而算出两个摘要。
+ */
+export function payloadHash(raw: Buffer | string): string {
+  return createHash('sha256').update(raw).digest('hex');
+}
 
 /**
  * 处理租约时长（毫秒，N22）：一次"登记 → 处理"的持有期。
@@ -44,7 +61,7 @@ export interface WebhookEventInput {
   /** 机构侧的事件 ID；同一事件重投时必须相同。 */
   eventId: string;
   eventType?: string | undefined;
-  /** 原文摘要（用适配器的 `payloadHash` 算）。 */
+  /** 原文摘要（用本文件的 `payloadHash` 算——算法即契约，见其 @why）。 */
   hash: string;
 }
 

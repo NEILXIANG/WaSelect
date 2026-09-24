@@ -7,8 +7,8 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from './db.js';
-import { createWebhookStore, payloadHash } from './webhooks.js';
-import type { WebhookStore } from '../ports/webhooks.js';
+import { createWebhookStore } from './webhooks.js';
+import { payloadHash, type WebhookStore } from '../ports/webhooks.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 
 let db: Db;

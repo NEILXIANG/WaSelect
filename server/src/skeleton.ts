@@ -33,8 +33,7 @@ import { AppError } from './errors.js';
 import { scopeKey, type IdempotencyExecutor } from './ports/idempotency.js';
 import type { Logger } from './logger.js';
 import type { IdentityCheck } from './adapters/identity.js';
-import { payloadHash } from './adapters/webhooks.js';
-import type { WebhookStore } from './ports/webhooks.js';
+import { payloadHash, type WebhookStore } from './ports/webhooks.js';
 
 export interface SkeletonDeps {
   db: Db;

@@ -15,7 +15,7 @@
  * @see ../ports/webhooks.ts（契约与全部设计理由）；migrations/003_idempotency_and_identity.sql；
  *      migrations/005_webhook_processing_lease.sql；docs/自主决策记录.md AJ-32 / AJ-38 / AJ-39
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Db } from './db.js';
 import {
   DEFAULT_PROCESSING_LEASE_MS,
@@ -23,11 +23,6 @@ import {
   type WebhookEventInput,
   type WebhookStore,
 } from '../ports/webhooks.js';
-
-/** 回调原文 → 64 位十六进制摘要（不落原文，见 ports 的 @limitation 一）。 */
-export function payloadHash(raw: Buffer | string): string {
-  return createHash('sha256').update(raw).digest('hex');
-}
 
 /**
  * 造一个回调事件存储。
