@@ -7,6 +7,76 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// F10 分层规则的**定义**放在文件顶部（`export default` 之前）：
+// 下面的 `tseslint.config(...)` 调用是**立即求值**的，
+// 若把这些 const 写在它后面，会撞 TDZ（ReferenceError: Cannot access before initialization）。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 分层规则同时作用在两处：**真实代码树**与**夹具树**。
+ * @why 两处共用同一份定义（下面的 layeringBlocks 生成器），否则"夹具绿、真代码不生效"
+ *      是极难发现的一类假绿——规则改了只改一边，另一边静默失效。
+ */
+const LAYER_ROOTS = ['server/src', 'test/lint/layering'];
+
+/** 各层禁止的依赖（同一份定义，供两棵树复用）。 */
+const FORBIDDEN = {
+  domain: {
+    patterns: [
+      {
+        group: ['**/adapters/**'],
+        message:
+          'F10 分层：domain 不得依赖 adapters（方向 app → domain → ports ← adapters）。' +
+          '要用这个能力，请在 ports/ 声明接口，由 app/ 注入实现。',
+      },
+      {
+        group: ['**/app/**'],
+        message: 'F10 分层：domain 不得依赖 app（app 是组装层，只有它依赖别人）。',
+      },
+    ],
+    paths: [
+      { name: 'express', message: 'F10 分层：domain 不得依赖 Web 框架（Express 属于 app/）。' },
+      {
+        name: 'postgres',
+        message: 'F10 分层：domain 不得依赖数据库驱动（持久化经 ports/ 注入）。',
+      },
+      {
+        name: 'stripe',
+        message: 'F10 分层：domain 不得依赖具体支付机构 SDK（走 PaymentProvider 端口）。',
+      },
+    ],
+  },
+  ports: {
+    patterns: [
+      {
+        group: ['**/adapters/**', '**/domain/**', '**/app/**'],
+        message:
+          'F10 分层：ports 只声明接口，不得依赖实现（adapters）或上层（domain/app）——' +
+          '否则与 domain→ports 成环，换实现就得先解开一坨互相 import。',
+      },
+    ],
+  },
+  adapters: {
+    patterns: [
+      {
+        group: ['**/app/**'],
+        message:
+          'F10 分层：adapters 不得反向依赖 app（组装层单向）。' +
+          '适配器不该知道谁在用它，否则"注册即接入"就没了。',
+      },
+    ],
+  },
+};
+
+/** 生成某一棵树的三个 block（domain / ports / adapters）。 */
+function layeringBlocks(root) {
+  return ['domain', 'ports', 'adapters'].map((layer) => ({
+    files: [`${root}/${layer}/**/*.ts`],
+    rules: { 'no-restricted-imports': ['error', FORBIDDEN[layer]] },
+  }));
+}
+
 export default tseslint.config(
   {
     ignores: [
@@ -108,4 +178,33 @@ export default tseslint.config(
       },
     },
   },
+
+  /**
+   * F10 分层与依赖方向（R2-1）——把"架构约定"变成**会红的检查**。
+   *
+   * @why 约定写在架构文档里拦不住任何人：三个月后有人在 domain 里 `import Stripe`，
+   *      一切都还能跑，直到要换支付通道时才发现业务核心已经和具体机构焊死了——
+   *      那条 import 当天就该是红的。规则是唯一不会疲劳的 review。
+   * @why 用**核心规则** `no-restricted-imports` 而不是 `import/no-restricted-paths`：
+   *      后者要装 eslint-plugin-import，而本机实测多插件与 typescript-eslint 同进程
+   *      会被资源看门狗 SIGKILL（此前 eslint-plugin-jsdoc 已踩过同一个坑）。
+   *      核心规则零依赖、零该风险；代价是**按 import 字符串匹配**而非解析后的绝对路径，
+   *      于是 `../adapters/x.js` 靠 glob 命中（已由夹具验证会报，见 test/lint/layering）。
+   *
+   * 允许的方向（@see docs/可扩展架构设计…md §4）：
+   *   `app → domain → ports ← adapters`，且 `app` 可以依赖所有层（它是组装层）。
+   * 被禁的四类：
+   *   ① domain → adapters / app / 框架 / 驱动 / 三方 SDK（业务核心必须不认识具体技术）
+   *   ② ports  → adapters / domain / app（接口层依赖实现会与 domain→ports 成环）
+   *   ③ adapters → app（适配器不能知道"谁在用它"，否则删一个适配器要改 app）
+   *
+   * @limitation 一：**只管 import 方向，不管代码内容**。把适配器逻辑整个写进
+   *             `domain/` 目录，这条规则一条都不会报——那是 review 的事。
+   * @limitation 二：`domain → events` 目前**允许**。events/ 现在只打算放事件类型与发布接口；
+   *             R2-2 落地"进程内总线（有状态运行时）"时，若总线不在 ports 后面，
+   *             就要把这一条也加进 domain 的黑名单（届时连总线一起改成注入）。
+   * @limitation 三：同一层内部（如 adapters 之间）**不设限**。跨适配器互相依赖
+   *             （stripe → notify）目前没有真实需求，等出现时再加 zone，不提前设限。
+   */
+  ...LAYER_ROOTS.flatMap(layeringBlocks),
 );
