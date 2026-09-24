@@ -156,8 +156,26 @@ export async function handleProviderCallback(
       body: { received: false, reason: 'already_processing' },
     };
   }
-  // 走到这里：claim.state 是 'new' 或 'retry'，且 claim.token 一定存在——
-  // 本次是唯一持有者，处理结果由它携带令牌写回（N22 栅栏）
+  // 走到这里：claim.state 是 'new' 或 'retry'，本次是唯一持有者（N22 栅栏）
+  /**
+   * 栅栏令牌。**一次取出、一次校验**，后面六处直接用 `token`（不再 `claim.token ?? ''`）。
+   *
+   * @why 原先每处写 `claim.token ?? ''`，看着"宽容"，实际是**把不变式违反变成静默事故**：
+   *      空令牌会被栅栏判成"租约已易主" → `finish` 返回 false → 钱已经付了、
+   *      而 `result` 没写进事件行，举证表上留下一条"处理过但没有结果"的行，且**没有任何告警**。
+   *      登记实现若真违反"new/retry 必带令牌"这条不变式，那是我们自己的 bug，
+   *      就该 5xx 让机构重发（登记行未封口 = 对账信号，@limitation 三），而不是悄悄写个空串。
+   * @why 顺带消灭了 6 条**构造上不可达**的分支：它们原本只能靠"造一个坏的存储实现"来覆盖，
+   *      而为了覆盖率去写那种用例正是 AJ-37 明令禁止的（不许为凑覆盖率写假测试）；
+   *      收敛成一处之后，它变成 2 条分支且**真的可测**（见 pay-callback.unit.test.ts）。
+   */
+  const token = claim.token;
+  if (token === undefined) {
+    throw new AppError(50000, {
+      reason: 'claim 返回 new/retry 却没有栅栏令牌：登记实现违反了它自己的不变式',
+      ctx: { provider: channel, event_id: event.eventId },
+    });
+  }
 
   // ── 非"支付成功"的事件：收下、登记、不落账（@limitation 一）──────────────
   if (event.outcome !== 'succeeded') {
@@ -170,7 +188,7 @@ export async function handleProviderCallback(
     await deps.webhooks.finish({
       ...webhook,
       result: `ignored:${event.outcome}`,
-      token: claim.token ?? '',
+      token,
       note: `归一化结果为 ${event.outcome}：MVP 不落业务状态（F12 接状态机后补）`,
     });
     return {
@@ -212,7 +230,7 @@ export async function handleProviderCallback(
          *    不交还的话，机构按 Retry-After 发来的重投会被判成 inflight（再吃一个 503），
          *    "早到 → 重发 → 补上"这条链被租约自己掐断——而它正是"钱到单未付"的兜底。
          */
-        await deps.webhooks.releaseLease({ ...webhook, token: claim.token ?? '' });
+        await deps.webhooks.releaseLease({ ...webhook, token });
         return {
           disposition: 'early',
           status: 503,
@@ -228,7 +246,7 @@ export async function handleProviderCallback(
       await deps.webhooks.finish({
         ...webhook,
         result: 'unmatched:order_not_found',
-        token: claim.token ?? '',
+        token,
         note: '超过宽限期订单仍不存在：转入对账任务（F13），机构不必再重发',
       });
       return {
@@ -248,7 +266,7 @@ export async function handleProviderCallback(
         await deps.webhooks.finish({
           ...webhook,
           result: 'paid:already',
-          token: claim.token ?? '',
+          token,
           note: '同单另一事件类型到达，订单已是 paid（N13：正常形态，不是异常）',
         });
         return {
@@ -265,7 +283,7 @@ export async function handleProviderCallback(
       await deps.webhooks.finish({
         ...webhook,
         result: 'ignored:status_conflict',
-        token: claim.token ?? '',
+        token,
         note: '业务冲突：重发也不会变，靠对账而非重试',
       });
       return {
@@ -282,7 +300,7 @@ export async function handleProviderCallback(
   const wrote = await deps.webhooks.finish({
     ...webhook,
     result: 'paid',
-    token: claim.token ?? '',
+    token,
   });
   if (!wrote) {
     deps.logger.warn('webhook_result_not_written', {

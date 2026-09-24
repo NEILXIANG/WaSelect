@@ -23,34 +23,23 @@
  *
  * @see docs/地基搭建清单.md F6c；docs/测试策略与验证门禁.md（L3 端到端）
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Express } from 'express';
+import { paramId } from './http.js';
 import { requireRole, type AuthConfig } from './app/auth.js';
-import { handleProviderCallback } from './app/pay-callback.js';
 import { currentContext } from './context.js';
 import type { Db } from './adapters/db.js';
 import { buildOrderNo } from './domain/order-no.js';
 import type { Clock } from './ports/clock.js';
 import type { IdGen } from './ports/ids.js';
 import { AppError } from './errors.js';
+import { markOrderPaid } from './app/mark-paid.js';
 import { scopeKey, type IdempotencyExecutor } from './ports/idempotency.js';
 import type { DomainEvent, EventBus } from './ports/events.js';
-import { withUnitOfWork } from './app/unit-of-work.js';
 import type { Logger } from './logger.js';
 import type { IdentityCheck } from './adapters/identity.js';
-import { payloadHash, type WebhookStore } from './ports/webhooks.js';
 
 export interface SkeletonDeps {
   db: Db;
-  /**
-   * 回调事件存储（F10 端口）。**必填**：装配时由 `createWebhookStore(db)` 注入。
-   *
-   * @why 走端口而不是让骨架自己 import 适配器：骨架是"业务怎么用存储"的第一份示范，
-   *      它一开始就依赖具体实现的话，后面所有业务代码都会照抄——
-   *      分层就只剩目录好看了。这里必填而不是可选，是为了让"装配时必须回答一次"
-   *      这个约束有强制力（可选就会有人不传，然后偷偷退化）。
-   */
-  webhooks: WebhookStore;
   /**
    * 幂等执行器（F10 端口）。**必填**：装配时由 `createIdempotencyExecutor(db)` 注入。
    *
@@ -78,7 +67,7 @@ export interface SkeletonDeps {
    *              ① `logger.ts` 的日志时间戳（pino 内部取，且必须是真实挂钟，
    *                 否则排障时拿到的"日志时间"是假的）；
    *              ② `adapters/webhooks.ts` 的 `now()` 兜底值——它只在 DB 没返回时间时用到，
-   *                 且会立刻与 DB 时钟做减法（跨时钟相减的风险见本文件宽限期那段注释）。
+   *                 且会立刻与 DB 时钟做减法（跨时钟相减的风险见 app/pay-callback.ts）。
    */
   clock: Clock;
   /**
@@ -93,14 +82,6 @@ export interface SkeletonDeps {
   idGen: IdGen;
   logger: Logger;
   auth: AuthConfig;
-  /** 模拟回调的 HMAC 密钥（骨架期；真实通道验签在 F11，见 @limitation 二）。 */
-  callbackSecret: string;
-  /**
-   * 回调早到的宽限期（毫秒，AJ-32）：回调到达时订单不存在，
-   * 距事件**首次**到达不超过这个时长 → 503 让机构重发（processed_at 保持 NULL）；
-   * 超过 → 2xx 收下 + error 告警 + 落 `unmatched:*` 转对账。
-   */
-  callbackOrderGraceMs: number;
   /**
    * 运行环境。**刻意作为显式入参而不是读 `process.env.NODE_ENV`**：
    * 隐式全局会让"这个行为由谁决定"不可见，也让测试必须改进程环境才能覆盖另一分支；
@@ -118,52 +99,6 @@ export interface SkeletonDeps {
 
 /** 骨架路由前缀：显式标注"脚手架"，防止被误当成正式 API。 */
 const PREFIX = '/api/v1/skeleton';
-/** 模拟回调路径：**必须**登记到 createHttpApp 的 rawBodyPaths，否则验签拿到的是解析后的 body。 */
-export const MOCK_CALLBACK_PATH = '/api/v1/pay/callback/mock';
-
-/**
- * 恒定时间比较 HMAC。
- * @why 用 `timingSafeEqual` 而不是 `===`：字符串比较会在第一个不同字节就返回，
- *      耗时差异可被用来逐字节猜出正确签名。验签代码里 `===` 就是缺陷。
- */
-function verifySignature(raw: Buffer, signature: string, secret: string): boolean {
-  const expected = createHmac('sha256', secret).update(raw).digest('hex');
-  const a = Buffer.from(expected, 'utf8');
-  const b = Buffer.from(signature, 'utf8');
-  // 长度不等时 timingSafeEqual 会抛错，必须先比长度——这一步泄漏的只是长度，不影响安全性
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-/**
- * 把订单置为 paid（事务 + `for update` + 追加审计事件）。
- *
- * @why 抽成共用函数是因为**两个入口都要做同一件事**：真实回调（验签后）与骨架的"模拟触发"。
- *      若各写一份，改一处漏一处就会出现"模拟能过、真实回调失败"这类只在生产暴露的差异。
- *
- * @why 走 `withUnitOfWork`（而不是 `withTransaction`）：置为已支付要发 `order.paid` 事件，
- *      而事件**必须在事务提交之后**分发——否则回滚了订阅者却已经跑过（见 app/unit-of-work.ts）。
- * @throws {AppError} 40400（订单不存在）/ 40902（状态不是 created，多半是回调重发）
- *
- * @param clock 时钟（注入）：事件时间戳取它，而不是 `new Date()`——
- *              "这个事件发生在什么时候"是业务事实，必须可被测试钉住（@see ports/clock.ts）。
- */
-async function markPaid(db: Db, events: EventBus, clock: Clock, orderId: string): Promise<void> {
-  await withUnitOfWork(db, events, async (tx, emit) => {
-    // for update：并发回调（机构重发）时排队，避免两次都读到 'created' 各写一次事件
-    const rows = await tx`select status from orders where id = ${orderId} for update`;
-    const current = rows[0]?.status;
-    if (current === undefined) throw new AppError(40400, { order_id: orderId });
-    if (current !== 'created') throw new AppError(40902, { from: current, to: 'paid' });
-    await tx`
-      update orders set status = 'paid', paid_at = now(), updated_at = now() where id = ${orderId}
-    `;
-    await tx`
-      insert into order_events (order_id, status, actor) values (${orderId}, 'paid', 'system')
-    `;
-    // 登记（不是分发）：只有这个事务提交成功，订阅者才会收到 order.paid
-    emit({ name: 'order.paid', at: clock.now().toISOString(), orderId });
-  });
-}
 
 /**
  * 读一张**确定属于该用户**的订单。
@@ -197,22 +132,6 @@ async function readOwnedOrder(
     throw new AppError(40400, { order_id: orderId, reason: 'owner_mismatch' });
   }
   return { id: String(row.id), order_no: String(row.order_no), status: String(row.status) };
-}
-
-/**
- * 收敛路径参数。
- * @why Express 5 的类型里 `req.params.x` 是 `string | string[]`（通配/重复参数会产生数组），
- *      `noUncheckedIndexedAccess` 下还可能是 `undefined`。直接拼进 SQL 会有两种静默后果：
- *      ① `undefined` 被 postgres.js 当 NULL → 查询返回空，错误从 400 变成 404，排查方向全错；
- *      ② 数组被转成字符串 → 查到一个根本不存在的 id。
- *      所以在**所有**用到 params 的地方统一先收敛，而不是在每个 handler 里各判一次。
- */
-function paramId(value: string | string[] | undefined): string {
-  const one = Array.isArray(value) ? value[0] : value;
-  if (typeof one !== 'string' || one.length === 0) {
-    throw new AppError(40001, { reason: '缺少或非法路径参数' });
-  }
-  return one;
 }
 
 export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
@@ -310,82 +229,6 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
     },
   );
 
-  // ── 2. 模拟支付回调：原始报文验签 + 事务状态回写 ──────────────────────────
-  app.post(MOCK_CALLBACK_PATH, (req, res, next) => {
-    void (async () => {
-      try {
-        // 必须拿到**未经解析的字节**才能验签——路由层已为这个前缀配了 express.raw()
-        const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-        const signature = req.header('x-mock-signature') ?? '';
-        if (!verifySignature(raw, signature, deps.callbackSecret)) {
-          // 40103：入站方的问题，不是我们的故障（@see shared/errors.ts 40103 的注释）
-          throw new AppError(40103);
-        }
-
-        // ⚠️ 必须自己 try：这里的 JSON.parse 抛的是**我们自己的** SyntaxError，
-        //    不带 body-parser 的 `type` / `status` 标记，所以 http.ts 的 isBodyParseError
-        //    认不出来，会被当成未归类异常折叠成 50000 → 机构收到 500 就会一直重试。
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw.toString('utf8'));
-        } catch {
-          throw new AppError(40001, { reason: '回调报文不是合法 JSON' });
-        }
-        const orderId = (parsed as { order_id?: unknown } | null)?.order_id;
-        if (typeof orderId !== 'string' || orderId.length === 0) {
-          throw new AppError(40001, { reason: '回调缺少 order_id' });
-        }
-
-        /**
-         * ── 交给**统一处理管线**（F11）─────────────────────────────────────
-         * @why 登记 / 冲突分层 / 封口这一段曾经就写在这里。它现在只有一份，在
-         *      `app/pay-callback.ts`——骨架与 `/pay/callback/:channel` 共用。
-         *      理由见那个文件的抬头：这段逻辑每一条都是踩过坑才定下来的
-         *      （宽限期用 DB 时钟、"已是 paid"不算冲突、早到要交还租约），
-         *      复制两份之后改一份忘一份，表现就是"模拟回调能过、真实回调不落账"。
-         * @limitation 骨架自己**仍然做** HMAC 验签与 JSON 解析，不走 Provider：
-         *      这条路径是脚手架（业务期 I1 整体删除），
-         *      真正的 mock 通道走 `/pay/callback/mock`（注册表里的 `mock` Provider）。
-         *      两边刻意保持同一套报文约定（`x-mock-signature` + `{order_id,event_id,type}`），
-         *      这样迁移到统一分发时测试只需换路径、不用改报文。
-         */
-        const eventIdRaw = (parsed as { event_id?: unknown } | null)?.event_id;
-        const typeRaw = (parsed as { type?: unknown } | null)?.type;
-        const outcome = await handleProviderCallback(
-          {
-            webhooks: deps.webhooks,
-            logger: deps.logger,
-            graceMs: deps.callbackOrderGraceMs,
-            apply: async (e) => markPaid(deps.db, deps.events, deps.clock, e.orderId),
-          },
-          'mock',
-          raw,
-          {
-            // 机构没给 event_id 时（骨架的模拟回调就没有），用原文摘要兜底：
-            // 内容完全相同的重复投递因此也能被识别
-            eventId:
-              typeof eventIdRaw === 'string' && eventIdRaw.length > 0
-                ? eventIdRaw
-                : `sha256:${payloadHash(raw)}`,
-            rawType:
-              typeof typeRaw === 'string' && typeRaw.length > 0 ? typeRaw : 'payment.succeeded',
-            // 骨架的模拟回调只表达"付成功了"这一件事
-            outcome: 'succeeded',
-            orderId,
-            providerRef: '',
-          },
-        );
-        if (outcome.disposition === 'paid') {
-          deps.logger.info('skeleton_payment_callback', { order_id: orderId, result: 'paid' });
-        }
-        if (outcome.retryAfter !== undefined) res.set('retry-after', String(outcome.retryAfter));
-        res.status(outcome.status).json(outcome.body);
-      } catch (e) {
-        next(e);
-      }
-    })();
-  });
-
   // ── 3. 模拟触发支付成功（骨架专用，供小程序壳按钮调用）─────────────────────
   // @why F6c 要求"小程序壳按钮 → 落库 → 触发模拟支付回调 → 状态回写"能在真机上走一遍。
   //      真实的回调是机构打给我们的（小程序端签不了名），所以骨架期需要这个入口代替机构。
@@ -402,7 +245,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           const orderId = paramId(req.params.id);
           // 先确认"这张单是他的"再改状态：否则这个骨架端点等于"任何人都能把别人的单改成已支付"
           await readOwnedOrder(deps.db, orderId, sub);
-          await markPaid(deps.db, deps.events, deps.clock, orderId);
+          await markOrderPaid(deps.db, deps.events, deps.clock, orderId);
           deps.logger.info('skeleton_simulate_paid', { order_id: orderId, result: 'paid' });
           res.json({ order_id: orderId, status: 'paid' });
         } catch (e) {

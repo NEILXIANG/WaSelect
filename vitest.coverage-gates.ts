@@ -111,6 +111,31 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     statements: 100,
   },
 
+  // F11 第三单元（统一回调分发）：这四条同样 100%，理由比上面那一组更直白——
+  // **它们是所有通道唯一的钱入口**。以前每个通道一条路由，写错只影响那一个通道；
+  // 合并之后，`channels.ts` 少注册一个通道、`pay-routes.ts` 忘了登记 rawBodyPaths、
+  // `pay-callback.ts` 把 40902 判成 40400，都是**全线**事故且不一定报错。
+  // 100% 不是追求数字，是逼"加第三个 Provider 的人"必须同时补分支用例。
+  'server/src/adapters/payment/channels.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/app/pay-routes.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/app/pay-callback.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/app/mark-paid.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
   'server/src/app/auth.ts': { branches: 95 },

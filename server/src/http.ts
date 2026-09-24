@@ -129,6 +129,28 @@ function responseBytes(res: Response): number | undefined {
  *             需要多域名就在配置里逐个列全，`CORS_ORIGINS` 是逗号分隔的。
  */
 /**
+ * 收敛路径参数为一个非空字符串。
+ *
+ * @why 放在**骨架层**而不是每个路由各写一份：Express 5 的类型里 `req.params.x` 是
+ *      `string | string[]`（通配/重复参数会产生数组），`noUncheckedIndexedAccess` 下还可能是
+ *      `undefined`。直接拼进 SQL 或传给机构有两种静默后果：
+ *      ① `undefined` 被 postgres.js 当 NULL → 查询返回空，错误从 400 变成 404，排查方向全错；
+ *      ② 数组被转成字符串 → 查到一个根本不存在的 id。
+ *      这类"不报错但查错东西"的写法散在各处时，改一处漏一处只是时间问题。
+ *
+ * @limitation 只保证"是一个非空字符串"，**不校验字符集**（如单号格式、UUID 形状）。
+ *              形状校验属于各自的领域规则，放这里会让这个函数变成一个什么都往里塞的校验器。
+ * @throws {AppError} 40001（缺少或非法路径参数）
+ */
+export function paramId(value: string | string[] | undefined): string {
+  const one = Array.isArray(value) ? value[0] : value;
+  if (typeof one !== 'string' || one.length === 0) {
+    throw new AppError(40001, { reason: '缺少或非法路径参数' });
+  }
+  return one;
+}
+
+/**
  * 路径前缀匹配（CORS 与 raw-body 共用）。
  * @why 不能是裸 `startsWith(p)`（基座自查 P1-3）：`/api/v1/adminx` 会命中 `/api/v1/admin`、
  *      `/pay/callback/stripe-v2` 会命中 `/pay/callback/stripe`——前者给非管理端路径发跨域通行证，

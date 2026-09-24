@@ -112,7 +112,16 @@ export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): 
 
     async parseWebhook(raw: Buffer, headers: HeaderBag): Promise<ProviderEvent> {
       const signature = headers[MOCK_SIGNATURE_HEADER] ?? '';
-      const expected = Buffer.from(createHmac('sha256', secret).update(raw).digest('hex'), 'utf8');
+      /**
+       * ⚠️ 期望值要保留**十六进制字符串**本身，不能只留 Buffer。
+       * @why 曾经写成 `sha256:${expected.toString('hex')}`：对一个"由 hex 字符串构造的 Buffer"
+       *      再 `.toString('hex')` 是**二次编码**——64 个 hex 字符变成 128 个 hex 字符，
+       *      拼上前缀共 135 字符，超出 `webhook_events.event_id varchar(128)`，
+       *      表现为机构没给 event_id 时回调**一律 500**（真库才暴露，单测测不到长度）。
+       *      端到端把模拟回调迁到统一分发后这条路径才第一次被真库走到。
+       */
+      const expectedHex = createHmac('sha256', secret).update(raw).digest('hex');
+      const expected = Buffer.from(expectedHex, 'utf8');
       const got = Buffer.from(signature, 'utf8');
       // 恒定时间比较 + 先比长度（长度不等时 timingSafeEqual 会抛）
       const ok = got.length === expected.length && timingSafeEqual(got, expected);
@@ -135,8 +144,7 @@ export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): 
         throw new Error(`mock 回调缺少 order_id：通道=${cfg.channel}，type=${String(body?.type)}`);
       }
       return {
-        eventId:
-          typeof body?.event_id === 'string' ? body.event_id : `sha256:${expected.toString('hex')}`,
+        eventId: typeof body?.event_id === 'string' ? body.event_id : `sha256:${expectedHex}`,
         rawType: typeof body?.type === 'string' ? body.type : 'unknown',
         outcome: OUTCOME_BY_TYPE[String(body?.type)] ?? 'unknown',
         orderId,

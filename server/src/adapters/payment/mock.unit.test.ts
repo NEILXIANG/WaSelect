@@ -80,6 +80,8 @@ describe('mock 通道', () => {
     const p = sign({ type: 'payment.succeeded', order_id: 'sk-1', provider_ref: 'ref-1' });
     const ev = await provider().parseWebhook(p.raw, p.headers);
     expect(ev.eventId.startsWith('sha256:')).toBe(true);
+    // ⚠️ 长度必须留在列宽内：曾经二次 hex 编码成 135 字符，真库里直接 500
+    expect(ev.eventId.length).toBeLessThanOrEqual(128);
     expect(ev.outcome).toBe('succeeded');
   });
 

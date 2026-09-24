@@ -16,61 +16,32 @@ import { describe, expect, it } from 'vitest';
 import { AppError } from '../errors.js';
 import { createLogger } from '../logger.js';
 import type { ProviderEvent } from '../ports/payment.js';
-import type {
-  ClaimResult,
-  ClaimState,
-  WebhookEventInput,
-  WebhookStore,
-} from '../ports/webhooks.js';
+import type { ClaimState, WebhookEventInput, WebhookStore } from '../ports/webhooks.js';
 import { handleProviderCallback, type CallbackPipelineDeps } from './pay-callback.js';
+import { fakeWebhookStore } from '../../../test/helpers/fake-webhook-store.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 
-/** 固定锚点：宽限期算术全部相对它，避免用例之间互相污染。 */
-const FIRST = new Date('2026-01-02T00:00:00.000Z');
-
+/**
+ * 本文件的桩：直接复用 `test/helpers/fake-webhook-store.ts`。
+ * @why 四态语义与宽限期锚点只应有一份定义（见该 helper 抬头的 @why），
+ *      这里只把它摊平成"用例直接拿 rec.xxx"的形状。
+ */
 interface Recorder {
   store: WebhookStore;
-  /** 被登记的事件（provider / eventId / eventType / hash）。 */
   claimed: WebhookEventInput[];
   finished: Array<{ result: string; token: string; note?: string | undefined }>;
   released: string[];
 }
 
-/**
- * 桩存储：`state` 决定本次登记结果，`elapsedMs` 决定"首次到达到现在"的时长，
- * `finishReturns` 决定是否让栅栏失败。
- */
 function fakeStore(opts: {
   state?: ClaimState;
   elapsedMs?: number;
   finishReturns?: boolean;
+  /** 覆盖令牌；传 `undefined` 可模拟"登记实现违反了它自己的不变式"。 */
+  token?: string | undefined;
 }): Recorder {
-  const claimed: WebhookEventInput[] = [];
-  const finished: Recorder['finished'] = [];
-  const released: string[] = [];
-  const state = opts.state ?? 'new';
-  const token = state === 'new' || state === 'retry' ? 'tok-1' : undefined;
-  const store: WebhookStore = {
-    async claim(input) {
-      claimed.push(input);
-      const result: ClaimResult = {
-        state,
-        firstReceivedAt: FIRST,
-        nowAt: new Date(FIRST.getTime() + (opts.elapsedMs ?? 0)),
-        ...(token !== undefined ? { token } : {}),
-      };
-      return result;
-    },
-    async finish(input) {
-      finished.push({ result: input.result, token: input.token, note: input.note });
-      return opts.finishReturns ?? true;
-    },
-    async releaseLease(input) {
-      released.push(input.token);
-      return true;
-    },
-  };
-  return { store, claimed, finished, released };
+  const { store, rec } = fakeWebhookStore(opts);
+  return { store, ...rec };
 }
 
 function deps(
@@ -248,7 +219,7 @@ describe('handleProviderCallback：冲突分层（宽限期用 DB 时钟）', ()
     expect(sink.find('callback_conflict')[0]?.level).toBe('warn');
   });
 
-  it('非 40400/40902 的异常**原样抛出**（业务 bug 必须变 5xx 让机构重发）', async () => {
+  it('非 40400/40902 的 AppError **原样抛出**（业务 bug 必须变 5xx 让机构重发）', async () => {
     const rec = fakeStore({});
     const { d } = deps(rec, async () => {
       throw new AppError(50003, { reason: '汇率不可用' });
@@ -258,6 +229,56 @@ describe('handleProviderCallback：冲突分层（宽限期用 DB 时钟）', ()
     });
     // 不封口 → 这行停在 processed_at IS NULL，由 F13 对账捞起（@limitation 三）
     expect(rec.finished).toHaveLength(0);
+  });
+
+  it('抛的不是 AppError（如 SQL 异常）→ 同样原样抛出，不被误判成业务冲突', async () => {
+    /**
+     * @why 这条专门钉 `e instanceof AppError ? e.code : 0` 的**否分支**：
+     *      一个裸 `Error` 的 `code` 是不存在的，若写成 `(e as AppError).code` 会得到
+     *      `undefined`，于是 `if (code === 40400)` 不成立 → 走到"原样抛出"，
+     *      看起来结果一样；但一旦将来加了 `if (code === 40902)` 之外的分支，
+     *      `undefined` 就可能匹配上某个默认值。用 `0` 兜住，语义才是"我不知道这是什么错"。
+     */
+    const rec = fakeStore({});
+    const boom = new Error('connection terminated');
+    const { d } = deps(rec, async () => {
+      throw boom;
+    });
+    await expect(handleProviderCallback(d, 'stripe', RAW, event())).rejects.toBe(boom);
+    expect(rec.finished).toHaveLength(0);
+  });
+
+  it('40902 但 details 里没有 from → 按**一般状态冲突**处理（不误判成 paid:already）', async () => {
+    const rec = fakeStore({});
+    const { d, sink } = deps(rec, async () => {
+      // ⚠️ 刻意不带 details：details 是可选的，读它必须走可选链
+      throw new AppError(40902);
+    });
+    const out = await handleProviderCallback(d, 'stripe', RAW, event());
+    expect(out.disposition).toBe('status_conflict');
+    expect(sink.find('paid_already')).toHaveLength(0);
+    expect(sink.find('callback_conflict')[0]?.level).toBe('warn');
+  });
+});
+
+describe('handleProviderCallback：栅栏令牌（N22 不变式）', () => {
+  it('登记返回 new/retry 却**没有令牌** → 50000 响亮失败，不静默写空串', async () => {
+    /**
+     * @why 这是"登记实现违反它自己的不变式"。若按老写法 `claim.token ?? ''` 兜过去，
+     *      空令牌会被栅栏判成"租约已易主" → finish 返回 false → **钱付了而 result 没写**，
+     *      举证表上留下"处理过但没有结果"的行，且没有任何告警。
+     * @why 5xx 而不是 2xx：让它进告警 + 机构重发；登记行未封口本身就是对账信号。
+     */
+    for (const state of ['new', 'retry'] as const) {
+      const rec = fakeStore({ state, token: undefined });
+      const { d } = deps(rec, async () => undefined);
+      await expect(handleProviderCallback(d, 'stripe', RAW, event())).rejects.toMatchObject({
+        code: 50_000,
+      });
+      // ⚠️ 关键：既没封口也没交租约——这条回调必须留在"待处理"里被对账捞起
+      expect(rec.finished).toHaveLength(0);
+      expect(rec.released).toHaveLength(0);
+    }
   });
 });
 

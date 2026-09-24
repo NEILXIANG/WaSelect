@@ -14,7 +14,7 @@ import { createHmac } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseOrderNoDate } from '@waselect/shared';
 import type { Db } from '../../server/src/adapters/db.js';
-import { MOCK_CALLBACK_PATH } from '../../server/src/skeleton.js';
+import { PAY_CALLBACK_PREFIX } from '../../server/src/app/pay-routes.js';
 import type { MemorySink } from '../helpers/memory-sink.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
 import { stubIdGen } from '../helpers/stub-id-gen.js';
@@ -57,15 +57,21 @@ function createOrder(token: string, idempotencyKey: string, trace = TRACE, body 
   });
 }
 
-/** 按骨架的约定给回调报文签名（HMAC-SHA256 hex）。 */
-function signedCallback(payload: unknown, secret = CALLBACK_SECRET, trace = TRACE) {
-  return signedRaw(JSON.stringify(payload), secret, trace);
+/**
+ * 按 mock 通道的约定给回调报文签名（HMAC-SHA256 hex）。
+ *
+ * ⚠️ 默认补 `type: 'payment.succeeded'`：F11 之后模拟回调就是注册表里的 `mock` 通道，
+ *    归一化结果由 `type` 决定——不认识的类型一律 `unknown`，**不落账**。
+ *    之前骨架自己的回调把"付成功"写死在代码里，所以报文不需要带类型；现在必须带。
+ */
+function signedCallback(payload: Record<string, unknown>, secret = CALLBACK_SECRET, trace = TRACE) {
+  return signedRaw(JSON.stringify({ type: 'payment.succeeded', ...payload }), secret, trace);
 }
 
 /** 发一段**任意原文**（可故意不是合法 JSON），签名照算——用于验证坏报文的处理。 */
 function signedRaw(body: string, secret = CALLBACK_SECRET, trace = TRACE) {
   const signature = createHmac('sha256', secret).update(Buffer.from(body)).digest('hex');
-  return fetch(`${base}${MOCK_CALLBACK_PATH}`, {
+  return fetch(`${base}${PAY_CALLBACK_PREFIX}/mock`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -134,7 +140,8 @@ describe('行走骨架：一条链路走到底', () => {
     expect(traced.length).toBeGreaterThan(0);
     expect([...new Set(traced.map((r) => String(r.trace_id)))]).toEqual([TRACE]);
     expect(sink.find('skeleton_order_created')).toHaveLength(1);
-    expect(sink.find('skeleton_payment_callback')).toHaveLength(1);
+    // F11：模拟回调已迁到统一分发（`/pay/callback/mock`），落账日志随之改名
+    expect(sink.find('pay_callback_handled')).toHaveLength(1);
     // 访问日志（流 C 的请求维度）也在同一条链上
     expect(sink.find('http_request').length).toBeGreaterThanOrEqual(3);
 
@@ -372,9 +379,13 @@ describe('行走骨架：一条链路走到底', () => {
     // 独立起一个 graceMs=0 的服务：任何回调都立即"超过宽限期"
     const s = await startSkeleton(db, { withRawBody: true, graceMs: 0 });
     try {
-      const raw = JSON.stringify({ order_id: 'sk-never', event_id: 'evt-late' });
+      const raw = JSON.stringify({
+        type: 'payment.succeeded',
+        order_id: 'sk-never',
+        event_id: 'evt-late',
+      });
       const sig = createHmac('sha256', CALLBACK_SECRET).update(raw).digest('hex');
-      const res = await fetch(`${s.base}${MOCK_CALLBACK_PATH}`, {
+      const res = await fetch(`${s.base}${PAY_CALLBACK_PREFIX}/mock`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -410,10 +421,18 @@ describe('行走骨架：一条链路走到底', () => {
     expect(sink.find('unhandled_error')).toHaveLength(0);
   });
 
-  it('回调体缺 order_id → 40001（脏输入不能落到 SQL 里）', async () => {
+  /**
+   * ⚠️ 这里从 40001 改成了 **50000**，理由要写清楚（F11 迁移时行为确实变了）：
+   *      `ProviderEvent.orderId` 取不到，在 `ports/payment.ts` 的口径里是
+   *      "**我们**的设计缺陷"（要么是 `create` 时没把单号写进机构 metadata，
+   *      要么是我们对机构字段的假设错了），不是"入站方给了脏报文"。
+   *      所以 mock Provider 抛的是普通 Error → 50000 进告警让人来修，
+   *      而不是回 4xx 假装"改改报文就行"。共同点不变：**不会落到 SQL 里**。
+   */
+  it('回调体缺 order_id → 50000（取不到单号是我们的缺陷，不是坏报文），且不落到 SQL', async () => {
     const res = await signedCallback({ wrong_field: 1 });
-    expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toMatchObject({ code: 40001 });
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toMatchObject({ code: 50000 });
   });
 
   it('回调验签失败 → 40103（4xx：入站方的问题，不占 5xx），订单状态不变', async () => {
@@ -572,9 +591,12 @@ describe('资源归属：order_id 不是能力凭证（D7）', () => {
  * 回调路由没登记到 `rawBodyPaths`，body 会被 JSON 解析掉，验签必然失败。
  * @why 配错时的症状是"验签永远失败"，而排查时会去怀疑密钥、怀疑机构，
  *      很少有人第一反应是"body 被解析过了"。用一条测试把这个可能性别留给人肉排查。
+ * @why F11 起这里期望的是 **50000 而不是 40103**：拿不到原始字节是**我们装配错了**，
+ *      不是"入站方给了坏签名"。回 4xx 会让排查继续指向密钥与机构——正是本条存在的理由
+ *      所反对的那种误导（@see app/pay-routes.ts @limitation 三）。
  */
 describe('断链验证：少配一环就必须失败', () => {
-  it('回调路由没登记 rawBodyPaths → 验签失败（证明原始报文这一环不可省）', async () => {
+  it('回调路由没登记 rawBodyPaths → 50000（我们的装配 bug），不伪装成验签失败', async () => {
     const broken = await startServer({ withRawBody: false });
     const brokenBase = broken.base;
     try {
@@ -595,7 +617,7 @@ describe('断链验证：少配一环就必须失败', () => {
       const signature = createHmac('sha256', CALLBACK_SECRET)
         .update(Buffer.from(body))
         .digest('hex');
-      const res = await fetch(`${brokenBase}${MOCK_CALLBACK_PATH}`, {
+      const res = await fetch(`${brokenBase}${PAY_CALLBACK_PREFIX}/mock`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -604,9 +626,9 @@ describe('断链验证：少配一环就必须失败', () => {
         },
         body,
       });
-      // 验签失败 = 40103（D6 后是 4xx）；这里断言的是"验签没过"，不是具体状态码
-      expect(res.status).toBe(401);
-      await expect(res.json()).resolves.toMatchObject({ code: 40103 });
+      // 装配 bug = 5xx（进告警 + 让机构重发），且**不能**被当成入站方的问题
+      expect(res.status).toBe(500);
+      await expect(res.json()).resolves.toMatchObject({ code: 50000 });
     } finally {
       await broken.server.close();
       // 还原到"正常"的服务，避免影响后续用例
@@ -691,10 +713,14 @@ describe('N22：并发重复投递只有一个持有者（processing_until 租�
         })
       ).json()) as { order_id: string };
 
-      const raw = JSON.stringify({ order_id: created.order_id, event_id: 'evt-concurrent' });
+      const raw = JSON.stringify({
+        type: 'payment.succeeded',
+        order_id: created.order_id,
+        event_id: 'evt-concurrent',
+      });
       const signature = createHmac('sha256', CALLBACK_SECRET).update(raw).digest('hex');
       const post = () =>
-        fetch(`${s.base}${MOCK_CALLBACK_PATH}`, {
+        fetch(`${s.base}${PAY_CALLBACK_PREFIX}/mock`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',

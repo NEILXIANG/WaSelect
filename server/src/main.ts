@@ -31,7 +31,11 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, redactConfig, ConfigError, type AppConfig } from './config.js';
 import { createHttpApp, installShutdownHandlers, listen, type StartedServer } from './http.js';
 import { createLogger, type Logger } from './logger.js';
-import { MOCK_CALLBACK_PATH, mountSkeleton } from './skeleton.js';
+import { mountSkeleton } from './skeleton.js';
+import { mountPayRoutes, PAY_CALLBACK_PREFIX } from './app/pay-routes.js';
+import { buildPaymentRegistry, describeChannels } from './adapters/payment/channels.js';
+import { createFetchClient } from './adapters/http/fetch-client.js';
+import { markOrderPaid } from './app/mark-paid.js';
 import { createIdentityCheck, withIdentityCache } from './adapters/identity.js';
 import { createWebhookStore } from './adapters/webhooks.js';
 import { createIdempotencyExecutor } from './adapters/idempotency.js';
@@ -110,7 +114,8 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
     const app = createHttpApp({
       logger,
       // 回调验签必须用原始字节：路径集中登记在这里，避免"某个回调忘了配就永远验签失败"
-      rawBodyPaths: [MOCK_CALLBACK_PATH],
+      // ⚠️ 用**前缀**而不是逐个通道列举：新通道自动生效（@see app/pay-routes.ts PAY_CALLBACK_PREFIX）
+      rawBodyPaths: [PAY_CALLBACK_PREFIX],
       silentPaths: ['/healthz', '/readyz'],
       // D23：层数来自配置，绝不能写死 true（客户端可伪造 X-Forwarded-For）
       trustProxyHops: config.TRUST_PROXY_HOPS,
@@ -121,15 +126,36 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       // D21：就绪 = "我自己还想接" 且 "数据库连通"。缺任一条都不该收新流量
       readiness: async () => acceptingTraffic && (await ping(db)),
       mount: (a) => {
-        if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见文件头取舍 3）
         // 事件总线在装配处建、订阅者在装配处注册：业务侧只见"发布"，不见"谁在听"
         const events = createEventBus(logger);
         registerBusinessEventLog(events, logger);
+
+        // ── 支付路由（F11）：**每个环境都挂**，它不是脚手架 ──────────────────
+        // @why 回调是机构打给我们的，生产必须能收；通道列表是前端入口的来源。
+        //      它们与骨架无关——骨架只是"没有真实下单接口时的一条演示链路"。
+        //      注册表在装配处按配置拼好：加一个通道 = 改配置 + 注册工厂，本处不改。
+        const registry = buildPaymentRegistry(config, {
+          http: createFetchClient(), // 必须带超时：fetch 默认不超时，支付请求挂死是真实事故
+          clock: systemClock,
+          idGen: systemIdGen,
+        });
+        logger.info('payment_channels_registered', {
+          result: 'ok',
+          ctx: { configured: describeChannels(config) },
+        });
+        mountPayRoutes(a, {
+          registry,
+          webhooks: createWebhookStore(db),
+          logger,
+          graceMs: config.CALLBACK_ORDER_GRACE_MS,
+          // 骨架期只有"把订单置为 paid"这一件事；业务期（I1）换成订单状态机的迁移
+          apply: async (e) => markOrderPaid(db, events, systemClock, e.orderId),
+        });
+
+        if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见文件头取舍 3）
         mountSkeleton(a, {
           db,
-          // 回调事件存储：**在这里**把实现装进端口（F10）。业务侧只见接口，不见 SQL。
-          webhooks: createWebhookStore(db),
-          // 幂等执行器同理：建单走单事务模式，handler 里写业务 SQL 用的就是这个事务。
+          // 幂等执行器：建单走单事务模式，handler 里写业务 SQL 用的就是这个事务。
           idempotency: createIdempotencyExecutor(db),
           events,
           // 时钟：生产装配注入真实时钟；业务侧只见 Clock 接口（F10）
@@ -138,14 +164,6 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           idGen: systemIdGen,
           logger,
           auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-          // ⚠️ mock 回调密钥**独立**于 JWT_SECRET（P1-4）：曾经直接复用 JWT_SECRET，
-          //    意味着①回调密钥与登录密钥泄露半径相同②JWT 轮换当天所有模拟回调失效。
-          //    生产启用 mock 只可能是审核模式，而跨字段规则已强制那时必须显式配置
-          //    MOCK_CALLBACK_SECRET——所以这里的回落值只在开发/测试到达。
-          callbackSecret:
-            config.MOCK_CALLBACK_SECRET ?? 'dev-mock-callback-secret-do-not-use-in-prod',
-          // AJ-32：回调早到宽限期（配置驱动，校准不发版）
-          callbackOrderGraceMs: config.CALLBACK_ORDER_GRACE_MS,
           env: config.NODE_ENV,
           // D25：带上身份状态查询，改密 / 封禁后才能真的把旧 token 挡在门外
           identity: withIdentityCache(createIdentityCheck(db)),
