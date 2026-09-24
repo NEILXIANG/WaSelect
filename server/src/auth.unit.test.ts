@@ -21,7 +21,7 @@ import {
   type AuthConfig,
   type Principal,
 } from './auth.js';
-import type { IdentityCheck } from './identity.js';
+import type { IdentityCheck } from './adapters/identity.js';
 import { decodeJwt } from 'jose';
 
 const cfg: AuthConfig = { secret: 'a'.repeat(40), issuer: 'waselect-test' };

@@ -15,7 +15,7 @@
  * @see docs/地基搭建清单.md F6c；miniprogram/utils/request.js @limitation
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { Db } from '../../server/src/db.js';
+import type { Db } from '../../server/src/adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
 import { fakeWxRequest } from '../helpers/fake-wx-request.js';
 import { E2E_USER, startSkeleton, userToken, type SkeletonServer } from './harness.js';

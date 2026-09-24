@@ -25,7 +25,7 @@ import bcrypt from 'bcryptjs';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { AppError } from './errors.js';
 import { patchContext } from './context.js';
-import type { IdentityCheck } from './identity.js';
+import type { IdentityCheck } from './adapters/identity.js';
 
 /** 角色：小程序用户与管理员是两套完全独立的入口（ADR-21：管理端为独立 Web）。 */
 export type Role = 'user' | 'admin';

@@ -28,11 +28,11 @@ import type { Express } from 'express';
 import { formatOrderNo, jstDateShort, randomOrderSeq } from '@waselect/shared';
 import { requireRole, type AuthConfig } from './auth.js';
 import { currentContext } from './context.js';
-import { withTransaction, type Db } from './db.js';
+import { withTransaction, type Db } from './adapters/db.js';
 import { AppError } from './errors.js';
 import { scopeKey, withIdempotencyTx } from './idempotency.js';
 import type { Logger } from './logger.js';
-import type { IdentityCheck } from './identity.js';
+import type { IdentityCheck } from './adapters/identity.js';
 import {
   claimWebhookEvent,
   finishWebhookEvent,

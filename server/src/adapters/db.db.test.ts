@@ -17,7 +17,7 @@ import {
   withTransaction,
   type Db,
 } from './db.js';
-import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../test/db/test-db.js';
+import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 
 let db: Db;
 

@@ -12,7 +12,7 @@
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import express from 'express';
-import type { Db } from './db.js';
+import type { Db } from './adapters/db.js';
 import { createLogger } from './logger.js';
 import { mountSkeleton, type SkeletonDeps } from './skeleton.js';
 import { MemorySink } from '../../test/helpers/memory-sink.js';

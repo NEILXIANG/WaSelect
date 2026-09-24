@@ -12,7 +12,7 @@
  */
 import { createHmac } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Db } from '../../server/src/db.js';
+import type { Db } from '../../server/src/adapters/db.js';
 import { MOCK_CALLBACK_PATH } from '../../server/src/skeleton.js';
 import type { MemorySink } from '../helpers/memory-sink.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';

@@ -12,7 +12,7 @@
  *              所以 `skeleton.e2e.test.ts` 里有一条专门的断链用例把它钉住。
  */
 import { signToken, type AuthConfig } from '../../server/src/auth.js';
-import type { Db } from '../../server/src/db.js';
+import type { Db } from '../../server/src/adapters/db.js';
 import { createHttpApp, listen, type StartedServer } from '../../server/src/http.js';
 import { createLogger } from '../../server/src/logger.js';
 import { MOCK_CALLBACK_PATH, mountSkeleton } from '../../server/src/skeleton.js';

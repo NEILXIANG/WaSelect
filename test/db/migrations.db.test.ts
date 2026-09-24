@@ -16,8 +16,8 @@ import { readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Db } from '../../server/src/db.js';
-import { closeDb } from '../../server/src/db.js';
+import type { Db } from '../../server/src/adapters/db.js';
+import { closeDb } from '../../server/src/adapters/db.js';
 import { ensureTestDb, runMigrations, testDb } from './test-db.js';
 
 /**

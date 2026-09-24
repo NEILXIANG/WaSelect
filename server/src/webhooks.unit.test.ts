@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { claimWebhookEvent } from './webhooks.js';
-import type { Db } from './db.js';
+import type { Db } from './adapters/db.js';
 
 describe('claimWebhookEvent 防御分支（N16 定向）', () => {
   it('insert 冲突后 select 仍查不到行（竞态：行在两次调用间被删）→ 保守按首次、锚点给当前时间', async () => {

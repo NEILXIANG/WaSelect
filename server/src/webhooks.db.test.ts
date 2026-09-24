@@ -6,7 +6,7 @@
  *      那条 false 可能来自任何一段代码，而不是唯一约束。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { closeDb, type Db } from './db.js';
+import { closeDb, type Db } from './adapters/db.js';
 import {
   claimWebhookEvent,
   finishWebhookEvent,

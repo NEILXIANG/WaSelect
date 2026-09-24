@@ -88,7 +88,7 @@ describe('组装根 bootstrap（A1）', () => {
       await rt.server.close();
       // 手动走一段 afterDrain 的语义：bootstrap 里挂的就是 closeDb
       await (async () => {
-        const { closeDb } = await import('./db.js');
+        const { closeDb } = await import('./adapters/db.js');
         await closeDb(rt.db);
       })();
       // 停之后：连接已关，再查必然抛错——这证明"关库"真的发生了

@@ -10,7 +10,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
-import { assertPostgresMajor, createDb, type Db } from '../../server/src/db.js';
+import { assertPostgresMajor, createDb, type Db } from '../../server/src/adapters/db.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const MIGRATE_BIN = resolve(root, 'node_modules/node-pg-migrate/bin/node-pg-migrate.js');

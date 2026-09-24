@@ -5,7 +5,7 @@
  * @see server/src/idempotency.ts @limitation
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeDb, type Db } from './db.js';
+import { closeDb, type Db } from './adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../test/db/test-db.js';
 import { requestFingerprint, scopeKey, withIdempotency, withIdempotencyTx } from './idempotency.js';
 import { createLogger } from './logger.js';

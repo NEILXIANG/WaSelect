@@ -9,7 +9,7 @@
  *              现在写进去等于把猜测固化成断言。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { Db } from '../../server/src/db.js';
+import type { Db } from '../../server/src/adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
 import {
   createIds,

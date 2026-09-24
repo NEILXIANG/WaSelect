@@ -12,7 +12,7 @@
  *              PO Box / 夏威夷 / 军邮在样本里已备好，等规则定了直接拿来当回归。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { Db } from '../../server/src/db.js';
+import type { Db } from '../../server/src/adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
 import {
   ADDRESS_LINE2_MAX_CHARS,

@@ -12,7 +12,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from './db.js';
 import { createIdentityCheck, withIdentityCache, type IdentityCheck } from './identity.js';
-import { ensureTestDb, resetTestDb, testDb } from '../../test/db/test-db.js';
+import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 
 let db: Db;
 

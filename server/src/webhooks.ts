@@ -23,7 +23,7 @@
  *      docs/自主决策记录.md AJ-32（回调早到宽限期，二审 N4）
  */
 import { createHash, randomUUID } from 'node:crypto';
-import type { Db } from './db.js';
+import type { Db } from './adapters/db.js';
 
 /**
  * 处理租约时长（毫秒，N22）：一次"登记 → 处理"的持有期。

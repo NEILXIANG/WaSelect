@@ -25,14 +25,14 @@
  *
  * @see docs/地基搭建清单.md F6 / A1；server/src/http.ts（createHttpApp / installShutdownHandlers）
  */
-import { closeDb, createDb, assertPostgresMajor, ping, type Db } from './db.js';
+import { closeDb, createDb, assertPostgresMajor, ping, type Db } from './adapters/db.js';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, redactConfig, ConfigError, type AppConfig } from './config.js';
 import { createHttpApp, installShutdownHandlers, listen, type StartedServer } from './http.js';
 import { createLogger, type Logger } from './logger.js';
 import { MOCK_CALLBACK_PATH, mountSkeleton } from './skeleton.js';
-import { createIdentityCheck, withIdentityCache } from './identity.js';
+import { createIdentityCheck, withIdentityCache } from './adapters/identity.js';
 import { installProcessErrorHandlers } from './process-errors.js';
 
 /**

@@ -34,7 +34,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
-import { withTransaction, type Db } from './db.js';
+import { withTransaction, type Db } from './adapters/db.js';
 import type { Logger } from './logger.js';
 
 /** 占位行的状态码：0 表示"抢到了但还没执行完"，不是真实 HTTP 状态。 */
