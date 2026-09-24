@@ -84,6 +84,30 @@ function optionalText() {
   return z.preprocess((v) => (v === undefined || v === '' ? undefined : v), z.string().optional());
 }
 
+/**
+ * 可选 URL（N11）：空串 → undefined；否则必须是 http(s) URL。
+ * @why `CHECKOUT_BASE_URL=nope` 这类配置启动时不拦，就要等到拼支付短链才炸——形状问题必须启动期拦。
+ *      生产的 https 要求在 crossField（需要看 NODE_ENV，字段级判断不了）。
+ */
+function optionalUrl() {
+  return z.preprocess(
+    (v) => (v === undefined || v === '' ? undefined : v),
+    z.url({ protocol: /^https?$/, error: '必须是 http(s) URL（如 https://checkout.example.com）' }).optional(),
+  );
+}
+
+/**
+ * 可选密钥类字符串（N11）：空串 → undefined；否则有最小长度。
+ * @why HMAC 共享密钥 / 初始口令是爆破与撞库的第一目标，"配了但很短"和"没配"是两回事，
+ *      前者更危险（看起来有保护）。形状规则不分环境（staging 同样生效）——staging 就是用来提前撞错的。
+ */
+function optionalSecret(minLen: number, label: string) {
+  return z.preprocess(
+    (v) => (v === undefined || v === '' ? undefined : v),
+    z.string().min(minLen, `${label} 至少 ${minLen} 字符（密钥/口令强度下限，N11）`).optional(),
+  );
+}
+
 /** 逗号分隔列表 → 字符串数组；空 / 缺失 → 空数组。 */
 function csv() {
   return z.preprocess(
@@ -95,6 +119,28 @@ function csv() {
             .filter(Boolean)
         : [],
     z.array(z.string()),
+  );
+}
+
+/**
+ * CORS 源列表（N11）：每项必须是带 scheme 的 http(s) origin，禁止通配。
+ * @why `CORS_ORIGINS=*` 不会真的生效（http.ts 按白名单逐项匹配），但也**不报错**——
+ *      静默通过等于"你以为配上了"。缺 scheme 的 `admin.example.com` 同理。
+ */
+function corsOrigins() {
+  return csv().refine(
+    (items) =>
+      items.every((o) => {
+        // 注：不需要单独的通配符判断——'*' 不是合法 URL host，new URL 会先抛
+        // （'CORS_ORIGINS=* 拒启'用例钉住这个行为；曾有一行 includes('*') 守卫，实测是冗余分支）
+        try {
+          const u = new URL(o);
+          return (u.protocol === 'https:' || u.protocol === 'http:') && u.host.length > 0;
+        } catch {
+          return false;
+        }
+      }),
+    { message: 'CORS_ORIGINS 每项必须是带 scheme 的 http(s) origin（如 https://admin.example.com），禁止通配符' },
   );
 }
 
@@ -145,7 +191,7 @@ const schema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET 至少 32 字符，用 openssl rand -hex 32 生成'),
   ADMIN_OPENIDS: csv(),
   ADMIN_EMAIL: optionalText(),
-  ADMIN_INITIAL_PASSWORD: optionalText(),
+  ADMIN_INITIAL_PASSWORD: optionalSecret(12, 'ADMIN_INITIAL_PASSWORD'),
 
   // ── 数据库 ──────────────────────────────────────────────────────────────
   DATABASE_URL: z.string().min(1, 'DATABASE_URL 必填（postgresql://user@host:5432/db）'),
@@ -216,7 +262,7 @@ const schema = z.object({
       .array(z.enum(PAYMENT_CHANNEL))
       .min(1, 'PAYMENT_CHANNELS 至少启用一个（mock | stripe | wechat）'),
   ),
-  CHECKOUT_BASE_URL: optionalText(),
+  CHECKOUT_BASE_URL: optionalUrl(),
   STRIPE_SECRET_KEY: optionalText(),
   STRIPE_WEBHOOK_SECRET: optionalText(),
   /**
@@ -237,11 +283,11 @@ const schema = z.object({
   RATE_LIMIT_LOGIN_PER_15MIN: int(5, 1),
   RATE_LIMIT_QUOTE_PER_MIN: int(30, 1),
   /** Cron Job 调 POST /internal/jobs/daily 的共享密钥；留空时该端点在启动时关闭（F6 接入）。 */
-  INTERNAL_JOB_SECRET: optionalText(),
+  INTERNAL_JOB_SECRET: optionalSecret(32, 'INTERNAL_JOB_SECRET'),
 
   // ── 通知与可观测性（F5 接入）─────────────────────────────────────────────
   SENTRY_DSN: optionalText(),
-  CORS_ORIGINS: csv(),
+  CORS_ORIGINS: corsOrigins(),
   MAIL_PROVIDER_API_KEY: optionalText(),
   SUBSCRIBE_TMPL_PAID: optionalText(),
   SUBSCRIBE_TMPL_SHIPPED: optionalText(),
@@ -252,8 +298,8 @@ const schema = z.object({
   R2_ACCESS_KEY_ID: optionalText(),
   R2_SECRET_ACCESS_KEY: optionalText(),
   R2_BUCKET: optionalText(),
-  IMG_BASE_URL: optionalText(),
-  PUBLIC_API_BASE: optionalText(),
+  IMG_BASE_URL: optionalUrl(),
+  PUBLIC_API_BASE: optionalUrl(),
 });
 
 /**
@@ -336,12 +382,30 @@ const crossField = schema.superRefine((c, ctx) => {
         add('WECHAT_INSTITUTION_API_KEY', '启用了 wechat 通道：生产环境必须配置机构 API Key');
       }
     }
-    // 4. 生产连到本地库：漏配 DATABASE_URL 时最典型的静默错误——服务起得来、写的却是另一个库
-    if (/(localhost|127\.0\.0\.1)/.test(c.DATABASE_URL)) {
-      add(
-        'DATABASE_URL',
-        '生产环境的 DATABASE_URL 不得指向 localhost/127.0.0.1（漏配环境变量的典型症状）',
-      );
+    // 4. 生产连到本地库：漏配 DATABASE_URL 时最典型的静默错误——服务起得来、写的却是另一个库。
+    //    N11：按 **URL hostname** 判定而不是正则碰运气——`[::1]`（IPv6 环回）与 127.x 整段
+    //    都能绕过 `/(localhost|127\.0\.0\.1)/` 这类字面匹配。
+    try {
+      const host = new URL(c.DATABASE_URL).hostname.toLowerCase();
+      if (host === 'localhost' || host === '::1' || host === '[::1]' || host.startsWith('127.')) {
+        add(
+          'DATABASE_URL',
+          '生产环境的 DATABASE_URL 不得指向本机（localhost / 127.x / ::1；漏配环境变量的典型症状）',
+        );
+      }
+    } catch {
+      // URL 解析失败说明它本就不像 postgres URL——由字段级 min(1) 之外的其他规则兜，这里不重复报
+      add('DATABASE_URL', 'DATABASE_URL 不是合法的 URL 形状（postgresql://user@host:5432/db）');
+    }
+    // 4b. 生产对外 URL 必须 https（N11）：http 的支付短链/图片域名会被浏览器与渠道当钓鱼拦截
+    for (const [key, value] of [
+      ['CHECKOUT_BASE_URL', c.CHECKOUT_BASE_URL],
+      ['IMG_BASE_URL', c.IMG_BASE_URL],
+      ['PUBLIC_API_BASE', c.PUBLIC_API_BASE],
+    ] as const) {
+      if (value !== undefined && !value.startsWith('https://')) {
+        add(key, `生产环境 ${key} 必须是 https（http 会被浏览器/渠道当不安全来源拦截）`);
+      }
     }
     // 5. 生产必须声明 CORS 源：不声明 = 管理端所有跨域请求被拒，且只在浏览器里才看得出来
     if (c.CORS_ORIGINS.length === 0) {

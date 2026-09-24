@@ -344,3 +344,70 @@ describe('issues 不携带原始值（N10）', () => {
     expect(all).not.toContain('secret-value-must-not-appear');
   });
 });
+
+/**
+ * N11：配置形状缺口——"值本身不像它该像的东西"。
+ * @why 这类缺口的特点是**启动全绿、运行时才炸**：`CHECKOUT_BASE_URL=nope` 要到拼支付短链
+ *      才发现不是 URL；`CORS_ORIGINS=*` 不会生效但也不报错，你以为配上了；
+ *      `[::1]` 绕过了"生产不得连本机库"的正则。形状规则对 staging 同样生效（第二轮 §N11 口径）——
+ *      staging 就是拿来提前撞这些错的。
+ */
+describe('配置形状（N11）', () => {
+  const prodLike = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
+    ...baseEnv,
+    NODE_ENV: 'production',
+    DATABASE_URL: 'postgresql://app@db.internal:5432/japan_shop',
+    PAYMENT_CHANNELS: 'stripe',
+    STRIPE_SECRET_KEY: 'sk_live_x',
+    STRIPE_WEBHOOK_SECRET: 'whsec_x',
+    CHECKOUT_BASE_URL: 'https://checkout.example.com',
+    CORS_ORIGINS: 'https://admin.example.com',
+    ...extra,
+  });
+
+  it('CHECKOUT_BASE_URL 非 URL → 拒启（staging 也拦，不能等拼短链才发现）', () => {
+    const issues = expectReject({ ...baseEnv, NODE_ENV: 'staging', CHECKOUT_BASE_URL: 'nope' });
+    expect(issues.join('\n')).toContain('CHECKOUT_BASE_URL');
+  });
+
+  it('生产 CHECKOUT_BASE_URL 必须 https（http 短链会被当钓鱼域名拦截）', () => {
+    const issues = expectReject(prodLike({ CHECKOUT_BASE_URL: 'http://checkout.example.com' }));
+    expect(issues.join('\n')).toContain('CHECKOUT_BASE_URL');
+  });
+
+  it('合法 URL 通过（staging 允许 http://localhost 调试用；回归：不能把正常配置拦死）', () => {
+    const c = loadConfig({ ...baseEnv, NODE_ENV: 'staging', CHECKOUT_BASE_URL: 'http://localhost:4000' });
+    expect(c.CHECKOUT_BASE_URL).toBe('http://localhost:4000');
+  });
+
+  it('CORS_ORIGINS=* → 拒启（通配不会生效但也不报错——静默通过等于以为配上了）', () => {
+    const issues = expectReject({ ...baseEnv, CORS_ORIGINS: '*' });
+    expect(issues.join('\n')).toContain('CORS_ORIGINS');
+  });
+
+  it('CORS_ORIGINS 条目必须是带 scheme 的 origin（缺 scheme 的 "admin.example.com" 拦下）', () => {
+    const issues = expectReject({ ...baseEnv, CORS_ORIGINS: 'admin.example.com' });
+    expect(issues.join('\n')).toContain('CORS_ORIGINS');
+  });
+
+  it('生产 DATABASE_URL 指向 [::1] / 127.x 都拒启（本机判定按 URL hostname 解析，不是正则碰运气）', () => {
+    expect(
+      expectReject(prodLike({ DATABASE_URL: 'postgresql://app@[::1]:5432/japan_shop' })).join('\n'),
+    ).toContain('DATABASE_URL');
+    expect(
+      expectReject(prodLike({ DATABASE_URL: 'postgresql://app@127.0.0.2:5432/japan_shop' })).join(
+        '\n',
+      ),
+    ).toContain('DATABASE_URL');
+  });
+
+  it('INTERNAL_JOB_SECRET < 32 → 拒启（HMAC 共享密钥，staging 同样生效）', () => {
+    const issues = expectReject({ ...baseEnv, NODE_ENV: 'staging', INTERNAL_JOB_SECRET: 'abc' });
+    expect(issues.join('\n')).toContain('INTERNAL_JOB_SECRET');
+  });
+
+  it('ADMIN_INITIAL_PASSWORD < 12 → 拒启（初始口令是爆破的第一目标）', () => {
+    const issues = expectReject({ ...baseEnv, NODE_ENV: 'staging', ADMIN_INITIAL_PASSWORD: 'abc' });
+    expect(issues.join('\n')).toContain('ADMIN_INITIAL_PASSWORD');
+  });
+});
