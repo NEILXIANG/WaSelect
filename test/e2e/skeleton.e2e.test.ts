@@ -12,12 +12,16 @@
  */
 import { createHmac } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { parseOrderNoDate } from '@waselect/shared';
 import type { Db } from '../../server/src/adapters/db.js';
 import { MOCK_CALLBACK_PATH } from '../../server/src/skeleton.js';
 import type { MemorySink } from '../helpers/memory-sink.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
+import { stubIdGen } from '../helpers/stub-id-gen.js';
 import {
   E2E_CALLBACK_SECRET as CALLBACK_SECRET,
+  E2E_NOW,
+  E2E_ORDER_NO_DATE,
   E2E_TRACE as TRACE,
   E2E_USER as USER,
   startSkeleton,
@@ -143,6 +147,64 @@ describe('行走骨架：一条链路走到底', () => {
     );
     expect(names).toEqual(['order.created', 'order.paid']);
     expect(business[0]?.order_id).toBe(created.order_id);
+  });
+
+  /**
+   * 时钟注入的**端到端**验收。
+   *
+   * @why 单测只能证明 `buildOrderNo` 用了传进来的时钟；证明不了**装配处真的传了**。
+   *      少传一个字段、传成 `systemClock`、或者某处又冒出 `new Date()`——
+   *      这些在单测里全绿，只有跑完整条装配链才看得出来。
+   *      而这条断言之所以能成立，靠的是 harness 把"现在"固定在远离真实今天的时刻：
+   *      只要业务用到了别的时钟，日期段立刻对不上。
+   */
+  it('单号日期段 = 装配处注入时钟的 JST 业务日（端到端证明没有偷偷 new Date()）', async () => {
+    const token = await userToken();
+    const res = await createOrder(token, 'key-clock-1');
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { order_no: string };
+    expect(parseOrderNoDate(body.order_no)).toBe(E2E_ORDER_NO_DATE);
+
+    // 事件时间戳同源：也必须来自注入的时钟，而不是"请求发生的真实时刻"
+    const created = sink.find('business_event')[0];
+    const ctx = created?.ctx as { domain_event?: string; at?: string } | undefined;
+    expect(ctx?.domain_event).toBe('order.created');
+    expect(ctx?.at).toBe(E2E_NOW);
+  });
+
+  /**
+   * 标识符注入的**端到端**验收：装配处注入一个确定性 IdGen 之后，
+   * id 与单号都必须是**可预先写出**的常量。
+   *
+   * @why 这条用例的价值不在"单号长得对"，而在证明**摇号这件事真的走了端口**。
+   *      业务侧只要有一处 `randomUUID()` / `randomOrderSeq()` 没换掉，
+   *      这里的断言立刻对不上——而这类"局部退回全局"在单测里是看不见的。
+   * @limitation 只建**一张**单：固定 id 与固定随机段都撞唯一约束（@see stubIdGen 的 @limitation）。
+   */
+  it('注入确定性 IdGen 后，order_id 与 order_no 都是可预先写出的常量', async () => {
+    const s = await startSkeleton(db, {
+      idGen: stubIdGen('K7Q2MN', '11111111-2222-4333-8444-555555555555'),
+    });
+    try {
+      const token = await userToken();
+      const res = await fetch(`${s.base}/api/v1/skeleton/orders`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+          'idempotency-key': 'key-idgen-1',
+        },
+        body: '{}',
+      });
+      expect(res.status).toBe(201);
+      await expect(res.json()).resolves.toEqual({
+        order_id: 'sk-11111111-2222-4333-8444-555555555555',
+        order_no: `${E2E_ORDER_NO_DATE}-K7Q2MN`,
+        status: 'created',
+      });
+    } finally {
+      await s.server.close();
+    }
   });
 
   it('幂等重放**不会**重复发领域事件（重放时 handler 不执行 → 没有事件可发）', async () => {

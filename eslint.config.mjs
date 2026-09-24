@@ -20,6 +20,61 @@ import prettier from 'eslint-config-prettier';
  */
 const LAYER_ROOTS = ['server/src', 'test/lint/layering'];
 
+/**
+ * "时间 / 随机源"纯度规则的作用范围（与分层规则同一套路：真代码树 + 夹具树）。
+ * 夹具子目录用 `purity` 而不是复用 `layering`——两套规则的**豁免清单不同**，
+ * 混在一棵树里会出现"这个文件为了测 A 规则写的违规，被 B 规则也报了"的互相干扰。
+ */
+const PURITY_ROOTS = ['server/src', 'test/lint/purity'];
+
+/**
+ * 业务侧禁止出现的**全局状态读取**（F10 最后一项的静态门禁）。
+ *
+ * @why 光有 `Clock` / `IdGen` 两个端口**拦不住任何人**：把它们接好之后的第二天，
+ *      有人在 order 路由里写了一句 `new Date()`，一切照常工作、照常上线，
+ *      直到"日本时间早上 9 点前下的单，单号日期是昨天"被发现为止。
+ *      端口提供的是"可以用"，这条规则提供的是"不可以用别的"。
+ * @why 用 `no-restricted-syntax`（**AST 选择器**）而不是文本扫描：
+ *      文本扫描会被注释骗过——本仓库里 `new Date()` 大量出现在注释中
+ *      （"禁止在这里 new Date()"），文本扫描要么永久红、要么得先手写一套去注释逻辑。
+ *      AST 只看代码节点，天然免疫。
+ *
+ * @limitation 一：以下是**显式豁免**，每一条都必须有理由，新增豁免等于新增风险：
+ *        - `adapters/**`：边界层，系统时间 / 随机数就该住在这里（它们本就是"进程外的东西"）；
+ *        - `logger.ts`：pino 时间戳必须是真实挂钟——排障时"日志时间"不能是假的；
+ *        - `context.ts`：`trace_id` 用 `randomUUID()`，它与业务判定无关，
+ *          且链路 ID 本来就要跨进程唯一（注入进去反而让"谁生成它"变成一个问题）；
+ *        - `app/auth.ts`：JWT 的 `iat/exp` 用 `Date.now()`——token 有效期对照的是
+ *          **真实时间**（验签方读的是真实时钟），注入时钟会让"过期"这件事在测试里失真；
+ *        - `*.test.ts`：测试正是要用固定/随机时间去覆盖边界，禁止它就写不了测试。
+ * @limitation 二：只禁这五种写法，不禁 `Date.parse` / `Date` 作为参数类型等形态——
+ *              精确打击比全面封杀更容易长期存活（全面封杀的第一反应是有人把整块关掉）。
+ */
+const PURITY_SELECTORS = [
+  {
+    selector: 'NewExpression[callee.name="Date"]',
+    message:
+      'F10：业务侧不得 new Date()——时间经 ports/clock.ts 的 Clock 注入，' +
+      '否则 JST 业务日、跨日边界、到期判断都只能在真实时间下测。',
+  },
+  {
+    selector: 'CallExpression[callee.object.name="Date"][callee.property.name="now"]',
+    message: 'F10：业务侧不得读 Date.now()——同上，走 Clock 端口（app/auth.ts 的 JWT 除外）。',
+  },
+  {
+    selector: 'CallExpression[callee.name="randomUUID"]',
+    message: 'F10：业务侧不得自己摇 UUID——走 ports/ids.ts 的 IdGen.uuid()。',
+  },
+  {
+    selector: 'CallExpression[callee.object.name="Math"][callee.property.name="random"]',
+    message: 'F10：业务侧不得用 Math.random——走 IdGen 端口（随机段口径只有一个来源）。',
+  },
+  {
+    selector: 'CallExpression[callee.name="randomOrderSeq"]',
+    message: 'F10：业务侧不得直接调 randomOrderSeq——走 IdGen.orderSeq()。',
+  },
+];
+
 /** 各层禁止的依赖（同一份定义，供两棵树复用）。 */
 const FORBIDDEN = {
   domain: {
@@ -207,4 +262,23 @@ export default tseslint.config(
    *             （stripe → notify）目前没有真实需求，等出现时再加 zone，不提前设限。
    */
   ...LAYER_ROOTS.flatMap(layeringBlocks),
+
+  /**
+   * 纯度规则本身：默认覆盖 `server/src/**`（**fail-closed**，新目录自动受约束），
+   * 只豁免上面 @limitation 一里逐条写明理由的几处。
+   *
+   * @why 用"默认全管 + 显式豁免"而不是"逐目录点名"：后者在新建业务目录时会静默漏掉——
+   *      那条新目录里的 `new Date()` 不会被任何东西拦住，而 gate 依然是全绿的。
+   */
+  ...PURITY_ROOTS.map((root) => ({
+    files: [`${root}/**/*.ts`],
+    ignores: [
+      'server/src/adapters/**',
+      'server/src/**/*.test.ts',
+      'server/src/logger.ts',
+      'server/src/context.ts',
+      'server/src/app/auth.ts',
+    ],
+    rules: { 'no-restricted-syntax': ['error', ...PURITY_SELECTORS] },
+  })),
 );

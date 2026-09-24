@@ -2,7 +2,12 @@
  * 职责：订单号（`order_no`，对人单号）的生成与解析——唯一生成处（地基 F2b）。
  * 边界：纯函数；**冲突重试不在这里**（要靠 DB 唯一约束判定，属仓储层职责，见 @limitation）。
  *
- * 格式（技术文档 v0.5 §1，逐字对齐）：`YYMMDD` + `-` + 6 位大写 Crockford Base32，例 `260919-K7Q2ML`。
+ * 格式（技术文档 v0.5 §1，逐字对齐）：`YYMMDD` + `-` + 6 位大写 Crockford Base32，例 `260919-K7Q2MN`。
+ *
+ * ⚠️ 示例**必须**能通过 `ORDER_NO_PATTERN`（曾经写的是 `260919-K7Q2ML`，含被排除的 `L`，
+ *    于是"规范示例"会被本文件的 `formatOrderNo` 抛 RangeError 拒绝——
+ *    文档与代码对不上时，照抄文档的人会写出永远无法入库的单号）。
+ *    `orderNo.unit.test.ts` 里有一条用例专门钉住这个示例串。
  * 日期按 **JST** 业务日（见 `businessDay.jstDateShort()`）。DB `orders.order_no VARCHAR(20)`，本格式恒 13 字符。
  *
  * @why 随机段而**不是自增序号**（§1 明文"禁止自增"）：

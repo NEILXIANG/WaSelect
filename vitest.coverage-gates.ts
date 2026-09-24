@@ -72,6 +72,13 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     statements: 100,
   },
 
+  // 时钟与单号：两者都是"口径级"代码——错了不会报错，只会让全站单号的日期段悄悄错一天。
+  // 100% 的理由不是它们复杂（都只有几行），而是**它们的边界只能靠注入才测得到**，
+  // 而"注入是否真的被用上"这件事如果没有阈值压着，改回 `new Date()` 也照样能提交。
+  'server/src/adapters/clock.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  'server/src/adapters/ids.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  'server/src/domain/order-no.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
   'server/src/app/auth.ts': { branches: 95 },

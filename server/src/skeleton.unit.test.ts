@@ -18,6 +18,8 @@ import { mountSkeleton, type SkeletonDeps } from './skeleton.js';
 import type { WebhookStore } from './ports/webhooks.js';
 import type { IdempotencyExecutor } from './ports/idempotency.js';
 import type { EventBus } from './ports/events.js';
+import { systemClock } from './adapters/clock.js';
+import { systemIdGen } from './adapters/ids.js';
 import { MemorySink } from '../../test/helpers/memory-sink.js';
 
 const AUTH = { secret: 'gate-test-secret-'.repeat(3), issuer: 'waselect-gate-test' };
@@ -32,6 +34,9 @@ function deps(env: SkeletonDeps['env']): { d: SkeletonDeps; sink: MemorySink } {
       webhooks: {} as unknown as WebhookStore,
       idempotency: {} as unknown as IdempotencyExecutor<Db>,
       events: {} as unknown as EventBus,
+      // 闸门测试用真实时钟即可（它不涉及时间边界）；这里必填是装配纪律的一部分
+      clock: systemClock,
+      idGen: systemIdGen,
       logger: createLogger({
         env: env === 'production' ? 'production' : 'development',
         destination: sink,

@@ -42,7 +42,8 @@ export function jstDateCompact(at: Date): string {
 
 /**
  * JST 日期的 **YYMMDD**（6 位）——订单号日期段用。
- * @see 技术文档 v0.5 §1：`order_no` = `YYMMDD` + 6 位 base32（例 `260919-K7Q2ML`）
+ * @see 技术文档 v0.5 §1：`order_no` = `YYMMDD` + 6 位 base32（例 `260919-K7Q2MN`；
+ *      旧示例 `…K7Q2ML` 含被 Crockford 排除的 `L`，会被 `formatOrderNo` 拒绝，已更正）
  */
 export function jstDateShort(at: Date): string {
   return jstDateCompact(at).slice(2);

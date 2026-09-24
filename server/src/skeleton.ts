@@ -23,12 +23,14 @@
  *
  * @see docs/地基搭建清单.md F6c；docs/测试策略与验证门禁.md（L3 端到端）
  */
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Express } from 'express';
-import { formatOrderNo, jstDateShort, randomOrderSeq } from '@waselect/shared';
 import { requireRole, type AuthConfig } from './app/auth.js';
 import { currentContext } from './context.js';
 import type { Db } from './adapters/db.js';
+import { buildOrderNo } from './domain/order-no.js';
+import type { Clock } from './ports/clock.js';
+import type { IdGen } from './ports/ids.js';
 import { AppError } from './errors.js';
 import { scopeKey, type IdempotencyExecutor } from './ports/idempotency.js';
 import type { DomainEvent, EventBus } from './ports/events.js';
@@ -65,6 +67,29 @@ export interface SkeletonDeps {
    *      而且总线**必须带 logger**（订阅者失败要落 error），装配处不传就是"静默吞异常"。
    */
   events: EventBus;
+  /**
+   * 时钟（F10 端口）。**必填**：装配时注入 `systemClock`（生产）或 `fixedClock`（测试）。
+   *
+   * @why 同 webhooks / idempotency：可选就一定有人不传，然后悄悄退回 `new Date()`。
+   *      而"现在几点"一旦退回全局，所有依赖它的边界（JST 业务日、跨日那一秒、
+   *      到期判断）就**只能在真实时间下测**——也就是说这些分支实际上没有测试。
+   * @limitation 只管"业务时间"。两处仍然直接用真实时间，刻意如此：
+   *              ① `logger.ts` 的日志时间戳（pino 内部取，且必须是真实挂钟，
+   *                 否则排障时拿到的"日志时间"是假的）；
+   *              ② `adapters/webhooks.ts` 的 `now()` 兜底值——它只在 DB 没返回时间时用到，
+   *                 且会立刻与 DB 时钟做减法（跨时钟相减的风险见本文件宽限期那段注释）。
+   */
+  clock: Clock;
+  /**
+   * 标识符生成器（F10 端口）。**必填**：装配时注入 `systemIdGen`（生产）或 `stubIdGen`（测试）。
+   *
+   * @why 与 `clock` 成对：id 也是"看着像纯函数、其实依赖全局状态"的输入。
+   *      必填而不是可选的理由完全相同——可选就一定有人不传，然后退回 `randomUUID()`，
+   *      于是"单号冲突重试"（D32）这条路径除了靠运气撞上一次之外永远测不到。
+   * @limitation `uuid()` 只用于**内部键**（`orders.id`）；对外一律用 `order_no`，
+   *              且必须校验归属（@see readOwnedOrder 的 @why：id 不是能力凭证）。
+   */
+  idGen: IdGen;
   logger: Logger;
   auth: AuthConfig;
   /** 模拟回调的 HMAC 密钥（骨架期；真实通道验签在 F11，见 @limitation 二）。 */
@@ -108,11 +133,6 @@ function verifySignature(raw: Buffer, signature: string, secret: string): boolea
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** 生成订单号：`YYMMDD-XXXXXX`，取自 shared（技术文档 §1：禁止自增）。 */
-function newOrderNo(): string {
-  return formatOrderNo(jstDateShort(new Date()), randomOrderSeq());
-}
-
 /**
  * 把订单置为 paid（事务 + `for update` + 追加审计事件）。
  *
@@ -122,8 +142,11 @@ function newOrderNo(): string {
  * @why 走 `withUnitOfWork`（而不是 `withTransaction`）：置为已支付要发 `order.paid` 事件，
  *      而事件**必须在事务提交之后**分发——否则回滚了订阅者却已经跑过（见 app/unit-of-work.ts）。
  * @throws {AppError} 40400（订单不存在）/ 40902（状态不是 created，多半是回调重发）
+ *
+ * @param clock 时钟（注入）：事件时间戳取它，而不是 `new Date()`——
+ *              "这个事件发生在什么时候"是业务事实，必须可被测试钉住（@see ports/clock.ts）。
  */
-async function markPaid(db: Db, events: EventBus, orderId: string): Promise<void> {
+async function markPaid(db: Db, events: EventBus, clock: Clock, orderId: string): Promise<void> {
   await withUnitOfWork(db, events, async (tx, emit) => {
     // for update：并发回调（机构重发）时排队，避免两次都读到 'created' 各写一次事件
     const rows = await tx`select status from orders where id = ${orderId} for update`;
@@ -137,7 +160,7 @@ async function markPaid(db: Db, events: EventBus, orderId: string): Promise<void
       insert into order_events (order_id, status, actor) values (${orderId}, 'paid', 'system')
     `;
     // 登记（不是分发）：只有这个事务提交成功，订阅者才会收到 order.paid
-    emit({ name: 'order.paid', at: new Date().toISOString(), orderId });
+    emit({ name: 'order.paid', at: clock.now().toISOString(), orderId });
   });
 }
 
@@ -245,8 +268,10 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
             // handler 内只用 tx（db.ts @limitation 二），禁止再开嵌套事务。
             async (tx) => {
               // id 与 order_no 分开：order_no 是给用户看的（YYMMDD-XXXXXX），id 是内部键
-              const orderId = `sk-${randomUUID()}`;
-              const orderNo = newOrderNo();
+              // id 与单号都从注入的 IdGen 来：业务侧不认识 randomUUID / randomOrderSeq
+              const orderId = `sk-${deps.idGen.uuid()}`;
+              // 日期段取 **JST 业务日**：规则在 domain，时钟从装配处来（禁止在这里 `new Date()`）
+              const orderNo = buildOrderNo(deps.clock, deps.idGen.orderSeq());
               await tx`
                 insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
                                     total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
@@ -263,7 +288,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
               });
               pendingEvents.push({
                 name: 'order.created',
-                at: new Date().toISOString(),
+                at: deps.clock.now().toISOString(),
                 orderId,
                 payload: { order_no: orderNo },
               });
@@ -376,7 +401,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
         //    告警会淹没真正的冲突。
         // ④ 其余状态冲突（expired/cancelled 等）→ 2xx + warn：重发不会变，靠人查。
         try {
-          await markPaid(deps.db, deps.events, orderId);
+          await markPaid(deps.db, deps.events, deps.clock, orderId);
         } catch (e) {
           const code = e instanceof AppError ? e.code : 0;
           if (code === 40400) {
@@ -494,7 +519,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           const orderId = paramId(req.params.id);
           // 先确认"这张单是他的"再改状态：否则这个骨架端点等于"任何人都能把别人的单改成已支付"
           await readOwnedOrder(deps.db, orderId, sub);
-          await markPaid(deps.db, deps.events, orderId);
+          await markPaid(deps.db, deps.events, deps.clock, orderId);
           deps.logger.info('skeleton_simulate_paid', { order_id: orderId, result: 'paid' });
           res.json({ order_id: orderId, status: 'paid' });
         } catch (e) {

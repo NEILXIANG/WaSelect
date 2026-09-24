@@ -19,14 +19,36 @@ import { MOCK_CALLBACK_PATH, mountSkeleton } from '../../server/src/skeleton.js'
 import { createWebhookStore } from '../../server/src/adapters/webhooks.js';
 import { createIdempotencyExecutor } from '../../server/src/adapters/idempotency.js';
 import { createEventBus } from '../../server/src/adapters/event-bus.js';
+import { systemIdGen } from '../../server/src/adapters/ids.js';
+import type { IdGen } from '../../server/src/ports/ids.js';
 import { registerBusinessEventLog } from '../../server/src/app/business-events.js';
 import { MemorySink } from '../helpers/memory-sink.js';
+import { fixedClock } from '../helpers/fixed-clock.js';
 
 export const E2E_AUTH: AuthConfig = { secret: 'e2e-jwt-secret-'.repeat(3), issuer: 'waselect-e2e' };
 export const E2E_CALLBACK_SECRET = 'mock-callback-secret';
 /** 全程只用一个链路 ID，便于断言"几跳日志是同一条链"。 */
 export const E2E_TRACE = 'e2e-trace-0001';
 export const E2E_USER = 'u-e2e';
+
+/**
+ * e2e 的"现在"：**固定值**，且刻意远离真实今天。
+ *
+ * @why 时钟一旦固定，单号的日期段就成了**可断言的常量**——
+ *      端到端层面因此能证明"业务真的用了装配处注入的那个时钟"，
+ *      而不是某处偷偷 `new Date()`（那种写法在真实时间下测不出来）。
+ * @why 选 `2026-01-02T15:30:00Z` 这个时刻：它刚过 JST 跨日点（UTC 15:00），
+ *      UTC 日与本机的本地日都还是 01-02，只有 JST 已经是 01-03——
+ *      于是"用错时区"和"用了注入时钟之外的时钟"两种错法都会立刻变红。
+ */
+export const E2E_NOW = '2026-01-02T15:30:00.000Z';
+/**
+ * `E2E_NOW` 对应的单号日期段（JST `YYMMDD`）。
+ *
+ * ⚠️ 刻意写成**字面量**而不是再调一次 `jstDateShort()`：
+ *    后者等于"用被测的函数去算期望值"，函数算错了测试照样绿。
+ */
+export const E2E_ORDER_NO_DATE = '260103';
 
 export interface SkeletonServer {
   server: StartedServer;
@@ -37,7 +59,7 @@ export interface SkeletonServer {
 
 export async function startSkeleton(
   db: Db,
-  opts: { withRawBody?: boolean; graceMs?: number } = {},
+  opts: { withRawBody?: boolean; graceMs?: number; now?: string; idGen?: IdGen } = {},
 ): Promise<SkeletonServer> {
   const sink = new MemorySink();
   const logger = createLogger({ env: 'development', destination: sink });
@@ -56,6 +78,12 @@ export async function startSkeleton(
         webhooks: createWebhookStore(db),
         idempotency: createIdempotencyExecutor(db),
         events,
+        // 与生产同一条装配路径：生产注入 systemClock，这里注入固定时钟。
+        // 业务代码不知道自己拿到的是哪一个——这正是"时间可测"的落点。
+        clock: fixedClock(opts.now ?? E2E_NOW),
+        // 默认用真实 IdGen（e2e 多数用例要建多张单，固定 id 会撞唯一约束）；
+        // 需要"断言 id 就是某个值"的用例显式传 `idGen`（见 stubIdGen 的 @limitation）
+        idGen: opts.idGen ?? systemIdGen,
         logger,
         auth: E2E_AUTH,
         callbackSecret: E2E_CALLBACK_SECRET,

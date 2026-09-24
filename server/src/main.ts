@@ -36,6 +36,8 @@ import { createIdentityCheck, withIdentityCache } from './adapters/identity.js';
 import { createWebhookStore } from './adapters/webhooks.js';
 import { createIdempotencyExecutor } from './adapters/idempotency.js';
 import { createEventBus } from './adapters/event-bus.js';
+import { systemClock } from './adapters/clock.js';
+import { systemIdGen } from './adapters/ids.js';
 import { registerBusinessEventLog } from './app/business-events.js';
 import { installProcessErrorHandlers } from './process-errors.js';
 
@@ -130,6 +132,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           // 幂等执行器同理：建单走单事务模式，handler 里写业务 SQL 用的就是这个事务。
           idempotency: createIdempotencyExecutor(db),
           events,
+          // 时钟：生产装配注入真实时钟；业务侧只见 Clock 接口（F10）
+          clock: systemClock,
+          // 标识符：同上，业务侧只见 IdGen 接口
+          idGen: systemIdGen,
           logger,
           auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
           // ⚠️ mock 回调密钥**独立**于 JWT_SECRET（P1-4）：曾经直接复用 JWT_SECRET，
