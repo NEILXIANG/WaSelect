@@ -79,6 +79,38 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
   'server/src/adapters/ids.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
   'server/src/domain/order-no.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
 
+  // F11 支付链路：端口、注册表、两个 Provider 实现、出站 HTTP——**全部 100%**。
+  // @why 这一组是"钱"经过的路径，且它们的失败形态多为"不报错"：
+  //      通道少出现一个（转化率静默下降）、下线通道还能建单（资金走错路）、
+  //      金额少算 100 倍（零小数币种）、验签容差失效（重放）。
+  //      更重要的理由是**新人加第三个 Provider 时要有同等的尺**：这些阈值就是那把尺。
+  'server/src/ports/payment.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  'server/src/adapters/payment/registry.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/adapters/payment/mock.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/adapters/payment/stripe-checkout.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  // 出站 HTTP：只有 20 行，但"没超时"这一条在生产上是挂死，必须锁住
+  'server/src/adapters/http/fetch-client.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
   'server/src/app/auth.ts': { branches: 95 },

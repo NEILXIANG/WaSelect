@@ -94,8 +94,15 @@ export interface PaymentRequest {
   orderId: string;
   /** 对人单号：机构侧元数据用它，排障时两边能对上。 */
   orderNo: string;
+  /** **JPY 锚**（ADR-09）：记账与对账始终用它，不随扣款币种变。 */
   amountJpy: number;
+  /** 扣款币种。 */
   currency: string;
+  /**
+   * **该币种下**的金额（主单位）。换算由 domain 按 `fx_snapshot` 做，
+   * 本端口**不做换算**——端口一旦开始换算，就会出现"同一个订单在两家机构金额不同"。
+   */
+  amountInCurrency: number;
   destCountry: string;
   /** 幂等键：传给机构，避免重复建单（机构侧幂等 ≠ 我们自己的幂等表）。 */
   idempotencyKey: string;
@@ -132,15 +139,30 @@ export interface ProviderEvent {
   /** 我们自己的订单 id（从机构 metadata 回带；取不到是**设计缺陷**，必须抛）。 */
   orderId: string;
   providerRef: string;
-  /** 实收金额（JPY）；机构币种不同时由适配器换算并写明来源。 */
-  amountJpy?: number | undefined;
+  /**
+   * 机构报的金额（**最小单位**，如 USD 是分、JPY 是円）与它的币种。
+   *
+   * @why 这里**不换算成 JPY**：换算需要下单价时的 `fx_snapshot`（订单级），
+   *      适配器拿不到也不该拿——拿到就会用它自己查到的"当前汇率"去换算一笔过去的交易，
+   *      于是对账时永远差一点，且差额随时间变化，查不出原因。
+   *      换算属 domain，用订单快照里那份汇率。
+   */
+  amountMinor?: number | undefined;
+  currency?: string | undefined;
 }
 
 export interface RefundRequest {
   orderId: string;
   providerRef: string;
-  /** 退款金额（JPY）。MVP 只做全额：必须等于原额，不等直接拒绝（见 @limitation）。 */
+  /** JPY 锚（记账与对账）。 */
   amountJpy: number;
+  /**
+   * **原扣款币种**与该币种下的金额：MVP 只做全额，**按原币退**（契约 `/admin/orders/{id}/refund`）。
+   * @why 按原币退而不是按"今天的汇率折算成 JPY 再退"：汇率在收与退之间会变，
+   *      折算退款会让用户拿到的金额与付款时不等（多退是损失、少退是纠纷）。
+   */
+  currency: string;
+  amountInCurrency: number;
   reason: string;
 }
 

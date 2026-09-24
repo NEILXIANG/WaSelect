@@ -128,6 +128,20 @@ describe('matchesScope / isChannelAvailable（契约级筛选规则）', () => {
     const caps = stub('a', { countries: ['JP'] }).capabilities;
     expect(isChannelAvailable(cfg({ channel: 'a', countries: ['*'] }), caps, US_JPY)).toBe(false);
   });
+
+  it('币种两侧都要命中：配置不含 / 能力不含，任一不成立都不可用', () => {
+    const caps = stub('a', { currencies: ['JPY'] }).capabilities;
+    expect(isChannelAvailable(cfg({ channel: 'a', currencies: ['USD'] }), caps, US_JPY)).toBe(
+      false,
+    );
+    expect(
+      isChannelAvailable(
+        cfg({ channel: 'a' }),
+        stub('a', { currencies: ['USD'] }).capabilities,
+        US_JPY,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('listAvailable（前端入口来源）', () => {
@@ -220,6 +234,12 @@ describe('getForRefund（下线语义：禁用只影响新单，不影响老单�
     expectChannelError(() => r.getForRefund('a'), 'channel_disabled_and_not_refundable');
   });
 
+  it('未配置 / 未注册工厂的通道，退款同样拒绝（老订单不会因为配置被删就退不了钱以外的东西）', () => {
+    const r = createPaymentRegistry({ configs: [cfg({ channel: 'nofactory' })] });
+    expectChannelError(() => r.getForRefund('nope'), 'channel_not_configured');
+    expectChannelError(() => r.getForRefund('nofactory'), 'channel_not_registered');
+  });
+
   it('启用但不支持退款 → 拒绝（不是"返回 undefined 让调用方自己判"）', () => {
     const r = createPaymentRegistry({ configs: [cfg({ channel: 'a' })] });
     r.register('a', (c) => stub(c.channel, { supportsRefund: false }, false));
@@ -256,6 +276,11 @@ describe('注册期不变式（声明必须与实现一致）', () => {
     const r = createPaymentRegistry({ configs: [cfg({ channel: 'a' })] });
     r.register('a', (c) => stub(c.channel, { supportsRefund: false }, true));
     expect(() => r.get('a')).toThrow(/声明 supportsRefund=false/);
+  });
+
+  it('空通道名 → 抛（空字符串会让"这个通道是谁"无从回答）', () => {
+    const r = createPaymentRegistry({ configs: [] });
+    expect(() => r.register('', (c) => stub(c.channel))).toThrow(/通道名不能为空/);
   });
 
   it('注册晚于首次取用也能生效（先 register 再 get 与反之都要正确）', () => {

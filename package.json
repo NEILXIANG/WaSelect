@@ -26,7 +26,7 @@
     "test:contract": "vitest run --project contract",
     "test:e2e": "vitest run --project e2e",
     "test:lint": "vitest run --project lint",
-    "cov": "vitest run --project unit --project db --project e2e --coverage",
+    "cov": "vitest run --project unit --project db --project contract --project e2e --coverage",
     "check:contract": "node scripts/check-contract.mjs",
     "build": "npm run build:shared && npm run build:server",
     "build:shared": "tsc -p packages/shared/tsconfig.build.json",
