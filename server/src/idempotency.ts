@@ -291,6 +291,12 @@ export async function withIdempotencyTx<T>(
       });
     } catch (e) {
       // 等锁超时（55P03）不是失败，是"别人还在做"——落到冲突路径按等待/超时处理
+      // ⚠️ @limitation 这条捕获**不限于占位那一步**：handler 内部若也撞上 55P03
+      //    （它自己在等别的行锁且超时），同样会被当成"占位冲突"再走一轮。
+      //    安全性：事务已回滚，重跑一次 handler 不会有残留副作用（这也是
+      //    @limitation 二"handler 必须只做 DB 写入"的价值所在）；
+      //    可观测性上会少一条"handler 等锁超时"的独立信号——需要一个时，应在 handler 内部
+      //    自行捕获并按业务语义记录，不要依赖本层区分。
       if (isLockTimeout(e)) {
         outcome = { kind: 'conflict' };
       } else {
@@ -344,9 +350,10 @@ function startRenewal(db: Db, args: IdempotencyArgs, token: string, leaseMs: num
   const timer = setInterval(() => {
     void (async () => {
       try {
+        // 同 claim()：续期的到期时刻也用 DB 时钟算，避免"写入用应用时钟、判定用 DB 时钟"
         const rows = await db`
           update idempotency_keys
-             set locked_until = ${new Date(Date.now() + leaseMs)}
+             set locked_until = now() + ${leaseMs} * interval '1 millisecond'
            where key = ${args.key} and lease_token = ${token} and completed_at is null
           returning key
         `;
@@ -379,6 +386,12 @@ function startRenewal(db: Db, args: IdempotencyArgs, token: string, leaseMs: num
  * @why 接管用 `UPDATE ... WHERE ... RETURNING` 而不是"先查再插"：后者两步之间有竞态，
  *      两个等待者可能同时判定"租约过期"然后都去执行。Postgres 的 UPDATE 在
  *      `locked_until < now()` 这一行条件上是原子的，第二个 UPDATE 匹配不到行（租约已被刷新）。
+ * @limitation 本函数的 `insert` **没有**设 `lock_timeout`：若另一个请求正用
+ *              {@link withIdempotencyTx} 持有同名占位（事务未提交），ON CONFLICT 会阻塞到它提交/回滚，
+ *              最坏要等到连接级 `statement_timeout`（15s，D20）才放手。
+ *              MVP 里两种模式不混用（骨架走单事务模式），所以现状可接受；
+ *              将来若同一批接口两种模式并存，应在这里按剩余等待预算 `SET LOCAL lock_timeout`
+ *              （与单事务模式一致的做法），否则会表现为"偶发请求挂十几秒"。
  * @why 接管时校验既有指纹（`request_hash = '' or request_hash = hash`）：
  *      旧占位登记的请求内容若与新请求不同，这是"客户端复用了幂等键"，
  *      必须走 40908（在 readRow 分支抛出）而不是覆盖指纹后执行——
@@ -390,11 +403,16 @@ async function claim(
   hash: string,
   leaseMs: number,
 ): Promise<string | undefined> {
-  const lockedUntil = new Date(Date.now() + leaseMs);
   const token = randomUUID();
+  // ⚠️ locked_until **必须由 DB 时钟计算**（`now() + leaseMs`），不能用 `new Date(Date.now() + leaseMs)`。
+  //    判定过期用的也是 DB 的 now()（下面的 `locked_until < now()`）——写与判若来自两个时钟，
+  //    租约长度就会被时钟偏移扭曲：应用时钟偏快 → 崩溃遗留的占位迟迟不能被接管；
+  //    偏慢 → 正常执行的 handler 被误接管。Render 上应用与 Postgres 是不同实例，差几秒很常见。
+  //    （2026-09-23 自查发现；用例「租约到期时刻由 DB 时钟决定」钉住）
   const inserted = await db`
     insert into idempotency_keys (key, user_id, route, status_code, response, request_hash, locked_until, lease_token)
-    values (${args.key}, ${args.userId ?? null}, ${args.route}, ${PENDING_STATUS_CODE}, '{}'::jsonb, ${hash}, ${lockedUntil}, ${token})
+    values (${args.key}, ${args.userId ?? null}, ${args.route}, ${PENDING_STATUS_CODE}, '{}'::jsonb, ${hash},
+            now() + ${leaseMs} * interval '1 millisecond', ${token})
     on conflict (key) do nothing
     returning lease_token
   `;
@@ -402,7 +420,8 @@ async function claim(
 
   const taken = await db`
     update idempotency_keys
-       set locked_until = ${lockedUntil}, request_hash = ${hash}, lease_token = ${token}
+       set locked_until = now() + ${leaseMs} * interval '1 millisecond',
+           request_hash = ${hash}, lease_token = ${token}
      where key = ${args.key}
        and completed_at is null
        and (locked_until is null or locked_until < now())

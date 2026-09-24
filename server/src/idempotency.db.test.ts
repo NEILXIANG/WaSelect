@@ -4,7 +4,7 @@
  * @why 用户狂点 / 前端超时重发是幂等的典型触发场景，两者都是并发的；不测并发等于没测。
  * @see server/src/idempotency.ts @limitation
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDb, type Db } from './db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../test/db/test-db.js';
 import { requestFingerprint, scopeKey, withIdempotency, withIdempotencyTx } from './idempotency.js';
@@ -345,6 +345,52 @@ describe('租约栅栏（N1）', () => {
  *      凡是 handler 超过租约时长的正常请求都会被接管 → 重复执行。
  *      续期把"慢"和"死"区分开：活着的 handler 定期刷新租约，死掉的才轮到别人接管。
  */
+/**
+ * 2026-09-23 自查发现：租约的**写入**用应用时钟（`new Date(Date.now() + leaseMs)`），
+ * 而**判定过期**用的是 DB 的 `now()`（SQL 里的 `locked_until < now()`）——两个时钟不同源。
+ * Render 上应用与 Postgres 是不同实例，时钟差个几秒很正常：
+ *   - 应用时钟偏快 → 租约被凭空拉长 → 崩溃遗留的占位迟迟不能被接管（恢复变慢）；
+ *   - 应用时钟偏慢 → 租约提前到期 → 正常执行的 handler 被误接管（虽有续期缓解，但续期同样受影响）。
+ * 修法是让 SQL 自己算 `now() + leaseMs`，全程只用一个时钟（DB 的）。
+ */
+describe('租约时钟（自查发现：不得跨时钟比较）', () => {
+  it('租约到期时刻由 DB 时钟决定——应用时钟偏移 10 分钟也不改变租约长度', async () => {
+    const KEY = 'k-clock';
+    const OFFSET = 600_000; // 把应用时钟拨快 10 分钟
+    const realNow = Date.now.bind(Date);
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + OFFSET);
+    try {
+      const running = withIdempotency(
+        db,
+        { ...args(KEY), leaseMs: 3_000, waitMs: 50 },
+        async () => {
+          await new Promise((r) => setTimeout(r, 400));
+          return { status: 200, body: { ok: true } };
+        },
+      );
+      // 等占位行真的出现（复用本文件既有手法，不靠"sleep 一个应该够了的时间"）
+      const deadline = Date.now() + 2000;
+      for (;;) {
+        const rows = await db`select key from idempotency_keys where key = ${KEY}`;
+        if (rows.length > 0 || Date.now() > deadline) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      const rows = await db`
+        select extract(epoch from (locked_until - now())) as secs
+          from idempotency_keys where key = ${KEY}
+      `;
+      const secs = Number(rows[0]?.secs);
+      await running;
+      // 租约 3s：DB 视角下剩余必须 ≈3s。
+      // 修复前（用应用时钟写）这里会是 ≈603s —— 租约被凭空拉长 200 倍。
+      expect(secs).toBeGreaterThan(0);
+      expect(secs).toBeLessThan(6);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('租约续期', () => {
   it('handler 超过租约时长但持续续期 → 不被接管，并发方重放同一结果', async () => {
     let executions = 0;
