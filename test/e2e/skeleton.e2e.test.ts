@@ -11,7 +11,7 @@
  * @see docs/地基搭建清单.md F6c；server/src/skeleton.ts @limitation
  */
 import { createHmac } from 'node:crypto';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../../server/src/db.js';
 import { MOCK_CALLBACK_PATH } from '../../server/src/skeleton.js';
 import type { MemorySink } from '../helpers/memory-sink.js';
@@ -241,6 +241,29 @@ describe('行走骨架：一条链路走到底', () => {
     // 一次早到的回调不能写出任何业务事件
     const events = await db`select id from order_events`;
     expect(events).toHaveLength(0);
+  });
+
+  /**
+   * 2026-09-23 自查发现：宽限期算的是"距事件**首次**到达多久"，而首次到达时间是 **DB 时钟**
+   * （`received_at` 由 Postgres 的 now() 写入）。用应用的 `Date.now()` 去减它，等于拿两个时钟做减法：
+   * 应用时钟快 20 分钟时，一条**刚到**的回调会被判成"超过 15 分钟宽限期" → 2xx 收下 +
+   * 落 unmatched、机构不再重发——"钱到单未付"就此静默，且没有任何报错。
+   * 判据必须是 DB 自己的 now()（由 claimWebhookEvent 一并返回）。
+   */
+  it('宽限期判定用 DB 时钟——应用时钟偏快 20 分钟也不许把早到回调判成超期', async () => {
+    const OFFSET = 20 * 60 * 1000; // 比默认宽限期（15 分钟）更大
+    const realNow = Date.now.bind(Date);
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + OFFSET);
+    try {
+      const res = await signedCallback({ order_id: 'sk-clock-skew', event_id: 'evt-skew' });
+      // 修复前这里会是 200 + unmatched：刚到的回调被误判超期，机构不再重发
+      expect(res.status).toBe(503);
+      const rows =
+        await db`select processed_at, result from webhook_events where event_id = 'evt-skew'`;
+      expect(rows[0]?.processed_at).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   /**

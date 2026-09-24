@@ -67,6 +67,19 @@ export interface ClaimResult {
    *      且骨架的模拟回调根本没有时间戳字段；前者单调、无时钟偏移问题。
    */
   firstReceivedAt: Date;
+  /**
+   * **DB 的当前时间**（`now()`），与 {@link firstReceivedAt} 同源。
+   *
+   * @why 宽限期要拿"现在"减"首次到达"，两个数必须来自**同一个时钟**。
+   *      `firstReceivedAt` 是 Postgres 写的（`received_at` 默认 now()），
+   *      若用应用的 `Date.now()` 去减它，就是跨时钟做减法：应用时钟快 20 分钟时，
+   *      一条刚到的回调会被判成"超过 15 分钟宽限期" → 2xx 收下 + 落 unmatched、
+   *      机构不再重发，"钱到单未付"就此静默且无任何报错（2026-09-23 自查发现）。
+   *      Render 上应用与 Postgres 是不同实例，时钟差几秒很常见。
+   * @limitation 极少数路径（见下方"查不到行"的兜底）拿不到 DB 时钟，
+   *             此时退化为应用时钟——那条路径本就是理论不可达的保守兜底。
+   */
+  nowAt: Date;
 }
 
 export async function claimWebhookEvent(db: Db, input: WebhookEventInput): Promise<ClaimResult> {
@@ -74,22 +87,29 @@ export async function claimWebhookEvent(db: Db, input: WebhookEventInput): Promi
     insert into webhook_events (provider, event_id, event_type, payload_hash)
     values (${input.provider}, ${input.eventId}, ${input.eventType ?? null}, ${input.hash})
     on conflict (provider, event_id) do nothing
-    returning received_at
+    returning received_at, now() as now_at
   `;
   if (inserted.length > 0) {
-    return { state: 'new', firstReceivedAt: inserted[0]?.received_at as Date };
+    return {
+      state: 'new',
+      firstReceivedAt: inserted[0]?.received_at as Date,
+      nowAt: inserted[0]?.now_at as Date,
+    };
   }
 
   const rows = await db`
-    select processed_at, received_at from webhook_events
+    select processed_at, received_at, now() as now_at from webhook_events
      where provider = ${input.provider} and event_id = ${input.eventId}
   `;
   const row = rows[0];
   // 理论上不可能走到（刚插入或已存在）；保守当作首次、起点给当前时间（宽限期从零算起）
-  if (row === undefined) return { state: 'new', firstReceivedAt: new Date() };
+  if (row === undefined) {
+    return { state: 'new', firstReceivedAt: new Date(), nowAt: new Date() };
+  }
   return {
     state: row.processed_at === null ? 'retry' : 'handled',
     firstReceivedAt: row.received_at as Date,
+    nowAt: row.now_at as Date,
   };
 }
 

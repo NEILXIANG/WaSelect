@@ -310,8 +310,16 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
         } catch (e) {
           const code = e instanceof AppError ? e.code : 0;
           if (code === 40400) {
-            const elapsedMs = Date.now() - claim.firstReceivedAt.getTime();
-            if (elapsedMs <= deps.callbackOrderGraceMs) {
+            // ⚠️ 用 **DB 时钟**做减法（claim.nowAt 与 firstReceivedAt 同源）：
+            //    应用时钟与 DB 时钟不同源，拿 Date.now() 减 received_at 会让宽限期被时钟偏移扭曲
+            //    ——最坏情况是"钱到单未付"被静默判成超期（@see webhooks.ts ClaimResult.nowAt）
+            const elapsedMs = claim.nowAt.getTime() - claim.firstReceivedAt.getTime();
+            // ⚠️ 用严格小于（`elapsedMs < graceMs`），不是 `<=`：
+            //    "宽限期 = 0"的语义必须是**零宽限**（任何早到都立即转 unmatched），
+            //    若写成 `<=`，则 elapsed 恰好为 0 时仍算宽限期内——
+            //    在 DB 时钟下"刚到"的 elapsed 就是 0，于是零宽限配置永远走不到超期分支
+            //    （本文件那条 graceMs=0 的用例原先是靠"应用时钟比 DB 时钟快几毫秒"才偶然成立的）。
+            if (elapsedMs < deps.callbackOrderGraceMs) {
               deps.logger.warn('callback_early', {
                 order_id: orderId,
                 result: 'retry_scheduled',
