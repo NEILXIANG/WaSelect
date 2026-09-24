@@ -59,7 +59,12 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
   // 真防御分支（竞态窗口、类型守卫的唯一调用方已保证）允许 `v8 ignore` + 中文理由注释，
   // 但不允许为凑覆盖率写假测试或删防御代码（见 docs/自主决策记录.md AJ-37）。
   'server/src/redact.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-  'server/src/idempotency.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  'server/src/adapters/idempotency.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
   'server/src/adapters/webhooks.ts': {
     lines: 100,
     functions: 100,

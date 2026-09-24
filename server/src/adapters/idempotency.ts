@@ -1,8 +1,7 @@
 /**
- * 职责：幂等执行器（F8）——同一个 Idempotency-Key 只真正执行一次，重放返回首次结果。
+ * 职责：幂等执行器的**实现**（F8）——同一个 Idempotency-Key 只真正执行一次，重放返回首次结果。
  * 边界：只管"执行一次"这件事；key 从哪个头来、哪些路由需要幂等，由路由层决定。
- * 两种模式：**单事务**（{@link withIdempotencyTx}，handler 只做 DB 写入，首选）
- * 与**非事务**（{@link withIdempotency}，handler 含外部副作用时用）。
+ * 对外只暴露 {@link createIdempotencyExecutor}；契约与语义常量在 `../ports/idempotency.ts`。
  *
  * @why 支付链路里重试是常态：网络抖动、用户狂点、前端超时重发。
  *      没有幂等，一次"用户以为没成功"的重试就会建出第二张单、扣第二次款——
@@ -28,105 +27,30 @@
  * @tradeoff 用数据库行而不是 Redis：多一个 DB 往返，换来零额外组件（Render 上没有托管 Redis）。
  *           过期清理交给调度器（idempotency_keys.created_at 24h），不在此处做 TTL。
  *
- * @see 技术文档 v0.5 §3（idempotency_keys）；docs/地基搭建清单.md F8；D-29；评审 D3/D4；
+ * @see ../ports/idempotency.ts（契约与语义常量）；技术文档 v0.5 §3（idempotency_keys）；
+ *      docs/地基搭建清单.md F8；D-29；评审 D3/D4；
  *      docs/二审意见甄别报告-2026-09-23.md §1 N1（栅栏令牌）/ N2（单事务模式）；
  *      migrations/004_idempotency_fencing.sql
  */
-import { createHash, randomUUID } from 'node:crypto';
-import { AppError } from './errors.js';
-import { withTransaction, type Db } from './adapters/db.js';
-import type { Logger } from './logger.js';
+import { randomUUID } from 'node:crypto';
+import { AppError } from '../errors.js';
+import { withTransaction, type Db } from './db.js';
+import {
+  DEFAULT_LEASE_MS,
+  requestFingerprint,
+  type HandlerResult,
+  type IdempotencyArgs,
+  type IdempotencyExecutor,
+  type IdempotencyResult,
+} from '../ports/idempotency.js';
 
 /** 占位行的状态码：0 表示"抢到了但还没执行完"，不是真实 HTTP 状态。 */
 const PENDING_STATUS_CODE = 0;
 
-/**
- * 占位行的**租约时长**（毫秒）：超过这个时间还没完成的占位，允许被下一个请求接管。
- *
- * @why 没有租约时，进程在"抢到占位之后、写回结果之前"崩溃，那行就永远停在占位态——
- *      同一个幂等键**永久**返回 40903，用户再也下不了这一单（复现缺陷 D3）。
- *      崩溃在小内存实例上是常态（OOM、平台重启、部署），所以这不是理论风险。
- * @why 30 秒而不是更短：必须显著大于 handler 的最坏耗时（下单含运费计算 + 建单 + 写事件，
- *      正常 <1s，最坏几秒）。租约短于 handler 耗时会触发"接管 → 重复执行"这一坏事
- *      （见 @limitation 四），所以宁长勿短。
- */
-export const DEFAULT_LEASE_MS = 30_000;
-
-/**
- * 稳定序列化：对象键按字典序排列。
- * @why 直接用 `JSON.stringify` 会让**键顺序不同但内容相同**的两个请求算出不同指纹，
- *      于是"客户端复用幂等键"这个真 bug 抓不到，反而会在正常重放时误报 40908。
- */
-function canonical(value: unknown): string {
-  if (value === null || value === undefined) return 'null';
-  if (typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  const obj = value as Record<string, unknown>;
-  const parts = Object.keys(obj)
-    .sort()
-    .map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`);
-  return `{${parts.join(',')}}`;
-}
-
-/**
- * 请求指纹：任意可序列化入参 → 64 位十六进制串。
- * @why 幂等键只回答"是不是同一件事的重复提交"，回答不了"是不是**同一件事**"（D4）。
- *      客户端复用键（bug 或刻意）时，若不比对内容就直接返回首次结果，
- *      用户会以为自己下了第二单——而实际上第二单从未创建，钱也没收。
- *      这种"静默成功"比报错危险得多：它在日志里长得跟正常重放一模一样。
- */
-export function requestFingerprint(payload: unknown): string {
-  return createHash('sha256').update(canonical(payload), 'utf8').digest('hex');
-}
-
-export interface IdempotencyArgs {
-  /** 幂等键（服务端按 `user_id + route + 客户端 key` 作用域拼接后传入）。 */
-  key: string;
-  userId?: string | undefined;
-  route: string;
-  /**
-   * 参与指纹的请求素材（通常是 body，含影响结果的关键 query）。
-   * @why 不传就**不做指纹校验**——给"确实没有入参"的接口留口子，
-   *      但默认应该是传：不传等于放弃 D4 那层保护。
-   */
-  request?: unknown;
-  /** 并发时等待首次结果的时长（毫秒，默认 2000）。 */
-  waitMs?: number;
-  /** 轮询间隔（毫秒，默认 50）。 */
-  pollMs?: number;
-  /** 占位租约时长（毫秒，默认 {@link DEFAULT_LEASE_MS}）。测试里设短值来验证接管。 */
-  leaseMs?: number;
-  /**
-   * 租约续期开关（默认开）。handler 执行期间每 `leaseMs/3` 刷新一次 `locked_until`，
-   * 把"慢"和"死"区分开：活着的 handler 不会被接管，死掉的才轮到别人。
-   * 测试里设 `false` 模拟"事件循环卡死导致续期停滞"（栅栏令牌防的正是这种场景）。
-   */
-  renew?: boolean;
-  /**
-   * 日志器：租约易主（`idempotency_lease_lost`）等异常必须落 error——
-   * 它意味着"两个持有者同时认为自己是主人"，是并发事故的信号，不能静默。
-   * 可选只是因为本层拿不到装配期的 logger；生产调用方（skeleton/业务路由）必须传。
-   */
-  logger?: Logger;
-}
-
-export interface IdempotencyResult<T> {
-  status: number;
-  body: T;
-  /** true = 本次是重放（handler 未执行）；false = 本次真正执行了。 */
-  replayed: boolean;
-}
-
-/** handler 的返回：HTTP 状态 + 可序列化的响应体。 */
-export interface HandlerResult<T> {
-  status: number;
-  body: T;
-}
-
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 以幂等方式执行 handler。
+ * 以幂等方式执行 handler（非事务模式）。
  *
  * @throws {AppError} 40903（重复提交）：首次请求仍在执行（租约未过期）且超过 `waitMs` 未出结果
  * @throws {AppError} 40908（幂等键复用但内容不同）：同一个键传了不一样的请求——客户端的 bug。
@@ -135,7 +59,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * @throws {AppError} 50000（idempotency_lease_lost）：handler 执行期间租约被接管，
  *         本次结果写不回（写了会覆盖新持有者）——租约易主是并发事故，调用方应重试
  */
-export async function withIdempotency<T>(
+async function withIdempotency<T>(
   db: Db,
   args: IdempotencyArgs,
   handler: () => Promise<HandlerResult<T>>,
@@ -252,7 +176,7 @@ export async function withIdempotency<T>(
  *
  * @see docs/二审意见甄别报告-2026-09-23.md §1 N2；migrations/003_idempotency_and_identity.sql
  */
-export async function withIdempotencyTx<T>(
+async function withIdempotencyTx<T>(
   db: Db,
   args: IdempotencyArgs,
   handler: (tx: Db) => Promise<HandlerResult<T>>,
@@ -456,7 +380,23 @@ async function readRow(db: Db, key: string): Promise<IdempotencyRow | undefined>
   };
 }
 
-/** 按 `用户 + 路由 + 客户端 key` 拼作用域，防止跨用户/跨接口撞键。 */
-export function scopeKey(parts: { userId?: string; route: string; clientKey: string }): string {
-  return [parts.userId ?? 'anon', parts.route, parts.clientKey].join(':');
+/**
+ * 造一个幂等执行器：把连接池绑定成 {@link IdempotencyExecutor}。
+ *
+ * @why 走工厂而不是直接导出两个函数：直接导出意味着业务侧要自己持有 `db` 再传进去，
+ *      于是"业务认识数据库"这件事又从后门回来了——目录分了，依赖没变（AJ-44 的原话）。
+ *      工厂把 `db` 收在闭包里，业务只拿到"能执行幂等"的对象。
+ * @why 返回类型是 `IdempotencyExecutor<Db>` 而不是更抽象的形态：
+ *      事务句柄的形状目前只能是 postgres.js 的 `Db`，因为 `runInTx` 的 handler
+ *      要在这个事务里写业务 SQL。把它伪装成别的类型只会让业务侧多一层 cast，
+ *      cast 之后"业务不认识 SQL"依然是假的——不如把不彻底写在明处
+ *      （@see ../ports/idempotency.ts @limitation 一）。
+ */
+export function createIdempotencyExecutor(db: Db): IdempotencyExecutor<Db> {
+  return {
+    run: <T>(args: IdempotencyArgs, handler: () => Promise<HandlerResult<T>>) =>
+      withIdempotency(db, args, handler),
+    runInTx: <T>(args: IdempotencyArgs, handler: (tx: Db) => Promise<HandlerResult<T>>) =>
+      withIdempotencyTx(db, args, handler),
+  };
 }

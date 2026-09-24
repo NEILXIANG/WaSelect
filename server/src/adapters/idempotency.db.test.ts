@@ -2,20 +2,29 @@
  * 职责：幂等执行器的 L1 真库测试（F8）。
  * 重点是**并发**：单线程下的"第二次返回首次结果"很容易做对，真正的难点是两个请求同时进来。
  * @why 用户狂点 / 前端超时重发是幂等的典型触发场景，两者都是并发的；不测并发等于没测。
- * @see server/src/idempotency.ts @limitation
+ *
+ * @why 用 `exec = createIdempotencyExecutor(db)` 而不是直接调实现函数：测试必须走**业务侧
+ *      今后真正会走的那条路**（端口 + 工厂）。若哪天有人把适配器改回"导出裸函数"、
+ *      业务直接 import 适配器，这里会因为拿不到 executor 而立刻红——
+ *      端口化最怕的就是"接口定义了但没人从接口进"。
+ * @see server/src/adapters/idempotency.ts @limitation；../ports/idempotency.ts（契约）
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeDb, type Db } from './adapters/db.js';
-import { ensureTestDb, resetTestDb, testDb } from '../../test/db/test-db.js';
-import { requestFingerprint, scopeKey, withIdempotency, withIdempotencyTx } from './idempotency.js';
-import { createLogger } from './logger.js';
-import { MemorySink } from '../../test/helpers/memory-sink.js';
+import { closeDb, type Db } from './db.js';
+import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
+import { requestFingerprint, scopeKey, type IdempotencyExecutor } from '../ports/idempotency.js';
+import { createIdempotencyExecutor } from './idempotency.js';
+import { createLogger } from '../logger.js';
+import { MemorySink } from '../../../test/helpers/memory-sink.js';
 
 let db: Db;
+/** 业务侧真正拿到的形态：端口接口，而不是两个裸函数。 */
+let exec: IdempotencyExecutor<Db>;
 
 beforeAll(async () => {
   await ensureTestDb();
   db = testDb();
+  exec = createIdempotencyExecutor(db);
 }, 30_000);
 
 afterAll(async () => {
@@ -38,7 +47,7 @@ describe('基本语义', () => {
   it('首次真正执行并记录，第二次重放且 handler 不再执行', async () => {
     let calls = 0;
     const run = () =>
-      withIdempotency(db, args('k-1'), async () => {
+      exec.run(args('k-1'), async () => {
         calls += 1;
         return { status: 201, body: { order_no: 'W20260922-000001' } };
       });
@@ -55,7 +64,7 @@ describe('基本语义', () => {
   it('不同 key 各自执行（幂等键必须按路由与用户分作用域）', async () => {
     let calls = 0;
     const run = (key: string) =>
-      withIdempotency(db, args(key), async () => {
+      exec.run(args(key), async () => {
         calls += 1;
         return { status: 200, body: { key } };
       });
@@ -66,7 +75,7 @@ describe('基本语义', () => {
 
   it('handler 抛错后不留下毒记录：同 key 可以重试成功', async () => {
     await expect(
-      withIdempotency(db, args('k-err'), async () => {
+      exec.run(args('k-err'), async () => {
         throw new Error('provider down');
       }),
     ).rejects.toThrow('provider down');
@@ -74,7 +83,7 @@ describe('基本语义', () => {
     const rows = await db`select key from idempotency_keys where key = 'k-err'`;
     expect(rows).toHaveLength(0);
 
-    const ok = await withIdempotency(db, args('k-err'), async () => ({
+    const ok = await exec.run(args('k-err'), async () => ({
       status: 200,
       body: { ok: true },
     }));
@@ -83,8 +92,8 @@ describe('基本语义', () => {
 
   it('响应体按 JSONB 原样回读（对象与数组都不变形）', async () => {
     const body = { items: [{ sku: 'S1', qty: 2 }], total_jpy: 12800 };
-    await withIdempotency(db, args('k-json'), async () => ({ status: 200, body }));
-    const replay = await withIdempotency(db, args('k-json'), async () => ({
+    await exec.run(args('k-json'), async () => ({ status: 200, body }));
+    const replay = await exec.run(args('k-json'), async () => ({
       status: 200,
       body: {},
     }));
@@ -96,7 +105,7 @@ describe('并发', () => {
   it('同时发起的同一 key：只有一个真正执行，另一个拿到同一结果', async () => {
     let calls = 0;
     const run = () =>
-      withIdempotency(db, args('k-concurrent'), async () => {
+      exec.run(args('k-concurrent'), async () => {
         calls += 1;
         await new Promise((r) => setTimeout(r, 100)); // 拉长执行窗口，确保两者重叠
         return { status: 201, body: { order_no: 'W20260922-000002' } };
@@ -118,12 +127,12 @@ describe('并发', () => {
    */
   it('首次执行超时未出结果 → 第二个请求拿 40903（不重复下单，宁可提示处理中）', async () => {
     const slow = (): Promise<{ status: number; body: { done: boolean } }> =>
-      withIdempotency(db, args('k-slow'), async () => {
+      exec.run(args('k-slow'), async () => {
         await new Promise((r) => setTimeout(r, 800));
         return { status: 201, body: { done: true } };
       });
     const impatient = () =>
-      withIdempotency(db, { ...args('k-slow'), waitMs: 60, pollMs: 20 }, async () => ({
+      exec.run({ ...args('k-slow'), waitMs: 60, pollMs: 20 }, async () => ({
         status: 201,
         body: { done: true },
       }));
@@ -160,11 +169,10 @@ describe('崩溃遗留的占位行（D3）', () => {
 
   it('租约已过期的占位可以被接管，键不会永久卡死', async () => {
     await insertStalePlaceholder('k-crash', "now() - interval '1 minute'");
-    const result = await withIdempotency(
-      db,
-      { ...args('k-crash'), waitMs: 300, pollMs: 20 },
-      async () => ({ status: 201, body: { order_no: 'W20260922-000003' } }),
-    );
+    const result = await exec.run({ ...args('k-crash'), waitMs: 300, pollMs: 20 }, async () => ({
+      status: 201,
+      body: { order_no: 'W20260922-000003' },
+    }));
     expect(result.replayed).toBe(false);
     expect(result.body).toEqual({ order_no: 'W20260922-000003' });
   });
@@ -172,7 +180,7 @@ describe('崩溃遗留的占位行（D3）', () => {
   it('租约**未**过期时不得接管（否则就是重复执行 handler）', async () => {
     await insertStalePlaceholder('k-live', "now() + interval '1 hour'");
     await expect(
-      withIdempotency(db, { ...args('k-live'), waitMs: 80, pollMs: 20 }, async () => ({
+      exec.run({ ...args('k-live'), waitMs: 80, pollMs: 20 }, async () => ({
         status: 201,
         body: { order_no: 'SHOULD-NOT-RUN' },
       })),
@@ -187,15 +195,14 @@ describe('崩溃遗留的占位行（D3）', () => {
  */
 describe('请求指纹（D4）', () => {
   it('同键不同内容 → 40908，绝不返回首次结果', async () => {
-    const first = await withIdempotency(
-      db,
-      { ...args('k-fp'), request: { sku: 'S1', qty: 1 } },
-      async () => ({ status: 201, body: { order_no: 'W-FIRST' } }),
-    );
+    const first = await exec.run({ ...args('k-fp'), request: { sku: 'S1', qty: 1 } }, async () => ({
+      status: 201,
+      body: { order_no: 'W-FIRST' },
+    }));
     expect(first.replayed).toBe(false);
 
     await expect(
-      withIdempotency(db, { ...args('k-fp'), request: { sku: 'S2', qty: 9 } }, async () => ({
+      exec.run({ ...args('k-fp'), request: { sku: 'S2', qty: 9 } }, async () => ({
         status: 201,
         body: { order_no: 'W-SECOND' },
       })),
@@ -203,12 +210,11 @@ describe('请求指纹（D4）', () => {
   });
 
   it('键顺序不同但内容相同 → 仍算同一次请求（指纹必须稳定）', async () => {
-    await withIdempotency(db, { ...args('k-fp2'), request: { sku: 'S1', qty: 1 } }, async () => ({
+    await exec.run({ ...args('k-fp2'), request: { sku: 'S1', qty: 1 } }, async () => ({
       status: 201,
       body: { order_no: 'W-ORDER-A' },
     }));
-    const replay = await withIdempotency(
-      db,
+    const replay = await exec.run(
       { ...args('k-fp2'), request: { qty: 1, sku: 'S1' } }, // 键顺序反了
       async () => ({ status: 201, body: { order_no: 'W-ORDER-B' } }),
     );
@@ -217,8 +223,8 @@ describe('请求指纹（D4）', () => {
   });
 
   it('不传 request 时不校验指纹（给确实没有入参的接口留口子）', async () => {
-    await withIdempotency(db, args('k-noreq'), async () => ({ status: 200, body: { ok: 1 } }));
-    const replay = await withIdempotency(db, args('k-noreq'), async () => ({
+    await exec.run(args('k-noreq'), async () => ({ status: 200, body: { ok: 1 } }));
+    const replay = await exec.run(args('k-noreq'), async () => ({
       status: 200,
       body: { ok: 2 },
     }));
@@ -255,15 +261,11 @@ describe('租约栅栏（N1）', () => {
     const KEY = 'k-fence';
 
     // A：租约 150ms，续期关闭（模拟事件循环卡死导致续期停滞），handler 跑 400ms 后失败
-    const a = withIdempotency(
-      db,
-      { ...args(KEY), leaseMs: 150, renew: false, logger },
-      async () => {
-        executions += 1;
-        await new Promise((r) => setTimeout(r, 400));
-        throw new Error('A late failure');
-      },
-    );
+    const a = exec.run({ ...args(KEY), leaseMs: 150, renew: false, logger }, async () => {
+      executions += 1;
+      await new Promise((r) => setTimeout(r, 400));
+      throw new Error('A late failure');
+    });
     // 等 A 的占位行真的出现（不依赖"sleep 一个应该够了的时间"）
     const deadline = Date.now() + 2000;
     for (;;) {
@@ -272,7 +274,7 @@ describe('租约栅栏（N1）', () => {
       await new Promise((r) => setTimeout(r, 10));
     }
     // B：claim 循环会在租约过期后接管；handler 同样跑 400ms（A 失败时 B 仍在执行中）
-    const b = withIdempotency(db, { ...args(KEY), leaseMs: 150, waitMs: 3000 }, async () => {
+    const b = exec.run({ ...args(KEY), leaseMs: 150, waitMs: 3000 }, async () => {
       executions += 1;
       await new Promise((r) => setTimeout(r, 400));
       return { status: 201, body: { by: 'B' } };
@@ -280,7 +282,7 @@ describe('租约栅栏（N1）', () => {
 
     await expect(a).rejects.toThrow('A late failure');
     // C：在 A 失败之后进入。修复前 A 已把 B 的占位删掉 → C 会第三次执行 handler
-    const c = await withIdempotency(db, { ...args(KEY), waitMs: 3000 }, async () => {
+    const c = await exec.run({ ...args(KEY), waitMs: 3000 }, async () => {
       executions += 1;
       return { status: 201, body: { by: 'C' } };
     });
@@ -299,7 +301,7 @@ describe('租约栅栏（N1）', () => {
     const logger = createLogger({ env: 'development', destination: sink });
     const KEY = 'k-fence-write';
     await expect(
-      withIdempotency(db, { ...args(KEY), leaseMs: 5000, renew: false, logger }, async () => {
+      exec.run({ ...args(KEY), leaseMs: 5000, renew: false, logger }, async () => {
         // 模拟"handler 执行期间租约被接管"：直接把行的 lease_token 换掉
         await new Promise((r) => setTimeout(r, 50));
         await db`update idempotency_keys set lease_token = gen_random_uuid() where key = ${KEY}`;
@@ -315,7 +317,7 @@ describe('租约栅栏（N1）', () => {
        values ('k-fence-fp', 'u-1', 'POST /orders', 0, '{}'::jsonb, '${requestFingerprint({ sku: 'S1' })}', now() - interval '1 minute')`,
     );
     await expect(
-      withIdempotency(db, { ...args('k-fence-fp'), request: { sku: 'S2' } }, async () => ({
+      exec.run({ ...args('k-fence-fp'), request: { sku: 'S2' } }, async () => ({
         status: 201,
         body: { by: 'takeover' },
       })),
@@ -330,8 +332,7 @@ describe('租约栅栏（N1）', () => {
     );
     // 同一个键发**另一个**请求：结果永远不可能合法重放给我们，等再久也是 40908，不该拿 40903 拖延
     await expect(
-      withIdempotency(
-        db,
+      exec.run(
         { ...args('k-fence-live'), request: { sku: 'S2' }, waitMs: 100, pollMs: 20 },
         async () => ({ status: 201, body: { by: 'other' } }),
       ),
@@ -360,14 +361,10 @@ describe('租约时钟（自查发现：不得跨时钟比较）', () => {
     const realNow = Date.now.bind(Date);
     const spy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + OFFSET);
     try {
-      const running = withIdempotency(
-        db,
-        { ...args(KEY), leaseMs: 3_000, waitMs: 50 },
-        async () => {
-          await new Promise((r) => setTimeout(r, 400));
-          return { status: 200, body: { ok: true } };
-        },
-      );
+      const running = exec.run({ ...args(KEY), leaseMs: 3_000, waitMs: 50 }, async () => {
+        await new Promise((r) => setTimeout(r, 400));
+        return { status: 200, body: { ok: true } };
+      });
       // 等占位行真的出现（复用本文件既有手法，不靠"sleep 一个应该够了的时间"）
       const deadline = Date.now() + 2000;
       for (;;) {
@@ -395,7 +392,7 @@ describe('租约续期', () => {
   it('handler 超过租约时长但持续续期 → 不被接管，并发方重放同一结果', async () => {
     let executions = 0;
     const run = () =>
-      withIdempotency(db, { ...args('k-renew'), leaseMs: 200, waitMs: 3000 }, async () => {
+      exec.run({ ...args('k-renew'), leaseMs: 200, waitMs: 3000 }, async () => {
         executions += 1;
         await new Promise((r) => setTimeout(r, 800)); // 4 倍于租约：续期生效才能不被接管
         return { status: 201, body: { order_no: 'W-RENEW' } };
@@ -445,7 +442,7 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
   it('首次真正执行并落结果，第二次重放且 handler 不再执行', async () => {
     let calls = 0;
     const run = () =>
-      withIdempotencyTx(db, txArgs('ktx-1'), async (tx) => {
+      exec.runInTx(txArgs('ktx-1'), async (tx) => {
         calls += 1;
         await tx`insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
                                      total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
@@ -467,7 +464,7 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
 
   it('handler 抛错 → 占位与业务写入一起回滚，不留任何痕迹，同 key 可重试成功', async () => {
     await expect(
-      withIdempotencyTx(db, txArgs('ktx-err'), async (tx) => {
+      exec.runInTx(txArgs('ktx-err'), async (tx) => {
         await tx`insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
                                      total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
                  values ('otx-err', 'W-TX-ERR', 'u-1', 'created', 1000, 0, 0, 1000, 500,
@@ -480,7 +477,7 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
     expect(await db`select key from idempotency_keys where key = 'ktx-err'`).toHaveLength(0);
     expect(await db`select id from orders where id = 'otx-err'`).toHaveLength(0);
 
-    const ok = await withIdempotencyTx(db, txArgs('ktx-err'), async () => ({
+    const ok = await exec.runInTx(txArgs('ktx-err'), async () => ({
       status: 200,
       body: { retried: true },
     }));
@@ -491,7 +488,7 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
   it('并发同 key：阻塞式串行——一个执行，另一个等它提交后重放', async () => {
     let calls = 0;
     const run = () =>
-      withIdempotencyTx(db, { ...txArgs('ktx-conc'), waitMs: 5000 }, async (tx) => {
+      exec.runInTx({ ...txArgs('ktx-conc'), waitMs: 5000 }, async (tx) => {
         calls += 1;
         // 在事务内拉长窗口：另一个请求会阻塞在 ON CONFLICT 上，直到本事务提交
         await tx`select pg_sleep(0.3)`;
@@ -504,7 +501,7 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
   });
 
   it('首次执行慢于 waitMs → 第二个请求拿 40903（lock_timeout 到点放手）', async () => {
-    const slow = withIdempotencyTx(db, { ...txArgs('ktx-slow'), waitMs: 3000 }, async (tx) => {
+    const slow = exec.runInTx({ ...txArgs('ktx-slow'), waitMs: 3000 }, async (tx) => {
       await tx`select pg_sleep(1)`;
       return { status: 201, body: { done: true } };
     });
@@ -512,7 +509,7 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
     // slow 的 insert 是第一个语句，几乎立即生效；给 100ms 让事务跑起来）
     await new Promise((r) => setTimeout(r, 100));
     await expect(
-      withIdempotencyTx(db, { ...txArgs('ktx-slow'), waitMs: 200 }, async () => ({
+      exec.runInTx({ ...txArgs('ktx-slow'), waitMs: 200 }, async () => ({
         status: 201,
         body: { done: false },
       })),
@@ -522,19 +519,18 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
   });
 
   it('同键不同内容 → 40908；键顺序不同但内容相同 → 重放', async () => {
-    await withIdempotencyTx(db, txArgs('ktx-fp'), async () => ({
+    await exec.runInTx(txArgs('ktx-fp'), async () => ({
       status: 201,
       body: { v: 1 },
     }));
     await expect(
-      withIdempotencyTx(db, { ...txArgs('ktx-fp'), request: { sku: 'S2', qty: 9 } }, async () => ({
+      exec.runInTx({ ...txArgs('ktx-fp'), request: { sku: 'S2', qty: 9 } }, async () => ({
         status: 201,
         body: { v: 2 },
       })),
     ).rejects.toMatchObject({ code: 40908 });
 
-    const replay = await withIdempotencyTx(
-      db,
+    const replay = await exec.runInTx(
       { ...txArgs('ktx-fp'), request: { qty: 1, sku: 'S1' } }, // 键顺序反了
       async () => ({ status: 201, body: { v: 3 } }),
     );
@@ -552,7 +548,7 @@ describe('默认参数与竞态窗口（N16 定向）', () => {
   it('非事务模式不显式传 waitMs/pollMs/userId 也能跑通（`??` 回落分支）', async () => {
     let calls = 0;
     const run = () =>
-      withIdempotency(db, { key: 'k-defaults', route: 'POST /orders' }, async () => {
+      exec.run({ key: 'k-defaults', route: 'POST /orders' }, async () => {
         calls += 1;
         return { status: 200, body: { ok: true } };
       });
@@ -593,8 +589,7 @@ describe('默认参数与竞态窗口（N16 定向）', () => {
       return p;
     }) as unknown as Db;
 
-    const r = await withIdempotency(
-      raceDb,
+    const r = await createIdempotencyExecutor(raceDb).run(
       { key: 'k-race', route: 'POST /orders', waitMs: 1000, pollMs: 20, renew: false },
       async () => {
         executions += 1;
@@ -610,7 +605,7 @@ describe('tx 模式的默认形状与等待路径（N16 定向）', () => {
   it('不传 request 与 userId：指纹为空串、user_id 落 NULL，执行 + 重放', async () => {
     let calls = 0;
     const run = () =>
-      withIdempotencyTx(db, { key: 'k-tx-noreq', route: 'POST /internal/x' }, async () => {
+      exec.runInTx({ key: 'k-tx-noreq', route: 'POST /internal/x' }, async () => {
         calls += 1;
         return { status: 200, body: { ok: true } };
       });
@@ -638,8 +633,7 @@ describe('tx 模式的默认形状与等待路径（N16 定向）', () => {
          where key = 'k-tx-wait'
       `;
     })();
-    const r = await withIdempotencyTx(
-      db,
+    const r = await exec.runInTx(
       { key: 'k-tx-wait', route: 'POST /x', request: { a: 1 }, waitMs: 2000, pollMs: 50 },
       async () => ({ status: 200, body: { by: 'me' } }),
     );
@@ -656,7 +650,7 @@ describe('续期的失败留痕（N16 定向）', () => {
     const KEY = 'k-renew-lost';
     await expect(
       // leaseMs 150 → 续期间隔 50ms；renew 默认开启
-      withIdempotency(db, { ...args(KEY), leaseMs: 150, logger }, async () => {
+      exec.run({ ...args(KEY), leaseMs: 150, logger }, async () => {
         await new Promise((r) => setTimeout(r, 60));
         // handler 执行期间租约被接管（token 换人）：下一次续期 update 命中 0 行
         await db`update idempotency_keys set lease_token = gen_random_uuid() where key = ${KEY}`;
@@ -684,19 +678,17 @@ describe('续期的失败留痕（N16 定向）', () => {
     const sink = new MemorySink();
     const logger = createLogger({ env: 'development', destination: sink });
     let failing = false;
-    const r = await withIdempotency(
+    const r = await createIdempotencyExecutor(
       flakyDb(
         () => new Error('conn reset'),
         () => failing,
       ),
-      { ...args('k-renew-fail'), leaseMs: 150, logger },
-      async () => {
-        failing = true; // claim 已成功，之后续期每 tick 都抛
-        await new Promise((res) => setTimeout(res, 180));
-        failing = false; // 结果写回前恢复，验证"续期失败不影响主流程"
-        return { status: 201, body: { ok: true } };
-      },
-    );
+    ).run({ ...args('k-renew-fail'), leaseMs: 150, logger }, async () => {
+      failing = true; // claim 已成功，之后续期每 tick 都抛
+      await new Promise((res) => setTimeout(res, 180));
+      failing = false; // 结果写回前恢复，验证"续期失败不影响主流程"
+      return { status: 201, body: { ok: true } };
+    });
     expect(r.replayed).toBe(false);
     const rows = sink.find('idempotency_lease_renew_failed');
     expect(rows.length).toBeGreaterThan(0);
@@ -707,19 +699,17 @@ describe('续期的失败留痕（N16 定向）', () => {
     const sink = new MemorySink();
     const logger = createLogger({ env: 'development', destination: sink });
     let failing = false;
-    const r = await withIdempotency(
+    const r = await createIdempotencyExecutor(
       flakyDb(
         () => 'string-boom',
         () => failing,
       ),
-      { ...args('k-renew-fail-str'), leaseMs: 150, logger },
-      async () => {
-        failing = true;
-        await new Promise((res) => setTimeout(res, 180));
-        failing = false;
-        return { status: 201, body: { ok: true } };
-      },
-    );
+    ).run({ ...args('k-renew-fail-str'), leaseMs: 150, logger }, async () => {
+      failing = true;
+      await new Promise((res) => setTimeout(res, 180));
+      failing = false;
+      return { status: 201, body: { ok: true } };
+    });
     expect(r.replayed).toBe(false);
     const rows = sink.find('idempotency_lease_renew_failed');
     expect(rows.length).toBeGreaterThan(0);

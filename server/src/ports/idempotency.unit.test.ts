@@ -1,6 +1,9 @@
 /**
  * 职责：幂等执行器的 L0 单测——只覆盖**不需要数据库**的纯函数（指纹）。
- * 真库并发语义一律在 idempotency.db.test.ts，本文件不复制。
+ * 真库并发语义一律在 adapters/idempotency.db.test.ts，本文件不复制。
+ *
+ * @why 本文件跟着 `ports/idempotency.ts` 走而不是留在 adapters：指纹与作用域是**契约语义**，
+ *      它们就在端口里（理由见 ports/idempotency.ts @limitation 二）。
  */
 import { describe, expect, it } from 'vitest';
 import { requestFingerprint } from './idempotency.js';

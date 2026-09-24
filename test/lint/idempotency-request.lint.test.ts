@@ -11,8 +11,12 @@
  *              误红（让你多看一眼）比漏绿（悄悄失去保护）便宜，所以窗口宁小勿大。
  * @limitation 二：豁免注释只要求"存在"，不审理由是否成立——理由质量靠 review（同注释门禁的 @limitation 一）。
  * @limitation 三：只扫 `server/src`。测试文件里的调用（如 db 测试故意不传 request 验证留口子行为）不受此约束。
+ * @limitation 四：**实现文件本身不算调用点**（`server/src/adapters/idempotency.ts`）：
+ *              它内部的 `withIdempotency(db, args, handler)` 只是把工厂转发给实现，不是业务调用。
+ *              ⚠️ 这是按**路径**排除的：哪天这个文件被搬走，排除会失效、本门禁会红——
+ *              红在这里是好事（比静默漏检好），修法是同步改这里的路径。
  *
- * @see docs/二审意见甄别报告-2026-09-23.md §1 N3；server/src/idempotency.ts（request 参数的 @why）
+ * @see docs/二审意见甄别报告-2026-09-23.md §1 N3；server/src/ports/idempotency.ts（request 参数的 @why）
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
@@ -36,10 +40,26 @@ interface CallSite {
   window: string;
 }
 
-/** 匹配调用点，排除定义点与注释提及。 */
-const CALL_RE = /\bwithIdempotency(?:Tx)?\s*\(/g;
+/**
+ * 匹配调用点，排除定义点与注释提及。
+ *
+ * 两种形态都要认：
+ * - `idempotency.run(InTx)?(` —— **端口形态**，业务侧今后唯一应该用的写法（R2-1 之后）；
+ * - `withIdempotency(Tx)?(` —— 旧的函数式写法，适配器内部转发仍在用它。
+ *
+ * @why 只认旧写法会在端口化之后**静默漏检**（业务改走 `deps.idempotency.runInTx`，
+ *      扫描器一个调用点都找不到 → 第一条断言"至少扫到一个"会红，但那是"扫描器失效"
+ *      而不是"接线断了"，信号是歪的）；只认新写法则会漏掉还没端口化的老调用点。
+ * @limitation `idempotency.run` 前缀是**按命名约定**匹配的：若有人把字段命名成
+ *              `idempotencyExecutor.run(...)`（没有 `idempotency` 紧邻），这里就匹配不到。
+ *              约定成本极低（装配处就是这么注入的），但要知道它靠的是约定不是 AST。
+ */
+const CALL_RE = /\b(?:withIdempotency(?:Tx)?|idempotency\.run(?:InTx)?)\s*\(/g;
 /** 窗口行数：够覆盖"args 对象 + handler 头部"的常规排版 */
 const WINDOW_LINES = 40;
+
+/** 实现文件本身不是调用点（见文件头 @limitation 四）。 */
+const IMPL_REL = 'server/src/adapters/idempotency.ts';
 
 function scan(): CallSite[] {
   const files = walk(join(root, 'server/src'))
@@ -47,6 +67,8 @@ function scan(): CallSite[] {
     .filter((f) => !f.includes('.test.'));
   const sites: CallSite[] = [];
   for (const f of files) {
+    const rel = f.slice(root.length + 1);
+    if (rel === IMPL_REL) continue;
     const lines = readFileSync(f, 'utf8').split('\n');
     lines.forEach((text, i) => {
       CALL_RE.lastIndex = 0;
@@ -57,7 +79,7 @@ function scan(): CallSite[] {
         if (/\bfunction\b/.test(before)) continue;
         if (/\/\/|\/\*/.test(before)) continue;
         sites.push({
-          rel: f.slice(root.length + 1),
+          rel,
           line: i + 1,
           window: lines.slice(i, i + WINDOW_LINES).join('\n'),
         });

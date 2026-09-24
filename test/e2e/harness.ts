@@ -17,6 +17,7 @@ import { createHttpApp, listen, type StartedServer } from '../../server/src/http
 import { createLogger } from '../../server/src/logger.js';
 import { MOCK_CALLBACK_PATH, mountSkeleton } from '../../server/src/skeleton.js';
 import { createWebhookStore } from '../../server/src/adapters/webhooks.js';
+import { createIdempotencyExecutor } from '../../server/src/adapters/idempotency.js';
 import { MemorySink } from '../helpers/memory-sink.js';
 
 export const E2E_AUTH: AuthConfig = { secret: 'e2e-jwt-secret-'.repeat(3), issuer: 'waselect-e2e' };
@@ -48,6 +49,7 @@ export async function startSkeleton(
         db,
         // 与生产同一条装配路径：实现在装配处注入，业务侧只见端口
         webhooks: createWebhookStore(db),
+        idempotency: createIdempotencyExecutor(db),
         logger,
         auth: E2E_AUTH,
         callbackSecret: E2E_CALLBACK_SECRET,

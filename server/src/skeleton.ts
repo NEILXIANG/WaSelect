@@ -30,7 +30,7 @@ import { requireRole, type AuthConfig } from './app/auth.js';
 import { currentContext } from './context.js';
 import { withTransaction, type Db } from './adapters/db.js';
 import { AppError } from './errors.js';
-import { scopeKey, withIdempotencyTx } from './idempotency.js';
+import { scopeKey, type IdempotencyExecutor } from './ports/idempotency.js';
 import type { Logger } from './logger.js';
 import type { IdentityCheck } from './adapters/identity.js';
 import { payloadHash } from './adapters/webhooks.js';
@@ -47,6 +47,16 @@ export interface SkeletonDeps {
    *      这个约束有强制力（可选就会有人不传，然后偷偷退化）。
    */
   webhooks: WebhookStore;
+  /**
+   * 幂等执行器（F10 端口）。**必填**：装配时由 `createIdempotencyExecutor(db)` 注入。
+   *
+   * @why 同 `webhooks`：可选就一定有人不传，然后悄悄退化回"直接 import 适配器"。
+   * @limitation 类型写成 `IdempotencyExecutor<Db>`——事务句柄目前仍是 postgres.js 的 `Db`，
+   *             因为建单 handler 必须在这个事务里写业务 SQL（AJ-47）。
+   *             这不是"业务认识 SQL"，只是"业务看得见事务句柄这个类型"；
+   *             真正的 Db 端口等 domain 出现后按真实用法提炼。
+   */
+  idempotency: IdempotencyExecutor<Db>;
   logger: Logger;
   auth: AuthConfig;
   /** 模拟回调的 HMAC 密钥（骨架期；真实通道验签在 F11，见 @limitation 二）。 */
@@ -202,8 +212,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
             throw new AppError(40001, { reason: '缺少 Idempotency-Key 头' });
           }
 
-          const result = await withIdempotencyTx(
-            deps.db,
+          const result = await deps.idempotency.runInTx(
             {
               key: scopeKey({ userId: sub, route: 'skeleton.createOrder', clientKey }),
               userId: sub,
