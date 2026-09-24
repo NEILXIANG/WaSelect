@@ -105,6 +105,11 @@ export function withIdentityCache(
         return hit.record;
       }
       const record = await check.load(sub);
+      // ⚠️ 回写前**必须先 delete 自己**：Map.set() 对已存在的键只更新值、**不动插入位置**，
+      //    于是"过期 → 重查 → 回写"之后这个条目仍停在旧位置，下一轮逐出会优先把它带走——
+      //    刚花一次 IO 换来的结果立刻作废（表现为热点用户每次都 miss，而缓存大小/TTL 看着都正常）。
+      //    逐出判断放在 delete 之后：否则它可能把"自己"当成最旧条目逐出（顺序语义就又乱了）。
+      cache.delete(sub);
       if (cache.size >= maxEntries) {
         // 逐出最久未用（迭代序第一个）。过期但未被访问的条目排在最前，会被最先带走
         const oldest = cache.keys().next().value;

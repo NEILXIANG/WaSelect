@@ -134,4 +134,37 @@ describe('withIdentityCache', () => {
     await cached.load('u-1');
     expect(inner.calls()).toBe(3); // u-1 没被逐出，没再查库
   });
+
+  /**
+   * @why Map 的 `set()` 对**已存在**的键只更新值、**不动插入位置**。
+   *      于是"TTL 过期 → 重新查库 → 回写"这条路径若只 set 不 delete，刚花一次 IO 换来的
+   *      条目会**停在它原来的位置**——只要它前面还有更旧的条目被逐出、它自己没被删，
+   *      它就仍是"最旧候选"，下一轮插入优先把它带走：刚查完就白查。
+   *      表现为**热点用户每次都 miss**（缓存对它完全失效），而缓存大小、TTL 看起来都正常。
+   *
+   * @limitation 这条用例必须先让 u-1 命中一次（把它挪到较新位置），再让**全部**条目过期，
+   *      然后重查 u-1——否则过期路径正好会先逐出 u-1 自己（删后再插反而顺序是对的），
+   *      缺陷不会显现。构造顺序本身就是这个 bug 的一部分，改动前请先读懂这段。
+   */
+  it('TTL 过期后重新查库也要刷新新旧（刚刷新的条目不该马上被逐出）', async () => {
+    const inner = counting(createIdentityCheck(db));
+    const cached = withIdentityCache(inner.check, 150, 3); // TTL 150ms、cap 3
+    for (const id of ['u-1', 'u-2', 'u-3', 'u-4', 'u-5']) {
+      await db`insert into users (id, openid) values (${id}, ${`o-${id}`}) on conflict (id) do nothing`;
+    }
+    await cached.load('u-1'); // [u-1]
+    await cached.load('u-2'); // [u-1,u-2]
+    await cached.load('u-1'); // 命中刷新 → [u-2,u-1]
+    await cached.load('u-3'); // → [u-2,u-1,u-3]
+    expect(inner.calls()).toBe(3);
+
+    await new Promise((r) => setTimeout(r, 200)); // 全部过期
+    await cached.load('u-1'); // 过期 → 重查；逐出最旧的 u-2 后回写，u-1 必须成为**最新**
+    expect(inner.calls()).toBe(4);
+
+    await cached.load('u-4'); // 未满，直接入 → 缺陷版 [u-1,u-3,u-4]，正确版 [u-3,u-1,u-4]
+    await cached.load('u-5'); // 满了 → 逐出最旧：缺陷版逐出 u-1（刚刷新的），正确版逐出 u-3
+    await cached.load('u-1'); // 正确版仍命中；缺陷版已被逐出 → 又查一次库
+    expect(inner.calls()).toBe(6); // 缺陷版会是 7
+  });
 });
