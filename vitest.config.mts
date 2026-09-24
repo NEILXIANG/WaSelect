@@ -32,6 +32,15 @@ export default defineConfig({
     passWithNoTests: false,
     environment: 'node',
     exclude: ['**/node_modules/**', '**/dist/**'],
+    /**
+     * 外网闸门（F12）：**每个测试文件**运行前都装上——未放行的出站请求直接抛错。
+     * @why 放在 setupFiles 而不是让每个测试自己记得调用：靠"记得"的闸门等于没有闸门。
+     *      它放行本机（localhost/127.0.0.1），所以端到端测试真起端口不受影响。
+     * @limitation 只拦 `fetch`；且 `vi.stubGlobal('fetch', …)` 会整体替换它——
+     *      那些用例本来就用假 fetch，闸门的实际覆盖是"忘了 stub 的用例"。
+     * @see test/setup/network-guard.ts
+     */
+    setupFiles: ['./test/setup/install-network-guard.ts'],
     projects: [
       {
         test: { name: 'unit', include: ['**/*.unit.test.ts'] },
