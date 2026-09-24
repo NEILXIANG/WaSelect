@@ -28,7 +28,6 @@ describe('提交门禁接线（N18）', () => {
 
   it('pre-commit 可执行（ chmod 丢了钩子就静默失效）', () => {
     const mode = statSync(join(root, 'scripts', 'pre-commit')).mode;
-    // eslint-disable-next-line no-bitwise
     expect(mode & 0o111).not.toBe(0);
   });
 
