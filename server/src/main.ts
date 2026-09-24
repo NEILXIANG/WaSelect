@@ -33,6 +33,7 @@ import { createHttpApp, installShutdownHandlers, listen, type StartedServer } fr
 import { createLogger, type Logger } from './logger.js';
 import { MOCK_CALLBACK_PATH, mountSkeleton } from './skeleton.js';
 import { createIdentityCheck, withIdentityCache } from './adapters/identity.js';
+import { createWebhookStore } from './adapters/webhooks.js';
 import { installProcessErrorHandlers } from './process-errors.js';
 
 /**
@@ -118,6 +119,8 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
         if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见文件头取舍 3）
         mountSkeleton(a, {
           db,
+          // 回调事件存储：**在这里**把实现装进端口（F10）。业务侧只见接口，不见 SQL。
+          webhooks: createWebhookStore(db),
           logger,
           auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
           // ⚠️ mock 回调密钥**独立**于 JWT_SECRET（P1-4）：曾经直接复用 JWT_SECRET，

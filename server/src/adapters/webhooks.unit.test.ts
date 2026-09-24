@@ -3,8 +3,8 @@
  * 真库行为一律在 webhooks.db.test.ts，本文件不复制。
  */
 import { describe, expect, it } from 'vitest';
-import { claimWebhookEvent } from './webhooks.js';
-import type { Db } from './adapters/db.js';
+import { createWebhookStore } from './webhooks.js';
+import type { Db } from './db.js';
 
 describe('claimWebhookEvent 防御分支（N16 定向）', () => {
   it('insert 冲突后 select 仍查不到行（竞态：行在两次调用间被删）→ 保守按首次、锚点给当前时间', async () => {
@@ -17,7 +17,11 @@ describe('claimWebhookEvent 防御分支（N16 定向）', () => {
       return Promise.resolve([]);
     }) as unknown as Db;
 
-    const r = await claimWebhookEvent(stub, { provider: 'mock', eventId: 'e-1', hash: 'h' });
+    const r = await createWebhookStore(stub).claim({
+      provider: 'mock',
+      eventId: 'e-1',
+      hash: 'h',
+    });
     // N22 之后是三步：insert（冲突返回 0 行）→ 接管 update（也 0 行）→ select（也 0 行）
     expect(calls).toBe(3);
     expect(r.state).toBe('new');

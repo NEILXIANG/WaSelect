@@ -15,6 +15,7 @@ import express from 'express';
 import type { Db } from './adapters/db.js';
 import { createLogger } from './logger.js';
 import { mountSkeleton, type SkeletonDeps } from './skeleton.js';
+import type { WebhookStore } from './ports/webhooks.js';
 import { MemorySink } from '../../test/helpers/memory-sink.js';
 
 const AUTH = { secret: 'gate-test-secret-'.repeat(3), issuer: 'waselect-gate-test' };
@@ -24,8 +25,9 @@ function deps(env: SkeletonDeps['env']): { d: SkeletonDeps; sink: MemorySink } {
   return {
     sink,
     d: {
-      // 闸门在挂载前就抛错，不会真的用到 db——空壳只为满足类型
+      // 闸门在挂载前就抛错，不会真的用到 db / webhooks——空壳只为满足类型
       db: {} as unknown as Db,
+      webhooks: {} as unknown as WebhookStore,
       logger: createLogger({
         env: env === 'production' ? 'production' : 'development',
         destination: sink,

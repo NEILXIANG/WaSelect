@@ -6,20 +6,19 @@
  *      那条 false 可能来自任何一段代码，而不是唯一约束。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { closeDb, type Db } from './adapters/db.js';
-import {
-  claimWebhookEvent,
-  finishWebhookEvent,
-  payloadHash,
-  releaseWebhookLease,
-} from './webhooks.js';
-import { ensureTestDb, resetTestDb, testDb } from '../../test/db/test-db.js';
+import { closeDb, type Db } from './db.js';
+import { createWebhookStore, payloadHash } from './webhooks.js';
+import type { WebhookStore } from '../ports/webhooks.js';
+import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 
 let db: Db;
+let store: WebhookStore;
 
 beforeAll(async () => {
   await ensureTestDb();
   db = testDb();
+  // 与生产同一条装配路径：实现只在装配处出现一次，之后业务侧只见端口
+  store = createWebhookStore(db);
 }, 30_000);
 
 afterAll(async () => {
@@ -39,21 +38,21 @@ const event = (eventId: string) => ({
 
 describe('claimWebhookEvent', () => {
   it('首次投递 = new，处理完成后重复投递 = handled（去重靠唯一约束，不是先查后插）', async () => {
-    const first = await claimWebhookEvent(db, event('evt-1'));
+    const first = await store.claim(event('evt-1'));
     expect(first.state).toBe('new');
     expect(
-      await finishWebhookEvent(db, { ...event('evt-1'), result: 'paid', token: first.token ?? '' }),
+      await store.finish({ ...event('evt-1'), result: 'paid', token: first.token ?? '' }),
     ).toBe(true);
-    await expect(claimWebhookEvent(db, event('evt-1'))).resolves.toMatchObject({
+    await expect(store.claim(event('evt-1'))).resolves.toMatchObject({
       state: 'handled',
     });
   });
 
   it('不同 provider 的同名事件互不干扰', async () => {
-    await expect(claimWebhookEvent(db, event('evt-1'))).resolves.toMatchObject({ state: 'new' });
-    await expect(
-      claimWebhookEvent(db, { ...event('evt-1'), provider: 'stripe' }),
-    ).resolves.toMatchObject({ state: 'new' });
+    await expect(store.claim(event('evt-1'))).resolves.toMatchObject({ state: 'new' });
+    await expect(store.claim({ ...event('evt-1'), provider: 'stripe' })).resolves.toMatchObject({
+      state: 'new',
+    });
   });
 
   /**
@@ -65,9 +64,9 @@ describe('claimWebhookEvent', () => {
    */
   it('并发投递：一个 new，其余必须是 inflight（正在处理中，不许第二个也去处理）', async () => {
     const results = await Promise.all([
-      claimWebhookEvent(db, event('evt-race')),
-      claimWebhookEvent(db, event('evt-race')),
-      claimWebhookEvent(db, event('evt-race')),
+      store.claim(event('evt-race')),
+      store.claim(event('evt-race')),
+      store.claim(event('evt-race')),
     ]);
     expect(results.filter((r) => r.state === 'new')).toHaveLength(1);
     expect(results.filter((r) => r.state === 'inflight')).toHaveLength(2);
@@ -82,7 +81,7 @@ describe('claimWebhookEvent', () => {
    *      这条与上面那条是一对，缺任一条租约都不成立。
    */
   it('崩溃遗留（租约已过期）→ retry 并可接管，不被误判成 inflight', async () => {
-    const first = await claimWebhookEvent(db, event('evt-crash'));
+    const first = await store.claim(event('evt-crash'));
     expect(first.state).toBe('new');
     // 模拟"处理到一半进程死了"：租约留在过去
     await db`
@@ -90,22 +89,22 @@ describe('claimWebhookEvent', () => {
          set processing_until = now() - interval '1 minute'
        where event_id = 'evt-crash'
     `;
-    const second = await claimWebhookEvent(db, event('evt-crash'));
+    const second = await store.claim(event('evt-crash'));
     expect(second.state).toBe('retry');
     expect(second.token).toBeDefined();
     // 接管后租约刷新：紧接着的第三次投递应被挡在 inflight
-    const third = await claimWebhookEvent(db, event('evt-crash'));
+    const third = await store.claim(event('evt-crash'));
     expect(third.state).toBe('inflight');
   });
 
   it('处理完成后重复投递 = handled，与是否持有租约无关', async () => {
-    const first = await claimWebhookEvent(db, event('evt-done'));
-    await finishWebhookEvent(db, {
+    const first = await store.claim(event('evt-done'));
+    await store.finish({
       ...event('evt-done'),
       result: 'paid',
       token: first.token ?? '',
     });
-    const again = await claimWebhookEvent(db, event('evt-done'));
+    const again = await store.claim(event('evt-done'));
     expect(again.state).toBe('handled');
     expect(again.token).toBeUndefined();
   });
@@ -116,9 +115,9 @@ describe('claimWebhookEvent', () => {
    *      机构每次重发都会把宽限期重新归零 → 脏回调永远走 503、永远落不了 unmatched。
    */
   it('firstReceivedAt 始终是首次到达时间（重发不刷新宽限期锚点）', async () => {
-    const first = await claimWebhookEvent(db, event('evt-anchor'));
+    const first = await store.claim(event('evt-anchor'));
     await new Promise((r) => setTimeout(r, 50));
-    const second = await claimWebhookEvent(db, event('evt-anchor'));
+    const second = await store.claim(event('evt-anchor'));
     expect(second.firstReceivedAt.getTime()).toBe(first.firstReceivedAt.getTime());
   });
 
@@ -136,40 +135,40 @@ describe('claimWebhookEvent', () => {
    * 现在必须分开：租约未过期 = inflight（不许碰），只有租约过期（真崩溃遗留）才 retry。
    */
   it('处理到一半崩了：租约未过期 = inflight，租约过期后 = retry（可接管）', async () => {
-    await expect(claimWebhookEvent(db, event('evt-crash'))).resolves.toMatchObject({
+    await expect(store.claim(event('evt-crash'))).resolves.toMatchObject({
       state: 'new',
     });
     // 持有人在租约内：重发不许插手
-    await expect(claimWebhookEvent(db, event('evt-crash'))).resolves.toMatchObject({
+    await expect(store.claim(event('evt-crash'))).resolves.toMatchObject({
       state: 'inflight',
     });
     // 租约过期（持有人崩了）→ 允许接管
     await db`update webhook_events set processing_until = now() - interval '1 second' where event_id = 'evt-crash'`;
-    await expect(claimWebhookEvent(db, event('evt-crash'))).resolves.toMatchObject({
+    await expect(store.claim(event('evt-crash'))).resolves.toMatchObject({
       state: 'retry',
     });
   });
 
   it('超过宽限期落了 unmatched → 终态 handled，不再重试（转对账而非重发）', async () => {
-    const c = await claimWebhookEvent(db, event('evt-late'));
-    await finishWebhookEvent(db, {
+    const c = await store.claim(event('evt-late'));
+    await store.finish({
       ...event('evt-late'),
       result: 'unmatched:order_not_found',
       token: c.token ?? '',
     });
-    await expect(claimWebhookEvent(db, event('evt-late'))).resolves.toMatchObject({
+    await expect(store.claim(event('evt-late'))).resolves.toMatchObject({
       state: 'handled',
     });
   });
 
   it('状态冲突（status_conflict）不重试——重发一万次也不会变', async () => {
-    const c = await claimWebhookEvent(db, event('evt-conflict'));
-    await finishWebhookEvent(db, {
+    const c = await store.claim(event('evt-conflict'));
+    await store.finish({
       ...event('evt-conflict'),
       result: 'ignored:status_conflict',
       token: c.token ?? '',
     });
-    await expect(claimWebhookEvent(db, event('evt-conflict'))).resolves.toMatchObject({
+    await expect(store.claim(event('evt-conflict'))).resolves.toMatchObject({
       state: 'handled',
     });
   });
@@ -181,23 +180,23 @@ it('无 event_type 的事件也能登记（骨架模拟回调没有类型字段�
     eventId: 'evt-notype',
     hash: payloadHash('payload-evt-notype'),
   };
-  await expect(claimWebhookEvent(db, noType)).resolves.toMatchObject({ state: 'new' });
+  await expect(store.claim(noType)).resolves.toMatchObject({ state: 'new' });
   // 库里应落 NULL 而不是崩——且重复投递照常去重
-  await expect(claimWebhookEvent(db, noType)).resolves.toMatchObject({ state: 'inflight' });
+  await expect(store.claim(noType)).resolves.toMatchObject({ state: 'inflight' });
 });
 
 describe('finishWebhookEvent', () => {
   it('处理完回填 processed_at 与 result', async () => {
-    const c = await claimWebhookEvent(db, event('evt-2'));
-    await finishWebhookEvent(db, { ...event('evt-2'), result: 'paid', token: c.token ?? '' });
+    const c = await store.claim(event('evt-2'));
+    await store.finish({ ...event('evt-2'), result: 'paid', token: c.token ?? '' });
     const rows = await db`select result, processed_at from webhook_events where event_id = 'evt-2'`;
     expect(rows[0]?.result).toBe('paid');
     expect(rows[0]?.processed_at).not.toBeNull();
   });
 
   it('业务冲突同样留痕（result 供对账区分"处理过"与"没处理"）', async () => {
-    const c = await claimWebhookEvent(db, event('evt-3'));
-    await finishWebhookEvent(db, {
+    const c = await store.claim(event('evt-3'));
+    await store.finish({
       ...event('evt-3'),
       token: c.token ?? '',
       result: 'unmatched:order_not_found',
@@ -209,7 +208,7 @@ describe('finishWebhookEvent', () => {
   });
 
   it('未处理的事件 processed_at 为空——这正是"待对账"信号', async () => {
-    await claimWebhookEvent(db, event('evt-4'));
+    await store.claim(event('evt-4'));
     const rows = await db`select processed_at from webhook_events where event_id = 'evt-4'`;
     expect(rows[0]?.processed_at).toBeNull();
   });
@@ -226,26 +225,26 @@ describe('finishWebhookEvent', () => {
  */
 describe('releaseWebhookLease', () => {
   it('交还后下一次投递立刻可接管（不是 inflight）——早到回调的重发必须能补上', async () => {
-    const first = await claimWebhookEvent(db, event('evt-release'));
+    const first = await store.claim(event('evt-release'));
     expect(first.state).toBe('new');
     // 交还前：并发投递被挡住（这是租约该做的事）
-    await expect(claimWebhookEvent(db, event('evt-release'))).resolves.toMatchObject({
+    await expect(store.claim(event('evt-release'))).resolves.toMatchObject({
       state: 'inflight',
     });
 
-    expect(
-      await releaseWebhookLease(db, { ...event('evt-release'), token: first.token ?? '' }),
-    ).toBe(true);
+    expect(await store.releaseLease({ ...event('evt-release'), token: first.token ?? '' })).toBe(
+      true,
+    );
 
     // 交还后：租约没了，下一次投递必须能接管（processed_at 仍 NULL → retry）
-    const next = await claimWebhookEvent(db, event('evt-release'));
+    const next = await store.claim(event('evt-release'));
     expect(next.state).toBe('retry');
     expect(next.token).toBeDefined();
   });
 
   it('交还只清租约，不动 processed_at（待办信号必须留着）', async () => {
-    const c = await claimWebhookEvent(db, event('evt-release2'));
-    await releaseWebhookLease(db, { ...event('evt-release2'), token: c.token ?? '' });
+    const c = await store.claim(event('evt-release2'));
+    await store.releaseLease({ ...event('evt-release2'), token: c.token ?? '' });
     const rows = await db`
       select processed_at, processing_until, processing_token
         from webhook_events where event_id = 'evt-release2'
@@ -261,27 +260,25 @@ describe('releaseWebhookLease', () => {
    *      两种都返回 false 且**不需要补偿**——前者已有人在接管处理，后者本就是终态。
    */
   it('令牌已失效（别人接管了）→ false，且不破坏新持有者的租约', async () => {
-    const first = await claimWebhookEvent(db, event('evt-fence'));
+    const first = await store.claim(event('evt-fence'));
     // 模拟租约过期被接管
     await db`update webhook_events set processing_until = now() - interval '1 second' where event_id = 'evt-fence'`;
-    const second = await claimWebhookEvent(db, event('evt-fence'));
+    const second = await store.claim(event('evt-fence'));
     expect(second.state).toBe('retry');
 
-    expect(await releaseWebhookLease(db, { ...event('evt-fence'), token: first.token ?? '' })).toBe(
+    expect(await store.releaseLease({ ...event('evt-fence'), token: first.token ?? '' })).toBe(
       false,
     );
     // 新持有者的租约完好：第三次投递仍被挡在 inflight
-    await expect(claimWebhookEvent(db, event('evt-fence'))).resolves.toMatchObject({
+    await expect(store.claim(event('evt-fence'))).resolves.toMatchObject({
       state: 'inflight',
     });
   });
 
   it('已封口的事件（processed_at 非空）不被交还影响', async () => {
-    const c = await claimWebhookEvent(db, event('evt-sealed'));
-    await finishWebhookEvent(db, { ...event('evt-sealed'), result: 'paid', token: c.token ?? '' });
-    expect(await releaseWebhookLease(db, { ...event('evt-sealed'), token: c.token ?? '' })).toBe(
-      false,
-    );
+    const c = await store.claim(event('evt-sealed'));
+    await store.finish({ ...event('evt-sealed'), result: 'paid', token: c.token ?? '' });
+    expect(await store.releaseLease({ ...event('evt-sealed'), token: c.token ?? '' })).toBe(false);
     const rows = await db`select result from webhook_events where event_id = 'evt-sealed'`;
     expect(rows[0]?.result).toBe('paid');
   });

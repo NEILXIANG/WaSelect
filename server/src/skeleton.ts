@@ -33,15 +33,20 @@ import { AppError } from './errors.js';
 import { scopeKey, withIdempotencyTx } from './idempotency.js';
 import type { Logger } from './logger.js';
 import type { IdentityCheck } from './adapters/identity.js';
-import {
-  claimWebhookEvent,
-  finishWebhookEvent,
-  payloadHash,
-  releaseWebhookLease,
-} from './webhooks.js';
+import { payloadHash } from './adapters/webhooks.js';
+import type { WebhookStore } from './ports/webhooks.js';
 
 export interface SkeletonDeps {
   db: Db;
+  /**
+   * 回调事件存储（F10 端口）。**必填**：装配时由 `createWebhookStore(db)` 注入。
+   *
+   * @why 走端口而不是让骨架自己 import 适配器：骨架是"业务怎么用存储"的第一份示范，
+   *      它一开始就依赖具体实现的话，后面所有业务代码都会照抄——
+   *      分层就只剩目录好看了。这里必填而不是可选，是为了让"装配时必须回答一次"
+   *      这个约束有强制力（可选就会有人不传，然后偷偷退化）。
+   */
+  webhooks: WebhookStore;
   logger: Logger;
   auth: AuthConfig;
   /** 模拟回调的 HMAC 密钥（骨架期；真实通道验签在 F11，见 @limitation 二）。 */
@@ -285,7 +290,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           eventType: 'payment.succeeded',
           hash: payloadHash(raw),
         };
-        const claim = await claimWebhookEvent(deps.db, webhook);
+        const claim = await deps.webhooks.claim(webhook);
         if (claim.state === 'handled') {
           // 重复投递：直接收下，不重复处理——但必须留一条可检索的日志，
           // 否则"机构在重发"这件事会被当成"一切正常"
@@ -361,7 +366,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
                *    "早到 → 重发 → 补上"这条链被租约自己掐断——而它正是"钱到单未付"的兜底。
                *    `processed_at` 保持 NULL 不变：那才是"待办"信号（对账 + 允许被接管）。
                */
-              await releaseWebhookLease(deps.db, { ...webhook, token: claim.token ?? '' });
+              await deps.webhooks.releaseLease({ ...webhook, token: claim.token ?? '' });
               // Retry-After 给机构一个重发节奏提示（30s 远小于宽限期，又不至于打爆我们）
               res
                 .status(503)
@@ -374,7 +379,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
               result: 'unmatched',
               ctx: { event_id: webhook.eventId, elapsed_ms: elapsedMs },
             });
-            await finishWebhookEvent(deps.db, {
+            await deps.webhooks.finish({
               ...webhook,
               result: 'unmatched:order_not_found',
               token: claim.token ?? '',
@@ -391,7 +396,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
                 result: 'ignored',
                 ctx: { event_id: webhook.eventId },
               });
-              await finishWebhookEvent(deps.db, {
+              await deps.webhooks.finish({
                 ...webhook,
                 result: 'paid:already',
                 token: claim.token ?? '',
@@ -405,7 +410,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
               conflict: 'status_conflict',
               result: 'ignored',
             });
-            await finishWebhookEvent(deps.db, {
+            await deps.webhooks.finish({
               ...webhook,
               result: 'ignored:status_conflict',
               token: claim.token ?? '',
@@ -417,7 +422,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           throw e;
         }
         // 栅栏（N22）：带令牌写结果；false = 租约已易主，我们是迟到的旧持有者
-        const wrote = await finishWebhookEvent(deps.db, {
+        const wrote = await deps.webhooks.finish({
           ...webhook,
           result: 'paid',
           token: claim.token ?? '',

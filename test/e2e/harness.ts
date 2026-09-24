@@ -16,6 +16,7 @@ import type { Db } from '../../server/src/adapters/db.js';
 import { createHttpApp, listen, type StartedServer } from '../../server/src/http.js';
 import { createLogger } from '../../server/src/logger.js';
 import { MOCK_CALLBACK_PATH, mountSkeleton } from '../../server/src/skeleton.js';
+import { createWebhookStore } from '../../server/src/adapters/webhooks.js';
 import { MemorySink } from '../helpers/memory-sink.js';
 
 export const E2E_AUTH: AuthConfig = { secret: 'e2e-jwt-secret-'.repeat(3), issuer: 'waselect-e2e' };
@@ -45,6 +46,8 @@ export async function startSkeleton(
       // env 显式给 development：骨架在 production 下会拒绝挂载（SEC2 闸门），装配处必须回答一次
       mountSkeleton(a, {
         db,
+        // 与生产同一条装配路径：实现在装配处注入，业务侧只见端口
+        webhooks: createWebhookStore(db),
         logger,
         auth: E2E_AUTH,
         callbackSecret: E2E_CALLBACK_SECRET,
