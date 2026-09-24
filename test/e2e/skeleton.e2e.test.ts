@@ -238,6 +238,15 @@ describe('行走骨架：一条链路走到底', () => {
     // processed_at 必须保持 NULL：这是对账信号，也是"同一 event_id 重发时能补上"的前提
     const rows = await db`select processed_at from webhook_events where event_id = 'evt-grace'`;
     expect(rows[0]?.processed_at).toBeNull();
+    /**
+     * 租约也必须**交还**（N22 补丁）：这个请求已经结束了，不算"处理中"。
+     * 留着租约会让接下来 10 秒内的重投被判成 inflight → 再吃一个 503，
+     * 于是"早到 → 重发 → 补上"整条链被租约掐断（本文件的重发补上用例就是这么红的）。
+     */
+    const lease =
+      await db`select processing_until, processing_token from webhook_events where event_id = 'evt-grace'`;
+    expect(lease[0]?.processing_until).toBeNull();
+    expect(lease[0]?.processing_token).toBeNull();
     // 一次早到的回调不能写出任何业务事件
     const events = await db`select id from order_events`;
     expect(events).toHaveLength(0);
@@ -516,5 +525,176 @@ describe('断链验证：少配一环就必须失败', () => {
       // 还原到"正常"的服务，避免影响后续用例
       await startServer({ withRawBody: true });
     }
+  });
+});
+
+/**
+ * N22（二审 P0-3）：同一个 event_id 的**并发**重复投递，只允许一个请求进入业务。
+ *
+ * @why 三态时期（new/handled/retry）把"正在处理"和"崩溃遗留"压成同一个 `retry`：
+ *      库里两者长得一模一样（`processed_at IS NULL`），于是并发的第二次投递也会去处理。
+ *      订单状态有 `for update` 兜底不会写错，但**事件行的 result 会被后写完的覆盖**——
+ *      而这张表存在的唯一理由就是"这条回调到底怎么处理的"要说得清（举证）。
+ *
+ * @why 这道闸门是**编排**出来的，不是 `Promise.all` 碰运气。
+ *      AJ-37 的硬要求：竞态窗口必须被编排，靠 sleep 或并发碰运气的测试
+ *      在慢机器上会假绿、在快机器上会假红，二者都等于没测。
+ *      办法是在 `db.begin`（markPaid 的事务入口）上装一道闸：A 进闸即停，
+ *      我们从容地发 B、断言它的响应，再放行 A。窗口 100% 落在我们要的地方。
+ * @tradeoff 闸门打在 `begin` 上意味着"处理中段"由事务入口近似——
+ *          好处是稳定；代价是它不覆盖"claim 之后、事务之前"那段（那段没有 IO，窗口极窄，
+ *          由 webhooks.db.test.ts 用直接调库的方式覆盖）。
+ */
+describe('N22：并发重复投递只有一个持有者（processing_until 租约 + 栅栏令牌）', () => {
+  /** 在 `db.begin` 上装一道可控闸门：armed 之后第一个事务会停在闸内，直到 release()。 */
+  function gatedDb(real: Db): {
+    db: Db;
+    arm: () => void;
+    entered: Promise<void>;
+    release: () => void;
+  } {
+    let armed = false;
+    let enteredResolve: () => void = () => undefined;
+    let releaseResolve: () => void = () => undefined;
+    const entered = new Promise<void>((r) => {
+      enteredResolve = r;
+    });
+    const release = new Promise<void>((r) => {
+      releaseResolve = r;
+    });
+    const gated = new Proxy(real, {
+      get(target, prop) {
+        if (prop === 'begin' && armed) {
+          return async (fn: unknown) => {
+            enteredResolve();
+            await release;
+            return (target.begin as (f: unknown) => unknown)(fn);
+          };
+        }
+        const v: unknown = Reflect.get(target, prop);
+        // 绑回真实对象：postgres.js 的方法靠内部字段工作，this 必须是 target 而不是代理
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+      },
+    });
+    return {
+      db: gated,
+      arm: () => {
+        armed = true;
+      },
+      entered,
+      release: () => releaseResolve(),
+    };
+  }
+
+  it('同一 event_id 并发重投：一个处理、另一个 503 already_processing，业务只跑一次', async () => {
+    const gate = gatedDb(db);
+    const s = await startSkeleton(gate.db, { withRawBody: true });
+    try {
+      const token = await userToken();
+      const created = (await (
+        await fetch(`${s.base}/api/v1/skeleton/orders`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${token}`,
+            'content-type': 'application/json',
+            'idempotency-key': 'key-n22',
+            'x-trace-id': TRACE,
+          },
+          body: '{}',
+        })
+      ).json()) as { order_id: string };
+
+      const raw = JSON.stringify({ order_id: created.order_id, event_id: 'evt-concurrent' });
+      const signature = createHmac('sha256', CALLBACK_SECRET).update(raw).digest('hex');
+      const post = () =>
+        fetch(`${s.base}${MOCK_CALLBACK_PATH}`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-mock-signature': signature,
+            'x-trace-id': TRACE,
+          },
+          body: raw,
+        });
+
+      gate.arm();
+      const first = post();
+      // A 已进闸（持有租约、业务尚未写完）——此刻发 B，必然撞上"处理中"
+      await gate.entered;
+
+      const second = await post();
+      expect(second.status).toBe(503);
+      expect(second.headers.get('retry-after')).toBe('10');
+      await expect(second.json()).resolves.toMatchObject({
+        received: false,
+        reason: 'already_processing',
+      });
+
+      // B 绝不能顺手把业务做了：此时还没有任何 paid 事件，事件行也没封口
+      expect(await db`select id from order_events where status = 'paid'`).toHaveLength(0);
+      const mid = await db`
+        select processed_at, processing_until > now() as lease_live
+          from webhook_events where event_id = 'evt-concurrent'
+      `;
+      expect(mid[0]?.processed_at).toBeNull();
+      expect(mid[0]?.lease_live).toBe(true);
+      expect(s.sink.find('webhook_inflight')).toHaveLength(1);
+
+      // 放行 A
+      gate.release();
+      const firstRes = await first;
+      expect(firstRes.status).toBe(200);
+
+      // 业务只跑了一次：一条 paid 事件，事件行封口且租约已交还
+      const events =
+        await db`select status from order_events where order_id = ${created.order_id} order by id`;
+      expect(events.map((r) => r.status)).toEqual(['created', 'paid']);
+      const rows = await db`
+        select result, processed_at, processing_until
+          from webhook_events where event_id = 'evt-concurrent'
+      `;
+      expect(rows[0]?.result).toBe('paid');
+      expect(rows[0]?.processed_at).not.toBeNull();
+      expect(rows[0]?.processing_until).toBeNull();
+      // 没有"结果没写成"的告警：A 是唯一持有者，令牌对得上
+      expect(s.sink.find('webhook_result_not_written')).toHaveLength(0);
+    } finally {
+      gate.release();
+      await s.server.close();
+    }
+  });
+
+  /**
+   * 崩溃遗留 → 下一次投递**必须能接管**。
+   * @why 这是租约机制的两面之一：上面那条证明"活的持有者不被抢"，
+   *      这条证明"死了的持有者不挡路"。只测前者的租约会把崩溃的回调永久卡死——
+   *      那正是 N22 想修的问题换了个方向复发。
+   * @why 用**过期租约 + processed_at IS NULL** 精确模拟崩溃：进程死了，
+   *      行留在那儿，租约到期后自然可被接管（不需要心跳，见 webhooks.ts @limitation）。
+   */
+  it('租约过期（上次处理崩了）→ 下一次投递接管并补上，订单最终 paid', async () => {
+    const token = await userToken();
+    const created = (await (await createOrder(token, 'key-n22-crash')).json()) as {
+      order_id: string;
+    };
+    // 手工造一行"崩溃遗留"：登记过、没处理完、租约已过期
+    await db`
+      insert into webhook_events (provider, event_id, event_type, payload_hash,
+                                  processing_until, processing_token)
+      values ('mock', 'evt-crashed', 'payment.succeeded', 'deadbeef',
+              now() - interval '1 second', gen_random_uuid())
+    `;
+
+    const res = await signedCallback({ order_id: created.order_id, event_id: 'evt-crashed' });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ received: true });
+
+    const rows = await db`select status from orders where id = ${created.order_id}`;
+    expect(rows[0]?.status).toBe('paid');
+    const w = await db`
+      select result, processed_at from webhook_events where event_id = 'evt-crashed'
+    `;
+    expect(w[0]?.result).toBe('paid');
+    expect(w[0]?.processed_at).not.toBeNull();
   });
 });

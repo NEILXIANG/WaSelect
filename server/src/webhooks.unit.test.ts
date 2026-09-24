@@ -18,8 +18,11 @@ describe('claimWebhookEvent 防御分支（N16 定向）', () => {
     }) as unknown as Db;
 
     const r = await claimWebhookEvent(stub, { provider: 'mock', eventId: 'e-1', hash: 'h' });
-    expect(calls).toBe(2); // insert（冲突返回 0 行）+ select（也 0 行）
+    // N22 之后是三步：insert（冲突返回 0 行）→ 接管 update（也 0 行）→ select（也 0 行）
+    expect(calls).toBe(3);
     expect(r.state).toBe('new');
+    // 兜底分支也要给令牌：它按"本次应当处理"返回，后续 finish 才有栅栏可验
+    expect(r.token).toBeDefined();
     expect(Math.abs(Date.now() - r.firstReceivedAt.getTime())).toBeLessThan(5_000);
   });
 });

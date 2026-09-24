@@ -121,5 +121,20 @@ describe('迁移 up → down → up', () => {
     // 004：栅栏令牌列——往返后仍在，证明 down/up 都带它（二审 N1）
     expect(names).toContain('lease_token');
     expect(await businessTables()).toContain('webhook_events');
+
+    /**
+     * 005：回调处理租约列——往返后仍在（二审 N22）。
+     * @why 这两列一旦在 down 里漏 DROP，二次 up 会因"列已存在"而失败；
+     *      更隐蔽的是**只漏 DROP 索引**：脚本照样成功，但并发回调的租约判定
+     *      会退化成全表扫描（乃至在数据量上来后突然变慢），回滚本身却看不出来。
+     */
+    const whCols = await db`
+      select column_name from information_schema.columns
+      where table_name = 'webhook_events'
+      order by column_name
+    `;
+    expect(whCols.map((r) => String(r.column_name))).toEqual(
+      expect.arrayContaining(['processing_until', 'processing_token']),
+    );
   });
 });

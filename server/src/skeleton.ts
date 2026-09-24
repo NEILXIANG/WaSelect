@@ -33,7 +33,12 @@ import { AppError } from './errors.js';
 import { scopeKey, withIdempotencyTx } from './idempotency.js';
 import type { Logger } from './logger.js';
 import type { IdentityCheck } from './identity.js';
-import { claimWebhookEvent, finishWebhookEvent, payloadHash } from './webhooks.js';
+import {
+  claimWebhookEvent,
+  finishWebhookEvent,
+  payloadHash,
+  releaseWebhookLease,
+} from './webhooks.js';
 
 export interface SkeletonDeps {
   db: Db;
@@ -293,7 +298,31 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           res.json({ received: true, order_id: orderId, duplicate: true });
           return;
         }
-        // claim.state === 'retry'：上次没处理完（订单当时不存在 / 进程崩了），这一次重新走一遍
+        /**
+         * N22：`inflight` = **另一个请求正在处理这个事件**（租约未过期）。
+         * @why 这里必须回 503 而不是 2xx：2xx 会让机构认为"处理完了"从而停止重发，
+         *      而我们这侧若那一次处理最终失败（进程崩了），就没有第二次机会了
+         *      ——只能等每日对账（F13），而"钱到单未付"多滞留一天是不可接受的。
+         *      503 + Retry-After 让机构稍后重发，届时要么读到结果（handled → 2xx），
+         *      要么租约已过期可以接管（retry）——两条路都通向正确处理。
+         * @why 不在这里**等待**对方处理完（像幂等那样轮询）：
+         *      回调的响应时间要尽量短（机构侧通常有 5–30s 超时），
+         *      而机构的重发机制本来就是为"稍后再试"设计的，等它重发比我们占着连接更划算。
+         */
+        if (claim.state === 'inflight') {
+          deps.logger.info('webhook_inflight', {
+            provider: webhook.provider,
+            result: 'deferred',
+            ctx: { event_id: webhook.eventId },
+          });
+          res
+            .status(503)
+            .set('retry-after', '10')
+            .json({ received: false, reason: 'already_processing' });
+          return;
+        }
+        // 走到这里：claim.state 是 'new' 或 'retry'，且 claim.token 一定存在——
+        // 本次是唯一持有者，处理结果由它携带令牌写回（N22 栅栏）
 
         // ── 冲突分层（AJ-32/N4/N13，取代旧的"一律 2xx + warn"）────────────────
         // ① 订单不存在 + 宽限期内 → **503**：让机构的重发机制替我们兜底，
@@ -325,6 +354,14 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
                 result: 'retry_scheduled',
                 ctx: { event_id: webhook.eventId, grace_ms: deps.callbackOrderGraceMs },
               });
+              /**
+               * ⚠️ **必须交还租约**（N22 的补丁，被自己的 e2e 抓出来）：
+               *    这个请求到此就结束了，它并不在"处理中"，租约却还挂在它名下 10 秒。
+               *    不交还的话，机构按 Retry-After 发来的重投会被判成 `inflight`（再吃一个 503），
+               *    "早到 → 重发 → 补上"这条链被租约自己掐断——而它正是"钱到单未付"的兜底。
+               *    `processed_at` 保持 NULL 不变：那才是"待办"信号（对账 + 允许被接管）。
+               */
+              await releaseWebhookLease(deps.db, { ...webhook, token: claim.token ?? '' });
               // Retry-After 给机构一个重发节奏提示（30s 远小于宽限期，又不至于打爆我们）
               res
                 .status(503)
@@ -340,6 +377,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
             await finishWebhookEvent(deps.db, {
               ...webhook,
               result: 'unmatched:order_not_found',
+              token: claim.token ?? '',
               note: '超过宽限期订单仍不存在：转入对账任务（F13），机构不必再重发',
             });
             res.json({ received: true, order_id: orderId, ignored: 'unmatched' });
@@ -356,6 +394,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
               await finishWebhookEvent(deps.db, {
                 ...webhook,
                 result: 'paid:already',
+                token: claim.token ?? '',
                 note: '同单另一事件类型到达，订单已是 paid（N13：正常形态，不是异常）',
               });
               res.json({ received: true, order_id: orderId, ignored: 'paid:already' });
@@ -369,6 +408,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
             await finishWebhookEvent(deps.db, {
               ...webhook,
               result: 'ignored:status_conflict',
+              token: claim.token ?? '',
               note: '业务冲突：重发也不会变，靠对账而非重试',
             });
             res.json({ received: true, order_id: orderId, ignored: 'status_conflict' });
@@ -376,7 +416,19 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           }
           throw e;
         }
-        await finishWebhookEvent(deps.db, { ...webhook, result: 'paid' });
+        // 栅栏（N22）：带令牌写结果；false = 租约已易主，我们是迟到的旧持有者
+        const wrote = await finishWebhookEvent(deps.db, {
+          ...webhook,
+          result: 'paid',
+          token: claim.token ?? '',
+        });
+        if (!wrote) {
+          deps.logger.warn('webhook_result_not_written', {
+            provider: webhook.provider,
+            result: 'lease_lost',
+            ctx: { event_id: webhook.eventId },
+          });
+        }
         deps.logger.info('skeleton_payment_callback', { order_id: orderId, result: 'paid' });
         res.json({ received: true, order_id: orderId });
       } catch (e) {
