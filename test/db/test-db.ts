@@ -110,13 +110,26 @@ export function assertIsTestDatabaseUrl(url: string, opts: { allowRemote?: boole
   return url;
 }
 
+/**
+ * 环境变量取值：空串/纯空白按「未设置」处理，回落到 fallback（惰性，有值时根本不调用）。
+ *
+ * @why 与 config.ts 的约定同源（`.env` 里 `KEY=` 是占位，不是空字符串值）——
+ *      但 `??` 拦不住空串。2026-09-25 真实踩到：dev-up 从 .env.example 物化出 .env 后，
+ *      `TEST_DATABASE_URL=`（空串）经 loadEnvFile 进入 env，`?? deriveTestUrl()` 放行空串，
+ *      `new URL('')` 在**模块加载期**炸掉——任何一个 import 本模块的测试文件全红，
+ *      且报错指不向「你的 .env 有个空占位」。
+ */
+export function envOrDefault(value: string | undefined, fallback: () => string): string {
+  return value !== undefined && value.trim().length > 0 ? value : fallback();
+}
+
 /** 测试库连接串（与开发库 japan_shop 分开，避免误删真实数据）。 */
 export const TEST_DB_URL = assertIsTestDatabaseUrl(
-  process.env.TEST_DATABASE_URL ?? deriveTestUrl(),
+  envOrDefault(process.env.TEST_DATABASE_URL, deriveTestUrl),
 );
 /** 用来建库的管理库连接串（本身不会被清空，但仍要求本机）。 */
 const ADMIN_DB_URL = ((): string => {
-  const url = process.env.TEST_ADMIN_DB_URL ?? deriveAdminUrl();
+  const url = envOrDefault(process.env.TEST_ADMIN_DB_URL, deriveAdminUrl);
   const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
   const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
   if (!isLocal && process.env.ALLOW_REMOTE_TEST_DB !== '1') {

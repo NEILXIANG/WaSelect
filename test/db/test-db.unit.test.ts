@@ -9,7 +9,7 @@
  * @limitation 只测规则本身，不真的去连一个非 `_test` 的库（那正是要避免的事）。
  */
 import { describe, expect, it } from 'vitest';
-import { assertIsTestDatabaseUrl } from './test-db.js';
+import { assertIsTestDatabaseUrl, envOrDefault } from './test-db.js';
 
 const local = 'postgres://someone@localhost:5432/japan_shop_test';
 
@@ -47,5 +47,23 @@ describe('测试库连接串闸门', () => {
   it('畸形连接串与空库名都要抛错（不能静默放过去）', () => {
     expect(() => assertIsTestDatabaseUrl('not a url')).toThrow(/无法解析/);
     expect(() => assertIsTestDatabaseUrl('postgres://u@localhost:5432/')).toThrow(/没有指定库名/);
+  });
+});
+
+describe('envOrDefault：空串按「未设置」处理（2026-09-25 物化 .env 暴露的回归）', () => {
+  it('空串 / 纯空白 / undefined 都回落到 fallback', () => {
+    expect(envOrDefault('', () => 'fb')).toBe('fb');
+    expect(envOrDefault('   ', () => 'fb')).toBe('fb');
+    expect(envOrDefault(undefined, () => 'fb')).toBe('fb');
+  });
+
+  it('有值时取值，且 fallback 根本不被调用（惰性）', () => {
+    let called = 0;
+    const fallback = (): string => {
+      called += 1;
+      return 'fb';
+    };
+    expect(envOrDefault('real', fallback)).toBe('real');
+    expect(called, 'fallback 有副作用时，"有值也调一次"就是 bug').toBe(0);
   });
 });
