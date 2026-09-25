@@ -8,7 +8,7 @@
 
 目录（见《工程框架文档 v0.5》）：`miniprogram/`（原生小程序 TS，9 页 + 银行卡支付引导页）、`server/`（Node.ts + postgres.js，九模块）、`checkout-static/`（Cloudflare Pages 静态站：`_redirects` → Stripe Checkout 托管页 + 结果页）、`admin-web/`（独立管理后台，前置 Cloudflare Access）。
 
-开始：`cp .env.example .env`，填 `DATABASE_URL`、`JWT_SECRET`，`PAYMENT_CHANNELS=mock,stripe`。
+开始：`npm run dev`（首次自动物化 `.env`、建库、迁移、灌 demo 数据并起服务于 `:3000`；`.env` 生成后按需填 Stripe 等占位）。`--no-serve` 只准备环境，`--full` 灌完整目录。本地联调（Stripe 回调 / 公网隧道）见 `docs/dev/stripe-listen-cloudflared.md`。
 
 **可扩展性**：先读 `docs/可扩展架构设计-支付可插拔·多国家·UI可配置.md`（ADR-28）——业务核心不认识任何具体支付方式/国家/UI：支付走 Provider 注册表 + 能力声明 + 配置表；多国家走 `country_profiles` + `shipping_rates.dest_country` + `duty_rates`；UI 走 design token + 页面/表单 schema，禁止写死色值、金额、国家、承运商、模块顺序。
 
