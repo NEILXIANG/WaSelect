@@ -164,6 +164,15 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     branches: 100,
     statements: 100,
   },
+  // 编排层：三条"错了也不报错"的性质全在这里——没抢到锁就什么都不做、
+  // 一个子任务失败不影响其它子任务、**失败 job 的 emit 不分发**（幽灵副作用）。
+  // 它们是所有定时任务共有的，靠 job 作者各自实现一遍等于交给概率。
+  'server/src/app/scheduler.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
 
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。

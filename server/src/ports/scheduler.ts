@@ -113,17 +113,31 @@ export interface JobFailure {
 
 export type JobResult = JobSuccess | JobFailure;
 
-/** 一轮 tick 的结果。 */
-export interface SchedulerTickResult {
-  /** 是否抢到锁。**false 不是失败**：说明另一个实例正在跑，本轮应当安静跳过。 */
-  acquired: boolean;
-  /** 抢到锁时才有意义：所有子任务都成功才算 true。 */
-  ok: boolean;
-  jobs: readonly JobResult[];
-  /** 本轮 trace_id：与 `job_runs.trace_id` 一致，用于从心跳行反查这一轮的全部日志。 */
+/** 本轮 trace_id：与 `job_runs.trace_id` 一致，用于从心跳行反查这一轮的全部日志。 */
+interface TickTrace {
   traceId: string;
   durationMs: number;
 }
+
+/**
+ * 没抢到锁：本轮由别的实例执行，**不是失败**。
+ *
+ * @why 刻意做成**没有 `ok` 字段**的类型：如果它也带 `ok`，调用方就会写出
+ *      `if (r.ok)` 这种判断，而"没抢到锁"既不是成功也不是失败——
+ *      它是"这件事由别人做了"。把两种结果做成判别联合，编译器会逼调用方先判 `acquired`。
+ */
+export interface SchedulerTickSkipped extends TickTrace {
+  acquired: false;
+}
+
+/** 抢到锁并执行了：`ok` = 所有子任务都成功。 */
+export interface SchedulerTickRan extends TickTrace {
+  acquired: true;
+  ok: boolean;
+  jobs: readonly JobResult[];
+}
+
+export type SchedulerTickResult = SchedulerTickSkipped | SchedulerTickRan;
 
 /**
  * 事务内互斥。
