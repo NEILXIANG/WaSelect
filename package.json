@@ -34,6 +34,7 @@
     "start": "node --conditions=waselect-runtime server/dist/main.js",
     "db:migrate": "node node_modules/node-pg-migrate/bin/node-pg-migrate.js -m migrations up",
     "db:migrate:down": "node node_modules/node-pg-migrate/bin/node-pg-migrate.js -m migrations down",
+    "db:seed": "tsx scripts/seed.ts",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "audit": "npm audit",
     "gate": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run check:contract && npm run test:unit && npm run test:db && npm run test:contract && npm run test:e2e && npm run test:lint && npm run audit:prod && npm run cov"
@@ -52,6 +53,7 @@
     "miniprogram-simulate": "^1.6.2",
     "node-pg-migrate": "^9.0.0",
     "prettier": "^3.6.2",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.43.0",
     "vitest": "^5.0.1"
