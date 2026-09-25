@@ -18,19 +18,33 @@
 /**
  * 参与统计的源码范围。测试文件不算（它们自己不需要被自己覆盖）。
  *
- * ⚠️ 小程序侧**只收 `.ts`**：`miniprogram/` 里还有一批 `.js`（request / idempotency / trace / app / config），
- *    它们有单测但当前不在统计范围内——把它们一起收进来的话，全局 85% 会被一堆 0% 的文件拉垮，
- *    结果是要么放松底线（等于没有底线），要么一次性补几十条测试（那是另一个单元）。
- *    先只收 `.ts`：新写的 TS 模块**自动**进统计（fail-closed，与 `server/src` 同口径），
- *    JS 的存量转换另立单元处理。
+ * ⚠️ 小程序侧的 `.js` **只收 `utils/` 下的**（2026-09-24 收口，此前一条 `.js` 都不收）。
+ *    三条口径，各自都有实测理由，不是随手划的线：
+ *    ① **收 `miniprogram/utils/*.js`**：这些是被单测**直接 import** 的（走 vite），
+ *       覆盖率计数可靠，且当前实测都在 97%~100%（request 97 / 其余五个 100）。
+ *    ② **不收 components 目录下的组件 js**：组件 js 是 `miniprogram-simulate`
+ *       用 **Node 的 `require`** 加载的，v8 覆盖率对这条路径**计数不可靠**——
+ *       实测：`ws-price` 组件的 `index.js` 里 `this.update()` 记到被调用 11 次，
+ *       而同一个函数体的 `setData` 记 0（代码是对的，文案正确渲染，是计数错了）。
+ *       收进来会给出**假信号**，那比不收更贵（会有人去追一个不存在的洞）。
+ *       组件的行为已经由各自的组件级用例（8 条 / 7 条）钉住，不靠覆盖率数字。
+ *    ③ **不收 `app.js` 与 `pages/**`**：它们是 `App()` / `Page()` 装配层，
+ *       本身不可单测（要跑就得先有小程序运行时），收进来是两个 0% 的大文件，
+ *       只会把全局均值拉低而换不来任何信号。它们的性质靠 L4 真机验收。
+ *    ⚠️ 于是**新写的组件 js 不会自动进统计**——这是上面第 ② 条的代价，已知且接受。
  */
 export const COVERAGE_INCLUDE: string[] = [
   'packages/shared/src/**/*.ts',
   'server/src/**/*.ts',
   'miniprogram/**/*.ts',
+  'miniprogram/utils/*.js',
 ];
 
-export const COVERAGE_EXCLUDE: string[] = ['**/*.test.ts'];
+export const COVERAGE_EXCLUDE: string[] = [
+  '**/*.test.ts',
+  // 夹具是"故意违规"的样本，它不是被测代码（@see miniprogram/utils/wx-global.fixture.js）
+  '**/*.fixture.js',
+];
 
 /**
  * 覆盖率阈值。键是**文件路径**（相对仓库根），值是四个维度；
@@ -225,6 +239,31 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
   // 于是"不注入时连的是真实宿主"这条**生产上唯一在跑的路径**天然没人覆盖——
   // 默认值写成空实现会让所有数据静默消失，绿着出事。
   'miniprogram/utils/storage.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+
+  // miniprogram/utils 下的存量 JS（2026-09-24 随统计范围一起收进来）：
+  // 它们每一个都有独立的单测且在收口时实测 100%，钉住是为了让"改坏了"立刻红，
+  // 而不是等某天有人发现"这个模块好像没人管"。
+  // ⚠️ `request.js` **不在此列**：它是 97%（还有两行没覆盖），单独设阈值会把底线钉在当前值，
+  //    反而让人不敢动它；它当前受全局 85% 约束，缺口已在清单里登记。
+  'miniprogram/utils/idempotency.js': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'miniprogram/utils/price-format.js': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'miniprogram/utils/random-id.js': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'miniprogram/utils/trace.js': { lines: 100, functions: 100, branches: 100, statements: 100 },
 
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
