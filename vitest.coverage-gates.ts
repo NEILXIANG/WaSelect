@@ -155,6 +155,15 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     branches: 100,
     statements: 100,
   },
+  // 适配器侧是"互斥"与"心跳"的唯一实现：锁 ID 跨进程一致（否则多实例各锁各的）、
+  // 失败不动 last_success_at（否则看门狗失明）——两条都是**错了也不报错**的形态，
+  // 只能靠真库用例 + 100% 闸门压住。
+  'server/src/adapters/scheduler.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
 
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
