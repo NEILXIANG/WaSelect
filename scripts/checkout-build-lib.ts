@@ -100,11 +100,17 @@ export function matchRedirect(
 /**
  * 生成 tokens.css：颜色来自 packages/shared（单一来源），
  * 尺寸/字号是本站的 px 平台值（小程序的 rpx 尺寸不可比，见 shared/design-tokens.ts 抬头）。
+ * @param generatedBy 生成者标识（写进产物首行注释）。**必须如实**——产物注释撒谎（写着
+ *                    「由 build-checkout 生成」实际出自 gen-admin-tokens）会让"该改哪个脚本"
+ *                    变成一道考古题（ADR-29：注释/生成物标注必须与事实一致）。
  */
-export function renderTokensCss(colors: Readonly<Record<string, string>>): string {
+export function renderTokensCss(
+  colors: Readonly<Record<string, string>>,
+  generatedBy = 'build-checkout',
+): string {
   const colorLines = Object.entries(colors).map(([k, v]) => `  --ws-color-${k}: ${v};`);
   return [
-    '/* 由 build-checkout 生成（颜色单一来源 = packages/shared/design-tokens.ts），勿手改 */',
+    `/* 由 ${generatedBy} 生成（颜色单一来源 = packages/shared/design-tokens.ts），勿手改 */`,
     ':root {',
     ...colorLines,
     '  /* 尺寸/字号：本站（Web px）平台值，与小程序 rpx 体系各自维护（单位不可比） */',
@@ -114,6 +120,8 @@ export function renderTokensCss(colors: Readonly<Record<string, string>>): strin
     '  --ws-font: 16px;',
     '  --ws-font-sm: 14px;',
     '  --ws-font-lg: 22px;',
+    '  /* 边框宽度：admin-web 引入（F15③，"border: 1px" 也是写死尺寸）；checkout 暂未用 */',
+    '  --ws-border: 1px;',
     '}',
     '',
   ].join('\n');

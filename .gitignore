@@ -14,6 +14,9 @@ build/
 # ── 小程序构建产物 ──
 miniprogram/miniprogram_npm/
 
+# ── 生成物（scripts/gen-admin-tokens.ts；颜色真源在 packages/shared）──
+admin-web/src/tokens.css
+
 # ── 测试与覆盖率 ──
 coverage/
 

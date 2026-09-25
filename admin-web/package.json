@@ -5,6 +5,11 @@
   "type": "module",
   "description": "管理后台（ADR-21 独立 Web）：Vite 单页骨架 + 统一请求封装（F15）",
   "scripts": {
+    "predev": "tsx ../scripts/gen-admin-tokens.ts",
+    "dev": "vite",
+    "prebuild": "tsx ../scripts/gen-admin-tokens.ts",
+    "build": "vite build",
+    "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

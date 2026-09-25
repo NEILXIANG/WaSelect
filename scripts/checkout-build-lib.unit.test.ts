@@ -135,6 +135,12 @@ describe('design token：颜色单一来源（packages/shared）', () => {
       );
     }
   });
+
+  it('生成者标识可定制且默认仍是 build-checkout（产物注释不许撒谎，ADR-29）', () => {
+    expect(renderTokensCss(WS_COLORS)).toContain('由 build-checkout 生成');
+    expect(renderTokensCss(WS_COLORS, 'gen-admin-tokens')).toContain('由 gen-admin-tokens 生成');
+    expect(renderTokensCss(WS_COLORS, 'gen-admin-tokens')).not.toContain('build-checkout');
+  });
 });
 
 describe('CSS 变量闭环：page.css 引用的每个变量都有定义（扫描类，配自检）', () => {

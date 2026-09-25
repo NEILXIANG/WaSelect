@@ -10,6 +10,8 @@
 
 开始：`npm run dev`（首次自动物化 `.env`、建库、迁移、灌 demo 数据并起服务于 `:3000`；`.env` 生成后按需填 Stripe 等占位）。`--no-serve` 只准备环境，`--full` 灌完整目录。本地联调（Stripe 回调 / 公网隧道）见 `docs/dev/stripe-listen-cloudflared.md`。
 
+管理后台：`npm run dev -w admin-web`（Vite，**`:5174`**，登录页占位；跨域白名单见 `.env` 的 `CORS_ORIGINS`，已含本地 5174）。构建产物在 `admin-web/dist`（部署 = 静态站 + API 指 `VITE_API_BASE_URL`）。
+
 **可扩展性**：先读 `docs/可扩展架构设计-支付可插拔·多国家·UI可配置.md`（ADR-28）——业务核心不认识任何具体支付方式/国家/UI：支付走 Provider 注册表 + 能力声明 + 配置表；多国家走 `country_profiles` + `shipping_rates.dest_country` + `duty_rates`；UI 走 design token + 页面/表单 schema，禁止写死色值、金额、国家、承运商、模块顺序。
 
 **注释与日志**：先读 `docs/代码注释规范与日志体系设计.md`（ADR-29）——注释必须写清逻辑、**缺点**与优点（`@limitation` / `@tradeoff` / `@see ADR-xx`）；日志三条流（运行 / 业务审计 / 用户行为）统一 `trace_id` 串联，脱敏红线见该文 §8，关键路径测试必须断言日志与事件落库。
