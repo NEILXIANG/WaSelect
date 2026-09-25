@@ -146,6 +146,16 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     statements: 100,
   },
 
+  // F12 熔断状态机：它是**唯一一种"主动让本来能成功的请求失败"**的容错，
+  // 判错的代价高于重试——把 4xx 计入会误杀健康的上游，冷却算错会让恢复后的流量迟迟回不来。
+  // 三态迁移必须 100%，否则"上游其实已经好了、我们还在拒绝"这类问题没有任何信号。
+  'server/src/ports/circuit-breaker.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+
   // F13 调度器契约：互斥与心跳是**看门狗的唯一依据**。它出错的形态不是报错，
   // 而是"某个 job 已经连续失败一天了，监控却显示刚刚还成功过"——
   // 那是比宕机更贵的一类失效（没人去看，也就没人发现）。归一化/汇总这两个纯函数是它的全部实现。
