@@ -253,7 +253,11 @@ describe('DB 级约束真的生效（不靠应用层自觉）', () => {
 });
 
 describe('迁移本身', () => {
-  it('001_init 已应用，且 13 张业务表齐全', async () => {
+  it('迁移已应用，且业务表清单与预期逐项一致', async () => {
+    // ⚠️ 标题**刻意不写数字**：它曾经写"13 张业务表"，而正文断言是 16，
+    //    两边都是手写的、都不是真值——加一张表就要改两个地方，
+    //    而这类"标题 + 正文"双份数字正是最容易漂移到互相矛盾的地方（单一来源，F2 铁律）。
+    //    真值只有正文这一处，且加表时它必然先红。
     const applied = await db`select name from pgmigrations order by name`;
     const appliedNames = applied.map((r) => r.name);
     expect(appliedNames).toContain('001_init');
@@ -262,14 +266,20 @@ describe('迁移本身', () => {
     const tables = (
       await db`select tablename from pg_tables where schemaname = 'public' and tablename <> 'pgmigrations' order by tablename`
     ).map((r) => r.tablename);
-    // 13（001）+ 2（002 的 user_events / admin_audit，ADR-29 流 B/C 落点）+ 1（003 的 webhook_events）。
-    // ⚠️ 技术文档 v0.5 §3 仍写"13 张表"，需同步补这三张——见 002_hardening.sql @limitation 二。
-    expect(tables).toHaveLength(16);
+    // 13（001）+ 2（002 的 user_events / admin_audit，ADR-29 流 B/C 落点）
+    // + 1（003 的 webhook_events）+ 1（007 的 country_profiles，F11 单元④）= 17。
+    // ⚠️ 技术文档 v0.5 §3 仍写"13 张表"；ADR-28 写"13 → 17（新增四张）"，
+    //    那份推演的基准是它成文时的 13 张。两者都与当前实际不符，
+    //    统一口径以本断言为准，文档同步已登记在 docs/地基搭建清单.md 的欠账里。
+    //    ADR-28 四张新增中已落地 1 张（country_profiles），
+    //    余下 duty_rates / payment_channels / app_config 属 I1（P1），全部落地后是 20 张。
+    expect(tables).toHaveLength(17);
     expect(tables).toContain('orders');
     expect(tables).toContain('job_runs');
     expect(tables).toContain('user_events');
     expect(tables).toContain('admin_audit');
     expect(tables).toContain('webhook_events');
+    expect(tables).toContain('country_profiles');
   });
 
   it('job_runs 有 seed（否则看门狗永远读不到心跳）', async () => {

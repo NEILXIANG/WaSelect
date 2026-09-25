@@ -162,6 +162,18 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
   },
   'server/src/app/mark-paid.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
 
+  // F11 单元④ 国家档案：它是**配置数据进入进程的唯一门**，而且进门的失败形态全部不报错——
+  // 脏 JSONB 被强转后变成半截对象（表单少一个输入框）、坏正则要等到用户提交才炸、
+  // SELECT 少一列在 strip 下静默丢字段。更关键的是它是**将来所有按国家分支的逻辑共用的数据源**
+  // （地址校验 / 展示币 / 承运商 / 关税文案）：这里错一次，后面每个国家分支都拿到错的东西，
+  // 而每一个都不会报错。100% 的另一个用途是逼"加第二个国家的人"同时补字段级同源用例。
+  'server/src/adapters/country-profiles.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+
   // F12 重试判定：**唯一一种"加了会让事情更糟"的容错**——不重试最多是失败，
   // 而错的重试会制造出本来不存在的第二次扣款，且上下游都认为自己是第一次。
   // 这一组纯函数就是那条红线的全部实现，必须 100%，且每个分类都要有对应用例。

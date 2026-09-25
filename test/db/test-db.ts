@@ -190,8 +190,21 @@ export function ensureTestDb(): Promise<void> {
  * @why 写死名单的失败模式是"加了新表忘了加进名单"——新表的数据会跨用例残留，
  *      表现为"某个用例单跑通过、整套跑就红"，这类幽灵红灯极难归因，
  *      而且必然发生在加新表的人身上（他对残留毫无预期）。动态取表把这个失败模式彻底消除。
- * @limitation 排除 `pgmigrations`（迁移账本）与 `job_runs`（迁移 seed）；
- *              将来若新增"不该清空的字典表"，在这里加白名单并写明原因。
+ * @limitation 排除三类"不该清空的表"，每类都有独立理由：
+ *              ① `pgmigrations` —— 迁移账本，清了会让下一次 migrate 重跑全部迁移；
+ *              ② `job_runs` —— 迁移 seed（D-45：清了看门狗永远读不到心跳）；
+ *              ③ `country_profiles` —— **配置表，不是业务表**（007 种子）。
+ *                 区分口径：业务表的数据是"用例造出来的"，配置表的数据是"环境的一部分"——
+ *                 就像表结构由迁移建、不该被 truncate 一样。清空配置表的后果不是"用例更干净"，
+ *                 而是"测试环境与生产环境不再同构"：生产上这张表永远有 US 那条，
+ *                 测试上被清空后任何读国家档案的代码都拿到空，于是测试在验一条生产上不存在的行为。
+ *              将来若新增"不该清空的字典表"，在这里加白名单并写明属于哪一类。
+ * @limitation ⚠️ "配置表不清空"的代价是：**它一旦被清掉，没有任何机制自动补回 seed**。
+ *              迁移账本仍记着 007 已应用，于是 `migrate up` 认为无事可做，
+ *              表现是"表在、结构在、数据是空的"——读国家档案的代码拿到空而不报错。
+ *              补救方式只有一条：对测试库跑一次 `migrations down` 再 `up`（重放 seed）。
+ *              2026-09-25 做缺陷注入时就真实踩到过一次（临时把配置表放回清空名单 → 跑完 seed 没了）。
+ *              **注入类操作结束后要检查的不只是代码，还有数据库状态。**
  */
 async function truncateTargets(db: Db): Promise<readonly string[]> {
   if (cachedTables !== undefined) return cachedTables;
@@ -199,7 +212,7 @@ async function truncateTargets(db: Db): Promise<readonly string[]> {
     select tablename
     from pg_tables
     where schemaname = 'public'
-      and tablename not in ('pgmigrations', 'job_runs')
+      and tablename not in ('pgmigrations', 'job_runs', 'country_profiles')
     order by tablename`;
   const tables = rows.map((r) => String(r.tablename));
   if (tables.length === 0) {
