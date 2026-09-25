@@ -1,0 +1,8 @@
+<button
+  class="ws-button ws-button--{{type}}"
+  loading="{{loading}}"
+  disabled="{{disabled}}"
+  catchtap="onTap"
+>
+  {{text}}
+</button>

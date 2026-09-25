@@ -1,0 +1,23 @@
+/**
+ * 按钮组件的样式（F14）。
+ *
+ * @why 与 `ws-price` 同一口径：只声明"长什么样"，不声明具体数值，全部走 design token。
+ * @limitation **不设 margin**：按钮放在哪儿、离上下多远是**页面**的决定
+ *            （骨架页里就各自给了 `margin-top`）。组件一旦自带外边距，
+ *            页面想去掉就得写 `margin: 0` 去覆盖——那是"默认值反过来变成负担"的典型。
+ */
+.ws-button {
+  border-radius: var(--ws-radius);
+  font-size: var(--ws-font);
+}
+
+/* 两档是刻意的上限：主操作 / 次操作。再多一档就又变成"每个页面一种强调"。 */
+.ws-button--primary {
+  background: var(--ws-color-fg);
+  color: var(--ws-color-card);
+}
+
+.ws-button--default {
+  background: var(--ws-color-card);
+  color: var(--ws-color-fg);
+}
