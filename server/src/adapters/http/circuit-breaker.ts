@@ -1,0 +1,151 @@
+/**
+ * 职责：熔断器的**状态存放**（F12 第四单元）——把 `ports/circuit-breaker.ts` 的纯状态机
+ *      "放到一个能跨请求活下来的地方"，并给出跳闸/恢复的信号。
+ *
+ * 边界：只管状态与信号；三态怎么迁移在端口里，什么时候调用它在 `fetch-client.ts` 里。
+ *
+ * @why 为什么状态机与存放要分开：状态机是**判定规则**（哪些失败计入、边界是"含"还是"不含"），
+ *      它必须能被纯函数测到；存放是**进程级的副作用**（一个 Map）。
+ *      混在一起的话，"三态迁移对不对"就只能靠"睡 30 秒"来测——那既慢又不稳定。
+ *
+ * @limitation 一：状态在**进程内存**里（一个 Map）。进程重启即全部复位为 closed——
+ *              这是可接受的方向（重启后重新学习上游状态），但意味着
+ *              "刚重启的实例会再打一次故障上游"。多实例部署时每个实例各有一份，
+ *              上游看到的是"N 个实例 × 每实例一个探测"。
+ * @limitation 二：Map **无上限**。key 来自 URL 的主机，正常只有个位数；
+ *              但若出现"每次请求一个新子域"这类形态会无限增长。
+ *              真出现时按 LRU 收口，现在不做（没有真实场景，提前做是猜）。
+ * @limitation 三：**不持久化**。熔断状态不是业务数据，重启丢了不需要补；
+ *              持久化反而会带来"重启后拿着昨天的状态拒绝今天的请求"这一更糟的形态。
+ *
+ * @see ../../ports/circuit-breaker.ts（状态机与契约）；./fetch-client.ts（调用方）；
+ *      docs/地基搭建清单.md F12；docs/自主决策记录.md AJ-61
+ */
+import type { Logger } from '../../logger.js';
+import type { HttpFailureKind } from '../../ports/http-client.js';
+import {
+  circuitAfter,
+  circuitBefore,
+  countsTowardTrip,
+  DEFAULT_BREAKER_POLICY,
+  initialCircuit,
+  type BreakerPolicy,
+  type CircuitSnapshot,
+  type CircuitState,
+} from '../../ports/circuit-breaker.js';
+
+/**
+ * 请求被熔断拒绝。
+ *
+ * @why 单独一个类而不是裸 `Error`：调用方需要**区分**"上游报错"与"我们主动没发"。
+ *      前者可能要退款/改状态，后者只是"稍后再试"——用同一类错误表达会让调用方写
+ *      `err.message.includes(...)` 这种脆弱判断。
+ */
+export class CircuitOpenError extends Error {
+  readonly key: string;
+  /** 还要等多少毫秒才可能放行（调用方可以据此提示用户）。 */
+  readonly retryAfterMs: number;
+
+  constructor(key: string, retryAfterMs: number) {
+    super(`出站请求被熔断拒绝（上游「${key}」最近连续失败）：约 ${retryAfterMs}ms 后重试`);
+    this.name = 'CircuitOpenError';
+    this.key = key;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+export interface CircuitBreakerOptions {
+  policy?: BreakerPolicy;
+  /** 时钟（默认 `Date.now`）。测试注入以把 30 秒冷却走完。 */
+  now?: () => number;
+  /** 跳闸 / 恢复的日志出口；不传则不记。 */
+  logger?: Logger;
+  /** 状态迁移回调（告警接这里；也可用于测试断言）。 */
+  onStateChange?: (key: string, from: CircuitState, to: CircuitState) => void;
+}
+
+/** 出发前的判定结果。 */
+export interface CircuitGate {
+  allowed: boolean;
+  state: CircuitState;
+  /** 不放行时还要等多久（放行时为 0）。 */
+  retryAfterMs: number;
+}
+
+export interface CircuitBreaker {
+  /** 出发前调用。**不放行时不改变状态**（见端口里 `circuitBefore` 的 @why）。 */
+  before(key: string): CircuitGate;
+  /**
+   * 一次尝试结束后调用。
+   * @param kind `none` = 成功；其余按 `countsTowardTrip` 判定是否计入。
+   */
+  after(key: string, kind: HttpFailureKind): void;
+  /** 当前状态（排障与测试用）。 */
+  snapshot(key: string): CircuitSnapshot;
+  /** 全部 key 的快照：`/readyz` 与"到底是谁在拒绝"这类问题用。 */
+  snapshots(): Record<string, CircuitSnapshot>;
+}
+
+export function createCircuitBreaker(opts: CircuitBreakerOptions = {}): CircuitBreaker {
+  const policy = opts.policy ?? DEFAULT_BREAKER_POLICY;
+  const now = opts.now ?? Date.now;
+  const logger = opts.logger;
+  const onStateChange = opts.onStateChange;
+  const states = new Map<string, CircuitSnapshot>();
+
+  /** 写入并（在状态真的变了时）发信号。 */
+  function commit(key: string, from: CircuitSnapshot, to: CircuitSnapshot): void {
+    states.set(key, to);
+    if (from.state === to.state) return;
+    onStateChange?.(key, from.state, to.state);
+    if (logger === undefined) return;
+
+    if (to.state === 'open') {
+      // 用 warn：这是"我们开始拒绝请求了"，是需要人知道的事，不能只在 debug 里
+      logger.warn('circuit_open', {
+        ctx: { key, threshold: policy.failureThreshold, cooldown_ms: policy.cooldownMs },
+      });
+    } else if (to.state === 'closed') {
+      // 用 info：恢复同样要有信号——否则"已经好了"这件事没有任何痕迹
+      logger.info('circuit_closed', { ctx: { key } });
+    }
+  }
+
+  return {
+    before(key) {
+      const current = states.get(key) ?? initialCircuit();
+      const { allowed, next } = circuitBefore(current, policy, now());
+      commit(key, current, next);
+      if (allowed) return { allowed: true, state: next.state, retryAfterMs: 0 };
+      const openedAt = next.openedAtMs;
+      // openedAt 为 null 只能来自"状态被别处写坏了"：端口已按 fail-closed 判定不放行，
+      // 这里给不出准确的等待时间就报 0——报 0 比报一个凭空的数字诚实。
+      // 防御分支（AJ-37 口径）：正常路径不可达，显式 ignore 并留理由，不写假测试。
+      /* v8 ignore next 3 */
+      if (openedAt === null) {
+        return { allowed: false, state: next.state, retryAfterMs: 0 };
+      }
+      // ⚠️ 会被 clamp 到 0 的真实场景：half_open 的探测名额用完（此时冷却早就过了），
+      //    于是 cooldownMs - elapsed 是负数——语义是"不是还要等冷却，是这一轮名额没了"。
+      const retryAfterMs = Math.max(0, policy.cooldownMs - (now() - openedAt));
+      return { allowed: false, state: next.state, retryAfterMs };
+    },
+
+    after(key, kind) {
+      const current = states.get(key) ?? initialCircuit();
+      // ⚠️ "不计入"等价于"这次是好的"：4xx 是上游正确地答复了一个错误请求，
+      //    说明它活着；half_open 的探测若返回 4xx，也必须据此复位——
+      //    否则 half_open 的探测名额用完又不回到 open，会**永久卡住**（再也放不了行）。
+      const ok = !countsTowardTrip(kind);
+      commit(key, current, circuitAfter(current, policy, now(), ok));
+    },
+
+    snapshot(key) {
+      return states.get(key) ?? initialCircuit();
+    },
+
+    snapshots() {
+      return Object.fromEntries(states);
+    },
+  };
+}

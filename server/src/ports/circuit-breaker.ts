@@ -92,10 +92,7 @@ export function initialCircuit(): CircuitSnapshot {
  */
 export function countsTowardTrip(kind: HttpFailureKind): boolean {
   return (
-    kind === 'timeout' ||
-    kind === 'network' ||
-    kind === 'server_error' ||
-    kind === 'rate_limited'
+    kind === 'timeout' || kind === 'network' || kind === 'server_error' || kind === 'rate_limited'
   );
 }
 

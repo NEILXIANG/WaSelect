@@ -155,6 +155,16 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     branches: 100,
     statements: 100,
   },
+  // F12 熔断**状态存放**：状态机对了不代表熔断成立——状态还得**跨请求活下来**。
+  // 写错的形态是"每个请求都当成第一次失败"，于是永远跳不了闸、门却一直绿着；
+  // 另一个形态是"key 不隔离"，一个上游挂了把所有上游一起拒掉（Stripe 故障 → 微信也不能用）。
+  // 这两条都只有跨调用的状态断言能测到，纯函数层测不出来，所以单独钉 100%。
+  'server/src/adapters/http/circuit-breaker.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
 
   // F13 调度器契约：互斥与心跳是**看门狗的唯一依据**。它出错的形态不是报错，
   // 而是"某个 job 已经连续失败一天了，监控却显示刚刚还成功过"——
