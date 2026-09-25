@@ -11,6 +11,7 @@
  *              这不是待办遗漏，是刻意把"登录业务"留到业务期，避免骨架里长出半成品逻辑。
  */
 import { createRequester } from './utils/request.js';
+import { createWxApi } from './utils/wx-api.js';
 import { API_BASE } from './config.js';
 
 App({
@@ -24,13 +25,17 @@ App({
   },
 
   onLaunch() {
-    this.globalData.token = wx.getStorageSync('token') || '';
+    // ⚠️ 宿主能力**只在这里取一次**，然后往下传：app 是装配层，
+    //    它知道"跑在小程序里"这件事，下面的 request / 页面不该再关心。
+    const wxApi = createWxApi();
+    this.globalData.token = wxApi.getStorageSync('token');
     this.globalData.api = createRequester({
+      wx: wxApi,
       getToken: () => this.globalData.token,
       log: (fields) => {
         if (fields.trace_id) this.globalData.lastTraceId = fields.trace_id;
         // 骨架期只用实时日志：ADR-29 的 /beacon 落库上报待 F5 补完
-        wx.getRealtimeLogManager?.()?.info?.(fields.event ?? 'api', JSON.stringify(fields));
+        wxApi.getRealtimeLogManager()?.info?.(fields.event ?? 'api', JSON.stringify(fields));
       },
     });
   },
@@ -38,6 +43,8 @@ App({
   /** 写入 token（骨架期由页面手动粘贴；真实流程由登录回调调用）。 */
   setToken(token) {
     this.globalData.token = token;
-    wx.setStorageSync('token', token);
+    // ⚠️ 这里没有注入口（app.js 本身不可测，它是装配层）：storage 写失败会**原样抛出**，
+    //    不吞——"token 没存上"若被吞掉，表现是"用户每次都要重新登录"且日志里什么都没有。
+    createWxApi().setStorageSync('token', token);
   },
 });

@@ -24,6 +24,7 @@ import { E2E_USER, startSkeleton, userToken, type SkeletonServer } from './harne
 import { ApiError, NETWORK_ERROR_CODE, createRequester } from '../../miniprogram/utils/request.js';
 import { createIntentIdempotency } from '../../miniprogram/utils/idempotency.js';
 import { newTraceId } from '../../miniprogram/utils/trace.js';
+import { createWxApi } from '../../miniprogram/utils/wx-api.js';
 
 let db: Db;
 let app: SkeletonServer;
@@ -39,7 +40,8 @@ beforeAll(async () => {
   app = await startSkeleton(db);
   beacons = [];
   api = createRequester({
-    request: fakeWxRequest,
+    // 宿主能力注入走 F14 的封装层（`wx: createWxApi({ request })`），不再传单个 `request`
+    wx: createWxApi({ request: fakeWxRequest }),
     getToken: () => token,
     // request.js 是 js（allowJs 未开 checkJs），回调参数无推断，这里显式标注
     log: (fields: unknown) => beacons.push(fields as Record<string, unknown>),

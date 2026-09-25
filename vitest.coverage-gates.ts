@@ -15,8 +15,20 @@
  * @see vitest.config.mts；test/config/coverage-threshold.unit.test.ts；docs/自主决策记录.md AJ-46
  */
 
-/** 参与统计的源码范围。测试文件不算（它们自己不需要被自己覆盖）。 */
-export const COVERAGE_INCLUDE: string[] = ['packages/shared/src/**/*.ts', 'server/src/**/*.ts'];
+/**
+ * 参与统计的源码范围。测试文件不算（它们自己不需要被自己覆盖）。
+ *
+ * ⚠️ 小程序侧**只收 `.ts`**：`miniprogram/` 里还有一批 `.js`（request / idempotency / trace / app / config），
+ *    它们有单测但当前不在统计范围内——把它们一起收进来的话，全局 85% 会被一堆 0% 的文件拉垮，
+ *    结果是要么放松底线（等于没有底线），要么一次性补几十条测试（那是另一个单元）。
+ *    先只收 `.ts`：新写的 TS 模块**自动**进统计（fail-closed，与 `server/src` 同口径），
+ *    JS 的存量转换另立单元处理。
+ */
+export const COVERAGE_INCLUDE: string[] = [
+  'packages/shared/src/**/*.ts',
+  'server/src/**/*.ts',
+  'miniprogram/**/*.ts',
+];
 
 export const COVERAGE_EXCLUDE: string[] = ['**/*.test.ts'];
 
@@ -202,6 +214,11 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     branches: 100,
     statements: 100,
   },
+
+  // F14 第一单元：宿主能力封装。它是**小程序侧唯一的第三方入口**——
+  // 它错了的形态是"宿主缺失时崩在业务行"，或者"getStorageSync 读出个对象"。
+  // 与 server 侧的 ports 同强度（100%）：两边都是"边界层"，边界层的价值就在于它没有第二种实现。
+  'miniprogram/utils/wx-api.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
 
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。

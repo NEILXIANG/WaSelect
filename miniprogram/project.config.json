@@ -9,6 +9,10 @@
       {
         "type": "file",
         "value": "**/*.unit.test.ts"
+      },
+      {
+        "type": "file",
+        "value": "**/*.fixture.js"
       }
     ],
     "include": []

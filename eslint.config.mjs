@@ -233,6 +233,41 @@ export default tseslint.config(
       },
     },
   },
+  {
+    /**
+     * F14：小程序端**禁止直接引用宿主全局 `wx`**——一律走 `utils/wx-api.js` 的封装。
+     *
+     * @why 这条规则是上一块的**反向收紧**：上一块把 `wx` 声明为合法全局（否则 no-undef 误报），
+     *      但"合法"不等于"可以直接用"。业务代码里散落的 `wx.xxx` 会带来三个问题：
+     *      ① 不可测（Node 侧引用就崩，于是每个模块各发明一套绕法——本仓库在封装之前已有三种）；
+     *      ② 错误形态不可控（宿主缺失时崩在 `undefined.request`，报错指向业务行）；
+     *      ③ 没有类型（`getStorageSync` 返回 unknown，调用方各写各的断言）。
+     *      写了文档、写了 CLAUDE.md 都拦不住——只有会红的规则拦得住。
+     *
+     * @why 用核心规则 `no-restricted-globals` 而不是自己写 AST 选择器：
+     *      它是官方规则、零依赖，且**不会误伤注释**（注释里提到 `wx.request` 是常事，
+     *      自己写正则扫描会把注释里的 `wx.` 也报出来——那种假红会逼人去改注释措辞）。
+     *
+     * @limitation 一：只挡**全局引用**。局部变量叫 `wx` 不算（作用域分析会跳过），
+     *              所以测试里 `const h = fakeWx()` 不受影响；但为了可读性仍建议别起这个名字。
+     * @limitation 二：只挡 `wx` 这一个名字。`App` / `Page` / `Component` / `getApp` 同样
+     *              是宿主全局，但它们只在**页面/组件/入口文件**里出现且无法收敛到一处
+     *              （小程序框架要求它们就在那里），强行收口只会多一层无意义的转发。
+     */
+    files: ['miniprogram/**/*.{js,ts}'],
+    ignores: ['miniprogram/utils/wx-api.ts'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        {
+          name: 'wx',
+          message:
+            '不要直接使用宿主全局 wx —— 走 utils/wx-api.js 的 createWxApi()。' +
+            '需要新的 wx 能力请先在 wx-api.js 登记一个方法（F14）。',
+        },
+      ],
+    },
+  },
 
   /**
    * F10 分层与依赖方向（R2-1）——把"架构约定"变成**会红的检查**。
