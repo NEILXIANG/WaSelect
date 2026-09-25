@@ -13,7 +13,13 @@ page {
   --ws-color-muted: #8a8a8a;
   --ws-color-error: #c0392b;
 
+  /* ⚠️ 间距只有两档（大/小）。**刻意不提供任意档位**——
+     每加一档就多一种"这个页面用了另一档"的可能，最后版式又散了。
+     真需要新档位时在这里加，并给它一个**说明用途**的名字（如 --ws-space-card），不要叫 -xs/-xxs。 */
   --ws-space: 24rpx;
+  --ws-space-sm: 12rpx;
+  /* 分隔线宽度：1rpx 在 2x/3x 屏上是"最细可见线"，写死在页面里会让改线宽变成逐页改。 */
+  --ws-border-width: 1rpx;
   --ws-radius: 12rpx;
   --ws-font: 28rpx;
   --ws-font-sm: 24rpx;

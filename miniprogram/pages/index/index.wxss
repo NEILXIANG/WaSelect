@@ -1,7 +1,9 @@
-/* 只放本页特有样式；颜色与间距一律用 app.wxss 里的 token，不在这里写死值。 */
+/* 只放本页特有样式；颜色与间距一律用 app.wxss 里的 token，不在这里写死值。
+ * （这条不是口号：miniprogram/design-token.unit.test.ts 会扫描除 app.wxss 之外的所有 wxss，
+ *   出现硬编码色值或尺寸字面量会直接红。） */
 .input {
-  margin-top: 12rpx;
-  padding: 12rpx 0;
+  margin-top: var(--ws-space-sm);
+  padding: var(--ws-space-sm) 0;
   font-size: var(--ws-font-sm);
-  border-bottom: 1rpx solid var(--ws-color-muted);
+  border-bottom: var(--ws-border-width) solid var(--ws-color-muted);
 }
