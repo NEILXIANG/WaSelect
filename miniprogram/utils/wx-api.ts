@@ -12,8 +12,8 @@
  *      ③ **没有类型**：`wx.getStorageSync` 返回 `unknown`，每个调用方各写各的断言。
  *      收敛到一个入口后，这三点各有一处答案。
  *
- * @limitation 一：**只声明当前真用到的四个能力**（request / getStorageSync / setStorageSync /
- *              getRealtimeLogManager）。新增一个 wx API 就在这里加一个方法——
+ * @limitation 一：**只声明当前真用到的能力**（request / getStorageSync / setStorageSync /
+ *              removeStorageSync / getRealtimeLogManager）。新增一个 wx API 就在这里加一个方法——
  *              不要预先铺满官方 API，铺了就会有人依赖上没被测试过的封装（本项目多次踩过"提前做是猜"）。
  * @limitation 二：`getStorageSync` 的契约是**只取字符串**：读到的不是字符串时一律当"没存过"（返回空串）。
  *              要存对象就先 JSON 序列化——小程序 storage 本身也是这个语义。
@@ -75,6 +75,7 @@ export interface WxApi {
   /** 取字符串值；不存在或非字符串 → 空串。@see @limitation 二 */
   getStorageSync(key: string): string;
   setStorageSync(key: string, value: string): void;
+  removeStorageSync(key: string): void;
   getRealtimeLogManager(): RealtimeLogger | undefined;
 }
 
@@ -83,6 +84,7 @@ interface WxHost {
   request(option: WxRequestOption): void;
   getStorageSync(key: string): unknown;
   setStorageSync(key: string, value: unknown): void;
+  removeStorageSync(key: string): void;
   getRealtimeLogManager?: () => RealtimeLogger | undefined;
 }
 
@@ -123,6 +125,9 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     },
     setStorageSync: (key, value) => {
       host().setStorageSync(key, value);
+    },
+    removeStorageSync: (key) => {
+      host().removeStorageSync(key);
     },
     getRealtimeLogManager: () => host().getRealtimeLogManager?.(),
   };

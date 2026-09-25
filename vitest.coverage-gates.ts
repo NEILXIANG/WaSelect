@@ -219,6 +219,12 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
   // 它错了的形态是"宿主缺失时崩在业务行"，或者"getStorageSync 读出个对象"。
   // 与 server 侧的 ports 同强度（100%）：两边都是"边界层"，边界层的价值就在于它没有第二种实现。
   'miniprogram/utils/wx-api.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  // F14 本地存储：它的三种失效形态**全部不报错**——key 不前缀会与同 appid 内的其它键互撞
+  // （表现为"数据突然不对"）、损坏的 JSON 一抛就是**启动崩溃**、remove 写回空串只是"看起来没了"。
+  // 另有一条只有这条阈值能压住的事：上面十来条用例全走注入，
+  // 于是"不注入时连的是真实宿主"这条**生产上唯一在跑的路径**天然没人覆盖——
+  // 默认值写成空实现会让所有数据静默消失，绿着出事。
+  'miniprogram/utils/storage.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
 
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。

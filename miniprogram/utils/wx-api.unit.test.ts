@@ -42,6 +42,10 @@ function stubHost(
       seen.push(`set:${k}`);
       storage[k] = v;
     },
+    removeStorageSync: (k: string) => {
+      seen.push(`remove:${k}`);
+      delete storage[k];
+    },
     ...(over.logger === undefined ? {} : { getRealtimeLogManager: () => over.logger }),
   });
   return { seen, storage, requested };
@@ -53,6 +57,7 @@ describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => 
     expect(() => api.request({ url: 'https://x.test' })).toThrow(/wx 宿主不存在/);
     expect(() => api.getStorageSync('token')).toThrow(/wx 宿主不存在/);
     expect(() => api.setStorageSync('token', 't')).toThrow(/wx 宿主不存在/);
+    expect(() => api.removeStorageSync('token')).toThrow(/wx 宿主不存在/);
     expect(() => api.getRealtimeLogManager()).toThrow(/wx 宿主不存在/);
   });
 
@@ -90,6 +95,13 @@ describe('走真实宿主时的行为', () => {
     api.setStorageSync('token', 'tk-2');
     expect(storage.token).toBe('tk-2');
     expect(api.getStorageSync('token')).toBe('tk-2');
+  });
+
+  it('removeStorageSync 真的删掉（不是写回空串——那条 key 会继续占配额）', () => {
+    const { storage, seen } = stubHost({ storage: { token: 'tk-2' } });
+    createWxApi().removeStorageSync('token');
+    expect(storage.token).toBeUndefined();
+    expect(seen).toContain('remove:token');
   });
 
   it('request 原样转发给宿主（不做任何改写——改写就等于又发明一套 HTTP 接口）', () => {
