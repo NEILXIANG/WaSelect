@@ -1,0 +1,50 @@
+<!--
+  组件样板页（F14）：把每个组件的每一种状态摆在一页上，供真机（L4）人工验收。
+
+  ⚠️ 「漏传价格」那个 ws-price 是**故意**的：它每次打开都会在控制台报一条
+  「金额必须是有限数」——那是我们要在真机上确认的行为（渲染空白，而不是 ¥0）。
+-->
+<view class="page">
+  <view class="card">
+    <text class="label">ws-price · 三档尺寸</text>
+    <view class="row"><ws-price jpy="{{1234}}" size="sm" /></view>
+    <view class="row"><ws-price jpy="{{1234}}" size="md" /></view>
+    <view class="row"><ws-price jpy="{{1234}}" size="lg" /></view>
+  </view>
+
+  <view class="card">
+    <text class="label">ws-price · 金额形态</text>
+    <view class="row">
+      <text class="label">整数</text>
+      <ws-price jpy="{{1234567}}" />
+    </view>
+    <view class="row">
+      <text class="label">负数（退款）</text>
+      <ws-price jpy="{{-1234}}" />
+    </view>
+    <view class="row">
+      <text class="label">零</text>
+      <ws-price jpy="{{0}}" />
+    </view>
+    <view class="row">
+      <text class="label">漏传（应是空白，不是 ¥0）</text>
+      <ws-price />
+    </view>
+  </view>
+
+  <view class="card">
+    <text class="label">ws-button · 两档类型（点了计数 +1）</text>
+    <ws-button text="primary" type="primary" bindtap="onCount" />
+    <ws-button text="default" type="default" bindtap="onCount" />
+  </view>
+
+  <view class="card">
+    <text class="label">ws-button · 处理中 / 禁用（点了**不该**计数）</text>
+    <ws-button text="loading（点了不计数）" loading="{{true}}" bindtap="onCount" />
+    <ws-button text="disabled（点了不计数）" disabled="{{true}}" bindtap="onCount" />
+    <view class="row">
+      <text class="label">点击计数</text>
+      <text class="value">{{taps}}</text>
+    </view>
+  </view>
+</view>

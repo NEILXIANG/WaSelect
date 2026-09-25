@@ -1,0 +1,7 @@
+{
+  "navigationBarTitleText": "组件样板",
+  "usingComponents": {
+    "ws-price": "/components/ws-price/index",
+    "ws-button": "/components/ws-button/index"
+  }
+}

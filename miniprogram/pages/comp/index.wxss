@@ -1,0 +1,14 @@
+/**
+ * 组件样板页的样式（F14）。
+ *
+ * @why 只做两件事：给组件之间留间距、让自定义组件独占一行。
+ *      间距一律走 design token——这一页虽然是"开发用页"，
+ *      但它同样受"改版只改 token"这条规则约束：规则一旦有例外，就会有人照着例外写。
+ * @limitation 这里给 `ws-button` 加外边距是**页面**的决定（组件刻意不自带 margin，
+ *              @see components/ws-button/index.wxss）；换到别的页面想去掉，改这里即可。
+ */
+ws-price,
+ws-button {
+  display: block;
+  margin-top: var(--ws-space-sm);
+}
