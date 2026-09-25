@@ -13,9 +13,13 @@
  *             但停机用例会**断言退出码是 0**——"信号编号漏进退出码"这类缺陷在装配层
  *             看得见，不该只留给产物级用例去抓（2026-09-23 实抓一次）。
  */
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHmac, randomUUID } from 'node:crypto';
 import { bootstrap, shouldMountSkeleton, type Runtime } from './main.js';
-import { ensureTestDb, TEST_DB_URL } from '../../test/db/test-db.js';
+import { signToken } from './app/auth.js';
+import { PAY_CALLBACK_PREFIX, PAY_CHANNELS_PATH } from './app/pay-routes.js';
+import type { Db } from './adapters/db.js';
+import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../test/db/test-db.js';
 import { emitRealSignal } from '../../test/signal-harness.js';
 
 /** 组装根测试专用端口（与 e2e 的 0 端口不冲突；db project 串行，彼此也不撞）。 */
@@ -276,4 +280,189 @@ describe('组装根 bootstrap（A1）', () => {
 afterAll(() => {
   // 保险：任何一条用例漏了 uninstall，这里兜住，避免污染其它测试文件的信号监听器计数
   expect(process.listeners('SIGTERM').length).toBeLessThanOrEqual(1);
+});
+
+/**
+ * 配置驱动的通道下线（二次审查 P1-NEW-1 的**链路级**证明）。
+ *
+ * @why e2e harness 的 `mockRegistry(enabled)` 手工构造注册表，**绕过了
+ *      `buildPaymentRegistry`**——而二次审查批次 A 改的恰恰是这个函数
+ *      （配置 → listed 集合 → enabled 派生 → offline 清单 → mock 例外）。
+ *      单测证明装配函数本身，e2e 证明注册表下游；唯有走**真 bootstrap**
+ *      （真 loadConfig + 真装配 + 真路由 + 真库）才能证明"运维改配置重启"
+ *      这个动作在真实链路上的完整效果。这是"各件各自绿、拼起来有缝"的
+ *      典型盲区，本 describe 把它钉死。
+ */
+describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
+  const PORT_LINK = 4613;
+  const MOCK_SECRET = 'main-db-offline-mock-secret';
+  const LINK_USER = 'u-link';
+  let db: Db;
+
+  beforeAll(() => {
+    db = testDb();
+  });
+
+  beforeEach(async () => {
+    await resetTestDb(db);
+    await db`insert into users (id, openid) values (${LINK_USER}, 'o-link') on conflict (id) do nothing`;
+  });
+
+  /** 与 bootstrap 装配的 JWT 配置同源（main.ts: issuer 写死 'waselect'，secret 来自 env）。 */
+  function linkToken(env: Record<string, string>): Promise<string> {
+    return signToken(
+      { sub: LINK_USER, role: 'user' },
+      { secret: env.JWT_SECRET as string, issuer: 'waselect' },
+    );
+  }
+
+  /**
+   * 与 test/e2e/harness.ts 的 signMockCallback 同一算法（HMAC-SHA256 hex）。
+   * 不跨层 import：e2e 可以依赖 db 层 helper，反过来会把层次倒置。
+   */
+  function sign(body: string, secret: string): string {
+    return createHmac('sha256', secret).update(Buffer.from(body)).digest('hex');
+  }
+
+  async function shutdown(rt: Runtime | undefined): Promise<void> {
+    rt?.uninstallSignals();
+    rt?.uninstallProcessErrors();
+    await rt?.server.close().catch(() => undefined);
+    await rt?.db.end().catch(() => undefined);
+  }
+
+  async function createOrder(port: number, env: Record<string, string>): Promise<string> {
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/skeleton/orders`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${await linkToken(env)}`,
+        'content-type': 'application/json',
+        'idempotency-key': `link-${randomUUID()}`,
+      },
+      body: '{}',
+    });
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { order_id: string }).order_id;
+  }
+
+  function channelsUrl(port: number): string {
+    return `http://127.0.0.1:${port}${PAY_CHANNELS_PATH}?country=US&currency=JPY&amount_jpy=10000`;
+  }
+
+  it('通道从 PAYMENT_CHANNELS 删掉 → 入口消失；在途回调仍落账（含启动日志三清单）', async () => {
+    // ── 服务 A：mock 在列（PAYMENT_CHANNELS=mock，来自 baseEnv）──
+    const envA = { ...baseEnv(PORT_LINK), MOCK_CALLBACK_SECRET: MOCK_SECRET };
+    let rt = await bootstrap({
+      env: envA,
+      logDestination: { write: () => undefined },
+      exit: () => undefined,
+    });
+    let orderId = '';
+    try {
+      await expect((await fetch(channelsUrl(PORT_LINK))).json()).resolves.toEqual({
+        // icon 来自 CHANNEL_DEFAULTS——e2e harness 的手工注册表没配 icon，
+        // 这条断言正是"真装配 vs 手工装配"漂移的探测器，不要随手删掉它
+        items: [{ channel: 'mock', entryMode: 'in_app', icon: 'flask', label: '模拟支付' }],
+      });
+      // 在途支付：单是通道下线**之前**建的
+      orderId = await createOrder(PORT_LINK, envA);
+    } finally {
+      await shutdown(rt);
+    }
+
+    // ── 服务 B：mock 从 PAYMENT_CHANNELS 删掉（PAYMENT_CHANNELS=stripe 占位，
+    //    但 stripe 密钥不全被静默跳过；mock 凭显式密钥保留下线注册）──
+    const { lines, write } = sink();
+    rt = await bootstrap({
+      env: { ...envA, PAYMENT_CHANNELS: 'stripe' },
+      logDestination: { write },
+      exit: () => undefined,
+    });
+    try {
+      // ① 入口消失：mock 已下线、stripe 未注册 → 空列表（前端显示"暂无可用支付方式"，不是报错）
+      await expect((await fetch(channelsUrl(PORT_LINK))).json()).resolves.toEqual({ items: [] });
+
+      // ② 启动日志三清单并列（批次 A 新增）：configured / registered / offline 各自有含义，
+      //    "下线通道的在途订单还活着"是运营事实，必须在日志里可见
+      const regLine = lines.find((l) => l.includes('payment_channels_registered'));
+      expect(regLine).toBeDefined();
+      expect(regLine).toContain('"configured":["stripe"]');
+      expect(regLine).toContain('"registered":["mock"]');
+      expect(regLine).toContain('"offline":["mock"]');
+
+      // ③ 在途回调照样落账——钱不能因为运维改配置而丢
+      const body = JSON.stringify({
+        event_id: 'evt-link-offline',
+        type: 'payment.succeeded',
+        order_id: orderId,
+        provider_ref: 'cs_1',
+      });
+      const res = await fetch(`http://127.0.0.1:${PORT_LINK}${PAY_CALLBACK_PREFIX}/mock`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-mock-signature': sign(body, MOCK_SECRET),
+        },
+        body,
+      });
+      expect(res.status).toBe(200);
+      const rows = await db`select status from orders where id = ${orderId}`;
+      expect(rows[0]?.status).toBe('paid');
+      const events =
+        await db`select status from order_events where order_id = ${orderId} order by id`;
+      expect(events.map((r) => r.status)).toEqual(['created', 'paid']);
+    } finally {
+      await shutdown(rt);
+    }
+  });
+
+  it('mock 未列出且未显式配密钥 → 不注册（公开占位值不能开门）：回调 40001，零留痕', async () => {
+    const env = { ...baseEnv(PORT_LINK), PAYMENT_CHANNELS: 'stripe' }; // 刻意不给 MOCK_CALLBACK_SECRET
+    const rt = await bootstrap({
+      env,
+      logDestination: { write: () => undefined },
+      exit: () => undefined,
+    });
+    try {
+      await expect((await fetch(channelsUrl(PORT_LINK))).json()).resolves.toEqual({ items: [] });
+      const orderId = await createOrder(PORT_LINK, env);
+
+      // 即使用开发占位密钥（公开值）正确签名，没注册就是没注册——响亮 40001，
+      // 不验签、不落 webhook_events（与"编造通道名"同形态，但语义是"配置没让它存在"）
+      const body = JSON.stringify({
+        event_id: 'evt-link-nokey',
+        type: 'payment.succeeded',
+        order_id: orderId,
+        provider_ref: 'cs_1',
+      });
+      const res = await fetch(`http://127.0.0.1:${PORT_LINK}${PAY_CALLBACK_PREFIX}/mock`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-mock-signature': sign(body, 'dev-mock-callback-secret-do-not-use-in-prod'),
+        },
+        body,
+      });
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toMatchObject({ code: 40001 });
+      const logged =
+        await db`select event_id from webhook_events where event_id = 'evt-link-nokey'`;
+      expect(logged.length).toBe(0);
+      const rows = await db`select status from orders where id = ${orderId}`;
+      expect(rows[0]?.status).toBe('created');
+    } finally {
+      await shutdown(rt);
+    }
+  });
+
+  it('PAYMENT_CHANNELS 全空 → 启动直接拒绝（min(1)：不许"没有任何支付入口"的配置静默上线）', async () => {
+    const { write } = sink();
+    await expect(
+      bootstrap({
+        env: { ...baseEnv(PORT_LINK), PAYMENT_CHANNELS: '' },
+        logDestination: { write },
+        exit: () => undefined,
+      }),
+    ).rejects.toThrow(/配置校验失败/);
+  });
 });

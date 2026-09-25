@@ -15,6 +15,12 @@
  * @limitation `withRawBody` 默认 **true**。回调验签依赖未经解析的原始字节，
  *              "配错"时的症状是验签永远失败，排查会误导向密钥/机构——
  *              所以 `skeleton.e2e.test.ts` 里有一条专门的断链用例把它钉住。
+ * @limitation 二：**注册表是手工装配的**（`mockRegistry`），刻意绕过生产装配函数
+ *              `buildPaymentRegistry`（换来轻量与可控时钟）。这意味着"配置 → 装配"
+ *              这一段的改动在本层**测不到**——该接缝由 `server/src/main.db.test.ts`
+ *              的「配置驱动的通道下线」describe（真 bootstrap）兜底，见
+ *              `docs/测试策略与验证门禁.md` §3.3 链路覆盖矩阵第一行。
+ *              新增"harness 绕过生产逻辑"的捷径时，必须同步检查矩阵里有没有对应行。
  */
 import { createHmac } from 'node:crypto';
 import { signToken, type AuthConfig } from '../../server/src/app/auth.js';
@@ -29,6 +35,8 @@ import { createIdempotencyExecutor } from '../../server/src/adapters/idempotency
 import { createEventBus } from '../../server/src/adapters/event-bus.js';
 import { createPaymentRegistry } from '../../server/src/adapters/payment/registry.js';
 import { createMockProvider } from '../../server/src/adapters/payment/mock.js';
+import { createStripeCheckoutProvider } from '../../server/src/adapters/payment/stripe-checkout.js';
+import type { HttpClient } from '../../server/src/ports/http-client.js';
 import { systemIdGen } from '../../server/src/adapters/ids.js';
 import type { IdGen } from '../../server/src/ports/ids.js';
 import { registerBusinessEventLog } from '../../server/src/app/business-events.js';
@@ -63,6 +71,8 @@ export const E2E_ORDER_NO_DATE = '260103';
 
 /** mock 通道在注册表里的配置（e2e 装配用）。 */
 export const E2E_MOCK_CHANNEL = 'mock';
+/** stripe 通道的 endpoint 密钥（e2e 装配用；形状仿 `whsec_...`，值本身是测试假数据）。 */
+export const E2E_STRIPE_WHSEC = 'whsec_e2e_test_secret';
 
 export interface SkeletonServer {
   server: StartedServer;
@@ -72,32 +82,56 @@ export interface SkeletonServer {
 }
 
 /**
- * 造一个只含 `mock` 通道的注册表。
+ * 造 e2e 注册表；`stripeHttp` 提供时**额外**注册 stripe 通道（验签走真 HMAC，
+ * 出站调用走传入的替身——通常是 test/helpers/fake-stripe-http.ts 的"有脾气的假实现"）。
  *
- * @param enabled 是否启用（= 通道配置里的 `enabled`）。传 false 即"该通道已下线"，
+ * @param enabled mock 通道是否启用（= 通道配置里的 `enabled`）。传 false 即"该通道已下线"，
  *                用于验证"下线后入口消失、但老单回调仍能落账"。
  */
 function mockRegistry(
   enabled: boolean,
   idGen: IdGen,
   now: string,
+  stripeHttp?: HttpClient,
 ): ReturnType<typeof createPaymentRegistry> {
-  const registry = createPaymentRegistry({
-    configs: [
-      {
-        channel: E2E_MOCK_CHANNEL,
-        enabled,
-        priority: 10,
-        countries: ['*'],
-        currencies: ['JPY'],
-        label: '模拟支付',
-        options: { secret: E2E_CALLBACK_SECRET },
-      },
-    ],
-  });
+  const configs = [
+    {
+      channel: E2E_MOCK_CHANNEL,
+      enabled,
+      priority: 10,
+      countries: ['*'],
+      currencies: ['JPY'],
+      label: '模拟支付',
+      options: { secret: E2E_CALLBACK_SECRET },
+    },
+    ...(stripeHttp !== undefined
+      ? [
+          {
+            channel: 'stripe',
+            enabled: true,
+            priority: 20,
+            countries: ['*'],
+            currencies: ['JPY', 'USD'],
+            label: '银行卡',
+            options: {
+              secretKey: 'sk_test_e2e_fake',
+              webhookSecret: E2E_STRIPE_WHSEC,
+              successUrl: 'https://checkout.e2e.example/pay/done',
+              cancelUrl: 'https://checkout.e2e.example/pay/cancelled',
+            },
+          },
+        ]
+      : []),
+  ];
+  const registry = createPaymentRegistry({ configs });
   registry.register(E2E_MOCK_CHANNEL, (cfg) =>
     createMockProvider(cfg, { clock: fixedClock(now), idGen }),
   );
+  if (stripeHttp !== undefined) {
+    registry.register('stripe', (cfg) =>
+      createStripeCheckoutProvider(cfg, { http: stripeHttp, clock: fixedClock(now), idGen }),
+    );
+  }
   return registry;
 }
 
@@ -110,6 +144,8 @@ export async function startSkeleton(
     idGen?: IdGen;
     /** mock 通道是否启用（默认启用）；false = 模拟"通道已下线"。 */
     mockEnabled?: boolean;
+    /** 提供则注册 stripe 通道（真 HMAC 验签，出站走这个替身）。 */
+    stripeHttp?: HttpClient;
   } = {},
 ): Promise<SkeletonServer> {
   const sink = new MemorySink();
@@ -127,7 +163,7 @@ export async function startSkeleton(
 
       // ── 支付路由（F11 统一分发）：模拟回调走的就是真实通道那条路 ───────────
       mountPayRoutes(a, {
-        registry: mockRegistry(opts.mockEnabled ?? true, idGen, now),
+        registry: mockRegistry(opts.mockEnabled ?? true, idGen, now, opts.stripeHttp),
         webhooks: createWebhookStore(db),
         logger,
         graceMs: opts.graceMs ?? 900_000,
