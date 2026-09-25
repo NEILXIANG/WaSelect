@@ -62,7 +62,7 @@ export function createPaymentRegistry(opts: RegistryOptions): PaymentRegistry {
    *      "客服点了退款"这条路径在运行时才炸，而那时钱已经收了。
    *      让它在**注册时**炸，是这类错误最便宜的暴露点。
    */
-  function assertConsistent(provider: PaymentProvider, channel: string): void {
+  function assertConsistent(provider: PaymentProvider, channel: string, cfg: ChannelConfig): void {
     if (provider.channel !== channel) {
       throw new Error(
         `Provider 自报的 channel 与注册键不一致：注册为 ${channel}，实例是 ${provider.channel}`,
@@ -78,6 +78,20 @@ export function createPaymentRegistry(opts: RegistryOptions): PaymentRegistry {
         `通道 ${channel} 实现了 refund() 却声明 supportsRefund=false（调用方不会调它）`,
       );
     }
+    // ⚠️ 配置声明的币种必须是能力声明的子集（二次审查 P3-2）：两层开关的语义是
+    //    "我们开不开（配置）∩ 机构做不做得到（能力）"——配置超出能力的部分会在
+    //    `listAvailable` 里**静默不出现**（过滤掉了），排障时看起来像通道丢了。
+    //    两侧都写 '*' 时跳过（'*' 的语义本来就是"不限"，谈不上子集）。
+    const declared = cfg.currencies;
+    const supported = provider.capabilities.currencies;
+    if (!declared.includes('*') && !supported.includes('*')) {
+      const over = declared.filter((c) => !supported.includes(c));
+      if (over.length > 0) {
+        throw new Error(
+          `通道 ${channel} 配置声明的币种超出能力声明：${over.join(', ')}（配置 [${declared.join(', ')}] ⊄ 能力 [${supported.join(', ')}]）`,
+        );
+      }
+    }
   }
 
   /** 取（或首次构造）实例；未注册工厂 → undefined（配置先行，静默跳过）。 */
@@ -88,7 +102,7 @@ export function createPaymentRegistry(opts: RegistryOptions): PaymentRegistry {
     const cfg = configs.get(channel);
     if (factory === undefined || cfg === undefined) return undefined;
     const provider = factory(cfg);
-    assertConsistent(provider, channel);
+    assertConsistent(provider, channel, cfg);
     instances.set(channel, provider);
     return provider;
   }
@@ -96,6 +110,13 @@ export function createPaymentRegistry(opts: RegistryOptions): PaymentRegistry {
   return {
     register(channel, factory) {
       if (channel.length === 0) throw new Error('register：通道名不能为空');
+      // ⚠️ 通道名会进 `webhook_events.provider`（VARCHAR(16)，migrations/003）：超长名字
+      //    能注册成功，但回调登记时 22001 炸成 500——把长度闸在注册期（二次审查 P3-9）。
+      if (channel.length > 16) {
+        throw new Error(
+          `register：通道名超过 16 字符（webhook_events.provider 列宽上限）：${channel}`,
+        );
+      }
       if (factories.has(channel)) {
         // 静默覆盖会让"线上生效的是哪个实现"变成谜，且只在出事后才被追问
         throw new Error(`重复注册支付通道：${channel}`);

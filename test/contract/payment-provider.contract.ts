@@ -85,7 +85,7 @@ export function runProviderContract(name: string, make: () => ProviderHarness): 
       orderNo: '260103-K7Q2MN',
       amountJpy: 12_000,
       currency: 'JPY',
-      amountInCurrency: 12_000,
+      amountMinor: 12_000,
       destCountry: 'US',
       idempotencyKey: 'idem-contract-1',
     };
@@ -180,7 +180,7 @@ export function runProviderContract(name: string, make: () => ProviderHarness): 
         providerRef: s.providerRef,
         amountJpy: req.amountJpy,
         currency: req.currency,
-        amountInCurrency: req.amountInCurrency,
+        amountMinor: req.amountMinor,
         reason: '缺货',
       });
       expect(r?.refundRef.length).toBeGreaterThan(0);

@@ -315,6 +315,31 @@ describe('注册期不变式（声明必须与实现一致）', () => {
     expect(() => r.register('', (c) => stub(c.channel))).toThrow(/通道名不能为空/);
   });
 
+  it('通道名超过 16 字符 → 抛（P3-9：webhook_events.provider 是 VARCHAR(16)，超长登记时 22001 炸 500）', () => {
+    const r = createPaymentRegistry({ configs: [] });
+    expect(() => r.register('a'.repeat(17), (c) => stub(c.channel))).toThrow(/16 字符/);
+    // 16 恰好合法（列宽含边界）
+    r.register('a'.repeat(16), (c) => stub(c.channel));
+  });
+
+  it('配置声明的币种超出能力声明 → 抛（P3-2：超出部分在列表里静默消失，排障像"通道丢了"）', () => {
+    const r = createPaymentRegistry({
+      configs: [cfg({ channel: 'a', currencies: ['JPY', 'USD'] })],
+    });
+    // stub 的能力只声明 JPY
+    r.register('a', (c) => stub(c.channel));
+    expect(() => r.get('a')).toThrow(/超出能力声明/);
+  });
+
+  it('任一侧声明 * 时跳过子集校验（* 的语义就是"不限"，谈不上子集）', () => {
+    const r = createPaymentRegistry({ configs: [cfg({ channel: 'a', currencies: ['*'] })] });
+    r.register('a', (c) => stub(c.channel));
+    expect(r.get('a').channel).toBe('a');
+    const r2 = createPaymentRegistry({ configs: [cfg({ channel: 'b', currencies: ['USD'] })] });
+    r2.register('b', (c) => stub(c.channel, { currencies: ['*'] }));
+    expect(r2.get('b').channel).toBe('b');
+  });
+
   it('注册晚于首次取用也能生效（先 register 再 get 与反之都要正确）', () => {
     const r = createPaymentRegistry({ configs: [cfg({ channel: 'a' })] });
     r.register('a', () => stub('a'));

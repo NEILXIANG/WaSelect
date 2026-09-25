@@ -1,10 +1,11 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.5.1
+  version: 0.5.2
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
+    0.5.2（D-58）：IdemKey required false→true（骨架实现缺头即 40001，契约宽松化是漂移）；/auth/admin/login 与 /pay/link/{id} 补 429 响应（契约已承诺限流，响应清单漏列）。
     鉴权：Bearer JWT（小程序 aud=mp；管理端 aud=admin）。D-49 起没有 H5 身份：银行卡支付在 Stripe Checkout 托管页完成。写接口支持 Idempotency-Key 头（24 小时内重复返回原响应）。
     展示价只由后端计算（display 对象），前端不做汇率乘法。
     F11（ADR-28）：支付回调**合并为统一入口** `/pay/callback/{channel}`（channel 为路径参数，新增通道不再新增路由），
@@ -50,7 +51,7 @@ paths:
       security: []
       summary: 管理端（admin-web）邮箱密码登录；仅 is_admin 账号，JWT 12 小时（aud=admin）；连续失败 5 次锁 15 分钟
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 12}}}}}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {token: {type: string}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {token: {type: string}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
   /fx:
     get:
       security: []
@@ -133,7 +134,7 @@ paths:
       security: []
       summary: 短链落地（D-49）：校验 t=token 与订单状态后 302 到 Stripe Checkout Session URL；token 不符或订单已终态 → 302 到静态失效页（40102）。按 IP 限流；不放行 CORS；不记录 query
       parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: t, in: query, required: true, schema: {type: string}}]
-      responses: {'302': {description: Location = Stripe Checkout Session URL 或失效页}}
+      responses: {'302': {description: Location = Stripe Checkout Session URL 或失效页}, '429': {$ref: '#/components/responses/Err'}}
   /orders/{id}/cancel:
     post:
       summary: 取消（仅 created / pending_payment；同时取消未完成支付意图）
@@ -262,7 +263,7 @@ components:
     bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
     internalSecret: {type: apiKey, in: header, name: X-Internal-Job-Secret, description: 与 INTERNAL_JOB_SECRET 相等；仅 /internal/* 使用，不放行 CORS 与小程序}
   parameters:
-    IdemKey: {name: Idempotency-Key, in: header, required: false, schema: {type: string}}
+    IdemKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string}}
   responses:
     Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}
   schemas:

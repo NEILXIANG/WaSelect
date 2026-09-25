@@ -211,6 +211,59 @@ describe('buildPaymentRegistry：stripe 通道（三要素齐全才注册）', (
   });
 });
 
+describe('buildPaymentRegistry：通道下线语义（二次审查 P1-NEW-1）', () => {
+  const stripeKeys = {
+    STRIPE_SECRET_KEY: 'sk_test_1',
+    STRIPE_WEBHOOK_SECRET: 'whsec_1',
+    CHECKOUT_BASE_URL: 'https://checkout.example.com',
+  };
+
+  it('stripe 从 PAYMENT_CHANNELS 移除但凭据还在 → 已下线（不接新单）但在途回调/退款不受影响', () => {
+    /**
+     * @why 这是"禁用不拦回调"设计承诺的兑现形态（AJ 口径：下线 = 停新单，不是让在途订单失联）。
+     *      旧形态：删配置 → 配置条目整个消失 → 在途回调在验签前被 40001 拒、webhook_events 零留痕。
+     *      曾经 `enabled` 恒 true（configs 只从 PAYMENT_CHANNELS 生成），这个语义根本无法触发。
+     */
+    const c = loadConfig({ ...baseEnv, ...stripeKeys, PAYMENT_CHANNELS: 'mock' });
+    const { registry, registered, offline } = buildPaymentRegistry(c, deps());
+
+    expect(registered).toEqual(['mock', 'stripe']);
+    expect(offline).toEqual(['stripe']);
+
+    // ① 新单被拦：channel_disabled（不是 channel_not_configured——它"存在"，只是下线了）
+    expectChannelError(() => registry.get('stripe'), 'channel_disabled');
+    // ② 支付入口列表不含它
+    expect(registry.listAvailable(US_USD).map((x) => x.channel)).toEqual([]);
+    // ③ 在途订单的回调照常（这是 getForCallback 不判 enabled 的存在意义）
+    expect(registry.getForCallback('stripe').channel).toBe('stripe');
+    // ④ 老单退款照常
+    expect(registry.getForRefund('stripe').channel).toBe('stripe');
+  });
+
+  it('mock 未列出但显式配了密钥 → 同样保留下线能力；未列出且只占位密钥 → 不注册（公开值不能开门）', () => {
+    /**
+     * @why 两条要一起看：mock 的占位密钥是仓库里的公开值——"未列出也注册"在 mock 身上
+     *      等于给任何人开"伪造回调置 paid"的门（P3-7 同源）；显式密钥则表明运营有意保留。
+     */
+    const explicit = loadConfig({
+      ...baseEnv,
+      PAYMENT_CHANNELS: 'wechat',
+      MOCK_CALLBACK_SECRET: 'explicit-secret',
+    });
+    const a1 = buildPaymentRegistry(explicit, deps());
+    expect(a1.registered).toEqual(['mock']);
+    expect(a1.offline).toEqual(['mock']);
+    expectChannelError(() => a1.registry.get('mock'), 'channel_disabled');
+    expect(a1.registry.getForCallback('mock').channel).toBe('mock');
+
+    const noSecret = loadConfig({ ...baseEnv, PAYMENT_CHANNELS: 'wechat' });
+    const a2 = buildPaymentRegistry(noSecret, deps());
+    expect(a2.registered).toEqual([]);
+    expect(a2.offline).toEqual([]);
+    expectChannelError(() => a2.registry.getForCallback('mock'), 'channel_not_configured');
+  });
+});
+
 describe('buildPaymentRegistry：未实现的通道与未知通道', () => {
   it('wechat 配置了但没有工厂 → 静默跳过（@limitation 二），其它通道不受影响', async () => {
     const c = loadConfig({ ...baseEnv, PAYMENT_CHANNELS: 'mock,wechat' });

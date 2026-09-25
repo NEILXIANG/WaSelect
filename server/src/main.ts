@@ -141,7 +141,11 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
         // @why 回调是机构打给我们的，生产必须能收；通道列表是前端入口的来源。
         //      它们与骨架无关——骨架只是"没有真实下单接口时的一条演示链路"。
         //      注册表在装配处按配置拼好：加一个通道 = 改配置 + 注册工厂，本处不改。
-        const { registry, registered: registeredChannels } = buildPaymentRegistry(config, {
+        const {
+          registry,
+          registered: registeredChannels,
+          offline: offlineChannels,
+        } = buildPaymentRegistry(config, {
           // ⚠️ `logger` **必须传**：不传的话出站 HTTP 一条日志都没有
           //    ——计时、重试、以及"我们正在拒绝请求"的熔断信号全部丢失，
           //    而它们正是线上回答"上游是不是挂了"的唯一依据（AJ-55 / AJ-62 / AJ-63）。
@@ -153,11 +157,16 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           clock: systemClock,
           idGen: systemIdGen,
         });
-        // ⚠️ configured 与 registered 必须并列：差集 = 被静默跳过的通道
-        //    （wechat 未实现 / stripe 密钥不全），只打 configured 等于没打（体检 P1 修复）
+        // ⚠️ configured / registered / offline 三个清单必须并列：
+        //    configured−registered = 被静默跳过的通道（wechat 未实现 / stripe 密钥不全），
+        //    offline = 已下线但在途订单还活着的通道（二次审查 P1-NEW-1）——只打 configured 等于没打
         logger.info('payment_channels_registered', {
           result: 'ok',
-          ctx: { configured: describeChannels(config), registered: registeredChannels },
+          ctx: {
+            configured: describeChannels(config),
+            registered: registeredChannels,
+            offline: offlineChannels,
+          },
         });
         mountPayRoutes(a, {
           registry,

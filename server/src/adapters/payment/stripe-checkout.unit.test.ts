@@ -31,7 +31,6 @@ import {
 import {
   createStripeCheckoutProvider,
   STRIPE_SIGNATURE_HEADER as HEADER,
-  toMinorUnits,
 } from './stripe-checkout.js';
 
 const SECRET = 'whsec_unit_secret';
@@ -62,7 +61,7 @@ const REQ: PaymentRequest = {
   orderNo: '260103-K7Q2MN',
   amountJpy: 12_000,
   currency: 'JPY',
-  amountInCurrency: 12_000,
+  amountMinor: 12_000,
   destCountry: 'US',
   idempotencyKey: 'idem-1',
 };
@@ -89,22 +88,6 @@ function signed(type: string, opts: { t?: number; secret?: string; extra?: strin
   return { raw: Buffer.from(body, 'utf8'), headers: { [HEADER]: withExtra } as HeaderBag };
 }
 
-describe('toMinorUnits（最小单位换算：跨境支付最常见的金额事故点）', () => {
-  it('JPY 是零小数币种：12000 円 → 12000（**不** ×100）', () => {
-    expect(toMinorUnits(12_000, 'JPY')).toBe(12_000);
-    expect(toMinorUnits(12_000, 'jpy')).toBe(12_000);
-  });
-
-  it('USD 有两位小数：$120.00 → 12000（×100）', () => {
-    expect(toMinorUnits(120, 'USD')).toBe(12_000);
-    expect(toMinorUnits(12.5, 'USD')).toBe(1250);
-  });
-
-  it('四舍五入到整数（机构不接受小数最小单位）', () => {
-    expect(toMinorUnits(12.345, 'USD')).toBe(1235);
-  });
-});
-
 describe('create（建 Checkout Session）', () => {
   it('带上鉴权头与幂等键（缺任一项都会被真实机构拒绝）', async () => {
     const { http, provider } = build();
@@ -127,6 +110,19 @@ describe('create（建 Checkout Session）', () => {
     // ⚠️ 体检 P1-7：payment_intent.* / charge.* 事件的 order_id 唯一来源。
     //    Session 级 metadata 不属于 PI/Charge；PI metadata 会在建 Charge 时复制过去
     expect(form.get('payment_intent_data[metadata][order_id]')).toBe('sk-1');
+  });
+
+  it('支付方式显式白名单只收卡（P2-NEW-1：Dashboard 开的异步方式会把"未付款 completed"放进来）', async () => {
+    /**
+     * @why 不限制 payment_method_types 时，托管页会展示 Dashboard 里启用的**所有**方式；
+     *      其中异步方式（银行转账等）的 `checkout.session.completed` 是"用户提交了但还没付钱"。
+     *      白名单 + parseWebhook 的 payment_status 校验是同一防线的两层。
+     */
+    const { http, provider } = build();
+    await provider.create(REQ);
+    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    expect(form.get('payment_method_types[0]')).toBe('card');
+    expect(form.get('payment_method_types[1]')).toBeNull();
   });
 
   it('返回 copylink 入口（D-49：银行卡走托管页，不做卡表单）', async () => {
@@ -213,6 +209,46 @@ describe('parseWebhook（事件映射与验签细节）', () => {
     const p = signed('payment_intent.requires_action');
     const ev = await provider.parseWebhook(p.raw, p.headers);
     expect(ev.outcome).toBe('unknown');
+  });
+
+  it('checkout.session.completed 但 payment_status=unpaid → unknown（P2-NEW-1：异步方式的"已提交未付款"不能置 paid）', async () => {
+    /**
+     * @why 官方口径：异步支付方式下 completed ≠ 已收款，要等 async_payment_succeeded。
+     *      create() 的白名单（只收卡）是第一层，这里是第二层——Dashboard 配置漂移伤不到落账。
+     */
+    const { provider } = build();
+    const object = {
+      ...objectForEvent('checkout.session.completed'),
+      payment_status: 'unpaid',
+      metadata: { order_id: REQ.orderId },
+    };
+    const body = JSON.stringify(stripeEvent('checkout.session.completed', object));
+    const p = {
+      raw: Buffer.from(body, 'utf8'),
+      headers: { [HEADER]: signStripePayload(body, SECRET, NOW_SEC) } as HeaderBag,
+    };
+    const ev = await provider.parseWebhook(p.raw, p.headers);
+    expect(ev.outcome).toBe('unknown');
+    expect(ev.rawType).toBe('checkout.session.completed');
+  });
+
+  it('时间戳不是数字（t=NaN）→ 40103（P3-12：任何与 NaN 的比较都是 false，容差会被静默绕过）', async () => {
+    const { provider } = build();
+    const body = JSON.stringify(
+      stripeEvent('checkout.session.completed', {
+        ...objectForEvent('checkout.session.completed'),
+        metadata: { order_id: REQ.orderId },
+      }),
+    );
+    // signStripePayload 直接插值 `${t}`：传 NaN 造出 "t=NaN" 的合法签名头
+    const p = {
+      raw: Buffer.from(body, 'utf8'),
+      headers: { [HEADER]: signStripePayload(body, SECRET, Number('not-a-number')) } as HeaderBag,
+    };
+    await expect(provider.parseWebhook(p.raw, p.headers)).rejects.toMatchObject({
+      code: 40103,
+      details: { reason: 'stripe_timestamp_malformed' },
+    });
   });
 
   it('密钥轮换：多个 v1 中任一命中即通过', async () => {
@@ -407,15 +443,34 @@ describe('refund（原币全额退）', () => {
       providerRef: 'pi_1',
       amountJpy: 12_000,
       currency: 'USD',
-      amountInCurrency: 80,
+      amountMinor: 8_000,
       reason: '缺货',
     });
     expect(r.outcome).toBe('succeeded');
     const form = new URLSearchParams(http.calls.at(-1)?.body ?? '');
-    // $80.00 → 8000 分；写成"按 JPY 退"就会变成 12000 分（$120），多退 50%
+    // $80.00 = 8000 分（端口口径已是整数最小单位，适配器只透传）；
+    // 写成"按 JPY 退"就会变成 12000 分（$120），多退 50%
     expect(form.get('amount')).toBe('8000');
     expect(form.get('payment_intent')).toBe('pi_1');
     expect(form.get('metadata[order_id]')).toBe('sk-1');
+  });
+
+  it('退款带机构侧幂等键 refund:{orderId}（P2-NEW-2：POST 超时后的人工重试不会退两次）', async () => {
+    /**
+     * @why 出站红线是"无幂等键的 POST 超时/5xx 一律不重试"——不带键时超时 = Stripe 侧
+     *      状态未知且我们不敢重发，只能靠人工再点。带上确定性键后，人工重试落到同一键，
+     *      Stripe 返回第一次的退款而不是再退一次（MVP 全额退、一单一退，orderId 即幂等粒度）。
+     */
+    const { http, provider } = build();
+    await mustRefund(provider)({
+      orderId: REQ.orderId,
+      providerRef: 'pi_1',
+      amountJpy: 12_000,
+      currency: 'JPY',
+      amountMinor: 12_000,
+      reason: '缺货',
+    });
+    expect(http.calls.at(-1)?.headers?.['idempotency-key']).toBe(`refund:${REQ.orderId}`);
   });
 
   it('退款状态 pending / failed 都要如实回带（不能一律当成成功）', async () => {
@@ -427,7 +482,7 @@ describe('refund（原币全额退）', () => {
         providerRef: 'pi_1',
         amountJpy: 12_000,
         currency: 'JPY',
-        amountInCurrency: 12_000,
+        amountMinor: 12_000,
         reason: '缺货',
       });
     };
@@ -444,7 +499,7 @@ describe('refund（原币全额退）', () => {
         providerRef: 'pi_1',
         amountJpy: 12_000,
         currency: 'JPY',
-        amountInCurrency: 12_000,
+        amountMinor: 12_000,
         reason: '缺货',
       }),
     ).rejects.toThrow(/缺 id/);
@@ -459,7 +514,7 @@ describe('refund（原币全额退）', () => {
         providerRef: 'pi_1',
         amountJpy: 12_000,
         currency: 'JPY',
-        amountInCurrency: 12_000,
+        amountMinor: 12_000,
         reason: '缺货',
       }),
     ).rejects.toThrow(/退款失败/);

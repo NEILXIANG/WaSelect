@@ -48,7 +48,11 @@ describe('NODE_ENV（D17）', () => {
 
   it('三个非生产值都合法', () => {
     for (const env of ['development', 'staging', 'test']) {
-      expect(loadConfig({ ...baseEnv, NODE_ENV: env }).NODE_ENV).toBe(env);
+      // staging 启用 mock 必须显式密钥（P3-7：公网环境不许回落公开占位值），
+      // 这里测的是"NODE_ENV 值是否被认得"，给它一把密钥以免碰到别的规则
+      expect(
+        loadConfig({ ...baseEnv, NODE_ENV: env, MOCK_CALLBACK_SECRET: 'explicit-secret' }).NODE_ENV,
+      ).toBe(env);
     }
   });
 
@@ -245,6 +249,27 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');
   });
 
+  it('staging 启用 mock 缺 MOCK_CALLBACK_SECRET → 拒绝（P3-7：公网环境不许回落公开占位值）', () => {
+    const issues = expectReject({ ...baseEnv, NODE_ENV: 'staging', PAYMENT_CHANNELS: 'mock' });
+    expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');
+  });
+
+  it('staging 显式配置 MOCK_CALLBACK_SECRET → 通过', () => {
+    const c = loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'staging',
+      PAYMENT_CHANNELS: 'mock',
+      MOCK_CALLBACK_SECRET: 'explicit-secret',
+    });
+    expect(c.MOCK_CALLBACK_SECRET).toBe('explicit-secret');
+  });
+
+  it('development / test 启用 mock 允许回落占位密钥（本机环境，可伪造面不出本机）', () => {
+    for (const env of ['development', 'test']) {
+      expect(loadConfig({ ...baseEnv, NODE_ENV: env }).MOCK_CALLBACK_SECRET).toBeUndefined();
+    }
+  });
+
   it('MOCK_CALLBACK_SECRET 与 JWT_SECRET 相同 → 拒绝（回调密钥与登录密钥的泄露半径必须不同）', () => {
     const issues = expectReject(
       prod({
@@ -261,6 +286,26 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     // 审核模式是"上线前"状态：真实通道若同时在线，审核人员的测试下单会产生真实扣款
     const issues = expectReject(prod({ REVIEW_MODE: 'on', REVIEW_SKU_ID: 'sku-1' }));
     expect(issues.join('\n')).toContain('PAYMENT_CHANNELS');
+  });
+
+  it('STRIPE_SECRET_KEY 形状不是 sk_test_/sk_live_ → 拒绝（P3-6：贴错值启动期就该看见）', () => {
+    const issues = expectReject({ ...baseEnv, STRIPE_SECRET_KEY: 'not-a-stripe-key' });
+    expect(issues.join('\n')).toContain('STRIPE_SECRET_KEY');
+  });
+
+  it('STRIPE_WEBHOOK_SECRET 形状不是 whsec_ → 拒绝（webhook 密钥与 API key 混淆是最常见的验签失败原因）', () => {
+    const issues = expectReject({ ...baseEnv, STRIPE_WEBHOOK_SECRET: 'sk_test_1' });
+    expect(issues.join('\n')).toContain('STRIPE_WEBHOOK_SECRET');
+  });
+
+  it('生产配 sk_test_ → 拒绝（P3-6：表现是真实用户全部无法付款）', () => {
+    const issues = expectReject(prod({ STRIPE_SECRET_KEY: 'sk_test_1' }));
+    expect(issues.join('\n')).toContain('sk_live_');
+  });
+
+  it('CB_FAILURE_THRESHOLD ≤ 3 → 拒绝（一次请求的重试就能把上游判死，P3-11）', () => {
+    const issues = expectReject({ ...baseEnv, CB_FAILURE_THRESHOLD: '3' });
+    expect(issues.join('\n')).toContain('CB_FAILURE_THRESHOLD');
   });
 
   it('审核模式开了却没指定 SKU → 拒绝（否则审核期全站下不了单）', () => {
@@ -380,6 +425,8 @@ describe('配置形状（N11）', () => {
       ...baseEnv,
       NODE_ENV: 'staging',
       CHECKOUT_BASE_URL: 'http://localhost:4000',
+      // staging 启用 mock 必须显式密钥（P3-7）；本用例测的是 URL 规则，补密钥隔离变量
+      MOCK_CALLBACK_SECRET: 'explicit-secret',
     });
     expect(c.CHECKOUT_BASE_URL).toBe('http://localhost:4000');
   });

@@ -21,7 +21,15 @@
  *              否则"配置里留着旧通道名"会让服务起不来，而删配置与删代码的节奏本就不同步。
  *              ⚠️ 代价：拼错通道名不会报错，只表现为"这个通道从来没出现过"——
  *              所以启动日志会打印最终生效的通道清单（见 `describeChannels`）。
- * @limitation 三：Stripe 的 `successUrl / cancelUrl` 目前由 `CHECKOUT_BASE_URL` 拼出
+ * @limitation 三：**"下线"≠"删配置"**（二次审查 P1-NEW-1 修复后的语义）。
+ *              把通道名从 `PAYMENT_CHANNELS` 删掉 = 停止接**新单**（`enabled=false`），
+ *              但只要凭据还在，工厂照样注册——该通道**在途订单的回调与退款不受影响**
+ *              （`getForCallback` / `getForRefund` 不拦禁用通道，这是它们的存在意义）。
+ *              曾经的形态是"删配置 → 配置条目整个消失 → 在途回调在验签前被 40001 拒掉、
+ *              `webhook_events` 零留痕"，把"禁用不拦回调"的设计承诺架空了。
+ *              ⚠️ 例外：mock 只有在**显式配置了密钥**时才会在未列出状态下注册——
+ *              开发占位密钥是公开值，未列出还注册 = 给伪造回调开门（P3-7 同源）。
+ * @limitation 四：Stripe 的 `successUrl / cancelUrl` 目前由 `CHECKOUT_BASE_URL` 拼出
  *              （`/pay/done` 与 `/pay/cancelled`），**那两个静态页还没建**（F15 范围内）。
  *              在它们建好之前，用户付完款会落到一个 404 的静态页——
  *              但**订单状态已经由回调正确置为 paid**，所以不影响资金与发货，只影响浏览器落地体验。
@@ -59,7 +67,15 @@ const CHANNEL_DEFAULTS: Readonly<
   mock: { priority: 90, countries: ['*'], currencies: ['JPY'], label: '模拟支付', icon: 'flask' },
 };
 
-/** 未被 {@link CHANNEL_DEFAULTS} 收录的通道用它兜底（新增通道不会因为漏登记就消失）。 */
+/**
+ * 未被 {@link CHANNEL_DEFAULTS} 收录的通道用它兜底（新增通道不会因为漏登记就消失）。
+ *
+ * @tradeoff `currencies: ['*']` 意味着"任何币种查询都匹配"——对新通道是**乐观默认**
+ *           （先让它出现，长得朴素也比消失强），代价是可能出现在机构实际做不到的币种下
+ *           （二次审查 P2-18）。兜底只在"配置里有、默认表没有"的过渡态生效，
+ *           被 CHANNEL_DEFAULTS 收录的通道走声明值，并由注册表的
+ *           "配置币种 ⊆ 能力币种"断言守着（P3-2），所以风险面只有过渡态这一段。
+ */
 const FALLBACK_DEFAULT = {
   priority: 100,
   countries: ['*'],
@@ -87,18 +103,29 @@ export function describeChannels(config: AppConfig): string[] {
   return [...config.PAYMENT_CHANNELS];
 }
 
-/** 装配产物：注册表 + **实际注册了工厂**的通道清单（与配置清单的差集 = 静默跳过的通道）。 */
+/** 装配产物：注册表 + 两个清单（与配置清单对照，差集各有含义，见各字段注释）。 */
 export interface PaymentAssembly {
   registry: PaymentRegistry;
   /**
-   * 实际注册的通道（`configured − registered` = 被静默跳过的：wechat 未实现 /
-   * stripe 密钥不全 / 未知通道）。启动日志必须把它与 configured 并列（见 `describeChannels` 的 @why）。
+   * 实际注册了工厂的通道。`configured − registered` = 被静默跳过的：wechat 未实现 /
+   * stripe 密钥不全 / 未知通道。启动日志必须把它与 configured 并列（见 `describeChannels` 的 @why）。
    */
   registered: string[];
+  /**
+   * **已下线但仍保留回调/退款能力**的通道（`registered − configured`）：
+   * 凭据还在所以工厂注册了，但不在 `PAYMENT_CHANNELS` 里（`enabled=false`，不接新单）。
+   * 这份清单必须在启动日志里可见——"下线通道的在途订单还活着"是运营事实，不该静默。
+   */
+  offline: string[];
 }
 
 /**
  * 按配置装配注册表。
+ *
+ * 语义（二次审查 P1-NEW-1 修复后）：
+ *  - `enabled` = 通道名是否在 `PAYMENT_CHANNELS` 里（**配置是新单的唯一开关**）；
+ *  - 工厂**凭据齐全就注册**，与是否列出无关——所以"下线"（从列表删除）只停新单，
+ *    在途订单的回调与退款照常（@limitation 三）。
  *
  * @throws {Error} 配置重复 / 工厂自报 channel 与注册键不一致 / 声明与实现不符（注册期不变式）
  */
@@ -106,12 +133,25 @@ export function buildPaymentRegistry(
   config: AppConfig,
   deps: ChannelAssemblyDeps,
 ): PaymentAssembly {
-  const configs: ChannelConfig[] = config.PAYMENT_CHANNELS.map((channel) => {
+  const stripeReady =
+    config.STRIPE_SECRET_KEY !== undefined &&
+    config.STRIPE_WEBHOOK_SECRET !== undefined &&
+    config.CHECKOUT_BASE_URL !== undefined;
+  // mock 的注册条件见 @limitation 三：列出（开发/审核期正常用）或显式配了密钥
+  // （未列出但显式配密钥 = 运营有意保留在途回调）。只占位密钥时不注册——公开值不能开门。
+  const listed = new Set<string>(config.PAYMENT_CHANNELS);
+  const mockRegistered = listed.has('mock') || config.MOCK_CALLBACK_SECRET !== undefined;
+
+  const names = new Set<string>(listed);
+  if (mockRegistered) names.add('mock');
+  if (stripeReady) names.add('stripe');
+
+  const configs: ChannelConfig[] = [...names].map((channel) => {
     const base = CHANNEL_DEFAULTS[channel] ?? FALLBACK_DEFAULT;
     return {
       channel,
-      // 在 `PAYMENT_CHANNELS` 里出现 = 开放；不在 = 不开放（配置是唯一开关）
-      enabled: true,
+      // 在 `PAYMENT_CHANNELS` 里出现 = 开放新单；不在 = 只保留在途订单的回调/退款（@limitation 三）
+      enabled: listed.has(channel),
       ...base,
       options: optionsFor(channel, config),
     };
@@ -121,7 +161,7 @@ export function buildPaymentRegistry(
   const registered: string[] = [];
 
   // ── mock：骨架期 / 审核期的假通道（真实 HMAC 验签，密钥来自配置）─────────────
-  if (config.PAYMENT_CHANNELS.includes('mock')) {
+  if (mockRegistered) {
     registry.register('mock', (cfg) =>
       createMockProvider(cfg, { clock: deps.clock, idGen: deps.idGen }),
     );
@@ -129,18 +169,14 @@ export function buildPaymentRegistry(
   }
 
   /**
-   * ── stripe：只有三要素齐全才注册 ──────────────────────────────────────
+   * ── stripe：三要素齐全就注册（与是否列出无关，见本函数头注释的语义）────────
    * @why 工厂在 `options` 不全时会抛（密钥缺失 = 任何人都能伪造回调，必须响亮失败）。
    *      而 `listAvailable` 会**构造**每个已启用通道的 Provider——
    *      若在这里无条件注册 stripe 工厂，本地没配 Stripe 密钥时
    *      `GET /pay/channels` 会整体 500（一个坏通道拖垮整个支付入口）。
    *      所以"能不能构造"必须先于"要不要开放"被判断。
    */
-  const stripeReady =
-    config.STRIPE_SECRET_KEY !== undefined &&
-    config.STRIPE_WEBHOOK_SECRET !== undefined &&
-    config.CHECKOUT_BASE_URL !== undefined;
-  if (config.PAYMENT_CHANNELS.includes('stripe') && stripeReady) {
+  if (stripeReady) {
     registry.register('stripe', (cfg) =>
       createStripeCheckoutProvider(cfg, { http: deps.http, clock: deps.clock, idGen: deps.idGen }),
     );
@@ -148,7 +184,8 @@ export function buildPaymentRegistry(
   }
 
   // wechat：R1（日本收单机构事前相談）通过前没有实现 → 配置里写了也只是静默跳过
-  return { registry, registered };
+  const offline = registered.filter((c) => !listed.has(c));
+  return { registry, registered, offline };
 }
 
 /**

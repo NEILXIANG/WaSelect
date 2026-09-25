@@ -99,10 +99,15 @@ export interface PaymentRequest {
   /** 扣款币种。 */
   currency: string;
   /**
-   * **该币种下**的金额（主单位）。换算由 domain 按 `fx_snapshot` 做，
-   * 本端口**不做换算**——端口一旦开始换算，就会出现"同一个订单在两家机构金额不同"。
+   * **该币种下的金额，整数最小单位**（JPY=円、USD=分）。
+   *
+   * @why 取整只在 `packages/shared/money.ts` 的 `toMinor` 一处发生（ADR-09）：
+   *      domain 换算完直接把整数最小单位交给端口，适配器**只做 `String()` 透传**。
+   *      旧口径是"主单位浮点、适配器再 ×100 取整"——那是全仓第二处金额取整
+   *      （二次审查 P3-1）：`.5` 边界上浮点误差会让 adapter 与 domain 差 1 分，
+   *      而这种差异不报错，只在对账时冒出来。
    */
-  amountInCurrency: number;
+  amountMinor: number;
   destCountry: string;
   /** 幂等键：传给机构，避免重复建单（机构侧幂等 ≠ 我们自己的幂等表）。 */
   idempotencyKey: string;
@@ -157,12 +162,13 @@ export interface RefundRequest {
   /** JPY 锚（记账与对账）。 */
   amountJpy: number;
   /**
-   * **原扣款币种**与该币种下的金额：MVP 只做全额，**按原币退**（契约 `/admin/orders/{id}/refund`）。
+   * **原扣款币种**：MVP 只做全额，**按原币退**（契约 `/admin/orders/{id}/refund`）。
    * @why 按原币退而不是按"今天的汇率折算成 JPY 再退"：汇率在收与退之间会变，
    *      折算退款会让用户拿到的金额与付款时不等（多退是损失、少退是纠纷）。
    */
   currency: string;
-  amountInCurrency: number;
+  /** 退款金额：**整数最小单位**（同 `PaymentRequest.amountMinor` 的 @why；MVP 全额=建单时的金额）。 */
+  amountMinor: number;
   reason: string;
 }
 

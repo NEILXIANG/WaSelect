@@ -115,8 +115,14 @@ describe('组装根 bootstrap（A1）', () => {
     const { write } = sink();
     let rt: Runtime | undefined;
     try {
+      // MOCK_CALLBACK_SECRET：staging + mock 无显式密钥会被规则 3b 拒（公网环境不许回落公开占位值，
+      // 见 config.ts 规则 3b / AJ-87）——本条用例验"骨架挂载"与密钥无关，显式给一个测试密钥
       rt = await bootstrap({
-        env: { ...baseEnv(PORT_PROD), NODE_ENV: 'staging' },
+        env: {
+          ...baseEnv(PORT_PROD),
+          NODE_ENV: 'staging',
+          MOCK_CALLBACK_SECRET: 'main-db-test-mock-secret',
+        },
         logDestination: { write },
         exit: () => undefined,
       });

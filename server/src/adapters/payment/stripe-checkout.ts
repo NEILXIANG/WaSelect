@@ -12,11 +12,12 @@
  *  - 主事件 = `checkout.session.completed / expired`，次路径 `payment_intent.*`；
  *  - 退款/拒付 = `charge.refunded` / `charge.dispute.created`。
  *
- * @limitation 一：**JPY 是零小数币种**，`unit_amount` 直接写円（12,000 = 12,000 円）。
- *              USD 要写"分"（$12.00 = 1200）。两者混用是跨境支付最常见的金额事故，
- *              所以这里只在 `currencies` 里声明 JPY/USD 且**按币种分别换算**（见 `toMinorUnits`）。
+ * @limitation 一：金额进本适配器时**已经是整数最小单位**（端口口径，JPY=円、USD=分），
+ *              这里只做 `String()` 透传。"JPY 零小数不 ×100、USD ×100"的知识唯一存在于
+ *              `packages/shared/money.ts`（二次审查 P3-1：适配器曾经自己换算，是全仓
+ *              第二处金额取整，`.5` 边界会与 domain 差 1 分）。
  * @limitation 二：**不重试**（端口 @limitation 一）。Stripe 侧靠 `Idempotency-Key` 保证
- *              重复请求不重复建单；我们自己的重试策略属 F12。
+ *              重复请求不重复建单/退款；我们自己的重试策略属 F12。
  * @limitation 三：4xx/5xx 一律抛普通 Error（被上层折叠成 50000）。
  *              "卡被拒（402）"这类**需要给用户看**的细分错误，要等业务期拿到真实错误码表再映射，
  *              现在猜一个映射表比不映射更危险（猜错会把"用户余额不足"说成"系统故障"）。
@@ -63,21 +64,11 @@ export const OUTCOME_BY_TYPE: Readonly<Record<string, ProviderEvent['outcome']>>
   'payment_intent.payment_failed': 'failed',
   'payment_intent.canceled': 'expired',
   'charge.refunded': 'refunded',
+  // ⚠️ `charge.refunded` 事件对象是**整张 Charge**：`amount` 是原扣款全额，退款额在
+  //    `amount_refunded`（NEEDS VERIFICATION：官方 changelog 未单列此事件载荷示例，
+  //    以 charge 对象结构推定）。F12 售后落账时取 `amount_refunded`，别用 `amount`。
   'charge.dispute.created': 'disputed',
 };
-
-/** 零小数币种（最小单位 = 主单位）。JPY 是典型；写错会把 100 円收成 1 円。 */
-const ZERO_DECIMAL = new Set(['JPY', 'KRW', 'VND', 'CLP']);
-
-/**
- * 主单位 → 机构最小单位。
- * @why 抽成函数是因为"×100"这类换算一旦散落，加币种时就会漏一处，
- *      而漏掉的表现是**金额差 100 倍**——可能是少收，也可能是多收。
- */
-export function toMinorUnits(amountMajor: number, currency: string): number {
-  const upper = currency.toUpperCase();
-  return ZERO_DECIMAL.has(upper) ? Math.round(amountMajor) : Math.round(amountMajor * 100);
-}
 
 interface StripeOptions {
   /** `sk_test_...` / `sk_live_...`（**绝不能进日志**）。 */
@@ -157,8 +148,15 @@ export function createStripeCheckoutProvider(
       throw new AppError(40103, { channel: cfg.channel, reason: 'stripe_signature_mismatch' });
     }
     // 时间容差：签名对但时间戳过旧 → 仍是 40103（防重放，不重试）
+    // ⚠️ `Number('not-a-number')` 是 NaN，`Math.abs(x - NaN) > 300` 为 false（任何与 NaN 的
+    //    比较都 false）——不拦的话畸形时间戳会绕过容差。签名已验过所以实际不可利用，
+    //    但"容差失效"本身不该静默（二次审查 P3-12）。
+    const tSec = Number(t);
+    if (!Number.isFinite(tSec)) {
+      throw new AppError(40103, { channel: cfg.channel, reason: 'stripe_timestamp_malformed' });
+    }
     const nowSec = Math.floor(deps.clock.now().getTime() / 1000);
-    if (Math.abs(nowSec - Number(t)) > STRIPE_TOLERANCE_SEC) {
+    if (Math.abs(nowSec - tSec) > STRIPE_TOLERANCE_SEC) {
       throw new AppError(40103, { channel: cfg.channel, reason: 'stripe_timestamp_expired' });
     }
   }
@@ -225,6 +223,11 @@ export function createStripeCheckoutProvider(
     async create(req: PaymentRequest): Promise<PaymentSession> {
       const form = new URLSearchParams({
         mode: 'payment',
+        // ⚠️ 显式白名单只收卡（D-49：银行卡通道）：不限制的话 Dashboard 里启用的
+        //    任何支付方式都会出现在托管页——其中**异步**方式（银行转账/便利店）会产生
+        //    `checkout.session.completed` 但 `payment_status='unpaid'` 的事件，
+        //    没有下面的 payment_status 校验就会把"用户还没付钱"置成 paid（二次审查 P2-NEW-1）。
+        'payment_method_types[0]': 'card',
         success_url: opts.successUrl,
         cancel_url: opts.cancelUrl,
         client_reference_id: req.orderId,
@@ -238,11 +241,8 @@ export function createStripeCheckoutProvider(
         'payment_intent_data[metadata][order_id]': req.orderId,
         'line_items[0][quantity]': '1',
         'line_items[0][price_data][currency]': req.currency.toLowerCase(),
-        // ⚠️ 只做"主单位 → 最小单位"（JPY 不 ×100，USD ×100）；
-        //    **JPY → 别的币种**的换算是 domain 的事，端口不碰（见 PaymentRequest.amountInCurrency）
-        'line_items[0][price_data][unit_amount]': String(
-          toMinorUnits(req.amountInCurrency, req.currency),
-        ),
+        // 端口口径：amountMinor 已是整数最小单位（JPY=円、USD=分），这里只透传
+        'line_items[0][price_data][unit_amount]': String(req.amountMinor),
         'line_items[0][price_data][product_data][name]': `WaSelect 订单 ${req.orderNo}`,
       });
       const res = await deps.http.send({
@@ -311,10 +311,21 @@ export function createStripeCheckoutProvider(
             : undefined;
       const currency =
         typeof obj['currency'] === 'string' ? obj['currency'].toUpperCase() : undefined;
+      // ⚠️ `checkout.session.completed` ≠ 已付款：异步支付方式下 completed 时
+      //    `payment_status` 还是 'unpaid'（官方口径：等 `checkout.session.async_payment_succeeded`）。
+      //    create() 已用白名单只收卡，这里是**第二道防线**（Dashboard 配置漂移也伤不到落账）：
+      //    带 payment_status 且不是 'paid' 的 completed 不归一化成 succeeded（二次审查 P2-NEW-1）。
+      const paymentStatus = obj['payment_status'];
+      const outcome =
+        type === 'checkout.session.completed' &&
+        typeof paymentStatus === 'string' &&
+        paymentStatus !== 'paid'
+          ? 'unknown'
+          : (OUTCOME_BY_TYPE[type] ?? 'unknown');
       return {
         eventId: typeof ev.id === 'string' ? ev.id : `gen-${deps.idGen.uuid()}`,
         rawType: type,
-        outcome: OUTCOME_BY_TYPE[type] ?? 'unknown',
+        outcome,
         orderId,
         providerRef:
           typeof obj['id'] === 'string'
@@ -332,7 +343,7 @@ export function createStripeCheckoutProvider(
       const form = new URLSearchParams({
         payment_intent: req.providerRef,
         // 原币退（见 RefundRequest.currency 的 @why）：币种与金额都来自**扣款当时**的那笔
-        amount: String(toMinorUnits(req.amountInCurrency, req.currency)),
+        amount: String(req.amountMinor),
         'metadata[order_id]': req.orderId,
         'metadata[reason]': req.reason,
       });
@@ -342,6 +353,12 @@ export function createStripeCheckoutProvider(
         headers: {
           authorization: `Bearer ${opts.secretKey}`,
           'content-type': 'application/x-www-form-urlencoded',
+          // ⚠️ 退款也必须带机构侧幂等键（与 create 同一层防线）：POST 超时后 Stripe 侧
+          //    状态未知，而我们按红线**绝不重试无幂等键的 POST**——不带键时超时 = 只能靠
+          //    人工再点一次，靠"已全额退款"报错兜底（二次审查 P2-NEW-2）。
+          //    键含 orderId：MVP 全额退、一单一退，同一订单的人工重试落到同一键上，
+          //    Stripe 会返回第一次的退款而不是再扣一次。
+          'idempotency-key': `refund:${req.orderId}`,
         },
         body: form.toString(),
       });

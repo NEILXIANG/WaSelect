@@ -176,11 +176,13 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
         { kind: 'response'; res: HttpResponse } | { kind: 'error'; err: unknown } | undefined;
 
       for (;;) {
-        attempt += 1;
         const remaining = totalBudgetMs - (now() - startedAt);
         // ⚠️ 剩余预算可能为 0/负：此时不能"再试一次但立刻超时"，
         //    那会白跑一趟网络并把超时噪声混进日志。预算用完就交出上一次的结果。
         if (remaining <= 0) break;
+        // ⚠️ 自增必须在"确认要试"之后（二次审查 P3-8）：放在循环头会把
+        //    "预算耗尽、根本没发出去的那一圈"也计进 attempts，日志虚高一档。
+        attempt += 1;
         const timeoutMs = Math.min(req.timeoutMs ?? fallbackTimeout, remaining);
 
         try {

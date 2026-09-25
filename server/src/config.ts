@@ -333,8 +333,8 @@ const schema = z.object({
    *      拿到真实的"用户放弃率 vs 等待时长"之后要调，调整不该发版。
    */
   HTTP_TOTAL_BUDGET_MS: int(6_000, 1),
-  /** 熔断：连续失败多少次才跳闸。⚠️ 必须 > `DEFAULT_RETRY_POLICY.maxAttempts`，否则一次请求就把上游判死。 */
-  CB_FAILURE_THRESHOLD: int(5, 1),
+  /** 熔断：连续失败多少次才跳闸。⚠️ 必须 > `DEFAULT_RETRY_POLICY.maxAttempts`（=3），否则一次请求就把上游判死。 */
+  CB_FAILURE_THRESHOLD: int(5, 4),
   /** 熔断：跳闸后冷却多久才放第一个探测（毫秒）。 */
   CB_COOLDOWN_MS: int(30_000, 0),
   /** 熔断：half_open 期间最多放行几个探测请求。 */
@@ -402,6 +402,40 @@ const crossField = schema.superRefine((c, ctx) => {
     );
   }
 
+  // 3b. mock 密钥：生产启用 mock 只可能发生在审核模式（规则 1 已拦其它情况）；
+  //     **staging 同规则**（二次审查 P3-7）——staging 是公网可达环境，占位密钥是仓库里的
+  //     公开值，回落 = 任何人都能伪造"支付成功"回调把订单置 paid。development/test 才允许回落。
+  const isStaging = c.NODE_ENV === 'staging';
+  if (
+    (isProd || isStaging) &&
+    c.PAYMENT_CHANNELS.includes('mock') &&
+    c.MOCK_CALLBACK_SECRET === undefined
+  ) {
+    add(
+      'MOCK_CALLBACK_SECRET',
+      `${c.NODE_ENV} 环境启用 mock 必须显式配置 MOCK_CALLBACK_SECRET，不得回落到开发占位值（公网环境，占位值是公开的）`,
+    );
+  }
+
+  // 2d. Stripe 密钥形状（二次审查 P3-6）：形状错的表现是"第一次调用/验签才炸"，
+  //     而那是用户正在付款的时刻——启动期拦下。生产必须 live：配 sk_test_ 的表现是
+  //     "真实用户全部无法付款"，比启动失败难看得多。
+  if (c.STRIPE_SECRET_KEY !== undefined && !/^sk_(test|live)_/.test(c.STRIPE_SECRET_KEY)) {
+    add(
+      'STRIPE_SECRET_KEY',
+      '形状必须是 sk_test_… 或 sk_live_…（贴错值/配错环境是最高频的 Stripe 配置事故）',
+    );
+  }
+  if (c.STRIPE_WEBHOOK_SECRET !== undefined && !c.STRIPE_WEBHOOK_SECRET.startsWith('whsec_')) {
+    add(
+      'STRIPE_WEBHOOK_SECRET',
+      '形状必须是 whsec_…（webhook 端点密钥，不是 API key——两者混淆是最常见的验签失败原因）',
+    );
+  }
+  if (isProd && c.STRIPE_SECRET_KEY !== undefined && !c.STRIPE_SECRET_KEY.startsWith('sk_live_')) {
+    add('STRIPE_SECRET_KEY', '生产环境必须配置 sk_live_…（配 sk_test_ 的表现是真实用户无法付款）');
+  }
+
   // 3. 启用真实通道就必须有对应密钥：缺密钥的表现是"下单报 500"，而不是"启动时告诉我少配了东西"
   if (isProd) {
     if (c.PAYMENT_CHANNELS.includes('stripe')) {
@@ -421,13 +455,6 @@ const crossField = schema.superRefine((c, ctx) => {
           '启用了 stripe 通道：生产环境必须配置 CHECKOUT_BASE_URL（D-49 短链域名）',
         );
       }
-    }
-    // 生产启用 mock 只可能发生在审核模式（规则 1 已拦其它情况）：此时必须有**独立的**回调密钥
-    if (c.PAYMENT_CHANNELS.includes('mock') && c.MOCK_CALLBACK_SECRET === undefined) {
-      add(
-        'MOCK_CALLBACK_SECRET',
-        '生产环境启用 mock（审核模式）必须显式配置 MOCK_CALLBACK_SECRET，不得回落到开发占位值',
-      );
     }
     if (c.PAYMENT_CHANNELS.includes('wechat')) {
       if (c.WECHAT_INSTITUTION_MERCHANT_ID === undefined) {

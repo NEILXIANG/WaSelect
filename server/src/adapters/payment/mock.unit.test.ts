@@ -57,7 +57,7 @@ describe('mock 通道', () => {
       orderNo: '260103-K7Q2MN',
       amountJpy: 12_000,
       currency: 'JPY',
-      amountInCurrency: 12_000,
+      amountMinor: 12_000,
       destCountry: 'US',
       idempotencyKey: 'idem-1',
     });
@@ -108,7 +108,7 @@ describe('mock 通道', () => {
       providerRef: 'ref-1',
       amountJpy: 12_000,
       currency: 'JPY',
-      amountInCurrency: 12_000,
+      amountMinor: 12_000,
       reason: '缺货',
     });
     expect(r?.refundRef.startsWith('mock_re_')).toBe(true);
@@ -129,7 +129,7 @@ describe('mock 通道', () => {
       orderNo: '260103-K7Q2MN',
       amountJpy: 100,
       currency: 'JPY',
-      amountInCurrency: 100,
+      amountMinor: 100,
       destCountry: 'US',
       idempotencyKey: 'idem-2',
     });
