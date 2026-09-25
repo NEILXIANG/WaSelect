@@ -1,4 +1,6 @@
 {
   "navigationBarTitleText": "骨架 · 行走链路",
-  "usingComponents": {}
+  "usingComponents": {
+    "ws-button": "/components/ws-button/index"
+  }
 }

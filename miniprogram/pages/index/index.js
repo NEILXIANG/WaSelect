@@ -13,6 +13,10 @@
  * @limitation 三：幂等键只存在**页面实例的内存**里（@see utils/idempotency.js @limitation 一）。
  *              页面销毁重建会丢键，重试会被当作新意图——MVP 刻意接受，
  *              要修应落在服务端草稿单，而不是把键写进本地缓存。
+ * @limitation 四：按钮统一走 `ws-button`，"处理中别再点"这道防线**只在组件里**有一份
+ *              （@see ../../components/ws-button/index.js @why）。页面里刻意**不写**手写守卫——
+ *              有守卫反而说明组件那道没起作用，或迟早变成两处规则各自漂移。
+ *              @see ../page-button-guard.unit.test.ts（这两条规则由机器守着）
  */
 import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -54,12 +58,17 @@ Page({
     this.setData({ error: `${code} ${e?.message ?? '未知错误'}`.trim() });
   },
 
+  /**
+   * 建单。
+   *
+   * ⚠️ 这里**没有**连点守卫，也不是漏了：三个按钮都换成了 `ws-button`，
+   *    那道防线只有组件里那一份（原生 `loading` 只转圈、不挡点击，
+   *    `disabled` 才挡——而"处理中"期间按钮 1 走 `loading`、按钮 2/3 走 `disabled`）。
+   *    @why 防线放两处的代价不是重复，而是**其中一处迟早被改掉而没人发现**：
+   *    漏一个页面就是两条并发请求（连点建两张单，不报错但很贵）。
+   *    @see ../../components/ws-button/index.js @why；page-button-guard.unit.test.ts（防它复发）
+   */
   async onCreate() {
-    // ⚠️ 必须自己挡连点：wxml 上的 `loading` 只让按钮转圈，**不会阻止 bindtap**，
-    //    `disabled` 才会。不挡的话连点会发出两个并发请求；即便键相同，
-    //    服务端也会让第二个拿 40903（"处理中"）而不是结果——体验上仍是"点了报个错"。
-    if (this.data.loading) return;
-
     // 一次用户操作 = 一条链路：这里建一次，后续请求沿用
     const traceId = newTraceId();
     // 一次用户意图 = 一个幂等键：首次新建，**失败后沿用**，成功后作废。

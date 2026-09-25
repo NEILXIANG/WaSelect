@@ -11,13 +11,30 @@
   </view>
 
   <view class="card">
-    <button class="btn" type="primary" loading="{{loading}}" bindtap="onCreate">
-      1 · 建单（落库一行）
-    </button>
-    <button class="btn" disabled="{{!orderId || loading}}" bindtap="onSimulate">
-      2 · 触发模拟支付回调
-    </button>
-    <button class="btn" disabled="{{!orderId || loading}}" bindtap="onRefresh">3 · 刷新状态</button>
+    <!-- ⚠️ 三个按钮都走 ws-button，不用原生 button：
+         "处理中再点一次"这道防线只有组件里那一份（原生 loading 只转圈、不挡点击）。
+         页面 js 里**没有**手写守卫，也不是漏了——@see components/ws-button/index.js @why -->
+    <ws-button
+      class="btn"
+      text="1 · 建单（落库一行）"
+      type="primary"
+      loading="{{loading}}"
+      bindtap="onCreate"
+    />
+    <ws-button
+      class="btn"
+      text="2 · 触发模拟支付回调"
+      type="default"
+      disabled="{{!orderId || loading}}"
+      bindtap="onSimulate"
+    />
+    <ws-button
+      class="btn"
+      text="3 · 刷新状态"
+      type="default"
+      disabled="{{!orderId || loading}}"
+      bindtap="onRefresh"
+    />
   </view>
 
   <view class="card" wx:if="{{orderId}}">
