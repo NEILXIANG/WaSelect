@@ -18,11 +18,17 @@
  *              在这里统一抛异常会抹掉这个区别。
  *              ⚠️ 但"重试次数用尽后的最后一个响应"仍会原样返回给调用方（不是抛异常），
  *              理由同上：那是上游的真实答复。
- * @limitation 五：**没有熔断**。上游长时间故障时，本实现仍会让每个请求各自重试满
- *              `maxAttempts` 次——它只保护"单次抖动"，不保护"上游持续不可用"。
- *              熔断要跨请求的状态（失败率窗口），属于下一个单元，不在这里半成品地加。
+ * @limitation 五：熔断**默认开启、可注入、可显式关闭**。状态在**进程内存**里，
+ *              重启即复位（多实例各跳各的）。详见 `./circuit-breaker.ts` 的 `@limitation`。
+ *              ⚠️ 被熔断拒绝时抛 `CircuitOpenError`——它与"上游报错"是两类事，
+ *              调用方要能分开处理；**本层不做错误码映射**（映射属 app 层，见 @limitation 六）。
+ * @limitation 六：**不把 `CircuitOpenError` 翻译成业务错误码**。
+ *              分层约束是 `app → domain → ports ← adapters`，adapters 不能反向 import app 的错误定义。
+ *              所以当下它会以"未分类异常"冒到最外层，表现为 500 而不是"上游暂不可用"。
+ *              这是已知缺口，要在 `app/pay-routes.ts` 的错误映射里补（登记在清单 F12 待办）。
  *
- * @see ../../ports/http-client.ts（端口契约、重试判定规则）；docs/地基搭建清单.md F12
+ * @see ../../ports/http-client.ts（端口契约、重试判定规则）；
+ *      ./circuit-breaker.ts（熔断状态机与存放）；docs/地基搭建清单.md F12
  */
 import type {
   HttpClient,
@@ -36,6 +42,8 @@ import {
   httpStatusKind,
   shouldRetry,
 } from '../../ports/http-client.js';
+import { breakerKey } from '../../ports/circuit-breaker.js';
+import { CircuitOpenError, createCircuitBreaker, type CircuitBreaker } from './circuit-breaker.js';
 import type { Logger } from '../../logger.js';
 
 /** 默认超时：支付链路不能无限等（见 @limitation 一）。 */
@@ -69,6 +77,16 @@ export interface FetchClientOptions {
   sleep?: (ms: number) => Promise<void>;
   /** 计时源（测试注入以断言"预算真的被算进去了"）。 */
   now?: () => number;
+  /**
+   * 熔断器。
+   *
+   * @why **默认开启**（用默认策略 + 本客户端的 `logger` 与 `now`）：
+   *      忘了配熔断的后果是"静默地没有保护"——门是绿的、链路是裸的，
+   *      而"多了一层保护"的后果最坏是误判（可关、可调）。两个方向不对称，所以默认开。
+   * @why 传 `null` 才是关闭：用一个**显式的空**表达"我知道并且不要"，
+   *      比"不传就没有"更不容易发生在"我只是没想起来"的情况下。
+   */
+  breaker?: CircuitBreaker | null;
 }
 
 /** 把 URL 收敛成可安全入日志的形态：去查询串（里面可能有 token / 签名）。 */
@@ -85,6 +103,11 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
   const rand = opts.rand ?? Math.random;
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  // ⚠️ 默认熔断**共用本客户端的时钟**：两处时间必须是同一个来源，
+  //    否则测试里注入了假时钟却只有预算走假时间、冷却走真实时间——
+  //    那种"一半可控"的状态最难排查。
+  const breaker =
+    opts.breaker === null ? undefined : (opts.breaker ?? createCircuitBreaker({ now, logger }));
 
   async function once(req: HttpRequest, timeoutMs: number): Promise<HttpResponse> {
     const init: RequestInit = {
@@ -101,6 +124,29 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
   return {
     async send(req: HttpRequest): Promise<HttpResponse> {
       const startedAt = now();
+      const key = breakerKey(req.url);
+
+      // 出发前：熔断说"别打"就不打。
+      // ⚠️ 这里**不发请求**，所以单独记一个 `http_outbound_circuit_open` 事件，
+      //    而不是混进 `http_outbound`——后者会被当成"我们打了一次上游"来统计，
+      //    而实际上一次网络往返都没发生（混进去会让"上游超时率"这类指标失准）。
+      if (breaker !== undefined) {
+        const gate = breaker.before(key);
+        if (!gate.allowed) {
+          logger?.error('http_outbound_circuit_open', {
+            result: 'circuit_open',
+            ctx: {
+              url: safeUrl(req.url),
+              method: req.method,
+              key,
+              state: gate.state,
+              retry_after_ms: gate.retryAfterMs,
+            },
+          });
+          throw new CircuitOpenError(key, gate.retryAfterMs);
+        }
+      }
+
       let attempt = 0;
       /**
        * 上一次尝试的结果。
@@ -123,6 +169,10 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
           const res = await once(req, timeoutMs);
           last = { kind: 'response', res };
           const kind = httpStatusKind(res.status);
+          // ⚠️ **每一次尝试**都喂给熔断（不是"整个请求结束后喂一次"）：
+          //    重试了 3 次才成功，中间那两次失败是真实发生的，不该被最后一次的成功抹掉；
+          //    而 `circuitAfter` 的语义是"成功即复位"，所以成功会自然清掉连续计数。
+          breaker?.after(key, kind);
           if (kind === 'none') {
             logger?.info('http_outbound', {
               result: 'ok',
@@ -159,6 +209,7 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
         } catch (e) {
           last = { kind: 'error', err: e };
           const kind = classifyHttpFailure(e);
+          breaker?.after(key, kind);
           const decision = shouldRetry(req, kind, attempt, policy, rand);
           if (!decision.retry) {
             logger?.error('http_outbound', {

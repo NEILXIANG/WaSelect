@@ -15,12 +15,19 @@
  *              能精确编排时间的前提下才可测；用真实 `Date.now()` 只能写出"大概重试了"的断言。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createFetchClient, DEFAULT_TIMEOUT_MS, DEFAULT_TOTAL_BUDGET_MS } from './fetch-client.js';
+import {
+  createFetchClient,
+  DEFAULT_TIMEOUT_MS,
+  DEFAULT_TOTAL_BUDGET_MS,
+  type FetchClientOptions,
+} from './fetch-client.js';
 import {
   DEFAULT_RETRY_POLICY,
   type HttpRequest,
   type RetryPolicy,
 } from '../../ports/http-client.js';
+import { DEFAULT_BREAKER_POLICY, type BreakerPolicy } from '../../ports/circuit-breaker.js';
+import { CircuitOpenError, createCircuitBreaker } from './circuit-breaker.js';
 import { createLogger } from '../../logger.js';
 import { MemorySink } from '../../../../test/helpers/memory-sink.js';
 
@@ -263,5 +270,177 @@ describe('createFetchClient：计时日志（脱敏）', () => {
     const row = h.sink.find('http_outbound')[0];
     expect(row?.result).toBe('server_error');
     expect(row?.ctx).toMatchObject({ no_retry_reason: expect.stringContaining('幂等键') });
+  });
+});
+
+/** 熔断策略常量（默认 5 / 30s / 1 个探测）。 */
+const BP: BreakerPolicy = DEFAULT_BREAKER_POLICY;
+
+/** 与 `POST_NO_KEY` 同形但**另一个主机**，用来验隔离。 */
+const POST_NO_KEY_OTHER_HOST: HttpRequest = {
+  ...POST_NO_KEY,
+  url: 'https://api.wechat.test/v3/pay/transactions',
+};
+
+/**
+ * 熔断接线用的可控客户端。
+ *
+ * @why 与上面的 `harness()` 分开写：那边钉的是**单次请求**（超时/重试/预算），
+ *      这边要的是**跨多次 send** 的状态累积，而且需要"中途换上游行为"
+ *      （先失败、后成功）与"把时钟推过冷却期"两个额外能力。
+ */
+function breakerHarness(
+  over: {
+    fetch?: (n: number) => Promise<{ status: number; body?: string }>;
+    breaker?: FetchClientOptions['breaker'];
+  } = {},
+) {
+  const sink = new MemorySink();
+  const logger = createLogger({ env: 'test', destination: sink });
+  let clock = 0;
+  let impl: (n: number) => Promise<{ status: number; body?: string }> =
+    over.fetch ?? (async () => ({ status: 503 }));
+  let count = 0;
+  vi.stubGlobal('fetch', async () => {
+    count += 1;
+    const r = await impl(count);
+    return { status: r.status, text: async () => r.body ?? '' };
+  });
+  const client = createFetchClient({
+    retry: P,
+    rand: () => 0,
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    logger,
+    // ⚠️ 显式展开三种情况：`undefined`（默认造一个）/ 注入 / `null`（关闭）。
+    //    直接写 `breaker: over.breaker` 在 `exactOptionalPropertyTypes` 下会把
+    //    `undefined` 也传进去，语义上就分不清"没传"与"传了 undefined"。
+    ...(over.breaker === undefined ? {} : { breaker: over.breaker }),
+  });
+  return {
+    client,
+    sink,
+    get calls(): number {
+      return count;
+    },
+    setFetch: (f: (n: number) => Promise<{ status: number; body?: string }>): void => {
+      impl = f;
+    },
+    at: (ms: number): void => {
+      clock = ms;
+    },
+  };
+}
+
+describe('createFetchClient：熔断接线（默认开启，可显式关闭）', () => {
+  it('默认就带熔断：连续失败到阈值后**不再打上游**，直接抛 CircuitOpenError', async () => {
+    const h = breakerHarness({ fetch: async () => ({ status: 503 }) });
+    for (let i = 0; i < BP.failureThreshold; i += 1) await h.client.send(POST_NO_KEY);
+    expect(h.calls).toBe(BP.failureThreshold);
+
+    await expect(h.client.send(POST_NO_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+    // 🔒 熔断的全部价值就在这一行：**一次网络往返都没发生**。
+    //    没有它的话，"保护上游"只是少重试几次，上游照样被砸。
+    expect(h.calls).toBe(BP.failureThreshold);
+  });
+
+  it('抛出的错误带 key 与还要等多久（调用方能区分"被熔断"与"上游报错"）', async () => {
+    const h = breakerHarness({ fetch: async () => ({ status: 503 }) });
+    for (let i = 0; i < BP.failureThreshold; i += 1) await h.client.send(POST_NO_KEY);
+
+    await expect(h.client.send(POST_NO_KEY)).rejects.toMatchObject({
+      name: 'CircuitOpenError',
+      key: 'api.stripe.test',
+      retryAfterMs: BP.cooldownMs,
+    });
+  });
+
+  it('冷却过后放行**一个**探测；探测成功 → 完全恢复', async () => {
+    const h = breakerHarness({ fetch: async () => ({ status: 503 }) });
+    for (let i = 0; i < BP.failureThreshold; i += 1) await h.client.send(POST_NO_KEY);
+    await expect(h.client.send(POST_NO_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+
+    h.at(BP.cooldownMs + 1_000); // 推过冷却期
+    h.setFetch(async () => ({ status: 200, body: 'ok' }));
+    const res = await h.client.send(POST_NO_KEY);
+    expect(res.status).toBe(200);
+
+    // 恢复之后，再失败也不会立刻被拒（计数已清零）
+    h.setFetch(async () => ({ status: 503 }));
+    await h.client.send(POST_NO_KEY);
+    await expect(h.client.send(POST_NO_KEY)).resolves.toMatchObject({ status: 503 });
+  });
+
+  it('按主机隔离：一个上游跳闸，另一个照常打', async () => {
+    const h = breakerHarness({ fetch: async () => ({ status: 503 }) });
+    for (let i = 0; i < BP.failureThreshold; i += 1) await h.client.send(POST_NO_KEY);
+    await expect(h.client.send(POST_NO_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+
+    // 换主机：不受影响（否则"Stripe 挂了导致微信也不能用"，这是连坐事故）
+    await expect(h.client.send(POST_NO_KEY_OTHER_HOST)).resolves.toMatchObject({ status: 503 });
+  });
+
+  it('4xx 不跳闸（上游健康地答复了一个错误请求，是我们的问题）', async () => {
+    const h = breakerHarness({ fetch: async () => ({ status: 400 }) });
+    for (let i = 0; i < BP.failureThreshold * 2; i += 1) await h.client.send(POST_NO_KEY);
+    // 全部尝试都成功发出（阈值 × 2 次也没有一次被拒）
+    expect(h.calls).toBe(BP.failureThreshold * 2);
+  });
+
+  it('一次请求内的**每次尝试**都计入（不因最后一次成功而抹掉中间的失败）', async () => {
+    // @why 这条钉的是"喂给熔断的粒度"。若只在整个请求结束后喂一次，
+    //      那么"重试 3 次才成功"会被记成一次成功 —— 上游的抖动就被完全隐藏了。
+    //      判据：阈值 5、每次请求最多 3 次尝试，所以**两个请求**就足以跳闸
+    //      （按请求粒度则需要 5 个请求）。
+    const h = breakerHarness({ fetch: async () => ({ status: 503 }) });
+    await h.client.send(POST_WITH_KEY); // 3 次尝试
+    await h.client.send(POST_WITH_KEY); // 第 5 次失败时跳闸，第 6 次尝试仍在本次请求内跑完
+    expect(h.calls).toBe(P.maxAttempts * 2);
+    await expect(h.client.send(POST_WITH_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+  });
+
+  it('`breaker: null` 显式关闭 → 一直打（不抛 CircuitOpenError）', async () => {
+    const h = breakerHarness({ fetch: async () => ({ status: 503 }), breaker: null });
+    for (let i = 0; i < BP.failureThreshold * 2; i += 1) {
+      await expect(h.client.send(POST_NO_KEY)).resolves.toMatchObject({ status: 503 });
+    }
+    expect(h.calls).toBe(BP.failureThreshold * 2);
+  });
+
+  it('注入的 breaker 被**直接使用**（不再自己造一个默认实例）', async () => {
+    // 注入一个阈值只有 2 的：若实现忽略了注入、仍用默认 5，这条会红
+    const h = breakerHarness({
+      fetch: async () => ({ status: 503 }),
+      breaker: createCircuitBreaker({
+        policy: { failureThreshold: 2, cooldownMs: 60_000, halfOpenMaxProbes: 1 },
+      }),
+    });
+    await h.client.send(POST_NO_KEY);
+    await h.client.send(POST_NO_KEY); // 第 2 次失败 → 跳闸
+    await expect(h.client.send(POST_NO_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+  });
+
+  it('跳闸记 `http_outbound_circuit_open`，且**不混进** `http_outbound` 统计', async () => {
+    // @why 分开记的理由是**指标会失准**：`http_outbound` 被当成"我们打了一次上游"来统计，
+    //     而熔断拒绝时一次网络往返都没有。混进去会稀释"上游超时率"这类指标，
+    //     表现是"上游看起来比实际健康"。
+    const h = breakerHarness({ fetch: async () => ({ status: 503 }) });
+    for (let i = 0; i < BP.failureThreshold; i += 1) await h.client.send(POST_NO_KEY);
+    const before = h.sink.find('http_outbound').length;
+
+    await expect(h.client.send(POST_NO_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+    const row = h.sink.find('http_outbound_circuit_open')[0];
+    expect(row?.result).toBe('circuit_open');
+    expect(row?.ctx).toMatchObject({
+      key: 'api.stripe.test',
+      state: 'open',
+      retry_after_ms: BP.cooldownMs,
+    });
+    // 不混进 http_outbound
+    expect(h.sink.find('http_outbound')).toHaveLength(before);
+    // 日志里不能出现查询串 / 鉴权头（脱敏红线在接线点同样成立）
+    expect(h.sink.lines.join('\n')).not.toContain('sk_live_secret');
   });
 });

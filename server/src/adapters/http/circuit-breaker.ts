@@ -59,9 +59,9 @@ export interface CircuitBreakerOptions {
   /** 时钟（默认 `Date.now`）。测试注入以把 30 秒冷却走完。 */
   now?: () => number;
   /** 跳闸 / 恢复的日志出口；不传则不记。 */
-  logger?: Logger;
+  logger?: Logger | undefined;
   /** 状态迁移回调（告警接这里；也可用于测试断言）。 */
-  onStateChange?: (key: string, from: CircuitState, to: CircuitState) => void;
+  onStateChange?: ((key: string, from: CircuitState, to: CircuitState) => void) | undefined;
 }
 
 /** 出发前的判定结果。 */

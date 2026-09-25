@@ -135,7 +135,11 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
         //      它们与骨架无关——骨架只是"没有真实下单接口时的一条演示链路"。
         //      注册表在装配处按配置拼好：加一个通道 = 改配置 + 注册工厂，本处不改。
         const registry = buildPaymentRegistry(config, {
-          http: createFetchClient(), // 必须带超时：fetch 默认不超时，支付请求挂死是真实事故
+          // ⚠️ `logger` **必须传**：不传的话出站 HTTP 一条日志都没有
+          //    ——计时、重试、以及"我们正在拒绝请求"的熔断信号全部丢失，
+          //    而它们正是线上回答"上游是不是挂了"的唯一依据（AJ-55 / AJ-62 / AJ-63）。
+          //    熔断**默认开启**：忘了配的后果是"静默地没有保护"，所以默认造一个。
+          http: createFetchClient({ logger }),
           clock: systemClock,
           idGen: systemIdGen,
         });
