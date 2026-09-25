@@ -449,6 +449,29 @@ export type AppConfig = z.infer<typeof schema>;
  */
 export const CONFIG_KEYS: readonly string[] = Object.keys(schema.shape);
 
+/**
+ * **无默认值**、必须由环境显式提供的环境变量名。
+ *
+ * @why 部署清单（`render.yaml`）最容易出的一类失效是"**新增了一个必填变量，却忘了配到平台上**"：
+ *      它在本机永远发现不了（本机 `.env` 里有），只在**部署之后启动失败**时才暴露——
+ *      而那已经是一次失败的发布，且失败形态是"服务起不来"而不是"某个功能不对"，
+ *      排查时最容易误判成代码问题。所以"哪些是必填"必须是**机器可读**的，
+ *      交给 `test/config/render-env.unit.test.ts` 做集合比对，而不是靠人对照 `.env.example`。
+ *
+ * @how 判定方式是"**喂 `undefined` 看它过不过得去**"，而不是再维护一份必填名单。
+ *      @why 第二份名单一定会漂移——这是本项目反复出现的失效形态（阈值表与文件路径、文档与 schema）。
+ *      有默认值 = 部署时可以不配；没默认值 = 不配就启动失败。这个语义本来就在 schema 里，取出来即可。
+ *
+ * @limitation 判据是"单个字段能否接受 undefined"，**不含跨字段规则**
+ *      （例如"生产启用 stripe 时 CHECKOUT_BASE_URL 必填"由 `crossField` 管）。
+ *      跨字段那几条的组合条件依赖其它字段的取值，无法离线枚举，靠 `config.unit.test.ts` 的用例覆盖。
+ */
+export const REQUIRED_ENV_KEYS: readonly string[] = CONFIG_KEYS.filter((key) => {
+  const shape: Record<string, z.ZodTypeAny> = schema.shape;
+  const field = shape[key];
+  return field !== undefined && !field.safeParse(undefined).success;
+});
+
 /** 配置校验失败：携带结构化 issues，供启动日志一次列全（不逐个试错重启）。 */
 export class ConfigError extends Error {
   constructor(

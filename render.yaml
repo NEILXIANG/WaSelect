@@ -1,0 +1,125 @@
+# Render 部署清单（F16）——Infrastructure as Code。
+#
+# @why 部署配置最容易出的失效不是"配错了"，而是"**代码新增了一个必填变量，平台上没配**"：
+#      本机永远发现不了（本机 .env 里有），只在部署后启动失败时才暴露——那已经是一次失败的发布。
+#      所以这个文件是**受门禁约束**的：test/config/render-env.unit.test.ts 会做三个集合比对
+#      （必填项是否都列了 / 这里列的键代码认不认得 / 密钥有没有被写死进来）。
+#      改这个文件之前先看那个测试的报错，它会直接告诉你缺哪个键。
+#
+# ⚠️ 密钥一律 `sync: false`（在 Render 控制台填），**绝不写 value**——
+#    本文件是提交进仓库的，写进来等于把密钥交给所有能读仓库的人（含 CI 日志）。
+#
+# @see .env.example（变量名与含义的唯一真源）、docs/地基搭建清单.md F16
+
+services:
+  - type: web
+    name: waselect-api
+    runtime: node
+    region: oregon # 美西 Oregon（ADR-13）：日本 ↔ 美西的往返比东京↔弗吉尼亚短一个量级
+    plan: starter # Web Starter ≈ $7/月。**禁免费档**：免费档会冷启动（首个请求可能几十秒），
+    #               支付回调在这种延迟下会被机构判超时并重发，而重发正是幂等要兜的东西——
+    #               拿免费档省下的钱去冒这个险不划算
+    branch: main
+    # 只装生产依赖；`npm run build` 编译 shared + server（start 跑的是 dist）
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    # ⚠️ 健康检查刻意用 /healthz（存活）而**不是** /readyz（就绪）。
+    #    /readyz 在停机摘流期间会转 503，若被平台当作健康依据，
+    #    正在排空在途请求的实例会被判定不健康而**提前杀掉**——恰好毁掉 SHUTDOWN_READY_DELAY_MS 要保护的那段窗口。
+    #    /readyz 保留给人工排查与外部观测。⚠️ 这条属平台行为，需 L4 在真平台上验一次。
+    healthCheckPath: /healthz
+    # 常驻调度器跑在 web 进程内（D-43）。**刻意 1 个实例**：多实例不是"多跑几次"，
+    # 而是两个进程抢同一把 advisory lock（安全但浪费），且订单超时关单这类 job 的触发时机变得不可预测。
+    # 要扩容前必须先把调度器拆成独立进程，否则每加一个实例就多一个空转的调度器。
+    numInstances: 1
+    envVars:
+      # ── 运行环境 ──────────────────────────────────────────────
+      # ⚠️ 必须显式写 production：schema 默认值是 development，
+      #    漏配的后果是**生产跨字段校验全部不生效**（https 要求、必填要求、CORS 要求全跳过），
+      #    而且服务照样起得来、照样能下单——是一类"看起来一切正常"的错。
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22
+      - key: HOST
+        value: 0.0.0.0 # 容器平台从宿主机外部探端口，绑回环会导致健康检查超时/发布失败
+      - key: TRUST_PROXY_HOPS
+        value: 1 # Render 前置一层反代（D23）。必须是层数，不是 true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: waselect-pg
+          property: connectionString
+
+      # ── 密钥（`sync: false`：在控制台填，不进仓库）────────────
+      - key: JWT_SECRET
+        sync: false # openssl rand -hex 32；≥32 字符
+      - key: MOCK_CALLBACK_SECRET
+        sync: false # 审核期专用。**独立于 JWT_SECRET**（泄露半径与轮换周期不同，P1-4）
+      - key: ADMIN_INITIAL_PASSWORD
+        sync: false # ≥12 位；首次登录后应改密。seed 时 bcrypt 写入 users.password_hash
+
+      # ── 业务口径 ──────────────────────────────────────────────
+      - key: TERMS_VERSION
+        value: TOS-2026-09-20 # 建单必传且必须相等（40011）；改它等于让所有旧客户端下单失败，是有意的行为
+      # 审核期只开 mock（AJ-30：真实通道必须离线，防止测试下单产生真实扣款）。
+      # R1（收单机构事前相談）通过后再改这里加 wechat——**改配置不改代码**，这正是通道可插拔的目的。
+      - key: PAYMENT_CHANNELS
+        value: mock
+      - key: REVIEW_MODE
+        value: on
+      - key: REVIEW_SKU_ID
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false # 生产必填（跨字段校验会拦）；只放行 admin-web 域名
+      - key: ADMIN_OPENIDS
+        sync: false # 逗号分隔；首次登录时写入 users.is_admin
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: PUBLIC_API_BASE
+        sync: false # 小程序 request 合法域名（微信后台每月仅可改 5 次，开局一次性规划）
+
+      # ── 尚未接线，先占位（业务期接上时直接填值，不用改这个文件）──
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: CHECKOUT_BASE_URL
+        sync: false # 短链域名（D-49）；启用 stripe 时生产必填
+      - key: INTERNAL_JOB_SECRET
+        sync: false # 每日对账 Cron Job 的共享密钥；≥32 字符
+      - key: SENTRY_DSN
+        sync: false
+      - key: IMG_BASE_URL
+        sync: false # 商品图必须走 R2 + CDN（Render egress 仅 5GB/月，不能由应用出图片流量）
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: MAIL_PROVIDER_API_KEY
+        sync: false
+      - key: SUBSCRIBE_TMPL_PAID
+        sync: false
+      - key: SUBSCRIBE_TMPL_SHIPPED
+        sync: false
+      - key: SUBSCRIBE_TMPL_DELIVERED
+        sync: false
+      - key: APP_ID
+        sync: false # 小程序 AppID（境外主体注册后取得）
+      - key: APP_SECRET
+        sync: false
+      - key: WECHAT_INSTITUTION_MERCHANT_ID
+        sync: false
+      - key: WECHAT_INSTITUTION_API_KEY
+        sync: false
+
+databases:
+  - name: waselect-pg
+    region: oregon # 与 web 同区：跨区会把每个查询的 RTT 加几十毫秒，且**按 egress 计费**
+    plan: starter # ≈ $6/月。**禁免费档**：免费库 30 天过期，数据是唯一不能重建的东西
+    postgresVersion: 16 # 代码里有硬闸门 assertPostgresMajor(>=16)，版本不符直接启动失败
+    databaseName: japan_shop
+    user: waselect
