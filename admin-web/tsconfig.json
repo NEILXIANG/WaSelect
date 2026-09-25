@@ -1,0 +1,32 @@
+{
+  "//": "admin-web 独立的 tsconfig（不进根 tsconfig 的 include）：根配置是 NodeNext/无 DOM lib 的 Node 口径，",
+  "//2": "而本端是 bundler resolution + DOM lib + JSX 的浏览器口径——两套口径互斥，只能分开。",
+  "//3": "严格选项与根 tsconfig 逐项对齐（strict/noUncheckedIndexedAccess/exactOptionalPropertyTypes…），",
+  "//4": "改根配置时这里要跟着改（eslint 类型感知经 projectService 各找各的项目，不会自动同步）。",
+  "//5": "types 里 node 也在列**只是为了测试文件**（跨端同值断言要 node:fs 读 miniprogram 的源文件）；",
+  "//6": "代价是 src 业务代码误用 process/Buffer 不会被 tsc 拦——浏览器一跑就崩，dev 期即现形，可接受；",
+  "//7": "反之把测试挪出 admin-web 会破坏本仓库「测试贴着模块放」的结构约定。另：注释键只能放顶层，compilerOptions 内不接受未知键。",
+
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["vite/client", "node"],
+    "useDefineForClassFields": true,
+    "moduleDetection": "force"
+  },
+  "include": ["src", "vite.config.ts"]
+}

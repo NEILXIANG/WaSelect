@@ -11,13 +11,14 @@
   "packageManager": "npm@10.9.7",
   "workspaces": [
     "server",
-    "packages/shared"
+    "packages/shared",
+    "admin-web"
   ],
   "scripts": {
     "prepare": "git config core.hooksPath scripts || true",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck -w admin-web",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:fast": "vitest run --project unit --changed HEAD~1 --passWithNoTests",

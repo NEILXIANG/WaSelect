@@ -163,7 +163,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.ts'],
+    files: ['**/*.ts', '**/*.tsx'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
@@ -200,7 +200,7 @@ export default tseslint.config(
      *    结论：默认全开，两头都对。若将来降级到 Express 4，async handler 会开始报红，
      *    那时该改的是升级 Express，不是关这条规则。
      */
-    files: ['**/*.ts'],
+    files: ['**/*.ts', '**/*.tsx'],
     languageOptions: {
       parserOptions: {
         // `projectService` 让每个文件自动归属到 tsconfig，省掉手工维护 `project` 映射；

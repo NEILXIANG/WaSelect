@@ -38,6 +38,10 @@ export const COVERAGE_INCLUDE: string[] = [
   'server/src/**/*.ts',
   'miniprogram/**/*.ts',
   'miniprogram/utils/*.js',
+  // admin-web：只收 `.ts`（api 封装等纯逻辑）；`.tsx` 组件层不收——
+  // 与小程序 pages/components 不收同一口径：没有组件测试 harness（未引入 testing-library），
+  // 收进来是几个 0% 文件，只会拉低均值换不来信号。UI 的性质靠构建（vite build 进 gate）+ L4 人工验收。
+  'admin-web/src/**/*.ts',
 ];
 
 export const COVERAGE_EXCLUDE: string[] = [
@@ -280,4 +284,10 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
   'server/src/app/auth.ts': { branches: 95 },
+
+  // F15 单元② admin-web 请求封装：管理端**所有**写操作（发货/退款/上下架）的唯一出口。
+  // 它错的形态全部不报错——带错 token 形状、超时取消被当成"服务端没执行"而重发、
+  // 401 不登出让管理员对着过期会话白点按钮。与小程序 request.js / server 出站 HTTP 同强度（100%），
+  // 它是"边界层"，边界层的价值就在于没有第二种实现。
+  'admin-web/src/api/client.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
 };
