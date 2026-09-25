@@ -1,12 +1,12 @@
 {
-  "desc": "索引配置：https://developers.weixin.qq.com/miniprogram/dev/framework/sitemap.html",
+  "desc": "索引配置：https://developers.weixin.qq.com/miniprogram/dev/framework/sitemap.html —— 黑名单制：默认收录（商城要微信搜一搜带进商品页流量），仅显式 disallow 私密/开发页。私有前缀页面必须有 disallow 规则，由 project-config.unit.test.ts 机器断言兜底",
   "rules": [
     {
-      "action": "allow",
-      "page": "pages/index/index"
+      "action": "disallow",
+      "page": "pages/comp/index"
     },
     {
-      "action": "disallow",
+      "action": "allow",
       "page": "*"
     }
   ]

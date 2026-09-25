@@ -50,7 +50,7 @@ const RAW_BODY_LIMIT = '256kb';
 export interface CorsOptions {
   /** 允许的来源（**精确匹配**，不支持通配）。 */
   origins: readonly string[];
-  /** 生效的路径前缀，默认 `/api/v1/admin`。 */
+  /** 生效的路径前缀，默认 `['/api/v1/admin', '/api/v1/auth/admin']`（业务 + 管理端登录）。 */
   pathPrefixes?: readonly string[] | undefined;
 }
 
@@ -164,7 +164,9 @@ function pathMatchesPrefix(path: string, prefix: string): boolean {
 }
 
 function corsMiddleware(opts: CorsOptions): RequestHandler {
-  const prefixes = opts.pathPrefixes ?? ['/api/v1/admin'];
+  // ⚠️ `/api/v1/auth/admin`（管理端登录）必须在内：它是 admin-web 的**第一个**跨域调用，
+  //    漏了它，管理端连登录预检都过不去——而业务路由一条条加的时候没人会想起登录（体检 P1-1）。
+  const prefixes = opts.pathPrefixes ?? ['/api/v1/admin', '/api/v1/auth/admin'];
   return (req, res, next) => {
     const origin = req.header('origin');
     if (origin === undefined) {
@@ -189,7 +191,8 @@ function corsMiddleware(opts: CorsOptions): RequestHandler {
       next();
       return;
     }
-    res.setHeader('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    // PUT 必须在列：契约里管理端有 PUT 路由（如地址/商品更新），缺了预检直接拦（体检 P1-2）
+    res.setHeader('access-control-allow-methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
     // idempotency-key 必须在列（N8）：管理端写操作（发货/退款）按规范要带幂等键，
     // 预检不放行它，浏览器在预检阶段就把请求拦下——管理端连试错的余地都没有
     res.setHeader(

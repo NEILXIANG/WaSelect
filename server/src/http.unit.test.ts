@@ -218,6 +218,45 @@ describe('CORS 与就绪探针（D21）', () => {
     expect(res.headers.get('access-control-allow-headers')).toContain('idempotency-key');
   });
 
+  it('管理端**登录**路径也开放 CORS（体检 P1-1：它是 admin-web 的第一个跨域调用，漏了登录必死）', async () => {
+    // 复现形态：admin-web 在浏览器里 POST /api/v1/auth/admin/login（content-type: json 触发预检），
+    // 而 pathPrefixes 只有 /api/v1/admin → 预检拿不到 allow-origin → 浏览器拦截 → "登录点不动"
+    const { baseUrl } = await serve({ cors: { origins: ['https://admin.example.com'] } });
+    const res = await fetch(`${baseUrl}/api/v1/auth/admin/login`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://admin.example.com',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'content-type',
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://admin.example.com');
+  });
+
+  it('登录路径的近似前缀不放行（/api/v1/auth/adminx 不是 /api/v1/auth/admin）', async () => {
+    const { baseUrl } = await serve({ cors: { origins: ['https://admin.example.com'] } });
+    const res = await fetch(`${baseUrl}/api/v1/auth/adminx/login`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://admin.example.com', 'access-control-request-method': 'POST' },
+    });
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('预检放行 PUT（体检 P1-2：契约里管理端有 PUT 路由，缺了预检直接拦）', async () => {
+    const { baseUrl } = await serve({ cors: { origins: ['https://admin.example.com'] } });
+    const res = await fetch(`${baseUrl}/api/v1/admin/products/p-1`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://admin.example.com',
+        'access-control-request-method': 'PUT',
+        'access-control-request-headers': 'authorization,content-type',
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-methods')).toContain('PUT');
+  });
+
   it('真实响应带 expose-headers（N8：前端要读得到 x-trace-id 才能报障）', async () => {
     const { baseUrl } = await serve({
       cors: { origins: ['https://admin.example.com'] },

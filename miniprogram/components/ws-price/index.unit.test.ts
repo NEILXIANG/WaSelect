@@ -25,6 +25,7 @@
  * @see ../../utils/price-format.js（格式化真源，17 条单测）；docs/地基搭建清单.md F14
  */
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import simulate from 'miniprogram-simulate';
@@ -135,5 +136,37 @@ describe('ws-price：漏传价格不能显示 ¥0', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('ws-price：非法尺寸档位不能静默回退', () => {
+  /**
+   * @why `size` 直接插 class 名时，传 `xl` 的表现是"没有档位样式命中 → 悄悄落回基础字号"：
+   *      版式散掉且不报错。与漏传价格显示 `¥0` 是同一种失效形态，走同一条响亮失败通道
+   *      （safeCallback → 渲染保持初始空态 + 控制台明确报错）。
+   */
+  it('⚠️ 传不存在的档位（xl）→ 报错且不产出档位 class', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const comp = render({ jpy: 1, size: 'xl' });
+      const logged = spy.mock.calls
+        .flat()
+        .map((c) => String(c))
+        .join('\n');
+      expect(logged).toMatch(/size 必须是 sm \/ md \/ lg 之一/);
+      // 初始 sizeClass 是 md：update 抛错后**停在前态**，绝不出现 ws-price--xl
+      expect(renderedClass(comp)).not.toContain('ws-price--xl');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('wxml 不直接消费 `size` 属性（档位 class 只能来自校验过的 sizeClass）', () => {
+    // 渲染层测不出绑定方式（`ws-price--{{size}}` 与 `{{sizeClass}}` 在合法档位下产物一样），
+    // 所以直接读 wxml 源文件钉住：插值必须是 sizeClass，不得回退成 size
+    // （与 ws-button 测试读 wxml 断言 catchtap 同款做法）
+    const wxml = readFileSync(`${root}/components/ws-price/index.wxml`, 'utf8');
+    expect(wxml).toContain('{{sizeClass}}');
+    expect(wxml).not.toMatch(/\{\{size\}\}/);
   });
 });

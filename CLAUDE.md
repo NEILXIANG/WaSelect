@@ -110,7 +110,7 @@
 
 | 已建机制 | 防住什么 |
 |---|---|
-| `server/src/db.db.test.ts` 的**结构不变量**（任何外键列都要索引、任何 status 列都要域约束） | 新表自动进入覆盖，漏索引/漏约束立刻红；豁免必须写原因 |
+| `server/src/adapters/db.db.test.ts` 的**结构不变量**（任何外键列都要索引、任何 status 列都要域约束） | 新表自动进入覆盖，漏索引/漏约束立刻红；豁免必须写原因 |
 | `server/src/config.contract.test.ts`（`.env.example` ↔ schema 键集合一致） | 变量名拼错被 zod strip 静默忽略、文档写了代码没有 |
 | `vitest.config.mts` 的关键模块 100% 门槛 | 关键模块靠全局均值蒙混过关 |
 | `scripts/check-contract.mjs`（契约随库 + 双副本比对） | 检查依赖隔壁仓库、文档库与工程库漂移 |

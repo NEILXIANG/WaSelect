@@ -39,6 +39,7 @@ const REQUIRED_STEPS: readonly string[] = [
   'lint',
   'typecheck',
   'build',
+  'build:checkout',
   'check:contract',
   'test:unit',
   'test:db',

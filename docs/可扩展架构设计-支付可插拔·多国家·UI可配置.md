@@ -157,7 +157,7 @@ server/src/
 | **P2（真要加国家时）** | 地址校验 country-aware（应用层 + DB 约束迁移）、地址表单 schema 渲染、`seller_entity` 多主体路由 | 中 | 触发条件：新增第一个非美国目的国 |
 | **P3（真要加支付时）** | 新 Provider 实现（复用契约测试）、前端入口已自动出现 | 低 | 触发条件：新增第一个新通道 |
 
-**表数变化**：13 → **17**（新增 `country_profiles` / `duty_rates` / `payment_channels` / `app_config`）。确认后再同步《技术文档》§3 DDL 与 `api-contract`。
+**表数变化**：本文成文时写的「13 → 17」基准已失真——002/003 各加过表，基准早非 13。正确口径：007 迁移后当前实际 **17 张**（四张新增中 `country_profiles` 已落地，见 `migrations/007`）；`duty_rates` / `payment_channels` / `app_config` 全部落地后为 **20 张**。唯一真源是 `server/src/adapters/db.db.test.ts` 的表清单断言。确认后再同步《技术文档》§3 DDL 与 `api-contract`（跨仓同步欠账已登记，见 `docs/地基搭建清单.md` 欠账登记）。
 
 ---
 

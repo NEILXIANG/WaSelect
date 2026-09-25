@@ -1,9 +1,10 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.5.0
+  version: 0.5.1
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
+    0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
     鉴权：Bearer JWT（小程序 aud=mp；管理端 aud=admin）。D-49 起没有 H5 身份：银行卡支付在 Stripe Checkout 托管页完成。写接口支持 Idempotency-Key 头（24 小时内重复返回原响应）。
     展示价只由后端计算（display 对象），前端不做汇率乘法。
     F11（ADR-28）：支付回调**合并为统一入口** `/pay/callback/{channel}`（channel 为路径参数，新增通道不再新增路由），
@@ -48,7 +49,7 @@ paths:
     post:
       security: []
       summary: 管理端（admin-web）邮箱密码登录；仅 is_admin 账号，JWT 12 小时（aud=admin）；连续失败 5 次锁 15 分钟
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 10}}}}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 12}}}}}}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {token: {type: string}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /fx:
     get:
@@ -250,7 +251,7 @@ paths:
       #    于是"假数据形状 vs 契约声明"的脱节会在 gate 里变红，而不是等到联调。
       #    @limitation 目前只有 stripe 一条；新增通道在此登记，样本工厂同步补。
       x-provider-events:
-        stripe: checkout.session.completed / checkout.session.expired / payment_intent.succeeded / payment_intent.payment_failed / payment_intent.canceled / charge.refunded / refund.updated / refund.failed / charge.dispute.created / charge.dispute.closed / charge.dispute.funds_withdrawn / charge.dispute.funds_reinstated（D-49/D-50）
+        stripe: checkout.session.completed / checkout.session.expired / checkout.session.async_payment_succeeded / checkout.session.async_payment_failed / payment_intent.succeeded / payment_intent.payment_failed / payment_intent.canceled / charge.refunded / refund.updated / refund.failed / charge.dispute.created / charge.dispute.closed / charge.dispute.funds_withdrawn / charge.dispute.funds_reinstated（D-49/D-50）
       responses:
         '200': {description: '已收下；body 形如 {received: true, order_id}（重复投递带 duplicate:true，未落业务状态带 ignored:<outcome|unmatched|paid:already|status_conflict>）'}
         '400': {$ref: '#/components/responses/Err'}

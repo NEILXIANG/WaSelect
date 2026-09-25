@@ -1,1 +1,1 @@
-<text class="ws-price ws-price--{{size}}">{{text}}</text>
+<text class="ws-price {{sizeClass}}">{{text}}</text>

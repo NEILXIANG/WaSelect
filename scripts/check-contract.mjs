@@ -54,7 +54,21 @@ for (const code of codes) {
   if (!contract.includes(code)) problems.push(`错误码 ${code} 未在 api-contract.yaml 中出现`);
 }
 
-const states = [...enumsSrc.matchAll(/^\s+'([a-z_]+)',$/gm)].map((m) => m[1]);
+// 多行数组形态：每行一个 'value',
+const multiline = [...enumsSrc.matchAll(/^\s+'([a-z_]+)',$/gm)].map((m) => m[1]);
+// 单行数组形态：export const X = ['a', 'b'] as const;
+// @why 体检 N17：PAYMENT_CHANNEL（mock/wechat/stripe）就是单行数组，旧正则只认多行，
+//      这条数组的值漂移时本检查完全不覆盖——"扫描类门禁必须配自检与覆盖面对账"（§2 第 34 条）。
+const inline = [
+  ...enumsSrc.matchAll(/^\s*export const [A-Z_]+ = \[((?:\s*'[a-z_]+',?)+)\] as const;/gm),
+].flatMap((m) => [...(m[1]?.matchAll(/'([a-z_]+)'/g) ?? [])].map((x) => x[1]));
+const states = [...new Set([...multiline, ...inline])];
+if (states.length === 0) problems.push('enums.ts 里没有解析到任何枚举值（正则失效？）');
+// 覆盖面对账（自检）：PAYMENT_CHANNEL 这类单行数组必须真的被扫到，
+// 否则"单行数组不受检"这件事会再次静默复发（N17 的教训：扫描器本身也要被扫）
+if (!states.includes('mock') || !states.includes('wechat') || !states.includes('stripe')) {
+  problems.push('PAYMENT_CHANNEL（单行数组）未被枚举扫描覆盖（N17 回归）');
+}
 for (const state of states) {
   if (!contract.includes(state)) problems.push(`枚举值 ${state} 未在 api-contract.yaml 中出现`);
 }

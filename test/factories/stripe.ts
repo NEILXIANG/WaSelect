@@ -15,8 +15,9 @@
  * @limitation 一：这里的 `verifyStripeSignature` 是**测试用的交叉验证实现**，
  *              不是生产实现。F11 会用官方 SDK 的 `stripe.webhooks.constructEvent`；
  *              保留一份独立实现是为了能用"另一套算法"验我造的样本，避免自证。
- * @limitation 二：只造 `payment_intent.*` 与 `charge.*` 两类事件。
- *              其余事件（退款、争议）的形状在用到时按同一方式补，不预先编。
+ * @limitation 二：造 `checkout.session.*` / `payment_intent.*` / `charge.refunded` /
+ *              `charge.dispute.created` 四类。其余（refund.updated、dispute.closed 等售后后续事件）
+ *              在用到时按同一方式补，不预先编（豁免名单见 STRIPE_EVENTS_NOT_SAMPLED）。
  * @limitation 三：金额一律用**最小货币单位整数**（JPY 是零小数币种，1 円 = 1）。
  *              Stripe 对 JPY 不做 /100 处理，写成 amount=100 就是 100 円——
  *              与 USD（分）混用是跨境支付最常见的金额事故，这里刻意只造 JPY。
@@ -116,9 +117,51 @@ export function checkoutSession(seed: CheckoutSessionSeed = {}): Record<string, 
 }
 
 /**
+ * `data.object` = Charge 的形状（`charge.refunded` 用）。
+ *
+ * @why metadata 默认带 order_id：官方口径是"建 Charge 时 PaymentIntent 的 metadata
+ *      会复制到 Charge"，而我们的 create 会写 `payment_intent_data.metadata.order_id`——
+ *      所以**真实**的 charge 事件一定带着它。样本若不照这个形状造，
+ *      解析代码就可能在"metadata 恒存在"的假设上写死，而测不出来。
+ */
+export function charge(seed: { metadata?: Record<string, string> } = {}): Record<string, unknown> {
+  return {
+    id: 'ch_3P0000000000000000000000',
+    object: 'charge',
+    amount: 12_000,
+    currency: 'jpy',
+    payment_intent: 'pi_3P0000000000000000000000',
+    refunded: true,
+    amount_refunded: 12_000,
+    metadata: seed.metadata ?? { order_id: 'sk-sample-order' },
+  };
+}
+
+/**
+ * `data.object` = Dispute 的形状（`charge.dispute.*` 用）。
+ *
+ * ⚠️ **刻意不带 metadata、不带 client_reference_id**：Stripe 不会把 metadata 复制到
+ *    Dispute 上，链回订单的唯一字段是 `payment_intent`（适配器据此反查）。
+ *    曾经把它造成 `{object: 'charge'}`——形状错了，于是"dispute 取不到 order_id"
+ *    这个真实失效形态在测试里根本不存在（体检 P1-7 的掩盖层之一）。
+ */
+export function dispute(seed: { paymentIntent?: string } = {}): Record<string, unknown> {
+  return {
+    id: 'du_3P0000000000000000000000',
+    object: 'dispute',
+    amount: 12_000,
+    currency: 'jpy',
+    charge: 'ch_3P0000000000000000000000',
+    payment_intent: seed.paymentIntent ?? 'pi_3P0000000000000000000000',
+    reason: 'fraudulent',
+    status: 'warning_needs_response',
+  };
+}
+
+/**
  * 造一个 Stripe 事件（形状与官方一致）。
  * @param type 事件类型
- * @param object 该事件的 `data.object` 内容（用 `paymentIntent()` / `checkoutSession()` 造）
+ * @param object 该事件的 `data.object` 内容（用 `paymentIntent()` / `checkoutSession()` / `charge()` / `dispute()` 造）
  * @param overrides 覆盖项，见 `StripeEventOverrides`（`dataObject` 为深合并）
  */
 export function stripeEvent(
@@ -222,6 +265,7 @@ export const STRIPE_EVENTS_NOT_SAMPLED: readonly string[] = [
 export function objectForEvent(type: string): Record<string, unknown> {
   if (type.startsWith('checkout.session.')) return checkoutSession();
   if (type.startsWith('payment_intent.')) return paymentIntent();
-  if (type.startsWith('charge.')) return { id: 'ch_3P0000000000000000000000', object: 'charge' };
+  if (type.startsWith('charge.dispute.')) return dispute();
+  if (type.startsWith('charge.')) return charge();
   throw new Error(`未知事件类型，未定义样本形状：${type}`);
 }

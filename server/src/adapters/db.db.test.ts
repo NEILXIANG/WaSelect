@@ -286,6 +286,17 @@ describe('迁移本身', () => {
     const rows = await db`select name from job_runs order by name`;
     expect(rows.map((r) => r.name)).toEqual(['daily', 'tick']);
   });
+
+  it('orders.terms_version 列宽已加宽（008：条款改一版不该撑爆建单路径）', async () => {
+    // @why 体检 P2：VARCHAR(16) 对 `TOS-2026-09-20`（14 字符）余量只有 2，
+    //      下次条款改版建单就会撑爆——用真库的列宽断言钉住，回退迁移立刻红。
+    const rows = await db`
+      select character_maximum_length as len
+      from information_schema.columns
+      where table_schema = 'public' and table_name = 'orders' and column_name = 'terms_version'
+    `;
+    expect(Number(rows[0]?.len)).toBeGreaterThanOrEqual(32);
+  });
 });
 
 /**

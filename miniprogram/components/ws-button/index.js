@@ -48,15 +48,15 @@ Component({
      * 内部按钮的 tap。
      * @param {WechatMiniprogram.TouchEvent} e
      */
-    onTap(e) {
+    onTap() {
       // ⚠️ 只在这里挡 `loading`：`disabled` 由原生 button 自己挡（它真的不触发 tap）。
       //    官方的 `loading` **只显示转圈、不阻止点击**——少了这一行，
       //    用户连点就会发出两条并发请求（页面里的手写守卫就是在补这个洞）。
       if (this.data.loading) return;
 
       // ⚠️ 不带 detail：这个组件没有"用户点了哪里"之类的附加信息可给，
-      //    传一个空对象反而会让页面以为有内容可看。
-      this.triggerEvent('tap', e.detail);
+      //    把原生事件的 detail（坐标等）透传出去反而会让页面以为有内容可看。
+      this.triggerEvent('tap');
     },
   },
 });

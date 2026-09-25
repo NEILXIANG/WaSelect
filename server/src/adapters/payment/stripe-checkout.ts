@@ -46,8 +46,15 @@ export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
 /** 官方库默认容差 5 分钟；超过这个时间的报文即使签名正确也拒（防重放）。 */
 export const STRIPE_TOLERANCE_SEC = 300;
 
-/** 事件类型 → 归一化结果。**未列出的一律 unknown**（不猜）。 */
-const OUTCOME_BY_TYPE: Readonly<Record<string, ProviderEvent['outcome']>> = {
+/**
+ * 事件类型 → 归一化结果。**未列出的一律 unknown**（不猜）。
+ *
+ * @why 导出（而不是藏在模块内）：契约的 `x-provider-events.stripe` 清单、本表、
+ *      样本工厂的豁免名单是**三方互锁**的同一份事实（test/factories/stripe.contract.test.ts
+ *      逐字比对），任何一方改了另两方没变红 = 口径漂移。
+ *      契约里订阅但刻意不归一化的事件（refund.updated 等售后后续事件）见该测试的名单。
+ */
+export const OUTCOME_BY_TYPE: Readonly<Record<string, ProviderEvent['outcome']>> = {
   'checkout.session.completed': 'succeeded',
   'checkout.session.async_payment_succeeded': 'succeeded',
   'checkout.session.async_payment_failed': 'failed',
@@ -169,6 +176,40 @@ export function createStripeCheckoutProvider(
     );
   }
 
+  /**
+   * Dispute 对象的专用取数通道：**反查 PaymentIntent**。
+   *
+   * @why Stripe 不会把 metadata 复制到 Dispute 上（与 Charge 不同——Charge 在建单时
+   *      会拿到 PaymentIntent 的 metadata 副本），dispute 对象上链回订单的唯一字段是
+   *      `payment_intent`；不反查的话 `charge.dispute.*` 事件全部取不到 order_id →
+   *      抛错 → 500 → 机构按节奏重发（ bounded 的重试风暴），且 `webhook_events` 里
+   *      连一行"收到过"都没有（解析先于登记）——拒付这种"钱在被往回拉"的事件
+   *      恰恰是最不能丢审计的一类（体检 P1-7）。
+   * @limitation 一次回调多一次出站调用；失败（超时/5xx）则原样抛出让机构重发。
+   *             反查拿到的 PI 上也没有 order_id 时同样抛——那才是**我们的**缺陷。
+   */
+  async function orderIdViaPaymentIntent(pi: string): Promise<string> {
+    const res = await deps.http.send({
+      method: 'GET',
+      url: `${apiBase}/v1/payment_intents/${pi}`,
+      headers: { authorization: `Bearer ${opts.secretKey}` },
+    });
+    if (res.status < 200 || res.status >= 300) {
+      // @security 只带状态与前 200 字符：上游错误体可能含 PII，且只进日志
+      throw new Error(
+        `stripe 反查 payment_intent 失败：HTTP ${res.status} ${res.body.slice(0, 200)}（pi=${pi}）`,
+      );
+    }
+    const json = JSON.parse(res.body) as { metadata?: Record<string, unknown> };
+    const orderId = json.metadata?.['order_id'];
+    if (typeof orderId !== 'string' || orderId.length === 0) {
+      throw new Error(
+        `stripe payment_intent 上没有 order_id（pi=${pi}）：create 时未写入 payment_intent_data.metadata`,
+      );
+    }
+    return orderId;
+  }
+
   return {
     channel: cfg.channel,
     capabilities: {
@@ -189,6 +230,12 @@ export function createStripeCheckoutProvider(
         client_reference_id: req.orderId,
         'metadata[order_id]': req.orderId,
         'metadata[order_no]': req.orderNo,
+        // ⚠️ 这一行是 payment_intent.* 与 charge.* 事件的 order_id **唯一来源**（体检 P1-7）：
+        //    Session 级 metadata 只属于 Session 对象；官方口径是"建 Charge 时
+        //    PaymentIntent 的 metadata 会复制到 Charge"（之后改 PI metadata 不影响已建 Charge），
+        //    所以写进 payment_intent_data 后，payment_intent.succeeded 与 charge.refunded
+        //        都能从 object.metadata 取到单号。缺了它，这批事件全进"取不到 order_id → 500"路径。
+        'payment_intent_data[metadata][order_id]': req.orderId,
         'line_items[0][quantity]': '1',
         'line_items[0][price_data][currency]': req.currency.toLowerCase(),
         // ⚠️ 只做"主单位 → 最小单位"（JPY 不 ×100，USD ×100）；
@@ -243,6 +290,19 @@ export function createStripeCheckoutProvider(
       };
       const obj = ev.data?.object ?? {};
       const type = typeof ev.type === 'string' ? ev.type : 'unknown';
+      // Dispute 对象结构上没有我们的 metadata（Stripe 不复制），走反查通道；
+      // 其余对象取不到就是 create 时漏写——保持"自己的缺陷必须抛"（见 orderIdOf）
+      let orderId: string;
+      try {
+        orderId = orderIdOf(obj);
+      } catch (firstError) {
+        const pi = obj['payment_intent'];
+        if (obj['object'] === 'dispute' && typeof pi === 'string' && pi.length > 0) {
+          orderId = await orderIdViaPaymentIntent(pi);
+        } else {
+          throw firstError;
+        }
+      }
       const amount =
         typeof obj['amount_total'] === 'number'
           ? obj['amount_total']
@@ -255,7 +315,7 @@ export function createStripeCheckoutProvider(
         eventId: typeof ev.id === 'string' ? ev.id : `gen-${deps.idGen.uuid()}`,
         rawType: type,
         outcome: OUTCOME_BY_TYPE[type] ?? 'unknown',
-        orderId: orderIdOf(obj),
+        orderId,
         providerRef:
           typeof obj['id'] === 'string'
             ? obj['id']

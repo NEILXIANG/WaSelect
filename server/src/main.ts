@@ -121,8 +121,14 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       // D23：层数来自配置，绝不能写死 true（客户端可伪造 X-Forwarded-For）
       trustProxyHops: config.TRUST_PROXY_HOPS,
       // D21：跨域只对管理端开放；没配 CORS_ORIGINS 就完全不开放（比"全部放行"安全）
+      // ⚠️ 两个前缀都要给：/admin 是业务路由，/auth/admin 是登录——漏了登录，管理端第一步就死
       ...(config.CORS_ORIGINS.length > 0
-        ? { cors: { origins: config.CORS_ORIGINS, pathPrefixes: ['/api/v1/admin'] } }
+        ? {
+            cors: {
+              origins: config.CORS_ORIGINS,
+              pathPrefixes: ['/api/v1/admin', '/api/v1/auth/admin'],
+            },
+          }
         : {}),
       // D21：就绪 = "我自己还想接" 且 "数据库连通"。缺任一条都不该收新流量
       readiness: async () => acceptingTraffic && (await ping(db)),
@@ -135,7 +141,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
         // @why 回调是机构打给我们的，生产必须能收；通道列表是前端入口的来源。
         //      它们与骨架无关——骨架只是"没有真实下单接口时的一条演示链路"。
         //      注册表在装配处按配置拼好：加一个通道 = 改配置 + 注册工厂，本处不改。
-        const registry = buildPaymentRegistry(config, {
+        const { registry, registered: registeredChannels } = buildPaymentRegistry(config, {
           // ⚠️ `logger` **必须传**：不传的话出站 HTTP 一条日志都没有
           //    ——计时、重试、以及"我们正在拒绝请求"的熔断信号全部丢失，
           //    而它们正是线上回答"上游是不是挂了"的唯一依据（AJ-55 / AJ-62 / AJ-63）。
@@ -147,9 +153,11 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           clock: systemClock,
           idGen: systemIdGen,
         });
+        // ⚠️ configured 与 registered 必须并列：差集 = 被静默跳过的通道
+        //    （wechat 未实现 / stripe 密钥不全），只打 configured 等于没打（体检 P1 修复）
         logger.info('payment_channels_registered', {
           result: 'ok',
-          ctx: { configured: describeChannels(config) },
+          ctx: { configured: describeChannels(config), registered: registeredChannels },
         });
         mountPayRoutes(a, {
           registry,

@@ -305,9 +305,15 @@ const schema = z.object({
   REVIEW_SKU_ID: optionalText(),
 
   // ── 限流与内部任务（D-52 / D-43）────────────────────────────────────────
+  // ⚠️ 限流器尚未实现（契约先行，见 docs/地基搭建清单.md 欠账登记）：
+  //    这两个字段当前只被配置层读取与校验，没有消费者（42901 尚不可达）。
   RATE_LIMIT_LOGIN_PER_15MIN: int(5, 1),
   RATE_LIMIT_QUOTE_PER_MIN: int(30, 1),
-  /** Cron Job 调 POST /internal/jobs/daily 的共享密钥；留空时该端点在启动时关闭（F6 接入）。 */
+  /**
+   * Cron Job 调 POST /internal/jobs/daily 的共享密钥；留空时该端点在启动时关闭。
+   * ⚠️ 该端点**尚未挂载**（契约先行，见 docs/地基搭建清单.md 欠账登记）——
+   *    此字段当前只被配置层读取与校验，没有消费者。
+   */
   INTERNAL_JOB_SECRET: optionalSecret(32, 'INTERNAL_JOB_SECRET'),
 
   // ── 出站 HTTP（F12 遗留②：数字从代码搬进配置）────────────────────────────

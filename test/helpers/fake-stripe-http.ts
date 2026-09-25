@@ -21,12 +21,19 @@ export interface FakeStripeHttp extends HttpClient {
   readonly calls: HttpRequest[];
   /** 让下一次请求失败（模拟上游 5xx / 网络错误）。 */
   failNext(status: number, body?: string): void;
+  /**
+   * 登记一个"机构侧已存在"的 PaymentIntent（供 dispute 事件反查）。
+   * 不登记就查到 = 404——替身有脾气：测得出"反查失败会怎么走"。
+   */
+  givenPaymentIntent(id: string, metadata: Record<string, string>): void;
 }
 
 export function createFakeStripeHttp(): FakeStripeHttp {
   const calls: HttpRequest[] = [];
   /** idempotency-key → 已建的会话。 */
   const sessions = new Map<string, { id: string; url: string; expires_at: number }>();
+  /** payment_intent id → metadata（create 时从表单抓 + givenPaymentIntent 手工登记）。 */
+  const paymentIntents = new Map<string, Record<string, string>>();
   let nextId = 1;
   let forced: { status: number; body: string } | undefined;
 
@@ -34,6 +41,9 @@ export function createFakeStripeHttp(): FakeStripeHttp {
     calls,
     failNext(status, body = '{"error":{"message":"forced failure"}}') {
       forced = { status, body };
+    },
+    givenPaymentIntent(id, metadata) {
+      paymentIntents.set(id, metadata);
     },
     async send(req: HttpRequest): Promise<HttpResponse> {
       calls.push(req);
@@ -65,7 +75,27 @@ export function createFakeStripeHttp(): FakeStripeHttp {
           expires_at: 1_800_000_000,
         };
         sessions.set(key, session);
+        // 与真 Stripe 同口径：Session 会带一个 PaymentIntent，
+        // 其 metadata 来自表单的 payment_intent_data[metadata][*]
+        const form = new URLSearchParams(body);
+        const orderId = form.get('payment_intent_data[metadata][order_id]');
+        if (orderId !== null) {
+          paymentIntents.set(`pi_for_${id}`, { order_id: orderId });
+        }
         return { status: 200, body: JSON.stringify(session) };
+      }
+
+      // dispute 事件的反查通道（适配器在 dispute 对象取不到 order_id 时调它）
+      const piMatch = /^\/v1\/payment_intents\/([^/]+)$/.exec(path);
+      if (piMatch !== null && req.method === 'GET') {
+        const pi = paymentIntents.get(piMatch[1] ?? '');
+        if (pi === undefined) {
+          return { status: 404, body: '{"error":{"message":"No such payment_intent"}}' };
+        }
+        return {
+          status: 200,
+          body: JSON.stringify({ id: piMatch[1], object: 'payment_intent', metadata: pi }),
+        };
       }
 
       if (path === '/v1/refunds' && req.method === 'POST') {

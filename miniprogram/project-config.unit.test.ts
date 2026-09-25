@@ -78,6 +78,7 @@ describe('project.config.json（MP1）', () => {
 
 describe('sitemap.json（MP1）', () => {
   const sitemap = readJson('sitemap.json');
+  const app = readJson('app.json');
 
   it('是合法 JSON 且有 rules 数组', () => {
     expect(Array.isArray(sitemap.rules)).toBe(true);
@@ -89,6 +90,50 @@ describe('sitemap.json（MP1）', () => {
     //    后面所有 disallow 都不会生效——表现为"本该不索引的页面被收录了"，且不易察觉。
     const wildcardIndex = rules.findIndex((r) => r.page === '*');
     expect(wildcardIndex).toBe(rules.length - 1);
+  });
+
+  /**
+   * 黑名单制的安全网：**私有/开发页的页面前缀必须显式 disallow**。
+   *
+   * @why sitemap 用黑名单制（默认收录）是商业决策：商城需要微信搜一搜把商品页带进来。
+   *      白名单制的失效形态是"新页面上线后静默不被收录"——业务损失且没有任何报错；
+   *      黑名单制的失效形态反过来：私密页（订单/支付/地址）被默认收录——同样不报错。
+   *      两种都得用机器兜，这里兜的是黑名单这一侧：凡是私有前缀的页面，
+   *      没有对应 disallow 规则就立刻红，而不是等用户在搜索引擎里刷到自己的订单页。
+   * @limitation 前缀名单是手维护的：新增一类私密页（如售后/客服）要同步加进
+   *             PRIVATE_PREFIXES——加的时候这条测试会先红（没有 disallow），提醒动作完整。
+   */
+  it('私有前缀页面必须显式 disallow（黑名单制下，漏一条就是私密页被收录）', () => {
+    const PRIVATE_PREFIXES = [
+      /^pages\/comp\//, // 组件样板页（开发用）
+      /^pages\/order[-/]/, // 订单
+      /^pages\/pay[-/]/, // 支付
+      /^pages\/cart[-/]/, // 购物车
+      /^pages\/user[-/]/, // 我的/账户
+      /^pages\/address[-/]/, // 地址簿（含收件人 PII）
+      /^pages\/admin[-/]/, // 管理类页面（若有）
+    ];
+    const rules = sitemap.rules as { action: string; page: string }[];
+    const pages = app.pages as string[];
+    for (const page of pages) {
+      if (!PRIVATE_PREFIXES.some((re) => re.test(page))) continue;
+      const hit = rules.some((r) => r.action === 'disallow' && (r.page === page || r.page === '*'));
+      // ⚠️ `disallow *` 不算数：那是白名单制，与黑名单制互斥（见上一条断言的顺序约束）
+      const explicit = rules.some((r) => r.action === 'disallow' && r.page === page);
+      expect(
+        explicit && hit,
+        `私有页面 ${page} 没有显式 disallow 规则——黑名单制下它会被微信收录`,
+      ).toBe(true);
+    }
+  });
+
+  it('disallow 规则指向的页面必须真实存在（防"页面改名后规则失效、新页面裸奔"）', () => {
+    const rules = sitemap.rules as { action: string; page: string }[];
+    const pages = app.pages as string[];
+    for (const r of rules) {
+      if (r.action !== 'disallow' || r.page === '*') continue;
+      expect(pages, `disallow 了不存在的页面 ${r.page}（改名后这条规则已失效）`).toContain(r.page);
+    }
   });
 });
 

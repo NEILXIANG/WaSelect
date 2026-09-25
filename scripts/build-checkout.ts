@@ -19,6 +19,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WS_COLORS } from '@waselect/shared';
 import {
+  assertDeployApiBase,
   CHECKOUT_PAGES,
   renderPage,
   renderRedirects,
@@ -35,6 +36,8 @@ function main(): void {
     process.loadEnvFile(envFile);
   }
   const apiBase = process.env.PUBLIC_API_BASE ?? 'http://localhost:3000';
+  // CF Pages 构建（平台注入 CF_PAGES）：漏配 PUBLIC_API_BASE 必须响亮失败（@see assertDeployApiBase）
+  if (process.env.CF_PAGES !== undefined) assertDeployApiBase(apiBase);
 
   rmSync(dist, { recursive: true, force: true }); // 全量重建：产物目录无增量状态
   mkdirSync(join(dist, 'assets'), { recursive: true });

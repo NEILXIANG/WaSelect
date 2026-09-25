@@ -75,14 +75,26 @@ export interface ChannelAssemblyDeps {
 }
 
 /**
- * 列出最终**生效**的通道名（进启动日志）。
+ * 列出**配置里写了**的通道名（进启动日志的 `configured` 字段）。
  *
  * @why 配置拼错 / 密钥缺失导致的"通道没注册"是静默的（@limitation 二），
  *      唯一能让它在**上线当天**而不是"用户说没有支付入口"那天被发现的手段，
- *      就是启动时把"实际注册了哪些"打出来——和启动打印脱敏配置是同一条道理。
+ *      就是启动时把 configured 与 registered **两个清单一起**打出来对照——
+ *      只打 configured 等于没打（曾经就是这个形态：日志事件名叫
+ *      `payment_channels_registered`，内容却是配置清单，密钥缺失照样"一切正常"）。
  */
 export function describeChannels(config: AppConfig): string[] {
   return [...config.PAYMENT_CHANNELS];
+}
+
+/** 装配产物：注册表 + **实际注册了工厂**的通道清单（与配置清单的差集 = 静默跳过的通道）。 */
+export interface PaymentAssembly {
+  registry: PaymentRegistry;
+  /**
+   * 实际注册的通道（`configured − registered` = 被静默跳过的：wechat 未实现 /
+   * stripe 密钥不全 / 未知通道）。启动日志必须把它与 configured 并列（见 `describeChannels` 的 @why）。
+   */
+  registered: string[];
 }
 
 /**
@@ -93,7 +105,7 @@ export function describeChannels(config: AppConfig): string[] {
 export function buildPaymentRegistry(
   config: AppConfig,
   deps: ChannelAssemblyDeps,
-): PaymentRegistry {
+): PaymentAssembly {
   const configs: ChannelConfig[] = config.PAYMENT_CHANNELS.map((channel) => {
     const base = CHANNEL_DEFAULTS[channel] ?? FALLBACK_DEFAULT;
     return {
@@ -106,16 +118,18 @@ export function buildPaymentRegistry(
   });
 
   const registry = createPaymentRegistry({ configs });
+  const registered: string[] = [];
 
   // ── mock：骨架期 / 审核期的假通道（真实 HMAC 验签，密钥来自配置）─────────────
   if (config.PAYMENT_CHANNELS.includes('mock')) {
     registry.register('mock', (cfg) =>
       createMockProvider(cfg, { clock: deps.clock, idGen: deps.idGen }),
     );
+    registered.push('mock');
   }
 
   /**
-   * ── stripe：只有四要素齐全才注册 ──────────────────────────────────────
+   * ── stripe：只有三要素齐全才注册 ──────────────────────────────────────
    * @why 工厂在 `options` 不全时会抛（密钥缺失 = 任何人都能伪造回调，必须响亮失败）。
    *      而 `listAvailable` 会**构造**每个已启用通道的 Provider——
    *      若在这里无条件注册 stripe 工厂，本地没配 Stripe 密钥时
@@ -130,10 +144,11 @@ export function buildPaymentRegistry(
     registry.register('stripe', (cfg) =>
       createStripeCheckoutProvider(cfg, { http: deps.http, clock: deps.clock, idGen: deps.idGen }),
     );
+    registered.push('stripe');
   }
 
   // wechat：R1（日本收单机构事前相談）通过前没有实现 → 配置里写了也只是静默跳过
-  return registry;
+  return { registry, registered };
 }
 
 /**

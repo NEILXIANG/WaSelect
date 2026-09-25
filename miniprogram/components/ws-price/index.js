@@ -20,6 +20,10 @@
  * @limitation 二：只有 `sm / md / lg` 三档尺寸，且**只影响字号**（走 design token）。
  *              刻意不提供"任意字号"属性：能传任意值的组件等于把版式决定权交回给调用方，
  *              最后又是"每页一个尺寸"。
+ *              ⚠️ 非法档位**不静默回退**：`size` 直接插进 class 名时，传 `xl` 的表现是
+ *              "没有任何档位样式命中 → 悄悄落回基础字号"，版式散掉且不报错。
+ *              所以 class 走内部计算的 `sizeClass`，非法值与漏传价格同一条路：
+ *              渲染空白 + 控制台明确报错（@see @limitation 一的 safeCallback 说明）。
  * @limitation 三：本组件的 `.js` 里 **import 的模块必须是 `.js`**，不能是 `.ts`。
  *              @why 它是被 `miniprogram-simulate` 用 Node 的 `require` 加载的，
  *              解析不到 `.ts`（vite 的 `.js → .ts` 映射只在测试侧有效）。
@@ -28,6 +32,21 @@
  * @see ../../utils/price-format.js（格式化真源）；docs/地基搭建清单.md F14
  */
 import { formatJpy } from '../../utils/price-format.js';
+
+/** 尺寸档位全集（@see 文件头 @limitation 二）。 */
+const SIZES = ['sm', 'md', 'lg'];
+
+/**
+ * 校验尺寸档位。
+ * @why 非法档位直接插 class 名会**静默**落回基础字号（没有该档位的样式命中），
+ *      与"漏传价格显示 ¥0"是同一种失效形态：看起来还行，实际错了，且不报错。
+ * @throws 档位不在 SIZES 里时原样抛出（走 safeCallback → 空白 + 控制台报错，不兜底）
+ */
+function assertSize(size) {
+  if (!SIZES.includes(size)) {
+    throw new Error(`ws-price 的 size 必须是 ${SIZES.join(' / ')} 之一，收到：${String(size)}`);
+  }
+}
 
 Component({
   properties: {
@@ -44,6 +63,8 @@ Component({
   data: {
     /** 渲染用的文案。**只在 `update()` 里被赋值**，wxml 不做任何字符串拼接。 */
     text: '',
+    /** 档位 class（内部计算，非法档位到不了这里——@see assertSize）。 */
+    sizeClass: 'ws-price--md',
   },
 
   // ⚠️ `attached` 与 `observers` 都要调：
@@ -56,12 +77,19 @@ Component({
     jpy() {
       this.update();
     },
+    size() {
+      this.update();
+    },
   },
 
   methods: {
-    /** 重算展示文案。@throws 金额不是有限数时原样抛出（不吞、不兜底） */
+    /** 重算展示文案与档位 class。@throws 金额非法 / 档位非法时原样抛出（不吞、不兜底） */
     update() {
-      this.setData({ text: formatJpy(this.data.jpy) });
+      assertSize(this.data.size);
+      this.setData({
+        text: formatJpy(this.data.jpy),
+        sizeClass: `ws-price--${this.data.size}`,
+      });
     },
   },
 });

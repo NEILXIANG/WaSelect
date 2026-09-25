@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest';
 import { WS_COLORS } from '@waselect/shared';
 import { STRIPE_RETURN_PATHS } from '../server/src/adapters/payment/channels.js';
 import {
+  assertDeployApiBase,
   BRAND_NAME,
   CHECKOUT_PAGES,
   collectCssVars,
@@ -55,6 +56,33 @@ describe('renderRedirects：生成短链转发规则', () => {
     expect(() => renderRedirects(`${API}/v2`)).toThrow(/路径/);
     expect(() => renderRedirects('ftp://api.example.com')).toThrow(/http/);
     expect(() => renderRedirects('not-a-url')).toThrow(/http/);
+  });
+});
+
+describe('assertDeployApiBase：CF Pages 构建的部署闸门（体检 N16）', () => {
+  /**
+   * @why CF Pages 无 IaC：环境变量漏配时构建照样成功，产物 _redirects 静默指向
+   *      localhost——"付款短链全灭"且发现靠用户反馈。部署构建必须要么真值要么失败。
+   */
+  it('localhost / 回环地址 → 拒绝（漏配 PUBLIC_API_BASE 的默认形态）', () => {
+    expect(() => assertDeployApiBase('http://localhost:3000')).toThrow(/https 公网地址/);
+    expect(() => assertDeployApiBase('http://127.0.0.1:3000')).toThrow(/https 公网地址/);
+    expect(() => assertDeployApiBase('http://0.0.0.0:3000')).toThrow(/https 公网地址/);
+  });
+
+  it('http 公网地址 → 同样拒绝（生产必须 https）', () => {
+    expect(() => assertDeployApiBase('http://api.example.com')).toThrow(/https 公网地址/);
+  });
+
+  it('https 公网地址 → 放行', () => {
+    expect(() => assertDeployApiBase('https://api.example.com')).not.toThrow();
+  });
+
+  it('自检：闸门对本机判定真的覆盖三种写法（扫歪了会静默放行）', () => {
+    // 与 §2 第 34 条同款：扫描/判定类逻辑必须证明"坏输入真的会红"
+    for (const bad of ['http://localhost:3000', 'http://127.0.0.1', 'http://[::1]:3000']) {
+      expect(() => assertDeployApiBase(bad), `${bad} 应被拒绝`).toThrow();
+    }
   });
 });
 

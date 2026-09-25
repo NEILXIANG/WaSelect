@@ -91,13 +91,38 @@ describe('describeChannels（启动日志用）', () => {
     //    启动日志里看到的顺序应当与配置文件里写的一致，否则排障时会误读成"优先级"。
     expect(describeChannels(c)).toEqual(['mock', 'stripe']);
   });
+
+  it('registered 清单如实反映"配置 ∩ 可构造"：差集就是静默跳过的通道', () => {
+    // @why 启动日志的检测能力全押在这两个清单的**对照**上：
+    //      只打 configured（曾经的形态）时，stripe 密钥缺失在日志里也是"一切正常"。
+    const partial = loadConfig({
+      ...baseEnv,
+      PAYMENT_CHANNELS: 'mock,stripe,wechat',
+      STRIPE_SECRET_KEY: 'sk_test_1',
+      STRIPE_WEBHOOK_SECRET: 'whsec_1',
+      // 缺 CHECKOUT_BASE_URL：stripe 不注册；wechat 未实现也不注册
+    });
+    const a1 = buildPaymentRegistry(partial, deps());
+    expect(describeChannels(partial)).toEqual(['mock', 'stripe', 'wechat']);
+    expect(a1.registered).toEqual(['mock']);
+
+    const full = loadConfig({
+      ...baseEnv,
+      PAYMENT_CHANNELS: 'mock,stripe',
+      STRIPE_SECRET_KEY: 'sk_test_1',
+      STRIPE_WEBHOOK_SECRET: 'whsec_1',
+      CHECKOUT_BASE_URL: 'https://checkout.example.com',
+    });
+    const a2 = buildPaymentRegistry(full, deps());
+    expect(a2.registered).toEqual(['mock', 'stripe']);
+  });
 });
 
 describe('buildPaymentRegistry：mock 通道', () => {
   it('未配 MOCK_CALLBACK_SECRET → 回落到开发占位密钥，且该密钥**真的能验过签**', async () => {
     const c = loadConfig(baseEnv);
     expect(c.MOCK_CALLBACK_SECRET).toBeUndefined();
-    const registry = buildPaymentRegistry(c, deps());
+    const { registry } = buildPaymentRegistry(c, deps());
 
     const provider = registry.get('mock');
     const raw = succeedRaw();
@@ -116,7 +141,7 @@ describe('buildPaymentRegistry：mock 通道', () => {
 
   it('配了显式密钥 → 用它验签；占位密钥验不过（40103，不是静默收下）', async () => {
     const c = loadConfig({ ...baseEnv, MOCK_CALLBACK_SECRET: 'explicit-secret' });
-    const registry = buildPaymentRegistry(c, deps());
+    const { registry } = buildPaymentRegistry(c, deps());
     const provider = registry.get('mock');
 
     const raw = succeedRaw();
@@ -130,7 +155,7 @@ describe('buildPaymentRegistry：mock 通道', () => {
   });
 });
 
-describe('buildPaymentRegistry：stripe 通道（四要素齐全才注册）', () => {
+describe('buildPaymentRegistry：stripe 通道（三要素齐全才注册）', () => {
   it('三要素不全 → 不注册；但**不拖垮**其它通道的列表', async () => {
     // 故意只配两个密钥、缺 CHECKOUT_BASE_URL：这是"本地开发还没接 Stripe"的真实形态
     const c = loadConfig({
@@ -139,7 +164,7 @@ describe('buildPaymentRegistry：stripe 通道（四要素齐全才注册）', (
       STRIPE_SECRET_KEY: 'sk_test_1',
       STRIPE_WEBHOOK_SECRET: 'whsec_1',
     });
-    const registry = buildPaymentRegistry(c, deps());
+    const { registry } = buildPaymentRegistry(c, deps());
 
     // ① stripe 没被装配进来
     expectChannelError(() => registry.get('stripe'), 'channel_not_registered');
@@ -157,7 +182,7 @@ describe('buildPaymentRegistry：stripe 通道（四要素齐全才注册）', (
      *             `describeChannels` + 实际注册清单对照才能看出来（@limitation 二）。
      */
     const c = loadConfig({ ...baseEnv, PAYMENT_CHANNELS: 'stripe' });
-    const registry = buildPaymentRegistry(c, deps());
+    const { registry } = buildPaymentRegistry(c, deps());
     expect(registry.listAvailable(US_USD)).toEqual([]);
     expect(registry.listAvailable(US_JPY)).toEqual([]);
   });
@@ -170,7 +195,7 @@ describe('buildPaymentRegistry：stripe 通道（四要素齐全才注册）', (
       STRIPE_WEBHOOK_SECRET: 'whsec_1',
       CHECKOUT_BASE_URL: 'https://checkout.example.com',
     });
-    const registry = buildPaymentRegistry(c, deps());
+    const { registry } = buildPaymentRegistry(c, deps());
 
     /**
      * ⚠️ **配置 ∩ 能力**，两者都要过，所以两个币种各只剩一个通道：
@@ -189,7 +214,7 @@ describe('buildPaymentRegistry：stripe 通道（四要素齐全才注册）', (
 describe('buildPaymentRegistry：未实现的通道与未知通道', () => {
   it('wechat 配置了但没有工厂 → 静默跳过（@limitation 二），其它通道不受影响', async () => {
     const c = loadConfig({ ...baseEnv, PAYMENT_CHANNELS: 'mock,wechat' });
-    const registry = buildPaymentRegistry(c, deps());
+    const { registry } = buildPaymentRegistry(c, deps());
 
     expectChannelError(() => registry.get('wechat'), 'channel_not_registered');
     // ⚠️ 关键：wechat 没实现 ≠ 支付入口没了
@@ -210,7 +235,7 @@ describe('buildPaymentRegistry：未实现的通道与未知通道', () => {
       ...loadConfig({ ...baseEnv, PAYMENT_CHANNELS: 'mock' }),
       PAYMENT_CHANNELS: ['mock', 'futurepay'],
     } as unknown as AppConfig;
-    const registry = buildPaymentRegistry(c, deps());
+    const { registry } = buildPaymentRegistry(c, deps());
 
     // 兜底配置本身不带工厂，这里补一个最小实现，只为"看得见它"
     registry.register('futurepay', (cfg) => minimalProvider(cfg.channel));

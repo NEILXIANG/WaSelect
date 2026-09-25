@@ -21,6 +21,7 @@ import { fixedClock } from '../../../../test/helpers/fixed-clock.js';
 import { systemIdGen } from '../ids.js';
 import { createFakeStripeHttp } from '../../../../test/helpers/fake-stripe-http.js';
 import {
+  dispute,
   objectForEvent,
   signStripePayload,
   stripeEvent,
@@ -76,8 +77,13 @@ function build(over: Partial<ChannelConfig['options']> = {}) {
 
 /** 造一条签名正确的事件报文。 */
 function signed(type: string, opts: { t?: number; secret?: string; extra?: string } = {}) {
-  const object = { ...objectForEvent(type), metadata: { order_id: REQ.orderId } };
-  const body = JSON.stringify(stripeEvent(type, object));
+  const object = objectForEvent(type);
+  // ⚠️ dispute 对象**不能**硬塞 metadata：真实的 Dispute 上没有它（Stripe 不复制），
+  //    塞进去等于把"取不到 order_id → 反查 PaymentIntent"这条路径从测试里抹掉——
+  //    P1-7 之所以藏到体检才被发现，这层"贴心的合并"就是掩盖层之一。
+  const realistic =
+    object['object'] === 'dispute' ? object : { ...object, metadata: { order_id: REQ.orderId } };
+  const body = JSON.stringify(stripeEvent(type, realistic));
   const header = signStripePayload(body, opts.secret ?? SECRET, opts.t ?? NOW_SEC);
   const withExtra = opts.extra === undefined ? header : `${header},${opts.extra}`;
   return { raw: Buffer.from(body, 'utf8'), headers: { [HEADER]: withExtra } as HeaderBag };
@@ -118,6 +124,9 @@ describe('create（建 Checkout Session）', () => {
     expect(form.get('line_items[0][price_data][unit_amount]')).toBe('12000');
     expect(form.get('metadata[order_id]')).toBe('sk-1');
     expect(form.get('client_reference_id')).toBe('sk-1');
+    // ⚠️ 体检 P1-7：payment_intent.* / charge.* 事件的 order_id 唯一来源。
+    //    Session 级 metadata 不属于 PI/Charge；PI metadata 会在建 Charge 时复制过去
+    expect(form.get('payment_intent_data[metadata][order_id]')).toBe('sk-1');
   });
 
   it('返回 copylink 入口（D-49：银行卡走托管页，不做卡表单）', async () => {
@@ -175,7 +184,9 @@ describe('create（建 Checkout Session）', () => {
 
 describe('parseWebhook（事件映射与验签细节）', () => {
   it('事件类型 → 归一化结果（逐条对，UNKNOWN 不猜）', async () => {
-    const { provider } = build();
+    const { http, provider } = build();
+    // dispute 事件的 order_id 来自反查 PaymentIntent（dispute 对象上没有 metadata）
+    http.givenPaymentIntent('pi_3P0000000000000000000000', { order_id: REQ.orderId });
     const expected: Array<[string, string]> = [
       [STRIPE_EVENT_TYPES.checkoutCompleted, 'succeeded'],
       [STRIPE_EVENT_TYPES.checkoutExpired, 'expired'],
@@ -312,6 +323,64 @@ describe('parseWebhook（事件映射与验签细节）', () => {
       stripeEvent('checkout.session.completed', objectForEvent('checkout.session.completed')),
     );
     const headers = { [STRIPE_SIGNATURE_HEADER]: signStripePayload(body, SECRET, NOW_SEC) };
+    await expect(provider.parseWebhook(Buffer.from(body, 'utf8'), headers)).rejects.toThrow(
+      /取不到 order_id/,
+    );
+  });
+});
+
+describe('parseWebhook：dispute 事件的 order_id 反查（体检 P1-7）', () => {
+  /**
+   * @why Dispute 对象结构上没有我们的 metadata（Stripe 不复制），链回订单的唯一字段是
+   *      `payment_intent`。不修这个的真实后果：拒付事件全部 500 → 机构重发风暴，
+   *      且 webhook_events 连"收到过"都没登记（解析先于登记）。
+   */
+  function signedDispute(pi = 'pi_3P0000000000000000000000') {
+    const body = JSON.stringify(
+      stripeEvent('charge.dispute.created', { ...dispute({ paymentIntent: pi }) }),
+    );
+    return {
+      raw: Buffer.from(body, 'utf8'),
+      headers: { [HEADER]: signStripePayload(body, SECRET, NOW_SEC) } as HeaderBag,
+    };
+  }
+
+  it('dispute 对象上没有 metadata → 反查 payment_intent 取回 order_id', async () => {
+    const { http, provider } = build();
+    http.givenPaymentIntent('pi_3P0000000000000000000000', { order_id: REQ.orderId });
+    const p = signedDispute();
+    const ev = await provider.parseWebhook(p.raw, p.headers);
+    expect(ev.outcome).toBe('disputed');
+    expect(ev.orderId).toBe(REQ.orderId);
+    // 确实走了反查通道（而不是从别处碰巧取到）
+    const gets = http.calls.filter((c) => c.method === 'GET');
+    expect(gets.map((c) => c.url)).toEqual([
+      'https://api.stripe.test/v1/payment_intents/pi_3P0000000000000000000000',
+    ]);
+  });
+
+  it('反查失败（机构 5xx / 无此 PI）→ 抛，让机构按节奏重发（不回 200 假装收到）', async () => {
+    const { provider } = build();
+    // 不登记这个 PI：替身返回 404（有脾气的替身，见 fake-stripe-http）
+    const p = signedDispute('pi_not_registered');
+    await expect(provider.parseWebhook(p.raw, p.headers)).rejects.toThrow(
+      /反查 payment_intent 失败：HTTP 404/,
+    );
+  });
+
+  it('反查到的 PI 上也没有 order_id → 抛（那才是**我们** create 时漏写的缺陷）', async () => {
+    const { http, provider } = build();
+    http.givenPaymentIntent('pi_3P0000000000000000000000', {});
+    const p = signedDispute();
+    await expect(provider.parseWebhook(p.raw, p.headers)).rejects.toThrow(/上没有 order_id/);
+  });
+
+  it('dispute 对象连 payment_intent 字段都没有 → 抛原始"取不到 order_id"（不编不猜）', async () => {
+    const { provider } = build();
+    const bare = dispute();
+    delete bare['payment_intent'];
+    const body = JSON.stringify(stripeEvent('charge.dispute.created', bare));
+    const headers = { [HEADER]: signStripePayload(body, SECRET, NOW_SEC) } as HeaderBag;
     await expect(provider.parseWebhook(Buffer.from(body, 'utf8'), headers)).rejects.toThrow(
       /取不到 order_id/,
     );

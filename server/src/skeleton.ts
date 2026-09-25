@@ -229,7 +229,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
     },
   );
 
-  // ── 3. 模拟触发支付成功（骨架专用，供小程序壳按钮调用）─────────────────────
+  // ── 2. 模拟触发支付成功（骨架专用，供小程序壳按钮调用）─────────────────────
   // @why F6c 要求"小程序壳按钮 → 落库 → 触发模拟支付回调 → 状态回写"能在真机上走一遍。
   //      真实的回调是机构打给我们的（小程序端签不了名），所以骨架期需要这个入口代替机构。
   // @limitation **业务期必须删除**：它会绕过验签直接改订单状态，留在生产等于任何人都能把单改成已支付。
@@ -255,7 +255,7 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
     },
   );
 
-  // ── 4. 读回：证明状态真的回写了（端到端测试的最后一环）────────────────────
+  // ── 3. 读回：证明状态真的回写了（端到端测试的最后一环）────────────────────
   app.get(
     `${PREFIX}/orders/:id`,
     requireRole('user', deps.auth, { identity: deps.identity }),

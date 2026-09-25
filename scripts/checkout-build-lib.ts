@@ -51,6 +51,25 @@ export function renderRedirects(apiBase: string): string {
   ].join('\n');
 }
 
+/**
+ * 部署目标的 API 基址闸门：Cloudflare Pages 构建（平台会注入 `CF_PAGES`）时，
+ * `PUBLIC_API_BASE` 必须是 https 公网地址。
+ *
+ * @why CF Pages 没有 IaC（体检 N16）：环境变量漏配时构建**照样成功**，
+ *      产物 `_redirects` 静默指向 localhost 默认值——用户点短链全部打不开，
+ *      而发现它的方式是"用户说付款链接坏了"。部署构建要么拿到真值，要么响亮失败。
+ * @limitation 只在 CF Pages 环境生效；本地/CI 构建故意允许 localhost（联调要用）。
+ */
+export function assertDeployApiBase(apiBase: string): void {
+  const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/.test(apiBase);
+  if (isLocal || !apiBase.startsWith('https://')) {
+    throw new Error(
+      `CF Pages 构建要求 PUBLIC_API_BASE 是 https 公网地址（当前：${apiBase}）。` +
+        '漏配时产物 _redirects 会指向 localhost——宁可构建失败，也不要静默产出一个坏站点。',
+    );
+  }
+}
+
 /* ── _redirects：解析与匹配（CF 语义最小子集） ───────────────────────────── */
 
 export interface RedirectRule {

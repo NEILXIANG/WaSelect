@@ -1,10 +1,10 @@
 /**
- * 职责：测试框架配置（F1）——四个分层 project + v8 覆盖率阈值。
+ * 职责：测试框架配置（F1）——五个分层 project（unit / db / contract / e2e + lint 元层，AJ-03）+ v8 覆盖率阈值。
  * 分层约定：*.unit.test.ts = L0 纯函数；*.db.test.ts = L1 真库集成；*.contract.test.ts = L2 契约；test/e2e/** = L3 端到端。
  * @see docs/测试策略与验证门禁.md §3/§4、docs/地基搭建清单.md F1
- * @tradeoff db/contract/e2e 在 F1 阶段尚无测试文件，passWithNoTests 放空通过——
- *          它们的真实接入分别在 F7（真库）、F11（Provider 契约）、I1 业务期；
- *          风险：gate 在这些层"形同虚设"直到接入，已在清单标注，不是漏配。
+ * @tradeoff（历史，F1 阶段）db/contract/e2e 当时尚无测试文件，passWithNoTests 曾放空通过——
+ *          现已关闭（见下方 `passWithNoTests: false` 的注释），且各层均已有测试文件接入
+ *          （F7 真库、F11 Provider 契约、F6c 起 e2e）。
  * @limitation 覆盖率阈值当前只覆盖已有文件（packages/shared），server/src 为空目录时不参与统计；
  *             后续每加一个模块，阈值约束自动生效（include 已含 server/src/**）。
  */
@@ -57,7 +57,7 @@ export default defineConfig({
       {
         // e2e 层同样必须**串行**，理由比 db 层更隐蔽：两个文件各起一个服务，各自 `resetTestDb()` 会
         // 把对方的库清空；表现出来是"单跑这个文件绿、跑全套就随机红"，极难复现。
-        // @limitation 串行的代价是 e2e 变慢；当前只有一个文件（~1s），可接受。文件多了再考虑分库。
+        // @limitation 串行的代价是 e2e 变慢；当前 4 个文件（秒级），可接受。文件多了再考虑分库。
         test: { name: 'e2e', include: ['test/e2e/**/*.test.ts'], fileParallelism: false },
       },
       {

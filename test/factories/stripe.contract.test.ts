@@ -13,6 +13,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { OUTCOME_BY_TYPE } from '../../server/src/adapters/payment/stripe-checkout.js';
 import {
   STRIPE_EVENTS_NOT_SAMPLED,
   STRIPE_EVENT_TYPES,
@@ -91,5 +92,26 @@ describe('样本工厂覆盖契约声明的 Stripe 事件', () => {
     for (const e of STRIPE_EVENTS_NOT_SAMPLED) {
       expect(sampled.includes(e), `${e} 已有样本，应从 STRIPE_EVENTS_NOT_SAMPLED 移除`).toBe(false);
     }
+  });
+
+  /**
+   * 三方互锁：**契约清单 = 适配器归一化表 + 明示的豁免名单**。
+   *
+   * @why 体检 P1-3：契约曾列了 5 个适配器不认识的事件（refund.updated 等），
+   *      它们静默落进 unknown；适配器也实现了 2 个契约没列的事件（async_payment_*）。
+   *      两个方向的漂移都不报错——契约、实现、样本三份"事实"各写各的。
+   *      互锁之后：任何一方改动而另两方没跟上，这里立刻红。
+   * @limitation 豁免名单的语义是"订阅了但刻意不归一化"（落 webhook_events 审计，
+   *             F12 售后域接入时再分派）——它不是"忘了实现"，名单本身也要被这条断言守着。
+   */
+  it('契约事件清单 = 归一化表（OUTCOME_BY_TYPE）∪ 豁免名单（三方互锁）', () => {
+    const declared = eventsInContract().sort();
+    const covered = [...Object.keys(OUTCOME_BY_TYPE), ...STRIPE_EVENTS_NOT_SAMPLED].sort();
+    expect(
+      covered,
+      '契约 / 归一化表 / 豁免名单三方不一致：\n' +
+        `  仅在契约里：${declared.filter((e) => !covered.includes(e)).join(', ') || '（无）'}\n` +
+        `  契约未列：${covered.filter((e) => !declared.includes(e)).join(', ') || '（无）'}`,
+    ).toEqual(declared);
   });
 });
