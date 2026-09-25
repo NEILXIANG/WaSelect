@@ -1,0 +1,49 @@
+# 依赖自动更新（F16）。
+#
+# @why 本项目对"依赖漂移"的容忍度比一般项目低：支付链路里一个依赖的行为变化
+#      （例如 jose 的验签口径、postgres.js 的 SQLSTATE 暴露方式）表现为**静默的正确性变化**，
+#      而不是报错。人工"想起来升级一次"的节奏无法覆盖这种风险面，
+#      而 Dependabot 的价值正是把"要不要升级"变成一个**每周都会出现在 PR 列表里的问题**。
+#
+# @why 每周而不是每天：本项目提交节奏是"一个单元一次 commit"，
+#      每天开 PR 会把 PR 列表变成噪音，而噪音里的安全更新会被一键关闭——那比没有更糟。
+#
+# @limitation 一：**只开 npm 与 github-actions**。没有 Docker（Render 用原生 Node 运行时），
+#              没有 Terraform。多开一个生态就多一条"永远没人处理的 PR"流。
+# @limitation 二：`open-pull-requests-limit: 5`。
+#              @why 不限量的话，一次 lockfile 大更新会开出几十个 PR，
+#              结果一定是全部被批量关掉——限量的目的是让**每一条都真的被看过**。
+# @limitation 三：**不自动合并**。安全更新也必须过 `npm run gate`——
+#              这正是 CI 存在的意义（ci.yml 与本地跑的是同一条命令）。
+#              自动合并会把"过了 CI"这个前提悄悄拿掉。
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # 分组：把同一批次的补丁合并成一个 PR。
+    # @why 逐个 PR 时，"升 vitest" 与 "升 @vitest/coverage-v8" 会互相冲突并各自红一次 CI，
+    #      最后两个都得重跑——分组让它们一次性通过。
+    groups:
+      dev-toolchain:
+        patterns:
+          - '@eslint/*'
+          - 'eslint*'
+          - 'prettier'
+          - 'typescript*'
+          - 'vitest'
+          - '@vitest/*'
+      test-runtime:
+        patterns:
+          - 'jsdom'
+          - 'miniprogram-simulate'
+          - 'fast-check'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
