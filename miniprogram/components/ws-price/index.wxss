@@ -1,0 +1,23 @@
+/**
+ * 价格组件的样式（F14）。
+ *
+ * @why 只声明"价格长什么样"，不声明具体数值：字号与颜色一律走 app.wxss 的 design token，
+ *      改版时只改 token，不会出现"这个页面的价格忘了改"。
+ * @limitation 组件样式在小程序里**有隔离**（默认 `isolated`），所以这里的选择器
+ *              不会污染页面；反过来说，页面也改不到它——要改只能改本文件或 token。
+ */
+.ws-price {
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font);
+  font-weight: bold;
+}
+
+/* ⚠️ 三档是刻意的上限（@see index.js @limitation 二）：
+   每加一档就多一种"这个页面用了另一档"的可能，最后版式又散了。 */
+.ws-price--sm {
+  font-size: var(--ws-font-sm);
+}
+
+.ws-price--lg {
+  font-size: var(--ws-font-lg);
+}

@@ -23,6 +23,8 @@ page {
   --ws-radius: 12rpx;
   --ws-font: 28rpx;
   --ws-font-sm: 24rpx;
+  /* 强调档：价格、区块标题。⚠️ 与间距同理——只有这三档，加档要给它一个说明用途的名字。 */
+  --ws-font-lg: 36rpx;
 
   background: var(--ws-color-bg);
   color: var(--ws-color-fg);
