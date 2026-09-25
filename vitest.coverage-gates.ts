@@ -173,6 +173,15 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     branches: 100,
     statements: 100,
   },
+  // 启动层：定时器回调里抛出的 rejection **没有任何人接**，Node 默认配置下会终止进程
+  // ——"某个 job 抛了一次异常"变成"服务重启"，日志上只看到进程没了。
+  // 同进程内重叠、stop 是否真的停、runImmediately 默认值，都是这条链上的失效点。
+  'server/src/app/scheduler-start.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
 
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。

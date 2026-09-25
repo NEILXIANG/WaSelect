@@ -58,10 +58,15 @@ export interface SchedulerDeps<TTx> {
   runs: JobRunLog<TTx>;
   clock: Clock;
   logger: Logger;
-  /** 锁键（默认 {@link TICK_LOCK_KEY}）。 */
-  lockKey?: string;
-  /** 心跳行名（默认 {@link TICK_JOB_NAME}）。 */
-  name?: string;
+  /**
+   * 锁键（默认 {@link TICK_LOCK_KEY}）。
+   * @why 写成 `string | undefined` 而不是 `string`：`exactOptionalPropertyTypes` 下，
+   *      装配层（`scheduler-start.ts`）要把"调用方没给"直接透传进来，
+   *      不写 `| undefined` 就得改成条件赋值，那是把一件事拆成两步写。
+   */
+  lockKey?: string | undefined;
+  /** 心跳行名（默认 {@link TICK_JOB_NAME}）；daily 对账传 'daily'。 */
+  name?: string | undefined;
 }
 
 /**
