@@ -14,15 +14,9 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CODES } from '@waselect/shared';
-import {
-  ApiError,
-  createAdminApi,
-  DEFAULT_TIMEOUT_MS,
-  NETWORK_ERROR_CODE,
-  normalizeBaseUrl,
-  UNAUTHORIZED_CODE,
-} from './client.js';
-import { DEFAULT_API_BASE, resolveApiBase } from './config.js';
+import { ApiError, NETWORK_ERROR_CODE, UNAUTHORIZED_CODE } from './errors.js';
+import { createAdminApi, DEFAULT_TIMEOUT_MS } from './client.js';
+import { DEFAULT_API_BASE, normalizeBaseUrl, resolveApiBase } from './config.js';
 import { createTokenStore, TOKEN_STORAGE_KEY } from './token-store.js';
 
 /** 造一个 JSON 响应（带 content-type，贴近服务端真实形状）。 */

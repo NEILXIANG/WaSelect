@@ -6,12 +6,28 @@
  *      顶层读取让"环境是什么"变成不可测的隐式输入，且模块一 import 就定型；
  *      纯函数让"默认值/空串/非法值"三个分支可以各有一条用例（§2：环境变量解析必须有测试）。
  *
- * @see client.ts（消费方）；.env.example PUBLIC_API_BASE（服务端同口径变量）
+ * @see client.ts（normalizeBaseUrl 的消费方）；.env.example PUBLIC_API_BASE（服务端同口径变量）
  */
-import { normalizeBaseUrl } from './client.js';
 
 /** 本地开发的 API 默认地址（与 .env.example 的 PUBLIC_API_BASE 一致）。 */
 export const DEFAULT_API_BASE = 'http://localhost:3000';
+
+/**
+ * 校验并归一 API 根地址：http(s) absolute，尾斜杠归一（拼 path 不双斜杠）。
+ * @why 形状不符在**构造期**硬失败而不是等第一次请求：相对路径会把请求打到静态站
+ *      自己身上，表现为全部 404 且 CORS 不报错，排查方向全错。
+ * @why 住在 config.ts 而不是 client.ts：它是**环境配置**的形状规则，
+ *      与 resolveApiBase 是同一件事的两半（拆分后 client.ts 只做"发请求"）。
+ */
+export function normalizeBaseUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!/^https?:\/\/\S+$/.test(trimmed)) {
+    throw new TypeError(
+      `baseUrl 必须是 http(s) 绝对地址，收到「${value}」——相对路径会把请求打到静态站自己身上`,
+    );
+  }
+  return trimmed.replace(/\/+$/, '');
+}
 
 /**
  * 解析 API 根地址。

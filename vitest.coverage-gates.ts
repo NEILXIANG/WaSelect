@@ -289,5 +289,7 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
   // 它错的形态全部不报错——带错 token 形状、超时取消被当成"服务端没执行"而重发、
   // 401 不登出让管理员对着过期会话白点按钮。与小程序 request.js / server 出站 HTTP 同强度（100%），
   // 它是"边界层"，边界层的价值就在于没有第二种实现。
+  // errors.ts 是同一出口的错误形状半边（AJ-86 拆分），同强度。
   'admin-web/src/api/client.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  'admin-web/src/api/errors.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
 };

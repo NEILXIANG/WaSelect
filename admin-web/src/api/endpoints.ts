@@ -8,7 +8,7 @@
  *
  * @see contracts/api-contract.yaml（/auth/admin/login）；./client.ts
  */
-import { ApiError, NETWORK_ERROR_CODE } from './client.js';
+import { ApiError, NETWORK_ERROR_CODE } from './errors.js';
 
 /** createAdminApi 的返回类型（避免把 requestApi 的签名抄第二份）。 */
 export type AdminApi = ReturnType<typeof import('./client.js').createAdminApi>;

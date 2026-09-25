@@ -13,7 +13,7 @@
  * @see contracts/api-contract.yaml /auth/admin/login；./api/endpoints.ts
  */
 import { useState, type FormEvent } from 'react';
-import { ApiError } from './api/client.js';
+import { ApiError } from './api/errors.js';
 
 export function LoginForm({
   onLogin,
