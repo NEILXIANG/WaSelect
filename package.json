@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "WaSelect 日本直邮跨境电商 monorepo（契约：WaSelectDoc 技术文档 v0.5 / api-contract 0.5.0）",
+  "description": "WaSelect 日本直邮跨境电商 monorepo（契约：WaSelectDoc 技术文档 v0.5 / api-contract 0.5.2）",
   "engines": {
     "node": ">=22 <23",
     "npm": ">=10"

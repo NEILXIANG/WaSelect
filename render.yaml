@@ -20,7 +20,11 @@ services:
     #               支付回调在这种延迟下会被机构判超时并重发，而重发正是幂等要兜的东西——
     #               拿免费档省下的钱去冒这个险不划算
     branch: main
-    # 只装生产依赖；`npm run build` 编译 shared + server（start 跑的是 dist）
+    # ⚠️ 这里必须是全量 `npm ci`（含 devDependencies），不能 `--omit=dev`：
+    #    build 要调 tsc / vite（都是 devDependencies），省了装不上就直接构建失败。
+    #    "只跑生产依赖"由 Render 的 start 阶段天然保证——start 只是 `node server/dist/main.js`，
+    #    dev 依赖装了也只是躺在 node_modules 里不进运行路径（代价是构建镜像稍大，换来的是不用维护两份依赖清单）。
+    #    `npm run build` 编译 shared + server + admin-web（start 跑的是 server/dist）
     buildCommand: npm ci && npm run build
     startCommand: npm start
     # ⚠️ 健康检查刻意用 /healthz（存活）而**不是** /readyz（就绪）。

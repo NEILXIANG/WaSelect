@@ -1,14 +1,14 @@
 # jp_project — 日本直邮小程序代码库
 
-设计文档在知识库仓库 `WaSelectDoc/50-产品与技术/`，代码以以下三份为契约：
+设计文档在知识库仓库 `WaSelectDoc/50-产品与技术/`（两仓布局：本地治理/业务文档库目录名 `jp` ↔ git 仓库 `WaSelectDoc`；本工程库目录名 `jp_project` ↔ git 仓库 `WaSelect`；两边互指链接、不重复数字），代码以以下三份为契约：
 
 - `技术架构/技术文档.md`（v0.5）：编码约定、状态机、表结构 DDL、PaymentProvider v2.1（Stripe Checkout 托管页）、复制链接支付入口、拒付、域名 / 隐私 / 审核细则
-- `技术架构/api-contract.yaml`（0.5.0）：OpenAPI 3.0，前后端共同依据
+- `技术架构/api-contract.yaml`（0.5.2）：OpenAPI 3.0，前后端共同依据
 - `需求与设计/需求文档PRD-v1.6.md` §3：P0 范围
 
-目录（见《工程框架文档 v0.5》）：`miniprogram/`（原生小程序 TS；「9 页」是规划口径，当前只有行走骨架演示页 + ws-button / ws-price 两个基础组件）、`server/`（Node.ts + postgres.js，九模块）、`checkout-static/`（Cloudflare Pages 静态站：`_redirects` → Stripe Checkout 托管页 + 结果页）、`admin-web/`（独立管理后台，前置 Cloudflare Access）。表数口径：当前 17 张（migrations 001–007），唯一真源是 `server/src/adapters/db.db.test.ts` 的表清单断言；文档里出现的「13 表」是成文时的旧基准。
+目录（见《工程框架文档 v0.5》）：`miniprogram/`（原生小程序混合体：WXML/WXSS/JS + TS 源码，由微信开发者工具的 TypeScript 编译插件转译；「9 页」是规划口径，当前只有行走骨架演示页 + ws-button / ws-price 两个基础组件）、`server/`（Node.ts + postgres.js，九模块）、`checkout-static/`（Cloudflare Pages 静态站：`_redirects` → Stripe Checkout 托管页 + 结果页）、`admin-web/`（独立管理后台，前置 Cloudflare Access）。表数口径：当前 17 张（migrations 001–008），唯一真源是 `server/src/adapters/db.db.test.ts` 的表清单断言；文档里出现的「13 表」是成文时的旧基准。
 
-**前置条件**（新机器 / 新同事）：Node **22.x**（`nvm use` 读 `.nvmrc`；CI 同主版本）、npm ≥ 10、本机 PostgreSQL **16**（如 `brew install postgresql@16`，代码有主版本硬闸门）、Git。然后：
+**前置条件**（新机器 / 新同事）：Node **22.x**（`nvm use` 读 `.nvmrc`；CI 同主版本）、npm ≥ 10、本机 PostgreSQL **16**（如 `brew install postgresql@16`，代码有主版本硬闸门）、Git。要跑小程序再加：**微信开发者工具**（导入 `miniprogram/` 目录；`project.config.json` 已开启 TypeScript 编译插件，工具内「详情 → 本地设置」保持默认即可；真机点亮验证属 F16 L4 欠账）。然后：
 
 ```bash
 npm install        # 装全部 workspace 依赖（prepare 钩子自动指 hooksPath）
@@ -26,5 +26,7 @@ npm run dev        # 首次自动物化 .env、建库、迁移、灌 demo 数据
 **地基搭建清单**：写第一行业务代码前，按 `docs/地基搭建清单.md` 的 21 项（F0–F17 + F2b/F6b/F6c 三个增补项）、6 个阶段搭好测试、配置、错误、日志、数据库、幂等、假数据、分层事件、可插拔注册表、调度器、外部调用、共享契约、前端地基与 CI。
 
 **测试门禁**：先读 `docs/测试策略与验证门禁.md` —— 四条铁律（T-1 无绿灯不写下一步 / T-2 先红后绿 / T-3 依赖要真只有三方要假 / T-4 假数据完整模拟真实）、最小单元粒度、必测清单（含运费取档 `w=1850 → 4950`）。每个单元交付前跑 `npm run gate`，全绿才算完成。
+
+**新人上手顺序（onboarding）**：① 本 README → ② `CLAUDE.md`（开发纪律十条约束，写任何代码前必读）→ ③ `docs/自主决策记录.md`（AJ 系列，AI 自主拍板的历史与依据）→ ④ 上面链接的架构 / 注释日志 / 地基清单 / 测试门禁四份细则。
 
 开发前审计记录：`docs/开发前审计报告-2026-09-19.md`（十六轮，§8 为小程序专项，§21 为第十六轮从头评审）。
