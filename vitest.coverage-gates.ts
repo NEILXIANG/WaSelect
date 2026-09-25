@@ -146,6 +146,16 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     statements: 100,
   },
 
+  // F13 调度器契约：互斥与心跳是**看门狗的唯一依据**。它出错的形态不是报错，
+  // 而是"某个 job 已经连续失败一天了，监控却显示刚刚还成功过"——
+  // 那是比宕机更贵的一类失效（没人去看，也就没人发现）。归一化/汇总这两个纯函数是它的全部实现。
+  'server/src/ports/scheduler.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+
   // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
   // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
   'server/src/app/auth.ts': { branches: 95 },
