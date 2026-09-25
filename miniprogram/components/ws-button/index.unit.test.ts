@@ -22,7 +22,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import simulate from 'miniprogram-simulate';
 
 const root = resolve(import.meta.dirname, '../..');
@@ -117,6 +117,38 @@ describe('ws-button：渲染', () => {
     const wxml = readFileSync(join(root, 'components/ws-button/index.wxml'), 'utf8');
     expect(wxml).toMatch(/disabled="{{disabled}}"/);
     expect(wxml).toMatch(/catchtap="onTap"/);
+  });
+});
+
+describe('ws-button：非法类型档位不能静默回退（与 ws-price 同一原则）', () => {
+  /**
+   * @why `type` 直接插 class 名时，传 `xl` 的表现是"没有档位样式命中 → 悄悄落回基础样式"：
+   *      按钮长得不对且不报错。与 ws-price 非法档位是同一种失效形态，
+   *      走同一条响亮失败通道（safeCallback → 渲染保持初始空态 + 控制台明确报错）。
+   */
+  it('⚠️ 传不存在的档位（xl）→ 报错且不产出档位 class', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const comp = render({ text: 'x', type: 'xl' });
+      const logged = spy.mock.calls
+        .flat()
+        .map((c) => String(c))
+        .join('\n');
+      expect(logged).toMatch(/type 必须是 primary \/ default 之一/);
+      // 初始 typeClass 是 primary：observer 抛错后停在前态，绝不出现 ws-button--xl
+      const cls = comp.dom.querySelector('wx-button')?.getAttribute('class') ?? '';
+      expect(cls).not.toContain('ws-button--xl');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('wxml 不直接消费 `type` 属性（档位 class 只能来自校验过的 typeClass）', () => {
+    // 渲染层测不出绑定方式（`ws-button--{{type}}` 与 `{{typeClass}}` 在合法档位下产物一样），
+    // 所以直接读 wxml 源文件钉住（与 ws-price 读 wxml 钉 sizeClass 同款做法）
+    const wxml = readFileSync(join(root, 'components/ws-button/index.wxml'), 'utf8');
+    expect(wxml).toContain('{{typeClass}}');
+    expect(wxml).not.toMatch(/ws-button--\{\{type\}\}/);
   });
 });
 

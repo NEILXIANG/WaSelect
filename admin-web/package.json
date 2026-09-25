@@ -7,7 +7,7 @@
   "scripts": {
     "predev": "tsx ../scripts/gen-admin-tokens.ts",
     "dev": "vite",
-    "prebuild": "tsx ../scripts/gen-admin-tokens.ts",
+    "prebuild": "tsx ../scripts/gen-admin-tokens.ts && tsx ../scripts/assert-admin-deploy-env.ts",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"

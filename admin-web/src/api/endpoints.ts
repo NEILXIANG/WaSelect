@@ -37,14 +37,19 @@ export async function login(
   api: AdminApi,
   cred: { email: string; password: string },
 ): Promise<string> {
+  // ⚠️ 显式生成 traceId 并复用（二次审查 P3）：形状校验失败抛错时要把它带出去——
+  //    曾经这里写的是常量 'login-shape' 冒充报障码，服务端日志按它什么都查不到，
+  //    与 N8"报障码必须能检索"的承诺相反。显式传入后，请求与报错是同一条链路。
+  const traceId = crypto.randomUUID();
   const resp = await api({
     path: '/api/v1/auth/admin/login',
     method: 'POST',
     body: { email: cred.email, password: cred.password },
+    traceId,
   });
   if (!isLoginResp(resp)) {
     // 契约漂移（200 但形状变了）：按"网络层异常"报，让日志/报障能区分"密码错"与"契约变了"
-    throw new ApiError(NETWORK_ERROR_CODE, '登录响应形状与契约不符', 'login-shape');
+    throw new ApiError(NETWORK_ERROR_CODE, '登录响应形状与契约不符', traceId);
   }
   return resp.token;
 }

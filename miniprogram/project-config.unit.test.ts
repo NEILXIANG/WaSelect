@@ -13,11 +13,12 @@
  *              微信开发者工具其实宽容注释，但一旦有人写了，CI 立刻红而工具里照样能跑——
  *              宁可在两边都强制纯 JSON，也不要出现"CI 红/工具绿"的分裂。
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { API_BASE } from './config.js';
+import { BRAND_NAME } from '../scripts/checkout-build-lib.js';
 
 // ⚠️ 不要拼 `'..'`：本文件就在 miniprogram/ 里，工程配置也在这里；
 //    拼了 '..' 会退到仓库根，于是 existsSync 全 false、报"缺少 project.config.json"——
@@ -49,8 +50,53 @@ describe('project.config.json（MP1）', () => {
     expect(setting.enhance).toBe(true);
   });
 
+  /**
+   * 存在非测试 .ts 源文件 ⇒ `useCompilerPlugins` 必须含 typescript（二次审查 P1）。
+   *
+   * @why utils/ 下的 .ts（storage/wx-api）被 app.js 等以 `.js` 后缀引用；而工具的 TS 支持
+   *      是**编译插件**——"enhance" 是 babel 管线，不编译 .ts 成可打包模块。
+   *      CI 全链路（vitest 的 .js→.ts 映射、simulate 只载组件）都不过微信打包器，
+   *      于是"测试全绿、工具打不开"——正是本文件反复声明要防的形态。
+   *      官方依据：developers.weixin.qq.com/miniprogram/dev/devtools/compilets
+   *      （旧项目须在 project.config.json 的 setting 配 useCompilerPlugins: ["typescript"]）。
+   * @limitation 插件开启后 `.js` specifier 指向仅存 `.ts` 文件的解析，官方文档未逐字写明
+   *             （"同名 ts 优先"覆盖的是同名共存场景）——真机点亮验证挂在 F16 L4；
+   *             若失败，回退方案是把两件 utils 改回 .js + JSDoc。
+   */
+  it('存在非测试 .ts 源文件 ⇒ 必须开启 typescript 编译插件（否则真机白屏）', () => {
+    const tsSources = readdirSync(root, { recursive: true, withFileTypes: true })
+      .filter(
+        (e) =>
+          e.isFile() &&
+          e.name.endsWith('.ts') &&
+          !e.name.endsWith('.unit.test.ts') &&
+          !e.name.endsWith('.d.ts'),
+      )
+      .map((e) => join(e.parentPath, e.name));
+    const setting = cfg.setting as Record<string, unknown>;
+    const plugins = (setting.useCompilerPlugins as string[] | undefined) ?? [];
+    if (tsSources.length > 0) {
+      expect(
+        plugins,
+        `存在 ${tsSources.length} 件非测试 .ts 源文件（如 ${tsSources[0]}），useCompilerPlugins 必须含 typescript`,
+      ).toContain('typescript');
+    }
+  });
+
   it('占位 appid 用 touristappid（未取得境外主体 AppID 前不能写死别的值）', () => {
     expect(cfg.appid).toBe('touristappid');
+  });
+
+  it('导航标题含品牌名（BRAND_NAME 同源；品牌定稿后只改一处，三端不该各写各的）', () => {
+    /**
+     * @why admin-web index.html 与 checkout 的品牌名都有同源断言（design-token.unit.test /
+     *      renderPage 占位替换），app.json 是第三个写品牌名的地方却没有断言（二次审查 P3）。
+     *      骨架期允许"（骨架）"后缀——它不是品牌的一部分，去掉后缀后必须逐字等于品牌名。
+     */
+    const app = readJson('app.json');
+    const window = app.window as { navigationBarTitleText?: string };
+    const title = window.navigationBarTitleText ?? '';
+    expect(title.replace('（骨架）', '')).toBe(BRAND_NAME);
   });
 
   it('测试文件不进上传包（*.unit.test.ts 不该被打包上传）', () => {

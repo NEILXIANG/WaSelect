@@ -21,6 +21,7 @@
     "urlCheck": false,
     "es6": true,
     "enhance": true,
+    "useCompilerPlugins": ["typescript"],
     "postcss": true,
     "minified": true,
     "newFeature": true,

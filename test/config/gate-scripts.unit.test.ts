@@ -115,4 +115,16 @@ describe('gate 这道门禁本身必须完整', () => {
     expect(hasFullAudit('npm run lint && npm audit && npm run cov')).toBe(true);
     expect(hasFullAudit('npm run lint && npm run audit:prod && npm run cov')).toBe(false);
   });
+
+  it('admin-web 的 prebuild 必须挂部署环境闸门（二次审查 P2：N16 同款缺口，拆掉闸门不报错）', () => {
+    /**
+     * @why admin-web 与 checkout-static 同属「CF Pages 无 IaC」形态：VITE_API_BASE_URL 漏配时
+     *      产物静默烤进 localhost。闸门脚本存在但**没被 prebuild 引用**是最可能的失效形态
+     *      （加一个脚本很容易，把它挂进构建链很容易忘）——所以这里钉的是"接线"，不是脚本本身。
+     */
+    const adminPkg = JSON.parse(readFileSync(resolve(root, 'admin-web/package.json'), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    expect(adminPkg.scripts['prebuild']).toContain('assert-admin-deploy-env');
+  });
 });

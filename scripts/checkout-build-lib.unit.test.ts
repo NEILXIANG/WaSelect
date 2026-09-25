@@ -13,7 +13,7 @@
  * @see scripts/checkout-build-lib.ts（被测）；server/src/adapters/payment/channels.ts
  *      （STRIPE_RETURN_PATHS 同源）；docs/地基搭建清单.md F15
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -83,6 +83,13 @@ describe('assertDeployApiBase：CF Pages 构建的部署闸门（体检 N16）',
     for (const bad of ['http://localhost:3000', 'http://127.0.0.1', 'http://[::1]:3000']) {
       expect(() => assertDeployApiBase(bad), `${bad} 应被拒绝`).toThrow();
     }
+  });
+
+  it('自定义变量名进报错文案（admin-web 复用同一闸门，变量是 VITE_API_BASE_URL）', () => {
+    // @why 同一闸门两个消费方（checkout 的 PUBLIC_API_BASE / admin-web 的 VITE_API_BASE_URL），
+    //      报错不带变量名时，运维拿到错误不知道去配哪一个（二次审查 P2 的连带修）
+    expect(() => assertDeployApiBase('', 'VITE_API_BASE_URL')).toThrow(/VITE_API_BASE_URL/);
+    expect(() => assertDeployApiBase('http://localhost:3000')).toThrow(/PUBLIC_API_BASE/);
   });
 });
 
@@ -205,5 +212,127 @@ describe('renderPage：品牌名单一来源', () => {
 
   it('无占位时原样返回', () => {
     expect(renderPage('<p>hi</p>')).toBe('<p>hi</p>');
+  });
+});
+
+/**
+ * checkout-static 硬编码字面量扫描器（二次审查 P2：UI 不写死纪律在 checkout 端的补齐）。
+ *
+ * @why miniprogram / admin-web 都有"字面量不许绕过 design token"的扫描器，checkout 端没有——
+ *      而 page.css 已经在违规（420px / 56px）。纪律漏一端等于没有纪律：
+ *      新加页面时会照着现有文件抄，字面量越抄越多。
+ * @why 豁免是**逐条登记**（文件 + 行内容 + 理由）而不是目录级排除：
+ *      目录级豁免会让"再往 page.css 里加一个色值"永远看不见；
+ *      逐条登记则要求每条豁免给出理由，且页面改动碰到该行时豁免失效（扫描器变红提醒复审）。
+ *      ⚠️ 自检内建在最后一条：豁免表里的每一条都必须**真的挡下过违规**——
+ *      豁免指向的内容被改没时，豁免本身变红（§2 第 34 条：扫描器失效形态是永绿）。
+ */
+describe('checkout-static 硬编码扫描器（UI 不写死纪律的第三端）', () => {
+  /** 违规模式：主题相关的字面量（色值 / 尺寸 / 内联样式）。 */
+  const PATTERNS: ReadonlyArray<{ name: string; re: RegExp }> = [
+    { name: 'hex 色值', re: /#[0-9a-fA-F]{3,8}\b/ },
+    { name: 'px 尺寸', re: /\d+px/ },
+    { name: '内联样式', re: /style="/ },
+    { name: 'SVG 笔画宽', re: /stroke-width="/ },
+  ];
+
+  /**
+   * 豁免登记：每条 = 文件（相对 checkout-static）+ 行内容子串 + 理由。
+   * ⚠️ 加豁免必须写得出理由；写不出理由的违规请 token 化。
+   */
+  const EXEMPTIONS: ReadonlyArray<{ file: string; line: string; reason: string }> = [
+    {
+      file: 'assets/page.css',
+      line: 'max-width: 420px',
+      reason:
+        '落地页卡片宽度——三张静态页共享的版式常量；checkout 无独立 token 体系（token 只有色板），F15 整体设计时一并定',
+    },
+    {
+      file: 'assets/page.css',
+      line: 'width: 56px',
+      reason: '状态图标容器尺寸——图标几何，不属主题色板/字号体系',
+    },
+    {
+      file: 'assets/page.css',
+      line: 'height: 56px',
+      reason: '状态图标容器尺寸——同上',
+    },
+    {
+      file: 'pay/done/index.html',
+      line: 'stroke-width="3"',
+      reason: 'SVG 图标笔画几何（颜色已走 currentColor，主题化无意义）',
+    },
+    {
+      file: 'pay/done/index.html',
+      line: 'stroke-width="4"',
+      reason: '同上',
+    },
+    {
+      file: 'pay/cancelled/index.html',
+      line: 'stroke-width="3"',
+      reason: '同上',
+    },
+    {
+      file: 'pay/cancelled/index.html',
+      line: 'stroke-width="4"',
+      reason: '同上',
+    },
+    {
+      file: 'pay/expired/index.html',
+      line: 'stroke-width="3"',
+      reason: '同上',
+    },
+    {
+      file: 'pay/expired/index.html',
+      line: 'stroke-width="4"',
+      reason: '同上',
+    },
+  ];
+
+  function collectSources(): Array<{ rel: string; lines: string[] }> {
+    const base = join(root, 'checkout-static');
+    const out: Array<{ rel: string; lines: string[] }> = [];
+    for (const f of readdirSync(join(base, 'assets'))) {
+      // tokens.css 是构建生成物（dist 里），源目录只有手写文件
+      out.push({
+        rel: `assets/${f}`,
+        lines: readFileSync(join(base, 'assets', f), 'utf8').split('\n'),
+      });
+    }
+    for (const page of readdirSync(join(base, 'pay'))) {
+      out.push({
+        rel: `pay/${page}/index.html`,
+        lines: readFileSync(join(base, 'pay', page, 'index.html'), 'utf8').split('\n'),
+      });
+    }
+    return out;
+  }
+
+  it('除登记豁免外，checkout 源文件零硬编码字面量', () => {
+    const violations: string[] = [];
+    for (const { rel, lines } of collectSources()) {
+      for (const [i, line] of lines.entries()) {
+        for (const { name, re } of PATTERNS) {
+          if (!re.test(line)) continue;
+          const exempted = EXEMPTIONS.some((e) => e.file === rel && line.includes(e.line));
+          if (!exempted) violations.push(`${rel}:${i + 1}（${name}）${line.trim()}`);
+        }
+      }
+    }
+    expect(violations, `未豁免的硬编码字面量：${'\n'}${violations.join('\n')}`).toEqual([]);
+  });
+
+  it('自检：每条豁免都必须真的挡下过违规（豁免指向的内容被改没时，豁免本身变红）', () => {
+    const sources = collectSources();
+    for (const e of EXEMPTIONS) {
+      const hit = sources.some(
+        ({ rel, lines }) =>
+          rel === e.file &&
+          lines.some((line) => line.includes(e.line) && PATTERNS.some(({ re }) => re.test(line))),
+      );
+      expect(hit, `豁免已失效（${e.file}：${e.line}）——删掉它或复审该行（理由：${e.reason}）`).toBe(
+        true,
+      );
+    }
   });
 });

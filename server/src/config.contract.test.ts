@@ -24,14 +24,19 @@ const documented = new Set(
 /**
  * 文档里写了、但**不进服务端配置**的变量白名单。
  * @why 每一条都必须写清原因，否则白名单会变成"懒得解释"的垃圾桶，机制就失效了。
- *      这里的两条是**测试基础设施**用的，由 test/db/test-db.ts 直接读 process.env——
+ *      前三条是**测试基础设施**用的，由 test/db/test-db.ts 直接读 process.env——
  *      它们不该出现在服务端运行配置里（会让生产配置多出两个无意义的键）。
+ *      第四条是 **admin-web 前端**变量：`.env.example` 是全仓唯一的环境变量登记处，
+ *      前端变量也写在这里（Vite envDir=admin-web，仓库根 .env 不会被 admin-web 加载——
+ *      登记在这只为"人能查到"，server schema 认识它反而错误）。
  */
 const TEST_ONLY_KEYS: Readonly<Record<string, string>> = {
   TEST_DATABASE_URL: '测试库连接串，由 test/db/test-db.ts 读取，不属于服务端运行配置',
   TEST_ADMIN_DB_URL: '建测试库用的管理库连接串，同上',
   ALLOW_REMOTE_TEST_DB:
     '测试库安全闸门的开关，由 test/db/test-db.ts 读取；设为 1 才允许连远端测试实例',
+  VITE_API_BASE_URL:
+    'admin-web 前端变量（Vite 构建期注入），由 admin-web/src/api/config.ts 与 scripts/assert-admin-deploy-env.ts 读取，不属于服务端运行配置',
 };
 
 describe('.env.example ↔ 配置 schema 键集合一致', () => {

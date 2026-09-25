@@ -60,12 +60,12 @@ export function renderRedirects(apiBase: string): string {
  *      而发现它的方式是"用户说付款链接坏了"。部署构建要么拿到真值，要么响亮失败。
  * @limitation 只在 CF Pages 环境生效；本地/CI 构建故意允许 localhost（联调要用）。
  */
-export function assertDeployApiBase(apiBase: string): void {
+export function assertDeployApiBase(apiBase: string, varName = 'PUBLIC_API_BASE'): void {
   const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/.test(apiBase);
   if (isLocal || !apiBase.startsWith('https://')) {
     throw new Error(
-      `CF Pages 构建要求 PUBLIC_API_BASE 是 https 公网地址（当前：${apiBase}）。` +
-        '漏配时产物 _redirects 会指向 localhost——宁可构建失败，也不要静默产出一个坏站点。',
+      `CF Pages 构建要求 ${varName} 是 https 公网地址（当前：${apiBase}）。` +
+        '漏配时产物会静默指向 localhost——宁可构建失败，也不要静默产出一个坏站点。',
     );
   }
 }

@@ -42,6 +42,8 @@ page {
   margin-top: var(--ws-space);
 }
 
+/* ⚠️ 8rpx 是写死值：.row 的纵向间距在 token 体系里没有对应档（骨架期只有这一个用处），
+   为单点新增 token 是过度设计；出现第二处间距需求时必须收进 token（二次审查 P3 登记）。 */
 .row {
   display: flex;
   justify-content: space-between;

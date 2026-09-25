@@ -28,19 +28,56 @@
  * @limitation 四：文案只走 `text` 属性，**不用 slot**。
  *              @why slot 会让"按钮里能不能放图标"变成每个页面各试各的，
  *              而 MVP 的按钮就是一行字；真要放图标时再加，加的时候是**新增**不是改。
+ * @limitation 五：`type` 只有 `primary / default` 两档，且非法档位**不静默回退**
+ *              （与 ws-price 同一原则）：`type` 直接插 class 名时，传 `xl` 的表现是
+ *              "没有任何档位样式命中 → 悄悄落回基础样式"，按钮长得不对且不报错。
+ *              所以 class 走内部计算的 `typeClass`，非法值与 ws-price 非法档位同一条路：
+ *              渲染空白 + 控制台明确报错（safeCallback 捕获，不冒泡给页面）。
  *
  * @see ../ws-price/index.js（同组组件，同样的"口径收一处"思路）；docs/地基搭建清单.md F14
  */
+/** 类型档位全集（@see 文件头 @limitation 五）。 */
+const TYPES = ['primary', 'default'];
+
+/**
+ * 校验类型档位。
+ * @why 非法档位直接插 class 名会**静默**落回基础样式（没有该档位的样式命中）——
+ *      看起来是个按钮，实际样式错了，且不报错。
+ * @throws 档位不在 TYPES 里时原样抛出（走 safeCallback → 空白 + 控制台报错，不兜底）
+ */
+function assertType(type) {
+  if (!TYPES.includes(type)) {
+    throw new Error(`ws-button 的 type 必须是 ${TYPES.join(' / ')} 之一，收到：${String(type)}`);
+  }
+}
+
 Component({
   properties: {
     /** 按钮文案。@see @limitation 四 */
     text: { type: String, value: '' },
-    /** `primary` / `default`。 */
+    /** `primary` / `default`。@see @limitation 五 */
     type: { type: String, value: 'primary' },
     /** 处理中：显示转圈，并**吞掉点击**（@see 文件头 @why） */
     loading: { type: Boolean, value: false },
     /** 禁用：由原生 button 挡住点击。@see @limitation 二 */
     disabled: { type: Boolean, value: false },
+  },
+
+  data: {
+    /** 档位 class（内部计算，非法档位到不了这里——@see assertType）。 */
+    typeClass: 'ws-button--primary',
+  },
+
+  // ⚠️ `attached` 与 `observers` 都要调：`observers` 只在**属性变化**时触发，
+  //    初始就传了非法值时（没有"变化"），只剩 `attached` 能让它响亮失败（与 ws-price 同理）。
+  attached() {
+    assertType(this.data.type);
+  },
+  observers: {
+    type(type) {
+      assertType(type);
+      this.setData({ typeClass: `ws-button--${type}` });
+    },
   },
 
   methods: {
