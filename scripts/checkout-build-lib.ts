@@ -1,0 +1,145 @@
+/**
+ * 职责：checkout-static 静态站的构建逻辑（F15 单元①）——
+ *      `_redirects` 生成/解析/匹配、tokens.css 生成、品牌名替换、页面清单。
+ *      与 CLI 薄壳（build-checkout.ts）分离，好让 D-49 的「第一跳」在仓库内可测。
+ *
+ * @why `_redirects` 由代码**生成**而不是手写：API 域名是环境相关值（dev/staging/prod 不同），
+ *      手写进仓库要么写死一个环境、要么留占位靠人肉替换——两种都是"换环境就错"的形态。
+ *
+ * @why matchRedirect 实现的是 Cloudflare 语义的**最小子集**（精确匹配 / 单 splat / 首条生效 /
+ *      状态缺省 302）。它是"我们以为 CF 会怎么做"的模型，不是 CF 本身——
+ *      真平台行为（尤其**查询串是否随 302 保留**，文档未承诺）登记为 L4 实测项，
+ *      部署后必须用带 `?t=` 的真实短链 curl 一遍。@limitation 不支持占位符（`:name`）——
+ *      当前规则用不到，支持了反而要维护第二套语义。
+ *
+ * @limitation 品牌名替换是构建期字符串替换，不是文案系统：
+ *              三张静态页只有品牌名一处外置；真要多语言/多文案时再谈渲染层。
+ *
+ * @see scripts/build-checkout.ts（CLI）；server/src/adapters/payment/channels.ts（回跳路径同源）；
+ *      https://developers.cloudflare.com/pages/configuration/redirects/
+ */
+
+/** 页面清单（构建时逐张复制 + 测试逐张核对存在性）。失效页的消费者是 I1 的 /pay/link（链接过期时 302 到这）。 */
+export const CHECKOUT_PAGES = ['/pay/done', '/pay/cancelled', '/pay/expired'] as const;
+
+/**
+ * 品牌名单一来源。⚠️ 品牌名**待定**（候选 和選/WaSelect，见 jp README §5）——
+ * 定稿后只改这一处，三张静态页由构建期替换（`__BRAND_NAME__` 占位）。
+ */
+export const BRAND_NAME = 'WaSelect';
+
+/* ── _redirects：生成 ───────────────────────────────────────────────────── */
+
+/**
+ * 生成 `_redirects` 内容。
+ * @param apiBase API 公网基址（`PUBLIC_API_BASE`），只允许 `http(s)://host[:port]`——
+ *   带路径说明配错了环境变量（拼出来会是 `…/v2/api/v1/…` 这种双前缀，且只在点击短链时才暴露）。
+ */
+export function renderRedirects(apiBase: string): string {
+  const trimmed = apiBase.endsWith('/') ? apiBase.slice(0, -1) : apiBase;
+  if (!/^https?:\/\/[^/]+$/.test(trimmed)) {
+    throw new Error(
+      `PUBLIC_API_BASE 形状不合法（只允许 http(s)://host[:port]，不得带路径）：${apiBase}`,
+    );
+  }
+  return [
+    '# checkout-static 转发规则（由 build-checkout 生成，勿手改；改规则请改 scripts/checkout-build-lib.ts）',
+    '# D-49 第一跳：短链 /o/:id → API /pay/link（由 API 校验后 302 到 Stripe 托管页）',
+    `# CF 语义：查询串不参与匹配；splat 转发路径后缀；状态缺省 302`,
+    `/o/* ${trimmed}/api/v1/pay/link/:splat 302`,
+    '',
+  ].join('\n');
+}
+
+/* ── _redirects：解析与匹配（CF 语义最小子集） ───────────────────────────── */
+
+export interface RedirectRule {
+  source: string;
+  destination: string;
+  status: number;
+}
+
+export function parseRedirects(content: string): RedirectRule[] {
+  const rules: RedirectRule[] = [];
+  for (const raw of content.split('\n')) {
+    const line = raw.trim();
+    if (line.length === 0 || line.startsWith('#')) continue;
+    const parts = line.split(/\s+/);
+    if (parts.length < 2) continue; // 畸形行 CF 也会忽略——与平台一致地跳过
+    const [source, destination, code] = parts as [string, string, string | undefined];
+    rules.push({ source, destination, status: code === undefined ? 302 : Number(code) });
+  }
+  return rules;
+}
+
+/**
+ * 按 CF 语义子集匹配一条规则：首条命中生效；splat（`*`）贪婪匹配并替换 `:splat`。
+ * @param path 只传**路径**（不含查询串——CF 的匹配本来就不看查询串）。
+ */
+export function matchRedirect(
+  rules: readonly RedirectRule[],
+  path: string,
+): { destination: string; status: number } | null {
+  for (const rule of rules) {
+    const star = rule.source.indexOf('*');
+    if (star === -1) {
+      if (rule.source === path) return { destination: rule.destination, status: rule.status };
+      continue;
+    }
+    const prefix = rule.source.slice(0, star);
+    if (path.startsWith(prefix)) {
+      const splat = path.slice(prefix.length);
+      return { destination: rule.destination.replaceAll(':splat', splat), status: rule.status };
+    }
+  }
+  return null;
+}
+
+/* ── tokens.css 生成与 CSS 变量扫描 ─────────────────────────────────────── */
+
+/**
+ * 生成 tokens.css：颜色来自 packages/shared（单一来源），
+ * 尺寸/字号是本站的 px 平台值（小程序的 rpx 尺寸不可比，见 shared/design-tokens.ts 抬头）。
+ */
+export function renderTokensCss(colors: Readonly<Record<string, string>>): string {
+  const colorLines = Object.entries(colors).map(([k, v]) => `  --ws-color-${k}: ${v};`);
+  return [
+    '/* 由 build-checkout 生成（颜色单一来源 = packages/shared/design-tokens.ts），勿手改 */',
+    ':root {',
+    ...colorLines,
+    '  /* 尺寸/字号：本站（Web px）平台值，与小程序 rpx 体系各自维护（单位不可比） */',
+    '  --ws-space: 16px;',
+    '  --ws-space-sm: 8px;',
+    '  --ws-radius: 10px;',
+    '  --ws-font: 16px;',
+    '  --ws-font-sm: 14px;',
+    '  --ws-font-lg: 22px;',
+    '}',
+    '',
+  ].join('\n');
+}
+
+/**
+ * 提取 CSS 里的变量：definitions = `--ws-x:` 定义处；references = `var(--ws-x)` 引用处。
+ * @why 两种提取分开：`var(--ws-typo)` 拼错不报错、静默失效——必须把"引用的"与"定义的"
+ *      对齐才能抓出来（AJ-66 同款教训）。
+ * @why 先剥块注释再匹配（AJ-74 同款）：注释里解释规则的文字（"一律走 var(--ws-*)"）
+ *      会被当成引用扫出来——剥注释与"鼓励写注释"是一体两面，不剥就是惩罚写注释的人。
+ */
+export function collectCssVars(css: string, kind: 'definitions' | 'references'): string[] {
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const re = kind === 'definitions' ? /(--[\w-]+)\s*:/g : /var\(\s*(--[\w-]+)/g;
+  const out = new Set<string>();
+  for (const m of stripped.matchAll(re)) {
+    const name = m[1];
+    if (name !== undefined) out.add(name);
+  }
+  return [...out];
+}
+
+/* ── 品牌名替换 ─────────────────────────────────────────────────────────── */
+
+/** 构建期把 `__BRAND_NAME__` 占位替换成品牌名；无占位时原样返回。 */
+export function renderPage(html: string, brand: string = BRAND_NAME): string {
+  return html.replaceAll('__BRAND_NAME__', brand);
+}

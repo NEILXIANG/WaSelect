@@ -1,0 +1,33 @@
+<!--
+  支付完成页（D-49 后范围：「请回微信查看订单」落地页，不是收银页）。
+  ⚠️ 刻意不读 URL 参数、不展示订单号/金额：静态页拿数据只能靠 URL 明文，
+     而订单详情回小程序查既安全又准确。__BRAND_NAME__ 由构建期替换。
+-->
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>支付完成 – __BRAND_NAME__</title>
+    <link rel="stylesheet" href="/assets/tokens.css" />
+    <link rel="stylesheet" href="/assets/page.css" />
+  </head>
+  <body>
+    <main class="card">
+      <svg class="icon success" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+        <circle cx="28" cy="28" r="26" stroke="currentColor" stroke-width="3" />
+        <path
+          d="M17 29l8 8 14-16"
+          stroke="currentColor"
+          stroke-width="4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      <h1>支付完成</h1>
+      <p>你的订单已支付成功。<br />请回到微信「__BRAND_NAME__」小程序查看订单状态与物流信息。</p>
+      <p class="footer">本页面可以安全关闭</p>
+    </main>
+  </body>
+</html>

@@ -29,6 +29,7 @@
     "cov": "vitest run --project unit --project db --project contract --project e2e --coverage",
     "check:contract": "node scripts/check-contract.mjs",
     "build": "npm run build:shared && npm run build:server",
+    "build:checkout": "tsx scripts/build-checkout.ts",
     "build:shared": "tsc -p packages/shared/tsconfig.build.json",
     "build:server": "tsc -p server/tsconfig.build.json",
     "start": "node --conditions=waselect-runtime server/dist/main.js",

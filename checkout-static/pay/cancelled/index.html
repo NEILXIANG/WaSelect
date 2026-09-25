@@ -1,0 +1,31 @@
+<!--
+  支付未完成页（Stripe Checkout cancel_url 回跳）。
+  ⚠️ 文案刻意不写具体时长数字（订单保留时长 = ORDER_PAYMENT_TTL_MIN 配置）：
+     UI 不写死（ADR-28），写死了配置一变文案就撒谎。__BRAND_NAME__ 由构建期替换。
+-->
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>支付未完成 – __BRAND_NAME__</title>
+    <link rel="stylesheet" href="/assets/tokens.css" />
+    <link rel="stylesheet" href="/assets/page.css" />
+  </head>
+  <body>
+    <main class="card">
+      <svg class="icon warn" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+        <circle cx="28" cy="28" r="26" stroke="currentColor" stroke-width="3" />
+        <path d="M28 16v16" stroke="currentColor" stroke-width="4" stroke-linecap="round" />
+        <circle cx="28" cy="40" r="2.5" fill="currentColor" />
+      </svg>
+      <h1>支付未完成</h1>
+      <p>
+        本次支付没有完成，未产生扣款。<br />
+        订单会为你保留一段时间，可回到微信「__BRAND_NAME__」小程序重新发起支付；超时未支付订单将自动关闭。
+      </p>
+      <p class="footer">本页面可以安全关闭</p>
+    </main>
+  </body>
+</html>

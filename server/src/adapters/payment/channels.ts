@@ -136,6 +136,14 @@ export function buildPaymentRegistry(
   return registry;
 }
 
+/**
+ * Stripe 回跳路径（checkout-static 静态站上的两张页）。
+ * @why 导出成常量是**单一来源**：静态站那边必须有同名的两张页，
+ *      缺了的表现是「用户付完款落到 404，而回调照样落账」（钱收了、页面挂了）。
+ *      两边的对齐由 `scripts/checkout-build-lib.unit.test.ts` 断言钉住。
+ */
+export const STRIPE_RETURN_PATHS = { success: '/pay/done', cancel: '/pay/cancelled' } as const;
+
 /** 通道私有配置（密钥等；**禁止进日志**——它们只存在于 cfg.options 里）。 */
 function optionsFor(channel: string, config: AppConfig): Readonly<Record<string, unknown>> {
   if (channel === 'mock') {
@@ -151,8 +159,8 @@ function optionsFor(channel: string, config: AppConfig): Readonly<Record<string,
       secretKey: config.STRIPE_SECRET_KEY ?? '',
       webhookSecret: config.STRIPE_WEBHOOK_SECRET ?? '',
       // @limitation 三：这两张静态页属 F15；建好之前浏览器会落到 404，但不影响回调落账
-      successUrl: `${base}/pay/done`,
-      cancelUrl: `${base}/pay/cancelled`,
+      successUrl: `${base}${STRIPE_RETURN_PATHS.success}`,
+      cancelUrl: `${base}${STRIPE_RETURN_PATHS.cancel}`,
     };
   }
   return {};

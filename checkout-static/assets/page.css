@@ -1,0 +1,66 @@
+/**
+ * checkout-static 三张状态页共用的样式（F15 单元①）。
+ * 颜色/尺寸一律走 var(--ws-*)（tokens.css 由构建生成，颜色单一来源 = packages/shared）。
+ * @limitation 引用未定义变量不报错、静默失效——由 checkout-build-lib 单测的闭环断言兜住。
+ */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ws-color-bg);
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  padding: var(--ws-space);
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--ws-color-card);
+  border-radius: var(--ws-radius);
+  padding: calc(var(--ws-space) * 2) var(--ws-space);
+  text-align: center;
+}
+
+.icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto var(--ws-space);
+}
+
+.icon.success {
+  color: var(--ws-color-success);
+}
+.icon.warn {
+  color: var(--ws-color-error);
+}
+.icon.muted {
+  color: var(--ws-color-muted);
+}
+
+h1 {
+  font-size: var(--ws-font-lg);
+  margin-bottom: var(--ws-space-sm);
+}
+
+p {
+  color: var(--ws-color-muted);
+  font-size: var(--ws-font-sm);
+  line-height: 1.7;
+}
+
+.footer {
+  margin-top: calc(var(--ws-space) * 2);
+  font-size: var(--ws-font-sm);
+  color: var(--ws-color-muted);
+}
