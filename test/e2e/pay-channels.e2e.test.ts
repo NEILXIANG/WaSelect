@@ -107,7 +107,9 @@ describe('GET /pay/channels（前端入口的唯一来源）', () => {
     const res = await channels('country=US&currency=JPY&amount_jpy=10000');
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({
-      items: [{ channel: 'mock', entryMode: 'in_app', label: '模拟支付' }],
+      // icon 是契约 ChannelView 的字段（D-56），生产装配（CHANNEL_DEFAULTS）真实返回它——
+      // harness 曾经漏配导致本条在与生产不一致的形状上全绿（2026-09-25 链路测试抓出）
+      items: [{ channel: 'mock', entryMode: 'in_app', icon: 'flask', label: '模拟支付' }],
     });
   });
 

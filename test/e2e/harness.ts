@@ -94,14 +94,19 @@ function mockRegistry(
   now: string,
   stripeHttp?: HttpClient,
 ): ReturnType<typeof createPaymentRegistry> {
+  // ⚠️ 下面两份通道配置的 priority/icon/label 必须与生产装配（channels.ts 的
+  //    CHANNEL_DEFAULTS）**逐字对齐**——本文件是"第二份手写值"，漂移过一次（2026-09-25：
+  //    mock 缺 icon，pay-channels.e2e 一直在与生产不一致的形状上断言全绿，被
+  //    main.db.test.ts 的链路用例当场抓红）。对齐由该文件的 icon 断言反向钉住。
   const configs = [
     {
       channel: E2E_MOCK_CHANNEL,
       enabled,
-      priority: 10,
+      priority: 90,
       countries: ['*'],
       currencies: ['JPY'],
       label: '模拟支付',
+      icon: 'flask',
       options: { secret: E2E_CALLBACK_SECRET },
     },
     ...(stripeHttp !== undefined
@@ -111,8 +116,9 @@ function mockRegistry(
             enabled: true,
             priority: 20,
             countries: ['*'],
-            currencies: ['JPY', 'USD'],
+            currencies: ['USD'],
             label: '银行卡',
+            icon: 'card',
             options: {
               secretKey: 'sk_test_e2e_fake',
               webhookSecret: E2E_STRIPE_WHSEC,
