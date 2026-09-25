@@ -35,6 +35,7 @@ import { mountSkeleton } from './skeleton.js';
 import { mountPayRoutes, PAY_CALLBACK_PREFIX } from './app/pay-routes.js';
 import { buildPaymentRegistry, describeChannels } from './adapters/payment/channels.js';
 import { createFetchClient } from './adapters/http/fetch-client.js';
+import { outboundHttpOptions } from './app/http-outbound.js';
 import { markOrderPaid } from './app/mark-paid.js';
 import { createIdentityCheck, withIdentityCache } from './adapters/identity.js';
 import { createWebhookStore } from './adapters/webhooks.js';
@@ -139,7 +140,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           //    ——计时、重试、以及"我们正在拒绝请求"的熔断信号全部丢失，
           //    而它们正是线上回答"上游是不是挂了"的唯一依据（AJ-55 / AJ-62 / AJ-63）。
           //    熔断**默认开启**：忘了配的后果是"静默地没有保护"，所以默认造一个。
-          http: createFetchClient({ logger }),
+          // ⚠️ 三个数字（单次超时 / 总预算 / 熔断策略）**来自配置**而不是实现层的兜底常量：
+          //    它们是运营参数（用户能等多久、上游故障形态），上线后必然要调，
+          //    调整不该发版。@see ./app/http-outbound.ts
+          http: createFetchClient({ logger, ...outboundHttpOptions(config) }),
           clock: systemClock,
           idGen: systemIdGen,
         });

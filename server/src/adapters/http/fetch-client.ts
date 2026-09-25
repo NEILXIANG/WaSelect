@@ -42,7 +42,11 @@ import {
   httpStatusKind,
   shouldRetry,
 } from '../../ports/http-client.js';
-import { breakerKey } from '../../ports/circuit-breaker.js';
+import {
+  breakerKey,
+  DEFAULT_BREAKER_POLICY,
+  type BreakerPolicy,
+} from '../../ports/circuit-breaker.js';
 import { CircuitOpenError, createCircuitBreaker, type CircuitBreaker } from './circuit-breaker.js';
 import type { Logger } from '../../logger.js';
 
@@ -87,6 +91,13 @@ export interface FetchClientOptions {
    *      比"不传就没有"更不容易发生在"我只是没想起来"的情况下。
    */
   breaker?: CircuitBreaker | null;
+  /**
+   * 不自建熔断器时用的策略（即没传 `breaker` 时）。
+   * @why F12 遗留②：熔断的三个数字原本只写死在 `ports/circuit-breaker.ts` 里，
+   *      改一次要发版。现在由 `app/http-outbound.ts` 从配置注入；
+   *      这里保留"不传就用库级兜底"是为了让 `createFetchClient()` 单独可用（测试直接这么调）。
+   */
+  breakerPolicy?: BreakerPolicy;
 }
 
 /** 把 URL 收敛成可安全入日志的形态：去查询串（里面可能有 token / 签名）。 */
@@ -107,7 +118,14 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
   //    否则测试里注入了假时钟却只有预算走假时间、冷却走真实时间——
   //    那种"一半可控"的状态最难排查。
   const breaker =
-    opts.breaker === null ? undefined : (opts.breaker ?? createCircuitBreaker({ now, logger }));
+    opts.breaker === null
+      ? undefined
+      : (opts.breaker ??
+        createCircuitBreaker({
+          now,
+          logger,
+          policy: opts.breakerPolicy ?? DEFAULT_BREAKER_POLICY,
+        }));
 
   async function once(req: HttpRequest, timeoutMs: number): Promise<HttpResponse> {
     const init: RequestInit = {

@@ -310,6 +310,30 @@ const schema = z.object({
   /** Cron Job 调 POST /internal/jobs/daily 的共享密钥；留空时该端点在启动时关闭（F6 接入）。 */
   INTERNAL_JOB_SECRET: optionalSecret(32, 'INTERNAL_JOB_SECRET'),
 
+  // ── 出站 HTTP（F12 遗留②：数字从代码搬进配置）────────────────────────────
+  /**
+   * 单次请求超时（毫秒）。
+   * @why 支付链路不能无限等：上游不响应时，占着的是**一个请求槽位 + 用户的一次等待**。
+   * @why 数字只在**这里**写一次：实现层（`adapters/http/fetch-client.ts`）留的兜底常量
+   *      必须与这里的默认值相等，由 `app/http-outbound.unit.test.ts` 的同源断言守着——
+   *      两处各写一个数字，迟早会有一个被改而另一个没改，而那不会报错。
+   */
+  HTTP_TIMEOUT_MS: int(10_000, 1),
+  /**
+   * 一次调用的**总时长预算**（所有重试加起来，毫秒）。
+   * @why 只给每次尝试设超时是不够的：10s × 3 次 = 30s，用户早就不在了，
+   *      而且它占着槽位半分钟。所以预算必须**单独封顶**（AJ-55）。
+   * @why 6 秒是**产品决策**（用户能等多久），不是技术常数——所以它必须是配置项：
+   *      拿到真实的"用户放弃率 vs 等待时长"之后要调，调整不该发版。
+   */
+  HTTP_TOTAL_BUDGET_MS: int(6_000, 1),
+  /** 熔断：连续失败多少次才跳闸。⚠️ 必须 > `DEFAULT_RETRY_POLICY.maxAttempts`，否则一次请求就把上游判死。 */
+  CB_FAILURE_THRESHOLD: int(5, 1),
+  /** 熔断：跳闸后冷却多久才放第一个探测（毫秒）。 */
+  CB_COOLDOWN_MS: int(30_000, 0),
+  /** 熔断：half_open 期间最多放行几个探测请求。 */
+  CB_HALF_OPEN_PROBES: int(1, 1),
+
   // ── 通知与可观测性（F5 接入）─────────────────────────────────────────────
   SENTRY_DSN: optionalText(),
   CORS_ORIGINS: corsOrigins(),

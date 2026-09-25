@@ -50,6 +50,21 @@ services:
           name: waselect-pg
           property: connectionString
 
+      # ── 出站 HTTP（F12：这三个数字是运营参数，调它不该发版）──────
+      - key: HTTP_TIMEOUT_MS
+        value: 10000
+      # ⚠️ 总预算必须与单次超时**分开看**：只设单次超时的后果是 10s × 3 次 = 30s，
+      #    那会挂死同步链路。预算存在的唯一理由就是比它更短。
+      - key: HTTP_TOTAL_BUDGET_MS
+        value: 6000
+      # ⚠️ 阈值必须大于重试次数（3），否则一次请求就把上游判死——熔断与重试成了同一件事
+      - key: CB_FAILURE_THRESHOLD
+        value: 5
+      - key: CB_COOLDOWN_MS
+        value: 30000
+      - key: CB_HALF_OPEN_PROBES
+        value: 1
+
       # ── 密钥（`sync: false`：在控制台填，不进仓库）────────────
       - key: JWT_SECRET
         sync: false # openssl rand -hex 32；≥32 字符
