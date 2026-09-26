@@ -29,10 +29,13 @@
  *              `webhook_events` 零留痕"，把"禁用不拦回调"的设计承诺架空了。
  *              ⚠️ 例外：mock 只有在**显式配置了密钥**时才会在未列出状态下注册——
  *              开发占位密钥是公开值，未列出还注册 = 给伪造回调开门（P3-7 同源）。
- * @limitation 四：Stripe 的 `successUrl / cancelUrl` 目前由 `CHECKOUT_BASE_URL` 拼出
- *              （`/pay/done` 与 `/pay/cancelled`），**那两个静态页还没建**（F15 范围内）。
- *              在它们建好之前，用户付完款会落到一个 404 的静态页——
- *              但**订单状态已经由回调正确置为 paid**，所以不影响资金与发货，只影响浏览器落地体验。
+ * @limitation 四：Stripe 的 `successUrl / cancelUrl` 由 `CHECKOUT_BASE_URL` 拼出
+ *              （`/pay/done` 与 `/pay/cancelled`）。两张静态页**已建**（F15 / AJ-82：
+ *              `checkout-static/pay/` 三张状态页 + 构建期生成 `_redirects`，路径对齐由
+ *              `STRIPE_RETURN_PATHS` 同源断言钉住）——此处仅说明 URL 的拼出来源。
+ *              ⚠️ 唯一未经实测的是 **CF Pages `_redirects` 对查询串的保留行为**（L4 项）：
+ *              短链 `/o/:id?t=…` 的 token 在查询串里，平台若丢查询串则回跳链断——
+ *              已登记地基清单，首次部署 CF Pages 时必须验证。
  *
  * @see ports/payment.ts；adapters/payment/registry.ts；docs/地基搭建清单.md F11；
  *      docs/可扩展架构设计-支付可插拔·多国家·UI可配置.md §2.2
@@ -215,7 +218,8 @@ function optionsFor(channel: string, config: AppConfig): Readonly<Record<string,
     return {
       secretKey: config.STRIPE_SECRET_KEY ?? '',
       webhookSecret: config.STRIPE_WEBHOOK_SECRET ?? '',
-      // @limitation 三：这两张静态页属 F15；建好之前浏览器会落到 404，但不影响回调落账
+      // successUrl/cancelUrl 指向 checkout-static 的两张状态页（已建，AJ-82）；
+      // 路径与静态页清单的对齐由 checkout-build-lib 同源断言钉住，这里只负责拼 URL
       successUrl: `${base}${STRIPE_RETURN_PATHS.success}`,
       cancelUrl: `${base}${STRIPE_RETURN_PATHS.cancel}`,
     };
