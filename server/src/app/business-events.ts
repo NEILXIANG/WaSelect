@@ -20,7 +20,7 @@ import type { EventBus } from '../ports/events.js';
 import type { Logger } from '../logger.js';
 
 /** 需要进日志的业务事件（新增事件时在这里登记）。 */
-export const LOGGED_EVENTS: readonly string[] = ['order.created', 'order.paid'];
+export const LOGGED_EVENTS: readonly string[] = ['order.created', 'order.paid', 'order.expired'];
 
 /** 日志事件名——检索用；`domain_event` 放 ctx（写 `event:` 会被 logger 静默丢弃）。 */
 export const BUSINESS_EVENT_LOG = 'business_event';

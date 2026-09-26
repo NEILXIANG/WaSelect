@@ -239,3 +239,69 @@ describe('落账绑定通道与金额（三审 S1② / U1）', () => {
     expect(rows[0]?.status).toBe('paid');
   });
 });
+
+describe('I1-U2：pending_payment 迁移与迟到付款守卫（D-33）', () => {
+  /** 造一张指定状态/到期时间的单。 */
+  async function seedOrderAt(id: string, status: string, expiresAt: string): Promise<void> {
+    await db`
+      insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, weight_g,
+                          fx_snapshot, address_snapshot, terms_version, expires_at)
+      values (${id}, ${`W-${id}`}, 'u-mp', ${status}, 1000, 1000, 500,
+              '{}'::jsonb, '{}'::jsonb, 'T', ${expiresAt})
+    `;
+  }
+
+  it('pending_payment → paid（业务期主路径：支付意图已发起后的回调落账）', async () => {
+    await seedOrderAt('o-pp', 'pending_payment', '2026-01-02T00:30:00.000Z');
+    await seedIntent('o-pp');
+    const { events } = bus();
+    await markOrderPaid(db, events, fixedClock('2026-01-02T00:05:00.000Z'), 'o-pp', OK);
+    const rows = await db`select status from orders where id = 'o-pp'`;
+    expect(rows[0]?.status).toBe('paid');
+  });
+
+  it('迟到付款：created 但已过 expires_at → 40902 late_payment，不落账、不封口、不发事件', async () => {
+    await seedOrderAt('o-late', 'created', '2026-01-02T00:30:00.000Z');
+    await seedIntent('o-late');
+    const { events } = bus();
+    let paidEvents = 0;
+    events.subscribe('order.paid', () => {
+      paidEvents += 1;
+    });
+    await expect(
+      markOrderPaid(db, events, fixedClock('2026-01-02T00:31:00.000Z'), 'o-late', OK),
+    ).rejects.toMatchObject({ code: 40902, details: { reason: 'late_payment' } });
+    // 订单不动、payments 行不封口（对账要靠 status='initiated' 找到它）、无 order.paid 事件
+    expect((await db`select status from orders where id = 'o-late'`)[0]?.status).toBe('created');
+    expect((await db`select status from payments where order_id = 'o-late'`)[0]?.status).toBe(
+      'initiated',
+    );
+    expect(await db`select 1 from order_events where order_id = 'o-late'`).toHaveLength(0);
+    expect(paidEvents).toBe(0);
+  });
+
+  it('边界：now 恰好等于 expires_at → 迟到（可支付窗口是 [created, expires_at)，与关单 job 同向）', async () => {
+    await seedOrderAt('o-edge', 'created', '2026-01-02T00:30:00.000Z');
+    await seedIntent('o-edge');
+    const { events } = bus();
+    await expect(
+      markOrderPaid(db, events, fixedClock('2026-01-02T00:30:00.000Z'), 'o-edge', OK),
+    ).rejects.toMatchObject({ code: 40902, details: { reason: 'late_payment' } });
+  });
+
+  it('边界：expires_at 前 1ms → 正常落账', async () => {
+    await seedOrderAt('o-edge2', 'created', '2026-01-02T00:30:00.000Z');
+    await seedIntent('o-edge2');
+    const { events } = bus();
+    await markOrderPaid(db, events, fixedClock('2026-01-02T00:29:59.999Z'), 'o-edge2', OK);
+    expect((await db`select status from orders where id = 'o-edge2'`)[0]?.status).toBe('paid');
+  });
+
+  it('已 expired 的单 → 40902{from:expired}（关单 job 先跑掉的情形，走普通冲突分层）', async () => {
+    await seedOrderAt('o-closed', 'expired', '2026-01-02T00:30:00.000Z');
+    const { events } = bus();
+    await expect(
+      markOrderPaid(db, events, fixedClock('2026-01-02T00:31:00.000Z'), 'o-closed', OK),
+    ).rejects.toMatchObject({ code: 40902, details: { from: 'expired' } });
+  });
+});

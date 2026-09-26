@@ -248,6 +248,24 @@ describe('handleProviderCallback：冲突分层（宽限期用 DB 时钟）', ()
     expect(rec.finished).toHaveLength(0);
   });
 
+  it('迟到付款（40902 late_payment）→ 2xx + **error** 告警 + 落 late_payment 转对账（钱到不能发货）', async () => {
+    // @why 这是 I1-U2 的专项分支：普通状态冲突只是 warn（重发也不会变），
+    //      但"用户付了钱、订单已过支付窗口"是**必须有人处理**的事——
+    //      按 warn 记会被日常噪音淹掉，而"钱到单未付"恰恰是最不能淹掉的那一类。
+    const rec = fakeStore({});
+    const { d, sink } = deps(rec, async () => {
+      throw new AppError(40902, { from: 'created', reason: 'late_payment' });
+    });
+    const out = await handleProviderCallback(d, 'stripe', RAW, event());
+    expect(out.disposition).toBe('status_conflict');
+    expect(out.status).toBe(200);
+    expect(out.body).toEqual({ received: true, order_id: 'sk-1', ignored: 'late_payment' });
+    expect(rec.finished[0]?.result).toBe('late_payment');
+    expect(sink.find('callback_late_payment')[0]?.level).toBe('error');
+    // 不能退化成普通 warn 冲突（那会被噪音淹掉）
+    expect(sink.find('callback_conflict')).toHaveLength(0);
+  });
+
   it('40902 但 details 里没有 from → 按**一般状态冲突**处理（不误判成 paid:already）', async () => {
     const rec = fakeStore({});
     const { d, sink } = deps(rec, async () => {

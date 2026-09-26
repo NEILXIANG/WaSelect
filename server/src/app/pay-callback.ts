@@ -261,8 +261,30 @@ export async function handleProviderCallback(
       };
     }
     if (code === 40902) {
-      const from = (e as AppError).details as { from?: unknown } | undefined;
-      if (from?.from === 'paid') {
+      const details = (e as AppError).details as { from?: unknown; reason?: unknown } | undefined;
+      // ⚠️ 迟到付款（I1-U2）：钱扣了但订单已过支付窗口——这是"钱到不能发货"，
+      //    必须 error 级告警（普通 status_conflict 只是 warn），并单独登记结果供对账检索。
+      //    自动全额退款属售后阶段（依赖真实通道退款能力，I1 方案 §1.3）；现在每一单都要能被找到。
+      if (details?.reason === 'late_payment') {
+        deps.logger.error('callback_late_payment', {
+          order_id: event.orderId,
+          provider: channel,
+          result: 'needs_refund',
+          ctx: { event_id: event.eventId, from: details.from },
+        });
+        await deps.webhooks.finish({
+          ...webhook,
+          result: 'late_payment',
+          token,
+          note: '迟到付款：订单已过支付窗口，拒落账转对账（自动退款属售后阶段，当前需人工处理）',
+        });
+        return {
+          disposition: 'status_conflict',
+          status: 200,
+          body: { received: true, order_id: event.orderId, ignored: 'late_payment' },
+        };
+      }
+      if (details?.from === 'paid') {
         deps.logger.info('paid_already', {
           order_id: event.orderId,
           result: 'ignored',

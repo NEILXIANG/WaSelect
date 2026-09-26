@@ -10,11 +10,19 @@
  *      而事件**必须在事务提交之后**分发——否则回滚了订阅者却已经跑过
  *      （@see app/unit-of-work.ts 的 @why）。
  *
- * @limitation 一：这是**骨架期**的落账实现，只处理 `created → paid` 一条迁移。
- *              业务期（I1）会换成真正的订单状态机（`pending_payment → paid`，
- *              且要处理"迟到付款 → 自动全额退款"等分支，见 D-33）。
+ * @limitation 一：接受 `created → paid` 与 `pending_payment → paid` 两条迁移
+ *              （I1-U2 起；前者保留给骨架 simulate 路径，U5/U6 真链路落地后随骨架退役）。
+ *              "迟到付款 → 自动全额退款"（D-33）**不在本函数**：迟到一律拒落账（见下），
+ *              自动退款依赖真实通道退款能力，属售后阶段（I1 方案 §1.3 明示）。
  *              ⚠️ 换的时候**不要**在调用方加 if：调用方只见 `apply` 这一个函数签名，
  *              换实现就换装配处的注入（app/pay-routes.ts 的 `PayRoutesDeps.apply`）。
+ * @limitation 一b：**迟到付款守卫**（I1-U2，D-33）：订单 `expires_at` 已到点
+ *              （`now >= expires_at`，与关单 job 同一边界方向，见 adapters/orders.ts @why ①）
+ *              而回调此时才到 → 抛 40902 `reason:'late_payment'`，**不落账、不封口 payments 行**。
+ *              管线的 40902 分支会把它转成 error 级告警 + `late_payment` 登记转对账——
+ *              这是"钱扣了但不能发货"的场景，绝不能按普通状态冲突 warn 了事。
+ *              关单 job 与守卫是互表里的两道：job 让"到点的单"在数据上死掉，
+ *              守卫挡住"死在到账之前的那笔钱"。
  * @limitation 二：状态冲突（不是 `created`）一律抛 **40902**，由回调管线做分层
  *              （已是 paid → `paid:already` 记 info；其它状态 → warn 转对账）。
  *              这里**不**自己决定"要不要忽略"——那是调用方的策略，不是落账动作的事。
@@ -141,11 +149,25 @@ export async function markOrderPaid(
   settlement: PaidSettlement,
 ): Promise<void> {
   await withUnitOfWork(db, events, async (tx, emit) => {
-    // for update：并发回调（机构重发）时排队，避免两次都读到 'created' 各写一次事件
-    const rows = await tx`select status from orders where id = ${orderId} for update`;
-    const current = rows[0]?.status;
+    // for update：并发回调（机构重发）时排队，避免两次都读到待支付态各写一次事件
+    const rows = await tx`select status, expires_at from orders where id = ${orderId} for update`;
+    const row = rows[0];
+    const current = row?.status;
     if (current === undefined) throw new AppError(40400, { order_id: orderId });
-    if (current !== 'created') throw new AppError(40902, { from: current, to: 'paid' });
+    if (current !== 'created' && current !== 'pending_payment') {
+      throw new AppError(40902, { from: current, to: 'paid' });
+    }
+    // ⚠️ 迟到付款守卫（@limitation 一b）：到点即不可付，边界方向与关单 job 一致（含等号）。
+    //    判定用注入时钟而不是 DB now()：与关单 job 的 startedAt 同源（应用时钟），
+    //    两个判定者用两种时钟会让"恰在边界的那毫秒"出现第三种结果。
+    const expiresAt = row?.expires_at as Date | undefined;
+    if (expiresAt !== undefined && clock.now() >= expiresAt) {
+      throw new AppError(40902, {
+        from: current,
+        reason: 'late_payment',
+        ctx: { expires_at: expiresAt.toISOString() },
+      });
+    }
     const matched =
       settlement.kind === 'provider'
         ? await assertSettlementMatches(tx, orderId, settlement, current)

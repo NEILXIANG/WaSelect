@@ -36,6 +36,7 @@ import { createEventBus } from './adapters/event-bus.js';
 import { systemClock } from './adapters/clock.js';
 import { registerBusinessEventLog } from './app/business-events.js';
 import { createCleanupIdempotencyJob } from './app/cleanup-idempotency.js';
+import { createExpireOrdersJob } from './app/expire-orders.js';
 import {
   createSchedulerDeps,
   startScheduler,
@@ -153,7 +154,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
      */
     const scheduler = startScheduler({
       deps: createSchedulerDeps(db, events, systemClock, logger, { name: 'tick', lockKey: 'tick' }),
-      jobs: [createCleanupIdempotencyJob()],
+      // ⚠️ 顺序即语义（scheduler.ts @limitation 一）：关单永远最先——
+      //    其它 job 对同一张单的判断都建立在"它是否还活着"之上
+      jobs: [createExpireOrdersJob(), createCleanupIdempotencyJob()],
       intervalMs: config.SCHEDULER_TICK_MS,
     });
 
