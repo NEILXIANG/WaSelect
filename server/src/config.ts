@@ -13,8 +13,10 @@
  *              拼错的变量会表现为"打印出来是默认值"，肉眼可发现。
  * @limitation 二：只校验形状与范围，不校验"值与外部世界是否匹配"（例如 DATABASE_URL 是否真能连上）——
  *              连通性由 F7 的启动自检负责，配置层不做 IO。
- * @limitation 三：`DUTY_RATE_US` 是迁移期保留项。ADR-28 要求关税率外置到 `duty_rates(origin,dest,rate)` 表，
- *              F7 只把它当作 seed 默认值写入该表，运行期一律查表，不再读此变量。
+ * @limitation 三：`DUTY_RATE_US` 是迁移期保留项，**当前零消费方**。ADR-28 要求关税率外置到
+ *              `duty_rates(origin,dest,rate)` 表，但该表**尚未建**（007 迁移注释已明写"尚未建表"），
+ *              所以"seed 进表、运行期查表"目前**并未发生**——本变量现在只是把 D-42 的 15% 口径
+ *              钉在配置里，I1 报价实现时若仍需关税计算，须先落地 `duty_rates` 表并接线（见地基清单 C1 / 13b）。
  *
  * @tradeoff 新增环境变量必须同步改 schema，否则启动失败——这是**有意的硬失败**，
  *           比"读不到就用一个看起来合理的默认值"安全，尤其在金额/税率/通道这类字段上。
@@ -248,7 +250,7 @@ const schema = z.object({
   ),
   /** 汇率缓冲（写 fx_rates.buffer）。上限 0.5 防止配置写成 0.3% 之类的量纲错误。 */
   FX_BUFFER_RATE: num(0.03).pipe(z.number().min(0).max(0.5)),
-  /** 迁移期保留：F7 用它 seed `duty_rates`，运行期查表（@limitation 三）。 */
+  /** 迁移期保留：`duty_rates` 表落地后转为 seed 默认值；当前零消费方（@limitation 三，勿照旧注释以为关税已外置）。 */
   DUTY_RATE_US: num(0.15).pipe(z.number().min(0).max(1)),
   /** 包邮阈值（整数円）；空 = 不包邮。 */
   FREE_SHIPPING_JPY: optionalInt(),
