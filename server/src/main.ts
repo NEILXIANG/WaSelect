@@ -31,18 +31,9 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, redactConfig, ConfigError, type AppConfig } from './config.js';
 import { createHttpApp, installShutdownHandlers, listen, type StartedServer } from './http.js';
 import { createLogger, type Logger } from './logger.js';
-import { mountSkeleton } from './skeleton.js';
-import { mountPayRoutes, PAY_CALLBACK_PREFIX } from './app/pay-routes.js';
-import { buildPaymentRegistry, describeChannels } from './adapters/payment/channels.js';
-import { createFetchClient } from './adapters/http/fetch-client.js';
-import { outboundHttpOptions } from './app/http-outbound.js';
-import { markOrderPaid } from './app/mark-paid.js';
-import { createIdentityCheck, withIdentityCache } from './adapters/identity.js';
-import { createWebhookStore } from './adapters/webhooks.js';
-import { createIdempotencyExecutor } from './adapters/idempotency.js';
+import { PAY_CALLBACK_PREFIX } from './app/pay-routes.js';
 import { createEventBus } from './adapters/event-bus.js';
 import { systemClock } from './adapters/clock.js';
-import { systemIdGen } from './adapters/ids.js';
 import { registerBusinessEventLog } from './app/business-events.js';
 import { createCleanupIdempotencyJob } from './app/cleanup-idempotency.js';
 import {
@@ -51,19 +42,13 @@ import {
   type SchedulerHandle,
 } from './app/scheduler-start.js';
 import { installProcessErrorHandlers } from './process-errors.js';
+import { mountAllRoutes } from './app/mount.js';
 
 /**
- * 是否挂载骨架路由。**生产不挂。**
- *
- * @why 抽成一个函数不是因为它复杂，而是因为它是**一条策略**——策略要能被单独断言。
- *      否则只能"起一个完整生产服务再打请求"来验证，而那需要一整套合法的生产环境变量
- *      （生产闸门还会拒绝指向 localhost 的 DATABASE_URL），测试成本远高于收益。
- * @limitation 这是第二道防线，不是唯一一道：`mountSkeleton()` 自己在 production 下
- *             也会抛错（SEC2）。两道都在，是因为"生产能改订单状态的端点"值得双保险。
+ * ⚠️ 路由挂载已收敛到 `app/mount.ts`（I1-U1）：生产与路由快照测试共用同一份挂载清单。
+ *    本 re-export 仅为保持既有 import 路径（main.db.test.ts 等）不变；策略本体与注释见 mount.ts。
  */
-export function shouldMountSkeleton(env: AppConfig['NODE_ENV']): boolean {
-  return env !== 'production';
-}
+export { shouldMountSkeleton } from './app/mount.js';
 
 export interface BootstrapOptions {
   /** 环境变量来源（测试注入用，生产走 process.env）。 */
@@ -151,73 +136,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
         : {}),
       // D21：就绪 = "我自己还想接" 且 "数据库连通"。缺任一条都不该收新流量
       readiness: async () => acceptingTraffic && (await ping(db)),
-      mount: (a) => {
-        // ── 支付路由（F11）：**每个环境都挂**，它不是脚手架 ──────────────────
-        // @why 回调是机构打给我们的，生产必须能收；通道列表是前端入口的来源。
-        //      它们与骨架无关——骨架只是"没有真实下单接口时的一条演示链路"。
-        //      注册表在装配处按配置拼好：加一个通道 = 改配置 + 注册工厂，本处不改。
-        const {
-          registry,
-          registered: registeredChannels,
-          offline: offlineChannels,
-        } = buildPaymentRegistry(config, {
-          // ⚠️ `logger` **必须传**：不传的话出站 HTTP 一条日志都没有
-          //    ——计时、重试、以及"我们正在拒绝请求"的熔断信号全部丢失，
-          //    而它们正是线上回答"上游是不是挂了"的唯一依据（AJ-55 / AJ-62 / AJ-63）。
-          //    熔断**默认开启**：忘了配的后果是"静默地没有保护"，所以默认造一个。
-          // ⚠️ 三个数字（单次超时 / 总预算 / 熔断策略）**来自配置**而不是实现层的兜底常量：
-          //    它们是运营参数（用户能等多久、上游故障形态），上线后必然要调，
-          //    调整不该发版。@see ./app/http-outbound.ts
-          http: createFetchClient({ logger, ...outboundHttpOptions(config) }),
-          clock: systemClock,
-          idGen: systemIdGen,
-        });
-        // ⚠️ configured / registered / offline 三个清单必须并列：
-        //    configured−registered = 被静默跳过的通道（wechat 未实现 / stripe 密钥不全），
-        //    offline = 已下线但在途订单还活着的通道（二次审查 P1-NEW-1）——只打 configured 等于没打
-        logger.info('payment_channels_registered', {
-          result: 'ok',
-          ctx: {
-            configured: describeChannels(config),
-            registered: registeredChannels,
-            offline: offlineChannels,
-          },
-        });
-        mountPayRoutes(a, {
-          registry,
-          webhooks: createWebhookStore(db),
-          logger,
-          graceMs: config.CALLBACK_ORDER_GRACE_MS,
-          // 骨架期只有"把订单置为 paid"这一件事；业务期（I1）换成订单状态机的迁移。
-          // ⚠️ 第二、三、四个参数必须来自回调本身（通道 / 机构单号 / 金额币种）：
-          //    落账逐项核对它们与 `payments` 行（三审 S1② / U1），对不上就不落账
-          apply: async (e, channel) =>
-            markOrderPaid(db, events, systemClock, e.orderId, {
-              kind: 'provider',
-              channel,
-              providerRef: e.providerRef,
-              amountMinor: e.amountMinor,
-              currency: e.currency,
-            }),
-        });
-
-        if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见文件头取舍 3）
-        mountSkeleton(a, {
-          db,
-          // 幂等执行器：建单走单事务模式，handler 里写业务 SQL 用的就是这个事务。
-          idempotency: createIdempotencyExecutor(db),
-          events,
-          // 时钟：生产装配注入真实时钟；业务侧只见 Clock 接口（F10）
-          clock: systemClock,
-          // 标识符：同上，业务侧只见 IdGen 接口
-          idGen: systemIdGen,
-          logger,
-          auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-          env: config.NODE_ENV,
-          // D25：带上身份状态查询，改密 / 封禁后才能真的把旧 token 挡在门外
-          identity: withIdentityCache(createIdentityCheck(db)),
-        });
-      },
+      // ⚠️ 路由挂载清单只有一份（app/mount.ts，I1-U1）：路由快照测试也走它，
+      //    新增路由只改那一处——绝不要在这里再内联挂路由
+      mount: (a) => mountAllRoutes(a, { config, logger, db, events }),
     });
 
     const server = await listen(app, { port: config.PORT, host: config.HOST });

@@ -312,7 +312,7 @@ describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
     await db`insert into users (id, openid) values (${LINK_USER}, 'o-link') on conflict (id) do nothing`;
   });
 
-  /** 与 bootstrap 装配的 JWT 配置同源（main.ts: issuer 写死 'waselect'，secret 来自 env）。 */
+  /** 与装配处的 JWT 配置同源（app/mount.ts: issuer 写死 'waselect'，secret 来自 env；I1-U1 起装配在 mount.ts）。 */
   function linkToken(env: Record<string, string>): Promise<string> {
     return signToken(
       { sub: LINK_USER, role: 'user' },
