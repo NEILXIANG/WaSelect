@@ -2,7 +2,7 @@
 
 > 状态：已定（设计层）｜ 版本：v1.0（2026-09-22）｜ 适用范围：`jp_project`
 > 来源：用户 2026-09-22 明确要求——**架构要灵活，能随时增加/删除/切换支付方式、对接不同国家；业务与功能解耦；UI 不能写死，能灵活调整优化**。
-> 上游契约：《技术文档 v0.5》《api-contract.yaml 0.5.2》《工程框架 v0.5》《测试策略与验证门禁》
+> 上游契约：《技术文档 v0.5》《api-contract.yaml 0.5.3》《工程框架 v0.5》《测试策略与验证门禁》
 > ⚠️ 本文是**工程侧单一事实来源**；治理库（jp）只在 ADR-28 存索引与结论，不复制内容。
 > ⚠️ 本文提出的是**扩展点设计**，涉及 DDL / 契约的改动（见 §5）须经用户确认后，再改《技术文档》v0.6 与 `api-contract` 0.6.0；未确认前不动主契约。
 
@@ -59,7 +59,7 @@ export interface ProviderRegistry {
 - **路由**：`PaymentRouter` 按 `(目的国, 金额, 能力, priority)` 返回可用通道列表；默认实现读表，将来可换成"成本最优 / 成功率最优"策略而不动调用方
 - **回调分发**：改为 `/pay/callback/:channel`，由注册表分发；新增通道不改路由、不改 Kong/Nginx
 - **下线语义**：通道下线后**已生成的支付单仍必须可退款/可对账**（`refundableWhenDisabled`），禁用只影响新单
-- **契约测试复用**：所有 Provider 跑同一组 `provider.contract.test.ts`（create / 重复回调 / 迟到回调 / 退款 / 拒付 / 验签失败），**新增支付方式直接复用同一套测试**（呼应《测试策略》T-1/T-3）
+- **契约测试复用**：所有 Provider 跑同一组 `test/contract/payment-provider.contract.test.ts`（create / 重复回调 / 迟到回调 / 退款 / 拒付 / 验签失败），**新增支付方式直接复用同一套测试**（呼应《测试策略》T-1/T-3）
 
 ### 2.3 前端入口
 `GET /pay/channels?country=US&amount=...` 返回 `[{channel, entryMode, label, icon}]`；小程序按 `entryMode` 渲染：`in_app` → 直接调起；`copylink` → 引导页；`redirect` → 短链。**删掉一个支付方式，前端自动不显示**（现在是两个写死的按钮）。
@@ -137,7 +137,7 @@ server/src/
 
 | 层 | 做法 | 收益 |
 |---|---|---|
-| **Design token** | `miniprogram/theme.ts` 单一来源（色板 / 间距 / 字号 / 圆角），WXSS 用 CSS 变量引用；页面与组件**禁止出现色值与尺寸字面量**（lint 规则） | D1 视觉 A/B（可爱日系 ↔ 轻奢日系）只换一个 token 文件 |
+| **Design token** | `packages/shared/src/design-tokens.ts` 单一来源（成文时设想放 `miniprogram/theme.ts`，落地时因 admin-web / checkout-static 也要消费而上提到 shared）（色板 / 间距 / 字号 / 圆角），WXSS 用 CSS 变量引用；页面与组件**禁止出现色值与尺寸字面量**（lint 规则） | D1 视觉 A/B（可爱日系 ↔ 轻奢日系）只换一个 token 文件 |
 | **组件化** | 6 个基础组件（按钮 / 价格 / 骨架 / 空态 / Toast / Modal）+ 页面只做组合 | 改样式只改组件 |
 | **页面区块 schema** | 首页由 `GET /home` 下发 `sections:[{type:'banner'|'category_grid'|'product_grid'|'coupon_bar', props}]`，前端按 `type` 查组件表渲染 | **调整首页布局/增删模块无需发版**（小程序发版要审核，这是刚需） |
 | **表单 schema** | 地址表单按 `CountryProfile.addressTemplate` 渲染 | 加国家 = 后端下发模板，前端零改动 |
@@ -151,7 +151,7 @@ server/src/
 
 | 优先级 | 改动 | 成本 | 说明 |
 |---|---|---|---|
-| **P0（写第一行业务代码前就定，零回归）** | 目录分层 `domain/ports/adapters/app` + ESLint 依赖方向约束；`PaymentProvider` 加 `capabilities`；Provider 注册表 + `/pay/callback/:channel`；前端 `theme.ts` token；`app_config` KV 表 | 低 | 不改现有行为，只加扩展点 |
+| **P0（写第一行业务代码前就定，零回归）** | 目录分层 `domain/ports/adapters/app` + ESLint 依赖方向约束；`PaymentProvider` 加 `capabilities`；Provider 注册表 + `/pay/callback/:channel`；前端 design token 单源（落地为 `packages/shared/src/design-tokens.ts`）；`app_config` KV 表 | 低 | 不改现有行为，只加扩展点 |
 | **P0（同上）** | `country_profiles` 表 + seed（US 一条，值 = 现有硬编码） | 低 | 为后续铺路 |
 | **P1（I1 内）** | `shipping_rates` 加 `dest_country`（默认 'US'）+ 取档 SQL 加国家条件（**7 条向量回归必须绿**）；`duty_rates` 表 + seed；`payment_channels` 配置表 | 中 | 需改技术文档 v0.6 / OpenAPI 0.6.0 |
 | **P2（真要加国家时）** | 地址校验 country-aware（应用层 + DB 约束迁移）、地址表单 schema 渲染、`seller_entity` 多主体路由 | 中 | 触发条件：新增第一个非美国目的国 |
@@ -163,7 +163,7 @@ server/src/
 
 ## 7. 与测试策略的接口
 
-- 每个适配器**必须通过同一套契约测试**（`adapters/payment/__tests__/provider.contract.test.ts`），新增实现直接复用 → 满足 T-1（先红后绿）与 T-3（依赖要真）
+- 每个适配器**必须通过同一套契约测试**（落地为 `test/contract/payment-provider.contract.test.ts`），新增实现直接复用 → 满足 T-1（先红后绿）与 T-3（依赖要真）
 - `shipping` 取档新增国家维度后，**D-46 的 7 条向量仍是红线**（`w=1850 → 4950`）
 - `domain/` 是纯函数密集区，天然满足"关键模块分支覆盖率 100%"
 - 目录依赖方向检查进 `npm run gate`（ESLint `no-restricted-imports`）

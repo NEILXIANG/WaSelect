@@ -3,10 +3,10 @@
 设计文档在知识库仓库 `WaSelectDoc/50-产品与技术/`（两仓布局：本地治理/业务文档库目录名 `jp` ↔ git 仓库 `WaSelectDoc`；本工程库目录名 `jp_project` ↔ git 仓库 `WaSelect`；两边互指链接、不重复数字），代码以以下三份为契约：
 
 - `技术架构/技术文档.md`（v0.5）：编码约定、状态机、表结构 DDL、PaymentProvider v2.1（Stripe Checkout 托管页）、复制链接支付入口、拒付、域名 / 隐私 / 审核细则
-- `技术架构/api-contract.yaml`（0.5.2）：OpenAPI 3.0，前后端共同依据
+- `技术架构/api-contract.yaml`（0.5.3）：OpenAPI 3.0，前后端共同依据
 - `需求与设计/需求文档PRD-v1.6.md` §3：P0 范围
 
-目录（见《工程框架文档 v0.5》）：`miniprogram/`（原生小程序混合体：WXML/WXSS/JS + TS 源码，由微信开发者工具的 TypeScript 编译插件转译；「9 页」是规划口径，当前只有行走骨架演示页 + ws-button / ws-price 两个基础组件）、`server/`（Node.ts + postgres.js，九模块）、`checkout-static/`（Cloudflare Pages 静态站：`_redirects` → Stripe Checkout 托管页 + 结果页）、`admin-web/`（独立管理后台，前置 Cloudflare Access）。表数口径：当前 17 张（migrations 001–008），唯一真源是 `server/src/adapters/db.db.test.ts` 的表清单断言；文档里出现的「13 表」是成文时的旧基准。
+目录（见《工程框架文档 v0.5》）：`miniprogram/`（原生小程序混合体：WXML/WXSS/JS + TS 源码，由微信开发者工具的 TypeScript 编译插件转译；「9 页」是规划口径，当前只有行走骨架演示页 + ws-button / ws-price 两个基础组件）、`server/`（Node.ts + postgres.js，九模块）、`checkout-static/`（Cloudflare Pages 静态站：`_redirects` → Stripe Checkout 托管页 + 结果页）、`admin-web/`（独立管理后台，前置 Cloudflare Access）。表数口径：当前 17 张（migrations 001–009），唯一真源是 `server/src/adapters/db.db.test.ts` 的表清单断言；文档里出现的「13 表」是成文时的旧基准。
 
 **前置条件**（新机器 / 新同事）：Node **22.x**（`nvm use` 读 `.nvmrc`；CI 同主版本）、npm ≥ 10、本机 PostgreSQL **16**（如 `brew install postgresql@16`，代码有主版本硬闸门）、Git。要跑小程序再加：**微信开发者工具**（导入 `miniprogram/` 目录；`project.config.json` 已开启 TypeScript 编译插件，工具内「详情 → 本地设置」保持默认即可；真机点亮验证属 F16 L4 欠账）。然后：
 
