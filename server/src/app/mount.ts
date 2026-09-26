@@ -50,6 +50,9 @@ import { mountOrderQueryRoutes } from './order-query-routes.js';
 import { mountPayIntentRoutes } from './pay-intent-routes.js';
 import { mountPayLinkRoutes } from './pay-link-routes.js';
 import { registerSessionExpiryOnClose } from './close-session-events.js';
+import { mountWechatAuthRoutes } from './wechat-auth-routes.js';
+import { createWechatAuth } from '../adapters/wechat/code2session.js';
+import { createDevWechatAuth } from '../adapters/wechat/dev-auth.js';
 
 /**
  * 是否挂载骨架路由。**生产不挂。**
@@ -83,19 +86,21 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   // @why 回调是机构打给我们的，生产必须能收；通道列表是前端入口的来源。
   //      它们与骨架无关——骨架只是"没有真实下单接口时的一条演示链路"。
   //      注册表在装配处按配置拼好：加一个通道 = 改配置 + 注册工厂，本处不改。
+  // 出站 HTTP 客户端（支付通道与微信登录共用一份：超时/总预算/熔断/日志的唯一出处）。
+  // ⚠️ `logger` **必须传**：不传的话出站 HTTP 一条日志都没有
+  //    ——计时、重试、以及"我们正在拒绝请求"的熔断信号全部丢失，
+  //    而它们正是线上回答"上游是不是挂了"的唯一依据（AJ-55 / AJ-62 / AJ-63）。
+  //    熔断**默认开启**：忘了配的后果是"静默地没有保护"，所以默认造一个。
+  // ⚠️ 三个数字（单次超时 / 总预算 / 熔断策略）**来自配置**而不是实现层的兜底常量：
+  //    它们是运营参数（用户能等多久、上游故障形态），上线后必然要调，
+  //    调整不该发版。@see ./http-outbound.ts
+  const outboundHttp = createFetchClient({ logger, ...outboundHttpOptions(config) });
   const {
     registry,
     registered: registeredChannels,
     offline: offlineChannels,
   } = buildPaymentRegistry(config, {
-    // ⚠️ `logger` **必须传**：不传的话出站 HTTP 一条日志都没有
-    //    ——计时、重试、以及"我们正在拒绝请求"的熔断信号全部丢失，
-    //    而它们正是线上回答"上游是不是挂了"的唯一依据（AJ-55 / AJ-62 / AJ-63）。
-    //    熔断**默认开启**：忘了配的后果是"静默地没有保护"，所以默认造一个。
-    // ⚠️ 三个数字（单次超时 / 总预算 / 熔断策略）**来自配置**而不是实现层的兜底常量：
-    //    它们是运营参数（用户能等多久、上游故障形态），上线后必然要调，
-    //    调整不该发版。@see ./http-outbound.ts
-    http: createFetchClient({ logger, ...outboundHttpOptions(config) }),
+    http: outboundHttp,
     clock: systemClock,
     idGen: systemIdGen,
   });
@@ -198,6 +203,25 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     clock: systemClock,
     logger,
     linkLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
+  });
+
+  // ── 小程序登录（I1-U6b）：真 AppID 优先；dev 替身只在 development/test 注册
+  //    （第二道防线——第一道是 loadConfig 规则 1c 拒生产/staging，与 SEC2 同精神的双保险）；
+  //    两者皆无 → null（路由照挂，调用时 50000 wechat_login_not_configured，见路由 @why）──
+  const wechatAuth =
+    config.APP_ID !== undefined && config.APP_SECRET !== undefined
+      ? createWechatAuth({ http: outboundHttp, appId: config.APP_ID, appSecret: config.APP_SECRET })
+      : config.WECHAT_DEV_LOGIN !== undefined &&
+          (config.NODE_ENV === 'development' || config.NODE_ENV === 'test')
+        ? createDevWechatAuth(config.WECHAT_DEV_LOGIN)
+        : null;
+  mountWechatAuthRoutes(app, {
+    db,
+    logger,
+    idGen: systemIdGen,
+    authConfig: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    wechatAuth,
+    loginLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
   });
 
   // ── D-50 关单连带（I1-U6a-2）：order.expired/cancelled → 作废在途支付行 +

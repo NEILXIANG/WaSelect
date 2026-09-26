@@ -73,7 +73,6 @@ function ni(method: string, path: string, reason: string): NotImplementedRoute {
   return { method, path, reason };
 }
 const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [
-  ni('POST', '/auth/wechat/login', 'I1-U6：微信登录（端口+dev 适配器；真接等公司主体 AppID）'),
   ni('POST', '/auth/admin/login', 'I1-U6：管理员登录（欠账②，含管理员 seed）'),
   ni('POST', '/internal/jobs/daily', '欠账①：每日对账端点，I1 收尾前落地或明示移交'),
   ni('GET', '/home', 'I2：小程序首页聚合（依赖 Banner 管理端）'),

@@ -261,6 +261,24 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     expect(issues.join('\n')).toContain('残留');
   });
 
+  it('生产/staging 配置 WECHAT_DEV_LOGIN → 拒绝（I1-U6b：dev 登录等价无密码登录，公网环境同拒）', () => {
+    const prodIssues = expectReject(prod({ WECHAT_DEV_LOGIN: 'dev-' }));
+    expect(prodIssues.join('\n')).toContain('WECHAT_DEV_LOGIN');
+    const stagingIssues = expectReject({
+      ...baseEnv,
+      NODE_ENV: 'staging',
+      WECHAT_DEV_LOGIN: 'dev-',
+    });
+    expect(stagingIssues.join('\n')).toContain('WECHAT_DEV_LOGIN');
+  });
+
+  it('development / test 配置 WECHAT_DEV_LOGIN → 通过（AppID 未下来前的本机联调通道）', () => {
+    for (const env of ['development', 'test']) {
+      const c = loadConfig({ ...baseEnv, NODE_ENV: env, WECHAT_DEV_LOGIN: 'dev-' });
+      expect(c.WECHAT_DEV_LOGIN).toBe('dev-');
+    }
+  });
+
   it('staging 启用 mock 缺 MOCK_CALLBACK_SECRET → 拒绝（P3-7：公网环境不许回落公开占位值）', () => {
     const issues = expectReject({ ...baseEnv, NODE_ENV: 'staging', PAYMENT_CHANNELS: 'mock' });
     expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');

@@ -223,6 +223,15 @@ const schema = z.object({
   // ── 微信小程序 ──────────────────────────────────────────────────────────
   APP_ID: optionalText(),
   APP_SECRET: optionalText(),
+  /**
+   * dev 登录开关（I1-U6b）：非空即启用——**不校验 code**，openid = `${本值}${code}`。
+   * 用途：AppID 未下来前的**本机/CI** 联调（开发期打不到微信，code 直接当用户标识后缀用）。
+   * ⚠️ 它等价于**无密码登录**（知道任意 code 字符串就能登进对应账号），
+   *    所以生产与 **staging** 配了它 = 配置错误，loadConfig 直接拒——
+   *    staging 是公网可达环境（P3-7 同口径：公网环境不给"任何人可用"的门），
+   *    见下方交叉校验，与 SEC2 / 规则 1（生产跑假支付）同精神。
+   */
+  WECHAT_DEV_LOGIN: optionalText(),
 
   // ── 服务端与管理员 ──────────────────────────────────────────────────────
   /** 自定义 token 密钥；≥32 字符（openssl rand -hex 32）。生产环境绝不允许短密钥。 */
@@ -410,6 +419,18 @@ const crossField = schema.superRefine((c, ctx) => {
     add(
       'MOCK_CALLBACK_SECRET',
       '生产环境未启用 mock 通道却配置了 MOCK_CALLBACK_SECRET（审核期残留）：mock 的回调门在生产不得保留，请删除该变量',
+    );
+  }
+
+  // 1c. 生产/staging 残留 dev 登录（I1-U6b）：它等价于无密码登录（任意 code 字符串
+  //     都能登进对应账号），危险性不低于"生产跑假支付"（规则 1）——而且同样是
+  //     "联调期合法、结束后残留"的形态，处理口径一致：配了就是配置错误，拒启。
+  //     staging 同拒（P3-7 同口径）：staging 是公网可达环境，无密码门开在公网 =
+  //     任何人能登进任意账号；本机/CI 才是它唯一合法的生存环境。
+  if ((isProd || c.NODE_ENV === 'staging') && c.WECHAT_DEV_LOGIN !== undefined) {
+    add(
+      'WECHAT_DEV_LOGIN',
+      `${c.NODE_ENV} 环境禁止配置 WECHAT_DEV_LOGIN（dev 登录等价无密码登录，公网环境不得保留；仅 development/test 可用）`,
     );
   }
 
