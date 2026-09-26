@@ -48,6 +48,44 @@ export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
 export const STRIPE_TOLERANCE_SEC = 300;
 
 /**
+ * `expires_at` 的下限：现在起 **30 分钟**（三审 A3 / D-49）。
+ *
+ * @why Stripe 要求会话到期不早于当前 30 分钟后，更早会被 400 拒。
+ *      而订单侧只给 30 分钟（D-33），两者几乎相等——所以真正的作用是兜住
+ *      "订单到期 < 30 分钟"这一侧：此时会话必须抬到下限，不能照抄订单到期，
+ *      否则建会话这一步就 400，用户连付款页都打不开。
+ * @limitation 30 分钟这个数来自 Stripe 文档口径（`NEEDS VERIFICATION`：未做真实 400 实测，
+ *      只按官方文档写死）；它比订单寿命长，所以正常路径下不会真的触发。
+ */
+export const STRIPE_MIN_SESSION_TTL_SEC = 30 * 60;
+
+/**
+ * 算出要发给机构的 `expires_at`（unix 秒）；`req.expiresAt` 缺省时返回 undefined（不发该字段）。
+ *
+ * 取值 = `max(订单到期向上取整, 现在 + {@link STRIPE_MIN_SESSION_TTL_SEC})`。
+ *
+ * @throws 非法 ISO → 响亮抛错。发 `NaN` 给机构只会得到一句含混的 400，
+ *         而"到底是我们传错了还是机构拒了"在那种报错里分不出来。
+ * @limitation **向上**取整（`Math.ceil`）：向下取整会**提前**关掉会话，把还愿意付款的用户
+ *             挡在门外；晚一秒关的代价远小于早一秒关。
+ */
+function sessionExpirySec(
+  expiresAt: string | undefined,
+  clock: Clock,
+  orderId: string,
+): number | undefined {
+  if (expiresAt === undefined) return undefined;
+  const ms = Date.parse(expiresAt);
+  if (!Number.isFinite(ms)) {
+    throw new Error(
+      `expiresAt 不是合法 ISO 时间：${expiresAt}（order=${orderId}；不发 NaN 给机构，那只会得到含混的 400）`,
+    );
+  }
+  const earliest = Math.floor(clock.now().getTime() / 1000) + STRIPE_MIN_SESSION_TTL_SEC;
+  return Math.max(Math.ceil(ms / 1000), earliest);
+}
+
+/**
  * 事件类型 → 归一化结果。**未列出的一律 unknown**（不猜）。
  *
  * @why 导出（而不是藏在模块内）：契约的 `x-provider-events.stripe` 清单、本表、
@@ -133,9 +171,15 @@ export function createStripeCheckoutProvider(
     if (t === undefined || v1s.length === 0) {
       throw new AppError(40103, { channel: cfg.channel, reason: 'stripe_signature_malformed' });
     }
+    // ⚠️ 必须按**原始字节**拼接（官方口径 `HMAC(secret, "{t}.{raw_bytes}")`，三审 S4）。
+    //    曾经先 `raw.toString('utf8')` 再拼：合法 UTF-8 时两者一致（所以测试全绿），
+    //    但字节流里出现非法 UTF-8 时 `toString` 会把它替换成 U+FFFD ——
+    //    **换了一批字节也就换了一个签名**，签名必然不匹配 → 合法回调被判 40103。
+    //    那是"安全但错"：fail-closed 保住了钱，代价是"机构侧显示已送达、我们拒收"，
+    //    且 40103 不重试，这条事件就此消失，只能靠对账捞。
     const expected = Buffer.from(
       createHmac('sha256', opts.webhookSecret)
-        .update(`${t}.${raw.toString('utf8')}`)
+        .update(Buffer.concat([Buffer.from(`${t}.`, 'utf8'), raw]))
         .digest('hex'),
       'utf8',
     );
@@ -221,8 +265,18 @@ export function createStripeCheckoutProvider(
     },
 
     async create(req: PaymentRequest): Promise<PaymentSession> {
+      // ⚠️ 必须在发请求**之前**算：非法 ISO 要在这里响亮抛，不能等机构回 400
+      //    （用例「expiresAt 不是合法 ISO → 建会话前抛错」钉的是 http.calls.length === 0）
+      const expiresAtSec = sessionExpirySec(req.expiresAt, deps.clock, req.orderId);
       const form = new URLSearchParams({
         mode: 'payment',
+        // ── D-49 三项（三审 A3）：缺了哪一条都是"不报错、只在拒付/迟到付款那天才付代价" ──
+        // ① 账单地址必收：AVS 与风控的唯一依据，也是拒付抗辩材料（D-50）
+        billing_address_collection: 'required',
+        // ② 3DS 尽力走：不强制的话 3DS 责任落在我方（D-50 拒付防线）
+        'payment_method_options[card][request_three_d_secure]': 'any',
+        // ③ 会话到期跟订单走（缺省不发，见 sessionExpirySec 的 @limitation）
+        ...(expiresAtSec === undefined ? {} : { expires_at: String(expiresAtSec) }),
         // ⚠️ 显式白名单只收卡（D-49：银行卡通道）：不限制的话 Dashboard 里启用的
         //    任何支付方式都会出现在托管页——其中**异步**方式（银行转账/便利店）会产生
         //    `checkout.session.completed` 但 `payment_status='unpaid'` 的事件，

@@ -26,7 +26,7 @@ function row(overrides: Record<string, unknown> = {}): unknown {
     postal_pattern: '^[0-9]{5}(-[0-9]{4})?$',
     allowed_carriers: [],
     blocked_tags: [],
-    duty_note: '价格已含关税与运费（DDP）',
+    duty_note: '价格已含美国关税（DDP）；国际运费按包裹重量分档，结算时单列',
     ...overrides,
   };
 }

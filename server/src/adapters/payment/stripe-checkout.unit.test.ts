@@ -30,6 +30,7 @@ import {
 } from '../../../../test/factories/stripe.js';
 import {
   createStripeCheckoutProvider,
+  STRIPE_MIN_SESSION_TTL_SEC,
   STRIPE_SIGNATURE_HEADER as HEADER,
 } from './stripe-checkout.js';
 
@@ -123,6 +124,47 @@ describe('create（建 Checkout Session）', () => {
     const form = new URLSearchParams(http.calls[0]?.body ?? '');
     expect(form.get('payment_method_types[0]')).toBe('card');
     expect(form.get('payment_method_types[1]')).toBeNull();
+  });
+
+  /**
+   * D-49 明定的会话参数（三审 A3）：账单地址必收、3DS 强制、会话到期跟订单到期走。
+   * @why 三者都是"缺了不报错、只在拒付/迟到付款那天才付代价"的参数：
+   *      不强制 3DS → 拒付责任在我方（D-50 拒付防线）；不收账单地址 → 风控与 AVS 无依据；
+   *      不设 expires_at → Stripe 默认 24h，订单 30 分钟就关了、用户 23 小时后还能付成功（D-33 迟到付款）。
+   */
+  it('D-49：账单地址必收、3DS any、expires_at 跟订单到期（不早于 Stripe 的 30 分钟下限）', async () => {
+    const { http, provider } = build();
+    // 订单 20 分钟后到期：低于 Stripe 下限 30 分钟 → 必须抬到 now+30min（否则机构 400）
+    await provider.create({ ...REQ, expiresAt: '2026-01-02T15:50:00.000Z' });
+    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    expect(form.get('billing_address_collection')).toBe('required');
+    expect(form.get('payment_method_options[card][request_three_d_secure]')).toBe('any');
+    // 数字取自生产常量（单一来源）：写死 30*60 的话，改了下限这条会"绿着"骗人
+    expect(form.get('expires_at')).toBe(String(NOW_SEC + STRIPE_MIN_SESSION_TTL_SEC));
+  });
+
+  it('D-49：订单到期晚于 30 分钟时 expires_at = 订单到期（整秒，向上取整不提前关会话）', async () => {
+    const { http, provider } = build();
+    await provider.create({ ...REQ, expiresAt: '2026-01-02T16:30:00.500Z' });
+    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    expect(form.get('expires_at')).toBe(
+      String(Math.ceil(Date.parse('2026-01-02T16:30:00.500Z') / 1000)),
+    );
+  });
+
+  it('expiresAt 不是合法 ISO 时间 → 建会话前抛错（发 NaN 给机构会得到含混的 400）', async () => {
+    const { http, provider } = build();
+    await expect(provider.create({ ...REQ, expiresAt: 'not-a-date' })).rejects.toThrow(
+      /expiresAt 不是合法 ISO/,
+    );
+    expect(http.calls.length).toBe(0);
+  });
+
+  it('未传 expiresAt 时不发 expires_at（由机构默认；I1 建单必传，此处只保证不发坏值）', async () => {
+    const { http, provider } = build();
+    await provider.create(REQ);
+    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    expect(form.get('expires_at')).toBeNull();
   });
 
   it('返回 copylink 入口（D-49：银行卡走托管页，不做卡表单）', async () => {
@@ -278,6 +320,39 @@ describe('parseWebhook（事件映射与验签细节）', () => {
     });
   });
 
+  /**
+   * 容差必须**双向**（三审变异 U36 存活：`Math.abs` 改成单向"只拦过旧"时全绿）。
+   * @why 未来时间戳同样是重放素材：攻击者拿到一份签名报文后，等到它"变旧"之前的窗口
+   *      并不受"只拦过旧"保护；且两端时钟差超过 300 秒本就是故障，不该静默放行。
+   */
+  it('时间戳在未来超过容差同样 40103（容差是双向的）', async () => {
+    const { provider } = build();
+    const p = signed('checkout.session.completed', { t: NOW_SEC + 301 });
+    await expect(provider.parseWebhook(p.raw, p.headers)).rejects.toMatchObject({
+      code: 40103,
+      details: { reason: 'stripe_timestamp_expired' },
+    });
+  });
+
+  /**
+   * 验签必须对**原始字节**做 HMAC（三审 S4）：`raw.toString('utf8')` 再 update 会把非法
+   * UTF-8 字节替换成 U+FFFD，签名对应的原文与我们算的不再是同一串字节。
+   * 结果是 fail-closed（拒绝），没有安全问题，但偏离官方"raw request body"口径，
+   * 且这类报文会被判成 40103 而不是 40001，排障方向指向密钥而不是报文。
+   */
+  it('原始字节含非法 UTF-8 时按字节验签仍能通过（fail-closed 改为按官方口径）', async () => {
+    const { provider } = build();
+    const bytes = Buffer.concat([
+      Buffer.from('{"id":"evt_x","type":"noop","data":{"object":{}}}'),
+      Buffer.from([0xff]),
+    ]);
+    const header = signStripePayload(bytes, SECRET, NOW_SEC);
+    // JSON 解析会失败 → 40001；若验签先按 utf8 重编码失败会得到 40103（错误方向）
+    await expect(
+      provider.parseWebhook(bytes, { [HEADER]: header } as HeaderBag),
+    ).rejects.toMatchObject({ code: 40001 });
+  });
+
   it('字段能缺就缺：id / type / currency / expires_at 缺失都有兜底，不炸也不假装', async () => {
     const { http, provider } = build();
     // 回调侧：没有 event id、没有 type、没有金额与币种
@@ -328,6 +403,23 @@ describe('parseWebhook（事件映射与验签细节）', () => {
       [HEADER]: signStripePayload(bare, SECRET, NOW_SEC),
     });
     expect(ev2.providerRef).toBe('');
+  });
+
+  it('签名头是空字符串 → 40103 stripe_no_signature（与缺头同判，不进入解析）', async () => {
+    const { provider } = build();
+    await expect(
+      provider.parseWebhook(Buffer.from('{}', 'utf8'), { [HEADER]: '' } as HeaderBag),
+    ).rejects.toMatchObject({ code: 40103, details: { reason: 'stripe_no_signature' } });
+  });
+
+  it('v1 长度正确但内容不对 → 40103 stripe_signature_mismatch（走到 timingSafeEqual 那一步）', async () => {
+    const { provider } = build();
+    const raw = Buffer.from('{"id":"evt_x","type":"charge.refunded"}', 'utf8');
+    const t = Math.floor(NOW.now().getTime() / 1000);
+    const wrong = 'a'.repeat(64); // HMAC-SHA256 hex 恰好 64 位
+    await expect(
+      provider.parseWebhook(raw, { [HEADER]: `t=${t},v1=${wrong}` } as HeaderBag),
+    ).rejects.toMatchObject({ code: 40103, details: { reason: 'stripe_signature_mismatch' } });
   });
 
   it('签名头存在但格式不对（没有 t= 或没有 v1）→ 40103', async () => {

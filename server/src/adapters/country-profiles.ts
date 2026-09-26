@@ -75,7 +75,16 @@ export interface CountryProfile {
   postalPattern: string;
   /** 允许的承运商；MVP 为空数组（尚无真实承运商数据，见迁移 @limitation 二）。 */
   allowedCarriers: string[];
-  /** 该国不可售的合规标签；MVP 为空数组（合规标签尚无枚举口径）。 */
+  /**
+   * 该国不可售的合规标签；MVP 为空数组（未针对任何国家额外加码）。
+   *
+   * @see packages/shared/src/enums.ts 的 `COMPLIANCE_TAG`（11 值，与契约 `compliance_tags`
+   *      逐字同源）与 `BLOCKED_COMPLIANCE_TAG`（7 值，上架即拒的那一批）。
+   * @limitation 口径是**两层的**：`BLOCKED_COMPLIANCE_TAG` 是全局硬拒（不论销往哪国），
+   *              本字段是"某国额外不可售"。三审 B5 之前这里写"合规标签尚无枚举口径"——
+   *              枚举 2026-09-25 已进 shared（契约里本来就有 11 值），注释就此作废；
+   *              **注释写"没有"会让后来的人真的以为没有，从而绕过 `BLOCKED_COMPLIANCE_TAG`**。
+   */
   blockedTags: string[];
   /** 前端展示的关税口径文案（MVP 为 DDP）。 */
   dutyNote: string;
