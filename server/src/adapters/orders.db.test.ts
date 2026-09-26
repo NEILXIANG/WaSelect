@@ -402,6 +402,9 @@ describe('setPayTokenHash + findPayLinkTarget（D-49 短链的两端）', () => 
       pay_token_hash: 'a'.repeat(64),
       pay_url: 'https://checkout.stripe.com/c/pay/cs_x',
     });
+    // expires_at 必须带出（短链落地的「到点未扫」判定全靠它——漏了这个字段，
+    // 过期但未被关单 job 扫到的订单链接会继续跳转到机构页）
+    expect(hit?.expires_at).toBeInstanceOf(Date);
 
     await seedFullOrder('o-link-nopay');
     const noPay = await findPayLinkTarget(db, 'o-link-nopay');

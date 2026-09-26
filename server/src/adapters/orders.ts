@@ -593,9 +593,16 @@ export async function setPayTokenHash(tx: Db, orderId: string, hash: string): Pr
   await tx`update orders set pay_token_hash = ${hash}, updated_at = now() where id = ${orderId}`;
 }
 
-/** `GET /pay/link/{id}` 的校验素材（订单状态 + token hash + 在途支付的托管页 URL）。 */
+/**
+ * `GET /pay/link/{id}` 的校验素材（订单状态 + token hash + 在途支付的托管页 URL）。
+ * @why 带 `expires_at`：「到点未扫」（pending_payment 但已过支付窗口、关单 job 还没扫到）
+ *      的订单，链接必须当场失效——判定方向与关单扫描 / mark-paid 守卫 / pay-intent 守卫
+ *      共享同一语义（`now >= expires_at` 即不可付，本文件头 @why ①），
+ *      短链是第四个、也是最后一个消费这个比较方向的入口。
+ */
 export interface PayLinkRow {
   status: string;
+  expires_at: Date;
   pay_token_hash: string | null;
   pay_url: string | null;
 }
@@ -607,7 +614,7 @@ export interface PayLinkRow {
  */
 export async function findPayLinkTarget(db: Db, orderId: string): Promise<PayLinkRow | null> {
   const rows = await db`
-    select o.status, o.pay_token_hash, p.pay_url
+    select o.status, o.expires_at, o.pay_token_hash, p.pay_url
       from orders o
       left join payments p on p.order_id = o.id and p.status = 'initiated'
      where o.id = ${orderId}
@@ -616,6 +623,7 @@ export async function findPayLinkTarget(db: Db, orderId: string): Promise<PayLin
   if (r === undefined) return null;
   return {
     status: String(r.status),
+    expires_at: r.expires_at as Date,
     pay_token_hash: r.pay_token_hash === null ? null : String(r.pay_token_hash),
     pay_url: r.pay_url === null ? null : String(r.pay_url),
   };

@@ -48,6 +48,8 @@ import { mountAddressRoutes } from './address-routes.js';
 import { mountOrderRoutes } from './order-routes.js';
 import { mountOrderQueryRoutes } from './order-query-routes.js';
 import { mountPayIntentRoutes } from './pay-intent-routes.js';
+import { mountPayLinkRoutes } from './pay-link-routes.js';
+import { registerSessionExpiryOnClose } from './close-session-events.js';
 
 /**
  * 是否挂载骨架路由。**生产不挂。**
@@ -189,6 +191,19 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     registry,
     payLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
   });
+
+  // ── 短链落地（I1-U6a-2 / D-49）：无鉴权（token 即凭证）；限流同 publicWrite 桶 ──
+  mountPayLinkRoutes(app, {
+    db,
+    clock: systemClock,
+    logger,
+    linkLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
+  });
+
+  // ── D-50 关单连带（I1-U6a-2）：order.expired/cancelled → 作废在途支付行 +
+  //    best-effort 作废机构会话。注册在这里（不在 main.ts）：registry 是本函数
+  //    局部装配的，订阅者与路由共用同一份才是"可插拔唯一出处"的真实兑现 ──
+  registerSessionExpiryOnClose(events, { db, logger, registry });
 
   if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见 @limitation）
   app.use('/api/v1/skeleton', rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite));

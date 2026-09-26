@@ -98,6 +98,23 @@ export function createFakeStripeHttp(): FakeStripeHttp {
         };
       }
 
+      // D-50 会话作废（关单连带）：与建会话同一层防线——无幂等键的 POST 拒掉，
+      // 否则"忘了带键"这个缺陷在测试里永远测不出来（超时后无人敢重发）
+      const expireMatch = /^\/v1\/checkout\/sessions\/([^/]+)\/expire$/.exec(path);
+      if (expireMatch !== null && req.method === 'POST') {
+        if ((req.headers?.['idempotency-key'] ?? '').length === 0) {
+          return { status: 400, body: '{"error":{"message":"missing idempotency key"}}' };
+        }
+        return {
+          status: 200,
+          body: JSON.stringify({
+            id: expireMatch[1],
+            object: 'checkout.session',
+            status: 'expired',
+          }),
+        };
+      }
+
       if (path === '/v1/refunds' && req.method === 'POST') {
         // 退款必须带 payment_intent：漏了就是"退到哪儿去"没说清楚
         if (!body.includes('payment_intent=')) {

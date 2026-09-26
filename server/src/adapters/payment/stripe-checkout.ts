@@ -436,5 +436,30 @@ export function createStripeCheckoutProvider(
               : 'failed',
       };
     },
+
+    async expireSession(providerRef: string): Promise<void> {
+      // D-50 关单连带：会话即短链跳转目标，订单关单/取消后它必须立刻死，
+      // 不能等自然过期（Stripe Checkout 会话最长可活 24h，远长于订单的 30 分钟）。
+      const res = await deps.http.send({
+        method: 'POST',
+        url: `${apiBase}/v1/checkout/sessions/${encodeURIComponent(providerRef)}/expire`,
+        headers: {
+          authorization: `Bearer ${opts.secretKey}`,
+          'content-type': 'application/x-www-form-urlencoded',
+          // ⚠️ 与 create/refund 同一层防线：POST 超时会话状态未知，我们按红线绝不自动
+          //    重试无幂等键的 POST。键含 providerRef：对同一会话的人工/重试落到同一键，
+          //    Stripe 返回第一次的结果而不是再炸一次（已 expired 的会话重复 expire
+          //    本来就是 400，幂等键让"超时后重发"至少语义确定）。
+          'idempotency-key': `expire:${providerRef}`,
+        },
+        body: '',
+      });
+      if (res.status < 200 || res.status >= 300) {
+        // 调用方（关单订阅者）按 best-effort 兜住：抛出去只是给它一条 warn 的素材
+        throw new Error(
+          `stripe 会话作废失败：HTTP ${res.status} ${res.body.slice(0, 200)}（session=${providerRef}）`,
+        );
+      }
+    },
   };
 }

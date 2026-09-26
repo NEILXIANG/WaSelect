@@ -211,6 +211,23 @@ export interface PaymentProvider {
 
   /** 退款。仅在 `capabilities.supportsRefund === true` 时存在（注册表强制一致性）。 */
   refund?(req: RefundRequest): Promise<RefundResult>;
+
+  /**
+   * 作废机构侧的**待支付会话**（D-50：订单关单/取消的连带动作）。
+   *
+   * @why 可选方法而不是必填：「机构侧有一个可作废的会话」不是普遍事实——
+   *      in_app 通道（mock/未来微信 Native）的"会话"是我们库里的 payments 行，
+   *      机构侧没有对应物，写出来只能是空实现。调用方（关单订阅者）按
+   *      `typeof provider.expireSession === 'function'` 判定，不需要 capabilities
+   *      字段：它不像 refund 那样驱动业务分支（售后路由要看 supportsRefund 决定
+   *      给不给入口），只是"有就顺手调一下"。
+   * @why **best-effort 语义**：调用方保证已先把库内 payments 行作废（那是底线事实），
+   *      本方法失败不重试、不告警升级——机构侧会话有自己的自然过期
+   *      （我们建会话时给的 expires_at），作废只是让"已关单的链接"立刻死、
+   *      不等自然死亡。失败只配一条 warn 日志。
+   * @throws 实现方对非 2xx 直接抛 Error（与 create/refund 同口径）；调用方必须兜住。
+   */
+  expireSession?(providerRef: string): Promise<void>;
 }
 
 /** 工厂：配置 → 实例。**装配处**把密钥等外部依赖在这里闭包进去。 */

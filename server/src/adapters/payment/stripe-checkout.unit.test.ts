@@ -612,3 +612,36 @@ describe('refund（原币全额退）', () => {
     ).rejects.toThrow(/退款失败/);
   });
 });
+
+describe('expireSession（D-50 关单连带：会话立刻死，不等自然过期）', () => {
+  /**
+   * 与 refund 同模式：可选方法在接口上可以不实现，但 copylink 通道的会话就是
+   * 短链跳转目标——订单关了会话还活着 = 已关单的链接还能跳去付款（钱货两开口）。
+   */
+  function mustExpire(p: PaymentProvider): NonNullable<PaymentProvider['expireSession']> {
+    const fn = p.expireSession;
+    if (fn === undefined) throw new Error('stripe（copylink）必须实现 expireSession()');
+    return fn;
+  }
+
+  it('POST /v1/checkout/sessions/:id/expire，带授权与确定性幂等键 expire:{ref}', async () => {
+    const { http, provider } = build();
+    await mustExpire(provider)('cs_test_123');
+    const call = http.calls.at(-1);
+    expect(call?.method).toBe('POST');
+    expect(call?.url).toBe('https://api.stripe.test/v1/checkout/sessions/cs_test_123/expire');
+    expect(call?.headers?.['authorization']).toBe('Bearer sk_test_unit');
+    // 幂等键含 providerRef：POST 超时后对同一会话的人工/重试落到同一键（出站红线同 refund）
+    expect(call?.headers?.['idempotency-key']).toBe('expire:cs_test_123');
+  });
+
+  it('非 2xx → 抛错带会话号（调用方 best-effort 兜住，错误消息是它 warn 日志的素材）', async () => {
+    const { http, provider } = build();
+    http.failNext(400, '{"error":{"message":"already expired"}}');
+    // ⚠️ 一次调用同时断言两点：failNext 只生效一次，调两次会让第二次真成功、断言变假
+    const err = await mustExpire(provider)('cs_test_123').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/作废失败/);
+    expect((err as Error).message).toMatch(/cs_test_123/);
+  });
+});
