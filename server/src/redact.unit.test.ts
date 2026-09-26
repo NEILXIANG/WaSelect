@@ -379,3 +379,66 @@ describe('意外类型的脱敏行为（N16 定向）', () => {
     expect(out.phone).toBe('***');
   });
 });
+
+/**
+ * 三审 S2：约束七红线"支付链接 token 一律不进日志"此前有四类漏网形态，逐条钉住。
+ */
+describe('三审 S2：支付链接 / 复数键 / 凭证形状的自由文本', () => {
+  it('URL 类键（url / link / href / pay_url / entry.url）去掉查询串与哈希，并抹掉像 token 的路径段', () => {
+    const out = redact({
+      pay_url:
+        'https://checkout.stripe.com/c/pay/cs_live_b1SECRETTOKENabcdefghijklmnop#fidkdWxOYHwnPyd1blpxYHZxWjA0',
+      entry: { url: 'https://pay.waselect.jp/o/o_01J8ZK3M7N?t=9f8e7d6c5b4a3f2e1d0c9b8a' },
+      link: 'https://api.stripe.com/v1/checkout/sessions',
+    }) as Record<string, unknown>;
+    expect(out.pay_url).toBe('https://checkout.stripe.com/c/pay/***');
+    expect((out.entry as Record<string, unknown>).url).toBe(
+      'https://pay.waselect.jp/o/o_01J8ZK3M7N',
+    );
+    // 普通 API 路径保持可读（排障要看打到哪个端点）
+    expect(out.link).toBe('https://api.stripe.com/v1/checkout/sessions');
+  });
+
+  it('复数键（tokens / secrets / passwords / api_keys）与单数同样整值遮蔽', () => {
+    const out = redact({
+      tokens: ['tok_x', 'tok_y'],
+      secrets: { a: 'b' },
+      passwords: ['Summer2024!'],
+      api_keys: ['k1'],
+    }) as Record<string, unknown>;
+    expect(out.tokens).toBe('***');
+    expect(out.secrets).toBe('***');
+    expect(out.passwords).toBe('***');
+    expect(out.api_keys).toBe('***');
+  });
+
+  it('自由文本里的 Stripe 密钥 / webhook 密钥 / Bearer / JWT / Checkout Session id 被掩码', () => {
+    const text =
+      'key sk_live_51Habcdefghijklmnop and whsec_ABCDEFGHIJKLMNOP with Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.c2lnbmF0dXJl session cs_test_a1B2c3D4e5F6g7H8';
+    const masked = maskText(text);
+    expect(masked).not.toContain('sk_live_51Habcdefghijklmnop');
+    expect(masked).not.toContain('whsec_ABCDEFGHIJKLMNOP');
+    expect(masked).not.toContain('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.c2lnbmF0dXJl');
+    expect(masked).not.toContain('cs_test_a1B2c3D4e5F6g7H8');
+    expect(masked).toContain('sk_live_***');
+    expect(masked).toContain('Bearer ***');
+  });
+
+  it('裸 JWT（不带 Bearer）保留 eyJ 前缀；URL 类键取值不是字符串时整体打星', () => {
+    expect(maskText('token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.c2lnbmF0dXJl')).toBe(
+      'token=eyJ***',
+    );
+    // null 原样透传（不是敏感值，且 JSON 里 null 与缺省语义不同），非字符串的非空值才整体打星
+    const out = redact({ url: 12345, link: null }) as Record<string, unknown>;
+    expect(out.url).toBe('***');
+    expect(out.link).toBeNull();
+  });
+
+  it('Error 的 message 与 stack 同样经过文本脱敏（三审变异 U21：此前无用例钉住）', () => {
+    const err = new Error('stripe 建会话失败：sk_test_abcdefghijklmnop 对 bob@example.com');
+    const out = redact(err) as Record<string, unknown>;
+    expect(out.err_message).not.toContain('sk_test_abcdefghijklmnop');
+    expect(out.err_message).toContain('b***@example.com');
+    expect(String(out.err_stack)).not.toContain('sk_test_abcdefghijklmnop');
+  });
+});

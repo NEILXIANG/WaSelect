@@ -48,7 +48,9 @@ export const ERROR_CODES = {
   40401: { code: 40401, message: '商品不存在或已下架', action: '提示并刷新' },
   40901: { code: 40901, message: '库存不足', action: '提示并刷新' },
   40902: { code: 40902, message: '订单状态不允许此操作', action: '刷新订单' },
-  40903: { code: 40903, message: '重复提交', action: '返回原结果' },
+  // 三审 P3-5：40903 的语义是"首次仍在执行、等待超时**没有**结果"（adapters/idempotency.ts 抬头），
+  // 旧 action"返回原结果"与之相反——根本没有原结果可返回；正确动作是提示处理中，稍后同键重放/查单
+  40903: { code: 40903, message: '重复提交', action: '提示处理中，稍后用同一幂等键重放或查询订单' },
   40904: { code: 40904, message: '订单已过期', action: '重新下单' },
   40905: { code: 40905, message: '价格已变动', action: '提示刷新确认页' },
   40906: { code: 40906, message: '订单金额超过上限，请拆单', action: '提示拆分订单' },

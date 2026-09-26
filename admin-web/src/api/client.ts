@@ -28,7 +28,7 @@ export const DEFAULT_TIMEOUT_MS = 10_000;
 export interface RequestOptions {
   /** API 路径（`/api/v1/...` 开头），与构造时的 baseUrl 拼接。 */
   path: string;
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE' | undefined;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | undefined;
   /** 请求体（自动 JSON 序列化）；GET 不传。 */
   body?: unknown;
   /** 幂等键（写操作必传；服务端 24h 内同键返回原响应，40908 防键复用不同内容）。 */
@@ -116,10 +116,15 @@ export function createAdminApi(deps: AdminApiDeps) {
     // 但 message 带上 HTTP 状态——"Render 502"与"DNS 不通"是两种排查方向，不能混成一句"网络失败"
     let body: unknown = null;
     let parsed = true;
-    try {
-      body = await res.json();
-    } catch {
-      parsed = false;
+    // 204 / 空体（契约的 DELETE → 204）：没有 JSON 可解析不等于"非 JSON 响应"（三审 P2-2）；
+    // 旧写法把成功的空响应当成网络失败，管理员删完商品看到"请求失败"、重试再拿 40400
+    const noContent = res.status === 204 || res.headers.get('content-length') === '0';
+    if (!noContent) {
+      try {
+        body = await res.json();
+      } catch {
+        parsed = false;
+      }
     }
 
     const code =

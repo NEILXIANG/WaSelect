@@ -207,6 +207,35 @@ describe('finishWebhookEvent', () => {
     expect(rows[0]?.note).toBe('订单不存在');
   });
 
+  /**
+   * 三审变异 D07 存活：删掉 finish 的 `processing_token =` 条件时全绿——真 SQL 那一半的栅栏
+   * 此前只在 fake store 上验过（pay-callback.unit）。这里用真库钉死：迟到的旧持有者写不动。
+   */
+  it('令牌已易主的旧持有者 finish → false，且不覆盖新持有者的结果（真库栅栏）', async () => {
+    const first = await store.claim(event('evt-finish-fence'));
+    await db`update webhook_events set processing_until = now() - interval '1 second' where event_id = 'evt-finish-fence'`;
+    const second = await store.claim(event('evt-finish-fence'));
+    expect(second.state).toBe('retry');
+    // 新持有者先写结果
+    expect(
+      await store.finish({
+        ...event('evt-finish-fence'),
+        result: 'paid',
+        token: second.token ?? '',
+      }),
+    ).toBe(true);
+    // 旧持有者迟到写回：必须 false，且库里仍是新持有者的结果
+    expect(
+      await store.finish({
+        ...event('evt-finish-fence'),
+        result: 'ignored:status_conflict',
+        token: first.token ?? '',
+      }),
+    ).toBe(false);
+    const rows = await db`select result from webhook_events where event_id = 'evt-finish-fence'`;
+    expect(rows[0]?.result).toBe('paid');
+  });
+
   it('未处理的事件 processed_at 为空——这正是"待对账"信号', async () => {
     await store.claim(event('evt-4'));
     const rows = await db`select processed_at from webhook_events where event_id = 'evt-4'`;

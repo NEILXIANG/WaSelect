@@ -38,8 +38,15 @@ export interface DomainEvent {
   payload?: Record<string, unknown> | undefined;
 }
 
-/** 订阅者。同步返回；抛错由总线兜住（见 {@link EventBus.publish}）。 */
-export type EventHandler = (event: DomainEvent) => void;
+/**
+ * 订阅者。可同步也可 async；抛错 / reject 都由总线兜住（见 {@link EventBus.publish}）。
+ * @limitation 总线**发后不等**（fire-and-forget）：async 订阅者的失败只落日志，
+ *             发布方拿不到它的结果——需要"必须成功"的动作（发货指令）不能只靠订阅者，
+ *             要有自己的重试与对账（F13）。
+ */
+// 返回类型用 `unknown` 而不是 `void | Promise<void>`：后者会拒绝 `() => arr.push(x)` 这类
+// 表达式体（返回 number），迫使调用方到处加花括号；总线在运行期只关心"返回值是不是 Promise"。
+export type EventHandler = (event: DomainEvent) => unknown;
 
 export interface EventBus {
   /**

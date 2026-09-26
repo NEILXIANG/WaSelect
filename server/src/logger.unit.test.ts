@@ -78,6 +78,30 @@ describe('脱敏在日志出口强制生效', () => {
     expect(raw).not.toContain('hanako@');
   });
 
+  it('支付链接 / 复数密钥键 / 自由文本里的 Stripe 密钥经真实 pino 管线后不会明文落盘（三审 S2 链路）', () => {
+    // @why redact.unit 钉的是 redact() 本身；这条证明 logger → redact → pino 序列化这条管线
+    //      没有哪一段把原值重新放回去（例如 child 绑定、上下文合并、Error 摊平）。
+    const { sink, log } = setup();
+    const child = log.child({ module: 'pay', tokens: ['tok_child_secret'] });
+    child.info('session_created', {
+      pay_url: 'https://checkout.stripe.com/c/pay/cs_live_b1SECRETSESSION#fidkdWxOYHwn',
+      api_keys: ['sk_live_51HzzzSECRETKEY'],
+      err: new Error('stripe 拒绝：Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln'),
+    });
+    const raw = sink.lines.join('\n');
+    for (const leak of [
+      'cs_live_b1SECRETSESSION',
+      'fidkdWxOYHwn',
+      'sk_live_51HzzzSECRETKEY',
+      'tok_child_secret',
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln',
+    ]) {
+      expect(raw, leak).not.toContain(leak);
+    }
+    // 排障需要的"是哪个域名 / 哪条路径"仍在
+    expect(raw).toContain('https://checkout.stripe.com/c/pay/***');
+  });
+
   it('Error 作为字段被摊平，便于按 err_message 检索', () => {
     const { sink, log } = setup();
     log.error('db_query_failed', { err: new Error('connection refused') });

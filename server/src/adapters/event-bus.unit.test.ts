@@ -102,6 +102,34 @@ describe('事件总线：失败隔离（R2-2 验收一）', () => {
   });
 });
 
+describe('事件总线：async 订阅者（三审 P2-1）', () => {
+  /**
+   * @why 通知/发券/发货指令天然是网络调用，订阅者迟早会是 async。旧实现只 try/catch 同步异常，
+   *      async 订阅者的 rejection 逃出总线 → 被 N25 的 unhandledRejection 兜底判成 fatal →
+   *      整个 web 进程优雅停机（一次通知服务抖动 = 一次发布事故）。
+   *      "永不抛错、单个订阅者失败不影响其它"这两条承诺必须对 async 同样成立。
+   */
+  it('async 订阅者 reject → 只记 subscriber_failed，不泄漏成 unhandledRejection，其它订阅者照常', async () => {
+    const { bus, sink } = busWithSink();
+    const seen: string[] = [];
+    bus.subscribe('order.paid', async () => {
+      await Promise.resolve();
+      throw new Error('boom-async');
+    });
+    bus.subscribe('order.paid', () => {
+      seen.push('sync-ok');
+    });
+    bus.publish(ev('order.paid', 'sk-async'));
+    // 让 rejection 走完微任务队列（若未被总线接住，vitest 会以 Unhandled Rejection 判红）
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual(['sync-ok']);
+    const rows = sink.find('domain_event_subscriber_failed');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.err).toBe('boom-async');
+    expect(rows[0]?.order_id).toBe('sk-async');
+  });
+});
+
 describe('事件总线：退订与批量', () => {
   it('退订后收不到；重复退订无副作用（幂等）', () => {
     const { bus } = busWithSink();

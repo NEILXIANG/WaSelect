@@ -85,6 +85,67 @@ function parseEnvEntries(yaml: string): EnvEntry[] {
 const declared = parseEnvEntries(renderYaml);
 const declaredKeys = new Set(declared.map((e) => e.key));
 
+/**
+ * Blueprint 规范里 `databases[]` 条目允许的键（render.com/docs/blueprint-spec，2026-09-25 核对）。
+ * @why 三审 P2-1：原文件写的是 `postgresVersion`，不是规范键名 `postgresMajorVersion`。
+ *      这类错**不报错**——平台忽略未知键，建出默认版本的库；代码闸门 `assertPostgresMajor(>=16)`
+ *      放行，CI 与生产的版本从此悄悄错位。和 envVars 的"拼错被 zod strip"是同一形态，所以同一守法。
+ * @limitation 名单是人抄的；规范新增键时这里会误红（改名单即可，误红比漏配便宜）。
+ */
+const DATABASE_KEYS = new Set([
+  'name',
+  'plan',
+  'region',
+  'postgresMajorVersion',
+  'databaseName',
+  'user',
+  'ipAllowList',
+  'diskSizeGB',
+  'highAvailability',
+  'readReplicas',
+  'previewPlan',
+]);
+
+interface DatabaseEntry {
+  keys: Map<string, string>;
+}
+
+/**
+ * 抽出 `databases:` 段里每个 `- name:` 条目的**键 → 原始值**（去掉行尾注释）。
+ * @see @limitation 一（同样只认我们自己的缩进风格）
+ */
+function parseDatabases(yaml: string): DatabaseEntry[] {
+  const out: DatabaseEntry[] = [];
+  let inDb = false;
+  let current: DatabaseEntry | undefined;
+  for (const raw of yaml.split('\n')) {
+    if (/^databases:\s*$/.test(raw)) {
+      inDb = true;
+      current = undefined;
+      continue;
+    }
+    if (/^\S/.test(raw)) {
+      inDb = false;
+      current = undefined;
+      continue;
+    }
+    if (!inDb) continue;
+    const line = raw.replace(/\s+#.*$/, '').trimEnd();
+    if (/^\s*#/.test(line) || line.trim() === '') continue;
+    const item = /^\s*-\s*([A-Za-z]+):\s*(.*)$/.exec(line);
+    if (item) {
+      current = { keys: new Map([[item[1] as string, item[2] as string]]) };
+      out.push(current);
+      continue;
+    }
+    const prop = /^\s+([A-Za-z]+):\s*(.*)$/.exec(line);
+    if (prop && current) current.keys.set(prop[1] as string, prop[2] as string);
+  }
+  return out;
+}
+
+const databases = parseDatabases(renderYaml);
+
 describe('render.yaml ↔ 配置 schema 一致', () => {
   it('两边都非空，且含各自最关键的那几个键（防"空对空"永远绿）', () => {
     // @why 本项目第三次以上踩同一形态：解析失效 / 目录改名会让集合变空，
@@ -143,6 +204,56 @@ describe('render.yaml ↔ 配置 schema 一致', () => {
       leaked,
       `这些是密钥，却带了字面 value（应改成 sync: false 并在控制台填）：\n${leaked.join('\n')}`,
     ).toEqual([]);
+  });
+
+  it('databases 段：键名都在 Blueprint 规范内，且显式钉住 Postgres 大版本（三审 P2-1）', () => {
+    expect(databases.length).toBeGreaterThan(0);
+    for (const db of databases) {
+      const unknown = [...db.keys.keys()].filter((k) => !DATABASE_KEYS.has(k));
+      expect(
+        unknown,
+        `databases[${db.keys.get('name')}] 有规范外的键（平台会静默忽略）：${unknown.join(', ')}`,
+      ).toEqual([]);
+      // 大版本必须显式写、且写成带引号的字符串（规范类型是 string；裸数字 16 会被 YAML 解析成整数）
+      expect(db.keys.get('postgresMajorVersion')).toMatch(/^'(1[6-9]|[2-9]\d)'$/);
+    }
+  });
+
+  it('服务与数据库都不得用免费档 / 规范外档位名（冷启动会让支付回调超时；数据库 30 天过期）', () => {
+    // @why `starter` 曾在本文件里写了两处——它不是 Blueprint 的档位名，平台会拒绝或回落。
+    //      合法值形如 `0.5c-512mb`（web）/ `0.5c-1g`（db）；只校验形状，不校验价格是否合理。
+    const plans = [...renderYaml.matchAll(/^\s*plan:\s*(\S+)/gm)].map((m) => m[1] as string);
+    expect(plans.length).toBeGreaterThanOrEqual(2);
+    for (const p of plans) expect(p).toMatch(/^\d+(\.\d+)?c-\d+(mb|g)$/);
+  });
+
+  it('解析器自检：databases 段解析出键值且不吃注释、不越段', () => {
+    const sample = [
+      'services:',
+      '  - type: web',
+      '    plan: 0.5c-512mb',
+      'databases:',
+      '  - name: pg-a',
+      '    region: oregon # 注释里的 plan: free 不该被读到',
+      '    # plan: starter',
+      "    postgresMajorVersion: '16'",
+      '  - name: pg-b',
+      '    plan: 0.5c-1g',
+      'other:',
+      '  - name: not-a-db',
+    ].join('\n');
+    const parsed = parseDatabases(sample);
+    expect(parsed.map((d) => [...d.keys.entries()])).toEqual([
+      [
+        ['name', 'pg-a'],
+        ['region', 'oregon'],
+        ['postgresMajorVersion', "'16'"],
+      ],
+      [
+        ['name', 'pg-b'],
+        ['plan', '0.5c-1g'],
+      ],
+    ]);
   });
 
   it('解析器自检：键、字面值标记、段落边界都解析正确（防"解析器坏了 → 全绿"）', () => {

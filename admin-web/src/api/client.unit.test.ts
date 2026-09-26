@@ -168,6 +168,24 @@ describe('错误收敛（统一 ApiError 形状）', () => {
     await expect(api({ path: '/x' })).rejects.toMatchObject({ code: 50000 });
   });
 
+  /**
+   * 三审 P2-2：契约有两个 DELETE → 204（`/admin/products/{id}`、`/addresses/{id}`），204 无 body，
+   * 旧实现 `res.json()` 失败 → 按"非 JSON"抛 `请求失败（HTTP 204）`：服务端已删、UI 报失败、
+   * 管理员重试拿 40400。成功的空响应必须 resolve 为 null。
+   */
+  it('204 无 body → resolve null（删除类端点的成功形状，不是网络失败）', async () => {
+    const spy = fetchSpy(async () => new Response(null, { status: 204 }));
+    const { api } = makeApi({ fetchImpl: spy.impl });
+    await expect(api({ path: '/admin/products/p1', method: 'DELETE' })).resolves.toBeNull();
+  });
+
+  it('PUT 是合法方法（契约有 4 条 PUT 路由；第一轮为它修了 CORS，客户端类型却没跟上）', async () => {
+    const spy = fetchSpy(async () => jsonResponse({ ok: true }));
+    const { api } = makeApi({ fetchImpl: spy.impl });
+    await api({ path: '/admin/products/p1', method: 'PUT', body: { title: 'x' } });
+    expect((spy.calls[0]?.init as RequestInit).method).toBe('PUT');
+  });
+
   it('非 JSON 响应（平台 502 HTML 页）→ NETWORK_ERROR_CODE，message 带 HTTP 状态', async () => {
     const spy = fetchSpy(async () => new Response('<html>bad gateway</html>', { status: 502 }));
     const { api } = makeApi({ fetchImpl: spy.impl });

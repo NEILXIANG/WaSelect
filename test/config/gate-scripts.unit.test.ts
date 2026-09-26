@@ -116,6 +116,28 @@ describe('gate 这道门禁本身必须完整', () => {
     expect(hasFullAudit('npm run lint && npm run audit:prod && npm run cov')).toBe(false);
   });
 
+  it('cov 必须真的开覆盖率、且覆盖全部测试项目（三审 P2-4：阈值写在 vitest.config 里，不带 --coverage 就永远不生效）', () => {
+    // @why `vitest.config.mts` 的 thresholds 只在 `--coverage` 时判定；把 cov 瘦身成不带
+    //      这个开关的普通 run，gate 照样绿，覆盖率门槛从此形同虚设，且没有任何东西会报。
+    //      少一个 --project 也一样：那部分代码的覆盖率从分母里消失，均值反而更好看。
+    const cov = pkg.scripts['cov'] ?? '';
+    expect(cov).toMatch(/(^|\s)--coverage(\s|$)/);
+    for (const p of ['unit', 'db', 'contract', 'e2e']) {
+      expect(cov, `cov 少了 --project ${p}`).toMatch(new RegExp(`--project ${p}(?![\\w:-])`));
+    }
+  });
+
+  it('gate 只能用 && 串联（`;` 或 `||` 会让前一步的红被吞掉）', () => {
+    // @why `a ; b` 与 `a || b` 都能让 gate 在某一层红了之后继续并以绿结束——
+    //      这是"gate 绿但其实没过"的最直接写法，肉眼在长命令里很难看出来。
+    expect(gate).not.toMatch(/;|\|\|/);
+    const steps = gate.split('&&').map((s) => s.trim());
+    expect(
+      steps.every((s) => /^npm run [\w:-]+$/.test(s)),
+      `gate 含非 npm run 步骤：${gate}`,
+    ).toBe(true);
+  });
+
   it('admin-web 的 prebuild 必须挂部署环境闸门（二次审查 P2：N16 同款缺口，拆掉闸门不报错）', () => {
     /**
      * @why admin-web 与 checkout-static 同属「CF Pages 无 IaC」形态：VITE_API_BASE_URL 漏配时

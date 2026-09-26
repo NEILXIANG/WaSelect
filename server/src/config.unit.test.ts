@@ -249,6 +249,18 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');
   });
 
+  /**
+   * 三审 S1：生产**未列出** mock 却残留 MOCK_CALLBACK_SECRET → 拒绝。
+   * @why 装配层的"下线通道保留回调"语义（P1-NEW-1）对 mock 是反向的：审核期结束后残留的密钥
+   *      会让 mock 回调门继续开着，而 mark-paid 不核对"订单属于哪个通道"——持有该密钥者能把
+   *      任意真实订单置 paid。render.yaml 把它列为长期 sync:false 密钥，残留是最可能的形态。
+   */
+  it('生产未启用 mock 却残留 MOCK_CALLBACK_SECRET → 拒绝（审核期结束必须撤掉伪造回调的门）', () => {
+    const issues = expectReject(prod({ MOCK_CALLBACK_SECRET: 'left-over-from-review' }));
+    expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');
+    expect(issues.join('\n')).toContain('残留');
+  });
+
   it('staging 启用 mock 缺 MOCK_CALLBACK_SECRET → 拒绝（P3-7：公网环境不许回落公开占位值）', () => {
     const issues = expectReject({ ...baseEnv, NODE_ENV: 'staging', PAYMENT_CHANNELS: 'mock' });
     expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');
@@ -354,6 +366,9 @@ describe('数值型配置的下限', () => {
     ['PACKAGING_WEIGHT_G', '0'], // 包材 0 克会让运费向下取错档（D-46 同源的方向性错误）
     ['CALLBACK_ORDER_GRACE_MS', '-1'], // 负宽限期无意义（0 合法 = 不要宽限期）
     ['SHUTDOWN_READY_DELAY_MS', '-1'], // 负摘流等待无意义（0 合法 = 不等，开发用）
+    ['FREE_SHIPPING_JPY', '0'], // 三审：0 / 负阈值 = 全场包邮，与"留空 = 不包邮"的语义相撞；要包邮就写正数
+    ['FREE_SHIPPING_JPY', '-5'],
+    ['MAX_ORDER_JPY', '200000'], // 三审：D-42 单笔必须低于 ¥200,000 出口申报阈值——超过就是每单要报关
   ];
   for (const [key, value] of bad) {
     it(`${key}=${value} 拒绝启动`, () => {
@@ -477,6 +492,16 @@ describe('配置形状（N11）', () => {
         '\n',
       ),
     ).toContain('DATABASE_URL');
+    // 三审链路补盲时发现的漏洞：`0.0.0.0` / `[::]` 作为**连接目标**等同于本机（内核路由到环回），
+    // 却不在名单里——与 test-db.ts 的测试库闸门（拒 0.0.0.0）方向不一致。
+    for (const url of [
+      'postgresql://app@0.0.0.0:5432/japan_shop',
+      'postgresql://app@[::]:5432/japan_shop',
+    ]) {
+      expect(expectReject(prodLike({ DATABASE_URL: url })).join('\n'), url).toContain(
+        'DATABASE_URL',
+      );
+    }
   });
 
   it('INTERNAL_JOB_SECRET < 32 → 拒启（HMAC 共享密钥，staging 同样生效）', () => {

@@ -140,7 +140,12 @@ export function buildPaymentRegistry(
   // mock 的注册条件见 @limitation 三：列出（开发/审核期正常用）或显式配了密钥
   // （未列出但显式配密钥 = 运营有意保留在途回调）。只占位密钥时不注册——公开值不能开门。
   const listed = new Set<string>(config.PAYMENT_CHANNELS);
-  const mockRegistered = listed.has('mock') || config.MOCK_CALLBACK_SECRET !== undefined;
+  // ⚠️ 生产**不适用**"未列出但有密钥 → 保留回调"（三审 S1）：mock 的在途订单只可能是审核期测试单，
+  //    没有值得保留的回调；保留的只是一扇"持密钥者可伪造支付成功"的门。config 规则 1b 已在启动期
+  //    拒绝这种组合，本处是第二道防线（两道都在，因为它是"能改订单状态的门"）。
+  const mockRegistered =
+    listed.has('mock') ||
+    (config.NODE_ENV !== 'production' && config.MOCK_CALLBACK_SECRET !== undefined);
 
   const names = new Set<string>(listed);
   if (mockRegistered) names.add('mock');

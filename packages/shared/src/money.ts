@@ -72,6 +72,11 @@ export function toRateInt(rate: number | string): number {
   if (Math.abs(n) >= MAX_RATE) {
     throw new RangeError(`汇率超出可精确表示的范围（|rate| < ${MAX_RATE}）：${n}`);
   }
+  // 三审 P3-6：0 / 负汇率在数学上"合法"，在业务上是事故（全站按 0 元或负数收款）——
+  // 唯一换算入口必须把它挡住，不能指望上游（fx 仓储属 I1）都记得校验
+  if (n <= 0) {
+    throw new RangeError(`汇率必须为正数，收到 ${n}`);
+  }
   // 浮点乘法后取整：double 相对误差约 1e-16，乘 1e8 后绝对误差约 1e-8，远小于 0.5，故取整安全
   return Math.round(n * RATE_SCALE);
 }

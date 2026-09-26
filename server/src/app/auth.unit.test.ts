@@ -125,6 +125,37 @@ describe('signToken / verifyToken', () => {
     await expect(verifyToken(noneToken, cfg)).rejects.toMatchObject({ code: 40101 });
   });
 
+  /**
+   * 三审变异 U23：`algorithms: ['HS256']` 白名单被删掉时全绿——alg=none 用例对它零约束
+   *（jose 本就拒 none）。真正能让白名单"红"的是：同一把密钥签 HS512，无白名单即通过。
+   */
+  it('同密钥签发的 HS512 token 拒绝（算法白名单必须真的在起作用）', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const hs512 = await new SignJWT({ role: 'admin' })
+      .setProtectedHeader({ alg: 'HS512' })
+      .setSubject('u-1')
+      .setIssuer(cfg.issuer ?? 'waselect')
+      .setAudience('admin')
+      .setIssuedAt(now)
+      .setExpirationTime(now + 3600)
+      .sign(new TextEncoder().encode(cfg.secret));
+    await expect(verifyToken(hs512, cfg)).rejects.toMatchObject({ code: 40101 });
+  });
+
+  /**
+   * 三审 S3：无 `exp` 的 token 必须拒绝。签发侧总带 exp，但任何未来的签发路径/脚本漏写一次，
+   * 就是一枚**永久有效**的 token；校验侧强制 requiredClaims 才是不依赖"签发侧记得"的防线。
+   */
+  it('缺 exp / iat 的 token 拒绝（永久有效的 token 不允许存在）', async () => {
+    const noExp = await new SignJWT({ role: 'user' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('u-1')
+      .setIssuer(cfg.issuer ?? 'waselect')
+      .setAudience('mp')
+      .sign(new TextEncoder().encode(cfg.secret));
+    await expect(verifyToken(noExp, cfg)).rejects.toMatchObject({ code: 40101 });
+  });
+
   it('签发侧拒绝非法角色（否则 TTL 变 NaN，报错信息完全指不到根因）', async () => {
     await expect(signToken({ sub: 'u-1', role: 'root' as never }, cfg)).rejects.toThrow(TypeError);
     await expect(signToken({ sub: '', role: 'user' }, cfg)).rejects.toThrow(TypeError);

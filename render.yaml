@@ -16,9 +16,11 @@ services:
     name: waselect-api
     runtime: node
     region: oregon # 美西 Oregon（ADR-13）：日本 ↔ 美西的往返比东京↔弗吉尼亚短一个量级
-    plan: starter # Web Starter ≈ $7/月。**禁免费档**：免费档会冷启动（首个请求可能几十秒），
-    #               支付回调在这种延迟下会被机构判超时并重发，而重发正是幂等要兜的东西——
-    #               拿免费档省下的钱去冒这个险不划算
+    # 三审：`starter` 不是 Blueprint 规范里的档位名（合法值形如 `0.5c-512mb` / `1c-2g`，
+    #    render.com/docs/blueprint-spec 2026-09-25 核对）。取最小付费档；**禁免费档**：
+    #    免费档会冷启动（首个请求可能几十秒），支付回调在这种延迟下会被机构判超时并重发，
+    #    而重发正是幂等要兜的东西——拿免费档省下的钱去冒这个险不划算。价格以控制台为准。
+    plan: 0.5c-512mb
     branch: main
     # ⚠️ 这里必须是全量 `npm ci`（含 devDependencies），不能 `--omit=dev`：
     #    build 要调 tsc / vite（都是 devDependencies），省了装不上就直接构建失败。
@@ -74,6 +76,8 @@ services:
         sync: false # openssl rand -hex 32；≥32 字符
       - key: MOCK_CALLBACK_SECRET
         sync: false # 审核期专用。**独立于 JWT_SECRET**（泄露半径与轮换周期不同，P1-4）
+        #           ⚠️ 审核期结束、PAYMENT_CHANNELS 去掉 mock 时必须在控制台**删除**此值：
+        #           生产残留会被配置层拒启（config.ts 规则 1b，三审 S1），不是可选清理
       - key: ADMIN_INITIAL_PASSWORD
         sync: false # ≥12 位；首次登录后应改密。seed 时 bcrypt 写入 users.password_hash
 
@@ -138,7 +142,13 @@ services:
 databases:
   - name: waselect-pg
     region: oregon # 与 web 同区：跨区会把每个查询的 RTT 加几十毫秒，且**按 egress 计费**
-    plan: starter # ≈ $6/月。**禁免费档**：免费库 30 天过期，数据是唯一不能重建的东西
-    postgresVersion: 16 # 代码里有硬闸门 assertPostgresMajor(>=16)，版本不符直接启动失败
+    # 三审：`starter` 不是 Blueprint 规范里的档位名；数据库合法档位形如 `0.1c-256mb` / `0.5c-1g`。
+    #    取最小付费档；**禁免费档**（`free` / 30 天过期）：数据是唯一不能重建的东西。价格以控制台为准。
+    plan: 0.5c-1g
+    # ⚠️ 键名是 `postgresMajorVersion`（字符串），**不是** `postgresVersion`（三审 P2-1）：
+    #    写错键名的后果不是报错，而是被忽略并建出**平台默认版本**的库——代码闸门
+    #    assertPostgresMajor(>=16) 会放行，但 CI（PG16）与生产版本从此不一致。
+    #    test/config/render-env.unit.test.ts 现在会校验 databases 段的键名集合。
+    postgresMajorVersion: '16' # 代码里有硬闸门 assertPostgresMajor(>=16)，版本不符直接启动失败
     databaseName: japan_shop
     user: waselect

@@ -126,8 +126,16 @@ const SENSITIVE_PHRASES: ReadonlySet<string> = new Set([
   'accountnumber',
 ]);
 
-/** 敏感键的类别。判定优先级：SECRET > IDENTIFIER > PII-name > PII-address。 */
-export type SensitiveClass = 'secret' | 'identifier' | 'pii-name' | 'pii';
+/**
+ * URL 类键（三审 S2）：Stripe Checkout Session 的 URL 本身就是**不记名凭证**（拿到就能付款），
+ * 支付短链的查询串里是 token——它们都不在 SECRET 词表里（`pay_url` 切词得 `pay`/`url`），
+ * 此前原样进日志，直接违反约束七"支付链接 token 一律不进日志"。
+ * 处理方式见 {@link maskUrl}：保留 origin 与可读路径，去掉查询串/哈希，抹掉像 token 的路径段。
+ */
+const URL_WORDS: ReadonlySet<string> = new Set(['url', 'uri', 'link', 'href']);
+
+/** 敏感键的类别。判定优先级：SECRET > IDENTIFIER > PII-name > PII-address > URL。 */
+export type SensitiveClass = 'secret' | 'identifier' | 'pii-name' | 'pii' | 'url';
 
 /** 把键名切成小写单词：`apiKey` / `api_key` / `api-key` / `APIKey` → ['api','key']。 */
 function splitWords(key: string): string[] {
@@ -139,16 +147,30 @@ function splitWords(key: string): string[] {
     .map((w) => w.toLowerCase());
 }
 
+/**
+ * 复数归一（三审 S2）：`tokens` / `secrets` / `passwords` / `api_keys` 此前切词得不到单数词，
+ * 整个数组明文落盘。只去尾 `s`（`keys`→`key`、`addresses`→`addresse` 不会误命中：
+ * 单数本身也在查，两者取并集），不做完整词形还原——词表是封闭的，够用且可预测。
+ */
+function singular(w: string): string {
+  return w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w;
+}
+
+function hasWord(words: string[], set: ReadonlySet<string>): boolean {
+  return words.some((w) => set.has(w) || set.has(singular(w)));
+}
+
 export function classifyKey(key: string): SensitiveClass | undefined {
   const squeezed = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (SENSITIVE_PHRASES.has(squeezed)) return 'secret';
+  if (SENSITIVE_PHRASES.has(squeezed) || SENSITIVE_PHRASES.has(singular(squeezed))) return 'secret';
   const words = splitWords(key);
-  if (words.some((w) => SECRET_WORDS.has(w))) return 'secret';
-  if (words.some((w) => IDENTIFIER_WORDS.has(w))) return 'identifier';
-  if (PII_NAME_PHRASES.has(squeezed) || words.some((w) => PII_NAME_WORDS.has(w))) {
+  if (hasWord(words, SECRET_WORDS)) return 'secret';
+  if (hasWord(words, IDENTIFIER_WORDS)) return 'identifier';
+  if (PII_NAME_PHRASES.has(squeezed) || hasWord(words, PII_NAME_WORDS)) {
     return 'pii-name';
   }
-  if (words.some((w) => PII_ADDRESS_WORDS.has(w))) return 'pii';
+  if (hasWord(words, PII_ADDRESS_WORDS)) return 'pii';
+  if (hasWord(words, URL_WORDS)) return 'url';
   return undefined;
 }
 
@@ -244,6 +266,38 @@ const INTL_PHONE_RE = /\+\d[\d\s-]{7,}\d/g;
  */
 const OPENID_RE = /(?<![A-Za-z0-9_-])o[A-Za-z0-9][A-Za-z0-9_-]{26}(?![A-Za-z0-9_-])/g;
 
+/**
+ * 凭证形状的自由文本（三审 S2）：Stripe 密钥 / webhook 密钥 / Checkout Session id、Bearer 头、JWT。
+ * @why 它们会出现在**错误消息**里（`stripe 建会话失败：HTTP 401 … sk_live_…`、上游回显的
+ *      Authorization），而错误消息是最常被原样打进日志的字符串。键名规则管不到字符串内部。
+ * @limitation 只认这几种已知前缀/形状；自造格式的密钥仍靠键名规则（redact 文件头 @limitation 一）。
+ */
+const CREDENTIAL_TEXT_RE =
+  /\b(sk|pk|rk|whsec|cs|pi|ch|re|acct)_(live|test)_[A-Za-z0-9]+|\bwhsec_[A-Za-z0-9]+|\bBearer\s+[A-Za-z0-9._~+/=-]+|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g;
+
+/** 路径段里像 token 的形态：≥16 位、字母数字与 `_-` 混排、且含至少一个数字（排除普通英文单词）。 */
+const TOKEN_LIKE_SEGMENT_RE = /^(?=.*\d)[A-Za-z0-9_-]{16,}$/;
+
+/**
+ * URL 类值的掩码：保留 origin 与可读路径段，去掉查询串与哈希，像 token 的路径段抹成 `***`。
+ * @why 不整值 `***`：出站 HTTP 的排障要看"打到了哪个端点"（`/v1/checkout/sessions`），
+ *      整值抹掉等于把 F12 的日志价值一起抹掉；而查询串（短链 `?t=`）与 Session id 路径段
+ *     （`/c/pay/cs_live_…`）才是凭证本体。
+ * @limitation 不是合法 URL 的字符串退回 maskText（键名叫 url 但值不是 URL 的形态不猜）。
+ */
+export function maskUrl(value: string): string {
+  let u: URL;
+  try {
+    u = new URL(value);
+  } catch {
+    return maskText(value);
+  }
+  const segments = u.pathname
+    .split('/')
+    .map((seg) => (TOKEN_LIKE_SEGMENT_RE.test(seg) ? '***' : seg));
+  return `${u.origin}${segments.join('/')}`;
+}
+
 /** 递归深度上限：防止自引用/超深对象把日志进程拖死。 */
 const MAX_DEPTH = 6;
 
@@ -263,7 +317,16 @@ export function maskText(text: string): string {
     )
     .replace(LONG_DIGITS_RE, (m) => (isCardLike(m) ? maskTail(m) : m))
     .replace(INTL_PHONE_RE, (m) => maskTail(m))
-    .replace(OPENID_RE, (m) => `${m.slice(0, 2)}***${m.slice(-2)}`);
+    .replace(OPENID_RE, (m) => `${m.slice(0, 2)}***${m.slice(-2)}`)
+    .replace(CREDENTIAL_TEXT_RE, (m) => {
+      // 保留可辨识的前缀（`sk_live_` / `Bearer ` / `eyJ`），值本体抹掉：排障要知道"是哪一类凭证漏了"
+      const head = m.startsWith('Bearer')
+        ? 'Bearer '
+        : m.startsWith('eyJ')
+          ? 'eyJ'
+          : m.replace(/(_(live|test)_|_)[A-Za-z0-9]+$/, '$1');
+      return `${head}***`;
+    });
 }
 
 /**
@@ -340,6 +403,8 @@ function maskByClass(cls: SensitiveClass, value: unknown): unknown {
       return typeof value === 'string' ? `${value[0] ?? ''}***` : '***';
     case 'identifier':
       return maskIdentifier(value);
+    case 'url':
+      return typeof value === 'string' ? maskUrl(value) : '***';
   }
 }
 

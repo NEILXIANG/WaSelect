@@ -189,9 +189,17 @@ export function stripeEvent(
  * @param secret endpoint 密钥（`whsec_...`）
  * @param t unix 秒；不传用当前时间。**造"迟到回调"样本时传一个过去的时间。**
  */
-export function signStripePayload(body: string, secret: string, t?: number): string {
+export function signStripePayload(body: string | Buffer, secret: string, t?: number): string {
   const timestamp = t ?? Math.floor(Date.now() / 1000);
-  const digest = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+  // 按**字节**拼接（与官方口径一致）：body 是 Buffer 时不能先转字符串再拼，否则非法 UTF-8 会被替换
+  const digest = createHmac('sha256', secret)
+    .update(
+      Buffer.concat([
+        Buffer.from(`${timestamp}.`, 'utf8'),
+        Buffer.isBuffer(body) ? body : Buffer.from(body, 'utf8'),
+      ]),
+    )
+    .digest('hex');
   return `t=${timestamp},v1=${digest}`;
 }
 

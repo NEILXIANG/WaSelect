@@ -51,20 +51,28 @@ export function createEventBus(logger: Logger): EventBus {
     return created;
   };
 
+  const logFailed = (event: DomainEvent, e: unknown): void => {
+    // 关键：单个订阅者失败只记日志，不冒泡、不中断其余订阅者。
+    // ⚠️ 领域事件名不能写成 `event:`——logger 会把调用点的 `event` 键**静默丢弃**
+    //    （logger.ts 的 SILENT_DROP_KEYS，缺陷 #6 确立的行为），写进去等于没写。
+    //    所以放进 ctx，检索时用 `domain_event = order.created` 找。
+    logger.error(SUBSCRIBER_FAILED, {
+      order_id: event.orderId,
+      result: 'subscriber_threw',
+      err: e instanceof Error ? e.message : String(e),
+      ctx: { domain_event: event.name, at: event.at },
+    });
+  };
+
   const dispatchOne = (event: DomainEvent, handler: EventHandler): void => {
     try {
-      handler(event);
+      const r: unknown = handler(event);
+      // 三审 P2-1：async 订阅者的 rejection 不走 try/catch——不接住就逃到进程级
+      //    unhandledRejection（N25 → fatal + 停机）。这里"发后不等"：publish 仍是同步语义，
+      //    只是把 rejection 收敛成同一条 subscriber_failed 日志。
+      if (r instanceof Promise) r.catch((e: unknown) => logFailed(event, e));
     } catch (e) {
-      // 关键：单个订阅者失败只记日志，不冒泡、不中断其余订阅者。
-      // ⚠️ 领域事件名不能写成 `event:`——logger 会把调用点的 `event` 键**静默丢弃**
-      //    （logger.ts 的 SILENT_DROP_KEYS，缺陷 #6 确立的行为），写进去等于没写。
-      //    所以放进 ctx，检索时用 `domain_event = order.created` 找。
-      logger.error(SUBSCRIBER_FAILED, {
-        order_id: event.orderId,
-        result: 'subscriber_threw',
-        err: e instanceof Error ? e.message : String(e),
-        ctx: { domain_event: event.name, at: event.at },
-      });
+      logFailed(event, e);
     }
   };
 

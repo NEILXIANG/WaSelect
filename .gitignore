@@ -13,6 +13,8 @@ build/
 
 # ── 小程序构建产物 ──
 miniprogram/miniprogram_npm/
+# 微信开发者工具的**个人**配置（含本机路径、编译偏好；官方明确建议不入库）。三审 P3。
+miniprogram/project.private.config.json
 
 # ── 生成物（scripts/gen-admin-tokens.ts；颜色真源在 packages/shared）──
 admin-web/src/tokens.css

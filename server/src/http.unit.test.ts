@@ -920,16 +920,33 @@ describe('错误归类：解析错误 vs 服务端 bug', () => {
   });
 
   it('请求体超限同样是客户端问题：warn 而非 error', async () => {
-    const { baseUrl, sink } = await serve();
-    await fetch(`${baseUrl}/healthz`, {
+    // 三审变异 U34：旧写法只断言"有一条 request_rejected warn"——把限额改成 10MB 后
+    //    请求因 404 同样产生一条 request_rejected，用例照绿（同义反复）。
+    //    必须钉住的是**限额本身**：120KB 的合法 JSON 打到一条真实存在的路由 → 40001 + 超限原因。
+    const { baseUrl, sink } = await serve((app) => {
+      app.post('/echo', (_req, res) => {
+        res.json({ ok: true });
+      });
+    });
+    const res = await fetch(`${baseUrl}/echo`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ pad: 'x'.repeat(120 * 1024) }),
     });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ code: 40001 });
     expect(sink.find('unhandled_error')).toHaveLength(0);
     const rejected = sink.find('request_rejected');
     expect(rejected).toHaveLength(1);
     expect(rejected[0]?.level).toBe('warn');
+    expect(rejected[0]?.reason).toMatchObject({ reason: '请求体超过大小上限' });
+    // 限额之内的同路由请求必须放行（防止把限额改得过小也全绿）
+    const ok = await fetch(`${baseUrl}/echo`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pad: 'x'.repeat(50 * 1024) }),
+    });
+    expect(ok.status).toBe(200);
   });
 
   it('业务代码抛的 SyntaxError → 50000，不能被误判成"用户传参错"', async () => {

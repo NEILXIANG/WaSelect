@@ -75,6 +75,16 @@ describe('toRateInt（汇率 ×1e8 整数化）', () => {
     expect(() => toRateInt('abc')).toThrow(RangeError);
     expect(() => toRateInt(2_000_000)).toThrow(RangeError);
   });
+
+  /**
+   * 三审 P3-6：0 与负汇率必须在**唯一换算入口**被拒。`toRateInt(0)` → 0，`toMinor(180000, 0)` → 0：
+   * 一条坏汇率行（管理员误填 0 / 负数）会让全站按 0 元收款，而 `money()` 只看整数性。
+   */
+  it('0 与负汇率拒绝（一条坏汇率行不能让全站按 0 元收款）', () => {
+    expect(() => toRateInt(0)).toThrow(RangeError);
+    expect(() => toRateInt('0')).toThrow(RangeError);
+    expect(() => toRateInt(-0.00676)).toThrow(RangeError);
+  });
 });
 
 describe('toMinor（唯一换算入口，整数运算）', () => {

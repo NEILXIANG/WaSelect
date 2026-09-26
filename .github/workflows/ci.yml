@@ -35,9 +35,15 @@ on:
 # 同一分支上新推送到来时，取消还在跑的旧 run。
 # @why 本仓提交节奏是"一个单元一次 commit"，连续推送时旧 run 的结果已经没有意义，
 #      留着只会占着 runner 并让 PR 上挂一串过期红灯。
+# ⚠️ 只对 PR 取消旧 run；main 上的推送**不取消**（三审 P3）：main 的每个 commit 都该留下一条
+#    完整的 gate 记录，否则连续推两次后第一个 commit 永远没有"绿/红"的结论，回溯时找不到断点。
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# 最小权限（三审 P3）：gate 只读仓库，不发布、不写 PR；默认 token 权限过宽是供应链事故的常见入口。
+permissions:
+  contents: read
 
 jobs:
   gate:
@@ -70,8 +76,10 @@ jobs:
       # DATABASE_URL：test/db/test-db.ts 会由它推导出 japan_shop_test（换库名）与
       #   管理库 postgres（换库名）。所以这里指向 postgres 库即可，不要手填 _test 库名。
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
-      # JWT_SECRET：config.ts 要求 >=32 字符。CI 上用一次性随机值，
-      #   不设固定值——固定等于把一把（虽然是测试的）密钥写进公开仓库的历史里。
+      # JWT_SECRET：config.ts 要求 >=32 字符。这是一个**公开的、只在 CI 进程内存活的占位值**，
+      #   不是密钥：它签出的 token 只能被同一次 CI 里的进程接受，任何生产环境都不用它。
+      #   ⚠️ 之前的注释写"用一次性随机值"与实际不符（三审 P3 注释失真）——随机值会让
+      #   失败用例不可复现，固定占位值反而是正确选择；真正的红线是"生产绝不复用这个值"。
       JWT_SECRET: ci-only-not-a-real-secret-0123456789abcdef
       TERMS_VERSION: TOS-CI-1
 

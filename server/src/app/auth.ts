@@ -136,6 +136,9 @@ export async function verifyToken(
       // 注：jose 本身就不实现 alg=none（unsecured JWT），所以这不是唯一防线，是纵深防御——
       // 保留它的真正理由是"换库或换人时不会悄悄失去这道约束"。
       algorithms: ['HS256'],
+      // 三审 S3：exp / iat 必须存在——签发侧总带，但校验侧不强制的话，任何一次漏写
+      //（未来的脚本、另一条签发路径）就是一枚永久有效的 token。
+      requiredClaims: ['exp', 'iat'],
     }));
   } catch {
     throw new AppError(40101);

@@ -38,6 +38,44 @@ export const COUNTRY = ['JP', 'US'] as const;
 export type Country = (typeof COUNTRY)[number];
 
 /**
+ * 商品合规标签（与 api-contract `ProductInput.compliance_tags` 的 11 值枚举逐字一致；
+ * `scripts/check-contract.mjs` 做双向集合比对）。
+ *
+ * @why 三审 B5：它是上架拦截的判定依据（D-42 / D-45 / D-51，见 BLOCKED_COMPLIANCE_TAG），
+ *      此前只存在于契约文本里、shared 没有常量——I1 写校验时只能在路由里手抄字符串，
+ *      拼错一个（`quasi-drug`）就是一条"合规拦截静默失效"。
+ */
+export const COMPLIANCE_TAG = [
+  'liquid',
+  'battery',
+  'cosmetic',
+  'food',
+  'flammable',
+  'aerosol',
+  'electrical',
+  'quasi_drug',
+  'sunscreen',
+  'children_product',
+  'alcohol',
+] as const;
+export type ComplianceTag = (typeof COMPLIANCE_TAG)[number];
+
+/**
+ * 上架即拒（40001）的标签：航空禁寄（flammable / aerosol，D-42）、MVP 不上电器（electrical，D-45）、
+ * 美国 FDA 口径属 OTC 药品（quasi_drug / sunscreen）、CPSIA（children_product）、酒类免许（alcohol）（D-51）。
+ * liquid / battery / cosmetic / food 只是**标记**（影响运输与申报），不拦。
+ */
+export const BLOCKED_COMPLIANCE_TAG = [
+  'flammable',
+  'aerosol',
+  'electrical',
+  'quasi_drug',
+  'sunscreen',
+  'children_product',
+  'alcohol',
+] as const satisfies readonly ComplianceTag[];
+
+/**
  * 前端订单展示分组（技术文档 §1 末尾的映射）。
  * @tradeoff 放在 shared 而非前端：管理后台与小程序要显示同一套标签，避免两处文案漂移。
  */

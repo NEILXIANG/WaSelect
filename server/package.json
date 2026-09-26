@@ -13,5 +13,8 @@
     "postgres": "^3.4.9",
     "zod": "^4.6.5"
   },
-  "//": "依赖以**本包实际 import** 为准：pino 之前只在根 package.json 里声明（靠 workspaces 提升才可用），npm ci 在只装本包时会缺。node-pg-migrate 是迁移 CLI，属于工具链，声明在根 devDependencies。"
+  "devDependencies": {
+    "@types/express": "^5.0.6"
+  },
+  "//": "依赖以**本包实际 import** 为准：pino 之前只在根 package.json 里声明（靠 workspaces 提升才可用），npm ci 在只装本包时会缺。node-pg-migrate 是迁移 CLI，属于工具链，声明在根 devDependencies。 @types/express 也放在本包（三审 P3）：它是 express 的类型伴生包，根上只放工具链。"
 }

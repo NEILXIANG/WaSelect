@@ -268,9 +268,9 @@ describe('迁移本身', () => {
     ).map((r) => r.tablename);
     // 13（001）+ 2（002 的 user_events / admin_audit，ADR-29 流 B/C 落点）
     // + 1（003 的 webhook_events）+ 1（007 的 country_profiles，F11 单元④）= 17。
-    // ⚠️ 技术文档 v0.5 §3 仍写"13 张表"；ADR-28 写"13 → 17（新增四张）"，
-    //    那份推演的基准是它成文时的 13 张。两者都与当前实际不符，
-    //    统一口径以本断言为准，文档同步已登记在 docs/地基搭建清单.md 的欠账里。
+    // ✅ 文档侧已同步（2026-09-25，欠账⑬关闭）：jp 技术文档 §3 标题与新增的 §3.1（迁移 002–009 增量）、
+    //    工程框架文档、PRD §5、jp README 的"13 张表"全部改为 17，并注明**真源是本断言、不是文档**。
+    //    ADR-28 写"13 → 17（新增四张）"那份推演的基准是它成文时的 13 张，现以本断言为准。
     //    ADR-28 四张新增中已落地 1 张（country_profiles），
     //    余下 duty_rates / payment_channels / app_config 属 I1（P1），全部落地后是 20 张。
     expect(tables).toHaveLength(17);
@@ -285,6 +285,26 @@ describe('迁移本身', () => {
   it('job_runs 有 seed（否则看门狗永远读不到心跳）', async () => {
     const rows = await db`select name from job_runs order by name`;
     expect(rows.map((r) => r.name)).toEqual(['daily', 'tick']);
+  });
+
+  /**
+   * 三审 P3-2：003 的 `idx_webhook_events_pending` 与 005 的 `idx_webhook_events_unfinished`
+   * 定义逐字相同（`(provider, processed_at) WHERE processed_at IS NULL`）——每次 claim/finish/release
+   * 都多维护一份索引。009 删掉重复的一份；本用例作为通用不变量守住"同表不得有定义相同的两个索引"。
+   */
+  it('同一张表上不得存在定义完全相同的两个索引（009 之后 webhook_events 只剩一份待处理索引）', async () => {
+    const rows = await db`
+      select tablename, regexp_replace(indexdef, 'INDEX \S+ ON', 'INDEX ? ON') as def, count(*)::int as n
+      from pg_indexes
+      where schemaname = 'public'
+      group by tablename, def
+      having count(*) > 1
+    `;
+    expect(rows).toEqual([]);
+    const names = await db`
+      select indexname from pg_indexes where schemaname = 'public' and tablename = 'webhook_events'
+    `;
+    expect(names.map((r) => r.indexname)).not.toContain('idx_webhook_events_pending');
   });
 
   it('orders.terms_version 列宽已加宽（008：条款改一版不该撑爆建单路径）', async () => {
@@ -315,6 +335,20 @@ describe('002 加固：约束真的会拦', () => {
       db`insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, fx_snapshot, address_snapshot, terms_version, expires_at)
          values ('o-1', '260923-K7Q2MN', 'u-1', 'payed', 100, 100, '{}', '{}', 'TOS', now())`,
     ).rejects.toThrow(/orders_status_domain/);
+  });
+
+  it('payments.status 写入未登记状态被拒（009 payments_status_domain；三审 P3-C1）', async () => {
+    await ensureUser();
+    await db`insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, fx_snapshot, address_snapshot, terms_version, expires_at)
+      values ('o-ps', '260925-PSDOM1', 'u-1', 'created', 100, 100, '{}', '{}', 'TOS', now())`;
+    await expect(
+      db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+         values ('pay-ps', 'o-ps', 'mock', 'paid', 'JPY', 100)`,
+    ).rejects.toThrow(/payments_status_domain/);
+    for (const [i, st] of ['initiated', 'succeeded', 'failed', 'cancelled', 'refunded'].entries()) {
+      await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+         values (${`pay-ps-${i}`}, 'o-ps', ${`p${i}`}, ${st}, 'JPY', 100)`;
+    }
   });
 
   it('orders.status 写入 10 个登记状态都通过（约束没有误伤合法值）', async () => {
@@ -432,10 +466,13 @@ describe('002 加固：约束真的会拦', () => {
  * @limitation 豁免名单必须**逐条写原因**。没有原因的豁免会让这个机制在几张表之后失效。
  */
 describe('结构不变量：对新表自动生效', () => {
-  /** 豁免：契约（api-contract.yaml）尚未枚举这两个状态域。等 0.6 补枚举后加约束并从这里移除。 */
+  /**
+   * 豁免必须逐条写原因。`payments.status` 曾以"契约未枚举"为由豁免——三审指出技术文档 §3
+   * 早已枚举五个取值（且 001 的部分唯一索引依赖 `'initiated'`），理由不成立，009 已补约束并移出名单。
+   */
   const STATUS_EXEMPT: Readonly<Record<string, string>> = {
-    'payments.status': '契约未枚举该状态域；编一套取值会在契约补全后开始误拒合法数据',
-    'shipments.status': '同上',
+    'shipments.status':
+      '技术文档 §3 只给了 DEFAULT created、未枚举取值集合（轨迹状态随承运商 P1 接入再定）；编一套取值会在口径定下后误拒合法数据',
     'order_events.status':
       '审计快照：CHECK 作用于全部历史行，一旦将来收敛状态枚举就会立刻违反约束，反而让枚举无法演进',
   };

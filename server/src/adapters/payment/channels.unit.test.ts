@@ -264,6 +264,31 @@ describe('buildPaymentRegistry：通道下线语义（二次审查 P1-NEW-1）',
   });
 });
 
+describe('buildPaymentRegistry：生产环境的 mock 门（三审 S1）', () => {
+  /**
+   * 第二道防线：config 规则 1b 已拒绝"生产残留 mock 密钥"，但装配层不能只信配置层——
+   * 若将来有人放宽规则 1b（例如为了"保留审核期在途订单"），mock 在生产也**绝不能**因为
+   * 密钥存在就注册。生产只有"列出 + REVIEW_MODE=on"这一条路（规则 1 保证）。
+   */
+  it('生产 + 未列出 mock + 残留密钥 → 不注册 mock（不靠配置层单点）', () => {
+    const c = loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://app@db.internal:5432/japan_shop',
+      PAYMENT_CHANNELS: 'stripe',
+      STRIPE_SECRET_KEY: 'sk_live_x',
+      STRIPE_WEBHOOK_SECRET: 'whsec_x',
+      CHECKOUT_BASE_URL: 'https://checkout.example.com',
+      CORS_ORIGINS: 'https://admin.example.com',
+    });
+    // 绕过配置层（模拟规则 1b 被放宽）：直接注入残留密钥
+    const a = buildPaymentRegistry({ ...c, MOCK_CALLBACK_SECRET: 'left-over' }, deps());
+    expect(a.registered).toEqual(['stripe']);
+    expect(a.offline).toEqual([]);
+    expectChannelError(() => a.registry.getForCallback('mock'), 'channel_not_configured');
+  });
+});
+
 describe('buildPaymentRegistry：未实现的通道与未知通道', () => {
   it('wechat 配置了但没有工厂 → 静默跳过（@limitation 二），其它通道不受影响', async () => {
     const c = loadConfig({ ...baseEnv, PAYMENT_CHANNELS: 'mock,wechat' });

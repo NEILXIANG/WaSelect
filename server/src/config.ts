@@ -71,13 +71,24 @@ function int(defaultValue: number, min?: number) {
   );
 }
 
-/** 可选整数：空串 / 缺失 → undefined（用于"不设置即关闭该功能"的开关，如包邮阈值）。 */
-function optionalInt() {
+/**
+ * 可选整数：空串 / 缺失 → undefined（用于"不设置即关闭该功能"的开关，如包邮阈值）。
+ * @param min 下限（三审）：`FREE_SHIPPING_JPY=0` / 负数会变成"全场包邮"，与"留空 = 不包邮"
+ *            的语义相撞——开关要么关（留空），要么是一个正阈值。
+ */
+function optionalInt(min = 1) {
   return z.preprocess(
     (v) => (v === undefined || v === '' ? undefined : Number(v)),
-    z.number().int().optional(),
+    z.number().int().min(min).optional(),
   );
 }
+
+/**
+ * 单笔订单上限的硬顶（D-42）：¥200,000 是出口申报阈值——单件邮件 ≤ ¥200,000 免出口申报，
+ * 超过要走正式报关。`MAX_ORDER_JPY` 配得比它高，等于让每一张大单都触发报关（三审业务一致性）。
+ * 与 Zonos 预付上限（$2,500）无关：那是币种换算后的另一条线，由 I1 建单按汇率判定。
+ */
+const EXPORT_DECLARATION_THRESHOLD_JPY = 200_000;
 
 /** 可选字符串：空串 → undefined（`.env.example` 里 `APP_ID=` 是占位，不是空字符串值）。 */
 function optionalText() {
@@ -242,7 +253,14 @@ const schema = z.object({
   /** 包邮阈值（整数円）；空 = 不包邮。 */
   FREE_SHIPPING_JPY: optionalInt(),
   /** 单笔上限（D-42）：低于 ¥200,000 出口申报阈值与 Zonos 预付上限；超出 → 40906。 */
-  MAX_ORDER_JPY: int(180000, 1),
+  MAX_ORDER_JPY: int(180000, 1).pipe(
+    z
+      .number()
+      .max(
+        EXPORT_DECLARATION_THRESHOLD_JPY - 1,
+        `MAX_ORDER_JPY 必须低于 ¥${EXPORT_DECLARATION_THRESHOLD_JPY}（出口申报阈值，D-42）`,
+      ),
+  ),
   /** 包材自重（D-42）。下限 1：0 克在业务上无意义，且会让运费向下取错档（D-46 同源的方向性错误）。 */
   PACKAGING_WEIGHT_G: int(250, 1),
 
@@ -382,6 +400,17 @@ const crossField = schema.superRefine((c, ctx) => {
     );
   }
 
+  // 1b. 生产**未列出** mock 却残留 MOCK_CALLBACK_SECRET（三审 S1）：装配层"凭据在即注册"的
+  //     下线语义对 mock 是反向的——审核期结束后残留的密钥 = 伪造"支付成功"回调的门一直开着，
+  //     而落账不核对"订单属于哪个通道"，持有该密钥者能把任意真实订单置 paid。
+  //     mock 在生产只有"列出 + REVIEW_MODE=on"这一条合法路（规则 1）；其余一律拒启。
+  if (isProd && !c.PAYMENT_CHANNELS.includes('mock') && c.MOCK_CALLBACK_SECRET !== undefined) {
+    add(
+      'MOCK_CALLBACK_SECRET',
+      '生产环境未启用 mock 通道却配置了 MOCK_CALLBACK_SECRET（审核期残留）：mock 的回调门在生产不得保留，请删除该变量',
+    );
+  }
+
   // 2. 审核模式必须指定 SKU，否则所有商品都不能用 mock 下单，等于审核期全站不可用
   if (c.REVIEW_MODE === 'on' && c.REVIEW_SKU_ID === undefined) {
     add('REVIEW_SKU_ID', 'REVIEW_MODE=on 时必须指定 REVIEW_SKU_ID（否则审核期没有任何商品可下单）');
@@ -469,10 +498,20 @@ const crossField = schema.superRefine((c, ctx) => {
     //    都能绕过 `/(localhost|127\.0\.0\.1)/` 这类字面匹配。
     try {
       const host = new URL(c.DATABASE_URL).hostname.toLowerCase();
-      if (host === 'localhost' || host === '::1' || host === '[::1]' || host.startsWith('127.')) {
+      // `0.0.0.0` / `[::]` 作为连接目标会被内核路由到本机（@measured: node `net.connect({host:'0.0.0.0'})`
+      // 连上的是 127.0.0.1 上的监听）——三审链路补盲发现它不在名单里，与 test-db.ts 闸门对齐补上
+      const isLocal =
+        host === 'localhost' ||
+        host === '::1' ||
+        host === '[::1]' ||
+        host === '::' ||
+        host === '[::]' ||
+        host === '0.0.0.0' ||
+        host.startsWith('127.');
+      if (isLocal) {
         add(
           'DATABASE_URL',
-          '生产环境的 DATABASE_URL 不得指向本机（localhost / 127.x / ::1；漏配环境变量的典型症状）',
+          '生产环境的 DATABASE_URL 不得指向本机（localhost / 127.x / ::1 / 0.0.0.0 / ::；漏配环境变量的典型症状）',
         );
       }
     } catch {

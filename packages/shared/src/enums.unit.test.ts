@@ -3,7 +3,15 @@
  * @see 技术文档 v0.5 §1；docs/地基搭建清单.md F2
  */
 import { describe, expect, it } from 'vitest';
-import { COUNTRY, CURRENCY, ORDER_STATUS, ORDER_STATUS_DISPLAY, PAYMENT_CHANNEL } from './enums.js';
+import {
+  BLOCKED_COMPLIANCE_TAG,
+  COMPLIANCE_TAG,
+  COUNTRY,
+  CURRENCY,
+  ORDER_STATUS,
+  ORDER_STATUS_DISPLAY,
+  PAYMENT_CHANNEL,
+} from './enums.js';
 
 describe('订单状态', () => {
   it('恰好 10 个状态，与技术文档 §1 一致', () => {
@@ -41,5 +49,15 @@ describe('通道 / 币种 / 国家', () => {
 
   it('MVP 国家为 JP（原产）与 US（目的）', () => {
     expect([...COUNTRY]).toEqual(['JP', 'US']);
+  });
+
+  it('合规标签 11 个（与契约 ProductInput.compliance_tags 一致，由 check-contract 双向比对）；拦截 7 个是其子集', () => {
+    expect(COMPLIANCE_TAG).toHaveLength(11);
+    expect(BLOCKED_COMPLIANCE_TAG).toHaveLength(7);
+    for (const t of BLOCKED_COMPLIANCE_TAG) expect(COMPLIANCE_TAG).toContain(t);
+    // 只标记不拦截的四个（运输与申报属性，不是禁售）
+    for (const t of ['liquid', 'battery', 'cosmetic', 'food']) {
+      expect(BLOCKED_COMPLIANCE_TAG).not.toContain(t);
+    }
   });
 });

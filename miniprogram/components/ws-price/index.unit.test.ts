@@ -3,8 +3,8 @@
  *
  * @why 只测 `price-format.js` 是不完整的：它证明不了"组件真的把它接上了"。
  *      组件这一层有它自己的失效形态，而且**都不报错**：
- *        ① **忘了接格式化**：wxml 里直接写 `¥{{jpy}}` → 没有千分位，看起来"也还行"；
- *        ② **加了兜底**：漏传价格时显示 `¥0` → 用户以为免费；
+ *        ① **忘了接格式化**：wxml 里直接写 `{{jpy}} 円` → 没有千分位，看起来"也还行"；
+ *        ② **加了兜底**：漏传价格时显示 `0 円` → 用户以为免费；
  *        ③ **属性名漂移**：页面传 `price` 而组件收 `jpy` → 一直是空，且不报错。
  *      这三条只有"渲染真组件 + 断言真实 DOM"能抓到。
  *
@@ -69,17 +69,17 @@ function renderedClass(comp: ReturnType<typeof render>): string {
 
 describe('ws-price：渲染真实组件文件', () => {
   it('传 jpy → DOM 里是格式化后的文案（千分位真的接上了）', () => {
-    // @why 断言"等于 formatJpy 的结果"而不是硬写 '¥1,234'：
+    // @why 断言"等于 formatJpy 的结果"而不是硬写 '1,234 円'：
     //      硬写等于把格式抄第二遍，改格式时要改两个地方；用真函数对照则只钉"组件接上了格式化"。
     const comp = render({ jpy: 1234 });
     expect(comp.dom.textContent).toBe(formatJpy(1234));
-    expect(comp.dom.textContent).toBe('¥1,234');
+    expect(comp.dom.textContent).toBe('1,234 円');
   });
 
   it('wxml 里**没有**自己拼货币符号（组件不得绕过格式化）', () => {
     const comp = render({ jpy: 1234 });
-    // 若 wxml 写成 `¥{{jpy}}`，数值不会被格式化，也不会带千分位
-    expect(comp.dom.textContent).not.toBe('¥1234');
+    // 若 wxml 写成 `{{jpy}} 円`，数值不会被格式化，也不会带千分位
+    expect(comp.dom.textContent).not.toBe('1234 円');
   });
 
   it('尺寸档位反映到 class 上（不是行内样式）', () => {
@@ -94,34 +94,34 @@ describe('ws-price：渲染真实组件文件', () => {
 
   it('属性变化后文案跟着变（observers 真的接上了）', () => {
     const comp = render({ jpy: 1 });
-    expect(comp.dom.textContent).toBe('¥1');
+    expect(comp.dom.textContent).toBe('1 円');
     comp.instance.setData({ jpy: 98765 });
-    expect(comp.dom.textContent).toBe('¥98,765');
+    expect(comp.dom.textContent).toBe('98,765 円');
   });
 
   it('负数（退款 / 折扣）也正常渲染', () => {
-    expect(render({ jpy: -1234 }).dom.textContent).toBe('-¥1,234');
+    expect(render({ jpy: -1234 }).dom.textContent).toBe('-1,234 円');
   });
 });
 
-describe('ws-price：漏传价格不能显示 ¥0', () => {
+describe('ws-price：漏传价格不能显示 0 円', () => {
   /**
    * @why 生命周期里的异常会被小程序框架的 `safeCallback` 捕获并打到控制台，
    *      **不会**冒泡到调用方。所以"响亮失败"的可断言形态是
    *      「渲染空白 + 控制台一条明确报错」，而不是"抛异常"。
    *      ⚠️ 这一点是实测出来的（我第一版断言 `render()` 抛错，全红）。
    */
-  it('⚠️ 不传 jpy → 渲染**空白**，且控制台有明确报错（不是 ¥0）', () => {
+  it('⚠️ 不传 jpy → 渲染**空白**，且控制台有明确报错（不是 0 円）', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const comp = render({});
-      // 这一条是本组件最贵的性质：`¥0` 会被用户读成"免费"
+      // 这一条是本组件最贵的性质：`0 円` 会被用户读成"免费"
       expect(comp.dom.textContent).toBe('');
       const logged = spy.mock.calls
         .flat()
         .map((c) => String(c))
         .join('\n');
-      expect(logged).toMatch(/金额必须是有限数/);
+      expect(logged).toMatch(/金额必须是整数円/);
     } finally {
       spy.mockRestore();
     }
@@ -142,7 +142,7 @@ describe('ws-price：漏传价格不能显示 ¥0', () => {
 describe('ws-price：非法尺寸档位不能静默回退', () => {
   /**
    * @why `size` 直接插 class 名时，传 `xl` 的表现是"没有档位样式命中 → 悄悄落回基础字号"：
-   *      版式散掉且不报错。与漏传价格显示 `¥0` 是同一种失效形态，走同一条响亮失败通道
+   *      版式散掉且不报错。与漏传价格显示 `0 円` 是同一种失效形态，走同一条响亮失败通道
    *      （safeCallback → 渲染保持初始空态 + 控制台明确报错）。
    */
   it('⚠️ 传不存在的档位（xl）→ 报错且不产出档位 class', () => {

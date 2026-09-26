@@ -63,6 +63,19 @@ describe('种子与基本读取', () => {
     expect(us?.dutyNote).toContain('DDP');
   });
 
+  /**
+   * 三审业务一致性 A2：seed 文案曾写"价格已含关税**与运费**"，与 D-32（商品价含关税、
+   * **运费按重量分档单列**）直接相反——这段是"前端展示的关税口径文案"，接入详情页后就是
+   * 向用户承诺含运费、结算页再收运费的投诉 / 拒付证据。文案必须明确"运费单列"。
+   */
+  it('US 的 duty_note 与 D-32 一致：含关税、运费单列（不得承诺"含运费"）', async () => {
+    const us = await repo.get('US');
+    expect(us?.dutyNote).toContain('关税');
+    expect(us?.dutyNote).toContain('运费');
+    expect(us?.dutyNote).not.toMatch(/含关税与运费|含运费/);
+    expect(us?.dutyNote).toMatch(/运费.*单列|单列.*运费/);
+  });
+
   it('resetTestDb 之后种子仍在：配置表不参与清空（否则测试环境与生产不同构）', async () => {
     // @why 这条守的是 test-db.ts 的 truncate 排除名单。哪天有人把 country_profiles 加回名单，
     //      本文件里每一条"读 US"的断言都会红——但那时归因会指向"seed 没建"，
