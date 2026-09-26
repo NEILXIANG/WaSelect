@@ -33,6 +33,7 @@ import { mountPayRoutes, PAY_CALLBACK_PREFIX } from '../../server/src/app/pay-ro
 import { createWebhookStore } from '../../server/src/adapters/webhooks.js';
 import { createIdempotencyExecutor } from '../../server/src/adapters/idempotency.js';
 import { createEventBus } from '../../server/src/adapters/event-bus.js';
+import type { EventBus } from '../../server/src/ports/events.js';
 import { createPaymentRegistry } from '../../server/src/adapters/payment/registry.js';
 import { createMockProvider } from '../../server/src/adapters/payment/mock.js';
 import { createStripeCheckoutProvider } from '../../server/src/adapters/payment/stripe-checkout.js';
@@ -152,6 +153,12 @@ export async function startSkeleton(
     mockEnabled?: boolean;
     /** 提供则注册 stripe 通道（真 HMAC 验签，出站走这个替身）。 */
     stripeHttp?: HttpClient;
+    /**
+     * 在装配处追加订阅者（与生产同一条路：`registerBusinessEventLog` 之后、路由挂载之前）。
+     * @why 链路用例要验"回调 → 落账 → 提交后分发 → 订阅者失败"的接缝，订阅者必须挂在
+     *      **真实那条总线**上，而不是测试里另造一条。
+     */
+    subscribe?: (events: EventBus) => void;
   } = {},
 ): Promise<SkeletonServer> {
   const sink = new MemorySink();
@@ -166,6 +173,7 @@ export async function startSkeleton(
       // 与生产同一条装配路径：总线与订阅者都在装配处接好（不复制一份"测试专用总线"）
       const events = createEventBus(logger);
       registerBusinessEventLog(events, logger);
+      opts.subscribe?.(events);
 
       // ── 支付路由（F11 统一分发）：模拟回调走的就是真实通道那条路 ───────────
       mountPayRoutes(a, {
@@ -173,7 +181,17 @@ export async function startSkeleton(
         webhooks: createWebhookStore(db),
         logger,
         graceMs: opts.graceMs ?? 900_000,
-        apply: async (e) => markOrderPaid(db, events, fixedClock(now), e.orderId),
+        // 与生产同一条落账路径（含通道/金额核对，三审 S1② / U1）：
+        //    不在这里放宽成 `simulated`——放宽就等于让 e2e 走一条生产上不存在的路，
+        //    而"核对"这件事恰恰只有走真的那条才测得出来
+        apply: async (e, channel) =>
+          markOrderPaid(db, events, fixedClock(now), e.orderId, {
+            kind: 'provider',
+            channel,
+            providerRef: e.providerRef,
+            amountMinor: e.amountMinor,
+            currency: e.currency,
+          }),
       });
 
       // env 显式给 development：骨架在 production 下会拒绝挂载（SEC2 闸门），装配处必须回答一次

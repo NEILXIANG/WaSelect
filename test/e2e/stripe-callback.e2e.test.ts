@@ -17,6 +17,7 @@ import { createHmac } from 'node:crypto';
 import type { Db } from '../../server/src/adapters/db.js';
 import { PAY_CALLBACK_PREFIX } from '../../server/src/app/pay-routes.js';
 import { STRIPE_SIGNATURE_HEADER } from '../../server/src/adapters/payment/stripe-checkout.js';
+import { recordPaymentIntent } from '../../server/src/app/payment-intent.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
 import { createFakeStripeHttp } from '../helpers/fake-stripe-http.js';
 import {
@@ -46,6 +47,14 @@ function stripeHeader(raw: string, tSec: number = T_SEC): string {
   return `t=${tSec},v1=${v1}`;
 }
 
+/** 同上，但对**原始字节**签名（报文含非法 UTF-8 时字符串版会把字节替换成 U+FFFD，签的就不是发的）。 */
+function stripeHeaderBytes(raw: Buffer, tSec: number = T_SEC): string {
+  const v1 = createHmac('sha256', E2E_STRIPE_WHSEC)
+    .update(Buffer.concat([Buffer.from(`${tSec}.`, 'utf8'), raw]))
+    .digest('hex');
+  return `t=${tSec},v1=${v1}`;
+}
+
 function sessionCompleted(orderId: string, paymentStatus: string, eventId: string): string {
   return JSON.stringify({
     id: eventId,
@@ -64,12 +73,13 @@ function sessionCompleted(orderId: string, paymentStatus: string, eventId: strin
   });
 }
 
-function postStripe(raw: string, signature?: string): Promise<Response> {
+function postStripe(raw: string | Buffer, signature?: string): Promise<Response> {
   return fetch(`${base}${PAY_CALLBACK_PREFIX}/stripe`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      [STRIPE_SIGNATURE_HEADER]: signature ?? stripeHeader(raw),
+      [STRIPE_SIGNATURE_HEADER]:
+        signature ?? (typeof raw === 'string' ? stripeHeader(raw) : stripeHeaderBytes(raw)),
       'x-trace-id': TRACE,
     },
     body: raw,
@@ -96,6 +106,24 @@ async function orderStatus(orderId: string): Promise<string> {
   return rows[0]?.status as string;
 }
 
+/**
+ * 登记"这张单要在 Stripe 上收 120 USD（12,000 分）"（走真函数）。
+ *
+ * @why 三审 S1②：落账现在必须绑定通道与金额。这里的三个值必须与报文一致
+ *      （`amount_total: 12000` / `currency: 'usd'` / `id: 'cs_test_...'`），
+ *      ——**故意**不在测试里放宽：放宽就等于假装在验一条生产上根本不存在的路径。
+ */
+function seedStripePayment(orderId: string, sessionId = 'cs_test_e2e_1'): Promise<void> {
+  return recordPaymentIntent(db, {
+    id: `pay-${orderId}`,
+    orderId,
+    provider: 'stripe',
+    providerRef: sessionId,
+    chargeCurrency: 'USD',
+    chargeAmount: 12000,
+  });
+}
+
 beforeAll(async () => {
   await ensureTestDb();
   db = testDb();
@@ -116,6 +144,7 @@ beforeEach(async () => {
 describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', () => {
   it('checkout.session.completed(paid) → 订单置 paid，order_events 与 webhook_events 都留痕', async () => {
     const orderId = await createOrder('key-stripe-paid');
+    await seedStripePayment(orderId);
     const res = await postStripe(sessionCompleted(orderId, 'paid', 'evt_e2e_paid'));
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ received: true, order_id: orderId });
@@ -129,6 +158,44 @@ describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', ()
     // result 口径见 ports/webhooks.ts：成功落账写 'paid'（重复回调则是 'paid:already'）
     expect(logged[0]?.result).toBe('paid');
     expect(logged[0]?.provider).toBe('stripe');
+    // 接缝：paid_at 来自装配处注入的时钟（E2E_NOW），不是 SQL now()——
+    // 行时间、order_events.at 与领域事件三者同源（三审 mark-paid 修正的链路级证明）
+    const paid = await db`select paid_at from orders where id = ${orderId}`;
+    expect((paid[0]?.paid_at as Date).toISOString()).toBe(E2E_NOW);
+    const evt =
+      await db`select at from order_events where order_id = ${orderId} and status = 'paid'`;
+    expect((evt[0]?.at as Date).toISOString()).toBe(E2E_NOW);
+  });
+
+  it('报文含 \\u 转义与多字节日文，签名按发出的原始字节 → 200 落账（rawBody 必须是真字节，不能是 JSON 重序列化）', async () => {
+    // @why `JSON.stringify(JSON.parse(body))` 会把 `\u30c6` 展开成原字符、丢掉空白——重序列化后的
+    //      字节与机构签的不同，验签必然失败。这条钉住的是 http 层 rawBody 中间件与适配器验签的接缝。
+    const orderId = await createOrder('key-stripe-bytes');
+    await seedStripePayment(orderId, 'cs_test_e2e_bytes');
+    const raw =
+      '{ "id": "evt_e2e_bytes", "type": "checkout.session.completed",  "data": { "object": {' +
+      '"object": "checkout.session", "id": "cs_test_e2e_bytes", "payment_status": "paid",' +
+      '"amount_total": 12000, "currency": "usd", "customer_details": { "name": "\\u30c6\\u30b9\\u30c8 太郎" },' +
+      `"metadata": { "order_id": "${orderId}" }, "payment_intent": "pi_e2e_bytes" } } }`;
+    const res = await postStripe(Buffer.from(raw, 'utf8'));
+    expect(res.status).toBe(200);
+    expect(await orderStatus(orderId)).toBe('paid');
+  });
+
+  it('原始字节含非法 UTF-8（签名按字节正确）→ 40001 坏报文，而不是 40103 验签失败；零留痕', async () => {
+    // @why 三审 S4：验签若先 `toString('utf8')` 再 HMAC，非法字节被换成 U+FFFD → 签名不匹配 → 40103，
+    //      排障方向就错了（以为密钥错）。按字节验签后，坏的只是 JSON，应落 40001（4xx，机构不必重试）。
+    const orderId = await createOrder('key-stripe-badutf8');
+    const raw = Buffer.concat([
+      Buffer.from(sessionCompleted(orderId, 'paid', 'evt_e2e_badutf8'), 'utf8'),
+      Buffer.from([0xff]),
+    ]);
+    const res = await postStripe(raw);
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ code: 40001 });
+    expect(await orderStatus(orderId)).toBe('created');
+    const logged = await db`select event_id from webhook_events where event_id = 'evt_e2e_badutf8'`;
+    expect(logged.length).toBe(0);
   });
 
   it('completed 但 payment_status=unpaid（异步支付未完成）→ 2xx 收下但**不落账**（P2-NEW-1）', async () => {
@@ -196,5 +263,60 @@ describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', ()
     const logged = await db`select result from webhook_events where event_id = 'evt_e2e_dispute'`;
     expect(logged[0]?.result).toBe('ignored:disputed');
     expect(await orderStatus(orderId)).toBe('created');
+  });
+});
+
+/**
+ * 接缝：回调 → 落账（事务提交）→ 提交后分发 → **async 订阅者失败**。
+ * @why 三审 P2-1：`EventHandler` 原先只捕获同步异常，async 订阅者的 rejection 逃出总线后
+ *      被进程级 unhandledRejection 当"漏 catch 的 bug"→ fatal 停机。单测钉住了总线本身；
+ *      这里证明的是**整条链**：HTTP 回调照样 2xx、订单照样 paid、失败只记一行日志、进程不退出。
+ */
+describe('提交后分发：async 订阅者失败不影响回调与落账（三审 P2-1 链路级证明）', () => {
+  let srv: SkeletonServer;
+  const savedBase = () => base;
+  let previousBase = '';
+  let calls = 0;
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+
+  beforeAll(async () => {
+    previousBase = savedBase();
+    srv = await startSkeleton(db, {
+      stripeHttp: fakeStripe,
+      subscribe: (events) => {
+        // 典型形态：通知 / 发货指令这类网络调用天然是 async；失败时它抛的是 rejected Promise
+        events.subscribe('order.paid', async () => {
+          calls += 1;
+          await Promise.resolve();
+          throw new Error('notify-service-down');
+        });
+      },
+    });
+    base = srv.base;
+    process.on('unhandledRejection', onUnhandled);
+  }, 30_000);
+
+  afterAll(async () => {
+    process.off('unhandledRejection', onUnhandled);
+    base = previousBase;
+    await srv.server.close();
+  });
+
+  it('订阅者 reject → 回调仍 200、订单 paid、记 domain_event_subscriber_failed、无 unhandledRejection', async () => {
+    const orderId = await createOrder('key-stripe-async-sub');
+    await seedStripePayment(orderId);
+    const res = await postStripe(sessionCompleted(orderId, 'paid', 'evt_e2e_async_sub'));
+    expect(res.status).toBe(200);
+    expect(await orderStatus(orderId)).toBe('paid');
+    expect(calls).toBe(1);
+    // rejection 是异步到达的：让微任务与 unhandledRejection 的投递窗口都走完
+    await new Promise((r) => setTimeout(r, 50));
+    const failed = srv.sink.find('domain_event_subscriber_failed');
+    expect(failed.length).toBe(1);
+    expect(JSON.stringify(failed[0])).toContain('notify-service-down');
+    expect(unhandled).toEqual([]);
   });
 });

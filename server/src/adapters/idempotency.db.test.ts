@@ -232,6 +232,27 @@ describe('请求指纹（D4）', () => {
   });
 });
 
+describe('用户命名空间（三审 P3-4：执行器自己核对 user_id，不只靠 scopeKey）', () => {
+  /**
+   * @why 安全性原本完全依赖调用方按 `scopeKey({userId,…})` 拼键。执行器手里既有 `args.userId`
+   *      又有行上的 `user_id`，却不比对——将来任何一个路由忘了 scopeKey 直接用客户端键，
+   *      就是跨用户响应重放（把别人的 order_id / order_no 原样返回）。纵深防御一行代价。
+   */
+  it('另一个用户用同一个键（同内容）→ 40908，绝不返回他人的结果', async () => {
+    const first = await exec.run({ ...args('k-shared'), request: { a: 1 } }, async () => ({
+      status: 201,
+      body: { order_no: 'W-OWNER' },
+    }));
+    expect(first.replayed).toBe(false);
+    await expect(
+      exec.run({ ...args('k-shared'), userId: 'u-2', request: { a: 1 } }, async () => ({
+        status: 201,
+        body: { order_no: 'W-INTRUDER' },
+      })),
+    ).rejects.toMatchObject({ code: 40908 });
+  });
+});
+
 describe('scopeKey', () => {
   it('按用户 + 路由 + 客户端键分作用域，避免跨用户撞键', () => {
     expect(scopeKey({ userId: 'u-1', route: 'POST /orders', clientKey: 'abc' })).toBe(
@@ -388,6 +409,28 @@ describe('租约时钟（自查发现：不得跨时钟比较）', () => {
   });
 });
 
+describe('租约续期：完成瞬间的续期不得误报易主（三审 P3-1）', () => {
+  /**
+   * @why 旧续期条件带 `completed_at is null`：handler 恰在续期 RTT 内完成时，续期命中 0 行 →
+   *      记 `idempotency_lease_renew_lost` warn，但租约从未易主。文件头把这条日志定性为
+   *      "两个持有者同时认为自己是主人"的信号，误报会把真信号淹掉。
+   *      修法：续期只以令牌为条件（对已完成行续期无害），0 行 = 令牌确实变了。
+   * @limitation 竞态窗口不可精确复现，本用例用"短租约 + handler 耗时 ≈ 续期间隔整数倍"放大命中
+   *      概率并重复多轮；修复后它是确定性绿（条件里已没有 completed_at），修复前概率性红（三审实测 3/60）。
+   */
+  it('多轮短租约执行后不出现 idempotency_lease_renew_lost', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    for (let i = 0; i < 12; i += 1) {
+      await exec.run({ ...args(`k-renew-race-${i}`), leaseMs: 150, logger }, async () => {
+        await new Promise((r) => setTimeout(r, 50 + (i % 3) * 25));
+        return { status: 200, body: { i } };
+      });
+    }
+    expect(sink.find('idempotency_lease_renew_lost')).toHaveLength(0);
+  });
+});
+
 describe('租约续期', () => {
   it('handler 超过租约时长但持续续期 → 不被接管，并发方重放同一结果', async () => {
     let executions = 0;
@@ -518,6 +561,34 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
     expect(done.body).toEqual({ done: true });
   });
 
+  /**
+   * 三审 P2-2：handler **内部**等锁超时（55P03）不得被当成"占位冲突"再跑一轮 handler。
+   * @why 旧实现把任何 55P03 都视为占位冲突 → 循环重跑 handler 直到 waitMs 耗尽（pollMs 50ms
+   *      一轮，2s 内最多 ~40 次）。事务回滚了 DB 副作用，但 handler 闭包里的内存副作用
+   *      （已 push 的领域事件、已打的"创建成功"日志、已消耗的单号）不会回滚——skeleton 正是
+   *      "executor 外收集事件再 publishAll"的形态，I1 照抄即发幽灵事件。
+   *      handler 等锁超时是它自己的独立信号，应原样抛出（→ 50000 + error 日志），且只跑一次。
+   */
+  it('handler 内部 55P03 → 原样抛出且 handler 只执行一次（不当占位冲突重跑）', async () => {
+    await db`insert into users (id, openid) values ('u-lock', 'o-lock') on conflict do nothing`;
+    // 另一连接持有 users 行锁 600ms
+    const holder = db.begin(async (tx) => {
+      await tx`select id from users where id = 'u-lock' for update`;
+      await new Promise((r) => setTimeout(r, 600));
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    let calls = 0;
+    await expect(
+      exec.runInTx({ ...txArgs('ktx-inner-lock'), waitMs: 300 }, async (tx) => {
+        calls += 1;
+        await tx`select id from users where id = 'u-lock' for update`;
+        return { status: 200, body: {} };
+      }),
+    ).rejects.toMatchObject({ code: '55P03' });
+    expect(calls).toBe(1);
+    await holder;
+  });
+
   it('同键不同内容 → 40908；键顺序不同但内容相同 → 重放', async () => {
     await exec.runInTx(txArgs('ktx-fp'), async () => ({
       status: 201,
@@ -536,6 +607,17 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
     );
     expect(replay.replayed).toBe(true);
     expect(replay.body).toEqual({ v: 1 });
+  });
+
+  it('事务模式同样核对用户：另一个用户用同键同内容 → 40908 user_mismatch（三审 P3-4）', async () => {
+    await db`insert into users (id, openid) values ('u-2', 'o-tx-2') on conflict (id) do nothing`;
+    await exec.runInTx(txArgs('ktx-user'), async () => ({ status: 201, body: { owner: 'u-1' } }));
+    await expect(
+      exec.runInTx({ ...txArgs('ktx-user'), userId: 'u-2' }, async () => ({
+        status: 201,
+        body: { owner: 'u-2' },
+      })),
+    ).rejects.toMatchObject({ code: 40908, details: { reason: 'user_mismatch' } });
   });
 });
 

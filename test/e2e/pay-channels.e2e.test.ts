@@ -17,6 +17,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from '../../server/src/adapters/db.js';
 import { PAY_CALLBACK_PREFIX, PAY_CHANNELS_PATH } from '../../server/src/app/pay-routes.js';
+import { recordPaymentIntent } from '../../server/src/app/payment-intent.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
 import {
   E2E_CALLBACK_SECRET as CALLBACK_SECRET,
@@ -82,6 +83,24 @@ async function createOrder(idempotencyKey: string): Promise<string> {
   return ((await res.json()) as { order_id: string }).order_id;
 }
 
+/** 骨架单一律 1,000 円（与 skeleton.e2e 同一口径）；回调与 payments 行必须都用它（三审 U1）。 */
+const CHARGE = { currency: 'JPY', amountMinor: 1000 };
+
+/**
+ * 登记"发起过支付"（走真函数）：三审 S1② 之后，没有 `payments` 行的订单
+ * **任何**通道的回调都不落账——这条事实必须先摆出来，否则测的就不是生产行为了。
+ */
+function seedPayment(orderId: string, provider = 'mock'): Promise<void> {
+  return recordPaymentIntent(db, {
+    id: `pay-${orderId}`,
+    orderId,
+    provider,
+    providerRef: 'cs_1',
+    chargeCurrency: CHARGE.currency,
+    chargeAmount: CHARGE.amountMinor,
+  });
+}
+
 /** 按 mock 通道的约定发一条"支付成功"回调。 */
 function payCallback(orderId: string, eventId = 'evt-1'): Promise<Response> {
   const body = JSON.stringify({
@@ -89,6 +108,8 @@ function payCallback(orderId: string, eventId = 'evt-1'): Promise<Response> {
     type: 'payment.succeeded',
     order_id: orderId,
     provider_ref: 'cs_1',
+    amount_minor: CHARGE.amountMinor,
+    currency: CHARGE.currency,
   });
   return fetch(`${base}${PAY_CALLBACK_PREFIX}/mock`, {
     method: 'POST',
@@ -145,8 +166,9 @@ describe('🔒 下线语义：入口消失，但在途回调仍要落账', () =>
    */
   it('同一条已下线通道的回调**照样置为 paid**（禁用只阻止新单）', async () => {
     await start({ mockEnabled: false });
-    // 前置：这张单是在通道下线**之前**建的（在途支付）
+    // 前置：这张单是在通道下线**之前**建的（在途支付），所以它登记过支付期望
     const orderId = await createOrder('key-disabled-channel');
+    await seedPayment(orderId);
 
     const res = await payCallback(orderId, 'evt-after-disabled');
     expect(res.status).toBe(200);

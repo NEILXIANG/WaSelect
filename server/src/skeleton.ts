@@ -245,7 +245,10 @@ export function mountSkeleton(app: Express, deps: SkeletonDeps): void {
           const orderId = paramId(req.params.id);
           // 先确认"这张单是他的"再改状态：否则这个骨架端点等于"任何人都能把别人的单改成已支付"
           await readOwnedOrder(deps.db, orderId, sub);
-          await markOrderPaid(deps.db, deps.events, deps.clock, orderId);
+          // `simulated`：没有机构参与，也就没有可核对的 `payments` 行。
+          // ⚠️ 这条路径在生产**不可达**（本文件在 production 下拒绝挂载，见文件头闸门），
+          //    所以"跳过核对"不会成为绕过落账核对的后门——真实回调只能走 main.ts 的 provider 分支
+          await markOrderPaid(deps.db, deps.events, deps.clock, orderId, { kind: 'simulated' });
           deps.logger.info('skeleton_simulate_paid', { order_id: orderId, result: 'paid' });
           res.json({ order_id: orderId, status: 'paid' });
         } catch (e) {

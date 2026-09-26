@@ -71,10 +71,10 @@ export interface PayRoutesDeps {
   /** 回调早到宽限期（毫秒）。 */
   graceMs: number;
   /**
-   * 把"支付成功"落到业务状态上。
+   * 把"支付成功"落到业务状态上。第二个参数是回调来自的通道（落账核对要用，见 pay-callback）。
    * @throws {AppError} 40400 / 40902（由管线做冲突分层）
    */
-  apply: (event: ProviderEvent) => Promise<void>;
+  apply: (event: ProviderEvent, channel: string) => Promise<void>;
 }
 
 /**

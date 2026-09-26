@@ -15,10 +15,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { parseOrderNoDate } from '@waselect/shared';
 import type { Db } from '../../server/src/adapters/db.js';
 import { PAY_CALLBACK_PREFIX } from '../../server/src/app/pay-routes.js';
+import { recordPaymentIntent } from '../../server/src/app/payment-intent.js';
 import type { MemorySink } from '../helpers/memory-sink.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
 import { stubIdGen } from '../helpers/stub-id-gen.js';
+import { SignJWT } from 'jose';
+import { AUDIENCE } from '../../server/src/app/auth.js';
 import {
+  E2E_AUTH,
   E2E_CALLBACK_SECRET as CALLBACK_SECRET,
   E2E_NOW,
   E2E_ORDER_NO_DATE,
@@ -58,14 +62,49 @@ function createOrder(token: string, idempotencyKey: string, trace = TRACE, body 
 }
 
 /**
+ * 骨架建出来的单一律是 **1,000 円**（`skeleton.ts` 写死的 fixture 金额）。
+ * 回调与 `payments` 行必须都用它——落账要核对金额（三审 U1），两边对不上就不落账。
+ */
+const CHARGE = { currency: 'JPY', amountMinor: 1000 };
+
+/**
+ * 登记"这张单要在 mock 通道上收 1,000 円"（走**真函数**，不是裸 SQL）。
+ *
+ * @why 三审 S1②：落账现在必须绑定通道与金额，而"我们原本打算怎么收钱"这条事实
+ *      只能来自发起支付时写的 `payments` 行。回调之前没有它 = 这张单从没发起过支付，
+ *      任何通道的回调都不该落账——不然"持任一通道密钥 → 给任意订单置 paid"还是通的。
+ */
+function seedPayment(orderId: string): Promise<void> {
+  return recordPaymentIntent(db, {
+    id: `pay-${orderId}`,
+    orderId,
+    provider: 'mock',
+    providerRef: `mock_cs_${orderId}`,
+    chargeCurrency: CHARGE.currency,
+    chargeAmount: CHARGE.amountMinor,
+  });
+}
+
+/**
  * 按 mock 通道的约定给回调报文签名（HMAC-SHA256 hex）。
  *
  * ⚠️ 默认补 `type: 'payment.succeeded'`：F11 之后模拟回调就是注册表里的 `mock` 通道，
  *    归一化结果由 `type` 决定——不认识的类型一律 `unknown`，**不落账**。
  *    之前骨架自己的回调把"付成功"写死在代码里，所以报文不需要带类型；现在必须带。
+ * ⚠️ 默认也补 `amount_minor` / `currency`：落账要拿它们与 `payments` 行对（三审 U1），
+ *    报文里没有金额 = 不可核对 = **不落账**（不是"跳过核对"）。
  */
 function signedCallback(payload: Record<string, unknown>, secret = CALLBACK_SECRET, trace = TRACE) {
-  return signedRaw(JSON.stringify({ type: 'payment.succeeded', ...payload }), secret, trace);
+  return signedRaw(
+    JSON.stringify({
+      type: 'payment.succeeded',
+      amount_minor: CHARGE.amountMinor,
+      currency: CHARGE.currency,
+      ...payload,
+    }),
+    secret,
+    trace,
+  );
 }
 
 /** 发一段**任意原文**（可故意不是合法 JSON），签名照算——用于验证坏报文的处理。 */
@@ -117,7 +156,10 @@ describe('行走骨架：一条链路走到底', () => {
       await db`select status from order_events where order_id = ${created.order_id} order by id`;
     expect(events1.map((r) => r.status)).toEqual(['created']);
 
-    // ── 2. 模拟支付回调（原始报文 + HMAC）─────────────────────────────────
+    // ── 2. 发起支付（写 payments 行：落账要拿它核对通道与金额，三审 S1② / U1）──
+    await seedPayment(created.order_id);
+
+    // ── 3. 模拟支付回调（原始报文 + HMAC）─────────────────────────────────
     const cbRes = await signedCallback({ order_id: created.order_id });
     expect(cbRes.status).toBe(200);
 
@@ -267,6 +309,58 @@ describe('行走骨架：一条链路走到底', () => {
     });
     expect(res.status).toBe(401);
     await expect(res.json()).resolves.toMatchObject({ code: 40101 });
+  });
+
+  it('同一把密钥、同一签发者签出的"无 exp"与 HS512 令牌，走真路由都是 40101（三审 S3 / U23 链路级）', async () => {
+    // @why 单测钉的是 verifyToken；这里证明装配处的鉴权中间件真的把 requiredClaims / algorithms
+    //      接进了路由——两个令牌在 jose 看来都"签名有效"，只有策略层能拒。独立用 jose 构造，不走 signToken。
+    const key = new TextEncoder().encode(E2E_AUTH.secret);
+    const noExp = await new SignJWT({ role: 'user', ver: 1 })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject(USER)
+      .setIssuer(E2E_AUTH.issuer ?? 'waselect')
+      .setAudience(AUDIENCE.user)
+      .setIssuedAt()
+      .sign(key);
+    const hs512 = await new SignJWT({ role: 'user', ver: 1 })
+      .setProtectedHeader({ alg: 'HS512' })
+      .setSubject(USER)
+      .setIssuer(E2E_AUTH.issuer ?? 'waselect')
+      .setAudience(AUDIENCE.user)
+      .setIssuedAt()
+      .setExpirationTime('1h')
+      .sign(key);
+    for (const [label, token] of [
+      ['no-exp', noExp],
+      ['hs512', hs512],
+    ] as const) {
+      const res = await createOrder(token, `k-${label}`);
+      expect(res.status, label).toBe(401);
+      await expect(res.json()).resolves.toMatchObject({ code: 40101 });
+    }
+    // 控制组：同参数、正规签发（HS256 + exp）→ 201，证明拒的是策略不是密钥/签发者
+    const ok = await createOrder(await userToken(), 'k-control');
+    expect(ok.status).toBe(201);
+  });
+
+  it('两个用户用**同一个** Idempotency-Key → 各自建单、互不串（路由 scopeKey ↔ 执行器 user_id 的接缝）', async () => {
+    // @why 三审 P3-4 给执行器加了 user_id 比对；若路由忘了按用户分作用域，执行器会以 40908 拒第二个用户——
+    //      这里同时证明两层：作用域分开（两张不同的单），且没有任何一方拿到对方的 order_id。
+    await db`insert into users (id, openid) values ('u-other', 'o-other') on conflict (id) do nothing`;
+    const a = await createOrder(await userToken(USER), 'shared-key');
+    const b = await createOrder(await userToken('u-other'), 'shared-key');
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    const ida = ((await a.json()) as { order_id: string }).order_id;
+    const idb = ((await b.json()) as { order_id: string }).order_id;
+    expect(ida).not.toBe(idb);
+    const rows = await db`select id, user_id from orders where id in (${ida}, ${idb}) order by id`;
+    expect(new Map(rows.map((r) => [r.id, r.user_id]))).toEqual(
+      new Map([
+        [ida, USER],
+        [idb, 'u-other'],
+      ]),
+    );
   });
 
   it('缺少 Idempotency-Key 直接拒绝（防重复下单是硬要求，不是可选项）', async () => {
@@ -456,6 +550,7 @@ describe('行走骨架：一条链路走到底', () => {
   it('同一 event_id 重投 → duplicate:true，业务层不再执行', async () => {
     const token = await userToken();
     const created = (await (await createOrder(token, 'key-dupcb')).json()) as { order_id: string };
+    await seedPayment(created.order_id);
     const payload = { order_id: created.order_id, event_id: 'evt-dup-1' };
     expect((await signedCallback(payload)).status).toBe(200);
 
@@ -475,6 +570,7 @@ describe('行走骨架：一条链路走到底', () => {
     const created = (await (await createOrder(token, 'key-conflict')).json()) as {
       order_id: string;
     };
+    await seedPayment(created.order_id);
     expect((await signedCallback({ order_id: created.order_id, event_id: 'evt-a' })).status).toBe(
       200,
     );
@@ -510,8 +606,9 @@ describe('行走骨架：一条链路走到底', () => {
       reason: 'order_not_found_yet',
     });
 
-    // 订单随后建好
+    // 订单随后建好（并补上"发起过支付"这条事实）
     const created = (await (await createOrder(token, 'key-late')).json()) as { order_id: string };
+    await seedPayment(created.order_id);
     // 机构重发**同一个** event_id（这次带上真实单号）
     const retry = await signedCallback({ order_id: created.order_id, event_id: 'evt-early' });
     expect(retry.status).toBe(200);
@@ -713,8 +810,11 @@ describe('N22：并发重复投递只有一个持有者（processing_until 租�
         })
       ).json()) as { order_id: string };
 
+      await seedPayment(created.order_id);
       const raw = JSON.stringify({
         type: 'payment.succeeded',
+        amount_minor: CHARGE.amountMinor,
+        currency: CHARGE.currency,
         order_id: created.order_id,
         event_id: 'evt-concurrent',
       });
@@ -790,6 +890,7 @@ describe('N22：并发重复投递只有一个持有者（processing_until 租�
     const created = (await (await createOrder(token, 'key-n22-crash')).json()) as {
       order_id: string;
     };
+    await seedPayment(created.order_id);
     // 手工造一行"崩溃遗留"：登记过、没处理完、租约已过期
     await db`
       insert into webhook_events (provider, event_id, event_type, payload_hash,

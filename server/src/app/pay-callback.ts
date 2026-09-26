@@ -51,9 +51,14 @@ export interface CallbackPipelineDeps {
   graceMs: number;
   /**
    * 把事件落到业务状态上。
-   * @throws {AppError} 40400（订单不存在）/ 40902（状态不允许本次迁移）
+   *
+   * @param channel 回调来自哪个通道。**必须**带进来（三审 S1②）：落账要把
+   *      "钱是从这条通道来的"与登记过的 `payments.provider` 对上，
+   *      只给 `event` 的话调用方无从知道通道名——而 `event` 里没有它
+   *      （那是有意的：ProviderEvent 只描述"机构说了什么"，不描述"我们怎么接的"）。
+   * @throws {AppError} 40400（订单不存在）/ 40902（状态不允许本次迁移，或核对不符）
    */
-  apply: (event: ProviderEvent) => Promise<void>;
+  apply: (event: ProviderEvent, channel: string) => Promise<void>;
 }
 
 /**
@@ -208,7 +213,7 @@ export async function handleProviderCallback(
   //    （N13：先 payment_intent.succeeded 后 checkout.session.completed），告警会淹没真正的冲突。
   // ④ 其余状态冲突（expired/cancelled 等）→ 2xx + warn：重发不会变，靠人查。
   try {
-    await deps.apply(event);
+    await deps.apply(event, channel);
   } catch (e) {
     const code = e instanceof AppError ? e.code : 0;
     if (code === 40400) {

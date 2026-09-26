@@ -44,6 +44,12 @@ import { createEventBus } from './adapters/event-bus.js';
 import { systemClock } from './adapters/clock.js';
 import { systemIdGen } from './adapters/ids.js';
 import { registerBusinessEventLog } from './app/business-events.js';
+import { createCleanupIdempotencyJob } from './app/cleanup-idempotency.js';
+import {
+  createSchedulerDeps,
+  startScheduler,
+  type SchedulerHandle,
+} from './app/scheduler-start.js';
 import { installProcessErrorHandlers } from './process-errors.js';
 
 /**
@@ -73,6 +79,12 @@ export interface Runtime {
   logger: Logger;
   db: Db;
   server: StartedServer;
+  /**
+   * 常驻调度器把手。
+   * @why 必须暴露：`tickNow()` 让集成测试不用等一个 tick 间隔就能验"job 真的跑了"；
+   *      `stop()` 让测试能收掉定时器（它 `unref()` 了，但显式停更清楚）。
+   */
+  scheduler: SchedulerHandle;
   /** 卸载信号处理器（生产不调用）。 */
   uninstallSignals: () => void;
   /** 卸载进程级错误处理器（uncaughtException/unhandledRejection；测试必须调，防监听器叠加）。 */
@@ -112,6 +124,13 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
      */
     let acceptingTraffic = true;
 
+    // 事件总线在装配处建、订阅者在装配处注册：业务侧只见"发布"，不见"谁在听"。
+    // ⚠️ 建在 `mount` 之外：常驻调度器也要用同一条总线（它在 `listen` 之后才启动），
+    //    两处各建一条的话，"回调发的事件"与"job 发的事件"会落进两个世界，
+    //    而订阅者只在其中一个世界里——那正是"能力存在 ≠ 能力被用上"的形态（决策记录 §2 第 35 条）。
+    const events = createEventBus(logger);
+    registerBusinessEventLog(events, logger);
+
     const app = createHttpApp({
       logger,
       // 回调验签必须用原始字节：路径集中登记在这里，避免"某个回调忘了配就永远验签失败"
@@ -133,10 +152,6 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       // D21：就绪 = "我自己还想接" 且 "数据库连通"。缺任一条都不该收新流量
       readiness: async () => acceptingTraffic && (await ping(db)),
       mount: (a) => {
-        // 事件总线在装配处建、订阅者在装配处注册：业务侧只见"发布"，不见"谁在听"
-        const events = createEventBus(logger);
-        registerBusinessEventLog(events, logger);
-
         // ── 支付路由（F11）：**每个环境都挂**，它不是脚手架 ──────────────────
         // @why 回调是机构打给我们的，生产必须能收；通道列表是前端入口的来源。
         //      它们与骨架无关——骨架只是"没有真实下单接口时的一条演示链路"。
@@ -173,8 +188,17 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           webhooks: createWebhookStore(db),
           logger,
           graceMs: config.CALLBACK_ORDER_GRACE_MS,
-          // 骨架期只有"把订单置为 paid"这一件事；业务期（I1）换成订单状态机的迁移
-          apply: async (e) => markOrderPaid(db, events, systemClock, e.orderId),
+          // 骨架期只有"把订单置为 paid"这一件事；业务期（I1）换成订单状态机的迁移。
+          // ⚠️ 第二、三、四个参数必须来自回调本身（通道 / 机构单号 / 金额币种）：
+          //    落账逐项核对它们与 `payments` 行（三审 S1② / U1），对不上就不落账
+          apply: async (e, channel) =>
+            markOrderPaid(db, events, systemClock, e.orderId, {
+              kind: 'provider',
+              channel,
+              providerRef: e.providerRef,
+              amountMinor: e.amountMinor,
+              currency: e.currency,
+            }),
         });
 
         if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见文件头取舍 3）
@@ -198,11 +222,28 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
 
     const server = await listen(app, { port: config.PORT, host: config.HOST });
 
+    /**
+     * ── 常驻调度器（D-43）：进程内 `setInterval` + advisory lock ──────────────
+     * @why 不做 Render Cron Job：那是另一个进程，拿不到本进程的连接池与健康状态，
+     *      且按绝对时钟触发、不关心上一轮跑完没有。代价是"进程挂了调度就停"——
+     *      而这正好被 `job_runs` 心跳覆盖：心跳停了 = 该告警（两件事互相补位）。
+     * @why 放在 `listen` **之后**：先能收流量再开始跑后台任务，
+     *      否则启动期慢的时候会出现"任务在跑、服务还没起来"这种不好归因的中间态。
+     */
+    const scheduler = startScheduler({
+      deps: createSchedulerDeps(db, events, systemClock, logger, { name: 'tick', lockKey: 'tick' }),
+      jobs: [createCleanupIdempotencyJob()],
+      intervalMs: config.SCHEDULER_TICK_MS,
+    });
+
     const shutdown = installShutdownHandlers(server, {
       logger,
       // 摘流量（D1 的第一段）：先让 /readyz 转 503，再等存量请求排空。
       // 顺序反过来就是"发布窗口内一批 500"——@see http.ts ShutdownHooks.beforeDrain 的 @why
       beforeDrain: async () => {
+        // ⚠️ 先停定时器再摘流量：否则排空的那几秒里可能又开一轮，
+        //    而那一轮拿到的锁会一直挂到停机之后（advisory lock 虽随连接释放，但顺序不该靠运气）
+        scheduler.stop();
         acceptingTraffic = false;
         logger.warn('traffic_draining', { result: 'ok', ctx: { port: config.PORT } });
       },
@@ -236,6 +277,8 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       logger,
       db,
       server,
+      // 暴露调度器把手：测试要能"立刻跑一轮"而不等 60 秒，也要能显式停掉定时器（否则进程不退出）
+      scheduler,
       uninstallSignals: shutdown.uninstall,
       uninstallProcessErrors,
     };

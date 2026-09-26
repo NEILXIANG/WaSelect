@@ -15,9 +15,13 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac, randomUUID } from 'node:crypto';
+import { createServer, connect, type Server as NetServer } from 'node:net';
+import { networkInterfaces } from 'node:os';
+import { loadConfig } from './config.js';
 import { bootstrap, shouldMountSkeleton, type Runtime } from './main.js';
 import { signToken } from './app/auth.js';
 import { PAY_CALLBACK_PREFIX, PAY_CHANNELS_PATH } from './app/pay-routes.js';
+import { recordPaymentIntent } from './app/payment-intent.js';
 import type { Db } from './adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../test/db/test-db.js';
 import { emitRealSignal } from '../../test/signal-harness.js';
@@ -391,11 +395,28 @@ describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
       expect(regLine).toContain('"offline":["mock"]');
 
       // ③ 在途回调照样落账——钱不能因为运维改配置而丢
+      //    ⚠️ 先登记支付意图（走**真函数**而不是裸 SQL）：落账必须核对
+      //    "这笔单本来打算在哪个通道、按什么金额收"（AJ-93 的 S1② / U1）。
+      //    少了这一行，回调会以 settlement_unverifiable 被拒——那不是缺陷，正是那条防线的目的：
+      //    "通道下线"这个运维动作不能顺带把"核对"也关掉。
+      await recordPaymentIntent(db, {
+        id: randomUUID(),
+        orderId,
+        provider: 'mock',
+        providerRef: 'cs_1',
+        chargeCurrency: 'JPY',
+        chargeAmount: 1000,
+      });
+      //    同时回调必须带 currency / amount_minor：落账要拿它跟上面登记的意图对一遍（AJ-93 的 U1）。
+      //    ⚠️ 少了这两个字段会以 settlement_unverifiable 被拒——机构没报金额就是核对不了，
+      //    这时宁可不落账 + 告警，也不能"相信回调里的订单号就置 paid"。
       const body = JSON.stringify({
         event_id: 'evt-link-offline',
         type: 'payment.succeeded',
         order_id: orderId,
         provider_ref: 'cs_1',
+        currency: 'JPY',
+        amount_minor: 1000,
       });
       const res = await fetch(`http://127.0.0.1:${PORT_LINK}${PAY_CALLBACK_PREFIX}/mock`, {
         method: 'POST',
@@ -465,4 +486,185 @@ describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
       }),
     ).rejects.toThrow(/配置校验失败/);
   });
+});
+
+/**
+ * 生产装配路径（三审欠账 ⑧：此前 NODE_ENV=production 的 bootstrap 全仓零集成测试）。
+ *
+ * @why 生产与开发的装配差异全在 `isProd` 分支里：骨架不挂、mock 只认列出的、跨字段校验全开。
+ *      这些分支各自有单测（config.unit / channels.unit / main.unit 的 shouldMountSkeleton），
+ *      但"生产配置 → loadConfig → buildPaymentRegistry → 路由挂载 → 真库"这条链此前没人端到端跑过——
+ *      两轮审计的 P1 共同形态正是"各件各自绿、拼起来有缝"。
+ *
+ * @how 生产规则 4 禁止 DATABASE_URL 指向本机，而测试库闸门又**只允许**本机——两条守卫方向相反。
+ *      这里不放宽任何一条：在本机的一个**非环回**网卡地址上起一个纯 TCP 转发器，把连接转到
+ *      127.0.0.1 的测试库；DATABASE_URL 的 hostname 因此是网卡地址（规则 4 放行），而字节仍落在测试库。
+ *      没有非环回 IPv4 的机器（极少见）跳过该用例并说明原因，**不把跳过伪装成通过**。
+ *
+ * @limitation 转发器只转字节，不理解 PG 协议；SSL 协商由 postgres.js 与 PG 直接完成（本机 PG 无 SSL）。
+ * @limitation macOS 应用防火墙对"进程在网卡地址上监听"可能弹一次授权框（连接来自本机，通常不拦）。
+ */
+describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
+  const PORT_PROD_LINK = 4614;
+
+  /** 与 render.yaml 同形状的最小生产配置；DATABASE_URL 由用例自行给出。 */
+  function prodEnv(port: number, databaseUrl: string): Record<string, string> {
+    return {
+      NODE_ENV: 'production',
+      PORT: String(port),
+      HOST: '127.0.0.1',
+      TRUST_PROXY_HOPS: '1',
+      DATABASE_URL: databaseUrl,
+      JWT_SECRET: 'main-prod-jwt-secret-'.repeat(3),
+      PAYMENT_CHANNELS: 'stripe',
+      TERMS_VERSION: 'TOS-TEST-1',
+      STRIPE_SECRET_KEY: 'sk_live_e2e_placeholder_not_real',
+      STRIPE_WEBHOOK_SECRET: 'whsec_e2e_placeholder_not_real',
+      CHECKOUT_BASE_URL: 'https://checkout.example.com',
+      CORS_ORIGINS: 'https://admin.example.com',
+      SHUTDOWN_READY_DELAY_MS: '50',
+    };
+  }
+
+  function lanIPv4(): string | undefined {
+    for (const list of Object.values(networkInterfaces())) {
+      for (const ni of list ?? []) {
+        if (ni.family === 'IPv4' && !ni.internal && !ni.address.startsWith('127.'))
+          return ni.address;
+      }
+    }
+    return undefined;
+  }
+
+  /** 在 `host` 上监听，把每条连接原样转到 127.0.0.1:5432（测试库）。 */
+  async function forwarder(
+    host: string,
+    targetPort: number,
+  ): Promise<{ port: number; close: () => Promise<void> }> {
+    const server: NetServer = createServer((client) => {
+      const upstream = connect({ host: '127.0.0.1', port: targetPort });
+      client.pipe(upstream).pipe(client);
+      const drop = (): void => {
+        client.destroy();
+        upstream.destroy();
+      };
+      client.on('error', drop);
+      upstream.on('error', drop);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, host, () => resolve());
+    });
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    return {
+      port,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  it('生产 + 未列出 mock + 残留 MOCK_CALLBACK_SECRET → 启动拒绝（规则 1b；控制组去掉密钥即通过校验）', async () => {
+    const env = {
+      ...prodEnv(PORT_PROD_LINK, 'postgresql://app:pw@db.invalid:5432/japan_shop'),
+      MOCK_CALLBACK_SECRET: 'leftover-review-period-secret-0001',
+    };
+    const { lines, write } = sink();
+    await expect(
+      bootstrap({ env, logDestination: { write }, exit: () => undefined }),
+    ).rejects.toThrow(/配置校验失败/);
+    // 拒启发生在建连接池之前：没有任何一行日志被写出（logger 在 loadConfig 之后才建）
+    expect(lines).toEqual([]);
+    // 控制组：同一份生产配置只去掉残留密钥 → 通过校验（证明红的是 1b，不是别的生产规则）
+    const withoutSecret = Object.fromEntries(
+      Object.entries(env).filter(([k]) => k !== 'MOCK_CALLBACK_SECRET'),
+    );
+    expect(loadConfig(withoutSecret).PAYMENT_CHANNELS).toEqual(['stripe']);
+  });
+
+  it('生产装配：骨架 404、mock 通道不存在（回调 40001 零留痕）、stripe 入口在、启动日志标 production', async () => {
+    const host = lanIPv4();
+    if (host === undefined) {
+      // 不伪装成通过：没有非环回网卡就无法在不放宽任何守卫的前提下让生产配置连上测试库
+      console.warn('[skip] 本机没有非环回 IPv4 网卡，生产装配链路用例无法运行');
+      return;
+    }
+    const target = new URL(TEST_DB_URL);
+    const fwd = await forwarder(host, Number(target.port || 5432));
+    const dbUrl = new URL(TEST_DB_URL);
+    dbUrl.hostname = host;
+    dbUrl.port = String(fwd.port);
+    const env = prodEnv(PORT_PROD_LINK, dbUrl.toString());
+    const { lines, write } = sink();
+    let rt: Runtime | undefined;
+    try {
+      rt = await bootstrap({ env, logDestination: { write }, exit: () => undefined });
+      const base = `http://127.0.0.1:${PORT_PROD_LINK}`;
+
+      // ① 探活通：说明生产配置真的连上了库（不是"起来了但半死"）
+      expect((await fetch(`${base}/healthz`)).status).toBe(200);
+      expect((await fetch(`${base}/readyz`)).status).toBe(200);
+
+      // ② 骨架路由在生产不存在（SEC2 闸门）：404，不是 40101
+      const skeleton = await fetch(`${base}/api/v1/skeleton/orders`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(skeleton.status).toBe(404);
+
+      // ③ 通道视图：只有 stripe（USD 场景），mock 不存在
+      const usd = (await (
+        await fetch(`${base}${PAY_CHANNELS_PATH}?country=US&currency=USD&amount_jpy=10000`)
+      ).json()) as { items: { channel: string }[] };
+      expect(usd.items.map((i) => i.channel)).toEqual(['stripe']);
+      const jpy = (await (await fetch(channelsUrl(PORT_PROD_LINK))).json()) as { items: unknown[] };
+      expect(jpy.items).toEqual([]);
+
+      // ④ mock 回调在生产是"没有这个通道"（40001），不验签、不落 webhook_events
+      const body = JSON.stringify({
+        event_id: 'evt-prod-mock',
+        type: 'payment.succeeded',
+        order_id: 'o-x',
+      });
+      const cb = await fetch(`${base}${PAY_CALLBACK_PREFIX}/mock`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-mock-signature': sign(body, 'dev-mock-callback-secret-do-not-use-in-prod'),
+        },
+        body,
+      });
+      expect(cb.status).toBe(400);
+      await expect(cb.json()).resolves.toMatchObject({ code: 40001 });
+      const db = testDb();
+      try {
+        const logged =
+          await db`select event_id from webhook_events where event_id = 'evt-prod-mock'`;
+        expect(logged.length).toBe(0);
+      } finally {
+        await db.end();
+      }
+
+      // ⑤ 启动日志：环境是 production，且密钥全部掩码
+      const configLine = lines.find((l) => l.includes('config_loaded'));
+      expect(configLine).toContain('"NODE_ENV":"production"');
+      expect(configLine).toContain('"STRIPE_SECRET_KEY":"***"');
+      expect(configLine).not.toContain('sk_live_e2e_placeholder');
+      expect(lines.some((l) => l.includes('server_started'))).toBe(true);
+    } finally {
+      rt?.uninstallSignals();
+      rt?.uninstallProcessErrors();
+      await rt?.server.close().catch(() => undefined);
+      await rt?.db.end().catch(() => undefined);
+      await fwd.close();
+    }
+  });
+
+  /** 与上一个 describe 相同的 HMAC 算法（本 describe 独立，不跨 describe 借用闭包）。 */
+  function sign(body: string, secret: string): string {
+    return createHmac('sha256', secret).update(Buffer.from(body)).digest('hex');
+  }
+  function channelsUrl(port: number): string {
+    return `http://127.0.0.1:${port}${PAY_CHANNELS_PATH}?country=US&currency=JPY&amount_jpy=10000`;
+  }
 });

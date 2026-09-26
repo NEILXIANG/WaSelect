@@ -25,7 +25,12 @@
  *              落 `idempotency_lease_lost` error 日志——二审 N1：曾按 key 定位删掉新持有者的占位）。
  *
  * @tradeoff 用数据库行而不是 Redis：多一个 DB 往返，换来零额外组件（Render 上没有托管 Redis）。
- *           过期清理交给调度器（idempotency_keys.created_at 24h），不在此处做 TTL。
+ *           过期清理交给**调度器**（{@link IDEMPOTENCY_TTL_HOURS} = 24h），不在此处做 TTL。
+ *           ⚠️ 2026-09-25 之前那句"过期清理交给调度器"是**假的**：全仓没有一条
+ *           `delete from idempotency_keys`、也没有对应 job（三审欠账 ①），
+ *           于是"24h 后同键可以重新执行"从未成立——键一旦写过就永久重放。
+ *           现在清理 SQL 在 {@link deleteExpiredIdempotencyKeys}，job 在
+ *           `app/cleanup-idempotency.ts`，接线在 `main.ts`。
  *
  * @see ../ports/idempotency.ts（契约与语义常量）；技术文档 v0.5 §3（idempotency_keys）；
  *      docs/地基搭建清单.md F8；D-29；评审 D3/D4；
@@ -131,6 +136,10 @@ async function withIdempotency<T>(
       // 指纹不符 = 客户端拿同一个键发了**另一个**请求：无论那行完成与否都必须报错（D4）。
       // 未完成时等下去也只有两个结局：完成后因指纹不符 40908，或超时 40903——
       // 两个结局都比"立即 40908"差，所以提前抛。
+      // 三审 P3-4：执行器自己核对用户，不只靠调用方 scopeKey——跨用户撞键与"同键不同内容"同码
+      if (row.user_id !== (args.userId ?? null)) {
+        throw new AppError(40908, { key: args.key, route: args.route, reason: 'user_mismatch' });
+      }
       if (hash !== '' && row.request_hash !== '' && row.request_hash !== hash) {
         throw new AppError(40908, { key: args.key, route: args.route });
       }
@@ -190,6 +199,9 @@ async function withIdempotencyTx<T>(
 
   for (;;) {
     let outcome: Outcome;
+    // 三审 P2-2：只有**占位那一步**的 55P03 才是"别人正在做"；handler 内部的 55P03 是它自己
+    //    在等别的行锁，必须原样抛出——否则 handler 会被静默重跑（内存副作用不随事务回滚）。
+    let inHandler = false;
     try {
       outcome = await withTransaction(db, async (tx): Promise<Outcome> => {
         // 等锁预算 = 剩余的等待额度：占不到锁（别人正在执行）到点放手，走 40903 路径
@@ -203,6 +215,7 @@ async function withIdempotencyTx<T>(
           returning key
         `;
         if (claimed.length === 0) return { kind: 'conflict' };
+        inHandler = true;
         const result = await handler(tx);
         await tx`
           update idempotency_keys
@@ -214,14 +227,12 @@ async function withIdempotencyTx<T>(
         return { kind: 'executed', result };
       });
     } catch (e) {
-      // 等锁超时（55P03）不是失败，是"别人还在做"——落到冲突路径按等待/超时处理
-      // ⚠️ @limitation 这条捕获**不限于占位那一步**：handler 内部若也撞上 55P03
-      //    （它自己在等别的行锁且超时），同样会被当成"占位冲突"再走一轮。
-      //    安全性：事务已回滚，重跑一次 handler 不会有残留副作用（这也是
-      //    @limitation 二"handler 必须只做 DB 写入"的价值所在）；
-      //    可观测性上会少一条"handler 等锁超时"的独立信号——需要一个时，应在 handler 内部
-      //    自行捕获并按业务语义记录，不要依赖本层区分。
-      if (isLockTimeout(e)) {
+      // 占位那一步等锁超时（55P03）不是失败，是"别人还在做"——落到冲突路径按等待/超时处理。
+      // handler 内部的 55P03 **不在此列**（inHandler=true）：曾经一律当占位冲突再走一轮，
+      //    DB 副作用虽随事务回滚，handler 闭包里的内存副作用（收集的领域事件、已打的日志、
+      //    已消耗的单号）不会——skeleton 的"executor 外收集事件再 publishAll"形态会发出幽灵事件
+      //    （三审 P2-2，用例「handler 内部 55P03 → 原样抛出且只执行一次」）。
+      if (isLockTimeout(e) && !inHandler) {
         outcome = { kind: 'conflict' };
       } else {
         throw e;
@@ -232,6 +243,10 @@ async function withIdempotencyTx<T>(
     // 冲突路径：要么已有结果（重放），要么别人正在做（等到出结果或超时）
     const row = await readRow(db, args.key);
     if (row !== undefined) {
+      // 三审 P3-4：执行器自己核对用户，不只靠调用方 scopeKey——跨用户撞键与"同键不同内容"同码
+      if (row.user_id !== (args.userId ?? null)) {
+        throw new AppError(40908, { key: args.key, route: args.route, reason: 'user_mismatch' });
+      }
       if (hash !== '' && row.request_hash !== '' && row.request_hash !== hash) {
         throw new AppError(40908, { key: args.key, route: args.route });
       }
@@ -278,9 +293,11 @@ function startRenewal(db: Db, args: IdempotencyArgs, token: string, leaseMs: num
         const rows = await db`
           update idempotency_keys
              set locked_until = now() + ${leaseMs} * interval '1 millisecond'
-           where key = ${args.key} and lease_token = ${token} and completed_at is null
+           where key = ${args.key} and lease_token = ${token}
           returning key
         `;
+        // ⚠️ 条件里**不带** `completed_at is null`（三审 P3-1）：handler 恰在续期 RTT 内完成时，
+        //    带该条件会命中 0 行 → 误报"易主"，把真信号淹掉；对已完成行续期无害，0 行只剩"令牌变了"一种含义。
         if (rows.length === 0) {
           args.logger?.warn('idempotency_lease_renew_lost', {
             route: args.route,
@@ -350,12 +367,15 @@ async function claim(
        and completed_at is null
        and (locked_until is null or locked_until < now())
        and (request_hash = '' or request_hash = ${hash})
+       and user_id is not distinct from ${args.userId ?? null}
      returning lease_token
   `;
   return taken.length > 0 ? String(taken[0]?.lease_token) : undefined;
 }
 
 interface IdempotencyRow {
+  /** 占位时的用户；与本次 `args.userId` 不符 = 跨用户撞键（三审 P3-4）。 */
+  user_id: string | null;
   status_code: number;
   response: unknown;
   request_hash: string;
@@ -366,12 +386,13 @@ interface IdempotencyRow {
 /** 读整行（含指纹与租约）；不存在返回 undefined。 */
 async function readRow(db: Db, key: string): Promise<IdempotencyRow | undefined> {
   const rows = await db`
-    select status_code, response, request_hash, completed_at, locked_until
+    select status_code, response, request_hash, completed_at, locked_until, user_id
       from idempotency_keys where key = ${key}
   `;
   const row = rows[0];
   if (row === undefined) return undefined;
   return {
+    user_id: (row.user_id as string | null) ?? null,
     status_code: Number(row.status_code),
     response: row.response,
     request_hash: String(row.request_hash),
@@ -392,6 +413,54 @@ async function readRow(db: Db, key: string): Promise<IdempotencyRow | undefined>
  *      cast 之后"业务不认识 SQL"依然是假的——不如把不彻底写在明处
  *      （@see ../ports/idempotency.ts @limitation 一）。
  */
+/**
+ * 幂等键的保留时长（小时）。
+ *
+ * @why 24h 取自审计口径（"24h 后同键可重新执行"），也是客户端重试的现实上界：
+ *      比它短，"用户隔天点了一次重试"会被当成新请求重复执行；比它长，
+ *      这张表会一直涨——它每一行都是一次真实请求的响应快照。
+ * @limitation 它是**代码常量而不是配置项**：改它要动的是业务语义（多久之后允许重做），
+ *      不是运营参数。真要可调时再进 config.ts（届时要同步 `.env.example`、
+ *      `render.yaml` 与 `config.contract.test.ts`，三处一起）。
+ */
+export const IDEMPOTENCY_TTL_HOURS = 24;
+
+/**
+ * 删掉早于 `cutoff` 的幂等键，返回**删除行数**（0 = 无事可做，不是失败）。
+ *
+ * @why `delete` 而不是 `update ... 标记过期`：标记之后"过期"这件事还要有人来解释，
+ *      而解释它的地方就是下一个会漏掉的地方。删掉之后表里剩下的每一行都还在有效期内，
+ *      "这张表有多大"直接等于"最近 24h 有多少次写请求"——可观测性也顺带好了。
+ * @limitation **只删已经完成的**（`completed_at is not null`）：还在执行的行由栅栏/租约保护，
+ *      清理任务在任何实例上跑，早删一步就等于替另一个实例把租约抹掉。
+ *      ⚠️ 副作用：崩溃遗留的"占位但未完成"行不会被本函数清掉——那些行靠租约过期
+ *      让下一个同键请求接管，属于既有设计，不在这里引入第二种清理语义。
+ */
+/**
+ * 由"当前时刻"推出清理截止点：`now - {@link IDEMPOTENCY_TTL_HOURS}`。
+ *
+ * @why 这个换算**必须住在 adapters 层**：业务侧（app / domain）被 F10 规则禁止自己
+ *      `new Date()`（时间一律由 `ports/clock.ts` 注入），而"由注入进来的时间派生一个更早的时间"
+ *      在语法上同样是 `new Date(...)`——规则是 AST 级的，分不出"取当前时间"与"派生"。
+ *      于是把派生收在这里（边界层本就是"进程外时间"该住的地方），
+ *      业务侧只传 `ctx.startedAt`，既守住了规则，也让 TTL 口径只有一个来源。
+ * @limitation 只做减法、且只按整小时回退：TTL 是"多久之后允许重做"的业务语义
+ *      （{@link IDEMPOTENCY_TTL_HOURS}），不是运营参数，不进 config。
+ */
+export function idempotencyCutoff(now: Date): Date {
+  return new Date(now.getTime() - IDEMPOTENCY_TTL_HOURS * 3_600_000);
+}
+
+export async function deleteExpiredIdempotencyKeys(db: Db, cutoff: Date): Promise<number> {
+  const rows = await db`
+    delete from idempotency_keys
+     where created_at < ${cutoff}
+       and completed_at is not null
+    returning key
+  `;
+  return rows.length;
+}
+
 export function createIdempotencyExecutor(db: Db): IdempotencyExecutor<Db> {
   return {
     run: <T>(args: IdempotencyArgs, handler: () => Promise<HandlerResult<T>>) =>
