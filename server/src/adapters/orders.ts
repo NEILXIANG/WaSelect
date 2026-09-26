@@ -218,3 +218,254 @@ export async function insertOrderItems(
     `;
   }
 }
+
+// ── I1-U5c：查询 / 取消 ─────────────────────────────────────────────────────
+
+/**
+ * jsonb 列读出归一化：本仓库的 postgres.js 配置**没有注册 jsonb 解析器**，
+ * 读回的是 **string**（U5b 接线测试实抓：断言前必须 JSON.parse）。
+ * 在仓储层消化掉这个驱动行为——调用方不该每个人都记得判一次 typeof。
+ * ⚠️ 若将来给驱动注册了解析器，本函数对已是对象的值直通，两种行为都正确。
+ */
+function jsonbValue(raw: unknown): unknown {
+  return typeof raw === 'string' ? (JSON.parse(raw) as unknown) : raw;
+}
+
+/** 我的订单列表行（fx_snapshot 已 JSON.parse，见 jsonbValue 的 ⚠️）。 */
+export interface OrderListRow {
+  id: string;
+  order_no: string;
+  status: string;
+  total_jpy: number;
+  fx_snapshot: unknown;
+  created_at: Date;
+}
+
+/**
+ * 列出本人的订单（按 created_at 倒序）。
+ *
+ * @why 归属过滤进 WHERE 而不是拉回内存再滤：漏写 `user_id=` 时前者是"返回空"，
+ *      后者是"把别人的单给了这个用户"——过滤位置选错了就是越权读取。
+ * @limitation 无分页：契约 GET /orders 没有 page/size 参数（MVP 单量下全量返回；
+ *              /admin/orders 才有分页）。单用户订单数真成问题的那天，先改契约再加。
+ */
+export async function listOwnedOrders(
+  db: Db,
+  userId: string,
+  status?: string,
+): Promise<OrderListRow[]> {
+  const rows =
+    status === undefined
+      ? await db`
+          select id, order_no, status, total_jpy, fx_snapshot, created_at
+            from orders where user_id = ${userId}
+            order by created_at desc
+        `
+      : await db`
+          select id, order_no, status, total_jpy, fx_snapshot, created_at
+            from orders where user_id = ${userId} and status = ${status}
+            order by created_at desc
+        `;
+  return rows.map((r) => ({
+    id: String(r.id),
+    order_no: String(r.order_no),
+    status: String(r.status),
+    total_jpy: Number(r.total_jpy),
+    fx_snapshot: jsonbValue(r.fx_snapshot),
+    created_at: r.created_at as Date,
+  }));
+}
+
+/** 订单详情主行（address_snapshot 已 JSON.parse）。 */
+export interface OrderDetailRow extends OrderListRow {
+  items_jpy: number;
+  shipping_jpy: number;
+  duty_jpy: number;
+  contact_email: string | null;
+  terms_version: string;
+  expires_at: Date;
+  address_snapshot: unknown;
+  carrier: string | null;
+  tracking_no: string | null;
+}
+
+/**
+ * 读取一张**确定属于该用户**的订单主行。
+ * @returns 非本人与不存在同返回 null——路由层判 40400，
+ *          防存在性探测（与 findOwnedAddress 同一判断，U5b 定）。
+ */
+export async function findOwnedOrder(
+  db: Db,
+  orderId: string,
+  userId: string,
+): Promise<OrderDetailRow | null> {
+  const rows = await db`
+    select id, order_no, status, items_jpy, shipping_jpy, duty_jpy, total_jpy,
+           fx_snapshot, address_snapshot, contact_email, terms_version,
+           carrier, tracking_no, expires_at, created_at
+      from orders where id = ${orderId} and user_id = ${userId}
+  `;
+  const r = rows[0];
+  if (r === undefined) return null;
+  return {
+    id: String(r.id),
+    order_no: String(r.order_no),
+    status: String(r.status),
+    items_jpy: Number(r.items_jpy),
+    shipping_jpy: Number(r.shipping_jpy),
+    duty_jpy: Number(r.duty_jpy),
+    total_jpy: Number(r.total_jpy),
+    fx_snapshot: jsonbValue(r.fx_snapshot),
+    address_snapshot: jsonbValue(r.address_snapshot),
+    contact_email: r.contact_email === null ? null : String(r.contact_email),
+    terms_version: String(r.terms_version),
+    carrier: r.carrier === null ? null : String(r.carrier),
+    tracking_no: r.tracking_no === null ? null : String(r.tracking_no),
+    expires_at: r.expires_at as Date,
+    created_at: r.created_at as Date,
+  };
+}
+
+/**
+ * 取消路径的第一步：**持行锁**读 {id,status}（FOR UPDATE）。
+ * @why 取消 = 锁单 → 判迁移 → 迁移 + 作废支付行 + 释放库存，全在一个事务里；
+ *      不持锁的话，"判完 created"与"改 cancelled"之间落账事务可以把单迁成 paid——
+ *      锁从读取那一刻起就把这个窗口焊死（mark-paid 同样 FOR UPDATE，谁先到谁赢）。
+ */
+export async function lockOwnedOrderForCancel(
+  tx: Db,
+  orderId: string,
+  userId: string,
+): Promise<{ id: string; status: string } | null> {
+  const rows = await tx`
+    select id, status from orders where id = ${orderId} and user_id = ${userId} for update
+  `;
+  const r = rows[0];
+  if (r === undefined) return null;
+  return { id: String(r.id), status: String(r.status) };
+}
+
+/** 订单行项目（含商品现图；images 已 JSON.parse）。 */
+export interface OrderItemReadRow {
+  product_id: string;
+  title_snapshot: string;
+  qty: number;
+  unit_price_jpy: number;
+  images: unknown;
+}
+
+/**
+ * 订单的行项目 + 商品现图。
+ * @why 图从 products 现查而不是落进快照：图是**展示素材**不是交易事实，
+ *      换图不该改历史订单的"内容"，但商品页改版后订单页不该还显示死链旧图。
+ *      INNER JOIN 安全：order_items.product_id 有外键，商品物理删除会被挡（只能下架）。
+ */
+export async function listOrderItemsWithImage(
+  db: Db,
+  orderId: string,
+): Promise<OrderItemReadRow[]> {
+  const rows = await db`
+    select oi.product_id, oi.title_snapshot, oi.qty, oi.unit_price_jpy, p.images
+      from order_items oi join products p on p.id = oi.product_id
+     where oi.order_id = ${orderId}
+     order by oi.id
+  `;
+  return rows.map((r) => ({
+    product_id: String(r.product_id),
+    title_snapshot: String(r.title_snapshot),
+    qty: Number(r.qty),
+    unit_price_jpy: Number(r.unit_price_jpy),
+    images: jsonbValue(r.images),
+  }));
+}
+
+/** 订单时间线一行（order_events 按 at 升序）。 */
+export async function listOrderTimeline(
+  db: Db,
+  orderId: string,
+): Promise<{ status: string; at: Date }[]> {
+  const rows = await db`
+    select status, at from order_events where order_id = ${orderId} order by at asc, id asc
+  `;
+  return rows.map((r) => ({ status: String(r.status), at: r.at as Date }));
+}
+
+/** 最新一条支付行的展示摘要（契约 Order.payment 的形状）。 */
+export interface OrderPaymentSummary {
+  provider: string;
+  status: string;
+  charge_currency: string;
+  charge_amount: number;
+  paid_amount: number | null;
+  paid_currency: string | null;
+}
+
+/**
+ * 取订单最新一条 payments 行（换通道重发后旧行不该盖新行，按 created_at desc 取一）。
+ * @limitation "最新"指的是我方登记时间——机构侧的真实先后以回调为准（落账在 mark-paid）。
+ */
+export async function findLatestPaymentSummary(
+  db: Db,
+  orderId: string,
+): Promise<OrderPaymentSummary | null> {
+  const rows = await db`
+    select provider, status, charge_currency, charge_amount, paid_amount, paid_currency
+      from payments where order_id = ${orderId}
+      order by created_at desc
+      limit 1
+  `;
+  const r = rows[0];
+  if (r === undefined) return null;
+  return {
+    provider: String(r.provider),
+    status: String(r.status),
+    charge_currency: String(r.charge_currency),
+    charge_amount: Number(r.charge_amount),
+    paid_amount: r.paid_amount === null ? null : Number(r.paid_amount),
+    paid_currency: r.paid_currency === null ? null : String(r.paid_currency),
+  };
+}
+
+/**
+ * 把一张订单关为 `cancelled` 并写审计事件（同一事务；与 markOrderExpired 同构）。
+ *
+ * @returns true = 本次真的迁了（随后应作废旧支付行 + 释放库存 + emit order.cancelled）；
+ *          false = 0 行命中（非本人 / 不存在 / 状态已被抢先迁走——**不是错误**）。
+ * @why WHERE 里同时带 user_id 与状态条件：归属与迁移合法性**都**交给数据库判定，
+ *      应用层先查再改会留 TOCTOU 窗口（lockOwnedOrderForCancel 已持锁时本条件是纵深，
+ *      与 markOrderExpired @limitation 二同一判断）。
+ */
+export async function markOrderCancelled(
+  tx: Db,
+  orderId: string,
+  userId: string,
+  at: Date,
+): Promise<boolean> {
+  const updated = await tx`
+    update orders
+       set status = 'cancelled', cancelled_at = ${at}, updated_at = now()
+     where id = ${orderId}
+       and user_id = ${userId}
+       and status in ${tx([...PAYABLE_STATUSES])}
+  `;
+  if (updated.count === 0) return false;
+  await tx`
+    insert into order_events (order_id, status, actor, at)
+    values (${orderId}, 'cancelled', ${`user:${userId}`}, ${at})
+  `;
+  return true;
+}
+
+/**
+ * 作废订单的在途支付行（initiated → cancelled），返回作废条数（0 或 1）。
+ * @why 只动 initiated：succeeded 的钱必须走退款链路（/admin/orders/{id}/refund，I2），
+ *      取消一张已支付的订单改支付行 = 把钱改成"没收过"。
+ *      部分唯一索引 `uq_payments_one_initiated` 保证在途至多一条，返回值就是 0/1。
+ */
+export async function voidInitiatedPayment(tx: Db, orderId: string): Promise<number> {
+  const rows = await tx`
+    update payments set status = 'cancelled'
+     where order_id = ${orderId} and status = 'initiated'
+  `;
+  return rows.count;
+}

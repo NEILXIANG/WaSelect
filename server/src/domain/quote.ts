@@ -187,3 +187,29 @@ export function computeQuote(input: QuoteComputationInput): QuoteComputation {
 export function dutyRatioIntOf(rate: string | null): number | null {
   return rate === null ? null : toRatioInt(rate);
 }
+
+/**
+ * 读路径的展示价换算（I1-U5c）：用**订单自己的 fx_snapshot** 把 JPY 锚金额换算成展示币。
+ *
+ * @why 与 computeQuote 的 display 循环是**两种语义**，刻意不合并：
+ *      报价/建单是收钱路径，缺币必须 50003 阻止下单；
+ *      订单列表/详情是读路径，快照里缺哪个币就静默少显示哪个（与 /fx、/products 的
+ *      浏览降级同口径）——"运营没维护汇率"不该让订单页打不开。
+ *      共用的只是 `toMinor` 这一个取整口（shared 唯一），判定逻辑各写各的。
+ *
+ * @why 用快照而不用当日汇率：订单页展示的换算金额应该等于用户**下单时看到的**，
+ *      用当日汇率重算会让同一笔订单的展示价每天漂移，对账时与 fx_snapshot 对不上。
+ *      顺带省掉列表场景每行一次的 fx 查询（N+1）。
+ */
+export function buildDisplayFromRates(
+  amountJpy: number,
+  fxRateIntByCurrency: Readonly<Partial<Record<DisplayCurrency, number>>>,
+  displayCurrencies: readonly DisplayCurrency[],
+): Partial<Record<DisplayCurrency, number>> {
+  const display: Partial<Record<DisplayCurrency, number>> = {};
+  for (const c of displayCurrencies) {
+    const rateInt = fxRateIntByCurrency[c];
+    if (rateInt !== undefined) display[c] = toMinor(amountJpy, rateInt);
+  }
+  return display;
+}

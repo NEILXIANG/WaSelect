@@ -1,5 +1,6 @@
 /**
- * 职责：`POST /orders` 路由薄壳（I1-U5b）——HTTP 形状校验 + 幂等包装 + 调建单核心。
+ * 职责：`POST /orders` 与 `POST /orders/{id}/cancel` 路由薄壳（I1-U5b/U5c）——
+ *      HTTP 形状校验 + 幂等包装 + 调建单/取消核心。
  *
  * @why 幂等（Idempotency-Key 必带）在薄壳而不在核心：幂等键的生命周期是"一次 HTTP 意图"，
  *      核心 `createOrder` 只懂"在事务里建一张单"。runInTx 的占位+业务写+结果写回
@@ -8,12 +9,18 @@
  * @why 限流只挂 **POST /orders**（publicWrite，30 次/分钟/IP）而不是整个 /orders 前缀：
  *      同前缀下的 GET /orders、GET /orders/{id}（U5c）是高频只读，被写路径的配额
  *      误伤不可接受；Express 按方法+路径匹配，本文件把 limiter 放进 post 的中间件链。
+ *      取消也不挂：低频本人写路径，与地址 CRUD 同口径（AJ-108）。
+ *
+ * @why 取消**不要** Idempotency-Key：它的天然幂等键就是状态机——第二次取消撞
+ *      迁移表（cancelled 是终态）→ 40902，语义比"重放返回旧结果"更清楚。
+ *      契约也没有给它声明 IdemKey 参数。
  *
  * @limitation 一：Idempotency-Key 的长度上限（≤128）属 U7b 统一收口，本文件暂不限长。
  * @limitation 二：响应的 display/fx_snapshot 直接用重算结果——客户端看到的确认页
  *              与建单返回必然一致（同一事务、同一次 fx 查询）。
  *
- * @see app/create-order.ts（建单核心）；app/quote-routes.ts（parseItems 共用形状校验）；
+ * @see app/create-order.ts（建单核心）；app/cancel-order.ts（取消核心）；
+ *      app/quote-routes.ts（parseItems 共用形状校验）；
  *      contracts/api-contract.yaml（OrderCreated）；docs/I1阶段开发实施方案.md §3.5
  */
 import type { Express, RequestHandler } from 'express';
@@ -28,6 +35,8 @@ import { requireRole, type AuthConfig } from './auth.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import { scopeKey, type IdempotencyExecutor } from '../ports/idempotency.js';
 import { createOrder } from './create-order.js';
+import { cancelOrder } from './cancel-order.js';
+import { withUnitOfWork } from './unit-of-work.js';
 import { parseItems } from './quote-routes.js';
 
 export interface OrderRoutesDeps {
@@ -153,6 +162,35 @@ export function mountOrderRoutes(app: Express, deps: OrderRoutesDeps): void {
           );
           deps.events.publishAll(pendingEvents);
           res.status(result.status).json(result.body);
+        } catch (e) {
+          next(e);
+        }
+      })();
+    },
+  );
+
+  // ── 取消（I1-U5c）：无 Idempotency-Key——状态机就是天然幂等键（文件头 @why）──
+  app.post(
+    '/api/v1/orders/:id/cancel',
+    requireRole('user', deps.auth, { identity: deps.identity }),
+    (req, res, next) => {
+      void (async () => {
+        try {
+          const sub = req.auth?.sub;
+          if (sub === undefined) throw new AppError(40101);
+          const raw = req.params['id'];
+          const orderId = typeof raw === 'string' ? raw : '';
+          if (orderId.length === 0) throw new AppError(40001, { reason: 'order_id_required' });
+          await withUnitOfWork(deps.db, deps.events, async (tx, emit) => {
+            await cancelOrder(
+              tx,
+              { clock: deps.clock, logger: deps.logger },
+              { orderId, userId: sub },
+            );
+            // 提交后才分发（withUnitOfWork 的位置保证）；重放撞 40902 到不了这里
+            emit({ name: 'order.cancelled', at: deps.clock.now().toISOString(), orderId });
+          });
+          res.status(200).json({ ok: true });
         } catch (e) {
           next(e);
         }

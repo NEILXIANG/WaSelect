@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { applyRate, toMinor, toRateInt, toRatioInt } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import {
+  buildDisplayFromRates,
   computeQuote,
   dutyRatioIntOf,
   summarizeQuoteItems,
@@ -161,5 +162,28 @@ describe('dutyRatioIntOf', () => {
   it('null 直通（无税率行的领域语义）；NUMERIC 字符串转 ×1e8 整数', () => {
     expect(dutyRatioIntOf(null)).toBeNull();
     expect(dutyRatioIntOf('0.15000')).toBe(15_000_000);
+  });
+});
+
+describe('buildDisplayFromRates（读路径展示价：订单详情/列表用订单自己的 fx_snapshot，I1-U5c）', () => {
+  it('按给定汇率表换算 JPY 锚金额（断言值用 toMinor 独立复算，公式写错会红）', () => {
+    const display = buildDisplayFromRates(12_950, { USD: 660_000, CNY: 4_800_000 }, ['USD', 'CNY']);
+    expect(display).toEqual({ USD: toMinor(12_950, 660_000), CNY: toMinor(12_950, 4_800_000) });
+  });
+
+  it('快照里缺的币种静默跳过——读路径降级口径，不是收钱路径的 50003', () => {
+    expect(buildDisplayFromRates(12_950, {}, ['USD', 'CNY'])).toEqual({});
+    expect(buildDisplayFromRates(12_950, { CNY: 4_800_000 }, ['USD', 'CNY'])).toEqual({
+      CNY: toMinor(12_950, 4_800_000),
+    });
+  });
+
+  it('只换算指定的展示币：快照里多出来的 USD（建单申报用）不会被带进 display', () => {
+    const display = buildDisplayFromRates(12_950, { USD: 660_000, CNY: 4_800_000 }, ['CNY']);
+    expect(display).toEqual({ CNY: toMinor(12_950, 4_800_000) });
+  });
+
+  it('展示币为空数组 → 空 display（不要求任何汇率）', () => {
+    expect(buildDisplayFromRates(12_950, { USD: 660_000 }, [])).toEqual({});
   });
 });

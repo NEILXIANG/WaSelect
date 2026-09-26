@@ -13,6 +13,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from './db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 import { decrementStock, lockExpiredPayableOrders, markOrderExpired } from './orders.js';
+import {
+  findLatestPaymentSummary,
+  findOwnedOrder,
+  listOrderItemsWithImage,
+  listOrderTimeline,
+  listOwnedOrders,
+  lockOwnedOrderForCancel,
+  markOrderCancelled,
+  voidInitiatedPayment,
+} from './orders.js';
 
 const NOW = new Date('2026-01-02T12:00:00.000Z');
 
@@ -156,5 +166,157 @@ describe('decrementStock（U5b：原子扣减的唯一正确形态）', () => {
     expect(Number(r[0]?.['stock'])).toBe(0);
 
     expect(await decrementStock(db, 'p-stock', 1)).toBe(false); // 0 件也不能再扣
+  });
+});
+
+// ── I1-U5c：查询 / 取消 ─────────────────────────────────────────────────────
+
+/** 造一张带全字段的单（查询/取消用；归属与状态可配）。 */
+async function seedFullOrder(
+  id: string,
+  over: { user?: string; status?: string; createdAt?: Date; fx?: string } = {},
+): Promise<void> {
+  await db`
+    insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                        total_jpy, weight_g, fx_snapshot, address_snapshot, contact_email,
+                        terms_version, expires_at, created_at)
+    values (${id}, ${`W-${id}`}, ${over.user ?? 'u-exp'}, ${over.status ?? 'created'},
+            1000, 200, 150, 1200, 500,
+            ${over.fx ?? '{"USD":0.0066}'}::jsonb,
+            ${'{"recipient":"Taro","phone":"+12025550123","line1":"1 Main St","city":"Springfield","state":"IL","postal_code":"62701","country":"US"}'}::jsonb,
+            't@example.com', 'TOS-1', ${NOW}, ${over.createdAt ?? NOW})
+  `;
+}
+
+describe('listOwnedOrders（U5c：归属过滤进 WHERE，不拉回内存再滤）', () => {
+  beforeEach(async () => {
+    await db`insert into users (id, openid) values ('u-other', 'o-other')`;
+  });
+
+  it('只列本人的单，按 created_at 倒序（最新的在前）', async () => {
+    await seedFullOrder('o-old', { createdAt: new Date(NOW.getTime() - 3_000) });
+    await seedFullOrder('o-new', { createdAt: new Date(NOW.getTime() - 1_000) });
+    await seedFullOrder('o-other', { user: 'u-other', createdAt: new Date(NOW.getTime() - 2_000) });
+    const rows = await listOwnedOrders(db, 'u-exp');
+    expect(rows.map((r) => r.id)).toEqual(['o-new', 'o-old']);
+  });
+
+  it('status 过滤只留匹配态；非法值在路由层已 40001（仓储不重复校验）', async () => {
+    await seedFullOrder('o-created');
+    await seedFullOrder('o-paid', { status: 'paid' });
+    const rows = await listOwnedOrders(db, 'u-exp', 'paid');
+    expect(rows.map((r) => r.id)).toEqual(['o-paid']);
+  });
+
+  it('fx_snapshot 读出为普通对象——jsonb 读回 string 的驱动坑在仓储层消化（U5b 实抓）', async () => {
+    await seedFullOrder('o-fx');
+    const rows = await listOwnedOrders(db, 'u-exp');
+    const fx = rows[0]?.fx_snapshot;
+    expect(typeof fx).toBe('object');
+    expect((fx as Record<string, number>)['USD']).toBeCloseTo(0.0066);
+  });
+});
+
+describe('findOwnedOrder / lockOwnedOrderForCancel（归属判定：非本人与不存在同 null）', () => {
+  beforeEach(async () => {
+    await db`insert into users (id, openid) values ('u-other', 'o-other')`;
+    await seedFullOrder('o-mine');
+    await seedFullOrder('o-theirs', { user: 'u-other' });
+  });
+
+  it('本人 → 全字段行（address_snapshot 也是普通对象）；他人与不存在 → null', async () => {
+    const mine = await findOwnedOrder(db, 'o-mine', 'u-exp');
+    expect(mine?.id).toBe('o-mine');
+    expect(mine?.contact_email).toBe('t@example.com');
+    expect((mine?.address_snapshot as Record<string, unknown>)['recipient']).toBe('Taro');
+    expect(await findOwnedOrder(db, 'o-theirs', 'u-exp')).toBeNull();
+    expect(await findOwnedOrder(db, 'o-ghost', 'u-exp')).toBeNull();
+  });
+
+  it('lock 版返回 {id,status} 并持行锁（取消路径的第一步）', async () => {
+    const locked = await lockOwnedOrderForCancel(db, 'o-mine', 'u-exp');
+    expect(locked).toEqual({ id: 'o-mine', status: 'created' });
+    expect(await lockOwnedOrderForCancel(db, 'o-theirs', 'u-exp')).toBeNull();
+  });
+});
+
+describe('listOrderItemsWithImage / listOrderTimeline / findLatestPaymentSummary', () => {
+  beforeEach(async () => {
+    await seedFullOrder('o-det');
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status, images)
+      values ('p-det', 'Detail Item', 'kitchen', 1000, 100, 5, 'JP', 'offline',
+              ${'["https://img.example.com/a.jpg"]'}::jsonb)
+    `;
+    await db`
+      insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd)
+      values ('oi-1', 'o-det', 'p-det', 'Detail Item', 2, 1000, 100, 1320)
+    `;
+  });
+
+  it('items 带出 products.images——商品已下架（offline）也照出：历史订单看的是下单时的事实', async () => {
+    const items = await listOrderItemsWithImage(db, 'o-det');
+    expect(items).toHaveLength(1);
+    expect(items[0]?.title_snapshot).toBe('Detail Item');
+    expect(items[0]?.qty).toBe(2);
+    expect(items[0]?.images).toEqual(['https://img.example.com/a.jpg']);
+  });
+
+  it('timeline 按 at 升序（取消链路的展示顺序）', async () => {
+    await db`insert into order_events (order_id, status, actor, at) values
+      ('o-det', 'created', 'user:u-exp', ${new Date(NOW.getTime() - 2_000)}),
+      ('o-det', 'cancelled', 'user:u-exp', ${new Date(NOW.getTime() - 1_000)})`;
+    const tl = await listOrderTimeline(db, 'o-det');
+    expect(tl.map((t) => t.status)).toEqual(['created', 'cancelled']);
+  });
+
+  it('payment 取 created_at 最新一条（换通道重发后旧的不该盖新的）；无支付行 → null', async () => {
+    expect(await findLatestPaymentSummary(db, 'o-det')).toBeNull();
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount, created_at)
+      values ('pay-old', 'o-det', 'mock', 'cancelled', 'JPY', 1200, ${new Date(NOW.getTime() - 2_000)}),
+             ('pay-new', 'o-det', 'stripe', 'initiated', 'USD', 800, ${new Date(NOW.getTime() - 1_000)})`;
+    const p = await findLatestPaymentSummary(db, 'o-det');
+    expect(p?.provider).toBe('stripe');
+    expect(p?.charge_amount).toBe(800);
+  });
+});
+
+describe('markOrderCancelled + voidInitiatedPayment（守卫 = 释放库存的排他凭证）', () => {
+  beforeEach(async () => {
+    await db`insert into users (id, openid) values ('u-other', 'o-other')`;
+  });
+
+  it('created / pending_payment → true + cancelled_at + order_events 行', async () => {
+    await seedFullOrder('o-c1');
+    await seedFullOrder('o-c2', { status: 'pending_payment' });
+    expect(await markOrderCancelled(db, 'o-c1', 'u-exp', NOW)).toBe(true);
+    expect(await markOrderCancelled(db, 'o-c2', 'u-exp', NOW)).toBe(true);
+    const r = await db`select status, cancelled_at from orders where id = 'o-c1'`;
+    expect(r[0]?.['status']).toBe('cancelled');
+    expect(r[0]?.['cancelled_at']).not.toBeNull();
+    const ev = await db`select status, actor from order_events where order_id = 'o-c1'`;
+    expect(ev[0]?.['status']).toBe('cancelled');
+  });
+
+  it('paid / 他人 / 不存在 → false（0 行命中不是错误，调用方判 40400/40902）', async () => {
+    await seedFullOrder('o-paid', { status: 'paid' });
+    await seedFullOrder('o-theirs', { user: 'u-other' });
+    expect(await markOrderCancelled(db, 'o-paid', 'u-exp', NOW)).toBe(false);
+    expect(await markOrderCancelled(db, 'o-theirs', 'u-exp', NOW)).toBe(false);
+    expect(await markOrderCancelled(db, 'o-ghost', 'u-exp', NOW)).toBe(false);
+  });
+
+  it('voidInitiatedPayment：initiated → cancelled（返回 1）；succeeded 不动（返回 0）', async () => {
+    await seedFullOrder('o-v1');
+    await seedFullOrder('o-v2');
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+      values ('pay-i', 'o-v1', 'mock', 'initiated', 'JPY', 1200),
+             ('pay-s', 'o-v2', 'mock', 'succeeded', 'JPY', 1200)`;
+    expect(await voidInitiatedPayment(db, 'o-v1')).toBe(1);
+    expect(await voidInitiatedPayment(db, 'o-v2')).toBe(0);
+    const r1 = await db`select status from payments where id = 'pay-i'`;
+    const r2 = await db`select status from payments where id = 'pay-s'`;
+    expect(r1[0]?.['status']).toBe('cancelled');
+    expect(r2[0]?.['status']).toBe('succeeded');
   });
 });

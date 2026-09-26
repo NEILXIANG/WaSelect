@@ -33,8 +33,8 @@ import type { DisplayCurrency } from '../domain/quote.js';
 /** 契约 /products 的 category 枚举（@limitation 一：契约词汇表，I2 提炼进 shared）。 */
 const PRODUCT_CATEGORIES = ['beauty', 'daily', 'kitchen', 'food'] as const;
 
-/** images JSONB 条目 → 契约 ImageSet（@why 见文件头）。 */
-function toImageSet(raw: unknown): { thumb: string; card: string; detail: string } | null {
+/** images JSONB 条目 → 契约 ImageSet（@why 见文件头）。U5c 起订单详情也复用（app→app helper 同 parseItems 先例）。 */
+export function toImageSet(raw: unknown): { thumb: string; card: string; detail: string } | null {
   if (typeof raw === 'string') return { thumb: raw, card: raw, detail: raw };
   if (raw !== null && typeof raw === 'object') {
     const o = raw as { thumb?: unknown; card?: unknown; detail?: unknown };

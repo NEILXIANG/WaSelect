@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.5.4
+  version: 0.5.5
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -9,6 +9,7 @@ info:
     0.5.3（D-59）：① `POST /orders/{id}/pay` 的请求体 `channel` 与 `PaymentIntent.channel` **去掉三值枚举**（改 `type: string`）——D-56「新增支付方式不再新增路由」的同一条逻辑：新增通道不该要求改契约 schema；当前登记在册的 key 改由顶层 `x-payment-channels` 机器可读字段声明，`scripts/check-contract.mjs` 仍拿它与 shared 的 `PAYMENT_CHANNEL` 做**双向集合比对**（防漂移这一层没丢，只是锚点从 schema 枚举换成了登记表）。
     ② `/orders/quote` 与 `/auth/wechat/login` 补 429 响应（D-52 已承诺限流，响应清单漏列）。③ `/readyz` 进契约（http.ts 早已实现并进 e2e，契约里没有这个路径）。
     0.5.4（AJ-102）：`/healthz` **删掉"调度看门狗"承诺**（原写"读 job_runs，tick/daily 超期则 503"，代码从未实现，且与 http.ts「存活探针不查依赖」的设计直接冲突——真实现会让 Render 把调度卡顿/DB 抖动当成实例故障杀进程）。改为对齐代码实际形状（只报进程存活）；调度器看门狗职责转交 I1 的 daily 对账 job（tick/daily 互相看心跳，异常走 error 日志告警），不由健康检查端点承担。
+    0.5.5（I1-U5c）：`GET /orders` 的 `status` 参数**双词表统一**——废掉旧的五值 UI 词（unpaid/paid/shipped/delivered/closed），改用 `OrderStatus` 10 态同一词表（与 /admin/orders 同一 $ref）。映射：unpaid ≈ created+pending_payment（前端各查一次或不过滤）、closed ≈ cancelled+expired；paid/shipped/delivered 同名单态不变。
     鉴权：Bearer JWT（小程序 aud=mp；管理端 aud=admin）。D-49 起没有 H5 身份：银行卡支付在 Stripe Checkout 托管页完成。写接口支持 Idempotency-Key 头（24 小时内重复返回原响应）。
     展示价只由后端计算（display 对象），前端不做汇率乘法。
     F11（ADR-28）：支付回调**合并为统一入口** `/pay/callback/{channel}`（channel 为路径参数，新增通道不再新增路由），
@@ -144,7 +145,7 @@ paths:
       responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Quote'}}}}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
   /orders:
     get:
-      parameters: [{name: status, in: query, schema: {type: string, enum: [unpaid, paid, shipped, delivered, closed]}}]
+      parameters: [{name: status, in: query, schema: {$ref: '#/components/schemas/OrderStatus'}, description: '按 10 态单词过滤（0.5.5 起双词表统一；旧五值 UI 词的映射见版本说明）'}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/OrderSummary'}}}}}}}}
     post:
       summary: 建单（不含支付；扣减 stock；写 fx_snapshot 与 expires_at）

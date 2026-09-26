@@ -17,6 +17,7 @@ import { loadConfig } from '../config.js';
 import { createEventBus } from '../adapters/event-bus.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
+import { registerBusinessEventLog } from './business-events.js';
 import { signToken } from './auth.js';
 
 let db: Db;
@@ -49,7 +50,12 @@ async function buildServer(): Promise<{
   });
   const app = createHttpApp({
     logger,
-    mount: (a) => mountAllRoutes(a, { config, logger, db, events: createEventBus(logger) }),
+    mount: (a) => {
+      // main.ts 的装配复刻：业务事件订阅者挂在总线上（order.cancelled 分发断言依赖它）
+      const events = createEventBus(logger);
+      registerBusinessEventLog(events, logger);
+      mountAllRoutes(a, { config, logger, db, events });
+    },
   });
   const server = await listen(app);
   return { url: `http://127.0.0.1:${server.port}`, sink, close: server.close };
@@ -279,6 +285,104 @@ describe('POST /orders（建单全链路）', () => {
       }
       const r = await create(srv.url, probe, 'probe-31');
       expect(r.json['code']).toBe(42901);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+describe('POST /orders/{id}/cancel（I1-U5c：取消 = 迁移 + 作废旧支付行 + 释放库存）', () => {
+  async function cancel(
+    url: string,
+    orderId: string,
+    auth: string = token,
+  ): Promise<{ status: number; json: Record<string, unknown> }> {
+    const res = await fetch(`${url}/api/v1/orders/${orderId}/cancel`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${auth}` },
+    });
+    return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+  }
+
+  it('created → 200：状态迁移 + cancelled_at + 事件 + 库存回补 + order.cancelled 分发', async () => {
+    const srv = await buildServer();
+    try {
+      const created = await create(srv.url, BODY, 'c1');
+      const orderId = String(created.json['order_id']);
+      const r = await cancel(srv.url, orderId);
+      expect(r.status).toBe(200);
+
+      const row = await db`select status, cancelled_at from orders where id = ${orderId}`;
+      expect(row[0]?.['status']).toBe('cancelled');
+      expect(row[0]?.['cancelled_at']).not.toBeNull();
+      const knife = await db`select stock from products where id = 'p-knife'`;
+      expect(Number(knife[0]?.['stock'])).toBe(5); // 回补：建单扣的 1 件还回
+      const cup = await db`select stock from products where id = 'p-cup'`;
+      expect(Number(cup[0]?.['stock'])).toBe(10);
+      const events = await db`
+        select status from order_events where order_id = ${orderId} order by at, id
+      `;
+      expect(events.map((e) => e['status'])).toEqual(['created', 'cancelled']);
+      // 领域事件真的分发了（订阅者落日志，BUSINESS_EVENT_LOG = business_event）
+      const logs = srv.sink.lines.filter((l) => l.includes('order.cancelled'));
+      expect(logs.length).toBeGreaterThan(0);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('pending_payment + initiated 支付行 → 200：支付行作废为 cancelled（succeeded 绝不会被动）', async () => {
+    const srv = await buildServer();
+    try {
+      const created = await create(srv.url, BODY, 'c2');
+      const orderId = String(created.json['order_id']);
+      await db`update orders set status = 'pending_payment' where id = ${orderId}`;
+      await db`
+        insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+        values ('pay-c2', ${orderId}, 'mock', 'initiated', 'JPY', ${TOTAL})
+      `;
+      const r = await cancel(srv.url, orderId);
+      expect(r.status).toBe(200);
+      const pay = await db`select status from payments where id = 'pay-c2'`;
+      expect(pay[0]?.['status']).toBe('cancelled');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('重复取消 → 40902（状态机是天然幂等键），库存只回补一次', async () => {
+    const srv = await buildServer();
+    try {
+      const created = await create(srv.url, BODY, 'c3');
+      const orderId = String(created.json['order_id']);
+      expect((await cancel(srv.url, orderId)).status).toBe(200);
+      const again = await cancel(srv.url, orderId);
+      expect(again.json['code']).toBe(40902);
+      const knife = await db`select stock from products where id = 'p-knife'`;
+      expect(Number(knife[0]?.['stock'])).toBe(5); // 不是 6：restore 不幂等，靠守卫排他
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('paid 不可取消 → 40902；他人单与不存在同 40400（防存在性探测）', async () => {
+    const srv = await buildServer();
+    try {
+      const created = await create(srv.url, BODY, 'c4');
+      const orderId = String(created.json['order_id']);
+      await db`update orders set status = 'paid' where id = ${orderId}`;
+      const paid = await cancel(srv.url, orderId);
+      expect(paid.json['code']).toBe(40902);
+
+      await db`insert into users (id, openid) values ('u-2', 'o-2')`;
+      const token2 = await signToken(
+        { sub: 'u-2', role: 'user' },
+        { secret: JWT_SECRET, issuer: 'waselect' },
+      );
+      const others = await cancel(srv.url, orderId, token2);
+      expect(others.json['code']).toBe(40400);
+      const ghost = await cancel(srv.url, 'ord-ghost');
+      expect(ghost.json['code']).toBe(40400);
     } finally {
       await srv.close();
     }
