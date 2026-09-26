@@ -63,7 +63,12 @@ describe('mock 通道', () => {
     });
     expect(s.entry.mode).toBe('in_app');
     if (s.entry.mode !== 'in_app') throw new Error('unreachable');
-    expect(s.entry.params).toEqual({ orderId: 'sk-1', amountJpy: 12_000, currency: 'JPY' });
+    expect(s.entry.params).toEqual({
+      auto: true,
+      orderId: 'sk-1',
+      amountJpy: 12_000,
+      currency: 'JPY',
+    });
     expect(JSON.stringify(s.entry.params)).not.toContain('secret');
     // 到期时间来自**注入的**时钟（不是 new Date()）
     expect(s.expiresAt).toBe(

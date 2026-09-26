@@ -5,10 +5,10 @@
  *      "测试插进去了、seed 脚本漏插一张表"或"列序两处不一致"的漂移。
  *      这里把每张表的单行 INSERT 收敛成各一个函数，seed 脚本、db 测试、反例库共用。
  *
- * @why `images` / `compliance_tags` 用 `JSON.stringify` 而不是 postgres.js 的
- *      `db.json()`：postgres.js 对数组参数默认按 PG 数组序列化（`{a,b}`），
- *      而这两列是 **JSONB**——必须显式转 JSON 文本，否则报 42883（类型不匹配）。
- *      这条已在 entities.db.test.ts 里踩过，所以在这里钉成唯一写法。
+ * @why JSONB 列用 `db.json()`（U6a 更正）：`JSON.stringify` 成字符串再当参数传，
+ *      驱动会按推断出的 jsonb 参数类型**再编码一次**（双重编码——列里存字符串标量，
+ *      `->>` 提取 null；裸传 JS 数组则按 PG 数组序列化报 42883，F9 踩的是这半边）。
+ *      `db.json()` 让驱动自己做那一次且仅那一次 JSON 编码，两种坑都避开。
  *
  * @limitation 一：只管"插"，不管"清"。清表（`resetTestDb` / 将来的一键灌数据脚本）由调用方决定——
  *              合在一起会让"我只想追加一条"也付出清空全库的代价。
@@ -21,11 +21,6 @@
 import type { Db } from '../../server/src/adapters/db.js';
 import type { AddressRow, ProductRow, ShippingRateRow, UserRow } from './entities.js';
 import type { SeedBundle } from './scenarios.js';
-
-/** 写 JSONB 列：数组 → JSON 文本（见文件头 @why）。 */
-function toJson(arr: readonly string[]): string {
-  return JSON.stringify(arr);
-}
 
 export async function insertUserRow(db: Db, u: UserRow): Promise<void> {
   await db`
@@ -49,8 +44,8 @@ export async function insertProductRow(db: Db, p: ProductRow): Promise<void> {
       weight_g, stock, compliance_tags, hs_code, customs_desc_en, origin_country,
       jan_code, purchase_source, status
     ) values (
-      ${p.id}, ${p.title}, ${p.title_ja}, ${p.category}, ${p.description}, ${toJson(p.images)},
-      ${p.price_jpy}, ${p.cost_jpy}, ${p.weight_g}, ${p.stock}, ${toJson(p.compliance_tags)},
+      ${p.id}, ${p.title}, ${p.title_ja}, ${p.category}, ${p.description}, ${db.json(p.images)},
+      ${p.price_jpy}, ${p.cost_jpy}, ${p.weight_g}, ${p.stock}, ${db.json(p.compliance_tags)},
       ${p.hs_code}, ${p.customs_desc_en}, ${p.origin_country}, ${p.jan_code}, ${p.purchase_source}, ${p.status}
     )
   `;

@@ -47,6 +47,7 @@ import { mountProductRoutes } from './product-routes.js';
 import { mountAddressRoutes } from './address-routes.js';
 import { mountOrderRoutes } from './order-routes.js';
 import { mountOrderQueryRoutes } from './order-query-routes.js';
+import { mountPayIntentRoutes } from './pay-intent-routes.js';
 
 /**
  * 是否挂载骨架路由。**生产不挂。**
@@ -174,6 +175,19 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     config,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity: withIdentityCache(createIdentityCheck(db)),
+  });
+
+  // ── 发起支付（I1-U6a）：幂等 + 限流；注册表用本函数顶部装配的那一份（可插拔唯一出处）──
+  mountPayIntentRoutes(app, {
+    logger,
+    clock: systemClock,
+    idGen: systemIdGen,
+    config,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity: withIdentityCache(createIdentityCheck(db)),
+    idempotency: createIdempotencyExecutor(db),
+    registry,
+    payLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
   });
 
   if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见 @limitation）

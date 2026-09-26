@@ -14,13 +14,18 @@ import { closeDb, type Db } from './db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 import { decrementStock, lockExpiredPayableOrders, markOrderExpired } from './orders.js';
 import {
+  findInitiatedPayment,
   findLatestPaymentSummary,
   findOwnedOrder,
+  findPayLinkTarget,
   listOrderItemsWithImage,
   listOrderTimeline,
   listOwnedOrders,
   lockOwnedOrderForCancel,
+  lockOwnedOrderForPay,
   markOrderCancelled,
+  markOrderPendingPayment,
+  setPayTokenHash,
   voidInitiatedPayment,
 } from './orders.js';
 
@@ -174,7 +179,7 @@ describe('decrementStock（U5b：原子扣减的唯一正确形态）', () => {
 /** 造一张带全字段的单（查询/取消用；归属与状态可配）。 */
 async function seedFullOrder(
   id: string,
-  over: { user?: string; status?: string; createdAt?: Date; fx?: string } = {},
+  over: { user?: string; status?: string; createdAt?: Date; fx?: Record<string, number> } = {},
 ): Promise<void> {
   await db`
     insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
@@ -182,8 +187,8 @@ async function seedFullOrder(
                         terms_version, expires_at, created_at)
     values (${id}, ${`W-${id}`}, ${over.user ?? 'u-exp'}, ${over.status ?? 'created'},
             1000, 200, 150, 1200, 500,
-            ${over.fx ?? '{"USD":0.0066}'}::jsonb,
-            ${'{"recipient":"Taro","phone":"+12025550123","line1":"1 Main St","city":"Springfield","state":"IL","postal_code":"62701","country":"US"}'}::jsonb,
+            ${db.json(over.fx ?? { USD: 0.0066 })},
+            ${db.json({ recipient: 'Taro', phone: '+12025550123', line1: '1 Main St', city: 'Springfield', state: 'IL', postal_code: '62701', country: 'US' })},
             't@example.com', 'TOS-1', ${NOW}, ${over.createdAt ?? NOW})
   `;
 }
@@ -208,7 +213,7 @@ describe('listOwnedOrders（U5c：归属过滤进 WHERE，不拉回内存再滤�
     expect(rows.map((r) => r.id)).toEqual(['o-paid']);
   });
 
-  it('fx_snapshot 读出为普通对象——jsonb 读回 string 的驱动坑在仓储层消化（U5b 实抓）', async () => {
+  it('fx_snapshot 读出为普通对象（db.json 单重编码写入 → 驱动解析直出；jsonbValue 兜旧行）', async () => {
     await seedFullOrder('o-fx');
     const rows = await listOwnedOrders(db, 'u-exp');
     const fx = rows[0]?.fx_snapshot;
@@ -246,7 +251,7 @@ describe('listOrderItemsWithImage / listOrderTimeline / findLatestPaymentSummary
     await db`
       insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status, images)
       values ('p-det', 'Detail Item', 'kitchen', 1000, 100, 5, 'JP', 'offline',
-              ${'["https://img.example.com/a.jpg"]'}::jsonb)
+              ${db.json(['https://img.example.com/a.jpg'])})
     `;
     await db`
       insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd)
@@ -318,5 +323,89 @@ describe('markOrderCancelled + voidInitiatedPayment（守卫 = 释放库存的�
     const r2 = await db`select status from payments where id = 'pay-s'`;
     expect(r1[0]?.['status']).toBe('cancelled');
     expect(r2[0]?.['status']).toBe('succeeded');
+  });
+});
+
+// ── I1-U6a：支付意图 / 短链 ──────────────────────────────────────────────────
+
+describe('lockOwnedOrderForPay（发起支付的第一步：持锁读全所需字段）', () => {
+  beforeEach(async () => {
+    await db`insert into users (id, openid) values ('u-other', 'o-other')`;
+    await seedFullOrder('o-pay');
+    await seedFullOrder('o-pay-theirs', { user: 'u-other' });
+  });
+
+  it('本人 → order_no/status/total/expires_at/快照/目的国（从 address_snapshot jsonb 提取）；他人与不存在 → null', async () => {
+    const row = await lockOwnedOrderForPay(db, 'o-pay', 'u-exp');
+    expect(row?.order_no).toBe('W-o-pay');
+    expect(row?.status).toBe('created');
+    expect(row?.total_jpy).toBe(1200);
+    expect(row?.dest_country).toBe('US');
+    expect((row?.fx_snapshot as Record<string, number>)['USD']).toBeCloseTo(0.0066);
+    expect(await lockOwnedOrderForPay(db, 'o-pay-theirs', 'u-exp')).toBeNull();
+    expect(await lockOwnedOrderForPay(db, 'o-ghost', 'u-exp')).toBeNull();
+  });
+});
+
+describe('findInitiatedPayment（在途支付意图至多一条：部分唯一索引保证）', () => {
+  beforeEach(async () => {
+    await seedFullOrder('o-ip');
+  });
+
+  it('initiated 行返回全字段；cancelled/succeeded 不取；无行 → null', async () => {
+    expect(await findInitiatedPayment(db, 'o-ip')).toBeNull();
+    await db`insert into payments (id, order_id, provider, provider_ref, status, charge_currency, charge_amount, pay_url)
+      values ('pay-i1', 'o-ip', 'stripe', 'cs_123', 'initiated', 'USD', 800, 'https://checkout.stripe.com/c/pay/cs_123')`;
+    const row = await findInitiatedPayment(db, 'o-ip');
+    expect(row).toMatchObject({
+      id: 'pay-i1',
+      provider: 'stripe',
+      provider_ref: 'cs_123',
+      charge_currency: 'USD',
+      charge_amount: 800,
+      pay_url: 'https://checkout.stripe.com/c/pay/cs_123',
+    });
+    await db`update payments set status = 'cancelled' where id = 'pay-i1'`;
+    expect(await findInitiatedPayment(db, 'o-ip')).toBeNull();
+  });
+});
+
+describe('markOrderPendingPayment（首次发起才迁移+记事件；重复发起不重复记）', () => {
+  it('created → true + order_events；pending_payment / paid → false 且无事件', async () => {
+    await seedFullOrder('o-pp');
+    expect(await markOrderPendingPayment(db, 'o-pp', NOW)).toBe(true);
+    const r = await db`select status from orders where id = 'o-pp'`;
+    expect(r[0]?.['status']).toBe('pending_payment');
+    const ev = await db`select status from order_events where order_id = 'o-pp'`;
+    expect(ev.map((e) => e['status'])).toEqual(['pending_payment']);
+
+    // 第二次（换通道重新发起 / 同通道复用）：不迁移、不重复记事件
+    expect(await markOrderPendingPayment(db, 'o-pp', NOW)).toBe(false);
+    const ev2 = await db`select status from order_events where order_id = 'o-pp'`;
+    expect(ev2).toHaveLength(1);
+
+    await seedFullOrder('o-pp-paid', { status: 'paid' });
+    expect(await markOrderPendingPayment(db, 'o-pp-paid', NOW)).toBe(false);
+  });
+});
+
+describe('setPayTokenHash + findPayLinkTarget（D-49 短链的两端）', () => {
+  it('hash 落库；findPayLinkTarget 联出 status/hash/initiated 的 pay_url（无支付行 → pay_url null）', async () => {
+    await seedFullOrder('o-link', { status: 'pending_payment' });
+    await setPayTokenHash(db, 'o-link', 'a'.repeat(64));
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount, pay_url)
+      values ('pay-l1', 'o-link', 'stripe', 'initiated', 'USD', 800, 'https://checkout.stripe.com/c/pay/cs_x')`;
+
+    const hit = await findPayLinkTarget(db, 'o-link');
+    expect(hit).toMatchObject({
+      status: 'pending_payment',
+      pay_token_hash: 'a'.repeat(64),
+      pay_url: 'https://checkout.stripe.com/c/pay/cs_x',
+    });
+
+    await seedFullOrder('o-link-nopay');
+    const noPay = await findPayLinkTarget(db, 'o-link-nopay');
+    expect(noPay?.pay_url).toBeNull();
+    expect(await findPayLinkTarget(db, 'o-ghost')).toBeNull();
   });
 });

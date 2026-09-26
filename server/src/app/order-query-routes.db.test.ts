@@ -65,7 +65,7 @@ beforeEach(async () => {
   await db`
     insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status, images)
     values ('p-knife', 'Chef Knife', 'kitchen', 8800, 620, 5, 'JP', 'active',
-            ${'["https://img.example.com/knife.jpg"]'}::jsonb),
+            ${db.json(['https://img.example.com/knife.jpg'])}),
            ('p-cup', 'Tea Cup', 'kitchen', 3200, 480, 10, 'JP', 'active', '[]'::jsonb)
   `;
   for (const s of makeShippingRates('placeholder')) {

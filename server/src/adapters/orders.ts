@@ -24,7 +24,7 @@
  * @see app/expire-orders.ts（消费方：超时关单 job）；migrations/001_init.sql（orders 表）；
  *      docs/I1阶段开发实施方案.md §3.2；D-33（30 分钟超时关单）
  */
-import type { Db } from './db.js';
+import type { Db, JSONValue } from './db.js';
 
 /**
  * 可支付状态：只有这两个状态的订单会被超时关单。
@@ -80,8 +80,13 @@ export async function markOrderExpired(tx: Db, orderId: string, at: Date): Promi
 
 // ── I1-U5b：建单 / 库存 ─────────────────────────────────────────────────────
 
-/** 建单快照用的地址行（普通对象，见 findOwnedAddress 的 ⚠️）。 */
-export interface OrderAddressSnapshot {
+/**
+ * 建单快照用的地址行（普通对象，见 findOwnedAddress 的 ⚠️）。
+ * @why 用 `type` 不用 `interface`：它要作为 `OrderInsertRow.address_snapshot`（JSONValue）
+ *      传给 `tx.json()`，而 JSONValue 的对象成员要求索引签名——interface 没有隐式
+ *      索引签名（TS 对 interface 的既定行为），对象字面量 type 有。两者在取值层面等价。
+ */
+export type OrderAddressSnapshot = {
   id: string;
   recipient: string;
   phone: string;
@@ -91,7 +96,7 @@ export interface OrderAddressSnapshot {
   state: string;
   postal_code: string;
   country: string;
-}
+};
 
 /**
  * 读取一张**确定属于该用户**的地址（建单快照的来源）。
@@ -159,7 +164,15 @@ export async function restoreStockForOrder(tx: Db, orderId: string): Promise<num
   return rows.count;
 }
 
-/** insertOrder 的行（JSONB 列传字符串，由 SQL 侧 ::jsonb 转换——postgres.js 数组进 jsonb 的坑见 F9）。 */
+/**
+ * insertOrder 的行。
+ * @why JSONB 列传 **JS 对象**、写入用 `tx.json()`——`${字符串}::jsonb` 会被驱动按
+ *      推断出的 jsonb 参数类型**再 JSON 编码一次**（双重编码：列里存的是字符串标量，
+ *      SQL 侧 `->>` 提取一律 null；读侧全靠驱动解析+调用方 JSON.parse 双重解码才
+ *      "看起来正常"——U6a 探针实锤，见 jsonbValue 的 ⚠️）。
+ *      类型上用驱动的 `JSONValue` 而不是 `unknown`：`tx.json()` 的签名就只收 JSONValue，
+ *      这里把"必须可 JSON 序列化"的约束交给编译器，而不是运行时才被序列化失败咬到。
+ */
 export interface OrderInsertRow {
   id: string;
   order_no: string;
@@ -169,8 +182,8 @@ export interface OrderInsertRow {
   duty_jpy: number;
   total_jpy: number;
   weight_g: number;
-  fx_snapshot: string;
-  address_snapshot: string;
+  fx_snapshot: JSONValue;
+  address_snapshot: JSONValue;
   contact_email: string | null;
   terms_version: string;
   expires_at: Date;
@@ -188,7 +201,7 @@ export async function insertOrder(tx: Db, row: OrderInsertRow): Promise<void> {
                         terms_version, expires_at)
     values (${row.id}, ${row.order_no}, ${row.user_id}, 'created', ${row.items_jpy},
             ${row.shipping_jpy}, ${row.duty_jpy}, ${row.total_jpy}, ${row.weight_g},
-            ${row.fx_snapshot}::jsonb, ${row.address_snapshot}::jsonb, ${row.contact_email},
+            ${tx.json(row.fx_snapshot)}, ${tx.json(row.address_snapshot)}, ${row.contact_email},
             ${row.terms_version}, ${row.expires_at})
   `;
 }
@@ -222,10 +235,15 @@ export async function insertOrderItems(
 // ── I1-U5c：查询 / 取消 ─────────────────────────────────────────────────────
 
 /**
- * jsonb 列读出归一化：本仓库的 postgres.js 配置**没有注册 jsonb 解析器**，
- * 读回的是 **string**（U5b 接线测试实抓：断言前必须 JSON.parse）。
- * 在仓储层消化掉这个驱动行为——调用方不该每个人都记得判一次 typeof。
- * ⚠️ 若将来给驱动注册了解析器，本函数对已是对象的值直通，两种行为都正确。
+ * jsonb 列读出归一化：对象直通；字符串再 JSON.parse 一次。
+ *
+ * ⚠️ 真实机制（U6a 探针实锤，推翻 U5b 的"驱动未注册解析器"误判）：
+ *    本仓库的 postgres.js **会解析 jsonb**（对象列读回就是 JS object）。
+ *    读回 string 的唯一原因是**写侧双重编码**——旧写法 `${JSON文本}::jsonb`
+ *    让驱动按推断的 jsonb 参数类型把字符串再 JSON 编码一遍，列里存的是
+ *    **字符串标量**（SQL 侧 `->>` 提取 null，是它最毒的表现：静默丢数据不报错）。
+ *    正确写法是 `tx.json(obj)`（insertOrder 已改）；本分支只为兼容
+ *    修复前已落库的双重编码行（dev/测试库），新数据不会走到。
  */
 function jsonbValue(raw: unknown): unknown {
   return typeof raw === 'string' ? (JSON.parse(raw) as unknown) : raw;
@@ -468,4 +486,137 @@ export async function voidInitiatedPayment(tx: Db, orderId: string): Promise<num
      where order_id = ${orderId} and status = 'initiated'
   `;
   return rows.count;
+}
+
+// ── I1-U6a：支付意图 / 短链 ──────────────────────────────────────────────────
+
+/** 发起支付要读的订单字段（一次 FOR UPDATE 取全，不再二查）。 */
+export interface OrderPayRow {
+  id: string;
+  order_no: string;
+  status: string;
+  total_jpy: number;
+  expires_at: Date;
+  fx_snapshot: unknown;
+  /** 目的国（从 address_snapshot jsonb 里提取；建单时地址快照即真相）。 */
+  dest_country: string | null;
+}
+
+/**
+ * 发起支付的第一步：**持行锁**读订单（并发支付/关单/取消互斥）。
+ * @why 目的国从 `address_snapshot->>'country'` 取而不是查 country_profiles：
+ *      这张单发往哪是**下单时已固定的事实**；全局"当前唯一活跃国家"是报价期的
+ *      解析口径，支付期若运营改了配置，老单的目的国不能跟着变。
+ */
+export async function lockOwnedOrderForPay(
+  tx: Db,
+  orderId: string,
+  userId: string,
+): Promise<OrderPayRow | null> {
+  const rows = await tx`
+    select id, order_no, status, total_jpy, expires_at, fx_snapshot,
+           address_snapshot->>'country' as dest_country
+      from orders where id = ${orderId} and user_id = ${userId}
+      for update
+  `;
+  const r = rows[0];
+  if (r === undefined) return null;
+  return {
+    id: String(r.id),
+    order_no: String(r.order_no),
+    status: String(r.status),
+    total_jpy: Number(r.total_jpy),
+    expires_at: r.expires_at as Date,
+    fx_snapshot: jsonbValue(r.fx_snapshot),
+    dest_country: r.dest_country === null ? null : String(r.dest_country),
+  };
+}
+
+/** 在途支付意图行（uq_payments_one_initiated 保证至多一条）。 */
+export interface InitiatedPaymentRow {
+  id: string;
+  provider: string;
+  provider_ref: string | null;
+  charge_currency: string;
+  charge_amount: number;
+  pay_url: string | null;
+}
+
+/** 取订单的在途支付意图（复用/换通道判定的来源）；无 → null。 */
+export async function findInitiatedPayment(
+  db: Db,
+  orderId: string,
+): Promise<InitiatedPaymentRow | null> {
+  const rows = await db`
+    select id, provider, provider_ref, charge_currency, charge_amount, pay_url
+      from payments where order_id = ${orderId} and status = 'initiated'
+  `;
+  const r = rows[0];
+  if (r === undefined) return null;
+  return {
+    id: String(r.id),
+    provider: String(r.provider),
+    provider_ref: r.provider_ref === null ? null : String(r.provider_ref),
+    charge_currency: String(r.charge_currency),
+    charge_amount: Number(r.charge_amount),
+    pay_url: r.pay_url === null ? null : String(r.pay_url),
+  };
+}
+
+/**
+ * 首次发起支付：created → pending_payment（写审计事件）。
+ * @returns true = 本次真的迁了；false = 已在 pending_payment（重复发起/换通道）
+ *          或状态已被迁走——**不是错误**，调用方按自己的守卫另行判定。
+ * @why 守卫只认 `created`：重复发起不重复记事件（时间线里两个 pending_payment
+ *      会让"到底发起了几次"变成猜谜），已在 pending_payment 的单继续走流程即可。
+ */
+export async function markOrderPendingPayment(tx: Db, orderId: string, at: Date): Promise<boolean> {
+  const updated = await tx`
+    update orders set status = 'pending_payment', updated_at = now()
+     where id = ${orderId} and status = 'created'
+  `;
+  if (updated.count === 0) return false;
+  await tx`
+    insert into order_events (order_id, status, actor, at)
+    values (${orderId}, 'pending_payment', 'user', ${at})
+  `;
+  return true;
+}
+
+/**
+ * 落短链 token 的 sha256（D-49）。
+ * @why **覆盖写**：同一订单重新发起支付时轮换 token——旧链接立即失效（hash 对不上），
+ *      只有最新签发的链接可用。明文 token 永不落库（库里只有 hash），
+ *      所以"重新发起时返回同一个链接"在设计上不可能，轮换是唯一诚实的做法。
+ */
+export async function setPayTokenHash(tx: Db, orderId: string, hash: string): Promise<void> {
+  await tx`update orders set pay_token_hash = ${hash}, updated_at = now() where id = ${orderId}`;
+}
+
+/** `GET /pay/link/{id}` 的校验素材（订单状态 + token hash + 在途支付的托管页 URL）。 */
+export interface PayLinkRow {
+  status: string;
+  pay_token_hash: string | null;
+  pay_url: string | null;
+}
+
+/**
+ * 短链落地校验的一次性读取（LEFT JOIN 在途支付行；无 initiated 行 → pay_url null）。
+ * @why 只联 **initiated**：支付行已作废（换通道/取消）意味着旧链接必须死——
+ *      用 cancelled 行的 pay_url 跳转 = 把用户送去一笔我们已不认账的支付。
+ */
+export async function findPayLinkTarget(db: Db, orderId: string): Promise<PayLinkRow | null> {
+  const rows = await db`
+    select o.status, o.pay_token_hash, p.pay_url
+      from orders o
+      left join payments p on p.order_id = o.id and p.status = 'initiated'
+     where o.id = ${orderId}
+  `;
+  const r = rows[0];
+  if (r === undefined) return null;
+  return {
+    status: String(r.status),
+    pay_token_hash: r.pay_token_hash === null ? null : String(r.pay_token_hash),
+    pay_url: r.pay_url === null ? null : String(r.pay_url),
+  };
 }

@@ -165,8 +165,9 @@ export async function createOrder(
           duty_jpy: q.dutyJpy ?? 0,
           total_jpy: q.totalJpy,
           weight_g: q.weightG,
-          fx_snapshot: JSON.stringify(fxSnapshot),
-          address_snapshot: JSON.stringify(address),
+          // JSONB 列传对象（tx.json 单重编码；`${字符串}::jsonb` 是双重编码，见 orders.ts ⚠️）
+          fx_snapshot: fxSnapshot,
+          address_snapshot: address,
           contact_email: input.contactEmail ?? null,
           terms_version: termsVersion,
           expires_at: expiresAt,

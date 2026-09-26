@@ -34,6 +34,15 @@ import postgres, { type Sql } from 'postgres';
 export type Db = Sql<{ int8: number }>;
 
 /**
+ * `sql.json(value)` 的参数类型（驱动定义）。适配器层统一从这里取，
+ * 不在各仓储文件里直接 `from 'postgres'`（驱动 import 单一来源）。
+ * @why 它是带索引签名的递归联合：**interface 没有隐式索引签名、不可直接赋给它**，
+ *      要传接口形状的对象，要么把声明写成 `type`（对象字面量 type 有隐式索引签名），
+ *      要么在调用点显式 `as JSONValue`（即"我保证它可 JSON 序列化"）。
+ */
+export type { JSONValue } from 'postgres';
+
+/**
  * `bigint`（int8）在 pg_type 里的 oid。
  * @why 自定义类型**靠 `from` 里的 oid 匹配，不靠键名**——实测：`types: { int8: {...} }` 与
  *      `{ bigint: {...} }` 效果完全相同，键名只是标签；而 `from: []` 会导致解析器**永远不被调用**

@@ -54,6 +54,14 @@ describe('场景整体入库（FK 与 JSONB 列序）', () => {
       select count(*)::int as n from addresses a
       where not exists (select 1 from users u where u.id = a.user_id)`;
     expect(Number(orphans[0]?.n)).toBe(0);
+
+    // JSONB 写入必须是**单重编码**（U6a 防复发）：SQL 侧能提取才算数——
+    // 双重编码（`${JSON文本}::jsonb` 或 stringify 后裸传）时列里是字符串标量，
+    // 读侧双重解码"看起来正常"，只有 `->>` 会静默返回 null（探针实锤）
+    const imgProbe = await db`
+      select count(*)::int as n from products
+      where jsonb_typeof(images) = 'array' and jsonb_typeof(compliance_tags) = 'array'`;
+    expect(Number(imgProbe[0]?.n)).toBe(counts.products);
   });
 
   it('demoShop：4 商品 + 完整运费档', async () => {

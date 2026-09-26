@@ -150,7 +150,8 @@ describe('POST /orders（建单全链路）', () => {
         weight_g: 1830,
         terms_version: 'TOS-TEST-1',
       });
-      // ⚠️ 本仓库的驱动配置下 jsonb 读回是 **string**（未注册 jsonb 解析器），断言前先 parse
+      // 修复双重编码后（U6a，insertOrder 改 tx.json）：jsonb 读回已是对象；
+      // 保留 typeof 分支只为兼容修复前落库的旧行（字符串标量需再 parse 一层）
       const snapshotRaw = orders[0]?.['address_snapshot'];
       const snapshot = (
         typeof snapshotRaw === 'string' ? JSON.parse(snapshotRaw) : snapshotRaw

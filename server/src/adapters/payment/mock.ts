@@ -101,8 +101,15 @@ export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): 
         providerRef: `mock_${deps.idGen.uuid()}`,
         entry: {
           mode: 'in_app',
-          // 只给"前端唤起需要的样子"，不含任何密钥或内部字段
-          params: { orderId: req.orderId, amountJpy: req.amountJpy, currency: req.currency },
+          // 只给"前端唤起需要的样子"，不含任何密钥或内部字段。
+          // `auto: true` 是审核期的自动确认信号（契约 PaymentIntent payload 的 mock 形状）：
+          // 前端据此直接走"模拟支付成功"流程，不必硬编码 channel === 'mock'（D-56 不写死通道名）
+          params: {
+            auto: true,
+            orderId: req.orderId,
+            amountJpy: req.amountJpy,
+            currency: req.currency,
+          },
         },
         expiresAt: new Date(deps.clock.now().getTime() + 30 * 60 * 1000).toISOString(),
       };
