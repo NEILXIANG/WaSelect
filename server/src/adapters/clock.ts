@@ -20,3 +20,16 @@ import type { Clock } from '../ports/clock.js';
 export const systemClock: Clock = {
   now: () => new Date(),
 };
+
+/**
+ * `注入时钟 + 偏移毫秒`（如 expires_at = now + TTL）的**唯一落点**。
+ *
+ * @why ESLint 纯度规则在业务侧禁一切 `new Date(...)`（含带参形态）——它要防的是
+ *      "绕开注入时钟读真实时间"，但顺带也禁掉了对注入时间的合法运算。
+ *      运算本身不产生新时间源，收口到边界层（adapters）后：业务侧写
+ *      `plusMs(clock.now(), TTL)`，时间来源仍是注入的，测试里固定时钟照常生效
+ *      （create-order.ts 的 expires_at 是被这条 lint 拦下后迁来的，I1-U5b）。
+ */
+export function plusMs(base: Date, ms: number): Date {
+  return new Date(base.getTime() + ms);
+}

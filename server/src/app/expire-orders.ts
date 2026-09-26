@@ -25,12 +25,20 @@
  * @limitation 三：`EXPIRE_BATCH_LIMIT` 是**代码常量**不是配置项：它是"单轮事务时长"的保护阀，
  *              不是运营参数；真要调大说明单量已到该重新审视调度形态的量级，那次调整本该发版。
  *              （与 IDEMPOTENCY_TTL_HOURS 同口径。）
+ * @limitation 四：I1-U5b 起关单连带**释放库存**（建单扣减的镜像）。⚠️ 技术文档 §1 还要求
+ *              关单时"取消该订单所有未完成的支付意图"（Stripe checkout.sessions.expire）——
+ *              那一步等 U6 支付意图落地后接线（当前不存在 initiated 行可取消），
+ *              且 Provider HTTP 必须在事务提交后执行（D-50）。
  *
  * @see adapters/orders.ts（SQL 与两个 @why：含等号边界 / SKIP LOCKED）；
  *      app/mark-paid.ts（另一半：迟到付款守卫）；docs/I1阶段开发实施方案.md §3.2
  */
 import type { Db } from '../adapters/db.js';
-import { lockExpiredPayableOrders, markOrderExpired } from '../adapters/orders.js';
+import {
+  lockExpiredPayableOrders,
+  markOrderExpired,
+  restoreStockForOrder,
+} from '../adapters/orders.js';
 import type { JobContext, JobOutcome, SchedulerJob } from '../ports/scheduler.js';
 
 export const EXPIRE_ORDERS_JOB = 'expire_orders';
@@ -54,6 +62,11 @@ export function createExpireOrdersJob(opts: { batchLimit?: number } = {}): Sched
       for (const id of ids) {
         // false = 被别人抢先迁走（恰好落账/取消），不是错误，不发事件（文件头 @why ③）
         if (await markOrderExpired(ctx.tx, id, ctx.startedAt)) {
+          // I1-U5b 连带：建单扣库存之后，关单必须释放（技术文档 §1：expired 释放库存）。
+          // 顺序不可换：markOrderExpired 的 true 是"本次迁移是我干的"的排他凭证，
+          // 释放跟在它后面（同事务）才不会在别人已迁走的单上双倍回血
+          // （restoreStockForOrder 不幂等，见 adapters/orders.ts 的 ⚠️）。
+          await restoreStockForOrder(ctx.tx, id);
           closed += 1;
           ctx.emit({ name: 'order.expired', at: ctx.startedAt.toISOString(), orderId: id });
         }

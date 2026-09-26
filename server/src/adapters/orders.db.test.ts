@@ -12,7 +12,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from './db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
-import { lockExpiredPayableOrders, markOrderExpired } from './orders.js';
+import { decrementStock, lockExpiredPayableOrders, markOrderExpired } from './orders.js';
 
 const NOW = new Date('2026-01-02T12:00:00.000Z');
 
@@ -135,5 +135,26 @@ describe('markOrderExpired', () => {
     expect(await markOrderExpired(db, 'o-1', NOW)).toBe(false);
     const evs = await db`select 1 from order_events where order_id = 'o-1'`;
     expect(evs).toHaveLength(1);
+  });
+});
+
+describe('decrementStock（U5b：原子扣减的唯一正确形态）', () => {
+  beforeEach(async () => {
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status)
+      values ('p-stock', 'Stock Item', 'kitchen', 1000, 100, 5, 'JP', 'active')
+    `;
+  });
+
+  it('恰好扣到 0 放行；扣 6 → false 且库存不变（判定+扣减在同一语句里）', async () => {
+    expect(await decrementStock(db, 'p-stock', 5)).toBe(true);
+    let r = await db`select stock from products where id = 'p-stock'`;
+    expect(Number(r[0]?.['stock'])).toBe(0);
+
+    expect(await decrementStock(db, 'p-stock', 6)).toBe(false);
+    r = await db`select stock from products where id = 'p-stock'`;
+    expect(Number(r[0]?.['stock'])).toBe(0);
+
+    expect(await decrementStock(db, 'p-stock', 1)).toBe(false); // 0 件也不能再扣
   });
 });

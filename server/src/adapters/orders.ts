@@ -60,7 +60,7 @@ export async function lockExpiredPayableOrders(
 /**
  * 把一张订单关为 `expired` 并写审计事件（同一事务）。
  *
- * @returns true = 本次真的关了（随后应 emit `order.expired`）；
+ * @returns true = 本次真的关了（随后应 emit `order.expired` + 释放库存）；
  *          false = 状态已被别人抢先迁走（0 行命中，**不是错误**，见文件头 @limitation 二）。
  */
 export async function markOrderExpired(tx: Db, orderId: string, at: Date): Promise<boolean> {
@@ -76,4 +76,145 @@ export async function markOrderExpired(tx: Db, orderId: string, at: Date): Promi
     values (${orderId}, 'expired', 'system', ${at})
   `;
   return true;
+}
+
+// ── I1-U5b：建单 / 库存 ─────────────────────────────────────────────────────
+
+/** 建单快照用的地址行（普通对象，见 findOwnedAddress 的 ⚠️）。 */
+export interface OrderAddressSnapshot {
+  id: string;
+  recipient: string;
+  phone: string;
+  line1: string;
+  line2: string | null;
+  city: string;
+  state: string;
+  postal_code: string;
+  country: string;
+}
+
+/**
+ * 读取一张**确定属于该用户**的地址（建单快照的来源）。
+ * @returns 地址行；不存在或非本人 → null（路由层判 40400，与订单归属同口径）。
+ *
+ * ⚠️ 必须**逐字段取值**返回普通对象，不能把 postgres.js 的行直接给 JSON.stringify：
+ *    驱动的 Row 是**数组子类**（列名挂在命名属性上），`JSON.stringify(Row)` 只序列化
+ *    数字索引 → 恒为 `'[]'`——快照落成空数组且**不报错**（接线测试实抓一次：
+ *    address_snapshot.recipient 读回 undefined）。
+ */
+export async function findOwnedAddress(
+  tx: Db,
+  addressId: string,
+  userId: string,
+): Promise<OrderAddressSnapshot | null> {
+  const rows = await tx`
+    select id, recipient, phone, line1, line2, city, state, postal_code, country
+      from addresses where id = ${addressId} and user_id = ${userId}
+  `;
+  const r = rows[0];
+  if (r === undefined) return null;
+  return {
+    id: String(r.id),
+    recipient: String(r.recipient),
+    phone: String(r.phone),
+    line1: String(r.line1),
+    line2: r.line2 === null ? null : String(r.line2),
+    city: String(r.city),
+    state: String(r.state),
+    postal_code: String(r.postal_code),
+    country: String(r.country),
+  };
+}
+
+/**
+ * 原子扣减库存（条件更新）：`stock >= qty` 才扣，一行都不满足则返回 false。
+ *
+ * @why 这是并发安全的**唯一**正确形态：先 SELECT 余量再 UPDATE 的写法，在两个请求
+ *      同时买最后一件时，两边都读到 1、都扣成功 → 超卖（-1 被 CHECK 拦住时则是一边 500）。
+ *      条件更新把"判定 + 扣减"压进一条语句，数据库用行锁保证只有一个成功者。
+ *      建单事务里逐行调用：任一商品 false → 抛 40901 整单回滚（前面已扣的随行回滚）。
+ */
+export async function decrementStock(tx: Db, productId: string, qty: number): Promise<boolean> {
+  const rows = await tx`
+    update products set stock = stock - ${qty}, updated_at = now()
+     where id = ${productId} and stock >= ${qty}
+  `;
+  return rows.count > 0;
+}
+
+/**
+ * 按订单行项目恢复库存（关单/取消的释放）。
+ *
+ * ⚠️ **本函数不幂等**：调一次加一次。调用方必须用"状态迁移守卫"保证只调一次——
+ *    `markOrderExpired` / cancel 的 update 带状态条件返回 true 的那一刻，
+ *    就是"本次迁移是我干的"的排他凭证，释放跟在它后面（同事务）。
+ *    脱离守卫直接调用 = 库存双倍回血（钱货两空的另一种形态）。
+ */
+export async function restoreStockForOrder(tx: Db, orderId: string): Promise<number> {
+  const rows = await tx`
+    update products p set stock = stock + oi.qty, updated_at = now()
+      from order_items oi
+     where oi.order_id = ${orderId} and oi.product_id = p.id
+  `;
+  return rows.count;
+}
+
+/** insertOrder 的行（JSONB 列传字符串，由 SQL 侧 ::jsonb 转换——postgres.js 数组进 jsonb 的坑见 F9）。 */
+export interface OrderInsertRow {
+  id: string;
+  order_no: string;
+  user_id: string;
+  items_jpy: number;
+  shipping_jpy: number;
+  duty_jpy: number;
+  total_jpy: number;
+  weight_g: number;
+  fx_snapshot: string;
+  address_snapshot: string;
+  contact_email: string | null;
+  terms_version: string;
+  expires_at: Date;
+}
+
+/**
+ * 插入订单主行（status='created'）。
+ * @throws {PostgresError} 23505（order_no 唯一冲突）——**调用方必须 savepoint 捕获重试**（D32）：
+ *         PG 事务内一条语句报错后整个事务进入 aborted 状态，不回滚到 savepoint 就什么都不能再做。
+ */
+export async function insertOrder(tx: Db, row: OrderInsertRow): Promise<void> {
+  await tx`
+    insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                        total_jpy, weight_g, fx_snapshot, address_snapshot, contact_email,
+                        terms_version, expires_at)
+    values (${row.id}, ${row.order_no}, ${row.user_id}, 'created', ${row.items_jpy},
+            ${row.shipping_jpy}, ${row.duty_jpy}, ${row.total_jpy}, ${row.weight_g},
+            ${row.fx_snapshot}::jsonb, ${row.address_snapshot}::jsonb, ${row.contact_email},
+            ${row.terms_version}, ${row.expires_at})
+  `;
+}
+
+/** order_items 一行（declared_value_usd 由建单用 allocate 分摊好——这里只负责落库）。 */
+export interface OrderItemInsertRow {
+  id: string;
+  order_id: string;
+  product_id: string;
+  title_snapshot: string;
+  qty: number;
+  unit_price_jpy: number;
+  weight_g: number;
+  declared_value_usd: number;
+}
+
+export async function insertOrderItems(
+  tx: Db,
+  items: readonly OrderItemInsertRow[],
+): Promise<void> {
+  for (const it of items) {
+    await tx`
+      insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy,
+                               weight_g, declared_value_usd)
+      values (${it.id}, ${it.order_id}, ${it.product_id}, ${it.title_snapshot}, ${it.qty},
+              ${it.unit_price_jpy}, ${it.weight_g}, ${it.declared_value_usd})
+    `;
+  }
 }

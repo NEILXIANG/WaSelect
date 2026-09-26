@@ -30,9 +30,10 @@
  */
 import type { Db } from './db.js';
 
-/** products 表读出的一行（报价视角所需的最小列集）。 */
+/** products 表读出的一行（报价/建单视角的列集；title 报价不用、建单写 title_snapshot 用）。 */
 export interface QuoteProductRow {
   id: string;
+  title: string;
   price_jpy: number;
   weight_g: number;
   stock: number;
@@ -100,11 +101,12 @@ export function createCatalogRepo(db: Db): CatalogRepo {
     async findProductsForQuote(ids: readonly string[]): Promise<QuoteProductRow[]> {
       if (ids.length === 0) return [];
       const rows = await db`
-        select id, price_jpy, weight_g, stock, status, origin_country
+        select id, title, price_jpy, weight_g, stock, status, origin_country
           from products where id in ${db([...ids])}
       `;
       return rows.map((r) => ({
         id: String(r.id),
+        title: String(r.title),
         price_jpy: Number(r.price_jpy),
         weight_g: Number(r.weight_g),
         stock: Number(r.stock),

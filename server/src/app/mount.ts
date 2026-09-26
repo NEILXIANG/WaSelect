@@ -45,6 +45,7 @@ import { rateLimiter, rateLimitRules } from './rate-limit.js';
 import { mountQuoteRoutes } from './quote-routes.js';
 import { mountProductRoutes } from './product-routes.js';
 import { mountAddressRoutes } from './address-routes.js';
+import { mountOrderRoutes } from './order-routes.js';
 
 /**
  * 是否挂载骨架路由。**生产不挂。**
@@ -150,6 +151,20 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity: withIdentityCache(createIdentityCheck(db)),
     idGen: systemIdGen,
+  });
+
+  // ── 建单（I1-U5b）：幂等 + 限流只挂 POST（GET /orders 系只读不共用写配额，order-routes @why）
+  mountOrderRoutes(app, {
+    db,
+    logger,
+    clock: systemClock,
+    idGen: systemIdGen,
+    config,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity: withIdentityCache(createIdentityCheck(db)),
+    idempotency: createIdempotencyExecutor(db),
+    events,
+    createOrderLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
   });
 
   if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见 @limitation）

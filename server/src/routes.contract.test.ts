@@ -78,7 +78,6 @@ const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [
   ni('POST', '/internal/jobs/daily', '欠账①：每日对账端点，I1 收尾前落地或明示移交'),
   ni('GET', '/home', 'I2：小程序首页聚合（依赖 Banner 管理端）'),
   ni('GET', '/orders', 'I1-U5：我的订单列表'),
-  ni('POST', '/orders', 'I1-U5：建单'),
   ni('GET', '/orders/{id}', 'I1-U5：订单详情'),
   ni('POST', '/orders/{id}/pay', 'I1-U6：发起支付'),
   ni('GET', '/pay/link/{id}', 'I1-U6：短链落地（D-49）'),
