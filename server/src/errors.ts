@@ -20,6 +20,7 @@
  * @see packages/shared/src/errors.ts（码注册表，唯一真源）、技术文档 v0.5 §7、docs/地基搭建清单.md F4
  */
 import { errorSpec, httpStatusOf, isErrorCode, type ErrorCode } from '@waselect/shared';
+import { CircuitOpenError } from './adapters/http/circuit-breaker.js';
 
 /** 对外响应的统一错误体（`data` 仅在需要附带结构化信息时出现，如字段级校验结果）。 */
 export interface ErrorBody {
@@ -62,6 +63,21 @@ export class AppError extends Error {
 export function toErrorResponse(err: unknown): { status: number; body: ErrorBody } {
   if (err instanceof AppError) {
     return { status: err.httpStatus, body: { code: err.code, message: err.message } };
+  }
+  // C4：熔断打开抛出的 `CircuitOpenError` 是**暂时性**故障，不该被折叠成 500（"我方内部错误"）。
+  //     映射成 50300（上游暂不可用），并把 `retry_after_ms` 透给前端做退避提示。
+  //     @why 在这里（通用序列化层）而非各 route 的 catch：熔断可能从支付、对账等**任何**出站链路冒出，
+  //           逐条 catch 会漏；这里是唯一对所有异常统一归一化的地方。
+  //     @see 地基清单 F12 待办 ③；adapters/http/fetch-client.ts @limitation 六（映射属 app 层）
+  if (err instanceof CircuitOpenError) {
+    return {
+      status: 503,
+      body: {
+        code: 50300,
+        message: errorSpec(50300)?.message ?? '服务暂时不可用，请稍后重试',
+        data: { retry_after_ms: err.retryAfterMs },
+      },
+    };
   }
   return { status: 500, body: { code: INTERNAL_ERROR_CODE, message: INTERNAL_ERROR_MESSAGE } };
 }

@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { AppError, asErrorCode, errorLogFields, toErrorResponse } from './errors.js';
+import { CircuitOpenError } from './adapters/http/circuit-breaker.js';
 
 describe('AppError', () => {
   it('已知码带出注册表的文案与 HTTP 状态（码前三位）', () => {
@@ -38,6 +39,16 @@ describe('toErrorResponse', () => {
     expect(body.message).toBe('服务器内部错误');
     expect(JSON.stringify(body)).not.toContain('password');
     expect(JSON.stringify(body)).not.toContain('10.0.0.7');
+  });
+
+  it('CircuitOpenError 映射为 503 + 50300，透出 retry_after_ms（C4）', () => {
+    const err = new CircuitOpenError('stripe', 30000);
+    const { status, body } = toErrorResponse(err);
+    expect(status).toBe(503);
+    expect(body.code).toBe(50300);
+    expect(body.data).toEqual({ retry_after_ms: 30000 });
+    // 熔断的原始 message 含内部 key，不得外泄（与未知异常同口径）
+    expect(JSON.stringify(body)).not.toContain('stripe');
   });
 
   it('非 Error 的 throw（字符串 / undefined / 对象）同样安全折叠', () => {

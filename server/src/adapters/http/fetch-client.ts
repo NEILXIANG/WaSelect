@@ -22,10 +22,10 @@
  *              重启即复位（多实例各跳各的）。详见 `./circuit-breaker.ts` 的 `@limitation`。
  *              ⚠️ 被熔断拒绝时抛 `CircuitOpenError`——它与"上游报错"是两类事，
  *              调用方要能分开处理；**本层不做错误码映射**（映射属 app 层，见 @limitation 六）。
- * @limitation 六：**不把 `CircuitOpenError` 翻译成业务错误码**。
+ * @limitation 六：**不在这里把 `CircuitOpenError` 翻译成业务错误码**。
  *              分层约束是 `app → domain → ports ← adapters`，adapters 不能反向 import app 的错误定义。
- *              所以当下它会以"未分类异常"冒到最外层，表现为 500 而不是"上游暂不可用"。
- *              这是已知缺口，要在 `app/pay-routes.ts` 的错误映射里补（登记在清单 F12 待办）。
+ *              映射已落在 `server/src/errors.ts` 的 `toErrorResponse`（app 层）——`CircuitOpenError`
+ *              会被转成 `AppError(50300)` 并透出 `retry_after_ms`（C4 / 地基清单 F12 待办 ③ 已关）。
  *
  * @see ../../ports/http-client.ts（端口契约、重试判定规则）；
  *      ./circuit-breaker.ts（熔断状态机与存放）；docs/地基搭建清单.md F12

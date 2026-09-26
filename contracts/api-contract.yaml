@@ -41,6 +41,7 @@ x-error-codes:
     50001: 支付创建失败
     50003: 汇率不可用
     50004: 运费不可计算
+    50300: 服务暂时不可用（上游熔断打开，按 data.retry_after_ms 退避）
 x-payment-channels:
   description: |
     **当前登记在册**的支付通道 key（D-56 / D-59）。
