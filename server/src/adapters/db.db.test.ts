@@ -262,24 +262,29 @@ describe('迁移本身', () => {
     const appliedNames = applied.map((r) => r.name);
     expect(appliedNames).toContain('001_init');
     expect(appliedNames).toContain('002_hardening');
+    expect(appliedNames).toContain('010_config_tables');
 
     const tables = (
       await db`select tablename from pg_tables where schemaname = 'public' and tablename <> 'pgmigrations' order by tablename`
     ).map((r) => r.tablename);
     // 13（001）+ 2（002 的 user_events / admin_audit，ADR-29 流 B/C 落点）
-    // + 1（003 的 webhook_events）+ 1（007 的 country_profiles，F11 单元④）= 17。
+    // + 1（003 的 webhook_events）+ 1（007 的 country_profiles，F11 单元④）
+    // + 3（010 的 duty_rates / payment_channels / app_config，I1-U7a）= 20。
     // ✅ 文档侧已同步（2026-09-25，欠账⑬关闭）：jp 技术文档 §3 标题与新增的 §3.1（迁移 002–009 增量）、
     //    工程框架文档、PRD §5、jp README 的"13 张表"全部改为 17，并注明**真源是本断言、不是文档**。
     //    ADR-28 写"13 → 17（新增四张）"那份推演的基准是它成文时的 13 张，现以本断言为准。
-    //    ADR-28 四张新增中已落地 1 张（country_profiles），
-    //    余下 duty_rates / payment_channels / app_config 属 I1（P1），全部落地后是 20 张。
-    expect(tables).toHaveLength(17);
+    // ✅ ADR-28 四张新增全部落地（2026-09-26，I1-U7a）：country_profiles（007）+ 本批三张 = 20 张，
+    //    触发技术文档 v0.6 / 契约 0.6.0 跨仓同步（I1 收尾统一做，见 I1阶段开发实施方案 §7.9）。
+    expect(tables).toHaveLength(20);
     expect(tables).toContain('orders');
     expect(tables).toContain('job_runs');
     expect(tables).toContain('user_events');
     expect(tables).toContain('admin_audit');
     expect(tables).toContain('webhook_events');
     expect(tables).toContain('country_profiles');
+    expect(tables).toContain('duty_rates');
+    expect(tables).toContain('payment_channels');
+    expect(tables).toContain('app_config');
   });
 
   it('job_runs 有 seed（否则看门狗永远读不到心跳）', async () => {

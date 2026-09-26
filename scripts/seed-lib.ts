@@ -7,8 +7,9 @@
  *         一键灌数据的全部风险是"对着远程库（尤其 Render 生产）跑了 truncate"——
  *         那一步不可逆。把 host 钉死在本机，"误连生产"在第一步就被拦下。
  *      ② **库名拒 prod**：粗粒度但有效的最后一道（哪怕有人把生产 URL 指到本机代理）。
- *      ③ **清表保留配置表**：truncate 排除 `country_profiles` / `job_runs` / `pgmigrations`——
- *         配置表是"环境的一部分"，清了 dev 库就与生产不同构（与 test-db.ts 同类口径）。
+ *      ③ **清表保留配置表**：truncate 排除 `country_profiles` / `duty_rates` / `payment_channels` /
+ *         `app_config` / `job_runs` / `pgmigrations`——配置表是"环境的一部分"，
+ *         清了 dev 库就与生产不同构（与 test-db.ts 同类口径）。
  *
  * @why 幂等靠"先清业务表再灌"而不是 `ON CONFLICT DO NOTHING`：
  *      `ON CONFLICT` 只解决主键撞车，解决不了"上次灌的商品这次从目录里删了、它还赖在库里"。
@@ -63,13 +64,13 @@ export function assertSafeTarget(url: string): void {
   }
 }
 
-/** 闸门③：清空业务表，保留配置表（country_profiles）与迁移账本、看门狗心跳。 */
+/** 闸门③：清空业务表，保留配置表（country_profiles / duty_rates / payment_channels / app_config）与迁移账本、看门狗心跳。 */
 export async function clearBusinessTables(db: Db): Promise<number> {
   // 与 test-db.ts 的 truncateTargets 同源（见 @limitation 二）：排除配置表与迁移账本
   const rows = await db`
     select tablename from pg_tables
     where schemaname = 'public'
-      and tablename not in ('pgmigrations', 'job_runs', 'country_profiles')
+      and tablename not in ('pgmigrations', 'job_runs', 'country_profiles', 'duty_rates', 'payment_channels', 'app_config')
     order by tablename`;
   const tables = rows.map((r) => String(r.tablename));
   for (const t of tables) {

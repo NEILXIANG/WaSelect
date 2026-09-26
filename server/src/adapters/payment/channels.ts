@@ -56,7 +56,12 @@ import { createStripeCheckoutProvider } from './stripe-checkout.js';
  *      通过率最高、也最符合用户在微信内的预期，所以排第一；银行卡是覆盖"没有大陆钱包"
  *      用户的第二路径（D-49），排第二；mock 只在审核 / 本地演示用，垫底。
  */
-const CHANNEL_DEFAULTS: Readonly<
+/**
+ * ⚠️ 导出只为一件事：`payment_channels` 表的迁移 seed（010）与本表**字段级同源比对**
+ *    （payment-channels-seed.db.test.ts）——seed 值逐字等于这里的声明，改一边不改另一边立即红。
+ *    业务代码不得把它当"通道配置的读取口"（运行期读注册表，不读本常量）。
+ */
+export const CHANNEL_DEFAULTS: Readonly<
   Record<string, Pick<ChannelConfig, 'priority' | 'countries' | 'currencies' | 'label' | 'icon'>>
 > = {
   wechat: {

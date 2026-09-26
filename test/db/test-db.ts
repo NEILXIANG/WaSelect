@@ -206,7 +206,8 @@ export function ensureTestDb(): Promise<void> {
  * @limitation 排除三类"不该清空的表"，每类都有独立理由：
  *              ① `pgmigrations` —— 迁移账本，清了会让下一次 migrate 重跑全部迁移；
  *              ② `job_runs` —— 迁移 seed（D-45：清了看门狗永远读不到心跳）；
- *              ③ `country_profiles` —— **配置表，不是业务表**（007 种子）。
+ *              ③ `country_profiles` / `duty_rates` / `payment_channels` / `app_config` ——
+ *                 **配置表，不是业务表**（007 / 010 种子；ADR-28 四张配置表）。
  *                 区分口径：业务表的数据是"用例造出来的"，配置表的数据是"环境的一部分"——
  *                 就像表结构由迁移建、不该被 truncate 一样。清空配置表的后果不是"用例更干净"，
  *                 而是"测试环境与生产环境不再同构"：生产上这张表永远有 US 那条，
@@ -225,7 +226,7 @@ async function truncateTargets(db: Db): Promise<readonly string[]> {
     select tablename
     from pg_tables
     where schemaname = 'public'
-      and tablename not in ('pgmigrations', 'job_runs', 'country_profiles')
+      and tablename not in ('pgmigrations', 'job_runs', 'country_profiles', 'duty_rates', 'payment_channels', 'app_config')
     order by tablename`;
   const tables = rows.map((r) => String(r.tablename));
   if (tables.length === 0) {
