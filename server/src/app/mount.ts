@@ -42,6 +42,7 @@ import { mountPayRoutes } from './pay-routes.js';
 import { markOrderPaid } from './mark-paid.js';
 import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import { rateLimiter, rateLimitRules } from './rate-limit.js';
+import { mountQuoteRoutes } from './quote-routes.js';
 
 /**
  * 是否挂载骨架路由。**生产不挂。**
@@ -120,15 +121,26 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
       }),
   });
 
-  if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见 @limitation）
+  // ── 报价路由（I1-U4）：**每个环境都挂**，与支付路由同理——它是产品接口不是脚手架 ──
   /**
-   * 限流（I1-U3）：首个消费方是骨架写路径——U5/U6 的业务路由（登录/报价/建单/短链）
-   * 落地时把规则挂到各自路由上（rate-limit.ts 的规则表是唯一出处）。
-   * ⚠️ store 建在挂载处（进程级）：计数必须跨请求存活；建在中间件里就成"每请求清零"。
+   * 限流（I1-U3）：store 建在挂载处（进程级）——计数必须跨请求存活；
+   * 建在中间件里就成"每请求清零"。规则表（rate-limit.ts）是唯一出处。
+   * ⚠️ store 必须在骨架闸门**之前**建：报价/支付路由全环境挂载，限流不能只在非生产存在。
    * ⚠️ 进程内实现只在**单实例**下正确（rate-limit-memory.ts @limitation 一，R-I1-2）。
    */
   const rateLimitStore = createMemoryRateLimitStore();
   const rateLimitDeps = { store: rateLimitStore, clock: systemClock, logger };
+  app.use('/api/v1/orders/quote', rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite));
+  mountQuoteRoutes(app, {
+    db,
+    logger,
+    clock: systemClock,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity: withIdentityCache(createIdentityCheck(db)),
+    config,
+  });
+
+  if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见 @limitation）
   app.use('/api/v1/skeleton', rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite));
   mountSkeleton(app, {
     db,

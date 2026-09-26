@@ -8,7 +8,16 @@
  */
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { addMoney, allocate, money, sumMoney, toMinor, toRateInt } from './money.js';
+import {
+  addMoney,
+  allocate,
+  applyRate,
+  money,
+  sumMoney,
+  toMinor,
+  toRateInt,
+  toRatioInt,
+} from './money.js';
 
 /** 参考实现：用 BigInt 做精确整数运算（不受 double 精度影响），只用于测试对拍。 */
 function referenceToMinor(jpy: number, rateInt: number): number {
@@ -191,5 +200,80 @@ describe('allocate（最大余额法拆分）', () => {
   it('含零权重的合法拆分：零权重项分到 0，其余照比例', () => {
     expect(allocate(17, [0, 1])).toEqual([0, 17]);
     expect(allocate(10, [1, 0, 1])).toEqual([5, 0, 5]);
+  });
+});
+
+describe('toRatioInt（无量纲比率 → ×1e8 整数）', () => {
+  it('NUMERIC(6,5) 驱动返回的字符串与 number 等价', () => {
+    expect(toRatioInt('0.15000')).toBe(15_000_000);
+    expect(toRatioInt(0.15)).toBe(15_000_000);
+  });
+
+  it('0 合法（零关税是正常业务，与汇率的 0 是事故不同）', () => {
+    expect(toRatioInt(0)).toBe(0);
+    expect(toRatioInt('0.00000')).toBe(0);
+  });
+
+  it('负数 / 非有限数 / 超范围一律 RangeError', () => {
+    expect(() => toRatioInt(-0.01)).toThrow(RangeError);
+    expect(() => toRatioInt(NaN)).toThrow(RangeError);
+    expect(() => toRatioInt('abc')).toThrow(RangeError);
+    expect(() => toRatioInt(1_000_000)).toThrow(RangeError);
+  });
+});
+
+describe('applyRate（同币种乘率，half-up）', () => {
+  /** BigInt 参考实现（与 referenceToMinor 同套路，只是除数为 1e8）。 */
+  function referenceApplyRate(amount: number, ratioInt: number): number {
+    const product = BigInt(amount) * BigInt(ratioInt);
+    const divisor = 100_000_000n;
+    const sign = product < 0n ? -1n : 1n;
+    const abs = product < 0n ? -product : product;
+    const q = abs / divisor;
+    const r = abs % divisor;
+    return Number(sign * (r * 2n >= divisor ? q + 1n : q));
+  }
+
+  it('duty 典型值：10,000 円 × 15% = 1,500 円', () => {
+    expect(applyRate(10_000, toRatioInt('0.15000'))).toBe(1500);
+  });
+
+  it('0 比率 → 0（零关税不该抛错）', () => {
+    expect(applyRate(10_000, 0)).toBe(0);
+  });
+
+  it('half-up 边界：0.5 进位、0.49 舍去、负金额远离零', () => {
+    expect(applyRate(1, toRatioInt(0.5))).toBe(1); // 0.5 → 1
+    expect(applyRate(100, toRatioInt('0.00499'))).toBe(0); // 0.499 → 0
+    expect(applyRate(-1, toRatioInt(0.5))).toBe(-1); // -0.5 → -1（远离零，与 toMinor 同）
+  });
+
+  it('负金额小额乘率不得产出 -0（Object.is 可区分，本属性测试实抓过一次）', () => {
+    expect(Object.is(applyRate(-1, 1), 0)).toBe(true);
+    expect(Object.is(toMinor(-1, 1), 0)).toBe(true);
+  });
+
+  it('非法输入：非整数金额 / 非整数比率 / 负比率', () => {
+    expect(() => applyRate(1.5, 100)).toThrow(RangeError);
+    expect(() => applyRate(100, 1.5)).toThrow(RangeError);
+    expect(() => applyRate(100, -1)).toThrow(RangeError);
+  });
+
+  it('乘积超出 2^53 → RangeError（不接受静默失精的"差不多"金额）', () => {
+    expect(() => applyRate(Number.MAX_SAFE_INTEGER, 2)).toThrow(RangeError);
+  });
+
+  it('属性：全值域与 BigInt 参考实现一致（永不差 1 円）', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: -1_000_000, max: 1_000_000 }),
+        // duty_rates CHECK 是 [0,1)；放宽到 [0,2) 留出将来"费率 >1"的余量
+        fc.integer({ min: 0, max: 200_000_000 }),
+        (amount, ratioInt) => {
+          expect(applyRate(amount, ratioInt)).toBe(referenceApplyRate(amount, ratioInt));
+        },
+      ),
+      { numRuns: 500 },
+    );
   });
 });

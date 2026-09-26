@@ -85,7 +85,6 @@ const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [
   ni('POST', '/addresses', 'I1-U5：新增地址'),
   ni('PUT', '/addresses/{id}', 'I1-U5：改地址'),
   ni('DELETE', '/addresses/{id}', 'I1-U5：删地址'),
-  ni('POST', '/orders/quote', 'I1-U5：报价'),
   ni('GET', '/orders', 'I1-U5：我的订单列表'),
   ni('POST', '/orders', 'I1-U5：建单'),
   ni('GET', '/orders/{id}', 'I1-U5：订单详情'),

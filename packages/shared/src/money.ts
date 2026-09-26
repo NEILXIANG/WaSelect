@@ -114,7 +114,64 @@ export function toMinor(jpy: number, rateInt: number): number {
   const quotient = Math.floor(abs / MINOR_DIVISOR);
   const remainder = abs - quotient * MINOR_DIVISOR;
   const roundUp = remainder * 2 >= MINOR_DIVISOR ? 1 : 0;
-  return sign * (quotient + roundUp);
+  // 归一化 -0（同 applyRate：负数小额乘率商的符号位会产出 -0）
+  const out = sign * (quotient + roundUp);
+  return out === 0 ? 0 : out;
+}
+
+/**
+ * 无量纲比率（关税率等）→ ×1e8 的整数。
+ *
+ * @why 与 `toRateInt` 拆成两个函数而不是加参数：**汇率**为 0 是事故（全站按 0 元收款），
+ *      **比率**为 0 是合法业务（零关税）。共用一个入口就得靠调用方记"这里 0 合法"，
+ *      而"靠调用方记得"正是 toRateInt 三审 P3-6 要消灭的东西。
+ * @param rate 比率（duty_rates.rate 是 NUMERIC(6,5)，驱动返回 string）；合法域 [0, MAX_RATE)
+ * @throws {RangeError} 非有限数、为负、或超出可精确表示范围
+ */
+export function toRatioInt(rate: number | string): number {
+  const n = typeof rate === 'string' ? Number(rate) : rate;
+  if (!Number.isFinite(n)) {
+    throw new RangeError(`比率必须是有限数，收到 ${String(rate)}`);
+  }
+  if (n < 0) {
+    throw new RangeError(`比率不得为负，收到 ${n}`);
+  }
+  if (n >= MAX_RATE) {
+    throw new RangeError(`比率超出可精确表示的范围（< ${MAX_RATE}）：${n}`);
+  }
+  return Math.round(n * RATE_SCALE);
+}
+
+/**
+ * 同币种比率应用：`amount × ratio`（ratioInt 为 ratio × 1e8 的整数），half-up 取整。
+ *
+ * 用途：`duty_jpy = applyRate(items_jpy, dutyRatioInt)`——JPY → JPY 乘一个**无量纲**比率，
+ * 不是币种换算。与 `toMinor` 的唯一区别是除数（1e8 vs 1e6）：
+ * toMinor 是"换算到目标币最小单位"，本函数是"同币种乘率"，两者共用同一套 half-up 纪律
+ * （整数商 + 余数，无浮点除法），取整规则仍只存在于本文件。
+ *
+ * @limitation 乘积 `amount × ratioInt` 必须落在 2^53 内：按 MAX_ORDER_JPY=180,000 与
+ *             duty_rates 的 CHECK（rate < 1，即 ratioInt < 1e8）乘积上限 1.8e13，安全。
+ */
+export function applyRate(amount: number, ratioInt: number): number {
+  if (!Number.isInteger(amount)) throw new RangeError(`金额必须是整数，收到 ${amount}`);
+  if (!Number.isInteger(ratioInt))
+    throw new RangeError(`比率必须是 ×1e8 后的整数，收到 ${ratioInt}`);
+  if (ratioInt < 0) throw new RangeError(`比率不得为负，收到 ${ratioInt}`);
+
+  const product = amount * ratioInt;
+  if (!Number.isSafeInteger(product)) {
+    throw new RangeError(`乘率乘积超出安全整数范围：${amount} × ${ratioInt}`);
+  }
+  const sign = product < 0 ? -1 : 1;
+  const abs = Math.abs(product);
+  const quotient = Math.floor(abs / RATE_SCALE);
+  const remainder = abs - quotient * RATE_SCALE;
+  const roundUp = remainder * 2 >= RATE_SCALE ? 1 : 0;
+  // 归一化 -0：sign × 0 会得到 -0，Object.is(-0, 0) 为 false、
+  // 且 -0 进 JSON/日志后与 0 无法区分地漂移（applyRate 属性测试实抓：amount=-1, ratioInt=1）
+  const out = sign * (quotient + roundUp);
+  return out === 0 ? 0 : out;
 }
 
 /**

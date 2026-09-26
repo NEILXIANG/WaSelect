@@ -1,0 +1,219 @@
+/**
+ * 职责：`POST /orders/quote` 的**接线级**真库用例（I1-U4，L1 层）。
+ *
+ * @why 本文件存在的理由是"接线"：域纯函数与仓储各有自己的测试，但
+ *      「路由挂没挂上、鉴权挡不挡、装配顺序对不对、响应形状与契约对不对」
+ *      只有真发请求才能证明（§2 第 35 条：能力存在 ≠ 能力被用上）。
+ *      金额断言用 shared 的 toMinor/applyRate 独立复算，不从响应抄数。
+ *
+ * @see app/quote-routes.ts（被测）；app/mount.ts（挂载点）；routes.contract.test.ts（路由快照）
+ */
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { applyRate, toMinor, toRateInt, toRatioInt } from '@waselect/shared';
+import { closeDb, type Db } from '../adapters/db.js';
+import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
+import { makeShippingRates } from '../../../test/factories/entities.js';
+import { MemorySink } from '../../../test/helpers/memory-sink.js';
+import { createLogger } from '../logger.js';
+import { loadConfig } from '../config.js';
+import { createEventBus } from '../adapters/event-bus.js';
+import { createHttpApp, listen } from '../http.js';
+import { mountAllRoutes } from './mount.js';
+import { signToken } from './auth.js';
+
+let db: Db;
+
+beforeAll(async () => {
+  await ensureTestDb();
+  db = testDb();
+}, 30_000);
+
+afterAll(async () => {
+  await closeDb(db);
+});
+
+const JWT_SECRET = 'quote-test-jwt-secret-'.repeat(3);
+
+/** 每用例重建 app：限流计数器随之清零（store 在 mount 时建，进程级）。 */
+async function buildServer(): Promise<{
+  url: string;
+  sink: MemorySink;
+  close: () => Promise<void>;
+}> {
+  const sink = new MemorySink();
+  const logger = createLogger({ env: 'test', destination: sink });
+  const config = loadConfig({
+    NODE_ENV: 'development',
+    PORT: '1',
+    HOST: '127.0.0.1',
+    DATABASE_URL: TEST_DB_URL,
+    JWT_SECRET,
+    PAYMENT_CHANNELS: 'mock',
+    TERMS_VERSION: 'TOS-TEST-1',
+  });
+  const app = createHttpApp({
+    logger,
+    mount: (a) => mountAllRoutes(a, { config, logger, db, events: createEventBus(logger) }),
+  });
+  const server = await listen(app);
+  return { url: `http://127.0.0.1:${server.port}`, sink, close: server.close };
+}
+
+async function postQuote(
+  url: string,
+  body: unknown,
+  token?: string,
+): Promise<{ status: number; json: Record<string, unknown>; headers: Headers }> {
+  const res = await fetch(`${url}/api/v1/orders/quote`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  return {
+    status: res.status,
+    json: (await res.json()) as Record<string, unknown>,
+    headers: res.headers,
+  };
+}
+
+async function seedCatalog(): Promise<void> {
+  await db`
+    insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status)
+    values ('p-knife', 'Knife', 'kitchen', 8800, 620, 5, 'JP', 'active'),
+           ('p-cup', 'Cup', 'kitchen', 3200, 480, 10, 'JP', 'active'),
+           ('p-heavy', 'Stone', 'kitchen', 1000, 2000, 50, 'JP', 'active'),
+           ('p-off', 'Old', 'kitchen', 1000, 100, 10, 'JP', 'offline')
+  `;
+  for (const s of makeShippingRates('placeholder')) {
+    await db`
+      insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
+      values (${s.carrier}, ${s.max_weight_g}, ${s.price_jpy}, ${s.active})
+    `;
+  }
+  await db`
+    insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)
+    values ('USD', 0.0067, 0.0065, 0.03, now() - interval '1 hour'),
+           ('CNY', 0.049, 0.048, 0.03, now() - interval '1 hour')
+  `;
+}
+
+let token: string;
+
+beforeEach(async () => {
+  await resetTestDb(db);
+  await db`insert into users (id, openid) values ('u-q', 'o-q')`;
+  await seedCatalog();
+  token = await signToken({ sub: 'u-q', role: 'user' }, { secret: JWT_SECRET, issuer: 'waselect' });
+});
+
+describe('POST /orders/quote（接线）', () => {
+  it('无 token → 40101（鉴权先于业务）', async () => {
+    const srv = await buildServer();
+    try {
+      const r = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 1 }] });
+      expect(r.json['code']).toBe(40101);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('完整报价：金额/重量/关税/展示价与契约形状逐项对上（独立复算）', async () => {
+    const srv = await buildServer();
+    try {
+      const r = await postQuote(
+        srv.url,
+        {
+          items: [
+            { product_id: 'p-knife', qty: 1 },
+            { product_id: 'p-cup', qty: 2 },
+          ],
+        },
+        token,
+      );
+      expect(r.status).toBe(200);
+      const items = 8800 + 3200 * 2; // 15200
+      const weight = 620 + 480 * 2 + 250; // 1830 → 向上取 2000 档（4950）
+      const total = items + 4950;
+      expect(r.json['items_jpy']).toBe(items);
+      expect(r.json['shipping_jpy']).toBe(4950);
+      expect(r.json['total_jpy']).toBe(total);
+      expect(r.json['weight_g']).toBe(weight);
+      expect(r.json['duty_estimate']).toBe(true);
+      expect(r.json['duty_jpy']).toBe(applyRate(items, toRatioInt('0.15000')));
+      expect(r.json['display']).toEqual({
+        USD: toMinor(total, toRateInt('0.0067')),
+        CNY: toMinor(total, toRateInt('0.049')),
+      });
+      expect(r.json['split_hint']).toBe(false);
+      expect(r.json['free_shipping_remaining_jpy']).toBeUndefined(); // 未配置包邮 → 字段不出现
+      // 流 A：报价留一条 info（高频只读，不进审计流）
+      const log = srv.sink.find('quote_computed')[0];
+      expect(log?.['result']).toBe('ok');
+      expect((log?.['ctx'] as { total_jpy?: number } | undefined)?.total_jpy).toBe(total);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('商品不存在 / 已下架 → 40401；库存不足 → 40901；形状坏 → 40001', async () => {
+    const srv = await buildServer();
+    try {
+      const ghost = await postQuote(srv.url, { items: [{ product_id: 'ghost', qty: 1 }] }, token);
+      expect(ghost.json['code']).toBe(40401);
+      const off = await postQuote(srv.url, { items: [{ product_id: 'p-off', qty: 1 }] }, token);
+      expect(off.json['code']).toBe(40401);
+      const stock = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 6 }] }, token);
+      expect(stock.json['code']).toBe(40901);
+      const empty = await postQuote(srv.url, { items: [] }, token);
+      expect(empty.json['code']).toBe(40001);
+      const dup = await postQuote(
+        srv.url,
+        {
+          items: [
+            { product_id: 'p-knife', qty: 1 },
+            { product_id: 'p-knife', qty: 1 },
+          ],
+        },
+        token,
+      );
+      expect(dup.json['code']).toBe(40001);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('超重（包裹 > 最大档）→ 50004；任一展示币汇率缺失 → 50003', async () => {
+    const srv = await buildServer();
+    try {
+      // 6 × 2000g + 250g 包材 = 12250g > 10000g 最大档
+      const heavy = await postQuote(srv.url, { items: [{ product_id: 'p-heavy', qty: 6 }] }, token);
+      expect(heavy.json['code']).toBe(50004);
+
+      await db`delete from fx_rates where quote = 'CNY'`;
+      const noFx = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 1 }] }, token);
+      expect(noFx.json['code']).toBe(50003);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('限流挂在真路由上：前 30 次 40101（无 token 被鉴权拦），第 31 次 42901', async () => {
+    const srv = await buildServer();
+    try {
+      const body = { items: [{ product_id: 'p-knife', qty: 1 }] };
+      for (let i = 0; i < 30; i += 1) {
+        const r = await postQuote(srv.url, body);
+        expect(r.json['code']).toBe(40101);
+      }
+      const r = await postQuote(srv.url, body);
+      expect(r.status).toBe(429);
+      expect(r.json['code']).toBe(42901);
+      expect(r.headers.get('retry-after')).not.toBeNull();
+    } finally {
+      await srv.close();
+    }
+  });
+});
