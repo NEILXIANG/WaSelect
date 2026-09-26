@@ -32,11 +32,9 @@ import {
   type NotImplementedRoute,
   type RouteRef,
 } from './app/route-snapshot.js';
-import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
-import { createEventBus } from './adapters/event-bus.js';
-import type { Db } from './adapters/db.js';
 import { MemorySink } from '../../test/helpers/memory-sink.js';
+import { stubMountContext } from '../../test/helpers/mount-ctx.js';
 
 const contractYaml = readFileSync(
   resolve(import.meta.dirname, '../../contracts/api-contract.yaml'),
@@ -44,27 +42,14 @@ const contractYaml = readFileSync(
 );
 
 /**
- * 构建路由快照 app：真实走 `mountAllRoutes`，但所有依赖在**被调用时**抛错。
- *
- * @why db 用"调用即抛"的 stub：挂载期若有人让某个工厂构造期触库（mount.ts @limitation 一
- *      明令禁止），本测试立刻红——这是"挂载期无 IO"这条性质的机器自证。
+ * 构建路由快照 app：真实走 `mountAllRoutes`，但所有依赖在**被调用时**抛错
+ * （stub 上下文见 test/helpers/mount-ctx.ts——"挂载期无 IO"的机器自证只有一份）。
  */
 function buildRouteSnapshotApp(): Express {
   const logger = createLogger({ env: 'test', destination: new MemorySink() });
-  const config = loadConfig({
-    NODE_ENV: 'development',
-    DATABASE_URL: 'postgresql://app@localhost:5432/japan_shop',
-    JWT_SECRET: 'a'.repeat(32),
-    PAYMENT_CHANNELS: 'mock,stripe',
-    TERMS_VERSION: 'TOS-2026-09-20',
-  });
-  const db = (() => {
-    throw new Error('路由快照不允许触库：挂载期必须无 IO（mount.ts @limitation 一）');
-  }) as unknown as Db;
-  const events = createEventBus(logger);
   return createHttpApp({
     logger,
-    mount: (a) => mountAllRoutes(a, { config, logger, db, events }),
+    mount: (a) => mountAllRoutes(a, stubMountContext({ logger })),
   });
 }
 
