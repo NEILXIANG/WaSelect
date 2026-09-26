@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { AppError, asErrorCode, errorLogFields, toErrorResponse } from './errors.js';
-import { CircuitOpenError } from './adapters/http/circuit-breaker.js';
+import { CircuitOpenError } from './ports/circuit-breaker.js';
 
 describe('AppError', () => {
   it('已知码带出注册表的文案与 HTTP 状态（码前三位）', () => {

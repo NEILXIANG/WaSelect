@@ -35,24 +35,12 @@ import {
 } from '../../ports/circuit-breaker.js';
 
 /**
- * 请求被熔断拒绝。
- *
- * @why 单独一个类而不是裸 `Error`：调用方需要**区分**"上游报错"与"我们主动没发"。
- *      前者可能要退款/改状态，后者只是"稍后再试"——用同一类错误表达会让调用方写
- *      `err.message.includes(...)` 这种脆弱判断。
+ * `CircuitOpenError` 的定义已上移到 `ports/circuit-breaker.ts`（AJ-102）：
+ * 它是"被熔断"的契约类型，errors.ts（分层规则覆盖区外）也要 import 它，
+ * 定义留在本文件会形成 `ports → errors → adapters` 的传递性反向依赖。
+ * 这里 re-export 仅为兼容既有引用点（fetch-client 与测试），**新代码请从 ports 导入**。
  */
-export class CircuitOpenError extends Error {
-  readonly key: string;
-  /** 还要等多少毫秒才可能放行（调用方可以据此提示用户）。 */
-  readonly retryAfterMs: number;
-
-  constructor(key: string, retryAfterMs: number) {
-    super(`出站请求被熔断拒绝（上游「${key}」最近连续失败）：约 ${retryAfterMs}ms 后重试`);
-    this.name = 'CircuitOpenError';
-    this.key = key;
-    this.retryAfterMs = retryAfterMs;
-  }
-}
+export { CircuitOpenError } from '../../ports/circuit-breaker.js';
 
 export interface CircuitBreakerOptions {
   policy?: BreakerPolicy;

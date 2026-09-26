@@ -11,8 +11,13 @@
  * @limitation 二：`withTransaction` 用 postgres.js 的 `begin`，它靠**同一条保留连接**实现，
  *              因此回调里**不能**用外层 `db` 去查询（会取到池里另一条连接，看不到未提交数据，还会自锁）。
  *              约定：事务内只用回调参数 `tx`。
- * @limitation 三：不用 prepared statement 缓存（`prepare: false` 默认）。
- *              pgbouncer 场景下必须关；本项目直连，但保持一致以免将来接入连接池时炸。
+ * @limitation 三：显式 `prepare: false`（AJ-102）。postgres.js 的默认是 `prepare: true`；
+ *              直连 Postgres 时开着无害且略快，但一旦将来接入 pgbouncer（transaction pooling），
+ *              具名 prepared statement 会跨事务残留并直接报错。本文件此前的注释声称
+ *              "prepare: false 默认"——那是**注释失真**（默认实为 true），三次全量审查时被抓出。
+ *              现在显式关闭，让"接入连接池不炸"从一句注释变成一行真实配置。
+ *              代价：失去 prepared statement 的少量缓存收益——本项目每条 SQL 都走参数化模板、
+ *              QPS 极低，收益本就可忽略。
  *
  * @tradeoff 不做查询构造器与 ORM：换来 SQL 完全可见可审；代价是重构字段时要手工找引用（靠 grep + 测试覆盖）。
  *
@@ -132,6 +137,9 @@ export function createDb(opts: CreateDbOptions): Db {
   return postgres(opts.url, {
     max: opts.max ?? 10,
     connect_timeout: opts.connectTimeoutSec ?? 10,
+    // ⚠️ 必须显式 false：postgres.js 默认是 true（注释曾误写为"false 默认"，AJ-102 修正）。
+    //    直连无害，但开着就等于把"将来接 pgbouncer 必炸"埋成定时炸弹。
+    prepare: false,
     // ⚠️ 必须配 int8 → number：默认返回 string，`a + b` 会变成字符串拼接（金额静默十倍）。
     //    numeric **不**在这里转（保持 string 交给 toRateInt），理由见 INT8_AS_SAFE_NUMBER 的注释。
     types: { int8: INT8_AS_SAFE_NUMBER },

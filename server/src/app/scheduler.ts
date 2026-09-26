@@ -132,9 +132,11 @@ async function runOneJob<TTx>(
     log.error('scheduler_job_failed', {
       duration_ms: durationMs,
       ...errorLogFields(err),
-      // ⚠️ 必须放在展开**之后**：`errorLogFields` 里的 `err_message` 是**未脱敏的原始** message，
-      //    而 logger 不做自动脱敏（已核实）——写在前面会被它覆盖回去，于是"脱敏"这件事悄悄失效。
-      //    这是 logger.ts @limitation 四 点名的"重复键覆盖"，被本文件的用例实测抓到过一次。
+      // ⚠️ 必须放在展开**之后**：`errorLogFields` 里的 `err_message` 是**未处理的原始** message。
+      //    logger 的 emit 会自动过 `redact()`（logger.ts），但 redact 对"自由文本里嵌着敏感内容"
+      //    （SQL、堆栈、上游报文）无能为力（redact.ts @limitation 三 / logger.ts @limitation 一），
+      //    所以原始 message 必须在调用点换成 `oneLineError` 的净化版，不能指望日志层兜底；
+      //    写在展开之前会被覆盖回去，于是"净化"这件事悄悄失效（曾被本文件的用例实测抓到过一次）。
       err_message: error,
     });
     return { name: job.name, ok: false, error, durationMs };

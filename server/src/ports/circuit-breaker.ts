@@ -30,6 +30,32 @@
  */
 import type { HttpFailureKind } from './http-client.js';
 
+/**
+ * 请求被熔断拒绝。
+ *
+ * @why 单独一个类而不是裸 `Error`：调用方需要**区分**"上游报错"与"我们主动没发"。
+ *      前者可能要退款/改状态，后者只是"稍后再试"——用同一类错误表达会让调用方写
+ *      `err.message.includes(...)` 这种脆弱判断。
+ *
+ * @why 类住在 **ports** 而不是 adapters（AJ-102）：它是"被熔断"这件事的**契约类型**——
+ *      抛出方（`adapters/http/fetch-client.ts`）与归一化方（`server/src/errors.ts` 的
+ *      `toErrorResponse`）都要认识它。定义在 adapters 时，errors.ts import 它就形成了
+ *      `ports → errors → adapters` 的传递性反向依赖（errors.ts 在分层规则覆盖区外，
+ *      lint 不会报红，是静默违规）；类本身零依赖，放 ports 后两端都走合法方向。
+ */
+export class CircuitOpenError extends Error {
+  readonly key: string;
+  /** 还要等多少毫秒才可能放行（调用方可以据此提示用户）。 */
+  readonly retryAfterMs: number;
+
+  constructor(key: string, retryAfterMs: number) {
+    super(`出站请求被熔断拒绝（上游「${key}」最近连续失败）：约 ${retryAfterMs}ms 后重试`);
+    this.name = 'CircuitOpenError';
+    this.key = key;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
 /** 三态：`closed` 正常放行 / `open` 拒绝一切 / `half_open` 只放探测请求。 */
 export type CircuitState = 'closed' | 'open' | 'half_open';
 

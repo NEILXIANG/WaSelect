@@ -116,8 +116,11 @@ export function startScheduler<TTx>(opts: StartSchedulerOptions<TTx>): Scheduler
     } catch (err) {
       log.error('scheduler_tick_error', {
         ...errorLogFields(err),
-        // ⚠️ 同 `scheduler.ts`：`errorLogFields` 的 `err_message` 是未脱敏原文，
-        //    必须放在展开**之后**覆盖它（logger 不做自动脱敏）。
+        // ⚠️ 同 `scheduler.ts`：`errorLogFields` 的 `err_message` 是未处理的原始 message，
+        //    必须放在展开**之后**覆盖它。logger 的 emit **会**自动过 `redact()`（logger.ts），
+        //    但 redact 对"自由文本里嵌着敏感内容"（SQL、堆栈、上游报文）无能为力
+        //    （redact.ts @limitation 三 / logger.ts @limitation 一）——所以原始 message
+        //    必须在调用点换成 `oneLineError` 的净化版，不能指望日志层兜底。
         err_message: oneLineError(err),
       });
       return undefined;

@@ -20,7 +20,10 @@
  * @see packages/shared/src/errors.ts（码注册表，唯一真源）、技术文档 v0.5 §7、docs/地基搭建清单.md F4
  */
 import { errorSpec, httpStatusOf, isErrorCode, type ErrorCode } from '@waselect/shared';
-import { CircuitOpenError } from './adapters/http/circuit-breaker.js';
+// ⚠️ 必须来自 ports（AJ-102）：CircuitOpenError 是"被熔断"的契约类型。
+//    从 adapters 导入会形成 ports → 本文件 → adapters 的传递性反向依赖
+//    （本文件在 layeringBlocks 覆盖区外，lint 不报红，靠这条注释与代码审查守）。
+import { CircuitOpenError } from './ports/circuit-breaker.js';
 
 /** 对外响应的统一错误体（`data` 仅在需要附带结构化信息时出现，如字段级校验结果）。 */
 export interface ErrorBody {
