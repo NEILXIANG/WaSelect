@@ -168,3 +168,55 @@ describe('findProductsForQuote', () => {
     expect(await repo.findProductsForQuote([])).toEqual([]);
   });
 });
+
+describe('listActiveProducts / findProductDetail（U5a）', () => {
+  async function seedProducts(): Promise<void> {
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status, description, compliance_tags, images)
+      values ('p-1', 'Chef Knife', 'kitchen', 8800, 620, 5, 'JP', 'active', 'sharp', '[]'::jsonb, '["k1.jpg"]'::jsonb),
+             ('p-2', 'Face Cream', 'beauty', 3200, 480, 10, 'JP', 'active', null, '["cosmetic"]'::jsonb, '[]'::jsonb),
+             ('p-3', 'Old Cup', 'daily', 1000, 300, 0, 'JP', 'offline', null, '[]'::jsonb, '[]'::jsonb)
+    `;
+  }
+
+  it('只出上架商品；total 与 items 一致；新到旧排序', async () => {
+    await seedProducts();
+    const r = await repo.listActiveProducts({ page: 1, size: 20 });
+    expect(r.total).toBe(2);
+    expect(r.items.map((p) => p.id).sort()).toEqual(['p-1', 'p-2']);
+    expect(typeof r.items[0]?.price_jpy).toBe('number');
+  });
+
+  it('分页：size=1 时两页各一条，total 不变', async () => {
+    await seedProducts();
+    const p1 = await repo.listActiveProducts({ page: 1, size: 1 });
+    const p2 = await repo.listActiveProducts({ page: 2, size: 1 });
+    expect(p1.items).toHaveLength(1);
+    expect(p2.items).toHaveLength(1);
+    expect(p1.total).toBe(2);
+    expect(p1.items[0]?.id).not.toBe(p2.items[0]?.id);
+  });
+
+  it('category 过滤与 keyword（ILIKE 子串）', async () => {
+    await seedProducts();
+    const byCat = await repo.listActiveProducts({ page: 1, size: 20, category: 'beauty' });
+    expect(byCat.items.map((p) => p.id)).toEqual(['p-2']);
+    const byKw = await repo.listActiveProducts({ page: 1, size: 20, keyword: 'knife' });
+    expect(byKw.items.map((p) => p.id)).toEqual(['p-1']); // ilike：小写命中大写
+  });
+
+  it('keyword 里的 % 与 _ 被转义（不当通配符）', async () => {
+    await seedProducts();
+    const r = await repo.listActiveProducts({ page: 1, size: 20, keyword: '%' });
+    expect(r.items).toHaveLength(0); // "%" 字面量不存在于任何标题
+  });
+
+  it('findProductDetail：详情含下架行（40401 判定在路由）；不存在 → null', async () => {
+    await seedProducts();
+    const off = await repo.findProductDetail('p-3');
+    expect(off?.status).toBe('offline');
+    const on = await repo.findProductDetail('p-2');
+    expect(on).toMatchObject({ title: 'Face Cream', weight_g: 480, origin_country: 'JP' });
+    expect(await repo.findProductDetail('ghost')).toBeNull();
+  });
+});

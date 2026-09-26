@@ -43,6 +43,8 @@ import { markOrderPaid } from './mark-paid.js';
 import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import { rateLimiter, rateLimitRules } from './rate-limit.js';
 import { mountQuoteRoutes } from './quote-routes.js';
+import { mountProductRoutes } from './product-routes.js';
+import { mountAddressRoutes } from './address-routes.js';
 
 /**
  * 是否挂载骨架路由。**生产不挂。**
@@ -138,6 +140,16 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity: withIdentityCache(createIdentityCheck(db)),
     config,
+  });
+
+  // ── 商品/配置公开端点 + 我的地址（I1-U5a）：全环境挂载（产品接口不是脚手架）──
+  mountProductRoutes(app, { db, clock: systemClock, config });
+  mountAddressRoutes(app, {
+    db,
+    logger,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity: withIdentityCache(createIdentityCheck(db)),
+    idGen: systemIdGen,
   });
 
   if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见 @limitation）

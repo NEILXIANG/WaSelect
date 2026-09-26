@@ -40,9 +40,42 @@ export interface QuoteProductRow {
   origin_country: string;
 }
 
+/** 商品列表查询（参数已在路由层校验过形状）。 */
+export interface ProductListQuery {
+  page: number;
+  size: number;
+  category?: string | undefined;
+  keyword?: string | undefined;
+}
+
+/** 列表行（ProductCard 所需列 + images 原始 JSONB，ImageSet 映射在路由层）。 */
+export interface ProductListRow {
+  id: string;
+  title: string;
+  category: string;
+  price_jpy: number;
+  images: unknown;
+  stock: number;
+}
+
+/** 详情行（Product 全量公开列）。 */
+export interface ProductDetailRow extends ProductListRow {
+  description: string | null;
+  weight_g: number;
+  compliance_tags: unknown;
+  hs_code: string | null;
+  customs_desc_en: string | null;
+  origin_country: string;
+  status: string;
+}
+
 export interface CatalogRepo {
   /** 按 id 批量取商品快照（不存在的 id 不出现在结果里，由 domain 判 40401）。 */
   findProductsForQuote(ids: readonly string[]): Promise<QuoteProductRow[]>;
+  /** 上架商品分页（新到旧）；category/keyword 为可选过滤。 */
+  listActiveProducts(q: ProductListQuery): Promise<{ items: ProductListRow[]; total: number }>;
+  /** 商品详情（含下架的——"下架 → 40401"是路由的业务判定，仓储不过滤）。 */
+  findProductDetail(id: string): Promise<ProductDetailRow | null>;
   /**
    * 活跃承运商恰好一家时返回其 carrier，否则 null（路由层 → 50004）。
    * @see 文件头 @why
@@ -78,6 +111,66 @@ export function createCatalogRepo(db: Db): CatalogRepo {
         status: String(r.status),
         origin_country: String(r.origin_country),
       }));
+    },
+
+    async listActiveProducts(
+      q: ProductListQuery,
+    ): Promise<{ items: ProductListRow[]; total: number }> {
+      // ILIKE 通配符必须转义：不转义的话搜 "100%" 会变成"以 100 开头的任何东西"——
+      // 静默错配，而且只有用户搜到怪结果才会被发现
+      const kw = q.keyword?.replace(/[\\%_]/g, (m) => `\\${m}`);
+      const rows = await db`
+        select id, title, category, price_jpy, images, stock
+          from products
+         where status = 'active'
+           ${q.category !== undefined ? db`and category = ${q.category}` : db``}
+           ${kw !== undefined && kw !== '' ? db`and title ilike ${'%' + kw + '%'}` : db``}
+         order by created_at desc, id
+         limit ${q.size} offset ${(q.page - 1) * q.size}
+      `;
+      const counts = await db`
+        select count(*)::int as n
+          from products
+         where status = 'active'
+           ${q.category !== undefined ? db`and category = ${q.category}` : db``}
+           ${kw !== undefined && kw !== '' ? db`and title ilike ${'%' + kw + '%'}` : db``}
+      `;
+      return {
+        items: rows.map((r) => ({
+          id: String(r.id),
+          title: String(r.title),
+          category: String(r.category),
+          price_jpy: Number(r.price_jpy),
+          images: r.images,
+          stock: Number(r.stock),
+        })),
+        total: Number(counts[0]?.n ?? 0),
+      };
+    },
+
+    async findProductDetail(id: string): Promise<ProductDetailRow | null> {
+      const rows = await db`
+        select id, title, category, price_jpy, images, stock, description, weight_g,
+               compliance_tags, hs_code, customs_desc_en, origin_country, status
+          from products where id = ${id}
+      `;
+      const r = rows[0];
+      if (r === undefined) return null;
+      return {
+        id: String(r.id),
+        title: String(r.title),
+        category: String(r.category),
+        price_jpy: Number(r.price_jpy),
+        images: r.images,
+        stock: Number(r.stock),
+        description: r.description === null ? null : String(r.description),
+        weight_g: Number(r.weight_g),
+        compliance_tags: r.compliance_tags,
+        hs_code: r.hs_code === null ? null : String(r.hs_code),
+        customs_desc_en: r.customs_desc_en === null ? null : String(r.customs_desc_en),
+        origin_country: String(r.origin_country),
+        status: String(r.status),
+      };
     },
 
     async resolveSingleActiveCarrier(): Promise<string | null> {
