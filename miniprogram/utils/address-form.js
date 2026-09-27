@@ -1,0 +1,178 @@
+/**
+ * 职责：收货地址的**表单模型与格式校验**（共享层；地址列表页与编辑页都用）。
+ *
+ * @why 独立成共享模块而不是塞进页面：地址在两处被用——**编辑页**要校验并组装请求体，
+ *      **确认订单页**要渲染一行摘要。写两遍的结果是"编辑页说格式对、列表页显示成空的"，
+ *      且两边各自的正则会各自漂移。
+ *
+ * @why 前端要**重复一遍**契约的 pattern（而不是等服务端 400）：
+ *      地址表单七个字段，让用户提交后才知道"电话少了 +1"是纯粹的浪费——
+ *      一次往返换一条错误信息，而这条信息客户端**本来就知道**。
+ *      ⚠️ 但**服务端仍是权威**：这里是"预检"，不是"放行"。
+ *      两处正则不一致的表现是"前端说对、服务端 400"，由单测与契约双向比对钉住
+ *      （同首页分类枚举的做法）。
+ *
+ * @limitation 一：`country` 在 MVP 固定取 `ADDRESS_COUNTRY_DEFAULT`（'US'）——
+ *              单一目的国是这个阶段的事实（PRD：先做美国）。
+ *              ⚠️ 它是**常量不是散落的字面量**：多国时改这里一处 + 服务端下发默认即可，
+ *              禁止在页面/wxml 里再写一个 'US'（ADR-28：不写死国家）。
+ * @limitation 二：`state` 一律 `toUpperCase()`：契约只约束长度 2 不约束大小写，
+ *              而美国州名的语义是大写（小写 `ca` 在报关与面单上会被当成另一个值）。
+ *              自动转比报错友好——用户没有"输错大小写"这个概念。
+ * @limitation 三：校验只报**字段级**错误，不做国际化 / 不做地址标准化（不调 USPS）。
+ *              能标准化的地址在服务端落库时也不会改格式，MVP 不引这条路。
+ *
+ * @see ../../contracts/api-contract.yaml（AddressInput：pattern 的**真源**）；
+ *      ../pages/address/index.vm.js（列表行）；../pages/checkout/（建单时用它摘要）
+ */
+
+/** MVP 唯一目的国（@see @limitation 一）。 */
+export const ADDRESS_COUNTRY_DEFAULT = 'US';
+
+/**
+ * 与契约 `AddressInput.pattern` **同源**的正则。
+ *
+ * ⚠️ 改这里要同时确认契约没改：`address-form.unit.test.ts` 用正则从 yaml 里抽出
+ *    pattern 做双向比对，任一边改了另一边不跟进 → gate 变红。
+ */
+export const ADDRESS_PATTERNS = {
+  /** `^[ -~]+$`：可打印 ASCII（美国地址面单不接受全角 / 日文）。 */
+  ascii: /^[ -~]+$/,
+  /** `^[ -~]*$`：同上但允许为空（`line2` 可省）。 */
+  asciiOptional: /^[ -~]*$/,
+  /** `^\+1[0-9]{10}$`：北美号码，带国家码。 */
+  phone: /^\+1[0-9]{10}$/,
+  /** `^\d{5}(-\d{4})?$`：5 位 ZIP 或 ZIP+4。 */
+  postal: /^\d{5}(-\d{4})?$/,
+  /** 州缩写（契约只约束长度 2；大小写由 @limitation 二 归一）。 */
+  state: /^[A-Z]{2}$/,
+};
+
+/** 表单字段（顺序 = 编辑页表单顺序；**不含** country/is_default，见 @limitation 一）。 */
+export const ADDRESS_FIELDS = [
+  'recipient',
+  'phone',
+  'line1',
+  'line2',
+  'city',
+  'state',
+  'postal_code',
+];
+
+/** 空表单（新增态）。 */
+export function emptyForm() {
+  return {
+    recipient: '',
+    phone: '',
+    line1: '',
+    line2: '',
+    city: '',
+    state: '',
+    postal_code: '',
+    is_default: false,
+  };
+}
+
+/**
+ * 服务端 `Address` → 表单模型（编辑态）。
+ * @param {unknown} addr 服务端地址；null/undefined → 空表单
+ * @why 逐字段取值而不是 `{...addr}`：地址对象是**外部输入**（可能多字段、可能缺字段），
+ *      铺进去会把未知字段一路带到请求体里（服务端会 40001），而报错指向请求体不指向表单。
+ */
+export function formModel(addr) {
+  const a = addr && typeof addr === 'object' ? addr : {};
+  const text = (v) => (typeof v === 'string' ? v : '');
+  return {
+    recipient: text(a.recipient),
+    phone: text(a.phone),
+    line1: text(a.line1),
+    line2: text(a.line2),
+    city: text(a.city),
+    // @see @limitation 二（州名大小写归一）
+    state: text(a.state).toUpperCase(),
+    postal_code: text(a.postal_code),
+    is_default: a.is_default === true,
+  };
+}
+
+/**
+ * 校验表单。
+ * @param {unknown} model
+ * @returns {{ok: boolean, errors: Record<string, string>, first: string}}
+ *          `errors` 以字段名为键（wxml 可按字段显示），`first` 是第一条提示（弹 toast 用）
+ * @why 返回**全部**错误而不是只返第一条：七字段表单一个一个报，用户要提交七次。
+ *      `first` 另给一份是因为 toast 只能显示一句——两者不冲突。
+ */
+export function formErrors(model) {
+  const m = formModel(model);
+  const errors = {};
+  if (!ADDRESS_PATTERNS.ascii.test(m.recipient.trim()))
+    errors.recipient = '收件人请用英文/数字填写（面单不支持中文或全角）';
+  if (!ADDRESS_PATTERNS.phone.test(m.phone.trim()))
+    errors.phone = '电话格式为 +1 开头加 10 位数字，如 +14155550123';
+  if (!ADDRESS_PATTERNS.ascii.test(m.line1.trim())) errors.line1 = '地址第一行请用英文/数字填写';
+  if (!ADDRESS_PATTERNS.asciiOptional.test(m.line2.trim()))
+    errors.line2 = '地址第二行请用英文/数字填写（可留空）';
+  if (!ADDRESS_PATTERNS.ascii.test(m.city.trim())) errors.city = '城市请用英文/数字填写';
+  if (!ADDRESS_PATTERNS.state.test(m.state.trim())) errors.state = '州为两位大写缩写，如 CA';
+  if (!ADDRESS_PATTERNS.postal.test(m.postal_code.trim()))
+    errors.postal_code = '邮编为 5 位或 ZIP+4，如 94105 或 94105-1234';
+  const first = Object.values(errors)[0] ?? '';
+  return { ok: Object.keys(errors).length === 0, errors, first };
+}
+
+/**
+ * 表单模型 → 契约 `AddressInput` 请求体。
+ * @why `line2` 空串仍**带上**而不是删掉：契约允许空串（`^[ -~]*$`），
+ *      删掉字段会让"改地址时清空第二行"变成"第二行保持不变"——
+ *      用户清了却没生效，且从 UI 上看不出区别。
+ * @limitation 四：**不校验**（校验是 `formErrors` 的事，调用方先过一遍）。
+ *              这里顺手校验的表现是"两个地方都能拒，但只有一个地方会提示"，
+ *              而没提示的那个（这里）会静默吞掉提交。
+ */
+export function toAddressInput(model) {
+  const m = formModel(model);
+  return {
+    recipient: m.recipient.trim(),
+    phone: m.phone.trim(),
+    line1: m.line1.trim(),
+    line2: m.line2.trim(),
+    city: m.city.trim(),
+    state: m.state.trim().toUpperCase(),
+    postal_code: m.postal_code.trim(),
+    country: ADDRESS_COUNTRY_DEFAULT,
+    is_default: m.is_default === true,
+  };
+}
+
+/**
+ * 地址 → 一行摘要（确认订单页 / 列表项副标题用）。
+ * @returns {{recipient: string, phone: string, line1: string, line2: string, region: string}}
+ * @why 摘要在**这里**拼而不是 wxml 里拼字符串：WXML 里做字符串拼接与空值判断
+ *      会产出"San Francisco, , CA"这种双逗号，而它在真机上的样子就是"地址显示错了"。
+ */
+export function addressSummary(addr) {
+  const a = addr && typeof addr === 'object' ? addr : {};
+  const text = (v) => (typeof v === 'string' ? v.trim() : '');
+  const region = [text(a.city), text(a.state), text(a.postal_code)].filter((s) => s !== '');
+  return {
+    recipient: text(a.recipient),
+    phone: text(a.phone),
+    line1: text(a.line1),
+    line2: text(a.line2),
+    region: region.join(', '),
+  };
+}
+
+/**
+ * 默认地址 id：`is_default` 优先，没有则取第一条；空列表 → 空串。
+ * @why 确认订单页必须**预选一个**地址（否则每次下单都要多点一次），
+ *      而"预选哪个"在两个页面各写一遍就会不一致（列表页认第一条、结算页认 is_default）。
+ */
+export function defaultAddressId(list) {
+  if (!Array.isArray(list)) return '';
+  const picked = list.find((a) => a && a.is_default === true && typeof a.id === 'string');
+  if (picked !== undefined) return picked.id;
+  const first = list.find((a) => a && typeof a.id === 'string');
+  return first?.id ?? '';
+}

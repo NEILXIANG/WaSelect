@@ -30,6 +30,8 @@ function stubHost(
   const storage: Record<string, unknown> = { ...(over.storage ?? {}) };
   const requested: unknown[] = [];
   const navigated: string[] = [];
+  const backDelta: number[] = [];
+  const modals: Array<{ success?: (res: { confirm: boolean; cancel: boolean }) => void }> = [];
   vi.stubGlobal('wx', {
     request: (o: unknown) => {
       seen.push('request');
@@ -55,9 +57,18 @@ function stubHost(
       seen.push('login');
       o.success?.({ code: 'host-code-1' });
     },
+    navigateBack: (o: { delta?: number }) => {
+      seen.push(`back:${String(o?.delta ?? 1)}`);
+      backDelta.push(o?.delta ?? 1);
+    },
+    showModal: (o: { success?: (res: { confirm: boolean; cancel: boolean }) => void }) => {
+      seen.push('modal');
+      modals.push(o);
+      o.success?.({ confirm: true, cancel: false });
+    },
     ...(over.logger === undefined ? {} : { getRealtimeLogManager: () => over.logger }),
   });
-  return { seen, storage, requested, navigated };
+  return { seen, storage, requested, navigated, backDelta, modals };
 }
 
 describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => {
@@ -70,6 +81,8 @@ describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => 
     expect(() => api.getRealtimeLogManager()).toThrow(/wx 宿主不存在/);
     expect(() => api.navigateTo({ url: '/pages/home/index' })).toThrow(/wx 宿主不存在/);
     expect(() => api.login({})).toThrow(/wx 宿主不存在/);
+    expect(() => api.navigateBack()).toThrow(/wx 宿主不存在/);
+    expect(() => api.showModal({})).toThrow(/wx 宿主不存在/);
   });
 
   it('**import 时不取宿主**——只有调用才取（否则 Node 侧连 import 都做不到）', () => {
@@ -147,6 +160,32 @@ describe('走真实宿主时的行为', () => {
     let code = '';
     createWxApi().login({ success: (res) => (code = res.code) });
     expect(code).toBe('host-code-1');
+  });
+
+  it('navigateBack 原样转发 delta（不补默认值——默认由宿主定，@limitation 八）', () => {
+    // @why 这条钉的是"只登记不兜底"：若在这里写 `delta ?? 1` 再传给宿主，
+    //      "调用方没传 delta"这件事就被吞掉了，而官方默认值改了我们也不知道。
+    const { backDelta } = stubHost();
+    createWxApi().navigateBack({ delta: 2 });
+    expect(backDelta).toEqual([2]);
+  });
+
+  it('⚠️ navigateBack 不传参也要能调（出栈一层是常态），且不报错', () => {
+    const { seen } = stubHost();
+    expect(() => createWxApi().navigateBack()).not.toThrow();
+    expect(seen).toContain('back:1');
+  });
+
+  it('showModal 原样转发并把 confirm 回给调用方（删除确认靠它）', () => {
+    const { modals } = stubHost();
+    let confirmed: boolean | null = null;
+    createWxApi().showModal({
+      title: '删除地址',
+      confirmText: '删除',
+      success: (res) => (confirmed = res.confirm),
+    });
+    expect(modals).toHaveLength(1);
+    expect(confirmed).toBe(true);
   });
 });
 

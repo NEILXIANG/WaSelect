@@ -13,7 +13,8 @@
  *      收敛到一个入口后，这三点各有一处答案。
  *
  * @limitation 一：**只声明当前真用到的能力**（request / getStorageSync / setStorageSync /
- *              removeStorageSync / getRealtimeLogManager / navigateTo / login）。新增一个 wx API 就在这里加一个方法——
+ *              removeStorageSync / getRealtimeLogManager / navigateTo / login /
+ *              navigateBack / showModal）。新增一个 wx API 就在这里加一个方法——
  *              不要预先铺满官方 API，铺了就会有人依赖上没被测试过的封装（本项目多次踩过"提前做是猜"）。
  * @limitation 二：`getStorageSync` 的契约是**只取字符串**：读到的不是字符串时一律当"没存过"（返回空串）。
  *              要存对象就先 JSON 序列化——小程序 storage 本身也是这个语义。
@@ -82,6 +83,23 @@ export interface WxLoginOption {
   fail?: (err: WxRequestFail) => void;
 }
 
+/** `wx.navigateBack` 的入参（只声明我们传的字段）。 */
+export interface WxNavigateBackOption {
+  /** 返回的层数；`1` = 回上一页。不传由宿主决定（官方默认 1）。 */
+  delta?: number;
+}
+
+/** `wx.showModal` 的入参（只声明我们传的字段）。 */
+export interface WxShowModalOption {
+  title?: string;
+  content?: string;
+  /** 按钮文字，最多四个字符（"取消" / "删除"这类）。 */
+  confirmText?: string;
+  cancelText?: string;
+  success?: (res: { confirm: boolean; cancel: boolean }) => void;
+  fail?: (err: WxRequestFail) => void;
+}
+
 /** 宿主能力的子集。**新增 wx API 就在这里加一个方法**。 */
 export interface WxApi {
   request(option: WxRequestOption): void;
@@ -109,6 +127,23 @@ export interface WxApi {
    *              上层（登录链）要有自己的防线，不能在这里假装有。
    */
   login(option: WxLoginOption): void;
+  /**
+   * 关闭当前页返回（页面栈出栈）。
+   * @why I2 地址编辑页保存成功要回列表——用 `navigateTo` 回列表会**再压一层**，
+   *      表现为"地址列表页被叠了两层，返回键要按两次"，且列表页不会重新取数。
+   * @limitation 八：**只登记不兜底**（不判栈深）。栈里只有一页时由宿主的 `fail` 报出来，
+   *              这里补一个 `navigateTo` 兜底的表现是"回到了一个不该存在的页面"。
+   *              @see @limitation 三（不吞异常，同一口径）
+   */
+  navigateBack(option?: WxNavigateBackOption): void;
+  /**
+   * 模态确认框（**破坏性操作**的唯一确认手段）。
+   * @why 删除地址不可撤销：不做确认的表现是"手滑删了常用地址"，
+   *      而没有任何日志能说明它是误操作——那是最难自证的一类投诉。
+   * @limitation 九：`showToast` 不在此登记——提示走页面内错误文案（可见、可测、不依赖宿主时序）。
+   *              只有"需要用户决策"的才用模态，一条提示不值得为一个 wx API 付覆盖率成本。
+   */
+  showModal(option: WxShowModalOption): void;
 }
 
 /** 宿主（`globalThis.wx`）上我们真正读到的形状——比 `WxApi` 宽松，因为官方签名返回 `unknown`。 */
@@ -120,6 +155,8 @@ interface WxHost {
   getRealtimeLogManager?: () => RealtimeLogger | undefined;
   navigateTo(option: WxNavigateOption): void;
   login(option: WxLoginOption): void;
+  navigateBack(option?: WxNavigateBackOption): void;
+  showModal(option: WxShowModalOption): void;
 }
 
 /**
@@ -169,6 +206,12 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     },
     login: (option) => {
       host().login(option);
+    },
+    navigateBack: (option) => {
+      host().navigateBack(option);
+    },
+    showModal: (option) => {
+      host().showModal(option);
     },
   };
   return { ...real, ...over };
