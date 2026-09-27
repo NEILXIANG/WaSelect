@@ -25,6 +25,7 @@ import { resolveApiBase } from './api/config.js';
 import { login } from './api/endpoints.js';
 import { createTokenStore } from './api/token-store.js';
 import { LoginForm } from './LoginForm.js';
+import { OrdersPage } from './orders/OrdersPage.js';
 import { ProductsPage } from './products/ProductsPage.js';
 import { ProductFormPage } from './products/ProductFormPage.js';
 import type { AdminProductLike } from './products/api.js';
@@ -33,7 +34,10 @@ import type { AdminProductLike } from './products/api.js';
 const tokenStore = createTokenStore();
 
 /** 一级页签（新增一个管理页就在这里加一项）。 */
-const TABS = [{ key: 'products', label: '商品管理' }] as const;
+const TABS = [
+  { key: 'products', label: '商品管理' },
+  { key: 'orders', label: '订单管理' },
+] as const;
 
 type TabKey = (typeof TABS)[number]['key'];
 
@@ -105,6 +109,8 @@ export function App() {
           退出登录
         </button>
       </nav>
+
+      {tab === 'orders' && <OrdersPage api={api} />}
 
       {tab === 'products' &&
         (editing === null ? (

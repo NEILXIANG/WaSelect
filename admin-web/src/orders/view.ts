@@ -223,6 +223,35 @@ export function addressGate(order: unknown): Gate {
   return NO(`仅"待发货"可改址（当前：${ORDER_STATUS_LABELS[status]}）——已发货改址要联系承运商`);
 }
 
+/**
+ * 订单地址 → 一行文案（空段跳过，防止出现"Seattle，，WA"）。
+ *
+ * @why 放进 view 而不是写在 `.tsx` 里：那是**字符串拼装逻辑**，
+ *      写在组件里就进不了门禁（tsx 不收覆盖率、也没有组件测试 harness），
+ *      而它错的样子恰恰是"看一眼像对的"——多一个空逗号没人会发现。
+ */
+export function addressSummary(order: unknown): string {
+  const addr = (order as { address?: unknown } | null)?.address;
+  const o = (typeof addr === 'object' && addr !== null ? addr : {}) as Record<string, unknown>;
+  const parts = ['recipient', 'line1', 'line2', 'city', 'state', 'postal_code']
+    .map((k) => (typeof o[k] === 'string' ? (o[k] as string).trim() : ''))
+    .filter((s) => s !== '');
+  return parts.length === 0 ? '—' : parts.join('，');
+}
+
+/** 支付信息 → 一行文案（取 `payment.channel` 与原币扣款额，缺则占位）。 */
+export function paymentSummary(order: unknown): string {
+  const p = (order as { payment?: unknown } | null)?.payment;
+  const o = (typeof p === 'object' && p !== null ? p : {}) as Record<string, unknown>;
+  const channel = typeof o['channel'] === 'string' ? o['channel'] : '';
+  const currency = typeof o['charge_currency'] === 'string' ? o['charge_currency'] : '';
+  const amount = Number.isInteger(o['charge_amount']) ? String(o['charge_amount']) : '';
+  const text = [channel, [currency, amount].filter((s) => s !== '').join(' ')]
+    .filter((s) => s !== '')
+    .join(' · ');
+  return text === '' ? '—' : text;
+}
+
 /** 发货表单（契约 `required: [carrier, tracking_no]`）。 */
 export interface ShipForm {
   carrier: string;

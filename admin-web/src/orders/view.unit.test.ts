@@ -15,6 +15,8 @@ import {
   ORDER_STATUS_LABELS,
   STATUS_FILTER_OPTIONS,
   addressGate,
+  addressSummary,
+  paymentSummary,
   emptyRefundForm,
   emptyShipForm,
   formatOrderTime,
@@ -117,6 +119,38 @@ describe('orderRows', () => {
     const [row] = orderRows([{ ...ORDER, is_test: true, has_dispute: true }]);
     expect(row?.isTest).toBe(true);
     expect(row?.hasDispute).toBe(true);
+  });
+});
+
+describe('addressSummary / paymentSummary', () => {
+  it('地址按美式顺序拼一行', () => {
+    expect(addressSummary(ORDER)).toBe('Emily Carter，Seattle，WA');
+  });
+
+  it('⚠️ line2 为空时不留空逗号（"Seattle，，WA" 会被当成漏字段）', () => {
+    expect(
+      addressSummary({ address: { ...ORDER.address, line1: '500 Union St', line2: '' } }),
+    ).toBe('Emily Carter，500 Union St，Seattle，WA');
+  });
+
+  it('⚠️ 完全没地址给占位符（空白会让人以为页面坏了）', () => {
+    expect(addressSummary({})).toBe('—');
+    expect(addressSummary(null)).toBe('—');
+  });
+
+  it('支付行给出通道 + 原币扣款额', () => {
+    expect(
+      paymentSummary({
+        payment: { channel: 'stripe', charge_currency: 'USD', charge_amount: 8600 },
+      }),
+    ).toBe('stripe · USD 8600');
+  });
+
+  it('⚠️ 缺 amount 时不显示 "USD undefined"', () => {
+    expect(paymentSummary({ payment: { channel: 'wechat', charge_currency: 'JPY' } })).toBe(
+      'wechat · JPY',
+    );
+    expect(paymentSummary({})).toBe('—');
   });
 });
 
