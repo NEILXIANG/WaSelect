@@ -1,0 +1,111 @@
+/**
+ * 职责：`domain/shipping-rates-input.ts` 的单测（I2 U-C1）。
+ *
+ * @why **整表**层面的三条约束（非空 / 唯一键 / 活跃承运商恰好一家）各给独立用例：
+ *      它们是"单条全对、整表仍然错"的那类问题，而 `PUT /admin/shipping-rates`
+ *      是整表替换——单条校验再严也挡不住它们。
+ *      其中"活跃承运商恰好一家"是 D-46 同源的静默事故：违反后全站报价 50004。
+ *
+ * @limitation 只测纯校验；"替换后是不是真的能取到档"由仓储与路由的接线级用例证明。
+ */
+import { describe, expect, it } from 'vitest';
+import { AppError } from '../errors.js';
+import { parseShippingRates } from './shipping-rates-input.js';
+
+function codeOf(fn: () => unknown): number {
+  try {
+    fn();
+  } catch (e) {
+    if (e instanceof AppError) return e.code;
+    throw e;
+  }
+  throw new Error('预期抛 AppError，实际没有抛');
+}
+
+/**
+ * 取 `details.reason`。
+ * @why **必须**断言 reason 而不只是错误码：空表（`rates_empty`）与全停用（`no_active_tier`）
+ *      是两条独立守卫，但都抛 40001——只断言码的话，注入"去掉空表守卫"仍然全绿
+ *      （被后一条兜住），缺陷注入第一次就没变红。这正是"两个守卫覆盖同一输入"的
+ *      覆盖假象（§2 教训：断言不够特异 = 没断言）。reason 进日志，是排障时的唯一线索，
+ *      所以它本身就是被验证的行为，不是实现细节。
+ */
+function reasonOf(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (e) {
+    if (e instanceof AppError) return String((e.details as { reason?: unknown })?.reason ?? '');
+    throw e;
+  }
+  throw new Error('预期抛 AppError，实际没有抛');
+}
+
+const OK = [
+  { carrier: 'placeholder', max_weight_g: 500, price_jpy: 2100 },
+  { carrier: 'placeholder', max_weight_g: 2000, price_jpy: 4950 },
+];
+
+describe('parseShippingRates', () => {
+  it('非数组 / 空数组 → 40001（空表 = 全站无法报价）', () => {
+    expect(codeOf(() => parseShippingRates({}))).toBe(40001);
+    expect(codeOf(() => parseShippingRates([]))).toBe(40001);
+    // reason 必须与"全停用"区分：两条守卫都是 40001，只有 reason 能证明是这一条拦的
+    expect(reasonOf(() => parseShippingRates([]))).toBe('rates_empty');
+  });
+
+  it('元素不是对象 → 40001', () => {
+    expect(codeOf(() => parseShippingRates([null]))).toBe(40001);
+  });
+
+  it('carrier 空或超 32 字符 → 40001（列宽 VARCHAR(32)）', () => {
+    expect(codeOf(() => parseShippingRates([{ ...OK[0], carrier: '  ' }]))).toBe(40001);
+    expect(codeOf(() => parseShippingRates([{ ...OK[0], carrier: 'c'.repeat(33) }]))).toBe(40001);
+  });
+
+  it('max_weight_g 非整数或 <1 → 40001；price_jpy 非整数或 <0 → 40001', () => {
+    expect(codeOf(() => parseShippingRates([{ ...OK[0], max_weight_g: 0 }]))).toBe(40001);
+    expect(codeOf(() => parseShippingRates([{ ...OK[0], max_weight_g: 1.5 }]))).toBe(40001);
+    expect(codeOf(() => parseShippingRates([{ ...OK[0], price_jpy: -1 }]))).toBe(40001);
+    expect(codeOf(() => parseShippingRates([{ ...OK[0], price_jpy: 1.5 }]))).toBe(40001);
+    // 0 円运费合法（手动包邮），不是事故
+    expect(parseShippingRates([{ ...OK[0], price_jpy: 0 }])[0]?.priceJpy).toBe(0);
+  });
+
+  it('同一承运商 + 上限重复 → 40001（DB UNIQUE 会拒，这里先给出可读原因）', () => {
+    expect(codeOf(() => parseShippingRates([...OK, { ...OK[1] }]))).toBe(40001);
+  });
+
+  it('🔴 两家承运商同时启用 → 40001（活跃承运商 ≠1 家 = 全站 50004 运费不可计算）', () => {
+    expect(
+      codeOf(() =>
+        parseShippingRates([...OK, { carrier: 'yamato', max_weight_g: 2000, price_jpy: 5000 }]),
+      ),
+    ).toBe(40001);
+  });
+
+  it('两家承运商但只有一家启用 → 通过（不拦"录着备用档位"这件事）', () => {
+    const out = parseShippingRates([
+      ...OK,
+      { carrier: 'yamato', max_weight_g: 2000, price_jpy: 5000, active: false },
+    ]);
+    expect(out).toHaveLength(3);
+    expect(out[2]?.active).toBe(false);
+  });
+
+  it('全部停用 → 40001（没有可取的档）', () => {
+    const rows = OK.map((r) => ({ ...r, active: false }));
+    expect(codeOf(() => parseShippingRates(rows))).toBe(40001);
+    expect(reasonOf(() => parseShippingRates(rows))).toBe('no_active_tier');
+  });
+
+  it('合法整表：active 缺省为 true，carrier 两侧空白被 trim', () => {
+    const out = parseShippingRates([
+      { carrier: '  placeholder ', max_weight_g: 500, price_jpy: 2100 },
+      { carrier: 'placeholder', max_weight_g: 2000, price_jpy: 4950, active: false },
+    ]);
+    expect(out).toEqual([
+      { carrier: 'placeholder', maxWeightG: 500, priceJpy: 2100, active: true },
+      { carrier: 'placeholder', maxWeightG: 2000, priceJpy: 4950, active: false },
+    ]);
+  });
+});
