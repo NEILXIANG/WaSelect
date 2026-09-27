@@ -230,6 +230,12 @@ export default tseslint.config(
         Component: 'readonly',
         getApp: 'readonly',
         console: 'readonly',
+        // `setTimeout` / `clearTimeout` 由**小程序运行时**提供（与浏览器同名同义），
+        // 不是宿主 API `wx.*`——所以它不需要也不该登记进 `utils/wx-api.ts`。
+        // @why 不逐个文件写 `/* global */`：那等于每用一个标准全局就发明一次绕法，
+        //      而本块正是"小程序端全局白名单"的唯一落点。
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
       },
     },
   },

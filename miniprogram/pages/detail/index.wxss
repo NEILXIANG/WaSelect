@@ -51,3 +51,14 @@
   line-height: 1.6;
   word-break: break-all;
 }
+
+/* 底部动作区：加购按钮 + 加购后的提示与"去购物车" */
+.buy-bar {
+  margin-top: var(--ws-space);
+}
+
+.added {
+  display: block;
+  margin: var(--ws-space-sm) 0;
+  text-align: center;
+}

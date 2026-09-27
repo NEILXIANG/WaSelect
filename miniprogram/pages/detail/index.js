@@ -8,9 +8,9 @@
  *      （vm 的 `intentForProduct`），由首页 shell 拼路径跳过来。id 是唯一入参——
  *      没有它的详情页只会白屏，所以缺 id 时**明示错误**，不渲染空壳。
  *
- * @why 刻意**没有"加入购物车 / 立即购买"按钮**：购物车与结算未落地（I2 后续单元），
- *      放一个点了没反应的按钮 = "看起来能用、实际是坏的"。购买动作落地时在这里加
- *      `ws-button`，连点防线由组件承担（页面不写守卫，@see pages/home/index.js 同一条）。
+ * @why 有「加入购物车」而**没有「立即购买」**：立即购买 = "加购 + 直奔结算"，
+ *      而结算页（`pages/checkout`）尚未落地——放一个点了没反应的按钮 =
+ *      "看起来能用、实际是坏的"。加入购物车则已经闭环（购物车页已存在）。
  *
  * @limitation 一：**无分享**（`onShareAppMessage`）——分享出去的小程序卡片需要
  *              真实域名与 AppID 才有意义，骨架期加了也只能在开发者工具里看。
@@ -21,9 +21,16 @@
  */
 import { detailView } from './index.vm.js';
 import { errorMessage } from '../../utils/error-text.js';
+import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 
 const app = getApp();
+
+/** 页面级宿主入口（wx-api 是无状态转发）。 */
+const wxApi = createWxApi();
+
+/** 购物车页路径（跳转路径只在这一处出现）。 */
+const CART_PAGE = '/pages/cart/index';
 
 Page({
   data: {
@@ -32,6 +39,8 @@ Page({
     loading: false,
     /** 错误文案（空串 = 无错误）。缺 id / 40401（下架或不存在）都会落到这里。 */
     error: '',
+    /** true = 本次加购已成功（页内提示，不弹 toast——又一个宿主 API 不值得登记）。 */
+    added: false,
   },
 
   productId: '',
@@ -67,5 +76,31 @@ Page({
     } finally {
       this.setData({ loading: false });
     }
+  },
+
+  /**
+   * 加入购物车（qty=1；改数量在购物车页做）。
+   * @why 快照信息（title/image/priceJpy）由这里备好交给 cart-store：
+   *      购物车是**本地**状态，离线也要能看到加过什么；而快照价**不许**用来算钱
+   *      （cart-store.js @limitation 一）。
+   */
+  onAddToCart() {
+    const p = this.data.product;
+    if (p === null || p.soldOut) return;
+    if (this.productId === '') return;
+    app.globalData.cart.add({
+      productId: this.productId,
+      qty: 1,
+      title: p.title,
+      image: p.images[0] ?? '',
+      priceJpy: p.priceJpy,
+    });
+    // ⚠️ 只提示、不跳走：加购后自动跳购物车会打断"继续逛"——用户自己点"去购物车"
+    this.setData({ added: true });
+  },
+
+  /** 去购物车（加购提示里的入口）。 */
+  onGoCart() {
+    wxApi.navigateTo({ url: CART_PAGE });
   },
 });

@@ -25,6 +25,7 @@ import { createRequester } from './utils/request.js';
 import { createWxApi } from './utils/wx-api.js';
 import { createStorage } from './utils/storage.js';
 import { loginWithWechat } from './utils/auth-session.js';
+import { createCartStore } from './utils/cart-store.js';
 import { API_BASE } from './config.js';
 
 /**
@@ -44,6 +45,8 @@ App({
     storage: null,
     /** 最近一次链路 ID，用于真机排障时对照服务端日志。 */
     lastTraceId: '',
+    /** 唯一的购物车实例（本地状态 + 持久化，PRD §3.1 / D-52）；页面都经它读写。 */
+    cart: null,
   },
 
   onLaunch() {
@@ -55,6 +58,8 @@ App({
     //    而且互撞**不报错**（只是数据突然不对）。前缀规则由 `storage.js` 唯一持有。
     const storage = createStorage({ wx: wxApi });
     this.globalData.storage = storage;
+    // 购物车必须在 storage 之后建：它一建就读盘（坏数据由它自己降级，不抛）
+    this.globalData.cart = createCartStore({ storage });
     this.globalData.token = storage.getString(TOKEN_KEY);
 
     const log = (fields) => {

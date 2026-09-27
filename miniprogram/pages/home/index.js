@@ -30,6 +30,7 @@
 import { errorMessage } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import {
+  cartLabel,
   categoryTabs,
   intentForProduct,
   listQuery,
@@ -47,6 +48,9 @@ const wxApi = createWxApi();
 /** 商品详情页路径（跳转路径只在这一处出现；vm 只给意图，不认识路径）。 */
 const DETAIL_PAGE = '/pages/detail/index';
 
+/** 购物车页路径（同上：页面路径只在这一处出现）。 */
+const CART_PAGE = '/pages/cart/index';
+
 Page({
   data: {
     /** 分类 tab（vm `categoryTabs` 的输出，含 active 标记）。 */
@@ -63,6 +67,8 @@ Page({
     empty: false,
     /** 是否还有下一页（vm `nextPage` 的布尔化，控制底部提示与触底行为）。 */
     hasMore: false,
+    /** 购物车入口文案（vm `cartLabel`：带件数角标）。 */
+    cartLabel: '',
     /** 错误文案（utils/error-text，真源唯一）；空串 = 无错误。 */
     error: '',
   },
@@ -83,6 +89,20 @@ Page({
     // tab 先渲染（本地常量，不需要等网络）——首屏至少有东西可点，而不是一整页白
     this.setData({ tabs: categoryTabs('') });
     this.reload('');
+  },
+
+  /**
+   * 每次进屏刷新购物车角标。
+   * @why 用 onShow 而不是只 onLoad：从详情页加购后**返回**首页不会触发 onLoad
+   *      （页面在栈里没销毁），只看 onLoad 的表现是"加了东西，角标还是 0"。
+   */
+  onShow() {
+    this.setData({ cartLabel: cartLabel(app.globalData.cart.count()) });
+  },
+
+  /** 去购物车。 */
+  onGoCart() {
+    wxApi.navigateTo({ url: CART_PAGE });
   },
 
   /**

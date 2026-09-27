@@ -41,6 +41,19 @@
       <text class="description">{{product.description}}</text>
     </view>
 
-    <!-- 购买动作空位：购物车/结算单元落地后在此放 ws-button -->
+    <!-- ⚠️ 刻意没有"立即购买"：它等于"加购 + 直奔结算"，而结算页未落地
+         （@see index.js 文件头 @why）。加入购物车已闭环（购物车页存在）。 -->
+    <view class="buy-bar">
+      <ws-button
+        text="加入购物车"
+        type="primary"
+        disabled="{{product.soldOut}}"
+        bindtap="onAddToCart"
+      />
+      <block wx:if="{{added}}">
+        <text class="label added">已加入购物车</text>
+        <ws-button text="去购物车" type="default" bindtap="onGoCart" />
+      </block>
+    </view>
   </block>
 </view>

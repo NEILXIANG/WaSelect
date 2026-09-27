@@ -20,6 +20,7 @@
       bindconfirm="onSearch"
     />
     <ws-button class="search-btn" text="搜索" type="default" loading="{{loading}}" bindtap="onSearch" />
+    <ws-button class="cart-btn" text="{{cartLabel}}" type="default" bindtap="onGoCart" />
   </view>
 
   <scroll-view class="tabs" scroll-x enable-flex>

@@ -1,6 +1,7 @@
 {
   "navigationBarTitleText": "WaSelect",
   "usingComponents": {
-    "ws-price": "/components/ws-price/index"
+    "ws-price": "/components/ws-price/index",
+    "ws-button": "/components/ws-button/index"
   }
 }

@@ -6,6 +6,10 @@
       "page": "pages/comp/index"
     },
     {
+      "action": "disallow",
+      "page": "pages/cart/index"
+    },
+    {
       "action": "allow",
       "page": "*"
     }

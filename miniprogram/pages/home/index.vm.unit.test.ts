@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CATEGORIES,
   PAGE_SIZE,
+  cartLabel,
   categoryTabs,
   hasMore,
   intentForProduct,
@@ -213,6 +214,19 @@ describe('intentForProduct（导航意图）', () => {
     expect(intentForProduct('')).toBeNull();
     expect(intentForProduct(undefined)).toBeNull();
     expect(intentForProduct(42)).toBeNull();
+  });
+});
+
+describe('cartLabel（购物车入口角标）', () => {
+  it('有件数 → `购物车 · N`', () => {
+    expect(cartLabel(3)).toBe('购物车 · 3');
+    expect(cartLabel(1)).toBe('购物车 · 1');
+  });
+
+  it('⚠️ 0 件 / 非整数 / 缺失 → 只有「购物车」（不显示 · 0）', () => {
+    for (const n of [0, -1, undefined, null, '2', 1.5]) {
+      expect(cartLabel(n)).toBe('购物车');
+    }
   });
 });
 
