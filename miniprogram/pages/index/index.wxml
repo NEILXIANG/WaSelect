@@ -1,5 +1,19 @@
-<!-- 骨架演示页：三个按钮对应链路的三个环节。刻意不做视觉打磨——它不是产品页面。 -->
+<!--
+  骨架演示页：三个按钮对应链路的三个环节。刻意不做视觉打磨——它不是产品页面。
+
+  ⚠️ **本页已停用**（U6c 骨架退役）：`/api/v1/skeleton/*` 端点已删除，按钮链路不存在。
+  停用表现为**按钮禁用 + 顶部明示原因**，而不是留着三个点了必然 404 的按钮
+  （那是"看起来能用、实际是坏的"，比明确停用贵得多）。
+-->
 <view class="page">
+  <view class="card" wx:if="{{retired}}">
+    <text class="error">
+      本页已停用：/api/v1/skeleton/* 端点随 U6c 骨架退役删除。
+      「全栈是否打通」改由 npm run test:e2e（miniprogram-shell，真实业务链路五跳共用一条 trace）验证。
+      本页保留仅供 ws-button / 幂等键 / trace 串联的写法参考，I2 下单页落地后整体删除。
+    </text>
+  </view>
+
   <view class="card">
     <text class="label">调试 token（骨架期手动粘贴，F6b 登录后自动换取）</text>
     <input
@@ -19,20 +33,21 @@
       text="1 · 建单（落库一行）"
       type="primary"
       loading="{{loading}}"
+      disabled="{{retired}}"
       bindtap="onCreate"
     />
     <ws-button
       class="btn"
       text="2 · 触发模拟支付回调"
       type="default"
-      disabled="{{!orderId || loading}}"
+      disabled="{{retired || !orderId || loading}}"
       bindtap="onSimulate"
     />
     <ws-button
       class="btn"
       text="3 · 刷新状态"
       type="default"
-      disabled="{{!orderId || loading}}"
+      disabled="{{retired || !orderId || loading}}"
       bindtap="onRefresh"
     />
   </view>

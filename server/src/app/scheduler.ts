@@ -175,17 +175,21 @@ export async function runSchedulerOnce<TTx>(
         }
 
         const ok = allJobsOk(results);
+        // 与日志里那个 processed 同一个数、同一条口径：一处算，两处用
+        // （012：它现在也进 `job_runs.last_processed`，让看门狗看表就知道扫出什么）
+        const processed = results.reduce((sum, r) => sum + (r.ok ? r.processed : 0), 0);
         await deps.runs.record(tx, {
           name: deps.name ?? TICK_JOB_NAME,
           ok,
           error: aggregateJobError(results),
           traceId,
+          processed,
           at: deps.clock.now(),
         });
         log.info('scheduler_tick_done', {
           ok,
           jobs: results.length,
-          processed: results.reduce((sum, r) => sum + (r.ok ? r.processed : 0), 0),
+          processed,
         });
         return { ok, results };
       });

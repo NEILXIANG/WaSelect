@@ -79,7 +79,8 @@ function trigger(url: string, secret?: string): Promise<Response> {
 async function waitForDailyHeartbeat(timeoutMs = 8000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const rows = await db`select last_success_at, last_error from job_runs where name = 'daily'`;
+    const rows =
+      await db`select last_success_at, last_error, last_processed from job_runs where name = 'daily'`;
     // 行不存在也必须继续等：否则"心跳行还没被 upsert 出来"会被误判成"作业已落定"（假绿）
     if (
       rows[0] !== undefined &&
@@ -129,7 +130,11 @@ beforeEach(async () => {
   await db`insert into users (id, openid) values ('u-recon', 'o-recon')`;
   // job_runs 被刻意排除在 resetTestDb 的 truncate 外（D-45：看门狗要读心跳）——
   // 所以心跳探针状态必须显式复位，否则上一条用例的成功会"遗传"给下一条
-  await db`update job_runs set last_success_at = null, last_error = null where name = 'daily'`;
+  await db`
+    update job_runs
+       set last_success_at = null, last_error = null, last_processed = null
+     where name = 'daily'
+  `;
 });
 
 describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
@@ -144,9 +149,13 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
 
       await waitForDailyHeartbeat();
       // 心跳：daily 行必须留下成功时间（D-45："跑没跑完看 job_runs，不看响应"）
-      const runs = await db`select last_success_at, last_error from job_runs where name = 'daily'`;
+      const runs = await db`
+        select last_success_at, last_error, last_processed from job_runs where name = 'daily'
+      `;
       expect(runs[0]?.last_success_at).not.toBeNull();
       expect(runs[0]?.last_error).toBeNull();
+      // 012：扫出什么也要进心跳行——0 条异常是"好消息"，不是"没上报"（NULL ≠ 0）
+      expect(runs[0]?.last_processed).toBe(0);
       // 零异常时只有一行 info 汇总（没有新闻就是最好的新闻）
       const summary = srv.sink.find('daily_reconciliation');
       expect(summary).toHaveLength(1);
@@ -222,9 +231,16 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       const summary = srv.sink.find('daily_reconciliation');
       expect(summary[0]?.['result']).toBe('anomalies_found');
       // 心跳：异常 ≠ 失败——job 本身跑完了（对账发现问题是它的产出，不是它的故障）
-      const runs = await db`select last_success_at, last_error from job_runs where name = 'daily'`;
+      const runs = await db`
+        select last_success_at, last_error, last_processed from job_runs where name = 'daily'
+      `;
       expect(runs[0]?.last_success_at).not.toBeNull();
       expect(runs[0]?.last_error).toBeNull();
+      // 4 而不是 3：**① 与 ② 落在同一行上**（pay-recon-mismatch 既是"订单已 paid 而支付行
+      // 仍 initiated"的悬空支付，又是"paid 但没有 succeeded 支付"的两本账不符）——
+      // 三类是三个**视角**，不是三个互斥集合，所以 processed（条数之和）≠ 异常类数（3）。
+      // 这条断言顺手把"重叠"钉住：将来有人把两类改成互斥，这里会红。
+      expect(runs[0]?.last_processed).toBe(4);
     } finally {
       await srv.close();
     }

@@ -101,12 +101,13 @@ export function createJobRunLog(): JobRunLog<Db> {
   return {
     async record(tx, input) {
       await tx`
-        insert into job_runs (name, last_success_at, last_error, trace_id, updated_at)
+        insert into job_runs (name, last_success_at, last_error, trace_id, last_processed, updated_at)
         values (
           ${input.name},
           ${input.ok ? input.at : null},
           ${input.error ?? null},
           ${input.traceId ?? null},
+          ${input.processed ?? null},
           ${input.at}
         )
         on conflict (name) do update set
@@ -114,6 +115,9 @@ export function createJobRunLog(): JobRunLog<Db> {
           last_success_at = coalesce(excluded.last_success_at, job_runs.last_success_at),
           last_error      = excluded.last_error,
           trace_id        = excluded.trace_id,
+          -- ⚠️ 这里**刻意不用 coalesce**：本轮没上报（NULL）必须真的清成 NULL，
+          --    "没上报"不能被旧值伪装成"这一轮扫出 N 条"（012 迁移 @why）
+          last_processed  = excluded.last_processed,
           updated_at      = excluded.updated_at
       `;
     },

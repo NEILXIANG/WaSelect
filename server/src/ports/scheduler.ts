@@ -161,6 +161,17 @@ export interface JobRunRecord {
   /** 归一化后的错误文本；ok=true 时传 undefined（会被清成 NULL，而不是留着上次的错误）。 */
   error?: string | undefined;
   traceId?: string | undefined;
+  /**
+   * 本轮处理条数（写 `job_runs.last_processed`，012 迁移）。
+   *
+   * @why 让"跑出了什么"和"跑没跑完"落在同一行：看门狗盯 `job_runs` 时，
+   *      只看到 `last_success_at` 是看不出异常的（对账扫出 3 条异常时 job 本身是**成功**的）。
+   * @why 可选 + NULL 而不是默认 0：「本轮没上报」与「本轮 0 条」必须是两个值
+   *      （012 @why）——把 NULL 当 0，就会把"没跑/没上报"读成"没有问题"。
+   * @limitation 语义按 job 而定：对账 job 里它是**异常条数**（0 = 好消息），
+   *             关单 job 里它是**关掉的单数**。别把它当错误计数——错误在 `last_error`。
+   */
+  processed?: number | undefined;
   at: Date;
 }
 

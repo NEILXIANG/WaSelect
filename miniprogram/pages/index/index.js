@@ -1,14 +1,23 @@
 /**
  * 职责：行走骨架的演示页（F6c）——一个按钮走完「建单 → 模拟支付 → 状态回写」。
  *
- * ⚠️ **本页调用的 `/api/v1/skeleton/*` 端点已随 U6c 骨架退役删除**——按钮链路
- *    现在必然 404。页面本体暂时保留（它是 ws-button / 幂等键 / trace 串联的
- *    真机演示壳），I2 商品/下单页落地时一并改写为业务路径后删除本警告。
- *    （登记：docs/自主决策记录.md AJ-114 欠账。）
+ * ⚠️ **本页已停用**：它调用的 `/api/v1/skeleton/*` 端点已随 U6c 骨架退役删除。
+ *    停用形态是**按钮禁用 + 页首明示原因**（`retired`，见 index.wxml），
+ *    而不是留三个点了必然 404 的按钮——"看起来能用、实际是坏的"比明确停用贵得多。
+ *
+ * @why **为什么不改成真实业务路径**（I2 欠账，此处说清理由，避免被当成"忘了改"）：
+ *      本页的按钮 2 是「触发模拟支付回调」，而真实链路里回调由**机构**发起、
+ *      带服务端密钥签名——前端既做不到、也不该做（能伪造回调 = 能伪造"已付款"）。
+ *      于是"一键走完建单→支付→回写"这个演示用途**在骨架退役后无法用真实端点复现**；
+ *      接真实路径等于新写一个下单页（登录/地址/选 SKU/发起支付），那是 I2 的正经工作。
+ *      @limitation 五：真要动它，先补**前端页面级的验证手段**（当前小程序页面无任何
+ *      自动化测试，改完只能人工真机点）——按 CLAUDE.md 约束一，无绿灯证据不前进。
+ *      在补上验证手段之前，本页的正确形态就是"明确停用 + 指路 e2e"。
  *
  * @why 这一页存在的唯一目的是**证明全栈是通的**：真机上点一次，
- *      就能在服务端日志里按 trace_id 查到这一跳。它不是产品页面，
- *      业务期会由真实的商品/下单页取代——所以刻意做得极简，不做交互打磨。
+ *      就能在服务端日志里按 trace_id 查到这一跳。该职责已由
+ *      `test/e2e/miniprogram-shell.e2e.test.ts` 接手（真实业务链路，五跳共用一条 trace），
+ *      所以本页现在只剩"ws-button / 幂等键 / trace 串联的写法参考"这一个价值。
  *
  * @limitation 一：**三次请求复用同一个 trace_id**（建单 / 模拟支付 / 刷新），
  *              这样服务端三行日志是同一条链。真实业务里"一次用户操作"的边界由页面决定，
@@ -30,6 +39,13 @@ const app = getApp();
 
 Page({
   data: {
+    /**
+     * true = 本页停用（骨架端点已删）。
+     * @why 它是**数据**而不是常量：wxml 用它控制按钮 disabled 与页首提示，
+     *      js 的三个 handler 也读它做守卫——一份开关，两处生效，不会出现
+     *      "按钮灰了但直接调方法还能发出请求"的缝。
+     */
+    retired: true,
     token: '',
     orderId: '',
     orderNo: '',
@@ -74,6 +90,8 @@ Page({
    *    @see ../../components/ws-button/index.js @why；page-button-guard.unit.test.ts（防它复发）
    */
   async onCreate() {
+    // 停用守卫：wxml 那道 disabled 只挡 UI，这里挡"绕过 UI 直接调方法"
+    if (this.data.retired) return;
     // 一次用户操作 = 一条链路：这里建一次，后续请求沿用
     const traceId = newTraceId();
     // 一次用户意图 = 一个幂等键：首次新建，**失败后沿用**，成功后作废。
@@ -104,6 +122,7 @@ Page({
   },
 
   async onSimulate() {
+    if (this.data.retired) return;
     const { orderId, traceId } = this.data;
     if (!orderId) return;
     this.setData({ loading: true, error: '' });
@@ -122,6 +141,7 @@ Page({
   },
 
   async onRefresh() {
+    if (this.data.retired) return;
     const { orderId, traceId } = this.data;
     if (!orderId) return;
     try {
