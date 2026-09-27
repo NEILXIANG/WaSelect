@@ -1,0 +1,70 @@
+<!--
+  首页（I2，无 Banner 版）：分类 tab + 搜索 + 商品流 + 触底加载。
+
+  样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss，
+  出现硬编码色值 / 尺寸字面量会直接红）。
+
+  ⚠️ 商品卡当前**不绑 tap**：目标页 pages/detail 尚未落地（@see index.js 文件头 @why），
+  跳一个不存在的页面 = "看起来能用、实际是坏的"。接线时给 `.card-item` 加
+  `data-id="{{item.id}}" bindtap="onProductTap"` 即可，vm 已备好导航意图。
+-->
+<view class="page">
+  <!-- Banner 空位：后端 GET /home 落地后在此接轮播，本版刻意不做 -->
+
+  <view class="toolbar">
+    <input
+      class="search"
+      value="{{keyword}}"
+      placeholder="搜索商品"
+      confirm-type="search"
+      bindinput="onSearchInput"
+      bindconfirm="onSearch"
+    />
+    <ws-button class="search-btn" text="搜索" type="default" loading="{{loading}}" bindtap="onSearch" />
+  </view>
+
+  <scroll-view class="tabs" scroll-x enable-flex>
+    <view
+      wx:for="{{tabs}}"
+      wx:key="key"
+      class="tab {{item.active ? 'tab--active' : ''}}"
+      data-key="{{item.key}}"
+      bindtap="onCategoryTap"
+    >
+      {{item.label}}
+    </view>
+  </scroll-view>
+
+  <!-- 首屏加载：只有"列表还是空的 + 在加载"时才整屏转圈，追加时不打扰已加载的内容 -->
+  <view class="card" wx:if="{{loading && cards.length === 0}}">
+    <text class="label">加载中…</text>
+  </view>
+
+  <view class="grid" wx:if="{{!loading || cards.length > 0}}">
+    <view class="grid-item" wx:for="{{cards}}" wx:key="id">
+      <view class="product-card">
+        <image class="product-image" src="{{item.image}}" mode="widthFix" lazy-load />
+        <view class="product-body">
+          <text class="product-title">{{item.title}}</text>
+          <ws-price jpy="{{item.priceJpy}}" size="md" />
+          <text class="sub-price" wx:if="{{item.subPrice}}">{{item.subPrice}}</text>
+          <text class="sold-out" wx:if="{{item.soldOut}}">已售罄</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{error}}">
+    <text class="error">{{error}}</text>
+  </view>
+
+  <view class="card" wx:elif="{{empty}}">
+    <text class="label">该分类下暂时没有商品</text>
+  </view>
+
+  <view class="footer" wx:if="{{cards.length > 0}}">
+    <text class="label" wx:if="{{loadingMore}}">加载中…</text>
+    <text class="label" wx:elif="{{hasMore}}">上拉加载更多</text>
+    <text class="label" wx:else>没有更多了</text>
+  </view>
+</view>
