@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { toIsoJst } from '../format.js';
 import {
   FX_QUOTES,
   emptyFxForm,
@@ -16,7 +17,6 @@ import {
   rateErrors,
   rateRows,
   toFxBody,
-  toIsoJst,
   toRateBody,
 } from './view.js';
 

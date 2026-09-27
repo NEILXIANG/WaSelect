@@ -35,3 +35,18 @@ export function formatJst(iso: unknown): string {
   if (Number.isNaN(ms)) return '—';
   return new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ');
 }
+
+/** `datetime-local` 输入框的形状（`YYYY-MM-DDTHH:mm`）。 */
+const LOCAL_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+
+/**
+ * `datetime-local` 的值 → 带 `+09:00` 的 ISO 时间。
+ *
+ * @why 输入框给的是**没有时区**的本地串，直接发出去会被服务端按 UTC 解释——
+ *      差九小时，而"汇率/ banner 晚九小时生效"不会报错，只会表现为"今天改了却没生效"，
+ *      排查时会一路查到服务端。这里显式钉成 JST（@see @limitation 二）。
+ * @returns 形状不符返回空串（调用方负责先校验，这里是第二道防御）
+ */
+export function toIsoJst(local: string): string {
+  return LOCAL_DATETIME.test(local) ? `${local}:00+09:00` : '';
+}
