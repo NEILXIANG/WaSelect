@@ -18,12 +18,154 @@ body {
     sans-serif;
 }
 
+/* ⚠️ 登录后是多页管理界面，不再是居中单卡片：靠左顶部对齐，宽度放宽到可读上限 */
 .page {
   min-height: 100vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  align-items: stretch;
   padding: var(--ws-space);
+  gap: var(--ws-space);
+  max-width: calc(var(--ws-space) * 72);
+  margin: 0 auto;
+}
+
+/* 顶部导航：品牌 + 页签 + 退出，一行排开（不用 flex gap，保持与既有写法一致） */
+.nav {
+  display: flex;
+  align-items: center;
+  gap: var(--ws-space-sm);
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-size: var(--ws-font-lg);
+  margin-right: var(--ws-space);
+}
+
+/* 页签：选中态用反色，未选中用描边（不引新色值——token 里没有"主色"） */
+.chip {
+  font-size: var(--ws-font-sm);
+  padding: var(--ws-space-sm) var(--ws-space);
+  border-radius: var(--ws-radius);
+  border: var(--ws-border) solid var(--ws-color-muted);
+  background: var(--ws-color-card);
+  color: var(--ws-color-fg);
+  cursor: pointer;
+}
+
+.chip-on {
+  background: var(--ws-color-fg);
+  color: var(--ws-color-card);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ws-space-sm);
+}
+
+/* 文字按钮（编辑/下架/返回）：不抢主按钮的视觉重量 */
+.link {
+  border: 0;
+  background: none;
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font-sm);
+  cursor: pointer;
+  padding: 0 var(--ws-space-sm);
+  text-decoration: underline;
+}
+
+.link:disabled {
+  color: var(--ws-color-muted);
+  cursor: not-allowed;
+}
+
+.panel {
+  background: var(--ws-color-card);
+  border-radius: var(--ws-radius);
+  padding: calc(var(--ws-space) * 1.5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space);
+}
+
+/* 两列输入行：表单有十几个字段，单行排会把页面拉得极长 */
+.row2 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ws-space);
+}
+
+.row2 > .field {
+  flex: 1;
+}
+
+.filters {
+  display: flex;
+  gap: var(--ws-space-sm);
+}
+
+/* 表格：不用斑马纹（不引新色值），靠行分隔线区分 */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ws-font-sm);
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: var(--ws-space-sm);
+  border-bottom: var(--ws-border) solid var(--ws-color-muted);
+}
+
+.table th {
+  color: var(--ws-color-muted);
+  font-weight: normal;
+}
+
+.ok {
+  color: var(--ws-color-success);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ws-space);
+}
+
+/* 图片缩略图：管理端只需确认"传的是不是这张图"，尺寸固定小档 */
+.thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ws-space-sm);
+}
+
+.thumb {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space-sm);
+}
+
+.thumb-img {
+  width: calc(var(--ws-space) * 4);
+  height: calc(var(--ws-space) * 4);
+  object-fit: cover;
+  border-radius: var(--ws-radius);
 }
 
 .card {
