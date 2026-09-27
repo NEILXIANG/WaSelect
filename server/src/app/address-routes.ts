@@ -14,12 +14,16 @@
  *      "这单存在但不是你的"，40400 则与"不存在"无法区分（与 order-query-routes 同口径）；
  *      仓储层已把 user_id 进 WHERE（addresses.ts @why）。
  *
+ * @why 形状与格式的校验**不写在本文件**（U-B2c 起提到 `domain/address-input.ts`）：
+ *      管理端改址收的是同一个 `AddressInput`，抄第二份就会各自漂移。
+ *      本文件只补它做不了的一步——国家要查 `country_profiles`（有 I/O，留在路由层）。
+ *
  * @limitation 一：PUT 是全量替换语义（契约 AddressInput 全字段），不做 PATCH。
  * @limitation 二：地址 CRUD 暂不挂限流——它是低频本人写路径（攻击面在登录/报价/短链）；
  *              真出现脚本刷地址时再按 rateLimitRules 表加规则（规则表是唯一出处）。
  *
- * @see contracts/api-contract.yaml（AddressInput/Address）；adapters/addresses.ts；
- *      migrations/001_init.sql（CHECK 同源）+ 011（默认唯一索引）
+ * @see contracts/api-contract.yaml（AddressInput/Address）；domain/address-input.ts（形状与格式校验）；
+ *      adapters/addresses.ts；migrations/001_init.sql（CHECK 同源）+ 011（默认唯一索引）
  */
 import type { Express } from 'express';
 import { AppError } from '../errors.js';
@@ -31,20 +35,7 @@ import { createAddressRepo, type AddressInput } from '../adapters/addresses.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
 import type { IdGen } from '../ports/ids.js';
 import { paramId } from '../http.js';
-
-/** 列宽（与 001 的 VARCHAR 一致）：超长属"形状错"（40001），DB 兜底是最后一道。 */
-const LEN = {
-  recipient: 100,
-  phone: 20,
-  line1: 200,
-  line2: 200,
-  city: 100,
-  postal_code: 10,
-} as const;
-const ASCII_RE = /^[ -~]+$/;
-const ASCII_OR_EMPTY_RE = /^[ -~]*$/;
-const PHONE_RE = /^\+1[0-9]{10}$/;
-const POSTAL_RE = /^[0-9]{5}(-[0-9]{4})?$/;
+import { parseAddressInput } from '../domain/address-input.js';
 
 export interface AddressRoutesDeps {
   db: Db;
@@ -58,57 +49,15 @@ export function mountAddressRoutes(app: Express, deps: AddressRoutesDeps): void 
   const addresses = createAddressRepo(deps.db);
   const countryProfiles = createCountryProfileRepo(deps.db);
 
-  /** 校验并取出 AddressInput；国家做表驱动的可下单检查（异步）。 */
+  /**
+   * 校验并取出 AddressInput。
+   * @why 形状与格式的校验**不在本文件**：它有两个消费方（本文件的地址簿 CRUD、
+   *      以及管理端改址 `POST /admin/orders/{id}/address`），两份校验会各自漂移
+   *      （@see domain/address-input.ts 文件头 @why）。这里只补它做不了的那一步——
+   *      **国家**要查 `country_profiles`，有 I/O，所以留在路由层。
+   */
   async function parseAddress(body: unknown): Promise<AddressInput> {
-    const b = body as Record<string, unknown> | null;
-    if (b === null || typeof b !== 'object') throw new AppError(40001, { reason: 'body_shape' });
-
-    const requiredStrings = [
-      'recipient',
-      'phone',
-      'line1',
-      'city',
-      'state',
-      'postal_code',
-    ] as const;
-    for (const k of requiredStrings) {
-      if (typeof b[k] !== 'string' || (b[k] as string).length === 0) {
-        throw new AppError(40001, { reason: `${k}_required` });
-      }
-    }
-    const input: AddressInput = {
-      recipient: b['recipient'] as string,
-      phone: b['phone'] as string,
-      line1: b['line1'] as string,
-      line2: b['line2'] === undefined || b['line2'] === null ? null : String(b['line2']),
-      city: b['city'] as string,
-      state: b['state'] as string,
-      postal_code: b['postal_code'] as string,
-      country: b['country'] === undefined ? 'US' : String(b['country']),
-      is_default: b['is_default'] === true,
-    };
-    // 形状：列宽（40001）
-    if (input.recipient.length > LEN.recipient)
-      throw new AppError(40001, { reason: 'recipient_too_long' });
-    if (input.phone.length > LEN.phone) throw new AppError(40001, { reason: 'phone_too_long' });
-    if (input.line1.length > LEN.line1) throw new AppError(40001, { reason: 'line1_too_long' });
-    if (input.line2 !== null && input.line2.length > LEN.line2) {
-      throw new AppError(40001, { reason: 'line2_too_long' });
-    }
-    if (input.city.length > LEN.city) throw new AppError(40001, { reason: 'city_too_long' });
-    if (input.postal_code.length > LEN.postal_code) {
-      throw new AppError(40001, { reason: 'postal_code_too_long' });
-    }
-    // 格式（40002，表单可修正）
-    if (!ASCII_RE.test(input.recipient)) throw new AppError(40002, { field: 'recipient' });
-    if (!ASCII_RE.test(input.line1)) throw new AppError(40002, { field: 'line1' });
-    if (input.line2 !== null && !ASCII_OR_EMPTY_RE.test(input.line2)) {
-      throw new AppError(40002, { field: 'line2' });
-    }
-    if (!ASCII_RE.test(input.city)) throw new AppError(40002, { field: 'city' });
-    if (!PHONE_RE.test(input.phone)) throw new AppError(40002, { field: 'phone' });
-    if (!/^[A-Z]{2}$/.test(input.state)) throw new AppError(40002, { field: 'state' });
-    if (!POSTAL_RE.test(input.postal_code)) throw new AppError(40002, { field: 'postal_code' });
+    const input = parseAddressInput(body);
     // 国家：表驱动的"可下单目的国"检查（@why 见文件头）
     const profile = await countryProfiles.get(input.country);
     if (profile === null || !profile.active) {
