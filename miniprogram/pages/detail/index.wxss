@@ -1,0 +1,53 @@
+/**
+ * 商品详情页样式。
+ *
+ * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
+ * 硬编码色值 / 非 0 尺寸字面量直接红）。
+ */
+
+/* 轮播：aspectFit 让非一比一的商品图完整可见（详情页看全图比填满更重要，
+   与首页 widthFix 的取舍不同——那里是列表，这里是主图）。 */
+.gallery {
+  width: 100%;
+  background: var(--ws-color-card);
+}
+
+.gallery-image {
+  width: 100%;
+  display: block;
+}
+
+.title {
+  display: block;
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font-lg);
+  line-height: 1.4;
+}
+
+.sub-price {
+  display: block;
+  margin-top: var(--ws-space-sm);
+  color: var(--ws-color-muted);
+  font-size: var(--ws-font-sm);
+}
+
+.sold-out {
+  display: block;
+  margin-top: var(--ws-space-sm);
+  color: var(--ws-color-error);
+  font-size: var(--ws-font-sm);
+}
+
+/* 规格行与描述之间留一档小间距；行内间距复用全局 .row 的 8rpx（app.wxss） */
+.specs {
+  margin-top: var(--ws-space-sm);
+}
+
+.description {
+  display: block;
+  margin-top: var(--ws-space-sm);
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font);
+  line-height: 1.6;
+  word-break: break-all;
+}

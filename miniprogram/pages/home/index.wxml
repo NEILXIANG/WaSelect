@@ -4,9 +4,8 @@
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss，
   出现硬编码色值 / 尺寸字面量会直接红）。
 
-  ⚠️ 商品卡当前**不绑 tap**：目标页 pages/detail 尚未落地（@see index.js 文件头 @why），
-  跳一个不存在的页面 = "看起来能用、实际是坏的"。接线时给 `.card-item` 加
-  `data-id="{{item.id}}" bindtap="onProductTap"` 即可，vm 已备好导航意图。
+  商品卡 → 详情页：tap 生成导航意图（vm `intentForProduct`），路径只在本文件出现一次
+  （`DETAIL_PAGE`），vm 不认识页面路径。
 -->
 <view class="page">
   <!-- Banner 空位：后端 GET /home 落地后在此接轮播，本版刻意不做 -->
@@ -41,7 +40,13 @@
   </view>
 
   <view class="grid" wx:if="{{!loading || cards.length > 0}}">
-    <view class="grid-item" wx:for="{{cards}}" wx:key="id">
+    <view
+      class="grid-item"
+      wx:for="{{cards}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      bindtap="onProductTap"
+    >
       <view class="product-card">
         <image class="product-image" src="{{item.image}}" mode="widthFix" lazy-load />
         <view class="product-body">

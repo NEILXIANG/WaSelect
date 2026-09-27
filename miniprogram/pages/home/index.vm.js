@@ -33,7 +33,8 @@
  *      contracts/api-contract.yaml（ProductCard / Display / ImageSet 形状）
  */
 
-import { formatCnyFen, formatUsdCents } from '../../utils/price-format.js';
+import { displaySubLine } from '../../utils/price-format.js';
+import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 
 /**
  * 契约 `/products` 的 category 枚举。
@@ -55,28 +56,15 @@ export const CATEGORY_LABELS = {
 /** 每页条数（契约 `/products` 的 size 默认值；上限 50，见契约 `maximum`）。 */
 export const PAGE_SIZE = 20;
 
-/** 商品图占位。@see @limitation 二 */
-export const PLACEHOLDER_IMAGE = '/assets/placeholder.png';
-
 /** 取"去空格后的字符串"；非字符串一律当空——`123` 不是分类、`null` 不是关键词。 */
 function text(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-/** 商品图：契约 ImageSet 取 `card`；缺/空/形态不对 → 占位图。@see @limitation 二 */
+/** 商品图：契约 ImageSet 取 `card`；缺/空/形态不对 → 占位图（真源 utils/placeholder.js）。 */
 function imageOf(image) {
-  const src =
-    image && typeof image === 'object' ? (image.card ?? image.thumb ?? image.detail) : image;
-  return text(src) === '' ? PLACEHOLDER_IMAGE : src;
-}
-
-/** 副行展示价（USD · CNY）。@see @limitation 三 */
-function subPriceOf(display) {
-  if (!display || typeof display !== 'object') return '';
-  const parts = [];
-  if (Number.isInteger(display.USD)) parts.push(`≈ ${formatUsdCents(display.USD)}`);
-  if (Number.isInteger(display.CNY)) parts.push(`≈ ${formatCnyFen(display.CNY)}`);
-  return parts.join(' · ');
+  const src = imageUrl(image);
+  return src === '' ? PLACEHOLDER_IMAGE : src;
 }
 
 /**
@@ -111,7 +99,7 @@ export function productCards(items) {
       title: typeof p.title === 'string' ? p.title : '',
       image: imageOf(p.image),
       priceJpy: p.price_jpy,
-      subPrice: subPriceOf(p.display),
+      subPrice: displaySubLine(p.display),
       soldOut: Number(p.stock) === 0,
     };
   });
@@ -166,14 +154,4 @@ export function mergeCards(existing, incoming, reset) {
  */
 export function intentForProduct(id) {
   return typeof id === 'string' && id !== '' ? { go: 'detail', id } : null;
-}
-
-/**
- * 错误文案（`code` + `message` 可机读，便于对照错误码表）；形状不对 → 兜底文案。
- * @param {unknown} err 请求封装抛出的 `ApiError`，也可能是任何东西（不要假设形状）
- */
-export function errorMessage(err) {
-  const code = err && Number.isInteger(err.code) ? String(err.code) : '';
-  const msg = text(err && err.message) === '' ? '加载失败' : String(err.message);
-  return code === '' ? msg : `${code} ${msg}`;
 }

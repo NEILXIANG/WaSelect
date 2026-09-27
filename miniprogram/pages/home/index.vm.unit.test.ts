@@ -23,9 +23,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CATEGORIES,
   PAGE_SIZE,
-  PLACEHOLDER_IMAGE,
   categoryTabs,
-  errorMessage,
   hasMore,
   intentForProduct,
   listQuery,
@@ -33,6 +31,7 @@ import {
   nextPage,
   productCards,
 } from './index.vm.js';
+import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
 
 /**
  * 像真的商品（约束三：真实日文品名、真实价位、真实 ImageSet 形状）。
@@ -214,19 +213,6 @@ describe('intentForProduct（导航意图）', () => {
     expect(intentForProduct('')).toBeNull();
     expect(intentForProduct(undefined)).toBeNull();
     expect(intentForProduct(42)).toBeNull();
-  });
-});
-
-describe('errorMessage（错误文案）', () => {
-  it('带 code + message → `code message`（可机读，便于对照错误码表）', () => {
-    expect(errorMessage({ code: 50003, message: '汇率缺失' })).toBe('50003 汇率缺失');
-  });
-
-  it('缺 message / 形状不对 → 兜底文案，不显示 undefined', () => {
-    expect(errorMessage({ code: -1 })).toBe('-1 加载失败');
-    expect(errorMessage(new Error('网络不通'))).toBe('网络不通');
-    expect(errorMessage(undefined)).toBe('加载失败');
-    expect(errorMessage('x')).toBe('加载失败');
   });
 });
 

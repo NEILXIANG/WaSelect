@@ -107,3 +107,26 @@ function formatMinor(minor, symbol, name) {
   const fraction = String(magnitude % 100).padStart(2, '0');
   return `${sign}${symbol}${group(units)}.${fraction}`;
 }
+
+/**
+ * 把契约 `Display`（USD/CNY 整数分）拼成副行文案：`≈ $24.50 · ≈ ¥176.00`。
+ *
+ * @param {unknown} display 契约 Display 形状（可能缺键 / 缺失 / 形态不对）
+ * @returns {string} 副行文案；一个币都没有 → 空串（调用方用 `wx:if` 整行隐藏）
+ *
+ * @why 收进本文件是因为它同时被首页卡片与商品详情页用到——
+ *      "副行长什么样"是 D-36 三币口径的一部分，两处各写一遍的结果是
+ *      "同一个金额在两个页面长得不一样"，而这类不一致没有任何报错。
+ *
+ * @limitation **缺哪个币就不显示哪个**（后端 fx 缺失时 `display` 会少键，AJ-108 降级口径），
+ *            ⚠️ 非整数也一并跳过而不抛：`formatUsdCents` 对非整数是抛错的（@limitation 二），
+ *            但那是**服务端**该炸的地方；在浏览页抛会让整页渲染失败，
+ *            代价远大于少一行参考价。这里的选择是"降级"，不是"吞错"——整页空白比少一行贵。
+ */
+export function displaySubLine(display) {
+  if (!display || typeof display !== 'object') return '';
+  const parts = [];
+  if (Number.isInteger(display.USD)) parts.push(`≈ ${formatUsdCents(display.USD)}`);
+  if (Number.isInteger(display.CNY)) parts.push(`≈ ${formatCnyFen(display.CNY)}`);
+  return parts.join(' · ');
+}

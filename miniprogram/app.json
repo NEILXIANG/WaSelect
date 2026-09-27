@@ -1,5 +1,5 @@
 {
-  "pages": ["pages/home/index", "pages/comp/index", "pages/index/index"],
+  "pages": ["pages/home/index", "pages/detail/index", "pages/comp/index", "pages/index/index"],
   "window": {
     "navigationBarTitleText": "WaSelect（骨架）",
     "navigationBarBackgroundColor": "#ffffff",

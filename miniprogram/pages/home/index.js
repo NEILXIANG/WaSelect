@@ -1,7 +1,7 @@
 /**
  * 职责：首页薄壳（I2 第一个业务页）——生命周期取数 → 调 vm → `setData` / 按意图跳转。
  *
- * ⚠️ 本文件**刻意薄**：所有"视图长什么样"的判断都在 `index.vm.js`（纯函数，26 条单测）。
+ * ⚠️ 本文件**刻意薄**：所有"视图长什么样"的判断都在 `index.vm.js`（纯函数，24 条单测）。
  *    这里只允许出现三类代码：① 生命周期与取数；② `setData`；③ 宿主能力调用（走 wx-api）。
  *    在这里写业务判断 = 逻辑回到没有测试的地方（@see index.vm.js 文件头 @why、CLAUDE.md 约束十一）。
  *
@@ -10,10 +10,9 @@
  *      等于"看起来能用、实际是坏的"——那比明确没有更贵。分类项直接来自契约 `/products`
  *      的 category 枚举（vm 里的 `CATEGORIES`，与契约文本有双向比对守着），不依赖 `/home`。
  *
- * @why 商品卡**当前不可点**：目标页 `pages/detail` 尚未落地，跳一个不存在的页面
- *      在真机上是"点了报 page not found"——同一种"看起来能用、实际是坏的"。
- *      vm 的 `intentForProduct` 已就位且被单测钉住，详情页单元接线时只需给 wxml
- *      加 `bindtap` + 本文件加一个 handler，vm 与它的测试一行不用动。
+ * @why 商品卡的跳转**只拿意图、不写判断**（`intentForProduct`）：vm 返回 `{go:'detail', id}`，
+ *      这里只负责"拼路径 + 调宿主"。@why 路径常量 `DETAIL_PAGE` 落在本文件而不是 vm：
+ *      vm 不认识页面路径，才能在 Node 里被测（约束十一的硬规则④不发请求、③不做 IO 同源）。
  *
  * @limitation 一：**没有下拉刷新**。`onPullDownRefresh` 要配 `wx.stopPullDownRefresh`
  *              （又一个宿主能力要登记）+ json 开 `enablePullDownRefresh`，而切分类 / 搜索
@@ -28,9 +27,11 @@
  * @see ./index.vm.js（视图逻辑真源）；../../utils/request.js（错误形状：ApiError{code,message}）；
  *      ../../utils/trace.js（trace_id 串联）；contracts/api-contract.yaml（ProductCard 形状）
  */
+import { errorMessage } from '../../utils/error-text.js';
+import { createWxApi } from '../../utils/wx-api.js';
 import {
   categoryTabs,
-  errorMessage,
+  intentForProduct,
   listQuery,
   mergeCards,
   nextPage,
@@ -39,6 +40,12 @@ import {
 import { newTraceId } from '../../utils/trace.js';
 
 const app = getApp();
+
+/** 页面级宿主入口（wx-api 是无状态转发，多建一个实例没有成本）。 */
+const wxApi = createWxApi();
+
+/** 商品详情页路径（跳转路径只在这一处出现；vm 只给意图，不认识路径）。 */
+const DETAIL_PAGE = '/pages/detail/index';
 
 Page({
   data: {
@@ -56,7 +63,7 @@ Page({
     empty: false,
     /** 是否还有下一页（vm `nextPage` 的布尔化，控制底部提示与触底行为）。 */
     hasMore: false,
-    /** 错误文案（vm `errorMessage`；空串 = 无错误）。 */
+    /** 错误文案（utils/error-text，真源唯一）；空串 = 无错误。 */
     error: '',
   },
 
@@ -99,6 +106,18 @@ Page({
   /** 触发搜索（键盘确认键与搜索按钮都到这）。 */
   onSearch() {
     this.reload(this.category);
+  },
+
+  /**
+   * 点商品卡 → 跳详情。
+   * @param {WechatMiniprogram.TouchEvent} e `data-id` 来自 wxml
+   */
+  onProductTap(e) {
+    const id = e?.currentTarget?.dataset?.id;
+    const intent = intentForProduct(typeof id === 'string' ? id : '');
+    // id 缺失（脏数据）→ 不跳：跳到一个没有 id 的详情页只会白屏
+    if (intent === null) return;
+    wxApi.navigateTo({ url: `${DETAIL_PAGE}?id=${encodeURIComponent(intent.id)}` });
   },
 
   /** 触底加载下一页。 */

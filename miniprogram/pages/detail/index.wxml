@@ -1,0 +1,46 @@
+<!--
+  商品详情页（I2）：轮播 + 标题/价格 + 规格 + 描述。
+
+  ⚠️ 刻意没有"加入购物车 / 立即购买"按钮：购物车与结算未落地，
+  放一个点了没反应的按钮 = "看起来能用、实际是坏的"（@see index.js 文件头 @why）。
+  购买动作落地时在 `.buy-bar` 的位置加 ws-button。
+-->
+<view class="page">
+  <view class="card" wx:if="{{loading && !product}}">
+    <text class="label">加载中…</text>
+  </view>
+
+  <view class="card" wx:if="{{error}}">
+    <text class="error">{{error}}</text>
+  </view>
+
+  <block wx:if="{{product}}">
+    <!-- 轮播：images 已由 vm 保证至少一条（空 → 占位图），不会出现空 swiper -->
+    <swiper class="gallery" indicator-dots>
+      <swiper-item wx:for="{{product.images}}" wx:key="*this">
+        <image class="gallery-image" src="{{item}}" mode="aspectFit" />
+      </swiper-item>
+    </swiper>
+
+    <view class="card">
+      <text class="title">{{product.title}}</text>
+      <ws-price jpy="{{product.priceJpy}}" size="lg" />
+      <text class="sub-price" wx:if="{{product.subPrice}}">{{product.subPrice}}</text>
+      <text class="sold-out" wx:if="{{product.soldOut}}">已售罄</text>
+
+      <view class="specs" wx:if="{{product.specs.length > 0}}">
+        <view class="row" wx:for="{{product.specs}}" wx:key="label">
+          <text class="label">{{item.label}}</text>
+          <text class="value">{{item.value}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="card" wx:if="{{product.description}}">
+      <text class="label">商品描述</text>
+      <text class="description">{{product.description}}</text>
+    </view>
+
+    <!-- 购买动作空位：购物车/结算单元落地后在此放 ws-button -->
+  </block>
+</view>

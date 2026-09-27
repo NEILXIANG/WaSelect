@@ -9,7 +9,7 @@
  * @how 断言**具体字符串**而不是"包含数字"：包含式断言在少了分隔符时照样绿。
  */
 import { describe, expect, it } from 'vitest';
-import { formatCnyFen, formatJpy, formatUsdCents } from './price-format.js';
+import { displaySubLine, formatCnyFen, formatJpy, formatUsdCents } from './price-format.js';
 
 describe('千分位', () => {
   it('四位数加一个分隔符', () => {
@@ -146,5 +146,31 @@ describe('formatUsdCents / formatCnyFen（整数分 → 两位小数）', () => 
     // ⚠️ 强转是刻意的：运行时校验必须真的被非数字触发（见上方 formatJpy 同组 @why）
     expect(() => formatUsdCents(v as unknown as number)).toThrow(/必须是整数分/);
     expect(() => formatCnyFen(v as unknown as number)).toThrow(/必须是整数分/);
+  });
+});
+
+describe('displaySubLine（副行文案，D-36 三币口径的展示侧）', () => {
+  it('USD + CNY 都在 → `≈ $… · ≈ ¥…`（首页卡片与详情页共用这一份）', () => {
+    expect(displaySubLine({ USD: 2450, CNY: 17600 })).toBe('≈ $24.50 · ≈ ¥176.00');
+  });
+
+  it('缺一个币 → 只显示另一个（fx 缺失时 display 会少键，AJ-108 降级口径）', () => {
+    expect(displaySubLine({ USD: 2450 })).toBe('≈ $24.50');
+    expect(displaySubLine({ CNY: 17600 })).toBe('≈ ¥176.00');
+  });
+
+  it('⚠️ 非整数跳过该币而**不抛**：浏览页抛会让整页渲染失败，比少一行参考价贵', () => {
+    // @why 服务端返回小数是服务端 bug，由契约测试与日志去暴露，不由首页 UI 承担。
+    expect(displaySubLine({ USD: 24.5, CNY: 17600 })).toBe('≈ ¥176.00');
+  });
+
+  it('空对象 / 缺失 / 形态不对 → 空串（调用方用 wx:if 整行隐藏，不留孤零零一个 ≈）', () => {
+    for (const d of [{}, undefined, null, 'x', 0]) {
+      expect(displaySubLine(d)).toBe('');
+    }
+  });
+
+  it('0 分也显示（`$0.00` 是真实换算结果，不是缺失——缺失走的是"没有键"那条路）', () => {
+    expect(displaySubLine({ USD: 0, CNY: 0 })).toBe('≈ $0.00 · ≈ ¥0.00');
   });
 });
