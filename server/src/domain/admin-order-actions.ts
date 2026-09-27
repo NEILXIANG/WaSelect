@@ -32,15 +32,21 @@
  * @see domain/order.ts（迁移表唯一真源）；app/admin-order-routes.ts（唯一调用方）；
  *      admin-web/src/orders/view.ts（前端三个闸门，口径必须与本文件一致）
  */
-import type { OrderStatus } from '@waselect/shared';
+import type { ErrorCode, OrderStatus } from '@waselect/shared';
 import { canTransition } from './order.js';
 
-/** 判定结果：`ok:false` 时 `reason` 只进日志与 details（契约 `Err` 只有 code/message）。 */
-export type AdminGateResult = { ok: true } | { ok: false; code: number; reason: string };
+/**
+ * 判定结果：`ok:false` 时 `reason` 只进日志与 details（契约 `Err` 只有 code/message）。
+ * @why `code` 的类型是 **`ErrorCode` 字面量联合**而不是 `number`：路由层拿它直接
+ *      `new AppError(gate.code, …)`，写成 number 就编译不过（AppError 只收已登记码）——
+ *      于是"闸门返回一个根本不存在的错误码"这件事在编译期就被挡住，
+ *      而不是等到客服看到一条 50000 才发现。
+ */
+export type AdminGateResult = { ok: true } | { ok: false; code: ErrorCode; reason: string };
 
 const OK: AdminGateResult = { ok: true };
 
-function deny(code: number, reason: string): AdminGateResult {
+function deny(code: ErrorCode, reason: string): AdminGateResult {
   return { ok: false, code, reason };
 }
 

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.1
+  version: 0.6.2
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -183,29 +183,29 @@ paths:
         - {name: keyword, in: query, schema: {type: string, description: order_no / 收件人 / 运单号}}
         - {name: page, in: query, schema: {type: integer, default: 1}}
         - {name: size, in: query, schema: {type: integer, default: 20, maximum: 100}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminOrderListItem'}}, total: {type: integer}}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminOrderListItem'}}, total: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}:
     get:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AdminOrder'}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AdminOrder'}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/ship:
     post:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [carrier, tracking_no], properties: {carrier: {type: string}, tracking_no: {type: string}}}}}}
-      responses: {'200': {description: OK}, '409': {$ref: '#/components/responses/Err'}}
+      responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/refund:
     post:
-      description: 订单 has_dispute=true 时拒绝（40907，D-50）
+      description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）
       summary: 全额退款（MVP；按 charge_currency / charge_amount 原币退；缺货场景整单退款）
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string}}}}}}
-      responses: {'202': {description: Accepted}, '409': {$ref: '#/components/responses/Err'}}
+      responses: {'202': {description: Accepted}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/address:
     post:
       summary: 发货前改址（仅 paid 未发货；重写 address_snapshot 并记 order_events，D-39）
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
-      responses: {'200': {description: OK}, '409': {$ref: '#/components/responses/Err'}}
+      responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/products:
     get:
       parameters: [{name: status, in: query, schema: {type: string, enum: [active, offline]}}, {name: page, in: query, schema: {type: integer, default: 1}}, {name: size, in: query, schema: {type: integer, default: 50}}]
@@ -332,6 +332,13 @@ components:
       ② 新增错误码 **40909**（有进行中的拒付，暂不可**发货**）。
       @why 不与 40907（暂不可**退款**）合并：两者是同一个事实的两个消费方，
       共用一个码会把"发货被拒"显示成"退款被拒"，客服照它去查退款，方向反掉。
+    0.6.2（I2 U-B2d）：`/admin/orders*` 五条路由补 400 / 401 / 403 / 404 / 500 响应。
+      @why 实现会返回它们（缺参数 40001、未登录 40101、非管理员 40301、订单不存在 40400、
+      退款机构调用失败 50000），而原清单只写了 200 / 202 / 409——
+      **响应清单漏列即漂移**（与 0.5.6 给 `/internal/jobs/daily` 补 500 同一条）。
+      退款的 500 尤其要写：它表示"钱可能没退成、订单停在 refunding"，
+      运维不能把它当成"接口坏了重试就行"。
+      ⚠️ 待办：`/admin/products*` 四条同样是漏列状态（沿用旧写法），下一批统一补齐。
     AdminOrderListItem: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, user_id: {type: string}, status: {$ref: '#/components/schemas/OrderStatus'}, total_jpy: {type: integer}, contact_email: {type: string}, carrier: {type: string}, tracking_no: {type: string}, has_dispute: {type: boolean, description: '列表也带（0.6.1）：客服在列表页就能看见拒付单'}, is_test: {type: boolean}, created_at: {type: string, format: date-time}}}
     AdminOrder: {allOf: [{$ref: '#/components/schemas/Order'}, {type: object, properties: {user_id: {type: string}, contact_email: {type: string, format: email, description: '客服可见（D-42）'}, is_test: {type: boolean, description: '审核期 mock 通道测试单；管理端列表默认过滤'}, has_dispute: {type: boolean, description: '存在进行中的拒付（D-50）；退款 40907'}, fx_snapshot: {type: object}, payments: {type: array, items: {type: object, properties: {provider: {type: string}, provider_ref: {type: string}, transaction_id: {type: string}, status: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, settled_jpy: {type: integer}, fee_jpy: {type: integer}}}}, events: {type: array, items: {type: object, properties: {status: {type: string}, note: {type: string}, actor: {type: string}, at: {type: string, format: date-time}}}}}}]}
     ChannelView: {type: object, required: [channel, entryMode, label], properties: {channel: {type: string, description: '通道 key（任意字符串：新增支付方式不需要改本契约的枚举）'}, entryMode: {type: string, enum: [in_app, copylink, redirect], description: 'in_app=小程序内直接调起；copylink=复制链接到外部浏览器（D-49：Stripe Checkout 托管页）；redirect=302 跳转'}, label: {type: string, description: 展示名（外置文案，前端不写死）}, icon: {type: string, description: 图标 key（同上）}}}

@@ -71,12 +71,8 @@ function ni(method: string, path: string, reason: string): NotImplementedRoute {
 const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [
   ni('POST', '/auth/admin/login', 'I1-U6：管理员登录（欠账②，含管理员 seed）'),
   ni('GET', '/home', 'I2：小程序首页聚合（依赖 Banner 管理端）'),
-  ni('GET', '/admin/orders', 'I2 管理端'),
-  ni('GET', '/admin/orders/{id}', 'I2 管理端'),
-  ni('POST', '/admin/orders/{id}/ship', 'I2 管理端'),
-  ni('POST', '/admin/orders/{id}/refund', 'I2 管理端（售后阶段，依赖真实通道退款）'),
-  ni('POST', '/admin/orders/{id}/address', 'I2 管理端'),
-  // ✅ 商品四条已随 I2-U-A3 落地并从本清单移除（本清单只许变短不许变长）
+  // ✅ 商品四条已随 I2-U-A3、订单五条已随 I2-U-B2d 落地并从本清单移除
+  //    （本清单只许变短不许变长；diffRoutes 规则④ 会在"已实现却仍登记"时报红）
   ni('POST', '/admin/upload', 'I2 管理端（依赖 R2）'),
   ni('GET', '/admin/fx', 'I2 管理端'),
   ni('POST', '/admin/fx', 'I2 管理端'),

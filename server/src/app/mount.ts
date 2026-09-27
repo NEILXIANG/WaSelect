@@ -44,6 +44,7 @@ import { rateLimiter, rateLimitRules } from './rate-limit.js';
 import { mountQuoteRoutes } from './quote-routes.js';
 import { mountProductRoutes } from './product-routes.js';
 import { mountAdminProductRoutes } from './admin-product-routes.js';
+import { mountAdminOrderRoutes } from './admin-order-routes.js';
 import { mountAddressRoutes } from './address-routes.js';
 import { mountOrderRoutes } from './order-routes.js';
 import { mountOrderQueryRoutes } from './order-query-routes.js';
@@ -154,6 +155,19 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity: withIdentityCache(createIdentityCheck(db)),
   });
+  // ── 管理端订单（I2-U-B2d）：注册表用本函数顶部装配的那一份——退款要按订单当时的
+  //    通道取 provider（老单退款不受"通道已下线"影响，getForRefund 内部判
+  //    refundableWhenDisabled），注册表必须是可插拔的唯一出处 ──
+  mountAdminOrderRoutes(app, {
+    db,
+    logger,
+    config,
+    clock: systemClock,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity: withIdentityCache(createIdentityCheck(db)),
+    registry,
+  });
+
   mountAddressRoutes(app, {
     db,
     logger,
