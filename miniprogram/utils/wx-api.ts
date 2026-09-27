@@ -13,7 +13,7 @@
  *      收敛到一个入口后，这三点各有一处答案。
  *
  * @limitation 一：**只声明当前真用到的能力**（request / getStorageSync / setStorageSync /
- *              removeStorageSync / getRealtimeLogManager / navigateTo）。新增一个 wx API 就在这里加一个方法——
+ *              removeStorageSync / getRealtimeLogManager / navigateTo / login）。新增一个 wx API 就在这里加一个方法——
  *              不要预先铺满官方 API，铺了就会有人依赖上没被测试过的封装（本项目多次踩过"提前做是猜"）。
  * @limitation 二：`getStorageSync` 的契约是**只取字符串**：读到的不是字符串时一律当"没存过"（返回空串）。
  *              要存对象就先 JSON 序列化——小程序 storage 本身也是这个语义。
@@ -23,8 +23,9 @@
  *              而日志里什么都没有——那是最难查的一类问题（看起来像登录逻辑的 bug）。
  * @limitation 四：宿主在**每次调用时**取（`globalThis.wx`），不是 import 时取。
  *              这样本模块可以被 Node 侧单测 import：取不到 wx 只会在真正调用时才响亮失败。
- * @limitation 五：**没有 `wx.login` / `wx.getUserProfile` 等登录链**——登录页的宿主调用待 I2 接入
- *              （见 `app.js` 的 @limitation），等真做登录时再在这里登记，不预先加。
+ * @limitation 五：`login` 已随 I2 登录链接入（本条是历史注记：它曾被刻意不登记，
+ *              理由是"等真有消费方再登记，不预先铺满官方 API"；`wx.getUserProfile`
+ *              等仍未登记——MVP 不需要用户资料，code 换 openid 已够）。
  *
  * @tradeoff 多一层转发换来可注入 + 可类型化 + 一处定义错误形态，
  *           代价是**所有 wx 用法都要先来这里登记**。忘登记的人会直接在业务代码里写 `wx.xxx`——
@@ -75,6 +76,12 @@ export interface WxNavigateOption {
   url: string;
 }
 
+/** `wx.login` 的入参（只声明我们读的字段）。 */
+export interface WxLoginOption {
+  success?: (res: { code: string }) => void;
+  fail?: (err: WxRequestFail) => void;
+}
+
 /** 宿主能力的子集。**新增 wx API 就在这里加一个方法**。 */
 export interface WxApi {
   request(option: WxRequestOption): void;
@@ -93,6 +100,15 @@ export interface WxApi {
    *              @see @limitation 三（不吞异常，同一口径）
    */
   navigateTo(option: WxNavigateOption): void;
+  /**
+   * 微信登录 code（`wx.login`）。
+   * @why I2 真实登录链（code → `/auth/wechat/login` → token）的第一步宿主调用。
+   *      @see @limitation 五（此前刻意未登记，现在真有消费方才登记）
+   * @limitation 七：回调式原样透传（Promise 化在 `utils/auth-session.js`，一处）。
+   *              这里不做超时处理——微信侧没有超时回调，超时表现为"什么都不发生"，
+   *              上层（登录链）要有自己的防线，不能在这里假装有。
+   */
+  login(option: WxLoginOption): void;
 }
 
 /** 宿主（`globalThis.wx`）上我们真正读到的形状——比 `WxApi` 宽松，因为官方签名返回 `unknown`。 */
@@ -103,6 +119,7 @@ interface WxHost {
   removeStorageSync(key: string): void;
   getRealtimeLogManager?: () => RealtimeLogger | undefined;
   navigateTo(option: WxNavigateOption): void;
+  login(option: WxLoginOption): void;
 }
 
 /**
@@ -149,6 +166,9 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     getRealtimeLogManager: () => host().getRealtimeLogManager?.(),
     navigateTo: (option) => {
       host().navigateTo(option);
+    },
+    login: (option) => {
+      host().login(option);
     },
   };
   return { ...real, ...over };

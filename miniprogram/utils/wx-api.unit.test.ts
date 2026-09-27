@@ -51,6 +51,10 @@ function stubHost(
       seen.push(`navigate:${o.url}`);
       navigated.push(o.url);
     },
+    login: (o: { success?: (res: { code: string }) => void }) => {
+      seen.push('login');
+      o.success?.({ code: 'host-code-1' });
+    },
     ...(over.logger === undefined ? {} : { getRealtimeLogManager: () => over.logger }),
   });
   return { seen, storage, requested, navigated };
@@ -65,6 +69,7 @@ describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => 
     expect(() => api.removeStorageSync('token')).toThrow(/wx 宿主不存在/);
     expect(() => api.getRealtimeLogManager()).toThrow(/wx 宿主不存在/);
     expect(() => api.navigateTo({ url: '/pages/home/index' })).toThrow(/wx 宿主不存在/);
+    expect(() => api.login({})).toThrow(/wx 宿主不存在/);
   });
 
   it('**import 时不取宿主**——只有调用才取（否则 Node 侧连 import 都做不到）', () => {
@@ -135,6 +140,13 @@ describe('走真实宿主时的行为', () => {
     const { navigated } = stubHost();
     createWxApi().navigateTo({ url: '/pages/detail/index?id=p-1' });
     expect(navigated).toEqual(['/pages/detail/index?id=p-1']);
+  });
+
+  it('login 原样转发（回调式不包 Promise——Promise 化在 auth-session，一处）', () => {
+    stubHost();
+    let code = '';
+    createWxApi().login({ success: (res) => (code = res.code) });
+    expect(code).toBe('host-code-1');
   });
 });
 
