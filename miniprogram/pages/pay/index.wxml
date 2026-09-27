@@ -48,6 +48,6 @@
     <ws-button text="复制链接" type="primary" bindtap="onCopy" wx:if="{{payUrl}}" />
   </view>
 
-  <ws-button text="查看订单" type="primary" disabled="{{true}}" />
-  <text class="label tip">{{orderHint}}</text>
+  <!-- 订单列表随时可去：支付完成的真值在那里（服务端回调落库），不在本页 -->
+  <ws-button text="查看订单" type="primary" bindtap="onViewOrders" />
 </view>

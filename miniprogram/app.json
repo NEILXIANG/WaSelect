@@ -7,6 +7,7 @@
     "pages/address-edit/index",
     "pages/checkout/index",
     "pages/pay/index",
+    "pages/order/index",
     "pages/comp/index",
     "pages/index/index"
   ],

@@ -14,7 +14,7 @@
  *
  * @limitation 一：**只声明当前真用到的能力**（request / getStorageSync / setStorageSync /
  *              removeStorageSync / getRealtimeLogManager / navigateTo / login /
- *              navigateBack / showModal / requestPayment / setClipboardData）。
+ *              navigateBack / showModal / requestPayment / setClipboardData / redirectTo）。
  *              新增一个 wx API 就在这里加一个方法——
  *              不要预先铺满官方 API，铺了就会有人依赖上没被测试过的封装（本项目多次踩过"提前做是猜"）。
  * @limitation 二：`getStorageSync` 的契约是**只取字符串**：读到的不是字符串时一律当"没存过"（返回空串）。
@@ -82,6 +82,12 @@ export interface WxNavigateOption {
 export interface WxLoginOption {
   success?: (res: { code: string }) => void;
   fail?: (err: WxRequestFail) => void;
+}
+
+/** `wx.redirectTo` 的入参（只声明我们传的字段）。 */
+export interface WxRedirectOption {
+  /** 以 `/` 开头的**页面内绝对路径**（小程序不支持相对路径跳转）。 */
+  url: string;
 }
 
 /** `wx.navigateBack` 的入参（只声明我们传的字段）。 */
@@ -153,6 +159,14 @@ export interface WxApi {
    */
   login(option: WxLoginOption): void;
   /**
+   * 关闭当前页并跳转（`wx.redirectTo`，**不留**在返回栈里）。
+   * @why 支付完成后去订单列表：用 `navigateTo` 会让支付页留在栈里，
+   *      从订单列表按返回键又回到"请在浏览器完成支付"那一屏——明显的死循环感，
+   *      而订单已经建好了，支付页的历史使命结束。
+   * @limitation 十二：**只登记不兜底**（与 navigateTo 同一条，@see @limitation 六）。
+   */
+  redirectTo(option: WxRedirectOption): void;
+  /**
    * 关闭当前页返回（页面栈出栈）。
    * @why I2 地址编辑页保存成功要回列表——用 `navigateTo` 回列表会**再压一层**，
    *      表现为"地址列表页被叠了两层，返回键要按两次"，且列表页不会重新取数。
@@ -204,6 +218,7 @@ interface WxHost {
   showModal(option: WxShowModalOption): void;
   requestPayment(option: WxRequestPaymentOption): void;
   setClipboardData(option: WxClipboardOption): void;
+  redirectTo(option: WxRedirectOption): void;
 }
 
 /**
@@ -265,6 +280,9 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     },
     setClipboardData: (option) => {
       host().setClipboardData(option);
+    },
+    redirectTo: (option) => {
+      host().redirectTo(option);
     },
   };
   return { ...real, ...over };

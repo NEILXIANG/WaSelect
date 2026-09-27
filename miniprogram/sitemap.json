@@ -26,6 +26,10 @@
       "page": "pages/pay/index"
     },
     {
+      "action": "disallow",
+      "page": "pages/order/index"
+    },
+    {
       "action": "allow",
       "page": "*"
     }

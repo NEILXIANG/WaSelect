@@ -38,8 +38,8 @@ const wxApi = createWxApi();
 /** 通道过滤的扣款币种（ADR-09：JPY 是唯一定价锚）。 */
 const CHARGE_CURRENCY = 'JPY';
 
-/** "查看订单"按钮的禁用原因（@see @limitation 二）。 */
-const ORDER_HINT = '订单页开发中（下一单元接线）';
+/** 订单列表页路径（跳转路径只在这一处出现）。 */
+const ORDER_PAGE = '/pages/order/index';
 
 Page({
   data: {
@@ -55,7 +55,6 @@ Page({
     paying: false,
     /** 错误文案（空串 = 无错误）。 */
     error: '',
-    orderHint: ORDER_HINT,
   },
 
   /** 订单 id（空串 = 没带过来，此时不取数）。 */
@@ -150,5 +149,15 @@ Page({
   onCopy() {
     if (this.data.payUrl === '') return;
     wxApi.setClipboardData({ data: this.data.payUrl });
+  },
+
+  /**
+   * 去订单列表（copylink 场景的"支付完成后回到这里查看订单"）。
+   * @why 用 `redirectTo` 而不是 `navigateTo`：支付页不该留在返回栈里——
+   *      从订单列表按返回键又回到"请在浏览器完成支付"那一屏是明显的死循环感，
+   *      而订单已经建好了，支付页的历史使命结束。
+   */
+  onViewOrders() {
+    wxApi.redirectTo({ url: ORDER_PAGE });
   },
 });

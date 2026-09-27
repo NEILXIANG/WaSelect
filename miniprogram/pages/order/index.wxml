@@ -1,0 +1,36 @@
+<!--
+  订单列表（I2）：状态/金额由 vm 给，状态词表与契约 OrderStatus 双向比对（单测钉住）。
+
+  ⚠️ 空态只在**确实没有订单**时显示——请求失败时说"还没有订单"会让用户以为订单丢了。
+
+  ⚠️ "继续支付"只出现在 created / pending_payment（vm 的 canPay）：
+  这两个态与契约里"可取消"的态刻意一致，避免出现"能付但取消不了"的半开状态。
+-->
+<view class="page">
+  <view class="card" wx:if="{{loading}}">
+    <text class="label">正在加载订单…</text>
+  </view>
+
+  <view class="card" wx:if="{{error}}">
+    <text class="error">{{error}}</text>
+  </view>
+
+  <view class="card" wx:if="{{empty}}">
+    <text class="label">还没有订单</text>
+  </view>
+
+  <view class="card" wx:for="{{rows}}" wx:key="orderId">
+    <view class="row">
+      <text class="label">{{item.orderNo}}</text>
+      <text class="status">{{item.statusText}}</text>
+    </view>
+    <view class="row">
+      <text class="label">合计</text>
+      <ws-price wx:if="{{item.totalJpy !== null}}" jpy="{{item.totalJpy}}" />
+    </view>
+    <text class="sub-price" wx:if="{{item.totalSub}}">{{item.totalSub}}</text>
+    <view class="act" wx:if="{{item.canPay}}" data-id="{{item.orderId}}" bindtap="onPay">
+      继续支付
+    </view>
+  </view>
+</view>

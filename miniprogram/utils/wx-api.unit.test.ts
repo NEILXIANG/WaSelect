@@ -34,6 +34,7 @@ function stubHost(
   const modals: Array<{ success?: (res: { confirm: boolean; cancel: boolean }) => void }> = [];
   const payments: Array<{ package?: string }> = [];
   const clipped: string[] = [];
+  const redirected: string[] = [];
   vi.stubGlobal('wx', {
     request: (o: unknown) => {
       seen.push('request');
@@ -78,9 +79,13 @@ function stubHost(
       clipped.push(o.data ?? '');
       o.success?.();
     },
+    redirectTo: (o: { url: string }) => {
+      seen.push(`redirect:${o.url}`);
+      redirected.push(o.url);
+    },
     ...(over.logger === undefined ? {} : { getRealtimeLogManager: () => over.logger }),
   });
-  return { seen, storage, requested, navigated, backDelta, modals, payments, clipped };
+  return { seen, storage, requested, navigated, backDelta, modals, payments, clipped, redirected };
 }
 
 describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => {
@@ -105,6 +110,7 @@ describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => 
       }),
     ).toThrow(/wx 宿主不存在/);
     expect(() => api.setClipboardData({ data: 'x' })).toThrow(/wx 宿主不存在/);
+    expect(() => api.redirectTo({ url: '/pages/order/index' })).toThrow(/wx 宿主不存在/);
   });
 
   it('**import 时不取宿主**——只有调用才取（否则 Node 侧连 import 都做不到）', () => {
@@ -243,6 +249,12 @@ describe('走真实宿主时的行为', () => {
     const { clipped } = stubHost();
     createWxApi().setClipboardData({ data: 'https://pay.test/l/abc' });
     expect(clipped).toEqual(['https://pay.test/l/abc']);
+  });
+
+  it('redirectTo 原样转发 url（不补前缀——@limitation 十二，同 navigateTo）', () => {
+    const { redirected } = stubHost();
+    createWxApi().redirectTo({ url: '/pages/order/index' });
+    expect(redirected).toEqual(['/pages/order/index']);
   });
 });
 
