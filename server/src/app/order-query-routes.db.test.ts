@@ -22,7 +22,8 @@ import { loadConfig } from '../config.js';
 import { createEventBus } from '../adapters/event-bus.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
-import { signToken } from './auth.js';
+import { SignJWT } from 'jose';
+import { AUDIENCE, signToken } from './auth.js';
 
 let db: Db;
 const JWT_SECRET = 'order-query-test-jwt-secret-'.repeat(3);
@@ -240,6 +241,46 @@ describe('GET /orders/{id}（订单详情）', () => {
       expect(others.json['code']).toBe(40400);
       const ghost = await get(srv.url, '/api/v1/orders/ord-ghost');
       expect(ghost.json['code']).toBe(40400);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+describe('鉴权策略的真路由级接线（三审 S3 / U23；骨架退役时从 skeleton.e2e 迁来）', () => {
+  it('同密钥同签发者的"无 exp"与 HS512 令牌，走真路由都是 40101（策略层真的接进了路由）', async () => {
+    // @why auth.unit.test 钉的是 verifyToken 本身；这里证明装配处的鉴权中间件
+    //      真的把 requiredClaims / algorithms 白名单接进了路由——两个令牌在 jose
+    //      看来都"签名有效"，只有策略层能拒。独立用 jose 构造，不走 signToken。
+    const srv = await buildServer();
+    try {
+      const key = new TextEncoder().encode(JWT_SECRET);
+      const noExp = await new SignJWT({ role: 'user', ver: 1 })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setSubject('u-1')
+        .setIssuer('waselect')
+        .setAudience(AUDIENCE.user)
+        .setIssuedAt()
+        .sign(key);
+      const hs512 = await new SignJWT({ role: 'user', ver: 1 })
+        .setProtectedHeader({ alg: 'HS512' })
+        .setSubject('u-1')
+        .setIssuer('waselect')
+        .setAudience(AUDIENCE.user)
+        .setIssuedAt()
+        .setExpirationTime('1h')
+        .sign(key);
+      for (const [label, bad] of [
+        ['no-exp', noExp],
+        ['hs512', hs512],
+      ] as const) {
+        const r = await get(srv.url, '/api/v1/orders', bad);
+        expect(r.status, label).toBe(401);
+        expect(r.json['code'], label).toBe(40101);
+      }
+      // 控制组：同密钥、正规签发（HS256 + exp）→ 200，证明拒的是策略不是密钥/签发者
+      const ok = await get(srv.url, '/api/v1/orders');
+      expect(ok.status).toBe(200);
     } finally {
       await srv.close();
     }

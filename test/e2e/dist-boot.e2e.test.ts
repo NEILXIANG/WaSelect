@@ -16,9 +16,9 @@
  * @limitation 二：不比对 dist 与 src 的新旧。构建产物过期时这里仍可能绿，
  *              但这属于构建流程问题，不该由测试兜底（`npm run gate` 的顺序已经保证）。
  * @limitation 三：`NODE_ENV=development` 是**必需的**，不是图省事：
- *              生产下 `shouldMountSkeleton()` 会拒绝挂载骨架（SEC2 闸门），
- *              进程会启动失败。所以这条用例验的是"产物能起来并跑完装配"，不是生产闸门本身
- *              （生产闸门由 `shouldMountSkeleton` 的单测负责）。
+ *              生产配置有一整套跨字段规则（本机 DATABASE_URL 直接拒启，见 config.ts
+ *              规则 4），而本用例的库只能是本机测试库。所以这条用例验的是
+ *              "产物能起来并跑完装配"，生产配置的拒启分支由 main.db.test.ts 覆盖。
  */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';

@@ -9,16 +9,31 @@
  *        4. `idempotency-key` 由封装注入后，服务端是不是真的按它去重。
  *      这些全是"两端各自都对、接起来错"的类型，只有真跑一遍才会暴露。
  *
- * 假的部分只有一处：`wx.request` 这个宿主 HTTP 通道（见 `fake-wx-request.ts` 的边界说明）。
+ * @why U6c 改写：骨架端点退役后，链路从"骨架演示单"改走**真实业务路径**——
+ *      dev 登录 → 建地址 → 建单 → 发起支付（mock in_app）→ 模拟机构回调 → 读回订单。
+ *      成本是要摆商品/运费 fixture，换来的是：客户端封装对齐的不再是"迟早要删的脚手架"，
+ *      而是小程序上线第一天真的会走的那条链路。
+ *
+ * 假的部分只有两处：`wx.request` 这个宿主 HTTP 通道（见 `fake-wx-request.ts` 的边界说明），
+ * 与支付机构本身（mock 通道 + 手工签名的模拟回调）。
  * 传输是真的：真端口、真 TCP、真 JSON 解析、真错误体。
  *
  * @see docs/地基搭建清单.md F6c；miniprogram/utils/request.js @limitation
  */
+import { createHmac } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from '../../server/src/adapters/db.js';
-import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
+import { createEventBus } from '../../server/src/adapters/event-bus.js';
+import { registerBusinessEventLog } from '../../server/src/app/business-events.js';
+import { mountAllRoutes } from '../../server/src/app/mount.js';
+import { PAY_CALLBACK_PREFIX } from '../../server/src/app/pay-routes.js';
+import { loadConfig } from '../../server/src/config.js';
+import { createHttpApp, listen, type StartedServer } from '../../server/src/http.js';
+import { createLogger } from '../../server/src/logger.js';
+import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../db/test-db.js';
+import { makeShippingRates } from '../factories/entities.js';
 import { fakeWxRequest } from '../helpers/fake-wx-request.js';
-import { E2E_USER, startSkeleton, userToken, type SkeletonServer } from './harness.js';
+import { MemorySink } from '../helpers/memory-sink.js';
 
 // 被直接测的是小程序源码本身（js，非 ts）——allowJs 已开，v8 覆盖率也会统计到它
 import { ApiError, NETWORK_ERROR_CODE, createRequester } from '../../miniprogram/utils/request.js';
@@ -26,10 +41,17 @@ import { createIntentIdempotency } from '../../miniprogram/utils/idempotency.js'
 import { newTraceId } from '../../miniprogram/utils/trace.js';
 import { createWxApi } from '../../miniprogram/utils/wx-api.js';
 
-let db: Db;
-let app: SkeletonServer;
+const JWT_SECRET = 'mp-shell-jwt-secret-'.repeat(3);
+/** 模拟机构回调的 HMAC 密钥（装配处 mock 通道的 options.secret）。 */
+const CALLBACK_SECRET = 'mp-shell-mock-callback-secret';
+const TERMS = 'TOS-TEST-1';
 
-/** 埋点出口：ADR-29 流 C 的用户行为。骨架期还没接 /beacon，先在这里收着断言。 */
+let db: Db;
+let server: StartedServer;
+let base = '';
+let sink: MemorySink;
+
+/** 埋点出口：ADR-29 流 C 的用户行为。/beacon 上报未接（request.js @limitation 三），先在这里收着断言。 */
 let beacons: Array<Record<string, unknown>>;
 let api: ReturnType<typeof createRequester>;
 let token = '';
@@ -37,7 +59,36 @@ let token = '';
 beforeAll(async () => {
   await ensureTestDb();
   db = testDb();
-  app = await startSkeleton(db);
+
+  // 与 order-routes.db.test 同一条装配路径：loadConfig + mountAllRoutes（生产形态的全量路由）。
+  // WECHAT_DEV_LOGIN 让 dev 登录替身注册（仅 development/test 双保险，mount.ts @why）——
+  // 本文件的"登录"走的就是小程序审核期与本地开发会走的那条 dev 登录路径。
+  sink = new MemorySink();
+  const logger = createLogger({ env: 'test', destination: sink });
+  const config = loadConfig({
+    NODE_ENV: 'development',
+    PORT: '1',
+    HOST: '127.0.0.1',
+    DATABASE_URL: TEST_DB_URL,
+    JWT_SECRET,
+    PAYMENT_CHANNELS: 'mock',
+    MOCK_CALLBACK_SECRET: CALLBACK_SECRET,
+    TERMS_VERSION: TERMS,
+    WECHAT_DEV_LOGIN: 'dev-',
+  });
+  const app = createHttpApp({
+    logger,
+    // 回调验签必须用原始字节（main.ts 同口径）：少配这一环 = 所有回调 50000 断链
+    rawBodyPaths: [PAY_CALLBACK_PREFIX],
+    mount: (a) => {
+      const events = createEventBus(logger);
+      registerBusinessEventLog(events, logger);
+      mountAllRoutes(a, { config, logger, db, events });
+    },
+  });
+  server = await listen(app);
+  base = `http://127.0.0.1:${server.port}`;
+
   beacons = [];
   api = createRequester({
     // 宿主能力注入走 F14 的封装层（`wx: createWxApi({ request })`），不再传单个 `request`
@@ -49,66 +100,169 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(async () => {
-  await app.server.close();
+  await server.close();
   await db.end();
 });
 
 beforeEach(async () => {
   await resetTestDb(db);
-  await db`insert into users (id, openid) values (${E2E_USER}, 'o-e2e') on conflict (id) do nothing`;
+  // 建单 fixture（与 order-routes.db.test 同一组事实：厨刀+茶杯、占位运费表、USD/CNY 汇率）
+  await db`
+    insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status)
+    values ('p-knife', 'Chef Knife', 'kitchen', 8800, 620, 5, 'JP', 'active'),
+           ('p-cup', 'Tea Cup', 'kitchen', 3200, 480, 10, 'JP', 'active')
+  `;
+  for (const s of makeShippingRates('placeholder')) {
+    await db`
+      insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
+      values (${s.carrier}, ${s.max_weight_g}, ${s.price_jpy}, ${s.active})
+    `;
+  }
+  await db`
+    insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)
+    values ('USD', 0.0067, 0.0065, 0.03, now() - interval '1 hour'),
+           ('CNY', 0.049, 0.048, 0.03, now() - interval '1 hour')
+  `;
   beacons = [];
-  token = await userToken();
-  app.sink.clear();
+  token = '';
+  sink.clear();
 });
 
-describe('小程序壳 → 真服务端：一条链路走到底', () => {
-  it('建单 → 模拟支付 → 读回，三跳共用客户端生成的同一个 trace_id', async () => {
+/** dev 登录（等价"微信扫码后换 token"）：dev 替身把 code 直接映射成 openid。 */
+async function login(code: string, traceId?: string): Promise<void> {
+  const r = (await api({
+    url: `${base}/api/v1/auth/wechat/login`,
+    method: 'POST',
+    data: { code },
+    ...(traceId !== undefined ? { traceId } : {}),
+  })) as { token: string };
+  token = r.token;
+}
+
+/** 建一张美国收货地址（业务端点，不走插库——客户端封装要对齐的是真路径）。 */
+async function createAddress(traceId?: string): Promise<string> {
+  const r = (await api({
+    url: `${base}/api/v1/addresses`,
+    method: 'POST',
+    data: {
+      recipient: 'Jane Doe',
+      phone: '+14155550123',
+      line1: '1 Infinite Loop',
+      city: 'Cupertino',
+      state: 'CA',
+      postal_code: '95014',
+      country: 'US',
+      is_default: true,
+    },
+    ...(traceId !== undefined ? { traceId } : {}),
+  })) as { id: string };
+  return r.id;
+}
+
+/** 建单请求体（厨刀×1 + 茶杯×2，与 order-routes.db.test 同一组 fixture 事实）。 */
+function orderBody(addressId: string): Record<string, unknown> {
+  return {
+    items: [
+      { product_id: 'p-knife', qty: 1 },
+      { product_id: 'p-cup', qty: 2 },
+    ],
+    address_id: addressId,
+    terms_version: TERMS,
+  };
+}
+
+async function createOrder(addressId: string, key: string, traceId?: string): Promise<string> {
+  const r = (await api({
+    url: `${base}/api/v1/orders`,
+    method: 'POST',
+    data: orderBody(addressId),
+    idempotencyKey: key,
+    ...(traceId !== undefined ? { traceId } : {}),
+  })) as { order_id: string };
+  return r.order_id;
+}
+
+/**
+ * 模拟机构回调（不走客户端封装——这是机构→服务端的方向，不是小程序的动作）。
+ * 带上同一条 trace_id：让"一次用户操作一条链"的日志断言不被这一跳打断。
+ * provider_ref 从 payments 行读：它是发起支付时机构侧的会话号，客户端拿不到也不该拿。
+ */
+async function mockPayCallback(orderId: string, traceId: string): Promise<void> {
+  const rows =
+    await db`select provider_ref, charge_currency, charge_amount from payments where order_id = ${orderId}`;
+  const p = rows[0];
+  expect(p, '发起支付后 payments 行必须存在（否则回调无的放矢）').toBeDefined();
+  const body = JSON.stringify({
+    event_id: `evt-mp-${orderId}`,
+    type: 'payment.succeeded',
+    order_id: orderId,
+    provider_ref: p?.provider_ref,
+    currency: p?.charge_currency,
+    amount_minor: Number(p?.charge_amount),
+  });
+  const res = await fetch(`${base}${PAY_CALLBACK_PREFIX}/mock`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-mock-signature': createHmac('sha256', CALLBACK_SECRET).update(body).digest('hex'),
+      'x-trace-id': traceId,
+    },
+    body,
+  });
+  expect(res.status).toBe(200);
+}
+
+describe('小程序壳 → 真服务端：一条业务链路走到底', () => {
+  it('dev 登录 → 建地址 → 建单 → 发起支付 → 机构回调 → 读回已支付，全程共用客户端生成的同一个 trace_id', async () => {
     // 客户端生成 trace，后续每一跳都传它——这是"一次用户操作一条链"的落地方式
     const traceId = newTraceId();
 
-    const created = (await api({
-      url: `${app.base}/api/v1/skeleton/orders`,
-      method: 'POST',
-      data: {},
-      idempotencyKey: 'mp-key-1',
-      traceId,
-    })) as { order_id: string; status: string };
-    expect(created.status).toBe('created');
+    await login('alice', traceId);
+    expect(token.length).toBeGreaterThan(0);
 
-    await api({
-      url: `${app.base}/api/v1/skeleton/orders/${created.order_id}/simulate-paid`,
+    const addressId = await createAddress(traceId);
+    const orderId = await createOrder(addressId, 'mp-key-1', traceId);
+
+    // 发起支付（mock in_app 通道）：payload 里的 `auto: true` 是审核期的自动确认信号
+    // （契约 PaymentIntent payload 的 mock 形状，D-56——前端据此走"模拟支付成功"，不硬编码通道名）
+    const pay = (await api({
+      url: `${base}/api/v1/orders/${orderId}/pay`,
       method: 'POST',
+      data: { channel: 'mock' },
+      idempotencyKey: 'mp-pay-1',
       traceId,
-    });
+    })) as { channel: string; payload: { auto?: boolean } };
+    expect(pay.channel).toBe('mock');
+    expect(pay.payload.auto).toBe(true);
+
+    await mockPayCallback(orderId, traceId);
 
     const got = (await api({
-      url: `${app.base}/api/v1/skeleton/orders/${created.order_id}`,
+      url: `${base}/api/v1/orders/${orderId}`,
       traceId,
-    })) as { status: string; trace_id: string };
-
+    })) as { status: string };
     expect(got.status).toBe('paid');
-    // 服务端把当前上下文的 trace_id 回显：等于证明"客户端的头真被服务端接受了"，
-    // 而不是"客户端自己生成一个自娱自乐"。这一条是整条测试的核心断言。
-    expect(got.trace_id).toBe(traceId);
 
-    // 服务端日志：三跳全在同一条链上（客户端的 ID 直接出现在服务端日志里）
-    const traced = app.sink.rows().filter((r) => r.trace_id !== undefined);
+    // 服务端日志：每一跳都在同一条链上（客户端的 ID 直接出现在服务端日志里）。
+    // 这是"客户端的头真被服务端接受"的证据——日志里的 trace_id 只能来自请求头
+    const traced = sink.rows().filter((r) => r.trace_id !== undefined);
     expect(traced.length).toBeGreaterThan(0);
     expect([...new Set(traced.map((r) => String(r.trace_id)))]).toEqual([traceId]);
 
-    // 流 C 用户行为埋点：三次成功各一条，且带同一个 trace_id
+    // 流 C 用户行为埋点：登录/地址/建单/支付/读回五次成功各一条，且带同一个 trace_id
     const okBeacons = beacons.filter((b) => b.event === 'api_ok');
-    expect(okBeacons).toHaveLength(3);
+    expect(okBeacons).toHaveLength(5);
     expect([...new Set(okBeacons.map((b) => String(b.trace_id)))]).toEqual([traceId]);
   });
 
   it('没带 token（未登录）→ ApiError 40101，且服务端没有落任何单', async () => {
-    token = '';
+    await login('bob');
+    token = ''; // 模拟"本地 token 丢失/从未登录"
     await expect(
       api({
-        url: `${app.base}/api/v1/skeleton/orders`,
+        url: `${base}/api/v1/orders`,
         method: 'POST',
-        data: {},
+        data: orderBody('addr-x'),
         idempotencyKey: 'mp-key-2',
       }),
     ).rejects.toMatchObject({ name: 'ApiError', code: 40101 });
@@ -124,24 +278,19 @@ describe('小程序壳 → 真服务端：一条链路走到底', () => {
   });
 
   it('连不上（端口没人听）→ code 为网络错误码，不是业务码', async () => {
-    await expect(api({ url: 'http://127.0.0.1:1/api/v1/skeleton/orders' })).rejects.toMatchObject({
+    await expect(api({ url: 'http://127.0.0.1:1/api/v1/orders' })).rejects.toMatchObject({
       code: NETWORK_ERROR_CODE,
     });
     expect(beacons.filter((b) => b.event === 'api_network_error')).toHaveLength(1);
   });
 
   it('封装注入的 Idempotency-Key 被服务端真的用上：连点两次只建一张单', async () => {
+    await login('carol');
+    const addressId = await createAddress();
     const traceId = newTraceId();
-    const opts = {
-      url: `${app.base}/api/v1/skeleton/orders`,
-      method: 'POST',
-      data: {},
-      idempotencyKey: 'mp-dup-key',
-      traceId,
-    };
-    const first = (await api(opts)) as { order_id: string };
-    const second = (await api(opts)) as { order_id: string };
-    expect(second.order_id).toBe(first.order_id);
+    const first = await createOrder(addressId, 'mp-dup-key', traceId);
+    const second = await createOrder(addressId, 'mp-dup-key', traceId);
+    expect(second).toBe(first);
     expect(await db`select id from orders`).toHaveLength(1);
   });
 
@@ -152,23 +301,19 @@ describe('小程序壳 → 真服务端：一条链路走到底', () => {
    *      「首试失败 → 重试」服务端必须认成同一个意图，而「成功后」必须真的是新单。
    */
   it('一次意图一个键：首试网络失败后重试仍是同一张单；成功后换键才是第二张', async () => {
+    await login('dave');
+    const addressId = await createAddress();
     const intent = createIntentIdempotency();
-    const post = (key: string) =>
-      api({
-        url: `${app.base}/api/v1/skeleton/orders`,
-        method: 'POST',
-        data: {},
-        idempotencyKey: key,
-      }) as Promise<{ order_id: string }>;
+    const post = (key: string) => createOrder(addressId, key);
 
     // 1) 首试：故意打到没人听的端口，模拟网络抖动（服务端根本没收到请求）
     const first = intent.acquire();
     expect(first.isRetry).toBe(false);
     await expect(
       api({
-        url: 'http://127.0.0.1:1/api/v1/skeleton/orders',
+        url: 'http://127.0.0.1:1/api/v1/orders',
         method: 'POST',
-        data: {},
+        data: orderBody(addressId),
         idempotencyKey: first.key,
       }),
     ).rejects.toMatchObject({ code: NETWORK_ERROR_CODE });
@@ -182,22 +327,22 @@ describe('小程序壳 → 真服务端：一条链路走到底', () => {
 
     // 3) 结果回来之前用户又点了一次（并发连点）→ 服务端重放，仍只有一张单
     const replayed = await post(intent.acquire().key);
-    expect(replayed.order_id).toBe(created.order_id);
+    expect(replayed).toBe(created);
     expect(await db`select id from orders`).toHaveLength(1);
 
     // 4) 成功后 retire：下一次点击是**新意图**，必须建出第二张不同的单
     intent.retire();
     const next = await post(intent.acquire().key);
-    expect(next.order_id).not.toBe(created.order_id);
+    expect(next).not.toBe(created);
     expect(await db`select id from orders`).toHaveLength(2);
   });
 
   it('ApiError 的 message 来自服务端错误体，不是占位符（否则用户看到的是空提示）', async () => {
     token = '';
     const err = (await api({
-      url: `${app.base}/api/v1/skeleton/orders`,
+      url: `${base}/api/v1/orders`,
       method: 'POST',
-      data: {},
+      data: orderBody('addr-x'),
       idempotencyKey: 'mp-key-3',
     }).catch((e: unknown) => e)) as ApiError;
     expect(err).toBeInstanceOf(ApiError);

@@ -36,7 +36,6 @@ import { createIdempotencyExecutor } from '../adapters/idempotency.js';
 import { createIdentityCheck, withIdentityCache } from '../adapters/identity.js';
 import { systemClock } from '../adapters/clock.js';
 import { systemIdGen } from '../adapters/ids.js';
-import { mountSkeleton } from '../skeleton.js';
 import { outboundHttpOptions } from './http-outbound.js';
 import { mountPayRoutes } from './pay-routes.js';
 import { markOrderPaid } from './mark-paid.js';
@@ -54,20 +53,6 @@ import { mountWechatAuthRoutes } from './wechat-auth-routes.js';
 import { createWechatAuth } from '../adapters/wechat/code2session.js';
 import { createDevWechatAuth } from '../adapters/wechat/dev-auth.js';
 
-/**
- * 是否挂载骨架路由。**生产不挂。**
- *
- * @why 抽成一个函数不是因为它复杂，而是因为它是**一条策略**——策略要能被单独断言。
- *      否则只能"起一个完整生产服务再打请求"来验证，而那需要一整套合法的生产环境变量
- *      （生产闸门还会拒绝指向 localhost 的 DATABASE_URL），测试成本远高于收益。
- * @limitation 这是第二道防线，不是唯一一道：`mountSkeleton()` 自己在 production 下
- *             也会抛错（SEC2）。两道都在，是因为"生产能改订单状态的端点"值得双保险。
- *             ⚠️ 本函数从 main.ts 迁来（I1-U1），main.ts 有 re-export，外部 import 路径不变。
- */
-export function shouldMountSkeleton(env: AppConfig['NODE_ENV']): boolean {
-  return env !== 'production';
-}
-
 /** 路由装配所需的已构造依赖（构造归 bootstrap，装配归本模块）。 */
 export interface MountContext {
   config: AppConfig;
@@ -84,7 +69,6 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
 
   // ── 支付路由（F11）：**每个环境都挂**，它不是脚手架 ──────────────────────
   // @why 回调是机构打给我们的，生产必须能收；通道列表是前端入口的来源。
-  //      它们与骨架无关——骨架只是"没有真实下单接口时的一条演示链路"。
   //      注册表在装配处按配置拼好：加一个通道 = 改配置 + 注册工厂，本处不改。
   // 出站 HTTP 客户端（支付通道与微信登录共用一份：超时/总预算/熔断/日志的唯一出处）。
   // ⚠️ `logger` **必须传**：不传的话出站 HTTP 一条日志都没有
@@ -120,12 +104,11 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     webhooks: createWebhookStore(db),
     logger,
     graceMs: config.CALLBACK_ORDER_GRACE_MS,
-    // 骨架期只有"把订单置为 paid"这一件事；业务期（I1）换成订单状态机的迁移。
+    // 落账 = 订单状态机的迁移（mark-paid 核对 payments 行后置 paid）。
     // ⚠️ 第二、三、四个参数必须来自回调本身（通道 / 机构单号 / 金额币种）：
     //    落账逐项核对它们与 `payments` 行（三审 S1② / U1），对不上就不落账
     apply: async (e, channel) =>
       markOrderPaid(db, events, systemClock, e.orderId, {
-        kind: 'provider',
         channel,
         providerRef: e.providerRef,
         amountMinor: e.amountMinor,
@@ -137,7 +120,8 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   /**
    * 限流（I1-U3）：store 建在挂载处（进程级）——计数必须跨请求存活；
    * 建在中间件里就成"每请求清零"。规则表（rate-limit.ts）是唯一出处。
-   * ⚠️ store 必须在骨架闸门**之前**建：报价/支付路由全环境挂载，限流不能只在非生产存在。
+   * ⚠️ store 在挂载处统一建、所有受限流路由共用同一份：报价/支付等路由全环境挂载，
+   *    限流也必须全环境存在（不能只在某个环境才有计数）。
    * ⚠️ 进程内实现只在**单实例**下正确（rate-limit-memory.ts @limitation 一，R-I1-2）。
    */
   const rateLimitStore = createMemoryRateLimitStore();
@@ -206,7 +190,8 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   });
 
   // ── 小程序登录（I1-U6b）：真 AppID 优先；dev 替身只在 development/test 注册
-  //    （第二道防线——第一道是 loadConfig 规则 1c 拒生产/staging，与 SEC2 同精神的双保险）；
+  //    （第二道防线——第一道是 loadConfig 规则 1c 拒生产/staging；双保险：
+  //    配置层拒了还不够，装配层再拦一次"配置被绕过"的情况）；
   //    两者皆无 → null（路由照挂，调用时 50000 wechat_login_not_configured，见路由 @why）──
   const wechatAuth =
     config.APP_ID !== undefined && config.APP_SECRET !== undefined
@@ -228,22 +213,4 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   //    best-effort 作废机构会话。注册在这里（不在 main.ts）：registry 是本函数
   //    局部装配的，订阅者与路由共用同一份才是"可插拔唯一出处"的真实兑现 ──
   registerSessionExpiryOnClose(events, { db, logger, registry });
-
-  if (!shouldMountSkeleton(config.NODE_ENV)) return; // 骨架不进生产（SEC2，见 @limitation）
-  app.use('/api/v1/skeleton', rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite));
-  mountSkeleton(app, {
-    db,
-    // 幂等执行器：建单走单事务模式，handler 里写业务 SQL 用的就是这个事务。
-    idempotency: createIdempotencyExecutor(db),
-    events,
-    // 时钟：生产装配注入真实时钟；业务侧只见 Clock 接口（F10）
-    clock: systemClock,
-    // 标识符：同上，业务侧只见 IdGen 接口
-    idGen: systemIdGen,
-    logger,
-    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    env: config.NODE_ENV,
-    // D25：带上身份状态查询，改密 / 封禁后才能真的把旧 token 挡在门外
-    identity: withIdentityCache(createIdentityCheck(db)),
-  });
 }

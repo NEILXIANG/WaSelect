@@ -174,7 +174,7 @@ describe('claimWebhookEvent', () => {
   });
 });
 
-it('无 event_type 的事件也能登记（骨架模拟回调没有类型字段；`?? null` 分支，N16 定向）', async () => {
+it('无 event_type 的事件也能登记（mock 通道的模拟回调没有类型字段；`?? null` 分支，N16 定向）', async () => {
   const noType: { provider: string; eventId: string; hash: string } = {
     provider: 'mock',
     eventId: 'evt-notype',

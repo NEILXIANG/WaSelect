@@ -173,7 +173,7 @@ export function buildPaymentRegistry(
   const registry = createPaymentRegistry({ configs });
   const registered: string[] = [];
 
-  // ── mock：骨架期 / 审核期的假通道（真实 HMAC 验签，密钥来自配置）─────────────
+  // ── mock：审核期 / 测试的假通道（真实 HMAC 验签，密钥来自配置）─────────────
   if (mockRegistered) {
     registry.register('mock', (cfg) =>
       createMockProvider(cfg, { clock: deps.clock, idGen: deps.idGen }),

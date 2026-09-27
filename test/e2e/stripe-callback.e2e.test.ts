@@ -20,18 +20,18 @@ import { STRIPE_SIGNATURE_HEADER } from '../../server/src/adapters/payment/strip
 import { recordPaymentIntent } from '../../server/src/app/payment-intent.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
 import { createFakeStripeHttp } from '../helpers/fake-stripe-http.js';
+import { seedCreatedOrder } from '../helpers/seed-order.js';
 import {
   E2E_NOW,
   E2E_STRIPE_WHSEC,
   E2E_TRACE as TRACE,
   E2E_USER as USER,
-  startSkeleton,
-  userToken,
-  type SkeletonServer,
+  startApp,
+  type E2EServer,
 } from './harness.js';
 
 let db: Db;
-let current: SkeletonServer;
+let current: E2EServer;
 let base = '';
 const fakeStripe = createFakeStripeHttp();
 
@@ -86,19 +86,12 @@ function postStripe(raw: string | Buffer, signature?: string): Promise<Response>
   });
 }
 
-async function createOrder(idempotencyKey: string): Promise<string> {
-  const res = await fetch(`${base}/api/v1/skeleton/orders`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${await userToken()}`,
-      'content-type': 'application/json',
-      'idempotency-key': idempotencyKey,
-      'x-trace-id': TRACE,
-    },
-    body: '{}',
-  });
-  expect(res.status).toBe(201);
-  return ((await res.json()) as { order_id: string }).order_id;
+/**
+ * 插库造一张在途单（created）：本文件的焦点是**回调链路**（验签 → 分发 → 落账），
+ * 建单链路本身由 order-routes.db.test 覆盖（seed-order helper 的 @why）。
+ */
+function seedOrder(orderId: string): Promise<string> {
+  return seedCreatedOrder(db, orderId, { userId: USER });
 }
 
 async function orderStatus(orderId: string): Promise<string> {
@@ -127,7 +120,7 @@ function seedStripePayment(orderId: string, sessionId = 'cs_test_e2e_1'): Promis
 beforeAll(async () => {
   await ensureTestDb();
   db = testDb();
-  current = await startSkeleton(db, { stripeHttp: fakeStripe });
+  current = await startApp(db, { stripeHttp: fakeStripe });
   base = current.base;
 }, 30_000);
 
@@ -143,7 +136,7 @@ beforeEach(async () => {
 
 describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', () => {
   it('checkout.session.completed(paid) → 订单置 paid，order_events 与 webhook_events 都留痕', async () => {
-    const orderId = await createOrder('key-stripe-paid');
+    const orderId = await seedOrder('o-stripe-paid');
     await seedStripePayment(orderId);
     const res = await postStripe(sessionCompleted(orderId, 'paid', 'evt_e2e_paid'));
     expect(res.status).toBe(200);
@@ -170,7 +163,7 @@ describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', ()
   it('报文含 \\u 转义与多字节日文，签名按发出的原始字节 → 200 落账（rawBody 必须是真字节，不能是 JSON 重序列化）', async () => {
     // @why `JSON.stringify(JSON.parse(body))` 会把 `\u30c6` 展开成原字符、丢掉空白——重序列化后的
     //      字节与机构签的不同，验签必然失败。这条钉住的是 http 层 rawBody 中间件与适配器验签的接缝。
-    const orderId = await createOrder('key-stripe-bytes');
+    const orderId = await seedOrder('o-stripe-bytes');
     await seedStripePayment(orderId, 'cs_test_e2e_bytes');
     const raw =
       '{ "id": "evt_e2e_bytes", "type": "checkout.session.completed",  "data": { "object": {' +
@@ -185,7 +178,7 @@ describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', ()
   it('原始字节含非法 UTF-8（签名按字节正确）→ 40001 坏报文，而不是 40103 验签失败；零留痕', async () => {
     // @why 三审 S4：验签若先 `toString('utf8')` 再 HMAC，非法字节被换成 U+FFFD → 签名不匹配 → 40103，
     //      排障方向就错了（以为密钥错）。按字节验签后，坏的只是 JSON，应落 40001（4xx，机构不必重试）。
-    const orderId = await createOrder('key-stripe-badutf8');
+    const orderId = await seedOrder('o-stripe-badutf8');
     const raw = Buffer.concat([
       Buffer.from(sessionCompleted(orderId, 'paid', 'evt_e2e_badutf8'), 'utf8'),
       Buffer.from([0xff]),
@@ -199,7 +192,7 @@ describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', ()
   });
 
   it('completed 但 payment_status=unpaid（异步支付未完成）→ 2xx 收下但**不落账**（P2-NEW-1）', async () => {
-    const orderId = await createOrder('key-stripe-unpaid');
+    const orderId = await seedOrder('o-stripe-unpaid');
     const res = await postStripe(sessionCompleted(orderId, 'unpaid', 'evt_e2e_unpaid'));
     expect(res.status).toBe(200);
     // 归一化成 unknown：收下登记、不落业务状态（F12 状态机接手前的既定语义）
@@ -215,7 +208,7 @@ describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', ()
   });
 
   it('签名被篡改 → 40103，不落账且 webhook_events 零留痕（解析先于登记）', async () => {
-    const orderId = await createOrder('key-stripe-forged');
+    const orderId = await seedOrder('o-stripe-forged');
     const raw = sessionCompleted(orderId, 'paid', 'evt_e2e_forged');
     const forged = stripeHeader(raw).replace(/v1=../, 'v1=00');
     const res = await postStripe(raw, forged);
@@ -228,7 +221,7 @@ describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', ()
   });
 
   it('charge.dispute.created → 反查 PaymentIntent 拿到 order_id → 登记 ignored:disputed（P1-7）', async () => {
-    const orderId = await createOrder('key-stripe-dispute');
+    const orderId = await seedOrder('o-stripe-dispute');
     // dispute 对象上没有我们的 metadata（Stripe 不复制），唯一线索是 payment_intent
     fakeStripe.givenPaymentIntent('pi_e2e_dispute', { order_id: orderId });
     const callsBefore = fakeStripe.calls.length;
@@ -273,7 +266,7 @@ describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', ()
  *      这里证明的是**整条链**：HTTP 回调照样 2xx、订单照样 paid、失败只记一行日志、进程不退出。
  */
 describe('提交后分发：async 订阅者失败不影响回调与落账（三审 P2-1 链路级证明）', () => {
-  let srv: SkeletonServer;
+  let srv: E2EServer;
   const savedBase = () => base;
   let previousBase = '';
   let calls = 0;
@@ -284,7 +277,7 @@ describe('提交后分发：async 订阅者失败不影响回调与落账（三�
 
   beforeAll(async () => {
     previousBase = savedBase();
-    srv = await startSkeleton(db, {
+    srv = await startApp(db, {
       stripeHttp: fakeStripe,
       subscribe: (events) => {
         // 典型形态：通知 / 发货指令这类网络调用天然是 async；失败时它抛的是 rejected Promise
@@ -306,7 +299,7 @@ describe('提交后分发：async 订阅者失败不影响回调与落账（三�
   });
 
   it('订阅者 reject → 回调仍 200、订单 paid、记 domain_event_subscriber_failed、无 unhandledRejection', async () => {
-    const orderId = await createOrder('key-stripe-async-sub');
+    const orderId = await seedOrder('o-stripe-async-sub');
     await seedStripePayment(orderId);
     const res = await postStripe(sessionCompleted(orderId, 'paid', 'evt_e2e_async_sub'));
     expect(res.status).toBe(200);

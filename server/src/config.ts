@@ -188,7 +188,7 @@ const schema = z.object({
    * 运行环境。**必须接受 `test`**（D17）：Vitest 启动时就会把 `NODE_ENV` 设成 `test`，
    *      而组装根一接进来，测试里调 `loadConfig(process.env)` 就会因这个值未登记而直接失败——
    *      属于"测试与生产共用同一条装配路径"之后必然撞上的第一类问题。
-   * @limitation `test` 与 `development` 走同一套"非生产"规则（骨架照挂、日志 debug 级）。
+   * @limitation `test` 与 `development` 走同一套"非生产"规则（日志 debug 级等宽松口径）。
    *              刻意不把它单独成一类：那会让"测试环境的特殊行为"成为长期的隐藏分支。
    */
   NODE_ENV: z.enum(['development', 'staging', 'test', 'production']).default('development'),
@@ -320,7 +320,7 @@ const schema = z.object({
   STRIPE_SECRET_KEY: optionalText(),
   STRIPE_WEBHOOK_SECRET: optionalText(),
   /**
-   * mock 回调的 HMAC 密钥（骨架期 / 审核期专用）。
+   * mock 回调的 HMAC 密钥（审核期 / 测试专用）。
    * @why 独立字段、**绝不默认复用 JWT_SECRET**（基座自查 P1-4）：
    *      ① 回调密钥与登录密钥的泄露半径不同——回调密钥要配给模拟器/审核脚本，JWT 密钥哪都不该去；
    *      ② JWT 密钥轮换是既定需求，若回调验签挂在同一把钥匙上，轮换当天所有模拟回调全部失效。

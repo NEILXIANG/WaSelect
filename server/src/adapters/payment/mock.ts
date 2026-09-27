@@ -1,5 +1,5 @@
 /**
- * 职责：**骨架期**的假支付通道（`mock`）——把"支付"这条链路走通，但不碰任何真实机构。
+ * 职责：**审核期 / 测试**的假支付通道（`mock`）——把"支付"这条链路走通，但不碰任何真实机构。
  *
  * @why 它是三个目的的交汇点，缺一个就不该存在：
  *      ① 审核期必须能演示下单到支付（微信审核要看得见完整链路）；
@@ -9,13 +9,13 @@
  *
  * @why 验签**照样做真的**（HMAC-SHA256 over 原始字节），只是密钥来自配置：
  *      "假通道"不等于"不要安全训练"。如果 mock 通道不验签，
- *      那么 `parseWebhook` 这条路径在骨架期就没人真正走过——
+ *      那么 `parseWebhook` 这条路径在接入真实通道之前就没人真正走过——
  *      真实通道接上来时才发现"raw body 没配""签名头取错名字"这类问题，代价高得多。
  *
  * @limitation 一：**进程内**幂等（Map 存 idempotencyKey → session）。
- *              重启即失效，多实例也不共享——这只够骨架与测试，
+ *              重启即失效，多实例也不共享——这只够审核演示与测试，
  *              真实机构的幂等由机构侧保证（我们把 `idempotencyKey` 传过去）+ 我们自己的幂等表。
- *              ⚠️ 无界 Map 会涨：骨架期调用量可忽略，若将来把它用于压测要加上限。
+ *              ⚠️ 无界 Map 会涨：审核/测试调用量可忽略，若将来把它用于压测要加上限。
  * @limitation 二：不做拒付（dispute）、不做部分退款——能力声明里已如实写 false，
  *              注册表会强制"声明与实现一致"，所以这里假称支持会直接注册失败。
  * @limitation 三：入口形态写死 `in_app`。它是"小程序内唤起"的占位，
@@ -38,10 +38,10 @@ import type {
   RefundRequest,
 } from '../../ports/payment.js';
 
-/** 模拟回调的签名头（与 skeleton 的 MOCK_CALLBACK_PATH 保持同一套约定）。 */
+/** 模拟回调的签名头（mock 通道自定义约定，不是任何机构的真实口径）。 */
 export const MOCK_SIGNATURE_HEADER = 'x-mock-signature';
 
-/** 模拟回调的报文形状（骨架期约定，不是任何机构的真实口径）。 */
+/** 模拟回调的报文形状（mock 通道自定义约定，不是任何机构的真实口径）。 */
 export interface MockEventBody {
   event_id: string;
   type: string;
@@ -162,7 +162,7 @@ export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): 
     },
 
     async refund(req: RefundRequest) {
-      // 骨架期不做真退款；但**形状**必须是真的（有 refundRef、有 outcome），
+      // mock 不对接真实机构退款；但**形状**必须是真的（有 refundRef、有 outcome），
       // 否则上层的"退款成功"分支在真实通道接上来之前一次都没被走过
       return {
         providerRef: req.providerRef,

@@ -10,8 +10,9 @@
  *      ADR-28"业务核心不认识任何国家"在写路径上的兑现——上线新目的国 = 表里加一行，
  *      本文件不改。country 省略时默认 'US'（契约 AddressInput.country default）。
  *
- * @why 归属不符一律 40400 而不是 40301：防存在性探测（与 readOwnedOrder 同口径，
- *      skeleton.ts 的 @tradeoff 有完整论证）；仓储层已把 user_id 进 WHERE（addresses.ts @why）。
+ * @why 归属不符一律 40400 而不是 40301：防存在性探测——40301 会告诉攻击者
+ *      "这单存在但不是你的"，40400 则与"不存在"无法区分（与 order-query-routes 同口径）；
+ *      仓储层已把 user_id 进 WHERE（addresses.ts @why）。
  *
  * @limitation 一：PUT 是全量替换语义（契约 AddressInput 全字段），不做 PATCH。
  * @limitation 二：地址 CRUD 暂不挂限流——它是低频本人写路径（攻击面在登录/报价/短链）；

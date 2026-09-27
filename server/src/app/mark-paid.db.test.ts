@@ -34,7 +34,6 @@ const INTENT = {
 };
 /** 与 INTENT 对得上的回调自述。 */
 const OK: PaidSettlement = {
-  kind: 'provider',
   channel: 'mock',
   providerRef: 'cs_test_intent_1',
   amountMinor: CHARGE.amountMinor,
@@ -228,15 +227,6 @@ describe('落账绑定通道与金额（三审 S1② / U1）', () => {
     await expect(
       markOrderPaid(db, events, fixedClock('2026-01-02T00:00:00.000Z'), 'o-mp', OK),
     ).rejects.toMatchObject({ code: 40902, details: { reason: 'no_payment_intent' } });
-  });
-
-  it('simulated（骨架模拟端点）不核对但仍然置 paid', async () => {
-    const { events } = bus();
-    await markOrderPaid(db, events, fixedClock('2026-01-02T00:00:00.000Z'), 'o-mp', {
-      kind: 'simulated',
-    });
-    const rows = await db`select status from orders where id = 'o-mp'`;
-    expect(rows[0]?.status).toBe('paid');
   });
 });
 

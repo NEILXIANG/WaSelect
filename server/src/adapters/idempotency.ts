@@ -230,7 +230,7 @@ async function withIdempotencyTx<T>(
       // 占位那一步等锁超时（55P03）不是失败，是"别人还在做"——落到冲突路径按等待/超时处理。
       // handler 内部的 55P03 **不在此列**（inHandler=true）：曾经一律当占位冲突再走一轮，
       //    DB 副作用虽随事务回滚，handler 闭包里的内存副作用（收集的领域事件、已打的日志、
-      //    已消耗的单号）不会——skeleton 的"executor 外收集事件再 publishAll"形态会发出幽灵事件
+      //    已消耗的单号）不会——"executor 外收集事件再 publishAll"的形态会发出幽灵事件
       //    （三审 P2-2，用例「handler 内部 55P03 → 原样抛出且只执行一次」）。
       if (isLockTimeout(e) && !inHandler) {
         outcome = { kind: 'conflict' };
@@ -330,7 +330,7 @@ function startRenewal(db: Db, args: IdempotencyArgs, token: string, leaseMs: num
  * @limitation 本函数的 `insert` **没有**设 `lock_timeout`：若另一个请求正用
  *              {@link withIdempotencyTx} 持有同名占位（事务未提交），ON CONFLICT 会阻塞到它提交/回滚，
  *              最坏要等到连接级 `statement_timeout`（15s，D20）才放手。
- *              MVP 里两种模式不混用（骨架走单事务模式），所以现状可接受；
+ *              MVP 里两种模式不混用（业务路由走单事务模式），所以现状可接受；
  *              将来若同一批接口两种模式并存，应在这里按剩余等待预算 `SET LOCAL lock_timeout`
  *              （与单事务模式一致的做法），否则会表现为"偶发请求挂十几秒"。
  * @why 接管时校验既有指纹（`request_hash = '' or request_hash = hash`）：

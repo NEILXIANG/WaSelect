@@ -366,7 +366,7 @@ describe('requireRole 中间件（真 HTTP）', () => {
       expect(res.status).toBe(200);
     });
 
-    it('不传 identity 时不查库（骨架期与单元测试的口子，行为与改造前一致）', async () => {
+    it('不传 identity 时不查库（单元测试的口子，行为与改造前一致）', async () => {
       const { baseUrl } = await serve(undefined);
       const res = await fetch(`${baseUrl}/api/v1/me`, {
         headers: { authorization: `Bearer ${await signToken(user, cfg)}` },

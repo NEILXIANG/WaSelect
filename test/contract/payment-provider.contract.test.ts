@@ -47,7 +47,7 @@ const mockConfig: ChannelConfig = {
   options: { secret: MOCK_SECRET },
 };
 
-/** 按骨架期约定的形状造报文（与 mock.ts 的 MockEventBody 同源）。 */
+/** 按 mock 通道约定的形状造报文（与 mock.ts 的 MockEventBody 同源）。 */
 function mockBody(e: SuccessEvent): Buffer {
   return Buffer.from(
     JSON.stringify({

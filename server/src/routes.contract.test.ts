@@ -55,15 +55,11 @@ function buildRouteSnapshotApp(): Express {
 
 /**
  * 代码侧豁免：允许"挂了但不在契约里"的路由。**每条必须给理由；没有路由再匹配时 diffRoutes 报红。**
- * 骨架（/skeleton/*）是脚手架不是契约 API——业务路由落地后整体退役（地基清单既定口径），
- * 退役时本豁免会因"无路由匹配"自动变红，逼着删除。
+ * 当前为空：骨架（/skeleton/*）曾是唯一豁免项，已随 U6c 骨架退役删除——
+ * 它正是被"无路由再匹配 → 豁免自动失效报红"这条机制逼着删掉的，
+ * 机制本身由下方「diffRoutes 比对器自测」的豁免两条钉住。
  */
-const CODE_EXEMPTIONS = [
-  {
-    pattern: /^(GET|POST) \/skeleton(\/|$)/,
-    reason: '骨架脚手架（F6c）：非契约 API，I1 业务路由落地后退役，届时本条豁免自动失效报红',
-  },
-] as const;
+const CODE_EXEMPTIONS: readonly { pattern: RegExp; reason: string }[] = [];
 
 /**
  * 契约侧未实现登记：允许"契约写了但代码还没有"的路由。**每条必须给理由；实现后必须删除（diffRoutes 规则④）。**
@@ -114,8 +110,8 @@ describe('代码路由 ↔ 契约路由（I1-U1）', () => {
   it('健全性：采集与解析都必须拿到真实数量（防正则/内省失效导致假绿）', () => {
     const code = collectAppRoutes(buildRouteSnapshotApp());
     const contract = parseContractRoutes(contractYaml);
-    // 当前事实：healthz/readyz/channels/callback + 骨架 3 条 = 7；将来只增不减（骨架退役时豁免同步删）
-    expect(code.length).toBeGreaterThanOrEqual(7);
+    // 当前事实：健康检查 + 回调 + 全部业务路由（I1 落地后 20+ 条）；将来只增不减
+    expect(code.length).toBeGreaterThanOrEqual(15);
     // 契约当前 40+ 条路由；解析失效（返回 0/几条）必须红
     expect(contract.length).toBeGreaterThanOrEqual(40);
     // 关键路由必须在场（防"归一化把路径全变成同一个形状"这类静默错）
@@ -149,16 +145,16 @@ describe('diffRoutes 比对器自测', () => {
   it('豁免失效（没有路由再匹配）→ 红（规则③）', () => {
     const code: readonly RouteRef[] = [...contract];
     const problems = diffRoutes(code, contract, {
-      codeExemptions: [{ pattern: /^GET \/skeleton/, reason: '测试豁免' }],
+      codeExemptions: [{ pattern: /^GET \/internal\/probe/, reason: '测试豁免' }],
       notImplemented: [],
     });
     expect(problems.some((p) => p.includes('豁免已失效'))).toBe(true);
   });
 
   it('豁免能正常吸收匹配的路由 → 绿', () => {
-    const code: readonly RouteRef[] = [...contract, { method: 'POST', path: '/skeleton/orders' }];
+    const code: readonly RouteRef[] = [...contract, { method: 'POST', path: '/internal/probe' }];
     const problems = diffRoutes(code, contract, {
-      codeExemptions: [{ pattern: /\/skeleton(\/|$)/, reason: '测试豁免' }],
+      codeExemptions: [{ pattern: /\/internal\/probe(\/|$)/, reason: '测试豁免' }],
       notImplemented: [],
     });
     expect(problems).toEqual([]);

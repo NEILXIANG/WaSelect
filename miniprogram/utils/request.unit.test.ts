@@ -319,7 +319,7 @@ describe('静默重登并重放（40101）', () => {
     expect(attemptNo).toBe(2);
   });
 
-  it('没配 `relogin` → 40101 **原样抛出**，不重放（骨架期没有登录业务）', async () => {
+  it('没配 `relogin` → 40101 **原样抛出**，不重放（没有重登手段时重放注定还是 40101）', async () => {
     const h = fakeWx({ statusCode: 200, data: UNAUTHORIZED });
     const api = createRequester({ wx: h.wx, getToken: () => 'old', log: () => undefined });
     await expect(api({ url: 'https://api.test/x' })).rejects.toMatchObject({ code: 40101 });

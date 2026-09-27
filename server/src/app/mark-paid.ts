@@ -1,17 +1,20 @@
 /**
  * 职责：**把订单置为 paid**（事务 + `for update` + 追加审计事件）——支付成功的落账动作。
  *
- * @why 从 `skeleton.ts` 搬出来是因为它有**两个调用方**了：
- *      ① 骨架的"模拟触发支付成功"端点；② F11 的统一回调管线（`app/pay-routes.ts`）。
+ * @why 从 `skeleton.ts` 搬出来（F11）是因为它有**两个调用方**了：
+ *      骨架的"模拟触发支付成功"端点与统一回调管线（`app/pay-routes.ts`）。
  *      两个入口做同一件事却各写一份，改一处漏一处就会出现
  *      "模拟能过、真实回调失败"这类只在生产暴露的差异。
+ *      （骨架端点已随 U6c 退役；本函数留下，唯一调用方是回调管线。）
  *
  * @why 走 `withUnitOfWork`（而不是 `withTransaction`）：置为已支付要发 `order.paid` 事件，
  *      而事件**必须在事务提交之后**分发——否则回滚了订阅者却已经跑过
  *      （@see app/unit-of-work.ts 的 @why）。
  *
- * @limitation 一：接受 `created → paid` 与 `pending_payment → paid` 两条迁移
- *              （I1-U2 起；前者保留给骨架 simulate 路径，U5/U6 真链路落地后随骨架退役）。
+ * @limitation 一：接受 `created → paid` 与 `pending_payment → paid` 两条迁移（I1-U2 起）。
+ *              `created → paid` 不是骨架遗留：它是**早到回调**的业务路径——
+ *              机构回调比"发起支付"的响应先到时，订单还没来得及转 pending_payment
+ *              （宽限期补单场景，pay-callback-pipeline.e2e 有链路级用例）。
  *              "迟到付款 → 自动全额退款"（D-33）**不在本函数**：迟到一律拒落账（见下），
  *              自动退款依赖真实通道退款能力，属售后阶段（I1 方案 §1.3 明示）。
  *              ⚠️ 换的时候**不要**在调用方加 if：调用方只见 `apply` 这一个函数签名，
@@ -50,30 +53,28 @@ import type { EventBus } from '../ports/events.js';
 import { withUnitOfWork } from './unit-of-work.js';
 
 /**
- * 落账依据的"钱是怎么来的"。**判别联合，调用方必须显式二选一**——
- * 没有"既不传通道也不声明模拟"这条路，少传一个字段就编译不过。
+ * 落账依据的"钱是怎么来的"。**全字段必填**（金额币种允许 undefined 但语义是"核对不了"
+ * 会被拒，见下）——没有"不传通道就跳过核对"这条路，少传一个字段就编译不过。
  *
- * @why 做成判别联合而不是可选参数：可选项的代价是"忘记传 = 跳过核对"，
+ * @why 不做成可选参数：可选项的代价是"忘记传 = 跳过核对"，
  *      而这个跳过**不报错**（订单照样置 paid），正是 S1② 要堵的那类静默洞。
+ *      （骨架期曾有 `simulated` 变体给模拟端点用；骨架退役后唯一来源就是机构回调，
+ *      判别联合随之收敛回单一形状——U6c。）
  */
-export type PaidSettlement =
-  | {
-      kind: 'provider';
-      /** 回调来自哪个通道（= `payments.provider`）。 */
-      channel: string;
-      /** 机构侧会话/交易号（= `payments.provider_ref`）。 */
-      providerRef: string;
-      /**
-       * 机构报的金额（整数最小单位）与币种。**允许 undefined**——
-       * 但那意味着"核对不了"，落账会被拒（`settlement_unverifiable`），不是"跳过核对"。
-       * @why 不设计成"没报就按我方登记值放行"：金额错配的表现是"少收也发货"，
-       *      比收不到钱更难发现，宁可让这一单转对账。
-       */
-      amountMinor: number | undefined;
-      currency: string | undefined;
-    }
-  /** 骨架的"模拟支付成功"端点：没有机构参与，也就没有可核对的事实。 */
-  | { kind: 'simulated' };
+export interface PaidSettlement {
+  /** 回调来自哪个通道（= `payments.provider`）。 */
+  channel: string;
+  /** 机构侧会话/交易号（= `payments.provider_ref`）。 */
+  providerRef: string;
+  /**
+   * 机构报的金额（整数最小单位）与币种。**允许 undefined**——
+   * 但那意味着"核对不了"，落账会被拒（`settlement_unverifiable`），不是"跳过核对"。
+   * @why 不设计成"没报就按我方登记值放行"：金额错配的表现是"少收也发货"，
+   *      比收不到钱更难发现，宁可让这一单转对账。
+   */
+  amountMinor: number | undefined;
+  currency: string | undefined;
+}
 
 /**
  * 核对 `payments` 行与回调自述是否对得上；对不上抛 40902（带 `reason`）。
@@ -88,7 +89,7 @@ export type PaidSettlement =
 async function assertSettlementMatches(
   tx: Db,
   orderId: string,
-  s: Extract<PaidSettlement, { kind: 'provider' }>,
+  s: PaidSettlement,
   current: unknown,
 ): Promise<{ id: string; amountMinor: number; currency: string }> {
   const rows = await tx`
@@ -168,10 +169,7 @@ export async function markOrderPaid(
         ctx: { expires_at: expiresAt.toISOString() },
       });
     }
-    const matched =
-      settlement.kind === 'provider'
-        ? await assertSettlementMatches(tx, orderId, settlement, current)
-        : undefined;
+    const matched = await assertSettlementMatches(tx, orderId, settlement, current);
     // 三审（业务一致性 C）：paid_at / 事件 at / order_events.at 三者同源——都取注入时钟。
     //    曾经 paid_at 用 SQL now()，事件用 clock.now()：应用与 DB 不同实例，两者可差数秒，
     //    "什么时候付的"在订单行与事件里各说各话（updated_at 仍用 now()：它是行的技术时间戳，非业务事实）
@@ -185,16 +183,14 @@ export async function markOrderPaid(
     // 同一事务里把支付行封口：`payments` 是"钱"的账，`orders` 是"货"的账，
     //    两边必须一起提交——分开写会出现"订单已付、支付行还在 initiated"，
     //    而对账任务正是拿 `status='initiated'` 找"收了钱没落单"的
-    if (matched !== undefined && settlement.kind === 'provider') {
-      await tx`
-        update payments
-           set status = 'succeeded',
-               paid_amount = ${matched.amountMinor},
-               paid_currency = ${matched.currency},
-               transaction_id = coalesce(transaction_id, ${settlement.providerRef})
-         where id = ${matched.id}
-      `;
-    }
+    await tx`
+      update payments
+         set status = 'succeeded',
+             paid_amount = ${matched.amountMinor},
+             paid_currency = ${matched.currency},
+             transaction_id = coalesce(transaction_id, ${settlement.providerRef})
+       where id = ${matched.id}
+    `;
     // 登记（不是分发）：只有这个事务提交成功，订阅者才会收到 order.paid
     emit({ name: 'order.paid', at: paidAt.toISOString(), orderId });
   });

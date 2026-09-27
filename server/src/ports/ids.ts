@@ -21,7 +21,7 @@
  *              （`order_no` 的冲突换新段重试属仓储层，D32 待办）；
  *              端口只负责"生成一个合法的候选"。
  * @limitation 三：`uuid()` 不承载权限。它只是内部键；对外暴露的**必须是** `order_no`
- *              （且必须校验归属，@see skeleton.ts readOwnedOrder 的 @why）。
+ *              （且必须校验归属，@see app/order-query-routes.ts 的归属判定）。
  *
  * @see adapters/ids.ts（真实实现）；../ports/clock.ts（同一条注入纪律的另一半）；
  *      packages/shared/src/orderNo.ts（随机段口径的唯一事实来源）

@@ -132,7 +132,7 @@ describe('buildPaymentRegistry：mock 通道', () => {
     expect(event.outcome).toBe('succeeded');
 
     /**
-     * @why 这条断言同时是一张**契约**：占位值写在 channels.ts 里，而 e2e 与骨架测试
+     * @why 这条断言同时是一张**契约**：占位值写在 channels.ts 里，而 e2e 测试
      *      都依赖它——改了 channels.ts 的占位值而没改这里，这条会红。
      * @limitation 它只保证"开发/测试环境能跑"，**不是**"生产可以没有密钥"：
      *      生产启用 mock 必须显式配置，由 config.ts 的跨字段规则拦（不是这里拦）。

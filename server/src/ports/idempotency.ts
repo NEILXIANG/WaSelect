@@ -98,7 +98,7 @@ export interface IdempotencyArgs {
   /**
    * 日志器：租约易主（`idempotency_lease_lost`）等异常必须落 error——
    * 它意味着"两个持有者同时认为自己是主人"，是并发事故的信号，不能静默。
-   * 可选只是因为本层拿不到装配期的 logger；生产调用方（skeleton/业务路由）必须传。
+   * 可选只是因为本层拿不到装配期的 logger；生产调用方（业务路由）必须传。
    */
   logger?: Logger;
 }

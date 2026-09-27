@@ -18,12 +18,12 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { createServer, connect, type Server as NetServer } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { loadConfig } from './config.js';
-import { bootstrap, shouldMountSkeleton, type Runtime } from './main.js';
-import { signToken } from './app/auth.js';
+import { bootstrap, type Runtime } from './main.js';
 import { PAY_CALLBACK_PREFIX, PAY_CHANNELS_PATH } from './app/pay-routes.js';
 import { recordPaymentIntent } from './app/payment-intent.js';
 import type { Db } from './adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../test/db/test-db.js';
+import { seedCreatedOrder } from '../../test/helpers/seed-order.js';
 import { emitRealSignal } from '../../test/signal-harness.js';
 
 /** 组装根测试专用端口（与 e2e 的 0 端口不冲突；db project 串行，彼此也不撞）。 */
@@ -104,44 +104,6 @@ describe('组装根 bootstrap（A1）', () => {
     } finally {
       rt.uninstallSignals();
       rt.uninstallProcessErrors();
-    }
-  });
-
-  /**
-   * 骨架挂载策略单独断言（不启服务）。
-   * @why 生产分支没法靠"启一个生产服务"来验证：生产的跨字段规则会拒绝指向 localhost
-   *      的 DATABASE_URL，而测试库只能是本机的。所以策略抽成 `shouldMountSkeleton()`
-   *      单独测，再配一条 staging 用例证明"非生产确实挂上了"。
-   */
-  it('骨架挂载策略：仅生产不挂', () => {
-    expect(shouldMountSkeleton('development')).toBe(true);
-    expect(shouldMountSkeleton('staging')).toBe(true);
-    expect(shouldMountSkeleton('production')).toBe(false);
-  });
-
-  it('非生产环境确实挂上了骨架（无 token → 40101，而不是 404 没这个路由）', async () => {
-    const { write } = sink();
-    let rt: Runtime | undefined;
-    try {
-      // MOCK_CALLBACK_SECRET：staging + mock 无显式密钥会被规则 3b 拒（公网环境不许回落公开占位值，
-      // 见 config.ts 规则 3b / AJ-87）——本条用例验"骨架挂载"与密钥无关，显式给一个测试密钥
-      rt = await bootstrap({
-        env: {
-          ...baseEnv(PORT_PROD),
-          NODE_ENV: 'staging',
-          MOCK_CALLBACK_SECRET: 'main-db-test-mock-secret',
-        },
-        logDestination: { write },
-        exit: () => undefined,
-      });
-      const res = await fetch(`http://127.0.0.1:${PORT_PROD}/api/v1/skeleton/orders/whatever`);
-      expect(res.status).toBe(401);
-      await expect(res.json()).resolves.toMatchObject({ code: 40101 });
-    } finally {
-      rt?.uninstallSignals();
-      rt?.uninstallProcessErrors();
-      await rt?.server.close().catch(() => undefined);
-      await rt?.db.end().catch(() => undefined);
     }
   });
 
@@ -312,14 +274,6 @@ describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
     await db`insert into users (id, openid) values (${LINK_USER}, 'o-link') on conflict (id) do nothing`;
   });
 
-  /** 与装配处的 JWT 配置同源（app/mount.ts: issuer 写死 'waselect'，secret 来自 env；I1-U1 起装配在 mount.ts）。 */
-  function linkToken(env: Record<string, string>): Promise<string> {
-    return signToken(
-      { sub: LINK_USER, role: 'user' },
-      { secret: env.JWT_SECRET as string, issuer: 'waselect' },
-    );
-  }
-
   /**
    * 与 test/e2e/harness.ts 的 signMockCallback 同一算法（HMAC-SHA256 hex）。
    * 不跨层 import：e2e 可以依赖 db 层 helper，反过来会把层次倒置。
@@ -335,18 +289,12 @@ describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
     await rt?.db.end().catch(() => undefined);
   }
 
-  async function createOrder(port: number, env: Record<string, string>): Promise<string> {
-    const res = await fetch(`http://127.0.0.1:${port}/api/v1/skeleton/orders`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${await linkToken(env)}`,
-        'content-type': 'application/json',
-        'idempotency-key': `link-${randomUUID()}`,
-      },
-      body: '{}',
-    });
-    expect(res.status).toBe(201);
-    return ((await res.json()) as { order_id: string }).order_id;
+  /**
+   * 插库造一张在途单（created）：本 describe 的焦点是**装配与通道下线**，
+   * 建单链路本身由 order-routes.db.test 覆盖（seed-order helper 的 @why）。
+   */
+  function seedOrder(orderId: string): Promise<string> {
+    return seedCreatedOrder(db, orderId, { userId: LINK_USER });
   }
 
   function channelsUrl(port: number): string {
@@ -369,7 +317,7 @@ describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
         items: [{ channel: 'mock', entryMode: 'in_app', icon: 'flask', label: '模拟支付' }],
       });
       // 在途支付：单是通道下线**之前**建的
-      orderId = await createOrder(PORT_LINK, envA);
+      orderId = await seedOrder('o-link-offline');
     } finally {
       await shutdown(rt);
     }
@@ -446,7 +394,7 @@ describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
     });
     try {
       await expect((await fetch(channelsUrl(PORT_LINK))).json()).resolves.toEqual({ items: [] });
-      const orderId = await createOrder(PORT_LINK, env);
+      const orderId = await seedOrder('o-link-nokey');
 
       // 即使用开发占位密钥（公开值）正确签名，没注册就是没注册——响亮 40001，
       // 不验签、不落 webhook_events（与"编造通道名"同形态，但语义是"配置没让它存在"）
@@ -491,8 +439,8 @@ describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
 /**
  * 生产装配路径（三审欠账 ⑧：此前 NODE_ENV=production 的 bootstrap 全仓零集成测试）。
  *
- * @why 生产与开发的装配差异全在 `isProd` 分支里：骨架不挂、mock 只认列出的、跨字段校验全开。
- *      这些分支各自有单测（config.unit / channels.unit / main.unit 的 shouldMountSkeleton），
+ * @why 生产与开发的装配差异全在 `isProd` 分支里：mock 只认列出的、跨字段校验全开。
+ *      这些分支各自有单测（config.unit / channels.unit），
  *      但"生产配置 → loadConfig → buildPaymentRegistry → 路由挂载 → 真库"这条链此前没人端到端跑过——
  *      两轮审计的 P1 共同形态正是"各件各自绿、拼起来有缝"。
  *
@@ -581,7 +529,7 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
     expect(loadConfig(withoutSecret).PAYMENT_CHANNELS).toEqual(['stripe']);
   });
 
-  it('生产装配：骨架 404、mock 通道不存在（回调 40001 零留痕）、stripe 入口在、启动日志标 production', async () => {
+  it('生产装配：mock 通道不存在（回调 40001 零留痕）、stripe 入口在、启动日志标 production', async () => {
     const host = lanIPv4();
     if (host === undefined) {
       // 不伪装成通过：没有非环回网卡就无法在不放宽任何守卫的前提下让生产配置连上测试库
@@ -604,15 +552,7 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
       expect((await fetch(`${base}/healthz`)).status).toBe(200);
       expect((await fetch(`${base}/readyz`)).status).toBe(200);
 
-      // ② 骨架路由在生产不存在（SEC2 闸门）：404，不是 40101
-      const skeleton = await fetch(`${base}/api/v1/skeleton/orders`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: '{}',
-      });
-      expect(skeleton.status).toBe(404);
-
-      // ③ 通道视图：只有 stripe（USD 场景），mock 不存在
+      // ② 通道视图：只有 stripe（USD 场景），mock 不存在
       const usd = (await (
         await fetch(`${base}${PAY_CHANNELS_PATH}?country=US&currency=USD&amount_jpy=10000`)
       ).json()) as { items: { channel: string }[] };
@@ -620,7 +560,7 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
       const jpy = (await (await fetch(channelsUrl(PORT_PROD_LINK))).json()) as { items: unknown[] };
       expect(jpy.items).toEqual([]);
 
-      // ④ mock 回调在生产是"没有这个通道"（40001），不验签、不落 webhook_events
+      // ③ mock 回调在生产是"没有这个通道"（40001），不验签、不落 webhook_events
       const body = JSON.stringify({
         event_id: 'evt-prod-mock',
         type: 'payment.succeeded',
@@ -645,7 +585,7 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
         await db.end();
       }
 
-      // ⑤ 启动日志：环境是 production，且密钥全部掩码
+      // ④ 启动日志：环境是 production，且密钥全部掩码
       const configLine = lines.find((l) => l.includes('config_loaded'));
       expect(configLine).toContain('"NODE_ENV":"production"');
       expect(configLine).toContain('"STRIPE_SECRET_KEY":"***"');

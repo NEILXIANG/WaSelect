@@ -4,7 +4,7 @@
  *
  * @why 幂等（Idempotency-Key 必带）在薄壳而不在核心：幂等键的生命周期是"一次 HTTP 意图"，
  *      核心 `createOrder` 只懂"在事务里建一张单"。runInTx 的占位+业务写+结果写回
- *      同事务模式已在骨架验证（skeleton.ts N2/N3），本路由是它的第一个业务消费方。
+ *      同事务模式（N2/N3）在骨架期已被验证，本路由是它的第一个业务消费方（骨架已随 U6c 退役）。
  *
  * @why 限流只挂 **POST /orders**（publicWrite，30 次/分钟/IP）而不是整个 /orders 前缀：
  *      同前缀下的 GET /orders、GET /orders/{id}（U5c）是高频只读，被写路径的配额
@@ -101,7 +101,7 @@ export function mountOrderRoutes(app: Express, deps: OrderRoutesDeps): void {
           const items = parseItems(req.body);
           const parsed = parseBody(req.body);
 
-          // 提交后才分发（重放时 handler 不执行、列表为空，天然不会重复发——skeleton 同模式）
+          // 提交后才分发（重放时 handler 不执行、列表为空，天然不会重复发）
           const pendingEvents: DomainEvent[] = [];
           const result = await deps.idempotency.runInTx(
             {

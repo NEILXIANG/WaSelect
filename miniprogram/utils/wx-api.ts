@@ -23,7 +23,7 @@
  *              而日志里什么都没有——那是最难查的一类问题（看起来像登录逻辑的 bug）。
  * @limitation 四：宿主在**每次调用时**取（`globalThis.wx`），不是 import 时取。
  *              这样本模块可以被 Node 侧单测 import：取不到 wx 只会在真正调用时才响亮失败。
- * @limitation 五：**没有 `wx.login` / `wx.getUserProfile` 等登录链**——登录业务在骨架期刻意留白
+ * @limitation 五：**没有 `wx.login` / `wx.getUserProfile` 等登录链**——登录页的宿主调用待 I2 接入
  *              （见 `app.js` 的 @limitation），等真做登录时再在这里登记，不预先加。
  *
  * @tradeoff 多一层转发换来可注入 + 可类型化 + 一处定义错误形态，

@@ -3,10 +3,10 @@
  *
  * @why 契约套件验的是"它像个合格的 Provider"，这里验的是"它自己的那些判断对不对"：
  *      缺密钥要炸、回调缺单号要炸、事件 id 缺失要兜底——
- *      这三条都是**只在骨架期就会出现**的问题，而且都不会自己报错：
+ *      这三条都是**只在 mock 这种"自造协议"的通道上才会出现**的问题，而且都不会自己报错：
  *      "回调里没有 order_id"的表现是订单永远等不到支付，而不是任何一条红。
  *
- * @limitation Mock 是骨架期的假通道，**不要**在这里测业务规则（那属于 domain）。
+ * @limitation Mock 是审核期/测试的假通道，**不要**在这里测业务规则（那属于 domain）。
  */
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';

@@ -4,7 +4,7 @@
  * ⚠️ **它等价于无密码登录**：不校验 code，openid = `${prefix}${code}`——
  *    任何人用任意 code 字符串都能登进对应账号。它只能活在 development/test：
  *    生产与 staging 由 loadConfig 交叉校验拒启（config.ts 规则 1c），
- *    装配层另有一层环境判定（mount.ts）——两道，与 skeleton 的 SEC2 同精神。
+ *    装配层另有一层环境判定（mount.ts）——两道防线：配置层拒启 + 装配层不注册。
  *
  * @why 要这个替身而不是"等 AppID 下来再开发"：登录是小程序链路的第一个接口，
  *      商品/地址/建单全部依赖它签发的 token；等境外主体 AppID（公司登记后数周）

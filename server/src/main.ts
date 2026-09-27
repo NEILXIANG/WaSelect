@@ -13,8 +13,9 @@
  *      而栈追踪正是 ADR-29 流 A 排障的主要依据——不划算。
  *   2. **`bootstrap()` 导出、`main()` 只在直接运行时执行**。这样测试能用同一条装配路径
  *      起一个真实服务，不复制一遍依赖拼接。
- *   3. **骨架只在非生产挂载**。骨架能绕过验签改订单状态（SEC2 闸门），
- *      生产环境连挂都不挂——比"挂了再被闸门拦下启动失败"更早一步，也更不容易误判为故障。
+ *   3. **骨架端点已退役**（I1-U6c）：业务路由全部落地后，`/api/v1/skeleton/*`
+ *      连同"生产不挂骨架"的闸门（SEC2）一起删除——脚手架的使命是让业务路由
+ *      有东西可抄，而不是永远留在装配里多守一道门。
  *
  * @limitation 一：摘流量只做**本地标记**（`/readyz` 转 503）。平台是否真的把流量摘走取决于它自己的
  *      健康检查周期——Render 的 drain 窗口内仍可能有新请求进来。彻底解决要靠平台侧的
@@ -44,12 +45,6 @@ import {
 } from './app/scheduler-start.js';
 import { installProcessErrorHandlers } from './process-errors.js';
 import { mountAllRoutes } from './app/mount.js';
-
-/**
- * ⚠️ 路由挂载已收敛到 `app/mount.ts`（I1-U1）：生产与路由快照测试共用同一份挂载清单。
- *    本 re-export 仅为保持既有 import 路径（main.db.test.ts 等）不变；策略本体与注释见 mount.ts。
- */
-export { shouldMountSkeleton } from './app/mount.js';
 
 export interface BootstrapOptions {
   /** 环境变量来源（测试注入用，生产走 process.env）。 */
@@ -81,7 +76,7 @@ export interface Runtime {
  * 装配并**启动监听**。测试与生产共用这一条路径。
  *
  * @throws {ConfigError} 配置不合法（启动期硬失败，见 config.ts 抬头）
- * @throws {Error} Postgres 版本不足，或生产环境误挂载骨架
+ * @throws {Error} Postgres 版本不足
  */
 export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
   const config = loadConfig(opts.env ?? process.env);

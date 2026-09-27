@@ -3,9 +3,10 @@
  *
  * @why 接线用例（最后一组）是本文件存在的理由：限流器"组件做对了但没挂到路由上"
  *      不会让任何单测红（§2 第 35 条"能力存在 ≠ 能力被用上"）——只有真发第 31 个请求、
- *      看到 40101 变成 42901，才能证明挂载成立。骨架写路径是当前唯一已挂载的消费方
- *      （U5/U6 业务路由落地时同步迁移），无鉴权请求在 requireRole 处 40101，
- *      恰好提供了"限流前置计数、与业务结果无关"的现成探针。
+ *      看到 40101 变成 42901，才能证明挂载成立。探针用 `POST /orders/quote`：
+ *      它的限流挂在 mount.ts 的 `app.use` 层（**先于**路由处理器），而无鉴权请求
+ *      在 requireRole 处 40101——恰好提供"限流前置计数、与业务结果无关"的现成探针。
+ *      （骨架退役前探针用的是骨架写路径，同一手法，U6c 迁到业务写路径。）
  *
  * @see app/rate-limit.ts（被测）；app/mount.ts（挂载点）；ports/rate-limit.ts；
  *      test/helpers/mount-ctx.ts（stub 装配上下文）
@@ -106,7 +107,7 @@ describe('rateLimiter 中间件（桩）', () => {
 });
 
 describe('限流接线（真请求，防"组件对了但没挂上"）', () => {
-  it('骨架写路径：前 30 次 40101（鉴权拦下），第 31 次 42901（限流拦下）', async () => {
+  it('业务写路径（POST /orders/quote）：前 30 次 40101（鉴权拦下），第 31 次 42901（限流拦下）', async () => {
     const sink = new MemorySink();
     const logger = createLogger({ env: 'test', destination: sink });
     const app = createHttpApp({
@@ -115,7 +116,7 @@ describe('限流接线（真请求，防"组件对了但没挂上"）', () => {
     });
     const server = await listen(app);
     try {
-      const url = `http://127.0.0.1:${server.port}/api/v1/skeleton/orders`;
+      const url = `http://127.0.0.1:${server.port}/api/v1/orders/quote`;
       const post = () =>
         fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
       // 默认 RATE_LIMIT_QUOTE_PER_MIN=30：前 30 次穿过限流，被 requireRole 拦成 40101

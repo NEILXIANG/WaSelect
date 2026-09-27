@@ -69,7 +69,7 @@ export class ApiError extends Error {
  * @param {Function} [deps.getToken] 取当前 token；无 token 返回空串
  * @param {Function} [deps.setToken] 写入新 token；**只在重登成功后被调用**
  * @param {Function} [deps.relogin] 静默重登：`() => Promise<string>` 返回新 token。
- *                   不传 → 收到 40101 时**不重放**（原样抛出），与骨架期"没有登录业务"一致
+ *                   不传 → 收到 40101 时**不重放**（原样抛出）：没有重登手段时重放注定还是 40101
  * @param {Function} [deps.log] 埋点出口，收到 `{ event, ...fields }`
  */
 export function createRequester(deps = {}) {

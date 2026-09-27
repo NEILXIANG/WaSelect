@@ -46,7 +46,7 @@ export interface CallbackPipelineDeps {
   logger: Logger;
   /**
    * 回调早到宽限期（毫秒）：订单不存在且距**首次**到达不超过它 → 503 让机构重发。
-   * @see skeleton.ts 的 `callbackOrderGraceMs`（同一口径，本文件不发明新默认值）
+   * @see config.ts 的 `CALLBACK_ORDER_GRACE_MS`（默认值的唯一出处，本文件不发明新默认值）
    */
   graceMs: number;
   /**

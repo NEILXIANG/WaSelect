@@ -565,8 +565,8 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
    * 三审 P2-2：handler **内部**等锁超时（55P03）不得被当成"占位冲突"再跑一轮 handler。
    * @why 旧实现把任何 55P03 都视为占位冲突 → 循环重跑 handler 直到 waitMs 耗尽（pollMs 50ms
    *      一轮，2s 内最多 ~40 次）。事务回滚了 DB 副作用，但 handler 闭包里的内存副作用
-   *      （已 push 的领域事件、已打的"创建成功"日志、已消耗的单号）不会回滚——skeleton 正是
-   *      "executor 外收集事件再 publishAll"的形态，I1 照抄即发幽灵事件。
+   *      （已 push 的领域事件、已打的"创建成功"日志、已消耗的单号）不会回滚——
+   *      "executor 外收集事件再 publishAll"的形态照抄即发幽灵事件。
    *      handler 等锁超时是它自己的独立信号，应原样抛出（→ 50000 + error 日志），且只跑一次。
    */
   it('handler 内部 55P03 → 原样抛出且 handler 只执行一次（不当占位冲突重跑）', async () => {

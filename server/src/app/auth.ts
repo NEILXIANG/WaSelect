@@ -177,7 +177,7 @@ export function bearerOf(req: Request): string | undefined {
  *
  * @param role 期望角色；`user` 路由用 'user'，管理端路由一律 'admin'
  * @param cfg 鉴权配置
- * @param identity 身份状态查询（D25）。**不传则不查库**——保留给"还没接库"的骨架期与单元测试；
+ * @param identity 身份状态查询（D25）。**不传则不查库**——保留给单元测试（生产装配一律传，见 mount.ts）；
  *                 生产装配必须传（main.ts），否则改密/封禁无法即时生效。
  */
 export function requireRole(

@@ -196,6 +196,14 @@ describe('POST /orders（建单全链路）', () => {
       expect(replay.json['order_id']).toBe(first.json['order_id']);
       const knife = await db`select stock from products where id = 'p-knife'`;
       expect(Number(knife[0]?.['stock'])).toBe(4); // 只扣一次
+      // 重放时 handler 不执行 → 没有事件可发：order.created 仍只 1 条
+      // （骨架 e2e 时代就有的一条；U6c 骨架退役时迁来——重放若重复发事件，
+      //  下游订阅者（对账/通知）会把一单算成两单）
+      const evts = await db`
+        select count(*)::int as n from order_events
+        where order_id = ${String(first.json['order_id'])} and status = 'created'
+      `;
+      expect(Number(evts[0]?.['n'])).toBe(1);
 
       const conflict = await create(
         srv.url,

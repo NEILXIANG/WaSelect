@@ -1,20 +1,20 @@
 /**
- * 职责：L3 端到端测试的公共装配（F6c / F11）——起一个"什么都真"的骨架服务。
+ * 职责：L3 端到端测试的公共装配（F6c / F11）——起一个"什么都真"的服务。
  *
  * @why 每个 e2e 文件都自己拼一遍 logger/app/db，就会出现"这个文件少配了 rawBodyPaths"，
  *      而它偏偏还能通过——因为那个文件根本没测回调。装配只有一处，少配的代价立刻在所有文件显现。
  *
  * 真实的东西：真端口、真库、真事务、真 JWT、真 HMAC 验签、真 pino 序列化。
- * 假的只有支付机构本身（骨架期应当如此，F11 换成 Stripe 真实验签）。
+ * 假的只有支付机构本身（mock 通道 + stripe 出站替身）。
  *
- * @why 装配处**同时**挂骨架与支付路由：模拟回调现在是"注册表里的 `mock` 通道"，
- *      走的就是与真实通道完全相同的那条统一分发路径（`/pay/callback/:channel`）。
- *      这样端到端测试覆盖的不是"骨架自己的那条路"，而是**生产会走的那条路**——
- *      这是把模拟回调迁出骨架换来的最大收益。
+ * @why 装配处挂的是**支付路由**（统一分发 `/pay/callback/:channel`）：模拟回调走的就是
+ *      与真实通道完全相同的那条路——端到端测试覆盖的是**生产会走的那条路**。
+ *      （U6c 之前这里还挂骨架端点做造单工具；骨架退役后造单改插库/业务端点，
+ *      本装配只剩"生产形态"的部分。）
  *
  * @limitation `withRawBody` 默认 **true**。回调验签依赖未经解析的原始字节，
  *              "配错"时的症状是验签永远失败，排查会误导向密钥/机构——
- *              所以 `skeleton.e2e.test.ts` 里有一条专门的断链用例把它钉住。
+ *              所以 `pay-callback-pipeline.e2e.test.ts` 里有一条专门的断链用例把它钉住。
  * @limitation 二：**注册表是手工装配的**（`mockRegistry`），刻意绕过生产装配函数
  *              `buildPaymentRegistry`（换来轻量与可控时钟）。这意味着"配置 → 装配"
  *              这一段的改动在本层**测不到**——该接缝由 `server/src/main.db.test.ts`
@@ -28,10 +28,8 @@ import { markOrderPaid } from '../../server/src/app/mark-paid.js';
 import type { Db } from '../../server/src/adapters/db.js';
 import { createHttpApp, listen, type StartedServer } from '../../server/src/http.js';
 import { createLogger } from '../../server/src/logger.js';
-import { mountSkeleton } from '../../server/src/skeleton.js';
 import { mountPayRoutes, PAY_CALLBACK_PREFIX } from '../../server/src/app/pay-routes.js';
 import { createWebhookStore } from '../../server/src/adapters/webhooks.js';
-import { createIdempotencyExecutor } from '../../server/src/adapters/idempotency.js';
 import { createEventBus } from '../../server/src/adapters/event-bus.js';
 import type { EventBus } from '../../server/src/ports/events.js';
 import { createPaymentRegistry } from '../../server/src/adapters/payment/registry.js';
@@ -75,7 +73,7 @@ export const E2E_MOCK_CHANNEL = 'mock';
 /** stripe 通道的 endpoint 密钥（e2e 装配用；形状仿 `whsec_...`，值本身是测试假数据）。 */
 export const E2E_STRIPE_WHSEC = 'whsec_e2e_test_secret';
 
-export interface SkeletonServer {
+export interface E2EServer {
   server: StartedServer;
   /** 形如 `http://127.0.0.1:<port>` */
   base: string;
@@ -142,7 +140,7 @@ function mockRegistry(
   return registry;
 }
 
-export async function startSkeleton(
+export async function startApp(
   db: Db,
   opts: {
     withRawBody?: boolean;
@@ -160,7 +158,7 @@ export async function startSkeleton(
      */
     subscribe?: (events: EventBus) => void;
   } = {},
-): Promise<SkeletonServer> {
+): Promise<E2EServer> {
   const sink = new MemorySink();
   const logger = createLogger({ env: 'development', destination: sink });
   const now = opts.now ?? E2E_NOW;
@@ -182,33 +180,15 @@ export async function startSkeleton(
         logger,
         graceMs: opts.graceMs ?? 900_000,
         // 与生产同一条落账路径（含通道/金额核对，三审 S1② / U1）：
-        //    不在这里放宽成 `simulated`——放宽就等于让 e2e 走一条生产上不存在的路，
-        //    而"核对"这件事恰恰只有走真的那条才测得出来
+        //    落账必须带"钱是怎么来的"——少传就编译不过，想在 e2e 里跳过核对
+        //    没有这条路（mark-paid.ts PaidSettlement 的 @why）
         apply: async (e, channel) =>
           markOrderPaid(db, events, fixedClock(now), e.orderId, {
-            kind: 'provider',
             channel,
             providerRef: e.providerRef,
             amountMinor: e.amountMinor,
             currency: e.currency,
           }),
-      });
-
-      // env 显式给 development：骨架在 production 下会拒绝挂载（SEC2 闸门），装配处必须回答一次
-      mountSkeleton(a, {
-        db,
-        // 幂等执行器：与生产同一条装配路径（实现在装配处注入，业务侧只见端口）
-        idempotency: createIdempotencyExecutor(db),
-        events,
-        // 与生产同一条装配路径：生产注入 systemClock，这里注入固定时钟。
-        // 业务代码不知道自己拿到的是哪一个——这正是"时间可测"的落点。
-        clock: fixedClock(now),
-        // 默认用真实 IdGen（e2e 多数用例要建多张单，固定 id 会撞唯一约束）；
-        // 需要"断言 id 就是某个值"的用例显式传 `idGen`（见 stubIdGen 的 @limitation）
-        idGen,
-        logger,
-        auth: E2E_AUTH,
-        env: 'development',
       });
     },
   });
@@ -216,7 +196,7 @@ export async function startSkeleton(
   return { server, base: `http://127.0.0.1:${server.port}`, sink };
 }
 
-/** 签发一个骨架用的用户 token。 */
+/** 签发 e2e 用户 token（直接签，不走登录端点——登录链路有自己的测试）。 */
 export function userToken(sub: string = E2E_USER): Promise<string> {
   return signToken({ sub, role: 'user' }, E2E_AUTH);
 }

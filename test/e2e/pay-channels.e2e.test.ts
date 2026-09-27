@@ -19,18 +19,18 @@ import type { Db } from '../../server/src/adapters/db.js';
 import { PAY_CALLBACK_PREFIX, PAY_CHANNELS_PATH } from '../../server/src/app/pay-routes.js';
 import { recordPaymentIntent } from '../../server/src/app/payment-intent.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
+import { SEED_ORDER_CHARGE as CHARGE, seedCreatedOrder } from '../helpers/seed-order.js';
 import {
   E2E_CALLBACK_SECRET as CALLBACK_SECRET,
   E2E_TRACE as TRACE,
   E2E_USER as USER,
   signMockCallback,
-  startSkeleton,
-  userToken,
-  type SkeletonServer,
+  startApp,
+  type E2EServer,
 } from './harness.js';
 
 let db: Db;
-let current: SkeletonServer;
+let current: E2EServer;
 let base = '';
 
 beforeAll(async () => {
@@ -58,7 +58,7 @@ beforeEach(async () => {
  */
 async function start(opts: { mockEnabled: boolean } = { mockEnabled: true }): Promise<void> {
   if (current !== undefined) await current.server.close();
-  const s = await startSkeleton(db, { mockEnabled: opts.mockEnabled });
+  const s = await startApp(db, { mockEnabled: opts.mockEnabled });
   current = s;
   base = s.base;
 }
@@ -67,24 +67,13 @@ function channels(q: string): Promise<Response> {
   return fetch(`${base}${PAY_CHANNELS_PATH}?${q}`);
 }
 
-async function createOrder(idempotencyKey: string): Promise<string> {
-  const token = await userToken();
-  const res = await fetch(`${base}/api/v1/skeleton/orders`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-      'idempotency-key': idempotencyKey,
-      'x-trace-id': TRACE,
-    },
-    body: '{}',
-  });
-  expect(res.status).toBe(201);
-  return ((await res.json()) as { order_id: string }).order_id;
+/**
+ * 插库造一张在途单（created）：本文件的焦点是**通道上下线与回调**，
+ * 建单链路本身由 order-routes.db.test 覆盖（helper 的 @why）。
+ */
+function seedOrder(orderId: string): Promise<string> {
+  return seedCreatedOrder(db, orderId, { userId: USER });
 }
-
-/** 骨架单一律 1,000 円（与 skeleton.e2e 同一口径）；回调与 payments 行必须都用它（三审 U1）。 */
-const CHARGE = { currency: 'JPY', amountMinor: 1000 };
 
 /**
  * 登记"发起过支付"（走真函数）：三审 S1② 之后，没有 `payments` 行的订单
@@ -167,7 +156,7 @@ describe('🔒 下线语义：入口消失，但在途回调仍要落账', () =>
   it('同一条已下线通道的回调**照样置为 paid**（禁用只阻止新单）', async () => {
     await start({ mockEnabled: false });
     // 前置：这张单是在通道下线**之前**建的（在途支付），所以它登记过支付期望
-    const orderId = await createOrder('key-disabled-channel');
+    const orderId = await seedOrder('o-disabled-channel');
     await seedPayment(orderId);
 
     const res = await payCallback(orderId, 'evt-after-disabled');
@@ -183,7 +172,7 @@ describe('🔒 下线语义：入口消失，但在途回调仍要落账', () =>
 
   it('未注册的通道（配置里没有）→ 40001，订单状态不变（验不了签必须响亮失败）', async () => {
     await start();
-    const orderId = await createOrder('key-ghost');
+    const orderId = await seedOrder('o-ghost');
     const res = await fetch(`${base}${PAY_CALLBACK_PREFIX}/ghost`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-mock-signature': 'whatever' },
@@ -199,7 +188,7 @@ describe('🔒 下线语义：入口消失，但在途回调仍要落账', () =>
 describe('统一分发：非 succeeded 的结果不落账', () => {
   it('checkout 过期（payment.expired）→ 2xx 收下但订单**不**变 paid（F12 状态机接手前只登记）', async () => {
     await start();
-    const orderId = await createOrder('key-expired');
+    const orderId = await seedOrder('o-expired');
     const body = JSON.stringify({
       event_id: 'evt-expired',
       type: 'payment.expired',

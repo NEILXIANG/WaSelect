@@ -69,7 +69,7 @@ describe('F10 时间与随机源纯度（业务侧不得直连全局）', () => 
   it('真实业务路径受约束（含**将来**才会出现的目录，fail-closed）', async () => {
     // `routes/` 现在还不存在：这条断言的意义是"将来新建业务目录时默认受约束"
     for (const rel of [
-      'server/src/skeleton.ts',
+      'server/src/main.ts',
       'server/src/domain/probe.ts',
       'server/src/routes/orders.ts',
     ]) {
