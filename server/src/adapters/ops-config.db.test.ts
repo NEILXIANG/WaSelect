@@ -1,0 +1,185 @@
+/**
+ * 职责：`adapters/ops-config.ts` 的真库用例（I2 U-C2）——汇率写入与运费**整表替换**。
+ *
+ * @why 整表替换必须**真库**测且必须验**事务回滚**：`delete` + 批量 `insert` 里途中有一步失败，
+ *      留下的不是"没保存"，而是**半张表甚至空表**——空表的后果是**全站无法报价**（50004）。
+ *      这是本文件唯一一条"失败路径"用例，也是最有价值的一条。
+ *
+ * @why 替换后要用 `catalog.findShippingPriceJpy`（D-46 唯一取档实现）**交叉验证**：
+ *      本仓储写进表的数据最终只被那一处消费。自己写一条 SQL 去数行数，
+ *      是"自己造数据自己断言"（§2 第 21 条）——验证不了"取档方向还正确吗"。
+ *
+ * @limitation 汇率插入的**唯一约束**（UNIQUE(quote, effective_from)）只测"能插"，
+ *              冲突路径由路由层转错误码，在那边验。
+ */
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { closeDb, type Db } from './db.js';
+import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
+import { createOpsConfigRepo } from './ops-config.js';
+import { createCatalogRepo } from './catalog.js';
+
+let db: Db;
+
+beforeAll(async () => {
+  await ensureTestDb();
+  db = testDb();
+}, 30_000);
+
+afterAll(async () => {
+  await closeDb(db);
+});
+
+beforeEach(async () => {
+  await resetTestDb(db);
+});
+
+const T0 = Date.parse('2026-09-27T00:00:00Z');
+
+describe('listFxRates / insertFxRate', () => {
+  it('空表 → []（不报错，前端按"今天没配汇率"展示）', async () => {
+    expect(await createOpsConfigRepo(db).listFxRates()).toEqual([]);
+  });
+
+  it('插入后可读回，rate / raw_rate / buffer 与写入值一致', async () => {
+    const repo = createOpsConfigRepo(db);
+    const row = await repo.insertFxRate({
+      quote: 'USD',
+      rate: 0.006695,
+      rawRate: 0.0065,
+      buffer: 0.03,
+      effectiveFromMs: T0,
+      createdBy: 'admin:u-1',
+    });
+    expect(row.quote).toBe('USD');
+    expect(row.rate).toBe(0.006695);
+    expect(row.raw_rate).toBe(0.0065);
+    expect(row.buffer).toBe(0.03);
+    expect(row.effective_from.getTime()).toBe(T0);
+
+    const all = await repo.listFxRates();
+    expect(all).toHaveLength(1);
+    expect(all[0]?.rate).toBe(0.006695);
+  });
+
+  it('排序：quote 升序，同币种内 effective_from **降序**（最新一行在最上面）', async () => {
+    const repo = createOpsConfigRepo(db);
+    for (const [quote, ms] of [
+      ['USD', T0],
+      ['CNY', T0],
+      ['USD', T0 + 86_400_000],
+    ] as const) {
+      await repo.insertFxRate({
+        quote,
+        rate: 0.01,
+        rawRate: 0.01,
+        buffer: 0,
+        effectiveFromMs: ms,
+        createdBy: 'admin:u-1',
+      });
+    }
+    const all = await repo.listFxRates();
+    expect(all.map((r) => r.quote)).toEqual(['CNY', 'USD', 'USD']);
+    expect(all[1]?.effective_from.getTime()).toBe(T0 + 86_400_000);
+    expect(all[2]?.effective_from.getTime()).toBe(T0);
+  });
+});
+
+describe('findLatestFxRate', () => {
+  it('取该币种**已生效**的最新一行；未来行不算', async () => {
+    const repo = createOpsConfigRepo(db);
+    for (const ms of [T0 - 86_400_000, T0, T0 + 86_400_000]) {
+      await repo.insertFxRate({
+        quote: 'USD',
+        rate: 0.01,
+        rawRate: 0.01,
+        buffer: 0,
+        effectiveFromMs: ms,
+        createdBy: 'admin:u-1',
+      });
+    }
+    const now = new Date(T0 + 1000);
+    expect((await repo.findLatestFxRate('USD', now))?.effective_from.getTime()).toBe(T0);
+    // 未来行在生效那一刻之前不该被选中（否则"提前录入明日汇率"会立刻改写今天的展示价）
+    expect(
+      (await repo.findLatestFxRate('USD', new Date(T0 - 86_400_000)))?.effective_from.getTime(),
+    ).toBe(T0 - 86_400_000);
+  });
+
+  it('没有该币种 → null（不抛，路由层据此判断"首次维护"）', async () => {
+    expect(await createOpsConfigRepo(db).findLatestFxRate('CNY', new Date(T0))).toBeNull();
+  });
+});
+
+describe('listShippingRates', () => {
+  it('按 carrier 升序、同承运商内 max_weight_g 升序（分档表语义就是"从轻到重"）', async () => {
+    const repo = createOpsConfigRepo(db);
+    await repo.replaceShippingRates([
+      { carrier: 'placeholder', maxWeightG: 2000, priceJpy: 4950, active: true },
+      { carrier: 'placeholder', maxWeightG: 500, priceJpy: 2100, active: true },
+    ]);
+    const rows = await repo.listShippingRates();
+    expect(rows.map((r) => r.max_weight_g)).toEqual([500, 2000]);
+    expect(rows[0]?.price_jpy).toBe(2100);
+  });
+});
+
+describe('replaceShippingRates', () => {
+  it('整表替换：旧档全没、新档全在，active 原样落库', async () => {
+    const repo = createOpsConfigRepo(db);
+    await repo.replaceShippingRates([
+      { carrier: 'old', maxWeightG: 1000, priceJpy: 3000, active: true },
+    ]);
+    await repo.replaceShippingRates([
+      { carrier: 'placeholder', maxWeightG: 500, priceJpy: 2100, active: true },
+      { carrier: 'placeholder', maxWeightG: 2000, priceJpy: 4950, active: false },
+    ]);
+    const rows = await repo.listShippingRates();
+    expect(rows).toEqual([
+      { carrier: 'placeholder', max_weight_g: 500, price_jpy: 2100, active: true },
+      { carrier: 'placeholder', max_weight_g: 2000, price_jpy: 4950, active: false },
+    ]);
+  });
+
+  it('🔴 中途失败必须回滚：旧表一张不少（否则留下空表 = 全站无法报价）', async () => {
+    const repo = createOpsConfigRepo(db);
+    const before = [
+      { carrier: 'placeholder', maxWeightG: 500, priceJpy: 2100, active: true },
+      { carrier: 'placeholder', maxWeightG: 2000, priceJpy: 4950, active: true },
+    ];
+    await repo.replaceShippingRates(before);
+
+    // 构造一条能骗过 domain 校验、但会被 DB 拒的输入：max_weight_g 溢出 INT4
+    await expect(
+      repo.replaceShippingRates([
+        { carrier: 'placeholder', maxWeightG: 500, priceJpy: 2100, active: true },
+        { carrier: 'placeholder', maxWeightG: 3_000_000_000, priceJpy: 4950, active: true },
+      ]),
+    ).rejects.toThrow();
+
+    const after = await repo.listShippingRates();
+    expect(after).toHaveLength(2);
+    expect(after.map((r) => r.max_weight_g)).toEqual([500, 2000]);
+  });
+
+  it('替换后 D-46 取档仍然正确（交叉验证，不自己写第二份取档 SQL）', async () => {
+    const repo = createOpsConfigRepo(db);
+    await repo.replaceShippingRates([
+      { carrier: 'placeholder', maxWeightG: 1000, priceJpy: 4050, active: true },
+      { carrier: 'placeholder', maxWeightG: 2000, priceJpy: 4950, active: true },
+    ]);
+    const catalog = createCatalogRepo(db);
+    expect(await catalog.resolveSingleActiveCarrier()).toBe('placeholder');
+    // 红线向量：1850g 必须取 2000 档（4950）。返回 4050 = 向下取档 = D-46 事故
+    expect(await catalog.findShippingPriceJpy('placeholder', 1850)).toBe(4950);
+    expect(await catalog.findShippingPriceJpy('placeholder', 1000)).toBe(4050);
+    expect(await catalog.findShippingPriceJpy('placeholder', 2500)).toBeNull();
+  });
+
+  it('停用全部档位后取档为 null（前端已挡，这里确认语义如此）', async () => {
+    const repo = createOpsConfigRepo(db);
+    await repo.replaceShippingRates([
+      { carrier: 'placeholder', maxWeightG: 2000, priceJpy: 4950, active: false },
+    ]);
+    expect(await createCatalogRepo(db).findShippingPriceJpy('placeholder', 100)).toBeNull();
+  });
+});
