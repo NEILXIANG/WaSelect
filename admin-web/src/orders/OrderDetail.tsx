@@ -20,13 +20,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { getOrder, refundOrder, shipOrder, type AdminApi, type AdminOrderLike } from './api.js';
+import { formatJst, moneyText } from '../format.js';
 import { OrderAddressForm } from './OrderAddressForm.js';
 import {
   addressSummary,
   emptyRefundForm,
   emptyShipForm,
-  formatOrderTime,
-  moneyText,
   paymentSummary,
   refundErrors,
   refundGate,
@@ -147,7 +146,7 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
             </div>
             <div className="field">
               <span className="label">下单时间（JST）</span>
-              <span>{formatOrderTime(order.created_at)}</span>
+              <span>{formatJst(order.created_at)}</span>
             </div>
           </div>
 
@@ -187,7 +186,7 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
               <span className="label">事件</span>
               {events.map((e, i) => (
                 <span className="muted" key={i}>
-                  {formatOrderTime(e.at)} {e.status ?? ''} {e.note ?? ''}
+                  {formatJst(e.at)} {e.status ?? ''} {e.note ?? ''}
                 </span>
               ))}
             </div>

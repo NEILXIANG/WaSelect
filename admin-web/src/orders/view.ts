@@ -28,6 +28,7 @@
  *      packages/shared/src/enums.ts（ORDER_STATUS 真源）；../../../docs/自主决策记录.md
  */
 import { ORDER_STATUS, type OrderStatus } from '@waselect/shared';
+import { formatJst, moneyText } from '../format.js';
 
 /** 管理端状态文案（@see @limitation 一：比买家侧更细，十态互不合并）。 */
 export const ORDER_STATUS_LABELS: Readonly<Record<OrderStatus, string>> = {
@@ -78,26 +79,6 @@ export interface OrderRow {
   actions: { ship: Gate; refund: Gate; address: Gate };
 }
 
-/** 千分位（不用 toLocaleString：它跟随浏览器语言区，同一笔钱两台机器显示不一样）。 */
-export function moneyText(jpy: unknown): string {
-  if (!Number.isInteger(jpy)) return '—';
-  return `${String(jpy).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} 円`;
-}
-
-/**
- * ISO 时间 → `YYYY-MM-DD HH:mm`（JST，@see @limitation 三）。
- * @tradeoff 这里用了 `Date.parse` 与 `Date` 构造器：F10 的"禁 `new Date()`"针对的是
- *           **业务判定**（到期、TTL、账期），展示层的时区换算没有第二条实现路径
- *           （除非引入日期库），收益不抵依赖。换算后仍走 `toISOString()` 取值，
- *           所以结果**不依赖运行机器的时区**——单测可以钉死。
- */
-export function formatOrderTime(iso: unknown): string {
-  if (typeof iso !== 'string' || iso === '') return '—';
-  const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return '—';
-  return new Date(ms + 9 * 60 * 60 * 1000).toISOString().slice(0, 16).replace('T', ' ');
-}
-
 /** 从任意形状里读状态（契约外的值返回 null，由调用方决定怎么显示）。 */
 function readStatus(value: unknown): OrderStatus | null {
   const s = (value as { status?: unknown } | null)?.status;
@@ -127,7 +108,7 @@ export function orderRows(items: unknown): OrderRow[] {
         status,
         statusText: status === null ? '未知状态' : ORDER_STATUS_LABELS[status],
         totalText: moneyText(o['total_jpy']),
-        createdText: formatOrderTime(o['created_at']),
+        createdText: formatJst(o['created_at']),
         recipientText: readString(
           (o['address'] as Record<string, unknown> | null) ?? {},
           'recipient',

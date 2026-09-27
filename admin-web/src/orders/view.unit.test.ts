@@ -19,8 +19,6 @@ import {
   paymentSummary,
   emptyRefundForm,
   emptyShipForm,
-  formatOrderTime,
-  moneyText,
   orderRows,
   refundErrors,
   refundGate,
@@ -47,34 +45,6 @@ const withStatus = (
   status: string,
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> => ({ ...ORDER, status, ...extra });
-
-describe('moneyText / formatOrderTime', () => {
-  it('千分位 + 円（不用 toLocaleString：它跟随浏览器语言区）', () => {
-    expect(moneyText(12800)).toBe('12,800 円');
-    expect(moneyText(1234567)).toBe('1,234,567 円');
-    expect(moneyText(0)).toBe('0 円');
-  });
-
-  it('⚠️ 非整数金额显示占位符而不是 "NaN 円"', () => {
-    expect(moneyText(null)).toBe('—');
-    expect(moneyText(12.5)).toBe('—');
-    expect(moneyText('12800')).toBe('—');
-  });
-
-  it('时间恒显 JST（UTC 04:05 → 13:05），不跟随机器时区', () => {
-    expect(formatOrderTime('2026-09-27T04:05:06Z')).toBe('2026-09-27 13:05');
-  });
-
-  it('⚠️ 跨日要整体进一天（UTC 23:30 → 次日 08:30），不是只加小时不管日期', () => {
-    expect(formatOrderTime('2026-09-27T23:30:00Z')).toBe('2026-09-28 08:30');
-  });
-
-  it('非法 / 空值显示占位符（表格里出现 "Invalid Date" 比空着更吓人）', () => {
-    expect(formatOrderTime('')).toBe('—');
-    expect(formatOrderTime('not-a-date')).toBe('—');
-    expect(formatOrderTime(undefined)).toBe('—');
-  });
-});
 
 describe('orderRows', () => {
   it('映射出列表要显示的每一列', () => {
