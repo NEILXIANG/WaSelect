@@ -47,6 +47,14 @@ App({
     lastTraceId: '',
     /** 唯一的购物车实例（本地状态 + 持久化，PRD §3.1 / D-52）；页面都经它读写。 */
     cart: null,
+    /**
+     * 地址列表页 → 结算页的**一次性**选中交接（空串 = 没有待消费的选择）。
+     * @why 小程序没有"带返回值返回"（无 Intent / onActivityResult），可选的三条路是
+     *      eventChannel（要求栈内通信、不可跨多次跳转）、storage（会留残留键）、globalData。
+     *      选 globalData，代价是**消费方读走后必须立刻清空**——否则下次进结算页会拿到过期选择。
+     * @see ../pages/address/index.js @limitation 二（写入侧）；../pages/checkout/index.js（消费侧）
+     */
+    pickedAddressId: '',
   },
 
   onLaunch() {

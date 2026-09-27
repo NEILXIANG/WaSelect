@@ -10,6 +10,14 @@
       "page": "pages/cart/index"
     },
     {
+      "action": "disallow",
+      "page": "pages/address/index"
+    },
+    {
+      "action": "disallow",
+      "page": "pages/address-edit/index"
+    },
+    {
       "action": "allow",
       "page": "*"
     }

@@ -1,0 +1,32 @@
+/**
+ * 地址编辑页样式。
+ *
+ * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
+ * 硬编码色值 / 非 0 尺寸字面量直接红）。
+ * ⚠️ `border` 宽度只能用 `--ws-border-width`：0 以外的尺寸字面量会被门禁拦。
+ */
+
+.field {
+  margin-bottom: var(--ws-space);
+}
+
+.input {
+  display: block;
+  margin-top: var(--ws-space-sm);
+  padding: var(--ws-space-sm);
+  border: var(--ws-border-width) solid var(--ws-color-muted);
+  border-radius: var(--ws-radius);
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font);
+}
+
+/* 默认地址开关：整行可点（用 view 不是 button——页面不允许原生可点 button） */
+.def {
+  padding: var(--ws-space-sm) 0;
+}
+
+.tip {
+  display: block;
+  margin-top: var(--ws-space);
+  text-align: center;
+}

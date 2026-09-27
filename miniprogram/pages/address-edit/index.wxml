@@ -1,0 +1,123 @@
+<!--
+  地址编辑（I2）：新增 / 编辑收货地址（美国格式，ASCII）。
+
+  ⚠️ 字段顺序与 `utils/address-form.js` 的 ADDRESS_FIELDS 一致；
+  `data-field` 落白名单外的字段会被 onInput 直接丢弃（防任意字段写进请求体）。
+
+  ⚠️ 校验失败显示**字段级**错误 + 顶部第一条，不弹 toast（页面内文案可测、不依赖宿主时序）。
+  服务端拒单也走同一条错误区：前端预检不是权威，只信预检会变成"说对但提交失败"。
+-->
+<view class="page">
+  <view class="card" wx:if="{{loading}}">
+    <text class="label">正在加载地址…</text>
+  </view>
+
+  <view class="card" wx:if="{{error}}">
+    <text class="error">{{error}}</text>
+  </view>
+
+  <view class="field">
+    <text class="label">收件人</text>
+    <input
+      class="input"
+      value="{{form.recipient}}"
+      data-field="recipient"
+      bindinput="onInput"
+      placeholder="Ken Tanaka"
+      placeholder-class="ph"
+    />
+    <text class="error" wx:if="{{errors.recipient}}">{{errors.recipient}}</text>
+  </view>
+
+  <view class="field">
+    <text class="label">电话</text>
+    <input
+      class="input"
+      value="{{form.phone}}"
+      data-field="phone"
+      bindinput="onInput"
+      placeholder="+14155550123"
+      placeholder-class="ph"
+    />
+    <text class="error" wx:if="{{errors.phone}}">{{errors.phone}}</text>
+  </view>
+
+  <view class="field">
+    <text class="label">地址第一行</text>
+    <input
+      class="input"
+      value="{{form.line1}}"
+      data-field="line1"
+      bindinput="onInput"
+      placeholder="1234 Market St"
+      placeholder-class="ph"
+    />
+    <text class="error" wx:if="{{errors.line1}}">{{errors.line1}}</text>
+  </view>
+
+  <view class="field">
+    <text class="label">地址第二行（可留空）</text>
+    <input
+      class="input"
+      value="{{form.line2}}"
+      data-field="line2"
+      bindinput="onInput"
+      placeholder="Apt 5B"
+      placeholder-class="ph"
+    />
+    <text class="error" wx:if="{{errors.line2}}">{{errors.line2}}</text>
+  </view>
+
+  <view class="field">
+    <text class="label">城市</text>
+    <input
+      class="input"
+      value="{{form.city}}"
+      data-field="city"
+      bindinput="onInput"
+      placeholder="San Francisco"
+      placeholder-class="ph"
+    />
+    <text class="error" wx:if="{{errors.city}}">{{errors.city}}</text>
+  </view>
+
+  <view class="field">
+    <text class="label">州（两位大写）</text>
+    <input
+      class="input"
+      value="{{form.state}}"
+      data-field="state"
+      bindinput="onInput"
+      placeholder="CA"
+      placeholder-class="ph"
+    />
+    <text class="error" wx:if="{{errors.state}}">{{errors.state}}</text>
+  </view>
+
+  <view class="field">
+    <text class="label">邮编</text>
+    <input
+      class="input"
+      value="{{form.postal_code}}"
+      data-field="postal_code"
+      bindinput="onInput"
+      placeholder="94102"
+      placeholder-class="ph"
+    />
+    <text class="error" wx:if="{{errors.postal_code}}">{{errors.postal_code}}</text>
+  </view>
+
+  <view class="field">
+    <view class="def" bindtap="onToggleDefault">
+      <text class="label">{{form.is_default ? '✓ 设为默认地址' : '设为默认地址'}}</text>
+    </view>
+  </view>
+
+  <ws-button
+    text="{{saving ? '保存中…' : '保存'}}"
+    type="primary"
+    disabled="{{saving}}"
+    bindtap="onSave"
+  />
+  <text class="label tip">收件信息请用英文/数字填写（国际面单不支持中文与全角）</text>
+</view>

@@ -1,0 +1,44 @@
+<!--
+  地址列表（I2）：我的地址 + 编辑/删除/设默认；`?pick=1` 时为结算页选地址。
+
+  ⚠️ 空态只在**确实没有地址**时显示——请求失败时显示"还没有地址"是在说假话
+  （用户会以为自己没存过，于是再存一遍，结果两条一样的地址）。
+  @see index.vm.js 的 emptyState
+
+  ⚠️ 删除走 showModal 二次确认（不可撤销），不在 wxml 里直接绑删除。
+-->
+<view class="page">
+  <view class="card" wx:if="{{loading}}">
+    <text class="label">正在加载地址…</text>
+  </view>
+
+  <view class="card" wx:if="{{error}}">
+    <text class="error">{{error}}</text>
+  </view>
+
+  <view class="card" wx:if="{{empty}}">
+    <text class="label">还没有收货地址</text>
+  </view>
+
+  <view class="card" wx:for="{{rows}}" wx:key="id">
+    <view class="addr-head">
+      <text class="name">{{item.recipient}}</text>
+      <text class="tag" wx:if="{{item.isDefault}}">{{item.defaultText}}</text>
+    </view>
+    <text class="line">{{item.phone}}</text>
+    <text class="line">{{item.line1}}</text>
+    <text class="line" wx:if="{{item.line2}}">{{item.line2}}</text>
+    <text class="line">{{item.region}}</text>
+
+    <view class="acts">
+      <view class="act" data-id="{{item.id}}" bindtap="onEdit">编辑</view>
+      <view class="act" data-id="{{item.id}}" bindtap="onDelete">删除</view>
+      <view class="act" wx:if="{{!item.isDefault}}" data-id="{{item.id}}" bindtap="onSetDefault">
+        设为默认
+      </view>
+      <view class="act" wx:if="{{pick}}" data-id="{{item.id}}" bindtap="onPick">用这个地址</view>
+    </view>
+  </view>
+
+  <ws-button text="新增地址" type="primary" bindtap="onAdd" />
+</view>
