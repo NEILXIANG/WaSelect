@@ -26,7 +26,15 @@ import { AppError } from '../errors.js';
 
 /** 迁移表（与技术文档 §1 的"可转到"列逐字一致）。 */
 export const ORDER_TRANSITIONS: Readonly<Record<OrderStatus, readonly OrderStatus[]>> = {
-  created: ['pending_payment', 'cancelled', 'expired'],
+  // ⚠️ `created → paid` 是**预留边**，不是日常路径（2026-09-27 与代码对齐时补进表）：
+  //    pay-intent 把"登记 payments 行"与"迁移 pending_payment"放在**同一事务**提交，
+  //    所以在当前实现下"payments 行可见 ⟺ 状态已是 pending_payment"，
+  //    `created` + 有 payments 行的组合**不可达**——早到回调实际是被 mark-paid 的
+  //    `no_payment_intent` 拒掉并转对账，允许这条边也救不了它（钱扣了、单没落账，人工处理）。
+  //    保留它只为"先提交行、后补 provider_ref"的两阶段形态（pay-intent 文件头 @tradeoff）：
+  //    那种形态下 created + payments 行会变成可达，届时状态机不需要再动。
+  //    **在那之前它是一条合法但走不到的边**，不要照着它去写"未发起支付也能付"的用例。
+  created: ['pending_payment', 'cancelled', 'expired', 'paid'],
   pending_payment: ['paid', 'expired', 'cancelled'],
   paid: ['shipped', 'refunding'],
   shipped: ['delivered', 'refunding'],

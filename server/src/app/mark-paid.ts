@@ -11,10 +11,14 @@
  *      而事件**必须在事务提交之后**分发——否则回滚了订阅者却已经跑过
  *      （@see app/unit-of-work.ts 的 @why）。
  *
- * @limitation 一：接受 `created → paid` 与 `pending_payment → paid` 两条迁移（I1-U2 起）。
- *              `created → paid` 不是骨架遗留：它是**早到回调**的业务路径——
- *              机构回调比"发起支付"的响应先到时，订单还没来得及转 pending_payment
- *              （宽限期补单场景，pay-callback-pipeline.e2e 有链路级用例）。
+ * @limitation 一：允许的迁移交给**状态机迁移表**裁决（domain/order.ts，2026-09-27 起），
+ *              本函数不再手写 `status !== 'created' && status !== 'pending_payment'`——
+ *              手写一份就是漂移源：表改了这里没改，就变成"状态机说能迁、落账偏不让"，
+ *              或者反过来，而两边都能自圆其说、谁也不报错。
+ *              ⚠️ 表里 `created → paid` 是**预留边、当前走不到**（原因见 domain/order.ts 该行注释）：
+ *                早到回调（回调比"发起支付"的响应先到）实际会被下方 `no_payment_intent` 拒掉——
+ *                payments 行与 pending_payment 在同一事务提交，回调到达时行还不可见。
+ *                **不是**"允许 created→paid 就能救"：那种情况只能转对账由人工处理。
  *              "迟到付款 → 自动全额退款"（D-33）**不在本函数**：迟到一律拒落账（见下），
  *              自动退款依赖真实通道退款能力，属售后阶段（I1 方案 §1.3 明示）。
  *              ⚠️ 换的时候**不要**在调用方加 if：调用方只见 `apply` 这一个函数签名，
@@ -50,6 +54,7 @@ import type { Db } from '../adapters/db.js';
 import { AppError } from '../errors.js';
 import type { Clock } from '../ports/clock.js';
 import type { EventBus } from '../ports/events.js';
+import { asOrderStatus, canTransition } from '../domain/order.js';
 import { withUnitOfWork } from './unit-of-work.js';
 
 /**
@@ -174,8 +179,11 @@ export async function markOrderPaid(
     const row = rows[0];
     const current = row?.status;
     if (current === undefined) throw new AppError(40400, { order_id: orderId });
-    if (current !== 'created' && current !== 'pending_payment') {
-      throw new AppError(40902, { from: current, to: 'paid' });
+    // 迁移合法性问状态机（@limitation 一）。`asOrderStatus` 对枚举外的脏状态抛 50000：
+    //    库里的状态超出枚举 = 数据已被写坏，不能当成"不可迁移"糊过去。
+    const from = asOrderStatus(current);
+    if (!canTransition(from, 'paid')) {
+      throw new AppError(40902, { from, to: 'paid', where: 'mark-paid' });
     }
     // ⚠️ 迟到付款守卫（@limitation 一b）：到点即不可付，边界方向与关单 job 一致（含等号）。
     //    判定用注入时钟而不是 DB now()：与关单 job 的 startedAt 同源（应用时钟），
@@ -183,12 +191,12 @@ export async function markOrderPaid(
     const expiresAt = row?.expires_at as Date | undefined;
     if (expiresAt !== undefined && clock.now() >= expiresAt) {
       throw new AppError(40902, {
-        from: current,
+        from,
         reason: 'late_payment',
         ctx: { expires_at: expiresAt.toISOString() },
       });
     }
-    const matched = await assertSettlementMatches(tx, orderId, settlement, current);
+    const matched = await assertSettlementMatches(tx, orderId, settlement, from);
     // 三审（业务一致性 C）：paid_at / 事件 at / order_events.at 三者同源——都取注入时钟。
     //    曾经 paid_at 用 SQL now()，事件用 clock.now()：应用与 DB 不同实例，两者可差数秒，
     //    "什么时候付的"在订单行与事件里各说各话（updated_at 仍用 now()：它是行的技术时间戳，非业务事实）
