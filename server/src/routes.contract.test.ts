@@ -70,7 +70,6 @@ function ni(method: string, path: string, reason: string): NotImplementedRoute {
 }
 const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [
   ni('POST', '/auth/admin/login', 'I1-U6：管理员登录（欠账②，含管理员 seed）'),
-  ni('POST', '/internal/jobs/daily', '欠账①：每日对账端点，I1 收尾前落地或明示移交'),
   ni('GET', '/home', 'I2：小程序首页聚合（依赖 Banner 管理端）'),
   ni('GET', '/admin/orders', 'I2 管理端'),
   ni('GET', '/admin/orders/{id}', 'I2 管理端'),

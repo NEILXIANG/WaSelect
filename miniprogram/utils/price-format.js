@@ -1,8 +1,9 @@
 /**
- * 职责：金额的**展示**格式化（当前只有 JPY）。
+ * 职责：金额的**展示**格式化（JPY 整数円 + USD/CNY 整数分）。
  *
- * @why 项目口径是「JPY 为唯一定价锚＝结算币＝记账币」，所以展示层**只认日元整数**——
- *      USD 是派生展示价，等真有汇率来源再加，不预先铺（本项目多次踩过"提前做是猜"）。
+ * @why 项目口径是「JPY 为唯一定价锚＝结算币＝记账币」，所以展示层**不做任何汇率运算**——
+ *      USD/CNY 展示价由后端按当日汇率算成**整数分**（契约 Display schema），
+ *      前端只负责把整数分拼成文案（I1-U7b）。前端做乘法=两个系统各算一遍，迟早对不上。
  *      格式化必须集中在一处：价格会同时出现在列表、详情、购物车、订单、退款若干个位置，
  *      各写一遍的结果是"同一个金额在不同页面长得不一样"——这类不一致**没有任何报错**，
  *      只会让人觉得"这个页面好像怪怪的"。
@@ -58,4 +59,51 @@ export function formatJpy(amountJpy) {
 function group(value) {
   // `\B` 匹配非单词边界，`(?=(\d{3})+(?!\d))` 断言后面是"3 的倍数个数字且到此为止"
   return String(value).replace(/\B(?=(?:\d{3})+(?!\d))/g, ',');
+}
+
+/**
+ * 把 USD 展示价（整数分，契约 Display schema）格式化成展示文案。
+ *
+ * @param {number} cents 美分（整数；非整数/非有限数按 @limitation 一抛错）
+ * @returns {string} 形如 `$1,234.56` / `-$1,234.56`
+ * @throws {Error} 非整数 / 非有限数 / 非数字
+ *
+ * @why 小数**恒两位**（`$24.50` 不是 `$24.5`）：少一位小数在价格语境里会被读成另一个金额，
+ *      而"有时候一位有时候两位"正是"不同页面长得不一样"的又一种形态。
+ * @why 符号用 `$`：D-36 三币并列、符号不共用——円 给 JPY，`¥` 给人民币，`$` 给美元。
+ */
+export function formatUsdCents(cents) {
+  return formatMinor(cents, '$', 'formatUsdCents');
+}
+
+/**
+ * 把 CNY 展示价（整数分，契约 Display schema）格式化成展示文案。
+ *
+ * @param {number} fen 分（整数；非整数/非有限数按 @limitation 一抛错）
+ * @returns {string} 形如 `¥1,234.56` / `-¥1,234.56`
+ * @throws {Error} 非整数 / 非有限数 / 非数字
+ *
+ * @why `¥` 是 D-36 分配给**人民币**的符号（目标用户是美国华人，`¥` 在他们眼里就是人民币）；
+ *      两位小数与 USD 同口径——D-36 示例里的 `¥176` 写于"整数分"契约之前，以契约为准。
+ */
+export function formatCnyFen(fen) {
+  return formatMinor(fen, '¥', 'formatCnyFen');
+}
+
+/**
+ * 整数分 → `符号 + 千分位整数部分 + 两位小数`（USD/CNY 共用的唯一实现，见文件头 @why）。
+ * @param {number} minor 整数分
+ * @param {string} symbol 货币符号（D-36 分配的专属符号）
+ * @param {string} name 调用方函数名（错误文案要指回真正的入口，否则用户看到的是内部名）
+ */
+function formatMinor(minor, symbol, name) {
+  if (typeof minor !== 'number' || !Number.isInteger(minor)) {
+    throw new Error(`${name}：金额必须是整数分，收到 ${String(minor)}`);
+  }
+  const magnitude = Math.abs(minor);
+  // ⚠️ 与 formatJpy 同口径：0（含 -0）不带负号——0 没有方向
+  const sign = minor < 0 && magnitude !== 0 ? '-' : '';
+  const units = Math.floor(magnitude / 100);
+  const fraction = String(magnitude % 100).padStart(2, '0');
+  return `${sign}${symbol}${group(units)}.${fraction}`;
 }

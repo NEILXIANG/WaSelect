@@ -9,7 +9,7 @@
  * @how 断言**具体字符串**而不是"包含数字"：包含式断言在少了分隔符时照样绿。
  */
 import { describe, expect, it } from 'vitest';
-import { formatJpy } from './price-format.js';
+import { formatCnyFen, formatJpy, formatUsdCents } from './price-format.js';
 
 describe('千分位', () => {
   it('四位数加一个分隔符', () => {
@@ -79,5 +79,72 @@ describe('坏数据必须响亮失败（@limitation 一）', () => {
     // ⚠️ 这里的强转是**刻意**的：该函数在运行时要能挡住任何类型，
     //    所以用例必须真的把非数字传进去——类型层面装作是数字，是为了把"运行时校验"测出来。
     expect(() => formatJpy(value as unknown as number)).toThrow(/金额必须是整数/);
+  });
+});
+
+/**
+ * I1-U7b：Display 展示价（后端算好的**整数分**）的前端格式化。
+ * 前端不做汇率乘法（契约 Display schema / 文件头 @why），只把整数分拼成文案。
+ */
+describe('formatUsdCents / formatCnyFen（整数分 → 两位小数）', () => {
+  it('分 → 元：小数恒两位（`$24.50` 不是 `$24.5`）', () => {
+    expect(formatUsdCents(2450)).toBe('$24.50');
+    expect(formatCnyFen(2450)).toBe('¥24.50');
+  });
+
+  it('不足一元：整数部分是 0（`$0.05`，不是 `$.05`）', () => {
+    expect(formatUsdCents(5)).toBe('$0.05');
+    expect(formatCnyFen(5)).toBe('¥0.05');
+  });
+
+  it('整元也带两位小数（`$1.00`：有没有小数位不能随金额变）', () => {
+    expect(formatUsdCents(100)).toBe('$1.00');
+    expect(formatCnyFen(100)).toBe('¥1.00');
+  });
+
+  it('整数部分千分位、小数部分不分组', () => {
+    expect(formatUsdCents(123456)).toBe('$1,234.56');
+    expect(formatCnyFen(123456789)).toBe('¥1,234,567.89');
+  });
+
+  it('0 → `$0.00` / `¥0.00`；-0 不带负号（0 没有方向）', () => {
+    expect(formatUsdCents(0)).toBe('$0.00');
+    expect(formatCnyFen(-0)).toBe('¥0.00');
+  });
+
+  it('负数（退款/折扣）：符号在最前（`-$24.50`）', () => {
+    expect(formatUsdCents(-2450)).toBe('-$24.50');
+    expect(formatCnyFen(-2450)).toBe('-¥24.50');
+  });
+
+  /**
+   * D-36（三审 A1）：三币并列、**符号不共用**——円 是日元、`$` 是美元、`¥` 是人民币。
+   * 目标用户是美国华人，`¥` 在他们眼里就是人民币；串了符号就是 20 倍的数量级误读。
+   */
+  it('D-36：美元用 $、人民币用 ¥，互不串符号', () => {
+    expect(formatUsdCents(2450)).toBe('$24.50');
+    expect(formatUsdCents(2450)).not.toContain('¥');
+    expect(formatCnyFen(17600)).toBe('¥176.00');
+    expect(formatCnyFen(17600)).not.toContain('$');
+  });
+
+  it.each([1234.4, 0.1, -0.4])(
+    '非整数分 %s → 抛错（契约就是整数分，收到小数是服务端 bug）',
+    (v) => {
+      expect(() => formatUsdCents(v)).toThrow(/必须是整数分/);
+      expect(() => formatCnyFen(v)).toThrow(/必须是整数分/);
+    },
+  );
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['undefined', undefined],
+    ['null', null],
+    ['字符串', '2450'],
+  ])('坏数据 %s → 抛错（与 formatJpy 同一条响亮失败通道）', (_name, v) => {
+    // ⚠️ 强转是刻意的：运行时校验必须真的被非数字触发（见上方 formatJpy 同组 @why）
+    expect(() => formatUsdCents(v as unknown as number)).toThrow(/必须是整数分/);
+    expect(() => formatCnyFen(v as unknown as number)).toThrow(/必须是整数分/);
   });
 });

@@ -6,7 +6,7 @@
  *      它们就在端口里（理由见 ports/idempotency.ts @limitation 二）。
  */
 import { describe, expect, it } from 'vitest';
-import { requestFingerprint } from './idempotency.js';
+import { MAX_CLIENT_KEY_LENGTH, requestFingerprint, scopeKey } from './idempotency.js';
 
 /**
  * N16 定向：canonical() 的非常规输入形状。
@@ -30,5 +30,47 @@ describe('requestFingerprint 的非常规输入形状（N16 定向）', () => {
     expect(requestFingerprint(() => 1)).toBe(requestFingerprint(null));
     expect(requestFingerprint({ cb: () => 1 })).toBe(requestFingerprint({ cb: null }));
     expect(requestFingerprint(Symbol('s'))).toBe(requestFingerprint(null));
+  });
+});
+
+/**
+ * scopeKey 的客户端键限长（I1-U7b / 地基清单欠账⑧：`key TEXT` 无上限 = 存储型 DoS）。
+ * @why 校验收口在 scopeKey：所有走幂等的写路由都经它拼键，别无第二处"128"。
+ */
+describe('scopeKey：客户端幂等键 ≤128（存储型 DoS 防线）', () => {
+  it('恰好 128 → 通过；键形状保持 `user:route:clientKey` 不变', () => {
+    const key = 'k'.repeat(MAX_CLIENT_KEY_LENGTH);
+    expect(scopeKey({ userId: 'u-1', route: 'orders.create', clientKey: key })).toBe(
+      `u-1:orders.create:${key}`,
+    );
+  });
+
+  it('匿名作用域（无 userId）也不受影响', () => {
+    expect(scopeKey({ route: 'r', clientKey: 'x' })).toBe('anon:r:x');
+  });
+
+  it('129 → 40001 idempotency_key_too_long（超限不是"截断后继续"，是响亮拒绝）', () => {
+    // @why 不截断：截断会把两个不同的长键折叠成同一个 → 后一单被当成重放，
+    //      表现是"用户下了两单只建了一单"——静默且丢钱，比报错贵得多
+    let caught: unknown;
+    try {
+      scopeKey({ userId: 'u-1', route: 'orders.create', clientKey: 'k'.repeat(129) });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toMatchObject({
+      code: 40001,
+      details: { reason: 'idempotency_key_too_long' },
+    });
+  });
+
+  it('几 MB 的"键"在同一条防线被拦（DoS 形态的极端值，不是边界值）', () => {
+    let caught: unknown;
+    try {
+      scopeKey({ route: 'r', clientKey: 'k'.repeat(1_000_000) });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toMatchObject({ code: 40001 });
   });
 });

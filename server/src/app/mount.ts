@@ -50,6 +50,7 @@ import { mountPayIntentRoutes } from './pay-intent-routes.js';
 import { mountPayLinkRoutes } from './pay-link-routes.js';
 import { registerSessionExpiryOnClose } from './close-session-events.js';
 import { mountWechatAuthRoutes } from './wechat-auth-routes.js';
+import { mountInternalJobsRoutes } from './internal-jobs-routes.js';
 import { createWechatAuth } from '../adapters/wechat/code2session.js';
 import { createDevWechatAuth } from '../adapters/wechat/dev-auth.js';
 
@@ -208,6 +209,9 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     wechatAuth,
     loginLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
   });
+
+  // ── 每日作业触发（I1-U7b / D-43）：Render Cron 的 HTTP 入口；异步执行走同一套调度器框架 ──
+  mountInternalJobsRoutes(app, { config, logger, db, events });
 
   // ── D-50 关单连带（I1-U6a-2）：order.expired/cancelled → 作废在途支付行 +
   //    best-effort 作废机构会话。注册在这里（不在 main.ts）：registry 是本函数

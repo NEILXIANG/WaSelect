@@ -339,9 +339,9 @@ const schema = z.object({
   RATE_LIMIT_LOGIN_PER_15MIN: int(5, 1),
   RATE_LIMIT_QUOTE_PER_MIN: int(30, 1),
   /**
-   * Cron Job 调 POST /internal/jobs/daily 的共享密钥；留空时该端点在启动时关闭。
-   * ⚠️ 该端点**尚未挂载**（契约先行，见 docs/地基搭建清单.md 欠账登记）——
-   *    此字段当前只被配置层读取与校验，没有消费者。
+   * Cron Job 调 POST /internal/jobs/daily 的共享密钥；留空时该端点拒绝执行
+   * （50000 internal_job_disabled，路由仍挂载——404 会把"没配密钥"表现成"打错地址"，
+   * 见 internal-jobs-routes.ts @why ③）。
    */
   INTERNAL_JOB_SECRET: optionalSecret(32, 'INTERNAL_JOB_SECRET'),
 

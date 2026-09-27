@@ -26,6 +26,7 @@
  *      docs/二审意见甄别报告-2026-09-23.md §1 N1（栅栏令牌）/ N2（单事务模式）
  */
 import { createHash } from 'node:crypto';
+import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 
 /**
@@ -67,8 +68,26 @@ export function requestFingerprint(payload: unknown): string {
   return createHash('sha256').update(canonical(payload), 'utf8').digest('hex');
 }
 
+/**
+ * 客户端幂等键（`Idempotency-Key` 头）的最大长度。
+ *
+ * @why `idempotency_keys.key` 是 `TEXT` 无长度上限（地基清单欠账⑧）：客户端可以发一个
+ *      几 MB 的"键"，每次写请求都把它落一行——存储型 DoS，而且**不报错**（行照插、
+ *      单照建，只是库在悄悄涨）。限 128 与 webhook_events.event_id 的 varchar(128) 同口径：
+ *      UUID/ULID/nanoid 都远短于它，真实客户端没有更长的合法需求。
+ * @why 校验放在 `scopeKey` 而不是各路由自己量：**所有**走幂等的写路由都必须经它拼键，
+ *      这是唯一的收口点——量两次就会有两个"128"，迟早漂（见同文件 requestFingerprint 的 @why）。
+ */
+export const MAX_CLIENT_KEY_LENGTH = 128;
+
 /** 按 `用户 + 路由 + 客户端 key` 幂等键的作用域前缀，防止跨用户/跨接口撞键。 */
 export function scopeKey(parts: { userId?: string; route: string; clientKey: string }): string {
+  if (parts.clientKey.length > MAX_CLIENT_KEY_LENGTH) {
+    throw new AppError(40001, {
+      reason: 'idempotency_key_too_long',
+      ctx: { max: MAX_CLIENT_KEY_LENGTH, got: parts.clientKey.length },
+    });
+  }
   return [parts.userId ?? 'anon', parts.route, parts.clientKey].join(':');
 }
 

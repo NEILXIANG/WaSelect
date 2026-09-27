@@ -37,6 +37,17 @@ function adminUrl(): string {
   return url.toString();
 }
 
+/**
+ * 删库清理的超时预算：30s。
+ * @why 默认 hook 超时是 10s，而这里是 **DDL**（`drop database ... with (force)`：
+ *      要先 terminate probe 库上的残留连接再删）。全量 gate 末期机器负载高时，
+ *      10s 会不够 → afterAll 超时 → **整条 gate 红，但没有任何用例失败**（已复现两次）。
+ *      给的是"清理动作的合理预算"，不是放宽断言：drop 失败依然红。
+ * @limitation 若将来仍偶发超时，下一个要看的是 Postgres 的 max_connections 是否被
+ *              gate 的并行 worker 打满——届时是资源上限问题，不是这两个数字的问题。
+ */
+const DROP_TIMEOUT_MS = 30_000;
+
 async function dropProbe(): Promise<void> {
   const admin = createDb({ url: adminUrl(), max: 1 });
   try {
@@ -50,13 +61,18 @@ async function dropProbe(): Promise<void> {
 describe('dev-up 真库全链路：建库 → 迁移 → 灌数据', () => {
   afterAll(async () => {
     await dropProbe();
-  });
+  }, DROP_TIMEOUT_MS);
 
-  it('库不存在 → 创建（created）；再调 → 幂等（exists）', async () => {
-    await dropProbe(); // 防上次跑挂掉留下的残留
-    expect(await ensureDatabase(probeUrl())).toBe('created');
-    expect(await ensureDatabase(probeUrl())).toBe('exists');
-  });
+  it(
+    '库不存在 → 创建（created）；再调 → 幂等（exists）',
+    async () => {
+      await dropProbe(); // 防上次跑挂掉留下的残留
+      expect(await ensureDatabase(probeUrl())).toBe('created');
+      expect(await ensureDatabase(probeUrl())).toBe('exists');
+    },
+    // 同 DROP_TIMEOUT_MS：本用例的开头就是一次 dropProbe（见上）
+    DROP_TIMEOUT_MS,
+  );
 
   it('迁移：真 CLI 跑完后，已应用数 == 磁盘上的迁移文件数', async () => {
     await migrateUp({ root, databaseUrl: probeUrl() });
