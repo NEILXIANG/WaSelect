@@ -13,7 +13,7 @@
  *      收敛到一个入口后，这三点各有一处答案。
  *
  * @limitation 一：**只声明当前真用到的能力**（request / getStorageSync / setStorageSync /
- *              removeStorageSync / getRealtimeLogManager）。新增一个 wx API 就在这里加一个方法——
+ *              removeStorageSync / getRealtimeLogManager / navigateTo）。新增一个 wx API 就在这里加一个方法——
  *              不要预先铺满官方 API，铺了就会有人依赖上没被测试过的封装（本项目多次踩过"提前做是猜"）。
  * @limitation 二：`getStorageSync` 的契约是**只取字符串**：读到的不是字符串时一律当"没存过"（返回空串）。
  *              要存对象就先 JSON 序列化——小程序 storage 本身也是这个语义。
@@ -69,6 +69,12 @@ export interface RealtimeLogger {
   error?: (...args: unknown[]) => void;
 }
 
+/** `wx.navigateTo` 的入参（只声明我们传的字段）。 */
+export interface WxNavigateOption {
+  /** 以 `/` 开头的**页面内绝对路径**（小程序不支持相对路径跳转）。 */
+  url: string;
+}
+
 /** 宿主能力的子集。**新增 wx API 就在这里加一个方法**。 */
 export interface WxApi {
   request(option: WxRequestOption): void;
@@ -77,6 +83,16 @@ export interface WxApi {
   setStorageSync(key: string, value: string): void;
   removeStorageSync(key: string): void;
   getRealtimeLogManager(): RealtimeLogger | undefined;
+  /**
+   * 保留当前页跳转（页面栈最多十层）。
+   * @why I2 首页点商品卡要跳详情，而业务代码写 `wx.navigateTo` 会被 `no-restricted-globals`
+   *      拦——那道规则正是为"每个页面各发明一套宿主绕法"而设，所以在这里登记，不在页面里破例。
+   * @limitation 六：**只登记不兜底**（不判页面栈层数、不判路径是否注册）。
+   *              目标页不存在 / 超过十层栈时由宿主的 `fail` 回调报出来，
+   *              这里吞掉它的表现是"点了没反应"——那正是最难查的一类问题。
+   *              @see @limitation 三（不吞异常，同一口径）
+   */
+  navigateTo(option: WxNavigateOption): void;
 }
 
 /** 宿主（`globalThis.wx`）上我们真正读到的形状——比 `WxApi` 宽松，因为官方签名返回 `unknown`。 */
@@ -86,6 +102,7 @@ interface WxHost {
   setStorageSync(key: string, value: unknown): void;
   removeStorageSync(key: string): void;
   getRealtimeLogManager?: () => RealtimeLogger | undefined;
+  navigateTo(option: WxNavigateOption): void;
 }
 
 /**
@@ -130,6 +147,9 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
       host().removeStorageSync(key);
     },
     getRealtimeLogManager: () => host().getRealtimeLogManager?.(),
+    navigateTo: (option) => {
+      host().navigateTo(option);
+    },
   };
   return { ...real, ...over };
 }

@@ -29,6 +29,7 @@ function stubHost(
   const seen: string[] = [];
   const storage: Record<string, unknown> = { ...(over.storage ?? {}) };
   const requested: unknown[] = [];
+  const navigated: string[] = [];
   vi.stubGlobal('wx', {
     request: (o: unknown) => {
       seen.push('request');
@@ -46,9 +47,13 @@ function stubHost(
       seen.push(`remove:${k}`);
       delete storage[k];
     },
+    navigateTo: (o: { url: string }) => {
+      seen.push(`navigate:${o.url}`);
+      navigated.push(o.url);
+    },
     ...(over.logger === undefined ? {} : { getRealtimeLogManager: () => over.logger }),
   });
-  return { seen, storage, requested };
+  return { seen, storage, requested, navigated };
 }
 
 describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => {
@@ -59,6 +64,7 @@ describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => 
     expect(() => api.setStorageSync('token', 't')).toThrow(/wx 宿主不存在/);
     expect(() => api.removeStorageSync('token')).toThrow(/wx 宿主不存在/);
     expect(() => api.getRealtimeLogManager()).toThrow(/wx 宿主不存在/);
+    expect(() => api.navigateTo({ url: '/pages/home/index' })).toThrow(/wx 宿主不存在/);
   });
 
   it('**import 时不取宿主**——只有调用才取（否则 Node 侧连 import 都做不到）', () => {
@@ -120,6 +126,15 @@ describe('走真实宿主时的行为', () => {
     const logger: RealtimeLogger = { info: () => undefined };
     stubHost({ logger });
     expect(createWxApi().getRealtimeLogManager()).toBe(logger);
+  });
+
+  it('navigateTo 原样转发 url（不做拼接、不补斜杠——路径错就该在真机上响亮失败）', () => {
+    // @why 这条钉的是 `wx-api.ts` 的 @limitation 六："只登记不兜底"。
+    //      若哪天有人在这里加"自动补 /pages 前缀"，本用例会红——
+    //      那种兜底的表现是"路径拼错了居然还能跳"，于是错误路径长期不被发现。
+    const { navigated } = stubHost();
+    createWxApi().navigateTo({ url: '/pages/detail/index?id=p-1' });
+    expect(navigated).toEqual(['/pages/detail/index?id=p-1']);
   });
 });
 
