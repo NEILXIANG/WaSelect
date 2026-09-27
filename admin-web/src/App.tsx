@@ -24,6 +24,7 @@ import { createAdminApi } from './api/client.js';
 import { resolveApiBase } from './api/config.js';
 import { login } from './api/endpoints.js';
 import { createTokenStore } from './api/token-store.js';
+import { BannersPage } from './banners/BannersPage.js';
 import { LoginForm } from './LoginForm.js';
 import { OrdersPage } from './orders/OrdersPage.js';
 import { OpsPage } from './ops/OpsPage.js';
@@ -39,6 +40,7 @@ const TABS = [
   { key: 'products', label: '商品管理' },
   { key: 'orders', label: '订单管理' },
   { key: 'ops', label: '运营配置' },
+  { key: 'banners', label: '首页 Banner' },
 ] as const;
 
 type TabKey = (typeof TABS)[number]['key'];
@@ -115,6 +117,10 @@ export function App() {
       {tab === 'orders' && <OrdersPage api={api} />}
 
       {tab === 'ops' && <OpsPage api={api} />}
+
+      {tab === 'banners' && (
+        <BannersPage api={api} baseUrl={baseUrl} getToken={() => tokenStore.get()} />
+      )}
 
       {tab === 'products' &&
         (editing === null ? (
