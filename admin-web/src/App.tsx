@@ -27,6 +27,7 @@ import { createTokenStore } from './api/token-store.js';
 import { BannersPage } from './banners/BannersPage.js';
 import { LoginForm } from './LoginForm.js';
 import { OrdersPage } from './orders/OrdersPage.js';
+import { RiskPage } from './risk/RiskPage.js';
 import { OpsPage } from './ops/OpsPage.js';
 import { ProductsPage } from './products/ProductsPage.js';
 import { ProductFormPage } from './products/ProductFormPage.js';
@@ -41,6 +42,7 @@ const TABS = [
   { key: 'orders', label: '订单管理' },
   { key: 'ops', label: '运营配置' },
   { key: 'banners', label: '首页 Banner' },
+  { key: 'risk', label: '风控' },
 ] as const;
 
 type TabKey = (typeof TABS)[number]['key'];
@@ -117,6 +119,8 @@ export function App() {
       {tab === 'orders' && <OrdersPage api={api} />}
 
       {tab === 'ops' && <OpsPage api={api} />}
+
+      {tab === 'risk' && <RiskPage api={api} />}
 
       {tab === 'banners' && (
         <BannersPage api={api} baseUrl={baseUrl} getToken={() => tokenStore.get()} />
