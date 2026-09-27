@@ -71,7 +71,10 @@ function toAdminProduct(r: AdminProductRow): Record<string, unknown> {
 }
 
 /** 校验失败 → 40001，字段明细写日志（@limitation 一）。 */
-function rejectInvalid(logger: Logger, errors: readonly { field: string; reason: string }[]): never {
+function rejectInvalid(
+  logger: Logger,
+  errors: readonly { field: string; reason: string }[],
+): never {
   logger.warn('admin_product_input_rejected', {
     result: 'rejected',
     ctx: { errors },
@@ -89,7 +92,13 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         const q = req.query as { status?: unknown; page?: unknown; size?: unknown };
         const page = q.page === undefined ? 1 : Number(q.page);
         const size = q.size === undefined ? 50 : Number(q.size);
-        if (!Number.isInteger(page) || page < 1 || !Number.isInteger(size) || size < 1 || size > 100) {
+        if (
+          !Number.isInteger(page) ||
+          page < 1 ||
+          !Number.isInteger(size) ||
+          size < 1 ||
+          size > 100
+        ) {
           throw new AppError(40001, { reason: 'page_size_invalid' });
         }
         const status = q.status === undefined ? undefined : String(q.status);

@@ -62,7 +62,10 @@ describe('通道 / 币种 / 国家', () => {
     // 只抽方括号：整行剩余（schema / type 等词）会被一起抽进来导致集合比对假失败
     const m = /name: category, in: query[\s\S]{0,120}?enum: \[([^\]]+)\]/.exec(yaml);
     expect(m?.[1], '契约里找不到 /products?category 的 enum —— 锚点变了要同步改正则').toBeDefined();
-    const contractValues = (m?.[1] ?? '').split(',').map((s) => s.trim()).filter((s) => s !== '');
+    const contractValues = (m?.[1] ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s !== '');
     expect([...PRODUCT_CATEGORY].sort()).toEqual([...contractValues].sort());
     expect(contractValues.length, '契约 enum 不能为空（正则抽空会假绿）').toBeGreaterThan(0);
   });

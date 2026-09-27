@@ -45,6 +45,7 @@ import { mountQuoteRoutes } from './quote-routes.js';
 import { mountProductRoutes } from './product-routes.js';
 import { mountAdminProductRoutes } from './admin-product-routes.js';
 import { mountAdminOrderRoutes } from './admin-order-routes.js';
+import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAddressRoutes } from './address-routes.js';
 import { mountOrderRoutes } from './order-routes.js';
 import { mountOrderQueryRoutes } from './order-query-routes.js';
@@ -166,6 +167,16 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity: withIdentityCache(createIdentityCheck(db)),
     registry,
+  });
+  // ── 管理端运营配置（I2-U-C3）：展示汇率与运费分档。clock 必须注入——
+  //    "立即生效"的 effective_from 取它，否则这条路由无法在假时间下测（F10）──
+  mountAdminOpsRoutes(app, {
+    db,
+    logger,
+    config,
+    clock: systemClock,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity: withIdentityCache(createIdentityCheck(db)),
   });
 
   mountAddressRoutes(app, {

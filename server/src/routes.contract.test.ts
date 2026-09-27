@@ -74,10 +74,7 @@ const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [
   // ✅ 商品四条已随 I2-U-A3、订单五条已随 I2-U-B2d 落地并从本清单移除
   //    （本清单只许变短不许变长；diffRoutes 规则④ 会在"已实现却仍登记"时报红）
   ni('POST', '/admin/upload', 'I2 管理端（依赖 R2）'),
-  ni('GET', '/admin/fx', 'I2 管理端'),
-  ni('POST', '/admin/fx', 'I2 管理端'),
-  ni('GET', '/admin/shipping-rates', 'I2 管理端'),
-  ni('PUT', '/admin/shipping-rates', 'I2 管理端'),
+  // ✅ 运营配置四条已随 I2-U-C3 落地并从本清单移除
   ni('GET', '/admin/banners', 'I2 管理端'),
   ni('POST', '/admin/banners', 'I2 管理端'),
   ni('PUT', '/admin/banners/{id}', 'I2 管理端'),

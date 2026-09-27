@@ -66,8 +66,7 @@ export interface ProductFieldError {
 }
 
 export type ProductInputResult =
-  | { ok: true; value: ProductInput }
-  | { ok: false; errors: readonly ProductFieldError[] };
+  { ok: true; value: ProductInput } | { ok: false; errors: readonly ProductFieldError[] };
 
 /** 报关品名禁词（D-51）：命中即拒，大小写不敏感、按词边界（@limitation 一）。 */
 const FORBIDDEN_DESC = /\b(medicated|whitening|spf|sunscreen|drug)\b/i;

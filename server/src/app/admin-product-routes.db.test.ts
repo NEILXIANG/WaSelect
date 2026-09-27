@@ -72,9 +72,15 @@ async function seedUser(isAdmin = true, tag = 'admin'): Promise<string> {
 }
 
 const adminToken = async (): Promise<string> =>
-  signToken({ sub: await seedUser(true), role: 'admin' }, { secret: JWT_SECRET, issuer: 'waselect' });
+  signToken(
+    { sub: await seedUser(true), role: 'admin' },
+    { secret: JWT_SECRET, issuer: 'waselect' },
+  );
 const userToken = async (): Promise<string> =>
-  signToken({ sub: await seedUser(false, 'buyer'), role: 'user' }, { secret: JWT_SECRET, issuer: 'waselect' });
+  signToken(
+    { sub: await seedUser(false, 'buyer'), role: 'user' },
+    { secret: JWT_SECRET, issuer: 'waselect' },
+  );
 
 /** 一条合法的商品输入（与 domain/product-input 的必填六项一致）。 */
 function body(overrides: Record<string, unknown> = {}): Record<string, unknown> {
