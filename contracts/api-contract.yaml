@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.0
+  version: 0.6.1
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -182,7 +182,7 @@ paths:
         - {name: keyword, in: query, schema: {type: string, description: order_no / 收件人 / 运单号}}
         - {name: page, in: query, schema: {type: integer, default: 1}}
         - {name: size, in: query, schema: {type: integer, default: 20, maximum: 100}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/Order'}}, total: {type: integer}}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminOrderListItem'}}, total: {type: integer}}}}}}}
   /admin/orders/{id}:
     get:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
@@ -319,6 +319,16 @@ components:
     OrderCreated: {allOf: [{$ref: '#/components/schemas/Quote'}, {type: object, properties: {order_id: {type: string}, order_no: {type: string}, fx_snapshot: {type: object, properties: {USD: {type: number}, CNY: {type: number}}}, status: {$ref: '#/components/schemas/OrderStatus'}, expires_at: {type: string, format: date-time}}}]}
     OrderSummary: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, total_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, status: {$ref: '#/components/schemas/OrderStatus'}, created_at: {type: string, format: date-time}}}
     Order: {allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, properties: {contact_email: {type: string, format: email, description: '可选收货通知邮箱（D-42 补入）'}, terms_version: {type: string, description: '建单时写入的条款版本（只读，D-43）'}, items: {type: array, items: {type: object, properties: {product_id: {type: string}, title: {type: string}, qty: {type: integer}, unit_price_jpy: {type: integer}, image: {$ref: '#/components/schemas/ImageSet'}}}}, address: {$ref: '#/components/schemas/Address'}, items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer}, expires_at: {type: string, format: date-time}, carrier: {type: string}, tracking_no: {type: string}, timeline: {type: array, items: {type: object, properties: {status: {type: string}, at: {type: string, format: date-time}}}}, payment: {type: object, properties: {channel: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, paid_amount: {type: integer}, paid_currency: {type: string}}}}}]}
+    0.6.1（I2 U-B1）：`GET /admin/orders` 的 `items` 从 `$ref: Order` 收紧为 **`AdminOrderListItem`**。
+      @why 原声明是"列表每行都带 items / address / timeline / payment"——那是**详情**的形状，
+      实现从来没这么做过（列表只给摘要 + 管理端专有列），属"契约比实现严格"的漂移，
+      前端照它写会拿到一堆 undefined。收紧后列表形状显式：OrderSummary 五列 +
+      `user_id` / `contact_email` / `carrier` / `tracking_no` / `has_dispute` / `is_test`。
+      ⚠️ 比 `Order` **多**出来的正是 `has_dispute`：原 `Order` 没有它，前端因此只能"字段缺失即放行"
+      退款闸门、拒付单要等打开详情才看得见（@see admin-web/src/orders/view.ts @limitation 二）。
+      列表带上它，客服在列表页就能看见拒付单——代价是前端那份"缺失即放行"的注释要改成
+      "缺失仍放行（防御），但正常路径下字段一定在"。
+    AdminOrderListItem: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, user_id: {type: string}, status: {$ref: '#/components/schemas/OrderStatus'}, total_jpy: {type: integer}, contact_email: {type: string}, carrier: {type: string}, tracking_no: {type: string}, has_dispute: {type: boolean, description: '列表也带（0.6.1）：客服在列表页就能看见拒付单'}, is_test: {type: boolean}, created_at: {type: string, format: date-time}}}
     AdminOrder: {allOf: [{$ref: '#/components/schemas/Order'}, {type: object, properties: {user_id: {type: string}, contact_email: {type: string, format: email, description: '客服可见（D-42）'}, is_test: {type: boolean, description: '审核期 mock 通道测试单；管理端列表默认过滤'}, has_dispute: {type: boolean, description: '存在进行中的拒付（D-50）；退款 40907'}, fx_snapshot: {type: object}, payments: {type: array, items: {type: object, properties: {provider: {type: string}, provider_ref: {type: string}, transaction_id: {type: string}, status: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, settled_jpy: {type: integer}, fee_jpy: {type: integer}}}}, events: {type: array, items: {type: object, properties: {status: {type: string}, note: {type: string}, actor: {type: string}, at: {type: string, format: date-time}}}}}}]}
     ChannelView: {type: object, required: [channel, entryMode, label], properties: {channel: {type: string, description: '通道 key（任意字符串：新增支付方式不需要改本契约的枚举）'}, entryMode: {type: string, enum: [in_app, copylink, redirect], description: 'in_app=小程序内直接调起；copylink=复制链接到外部浏览器（D-49：Stripe Checkout 托管页）；redirect=302 跳转'}, label: {type: string, description: 展示名（外置文案，前端不写死）}, icon: {type: string, description: 图标 key（同上）}}}
     PaymentIntent: {type: object, properties: {channel: {type: string, description: '通道 key（同 POST /orders/{id}/pay：任意字符串，见 x-payment-channels）'}, charge: {type: object, properties: {currency: {type: string, enum: [JPY, USD]}, amount: {type: integer}}}, payload: {type: object, additionalProperties: true, description: 'wechat: wx.requestPayment 五参数；stripe: {pay_url, expires_at}（D-49 短链）；mock: {auto:true, orderId, amountJpy, currency}（auto=审核期自动确认信号，0.5.6 更正）'}, expires_at: {type: string, format: date-time}}}

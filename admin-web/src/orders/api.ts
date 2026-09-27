@@ -12,9 +12,13 @@
  *              防重复提交的兜底是服务端状态机（已发货不能再发货、refunding 期间不能退款）
  *              + 前端按钮禁用；⚠️ 这不是幂等，只是"第二次大概率被拒"——
  *              将来契约补上幂等头时，这里要跟着传（否则超时重发真的会发两次货）。
- * @limitation 三：列表接口返回的是 `Order`（**不含** `has_dispute` / `payments` / `events`），
- *              详情接口才是 `AdminOrder`。所以"退款闸门"在列表页只能按状态判断，
- *              拒付标记要等打开详情才知道（@see ../orders/view.ts @limitation 二）。
+ * @limitation 三：列表接口返回的是 **`AdminOrderListItem`**（契约 0.6.1 起，不再是 `Order`）：
+ *              带 `has_dispute` / `is_test`，但**不带** `items` / `address` / `timeline` /
+ *              `payments` / `events`——那些只有详情接口 `AdminOrder` 才有。
+ *              ⚠️ 0.6.1 之前列表被声明成 `Order`（不含 has_dispute），前端因此写过
+ *              "列表查不出拒付"的兜底（@see ../orders/view.ts @limitation 二 的历史版本）。
+ *              现在字段在，但 `refundGate` 对"字段缺失"**仍**放行——那是防御，
+ *              不是"预期会有缺失"：契约形状再变一次时，不至于让正常单点不动。
  *
  * @see ../../../contracts/api-contract.yaml（/admin/orders*）；./view.ts（请求体的生产者）
  */
