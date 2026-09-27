@@ -43,6 +43,7 @@ import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import { rateLimiter, rateLimitRules } from './rate-limit.js';
 import { mountQuoteRoutes } from './quote-routes.js';
 import { mountProductRoutes } from './product-routes.js';
+import { mountAdminProductRoutes } from './admin-product-routes.js';
 import { mountAddressRoutes } from './address-routes.js';
 import { mountOrderRoutes } from './order-routes.js';
 import { mountOrderQueryRoutes } from './order-query-routes.js';
@@ -142,6 +143,17 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
 
   // ── 商品/配置公开端点 + 我的地址（I1-U5a）：全环境挂载（产品接口不是脚手架）──
   mountProductRoutes(app, { db, clock: systemClock, config });
+
+  // ── 管理端商品（I2-U-A3）：守卫在路由文件内共用一个实例（admin-product-routes @why）；
+  //    identity 与其它路由共用同一份缓存实例——管理员也要能被即时撤权 ──
+  mountAdminProductRoutes(app, {
+    db,
+    logger,
+    idGen: systemIdGen,
+    config,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity: withIdentityCache(createIdentityCheck(db)),
+  });
   mountAddressRoutes(app, {
     db,
     logger,

@@ -76,10 +76,7 @@ const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [
   ni('POST', '/admin/orders/{id}/ship', 'I2 管理端'),
   ni('POST', '/admin/orders/{id}/refund', 'I2 管理端（售后阶段，依赖真实通道退款）'),
   ni('POST', '/admin/orders/{id}/address', 'I2 管理端'),
-  ni('GET', '/admin/products', 'I2 管理端'),
-  ni('POST', '/admin/products', 'I2 管理端'),
-  ni('PUT', '/admin/products/{id}', 'I2 管理端'),
-  ni('PATCH', '/admin/products/{id}/status', 'I2 管理端'),
+  // ✅ 商品四条已随 I2-U-A3 落地并从本清单移除（本清单只许变短不许变长）
   ni('POST', '/admin/upload', 'I2 管理端（依赖 R2）'),
   ni('GET', '/admin/fx', 'I2 管理端'),
   ni('POST', '/admin/fx', 'I2 管理端'),
