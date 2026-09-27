@@ -47,6 +47,7 @@ import {
   RESULT_PAID_ALREADY,
   RESULT_STATUS_CONFLICT,
   RESULT_UNMATCHED_PREFIX,
+  resultValue,
 } from './webhook-results.js';
 import { SETTLEMENT_MISMATCH_REASONS } from './mark-paid.js';
 
@@ -204,7 +205,7 @@ export async function handleProviderCallback(
     });
     await deps.webhooks.finish({
       ...webhook,
-      result: `${RESULT_IGNORED_PREFIX}${event.outcome}`,
+      result: resultValue(RESULT_IGNORED_PREFIX, event.outcome),
       token,
       note: `归一化结果为 ${event.outcome}：MVP 不落业务状态（F12 接状态机后补）`,
     });
@@ -262,7 +263,7 @@ export async function handleProviderCallback(
       });
       await deps.webhooks.finish({
         ...webhook,
-        result: `${RESULT_UNMATCHED_PREFIX}order_not_found`,
+        result: resultValue(RESULT_UNMATCHED_PREFIX, 'order_not_found'),
         token,
         note: '超过宽限期订单仍不存在：转入对账任务（F13），机构不必再重发',
       });
@@ -310,7 +311,7 @@ export async function handleProviderCallback(
         });
         await deps.webhooks.finish({
           ...webhook,
-          result: `${RESULT_MISMATCH_PREFIX}${details.reason}`,
+          result: resultValue(RESULT_MISMATCH_PREFIX, details.reason),
           token,
           note: '落账核对不通过：不落账、不重发，转对账人工处理',
         });

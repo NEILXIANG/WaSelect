@@ -56,6 +56,21 @@ import { allocate, toMinor, toRateInt } from '@waselect/shared';
 /** D32：单号撞唯一约束的最大尝试次数（含首次）。 */
 export const ORDER_NO_MAX_ATTEMPTS = 3;
 
+/**
+ * 商品 id 的**确定序**比较——只服务于第 6 步的取锁顺序。
+ *
+ * @why 不能用 `localeCompare`：它走 ICU collation，结果随 Node 构建（small-icu / full-icu）
+ *      与 ICU 版本而变。两个实例对同一组 id 若算出**不同**的锁序，"统一取锁顺序"
+ *      就只在单实例内成立，跨实例仍然是 AB / BA 互等（40P01）——
+ *      而防死锁恰恰只在**多实例并发**时才有意义，单机测出来绿说明不了任何事。
+ * @limitation 结果不符合任何自然语言的字典序（大写整体排在小写之前）；
+ *              锁序不需要好看，只需要"每个进程算出同一个结果"。
+ *              id 出现非 ASCII 时 codePoint 序依然确定——与 locale 无关正是选它的理由。
+ */
+export function compareProductIdForLock(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export interface CreateOrderInput {
   userId: string;
   items: readonly QuoteItemInput[];
@@ -143,7 +158,9 @@ export async function createOrder(
   //    行锁获取顺序 AB / BA 交叉 → PG 40P01 死锁 → 非 AppError → 50000。
   //    @measured 探针：同 SQL 交叉更新复现 `deadlock detected`；真 createOrder 并发 20 轮出现 17 次。
   //    统一顺序后所有事务对同一组行按同一序取锁，只会排队不会互等。
-  const orderedItems = [...input.items].sort((a, b) => a.productId.localeCompare(b.productId));
+  const orderedItems = [...input.items].sort((a, b) =>
+    compareProductIdForLock(a.productId, b.productId),
+  );
   for (const item of orderedItems) {
     const ok = await decrementStock(tx, item.productId, item.qty);
     if (!ok) throw new AppError(40901, { product_id: item.productId, qty: item.qty });

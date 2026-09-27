@@ -334,8 +334,11 @@ const schema = z.object({
   REVIEW_SKU_ID: optionalText(),
 
   // ── 限流与内部任务（D-52 / D-43）────────────────────────────────────────
-  // ⚠️ 限流器尚未实现（契约先行，见 docs/地基搭建清单.md 欠账登记）：
-  //    这两个字段当前只被配置层读取与校验，没有消费者（42901 尚不可达）。
+  // 限流配额（I1-U3 已接线，不再是"契约先行"的欠账）：这两个值的唯一消费者是
+  //    `app/rate-limit.ts` 的规则表——adminLogin 取 LOGIN_PER_15MIN、
+  //    publicWrite(routeKey) 取 QUOTE_PER_MIN（每个入口一个独立桶）。
+  //    ⚠️ 变量名里的窗口（PER_MIN / PER_15MIN）与规则表里的 windowMs 是**同一语义的两半**：
+  //    改名字不改窗口 = "名字叫 PER_MIN 实际 10 分钟"的失真（rate-limit.ts @limitation 二）。
   RATE_LIMIT_LOGIN_PER_15MIN: int(5, 1),
   RATE_LIMIT_QUOTE_PER_MIN: int(30, 1),
   /**
@@ -429,6 +432,13 @@ const crossField = schema.superRefine((c, ctx) => {
   //     任何人能登进任意账号；本机/CI 才是它唯一合法的生存环境。
   // 1d. 微信登录配置成对 + 生产必配（全量审计 2026-09-26 P2）：APP_ID / APP_SECRET 缺一，装配层就不建
   //     wechatAuth，登录一律 50000——服务照样起得来，审核期唯一的入口却是死的。半配比不配更隐蔽。
+  //     ⚠️ 只对**生产**强制（staging 不强制，2026-09-27 裁决，理由见下）：
+  //        AppID 依赖日本公司登记 → 海外主体注册，粗估 6–10 周才拿得到；
+  //        在这之前强制 staging 必配 = 宣布 staging 永远起不来（规则把环境判死了）。
+  //        与规则 1c / 3b 的"staging 同拒"不是同一类：**那两条拦的是安全洞**
+  //        （无密码登录、公开占位密钥），有没有 AppID 都不影响它们成立；
+  //        本条拦的是"入口不可用"，而它在 AppID 下来前是**既定现实**不是错误。
+  //        AppID 就绪后本条是否扩到 staging 应重评——届时 staging 才有"完整预生产"的意义。
   if ((c.APP_ID === undefined) !== (c.APP_SECRET === undefined)) {
     add('APP_ID', 'APP_ID 与 APP_SECRET 必须同时配置或同时留空（只配一个 = 登录 500）');
   }

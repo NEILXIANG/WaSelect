@@ -7,10 +7,18 @@
  *      （stripe 无密钥时注册不了第二个真实通道，"换通道"就没法测）——
  *      核心可注入，路由与核心测试共用同一份逻辑。
  *
- * @why 幂等键用**确定性派生**（`pay-{orderId}-{channel}`）而不是随机：
+ * @why 幂等键用**确定性派生**而不是随机：`pay-<order>-<channel>`，**第二轮起带轮次** `-<n>`。
  *      同订单同通道重发 = 机构侧同一次创建（mock 的会话缓存 / Stripe 的 Idempotency-Key
- *      都按键去重）——崩溃重试不会造出第二个会话；复用路径也靠它把"同一份会话视图"
- *      拿回来（我们没存 in_app 的 params，重新调一次 create 用同键取回是通道无关的做法）。
+ *      都按键去重）——崩溃重试不会造出第二个会话。
+ *      ⚠️ 轮次是 2026-09-26 全量审计后加的：换通道 A→B→A 时旧 A 行已 cancelled，
+ *         不带轮次的同键会让机构**复放**旧 provider_ref，撞 (provider, provider_ref) 唯一键，
+ *         于是被误判成"已有在途支付"。第二轮起必须是新键（见文末 intentIdempotencyKey）。
+ * @why 复用时是否再调机构 `create` **分两种**（曾一律重调，2026-09-26 改）：
+ *      copylink（行里存了 provider_ref 与 pay_url）→ 直接取回，**不再调 create**：
+ *        Stripe 的 expires_at 随调用时刻变化，同键异参会被判 400 idempotency_error
+ *        ——用户第二次点"复制链接"直接 500；mock 按键缓存所以当年测试全绿，只有真通道会炸。
+ *      in_app（只存 provider_ref，params 没落库）→ 仍以同键重调 create 取回会话视图，
+ *        这是通道无关的做法，代价是多一次出站（受总时长预算约束）。
  *
  * @why provider.create **在事务内**调用（已知代价，不是疏忽）：
  *      出站 HTTP 最长占住事务 ~6s（总预算封顶，ports/http-client.ts）。
