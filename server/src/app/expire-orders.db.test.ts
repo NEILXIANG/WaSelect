@@ -104,6 +104,27 @@ describe('expire-orders job（接线级）', () => {
     expect(expired.sort()).toEqual(['o-due', 'o-due-pending']);
   });
 
+  it('关单回补库存：到点关单后 products.stock 回到扣减前；第二轮不再回血（全量审计 M20）', async () => {
+    // @why 关单 job 里删掉 restoreStockForOrder 时既有用例全绿——"到点关单 → 库存永久少一件"
+    //      是静默事故，必须由库存数字钉住。
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status)
+      values ('p-exj', 'Probe', 'kitchen', 1000, 100, 3, 'JP', 'active')
+    `;
+    await seedOrder('o-restock', 'created', new Date(NOW.getTime() - 1_000));
+    await db`insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy, declared_value_usd)
+             values ('oi-exj', 'o-restock', 'p-exj', 'Probe', 2, 1000, 700)`;
+    await db`update products set stock = 1 where id = 'p-exj'`; // 建单时扣掉了 2
+    const { deps } = makeDeps();
+    await runSchedulerOnce(deps, [createExpireOrdersJob()]);
+    expect(await statusOf('o-restock')).toBe('expired');
+    const after = await db`select stock from products where id = 'p-exj'`;
+    expect(Number(after[0]?.stock)).toBe(3);
+    await runSchedulerOnce(deps, [createExpireOrdersJob()]);
+    const again = await db`select stock from products where id = 'p-exj'`;
+    expect(Number(again[0]?.stock)).toBe(3);
+  });
+
   it('幂等：第二轮处理 0 单、审计事件不翻倍', async () => {
     await seedOrder('o-due', 'created', new Date(NOW.getTime() - 1_000));
     const { deps } = makeDeps();

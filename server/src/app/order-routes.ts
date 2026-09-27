@@ -71,8 +71,18 @@ function parseBody(body: unknown): {
   if (b['expected_total_jpy'] !== undefined && !Number.isInteger(b['expected_total_jpy'])) {
     throw new AppError(40001, { reason: 'expected_total_jpy_shape' });
   }
-  if (b['contact_email'] !== undefined && typeof b['contact_email'] !== 'string') {
-    throw new AppError(40001, { reason: 'contact_email_shape' });
+  if (b['contact_email'] !== undefined) {
+    // 形状 + 长度在入口拦（全量审计 2026-09-26）：列是 VARCHAR(255)，超长会以 PG 22001 → 50000 暴露，
+    // 而它是客户端可控输入，应是 40001；格式只做最低限度（有 @、无空白），不发明邮箱正则
+    const email = b['contact_email'];
+    if (
+      typeof email !== 'string' ||
+      email.length === 0 ||
+      email.length > 255 ||
+      !/^[^\s@]+@[^\s@]+$/.test(email)
+    ) {
+      throw new AppError(40001, { reason: 'contact_email_shape' });
+    }
   }
   return {
     addressId: b['address_id'] as string,

@@ -468,6 +468,8 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
       TERMS_VERSION: 'TOS-TEST-1',
       STRIPE_SECRET_KEY: 'sk_live_e2e_placeholder_not_real',
       STRIPE_WEBHOOK_SECRET: 'whsec_e2e_placeholder_not_real',
+      APP_ID: 'wx-e2e-placeholder',
+      APP_SECRET: 'e2e-placeholder-app-secret',
       CHECKOUT_BASE_URL: 'https://checkout.example.com',
       CORS_ORIGINS: 'https://admin.example.com',
       SHUTDOWN_READY_DELAY_MS: '50',

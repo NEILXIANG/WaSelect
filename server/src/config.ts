@@ -427,6 +427,14 @@ const crossField = schema.superRefine((c, ctx) => {
   //     "联调期合法、结束后残留"的形态，处理口径一致：配了就是配置错误，拒启。
   //     staging 同拒（P3-7 同口径）：staging 是公网可达环境，无密码门开在公网 =
   //     任何人能登进任意账号；本机/CI 才是它唯一合法的生存环境。
+  // 1d. 微信登录配置成对 + 生产必配（全量审计 2026-09-26 P2）：APP_ID / APP_SECRET 缺一，装配层就不建
+  //     wechatAuth，登录一律 50000——服务照样起得来，审核期唯一的入口却是死的。半配比不配更隐蔽。
+  if ((c.APP_ID === undefined) !== (c.APP_SECRET === undefined)) {
+    add('APP_ID', 'APP_ID 与 APP_SECRET 必须同时配置或同时留空（只配一个 = 登录 500）');
+  }
+  if (isProd && c.APP_ID === undefined) {
+    add('APP_ID', '生产环境必须配置 APP_ID / APP_SECRET（小程序登录是唯一入口，缺了登录全部 500）');
+  }
   if ((isProd || c.NODE_ENV === 'staging') && c.WECHAT_DEV_LOGIN !== undefined) {
     add(
       'WECHAT_DEV_LOGIN',

@@ -61,8 +61,13 @@ export interface RateLimiterDeps {
 export function rateLimitRules(config: AppConfig): {
   /** 管理端登录：5 次 / 15 分钟 / IP（D-52；窗口时长见文件头 @limitation 二）。 */
   adminLogin: RateLimitRule;
-  /** 报价/小程序登录/短链等高频公开入口：30 次 / 分钟 / IP。 */
-  publicWrite: RateLimitRule;
+  /**
+   * 报价/建单/发起支付/小程序登录/短链等公开入口：30 次 / 分钟 / IP，**每个入口独立一个桶**。
+   * @why 全量审计 2026-09-26 P1：曾经五处共用 `public.write` 一个桶——用户在购物车里改几次数量
+   *      （每次一个报价）+ 建单 + 发起支付就逼近 30，第 31 次登录/短链被 42901；移动网络 CGNAT 下
+   *      成百上千用户共享一个出口 IP，共享桶会把无关用户一起拒掉。按入口分桶后配额互不消耗。
+   */
+  publicWrite: (routeKey: string) => RateLimitRule;
 } {
   return {
     adminLogin: {
@@ -70,11 +75,11 @@ export function rateLimitRules(config: AppConfig): {
       limit: config.RATE_LIMIT_LOGIN_PER_15MIN,
       windowMs: 15 * 60_000,
     },
-    publicWrite: {
-      routeKey: 'public.write',
+    publicWrite: (routeKey: string) => ({
+      routeKey: `public.write.${routeKey}`,
       limit: config.RATE_LIMIT_QUOTE_PER_MIN,
       windowMs: 60_000,
-    },
+    }),
   };
 }
 

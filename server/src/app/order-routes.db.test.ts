@@ -247,6 +247,21 @@ describe('POST /orders（建单全链路）', () => {
     }
   });
 
+  it('contact_email 形状：空串 / 无 @ / 256 字符 → 40001（不能让 VARCHAR(255) 以 22001 → 500 暴露）；合法值 201', async () => {
+    const srv = await buildServer();
+    try {
+      for (const [i, bad] of ['', 'no-at-sign', `${'a'.repeat(251)}@x.io`].entries()) {
+        const r = await create(srv.url, { ...BODY, contact_email: bad }, `ce-bad-${i}`);
+        expect(r.status, bad.slice(0, 20)).toBe(400);
+        expect(r.json['code']).toBe(40001);
+      }
+      const ok = await create(srv.url, { ...BODY, contact_email: 'hanako@example.com' }, 'ce-ok');
+      expect(ok.status).toBe(201);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('库存不足 → 40901（整单回滚，其它商品也不扣）；他人地址 → 40400；超重 → 50004；缺 fx → 50003', async () => {
     const srv = await buildServer();
     try {

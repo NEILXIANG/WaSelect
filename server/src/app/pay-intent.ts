@@ -174,17 +174,47 @@ export async function createPayIntent(
   }
 
   // ── 5. 金额与机构会话（确定性幂等键，文件头 @why）───────────────────────────
-  const charge = resolveCharge(provider.capabilities.currencies, order);
-  const session = await provider.create({
-    orderId: order.id,
-    orderNo: order.order_no,
-    amountJpy: order.total_jpy,
-    currency: charge.currency,
-    amountMinor: charge.amount,
-    destCountry: order.dest_country,
-    idempotencyKey: `pay-${order.id}-${input.channel}`,
-    expiresAt: order.expires_at.toISOString(),
-  });
+  // 全量审计 2026-09-26 P1：扣款币种曾只看 Provider 能力（Stripe 能力 JPY+USD → 选 JPY），
+  //    而通道**配置**对外宣告的是 USD（`GET /pay/channels?currency=USD` 才列出 stripe，前端按 USD 展示价引导）
+  //    → 用户看到 USD、Stripe 却按 JPY 扣，实付由发卡行汇率决定，我方汇率缓冲全部失效。
+  //    以"通道在该币种下**对外可见**"为准（与列表接口同一判定），再与能力取交集。
+  // 复用时钱按**行里登记的**币种/金额走（mark-paid 只认行里的值）；配置改了币种也不能让响应与会话不一致
+  const charge = reusing
+    ? { currency: existing.charge_currency, amount: existing.charge_amount }
+    : resolveCharge(
+        provider.capabilities.currencies.filter((c) =>
+          listedFor(registry, input.channel, order, c),
+        ),
+        order,
+      );
+  // 全量审计 2026-09-26 P1（两处）：
+  //  ① 复用 copylink 意图时**不再回调机构**：行里已存 provider_ref / pay_url。曾经同键重调 create，
+  //     而 Stripe 的 expires_at = max(订单到期, now+30min) 随调用时刻变化 → 同一 Idempotency-Key 不同参数
+  //     → Stripe 400 idempotency_error → 用户第二次点"复制链接"直接 500（mock 按键缓存所以测试全绿）。
+  //  ② 新建意图的幂等键带**轮次**（该单已有几条 payments 行）：换通道 A→B→A 时旧 A 行已 cancelled，
+  //     机构按同键复放同一 provider_ref → 撞 (provider, provider_ref) 唯一键 → 被误判成"已有在途支付"。
+  const session: PaymentSession =
+    reusing && existing.pay_url !== null && existing.provider_ref !== null
+      ? {
+          providerRef: existing.provider_ref,
+          entry: { mode: 'copylink', url: existing.pay_url },
+          expiresAt: order.expires_at.toISOString(),
+        }
+      : await provider.create({
+          orderId: order.id,
+          orderNo: order.order_no,
+          amountJpy: order.total_jpy,
+          currency: charge.currency,
+          amountMinor: charge.amount,
+          destCountry: order.dest_country,
+          idempotencyKey: intentIdempotencyKey(
+            order.id,
+            input.channel,
+            // 复用：该 initiated 行是第 n 行 → 当初建它时的轮次是 n-1；新建：轮次 = 已有行数
+            reusing ? (await countPayments(tx, order.id)) - 1 : await countPayments(tx, order.id),
+          ),
+          expiresAt: order.expires_at.toISOString(),
+        });
 
   // ── 6. 登记 payments 行（复用不建行：同一意图同一行）─────────────────────────
   if (!reusing) {
@@ -216,4 +246,34 @@ export async function createPayIntent(
     payload,
     expiresAt: order.expires_at,
   };
+}
+
+/**
+ * 意图幂等键：首轮 `pay-<order>-<channel>`（与既有会话兼容），之后带轮次 `-<n>`。
+ * @why 同一订单同一通道的第二轮意图（A→B→A）必须是**新的**机构会话，否则机构复放旧 provider_ref 撞唯一键。
+ */
+function intentIdempotencyKey(orderId: string, channel: string, round: number): string {
+  const base = `pay-${orderId}-${channel}`;
+  return round <= 0 ? base : `${base}-${round}`;
+}
+
+/** 该单已登记过的 payments 行数（任何状态）——作为新意图幂等键的轮次。 */
+async function countPayments(tx: Db, orderId: string): Promise<number> {
+  const rows = await tx`select count(*)::int as n from payments where order_id = ${orderId}`;
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * 该通道在 `currency` 下是否对用户可见（与 `GET /pay/channels` 同一判定：enabled + 国家 + 币种）。
+ * `'*'` 能力不需要判定（能力本身不指向某个币，交集里保留它由 resolveCharge 按 JPY 处理）。
+ */
+function listedFor(
+  registry: PaymentRegistry,
+  channel: string,
+  order: OrderPayRow,
+  currency: string,
+): boolean {
+  if (currency === '*') return true;
+  const query = { destCountry: order.dest_country ?? '', amountJpy: order.total_jpy, currency };
+  return registry.listAvailable(query).some((v) => v.channel === channel);
 }

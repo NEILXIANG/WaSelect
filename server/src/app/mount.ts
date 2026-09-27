@@ -127,7 +127,10 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
    */
   const rateLimitStore = createMemoryRateLimitStore();
   const rateLimitDeps = { store: rateLimitStore, clock: systemClock, logger };
-  app.use('/api/v1/orders/quote', rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite));
+  app.use(
+    '/api/v1/orders/quote',
+    rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('orders.quote')),
+  );
   mountQuoteRoutes(app, {
     db,
     logger,
@@ -158,7 +161,10 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     identity: withIdentityCache(createIdentityCheck(db)),
     idempotency: createIdempotencyExecutor(db),
     events,
-    createOrderLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
+    createOrderLimiter: rateLimiter(
+      rateLimitDeps,
+      rateLimitRules(config).publicWrite('orders.create'),
+    ),
   });
 
   // ── 订单读路径（I1-U5c）：只读不共用写配额（order-query-routes @why）──
@@ -179,15 +185,16 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     identity: withIdentityCache(createIdentityCheck(db)),
     idempotency: createIdempotencyExecutor(db),
     registry,
-    payLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
+    payLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('orders.pay')),
   });
 
-  // ── 短链落地（I1-U6a-2 / D-49）：无鉴权（token 即凭证）；限流同 publicWrite 桶 ──
+  // ── 短链落地（I1-U6a-2 / D-49）：无鉴权（token 即凭证）；限流 publicWrite（独立桶） ──
   mountPayLinkRoutes(app, {
     db,
     clock: systemClock,
     logger,
-    linkLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
+    checkoutBaseUrl: config.CHECKOUT_BASE_URL,
+    linkLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('pay.link')),
   });
 
   // ── 小程序登录（I1-U6b）：真 AppID 优先；dev 替身只在 development/test 注册
@@ -207,7 +214,10 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     idGen: systemIdGen,
     authConfig: { secret: config.JWT_SECRET, issuer: 'waselect' },
     wechatAuth,
-    loginLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite),
+    loginLimiter: rateLimiter(
+      rateLimitDeps,
+      rateLimitRules(config).publicWrite('auth.wechat.login'),
+    ),
   });
 
   // ── 每日作业触发（I1-U7b / D-43）：Render Cron 的 HTTP 入口；异步执行走同一套调度器框架 ──

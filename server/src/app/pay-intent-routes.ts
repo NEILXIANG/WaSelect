@@ -10,10 +10,8 @@
  * @why 限流挂 publicWrite（30 次/分钟/IP）：每次发起都可能产生一次出站机构调用，
  *      不限流等于把我们对机构 API 的调用频次交给网络另一端决定。
  *
- * @tradeoff 限流桶是"按规则共享"而不是"按路由独享"：建单等同属 publicWrite 的写接口
- *      会**预消耗**本接口的配额，突发建单后紧跟发起支付可能更早撞 42901。
- *      换来限流规则表只有一份、新增写接口不用单独调额；代价是配额语义不直观
- *      （测试里要绕开就得直接插单，见 pay-intent-routes.db.test.ts 的限流用例）。
+ * @tradeoff 限流桶按入口独享（全量审计 2026-09-26 起）：建单、报价、发起支付各自 30 次/分钟/IP，
+ *      互不预消耗；限流规则表仍只有一份（`publicWrite(routeKey)`），新增写接口只需给一个 routeKey。
  *
  * @see app/pay-intent.ts（核心：守卫/复用/换通道/短链）；contracts/api-contract.yaml
  *      （PaymentIntent）；docs/I1阶段开发实施方案.md §3.6

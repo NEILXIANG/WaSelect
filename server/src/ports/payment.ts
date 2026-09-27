@@ -154,7 +154,10 @@ export interface ProviderEvent {
   rawType: string;
   /** 归一化结果：业务只认这几种。 */
   outcome: 'succeeded' | 'failed' | 'expired' | 'refunded' | 'disputed' | 'unknown';
-  /** 我们自己的订单 id（从机构 metadata 回带；取不到是**设计缺陷**，必须抛）。 */
+  /**
+   * 我们自己的订单 id（从机构 metadata 回带）。落账类事件取不到是**设计缺陷**，必须抛；
+   * 与订单无关的机构事件（payout / balance 等）允许为空串且 outcome 必为 unknown（全量审计 2026-09-26）。
+   */
   orderId: string;
   providerRef: string;
   /**

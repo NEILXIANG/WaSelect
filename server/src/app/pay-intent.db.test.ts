@@ -265,9 +265,54 @@ describe('发起（JPY 通道）', () => {
     expect(rows[0]).toMatchObject({ provider: 'pa', status: 'cancelled' });
     expect(rows[1]).toMatchObject({ provider: 'pb', status: 'initiated' });
   });
+
+  it('换通道回切 A→B→A：机构复放旧 provider_ref 也不撞唯一键（幂等键带轮次），第三次仍成功（全量审计 P1）', async () => {
+    const sink = new MemorySink();
+    const registry = fakeRegistry({ pa: fakeProvider('pa'), pb: fakeProvider('pb') });
+    await seedPayable('o-1');
+    const go = (channel: string) =>
+      withTransaction(db, (tx) =>
+        createPayIntent(tx, deps(registry, sink), { orderId: 'o-1', userId: 'u-1', channel }),
+      );
+    const first = await go('pa');
+    await go('pb');
+    const third = await go('pa');
+    // 新一轮意图是**新的**机构会话（fakeProvider 的 ref 由幂等键派生，键带轮次即不同）
+    expect(third.providerRef).not.toBe(first.providerRef);
+    const rows =
+      await db`select provider, status from payments where order_id = 'o-1' order by created_at`;
+    expect(rows.map((r) => `${r.provider}:${r.status}`)).toEqual([
+      'pa:cancelled',
+      'pb:cancelled',
+      'pa:initiated',
+    ]);
+  });
 });
 
 describe('copylink（D-49 短链）', () => {
+  it('复用 copylink 意图**不回调机构**：provider.create 只被调一次，pay_url / provider_ref 取自库（Stripe 同键异参会 400）', async () => {
+    const sink = new MemorySink();
+    const base = fakeProvider('pc', { currencies: ['USD'], copylink: true });
+    let creates = 0;
+    const counting: PaymentProvider = {
+      ...base,
+      create: (req) => {
+        creates += 1;
+        return base.create(req);
+      },
+    };
+    const registry = fakeRegistry({ pc: counting });
+    await seedPayable('o-1');
+    const first = await withTransaction(db, (tx) =>
+      createPayIntent(tx, deps(registry, sink), { orderId: 'o-1', userId: 'u-1', channel: 'pc' }),
+    );
+    const second = await withTransaction(db, (tx) =>
+      createPayIntent(tx, deps(registry, sink), { orderId: 'o-1', userId: 'u-1', channel: 'pc' }),
+    );
+    expect(creates).toBe(1);
+    expect(second.providerRef).toBe(first.providerRef);
+  });
+
   it('pay_url 落库；token 明文进 pay_url、sha256 落 orders.pay_token_hash（两端对得上）', async () => {
     const sink = new MemorySink();
     const registry = fakeRegistry({
@@ -323,6 +368,29 @@ describe('copylink（D-49 短链）', () => {
 });
 
 describe('扣款币种解析（JPY 锚优先）', () => {
+  it('通道配置只对外宣告 USD（列表按 USD 才列出）而能力含 JPY+USD → 按 **USD** 扣，与用户看到的一致（全量审计 P1）', async () => {
+    const sink = new MemorySink();
+    const provider = fakeProvider('st', { currencies: ['JPY', 'USD'], copylink: true });
+    const registry = createPaymentRegistry({
+      configs: [
+        {
+          channel: 'st',
+          enabled: true,
+          priority: 10,
+          countries: ['*'],
+          currencies: ['USD'],
+          label: 'st',
+        },
+      ],
+    });
+    registry.register('st', () => provider);
+    await seedPayable('o-1');
+    const r = await withTransaction(db, (tx) =>
+      createPayIntent(tx, deps(registry, sink), { orderId: 'o-1', userId: 'u-1', channel: 'st' }),
+    );
+    expect(r.charge.currency).toBe('USD');
+  });
+
   it('USD-only 通道：按订单 fx_snapshot 换算（断言值独立复算）', async () => {
     const sink = new MemorySink();
     const registry = fakeRegistry({

@@ -86,6 +86,16 @@ export interface PaidSettlement {
  *              ⚠️ 换通道重付的场景（旧行 cancelled、新行 initiated）在 I1 状态机里
  *              应当先作废旧行；本函数不猜"该用哪一行"，取最新的那条。
  */
+/** 核对失败的 reason 全集（回调管线据此把它们与普通状态冲突分层）。 */
+export const SETTLEMENT_MISMATCH_REASONS = [
+  'no_payment_intent',
+  'channel_mismatch',
+  'provider_ref_mismatch',
+  'currency_mismatch',
+  'amount_mismatch',
+  'settlement_unverifiable',
+] as const;
+
 async function assertSettlementMatches(
   tx: Db,
   orderId: string,
@@ -112,14 +122,23 @@ async function assertSettlementMatches(
       ctx: { expected: p.provider, got: s.channel },
     });
   }
-  // 两边都有值才比：一方为空是"机构没给/没记"，比了只会误报
+  // 两边都有值才比：一方为空是"机构没给/没记"，比了只会误报。
+  // ⚠️ 且只在**同一 id 族**内比（全量审计 2026-09-26）：Stripe 登记的是 Checkout Session（`cs_…`），
+  //    而 `payment_intent.succeeded` 事件回带的是 `pi_…`、`charge.*` 回带 `ch_…`——同一笔钱三种 id。
+  //    跨族硬比会把每一单 PI 先到的正常回调判成 provider_ref_mismatch（现在是 error 级 + 进对账）。
+  //    跨族时放弃单号核对，仍由通道 / 币种 / 金额三项兜住。
   if (
     typeof p.provider_ref === 'string' &&
     p.provider_ref.length > 0 &&
     s.providerRef.length > 0 &&
+    sameRefFamily(p.provider_ref, s.providerRef) &&
     p.provider_ref !== s.providerRef
   ) {
-    throw new AppError(40902, { from: current, reason: 'provider_ref_mismatch' });
+    throw new AppError(40902, {
+      from: current,
+      reason: 'provider_ref_mismatch',
+      ctx: { expected: p.provider_ref, got: s.providerRef },
+    });
   }
   if (s.currency === undefined || s.amountMinor === undefined) {
     throw new AppError(40902, { from: current, reason: 'settlement_unverifiable' });
@@ -194,4 +213,16 @@ export async function markOrderPaid(
     // 登记（不是分发）：只有这个事务提交成功，订阅者才会收到 order.paid
     emit({ name: 'order.paid', at: paidAt.toISOString(), orderId });
   });
+}
+
+/**
+ * 两个机构单号是否属于同一 id 族（前缀到第一个 `_` 为止；无下划线的视为同族——mock 等自定义 ref）。
+ * @measured Stripe 对象 id 形如 `cs_test_…` / `pi_…` / `ch_…` / `re_…`，族名是第一段（test/factories/stripe.ts 样本一致）。
+ */
+// @limitation 跨族放行意味着 Stripe 上单号核对只对 `checkout.session.*` 事件生效；`payment_intent.succeeded`
+//             先到时凭通道/币种/金额落账。A→B→A 后用户若付了**旧** cs 会话，PI 事件同样能落账——钱是真的、
+//             金额对，但 transaction_id 指向旧会话；旧会话不主动作废是 pay-intent 的既有 @limitation。
+function sameRefFamily(a: string, b: string): boolean {
+  const fam = (x: string): string => (x.includes('_') ? x.slice(0, x.indexOf('_')) : '');
+  return fam(a) === fam(b);
 }

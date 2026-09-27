@@ -182,6 +182,28 @@ describe('落账绑定通道与金额（三审 S1② / U1）', () => {
     ).rejects.toMatchObject({ code: 40902, details: { reason: 'provider_ref_mismatch' } });
   });
 
+  it('无下划线的机构单号（自定义 ref 形态）同族硬比：不同即 provider_ref_mismatch', async () => {
+    await seedIntent('o-mp', { providerRef: 'REF0001' });
+    const { events } = bus();
+    await expect(
+      markOrderPaid(db, events, fixedClock('2026-01-02T00:00:00.000Z'), 'o-mp', {
+        ...OK,
+        providerRef: 'REF0002',
+      }),
+    ).rejects.toMatchObject({ code: 40902, details: { reason: 'provider_ref_mismatch' } });
+  });
+
+  it('机构单号跨 id 族（登记 cs_、事件回带 pi_）→ 不比单号，凭通道/币种/金额落账（Stripe PI 事件先到是常态）', async () => {
+    await seedIntent('o-mp');
+    const { events } = bus();
+    await markOrderPaid(db, events, fixedClock('2026-01-02T00:00:00.000Z'), 'o-mp', {
+      ...OK,
+      providerRef: 'pi_3Habcdef',
+    });
+    const rows = await db`select status from orders where id = 'o-mp'`;
+    expect(rows[0]?.status).toBe('paid');
+  });
+
   it('⛔ 从未发起过支付（无 payments 行）→ 落账被拒：持任一通道密钥也不能凭空置 paid', async () => {
     const { events } = bus();
     await expect(

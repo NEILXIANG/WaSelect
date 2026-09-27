@@ -444,6 +444,21 @@ describe('parseWebhook（事件映射与验签细节）', () => {
     );
   });
 
+  it.each(['balance.available', 'payout.paid', 'charge.refunded', 'payment_intent.canceled'])(
+    '与订单无关 / 非落账事件缺 order_id（%s）→ unknown + orderId 空串，不抛（否则 Stripe 无限重发直至停用端点）',
+    async (type) => {
+      const { provider } = build();
+      const body = JSON.stringify({
+        id: `evt_${type}`,
+        type,
+        data: { object: { object: 'x', id: 'obj_1' } },
+      });
+      const headers = { [STRIPE_SIGNATURE_HEADER]: signStripePayload(body, SECRET, NOW_SEC) };
+      const ev = await provider.parseWebhook(Buffer.from(body, 'utf8'), headers);
+      expect(ev).toMatchObject({ outcome: 'unknown', orderId: '', rawType: type });
+    },
+  );
+
   it('取不到 order_id → 抛（这是**我们**的缺陷：create 时没写 metadata）', async () => {
     const { provider } = build();
     // 造一条没有 metadata 的报文（模拟 create 时漏写）

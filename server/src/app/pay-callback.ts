@@ -40,6 +40,18 @@ import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 import type { ProviderEvent } from '../ports/payment.js';
 import { payloadHash, type WebhookStore } from '../ports/webhooks.js';
+import {
+  RESULT_IGNORED_PREFIX,
+  RESULT_LATE_PAYMENT,
+  RESULT_MISMATCH_PREFIX,
+  RESULT_PAID_ALREADY,
+  RESULT_STATUS_CONFLICT,
+  RESULT_UNMATCHED_PREFIX,
+} from './webhook-results.js';
+import { SETTLEMENT_MISMATCH_REASONS } from './mark-paid.js';
+
+/** mark-paid 核对失败的 reason 集合（单一来源：app/mark-paid.ts）。 */
+const MISMATCH_REASONS: ReadonlySet<string> = new Set(SETTLEMENT_MISMATCH_REASONS);
 
 export interface CallbackPipelineDeps {
   webhooks: WebhookStore;
@@ -192,7 +204,7 @@ export async function handleProviderCallback(
     });
     await deps.webhooks.finish({
       ...webhook,
-      result: `ignored:${event.outcome}`,
+      result: `${RESULT_IGNORED_PREFIX}${event.outcome}`,
       token,
       note: `归一化结果为 ${event.outcome}：MVP 不落业务状态（F12 接状态机后补）`,
     });
@@ -250,7 +262,7 @@ export async function handleProviderCallback(
       });
       await deps.webhooks.finish({
         ...webhook,
-        result: 'unmatched:order_not_found',
+        result: `${RESULT_UNMATCHED_PREFIX}order_not_found`,
         token,
         note: '超过宽限期订单仍不存在：转入对账任务（F13），机构不必再重发',
       });
@@ -274,7 +286,7 @@ export async function handleProviderCallback(
         });
         await deps.webhooks.finish({
           ...webhook,
-          result: 'late_payment',
+          result: RESULT_LATE_PAYMENT,
           token,
           note: '迟到付款：订单已过支付窗口，拒落账转对账（自动退款属售后阶段，当前需人工处理）',
         });
@@ -282,6 +294,30 @@ export async function handleProviderCallback(
           disposition: 'status_conflict',
           status: 200,
           body: { received: true, order_id: event.orderId, ignored: 'late_payment' },
+        };
+      }
+      // 全量审计 P1：落账核对不通过（通道 / 机构单号 / 币种 / 金额 / 无支付意图）此前与
+      //    "订单已 cancelled" 折成同一个 warn + `ignored:status_conflict`——"机构说收了 10 円、我方登记 1000 円"
+      //    在日志里与普通过期冲突长得一样，且 reason / expected / got 全被丢弃。这里单独分层：error 级、
+      //    带 reason 与期望值，result 写 `mismatch:<reason>` 供对账精确检索。机构仍拿 200：重发也不会变。
+      if (typeof details?.reason === 'string' && MISMATCH_REASONS.has(details.reason)) {
+        const ctx = (details as { ctx?: Record<string, unknown> }).ctx;
+        deps.logger.error('callback_settlement_mismatch', {
+          order_id: event.orderId,
+          provider: channel,
+          result: 'needs_human',
+          ctx: { event_id: event.eventId, reason: details.reason, from: details.from, ...ctx },
+        });
+        await deps.webhooks.finish({
+          ...webhook,
+          result: `${RESULT_MISMATCH_PREFIX}${details.reason}`,
+          token,
+          note: '落账核对不通过：不落账、不重发，转对账人工处理',
+        });
+        return {
+          disposition: 'status_conflict',
+          status: 200,
+          body: { received: true, order_id: event.orderId, ignored: 'settlement_mismatch' },
         };
       }
       if (details?.from === 'paid') {
@@ -292,7 +328,7 @@ export async function handleProviderCallback(
         });
         await deps.webhooks.finish({
           ...webhook,
-          result: 'paid:already',
+          result: RESULT_PAID_ALREADY,
           token,
           note: '同单另一事件类型到达，订单已是 paid（N13：正常形态，不是异常）',
         });
@@ -309,7 +345,7 @@ export async function handleProviderCallback(
       });
       await deps.webhooks.finish({
         ...webhook,
-        result: 'ignored:status_conflict',
+        result: RESULT_STATUS_CONFLICT,
         token,
         note: '业务冲突：重发也不会变，靠对账而非重试',
       });

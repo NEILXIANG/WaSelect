@@ -63,6 +63,8 @@ describe('NODE_ENV（D17）', () => {
     const prod = {
       ...baseEnv,
       NODE_ENV: 'production',
+      APP_ID: 'wx-prod-like',
+      APP_SECRET: 'prod-like-app-secret',
       DATABASE_URL: 'postgres://u@db.internal.example:5432/waselect',
       CORS_ORIGINS: 'https://admin.example.com',
       PAYMENT_CHANNELS: 'stripe',
@@ -211,6 +213,8 @@ describe('跨字段校验：单项合法但组合成事故', () => {
   const prod = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
     ...baseEnv,
     NODE_ENV: 'production',
+    APP_ID: 'wx-prod-like',
+    APP_SECRET: 'prod-like-app-secret',
     DATABASE_URL: 'postgresql://app@db.internal:5432/japan_shop',
     PAYMENT_CHANNELS: 'stripe',
     STRIPE_SECRET_KEY: 'sk_live_x',
@@ -434,6 +438,8 @@ describe('配置形状（N11）', () => {
   const prodLike = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
     ...baseEnv,
     NODE_ENV: 'production',
+    APP_ID: 'wx-prod-like',
+    APP_SECRET: 'prod-like-app-secret',
     DATABASE_URL: 'postgresql://app@db.internal:5432/japan_shop',
     PAYMENT_CHANNELS: 'stripe',
     STRIPE_SECRET_KEY: 'sk_live_x',
@@ -441,6 +447,16 @@ describe('配置形状（N11）', () => {
     CHECKOUT_BASE_URL: 'https://checkout.example.com',
     CORS_ORIGINS: 'https://admin.example.com',
     ...extra,
+  });
+
+  it('微信登录配置：APP_ID / APP_SECRET 只配一个 → 拒启；生产两者都缺 → 拒启（全量审计 P2：半配登录 500）', () => {
+    expect(expectReject(prodLike({ APP_SECRET: '' })).join('\n')).toContain('APP_ID');
+    expect(expectReject(prodLike({ APP_ID: '' })).join('\n')).toContain('APP_ID');
+    expect(expectReject(prodLike({ APP_ID: '', APP_SECRET: '' })).join('\n')).toContain(
+      '生产环境必须配置 APP_ID',
+    );
+    // 开发环境两者都缺是合法的（走 WECHAT_DEV_LOGIN 或根本不登录）
+    expect(() => loadConfig({ ...baseEnv, APP_ID: '', APP_SECRET: '' })).not.toThrow();
   });
 
   it('CHECKOUT_BASE_URL 非 URL → 拒启（staging 也拦，不能等拼短链才发现）', () => {

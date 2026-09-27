@@ -10,9 +10,8 @@
  *      排查方向整个反掉；响亮失败的 50000 才是"这是我们的配置缺口"的诚实表达
  *      （NOT_IMPLEMENTED 清单已删此路径，路由必须在）。
  *
- * @tradeoff 限流挂 publicWrite 共享桶（规则表注释早已把"小程序登录"列进这条规则）：
- *      与建单/报价/短链同桶，突发建单后登录可能更早撞 42901；
- *      换来限流规则只有一份表——登录是每分钟 30 次/IP 远远够用的低频动作。
+ * @tradeoff 限流挂 publicWrite（按入口独立桶，全量审计 2026-09-26 起不再共享）：
+ *      登录桶不再被建单/报价/短链预消耗；30 次/分钟/IP 对登录这种低频动作远远够用。
  *
  * @see app/wechat-login.ts（核心）；ports/wechat-auth.ts；contracts/api-contract.yaml
  *      /auth/wechat/login

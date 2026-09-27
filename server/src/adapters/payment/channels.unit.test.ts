@@ -274,6 +274,8 @@ describe('buildPaymentRegistry：生产环境的 mock 门（三审 S1）', () =>
     const c = loadConfig({
       ...baseEnv,
       NODE_ENV: 'production',
+      APP_ID: 'wx-prod-like',
+      APP_SECRET: 'prod-like-app-secret',
       DATABASE_URL: 'postgresql://app@db.internal:5432/japan_shop',
       PAYMENT_CHANNELS: 'stripe',
       STRIPE_SECRET_KEY: 'sk_live_x',

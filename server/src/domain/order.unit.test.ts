@@ -49,6 +49,23 @@ describe('ORDER_TRANSITIONS（整体断言，与技术文档 §1 同源）', () 
     }
   });
 
+  it('非法边**不存在**：整表与期望常量逐字相等（防"加了一条 paid→cancelled 却没人红"，全量审计 M7）', () => {
+    // @why 上面只断言"该有的边有"，往表里**多加**一条边（例如让已付款的单可以 cancelled）全绿——
+    //      而多出来的边正是钱的事故（已付款被取消 = 退款流程绕过）。整表相等把两个方向都钉住。
+    expect(ORDER_TRANSITIONS).toEqual({
+      created: ['pending_payment', 'cancelled', 'expired'],
+      pending_payment: ['paid', 'expired', 'cancelled'],
+      paid: ['shipped', 'refunding'],
+      shipped: ['delivered', 'refunding'],
+      delivered: ['completed', 'refunding'],
+      completed: [],
+      cancelled: [],
+      expired: [],
+      refunding: ['refunded'],
+      refunded: [],
+    });
+  });
+
   it('终态不可再迁（expired 的单不能被关单 job 之外的任何东西复活）', () => {
     for (const t of TERMINAL_ORDER_STATUS) {
       for (const to of ORDER_STATUS) {

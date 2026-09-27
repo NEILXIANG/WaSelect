@@ -46,6 +46,8 @@ async function buildServer(): Promise<{ url: string; close: () => Promise<void> 
     JWT_SECRET: 'pay-link-route-test-'.repeat(3),
     PAYMENT_CHANNELS: 'mock',
     TERMS_VERSION: 'TOS-TEST-1',
+    // 与生产同形：失效页必须落到 checkout 静态站的绝对地址（浏览器此时已在 API 域名上）
+    CHECKOUT_BASE_URL: 'https://checkout.example.test/',
   });
   const app = createHttpApp({
     logger,
@@ -107,7 +109,8 @@ describe('GET /pay/link/{id}（302 搬运）', () => {
       ]) {
         const res = await fetch(url, { redirect: 'manual' });
         expect(res.status).toBe(302);
-        expect(res.headers.get('location')).toBe('/pay/expired');
+        // 绝对地址 + 尾斜杠被归一（`//pay/expired` 会把静态站当成协议相对地址）
+        expect(res.headers.get('location')).toBe('https://checkout.example.test/pay/expired');
       }
     } finally {
       await srv.close();

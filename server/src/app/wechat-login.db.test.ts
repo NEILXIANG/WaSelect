@@ -74,6 +74,20 @@ describe('loginWithWechat', () => {
     expect(JSON.stringify(logs[0])).toContain('"is_new_user":true');
   });
 
+  it('token_ver 被 bump 后重新登录 → 新 token 带当前 ver，能通过 verifyToken 的 ver 比对（否则无限重登）', async () => {
+    const first = await loginWithWechat(db, deps(fakeWechat(OPENID)), { code: 'c-1' });
+    await db`update users set token_ver = token_ver + 1 where id = ${first.user.id}`;
+    const again = await loginWithWechat(db, deps(fakeWechat(OPENID)), { code: 'c-2' });
+    const principal = await verifyToken(
+      again.token,
+      { secret: JWT_SECRET, issuer: 'waselect' },
+      'user',
+    );
+    const rows = await db`select token_ver from users where id = ${first.user.id}`;
+    expect(principal.ver).toBe(Number(rows[0]?.token_ver));
+    expect(principal.ver).toBe(2);
+  });
+
   it('复登：不重复建行（仍 1 行）+ 同一 user.id + is_new_user=false', async () => {
     const d = deps(fakeWechat(OPENID));
     const first = await loginWithWechat(db, d, { code: 'c-1' });

@@ -219,6 +219,38 @@ describe('handleProviderCallback：冲突分层（宽限期用 DB 时钟）', ()
     expect(sink.find('callback_conflict')[0]?.level).toBe('warn');
   });
 
+  it.each([
+    'no_payment_intent',
+    'channel_mismatch',
+    'provider_ref_mismatch',
+    'currency_mismatch',
+    'amount_mismatch',
+    'settlement_unverifiable',
+  ])(
+    '落账核对不通过（40902 reason=%s）→ 2xx + error 告警带 reason/expected/got + 落 mismatch:<reason>',
+    async (reason) => {
+      const rec = fakeStore({});
+      const { d, sink } = deps(rec, async () => {
+        throw new AppError(40902, {
+          from: 'pending_payment',
+          reason,
+          ctx: { expected: 1000, got: 10 },
+        });
+      });
+      const out = await handleProviderCallback(d, 'mock', RAW, event());
+      expect(out.status).toBe(200);
+      expect(out.body).toMatchObject({ received: true, ignored: 'settlement_mismatch' });
+      expect(rec.finished[0]?.result).toBe(`mismatch:${reason}`);
+      const line = sink.find('callback_settlement_mismatch');
+      expect(line).toHaveLength(1);
+      expect(line[0]?.level).toBe('error');
+      expect(JSON.stringify(line[0])).toContain(reason);
+      expect(JSON.stringify(line[0])).toContain('"expected":1000');
+      // 不得再被记成普通 status_conflict（那条是 warn，会被淹）
+      expect(sink.find('callback_conflict')).toHaveLength(0);
+    },
+  );
+
   it('非 40400/40902 的 AppError **原样抛出**（业务 bug 必须变 5xx 让机构重发）', async () => {
     const rec = fakeStore({});
     const { d } = deps(rec, async () => {

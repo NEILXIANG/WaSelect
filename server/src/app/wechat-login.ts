@@ -47,6 +47,7 @@ export interface WechatLoginResult {
 interface UserRow {
   id: string;
   is_admin: boolean;
+  token_ver: number;
 }
 
 export async function loginWithWechat(
@@ -64,7 +65,7 @@ export async function loginWithWechat(
   // count=1 表示这次真的建了行（首登）；0 表示 openid 已存在（复登）——转化漏斗用
   const isNewUser = inserted.count === 1;
   const rows = await db`
-    select id, is_admin from users where openid = ${session.openid}
+    select id, is_admin, token_ver from users where openid = ${session.openid}
   `;
   const user = rows[0] as UserRow | undefined;
   if (user === undefined) {
@@ -73,7 +74,13 @@ export async function loginWithWechat(
     throw new Error(`users 行缺失：ON CONFLICT 后 select 未命中（schema 漂移？）`);
   }
 
-  const token = await signToken({ sub: user.id, role: 'user' }, deps.authConfig);
+  // ⚠️ 必须签当前 token_ver（全量审计 2026-09-26 P1）：曾经不带 ver → 永远签 1，而 requireRole 用库里的
+  //    token_ver 比对；一旦有人 bump（改密/强制下线），该用户之后每次登录仍拿到 ver=1 →
+  //    所有受保护接口 40101 → 前端静默重登 → 无限循环，表现为"登录成功但什么都做不了"。
+  const token = await signToken(
+    { sub: user.id, role: 'user', ver: Number(user.token_ver) },
+    deps.authConfig,
+  );
   // 登录成功这一刻起，本请求后续日志都该带身份（与 requireRole 验签成功后同处置）；
   // 无上下文时（核心被脱离 HTTP 直接调用）no-op，由 context.ts 兜底
   patchContext({ user_id: user.id, actor: `user:${user.id}` });

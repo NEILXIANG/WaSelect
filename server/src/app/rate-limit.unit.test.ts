@@ -12,6 +12,7 @@
  *      test/helpers/mount-ctx.ts（stub 装配上下文）
  */
 import type { NextFunction, Request, Response } from 'express';
+import { loadConfig } from '../config.js';
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../errors.js';
 import { createLogger } from '../logger.js';
@@ -21,7 +22,7 @@ import { stubMountContext } from '../../../test/helpers/mount-ctx.js';
 import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
-import { rateLimiter, type RateLimiterDeps } from './rate-limit.js';
+import { rateLimitRules, rateLimiter, type RateLimiterDeps } from './rate-limit.js';
 
 const T0 = Date.parse('2026-01-02T12:00:00.000Z');
 
@@ -86,6 +87,40 @@ describe('rateLimiter 中间件（桩）', () => {
     run(deps, '1.1.1.1');
     run(deps, '1.1.1.1'); // A 超限
     expect(run(deps, '2.2.2.2').err).toBeUndefined();
+  });
+
+  it('publicWrite(routeKey) 每个入口独立桶：报价打满不消耗登录 / 建单的配额（全量审计 P1）', () => {
+    const cfg = loadConfig({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgres://localhost/x',
+      JWT_SECRET: 'rate-limit-unit-secret-'.repeat(3),
+      PAYMENT_CHANNELS: 'mock',
+      TERMS_VERSION: 'T',
+      RATE_LIMIT_QUOTE_PER_MIN: '2',
+    });
+    const rules = rateLimitRules(cfg);
+    const keys = new Set(
+      ['orders.quote', 'orders.create', 'orders.pay', 'pay.link', 'auth.wechat.login'].map(
+        (k) => rules.publicWrite(k).routeKey,
+      ),
+    );
+    expect(keys.size).toBe(5);
+    const { deps } = makeDeps();
+    const hit = (rule: ReturnType<typeof rules.publicWrite>): Captured => {
+      const captured: Captured = { headers: {} };
+      rateLimiter(deps, rule)(
+        { ip: '9.9.9.9', method: 'POST', path: '/x' } as unknown as Request,
+        { setHeader: () => undefined } as unknown as Response,
+        ((e?: unknown) => {
+          captured.err = e;
+        }) as NextFunction,
+      );
+      return captured;
+    };
+    hit(rules.publicWrite('orders.quote'));
+    hit(rules.publicWrite('orders.quote'));
+    expect(hit(rules.publicWrite('orders.quote')).err).toBeDefined(); // 报价桶满
+    expect(hit(rules.publicWrite('auth.wechat.login')).err).toBeUndefined(); // 登录桶不受影响
   });
 
   it('req.ip 缺失按 unknown 计（绝不自己读 X-Forwarded-For）', () => {

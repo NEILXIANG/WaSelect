@@ -353,6 +353,14 @@ export function createStripeCheckoutProvider(
         const pi = obj['payment_intent'];
         if (obj['object'] === 'dispute' && typeof pi === 'string' && pi.length > 0) {
           orderId = await orderIdViaPaymentIntent(pi);
+        } else if (OUTCOME_BY_TYPE[type] !== 'succeeded' && obj['object'] !== 'dispute') {
+          // 全量审计 2026-09-26 P1：端点订阅了哪些事件由 Stripe 控制台决定——`balance.available` /
+          //    `payout.*` / 控制台手工退款的 `refund.*` / 无 metadata 的 `charge.*` 根本没有我们的单号。
+          //    对它们抛错 = 500 → Stripe 按退避重发数天，持续失败的端点会被标记停用，届时真正的
+          //    `checkout.session.completed` 也收不到。与订单无关的事件按 unknown 收下（管线 200 +
+          //    `ignored:unknown` 留痕）；只有"本该落账却取不到单号"与"拒付却链不回订单"才抛——
+          //    前者是我们 create 漏写 metadata，后者是钱正在被拉回、必须有人看见（不能悄悄 ignored）。
+          orderId = '';
         } else {
           throw firstError;
         }
@@ -371,9 +379,10 @@ export function createStripeCheckoutProvider(
       //    带 payment_status 且不是 'paid' 的 completed 不归一化成 succeeded（二次审查 P2-NEW-1）。
       const paymentStatus = obj['payment_status'];
       const outcome =
-        type === 'checkout.session.completed' &&
-        typeof paymentStatus === 'string' &&
-        paymentStatus !== 'paid'
+        orderId === '' ||
+        (type === 'checkout.session.completed' &&
+          typeof paymentStatus === 'string' &&
+          paymentStatus !== 'paid')
           ? 'unknown'
           : (OUTCOME_BY_TYPE[type] ?? 'unknown');
       return {

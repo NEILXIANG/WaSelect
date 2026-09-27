@@ -212,7 +212,7 @@ describe('POST /orders/{id}/pay（mock 通道全链路）', () => {
   it('限流挂在发起支付上：前 30 次穿过（被业务拦），第 31 次 42901', async () => {
     const srv = await buildServer();
     try {
-      // 直接插单，不走建单端点：限流 key 是 routeKey+IP（publicWrite 全规则共享一个桶），
+      // 直接插单，不走建单端点：限流 key 是 routeKey+IP（publicWrite 按入口分桶：orders.pay 自己一个桶），
       // 建单会预消耗 1 次配额，探针数就说不清了
       await db`
         insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, weight_g,

@@ -227,6 +227,15 @@ describe('render.yaml ↔ 配置 schema 一致', () => {
     for (const p of plans) expect(p).toMatch(/^\d+(\.\d+)?c-\d+(mb|g)$/);
   });
 
+  it('web 服务：构建必须显式装 devDependencies，且发布前有迁移步骤（全量审计 P1）', () => {
+    // @why NODE_ENV=production 被注入到构建期，npm 默认 omit=dev（@measured 见 render.yaml 注释）；
+    //      迁移此前没有任何生产执行点——两条都是"服务能起来、第一次请求才炸"的形态，只能靠清单钉住。
+    const build = /^\s*buildCommand:\s*(.+)$/m.exec(renderYaml)?.[1] ?? '';
+    expect(build).toMatch(/npm ci --include=dev/);
+    const pre = /^\s*preDeployCommand:\s*(.+)$/m.exec(renderYaml)?.[1] ?? '';
+    expect(pre).toMatch(/npm run db:migrate/);
+  });
+
   it('解析器自检：databases 段解析出键值且不吃注释、不越段', () => {
     const sample = [
       'services:',

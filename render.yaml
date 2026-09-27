@@ -27,7 +27,15 @@ services:
     #    "只跑生产依赖"由 Render 的 start 阶段天然保证——start 只是 `node server/dist/main.js`，
     #    dev 依赖装了也只是躺在 node_modules 里不进运行路径（代价是构建镜像稍大，换来的是不用维护两份依赖清单）。
     #    `npm run build` 编译 shared + server + admin-web（start 跑的是 server/dist）
-    buildCommand: npm ci && npm run build
+    #    ⚠️ 必须 `--include=dev`（全量审计 2026-09-26 P1）：本清单把 NODE_ENV=production 注入到构建期，
+    #    而 npm 在 NODE_ENV=production 下默认 `omit=dev`——@measured：`NODE_ENV=production npm ci` 装出
+    #    0 个包、`--include=dev` 才装出 devDependencies。没有它 tsc / vite / node-pg-migrate 全都不在，
+    #    构建必失败（或迁移命令找不到工具）。
+    buildCommand: npm ci --include=dev && npm run build
+    # 发布前先跑迁移（全量审计 2026-09-26 P1：此前生产没有任何迁移执行点，服务能起来但表/列不存在）。
+    # Blueprint 字段名 `preDeployCommand`（NEEDS VERIFICATION：以 render.com/docs/blueprint-spec 为准；
+    # 若平台不认此字段，退路是 `startCommand: npm run db:migrate && npm start`，代价是每个实例都跑一次迁移）
+    preDeployCommand: npm run db:migrate
     startCommand: npm start
     # ⚠️ 健康检查刻意用 /healthz（存活）而**不是** /readyz（就绪）。
     #    /readyz 在停机摘流期间会转 503，若被平台当作健康依据，

@@ -139,7 +139,12 @@ export async function createOrder(
   }
 
   // ── 6. 原子扣库存（任一失败整单回滚，@limitation 一）──────────────────────
-  for (const item of input.items) {
+  // ⚠️ 按 product_id **排序后**逐行扣（全量审计 2026-09-26 P1）：两张单以相反顺序含同两件商品时，
+  //    行锁获取顺序 AB / BA 交叉 → PG 40P01 死锁 → 非 AppError → 50000。
+  //    @measured 探针：同 SQL 交叉更新复现 `deadlock detected`；真 createOrder 并发 20 轮出现 17 次。
+  //    统一顺序后所有事务对同一组行按同一序取锁，只会排队不会互等。
+  const orderedItems = [...input.items].sort((a, b) => a.productId.localeCompare(b.productId));
+  for (const item of orderedItems) {
     const ok = await decrementStock(tx, item.productId, item.qty);
     if (!ok) throw new AppError(40901, { product_id: item.productId, qty: item.qty });
   }

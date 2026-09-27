@@ -163,3 +163,53 @@ describe('关单释放库存（建单扣 → 到点关 → 回，端到端）', 
     expect(Number(final[0]?.['stock'])).toBe(5);
   });
 });
+
+describe('并发建单：相同商品、相反顺序（全量审计 P1：行锁顺序不确定 → 40P01 死锁 → 500）', () => {
+  it('20 轮 AB / BA 交叉建单：零死锁，库存精确扣减', async () => {
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status)
+      values ('p-bowl', 'Rice Bowl', 'kitchen', 1200, 300, 100, 'JP', 'active')
+    `;
+    await db`update products set stock = 100 where id = 'p-knife'`;
+    const sink = new MemorySink();
+    let n = 0;
+    const gen = (): IdGen => ({
+      orderSeq: () => `S${String(n++).padStart(5, '0')}`.slice(0, 6),
+      uuid: () => `00000000-0000-4000-8000-${String(n++).padStart(12, '0')}`,
+    });
+    const ab = {
+      ...INPUT,
+      items: [
+        { productId: 'p-knife', qty: 1 },
+        { productId: 'p-bowl', qty: 1 },
+      ],
+    };
+    const ba = {
+      ...INPUT,
+      items: [
+        { productId: 'p-bowl', qty: 1 },
+        { productId: 'p-knife', qty: 1 },
+      ],
+    };
+    const results: PromiseSettledResult<unknown>[] = [];
+    for (let round = 0; round < 20; round += 1) {
+      results.push(
+        ...(await Promise.allSettled([
+          withTransaction(db, (tx) => createOrder(tx, deps(gen(), sink), ab)),
+          withTransaction(db, (tx) => createOrder(tx, deps(gen(), sink), ba)),
+        ])),
+      );
+    }
+    const failures = results.filter((r) => r.status === 'rejected');
+    expect(
+      failures,
+      JSON.stringify(failures.map((f) => String((f as PromiseRejectedResult).reason))),
+    ).toEqual([]);
+    const stock =
+      await db`select id, stock from products where id in ('p-knife', 'p-bowl') order by id`;
+    expect(stock.map((r) => [r.id, Number(r.stock)])).toEqual([
+      ['p-bowl', 60],
+      ['p-knife', 60],
+    ]);
+  });
+});
