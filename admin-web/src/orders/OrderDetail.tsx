@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { getOrder, refundOrder, shipOrder, type AdminApi, type AdminOrderLike } from './api.js';
+import { OrderAddressForm } from './OrderAddressForm.js';
 import {
   addressSummary,
   emptyRefundForm,
@@ -191,6 +192,16 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
               ))}
             </div>
           )}
+
+          <OrderAddressForm
+            api={api}
+            id={id}
+            order={order}
+            onDone={() => {
+              void load();
+              onChanged();
+            }}
+          />
 
           {order.has_dispute === true && (
             <p className="error">
