@@ -30,7 +30,7 @@ import { systemClock } from '../adapters/clock.js';
 import { systemIdGen } from '../adapters/ids.js';
 import { createSchedulerDeps } from './scheduler-start.js';
 import { runSchedulerOnce } from './scheduler.js';
-import { createDailyReconciliationJob } from './daily-reconciliation.js';
+import { createDailyReconciliationJob, DAILY_JOB_ROW_NAME } from './daily-reconciliation.js';
 
 export const INTERNAL_JOBS_PREFIX = '/api/v1/internal/jobs';
 
@@ -52,15 +52,18 @@ export function mountInternalJobsRoutes(
     void (async () => {
       try {
         const secret = deps.config.INTERNAL_JOB_SECRET;
+        const got = req.header('x-internal-job-secret') ?? '';
+        // 先拒没带头的来访者（全量审计 2026-09-26 P2）：这是无鉴权、无限流的公网路径，
+        // 若先判"配置缺失"再打 error，任何匿名请求都能刷一条 error 级日志/告警。
+        // 带了头、而我们没配密钥，才是配置缺口，此时响亮（文件头 @why ③）。
+        if (got.length === 0) throw new AppError(40101);
         if (secret === undefined) {
-          // 配置缺口必须响亮（文件头 @why ③）；5xx details 不外发，reason 只进日志
           deps.logger.error('internal_job_disabled', {
             result: 'refused',
             ctx: { reason: 'INTERNAL_JOB_SECRET 未配置' },
           });
           throw new AppError(50000);
         }
-        const got = req.header('x-internal-job-secret') ?? '';
         if (!secretMatches(got, secret)) throw new AppError(40101);
 
         const runId = systemIdGen.uuid();
@@ -72,7 +75,9 @@ export function mountInternalJobsRoutes(
         //    还容易让人以为"端点只会跑一次"——真正的互斥是调度器的 advisory lock）。
         void runSchedulerOnce(
           createSchedulerDeps(deps.db, deps.events, systemClock, deps.logger, {
-            name: 'daily',
+            // ⚠️ 名字与看门狗盯的那一行是**同一个常量**：两处字面量各自漂移时，
+            //    daily-reconciliation 的 `scanStalledHeartbeats` 会去盯一个不存在的行
+            name: DAILY_JOB_ROW_NAME,
             lockKey: 'daily',
           }),
           [createDailyReconciliationJob()],

@@ -7,7 +7,7 @@
  *         钱没扣，但支付行悬着，机构侧会话可能还活着；
  *      ② 订单 paid 但最近一条 payments 不是 succeeded（两本账不符）：
  *         mark-paid 设计上是同事务封口，出现即意味着有未知写路径；
- *      ③ 近 48h 回调登记为 needs_refund / late_payment / status_conflict / unmatched：
+ *      ③ 近 48h 回调登记为 late_payment / mismatch:* / ignored:status_conflict / unmatched:*（词表 app/webhook-results.ts）：
  *         "钱扣了但不能发货"与"钱到了找不到单"，每一条都要人工跟进。
  *      自动修任何一类都需要业务裁决（退不退？发不发？），MVP 把它留给人——
  *      但没有这个 job，这些行就只能在库里静默躺着（欠账①被评为致命级的原因）。
@@ -29,7 +29,18 @@
  * @see app/internal-jobs-routes.ts（触发端点）；app/expire-orders.ts（同一框架的兄弟 job）
  */
 import type { Db } from '../adapters/db.js';
-import type { JobContext, JobOutcome, SchedulerJob } from '../ports/scheduler.js';
+import {
+  TICK_JOB_NAME,
+  type JobContext,
+  type JobOutcome,
+  type SchedulerJob,
+} from '../ports/scheduler.js';
+import {
+  RESULT_LATE_PAYMENT,
+  RESULT_MISMATCH_PREFIX,
+  RESULT_STATUS_CONFLICT,
+  RESULT_UNMATCHED_PREFIX,
+} from './webhook-results.js';
 
 export const DAILY_RECONCILIATION_JOB = 'daily_reconciliation';
 
@@ -37,6 +48,27 @@ export const DAILY_RECONCILIATION_JOB = 'daily_reconciliation';
 export const RECONCILE_IDS_CAP = 20;
 /** 回调异常的回看窗口（小时）：再早的异常要么已处理、要么已沉底，每日扫全表没有意义。 */
 export const RECONCILE_LOOKBACK_HOURS = 48;
+
+/**
+ * 心跳停滞阈值：**tick**（常驻调度器，60s 一轮）超过这个分钟数没有成功心跳 = 卡了。
+ * @why 取 10 分钟而不是 2 分钟：一轮最坏要跑完所有 job，偶发一轮超时不该报警；
+ *      取 10 是"卡住"与"慢了一轮"的分界（60s × 10）。
+ */
+export const TICK_STALL_MINUTES = 10;
+/**
+ * 心跳停滞阈值：**daily**（每日作业，24h 一轮）超过这个小时数没有成功心跳 = 没跑。
+ * @why 26 小时而不是 24：cron 触发时刻会有抖动（部署/重试），刚过 24 小时就报警
+ *      会把"晚了几分钟"报成"一天没跑"。
+ */
+export const DAILY_STALL_HOURS = 26;
+
+/**
+ * `job_runs` 里"每日作业"那一行的名字。
+ * @why 与端点（`internal-jobs-routes.ts` 传给 `createSchedulerDeps` 的 name）**同一个值**，
+ *      所以端点改用它而不是再写一个 'daily' 字面量——两处字面量各自漂移时，
+ *      看门狗会去盯一个不存在的行（静默失明，最坏的一类失效）。
+ */
+export const DAILY_JOB_ROW_NAME = 'daily';
 
 interface AnomalyClass {
   /** 日志键与报告键（英文蛇形：日志检索口径）。 */
@@ -103,8 +135,9 @@ async function scanCallbackAnomalies(ctx: JobContext<Db>): Promise<AnomalyClass>
     select event_id from webhook_events
      where received_at > ${ctx.startedAt}::timestamptz
                           - make_interval(hours => ${RECONCILE_LOOKBACK_HOURS})
-       and (result in ('needs_refund', 'late_payment', 'status_conflict')
-            or result like 'unmatched%')
+       and (result in (${RESULT_LATE_PAYMENT}, ${RESULT_STATUS_CONFLICT})
+            or result like ${RESULT_MISMATCH_PREFIX + '%'}
+            or result like ${RESULT_UNMATCHED_PREFIX + '%'})
      order by received_at
      limit ${RECONCILE_IDS_CAP + 1}
   `;
@@ -112,13 +145,69 @@ async function scanCallbackAnomalies(ctx: JobContext<Db>): Promise<AnomalyClass>
     select count(*)::text as count from webhook_events
      where received_at > ${ctx.startedAt}::timestamptz
                           - make_interval(hours => ${RECONCILE_LOOKBACK_HOURS})
-       and (result in ('needs_refund', 'late_payment', 'status_conflict')
-            or result like 'unmatched%')
+       and (result in (${RESULT_LATE_PAYMENT}, ${RESULT_STATUS_CONFLICT})
+            or result like ${RESULT_MISMATCH_PREFIX + '%'}
+            or result like ${RESULT_UNMATCHED_PREFIX + '%'})
   `;
   return {
     key: 'callback_anomalies_48h',
     count: Number(countRows[0]?.count ?? 0),
     ids: rows.slice(0, RECONCILE_IDS_CAP).map((r) => String(r.event_id)),
+  };
+}
+
+/**
+ * 第四类：**调度器心跳停滞**（AJ-102 承诺落到这里，不是新增想法）。
+ *
+ * @why 契约 0.5.4 里删掉了 `/healthz` 的"调度看门狗"承诺（那会让 Render 把调度卡顿
+ *      当成实例故障去杀进程），当时写下的替代方案就是"**转交 I1 的 daily 对账 job**
+ *      ——tick/daily 互相看心跳，异常走 error 日志"。本函数就是那个替代方案。
+ *      没有它，`job_runs` 那两行只在"有人想起来去查"时才被看见。
+ * @why 判据是 `last_success_at`（不是 `updated_at`）：失败轮次只更新 last_error、
+ *      不动 last_success_at（清单 F13），所以"一直在失败"表现为**成功时间停滞**，
+ *      用 updated_at 会把它误判成健康。
+ *
+ * @limitation **daily 行的 null 刻意不算停滞**：本 job 自己就是 daily，
+ *      它此刻还没写完自己的心跳（写完在事务提交时），把 null 当停滞意味着
+ *      "第一次跑必定报警"。tick 没有这个豁免——常驻调度器起不来是真故障。
+ */
+async function scanStalledHeartbeats(ctx: JobContext<Db>): Promise<AnomalyClass> {
+  const stalled = await ctx.tx<{ name: string }[]>`
+    select name from job_runs
+     where (
+             name = ${TICK_JOB_NAME}
+             and (last_success_at is null
+                  or last_success_at < ${ctx.startedAt}::timestamptz
+                                       - make_interval(mins => ${TICK_STALL_MINUTES}))
+           )
+        or (
+             name = ${DAILY_JOB_ROW_NAME}
+             and last_success_at is not null
+             and last_success_at < ${ctx.startedAt}::timestamptz
+                                    - make_interval(hours => ${DAILY_STALL_HOURS})
+           )
+     order by name
+     limit ${RECONCILE_IDS_CAP + 1}
+  `;
+  const countRows = await ctx.tx<{ count: string }[]>`
+    select count(*)::text as count from job_runs
+     where (
+             name = ${TICK_JOB_NAME}
+             and (last_success_at is null
+                  or last_success_at < ${ctx.startedAt}::timestamptz
+                                       - make_interval(mins => ${TICK_STALL_MINUTES}))
+           )
+        or (
+             name = ${DAILY_JOB_ROW_NAME}
+             and last_success_at is not null
+             and last_success_at < ${ctx.startedAt}::timestamptz
+                                    - make_interval(hours => ${DAILY_STALL_HOURS})
+           )
+  `;
+  return {
+    key: 'stalled_heartbeats',
+    count: Number(countRows[0]?.count ?? 0),
+    ids: stalled.slice(0, RECONCILE_IDS_CAP).map((r) => String(r.name)),
   };
 }
 
@@ -130,6 +219,7 @@ export function createDailyReconciliationJob(): SchedulerJob<Db> {
         await scanDanglingPayments(ctx),
         await scanLedgerMismatch(ctx),
         await scanCallbackAnomalies(ctx),
+        await scanStalledHeartbeats(ctx),
       ];
       let anomalies = 0;
       for (const c of classes) {

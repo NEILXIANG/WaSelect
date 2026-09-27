@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.5.6
+  version: 0.6.0
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -11,6 +11,7 @@ info:
     0.5.4（AJ-102）：`/healthz` **删掉"调度看门狗"承诺**（原写"读 job_runs，tick/daily 超期则 503"，代码从未实现，且与 http.ts「存活探针不查依赖」的设计直接冲突——真实现会让 Render 把调度卡顿/DB 抖动当成实例故障杀进程）。改为对齐代码实际形状（只报进程存活）；调度器看门狗职责转交 I1 的 daily 对账 job（tick/daily 互相看心跳，异常走 error 日志告警），不由健康检查端点承担。
     0.5.5（I1-U5c）：`GET /orders` 的 `status` 参数**双词表统一**——废掉旧的五值 UI 词（unpaid/paid/shipped/delivered/closed），改用 `OrderStatus` 10 态同一词表（与 /admin/orders 同一 $ref）。映射：unpaid ≈ created+pending_payment（前端各查一次或不过滤）、closed ≈ cancelled+expired；paid/shipped/delivered 同名单态不变。
     0.5.6（I1-U6a）：① `PaymentIntent.payload` 的 mock 形状更正为 `{auto:true, orderId, amountJpy, currency}`（实现落地：auto 是审核期自动确认信号，前端不写死通道名）。② `POST /orders/{id}/pay` 补 429 响应（实现已挂 publicWrite 限流，响应清单漏列——同 0.5.3② 的同类漂移）。
+    0.6.0（I1 收尾：U6b→U7b）：① `POST /internal/jobs/daily` 补 **500** 响应——未配置 `INTERNAL_JOB_SECRET` 时实现**响亮拒绝 50000**（不是 404：404 会把"我们没配密钥"表现成"cron 打错地址"，排查方向整个反掉）。响应清单漏列即漂移。② `Idempotency-Key` 补 `maxLength: 128`（实现已在 `scopeKey` 处拒绝超长键，超限 40001 + reason `idempotency_key_too_long`；契约无上限 = 契约比实现宽松，同一类漂移）。③ **0.5.4 的看门狗承诺兑现**：调度心跳不再由 `/healthz` 承担，改由每日对账 job 的第四类异常 `stalled_heartbeats` 报告（tick 10 分钟 / daily 26 小时无成功心跳即 error 日志；daily 首跑 last_success_at 为 null 不算停滞）。④ 骨架（`/api/v1/skeleton/*`）随 U6c 退役——它**从未进入本契约**，此处仅记一笔以说明"为什么找不到它"。
     鉴权：Bearer JWT（小程序 aud=mp；管理端 aud=admin）。D-49 起没有 H5 身份：银行卡支付在 Stripe Checkout 托管页完成。写接口支持 Idempotency-Key 头（24 小时内重复返回原响应）。
     展示价只由后端计算（display 对象），前端不做汇率乘法。
     F11（ADR-28）：支付回调**合并为统一入口** `/pay/callback/{channel}`（channel 为路径参数，新增通道不再新增路由），
@@ -105,7 +106,7 @@ paths:
     post:
       security: [{internalSecret: []}]
       summary: 每日作业触发（Render Cron Job 调用）：立即 202，进程内异步执行对账 / 汇率刷新 / 存活校验，结果写 job_runs('daily')（D-45；经 Cloudflare 代理有 100 秒上限，不得同步执行）
-      responses: {'202': {description: Accepted, content: {application/json: {schema: {type: object, properties: {run_id: {type: string}, started_at: {type: string, format: date-time}}}}}}, '401': {$ref: '#/components/responses/Err'}}
+      responses: {'202': {description: Accepted, content: {application/json: {schema: {type: object, properties: {run_id: {type: string}, started_at: {type: string, format: date-time}}}}}}, '401': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /home:
     get:
       security: []
@@ -297,7 +298,7 @@ components:
     bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
     internalSecret: {type: apiKey, in: header, name: X-Internal-Job-Secret, description: 与 INTERNAL_JOB_SECRET 相等；仅 /internal/* 使用，不放行 CORS 与小程序}
   parameters:
-    IdemKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string}}
+    IdemKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 128, description: '客户端段上限 128 字符（0.6.0②）；超限 40001 + reason idempotency_key_too_long'}}
   responses:
     Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}
   schemas:

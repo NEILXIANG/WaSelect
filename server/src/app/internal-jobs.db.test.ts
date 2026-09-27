@@ -20,6 +20,11 @@ import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { registerBusinessEventLog } from './business-events.js';
 import { seedCreatedOrder } from '../../../test/helpers/seed-order.js';
+import {
+  RESULT_LATE_PAYMENT,
+  RESULT_MISMATCH_PREFIX,
+  RESULT_STATUS_CONFLICT,
+} from './webhook-results.js';
 
 let db: Db;
 const JOB_SECRET = 'internal-job-secret-'.padEnd(40, 'x');
@@ -79,13 +84,13 @@ function trigger(url: string, secret?: string): Promise<Response> {
 async function waitForDailyHeartbeat(timeoutMs = 8000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const rows =
-      await db`select last_success_at, last_error, last_processed from job_runs where name = 'daily'`;
+    // ⚠️ 判据用 `last_processed` 而不是 `last_success_at`：beforeEach 会给 tick/daily
+    //    两行造"健康心跳"（last_success_at = now()），否则看门狗会在每条用例里乱叫——
+    //    于是"等 last_success_at 出现"会**立刻返回**，等到的其实是基线而不是本轮。
+    //    `last_processed` 是每轮必写的本轮产物（零异常时写 0），基线把它清成 null。
+    const rows = await db`select last_processed from job_runs where name = 'daily'`;
     // 行不存在也必须继续等：否则"心跳行还没被 upsert 出来"会被误判成"作业已落定"（假绿）
-    if (
-      rows[0] !== undefined &&
-      (rows[0].last_success_at !== null || rows[0].last_error !== null)
-    ) {
+    if (rows[0] !== undefined && rows[0].last_processed !== null) {
       return;
     }
     if (Date.now() > deadline) throw new Error('每日作业未在超时内留下心跳（job_runs daily）');
@@ -117,10 +122,15 @@ async function seedAnomalies(): Promise<{ danglingPaymentId: string; paidOrderId
     insert into payments (id, order_id, provider, provider_ref, status, charge_currency, charge_amount)
     values ('pay-recon-mismatch', 'o-recon-mismatch', 'mock', 'mock_ref_2', 'initiated', 'JPY', 1000)
   `;
-  // ③ 待人工回调异常：近 48h 一条 needs_refund
+  // ③ 待人工回调异常：近 48h 内三种**管线真的会写**的 result（词表见 app/webhook-results.ts）。
+  //    ⚠️ 曾经这里塞的是 'needs_refund'——管线从未写过这个值，对账 SQL 却只认它：同义反复的假绿
+  //    （全量审计 2026-09-26 P0）。现在取值必须来自词表常量，管线与对账改词时这里跟着变。
   await db`
     insert into webhook_events (event_id, provider, event_type, result)
-    values ('evt-recon-late', 'mock', 'payment.succeeded', 'needs_refund')
+    values ('evt-recon-late', 'mock', 'payment.succeeded', ${RESULT_LATE_PAYMENT}),
+           ('evt-recon-conflict', 'mock', 'payment.succeeded', ${RESULT_STATUS_CONFLICT}),
+           ('evt-recon-mismatch', 'mock', 'payment.succeeded', ${RESULT_MISMATCH_PREFIX + 'amount_mismatch'}),
+           ('evt-recon-noise', 'mock', 'payment.expired', 'ignored:expired')
   `;
   return { danglingPaymentId: 'pay-recon-dangling', paidOrderId: 'o-recon-mismatch' };
 }
@@ -134,6 +144,12 @@ beforeEach(async () => {
     update job_runs
        set last_success_at = null, last_error = null, last_processed = null
      where name = 'daily'
+  `;
+  // 心跳看门狗（第四类异常）的**健康基线**：本文件多数用例要的是"其它三类"的断言，
+  // 若两行心跳是脏的，每条用例都会额外飘出 stalled_heartbeats。
+  // ⚠️ 反过来这也说明看门狗真的在跑——把它调坏的那条用例（见下）就是它的红灯证明。
+  await db`
+    update job_runs set last_success_at = now(), last_error = null where name in ('tick', 'daily')
   `;
 });
 
@@ -173,8 +189,10 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       expect(wrong.status).toBe(401);
       const none = await trigger(srv.url);
       expect(none.status).toBe(401);
-      const runs = await db`select last_success_at from job_runs where name = 'daily'`;
-      expect(runs[0]?.last_success_at).toBeNull();
+      // 判据同 waitForDailyHeartbeat：看**本轮产物** `last_processed` 仍为 null
+      // （基线给 last_success_at 造了健康心跳，不能再拿它当"没执行"的判据）
+      const runs = await db`select last_processed from job_runs where name = 'daily'`;
+      expect(runs[0]?.last_processed).toBeNull();
     } finally {
       await srv.close();
     }
@@ -190,6 +208,10 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       const refused = srv.sink.find('internal_job_disabled');
       expect(refused).toHaveLength(1);
       expect(JSON.stringify(refused[0])).toContain('INTERNAL_JOB_SECRET');
+      // 匿名（不带头）请求即使在未配密钥时也只是 40101，不得刷出 error 日志（公网无限流路径）
+      const anon = await fetch(`${srv.url}/api/v1/internal/jobs/daily`, { method: 'POST' });
+      expect(anon.status).toBe(401);
+      expect(srv.sink.find('internal_job_disabled')).toHaveLength(1);
     } finally {
       await srv.close();
     }
@@ -199,13 +221,15 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
     const srv = await buildServer({ withSecret: true });
     try {
       // 两条同类型异常，只差在 received_at：一条卡在窗口内（47h）、一条刚好在窗口外（49h）。
+      // result 必须取词表里**管线真的会写**的值（app/webhook-results.ts）：`needs_refund`
+      // 从未被任何路径写入，过滤条件也不再认它（全量审计 2026-09-26 P1-1）。
       // @why 单独一条用例而不是塞进上面那条：窗口边界此前**完全没有被测**
       //       （上面那条只种了 now() 的样本，窗口写成 1 小时它也是绿的）——
       //       这类"参数只在 SQL 里出现、没人钉边界"的常量，最容易被人悄悄改错。
       await db`
         insert into webhook_events (event_id, provider, event_type, result, received_at)
-        values ('evt-in-47h',  'mock', 'payment.succeeded', 'needs_refund', now() - interval '47 hours'),
-               ('evt-out-49h', 'mock', 'payment.succeeded', 'needs_refund', now() - interval '49 hours')
+        values ('evt-in-47h',  'mock', 'payment.succeeded', ${RESULT_LATE_PAYMENT}, now() - interval '47 hours'),
+               ('evt-out-49h', 'mock', 'payment.succeeded', ${RESULT_LATE_PAYMENT}, now() - interval '49 hours')
       `;
       const res = await trigger(srv.url, JOB_SECRET);
       expect(res.status).toBe(202);
@@ -222,6 +246,75 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       expect(ids).not.toContain('evt-out-49h');
     } finally {
       await srv.close();
+    }
+  });
+
+  it('心跳看门狗（AJ-102 承诺的替代方案）：tick 从未成功 → 报 stalled_heartbeats', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      // 把 tick 打回"从未成功"（last_success_at = null）：常驻调度器起不来的形态
+      await db`update job_runs set last_success_at = null where name = 'tick'`;
+      const res = await trigger(srv.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      await waitForDailyHeartbeat();
+
+      const stalled = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'stalled_heartbeats');
+      expect(stalled, 'tick 没有成功心跳必须被看门狗报出来').toBeDefined();
+      const ctx = stalled?.['ctx'] as Record<string, unknown> | undefined;
+      expect(ctx?.['count']).toBe(1);
+      expect(JSON.stringify(ctx?.['sample_ids'])).toContain('tick');
+      // daily 行是健康的（beforeEach 造的），不该被连带报出
+      expect(JSON.stringify(ctx?.['sample_ids'])).not.toContain('daily');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('心跳看门狗边界：daily 停滞（30h 前）报出；daily 为 null（首次）不报', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      // ① daily 上一次成功在 30 小时前 → 超过 26h 阈值 → 报
+      await db`
+        update job_runs
+           set last_success_at = now() - interval '30 hours'
+         where name = 'daily'
+      `;
+      const res = await trigger(srv.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      await waitForDailyHeartbeat();
+      const ctx1 = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'stalled_heartbeats')?.[
+        'ctx'
+      ] as Record<string, unknown> | undefined;
+      expect(ctx1, 'daily 超过 26h 没成功心跳应报').toBeDefined();
+      expect(JSON.stringify(ctx1?.['sample_ids'])).toContain('daily');
+    } finally {
+      await srv.close();
+    }
+
+    // ② daily 为 null（首次运行，本轮就要写它）→ **不报**（否则"第一次跑必定报警"）
+    const srv2 = await buildServer({ withSecret: true });
+    try {
+      // ⚠️ `last_processed` 也要清：它是 waitForDailyHeartbeat 的判据，① 刚写过一轮，
+      //    不清则 ② 的等待**立刻返回**（等到的是 ① 的产物），srv2 关掉时作业还在跑，
+      //    它的心跳会落到下一条用例的 beforeEach 之后——下一条用例的等待也跟着假返回
+      //    （实测：紧随其后的"三类异常各一行"sink 里只有 2 行 http 日志、0 条 anomaly）。
+      await db`
+        update job_runs set last_success_at = null, last_processed = null where name = 'daily'
+      `;
+      await db`update job_runs set last_success_at = now() where name = 'tick'`;
+      const res = await trigger(srv2.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      await waitForDailyHeartbeat();
+      const stalled = srv2.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'stalled_heartbeats');
+      expect(stalled, 'daily 首跑（null）不该被当成停滞').toBeUndefined();
+    } finally {
+      await srv2.close();
     }
   });
 
@@ -255,6 +348,9 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       expect(payload).toContain('pay-recon-dangling');
       expect(payload).toContain('o-recon-mismatch');
       expect(payload).toContain('evt-recon-late');
+      expect(payload).toContain('evt-recon-conflict');
+      expect(payload).toContain('evt-recon-mismatch');
+      expect(payload).not.toContain('evt-recon-noise');
       expect(payload).not.toContain('pay-recon-normal');
       expect(payload).not.toContain('o-recon-normal');
 
@@ -266,11 +362,12 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       `;
       expect(runs[0]?.last_success_at).not.toBeNull();
       expect(runs[0]?.last_error).toBeNull();
-      // 4 而不是 3：**① 与 ② 落在同一行上**（pay-recon-mismatch 既是"订单已 paid 而支付行
-      // 仍 initiated"的悬空支付，又是"paid 但没有 succeeded 支付"的两本账不符）——
-      // 三类是三个**视角**，不是三个互斥集合，所以 processed（条数之和）≠ 异常类数（3）。
+      // 6 = ① 2 + ② 1 + ③ 3，而不是异常类数 3：**① 与 ② 落在同一行上**（pay-recon-mismatch
+      // 既是"订单已 paid 而支付行仍 initiated"的悬空支付，又是"paid 但没有 succeeded 支付"的
+      // 两本账不符）；③ 种了三种词表 result（噪声行 ignored:expired 不计）——
+      // 三类是三个**视角**，不是三个互斥集合，所以 processed（条数之和）≠ 异常类数。
       // 这条断言顺手把"重叠"钉住：将来有人把两类改成互斥，这里会红。
-      expect(runs[0]?.last_processed).toBe(4);
+      expect(runs[0]?.last_processed).toBe(6);
     } finally {
       await srv.close();
     }
