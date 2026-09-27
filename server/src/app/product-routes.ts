@@ -10,9 +10,9 @@
  *      还不存在）。字符串条目 → 三尺寸同源的 ImageSet 占位；已是 {thumb,card,detail}
  *      形状的条目原样透传——两种存量都不得炸。
  *
- * @limitation 一：category 合法值照抄契约枚举（[beauty, daily, kitchen, food]）——
- *              它是**契约词汇表**；管理端商品上架（I2）落地时应连同 ProductInput 的
- *              category 一起提炼进 shared 枚举（现在提炼 = 为一个消费方提前设计）。
+ * ~~@limitation 一：category 合法值照抄契约枚举~~ **已解决（I2-U-A1）**：已提炼进
+ *              shared 的 `PRODUCT_CATEGORY`（与契约 `GET /products?category` 由单测双向比对），
+ *              本文件不再手抄——管理端上架是第二个消费方，两份手抄必然漂移。
  * @limitation 二：GET /terms 的 urls 是**占位相对路径**——法务静态页属 F15/内容阶段；
  *              updated_at 没有真实来源（TERMS_VERSION 来自环境变量，无时间维度），省略不编。
  * @limitation 三：GET /fx 的 rates 缺币时**省略该币**（降级同 display）；
@@ -27,11 +27,11 @@ import type { Db } from '../adapters/db.js';
 import type { Clock } from '../ports/clock.js';
 import type { AppConfig } from '../config.js';
 import { createCatalogRepo } from '../adapters/catalog.js';
-import { toMinor, toRateInt } from '@waselect/shared';
+import { PRODUCT_CATEGORY, toMinor, toRateInt } from '@waselect/shared';
 import type { DisplayCurrency } from '../domain/quote.js';
 
-/** 契约 /products 的 category 枚举（@limitation 一：契约词汇表，I2 提炼进 shared）。 */
-const PRODUCT_CATEGORIES = ['beauty', 'daily', 'kitchen', 'food'] as const;
+// category 合法值：来自 shared（契约词汇表的唯一出处），本文件不再手抄一份。
+const PRODUCT_CATEGORIES = PRODUCT_CATEGORY;
 
 /** images JSONB 条目 → 契约 ImageSet（@why 见文件头）。U5c 起订单详情也复用（app→app helper 同 parseItems 先例）。 */
 export function toImageSet(raw: unknown): { thumb: string; card: string; detail: string } | null {

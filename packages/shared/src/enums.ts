@@ -38,6 +38,21 @@ export const COUNTRY = ['JP', 'US'] as const;
 export type Country = (typeof COUNTRY)[number];
 
 /**
+ * 商品分类（与 api-contract `GET /products?category` 的 4 值枚举逐字一致）。
+ *
+ * @why 此前它只以字符串数组的形式手抄在 `app/product-routes.ts`（该文件 @limitation 一
+ *      已预告"I2 提炼进 shared"）。现在管理端上架是**第二个消费方**：再手抄一份，
+ *      两边的合法值就会各自漂移，而漂移的表现是"管理端能建一个买家永远筛不到的商品"。
+ *
+ * @limitation 契约的 `ProductInput.category` **尚未声明 enum**（只有 `GET /products?category`
+ *             的查询参数有）。本常量以查询参数那一处为锚，与它由单测双向比对守着；
+ *             待契约给 ProductInput 补上 enum 后，两处都归到同一个锚点。
+ * @see enums.unit.test.ts（与契约的双向比对）
+ */
+export const PRODUCT_CATEGORY = ['beauty', 'daily', 'kitchen', 'food'] as const;
+export type ProductCategory = (typeof PRODUCT_CATEGORY)[number];
+
+/**
  * 商品合规标签（与 api-contract `ProductInput.compliance_tags` 的 11 值枚举逐字一致；
  * `scripts/check-contract.mjs` 做双向集合比对）。
  *
