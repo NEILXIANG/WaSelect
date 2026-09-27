@@ -1,6 +1,10 @@
 /**
- * 职责：管理端订单的**读**仓储（I2 U-B1）——列表（状态 / 关键字 / 分页）、详情主行、
- *      以及 items / payments / events 三张附属表的**批量**查询。
+ * 职责：管理端订单的**读与写**仓储（I2 U-B1 读 / U-B2b 写）——列表（状态 / 关键字 / 分页）、
+ *      详情主行、items / payments / events 的批量查询，以及发货 / 退款 / 改址三条写路径。
+ *
+ * @why **写也放在本文件**（不另开 `orders-admin-write.ts`）：文件头那条"没有 user_id 过滤"
+ *      是**管理端 SQL 的固有属性**，读与写同样成立；拆开反而要把它在两份文件里各论证一遍。
+ *      读与写在文件内用分隔注释切开，顺序是"先读后写"（写的每一步都要先读到行）。
  *
  * @why 与 `orders.ts`（买家侧）**分成两个文件**：买家侧每条查询都带 `user_id =`
  *      （orders.ts @why：归属过滤进 WHERE，写错就是越权读取）。管理端若复用它们，
@@ -38,11 +42,20 @@
  *              已随 U-B1 收紧为 `AdminOrderListItem`（0.6.1）。真要给列表补附属数据，
  *              先改契约再改这里（顺序不能倒，否则又是注释与事实分离）。
  *
+ * @limitation 五：三条写路径都要求调用方**先持行锁**（`lockAdminOrder` 的 FOR UPDATE），
+ *              UPDATE 的 WHERE 里再带一次状态条件（与 `markOrderCancelled` 同构）：
+ *              前者挡并发，后者挡"锁是上一次读的、状态已被别人迁走"的 TOCTOU。
+ *              两条都在时，"0 行命中"只可能表示"状态确实不是我能迁的那一态"。
+ * @limitation 六：**不动 `shipments` 表**。契约的 ship 只给 carrier / tracking_no，
+ *              而 `shipments` 的价值在 `events`（承运商轨迹）——MVP 没有承运商 API，
+ *              落一行进去只会得到 `events: []` 与主表重复的 carrier/tracking_no。
+ *              等接入物流轨迹查询时再落，那时它才有区别于 orders 两列的内容。
+ *
  * @see contracts/api-contract.yaml（AdminOrderListItem / AdminOrder）；
  *      migrations/001_init.sql（orders / order_items / payments / order_events）；
- *      app/admin-order-routes.ts（唯一调用方）
+ *      domain/admin-order-actions.ts（三条写路径的准入判定）；app/admin-order-routes.ts（唯一调用方）
  */
-import type { Db } from './db.js';
+import type { Db, JSONValue } from './db.js';
 
 /** 列表行（`AdminOrderListItem`：OrderSummary + 管理端专有列）。 */
 export interface AdminOrderListRow {
@@ -323,4 +336,187 @@ export async function listEventsFor(
     actor: strOrNull(r.actor),
     at: r.at as Date,
   }));
+}
+
+// ── 写路径（I2 U-B2b：发货 / 退款 / 改址）──────────────────────────────────
+
+/** 持行锁读出的最小判定集（准入判定只需要这些列，多读一列就多一个"忘了它也会变"的隐患）。 */
+export interface AdminOrderLockRow {
+  id: string;
+  order_no: string;
+  user_id: string;
+  status: string;
+  total_jpy: number;
+  has_dispute: boolean;
+  carrier: string | null;
+  tracking_no: string | null;
+}
+
+/**
+ * 持行锁读一张订单（写路径的第一步）。
+ * @returns 不存在 → null（路由层 40400）。
+ * @why `for update` 而不是"先查后改"：三个写操作都是"读状态 → 判定 → 改状态"，
+ *      中间若被别人（支付回调 / 关单 job / 另一个客服）抢先迁移，判定就建立在过期事实上。
+ *      行锁把这段窗口焊死——代价是写路径必须包在事务里（事务外 `for update` 等于没锁）。
+ */
+export async function lockAdminOrder(tx: Db, orderId: string): Promise<AdminOrderLockRow | null> {
+  const rows = await tx`
+    select id, order_no, user_id, status, total_jpy, has_dispute, carrier, tracking_no
+      from orders where id = ${orderId} for update
+  `;
+  const r = rows[0] as Record<string, unknown> | undefined;
+  if (r === undefined) return null;
+  return {
+    id: String(r.id),
+    order_no: String(r.order_no),
+    user_id: String(r.user_id),
+    status: String(r.status),
+    total_jpy: Number(r.total_jpy),
+    has_dispute: bool(r.has_dispute),
+    carrier: strOrNull(r.carrier),
+    tracking_no: strOrNull(r.tracking_no),
+  };
+}
+
+/** 可退款的支付行（**原币**退款的金额与通道来源）。 */
+export interface RefundablePaymentRow {
+  id: string;
+  provider: string;
+  provider_ref: string | null;
+  charge_currency: string;
+  charge_amount: number;
+}
+
+/**
+ * 取订单最新一条**已成功**的支付行。
+ * @returns 没有 succeeded 行 → null（路由层 40902：没付过的钱无从退起）。
+ * @why 按 `created_at desc` 取一：一次成功 + 一次失败的行可能并存，
+ *      "这笔钱现在在哪"只由最新那条回答。
+ */
+export async function findRefundablePayment(
+  db: Db,
+  orderId: string,
+): Promise<RefundablePaymentRow | null> {
+  const rows = await db`
+    select id, provider, provider_ref, charge_currency, charge_amount
+      from payments where order_id = ${orderId} and status = 'succeeded'
+     order by created_at desc
+     limit 1
+  `;
+  const r = rows[0] as Record<string, unknown> | undefined;
+  if (r === undefined) return null;
+  return {
+    id: String(r.id),
+    provider: String(r.provider),
+    provider_ref: strOrNull(r.provider_ref),
+    charge_currency: String(r.charge_currency),
+    charge_amount: Number(r.charge_amount),
+  };
+}
+
+/**
+ * 迁 `paid → shipped` 并记事件（同一事务；准入由调用方持锁后判定）。
+ * @returns false = 状态已被抢先迁走（**不是错误**）。
+ */
+export async function markShipped(
+  tx: Db,
+  orderId: string,
+  carrier: string,
+  trackingNo: string,
+  at: Date,
+): Promise<boolean> {
+  const updated = await tx`
+    update orders set status = 'shipped', carrier = ${carrier}, tracking_no = ${trackingNo},
+                      shipped_at = ${at}, updated_at = now()
+     where id = ${orderId} and status = 'paid'
+  `;
+  if (updated.count === 0) return false;
+  await tx`
+    insert into order_events (order_id, status, note, actor, at)
+    values (${orderId}, 'shipped', ${`${carrier} / ${trackingNo}`}, 'admin', ${at})
+  `;
+  return true;
+}
+
+/**
+ * 迁 `paid|shipped|delivered → refunding` 并记事件。
+ * @why **先落 refunding 再调机构**（顺序不能倒）：反过来（先调机构、成功后才迁状态）的
+ *      失败模式是"钱已退、我们的库还写着 paid"——客服看到 paid 会再退一次，
+ *      而机构侧那笔钱已经出去了，于是**同一笔钱退两次**且我方没有记录。
+ *      先落 refunding 的代价是"机构调用失败时订单停在 refunding"，
+ *      而那是一个**看得见**的状态（有事件、列表能筛），比"钱货对不上但没人知道"轻得多。
+ */
+export async function markRefunding(
+  tx: Db,
+  orderId: string,
+  reason: string,
+  at: Date,
+): Promise<boolean> {
+  const updated = await tx`
+    update orders set status = 'refunding', updated_at = now()
+     where id = ${orderId} and status in ${tx(['paid', 'shipped', 'delivered'])}
+  `;
+  if (updated.count === 0) return false;
+  await tx`
+    insert into order_events (order_id, status, note, actor, at)
+    values (${orderId}, 'refunding', ${reason}, 'admin', ${at})
+  `;
+  return true;
+}
+
+/**
+ * 迁 `refunding → refunded`，把 payment 行标成 refunded，事件里留机构退款号。
+ * @returns false = 当前不是 refunding（重复提交 / 已被别处迁走，**不是错误**）。
+ * @limitation `payments.status` 目前是**约定词表**（initiated / succeeded / cancelled /
+ *      failed / refunded），shared 里没有对应枚举——加新词没有任何编译期或门禁守护。
+ *      这是已知缺口（F12 售后对账统一收口时补枚举 + 与契约双向比对）。
+ */
+export async function markRefunded(
+  tx: Db,
+  orderId: string,
+  paymentId: string,
+  refundRef: string,
+  at: Date,
+): Promise<boolean> {
+  const updated = await tx`
+    update orders set status = 'refunded', refunded_at = ${at}, updated_at = now()
+     where id = ${orderId} and status = 'refunding'
+  `;
+  if (updated.count === 0) return false;
+  await tx`
+    update payments set status = 'refunded' where id = ${paymentId}
+  `;
+  await tx`
+    insert into order_events (order_id, status, note, actor, at)
+    values (${orderId}, 'refunded', ${refundRef}, 'admin', ${at})
+  `;
+  return true;
+}
+
+/**
+ * 改址：重写 `address_snapshot` 并记事件（**不改状态**）。
+ * @returns false = 当前不是 paid（已被抢先发货 / 退款，**不是错误**）。
+ * @why 事件用伪状态 `address_changed` 而不是复用 `paid`：时间线里两条都叫 paid 的话，
+ *      "这笔单付过几次款"就成了猜谜。前端详情页直接显示 `status` 原文（未走状态文案映射），
+ *      所以伪状态不会被渲染成"未知状态"。
+ *      @limitation 它不在 `ORDER_STATUS` 枚举里——`order_events.status` 是 VARCHAR 故不违反
+ *      DB 约束，但任何"按 enum 校验事件状态"的将来逻辑都要把它列为例外。
+ */
+export async function updateAddressSnapshot(
+  tx: Db,
+  orderId: string,
+  snapshot: JSONValue,
+  actor: string,
+  at: Date,
+): Promise<boolean> {
+  const updated = await tx`
+    update orders set address_snapshot = ${tx.json(snapshot)}, updated_at = now()
+     where id = ${orderId} and status = 'paid'
+  `;
+  if (updated.count === 0) return false;
+  await tx`
+    insert into order_events (order_id, status, note, actor, at)
+    values (${orderId}, 'address_changed', '管理员改址', ${actor}, ${at})
+  `;
+  return true;
 }
