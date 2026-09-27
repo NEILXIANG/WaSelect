@@ -1,0 +1,223 @@
+/**
+ * 职责：`validateProductInput`（管理端上架/改商品输入校验）的行为钉子。
+ *
+ * @why 上架校验是**合规的最后一道自动闸门**：D-42 航空禁寄、D-45 不上电器、
+ *      D-51 医薬部外品/SPF（美国 FDA 口径属 OTC 药品）、CPSIA、酒类 —— 七类商品
+ *      上架即拒。它们一旦漏检，后果不是"页面显示错"，而是**货被海关扣留**或
+ *      **在卖处方药边界的东西**；而漏检的样子是"商品静静地上架了"，没有任何一方报错。
+ *
+ * @why 每条规则配**一个独立用例**（不批量断言）：两年前本项目踩过"两个变量一起改"的
+ *      覆盖假象（关税行 duty_jpy 与 duty_estimate 同时改，漏了一档）。这里每条规则
+ *      只动一个字段，缺陷注入时才能确认"这一条真的被这条用例守着"。
+ *
+ * @see domain/product-input.ts（被测）；contracts/api-contract.yaml ProductInput
+ */
+import { describe, expect, it } from 'vitest';
+import { validateProductInput, type ProductInput } from './product-input.js';
+
+/** 一条合法输入（每个用例只改自己关心的那一两个字段）。 */
+function base(): Record<string, unknown> {
+  return {
+    title: '测试商品',
+    category: 'beauty',
+    price_jpy: 3600,
+    weight_g: 800,
+    customs_desc_en: 'cosmetic set',
+    origin_country: 'JP',
+  };
+}
+
+/** 断言通过并取回归一化值。 */
+function ok(raw: unknown): ProductInput {
+  const r = validateProductInput(raw);
+  if (!r.ok) throw new Error(`期望通过，实际拒绝：${JSON.stringify(r.errors)}`);
+  return r.value;
+}
+
+/** 断言被拒并返回错误里的 reason 列表。 */
+function reasons(raw: unknown): string[] {
+  const r = validateProductInput(raw);
+  if (r.ok) throw new Error('期望拒绝，实际通过');
+  return r.errors.map((e) => e.reason);
+}
+
+describe('validateProductInput（管理端商品输入，I2）', () => {
+  it('全部合法字段 → 通过并归一化（缺的可选字段补默认）', () => {
+    const v = ok(base());
+    expect(v.category).toBe('beauty');
+    expect(v.price_jpy).toBe(3600);
+    expect(v.origin_country).toBe('JP');
+    expect(v.stock).toBe(0);
+  });
+
+  it('非对象 / null → 拒绝（reason: not_object）', () => {
+    expect(reasons(null)).toContain('not_object');
+    expect(reasons('x')).toContain('not_object');
+  });
+
+  // ── 必填六项：每项一个用例（防"缺项被静默当成 0/空串"）──────────────────
+  it('缺 title → 拒绝', () => {
+    const b = base();
+    delete b.title;
+    expect(reasons(b)).toContain('title_required');
+  });
+
+  it('缺 category → 拒绝', () => {
+    const b = base();
+    delete b.category;
+    expect(reasons(b)).toContain('category_required');
+  });
+
+  it('缺 price_jpy → 拒绝', () => {
+    const b = base();
+    delete b.price_jpy;
+    expect(reasons(b)).toContain('price_required');
+  });
+
+  it('缺 weight_g → 拒绝', () => {
+    const b = base();
+    delete b.weight_g;
+    expect(reasons(b)).toContain('weight_required');
+  });
+
+  it('缺 customs_desc_en → 拒绝（报关品名上架必填，D-39）', () => {
+    const b = base();
+    delete b.customs_desc_en;
+    expect(reasons(b)).toContain('customs_desc_required');
+  });
+
+  it('缺 origin_country → 拒绝（必填无默认，D-42/D-43）', () => {
+    const b = base();
+    delete b.origin_country;
+    expect(reasons(b)).toContain('origin_required');
+  });
+
+  // ── 数值约束 ────────────────────────────────────────────────────────────
+  it('price_jpy = 0 / 负数 / 非整数 / 非数字 → 拒绝', () => {
+    expect(reasons({ ...base(), price_jpy: 0 })).toContain('price_invalid');
+    expect(reasons({ ...base(), price_jpy: -1 })).toContain('price_invalid');
+    expect(reasons({ ...base(), price_jpy: 1.5 })).toContain('price_invalid');
+    expect(reasons({ ...base(), price_jpy: '3600' })).toContain('price_invalid');
+  });
+
+  it('weight_g = 0 / 非整数 → 拒绝（运费取档的输入，0 克会让取档取到最小档）', () => {
+    expect(reasons({ ...base(), weight_g: 0 })).toContain('weight_invalid');
+    expect(reasons({ ...base(), weight_g: 10.5 })).toContain('weight_invalid');
+  });
+
+  it('stock 负数 → 拒绝（0 允许：预售/缺货上架是正常运营动作）', () => {
+    expect(reasons({ ...base(), stock: -1 })).toContain('stock_invalid');
+    expect(ok({ ...base(), stock: 0 }).stock).toBe(0);
+  });
+
+  it('cost_jpy 负数 → 拒绝（未填允许：采购价可后补）', () => {
+    expect(reasons({ ...base(), cost_jpy: -1 })).toContain('cost_invalid');
+    expect(ok({ ...base(), cost_jpy: 2000 }).cost_jpy).toBe(2000);
+  });
+
+  // ── 枚举与产地 ──────────────────────────────────────────────────────────
+  it('category 不在四值枚举 → 拒绝', () => {
+    expect(reasons({ ...base(), category: 'beauty2' })).toContain('category_invalid');
+    for (const c of ['beauty', 'daily', 'kitchen', 'food']) {
+      expect(ok({ ...base(), category: c }).category).toBe(c);
+    }
+  });
+
+  it('origin_country 非 JP → 拒绝（MVP 只卖日本原产；DB 也有 CHECK，前端拦是为了给出人话错误）', () => {
+    expect(reasons({ ...base(), origin_country: 'CN' })).toContain('origin_invalid');
+    expect(reasons({ ...base(), origin_country: 'jp' })).toContain('origin_invalid'); // 大小写敏感
+  });
+
+  // ── 合规标签：上架即拒（D-42 / D-45 / D-51）────────────────────────────
+  it('七个拦截标签任一 → 拒绝（reason: tag_blocked）', () => {
+    for (const t of [
+      'flammable',
+      'aerosol',
+      'electrical',
+      'quasi_drug',
+      'sunscreen',
+      'children_product',
+      'alcohol',
+    ]) {
+      expect(reasons({ ...base(), compliance_tags: [t] })).toContain('tag_blocked');
+    }
+  });
+
+  it('只标记不拦的标签 → 通过（liquid / battery 不要求 HS 码；cosmetic / food 要求，见下两条）', () => {
+    for (const t of ['liquid', 'battery']) {
+      expect(ok({ ...base(), compliance_tags: [t] }).compliance_tags).toEqual([t]);
+    }
+  });
+
+  it('未登记的字符串 → 拒绝（拼错标签 = 拦截静默失效，三审 B5）', () => {
+    expect(reasons({ ...base(), compliance_tags: ['quasi-drug'] })).toContain('tag_invalid');
+  });
+
+  it('compliance_tags 非数组 → 拒绝', () => {
+    expect(reasons({ ...base(), compliance_tags: 'food' })).toContain('tags_invalid');
+  });
+
+  // ── 报关品名禁词（D-51）────────────────────────────────────────────────
+  it('customs_desc_en 含禁词 → 拒绝（大小写不敏感：海关看的是文本不是大小写）', () => {
+    for (const w of ['medicated', 'whitening', 'SPF', 'sunscreen', 'drug']) {
+      expect(reasons({ ...base(), customs_desc_en: `skin ${w} cream` })).toContain(
+        'customs_desc_forbidden',
+      );
+    }
+    // 大写的 MEDICATED 同样要拦（只比小写原词会漏）
+    expect(reasons({ ...base(), customs_desc_en: 'MEDICATED soap' })).toContain(
+      'customs_desc_forbidden',
+    );
+  });
+
+  it('禁词作为单词的一部分（classic 含 "ass"? 不在名单）不算命中——只按词边界比，避免误伤', () => {
+    expect(ok({ ...base(), customs_desc_en: 'classic ceramic cup' }).customs_desc_en).toBe(
+      'classic ceramic cup',
+    );
+  });
+
+  // ── HS 码（食品 / 化妆品必填，D-39/D-42）────────────────────────────────
+  it('food 标签且无 hs_code → 拒绝', () => {
+    expect(reasons({ ...base(), compliance_tags: ['food'] })).toContain('hs_code_required');
+  });
+
+  it('cosmetic 标签且无 hs_code → 拒绝', () => {
+    expect(reasons({ ...base(), compliance_tags: ['cosmetic'] })).toContain('hs_code_required');
+  });
+
+  it('food + hs_code → 通过（补了就放行）', () => {
+    expect(ok({ ...base(), compliance_tags: ['food'], hs_code: '210690' }).hs_code).toBe('210690');
+  });
+
+  it('无 food/cosmetic 标签时 hs_code 缺省 → 通过（不由我们编造 HS 码）', () => {
+    expect(ok(base()).hs_code).toBeUndefined();
+  });
+
+  // ── 形状与长度 ──────────────────────────────────────────────────────────
+  it('images 每项须为 {thumb,card,detail} 三字符串 → 否则拒绝', () => {
+    expect(
+      ok({
+        ...base(),
+        images: [{ thumb: 'a', card: 'b', detail: 'c' }],
+      }).images,
+    ).toEqual([{ thumb: 'a', card: 'b', detail: 'c' }]);
+    expect(reasons({ ...base(), images: [{ thumb: 'a' }] })).toContain('image_invalid');
+    expect(reasons({ ...base(), images: ['a'] })).toContain('image_invalid');
+  });
+
+  it('jan_code 超 13 字符 → 拒绝（DB VARCHAR(13)；超长会在入库时才炸）', () => {
+    expect(reasons({ ...base(), jan_code: '1'.repeat(14) })).toContain('jan_code_invalid');
+    expect(ok({ ...base(), jan_code: '1'.repeat(13) }).jan_code).toBe('1'.repeat(13));
+  });
+
+  it('title 超 255 字符 → 拒绝（DB VARCHAR(255)）', () => {
+    expect(reasons({ ...base(), title: 'x'.repeat(256) })).toContain('title_too_long');
+  });
+
+  it('一次收集多个错误，不是遇到第一个就停（表单要一次显示全部问题）', () => {
+    const errs = validateProductInput({ title: 'x', price_jpy: 0, weight_g: -1 });
+    expect(errs.ok).toBe(false);
+    if (errs.ok) return;
+    expect(errs.errors.length).toBeGreaterThanOrEqual(4);
+  });
+});
