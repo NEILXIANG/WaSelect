@@ -16,6 +16,7 @@ import {
   rateErrors,
   rateRows,
   toFxBody,
+  toIsoJst,
   toRateBody,
 } from './view.js';
 
@@ -86,14 +87,22 @@ describe('fxFormErrors / toFxBody', () => {
     });
   });
 
-  it('填了时间才带上', () => {
+  it('⚠️ 填了时间按 JST 转成带 +09:00 的 ISO（datetime-local 没有时区，直发会被当 UTC）', () => {
+    expect(toFxBody({ quote: 'CNY', rawRate: '0.048', effectiveFrom: '2026-10-01T09:00' })).toEqual(
+      {
+        quote: 'CNY',
+        raw_rate: 0.048,
+        effective_from: '2026-10-01T09:00:00+09:00',
+      },
+    );
+  });
+
+  it('⚠️ 时间格式不对 → 校验先拦住（不让它变成空串发出去）', () => {
     expect(
-      toFxBody({ quote: 'CNY', rawRate: '0.048', effectiveFrom: '2026-10-01T00:00:00Z' }),
-    ).toEqual({
-      quote: 'CNY',
-      raw_rate: 0.048,
-      effective_from: '2026-10-01T00:00:00Z',
-    });
+      fxFormErrors({ quote: 'USD', rawRate: '0.0067', effectiveFrom: '2026/10/01' }).first,
+    ).toContain('生效时间');
+    expect(toIsoJst('2026/10/01')).toBe('');
+    expect(toIsoJst('')).toBe('');
   });
 
   it('⚠️ 空表单（默认 quote）也要先填汇率才能过', () => {

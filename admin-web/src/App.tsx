@@ -26,6 +26,7 @@ import { login } from './api/endpoints.js';
 import { createTokenStore } from './api/token-store.js';
 import { LoginForm } from './LoginForm.js';
 import { OrdersPage } from './orders/OrdersPage.js';
+import { OpsPage } from './ops/OpsPage.js';
 import { ProductsPage } from './products/ProductsPage.js';
 import { ProductFormPage } from './products/ProductFormPage.js';
 import type { AdminProductLike } from './products/api.js';
@@ -37,6 +38,7 @@ const tokenStore = createTokenStore();
 const TABS = [
   { key: 'products', label: '商品管理' },
   { key: 'orders', label: '订单管理' },
+  { key: 'ops', label: '运营配置' },
 ] as const;
 
 type TabKey = (typeof TABS)[number]['key'];
@@ -111,6 +113,8 @@ export function App() {
       </nav>
 
       {tab === 'orders' && <OrdersPage api={api} />}
+
+      {tab === 'ops' && <OpsPage api={api} />}
 
       {tab === 'products' &&
         (editing === null ? (
