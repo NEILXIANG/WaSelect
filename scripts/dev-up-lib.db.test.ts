@@ -38,21 +38,34 @@ function adminUrl(): string {
 }
 
 /**
- * 删库清理的超时预算：30s。
- * @why 默认 hook 超时是 10s，而这里是 **DDL**（`drop database ... with (force)`：
- *      要先 terminate probe 库上的残留连接再删）。全量 gate 末期机器负载高时，
- *      10s 会不够 → afterAll 超时 → **整条 gate 红，但没有任何用例失败**（已复现两次）。
- *      给的是"清理动作的合理预算"，不是放宽断言：drop 失败依然红。
- * @limitation 若将来仍偶发超时，下一个要看的是 Postgres 的 max_connections 是否被
- *              gate 的并行 worker 打满——届时是资源上限问题，不是这两个数字的问题。
+ * 删库清理的超时预算：30s（同时给钩子与 DDL 语句）。
+ *
+ * @why 第一版只把**钩子**超时从默认 10s 提到 30s，结果第三次复现时报的却是
+ *      `PostgresError: canceling statement due to statement timeout`——
+ *      **卡住的不是钩子，是语句**：`drop database ... with (force)` 在全量 gate 末期
+ *      跑满了 db.ts 给业务查询设的 15s 语句预算（57014，已实测一次）。
+ *      加钩子预算是在错误的地方加数字（第三次才看清），所以对症状修两处：
+ *      ① 拆成「先 `pg_terminate_backend` 再 `drop database`」——慢在哪一步变得可见
+ *         （FORCE 把 terminate + 删文件压成一条语句，黑盒且不可诊断）；
+ *      ② 这条 DDL 单独拿 30s 语句预算（`statementTimeoutMs`）——DDL 与业务查询
+ *         本就不该共用一个预算：业务查询 15s 不返回基本等于写错了，DDL 删库 20s
+ *         在负载高峰是正常的。
+ * @limitation 若仍偶发，下一个要看的是 Postgres `max_connections`（本机实测 **100**，
+ *             默认值偏小）是否被 gate 的并行 worker 打满——届时是资源上限问题，
+ *             不是这两个数字的问题。
  */
 const DROP_TIMEOUT_MS = 30_000;
 
 async function dropProbe(): Promise<void> {
-  const admin = createDb({ url: adminUrl(), max: 1 });
+  const admin = createDb({ url: adminUrl(), max: 1, statementTimeoutMs: DROP_TIMEOUT_MS });
   try {
-    // FORCE：probe 可能有残留连接（上次跑挂掉）；PG13+ 支持
-    await admin.unsafe(`drop database if exists ${PROBE_NAME} with (force)`);
+    // ① 先终止 probe 库上的残留连接（上次跑挂掉会留下）。拆出来是为了可诊断：
+    //    这一步慢 = 有人连着 probe 库；②慢 = PG 自己在忙（IO/连接数）。
+    await admin.unsafe(
+      `select pg_terminate_backend(pid) from pg_stat_activity where datname = '${PROBE_NAME}'`,
+    );
+    // ② 再删库（不带 force：连接已在 ① 终止，留着 force 只会把失败压回黑盒）
+    await admin.unsafe(`drop database if exists ${PROBE_NAME}`);
   } finally {
     await admin.end();
   }

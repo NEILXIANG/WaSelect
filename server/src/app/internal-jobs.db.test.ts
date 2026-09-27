@@ -195,6 +195,36 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
     }
   });
 
+  it('回调异常回看窗口边界：47h 内计入 / 49h 外不计（窗口下界来自注入时钟）', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      // 两条同类型异常，只差在 received_at：一条卡在窗口内（47h）、一条刚好在窗口外（49h）。
+      // @why 单独一条用例而不是塞进上面那条：窗口边界此前**完全没有被测**
+      //       （上面那条只种了 now() 的样本，窗口写成 1 小时它也是绿的）——
+      //       这类"参数只在 SQL 里出现、没人钉边界"的常量，最容易被人悄悄改错。
+      await db`
+        insert into webhook_events (event_id, provider, event_type, result, received_at)
+        values ('evt-in-47h',  'mock', 'payment.succeeded', 'needs_refund', now() - interval '47 hours'),
+               ('evt-out-49h', 'mock', 'payment.succeeded', 'needs_refund', now() - interval '49 hours')
+      `;
+      const res = await trigger(srv.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      await waitForDailyHeartbeat();
+
+      const cb = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'callback_anomalies_48h');
+      expect(cb, '窗口内有一条就该报这一类').toBeDefined();
+      const ctx = cb?.['ctx'] as Record<string, unknown> | undefined;
+      expect(ctx?.['count']).toBe(1); // 只有 47h 那条，49h 那条必须被窗口排除
+      const ids = JSON.stringify(ctx?.['sample_ids']);
+      expect(ids).toContain('evt-in-47h');
+      expect(ids).not.toContain('evt-out-49h');
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('三类异常各一行 → 全部扫出：三条 error 取样 + 汇总行计数 + processed 进日志', async () => {
     const srv = await buildServer({ withSecret: true });
     try {
