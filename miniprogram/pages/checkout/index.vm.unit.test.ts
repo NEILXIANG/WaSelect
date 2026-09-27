@@ -3,16 +3,16 @@
  *
  * @why 钉的全是**点了之后看起来成功、实际是坏的**：
  *      ① 建单不带 expected_total_jpy → 失去"看到的 ≠ 算出来的"这道防线（40905）；
- *      ② 幂等键每次重试都换 → 网络一抖建出两张单，用户只点了一次；
- *      ③ 商品行带价格 → 有人会拿它当合计（cart-store @limitation 一 的红线）；
- *      ④ 提交闸门禁用却不说原因 → 被读成"这站坏了"。
+ *      ② 商品行带价格 → 有人会拿它当合计（cart-store @limitation 一 的红线）；
+ *      ③ 提交闸门禁用却不说原因 → 被读成"这站坏了"。
+ *      （幂等键已下沉到 `utils/idem-key.js`，由 `idem-key.unit.test.ts` 覆盖。）
  *
  * @why 支付相关（通道渲染 / 下一步做什么）**不在这里**——它们住在
  *      `utils/pay-plan.js` 并由 `pay-plan.unit.test.ts` 覆盖：确认页与支付页共用同一份，
  *      拆开测会让"两页显示不一致"这件事没有守卫。
  */
 import { describe, expect, it } from 'vitest';
-import { itemRows, newIdemKey, orderBody, submitGate } from './index.vm.js';
+import { itemRows, orderBody, submitGate } from './index.vm.js';
 
 const ITEMS = [
   { productId: 'p-shiro-cleansing-oil', qty: 2, title: '資生堂 クレンジングオイル 200ml' },
@@ -55,24 +55,6 @@ describe('submitGate（提交闸门）', () => {
 
   it('脏输入：null → 不可提交，不抛', () => {
     expect(submitGate(null as never).ok).toBe(false);
-  });
-});
-
-describe('newIdemKey（幂等键）', () => {
-  it('注入固定 rand → 可复现且钉住格式（**测试不靠真随机**）', () => {
-    const seq = [0.5, 0.25];
-    let i = 0;
-    // (0.5).toString(36) = '0.i' → slice(2) = 'i'；(0.25).toString(36) = '0.9' → '9'
-    expect(newIdemKey(() => seq[i++] ?? 0)).toBe('idem-i9');
-  });
-
-  it('同一随机源两次调用相同 → 说明它**只**依赖注入的 rand（没有藏 Date.now）', () => {
-    expect(newIdemKey(() => 0.5)).toBe(newIdemKey(() => 0.5));
-    expect(newIdemKey(() => 0.5)).not.toBe(newIdemKey(() => 0.25));
-  });
-
-  it('⚠️ 长度在契约上限 128 内', () => {
-    expect(newIdemKey().length).toBeLessThanOrEqual(128);
   });
 });
 

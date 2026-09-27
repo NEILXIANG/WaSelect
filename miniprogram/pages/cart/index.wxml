@@ -6,8 +6,8 @@
   拿快照价算钱 = 价格变了没人发现）。行内刻意不显示"小计"——
   小计 = 单价 × 数量，是"算合计"的半成品，同一条红线。
 
-  ⚠️ 去结算按钮当前禁用：目标页 pages/checkout 未落地（@see index.js @limitation 一），
-  跳一个不存在的页面 = "看起来能用、实际是坏的"。
+  ⚠️ 去结算只在权威合计出来后才可点：结算页要用它做 expected_total_jpy 防线（40905），
+  没有合计就跳过去 = 带着一个"防线已降级"的状态下单，而页面上看不出来。
 -->
 <view class="page">
   <view class="card" wx:if="{{empty}}">
@@ -54,8 +54,15 @@
       <text class="error">{{quoteError}}</text>
     </view>
 
-    <!-- 去结算：禁用 + 明示原因（@see index.js @limitation 一） -->
-    <ws-button text="去结算" type="primary" disabled="{{true}}" />
-    <text class="label checkout-hint">{{checkoutHint}}</text>
+    <!-- 去结算：只有权威合计出来了才可点（@see index.js @limitation 一） -->
+    <ws-button
+      text="去结算"
+      type="primary"
+      disabled="{{!quote || quote.totalJpy === null}}"
+      bindtap="onCheckout"
+    />
+    <text class="label checkout-hint" wx:if="{{!quote || quote.totalJpy === null}}">
+      {{checkoutHint}}
+    </text>
   </block>
 </view>

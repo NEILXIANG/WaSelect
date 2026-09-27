@@ -32,6 +32,8 @@ function stubHost(
   const navigated: string[] = [];
   const backDelta: number[] = [];
   const modals: Array<{ success?: (res: { confirm: boolean; cancel: boolean }) => void }> = [];
+  const payments: Array<{ package?: string }> = [];
+  const clipped: string[] = [];
   vi.stubGlobal('wx', {
     request: (o: unknown) => {
       seen.push('request');
@@ -66,9 +68,19 @@ function stubHost(
       modals.push(o);
       o.success?.({ confirm: true, cancel: false });
     },
+    requestPayment: (o: { package?: string; success?: () => void }) => {
+      seen.push(`pay:${o.package ?? ''}`);
+      payments.push(o);
+      o.success?.();
+    },
+    setClipboardData: (o: { data?: string; success?: () => void }) => {
+      seen.push(`clip:${o.data ?? ''}`);
+      clipped.push(o.data ?? '');
+      o.success?.();
+    },
     ...(over.logger === undefined ? {} : { getRealtimeLogManager: () => over.logger }),
   });
-  return { seen, storage, requested, navigated, backDelta, modals };
+  return { seen, storage, requested, navigated, backDelta, modals, payments, clipped };
 }
 
 describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => {
@@ -83,6 +95,16 @@ describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => 
     expect(() => api.login({})).toThrow(/wx 宿主不存在/);
     expect(() => api.navigateBack()).toThrow(/wx 宿主不存在/);
     expect(() => api.showModal({})).toThrow(/wx 宿主不存在/);
+    expect(() =>
+      api.requestPayment({
+        timeStamp: '1',
+        nonceStr: 'n',
+        package: 'prepay_id=x',
+        signType: 'RSA',
+        paySign: 's',
+      }),
+    ).toThrow(/wx 宿主不存在/);
+    expect(() => api.setClipboardData({ data: 'x' })).toThrow(/wx 宿主不存在/);
   });
 
   it('**import 时不取宿主**——只有调用才取（否则 Node 侧连 import 都做不到）', () => {
@@ -186,6 +208,41 @@ describe('走真实宿主时的行为', () => {
     });
     expect(modals).toHaveLength(1);
     expect(confirmed).toBe(true);
+  });
+
+  it('requestPayment 五参数原样转发（含 `package`——改名就要维护映射表）', () => {
+    const { payments } = stubHost();
+    const option = {
+      timeStamp: '1712345678',
+      nonceStr: 'n-abcdef1234',
+      package: 'prepay_id=wx1234567890',
+      signType: 'RSA',
+      paySign: 'sign-xxxx',
+      success: () => undefined,
+    };
+    createWxApi().requestPayment(option);
+    expect(payments[0]?.package).toBe('prepay_id=wx1234567890');
+    expect(payments[0]).toBe(option);
+  });
+
+  it('⚠️ 不判"用户取消"——cancel 与失败一视同仁（@limitation 十）', () => {
+    // @why 宿主 fail 的 errMsg 是文案（含 "cancel"），解析它等于把宿主文案当契约；
+    //      上层对两者同样处理：停在支付页，订单仍是 pending_payment。
+    const { seen } = stubHost();
+    createWxApi().requestPayment({
+      timeStamp: '1',
+      nonceStr: 'n',
+      package: 'p',
+      signType: 'RSA',
+      paySign: 's',
+    });
+    expect(seen).toContain('pay:p');
+  });
+
+  it('setClipboardData 原样转发 data（只复制，不代跳——@limitation 十一）', () => {
+    const { clipped } = stubHost();
+    createWxApi().setClipboardData({ data: 'https://pay.test/l/abc' });
+    expect(clipped).toEqual(['https://pay.test/l/abc']);
   });
 });
 

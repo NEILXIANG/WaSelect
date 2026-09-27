@@ -1,0 +1,53 @@
+<!--
+  支付（I2）：支付方式由 GET /pay/channels 下发并渲染，**不写死通道名与按钮**
+  （ADR-28/F11：上下线一个通道改配置即可，无需发版）。
+
+  ⚠️ 按钮文案取自服务端的 `label`（外置文案）；entryMode 为 redirect 的通道
+  在 utils/pay-plan.js 里就被滤掉了——小程序内没有"302 跳出去再回来"的闭环，
+  显示了就是"点了没反应"。
+
+  ⚠️ copylink 那一屏：只给"复制链接"，不自动复制、不代为跳转
+  （剪贴板是用户的东西；跳出去也打不开——D-49 已废 web-view）。
+-->
+<view class="page">
+  <view class="card" wx:if="{{error}}">
+    <text class="error">{{error}}</text>
+  </view>
+
+  <view class="card" wx:if="{{loading}}">
+    <text class="label">正在加载支付方式…</text>
+  </view>
+
+  <view class="card" wx:if="{{totalJpy !== null}}">
+    <view class="row">
+      <text class="label">应付合计</text>
+      <ws-price jpy="{{totalJpy}}" size="lg" />
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{channels.length > 0}}">
+    <view
+      class="channel"
+      wx:for="{{channels}}"
+      wx:key="channel"
+      data-channel="{{item.channel}}"
+      bindtap="onPay"
+    >
+      <text class="label">{{item.label}}</text>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{paying}}">
+    <text class="label">正在发起支付…</text>
+  </view>
+
+  <!-- 引导屏：copylink（银行卡）/ auto（审核期）/ unsupported -->
+  <view class="card" wx:if="{{guide.title}}">
+    <text class="label">{{guide.title}}</text>
+    <text class="line">{{guide.body}}</text>
+    <ws-button text="复制链接" type="primary" bindtap="onCopy" wx:if="{{payUrl}}" />
+  </view>
+
+  <ws-button text="查看订单" type="primary" disabled="{{true}}" />
+  <text class="label tip">{{orderHint}}</text>
+</view>

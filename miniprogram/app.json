@@ -5,6 +5,8 @@
     "pages/cart/index",
     "pages/address/index",
     "pages/address-edit/index",
+    "pages/checkout/index",
+    "pages/pay/index",
     "pages/comp/index",
     "pages/index/index"
   ],

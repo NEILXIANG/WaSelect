@@ -14,7 +14,8 @@
  *
  * @limitation 一：**只声明当前真用到的能力**（request / getStorageSync / setStorageSync /
  *              removeStorageSync / getRealtimeLogManager / navigateTo / login /
- *              navigateBack / showModal）。新增一个 wx API 就在这里加一个方法——
+ *              navigateBack / showModal / requestPayment / setClipboardData）。
+ *              新增一个 wx API 就在这里加一个方法——
  *              不要预先铺满官方 API，铺了就会有人依赖上没被测试过的封装（本项目多次踩过"提前做是猜"）。
  * @limitation 二：`getStorageSync` 的契约是**只取字符串**：读到的不是字符串时一律当"没存过"（返回空串）。
  *              要存对象就先 JSON 序列化——小程序 storage 本身也是这个语义。
@@ -89,6 +90,30 @@ export interface WxNavigateBackOption {
   delta?: number;
 }
 
+/**
+ * `wx.requestPayment` 的入参（官方五参数 + 回调；字段名与官方一致，不改名）。
+ *
+ * @why `package` 是保留字但在**对象属性**里合法，且必须与官方一致——
+ *      改名的结果是要在这里维护一张映射表，而映射表错一个键
+ *      的表现是"支付调不起来"，报错还指向宿主。
+ */
+export interface WxRequestPaymentOption {
+  timeStamp: string;
+  nonceStr: string;
+  package: string;
+  signType: string;
+  paySign: string;
+  success?: () => void;
+  fail?: (err: WxRequestFail) => void;
+}
+
+/** `wx.setClipboardData` 的入参（只声明我们传的字段）。 */
+export interface WxClipboardOption {
+  data: string;
+  success?: () => void;
+  fail?: (err: WxRequestFail) => void;
+}
+
 /** `wx.showModal` 的入参（只声明我们传的字段）。 */
 export interface WxShowModalOption {
   title?: string;
@@ -144,6 +169,26 @@ export interface WxApi {
    *              只有"需要用户决策"的才用模态，一条提示不值得为一个 wx API 付覆盖率成本。
    */
   showModal(option: WxShowModalOption): void;
+  /**
+   * 调起微信支付（`wx.requestPayment`）。
+   * @why I2 支付页的 in_app 通道（微信支付跨境机构模式）最后一步宿主调用。
+   *      五参数全部来自服务端 `PaymentIntent.payload`，这里**不做任何补全**。
+   * @limitation 十：**不判"用户取消"**。`fail` 的 `errMsg` 是宿主文案（含 "cancel"），
+   *      在这里解析文案去区分"取消 vs 失败"等于把宿主文案当成契约——
+   *      微信改一个字就会判错。取消与失败在**上层**一视同仁：都停在支付页，
+   *      由用户点"重新支付"（订单仍是 pending_payment，不会重复扣款）。
+   */
+  requestPayment(option: WxRequestPaymentOption): void;
+  /**
+   * 复制文本到剪贴板（`wx.setClipboardData`）。
+   * @why D-49 定下的银行卡唯一入口：短链 → Stripe Checkout 托管页。
+   *      小程序**内**无法打开它（已废 web-view），所以唯一可行的路径是
+   *      "复制链接 → 用户自己去浏览器粘贴"。
+   * @limitation 十一：只复制，不代为跳转，也不做"是否已复制"的判断
+   *      （`success` 回调在原样转发后由调用方决定）。
+   *      替用户跳转的表现是"跳到一个打不开的页面"，比复制更糟。
+   */
+  setClipboardData(option: WxClipboardOption): void;
 }
 
 /** 宿主（`globalThis.wx`）上我们真正读到的形状——比 `WxApi` 宽松，因为官方签名返回 `unknown`。 */
@@ -157,6 +202,8 @@ interface WxHost {
   login(option: WxLoginOption): void;
   navigateBack(option?: WxNavigateBackOption): void;
   showModal(option: WxShowModalOption): void;
+  requestPayment(option: WxRequestPaymentOption): void;
+  setClipboardData(option: WxClipboardOption): void;
 }
 
 /**
@@ -212,6 +259,12 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     },
     showModal: (option) => {
       host().showModal(option);
+    },
+    requestPayment: (option) => {
+      host().requestPayment(option);
+    },
+    setClipboardData: (option) => {
+      host().setClipboardData(option);
     },
   };
   return { ...real, ...over };

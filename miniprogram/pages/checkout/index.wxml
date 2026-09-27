@@ -1,0 +1,70 @@
+<!--
+  确认订单（I2）：商品行 + 收货地址 + 权威报价 + 条款 → 建单 → 支付页。
+
+  ⚠️ 商品行**没有价格**：价格只信 POST /orders/quote（行里一有价格就会有人拿它算合计，
+  而购物车快照价会过期）。@see index.vm.js @limitation 一
+
+  ⚠️ 提交按钮禁用时**必须显示原因**（gate.reason）——禁用不说为什么会被读成"这站坏了"。
+-->
+<view class="page">
+  <view class="card" wx:if="{{error}}">
+    <text class="error">{{error}}</text>
+  </view>
+
+  <view class="card" wx:if="{{rows.length > 0}}">
+    <view class="row" wx:for="{{rows}}" wx:key="productId">
+      <text class="label">{{item.title}}</text>
+      <text class="qty">× {{item.qty}}</text>
+    </view>
+  </view>
+
+  <view class="card" wx:else>
+    <text class="label">购物车是空的</text>
+  </view>
+
+  <view class="card" bindtap="onPickAddress">
+    <text class="label">收货地址</text>
+    <block wx:if="{{address}}">
+      <text class="line">{{address.recipient}} · {{address.phone}}</text>
+      <text class="line">{{address.line1}}</text>
+      <text class="line" wx:if="{{address.line2}}">{{address.line2}}</text>
+      <text class="line">{{address.region}}</text>
+    </block>
+    <text class="line" wx:else>还没有地址，点这里新增</text>
+    <text class="hint">点此切换地址</text>
+  </view>
+
+  <view class="card" wx:if="{{quote}}">
+    <view class="row" wx:for="{{quote.lines}}" wx:for-item="line" wx:key="label">
+      <text class="label">{{line.label}}</text>
+      <text class="value">{{line.value}}</text>
+    </view>
+
+    <view class="total">
+      <text class="label">应付合计</text>
+      <ws-price wx:if="{{quote.hasTotal}}" jpy="{{quote.totalJpy}}" size="lg" />
+    </view>
+    <text class="sub-price" wx:if="{{quote.totalSub}}">{{quote.totalSub}}</text>
+    <text class="label" wx:for="{{quote.hints}}" wx:for-item="hint" wx:key="*this">{{hint}}</text>
+  </view>
+
+  <view class="card" wx:if="{{loading}}">
+    <text class="label">正在计算运费…</text>
+  </view>
+
+  <view class="card">
+    <view class="terms" bindtap="onToggleTerms">
+      <text class="label">{{termsAccepted ? '✓ 已阅读并同意购买条款' : '阅读并同意购买条款'}}</text>
+    </view>
+    <text class="hint" wx:if="{{termsVersion}}">条款版本 {{termsVersion}}</text>
+    <text class="hint" wx:else>条款版本加载中</text>
+  </view>
+
+  <ws-button
+    text="{{submitting ? '提交中…' : '提交订单'}}"
+    type="primary"
+    disabled="{{!gate.ok || submitting}}"
+    bindtap="onSubmit"
+  />
+  <text class="label tip" wx:if="{{gate.reason}}">{{gate.reason}}</text>
+</view>

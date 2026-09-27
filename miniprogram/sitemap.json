@@ -18,6 +18,14 @@
       "page": "pages/address-edit/index"
     },
     {
+      "action": "disallow",
+      "page": "pages/checkout/index"
+    },
+    {
+      "action": "disallow",
+      "page": "pages/pay/index"
+    },
+    {
       "action": "allow",
       "page": "*"
     }

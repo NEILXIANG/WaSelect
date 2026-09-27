@@ -12,25 +12,34 @@
  *      而报价端点带 429 限流（契约已声明）——客户端不该把自己限死。
  *      防抖只影响"打不打电话"，本地数量与金额显示是**立刻**更新的（不等待网络）。
  *
- * @limitation 一：**去结算按钮当前禁用**——目标页 `pages/checkout` 未落地，
- *              跳一个不存在的页面 = "看起来能用、实际是坏的"（与首页/详情同一条原则）。
- *              按钮保留在版式上并**明示原因**（同骨架页停用的形态），接线时只改 wxml 两处。
+ * @limitation 一：**去结算只在报价出来后才可用**（`quote.totalJpy` 非 null）——
+ *              结算页要拿这个数做 `expected_total_jpy` 防线（40905），
+ *              没有合计就跳过去 = 带着一个"防线已降级"的状态下单，而页面上看不出来。
  * @limitation 二：报价失败**不清列表**（本地条目还在，用户能继续改数量），
  *              只显示错误文案；下一次改动会自然重试。
  *
- * @see ./index.vm.js（视图逻辑真源）；../../utils/cart-store.js（本地状态真源）
+ * @see ./index.vm.js（行视图真源）；../../utils/quote-view.js（报价区视图，共享层）；
+ *      ../../utils/cart-store.js（本地状态真源）
  */
-import { cartRows, quoteView } from './index.vm.js';
+import { cartRows } from './index.vm.js';
+import { quoteView } from '../../utils/quote-view.js';
 import { errorMessage } from '../../utils/error-text.js';
+import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 
 const app = getApp();
 
+/** 页面级宿主入口（wx-api 是无状态转发）。 */
+const wxApi = createWxApi();
+
 /** 报价防抖毫秒数（@why 见文件头）。 */
 const QUOTE_DEBOUNCE_MS = 400;
 
+/** 结算页路径（跳转路径只在这一处出现）。 */
+const CHECKOUT_PAGE = '/pages/checkout/index';
+
 /** 去结算按钮的禁用原因（@see @limitation 一）。 */
-const CHECKOUT_HINT = '结算页开发中（下一单元接线）';
+const CHECKOUT_HINT = '运费与合计还在计算中';
 
 Page({
   data: {
@@ -134,6 +143,15 @@ Page({
     // ⚠️ 减到 0 由 cart-store 定义为"移除"（setQty 的 @why）；这里不额外判断
     cart.setQty(productId, current.qty + delta);
     this.refresh();
+  },
+
+  /**
+   * 去结算（@see @limitation 一：没有权威合计时不让走）。
+   * @why 不传任何金额给结算页：金额一律由结算页自己向服务端要（跨页传金额 = 可被篡改）。
+   */
+  onCheckout() {
+    if (this.data.quote === null || this.data.quote.totalJpy === null) return;
+    wxApi.navigateTo({ url: CHECKOUT_PAGE });
   },
 
   /** 取 wxml 的 `data-id`（取不到 = 空串，而不是 undefined）。 */

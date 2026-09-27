@@ -4,9 +4,9 @@
  * @why 这一页是整条链路里**最容易静默出错**的一页：
  *      ① 拿购物车快照价当合计 → 价格变了没人发现（cart-store @limitation 一）；
  *      ② 建单不带 `expected_total_jpy` → 失去"用户看到的 ≠ 服务端算的"这道防线（40905）；
- *      ③ 幂等键每次重试都换 → 网络一抖就建出两张单（服务端幂等形同虚设）；
- *      ④ 提交闸门禁用却不说原因 → 被读成"这站坏了"。
- *      这四条没有一条会报错，只会"看起来成功了"。
+ *      ③ 提交闸门禁用却不说原因 → 被读成"这站坏了"。
+ *      这三条没有一条会报错，只会"看起来成功了"。
+ *      （幂等键那条已下沉到 `utils/idem-key.js`：确认页与支付页共用。）
  *
  * @why **不含**支付相关函数：支付方式渲染与"下一步做什么"住在 `utils/pay-plan.js`——
  *      确认页要**预取**通道列表（先让用户看到可以用什么付），支付页要**执行**，
@@ -47,21 +47,6 @@ export function submitGate(state) {
   if (s.termsAccepted !== true) return { ok: false, reason: '请先阅读并同意购买条款' };
   if (!Number.isInteger(s.totalJpy)) return { ok: false, reason: '运费与合计还在计算中' };
   return { ok: true, reason: '' };
-}
-
-/**
- * 建单幂等键（`Idempotency-Key`，契约上限 128 字符）。
- * @param {() => number} [rand] 随机源（**注入**，可测；默认 `Math.random`）
- * @why 幂等键必须**一次提交一个、重试复用同一个**：每次重试都换键，
- *      服务端幂等就形同虚设——网络一抖建出两张单，而用户只点了一次。
- *      所以生成交给调用方**持有**，本函数只负责"造一个不可能撞的串"。
- * @why 不用 `Date.now()`：约束十禁业务侧 `new Date()`，且时间戳在高并发下不够随机；
- *      两段 base36 随机串拼接的碰撞概率对本量级足够。
- */
-export function newIdemKey(rand = Math.random) {
-  const a = rand().toString(36).slice(2);
-  const b = rand().toString(36).slice(2);
-  return `idem-${a}${b}`;
 }
 
 /**
