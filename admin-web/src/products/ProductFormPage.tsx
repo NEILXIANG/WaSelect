@@ -16,14 +16,15 @@
  */
 import { useState } from 'react';
 import { ApiError } from '../api/errors.js';
-import { createProduct, updateProduct, uploadProductImage, type AdminApi } from './api.js';
+import { uploadImage } from '../api/upload.js';
+import { createProduct, updateProduct, type AdminApi } from './api.js';
 import { productFormErrors, productFormModel, toProductInput, type ProductForm } from './view.js';
 import { Field, ImagePicker, TagPicker } from './ProductFormParts.js';
 import type { AdminProductLike } from './api.js';
 
 export interface ProductFormPageProps {
   api: AdminApi;
-  /** API 根地址 + 取 token（上传走独立封装，需要这两项；@see api.ts 的 uploadProductImage）。 */
+  /** API 根地址 + 取 token（上传走独立封装，需要这两项；@see ../api/upload.ts）。 */
   baseUrl: string;
   getToken: () => string;
   /** 商品 id；null = 新建。 */
@@ -86,7 +87,7 @@ export function ProductFormPage({
     setUploading(true);
     setError('');
     try {
-      const imageSet = await uploadProductImage({ baseUrl, getToken }, file);
+      const imageSet = await uploadImage({ baseUrl, getToken }, file);
       setForm((prev) => ({ ...prev, images: [...prev.images, imageSet] }));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));

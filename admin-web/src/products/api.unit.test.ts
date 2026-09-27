@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAdminApi } from '../api/client.js';
 import { NETWORK_ERROR_CODE } from '../api/errors.js';
-import { listProducts, setProductStatus, updateProduct, uploadProductImage } from './api.js';
+import { listProducts, setProductStatus, updateProduct } from './api.js';
 
 /** 造一个假 fetch：记录最后一次请求，返回预定响应。 */
 function stubFetch(handler: (url: string, init: RequestInit) => Response) {
@@ -89,44 +89,5 @@ describe('updateProduct / setProductStatus', () => {
     expect(seen[0]?.url).toBe('http://localhost:3000/api/v1/admin/products/p-1/status');
     expect(seen[0]?.init.method).toBe('PATCH');
     expect(JSON.parse(String(seen[0]?.init.body))).toEqual({ status: 'offline' });
-  });
-});
-
-describe('uploadProductImage（multipart，不走 JSON 封装）', () => {
-  it('走 FormData 而不是 JSON.stringify（body 是 FormData 实例）', async () => {
-    const { impl, seen } = stubFetch(() => json({ thumb: 't', card: 'c', detail: 'd' }, 201));
-    const file = new Blob(['x'], { type: 'image/png' }) as unknown as File;
-    const out = await uploadProductImage(
-      { baseUrl: 'http://localhost:3000', getToken: () => 'tk', fetchImpl: impl },
-      file,
-    );
-    expect(seen[0]?.init.body).toBeInstanceOf(FormData);
-    // ⚠️ 没有 content-type: application/json（否则服务端拿不到 multipart 边界 → 40001）
-    expect((seen[0]?.init.headers as Record<string, string>)['content-type']).toBeUndefined();
-    expect(out).toEqual({ thumb: 't', card: 'c', detail: 'd' });
-  });
-
-  it('⚠️ ImageSet 三档缺一档 → 抛（缺了前端会渲染空 src，运营以为图没传上去）', async () => {
-    for (const missing of ['thumb', 'card', 'detail'] as const) {
-      const body: Record<string, string> = { thumb: 't', card: 'c', detail: 'd' };
-      delete body[missing];
-      const { impl } = stubFetch(() => json(body, 201));
-      await expect(
-        uploadProductImage(
-          { baseUrl: 'http://localhost:3000', getToken: () => 'tk', fetchImpl: impl },
-          new Blob(['x']) as unknown as File,
-        ),
-      ).rejects.toThrow(new RegExp(missing));
-    }
-  });
-
-  it('HTTP 非 2xx → 抛（不把错误页当 JSON 解析）', async () => {
-    const { impl } = stubFetch(() => json({ code: 40001, message: 'bad' }, 400));
-    await expect(
-      uploadProductImage(
-        { baseUrl: 'http://localhost:3000', getToken: () => 'tk', fetchImpl: impl },
-        new Blob(['x']) as unknown as File,
-      ),
-    ).rejects.toThrow(/HTTP 400/);
   });
 });

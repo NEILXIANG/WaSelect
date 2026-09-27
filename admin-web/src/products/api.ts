@@ -125,52 +125,6 @@ export async function setProductStatus(
   });
 }
 
-/**
- * `POST /admin/upload`（multipart 图片上传 → `ImageSet`）。
- *
- * @why **不走** `requestApi`：那个封装恒发 JSON（`content-type: application/json` +
- *      `JSON.stringify(body)`），而 multipart 的边界由浏览器生成、body 不能被序列化。
- *      为它给通用封装开一个"不序列化"的分支，等于让封装知道两种完全不同的传输语义——
- *      那正是封装要消灭的东西。所以这里单独实现，共享的只有 baseUrl / token / trace 头。
- * @limitation 三：超时用 `AbortController`（与 client.ts @limitation 二 同口径）——
- *              取消的是等待，不是服务端执行；失败重发要重新选同一个文件，不自动重试。
- */
-export async function uploadProductImage(
-  deps: { baseUrl: string; getToken: () => string; fetchImpl?: typeof fetch },
-  file: File,
-  traceId?: string,
-): Promise<{ thumb: string; card: string; detail: string }> {
-  const doFetch = deps.fetchImpl ?? fetch;
-  const form = new FormData();
-  form.set('file', file);
-  const headers: Record<string, string> = {};
-  const token = deps.getToken();
-  if (token !== '') headers['authorization'] = `Bearer ${token}`;
-  if (traceId !== undefined) headers['x-trace-id'] = traceId;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30_000);
-  let res: Response;
-  try {
-    res = await doFetch(`${deps.baseUrl}/api/v1/admin/upload`, {
-      method: 'POST',
-      headers,
-      body: form,
-      signal: controller.signal,
-    });
-  } catch {
-    throw new ApiError(NETWORK_ERROR_CODE, '图片上传失败（网络或超时）', traceId ?? '');
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!res.ok) {
-    throw new ApiError(NETWORK_ERROR_CODE, `图片上传失败（HTTP ${res.status}）`, traceId ?? '');
-  }
-  const body: unknown = await res.json();
-  assertImageSet(body, traceId ?? '');
-  return body;
-}
-
 /** 列表响应形状校验（@see @limitation 一）。 */
 function assertProductList(value: unknown, traceId: string): asserts value is ProductListResp {
   const o = value as { items?: unknown; total?: unknown } | null;
@@ -191,18 +145,5 @@ function assertProductList(value: unknown, traceId: string): asserts value is Pr
 function assertProduct(value: unknown, traceId: string): asserts value is AdminProductLike {
   if (typeof (value as { id?: unknown } | null)?.id !== 'string') {
     throw new ApiError(NETWORK_ERROR_CODE, '商品响应形状与契约不符（缺 id）', traceId);
-  }
-}
-
-/** `ImageSet` 形状校验（三档 URL 必须都有：缺一档前端渲染时会拿到空 src）。 */
-function assertImageSet(
-  value: unknown,
-  traceId: string,
-): asserts value is { thumb: string; card: string; detail: string } {
-  const o = value as Record<string, unknown> | null;
-  for (const k of ['thumb', 'card', 'detail'] as const) {
-    if (typeof o?.[k] !== 'string' || (o[k] as string) === '') {
-      throw new ApiError(NETWORK_ERROR_CODE, `上传响应缺 ${k}（ImageSet 三档不全）`, traceId);
-    }
   }
 }
