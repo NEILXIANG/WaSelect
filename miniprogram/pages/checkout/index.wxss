@@ -56,3 +56,10 @@
   margin-top: var(--ws-space-sm);
   text-align: center;
 }
+
+/* "查看条款全文"：整行可点（用 view 不是 button——页面不允许原生可点 button） */
+.act {
+  margin-top: var(--ws-space);
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font-sm);
+}

@@ -1,0 +1,46 @@
+<!--
+  法务页（I2）：当前生效的条款版本 + 三语种链接（复制后在浏览器打开）。
+
+  ⚠️ 条款正文**不在小程序里**：正文的单一事实源是 GET /terms 的 urls 指向的静态页。
+  这里再抄一份的后果是"改了条款、小程序还是旧版"，而版本号对得上——比没有更危险。
+
+  ⚠️ 空态只在"确实没有可查看的语种"时显示——请求失败时说"暂时没有"，
+  用户会读成"这家店没有条款"。@see index.vm.js 的 legalState
+-->
+<view class="page">
+  <view class="card" wx:if="{{error}}">
+    <text class="error">{{error}}</text>
+  </view>
+
+  <view class="card" wx:if="{{state.showLoading}}">
+    <text class="label">正在加载条款…</text>
+  </view>
+
+  <view class="card" wx:if="{{state.showEmpty}}">
+    <text class="label">暂时没有可查看的条款</text>
+  </view>
+
+  <view class="card" wx:if="{{version}}">
+    <view class="row">
+      <text class="label">当前生效版本</text>
+      <text class="version">{{version}}</text>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{state.showList}}">
+    <text class="label">复制链接后在浏览器中打开查看全文</text>
+
+    <view class="doc" wx:for="{{langs}}" wx:key="key">
+      <view class="doc-head">
+        <text class="doc-label">{{item.label}}</text>
+        <text
+          class="doc-act"
+          data-url="{{item.url}}"
+          data-key="{{item.key}}"
+          bindtap="onCopy"
+        >{{copied === item.key ? '已复制' : '复制链接'}}</text>
+      </view>
+      <text class="doc-url" user-select>{{item.url}}</text>
+    </view>
+  </view>
+</view>

@@ -58,6 +58,11 @@
     </view>
     <text class="hint" wx:if="{{termsVersion}}">条款版本 {{termsVersion}}</text>
     <text class="hint" wx:else>条款版本加载中</text>
+    <!--
+      ⚠️ 勾选框必须配一个"能真的读到条款"的去处：只有勾选没有正文，
+      等于让用户同意一份他看不见的文本（我们手上却会有一份"已同意"的记录）。
+    -->
+    <view class="act" bindtap="onOpenTerms">查看条款全文</view>
   </view>
 
   <ws-button

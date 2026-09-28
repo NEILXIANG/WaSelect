@@ -224,4 +224,35 @@ describe('app.json 与文件不漂移（MP1）', () => {
     if (entry === undefined) return; // 未配置时取 pages[0]，合法
     expect(app.pages as string[]).toContain(entry);
   });
+
+  /**
+   * 反向断言：**建了页面就得登记**（U-H1 缺陷注入⑦ 实测出来的空白）。
+   *
+   * @why 上面"pages 里每项都有三个文件"是**正向**的，它只能发现"登记了但文件不全"。
+   *      反向的失效——`pages/legal/index.wxml/.js/.json` 三件套齐备，却忘了写进
+   *      `app.json` 的 `pages`——**不会让任何一条测试变红**（实测注入后 exit=0）：
+   *      页面在磁盘上好好的，只是小程序永远打不开它，而跳转它的那一行会静默失败。
+   *      这是"新东西悄悄脱离防线"的典型形态：代码全对，用户那儿是死的。
+   *      于是"新建页面的动作"必须有机器兜底，不能靠"记得在 app.json 里也加一行"。
+   * @limitation 判定标准是"目录下有 `index.wxml`"：小程序页面允许自定义文件名
+   *              （`pages/x/main.wxml`），那种页面这条扫不到（当前没有，且与
+   *              `pages` 里"每项都有 .js/.wxml/.json"那条共用同一个约定——都叫 index）。
+   */
+  it('pages 目录下的每个页面目录都登记在 app.json 里（建了不登记 = 永远打不开）', () => {
+    const pages = app.pages as string[];
+    const dirs = readdirSync(join(root, 'pages'), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+    expect(dirs.length, 'pages 目录是空的——路径写错了？').toBeGreaterThan(0);
+    const orphans = dirs
+      .filter((d) => existsSync(join(root, 'pages', d, 'index.wxml')))
+      .map((d) => `pages/${d}/index`)
+      .filter((p) => !pages.includes(p));
+    expect(
+      orphans,
+      `这些页面三件套齐备却没有登记进 app.json 的 pages：${orphans.join('、')}——` +
+        `小程序永远打不开它们，跳过去的那一行会静默失败`,
+    ).toEqual([]);
+  });
 });
