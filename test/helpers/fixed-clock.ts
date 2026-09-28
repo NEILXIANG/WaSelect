@@ -24,3 +24,38 @@ export function fixedClock(at: string | Date): Clock {
   }
   return { now: () => new Date(frozen.getTime()) };
 }
+
+/**
+ * **可推进**的假时钟（U-J4）。
+ *
+ * @why 固定时钟只能证明"注入的时刻被用上了"，证明不了"**时间真的来自注入的时钟**"——
+ *      一个自己 `new Date()` 的实现，在固定时钟下也会给出一个能通过的时刻。
+ *      可推进时钟把这件事变成确定性断言：推进假时钟 → 依赖时间的代码必须跟着变；
+ *      若它读的是真实时间，推进假时钟毫无影响，用例必红。
+ *
+ * @why 与 `vi.useFakeTimers` 的区别：后者改的是**全局** `Date`/定时器，
+ *      会连带影响 pino 时间戳与 pg 心跳（fixed-clock.ts 文件头 @why 同口径）。
+ *
+ * @limitation 不自动前进——每调用 `now()` 返回同一时刻，只有显式 `advance` 才动。
+ *             这是刻意的：自动前进会让"两次调用间隔多久"变成不确定的量。
+ */
+export function mutableClock(at: string | Date): {
+  clock: Clock;
+  advance: (ms: number) => void;
+  set: (at: string | Date) => void;
+} {
+  const start = typeof at === 'string' ? Date.parse(at) : at.getTime();
+  if (Number.isNaN(start)) {
+    throw new RangeError(`mutableClock 收到非法时刻：${String(at)}`);
+  }
+  let current = start;
+  return {
+    clock: { now: () => new Date(current) },
+    advance: (ms: number) => {
+      current += ms;
+    },
+    set: (next: string | Date) => {
+      current = typeof next === 'string' ? Date.parse(next) : next.getTime();
+    },
+  };
+}

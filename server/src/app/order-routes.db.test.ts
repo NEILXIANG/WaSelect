@@ -18,7 +18,7 @@ import { createEventBus } from '../adapters/event-bus.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { createMemoryStorage } from '../adapters/storage-memory.js';
-import { registerBusinessEventLog } from './business-events.js';
+import { BUSINESS_EVENT_LOG, registerBusinessEventLog } from './business-events.js';
 import { signToken } from './auth.js';
 
 let db: Db;
@@ -348,9 +348,21 @@ describe('POST /orders/{id}/cancel（I1-U5c：取消 = 迁移 + 作废旧支付�
         select status from order_events where order_id = ${orderId} order by at, id
       `;
       expect(events.map((e) => e['status'])).toEqual(['created', 'cancelled']);
-      // 领域事件真的分发了（订阅者落日志，BUSINESS_EVENT_LOG = business_event）
-      const logs = srv.sink.lines.filter((l) => l.includes('order.cancelled'));
-      expect(logs.length).toBeGreaterThan(0);
+      // 领域事件真的分发了。
+      // @why 断言**结构化字段**而不是"日志文本里包含 order.cancelled"：
+      //      字符串包含会同时被两种东西满足——真分发了、以及**别处**一条恰好提到这个词的日志；
+      //      而且改一次日志文案就失效。这里钉三件事：事件名在 ctx.domain_event 上、
+      //      order_id 是这一单、result 是 dispatched。事件名放 ctx 是因为 logger 会
+      //      静默丢弃 `event:` 键（business-events.ts 文件头同口径）。
+      const logs = srv.sink
+        .find(BUSINESS_EVENT_LOG)
+        .filter(
+          (r) =>
+            (r['ctx'] as { domain_event?: string } | undefined)?.domain_event === 'order.cancelled',
+        );
+      expect(logs).toHaveLength(1); // 一次取消 → 恰好一条（重复分发会被这里兜住）
+      expect(logs[0]?.['order_id']).toBe(orderId);
+      expect(logs[0]?.['result']).toBe('dispatched');
     } finally {
       await srv.close();
     }

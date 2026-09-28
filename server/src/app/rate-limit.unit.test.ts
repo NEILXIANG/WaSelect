@@ -16,7 +16,8 @@ import { loadConfig } from '../config.js';
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../errors.js';
 import { createLogger } from '../logger.js';
-import { fixedClock } from '../../../test/helpers/fixed-clock.js';
+import type { Clock } from '../ports/clock.js';
+import { fixedClock, mutableClock } from '../../../test/helpers/fixed-clock.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { stubMountContext } from '../../../test/helpers/mount-ctx.js';
 import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
@@ -24,14 +25,12 @@ import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { rateLimitRules, rateLimiter, type RateLimiterDeps } from './rate-limit.js';
 
-const T0 = Date.parse('2026-01-02T12:00:00.000Z');
-
-function makeDeps(): { deps: RateLimiterDeps; sink: MemorySink } {
+function makeDeps(clock?: Clock): { deps: RateLimiterDeps; sink: MemorySink } {
   const sink = new MemorySink();
   return {
     deps: {
       store: createMemoryRateLimitStore(),
-      clock: fixedClock('2026-01-02T12:00:00.000Z'),
+      clock: clock ?? fixedClock('2026-01-02T12:00:00.000Z'),
       logger: createLogger({ env: 'test', destination: sink }),
     },
     sink,
@@ -130,14 +129,22 @@ describe('rateLimiter 中间件（桩）', () => {
     expect(run(deps, undefined).err).toBeInstanceOf(AppError);
   });
 
-  it('时间用注入时钟（窗口边界可被测试钉住）', () => {
-    // 注入 T0 的时钟：所有 hit 落在同一窗口；若中间件自己 new Date()，
-    // 这条用例会随真实时间漂移（偶发绿/红）
-    const { deps } = makeDeps();
+  it('窗口走注入时钟：推进假时钟越过窗口 → 配额回来（确定性，不靠真实时间漂）', () => {
+    // @why 旧版这条只发三次请求、断言第三次超限——中间件若自己 `new Date()` 它**照样绿**
+    //      （三次请求几乎必然落在同一分钟里），只在跨分钟边界时偶发红：一条会 flaky 的用例。
+    //      改成**推进注入时钟**之后：真用了注入时钟 → 配额回来；
+    //      用了 `new Date()` → 推进假时钟不影响计数，第 4、5 次仍然超限 → 红。
+    //      "时间来自注入时钟"从一句注释变成一条确定性断言（U-J4）。
+    const { clock, advance } = mutableClock('2026-01-02T12:00:00.000Z');
+    const { deps } = makeDeps(clock);
     run(deps, '1.1.1.1');
     run(deps, '1.1.1.1');
-    expect(T0).toBe(Date.parse('2026-01-02T12:00:00.000Z')); // 锚定注释所言的时钟
-    expect(run(deps, '1.1.1.1').err).toBeInstanceOf(AppError);
+    expect(run(deps, '1.1.1.1').err).toBeInstanceOf(AppError); // 窗口内第 3 次：超限
+
+    advance(RULE.windowMs + 1); // 越过窗口边界
+    expect(run(deps, '1.1.1.1').err).toBeUndefined(); // 配额回来
+    expect(run(deps, '1.1.1.1').err).toBeUndefined();
+    expect(run(deps, '1.1.1.1').err).toBeInstanceOf(AppError); // 新窗口再次打满
   });
 });
 

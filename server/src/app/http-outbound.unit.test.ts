@@ -98,8 +98,15 @@ describe('出站 HTTP 参数来自配置（不是写死在实现里）', () => {
     //    本断言的读取目标同步改为 mount.ts——main.ts 只剩"调 mountAllRoutes"的一行，
     //    通道装配（含 createFetchClient）全部在 mount.ts。
     const mount = readFileSync(resolve(import.meta.dirname, './mount.ts'), 'utf8');
-    expect(mount).toContain('outboundHttpOptions(');
-    expect(mount).toMatch(/createFetchClient\(\{[^}]*outboundHttpOptions\(config\)/);
+    // ⚠️ 先剥掉注释行再匹配（§2 第 53 条：注入点命中注释是本项目反复踩过的坑，
+    //    反过来说明**断言**命中注释同样是假绿——有人在注释里写一句
+    //    `createFetchClient({ ...outboundHttpOptions(config) })` 就能让旧版断言通过）。
+    const code = mount
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
+    expect(code).toContain('outboundHttpOptions(');
+    expect(code).toMatch(/createFetchClient\(\{[^}]*outboundHttpOptions\(config\)/);
   });
 
   it('不传任何覆盖时，产物里没有 undefined（防止"加了字段但忘了映射"）', () => {
