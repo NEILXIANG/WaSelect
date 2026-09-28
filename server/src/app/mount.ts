@@ -47,6 +47,7 @@ import { mountAdminProductRoutes } from './admin-product-routes.js';
 import { mountAdminOrderRoutes } from './admin-order-routes.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAdminBannerRoutes } from './admin-banner-routes.js';
+import { mountAdminRiskRoutes } from './admin-risk-routes.js';
 import { mountAddressRoutes } from './address-routes.js';
 import { mountOrderRoutes } from './order-routes.js';
 import { mountOrderQueryRoutes } from './order-query-routes.js';
@@ -186,6 +187,14 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     logger,
     config,
     idGen: systemIdGen,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity: withIdentityCache(createIdentityCheck(db)),
+  });
+  // ── 管理端风控（I2-U-E3）：拒付列表 + 拉黑。拉黑是本项目第一个**不可逆**的写操作
+  //    （契约没有解除接口），所以它必须走业务日志（admin_audit 端口落地后一并接入）──
+  mountAdminRiskRoutes(app, {
+    db,
+    logger,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity: withIdentityCache(createIdentityCheck(db)),
   });

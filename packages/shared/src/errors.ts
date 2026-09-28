@@ -60,6 +60,16 @@ export const ERROR_CODES = {
    * @see adapters/banners-admin.ts（updateBanner 0 行 → null）；app/admin-banner-routes.ts
    */
   40402: { code: 40402, message: '该 Banner 不存在或已被删除', action: '刷新列表后重试' },
+  /**
+   * 要拉黑的用户不存在（I2 U-E3）。
+   *
+   * @why 不复用 40400 / 40402：40400 的 action 是"接口路径写错"（照着去查路径就是错方向），
+   *      40402 是 Banner。码的 `action` 是给前端的**处置指令**，用错会把运营引到别处找一圈。
+   * @why 🈲 更不能返回 200：拉黑一个不存在的 id 当成"已处理"，
+   *      运营会以为风控生效了、实际**什么都没发生**（与 40402 同类的静默失败）。
+   * @see adapters/risk-admin.ts（blockUser 的 not_found）；app/admin-risk-routes.ts
+   */
+  40403: { code: 40403, message: '该用户不存在', action: '刷新列表后重试' },
   40901: { code: 40901, message: '库存不足', action: '提示并刷新' },
   40902: { code: 40902, message: '订单状态不允许此操作', action: '刷新订单' },
   // 三审 P3-5：40903 的语义是"首次仍在执行、等待超时**没有**结果"（adapters/idempotency.ts 抬头），
@@ -117,6 +127,21 @@ export const ERROR_CODES = {
     code: 40910,
     message: '该币种在此生效时间已有一条汇率',
     action: '换一个生效时间，或先查看列表里已有的那条',
+  },
+  /**
+   * 试图拉黑一个**管理员**账号（I2 U-E3）。
+   *
+   * @why 不用 40301（"无权限"）：那是"**你**没权限做这件事"，
+   *      而这里是"**这个对象**不能被这样处理"——前端照 40301 会去查自己的登录态，
+   *      真因却是"对方是管理员"，排查方向整个反掉。
+   * @why 必须拦：拉黑是**不可逆**的（契约没有解除接口，AJ-135），
+   *      把管理员拉黑 = 把自己锁在后台门外，解除只能直连数据库。
+   * @see adapters/risk-admin.ts（blockUser 的 is_admin）；app/admin-risk-routes.ts
+   */
+  40911: {
+    code: 40911,
+    message: '不能拉黑管理员账号',
+    action: '先把该账号的管理员权限撤掉，再来拉黑',
   },
   42901: { code: 42901, message: '请求过于频繁', action: '稍后重试' },
   50000: {
