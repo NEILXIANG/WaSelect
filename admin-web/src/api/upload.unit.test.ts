@@ -36,24 +36,42 @@ const deps = (fetchImpl: typeof fetch) => ({
 
 describe('uploadImage（multipart，不走 JSON 封装）', () => {
   it('走 FormData 而不是 JSON.stringify（body 是 FormData 实例）', async () => {
-    const { impl, seen } = stubFetch(() => json({ thumb: 't', card: 'c', detail: 'd' }, 201));
+    const { impl, seen } = stubFetch(() =>
+      json({ thumb: 't', card: 'c', detail: 'd', image_key: 'k' }, 201),
+    );
     const file = new Blob(['x'], { type: 'image/png' }) as unknown as File;
     const out = await uploadImage(deps(impl), file);
     expect(seen[0]?.init.body).toBeInstanceOf(FormData);
     // ⚠️ 没有 content-type: application/json（否则服务端拿不到 multipart 边界 → 40001）
     expect((seen[0]?.init.headers as Record<string, string>)['content-type']).toBeUndefined();
-    expect(out).toEqual({ thumb: 't', card: 'c', detail: 'd' });
+    expect(out).toEqual({ thumb: 't', card: 'c', detail: 'd', image_key: 'k' });
   });
 
-  it('⚠️ ImageSet 三档缺一档 → 抛（缺了前端会渲染空 src，运营以为图没传上去）', async () => {
+  it('⚠️ image_key 缺失或空串 → 抛（0.6.8 起服务端恒返回，缺了 Banner 提交的就是空 key）', async () => {
+    for (const body of [
+      { thumb: 't', card: 'c', detail: 'd' },
+      { thumb: 't', card: 'c', detail: 'd', image_key: '' },
+    ]) {
+      const { impl } = stubFetch(() => json(body, 201));
+      await expect(uploadImage(deps(impl), new Blob(['x']) as unknown as File)).rejects.toThrow(
+        /image_key/,
+      );
+    }
+  });
+
+  it('⚠️ 三档缺一/缺二 → 抛（畸形响应）；三档全缺 → 放行（IMG_BASE_URL 未配置的降级形状）', async () => {
     for (const missing of ['thumb', 'card', 'detail'] as const) {
-      const body: Record<string, string> = { thumb: 't', card: 'c', detail: 'd' };
+      const body: Record<string, string> = { thumb: 't', card: 'c', detail: 'd', image_key: 'k' };
       delete body[missing];
       const { impl } = stubFetch(() => json(body, 201));
       await expect(uploadImage(deps(impl), new Blob(['x']) as unknown as File)).rejects.toThrow(
-        new RegExp(missing),
+        /三档不全/,
       );
     }
+    // 全缺是合法降级（banner image 同口径：字段缺席才是"没有 URL"），调用方自行决定能否接受
+    const { impl } = stubFetch(() => json({ image_key: 'k' }, 201));
+    const out = await uploadImage(deps(impl), new Blob(['x']) as unknown as File);
+    expect(out).toEqual({ image_key: 'k' });
   });
 
   it('HTTP 非 2xx → 抛（不把错误页当 JSON 解析）', async () => {

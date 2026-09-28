@@ -26,6 +26,7 @@ import type { Db } from '../../server/src/adapters/db.js';
 import { createEventBus } from '../../server/src/adapters/event-bus.js';
 import { registerBusinessEventLog } from '../../server/src/app/business-events.js';
 import { mountAllRoutes } from '../../server/src/app/mount.js';
+import { createMemoryStorage } from '../../server/src/adapters/storage-memory.js';
 import { PAY_CALLBACK_PREFIX } from '../../server/src/app/pay-routes.js';
 import { loadConfig } from '../../server/src/config.js';
 import { createHttpApp, listen, type StartedServer } from '../../server/src/http.js';
@@ -83,7 +84,7 @@ beforeAll(async () => {
     mount: (a) => {
       const events = createEventBus(logger);
       registerBusinessEventLog(events, logger);
-      mountAllRoutes(a, { config, logger, db, events });
+      mountAllRoutes(a, { config, logger, db, events, storage: createMemoryStorage() });
     },
   });
   server = await listen(app);

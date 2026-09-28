@@ -15,6 +15,7 @@ import { loadConfig, type AppConfig } from '../../server/src/config.js';
 import type { Logger } from '../../server/src/logger.js';
 import type { Db } from '../../server/src/adapters/db.js';
 import { createEventBus } from '../../server/src/adapters/event-bus.js';
+import { createMemoryStorage } from '../../server/src/adapters/storage-memory.js';
 import type { MountContext } from '../../server/src/app/mount.js';
 
 /** 默认的合法环境（与 config.unit.test.ts 的 baseEnv 同源口径）。 */
@@ -42,5 +43,7 @@ export function stubMountContext(opts: StubMountContextOptions): MountContext {
     logger: opts.logger,
     db,
     events: createEventBus(opts.logger),
+    // memory 驱动：构造期无 IO（挂载期无 IO 的自证不破）；handler 真跑到的测试请用真库 + 显式依赖袋
+    storage: createMemoryStorage(),
   };
 }

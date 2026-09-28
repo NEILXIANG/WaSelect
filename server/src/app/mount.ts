@@ -29,6 +29,7 @@ import type { AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
 import type { Db } from '../adapters/db.js';
 import type { EventBus } from '../ports/events.js';
+import type { ObjectStorage } from '../ports/storage.js';
 import { createFetchClient } from '../adapters/http/fetch-client.js';
 import { buildPaymentRegistry, describeChannels } from '../adapters/payment/channels.js';
 import { createWebhookStore } from '../adapters/webhooks.js';
@@ -52,6 +53,7 @@ import { mountAdminOrderRoutes } from './admin-order-routes.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAdminBannerRoutes } from './admin-banner-routes.js';
 import { mountAdminRiskRoutes } from './admin-risk-routes.js';
+import { mountAdminUploadRoutes } from './admin-upload-routes.js';
 import { mountAddressRoutes } from './address-routes.js';
 import { mountOrderRoutes } from './order-routes.js';
 import { mountOrderQueryRoutes } from './order-query-routes.js';
@@ -69,13 +71,15 @@ export interface MountContext {
   logger: Logger;
   db: Db;
   events: EventBus;
+  /** 对象存储驱动（构造归 `adapters/storage.ts` 的 resolveStorage）；null = 生产未配置，上传路由 50000 响亮拒绝。 */
+  storage: ObjectStorage | null;
 }
 
 /**
  * 把全部业务路由挂到应用上。**生产与路由快照测试共用这一条路径**（见文件头 @why）。
  */
 export function mountAllRoutes(app: Express, ctx: MountContext): void {
-  const { config, logger, db, events } = ctx;
+  const { config, logger, db, events, storage } = ctx;
 
   // ── 支付路由（F11）：**每个环境都挂**，它不是脚手架 ──────────────────────
   // @why 回调是机构打给我们的，生产必须能收；通道列表是前端入口的来源。
@@ -253,6 +257,17 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     logger,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity: withIdentityCache(createIdentityCheck(db)),
+  });
+
+  // ── 管理端上传（I2-U-I4）：storage 由依赖袋传入（测试用 memory 驱动断言 put）；
+  //    null = 生产未配置，路由照挂、调用时 50000 storage_not_configured（wechat 同款）──
+  mountAdminUploadRoutes(app, {
+    logger,
+    config,
+    idGen: systemIdGen,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity: withIdentityCache(createIdentityCheck(db)),
+    storage,
   });
 
   mountAddressRoutes(app, {

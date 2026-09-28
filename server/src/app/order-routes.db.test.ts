@@ -17,6 +17,7 @@ import { loadConfig } from '../config.js';
 import { createEventBus } from '../adapters/event-bus.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
+import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { registerBusinessEventLog } from './business-events.js';
 import { signToken } from './auth.js';
 
@@ -54,7 +55,7 @@ async function buildServer(): Promise<{
       // main.ts 的装配复刻：业务事件订阅者挂在总线上（order.cancelled 分发断言依赖它）
       const events = createEventBus(logger);
       registerBusinessEventLog(events, logger);
-      mountAllRoutes(a, { config, logger, db, events });
+      mountAllRoutes(a, { config, logger, db, events, storage: createMemoryStorage() });
     },
   });
   const server = await listen(app);

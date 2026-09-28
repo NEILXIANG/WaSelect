@@ -15,7 +15,7 @@
  * @see ./view.ts（模型与校验真源）；./api.ts（提交与上传）；./ProductFormParts.tsx（字段组件）
  */
 import { useState } from 'react';
-import { ApiError } from '../api/errors.js';
+import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
 import { uploadImage } from '../api/upload.js';
 import { createProduct, updateProduct, type AdminApi } from './api.js';
 import { productFormErrors, productFormModel, toProductInput, type ProductForm } from './view.js';
@@ -88,7 +88,18 @@ export function ProductFormPage({
     setError('');
     try {
       const imageSet = await uploadImage({ baseUrl, getToken }, file);
-      setForm((prev) => ({ ...prev, images: [...prev.images, imageSet] }));
+      // 商品图存的是三档 URL（products.images JSONB），IMG_BASE_URL 未配置时
+      // 上传只回 image_key——对 Banner 够用，对商品图不够，在这里拦给明白话。
+      // ⚠️ 先解构再判空：直接在闭包里读 imageSet.thumb 拿不到这里的判空收窄（TS 在回调内失效）。
+      const { thumb, card, detail } = imageSet;
+      if (thumb === undefined || card === undefined || detail === undefined) {
+        throw new ApiError(
+          NETWORK_ERROR_CODE,
+          '服务端未配置 IMG_BASE_URL：上传成功但没有可展示的 URL，商品图无法保存',
+          '',
+        );
+      }
+      setForm((prev) => ({ ...prev, images: [...prev.images, { thumb, card, detail }] }));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {

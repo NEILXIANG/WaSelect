@@ -123,14 +123,10 @@ export function BannersPage({ api, baseUrl, getToken }: BannersPageProps) {
     if (file === undefined) return;
     setBusy(true);
     try {
-      // ⚠️ 契约缝隙（已登记为待拍板项，见 docs/自主决策记录.md §3）：
-      //    `POST /admin/upload` 返回的是 **ImageSet（三档 URL）**，
-      //    而 `BannerInput` 要的是 **image_key**（Banner.image 是服务端拿 key 拼出的完整 URL）。
-      //    MVP 暂以 detail 档 URL 充当 image_key 提交；
-      //    服务端实现 /admin/banners 时必须定死二者关系（上传也返回 key，或 BannerInput 改收 URL），
-      //    否则会出现"存的是 URL、拼出来还是 URL"的双份前缀。
+      // 0.6.8 起上传响应恒带 image_key（= detail 档键，AJ-143/AJ-166），直接提交；
+      // 服务端拿它与 IMG_BASE_URL 拼出 Banner.image 的完整 URL。
       const set = await uploadImage({ baseUrl, getToken }, file);
-      setForm((s) => ({ ...s, imageKey: set.detail }));
+      setForm((s) => ({ ...s, imageKey: set.image_key }));
       setErrors((e) => ({ ...e, imageKey: '' }));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));

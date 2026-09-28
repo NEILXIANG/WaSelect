@@ -387,6 +387,16 @@ const schema = z.object({
   R2_BUCKET: optionalText(),
   IMG_BASE_URL: optionalUrl(),
   PUBLIC_API_BASE: optionalUrl(),
+
+  // ── 上传存储驱动（I2 U-I4）──────────────────────────────────────────────
+  // fs=本地盘（仅开发期，Render 易失盘）；memory=进程内存（仅测试/e2e）。
+  // r2 适配器未落地前生产只能留空（装配层给 storage=null，上传 50000 响亮拒绝）。
+  STORAGE_DRIVER: z.preprocess(
+    (v) => (v === undefined || v === '' ? undefined : v),
+    z.enum(['fs', 'memory']).optional(),
+  ),
+  /** fs 驱动的落盘根目录；缺省 `./var/uploads`（装配层解析，不在此给默认值——默认值进 schema 会让"用户没配"与"用户配了同值"不可分）。 */
+  STORAGE_FS_DIR: optionalText(),
 });
 
 /**
@@ -449,6 +459,17 @@ const crossField = schema.superRefine((c, ctx) => {
     add(
       'WECHAT_DEV_LOGIN',
       `${c.NODE_ENV} 环境禁止配置 WECHAT_DEV_LOGIN（dev 登录等价无密码登录，公网环境不得保留；仅 development/test 可用）`,
+    );
+  }
+
+  // 1d. 生产显式选易失/内存存储驱动（I2 U-I4，AJ-168 反向风险的拦截）：fs=Render 易失盘、
+  //     memory=进程死即丢——两者在生产都是"上传成功、随后图静默消失"且没有任何一方报错。
+  //     ⚠️ 生产**未配置**（undefined）不在此拦：那会连"不需要上传的部署"都起不来；
+  //     未配置由装配层给 storage=null、上传路由 50000 响亮拒绝（wechat 未配置的同款处理）。
+  if (isProd && (c.STORAGE_DRIVER === 'fs' || c.STORAGE_DRIVER === 'memory')) {
+    add(
+      'STORAGE_DRIVER',
+      `生产环境禁止 STORAGE_DRIVER=${c.STORAGE_DRIVER}（易失盘/进程内存，上传的图会静默丢；生产待 R2 适配器落地）`,
     );
   }
 

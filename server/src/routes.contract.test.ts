@@ -73,7 +73,7 @@ const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [
   ni('GET', '/home', 'I2：小程序首页聚合（依赖 Banner 管理端）'),
   // ✅ 商品四条已随 I2-U-A3、订单五条已随 I2-U-B2d 落地并从本清单移除
   //    （本清单只许变短不许变长；diffRoutes 规则④ 会在"已实现却仍登记"时报红）
-  ni('POST', '/admin/upload', 'I2 管理端（依赖 R2）'),
+  // ✅ 上传已随 I2-U-I4 落地并从本清单移除
   // ✅ 运营配置四条已随 I2-U-C3、Banner 四条已随 I2-U-D3、风控两条已随 I2-U-E3
   //    落地并从本清单移除（本清单只许变短不许变长）
 ];

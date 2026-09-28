@@ -13,12 +13,22 @@
  *
  * @limitation 一：超时用 `AbortController`（与 client.ts @limitation 二 同口径）——
  *              取消的是等待，不是服务端执行；失败重发要重新选同一个文件，不自动重试。
- * @limitation 二：`ImageSet` 三档（thumb/card/detail）缺一档即抛：
- *              缺了前端会渲染空 src，运营以为图没传上去。
+ * @limitation 二：`ImageSet` 三档（thumb/card/detail）**全在或全缺**——服务端在
+ *              `IMG_BASE_URL` 未配置时三档全省略（banner `image` 同口径：字段缺席
+ *              才是"没有可展示的 URL"）；缺一/缺二是畸形响应，抛。
+ *              `image_key` 恒在（0.6.8 起，AJ-143），缺它即抛。
  *
  * @see ../../../contracts/api-contract.yaml（/admin/upload）
  */
 import { ApiError, NETWORK_ERROR_CODE } from './errors.js';
+
+/** 上传响应：三档 URL 可选（IMG_BASE_URL 未配置时全省略），`image_key` 恒在。 */
+export interface UploadedImage {
+  thumb?: string;
+  card?: string;
+  detail?: string;
+  image_key: string;
+}
 
 /**
  * `POST /admin/upload`（multipart 图片上传 → `ImageSet`）。
@@ -34,7 +44,7 @@ export async function uploadImage(
   deps: { baseUrl: string; getToken: () => string; fetchImpl?: typeof fetch },
   file: File,
   traceId?: string,
-): Promise<{ thumb: string; card: string; detail: string }> {
+): Promise<UploadedImage> {
   const doFetch = deps.fetchImpl ?? fetch;
   const form = new FormData();
   form.set('file', file);
@@ -62,19 +72,28 @@ export async function uploadImage(
     throw new ApiError(NETWORK_ERROR_CODE, `图片上传失败（HTTP ${res.status}）`, traceId ?? '');
   }
   const body: unknown = await res.json();
-  assertImageSet(body, traceId ?? '');
+  assertUploadResponse(body, traceId ?? '');
   return body;
 }
 
-/** `ImageSet` 形状校验（三档 URL 必须都有：缺一档前端渲染时会拿到空 src）。 */
-function assertImageSet(
-  value: unknown,
-  traceId: string,
-): asserts value is { thumb: string; card: string; detail: string } {
+/**
+ * 上传响应形状校验（@limitation 二）：`image_key` 必须非空；
+ * 三档 URL **全在或全缺**（全缺 = 服务端 IMG_BASE_URL 未配置，调用方自行决定能否接受——
+ * Banner 只要 key 不受影响，商品图要 URL，由商品表单拦）。
+ */
+function assertUploadResponse(value: unknown, traceId: string): asserts value is UploadedImage {
   const o = value as Record<string, unknown> | null;
-  for (const k of ['thumb', 'card', 'detail'] as const) {
-    if (typeof o?.[k] !== 'string' || (o[k] as string) === '') {
-      throw new ApiError(NETWORK_ERROR_CODE, `上传响应缺 ${k}（ImageSet 三档不全）`, traceId);
-    }
+  if (typeof o?.image_key !== 'string' || o.image_key === '') {
+    throw new ApiError(NETWORK_ERROR_CODE, '上传响应缺 image_key（0.6.8 起服务端恒返回）', traceId);
+  }
+  const present = ['thumb', 'card', 'detail'].filter(
+    (k) => typeof o[k] === 'string' && (o[k] as string) !== '',
+  );
+  if (present.length !== 0 && present.length !== 3) {
+    throw new ApiError(
+      NETWORK_ERROR_CODE,
+      `上传响应 ImageSet 三档不全（只有 ${present.join('/')}）：畸形响应`,
+      traceId,
+    );
   }
 }

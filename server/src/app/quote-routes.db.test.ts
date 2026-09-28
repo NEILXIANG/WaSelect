@@ -17,6 +17,7 @@ import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { createLogger } from '../logger.js';
 import { loadConfig } from '../config.js';
 import { createEventBus } from '../adapters/event-bus.js';
+import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { signToken } from './auth.js';
@@ -53,7 +54,14 @@ async function buildServer(): Promise<{
   });
   const app = createHttpApp({
     logger,
-    mount: (a) => mountAllRoutes(a, { config, logger, db, events: createEventBus(logger) }),
+    mount: (a) =>
+      mountAllRoutes(a, {
+        config,
+        logger,
+        db,
+        events: createEventBus(logger),
+        storage: createMemoryStorage(),
+      }),
   });
   const server = await listen(app);
   return { url: `http://127.0.0.1:${server.port}`, sink, close: server.close };

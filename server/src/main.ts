@@ -34,6 +34,7 @@ import { createHttpApp, installShutdownHandlers, listen, type StartedServer } fr
 import { createLogger, type Logger } from './logger.js';
 import { PAY_CALLBACK_PREFIX } from './app/pay-routes.js';
 import { createEventBus } from './adapters/event-bus.js';
+import { resolveStorage } from './adapters/storage.js';
 import { systemClock } from './adapters/clock.js';
 import { registerBusinessEventLog } from './app/business-events.js';
 import { createCleanupIdempotencyJob } from './app/cleanup-idempotency.js';
@@ -110,6 +111,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
     //    两处各建一条的话，"回调发的事件"与"job 发的事件"会落进两个世界，
     //    而订阅者只在其中一个世界里——那正是"能力存在 ≠ 能力被用上"的形态（决策记录 §2 第 35 条）。
     const events = createEventBus(logger);
+    const storage = resolveStorage(config);
     registerBusinessEventLog(events, logger);
 
     const app = createHttpApp({
@@ -134,7 +136,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       readiness: async () => acceptingTraffic && (await ping(db)),
       // ⚠️ 路由挂载清单只有一份（app/mount.ts，I1-U1）：路由快照测试也走它，
       //    新增路由只改那一处——绝不要在这里再内联挂路由
-      mount: (a) => mountAllRoutes(a, { config, logger, db, events }),
+      mount: (a) => mountAllRoutes(a, { config, logger, db, events, storage }),
     });
 
     const server = await listen(app, { port: config.PORT, host: config.HOST });

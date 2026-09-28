@@ -17,6 +17,7 @@ import { loadConfig } from '../config.js';
 import { createEventBus } from '../adapters/event-bus.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
+import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { registerBusinessEventLog } from './business-events.js';
 
 let db: Db;
@@ -56,7 +57,7 @@ async function buildServer(env: Record<string, string> = {}): Promise<{
     mount: (a) => {
       const events = createEventBus(logger);
       registerBusinessEventLog(events, logger);
-      mountAllRoutes(a, { config, logger, db, events });
+      mountAllRoutes(a, { config, logger, db, events, storage: createMemoryStorage() });
     },
   });
   const server = await listen(app);

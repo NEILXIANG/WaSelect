@@ -241,6 +241,21 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     expect(c.REVIEW_MODE).toBe('on');
   });
 
+  it('生产 + STORAGE_DRIVER=fs → 拒绝（Render 易失盘，上传的图静默丢且无报错）', () => {
+    const issues = expectReject(prod({ STORAGE_DRIVER: 'fs' }));
+    expect(issues.join('\n')).toContain('STORAGE_DRIVER');
+  });
+
+  it('生产 + STORAGE_DRIVER=memory → 拒绝（进程死即丢）', () => {
+    const issues = expectReject(prod({ STORAGE_DRIVER: 'memory' }));
+    expect(issues.join('\n')).toContain('STORAGE_DRIVER');
+  });
+
+  it('生产未配置 STORAGE_DRIVER → 放行（不拦"不需要上传的部署"；装配层给 storage=null，上传 50000 响亮拒绝）', () => {
+    const c = loadConfig(prod());
+    expect(c.STORAGE_DRIVER).toBeUndefined();
+  });
+
   it('生产启用 stripe 却缺 CHECKOUT_BASE_URL → 拒绝（D-49 收银链接拼不出来，运行时才暴露）', () => {
     const issues = expectReject(prod({ CHECKOUT_BASE_URL: '' }));
     expect(issues.join('\n')).toContain('CHECKOUT_BASE_URL');
