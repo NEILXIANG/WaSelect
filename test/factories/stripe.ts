@@ -145,7 +145,9 @@ export function charge(seed: { metadata?: Record<string, string> } = {}): Record
  *    曾经把它造成 `{object: 'charge'}`——形状错了，于是"dispute 取不到 order_id"
  *    这个真实失效形态在测试里根本不存在（体检 P1-7 的掩盖层之一）。
  */
-export function dispute(seed: { paymentIntent?: string } = {}): Record<string, unknown> {
+export function dispute(
+  seed: { paymentIntent?: string; status?: string } = {},
+): Record<string, unknown> {
   return {
     id: 'du_3P0000000000000000000000',
     object: 'dispute',
@@ -154,7 +156,12 @@ export function dispute(seed: { paymentIntent?: string } = {}): Record<string, u
     charge: 'ch_3P0000000000000000000000',
     payment_intent: seed.paymentIntent ?? 'pi_3P0000000000000000000000',
     reason: 'fraudulent',
-    status: 'warning_needs_response',
+    /**
+     * 默认 `warning_needs_response`（开案、待答辩）。
+     * ⚠️ 结案样本要显式传 `status: 'won' | 'lost'`——Stripe 的**事件类型**
+     *    （`charge.dispute.closed`）本身不携带结果，结果只在这个字段上。
+     */
+    status: seed.status ?? 'warning_needs_response',
     // ⚠️ 刻意与事件 envelope 的 `created`（默认 1_700_000_000）**不同**：
     //    Dispute 的 `created` 是"开案时刻"（举证期限的起点），envelope 的是"投递时刻"，
     //    补发时两者可差数天。取错的表现是举证窗口被算短，且不报错。
@@ -266,13 +273,13 @@ export const STRIPE_EVENT_TYPES = {
   // ── 售后 ──
   refundSucceeded: 'charge.refunded',
   disputeCreated: 'charge.dispute.created',
+  disputeClosed: 'charge.dispute.closed',
 } as const;
 
 /** 尚未造样本、但契约已列出的事件（用到时必须补，不能永久豁免）。 */
 export const STRIPE_EVENTS_NOT_SAMPLED: readonly string[] = [
   'refund.updated',
   'refund.failed',
-  'charge.dispute.closed',
   'charge.dispute.funds_withdrawn',
   'charge.dispute.funds_reinstated',
 ];

@@ -85,7 +85,115 @@ export const DISPUTE_MISMATCH_REASONS = [
   'no_succeeded_payment',
   'dispute_unverifiable',
   'dispute_id_conflict',
+  'dispute_not_open',
+  'dispute_result_conflict',
+  'dispute_result_unknown',
 ] as const;
+
+/** 结案事实。结果已经过 domain 映射（只可能是 won / lost）。 */
+export interface DisputeClosure {
+  /** 回调来自哪个通道（= `payments.provider`）。 */
+  channel: string;
+  /** 机构侧拒付单号（定位到**哪一条**拒付）。 */
+  disputeId: string;
+  /** 结案结果。 */
+  result: 'won' | 'lost';
+}
+
+/**
+ * 落一条**结案**（`charge.dispute.closed`）。
+ *
+ * @why 结案必须把 `orders.has_dispute` **复位成 false**：
+ *      发货/退款闸门（`domain/admin-order-actions.ts` 的 shipGuard / refundGate）
+ *      读的就是这个布尔，它们的语义是"**进行中**的拒付"（deny reason 就叫 `dispute_open`）。
+ *      结案后不复位 = 这张单**永远**不能发货、不能退款——
+ *      那不是"显示不对"，是运营真的做不了事，而且没有任何一方报错。
+ *      ⚠️ 这条是 U-F3 留下来的真缺口（它的 @limitation 二：结案未实现），在此补上。
+ *
+ * @why 结案时刻取**入库时刻**（SQL `now()`）而不是机构时间，与开案相反：
+ *      开案时刻是**举证期限的起点**，错不得；结案时刻不是任何期限的起点，
+ *      而 Stripe 的 dispute 对象上根本没有"结案时间"这个字段——
+ *      能拿到的只有事件 envelope 的投递时刻（U-F1 已明确不取它）。
+ *      拿不到就如实用入库时刻，不硬凑。
+ *
+ * @limitation 一：定位支付行用 `dispute_id` 精确匹配，而不是"最近一条 succeeded"
+ *      （开案是后者）。@why 结案是对**某一条具体拒付**的判决，
+ *      按"最近一条"找会在"旧拒付已结、新拒付刚开"的边界上判错对象。
+ * @limitation 二：已结案且**结果相同** → 幂等不动；结果**不同** → 40902
+ *      `dispute_result_conflict`，不静默改判。@why "赢了又改成输了"会影响
+ *      财务口径（这笔钱到底算不算损失），必须由人裁决，不能让最后到达的事件说了算。
+ * @limitation 三：只清 `has_dispute`，**不动订单状态**（与开案同一条口径）。
+ */
+export async function markDisputeClosed(
+  db: Db,
+  events: EventBus,
+  orderId: string,
+  c: DisputeClosure,
+): Promise<void> {
+  await withUnitOfWork(db, events, async (tx, emit) => {
+    const orders = await tx`select has_dispute from orders where id = ${orderId} for update`;
+    if (orders[0] === undefined) throw new AppError(40400, { order_id: orderId });
+
+    // 行锁顺序与开案一致（先 orders 后 payments）
+    const pays = await tx`
+      select id, provider, dispute_status
+        from payments
+       where order_id = ${orderId} and dispute_id = ${c.disputeId}
+       limit 1
+       for update
+    `;
+    const p = pays[0];
+    if (p === undefined) {
+      // 没有这条拒付 = 要么开案事件没到（乱序到达），要么单号对不上。
+      // 不"顺手把最近一条支付行结了"——那会结错对象。
+      throw new AppError(40902, {
+        order_id: orderId,
+        reason: 'dispute_not_open',
+        ctx: { dispute_id: c.disputeId },
+      });
+    }
+    if (p.provider !== c.channel) {
+      throw new AppError(40902, {
+        order_id: orderId,
+        reason: 'channel_mismatch',
+        ctx: { expected: p.provider, got: c.channel },
+      });
+    }
+    const current = p.dispute_status as string | null;
+    if (current !== null && current !== 'open') {
+      if (current === c.result) return; // 幂等：同一结果的重投什么都不做
+      throw new AppError(40902, {
+        order_id: orderId,
+        reason: 'dispute_result_conflict',
+        ctx: { expected: current, got: c.result },
+      });
+    }
+
+    const rows = await tx`
+      update payments
+         set dispute_status = ${c.result},
+             dispute_closed_at = now()
+       where id = ${p.id}
+      returning dispute_closed_at
+    `;
+    const closedAt = (rows[0]?.dispute_closed_at ?? null) as Date | null;
+    if (closedAt === null) {
+      throw new AppError(50000, { reason: '拒付结案未命中支付行', ctx: { order_id: orderId } });
+    }
+
+    await tx`update orders set has_dispute = false, updated_at = now() where id = ${orderId}`;
+    await tx`
+      insert into order_events (order_id, status, note, actor, at)
+      values (${orderId}, 'dispute_closed', ${`${c.disputeId}:${c.result}`}, 'system', ${closedAt})
+    `;
+    emit({
+      name: 'order.dispute_closed',
+      at: closedAt.toISOString(),
+      orderId,
+      payload: { dispute_id: c.disputeId, result: c.result },
+    });
+  });
+}
 
 export async function markOrderDisputed(
   db: Db,

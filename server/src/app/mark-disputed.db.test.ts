@@ -27,7 +27,7 @@ import type { ProviderEvent } from '../ports/payment.js';
 import { createWebhookStore } from '../adapters/webhooks.js';
 import { handleProviderCallback, type CallbackPipelineDeps } from './pay-callback.js';
 import { RESULT_DISPUTED } from './webhook-results.js';
-import { markOrderDisputed } from './mark-disputed.js';
+import { markDisputeClosed, markOrderDisputed } from './mark-disputed.js';
 
 /** 事件总线需要一个 logger；这里不关心它输出什么（另有专门的分发顺序测试）。 */
 const SILENT = createLogger({ env: 'test', destination: new MemorySink() });
@@ -87,7 +87,7 @@ function dispute(over: Partial<Parameters<typeof markOrderDisputed>[3]> = {}) {
 /** 读回 payments 那四列（拒付账的唯一形状）。 */
 async function paymentRow(orderId: string): Promise<Record<string, unknown>> {
   const rows = await db`
-    select dispute_id, dispute_status, dispute_amount, dispute_opened_at
+    select dispute_id, dispute_status, dispute_amount, dispute_opened_at, dispute_closed_at
       from payments where order_id = ${orderId}`;
   return (rows[0] ?? {}) as Record<string, unknown>;
 }
@@ -291,6 +291,142 @@ describe('markOrderDisputed：接线（经回调管线，不是只测函数）',
 
     const rows = await db`select result from webhook_events where event_id = 'evt-dp-2'`;
     expect(rows[0]?.result).toBe('mismatch:dispute_unverifiable');
+  });
+});
+
+describe('markDisputeClosed：结案（U-F4）', () => {
+  /** 造一单**已有进行中拒付**的状态（结案的前置事实）。 */
+  async function seedDisputed(orderId: string, status = 'open'): Promise<void> {
+    await seedPaid(orderId);
+    await db`update payments set dispute_id = 'dp_1', dispute_status = ${status},
+                                 dispute_amount = 1000, dispute_opened_at = to_timestamp(${OPENED_MS / 1000})
+             where order_id = ${orderId}`;
+    await db`update orders set has_dispute = true where id = ${orderId}`;
+  }
+
+  it('won → 状态写 won + 结案时刻 + **has_dispute 复位 false**（闸门解锁）', async () => {
+    /**
+     * @why `has_dispute` 复位是这一条的核心：发货/退款闸门读的就是它，
+     *      语义是"**进行中**的拒付"。结案后不复位 = 这张单永远不能发货、不能退款，
+     *      而没有任何一方报错（运营只会觉得"系统不让我操作"）。
+     */
+    await seedDisputed('o-1');
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'won',
+    });
+    const p = await paymentRow('o-1');
+    expect(p['dispute_status']).toBe('won');
+    expect(p['dispute_closed_at']).toBeInstanceOf(Date);
+    expect((await orderRow('o-1'))['has_dispute']).toBe(false);
+    expect(await events('o-1')).toEqual(['dispute_closed']);
+  });
+
+  it('lost → 同样复位（钱没了，但"进行中"这个状态结束了）', async () => {
+    await seedDisputed('o-1');
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'lost',
+    });
+    expect((await paymentRow('o-1'))['dispute_status']).toBe('lost');
+    expect((await orderRow('o-1'))['has_dispute']).toBe(false);
+  });
+
+  it('开案时刻**不被**结案改动（举证期限的起点要保持可查）', async () => {
+    await seedDisputed('o-1');
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'won',
+    });
+    const opened = (await paymentRow('o-1'))['dispute_opened_at'] as Date | null;
+    expect(opened?.getTime()).toBe(OPENED_MS);
+  });
+
+  it('同一结果重投 → 幂等，不改结案时刻、不重复事件', async () => {
+    await seedDisputed('o-1');
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'won',
+    });
+    const first = (await paymentRow('o-1'))['dispute_closed_at'];
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'won',
+    });
+    expect((await paymentRow('o-1'))['dispute_closed_at']).toEqual(first);
+    expect(await events('o-1')).toEqual(['dispute_closed']);
+  });
+
+  it('🔴 结果不同 → 40902 dispute_result_conflict（不静默改判）', async () => {
+    /**
+     * @why "赢了又改成输了"影响财务口径（这笔钱算不算损失），
+     *      必须留给人工裁决，不能让最后到达的那条事件说了算。
+     */
+    await seedDisputed('o-1');
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'won',
+    });
+    await expect(
+      markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+        channel: 'stripe',
+        disputeId: 'dp_1',
+        result: 'lost',
+      }),
+    ).rejects.toMatchObject({ code: 40902 });
+    expect((await paymentRow('o-1'))['dispute_status']).toBe('won');
+  });
+
+  it('没有这条拒付（开案没到 / 单号不符）→ 40902 dispute_not_open，不结错对象', async () => {
+    await seedPaid('o-1'); // 有支付行，但没开过案
+    await expect(
+      markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+        channel: 'stripe',
+        disputeId: 'dp_1',
+        result: 'won',
+      }),
+    ).rejects.toMatchObject({ code: 40902 });
+  });
+
+  it('通道不符 → 40902 channel_mismatch', async () => {
+    await seedDisputed('o-1');
+    await expect(
+      markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+        channel: 'wechat',
+        disputeId: 'dp_1',
+        result: 'won',
+      }),
+    ).rejects.toMatchObject({ code: 40902 });
+  });
+
+  it('订单不存在 → 40400', async () => {
+    await expect(
+      markDisputeClosed(db, createEventBus(SILENT), 'nope', {
+        channel: 'stripe',
+        disputeId: 'dp_1',
+        result: 'won',
+      }),
+    ).rejects.toMatchObject({ code: 40400 });
+  });
+
+  it('换一个读取方：风控列表的状态变成 won（§2 第 21 条）', async () => {
+    await seedDisputed('o-1');
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'won',
+    });
+    const rows = await createRiskAdminRepo(db).listDisputes('won');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.disputeStatus).toBe('won');
+    // 且不再出现在"进行中"的筛选里
+    expect(await createRiskAdminRepo(db).listDisputes('open')).toHaveLength(0);
   });
 });
 

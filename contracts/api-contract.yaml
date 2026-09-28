@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.6
+  version: 0.6.7
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -195,7 +195,7 @@ paths:
       responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/refund:
     post:
-      description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）
+      description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.7 起 `has_dispute` 的语义是「**有进行中的拒付**」：拒付结案（won/lost）时它被复位为 false，闸门随之解锁（U-F4）
       summary: 全额退款（MVP；按 charge_currency / charge_amount 原币退；缺货场景整单退款）
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string}}}}}}
@@ -398,6 +398,24 @@ components:
       把"实际有 body"写成"无 body"比漏列状态码更糟（前端不敢读，于是为了确认结果多拉一次列表）。
       ③ `GET` 的 `status` 与 `page` / `size` 非法 → 40001（不是静默回落默认值：
       分页参数错了还返回第一页，运营会以为"总共就这些"）。
+    0.6.7（I2 U-F4）：拒付**结案**落地，并兑现 `has_dispute` =「**有进行中的拒付**」这条口径。
+      @why U-F3 只实现了开案，`dispute_status` 置 open 后**永远不变**；而 40907（退款）与
+      40909（发货）闸门读的正是 `has_dispute`，于是"拒付已结案"的订单被**永久锁死**——
+      不能发货也不能退款，且没有任何一方报错（运营只会觉得"系统不让我操作"）。
+      ⚠️ 这不是显示问题，而且 `AdminOrder.has_dispute` 的描述**本来就写的是"存在进行中的拒付"**
+      ——0.6.7 之前是**契约与实现不符**，这一版是修复漂移，不是改口径。
+      ① `charge.dispute.closed` 归一化成 **`dispute_closed`**（与开案的 `disputed`
+      **分成两个 outcome**）：合并的话每个拒付落账器都要自己分辨开案 / 结案，
+      漏分辨的表现是"结案事件把开案又写一遍"——已 won 的拒付被重新标成 open。
+      ② 结案结果（won / lost）取自 **Dispute 对象的 `status`**，事件类型本身不带它；
+      由 domain 映射，**认不出就拒绝落库**（`dispute_result_unknown`），不猜默认值——
+      "赢了却记成输了"与"输了却记成赢了"都是财务口径事故。
+      ③ 结案时 `has_dispute` **复位为 false**；已结案且结果相同 → 幂等；
+      结果不同 → 40902 `dispute_result_conflict`（不静默改判：财务口径留给人工裁决）。
+      ④ 结案时刻取**入库时刻**（SQL now()），与开案时刻**相反**——
+      开案时刻是举证期限的起点、必须取机构时间；结案时刻不是任何期限的起点，
+      而 Stripe 的 dispute 对象上根本没有"结案时间"字段（能拿到的只有事件投递时刻）。
+      ⑤ `ListDispute.has_dispute`（列表列）同义：进行中的拒付，不含已结案的。
     AdminOrderListItem: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, user_id: {type: string}, status: {$ref: '#/components/schemas/OrderStatus'}, total_jpy: {type: integer}, contact_email: {type: string}, carrier: {type: string}, tracking_no: {type: string}, has_dispute: {type: boolean, description: '列表也带（0.6.1）：客服在列表页就能看见拒付单'}, is_test: {type: boolean}, created_at: {type: string, format: date-time}}}
     AdminOrder: {allOf: [{$ref: '#/components/schemas/Order'}, {type: object, properties: {user_id: {type: string}, contact_email: {type: string, format: email, description: '客服可见（D-42）'}, is_test: {type: boolean, description: '审核期 mock 通道测试单；管理端列表默认过滤'}, has_dispute: {type: boolean, description: '存在进行中的拒付（D-50）；退款 40907'}, fx_snapshot: {type: object}, payments: {type: array, items: {type: object, properties: {provider: {type: string}, provider_ref: {type: string}, transaction_id: {type: string}, status: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, settled_jpy: {type: integer}, fee_jpy: {type: integer}}}}, events: {type: array, items: {type: object, properties: {status: {type: string}, note: {type: string}, actor: {type: string}, at: {type: string, format: date-time}}}}}}]}
     ChannelView: {type: object, required: [channel, entryMode, label], properties: {channel: {type: string, description: '通道 key（任意字符串：新增支付方式不需要改本契约的枚举）'}, entryMode: {type: string, enum: [in_app, copylink, redirect], description: 'in_app=小程序内直接调起；copylink=复制链接到外部浏览器（D-49：Stripe Checkout 托管页）；redirect=302 跳转'}, label: {type: string, description: 展示名（外置文案，前端不写死）}, icon: {type: string, description: 图标 key（同上）}}}

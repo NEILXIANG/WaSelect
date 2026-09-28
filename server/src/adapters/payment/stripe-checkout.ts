@@ -106,6 +106,12 @@ export const OUTCOME_BY_TYPE: Readonly<Record<string, ProviderEvent['outcome']>>
   //    `amount_refunded`（NEEDS VERIFICATION：官方 changelog 未单列此事件载荷示例，
   //    以 charge 对象结构推定）。F12 售后落账时取 `amount_refunded`，别用 `amount`。
   'charge.dispute.created': 'disputed',
+  /**
+   * 结案：**开案与结案分开两个 outcome**（@see ports/payment.ts ProviderEvent.outcome）。
+   * @limitation 结果（won / lost）不在这个表里——它取决于对象上的 `status`，
+   *             不是事件类型能表达的东西，由 `parseWebhook` 单独回带 `disputeStatus`。
+   */
+  'charge.dispute.closed': 'dispute_closed',
 };
 
 interface StripeOptions {
@@ -383,6 +389,15 @@ export function createStripeCheckoutProvider(
        *              让"机构没给"这件事暴露给消费方，由它决定降级还是拒绝，不在这里静默补 0。
        */
       const createdSec = obj['created'];
+      /**
+       * 拒付对象的机构状态原值（**不映射**，映射属 domain）。
+       * @why 只在 `obj.object === 'dispute'` 时才带：这个字段的语义是"这条拒付现在什么状态"，
+       *      拿 charge / session 的 `status` 填进来会和"支付状态"混成一团。
+       */
+      const disputeStatus =
+        obj['object'] === 'dispute' && typeof obj['status'] === 'string'
+          ? obj['status']
+          : undefined;
       // ⚠️ `checkout.session.completed` ≠ 已付款：异步支付方式下 completed 时
       //    `payment_status` 还是 'unpaid'（官方口径：等 `checkout.session.async_payment_succeeded`）。
       //    create() 已用白名单只收卡，这里是**第二道防线**（Dashboard 配置漂移也伤不到落账）：
@@ -412,6 +427,7 @@ export function createStripeCheckoutProvider(
         ...(typeof createdSec === 'number' && Number.isFinite(createdSec)
           ? { occurredAtMs: Math.round(createdSec * 1000) }
           : {}),
+        ...(disputeStatus !== undefined ? { disputeStatus } : {}),
       };
     },
 

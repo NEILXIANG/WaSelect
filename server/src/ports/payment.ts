@@ -152,8 +152,18 @@ export interface ProviderEvent {
   eventId: string;
   /** 机构原始事件类型（进日志与 `webhook_events`，排障要看）。 */
   rawType: string;
-  /** 归一化结果：业务只认这几种。 */
-  outcome: 'succeeded' | 'failed' | 'expired' | 'refunded' | 'disputed' | 'unknown';
+  /**
+   * 归一化结果：业务只认这几种。
+   *
+   * ⚠️ `disputed`（开案）与 `dispute_closed`（结案）**刻意分成两个值**，不合并成一个
+   * `disputed` 再让消费方去看 `disputeStatus`：合并了就等于要求"每个拒付落账器都要自己
+   * 分辨开案还是结案"，而漏分辨的表现是**结案事件把开案状态又写一遍**——
+   * 已 won 的拒付被重新标成 open，风控页显示"进行中"，运营照它去拦退款，
+   * 而机构那边早就结案了。分开之后，两个落点各自独立注册（U-F2 的注册表），
+   * 谁漏注册谁就走 `ignored:<outcome>`——**看得见**，而不是静默写错。
+   */
+  outcome:
+    'succeeded' | 'failed' | 'expired' | 'refunded' | 'disputed' | 'dispute_closed' | 'unknown';
   /**
    * 我们自己的订单 id（从机构 metadata 回带）。落账类事件取不到是**设计缺陷**，必须抛；
    * 与订单无关的机构事件（payout / balance 等）允许为空串且 outcome 必为 unknown（全量审计 2026-09-26）。
@@ -182,6 +192,21 @@ export interface ProviderEvent {
    * @see migrations/013_dispute_opened_at.sql
    */
   occurredAtMs?: number | undefined;
+  /**
+   * **拒付对象**的机构状态原值（如 Stripe 的 `won` / `lost` / `needs_response`）。
+   *
+   * @why 结案必须知道**结果**（赢了还是输了），而这个信息只在机构对象的 `status` 上，
+   *      事件类型（`charge.dispute.closed`）本身不携带它——只看事件类型的话，
+   *      结案只能写成"已关闭"，风控页就答不出"这单拒付最后是赔了还是保住了"。
+   * @limitation 一：只有 `outcome` 是 `disputed` / `dispute_closed` 的**拒付对象**才填它，
+   *              原样给字符串、**不做映射**（映射属 domain，见 domain/dispute-input.ts）——
+   *              适配器不认识业务词表，认识的就是"下一版机构文档改了枚举名"这种事故。
+   * @limitation 二：⚠️ 这是 `ProviderEvent` 上第 5 个可选字段。它有滑向
+   *              "机构字段的并集"的风险（本文件 @limitation 四就在防这个），
+   *              所以只收"业务上必须在机构侧取值、我们这侧推不出来"的那几个：
+   *              金额、币种、时刻、拒付状态。**其余一律不许加。**
+   */
+  disputeStatus?: string | undefined;
 }
 
 export interface RefundRequest {

@@ -37,3 +37,30 @@ export function parseDisputeStatus(raw: unknown): DisputeStatus | undefined {
   }
   return raw as DisputeStatus;
 }
+
+/**
+ * 机构拒付状态 → 我方**结案结果**（won / lost）；未结案或认不出 → undefined。
+ *
+ * @why 映射放在 domain 而不是适配器：适配器只做"原样回带机构说了什么"
+ *      （@see ports/payment.ts disputeStatus 的 @limitation 一），
+ *      认识业务词表是 domain 的事。分开放之后，机构改枚举名只需动这一张表。
+ *
+ * @why **认不出就返回 undefined 而不是抛错**：结案事件到达时若结果是
+ *      `warning_closed`（Stripe：机构撤回警告、未进入正式拒付）之类，
+ *      那不是错误，只是"这条拒付没有赢输之分"。是否拒绝落库由**落账方**决定——
+ *      它才知道"这条拒付现在是什么状态、能不能接受这个结果"（例如 open 的拒付
+ *      收到 warning_closed 应当保持 open，不该报错）。
+ *
+ * @limitation 只认 `won` / `lost`；⚠️ `charge_refunded`（机构已退款给持卡人）
+ *              在业务上等于 **lost**（钱没了），但这里**故意不映射**——
+ *              它与 lost 的后续动作不同（退款已由机构执行，我方不该再退一次），
+ *              等 F12 售后明确"机构退款 vs 我方退款"的口径再定，现在按"认不出"处理。
+ *
+ * @see adapters/payment/stripe-checkout.ts（生产 `disputeStatus`）；
+ *      app/mark-disputed.ts（消费方，决定认不出时怎么办）
+ */
+export function parseDisputeResult(raw: string | undefined): 'won' | 'lost' | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === 'won' || raw === 'lost') return raw;
+  return undefined;
+}

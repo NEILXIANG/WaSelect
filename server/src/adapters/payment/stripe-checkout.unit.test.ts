@@ -77,8 +77,11 @@ function build(over: Partial<ChannelConfig['options']> = {}) {
 }
 
 /** 造一条签名正确的事件报文。 */
-function signed(type: string, opts: { t?: number; secret?: string; extra?: string } = {}) {
-  const object = objectForEvent(type);
+function signed(
+  type: string,
+  opts: { t?: number; secret?: string; extra?: string; object?: Record<string, unknown> } = {},
+) {
+  const object = opts.object ?? objectForEvent(type);
   // ⚠️ dispute 对象**不能**硬塞 metadata：真实的 Dispute 上没有它（Stripe 不复制），
   //    塞进去等于把"取不到 order_id → 反查 PaymentIntent"这条路径从测试里抹掉——
   //    P1-7 之所以藏到体检才被发现，这层"贴心的合并"就是掩盖层之一。
@@ -236,6 +239,7 @@ describe('parseWebhook（事件映射与验签细节）', () => {
       [STRIPE_EVENT_TYPES.payCanceled, 'expired'],
       [STRIPE_EVENT_TYPES.refundSucceeded, 'refunded'],
       [STRIPE_EVENT_TYPES.disputeCreated, 'disputed'],
+      [STRIPE_EVENT_TYPES.disputeClosed, 'dispute_closed'],
     ];
     for (const [type, outcome] of expected) {
       const p = signed(type);
@@ -256,6 +260,44 @@ describe('parseWebhook（事件映射与验签细节）', () => {
     //           取错的话这里会拿到前者（差 10_000_000 秒 ≈ 115 天），举证窗口被算短。
     expect(ev.occurredAtMs).toBe(DISPUTE_CREATED_SEC * 1000);
     expect(ev.occurredAtMs).not.toBe(1_700_000_000 * 1000);
+  });
+
+  it('🔴 结案事件的**结果**在对象 status 上，事件类型本身不带（won / lost 必须能传出去）', async () => {
+    /**
+     * @why Stripe 的 `charge.dispute.closed` 只说"结案了"，赢了还是输了在
+     *      `data.object.status`（`won` / `lost`）。只看事件类型的话，
+     *      结案只能落成一个"已关闭"，风控页就答不出"这单最后是赔了还是保住了"——
+     *      而那正是运营要拿它决定"要不要继续追究"的依据。
+     */
+    const { http, provider } = build();
+    http.givenPaymentIntent('pi_3P0000000000000000000000', { order_id: REQ.orderId });
+    for (const status of ['won', 'lost'] as const) {
+      const p = signed(STRIPE_EVENT_TYPES.disputeClosed, { object: dispute({ status }) });
+      const ev = await provider.parseWebhook(p.raw, p.headers);
+      expect(ev.outcome).toBe('dispute_closed');
+      expect(ev.disputeStatus).toBe(status);
+    }
+  });
+
+  it('开案事件同样带 disputeStatus（让落账方知道"这条拒付现在什么状态"）', async () => {
+    const { http, provider } = build();
+    http.givenPaymentIntent('pi_3P0000000000000000000000', { order_id: REQ.orderId });
+    const p = signed(STRIPE_EVENT_TYPES.disputeCreated);
+    const ev = await provider.parseWebhook(p.raw, p.headers);
+    expect(ev.disputeStatus).toBe('warning_needs_response');
+  });
+
+  it('非拒付对象（charge / session）即使有 status 也**不带** disputeStatus（不混成一团）', async () => {
+    /**
+     * @why `charge` 与 `checkout.session` 也有 `status` 字段，但那是**支付**状态。
+     *      不分对象地回带，消费方就会拿到一个"不知道是哪种状态"的 status——
+     *      于是"支付失败"可能被当成"拒付输了"。
+     */
+    const { provider } = build();
+    const p = signed(STRIPE_EVENT_TYPES.refundSucceeded);
+    const ev = await provider.parseWebhook(p.raw, p.headers);
+    expect(ev.outcome).toBe('refunded');
+    expect(ev.disputeStatus).toBeUndefined();
   });
 
   it('机构没给 created → 不带 occurredAtMs（让"没给"暴露给消费方，不静默补当前时间）', async () => {

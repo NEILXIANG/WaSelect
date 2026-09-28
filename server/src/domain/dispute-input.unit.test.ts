@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../errors.js';
-import { DISPUTE_STATUS, parseDisputeStatus } from './dispute-input.js';
+import { DISPUTE_STATUS, parseDisputeResult, parseDisputeStatus } from './dispute-input.js';
 
 function reasonOf(fn: () => unknown): string {
   try {
@@ -68,6 +68,43 @@ describe('parseDisputeStatus', () => {
   it('非字符串（数字 / 对象）→ 40001', () => {
     expect(codeOf(() => parseDisputeStatus(0))).toBe(40001);
     expect(codeOf(() => parseDisputeStatus({ status: 'open' }))).toBe(40001);
+  });
+});
+
+describe('parseDisputeResult（结案结果：机构 status → won / lost）', () => {
+  it('won / lost 各自带出', () => {
+    expect(parseDisputeResult('won')).toBe('won');
+    expect(parseDisputeResult('lost')).toBe('lost');
+  });
+
+  it('🔴 未结案的状态（needs_response / under_review / warning_*）→ undefined，不是 lost', () => {
+    /**
+     * @why 把"还在答辩中"认成 lost 的后果最严重：拒付其实还有救，
+     *      我方却按"已经输了"结案——风控页不再标红、退款闸门解锁，
+     *      而举证期限可能还剩好几天。这类错误同样没有任何一方报错。
+     */
+    for (const s of [
+      'warning_needs_response',
+      'warning_under_review',
+      'needs_response',
+      'under_review',
+    ]) {
+      expect(parseDisputeResult(s), s).toBeUndefined();
+    }
+  });
+
+  it('🔴 charge_refunded 按"认不出"处理（不映射成 lost：退款已由机构执行，后续动作不同）', () => {
+    expect(parseDisputeResult('charge_refunded')).toBeUndefined();
+  });
+
+  it('机构没给（undefiened）/ 空串 → undefined（由落账方决定怎么办，不在这里猜）', () => {
+    expect(parseDisputeResult(undefined)).toBeUndefined();
+    expect(parseDisputeResult('')).toBeUndefined();
+  });
+
+  it('大小写不同也不认（不给"看起来像"留缝）', () => {
+    expect(parseDisputeResult('Won')).toBeUndefined();
+    expect(parseDisputeResult('LOST')).toBeUndefined();
   });
 });
 

@@ -38,9 +38,11 @@ import { systemClock } from '../adapters/clock.js';
 import { systemIdGen } from '../adapters/ids.js';
 import { outboundHttpOptions } from './http-outbound.js';
 import { mountPayRoutes } from './pay-routes.js';
+import { AppError } from '../errors.js';
 import { markOrderPaid } from './mark-paid.js';
-import { markOrderDisputed } from './mark-disputed.js';
-import { RESULT_DISPUTED, RESULT_PAID } from './webhook-results.js';
+import { markDisputeClosed, markOrderDisputed } from './mark-disputed.js';
+import { parseDisputeResult } from '../domain/dispute-input.js';
+import { RESULT_DISPUTED, RESULT_DISPUTE_CLOSED, RESULT_PAID } from './webhook-results.js';
 import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import { rateLimiter, rateLimitRules } from './rate-limit.js';
 import { mountQuoteRoutes } from './quote-routes.js';
@@ -146,6 +148,32 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
           }),
         result: RESULT_DISPUTED,
         disposition: 'disputed',
+      },
+      /**
+       * 拒付结案（U-F4）：写 won/lost + 结案时刻，并把 `orders.has_dispute` **复位成 false**。
+       * @why 复位是这条的关键：发货/退款闸门读的就是 `has_dispute`，语义是"**进行中**的拒付"。
+       *      结案后不复位 = 这张单永远不能发货、不能退款，且没有任何一方报错。
+       * ⚠️ 结果（won/lost）由 domain 从机构 status 映射；**认不出就拒绝落库**
+       *    （`dispute_result_unknown` → 管线按 error 级处理、转对账），
+       *    绝不猜一个默认值——"赢了却记成输了"和"输了却记成赢了"都是财务口径事故。
+       */
+      dispute_closed: {
+        apply: async (e, channel) => {
+          const result = parseDisputeResult(e.disputeStatus);
+          if (result === undefined) {
+            throw new AppError(40902, {
+              reason: 'dispute_result_unknown',
+              ctx: { got: e.disputeStatus ?? null },
+            });
+          }
+          return markDisputeClosed(db, events, e.orderId, {
+            channel,
+            disputeId: e.providerRef,
+            result,
+          });
+        },
+        result: RESULT_DISPUTE_CLOSED,
+        disposition: 'dispute_closed',
       },
     },
   });
