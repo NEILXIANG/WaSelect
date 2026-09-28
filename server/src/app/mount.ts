@@ -46,6 +46,7 @@ import { mountProductRoutes } from './product-routes.js';
 import { mountAdminProductRoutes } from './admin-product-routes.js';
 import { mountAdminOrderRoutes } from './admin-order-routes.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
+import { mountAdminBannerRoutes } from './admin-banner-routes.js';
 import { mountAddressRoutes } from './address-routes.js';
 import { mountOrderRoutes } from './order-routes.js';
 import { mountOrderQueryRoutes } from './order-query-routes.js';
@@ -175,6 +176,16 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     logger,
     config,
     clock: systemClock,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity: withIdentityCache(createIdentityCheck(db)),
+  });
+  // ── 管理端 Banner（I2-U-D3）：`image` 完整 URL 由本路由用 config.IMG_BASE_URL 拼
+  //    （它是该配置项的**第一个**消费方，此前配了但没人用）──
+  mountAdminBannerRoutes(app, {
+    db,
+    logger,
+    config,
+    idGen: systemIdGen,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity: withIdentityCache(createIdentityCheck(db)),
   });
