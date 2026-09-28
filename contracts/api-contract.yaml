@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.7
+  version: 0.6.8
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -232,9 +232,10 @@ paths:
       responses: {'200': {description: 'OK（回 {id, status}：让前端不必为了确认结果再拉一次列表）', content: {application/json: {schema: {type: object, properties: {id: {type: string}, status: {type: string, enum: [active, offline]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/upload:
     post:
-      summary: 图片上传（multipart，服务端写 R2 并生成 thumb/card/detail 三档）
+      summary: 图片上传（multipart，服务端写对象存储并生成 thumb/card/detail 三档 webp；响应 ImageSet 增带 image_key = detail 档键）
+      description: 0.6.8 补：单文件上限 **10MB**；只收 jpeg / png / webp，按 **magic bytes** 判定（不信客户端 Content-Type；svg 永不放行，heic 明拒）。类型不符 / 超限 → 40001。`image_key` 供 BannerInput 使用（AJ-143）
       requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, properties: {file: {type: string, format: binary}}}}}}
-      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ImageSet'}}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ImageSet'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/fx:
     get:
       summary: 展示汇率列表（**含历史与未来生效行**；quote 升序、同币种内 effective_from 倒序）
@@ -322,7 +323,7 @@ components:
   schemas:
     AuthResp: {type: object, properties: {token: {type: string}, user: {type: object, properties: {id: {type: string}, isAdmin: {type: boolean}}}}}
     Display: {type: object, description: 展示价，整数分（后端按当日汇率计算）, properties: {USD: {type: integer}, CNY: {type: integer}}}
-    ImageSet: {type: object, properties: {thumb: {type: string}, card: {type: string}, detail: {type: string}}}
+    ImageSet: {type: object, properties: {thumb: {type: string}, card: {type: string}, detail: {type: string}, image_key: {type: string, description: '仅 POST /admin/upload 响应里出现（0.6.8）：detail 档存储键，供 BannerInput.image_key 使用（AJ-143/AJ-166）；存量 Product.images 条目没有它'}}}
     ProductCard: {type: object, properties: {id: {type: string}, title: {type: string}, category: {type: string}, price_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, image: {$ref: '#/components/schemas/ImageSet'}, stock: {type: integer}, status: {type: string}}}
     Product: {allOf: [{$ref: '#/components/schemas/ProductCard'}, {type: object, properties: {description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, weight_g: {type: integer}, compliance_tags: {type: array, items: {type: string}}, hs_code: {type: string}, customs_desc_en: {type: string}, origin_country: {type: string}}}]}
     AdminProduct: {allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time}}}]}
@@ -416,6 +417,16 @@ components:
       开案时刻是举证期限的起点、必须取机构时间；结案时刻不是任何期限的起点，
       而 Stripe 的 dispute 对象上根本没有"结案时间"字段（能拿到的只有事件投递时刻）。
       ⑤ `ListDispute.has_dispute`（列表列）同义：进行中的拒付，不含已结案的。
+    0.6.8（I2 U-I1）：`ImageSet` 增 **`image_key`**（可选，AJ-143 定论的落地）。
+      @why `BannerInput.image_key` 要的是**键**而 `POST /admin/upload` 原本只回三档 URL——
+      让前端从 URL 反解键是靠字符串巧合工作（URL 规则一变就静默产出错键且无人报错）；
+      让 BannerInput 改收 URL 会把存储位置（域名/CDN 前缀）写进业务表，换图床要改历史数据。
+      增量字段向后兼容：老调用方继续只用三档 URL。
+      ① `image_key` = **detail 档的存储键**（AJ-166）：Banner 展示用最大档；
+      服务端**不存原图**（原图可能 10MB，直出当 banner 既慢又贵；代价是档位尺寸日后变更无法重生成，只能重传）。
+      ② `image_key` 只在**上传响应**里出现；`Product.images` 等存量 ImageSet 条目没有它（故 optional）。
+      ③ 上传限 **10MB**、只收 jpeg / png / webp（按 magic bytes 判，不信客户端 Content-Type；
+      svg 是脚本载体永不放行，heic 因 sharp 不带 libheif 在入口明拒）。
     AdminOrderListItem: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, user_id: {type: string}, status: {$ref: '#/components/schemas/OrderStatus'}, total_jpy: {type: integer}, contact_email: {type: string}, carrier: {type: string}, tracking_no: {type: string}, has_dispute: {type: boolean, description: '列表也带（0.6.1）：客服在列表页就能看见拒付单'}, is_test: {type: boolean}, created_at: {type: string, format: date-time}}}
     AdminOrder: {allOf: [{$ref: '#/components/schemas/Order'}, {type: object, properties: {user_id: {type: string}, contact_email: {type: string, format: email, description: '客服可见（D-42）'}, is_test: {type: boolean, description: '审核期 mock 通道测试单；管理端列表默认过滤'}, has_dispute: {type: boolean, description: '存在进行中的拒付（D-50）；退款 40907'}, fx_snapshot: {type: object}, payments: {type: array, items: {type: object, properties: {provider: {type: string}, provider_ref: {type: string}, transaction_id: {type: string}, status: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, settled_jpy: {type: integer}, fee_jpy: {type: integer}}}}, events: {type: array, items: {type: object, properties: {status: {type: string}, note: {type: string}, actor: {type: string}, at: {type: string, format: date-time}}}}}}]}
     ChannelView: {type: object, required: [channel, entryMode, label], properties: {channel: {type: string, description: '通道 key（任意字符串：新增支付方式不需要改本契约的枚举）'}, entryMode: {type: string, enum: [in_app, copylink, redirect], description: 'in_app=小程序内直接调起；copylink=复制链接到外部浏览器（D-49：Stripe Checkout 托管页）；redirect=302 跳转'}, label: {type: string, description: 展示名（外置文案，前端不写死）}, icon: {type: string, description: 图标 key（同上）}}}
