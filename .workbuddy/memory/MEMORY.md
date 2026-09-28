@@ -48,6 +48,10 @@
 - ⚠️ **§2 第 50 条：「能走通」不等于「走得到」**——页面注册了、三件套齐备、单测全绿 ≠ 用户能到（订单/地址/法务三页曾是孤岛）。新增页面时"有没有登记 / 有没有入口"**都不报错**。现由 `project-config` 两条断言守；白名单（名单式）：`pages[0]` 启动页、`pages/index/index`、`pages/comp/index`
 - ⚠️ **§2 第 51 条：`git checkout -- <file>` 对新文件无效**（未跟踪文件不在 HEAD 里，命令失败但静默留下注入的改动）。缺陷注入的还原一律用**事先 `cp` 的备份**
 - ⚠️ **§2 第 52 条：BSD `date -j -f` 是恒等映射陷阱**——`TZ=Asia/Tokyo date -j -f …` 把输入当本地时区解析，输出=输入，"交叉验证"什么都没验到。正确做法：`TZ=UTC date -j -f … +%s` 得 epoch → `TZ=Asia/Tokyo date -r` 换算，再加 Python `datetime+timedelta(hours=9)` 第三路
+- ⚠️ **§2 第 53 条：缺陷注入必须确认改动落在代码行、不是注释**——`replace(str, 1)` 会命中 @why 注释里的同款字符串 → exit=0 的假绿。修法：注入点用**带调用上下文的整行**
+- ⚠️ **§2 第 54 条（09-28）：源码文本断言会被"注释里的同款字符串"假绿**（第 53 条的反面）。实测：把 `createFetchClient({ …outboundHttpOptions(config) })` 整行注释掉、真实调用降级 → **旧断言通过、剥注释后的新断言失败**。修法：扫源码前先 `filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))`
+- ⚠️ **§2 第 55 条（09-28）：固定时钟证明不了"时间来自注入时钟"**——自己 `new Date()` 的实现在固定时钟下照样给得出能通过的时刻。必须**推进**假时钟看依赖时间的代码跟不跟着变 → `mutableClock(at)`（`test/helpers/fixed-clock.ts`，返回 `{clock, advance, set}`）
+- ⚠️ **§2 第 56 条（09-28）："两个读取方都断言"能防自证**——注入"买家详情 status 写死"时**详情与列表同时红**，才证明它们不是同一份映射在互证。写跨端/跨层一致性用例时**必须找两个独立读取方**
 
 ## 7. 商业测算（jp `30-商业模式/商业测算模型.xlsx`）
 - 纯美国、**N=4**：加权单件净贡献 **948.5 円**；净贡献率 **12.39%**、毛利率 17.55%；盈亏平衡 **174 件 / 44 单·月**。过 12% 红线：厨刀 15.97% ✅、保温杯 13.40% ✅、SK-II 11.78% ⛔
@@ -56,6 +60,8 @@
 - ⚠️ 改 xlsx 教训：openpyxl 插删行**不改写公式引用**；改完必须① 全表扫引用 ② Python 独立复算 ③ 提醒用户用 Excel 打开重算另存
 
 ## 8. 进度与下一步
+- **✅ 测试体系全面审查完成（09-28，用户 7 项要求；jp_project `71a7301`/`0b02e7e`/`a3ff455`/`aaa650c`，jp `ddd439b` D-72；AJ-170~173；四次 gate 全 exit=0）**：结论＝**不缺覆盖率（96.59/90.9/98.06/97.59）、缺模块联动**。补了 4 处接缝共 16 条用例：`quote-create-chain.db.test.ts`（报价→建单同源 + 配置驱动报价）、`close-session-wiring.db.test.ts`（事件订阅者注册与触发链）、`admin-buyer-consistency.db.test.ts`（管理端写→买家侧读 + 拒付解锁回路）、U-J4 修 3 条弱断言。db 528→**544**，cov 2135→**2192**
+- **审查的正面结论（影响后续判断）**：全库 187 个测试文件只有 2 个用 `vi.fn`、`toHaveBeenCalled*` 共 7 处且都配了行为断言、零 skip/only/todo → "只验证函数被调用"的假象**基本不存在**；以后别再把"提高覆盖率"当目标
 - **地基 F0–F17 全部 ✅**；**I1 订单域 U1–U7b 完成 + 10 条 P2 尾巴清完**（AJ-120~122 / D-65）；**I2 前端开工（09-26 深夜）**：首页 + 商品详情页落地，测试 **1541 条**（1099/368/39/35/34），gate exit=0，契约 **0.6.0**，两库已推送（jp_project `6f01f41` / jp `9f44452` D-66）
 - **约束十一已生效**（CLAUDE.md 第十一条，AJ-123）：页面逻辑进 `*.vm.js` 纯函数（不读 wx/不 new Date/不做 IO/不发请求），导航意图用数据表达，`index.js` 薄壳；守卫 `miniprogram/vm-guard.unit.test.ts`（有 vm 必须有同名单测，**不强制每页都有 vm**）
 - **⚠️ I2 主链路已闭环（09-27，测试 1541→1647，gate exit=0，jp_project `9b25a9b` / jp `5c47791` D-67）**：home → detail → cart → address → checkout → pay → order 全通。共享层：`cart-store.js`（本地车，快照价**不许算钱**）、`address-form.js`（与契约 pattern 双向比对）、`pay-plan.js`、`quote-view.js`、`idem-key.js`、`placeholder.js`、`price-format.js`、`error-text.js`。`wx-api.ts` 已登记 10 个宿主 API（request/storage×3/log/navigateTo/login/navigateBack/showModal/requestPayment/setClipboardData/redirectTo）
