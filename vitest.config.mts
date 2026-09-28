@@ -49,7 +49,25 @@ export default defineConfig({
         // db 层必须**串行**：所有 db 用例共用一个测试库，且用例之间靠 TRUNCATE 重置；
         // 并行时两个文件会互删对方刚写入的数据（实测：提交后数据可见 / 幂等并发两条同时变红），
         // 这类红灯是环境导致的假失败，最难排查。串行换来确定性，代价是 db 层慢一点（当前 3s 内）。
-        test: { name: 'db', include: ['**/*.db.test.ts'], fileParallelism: false },
+        //
+        // ⚠️ `hookTimeout` / `testTimeout` 放宽到 30s 是**实测**逼出来的，不是保守：
+        //      2026-09-27 的 `cov` 一轮（unit/contract/e2e 与 db 并发跑，共用同一个 Postgres）
+        //      在本机负载 ~13 时，`beforeAll` 里的 `ensureTestDb()`（子进程跑 node-pg-migrate）
+        //      与 `beforeEach` 里的 `resetTestDb()`（TRUNCATE 全部业务表）双双超过 vitest 默认的 10s，
+        //      表现为 Hook timed out ——而同一批复测用例单跑 db 层是 476/476 绿、137s。
+        //      即：**红灯来自资源争用，不来自被测逻辑**。
+        //      与 lint 层放宽 `testTimeout` 是同一类理由（那里是每个文件各建一个 TS Program）。
+        // @limitation 放宽超时**不承担**正确性判断：真死锁/真挂起仍会超过 30s 而失败，
+        //              它只是把"机器忙"这一档噪声从结果里挪出去。
+        //              🚫 因此不要把某条用例"偶发超时"直接归因到机器慢就了事——
+        //              先单跑该层确认绿，再判断是不是争用（否则这里会变成掩盖真缺陷的抽屉）。
+        test: {
+          name: 'db',
+          include: ['**/*.db.test.ts'],
+          fileParallelism: false,
+          hookTimeout: 30_000,
+          testTimeout: 30_000,
+        },
       },
       {
         test: { name: 'contract', include: ['**/*.contract.test.ts'] },

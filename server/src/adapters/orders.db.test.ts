@@ -107,12 +107,21 @@ describe('lockExpiredPayableOrders：SKIP LOCKED', () => {
     await seedOrder('o-free');
     const other = testDb();
     try {
+      // ⚠️ 用**信号**等"锁已被持有"，不要 sleep 一个固定时长：
+      //      `other.begin` 要先建连接再发 SQL，那段耗时在覆盖率跑（进程更慢、worker 更多）时
+      //      会超过固定 sleep —— 实测 gate 的 cov 一轮因此挂过一次（拿到 ['o-locked','o-free']）。
+      //      sleep 只是"大概率够"，信号才是"必然够"（§2 第 44 条）。
+      let acquired: () => void = () => undefined;
+      const locked = new Promise<void>((r) => {
+        acquired = r;
+      });
       // 外部事务持有 o-locked 的行锁（不提交）
       const holder = other.begin(async (tx) => {
         await tx`select id from orders where id = 'o-locked' for update`;
+        acquired();
         await new Promise((r) => setTimeout(r, 300));
       });
-      await new Promise((r) => setTimeout(r, 50));
+      await locked;
       const ids = await lockExpiredPayableOrders(db, NOW, 100);
       expect(ids).toEqual(['o-free']);
       await holder;
