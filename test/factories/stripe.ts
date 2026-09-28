@@ -155,8 +155,16 @@ export function dispute(seed: { paymentIntent?: string } = {}): Record<string, u
     payment_intent: seed.paymentIntent ?? 'pi_3P0000000000000000000000',
     reason: 'fraudulent',
     status: 'warning_needs_response',
+    // ⚠️ 刻意与事件 envelope 的 `created`（默认 1_700_000_000）**不同**：
+    //    Dispute 的 `created` 是"开案时刻"（举证期限的起点），envelope 的是"投递时刻"，
+    //    补发时两者可差数天。取错的表现是举证窗口被算短，且不报错。
+    //    两个值不同，用例才能证明适配器取的是**对象**那个（U-F1）。
+    created: DISPUTE_CREATED_SEC,
   };
 }
+
+/** Dispute 对象的开案时刻（unix 秒）。单独导出，供用例与写入方对同一个数。 */
+export const DISPUTE_CREATED_SEC = 1_690_000_000;
 
 /**
  * 造一个 Stripe 事件（形状与官方一致）。

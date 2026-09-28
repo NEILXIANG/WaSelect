@@ -373,6 +373,16 @@ export function createStripeCheckoutProvider(
             : undefined;
       const currency =
         typeof obj['currency'] === 'string' ? obj['currency'].toUpperCase() : undefined;
+      /**
+       * 机构报的对象创建时刻（Stripe 一律 unix **秒**）。
+       *
+       * @why 只取 `obj.created` 而**不取事件 envelope 的 `created`**：
+       *      前者是"这个对象（如 dispute）是什么时候发生的"，后者是"Stripe 什么时候投递这条事件"——
+       *      补发/重投时两者可以差好几天，而举证期限要的是前者（@see ports/payment.ts occurredAtMs）。
+       * @limitation 只有数字才用；`obj.created` 缺失时**不带这个字段**而不是填当前时间——
+       *              让"机构没给"这件事暴露给消费方，由它决定降级还是拒绝，不在这里静默补 0。
+       */
+      const createdSec = obj['created'];
       // ⚠️ `checkout.session.completed` ≠ 已付款：异步支付方式下 completed 时
       //    `payment_status` 还是 'unpaid'（官方口径：等 `checkout.session.async_payment_succeeded`）。
       //    create() 已用白名单只收卡，这里是**第二道防线**（Dashboard 配置漂移也伤不到落账）：
@@ -399,6 +409,9 @@ export function createStripeCheckoutProvider(
         // ⚠️ 原样回带**最小单位 + 币种**，不换算成 JPY（换算属 domain，用订单的 fx_snapshot）
         ...(amount !== undefined ? { amountMinor: amount } : {}),
         ...(currency !== undefined ? { currency } : {}),
+        ...(typeof createdSec === 'number' && Number.isFinite(createdSec)
+          ? { occurredAtMs: Math.round(createdSec * 1000) }
+          : {}),
       };
     },
 

@@ -27,6 +27,7 @@ import {
   stripeEvent,
   STRIPE_EVENT_TYPES,
   STRIPE_SIGNATURE_HEADER,
+  DISPUTE_CREATED_SEC,
 } from '../../../../test/factories/stripe.js';
 import {
   createStripeCheckoutProvider,
@@ -243,6 +244,32 @@ describe('parseWebhook（事件映射与验签细节）', () => {
       expect(ev.orderId).toBe(REQ.orderId);
       expect(ev.rawType).toBe(type);
     }
+  });
+
+  it('🔴 拒付事件带**开案时刻**（取 Dispute 对象的 created，不是事件 envelope 的）', async () => {
+    const { http, provider } = build();
+    http.givenPaymentIntent('pi_3P0000000000000000000000', { order_id: REQ.orderId });
+    const p = signed(STRIPE_EVENT_TYPES.disputeCreated);
+    const ev = await provider.parseWebhook(p.raw, p.headers);
+    expect(ev.outcome).toBe('disputed');
+    // @measured 样本里 envelope 的 created = 1_700_000_000、Dispute 的 = 1_690_000_000；
+    //           取错的话这里会拿到前者（差 10_000_000 秒 ≈ 115 天），举证窗口被算短。
+    expect(ev.occurredAtMs).toBe(DISPUTE_CREATED_SEC * 1000);
+    expect(ev.occurredAtMs).not.toBe(1_700_000_000 * 1000);
+  });
+
+  it('机构没给 created → 不带 occurredAtMs（让"没给"暴露给消费方，不静默补当前时间）', async () => {
+    const { provider } = build();
+    const body = JSON.stringify(
+      stripeEvent('checkout.session.completed', {
+        id: 'cs_1',
+        metadata: { order_id: REQ.orderId },
+      }),
+    );
+    const ev = await provider.parseWebhook(Buffer.from(body, 'utf8'), {
+      [HEADER]: signStripePayload(body, SECRET, NOW_SEC),
+    });
+    expect(ev.occurredAtMs).toBeUndefined();
   });
 
   it('未知事件类型 → unknown（不猜，记录后由业务决定是否忽略）', async () => {

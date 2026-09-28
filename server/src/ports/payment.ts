@@ -170,6 +170,18 @@ export interface ProviderEvent {
    */
   amountMinor?: number | undefined;
   currency?: string | undefined;
+  /**
+   * 机构报的**事件时刻**（unix 毫秒）；缺省 = 机构没给，由消费方决定用入库时刻还是拒绝落库。
+   *
+   * @why 加它而不是让消费方用"我们收到的那一刻"：有些时刻是**期限的起点**，
+   *      两者可以相差数小时（回调重试 / 队列积压 / 端点被停用后的补发）——
+   *      最典型的是**拒付开案时刻**（`dispute.created`）：举证期限从它起算，
+   *      用入库时刻会把举证窗口**算短**，那是真金白银的损失（迁移 013 / AJ-156 ③）。
+   * @limitation 只有"起点必须取机构时间"的场景才该用它；
+   *              订单的 `paid_at` 之类仍然取注入时钟（业务事实可被测试钉住，见 mark-paid.ts）。
+   * @see migrations/013_dispute_opened_at.sql
+   */
+  occurredAtMs?: number | undefined;
 }
 
 export interface RefundRequest {
