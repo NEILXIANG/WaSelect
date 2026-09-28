@@ -39,7 +39,8 @@ import { systemIdGen } from '../adapters/ids.js';
 import { outboundHttpOptions } from './http-outbound.js';
 import { mountPayRoutes } from './pay-routes.js';
 import { markOrderPaid } from './mark-paid.js';
-import { RESULT_PAID } from './webhook-results.js';
+import { markOrderDisputed } from './mark-disputed.js';
+import { RESULT_DISPUTED, RESULT_PAID } from './webhook-results.js';
 import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import { rateLimiter, rateLimitRules } from './rate-limit.js';
 import { mountQuoteRoutes } from './quote-routes.js';
@@ -125,6 +126,26 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
           }),
         result: RESULT_PAID,
         disposition: 'paid',
+      },
+      /**
+       * 拒付落库（U-F3）：**不迁订单状态**，只标 `orders.has_dispute` + 写 `payments.dispute_*`。
+       * ⚠️ 开案时刻取**机构报的时间**（`event.occurredAtMs`），不是入库时刻——
+       *    它是举证期限的起点，用后者会把举证窗口**算短**（AJ-159 / 迁移 013）。
+       *    机构没给时 `markOrderDisputed` 会**拒落库**转对账，这里不降级成"用当前时间"：
+       *    "有值但错了"比"没有值"更难发现。
+       * @see app/mark-disputed.ts @limitation 二（结案事件尚未实现，status 置 open 后不再变）
+       */
+      disputed: {
+        apply: async (e, channel) =>
+          markOrderDisputed(db, events, e.orderId, {
+            channel,
+            disputeId: e.providerRef,
+            amountMinor: e.amountMinor,
+            currency: e.currency,
+            openedAtMs: e.occurredAtMs,
+          }),
+        result: RESULT_DISPUTED,
+        disposition: 'disputed',
       },
     },
   });

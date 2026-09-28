@@ -51,9 +51,23 @@ import {
   resultValue,
 } from './webhook-results.js';
 import { SETTLEMENT_MISMATCH_REASONS } from './mark-paid.js';
+import { DISPUTE_MISMATCH_REASONS } from './mark-disputed.js';
 
-/** mark-paid 核对失败的 reason 集合（单一来源：app/mark-paid.ts）。 */
-const MISMATCH_REASONS: ReadonlySet<string> = new Set(SETTLEMENT_MISMATCH_REASONS);
+/**
+ * 落账核对失败的 reason 集合：付款（mark-paid）与拒付（mark-disputed）两处来源合并。
+ *
+ * @why 拒付那三个 reason **必须**进这个集合：不进的话它们会落到下面
+ *      "其它状态冲突"那条分支——**warn 级 + 2xx**。而 2xx 意味着机构不再重发，
+ *      于是"拒付没落库"既不重试也没有 error 告警，举证窗口白白流失
+ *      （这正是 U-F3 审查草稿时发现的最大缺陷）。
+ *      @see mark-disputed.ts DISPUTE_MISMATCH_REASONS 的 @why
+ * @limitation 两张词表**各自**维护、在此合并，不做成一张：付款与拒付的失败形态不同，
+ *              合成一张会让"改了付款忘了拒付"变成静默漏词。
+ */
+const MISMATCH_REASONS: ReadonlySet<string> = new Set([
+  ...SETTLEMENT_MISMATCH_REASONS,
+  ...DISPUTE_MISMATCH_REASONS,
+]);
 
 /**
  * 一种 outcome 的**落账器**。
