@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { SETTLEMENT_MISMATCH_REASONS } from './mark-paid.js';
 import {
+  RESULT_DISPUTED,
   RESULT_IGNORED_PREFIX,
   RESULT_LATE_PAYMENT,
   RESULT_MAX_LEN,
@@ -19,6 +20,7 @@ describe('webhook_events.result 词表', () => {
     const all = [
       RESULT_PAID,
       RESULT_PAID_ALREADY,
+      RESULT_DISPUTED,
       RESULT_LATE_PAYMENT,
       RESULT_STATUS_CONFLICT,
       `${RESULT_UNMATCHED_PREFIX}order_not_found`,

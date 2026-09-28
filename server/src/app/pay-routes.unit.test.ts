@@ -23,7 +23,13 @@ import { createPaymentRegistry } from '../adapters/payment/registry.js';
 import { createMockProvider } from '../adapters/payment/mock.js';
 import type { ChannelConfig, PaymentRegistry, ProviderCapabilities } from '../ports/payment.js';
 import type { ProviderEvent } from '../ports/payment.js';
-import { mountPayRoutes, PAY_CALLBACK_PREFIX, PAY_CHANNELS_PATH } from './pay-routes.js';
+import {
+  mountPayRoutes,
+  PAY_CALLBACK_PREFIX,
+  PAY_CHANNELS_PATH,
+  type PayRoutesDeps,
+} from './pay-routes.js';
+import { RESULT_PAID } from './webhook-results.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { fakeWebhookStore } from '../../../test/helpers/fake-webhook-store.js';
 import { fixedClock } from '../../../test/helpers/fixed-clock.js';
@@ -102,7 +108,9 @@ async function start(
     registry?: PaymentRegistry;
     withRawBody?: boolean;
     graceMs?: number;
+    /** succeeded 的落账器；用例要验"额外注册的 outcome"时用 {@link appliers} 整体覆盖。 */
     apply?: (e: ProviderEvent) => Promise<void>;
+    appliers?: PayRoutesDeps['appliers'];
   } = {},
 ): Promise<Started> {
   const sink = new MemorySink();
@@ -119,11 +127,19 @@ async function start(
         webhooks: store,
         logger,
         graceMs: opts.graceMs ?? 900_000,
-        apply:
-          opts.apply ??
-          (async (e) => {
-            applied.push(e);
-          }),
+        appliers:
+          opts.appliers ??
+          ({
+            succeeded: {
+              apply:
+                opts.apply ??
+                (async (e) => {
+                  applied.push(e);
+                }),
+              result: RESULT_PAID,
+              disposition: 'paid',
+            },
+          } as PayRoutesDeps['appliers']),
       }),
   });
   const { port, close } = await listen(app);

@@ -25,6 +25,7 @@
 import { createHmac } from 'node:crypto';
 import { signToken, type AuthConfig } from '../../server/src/app/auth.js';
 import { markOrderPaid } from '../../server/src/app/mark-paid.js';
+import { RESULT_PAID } from '../../server/src/app/webhook-results.js';
 import type { Db } from '../../server/src/adapters/db.js';
 import { createHttpApp, listen, type StartedServer } from '../../server/src/http.js';
 import { createLogger } from '../../server/src/logger.js';
@@ -182,13 +183,19 @@ export async function startApp(
         // 与生产同一条落账路径（含通道/金额核对，三审 S1② / U1）：
         //    落账必须带"钱是怎么来的"——少传就编译不过，想在 e2e 里跳过核对
         //    没有这条路（mark-paid.ts PaidSettlement 的 @why）
-        apply: async (e, channel) =>
-          markOrderPaid(db, events, fixedClock(now), e.orderId, {
-            channel,
-            providerRef: e.providerRef,
-            amountMinor: e.amountMinor,
-            currency: e.currency,
-          }),
+        appliers: {
+          succeeded: {
+            apply: async (e, channel) =>
+              markOrderPaid(db, events, fixedClock(now), e.orderId, {
+                channel,
+                providerRef: e.providerRef,
+                amountMinor: e.amountMinor,
+                currency: e.currency,
+              }),
+            result: RESULT_PAID,
+            disposition: 'paid',
+          },
+        },
       });
     },
   });

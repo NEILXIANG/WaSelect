@@ -18,6 +18,14 @@
 export const RESULT_PAID = 'paid';
 /** 订单已 paid、同单另一事件到达（正常形态）。 */
 export const RESULT_PAID_ALREADY = 'paid:already';
+/**
+ * 拒付已落库（`payments.dispute_*` + `orders.has_dispute`）。
+ *
+ * @why 与 `paid` 分开成一个词：对账/风控要能精确检索"哪些回调是拒付"。
+ *      若沿用 `ignored:disputed`（U-F2 之前的行为），拒付在登记行里与
+ *      "收下了但没反应"长得一样——而拒付是**有举证期限**的事，扫不到就是真金白银。
+ */
+export const RESULT_DISPUTED = 'disputed';
 /** 迟到付款：钱扣了但订单已过支付窗口——需人工退款。 */
 export const RESULT_LATE_PAYMENT = 'late_payment';
 /** 落账核对不通过（通道 / 机构单号 / 币种 / 金额 / 无支付意图）：`mismatch:<reason>`。 */

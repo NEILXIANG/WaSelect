@@ -39,6 +39,7 @@ import { systemIdGen } from '../adapters/ids.js';
 import { outboundHttpOptions } from './http-outbound.js';
 import { mountPayRoutes } from './pay-routes.js';
 import { markOrderPaid } from './mark-paid.js';
+import { RESULT_PAID } from './webhook-results.js';
 import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import { rateLimiter, rateLimitRules } from './rate-limit.js';
 import { mountQuoteRoutes } from './quote-routes.js';
@@ -110,16 +111,22 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     webhooks: createWebhookStore(db),
     logger,
     graceMs: config.CALLBACK_ORDER_GRACE_MS,
-    // 落账 = 订单状态机的迁移（mark-paid 核对 payments 行后置 paid）。
-    // ⚠️ 第二、三、四个参数必须来自回调本身（通道 / 机构单号 / 金额币种）：
-    //    落账逐项核对它们与 `payments` 行（三审 S1② / U1），对不上就不落账
-    apply: async (e, channel) =>
-      markOrderPaid(db, events, systemClock, e.orderId, {
-        channel,
-        providerRef: e.providerRef,
-        amountMinor: e.amountMinor,
-        currency: e.currency,
-      }),
+    appliers: {
+      // 落账 = 订单状态机的迁移（mark-paid 核对 payments 行后置 paid）。
+      // ⚠️ 第二、三、四个参数必须来自回调本身（通道 / 机构单号 / 金额币种）：
+      //    落账逐项核对它们与 `payments` 行（三审 S1② / U1），对不上就不落账
+      succeeded: {
+        apply: async (e, channel) =>
+          markOrderPaid(db, events, systemClock, e.orderId, {
+            channel,
+            providerRef: e.providerRef,
+            amountMinor: e.amountMinor,
+            currency: e.currency,
+          }),
+        result: RESULT_PAID,
+        disposition: 'paid',
+      },
+    },
   });
 
   // ── 报价路由（I1-U4）：**每个环境都挂**，与支付路由同理——它是产品接口不是脚手架 ──

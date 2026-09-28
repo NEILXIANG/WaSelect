@@ -15,14 +15,15 @@
  *      验签与解析属于各 Provider 的差异部分（`parseWebhook`），
  *      落账与冲突分层属于所有通道共有的部分。这条分界线让"新增通道"只需要写前者。
  *
- * @limitation 一：**只处理 `outcome === 'succeeded'`**；其余（failed/expired/refunded/disputed/unknown）
- *              一律 2xx 收下 + 登记为 `ignored:<outcome>`，不落任何业务状态。
- *              MVP 的订单状态机（F12）还没有"支付失败/过期关单"与"拒付冻结"的落点，
+ * @limitation 一：**只有注册了落账器的 outcome 才会落业务状态**（见 {@link CallbackPipelineDeps.appliers}）；
+ *              未注册的（failed / expired / refunded / unknown 等）一律 2xx 收下 +
+ *              登记为 `ignored:<outcome>`，不落任何业务状态。
+ *              MVP 的订单状态机（F12）还没有"支付失败/过期关单"与"退款"的落点，
  *              现在硬写只会写出一个谁也没验证过的分支。
  *              ⚠️ 代价：`checkout.session.expired` 到达时订单**不会**自动关闭，
- *              仍要靠超时关单任务（D-43）兜；`charge.dispute.created` 到达时也不会冻结订单。
- *              这两条都是**已知缺口**，不是遗漏——F12 接状态机时把它们排进去。
- *              @upgrade F12：按 outcome 分派到状态机的对应迁移，并补各自的测试。
+ *              仍要靠超时关单任务（D-43）兜。这是**已知缺口**，不是遗漏。
+ *              @upgrade F12：给 refunded / expired / failed 各在挂载处注册一个落账器，
+ *              本文件不用再改（这正是用注册表而不是分支链的原因）。
  * @limitation 二：HTTP 应答形状（状态码与 body）**由本文件决定**，路由层不改写。
  *              好处是"机构收到什么"只有一个地方说了算；代价是本文件同时管业务与协议，
  *              将来若某个机构要求特殊的应答体（微信要求 XML/特定字段），
@@ -54,6 +55,36 @@ import { SETTLEMENT_MISMATCH_REASONS } from './mark-paid.js';
 /** mark-paid 核对失败的 reason 集合（单一来源：app/mark-paid.ts）。 */
 const MISMATCH_REASONS: ReadonlySet<string> = new Set(SETTLEMENT_MISMATCH_REASONS);
 
+/**
+ * 一种 outcome 的**落账器**。
+ *
+ * @param channel 回调来自哪个通道。**必须**带进来（三审 S1②）：落账要把
+ *      "钱是从这条通道来的"与登记过的 `payments.provider` 对上，
+ *      只给 `event` 的话调用方无从知道通道名——而 `event` 里没有它
+ *      （那是有意的：ProviderEvent 只描述"机构说了什么"，不描述"我们怎么接的"）。
+ * @throws {AppError} 40400（订单不存在）/ 40902（状态不允许本次迁移，或核对不符）
+ */
+export type OutcomeApplier = (event: ProviderEvent, channel: string) => Promise<void>;
+
+/**
+ * 一种 outcome 在**本管线里怎么落地**——落账动作 + 两个记账口径。
+ *
+ * @why 三个字段绑在一处而不是由管线按 outcome 推（`outcome==='succeeded'?'paid':outcome`）：
+ *      对账靠 `result` 精确检索（@see webhook-results.ts 抬头的 @why），
+ *      disposition 决定埋点与指标。分成"落账器注册在挂载处、result 推导在管线里"两处的话，
+ *      F12 接 refunded 时改了落账器却忘了改推导，登记行就会写成 `ignored:refunded`
+ *      ——**钱已经动了而登记显示"没反应"**，与"钱到单未付"同级。
+ *      绑在一处，加落点时不可能只加一半。
+ */
+export interface OutcomeHandler {
+  /** 落账动作。 */
+  apply: OutcomeApplier;
+  /** 落账成功后写进 `webhook_events.result` 的词（对账按它精确检索）。 */
+  result: string;
+  /** 落账成功后的业务处置（与状态码是两件事，见 {@link CallbackDisposition}）。 */
+  disposition: CallbackDisposition;
+}
+
 export interface CallbackPipelineDeps {
   webhooks: WebhookStore;
   logger: Logger;
@@ -63,15 +94,18 @@ export interface CallbackPipelineDeps {
    */
   graceMs: number;
   /**
-   * 把事件落到业务状态上。
+   * **按 outcome 注册的落账器**；键缺失 = 该 outcome 没有落点（@limitation 一）。
    *
-   * @param channel 回调来自哪个通道。**必须**带进来（三审 S1②）：落账要把
-   *      "钱是从这条通道来的"与登记过的 `payments.provider` 对上，
-   *      只给 `event` 的话调用方无从知道通道名——而 `event` 里没有它
-   *      （那是有意的：ProviderEvent 只描述"机构说了什么"，不描述"我们怎么接的"）。
-   * @throws {AppError} 40400（订单不存在）/ 40902（状态不允许本次迁移，或核对不符）
+   * @why 用表而不是 `if (outcome === 'succeeded')` 的分支链：F12 会把
+   *      refunded / expired / failed 一个个接进状态机，每接一个就多一条分支，
+   *      并且每条都要把下面的"冲突分层"再抄一遍——抄漏一条的表现是
+   *      "该落的状态没落、而登记行显示成功"。表把"哪些 outcome 有落点"变成**数据**：
+   *      新增落点只改挂载处（mount.ts），管线本身不再变化。
+   * @limitation 表是**编译期**注册（不是数据库配置表）：新增一个 outcome 落点仍要发版。
+   *             不做成运行时可配，是因为迄今没有出现过"不发版就要接新 outcome"的需求；
+   *             真出现时再升，那时需要一并解决的是"落账器如何被审核"，不是这一张表。
    */
-  apply: (event: ProviderEvent, channel: string) => Promise<void>;
+  appliers: Partial<Record<ProviderEvent['outcome'], OutcomeHandler>>;
 }
 
 /**
@@ -96,9 +130,11 @@ export type CallbackDisposition =
   | 'unmatched'
   /** 订单已是 paid（另一事件类型到达，N13：正常形态） */
   | 'paid:already'
+  /** 拒付已落库（payments.dispute_* + orders.has_dispute） */
+  | 'disputed'
   /** 其它状态冲突（重发也不会变） */
   | 'status_conflict'
-  /** 归一化结果不是 succeeded（@limitation 一） */
+  /** 该 outcome 没有注册落账器（@limitation 一） */
   | 'ignored';
 
 /** 回调的 HTTP 应答（由本管线一次决定，路由层不改写）。 */
@@ -195,8 +231,9 @@ export async function handleProviderCallback(
     });
   }
 
-  // ── 非"支付成功"的事件：收下、登记、不落账（@limitation 一）──────────────
-  if (event.outcome !== 'succeeded') {
+  // ── 该 outcome 没有注册落账器：收下、登记、不落账（@limitation 一）────────
+  const handler = deps.appliers[event.outcome];
+  if (handler === undefined) {
     deps.logger.warn('callback_outcome_ignored', {
       order_id: event.orderId,
       provider: channel,
@@ -207,7 +244,7 @@ export async function handleProviderCallback(
       ...webhook,
       result: resultValue(RESULT_IGNORED_PREFIX, event.outcome),
       token,
-      note: `归一化结果为 ${event.outcome}：MVP 不落业务状态（F12 接状态机后补）`,
+      note: `归一化结果为 ${event.outcome}：本环境没有给它注册落账器（F12 接状态机后补）`,
     });
     return {
       disposition: 'ignored',
@@ -217,6 +254,9 @@ export async function handleProviderCallback(
   }
 
   // ── 冲突分层（AJ-32/N4/N13）────────────────────────────────────────────
+  // ⚠️ 这段对**所有已注册的 outcome 共用**：拒付到达时订单不存在，与"支付成功到达时
+  //    订单不存在"是同一件事（钱/纠纷到了，单找不到），宽限期与转对账的口径必须一致。
+  //    分成两套的话，"拒付找不到订单"会被写成 2xx 静默落 ignored，而那正是最需要人看的一类。
   // ① 订单不存在 + 宽限期内 → 503：让机构的重发机制替我们兜底，
   //    processed_at 保持 NULL（对账信号 + 重发能补上）。
   //    旧行为是一律 2xx——"可重试"的登记被 200 抵消，机构永不重发（N4）。
@@ -226,7 +266,7 @@ export async function handleProviderCallback(
   //    （N13：先 payment_intent.succeeded 后 checkout.session.completed），告警会淹没真正的冲突。
   // ④ 其余状态冲突（expired/cancelled 等）→ 2xx + warn：重发不会变，靠人查。
   try {
-    await deps.apply(event, channel);
+    await handler.apply(event, channel);
   } catch (e) {
     const code = e instanceof AppError ? e.code : 0;
     if (code === 40400) {
@@ -363,7 +403,7 @@ export async function handleProviderCallback(
   // 栅栏（N22）：带令牌写结果；false = 租约已易主，我们是迟到的旧持有者
   const wrote = await deps.webhooks.finish({
     ...webhook,
-    result: 'paid',
+    result: handler.result,
     token,
   });
   if (!wrote) {
@@ -373,5 +413,9 @@ export async function handleProviderCallback(
       ctx: { event_id: event.eventId },
     });
   }
-  return { disposition: 'paid', status: 200, body: { received: true, order_id: event.orderId } };
+  return {
+    disposition: handler.disposition,
+    status: 200,
+    body: { received: true, order_id: event.orderId },
+  };
 }

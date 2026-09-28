@@ -34,9 +34,9 @@ import { z } from 'zod';
 import { AppError } from '../errors.js';
 import { paramId } from '../http.js';
 import type { Logger } from '../logger.js';
-import type { HeaderBag, PaymentRegistry, ProviderEvent } from '../ports/payment.js';
+import type { HeaderBag, PaymentRegistry } from '../ports/payment.js';
 import type { WebhookStore } from '../ports/webhooks.js';
-import { handleProviderCallback } from './pay-callback.js';
+import { handleProviderCallback, type CallbackPipelineDeps } from './pay-callback.js';
 
 /**
  * 回调路径**前缀**：必须登记到 `createHttpApp` 的 `rawBodyPaths`。
@@ -71,10 +71,15 @@ export interface PayRoutesDeps {
   /** 回调早到宽限期（毫秒）。 */
   graceMs: number;
   /**
-   * 把"支付成功"落到业务状态上。第二个参数是回调来自的通道（落账核对要用，见 pay-callback）。
+   * 按 outcome 注册的落账器，原样透传给回调管线。
+   *
+   * @why 这里**不重新定义**落账语义、也不在这里挑 outcome：路由层只做
+   *      "验签 + 解析 + 交给管线"，落点由管线按注册表演（@see pay-callback.ts
+   *      CallbackPipelineDeps.appliers）。路由里加一句 `if (outcome === ...)` 就等于
+   *      把"哪些 outcome 有落点"变成两份，F12 接状态机时必漂。
    * @throws {AppError} 40400 / 40902（由管线做冲突分层）
    */
-  apply: (event: ProviderEvent, channel: string) => Promise<void>;
+  appliers: CallbackPipelineDeps['appliers'];
 }
 
 /**
@@ -164,7 +169,7 @@ export function mountPayRoutes(app: Express, deps: PayRoutesDeps): void {
             webhooks: deps.webhooks,
             logger: deps.logger,
             graceMs: deps.graceMs,
-            apply: deps.apply,
+            appliers: deps.appliers,
           },
           channel,
           raw,

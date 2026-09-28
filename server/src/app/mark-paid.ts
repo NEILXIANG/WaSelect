@@ -21,8 +21,9 @@
  *                **不是**"允许 created→paid 就能救"：那种情况只能转对账由人工处理。
  *              "迟到付款 → 自动全额退款"（D-33）**不在本函数**：迟到一律拒落账（见下），
  *              自动退款依赖真实通道退款能力，属售后阶段（I1 方案 §1.3 明示）。
- *              ⚠️ 换的时候**不要**在调用方加 if：调用方只见 `apply` 这一个函数签名，
- *              换实现就换装配处的注入（app/pay-routes.ts 的 `PayRoutesDeps.apply`）。
+ *              ⚠️ 换的时候**不要**在调用方加 if：调用方只见"落账器"这一个函数签名，
+ *              换实现就换装配处的注入（挂载处 `appliers.succeeded.apply`，
+ *              见 app/pay-callback.ts 的 @see 链——注册表把"哪个 outcome 由谁落"变成了数据）。
  * @limitation 一b：**迟到付款守卫**（I1-U2，D-33）：订单 `expires_at` 已到点
  *              （`now >= expires_at`，与关单 job 同一边界方向，见 adapters/orders.ts @why ①）
  *              而回调此时才到 → 抛 40902 `reason:'late_payment'`，**不落账、不封口 payments 行**。

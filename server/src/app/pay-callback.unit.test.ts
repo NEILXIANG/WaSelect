@@ -17,7 +17,13 @@ import { AppError } from '../errors.js';
 import { createLogger } from '../logger.js';
 import type { ProviderEvent } from '../ports/payment.js';
 import type { ClaimState, WebhookEventInput, WebhookStore } from '../ports/webhooks.js';
-import { handleProviderCallback, type CallbackPipelineDeps } from './pay-callback.js';
+import {
+  handleProviderCallback,
+  type CallbackPipelineDeps,
+  type OutcomeApplier,
+  type OutcomeHandler,
+} from './pay-callback.js';
+import { RESULT_DISPUTED, RESULT_PAID } from './webhook-results.js';
 import { fakeWebhookStore } from '../../../test/helpers/fake-webhook-store.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 
@@ -44,10 +50,17 @@ function fakeStore(opts: {
   return { store, ...rec };
 }
 
+/**
+ * @param apply succeeded 的落账器（绝大多数用例只关心它）。
+ * @param extra 额外注册的 outcome 落账器——用来验"按 outcome 分派"而不是"有就调"。
+ * @why 默认只注册 succeeded：这样"未注册的 outcome 走 ignored"是**默认态**，
+ *      而不是每个用例都要显式声明一遍。要验分派时再往 extra 里加。
+ */
 function deps(
   rec: Recorder,
   apply: (e: ProviderEvent) => Promise<void>,
   graceMs = 900_000,
+  extra: Partial<Record<ProviderEvent['outcome'], OutcomeHandler>> = {},
 ): { d: CallbackPipelineDeps; sink: MemorySink } {
   const sink = new MemorySink();
   return {
@@ -55,7 +68,10 @@ function deps(
       webhooks: rec.store,
       logger: createLogger({ env: 'test', destination: sink }),
       graceMs,
-      apply,
+      appliers: {
+        succeeded: { apply, result: RESULT_PAID, disposition: 'paid' },
+        ...extra,
+      },
     },
     sink,
   };
@@ -116,8 +132,11 @@ describe('handleProviderCallback：登记与去重', () => {
   });
 });
 
-describe('handleProviderCallback：非 succeeded 的结果不落账（@limitation 一）', () => {
-  it('expired / failed / unknown 一律 2xx 收下 + 登记 ignored:<outcome>，apply 不执行', async () => {
+describe('handleProviderCallback：**没有落账器**的 outcome 不落账（@limitation 一）', () => {
+  it('expired / failed / disputed / unknown 一律 2xx 收下 + 登记 ignored:<outcome>，落账器不执行', async () => {
+    // ⚠️ disputed 在这里是**未注册**的状态（deps 默认只注册 succeeded）。
+    //    注册之后的行为由下一个 describe 钉住；两条必须并存——
+    //    只测"注册后能落"就漏了"忘记注册时是什么表现"，而那正是 F12 会犯的错。
     for (const outcome of ['expired', 'failed', 'disputed', 'unknown'] as const) {
       const rec = fakeStore({});
       let called = 0;
@@ -145,6 +164,103 @@ describe('handleProviderCallback：非 succeeded 的结果不落账（@limitatio
     const { d } = deps(rec, async () => undefined);
     const out = await handleProviderCallback(d, 'stripe', RAW, event({ outcome: 'expired' }));
     expect(out.disposition).toBe('duplicate');
+    expect(rec.finished).toHaveLength(0);
+  });
+});
+
+describe('handleProviderCallback：按 outcome 分派落账器（注册表，不是分支链）', () => {
+  /**
+   * @why 这一组专门为 U-F2 加：拒付（`charge.dispute.created`）此前与 failed/expired
+   *      一起被折进 `ignored:<outcome>`（@limitation 一 的旧写法），
+   *      而拒付是**有举证期限**的事，"收下了但没反应"等于举证窗口白白流失。
+   */
+  const disputedHandler = (apply: OutcomeApplier): OutcomeHandler => ({
+    apply,
+    result: RESULT_DISPUTED,
+    disposition: 'disputed',
+  });
+
+  it('注册了 disputed → 走落账路径，封口 disputed 且 disposition=disputed', async () => {
+    const rec = fakeStore({});
+    let called = 0;
+    const { d } = deps(rec, async () => undefined, 900_000, {
+      disputed: disputedHandler(async () => {
+        called += 1;
+      }),
+    });
+    const out = await handleProviderCallback(
+      d,
+      'stripe',
+      RAW,
+      event({ outcome: 'disputed', rawType: 'charge.dispute.created' }),
+    );
+    expect(out).toEqual({
+      disposition: 'disputed',
+      status: 200,
+      body: { received: true, order_id: 'sk-1' },
+    });
+    expect(called).toBe(1);
+    // 登记行写 `disputed` 而不是 `ignored:disputed`：对账/风控要能精确检索拒付
+    expect(rec.finished).toEqual([{ result: 'disputed', token: 'tok-1', note: undefined }]);
+  });
+
+  it('disputed 事件**不会**调用 succeeded 的落账器（按 outcome 取，不是"有就调第一个"）', async () => {
+    const rec = fakeStore({});
+    let paidCalled = 0;
+    let disputedCalled = 0;
+    const { d } = deps(
+      rec,
+      async () => {
+        paidCalled += 1;
+      },
+      900_000,
+      {
+        disputed: disputedHandler(async () => {
+          disputedCalled += 1;
+        }),
+      },
+    );
+    await handleProviderCallback(d, 'stripe', RAW, event({ outcome: 'disputed' }));
+    expect(disputedCalled).toBe(1);
+    expect(paidCalled).toBe(0);
+  });
+
+  it('落账器收到的 channel 是**通道名**（三审 S1②：落账要对上 payments.provider）', async () => {
+    const rec = fakeStore({});
+    let seen: string | undefined;
+    const { d } = deps(rec, async () => undefined, 900_000, {
+      disputed: disputedHandler(async (_e: ProviderEvent, channel: string) => {
+        seen = channel;
+      }),
+    });
+    await handleProviderCallback(d, 'stripe', RAW, event({ outcome: 'disputed' }));
+    expect(seen).toBe('stripe');
+  });
+
+  it('disputed 落账抛 40400 → 与 succeeded **共用**同一套宽限期分层（不是另写一套）', async () => {
+    const rec = fakeStore({ elapsedMs: 1_000 });
+    const { d } = deps(rec, async () => undefined, 900_000, {
+      disputed: disputedHandler(async () => {
+        throw new AppError(40400, { order_id: 'sk-1' });
+      }),
+    });
+    const out = await handleProviderCallback(d, 'stripe', RAW, event({ outcome: 'disputed' }));
+    expect(out.disposition).toBe('early');
+    expect(out.status).toBe(503);
+    expect(rec.released).toEqual(['tok-1']);
+    expect(rec.finished).toHaveLength(0);
+  });
+
+  it('disputed 落账抛非 40400/40902 → 原样抛出，登记行不封口（@limitation 三）', async () => {
+    const rec = fakeStore({});
+    const { d } = deps(rec, async () => undefined, 900_000, {
+      disputed: disputedHandler(async () => {
+        throw new AppError(50003, { reason: 'db down' });
+      }),
+    });
+    await expect(
+      handleProviderCallback(d, 'stripe', RAW, event({ outcome: 'disputed' })),
+    ).rejects.toMatchObject({ code: 50003 });
     expect(rec.finished).toHaveLength(0);
   });
 });
