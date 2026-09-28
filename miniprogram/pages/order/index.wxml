@@ -19,7 +19,7 @@
     <text class="label">还没有订单</text>
   </view>
 
-  <view class="card" wx:for="{{rows}}" wx:key="orderId">
+  <view class="card" wx:for="{{rows}}" wx:key="orderId" data-id="{{item.orderId}}" bindtap="onRowTap">
     <view class="row">
       <text class="label">{{item.orderNo}}</text>
       <text class="status">{{item.statusText}}</text>
@@ -29,7 +29,11 @@
       <ws-price wx:if="{{item.totalJpy !== null}}" jpy="{{item.totalJpy}}" />
     </view>
     <text class="sub-price" wx:if="{{item.totalSub}}">{{item.totalSub}}</text>
-    <view class="act" wx:if="{{item.canPay}}" data-id="{{item.orderId}}" bindtap="onPay">
+    <!--
+      ⚠️ 用 catchtap 不用 bindtap：卡片本身也绑了点击（去详情），
+      bindtap 会冒泡到卡片——点"继续支付"会同时跳详情 + 跳支付。
+    -->
+    <view class="act" wx:if="{{item.canPay}}" data-id="{{item.orderId}}" catchtap="onPay">
       继续支付
     </view>
   </view>

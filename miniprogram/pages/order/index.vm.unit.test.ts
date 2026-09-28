@@ -5,11 +5,14 @@
  *      ① 状态词表与契约 enum 漂移 → 新增状态后前端静默显示"状态未知"；
  *      ② 能付的状态与可取消的状态不一致 → "能付但取消不了"的半开状态；
  *      ③ 请求失败时说"还没有订单" → 用户以为订单丢了。
+ *
+ * ⚠️ 状态词表与可付态已下沉 `utils/order-status.js`（U-H3），词表本身的断言
+ *    （含与契约的双向比对）**跟着真源一起搬走了**——这里只剩列表行的集成断言，
+ *    不重复测词表本身（只搬代码不搬测试 = 守护静默消失；搬了就只留一份）。
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { STATUS_LABELS, emptyState, orderRows } from './index.vm.js';
+import { STATUS_LABELS, statusText } from '../../utils/order-status.js';
+import { emptyState, orderRows } from './index.vm.js';
 
 const ORDERS = [
   {
@@ -80,29 +83,10 @@ describe('emptyState（空态）', () => {
   });
 });
 
-/**
- * ⚠️ 与契约的双向比对：词表的键必须**恰好等于** `OrderStatus` 的 enum。
- * @why 服务端新增一个状态而前端没跟进的表现是：列表页这一列显示"状态未知"——
- *      不报错、不崩溃，只是用户看不懂自己的订单怎么了。
- */
-describe('STATUS_LABELS 与契约 OrderStatus 的双向比对', () => {
-  const yaml = readFileSync(resolve(__dirname, '../../../contracts/api-contract.yaml'), 'utf8');
-  const line = yaml.split('\n').find((l) => l.includes('OrderStatus: {')) ?? '';
-  const enumLine = line.slice(line.indexOf('enum:'));
-  const contractStatuses = (enumLine.match(/[a-z_]+/g) ?? []).filter((w) => w !== 'enum');
-
-  it('抽到了 OrderStatus 的 enum（契约改写成多行会失配）', () => {
-    expect(line).toContain('OrderStatus');
-    expect(contractStatuses.length).toBeGreaterThan(0);
-  });
-
-  it('两边集合相等：契约有而词表没有 → 静默显示"状态未知"', () => {
-    expect(Object.keys(STATUS_LABELS).sort()).toEqual([...contractStatuses].sort());
-  });
-
-  it('每条文案都非空（空串 = 真机上一个空白标签）', () => {
-    for (const [status, label] of Object.entries(STATUS_LABELS)) {
-      expect(label, `${status} 的文案为空`).not.toBe('');
+describe('与共享状态词表的接线（词表本身在 utils/order-status 测，这里只测列表行真的用上了它）', () => {
+  it('⚠️ 词表里每一个状态都能被列表行翻出来（接线断了 = 全部显示"状态未知"）', () => {
+    for (const status of Object.keys(STATUS_LABELS)) {
+      expect(orderRows([{ order_id: 'x', status }])[0]?.statusText).toBe(statusText(status));
     }
   });
 });

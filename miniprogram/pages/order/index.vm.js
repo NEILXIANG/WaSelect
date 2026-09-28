@@ -17,28 +17,10 @@
  *      ../../../contracts/api-contract.yaml（OrderStatus / OrderSummary）
  */
 import { displaySubLine, formatJpy } from '../../utils/price-format.js';
-
-/**
- * `OrderStatus` 十态 → 展示文案。
- * @why **全部列出**（不靠 default 兜底）：兜底会让"新增状态"静默变成一个通用词，
- *      而列表页上一个看不懂的状态词，等于告诉用户"我们也不知道这单怎么了"。
- *      @see @limitation 一（单测与契约比对，漏一个就红）
- */
-export const STATUS_LABELS = {
-  created: '待付款',
-  pending_payment: '付款中',
-  paid: '已付款',
-  shipped: '已发货',
-  delivered: '已送达',
-  completed: '已完成',
-  cancelled: '已取消',
-  expired: '已超时关闭',
-  refunding: '退款中',
-  refunded: '已退款',
-};
-
-/** 可以继续支付的状态（@see @limitation 二）。 */
-const PAYABLE = ['created', 'pending_payment'];
+// ⚠️ 状态词表与可付态的真源在 `../../utils/order-status.js`（U-H3 下沉）：
+//    订单详情页也要用，而页面不能 import 页面。与契约的双向比对测试跟着真源一起搬走
+//    （只搬代码不搬测试 = 守护静默消失，见 utils/order-status.unit.test.ts）。
+import { PAYABLE, STATUS_LABELS } from '../../utils/order-status.js';
 
 /**
  * `GET /orders` 的 items → 列表行。

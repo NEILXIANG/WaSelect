@@ -1,0 +1,81 @@
+/**
+ * 订单详情页样式。
+ *
+ * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
+ * 硬编码色值 / 非 0 尺寸字面量直接红）。
+ * ⚠️ 与订单列表 / 结算页同名的类（.row/.status/.hint/.total/.sub-price/.qty/.line）
+ * 刻意重名不复制样式意图——同一块视觉，改一处即多处（design token 的本意）。
+ */
+
+.status {
+  color: var(--ws-color-muted);
+  font-size: var(--ws-font-sm);
+}
+
+.hint {
+  display: block;
+  margin-top: var(--ws-space-sm);
+  color: var(--ws-color-muted);
+  font-size: var(--ws-font-sm);
+}
+
+/* 行项目：左图右文。图宽用百分比（token 里没有"缩略图"这一档，
+   而真实商品图统一一比一，宽度定了高度自然对） */
+.item {
+  display: flex;
+  margin-top: var(--ws-space-sm);
+}
+
+.item-img {
+  width: 20%;
+  border-radius: var(--ws-radius);
+  background: var(--ws-color-bg);
+}
+
+.item-body {
+  flex: 1;
+  margin-left: var(--ws-space-sm);
+}
+
+.item-title {
+  display: block;
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font-sm);
+}
+
+.qty {
+  color: var(--ws-color-muted);
+  font-size: var(--ws-font-sm);
+}
+
+.total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: var(--ws-space-sm);
+}
+
+.sub-price {
+  display: block;
+  margin-top: var(--ws-space-sm);
+  color: var(--ws-color-muted);
+  font-size: var(--ws-font-sm);
+}
+
+.line {
+  display: block;
+  margin-top: var(--ws-space-sm);
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font-sm);
+}
+
+/* 运单号：整块可点复制（用 text 不是 button——页面不允许原生可点 button） */
+.track {
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font-sm);
+  word-break: break-all;
+}
+
+.cancel-btn {
+  margin-top: var(--ws-space-sm);
+}

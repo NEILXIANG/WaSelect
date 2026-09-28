@@ -9,9 +9,9 @@
  * @limitation 一：**不做支付结果轮询**（与支付页 @limitation 一 同一条）：
  *              完成靠服务端回调落库，本页每次进屏拉一次即是"最新真值"。
  *              轮询的代价是弱网下白耗电，且它给出的仍然不是权威状态。
- * @limitation 二：**没有订单详情页**（`GET /orders/{id}`）——MVP 列表已能回答
- *              "付没付、发了没、多少钱"，详情要展示的 timeline / 物流单号
- *              属于下一阶段。缺详情页不是缺口，是范围。
+ * @limitation 二：列表行的信息密度**刻意低**（单号 / 状态 / 合计）——
+ *              时间线 / 运单号 / 地址快照 / 条款版本在详情页（U-H3，`pages/order-detail`），
+ *              列表点卡片即达。往列表行里再塞这些，等于把详情页在每张卡片上重复一遍。
  *
  * @see ./index.vm.js（状态词表与列表行，9 条单测）
  */
@@ -27,6 +27,9 @@ const wxApi = createWxApi();
 
 /** 支付页路径（跳转路径只在这一处出现）。 */
 const PAY_PAGE = '/pages/pay/index';
+
+/** 订单详情页路径（同上）。 */
+const DETAIL_PAGE = '/pages/order-detail/index';
 
 Page({
   data: {
@@ -64,6 +67,18 @@ Page({
     } finally {
       this.setData({ loading: false });
     }
+  },
+
+  /**
+   * 点卡片 → 详情。
+   * @param {WechatMiniprogram.TouchEvent} e `data-id` 来自 wxml
+   * @why 详情页是"这单到底走到哪了"的唯一去处（时间线 / 运单号 / 条款版本）；
+   *      列表行的信息密度刻意低（@see ./index.vm.js @limitation 二）。
+   */
+  onRowTap(e) {
+    const id = e?.currentTarget?.dataset?.id;
+    if (typeof id !== 'string' || id === '') return;
+    wxApi.navigateTo({ url: `${DETAIL_PAGE}?id=${id}` });
   },
 
   /**

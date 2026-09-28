@@ -31,6 +31,10 @@
     },
     {
       "action": "disallow",
+      "page": "pages/order-detail/index"
+    },
+    {
+      "action": "disallow",
       "page": "pages/user/index"
     },
     {

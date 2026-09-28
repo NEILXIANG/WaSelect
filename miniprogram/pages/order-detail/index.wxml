@@ -1,0 +1,107 @@
+<!--
+  订单详情（I2）："这单到底走到哪了"——时间线 / 运单号 / 地址快照 / 条款版本。
+
+  ⚠️ 时间全部按 JST 显示（UTC 存、JST 显，转换在 utils/jst-text.js 纯函数里，有单测）。
+
+  ⚠️ 关税是**信息字段**（含在商品价内），vm 给它的标签写死了"含在商品价内"——
+  别在 wxml 里把它改成"关税：另收"那一类说法。
+
+  ⚠️ 取消按钮只在可取消态出现（vm 的 canCancel，与可付态同源）；
+  点了先弹模态确认（showModal），成功后原地重取。
+-->
+<view class="page">
+  <view class="card" wx:if="{{error}}">
+    <text class="error">{{error}}</text>
+  </view>
+
+  <view class="card" wx:if="{{loading && !view}}">
+    <text class="label">正在加载订单…</text>
+  </view>
+
+  <block wx:if="{{view}}">
+    <view class="card">
+      <view class="row">
+        <text class="label">{{view.orderNo}}</text>
+        <text class="status">{{view.statusText}}</text>
+      </view>
+      <text class="hint" wx:if="{{view.createdAtText}}">建单 {{view.createdAtText}}</text>
+      <text class="hint" wx:if="{{view.expiresAtText}}">请在 {{view.expiresAtText}} 前完成支付</text>
+    </view>
+
+    <view class="card" wx:if="{{view.items.length > 0}}">
+      <view class="item" wx:for="{{view.items}}" wx:key="productId">
+        <image class="item-img" src="{{item.image}}" mode="aspectFill" lazy-load />
+        <view class="item-body">
+          <text class="item-title">{{item.title}}</text>
+          <view class="row">
+            <text class="label" wx:if="{{item.unitPriceText}}">{{item.unitPriceText}}</text>
+            <text class="qty">× {{item.qty}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="row" wx:for="{{view.amountLines}}" wx:for-item="line" wx:key="label">
+        <text class="label">{{line.label}}</text>
+        <text class="value">{{line.value}}</text>
+      </view>
+      <view class="total">
+        <text class="label">应付合计</text>
+        <ws-price wx:if="{{view.totalJpy !== null}}" jpy="{{view.totalJpy}}" size="lg" />
+      </view>
+      <text class="sub-price" wx:if="{{view.totalSub}}">{{view.totalSub}}</text>
+    </view>
+
+    <view class="card" wx:if="{{view.address}}">
+      <text class="label">收货地址</text>
+      <text class="line">{{view.address.recipient}} · {{view.address.phone}}</text>
+      <text class="line">{{view.address.line1}}</text>
+      <text class="line" wx:if="{{view.address.line2}}">{{view.address.line2}}</text>
+      <text class="line">{{view.address.region}}</text>
+    </view>
+
+    <view class="card" wx:if="{{view.hasTracking}}">
+      <view class="row" wx:if="{{view.carrier}}">
+        <text class="label">承运商</text>
+        <text class="value">{{view.carrier}}</text>
+      </view>
+      <view class="row">
+        <text class="label">运单号</text>
+        <text class="track" data-no="{{view.trackingNo}}" bindtap="onCopyTracking">
+          {{copied ? '已复制' : view.trackingNo}}
+        </text>
+      </view>
+      <text class="hint">点运单号复制</text>
+    </view>
+
+    <view class="card" wx:if="{{view.timeline.length > 0}}">
+      <text class="label">订单进展</text>
+      <view class="row" wx:for="{{view.timeline}}" wx:for-item="t" wx:key="index">
+        <text class="value">{{t.statusText}}</text>
+        <text class="label">{{t.atText}}</text>
+      </view>
+    </view>
+
+    <view class="card" wx:if="{{view.termsVersion || view.contactEmail}}">
+      <view class="row" wx:if="{{view.termsVersion}}">
+        <text class="label">条款版本</text>
+        <text class="value">{{view.termsVersion}}</text>
+      </view>
+      <view class="row" wx:if="{{view.contactEmail}}">
+        <text class="label">通知邮箱</text>
+        <text class="value">{{view.contactEmail}}</text>
+      </view>
+    </view>
+
+    <ws-button wx:if="{{view.canPay}}" text="继续支付" type="primary" bindtap="onPay" />
+    <ws-button
+      wx:if="{{view.canCancel}}"
+      class="cancel-btn"
+      text="{{cancelling ? '取消中…' : '取消订单'}}"
+      type="default"
+      loading="{{cancelling}}"
+      bindtap="onCancelTap"
+    />
+  </block>
+</view>

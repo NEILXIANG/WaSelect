@@ -8,6 +8,7 @@
     "pages/checkout/index",
     "pages/pay/index",
     "pages/order/index",
+    "pages/order-detail/index",
     "pages/legal/index",
     "pages/user/index",
     "pages/comp/index",
