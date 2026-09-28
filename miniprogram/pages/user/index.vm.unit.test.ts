@@ -1,0 +1,74 @@
+/**
+ * 职责：「我的」页 vm 的单测（约束十一要求的配套测试；`vm-guard` 会检查它存在）。
+ *
+ * @why 钉的是两件**都不报错**的事：
+ *      ① 登录态文案写反 / 把"正在登录"显示成"未登录" → 用户去找一个不存在的登录按钮；
+ *      ② 入口清单加了一项却没接跳转 → 表现只是"点了没反应"，没有任何测试会红。
+ *      第 ② 条是跨文件的一致性，所以最后一组去读 `index.js` 的跳转表。
+ */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { MENU_ROWS, loginState } from './index.vm.js';
+
+describe('loginState（登录态文案）', () => {
+  it('有 token → 已登录', () => {
+    expect(loginState('eyJhbGciOi...')).toEqual({ logged: true, text: '已登录（微信）' });
+  });
+
+  it('⚠️ 无 token → "正在登录…" 而不是"未登录"（没有登录页，写了"未登录"用户会去找按钮）', () => {
+    expect(loginState('')).toEqual({ logged: false, text: '正在登录…' });
+    expect(loginState('   ')).toEqual({ logged: false, text: '正在登录…' });
+  });
+
+  it('脏输入（null / 数字 / 对象）→ 一律按未登录，不崩', () => {
+    expect(loginState(null)).toEqual({ logged: false, text: '正在登录…' });
+    expect(loginState(undefined)).toEqual({ logged: false, text: '正在登录…' });
+    expect(loginState(123)).toEqual({ logged: false, text: '正在登录…' });
+    expect(loginState({})).toEqual({ logged: false, text: '正在登录…' });
+  });
+});
+
+describe('MENU_ROWS（入口清单）', () => {
+  it('至少三个入口，且 key 唯一（重复 key 会让 wx:key 报重复、且其中一个永远跳不到）', () => {
+    expect(MENU_ROWS.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(MENU_ROWS.map((r) => r.key)).size).toBe(MENU_ROWS.length);
+  });
+
+  it('每条的 key 与 label 都非空（空 label = 真机上一个空白的可点区块）', () => {
+    for (const row of MENU_ROWS) {
+      expect(row.key, '入口 key 为空').not.toBe('');
+      expect(row.label, `${row.key} 的文案为空`).not.toBe('');
+    }
+  });
+});
+
+/**
+ * ⚠️ 跨文件一致性：**每个入口都必须在 `index.js` 的跳转表里有一条路径**。
+ *
+ * @why 入口清单在 vm、跳转路径在页面 js，是两份真源——
+ *      加了一个入口却忘了接跳转的表现是"点了没反应"：不报错、不崩溃，
+ *      而且 vm 自己的测试全绿（它不知道页面那边有没有接上）。
+ *      这类"两个文件各对一半"的失效，只能靠其中一个去读另一个才能发现。
+ * @how 读 `index.js` 源码做形态匹配（与 `project-config` / `showcase-guard` 同套路）。
+ */
+describe('MENU_ROWS 与 index.js 跳转表的双向比对', () => {
+  const js = readFileSync(resolve(__dirname, 'index.js'), 'utf8');
+  const table = js.slice(js.indexOf('PAGE_BY_KEY'));
+  const keys = [...table.matchAll(/^\s{2}([a-z_]+):\s*'\/pages\//gm)].map((m) => m[1] ?? '');
+
+  it('抽到了跳转表（页面 js 改写法会失配 → 这条先红）', () => {
+    expect(table).toContain('PAGE_BY_KEY');
+    expect(keys.length).toBeGreaterThan(0);
+  });
+
+  it('每个入口都有对应路径（缺一个 = 那个入口点了没反应）', () => {
+    for (const row of MENU_ROWS) {
+      expect(keys, `入口 ${row.key} 在 PAGE_BY_KEY 里没有路径`).toContain(row.key);
+    }
+  });
+
+  it('跳转表里没有多余项（写了没人用的路径，改页面路径时那一处会被漏掉）', () => {
+    expect([...keys].sort()).toEqual(MENU_ROWS.map((r) => r.key).sort());
+  });
+});

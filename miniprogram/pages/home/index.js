@@ -51,6 +51,13 @@ const DETAIL_PAGE = '/pages/detail/index';
 /** 购物车页路径（同上：页面路径只在这一处出现）。 */
 const CART_PAGE = '/pages/cart/index';
 
+/**
+ * 「我的」页路径。
+ * @why 它是订单 / 地址 / 法务三个页**唯一的入口**——那三个页此前注册了也能跑，
+ *      但从首页出发没有任何路径能走到（付完款回到首页，订单就找不到了）。
+ */
+const USER_PAGE = '/pages/user/index';
+
 Page({
   data: {
     /** 分类 tab（vm `categoryTabs` 的输出，含 active 标记）。 */
@@ -103,6 +110,11 @@ Page({
   /** 去购物车。 */
   onGoCart() {
     wxApi.navigateTo({ url: CART_PAGE });
+  },
+
+  /** 去「我的」（订单 / 地址 / 法务的唯一入口，@see USER_PAGE 注释）。 */
+  onGoMine() {
+    wxApi.navigateTo({ url: USER_PAGE });
   },
 
   /**

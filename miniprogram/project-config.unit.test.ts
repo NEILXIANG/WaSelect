@@ -31,6 +31,59 @@ function readJson(rel: string): Record<string, unknown> {
   return JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
 }
 
+/**
+ * 页面 js 里的**路径常量表**：`const PAY_PAGE = '/pages/pay/index'` → `{PAY_PAGE: '/pages/pay/index'}`。
+ *
+ * @why 跳转路径在本仓库一律走常量（"路径只在这一处出现"），所以"跳到哪"要经常量解析才读得到。
+ * @limitation 只认 `const 大写常量 = '字面量'` 这一种形态；`let` / 拼接都不认（当前没有）。
+ */
+function pathConsts(src: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of src.matchAll(
+    /const\s+([A-Z][A-Z0-9_]*)\s*=\s*'(\/pages\/[a-z0-9-]+\/index)(?:\?[^']*)?'/g,
+  )) {
+    if (m[1] !== undefined && m[2] !== undefined) out[m[1]] = m[2];
+  }
+  return out;
+}
+
+/**
+ * 某份页面 js 里**真的被 `navigateTo` / `redirectTo` 跳到**的页面路径（已去掉前导斜杠）。
+ *
+ * @why 不扫"文件里出现过这个字面量"：常量声明本身就是字面量，那样会把
+ *      "路径常量声明了、但没有任何跳转用它"也算成有入口（实测注入时 exit=0，
+ *      见下面那条断言的 @how）。只有从调用点取证才不是自证。
+ * @limitation 调用点的匹配是形态级正则（入参对象里 `url:` 的值），不是 AST：
+ *      写成一个变量再传（`const u = PAY_PAGE; navigateTo({url: u})`）扫不到。
+ */
+function jumpTargets(src: string): string[] {
+  const consts = pathConsts(src);
+  /** 查常量表；未声明过的名字一律当"没有"（拼错的名字不是路径）。 */
+  const resolve = (name: string | undefined): string | undefined =>
+    name === undefined ? undefined : consts[name];
+  const out: string[] = [];
+  const calls = src.matchAll(/\b(?:navigateTo|redirectTo)\(\{[\s\S]*?\}\s*\)/g);
+  for (const call of calls) {
+    const arg = call[0].slice(call[0].indexOf('url:'));
+    // ① 直接字面量：`url: '/pages/x/index'` 或带 query
+    const lit = arg.match(/^url:\s*'(\/pages\/[a-z0-9-]+\/index)/);
+    if (lit?.[1] !== undefined) {
+      out.push(lit[1].slice(1));
+      continue;
+    }
+    // ② 模板串里的常量：`url: `${PAY_PAGE}?orderId=${id}``
+    const fromTpl = resolve(arg.match(/^url:\s*`\$\{([A-Z][A-Z0-9_]*)\}/)?.[1]);
+    if (fromTpl !== undefined) {
+      out.push(fromTpl.slice(1));
+      continue;
+    }
+    // ③ 裸常量：`url: CART_PAGE`
+    const fromBare = resolve(arg.match(/^url:\s*([A-Z][A-Z0-9_]*)\s*[,\s}]/)?.[1]);
+    if (fromBare !== undefined) out.push(fromBare.slice(1));
+  }
+  return out;
+}
+
 describe('project.config.json（MP1）', () => {
   const cfg = readJson('project.config.json');
 
@@ -254,5 +307,78 @@ describe('app.json 与文件不漂移（MP1）', () => {
       `这些页面三件套齐备却没有登记进 app.json 的 pages：${orphans.join('、')}——` +
         `小程序永远打不开它们，跳过去的那一行会静默失败`,
     ).toEqual([]);
+  });
+
+  /**
+   * 可达性断言：**每个业务页都至少被一个页面跳到**。
+   *
+   * @why 与上面两条同一族，但守的是第三半：一个页面可以「登记了 + 三件套齐备」，
+   *      却**没有任何路径能走到它**——U-H2 之前的订单 / 地址 / 法务三页正是这个状态：
+   *      它们能跑、测试也绿，但用户从首页出发永远到不了（付完款回到首页，订单就找不到了）。
+   *      这种"孤岛页"不报错、不崩溃，只在新页面加进来之后**悄悄脱离可达图**，
+   *      而"有没有入口"从来不在任何一个文件的本地视野里——只能跨文件扫描。
+   * @how **只认"真的被跳转"**，不认"存在过一个字面量"：
+   *      ① 先在每个页面 js 里收集路径常量（`const PAY_PAGE = '/pages/pay/index'`）；
+   *      ② 只从 `navigateTo` / `redirectTo` 的入参里取目标（字面量、`${CONST}`、裸 `CONST`）。
+   *      @why 必须做到 ②：**第一版只扫"文件里出现过这个字面量"，注入
+   *      "删掉 `onGoMine`、只留 `const USER_PAGE = '/pages/user/index'`"时 exit=0**——
+   *      因为常量声明本身就是那个字面量，扫描器读到的正是"没人用的声明"。
+   *      那是 §2 第 21 条的自证：从被测对象自己留下的痕迹里取证，当然永远成立。
+   *      @limitation 拼出来的路径（`'/pages/' + name + '/index'`）扫不到——当前没有，
+   *      出现时这条要升级为真正的表达式解析，而不是假装它不存在。
+   * @limitation 启动页与两个开发页（`pages/index/index` 骨架页、`pages/comp/index` 样板页）
+   *      刻意没有入口，走**白名单**豁免而不是"看起来没人链就放过"。
+   */
+  it('每个业务页都至少被一个页面跳到（没有入口 = 用户永远走不到，但不报错）', () => {
+    /**
+     * 不需要入口的页面。@see @limitation
+     * - `pages[0]`：**启动页**，它由 App 启动进入而不是被跳转进来（写死首页路径会在这个文件里
+     *   多一份真源，首页改名时两处都要改——所以按 `pages[0]` 取）。
+     * - 两个开发页：骨架页 `pages/index/index` 与组件样板页 `pages/comp/index`。
+     */
+    const NO_ENTRY_NEEDED = [(app.pages as string[])[0], 'pages/index/index', 'pages/comp/index'];
+    /** 递归收页面 js（含 `.vm.js`：跳转路径常量也可能落在页面目录的任何一处）。 */
+    const files: string[] = [];
+    for (const entry of readdirSync(join(root, 'pages'), {
+      recursive: true,
+      withFileTypes: true,
+    })) {
+      if (entry.isFile() && entry.name.endsWith('.js'))
+        files.push(join(entry.parentPath, entry.name));
+    }
+    expect(files.length, 'pages 下一个 js 都没扫到——扫描根改坏了？').toBeGreaterThan(0);
+
+    const targets = new Set<string>();
+    for (const abs of files) {
+      for (const t of jumpTargets(readFileSync(abs, 'utf8'))) targets.add(t);
+    }
+    expect(targets.size, '一个跳转目标都没扫到——正则或扫描根改坏了？').toBeGreaterThan(0);
+    const islands = (app.pages as string[]).filter(
+      (p) => !NO_ENTRY_NEEDED.includes(p) && !targets.has(p),
+    );
+    expect(
+      islands,
+      `这些页面没有任何入口：${islands.join('、')}——` +
+        `它们登记了、也能跑，但用户永远走不到（可达图上的孤岛）`,
+    ).toEqual([]);
+  });
+
+  it('匹配器自检：路径常量"声明了却没人跳"**不算**入口（否则上一条是自证）', () => {
+    // @why §2 第 30 条：扫描型门禁最危险的失效是**假阴性**（永远绿）。
+    //      这一条专门钉住"第一版那个洞"：只扫字面量时，常量声明本身就是字面量，
+    //      于是"删掉跳转、只留声明"照样绿——那正是 U-H2 要防的事。
+    expect(jumpTargets("const USER_PAGE = '/pages/user/index';\n")).toEqual([]);
+    expect(jumpTargets("const P = '/pages/pay/index';\nwxApi.navigateTo({ url: P });")).toEqual([
+      'pages/pay/index',
+    ]);
+    expect(
+      jumpTargets("const P = '/pages/pay/index';\nwxApi.navigateTo({ url: `${P}?orderId=x` });"),
+    ).toEqual(['pages/pay/index']);
+    expect(jumpTargets("wxApi.navigateTo({ url: '/pages/legal/index' });")).toEqual([
+      'pages/legal/index',
+    ]);
+    expect(jumpTargets("wxApi.navigateTo({ url: '/pages/address/index?pick=1' });")).toEqual([
+      'pages/address/index',
+    ]);
   });
 });

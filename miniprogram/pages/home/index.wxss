@@ -25,7 +25,12 @@
   border-bottom: var(--ws-border-width) solid var(--ws-color-muted);
 }
 
-.search-btn {
+/* 工具栏右侧的按钮统一左间距。
+   ⚠️ 此前只有 .search-btn 有间距而 .cart-btn 没有（漏配，不是取舍）：
+      两个按钮贴在一起，看起来像一个按钮。补齐并把「我的」纳入同一条规则。 */
+.search-btn,
+.cart-btn,
+.mine-btn {
   margin-left: var(--ws-space-sm);
 }
 

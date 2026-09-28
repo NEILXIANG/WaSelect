@@ -21,6 +21,7 @@
     />
     <ws-button class="search-btn" text="搜索" type="default" loading="{{loading}}" bindtap="onSearch" />
     <ws-button class="cart-btn" text="{{cartLabel}}" type="default" bindtap="onGoCart" />
+    <ws-button class="mine-btn" text="我的" type="default" bindtap="onGoMine" />
   </view>
 
   <scroll-view class="tabs" scroll-x enable-flex>

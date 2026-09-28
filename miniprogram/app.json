@@ -9,6 +9,7 @@
     "pages/pay/index",
     "pages/order/index",
     "pages/legal/index",
+    "pages/user/index",
     "pages/comp/index",
     "pages/index/index"
   ],

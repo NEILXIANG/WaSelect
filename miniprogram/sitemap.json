@@ -30,6 +30,10 @@
       "page": "pages/order/index"
     },
     {
+      "action": "disallow",
+      "page": "pages/user/index"
+    },
+    {
       "action": "allow",
       "page": "*"
     }

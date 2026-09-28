@@ -1,0 +1,22 @@
+<!--
+  我的（I2）：登录态 + 三个入口——订单 / 地址 / 条款。
+
+  ⚠️ 这三个页此前没有任何入口：注册了、能跑，但从首页出发走不到。
+  本页是它们唯一的入口，所以入口清单在 vm 里集中维护，
+  "加一个入口忘了接跳转"由单测断言（index.vm.unit.test.ts 最后一组）。
+
+  ⚠️ 刻意没有客服入口：客服账号未定、契约也没有该字段——
+  写一个假的微信号比没有更贵（用户会真的去加）。@see index.vm.js @limitation 一
+-->
+<view class="page">
+  <view class="card">
+    <view class="row">
+      <text class="label">登录状态</text>
+      <text class="value">{{login.text}}</text>
+    </view>
+  </view>
+
+  <view class="card" wx:for="{{rows}}" wx:key="key" data-key="{{item.key}}" bindtap="onMenuTap">
+    <text class="entry-text">{{item.label}}</text>
+  </view>
+</view>
