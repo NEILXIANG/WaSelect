@@ -20,6 +20,8 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
+import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import { MAX_CLIENT_KEY_LENGTH } from './ports/idempotency.js';
 import { normalizeRoutePath, parseContractRoutes } from './app/route-snapshot.js';
 
 const { load: loadYaml } = createRequire(import.meta.url)('js-yaml') as {
@@ -96,5 +98,47 @@ describe('契约文件是合法、自洽的 OpenAPI 文档', () => {
       .map((r) => `${r.method} ${r.path}`)
       .sort();
     expect(byLine).toEqual(real);
+  });
+});
+
+/**
+ * 契约里声明的**输入上限**必须与代码里的常量一致（B7 / AJ-191 起）。
+ *
+ * @why 契约写 `maxLength: 500` 而代码拒 200，是"契约比实现宽松"的同一类漂移：
+ *      前端照契约放行、服务端照代码拒绝，运营看到的是"填了、点了、报参数错误"。
+ *      而这类漂移不会让任何既有测试变红——上限是**新增**的，没有旧用例覆盖它。
+ * @why 从 yaml 里**读出来**与常量比，而不是断言 `maxLength === 500`：
+ *      后者在契约里再写一个 500 就绿了，等于两头各自写死、互相不认识。
+ */
+describe('契约的输入上限与 shared 常量一致', () => {
+  /** 取某个路径下某个方法请求体的 properties。 */
+  function requestProps(path: string, method: string): Record<string, Record<string, unknown>> {
+    const doc = loadYaml(TEXT) as Doc;
+    const op = (doc.paths[path] as Record<string, Record<string, unknown>> | undefined)?.[
+      method
+    ] as
+      | { requestBody?: { content?: Record<string, { schema?: Record<string, unknown> }> } }
+      | undefined;
+    const schema = op?.requestBody?.content?.['application/json']?.schema;
+    const props = (schema as { properties?: Record<string, Record<string, unknown>> } | undefined)
+      ?.properties;
+    expect(props, `${method.toUpperCase()} ${path} 没有请求体 properties`).toBeDefined();
+    return props ?? {};
+  }
+
+  it('POST /admin/orders/{id}/refund 的 reason.maxLength == REFUND_REASON_MAX_LENGTH', () => {
+    const reason = requestProps('/admin/orders/{id}/refund', 'post')['reason'];
+    expect(reason, '契约没有声明 reason').toBeDefined();
+    expect(reason?.['maxLength']).toBe(REFUND_REASON_MAX_LENGTH);
+  });
+
+  // @why 不用 "JSON.stringify 里包含 128" 那种包含式断言：128 在别处也可能出现，
+  //      那种写法在契约把 maxLength 删掉之后仍然可能绿（§2 第 49 条：扫描型断言最易自证）。
+  it('IdemKey 参数的 maxLength == MAX_CLIENT_KEY_LENGTH（0.6.0② 的同类防线）', () => {
+    const doc = loadYaml(TEXT) as Doc;
+    const idem = doc.components['parameters']?.['IdemKey'] as
+      { schema?: { maxLength?: number } } | undefined;
+    expect(idem, 'components.parameters.IdemKey 不存在').toBeDefined();
+    expect(idem?.schema?.maxLength).toBe(MAX_CLIENT_KEY_LENGTH);
   });
 });

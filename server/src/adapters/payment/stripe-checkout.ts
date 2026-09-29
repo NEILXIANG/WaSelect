@@ -33,6 +33,7 @@ import { AppError } from '../../errors.js';
 import type { Clock } from '../../ports/clock.js';
 import type { IdGen } from '../../ports/ids.js';
 import type { HttpClient } from '../../ports/http-client.js';
+import { clipRefundReason } from '../../domain/admin-order-actions.js';
 import type {
   ChannelConfig,
   HeaderBag,
@@ -537,7 +538,12 @@ export function createStripeCheckoutProvider(
         // 原币退（见 RefundRequest.currency 的 @why）：币种与金额都来自**扣款当时**的那笔
         amount: String(req.amountMinor),
         'metadata[order_id]': req.orderId,
-        'metadata[reason]': req.reason,
+        // ⚠️ 不是 req.reason 本身（B7 / AJ-191）：理由原样进 metadata，而 Stripe 对
+        //    metadata 的值有长度上限，超了直接拒掉这一整笔退款。
+        //    路由入口已经拒掉超长的新理由，这里截断只为**存量**脏数据兜底
+        //    （order_events 是 append-only，那些理由改不了），且必须确定性
+        //    ——重试之间截出不同文本就是同键异参，机构会 400。
+        'metadata[reason]': clipRefundReason(req.reason),
       });
       const res = await deps.http.send({
         method: 'POST',

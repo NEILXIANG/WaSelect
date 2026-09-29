@@ -44,7 +44,13 @@ import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
 import { ORDER_STATUS } from '@waselect/shared';
 import { asOrderStatus } from '../domain/order.js';
-import { addressGuard, refundGuard, shipGuard } from '../domain/admin-order-actions.js';
+import {
+  addressGuard,
+  refundGuard,
+  refundReasonGuard,
+  shipGuard,
+} from '../domain/admin-order-actions.js';
+import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import { parseAddressInput } from '../domain/address-input.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
 import {
@@ -272,10 +278,16 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
     void (async () => {
       try {
         const id = String(req.params.id);
-        const reason = (req.body as { reason?: unknown } | null)?.reason;
-        if (typeof reason !== 'string' || reason.trim() === '') {
-          throw new AppError(40001, { reason: 'refund_reason_required' });
+        // 理由的校验（非空 + 长度上限）在事务**之前**：见 refundReasonGuard 的 @why——
+        // 上限这条如果放进事务，理由就已经被写进 append-only 的 order_events 了。
+        const reasonCheck = refundReasonGuard((req.body as { reason?: unknown } | null)?.reason);
+        if (!reasonCheck.ok) {
+          throw new AppError(reasonCheck.code, {
+            reason: reasonCheck.reason,
+            ctx: { max: REFUND_REASON_MAX_LENGTH },
+          });
         }
+        const reason = reasonCheck.reason;
         // ── 第一段（事务内）：持锁判定 → 落 refunding（AJ-146：先记账再对外）──
         const plan = await withTransaction(deps.db, async (tx) => {
           const row = await lockAdminOrder(tx, id);
@@ -301,7 +313,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           //   不改成"每次重试换新键"：原请求的结果不确定（可能已退），新键 = 可能退第二次。
           //   机构**确认失败**（退款对象 status=failed/canceled）不属于这里：F-03（AJ-178）起换新键重新发起，
           //   见 refund-execution.ts。stripe-golden-chain.db.test.ts「KD-4」「F-03」两组用例分别钉住两条路。
-          let refundReason = reason.trim();
+          let refundReason = reason; // 已由 refundReasonGuard trim 过
           if (row.status === 'refunding') {
             const original = await findRefundingReason(tx, id);
             if (original === null) {

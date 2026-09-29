@@ -29,7 +29,7 @@
  * @see ../../../contracts/api-contract.yaml（OrderStatus / Order / AdminOrder / ship / refund）；
  *      packages/shared/src/enums.ts（ORDER_STATUS 真源）；../../../docs/自主决策记录.md
  */
-import { ORDER_STATUS, type OrderStatus } from '@waselect/shared';
+import { ORDER_STATUS, REFUND_REASON_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
 import { formatJst, moneyText } from '../format.js';
 
 /** 管理端状态文案（@see @limitation 一：比买家侧更细，十态互不合并）。 */
@@ -290,16 +290,36 @@ export function emptyRefundForm(): RefundForm {
 }
 
 /**
- * 退款校验。
- * @why reason 只要求非空、不设最短长度：退款原因是要进审计台账给人看的，
+ * 退款校验：必填 + **不超过 500 字**（B7 / AJ-191）。
+ *
+ * @why reason 只要求非空、不设**最短**长度：退款原因是要进审计台账给人看的，
  *      "缺货""客户取消"四个字就够；设了最短长度只会逼人填满 `aaaa`。
+ * @why 但**最长**必须有：理由会原样写进机构的 metadata，超了机构拒这一整笔退款；
+ *      而重试必须沿用首次理由（KD-4 / AJ-175，同键同参）、`order_events` 又 append-only，
+ *      于是"填太长"会把这张单**永久**钉在 refunding。
+ *      服务端已在入口拒（`40001` / `refund_reason_too_long`），这里是**事前**拦截——
+ *      只靠服务端的话，运营看到的是"填了 600 字、点了退款、报参数错误"，
+ *      而错误文案里不会告诉他是因为太长。
+ * @why 上限取自 shared 的 `REFUND_REASON_MAX_LENGTH` 而不是再写一个 500：
+ *      两端各写一份的上限迟早漂成"前端放行、后端拒绝"（ADR-28：禁写死上限）。
+ *
+ * @limitation 与服务端同样按 **UTF-16 码元**计数（`.length`），含 emoji 的理由
+ *      会比机构口径早一点被拦——保守方向，两端口径一致比"精确"更重要
+ *      （不一致的表现是"前端能提交、后端拒"，正是这条要防的）。
+ *
+ * @see packages/shared/src/limits.ts（上限唯一真源）；OrderDetail.tsx（输入框 maxLength）
  */
 export function refundErrors(form: unknown): { ok: boolean; first: string } {
   const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
   const reason = typeof f['reason'] === 'string' ? f['reason'].trim() : '';
-  return reason === ''
-    ? { ok: false, first: '退款原因必填（会进审计台账）' }
-    : { ok: true, first: '' };
+  if (reason === '') return { ok: false, first: '退款原因必填（会进审计台账）' };
+  if (reason.length > REFUND_REASON_MAX_LENGTH) {
+    return {
+      ok: false,
+      first: `退款原因不得超过 ${String(REFUND_REASON_MAX_LENGTH)} 字（当前 ${String(reason.length)} 字；超长会被机构拒，且订单会卡在退款中）`,
+    };
+  }
+  return { ok: true, first: '' };
 }
 
 /** 表单 → 契约请求体。 */

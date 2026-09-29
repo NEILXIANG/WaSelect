@@ -11,8 +11,14 @@
  *      给错的话客服会去改状态，越改越错（实现里的 @why 写了同一条）。
  */
 import { describe, expect, it } from 'vitest';
-import { ORDER_STATUS, type OrderStatus } from '@waselect/shared';
-import { addressGuard, refundGuard, shipGuard } from './admin-order-actions.js';
+import { ORDER_STATUS, REFUND_REASON_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
+import {
+  addressGuard,
+  clipRefundReason,
+  refundGuard,
+  refundReasonGuard,
+  shipGuard,
+} from './admin-order-actions.js';
 
 /** 取失败码；断言"必须通过"前先断言 ok（否则 `code` 是 undefined，断言会假绿）。 */
 function codeOf(r: ReturnType<typeof shipGuard>): number {
@@ -75,5 +81,85 @@ describe('admin-order-actions（管理端操作准入，I2 U-B2a）', () => {
   it('改址不因拒付被拦：同一张单 shipGuard 拦、addressGuard 放行', () => {
     expect(shipGuard('paid', true).ok).toBe(false);
     expect(addressGuard('paid' as OrderStatus).ok).toBe(true);
+  });
+});
+
+/**
+ * 退款理由的长度上限（B7 / AJ-191）。
+ *
+ * @why 上限这件事最容易被写成"测试里也写一个 500"——那是用第二份常量自证，
+ *      改了实现改了测试，两边一起漂。这里的边界值全部由 shared 的常量**算出来**
+ *      （`MAX` / `MAX + 1`），常量一动，边界跟着动。
+ */
+describe('refundReasonGuard：退款理由非空且不超过 500 字（B7 / AJ-191）', () => {
+  const MAX = REFUND_REASON_MAX_LENGTH;
+
+  it('恰好 MAX 字 → 通过，且 reason 已 trim（落库的就是它）', () => {
+    // 全角空格 U+3000 也要被 trim 掉（写字符串字面量会撞 lint 的 no-irregular-whitespace）
+    const pad = '\u3000';
+    const raw = `${pad}${'理'.repeat(MAX - 1)}由${pad}`;
+    expect(raw.trim().length).toBe(MAX);
+    const r = refundReasonGuard(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('期望通过');
+    expect(r.reason).toBe('理'.repeat(MAX - 1) + '由');
+  });
+
+  it('MAX + 1 字 → 40001 refund_reason_too_long（不是截断后放行）', () => {
+    const r = refundReasonGuard('理'.repeat(MAX + 1));
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('期望被拦');
+    expect(r.code).toBe(40001);
+    expect(r.reason).toBe('refund_reason_too_long');
+  });
+
+  // @why 不截断：截断后的文本与"运营当时写的意思"可能不是一回事，
+  //      而它是要进审计台账的。让他自己删到上限以内，比我们替他删更可解释。
+  it('超长一律拒绝，不做"截断后继续"', () => {
+    const r = refundReasonGuard('理'.repeat(MAX * 4));
+    expect(r.ok).toBe(false);
+  });
+
+  it('全角空格 / 纯空白 → refund_reason_required（不是 too_long）', () => {
+    for (const bad of ['', '   ', '\u3000\u3000', '\t\n']) {
+      const r = refundReasonGuard(bad);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('期望被拦');
+      expect(r.reason).toBe('refund_reason_required');
+    }
+  });
+
+  it('非字符串（缺 / null / 数字 / 对象）→ refund_reason_required', () => {
+    for (const bad of [undefined, null, 42, {}, ['缺货']]) {
+      const r = refundReasonGuard(bad);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('期望被拦');
+      expect(r.reason).toBe('refund_reason_required');
+    }
+  });
+});
+
+/**
+ * 适配器侧截断（纵深防御，B7 / AJ-191）。
+ *
+ * @why 只测"确定性"与"不碰已合规文本"两件事：前者是同键同参的前提（KD-4），
+ *      后者保证它对新数据**完全不生效**（否则就是在悄悄改运营写的理由）。
+ */
+describe('clipRefundReason：只截超限的存量脏数据，且必须确定性', () => {
+  const MAX = REFUND_REASON_MAX_LENGTH;
+
+  it('未超限 → 一字不动（对新数据完全不生效）', () => {
+    for (const s of ['缺货', '', '理'.repeat(MAX)]) {
+      expect(clipRefundReason(s)).toBe(s);
+    }
+  });
+
+  it('超限 → 截到 MAX，且同一输入永远同一输出（重试之间不能变）', () => {
+    const long = '理'.repeat(MAX + 300);
+    const a = clipRefundReason(long);
+    const b = clipRefundReason(long);
+    expect(a).toBe(b);
+    expect(a.length).toBe(MAX);
+    expect(long.startsWith(a)).toBe(true); // 是前缀，不是随便切一段
   });
 });

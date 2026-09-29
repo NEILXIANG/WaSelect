@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.11
+  version: 0.6.12
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -156,6 +156,11 @@ info:
       ④ `POST /auth/admin/login` **已实现**（移出 NOT_IMPLEMENTED）：补 400；同一账号连续失败 5 次锁 15 分钟，
       锁定期间一律 **429 / 42901**（带 Retry-After，与 IP 限流同码）；不存在的邮箱与口令错同为 40101；非管理员 / 已封禁 40301。
       ⑤ 管理端写接口（/admin 前缀下 POST/PUT/PATCH/DELETE 成功时）写 `admin_audit`（流 B）；对外形状不变。
+    0.6.12（B7 / AJ-191）：`POST /admin/orders/{id}/refund` 的请求体 `reason` 补 **maxLength: 500**——
+      理由会原样写进机构的 metadata，超长时机构拒掉这一整笔退款；而重试必须沿用首次理由（KD-4 / AJ-175，同键同参）、
+      `order_events` 又是 append-only，理由改不了删不掉 ⇒ 超长的理由会把订单**永久**钉在 refunding。
+      服务端在入口即拒（`40001` + reason `refund_reason_too_long`），订单不进 refunding；
+      适配器对存量超长理由做**确定性**截断兜底（重试之间必须截出同一段，否则同键异参）。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -348,7 +353,7 @@ paths:
       description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.7 起 `has_dispute` 的语义是「**有进行中的拒付**」：拒付结案（won/lost）时它被复位为 false，闸门随之解锁（U-F4）。0.6.9（AJ-175/KD-4）：状态为 **refunding**（上次机构调用失败）时允许再调重试，沿用首次退款原因与同一机构幂等键；refunded 仍 40902。0.6.11（AJ-178 / F-03）：上一笔机构退款在途（refund_pending）时再调只查询该笔、不再发起；机构确认失败后换新机构幂等键重新发起；结果未知（超时 / 机构报错）仍沿用同键
       summary: 全额退款（MVP；按 charge_currency / charge_amount 原币退；缺货场景整单退款）
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string}}}}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500, description: '0.6.12（B7 / AJ-191）：上限 500（机构 metadata 值上限）；超限 40001 + reason refund_reason_too_long。上限唯一真源 = shared REFUND_REASON_MAX_LENGTH，由契约测试双向比对'}}}}}}
       responses: {'202': {description: 'Accepted（succeeded = 已退款，订单 refunded；pending = 机构处理中，订单停在 refunding，再调即查询）', content: {application/json: {schema: {type: object, required: [order_id, outcome], properties: {order_id: {type: string}, outcome: {type: string, enum: [succeeded, pending]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/address:
     post:

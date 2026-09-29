@@ -11,6 +11,7 @@
  *              只有"Stripe 服务器"那一段是替身（测试策略 T-3）。
  */
 import { describe, expect, it } from 'vitest';
+import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import type {
   ChannelConfig,
   HeaderBag,
@@ -685,6 +686,49 @@ describe('refund（原币全额退）', () => {
       reason: '缺货',
     });
     expect(http.calls.at(-1)?.headers?.['idempotency-key']).toBe(`refund:${REQ.orderId}`);
+  });
+
+  /**
+   * B7 / AJ-191：metadata 的值有长度上限，超了机构拒这一整笔退款。
+   * @why 断言的是**报文里的实际值**而不是"有没有调用 clip"：后者是拿被测对象内部
+   *      状态自证（§2 第 21 条），把 `clipRefundReason` 换成恒等函数它照样绿。
+   * @why 同时断言"截断是前缀、且两次调用一致"：KD-4 要求重试同键同参，
+   *      若截断不确定（比如按时间/长度抖动），重试就是异参，机构直接 400。
+   */
+  it('超限的理由在报文里被**确定性**截断（B7：超长会被机构拒）', async () => {
+    const { http, provider } = build();
+    const long = '理'.repeat(REFUND_REASON_MAX_LENGTH + 200);
+    const send = () =>
+      mustRefund(provider)({
+        orderId: REQ.orderId,
+        providerRef: 'pi_1',
+        amountJpy: 12_000,
+        currency: 'JPY',
+        amountMinor: 12_000,
+        reason: long,
+      });
+    await send();
+    const first = new URLSearchParams(http.calls.at(-1)?.body ?? '').get('metadata[reason]');
+    expect(first).not.toBeNull();
+    expect(first?.length).toBe(REFUND_REASON_MAX_LENGTH);
+    expect(long.startsWith(first ?? '')).toBe(true); // 是前缀，不是随便切一段
+    await send();
+    const second = new URLSearchParams(http.calls.at(-1)?.body ?? '').get('metadata[reason]');
+    expect(second).toBe(first); // 同一输入 → 同一输出（重试同键同参）
+  });
+
+  it('未超限的理由一字不动（截断只在存量脏数据上生效）', async () => {
+    const { http, provider } = build();
+    const reason = '缺货，客户要求整单退款';
+    await mustRefund(provider)({
+      orderId: REQ.orderId,
+      providerRef: 'pi_1',
+      amountJpy: 12_000,
+      currency: 'JPY',
+      amountMinor: 12_000,
+      reason,
+    });
+    expect(new URLSearchParams(http.calls.at(-1)?.body ?? '').get('metadata[reason]')).toBe(reason);
   });
 
   it('退款状态 pending / failed 都要如实回带（不能一律当成成功）', async () => {

@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ORDER_STATUS } from '@waselect/shared';
+import { ORDER_STATUS, REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import {
   ORDER_STATUS_LABELS,
   STATUS_FILTER_OPTIONS,
@@ -231,6 +231,21 @@ describe('发货 / 退款表单', () => {
     expect(refundErrors(emptyRefundForm()).ok).toBe(false);
     expect(refundErrors({ reason: '缺货' }).ok).toBe(true);
     expect(toRefundBody({ reason: ' 缺货 ' })).toEqual({ reason: '缺货' });
+  });
+
+  /**
+   * B7 / AJ-191：**最长**必须有（最短故意没有）。
+   * @why 边界值由 shared 常量算出，不在测试里再写一遍 500——写两遍就等于两处都能改、
+   *      改一处另一处不红（契约 / 服务端 / 前端三个 500 各自漂移正是这条要防的）。
+   * @why 同时断言"提示语里带上限数字"：运营看到的错误必须告诉他**上限是多少**，
+   *      否则他只知道"不能提交"，不知道该删到多短。
+   */
+  it(`退款原因超过 ${String(REFUND_REASON_MAX_LENGTH)} 字 → 拦下，且提示带上限数字`, () => {
+    const MAX = REFUND_REASON_MAX_LENGTH;
+    expect(refundErrors({ reason: '理'.repeat(MAX) }).ok).toBe(true);
+    const tooLong = refundErrors({ reason: '理'.repeat(MAX + 1) });
+    expect(tooLong.ok).toBe(false);
+    expect(tooLong.first).toContain(String(MAX));
   });
 
   it('非对象输入当作空表单（不是抛，也不是 undefined 穿透）', () => {

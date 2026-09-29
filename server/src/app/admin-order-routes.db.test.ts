@@ -11,6 +11,7 @@
  *      退款那条尤其重要——它跨了两次事务，响应 202 并不代表钱真的退了。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
@@ -390,6 +391,31 @@ describe('POST /admin/orders/{id}/refund（全额退款）', () => {
     const again = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/refund', { reason: 'x' });
     expect(again.status).toBe(409);
     expect(again.json.code).toBe(40902);
+    await s.close();
+  });
+
+  // B7 / AJ-191：**超长理由必须在入口就被拒，且订单不进 refunding**。
+  // @why 这条守的不是"参数校验"，是"这张单还有没有出口"：理由一旦落进 append-only 的
+  //      order_events，KD-4 又要求重试沿用首次理由（同键同参），机构就会一直拒——
+  //      订单永久停在 refunding。所以必须断言库里**没有** refunding 事件，而不只是看响应码。
+  // @why 上限由 shared 常量算出（不是再写一遍 500）：写死会让"改了上限、测试照旧绿"。
+  it(`理由超过 ${String(REFUND_REASON_MAX_LENGTH)} 字 → 40001，订单仍是 paid 且没有 refunding 事件（B7）`, async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1' });
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/refund', {
+      reason: '理'.repeat(REFUND_REASON_MAX_LENGTH + 1),
+    });
+    expect(r.status).toBe(400);
+    expect(r.json.code).toBe(40001);
+    expect((await db`select status from orders where id = 'o-1'`)[0]?.status).toBe('paid');
+    const ev = await db`select status from order_events where order_id = 'o-1'`;
+    expect(ev.map((e) => String(e['status']))).not.toContain('refunding');
+    // 恰好在上限处应当照常退款（边界不是"卡住"，是"过了才卡"）
+    const ok = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/refund', {
+      reason: '理'.repeat(REFUND_REASON_MAX_LENGTH),
+    });
+    expect(ok.status).toBe(202);
+    expect((await db`select status from orders where id = 'o-1'`)[0]?.status).toBe('refunded');
     await s.close();
   });
 

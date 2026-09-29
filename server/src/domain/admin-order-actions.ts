@@ -30,9 +30,10 @@
  *              改址不动钱也不动货，拦它只会让"客户在争议期间要求改收货地址"变成无解。
  *
  * @see domain/order.ts（迁移表唯一真源）；app/admin-order-routes.ts（唯一调用方）；
- *      admin-web/src/orders/view.ts（前端三个闸门，口径必须与本文件一致）
+ *      admin-web/src/orders/view.ts（前端三个闸门，口径必须与本文件一致）；
+ *      packages/shared/src/limits.ts（退款理由上限的唯一真源，B7 / AJ-191）
  */
-import type { ErrorCode, OrderStatus } from '@waselect/shared';
+import { REFUND_REASON_MAX_LENGTH, type ErrorCode, type OrderStatus } from '@waselect/shared';
 import { canTransition } from './order.js';
 
 /**
@@ -91,4 +92,68 @@ export function refundGuard(status: OrderStatus, hasDispute: boolean): AdminGate
  */
 export function addressGuard(status: OrderStatus): AdminGateResult {
   return status === 'paid' ? OK : deny(40902, `status_${status}`);
+}
+
+/**
+ * 退款理由的校验结果：`ok:true` 时 `reason` 是**已 trim 过**的待落库文本。
+ */
+export type RefundReasonResult =
+  { ok: true; reason: string } | { ok: false; code: ErrorCode; reason: string };
+
+/**
+ * 退款理由准入（B7 / AJ-191）：非空，且不超过 `REFUND_REASON_MAX_LENGTH`。
+ *
+ * @why 上限必须**在入口就拒**，而不是交给机构去拒：理由会原样写进 Stripe 的
+ *      `metadata[reason]`，超长时机构拒这笔退款；而 KD-4（AJ-175）要求人工重试
+ *      **沿用首次理由**（同键同参），`order_events` 又是 append-only——
+ *      于是"第一次填太长"这件事会把订单钉死在 refunding，之后再点多少次都是同一个错。
+ *      **入口拒绝**把这条链断在最前面：理由根本进不了库，订单也根本不会进 refunding。
+ * @why 与 `refundGuard` 分开：`refundGuard` 问的是"这张单现在能不能退"（状态 × 拒付），
+ *      本函数问的是"这段文本能不能当理由"。合起来会让"状态不对"和"理由太长"
+ *      争同一个 40001，而它们的处置完全不同（前者重试也没用，后者改短就行）。
+ *
+ * @limitation trim 之后再判空与量长度：全角空格（U+3000）也被 `.trim()` 去掉，
+ *      所以"打一串空格"不会蒙混过关。代价是理由的首尾空白不被保留——退款理由是
+ *      审计台账给人读的，首尾空白没有信息量。
+ * @limitation 量的是 **UTF-16 码元**（见 `REFUND_REASON_MAX_LENGTH` 的 @limitation），
+ *      含 emoji 的理由会比机构口径早一点被拒；这是刻意选的保守方向。
+ *
+ * @see packages/shared/src/limits.ts（上限唯一真源）；app/admin-order-routes.ts（唯一调用方）
+ */
+export function refundReasonGuard(raw: unknown): RefundReasonResult {
+  if (typeof raw !== 'string') {
+    return { ok: false, code: 40001, reason: 'refund_reason_required' };
+  }
+  const reason = raw.trim();
+  if (reason === '') {
+    return { ok: false, code: 40001, reason: 'refund_reason_required' };
+  }
+  if (reason.length > REFUND_REASON_MAX_LENGTH) {
+    return { ok: false, code: 40001, reason: 'refund_reason_too_long' };
+  }
+  return { ok: true, reason };
+}
+
+/**
+ * 退款理由的**确定性截断**（适配器侧纵深防御，B7 / AJ-191）。
+ *
+ * @why 路由入口已经拒掉超长理由，所以这个函数看起来"永远不会被触发"——
+ *      它服务的不是新请求，而是**存量数据**：本上限上线之前写进 `order_events`
+ *      的那些超长理由改不了也删不掉（append-only），而 KD-4 要求重试沿用首次理由。
+ *      那种订单今天唯一的出口就是"截断后再发"，否则它永久停在 refunding。
+ * @why 截断必须是**确定性的**（同一输入永远同一输出）：重试之间若截出不同文本，
+ *      就是同键异参，机构会直接 400——比不截断更糟。
+ *
+ * @limitation 截断会改变理由文本，严格说破坏了同键同参。选它是因为方向对：
+ *      让这笔退款**发得出去**，而不是继续被机构拒。且它只影响上限生效前的存量数据。
+ * @limitation 按码元切（`.slice`）可能把代理对切成两半，产生一个半个 emoji。
+ *      不修：那是存量脏数据的**展示**瑕疵，不影响机构接受与否，
+ *      而为了它引入码点切分会给一条防御路径加上不必要的复杂度。
+ *
+ * @see adapters/payment/stripe-checkout.ts（唯一调用方：metadata[reason]）
+ */
+export function clipRefundReason(reason: string): string {
+  return reason.length > REFUND_REASON_MAX_LENGTH
+    ? reason.slice(0, REFUND_REASON_MAX_LENGTH)
+    : reason;
 }

@@ -21,6 +21,7 @@
  * @see ./view.ts（闸门与请求体）；./api.ts；../../../contracts/api-contract.yaml（AdminOrder）
  */
 import { useCallback, useEffect, useState } from 'react';
+import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { getOrder, refundOrder, shipOrder, type AdminApi, type AdminOrderLike } from './api.js';
 import { formatJst, moneyText } from '../format.js';
@@ -243,6 +244,8 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
             <input
               className="input"
               placeholder="退款原因（进审计台账）"
+              // 硬上限来自 shared（B7 / AJ-191）：超长会被机构拒且订单卡在退款中
+              maxLength={REFUND_REASON_MAX_LENGTH}
               value={refund.reason}
               onChange={(e) => setRefund({ reason: e.target.value })}
             />
