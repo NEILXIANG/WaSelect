@@ -12,7 +12,7 @@
  *      拆开测会让"两页显示不一致"这件事没有守卫。
  */
 import { describe, expect, it } from 'vitest';
-import { contactEmailOf, itemRows, orderBody, submitGate } from './index.vm.js';
+import { contactEmailOf, itemRows, orderBody, resolveAddressId, submitGate } from './index.vm.js';
 
 const ITEMS = [
   { productId: 'p-shiro-cleansing-oil', qty: 2, title: '資生堂 クレンジングオイル 200ml' },
@@ -134,5 +134,39 @@ describe('contactEmailOf（选填邮箱）', () => {
     });
     expect(submitGate({ ...OK, itemCount: 0, emailError: 'x' }).reason).toBe('购物车是空的');
     expect(submitGate({ ...OK, emailError: '' }).ok).toBe(true);
+  });
+});
+
+/**
+ * 地址预选（全量审查 A6，2026-09-29）：每次 `onShow` 都会重算一次地址，
+ * 而"用户刚从地址页选的那一个"是一次性的（读走即清空）。
+ * @why 这三个用例钉的是**同一个缺陷的三个面**：少了"当前已选"这一段优先级，
+ *      用户只要离开结算页再回来（看条款 / 切后台 / 进地址页没选就返回），
+ *      地址就静默回到默认地址并按它发货——页面显示的确实是默认地址，用户不会再核对。
+ */
+describe('resolveAddressId（地址预选的三段优先级）', () => {
+  const LIST = [{ id: 'addr-A', isDefault: true }, { id: 'addr-B' }];
+
+  it('一次性选择优先（刚从地址页选完回来）', () => {
+    expect(
+      resolveAddressId({ picked: 'addr-B', current: 'addr-A', list: LIST, fallback: 'addr-A' }),
+    ).toBe('addr-B');
+  });
+
+  it('🔴 没有一次性选择时**保留当前已选**（看完条款返回 / 切后台回来，A6 的原缺陷）', () => {
+    expect(
+      resolveAddressId({ picked: '', current: 'addr-B', list: LIST, fallback: 'addr-A' }),
+    ).toBe('addr-B');
+  });
+
+  it('当前地址已被删除（不在列表里）→ 回落默认，而不是带着一个不存在的 id 去建单', () => {
+    expect(
+      resolveAddressId({ picked: '', current: 'addr-deleted', list: LIST, fallback: 'addr-A' }),
+    ).toBe('addr-A');
+  });
+
+  it('列表为空 → 空串（让 submitGate 报"请选择收货地址"）', () => {
+    expect(resolveAddressId({ picked: '', current: 'addr-B', list: [], fallback: '' })).toBe('');
+    expect(resolveAddressId({})).toBe('');
   });
 });

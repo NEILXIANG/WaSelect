@@ -20,7 +20,7 @@
  * @see ./index.vm.js（商品行/闸门/幂等键/请求体，12 条单测）；
  *      ../../utils/quote-view.js（报价区）；../../utils/address-form.js（地址摘要）
  */
-import { contactEmailOf, itemRows, orderBody, submitGate } from './index.vm.js';
+import { contactEmailOf, itemRows, orderBody, resolveAddressId, submitGate } from './index.vm.js';
 import { newIdemKey } from '../../utils/idem-key.js';
 import { addressSummary, defaultAddressId } from '../../utils/address-form.js';
 import { quoteView } from '../../utils/quote-view.js';
@@ -125,8 +125,15 @@ Page({
       // ⚠️ 一次性交接：读走立刻清空（留着会让下次进结算页拿到过期选择）
       const picked = app.globalData.pickedAddressId;
       app.globalData.pickedAddressId = '';
-      const id =
-        picked !== '' && list.some((a) => a && a.id === picked) ? picked : defaultAddressId(list);
+      // ⚠️ 三段优先级（A6）：一次性选择 > **当前已选** > 默认。
+      //    少了中间那段，每次 onShow 都会把用户选好的地址换回默认——
+      //    看条款返回、切后台回来都会中招，而页面显示的确实是默认地址，用户不会再核对。
+      const id = resolveAddressId({
+        picked,
+        current: this.addressId,
+        list,
+        fallback: defaultAddressId(list),
+      });
       const found = list.find((a) => a && a.id === id);
       this.addressId = id;
       this.setData({ address: found === undefined ? null : addressSummary(found) });

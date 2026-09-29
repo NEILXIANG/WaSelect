@@ -72,6 +72,40 @@ export function contactEmailOf(raw) {
 }
 
 /**
+ * 结算页该用哪个地址（全量审查 A6，2026-09-29）。
+ *
+ * @param {{picked?: string, current?: string, list?: Array<{id?: string}>, fallback?: string}} args
+ *   `picked`  地址页回传的一次性选择（读走即清空）；
+ *   `current` 页面当前持有的选择；
+ *   `fallback` 两者都用不上时的回落（薄壳传 `defaultAddressId(list)`）；
+ *   `list`    `GET /addresses` 的响应（只用来判断某个 id 是否还在列表里）。
+ * @returns {string} 选中的地址 id；没有地址时为空串。
+ *
+ * @why 优先级必须是 **picked > current > fallback** 三段，缺了 `current` 这一段就会
+ *      出现 A6 那个缺陷：每次 `onShow` 都会重算地址，而一次性 `picked` 在第一次就被读走清空了，
+ *      于是此后每一次返回结算页都回落到默认地址——用户选了非默认地址 B 之后，
+ *      **点"查看条款全文"再返回、进地址页没选就返回、或把小程序切到后台再回来**，
+ *      地址就静默回到 A，提交后按 A 发货。页面显示的是 A，而用户已经选过一次，
+ *      大多不会再核对。跨境改址要走人工，还有重发成本。
+ *
+ * @why `current` 也要过一遍"仍在列表里"的检查：用户在别处（或另一个标签页）
+ *      把当前地址删掉之后，`current` 是一个已经不存在的 id，
+ *      继续用它会让 `orderBody` 带一个服务端必然 40400 的 `address_id`。
+ *
+ * @limitation 只做"选哪个"，**不做默认地址的判定**：默认逻辑（`is_default` / 第一条）
+ *              住在 `utils/address-form.js` 的 `defaultAddressId`，由薄壳算好传进 `fallback`。
+ *              在这里再写一份就会变成第二份真源（约束九）。
+ */
+export function resolveAddressId(args) {
+  const a = args && typeof args === 'object' ? args : {};
+  const list = Array.isArray(a.list) ? a.list : [];
+  const inList = (id) => typeof id === 'string' && id !== '' && list.some((x) => x && x.id === id);
+  if (inList(a.picked)) return a.picked;
+  if (inList(a.current)) return a.current;
+  return typeof a.fallback === 'string' ? a.fallback : '';
+}
+
+/**
  * 组装 `POST /orders` 请求体。
  * @param {{items: Array, addressId: string, termsVersion: string,
  *          expectedTotalJpy?: number|null, contactEmail?: string}} args
