@@ -136,6 +136,46 @@ describe('expire-orders job（接线级）', () => {
     expect(Number(again[0]?.stock)).toBe(3);
   });
 
+  /**
+   * A3 的**语义**侧（并发侧在 `create-order.db.test.ts` 的死锁探针）：
+   * 关单 job 改成"先逐单迁移、再一次性批量回补"之后，语义必须**逐字不变**——
+   * 每张被关的单都要回血，且只回一次。
+   * @why 两张单含**交叉**的商品（X1=[z]、X2=[a]）而不是同一件：批量汇总后按序回补，
+   *      "哪张单对应哪个商品"这层映射一旦在 sum/group by 里串了，会表现为
+   *      "某个商品多回、另一个少回"——只有两个不同商品才看得出串。
+   */
+  it('批量关单回补：两张交叉商品的单一起关 → 两个商品各自回到原值（A3 两阶段重构后）', async () => {
+    for (const [pid, qty] of [
+      ['p-exj-a', 2],
+      ['p-exj-z', 3],
+    ] as const) {
+      await db`
+        insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status)
+        values (${pid}, ${`Probe ${pid}`}, 'kitchen', 1000, 100, 10, 'JP', 'active')
+      `;
+      await db`update products set stock = 10 - ${qty} where id = ${pid}`; // 模拟建单已扣
+    }
+    await seedOrder('o-batch-1', 'created', new Date(NOW.getTime() - 2_000));
+    await seedOrder('o-batch-2', 'created', new Date(NOW.getTime() - 1_000));
+    await db`insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy, declared_value_usd)
+             values ('oi-b1', 'o-batch-1', 'p-exj-z', 'Probe z', 3, 1000, 700)`;
+    await db`insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy, declared_value_usd)
+             values ('oi-b2', 'o-batch-2', 'p-exj-a', 'Probe a', 2, 1000, 700)`;
+
+    const { deps } = makeDeps();
+    const r = await runSchedulerOnce(deps, [createExpireOrdersJob()]);
+    expect(r.acquired).toBe(true);
+    if (!r.acquired) return;
+    expect(processedOf(r)).toBe(2);
+    expect(await statusOf('o-batch-1')).toBe('expired');
+    expect(await statusOf('o-batch-2')).toBe('expired');
+    const stock = await db`select id, stock from products where id like 'p-exj-%' order by id`;
+    expect(stock.map((s) => [String(s.id), Number(s.stock)])).toEqual([
+      ['p-exj-a', 10],
+      ['p-exj-z', 10],
+    ]);
+  });
+
   it('幂等：第二轮处理 0 单、审计事件不翻倍', async () => {
     await seedOrder('o-due', 'created', new Date(NOW.getTime() - 1_000));
     const { deps } = makeDeps();

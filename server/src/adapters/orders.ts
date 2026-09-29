@@ -26,6 +26,7 @@
  */
 import { ORDER_STATUS } from '@waselect/shared';
 import type { Db, JSONValue } from './db.js';
+import { PRODUCT_ID_LOCK_COLLATION } from '../domain/stock-lock.js';
 
 /**
  * 可支付状态：只有这两个状态的订单会被超时关单。
@@ -196,20 +197,80 @@ export async function decrementStock(tx: Db, productId: string, qty: number): Pr
 }
 
 /**
+ * 原子增加库存（回补）。与 {@link decrementStock} 对称，但不带条件——
+ * 回补不该有"加不进去"的情形（库存上限不是这个阶段的概念）。
+ */
+export async function incrementStock(tx: Db, productId: string, qty: number): Promise<void> {
+  await tx`
+    update products set stock = stock + ${qty}, updated_at = now()
+     where id = ${productId}
+  `;
+}
+
+/**
+ * 取一批订单里要回补的（商品, 数量），**按取锁顺序排好**（见 `domain/stock-lock.ts`）。
+ *
+ * @why 同一个商品在一批单里出现多次要先 `sum` 再回补：逐单逐行调用会把锁
+ *      获取序列变成"每单内升序的串接"（A: a,c 然后 B: b → 序列 a,c,b），
+ *      那**不是**一个全局升序——只要两个事务的串接断点不同就可能成环
+ *      （T1: a,c,b 持 a,c 等 b；T2: b,a,c 持 b 等 a → 40P01）。
+ *      汇总后一次性按序走，序列才是真正的全局升序。
+ * @why `collate "C"` 必须显式写（不能靠库的默认排序规则）：见 `domain/stock-lock.ts` 文件头。
+ */
+export async function stockRestorePlan(
+  tx: Db,
+  orderIds: readonly string[],
+): Promise<readonly { productId: string; qty: number }[]> {
+  if (orderIds.length === 0) return [];
+  // ⚠️ collation 不能参数化（PG 不接受 $1 当 collation 名），只能拼接；
+  //    值来自本模块导入的常量，不是用户输入（postgres.js 的 unsafe 会绕过参数化，故在此集中一处）
+  const rows = await tx.unsafe(
+    `select product_id, sum(qty)::int as qty
+       from order_items
+      where order_id = any($1::text[])
+      group by product_id
+      order by product_id collate "${PRODUCT_ID_LOCK_COLLATION}"`,
+    [orderIds as unknown as string[]],
+  );
+  return rows.map((r: Record<string, unknown>) => ({
+    productId: String(r['product_id']),
+    qty: Number(r['qty']),
+  }));
+}
+
+/**
  * 按订单行项目恢复库存（关单/取消的释放）。
+ *
+ * @why **按取锁顺序逐行加**，而不是一条 `update … from order_items`：后者一次更新多行，
+ *      行锁的获取顺序由**执行计划**决定（小表 Seq Scan + Nested Loop 与走索引时的顺序可以相反），
+ *      与建单那条"按序扣减"的路径形成 AB / BA → PG 40P01 死锁 → 非 AppError → 50000。
+ *      @measured（全量审查 ORD 分片探针, 2026-09-29）：两种执行计划下都复现过 `deadlock detected`。
  *
  * ⚠️ **本函数不幂等**：调一次加一次。调用方必须用"状态迁移守卫"保证只调一次——
  *    `markOrderExpired` / cancel 的 update 带状态条件返回 true 的那一刻，
  *    就是"本次迁移是我干的"的排他凭证，释放跟在它后面（同事务）。
  *    脱离守卫直接调用 = 库存双倍回血（钱货两空的另一种形态）。
+ *
+ * @returns 受影响的行数（= 涉及的商品种类数）。
  */
 export async function restoreStockForOrder(tx: Db, orderId: string): Promise<number> {
-  const rows = await tx`
-    update products p set stock = stock + oi.qty, updated_at = now()
-      from order_items oi
-     where oi.order_id = ${orderId} and oi.product_id = p.id
-  `;
-  return rows.count;
+  return restoreStockForOrders(tx, [orderId]);
+}
+
+/**
+ * 批量回补：多张单一起关时**必须**走这里，逐单调 {@link restoreStockForOrder} 是错的。
+ *
+ * @why 关单 job 在一个事务里跨多张单回补。逐单调用时，总锁序是"每单内升序"的串接，
+ *      不是全局升序——两个批次只要串接断点不同就可能成环（见 `stockRestorePlan` 的 @why）。
+ *      汇总后按序走，死锁才真的被消除，而不是"每单内碰巧有序"。
+ * @returns 受影响的行数（= 涉及的商品种类数，不是订单数）。
+ */
+export async function restoreStockForOrders(tx: Db, orderIds: readonly string[]): Promise<number> {
+  const plan = await stockRestorePlan(tx, orderIds);
+  for (const row of plan) {
+    await incrementStock(tx, row.productId, row.qty);
+  }
+  return plan.length;
 }
 
 /**

@@ -51,6 +51,7 @@ import {
   type QuoteProduct,
 } from '../domain/quote.js';
 import { buildOrderNo } from '../domain/order-no.js';
+import { compareProductIdForLock } from '../domain/stock-lock.js';
 import { assembleQuote } from './quote-assembly.js';
 import { allocate, toMinor, toRateInt } from '@waselect/shared';
 
@@ -58,19 +59,11 @@ import { allocate, toMinor, toRateInt } from '@waselect/shared';
 export const ORDER_NO_MAX_ATTEMPTS = 3;
 
 /**
- * 商品 id 的**确定序**比较——只服务于第 6 步的取锁顺序。
- *
- * @why 不能用 `localeCompare`：它走 ICU collation，结果随 Node 构建（small-icu / full-icu）
- *      与 ICU 版本而变。两个实例对同一组 id 若算出**不同**的锁序，"统一取锁顺序"
- *      就只在单实例内成立，跨实例仍然是 AB / BA 互等（40P01）——
- *      而防死锁恰恰只在**多实例并发**时才有意义，单机测出来绿说明不了任何事。
- * @limitation 结果不符合任何自然语言的字典序（大写整体排在小写之前）；
- *              锁序不需要好看，只需要"每个进程算出同一个结果"。
- *              id 出现非 ASCII 时 codePoint 序依然确定——与 locale 无关正是选它的理由。
+ * 第 6 步用到的取锁序已下沉到 `domain/stock-lock.ts`。
+ * @why 回补路径（`adapters/orders.ts`）要用**同一个**序，而 adapters 不能反向依赖 app——
+ *      两处各写一份必然漂移，而"两个方向用不同的序"正是死锁的定义。
+ *      它的用例也随之搬到 `domain/stock-lock.unit.test.ts`（搬代码必须连测试一起搬）。
  */
-export function compareProductIdForLock(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
 
 export interface CreateOrderInput {
   userId: string;

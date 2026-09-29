@@ -13,10 +13,16 @@
  * @limitation 测不出"两个实例真的用了同一个 locale"（那是环境问题，不是代码问题）；
  *             测的是"我们的排序根本不读 locale"，所以环境改不了它。
  *
- * @see app/create-order.ts（第 6 步：排序后逐行扣库存，防 AB/BA 死锁 40P01）
+ * @why 还要钉住 **SQL 侧**的排序也带 `collate "C"`（{@link PRODUCT_ID_LOCK_COLLATION}）：
+ *      回补的排序发生在库里（`order by product_id`），用的是库的默认 collation；
+ *      生产库默认什么 collation 至今没有 @measured。只钉 JS 侧而漏了 SQL 侧，
+ *      "两边同一个序"就只有一半成立——而那一半恰恰是**关单批量**走的那一半。
+ *
+ * @see domain/stock-lock.ts；adapters/orders.ts（回补）；app/create-order.ts（第 6 步扣减）
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { compareProductIdForLock } from './create-order.js';
+import { compareProductIdForLock, PRODUCT_ID_LOCK_COLLATION } from './stock-lock.js';
 
 describe('compareProductIdForLock（取锁顺序）', () => {
   it('顺序等于 codePoint 序：数字 < 大写 < 小写（不是任何语言的字典序）', () => {
@@ -51,5 +57,21 @@ describe('compareProductIdForLock（取锁顺序）', () => {
     expect(compareProductIdForLock('p-a', 'p-a')).toBe(0);
     expect(compareProductIdForLock('p-a', 'p-b')).toBeLessThan(0);
     expect(compareProductIdForLock('p-b', 'p-a')).toBeGreaterThan(0);
+  });
+});
+
+describe('SQL 侧的排序必须显式 collate（不依赖库的默认排序规则）', () => {
+  it('PRODUCT_ID_LOCK_COLLATION 是 "C"（按字节/码点排，与 JS 的 < 同向）', () => {
+    expect(PRODUCT_ID_LOCK_COLLATION).toBe('C');
+  });
+
+  it('回补的 SQL 里 order by product_id 带着这个 collation（剥注释后扫）', () => {
+    // §2 第 54 条：先剥注释行——注释里也写着同样的字符串，不剥就会"只删用法、留下注释"也绿
+    const src = readFileSync(new URL('../adapters/orders.ts', import.meta.url), 'utf8');
+    const code = src
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
+    expect(code).toMatch(/order by product_id collate "\$\{PRODUCT_ID_LOCK_COLLATION\}"/);
   });
 });

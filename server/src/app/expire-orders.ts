@@ -36,7 +36,7 @@ import type { Db } from '../adapters/db.js';
 import {
   lockExpiredPayableOrders,
   markOrderExpired,
-  restoreStockForOrder,
+  restoreStockForOrders,
 } from '../adapters/orders.js';
 import type { JobContext, JobOutcome, SchedulerJob } from '../ports/scheduler.js';
 
@@ -57,19 +57,24 @@ export function createExpireOrdersJob(opts: { batchLimit?: number } = {}): Sched
     run: async (ctx: JobContext<Db>): Promise<JobOutcome> => {
       // 判定基准 = 本轮 tick 的 startedAt（同一轮所有 job 同一基准，ports/scheduler.ts 的既定口径）
       const ids = await lockExpiredPayableOrders(ctx.tx, ctx.startedAt, limit);
-      let closed = 0;
+      // ── 两段式：先逐单迁移，再**一次性**按全局锁序回补 ────────────────────────
+      // ⚠️ 不可在循环里逐单回补：那会让总锁序变成"每单内升序"的串接而不是全局升序，
+      //    两个批次只要串接断点不同就可能成环（A3，2026-09-29 全量审查：
+      //    探针复现批 X1=[B]、X2=[A] 对建单 A→B 时 40P01 且**整批回滚**）。
+      //    先收集、后统一回补，锁序才是一个全局升序。
+      // ⚠️ 顺序仍然不可换：markOrderExpired 的 true 是"本次迁移是我干的"的排他凭证，
+      //    "哪些单算我关的"必须在这轮定下来（restoreStockForOrders 不幂等，见 adapters/orders.ts 的 ⚠️），
+      //    只是"把库存加回去"这一步挪到循环之后——仍在同一个事务里，要么一起落要么一起滚。
+      const closedIds: string[] = [];
       for (const id of ids) {
         // false = 被别人抢先迁走（恰好落账/取消），不是错误，不发事件（文件头 @why ③）
         if (await markOrderExpired(ctx.tx, id, ctx.startedAt)) {
-          // I1-U5b 连带：建单扣库存之后，关单必须释放（技术文档 §1：expired 释放库存）。
-          // 顺序不可换：markOrderExpired 的 true 是"本次迁移是我干的"的排他凭证，
-          // 释放跟在它后面（同事务）才不会在别人已迁走的单上双倍回血
-          // （restoreStockForOrder 不幂等，见 adapters/orders.ts 的 ⚠️）。
-          await restoreStockForOrder(ctx.tx, id);
-          closed += 1;
+          closedIds.push(id);
           ctx.emit({ name: 'order.expired', at: ctx.startedAt.toISOString(), orderId: id });
         }
       }
+      if (closedIds.length > 0) await restoreStockForOrders(ctx.tx, closedIds);
+      const closed = closedIds.length;
       ctx.log.info('orders_expired', {
         result: 'ok',
         count: closed,
