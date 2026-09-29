@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.13
+  version: 0.6.14
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -167,6 +167,12 @@ info:
       而以 `warning_closed` 结案时旧实现抛 `dispute_result_unknown` ⇒ `has_dispute` 永远是 true
       ⇒ 发货 40909 / 退款 40907 永久生效，而全仓只有 `markDisputeClosed` 会写回 false。
       `has_dispute` 的复位规则因此改为：**只有 lost 保持 true**，won 与 withdrawn 都复位。
+    0.6.14（B1b / AJ-194）：新增 `POST /admin/orders/{id}/dispute/release`——**人工解除拒付限制**的逃生口。
+      @why `has_dispute` 为 true 时发货 40909 / 退款 40907 全被锁住，而能保证它变回 false 的路径只有一条：
+      机构发来 `charge.dispute.closed`。那条链会断在任何一环（漏发 / 没接住 / 未知状态被拒落库），
+      断了之后唯一解法就是直连数据库改行——既不留痕也不可复核。
+      ⚠️ 它**不碰** `payments.dispute_*`：解除的是限制，不是事实。
+      已没锁的订单 → 409 / 40902 `dispute_not_locking`（不是幂等 200）。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -361,6 +367,13 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500, description: '0.6.12（B7 / AJ-191）：上限 500（机构 metadata 值上限）；超限 40001 + reason refund_reason_too_long。上限唯一真源 = shared REFUND_REASON_MAX_LENGTH，由契约测试双向比对'}}}}}}
       responses: {'202': {description: 'Accepted（succeeded = 已退款，订单 refunded；pending = 机构处理中，订单停在 refunding，再调即查询）', content: {application/json: {schema: {type: object, required: [order_id, outcome], properties: {order_id: {type: string}, outcome: {type: string, enum: [succeeded, pending]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/orders/{id}/dispute/release:
+    post:
+      summary: 人工解除拒付限制（B1b / AJ-194，逃生口）
+      description: 把 orders.has_dispute 由 true 置回 false，解锁发货（40909）与退款（40907）。⚠️ **不碰 payments.dispute_***：解除的是"限制"不是"事实"，拒付记录照旧留在风控列表。0.6.14（AJ-194）：已没锁的订单返回 **409 / 40902** dispute_not_locking（不是幂等 200——静默成功会让"点错单号"变成看不见的事故）；成功写 admin_audit（含改前值）与 order_events(status=dispute_released)
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500, description: '解除理由必填（进审计台账与订单时间线）；上限 500 字'}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [order_id, has_dispute], properties: {order_id: {type: string}, has_dispute: {type: boolean}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/address:
     post:
       summary: 发货前改址（仅 paid 未发货；重写 address_snapshot 并记 order_events，D-39）

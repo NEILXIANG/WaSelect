@@ -563,6 +563,47 @@ export async function markRefunding(
 }
 
 /**
+ * **人工解除**订单的拒付限制（`orders.has_dispute` true → false）并记事件（B1b / AJ-194）。
+ *
+ * @why 这个写操作是 A4 / B33 / B1a 之后**所有**"订单被永久锁死"情形的唯一出口：
+ *      结案事件没到（机构漏发 / 我们当时没接住）、未知状态被拒落库、
+ *      败诉单后来与买家协商好了、甚至只是某次回调丢了一——它们共同的终点都是
+ *      "has_dispute 是 true 且再也不会变"。没有这个口，唯一的解法是**直连数据库改行**，
+ *      那既不留痕也不可复核。
+ * @why 条件是 `has_dispute = true` 而不是无条件更新：命中 0 行时调用方转 40902
+ *      `dispute_not_locking`。@why "解除一个本来就没锁的限制"如果返回成功，
+ *      运营点错单号时会**以为自己解开了某张单**，而实际上什么都没发生——
+ *      这类"静默成功"正是逃生口最危险的用法。
+ *
+ * @limitation **不动 `payments.dispute_*`**：解除的是"限制"，不是"事实"。
+ *              拒付发生过、输过、赢过，这些都留在支付行上，风控列表照样看得到；
+ *              改它们等于让人能**抹掉**拒付记录，那不是逃生口而是橡皮擦。
+ * @limitation 事件名 `dispute_released` 与开案 / 结案的 `dispute_opened` / `dispute_closed`
+ *              并列：订单时间线上要能看出"限制是什么时候、被谁解开的"。
+ *              ⚠️ 它是**人工**动作（actor 是 `admin:<sub>`），与机构事件天然可区分。
+ *
+ * @see app/admin-order-routes.ts（唯一调用方）；domain/admin-order-actions.ts（releaseReasonGuard）
+ */
+export async function releaseDisputeHold(
+  tx: Db,
+  orderId: string,
+  reason: string,
+  at: Date,
+  actor: string,
+): Promise<boolean> {
+  const updated = await tx`
+    update orders set has_dispute = false, updated_at = now()
+     where id = ${orderId} and has_dispute = true
+  `;
+  if (updated.count === 0) return false;
+  await tx`
+    insert into order_events (order_id, status, note, actor, at)
+    values (${orderId}, 'dispute_released', ${reason}, ${actor}, ${at})
+  `;
+  return true;
+}
+
+/**
  * 最近一次进入 refunding 时记下的退款理由（重试沿用它，KD-4）。
  * @why 机构退款请求里带着理由（Stripe `metadata[reason]`），而机构侧幂等键按订单固定
  *      （`refund:<orderId>`）——重试时换一句理由就是"同键异参"，Stripe 会 400。

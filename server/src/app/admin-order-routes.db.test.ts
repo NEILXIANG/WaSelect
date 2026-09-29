@@ -12,6 +12,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import { ADMIN_NOTE_MAX_LENGTH, refundGuard, shipGuard } from '../domain/admin-order-actions.js';
 import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
@@ -234,13 +235,14 @@ describe('GET /admin/orders（管理端订单列表）', () => {
     await s.close();
   });
 
-  it('五条路由**每一条**都对无 token 返回 40101（防"某条忘了挂守卫"）', async () => {
+  it('六条路由**每一条**都对无 token 返回 40101（防"某条忘了挂守卫"）', async () => {
     const s = await buildServer();
     const cases: ReadonlyArray<readonly [string, string]> = [
       ['GET', '/api/v1/admin/orders'],
       ['GET', '/api/v1/admin/orders/x'],
       ['POST', '/api/v1/admin/orders/x/ship'],
       ['POST', '/api/v1/admin/orders/x/refund'],
+      ['POST', '/api/v1/admin/orders/x/dispute/release'],
       ['POST', '/api/v1/admin/orders/x/address'],
     ];
     for (const [method, path] of cases) {
@@ -482,6 +484,117 @@ describe('POST /admin/orders/{id}/refund（全额退款）', () => {
     expect(r.json.code).toBe(40902);
     await seedOrder({ id: 'o-2' });
     expect((await adminFetch(s, 'POST', '/api/v1/admin/orders/o-2/refund', {})).status).toBe(400);
+    await s.close();
+  });
+});
+
+/**
+ * B1b / AJ-194：人工解除拒付限制的**逃生口**。
+ *
+ * @why 这组用例守的不是"多一条接口"，是"订单还有没有活路"：`has_dispute` 为 true 时
+ *      发货 40909、退款 40907 全被锁住，而能让它变回 false 的只有机构那条
+ *      `charge.dispute.closed`——那条链断在任何一环，订单就永久锁死。
+ */
+describe('POST /admin/orders/{id}/dispute/release（人工解除拒付限制，B1b）', () => {
+  it('锁着的单 + 理由 → 解锁，且**发货与退款闸门真的开了**（换读取方验证）', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1', hasDispute: true });
+    // 解锁前：两个闸门都是关的
+    expect(shipGuard('paid', true).ok).toBe(false);
+    expect(refundGuard('paid', true).ok).toBe(false);
+
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/dispute/release', {
+      reason: '机构回调丢失，已与买家核实款项正常',
+    });
+    expect(r.status).toBe(200);
+    expect((await db`select has_dispute from orders where id = 'o-1'`)[0]?.has_dispute).toBe(false);
+
+    // 换两个读取方：闸门与详情接口
+    expect(shipGuard('paid', false).ok).toBe(true);
+    expect(refundGuard('paid', false).ok).toBe(true);
+    const detail = await adminFetch(s, 'GET', '/api/v1/admin/orders/o-1');
+    expect(detail.json['has_dispute']).toBe(false);
+    await s.close();
+  });
+
+  // @why 事件与审计是"谁在什么时候解开的"的唯一留痕：没有它们，这个口就跟手工改库没区别。
+  it('写下 dispute_released 事件（actor 是 admin:<sub>）与 admin_audit（含改前值）', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1', hasDispute: true });
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/dispute/release', {
+      reason: '已与买家和解',
+    });
+    expect(r.status).toBe(200);
+
+    const ev =
+      await db`select status, note, actor from order_events where order_id = 'o-1' and status = 'dispute_released'`;
+    expect(ev).toHaveLength(1);
+    expect(String(ev[0]?.note)).toBe('已与买家和解');
+    expect(String(ev[0]?.actor)).toMatch(/^admin:/); // 人工动作，不是机构事件
+
+    const audit =
+      await db`select action, target, before, after from admin_audit where target = 'o-1'`;
+    const row = audit.find((a) => String(a['action']).includes('dispute/release'));
+    expect(row, 'admin_audit 里没有这条解锁记录').toBeDefined();
+    // 不可逆操作要记改前值（admin-audit 中间件只在显式提供时才写 before）
+    expect(String(JSON.stringify(row?.['before']))).toContain('has_dispute');
+    await s.close();
+  });
+
+  // @why **不碰 payments.dispute_***：解除的是"限制"不是"事实"。
+  //      允许抹掉拒付记录 = 这个口从逃生口变成橡皮擦。
+  it('🔴 不碰 payments.dispute_*（拒付记录照旧在风控列表里看得见）', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1', hasDispute: true });
+    await db`update payments set dispute_id = 'dp_1', dispute_status = 'lost' where id = 'pay-o-1'`;
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/dispute/release', {
+      reason: '败诉单已线下退款给买家',
+    });
+    expect(r.status).toBe(200);
+    const p = await db`select dispute_id, dispute_status from payments where id = 'pay-o-1'`;
+    expect(String(p[0]?.dispute_id)).toBe('dp_1');
+    expect(String(p[0]?.dispute_status)).toBe('lost');
+    await s.close();
+  });
+
+  /**
+   * @why "解除一个本来就没锁的限制"如果返回成功，运营点错单号时会**以为**自己解开了某张单，
+   *      而实际上什么都没发生。这是这个口最危险的用法，必须响亮失败。
+   */
+  it('🔴 本来就没锁 → 40902 dispute_not_locking（不是幂等 200）', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1' }); // has_dispute 默认 false
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/dispute/release', {
+      reason: '试试',
+    });
+    expect(r.status).toBe(409);
+    expect(r.json.code).toBe(40902);
+    expect((await db`select has_dispute from orders where id = 'o-1'`)[0]?.has_dispute).toBe(false);
+    await s.close();
+  });
+
+  it('缺理由 → 40001；超长理由 → 40001；订单不存在 → 40400', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1', hasDispute: true });
+    expect(
+      (await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/dispute/release', {})).status,
+    ).toBe(400);
+    expect(
+      (
+        await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/dispute/release', {
+          reason: '理'.repeat(ADMIN_NOTE_MAX_LENGTH + 1),
+        })
+      ).status,
+    ).toBe(400);
+    // 超长的没落下事件（理由根本没进库）
+    expect(
+      await db`select 1 from order_events where order_id = 'o-1' and status = 'dispute_released'`,
+    ).toHaveLength(0);
+
+    const missing = await adminFetch(s, 'POST', '/api/v1/admin/orders/nope/dispute/release', {
+      reason: 'x',
+    });
+    expect(missing.status).toBe(404);
     await s.close();
   });
 });

@@ -120,18 +120,62 @@ export type RefundReasonResult =
  *
  * @see packages/shared/src/limits.ts（上限唯一真源）；app/admin-order-routes.ts（唯一调用方）
  */
+/**
+ * 管理端自由文本的通行校验：**必填 + 不超过上限**，返回已 trim 的文本。
+ *
+ * @why 抽出来而不是让每处各写一遍 if：这类校验的失败模式是"某处漏了长度判断"，
+ *      而漏了之后不会报错，只是那一处能存进任意长的文本——
+ *      等到审计台账里出现一篇长文才发现。抽成一处，新增字段就没有"忘了判长度"这个选项。
+ * @why 失败 reason **由调用方给**（而不是在这里写死一组）：它们进 `Err.details` 也要进日志，
+ *      必须能区分"退款理由太长"与"解除理由太长"，合成一个词等于把两个现场混成一个。
+ */
+function textGuard(
+  raw: unknown,
+  max: number,
+  emptyReason: string,
+  longReason: string,
+): RefundReasonResult {
+  if (typeof raw !== 'string') return { ok: false, code: 40001, reason: emptyReason };
+  const text = raw.trim();
+  if (text === '') return { ok: false, code: 40001, reason: emptyReason };
+  if (text.length > max) return { ok: false, code: 40001, reason: longReason };
+  return { ok: true, reason: text };
+}
+
 export function refundReasonGuard(raw: unknown): RefundReasonResult {
-  if (typeof raw !== 'string') {
-    return { ok: false, code: 40001, reason: 'refund_reason_required' };
-  }
-  const reason = raw.trim();
-  if (reason === '') {
-    return { ok: false, code: 40001, reason: 'refund_reason_required' };
-  }
-  if (reason.length > REFUND_REASON_MAX_LENGTH) {
-    return { ok: false, code: 40001, reason: 'refund_reason_too_long' };
-  }
-  return { ok: true, reason };
+  return textGuard(
+    raw,
+    REFUND_REASON_MAX_LENGTH,
+    'refund_reason_required',
+    'refund_reason_too_long',
+  );
+}
+
+/**
+ * 管理端备注的字符上限（解除拒付限制的理由等进审计台账的自由文本）。
+ * @why 500 与 `REFUND_REASON_MAX_LENGTH` **同值纯属巧合，不是同一个约束**：
+ *      那条是机构 metadata 的硬上限，这条没有外部约束，取值只为不让审计行变成一篇长文。
+ *      ⚠️ 因此它**不**放进 shared（没有前端消费方），也不与退款那条互相引用——
+ *      两条约束碰巧一样，改其中一条不该被另一条绊住。
+ */
+export const ADMIN_NOTE_MAX_LENGTH = 500;
+
+/**
+ * "人工解除拒付限制"的理由校验（B1b / AJ-194）。
+ *
+ * @why 理由**必须**填：这个口能把一张"钱可能已被机构拉回"的订单解锁成可发货、可退款，
+ *      是管理端权限最大的动作之一。没有理由的解锁在审计里就是一条说不清的记录，
+ *      而事后追问"当时为什么解开"一定发生在**出事之后**——那时没有理由就没有答案。
+ * @limitation 不校验"理由是否充分"（机器判断不了），也不要求最短长度
+ *      （逼人填满 `aaaa` 比留一句短话更糟）。
+ */
+export function releaseReasonGuard(raw: unknown): RefundReasonResult {
+  return textGuard(
+    raw,
+    ADMIN_NOTE_MAX_LENGTH,
+    'release_reason_required',
+    'release_reason_too_long',
+  );
 }
 
 /**

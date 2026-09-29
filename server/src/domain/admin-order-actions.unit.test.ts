@@ -13,10 +13,12 @@
 import { describe, expect, it } from 'vitest';
 import { ORDER_STATUS, REFUND_REASON_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
 import {
+  ADMIN_NOTE_MAX_LENGTH,
   addressGuard,
   clipRefundReason,
   refundGuard,
   refundReasonGuard,
+  releaseReasonGuard,
   shipGuard,
 } from './admin-order-actions.js';
 
@@ -136,6 +138,50 @@ describe('refundReasonGuard：退款理由非空且不超过 500 字（B7 / AJ-1
       if (r.ok) throw new Error('期望被拦');
       expect(r.reason).toBe('refund_reason_required');
     }
+  });
+});
+
+/**
+ * "人工解除拒付限制"的理由（B1b / AJ-194）。
+ *
+ * @why 理由**必须**填：这个口能把一张"钱可能已被机构拉回"的订单解锁成可发货、可退款，
+ *      是管理端权限最大的动作之一。事后追问"当时为什么解开"一定发生在出事之后——
+ *      那时没有理由就没有答案。
+ */
+describe('releaseReasonGuard：解除理由必填且有上限（B1b / AJ-194）', () => {
+  const MAX = ADMIN_NOTE_MAX_LENGTH;
+
+  it('正常理由带出（已 trim）', () => {
+    const r = releaseReasonGuard('  机构回调丢失，已核实款项正常  ');
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('期望通过');
+    expect(r.reason).toBe('机构回调丢失，已核实款项正常');
+  });
+
+  it('缺 / 空 / 全角空格 / 非字符串 → release_reason_required', () => {
+    for (const bad of [undefined, null, '', '   ', '\u3000', 42, {}]) {
+      const r = releaseReasonGuard(bad);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('期望被拦');
+      expect(r.reason).toBe('release_reason_required');
+    }
+  });
+
+  it('超长 → release_reason_too_long（不是截断后放行）', () => {
+    expect(releaseReasonGuard('理'.repeat(MAX)).ok).toBe(true);
+    const r = releaseReasonGuard('理'.repeat(MAX + 1));
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('期望被拦');
+    expect(r.reason).toBe('release_reason_too_long');
+  });
+
+  // @why 两条失败 reason 必须**不同**：它们进日志与 details，
+  //      合成一个词等于把"退款理由太长"与"解除理由太长"两个现场混成一个。
+  it('失败 reason 与退款理由的**不重名**（两个现场不能混成一个）', () => {
+    const a = releaseReasonGuard(undefined);
+    const b = refundReasonGuard(undefined);
+    if (a.ok || b.ok) throw new Error('期望都被拦');
+    expect(a.reason).not.toBe(b.reason);
   });
 });
 

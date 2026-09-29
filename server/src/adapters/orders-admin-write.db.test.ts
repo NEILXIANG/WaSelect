@@ -20,6 +20,7 @@ import {
   markRefunded,
   markRefunding,
   markShipped,
+  releaseDisputeHold,
   recordRefundFailed,
   recordRefundPending,
   updateAddressSnapshot,
@@ -120,6 +121,30 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
 
     await seedPaidOrder('o-2', 'created');
     expect(await findRefundablePayment(db, 'o-2')).toBeNull();
+  });
+
+  /**
+   * B1b / AJ-194：`has_dispute` 必须为 true 才解除。
+   * @why 命中 0 行返回 false（而不是"反正目标是 false 就算成功"）——调用方据此转 40902。
+   *      "解除一个本来就没锁的限制"若算成功，运营点错单号时会以为自己解开了某张单。
+   */
+  it('releaseDisputeHold：已锁 → true 并记事件；本来就没锁 → false（不写事件）', async () => {
+    await seedPaidOrder('o-1');
+    await db`update orders set has_dispute = true where id = 'o-1'`;
+    await seedPaidOrder('o-2'); // has_dispute 默认 false
+
+    await withTransaction(db, async (tx) => {
+      expect(await releaseDisputeHold(tx, 'o-1', '回调丢失', new Date(), 'admin:u-x')).toBe(true);
+      expect(await releaseDisputeHold(tx, 'o-2', '试试', new Date(), 'admin:u-x')).toBe(false);
+    });
+    expect((await db`select has_dispute from orders where id = 'o-1'`)[0]?.has_dispute).toBe(false);
+    const evs =
+      await db`select note, actor, status from order_events where order_id = 'o-1' and status = 'dispute_released'`;
+    expect(evs).toHaveLength(1);
+    expect(String(evs[0]?.note)).toBe('回调丢失');
+    expect(String(evs[0]?.actor)).toBe('admin:u-x');
+    // 🔴 没锁的那张单一个事件都没写（假成功会留下一条说不清的审计）
+    expect(await db`select 1 from order_events where order_id = 'o-2'`).toHaveLength(0);
   });
 
   it('markRefunding：paid|shipped|delivered → refunding，事件带原因', async () => {

@@ -48,12 +48,15 @@ import { requireRole } from './auth.js';
 import { ORDER_STATUS } from '@waselect/shared';
 import { asOrderStatus } from '../domain/order.js';
 import {
+  ADMIN_NOTE_MAX_LENGTH,
   addressGuard,
   refundGuard,
   refundReasonGuard,
+  releaseReasonGuard,
   shipGuard,
 } from '../domain/admin-order-actions.js';
 import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import { setAuditBefore } from './admin-audit.js';
 import { parseAddressInput } from '../domain/address-input.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
 import {
@@ -68,6 +71,7 @@ import {
   findRefundProgress,
   markRefunding,
   markShipped,
+  releaseDisputeHold,
   updateAddressSnapshot,
   type AdminOrderListRow,
   type AdminOrderRow,
@@ -379,6 +383,81 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           ctx: { outcome },
         });
         res.status(202).json({ order_id: id, outcome });
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  /**
+   * 人工解除拒付限制（B1b / AJ-194）——**逃生口**。
+   *
+   * @why 必须有这个口：`has_dispute` 一旦为 true，发货（40909）与退款（40907）
+   *      就都被锁住，而能保证它变回 false 的路径**只有一条**——机构发来
+   *      `charge.dispute.closed`。那条链会断在任何一环：机构漏发、我们当时没接住、
+   *      未知状态被拒落库（`dispute_result_unknown`）、败诉单后来与买家协商好了。
+   *      断了之后的终点都是"订单永久锁死，唯一解法是直连数据库改行"——
+   *      那既不留痕也不可复核。
+   * @why 与"结案"分开成两个动作：结案是**机构**说的（写 `payments.dispute_*`，
+   *      是不可抹掉的事实），解除是**我们**说的（只动 `orders.has_dispute`）。
+   *      合成一个动作就等于让人能改写机构判决——那不是逃生口，是橡皮擦。
+   *      ⚠️ 所以这里**不碰** `payments.dispute_*`：风控列表照样看得到这条拒付。
+   *
+   * @limitation 一：**已经没锁的订单返回 40902** `dispute_not_locking`，不是幂等 200。
+   *      @why 这个口最危险的用法是"点错单号却显示成功"——运营以为解开了 A 单，
+   *           实际上什么都没发生（或解的是 B 单）。响亮失败比静默成功安全得多，
+   *           与全仓既定的"改（PUT）命中 0 行必须 404/409"同一条口径。
+   * @limitation 二：审计由 `/admin` 前缀的中间件**自动**写（`app/admin-audit.ts`），
+   *              本路由不自己 insert；额外用 `setAuditBefore` 记改前值——
+   *              解锁是**不可逆**的（契约没有"重新上锁"的接口），
+   *              按该中间件的口径，不可逆操作才取改前值。
+   * @limitation 三：管理端 UI 暂无这个按钮（属批次三），目前只能调接口。
+   *              它相对"手工改库"仍然是巨大改进（有留痕、有校验、有守卫），
+   *              但不把它写进契约与记录就会被忘掉——已登记为前端待办（AJ-194）。
+   */
+  app.post('/api/v1/admin/orders/:id/dispute/release', guard, (req, res, next) => {
+    void (async () => {
+      try {
+        const id = String(req.params.id);
+        const reasonCheck = releaseReasonGuard((req.body as { reason?: unknown } | null)?.reason);
+        if (!reasonCheck.ok) {
+          throw new AppError(reasonCheck.code, {
+            reason: reasonCheck.reason,
+            ctx: { max: ADMIN_NOTE_MAX_LENGTH },
+          });
+        }
+        await withTransaction(deps.db, async (tx) => {
+          const row = await lockAdminOrder(tx, id);
+          if (row === null) throw new AppError(40400, { order_id: id });
+          // 🔴 没锁着就响亮失败（@limitation 一）：静默成功会让"点错单号"变成看不见的事故。
+          //    ⚠️ 行为上这一层与 `releaseDisputeHold` 的 `and has_dispute = true` **重复**——
+          //    去掉它，仓储那句照样命中 0 行、照样 40902（缺陷注入实测：删掉这段用例仍全绿）。
+          //    保留它是为了**日志里的 reason 正确**：仓储那层只能报 `status_raced`，
+          //    而"这张单本来就没锁"和"并发下被别人抢先改了"是两件事——
+          //    报成后者会让排查的人去查并发，方向整个反掉。
+          if (row.has_dispute !== true) {
+            throw new AppError(40902, { order_id: id, reason: 'dispute_not_locking' });
+          }
+          if (
+            !(await releaseDisputeHold(
+              tx,
+              id,
+              reasonCheck.reason,
+              deps.clock.now(),
+              adminActor(req),
+            ))
+          ) {
+            throw new AppError(40902, { order_id: id, reason: 'status_raced' });
+          }
+          // 不可逆 → 记改前值（admin-audit 中间件只在显式提供时才写 before）
+          setAuditBefore(res, { has_dispute: true });
+        });
+        deps.logger.warn('admin_order_dispute_released', {
+          result: 'ok',
+          order_id: id,
+          ctx: { reason_length: reasonCheck.reason.length },
+        });
+        res.json({ order_id: id, has_dispute: false });
       } catch (e) {
         next(e);
       }
