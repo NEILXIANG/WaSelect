@@ -32,9 +32,11 @@
  *      所以"复用时返回同一个链接"在设计上不可能——重新签发并覆盖 hash 是唯一诚实做法。
  *      旧链接立即失效（hash 对不上 → 302 失效页），同一张单同时只有一个活链接。
  *
- * @limitation 一：换通道只作废**我方**的 payments 行；旧通道的机构会话不去主动关闭
- *              （Stripe session 30 分钟自然过期，与订单 TTL 同源）。主动关闭属
- *              D-50 关单连带的同款机制（order.cancelled/expired 事件的订阅者，U6a-2）。
+ * @limitation 一：换通道只作废**我方**的 payments 行，不在本事务里调机构；旧通道的机构会话
+ *              由 `order.paid` / `order.cancelled` / `order.expired` 的订阅者在事务提交后作废
+ *              （`app/close-session-events.ts`，D-50 / KD-16）。剩余窗口："已换通道、尚未付款"期间旧托管页仍可付
+ *              （付了进对账人工退款）。Stripe 会话有效期 = 订单到期 + 32 分钟（KD-9），不是"30 分钟、与订单同源"
+ *              （一致性审计 C9 更正）。
  * @limitation 二：扣款币种只看 **provider 能力**（JPY 锚优先，其次 USD 按订单快照换算）；
  *              运营侧的币种开关（ChannelConfig.currencies）是展示层过滤，
  *              用户显式选了通道来到这一步时，能力边界才是硬约束。
@@ -43,13 +45,20 @@
  *      docs/I1阶段开发实施方案.md §3.6；技术文档 D-49（短链）
  */
 import { createHash } from 'node:crypto';
-import type { Db } from '../adapters/db.js';
+import { withTransaction, type Db } from '../adapters/db.js';
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
 import type { IdGen } from '../ports/ids.js';
 import type { AppConfig } from '../config.js';
-import type { PaymentRegistry, PaymentSession } from '../ports/payment.js';
+import type {
+  PaymentProvider,
+  PaymentRegistry,
+  PaymentRequest,
+  PaymentSession,
+  PaymentShipping,
+} from '../ports/payment.js';
+import { CircuitOpenError } from '../ports/circuit-breaker.js';
 import {
   findInitiatedPayment,
   lockOwnedOrderForPay,
@@ -119,6 +128,67 @@ async function issuePayLink(
     pay_url: `${base}/o/${orderId}?t=${token}`,
     expires_at: expiresAt.toISOString(),
   };
+}
+
+/** 幂等表里代替明文 token 的占位值（落地端点按 hash 比对，占位值永远对不上 → "链接已失效"）。 */
+export const PAY_TOKEN_REDACTED = 'redacted';
+
+/**
+ * 发起支付的响应体 → **可落库**的形态：抹掉短链里的明文 token（KD-3，AJ-175）。
+ * @why D-49"明文 token 永不落库"只守住了 orders.pay_token_hash 这一处，
+ *      幂等执行器却把整个响应体（含 `pay_url?t=<明文>`）原样存进 `idempotency_keys.response` 24 小时——
+ *      拿到库读权限的人（运维、备份、日志导出）就能直接拼出任何一单的可付款链接。
+ * @why 只改 `payload.pay_url` 的 `t` 参数，其余字段原样：重放体的形状必须与首次响应一致。
+ */
+export function redactPayToken(body: unknown): unknown {
+  if (body === null || typeof body !== 'object') return body;
+  const b = body as { payload?: unknown };
+  const payload = b.payload as { pay_url?: unknown } | undefined;
+  if (payload === undefined || typeof payload.pay_url !== 'string') return body;
+  const u = new URL(payload.pay_url);
+  if (!u.searchParams.has('t')) return body;
+  u.searchParams.set('t', PAY_TOKEN_REDACTED);
+  return { ...b, payload: { ...payload, pay_url: u.toString() } };
+}
+
+/**
+ * 幂等**重放**时补发短链：重放体里的 token 已被抹掉（{@link redactPayToken}），
+ * 订单仍处于待支付且未到期 → 重新签发一次（轮换 token，旧链接随之失效），返回可用的短链；
+ * 否则原样返回（占位 token 的链接落地即"已失效"——订单本就不可付了，这正是想要的结果）。
+ *
+ * @why 与 copylink **复用即轮换**（文件头 @why，D-49）同一语义：重放发生在"客户端没收到首次响应"
+ *      或"连点"两种情形，前者手里根本没有旧链接，后者拿到的最新一条就是可用的那条。
+ * @tradeoff 重放不再逐字节等于首次响应（pay_url 的 t 不同）。幂等的承诺是"同一次业务操作只做一次"
+ *           （没有第二个支付意图、没有第二次机构调用），不是"响应字节不变"——为了字节不变而把
+ *           明文存 24 小时，是用安全换一个没有消费方的性质。
+ */
+export async function reissuePayLinkOnReplay(
+  db: Db,
+  deps: PayIntentDeps,
+  input: { orderId: string; userId: string },
+  replayed: unknown,
+): Promise<unknown> {
+  if (replayed === null || typeof replayed !== 'object') return replayed;
+  const payload = (replayed as { payload?: { pay_url?: unknown } }).payload;
+  if (
+    typeof payload?.pay_url !== 'string' ||
+    !payload.pay_url.includes(`t=${PAY_TOKEN_REDACTED}`)
+  ) {
+    return replayed;
+  }
+  return withTransaction(db, async (tx) => {
+    const order = await lockOwnedOrderForPay(tx, input.orderId, input.userId);
+    if (
+      order === null ||
+      asOrderStatus(order.status) !== 'pending_payment' ||
+      deps.clock.now() >= order.expires_at
+    ) {
+      return replayed;
+    }
+    const fresh = await issuePayLink(tx, deps, input.orderId, order.expires_at);
+    deps.logger.info('pay_link_reissued_on_replay', { order_id: input.orderId, result: 'ok' });
+    return { ...(replayed as object), payload: { ...payload, ...fresh } };
+  });
 }
 
 /** 由会话入口构建契约 payload（in_app 透传参数；copylink 发短链）。 */
@@ -197,7 +267,7 @@ export async function createPayIntent(
       );
   // 全量审计 2026-09-26 P1（两处）：
   //  ① 复用 copylink 意图时**不再回调机构**：行里已存 provider_ref / pay_url。曾经同键重调 create，
-  //     而 Stripe 的 expires_at = max(订单到期, now+30min) 随调用时刻变化 → 同一 Idempotency-Key 不同参数
+  //     而 Stripe 的 expires_at 当时 = max(订单到期, now+30min) 随调用时刻变化（KD-9 后已改为只由订单决定）→ 同一 Idempotency-Key 不同参数
   //     → Stripe 400 idempotency_error → 用户第二次点"复制链接"直接 500（mock 按键缓存所以测试全绿）。
   //  ② 新建意图的幂等键带**轮次**（该单已有几条 payments 行）：换通道 A→B→A 时旧 A 行已 cancelled，
   //     机构按同键复放同一 provider_ref → 撞 (provider, provider_ref) 唯一键 → 被误判成"已有在途支付"。
@@ -208,7 +278,7 @@ export async function createPayIntent(
           entry: { mode: 'copylink', url: existing.pay_url },
           expiresAt: order.expires_at.toISOString(),
         }
-      : await provider.create({
+      : await createSessionOr50001(provider, deps, {
           orderId: order.id,
           orderNo: order.order_no,
           amountJpy: order.total_jpy,
@@ -222,6 +292,7 @@ export async function createPayIntent(
             reusing ? (await countPayments(tx, order.id)) - 1 : await countPayments(tx, order.id),
           ),
           expiresAt: order.expires_at.toISOString(),
+          shipping: shippingOf(order.address_snapshot),
         });
 
   // ── 6. 登记 payments 行（复用不建行：同一意图同一行）─────────────────────────
@@ -238,7 +309,7 @@ export async function createPayIntent(
   }
 
   // ── 7. 迁移 + payload（copylink 复用也轮换 token，文件头 @why）──────────────
-  await markOrderPendingPayment(tx, order.id, clock.now());
+  await markOrderPendingPayment(tx, order.id, clock.now(), `user:${input.userId}`);
   const payload = await payloadFor(tx, deps, session, order.id, order.expires_at);
 
   logger.info(reusing ? 'pay_intent_reused' : 'pay_intent_created', {
@@ -254,6 +325,60 @@ export async function createPayIntent(
     payload,
     expiresAt: order.expires_at,
   };
+}
+
+/**
+ * 地址快照 → 端口的收货信息（D-60①，AJ-176）。快照形状不对（旧数据 / 被写坏）时返回 undefined：
+ * 宁可不发，也不编一个半截地址给机构（半截地址在拒付举证时比没有更糟）。
+ */
+function shippingOf(snapshot: unknown): PaymentShipping | undefined {
+  if (snapshot === null || typeof snapshot !== 'object') return undefined;
+  const a = snapshot as Record<string, unknown>;
+  const str = (k: string): string | undefined =>
+    typeof a[k] === 'string' && a[k] !== '' ? (a[k] as string) : undefined;
+  const name = str('recipient');
+  const line1 = str('line1');
+  if (name === undefined || line1 === undefined) return undefined;
+  return {
+    name,
+    line1,
+    line2: str('line2'),
+    city: str('city'),
+    state: str('state'),
+    postalCode: str('postal_code'),
+    country: str('country'),
+    phone: str('phone'),
+  };
+}
+
+/**
+ * 调机构建会话；**机构侧失败**统一翻成 50001「支付创建失败 → 重试或切换支付方式」。
+ *
+ * @why 一致性审计 C4（AJ-176）：错误码表（契约 x-error-codes / shared / 技术文档 §7）早就登记了 50001，
+ *      全仓却没有一个抛出点——Stripe 回 4xx/5xx 时适配器抛普通 Error，被兜底成 50000"系统繁忙"，
+ *      前端给不出"换一种支付方式"的引导。
+ * @why 两类**不翻**：`AppError`（适配器自己判定的业务错，如配置缺失 50000）原样抛；
+ *      熔断 `CircuitOpenError` 原样抛——它在 errors.ts 映射成 50300 + retry_after，含义是"上游在恢复，稍后再试"，
+ *      翻成 50001 会丢掉重试时刻。
+ * @limitation 原始错误只进运行日志（`pay_intent_create_failed`，已脱敏），不进响应体。
+ */
+async function createSessionOr50001(
+  provider: PaymentProvider,
+  deps: PayIntentDeps,
+  req: PaymentRequest,
+): Promise<PaymentSession> {
+  try {
+    return await provider.create(req);
+  } catch (e) {
+    if (e instanceof AppError || e instanceof CircuitOpenError) throw e;
+    deps.logger.error('pay_intent_create_failed', {
+      order_id: req.orderId,
+      channel: provider.channel,
+      result: 'failed',
+      err: e,
+    });
+    throw new AppError(50001, { channel: provider.channel, reason: 'provider_create_failed' });
+  }
 }
 
 /**

@@ -67,6 +67,11 @@ export function shipGuard(status: OrderStatus, hasDispute: boolean): AdminGateRe
  */
 export function refundGuard(status: OrderStatus, hasDispute: boolean): AdminGateResult {
   if (hasDispute) return deny(40907, 'dispute_open');
+  // `refunding` 放行 = **重试**（KD-4，AJ-175）：上一次机构调用失败/超时后订单停在 refunding，
+  // 路由头注释承诺"可人工重试"，但原判定只认状态机迁移，refunding → refunding 不在表里 → 40902，
+  // 这张单从此退不了、也回不去。重试不是迁移（状态机表保持不变），双扣由机构侧幂等键兜住
+  // （同一订单同一键 `refund:<orderId>`，且重试沿用首次的退款理由，保证同键同参）。
+  if (status === 'refunding') return OK;
   return canTransition(status, 'refunding') ? OK : deny(40902, `status_${status}`);
 }
 

@@ -29,6 +29,7 @@
  *              而回调此时才到 → 抛 40902 `reason:'late_payment'`，**不落账、不封口 payments 行**。
  *              管线的 40902 分支会把它转成 error 级告警 + `late_payment` 登记转对账——
  *              这是"钱扣了但不能发货"的场景，绝不能按普通状态冲突 warn 了事。
+ *              **订单已被关成 expired / cancelled 之后到账，同样按迟到付款**（KD-7，AJ-175）。
  *              关单 job 与守卫是互表里的两道：job 让"到点的单"在数据上死掉，
  *              守卫挡住"死在到账之前的那笔钱"。
  * @limitation 二：状态冲突（不是 `created`）一律抛 **40902**，由回调管线做分层
@@ -167,6 +168,12 @@ async function assertSettlementMatches(
   return { id: String(p.id), amountMinor: s.amountMinor, currency: s.currency };
 }
 
+/**
+ * "关闭且未收款"的终态：此时到账一律按迟到付款处理（KD-7，见 markOrderPaid 内注释）。
+ * @why 集合而不是 `from === 'expired'`：新增一种"未收款即关闭"的终态时只改这里。
+ */
+const CLOSED_UNPAID: ReadonlySet<string> = new Set(['expired', 'cancelled']);
+
 export async function markOrderPaid(
   db: Db,
   events: EventBus,
@@ -183,6 +190,21 @@ export async function markOrderPaid(
     // 迁移合法性问状态机（@limitation 一）。`asOrderStatus` 对枚举外的脏状态抛 50000：
     //    库里的状态超出枚举 = 数据已被写坏，不能当成"不可迁移"糊过去。
     const from = asOrderStatus(current);
+    // ⚠️ **已关单的到账 = 迟到付款**（KD-7，2026-09-28 测试审查实测；AJ-175 拍板）：
+    //    关单作业每分钟一轮，迟到的钱多数时候碰到的已经是 `expired`（用户取消的则是 `cancelled`）。
+    //    原实现先问状态机、`expired → paid` 不合法 → 不带 reason 的 40902 → 管线按普通状态冲突记 warn +
+    //    `ignored:status_conflict`，只有"关单作业还没跑到"的几十秒内到账才被识别为 late_payment——
+    //    同一件事（钱扣了、单已关、必须人工退款）按到达时刻分成两种分类与两种告警级别。
+    //    现在两种情形统一：订单已处于"关闭且未收款"终态时，一律 `reason:'late_payment'`。
+    //    @tradeoff cancelled 也归入 late_payment 而不是新造一个 `closed_payment`：运营动作完全相同（退款），
+    //    多一个词只多一条对账分支；区分"是过期还是取消"看 `details.from`，日志里有。
+    if (CLOSED_UNPAID.has(from)) {
+      throw new AppError(40902, {
+        from,
+        reason: 'late_payment',
+        ctx: { closed_as: from },
+      });
+    }
     if (!canTransition(from, 'paid')) {
       throw new AppError(40902, { from, to: 'paid', where: 'mark-paid' });
     }
@@ -206,7 +228,8 @@ export async function markOrderPaid(
       update orders set status = 'paid', paid_at = ${paidAt}, updated_at = now() where id = ${orderId}
     `;
     await tx`
-      insert into order_events (order_id, status, actor, at) values (${orderId}, 'paid', 'system', ${paidAt})
+      insert into order_events (order_id, status, actor, at)
+      values (${orderId}, 'paid', ${`provider:${settlement.channel}`}, ${paidAt})
     `;
     // 同一事务里把支付行封口：`payments` 是"钱"的账，`orders` 是"货"的账，
     //    两边必须一起提交——分开写会出现"订单已付、支付行还在 initiated"，

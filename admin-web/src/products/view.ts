@@ -266,15 +266,19 @@ export function productFormErrors(form: unknown): {
  * @why `origin_country` **强制 JP** 而不是照抄表单：MVP 只允许 JP（D-42/D-43），
  *      表单里若出现别的值是脏数据，照抄会把"前端显示错了"升级成"服务端 40001"。
  */
-export function toProductInput(form: unknown): Record<string, unknown> {
+export function toProductInput(form: unknown, originalStock?: string): Record<string, unknown> {
   const f = asForm(form);
+  // 库存**只在变动时发送**（AJ-175）：库存是并发写的列（下单扣减、取消/关单回补），
+  // 编辑页打开时读到的值在保存那一刻可能已经过时；原样带回去会把期间的扣减/回补覆盖掉。
+  // 服务端约定：PUT 省略 stock = 保持原值。新建（originalStock 未传）照常发送。
+  const stockChanged = originalStock === undefined || f.stock.trim() !== originalStock.trim();
   return {
     title: f.title.trim(),
     category: f.category,
     price_jpy: Number(f.priceJpy),
     cost_jpy: f.costJpy.trim() === '' ? undefined : Number(f.costJpy),
     weight_g: Number(f.weightG),
-    stock: Number(f.stock),
+    ...(stockChanged ? { stock: Number(f.stock) } : {}),
     description: f.description.trim(),
     customs_desc_en: f.customsDescEn.trim(),
     origin_country: 'JP',

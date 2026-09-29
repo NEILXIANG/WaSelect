@@ -80,7 +80,7 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     await seedPaidOrder('o-1');
     const at = new Date('2026-09-27T10:00:00Z');
     await withTransaction(db, async (tx) => {
-      expect(await markShipped(tx, 'o-1', 'JPPOST', 'TRACK-1', at)).toBe(true);
+      expect(await markShipped(tx, 'o-1', 'JPPOST', 'TRACK-1', at, 'admin:u-admin')).toBe(true);
     });
     const rows =
       await db`select status, carrier, tracking_no, shipped_at from orders where id = 'o-1'`;
@@ -91,12 +91,16 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     const evs = await db`select status, note, actor from order_events where order_id = 'o-1'`;
     expect(String(evs[0]?.status)).toBe('shipped');
     expect(String(evs[0]?.note)).toBe('JPPOST / TRACK-1');
+    // 一致性审计 C3（AJ-176）：技术文档 actor 口径 `admin:<id>`——admin_audit 未落地前这是"谁发的货"的唯一留痕
+    expect(String(evs[0]?.actor)).toBe('admin:u-admin');
   });
 
   it('markShipped：状态已被抢先迁走 → false 且不写事件（0 行命中不是错误）', async () => {
     await seedPaidOrder('o-1', 'shipped');
     await withTransaction(db, async (tx) => {
-      expect(await markShipped(tx, 'o-1', 'JPPOST', 'TRACK-1', new Date())).toBe(false);
+      expect(await markShipped(tx, 'o-1', 'JPPOST', 'TRACK-1', new Date(), 'admin:u-admin')).toBe(
+        false,
+      );
     });
     const evs = await db`select count(*)::int as n from order_events where order_id = 'o-1'`;
     expect(Number(evs[0]?.n)).toBe(0);
@@ -119,13 +123,14 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
       const id = `o-${from}`;
       await seedPaidOrder(id, from);
       await withTransaction(db, async (tx) => {
-        expect(await markRefunding(tx, id, '缺货', new Date())).toBe(true);
+        expect(await markRefunding(tx, id, '缺货', new Date(), 'admin:u-admin')).toBe(true);
       });
     }
     const rows = await db`select id, status from orders order by id`;
     expect(rows.map((r) => String(r.status))).toEqual(['refunding', 'refunding', 'refunding']);
-    const evs = await db`select note from order_events where order_id = 'o-paid'`;
+    const evs = await db`select note, actor from order_events where order_id = 'o-paid'`;
     expect(String(evs[0]?.note)).toBe('缺货');
+    expect(String(evs[0]?.actor)).toBe('admin:u-admin');
   });
 
   it('markRefunding：cancelled / expired / refunding 一律不迁（false）', async () => {
@@ -133,7 +138,7 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
       const id = `o-${from}`;
       await seedPaidOrder(id, from);
       await withTransaction(db, async (tx) => {
-        expect(await markRefunding(tx, id, 'x', new Date())).toBe(false);
+        expect(await markRefunding(tx, id, 'x', new Date(), 'admin:u-admin')).toBe(false);
       });
     }
   });
@@ -141,24 +146,27 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
   it('markRefunded：refunding → refunded，payment 行同步标 refunded，事件留机构退款号', async () => {
     await seedPaidOrder('o-1', 'refunding');
     await withTransaction(db, async (tx) => {
-      expect(await markRefunded(tx, 'o-1', 'pay-o-1', 're_stripe_1', new Date())).toBe(true);
+      expect(
+        await markRefunded(tx, 'o-1', 'pay-o-1', 're_stripe_1', new Date(), 'admin:u-admin'),
+      ).toBe(true);
     });
     const o = await db`select status, refunded_at from orders where id = 'o-1'`;
     expect(String(o[0]?.status)).toBe('refunded');
     expect(o[0]?.refunded_at).not.toBeNull();
     const p = await db`select status from payments where id = 'pay-o-1'`;
     expect(String(p[0]?.status)).toBe('refunded');
-    const evs = await db`select status, note from order_events where order_id = 'o-1'`;
+    const evs = await db`select status, note, actor from order_events where order_id = 'o-1'`;
     expect(String(evs[0]?.status)).toBe('refunded');
     expect(String(evs[0]?.note)).toBe('re_stripe_1');
+    expect(String(evs[0]?.actor)).toBe('admin:u-admin');
   });
 
   it('markRefunded：重复提交 → false（第二次不再写事件，退款不会记两笔）', async () => {
     await seedPaidOrder('o-1', 'refunding');
     const at = new Date();
     await withTransaction(db, async (tx) => {
-      expect(await markRefunded(tx, 'o-1', 'pay-o-1', 're_1', at)).toBe(true);
-      expect(await markRefunded(tx, 'o-1', 'pay-o-1', 're_1', at)).toBe(false);
+      expect(await markRefunded(tx, 'o-1', 'pay-o-1', 're_1', at, 'admin:u-admin')).toBe(true);
+      expect(await markRefunded(tx, 'o-1', 'pay-o-1', 're_1', at, 'admin:u-admin')).toBe(false);
     });
     const evs = await db`select count(*)::int as n from order_events where order_id = 'o-1'`;
     expect(Number(evs[0]?.n)).toBe(1);

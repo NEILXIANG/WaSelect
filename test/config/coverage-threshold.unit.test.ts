@@ -162,6 +162,16 @@ describe('覆盖率阈值配置（vitest.coverage-gates.ts）', () => {
    *      上面那条断言若因为匹配器写错而"什么都匹配不到"，表现是"全绿但一条阈值都没验"。
    * @measured 三条正例一条反例：'a/**\/*.ts' 命中 0 层与 2 层目录，'*' 不跨 '/'，'?' 只吃一个字符。
    */
+  it('每个页面 view-model（miniprogram/pages/*/index.vm.js）都在统计范围内（约束十一的逻辑不能游离在门槛外）', () => {
+    // @why 一致性审计 C6（AJ-176）：约束十一把页面逻辑全部挪进 *.vm.js，但 include 只收 utils，
+    //      9 个 vm（约 750 行）不在任何覆盖率门槛下，《测试策略》§4.2「抽出的纯逻辑 ≥ 80%」形同虚设。
+    //      新建页面时 vm 会自动进统计；有人删掉 include 那一行会在这里红。
+    const vms = allFiles.filter((f) => /^miniprogram\/pages\/[^/]+\/index\.vm\.js$/.test(f));
+    expect(vms.length).toBeGreaterThan(0);
+    const covered = new Set(coveredSourceFiles());
+    expect(vms.filter((f) => !covered.has(f))).toEqual([]);
+  });
+
   it('自带 glob 匹配器自检：`**` 跨目录、`*` 不跨目录、`?` 单字符', () => {
     expect(globToRegExp('server/src/**/webhooks.ts').test('server/src/adapters/webhooks.ts')).toBe(
       true,

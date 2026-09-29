@@ -8,9 +8,9 @@
  *      运费取档（SQL）夹在"算总重"与"算总价"中间——总重是取档的输入，运费是总价的输入。
  *      若合成一个函数，要么把 SQL 塞进纯函数（分层破），要么在外面把校验逻辑拆开写两遍。
  *
- * @why duty_jpy 是**信息字段、不计入 total**（契约 Quote.duty_jpy 描述，13b 未定）：
- *      MVP 是 DDP（价格已含关税），向用户展示"其中关税估算 X"只是透明度，
- *      基数与口径（15% / 13.04% / 17.25% 三口径待 D 决策）没定之前，它绝不能参与应收。
+ * @why duty_jpy 是**信息字段、不计入 total**（契约 Quote.duty_jpy 描述）：
+ *      MVP 是 DDP（价格已含关税），向用户展示"其中关税估算 X"只是透明度，它绝不参与应收。
+ *      基数与口径已由 AJ-142 定案（按成交价 ×15%，13b 转已决；一致性审计 C9 更正原"三口径待 D 决策"）。
  *
  * @limitation 一：duty 基数取**商品小计**（items_jpy，不含运费）——三口径未定前的展示口径；
  *              决策落地时改这一处 + duty_rates.note，不要在调用点打补丁。
@@ -157,7 +157,7 @@ export function computeQuote(input: QuoteComputationInput): QuoteComputation {
   const totalJpy = input.itemsJpy + shippingJpy;
 
   const dutyEstimated = input.dutyRatioInt !== null;
-  // 基数 = 商品小计（@limitation 一，13b 未定）；取整走 shared 唯一口（applyRate）
+  // 基数 = 商品小计（@limitation 一；按成交价申报，AJ-142）；取整走 shared 唯一口（applyRate）
   const dutyJpy = dutyEstimated ? applyRate(input.itemsJpy, input.dutyRatioInt ?? 0) : null;
 
   const display: Partial<Record<DisplayCurrency, number>> = {};

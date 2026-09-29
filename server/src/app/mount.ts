@@ -80,6 +80,12 @@ export interface MountContext {
  */
 export function mountAllRoutes(app: Express, ctx: MountContext): void {
   const { config, logger, db, events, storage } = ctx;
+  // ── 身份状态回源（D25）：**全站共用一份缓存实例**（KD-6，2026-09-28 测试审查读码确认；AJ-175）。
+  //    曾经每组路由各自 `withIdentityCache(createIdentityCheck(db))`，共 11 份独立缓存——
+  //    同一个人被封禁/撤权后，各组路由在不同时刻（最长各 60 秒）才生效：买家在订单页已被拒、
+  //    在地址页仍放行；token_ver 变更后重登拿到的新 token 也可能被某一组尚未过期的旧缓存拒成 40101。
+  //    一份实例 = 全站同一时刻看到同一个身份状态（仍有最长 60 秒的缓存窗口，这是既定口径）。
+  const identity = withIdentityCache(createIdentityCheck(db));
 
   // ── 支付路由（F11）：**每个环境都挂**，它不是脚手架 ──────────────────────
   // @why 回调是机构打给我们的，生产必须能收；通道列表是前端入口的来源。
@@ -139,7 +145,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
        *    它是举证期限的起点，用后者会把举证窗口**算短**（AJ-159 / 迁移 013）。
        *    机构没给时 `markOrderDisputed` 会**拒落库**转对账，这里不降级成"用当前时间"：
        *    "有值但错了"比"没有值"更难发现。
-       * @see app/mark-disputed.ts @limitation 二（结案事件尚未实现，status 置 open 后不再变）
+       * @see app/mark-disputed.ts（结案由下面的 dispute_closed 落账器处理，AJ-162 / AJ-176）
        */
       disputed: {
         apply: async (e, channel) =>
@@ -201,7 +207,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     logger,
     clock: systemClock,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
     config,
   });
 
@@ -216,7 +222,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     idGen: systemIdGen,
     config,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
   });
   // ── 管理端订单（I2-U-B2d）：注册表用本函数顶部装配的那一份——退款要按订单当时的
   //    通道取 provider（老单退款不受"通道已下线"影响，getForRefund 内部判
@@ -227,7 +233,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     config,
     clock: systemClock,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
     registry,
   });
   // ── 管理端运营配置（I2-U-C3）：展示汇率与运费分档。clock 必须注入——
@@ -238,7 +244,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     config,
     clock: systemClock,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
   });
   // ── 管理端 Banner（I2-U-D3）：`image` 完整 URL 由本路由用 config.IMG_BASE_URL 拼
   //    （它是该配置项的**第一个**消费方，此前配了但没人用）──
@@ -248,7 +254,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     config,
     idGen: systemIdGen,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
   });
   // ── 管理端风控（I2-U-E3）：拒付列表 + 拉黑。拉黑是本项目第一个**不可逆**的写操作
   //    （契约没有解除接口），所以它必须走业务日志（admin_audit 端口落地后一并接入）──
@@ -256,7 +262,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     db,
     logger,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
   });
 
   // ── 管理端上传（I2-U-I4）：storage 由依赖袋传入（测试用 memory 驱动断言 put）；
@@ -266,7 +272,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     config,
     idGen: systemIdGen,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
     storage,
   });
 
@@ -274,7 +280,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     db,
     logger,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
     idGen: systemIdGen,
   });
 
@@ -286,7 +292,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     idGen: systemIdGen,
     config,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
     idempotency: createIdempotencyExecutor(db),
     events,
     createOrderLimiter: rateLimiter(
@@ -300,17 +306,18 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     db,
     config,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
   });
 
   // ── 发起支付（I1-U6a）：幂等 + 限流；注册表用本函数顶部装配的那一份（可插拔唯一出处）──
   mountPayIntentRoutes(app, {
+    db,
     logger,
     clock: systemClock,
     idGen: systemIdGen,
     config,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
-    identity: withIdentityCache(createIdentityCheck(db)),
+    identity,
     idempotency: createIdempotencyExecutor(db),
     registry,
     payLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('orders.pay')),

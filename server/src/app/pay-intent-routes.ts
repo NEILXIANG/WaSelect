@@ -27,9 +27,11 @@ import type { PaymentRegistry } from '../ports/payment.js';
 import { requireRole, type AuthConfig } from './auth.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import { scopeKey, type IdempotencyExecutor } from '../ports/idempotency.js';
-import { createPayIntent } from './pay-intent.js';
+import { createPayIntent, redactPayToken, reissuePayLinkOnReplay } from './pay-intent.js';
 
 export interface PayIntentRoutesDeps {
+  /** 幂等重放时补发短链要开自己的事务（KD-3：重放体里的明文 token 已被抹掉）。 */
+  db: Db;
   logger: Logger;
   clock: Clock;
   idGen: IdGen;
@@ -76,6 +78,8 @@ export function mountPayIntentRoutes(app: Express, deps: PayIntentRoutesDeps): v
               // N3：指纹素材必传（客户端复用键换通道 → 40908，与建单同口径）
               request: req.body,
               logger: deps.logger,
+              // KD-3（AJ-175）：短链明文 token 不许随响应体进幂等表——落库前抹掉，重放时补发
+              persist: redactPayToken,
             },
             async (tx) => {
               const r = await createPayIntent(
@@ -100,7 +104,21 @@ export function mountPayIntentRoutes(app: Express, deps: PayIntentRoutesDeps): v
               };
             },
           );
-          res.status(result.status).json(result.body);
+          const out = result.replayed
+            ? await reissuePayLinkOnReplay(
+                deps.db,
+                {
+                  config: deps.config,
+                  clock: deps.clock,
+                  idGen: deps.idGen,
+                  logger: deps.logger,
+                  registry: deps.registry,
+                },
+                { orderId, userId: sub },
+                result.body,
+              )
+            : result.body;
+          res.status(result.status).json(out);
         } catch (e) {
           next(e);
         }

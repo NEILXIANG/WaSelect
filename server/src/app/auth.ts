@@ -5,9 +5,10 @@
  * @why 鉴权做成骨架而不是等业务期再写：它是唯一的"横切安全面"，晚做就意味着中间写的所有路由
  *      都要回头补守卫；而补守卫最容易漏的是"忘了补"的那一个（管理端接口泄露的代价最大）。
  *
- * @limitation 一：JWT 用 HS256 + 单一密钥，且**不做服务端的 token 黑名单**。
- *              后果：登出 / 封禁后旧 token 在 exp 之前仍然有效。MVP 可接受（影响窗口 = token 有效期）；
- *              若将来需要即时失效，改为在 `users.token_version` 上做版本比对（F7 之后有库了才能做）。
+ * @limitation 一：JWT 用 HS256 + 单一密钥，**不做 token 黑名单**；即时失效靠**回源比对**：
+ *              每个受保护请求经 `IdentityCheck` 读 `users.token_ver` / `blocked_at` / `is_admin`（D25，
+ *              全站一份 60 秒缓存，KD-6）——改密 / 封禁 / 撤权最迟 60 秒生效。
+ *              （一致性审计 C9 更正：本条原写"旧 token 在 exp 前仍有效、token_version 待做"，迁移 003 后已实现。）
  * @limitation 二：口令哈希用 bcryptjs（纯 JS）。比 argon2id 弱、比原生 bcrypt 慢约 3–5 倍。
  *              选它是因为无需本地编译（本机 npm install 常被资源看门狗杀，原生模块编译是重灾区）；
  *              管理员登录是低频操作，性能无所谓。cost 固定 10，写在这里以便将来统一调。

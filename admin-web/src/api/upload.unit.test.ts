@@ -6,6 +6,7 @@
  *      HTTP 非 2xx 被当 JSON 解析。
  */
 import { describe, expect, it } from 'vitest';
+import { ApiError } from './errors.js';
 import { uploadImage } from './upload.js';
 
 /** 造一个假 fetch：记录最后一次请求，返回预定响应。 */
@@ -74,10 +75,64 @@ describe('uploadImage（multipart，不走 JSON 封装）', () => {
     expect(out).toEqual({ image_key: 'k' });
   });
 
-  it('HTTP 非 2xx → 抛（不把错误页当 JSON 解析）', async () => {
+  it('HTTP 非 2xx 且带业务码 → 抛**业务错**（KD-13 前这里断言的是"HTTP 400"——把缺陷行为钉成了期望）', async () => {
     const { impl } = stubFetch(() => json({ code: 40001, message: 'bad' }, 400));
-    await expect(uploadImage(deps(impl), new Blob(['x']) as unknown as File)).rejects.toThrow(
-      /HTTP 400/,
+    const err = await uploadImage(deps(impl), new Blob(['x']) as unknown as File).catch(
+      (e: unknown) => e,
     );
+    expect((err as ApiError).code).toBe(40001);
+    expect((err as ApiError).message).toContain('bad');
+  });
+});
+
+describe('uploadImage 错误收敛与 client.ts 同口径（KD-13）', () => {
+  const file = () => new Blob(['x']) as unknown as File;
+  const respond =
+    (status: number, body: string, headers: Record<string, string> = {}): typeof fetch =>
+    async () =>
+      new Response(body, { status, headers });
+
+  it('body 带业务码 → 按业务错抛：code / 服务端 message / 响应头 trace id 都带回', async () => {
+    const err = await uploadImage(
+      {
+        baseUrl: 'https://api.test',
+        getToken: () => 't',
+        fetchImpl: respond(400, '{"code":40001,"message":"参数缺失或格式错误"}', {
+          'x-trace-id': 'trace-from-server',
+        }),
+      },
+      file(),
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe(40001);
+    expect((err as ApiError).message).toContain('参数缺失或格式错误');
+    expect((err as ApiError).traceId).toBe('trace-from-server');
+  });
+
+  it('40101 → 先调 onUnauthorized 再抛（与 JSON 封装同序）；其它业务码不调', async () => {
+    const seen: number[] = [];
+    const deps = (body: string) => ({
+      baseUrl: 'https://api.test',
+      getToken: () => 't',
+      fetchImpl: respond(401, body),
+      onUnauthorized: (e: ApiError) => seen.push(e.code),
+    });
+    await expect(uploadImage(deps('{"code":40101,"message":"x"}'), file())).rejects.toThrow();
+    expect(seen).toEqual([40101]);
+    await expect(uploadImage(deps('{"code":40301,"message":"x"}'), file())).rejects.toThrow();
+    expect(seen).toEqual([40101]);
+  });
+
+  it('非 JSON 错误页（平台 502 HTML）→ 仍归网络错并带 HTTP 状态', async () => {
+    const err = await uploadImage(
+      {
+        baseUrl: 'https://api.test',
+        getToken: () => 't',
+        fetchImpl: respond(502, '<html>bad gateway</html>'),
+      },
+      file(),
+    ).catch((e: unknown) => e);
+    expect((err as ApiError).code).toBe(-1);
+    expect((err as ApiError).message).toContain('HTTP 502');
   });
 });

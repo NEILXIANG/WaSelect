@@ -27,12 +27,9 @@
  *              重投会把已经 won / lost 的拒付**打回 open**——后台于是显示"有进行中的拒付"、
  *              退款闸门重新锁上，而机构那边早就结案了。这种错误**没有任何一方报错**，
  *              只能靠"重放不得改变已结案状态"这条用例钉住。
- * @limitation 二：**只处理"开案"**（`charge.dispute.created`）。
- *              结案（`charge.dispute.closed` → won/lost + `dispute_closed_at`）**尚未实现**——
- *              它在等 F12 的状态机与真实机构的结案事件形状，现在硬写会写出一个
- *              没人验证过的分支（与 pay-callback.ts @limitation 一 同一个判断）。
- *              ⚠️ 代价：`payments.dispute_status` 一旦置 open 就**永远**是 open，
- *              风控页因此会把已结案的拒付一直显示成进行中。这是**已知缺口**。
+ * @limitation 二：开案（`markOrderDisputed`）与结案（`markDisputeClosed`，I2 U-F4 / AJ-162）都已实现；
+ *              结案后 `has_dispute`：won 复位、**lost 保持 true**（AJ-176 部分推翻 AJ-162 ③，理由见 markDisputeClosed 内注释）。
+ *              （一致性审计 C9 更正：本条原写"结案尚未实现、dispute_status 永远是 open"，U-F4 落地后未回写。）
  * @limitation 三：只取**最近一条** `status='succeeded'` 的支付行（与 mark-paid 同一口径）。
  *              换通道重付的场景（旧行作废、新行 succeeded）里，拒付只会落在新的那条上；
  *              旧行的拒付状态不会同步。MVP 无换通道重付，可接受。
@@ -181,10 +178,18 @@ export async function markDisputeClosed(
       throw new AppError(50000, { reason: '拒付结案未命中支付行', ctx: { order_id: orderId } });
     }
 
-    await tx`update orders set has_dispute = false, updated_at = now() where id = ${orderId}`;
+    // 结案：won → 复位（闸门解锁，AJ-162 ③）；**lost → 保持 true**（一致性审计 C12，AJ-176 部分推翻 AJ-162 ③）。
+    // @why lost 意味着钱已被机构拉回给持卡人：再发货 = 钱货两空；再退款在 Stripe 侧必败——
+    //      @measured(docs.stripe.com/error-codes, 2026-09-28)：`charge_disputed`「The charge you're attempting
+    //      to refund has been charged back」、`refund_disputed_payment`「You can't refund a disputed payment」。
+    //      复位后退款会停在 refunding + 50000，发货则无人拦。AJ-162 只论证了"won 不复位 = 永远不能操作"，
+    //      lost 那一半沿用了同一结论；技术文档 D-50 行原本就写着"won 解除 has_dispute"。
+    // @tradeoff `has_dispute` 的语义从"有进行中的拒付"扩为"有未解除的拒付限制（进行中，或已败诉）"（契约 0.6.10）。
+    await tx`update orders set has_dispute = ${c.result !== 'won'}, updated_at = now() where id = ${orderId}`;
     await tx`
       insert into order_events (order_id, status, note, actor, at)
-      values (${orderId}, 'dispute_closed', ${`${c.disputeId}:${c.result}`}, 'system', ${closedAt})
+      values (${orderId}, 'dispute_closed', ${`${c.disputeId}:${c.result}`},
+              ${`provider:${c.channel}`}, ${closedAt})
     `;
     emit({
       name: 'order.dispute_closed',
@@ -275,7 +280,7 @@ export async function markOrderDisputed(
         await tx`update orders set has_dispute = true, updated_at = now() where id = ${orderId}`;
         await tx`
           insert into order_events (order_id, status, note, actor, at)
-          values (${orderId}, 'dispute_opened', ${d.disputeId}, 'system',
+          values (${orderId}, 'dispute_opened', ${d.disputeId}, ${`provider:${d.channel}`},
                   to_timestamp(${openedAtSec}))
         `;
         emit({
@@ -307,7 +312,7 @@ export async function markOrderDisputed(
     await tx`update orders set has_dispute = true, updated_at = now() where id = ${orderId}`;
     await tx`
       insert into order_events (order_id, status, note, actor, at)
-      values (${orderId}, 'dispute_opened', ${d.disputeId}, 'system', ${openedAt})
+      values (${orderId}, 'dispute_opened', ${d.disputeId}, ${`provider:${d.channel}`}, ${openedAt})
     `;
     emit({
       name: 'order.dispute_opened',

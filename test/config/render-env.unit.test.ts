@@ -41,6 +41,8 @@ const renderYaml = readFileSync(resolve(root, 'render.yaml'), 'utf8');
  */
 const PLATFORM_KEYS: Readonly<Record<string, string>> = {
   NODE_VERSION: 'Render 平台的运行时版本开关，由平台自身读取，不属于应用配置',
+  DAILY_JOB_TARGET:
+    'cron 服务专用：由平台 fromService(property: hostport) 注入的 web 服务内网地址，只给 startCommand 用，应用不读（AJ-176）',
 };
 
 interface EnvEntry {
@@ -234,6 +236,22 @@ describe('render.yaml ↔ 配置 schema 一致', () => {
     expect(build).toMatch(/npm ci --include=dev/);
     const pre = /^\s*preDeployCommand:\s*(.+)$/m.exec(renderYaml)?.[1] ?? '';
     expect(pre).toMatch(/npm run db:migrate/);
+  });
+
+  it('每日作业：声明了 cron 服务调 /api/v1/internal/jobs/daily，密钥与内网地址取自 web 服务（一致性审计 C1，AJ-176）', () => {
+    // @why 技术文档 §6.1 / 工程框架文档 / D-43③ 都写"Render Cron Job 调 POST /internal/jobs/daily"，
+    //      但本清单只有 web + db：生产上每日对账（含调度心跳看门狗、卡住的回调 KD-2）**永不执行**，
+    //      而 0.5.4 起 /healthz 已不再承担看门狗——tick 停摆将没有任何告警。
+    const cron =
+      /^\s*-\s*type:\s*cron\s*$([\s\S]*?)(?=^\s*-\s*type:|^\S)/m.exec(renderYaml)?.[1] ?? '';
+    expect(cron).not.toBe('');
+    expect(cron).toMatch(/^\s*schedule:\s*'[^']+'/m);
+    expect(cron).toMatch(/\/api\/v1\/internal\/jobs\/daily/);
+    expect(cron).toMatch(/x-internal-job-secret/i);
+    // 密钥不写字面值：取 web 服务同名变量（fromService），且与 web 同区域（内网只在同区域可达）
+    expect(cron).toMatch(/-\s*key:\s*INTERNAL_JOB_SECRET\s*\n\s*fromService:/);
+    expect(cron).toMatch(/property:\s*hostport/);
+    expect(cron).toMatch(/^\s*region:\s*oregon/m);
   });
 
   it('解析器自检：databases 段解析出键值且不吃注释、不越段', () => {

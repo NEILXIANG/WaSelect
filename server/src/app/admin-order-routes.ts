@@ -30,7 +30,7 @@
  * @see adapters/orders-admin.ts（仓储）；domain/admin-order-actions.ts（准入判定）；
  *      domain/address-input.ts（地址校验）；contracts/api-contract.yaml（AdminOrder / AdminOrderListItem）
  */
-import type { Express } from 'express';
+import type { Express, Request } from 'express';
 import { AppError } from '../errors.js';
 import type { Db } from '../adapters/db.js';
 import { withTransaction } from '../adapters/db.js';
@@ -55,6 +55,8 @@ import {
   listPaymentsFor,
   lockAdminOrder,
   markRefunded,
+  findRefundingReason,
+  recordRefundFailed,
   markRefunding,
   markShipped,
   updateAddressSnapshot,
@@ -72,6 +74,16 @@ export interface AdminOrderRoutesDeps {
   registry: PaymentRegistry;
 }
 
+/**
+ * 事件 actor：`admin:<sub>`（技术文档 order_events.actor 口径）。
+ * @why 发货 / 退款曾写成不带 id 的 `'admin'`（一致性审计 C3，AJ-176）：`admin_audit` 未落地前（AJ-150），
+ *      order_events 是"哪个管理员退的款"的**唯一**留痕，不带 id 就无从追责。
+ *      `unknown` 只在守卫之后仍拿不到 sub 时出现（理论不可达：requireRole 已验签），保留是为了不抛。
+ */
+function adminActor(req: Request): string {
+  return `admin:${req.auth?.sub ?? 'unknown'}`;
+}
+
 /** 列表行 → 契约 `AdminOrderListItem`（主键改叫 order_id，见文件头 @why）。 */
 function toListItem(r: AdminOrderListRow): Record<string, unknown> {
   return {
@@ -83,6 +95,7 @@ function toListItem(r: AdminOrderListRow): Record<string, unknown> {
     ...(r.contact_email !== null ? { contact_email: r.contact_email } : {}),
     ...(r.carrier !== null ? { carrier: r.carrier } : {}),
     ...(r.tracking_no !== null ? { tracking_no: r.tracking_no } : {}),
+    ...(r.recipient !== null ? { recipient: r.recipient } : {}),
     has_dispute: r.has_dispute,
     is_test: r.is_test,
     created_at: r.created_at.toISOString(),
@@ -96,7 +109,9 @@ function toAdminOrder(
   payments: readonly Record<string, unknown>[],
   events: readonly Record<string, unknown>[],
 ): Record<string, unknown> {
-  const latest = payments[payments.length - 1] as { charge_currency?: unknown } | undefined;
+  const latest = payments[payments.length - 1] as
+    | { provider?: unknown; charge_currency?: unknown; charge_amount?: unknown; status?: unknown }
+    | undefined;
   return {
     order_id: r.id,
     order_no: r.order_no,
@@ -116,8 +131,18 @@ function toAdminOrder(
     is_test: r.is_test,
     payments,
     events,
-    // `payment` 是契约 Order 里的"最新一条摘要"；与 payments 末条同源，不另查一次。
-    ...(latest !== undefined ? { payment: latest } : {}),
+    // `payment` 是契约 Order 里的"最新一条摘要"（{channel, charge_currency, charge_amount}）；与 payments 末条同源。
+    // ⚠️ 键名按契约叫 `channel`：曾把末条原样透传（键叫 provider），admin-web 读 payment.channel 永远为空
+    //    （一致性审计 C5，AJ-176）。明细仍在 `payments[]`（带 provider / status / 机构单号）。
+    ...(latest !== undefined
+      ? {
+          payment: {
+            channel: latest.provider,
+            charge_currency: latest.charge_currency,
+            charge_amount: latest.charge_amount,
+          },
+        }
+      : {}),
     ...(r.contact_email !== null ? { contact_email: r.contact_email } : {}),
     ...(r.carrier !== null ? { carrier: r.carrier } : {}),
     ...(r.tracking_no !== null ? { tracking_no: r.tracking_no } : {}),
@@ -229,7 +254,9 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           if (row === null) throw new AppError(40400, { order_id: id });
           const gate = shipGuard(asOrderStatus(row.status), row.has_dispute);
           if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
-          if (!(await markShipped(tx, id, carrier, trackingNo, deps.clock.now()))) {
+          if (
+            !(await markShipped(tx, id, carrier, trackingNo, deps.clock.now(), adminActor(req)))
+          ) {
             throw new AppError(40902, { order_id: id, reason: 'status_raced' });
           }
         });
@@ -262,13 +289,39 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           if (pay.provider_ref === null) {
             throw new AppError(50000, { order_id: id, reason: 'provider_ref_missing' });
           }
-          if (!(await markRefunding(tx, id, reason.trim(), deps.clock.now()))) {
+          // 重试（KD-4，AJ-175）：上一次机构调用失败后订单停在 refunding。
+          // 不再迁移状态（refunding → refunding 不是迁移），也不写第二条 refunding 事件；
+          // 机构请求沿用**首次**的理由——机构幂等键按订单固定，换理由 = 同键异参 = 机构 400。
+          // @measured(docs.stripe.com/error-low-level#idempotency, 2026-09-28)：
+          //   "as long as an API method began execution, Stripe's API servers will cache the results
+          //   of the request regardless of what they were"（含 500）；同键同参重试回首次结果。
+          //   → 最常见的卡单原因"机构已执行、我们没收到答复"（超时/断网）：重试拿回首次那笔退款，正确。
+          // @limitation 机构侧**已执行但失败**（如 400/402/500 被缓存）时，24 小时内同键重试回的是同一个错误——
+          //   重试不会成功，要么等 24 小时键过期，要么在 Stripe 控制台人工处理后再点。
+          //   不改成"每次重试换新键"：原请求的结果不确定（可能已退），新键 = 可能退第二次
+          //   （全额退时 Stripe 会拒"已退款"，但我方会因此停在 refunding 且拿不到退款单号）。
+          //   stripe-golden-chain.db.test.ts「KD-4」用例验的是"响应丢失后重试"这一主路径。
+          let refundReason = reason.trim();
+          if (row.status === 'refunding') {
+            const original = await findRefundingReason(tx, id);
+            if (original === null) {
+              throw new AppError(50000, { order_id: id, reason: 'refunding_event_missing' });
+            }
+            refundReason = original;
+            deps.logger.warn('admin_order_refund_retry', {
+              result: 'retry',
+              order_id: id,
+              ctx: { provider: pay.provider },
+            });
+          } else if (
+            !(await markRefunding(tx, id, refundReason, deps.clock.now(), adminActor(req)))
+          ) {
             throw new AppError(40902, { order_id: id, reason: 'status_raced' });
           }
           // ⚠️ 在这里把已收窄的 providerRef 带出去：出了这个闭包 TS 的收窄就丢了，
           //    而 `RefundRequest.providerRef` 是 `string`——不带上就得在调用点再判一次
           //    （或用 `!`，那等于把"这里不可能为 null"的论证从类型里拿掉）。
-          return { row, pay, providerRef: pay.provider_ref };
+          return { row, pay, providerRef: pay.provider_ref, refundReason };
         });
 
         // ── 第二段（事务外）：调机构。失败不回滚——停在 refunding 是**可见**的状态 ──
@@ -279,23 +332,46 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           amountJpy: plan.row.total_jpy,
           currency: plan.pay.charge_currency,
           amountMinor: plan.pay.charge_amount,
-          reason: reason.trim(),
+          reason: plan.refundReason,
         };
-        const out = await provider.refund?.(refundReq);
-        if (out === undefined) {
+        if (provider.refund === undefined) {
           throw new AppError(50000, { order_id: id, reason: 'refund_not_supported' });
         }
-        if (out.outcome === 'failed') {
+        // 失败两种形态（机构抛错 / 机构回 failed）都记一条 refund_failed 事件 + error 日志，再抛 50000（C13）
+        const failRefund = async (kind: 'provider_error' | 'provider_failed', err?: unknown) => {
           deps.logger.error('admin_order_refund_failed', {
             result: 'failed',
             order_id: id,
-            ctx: { provider: plan.pay.provider },
+            ctx: { provider: plan.pay.provider, kind },
+            ...(err !== undefined ? { err } : {}),
           });
-          throw new AppError(50000, { order_id: id, reason: 'refund_failed' });
+          await recordRefundFailed(deps.db, id, kind, adminActor(req), deps.clock.now()).catch(
+            (e: unknown) =>
+              deps.logger.error('admin_order_refund_failed_event_not_written', {
+                result: 'failed',
+                order_id: id,
+                err: e,
+              }),
+          );
+          return new AppError(50000, { order_id: id, reason: 'refund_failed' });
+        };
+        let out;
+        try {
+          out = await provider.refund(refundReq);
+        } catch (e) {
+          throw await failRefund('provider_error', e);
         }
+        if (out.outcome === 'failed') throw await failRefund('provider_failed');
         if (out.outcome === 'succeeded') {
           await withTransaction(deps.db, async (tx) => {
-            await markRefunded(tx, id, plan.pay.id, out.refundRef, deps.clock.now());
+            await markRefunded(
+              tx,
+              id,
+              plan.pay.id,
+              out.refundRef,
+              deps.clock.now(),
+              adminActor(req),
+            );
           });
         }
         // pending：留在 refunding，等机构异步完成（F12 售后对账补"退款状态查询/回调"）
@@ -343,7 +419,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
               tx,
               id,
               snapshot as never,
-              `admin:${req.auth?.sub ?? 'unknown'}`,
+              adminActor(req),
               deps.clock.now(),
             ))
           ) {

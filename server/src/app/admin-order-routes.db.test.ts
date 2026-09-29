@@ -209,6 +209,19 @@ describe('GET /admin/orders（管理端订单列表）', () => {
     await s.close();
   });
 
+  it('列表行带收件人（0.6.9/KD-14）：按收件人搜中的行，收件人一栏能回显；其余地址字段不在列表', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-r1' });
+    await db`update orders set address_snapshot = address_snapshot || '{"recipient":"Hanako Sato"}'::jsonb where id = 'o-r1'`;
+    const r = await adminFetch(s, 'GET', '/api/v1/admin/orders?keyword=hanako');
+    const items = r.json.items as Array<Record<string, unknown>>;
+    expect(items).toHaveLength(1);
+    expect(items[0]?.['recipient']).toBe('Hanako Sato');
+    expect(items[0]).not.toHaveProperty('address');
+    expect(JSON.stringify(items[0])).not.toMatch(/phone|line1|postal_code/);
+    await s.close();
+  });
+
   it('五条路由**每一条**都对无 token 返回 40101（防"某条忘了挂守卫"）', async () => {
     const s = await buildServer();
     const cases: ReadonlyArray<readonly [string, string]> = [
@@ -241,6 +254,13 @@ describe('GET /admin/orders/{id}（详情）', () => {
     expect(ok.json.items as unknown[]).toHaveLength(1);
     const pays = ok.json.payments as Record<string, unknown>[];
     expect(pays[0]?.provider).toBe('mock');
+    // 契约 Order.payment = {channel, charge_currency, charge_amount, …}：曾原样透传 payments 末条（键叫 provider），
+    // admin-web 读 payment.channel 永远为空（一致性审计 C5，AJ-176）
+    const payment = ok.json.payment as Record<string, unknown>;
+    expect(payment.channel).toBe('mock');
+    expect(payment.charge_currency).toBe(pays[0]?.charge_currency);
+    expect(payment.charge_amount).toBe(pays[0]?.charge_amount);
+    expect(payment).not.toHaveProperty('provider');
     expect(ok.json.events as unknown[]).toHaveLength(0);
     expect((ok.json.address as { recipient?: string }).recipient).toBe('Jane Doe');
     await s.close();
@@ -344,6 +364,32 @@ describe('POST /admin/orders/{id}/refund（全额退款）', () => {
     expect((await db`select status from payments where id = 'pay-o-1'`)[0]?.status).toBe(
       'succeeded',
     );
+    await s.close();
+  });
+
+  // KD-4（AJ-175）：上一次机构调用失败后订单停在 refunding——此前重试被 40902 拒，这张单从此退不了
+  it('停在 refunding 的单（上次机构调用失败）→ 重试 202 → refunded；只有一条 refunding 事件；重试沿用首次理由', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1' });
+    // 造"上一次失败"的现场：迁到 refunding 并记下首次理由，但钱没退成
+    await db`update orders set status = 'refunding' where id = 'o-1'`;
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-1', 'refunding', '首次理由：缺货', 'admin', now() - interval '5 minutes')`;
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/refund', {
+      reason: '再试一次',
+    });
+    expect(r.status).toBe(202);
+    expect((await db`select status from orders where id = 'o-1'`)[0]?.status).toBe('refunded');
+    expect((await db`select status from payments where id = 'pay-o-1'`)[0]?.status).toBe(
+      'refunded',
+    );
+    const ev =
+      await db`select status, note from order_events where order_id = 'o-1' and status = 'refunding'`;
+    expect(ev.map((e) => e['note'])).toEqual(['首次理由：缺货']); // 重试不写第二条
+    // 已退完的单不能再退（重试放行只对 refunding，不对 refunded）
+    const again = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/refund', { reason: 'x' });
+    expect(again.status).toBe(409);
+    expect(again.json.code).toBe(40902);
     await s.close();
   });
 

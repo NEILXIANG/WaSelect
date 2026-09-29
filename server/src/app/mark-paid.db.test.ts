@@ -88,11 +88,17 @@ describe('markOrderPaid（真库）', () => {
     // 制造确定性的交错：外部事务先持有行锁 300ms（不改数据）。有 `for update` 时两次落账
     // 都在 select 处排队，先到者提交后后到者读到 paid；没有 `for update` 时两者都立即读到
     // `created`，随后各自 update → 两条 paid 事件（三审变异 D11 就是这样存活的）。
+    // 就位信号用"锁真的拿到了"，不用 `setTimeout(50)` 猜（AJ-177）
+    let locked: () => void = () => {};
+    const ready = new Promise<void>((r) => {
+      locked = r;
+    });
     const holder = db.begin(async (tx) => {
       await tx`select id from orders where id = 'o-mp' for update`;
+      locked();
       await new Promise((r) => setTimeout(r, 300));
     });
-    await new Promise((r) => setTimeout(r, 50));
+    await ready;
     const results = await Promise.allSettled([
       markOrderPaid(db, events, clock, 'o-mp', OK),
       markOrderPaid(db, events, clock, 'o-mp', OK),
@@ -106,8 +112,10 @@ describe('markOrderPaid（真库）', () => {
       code: 40902,
       details: { from: 'paid' },
     });
-    const evs = await db`select status from order_events where order_id = 'o-mp'`;
+    const evs = await db`select status, actor from order_events where order_id = 'o-mp'`;
     expect(evs).toHaveLength(1);
+    // actor 口径 `provider:<channel>`（技术文档 order_events.actor；一致性审计 C3，AJ-176）
+    expect(evs[0]?.['actor']).toBe('provider:mock');
     expect(paidEvents).toBe(1);
   });
 
@@ -309,11 +317,27 @@ describe('I1-U2：pending_payment 迁移与迟到付款守卫（D-33）', () => 
     expect((await db`select status from orders where id = 'o-edge2'`)[0]?.status).toBe('paid');
   });
 
-  it('已 expired 的单 → 40902{from:expired}（关单 job 先跑掉的情形，走普通冲突分层）', async () => {
-    await seedOrderAt('o-closed', 'expired', '2026-01-02T00:30:00.000Z');
-    const { events } = bus();
-    await expect(
-      markOrderPaid(db, events, fixedClock('2026-01-02T00:31:00.000Z'), 'o-closed', OK),
-    ).rejects.toMatchObject({ code: 40902, details: { from: 'expired' } });
-  });
+  it.each(['expired', 'cancelled'] as const)(
+    '已 %s 的单到账 → 40902{reason:late_payment}（关单作业先跑掉/用户已取消：与"到点未关"同一分类，KD-7）',
+    async (closedAs) => {
+      await seedOrderAt(`o-closed-${closedAs}`, closedAs, '2026-01-02T00:30:00.000Z');
+      const { events } = bus();
+      await expect(
+        markOrderPaid(
+          db,
+          events,
+          fixedClock('2026-01-02T00:31:00.000Z'),
+          `o-closed-${closedAs}`,
+          OK,
+        ),
+      ).rejects.toMatchObject({
+        code: 40902,
+        details: { from: closedAs, reason: 'late_payment' },
+      });
+      // 拒落账：订单状态纹丝不动
+      expect(
+        (await db`select status from orders where id = ${`o-closed-${closedAs}`}`)[0]?.status,
+      ).toBe(closedAs);
+    },
+  );
 });

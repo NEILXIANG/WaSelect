@@ -505,6 +505,33 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
     expect(Number(rows[0]?.status_code)).toBe(201);
   });
 
+  it('persist：落库的是变换后的形态（秘密不进幂等表），首次调用方仍拿到原始响应，重放拿到变换后的形态（KD-3）', async () => {
+    const secret = 'plain-token-0123456789abcdef';
+    const run = () =>
+      exec.runInTx(
+        { ...txArgs('ktx-persist'), persist: (b) => ({ ...(b as object), token: 'redacted' }) },
+        () => Promise.resolve({ status: 200, body: { order_id: 'o-p', token: secret } }),
+      );
+    const first = await run();
+    expect(first.body).toEqual({ order_id: 'o-p', token: secret }); // 调用方拿原始值
+    const stored =
+      await db`select response::text as r from idempotency_keys where key = 'ktx-persist'`;
+    expect(String(stored[0]?.['r'])).not.toContain(secret);
+    const second = await run();
+    expect(second.replayed).toBe(true);
+    expect(second.body).toEqual({ order_id: 'o-p', token: 'redacted' });
+  });
+
+  it('persist 在非事务模式同样生效', async () => {
+    const out = await exec.run(
+      { key: 'k-persist-nontx', route: 't', persist: () => ({ scrubbed: true }) },
+      () => Promise.resolve({ status: 200, body: { secret: 's3cr3t' } }),
+    );
+    expect(out.body).toEqual({ secret: 's3cr3t' });
+    const stored = await db`select response from idempotency_keys where key = 'k-persist-nontx'`;
+    expect(stored[0]?.['response']).toEqual({ scrubbed: true });
+  });
+
   it('handler 抛错 → 占位与业务写入一起回滚，不留任何痕迹，同 key 可重试成功', async () => {
     await expect(
       exec.runInTx(txArgs('ktx-err'), async (tx) => {
@@ -572,11 +599,17 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
   it('handler 内部 55P03 → 原样抛出且 handler 只执行一次（不当占位冲突重跑）', async () => {
     await db`insert into users (id, openid) values ('u-lock', 'o-lock') on conflict do nothing`;
     // 另一连接持有 users 行锁 600ms
+    // 就位信号用"锁真的拿到了"，不用 `setTimeout(50)` 猜（AJ-177）
+    let locked: () => void = () => {};
+    const ready = new Promise<void>((r) => {
+      locked = r;
+    });
     const holder = db.begin(async (tx) => {
       await tx`select id from users where id = 'u-lock' for update`;
+      locked();
       await new Promise((r) => setTimeout(r, 600));
     });
-    await new Promise((r) => setTimeout(r, 50));
+    await ready;
     let calls = 0;
     await expect(
       exec.runInTx({ ...txArgs('ktx-inner-lock'), waitMs: 300 }, async (tx) => {

@@ -104,6 +104,17 @@ describe('expire-orders job（接线级）', () => {
     expect(expired.sort()).toEqual(['o-due', 'o-due-pending']);
   });
 
+  it('边界（AJ-175 补测）：expires_at 恰好等于本轮 startedAt → 关（<=，与落账 now >= expires_at 判迟到同向）；晚 1ms → 不关', async () => {
+    await seedOrder('o-eq', 'pending_payment', new Date(NOW.getTime()));
+    await seedOrder('o-after', 'pending_payment', new Date(NOW.getTime() + 1));
+    const { deps } = makeDeps();
+    await runSchedulerOnce(deps, [createExpireOrdersJob()]);
+    // 同一时刻的两个判定必须互补：落账说"已迟到"的那一毫秒，关单必须说"该关了"——
+    // 否则存在一个既不能付、也不会被关的毫秒（订单卡在 pending_payment 且库存不释放）
+    expect(await statusOf('o-eq')).toBe('expired');
+    expect(await statusOf('o-after')).toBe('pending_payment');
+  });
+
   it('关单回补库存：到点关单后 products.stock 回到扣减前；第二轮不再回血（全量审计 M20）', async () => {
     // @why 关单 job 里删掉 restoreStockForOrder 时既有用例全绿——"到点关单 → 库存永久少一件"
     //      是静默事故，必须由库存数字钉住。
@@ -166,11 +177,17 @@ describe('expire-orders job（接线级）', () => {
     await seedOrder('o-race', 'created', new Date(NOW.getTime() - 1_000));
     const other = testDb();
     try {
+      // 就位信号用"锁真的拿到了"，不用 `setTimeout(50)` 猜（新连接握手慢时会猜错；AJ-177）
+      let locked: () => void = () => {};
+      const ready = new Promise<void>((r) => {
+        locked = r;
+      });
       const holder = other.begin(async (tx) => {
         await tx`select id from orders where id = 'o-race' for update`;
+        locked();
         await new Promise((r) => setTimeout(r, 300));
       });
-      await new Promise((r) => setTimeout(r, 50));
+      await ready;
 
       const { deps } = makeDeps();
       const r1 = await runSchedulerOnce(deps, [createExpireOrdersJob()]);

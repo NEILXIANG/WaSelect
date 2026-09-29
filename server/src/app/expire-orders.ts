@@ -20,15 +20,14 @@
  *              用户在小程序里看到的是订单列表/详情里的"已关闭"。通知属售后阶段，届时订阅
  *              `order.expired` 即可，本 job 不需要改。
  * @limitation 二：关单**不碰 payments 行**：一张单可能有 initiated 的支付意图，
- *              它的善后（Stripe session 自然过期 / 回调到达后按"迟到付款"拒落账）
- *              由 mark-paid 守卫与回调管线负责，两处职责不重叠。
+ *              它的善后由 `order.expired` 的订阅者负责（`app/close-session-events.ts`：提交后库内作废 +
+ *              best-effort 作废机构会话，D-50）；到账则由 mark-paid 按"迟到付款"拒落账。职责不重叠。
  * @limitation 三：`EXPIRE_BATCH_LIMIT` 是**代码常量**不是配置项：它是"单轮事务时长"的保护阀，
  *              不是运营参数；真要调大说明单量已到该重新审视调度形态的量级，那次调整本该发版。
  *              （与 IDEMPOTENCY_TTL_HOURS 同口径。）
- * @limitation 四：I1-U5b 起关单连带**释放库存**（建单扣减的镜像）。⚠️ 技术文档 §1 还要求
- *              关单时"取消该订单所有未完成的支付意图"（Stripe checkout.sessions.expire）——
- *              那一步等 U6 支付意图落地后接线（当前不存在 initiated 行可取消），
- *              且 Provider HTTP 必须在事务提交后执行（D-50）。
+ * @limitation 四：I1-U5b 起关单连带**释放库存**（建单扣减的镜像）。技术文档 §1 要求的
+ *              "取消该订单所有未完成的支付意图"（Stripe checkout.sessions.expire）已由 `order.expired`
+ *              订阅者在**事务提交后**执行（`app/close-session-events.ts`，D-50；一致性审计 C9 更正原"待接线"）。
  *
  * @see adapters/orders.ts（SQL 与两个 @why：含等号边界 / SKIP LOCKED）；
  *      app/mark-paid.ts（另一半：迟到付款守卫）；docs/I1阶段开发实施方案.md §3.2

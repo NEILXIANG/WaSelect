@@ -131,7 +131,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           price_jpy: r.value.price_jpy,
           cost_jpy: r.value.cost_jpy ?? null,
           weight_g: r.value.weight_g,
-          stock: r.value.stock,
+          stock: r.value.stock ?? 0, // 新建：省略即 0（预售/缺货上架是正常动作）
           compliance_tags: r.value.compliance_tags,
           hs_code: r.value.hs_code ?? null,
           customs_desc_en: r.value.customs_desc_en,
@@ -163,7 +163,8 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           price_jpy: r.value.price_jpy,
           cost_jpy: r.value.cost_jpy ?? null,
           weight_g: r.value.weight_g,
-          stock: r.value.stock,
+          // 省略 = 不改库存；status 不在 PUT 的职责内（上下架只走 PATCH /status）——AJ-175
+          ...(r.value.stock !== undefined ? { stock: r.value.stock } : {}),
           compliance_tags: r.value.compliance_tags,
           hs_code: r.value.hs_code ?? null,
           customs_desc_en: r.value.customs_desc_en,
@@ -171,7 +172,6 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           title_ja: r.value.title_ja ?? null,
           jan_code: r.value.jan_code ?? null,
           purchase_source: r.value.purchase_source ?? null,
-          status: 'active',
         });
         if (row === null) throw new AppError(40401, { product_id: id });
         res.json(toAdminProduct(row));

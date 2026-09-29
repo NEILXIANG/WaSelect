@@ -27,6 +27,8 @@ export interface ProductFormPageProps {
   /** API 根地址 + 取 token（上传走独立封装，需要这两项；@see ../api/upload.ts）。 */
   baseUrl: string;
   getToken: () => string;
+  /** 上传遇 40101 时的出口（与通用封装同一语义：清 token 回登录页，KD-13）。 */
+  onUnauthorized?: (() => void) | undefined;
   /** 商品 id；null = 新建。 */
   productId: string | null;
   /** 编辑态的原始数据（列表页带过来，@see 文件头）。 */
@@ -39,12 +41,17 @@ export function ProductFormPage({
   api,
   baseUrl,
   getToken,
+  onUnauthorized,
   productId,
   source,
   onDone,
 }: ProductFormPageProps) {
   const [form, setForm] = useState<ProductForm>(() =>
     source === null ? productFormModel(null) : productFormModel(source),
+  );
+  // 打开编辑页那一刻的库存：保存时只有它被改动了才提交 stock（toProductInput @see AJ-175）
+  const [originalStock] = useState<string | undefined>(() =>
+    source === null ? undefined : productFormModel(source).stock,
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
@@ -71,7 +78,7 @@ export function ProductFormPage({
     setSaving(true);
     setError('');
     try {
-      const body = toProductInput(form);
+      const body = toProductInput(form, productId === null ? undefined : originalStock);
       if (productId === null) await createProduct(api, body);
       else await updateProduct(api, productId, body);
       onDone();
@@ -87,7 +94,7 @@ export function ProductFormPage({
     setUploading(true);
     setError('');
     try {
-      const imageSet = await uploadImage({ baseUrl, getToken }, file);
+      const imageSet = await uploadImage({ baseUrl, getToken, onUnauthorized }, file);
       // 商品图存的是三档 URL（products.images JSONB），IMG_BASE_URL 未配置时
       // 上传只回 image_key——对 Banner 够用，对商品图不够，在这里拦给明白话。
       // ⚠️ 先解构再判空：直接在闭包里读 imageSet.thumb 拿不到这里的判空收窄（TS 在回调内失效）。

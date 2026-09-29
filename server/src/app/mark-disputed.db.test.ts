@@ -98,7 +98,10 @@ async function orderRow(orderId: string): Promise<Record<string, unknown>> {
 }
 
 async function events(orderId: string): Promise<string[]> {
-  const rows = await db`select status from order_events where order_id = ${orderId} order by id`;
+  const rows =
+    await db`select status, actor from order_events where order_id = ${orderId} order by id`;
+  // 拒付事件由机构回调写入：actor 必须是 `provider:<channel>`（一致性审计 C3，AJ-176）
+  for (const r of rows) expect(String(r.actor)).toMatch(/^provider:[a-z]+$/);
   return rows.map((r) => String(r.status));
 }
 
@@ -323,7 +326,7 @@ describe('markDisputeClosed：结案（U-F4）', () => {
     expect(await events('o-1')).toEqual(['dispute_closed']);
   });
 
-  it('lost → 同样复位（钱没了，但"进行中"这个状态结束了）', async () => {
+  it('lost → **不复位**（钱已被拉回：再发货钱货两空、再退款 Stripe 必拒 charge_disputed；AJ-176 部分推翻 AJ-162 ③）', async () => {
     await seedDisputed('o-1');
     await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
       channel: 'stripe',
@@ -331,7 +334,8 @@ describe('markDisputeClosed：结案（U-F4）', () => {
       result: 'lost',
     });
     expect((await paymentRow('o-1'))['dispute_status']).toBe('lost');
-    expect((await orderRow('o-1'))['has_dispute']).toBe(false);
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+    expect(await events('o-1')).toEqual(['dispute_closed']);
   });
 
   it('开案时刻**不被**结案改动（举证期限的起点要保持可查）', async () => {

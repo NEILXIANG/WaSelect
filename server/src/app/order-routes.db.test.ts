@@ -127,15 +127,19 @@ describe('POST /orders（建单全链路）', () => {
   it('201：响应形状 + 落库四件事（orders/order_items/order_events/stock 扣减）全部对上', async () => {
     const srv = await buildServer();
     try {
+      const t0 = Date.now();
       const r = await create(srv.url, BODY);
+      const t1 = Date.now();
       expect(r.status).toBe(201);
       expect(r.json['total_jpy']).toBe(TOTAL);
       expect(r.json['status']).toBe('created');
       expect(typeof r.json['order_no']).toBe('string');
       expect(r.json['fx_snapshot']).toMatchObject({ USD: 0.0067, CNY: 0.049 });
-      // expires_at ≈ 30 分钟后（容差 2 分钟：测试机时钟与 DB now 有微小偏移）
+      // expires_at = 下单时刻 + **恰好 30 分钟**（D-33）。路由时钟不可注入，所以夹在请求前后：
+      // 原写法容差 ±2 分钟，29 或 31 分钟的 TTL 也能过（测试审查 U-J11）
       const expiresAt = Date.parse(String(r.json['expires_at']));
-      expect(Math.abs(expiresAt - (Date.now() + 30 * 60_000))).toBeLessThan(120_000);
+      expect(expiresAt).toBeGreaterThanOrEqual(t0 + 30 * 60_000);
+      expect(expiresAt).toBeLessThanOrEqual(t1 + 30 * 60_000);
 
       const orderId = String(r.json['order_id']);
       const orders = await db`
@@ -279,8 +283,9 @@ describe('POST /orders（建单全链路）', () => {
       );
       expect(stock.json['code']).toBe(40901);
       const cup = await db`select stock from products where id = 'p-cup'`;
-      expect(Number(cup[0]?.['stock'])).toBe(10); // 整单回滚：cup 也没被扣
+      expect(Number(cup[0]?.['stock'])).toBe(10); // 预检阶段即拒，没有任何扣减发生（"扣到一半失败的整单回滚"见 order-failure-consistency.db.test.ts）
 
+      // 不存在的地址 → 40400（"他人**真实**地址"的越权用例在 order-failure-consistency.db.test.ts）
       const others = await create(srv.url, { ...BODY, address_id: 'addr-ghost' }, 's2');
       expect(others.json['code']).toBe(40400);
 
@@ -368,7 +373,7 @@ describe('POST /orders/{id}/cancel（I1-U5c：取消 = 迁移 + 作废旧支付�
     }
   });
 
-  it('pending_payment + initiated 支付行 → 200：支付行作废为 cancelled（succeeded 绝不会被动）', async () => {
+  it('pending_payment + initiated 支付行 → 200：支付行作废为 cancelled（真实发起支付后取消、回调随后到达的整链见 order-golden-chain.db.test.ts）', async () => {
     const srv = await buildServer();
     try {
       const created = await create(srv.url, BODY, 'c2');

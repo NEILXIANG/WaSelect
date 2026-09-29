@@ -72,6 +72,7 @@
 - 业务核心**不认识**任何具体支付方式、国家、承运商、UI 样式。
 - 支付：Provider 注册表 + 能力声明 + 配置表驱动；增删一种支付方式只改配置与新增一个 Provider 文件，不改订单流程。
 - 国家：`country_profiles` + `shipping_rates.dest_country` + `duty_rates` 驱动；接一个新国家不改业务代码。
+- ⚠️ 现状差距（2026-09-28 一致性审计，AJ-176）：以上两条是**目标约束**，尚未完全兑现——`payment_channels` 表已建未接线（启用通道仍由 env + `adapters/payment/channels.ts` 内置表决定，新增通道还要改 shared 枚举与契约登记表）；`shipping_rates.dest_country` 尚未建列。二者都是已登记债务（见 `docs/可扩展架构设计-支付可插拔·多国家·UI可配置.md`），**新代码不得以「现状也写死了」为由继续写死**。
 - 解耦：domain（纯逻辑，零依赖）← application（用例）← adapters（DB / 三方 / HTTP）；依赖只能由外向内。
 - 禁止在业务代码里出现写死的货币、税率、国家码、承运商名、支付方式名。
 
@@ -103,7 +104,7 @@
   外键索引用例被 `payments` 上的部分唯一索引 `uq_payments_one_initiated` 掩盖，
   把通用索引删掉它仍然全绿——修正方式是查询里排除部分索引（`indpred is null`）。
 - 覆盖率数字**不等于**验证充分。全局 85% 门槛下 `money.ts` 分支只有 75% 也能过，
-  所以关键模块单设 100% 门槛（见 `vitest.config.mts` 的 thresholds）。
+  所以关键模块单设 100% 门槛（唯一真源 `vitest.coverage-gates.ts`；`vitest.config.mts` 只 import 它）。
 
 ## 约束九　防复发的机制优先于"补这一次"
 
@@ -113,7 +114,7 @@
 |---|---|
 | `server/src/adapters/db.db.test.ts` 的**结构不变量**（任何外键列都要索引、任何 status 列都要域约束） | 新表自动进入覆盖，漏索引/漏约束立刻红；豁免必须写原因 |
 | `server/src/config.contract.test.ts`（`.env.example` ↔ schema 键集合一致） | 变量名拼错被 zod strip 静默忽略、文档写了代码没有 |
-| `vitest.config.mts` 的关键模块 100% 门槛 | 关键模块靠全局均值蒙混过关 |
+| `vitest.coverage-gates.ts` 的关键模块 100% 门槛（页面 `*.vm.js` 也进统计） | 关键模块靠全局均值蒙混过关；页面逻辑游离在统计之外 |
 | `scripts/check-contract.mjs`（契约随库 + 双副本比对） | 检查依赖隔壁仓库、文档库与工程库漂移 |
 | 文档里的数字直接写进断言（TTL=43200、`w=1850→4950`、订单号 `YYMMDD`） | 代码与文档"差一点"但谁都不报错 |
 | `assertPostgresMajor(>=16)` | 本地与生产版本错位 |
@@ -148,7 +149,8 @@
 ## 约束十一　小程序页面逻辑必须住在 `*.vm.js`（可测性的唯一路径）
 
 - **为什么（不是为了好看）**：小程序页面是 `Page({...})` 注册的对象，逻辑天然写在生命周期与方法里；
-  而本项目**没有小程序组件测试框架**（未引入 testing-library / miniprogram-simulate）。
+  而本项目**没有小程序页面测试框架**：组件层已引入 `miniprogram-simulate`（ws-button / ws-price 的单测在用），
+  但 `Page({...})` 页面本体仍无法在其中加载与交互（2026-09-28 更正原「未引入 miniprogram-simulate」）。
   逻辑一旦进 `index.js`，就只剩"真机点一下"这一种验证方式——
   约束二要求的"渲染 + 交互测试"在小程序端**无处落地**，约束一（无绿灯不前进）随之形同虚设。
 - **约定**：每个页面目录下放 `index.vm.js`，**只导出纯函数**：
@@ -158,10 +160,10 @@
 - **vm 的硬规则**：① 不读 `wx` 全局（那归 `utils/wx-api.ts`）；② 不 `new Date()`（与 F10 同口径）；
   ③ 不做 IO；④ 不发请求。违反任一条，它就不再是纯函数，也就不可能被测。
 - **机器校验**：`miniprogram/vm-guard.unit.test.ts`——每个 `*.vm.js` 必须有同名 `*.unit.test.ts`。
-  @why 只强制"有 vm 就有测试"而不强制"每个页面都要有 vm"：纯静态页（法务页）没有逻辑可抽，
+  @why 只强制"有 vm 就有测试"而不强制"每个页面都要有 vm"：纯静态页没有逻辑可抽（法务页因「复制条款链接」有少量逻辑，也抽了 vm），
   硬要抽只会产出空壳；真正要堵的是"**抽了 vm 却没人测**"——那等于把逻辑换个地方继续裸奔。
 - **它解决不了的（不夸大）**：WXML 绑定写错、样式问题、真机兼容性——这些仍只能真机验。
-  AppID 未下来前无法真机预览，属**已知外部阻塞**（见 `miniprogram/pages/index/index.js` 的停用手记）。
+  AppID 未下来前无法真机预览，属**已知外部阻塞**（见 `docs/地基搭建清单.md` F14 / F16；`miniprogram/pages/index/index.js` 的停用手记讲的是行走骨架退役，不是 AppID）。
 
 ## 每个单元的完成标准（缺一不可）
 

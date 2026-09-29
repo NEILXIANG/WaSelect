@@ -58,7 +58,8 @@ const OUTCOME_BY_TYPE: Readonly<Record<string, ProviderEvent['outcome']>> = {
   'payment.failed': 'failed',
   'payment.expired': 'expired',
   'charge.refunded': 'refunded',
-  'charge.dispute.created': 'disputed',
+  // ⚠️ 不映射拒付事件：能力声明 supportsDispute=false（@limitation 二）。曾映射 `charge.dispute.created → disputed`，
+  //    声明与实现互相矛盾（注册表只校验退款一项所以没拦住；一致性审计 P39，AJ-176）。拒付链路用 stripe 通道测。
 };
 
 export interface MockProviderDeps {

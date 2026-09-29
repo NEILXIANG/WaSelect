@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "WaSelect 日本直邮跨境电商 monorepo（契约：WaSelectDoc 技术文档 v0.5 / api-contract 0.5.4）",
+  "description": "WaSelect 日本直邮跨境电商 monorepo（契约：WaSelectDoc 技术文档 v0.5 / contracts/api-contract.yaml，版本以 info.version 为准）",
   "engines": {
     "node": ">=22 <23",
     "npm": ">=10"
@@ -53,6 +53,7 @@
     "eslint": "^9.34.0",
     "eslint-config-prettier": "^10.1.8",
     "fast-check": "^4.10.2",
+    "js-yaml": "^4.3.2",
     "jsdom": "^30.1.1",
     "miniprogram-simulate": "^1.6.2",
     "node-pg-migrate": "^9.0.0",

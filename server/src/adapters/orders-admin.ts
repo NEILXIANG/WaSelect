@@ -70,6 +70,13 @@ export interface AdminOrderListRow {
   has_dispute: boolean;
   is_test: boolean;
   created_at: Date;
+  /**
+   * 收件人（地址快照里的 recipient；0.6.9 / KD-14）。
+   * @why 列表支持"按收件人搜"，前端列表也有"收件人"列，但原来列表行不带它——
+   *      搜到的行收件人一栏是空的，运营无法确认"搜中的是不是这个人"。只带姓名一列：
+   *      电话/街道等其余地址字段仍只在详情（最小暴露）。
+   */
+  recipient: string | null;
 }
 
 export interface AdminOrderListQuery {
@@ -98,6 +105,11 @@ export interface AdminOrderRow {
   address_snapshot: unknown;
   contact_email: string | null;
   terms_version: string;
+  /**
+   * ⚠️ `orders.charge_*` **从未被写入**（恒为 null）：扣款币种 / 金额的唯一真源是 `payments` 行
+   * （pay-intent 只写 payments）。技术文档曾写"支付时写入 orders.charge_*"——一致性审计 D7（AJ-176）
+   * 裁定以 payments 为准、文档标注该两列废弃；这里保留读取只为不改查询形状，**任何新代码不得读它们**。
+   */
   charge_currency: string | null;
   charge_amount: number | null;
   carrier: string | null;
@@ -212,6 +224,7 @@ function toListRow(r: Record<string, unknown>): AdminOrderListRow {
     has_dispute: bool(r.has_dispute),
     is_test: bool(r.is_test),
     created_at: r.created_at as Date,
+    recipient: strOrNull(r.recipient),
   };
 }
 
@@ -221,7 +234,7 @@ export async function listAdminOrders(
   q: AdminOrderListQuery,
 ): Promise<{ items: AdminOrderListRow[]; total: number }> {
   const rows = await db`
-    select ${db([...LIST_COLS])} from orders
+    select ${db([...LIST_COLS])}, address_snapshot ->> 'recipient' as recipient from orders
     ${buildWhere(db, q)}
      order by created_at desc, id desc
      limit ${q.size} offset ${(q.page - 1) * q.size}
@@ -424,6 +437,8 @@ export async function markShipped(
   carrier: string,
   trackingNo: string,
   at: Date,
+  /** `admin:<sub>`（技术文档 order_events.actor 口径；admin_audit 未落地前这是"谁发的货"的唯一留痕）。 */
+  actor: string,
 ): Promise<boolean> {
   const updated = await tx`
     update orders set status = 'shipped', carrier = ${carrier}, tracking_no = ${trackingNo},
@@ -433,9 +448,34 @@ export async function markShipped(
   if (updated.count === 0) return false;
   await tx`
     insert into order_events (order_id, status, note, actor, at)
-    values (${orderId}, 'shipped', ${`${carrier} / ${trackingNo}`}, 'admin', ${at})
+    values (${orderId}, 'shipped', ${`${carrier} / ${trackingNo}`}, ${actor}, ${at})
   `;
   return true;
+}
+
+/**
+ * 记一条**退款失败**事件（不迁状态：订单停在 refunding，可重试，KD-4）。
+ *
+ * @why 技术文档 refunding 行的原意（"退款失败：停留 refunding + order_events 记 refund_failed"）；
+ *      曾经只打运行日志——运营在管理端订单详情里看不到"这张单的退款失败过、何时失败"。
+ *      一致性审计 C13（AJ-176）：买家时间线已按订单状态值过滤（listOrderTimeline），
+ *      非状态事件不会再以"状态未知"外泄给买家，这一行只进管理端。
+ * @why 事务外单条插入：机构调用本就在事务外（第二段），失败时没有可以依附的事务；
+ *      插入失败不影响原错误的抛出（调用方 best-effort）。
+ * @limitation note 只写**分类**（provider_error / provider_failed），不写机构错误原文——
+ *             原文可能含 PII 或机构内部信息，只进运行日志（已脱敏）。
+ */
+export async function recordRefundFailed(
+  db: Db,
+  orderId: string,
+  kind: 'provider_error' | 'provider_failed',
+  actor: string,
+  at: Date,
+): Promise<void> {
+  await db`
+    insert into order_events (order_id, status, note, actor, at)
+    values (${orderId}, 'refund_failed', ${kind}, ${actor}, ${at})
+  `;
 }
 
 /**
@@ -451,6 +491,8 @@ export async function markRefunding(
   orderId: string,
   reason: string,
   at: Date,
+  /** `admin:<sub>`（同 markShipped）。 */
+  actor: string,
 ): Promise<boolean> {
   const updated = await tx`
     update orders set status = 'refunding', updated_at = now()
@@ -459,9 +501,27 @@ export async function markRefunding(
   if (updated.count === 0) return false;
   await tx`
     insert into order_events (order_id, status, note, actor, at)
-    values (${orderId}, 'refunding', ${reason}, 'admin', ${at})
+    values (${orderId}, 'refunding', ${reason}, ${actor}, ${at})
   `;
   return true;
+}
+
+/**
+ * 最近一次进入 refunding 时记下的退款理由（重试沿用它，KD-4）。
+ * @why 机构退款请求里带着理由（Stripe `metadata[reason]`），而机构侧幂等键按订单固定
+ *      （`refund:<orderId>`）——重试时换一句理由就是"同键异参"，Stripe 会 400。
+ *      所以重试必须发**首次**的理由，而首次理由唯一的落点就是这条事件的 note。
+ * @returns null = 没有 refunding 事件（数据不一致，调用方应响亮失败）。
+ */
+export async function findRefundingReason(tx: Db, orderId: string): Promise<string | null> {
+  const rows = await tx`
+    select note from order_events
+     where order_id = ${orderId} and status = 'refunding'
+     order by at desc, id desc
+     limit 1
+  `;
+  const note = rows[0]?.['note'];
+  return typeof note === 'string' && note !== '' ? note : null;
 }
 
 /**
@@ -477,6 +537,8 @@ export async function markRefunded(
   paymentId: string,
   refundRef: string,
   at: Date,
+  /** `admin:<sub>`（同 markShipped）。 */
+  actor: string,
 ): Promise<boolean> {
   const updated = await tx`
     update orders set status = 'refunded', refunded_at = ${at}, updated_at = now()
@@ -488,7 +550,7 @@ export async function markRefunded(
   `;
   await tx`
     insert into order_events (order_id, status, note, actor, at)
-    values (${orderId}, 'refunded', ${refundRef}, 'admin', ${at})
+    values (${orderId}, 'refunded', ${refundRef}, ${actor}, ${at})
   `;
   return true;
 }
@@ -497,8 +559,9 @@ export async function markRefunded(
  * 改址：重写 `address_snapshot` 并记事件（**不改状态**）。
  * @returns false = 当前不是 paid（已被抢先发货 / 退款，**不是错误**）。
  * @why 事件用伪状态 `address_changed` 而不是复用 `paid`：时间线里两条都叫 paid 的话，
- *      "这笔单付过几次款"就成了猜谜。前端详情页直接显示 `status` 原文（未走状态文案映射），
- *      所以伪状态不会被渲染成"未知状态"。
+ *      "这笔单付过几次款"就成了猜谜。**管理端**详情页直接显示 `status` 原文，所以不会被渲染成"未知状态"；
+ *      **买家**时间线（`listOrderTimeline`）按 ORDER_STATUS 过滤，看不到它（一致性审计 C2，AJ-176——
+ *      此前买家端小程序会把它渲染成"状态未知"，本注释当时只考虑了管理端）。
  *      @limitation 它不在 `ORDER_STATUS` 枚举里——`order_events.status` 是 VARCHAR 故不违反
  *      DB 约束，但任何"按 enum 校验事件状态"的将来逻辑都要把它列为例外。
  */

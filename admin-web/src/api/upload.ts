@@ -20,7 +20,7 @@
  *
  * @see ../../../contracts/api-contract.yaml（/admin/upload）
  */
-import { ApiError, NETWORK_ERROR_CODE } from './errors.js';
+import { ApiError, NETWORK_ERROR_CODE, UNAUTHORIZED_CODE } from './errors.js';
 
 /** 上传响应：三档 URL 可选（IMG_BASE_URL 未配置时全省略），`image_key` 恒在。 */
 export interface UploadedImage {
@@ -40,8 +40,22 @@ export interface UploadedImage {
  * @limitation 三：超时用 `AbortController`（与 client.ts @limitation 二 同口径）——
  *              取消的是等待，不是服务端执行；失败重发要重新选同一个文件，不自动重试。
  */
+/**
+ * @why 错误收敛与 `client.ts` **同一口径**（KD-13，AJ-175，前后端接缝测试实测）：
+ *      原实现把一切非 2xx 折成 `NETWORK_ERROR_CODE` + "HTTP 400/401"——
+ *      ① 服务端的业务码（40001 图片解不开 / 格式不收）被丢掉，运营只看到"上传失败（HTTP 400）"，不知道是图的问题；
+ *      ② 40101 不触发 `onUnauthorized`：登录过期时 JSON 请求会把人带回登录页，唯独上传不会，
+ *         运营反复重选文件、反复"HTTP 401"。现在：body 带数字 `code` → 按业务错抛（带服务端 message 与
+ *         响应头的 trace id）；40101 先通知 `onUnauthorized` 再抛（与 client.ts 同序）；body 不是 JSON 才归网络错。
+ */
 export async function uploadImage(
-  deps: { baseUrl: string; getToken: () => string; fetchImpl?: typeof fetch },
+  deps: {
+    baseUrl: string;
+    getToken: () => string;
+    fetchImpl?: typeof fetch;
+    /** 40101 时的通知出口（与 `createAdminApi` 的同名依赖同一语义：装配层清 token 回登录页）。 */
+    onUnauthorized?: ((err: ApiError) => void) | undefined;
+  },
   file: File,
   traceId?: string,
 ): Promise<UploadedImage> {
@@ -68,8 +82,24 @@ export async function uploadImage(
   } finally {
     clearTimeout(timer);
   }
+  const serverTraceId = res.headers.get('x-trace-id') ?? traceId ?? '';
   if (!res.ok) {
-    throw new ApiError(NETWORK_ERROR_CODE, `图片上传失败（HTTP ${res.status}）`, traceId ?? '');
+    const errBody = (await res.json().catch(() => null)) as {
+      code?: unknown;
+      message?: unknown;
+    } | null;
+    if (typeof errBody?.code === 'number') {
+      const err = new ApiError(
+        errBody.code,
+        typeof errBody.message === 'string'
+          ? `图片上传失败：${errBody.message}`
+          : `图片上传失败（${errBody.code}）`,
+        serverTraceId,
+      );
+      if (err.code === UNAUTHORIZED_CODE) deps.onUnauthorized?.(err);
+      throw err;
+    }
+    throw new ApiError(NETWORK_ERROR_CODE, `图片上传失败（HTTP ${res.status}）`, serverTraceId);
   }
   const body: unknown = await res.json();
   assertUploadResponse(body, traceId ?? '');

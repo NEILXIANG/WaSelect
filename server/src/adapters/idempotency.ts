@@ -90,7 +90,7 @@ async function withIdempotency<T>(
         const written = await db`
           update idempotency_keys
              set status_code = ${result.status},
-                 response = ${result.body as never},
+                 response = ${(args.persist ? args.persist(result.body) : result.body) as never},
                  completed_at = now(),
                  locked_until = null
            where key = ${args.key} and lease_token = ${token}
@@ -220,7 +220,7 @@ async function withIdempotencyTx<T>(
         await tx`
           update idempotency_keys
              set status_code = ${result.status},
-                 response = ${result.body as never},
+                 response = ${(args.persist ? args.persist(result.body) : result.body) as never},
                  completed_at = now()
            where key = ${args.key}
         `;

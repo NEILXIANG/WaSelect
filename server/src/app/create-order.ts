@@ -20,7 +20,8 @@
  * @limitation 一：扣库存用条件更新（decrementStock），逐行执行、任一失败整单回滚——
  *              没有"部分成交"。@tradeoff 代价是热销品并发建单时后到的请求整单 40901，
  *              而不是"能买几件买几件"（那是购物车语义，不是建单语义）。
- * @limitation 二：declared_value_usd 的基数是**商品小计**（与 duty 同口径，13b 未定）；
+ * @limitation 二：declared_value_usd 的基数是**商品小计**（与 duty 同口径 = 按成交价申报，13b 已由 AJ-142 定案；
+ *              一致性审计 C9 更正原「13b 未定」。运费不计入申报价——实付含运费，二者本就不等）；
  *              分摊用 allocate（最大余额法），保证各行之和 === toMinor(小计)，不差 1 分。
  * @limitation 三：terms_version 的比对源是 config.TERMS_VERSION（D-I1-3：app_config 不接线）。
  *

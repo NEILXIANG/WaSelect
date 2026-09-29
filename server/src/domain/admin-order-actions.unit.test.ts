@@ -38,12 +38,12 @@ describe('admin-order-actions（管理端操作准入，I2 U-B2a）', () => {
     expect(codeOf(shipGuard('cancelled', false))).toBe(40902);
   });
 
-  it('refundGuard：paid / shipped / delivered 可退，其余七态拦', () => {
+  it('refundGuard：paid / shipped / delivered 可退，refunding 可**重试**（KD-4），其余六态拦', () => {
     const allowed = ORDER_STATUS.filter((s) => refundGuard(s, false).ok);
-    expect(allowed).toEqual(['paid', 'shipped', 'delivered']);
+    expect(allowed).toEqual(['paid', 'shipped', 'delivered', 'refunding']);
     // completed 由状态机决定（ORDER_TRANSITIONS.completed = []），本模块不另写一条
     expect(refundGuard('completed', false).ok).toBe(false);
-    expect(refundGuard('refunding', false).ok).toBe(false);
+    expect(refundGuard('refunded', false).ok).toBe(false); // 已退完的不能再退
   });
 
   it('refundGuard：有进行中的拒付 → 40907（D-50）', () => {
@@ -54,7 +54,7 @@ describe('admin-order-actions（管理端操作准入，I2 U-B2a）', () => {
 
   it('refundGuard：拒付与状态同时不合时，报的是拒付（40907）', () => {
     expect(codeOf(refundGuard('refunding', true))).toBe(40907);
-    expect(codeOf(refundGuard('refunding', false))).toBe(40902);
+    expect(codeOf(refundGuard('refunded', false))).toBe(40902);
   });
 
   it('addressGuard：十态里只有 paid 可改址（改完仍是 paid，不是状态迁移）', () => {

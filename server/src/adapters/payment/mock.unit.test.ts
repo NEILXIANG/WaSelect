@@ -127,6 +127,16 @@ describe('mock 通道', () => {
     expect(p.channel).toBe('mock');
   });
 
+  it('声明不支持拒付 → 拒付报文不产出 disputed（一致性审计 C11 / AJ-176：声明与映射曾互相矛盾）', async () => {
+    const p = provider();
+    expect(p.capabilities.supportsDispute).toBe(false);
+    for (const type of ['charge.dispute.created', 'charge.dispute.closed']) {
+      const s = sign({ type, order_id: 'sk-1', provider_ref: 'ref-1' });
+      const ev = await p.parseWebhook(s.raw, s.headers);
+      expect(ev.outcome, type).toBe('unknown');
+    }
+  });
+
   it('注入的时钟真的被用上（换一个时钟，到期时间跟着变）', async () => {
     const late = createMockProvider(config(), { clock: systemClock, idGen: systemIdGen });
     const s = await late.create({

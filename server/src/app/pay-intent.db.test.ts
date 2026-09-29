@@ -144,6 +144,32 @@ function codeOf(e: unknown): number {
 }
 
 describe('守卫（归属/状态/到期）', () => {
+  it('边界（AJ-175 补测）：now 恰好等于 expires_at → 40904；前 1ms → 可发起（窗口 [created, expires_at)，与落账 / 短链 / 关单作业同向）', async () => {
+    const sink = new MemorySink();
+    const registry = fakeRegistry({ pa: fakeProvider('pa') });
+    await seedPayable('o-eq', { expiresAt: CLOCK.now() });
+    await seedPayable('o-1ms', { expiresAt: new Date(CLOCK.now().getTime() + 1) });
+    await withTransaction(db, async (tx) => {
+      await createPayIntent(tx, deps(registry, sink), {
+        orderId: 'o-eq',
+        userId: 'u-1',
+        channel: 'pa',
+      }).then(
+        () =>
+          expect.unreachable('恰好到点应 40904（写成 > 会在这一毫秒放行一个关单作业马上要关的单）'),
+        (e) => expect(codeOf(e)).toBe(40904),
+      );
+    });
+    await withTransaction(db, async (tx) => {
+      const r = await createPayIntent(tx, deps(registry, sink), {
+        orderId: 'o-1ms',
+        userId: 'u-1',
+        channel: 'pa',
+      });
+      expect(r.channel).toBe('pa');
+    });
+  });
+
   it('非本人与不存在 → 40400；expired → 40904；到点未扫（created 但已过 expires_at）→ 40904；paid → 40902', async () => {
     const sink = new MemorySink();
     const registry = fakeRegistry({ pa: fakeProvider('pa') });
@@ -193,11 +219,12 @@ describe('守卫（归属/状态/到期）', () => {
         () => expect.unreachable('paid 应 40902'),
         (e) => expect(codeOf(e)).toBe(40902),
       );
-      // 全部拒绝路径不得留下任何 payments 行
+      // 全部拒绝路径不得留下任何 payments 行——**必须在回滚之前、用同一个 tx 数**：
+      // 回滚之后再数恒为 0（测试审查 U-J11：原写法是同义反复，拒绝路径写了行也会绿）
+      const inTx = await tx`select count(*)::int as n from payments`;
+      expect(Number(inTx[0]?.['n'])).toBe(0);
       throw new Error('rollback-probe');
     }).catch((e: Error) => expect(e.message).toBe('rollback-probe'));
-    const pays = await db`select count(*)::int as n from payments`;
-    expect(Number(pays[0]?.['n'])).toBe(0);
   });
 });
 

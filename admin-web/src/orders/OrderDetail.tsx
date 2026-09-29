@@ -270,7 +270,8 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 退款
               </button>
             )}
-            {!refundG.ok && <p className="muted">{refundG.reason}</p>}
+            {/* 放行时也可能带提示（refunding = 重试，KD-12）：有话就显示，不只在拦的时候 */}
+            {refundG.reason !== '' && <p className="muted">{refundG.reason}</p>}
           </div>
         </>
       )}

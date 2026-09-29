@@ -111,10 +111,10 @@ export function orderRows(items: unknown): OrderRow[] {
         statusText: status === null ? '未知状态' : ORDER_STATUS_LABELS[status],
         totalText: moneyText(o['total_jpy']),
         createdText: formatJst(o['created_at']),
-        recipientText: readString(
-          (o['address'] as Record<string, unknown> | null) ?? {},
-          'recipient',
-        ),
+        // 列表行带顶层 `recipient`（0.6.9/KD-14）；详情形状（AdminOrder）只有 address.recipient——两种都认
+        recipientText:
+          readString(o, 'recipient') ||
+          readString((o['address'] as Record<string, unknown> | null) ?? {}, 'recipient'),
         shipText:
           carrier === '' && tracking === ''
             ? ''
@@ -186,7 +186,14 @@ export function refundGate(order: unknown): Gate {
     case 'pending_payment':
       return NO('未付款，请取消订单而不是退款');
     case 'refunding':
-      return NO('退款已在处理中，不要重复提交');
+      // KD-4 / KD-12（AJ-175）：服务端允许对停在 refunding 的单**重试**（同一机构幂等键，不会退两次；
+      // 原因沿用首次）。这里曾写"不要重复提交"把按钮禁掉——服务端的修复在界面上没有入口，
+      // 卡住的单只能找开发改库。放行，但把"这是重试"讲清楚。
+      return {
+        ok: true,
+        reason:
+          '上次退款未确认完成（机构调用失败或超时）：可重试；机构侧同一幂等键不会退两次，退款原因沿用首次填写',
+      };
     case 'refunded':
       return NO('已退款');
     case 'completed':

@@ -17,8 +17,9 @@
  *              （010 迁移建表 + seed，由 U4 报价域经 `adapters/catalog.ts` 查表消费）。
  *              ADR-28 要求"税率可改数据不改码"，放进配置就等于留第二个真值来源
  *              （历史上曾有个 `DUTY_RATE_US` 占位变量，表落地并接线后已删除——**不要再加回来**）。
- *              ⚠️ 种子行 ('JP','US',0.15) 是**占位口径**（13b 未定：15% / 13.04% / 17.25% 三种
- *              申报口径待业务拍板），定案后改那一行数据即可，不动代码、不动配置。
+ *              种子行 ('JP','US',0.15) 的口径已由 AJ-142 定案（2026-09-27：按成交价 ×15%，即维持种子值）；
+ *              种子 note 列仍写着「13b 未定」——写于定案之前，迁移不可改，留待下次触及 duty_rates 的迁移更新
+ *              （一致性审计 C9，AJ-176）。将来改口径只改那一行数据，不动代码、不动配置。
  *
  * @tradeoff 新增环境变量必须同步改 schema，否则启动失败——这是**有意的硬失败**，
  *           比"读不到就用一个看起来合理的默认值"安全，尤其在金额/税率/通道这类字段上。
@@ -285,7 +286,7 @@ const schema = z.object({
    *      它是配置项，调整不发版。
    */
   CALLBACK_ORDER_GRACE_MS: int(900_000, 0),
-  /** 常驻调度器 tick 间隔（D-43：web 进程内 setInterval + pg_try_advisory_lock；不是 Render Cron Job）。 */
+  /** 常驻调度器 tick 间隔（D-43：web 进程内 setInterval + **事务级** pg_try_advisory_xact_lock（D-45②）；不是 Render Cron Job——每日作业才走 Cron，见 render.yaml）。 */
   SCHEDULER_TICK_MS: int(60000, 1000),
   /**
    * N7：停机时摘流量（/readyz 转 503）后、close 前的等待毫秒数。

@@ -49,7 +49,14 @@ export interface ProductInput {
   price_jpy: number;
   cost_jpy?: number | undefined;
   weight_g: number;
-  stock: number;
+  /**
+   * 库存；**省略 = 不改**（更新路径保持原值；新建路径由调用方取 0）。
+   * @why 库存是**并发写**的列：建单扣减、取消/关单回补都在改它。管理端"读 → 改标题 → 整体 PUT"
+   *      若总带着读到的旧库存，会把期间被扣掉/回补的数量覆盖回去（丢失更新 → 超卖或少卖）。
+   *      所以只有管理员**确实改了库存**时才发这个字段（admin-web toProductInput 只在变动时带），
+   *      省略时服务端不碰它（AJ-175）。
+   */
+  stock?: number | undefined;
   compliance_tags: readonly string[];
   hs_code?: string | undefined;
   customs_desc_en: string;
@@ -146,8 +153,9 @@ export function validateProductInput(raw: unknown): ProductInputResult {
   else if (origin !== 'JP') fail('origin_country', 'origin_invalid');
 
   // ── 可选数值（填了就必须合法；不填用默认）───────────────────────────────
-  const stock = b.stock === undefined ? 0 : intAtLeast(b.stock, 0);
-  if (stock === undefined) fail('stock', 'stock_invalid');
+  // 库存省略 = 不改（见 ProductInputValue.stock 的 @why）；填了就必须合法
+  const stock = b.stock === undefined ? undefined : intAtLeast(b.stock, 0);
+  if (b.stock !== undefined && stock === undefined) fail('stock', 'stock_invalid');
   const cost = b.cost_jpy === undefined ? undefined : intAtLeast(b.cost_jpy, 0);
   if (b.cost_jpy !== undefined && cost === undefined) fail('cost_jpy', 'cost_invalid');
 
@@ -189,7 +197,7 @@ export function validateProductInput(raw: unknown): ProductInputResult {
       price_jpy: price,
       ...(cost !== undefined ? { cost_jpy: cost } : {}),
       weight_g: weight,
-      stock: stock ?? 0,
+      ...(stock !== undefined ? { stock } : {}),
       compliance_tags: tags,
       ...(hs !== undefined ? { hs_code: hs } : {}),
       customs_desc_en: desc ?? '',

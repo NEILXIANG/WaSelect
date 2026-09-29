@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.8
+  version: 0.6.10
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -12,332 +12,10 @@ info:
     0.5.5（I1-U5c）：`GET /orders` 的 `status` 参数**双词表统一**——废掉旧的五值 UI 词（unpaid/paid/shipped/delivered/closed），改用 `OrderStatus` 10 态同一词表（与 /admin/orders 同一 $ref）。映射：unpaid ≈ created+pending_payment（前端各查一次或不过滤）、closed ≈ cancelled+expired；paid/shipped/delivered 同名单态不变。
     0.5.6（I1-U6a）：① `PaymentIntent.payload` 的 mock 形状更正为 `{auto:true, orderId, amountJpy, currency}`（实现落地：auto 是审核期自动确认信号，前端不写死通道名）。② `POST /orders/{id}/pay` 补 429 响应（实现已挂 publicWrite 限流，响应清单漏列——同 0.5.3② 的同类漂移）。
     0.6.0（I1 收尾：U6b→U7b）：① `POST /internal/jobs/daily` 补 **500** 响应——未配置 `INTERNAL_JOB_SECRET` 时实现**响亮拒绝 50000**（不是 404：404 会把"我们没配密钥"表现成"cron 打错地址"，排查方向整个反掉）。响应清单漏列即漂移。② `Idempotency-Key` 补 `maxLength: 128`（实现已在 `scopeKey` 处拒绝超长键，超限 40001 + reason `idempotency_key_too_long`；契约无上限 = 契约比实现宽松，同一类漂移）。③ **0.5.4 的看门狗承诺兑现**：调度心跳不再由 `/healthz` 承担，改由每日对账 job 的第四类异常 `stalled_heartbeats` 报告（tick 10 分钟 / daily 26 小时无成功心跳即 error 日志；daily 首跑 last_success_at 为 null 不算停滞）。④ 骨架（`/api/v1/skeleton/*`）随 U6c 退役——它**从未进入本契约**，此处仅记一笔以说明"为什么找不到它"。
-    鉴权：Bearer JWT（小程序 aud=mp；管理端 aud=admin）。D-49 起没有 H5 身份：银行卡支付在 Stripe Checkout 托管页完成。写接口支持 Idempotency-Key 头（24 小时内重复返回原响应）。
+    鉴权：Bearer JWT（小程序 aud=mp；管理端 aud=admin）。D-49 起没有 H5 身份：银行卡支付在 Stripe Checkout 托管页完成。**声明了 IdemKey 参数的**写接口（建单、发起支付）支持 Idempotency-Key 头（24 小时内重复返回原响应；发起支付的重放补发新链接，见 0.6.9 ③）；其余写接口不认这个头（0.6.10 ⑥）。所有 bearerAuth 接口都可能返回 401 / 403（0.6.10 ⑤）。
     展示价只由后端计算（display 对象），前端不做汇率乘法。
     F11（ADR-28）：支付回调**合并为统一入口** `/pay/callback/{channel}`（channel 为路径参数，新增通道不再新增路由），
     并新增 `GET /pay/channels`——前端据此渲染支付入口，不写死通道名与按钮。
-servers:
-  - url: https://api.example.com/api/v1
-security:
-  - bearerAuth: []
-x-error-codes:
-  description: 业务错误码注册表（唯一真源 = 技术文档 v0.5 §7）；码前三位即 HTTP 状态。packages/shared/src/errors.ts 必须与本表一致，由 scripts/check-contract.mjs 防漂移。
-  codes:
-    40001: 参数缺失或格式错误
-    40002: 地址须为英文/拼音或电话格式错误
-    40011: 条款版本缺失或已过期
-    40101: 未登录或登录已过期
-    40102: 支付链接无效或已失效
-    40103: 回调验签失败（D6：入站方问题，4xx，不占 5xx 通道）
-    40301: 无权限
-    40400: 请求的资源不存在
-    40401: 商品不存在或已下架
-    40901: 库存不足
-    40902: 订单状态不允许此操作
-    40903: 重复提交
-    40904: 订单已过期
-    40905: 价格已变动
-    40906: 订单金额超过上限，请拆单
-    40907: 该支付存在进行中的拒付，暂不可退款
-    40908: 幂等键复用但请求内容不一致（D4：客户端须为每次新意图生成新键）
-    40909: 该支付存在进行中的拒付，暂不可发货（与 40907 同一事实的两个消费方：退款用 40907、发货用 40909）
-    42901: 请求过于频繁
-    50000: 服务器内部错误
-    50001: 支付创建失败
-    50003: 汇率不可用
-    50004: 运费不可计算
-    50300: 服务暂时不可用（上游熔断打开，按 data.retry_after_ms 退避）
-x-payment-channels:
-  description: |
-    **当前登记在册**的支付通道 key（D-56 / D-59）。
-    ① 这是**登记表，不是枚举约束**：本契约所有 schema 里的 channel 字段一律 `type: string`——
-       新增支付方式只需在注册表与配置里加一条，**不需要改本契约、也不需要新增路由**
-       （`/pay/callback/{channel}` 的 channel 是路径参数，`GET /pay/channels` 返回可选项）。
-       把它写成 OpenAPI `enum` 等于宣布"每加一个通道都要发一版契约"，与 D-56 直接冲突。
-    ② 它是**机器可读**的：`scripts/check-contract.mjs` 取这里的 `keys`，与
-       `packages/shared/src/enums.ts` 的 `PAYMENT_CHANNEL` 做**双向集合比对**——
-       只在 shared 加了通道而契约没登记（或反之）都会在 gate 里报红。
-       @limitation 它守的是"两端登记一致"，**守不住"登记了但适配器没装配"**（那是装配层的事）。
-    ③ 不在表内的 key：建单路径 40001（`POST /orders/{id}/pay`）、回调路径 40001（`/pay/callback/{channel}`）。
-  keys: [mock, wechat, stripe]
-paths:
-  /auth/wechat/login:
-    post:
-      security: []
-      summary: 小程序登录（wx.login code 换 token）
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [code], properties: {code: {type: string}}}}}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AuthResp'}}}}, '401': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
-  /auth/admin/login:
-    post:
-      security: []
-      summary: 管理端（admin-web）邮箱密码登录；仅 is_admin 账号，JWT 12 小时（aud=admin）；连续失败 5 次锁 15 分钟
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 12}}}}}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {token: {type: string}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
-  /fx:
-    get:
-      security: []
-      summary: 当日展示汇率（含缓冲），仅供文案展示
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {base: {type: string, example: JPY}, rates: {type: object, additionalProperties: {type: number}}, asOf: {type: string, format: date-time}}}}}}}
-  /terms:
-    get:
-      security: []
-      summary: 当前生效条款版本与法务页地址（D-45）；小程序法务页与建单前调用，建单时把 version 回传
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {version: {type: string, example: TOS-2026-09-20}, updated_at: {type: string, format: date-time}, urls: {type: object, properties: {zh: {type: string}, ja: {type: string}, en: {type: string}}}}}}}}}
-  /healthz:
-    get:
-      security: []
-      summary: |
-        健康检查（Render healthCheckPath）：**只报进程活着，不查任何依赖**。
-        @why 存活探针查依赖（DB / 调度心跳）会把一次依赖抖动放大成全站重启——平台健康检查 503 → 杀进程。
-        调度器看门狗**不由本端点承担**：I1 的 daily 对账 job 会读 job_runs 里 tick/daily 的 last_success_at 互相监视，
-        超期走 error 日志告警（见 AJ-102 / 0.5.4 变更注记；/readyz 与 /healthz 的语义分工见 /readyz 条目）。
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {status: {type: string, example: ok}}}}}}}
-  /readyz:
-    get:
-      security: []
-      summary: |
-        就绪探针（D21）：**查依赖**（当前为 DB `SELECT 1`），不通即 503——平台据此把实例摘出负载均衡。
-        与 `/healthz` 的区别是**语义**不是细节：/healthz = 进程活着吗（不查依赖，避免一次 DB 抖动把整个服务重启一轮）；
-        /readyz = 能接流量吗（查依赖）。⚠️ Render 的健康检查刻意配 `/healthz` 而**不是** `/readyz`：
-        停机摘流（N7）期间 /readyz 会先转 503，若被平台当作健康依据会直接杀进程。
-      responses:
-        '200': {description: Ready, content: {application/json: {schema: {type: object, properties: {status: {type: string, example: ok}}}}}}
-        '503': {description: '不就绪：依赖不可达，或正在停机摘流（N7 等待窗口内持续 503）', content: {application/json: {schema: {type: object, properties: {status: {type: string, example: degraded}}}}}}
-  /internal/jobs/daily:
-    post:
-      security: [{internalSecret: []}]
-      summary: 每日作业触发（Render Cron Job 调用）：立即 202，进程内异步执行对账 / 汇率刷新 / 存活校验，结果写 job_runs('daily')（D-45；经 Cloudflare 代理有 100 秒上限，不得同步执行）
-      responses: {'202': {description: Accepted, content: {application/json: {schema: {type: object, properties: {run_id: {type: string}, started_at: {type: string, format: date-time}}}}}}, '401': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /home:
-    get:
-      security: []
-      summary: 首页数据（D-51）：生效中的 Banner（active 且在 starts_at/ends_at 内，按 sort）+ 分类
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {banners: {type: array, items: {$ref: '#/components/schemas/Banner'}}, categories: {type: array, items: {type: string}}}}}}}}
-  /products:
-    get:
-      security: []
-      parameters:
-        - {name: page, in: query, schema: {type: integer, default: 1}}
-        - {name: size, in: query, schema: {type: integer, default: 20, maximum: 50}}
-        - {name: category, in: query, schema: {type: string, enum: [beauty, daily, kitchen, food]}}
-        - {name: keyword, in: query, schema: {type: string}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/ProductCard'}}, total: {type: integer}}}}}}}
-  /products/{id}:
-    get:
-      security: []
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Product'}}}}, '404': {$ref: '#/components/responses/Err'}}
-  /addresses:
-    get: {summary: 我的地址, responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Address'}}}}}}}
-    post:
-      summary: 新增地址（美国格式，ASCII）
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
-      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Address'}}}}, '400': {$ref: '#/components/responses/Err'}}
-  /addresses/{id}:
-    put:
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Address'}}}}}
-    delete:
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'204': {description: Deleted}}
-  /orders/quote:
-    post:
-      summary: 报价（购物车 / 确认页；不落库、不扣库存）
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}}}}}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Quote'}}}}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
-  /orders:
-    get:
-      parameters: [{name: status, in: query, schema: {$ref: '#/components/schemas/OrderStatus'}, description: '按 10 态单词过滤（0.5.5 起双词表统一；旧五值 UI 词的映射见版本说明）'}]
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/OrderSummary'}}}}}}}}
-    post:
-      summary: 建单（不含支付；扣减 stock；写 fx_snapshot 与 expires_at）
-      parameters: [{$ref: '#/components/parameters/IdemKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items, address_id, terms_version], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}, address_id: {type: string}, expected_total_jpy: {type: integer, description: '可选：前端确认页看到的合计；不等则 40905 价格已变动'}, contact_email: {type: string, format: email, description: '可选：收货通知兜底邮箱（D-39）'}, terms_version: {type: string, description: '建单时刻生效的条款版本（如 TOS-2026-09-20）；服务端与 TERMS_VERSION（GET /terms 返回的 version）不一致则 40011，缺失或不匹配一律拒单（D-43）'}}}}}}
-      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/OrderCreated'}}}}, '409': {$ref: '#/components/responses/Err'}}
-  /orders/{id}:
-    get:
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Order'}}}}}
-  /orders/{id}/pay:
-    post:
-      summary: 发起支付（选通道）。同订单同通道未支付期内幂等返回同一意图；换通道先取消旧意图（D-33）。stripe 返回短链 pay_url（D-49），小程序不接收 client_secret
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdemKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [channel], properties: {channel: {type: string, description: '通道 key（D-56/D-59：任意字符串，新增支付方式不需要改本契约、不需要新增路由；前端取值来自 GET /pay/channels 返回的 channel 字段，不写死；不在顶层 x-payment-channels 登记表内即 40001）'}}}}}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/PaymentIntent'}}}}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
-  /pay/link/{id}:
-    get:
-      security: []
-      summary: 短链落地（D-49）：校验 t=token 与订单状态后 302 到 Stripe Checkout Session URL；token 不符或订单已终态 → 302 到静态失效页（40102）。按 IP 限流；不放行 CORS；不记录 query
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: t, in: query, required: true, schema: {type: string}}]
-      responses: {'302': {description: Location = Stripe Checkout Session URL 或失效页}, '429': {$ref: '#/components/responses/Err'}}
-  /orders/{id}/cancel:
-    post:
-      summary: 取消（仅 created / pending_payment；同时取消未完成支付意图）
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: OK}, '409': {$ref: '#/components/responses/Err'}}
-  /admin/orders:
-    get:
-      parameters:
-        - {name: status, in: query, schema: {$ref: '#/components/schemas/OrderStatus'}}
-        - {name: keyword, in: query, schema: {type: string, description: order_no / 收件人 / 运单号}}
-        - {name: page, in: query, schema: {type: integer, default: 1}}
-        - {name: size, in: query, schema: {type: integer, default: 20, maximum: 100}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminOrderListItem'}}, total: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
-  /admin/orders/{id}:
-    get:
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AdminOrder'}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}
-  /admin/orders/{id}/ship:
-    post:
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [carrier, tracking_no], properties: {carrier: {type: string}, tracking_no: {type: string}}}}}}
-      responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
-  /admin/orders/{id}/refund:
-    post:
-      description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.7 起 `has_dispute` 的语义是「**有进行中的拒付**」：拒付结案（won/lost）时它被复位为 false，闸门随之解锁（U-F4）
-      summary: 全额退款（MVP；按 charge_currency / charge_amount 原币退；缺货场景整单退款）
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string}}}}}}
-      responses: {'202': {description: Accepted}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /admin/orders/{id}/address:
-    post:
-      summary: 发货前改址（仅 paid 未发货；重写 address_snapshot 并记 order_events，D-39）
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
-      responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
-  /admin/products:
-    get:
-      summary: 商品列表（管理端；status 非法或 page/size 非法 → 40001）
-      parameters: [{name: status, in: query, schema: {type: string, enum: [active, offline]}}, {name: page, in: query, schema: {type: integer, default: 1}}, {name: size, in: query, schema: {type: integer, default: 50}}]
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminProduct'}}, total: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-    post:
-      summary: 管理员建商品（响应带 id：前端用它打后续的 PUT /{id}）
-      description: 0.6.6 补：上架校验命中任一条即 40001（见 ProductInput.compliance_tags 的七禁标签与 customs_desc_en 词表；weight_g / price_jpy 也在此校验）
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProductInput'}}}}
-      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /admin/products/{id}:
-    put:
-      summary: 全量更新（整行覆盖）；id 不存在 → **40401**
-      description: 0.6.6 补：🈲 不存在的 id **不得**返回 200——那会让运营以为改成功了、实际什么都没改（静默失败）。与 `/admin/banners/{id}` 的 PUT 同口径（40402）
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProductInput'}}}}
-      responses: {'200': {description: 'OK（回整行 AdminProduct：与 Banner PUT 的空体不同，这里实现本就回整行，前端据此刷新表单）', content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /admin/products/{id}/status:
-    patch:
-      summary: 上架 / 下架；id 不存在 → **40401**
-      description: 0.6.6 补：status 只收 active / offline，其它值 40001；0 行命中一律 40401（不静默 200）
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {status: {type: string, enum: [active, offline]}}}}}}
-      responses: {'200': {description: 'OK（回 {id, status}：让前端不必为了确认结果再拉一次列表）', content: {application/json: {schema: {type: object, properties: {id: {type: string}, status: {type: string, enum: [active, offline]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /admin/upload:
-    post:
-      summary: 图片上传（multipart，服务端写对象存储并生成 thumb/card/detail 三档 webp；响应 ImageSet 增带 image_key = detail 档键）
-      description: 0.6.8 补：单文件上限 **10MB**；只收 jpeg / png / webp，按 **magic bytes** 判定（不信客户端 Content-Type；svg 永不放行，heic 明拒）。类型不符 / 超限 → 40001。`image_key` 供 BannerInput 使用（AJ-143）
-      requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, properties: {file: {type: string, format: binary}}}}}}
-      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ImageSet'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /admin/fx:
-    get:
-      summary: 展示汇率列表（**含历史与未来生效行**；quote 升序、同币种内 effective_from 倒序）
-      description: 0.6.3 更正——旧文案「当前生效」会让人以为只返回已生效的行；实际不过滤，否则刚提交的未来汇率在列表里消失，运营会以为没保存成功（AJ-150 ①）。排序保证每个币种最新一行排在最上面
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/FxRate'}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
-    post:
-      summary: 管理员维护展示汇率（**追加一行**；rate 由服务端按 raw_rate × (1 + FX_BUFFER_RATE) 算出，不收 rate）
-      description: 同币种同一生效时间重复提交 → 40910（UNIQUE(quote, effective_from)）；改前值与 10 倍以上的突变只进日志，不拦截（AJ-148 ④）
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [quote, raw_rate], properties: {quote: {type: string, enum: [CNY, USD]}, raw_rate: {type: number, exclusiveMinimum: 0, maximum: 1000}, effective_from: {type: string, format: date-time, description: '缺省 = 立即生效（服务端取当前时间）'}}}}}}
-      responses: {'201': {description: 'Created（无响应体：契约没定义 body，前端保存后重新 GET）'}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /admin/shipping-rates:
-    get:
-      summary: 运费分档全表（含停用档；carrier 升序、同承运商内 max_weight_g 升序）
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ShippingRate'}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
-    put:
-      summary: 整表替换运费分档（**事务内** delete + insert；中途失败整表回滚）
-      description: 🔴 启用的承运商必须**恰好一家**——否则 resolveSingleActiveCarrier() ≠1 家 → 全站 50004 无法报价（AJ-148 ③）。空表 / 重复档 / 全停用同样 40001。无响应体（契约没定义 body）
-      requestBody: {required: true, content: {application/json: {schema: {type: array, minItems: 1, items: {$ref: '#/components/schemas/ShippingRate'}}}}}
-      responses: {'200': {description: 'OK（无响应体：前端保存后重新 GET）'}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /admin/banners:
-    get:
-      summary: Banner 列表（D-51；**全量**：含停用与未开始的，不过滤时间窗）
-      description: 0.6.4 补：只返回"当前生效"的话，"停用"就等于永久删除视图——运营再也找不到它来重新启用。"当前该展示哪些"是买家侧 /home 的判定，不是本接口的职责
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Banner'}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
-    post:
-      summary: 新建 Banner（**响应必须带 id**：前端用它打后续的 PUT /{id}）
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BannerInput'}}}}
-      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Banner'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /admin/banners/{id}:
-    put:
-      summary: 全量更新（整行覆盖）；id 不存在 → **40402**
-      description: 🈲 不存在的 id **不得**返回 200——那会让运营以为改成功了、实际什么都没改（静默失败）。DELETE 则相反：幂等 204
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BannerInput'}}}}
-      responses: {'200': {description: 'OK（无响应体）'}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-    delete:
-      summary: 删除（**幂等**：不存在的 id 也 204）
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'204': {description: Deleted}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /admin/disputes:
-    get:
-      summary: 拒付列表（D-50）：payments.dispute_status；证据在 Stripe Dashboard 提交，后台只标红、锁退款、拉黑
-      description: 0.6.5 补：只出**带 dispute_id 的支付行**（无拒付的支付行不出现）；按开案时间倒序（NULL 最后）。`status` 非法 → **40001**，🈲 不得静默当成"不过滤"——那会让运营看到列表突然变长、按"拒付激增"这个错的结论去查业务
-      parameters: [{name: status, in: query, schema: {type: string, enum: [open, won, lost]}}]
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Dispute'}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /admin/users/{id}/block:
-    post:
-      summary: 拉黑用户（D-50）：users.blocked_at；此后建单 40301
-      description: 0.6.5 补：**不可逆**（契约没有解除接口），前端必须二次确认。id 不存在 → **40403**；对方是管理员 → **40911**（拉黑管理员 = 把自己锁在后台门外）。已拉黑的账号重复调用 → 200 幂等，不刷新 blocked_at。无响应体
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: 'OK（无响应体：前端拉黑后重新拉列表）'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
-  /pay/channels:
-    get:
-      security: []
-      summary: 可用支付通道（F11/ADR-28）：按 (目的国, 币种, 金额 JPY) 过滤并按 priority 排序。**前端据此渲染支付入口，不写死通道名与按钮**——下线一个通道改配置即可，无需发版
-      parameters:
-        - {name: country, in: query, required: true, schema: {type: string, pattern: '^[A-Z]{2}$'}, description: 目的国 ISO 3166-1 alpha-2；必填（服务端不给默认值，避免把国家写死）}
-        - {name: currency, in: query, required: true, schema: {type: string, pattern: '^[A-Z]{3}$'}, description: 扣款币种 ISO 4217}
-        - {name: amount_jpy, in: query, required: true, schema: {type: integer, minimum: 1}, description: 订单金额（JPY 整数円，ADR-09 唯一定价锚）}
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/ChannelView'}}}}}}}, '400': {$ref: '#/components/responses/Err'}}
-  /pay/callback/{channel}:
-    post:
-      security: []
-      summary: '**统一回调入口**（F11/ADR-28）：channel 为路径参数（mock / wechat / stripe…，新增通道不再新增路由）。验签与报文解析由该通道的 Provider 自己完成（raw body 原文）。响应范式（D5/D6）：业务冲突（单不存在且在宽限期内 → 503 让机构重发；超过宽限期 / 状态不符 → 200 + 我方告警）绝不回 4xx / 5xx——机构对任何非 2xx 都会重发，而这类冲突重发一万次也不会变；只有验签失败（40103）、报文不可解析（40001）与未登记的通道（40001）才回 4xx'
-      parameters: [{name: channel, in: path, required: true, schema: {type: string}}]
-      # ⚠️ 各通道登记的事件清单。契约只登记"会收到什么"，**不描述怎么解析**（那是 Provider 的事）。
-      #    用处：test/factories/stripe.contract.test.ts 从这里抽事件名，断言样本工厂造得出来——
-      #    于是"假数据形状 vs 契约声明"的脱节会在 gate 里变红，而不是等到联调。
-      #    @limitation 目前只有 stripe 一条；新增通道在此登记，样本工厂同步补。
-      x-provider-events:
-        stripe: checkout.session.completed / checkout.session.expired / checkout.session.async_payment_succeeded / checkout.session.async_payment_failed / payment_intent.succeeded / payment_intent.payment_failed / payment_intent.canceled / charge.refunded / refund.updated / refund.failed / charge.dispute.created / charge.dispute.closed / charge.dispute.funds_withdrawn / charge.dispute.funds_reinstated（D-49/D-50）
-      responses:
-        '200': {description: '已收下；body 形如 {received: true, order_id}（重复投递带 duplicate:true，未落业务状态带 ignored:<outcome|unmatched|paid:already|status_conflict>）'}
-        '400': {$ref: '#/components/responses/Err'}
-        '401': {$ref: '#/components/responses/Err'}
-        '503': {description: '暂未处理：already_processing（另一请求在处理中）或 order_not_found_yet（回调早到、宽限期内）；带 Retry-After'}
-components:
-  securitySchemes:
-    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
-    internalSecret: {type: apiKey, in: header, name: X-Internal-Job-Secret, description: 与 INTERNAL_JOB_SECRET 相等；仅 /internal/* 使用，不放行 CORS 与小程序}
-  parameters:
-    IdemKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 128, description: '客户端段上限 128 字符（0.6.0②）；超限 40001 + reason idempotency_key_too_long'}}
-  responses:
-    Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}
-  schemas:
-    AuthResp: {type: object, properties: {token: {type: string}, user: {type: object, properties: {id: {type: string}, isAdmin: {type: boolean}}}}}
-    Display: {type: object, description: 展示价，整数分（后端按当日汇率计算）, properties: {USD: {type: integer}, CNY: {type: integer}}}
-    ImageSet: {type: object, properties: {thumb: {type: string}, card: {type: string}, detail: {type: string}, image_key: {type: string, description: '仅 POST /admin/upload 响应里出现（0.6.8）：detail 档存储键，供 BannerInput.image_key 使用（AJ-143/AJ-166）；存量 Product.images 条目没有它'}}}
-    ProductCard: {type: object, properties: {id: {type: string}, title: {type: string}, category: {type: string}, price_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, image: {$ref: '#/components/schemas/ImageSet'}, stock: {type: integer}, status: {type: string}}}
-    Product: {allOf: [{$ref: '#/components/schemas/ProductCard'}, {type: object, properties: {description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, weight_g: {type: integer}, compliance_tags: {type: array, items: {type: string}}, hs_code: {type: string}, customs_desc_en: {type: string}, origin_country: {type: string}}}]}
-    AdminProduct: {allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time}}}]}
-    ProductInput: {type: object, required: [title, category, price_jpy, weight_g, customs_desc_en, origin_country], properties: {title: {type: string}, category: {type: string}, description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, price_jpy: {type: integer, minimum: 1}, cost_jpy: {type: integer}, weight_g: {type: integer, minimum: 1}, stock: {type: integer}, compliance_tags: {type: array, items: {type: string, enum: [liquid, battery, cosmetic, food, flammable, aerosol, electrical, quasi_drug, sunscreen, children_product, alcohol]}, description: 'flammable / aerosol / electrical / quasi_drug / sunscreen / children_product / alcohol 七个标签上架即拒（40001）：前两者为日本邮便航空禁寄品（D-42），electrical 为 MVP 不上电器（D-45），quasi_drug（医薬部外品/薬用）与 sunscreen（SPF）在美国 FDA 口径属 OTC 药品、children_product 需 CPSIA 检测、alcohol 需酒类免许且不可邮寄（D-51）；customs_desc_en 含 medicated/whitening/SPF/sunscreen/drug 亦拒'}, hs_code: {type: string, description: '报关 HS 码；缺省时由 Zonos 自动识别、管理员核对；食品/化妆品必填（D-39/D-42）'}, customs_desc_en: {type: string, description: '英文报关品名，上架必填（D-39）'}, origin_country: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', enum: [JP], description: '原产地 ISO 3166-1 alpha-2，必填无默认，按商品包装实录；MVP 仅接受 JP——非 JP 一律 400 拒绝上架（D-42/D-43）'}, title_ja: {type: string, description: '日文品名（采购用）'}, jan_code: {type: string, description: 'JAN 码'}, purchase_source: {type: string, description: '采购渠道'}}}
-    AddressInput: {type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, pattern: '^[ -~]+$'}, phone: {type: string, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, pattern: '^[ -~]+$'}, line2: {type: string, pattern: '^[ -~]*$'}, city: {type: string, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2}, postal_code: {type: string, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
-    Address: {allOf: [{$ref: '#/components/schemas/AddressInput'}, {type: object, properties: {id: {type: string}}}]}
-    OrderItemsInput: {type: array, minItems: 1, items: {type: object, required: [product_id, qty], properties: {product_id: {type: string}, qty: {type: integer, minimum: 1}}}}
-    # duty_jpy 可空 + duty_estimate（I1-U4 实现口径）：duty_rates 无此 (origin,dest) 行、或目的国/产地
-    # 无法唯一确定时 duty_jpy=null 且 duty_estimate=false——duty 本是信息字段，缺失不阻止下单（13b 未定）。
-    Quote: {type: object, properties: {items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer, nullable: true, description: 信息字段，不计入 total（D-32）；null = 无法估算（见 duty_estimate）}, duty_estimate: {type: boolean, description: 'false 时 duty_jpy 为 null，前端不得展示具体关税数字'}, total_jpy: {type: integer}, weight_g: {type: integer, description: 含 PACKAGING_WEIGHT_G 包材重量（D-42）}, display: {$ref: '#/components/schemas/Display'}, free_shipping_remaining_jpy: {type: integer}, split_hint: {type: boolean, description: 金额超 MAX_ORDER_JPY 时为 true，提示拆单（D-42；建单时硬拦 40906）}}}
-    OrderStatus: {type: string, enum: [created, pending_payment, paid, shipped, delivered, completed, cancelled, expired, refunding, refunded]}
-    OrderCreated: {allOf: [{$ref: '#/components/schemas/Quote'}, {type: object, properties: {order_id: {type: string}, order_no: {type: string}, fx_snapshot: {type: object, properties: {USD: {type: number}, CNY: {type: number}}}, status: {$ref: '#/components/schemas/OrderStatus'}, expires_at: {type: string, format: date-time}}}]}
-    OrderSummary: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, total_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, status: {$ref: '#/components/schemas/OrderStatus'}, created_at: {type: string, format: date-time}}}
-    Order: {allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, properties: {contact_email: {type: string, format: email, description: '可选收货通知邮箱（D-42 补入）'}, terms_version: {type: string, description: '建单时写入的条款版本（只读，D-43）'}, items: {type: array, items: {type: object, properties: {product_id: {type: string}, title: {type: string}, qty: {type: integer}, unit_price_jpy: {type: integer}, image: {$ref: '#/components/schemas/ImageSet'}}}}, address: {$ref: '#/components/schemas/Address'}, items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer}, expires_at: {type: string, format: date-time}, carrier: {type: string}, tracking_no: {type: string}, timeline: {type: array, items: {type: object, properties: {status: {type: string}, at: {type: string, format: date-time}}}}, payment: {type: object, properties: {channel: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, paid_amount: {type: integer}, paid_currency: {type: string}}}}}]}
     0.6.1（I2 U-B1）：`GET /admin/orders` 的 `items` 从 `$ref: Order` 收紧为 **`AdminOrderListItem`**。
       @why 原声明是"列表每行都带 items / address / timeline / payment"——那是**详情**的形状，
       实现从来没这么做过（列表只给摘要 + 管理端专有列），属"契约比实现严格"的漂移，
@@ -427,11 +105,378 @@ components:
       ② `image_key` 只在**上传响应**里出现；`Product.images` 等存量 ImageSet 条目没有它（故 optional）。
       ③ 上传限 **10MB**、只收 jpeg / png / webp（按 magic bytes 判，不信客户端 Content-Type；
       svg 是脚本载体永不放行，heic 因 sharp 不带 libheif 在入口明拒）。
-    AdminOrderListItem: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, user_id: {type: string}, status: {$ref: '#/components/schemas/OrderStatus'}, total_jpy: {type: integer}, contact_email: {type: string}, carrier: {type: string}, tracking_no: {type: string}, has_dispute: {type: boolean, description: '列表也带（0.6.1）：客服在列表页就能看见拒付单'}, is_test: {type: boolean}, created_at: {type: string, format: date-time}}}
-    AdminOrder: {allOf: [{$ref: '#/components/schemas/Order'}, {type: object, properties: {user_id: {type: string}, contact_email: {type: string, format: email, description: '客服可见（D-42）'}, is_test: {type: boolean, description: '审核期 mock 通道测试单；管理端列表默认过滤'}, has_dispute: {type: boolean, description: '存在进行中的拒付（D-50）；退款 40907'}, fx_snapshot: {type: object}, payments: {type: array, items: {type: object, properties: {provider: {type: string}, provider_ref: {type: string}, transaction_id: {type: string}, status: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, settled_jpy: {type: integer}, fee_jpy: {type: integer}}}}, events: {type: array, items: {type: object, properties: {status: {type: string}, note: {type: string}, actor: {type: string}, at: {type: string, format: date-time}}}}}}]}
+    0.6.9（AJ-175，测试审查第二轮缺陷修复）：四处**行为变更**写进契约。
+      ① `ProductInput.stock` 改为**省略即不改**：POST 省略按 0 建；PUT 省略则库存保持库里的当前值。
+      @why 原来 PUT 是"整行覆盖"，管理端编辑页打开期间买家下单扣了库存，运营只改标题一保存，
+      就把打开页面时读到的旧库存写回去——卖出的那件"凭空回来"，会超卖（测试审查 KD 库存覆盖）。
+      前端只在库存**被改动**时才带 stock。仍会丢的情形：运营**确实改了库存**且期间有人下单——那是两个人改同一个数，需乐观锁，未做（见 @limitation）。
+      ② `PUT /admin/products/{id}` **不再改上下架状态**（上下架只走 PATCH `/status`）。
+      @why 原实现把请求体里没有的 status 写成默认 active：编辑一个已下架的商品会把它**悄悄重新上架**。
+      ③ `POST /orders/{id}/pay` 的幂等**重放**：`pay_url` 里的 token 是**新签发**的（旧链接随之失效），不再逐字节等于首次响应。
+      @why D-49 要求明文 token 不落库，但幂等表存了整个响应体 24 小时（KD-3）；现改为落库前抹掉 token、重放时补发。
+      订单已不可付（非 pending_payment 或已过期）时，重放体里的链接落地即 40102（与"链接已失效"同口径）。
+      ④ `POST /admin/orders/{id}/refund`：订单停在 **refunding**（上次机构调用失败，500）时**可以再调一次重试**，
+      沿用**首次**的退款原因、向机构发同一幂等键（机构侧不会退两次）；已 refunded 仍 40902（KD-4）。
+      ⑤ `AdminOrderListItem` 增 **`recipient`**（收件人姓名，可选：快照缺失时省略）。
+      @why 列表早就支持"按收件人搜"、管理端列表也有"收件人"列，但行里不带它——搜中的行收件人一栏恒为空
+      （前后端接缝测试实测，KD-14）。只加姓名一列，其余地址字段仍只在详情（最小暴露）。
+    0.6.10（AJ-176，代码↔文档一致性审计）：契约与实现对齐，两处**行为变更**，其余为漏列/措辞更正（①～⑦）。
+      ① 行为变更：拒付**败诉**（dispute.closed + lost）后 `has_dispute` **保持 true**，发货 40909 / 退款 40907 继续拦；
+      只有**胜诉**复位（0.6.7 原为"won/lost 都复位"）。
+      @why 败诉 = 钱已被机构拉回持卡人：再发货钱货两空；再退款 Stripe 必拒（`charge_disputed` /
+      `refund_disputed_payment`，docs.stripe.com/error-codes 2026-09-28 核对），订单会卡在 refunding。
+      `has_dispute` 的语义随之扩为"**有未解除的拒付限制**（进行中，或已败诉）"。
+      ② 行为变更：`Order.timeline`（买家订单详情）**只含订单状态值**（OrderStatus 10 态）；改址 / 拒付 / 退款失败等管理事件
+      只在 `AdminOrder.events` 里。@why 曾不过滤：买家详情出现"状态未知"行，且拒付开案/结案被买家看见。
+      ③ `x-error-codes` 登记表补齐 40402 / 40403 / 40910 / 40911（实现早已使用，只写在版本说明正文里）；
+      `scripts/check-contract.mjs` 改为只认登记表段的**双向**比对（旧的全文子串匹配放过了这四个）。
+      40400 的含义更正为"资源不存在（含他人资源，同码防存在性探测）"——实现一直把它用于订单 / 地址不存在。
+      ④ `/healthz` `/readyz` 挂在**根路径**（不在 `/api/v1` 下）：两条补 path 级 `servers`。
+      ⑤ 漏列补齐：`POST /orders` 补 400/401/403/404/429/500；`POST /orders/{id}/pay` 补 400/401/403/404/500（含 **50001**：
+      机构建会话失败，实现本轮起才真正抛出，原被兜底成 50000）；回调 200 的 `ignored` 取值补 `late_payment` / `settlement_mismatch`。
+      所有 bearerAuth 接口都可能返回 401（40101）与 403（40301：封禁 / 角色不符 / 撤权），不再逐条重复列出。
+      ⑥ 措辞更正：Idempotency-Key 只对**声明了 IdemKey 参数**的写接口生效（建单 / 发起支付），其余写接口带了也被忽略；
+      封禁后是**所有买家鉴权接口** 40301（不只建单）；`AdminOrder.payment` 按 `Order.payment` 形状（`channel` 而不是 `provider`）；
+      `AdminOrder` 不带 `display` / `timeline`（看 `events` 全量），另带 `paid_at` / `shipped_at`；
+      `/auth/admin/login` 与 `/home` 标注**未实现**（契约先行，routes.contract.test 登记在 NOT_IMPLEMENTED）；
+      `/terms` 的 `updated_at` 当前不返回、`urls` 为占位相对路径；`Order.duty_jpy` 无法估算时为 **0**（与 `Quote.duty_jpy` 的 null 不同，AJ-176 未决项）。
+      ⑦ 管理端商品 / Banner 漏列的校验补进 schema（实现早已如此拦截）：`GET /admin/products` 的 `size` ∈ [1, 100]；
+      `ProductInput.category` 限四个分类（与 `PRODUCT_CATEGORY` 同源）；`BannerInput.link_id` 在 `link_type` ≠ none 时必填、`sort` ≥ 0；
+      商品详情不返回 `image`（用 `images`），管理端商品另不返回 `display` / `image`。
+servers:
+  - url: https://api.example.com/api/v1
+security:
+  - bearerAuth: []
+x-error-codes:
+  description: 业务错误码注册表（唯一真源 = 技术文档 v0.5 §7）；码前三位即 HTTP 状态。packages/shared/src/errors.ts 必须与本表一致，由 scripts/check-contract.mjs 防漂移。
+  codes:
+    40001: 参数缺失或格式错误
+    40002: 地址须为英文/拼音或电话格式错误
+    40011: 条款版本缺失或已过期
+    40101: 未登录或登录已过期
+    40102: 支付链接无效或已失效
+    40103: 回调验签失败（D6：入站方问题，4xx，不占 5xx 通道）
+    40301: 无权限
+    40400: 请求的资源不存在（含他人资源：订单 / 地址按归属判定，与不存在同码防探测；未知路径也归此码）
+    40402: 该 Banner 不存在或已被删除
+    40403: 该用户不存在
+    40401: 商品不存在或已下架
+    40901: 库存不足
+    40902: 订单状态不允许此操作
+    40903: 重复提交
+    40904: 订单已过期
+    40905: 价格已变动
+    40906: 订单金额超过上限，请拆单
+    40907: 该支付存在进行中的拒付，暂不可退款
+    40908: 幂等键复用但请求内容不一致（D4：客户端须为每次新意图生成新键）
+    40909: 该支付存在进行中的拒付，暂不可发货（与 40907 同一事实的两个消费方：退款用 40907、发货用 40909）
+    40910: 该币种在此生效时间已有一条汇率
+    40911: 不能拉黑管理员账号
+    42901: 请求过于频繁
+    50000: 服务器内部错误
+    50001: 支付创建失败
+    50003: 汇率不可用
+    50004: 运费不可计算
+    50300: 服务暂时不可用（上游熔断打开，按 data.retry_after_ms 退避）
+x-payment-channels:
+  description: |
+    **当前登记在册**的支付通道 key（D-56 / D-59）。
+    ① 这是**登记表，不是枚举约束**：本契约所有 schema 里的 channel 字段一律 `type: string`——
+       新增支付方式只需在注册表与配置里加一条，**不需要改本契约、也不需要新增路由**
+       （`/pay/callback/{channel}` 的 channel 是路径参数，`GET /pay/channels` 返回可选项）。
+       把它写成 OpenAPI `enum` 等于宣布"每加一个通道都要发一版契约"，与 D-56 直接冲突。
+    ② 它是**机器可读**的：`scripts/check-contract.mjs` 取这里的 `keys`，与
+       `packages/shared/src/enums.ts` 的 `PAYMENT_CHANNEL` 做**双向集合比对**——
+       只在 shared 加了通道而契约没登记（或反之）都会在 gate 里报红。
+       @limitation 它守的是"两端登记一致"，**守不住"登记了但适配器没装配"**（那是装配层的事）。
+    ③ 不在表内的 key：建单路径 40001（`POST /orders/{id}/pay`）、回调路径 40001（`/pay/callback/{channel}`）。
+  keys: [mock, wechat, stripe]
+paths:
+  /auth/wechat/login:
+    post:
+      security: []
+      summary: 小程序登录（wx.login code 换 token）
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [code], properties: {code: {type: string}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AuthResp'}}}}, '401': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
+  /auth/admin/login:
+    post:
+      security: []
+      summary: ⚠️ **未实现**（契约先行；routes.contract.test NOT_IMPLEMENTED 登记，含管理员 seed）——管理端（admin-web）邮箱密码登录；仅 is_admin 账号，JWT 12 小时（aud=admin）；连续失败 5 次锁 15 分钟
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 12}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {token: {type: string}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
+  /fx:
+    get:
+      security: []
+      summary: 当日展示汇率（含缓冲），仅供文案展示
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {base: {type: string, example: JPY}, rates: {type: object, additionalProperties: {type: number}}, asOf: {type: string, format: date-time}}}}}}}
+  /terms:
+    get:
+      security: []
+      summary: 当前生效条款版本与法务页地址（D-45）；小程序法务页与建单前调用，建单时把 version 回传
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {version: {type: string, example: TOS-2026-09-20}, updated_at: {type: string, format: date-time, description: '0.6.10：当前实现不返回（可选）'}, urls: {type: object, description: '0.6.10：当前为占位相对路径，法务页上线后改绝对 URL', properties: {zh: {type: string}, ja: {type: string}, en: {type: string}}}}}}}}}
+  /healthz:
+    servers: [{url: 'https://api.example.com', description: '0.6.10：探针挂在根路径，不在 /api/v1 下'}]
+    get:
+      security: []
+      summary: |
+        健康检查（Render healthCheckPath）：**只报进程活着，不查任何依赖**。
+        @why 存活探针查依赖（DB / 调度心跳）会把一次依赖抖动放大成全站重启——平台健康检查 503 → 杀进程。
+        调度器看门狗**不由本端点承担**：I1 的 daily 对账 job 会读 job_runs 里 tick/daily 的 last_success_at 互相监视，
+        超期走 error 日志告警（见 AJ-102 / 0.5.4 变更注记；/readyz 与 /healthz 的语义分工见 /readyz 条目）。
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {status: {type: string, example: ok}}}}}}}
+  /readyz:
+    servers: [{url: 'https://api.example.com', description: '0.6.10：探针挂在根路径，不在 /api/v1 下'}]
+    get:
+      security: []
+      summary: |
+        就绪探针（D21）：**查依赖**（当前为 DB `SELECT 1`），不通即 503——平台据此把实例摘出负载均衡。
+        与 `/healthz` 的区别是**语义**不是细节：/healthz = 进程活着吗（不查依赖，避免一次 DB 抖动把整个服务重启一轮）；
+        /readyz = 能接流量吗（查依赖）。⚠️ Render 的健康检查刻意配 `/healthz` 而**不是** `/readyz`：
+        停机摘流（N7）期间 /readyz 会先转 503，若被平台当作健康依据会直接杀进程。
+      responses:
+        '200': {description: Ready, content: {application/json: {schema: {type: object, properties: {status: {type: string, example: ok}}}}}}
+        '503': {description: '不就绪：依赖不可达，或正在停机摘流（N7 等待窗口内持续 503）', content: {application/json: {schema: {type: object, properties: {status: {type: string, example: degraded}}}}}}
+  /internal/jobs/daily:
+    post:
+      security: [{internalSecret: []}]
+      summary: 每日作业触发（Render Cron Job 调用）：立即 202，进程内异步执行对账 / 汇率刷新 / 存活校验，结果写 job_runs('daily')（D-45；经 Cloudflare 代理有 100 秒上限，不得同步执行）
+      responses: {'202': {description: Accepted, content: {application/json: {schema: {type: object, properties: {run_id: {type: string}, started_at: {type: string, format: date-time}}}}}}, '401': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /home:
+    get:
+      security: []
+      summary: ⚠️ **未实现**（契约先行；routes.contract.test NOT_IMPLEMENTED 登记）——首页数据（D-51）：生效中的 Banner（active 且在 starts_at/ends_at 内，按 sort）+ 分类
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {banners: {type: array, items: {$ref: '#/components/schemas/Banner'}}, categories: {type: array, items: {type: string}}}}}}}}
+  /products:
+    get:
+      security: []
+      parameters:
+        - {name: page, in: query, schema: {type: integer, default: 1}}
+        - {name: size, in: query, schema: {type: integer, default: 20, maximum: 50}}
+        - {name: category, in: query, schema: {type: string, enum: [beauty, daily, kitchen, food]}}
+        - {name: keyword, in: query, schema: {type: string}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/ProductCard'}}, total: {type: integer}}}}}}}
+  /products/{id}:
+    get:
+      security: []
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Product'}}}}, '404': {$ref: '#/components/responses/Err'}}
+  /addresses:
+    get: {summary: 我的地址, responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Address'}}}}}}}
+    post:
+      summary: 新增地址（美国格式，ASCII）
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Address'}}}}, '400': {$ref: '#/components/responses/Err'}}
+  /addresses/{id}:
+    put:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Address'}}}}}
+    delete:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: Deleted}}
+  /orders/quote:
+    post:
+      summary: 报价（购物车 / 确认页；不落库、不扣库存）
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Quote'}}}}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
+  /orders:
+    get:
+      parameters: [{name: status, in: query, schema: {$ref: '#/components/schemas/OrderStatus'}, description: '按 10 态单词过滤（0.5.5 起双词表统一；旧五值 UI 词的映射见版本说明）'}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/OrderSummary'}}}}}}}}
+    post:
+      summary: 建单（不含支付；扣减 stock；写 fx_snapshot 与 expires_at）
+      parameters: [{$ref: '#/components/parameters/IdemKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items, address_id, terms_version], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}, address_id: {type: string}, expected_total_jpy: {type: integer, description: '可选：前端确认页看到的合计；不等则 40905 价格已变动'}, contact_email: {type: string, format: email, description: '可选：收货通知兜底邮箱（D-39）'}, terms_version: {type: string, description: '建单时刻生效的条款版本（如 TOS-2026-09-20）；服务端与 TERMS_VERSION（GET /terms 返回的 version）不一致则 40011，缺失或不匹配一律拒单（D-43）'}}}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/OrderCreated'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /orders/{id}:
+    get:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Order'}}}}}
+  /orders/{id}/pay:
+    post:
+      summary: 发起支付（选通道）。同订单同通道未支付期内幂等返回同一意图；换通道先取消旧意图（D-33）。stripe 返回短链 pay_url（D-49），小程序不接收 client_secret
+      description: 0.6.9（AJ-175/KD-3）：同一 Idempotency-Key 重放时不产生第二个支付意图、不再调机构，但 `pay_url` 的 token 为**重新签发**（明文 token 不落幂等表），旧链接随之失效；订单已不可付时重放体里的链接落地即 40102
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdemKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [channel], properties: {channel: {type: string, description: '通道 key（D-56/D-59：任意字符串，新增支付方式不需要改本契约、不需要新增路由；前端取值来自 GET /pay/channels 返回的 channel 字段，不写死；不在顶层 x-payment-channels 登记表内即 40001）'}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/PaymentIntent'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}, '500': {description: '50001 机构建会话失败（重试或切换支付方式）/ 50003 扣款所需汇率缺失 / 50000 其它', content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}}
+  /pay/link/{id}:
+    get:
+      security: []
+      summary: 短链落地（D-49）：校验 t=token 与订单状态后 302 到 Stripe Checkout Session URL；token 不符或订单已终态 → 302 到静态失效页（40102）。按 IP 限流；不放行 CORS；不记录 query
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: t, in: query, required: true, schema: {type: string}}]
+      responses: {'302': {description: Location = Stripe Checkout Session URL 或失效页}, '429': {$ref: '#/components/responses/Err'}}
+  /orders/{id}/cancel:
+    post:
+      summary: 取消（仅 created / pending_payment；同时取消未完成支付意图）
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/orders:
+    get:
+      parameters:
+        - {name: status, in: query, schema: {$ref: '#/components/schemas/OrderStatus'}}
+        - {name: keyword, in: query, schema: {type: string, description: order_no / 收件人 / 运单号}}
+        - {name: page, in: query, schema: {type: integer, default: 1}}
+        - {name: size, in: query, schema: {type: integer, default: 20, maximum: 100}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminOrderListItem'}}, total: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+  /admin/orders/{id}:
+    get:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AdminOrder'}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}
+  /admin/orders/{id}/ship:
+    post:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [carrier, tracking_no], properties: {carrier: {type: string}, tracking_no: {type: string}}}}}}
+      responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/orders/{id}/refund:
+    post:
+      description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.7 起 `has_dispute` 的语义是「**有进行中的拒付**」：拒付结案（won/lost）时它被复位为 false，闸门随之解锁（U-F4）。0.6.9（AJ-175/KD-4）：状态为 **refunding**（上次机构调用失败）时允许再调重试，沿用首次退款原因与同一机构幂等键；refunded 仍 40902
+      summary: 全额退款（MVP；按 charge_currency / charge_amount 原币退；缺货场景整单退款）
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string}}}}}}
+      responses: {'202': {description: Accepted}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/orders/{id}/address:
+    post:
+      summary: 发货前改址（仅 paid 未发货；重写 address_snapshot 并记 order_events，D-39）
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
+      responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/products:
+    get:
+      summary: 商品列表（管理端；status 非法或 page/size 非法 → 40001）
+      parameters: [{name: status, in: query, schema: {type: string, enum: [active, offline]}}, {name: page, in: query, schema: {type: integer, default: 1}}, {name: size, in: query, schema: {type: integer, default: 50, minimum: 1, maximum: 100}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminProduct'}}, total: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+    post:
+      summary: 管理员建商品（响应带 id：前端用它打后续的 PUT /{id}）
+      description: 0.6.6 补：上架校验命中任一条即 40001（见 ProductInput.compliance_tags 的七禁标签与 customs_desc_en 词表；weight_g / price_jpy 也在此校验）
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProductInput'}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/products/{id}:
+    put:
+      summary: 更新商品字段（**不改上下架状态**；stock 省略即不改）；id 不存在 → **40401**
+      description: 0.6.9：上下架只走 PATCH `/status`，本接口不碰 status（原实现会把已下架商品悄悄改回 active）；stock 省略即保持当前库存（AJ-175）。0.6.6 补：🈲 不存在的 id **不得**返回 200——那会让运营以为改成功了、实际什么都没改（静默失败）。与 `/admin/banners/{id}` 的 PUT 同口径（40402）
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProductInput'}}}}
+      responses: {'200': {description: 'OK（回整行 AdminProduct：与 Banner PUT 的空体不同，这里实现本就回整行，前端据此刷新表单）', content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/products/{id}/status:
+    patch:
+      summary: 上架 / 下架；id 不存在 → **40401**
+      description: 0.6.6 补：status 只收 active / offline，其它值 40001；0 行命中一律 40401（不静默 200）
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {status: {type: string, enum: [active, offline]}}}}}}
+      responses: {'200': {description: 'OK（回 {id, status}：让前端不必为了确认结果再拉一次列表）', content: {application/json: {schema: {type: object, properties: {id: {type: string}, status: {type: string, enum: [active, offline]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/upload:
+    post:
+      summary: 图片上传（multipart，服务端写对象存储并生成 thumb/card/detail 三档 webp；响应 ImageSet 增带 image_key = detail 档键）
+      description: 0.6.8 补：单文件上限 **10MB**；只收 jpeg / png / webp，按 **magic bytes** 判定（不信客户端 Content-Type；svg 永不放行，heic 明拒）。类型不符 / 超限 → 40001。`image_key` 供 BannerInput 使用（AJ-143）
+      requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, properties: {file: {type: string, format: binary}}}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ImageSet'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/fx:
+    get:
+      summary: 展示汇率列表（**含历史与未来生效行**；quote 升序、同币种内 effective_from 倒序）
+      description: 0.6.3 更正——旧文案「当前生效」会让人以为只返回已生效的行；实际不过滤，否则刚提交的未来汇率在列表里消失，运营会以为没保存成功（AJ-150 ①）。排序保证每个币种最新一行排在最上面
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/FxRate'}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+    post:
+      summary: 管理员维护展示汇率（**追加一行**；rate 由服务端按 raw_rate × (1 + FX_BUFFER_RATE) 算出，不收 rate）
+      description: 同币种同一生效时间重复提交 → 40910（UNIQUE(quote, effective_from)）；改前值与 10 倍以上的突变只进日志，不拦截（AJ-148 ④）
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [quote, raw_rate], properties: {quote: {type: string, enum: [CNY, USD]}, raw_rate: {type: number, exclusiveMinimum: 0, maximum: 1000}, effective_from: {type: string, format: date-time, description: '缺省 = 立即生效（服务端取当前时间）'}}}}}}
+      responses: {'201': {description: 'Created（无响应体：契约没定义 body，前端保存后重新 GET）'}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/shipping-rates:
+    get:
+      summary: 运费分档全表（含停用档；carrier 升序、同承运商内 max_weight_g 升序）
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ShippingRate'}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+    put:
+      summary: 整表替换运费分档（**事务内** delete + insert；中途失败整表回滚）
+      description: 🔴 启用的承运商必须**恰好一家**——否则 resolveSingleActiveCarrier() ≠1 家 → 全站 50004 无法报价（AJ-148 ③）。空表 / 重复档 / 全停用同样 40001。无响应体（契约没定义 body）
+      requestBody: {required: true, content: {application/json: {schema: {type: array, minItems: 1, items: {$ref: '#/components/schemas/ShippingRate'}}}}}
+      responses: {'200': {description: 'OK（无响应体：前端保存后重新 GET）'}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/banners:
+    get:
+      summary: Banner 列表（D-51；**全量**：含停用与未开始的，不过滤时间窗）
+      description: 0.6.4 补：只返回"当前生效"的话，"停用"就等于永久删除视图——运营再也找不到它来重新启用。"当前该展示哪些"是买家侧 /home 的判定，不是本接口的职责
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Banner'}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+    post:
+      summary: 新建 Banner（**响应必须带 id**：前端用它打后续的 PUT /{id}）
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BannerInput'}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Banner'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/banners/{id}:
+    put:
+      summary: 全量更新（整行覆盖）；id 不存在 → **40402**
+      description: 🈲 不存在的 id **不得**返回 200——那会让运营以为改成功了、实际什么都没改（静默失败）。DELETE 则相反：幂等 204
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BannerInput'}}}}
+      responses: {'200': {description: 'OK（无响应体）'}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+    delete:
+      summary: 删除（**幂等**：不存在的 id 也 204）
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: Deleted}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/disputes:
+    get:
+      summary: 拒付列表（D-50）：payments.dispute_status；证据在 Stripe Dashboard 提交，后台只标红、锁退款、拉黑
+      description: 0.6.5 补：只出**带 dispute_id 的支付行**（无拒付的支付行不出现）；按开案时间倒序（NULL 最后）。`status` 非法 → **40001**，🈲 不得静默当成"不过滤"——那会让运营看到列表突然变长、按"拒付激增"这个错的结论去查业务
+      parameters: [{name: status, in: query, schema: {type: string, enum: [open, won, lost]}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Dispute'}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/users/{id}/block:
+    post:
+      summary: 拉黑用户（D-50）：users.blocked_at；此后**所有买家鉴权接口** 40301（0.6.10 更正：不只建单）
+      description: 0.6.5 补：**不可逆**（契约没有解除接口），前端必须二次确认。id 不存在 → **40403**；对方是管理员 → **40911**（拉黑管理员 = 把自己锁在后台门外）。已拉黑的账号重复调用 → 200 幂等，不刷新 blocked_at。无响应体
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: 'OK（无响应体：前端拉黑后重新拉列表）'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /pay/channels:
+    get:
+      security: []
+      summary: 可用支付通道（F11/ADR-28）：按 (目的国, 币种, 金额 JPY) 过滤并按 priority 排序。**前端据此渲染支付入口，不写死通道名与按钮**——下线一个通道改配置即可，无需发版
+      parameters:
+        - {name: country, in: query, required: true, schema: {type: string, pattern: '^[A-Z]{2}$'}, description: 目的国 ISO 3166-1 alpha-2；必填（服务端不给默认值，避免把国家写死）}
+        - {name: currency, in: query, required: true, schema: {type: string, pattern: '^[A-Z]{3}$'}, description: 扣款币种 ISO 4217}
+        - {name: amount_jpy, in: query, required: true, schema: {type: integer, minimum: 1}, description: 订单金额（JPY 整数円，ADR-09 唯一定价锚）}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/ChannelView'}}}}}}}, '400': {$ref: '#/components/responses/Err'}}
+  /pay/callback/{channel}:
+    post:
+      security: []
+      summary: '**统一回调入口**（F11/ADR-28）：channel 为路径参数（mock / wechat / stripe…，新增通道不再新增路由）。验签与报文解析由该通道的 Provider 自己完成（raw body 原文）。响应范式（D5/D6）：业务冲突（单不存在且在宽限期内 → 503 让机构重发；超过宽限期 / 状态不符 → 200 + 我方告警）绝不回 4xx / 5xx——机构对任何非 2xx 都会重发，而这类冲突重发一万次也不会变；只有验签失败（40103）、报文不可解析（40001）与未登记的通道（40001）才回 4xx'
+      parameters: [{name: channel, in: path, required: true, schema: {type: string}}]
+      # ⚠️ 各通道登记的事件清单。契约只登记"会收到什么"，**不描述怎么解析**（那是 Provider 的事）。
+      #    用处：test/factories/stripe.contract.test.ts 从这里抽事件名，断言样本工厂造得出来——
+      #    于是"假数据形状 vs 契约声明"的脱节会在 gate 里变红，而不是等到联调。
+      #    @limitation 目前只有 stripe 一条；新增通道在此登记，样本工厂同步补。
+      x-provider-events:
+        stripe: checkout.session.completed / checkout.session.expired / checkout.session.async_payment_succeeded / checkout.session.async_payment_failed / payment_intent.succeeded / payment_intent.payment_failed / payment_intent.canceled / charge.refunded / refund.updated / refund.failed / charge.dispute.created / charge.dispute.closed / charge.dispute.funds_withdrawn / charge.dispute.funds_reinstated（D-49/D-50）
+      responses:
+        '200': {description: '已收下；body 形如 {received: true, order_id}（重复投递带 duplicate:true，未落业务状态带 ignored:<outcome|unmatched|paid:already|status_conflict|late_payment|settlement_mismatch>）'}
+        '400': {$ref: '#/components/responses/Err'}
+        '401': {$ref: '#/components/responses/Err'}
+        '503': {description: '暂未处理：already_processing（另一请求在处理中）或 order_not_found_yet（回调早到、宽限期内）；带 Retry-After'}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+    internalSecret: {type: apiKey, in: header, name: X-Internal-Job-Secret, description: 与 INTERNAL_JOB_SECRET 相等；仅 /internal/* 使用，不放行 CORS 与小程序}
+  parameters:
+    IdemKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 128, description: '客户端段上限 128 字符（0.6.0②）；超限 40001 + reason idempotency_key_too_long'}}
+  responses:
+    Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}
+  schemas:
+    AuthResp: {type: object, properties: {token: {type: string}, user: {type: object, properties: {id: {type: string}, isAdmin: {type: boolean}}}}}
+    Display: {type: object, description: 展示价，整数分（后端按当日汇率计算）, properties: {USD: {type: integer}, CNY: {type: integer}}}
+    ImageSet: {type: object, properties: {thumb: {type: string}, card: {type: string}, detail: {type: string}, image_key: {type: string, description: '仅 POST /admin/upload 响应里出现（0.6.8）：detail 档存储键，供 BannerInput.image_key 使用（AJ-143/AJ-166）；存量 Product.images 条目没有它'}}}
+    ProductCard: {type: object, properties: {id: {type: string}, title: {type: string}, category: {type: string}, price_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, image: {$ref: '#/components/schemas/ImageSet'}, stock: {type: integer}, status: {type: string}}}
+    Product: {description: '商品详情。实现不返回 ProductCard.image（缩略图只在列表卡片用，详情用 images）；AdminProduct 另不返回 display / image（0.6.10 ⑦）', allOf: [{$ref: '#/components/schemas/ProductCard'}, {type: object, properties: {description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, weight_g: {type: integer}, compliance_tags: {type: array, items: {type: string}}, hs_code: {type: string}, customs_desc_en: {type: string}, origin_country: {type: string}}}]}
+    AdminProduct: {allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time}}}]}
+    ProductInput: {type: object, required: [title, category, price_jpy, weight_g, customs_desc_en, origin_country], properties: {title: {type: string}, category: {type: string, enum: [beauty, daily, kitchen, food]}, description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, price_jpy: {type: integer, minimum: 1}, cost_jpy: {type: integer}, weight_g: {type: integer, minimum: 1}, stock: {type: integer, minimum: 0, description: '可选（0.6.9/AJ-175）：POST 省略 = 0；PUT 省略 = 不改库存（防编辑页打开期间的买家扣减被旧值覆盖）。填了就必须是 ≥0 整数，否则 40001'}, compliance_tags: {type: array, items: {type: string, enum: [liquid, battery, cosmetic, food, flammable, aerosol, electrical, quasi_drug, sunscreen, children_product, alcohol]}, description: 'flammable / aerosol / electrical / quasi_drug / sunscreen / children_product / alcohol 七个标签上架即拒（40001）：前两者为日本邮便航空禁寄品（D-42），electrical 为 MVP 不上电器（D-45），quasi_drug（医薬部外品/薬用）与 sunscreen（SPF）在美国 FDA 口径属 OTC 药品、children_product 需 CPSIA 检测、alcohol 需酒类免许且不可邮寄（D-51）；customs_desc_en 含 medicated/whitening/SPF/sunscreen/drug 亦拒'}, hs_code: {type: string, description: '报关 HS 码；缺省时由 Zonos 自动识别、管理员核对；食品/化妆品必填（D-39/D-42）'}, customs_desc_en: {type: string, description: '英文报关品名，上架必填（D-39）'}, origin_country: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', enum: [JP], description: '原产地 ISO 3166-1 alpha-2，必填无默认，按商品包装实录；MVP 仅接受 JP——非 JP 一律 400 拒绝上架（D-42/D-43）'}, title_ja: {type: string, description: '日文品名（采购用）'}, jan_code: {type: string, description: 'JAN 码'}, purchase_source: {type: string, description: '采购渠道'}}}
+    AddressInput: {type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, pattern: '^[ -~]+$'}, phone: {type: string, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, pattern: '^[ -~]+$'}, line2: {type: string, pattern: '^[ -~]*$'}, city: {type: string, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2}, postal_code: {type: string, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
+    Address: {allOf: [{$ref: '#/components/schemas/AddressInput'}, {type: object, properties: {id: {type: string}}}]}
+    OrderItemsInput: {type: array, minItems: 1, items: {type: object, required: [product_id, qty], properties: {product_id: {type: string}, qty: {type: integer, minimum: 1}}}}
+    # duty_jpy 可空 + duty_estimate（I1-U4 实现口径）：duty_rates 无此 (origin,dest) 行、或目的国/产地
+    # 无法唯一确定时 duty_jpy=null 且 duty_estimate=false——duty 本是信息字段，缺失不阻止下单（基数口径 13b 已由工程 AJ-142 定为按成交价 ×15%）。
+    Quote: {type: object, properties: {items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer, nullable: true, description: 信息字段，不计入 total（D-32）；null = 无法估算（见 duty_estimate）}, duty_estimate: {type: boolean, description: 'false 时 duty_jpy 为 null，前端不得展示具体关税数字'}, total_jpy: {type: integer}, weight_g: {type: integer, description: 含 PACKAGING_WEIGHT_G 包材重量（D-42）}, display: {$ref: '#/components/schemas/Display'}, free_shipping_remaining_jpy: {type: integer}, split_hint: {type: boolean, description: 金额超 MAX_ORDER_JPY 时为 true，提示拆单（D-42；建单时硬拦 40906）}}}
+    OrderStatus: {type: string, enum: [created, pending_payment, paid, shipped, delivered, completed, cancelled, expired, refunding, refunded]}
+    OrderCreated: {allOf: [{$ref: '#/components/schemas/Quote'}, {type: object, properties: {order_id: {type: string}, order_no: {type: string}, fx_snapshot: {type: object, properties: {USD: {type: number}, CNY: {type: number}}}, status: {$ref: '#/components/schemas/OrderStatus'}, expires_at: {type: string, format: date-time}}}]}
+    OrderSummary: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, total_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, status: {$ref: '#/components/schemas/OrderStatus'}, created_at: {type: string, format: date-time}}}
+    Order: {allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, properties: {contact_email: {type: string, format: email, description: '可选收货通知邮箱（D-42 补入）'}, terms_version: {type: string, description: '建单时写入的条款版本（只读，D-43）'}, items: {type: array, items: {type: object, properties: {product_id: {type: string}, title: {type: string}, qty: {type: integer}, unit_price_jpy: {type: integer}, image: {$ref: '#/components/schemas/ImageSet'}}}}, address: {$ref: '#/components/schemas/Address'}, items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer, description: '0.6.10：无法估算时为 0（与 Quote.duty_jpy 的 null 不同，AJ-176 未决项：需决定是否改存 NULL 并加 duty_estimate）'}, expires_at: {type: string, format: date-time}, carrier: {type: string}, tracking_no: {type: string}, timeline: {type: array, description: '0.6.10：只含订单状态值（OrderStatus 10 态）；管理事件只在 AdminOrder.events', items: {type: object, properties: {status: {type: string}, at: {type: string, format: date-time}}}}, payment: {type: object, properties: {channel: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, paid_amount: {type: integer}, paid_currency: {type: string}}}}}]}
+    AdminOrderListItem: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, user_id: {type: string}, status: {$ref: '#/components/schemas/OrderStatus'}, total_jpy: {type: integer}, contact_email: {type: string}, carrier: {type: string}, tracking_no: {type: string}, recipient: {type: string, description: '收件人姓名（0.6.9/KD-14）：列表支持按收件人搜索，行里要能回显；电话/街道等其余地址字段仍只在详情'}, has_dispute: {type: boolean, description: '列表也带（0.6.1）：客服在列表页就能看见拒付单'}, is_test: {type: boolean}, created_at: {type: string, format: date-time}}}
+    AdminOrder: {description: '0.6.10：实际响应不带 display / timeline（管理端看 events 全量），另带 paid_at / shipped_at；payment 为 {channel, charge_currency, charge_amount}', allOf: [{$ref: '#/components/schemas/Order'}, {type: object, properties: {paid_at: {type: string, format: date-time}, shipped_at: {type: string, format: date-time}, user_id: {type: string}, contact_email: {type: string, format: email, description: '客服可见（D-42）'}, is_test: {type: boolean, description: '审核期 mock 通道测试单；管理端列表默认过滤'}, has_dispute: {type: boolean, description: '0.6.10：有未解除的拒付限制——进行中，或已败诉（钱已被拉回）；为 true 时退款 40907、发货 40909。仅胜诉结案复位（D-50 / AJ-162 / AJ-176）'}, fx_snapshot: {type: object}, payments: {type: array, items: {type: object, properties: {provider: {type: string}, provider_ref: {type: string}, transaction_id: {type: string}, status: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, settled_jpy: {type: integer}, fee_jpy: {type: integer}}}}, events: {type: array, items: {type: object, properties: {status: {type: string}, note: {type: string}, actor: {type: string}, at: {type: string, format: date-time}}}}}}]}
     ChannelView: {type: object, required: [channel, entryMode, label], properties: {channel: {type: string, description: '通道 key（任意字符串：新增支付方式不需要改本契约的枚举）'}, entryMode: {type: string, enum: [in_app, copylink, redirect], description: 'in_app=小程序内直接调起；copylink=复制链接到外部浏览器（D-49：Stripe Checkout 托管页）；redirect=302 跳转'}, label: {type: string, description: 展示名（外置文案，前端不写死）}, icon: {type: string, description: 图标 key（同上）}}}
     PaymentIntent: {type: object, properties: {channel: {type: string, description: '通道 key（同 POST /orders/{id}/pay：任意字符串，见 x-payment-channels）'}, charge: {type: object, properties: {currency: {type: string, enum: [JPY, USD]}, amount: {type: integer}}}, payload: {type: object, additionalProperties: true, description: 'wechat: wx.requestPayment 五参数；stripe: {pay_url, expires_at}（D-49 短链）；mock: {auto:true, orderId, amountJpy, currency}（auto=审核期自动确认信号，0.5.6 更正）'}, expires_at: {type: string, format: date-time}}}
-    BannerInput: {type: object, required: [image_key], properties: {image_key: {type: string}, link_type: {type: string, enum: [none, product, category], default: none}, link_id: {type: string}, sort: {type: integer, default: 0}, active: {type: boolean, default: true}, starts_at: {type: string, format: date-time}, ends_at: {type: string, format: date-time}}}
+    BannerInput: {type: object, required: [image_key], properties: {image_key: {type: string}, link_type: {type: string, enum: [none, product, category], default: none}, link_id: {type: string, description: 'link_type ≠ none 时必填（缺 → 40001 link_id_required）'}, sort: {type: integer, default: 0, minimum: 0}, active: {type: boolean, default: true}, starts_at: {type: string, format: date-time}, ends_at: {type: string, format: date-time}}}
     Banner: {allOf: [{$ref: '#/components/schemas/BannerInput'}, {type: object, properties: {id: {type: string}, image: {type: string, description: 'img.<domain> 完整 URL'}}}]}
     Dispute: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, payment_id: {type: string}, dispute_id: {type: string}, dispute_status: {type: string, enum: [open, won, lost]}, dispute_amount: {type: integer}, charge_currency: {type: string}, opened_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time}}}
     FxRate: {type: object, properties: {quote: {type: string}, rate: {type: number}, raw_rate: {type: number}, buffer: {type: number}, effective_from: {type: string, format: date-time}}}

@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    # Postgres 必须 16：server/src/db.ts 有 assertPostgresMajor(>=16)，版本不符直接启动失败。
+    # Postgres 必须 16：server/src/adapters/db.ts 有 assertPostgresMajor(>=16)，版本不符直接启动失败。
     # 与生产（Render Postgres 16）保持一致，避免"CI 上过、生产上挂"。
     services:
       postgres:

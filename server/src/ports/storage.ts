@@ -5,11 +5,12 @@
  *      在开发期没有 R2 凭据（公司登记链还卡着）——三种环境三种驱动，
  *      端口就是换驱动不换业务的那条缝（ADR-28 的可换零件）。
  *
- * @why 接口只有 `put`，没有 get/delete/list：
+ * @why 接口只有 `put` 与 `delete`，没有 get/list：
  *      读由 HTTP/CDN 承担（`IMG_BASE_URL` + key，见 admin-banner-routes），
- *      不经过服务端进程——服务端不需要"读回自己写的字节"这条路径；
- *      删除没有 MVP 消费方（孤儿图清理属运营阶段）。**无消费方的方法不进端口**
- *      （ADR-28：无消费方的字段是死数据，方法同理）。
+ *      不经过服务端进程——服务端不需要"读回自己写的字节"这条路径。
+ *      `delete` 的消费方是上传的**失败补偿**（2026-09-28 KD-8，AJ-175）：三档顺序写入，
+ *      第二档失败时第一档已落存储，没有 delete 就只能留半套孤儿对象。
+ *      **无消费方的方法不进端口**（ADR-28）——list 仍没有消费方，不加。
  *
  * @limitation 一：`put` 语义是**覆写**（同 key 后写覆盖先写），实现方不得追加或报错——
  *              重复上传同一 id 的三档是合法操作（重传）。
@@ -22,4 +23,9 @@
  */
 export interface ObjectStorage {
   put(key: string, bytes: Buffer, contentType: string): Promise<void>;
+  /**
+   * 删除一个对象。**幂等**：key 不存在不是错误（补偿路径可能重复调用，
+   * 或者要删的那一档根本没写成）。key 的安全校验与 `put` 同口径。
+   */
+  delete(key: string): Promise<void>;
 }

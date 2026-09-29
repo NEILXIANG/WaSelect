@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 职责：契约漂移检查——shared 里的错误码与状态枚举，必须在 api-contract.yaml 中出现。
+ * 职责：契约漂移检查——shared 里的错误码与状态枚举，必须与 api-contract.yaml 一致（登记表双向，其余整词存在）。
  * 逻辑：按文本匹配（不解析 YAML），避免为一个检查引入 YAML 依赖；改 yaml 而漏改 shared（或反之）即报红。
  *
  * @why 契约文件**必须在本仓库内**：曾经脚本硬编码读 `../jp/50-产品与技术/技术架构/api-contract.yaml`，
@@ -9,9 +9,10 @@
  *      现在默认读 `contracts/api-contract.yaml`（随代码一起版本化），
  *      仍可用 `CONTRACT_PATH` 指向别处（例如文档库的权威副本）做对账。
  *
- * @limitation 一：错误码仍只查单向（errors.ts → 契约）；枚举对 ENUM_TO_CONTRACT_KEY 登记的三组做
- *              **双向**集合比对，其余枚举只查整词存在性（三审 P2-3）。完整反向检查等 F2 接入
- *              openapi-typescript 时一并做。
+ * @limitation 一：错误码与契约 `x-error-codes.codes` 登记表做**双向**集合比对（一致性审计 C7，AJ-176；
+ *              此前只查单向且是全文子串匹配）；枚举对 ENUM_TO_CONTRACT_KEY 登记的三组做**双向**集合比对，
+ *              其余枚举只查整词存在性（三审 P2-3）。字段 / 响应码层面的完整比对等 F2 接入
+ *              openapi-typescript 时一并做（路由的"方法+路径"已由 routes.contract.test 双向守住）。
  * @limitation 二：仓库内这份副本与文档库（jp）的副本是**两份文件**，存在漂移可能。
  *              缓解：若本机存在 jp 的那一份，脚本会比对内容，不一致即报红并给出同步命令。
  *              根治方案是把权威源迁到本仓库、文档库改为引用——涉及跨仓库约定，待确认后执行。
@@ -51,8 +52,27 @@ if (contractPath !== docRepoCopy && existsSync(docRepoCopy)) {
 
 const codes = [...errorsSrc.matchAll(/^\s{2}(\d{5}): \{/gm)].map((m) => m[1]);
 if (codes.length === 0) problems.push('errors.ts 里没有解析到任何错误码（正则失效？）');
+
+// ── 错误码：与契约 `x-error-codes.codes` 登记表做**双向集合相等**（一致性审计 C7，AJ-176）──────
+// 旧实现：`contract.includes(code)` 全文子串匹配。实测漏洞：40402 / 40403 / 40910 / 40911 四个码
+// 只出现在版本变更说明的正文里、从未进登记表，检查照样通过——"登记表是唯一真源"这句注释是假的。
+// 现在：只认登记表段（`x-error-codes:` 下 `codes:` 的 `NNNNN: 文案` 行，到下一个顶层键为止）。
+function contractErrorCodes(text) {
+  const block = /^x-error-codes:\n([\s\S]*?)(?=^\S)/m.exec(text)?.[1] ?? '';
+  const codesPart = /^\s+codes:\n([\s\S]*)$/m.exec(block)?.[1] ?? '';
+  return [...codesPart.matchAll(/^\s+(\d{5}):/gm)].map((m) => m[1]);
+}
+const registered = contractErrorCodes(contract);
+if (registered.length === 0) {
+  problems.push('契约 x-error-codes.codes 登记表没有解析到任何码（格式变了？扫描器不能空跑）');
+}
 for (const code of codes) {
-  if (!contract.includes(code)) problems.push(`错误码 ${code} 未在 api-contract.yaml 中出现`);
+  if (!registered.includes(code))
+    problems.push(`错误码 ${code} 在 shared 有、契约 x-error-codes 登记表里没有`);
+}
+for (const code of registered) {
+  if (!codes.includes(code))
+    problems.push(`错误码 ${code} 在契约登记表有、shared/errors.ts 里没有`);
 }
 
 // ── 枚举漂移（三审 P2-3 重写）────────────────────────────────────────────────

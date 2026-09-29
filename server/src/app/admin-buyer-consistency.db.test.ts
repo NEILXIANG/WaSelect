@@ -264,7 +264,7 @@ describe('拒付解锁回路（此前只验了"复位"，没验"复位之后真�
     }
   });
 
-  it('拒付中退款被 40907 拦下 → 结案后**同一个退款请求**真的成功，买家侧看到 refunded', async () => {
+  it('拒付中退款被 40907 拦下 → **胜诉**结案后同一个退款请求真的成功，买家侧看到 refunded', async () => {
     const s = await buildServer();
     try {
       await seedPaidOrder('o-dispute2', true);
@@ -285,7 +285,7 @@ describe('拒付解锁回路（此前只验了"复位"，没验"复位之后真�
       await markDisputeClosed(db, silentBus(), 'o-dispute2', {
         channel: 'mock',
         disputeId: 'dp_2',
-        result: 'lost',
+        result: 'won',
       });
 
       const after = await req(s, 'POST', '/api/v1/admin/orders/o-dispute2/refund', true, {
@@ -293,6 +293,40 @@ describe('拒付解锁回路（此前只验了"复位"，没验"复位之后真�
       });
       expect(after.status).toBe(202);
       expect((await buyerSees(s, 'o-dispute2')).detail).toBe('refunded');
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('**败诉**结案后闸门不解锁：退款仍 40907、发货仍 40909（钱已被拉回；AJ-176 部分推翻 AJ-162 ③）', async () => {
+    /**
+     * @why 原用例在 lost 之后断言"退款 202 → refunded"——那是 mock 通道的假象：
+     *      @measured(docs.stripe.com/error-codes)：对已被拒付的扣款退款，Stripe 返回 `charge_disputed` /
+     *      `refund_disputed_payment`，订单会停在 refunding + 50000。发货则是把货白送出去。
+     */
+    const s = await buildServer();
+    try {
+      await seedPaidOrder('o-dispute3', true);
+      await db`
+        update payments set dispute_id = 'dp_4', dispute_status = 'open',
+                             dispute_amount = 1000, dispute_opened_at = now()
+         where order_id = 'o-dispute3'
+      `;
+      await markDisputeClosed(db, silentBus(), 'o-dispute3', {
+        channel: 'mock',
+        disputeId: 'dp_4',
+        result: 'lost',
+      });
+      const refund = await req(s, 'POST', '/api/v1/admin/orders/o-dispute3/refund', true, {
+        reason: '缺货',
+      });
+      expect(refund.json['code']).toBe(40907);
+      const ship = await req(s, 'POST', '/api/v1/admin/orders/o-dispute3/ship', true, {
+        carrier: 'yamato',
+        tracking_no: 'TRACK-4',
+      });
+      expect(ship.json['code']).toBe(40909);
+      expect((await buyerSees(s, 'o-dispute3')).detail).toBe('paid');
     } finally {
       await s.close();
     }

@@ -109,7 +109,9 @@ services:
       - key: PUBLIC_API_BASE
         sync: false # 小程序 request 合法域名（微信后台每月仅可改 5 次，开局一次性规划）
 
-      # ── 尚未接线，先占位（业务期接上时直接填值，不用改这个文件）──
+      # ── 占位：有的已接线（CHECKOUT_BASE_URL / INTERNAL_JOB_SECRET / IMG_BASE_URL / STRIPE_*），
+      #    有的尚无使用方（R2_* / MAIL_* / SUBSCRIBE_* / WECHAT_INSTITUTION_* / SENTRY_DSN）——
+      #    是否接线以 server/src/config.ts 的使用方为准（一致性审计 C9，AJ-176 更正原"尚未接线"一句）──
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
@@ -117,7 +119,7 @@ services:
       - key: CHECKOUT_BASE_URL
         sync: false # 短链域名（D-49）；启用 stripe 时生产必填
       - key: INTERNAL_JOB_SECRET
-        sync: false # 每日对账 Cron Job 的共享密钥；≥32 字符
+        sync: false # 每日作业共享密钥（≥32 字符）；下方 cron 服务经 fromService 取同一个值
       - key: SENTRY_DSN
         sync: false
       - key: IMG_BASE_URL
@@ -146,6 +148,45 @@ services:
         sync: false
       - key: WECHAT_INSTITUTION_API_KEY
         sync: false
+
+  # ── 每日作业（D-43③ / 技术文档 §6.1 / 工程框架文档：「1 个每日 Cron Job」）──────────────
+  # @why 每日对账、调度心跳看门狗（0.5.4 起 /healthz 不再承担）、卡住的回调（KD-2）都只由
+  #      POST /api/v1/internal/jobs/daily 触发。本清单曾只有 web + db（一致性审计 C1，AJ-176）：
+  #      生产上这些检查**永不执行**，tick 停摆没有任何告警。
+  # @measured(render.com/docs/blueprint-spec, 2026-09-28)：cron 服务字段 type/name/runtime/schedule/
+  #      buildCommand/startCommand；plan 缺省 0.5c-512mb；`fromService.property` 取值含 host / port / hostport。
+  # @measured(render.com/docs/private-network, 2026-09-28)：「Workflows, background workers, and cron jobs can
+  #      *send* private network requests」；web 服务可接收；地址需带协议（http://<host>:<port>）。私网只在同区域可达。
+  # @measured(本地桩服务，2026-09-28，同一条 startCommand)：202 → 打印「daily job HTTP 202」exit 0；
+  #      401 → exit 1；地址不可达 → exit 1（非 0 退出让 Render 把这次作业标成失败，控制台可见）。
+  # @limitation 发现延迟 = 一天一轮（tick 停摆最迟约 24 小时才被看见）；要更快需另起高频作业。
+  # @limitation 私网请求不经公网 TLS，由共享密钥头鉴权（x-internal-job-secret，≥32 字符，恒定时间比较）。
+  - type: cron
+    name: waselect-daily
+    runtime: node
+    region: oregon # 必须与 web 同区域：私网跨区域不可达
+    plan: 0.5c-512mb
+    schedule: '10 18 * * *' # UTC 18:10 = JST 03:10（低峰）；分钟避开整点拥挤
+    branch: main
+    buildCommand: 'true' # 不装依赖：只发一个 HTTP 请求（Node 22 自带 fetch）
+    startCommand: >-
+      node -e "fetch('http://' + process.env.DAILY_JOB_TARGET + '/api/v1/internal/jobs/daily',
+      {method: 'POST', headers: {'x-internal-job-secret': process.env.INTERNAL_JOB_SECRET}})
+      .then((r) => { console.log('daily job HTTP', r.status); if (r.status !== 202) process.exit(1); })
+      .catch((e) => { console.error(e); process.exit(1); })"
+    envVars:
+      - key: NODE_VERSION
+        value: '22'
+      - key: INTERNAL_JOB_SECRET
+        fromService:
+          type: web
+          name: waselect-api
+          envVarKey: INTERNAL_JOB_SECRET
+      - key: DAILY_JOB_TARGET
+        fromService:
+          type: web
+          name: waselect-api
+          property: hostport
 
 databases:
   - name: waselect-pg

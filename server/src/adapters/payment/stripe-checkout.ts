@@ -48,32 +48,43 @@ export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
 export const STRIPE_TOLERANCE_SEC = 300;
 
 /**
- * `expires_at` 的下限：现在起 **30 分钟**（三审 A3 / D-49）。
+ * Stripe 会话寿命下限：会话创建后 **30 分钟**（三审 A3 / D-49）。
  *
- * @why Stripe 要求会话到期不早于当前 30 分钟后，更早会被 400 拒。
- *      而订单侧只给 30 分钟（D-33），两者几乎相等——所以真正的作用是兜住
- *      "订单到期 < 30 分钟"这一侧：此时会话必须抬到下限，不能照抄订单到期，
- *      否则建会话这一步就 400，用户连付款页都打不开。
+ * @why Stripe 要求 `expires_at` 不早于会话创建后 30 分钟，更早会被 400 拒。
  * @limitation 30 分钟这个数来自 Stripe 文档口径（`NEEDS VERIFICATION`：未做真实 400 实测，
- *      只按官方文档写死）；它比订单寿命长，所以正常路径下不会真的触发。
+ *      只按官方文档写死）。
  */
 export const STRIPE_MIN_SESSION_TTL_SEC = 30 * 60;
 
 /**
+ * 在下限之外再留的余量：抵消"我们判定可付的那一刻"与"Stripe 收到请求的那一刻"之间的
+ * 网络延迟与两边时钟偏差。2 分钟远大于正常的秒级延迟/偏差。
+ */
+export const STRIPE_SESSION_MARGIN_SEC = 2 * 60;
+
+/**
  * 算出要发给机构的 `expires_at`（unix 秒）；`req.expiresAt` 缺省时返回 undefined（不发该字段）。
  *
- * 取值 = `max(订单到期向上取整, 现在 + {@link STRIPE_MIN_SESSION_TTL_SEC})`。
+ * 取值 = `订单到期（向上取整） + 30 分钟下限 + 2 分钟余量`——**只由订单决定，与调用时刻无关**。
  *
+ * @why 曾经是 `max(订单到期, 现在 + 30 分钟)`（KD-9，AJ-175）：值随调用时刻变化，而意图幂等键
+ *      在"建会话失败 → 事务回滚 → 用户重试"时轮次不变（pay-intent.ts intentIdempotencyKey），
+ *      于是重试时**同一个幂等键带着不同的 expires_at**——Stripe 对同键异参回 400，
+ *      这张单在幂等键 24 小时有效期内再也建不出会话（订单只活 30 分钟，等于这单作废）。
+ *      现在同一张单无论何时重试，发给 Stripe 的参数逐字节相同：机构侧幂等照常生效，
+ *      "建成了但响应丢了"的重试会拿回同一个会话，不会多出孤儿会话。
+ * @why 为什么一定满足 Stripe 下限：能走到建会话，说明订单**尚未到期**（pay-intent 先判 40904），
+ *      即 now < 订单到期，于是 订单到期 + 32min > now + 30min。
+ * @tradeoff 会话比订单**多活约 32 分钟**：订单关闭后托管页理论上仍可付款。缓解有二：
+ *      ① 关单作业/取消的连带订阅者会**主动作废**会话（close-session-events.ts，KD-1 已修）；
+ *      ② 到账也会被识别为迟到付款转人工退款（KD-7）。原公式在实际路径上同样让会话比订单多活
+ *      （建意图晚于建单，now+30min 本就晚于订单到期），差别只在多出的时长。
+ * @limitation 订单支付窗口（ORDER_PAYMENT_TTL_MIN）若配到约 23.5 小时以上，
+ *      到期 + 32 分钟会超出 Stripe 的 24 小时上限而被 400——现行口径是 30 分钟（D-33），远离此界。
  * @throws 非法 ISO → 响亮抛错。发 `NaN` 给机构只会得到一句含混的 400，
  *         而"到底是我们传错了还是机构拒了"在那种报错里分不出来。
- * @limitation **向上**取整（`Math.ceil`）：向下取整会**提前**关掉会话，把还愿意付款的用户
- *             挡在门外；晚一秒关的代价远小于早一秒关。
  */
-function sessionExpirySec(
-  expiresAt: string | undefined,
-  clock: Clock,
-  orderId: string,
-): number | undefined {
+function sessionExpirySec(expiresAt: string | undefined, orderId: string): number | undefined {
   if (expiresAt === undefined) return undefined;
   const ms = Date.parse(expiresAt);
   if (!Number.isFinite(ms)) {
@@ -81,8 +92,7 @@ function sessionExpirySec(
       `expiresAt 不是合法 ISO 时间：${expiresAt}（order=${orderId}；不发 NaN 给机构，那只会得到含混的 400）`,
     );
   }
-  const earliest = Math.floor(clock.now().getTime() / 1000) + STRIPE_MIN_SESSION_TTL_SEC;
-  return Math.max(Math.ceil(ms / 1000), earliest);
+  return Math.ceil(ms / 1000) + STRIPE_MIN_SESSION_TTL_SEC + STRIPE_SESSION_MARGIN_SEC;
 }
 
 /**
@@ -258,6 +268,57 @@ export function createStripeCheckoutProvider(
     return orderId;
   }
 
+  /**
+   * 退款要的 PaymentIntent id：`payments.provider_ref` 登记的是 **Checkout Session**（`cs_…`），
+   * 退款 API 只认 PaymentIntent / Charge——会话号要先反查成 PI（KD-11，AJ-175）。
+   *
+   * @why @measured(docs.stripe.com/api/refunds/create, 2026-09-28)：退款参数只有
+   *      `charge`（"The identifier of the charge to refund"）与 `payment_intent`
+   *      （"The identifier of the PaymentIntent to refund"），无效标识 "Raises an error"。
+   *      原实现把会话号直接当 `payment_intent` 传——**每一笔 Stripe 退款都会失败**，
+   *      订单全部停在 refunding；单测与契约测试没发现，是因为单测喂的是 `pi_1`（生产里不存在的形态）、
+   *      替身只查"带没带 payment_intent="（替身已加脾气，见 test/helpers/fake-stripe-http.ts @why ②）。
+   * @why 在适配器里反查而不是在落账时另存 PI：
+   *      ① "会话号 vs PI 号"是 Stripe 私有的 id 族知识，业务核心不该认识（约束四）；
+   *      ② 历史订单（修复前已付款的）也能退，不需要数据迁移；
+   *      ③ 反查是 GET，天然幂等，重试安全。
+   * @tradeoff 每次退款多一次出站调用（退款是低频的人工操作，可接受）。
+   * @limitation 会话上 `payment_intent` 为空（未付款的会话，@measured 同上 Session 对象文档示例
+   *             `"payment_intent": null`）→ 抛错：没付过款的会话本就不该走到退款。
+   *             `pi_…` 直接用；其它前缀（`ch_…` 等）当前不会出现在 provider_ref，出现即抛——不猜。
+   */
+  async function paymentIntentForRefund(providerRef: string): Promise<string> {
+    if (providerRef.startsWith('pi_')) return providerRef;
+    if (!providerRef.startsWith('cs_')) {
+      throw new Error(`stripe 退款：无法识别的机构单号族（ref=${providerRef}）`);
+    }
+    const res = await deps.http.send({
+      method: 'GET',
+      url: `${apiBase}/v1/checkout/sessions/${encodeURIComponent(providerRef)}`,
+      headers: { authorization: `Bearer ${opts.secretKey}` },
+    });
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(
+        `stripe 退款前反查会话失败：HTTP ${res.status} ${res.body.slice(0, 200)}（session=${providerRef}）`,
+      );
+    }
+    const json = JSON.parse(res.body) as { payment_intent?: unknown };
+    const pi = json.payment_intent;
+    // 展开（expand）时是对象：取其 id。两种形态都认，免得哪天加了 expand 参数就静默退不了款
+    const id =
+      typeof pi === 'string'
+        ? pi
+        : pi !== null && typeof pi === 'object' && typeof (pi as { id?: unknown }).id === 'string'
+          ? (pi as { id: string }).id
+          : '';
+    if (!id.startsWith('pi_')) {
+      throw new Error(
+        `stripe 会话上没有 payment_intent（session=${providerRef}）：未付款的会话不能退款`,
+      );
+    }
+    return id;
+  }
+
   return {
     channel: cfg.channel,
     capabilities: {
@@ -273,7 +334,7 @@ export function createStripeCheckoutProvider(
     async create(req: PaymentRequest): Promise<PaymentSession> {
       // ⚠️ 必须在发请求**之前**算：非法 ISO 要在这里响亮抛，不能等机构回 400
       //    （用例「expiresAt 不是合法 ISO → 建会话前抛错」钉的是 http.calls.length === 0）
-      const expiresAtSec = sessionExpirySec(req.expiresAt, deps.clock, req.orderId);
+      const expiresAtSec = sessionExpirySec(req.expiresAt, req.orderId);
       const form = new URLSearchParams({
         mode: 'payment',
         // ── D-49 三项（三审 A3）：缺了哪一条都是"不报错、只在拒付/迟到付款那天才付代价" ──
@@ -305,6 +366,26 @@ export function createStripeCheckoutProvider(
         'line_items[0][price_data][unit_amount]': String(req.amountMinor),
         'line_items[0][price_data][product_data][name]': `WaSelect 订单 ${req.orderNo}`,
       });
+      // D-60①：收货信息附给 PaymentIntent（Radar 风控 / 拒付举证）。一致性审计 C14（AJ-176）：
+      //    D-60 拍板后一直没接，而 D-60 标注的 NEEDS VERIFICATION 已核实——
+      //    @measured(docs.stripe.com/api/checkout/sessions/create?query=payment_intent_data, 2026-09-28)：
+      //    `payment_intent_data.shipping`「Shipping information for this payment」，`address.line1` 与 `name` 必填，
+      //    其余（line2 / city / state / postal_code / country / phone）可选。缺必填时整块不发（不编造）。
+      // ⚠️ 表单字段顺序固定、值来自订单快照：同一订单任何时刻重试请求体逐字节相同（KD-9 的前提不被破坏）。
+      const ship = req.shipping;
+      if (ship !== undefined && ship.name !== '' && ship.line1 !== '') {
+        form.set('payment_intent_data[shipping][name]', ship.name);
+        form.set('payment_intent_data[shipping][address][line1]', ship.line1);
+        const optional: [string, string | undefined][] = [
+          ['payment_intent_data[shipping][address][line2]', ship.line2],
+          ['payment_intent_data[shipping][address][city]', ship.city],
+          ['payment_intent_data[shipping][address][state]', ship.state],
+          ['payment_intent_data[shipping][address][postal_code]', ship.postalCode],
+          ['payment_intent_data[shipping][address][country]', ship.country],
+          ['payment_intent_data[shipping][phone]', ship.phone],
+        ];
+        for (const [k, v] of optional) if (v !== undefined && v !== '') form.set(k, v);
+      }
       const res = await deps.http.send({
         method: 'POST',
         url: `${apiBase}/v1/checkout/sessions`,
@@ -433,7 +514,8 @@ export function createStripeCheckoutProvider(
 
     async refund(req: RefundRequest) {
       const form = new URLSearchParams({
-        payment_intent: req.providerRef,
+        // ⚠️ 不是 req.providerRef 本身：那是会话号 cs_…（见 paymentIntentForRefund，KD-11）
+        payment_intent: await paymentIntentForRefund(req.providerRef),
         // 原币退（见 RefundRequest.currency 的 @why）：币种与金额都来自**扣款当时**的那笔
         amount: String(req.amountMinor),
         'metadata[order_id]': req.orderId,

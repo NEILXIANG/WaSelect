@@ -46,4 +46,12 @@ describe('memory storage（ObjectStorage 端口替身）', () => {
     read.bytes[0] = 77;
     expect(s.get('k')?.bytes[0]).toBe(1);
   });
+  it('delete：删掉后读不回；删不存在的 key 不抛（端口"幂等"语义）', async () => {
+    const s = createMemoryStorage();
+    await s.put('img/a/detail.webp', Buffer.from('x'), 'image/webp');
+    await s.delete('img/a/detail.webp');
+    expect(s.get('img/a/detail.webp')).toBeUndefined();
+    expect(s.size()).toBe(0);
+    await expect(s.delete('img/a/detail.webp')).resolves.toBeUndefined();
+  });
 });

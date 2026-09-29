@@ -32,6 +32,7 @@ import {
 import {
   createStripeCheckoutProvider,
   STRIPE_MIN_SESSION_TTL_SEC,
+  STRIPE_SESSION_MARGIN_SEC,
   STRIPE_SIGNATURE_HEADER as HEADER,
 } from './stripe-checkout.js';
 
@@ -136,23 +137,60 @@ describe('create（建 Checkout Session）', () => {
    *      不强制 3DS → 拒付责任在我方（D-50 拒付防线）；不收账单地址 → 风控与 AVS 无依据；
    *      不设 expires_at → Stripe 默认 24h，订单 30 分钟就关了、用户 23 小时后还能付成功（D-33 迟到付款）。
    */
-  it('D-49：账单地址必收、3DS any、expires_at 跟订单到期（不早于 Stripe 的 30 分钟下限）', async () => {
+  it('D-49：账单地址必收、3DS any、expires_at = 订单到期 + 30 分钟下限 + 2 分钟余量（KD-9）', async () => {
     const { http, provider } = build();
-    // 订单 20 分钟后到期：低于 Stripe 下限 30 分钟 → 必须抬到 now+30min（否则机构 400）
     await provider.create({ ...REQ, expiresAt: '2026-01-02T15:50:00.000Z' });
     const form = new URLSearchParams(http.calls[0]?.body ?? '');
     expect(form.get('billing_address_collection')).toBe('required');
     expect(form.get('payment_method_options[card][request_three_d_secure]')).toBe('any');
     // 数字取自生产常量（单一来源）：写死 30*60 的话，改了下限这条会"绿着"骗人
-    expect(form.get('expires_at')).toBe(String(NOW_SEC + STRIPE_MIN_SESSION_TTL_SEC));
+    expect(form.get('expires_at')).toBe(
+      String(
+        Date.parse('2026-01-02T15:50:00.000Z') / 1000 +
+          STRIPE_MIN_SESSION_TTL_SEC +
+          STRIPE_SESSION_MARGIN_SEC,
+      ),
+    );
   });
 
-  it('D-49：订单到期晚于 30 分钟时 expires_at = 订单到期（整秒，向上取整不提前关会话）', async () => {
+  it('订单到期带毫秒 → 向上取整到秒再加下限（不提前关会话）', async () => {
     const { http, provider } = build();
     await provider.create({ ...REQ, expiresAt: '2026-01-02T16:30:00.500Z' });
     const form = new URLSearchParams(http.calls[0]?.body ?? '');
     expect(form.get('expires_at')).toBe(
-      String(Math.ceil(Date.parse('2026-01-02T16:30:00.500Z') / 1000)),
+      String(
+        Math.ceil(Date.parse('2026-01-02T16:30:00.500Z') / 1000) +
+          STRIPE_MIN_SESSION_TTL_SEC +
+          STRIPE_SESSION_MARGIN_SEC,
+      ),
+    );
+  });
+
+  it('KD-9：同一张单在不同时刻重试建会话 → 发给 Stripe 的请求体与幂等键逐字节相同（同键同参，机构幂等才有效）', async () => {
+    const withClock = (at: string) => {
+      const http = createFakeStripeHttp();
+      return {
+        http,
+        provider: createStripeCheckoutProvider(config(), {
+          http,
+          clock: fixedClock(at),
+          idGen: systemIdGen,
+        }),
+      };
+    };
+    const early = withClock('2026-01-02T15:21:00.000Z');
+    const late = withClock('2026-01-02T15:49:30.000Z');
+    const req = { ...REQ, expiresAt: '2026-01-02T15:50:00.000Z' };
+    await early.provider.create(req);
+    await late.provider.create(req);
+    expect(late.http.calls[0]?.body).toBe(early.http.calls[0]?.body);
+    expect(late.http.calls[0]?.headers?.['idempotency-key']).toBe(
+      early.http.calls[0]?.headers?.['idempotency-key'],
+    );
+    // 且在最晚的可付时刻（到期前 30 秒）仍满足 Stripe 的"创建后至少 30 分钟"
+    const sent = Number(new URLSearchParams(late.http.calls[0]?.body ?? '').get('expires_at'));
+    expect(sent - Date.parse('2026-01-02T15:49:30.000Z') / 1000).toBeGreaterThan(
+      STRIPE_MIN_SESSION_TTL_SEC,
     );
   });
 
@@ -727,5 +765,122 @@ describe('expireSession（D-50 关单连带：会话立刻死，不等自然过�
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/作废失败/);
     expect((err as Error).message).toMatch(/cs_test_123/);
+  });
+});
+
+describe('refund：生产里 providerRef 是 Checkout Session 号（KD-11，AJ-175）', () => {
+  /**
+   * @why 上面那组退款用例喂的是 `pi_1`——生产里 `payments.provider_ref` **从来不是** PI，
+   *      而是 create() 登记的会话号 `cs_…`（约束三：假数据要像真的）。
+   *      原实现把会话号原样当 `payment_intent` 传，真 Stripe 上每一笔退款都失败；
+   *      这组用例用 create() 真返回的 providerRef 走一遍。
+   */
+  const refundOf = (p: PaymentProvider) => {
+    const fn = p.refund;
+    if (fn === undefined) throw new Error('stripe 必须实现 refund()');
+    return fn;
+  };
+  const refundReq = (providerRef: string, reason = '缺货') => ({
+    orderId: REQ.orderId,
+    providerRef,
+    amountJpy: 12_000,
+    currency: 'JPY',
+    amountMinor: 12_000,
+    reason,
+  });
+
+  it('先 GET 会话取 payment_intent，再用 PI 退款（不是把 cs_ 当 PI）', async () => {
+    const { http, provider } = build();
+    const s = await provider.create(REQ);
+    expect(s.providerRef).toMatch(/^cs_/); // 前提：生产形态就是会话号
+    const r = await refundOf(provider)(refundReq(s.providerRef));
+    expect(r.outcome).toBe('succeeded');
+    const [get, post] = http.calls.slice(-2);
+    expect(get?.method).toBe('GET');
+    expect(get?.url).toBe(`https://api.stripe.test/v1/checkout/sessions/${s.providerRef}`);
+    expect(get?.headers?.['authorization']).toBe('Bearer sk_test_unit');
+    expect(post?.url).toBe('https://api.stripe.test/v1/refunds');
+    expect(new URLSearchParams(post?.body ?? '').get('payment_intent')).toBe(
+      `pi_for_${s.providerRef}`,
+    );
+    // 回带的 providerRef 仍是登记值（上层按它找 payments 行），不是换算后的 PI
+    expect(r.providerRef).toBe(s.providerRef);
+  });
+
+  it('会话上 payment_intent 为空（未付款会话）→ 抛，且**不发**退款 POST', async () => {
+    const { http, provider } = build();
+    http.failNext(200, JSON.stringify({ id: 'cs_test_x', payment_intent: null }));
+    await expect(refundOf(provider)(refundReq('cs_test_x'))).rejects.toThrow(/没有 payment_intent/);
+    expect(http.calls.filter((c) => c.url.endsWith('/v1/refunds'))).toHaveLength(0);
+  });
+
+  it('会话反查失败（404/5xx）→ 抛带会话号，且不发退款 POST', async () => {
+    const { http, provider } = build();
+    const err = await refundOf(provider)(refundReq('cs_test_ghost')).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/反查会话失败：HTTP 404/);
+    expect((err as Error).message).toMatch(/cs_test_ghost/);
+    expect(http.calls.filter((c) => c.url.endsWith('/v1/refunds'))).toHaveLength(0);
+  });
+
+  it('payment_intent 被展开成对象时取其 id；未知单号族直接抛（不猜）', async () => {
+    const { http, provider } = build();
+    http.failNext(200, JSON.stringify({ id: 'cs_test_e', payment_intent: { id: 'pi_expanded' } }));
+    await refundOf(provider)(refundReq('cs_test_e'));
+    expect(new URLSearchParams(http.calls.at(-1)?.body ?? '').get('payment_intent')).toBe(
+      'pi_expanded',
+    );
+    await expect(refundOf(provider)(refundReq('ch_123'))).rejects.toThrow(/无法识别的机构单号族/);
+  });
+
+  it('同一单重试退款：同键同参 → 回第一次那笔（不退两次）；同键换了原因 → 机构拒（KD-4 为什么要沿用原因）', async () => {
+    const { provider } = build();
+    const s = await provider.create(REQ);
+    const first = await refundOf(provider)(refundReq(s.providerRef, '缺货'));
+    const again = await refundOf(provider)(refundReq(s.providerRef, '缺货'));
+    expect(again.refundRef).toBe(first.refundRef);
+    await expect(refundOf(provider)(refundReq(s.providerRef, '客户改主意'))).rejects.toThrow(
+      /idempotency_error/,
+    );
+  });
+});
+
+describe('create：收货信息附给 PaymentIntent（D-60①，一致性审计 C14 / AJ-176）', () => {
+  const formOf = (http: ReturnType<typeof build>['http']) =>
+    new URLSearchParams(http.calls.at(-1)?.body ?? '');
+
+  it('完整地址 → payment_intent_data[shipping] 各字段；空串的可选字段不发', async () => {
+    const { http, provider } = build();
+    await provider.create({
+      ...REQ,
+      shipping: {
+        name: 'Jane Doe',
+        line1: '1 Infinite Loop',
+        line2: '',
+        city: 'Cupertino',
+        state: 'CA',
+        postalCode: '95014',
+        country: 'US',
+        phone: '+14155550123',
+      },
+    });
+    const f = formOf(http);
+    expect(f.get('payment_intent_data[shipping][name]')).toBe('Jane Doe');
+    expect(f.get('payment_intent_data[shipping][address][line1]')).toBe('1 Infinite Loop');
+    expect(f.has('payment_intent_data[shipping][address][line2]')).toBe(false);
+    expect(f.get('payment_intent_data[shipping][address][postal_code]')).toBe('95014');
+    expect(f.get('payment_intent_data[shipping][phone]')).toBe('+14155550123');
+  });
+
+  it('缺必填（name 或 line1）→ 整块不发，不编造半截地址；不传 shipping → 同样不发', async () => {
+    for (const shipping of [
+      { name: '', line1: '1 Infinite Loop' },
+      { name: 'Jane Doe', line1: '' },
+      undefined,
+    ]) {
+      const { http, provider } = build();
+      await provider.create({ ...REQ, ...(shipping !== undefined ? { shipping } : {}) });
+      const keys = [...formOf(http).keys()].filter((k) => k.includes('[shipping]'));
+      expect(keys).toEqual([]);
+    }
   });
 });

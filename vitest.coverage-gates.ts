@@ -32,12 +32,18 @@
  *       本身不可单测（要跑就得先有小程序运行时），收进来是两个 0% 的大文件，
  *       只会把全局均值拉低而换不来任何信号。它们的性质靠 L4 真机验收。
  *    ⚠️ 于是**新写的组件 js 不会自动进统计**——这是上面第 ② 条的代价，已知且接受。
+ *    ④ **收各页面目录下的 `index.vm.js`**（glob 见下方数组；一致性审计 C6，AJ-176）：第 ③ 条写于约束十一之前。
+ *       （⚠️ 注释里不写 glob 原文：星号紧跟斜杠会提前结束块注释，§2 第 7 条同一个坑。）
+ *       约束十一把页面逻辑全部挪进 `*.vm.js` 纯函数，它们与 utils 一样被单测**直接 import**（走 vite），
+ *       计数可靠；不收的后果是 9 个 vm（约 750 行、页面的全部逻辑）不在任何覆盖率门槛下，
+ *       与《测试策略》§4.2「miniprogram 抽出的纯逻辑 行 ≥ 80%」直接矛盾。`index.js` 薄壳仍按第 ③ 条不收。
  */
 export const COVERAGE_INCLUDE: string[] = [
   'packages/shared/src/**/*.ts',
   'server/src/**/*.ts',
   'miniprogram/**/*.ts',
   'miniprogram/utils/*.js',
+  'miniprogram/pages/**/*.vm.js',
   // admin-web：只收 `.ts`（api 封装等纯逻辑）；`.tsx` 组件层不收——
   // 与小程序 pages/components 不收同一口径：没有组件测试 harness（未引入 testing-library），
   // 收进来是几个 0% 文件，只会拉低均值换不来信号。UI 的性质靠构建（vite build 进 gate）+ L4 人工验收。
@@ -165,6 +171,23 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     statements: 100,
   },
   'server/src/app/mark-paid.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  // 测试审查第二轮（AJ-175）：两处"钱/状态核心、已实测 100%、但此前没钉"的文件补钉。
+  // ① unit-of-work：**提交后才分发**的唯一实现，"钱没落库、通知却已发出"的最后一道闸。
+  //    护栏两层：unit-of-work.unit.test（假 begin 按序断言）+ mark-paid-fault（真库 COMMIT 失败）。
+  // ② admin-order-actions：退款/发货/改址三道准入闸（40907 拒付锁、refunding 可重试 KD-4）。
+  //    准入判定错一条就是"钱退两次"或"拒付中发货"，且都返回 2xx。
+  // 未钉的（有意）：daily-reconciliation（64% 分支，未覆盖的是结果行的 `?.`/`??` 兜底）、
+  //    close-session-events（67%，未覆盖的是日志字段的 `??` 兜底）——补满需要造"库里查出 undefined"的假行，
+  //    属 AJ-37 禁止的"为覆盖率写假测试"；它们的行为分支已由 golden-chain / close-session 用例逐条覆盖。
+  'server/src/app/unit-of-work.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  // 状态机迁移表本体（一致性审计 C6，AJ-176）：《测试策略》§4.2 写"已钉 100%"而此处从未钉——文档先于闸门。
+  'server/src/domain/order.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  'server/src/domain/admin-order-actions.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
 
   // F11 单元④ 国家档案：它是**配置数据进入进程的唯一门**，而且进门的失败形态全部不报错——
   // 脏 JSONB 被强转后变成半截对象（表单少一个输入框）、坏正则要等到用户提交才炸、

@@ -17,7 +17,7 @@
  *
  * @see ports/storage.ts（端口语义）
  */
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, sep } from 'node:path';
 import type { ObjectStorage } from '../ports/storage.js';
 
@@ -43,6 +43,17 @@ export function createFsStorage(rootDir: string): ObjectStorage {
       if (!full.startsWith(root)) throw new Error(`object_key_unsafe`);
       await mkdir(dirname(full), { recursive: true });
       await writeFile(full, bytes);
+    },
+    async delete(key) {
+      assertSafeKey(key);
+      const full = normalize(join(root, key));
+      if (!full.startsWith(root)) throw new Error(`object_key_unsafe`);
+      try {
+        await unlink(full);
+      } catch (e) {
+        // 幂等：不存在不是错误（@measured node 22：unlink 缺文件抛 code === 'ENOENT'）
+        if ((e as { code?: string }).code !== 'ENOENT') throw e;
+      }
     },
   };
 }

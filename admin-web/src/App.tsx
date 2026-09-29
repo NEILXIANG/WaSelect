@@ -19,7 +19,7 @@
  *
  * @see ./api/client.ts（40101 → onUnauthorized 的语义）；docs/地基搭建清单.md F15
  */
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { createAdminApi } from './api/client.js';
 import { resolveApiBase } from './api/config.js';
 import { login } from './api/endpoints.js';
@@ -60,19 +60,22 @@ export function App() {
 
   const baseUrl = useMemo(() => resolveApiBase(import.meta.env), []);
 
+  // 40101 的唯一出口：JSON 封装与上传封装共用（KD-13：上传曾不走这里，过期后反复"HTTP 401"）
+  const onUnauthorized = useCallback((): void => {
+    // 管理端没有静默重登（AJ-83）：token 失效的唯一出路是回登录页重新输密码
+    tokenStore.clear();
+    setToken('');
+  }, []);
+
   const api = useMemo(
     () =>
       createAdminApi({
         baseUrl,
         getToken: () => tokenStore.get(),
-        onUnauthorized: () => {
-          // 管理端没有静默重登（AJ-83）：token 失效的唯一出路是回登录页重新输密码
-          tokenStore.clear();
-          setToken('');
-        },
+        onUnauthorized,
         log: (fields) => console.info('[admin-api]', fields),
       }),
-    [baseUrl],
+    [baseUrl, onUnauthorized],
   );
 
   if (!token) {
@@ -123,7 +126,12 @@ export function App() {
       {tab === 'risk' && <RiskPage api={api} />}
 
       {tab === 'banners' && (
-        <BannersPage api={api} baseUrl={baseUrl} getToken={() => tokenStore.get()} />
+        <BannersPage
+          api={api}
+          baseUrl={baseUrl}
+          getToken={() => tokenStore.get()}
+          onUnauthorized={onUnauthorized}
+        />
       )}
 
       {tab === 'products' &&
@@ -137,6 +145,7 @@ export function App() {
             api={api}
             baseUrl={baseUrl}
             getToken={() => tokenStore.get()}
+            onUnauthorized={onUnauthorized}
             productId={editing.id}
             source={editing.source}
             onDone={() => setEditing(null)}

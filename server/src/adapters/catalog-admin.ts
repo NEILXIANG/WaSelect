@@ -43,6 +43,16 @@ export interface AdminProductInsert {
   status: string;
 }
 
+/**
+ * 管理端**更新**形状：不含 `status`、`stock` 可省略。
+ * @why `status` 只归 `PATCH /status` 管：曾经 PUT 写死 `status = 'active'`，
+ *      管理员编辑一个**已下架**商品的标题，它就被悄悄重新上架、买家可以下单（AJ-175 顺带修正）。
+ * @why `stock` 省略 = 保持原值（并发写的列，见 domain/product-input.ts ProductInputValue.stock）。
+ */
+export type AdminProductUpdate = Omit<AdminProductInsert, 'status' | 'stock'> & {
+  stock?: number | undefined;
+};
+
 /** 读出行（含服务端生成的 updated_at）。 */
 export interface AdminProductRow extends AdminProductInsert {
   updated_at: Date;
@@ -59,7 +69,7 @@ export interface CatalogAdminRepo {
   listAdminProducts(q: AdminProductListQuery): Promise<{ items: AdminProductRow[]; total: number }>;
   insertProduct(row: AdminProductInsert): Promise<AdminProductRow>;
   /** @returns 更新后的行；id 不存在 → null（路由层据此 40401） */
-  updateProduct(id: string, row: AdminProductInsert): Promise<AdminProductRow | null>;
+  updateProduct(id: string, row: AdminProductUpdate): Promise<AdminProductRow | null>;
   /** @returns 是否命中（id 不存在 → false） */
   setProductStatus(id: string, status: 'active' | 'offline'): Promise<boolean>;
 }
@@ -132,11 +142,12 @@ export function createCatalogAdminRepo(db: Db): CatalogAdminRepo {
         update products set title = ${row.title}, category = ${row.category},
                description = ${row.description}, images = ${j(db, row.images)},
                price_jpy = ${row.price_jpy}, cost_jpy = ${row.cost_jpy}, weight_g = ${row.weight_g},
-               stock = ${row.stock}, compliance_tags = ${j(db, row.compliance_tags)},
+               stock = coalesce(${row.stock ?? null}::int, stock),
+               compliance_tags = ${j(db, row.compliance_tags)},
                hs_code = ${row.hs_code}, customs_desc_en = ${row.customs_desc_en},
                origin_country = ${row.origin_country}, title_ja = ${row.title_ja},
                jan_code = ${row.jan_code}, purchase_source = ${row.purchase_source},
-               status = ${row.status}, updated_at = now()
+               updated_at = now()
          where id = ${id}
         returning ${db(COLS.split(',').map((c) => c.trim()))}
       `;

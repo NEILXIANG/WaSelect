@@ -30,6 +30,9 @@ export function createMemoryStorage(): MemoryStorage {
     async put(key, bytes, contentType) {
       map.set(key, { bytes: Buffer.from(bytes), contentType });
     },
+    async delete(key) {
+      map.delete(key); // Map.delete 对不存在的 key 返回 false 不抛——与端口"幂等"语义一致
+    },
     get(key) {
       const hit = map.get(key);
       return hit === undefined

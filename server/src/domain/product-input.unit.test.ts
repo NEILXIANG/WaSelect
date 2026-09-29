@@ -47,7 +47,9 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     expect(v.category).toBe('beauty');
     expect(v.price_jpy).toBe(3600);
     expect(v.origin_country).toBe('JP');
-    expect(v.stock).toBe(0);
+    // 库存省略 = 不改（更新保持原值、新建由路由取 0）——不再在这里补 0（AJ-175：补 0 会让
+    // "只改标题的 PUT"把库存清零；更早的形态是带旧值覆盖并发扣减）
+    expect(v.stock).toBeUndefined();
   });
 
   it('非对象 / null → 拒绝（reason: not_object）', () => {

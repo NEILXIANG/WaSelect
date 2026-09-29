@@ -284,6 +284,17 @@ describe('listOrderItemsWithImage / listOrderTimeline / findLatestPaymentSummary
     expect(tl.map((t) => t.status)).toEqual(['created', 'cancelled']);
   });
 
+  it('买家时间线只含订单状态值：改址 / 拒付 / 退款失败这类管理事件不外泄（一致性审计 C2，AJ-176）', async () => {
+    await db`insert into order_events (order_id, status, note, actor, at) values
+      ('o-det', 'created', null, 'user:u-exp', ${new Date(NOW.getTime() - 5_000)}),
+      ('o-det', 'paid', null, 'provider:mock', ${new Date(NOW.getTime() - 4_000)}),
+      ('o-det', 'address_changed', '管理员改址', 'admin:u-admin', ${new Date(NOW.getTime() - 3_000)}),
+      ('o-det', 'dispute_opened', 'dp_1', 'provider:stripe', ${new Date(NOW.getTime() - 2_000)}),
+      ('o-det', 'refund_failed', 'provider_error', 'admin:u-admin', ${new Date(NOW.getTime() - 1_000)})`;
+    const tl = await listOrderTimeline(db, 'o-det');
+    expect(tl.map((t) => t.status)).toEqual(['created', 'paid']);
+  });
+
   it('payment 取 created_at 最新一条（换通道重发后旧的不该盖新的）；无支付行 → null', async () => {
     expect(await findLatestPaymentSummary(db, 'o-det')).toBeNull();
     await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount, created_at)
@@ -382,19 +393,21 @@ describe('findInitiatedPayment（在途支付意图至多一条：部分唯一�
 describe('markOrderPendingPayment（首次发起才迁移+记事件；重复发起不重复记）', () => {
   it('created → true + order_events；pending_payment / paid → false 且无事件', async () => {
     await seedFullOrder('o-pp');
-    expect(await markOrderPendingPayment(db, 'o-pp', NOW)).toBe(true);
+    expect(await markOrderPendingPayment(db, 'o-pp', NOW, 'user:u-exp')).toBe(true);
     const r = await db`select status from orders where id = 'o-pp'`;
     expect(r[0]?.['status']).toBe('pending_payment');
-    const ev = await db`select status from order_events where order_id = 'o-pp'`;
+    const ev = await db`select status, actor from order_events where order_id = 'o-pp'`;
     expect(ev.map((e) => e['status'])).toEqual(['pending_payment']);
+    // actor 口径 `user:<id>`（一致性审计 C3，AJ-176；与建单 / 取消两处同形）
+    expect(ev[0]?.['actor']).toBe('user:u-exp');
 
     // 第二次（换通道重新发起 / 同通道复用）：不迁移、不重复记事件
-    expect(await markOrderPendingPayment(db, 'o-pp', NOW)).toBe(false);
+    expect(await markOrderPendingPayment(db, 'o-pp', NOW, 'user:u-exp')).toBe(false);
     const ev2 = await db`select status from order_events where order_id = 'o-pp'`;
     expect(ev2).toHaveLength(1);
 
     await seedFullOrder('o-pp-paid', { status: 'paid' });
-    expect(await markOrderPendingPayment(db, 'o-pp-paid', NOW)).toBe(false);
+    expect(await markOrderPendingPayment(db, 'o-pp-paid', NOW, 'user:u-exp')).toBe(false);
   });
 });
 

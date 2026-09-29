@@ -8,7 +8,9 @@
  *      ② 订单 paid 但最近一条 payments 不是 succeeded（两本账不符）：
  *         mark-paid 设计上是同事务封口，出现即意味着有未知写路径；
  *      ③ 近 48h 回调登记为 late_payment / mismatch:* / ignored:status_conflict / unmatched:*（词表 app/webhook-results.ts）：
- *         "钱扣了但不能发货"与"钱到了找不到单"，每一条都要人工跟进。
+ *         "钱扣了但不能发货"与"钱到了找不到单"，每一条都要人工跟进；
+ *      ④ 调度器心跳停滞（AJ-102 的替代方案）；
+ *      ⑤ 卡住的回调：登记了却没有任何结果、租约已过期（KD-2 / AJ-175，见 scanUnfinishedCallbacks）。
  *      自动修任何一类都需要业务裁决（退不退？发不发？），MVP 把它留给人——
  *      但没有这个 job，这些行就只能在库里静默躺着（欠账①被评为致命级的原因）。
  *
@@ -48,6 +50,16 @@ export const DAILY_RECONCILIATION_JOB = 'daily_reconciliation';
 export const RECONCILE_IDS_CAP = 20;
 /** 回调异常的回看窗口（小时）：再早的异常要么已处理、要么已沉底，每日扫全表没有意义。 */
 export const RECONCILE_LOOKBACK_HOURS = 48;
+
+/**
+ * 卡住回调的判定阈值（分钟）：登记后超过这么久仍**没有任何处理结果**、且租约已过期 → 卡住。
+ * @why 15 分钟（KD-2，AJ-175 拍板）：回调处理租约是秒级的，正常一条回调在秒级内就有结果；
+ *      机构的重发节奏是分钟级起步（Stripe 官方口径为最长约 3 天的指数退避；各机构首轮间隔未逐一实测），
+ *      15 分钟足以区分"正在重试的正常抖动"与"没人会再来处理的孤儿"。取更短会把正在排队的早到回调（grace）误报；
+ *      取更长（如 1 小时）则在每日对账这种低频作业里没有额外收益——作业一天只跑一次，
+ *      阈值只是用来排除"刚刚到、还在处理"的那几分钟。
+ */
+export const UNFINISHED_CALLBACK_MINUTES = 15;
 
 /**
  * 心跳停滞阈值：**tick**（常驻调度器，60s 一轮）超过这个分钟数没有成功心跳 = 卡了。
@@ -157,6 +169,47 @@ async function scanCallbackAnomalies(ctx: JobContext<Db>): Promise<AnomalyClass>
 }
 
 /**
+ * 第五类：**卡住的回调**（KD-2，2026-09-28 测试审查实测）——登记了、处理中途失败或进程崩溃、
+ * 租约早已过期、却**没有任何结果**（`processed_at is null`）的回调。
+ *
+ * @why pay-callback.ts 与 ports/webhooks.ts 都承诺这类行"由 F13 对账捞起"，而第三类只按 `result`
+ *      取值扫——result 为空的行永远不会被列出。机构若不再重发（已达重试上限、或事件本就只发一次），
+ *      这笔钱就静默躺着。这是"对账最该看见、却恰好看不见"的一类。
+ * @why 条件用"租约已过期或从未取得"（`processing_until is null or < startedAt`）：
+ *      租约还在的行是**正在处理**，不是卡住；只看 `processed_at is null` 会把正在跑的也报出来。
+ * @limitation 与第三类同一个 48 小时回看窗口：更早的孤儿行会从报告里消失。
+ *             作业每天一轮，每条孤儿行会被报告约两次；超过窗口仍未处理的，说明已被人看过两次仍放着，
+ *             继续每天报它只会成为噪声（与第三类取窗口的理由相同）。
+ */
+async function scanUnfinishedCallbacks(ctx: JobContext<Db>): Promise<AnomalyClass> {
+  const rows = await ctx.tx<{ event_id: string }[]>`
+    select event_id from webhook_events
+     where processed_at is null
+       and (processing_until is null or processing_until < ${ctx.startedAt}::timestamptz)
+       and received_at <= ${ctx.startedAt}::timestamptz
+                          - make_interval(mins => ${UNFINISHED_CALLBACK_MINUTES})
+       and received_at > ${ctx.startedAt}::timestamptz
+                          - make_interval(hours => ${RECONCILE_LOOKBACK_HOURS})
+     order by received_at
+     limit ${RECONCILE_IDS_CAP + 1}
+  `;
+  const countRows = await ctx.tx<{ count: string }[]>`
+    select count(*)::text as count from webhook_events
+     where processed_at is null
+       and (processing_until is null or processing_until < ${ctx.startedAt}::timestamptz)
+       and received_at <= ${ctx.startedAt}::timestamptz
+                          - make_interval(mins => ${UNFINISHED_CALLBACK_MINUTES})
+       and received_at > ${ctx.startedAt}::timestamptz
+                          - make_interval(hours => ${RECONCILE_LOOKBACK_HOURS})
+  `;
+  return {
+    key: 'unfinished_callbacks',
+    count: Number(countRows[0]?.count ?? 0),
+    ids: rows.slice(0, RECONCILE_IDS_CAP).map((r) => String(r.event_id)),
+  };
+}
+
+/**
  * 第四类：**调度器心跳停滞**（AJ-102 承诺落到这里，不是新增想法）。
  *
  * @why 契约 0.5.4 里删掉了 `/healthz` 的"调度看门狗"承诺（那会让 Render 把调度卡顿
@@ -220,6 +273,7 @@ export function createDailyReconciliationJob(): SchedulerJob<Db> {
         await scanLedgerMismatch(ctx),
         await scanCallbackAnomalies(ctx),
         await scanStalledHeartbeats(ctx),
+        await scanUnfinishedCallbacks(ctx),
       ];
       let anomalies = 0;
       for (const c of classes) {

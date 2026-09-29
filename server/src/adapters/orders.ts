@@ -24,6 +24,7 @@
  * @see app/expire-orders.ts（消费方：超时关单 job）；migrations/001_init.sql（orders 表）；
  *      docs/I1阶段开发实施方案.md §3.2；D-33（30 分钟超时关单）
  */
+import { ORDER_STATUS } from '@waselect/shared';
 import type { Db, JSONValue } from './db.js';
 
 /**
@@ -397,13 +398,24 @@ export async function listOrderItemsWithImage(
   }));
 }
 
-/** 订单时间线一行（order_events 按 at 升序）。 */
+/**
+ * **买家**订单时间线（order_events 按 at 升序，**只取订单状态值**）。
+ *
+ * @why `order_events` 同时承载两类行：状态迁移（10 态，契约 OrderStatus）与管理事件
+ *      （`address_changed` / `dispute_opened` / `dispute_closed` / `refund_failed`，actor 为管理员或机构）。
+ *      曾经不加过滤：买家订单详情里出现"状态未知"行，且**拒付开案/结案被买家看见**
+ *      （一致性审计 C2，AJ-176 实测）。管理端详情走 `listEventsFor`，仍看全量。
+ * @tradeoff 过滤写在 SQL（`= any(ORDER_STATUS)`）而不是前端：外泄面在服务端收口，
+ *           小程序与将来的日文站不必各自再过滤一遍。
+ */
 export async function listOrderTimeline(
   db: Db,
   orderId: string,
 ): Promise<{ status: string; at: Date }[]> {
   const rows = await db`
-    select status, at from order_events where order_id = ${orderId} order by at asc, id asc
+    select status, at from order_events
+     where order_id = ${orderId} and status = any(${[...ORDER_STATUS]})
+     order by at asc, id asc
   `;
   return rows.map((r) => ({ status: String(r.status), at: r.at as Date }));
 }
@@ -500,6 +512,8 @@ export interface OrderPayRow {
   fx_snapshot: unknown;
   /** 目的国（从 address_snapshot jsonb 里提取；建单时地址快照即真相）。 */
   dest_country: string | null;
+  /** 地址快照整体（发起支付时附给机构做风控 / 拒付举证，D-60①；AJ-176）。 */
+  address_snapshot: unknown;
 }
 
 /**
@@ -514,7 +528,7 @@ export async function lockOwnedOrderForPay(
   userId: string,
 ): Promise<OrderPayRow | null> {
   const rows = await tx`
-    select id, order_no, status, total_jpy, expires_at, fx_snapshot,
+    select id, order_no, status, total_jpy, expires_at, fx_snapshot, address_snapshot,
            address_snapshot->>'country' as dest_country
       from orders where id = ${orderId} and user_id = ${userId}
       for update
@@ -529,6 +543,7 @@ export async function lockOwnedOrderForPay(
     expires_at: r.expires_at as Date,
     fx_snapshot: jsonbValue(r.fx_snapshot),
     dest_country: r.dest_country === null ? null : String(r.dest_country),
+    address_snapshot: jsonbValue(r.address_snapshot),
   };
 }
 
@@ -570,7 +585,13 @@ export async function findInitiatedPayment(
  * @why 守卫只认 `created`：重复发起不重复记事件（时间线里两个 pending_payment
  *      会让"到底发起了几次"变成猜谜），已在 pending_payment 的单继续走流程即可。
  */
-export async function markOrderPendingPayment(tx: Db, orderId: string, at: Date): Promise<boolean> {
+export async function markOrderPendingPayment(
+  tx: Db,
+  orderId: string,
+  at: Date,
+  /** `user:<id>`（与建单 / 取消两处同形；曾写成不带 id 的 `'user'`，一致性审计 C3，AJ-176）。 */
+  actor: string,
+): Promise<boolean> {
   const updated = await tx`
     update orders set status = 'pending_payment', updated_at = now()
      where id = ${orderId} and status = 'created'
@@ -578,7 +599,7 @@ export async function markOrderPendingPayment(tx: Db, orderId: string, at: Date)
   if (updated.count === 0) return false;
   await tx`
     insert into order_events (order_id, status, actor, at)
-    values (${orderId}, 'pending_payment', 'user', ${at})
+    values (${orderId}, 'pending_payment', ${actor}, ${at})
   `;
   return true;
 }

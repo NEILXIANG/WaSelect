@@ -15,7 +15,8 @@
  *      迁移表（cancelled 是终态）→ 40902，语义比"重放返回旧结果"更清楚。
  *      契约也没有给它声明 IdemKey 参数。
  *
- * @limitation 一：Idempotency-Key 的长度上限（≤128）属 U7b 统一收口，本文件暂不限长。
+ * @limitation 一：Idempotency-Key 的长度上限（≤128）已在 `ports/idempotency.ts` 的 `scopeKey` 统一拒绝
+ *              （超限 40001 + reason idempotency_key_too_long，契约 0.6.0②；一致性审计 C9 更正原"暂不限长"）。
  * @limitation 二：响应的 display/fx_snapshot 直接用重算结果——客户端看到的确认页
  *              与建单返回必然一致（同一事务、同一次 fx 查询）。
  *

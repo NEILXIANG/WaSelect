@@ -8,7 +8,7 @@
  *      写穿 rootDir 的表现是把字节写进任意路径，且**没有任何一方报错**。
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFsStorage } from './storage-fs.js';
@@ -71,5 +71,14 @@ describe('fs storage（开发期 ObjectStorage）', () => {
     expect(await readFile(join(root, 'img/018f3c2a-7b1d-7e5f/x_y-z.webp'))).toEqual(
       Buffer.from([5]),
     );
+  });
+  it('delete：文件被删；再删一次不抛（ENOENT 视为已删）；穿越 key 一律拒', async () => {
+    const root = await freshRoot();
+    const s = createFsStorage(root);
+    await s.put('img/a/detail.webp', Buffer.from('x'), 'image/webp');
+    await s.delete('img/a/detail.webp');
+    await expect(stat(join(root, 'img/a/detail.webp'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(s.delete('img/a/detail.webp')).resolves.toBeUndefined();
+    await expect(s.delete('../escape.webp')).rejects.toThrow('object_key_unsafe');
   });
 });

@@ -45,10 +45,28 @@ export interface AdminUploadRoutesDeps {
   storage: ObjectStorage | null;
 }
 
-/** 收完整 multipart（单文件）。超限截断 / 无文件 / 非图字节都在此变成 40001。 */
+/**
+ * 收完整 multipart（单文件）。超限截断 / 无文件 / 非 multipart / 报文损坏都在此变成 40001。
+ *
+ * @why busboy 对"不是 multipart"是在**构造时同步抛普通 Error**，报文中途损坏是 `error` 事件——
+ *      两者都是**客户端**的问题。原实现让它们落到全局兜底成 50000（KD-5，2026-09-28 测试审查实测），
+ *      运营看到"服务器内部错误"去找技术，而不是换个方式重传。
+ *      @measured busboy 1.6：`application/json` → `Error: Unsupported content type: application/json`；
+ *      无 Content-Type → `Error: Missing Content-Type`（均为普通 Error，无 code 字段）。
+ */
 function readImageFile(req: Request): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const bb = Busboy({ headers: req.headers, limits: { fileSize: UPLOAD_MAX_BYTES, files: 1 } });
+    let bb: ReturnType<typeof Busboy>;
+    try {
+      // ⚠️ `+ 1`（KD-15，AJ-175 边界补测实测）：busboy 的 fileSize 是**排他**上限——
+      //    @measured(busboy 1.6.0, limits.fileSize=16)：15 字节 → limit 未触发；**恰好 16 字节 → limit 触发、
+      //    truncated=true**；17 字节 → received=16、truncated=true。直接传 UPLOAD_MAX_BYTES 的后果是
+      //    "恰好 10MB 的图被判超限"，与契约"上限 10MB"差一个字节。+1 之后：≤10MB 放行，>10MB 截断即拒。
+      bb = Busboy({ headers: req.headers, limits: { fileSize: UPLOAD_MAX_BYTES + 1, files: 1 } });
+    } catch {
+      reject(new AppError(40001, { reason: 'upload_not_multipart' }));
+      return;
+    }
     const chunks: Buffer[] = [];
     let seen = false;
     let truncated = false;
@@ -59,7 +77,7 @@ function readImageFile(req: Request): Promise<Buffer> {
         truncated = true;
       });
     });
-    bb.on('error', (e) => reject(e));
+    bb.on('error', () => reject(new AppError(40001, { reason: 'upload_malformed' })));
     bb.on('finish', () => {
       if (!seen) reject(new AppError(40001, { reason: 'upload_file_missing' }));
       else if (truncated) reject(new AppError(40001, { reason: 'upload_file_too_large' }));
@@ -81,8 +99,46 @@ export function mountAdminUploadRoutes(app: Express, deps: AdminUploadRoutesDeps
         throw new AppError(40001, { reason: 'unsupported_image_type' });
       }
       const imageId = deps.idGen.uuid();
-      const tiers = await resizeToTiers(bytes, imageId);
-      for (const t of tiers) await deps.storage.put(t.key, t.bytes, t.contentType);
+      const storage = deps.storage;
+      // ⚠️ 文件头合法、内容损坏（截半的 jpeg 等）会在**解码**时失败——那仍是客户端给的坏图，
+      //    不是服务端故障（KD-5）。@measured sharp 0.35：截断 jpeg →
+      //    `Error: Input buffer has corrupt header: VipsJpeg: premature end of JPEG image`。
+      //    @tradeoff 解码阶段的**一切**异常都归 40001：sharp 自身的资源类故障（极少见）也会被说成"图坏了"，
+      //    代价是一次误判的重传；反过来把坏图说成 50000 是每一张坏图都误判。原始信息进 warn 日志备查。
+      const tiers = await resizeToTiers(bytes, imageId).catch((e: unknown) => {
+        deps.logger.warn('admin_upload_decode_failed', {
+          result: 'rejected',
+          ctx: { image_id: imageId, bytes: bytes.length },
+          err: e instanceof Error ? e.message : String(e),
+        });
+        throw new AppError(40001, { reason: 'image_decode_failed' });
+      });
+      // 三档**顺序**写入；任一档失败 → 删掉已写成的档再抛（KD-8：否则留下半套孤儿对象，
+      // 且响应是 50000、运营会重传，每次重传都再多留一套）。补偿是 best-effort：
+      // 删除本身失败只记日志，不覆盖原始错误——原始错误才是要报给调用方的事实。
+      const written: string[] = [];
+      try {
+        for (const t of tiers) {
+          await storage.put(t.key, t.bytes, t.contentType);
+          written.push(t.key);
+        }
+      } catch (e) {
+        let cleaned = 0;
+        for (const key of written) {
+          await storage.delete(key).then(
+            () => {
+              cleaned += 1;
+            },
+            () => undefined,
+          );
+        }
+        deps.logger.error('admin_upload_partial_rollback', {
+          result: 'failed',
+          ctx: { image_id: imageId, written: written.length, cleaned },
+          err: e instanceof Error ? e.message : String(e),
+        });
+        throw e;
+      }
       deps.logger.info('admin_upload_ok', {
         result: 'ok',
         ctx: { bytes: bytes.length, image_id: imageId },

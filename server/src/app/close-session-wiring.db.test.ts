@@ -59,6 +59,8 @@ import { registerSessionExpiryOnClose } from './close-session-events.js';
 import { runSchedulerOnce } from './scheduler.js';
 import { createSchedulerDeps } from './scheduler-start.js';
 import { createExpireOrdersJob, EXPIRE_ORDERS_JOB } from './expire-orders.js';
+import { cancelOrder } from './cancel-order.js';
+import { withUnitOfWork } from './unit-of-work.js';
 
 let db: Db;
 const sink = new MemorySink();
@@ -288,5 +290,61 @@ describe('触发链：expire job → 真总线 → 订阅者 → 机构 expireSe
     await new Promise((r) => setTimeout(r, 300));
     expect(await payStatusOf('o-chain-none')).toBe('initiated'); // 但连带没发生
     expect(calls).toEqual([]);
+  });
+});
+
+describe('触发链：用户取消（真取消事务 + 提交后分发）→ 订阅者 → 机构 expireSession（KD-1 回归）', () => {
+  it('取消事务内已把支付行 void，提交后订阅者仍把机构会话作废（此前永远找不到行、从不作废）', async () => {
+    await db`
+      insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                          total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
+      values ('o-cxl', 'W-o-cxl', 'u-csw', 'pending_payment', 1000, 200, 0, 1200, 500,
+              ${db.json({ USD: 0.0066 })}, ${db.json({ country: 'US' })}, 'TOS-1',
+              ${new Date(NOW.getTime() + 30 * 60_000)})
+    `;
+    await db`
+      insert into payments (id, order_id, provider, provider_ref, status, charge_currency, charge_amount, pay_url)
+      values ('pay-o-cxl', 'o-cxl', 'stub', 'cs_test_cxl', 'initiated', 'USD', 800, 'https://example.invalid/pay')
+    `;
+    const calls: string[] = [];
+    const provider = {
+      channel: 'stub',
+      capabilities: {
+        currencies: ['USD'],
+        countries: ['*'],
+        entryMode: 'copylink',
+        supportsRefund: false,
+        supportsPartialRefund: false,
+        supportsDispute: false,
+        refundableWhenDisabled: false,
+      },
+      create: () => Promise.reject(new Error('unused')),
+      parseWebhook: () => Promise.reject(new Error('unused')),
+      expireSession: (ref: string) => {
+        calls.push(ref);
+        return Promise.resolve();
+      },
+    } as unknown as PaymentProvider;
+    const registry: PaymentRegistry = {
+      register: () => undefined,
+      get: () => provider,
+      getForRefund: () => provider,
+      getForCallback: () => provider,
+      listAvailable: (): ChannelView[] => [],
+    };
+    const bus = createEventBus(logger);
+    registerSessionExpiryOnClose(bus, { db, logger, registry });
+
+    // 与 order-routes.ts 取消路由同构：同一事务取消 + 提交后分发 order.cancelled
+    await withUnitOfWork(db, bus, async (tx, emit) => {
+      await cancelOrder(tx, { clock, logger }, { orderId: 'o-cxl', userId: 'u-csw' });
+      emit({ name: 'order.cancelled', at: NOW.toISOString(), orderId: 'o-cxl' });
+    });
+
+    expect(await payStatusOf('o-cxl')).toBe('cancelled'); // 事务内已作废
+    await vi.waitFor(() => expect(calls).toEqual(['cs_test_cxl']), {
+      timeout: 5_000,
+      interval: 20,
+    });
   });
 });

@@ -158,8 +158,18 @@ describe('refundGate（退款闸门）', () => {
     expect(g.reason).toContain('取消');
   });
 
-  it('⚠️ refunding 拦（重复提交会打第二笔退款）', () => {
-    expect(refundGate(withStatus('refunding')).reason).toContain('重复');
+  it('⚠️ refunding 放行为**重试**并说明（KD-12：服务端允许重试，前端不能把唯一入口堵死）', () => {
+    const g = refundGate(withStatus('refunding'));
+    expect(g.ok).toBe(true);
+    expect(g.reason).toContain('重试');
+    expect(g.reason).toContain('不会退两次');
+  });
+
+  it('列表行收件人：取顶层 recipient（列表形状，0.6.9），缺失时回落 address.recipient（详情形状）', () => {
+    const list = orderRows([{ order_id: 'o-1', status: 'paid', recipient: 'Jane Doe' }]);
+    expect(list[0]?.recipientText).toBe('Jane Doe');
+    const detail = orderRows([{ order_id: 'o-2', status: 'paid', address: { recipient: 'Taro' } }]);
+    expect(detail[0]?.recipientText).toBe('Taro');
   });
 
   it('⚠️ has_dispute=true 拦且原因带 40907（服务端就是这么拒的，文案要能自查）', () => {

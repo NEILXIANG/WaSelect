@@ -12,8 +12,9 @@
  *      "UTC 14:59:59 与 15:00:00 生成的单号必须跨天"这条规则**永远测不到**——
  *      要测就得等真实时间走到那一刻。
  *
- * @limitation 一：**只拼装，不判重**。冲突重试靠 `order_no` 的唯一约束捕获（D32，待办），
- *              那需要知道"这个号是否已存在"，是仓储层的事；domain 不知道存储。
+ * @limitation 一：**只拼装，不判重**。冲突重试靠 `order_no` 的唯一约束捕获（D32），
+ *              已在 `app/create-order.ts` 落地（savepoint + 换随机段重试 3 次；一致性审计 C9 更正原"待办"）；
+ *              domain 不知道存储。
  * @limitation 二：随机段仍由调用方传入（`randomOrderSeq()`），本模块不自己摇随机数——
  *              "摇号"是可注入的另一个输入（IdGen），与时钟同理，下一步端口化。
  * @limitation 三：`jstDateShort` 来自 `packages/shared`，domain 允许依赖 shared

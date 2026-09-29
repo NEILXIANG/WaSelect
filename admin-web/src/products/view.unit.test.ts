@@ -197,6 +197,19 @@ describe('toProductInput（请求体）', () => {
     ).toBe('JP');
   });
 
+  it('编辑时库存**没改** → 不带 stock（服务端保持原值，不覆盖期间的下单扣减，AJ-175）', () => {
+    const f = productFormModel(PRODUCT);
+    const body = toProductInput({ ...f, title: '改个标题' }, f.stock);
+    expect(body['stock']).toBeUndefined();
+    expect(body['title']).toBe('改个标题');
+  });
+
+  it('编辑时库存**改了** → 带新值；新建（不传原值）→ 照常带', () => {
+    const f = productFormModel(PRODUCT);
+    expect(toProductInput({ ...f, stock: '30' }, f.stock)['stock']).toBe(30);
+    expect(toProductInput(f)['stock']).toBe(12);
+  });
+
   it('成本价留空 → 不带该字段（不是塞 0，0 会被当成"零成本"）', () => {
     const body = toProductInput({ ...productFormModel(PRODUCT), costJpy: '' });
     expect(body['cost_jpy']).toBeUndefined();

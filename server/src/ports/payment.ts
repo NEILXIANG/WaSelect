@@ -124,6 +124,28 @@ export interface PaymentRequest {
    * @see ADR / 决策 D-33（订单 30 分钟超时关单）、D-49（银行卡走 Stripe 托管页）
    */
   expiresAt?: string | undefined;
+  /**
+   * 收货信息（订单**地址快照**，建单时固定）。**可选**：机构支持就附上，不支持的适配器忽略。
+   *
+   * @why D-60①：Stripe 走 `payment_intent_data[shipping]`，给 Radar 风控与**拒付举证**用
+   *      （"寄到了哪、寄给了谁"是举证材料的核心）。放进端口而不是让适配器自己查库：
+   *      适配器不认识订单表（约束四：依赖只能由外向内）。
+   * @limitation 这是**建会话那一刻**的快照：发货前管理员改址不会回写机构侧（AJ-96 已登记）。
+   * @limitation 含个人信息：只随出站请求体发给机构，**不进日志**（fetch 客户端只记 URL，不记 body）。
+   */
+  shipping?: PaymentShipping | undefined;
+}
+
+/** 收货信息（字段与 addresses / address_snapshot 同名同义；可选字段缺失时不发）。 */
+export interface PaymentShipping {
+  name: string;
+  phone?: string | undefined;
+  line1: string;
+  line2?: string | undefined;
+  city?: string | undefined;
+  state?: string | undefined;
+  postalCode?: string | undefined;
+  country?: string | undefined;
 }
 
 /**

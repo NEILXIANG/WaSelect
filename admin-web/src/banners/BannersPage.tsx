@@ -39,9 +39,11 @@ export interface BannersPageProps {
   /** 上传要用（multipart 不走通用封装）。 */
   baseUrl: string;
   getToken: () => string;
+  /** 上传遇 40101 时的出口（与通用封装同一语义：清 token 回登录页，KD-13）。 */
+  onUnauthorized?: (() => void) | undefined;
 }
 
-export function BannersPage({ api, baseUrl, getToken }: BannersPageProps) {
+export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersPageProps) {
   const [rows, setRows] = useState<ReturnType<typeof bannerRows>>([]);
   const [raw, setRaw] = useState<BannerLike[]>([]);
   const [editing, setEditing] = useState<BannerLike | null>(null);
@@ -125,7 +127,7 @@ export function BannersPage({ api, baseUrl, getToken }: BannersPageProps) {
     try {
       // 0.6.8 起上传响应恒带 image_key（= detail 档键，AJ-143/AJ-166），直接提交；
       // 服务端拿它与 IMG_BASE_URL 拼出 Banner.image 的完整 URL。
-      const set = await uploadImage({ baseUrl, getToken }, file);
+      const set = await uploadImage({ baseUrl, getToken, onUnauthorized }, file);
       setForm((s) => ({ ...s, imageKey: set.image_key }));
       setErrors((e) => ({ ...e, imageKey: '' }));
     } catch (e) {

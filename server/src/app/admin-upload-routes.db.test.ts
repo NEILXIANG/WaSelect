@@ -221,6 +221,112 @@ describe('POST /admin/upload', () => {
     }
   });
 
+  it('边界（AJ-175 补测）：恰好 10MB（UPLOAD_MAX_BYTES）→ 201；多 1 字节 → 40001', async () => {
+    const srv = await buildServer('https://img.example.com');
+    try {
+      const jpeg = await makeJpeg();
+      // 真 jpeg + 尾部填充：EOI 之后的字节 libjpeg 不读（实测 201），所以能单独考"大小"这一个维度
+      const exact = Buffer.concat([jpeg, Buffer.alloc(UPLOAD_MAX_BYTES - jpeg.length, 0x61)]);
+      expect(exact.length).toBe(UPLOAD_MAX_BYTES);
+      const ok = await postUpload(
+        srv.url,
+        await bearer(),
+        multipart(exact, 'exact.jpg', 'image/jpeg'),
+      );
+      expect(ok.status).toBe(201);
+      const over = Buffer.concat([exact, Buffer.from([0x61])]);
+      const bad = await postUpload(
+        srv.url,
+        await bearer(),
+        multipart(over, 'over.jpg', 'image/jpeg'),
+      );
+      expect(bad.status).toBe(400);
+      expect(((await bad.json()) as { code: number }).code).toBe(40001);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it.each([
+    ['JSON 体（不是 multipart）', 'application/json', Buffer.from('{}'), 'upload_not_multipart'],
+    ['缺 Content-Type', undefined, Buffer.from('x'), 'upload_not_multipart'],
+  ] as const)(
+    'KD-5 %s → 40001（客户端错误，不是 50000），存储零写入',
+    async (_name, ct, body, reason) => {
+      const srv = await buildServer('https://img.example.com');
+      try {
+        const res = await fetch(`${srv.url}/api/v1/admin/upload`, {
+          method: 'POST',
+          headers: {
+            authorization: await bearer(),
+            ...(ct === undefined ? {} : { 'content-type': ct }),
+          },
+          body,
+        });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: number }).code).toBe(40001);
+        expect(sink.lines.join('\n')).toContain(reason);
+        expect(storage.size()).toBe(0);
+      } finally {
+        await srv.close();
+      }
+    },
+  );
+
+  it('KD-5 文件头合法、内容损坏的 jpeg → 40001 image_decode_failed，存储零写入，解码原因进 warn 日志', async () => {
+    const srv = await buildServer('https://img.example.com');
+    try {
+      // 真 jpeg 只取前 64 字节：magic bytes 通过嗅探，解码必然失败
+      const broken = (await makeJpeg()).subarray(0, 64);
+      const res = await postUpload(
+        srv.url,
+        await bearer(),
+        multipart(broken, 'b.jpg', 'image/jpeg'),
+      );
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { code: number }).code).toBe(40001);
+      expect(storage.size()).toBe(0);
+      const warn = sink.lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .find((r) => r['event'] === 'admin_upload_decode_failed');
+      expect(warn?.['level']).toBe('warn');
+      expect(String(warn?.['err'])).toMatch(/jpeg|JPEG|header/);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('KD-8 第二档写存储失败 → 50000，已写成的第一档被删掉（不留半套孤儿对象），补偿过程进 error 日志', async () => {
+    let n = 0;
+    const flaky: MemoryStorage = {
+      ...storage,
+      put: async (key, bytes, contentType) => {
+        n += 1;
+        if (n === 2) throw new Error('simulated storage outage');
+        await storage.put(key, bytes, contentType);
+      },
+      delete: (key) => storage.delete(key),
+    };
+    const srv = await buildServer('https://img.example.com', flaky);
+    try {
+      const res = await postUpload(
+        srv.url,
+        await bearer(),
+        multipart(await makeJpeg(), 'a.jpg', 'image/jpeg'),
+      );
+      expect(res.status).toBe(500);
+      expect(((await res.json()) as { code: number }).code).toBe(50000);
+      expect(storage.size()).toBe(0); // 第一档写成后又被补偿删除
+      const rb = sink.lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .find((r) => r['event'] === 'admin_upload_partial_rollback');
+      expect(rb?.['level']).toBe('error');
+      expect(rb?.['ctx']).toMatchObject({ written: 1, cleaned: 1 });
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('⚠️ 存储未配置（生产无 R2 的形态）→ 50000 响亮拒绝，不是 201 也不是静默丢弃', async () => {
     const srv = await buildServer('https://img.example.com', null);
     try {

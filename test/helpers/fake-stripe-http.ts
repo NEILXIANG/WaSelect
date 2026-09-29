@@ -9,10 +9,25 @@
  *      一个"什么都返回 200"的替身只能测出"我们不会崩"，
  *      测不出"我们真的带了鉴权头""我们真的传了幂等键"——而漏掉后者等于重复扣款。
  *
- * @limitation 一：幂等按 `Idempotency-Key` **整键**缓存（真实 Stripe 也是这个语义，
- *              但有 24 小时窗口与请求体一致性校验；这里不做，够用即可）。
+ * @why 替身的两条"脾气"来自 2026-09-28 测试审查第二轮（AJ-175）——此前它们缺席，于是两个真缺陷全绿：
+ *      ① **同键异参报错**：@measured(docs.stripe.com/api/idempotent_requests, 2026-09-28)
+ *        "The idempotency layer compares incoming parameters to those of the original request
+ *        and errors if they're not the same"。原替身同键直接回缓存，于是"重试时 expires_at 重算
+ *        → 参数变了"（KD-9）与"退款重试换了原因"（KD-4）在测试里都成功，在真 Stripe 上都会被拒。
+ *      ② **退款只认 PaymentIntent**：@measured(docs.stripe.com/api/refunds/create, 2026-09-28)
+ *        参数只有 `charge`（"The identifier of the charge to refund"）与 `payment_intent`
+ *        （"The identifier of the PaymentIntent to refund"），传入无效标识会 "Raises an error"。
+ *        原替身只查"带没带 payment_intent="，于是把 Checkout Session id（`cs_…`）当 PI 传过去（KD-11）
+ *        在测试里退款成功，在真 Stripe 上每一笔都会失败。
+ *
+ * @limitation 一：幂等只模拟"同键同参回原结果 / 同键异参报错"，不模拟 24 小时窗口；
+ *              同键异参的**状态码**文档没写明，这里取 400 + `idempotency_error`（未实测，凭记忆）——
+ *              被测代码只需要"非 2xx 即失败"，不依赖具体状态码。
  * @limitation 二：不模拟错误码（402 卡被拒、429 限流）。
  *              需要时按用例单独造，不预先铺——铺了就会有人依赖上不存在的场景。
+ * @limitation 三：`GET /v1/checkout/sessions/{id}` 回的会话一律带 `payment_intent`（等同"已付款"）；
+ *              真 Stripe 在会话确认前该字段为 null（同一文档页示例 `"payment_intent": null`）——
+ *              那条分支在适配器单测里用 `failNext` 单独造。
  */
 import type { HttpClient, HttpRequest, HttpResponse } from '../../server/src/ports/http-client.js';
 
@@ -32,6 +47,13 @@ export function createFakeStripeHttp(): FakeStripeHttp {
   const calls: HttpRequest[] = [];
   /** idempotency-key → 已建的会话。 */
   const sessions = new Map<string, { id: string; url: string; expires_at: number }>();
+  /** 会话 id → 会话（供 GET 反查 payment_intent）。 */
+  const sessionsById = new Map<string, { id: string; url: string; expires_at: number }>();
+  /** `路径|幂等键` → 首次请求体（同键异参检查，见文件头 @why ①）。 */
+  const firstBodies = new Map<string, string>();
+  /** 退款幂等键 → 首次退款结果（同键重放回同一笔，不是再退一次）。 */
+  const refunds = new Map<string, { id: string; status: string }>();
+  let nextRefund = 1;
   /** payment_intent id → metadata（create 时从表单抓 + givenPaymentIntent 手工登记）。 */
   const paymentIntents = new Map<string, Record<string, string>>();
   let nextId = 1;
@@ -59,6 +81,24 @@ export function createFakeStripeHttp(): FakeStripeHttp {
       }
       const path = new URL(req.url).pathname;
       const body = req.body ?? '';
+      // 同键异参 → 报错（文件头 @why ①）。GET 不带键，不进这条
+      const idemKey = req.headers?.['idempotency-key'] ?? '';
+      if (req.method === 'POST' && idemKey.length > 0) {
+        const slot = `${path}|${idemKey}`;
+        const first = firstBodies.get(slot);
+        if (first !== undefined && first !== body) {
+          return {
+            status: 400,
+            body: JSON.stringify({
+              error: {
+                type: 'idempotency_error',
+                message: `Keys for idempotent requests can only be used with the same parameters they were first used with (key=${idemKey})`,
+              },
+            }),
+          };
+        }
+        firstBodies.set(slot, body);
+      }
 
       if (path === '/v1/checkout/sessions' && req.method === 'POST') {
         const key = req.headers?.['idempotency-key'] ?? '';
@@ -75,6 +115,7 @@ export function createFakeStripeHttp(): FakeStripeHttp {
           expires_at: 1_800_000_000,
         };
         sessions.set(key, session);
+        sessionsById.set(id, session);
         // 与真 Stripe 同口径：Session 会带一个 PaymentIntent，
         // 其 metadata 来自表单的 payment_intent_data[metadata][*]
         const form = new URLSearchParams(body);
@@ -83,6 +124,23 @@ export function createFakeStripeHttp(): FakeStripeHttp {
           paymentIntents.set(`pi_for_${id}`, { order_id: orderId });
         }
         return { status: 200, body: JSON.stringify(session) };
+      }
+
+      // 会话反查（退款前把 Checkout Session 换成 PaymentIntent，KD-11）
+      const sessionGet = /^\/v1\/checkout\/sessions\/([^/]+)$/.exec(path);
+      if (sessionGet !== null && req.method === 'GET') {
+        const found = sessionsById.get(sessionGet[1] ?? '');
+        if (found === undefined) {
+          return { status: 404, body: '{"error":{"message":"No such checkout.session"}}' };
+        }
+        return {
+          status: 200,
+          body: JSON.stringify({
+            ...found,
+            object: 'checkout.session',
+            payment_intent: `pi_for_${found.id}`,
+          }),
+        };
       }
 
       // dispute 事件的反查通道（适配器在 dispute 对象取不到 order_id 时调它）
@@ -117,10 +175,33 @@ export function createFakeStripeHttp(): FakeStripeHttp {
 
       if (path === '/v1/refunds' && req.method === 'POST') {
         // 退款必须带 payment_intent：漏了就是"退到哪儿去"没说清楚
-        if (!body.includes('payment_intent=')) {
+        const pi = new URLSearchParams(body).get('payment_intent');
+        if (pi === null) {
           return { status: 400, body: '{"error":{"message":"missing payment_intent"}}' };
         }
-        return { status: 200, body: JSON.stringify({ id: 're_test_0001', status: 'succeeded' }) };
+        // 只认 PaymentIntent（文件头 @why ②）：把会话号 cs_… 当 PI 传 = 真 Stripe 上"查无此 PI"
+        if (!pi.startsWith('pi_')) {
+          return {
+            status: 400,
+            body: JSON.stringify({
+              error: {
+                type: 'invalid_request_error',
+                code: 'resource_missing',
+                message: `No such payment_intent: '${pi}'`,
+              },
+            }),
+          };
+        }
+        const key = req.headers?.['idempotency-key'] ?? '';
+        const prior = key.length > 0 ? refunds.get(key) : undefined;
+        if (prior !== undefined) return { status: 200, body: JSON.stringify(prior) };
+        const refund = {
+          id: `re_test_${String(nextRefund).padStart(4, '0')}`,
+          status: 'succeeded',
+        };
+        nextRefund += 1;
+        if (key.length > 0) refunds.set(key, refund);
+        return { status: 200, body: JSON.stringify(refund) };
       }
 
       return { status: 404, body: '{"error":{"message":"unknown path"}}' };
