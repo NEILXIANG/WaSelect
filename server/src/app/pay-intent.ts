@@ -67,7 +67,8 @@ import {
   voidInitiatedPayment,
   type OrderPayRow,
 } from '../adapters/orders.js';
-import { recordPaymentIntent } from './payment-intent.js';
+import { countPayCreateFailures, recordPaymentIntent } from './payment-intent.js';
+import { ProviderRejectedError } from '../ports/payment.js';
 import { asOrderStatus } from '../domain/order.js';
 import { toMinor, toRateInt } from '@waselect/shared';
 
@@ -276,6 +277,13 @@ export async function createPayIntent(
   //     → Stripe 400 idempotency_error → 用户第二次点"复制链接"直接 500（mock 按键缓存所以测试全绿）。
   //  ② 新建意图的幂等键带**轮次**（该单已有几条 payments 行）：换通道 A→B→A 时旧 A 行已 cancelled，
   //     机构按同键复放同一 provider_ref → 撞 (provider, provider_ref) 唯一键 → 被误判成"已有在途支付"。
+  //  ③ 幂等键还要带**被拒次数**（B3 / AJ-199）：机构会把**失败结果**按幂等键缓存
+  //     （Stripe 官方口径：含 500，保留 ≥24 小时），而订单只活 30 分钟。
+  //     不带它 = 首次 5xx 之后这张单在整个生命周期内都建不出会话（事务回滚 → 轮次不变 → 同键）。
+  const round = reusing
+    ? (await countPayments(tx, order.id)) - 1
+    : await countPayments(tx, order.id);
+  const attempt = await countPayCreateFailures(tx, order.id, input.channel);
   const session: PaymentSession =
     reusing && existing.pay_url !== null && existing.provider_ref !== null
       ? {
@@ -290,12 +298,7 @@ export async function createPayIntent(
           currency: charge.currency,
           amountMinor: charge.amount,
           destCountry: order.dest_country,
-          idempotencyKey: intentIdempotencyKey(
-            order.id,
-            input.channel,
-            // 复用：该 initiated 行是第 n 行 → 当初建它时的轮次是 n-1；新建：轮次 = 已有行数
-            reusing ? (await countPayments(tx, order.id)) - 1 : await countPayments(tx, order.id),
-          ),
+          idempotencyKey: intentIdempotencyKey(order.id, input.channel, round, attempt),
           expiresAt: order.expires_at.toISOString(),
           shipping: shippingOf(order.address_snapshot),
         });
@@ -376,23 +379,66 @@ async function createSessionOr50001(
     return await provider.create(req);
   } catch (e) {
     if (e instanceof AppError || e instanceof CircuitOpenError) throw e;
+    /**
+     * 机构**明确拒绝**（拿到了非 2xx 的 HTTP 响应）与**结果未知**（超时 / 网络 / 预算耗尽）
+     * 在这里分道：前者要把"被拒了一次"交给调用方去记（换键），后者绝不能换键。
+     * @see ports/payment.ts 的 ProviderRejectedError（为什么必须由适配器标明）
+     */
+    const rejected = e instanceof ProviderRejectedError;
     deps.logger.error('pay_intent_create_failed', {
       order_id: req.orderId,
       channel: provider.channel,
       result: 'failed',
+      ctx: { definitive: rejected },
       err: e,
     });
-    throw new AppError(50001, { channel: provider.channel, reason: 'provider_create_failed' });
+    throw new AppError(50001, {
+      channel: provider.channel,
+      reason: rejected ? 'provider_create_rejected' : 'provider_create_failed',
+      // details **只进日志**（errors.ts @limitation 一），但路由靠它决定"要不要在事务外记一笔"
+      ...(rejected ? { payCreate: { orderId: req.orderId, channel: provider.channel } } : {}),
+    });
   }
 }
 
 /**
- * 意图幂等键：首轮 `pay-<order>-<channel>`（与既有会话兼容），之后带轮次 `-<n>`。
- * @why 同一订单同一通道的第二轮意图（A→B→A）必须是**新的**机构会话，否则机构复放旧 provider_ref 撞唯一键。
+ * 取出"机构**确认**拒绝建会话"这件事（非此类失败返回 undefined）。
+ *
+ * @why 路由必须在**事务外**记一笔失败计数（事务回滚会带走它），所以它需要从异常里
+ *      知道"是不是这一类失败"。用 details 携带而不是新增 AppError 子类，是为了守住
+ *      errors.ts 明写的取舍——"一个错误类 + 一个序列化函数"，不为每个业务各造子类。
+ * @limitation 判定只认 `details.payCreate` 这个我们自己写的形状：谁改了上面那处 reason
+ *             或字段名而没同步改这里，计数会静默停止（不报错、只是又变回 B3 的老毛病）。
+ *             `pay-intent-create-failure.db.test.ts` 用端到端链路钉住它，不靠读源码。
  */
-function intentIdempotencyKey(orderId: string, channel: string, round: number): string {
+export function payCreateRejectionOf(
+  err: unknown,
+): { orderId: string; channel: string } | undefined {
+  if (!(err instanceof AppError)) return undefined;
+  const p = (err.details as { payCreate?: { orderId?: unknown; channel?: unknown } } | undefined)
+    ?.payCreate;
+  if (typeof p?.orderId !== 'string' || p.orderId.length === 0) return undefined;
+  if (typeof p.channel !== 'string' || p.channel.length === 0) return undefined;
+  return { orderId: p.orderId, channel: p.channel };
+}
+
+/**
+ * 意图幂等键：首轮 `pay-<order>-<channel>`（与既有会话兼容），之后带轮次 `-<n>`；
+ * 被机构确认拒绝过 `attempt` 次再补 `-f<attempt>`（B3 / AJ-199）。
+ *
+ * @why 同一订单同一通道的第二轮意图（A→B→A）必须是**新的**机构会话，否则机构复放旧 provider_ref 撞唯一键。
+ * @why `-f<n>` 用独立后缀而不是并入轮次数字：轮次与被拒次数是**两个**成因，
+ *      合进一个数字会出现"轮次 1、拒 1"与"轮次 11、拒 0"撞键这种看不出来的错位。
+ */
+function intentIdempotencyKey(
+  orderId: string,
+  channel: string,
+  round: number,
+  attempt: number,
+): string {
   const base = `pay-${orderId}-${channel}`;
-  return round <= 0 ? base : `${base}-${round}`;
+  const withRound = round <= 0 ? base : `${base}-${round}`;
+  return attempt <= 0 ? withRound : `${withRound}-f${attempt}`;
 }
 
 /** 该单已登记过的 payments 行数（任何状态）——作为新意图幂等键的轮次。 */

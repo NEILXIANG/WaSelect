@@ -29,10 +29,12 @@ import type { IdentityCheck } from '../adapters/identity.js';
 import { scopeKey, type IdempotencyExecutor } from '../ports/idempotency.js';
 import {
   createPayIntent,
+  payCreateRejectionOf,
   redactPayToken,
   reissuePayLinkOnReplay,
   type PayIntentResult,
 } from './pay-intent.js';
+import { recordPayCreateFailure } from './payment-intent.js';
 import type { AutoConfirm } from './auto-confirm.js';
 
 export interface PayIntentRoutesDeps {
@@ -62,8 +64,9 @@ export function mountPayIntentRoutes(app: Express, deps: PayIntentRoutesDeps): v
     requireRole('user', deps.auth, { identity: deps.identity }),
     (req, res, next) => {
       void (async () => {
+        // ⚠️ `sub` 必须在 try **外**取：catch 里要靠它记"谁发起的"那笔失败（B3 / AJ-199）
+        const sub = req.auth?.sub;
         try {
-          const sub = req.auth?.sub;
           if (sub === undefined) throw new AppError(40101);
 
           const raw = req.params['id'];
@@ -151,6 +154,31 @@ export function mountPayIntentRoutes(app: Express, deps: PayIntentRoutesDeps): v
             : result.body;
           res.status(result.status).json(out);
         } catch (e) {
+          // B3 / AJ-199：机构**确认**拒绝建会话 —— 到这里业务事务已经整体回滚了，
+          // 失败计数必须**在事务外**补记（`order_events` 是 append-only，回滚不带走它）：
+          //   不记 → 下一次发起还是同一把幂等键 → 机构把缓存的那次失败原样回放
+          //   （Stripe 保留 ≥24 小时，而订单只活 30 分钟）→ 这张单终身付不了。
+          // ⚠️ 反过来，"结果未知"（超时 / 网络错误）**绝不能**记：会话可能已经建好，
+          //    换键就会建出第二个（与退款 KD-4 同一口径）。记与不记由核心抛出的错误类型决定。
+          const rejected = payCreateRejectionOf(e);
+          if (rejected !== undefined) {
+            try {
+              await recordPayCreateFailure(deps.db, {
+                orderId: rejected.orderId,
+                channel: rejected.channel,
+                actor: `user:${sub}`,
+                at: deps.clock.now(),
+              });
+            } catch (recordErr) {
+              // 记不进去**不能**吞掉原始错误（用户仍要看到 50001 去换支付方式），只能落日志
+              deps.logger.error('pay_create_failure_record_failed', {
+                order_id: rejected.orderId,
+                channel: rejected.channel,
+                result: 'failed',
+                err: recordErr,
+              });
+            }
+          }
           next(e);
         }
       })();

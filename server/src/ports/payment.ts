@@ -264,6 +264,31 @@ export interface RefundResult {
 /** 请求头袋（key **一律小写**，由调用方归一化；Express 的 `req.header()` 大小写不敏感）。 */
 export type HeaderBag = Readonly<Record<string, string | undefined>>;
 
+/**
+ * 机构**明确答复**"这次请求失败了"（拿到了 HTTP 响应且非 2xx），与"结果未知"相对。
+ *
+ * @why 这两类失败的处理方向**相反**，所以必须由抛出方（适配器）标明，不能让调用方猜：
+ *      - 明确拒绝：机构什么都没建 → 下一次发起**必须换幂等键**（B3 / AJ-199）。
+ *      - 结果未知（超时 / 连接中断 / 预算耗尽）：会话**可能已经建好** → 下一次发起
+ *        **必须沿用同一把键**去把它取回来，换键就会建出第二个会话（与退款 KD-4 同一口径）。
+ *      没有这个类型时，调用方只能"一律重试"，于是 B3 那种"机构把 5xx 按键缓存 ≥24h、
+ *      而订单只活 30 分钟"的场景会让这张单终身付不了。
+ * @why 放在 ports 而不是某个适配器：它是**所有**机构适配器对业务层的共同承诺，
+ *      业务核心（`app/pay-intent.ts`）只认这个类型，不认识 stripe / mock / 微信。
+ * @limitation 只表达"机构给了答复"，**不表达**这个失败是否可恢复（402 卡被拒与 500 上游故障
+ *              都是明确拒绝）——可恢复与否由调用方按 status 自己判断。
+ */
+export class ProviderRejectedError extends Error {
+  /** 机构返回的 HTTP 状态码。 */
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ProviderRejectedError';
+    this.status = status;
+  }
+}
+
 export interface PaymentProvider {
   /** 必须与注册表的 key 一致（注册表注册时校验）。 */
   readonly channel: string;

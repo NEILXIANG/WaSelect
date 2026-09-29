@@ -18,6 +18,7 @@ import type {
   PaymentProvider,
   PaymentRequest,
 } from '../../ports/payment.js';
+import { ProviderRejectedError } from '../../ports/payment.js';
 import { fixedClock } from '../../../../test/helpers/fixed-clock.js';
 import { systemIdGen } from '../ids.js';
 import { createFakeStripeHttp } from '../../../../test/helpers/fake-stripe-http.js';
@@ -226,6 +227,33 @@ describe('create（建 Checkout Session）', () => {
     //    写两次 failNext 会让第二次请求真的成功，于是"抛错"这条断言变成假的
     http.failNext(500, '{"error":{"message":"upstream down"}}');
     await expect(provider.create(REQ)).rejects.toThrow(/HTTP 500[\s\S]*sk-1/);
+  });
+
+  /**
+   * B3 / AJ-199：抛的必须是 `ProviderRejectedError`，不能是普通 Error。
+   * @why 业务核心靠这个类型分辨"机构给了确定答复"与"结果未知"——前者换幂等键、后者不换。
+   *      类型不对 = 换键逻辑永远走不到 = 这张单在机构故障恢复后仍然付不了（B3 的原始症状）。
+   */
+  it('上游 5xx → 抛 `ProviderRejectedError`（业务层靠这个类型决定换不换幂等键）', async () => {
+    const { http, provider } = build();
+    http.failNext(500, '{"error":{"message":"upstream down"}}');
+    await expect(provider.create(REQ)).rejects.toBeInstanceOf(ProviderRejectedError);
+  });
+
+  /**
+   * @why 替身现在会**按幂等键回放 5xx**（真 Stripe 保留 ≥24 小时）。
+   *      没有这条脾气时，"首次 5xx → 再次发起"在测试里会成功，在真 Stripe 上会一直失败到订单过期。
+   *      换一把键就能成功——这正是 B3 的修法；不换键必须仍然失败，否则替身没脾气、B3 会假绿。
+   */
+  it('同键重放 5xx（替身模拟机构缓存）；换键才建得出来', async () => {
+    const { http, provider } = build();
+    http.failNext(500, '{"error":{"message":"upstream down"}}');
+    await expect(provider.create(REQ)).rejects.toBeInstanceOf(ProviderRejectedError);
+    // 同键第二次：机构回放的是**缓存的那次失败**，不是"再试一次"
+    await expect(provider.create(REQ)).rejects.toBeInstanceOf(ProviderRejectedError);
+    // 换键（业务层的 -f1）：这才是 B3 修法能救回来的那一次
+    const s = await provider.create({ ...REQ, idempotencyKey: `${REQ.idempotencyKey}-f1` });
+    expect(s.providerRef.startsWith('cs_test_')).toBe(true);
   });
 
   it('响应缺 id/url → 抛（默认"响应一定合法"会让脏数据一路流到前端）', async () => {

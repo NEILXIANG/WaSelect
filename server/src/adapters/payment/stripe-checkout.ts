@@ -44,6 +44,8 @@ import type {
   RefundRequest,
   RefundResult,
 } from '../../ports/payment.js';
+// 值导入（不是 type）：B3 / AJ-199 —— 适配器要**抛**这个契约错误，业务层按类型分辨"是否换幂等键"
+import { ProviderRejectedError } from '../../ports/payment.js';
 
 export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
 /** 官方库默认容差 5 分钟；超过这个时间的报文即使签名正确也拒（防重放）。 */
@@ -455,8 +457,13 @@ export function createStripeCheckoutProvider(
         body: form.toString(),
       });
       if (res.status < 200 || res.status >= 300) {
+        // B3 / AJ-199：必须是 `ProviderRejectedError` 而不是普通 Error——
+        //   "机构给了确定答复"与"结果未知"在业务层是**相反**的处理（换键 vs 不换键）。
+        //   Stripe 会把失败结果按幂等键缓存（文档口径：含 500，保留 ≥24 小时），
+        //   而订单只活 30 分钟：不换键 = 这张单在整个生命周期内都建不出会话。
         // @security 只带状态与前 200 字符：上游错误体可能含 PII，且只进日志
-        throw new Error(
+        throw new ProviderRejectedError(
+          res.status,
           `stripe 建会话失败：HTTP ${res.status} ${res.body.slice(0, 200)}（order=${req.orderId}）`,
         );
       }

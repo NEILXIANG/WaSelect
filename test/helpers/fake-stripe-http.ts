@@ -81,6 +81,16 @@ export function createFakeStripeHttp(): FakeStripeHttp {
   const paymentIntents = new Map<string, Record<string, string>>();
   let nextId = 1;
   let forced: { status: number; body: string } | undefined;
+  /**
+   * `路径|幂等键` → 首次 **5xx** 响应。
+   * @why B3 / AJ-199：@measured(docs.stripe.com/api/idempotent_requests, 2026-09-29)
+   *      "results are saved … including 500 … for 24 hours"——同键后续请求拿回的是**同一个 500**，
+   *      不是"再试一次"。原替身的 `failNext` 只影响下一次，于是"首次 5xx → 再次发起"在测试里
+   *      会成功，在真 Stripe 上会一直失败到订单过期（30 分钟）之后。
+   * @limitation 只缓存 **5xx**：4xx（402 卡被拒 / 400 参数错）真 Stripe 的缓存口径文档没写明，
+   *              且被测代码对 4xx 也不靠"换键"来恢复——不造没实测过的脾气。
+   */
+  const failuresByKey = new Map<string, { status: number; body: string }>();
 
   const client: FakeStripeHttp = {
     calls,
@@ -100,9 +110,20 @@ export function createFakeStripeHttp(): FakeStripeHttp {
     },
     async send(req: HttpRequest): Promise<HttpResponse> {
       calls.push(req);
+      const path = new URL(req.url).pathname;
+      const idemKey = req.headers?.['idempotency-key'] ?? '';
+      // 同键的 5xx **先到先得**（见 failuresByKey 的 @why）：真 Stripe 会把它回放 ≥24 小时。
+      // 放在 `forced` 之前——"上次已经失败过"比"这次要造一个失败"更接近机构的真实状态。
+      if (req.method === 'POST' && idemKey.length > 0) {
+        const cachedFailure = failuresByKey.get(`${path}|${idemKey}`);
+        if (cachedFailure !== undefined) return { ...cachedFailure };
+      }
       if (forced !== undefined) {
         const f = forced;
         forced = undefined;
+        if (req.method === 'POST' && idemKey.length > 0 && f.status >= 500) {
+          failuresByKey.set(`${path}|${idemKey}`, f);
+        }
         return { status: f.status, body: f.body };
       }
       // 没带鉴权头就像真 Stripe 一样拒绝：否则"忘了带 key"这个缺陷永远测不出来
@@ -110,10 +131,8 @@ export function createFakeStripeHttp(): FakeStripeHttp {
       if (!auth.startsWith('Bearer ')) {
         return { status: 401, body: '{"error":{"message":"missing api key"}}' };
       }
-      const path = new URL(req.url).pathname;
       const body = req.body ?? '';
       // 同键异参 → 报错（文件头 @why ①）。GET 不带键，不进这条
-      const idemKey = req.headers?.['idempotency-key'] ?? '';
       if (req.method === 'POST' && idemKey.length > 0) {
         const slot = `${path}|${idemKey}`;
         const first = firstBodies.get(slot);

@@ -27,9 +27,11 @@ import type {
   PaymentRequest,
   PaymentSession,
 } from '../ports/payment.js';
+import { ProviderRejectedError } from '../ports/payment.js';
 import type { IdGen } from '../ports/ids.js';
 import { AppError } from '../errors.js';
 import { createPayIntent, type PayIntentDeps } from './pay-intent.js';
+import { recordPayCreateFailure } from './payment-intent.js';
 
 let db: Db;
 const CLOCK = fixedClock('2026-01-02T12:00:00.000Z');
@@ -456,5 +458,140 @@ describe('扣款币种解析（JPY 锚优先）', () => {
       );
       throw new Error('rollback-probe');
     }).catch((e: Error) => expect(e.message).toBe('rollback-probe'));
+  });
+});
+
+// ── B3 / AJ-199：被机构"确认拒绝"之后必须换幂等键 ────────────────────────────
+/**
+ * @why 这三条的**产物**（幂等键）只有假 Provider 看得见，所以断言钉在它收到的键上：
+ *      只断言"第二次成功"是不够的——键相同的话，真 Stripe 会回放缓存的那次失败，
+ *      而假 Provider 不会，于是"第二次成功"会假绿（这正是 B3 当年全绿的原因）。
+ */
+describe('建会话失败后的幂等键（B3 / AJ-199）', () => {
+  /** 会抛指定错误的 Provider，并把自己收到的幂等键记下来。 */
+  function recordingProvider(
+    channel: string,
+    seen: string[],
+    err: () => Error,
+    failTimes: number,
+  ): PaymentProvider {
+    let n = 0;
+    return {
+      ...fakeProvider(channel),
+      async create(req: PaymentRequest): Promise<PaymentSession> {
+        seen.push(req.idempotencyKey);
+        n += 1;
+        if (n <= failTimes) throw err();
+        return {
+          providerRef: `${channel}-${req.idempotencyKey}`,
+          entry: { mode: 'in_app', params: { via: channel } },
+        };
+      },
+    };
+  }
+
+  it('机构**确认**拒绝一次后，下一次发起的键带 -f1（否则机构回放缓存的失败）', async () => {
+    const sink = new MemorySink();
+    const seen: string[] = [];
+    const registry = fakeRegistry({
+      pa: recordingProvider('pa', seen, () => new ProviderRejectedError(500, 'upstream down'), 1),
+    });
+    await seedPayable('o-rej');
+
+    await withTransaction(db, async (tx) => {
+      await createPayIntent(tx, deps(registry, sink), {
+        orderId: 'o-rej',
+        userId: 'u-1',
+        channel: 'pa',
+      }).then(
+        () => expect.unreachable('机构 5xx 应 50001'),
+        (e) => expect(codeOf(e)).toBe(50001),
+      );
+    });
+    // 路由在事务外补记这一笔（真实链路见 pay-intent-create-failure.db.test.ts）
+    await recordPayCreateFailure(db, {
+      orderId: 'o-rej',
+      channel: 'pa',
+      actor: 'user:u-1',
+      at: CLOCK.now(),
+    });
+
+    await withTransaction(db, async (tx) => {
+      await createPayIntent(tx, deps(registry, sink), {
+        orderId: 'o-rej',
+        userId: 'u-1',
+        channel: 'pa',
+      });
+    });
+    expect(seen).toEqual(['pay-o-rej-pa', 'pay-o-rej-pa-f1']);
+  });
+
+  it('**结果未知**（超时/网络）不换键：会话可能已经建好，换键就会建出第二个', async () => {
+    const sink = new MemorySink();
+    const seen: string[] = [];
+    const registry = fakeRegistry({
+      pa: recordingProvider('pa', seen, () => new Error('ETIMEDOUT'), 1),
+    });
+    await seedPayable('o-unk');
+
+    await withTransaction(db, async (tx) => {
+      await createPayIntent(tx, deps(registry, sink), {
+        orderId: 'o-unk',
+        userId: 'u-1',
+        channel: 'pa',
+      }).then(
+        () => expect.unreachable('超时应 50001'),
+        (e) => expect(codeOf(e)).toBe(50001),
+      );
+    });
+    // ⚠️ 故意**不**记失败（真实路由也不会记）
+    await withTransaction(db, async (tx) => {
+      await createPayIntent(tx, deps(registry, sink), {
+        orderId: 'o-unk',
+        userId: 'u-1',
+        channel: 'pa',
+      });
+    });
+    expect(seen).toEqual(['pay-o-unk-pa', 'pay-o-unk-pa']);
+  });
+
+  it('拒两次 → -f2；且换通道不影响另一条通道的键', async () => {
+    const sink = new MemorySink();
+    const seen: string[] = [];
+    const registry = fakeRegistry({
+      pa: recordingProvider('pa', seen, () => new ProviderRejectedError(503, 'unavailable'), 99),
+      pb: recordingProvider('pb', seen, () => new ProviderRejectedError(503, 'unavailable'), 99),
+    });
+    await seedPayable('o-two');
+    for (let i = 0; i < 2; i += 1) {
+      await withTransaction(db, async (tx) => {
+        await createPayIntent(tx, deps(registry, sink), {
+          orderId: 'o-two',
+          userId: 'u-1',
+          channel: 'pa',
+        }).catch((e) => expect(codeOf(e)).toBe(50001));
+      });
+      await recordPayCreateFailure(db, {
+        orderId: 'o-two',
+        channel: 'pa',
+        actor: 'user:u-1',
+        at: CLOCK.now(),
+      });
+    }
+    await withTransaction(db, async (tx) => {
+      await createPayIntent(tx, deps(registry, sink), {
+        orderId: 'o-two',
+        userId: 'u-1',
+        channel: 'pa',
+      }).catch((e) => expect(codeOf(e)).toBe(50001));
+    });
+    await withTransaction(db, async (tx) => {
+      await createPayIntent(tx, deps(registry, sink), {
+        orderId: 'o-two',
+        userId: 'u-1',
+        channel: 'pb',
+      }).catch((e) => expect(codeOf(e)).toBe(50001));
+    });
+    expect(seen).toEqual(['pay-o-two-pa', 'pay-o-two-pa-f1', 'pay-o-two-pa-f2', 'pay-o-two-pb']);
   });
 });
