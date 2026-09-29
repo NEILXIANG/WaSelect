@@ -156,6 +156,13 @@ export async function tokenFor(
 export interface HttpResult {
   status: number;
   json: Record<string, unknown>;
+  /**
+   * 响应头（只读）。
+   * @why 有些被断言的行为**只存在于头里**而响应体看不出来——最典型的是 429 的
+   *      `retry-after`（锁还剩多久）。只回 status + json 时，"到底有没有带这个头"
+   *      这件事在测试里根本问不出口，于是它可能一直没带也没人知道。
+   */
+  headers: Readonly<Headers>;
 }
 
 /** 一次 JSON 请求（token / 幂等键可选）。响应体解析失败时给空对象，状态码照实返回。 */
@@ -175,7 +182,7 @@ export async function call(
     ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
   });
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  return { status: res.status, json };
+  return { status: res.status, json, headers: res.headers };
 }
 
 /** 标准建单请求体（厨刀×1 + 茶杯×2；地址默认 addr-1）。 */
@@ -220,7 +227,7 @@ export async function mockCallback(
     body,
   });
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  return { status: res.status, json };
+  return { status: res.status, json, headers: res.headers };
 }
 
 /**

@@ -1,17 +1,28 @@
 /**
- * 职责：管理员登录的**库侧**动作——读凭据、记失败（含锁定）、清失败、初始管理员 seed（O-11 / AJ-181）。
+ * 职责：管理员登录的**库侧**动作——读凭据、登录额度（失败计数与锁定）、初始管理员 seed（O-11 / AJ-181 / AJ-187）。
  *
  * @why 与 `identity.ts`（每个受保护请求的身份回源）分开：那条是热路径、带 60 秒缓存；
- *      这里是登录时的冷路径，要读口令哈希与锁定列——把它们塞进热路径的查询会让每个请求多搬一段哈希。
- * @why 锁定判定写在**一条 UPDATE** 里（库内原子读改写）：两次并发失败若由应用层"读 4 写 5"，
- *      会各自写 5 而漏锁；PG 的行锁让同一行的两条 UPDATE 串行执行，第二条读到的是第一条的结果。
- *      @measured(app/admin-auth-store.db.test.ts「并发」用例, 2026-09-29)：5 次并发失败 → 恰好 1 次返回锁定时刻。
+ *      这里是登录时的冷路径，要读口令哈希——把它塞进热路径的查询会让每个请求多搬一段哈希。
+ *
+ * @why **计数与锁落的键是 `sha256(lower(email))`，不是 users.id**（AJ-187 重写，替代 014 的两列）：
+ *      ① 锁必须挡在 bcrypt **之前**才真的封顶（旧实现先读锁、再花 ~100ms 比对、最后才计数，
+ *         并发 N 个请求会全部读到"未锁"、全部走完比对——"最多试 5 次"形同虚设）；
+ *      ② 不存在的邮箱在 users 里没有行，用 id 就无处计数，于是"第 6 次是 429 还是 401"
+ *         能问出这个邮箱是不是已注册账号（登录口当邮箱探测器用）。
+ *      键按邮箱哈希后两者都解决：**有没有这个人都按同一个键计数、同一把锁**。
+ * @why 扣额度是一条 `insert … on conflict do update … where 未锁定` 的原子语句：
+ *      应用层"先读计数再写回"在并发下会各自读到 4、各自写 5（第 6 次还能试）；
+ *      PG 对冲突行加行锁让同键的两条语句串行执行，第二条读到的是第一条的结果，
+ *      而 `where` 让已锁的行**不返回行**——"0 行"就是"已锁"的唯一判据，不需要先读再判。
  * @limitation 一：邮箱匹配按 `lower(email)`（迁移 003 的函数唯一索引 users_email_lower_key 保证唯一且走索引）。
  * @limitation 二：seed 只建号不改号——已有同邮箱账号（大小写不敏感）一律不动（见 ensureInitialAdmin 的 @why）。
+ * @limitation 三：`login_attempts` 只增不删，靠 daily 作业清过期行（app/login-attempts-cleanup.ts），
+ *      清理窗口 {@link LOGIN_ATTEMPT_RETENTION_HOURS}。它不负责清理，只提供删除函数。
  *
- * @see migrations/014_admin_login_lockout.sql；app/admin-auth-routes.ts；技术文档 v0.5 §5（aud=admin 12h）；D-38 ⑤
+ * @see migrations/015_login_attempts.sql（014 的两列已在此退役）；app/admin-auth-routes.ts；
+ *      app/login-attempts-cleanup.ts；技术文档 v0.5 §5（aud=admin 12h）；D-38 ⑤
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Db } from './db.js';
 
 /** 登录要用到的账号信息（**含口令哈希**：只在登录路由里流转，绝不进日志或响应）。 */
@@ -21,9 +32,39 @@ export interface AdminCredential {
   blocked: boolean;
   passwordHash: string | null;
   tokenVer: number;
-  failures: number;
-  lockedUntil: Date | null;
 }
+
+/**
+ * 登录额度键：`sha256(lower(trim(email)))` 的 hex。
+ * @why 不存邮箱明文：这张表会为**根本不存在的邮箱**建行（B14 要求它们也要计数也要锁），
+ *      存明文等于把"谁被探测过"落成一张表（约束七脱敏红线）。
+ * @why 无盐确定性哈希：必须能"同一个邮箱每次算出同一个键"才能查得到；
+ *      @tradeoff 因此挡不住"拿到库后枚举候选邮箱比对哈希"，但保护了更现实的那一种泄露
+ *      （库被拖走后不直接给出邮箱清单）。加盐就查不到键了，不可行。
+ */
+export function loginAttemptKey(email: string): string {
+  return createHash('sha256').update(email.trim().toLowerCase(), 'utf8').digest('hex');
+}
+
+/** 过期登录尝试的保留窗口（小时）：早于此刻且**已解锁**的行由 daily 作业清掉。 */
+export const LOGIN_ATTEMPT_RETENTION_HOURS = 24;
+
+export interface LoginAttemptPolicy {
+  maxFailures: number;
+  lockMinutes: number;
+}
+
+/**
+ * 扣一次登录尝试额度的结果（判别联合）。
+ * @why 用判别联合而不是 `{ locked: boolean; until: Date | null }`：后者允许
+ *      `{ locked: true, until: null }` 这种自相矛盾的形状，调用方每次都要判断到底信哪个字段。
+ */
+export type LoginAttemptClaim =
+  | { kind: 'locked'; lockedUntil: Date }
+  | { kind: 'claimed'; failedCount: number; lockedUntil: Date | null };
+
+/** 清零的结果：`absent`（这个键从没失败过，无需清）与 `locked`（清不动）必须分开。 */
+export type ClearLoginAttemptResult = 'cleared' | 'absent' | 'locked';
 
 export async function findAdminCredential(db: Db, email: string): Promise<AdminCredential | null> {
   const rows = await db<
@@ -33,11 +74,9 @@ export async function findAdminCredential(db: Db, email: string): Promise<AdminC
       blocked_at: Date | null;
       password_hash: string | null;
       token_ver: number;
-      failed_login_count: number;
-      login_locked_until: Date | null;
     }[]
   >`
-    select id, is_admin, blocked_at, password_hash, token_ver, failed_login_count, login_locked_until
+    select id, is_admin, blocked_at, password_hash, token_ver
       from users where lower(email) = lower(${email})
   `;
   const r = rows[0];
@@ -48,43 +87,111 @@ export async function findAdminCredential(db: Db, email: string): Promise<AdminC
     blocked: r.blocked_at !== null,
     passwordHash: r.password_hash,
     tokenVer: r.token_ver,
-    failures: r.failed_login_count,
-    lockedUntil: r.login_locked_until,
   };
 }
 
 /**
- * 记一次失败；达到 maxFailures 时锁到 `now + lockMinutes` 并把计数归零（下一轮从 0 数）。
- * @returns 本次触发锁定 → 锁到的时刻；否则 null。
- * @why 锁定时计数归零而不是继续累加：锁到期后给一个完整的新窗口（再错 max 次才再锁），
- *      而不是"到期后错一次就又锁"——后者对记错口令的真管理员过于严厉，对攻击者也没有多挡一次。
+ * **在口令比对之前**扣掉一次尝试额度；已锁定则不给额度（调用方据此直接 42901，不碰 bcrypt）。
+ *
+ * @why 时机是这里的全部意义：额度扣在 bcrypt 之前，"最多试 max 次"才是**硬封顶**；
+ *      扣在之后（旧实现）时，N 个并发请求都先读到"未锁"，于是全都跑完 100ms 的 bcrypt，
+ *      锁只在事后才生效——封顶的是"失败次数"而不是"能尝试的次数"。
+ * @why 达到 maxFailures 时**计数归零并置锁**（而不是继续累加）：锁到期后给一个完整的新窗口
+ *      （再错 max 次才再锁），而不是"到期后错一次就又锁"——后者对记错口令的真管理员过于严厉，
+ *      对攻击者也没有多挡一次。
+ * @why `where` 里的"未锁定"条件让已锁的行**不返回行**：0 行即已锁，不需要先 SELECT 再判
+ *      （先读后判正是旧实现被并发越过的根因）。
+ * @returns `kind:'locked'` 时**没有**扣额度（这一行没被改动）；`kind:'claimed'` 时已扣。
+ * @limitation 触发锁定的那一次**仍会返回 claimed**（这一次的口令照样要比对）——
+ *             否则"第 5 次输对了"也会被拒，那对真管理员是不可接受的；
+ *             锁定由下一次请求撞到 0 行来体现。
  */
-export async function recordLoginFailure(
+export async function claimLoginAttempt(
   db: Db,
-  userId: string,
+  keyHash: string,
   now: Date,
-  policy: { maxFailures: number; lockMinutes: number },
-): Promise<Date | null> {
-  const rows = await db<{ locked: Date | null }[]>`
-    update users set
-      failed_login_count = case when failed_login_count + 1 >= ${policy.maxFailures}
-                                then 0 else failed_login_count + 1 end,
-      login_locked_until = case when failed_login_count + 1 >= ${policy.maxFailures}
-                                then ${now}::timestamptz + make_interval(mins => ${policy.lockMinutes})
-                                else login_locked_until end
-     where id = ${userId}
-    returning case when failed_login_count = 0 and login_locked_until is not null
-                    and login_locked_until > ${now}::timestamptz
-                   then login_locked_until end as locked
+  policy: LoginAttemptPolicy,
+): Promise<LoginAttemptClaim> {
+  const rows = await db<{ failed_count: number; locked_until: Date | null }[]>`
+    insert into login_attempts as la
+      (key_hash, failed_count, locked_until, first_failed_at, last_failed_at)
+    values (${keyHash}, 1,
+            case when 1 >= ${policy.maxFailures}
+                 then ${now}::timestamptz + make_interval(mins => ${policy.lockMinutes}) end,
+            ${now}::timestamptz, ${now}::timestamptz)
+    on conflict (key_hash) do update set
+      failed_count = case when la.failed_count + 1 >= ${policy.maxFailures}
+                          then 0 else la.failed_count + 1 end,
+      locked_until = case
+                       when la.failed_count + 1 >= ${policy.maxFailures}
+                         then ${now}::timestamptz + make_interval(mins => ${policy.lockMinutes})
+                       -- 上一轮锁已到期：放行时顺手把它清掉，别留着一个"过期但看着像还在锁"的时刻。
+                       -- @measured(admin-auth-store.db.test.ts「锁没到期…」用例, 2026-09-29)：
+                       --   不清的话行会变成 failed_count=1 且 locked_until=过去时刻，
+                       --   查库的人/清理作业都会把它读成"锁着"，而它其实已经放行。
+                       when la.locked_until is not null and la.locked_until <= ${now}::timestamptz
+                         then null
+                       else la.locked_until
+                     end,
+      last_failed_at = ${now}::timestamptz
+     where la.locked_until is null or la.locked_until <= ${now}::timestamptz
+    returning failed_count, locked_until
   `;
-  return rows[0]?.locked ?? null;
+  const r = rows[0];
+  if (r === undefined) {
+    // 0 行 = 撞到了"未锁定"条件的反面（已锁、且还没到期）。此时行一定存在且锁已生效，
+    // 回读一次拿锁定时刻是为了响应头的 retry-after；这个值是稳定的（锁只会到期、不会延长）。
+    const [cur] = await db<{ locked_until: Date | null }[]>`
+      select locked_until from login_attempts where key_hash = ${keyHash}`;
+    return { kind: 'locked', lockedUntil: cur?.locked_until ?? now };
+  }
+  return { kind: 'claimed', failedCount: r.failed_count, lockedUntil: r.locked_until };
 }
 
-/** 登录成功：失败计数与锁一起清。 */
-export async function recordLoginSuccess(db: Db, userId: string): Promise<void> {
-  await db`
-    update users set failed_login_count = 0, login_locked_until = null where id = ${userId}
+/**
+ * 登录成功：把额度清零。
+ * @why 带"未锁定"条件且**区分 0 行的两种原因**：`absent` 是"这个键从没失败过"（正常，直接过），
+ *      `locked` 是"在我比对口令的这 100ms 里，另一个并发请求把锁打上了"（必须 42901）。
+ *      不区分就会把"竞态下已锁"当成"没锁过"放行——那正是 A1 要堵的洞的另一半。
+ * @limitation 口令对了但账号不是管理员 / 已封禁（40301）时**也要清**：
+ *             他证明了自己持有这个账号的口令，继续计数没有意义。
+ */
+export async function clearLoginAttempt(
+  db: Db,
+  keyHash: string,
+  now: Date,
+): Promise<ClearLoginAttemptResult> {
+  const rows = await db<{ key_hash: string }[]>`
+    update login_attempts set failed_count = 0, locked_until = null
+     where key_hash = ${keyHash}
+       and (locked_until is null or locked_until <= ${now}::timestamptz)
+    returning key_hash
   `;
+  if (rows.length > 0) return 'cleared';
+  const [cur] = await db<{ locked_until: Date | null }[]>`
+    select locked_until from login_attempts where key_hash = ${keyHash}`;
+  return cur === undefined ? 'absent' : 'locked';
+}
+
+/** 清理基准时刻：早于它的"已解锁"行可以删（F10：基准来自注入时钟，业务侧不自己取 now）。 */
+export function loginAttemptsCutoff(now: Date): Date {
+  return new Date(now.getTime() - LOGIN_ATTEMPT_RETENTION_HOURS * 3_600_000);
+}
+
+/**
+ * 删掉过期的登录尝试行。
+ * @why 只删**已解锁**的行（`locked_until is null` 或已到期）：还在锁里的行是**正在生效的安全状态**，
+ *      清掉它等于给人一条"连错 5 次再等一天就能重来"的捷径；留着它，锁的语义才完整。
+ * @returns 删除行数（0 是正常的，不代表失败）。
+ */
+export async function deleteStaleLoginAttempts(db: Db, cutoff: Date): Promise<number> {
+  const rows = await db<{ key_hash: string }[]>`
+    delete from login_attempts
+     where last_failed_at < ${cutoff}::timestamptz
+       and (locked_until is null or locked_until < ${cutoff}::timestamptz)
+    returning key_hash
+  `;
+  return rows.length;
 }
 
 /**

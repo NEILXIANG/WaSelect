@@ -11,6 +11,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from '../adapters/db.js';
+import { loginAttemptKey } from '../adapters/admin-auth.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { createLogger } from '../logger.js';
@@ -306,6 +307,36 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       expect(iDeliver).toBeGreaterThanOrEqual(0);
       expect(iDeliver).toBeLessThan(iComplete);
       expect(iComplete).toBeLessThan(iRecon);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  /**
+   * A1+B14 的收尾（AJ-187）：`login_attempts` 是一张**由攻击者决定行数**的表
+   * （不存在的邮箱被试探也会留一行），不清就是一条"某天磁盘告警但没人知道为什么"的伏笔。
+   * @why 钉的是"清了什么、留了什么"：**还在锁里的行必须留**——清掉它等于给人一条
+   *      "连错 5 次、等一天就能重来"的捷径，锁的语义会被清理作业悄悄抹掉。
+   */
+  it('每日作业含登录尝试清理（AJ-187）：过期且已解锁的删，还在锁里的留', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      const stale = loginAttemptKey('stale@example.com');
+      const locked = loginAttemptKey('locked@example.com');
+      await db`
+        insert into login_attempts (key_hash, failed_count, locked_until, first_failed_at, last_failed_at)
+        values (${stale}, 2, null, now() - interval '30 hours', now() - interval '30 hours'),
+               (${locked}, 0, now() + interval '10 minutes', now() - interval '30 hours',
+                now() - interval '30 hours')`;
+      const res = await trigger(srv.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      await waitForDailyHeartbeat();
+
+      const left = await db`select key_hash from login_attempts order by key_hash`;
+      expect(left.map((r) => String(r.key_hash))).toEqual([locked]);
+      const cleanup = srv.sink.find('login_attempts_cleanup');
+      expect(cleanup).toHaveLength(1);
+      expect(cleanup[0]?.['count']).toBe(1);
     } finally {
       await srv.close();
     }

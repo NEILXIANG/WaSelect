@@ -32,6 +32,7 @@ import { createSchedulerDeps } from './scheduler-start.js';
 import { runSchedulerOnce } from './scheduler.js';
 import { createDailyReconciliationJob, DAILY_JOB_ROW_NAME } from './daily-reconciliation.js';
 import { createAutoCompleteJob, createAutoDeliverJob } from './auto-fulfilment.js';
+import { createCleanupLoginAttemptsJob } from './login-attempts-cleanup.js';
 
 export const INTERNAL_JOBS_PREFIX = '/api/v1/internal/jobs';
 
@@ -81,11 +82,13 @@ export function mountInternalJobsRoutes(
             name: DAILY_JOB_ROW_NAME,
             lockKey: 'daily',
           }),
-          // 顺序即执行顺序：先把到期的单迁走（自动签收 → 自动完成，O-12 / AJ-182），对账看到的是迁移后的状态
+          // 顺序即执行顺序：先把到期的单迁走（自动签收 → 自动完成，O-12 / AJ-182），对账看到的是迁移后的状态；
+          // 登录尝试行的清理放最后——它只删"已解锁且过期"的行，不参与任何业务判定，放前面只会拖长锁的持有时间
           [
             createAutoDeliverJob({ afterDays: deps.config.AUTO_DELIVER_DAYS }),
             createAutoCompleteJob({ afterDays: deps.config.AUTO_COMPLETE_DAYS }),
             createDailyReconciliationJob(),
+            createCleanupLoginAttemptsJob(),
           ],
         ).catch((e: unknown) => {
           deps.logger.error('internal_job_crashed', {
