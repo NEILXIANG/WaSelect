@@ -50,6 +50,25 @@ export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
 export const STRIPE_TOLERANCE_SEC = 300;
 
 /**
+ * **本系统标记**：`create()` 时连同 `order_id` 一起写进 Session 与 PaymentIntent 的 metadata（B5 / AJ-198）。
+ *
+ * @why 同一个 Stripe 账户里**不一定只有本系统的付款**：运营用 Payment Link / Dashboard /
+ *      Invoice 收的款，其 `checkout.session.completed` 与 `payment_intent.succeeded`
+ *      也会打到同一个回调端点（端点订阅哪些事件由控制台决定），而它们**没有** `metadata.order_id`。
+ *      旧实现对这类事件一律抛错 → 500；Stripe 会按退避重发约 3 天，
+ *      **持续失败的端点会被停用**——届时真实订单的回调也一起收不到（钱收了、订单永远 pending_payment）。
+ * @why 为什么需要"有没有我们的标记"这一层，而不是继续按"取不到单号就 unknown"处理：
+ *      后者会把**我们自己漏写 metadata** 这种真缺陷也 quietly 变成 ignored。
+ *      有了标记，两种情形才分得开——
+ *        **没标记** = 账户里别人/别的渠道的付款 → 200 + ignored（**不**是我们的问题，不该报警级重试）
+ *        **有标记却没有 order_id** = 我们 create 写漏了 → **抛错**（自己的缺陷必须看得见）
+ * @limitation 它只覆盖"我们 `create()` 建出来的"付款；**历史数据**（加这个标记之前建的会话）
+ *      没有标记，那批事件会被当成"非本系统付款"而 ignored。
+ *      @why 可接受：MVP 未上线，没有历史数据；真有历史数据时，正确做法是让它们走对账而不是回调。
+ */
+export const STRIPE_SOURCE_TAG = 'waselect';
+
+/**
  * Stripe 会话寿命下限：会话创建后 **30 分钟**（三审 A3 / D-49）。
  *
  * @why Stripe 要求 `expires_at` 不早于会话创建后 30 分钟，更早会被 400 拒。
@@ -240,6 +259,16 @@ export function createStripeCheckoutProvider(
     }
   }
 
+  /**
+   * 这个对象是不是**本系统**建出来的（B5 / AJ-198）：看 `metadata.source === 'waselect'`。
+   *
+   * @see STRIPE_SOURCE_TAG 的 @why（为什么要这个标记、没有它会导致端点被停用）
+   */
+  function isOurs(obj: Record<string, unknown>): boolean {
+    const md = obj['metadata'] as Record<string, unknown> | undefined;
+    return md?.['source'] === STRIPE_SOURCE_TAG;
+  }
+
   /** 取订单 id：metadata.order_id（我们 create 时写进去的）→ client_reference_id。 */
   function orderIdOf(obj: Record<string, unknown>): string {
     const md = obj['metadata'] as Record<string, unknown> | undefined;
@@ -278,6 +307,11 @@ export function createStripeCheckoutProvider(
       );
     }
     const json = JSON.parse(res.body) as { metadata?: Record<string, unknown> };
+    // B5 / AJ-198：先判"是不是我们的付款"。拒付也可能来自账户里非本系统的收款
+    // （Payment Link 收的钱被拒付），那种 dispute 反查回来的 PI 上没有我们的标记——
+    // 对它抛错同样会把端点拖向停用。注意区分：**没标记 = 别人的钱**（ignored），
+    // **有标记却没有 order_id = 我们写漏了**（抛）。
+    if (json.metadata?.['source'] !== STRIPE_SOURCE_TAG) return '';
     const orderId = json.metadata?.['order_id'];
     if (typeof orderId !== 'string' || orderId.length === 0) {
       throw new Error(
@@ -371,6 +405,8 @@ export function createStripeCheckoutProvider(
         success_url: opts.successUrl,
         cancel_url: opts.cancelUrl,
         client_reference_id: req.orderId,
+        // B5 / AJ-198：本系统标记（区分"我们的付款"与"账户里别的渠道收的款"，见常量 @why）
+        'metadata[source]': STRIPE_SOURCE_TAG,
         'metadata[order_id]': req.orderId,
         'metadata[order_no]': req.orderNo,
         // ⚠️ 这一行是 payment_intent.* 与 charge.* 事件的 order_id **唯一来源**（体检 P1-7）：
@@ -378,6 +414,8 @@ export function createStripeCheckoutProvider(
         //    PaymentIntent 的 metadata 会复制到 Charge"（之后改 PI metadata 不影响已建 Charge），
         //    所以写进 payment_intent_data 后，payment_intent.succeeded 与 charge.refunded
         //        都能从 object.metadata 取到单号。缺了它，这批事件全进"取不到 order_id → 500"路径。
+        // 标记同样要写进 PI：`payment_intent.*` / `charge.*` 事件读的是这一份（B5 / AJ-198）
+        'payment_intent_data[metadata][source]': STRIPE_SOURCE_TAG,
         'payment_intent_data[metadata][order_id]': req.orderId,
         'line_items[0][quantity]': '1',
         'line_items[0][price_data][currency]': req.currency.toLowerCase(),
@@ -466,8 +504,31 @@ export function createStripeCheckoutProvider(
           //    `checkout.session.completed` 也收不到。与订单无关的事件按 unknown 收下（管线 200 +
           //    `ignored:unknown` 留痕）；只有"本该落账却取不到单号"与"拒付却链不回订单"才抛——
           //    前者是我们 create 漏写 metadata，后者是钱正在被拉回、必须有人看见（不能悄悄 ignored）。
+          // ⚠️ 2026-09-29 B5（AJ-198）**收窄**了上面这句：这一分支按**事件类型**判断，
+          //    挡不住"succeeded 类事件却是账户里非本系统收的款"（Payment Link / Dashboard 收款）——
+          //    它同样会走到抛错 → 500 → 端点被停用。那一条由下面的 `!isOurs` 分支兜住。
+          //    现在真正会抛的只有一种情形：**有我们的标记、却取不到 order_id**（自己写漏了）。
+          orderId = '';
+        } else if (!isOurs(obj) && obj['object'] !== 'dispute') {
+          // ⚠️ dispute **排除在外**：Stripe 不把 metadata 复制到 dispute 对象上，
+          //    所以 dispute 永远"没有标记"——对它不能用 `!isOurs` 判成非本系统，
+          //    否则"链不回订单的拒付"会被静默 ignored，而那正是钱正在被拉回、
+          //    必须有人看见的一类。dispute 的归属只由**反查 PI** 判定（上面那个分支）；
+          //    连 `payment_intent` 字段都没有的 dispute → 落到最后那个 throw。
+          // 🔴 B5 / AJ-198：**没有我们的标记 = 这个 Stripe 账户里非本系统收的款**
+          //    （Payment Link / Dashboard / Invoice 手工收款）。它们也会打到同一个端点，
+          //    而 `metadata.order_id` 理所当然没有。旧实现对它们一律 throw → 500
+          //    → Stripe 按退避重发约 3 天 → **持续失败的端点会被停用**，
+          //    届时真实订单的 `checkout.session.completed` 也一起收不到（钱收了、订单永远 pending_payment）。
+          //    这里按 unknown 收下：**200 + `ignored:unknown` 留痕**（管线给 warn 并写 webhook_events）。
+          // @limitation 它**不会**单独打一条 `stripe_foreign_event`：适配器没有 logger（`StripeProviderDeps`
+          //    刻意不含它），而 `ProviderEvent` 又明令不许再加字段（ports/payment.ts @limitation 二）。
+          //    代价是"非本系统付款"与"我们的 outcome 没注册"在日志里都叫 `ignored:unknown`，
+          //    要靠 `raw_type` 区分。**这是可接受的下一次改进点**，不是本次要堵的洞——
+          //    本次要堵的是 500（端点被停用），200 + 留痕已经彻底解决它。
           orderId = '';
         } else {
+          // 有我们的标记却没有 order_id = **自己 create 时写漏了**，必须看得见（不能 quietly ignored）
           throw firstError;
         }
       }

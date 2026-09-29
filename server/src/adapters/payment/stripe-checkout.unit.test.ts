@@ -34,6 +34,7 @@ import {
   createStripeCheckoutProvider,
   STRIPE_MIN_SESSION_TTL_SEC,
   STRIPE_SESSION_MARGIN_SEC,
+  STRIPE_SOURCE_TAG,
   STRIPE_SIGNATURE_HEADER as HEADER,
 } from './stripe-checkout.js';
 
@@ -267,7 +268,11 @@ describe('parseWebhook（事件映射与验签细节）', () => {
   it('事件类型 → 归一化结果（逐条对，UNKNOWN 不猜）', async () => {
     const { http, provider } = build();
     // dispute 事件的 order_id 来自反查 PaymentIntent（dispute 对象上没有 metadata）
-    http.givenPaymentIntent('pi_3P0000000000000000000000', { order_id: REQ.orderId });
+    // B5 / AJ-198：替身里的 PI 必须带上本系统标记，否则会被当成"账户里非本系统的付款"
+    http.givenPaymentIntent('pi_3P0000000000000000000000', {
+      order_id: REQ.orderId,
+      source: STRIPE_SOURCE_TAG,
+    });
     const expected: Array<[string, string]> = [
       [STRIPE_EVENT_TYPES.checkoutCompleted, 'succeeded'],
       [STRIPE_EVENT_TYPES.checkoutExpired, 'expired'],
@@ -291,7 +296,11 @@ describe('parseWebhook（事件映射与验签细节）', () => {
 
   it('🔴 拒付事件带**开案时刻**（取 Dispute 对象的 created，不是事件 envelope 的）', async () => {
     const { http, provider } = build();
-    http.givenPaymentIntent('pi_3P0000000000000000000000', { order_id: REQ.orderId });
+    // B5 / AJ-198：替身里的 PI 必须带上本系统标记，否则会被当成"账户里非本系统的付款"
+    http.givenPaymentIntent('pi_3P0000000000000000000000', {
+      order_id: REQ.orderId,
+      source: STRIPE_SOURCE_TAG,
+    });
     const p = signed(STRIPE_EVENT_TYPES.disputeCreated);
     const ev = await provider.parseWebhook(p.raw, p.headers);
     expect(ev.outcome).toBe('disputed');
@@ -309,7 +318,11 @@ describe('parseWebhook（事件映射与验签细节）', () => {
      *      而那正是运营要拿它决定"要不要继续追究"的依据。
      */
     const { http, provider } = build();
-    http.givenPaymentIntent('pi_3P0000000000000000000000', { order_id: REQ.orderId });
+    // B5 / AJ-198：替身里的 PI 必须带上本系统标记，否则会被当成"账户里非本系统的付款"
+    http.givenPaymentIntent('pi_3P0000000000000000000000', {
+      order_id: REQ.orderId,
+      source: STRIPE_SOURCE_TAG,
+    });
     for (const status of ['won', 'lost'] as const) {
       const p = signed(STRIPE_EVENT_TYPES.disputeClosed, { object: dispute({ status }) });
       const ev = await provider.parseWebhook(p.raw, p.headers);
@@ -320,7 +333,11 @@ describe('parseWebhook（事件映射与验签细节）', () => {
 
   it('开案事件同样带 disputeStatus（让落账方知道"这条拒付现在什么状态"）', async () => {
     const { http, provider } = build();
-    http.givenPaymentIntent('pi_3P0000000000000000000000', { order_id: REQ.orderId });
+    // B5 / AJ-198：替身里的 PI 必须带上本系统标记，否则会被当成"账户里非本系统的付款"
+    http.givenPaymentIntent('pi_3P0000000000000000000000', {
+      order_id: REQ.orderId,
+      source: STRIPE_SOURCE_TAG,
+    });
     const p = signed(STRIPE_EVENT_TYPES.disputeCreated);
     const ev = await provider.parseWebhook(p.raw, p.headers);
     expect(ev.disputeStatus).toBe('warning_needs_response');
@@ -543,13 +560,18 @@ describe('parseWebhook（事件映射与验签细节）', () => {
     }
   });
 
-  it('报文合法但整个 data 缺失 → 抛（拿不到单号就是没法处理，不能回 200 假装收到）', async () => {
+  it('报文合法但整个 data 缺失 → unknown + 空单号（B5 修正：抛 500 会把端点拖向停用）', async () => {
+    /**
+     * @why 旧断言是"抛"——那是 B5 要修的错误方向：一个我们根本无法归属的报文，
+     *      抛错只会让 Stripe 按退避重发数天。收下并记 `ignored:unknown`，
+     *      "有东西进来了但我们没处理"在 `webhook_events` 里看得见，比 500 有用。
+     */
     const { provider } = build();
     const body = JSON.stringify({ id: 'evt_1', type: 'checkout.session.completed' });
     const headers = { [HEADER]: signStripePayload(body, SECRET, NOW_SEC) } as HeaderBag;
-    await expect(provider.parseWebhook(Buffer.from(body, 'utf8'), headers)).rejects.toThrow(
-      /取不到 order_id/,
-    );
+    const ev = await provider.parseWebhook(Buffer.from(body, 'utf8'), headers);
+    expect(ev.outcome).toBe('unknown');
+    expect(ev.orderId).toBe('');
   });
 
   it.each(['balance.available', 'payout.paid', 'charge.refunded', 'payment_intent.canceled'])(
@@ -567,11 +589,32 @@ describe('parseWebhook（事件映射与验签细节）', () => {
     },
   );
 
-  it('取不到 order_id → 抛（这是**我们**的缺陷：create 时没写 metadata）', async () => {
+  it('B5 修正：完全没有我们的标记 → 按"非本系统的付款"收下（**不再**抛）', async () => {
+    /**
+     * @why 旧断言"取不到 order_id 就抛"**没有区分两种完全不同的现场**：
+     *      ① 账户里非本系统收的款（Payment Link / Dashboard / Invoice）——不是我们的钱，抛了就是 500；
+     *      ② 我们建的单却漏写了 metadata——那才是我们的缺陷。
+     *      有了 `metadata.source` 标记之后两者才分得开：没标记归①，有标记却没单号归②。
+     *      ⚠️ 这条改成"不抛"之后，**② 的兜底靠下一个用例 + create 侧"标记必须发出去"那条**
+     *      ——两边合起来才等价于旧的守护，缺任何一边就会出现"我们漏写 metadata 却静默丢单"。
+     */
     const { provider } = build();
-    // 造一条没有 metadata 的报文（模拟 create 时漏写）
     const body = JSON.stringify(
       stripeEvent('checkout.session.completed', objectForEvent('checkout.session.completed')),
+    );
+    const headers = { [STRIPE_SIGNATURE_HEADER]: signStripePayload(body, SECRET, NOW_SEC) };
+    const ev = await provider.parseWebhook(Buffer.from(body, 'utf8'), headers);
+    expect(ev.outcome).toBe('unknown');
+    expect(ev.orderId).toBe('');
+  });
+
+  it('有我们的标记却取不到 order_id → 抛（那才是**我们** create 写漏了，必须看得见）', async () => {
+    const { provider } = build();
+    const body = JSON.stringify(
+      stripeEvent('checkout.session.completed', {
+        ...objectForEvent('checkout.session.completed'),
+        metadata: { source: STRIPE_SOURCE_TAG }, // 是我们建的，但没有 order_id
+      }),
     );
     const headers = { [STRIPE_SIGNATURE_HEADER]: signStripePayload(body, SECRET, NOW_SEC) };
     await expect(provider.parseWebhook(Buffer.from(body, 'utf8'), headers)).rejects.toThrow(
@@ -598,7 +641,11 @@ describe('parseWebhook：dispute 事件的 order_id 反查（体检 P1-7）', ()
 
   it('dispute 对象上没有 metadata → 反查 payment_intent 取回 order_id', async () => {
     const { http, provider } = build();
-    http.givenPaymentIntent('pi_3P0000000000000000000000', { order_id: REQ.orderId });
+    // B5 / AJ-198：替身里的 PI 必须带上本系统标记，否则会被当成"账户里非本系统的付款"
+    http.givenPaymentIntent('pi_3P0000000000000000000000', {
+      order_id: REQ.orderId,
+      source: STRIPE_SOURCE_TAG,
+    });
     const p = signedDispute();
     const ev = await provider.parseWebhook(p.raw, p.headers);
     expect(ev.outcome).toBe('disputed');
@@ -621,9 +668,49 @@ describe('parseWebhook：dispute 事件的 order_id 反查（体检 P1-7）', ()
 
   it('反查到的 PI 上也没有 order_id → 抛（那才是**我们** create 时漏写的缺陷）', async () => {
     const { http, provider } = build();
-    http.givenPaymentIntent('pi_3P0000000000000000000000', {});
+    // 有我们的标记、却没有 order_id ⇒ **我们** create 写漏了，必须抛（B5 保留这条不放宽）
+    http.givenPaymentIntent('pi_3P0000000000000000000000', { source: STRIPE_SOURCE_TAG });
     const p = signedDispute();
     await expect(provider.parseWebhook(p.raw, p.headers)).rejects.toThrow(/上没有 order_id/);
+  });
+
+  it('🔴 B5：非本系统收的款（Payment Link / Dashboard 收款）的 completed → unknown + 空单号，不抛', async () => {
+    /**
+     * @why 旧实现：`checkout.session.completed` 若取不到 order_id 一律**抛** → 500。
+     *      而运营用 Payment Link / Dashboard / Invoice 收的款也会打到同一个端点，
+     *      它们理所当然没有我们的 metadata。Stripe 对持续失败的端点会**停用**——
+     *      届时真实订单的回调一起收不到（钱收了、订单永远 pending_payment）。
+     *      判据是 `metadata.source`：**没有标记 = 不是我们的钱**。
+     */
+    const { provider } = build();
+    const body = JSON.stringify(
+      stripeEvent(STRIPE_EVENT_TYPES.checkoutCompleted, {
+        ...objectForEvent(STRIPE_EVENT_TYPES.checkoutCompleted),
+        metadata: {}, // 没有 source、没有 order_id
+      }),
+    );
+    const headers = { [HEADER]: signStripePayload(body, SECRET, NOW_SEC) } as HeaderBag;
+    const ev = await provider.parseWebhook(Buffer.from(body, 'utf8'), headers);
+    expect(ev.outcome).toBe('unknown'); // 空单号一律 unknown ⇒ 管线 200 + ignored 留痕
+    expect(ev.orderId).toBe('');
+  });
+
+  it('🔴 B5：非本系统的拒付（PI 上没有我们的标记）→ unknown + 空单号，不抛', async () => {
+    const { http, provider } = build();
+    http.givenPaymentIntent('pi_foreign_000000000000000', { order_id: 'someone-elses-order' });
+    const p = signedDispute('pi_foreign_000000000000000');
+    const ev = await provider.parseWebhook(p.raw, p.headers);
+    expect(ev.outcome).toBe('unknown');
+    expect(ev.orderId).toBe('');
+  });
+
+  it('B5：create 把本系统标记写进 Session 与 PaymentIntent 的 metadata（判据的两端都要发）', async () => {
+    const { http, provider } = build();
+    await provider.create(REQ);
+    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    expect(form.get('metadata[source]')).toBe(STRIPE_SOURCE_TAG);
+    // ⚠️ PI 那份才是 payment_intent.* / charge.* 事件的判据来源，漏了它那批事件全部变成"非本系统"
+    expect(form.get('payment_intent_data[metadata][source]')).toBe(STRIPE_SOURCE_TAG);
   });
 
   it('dispute 对象连 payment_intent 字段都没有 → 抛原始"取不到 order_id"（不编不猜）', async () => {

@@ -150,9 +150,17 @@ export function createFakeStripeHttp(): FakeStripeHttp {
         // 与真 Stripe 同口径：Session 会带一个 PaymentIntent，
         // 其 metadata 来自表单的 payment_intent_data[metadata][*]
         const form = new URLSearchParams(body);
-        const orderId = form.get('payment_intent_data[metadata][order_id]');
-        if (orderId !== null) {
-          paymentIntents.set(`pi_for_${id}`, { order_id: orderId });
+        // ⚠️ **整段抓取**而不是只抓 `order_id`：真 Stripe 会把 PI 的 metadata 全量复制过去，
+        //    只抓一个键的话，新加的键（如 B5 的 `source`）在替身里永远不存在——
+        //    于是"反查 PI"这条链在测试里拿到的形状与生产不一致，
+        //    表现为"生产多一个键、测试少一个键"这种最难查的分叉。
+        const meta: Record<string, string> = {};
+        for (const [k, v] of form) {
+          const m = /^payment_intent_data\[metadata\]\[([^\]]+)\]$/.exec(k);
+          if (m !== null) meta[m[1] ?? ''] = v;
+        }
+        if (Object.keys(meta).length > 0) {
+          paymentIntents.set(`pi_for_${id}`, meta);
         }
         return { status: 200, body: JSON.stringify(session) };
       }

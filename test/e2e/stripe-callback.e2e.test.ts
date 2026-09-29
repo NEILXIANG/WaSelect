@@ -16,7 +16,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createHmac } from 'node:crypto';
 import type { Db } from '../../server/src/adapters/db.js';
 import { PAY_CALLBACK_PREFIX } from '../../server/src/app/pay-routes.js';
-import { STRIPE_SIGNATURE_HEADER } from '../../server/src/adapters/payment/stripe-checkout.js';
+import {
+  STRIPE_SIGNATURE_HEADER,
+  STRIPE_SOURCE_TAG,
+} from '../../server/src/adapters/payment/stripe-checkout.js';
 import { recordPaymentIntent } from '../../server/src/app/payment-intent.js';
 import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
 import { createFakeStripeHttp } from '../helpers/fake-stripe-http.js';
@@ -223,7 +226,11 @@ describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', ()
   it('charge.dispute.created → 反查 PaymentIntent 拿到 order_id → 登记 ignored:disputed（P1-7）', async () => {
     const orderId = await seedOrder('o-stripe-dispute');
     // dispute 对象上没有我们的 metadata（Stripe 不复制），唯一线索是 payment_intent
-    fakeStripe.givenPaymentIntent('pi_e2e_dispute', { order_id: orderId });
+    // B5 / AJ-198：带上本系统标记，否则会被判成"账户里非本系统收的款"而不再链回订单
+    fakeStripe.givenPaymentIntent('pi_e2e_dispute', {
+      order_id: orderId,
+      source: STRIPE_SOURCE_TAG,
+    });
     const callsBefore = fakeStripe.calls.length;
     const raw = JSON.stringify({
       id: 'evt_e2e_dispute',
