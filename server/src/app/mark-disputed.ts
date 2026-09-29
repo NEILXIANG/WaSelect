@@ -44,6 +44,7 @@
 import type { Db } from '../adapters/db.js';
 import { AppError } from '../errors.js';
 import type { EventBus } from '../ports/events.js';
+import type { Logger } from '../logger.js';
 import { withUnitOfWork } from './unit-of-work.js';
 
 /**
@@ -55,8 +56,13 @@ export interface DisputeSettlement {
   channel: string;
   /** 机构侧拒付单号（写入 `payments.dispute_id`）。 */
   disputeId: string;
-  /** 机构报的争议金额与币种（与 `payments.charge_*` 核对）。 */
+  /**
+   * 机构报的争议金额（**照它落库**，A4 / AJ-189）。
+   * @why 不要求它等于 `payments.charge_amount`：机构官方口径就是"可能不同"
+   *      （汇率波动 / 部分争议）。不符时记 warn `dispute_amount_differs` 但照常落库。
+   */
   amountMinor: number | undefined;
+  /** 机构报的币种；与 `payments.charge_currency` 不同**仍然拒绝**（币种不同无法比较）。 */
   currency: string | undefined;
   /** 开案时刻（unix 毫秒，来自机构报文）。undefined = 机构没给 → 拒绝落库。 */
   openedAtMs: number | undefined;
@@ -71,9 +77,13 @@ export interface DisputeSettlement {
  * @why 这三个词**必须**进管线的 error 级词表（pay-callback.ts 的 MISMATCH_REASONS）：
  *      不进的话它们会走普通过期冲突那条路——**warn 级 + 2xx**，机构不再重发，
  *      于是"拒付没落库"这件事既不重试也没有 error 告警，举证窗口白白流失。
- * @limitation `channel_mismatch` / `currency_mismatch` / `amount_mismatch` 三个词**复用**
- *              mark-paid 的（语义相同、且已在管线词表里），这里不重复声明——
+ * @limitation `channel_mismatch` / `currency_mismatch` 两个词**复用** mark-paid 的
+ *              （语义相同、且已在管线词表里），这里不重复声明——
  *              重复声明就会被 `check:contract` 之类的比对当成两个不同的词。
+ *              ⚠️ `amount_mismatch` 已于 AJ-189 **从拒付侧移除**（只留在付款落账侧）：
+ *              机构的 `Dispute.amount` 官方口径就是"通常等于扣款额，但可能不同"，
+ *              把它当错误会让整条拒付消失（`has_dispute` 不置位 → 退款闸门照开）。
+ *              两处语义**并不相同**，所以现在它们恰好各归其位。
  * @limitation 词长受 `webhook_events.result` 的 VARCHAR(32) 约束（9 个字符的前缀 `mismatch:`）：
  *              新增词必须 ≤ 23 字符，否则 `resultValue` 会截断、对账检索不到
  *              （`different_dispute_already_open` 就因超长而改用 `dispute_id_conflict`）。
@@ -203,6 +213,7 @@ export async function markDisputeClosed(
 export async function markOrderDisputed(
   db: Db,
   events: EventBus,
+  logger: Logger,
   orderId: string,
   d: DisputeSettlement,
 ): Promise<void> {
@@ -248,11 +259,35 @@ export async function markOrderDisputed(
         ctx: { expected: p.charge_currency, got: d.currency },
       });
     }
-    if (Number(p.charge_amount) !== d.amountMinor) {
-      throw new AppError(40902, {
+    /**
+     * 金额：**按机构报的落库**，不符**不拒**（A4，AJ-189）。
+     *
+     * @why 机构（Stripe）官方口径：`Dispute.amount` 通常等于扣款额，但**可能不同**
+     *      ——常见原因是汇率波动，或只对订单的一部分发起争议（部分退款后再被拒付）。
+     *      旧实现把它当错误拒绝落库，后果是这条拒付**根本进不了系统**：
+     *      `orders.has_dispute` 不会置位 → 退款闸门与发货闸门照开 →
+     *      钱已经被机构扣回去、我们还在给买家退款 = 钱货两空，且全程无报错。
+     * @why 接受它只是"记的金额与扣款额不同"（数字差异、可查、可改），
+     *      拒绝它是"整条拒付消失"（行为缺失、无人知晓）——两种错误的方向严重不对等，
+     *      按本项目既定的拍板判据（两种错误方向不同时选保守方向），必须选"接受"。
+     * @why 差异必须**留痕**（warn 级）：这是财务口径差异，人不看见就等于没发生。
+     *      落 `payments.dispute_amount` 的是**机构说的数**——对账要以机构口径为准，
+     *      而不是拿我们的扣款额去"纠正"它。
+     * @limitation 不自动发起"差额退款"或改订单金额：部分争议怎么处置是业务裁决，
+     *              由人在风控页看到这条 warn 后决定（ADR-29：不替人做业务判断）。
+     */
+    const chargeAmount = Number(p.charge_amount);
+    if (chargeAmount !== d.amountMinor) {
+      logger.warn('dispute_amount_differs', {
+        result: 'accepted',
         order_id: orderId,
-        reason: 'amount_mismatch',
-        ctx: { expected: Number(p.charge_amount), got: d.amountMinor },
+        ctx: {
+          dispute_id: d.disputeId,
+          charge_amount: chargeAmount,
+          dispute_amount: d.amountMinor,
+          diff: d.amountMinor - chargeAmount,
+          currency: d.currency,
+        },
       });
     }
 

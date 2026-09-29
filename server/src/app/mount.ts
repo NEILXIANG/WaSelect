@@ -155,7 +155,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
        */
       disputed: {
         apply: async (e, channel) =>
-          markOrderDisputed(db, events, e.orderId, {
+          markOrderDisputed(db, events, logger, e.orderId, {
             channel,
             disputeId: e.providerRef,
             amountMinor: e.amountMinor,

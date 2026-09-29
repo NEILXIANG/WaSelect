@@ -73,7 +73,7 @@ const OPENED_MS = 1_690_000_000_000;
 /** 同一个时刻的 ISO 字符串（写死而不是 `new Date(ms)` 转：测试文件同样受 F10 约束）。 */
 const OPENED_ISO = '2023-07-22T04:26:40.000Z';
 
-function dispute(over: Partial<Parameters<typeof markOrderDisputed>[3]> = {}) {
+function dispute(over: Partial<Parameters<typeof markOrderDisputed>[4]> = {}) {
   return {
     channel: 'stripe',
     disputeId: 'dp_1',
@@ -108,7 +108,7 @@ async function events(orderId: string): Promise<string[]> {
 describe('markOrderDisputed：happy path', () => {
   it('落四列 + orders.has_dispute + 一条 dispute_opened 事件', async () => {
     await seedPaid('o-1');
-    await markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute());
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
 
     const p = await paymentRow('o-1');
     expect(p['dispute_id']).toBe('dp_1');
@@ -127,13 +127,13 @@ describe('markOrderDisputed：happy path', () => {
 
   it('🔴 不迁移订单状态：货态仍是 paid（has_dispute 是与货态正交的资金标记）', async () => {
     await seedPaid('o-1');
-    await markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute());
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
     expect((await orderRow('o-1'))['status']).toBe('paid');
   });
 
   it('换一个读取方：风控列表能看见这条拒付（§2 第 21 条，不自证）', async () => {
     await seedPaid('o-1');
-    await markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute());
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
     const rows = await createRiskAdminRepo(db).listDisputes();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.disputeId).toBe('dp_1');
@@ -157,7 +157,7 @@ describe('markOrderDisputed：happy path', () => {
     bus.subscribe('order.dispute_opened', (e) => {
       ats.push(e.at);
     });
-    await markOrderDisputed(db, bus, 'o-1', dispute());
+    await markOrderDisputed(db, bus, SILENT, 'o-1', dispute());
     expect(ats).toEqual([OPENED_ISO]);
   });
 });
@@ -165,10 +165,10 @@ describe('markOrderDisputed：happy path', () => {
 describe('markOrderDisputed：幂等（机构会重发 charge.dispute.created）', () => {
   it('同一 dispute_id 重放 → 不重复写事件、不刷新 opened_at', async () => {
     await seedPaid('o-1');
-    await markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute());
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
     const first = await paymentRow('o-1');
 
-    await markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute());
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
     const second = await paymentRow('o-1');
 
     expect(second['dispute_opened_at']).toEqual(first['dispute_opened_at']);
@@ -184,18 +184,18 @@ describe('markOrderDisputed：幂等（机构会重发 charge.dispute.created）
      *      而实际上机构那边早就结案了。这种错误没有任何一方报错。
      */
     await seedPaid('o-1');
-    await markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute());
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
     await db`update payments set dispute_status = 'won' where order_id = 'o-1'`;
 
-    await markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute());
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
     expect((await paymentRow('o-1'))['dispute_status']).toBe('won');
   });
 
   it('不同的 dispute_id 到达 → 40902 dispute_id_conflict（不静默覆盖）', async () => {
     await seedPaid('o-1');
-    await markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute());
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
     await expect(
-      markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute({ disputeId: 'dp_2' })),
+      markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute({ disputeId: 'dp_2' })),
     ).rejects.toMatchObject({ code: 40902 });
     // 原拒付不被覆盖
     expect((await paymentRow('o-1'))['dispute_id']).toBe('dp_1');
@@ -219,7 +219,7 @@ describe('markOrderDisputed：接线（经回调管线，不是只测函数）',
         appliers: {
           disputed: {
             apply: async (e: ProviderEvent, channel: string) =>
-              markOrderDisputed(db, createEventBus(SILENT), e.orderId, {
+              markOrderDisputed(db, createEventBus(SILENT), SILENT, e.orderId, {
                 channel,
                 disputeId: e.providerRef,
                 amountMinor: e.amountMinor,
@@ -437,7 +437,7 @@ describe('markDisputeClosed：结案（U-F4）', () => {
 describe('markOrderDisputed：拒绝路径（每一条都要能进对账）', () => {
   it('订单不存在 → 40400（由管线按宽限期分层，不是在这里吞掉）', async () => {
     await expect(
-      markOrderDisputed(db, createEventBus(SILENT), 'nope', dispute()),
+      markOrderDisputed(db, createEventBus(SILENT), SILENT, 'nope', dispute()),
     ).rejects.toMatchObject({ code: 40400 });
   });
 
@@ -445,7 +445,7 @@ describe('markOrderDisputed：拒绝路径（每一条都要能进对账）', ()
     await seedPaid('o-1');
     await db`update payments set status = 'initiated' where order_id = 'o-1'`;
     await expect(
-      markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute()),
+      markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute()),
     ).rejects.toMatchObject({ code: 40902 });
     // 且什么都没写
     expect((await orderRow('o-1'))['has_dispute']).toBe(false);
@@ -454,21 +454,56 @@ describe('markOrderDisputed：拒绝路径（每一条都要能进对账）', ()
   it('通道不符 → 40902 channel_mismatch（持别家密钥不能给我方订单打拒付标记）', async () => {
     await seedPaid('o-1');
     await expect(
-      markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute({ channel: 'wechat' })),
+      markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute({ channel: 'wechat' })),
     ).rejects.toMatchObject({ code: 40902 });
   });
 
-  it('金额不符 → 40902 amount_mismatch', async () => {
+  /**
+   * A4（AJ-189）：金额不符**照常落库**，落的是**机构报的数**，并留一条 warn。
+   *
+   * @why 旧实现拒绝落库的后果不是"多一条错误日志"，而是**这条拒付消失**：
+   *      `has_dispute` 不置位 → 退款/发货闸门照开 → 钱被扣回去了我们还在退款。
+   *      所以这里钉的是"闸门真的关上了"（风控列表读得到 + has_dispute=true），
+   *      而不只是"没抛错"。
+   */
+  it('A4：金额不符（部分争议 / 汇率波动）→ 照常落库，落机构报的金额 + warn 留痕', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'test', destination: sink });
     await seedPaid('o-1', { amount: 1000 });
+    await markOrderDisputed(
+      db,
+      createEventBus(SILENT),
+      logger,
+      'o-1',
+      dispute({ amountMinor: 700 }),
+    );
+    // 落的是机构说的 700，不是我们的扣款额 1000
+    expect((await paymentRow('o-1'))['dispute_amount']).toBe(700);
+    // 闸门必须关上：这才是"拒付真的进了系统"的判据
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+    const disputes = await createRiskAdminRepo(db).listDisputes();
+    expect(disputes.map((r) => r.disputeId)).toContain('dp_1');
+    const warns = sink.find('dispute_amount_differs');
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.['ctx']).toMatchObject({
+      charge_amount: 1000,
+      dispute_amount: 700,
+      diff: -300,
+    });
+  });
+
+  it('金额不符但已退款的支付行 → 仍走 no_succeeded_payment（不因为有争议就放宽前置）', async () => {
+    await seedPaid('o-1', { amount: 1000 });
+    await db`update payments set status = 'refunded' where order_id = 'o-1'`;
     await expect(
-      markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute({ amountMinor: 10 })),
+      markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute({ amountMinor: 700 })),
     ).rejects.toMatchObject({ code: 40902 });
   });
 
   it('币种不符 → 40902 currency_mismatch', async () => {
     await seedPaid('o-1', { currency: 'USD' });
     await expect(
-      markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute({ currency: 'JPY' })),
+      markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute({ currency: 'JPY' })),
     ).rejects.toMatchObject({ code: 40902 });
   });
 
@@ -480,7 +515,13 @@ describe('markOrderDisputed：拒绝路径（每一条都要能进对账）', ()
      */
     await seedPaid('o-1');
     await expect(
-      markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute({ openedAtMs: undefined })),
+      markOrderDisputed(
+        db,
+        createEventBus(SILENT),
+        SILENT,
+        'o-1',
+        dispute({ openedAtMs: undefined }),
+      ),
     ).rejects.toMatchObject({ code: 40902 });
     expect((await paymentRow('o-1'))['dispute_id']).toBeNull();
     expect(await events('o-1')).toEqual([]);
@@ -489,10 +530,22 @@ describe('markOrderDisputed：拒绝路径（每一条都要能进对账）', ()
   it('金额或币种缺失 → 同样 dispute_unverifiable（不跳过核对）', async () => {
     await seedPaid('o-1');
     await expect(
-      markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute({ amountMinor: undefined })),
+      markOrderDisputed(
+        db,
+        createEventBus(SILENT),
+        SILENT,
+        'o-1',
+        dispute({ amountMinor: undefined }),
+      ),
     ).rejects.toMatchObject({ code: 40902 });
     await expect(
-      markOrderDisputed(db, createEventBus(SILENT), 'o-1', dispute({ currency: undefined })),
+      markOrderDisputed(
+        db,
+        createEventBus(SILENT),
+        SILENT,
+        'o-1',
+        dispute({ currency: undefined }),
+      ),
     ).rejects.toMatchObject({ code: 40902 });
   });
 
@@ -501,6 +554,7 @@ describe('markOrderDisputed：拒绝路径（每一条都要能进对账）', ()
     const err = await markOrderDisputed(
       db,
       createEventBus(SILENT),
+      SILENT,
       'o-1',
       dispute({ openedAtMs: undefined }),
     ).catch((e: unknown) => e);
