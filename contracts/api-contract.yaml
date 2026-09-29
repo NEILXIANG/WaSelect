@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.12
+  version: 0.6.13
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -161,6 +161,12 @@ info:
       `order_events` 又是 append-only，理由改不了删不掉 ⇒ 超长的理由会把订单**永久**钉在 refunding。
       服务端在入口即拒（`40001` + reason `refund_reason_too_long`），订单不进 refunding；
       适配器对存量超长理由做**确定性**截断兜底（重试之间必须截出同一段，否则同键异参）。
+    0.6.13（B1 / AJ-193）：拒付结案结果**从两种变三种**——`Dispute.dispute_status` 枚举增 `withdrawn`
+      （机构撤回 / 未进入正式拒付：`warning_closed`、`prevented`）。
+      @why 查询函（inquiry）以 `warning_needs_response` 开案照样置 `has_dispute=true`，
+      而以 `warning_closed` 结案时旧实现抛 `dispute_result_unknown` ⇒ `has_dispute` 永远是 true
+      ⇒ 发货 40909 / 退款 40907 永久生效，而全仓只有 `markDisputeClosed` 会写回 false。
+      `has_dispute` 的复位规则因此改为：**只有 lost 保持 true**，won 与 withdrawn 都复位。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -499,6 +505,6 @@ components:
     PaymentIntent: {type: object, properties: {channel: {type: string, description: '通道 key（同 POST /orders/{id}/pay：任意字符串，见 x-payment-channels）'}, charge: {type: object, properties: {currency: {type: string, enum: [JPY, USD]}, amount: {type: integer}}}, payload: {type: object, additionalProperties: true, description: 'wechat: wx.requestPayment 五参数；stripe: {pay_url, expires_at}（D-49 短链）；mock: {auto, orderId, amountJpy, currency}——auto 为布尔：仅审核模式（服务端会自动确认、响应返回时订单已 paid）为 true，否则 false（0.6.11 / AJ-179；0.5.6 起的 auto:true 恒真已废）'}, expires_at: {type: string, format: date-time}}}
     BannerInput: {type: object, required: [image_key], properties: {image_key: {type: string}, link_type: {type: string, enum: [none, product, category], default: none}, link_id: {type: string, description: 'link_type ≠ none 时必填（缺 → 40001 link_id_required）'}, sort: {type: integer, default: 0, minimum: 0}, active: {type: boolean, default: true}, starts_at: {type: string, format: date-time}, ends_at: {type: string, format: date-time}}}
     Banner: {allOf: [{$ref: '#/components/schemas/BannerInput'}, {type: object, properties: {id: {type: string}, image: {type: string, description: 'img.<domain> 完整 URL'}}}]}
-    Dispute: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, payment_id: {type: string}, dispute_id: {type: string}, dispute_status: {type: string, enum: [open, won, lost]}, dispute_amount: {type: integer}, charge_currency: {type: string}, opened_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time}}}
+    Dispute: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, payment_id: {type: string}, dispute_id: {type: string}, dispute_status: {type: string, enum: [open, won, lost, withdrawn], description: 'withdrawn（0.6.13 / B1 AJ-193）= 机构撤回、未进入正式拒付（查询函 warning_closed / Radar prevented）：解除 has_dispute 限制、不计输赢。lost 是唯一保持限制的结案结果'}, dispute_amount: {type: integer}, charge_currency: {type: string}, opened_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time}}}
     FxRate: {type: object, properties: {quote: {type: string}, rate: {type: number}, raw_rate: {type: number}, buffer: {type: number}, effective_from: {type: string, format: date-time}}}
     ShippingRate: {type: object, required: [carrier, max_weight_g, price_jpy], properties: {carrier: {type: string}, max_weight_g: {type: integer}, price_jpy: {type: integer}, active: {type: boolean, default: true}}}

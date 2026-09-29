@@ -71,13 +71,24 @@ describe('parseDisputeStatus', () => {
   });
 });
 
-describe('parseDisputeResult（结案结果：机构 status → won / lost）', () => {
+describe('parseDisputeResult（结案结果：机构 status → won / lost / withdrawn）', () => {
   it('won / lost 各自带出', () => {
     expect(parseDisputeResult('won')).toBe('won');
     expect(parseDisputeResult('lost')).toBe('lost');
   });
 
-  it('🔴 未结案的状态（needs_response / under_review / warning_*）→ undefined，不是 lost', () => {
+  /**
+   * B1 / AJ-193：这两个是"**结案但没输赢**"。
+   * @why 旧实现在这里返回 undefined，`mount.ts` 随即抛 `dispute_result_unknown`——
+   *      于是查询函（inquiry）关闭后 `has_dispute` 永远是 true，订单被永久锁死。
+   *      ⚠️ 这条用例不只是"多认两个词"：它是整条 B1 的入口，缺了它后面全绿也白搭。
+   */
+  it('🔴 warning_closed / prevented → withdrawn（结案但**不计输赢**，不是 undefined）', () => {
+    expect(parseDisputeResult('warning_closed')).toBe('withdrawn');
+    expect(parseDisputeResult('prevented')).toBe('withdrawn');
+  });
+
+  it('🔴 未结案的状态（needs_response / under_review / warning_* 的在途两态）→ undefined，不是 lost', () => {
     /**
      * @why 把"还在答辩中"认成 lost 的后果最严重：拒付其实还有救，
      *      我方却按"已经输了"结案——风控页不再标红、退款闸门解锁，

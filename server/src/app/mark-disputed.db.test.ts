@@ -26,7 +26,9 @@ import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import type { ProviderEvent } from '../ports/payment.js';
 import { createWebhookStore } from '../adapters/webhooks.js';
 import { handleProviderCallback, type CallbackPipelineDeps } from './pay-callback.js';
-import { RESULT_DISPUTED } from './webhook-results.js';
+import { RESULT_DISPUTED, RESULT_DISPUTE_CLOSED } from './webhook-results.js';
+import { parseDisputeResult } from '../domain/dispute-input.js';
+import { shipGuard, refundGuard } from '../domain/admin-order-actions.js';
 import { markDisputeClosed, markOrderDisputed } from './mark-disputed.js';
 
 /** 事件总线需要一个 logger；这里不关心它输出什么（另有专门的分发顺序测试）。 */
@@ -229,6 +231,31 @@ describe('markOrderDisputed：接线（经回调管线，不是只测函数）',
             result: RESULT_DISPUTED,
             disposition: 'disputed' as const,
           },
+          /**
+           * 结案落点：**与 mount.ts 同一条写法**（`parseDisputeResult` → 认不出就抛
+           * `dispute_result_unknown`）。
+           * @why 复制这段而不是另造一个"更方便"的 applier：这里要验的正是
+           *      "domain 的映射 + 落库"这条链接起来是什么行为。用不同的写法就等于
+           *      测了另一个东西（§2 第 21 条）。
+           */
+          dispute_closed: {
+            apply: async (e: ProviderEvent, channel: string) => {
+              const result = parseDisputeResult(e.disputeStatus);
+              if (result === undefined) {
+                throw new AppError(40902, {
+                  reason: 'dispute_result_unknown',
+                  ctx: { got: e.disputeStatus ?? null },
+                });
+              }
+              return markDisputeClosed(db, createEventBus(SILENT), e.orderId, {
+                channel,
+                disputeId: e.providerRef,
+                result,
+              });
+            },
+            result: RESULT_DISPUTE_CLOSED,
+            disposition: 'dispute_closed' as const,
+          },
         },
       },
     };
@@ -246,6 +273,18 @@ describe('markOrderDisputed：接线（经回调管线，不是只测函数）',
       occurredAtMs: OPENED_MS,
       ...over,
     };
+  }
+
+  /** 结案事件（`charge.dispute.closed`）。`disputeStatus` 是机构的原始状态词。 */
+  function closeEvent(over: Partial<ProviderEvent> & { disputeStatus?: string }): ProviderEvent {
+    return {
+      eventId: 'evt-dp-close',
+      rawType: 'charge.dispute.closed',
+      outcome: 'dispute_closed',
+      orderId: 'o-1',
+      providerRef: 'dp_1',
+      ...over,
+    } as ProviderEvent;
   }
 
   it('disputed 事件经管线 → 落库，登记行写 `disputed`（对账能精确检索拒付）', async () => {
@@ -294,6 +333,76 @@ describe('markOrderDisputed：接线（经回调管线，不是只测函数）',
 
     const rows = await db`select result from webhook_events where event_id = 'evt-dp-2'`;
     expect(rows[0]?.result).toBe('mismatch:dispute_unverifiable');
+  });
+
+  /**
+   * B1 / AJ-193 的**接线级**守护：查询函（inquiry）关闭这条路径，从"机构事件"一路走到"闸门解锁"。
+   *
+   * @why 单测只证明了 `parseDisputeResult('warning_closed') === 'withdrawn'`，
+   *      没证明 `markDisputeClosed` 接得住它、也没证明管线把它当成功而不是 mismatch。
+   *      这条补的就是那一半：走真实管线，断言登记行写的是 `dispute_closed`（不是 mismatch）。
+   */
+  it('🔴 查询函关闭（warning_closed）经管线 → withdrawn 落库 + has_dispute 复位（B1 接线）', async () => {
+    await seedPaid('o-1');
+    const { deps } = pipeline();
+    // 先开案（查询函以 warning_needs_response 开案，照样置 has_dispute=true）
+    await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"d":1}'),
+      disputeEvent({ eventId: 'evt-open' }),
+    );
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+
+    const out = await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"d":2}'),
+      closeEvent({ eventId: 'evt-close', disputeStatus: 'warning_closed' }),
+    );
+    expect(out.disposition).toBe('dispute_closed');
+    expect(out.status).toBe(200);
+    expect((await paymentRow('o-1'))['dispute_status']).toBe('withdrawn');
+    expect((await orderRow('o-1'))['has_dispute']).toBe(false);
+    // 🔴 不是 mismatch：结案被**接受**了（旧实现在这里抛 dispute_result_unknown）
+    const rows = await db`select result from webhook_events where event_id = 'evt-close'`;
+    expect(rows[0]?.result).toBe('dispute_closed');
+    // 换一个读取方：闸门真的开了
+    expect(shipGuard('paid', false).ok).toBe(true);
+  });
+
+  /**
+   * 认不出的结案状态。
+   * @why **全仓此前没有任何用例走到这个分支**（报告 B1 明确指出）：
+   *      它是一条"抛错"的路，写错了的表现是"永远不被执行"，而那看起来一切正常。
+   *      它必须 error 级 + 单独 result，否则"拒付结案没落库"既不重试也不告警。
+   */
+  it('🔴 认不出的结案状态 → error 级 + `mismatch:dispute_result_unknown`（不静默、不猜）', async () => {
+    await seedPaid('o-1');
+    const { deps, sink } = pipeline();
+    await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"d":1}'),
+      disputeEvent({ eventId: 'evt-open' }),
+    );
+
+    const out = await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"d":3}'),
+      closeEvent({ eventId: 'evt-unknown', disputeStatus: 'under_review' }),
+    );
+    expect(out.status).toBe(200); // 机构不必重发：重发也一样认不出
+    // 什么都没改（既不结案、也不解锁）
+    expect((await paymentRow('o-1'))['dispute_status']).toBe('open');
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+
+    const line = sink.find('callback_settlement_mismatch');
+    expect(line).toHaveLength(1);
+    expect(line[0]?.level).toBe('error');
+    const rows = await db`select result from webhook_events where event_id = 'evt-unknown'`;
+    expect(rows[0]?.result).toBe('mismatch:dispute_result_unknown');
   });
 });
 
@@ -407,6 +516,81 @@ describe('markDisputeClosed：结案（U-F4）', () => {
         result: 'won',
       }),
     ).rejects.toMatchObject({ code: 40902 });
+  });
+
+  /**
+   * B1 / AJ-193：查询函（inquiry）关闭后的出口。
+   *
+   * @why 这条守的是"订单还有没有活路"：查询函以 `warning_needs_response` 开案照样置
+   *      `has_dispute=true`，而旧实现在 `warning_closed` 这条路上抛 `dispute_result_unknown`
+   *      ——于是 `has_dispute` 永远是 true，40909 / 40907 永久生效，全仓又只有
+   *      本函数会写回 false。它**不是**显示问题：运营真的发不了货、退不了款。
+   * @why 断言用 `shipGuard` **换一个读取方**（§2 第 21 条）：只断言布尔列等于 false
+   *      是在自证"我写进去的值"；真正要证明的是"闸门真的开了"，那就调闸门本身。
+   */
+  it('🔴 withdrawn（查询函关闭）→ 解除限制：has_dispute 复位、闸门真的开了（B1）', async () => {
+    await seedDisputed('o-1');
+    // 开案后确实是锁着的（先证明"锁"这件事真的发生了，再看它有没有解开）
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+    expect(shipGuard('paid', true).ok).toBe(false);
+
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'withdrawn',
+    });
+    expect((await paymentRow('o-1'))['dispute_status']).toBe('withdrawn');
+    expect((await orderRow('o-1'))['has_dispute']).toBe(false);
+    // 换一个读取方：发货闸门与退款闸门都必须放行
+    expect(shipGuard('paid', Boolean((await orderRow('o-1'))['has_dispute'])).ok).toBe(true);
+    expect(refundGuard('paid', Boolean((await orderRow('o-1'))['has_dispute'])).ok).toBe(true);
+    expect(await events('o-1')).toEqual(['dispute_closed']);
+  });
+
+  // @why 与 withdrawn 的对照：lost 是**唯一**保持限制的结案结果（AJ-176）。
+  //      两条一起跑才能证明"复位规则不是一律复位"，否则把实现改成都复位也照样绿。
+  it('对照：lost 仍然保持限制（has_dispute 不复位，AJ-176）', async () => {
+    await seedDisputed('o-1');
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'lost',
+    });
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+    expect(shipGuard('paid', true).ok).toBe(false);
+  });
+
+  // @why withdrawn → won/lost 按冲突处理：同一 dispute_id 先被撤回、再判出输赢，
+  //      在机构侧意味着另一条拒付；这里让它响亮失败，比悄悄改写财务口径安全。
+  it('withdrawn 之后再收到 lost → 40902 dispute_result_conflict（不静默改判）', async () => {
+    await seedDisputed('o-1');
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'withdrawn',
+    });
+    await expect(
+      markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+        channel: 'stripe',
+        disputeId: 'dp_1',
+        result: 'lost',
+      }),
+    ).rejects.toMatchObject({ code: 40902 });
+    expect((await paymentRow('o-1'))['dispute_status']).toBe('withdrawn');
+    expect((await orderRow('o-1'))['has_dispute']).toBe(false);
+  });
+
+  it('换一个读取方：风控列表能按 withdrawn 筛出来（§2 第 21 条）', async () => {
+    await seedDisputed('o-1');
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'withdrawn',
+    });
+    const rows = await createRiskAdminRepo(db).listDisputes('withdrawn');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.disputeStatus).toBe('withdrawn');
+    expect(await createRiskAdminRepo(db).listDisputes('open')).toHaveLength(0);
   });
 
   it('订单不存在 → 40400', async () => {

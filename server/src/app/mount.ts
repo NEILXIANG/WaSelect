@@ -166,10 +166,14 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
         disposition: 'disputed',
       },
       /**
-       * 拒付结案（U-F4）：写 won/lost + 结案时刻，并把 `orders.has_dispute` **复位成 false**。
-       * @why 复位是这条的关键：发货/退款闸门读的就是 `has_dispute`，语义是"**进行中**的拒付"。
-       *      结案后不复位 = 这张单永远不能发货、不能退款，且没有任何一方报错。
-       * ⚠️ 结果（won/lost）由 domain 从机构 status 映射；**认不出就拒绝落库**
+       * 拒付结案（U-F4）：写 won/lost/withdrawn + 结案时刻，并据此复位 `orders.has_dispute`。
+       * @why 复位是这条的关键：发货/退款闸门读的就是 `has_dispute`，语义是"**未解除的拒付限制**"。
+       *      结案后该复位却不复位 = 这张单永远不能发货、不能退款，且没有任何一方报错
+       *      （这正是 B1 / AJ-193 修掉的现场：查询函以 `warning_closed` 结案时旧实现走到
+       *      `dispute_result_unknown`，`has_dispute` 从此永远是 true）。
+       * ⚠️ 只有 **lost** 保持 true（钱已被机构拉回，发货 = 钱货两空、退款在机构侧必败）；
+       *    won 与 withdrawn 都复位（withdrawn = 机构撤回 / 未进入正式拒付，没有输赢）。
+       * ⚠️ 结果由 domain 从机构 status 映射；**认不出就拒绝落库**
        *    （`dispute_result_unknown` → 管线按 error 级处理、转对账），
        *    绝不猜一个默认值——"赢了却记成输了"和"输了却记成赢了"都是财务口径事故。
        */

@@ -28,7 +28,8 @@
  *              退款闸门重新锁上，而机构那边早就结案了。这种错误**没有任何一方报错**，
  *              只能靠"重放不得改变已结案状态"这条用例钉住。
  * @limitation 二：开案（`markOrderDisputed`）与结案（`markDisputeClosed`，I2 U-F4 / AJ-162）都已实现；
- *              结案后 `has_dispute`：won 复位、**lost 保持 true**（AJ-176 部分推翻 AJ-162 ③，理由见 markDisputeClosed 内注释）。
+ *              结案后 `has_dispute`：**lost 保持 true，won 与 withdrawn 复位**
+ *              （AJ-176 部分推翻 AJ-162 ③；withdrawn 是 B1 / AJ-193 新增的第三类结案结果）。
  *              （一致性审计 C9 更正：本条原写"结案尚未实现、dispute_status 永远是 open"，U-F4 落地后未回写。）
  * @limitation 三：只取**最近一条** `status='succeeded'` 的支付行（与 mark-paid 同一口径）。
  *              换通道重付的场景（旧行作废、新行 succeeded）里，拒付只会落在新的那条上；
@@ -45,6 +46,7 @@ import type { Db } from '../adapters/db.js';
 import { AppError } from '../errors.js';
 import type { EventBus } from '../ports/events.js';
 import type { Logger } from '../logger.js';
+import type { DisputeResult } from '../domain/dispute-input.js';
 import { withUnitOfWork } from './unit-of-work.js';
 
 /**
@@ -97,14 +99,14 @@ export const DISPUTE_MISMATCH_REASONS = [
   'dispute_result_unknown',
 ] as const;
 
-/** 结案事实。结果已经过 domain 映射（只可能是 won / lost）。 */
+/** 结案事实。结果已经过 domain 映射（won / lost / withdrawn）。 */
 export interface DisputeClosure {
   /** 回调来自哪个通道（= `payments.provider`）。 */
   channel: string;
   /** 机构侧拒付单号（定位到**哪一条**拒付）。 */
   disputeId: string;
-  /** 结案结果。 */
-  result: 'won' | 'lost';
+  /** 结案结果（B1 / AJ-193 起含 `withdrawn`：机构撤回、不计输赢）。 */
+  result: DisputeResult;
 }
 
 /**
@@ -129,6 +131,10 @@ export interface DisputeClosure {
  * @limitation 二：已结案且**结果相同** → 幂等不动；结果**不同** → 40902
  *      `dispute_result_conflict`，不静默改判。@why "赢了又改成输了"会影响
  *      财务口径（这笔钱到底算不算损失），必须由人裁决，不能让最后到达的事件说了算。
+ *      ⚠️ `withdrawn → won/lost` 同样按冲突处理（B1 / AJ-193）：同一 `dispute_id`
+ *      先被撤回、再判出输赢，在机构侧意味着**另一条**拒付（正式拒付有新的 dispute_id），
+ *      所以它本就该走 `dispute_not_open`；真撞上同一个 id 时让它响亮失败，
+ *      比"悄悄把'机构已撤回'改写成'我方败诉'"安全得多。
  * @limitation 三：只清 `has_dispute`，**不动订单状态**（与开案同一条口径）。
  */
 export async function markDisputeClosed(
@@ -188,14 +194,19 @@ export async function markDisputeClosed(
       throw new AppError(50000, { reason: '拒付结案未命中支付行', ctx: { order_id: orderId } });
     }
 
-    // 结案：won → 复位（闸门解锁，AJ-162 ③）；**lost → 保持 true**（一致性审计 C12，AJ-176 部分推翻 AJ-162 ③）。
+    // 结案后的 `has_dispute`：**只有 lost 保持 true**；won 与 withdrawn 都复位（B1 / AJ-193）。
     // @why lost 意味着钱已被机构拉回给持卡人：再发货 = 钱货两空；再退款在 Stripe 侧必败——
     //      @measured(docs.stripe.com/error-codes, 2026-09-28)：`charge_disputed`「The charge you're attempting
     //      to refund has been charged back」、`refund_disputed_payment`「You can't refund a disputed payment」。
     //      复位后退款会停在 refunding + 50000，发货则无人拦。AJ-162 只论证了"won 不复位 = 永远不能操作"，
     //      lost 那一半沿用了同一结论；技术文档 D-50 行原本就写着"won 解除 has_dispute"。
+    // @why **withdrawn 必须复位**（这就是 B1 修的东西）：查询函（inquiry）以 `warning_needs_response`
+    //      开案照样置了 `has_dispute=true`，而它以 `warning_closed` 结案——争议压根没进入正式拒付，
+    //      钱没有输掉。旧实现在这条路上抛 `dispute_result_unknown`，`has_dispute` 永远是 true，
+    //      于是"机构已经撤回"的订单照样被 40909 / 40907 永久锁死，而全仓只有本函数会写回 false。
     // @tradeoff `has_dispute` 的语义从"有进行中的拒付"扩为"有未解除的拒付限制（进行中，或已败诉）"（契约 0.6.10）。
-    await tx`update orders set has_dispute = ${c.result !== 'won'}, updated_at = now() where id = ${orderId}`;
+    //      withdrawn 不在"限制"之列——它不是败诉，也没有待举证的事项。
+    await tx`update orders set has_dispute = ${c.result === 'lost'}, updated_at = now() where id = ${orderId}`;
     await tx`
       insert into order_events (order_id, status, note, actor, at)
       values (${orderId}, 'dispute_closed', ${`${c.disputeId}:${c.result}`},

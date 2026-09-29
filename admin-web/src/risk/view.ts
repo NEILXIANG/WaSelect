@@ -16,14 +16,21 @@
 import { formatJst } from '../format.js';
 
 /** 契约 `Dispute.dispute_status` 枚举（单测与契约双向比对）。 */
-export const DISPUTE_STATUS = ['open', 'won', 'lost'] as const;
+export const DISPUTE_STATUS = ['open', 'won', 'lost', 'withdrawn'] as const;
 export type DisputeStatus = (typeof DISPUTE_STATUS)[number];
 
-/** 展示名（契约只给 key）。 */
+/**
+ * 展示名（契约只给 key）。
+ *
+ * ⚠️ `withdrawn`（B1 / AJ-193）= 机构撤回 / 未进入正式拒付（查询函关闭、Radar 拦下），
+ *    **没有输赢**，所以文案**不能**写成"已胜诉"或"已败诉"——那会让运营以为这笔钱
+ *    要么回来了、要么没了，而事实是争议压根没走到判决。
+ */
 export const DISPUTE_STATUS_LABELS: Readonly<Record<DisputeStatus, string>> = {
   open: '进行中',
   won: '已胜诉',
   lost: '已败诉',
+  withdrawn: '已撤回（不计输赢）',
 };
 
 /** 拉黑后果的固定文案（@see @limitation 二：没有解除接口，点之前必须说清）。 */
