@@ -38,6 +38,8 @@ interface CallSite {
   line: number;
   /** 调用行起 40 行窗口的文本（判断 request: 与豁免注释用） */
   window: string;
+  /** 整个文件的行（回溯「本调用点属于哪条路由」用） */
+  lines: string[];
 }
 
 /**
@@ -82,6 +84,7 @@ function scan(): CallSite[] {
           rel,
           line: i + 1,
           window: lines.slice(i, i + WINDOW_LINES).join('\n'),
+          lines,
         });
       }
     });
@@ -90,6 +93,28 @@ function scan(): CallSite[] {
 }
 
 const sites = scan();
+
+/**
+ * 调用点**属于哪条路由**：从调用行向上回溯最近的一处 `app.<method>('<path>'`。
+ *
+ * @why 必须按**路由**判断而不是按"文件里有没有 `req.params`"：
+ *      `order-routes.ts` 里有 `GET /orders/:id` 读路径参数，但它的幂等调用点在
+ *      `POST /orders`（无路径参数）上——按文件判断会**误红**，误红多了就会被加豁免、门禁随即失效。
+ * @limitation 取"调用点之前最近的那一处"是启发式：一个文件里路由交错排版时会认错归属。
+ *             认错的代价是误红（多看一眼），比漏绿便宜；真误红了就调整排版或加豁免理由。
+ */
+function routePathAbove(lines: string[], callLineIdx: number): string {
+  for (let i = callLineIdx; i >= 0; i -= 1) {
+    const text = lines[i] ?? '';
+    // §2 第 54 条：注释里的同款字符串不算——注释掉的路由注册不是路由
+    if (/^\s*(\/\/|\*|\/\*)/.test(text)) continue;
+    // ⚠️ 不能匹配 `app.post(` 那一行：**路径字面量在它的下一行**（prettier 的排版），
+    //    按行匹配 `app.post\(\s*'` 永远拿不到 → 这条断言会静默假绿（第一次写就是这样）。
+    const m = /'(\/api\/v1\/[^']*)'/.exec(text);
+    if (m !== null) return m[1] ?? '';
+  }
+  return '';
+}
 
 describe('幂等调用的指纹接线门禁（N3）', () => {
   it('扫描到至少一个调用点（否则下面的断言是假绿灯）', () => {
@@ -106,6 +131,37 @@ describe('幂等调用的指纹接线门禁（N3）', () => {
       `这些幂等调用点没有传 request（指纹校验会是死代码，N3 重演），也没有豁免理由：\n` +
         bad.map((s) => `${s.rel}:${s.line}`).join('\n') +
         `\n修法：给 args 加 request: <请求素材>；确实没有入参的接口写 // idempotency-no-request: <理由>`,
+    ).toEqual([]);
+  });
+
+  /**
+   * B10 / AJ-195：带路径参数的幂等路由，指纹不得是**裸 `req.body`**。
+   *
+   * @why 幂等键的作用域只由「用户 + 路由 + 客户端键」拼成，`route` 是**常量**，
+   *      不含 `/orders/{id}/pay` 里的 id。**指纹若只有裸 body**，同一把键用在另一个资源上
+   *      会被判成"同键同参" → 重放**另一个资源**的响应：
+   *      copylink 拼出「上一张单的金额 + 这一张单的短链」，in_app 直接把上一张单的会话
+   *      交给正在付这一单的人。A5 让客户端键变成复用之后，这条从"潜伏"变为可达。
+   * @limitation 只挡**裸 `req.body`** 这一种写法。`request: { channel: body['channel'] }`
+   *            这种"只取 body 字段"的形态同样漏路径参数，但文本上分辨不出来——
+   *            那条只能靠 review 与行为用例（pay-intent-routes.db.test.ts 有真库用例守着：
+   *            去掉指纹里的 order_id 它会红）。
+   */
+  it('带路径参数的幂等路由，指纹不得是裸 req.body（B10 / AJ-195）', () => {
+    const bad = sites
+      .filter((s) => routePathAbove(s.lines, s.line - 1).includes(':'))
+      .filter(
+        (s) =>
+          /\brequest:\s*req\.body\b/.test(s.window) &&
+          !s.window.includes('idempotency-raw-body-ok:'),
+      );
+    expect(
+      bad,
+      `这些幂等路由带路径参数、指纹却是裸 body（跨资源重放，B10）：\n` +
+        bad
+          .map((s) => `${s.rel}:${s.line}（路由 ${routePathAbove(s.lines, s.line - 1)}）`)
+          .join('\n') +
+        `\n修法：request: { <路径参数>, ...(body ?? {}) }；确实无关的接口写 // idempotency-raw-body-ok: <理由>`,
     ).toEqual([]);
   });
 });

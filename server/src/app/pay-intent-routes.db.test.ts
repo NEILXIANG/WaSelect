@@ -179,6 +179,32 @@ describe('POST /orders/{id}/pay（mock 通道全链路）', () => {
     }
   });
 
+  it('幂等作用域含路径里的 orderId：同键用在另一张单上 → 40908，且不为它建意图', async () => {
+    const srv = await buildServer();
+    try {
+      const a = await createOrder(srv.url);
+      const b = await createOrder(srv.url);
+      const first = await pay(srv.url, a, { channel: 'mock' }, 'shared-key');
+      expect(first.status).toBe(200);
+
+      // 🔴 指纹若不含 orderId，`b` 会命中 `a` 的幂等行并**重放 a 的响应**：
+      //    copylink 拼成「a 的金额 + b 的短链」，in_app 直接把 a 的会话交给正在付 b 的人。
+      //    小程序历史上每次点击都现造键，所以这条当年不可达（A5 改成键复用之后才变为可达）。
+      const cross = await pay(srv.url, b, { channel: 'mock' }, 'shared-key');
+      expect(cross.json['code']).toBe(40908);
+      const paysB = await db`select count(*)::int as n from payments where order_id = ${b}`;
+      expect(Number(paysB[0]?.['n'])).toBe(0);
+
+      // 回归：防跨单不能把"同键同单同参"的正常重放一起打掉
+      const replay = await pay(srv.url, a, { channel: 'mock' }, 'shared-key');
+      expect(replay.status).toBe(200);
+      const paysA = await db`select count(*)::int as n from payments where order_id = ${a}`;
+      expect(Number(paysA[0]?.['n'])).toBe(1);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('形状守卫：缺 channel → 40001；未注册通道 → 40001；他人单 → 40400；已过期 → 40904', async () => {
     const srv = await buildServer();
     try {

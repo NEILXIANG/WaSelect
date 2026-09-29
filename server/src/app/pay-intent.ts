@@ -161,6 +161,11 @@ export function redactPayToken(body: unknown): unknown {
  * @tradeoff 重放不再逐字节等于首次响应（pay_url 的 t 不同）。幂等的承诺是"同一次业务操作只做一次"
  *           （没有第二个支付意图、没有第二次机构调用），不是"响应字节不变"——为了字节不变而把
  *           明文存 24 小时，是用安全换一个没有消费方的性质。
+ * @limitation **重放体来自同一张单，是本函数安全的前提**：这里把 `replayed` 里的金额原样返回、
+ *           只替换 `pay_url`。若重放体其实来自另一张单，产物就是「上一张单的金额 + 这一张单的链接」。
+ *           这个前提由调用方的幂等指纹**含 order_id** 保证（`pay-intent-routes.ts`，AJ-195）；
+ *            本函数**不**自己复核（查不到"重放体属于谁"——幂等表里只有响应体）。
+ *            ⚠️ 因此：谁改了路由的 `request` 指纹，必须回到这里确认一遍，否则不报错、只产出错的钱数。
  */
 export async function reissuePayLinkOnReplay(
   db: Db,

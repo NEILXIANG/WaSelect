@@ -89,7 +89,14 @@ export function mountPayIntentRoutes(app: Express, deps: PayIntentRoutesDeps): v
               userId: sub,
               route: 'orders.pay',
               // N3：指纹素材必传（客户端复用键换通道 → 40908，与建单同口径）
-              request: req.body,
+              // 🔴 **必须含路径里的 orderId**：作用域只按「用户 + 路由 + 客户端键」拼
+              //    （`scopeKey`），orderId 不在键里。它若不进指纹，同一把键用在另一张单上
+              //    就是"同键同参"→ 命中上一张单的幂等行并重放它的响应：
+              //    copylink 拼成「上一张单的金额 + 这一张单的短链」，in_app 直接把上一张单的
+              //    会话交给正在付这一单的人（钱进了 A 的会话，用户以为在付 B）。
+              //    小程序历史上每次点击都现造键 ⇒ 当年不可达；A5 改成键复用之后变为可达。
+              //    @see AJ-195；app/pay-intent.ts 的 reissuePayLinkOnReplay（它的安全性依赖这里）
+              request: { order_id: orderId, ...(body ?? {}) },
               logger: deps.logger,
               // KD-3（AJ-175）：短链明文 token 不许随响应体进幂等表——落库前抹掉，重放时补发
               persist: redactPayToken,
