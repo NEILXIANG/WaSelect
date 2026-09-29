@@ -21,9 +21,9 @@
  *              **不刷新 `blocked_at`、不再 +1 `token_ver`**——
  *              否则"重复点一次拉黑"会把首次封禁时间改掉（审计时答不出"什么时候封的"），
  *              并且把所有人重新登一遍。
- * @limitation 四：拉黑的生效**不是即时的**：`identity.ts` 的身份查询有 60 秒进程内缓存，
- *              所以"已经在请求中的旧 token"最多 60 秒内仍可通过；多实例部署时每个实例各 60 秒。
- *              彻底解决要把缓存换成共享存储（Redis），MVP 阶段不值得（与 identity.ts @tradeoff 同源）。
+ * @limitation 四：`identity.ts` 的身份查询有 60 秒进程内缓存——拉黑路由成功后会作废**本进程**的这一条
+ *              （F-06 / AJ-183），单实例部署下即时生效；多实例时其它实例仍各有 60 秒窗口
+ *              （render.yaml 固定单实例并有断言钉住；扩容前要换成共享失效机制）。
  *
  * @see migrations/001_init.sql（payments.dispute_* / users.blocked_at）、003（users.token_ver）、
  *      013（payments.dispute_opened_at）；domain/dispute-input.ts（status 校验）；

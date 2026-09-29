@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.10
+  version: 0.6.11
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -143,6 +143,19 @@ info:
       ⑦ 管理端商品 / Banner 漏列的校验补进 schema（实现早已如此拦截）：`GET /admin/products` 的 `size` ∈ [1, 100]；
       `ProductInput.category` 限四个分类（与 `PRODUCT_CATEGORY` 同源）；`BannerInput.link_id` 在 `link_type` ≠ none 时必填、`sort` ≥ 0；
       商品详情不返回 `image`（用 `images`），管理端商品另不返回 `display` / `image`。
+    0.6.11（AJ-178～AJ-183，独立审查辨析处置）：
+      ① `POST /admin/orders/{id}/refund`：202 响应体入契约 `{order_id, outcome: succeeded|pending}`；
+      订单停在 refunding 且上一笔机构退款在途（`refund_pending` 事件）时，再调**只查询**该笔退款、不再发起；
+      机构确认失败后换新机构幂等键重新发起（F-03）。`AdminOrder.events` 新增 `refund_pending`（note = 机构退款号），
+      `refund_failed` 的 note 取值 `provider_error` / `provider_failed:<机构退款号>`。
+      ② 审核模式（技术文档 §2.9 落地）：`REVIEW_MODE=on` 时 `POST /orders` 只收 `REVIEW_SKU_ID`，含其它商品整单 **40401**；
+      审核期建的单 `is_test=true`；mock 通道 `payload.auto` 改为**布尔**——只有服务端会自动确认（审核模式）时才是 true，
+      且响应返回时订单已被确认为 paid（经与真实回调同一条管线）；非审核模式为 false。
+      `POST /admin/orders/{id}/ship` 对 `is_test` 订单 **409 / 40902**（测试单永不发货）。
+      ③ `Product` 增 `ship_within_business_days`（发货时限承诺，工作日；配置 SHIP_WITHIN_BUSINESS_DAYS，D-39⑦ FTC）。
+      ④ `POST /auth/admin/login` **已实现**（移出 NOT_IMPLEMENTED）：补 400；同一账号连续失败 5 次锁 15 分钟，
+      锁定期间一律 **429 / 42901**（带 Retry-After，与 IP 限流同码）；不存在的邮箱与口令错同为 40101；非管理员 / 已封禁 40301。
+      ⑤ 管理端写接口（/admin 前缀下 POST/PUT/PATCH/DELETE 成功时）写 `admin_audit`（流 B）；对外形状不变。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -201,9 +214,10 @@ paths:
   /auth/admin/login:
     post:
       security: []
-      summary: ⚠️ **未实现**（契约先行；routes.contract.test NOT_IMPLEMENTED 登记，含管理员 seed）——管理端（admin-web）邮箱密码登录；仅 is_admin 账号，JWT 12 小时（aud=admin）；连续失败 5 次锁 15 分钟
+      summary: 管理端（admin-web）邮箱密码登录；仅 is_admin 且未封禁的账号，JWT 12 小时（aud=admin，ver=users.token_ver）；同一账号连续失败 5 次锁 15 分钟（锁定期 429 / 42901 + Retry-After）；初始管理员由启动时 seed（ADMIN_EMAIL + ADMIN_INITIAL_PASSWORD，只建不改）
+      description: 0.6.11（AJ-181）实现落地。不存在的邮箱与口令错同为 40101（不作邮箱探测器）；口令对了才判是否管理员 / 是否封禁（40301）；IP 维度另有 RATE_LIMIT_LOGIN_PER_15MIN 限流（D-52）
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 12}}}}}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {token: {type: string}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {token: {type: string}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
   /fx:
     get:
       security: []
@@ -285,6 +299,7 @@ paths:
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/OrderSummary'}}}}}}}}
     post:
       summary: 建单（不含支付；扣减 stock；写 fx_snapshot 与 expires_at）
+      description: 0.6.11（AJ-179）：REVIEW_MODE=on 时只收 REVIEW_SKU_ID，含其它商品整单 40401；审核期建的单 is_test=true
       parameters: [{$ref: '#/components/parameters/IdemKey'}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items, address_id, terms_version], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}, address_id: {type: string}, expected_total_jpy: {type: integer, description: '可选：前端确认页看到的合计；不等则 40905 价格已变动'}, contact_email: {type: string, format: email, description: '可选：收货通知兜底邮箱（D-39）'}, terms_version: {type: string, description: '建单时刻生效的条款版本（如 TOS-2026-09-20）；服务端与 TERMS_VERSION（GET /terms 返回的 version）不一致则 40011，缺失或不匹配一律拒单（D-43）'}}}}}}
       responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/OrderCreated'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
@@ -324,16 +339,17 @@ paths:
       responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AdminOrder'}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/ship:
     post:
+      description: 仅 paid；has_dispute=true → 40909；0.6.11（AJ-179）：is_test（审核期测试单）→ 409 / 40902，测试单永不发货
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [carrier, tracking_no], properties: {carrier: {type: string}, tracking_no: {type: string}}}}}}
       responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/refund:
     post:
-      description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.7 起 `has_dispute` 的语义是「**有进行中的拒付**」：拒付结案（won/lost）时它被复位为 false，闸门随之解锁（U-F4）。0.6.9（AJ-175/KD-4）：状态为 **refunding**（上次机构调用失败）时允许再调重试，沿用首次退款原因与同一机构幂等键；refunded 仍 40902
+      description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.7 起 `has_dispute` 的语义是「**有进行中的拒付**」：拒付结案（won/lost）时它被复位为 false，闸门随之解锁（U-F4）。0.6.9（AJ-175/KD-4）：状态为 **refunding**（上次机构调用失败）时允许再调重试，沿用首次退款原因与同一机构幂等键；refunded 仍 40902。0.6.11（AJ-178 / F-03）：上一笔机构退款在途（refund_pending）时再调只查询该笔、不再发起；机构确认失败后换新机构幂等键重新发起；结果未知（超时 / 机构报错）仍沿用同键
       summary: 全额退款（MVP；按 charge_currency / charge_amount 原币退；缺货场景整单退款）
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string}}}}}}
-      responses: {'202': {description: Accepted}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+      responses: {'202': {description: 'Accepted（succeeded = 已退款，订单 refunded；pending = 机构处理中，订单停在 refunding，再调即查询）', content: {application/json: {schema: {type: object, required: [order_id, outcome], properties: {order_id: {type: string}, outcome: {type: string, enum: [succeeded, pending]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/address:
     post:
       summary: 发货前改址（仅 paid 未发货；重写 address_snapshot 并记 order_events，D-39）
@@ -459,8 +475,8 @@ components:
     Display: {type: object, description: 展示价，整数分（后端按当日汇率计算）, properties: {USD: {type: integer}, CNY: {type: integer}}}
     ImageSet: {type: object, properties: {thumb: {type: string}, card: {type: string}, detail: {type: string}, image_key: {type: string, description: '仅 POST /admin/upload 响应里出现（0.6.8）：detail 档存储键，供 BannerInput.image_key 使用（AJ-143/AJ-166）；存量 Product.images 条目没有它'}}}
     ProductCard: {type: object, properties: {id: {type: string}, title: {type: string}, category: {type: string}, price_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, image: {$ref: '#/components/schemas/ImageSet'}, stock: {type: integer}, status: {type: string}}}
-    Product: {description: '商品详情。实现不返回 ProductCard.image（缩略图只在列表卡片用，详情用 images）；AdminProduct 另不返回 display / image（0.6.10 ⑦）', allOf: [{$ref: '#/components/schemas/ProductCard'}, {type: object, properties: {description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, weight_g: {type: integer}, compliance_tags: {type: array, items: {type: string}}, hs_code: {type: string}, customs_desc_en: {type: string}, origin_country: {type: string}}}]}
-    AdminProduct: {allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time}}}]}
+    Product: {description: '商品详情。实现不返回 ProductCard.image（缩略图只在列表卡片用，详情用 images）；AdminProduct 另不返回 display / image（0.6.10 ⑦）', allOf: [{$ref: '#/components/schemas/ProductCard'}, {type: object, properties: {description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, weight_g: {type: integer}, compliance_tags: {type: array, items: {type: string}}, hs_code: {type: string}, customs_desc_en: {type: string}, origin_country: {type: string}, ship_within_business_days: {type: integer, minimum: 1, maximum: 30, description: '0.6.11（AJ-180）：发货时限承诺（付款后 N 个工作日内发出，FTC / D-39⑦）；店铺级配置 SHIP_WITHIN_BUSINESS_DAYS'}}}]}
+    AdminProduct: {description: '0.6.11：不返回 ship_within_business_days（店铺级配置，只随买家商品详情下发）', allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time}}}]}
     ProductInput: {type: object, required: [title, category, price_jpy, weight_g, customs_desc_en, origin_country], properties: {title: {type: string}, category: {type: string, enum: [beauty, daily, kitchen, food]}, description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, price_jpy: {type: integer, minimum: 1}, cost_jpy: {type: integer}, weight_g: {type: integer, minimum: 1}, stock: {type: integer, minimum: 0, description: '可选（0.6.9/AJ-175）：POST 省略 = 0；PUT 省略 = 不改库存（防编辑页打开期间的买家扣减被旧值覆盖）。填了就必须是 ≥0 整数，否则 40001'}, compliance_tags: {type: array, items: {type: string, enum: [liquid, battery, cosmetic, food, flammable, aerosol, electrical, quasi_drug, sunscreen, children_product, alcohol]}, description: 'flammable / aerosol / electrical / quasi_drug / sunscreen / children_product / alcohol 七个标签上架即拒（40001）：前两者为日本邮便航空禁寄品（D-42），electrical 为 MVP 不上电器（D-45），quasi_drug（医薬部外品/薬用）与 sunscreen（SPF）在美国 FDA 口径属 OTC 药品、children_product 需 CPSIA 检测、alcohol 需酒类免许且不可邮寄（D-51）；customs_desc_en 含 medicated/whitening/SPF/sunscreen/drug 亦拒'}, hs_code: {type: string, description: '报关 HS 码；缺省时由 Zonos 自动识别、管理员核对；食品/化妆品必填（D-39/D-42）'}, customs_desc_en: {type: string, description: '英文报关品名，上架必填（D-39）'}, origin_country: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', enum: [JP], description: '原产地 ISO 3166-1 alpha-2，必填无默认，按商品包装实录；MVP 仅接受 JP——非 JP 一律 400 拒绝上架（D-42/D-43）'}, title_ja: {type: string, description: '日文品名（采购用）'}, jan_code: {type: string, description: 'JAN 码'}, purchase_source: {type: string, description: '采购渠道'}}}
     AddressInput: {type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, pattern: '^[ -~]+$'}, phone: {type: string, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, pattern: '^[ -~]+$'}, line2: {type: string, pattern: '^[ -~]*$'}, city: {type: string, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2}, postal_code: {type: string, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
     Address: {allOf: [{$ref: '#/components/schemas/AddressInput'}, {type: object, properties: {id: {type: string}}}]}
@@ -475,7 +491,7 @@ components:
     AdminOrderListItem: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, user_id: {type: string}, status: {$ref: '#/components/schemas/OrderStatus'}, total_jpy: {type: integer}, contact_email: {type: string}, carrier: {type: string}, tracking_no: {type: string}, recipient: {type: string, description: '收件人姓名（0.6.9/KD-14）：列表支持按收件人搜索，行里要能回显；电话/街道等其余地址字段仍只在详情'}, has_dispute: {type: boolean, description: '列表也带（0.6.1）：客服在列表页就能看见拒付单'}, is_test: {type: boolean}, created_at: {type: string, format: date-time}}}
     AdminOrder: {description: '0.6.10：实际响应不带 display / timeline（管理端看 events 全量），另带 paid_at / shipped_at；payment 为 {channel, charge_currency, charge_amount}', allOf: [{$ref: '#/components/schemas/Order'}, {type: object, properties: {paid_at: {type: string, format: date-time}, shipped_at: {type: string, format: date-time}, user_id: {type: string}, contact_email: {type: string, format: email, description: '客服可见（D-42）'}, is_test: {type: boolean, description: '审核期 mock 通道测试单；管理端列表默认过滤'}, has_dispute: {type: boolean, description: '0.6.10：有未解除的拒付限制——进行中，或已败诉（钱已被拉回）；为 true 时退款 40907、发货 40909。仅胜诉结案复位（D-50 / AJ-162 / AJ-176）'}, fx_snapshot: {type: object}, payments: {type: array, items: {type: object, properties: {provider: {type: string}, provider_ref: {type: string}, transaction_id: {type: string}, status: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, settled_jpy: {type: integer}, fee_jpy: {type: integer}}}}, events: {type: array, items: {type: object, properties: {status: {type: string}, note: {type: string}, actor: {type: string}, at: {type: string, format: date-time}}}}}}]}
     ChannelView: {type: object, required: [channel, entryMode, label], properties: {channel: {type: string, description: '通道 key（任意字符串：新增支付方式不需要改本契约的枚举）'}, entryMode: {type: string, enum: [in_app, copylink, redirect], description: 'in_app=小程序内直接调起；copylink=复制链接到外部浏览器（D-49：Stripe Checkout 托管页）；redirect=302 跳转'}, label: {type: string, description: 展示名（外置文案，前端不写死）}, icon: {type: string, description: 图标 key（同上）}}}
-    PaymentIntent: {type: object, properties: {channel: {type: string, description: '通道 key（同 POST /orders/{id}/pay：任意字符串，见 x-payment-channels）'}, charge: {type: object, properties: {currency: {type: string, enum: [JPY, USD]}, amount: {type: integer}}}, payload: {type: object, additionalProperties: true, description: 'wechat: wx.requestPayment 五参数；stripe: {pay_url, expires_at}（D-49 短链）；mock: {auto:true, orderId, amountJpy, currency}（auto=审核期自动确认信号，0.5.6 更正）'}, expires_at: {type: string, format: date-time}}}
+    PaymentIntent: {type: object, properties: {channel: {type: string, description: '通道 key（同 POST /orders/{id}/pay：任意字符串，见 x-payment-channels）'}, charge: {type: object, properties: {currency: {type: string, enum: [JPY, USD]}, amount: {type: integer}}}, payload: {type: object, additionalProperties: true, description: 'wechat: wx.requestPayment 五参数；stripe: {pay_url, expires_at}（D-49 短链）；mock: {auto, orderId, amountJpy, currency}——auto 为布尔：仅审核模式（服务端会自动确认、响应返回时订单已 paid）为 true，否则 false（0.6.11 / AJ-179；0.5.6 起的 auto:true 恒真已废）'}, expires_at: {type: string, format: date-time}}}
     BannerInput: {type: object, required: [image_key], properties: {image_key: {type: string}, link_type: {type: string, enum: [none, product, category], default: none}, link_id: {type: string, description: 'link_type ≠ none 时必填（缺 → 40001 link_id_required）'}, sort: {type: integer, default: 0, minimum: 0}, active: {type: boolean, default: true}, starts_at: {type: string, format: date-time}, ends_at: {type: string, format: date-time}}}
     Banner: {allOf: [{$ref: '#/components/schemas/BannerInput'}, {type: object, properties: {id: {type: string}, image: {type: string, description: 'img.<domain> 完整 URL'}}}]}
     Dispute: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, payment_id: {type: string}, dispute_id: {type: string}, dispute_status: {type: string, enum: [open, won, lost]}, dispute_amount: {type: integer}, charge_currency: {type: string}, opened_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time}}}

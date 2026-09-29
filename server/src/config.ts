@@ -279,6 +279,15 @@ const schema = z.object({
   // ── 订单生命周期 ────────────────────────────────────────────────────────
   ORDER_PAYMENT_TTL_MIN: int(30, 1),
   /**
+   * 发货时限承诺（工作日）：小程序商品详情「付款后 N 个工作日内发出」（FTC 邮购规则，D-39⑦；AJ-180 拍板 7）。
+   * @why 放配置不放前端：这是对买家的法律承诺，要跟着采购与节假日节奏调，调整不该等小程序发版过审。
+   * @why 上限 30：FTC 规则在商品页**未写**时限时默认 30 天，写出来的承诺比默认还长 = 文案自相矛盾。
+   * @limitation 只是展示承诺，**不驱动**任何作业（超时未发货没有自动告警 / 自动取消）；兑现靠人。
+   */
+  SHIP_WITHIN_BUSINESS_DAYS: int(7, 1).pipe(
+    z.number().max(30, 'SHIP_WITHIN_BUSINESS_DAYS 不得超过 30（FTC 未写时限时的默认值）'),
+  ),
+  /**
    * 回调早到宽限期（毫秒，AJ-32）：回调到达时订单不存在，
    * 距事件首次到达 ≤ 此值 → 503 让机构重发；超过 → 2xx + error 告警 + 落 unmatched 转对账。
    * @why 15 分钟是**拍的**（无机构实测数据）：远大于建单链路 P99 延迟（秒级），
@@ -471,6 +480,15 @@ const crossField = schema.superRefine((c, ctx) => {
     add(
       'STORAGE_DRIVER',
       `生产环境禁止 STORAGE_DRIVER=${c.STORAGE_DRIVER}（易失盘/进程内存，上传的图会静默丢；生产待 R2 适配器落地）`,
+    );
+  }
+
+  // 1e. 初始管理员 seed 成对（O-11 / AJ-181）：只配一个 = 启动时 seed 静默不跑，生产上无人能登管理端，
+  //     而服务照样起得来——与规则 1d（APP_ID 成对）同一类"半配比不配更隐蔽"。
+  if ((c.ADMIN_EMAIL === undefined) !== (c.ADMIN_INITIAL_PASSWORD === undefined)) {
+    add(
+      c.ADMIN_EMAIL === undefined ? 'ADMIN_EMAIL' : 'ADMIN_INITIAL_PASSWORD',
+      'ADMIN_EMAIL 与 ADMIN_INITIAL_PASSWORD 必须同时配置或同时留空（初始管理员 seed 需要两者）',
     );
   }
 

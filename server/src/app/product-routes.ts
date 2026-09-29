@@ -165,6 +165,8 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
           hs_code: p.hs_code,
           customs_desc_en: p.customs_desc_en,
           origin_country: p.origin_country,
+          // FTC 发货时限承诺（D-39⑦ / AJ-180）：店铺级配置，随详情下发省一次请求；前端照此出文案、不编数字
+          ship_within_business_days: deps.config.SHIP_WITHIN_BUSINESS_DAYS,
         });
       } catch (e) {
         next(e);

@@ -82,6 +82,43 @@ describe('组装根 bootstrap（A1）', () => {
     }
   });
 
+  it('配了 ADMIN_EMAIL + ADMIN_INITIAL_PASSWORD → 启动时建初始管理员（幂等；日志无邮箱与口令，AJ-181）', async () => {
+    const db = testDb();
+    await resetTestDb(db);
+    const { lines, write } = sink();
+    let rt: Runtime | undefined;
+    try {
+      rt = await bootstrap({
+        env: {
+          ...baseEnv(PORT_DEV),
+          ADMIN_EMAIL: 'Boss@Example.com',
+          ADMIN_INITIAL_PASSWORD: 'initial-password-123',
+        },
+        logDestination: { write },
+        exit: () => undefined,
+      });
+      const rows = await db`select is_admin from users where lower(email) = 'boss@example.com'`;
+      expect(rows).toEqual([{ is_admin: true }]);
+      const seeded = lines.find((l) => l.includes('admin_seed'));
+      expect(seeded).toContain('created');
+      expect(lines.join('\n')).not.toContain('initial-password-123');
+      expect(lines.join('\n').toLowerCase()).not.toContain('boss@example.com');
+      // 真能登：seed 出来的口令哈希与登录路由用的是同一套（预哈希 + bcrypt）
+      const res = await fetch(`http://127.0.0.1:${PORT_DEV}/api/v1/auth/admin/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'boss@example.com', password: 'initial-password-123' }),
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      rt?.uninstallSignals();
+      rt?.uninstallProcessErrors();
+      await rt?.server.close().catch(() => undefined);
+      await rt?.db.end().catch(() => undefined);
+      await db.end().catch(() => undefined);
+    }
+  });
+
   it('停机是「排空后关库」：afterDrain 之后连接池真的关了', async () => {
     const { write } = sink();
     const rt = await bootstrap({

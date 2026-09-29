@@ -73,9 +73,13 @@ export function createPaymentRegistry(opts: RegistryOptions): PaymentRegistry {
     if (cap && !impl) {
       throw new Error(`通道 ${channel} 声明 supportsRefund 但没有实现 refund()`);
     }
-    if (!cap && impl) {
+    // F-03（AJ-178）：能退就必须能查——机构回 pending 的退款只有靠查询才走得出 refunding
+    if (cap && provider.refundStatus === undefined) {
+      throw new Error(`通道 ${channel} 声明 supportsRefund 但没有实现 refundStatus()`);
+    }
+    if (!cap && (impl || provider.refundStatus !== undefined)) {
       throw new Error(
-        `通道 ${channel} 实现了 refund() 却声明 supportsRefund=false（调用方不会调它）`,
+        `通道 ${channel} 实现了 refund()/refundStatus() 却声明 supportsRefund=false（调用方不会调它）`,
       );
     }
     // ⚠️ 配置声明的币种必须是能力声明的子集（二次审查 P3-2）：两层开关的语义是

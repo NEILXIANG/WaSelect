@@ -238,6 +238,22 @@ describe('render.yaml ↔ 配置 schema 一致', () => {
     expect(pre).toMatch(/npm run db:migrate/);
   });
 
+  it('web 服务固定单实例 numInstances: 1（F-07 / AJ-183：三处进程内状态依赖它）', () => {
+    /**
+     * @why 下面三处都只在**单进程**里成立，扩成多实例不会报任何错，只会静默失效：
+     *      ① 限流计数（rate-limit-memory.ts）：每个实例各数各的，5 次/15 分钟变成 5×N 次；
+     *      ② 身份缓存与拉黑即时作废（identity.ts withIdentityCache / invalidate）：只作废本实例，
+     *         被拉黑者在其它实例上继续用最多 60 秒；
+     *      ③ 常驻调度器（D-43）：每个实例一个空转调度器抢同一把锁。
+     *      这条断言让"改 numInstances"先在 CI 红——逼人先把这三处换成共享实现，而不是扩了才发现。
+     */
+    const web =
+      /^\s*-\s*type:\s*web\s*$([\s\S]*?)(?=^\s*-\s*type:|^\S)/m.exec(renderYaml)?.[1] ?? '';
+    expect(web).not.toBe('');
+    expect(/^\s*numInstances:\s*(\d+)/m.exec(web)?.[1]).toBe('1');
+    expect(web).not.toMatch(/^\s*scaling:/m); // 自动扩缩容同样会破坏上面三处前提
+  });
+
   it('每日作业：声明了 cron 服务调 /api/v1/internal/jobs/daily，密钥与内网地址取自 web 服务（一致性审计 C1，AJ-176）', () => {
     // @why 技术文档 §6.1 / 工程框架文档 / D-43③ 都写"Render Cron Job 调 POST /internal/jobs/daily"，
     //      但本清单只有 web + db：生产上每日对账（含调度心跳看门狗、卡住的回调 KD-2）**永不执行**，

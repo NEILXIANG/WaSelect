@@ -127,6 +127,24 @@ export async function createOrder(
   const address = await findOwnedAddress(tx, input.addressId, input.userId);
   if (address === null) throw new AppError(40400, { address_id: input.addressId });
 
+  // ── 2b. 审核模式（技术文档 §2.9 / AJ-179）：只有 REVIEW_SKU_ID 能下单 ──────────
+  // @why 审核期全店只能走 mock（config 规则 2b），任何能下单的商品都能被"假付款"确认——
+  //      闸门必须在建单处（扣库存之前），不能只在支付处：否则审核员能把真商品库存占满 30 分钟。
+  //      用 40401（商品不存在或已下架）：对买家而言它就是"此刻买不了"，不另开一个只在审核期出现的码。
+  const reviewMode = config.REVIEW_MODE === 'on';
+  if (reviewMode) {
+    const outside = input.items
+      .map((i) => i.productId)
+      .filter((pid) => pid !== config.REVIEW_SKU_ID);
+    if (outside.length > 0) {
+      logger.warn('order_review_sku_rejected', {
+        result: 'rejected',
+        ctx: { product_ids: outside.slice(0, 10) },
+      });
+      throw new AppError(40401, { product_id: outside[0], reason: 'review_mode_sku_only' });
+    }
+  }
+
   // ── 3. 商品快照与行项目汇总（40001/40401/40901 初筛）─────────────────────
   const catalog = createCatalogRepo(tx);
   const rows = await catalog.findProductsForQuote(input.items.map((i) => i.productId));
@@ -194,6 +212,7 @@ export async function createOrder(
           contact_email: input.contactEmail ?? null,
           terms_version: termsVersion,
           expires_at: expiresAt,
+          is_test: reviewMode,
         }),
       );
       orderNo = candidate;

@@ -39,6 +39,13 @@ export interface IdentityRecord {
  */
 export interface IdentityCheck {
   load(sub: string): Promise<IdentityRecord | null>;
+  /**
+   * 让本进程里这个 sub 的缓存立即作废（F-06 / AJ-183）：拉黑 / 撤权之后调用，下一次 load 必回源。
+   * @why 可选：无缓存的实现没有东西可作废；带缓存的实现（withIdentityCache）必须提供。
+   * @limitation **只作废本进程**：多实例时其它实例仍要等 TTL（60 秒）——`render.yaml` 固定单实例，
+   *             且 test/config/render-env.unit.test.ts 钉住 numInstances=1（扩容前必须先换成共享失效机制）。
+   */
+  invalidate?(sub: string): void;
 }
 
 /** 缓存默认时长（毫秒）：60 秒（见文件头 @tradeoff）。 */
@@ -117,6 +124,10 @@ export function withIdentityCache(
       }
       cache.set(sub, { at: now, record });
       return record;
+    },
+    invalidate(sub: string): void {
+      cache.delete(sub);
+      check.invalidate?.(sub);
     },
   };
 }

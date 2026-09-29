@@ -361,6 +361,8 @@ export interface AdminOrderLockRow {
   status: string;
   total_jpy: number;
   has_dispute: boolean;
+  /** 审核期测试单（发货闸门要它，AJ-179）。 */
+  is_test: boolean;
   carrier: string | null;
   tracking_no: string | null;
 }
@@ -374,7 +376,7 @@ export interface AdminOrderLockRow {
  */
 export async function lockAdminOrder(tx: Db, orderId: string): Promise<AdminOrderLockRow | null> {
   const rows = await tx`
-    select id, order_no, user_id, status, total_jpy, has_dispute, carrier, tracking_no
+    select id, order_no, user_id, status, total_jpy, has_dispute, is_test, carrier, tracking_no
       from orders where id = ${orderId} for update
   `;
   const r = rows[0] as Record<string, unknown> | undefined;
@@ -386,6 +388,7 @@ export async function lockAdminOrder(tx: Db, orderId: string): Promise<AdminOrde
     status: String(r.status),
     total_jpy: Number(r.total_jpy),
     has_dispute: bool(r.has_dispute),
+    is_test: bool(r.is_test),
     carrier: strOrNull(r.carrier),
     tracking_no: strOrNull(r.tracking_no),
   };
@@ -462,13 +465,15 @@ export async function markShipped(
  *      非状态事件不会再以"状态未知"外泄给买家，这一行只进管理端。
  * @why 事务外单条插入：机构调用本就在事务外（第二段），失败时没有可以依附的事务；
  *      插入失败不影响原错误的抛出（调用方 best-effort）。
- * @limitation note 只写**分类**（provider_error / provider_failed），不写机构错误原文——
- *             原文可能含 PII 或机构内部信息，只进运行日志（已脱敏）。
+ * @limitation note 只写**分类**，不写机构错误原文——原文可能含 PII 或机构内部信息，只进运行日志（已脱敏）。
+ *             两类分类语义不同（F-03，AJ-178），`findRefundProgress` 靠前缀区分：
+ *             · `provider_error`：结果**未知**（超时 / 响应丢失 / 机构报错）→ 重试必须沿用同一幂等键（KD-4）；
+ *             · `provider_failed:<机构退款号>`：机构**确认**这笔失败 → 下一次重试换新键重新发起。
  */
 export async function recordRefundFailed(
   db: Db,
   orderId: string,
-  kind: 'provider_error' | 'provider_failed',
+  kind: 'provider_error' | `provider_failed:${string}`,
   actor: string,
   at: Date,
 ): Promise<void> {
@@ -476,6 +481,57 @@ export async function recordRefundFailed(
     insert into order_events (order_id, status, note, actor, at)
     values (${orderId}, 'refund_failed', ${kind}, ${actor}, ${at})
   `;
+}
+
+/**
+ * 记一条**退款在途**事件（机构回了 pending，F-03 / AJ-178）：note = 机构退款单号。
+ * @why 原先 pending 只打一条 info 日志，单号哪儿都没留——之后既查不了机构、也对不上账。
+ *      落进 order_events：管理端时间线看得见，`findRefundProgress` 取得回来（买家时间线按状态值过滤，不外泄）。
+ */
+export async function recordRefundPending(
+  db: Db,
+  orderId: string,
+  refundRef: string,
+  actor: string,
+  at: Date,
+): Promise<void> {
+  await db`
+    insert into order_events (order_id, status, note, actor, at)
+    values (${orderId}, 'refund_pending', ${refundRef}, ${actor}, ${at})
+  `;
+}
+
+/** 退款进度（`findRefundProgress` 的返回）。 */
+export interface RefundProgress {
+  /** 最新一条退款进度事件是 `refund_pending` 时 = 它的机构单号（下一步是**查询**，不是再 POST）。 */
+  pendingRef: string | null;
+  /** 机构**确认**失败的次数（`provider_failed:*`）= 下一次发起用的 attempt（换新幂等键）。 */
+  confirmedFailures: number;
+}
+
+/**
+ * 读退款进度：决定管理员再点"退款"时该**查询**旧单还是**发起**新单、用第几把幂等键（F-03，AJ-178）。
+ * @why "最新"按插入顺序（`id desc`）而不是 `at`：同一次请求里先后写入的两条事件 `at` 可以相同
+ *      （注入时钟），而"哪条后发生"在我们系统里就是插入顺序。
+ * @limitation 只看 `refund_pending` / `refund_failed` 两类；refunding 在一张订单上只会进入一次
+ *             （refunded 是终态），所以不必按"本轮退款"切片。
+ */
+export async function findRefundProgress(db: Db, orderId: string): Promise<RefundProgress> {
+  const rows = await db<{ status: string; note: string | null }[]>`
+    select status, note from order_events
+     where order_id = ${orderId} and status in ('refund_pending', 'refund_failed')
+     order by id desc
+  `;
+  const latest = rows[0];
+  return {
+    pendingRef:
+      latest?.status === 'refund_pending' && typeof latest.note === 'string' && latest.note !== ''
+        ? latest.note
+        : null,
+    confirmedFailures: rows.filter(
+      (r) => r.status === 'refund_failed' && (r.note ?? '').startsWith('provider_failed'),
+    ).length,
+  };
 }
 
 /**

@@ -20,10 +20,16 @@
  *              两者都停在支付页，订单仍是 pending_payment，用户可再点一次。
  *              解析宿主 fail 的文案去区分"取消 vs 失败"等于把宿主文案当契约。
  *
- * @see ../../utils/pay-plan.js（通道渲染 / 下一步做什么，13 条单测）；
+ * @see ../../utils/pay-plan.js（通道渲染 / 实扣金额与 §14.2 提示条 / 下一步做什么）；
  *      ../../utils/address-form.js（ADDRESS_COUNTRY_DEFAULT：通道过滤的目的国）
  */
-import { channelOptions, payGuide, payPlan } from '../../utils/pay-plan.js';
+import {
+  CHARGE_CURRENCY_ORDER,
+  chargeOptions,
+  payGuide,
+  payNotice,
+  payPlan,
+} from '../../utils/pay-plan.js';
 import { ADDRESS_COUNTRY_DEFAULT } from '../../utils/address-form.js';
 import { newIdemKey } from '../../utils/idem-key.js';
 import { errorMessage } from '../../utils/error-text.js';
@@ -35,16 +41,15 @@ const app = getApp();
 /** 页面级宿主入口（wx-api 是无状态转发）。 */
 const wxApi = createWxApi();
 
-/** 通道过滤的扣款币种（ADR-09：JPY 是唯一定价锚）。 */
-const CHARGE_CURRENCY = 'JPY';
-
 /** 订单列表页路径（跳转路径只在这一处出现）。 */
 const ORDER_PAGE = '/pages/order/index';
 
 Page({
   data: {
-    /** `channelOptions` 的输出（服务端已按 priority 排序，前端不重排）。 */
+    /** `chargeOptions` 的输出：每个通道带实扣币种与金额（§14.2，AJ-180）。 */
     channels: [],
+    /** §14.2 支付前提示条（逐行文案；空数组 = 不渲染）。 */
+    notice: [],
     /** 订单合计（JPY 整数）；null = 还没拿到。 */
     totalJpy: null,
     /** 引导屏文案（copylink / auto / unsupported）；title 空串 = 不渲染引导屏。 */
@@ -74,7 +79,11 @@ Page({
     void this.load();
   },
 
-  /** 取订单（拿权威金额）→ 取通道（按金额过滤）。串行：后者依赖前者的金额。 */
+  /**
+   * 取订单（拿权威金额）→ 按扣款币种顺序逐个取通道（按金额过滤）。串行：后者依赖前者的金额。
+   * @why 逐币种查（CHARGE_CURRENCY_ORDER）而不是只查 JPY：只对外声明 USD 的银行卡通道只在 USD 下列出，
+   *      只查 JPY 时它**永远不出现**（AJ-180）。
+   */
   async load() {
     this.setData({ loading: true });
     try {
@@ -88,11 +97,16 @@ Page({
         this.setData({ error: '订单金额还没确定，请稍后再试' });
         return;
       }
-      const res = await app.globalData.api({
-        url: `${app.globalData.apiBase}/api/v1/pay/channels?country=${ADDRESS_COUNTRY_DEFAULT}&currency=${CHARGE_CURRENCY}&amount_jpy=${total}`,
-        traceId: this.traceId,
-      });
-      this.setData({ channels: channelOptions(res) });
+      const listings = [];
+      for (const currency of CHARGE_CURRENCY_ORDER) {
+        const resp = await app.globalData.api({
+          url: `${app.globalData.apiBase}/api/v1/pay/channels?country=${ADDRESS_COUNTRY_DEFAULT}&currency=${currency}&amount_jpy=${total}`,
+          traceId: this.traceId,
+        });
+        listings.push({ currency, resp });
+      }
+      const channels = chargeOptions(listings, order);
+      this.setData({ channels, notice: channels.length > 0 ? payNotice(channels, order) : [] });
     } catch (e) {
       this.setData({ error: errorMessage(e) });
     } finally {

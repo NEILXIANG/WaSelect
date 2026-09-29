@@ -25,6 +25,8 @@
  *      ./wx-api.js（requestPayment / setClipboardData 宿主能力）
  */
 
+import { formatJpy, formatUsdCents } from './price-format.js';
+
 /** `wx.requestPayment` 需要的五个字段（契约 PaymentIntent.payload 的 wechat 形状）。 */
 const WX_PAY_FIELDS = ['timeStamp', 'nonceStr', 'package', 'signType', 'paySign'];
 
@@ -117,4 +119,110 @@ export function payGuide(plan) {
     body: typeof p.reason === 'string' ? p.reason : '该支付方式当前不可用，请改用其他支付方式。',
     actionText: '返回订单',
   };
+}
+
+/**
+ * 通道列出查询的币种顺序 = 扣款币种的判定顺序（§14.2，AJ-180）。
+ * @why 与服务端 `pay-intent.ts` 的 resolveCharge 同口径："通道在该币种下**对外可见**"才会按该币种扣，
+ *      JPY 锚优先、其次 USD。曾经支付页只按 JPY 查——只声明 USD 的银行卡通道（stripe）**永远不出现**，
+ *      而微信支付要等 R1 才上线：那段时间小程序里一个支付入口都没有，且不报任何错。
+ * @limitation 这是服务端规则在前端的**一份复述**（契约 ChannelView 不带扣款币种）；
+ *             服务端改判定顺序时这里要跟着改。`stripe-golden-chain.db.test.ts`「§14.2」用真路由钉住
+ *             "按这个顺序查到的第一个币种 = 发起支付时实际扣的币种"，漂移会先在那里红。
+ */
+export const CHARGE_CURRENCY_ORDER = ['JPY', 'USD'];
+
+/**
+ * 按 CHARGE_CURRENCY_ORDER 分别查到的通道列表 → 带实扣币种与金额的支付选项（§14.2）。
+ * @param {unknown} listings `[{currency, resp}]`，resp 为 `GET /pay/channels` 响应
+ * @param {unknown} order `GET /orders/{id}` 响应（读 total_jpy / display）
+ * @returns {Array<{channel: string, label: string, entryMode: string,
+ *           charge: {currency: string, amount: number|null, text: string}, buttonText: string}>}
+ * @why 同一通道在多个币种下都列出时**先到先得**（与服务端同样取 JPY），不重复出现。
+ * @why 美元金额取订单的 `display.USD`：它与服务端扣款用的是同一个换算（订单自己的 fx_snapshot → toMinor），
+ *      不在前端再乘一次汇率；缺了就不编数字（amount=null，文案指向支付页）。
+ * @limitation 顺序：先 JPY 列出的、再只在 USD 下列出的；ChannelView 不带 priority，跨币种无法按优先级合并。
+ */
+export function chargeOptions(listings, order) {
+  if (!Array.isArray(listings)) return [];
+  const o = order && typeof order === 'object' ? order : {};
+  const seen = new Set();
+  const out = [];
+  for (const l of listings) {
+    const currency = l && typeof l === 'object' ? l.currency : undefined;
+    if (currency !== 'JPY' && currency !== 'USD') continue;
+    const items = l.resp && Array.isArray(l.resp.items) ? l.resp.items : [];
+    for (const c of items) {
+      if (!c || typeof c !== 'object' || typeof c.channel !== 'string' || c.channel === '')
+        continue;
+      if (c.entryMode !== 'in_app' && c.entryMode !== 'copylink') continue;
+      if (seen.has(c.channel)) continue;
+      seen.add(c.channel);
+      const label = typeof c.label === 'string' && c.label !== '' ? c.label : c.channel;
+      const charge = chargeOf(currency, o);
+      out.push({
+        channel: c.channel,
+        label,
+        entryMode: c.entryMode,
+        charge,
+        buttonText: charge.amount === null ? label : `${label}（${charge.text}）`,
+      });
+    }
+  }
+  return out;
+}
+
+/** 单个币种的实扣金额与文案（chargeOptions 的一部分）。 */
+function chargeOf(currency, order) {
+  if (currency === 'JPY') {
+    const jpy = Number.isInteger(order.total_jpy) ? order.total_jpy : null;
+    return {
+      currency,
+      amount: jpy,
+      text: jpy === null ? '日元（金额以支付页为准）' : formatJpy(jpy),
+    };
+  }
+  const usd = order.display && Number.isInteger(order.display.USD) ? order.display.USD : null;
+  return {
+    currency,
+    amount: usd,
+    text: usd === null ? '美元（金额以支付页为准）' : formatUsdCents(usd),
+  };
+}
+
+/** 币种 → 提示条里的中文名。 */
+const CURRENCY_NAME = { JPY: '日元', USD: '美元' };
+
+/**
+ * §14.2 支付前提示条（官方《小程序平台运营规范》§14.2："执行支付动作前，需在页面中对用户有明确的提示"，D-48）。
+ * @param {ReturnType<typeof chargeOptions>} options
+ * @param {unknown} order 读 created_at / expires_at（只做两个时刻相减，**不取"现在"**——F10 同口径）
+ * @returns {string[]} 逐行文案：各通道实扣币种与金额 → copylink 离开微信 → 超时关单
+ * @why 关单分钟数由订单自己的两个时刻算，而不是写死 30：TTL 是服务端配置（ORDER_PAYMENT_TTL_MIN），
+ *      写死就是"改了配置、提示还说 30 分钟"。
+ */
+export function payNotice(options, order) {
+  const opts = Array.isArray(options) ? options : [];
+  const lines = [];
+  for (const o of opts) {
+    const name = CURRENCY_NAME[o.charge.currency] ?? o.charge.currency;
+    lines.push(
+      o.charge.amount === null
+        ? `${o.label}：将以${name}扣款（金额以支付页为准）`
+        : `${o.label}：将以${name}扣款 ${o.charge.text}`,
+    );
+  }
+  for (const o of opts) {
+    if (o.entryMode === 'copylink') {
+      lines.push(`选择「${o.label}」将离开微信，复制链接后在 Safari / Chrome 等浏览器中完成支付`);
+    }
+  }
+  const ord = order && typeof order === 'object' ? order : {};
+  const ttlMs = Date.parse(String(ord.expires_at)) - Date.parse(String(ord.created_at));
+  lines.push(
+    Number.isFinite(ttlMs) && ttlMs > 0
+      ? `订单 ${Math.round(ttlMs / 60_000)} 分钟内未支付将自动关闭`
+      : '订单超时未支付将自动关闭',
+  );
+  return lines;
 }

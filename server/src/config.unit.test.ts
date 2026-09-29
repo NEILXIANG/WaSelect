@@ -93,6 +93,7 @@ describe('loadConfig 正常路径', () => {
     expect(c.SCHEDULER_TICK_MS).toBe(60000);
     expect(c.SHUTDOWN_READY_DELAY_MS).toBe(5_000);
     expect(c.FX_BUFFER_RATE).toBeCloseTo(0.03, 10);
+    expect(c.SHIP_WITHIN_BUSINESS_DAYS).toBe(7); // FTC 发货时限承诺（D-39⑦ / AJ-180）
   });
 
   it('逗号分隔的通道被解析成数组，顺序保留', () => {
@@ -399,6 +400,8 @@ describe('数值型配置的下限', () => {
     ['RATE_LIMIT_QUOTE_PER_MIN', '0'],
     ['MAX_ORDER_JPY', '0'],
     ['AUTO_DELIVER_DAYS', '0'],
+    ['SHIP_WITHIN_BUSINESS_DAYS', '0'], // "付款后 0 个工作日内发出"——承诺不可能兑现
+    ['SHIP_WITHIN_BUSINESS_DAYS', '31'], // FTC 未写时限时默认 30 天；承诺比默认还长 = 文案自相矛盾
     ['PORT', '0'],
     ['PACKAGING_WEIGHT_G', '0'], // 包材 0 克会让运费向下取错档（D-46 同源的方向性错误）
     ['CALLBACK_ORDER_GRACE_MS', '-1'], // 负宽限期无意义（0 合法 = 不要宽限期）
@@ -556,6 +559,22 @@ describe('配置形状（N11）', () => {
   it('INTERNAL_JOB_SECRET < 32 → 拒启（HMAC 共享密钥，staging 同样生效）', () => {
     const issues = expectReject({ ...baseEnv, NODE_ENV: 'staging', INTERNAL_JOB_SECRET: 'abc' });
     expect(issues.join('\n')).toContain('INTERNAL_JOB_SECRET');
+  });
+
+  it('ADMIN_EMAIL 与 ADMIN_INITIAL_PASSWORD 必须成对（半配 = seed 静默不跑，生产无人能登管理端，AJ-181）', () => {
+    expect(expectReject({ ...baseEnv, ADMIN_EMAIL: 'boss@example.com' }).join('\n')).toContain(
+      'ADMIN_INITIAL_PASSWORD',
+    );
+    expect(
+      expectReject({ ...baseEnv, ADMIN_INITIAL_PASSWORD: 'initial-password-123' }).join('\n'),
+    ).toContain('ADMIN_EMAIL');
+    expect(
+      loadConfig({
+        ...baseEnv,
+        ADMIN_EMAIL: 'boss@example.com',
+        ADMIN_INITIAL_PASSWORD: 'initial-password-123',
+      }).ADMIN_EMAIL,
+    ).toBe('boss@example.com');
   });
 
   it('ADMIN_INITIAL_PASSWORD < 12 → 拒启（初始口令是爆破的第一目标）', () => {

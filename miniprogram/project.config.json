@@ -7,12 +7,20 @@
   "packOptions": {
     "ignore": [
       {
-        "type": "file",
+        "type": "glob",
         "value": "**/*.unit.test.ts"
       },
       {
-        "type": "file",
+        "type": "glob",
         "value": "**/*.fixture.js"
+      },
+      {
+        "type": "folder",
+        "value": "pages/index"
+      },
+      {
+        "type": "folder",
+        "value": "pages/comp"
       }
     ],
     "include": []

@@ -38,6 +38,14 @@ describe('admin-order-actions（管理端操作准入，I2 U-B2a）', () => {
     expect(codeOf(shipGuard('cancelled', false))).toBe(40902);
   });
 
+  it('shipGuard：审核期测试单（is_test）→ 40902 test_order，永不发货（技术文档 §2.9 / AJ-179）', () => {
+    const r = shipGuard('paid', false, true);
+    expect(codeOf(r)).toBe(40902);
+    expect(r.ok ? '' : r.reason).toBe('test_order');
+    // 缺省 isTest=false：存量调用口径不变
+    expect(shipGuard('paid', false).ok).toBe(true);
+  });
+
   it('refundGuard：paid / shipped / delivered 可退，refunding 可**重试**（KD-4），其余六态拦', () => {
     const allowed = ORDER_STATUS.filter((s) => refundGuard(s, false).ok);
     expect(allowed).toEqual(['paid', 'shipped', 'delivered', 'refunding']);

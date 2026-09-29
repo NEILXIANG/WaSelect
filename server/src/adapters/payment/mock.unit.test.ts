@@ -64,7 +64,8 @@ describe('mock 通道', () => {
     expect(s.entry.mode).toBe('in_app');
     if (s.entry.mode !== 'in_app') throw new Error('unreachable');
     expect(s.entry.params).toEqual({
-      auto: true,
+      // 未开自动确认（非审核模式）→ auto=false：前端不能显示"支付已完成"（AJ-179）
+      auto: false,
       orderId: 'sk-1',
       amountJpy: 12_000,
       currency: 'JPY',
@@ -74,6 +75,52 @@ describe('mock 通道', () => {
     expect(s.expiresAt).toBe(
       new Date(Date.parse('2026-01-02T15:30:00.000Z') + 30 * 60_000).toISOString(),
     );
+  });
+
+  it('自动确认（审核模式，AJ-179）：未开 → 无 selfConfirmation；开了 → auto=true，自签报文能过自己的验签、事件 id 确定', async () => {
+    expect(provider().selfConfirmation).toBeUndefined();
+
+    const p = provider(config({ autoConfirm: true }));
+    const s = await p.create({
+      orderId: 'sk-1',
+      orderNo: '260103-K7Q2MN',
+      amountJpy: 3_200,
+      currency: 'JPY',
+      amountMinor: 3_200,
+      destCountry: 'US',
+      idempotencyKey: 'idem-auto',
+    });
+    if (s.entry.mode !== 'in_app') throw new Error('unreachable');
+    expect(s.entry.params['auto']).toBe(true);
+
+    const msg = p.selfConfirmation?.({
+      orderId: 'sk-1',
+      providerRef: s.providerRef,
+      amountMinor: 3_200,
+      currency: 'JPY',
+    });
+    if (msg === undefined) throw new Error('开了自动确认必须提供 selfConfirmation');
+    const ev = await p.parseWebhook(msg.raw, msg.headers);
+    expect(ev).toMatchObject({
+      eventId: `auto:${s.providerRef}`,
+      outcome: 'succeeded',
+      orderId: 'sk-1',
+      providerRef: s.providerRef,
+      amountMinor: 3_200,
+      currency: 'JPY',
+    });
+    // 同一意图再造一次 → 同一个事件 id（管线据此去重，重复确认不会重复落账）
+    const again = p.selfConfirmation?.({
+      orderId: 'sk-1',
+      providerRef: s.providerRef,
+      amountMinor: 3_200,
+      currency: 'JPY',
+    });
+    expect(again?.raw.equals(msg.raw)).toBe(true);
+  });
+
+  it('autoConfirm 只认布尔 true（字符串 "true" 不算：配置漂移不能悄悄打开"假付款"）', () => {
+    expect(provider(config({ autoConfirm: 'true' })).selfConfirmation).toBeUndefined();
   });
 
   it('回调缺 order_id → 抛（这是**我们**的缺陷，不是坏报文，所以不当 4xx）', async () => {
@@ -120,10 +167,25 @@ describe('mock 通道', () => {
     expect(r?.outcome).toBe('succeeded');
   });
 
+  it('refundStatus：自己发出的退款单号 → succeeded（mock 退款同步完成）；认不出的单号 → 抛（不猜）', async () => {
+    const p = provider();
+    const r = await p.refund?.({
+      orderId: 'sk-1',
+      providerRef: 'ref-1',
+      amountJpy: 12_000,
+      currency: 'JPY',
+      amountMinor: 12_000,
+      reason: '缺货',
+    });
+    await expect(p.refundStatus?.(r?.refundRef ?? '')).resolves.toBe('succeeded');
+    await expect(p.refundStatus?.('re_not_mine')).rejects.toThrow(/不是 mock 发出的退款单号/);
+  });
+
   it('能力声明与实现一致（注册表会校验，这里再钉一次便于单独定位）', () => {
     const p = provider();
     expect(p.capabilities.supportsRefund).toBe(true);
     expect(p.refund).toBeDefined();
+    expect(p.refundStatus).toBeDefined();
     expect(p.channel).toBe('mock');
   });
 

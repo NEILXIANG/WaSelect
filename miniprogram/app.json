@@ -10,12 +10,10 @@
     "pages/order/index",
     "pages/order-detail/index",
     "pages/legal/index",
-    "pages/user/index",
-    "pages/comp/index",
-    "pages/index/index"
+    "pages/user/index"
   ],
   "window": {
-    "navigationBarTitleText": "WaSelect（骨架）",
+    "navigationBarTitleText": "WaSelect",
     "navigationBarBackgroundColor": "#ffffff",
     "navigationBarTextStyle": "black",
     "backgroundTextStyle": "light"

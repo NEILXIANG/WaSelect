@@ -245,6 +245,13 @@ export interface RefundRequest {
   /** 退款金额：**整数最小单位**（同 `PaymentRequest.amountMinor` 的 @why；MVP 全额=建单时的金额）。 */
   amountMinor: number;
   reason: string;
+  /**
+   * 第几次**重新发起**（缺省 0 = 首次）。只在上一笔被机构**确认失败**后才加一（F-03，AJ-178）。
+   * @why 机构幂等键按订单固定时，确认失败的那笔会被机构缓存——同键重试永远拿回同一个失败；
+   *      所以"确认失败"必须换键，而"结果未知"（超时 / 响应丢失）绝不能换键（换了可能退两次，KD-4）。
+   *      由调用方按落库的失败事件计数，适配器只把它编进幂等键，不自己判断。
+   */
+  attempt?: number;
 }
 
 export interface RefundResult {
@@ -275,6 +282,16 @@ export interface PaymentProvider {
   refund?(req: RefundRequest): Promise<RefundResult>;
 
   /**
+   * 查一笔退款的**当前**状态（F-03，AJ-178）。与 `refund` 同进同退（注册表强制：能退就必须能查）。
+   * @why 机构对退款可能先回 pending、稍后才落定；而同键重发 `refund` 拿回的是**首次响应快照**，
+   *      永远等不到结果——pending 的唯一出口是按退款单号查询。
+   * @throws 查询本身失败（网络 / 非 2xx）→ 抛；调用方**不得**把它当成"退款失败"。
+   * @limitation 返回值复用 `RefundResult['outcome']`：机构的中间态（如 Stripe `requires_action`）
+   *             一律并入 pending，认不出的状态也并入 pending——只有机构明确说失败才算 failed。
+   */
+  refundStatus?(refundRef: string): Promise<RefundResult['outcome']>;
+
+  /**
    * 作废机构侧的**待支付会话**（D-50：订单关单/取消的连带动作）。
    *
    * @why 可选方法而不是必填：「机构侧有一个可作废的会话」不是普遍事实——
@@ -290,6 +307,32 @@ export interface PaymentProvider {
    * @throws 实现方对非 2xx 直接抛 Error（与 create/refund 同口径）；调用方必须兜住。
    */
   expireSession?(providerRef: string): Promise<void>;
+
+  /**
+   * 造一条**本通道自己签名**的「支付成功」回调报文（审核模式自动确认，技术文档 §2.9 / AJ-179）。
+   *
+   * @why 审核期 mock 通道没有机构来发回调，小程序却已按 `auto:true` 显示「支付已完成」——
+   *      服务端要自己把这笔确认掉。让通道**造报文**而不是让业务层直接改 paid：
+   *      报文随后走与真实回调同一条路（parseWebhook 验签 → 回调管线 → mark-paid 核对金额/单号 → 去重登记），
+   *      审核期验到的就是生产那条路。事件 id 必须由意图确定（同一意图多次造 → 同一 id → 管线去重）。
+   * @limitation **真实机构通道永远不实现它**：钱到没到只能由机构说。只有审核期假通道、且配置开了自动确认时才存在；
+   *             调用方（app/auto-confirm.ts）另有"只确认测试单"的第二道防线。
+   */
+  selfConfirmation?(input: SelfConfirmationInput): SignedCallback;
+}
+
+/** `selfConfirmation` 的入参：确认哪一笔意图（全部取自已落库的 payments 行）。 */
+export interface SelfConfirmationInput {
+  orderId: string;
+  providerRef: string;
+  amountMinor: number;
+  currency: string;
+}
+
+/** 一条带签名的回调报文（原始字节 + 验签要的头）。 */
+export interface SignedCallback {
+  raw: Buffer;
+  headers: HeaderBag;
 }
 
 /** 工厂：配置 → 实例。**装配处**把密钥等外部依赖在这里闭包进去。 */

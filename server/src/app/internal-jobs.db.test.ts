@@ -250,6 +250,67 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
     }
   });
 
+  it('退款滞留（F-03，AJ-178）：refunding 超过 24h 报 stuck_refunds；23h 不报；缺事件按 updated_at 兜底', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      const refundingOrder = (id: string, no: string, updatedAgo: string) => db`
+        insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                            total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version,
+                            expires_at, updated_at)
+        values (${id}, ${no}, 'u-recon', 'refunding', 1000, 0, 0, 1000, 500,
+                '{}'::jsonb, '{}'::jsonb, 'T', now(), now() - ${updatedAgo}::interval)`;
+      await refundingOrder('o-refund-stuck', 'W-RF-1', '1 minute'); // updated_at 新，但事件是 25h 前
+      await refundingOrder('o-refund-fresh', 'W-RF-2', '1 minute');
+      await refundingOrder('o-refund-noevent', 'W-RF-3', '30 hours');
+      await db`
+        insert into order_events (order_id, status, note, actor, at)
+        values ('o-refund-stuck', 'refunding', '缺货', 'admin:u-admin', now() - interval '25 hours'),
+               ('o-refund-fresh', 'refunding', '缺货', 'admin:u-admin', now() - interval '23 hours')`;
+
+      const res = await trigger(srv.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      await waitForDailyHeartbeat();
+      const hit = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'stuck_refunds');
+      expect(hit, 'refunding 超过 24h 必须报出').toBeDefined();
+      const ctx = hit?.['ctx'] as Record<string, unknown> | undefined;
+      expect(ctx?.['count']).toBe(2);
+      const ids = JSON.stringify(ctx?.['sample_ids']);
+      expect(ids).toContain('o-refund-stuck');
+      expect(ids).toContain('o-refund-noevent');
+      expect(ids).not.toContain('o-refund-fresh');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('每日作业含自动签收 / 自动完成（O-12 / AJ-182 接线）：31 天前发货的单被签收，且排在对账之前', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      await db`
+        insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                            total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version,
+                            expires_at, shipped_at)
+        values ('o-auto-deliver', 'W-AD-1', 'u-recon', 'shipped', 1000, 0, 0, 1000, 500,
+                '{}'::jsonb, '{}'::jsonb, 'T', now() - interval '40 days', now() - interval '31 days')`;
+      const res = await trigger(srv.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      await waitForDailyHeartbeat();
+      const [o] = await db`select status from orders where id = 'o-auto-deliver'`;
+      expect(o?.['status']).toBe('delivered');
+      const order = srv.sink.rows().map((r) => String(r.event));
+      const iDeliver = order.indexOf('orders_auto_delivered');
+      const iComplete = order.indexOf('orders_auto_completed');
+      const iRecon = order.indexOf('daily_reconciliation');
+      expect(iDeliver).toBeGreaterThanOrEqual(0);
+      expect(iDeliver).toBeLessThan(iComplete);
+      expect(iComplete).toBeLessThan(iRecon);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('心跳看门狗（AJ-102 承诺的替代方案）：tick 从未成功 → 报 stalled_heartbeats', async () => {
     const srv = await buildServer({ withSecret: true });
     try {

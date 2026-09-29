@@ -12,7 +12,7 @@
  *      拆开测会让"两页显示不一致"这件事没有守卫。
  */
 import { describe, expect, it } from 'vitest';
-import { itemRows, orderBody, submitGate } from './index.vm.js';
+import { contactEmailOf, itemRows, orderBody, submitGate } from './index.vm.js';
 
 const ITEMS = [
   { productId: 'p-shiro-cleansing-oil', qty: 2, title: '資生堂 クレンジングオイル 200ml' },
@@ -95,5 +95,44 @@ describe('orderBody（建单请求体）', () => {
       contact_email: 'a@b.com',
     });
     expect(Object.keys(orderBody({ ...ARGS, contactEmail: '' }))).not.toContain('contact_email');
+  });
+});
+
+/**
+ * 可选收货通知邮箱（PRD §3 确认订单 / D-39；提审前必须，AJ-180）。
+ * @why 选填：空着照常下单；填了就必须是服务端会收的形状——否则"提交 → 40001"
+ *      给出的是泛化的"参数错误"，用户不知道错在邮箱。口径与服务端入口一致（有 @、无空白、≤255）。
+ */
+describe('contactEmailOf（选填邮箱）', () => {
+  it('空 / 纯空白 → 不带（value 为空串）、不拦', () => {
+    expect(contactEmailOf('')).toEqual({ value: '', error: '' });
+    expect(contactEmailOf('   ')).toEqual({ value: '', error: '' });
+    expect(contactEmailOf(undefined)).toEqual({ value: '', error: '' });
+  });
+
+  it('去首尾空白后合法 → 带上', () => {
+    expect(contactEmailOf('  jane@example.com ')).toEqual({ value: 'jane@example.com', error: '' });
+  });
+
+  it('形状不对 / 中间有空白 / 超过 255 → 给具体原因（与服务端 contact_email_shape 同口径）', () => {
+    for (const bad of [
+      'jane',
+      'jane@',
+      '@example.com',
+      'ja ne@example.com',
+      `${'a'.repeat(250)}@x.com`,
+    ]) {
+      expect(contactEmailOf(bad).error, bad).toBe('邮箱格式不正确（可留空）');
+    }
+  });
+
+  it('submitGate：邮箱有错 → 不可提交且原因指向邮箱；其余四项的原因优先', () => {
+    const OK = { itemCount: 2, addressId: 'addr-1', termsAccepted: true, totalJpy: 9150 };
+    expect(submitGate({ ...OK, emailError: '邮箱格式不正确（可留空）' })).toEqual({
+      ok: false,
+      reason: '邮箱格式不正确（可留空）',
+    });
+    expect(submitGate({ ...OK, itemCount: 0, emailError: 'x' }).reason).toBe('购物车是空的');
+    expect(submitGate({ ...OK, emailError: '' }).ok).toBe(true);
   });
 });

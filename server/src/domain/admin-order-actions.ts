@@ -51,10 +51,18 @@ function deny(code: ErrorCode, reason: string): AdminGateResult {
 }
 
 /**
- * 发货准入：`paid → shipped`，且无进行中的拒付。
+ * 发货准入：`paid → shipped`，且无进行中的拒付，且**不是审核期测试单**。
  * @param hasDispute `orders.has_dispute`（D-50）。
+ * @param isTest `orders.is_test`（技术文档 §2.9 / AJ-179）：审核期 mock 单是**未付款即确认**的，
+ *        发货 = 真货换假钱。拦在拒付与状态之前：它两样都可能"合格"（paid、无拒付），唯独这条不能放。
+ *        缺省 false 只为存量调用口径不变；路由层一律显式传。
  */
-export function shipGuard(status: OrderStatus, hasDispute: boolean): AdminGateResult {
+export function shipGuard(
+  status: OrderStatus,
+  hasDispute: boolean,
+  isTest = false,
+): AdminGateResult {
+  if (isTest) return deny(40902, 'test_order');
   if (hasDispute) return deny(40909, 'dispute_open');
   return canTransition(status, 'shipped') ? OK : deny(40902, `status_${status}`);
 }

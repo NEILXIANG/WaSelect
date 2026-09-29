@@ -39,6 +39,11 @@ import { systemClock } from '../adapters/clock.js';
 import { systemIdGen } from '../adapters/ids.js';
 import { outboundHttpOptions } from './http-outbound.js';
 import { mountPayRoutes } from './pay-routes.js';
+import type { CallbackPipelineDeps } from './pay-callback.js';
+import { createAutoConfirm } from './auto-confirm.js';
+import { mountAdminAuthRoutes } from './admin-auth-routes.js';
+import { adminAuditMiddleware } from './admin-audit.js';
+import { createAdminAuditStore } from '../adapters/admin-audit.js';
 import { AppError } from '../errors.js';
 import { markOrderPaid } from './mark-paid.js';
 import { markDisputeClosed, markOrderDisputed } from './mark-disputed.js';
@@ -119,8 +124,9 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
       offline: offlineChannels,
     },
   });
-  mountPayRoutes(app, {
-    registry,
+  // 回调管线依赖**只造这一份**：`/pay/callback/{channel}` 与审核模式自动确认（AJ-179）共用——
+  // 两份各自装配的后果是"自动确认走的落账器与真实回调不是同一套"，审核期验到的就不是生产那条路
+  const callbackPipeline: CallbackPipelineDeps = {
     webhooks: createWebhookStore(db),
     logger,
     graceMs: config.CALLBACK_ORDER_GRACE_MS,
@@ -186,7 +192,8 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
         disposition: 'dispute_closed',
       },
     },
-  });
+  };
+  mountPayRoutes(app, { registry, ...callbackPipeline });
 
   // ── 报价路由（I1-U4）：**每个环境都挂**，与支付路由同理——它是产品接口不是脚手架 ──
   /**
@@ -213,6 +220,10 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
 
   // ── 商品/配置公开端点 + 我的地址（I1-U5a）：全环境挂载（产品接口不是脚手架）──
   mountProductRoutes(app, { db, clock: systemClock, config });
+
+  // ── 管理端操作审计（流 B / ADR-29；F-02 / AJ-183）：**先于**所有管理端路由挂在 /api/v1/admin 前缀上——
+  //    新增的管理端写路由自动被审计（admin-audit.ts @why）；挂在后面的话，前面那些路由就漏了 ──
+  app.use('/api/v1/admin', adminAuditMiddleware({ store: createAdminAuditStore(db), logger }));
 
   // ── 管理端商品（I2-U-A3）：守卫在路由文件内共用一个实例（admin-product-routes @why）；
   //    identity 与其它路由共用同一份缓存实例——管理员也要能被即时撤权 ──
@@ -257,7 +268,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     identity,
   });
   // ── 管理端风控（I2-U-E3）：拒付列表 + 拉黑。拉黑是本项目第一个**不可逆**的写操作
-  //    （契约没有解除接口），所以它必须走业务日志（admin_audit 端口落地后一并接入）──
+  //    （契约没有解除接口）：业务日志 + admin_audit（前缀审计中间件，AJ-183）+ 身份缓存即时作废（F-06）──
   mountAdminRiskRoutes(app, {
     db,
     logger,
@@ -321,6 +332,8 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     idempotency: createIdempotencyExecutor(db),
     registry,
     payLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('orders.pay')),
+    // 审核模式自动确认（§2.9 / AJ-179）：是否真的确认由通道能力决定，这里全环境装配
+    autoConfirm: createAutoConfirm({ db, registry, logger, pipeline: callbackPipeline }),
   });
 
   // ── 短链落地（I1-U6a-2 / D-49）：无鉴权（token 即凭证）；限流 publicWrite（独立桶） ──
@@ -353,6 +366,15 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
       rateLimitDeps,
       rateLimitRules(config).publicWrite('auth.wechat.login'),
     ),
+  });
+
+  // ── 管理员登录（D-38 ⑤ / O-11 / AJ-181）：IP 限流（adminLogin 规则，D-52）+ 账号锁定（路由内）──
+  mountAdminAuthRoutes(app, {
+    db,
+    logger,
+    clock: systemClock,
+    authConfig: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    loginLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).adminLogin),
   });
 
   // ── 每日作业触发（I1-U7b / D-43）：Render Cron 的 HTTP 入口；异步执行走同一套调度器框架 ──

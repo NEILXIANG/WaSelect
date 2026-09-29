@@ -99,6 +99,18 @@ describe('withIdentityCache', () => {
     expect(after?.blockedAt).toBeInstanceOf(Date);
   });
 
+  it('invalidate(sub)：TTL 之内也立即回源、看到新状态；只作废这一个 sub（F-06 / AJ-183）', async () => {
+    const inner = counting(createIdentityCheck(db));
+    const cached = withIdentityCache(inner.check, 60_000);
+    await cached.load('u-1');
+    await cached.load('u-2');
+    await db`update users set blocked_at = now() where id = 'u-1'`;
+    cached.invalidate?.('u-1');
+    expect((await cached.load('u-1'))?.blockedAt).toBeInstanceOf(Date);
+    await cached.load('u-2');
+    expect(inner.calls()).toBe(3); // u-1 两次（作废后回源）+ u-2 一次（没被连带作废）
+  });
+
   it('"查不到"也会被缓存（否则不存在的用户会变成放大攻击面）', async () => {
     const inner = counting(createIdentityCheck(db));
     const cached = withIdentityCache(inner.check, 60_000);

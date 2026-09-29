@@ -79,6 +79,53 @@ export async function markOrderExpired(tx: Db, orderId: string, at: Date): Promi
   return true;
 }
 
+// ── 自动签收 / 自动完成（O-12 / AJ-182）──────────────────────────────────────
+
+/**
+ * 两段自动迁移的列映射（**白名单**：列名只能来自这张表，不接受调用方传入的字符串）。
+ * @why 两段逻辑逐字相同，只差"从哪个状态、按哪一列计时、盖哪一列时间戳"——写两份 SQL
+ *      迟早漂移（一份改了拒付排除、另一份没改）。列名走 `tx(identifier)` 转义，且只能是这里列出的值。
+ */
+const AUTO_ADVANCE = {
+  delivered: { from: 'shipped', since: 'shipped_at', stamp: 'delivered_at' },
+  completed: { from: 'delivered', since: 'delivered_at', stamp: 'completed_at' },
+} as const;
+
+/**
+ * 把到期的订单自动迁到下一态，并逐单记 order_events（actor = system）。**一条语句**完成选取、迁移、记事件。
+ * @param dueBefore 计时列 ≤ 它即到期（含等号：恰好满 N 天算到期，与关单 expires_at 同口径）
+ * @param at 迁移时刻（写进时间戳列与事件；来自注入时钟）
+ * @returns 本次真正迁走的订单 id
+ * @why 排除 `has_dispute`：拒付未决时"签收 / 完成"会关掉售后与举证窗口，那要人判断（AJ-182）。
+ * @why `for update skip locked` + 迁移时再判一次 `status`：与关单同口径——并发的人工操作（退款、发货改址）
+ *      持着行锁时本轮跳过它，下一轮再看；已被别人迁走的行 0 命中，不写事件。
+ */
+export async function autoAdvanceOrders(
+  tx: Db,
+  to: keyof typeof AUTO_ADVANCE,
+  opts: { dueBefore: Date; at: Date; note: string; limit: number },
+): Promise<string[]> {
+  const m = AUTO_ADVANCE[to];
+  const rows = await tx<{ id: string }[]>`
+    with due as (
+      select id from orders
+       where status = ${m.from} and has_dispute = false and ${tx(m.since)} <= ${opts.dueBefore}
+       order by ${tx(m.since)}
+       limit ${opts.limit}
+       for update skip locked
+    ), moved as (
+      update orders o set status = ${to}, ${tx(m.stamp)} = ${opts.at}, updated_at = now()
+        from due where o.id = due.id and o.status = ${m.from}
+      returning o.id
+    ), ev as (
+      insert into order_events (order_id, status, note, actor, at)
+      select id, ${to}, ${opts.note}, 'system', ${opts.at} from moved
+    )
+    select id from moved
+  `;
+  return rows.map((r) => r.id);
+}
+
 // ── I1-U5b：建单 / 库存 ─────────────────────────────────────────────────────
 
 /**
@@ -188,6 +235,8 @@ export interface OrderInsertRow {
   contact_email: string | null;
   terms_version: string;
   expires_at: Date;
+  /** 审核期测试单（技术文档 §2.9 / AJ-179）：建单时 REVIEW_MODE=on 即 true；管理端默认过滤、不得采购发货。 */
+  is_test: boolean;
 }
 
 /**
@@ -199,12 +248,22 @@ export async function insertOrder(tx: Db, row: OrderInsertRow): Promise<void> {
   await tx`
     insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
                         total_jpy, weight_g, fx_snapshot, address_snapshot, contact_email,
-                        terms_version, expires_at)
+                        terms_version, expires_at, is_test)
     values (${row.id}, ${row.order_no}, ${row.user_id}, 'created', ${row.items_jpy},
             ${row.shipping_jpy}, ${row.duty_jpy}, ${row.total_jpy}, ${row.weight_g},
             ${tx.json(row.fx_snapshot)}, ${tx.json(row.address_snapshot)}, ${row.contact_email},
-            ${row.terms_version}, ${row.expires_at})
+            ${row.terms_version}, ${row.expires_at}, ${row.is_test})
   `;
+}
+
+/**
+ * 订单是否审核期测试单（自动确认的第二道防线，AJ-179）。
+ * @returns null = 订单不存在。
+ */
+export async function isTestOrder(db: Db, orderId: string): Promise<boolean | null> {
+  const rows = await db<{ is_test: boolean }[]>`select is_test from orders where id = ${orderId}`;
+  const row = rows[0];
+  return row === undefined ? null : row.is_test;
 }
 
 /** order_items 一行（declared_value_usd 由建单用 allocate 分摊好——这里只负责落库）。 */

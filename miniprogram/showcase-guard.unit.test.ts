@@ -21,9 +21,9 @@
  *              这件事再写一遍；这一层留给 L4 人工看。
  * @limitation 二：组件目录名与标签名**当前同名**（`ws-price` → `<ws-price>`）。
  *              若将来出现"目录名 ≠ 标签名"的组件，这里会误报，需要按映射表改。
- * @limitation 三：`app.json` 的 `pages[0]` 是启动页，所以样板页**不能排第一**；
- *              这里只挡"排第一"，不挡"样板页被打进发布包"（小程序没有条件编译页，
- *              @tradeoff 想彻底不带，得把它挪进分包并在提审前删——当前包体代价 ≈ 0，先不做）。
+ * @limitation 三：样板页**不登记**进 app.json、并按目录排除出上传包（AJ-180，提审前 O-14）——
+ *              小程序没有条件编译页，所以 L4 真机验收时要临时登记、验完撤回（不提交）。
+ *              曾经的口径是"登记但不排第一"，代价是审核员能打开一张组件陈列页。
  *
  * @see ../pages/comp/index.json（样板页登记处）；docs/地基搭建清单.md F14
  */
@@ -89,14 +89,20 @@ describe('组件样板页必须登记每一个已建组件', () => {
     }
   });
 
-  it('样板页在 app.json 的 pages 里（不在就打不开，等于没有验收面）', () => {
+  /**
+   * 发布包不带样板页（提审前 O-14 / AJ-180）：曾经它登记在 app.json 里随包上传——
+   * 审核员能看到一张"组件陈列"页，而它不是产品的一部分。
+   * @why 两道：① app.json 不登记（登记了就能被打开）；② project.config.json 的 packOptions.ignore
+   *      按目录排除（万一有人为了 L4 临时登记后忘了删，打包会因缺页**失败**，而不是悄悄带上去）。
+   * @limitation L4 真机看组件时，要**临时**把 `pages/comp/index` 加回 app.json（不提交）。
+   */
+  it('样板页不在 app.json 的 pages 里，且被 packOptions.ignore 按目录排除（发布包不带开发页）', () => {
     const app = JSON.parse(readFileSync(join(mini, APP_JSON), 'utf8')) as { pages: string[] };
-    expect(app.pages).toContain(SHOWCASE_PAGE);
-  });
-
-  it('样板页不是启动页（pages[0] 是启动页；排第一就等于产品首页被顶掉）', () => {
-    const app = JSON.parse(readFileSync(join(mini, APP_JSON), 'utf8')) as { pages: string[] };
-    expect(app.pages[0], `启动页是 ${SHOWCASE_PAGE}——样板页不能排第一`).not.toBe(SHOWCASE_PAGE);
+    expect(app.pages).not.toContain(SHOWCASE_PAGE);
+    const cfg = JSON.parse(readFileSync(join(mini, 'project.config.json'), 'utf8')) as {
+      packOptions?: { ignore?: { type: string; value: string }[] };
+    };
+    expect(cfg.packOptions?.ignore).toContainEqual({ type: 'folder', value: 'pages/comp' });
   });
 
   it('每个登记的组件在样板页 wxml 里至少用了一次（防"登记了但没摆出来"）', () => {

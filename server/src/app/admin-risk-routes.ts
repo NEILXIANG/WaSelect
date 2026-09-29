@@ -15,11 +15,10 @@
  *      它们的处置动作完全不同——"人不存在"要刷新列表，"对方是管理员"要先撤管理员权限。
  *      折叠成一个码会让运营照着错误的方向去处理（与 AJ-150 里 40910 不折叠进 50000 同一条理由）。
  *
- * @limitation 一：**没有 `admin_audit` 写入**（与商品价格/订单操作同批欠账，AJ-150 已登记）。
- *              本路由只写 pino 业务日志（流 A）；等审计端口落地，这里要一并接入——
- *              风控动作是"最需要永久留痕"的那一类（应用日志有保留期，`admin_audit` 没有）。
- * @limitation 二：拉黑**不是即时生效**（`adapters/risk-admin.ts` @limitation 四）：
- *              身份缓存 60 秒，多实例各计。
+ * @limitation 一：`admin_audit` 由 /api/v1/admin 前缀上的审计中间件统一写（F-02 / AJ-183，app/admin-audit.ts）：
+ *              拉黑成功即留一行（actor / target / trace_id），本路由不直接写表。
+ * @limitation 二：拉黑**本进程即时生效**（F-06 / AJ-183：成功后作废身份缓存）；多实例时其它实例仍要等
+ *              60 秒 TTL——render.yaml 固定单实例并由 render-env.unit.test.ts 钉住。
  *
  * @see adapters/risk-admin.ts（仓储）；domain/dispute-input.ts（status 校验）；
  *      contracts/api-contract.yaml 0.6.5（Dispute、两条路由的响应清单）
@@ -81,6 +80,9 @@ export function mountAdminRiskRoutes(app: Express, deps: AdminRiskRoutesDeps): v
         const outcome = await repo.blockUser(id);
         if (outcome.kind === 'not_found') throw new AppError(40403, { target_user_id: id });
         if (outcome.kind === 'is_admin') throw new AppError(40911, { target_user_id: id });
+        // 即时生效（F-06 / AJ-183）：作废本进程的身份缓存，被拉黑者的下一个请求就回源、就被拒——
+        // 不作废的话缓存命中还会放行最多 60 秒（IDENTITY_CACHE_TTL_MS）
+        deps.identity.invalidate?.(id);
         deps.logger.info('admin_user_blocked', {
           result: 'ok',
           // ⚠️ 不能写 `actor`：那是 logger 的保留键（由 requireRole 写入上下文），

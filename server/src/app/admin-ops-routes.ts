@@ -15,11 +15,9 @@
  * @why 两张表的每次改动都把**改前的值**记进日志（流 A）：
  *      运费整表替换是**不可逆**的（`delete` 之后旧档就没有了），
  *      一次误操作后运营一定会问"之前是多少"——答不上来就是真实的数据丢失。
- *      ⚠️ **刻意不写 `admin_audit` 表**（它有 before/after 两列，看起来正是为这个准备的）：
- *      该表目前**零写入方**，接入需要一个统一的写入端口（ports 层 + 挂载处装配），
- *      那是独立的一件事（"管理端审计流"），不是一个路由单元顺手能加的；
- *      在一条路由里直接 insert 会造出"审计写入的第一份实现"，后面三条路由各抄一遍
- *      ——正是"抄第二份必漂移"的老路（§2）。登记为待办：等审计端口落地，四处一起接。
+ *      `admin_audit` 由挂在 /api/v1/admin 前缀上的审计中间件统一写（F-02 / AJ-183，app/admin-audit.ts）；
+ *      本文件只负责用 `setAuditBefore` 交出改前值——整表替换与汇率追加是两类"之前是多少"必须答得上的操作。
+ *      （早先"刻意不写"的理由——不要在路由里造第一份实现——正是端口落地后四处一起接的由来。）
  *
  * @limitation 一：**汇率突变只记日志不拦截**。新 rate 与"当前生效的那条"相差 10 倍以上
  *              打一条 warn（`fx_rate_jump`）。不做拦截是因为"可接受的日波动区间"
@@ -43,6 +41,7 @@ import type { Clock } from '../ports/clock.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
+import { setAuditBefore } from './admin-audit.js';
 import {
   createOpsConfigRepo,
   type FxRateRow,
@@ -115,6 +114,7 @@ export function mountAdminOpsRoutes(app: Express, deps: AdminOpsRoutesDeps): voi
         // 改前值进日志（@why）：这一次维护之后，"上一次是多少"仍然可查
         const now = deps.clock.now();
         const prev = await repo.findLatestFxRate(input.quote, now);
+        setAuditBefore(res, prev); // 审计流 B 的改前值（AJ-183）：汇率只追加不改，"上一条"就是改前值
         const effectiveFromMs = input.effectiveFromMs ?? now.getTime();
         try {
           await repo.insertFxRate({
@@ -175,6 +175,7 @@ export function mountAdminOpsRoutes(app: Express, deps: AdminOpsRoutesDeps): voi
         const rows = parseShippingRates(req.body);
         // 改前整表进日志：整表替换不可逆，没有 before 就再也答不出"之前是多少"
         const before = await repo.listShippingRates();
+        setAuditBefore(res, before.map(toShippingRate)); // 审计流 B 的改前值（AJ-183）：整表替换不可逆
         const after = await repo.replaceShippingRates(rows);
         deps.logger.info('admin_shipping_rates_replaced', {
           result: 'ok',

@@ -27,7 +27,13 @@ import type { PaymentRegistry } from '../ports/payment.js';
 import { requireRole, type AuthConfig } from './auth.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import { scopeKey, type IdempotencyExecutor } from '../ports/idempotency.js';
-import { createPayIntent, redactPayToken, reissuePayLinkOnReplay } from './pay-intent.js';
+import {
+  createPayIntent,
+  redactPayToken,
+  reissuePayLinkOnReplay,
+  type PayIntentResult,
+} from './pay-intent.js';
+import type { AutoConfirm } from './auto-confirm.js';
 
 export interface PayIntentRoutesDeps {
   /** 幂等重放时补发短链要开自己的事务（KD-3：重放体里的明文 token 已被抹掉）。 */
@@ -42,6 +48,11 @@ export interface PayIntentRoutesDeps {
   registry: PaymentRegistry;
   /** 限流中间件（装配处按 rateLimitRules.publicWrite 生成后传入）。 */
   payLimiter: RequestHandler;
+  /**
+   * 事务提交后的审核模式自动确认（技术文档 §2.9 / AJ-179）；缺省 = 不做。
+   * 是否真的确认由通道能力决定（app/auto-confirm.ts），路由不认识任何通道。
+   */
+  autoConfirm?: AutoConfirm | undefined;
 }
 
 export function mountPayIntentRoutes(app: Express, deps: PayIntentRoutesDeps): void {
@@ -70,6 +81,8 @@ export function mountPayIntentRoutes(app: Express, deps: PayIntentRoutesDeps): v
             throw new AppError(40001, { reason: 'channel_required' });
           }
 
+          /** 本次**新执行**（非幂等重放）的意图：提交后交给自动确认。 */
+          let committed: PayIntentResult | undefined;
           const result = await deps.idempotency.runInTx(
             {
               key: scopeKey({ userId: sub, route: 'orders.pay', clientKey }),
@@ -93,6 +106,7 @@ export function mountPayIntentRoutes(app: Express, deps: PayIntentRoutesDeps): v
                 },
                 { orderId, userId: sub, channel },
               );
+              committed = r;
               return {
                 status: 200,
                 body: {
@@ -104,6 +118,16 @@ export function mountPayIntentRoutes(app: Express, deps: PayIntentRoutesDeps): v
               };
             },
           );
+          // 审核模式：提交之后才确认（管线要读到已提交的 payments 行，auto-confirm.ts @why）。
+          // ⚠️ 必须在回响应之前等它完成：小程序见 auto=true 立刻显示「支付已完成」并去看订单
+          if (!result.replayed && committed !== undefined && deps.autoConfirm !== undefined) {
+            await deps.autoConfirm({
+              orderId,
+              channel: committed.channel,
+              providerRef: committed.providerRef,
+              charge: committed.charge,
+            });
+          }
           const out = result.replayed
             ? await reissuePayLinkOnReplay(
                 deps.db,

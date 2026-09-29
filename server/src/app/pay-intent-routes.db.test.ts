@@ -136,7 +136,9 @@ describe('POST /orders/{id}/pay（mock 通道全链路）', () => {
       expect(r.json['channel']).toBe('mock');
       expect(r.json['charge']).toEqual({ currency: 'JPY', amount: TOTAL });
       const payload = r.json['payload'] as Record<string, unknown>;
-      expect(payload['auto']).toBe(true); // mock 的自动确认信号（前端不写死通道名）
+      // mock 的自动确认信号（前端不写死通道名）：非审核模式服务端不会确认 → false（AJ-179；
+      // 审核模式的 true + 已确认见 review-mode.db.test.ts）
+      expect(payload['auto']).toBe(false);
       expect(payload['orderId']).toBe(orderId);
       expect(typeof r.json['expires_at']).toBe('string');
 

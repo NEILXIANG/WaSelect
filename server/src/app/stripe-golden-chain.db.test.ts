@@ -41,6 +41,11 @@ import {
   type ChainServer,
 } from '../../../test/helpers/chain-server.js';
 import { PAY_CALLBACK_PREFIX } from './pay-routes.js';
+import {
+  CHARGE_CURRENCY_ORDER,
+  chargeOptions,
+  payNotice,
+} from '../../../miniprogram/utils/pay-plan.js';
 import { PAY_LINK_PREFIX } from './pay-link-routes.js';
 import {
   STRIPE_MIN_SESSION_TTL_SEC,
@@ -376,6 +381,145 @@ describe('KD-4：退款"机构已执行、响应丢失"后重试', () => {
       await db`select note from order_events where order_id = ${orderId} and status = 'refunded'`;
     expect(note[0]?.['note']).toBe('re_test_0001'); // 机构侧只有一笔
     expect(srv.sink.find('admin_order_refund_retry')).toHaveLength(1);
+  });
+});
+
+describe('§14.2 支付前提示：小程序算出的"实扣币种与金额" = 服务端真正扣的（AJ-180）', () => {
+  /**
+   * @why 小程序的 chargeOptions 复述了服务端 resolveCharge 的规则（契约 ChannelView 不带扣款币种）；
+   *      这条用**真路由**的输出喂小程序自己的纯函数，再与发起支付的实扣对账——两边任何一边漂了都红。
+   *      顺带钉住原缺陷：只按 JPY 查通道时 stripe（只对外声明 USD）根本不出现。
+   */
+  it('按 CHARGE_CURRENCY_ORDER 逐币种查通道 → stripe 只在 USD 下出现；提示的金额 = 发起支付的 charge', async () => {
+    const orderId = await createOrder('k-142');
+    const token = await tokenFor('u-1');
+    const order = await call(srv, 'GET', `/api/v1/orders/${orderId}`, { token });
+    const totalJpy = Number(order.json['total_jpy']);
+    const listings = [];
+    for (const currency of CHARGE_CURRENCY_ORDER) {
+      const r = await call(
+        srv,
+        'GET',
+        `/api/v1/pay/channels?country=US&currency=${currency}&amount_jpy=${String(totalJpy)}`,
+      );
+      expect(r.status).toBe(200);
+      listings.push({ currency, resp: r.json });
+    }
+    const jpyOnly = chargeOptions([listings[0]], order.json).map((o) => o.channel);
+    expect(jpyOnly, '只按 JPY 查时银行卡不出现——这正是原缺陷').not.toContain('stripe');
+
+    const opts = chargeOptions(listings, order.json);
+    const card = opts.find((o) => o.channel === 'stripe');
+    expect(card?.charge.currency).toBe('USD');
+
+    const pay = await payStripe(orderId, 'pay-142');
+    expect(pay.status).toBe(200);
+    expect(pay.json['charge']).toEqual({
+      currency: card?.charge.currency,
+      amount: card?.charge.amount,
+    });
+    expect(payNotice(opts, order.json).join('\n')).toContain('离开微信');
+  });
+});
+
+describe('F-03：退款 pending 的出口（AJ-178）', () => {
+  /**
+   * @why 原先 pending 分支只打一条 info 日志就回 202：退款单号没落库，重试沿用同一幂等键，
+   *      Stripe 回放的是**首次响应快照**（仍是 pending）——订单永远停在 refunding、没有任何告警
+   *      （独立审查辨析 §3.1）。这组用例钉住三条出口：查询、确认失败后换键、以及查询失败不误判。
+   */
+  async function paidOrder(tag: string): Promise<string> {
+    const orderId = await createOrder(`k-${tag}`);
+    await payStripe(orderId, `pay-${tag}`);
+    expect((await completeCheckout(orderId, `evt_${tag}`)).status).toBe(200);
+    return orderId;
+  }
+  const refund = async (orderId: string, key: string) =>
+    call(srv, 'POST', `/api/v1/admin/orders/${orderId}/refund`, {
+      token: await tokenFor('u-admin', 'admin'),
+      key,
+      body: { reason: '缺货' },
+    });
+  const refundKeys = () =>
+    stripeCalls('/v1/refunds').map((c) => c.headers?.['idempotency-key'] ?? '');
+  const refundGets = (ref: string) =>
+    fake.calls.filter((c) => c.method === 'GET' && c.url.endsWith(`/v1/refunds/${ref}`));
+  const events = (orderId: string, status: string) =>
+    db`select note, actor from order_events where order_id = ${orderId} and status = ${status} order by id`;
+
+  it('pending → 单号落库 → 再点只查询不再 POST → 机构完成后再点 → refunded（同一单号）', async () => {
+    const orderId = await paidOrder('f3a');
+    fake.nextRefundStatus('pending');
+    const first = await refund(orderId, 'rf-f3a-1');
+    expect(first.status).toBe(202);
+    expect(first.json['outcome']).toBe('pending');
+    expect(await orderStatus(orderId)).toBe('refunding');
+    const pend = await events(orderId, 'refund_pending');
+    expect(pend.map((r) => r['note'])).toEqual(['re_test_0001']);
+    expect(pend[0]?.['actor']).toBe('admin:u-admin');
+
+    const still = await refund(orderId, 'rf-f3a-2');
+    expect(still.status).toBe(202);
+    expect(still.json['outcome']).toBe('pending');
+    expect(refundKeys()).toHaveLength(1); // 没有第二次 POST（那只会拿回首次快照）
+    expect(refundGets('re_test_0001')).toHaveLength(1);
+    expect(srv.sink.find('admin_order_refund_still_pending')).toHaveLength(1);
+
+    fake.settleRefund('re_test_0001', 'succeeded');
+    const done = await refund(orderId, 'rf-f3a-3');
+    expect(done.status).toBe(202);
+    expect(done.json['outcome']).toBe('succeeded');
+    expect(await orderStatus(orderId)).toBe('refunded');
+    expect((await events(orderId, 'refunded')).map((r) => r['note'])).toEqual(['re_test_0001']);
+    expect((await paymentRow(orderId)).status).toBe('refunded');
+    expect(refundKeys()).toHaveLength(1);
+  });
+
+  it('pending → 机构判失败 → 再点：记"确认失败" + 换新键重新发起 → refunded', async () => {
+    const orderId = await paidOrder('f3b');
+    fake.nextRefundStatus('pending');
+    expect((await refund(orderId, 'rf-f3b-1')).json['outcome']).toBe('pending');
+    fake.settleRefund('re_test_0001', 'failed');
+
+    const retry = await refund(orderId, 'rf-f3b-2');
+    expect(retry.status).toBe(202);
+    expect(retry.json['outcome']).toBe('succeeded');
+    expect(await orderStatus(orderId)).toBe('refunded');
+    expect(refundKeys()).toEqual([`refund:${orderId}`, `refund:${orderId}:1`]);
+    expect((await events(orderId, 'refund_failed')).map((r) => r['note'])).toEqual([
+      'provider_failed:re_test_0001',
+    ]);
+    expect((await events(orderId, 'refunded')).map((r) => r['note'])).toEqual(['re_test_0002']);
+  });
+
+  it('POST 直接回 failed → 50000 + 确认失败留痕 → 再点换新键（不是拿回缓存的失败）→ refunded', async () => {
+    const orderId = await paidOrder('f3c');
+    fake.nextRefundStatus('failed');
+    const first = await refund(orderId, 'rf-f3c-1');
+    expect(first.status).toBe(500);
+    expect(await orderStatus(orderId)).toBe('refunding');
+    expect((await events(orderId, 'refund_failed')).map((r) => r['note'])).toEqual([
+      'provider_failed:re_test_0001',
+    ]);
+
+    const retry = await refund(orderId, 'rf-f3c-2');
+    expect(retry.status).toBe(202);
+    expect(await orderStatus(orderId)).toBe('refunded');
+    expect(refundKeys()).toEqual([`refund:${orderId}`, `refund:${orderId}:1`]);
+  });
+
+  it('查询本身失败（网络）→ 50000、不 POST、不记"退款失败"（查不到 ≠ 退款失败）', async () => {
+    const orderId = await paidOrder('f3d');
+    fake.nextRefundStatus('pending');
+    expect((await refund(orderId, 'rf-f3d-1')).json['outcome']).toBe('pending');
+    dropResponses.set('/v1/refunds/re_test_0001', 10);
+
+    const r = await refund(orderId, 'rf-f3d-2');
+    expect(r.status).toBe(500);
+    expect(await orderStatus(orderId)).toBe('refunding');
+    expect(refundKeys()).toHaveLength(1);
+    expect(await events(orderId, 'refund_failed')).toHaveLength(0);
+    expect(srv.sink.find('admin_order_refund_status_query_failed')).toHaveLength(1);
   });
 });
 

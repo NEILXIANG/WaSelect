@@ -33,7 +33,8 @@ export function itemRows(items) {
 
 /**
  * 能否提交（按钮禁用 + 原因）。
- * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null}} state
+ * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null,
+ *          emailError?: string}} state
  * @returns {{ok: boolean, reason: string}}
  * @why 返回**原因**而不是只给 ok：禁用但不说为什么的按钮会被读成"这站坏了"，
  *      而原因文案必须由逻辑给（wxml 里写死一串 `wx:if` 会让四条判断各漂移一次）。
@@ -46,7 +47,28 @@ export function submitGate(state) {
     return { ok: false, reason: '请选择收货地址' };
   if (s.termsAccepted !== true) return { ok: false, reason: '请先阅读并同意购买条款' };
   if (!Number.isInteger(s.totalJpy)) return { ok: false, reason: '运费与合计还在计算中' };
+  // 选填邮箱填错了才拦（AJ-180）：排在最后——前四项是"能不能下单"，这一项只是"填的东西对不对"
+  if (typeof s.emailError === 'string' && s.emailError !== '')
+    return { ok: false, reason: s.emailError };
   return { ok: true, reason: '' };
+}
+
+/** 邮箱错误文案（与服务端 `contact_email_shape` 40001 同一件事，给用户看的版本）。 */
+const EMAIL_ERROR = '邮箱格式不正确（可留空）';
+
+/**
+ * 结算页"收货通知邮箱（选填）"输入 → 要发的值与错误（PRD §3 确认订单 / D-39；提审前必须，AJ-180）。
+ * @param {unknown} raw 输入框原值
+ * @returns {{value: string, error: string}} value 为空串 = 不带 contact_email
+ * @why 口径与服务端入口（order-routes.ts contact_email）逐条一致：有 @、无空白、≤255；
+ *      不发明更严的邮箱正则——前端比服务端严，会拒掉服务端能收的地址；比服务端松，就是"提交后才报错"。
+ * @why 首尾空白先去掉：输入法与粘贴常带空格，这不是用户想表达的内容。
+ */
+export function contactEmailOf(raw) {
+  const v = typeof raw === 'string' ? raw.trim() : '';
+  if (v === '') return { value: '', error: '' };
+  const ok = v.length <= 255 && /^[^\s@]+@[^\s@]+$/.test(v);
+  return ok ? { value: v, error: '' } : { value: '', error: EMAIL_ERROR };
 }
 
 /**

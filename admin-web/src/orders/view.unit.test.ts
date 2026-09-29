@@ -143,6 +143,12 @@ describe('shipGate（发货闸门）', () => {
   it('未付款给的原因指向"付款"而不是笼统的"不能操作"', () => {
     expect(shipGate(withStatus('created')).reason).toContain('未付款');
   });
+
+  it('审核期测试单（is_test）→ 拦，原因写明"测试单"（与服务端 shipGuard 同口径，AJ-179）', () => {
+    const g = shipGate(withStatus('paid', { is_test: true }));
+    expect(g.ok).toBe(false);
+    expect(g.reason).toContain('测试单');
+  });
 });
 
 describe('refundGate（退款闸门）', () => {

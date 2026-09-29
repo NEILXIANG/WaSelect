@@ -52,6 +52,20 @@
     <text class="label">正在计算运费…</text>
   </view>
 
+  <!-- 收货通知邮箱（选填，PRD §3 / D-39；AJ-180）：微信内没有推送兜底，发货通知靠它 -->
+  <view class="card">
+    <text class="label">收货通知邮箱（选填）</text>
+    <input
+      class="input"
+      type="text"
+      value="{{email}}"
+      placeholder="用于接收发货通知，可留空"
+      maxlength="255"
+      bindinput="onEmailInput"
+    />
+    <text class="error" wx:if="{{emailError}}">{{emailError}}</text>
+  </view>
+
   <view class="card">
     <view class="terms" bindtap="onToggleTerms">
       <text class="label">{{termsAccepted ? '✓ 已阅读并同意购买条款' : '阅读并同意购买条款'}}</text>

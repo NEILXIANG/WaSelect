@@ -20,7 +20,7 @@
  * @see ./index.vm.js（商品行/闸门/幂等键/请求体，12 条单测）；
  *      ../../utils/quote-view.js（报价区）；../../utils/address-form.js（地址摘要）
  */
-import { itemRows, orderBody, submitGate } from './index.vm.js';
+import { contactEmailOf, itemRows, orderBody, submitGate } from './index.vm.js';
 import { newIdemKey } from '../../utils/idem-key.js';
 import { addressSummary, defaultAddressId } from '../../utils/address-form.js';
 import { quoteView } from '../../utils/quote-view.js';
@@ -50,6 +50,9 @@ Page({
     termsVersion: '',
     /** 条款勾选态（用户侧确认，与"拿到版本"是两件事）。 */
     termsAccepted: false,
+    /** 收货通知邮箱（选填，AJ-180）：输入框原值与校验错误（空串 = 无错）。 */
+    email: '',
+    emailError: '',
     /** 提交闸门：{ok, reason}。 */
     gate: { ok: false, reason: '' },
     loading: false,
@@ -156,8 +159,16 @@ Page({
       addressId: this.addressId,
       termsAccepted: this.data.termsAccepted,
       totalJpy: this.data.quote?.totalJpy ?? null,
+      emailError: this.data.emailError,
     });
     this.setData({ gate });
+  },
+
+  /** 邮箱输入（选填）：每次输入都重算错误与闸门，错误就近显示在输入框下。 */
+  onEmailInput(e) {
+    const raw = typeof e?.detail?.value === 'string' ? e.detail.value : '';
+    this.setData({ email: raw, emailError: contactEmailOf(raw).error });
+    this.updateGate();
   },
 
   onToggleTerms() {
@@ -198,6 +209,7 @@ Page({
         addressId: this.addressId,
         termsVersion: this.data.termsVersion,
         expectedTotalJpy: this.data.quote?.totalJpy ?? null,
+        contactEmail: contactEmailOf(this.data.email).value,
       });
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders`,

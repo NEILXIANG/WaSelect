@@ -20,10 +20,23 @@
  *        原替身只查"带没带 payment_intent="，于是把 Checkout Session id（`cs_…`）当 PI 传过去（KD-11）
  *        在测试里退款成功，在真 Stripe 上每一笔都会失败。
  *
+ *      ③ **退款有生命周期**（F-03，AJ-178）：@measured(docs.stripe.com/api/refunds/object, 2026-09-29)
+ *        Refund.status ∈ pending / requires_action / succeeded / failed / canceled；
+ *        @measured(docs.stripe.com/api/refunds/retrieve, 2026-09-29) `GET /v1/refunds/{id}` 取当前状态。
+ *        同键重放回的是**首次响应的快照**（idempotent_requests："subsequent requests with the same key
+ *        return the same result"），不是退款的当前状态——所以"重试 POST"永远等不到 pending 变成功，
+ *        只有查询能。原替身所有退款恒为 succeeded，pending 这条死路在测试里不存在。
+ *      ④ **一笔扣款只能被退满一次**：@measured(docs.stripe.com/error-codes, 2026-09-29)
+ *        `charge_already_refunded`："The charge you're attempting to refund has already been refunded."
+ *        同一 PI 上还有未失败（pending / requires_action / succeeded）的退款时，新键的退款被拒——
+ *        于是"换了新键却没确认旧的已失败"这个缺陷会在测试里红，而不是悄悄退第二次。
+ *
  * @limitation 一：幂等只模拟"同键同参回原结果 / 同键异参报错"，不模拟 24 小时窗口；
  *              同键异参的**状态码**文档没写明，这里取 400 + `idempotency_error`（未实测，凭记忆）——
  *              被测代码只需要"非 2xx 即失败"，不依赖具体状态码。
- * @limitation 二：不模拟错误码（402 卡被拒、429 限流）。
+ * @limitation 一b：④ 里"被 pending 退款占住的扣款再退"真 Stripe 回的是 `charge_already_refunded`
+ *              还是金额超限类错误，文档没写明（未实测）——被测代码只依赖"非 2xx 即失败"。
+ * @limitation 二：不模拟其它错误码（402 卡被拒、429 限流）。
  *              需要时按用例单独造，不预先铺——铺了就会有人依赖上不存在的场景。
  * @limitation 三：`GET /v1/checkout/sessions/{id}` 回的会话一律带 `payment_intent`（等同"已付款"）；
  *              真 Stripe 在会话确认前该字段为 null（同一文档页示例 `"payment_intent": null`）——
@@ -41,6 +54,10 @@ export interface FakeStripeHttp extends HttpClient {
    * 不登记就查到 = 404——替身有脾气：测得出"反查失败会怎么走"。
    */
   givenPaymentIntent(id: string, metadata: Record<string, string>): void;
+  /** 下一笔**新建**退款的初始状态（缺省 `succeeded`）：造 pending / failed 形态（F-03）。 */
+  nextRefundStatus(status: string): void;
+  /** 机构侧把某笔退款推进到新状态（模拟 pending → succeeded / failed 的异步完成）。 */
+  settleRefund(refundId: string, status: string): void;
 }
 
 export function createFakeStripeHttp(): FakeStripeHttp {
@@ -51,9 +68,15 @@ export function createFakeStripeHttp(): FakeStripeHttp {
   const sessionsById = new Map<string, { id: string; url: string; expires_at: number }>();
   /** `路径|幂等键` → 首次请求体（同键异参检查，见文件头 @why ①）。 */
   const firstBodies = new Map<string, string>();
-  /** 退款幂等键 → 首次退款结果（同键重放回同一笔，不是再退一次）。 */
-  const refunds = new Map<string, { id: string; status: string }>();
+  /** 退款幂等键 → 首次响应体**快照**（同键重放回首次响应，不是退款的当前状态，见 @why ③）。 */
+  const refunds = new Map<string, string>();
+  /** 退款 id → 退款当前状态（GET 查询与 ④ 的"已退满"判定都读它）。 */
+  const refundsById = new Map<
+    string,
+    { id: string; object: 'refund'; status: string; payment_intent: string }
+  >();
   let nextRefund = 1;
+  let pendingInitialStatus: string | undefined;
   /** payment_intent id → metadata（create 时从表单抓 + givenPaymentIntent 手工登记）。 */
   const paymentIntents = new Map<string, Record<string, string>>();
   let nextId = 1;
@@ -66,6 +89,14 @@ export function createFakeStripeHttp(): FakeStripeHttp {
     },
     givenPaymentIntent(id, metadata) {
       paymentIntents.set(id, metadata);
+    },
+    nextRefundStatus(status) {
+      pendingInitialStatus = status;
+    },
+    settleRefund(refundId, status) {
+      const r = refundsById.get(refundId);
+      if (r === undefined) throw new Error(`替身里没有这笔退款：${refundId}`);
+      r.status = status;
     },
     async send(req: HttpRequest): Promise<HttpResponse> {
       calls.push(req);
@@ -194,14 +225,45 @@ export function createFakeStripeHttp(): FakeStripeHttp {
         }
         const key = req.headers?.['idempotency-key'] ?? '';
         const prior = key.length > 0 ? refunds.get(key) : undefined;
-        if (prior !== undefined) return { status: 200, body: JSON.stringify(prior) };
+        if (prior !== undefined) return { status: 200, body: prior };
+        // ④ 一笔扣款只能被退满一次：同 PI 上还有未失败的退款 → 拒
+        const occupied = [...refundsById.values()].some(
+          (r) => r.payment_intent === pi && r.status !== 'failed' && r.status !== 'canceled',
+        );
+        if (occupied) {
+          return {
+            status: 400,
+            body: JSON.stringify({
+              error: {
+                type: 'invalid_request_error',
+                code: 'charge_already_refunded',
+                message: "The charge you're attempting to refund has already been refunded.",
+              },
+            }),
+          };
+        }
         const refund = {
           id: `re_test_${String(nextRefund).padStart(4, '0')}`,
-          status: 'succeeded',
+          object: 'refund' as const,
+          status: pendingInitialStatus ?? 'succeeded',
+          payment_intent: pi,
         };
+        pendingInitialStatus = undefined;
         nextRefund += 1;
-        if (key.length > 0) refunds.set(key, refund);
-        return { status: 200, body: JSON.stringify(refund) };
+        refundsById.set(refund.id, refund);
+        const snapshot = JSON.stringify(refund);
+        if (key.length > 0) refunds.set(key, snapshot);
+        return { status: 200, body: snapshot };
+      }
+
+      // 退款状态查询（F-03）：回**当前**状态（与 POST 重放回的首次快照相对）
+      const refundGet = /^\/v1\/refunds\/([^/]+)$/.exec(path);
+      if (refundGet !== null && req.method === 'GET') {
+        const found = refundsById.get(refundGet[1] ?? '');
+        if (found === undefined) {
+          return { status: 404, body: '{"error":{"message":"No such refund"}}' };
+        }
+        return { status: 200, body: JSON.stringify(found) };
       }
 
       return { status: 404, body: '{"error":{"message":"unknown path"}}' };

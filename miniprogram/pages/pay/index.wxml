@@ -25,6 +25,12 @@
     </view>
   </view>
 
+  <!-- §14.2 支付前明确提示（官方运营规范强制，D-48 / AJ-180）：必须在支付按钮**上方**、点之前就看得到 -->
+  <view class="card notice" wx:if="{{notice.length > 0}}">
+    <text class="label">支付前请确认</text>
+    <text class="line" wx:for="{{notice}}" wx:key="*this">{{item}}</text>
+  </view>
+
   <view class="card" wx:if="{{channels.length > 0}}">
     <view
       class="channel"
@@ -33,7 +39,7 @@
       data-channel="{{item.channel}}"
       bindtap="onPay"
     >
-      <text class="label">{{item.label}}</text>
+      <text class="label">{{item.buttonText}}</text>
     </view>
   </view>
 

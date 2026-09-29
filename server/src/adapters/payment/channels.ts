@@ -216,6 +216,9 @@ function optionsFor(channel: string, config: AppConfig): Readonly<Record<string,
       // 与 main.ts 原先的回落值保持一致：开发与测试环境可以不配；
       // 生产启用 mock 时 config.ts 的跨字段规则已强制必须显式配置（见 config.ts）
       secret: config.MOCK_CALLBACK_SECRET ?? 'dev-mock-callback-secret-do-not-use-in-prod',
+      // 审核模式：服务端自签确认 mock 付款（技术文档 §2.9 / AJ-179）。审核模式下只允许 mock（config 规则 2b），
+      // 非审核模式的 mock 只是测试/本地通道，付款靠显式签名回调驱动
+      autoConfirm: config.REVIEW_MODE === 'on',
     };
   }
   if (channel === 'stripe') {

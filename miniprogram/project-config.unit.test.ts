@@ -144,17 +144,36 @@ describe('project.config.json（MP1）', () => {
     /**
      * @why admin-web index.html 与 checkout 的品牌名都有同源断言（design-token.unit.test /
      *      renderPage 占位替换），app.json 是第三个写品牌名的地方却没有断言（二次审查 P3）。
-     *      骨架期允许"（骨架）"后缀——它不是品牌的一部分，去掉后缀后必须逐字等于品牌名。
+     *      AJ-180：提审版不再允许"（骨架）"后缀——审核员看到的标题栏写着"骨架"，就是在自报未完成。
      */
     const app = readJson('app.json');
     const window = app.window as { navigationBarTitleText?: string };
-    const title = window.navigationBarTitleText ?? '';
-    expect(title.replace('（骨架）', '')).toBe(BRAND_NAME);
+    expect(window.navigationBarTitleText ?? '').toBe(BRAND_NAME);
   });
 
-  it('测试文件不进上传包（*.unit.test.ts 不该被打包上传）', () => {
-    const pack = cfg.packOptions as { ignore?: { value: string }[] };
-    expect(pack.ignore?.map((i) => i.value)).toContain('**/*.unit.test.ts');
+  it('测试文件不进上传包（*.unit.test.ts 不该被打包上传）——通配写法必须用 glob 类型', () => {
+    /**
+     * @measured(developers.weixin.qq.com/miniprogram/dev/devtools/projectconfig.html, 2026-09-29)：
+     *   packOptions.ignore 的 type 取值 folder / file / suffix / prefix / regexp / glob；
+     *   示例 `{"type": "file", "value": "test/test.js"}` 是**单个文件路径**，通配写 `{"type": "glob", ...}`。
+     * @why 曾经写成 `{"type": "file", "value": "**\/*.unit.test.ts"}`：file 类型按路径精确匹配，
+     *      这条规则大概率什么都没排除（AJ-180）——而且没有任何报错。
+     */
+    const pack = cfg.packOptions as { ignore?: { type: string; value: string }[] };
+    expect(pack.ignore).toContainEqual({ type: 'glob', value: '**/*.unit.test.ts' });
+    for (const rule of pack.ignore ?? []) {
+      if (rule.value.includes('*'))
+        expect(rule.type, `${rule.value} 含通配却不是 glob`).toBe('glob');
+    }
+  });
+
+  it('开发页不进发布包：骨架页 pages/index 与样板页 pages/comp 不登记、按目录排除（提审前 O-14，AJ-180）', () => {
+    const pages = readJson('app.json').pages as string[];
+    expect(pages).not.toContain('pages/index/index');
+    expect(pages).not.toContain('pages/comp/index');
+    const pack = cfg.packOptions as { ignore?: { type: string; value: string }[] };
+    expect(pack.ignore).toContainEqual({ type: 'folder', value: 'pages/index' });
+    expect(pack.ignore).toContainEqual({ type: 'folder', value: 'pages/comp' });
   });
 
   /**
@@ -298,8 +317,17 @@ describe('app.json 与文件不漂移（MP1）', () => {
       .map((e) => e.name)
       .sort();
     expect(dirs.length, 'pages 目录是空的——路径写错了？').toBeGreaterThan(0);
+    // 开发页（骨架页 / 样板页）刻意不登记、按目录排除出上传包（AJ-180）：豁免名单**取自** packOptions.ignore
+    // 的 folder 规则（单一来源）——只在这里写死名字，两处会各自漂移
+    const packCfg = readJson('project.config.json').packOptions as {
+      ignore?: { type: string; value: string }[];
+    };
+    const devDirs = new Set(
+      (packCfg.ignore ?? []).filter((r) => r.type === 'folder').map((r) => r.value),
+    );
     const orphans = dirs
       .filter((d) => existsSync(join(root, 'pages', d, 'index.wxml')))
+      .filter((d) => !devDirs.has(`pages/${d}`))
       .map((d) => `pages/${d}/index`)
       .filter((p) => !pages.includes(p));
     expect(
@@ -326,17 +354,17 @@ describe('app.json 与文件不漂移（MP1）', () => {
    *      那是 §2 第 21 条的自证：从被测对象自己留下的痕迹里取证，当然永远成立。
    *      @limitation 拼出来的路径（`'/pages/' + name + '/index'`）扫不到——当前没有，
    *      出现时这条要升级为真正的表达式解析，而不是假装它不存在。
-   * @limitation 启动页与两个开发页（`pages/index/index` 骨架页、`pages/comp/index` 样板页）
-   *      刻意没有入口，走**白名单**豁免而不是"看起来没人链就放过"。
+   * @limitation 启动页刻意没有入口，走**白名单**豁免而不是"看起来没人链就放过"
+   *      （两个开发页已移出 app.json，AJ-180）。
    */
   it('每个业务页都至少被一个页面跳到（没有入口 = 用户永远走不到，但不报错）', () => {
     /**
      * 不需要入口的页面。@see @limitation
      * - `pages[0]`：**启动页**，它由 App 启动进入而不是被跳转进来（写死首页路径会在这个文件里
      *   多一份真源，首页改名时两处都要改——所以按 `pages[0]` 取）。
-     * - 两个开发页：骨架页 `pages/index/index` 与组件样板页 `pages/comp/index`。
+     * （两个开发页 `pages/index` / `pages/comp` 已不登记进 app.json，AJ-180——不在 pages 里就不需要豁免。）
      */
-    const NO_ENTRY_NEEDED = [(app.pages as string[])[0], 'pages/index/index', 'pages/comp/index'];
+    const NO_ENTRY_NEEDED = [(app.pages as string[])[0]];
     /** 递归收页面 js（含 `.vm.js`：跳转路径常量也可能落在页面目录的任何一处）。 */
     const files: string[] = [];
     for (const entry of readdirSync(join(root, 'pages'), {

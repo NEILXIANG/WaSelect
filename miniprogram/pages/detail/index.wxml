@@ -27,6 +27,8 @@
       <ws-price jpy="{{product.priceJpy}}" size="lg" />
       <text class="sub-price" wx:if="{{product.subPrice}}">{{product.subPrice}}</text>
       <text class="sold-out" wx:if="{{product.soldOut}}">已售罄</text>
+      <!-- 提审前必须（PRD §3 / D-32 / D-39⑦ FTC）：关税口径 + 发货时限承诺，文案由 vm 给出 -->
+      <text class="note" wx:for="{{product.notes}}" wx:key="*this">{{item}}</text>
 
       <view class="specs" wx:if="{{product.specs.length > 0}}">
         <view class="row" wx:for="{{product.specs}}" wx:key="label">

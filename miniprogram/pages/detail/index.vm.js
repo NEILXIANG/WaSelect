@@ -29,10 +29,18 @@ import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 const ORIGIN_LABELS = { JP: '日本' };
 
 /**
+ * 价格口径说明（D-32 / D-69②：商品价含美国关税，DDP 由 KK 预缴计入定价；运费按重量单列）。
+ * @why 写在 vm 常量而不是 wxml：口径变时改这一处，且被单测钉住（提审前必须项，AJ-176 标注）。
+ * @limitation 口径本身是店铺级政策，不随商品变；将来若出现"不含关税"的商品，要改成由契约下发。
+ */
+export const DUTY_NOTE = '价格含美国关税，国际运费按重量在结算时计算';
+
+/**
  * `GET /products/{id}` 的 Product → 详情视图数据。
  * @param {unknown} product 契约 `Product`（请求失败时页面根本不会调这里）
  * @returns {{title: string, priceJpy: unknown, subPrice: string, images: string[],
- *            description: string, specs: Array<{label: string, value: string}>, soldOut: boolean}}
+ *            description: string, specs: Array<{label: string, value: string}>, soldOut: boolean,
+ *            notes: string[]}}
  * @why `priceJpy` **原样透传、不做任何兜底**（与首页同一口径）：`ws-price` 对非整数
  *      会响亮失败，在这里补 0 会显示 `0 円`——那是价格组件最贵的失败形态。
  */
@@ -46,7 +54,21 @@ export function detailView(product) {
     description: typeof p.description === 'string' ? p.description.trim() : '',
     specs: specsOf(p),
     soldOut: Number(p.stock) === 0,
+    notes: notesOf(p),
   };
+}
+
+/**
+ * 价格区下方的两行说明：关税口径 + 发货时限承诺（FTC 邮购规则，D-39⑦；AJ-180）。
+ * @why 时限数字**只取服务端下发**（`ship_within_business_days`，配置 SHIP_WITHIN_BUSINESS_DAYS）：
+ *      这是法律承诺，前端写死就是"运营改了配置、页面还是旧承诺"；拿不到合法正整数就不出这一行——
+ *      写错的承诺比不写更糟（FTC 未写时限时默认 30 天，不写不违规）。
+ */
+function notesOf(p) {
+  const days = p.ship_within_business_days;
+  return Number.isInteger(days) && days > 0
+    ? [DUTY_NOTE, `付款后 ${days} 个工作日内发出`]
+    : [DUTY_NOTE];
 }
 
 /** ImageSet[] → 主图 URL 列表；一条图都没有 → [占位图]（不留空数组，轮播会整个消失）。 */

@@ -121,3 +121,25 @@ describe('detailView（描述与规格）', () => {
     }
   });
 });
+
+/**
+ * 提审前必须的两行说明（PRD §3 商品详情 / GUI §3.2 / D-32 / D-39⑦；AJ-180）。
+ * @why FTC 邮购规则：商品页写了"X 个工作日内发出"，就必须在时限内发出——数字来自服务端配置，
+ *      前端不编；没有就**不出这一行**（写错的承诺比不写更糟）。
+ */
+describe('detailView（关税与发货时限说明）', () => {
+  it('两行齐全：含美国关税 + 付款后 N 个工作日内发出（N 取自 ship_within_business_days）', () => {
+    expect(detailView({ ...PRODUCT, ship_within_business_days: 7 }).notes).toEqual([
+      '价格含美国关税，国际运费按重量在结算时计算',
+      '付款后 7 个工作日内发出',
+    ]);
+  });
+
+  it('时限缺失 / 非正整数 → 只出关税一行（不编数字）', () => {
+    for (const bad of [undefined, 0, -1, 2.5, '7']) {
+      expect(detailView({ ...PRODUCT, ship_within_business_days: bad }).notes).toEqual([
+        '价格含美国关税，国际运费按重量在结算时计算',
+      ]);
+    }
+  });
+});

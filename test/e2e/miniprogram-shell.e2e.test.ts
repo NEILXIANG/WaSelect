@@ -224,8 +224,9 @@ describe('小程序壳 → 真服务端：一条业务链路走到底', () => {
     const addressId = await createAddress(traceId);
     const orderId = await createOrder(addressId, 'mp-key-1', traceId);
 
-    // 发起支付（mock in_app 通道）：payload 里的 `auto: true` 是审核期的自动确认信号
-    // （契约 PaymentIntent payload 的 mock 形状，D-56——前端据此走"模拟支付成功"，不硬编码通道名）
+    // 发起支付（mock in_app 通道）：payload 里的 `auto` 是审核期的自动确认信号
+    // （契约 PaymentIntent payload 的 mock 形状，D-56——前端据此走"模拟支付成功"，不硬编码通道名）。
+    // 本链路不开审核模式 → auto=false、服务端不自动确认，由下面的机构回调落账（AJ-179）
     const pay = (await api({
       url: `${base}/api/v1/orders/${orderId}/pay`,
       method: 'POST',
@@ -234,7 +235,7 @@ describe('小程序壳 → 真服务端：一条业务链路走到底', () => {
       traceId,
     })) as { channel: string; payload: { auto?: boolean } };
     expect(pay.channel).toBe('mock');
-    expect(pay.payload.auto).toBe(true);
+    expect(pay.payload.auto).toBe(false);
 
     await mockPayCallback(orderId, traceId);
 

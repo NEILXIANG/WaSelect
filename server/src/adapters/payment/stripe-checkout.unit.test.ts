@@ -735,6 +735,96 @@ describe('refund（原币全额退）', () => {
   });
 });
 
+describe('refund 状态映射 / 重新发起 / 状态查询（F-03，AJ-178）', () => {
+  const REFUND = {
+    orderId: REQ.orderId,
+    providerRef: 'pi_1',
+    amountJpy: 12_000,
+    currency: 'JPY',
+    amountMinor: 12_000,
+    reason: '缺货',
+  };
+  const refundOf = (p: PaymentProvider) => {
+    const fn = p.refund;
+    if (fn === undefined) throw new Error('stripe 必须实现 refund()');
+    return fn;
+  };
+  const statusOf = (p: PaymentProvider) => {
+    const fn = p.refundStatus;
+    if (fn === undefined) throw new Error('stripe 声明 supportsRefund，必须实现 refundStatus()');
+    return fn;
+  };
+
+  /**
+   * @measured(docs.stripe.com/api/refunds/object, 2026-09-29)：Refund.status 取值
+   *   `pending` / `requires_action` / `succeeded` / `failed` / `canceled`（nullable）。
+   * @why 只有 failed / canceled 算"机构确认失败"——那会让下一次重试**换新幂等键**重新发起；
+   *      认不出的状态一律 pending（等查询 / 对账），不猜成失败：猜错的代价是对一笔
+   *      可能已在途的退款再发一笔。
+   */
+  it.each([
+    ['succeeded', 'succeeded'],
+    ['pending', 'pending'],
+    ['requires_action', 'pending'],
+    ['failed', 'failed'],
+    ['canceled', 'failed'],
+    ['a_future_status', 'pending'],
+  ])('POST 回 status=%s → outcome=%s', async (status, outcome) => {
+    const { http, provider } = build();
+    http.failNext(200, JSON.stringify({ id: 're_1', object: 'refund', status }));
+    await expect(refundOf(provider)(REFUND)).resolves.toMatchObject({ outcome, refundRef: 're_1' });
+  });
+
+  it('attempt 缺省 / 0 → 键 refund:{orderId}；attempt=2 → 键 refund:{orderId}:2（确认失败后才换键）', async () => {
+    const { http, provider } = build();
+    // 首笔被机构判失败（替身按真规则：同一 PI 上还有未失败的退款时，新键会被拒 charge_already_refunded）
+    http.nextRefundStatus('failed');
+    await expect(refundOf(provider)(REFUND)).resolves.toMatchObject({ outcome: 'failed' });
+    await expect(refundOf(provider)({ ...REFUND, attempt: 0 })).resolves.toMatchObject({
+      outcome: 'failed', // 同键 = 机构缓存的首次结果：不换键就永远拿回这笔失败
+    });
+    await expect(refundOf(provider)({ ...REFUND, attempt: 2 })).resolves.toMatchObject({
+      outcome: 'succeeded',
+    });
+    const keys = http.calls
+      .filter((c) => c.url.endsWith('/v1/refunds'))
+      .map((c) => c.headers?.['idempotency-key']);
+    expect(keys).toEqual([
+      `refund:${REQ.orderId}`,
+      `refund:${REQ.orderId}`,
+      `refund:${REQ.orderId}:2`,
+    ]);
+  });
+
+  it('refundStatus：GET /v1/refunds/{id}（带鉴权、不带幂等键），按同一张表映射', async () => {
+    const { http, provider } = build();
+    for (const [status, outcome] of [
+      ['succeeded', 'succeeded'],
+      ['pending', 'pending'],
+      ['requires_action', 'pending'],
+      ['failed', 'failed'],
+      ['canceled', 'failed'],
+      ['a_future_status', 'pending'],
+    ] as const) {
+      http.failNext(200, JSON.stringify({ id: 're_9', object: 'refund', status }));
+      await expect(statusOf(provider)('re_9')).resolves.toBe(outcome);
+    }
+    const last = http.calls.at(-1);
+    expect(last?.method).toBe('GET');
+    expect(last?.url).toBe('https://api.stripe.test/v1/refunds/re_9');
+    expect(last?.headers?.['idempotency-key']).toBeUndefined();
+  });
+
+  it('refundStatus：鉴权头真的带上（替身无 Bearer 回 401）；非 2xx → 抛（查询失败 ≠ 退款失败）', async () => {
+    const { http, provider } = build();
+    http.failNext(404, '{"error":{"message":"No such refund"}}');
+    await expect(statusOf(provider)('re_ghost')).rejects.toThrow(/查询退款失败：HTTP 404/);
+    // 走替身本体（不 failNext）：替身按真 Stripe 规则验鉴权头，未登记的退款 → 404
+    await expect(statusOf(provider)('re_unknown')).rejects.toThrow(/HTTP 404/);
+    expect(http.calls.at(-1)?.headers?.['authorization']).toMatch(/^Bearer /);
+  });
+});
+
 describe('expireSession（D-50 关单连带：会话立刻死，不等自然过期）', () => {
   /**
    * 与 refund 同模式：可选方法在接口上可以不实现，但 copylink 通道的会话就是

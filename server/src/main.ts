@@ -46,6 +46,8 @@ import {
 } from './app/scheduler-start.js';
 import { installProcessErrorHandlers } from './process-errors.js';
 import { mountAllRoutes } from './app/mount.js';
+import { ensureInitialAdmin } from './adapters/admin-auth.js';
+import { hashPassword } from './app/auth.js';
 
 export interface BootstrapOptions {
   /** 环境变量来源（测试注入用，生产走 process.env）。 */
@@ -99,6 +101,16 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
   try {
     const major = await assertPostgresMajor(db);
     logger.info('postgres_checked', { major, result: 'ok' });
+
+    // 初始管理员 seed（D-38 ⑤ / O-11 / AJ-181）：配了才跑、幂等、不改已有账号；日志不带邮箱与口令
+    if (config.ADMIN_EMAIL !== undefined && config.ADMIN_INITIAL_PASSWORD !== undefined) {
+      const seeded = await ensureInitialAdmin(
+        db,
+        config.ADMIN_EMAIL,
+        await hashPassword(config.ADMIN_INITIAL_PASSWORD),
+      );
+      logger.info('admin_seed', { result: seeded });
+    }
 
     /**
      * 是否还对外宣称"可以接流量"。停机时先置 false，`/readyz` 随即返回 503。

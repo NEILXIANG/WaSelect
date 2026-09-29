@@ -3,10 +3,6 @@
   "rules": [
     {
       "action": "disallow",
-      "page": "pages/comp/index"
-    },
-    {
-      "action": "disallow",
       "page": "pages/cart/index"
     },
     {

@@ -34,7 +34,7 @@
 `PaymentProvider` v2.1 接口已有（create / cancel / verify / refund / reconcile），三个实现（Mock / Stripe / WechatInstitution），启用靠 `PAYMENT_CHANNELS`。**不足**：通道是代码里的 `Channel` 联合类型；回调路由 `/pay/callback/stripe`、`/pay/callback/wechat` 硬编码；前端入口写死；通道上下线要改代码 + 发版。
 
 > ⚠️ 上段是 **2026-09-22 成文时**的现状。**2026-09-28 现状**（AJ-176，以代码为准）：
-> - 端口 `server/src/ports/payment.ts`：`PaymentProvider` = `create` / `parseWebhook` / 可选 `refund` / 可选 `expireSession` + `capabilities`，**没有** cancel / verify / reconcile；`channel` 是 string（不再是联合类型）。
+> - 端口 `server/src/ports/payment.ts`：`PaymentProvider` = `create` / `parseWebhook` / 可选 `refund` + `refundStatus`（同进同退，注册表强制，AJ-178）/ 可选 `expireSession` / 可选 `selfConfirmation`（仅审核期假通道，AJ-179）+ `capabilities`，**没有** cancel / verify / reconcile；`channel` 是 string（不再是联合类型）。
 > - 实现只有 `mock`（`adapters/payment/mock.ts`）与 `stripe`（`adapters/payment/stripe-checkout.ts`，Checkout 托管页）；**没有微信机构适配器**（R1 通过后再做；配置里写了 `wechat` 也会因未注册而静默跳过）。
 > - 回调已统一为 `/api/v1/pay/callback/:channel`（`app/pay-routes.ts` 的 `PAY_CALLBACK_PREFIX`），由注册表分发。
 > - 前端入口已按 `GET /pay/channels` 下发渲染（`miniprogram/pages/pay/index.js`），不再写死按钮。

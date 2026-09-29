@@ -69,7 +69,7 @@ function ni(method: string, path: string, reason: string): NotImplementedRoute {
   return { method, path, reason };
 }
 const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [
-  ni('POST', '/auth/admin/login', 'I1-U6：管理员登录（欠账②，含管理员 seed）'),
+  // ✅ 管理员登录（含 seed）已随 AJ-181 落地并从本清单移除
   ni('GET', '/home', 'I2：小程序首页聚合（依赖 Banner 管理端）'),
   // ✅ 商品四条已随 I2-U-A3、订单五条已随 I2-U-B2d 落地并从本清单移除
   //    （本清单只许变短不许变长；diffRoutes 规则④ 会在"已实现却仍登记"时报红）

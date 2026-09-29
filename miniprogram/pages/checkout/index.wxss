@@ -63,3 +63,14 @@
   color: var(--ws-color-fg);
   font-size: var(--ws-font-sm);
 }
+
+/* 收货通知邮箱输入框（AJ-180）：与地址编辑页同一套 token */
+.input {
+  display: block;
+  margin-top: var(--ws-space-sm);
+  padding: var(--ws-space-sm);
+  border: var(--ws-border-width) solid var(--ws-color-muted);
+  border-radius: var(--ws-radius);
+  color: var(--ws-color-fg);
+  font-size: var(--ws-font);
+}

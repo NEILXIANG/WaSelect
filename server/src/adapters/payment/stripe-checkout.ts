@@ -41,6 +41,7 @@ import type {
   PaymentSession,
   ProviderEvent,
   RefundRequest,
+  RefundResult,
 } from '../../ports/payment.js';
 
 export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
@@ -93,6 +94,23 @@ function sessionExpirySec(expiresAt: string | undefined, orderId: string): numbe
     );
   }
   return Math.ceil(ms / 1000) + STRIPE_MIN_SESSION_TTL_SEC + STRIPE_SESSION_MARGIN_SEC;
+}
+
+/**
+ * Stripe Refund.status → 端口的三态（POST 响应与 GET 查询共用一张表，F-03 / AJ-178）。
+ *
+ * @measured(docs.stripe.com/api/refunds/object, 2026-09-29)：status 取值
+ *   `pending` / `requires_action` / `succeeded` / `failed` / `canceled`，且 nullable。
+ * @why 只有 `failed` / `canceled` 算"机构确认失败"：它会让下一次重试**换新幂等键**重新发起。
+ *      `requires_action`、null、以及将来新增的认不出的状态一律并入 pending——猜成失败的代价
+ *      是对一笔可能已在途的退款再发一笔（机构会以"已退款"拒掉，但我们会因此丢掉在途单号），
+ *      猜成 pending 的代价只是多等一次查询 / 被每日对账 stuck_refunds 报出。
+ *      （旧实现把认不出的一律当 failed——在旧的"失败也同键重试"语义下无害，换键语义下就不行了。）
+ */
+function refundOutcome(status: unknown): RefundResult['outcome'] {
+  if (status === 'succeeded') return 'succeeded';
+  if (status === 'failed' || status === 'canceled') return 'failed';
+  return 'pending';
 }
 
 /**
@@ -532,7 +550,12 @@ export function createStripeCheckoutProvider(
           //    人工再点一次，靠"已全额退款"报错兜底（二次审查 P2-NEW-2）。
           //    键含 orderId：MVP 全额退、一单一退，同一订单的人工重试落到同一键上，
           //    Stripe 会返回第一次的退款而不是再扣一次。
-          'idempotency-key': `refund:${req.orderId}`,
+          //    F-03（AJ-178）：上一笔被机构**确认失败**后调用方才把 attempt 加一 → 新键
+          //    （同键只会拿回缓存的那次失败）；attempt 0 保持旧键形态，存量重试语义不变。
+          'idempotency-key':
+            (req.attempt ?? 0) > 0
+              ? `refund:${req.orderId}:${String(req.attempt)}`
+              : `refund:${req.orderId}`,
         },
         body: form.toString(),
       });
@@ -548,13 +571,24 @@ export function createStripeCheckoutProvider(
       return {
         providerRef: req.providerRef,
         refundRef: json.id,
-        outcome:
-          json.status === 'succeeded'
-            ? 'succeeded'
-            : json.status === 'pending'
-              ? 'pending'
-              : 'failed',
+        outcome: refundOutcome(json.status),
       };
+    },
+
+    async refundStatus(refundRef: string) {
+      // @measured(docs.stripe.com/api/refunds/retrieve, 2026-09-29)：`GET /v1/refunds/{id}`
+      //   "Retrieves the details of an existing refund"；GET 不带幂等键（幂等只对 POST 有意义）。
+      const res = await deps.http.send({
+        method: 'GET',
+        url: `${apiBase}/v1/refunds/${encodeURIComponent(refundRef)}`,
+        headers: { authorization: `Bearer ${opts.secretKey}` },
+      });
+      if (res.status < 200 || res.status >= 300) {
+        throw new Error(
+          `stripe 查询退款失败：HTTP ${res.status} ${res.body.slice(0, 200)}（refund=${refundRef}）`,
+        );
+      }
+      return refundOutcome((JSON.parse(res.body) as { status?: unknown }).status);
     },
 
     async expireSession(providerRef: string): Promise<void> {

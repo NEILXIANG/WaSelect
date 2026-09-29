@@ -172,6 +172,7 @@ export function runProviderContract(name: string, make: () => ProviderHarness): 
       const { provider } = make();
       if (!provider.capabilities.supportsRefund) {
         expect(provider.refund).toBeUndefined();
+        expect(provider.refundStatus).toBeUndefined();
         return;
       }
       const s = await provider.create(req);
@@ -185,6 +186,10 @@ export function runProviderContract(name: string, make: () => ProviderHarness): 
       });
       expect(r?.refundRef.length).toBeGreaterThan(0);
       expect(['succeeded', 'pending']).toContain(r?.outcome);
+      // F-03（AJ-178）：能退就必须能查——pending 的退款只有靠查询才走得出 refunding
+      expect(provider.refundStatus, '声明 supportsRefund 必须实现 refundStatus').toBeDefined();
+      const status = await provider.refundStatus?.(r?.refundRef ?? '');
+      expect(['succeeded', 'pending', 'failed']).toContain(status);
     });
 
     it('能力自洽：支持部分退款 ⇒ 必须支持全额退款（否则"部分退"没有退路）', () => {

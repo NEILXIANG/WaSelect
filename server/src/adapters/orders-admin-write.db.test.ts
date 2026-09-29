@@ -15,10 +15,13 @@ import { closeDb, type Db, withTransaction } from './db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 import {
   findRefundablePayment,
+  findRefundProgress,
   lockAdminOrder,
   markRefunded,
   markRefunding,
   markShipped,
+  recordRefundFailed,
+  recordRefundPending,
   updateAddressSnapshot,
 } from './orders-admin.js';
 
@@ -72,6 +75,7 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
       expect(row?.status).toBe('paid');
       expect(row?.has_dispute).toBe(false);
       expect(row?.total_jpy).toBe(1650);
+      expect(row?.is_test).toBe(false); // 发货闸门要它（审核期测试单不发货，AJ-179）
       expect(await lockAdminOrder(tx, 'no-such')).toBeNull();
     });
   });
@@ -170,6 +174,34 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     });
     const evs = await db`select count(*)::int as n from order_events where order_id = 'o-1'`;
     expect(Number(evs[0]?.n)).toBe(1);
+  });
+
+  it('findRefundProgress（F-03）：最新一条是 pending → 带出单号；确认失败只数 provider_failed:*，不数 provider_error', async () => {
+    await seedPaidOrder('o-1', 'refunding');
+    const at = new Date('2026-09-29T01:00:00Z');
+    expect(await findRefundProgress(db, 'o-1')).toEqual({ pendingRef: null, confirmedFailures: 0 });
+
+    await recordRefundFailed(db, 'o-1', 'provider_error', 'admin:u-a', at); // 结果未知 ≠ 确认失败
+    expect(await findRefundProgress(db, 'o-1')).toEqual({ pendingRef: null, confirmedFailures: 0 });
+
+    await recordRefundPending(db, 'o-1', 're_A', 'admin:u-a', at);
+    expect(await findRefundProgress(db, 'o-1')).toEqual({
+      pendingRef: 're_A',
+      confirmedFailures: 0,
+    });
+
+    // 同一时刻（at 相同）写入的后一条才是"最新"：按插入顺序判定，不按业务时间
+    await recordRefundFailed(db, 'o-1', 'provider_failed:re_A', 'admin:u-a', at);
+    expect(await findRefundProgress(db, 'o-1')).toEqual({ pendingRef: null, confirmedFailures: 1 });
+
+    await recordRefundPending(db, 'o-1', 're_B', 'admin:u-a', at);
+    expect(await findRefundProgress(db, 'o-1')).toEqual({
+      pendingRef: 're_B',
+      confirmedFailures: 1,
+    });
+    const ev =
+      await db`select actor from order_events where order_id = 'o-1' and status = 'refund_pending'`;
+    expect(ev.map((r) => r['actor'])).toEqual(['admin:u-a', 'admin:u-a']);
   });
 
   it('updateAddressSnapshot：重写快照 + 事件用伪状态 address_changed，**状态不变**', async () => {

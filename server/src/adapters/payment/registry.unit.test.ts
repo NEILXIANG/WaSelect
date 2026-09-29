@@ -67,6 +67,7 @@ function stub(
           refundRef: 're-1',
           outcome: 'succeeded',
         }),
+        refundStatus: async () => 'succeeded',
       }
     : base;
 }
@@ -302,6 +303,25 @@ describe('注册期不变式（声明必须与实现一致）', () => {
     const r = createPaymentRegistry({ configs: [cfg({ channel: 'a' })] });
     r.register('a', (c) => stub(c.channel, { supportsRefund: true }, false));
     expect(() => r.get('a')).toThrow(/supportsRefund 但没有实现/);
+  });
+
+  it('声明 supportsRefund=true、有 refund() 却没有 refundStatus() → 抛（F-03：pending 的退款没有出口）', () => {
+    const r = createPaymentRegistry({ configs: [cfg({ channel: 'a' })] });
+    r.register('a', (c) => {
+      const p = stub(c.channel);
+      delete p.refundStatus;
+      return p;
+    });
+    expect(() => r.get('a')).toThrow(/没有实现 refundStatus/);
+  });
+
+  it('只实现了 refundStatus() 却声明 supportsRefund=false → 抛（半套退款能力）', () => {
+    const r = createPaymentRegistry({ configs: [cfg({ channel: 'a' })] });
+    r.register('a', (c) => ({
+      ...stub(c.channel, { supportsRefund: false }, false),
+      refundStatus: async () => 'succeeded' as const,
+    }));
+    expect(() => r.get('a')).toThrow(/声明 supportsRefund=false/);
   });
 
   it('实现了 refund() 却声明 supportsRefund=false → 抛（调用方永远不会调它）', () => {

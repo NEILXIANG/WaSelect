@@ -36,6 +36,8 @@ import type {
   PaymentSession,
   ProviderEvent,
   RefundRequest,
+  SelfConfirmationInput,
+  SignedCallback,
 } from '../../ports/payment.js';
 
 /** 模拟回调的签名头（mock 通道自定义约定，不是任何机构的真实口径）。 */
@@ -67,6 +69,11 @@ export interface MockProviderDeps {
   idGen: IdGen;
 }
 
+/** mock 退款单号前缀（refund 生成、refundStatus 识别，同一个常量）。 */
+const MOCK_REFUND_PREFIX = 'mock_re_';
+/** 审核模式自签确认的事件 id 前缀（`auto:<机构单号>`，AJ-179）。 */
+export const MOCK_AUTO_EVENT_PREFIX = 'auto:';
+
 /** 从配置里取密钥：缺失要在**装配期**炸，而不是等到第一个回调验签失败。 */
 function secretOf(cfg: ChannelConfig): string {
   const secret = cfg.options?.['secret'];
@@ -80,6 +87,12 @@ function secretOf(cfg: ChannelConfig): string {
 
 export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): PaymentProvider {
   const secret = secretOf(cfg);
+  /**
+   * 审核模式自动确认（AJ-179）：只认布尔 `true`（装配处按 `REVIEW_MODE === 'on'` 给）。
+   * @why 只认布尔：字符串 "true" 之类的配置漂移不能悄悄打开"未付款即确认"。
+   */
+  const autoConfirm = cfg.options?.['autoConfirm'] === true;
+  const sign = (raw: Buffer): string => createHmac('sha256', secret).update(raw).digest('hex');
   /** idempotencyKey → 已创建的会话（见 @limitation 一）。 */
   const sessions = new Map<string, PaymentSession>();
 
@@ -103,10 +116,12 @@ export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): 
         entry: {
           mode: 'in_app',
           // 只给"前端唤起需要的样子"，不含任何密钥或内部字段。
-          // `auto: true` 是审核期的自动确认信号（契约 PaymentIntent payload 的 mock 形状）：
-          // 前端据此直接走"模拟支付成功"流程，不必硬编码 channel === 'mock'（D-56 不写死通道名）
+          // `auto` 是审核期的自动确认信号（契约 PaymentIntent payload 的 mock 形状）：
+          // 前端见 true 直接显示"支付已完成"，不必硬编码 channel === 'mock'（D-56 不写死通道名）。
+          // ⚠️ 只有服务端**真的会**自动确认时才是 true（AJ-179）：曾经恒为 true，
+          //    而服务端从不确认——审核员看到"已支付"、订单却停在待付款直到过期。
           params: {
-            auto: true,
+            auto: autoConfirm,
             orderId: req.orderId,
             amountJpy: req.amountJpy,
             currency: req.currency,
@@ -128,7 +143,7 @@ export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): 
        *      表现为机构没给 event_id 时回调**一律 500**（真库才暴露，单测测不到长度）。
        *      端到端把模拟回调迁到统一分发后这条路径才第一次被真库走到。
        */
-      const expectedHex = createHmac('sha256', secret).update(raw).digest('hex');
+      const expectedHex = sign(raw);
       const expected = Buffer.from(expectedHex, 'utf8');
       const got = Buffer.from(signature, 'utf8');
       // 恒定时间比较 + 先比长度（长度不等时 timingSafeEqual 会抛）
@@ -167,9 +182,45 @@ export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): 
       // 否则上层的"退款成功"分支在真实通道接上来之前一次都没被走过
       return {
         providerRef: req.providerRef,
-        refundRef: `mock_re_${deps.idGen.uuid()}`,
+        refundRef: `${MOCK_REFUND_PREFIX}${deps.idGen.uuid()}`,
         outcome: 'succeeded' as const,
       };
     },
+
+    /**
+     * mock 退款同步完成：自己发出的单号一律 succeeded（F-03：能退就必须能查，注册表强制）。
+     * @why 认不出的单号**抛**而不是回 succeeded：mock 若对任何单号都说"成功"，
+     *      管理端把别的通道的单号错送到这里时，订单会被静默迁成 refunded（钱其实没退）。
+     */
+    async refundStatus(refundRef: string) {
+      if (!refundRef.startsWith(MOCK_REFUND_PREFIX)) {
+        throw new Error(`不是 mock 发出的退款单号：${refundRef.slice(0, 32)}`);
+      }
+      return 'succeeded' as const;
+    },
+
+    /**
+     * 审核模式自签「支付成功」报文（端口 `selfConfirmation` 的 @why）。未开自动确认时**不存在**。
+     * @why 事件 id = `auto:<机构单号>`：同一意图无论造几次都是同一个 id → 回调管线按 (provider, event_id) 去重。
+     *      报文字段与 `parseWebhook` 读的完全同形——自签报文随后要过自己的验签，形状漂了立刻 40103。
+     */
+    ...(autoConfirm
+      ? {
+          selfConfirmation(input: SelfConfirmationInput): SignedCallback {
+            const raw = Buffer.from(
+              JSON.stringify({
+                event_id: `${MOCK_AUTO_EVENT_PREFIX}${input.providerRef}`,
+                type: 'payment.succeeded',
+                order_id: input.orderId,
+                provider_ref: input.providerRef,
+                amount_minor: input.amountMinor,
+                currency: input.currency,
+              }),
+              'utf8',
+            );
+            return { raw, headers: { [MOCK_SIGNATURE_HEADER]: sign(raw) } };
+          },
+        }
+      : {}),
   };
 }

@@ -31,6 +31,7 @@ import { systemIdGen } from '../adapters/ids.js';
 import { createSchedulerDeps } from './scheduler-start.js';
 import { runSchedulerOnce } from './scheduler.js';
 import { createDailyReconciliationJob, DAILY_JOB_ROW_NAME } from './daily-reconciliation.js';
+import { createAutoCompleteJob, createAutoDeliverJob } from './auto-fulfilment.js';
 
 export const INTERNAL_JOBS_PREFIX = '/api/v1/internal/jobs';
 
@@ -80,7 +81,12 @@ export function mountInternalJobsRoutes(
             name: DAILY_JOB_ROW_NAME,
             lockKey: 'daily',
           }),
-          [createDailyReconciliationJob()],
+          // 顺序即执行顺序：先把到期的单迁走（自动签收 → 自动完成，O-12 / AJ-182），对账看到的是迁移后的状态
+          [
+            createAutoDeliverJob({ afterDays: deps.config.AUTO_DELIVER_DAYS }),
+            createAutoCompleteJob({ afterDays: deps.config.AUTO_COMPLETE_DAYS }),
+            createDailyReconciliationJob(),
+          ],
         ).catch((e: unknown) => {
           deps.logger.error('internal_job_crashed', {
             result: 'error',

@@ -138,6 +138,9 @@ export function orderRows(items: unknown): OrderRow[] {
 export function shipGate(order: unknown): Gate {
   const status = readStatus(order);
   if (status === null) return NO('订单状态未知，不能操作');
+  // 与服务端 shipGuard 同口径（AJ-179）：审核期测试单是"未付款即确认"的，发货 = 真货换假钱
+  if ((order as { is_test?: unknown } | null)?.is_test === true)
+    return NO('审核期测试单，不得采购发货');
   if ((order as { has_dispute?: unknown } | null)?.has_dispute === true)
     return NO('有拒付进行中，先处理拒付再发货（发货后钱货两空）');
   switch (status) {

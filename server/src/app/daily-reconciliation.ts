@@ -10,7 +10,8 @@
  *      ③ 近 48h 回调登记为 late_payment / mismatch:* / ignored:status_conflict / unmatched:*（词表 app/webhook-results.ts）：
  *         "钱扣了但不能发货"与"钱到了找不到单"，每一条都要人工跟进；
  *      ④ 调度器心跳停滞（AJ-102 的替代方案）；
- *      ⑤ 卡住的回调：登记了却没有任何结果、租约已过期（KD-2 / AJ-175，见 scanUnfinishedCallbacks）。
+ *      ⑤ 卡住的回调：登记了却没有任何结果、租约已过期（KD-2 / AJ-175，见 scanUnfinishedCallbacks）；
+ *      ⑥ 退款滞留：订单停在 refunding 超过 24 小时（F-03 / AJ-178，见 scanStuckRefunds）。
  *      自动修任何一类都需要业务裁决（退不退？发不发？），MVP 把它留给人——
  *      但没有这个 job，这些行就只能在库里静默躺着（欠账①被评为致命级的原因）。
  *
@@ -60,6 +61,15 @@ export const RECONCILE_LOOKBACK_HOURS = 48;
  *      阈值只是用来排除"刚刚到、还在处理"的那几分钟。
  */
 export const UNFINISHED_CALLBACK_MINUTES = 15;
+
+/**
+ * 退款滞留阈值（小时）：订单进入 refunding 超过这么久仍未落定 → 报 stuck_refunds（F-03，AJ-178）。
+ * @why 24 小时：与机构幂等键的缓存窗口同量级（Stripe 缓存执行结果 24h，KD-4 的 @measured）——
+ *      到这个时刻"同键重试拿回首次结果"这条自愈路径已经走完，仍在 refunding 的单必然要人看。
+ *      取更短（如 1 小时）会把"管理员刚点、机构还在处理"的正常单报出来。
+ *      （买家多久到账是发卡行的事，与退款对象的状态无关，不拿来当阈值。）
+ */
+export const STUCK_REFUND_HOURS = 24;
 
 /**
  * 心跳停滞阈值：**tick**（常驻调度器，60s 一轮）超过这个分钟数没有成功心跳 = 卡了。
@@ -264,6 +274,45 @@ async function scanStalledHeartbeats(ctx: JobContext<Db>): Promise<AnomalyClass>
   };
 }
 
+/**
+ * 第六类：**退款滞留**（F-03，AJ-178）——订单停在 refunding 超过 STUCK_REFUND_HOURS。
+ *
+ * @why refunding 是"钱在路上"的状态：机构回 pending、机构报错后同键重试拿回同一个错误、
+ *      或有人在机构后台手工退了款——这几种情况订单都会停在这里，而买家看到的一直是"退款中"。
+ *      此前五类扫描都不看它（独立审查辨析 §3.1 ④）。
+ * @why 起点取**最近一次进入 refunding 的事件时刻**（注入时钟写的业务时间），缺事件时退回 `orders.updated_at`：
+ *      updated_at 由库的 now() 写，任何无关更新都会刷新它，单用它会把老单"洗新"。
+ * @why **不设回看上界**（与第三、五类不同）：滞留的退款是**活的欠款**，每一张都对应一个等钱的买家，
+ *      落定之前每天都该报，报到有人处理为止。
+ */
+async function scanStuckRefunds(ctx: JobContext<Db>): Promise<AnomalyClass> {
+  const rows = await ctx.tx<{ id: string }[]>`
+    select o.id from orders o
+     where o.status = 'refunding'
+       and coalesce(
+             (select max(e.at) from order_events e
+               where e.order_id = o.id and e.status = 'refunding'),
+             o.updated_at
+           ) <= ${ctx.startedAt}::timestamptz - make_interval(hours => ${STUCK_REFUND_HOURS})
+     order by o.id
+     limit ${RECONCILE_IDS_CAP + 1}
+  `;
+  const countRows = await ctx.tx<{ count: string }[]>`
+    select count(*)::text as count from orders o
+     where o.status = 'refunding'
+       and coalesce(
+             (select max(e.at) from order_events e
+               where e.order_id = o.id and e.status = 'refunding'),
+             o.updated_at
+           ) <= ${ctx.startedAt}::timestamptz - make_interval(hours => ${STUCK_REFUND_HOURS})
+  `;
+  return {
+    key: 'stuck_refunds',
+    count: Number(countRows[0]?.count ?? 0),
+    ids: rows.slice(0, RECONCILE_IDS_CAP).map((r) => String(r.id)),
+  };
+}
+
 export function createDailyReconciliationJob(): SchedulerJob<Db> {
   return {
     name: DAILY_RECONCILIATION_JOB,
@@ -274,6 +323,7 @@ export function createDailyReconciliationJob(): SchedulerJob<Db> {
         await scanCallbackAnomalies(ctx),
         await scanStalledHeartbeats(ctx),
         await scanUnfinishedCallbacks(ctx),
+        await scanStuckRefunds(ctx),
       ];
       let anomalies = 0;
       for (const c of classes) {

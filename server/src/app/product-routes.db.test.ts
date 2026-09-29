@@ -121,6 +121,8 @@ describe('GET /products/{id}', () => {
       const p = r.json as { id: string; compliance_tags: string[]; origin_country: string };
       expect(p.compliance_tags).toEqual(['cosmetic']);
       expect(p.origin_country).toBe('JP');
+      // FTC 发货时限承诺（D-39⑦ / AJ-180）：来自配置 SHIP_WITHIN_BUSINESS_DAYS（缺省 7），小程序详情页照此出文案
+      expect((r.json as Record<string, unknown>)['ship_within_business_days']).toBe(7);
     } finally {
       await srv.close();
     }
