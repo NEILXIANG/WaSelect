@@ -44,7 +44,7 @@ import { createWxApi } from '../../miniprogram/utils/wx-api.js';
 
 const JWT_SECRET = 'mp-shell-jwt-secret-'.repeat(3);
 /** 模拟机构回调的 HMAC 密钥（装配处 mock 通道的 options.secret）。 */
-const CALLBACK_SECRET = 'mp-shell-mock-callback-secret';
+const CALLBACK_SECRET = 'mp-shell-mock-callback-secret-2026-09-e2e';
 const TERMS = 'TOS-TEST-1';
 
 let db: Db;

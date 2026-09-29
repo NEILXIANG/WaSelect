@@ -51,7 +51,11 @@ describe('NODE_ENV（D17）', () => {
       // staging 启用 mock 必须显式密钥（P3-7：公网环境不许回落公开占位值），
       // 这里测的是"NODE_ENV 值是否被认得"，给它一把密钥以免碰到别的规则
       expect(
-        loadConfig({ ...baseEnv, NODE_ENV: env, MOCK_CALLBACK_SECRET: 'explicit-secret' }).NODE_ENV,
+        loadConfig({
+          ...baseEnv,
+          NODE_ENV: env,
+          MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
+        }).NODE_ENV,
       ).toBe(env);
     }
   });
@@ -236,7 +240,7 @@ describe('跨字段校验：单项合法但组合成事故', () => {
         PAYMENT_CHANNELS: 'mock',
         REVIEW_MODE: 'on',
         REVIEW_SKU_ID: 'sku-1',
-        MOCK_CALLBACK_SECRET: 'review-mock-secret',
+        MOCK_CALLBACK_SECRET: 'review-mock-callback-secret-2026-period',
       }),
     );
     expect(c.REVIEW_MODE).toBe('on');
@@ -276,7 +280,9 @@ describe('跨字段校验：单项合法但组合成事故', () => {
    *      任意真实订单置 paid。render.yaml 把它列为长期 sync:false 密钥，残留是最可能的形态。
    */
   it('生产未启用 mock 却残留 MOCK_CALLBACK_SECRET → 拒绝（审核期结束必须撤掉伪造回调的门）', () => {
-    const issues = expectReject(prod({ MOCK_CALLBACK_SECRET: 'left-over-from-review' }));
+    const issues = expectReject(
+      prod({ MOCK_CALLBACK_SECRET: 'left-over-from-review-period-2026-09' }),
+    );
     expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');
     expect(issues.join('\n')).toContain('残留');
   });
@@ -309,9 +315,9 @@ describe('跨字段校验：单项合法但组合成事故', () => {
       ...baseEnv,
       NODE_ENV: 'staging',
       PAYMENT_CHANNELS: 'mock',
-      MOCK_CALLBACK_SECRET: 'explicit-secret',
+      MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
     });
-    expect(c.MOCK_CALLBACK_SECRET).toBe('explicit-secret');
+    expect(c.MOCK_CALLBACK_SECRET).toBe('explicit-mock-callback-secret-32ch');
   });
 
   it('development / test 启用 mock 允许回落占位密钥（本机环境，可伪造面不出本机）', () => {
@@ -493,9 +499,89 @@ describe('配置形状（N11）', () => {
       NODE_ENV: 'staging',
       CHECKOUT_BASE_URL: 'http://localhost:4000',
       // staging 启用 mock 必须显式密钥（P3-7）；本用例测的是 URL 规则，补密钥隔离变量
-      MOCK_CALLBACK_SECRET: 'explicit-secret',
+      MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
     });
     expect(c.CHECKOUT_BASE_URL).toBe('http://localhost:4000');
+  });
+
+  it('CHECKOUT_BASE_URL 带尾斜杠 → 规范化去掉（全量审查 B9：三处拼接只有一处处理过）', () => {
+    /**
+     * @why 2026-09-29 全量审查 B9：`CHECKOUT_BASE_URL` 有三处拼接——
+     *      `pay-intent.ts` 的短链 `${base}/o/${id}`、`channels.ts` 的 Stripe
+     *      `successUrl/cancelUrl` `${base}${path}`、以及 `pay-link-routes.ts` 的
+     *      `expiredPageUrl`。**只有第三处**做了 `.replace(/\/+$/, '')`。
+     *      部署时多打一个斜杠（zod 的 url 规则接受且不规范化）的表现是：
+     *      · 银行卡短链变成 `https://checkout.example.com//o/<id>` → 静态站的 `/o/*`
+     *        路由规则不匹配 → 用户点了短链打不开收银页；
+     *      · Stripe 付完款回跳 `//pay/done` → 404。
+     *      **不报错、启动全绿**，属于"配置对了一半"的静默故障，且只有走到付款那一步才发现。
+     * @why 在**配置层**规范化而不是在每个拼接点各写一次：拼接点是会被新增的
+     *      （将来加一个"订单详情页地址"就又是一处），而"URL 该长什么样"只有一个答案。
+     *      把答案放在唯一入口，新增拼接点不用记得做处理。
+     * @limitation 只去**路径末尾**的斜杠，不动 query / 其余部分
+     *      （`https://x.com/a/` 与 `https://x.com/a//` 都归一到 `https://x.com/a`）。
+     *      根路径 `https://x.com/` 归一化成 `https://x.com`，与"不带斜杠"等价。
+     */
+    const c = loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'staging',
+      CHECKOUT_BASE_URL: 'http://localhost:4000/',
+      MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
+    });
+    expect(c.CHECKOUT_BASE_URL).toBe('http://localhost:4000');
+    // 多个尾斜杠同样归一（防"去掉一个还剩一个"）
+    const c2 = loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'staging',
+      CHECKOUT_BASE_URL: 'http://localhost:4000//',
+      MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
+    });
+    expect(c2.CHECKOUT_BASE_URL).toBe('http://localhost:4000');
+    // 不带斜杠的原样保留（回归：不能把正常值改坏）
+    const c3 = loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'staging',
+      CHECKOUT_BASE_URL: 'http://localhost:4000',
+      MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
+    });
+    expect(c3.CHECKOUT_BASE_URL).toBe('http://localhost:4000');
+  });
+
+  it('TERMS_VERSION 超过 32 字符 → 拒启（全量审查 B32：超列宽会让之后所有建单 500）', () => {
+    /**
+     * @why 2026-09-29 全量审查 B32：`orders.terms_version` 在迁移 008 里已加宽到
+     *      `VARCHAR(32)`，但配置层只有 `.min(1)`、没有上界。于是
+     *      `TERMS_VERSION=TOS-2026-10-01-with-a-very-long-suffix`（>32）能通过启动校验，
+     *      `/terms` 接口**照常下发**这个版本，前端照常把它塞进建单请求体，
+     *      然后每一笔建单都在写库时撞 22001（value too long）→ 50000。
+     *      失败形态是"服务起来了、对账也健康、就是所有人都下不了单"，
+     *      而且启动期不报错意味着**部署后第一次成功请求之前没人知道**。
+     * @why 上界取自列宽而不是拍一个数：列宽是硬约束，配置上界比它大就是漏网、
+     *      比它小就是把合法值拦死。二者必须同源（下一条 db 用例从 information_schema 读列宽对拍）。
+     */
+    const issues = expectReject({ ...baseEnv, TERMS_VERSION: 'T'.repeat(33) });
+    expect(issues.join('\n')).toContain('TERMS_VERSION');
+    // 边界：32 恰好放行（不能把最大值本身拦掉）
+    expect(() => loadConfig({ ...baseEnv, TERMS_VERSION: 'T'.repeat(32) })).not.toThrow();
+  });
+
+  it('MOCK_CALLBACK_SECRET 短于 32 → 拒启（全量审查 B19：短密钥可被在线枚举伪造"支付成功"）', () => {
+    /**
+     * @why 2026-09-29 全量审查 B19：`MOCK_CALLBACK_SECRET` 是**审核期伪造"支付成功"**的
+     *      HMAC 密钥——持有它就能给任意订单落账（把订单置为 paid）。它此前用 `optionalText()`，
+     *      即**没有长度下限**：`NODE_ENV=production` + `PAYMENT_CHANNELS=mock` +
+     *      `REVIEW_MODE=on` + `MOCK_CALLBACK_SECRET=a` 能正常启动。
+     *      审核期这条通路是**刻意**暴露在公网上的（审核员要用它下单），
+     *      一个 1 字符密钥在线枚举几十次即可命中，后果是审核期订单被任意置为已付款。
+     * @why N11 自己的论断是"配了但很短比没配更危险"（短值给了安全的错觉），
+     *      但这条论断此前没有落实到这里——`optionalSecret()` 就是为它写的，却没被用上。
+     * @why 阈值取 32（与 JWT_SECRET 同档，见同一份 `.env.example` 的口径）：
+     *      它是 HMAC 密钥，强度和 JWT 密钥是同一量级的问题。
+     */
+    const issues = expectReject({ ...baseEnv, MOCK_CALLBACK_SECRET: 'a' });
+    expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');
+    // 边界：32 恰好放行（不能把合法长度拦掉）
+    expect(() => loadConfig({ ...baseEnv, MOCK_CALLBACK_SECRET: 'b'.repeat(32) })).not.toThrow();
   });
 
   it('CORS_ORIGINS=* → 拒启（通配不会生效但也不报错——静默通过等于以为配上了）', () => {

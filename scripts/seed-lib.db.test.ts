@@ -11,7 +11,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from '../server/src/adapters/db.js';
-import { ensureTestDb, testDb } from '../test/db/test-db.js';
+import { ensureTestDb, resetTestDb, testDb } from '../test/db/test-db.js';
 import { clearBusinessTables, seedOnce } from './seed-lib.js';
 import { SHIPPING_TIERS } from '../test/factories/catalog.js';
 
@@ -19,6 +19,14 @@ let db: Db;
 beforeAll(async () => {
   await ensureTestDb();
   db = testDb();
+  // ⚠️ 必须先重置：db project 的多个文件**共享同一个测试库**且跨文件不清理，
+  //    别的文件留下的订单/支付行会让 `seedOnce` 的内容闸门（闸门④）拒绝清表，
+  //    表现为"单独跑这个文件绿、全量跑红"——这是本文件先踩到的一次
+  //    （2026-09-29，加内容闸门后全量 db 立刻红了两条）。
+  //    @why 用 `resetTestDb` 而不是 `clearBusinessTables`：前者是测试库的标准重置入口，
+  //    且它**不带**内容闸门（测试库名以 `_test` 结尾，已由 assertIsTestDatabaseUrl 保证），
+  //    不会被"库里恰好有真订单"挡住——那正是生产保护该有的样子，测试环境不该被它绊倒。
+  await resetTestDb(db);
 }, 30_000);
 afterAll(async () => {
   await db.end();
@@ -69,5 +77,71 @@ describe('配置表保留（闸门③）', () => {
     const us = await db`select code from country_profiles where code = 'US'`;
     expect(us.length).toBe(1);
     expect((await counts()).products).toBe(4);
+  });
+});
+
+describe('闸门④：内容闸门（B31 纵深防御：名字拦不住时靠数据拦）', () => {
+  /**
+   * @why 全量审查 B31（2026-09-29）：闸门①（只灌本机）与闸门②（库名拒 prod）都是**名字层**的。
+   *      名字层的闸门有一个共同的死法——开发者为排查生产问题开了 `localhost:15432 → Render 库`
+   *      的隧道：此时 host 是 localhost（①放行），库名若将来又被改回 `japan_shop`（②也放行）。
+   *      内容闸门不认名字，只认**数据**：库里只要有"真业务"的痕迹就拒，
+   *      因为 dev 库里的订单只能是审核期测试单（`is_test=true`）、支付行只能来自 mock。
+   * @why 判据取"is_test=false 的订单"与"provider <> mock 的支付行"两条，而不是"orders 非空"：
+   *      本地开发本来就会下测试单（那是正常业务），按"非空"拦会把日常开发挡死，
+   *      于是有人会把闸门删掉——拦太宽比不拦更危险（与闸门②不拦 "produce" 同一条理由）。
+   */
+
+  /** 造一个最小用户（只填 NOT NULL 列）。 */
+  async function someUserId(): Promise<string> {
+    await seedOnce(db, {});
+    const u = await db`select id from users limit 1`;
+    return String(u[0]?.id);
+  }
+
+  /** 造一张最小订单（expires_at 用 now()，形状合规即可）。 */
+  async function insertOrder(id: string, userId: string, isTest: boolean): Promise<void> {
+    await db`
+      insert into orders (id, order_no, user_id, items_jpy, total_jpy, fx_snapshot,
+                          address_snapshot, terms_version, expires_at, is_test)
+      values (${id}, ${`no-${id}`}, ${userId}, 1000, 1000, '{}'::jsonb,
+              '{}'::jsonb, 'terms-1', now(), ${isTest})
+    `;
+  }
+
+  it('有 is_test=false 的订单 → 拒绝清表，且那张单还在', async () => {
+    const userId = await someUserId();
+    await insertOrder('ord-real-1', userId, false);
+    await expect(seedOnce(db, {})).rejects.toThrow(/真订单|生产/);
+    // 拒绝之后必须**什么都没动**（防"拒了但已经 truncate 了"）
+    const left = await db`select id from orders where id = 'ord-real-1'`;
+    expect(left.length).toBe(1);
+    await resetTestDb(db);
+  });
+
+  it('有非 mock 通道的支付行 → 拒绝清表', async () => {
+    const userId = await someUserId();
+    await insertOrder('ord-real-2', userId, true);
+    await db`
+      insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+      values ('pay-stripe-1', 'ord-real-2', 'stripe', 'succeeded', 'USD', 1000)
+    `;
+    await expect(seedOnce(db, {})).rejects.toThrow(/生产|非 mock/);
+    const left = await db`select id from payments where id = 'pay-stripe-1'`;
+    expect(left.length).toBe(1);
+    await resetTestDb(db);
+  });
+
+  it('只有审核期测试单与 mock 支付行 → 放行（不能把日常开发挡死）', async () => {
+    const userId = await someUserId();
+    await insertOrder('ord-test-1', userId, true);
+    await db`
+      insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+      values ('pay-mock-1', 'ord-test-1', 'mock', 'succeeded', 'JPY', 1000)
+    `;
+    await expect(seedOnce(db, {})).resolves.toBeDefined();
+    // 灌进去了 = 清过了：刚才那张测试单没了
+    const left = await db`select id from orders where id = 'ord-test-1'`;
+    expect(left.length).toBe(0);
   });
 });

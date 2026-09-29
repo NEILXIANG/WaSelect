@@ -199,5 +199,11 @@ databases:
     #    assertPostgresMajor(>=16) 会放行，但 CI（PG16）与生产版本从此不一致。
     #    test/config/render-env.unit.test.ts 现在会校验 databases 段的键名集合。
     postgresMajorVersion: '16' # 代码里有硬闸门 assertPostgresMajor(>=16)，版本不符直接启动失败
-    databaseName: japan_shop
+    # ⚠️ 库名**必须**带 `_prod` 且与开发默认库名（`japan_shop`）不同（全量审查 B31，2026-09-29）：
+    #    同名会让 `scripts/seed-lib.ts` 的两道闸门同时失效——① 只挡非 localhost，而"把生产库
+    #    端口转发到 localhost:15432 排查问题"是常规操作，转发后 host 就是 localhost；
+    #    ② "库名含 prod 就拒"因为名字里没有 prod 而永远不触发。两者叠加的结果是
+    #    `npm run db:seed`（默认 TRUNCATE 全部业务表）可以对着生产库跑且一路绿灯。
+    #    ⚠️ **Render 建库后此值不可再改**（只能新建库再迁数据），所以必须在这里一次改对。
+    databaseName: japan_shop_prod
     user: waselect

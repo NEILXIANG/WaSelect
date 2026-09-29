@@ -45,7 +45,7 @@ import { fixedClock } from '../helpers/fixed-clock.js';
 
 export const E2E_AUTH: AuthConfig = { secret: 'e2e-jwt-secret-'.repeat(3), issuer: 'waselect-e2e' };
 /** 模拟回调的 HMAC 密钥：也是注册表里 `mock` 通道的 `options.secret`。 */
-export const E2E_CALLBACK_SECRET = 'mock-callback-secret';
+export const E2E_CALLBACK_SECRET = 'mock-callback-secret-for-e2e-harness-2026';
 /** 全程只用一个链路 ID，便于断言"几跳日志是同一条链"。 */
 export const E2E_TRACE = 'e2e-trace-0001';
 export const E2E_USER = 'u-e2e';

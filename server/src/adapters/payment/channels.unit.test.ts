@@ -140,13 +140,18 @@ describe('buildPaymentRegistry：mock 通道', () => {
   });
 
   it('配了显式密钥 → 用它验签；占位密钥验不过（40103，不是静默收下）', async () => {
-    const c = loadConfig({ ...baseEnv, MOCK_CALLBACK_SECRET: 'explicit-secret' });
+    const c = loadConfig({
+      ...baseEnv,
+      MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
+    });
     const { registry } = buildPaymentRegistry(c, deps());
     const provider = registry.get('mock');
 
     const raw = succeedRaw();
     await expect(
-      provider.parseWebhook(raw, { [MOCK_SIGNATURE_HEADER]: signMock(raw, 'explicit-secret') }),
+      provider.parseWebhook(raw, {
+        [MOCK_SIGNATURE_HEADER]: signMock(raw, 'explicit-mock-callback-secret-32ch'),
+      }),
     ).resolves.toMatchObject({ outcome: 'succeeded' });
 
     await expect(
@@ -248,7 +253,7 @@ describe('buildPaymentRegistry：通道下线语义（二次审查 P1-NEW-1）',
     const explicit = loadConfig({
       ...baseEnv,
       PAYMENT_CHANNELS: 'wechat',
-      MOCK_CALLBACK_SECRET: 'explicit-secret',
+      MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
     });
     const a1 = buildPaymentRegistry(explicit, deps());
     expect(a1.registered).toEqual(['mock']);
@@ -284,7 +289,10 @@ describe('buildPaymentRegistry：生产环境的 mock 门（三审 S1）', () =>
       CORS_ORIGINS: 'https://admin.example.com',
     });
     // 绕过配置层（模拟规则 1b 被放宽）：直接注入残留密钥
-    const a = buildPaymentRegistry({ ...c, MOCK_CALLBACK_SECRET: 'left-over' }, deps());
+    const a = buildPaymentRegistry(
+      { ...c, MOCK_CALLBACK_SECRET: 'left-over-mock-callback-secret-32ch-ok' },
+      deps(),
+    );
     expect(a.registered).toEqual(['stripe']);
     expect(a.offline).toEqual([]);
     expectChannelError(() => a.registry.getForCallback('mock'), 'channel_not_configured');

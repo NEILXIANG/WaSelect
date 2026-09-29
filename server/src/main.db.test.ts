@@ -298,7 +298,7 @@ afterAll(() => {
  */
 describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
   const PORT_LINK = 4613;
-  const MOCK_SECRET = 'main-db-offline-mock-secret';
+  const MOCK_SECRET = 'main-db-offline-mock-callback-secret-2026';
   const LINK_USER = 'u-link';
   let db: Db;
 

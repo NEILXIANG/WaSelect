@@ -270,6 +270,26 @@ describe('render.yaml ↔ 配置 schema 一致', () => {
     expect(cron).toMatch(/^\s*region:\s*oregon/m);
   });
 
+  it('生产库名必须与开发默认库名不同，且含 prod（全量审查 B31：同名会让 seed 闸门②永不触发）', () => {
+    /**
+     * @why 2026-09-29 全量审查 B31：`render.yaml` 的 `databaseName: japan_shop` 与
+     *      `scripts/seed-lib.ts` 的 `defaultDevUrl()` **同名**。后果是两道闸门同时失效：
+     *      · 闸门①只挡"非 localhost"，而"把生产库端口转发到 localhost:15432"是排查生产问题
+     *        时的**常规操作**，转发之后 host 就是 localhost，闸门①放行；
+     *      · 闸门②"库名含 prod 就拒"因为库名里没有 prod，**永远不触发**。
+     *      于是 `npm run db:seed`（默认 TRUNCATE 全部业务表）对着生产库跑，数据不可逆丢失，
+     *      而 `order_events` / `admin_audit` 的 append-only 触发器挡不住 TRUNCATE。
+     * @why 判据要同时钉"不同名"与"含 prod"两条：只钉"不同名"的话，有人改成
+     *      `japan_shop_2` 也能绿，而闸门②照样不触发——两条一起才等于"闸门②真的能拦"。
+     * @limitation 这条只能守住"名字"这一层，守不住"有人手动给了 `--allow-remote`"
+     *      （那需要交互确认，见 seed-lib.ts @limitation 三）。纵深防御靠那里的**内容闸门**。
+     */
+    const prodName = databases[0]?.keys.get('databaseName') ?? '';
+    expect(prodName, 'databases[0] 解析不出 databaseName（解析器坏了或键名改了）').not.toBe('');
+    expect(prodName).not.toBe('japan_shop');
+    expect(prodName).toMatch(/prod/i);
+  });
+
   it('解析器自检：databases 段解析出键值且不吃注释、不越段', () => {
     const sample = [
       'services:',

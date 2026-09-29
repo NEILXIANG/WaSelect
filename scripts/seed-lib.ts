@@ -81,6 +81,51 @@ export async function clearBusinessTables(db: Db): Promise<number> {
   return tables.length;
 }
 
+/**
+ * 闸门④：**内容闸门**——不认库名，只认数据（全量审查 B31 的纵深防御，2026-09-29）。
+ *
+ * @why 闸门①（只灌本机）与闸门②（库名拒 prod）都是**名字层**的，而名字层的闸门有一个共同的死法：
+ *      开发者为排查生产问题开了 `localhost:15432 → Render 库` 的隧道并 `export DATABASE_URL`，
+ *      此时 host 就是 localhost（①放行）；若库名将来又被改回不含 prod 的名字（②也放行）。
+ *      两道闸门同时沉默，而 `npm run db:seed` 默认 TRUNCATE 全部业务表——
+ *      `order_events` / `admin_audit` 的 append-only 触发器**挡不住 TRUNCATE**（只拦 UPDATE/DELETE），
+ *      数据不可逆丢失且不报任何错。
+ *      内容闸门不认名字：库里只要有"真业务"的痕迹就拒，因为 dev 库里的订单只可能是
+ *      审核期测试单（`is_test=true`）、支付行只可能来自 `mock` 通道。
+ *
+ * @why 判据取"is_test=false 的订单"和"provider <> 'mock' 的支付行"，而不是"orders 非空"：
+ *      本地开发本来就会下测试单（那是正常业务），按"非空"拦会把日常开发挡死，
+ *      于是有人会把闸门删掉——**拦太宽比不拦更危险**（与闸门②不拦 "produce" 同一条理由）。
+ *
+ * @limitation 一：只查两张表。dev 库里可能有真实感的商品/地址/用户（那是 fixture 该有的样子），
+ *              它们丢了能重建；订单与支付行丢了不能。判定标准就是"丢了能不能重建"。
+ * @limitation 二：SQL 里写死了 `'mock'` 这个通道名——它是"审核期假支付"的约定名，
+ *              不是业务支付方式（约束四禁的是后者）。将来若改名，这里与 `PAYMENT_CHANNELS`
+ *              一起改，并同步本注释。
+ * @limitation 三：**不提供 `--force` 跳过口**。@why 这个闸门存在的唯一理由就是"没有后门"；
+ *              真需要对着有真数据的库重灌，正确做法是先把数据导出或换一个库，不是加开关。
+ *
+ * @throws 发现像生产的数据时抛错；调用方（seedOnce）应在**清表之前**调用它。
+ */
+export async function assertNotProductionData(db: Db): Promise<void> {
+  const real = await db`select count(*)::int as n from orders where is_test = false`;
+  const realOrders = Number(real[0]?.n ?? 0);
+  if (realOrders > 0) {
+    throw new Error(
+      `拒绝清表：库里有 ${realOrders} 张 is_test=false 的**真订单**（dev 库只应有审核期测试单）。` +
+        `这是不可逆操作，请确认 DATABASE_URL 指向的是本机开发库，而不是端口转发到生产的库。`,
+    );
+  }
+  const pays = await db`select count(*)::int as n from payments where provider <> 'mock'`;
+  const realPayments = Number(pays[0]?.n ?? 0);
+  if (realPayments > 0) {
+    throw new Error(
+      `拒绝清表：库里有 ${realPayments} 条非 mock 通道的支付行（dev 库只应有 mock 假支付）。` +
+        `同上，请确认 DATABASE_URL 指向本机开发库。`,
+    );
+  }
+}
+
 export interface SeedResult {
   clearedTables: number;
   bundle: SeedBundle;
@@ -95,6 +140,9 @@ export async function seedOnce(
   db: Db,
   opts: { full?: boolean; seed?: string | number } = {},
 ): Promise<SeedResult> {
+  // ⚠️ 必须在 clearBusinessTables **之前**：闸门的意义就是"先判再动手"，
+  //    判晚了等于清完了才说"刚才那个好像是生产库"。
+  await assertNotProductionData(db);
   const clearedTables = await clearBusinessTables(db);
   const seedKey = opts.seed ?? 'seed';
   const bundle: SeedBundle =

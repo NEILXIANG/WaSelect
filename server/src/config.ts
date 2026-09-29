@@ -115,6 +115,39 @@ function optionalUrl() {
 }
 
 /**
+ * 可选 URL 且**去掉路径末尾的斜杠**（N11 + 全量审查 B9，2026-09-29）。
+ *
+ * @why `CHECKOUT_BASE_URL` 有三处拼接：`pay-intent.ts` 的短链 `${base}/o/${id}`、
+ *      `channels.ts` 的 Stripe `successUrl/cancelUrl` `${base}${path}`、
+ *      `pay-link-routes.ts` 的 `expiredPageUrl`。**只有第三处**做了去尾斜杠处理，
+ *      而 zod 的 `url()` 接受尾斜杠且**不规范化**。于是部署时多打一个斜杠的表现是：
+ *      银行卡短链变成 `https://checkout.example.com//o/<id>` → 静态站 `/o/*` 路由不匹配，
+ *      用户点了短链打不开收银页；Stripe 付完款回跳 `//pay/done` → 404。
+ *      **不报错、启动全绿**，属于"配置对了一半"的静默故障，且只有走到付款那一步才被发现。
+ *
+ * @why 在**配置层**规范化，而不是在每个拼接点各写一次 `replace`：
+ *      拼接点是会被新增的（将来加一个"订单详情页地址"就又是一处），
+ *      而"这个 URL 该长什么样"只有一个答案。放在唯一入口，新增拼接点不必记得做处理。
+ *
+ * @limitation 一：只去**路径末尾**的斜杠，不动 query 与其余部分；
+ *              根路径 `https://x.com/` 归一成 `https://x.com`（与不带斜杠等价）。
+ * @limitation 二：与 `optionalUrl()` 的差别**只有**这一步归一化。
+ *              `IMG_BASE_URL` / `PUBLIC_API_BASE` 仍在用不带归一化的版本——
+ *              它们目前没有"拼接路径"的用法（都是整值下发），改了反而可能造成
+ *              "前端拿到的值与我配的不一样"的困惑。**它们一旦开始拼路径，就改用本函数。**
+ */
+function optionalUrlNoTrailingSlash() {
+  return z.preprocess(
+    (v) => (v === undefined || v === '' ? undefined : v),
+    z
+      .url({ protocol: /^https?$/, error: '必须是 http(s) URL（如 https://checkout.example.com）' })
+      .optional()
+      // `\/+$` 而不是 `\/$`：连打两个斜杠也得归一（去掉一个还剩一个同样是坏链）
+      .transform((u) => (u === undefined ? u : u.replace(/\/+$/, ''))),
+  );
+}
+
+/**
  * 可选密钥类字符串（N11）：空串 → undefined；否则有最小长度。
  * @why HMAC 共享密钥 / 初始口令是爆破与撞库的第一目标，"配了但很短"和"没配"是两回事，
  *      前者更危险（看起来有保护）。形状规则不分环境（staging 同样生效）——staging 就是用来提前撞错的。
@@ -307,7 +340,21 @@ const schema = z.object({
   AUTO_DELIVER_DAYS: int(30, 1),
   AUTO_COMPLETE_DAYS: int(7, 1),
   /** 建单必传且必须与服务端相等，否则 40011（D-43）。必填 → 忘了配就启动失败，而不是全站下单失败。 */
-  TERMS_VERSION: z.string().min(1, 'TERMS_VERSION 必填（建单比对，D-43）'),
+  /**
+   * 条款版本（建单比对，D-43）。上界 **32 = `orders.terms_version` 的列宽**
+   * （迁移 008 已从 16 加宽到 32）。
+   * @why 只写 `.min(1)` 时，配一个 >32 的值能通过启动、`/terms` 照常下发、前端照常提交，
+   *      然后**每一笔建单**在写库时撞 22001 → 50000。形态是"服务起来了、
+   *      健康检查也过、就是所有人都下不了单"——而启动期不报错意味着部署后
+   *      第一次建单之前没人知道（全量审查 B32，2026-09-29）。
+   * @why 上界**取自列宽而不是拍一个数**：比列宽大 = 漏网，比列宽小 = 把合法值拦死。
+   * @limitation 32 这个数与列宽是**两处各写一份**（config 在这里、DDL 在 008）；
+   *              收紧或放宽都要同时改，由 `config.db.test.ts` 的同源断言盯着。
+   */
+  TERMS_VERSION: z
+    .string()
+    .min(1, 'TERMS_VERSION 必填（建单比对，D-43）')
+    .max(32, 'TERMS_VERSION 最多 32 字符（orders.terms_version 列宽，超出会让建单 500）'),
 
   // ── 支付通道（可插拔，ADR-28）────────────────────────────────────────────
   /**
@@ -326,7 +373,8 @@ const schema = z.object({
       .array(z.enum(PAYMENT_CHANNEL))
       .min(1, 'PAYMENT_CHANNELS 至少启用一个（mock | stripe | wechat）'),
   ),
-  CHECKOUT_BASE_URL: optionalUrl(),
+  // ⚠️ 用带"去尾斜杠"的版本：本字段会被三处拼路径（见 optionalUrlNoTrailingSlash 的 @why）
+  CHECKOUT_BASE_URL: optionalUrlNoTrailingSlash(),
   STRIPE_SECRET_KEY: optionalText(),
   STRIPE_WEBHOOK_SECRET: optionalText(),
   /**
@@ -336,7 +384,18 @@ const schema = z.object({
    *      ② JWT 密钥轮换是既定需求，若回调验签挂在同一把钥匙上，轮换当天所有模拟回调全部失效。
    *      非生产环境可留空（装配层回落到开发占位值）；生产启用 mock（= 审核模式）时必填。
    */
-  MOCK_CALLBACK_SECRET: optionalText(),
+  /**
+   * mock 通道回调的 HMAC 密钥（审核期伪造"支付成功"用）。
+   * ⚠️ 用 `optionalSecret(32, …)` 而不是 `optionalText()`（全量审查 B19，2026-09-29）：
+   *    持有这把钥匙就能给**任意订单**落账（置为 paid），而审核期这条通路是刻意暴露在
+   *    公网上的（审核员要用它下单）。没有长度下限时，`MOCK_CALLBACK_SECRET=a` 能通过启动，
+   *    在线枚举几十次即可命中。阈值 32 与 JWT_SECRET 同档——它是 HMAC 密钥，
+   *    强度和 JWT 密钥是同一量级的问题。
+   * @why 这就是 N11 那条"配了但很短比没配更危险"的落实：`optionalSecret()` 本来就是
+   *      为这类字段写的，此前这个字段却漏用了它，于是论断停在文档里、没进代码。
+   * @limitation 只对"配了值"生效；留空仍走开发占位值（生产启用 mock 时另有规则 1b 强制必填）。
+   */
+  MOCK_CALLBACK_SECRET: optionalSecret(32, 'MOCK_CALLBACK_SECRET'),
   WECHAT_INSTITUTION_MERCHANT_ID: optionalText(),
   WECHAT_INSTITUTION_API_KEY: optionalText(),
   /** on 时仅 REVIEW_SKU_ID 商品允许 channel=mock（审核期用）。 */

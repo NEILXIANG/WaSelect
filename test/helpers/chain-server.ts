@@ -45,7 +45,7 @@ import { MemorySink } from './memory-sink.js';
 import { fixedClock } from './fixed-clock.js';
 
 export const CHAIN_JWT_SECRET = 'chain-test-jwt-secret-'.repeat(3);
-export const CHAIN_CALLBACK_SECRET = 'chain-test-mock-callback-secret';
+export const CHAIN_CALLBACK_SECRET = 'chain-test-mock-callback-secret-2026-09';
 export const CHAIN_TERMS = 'TOS-TEST-1';
 
 export interface ChainServer {
