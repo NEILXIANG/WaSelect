@@ -5,7 +5,7 @@
  *      ① 建单不带 expected_total_jpy → 失去"看到的 ≠ 算出来的"这道防线（40905）；
  *      ② 商品行带价格 → 有人会拿它当合计（cart-store @limitation 一 的红线）；
  *      ③ 提交闸门禁用却不说原因 → 被读成"这站坏了"。
- *      （幂等键已下沉到 `utils/idem-key.js`，由 `idem-key.unit.test.ts` 覆盖。）
+ *      （幂等键已下沉到 `utils/idempotency.js`，由 `idempotency.unit.test.ts` 覆盖。）
  *
  * @why 支付相关（通道渲染 / 下一步做什么）**不在这里**——它们住在
  *      `utils/pay-plan.js` 并由 `pay-plan.unit.test.ts` 覆盖：确认页与支付页共用同一份，

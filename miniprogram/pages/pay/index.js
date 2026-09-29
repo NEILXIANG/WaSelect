@@ -19,8 +19,14 @@
  * @limitation 三：`requestPayment` 的**取消与失败一视同仁**（wx-api @limitation 十）：
  *              两者都停在支付页，订单仍是 pending_payment，用户可再点一次。
  *              解析宿主 fail 的文案去区分"取消 vs 失败"等于把宿主文案当契约。
+ * @limitation 四：幂等键**一次意图一个、重试复用**（`intentKey.acquire()`），
+ *              与结算页同一口径（A5，2026-09-29）。两处会作废键：
+ *              **换通道**（同键重放会拿回上一个通道的凭据）与支付已发起成功。
+ *              发起失败**不**作废——弱网下用户再点一次必须还是同一个键，
+ *              否则同一张单会发起两次支付。
  *
  * @see ../../utils/pay-plan.js（通道渲染 / 实扣金额与 §14.2 提示条 / 下一步做什么）；
+ *      ../../utils/idempotency.js（幂等键生命周期）；
  *      ../../utils/address-form.js（ADDRESS_COUNTRY_DEFAULT：通道过滤的目的国）
  */
 import {
@@ -31,7 +37,7 @@ import {
   payPlan,
 } from '../../utils/pay-plan.js';
 import { ADDRESS_COUNTRY_DEFAULT } from '../../utils/address-form.js';
-import { newIdemKey } from '../../utils/idem-key.js';
+import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { errorMessage } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -64,13 +70,16 @@ Page({
 
   /** 订单 id（空串 = 没带过来，此时不取数）。 */
   orderId: '',
-  /** 本次发起支付的幂等键（重试复用，同 checkout 的口径）。 */
-  idemKey: '',
+  /** 幂等键的生命周期器（重试复用，同 checkout 的口径）。 */
+  intentKey: null,
+  /** 上一次发起支付用的通道（空串 = 还没发起过）。 */
+  lastChannel: '',
   traceId: '',
 
   /** @param {{orderId?: string}} options 结算页带来的 `?orderId=…` */
   onLoad(options) {
     this.traceId = newTraceId();
+    this.intentKey = createIntentIdempotency();
     this.orderId = typeof options?.orderId === 'string' ? options.orderId : '';
     if (this.orderId === '') {
       this.setData({ error: '缺少订单 id' });
@@ -118,18 +127,23 @@ Page({
   onPay(e) {
     const channel = e?.currentTarget?.dataset?.channel;
     if (typeof channel !== 'string' || channel === '') return;
-    this.idemKey = newIdemKey();
-    void this.startPay(channel);
+    if (this.intentKey === null) return;
+    // ⚠️ 换通道 = 请求参数变了：沿用旧键会被服务端**重放成上一个通道的 intent**，
+    //    用户点了 B 却拿到 A 的支付凭据（同键同参才算重放，参数不同就不是）。
+    if (this.lastChannel !== '' && this.lastChannel !== channel) this.intentKey.retire();
+    this.lastChannel = channel;
+    const { key } = this.intentKey.acquire();
+    void this.startPay(channel, key);
   },
 
-  async startPay(channel) {
+  async startPay(channel, idemKey) {
     this.setData({ paying: true, error: '' });
     try {
       const intent = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}/pay`,
         method: 'POST',
         data: { channel },
-        idempotencyKey: this.idemKey,
+        idempotencyKey: idemKey,
         traceId: this.traceId,
       });
       this.run(intent);

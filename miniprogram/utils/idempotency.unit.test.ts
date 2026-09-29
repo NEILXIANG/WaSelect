@@ -13,9 +13,12 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createIntentIdempotency, newIdempotencyKey } from './idempotency.js';
 import { ID_ALPHABET_CHARS, randomId } from './random-id.js';
+
+/** 写操作的两张页面：它们的幂等键必须走生命周期器，不能自己现造。 */
+const WRITE_PAGES = ['pages/checkout/index.js', 'pages/pay/index.js'];
 
 /** 服务端 trace/键的字符集要求；幂等键自身不含 ':' 是 scopeKey 拼接的需要。 */
 const SERVER_SAFE = /^[A-Za-z0-9._:-]{8,64}$/;
@@ -51,6 +54,32 @@ describe('newIdempotencyKey', () => {
     const seen = new Set<string>();
     for (let i = 0; i < 10_000; i += 1) seen.add(newIdempotencyKey());
     expect(seen.size).toBe(10_000);
+  });
+
+  it('⚠️ 长度在契约上限 128 内', () => {
+    expect(newIdempotencyKey().length).toBeLessThanOrEqual(128);
+  });
+
+  it('⚠️ 时间前进半年后产出**不变** → 键里没藏 Date.now（约束十）', () => {
+    // @why "同一毫秒内两次相同"这类断言会漏：真掺了 Date.now() 也常常产出相同串。
+    //      用假时钟把时间明确推到两个不同的点，才真的钉住"不取时间"。
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const early = newIdempotencyKey();
+      vi.setSystemTime(new Date('2026-06-01T12:00:00Z'));
+      expect(newIdempotencyKey()).not.toBe(early); // 键本身每次都不同（下一条钉的是"不掺时间"不是"恒定"）
+      const a = createIntentIdempotency({ newKey: () => 'fixed' }).acquire().key;
+      vi.setSystemTime(new Date('2027-01-01T00:00:00Z'));
+      const b = createIntentIdempotency({ newKey: () => 'fixed' }).acquire().key;
+      expect(b).toBe(a);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('默认随机源下两次调用不相同', () => {
+    expect(newIdempotencyKey()).not.toBe(newIdempotencyKey());
   });
 });
 
@@ -97,6 +126,30 @@ describe('一次意图一个键', () => {
     expect(intent.acquire()).toEqual({ key: 'mpord-1', isRetry: true });
     intent.retire();
     expect(intent.acquire()).toEqual({ key: 'mpord-2', isRetry: false });
+  });
+});
+
+describe('防回归：写操作页面必须**用**生命周期器（A5）', () => {
+  /**
+   * @why 上面的用例只证明"`createIntentIdempotency` 是对的"，管不住页面不用它：
+   *      结算页与支付页曾经每次点击都 `newIdemKey()`，而文件头注释写的是
+   *      "重试复用同一个"——**注释与实现相反**，单测全绿（ADR-29 直接命中）。
+   *      所以要有一条"这个模块真的被用上了"的断言，而不只是"这个模块是对的"。
+   * @limitation 扫源码是文本级（第 54 条）：先剥注释行再扫——注释里也写着
+   *              `acquire()` 与 `retire()`，不剥的话"删掉调用、只留注释"会假绿。
+   */
+  it('checkout / pay 两页的代码里走 acquire()，且不得再出现现造键的写法', () => {
+    const root = fileURLToPath(new URL('..', import.meta.url));
+    for (const page of WRITE_PAGES) {
+      const src = readFileSync(`${root}/${page}`, 'utf8');
+      const code = src
+        .split('\n')
+        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+        .join('\n');
+      expect(code, `${page} 必须调 acquire()`).toMatch(/\.acquire\(\)/);
+      expect(code, `${page} 不得再自己现造幂等键`).not.toMatch(/newIdemKey\s*\(/);
+      expect(code, `${page} 不得再把新键直接赋给实例字段`).not.toMatch(/this\.idemKey\s*=/);
+    }
   });
 });
 

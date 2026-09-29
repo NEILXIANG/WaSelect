@@ -14,14 +14,18 @@
  * @limitation 一：建单成功**立刻清空购物车**——购物车是本地状态，
  *              不清的表现是"下单了购物车还有东西"，用户会再下一单。
  *              支付失败不影响：订单已存在（pending_payment），去订单页可继续付。
- * @limitation 二：幂等键**一次提交一个**（`this.idemKey`），重试复用同一个——
+ * @limitation 二：幂等键**一次提交一个**，重试复用同一个——
  *              每次重试都换键的话，网络一抖就建出两张单，而用户只点了一次。
+ *              ⚠️ 这条曾经**只有注释没有实现**（`onSubmit` 里每次 `newIdemKey()`），
+ *              是 A5（2026-09-29 全量审查）抓出来的"注释与实现相反"。
+ *              生命周期现在由 `utils/idempotency.js` 的 `createIntentIdempotency` 承担，
+ *              页面只负责在**两个时机**调 `retire()`：建单成功、意图内容变了（换地址）。
  *
- * @see ./index.vm.js（商品行/闸门/幂等键/请求体，12 条单测）；
+ * @see ./index.vm.js（商品行/闸门/请求体）；../../utils/idempotency.js（幂等键生命周期）；
  *      ../../utils/quote-view.js（报价区）；../../utils/address-form.js（地址摘要）
  */
 import { contactEmailOf, itemRows, orderBody, resolveAddressId, submitGate } from './index.vm.js';
-import { newIdemKey } from '../../utils/idem-key.js';
+import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { addressSummary, defaultAddressId } from '../../utils/address-form.js';
 import { quoteView } from '../../utils/quote-view.js';
 import { errorMessage } from '../../utils/error-text.js';
@@ -63,12 +67,13 @@ Page({
 
   /** 选中的地址 id（空串 = 没选/没地址）。 */
   addressId: '',
-  /** 本次提交的幂等键（@see @limitation 二）。 */
-  idemKey: '',
+  /** 幂等键的生命周期器（@see @limitation 二）；**不放在 data 里**（它不是渲染数据）。 */
+  intentKey: null,
   traceId: '',
 
   onLoad() {
     this.traceId = newTraceId();
+    this.intentKey = createIntentIdempotency();
   },
 
   onShow() {
@@ -135,6 +140,11 @@ Page({
         fallback: defaultAddressId(list),
       });
       const found = list.find((a) => a && a.id === id);
+      // 地址换了 = 订单意图变了 → 旧键必须作废：否则新地址下的建单会被服务端
+      // 按同一个键重放成**旧地址**那张单（@see utils/idempotency.js 的 retire 说明）
+      if (picked !== '' && picked !== undefined && picked !== this.addressId) {
+        this.intentKey?.retire();
+      }
       this.addressId = id;
       this.setData({ address: found === undefined ? null : addressSummary(found) });
     } catch (e) {
@@ -200,15 +210,19 @@ Page({
     wxApi.navigateTo({ url: LEGAL_PAGE });
   },
 
-  /** 提交建单。 */
+  /**
+   * 提交建单。
+   * @why 键在这里**取**而不是**造**：`acquire()` 首次给新键、之后给同一个键，
+   *      于是"上一次失败、用户再点一次"走的是同一个键，服务端认出是重放、
+   *      不会建出第二张单（A5）。失败路径刻意**不** `retire()`——键要留给重试。
+   */
   onSubmit() {
-    if (!this.data.gate.ok) return;
-    // ⚠️ 一次提交一个幂等键（重试复用，@see @limitation 二）
-    this.idemKey = newIdemKey();
-    void this.createOrder();
+    if (!this.data.gate.ok || this.intentKey === null) return;
+    const { key } = this.intentKey.acquire();
+    void this.createOrder(key);
   },
 
-  async createOrder() {
+  async createOrder(idemKey) {
     this.setData({ submitting: true, error: '' });
     try {
       const body = orderBody({
@@ -222,13 +236,16 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/orders`,
         method: 'POST',
         data: body,
-        idempotencyKey: this.idemKey,
+        idempotencyKey: idemKey,
         traceId: this.traceId,
       });
       // @see @limitation 一：建单成功即清车（订单已存在，支付失败可去订单页继续）
       app.globalData.cart.clear();
+      // 意图已完成：作废键。再点一次是**新的一张单**，沿用旧键会被重放成刚才那张
+      this.intentKey?.retire();
       wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${res?.order_id ?? ''}` });
     } catch (e) {
+      // ⚠️ 不 retire：键留给重试（弱网下用户看到错误再点一次必须还是同一个键）
       this.setData({ error: errorMessage(e) });
     } finally {
       this.setData({ submitting: false });
