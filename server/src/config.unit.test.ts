@@ -98,6 +98,11 @@ describe('loadConfig 正常路径', () => {
     expect(c.SHUTDOWN_READY_DELAY_MS).toBe(5_000);
     expect(c.FX_BUFFER_RATE).toBeCloseTo(0.03, 10);
     expect(c.SHIP_WITHIN_BUSINESS_DAYS).toBe(7); // FTC 发货时限承诺（D-39⑦ / AJ-180）
+    // A2 / AJ-197：默认 0（宁小勿大）——取到的是直连对端 IP（错但**不可伪造**），
+    // 而默认 1 在"前面其实有两层"时取到的是 Cloudflare 边缘那一跳，方向是"可伪造"。
+    // ⚠️ 生产由 render.yaml 显式给值，不许依赖默认。
+    expect(c.TRUST_PROXY_HOPS).toBe(0);
+    expect(c.ORIGIN_VERIFY_SECRET).toBeUndefined(); // 源站闸门默认关闭（拓扑未实测）
   });
 
   it('逗号分隔的通道被解析成数组，顺序保留', () => {

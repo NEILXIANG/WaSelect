@@ -58,6 +58,12 @@ services:
       - key: HOST
         value: 0.0.0.0 # 容器平台从宿主机外部探端口，绑回环会导致健康检查超时/发布失败
       - key: TRUST_PROXY_HOPS
+        # ⚠️ **必须显式给值，不许依赖代码默认**（A2 / AJ-197）：代码默认值已改为 0（宁小勿大）。
+        # 1 = 只有 Render 反代一层；**若 api 真的挂在 Cloudflare 后面则应为 2**，
+        # 而"Render 前一层 = 1"至今没有 @measured——staging 实测 XFF 之前不许改。
+        # ⚠️ 改成 2 的**前提**是源站不再可被直连：必须同时配 ORIGIN_VERIFY_SECRET
+        # （Cloudflare Transform Rule 注入 x-origin-verify），否则直连者伪造的 XFF 会被采信
+        # ⇒ 限流与账号封禁可被任意绕过（比"取错 IP"严重得多）。
         value: 1 # Render 前置一层反代（D23）。必须是层数，不是 true
       - key: DATABASE_URL
         fromDatabase:

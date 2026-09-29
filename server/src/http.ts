@@ -33,6 +33,7 @@ import express, {
   type Response,
 } from 'express';
 import { AppError, toErrorResponse } from './errors.js';
+import { timingSafeEqual } from 'node:crypto';
 import { newTraceId, runWithContext } from './context.js';
 import type { Logger } from './logger.js';
 
@@ -40,6 +41,31 @@ import type { Logger } from './logger.js';
 const JSON_BODY_LIMIT = '100kb';
 /** 回调原文上限（Stripe/WeChat 回调体都很小）。 */
 const RAW_BODY_LIMIT = '256kb';
+
+/**
+ * 源站校验头的名字（A2 / AJ-197）。**常量而不是配置项**：
+ * @why 它由 Cloudflare Transform Rule 注入、由本进程校验，两端都是我们自己写——
+ *      让它可配只会多出一个"名字对不上 → 全站 403"的失效方式，而没有任何收益
+ *      （没有任何场景需要两个不同的名字）。可配的只有**值**（`ORIGIN_VERIFY_SECRET`）。
+ */
+const ORIGIN_VERIFY_HEADER = 'x-origin-verify';
+
+/**
+ * 源站校验的豁免路径（平台内网直连源站的三类流量，见 2c 的 @why）。
+ * @why `/api/v1/internal/jobs` 用**前缀**：Cron 调的是它的子路径 `/daily`。
+ */
+const ORIGIN_VERIFY_EXEMPT_PATHS: readonly string[] = [
+  '/healthz',
+  '/readyz',
+  '/api/v1/internal/jobs',
+];
+
+/** 比共享密钥（先比长度再走 timingSafeEqual，不借长度差泄露信息）。 */
+function secretMatches(got: string, want: string): boolean {
+  const a = Buffer.from(got, 'utf8');
+  const b = Buffer.from(want, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 /**
  * CORS 配置（D21）。
@@ -78,8 +104,16 @@ export interface CreateHttpAppOptions {
    *      将来按 IP 做限流 / 登录锁定时，伪造 IP 就是一秒钟绕过。
    * @limitation 层数**少于**实际代理数时，取到的是中间代理的 IP（错，但至少不可伪造）；
    *              层数多于实际时才会重新变得可伪造。所以这个数宁小勿大，按平台实际拓扑配（Render=1）。
+   * @why 不传时的兜底由 1 改为 **0**（A2 / AJ-197）：与 `config.ts` 的 schema 默认值对齐——
+   *      两处各写一个数就是口径漂移，而漂移的方向又是"可伪造"（§2 第 60 条）。
+   *      生产走 config → 恒有值；这里的 0 只服务"没传这个选项"的调用方（测试与骨架单测）。
    */
   trustProxyHops?: number | undefined;
+  /**
+   * 源站校验密钥：**传了就只接受带 {@link ORIGIN_VERIFY_HEADER} 且值相等的请求**，不传 = 不校验。
+   * @see config.ts ORIGIN_VERIFY_SECRET（为什么需要它、为什么配了才生效、为什么豁免健康检查与每日作业）
+   */
+  originVerifySecret?: string | undefined;
   /**
    * 挂载业务路由；在兜底中间件之前调用。
    * 显式声明 `| undefined`：`exactOptionalPropertyTypes` 下调用方传 `{ mount: maybe }` 会被判不兼容，
@@ -220,7 +254,7 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
 
   // 反代后面取真实客户端 IP（限流与审计用）；不得用于鉴权（@limitation 一）
   // 层数而非 true：见 trustProxyHops 的 @why（D23，伪造 IP 可绕过未来的限流/锁定）
-  app.set('trust proxy', opts.trustProxyHops ?? 1);
+  app.set('trust proxy', opts.trustProxyHops ?? 0);
   app.disable('x-powered-by');
 
   /**
@@ -268,6 +302,33 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
 
   // ── 2b. CORS（管理端跨域，D21）────────────────────────────────────────────
   if (opts.cors !== undefined) app.use(corsMiddleware(opts.cors));
+
+  /**
+   * ── 2c. 源站校验：只接受经 Cloudflare 的流量（A2 / AJ-197）─────────────────
+   *
+   * @why 放在**报文解析之前**：被拒的请求不该先花力气解析 body。
+   * @why 豁免 `/healthz` `/readyz` 与 `/api/v1/internal/jobs`：这三类是**平台内网直连源站**的
+   *      （Render 的存活探针与 Cron 不经过 Cloudflare）。把它们一起挡掉的结果是
+   *      "实例被判死"或"每日作业静默停跑"——后者正是 B11 那类**没有任何报错**的失效，
+   *      代价远大于"少校验一个入口"（每日作业另有 INTERNAL_JOB_SECRET 把关）。
+   * @limitation 校验的是**静态共享密钥**而不是签名（config.ts @limitation 二）：
+   *             它只回答"是否经过 Cloudflare"这一个问题，泄露后换值即可。
+   */
+  const originSecret = opts.originVerifySecret ?? '';
+  if (originSecret !== '') {
+    app.use((req, _res, next) => {
+      if (ORIGIN_VERIFY_EXEMPT_PATHS.some((p) => pathMatchesPrefix(req.path, p))) {
+        next();
+        return;
+      }
+      const got = req.header(ORIGIN_VERIFY_HEADER);
+      if (got === undefined || !secretMatches(got, originSecret)) {
+        next(new AppError(40301, { reason: 'origin_not_verified' }));
+        return;
+      }
+      next();
+    });
+  }
 
   // ── 3. 报文解析：raw 优先（回调验签），其余走 JSON ────────────────────────
   const rawParser = express.raw({ type: () => true, limit: RAW_BODY_LIMIT });

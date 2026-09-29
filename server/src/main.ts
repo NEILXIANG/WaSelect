@@ -135,6 +135,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       silentPaths: ['/healthz', '/readyz'],
       // D23：层数来自配置，绝不能写死 true（客户端可伪造 X-Forwarded-For）
       trustProxyHops: config.TRUST_PROXY_HOPS,
+      // A2 / AJ-197：源站只接受经 Cloudflare 的流量。**配了才生效**，空 = 不启用这道闸门。
+      // ⚠️ 它与 TRUST_PROXY_HOPS 是**成对**的：只有源站不再能被直连，
+      //    把层数往大调（拿到真客户端 IP）才不会变成"XFF 可伪造"（config.ts 的 @why）
+      originVerifySecret: config.ORIGIN_VERIFY_SECRET,
       // D21：跨域只对管理端开放；没配 CORS_ORIGINS 就完全不开放（比"全部放行"安全）
       // ⚠️ 两个前缀都要给：/admin 是业务路由，/auth/admin 是登录——漏了登录，管理端第一步就死
       ...(config.CORS_ORIGINS.length > 0

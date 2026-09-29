@@ -26,6 +26,14 @@ interface ServeOpts {
   cors?: { origins: readonly string[]; pathPrefixes?: readonly string[] } | undefined;
   /** 就绪探针（D21）。 */
   readiness?: (() => Promise<boolean>) | undefined;
+  /**
+   * 可信反代层数（D23）。**不传 = 骨架默认 0**（A2 / AJ-197）。
+   * @why 要验"XFF 取哪一跳"必须**显式传**——依赖默认值的话，哪天默认值一改，
+   *      这条用例会在没人动它的情况下改变含义（测的是默认值不是取值规则）。
+   */
+  trustProxyHops?: number | undefined;
+  /** 源站校验密钥（A2 / AJ-197）。不传 = 闸门关闭。 */
+  originVerifySecret?: string | undefined;
 }
 
 /** 起一个真实服务，返回 baseUrl；用例结束后关闭。 */
@@ -47,6 +55,10 @@ async function start(arg?: ServeOpts | ((app: Express, logger: Logger) => void))
       : {}),
     ...(opts.cors ? { cors: opts.cors } : {}),
     ...(opts.readiness ? { readiness: opts.readiness } : {}),
+    ...(opts.trustProxyHops !== undefined ? { trustProxyHops: opts.trustProxyHops } : {}),
+    ...(opts.originVerifySecret !== undefined
+      ? { originVerifySecret: opts.originVerifySecret }
+      : {}),
   });
   const { port, close } = await listen(app);
   return { baseUrl: `http://127.0.0.1:${port}`, sink, logger, close };
@@ -114,7 +126,8 @@ describe('模块归属不被传输层覆盖（D9）', () => {
  */
 describe('访问日志字段完整（D22）', () => {
   it('带客户端 IP（走 X-Forwarded-For，容器平台后面才有真 IP）', async () => {
-    const { baseUrl, sink } = await serve();
+    // 显式给层数：见 ServeOpts.trustProxyHops 的注（默认值改了不应改变这条用例的含义）
+    const { baseUrl, sink } = await serve({ trustProxyHops: 1 });
     await fetch(`${baseUrl}/anything`, { headers: { 'x-forwarded-for': '203.0.113.9' } });
     const rows = sink.find('http_request');
     expect(rows.length).toBeGreaterThan(0);
@@ -149,12 +162,78 @@ describe('访问日志字段完整（D22）', () => {
  */
 describe('trust proxy 只信平台那几跳（D23）', () => {
   it('客户端伪造的 XFF 前缀不被采信', async () => {
-    const { baseUrl, sink } = await serve();
+    // 层数**显式给 1**：这条用例验的是"取哪一跳"，不是"默认值是多少"（ServeOpts 的注）
+    const { baseUrl, sink } = await serve({ trustProxyHops: 1 });
     await fetch(`${baseUrl}/anything`, {
       headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2, 3.3.3.3' },
     });
     // 只有最后一跳是可信代理写的；前面的都是客户端自己塞的
     expect(sink.find('http_request')[0]?.client_ip).toBe('3.3.3.3');
+  });
+});
+
+/**
+ * A2 / AJ-197：源站只接受经 Cloudflare 的流量。
+ *
+ * @why 这道闸门的存在意义是**让 TRUST_PROXY_HOPS 敢往大调**：api 若真挂在 Cloudflare 后面，
+ *      层数必须取 2 才拿得到真客户端 IP；但只要源站还能被直连，伪造的 XFF 就同样被采信
+ *      ——限流与账号封禁可被任意绕过，那比"取错 IP"严重得多。两者必须成对出现。
+ * @why 用例刻意**先验证"没配就放行"**：默认关是当前状态（拓扑还没实测），
+ *      这条防止有人把闸门改成恒开，把 staging 与本地全挡在门外。
+ */
+describe('源站校验（A2 / AJ-197）', () => {
+  const SECRET = 's'.repeat(32);
+
+  it('没配密钥 → 闸门关闭，任何请求照常通过（当前状态：拓扑还没实测）', async () => {
+    const { baseUrl } = await serve((app) => {
+      app.get('/anything', (_req, res) => res.json({ ok: true }));
+    });
+    const res = await fetch(`${baseUrl}/anything`);
+    expect(res.status).toBe(200);
+  });
+
+  it('配了密钥且带正确头 → 通过', async () => {
+    const { baseUrl } = await serve({
+      originVerifySecret: SECRET,
+      mount: (app) => {
+        app.get('/anything', (_req, res) => res.json({ ok: true }));
+      },
+    });
+    const res = await fetch(`${baseUrl}/anything`, { headers: { 'x-origin-verify': SECRET } });
+    expect(res.status).toBe(200);
+  });
+
+  it('配了密钥但缺头 → 40301 origin_not_verified', async () => {
+    const { baseUrl } = await serve({
+      originVerifySecret: SECRET,
+      mount: (app) => {
+        app.get('/anything', (_req, res) => res.json({ ok: true }));
+      },
+    });
+    const res = await fetch(`${baseUrl}/anything`);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { code: number }).code).toBe(40301);
+  });
+
+  it('头的值不对（长度相同、内容不同）→ 同样 40301', async () => {
+    const { baseUrl } = await serve({
+      originVerifySecret: SECRET,
+      mount: (app) => {
+        app.get('/anything', (_req, res) => res.json({ ok: true }));
+      },
+    });
+    const res = await fetch(`${baseUrl}/anything`, {
+      headers: { 'x-origin-verify': 't'.repeat(32) },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('健康检查与每日作业豁免（平台内网直连源站，不经过 Cloudflare）', async () => {
+    // @why 挡掉它们的后果是"实例被判死"或"每日作业静默停跑"——
+    //      后者正是 B11 那类没有任何报错的失效，比"少校验一个入口"代价大得多
+    const { baseUrl } = await serve({ originVerifySecret: SECRET });
+    expect((await fetch(`${baseUrl}/healthz`)).status).toBe(200);
+    expect((await fetch(`${baseUrl}/readyz`)).status).toBe(200);
   });
 });
 

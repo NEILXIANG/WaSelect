@@ -42,6 +42,7 @@ export const SECRET_KEYS = [
   'WECHAT_INSTITUTION_API_KEY',
   'WECHAT_INSTITUTION_MERCHANT_ID',
   'INTERNAL_JOB_SECRET',
+  'ORIGIN_VERIFY_SECRET',
   'MAIL_PROVIDER_API_KEY',
   'R2_ACCESS_KEY_ID',
   'R2_SECRET_ACCESS_KEY',
@@ -253,8 +254,38 @@ const schema = z.object({
    *      （实测：true 取最左 1.1.1.1；1 取最右 3.3.3.3，即平台那一跳写入的值）。
    * @limitation 取值宁小勿大：小于实际层数时取到中间代理的 IP（错，但至少不可伪造）；
    *              大于实际层数才会重新变得可伪造。Render 前一层 = 1，本机无代理 = 0。
+   * @why 默认值由 1 改为 **0**（A2 / AJ-197）：这个数**取决于平台拓扑**
+   *      （客户端 → Cloudflare？→ Render 反代 → 应用），而"Render = 1"这个取值
+   *      **至今没有 @measured**——文档写 api 前挂 Cloudflare，若属实则应为 2。
+   *      默认值取 0 = "谁都没配的时候按最保守走"：取到的是直连对端 IP
+   *      （错，成片共用一个限流桶，但**不可伪造**），而默认 1 在"其实前面有两层"时
+   *      会采信 Cloudflare 边缘那一跳——同样是错，方向却是"可伪造"。
+   *      ⚠️ 因此 **render.yaml 必须显式给值**（已经是 1），不能依赖默认；
+   *      真正定值是 staging 实测一次 XFF 之后的事，不是现在改代码能定的。
    */
-  TRUST_PROXY_HOPS: int(1, 0),
+  TRUST_PROXY_HOPS: int(0, 0),
+
+  /**
+   * 源站校验密钥：**配了就只接受带上来的请求**（A2 / AJ-197），空 = 不启用这道闸门。
+   *
+   * @why 它的存在是为了让 `TRUST_PROXY_HOPS` 敢往大调：api 若真的挂在 Cloudflare 后面，
+   *      XFF 是 `client, cf-edge`，层数必须取 2 才拿得到真客户端 IP；
+   *      但只要源站 `*.onrender.com` 还能被直连，直连者伪造的 XFF 就同样被采信——
+   *      限流与账号封禁于是**可以被任意绕过**，那比"取错 IP"严重得多。
+   *      所以两件事必须成对出现：**层数取 2 + 源站只认 Cloudflare 注入的头**。
+   *      这道闸门就是后者，机制先备好，开关等实测后再开（A2 判定为"待定值"，不是已确认缺陷）。
+   * @why 做成"配了才生效"而不是恒开：本地 / 测试 / 尚未接入 CF 的 staging 都没有这个头，
+   *      恒开会把它们全部挡在门外，而那时限流取错 IP 的代价远小于全站 403。
+   * @limitation 一：**健康检查与每日作业刻意豁免**——Render 的存活探针与 Cron
+   *              是从平台内网直连源站的，不经过 Cloudflare。把它们一起挡掉，
+   *              结果是"实例被判死"或"daily 静默停跑"（正是 B11 那类没有报错的失效）。
+   *              每日作业另有自己的共享密钥（INTERNAL_JOB_SECRET），豁免不等于裸奔。
+   * @limitation 二：它是**静态共享密钥**，不是签名：任何拿到它的人都能伪造来源。
+   *              风险可接受的原因是它只用来判断"是否经过 Cloudflare"这一个问题，
+   *              泄露后换一个值即可（CF Transform Rule 与环境变量同步改）。
+   * @see http.ts（校验中间件与豁免名单）；render.yaml（与 TRUST_PROXY_HOPS 成对）
+   */
+  ORIGIN_VERIFY_SECRET: optionalSecret(32, 'ORIGIN_VERIFY_SECRET'),
 
   // ── 微信小程序 ──────────────────────────────────────────────────────────
   APP_ID: optionalText(),
