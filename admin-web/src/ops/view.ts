@@ -86,9 +86,94 @@ export function fxFormErrors(form: unknown): { ok: boolean; first: string } {
   if (!(FX_QUOTES as readonly string[]).includes(quote))
     return { ok: false, first: '币种必须是 CNY 或 USD' };
   if (!Number.isFinite(raw) || raw <= 0) return { ok: false, first: '原始汇率必须是大于 0 的数字' };
+  // ⚠️ 上界与服务端 `domain/fx-input.ts` 的 `MAX_RAW_RATE` 同源（A8）：
+  //    前端不补这一条的话，"多打好几个 0"要等提交之后才被服务端 40001 拒，
+  //    而运营看到的是泛化的"参数缺失或格式错误"。它是量纲护栏不是"合理汇率范围"——
+  //    "反着填"（150）与"错一位"（0.067）都够不到 1000，那两类靠下面的 `fxPreview`。
+  if (raw > MAX_RAW_RATE)
+    return {
+      ok: false,
+      first: `原始汇率必须 ≤ ${MAX_RAW_RATE}（1 円换不到这么多外币，请检查小数点）`,
+    };
   if (from !== '' && toIsoJst(from) === '')
     return { ok: false, first: '生效时间格式为 YYYY-MM-DDTHH:mm（留空表示立即生效）' };
   return { ok: true, first: '' };
+}
+
+/**
+ * raw_rate 的**量纲上界**（与服务端 `domain/fx-input.ts` 的 `MAX_RAW_RATE` 同值）。
+ * @limitation 两处各写一份（前端这里 / 服务端那里）。@why 前端拿不到服务端的常量
+ *              （shared 里放"管理端专属的校验上限"会让小程序包也带上它）；
+ *              由 `fxFormErrors` 的用例钉住 1000 与 1001 的边界，改一边忘了另一边会红。
+ */
+export const MAX_RAW_RATE = 1000;
+
+/** 折算样例用的日元金额：一个"中等订单"的量级，太大太小都看不出量级错没错。 */
+const SAMPLE_JPY = 10_000;
+
+/**
+ * 保存**之前**的量级核对（全量审查 A8，2026-09-29）。
+ *
+ * @param {{quote?: string, rawRate?: unknown, currentRate?: number|null}} args
+ *   `currentRate` 该币种**当前生效**的 rate（服务端 `fx_rates.rate`）；第一次配置时为 null。
+ * @returns {{ratio: number|null, risky: boolean, sampleText: string, reason: string}}
+ *
+ * @why 展示汇率**直接乘进真实扣款额**（`server/src/app/pay-intent.ts` 的 `resolveCharge`：
+ *      USD 分支就是 `toMinor(total_jpy, rate)`），而保存按钮此前是"一点即提交"。
+ *      录成 0.00067 之后每笔美元订单少收 90%；录成 150 多收两万倍，引来拒付——
+ *      两种情况**在提交时都不报任何错**。
+ *
+ * @why 判据是"与当前生效值的**倍数**"，不是"这个数合不合理"：
+ *      汇率本身会波动，绝对值没有合理范围（0.0067 和 0.049 都是对的），
+ *      只有"相对上一次跳了多少"是可判的。阈值取 ≥1.5 或 ≤0.67（约 ±50%）——
+ *      日波动超过这个幅度在主要货币对上极罕见，而"错一位"是 10 倍或 1/10，远远越过它。
+ *
+ * @why 同时给一个**样例金额**（¥10,000 ≈ USD 67.00）而不是只给倍数：
+ *      运营核对的是"这个数看起来像不像我认识的价格"，倍数需要心算，金额一眼就能看出来。
+ *
+ * @limitation 一：**不做硬拦截**，只标红并要求勾选确认。
+ *              @why 汇率真的会剧烈波动，硬拦会误伤真实的调价；而且"阈值多少"是一个
+ *              尚未拍板的运营参数（AJ-148 登记的待办）。这里是"阈值落地前"的必要缓解。
+ * @limitation 二：`currentRate` 为 null（第一次配置）时无从比较，此时**不标红**——
+ *              拿不到基准却标红，等于把"首次配置"变成每次都要解释的麻烦事，
+ *              于是有人会把整个确认流程删掉。首次的风险由样例金额承担。
+ */
+export function fxPreview(args: unknown): {
+  ratio: number | null;
+  risky: boolean;
+  sampleText: string;
+  reason: string;
+} {
+  const a = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
+  const quote = typeof a['quote'] === 'string' ? a['quote'] : '';
+  const raw = Number(typeof a['rawRate'] === 'string' ? a['rawRate'].trim() : a['rawRate']);
+  const current = a['currentRate'];
+
+  if (!Number.isFinite(raw) || raw <= 0) {
+    // 填了非法值：不在这里造文案（fxFormErrors 负责），只说"给不出预览"
+    return { ratio: null, risky: false, sampleText: '', reason: '' };
+  }
+
+  // 样例金额：¥10,000 折成该币种的主单位（USD / CNY 都是 2 位小数）
+  const sampleText = `¥${SAMPLE_JPY.toLocaleString('en-US')} ≈ ${quote} ${(SAMPLE_JPY * raw).toFixed(2)}`;
+
+  if (typeof current !== 'number' || !Number.isFinite(current) || current <= 0) {
+    return { ratio: null, risky: false, sampleText, reason: '' };
+  }
+
+  const ratio = raw / current;
+  // 阈值写成 0.67 而不是 1/1.5：两个方向的判定要**互相可逆**
+  // （涨到 1.5 倍标红，跌回去到 1/1.5 = 0.667 也应标红），否则会出现"改过去标红、改回来不标红"。
+  const risky = ratio >= 1.5 || ratio <= 0.67;
+  const pct = Math.abs(ratio - 1) * 100;
+  return {
+    ratio,
+    risky,
+    sampleText,
+    reason: risky
+      ? `与当前生效值相差约 ${pct.toFixed(0)}%（${ratio.toFixed(3)} 倍），请确认不是小数点错位`
+      : '',
+  };
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   emptyFxForm,
   emptyRateRow,
   fxFormErrors,
+  fxPreview,
   fxRows,
   rateErrors,
   rateRows,
@@ -107,6 +108,70 @@ describe('fxFormErrors / toFxBody', () => {
 
   it('⚠️ 空表单（默认 quote）也要先填汇率才能过', () => {
     expect(fxFormErrors(emptyFxForm()).ok).toBe(false);
+  });
+});
+
+describe('fxFormErrors 的上界（A8：与服务端 MAX_RAW_RATE 同源）', () => {
+  /**
+   * @why 服务端 `domain/fx-input.ts` 的 `MAX_RAW_RATE = 1000` 是量纲护栏
+   *      （"1 円换不到 1000 个外币单位"）。前端不补同一条的话，
+   *      "多打好几个 0"要等提交之后才被服务端 40001 拒，
+   *      而运营看到的是泛化的"参数缺失或格式错误"，不知道错在小数点。
+   *      ⚠️ 两个 1000 是**两处各写一份**（前端不能 import 服务端常量，见 MAX_RAW_RATE 的 @limitation）；
+   *      这两条用例钉住边界，改一边忘一边会红，但要改两边仍靠人记得。
+   */
+  it('超过 1000 → 拒（且文案点明是小数点问题）', () => {
+    const r = fxFormErrors({ quote: 'USD', rawRate: '1001' });
+    expect(r.ok).toBe(false);
+    expect(r.first).toContain('1000');
+  });
+
+  it('恰好 1000 → 放行（边界：不能把最大值本身拦掉）', () => {
+    expect(fxFormErrors({ quote: 'USD', rawRate: '1000' }).ok).toBe(true);
+  });
+});
+
+describe('fxPreview（A8：保存前的量级核对）', () => {
+  /**
+   * @why 2026-09-29 全量审查 A8：展示汇率**直接乘进真实扣款额**
+   *      （`pay-intent.ts` 的 `resolveCharge`：USD 分支 `toMinor(total_jpy, rate)`）。
+   *      而保存按钮是"一点即提交"，前端只查 >0，服务端上界 1000 只挡"多打好几个 0"，
+   *      挡不住"反着填"（150）或"错一位"（0.067 / 0.00067）。
+   *      录成 0.00067 之后每笔美元订单少收 90%；录成 150 多收两万倍，引来拒付。
+   * @why 判据用**与当前生效值的倍数**而不是"这个数合不合理"：汇率本身会波动，
+   *      绝对值没有"合理范围"（0.0067 和 0.049 都是对的），只有"相对上一次跳了多少"是可判的。
+   */
+  it('与当前值相差不大 → 不标红（正常波动不该被拦成硬失败）', () => {
+    const p = fxPreview({ quote: 'USD', rawRate: '0.0068', currentRate: 0.0067 });
+    expect(p.risky).toBe(false);
+    expect(p.ratio).toBeCloseTo(1.015, 3);
+  });
+
+  it('🔴 错一位（10 倍）→ 标红，并给出倍数与样例金额', () => {
+    const p = fxPreview({ quote: 'USD', rawRate: '0.067', currentRate: 0.0067 });
+    expect(p.risky).toBe(true);
+    expect(p.ratio).toBeCloseTo(10, 6);
+    expect(p.reason).toContain('倍');
+    expect(p.sampleText).toBe('¥10,000 ≈ USD 670.00');
+  });
+
+  it('🔴 小数点错位（1/10）→ 同样标红（少收 90% 的方向更危险）', () => {
+    const p = fxPreview({ quote: 'USD', rawRate: '0.00067', currentRate: 0.0067 });
+    expect(p.risky).toBe(true);
+    expect(p.ratio).toBeCloseTo(0.1, 6);
+  });
+
+  it('第一次配置（没有当前值）→ 不标红但也要给样例金额让人核对', () => {
+    const p = fxPreview({ quote: 'USD', rawRate: '0.0067', currentRate: null });
+    expect(p.ratio).toBeNull();
+    expect(p.risky).toBe(false);
+    expect(p.sampleText).toBe('¥10,000 ≈ USD 67.00');
+  });
+
+  it('填了非法值 → 给不出预览（由 fxFormErrors 负责报错，这里不重复造文案）', () => {
+    const p = fxPreview({ quote: 'USD', rawRate: 'abc', currentRate: 0.0067 });
+    expect(p.risky).toBe(false);
+    expect(p.sampleText).toBe('');
   });
 });
 
