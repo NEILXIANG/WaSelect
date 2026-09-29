@@ -148,6 +148,32 @@ export function rateRows(items: unknown): RateViewRow[] {
 }
 
 /**
+ * 表单里的数值字段 → 整数；**空串与非法都返回 null**（全量审查 A7，2026-09-29）。
+ *
+ * @why 原来的写法是 `Number(v)`，而 `Number('')` 等于 **0**：
+ *      "≥0 的整数"这道校验会**放行空值**，提交时又把空值转成 `price_jpy: 0`。
+ *      服务端把 0 円视为合法的"手动包邮"，于是运营"新增一档"只填了重量上限、
+ *      没填运费（或清空后忘了重填），确认之后**这个重量段的所有订单运费都是 0**，
+ *      不报任何错——正是文件头引用的 D-46 那类"每单少收钱且静默"。
+ *      重量上限因为要求 ≥1，空值会被拦下；**运费没有同等拦截**，不对称正是漏洞所在。
+ *
+ * @why 用 `/^\d+$/` 而不是 `Number()` / `parseInt()`：后两者会接受
+ *      `'1e3'`（`Number` → 1000）、`'0x10'`（`Number` → 16）、`'12abc'`（`parseInt` → 12）。
+ *      这些都能"看着通过了校验"，实际写进库的是运营没打算写的数。
+ *
+ * @limitation 只认**十进制非负整数字符串**与已经是整数的 number；
+ *              负数、小数、科学计数法、十六进制一律 null（由调用方转成各自的报错文案）。
+ */
+function parseCount(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isInteger(v) && v >= 0 ? v : null;
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  if (t === '') return null;
+  if (!/^\d+$/.test(t)) return null;
+  return Number(t);
+}
+
+/**
  * 整表校验（@see @limitation 一）。
  * @returns 全部问题（不是第一条）：整表替换一次提交，逐条报要提交很多次。
  */
@@ -160,13 +186,31 @@ export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; firs
   list.forEach((raw, i) => {
     const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
     const carrier = typeof r['carrier'] === 'string' ? r['carrier'].trim() : '';
-    const max = Number(r['maxWeightG'] ?? r['max_weight_g']);
-    const price = Number(r['priceJpy'] ?? r['price_jpy']);
+    const maxRaw = r['maxWeightG'] ?? r['max_weight_g'];
+    const priceRaw = r['priceJpy'] ?? r['price_jpy'];
+    const max = parseCount(maxRaw);
+    const price = parseCount(priceRaw);
     const at = `第 ${i + 1} 档`;
     if (carrier === '') errors.push(`${at}：承运商必填`);
-    if (!Number.isInteger(max) || max < 1) errors.push(`${at}：重量上限必须是 ≥1 的整数（克）`);
-    if (!Number.isInteger(price) || price < 0) errors.push(`${at}：运费必须是 ≥0 的整数（円）`);
-    const key = `${carrier}|${max}`;
+    // ⚠️ "没填"与"填错了"要分开报：合并成一句的话，运营看到"必须是 ≥0 的整数"
+    //    会以为自己填了非法值，而实际是**根本没填**——后者才是真正的静默事故。
+    if (max === null) {
+      errors.push(
+        typeof maxRaw === 'string' && maxRaw.trim() === ''
+          ? `${at}：重量上限必填`
+          : `${at}：重量上限必须是 ≥1 的整数（克）`,
+      );
+    } else if (max < 1) {
+      errors.push(`${at}：重量上限必须是 ≥1 的整数（克）`);
+    }
+    if (price === null) {
+      errors.push(
+        typeof priceRaw === 'string' && priceRaw.trim() === ''
+          ? `${at}：运费必填（包邮请显式填 0，不要留空）`
+          : `${at}：运费必须是 ≥0 的整数（円）`,
+      );
+    }
+    const key = `${carrier}|${String(max)}`;
     if (seen.has(key)) errors.push(`${at}：与前面某一档的承运商 + 上限重复（DB 唯一约束会拒）`);
     seen.add(key);
   });
@@ -182,10 +226,23 @@ export function toRateBody(rows: unknown): Array<Record<string, unknown>> {
   const list = Array.isArray(rows) ? rows : [];
   return list.map((raw) => {
     const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+    // ⚠️ 与 `rateErrors` 用**同一个** `parseCount`，且解析不出时**抛错而不是回落 0**。
+    //    @why 本函数只在 `rateErrors().ok` 之后被调用（RatesPanel.save 先校验），
+    //    所以走到这里还解析不出 = 校验与组装两边口径已经漂移，那是一个**必须响亮失败**
+    //    的内部不一致；回落成 0 就又回到"静默按 0 円运费提交"（A7 的原病）。
+    const max = parseCount(r['maxWeightG'] ?? r['max_weight_g']);
+    const price = parseCount(r['priceJpy'] ?? r['price_jpy']);
+    if (max === null || price === null) {
+      throw new Error(
+        `运费行无法解析为整数（maxWeightG=${String(r['maxWeightG'])}，priceJpy=${String(
+          r['priceJpy'],
+        )}）：整表替换已中止，未提交任何改动`,
+      );
+    }
     return {
       carrier: typeof r['carrier'] === 'string' ? r['carrier'].trim() : '',
-      max_weight_g: Number(r['maxWeightG'] ?? r['max_weight_g']),
-      price_jpy: Number(r['priceJpy'] ?? r['price_jpy']),
+      max_weight_g: max,
+      price_jpy: price,
       active: r['active'] !== false,
     };
   });

@@ -171,6 +171,45 @@ describe('rateErrors（整表校验）', () => {
     const r = rateErrors([formRow('x', 'y'), formRow('0', '-1')]);
     expect(r.errors.length).toBeGreaterThan(2);
   });
+
+  it('🔴 运费留空 → 必须拒（A7：`Number(\'\')` = 0 曾让空值通过"≥0 的整数"）', () => {
+    /**
+     * @why 2026-09-29 全量审查 A7：旧实现用 `Number(priceJpy)`，而 `Number('')` 等于 **0**，
+     *      "≥0 的整数"这道校验**放行空值**，提交时又把空值转成 `price_jpy: 0`。
+     *      服务端把 0 円视为合法的"手动包邮"，于是运营"新增一档"只填了重量上限、
+     *      没填运费（或清空后忘了重填），确认之后**这个重量段的所有订单运费都是 0**，
+     *      不报任何错——正是本文件头引用的 D-46 那类"每单少收钱且静默"。
+     *      重量上限因为要求 ≥1，空值会被拦下；**运费没有同等拦截**，不对称正是漏洞所在。
+     */
+    const r = rateErrors([formRow('2000', '')]);
+    expect(r.ok).toBe(false);
+    expect(r.first).toContain('运费必填');
+  });
+
+  it('🔴 运费只有空格 → 同样拒（trim 之后才算空）', () => {
+    const r = rateErrors([formRow('2000', '   ')]);
+    expect(r.ok).toBe(false);
+    expect(r.first).toContain('运费必填');
+  });
+
+  it('🔴 重量上限留空 → 拒，且报的是"必填"而不是"必须是整数"（没填 ≠ 填错）', () => {
+    const r = rateErrors([formRow('', '2200')]);
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.includes('重量上限必填'))).toBe(true);
+  });
+
+  it('⚠️ 运费填 0 → 放行（包邮是合法意图，必须显式填）', () => {
+    // @why 这条是上一条的对照组：拦的是"没填"，不是"填了 0"。
+    //      把 0 也拦掉会让"包邮档"无法表达，于是有人会去改校验本身。
+    expect(rateErrors([formRow('2000', '0')]).ok).toBe(true);
+  });
+
+  it('🔴 `1e3` / `0x10` → 拒（`Number()` 会把它们读成 1000 / 16）', () => {
+    // @why 表单输入是字符串，`Number('1e3')` = 1000、`Number('0x10')` = 16，
+    //      两者在旧实现里都"看着通过了校验"，实际写进库的是运营没打算写的数。
+    expect(rateErrors([formRow('2000', '1e3')]).ok).toBe(false);
+    expect(rateErrors([formRow('2000', '0x10')]).ok).toBe(false);
+  });
 });
 
 describe('toRateBody', () => {
@@ -197,6 +236,17 @@ describe('toRateBody', () => {
       priceJpy: '',
       active: true,
     });
+  });
+
+  it('🔴 运费留空 → **抛错**而不是发 `price_jpy: 0`（A7 纵深防御）', () => {
+    /**
+     * @why 校验（rateErrors）是主防线，但它只在 `RatesPanel.save` 里被调一次。
+     *      组装（toRateBody）若自己回落成 0，就等于"主防线一旦被绕过，后果仍是静默少收钱"。
+     *      走到这里还解析不出 = 校验与组装的口径已经漂移，那是一个**必须响亮失败**的
+     *      内部不一致；抛错至少让这次提交停在原地，而不是把 0 円写进全站运费表。
+     */
+    expect(() => toRateBody([formRow('2000', '')])).toThrow(/无法解析|运费/);
+    expect(() => toRateBody([formRow('2000', '1e3')])).toThrow(/无法解析|运费/);
   });
 });
 
