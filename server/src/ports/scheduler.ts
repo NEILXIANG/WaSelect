@@ -39,6 +39,37 @@ export const TICK_JOB_NAME = 'tick';
 export const TICK_LOCK_KEY = 'scheduler:tick';
 
 /**
+ * `job_runs` 里"每日作业"那一行的名字。
+ * @why 与端点（`internal-jobs-routes.ts` 传给 `createSchedulerDeps` 的 name）**同一个值**，
+ *      所以端点改用它而不是再写一个 'daily' 字面量——两处字面量各自漂移时，
+ *      看门狗会去盯一个不存在的行（静默失明，最坏的一类失效）。
+ * @why 从 `app/daily-reconciliation.ts` **上移到本端口**（AJ-196）：B11 之后它有两个消费方
+ *      （daily 自己的停滞扫描 + tick 里新加的 daily 看门狗 job），
+ *      两处各自写一份 'daily' 就是"盯错了行也不报错"的同一个坑（§2 第 60 条：口径漂移）。
+ */
+export const DAILY_JOB_ROW_NAME = 'daily';
+
+/**
+ * 心跳停滞阈值：**daily**（每日作业，24h 一轮）超过这个小时数没有成功心跳 = 没跑。
+ * @why 26 小时而不是 24：cron 触发时刻会有抖动（部署/重试），刚过 24 小时就报警
+ *      会把"晚了几分钟"报成"一天没跑"。
+ * @why 与 {@link DAILY_JOB_ROW_NAME} 一起上移（AJ-196）：两个看门狗必须用**同一个阈值**，
+ *      否则会出现"daily 自己说没事、tick 说停滞"这种自相矛盾的告警，排查的人无从下手。
+ */
+export const DAILY_STALL_HOURS = 26;
+
+/**
+ * daily **从未成功过**（`last_success_at is null`）时，进程至少跑了这么久才算停滞。
+ *
+ * @why 需要"进程运行多久"这个额外条件：新部署的头 26 小时里 daily 本来就没机会跑，
+ *      那时 null 是**正常**的；只有"起来一天多了、daily 一次都没成功"才是故障
+ *      （cron 没配 / 密钥轮换后 40101 / 端点没挂载）。
+ * @why 与 {@link DAILY_STALL_HOURS} **同值**：两者都是"超过一轮 + 抖动余量"，
+ *      分开取值只会多出一个没有人能解释的数字。
+ */
+export const DAILY_NEVER_RAN_GRACE_HOURS = DAILY_STALL_HOURS;
+
+/**
  * `last_error` 与日志里单条错误的最大字符数。
  *
  * @why Postgres 的 TEXT 能装 1GB，装得下不代表该装：

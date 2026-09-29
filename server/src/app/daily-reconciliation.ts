@@ -33,6 +33,8 @@
  */
 import type { Db } from '../adapters/db.js';
 import {
+  DAILY_JOB_ROW_NAME,
+  DAILY_STALL_HOURS,
   TICK_JOB_NAME,
   type JobContext,
   type JobOutcome,
@@ -82,15 +84,6 @@ export const TICK_STALL_MINUTES = 10;
  * @why 26 小时而不是 24：cron 触发时刻会有抖动（部署/重试），刚过 24 小时就报警
  *      会把"晚了几分钟"报成"一天没跑"。
  */
-export const DAILY_STALL_HOURS = 26;
-
-/**
- * `job_runs` 里"每日作业"那一行的名字。
- * @why 与端点（`internal-jobs-routes.ts` 传给 `createSchedulerDeps` 的 name）**同一个值**，
- *      所以端点改用它而不是再写一个 'daily' 字面量——两处字面量各自漂移时，
- *      看门狗会去盯一个不存在的行（静默失明，最坏的一类失效）。
- */
-export const DAILY_JOB_ROW_NAME = 'daily';
 
 interface AnomalyClass {
   /** 日志键与报告键（英文蛇形：日志检索口径）。 */

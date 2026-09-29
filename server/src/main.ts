@@ -38,6 +38,7 @@ import { resolveStorage } from './adapters/storage.js';
 import { systemClock } from './adapters/clock.js';
 import { registerBusinessEventLog } from './app/business-events.js';
 import { createCleanupIdempotencyJob } from './app/cleanup-idempotency.js';
+import { createDailyHeartbeatWatchJob } from './app/daily-heartbeat-watch.js';
 import { createExpireOrdersJob } from './app/expire-orders.js';
 import {
   createSchedulerDeps,
@@ -161,11 +162,23 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
      * @why 放在 `listen` **之后**：先能收流量再开始跑后台任务，
      *      否则启动期慢的时候会出现"任务在跑、服务还没起来"这种不好归因的中间态。
      */
+    /**
+     * 进程启动时刻（B11 / AJ-196）：daily 看门狗要用它区分"新部署还没到第一次 daily"
+     * 与"起来很久了一次都没跑"。
+     * @why 在这里取一次而不是让 job 自己调 `now()`：job 第一次跑的时刻 ≠ 进程启动时刻，
+     *      用前者会把启动到首轮之间的空窗算成 0，宽限期判断随即失真（F10：时间只从外面进来）。
+     */
+    const processStartedAt = systemClock.now();
     const scheduler = startScheduler({
       deps: createSchedulerDeps(db, events, systemClock, logger, { name: 'tick', lockKey: 'tick' }),
       // ⚠️ 顺序即语义（scheduler.ts @limitation 一）：关单永远最先——
       //    其它 job 对同一张单的判断都建立在"它是否还活着"之上
-      jobs: [createExpireOrdersJob(), createCleanupIdempotencyJob()],
+      jobs: [
+        createExpireOrdersJob(),
+        createCleanupIdempotencyJob(),
+        // B11：daily 停跑的看门狗。只读一行、只打日志，放在最后不抢前面 job 的时间
+        createDailyHeartbeatWatchJob({ processStartedAt }),
+      ],
       intervalMs: config.SCHEDULER_TICK_MS,
     });
 

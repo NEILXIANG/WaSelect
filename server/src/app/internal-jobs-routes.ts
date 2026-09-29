@@ -30,7 +30,8 @@ import { systemClock } from '../adapters/clock.js';
 import { systemIdGen } from '../adapters/ids.js';
 import { createSchedulerDeps } from './scheduler-start.js';
 import { runSchedulerOnce } from './scheduler.js';
-import { createDailyReconciliationJob, DAILY_JOB_ROW_NAME } from './daily-reconciliation.js';
+import { DAILY_JOB_ROW_NAME } from '../ports/scheduler.js';
+import { createDailyReconciliationJob } from './daily-reconciliation.js';
 import { createAutoCompleteJob, createAutoDeliverJob } from './auto-fulfilment.js';
 import { createCleanupLoginAttemptsJob } from './login-attempts-cleanup.js';
 
