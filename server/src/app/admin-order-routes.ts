@@ -17,6 +17,9 @@
  *              押在别人的响应时间上。代价是"迁移成功、机构调用失败"会留下
  *              一个停在 `refunding` 的订单（看得见、可捞、可人工重试），
  *              而不是"整单回滚、钱货对不上但没人知道"（AJ-146）。
+ *              ⚠️ 但"机构调用"里**有一半不属于事务外**：通道解析（`registry.getForRefund`）
+ *              是纯配置查找，必须在事务内、落 refunding 之前做——放到事务外就是
+ *              "订单已迁 refunding、却拿不到 provider"，永久卡单（B8 / AJ-192）。
  * @limitation 二：`includeTest` **不在路由上开放**（仓储支持、路由不接）：
  *              契约只声明了 status / keyword / page / size，而管理端目前没有
  *              "显示测试单"的开关。等要加开关的那天**先改契约再开参数**——
@@ -301,6 +304,21 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           if (pay.provider_ref === null) {
             throw new AppError(50000, { order_id: id, reason: 'provider_ref_missing' });
           }
+          // ── B8（AJ-192）：通道**必须在事务内、落 refunding 之前**解析 ──
+          // @why 通道查找是纯配置查找（`registry.getForRefund`），没有任何理由放在事务外，
+          //      而放在事务外的后果是"通道不可用"发生在订单**已经**迁到 refunding 之后：
+          //      拿不到 provider → 40001，订单却停在 refunding；再点走的是重试分支
+          //      （refunding → refunding 不是迁移，refundGuard 放行），每次都再拿一次 40001
+          //      ⇒ 订单永久停在 refunding，stuck_refunds 每天报警，而它其实一分钱都没动过。
+          //      典型触发面：审核期（REVIEW_MODE）的 mock 已付单在审核结束、mock 移出
+          //      `PAYMENT_CHANNELS` 之后去退；以及 Stripe 凭据缺失 / 轮换期。
+          //      ⚠️ 放在事务内，失败即整体回滚：订单仍是 paid，一条 refunding 事件都没有。
+          // @limitation 因此 is_test（审核期测试单）在 mock 下线后**没有退款出口**——
+          //      它既不能发货（AJ-179）也不能退款，只能停在 paid。这是**可见且无害**的
+          //      （没有资金状态错误、不触发对账告警），而给它开"不调机构直接落 refunded"
+          //      等于造一扇能把任意订单标记成已退款的门，风险远大于收益。
+          //      正确的出口是"清理/归档审核期测试单"的作业，已登记为待办（AJ-192）。
+          const provider = deps.registry.getForRefund(pay.provider);
           // 重试（KD-4，AJ-175）：上一次机构调用失败后订单停在 refunding。
           // 不再迁移状态（refunding → refunding 不是迁移），也不写第二条 refunding 事件；
           // 机构请求沿用**首次**的理由——机构幂等键按订单固定，换理由 = 同键异参 = 机构 400。
@@ -334,12 +352,12 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           //    而 `RefundRequest.providerRef` 是 `string`——不带上就得在调用点再判一次
           //    （或用 `!`，那等于把"这里不可能为 null"的论证从类型里拿掉）。
           const progress = await findRefundProgress(tx, id);
-          return { row, pay, providerRef: pay.provider_ref, refundReason, progress };
+          return { row, pay, provider, providerRef: pay.provider_ref, refundReason, progress };
         });
 
         // ── 第二段（事务外）：调机构。失败不回滚——停在 refunding 是**可见**的状态 ──
         // 查询在途单 / 确认失败换键 / 结果未知同键，全部在 refund-execution.ts（F-03，AJ-178）
-        const outcome = await executeRefund(deps, deps.registry.getForRefund(plan.pay.provider), {
+        const outcome = await executeRefund(deps, plan.provider, {
           orderId: id,
           paymentId: plan.pay.id,
           channel: plan.pay.provider,

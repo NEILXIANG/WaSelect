@@ -39,8 +39,17 @@ beforeEach(async () => {
   await resetTestDb(db);
 });
 
-/** 起一个只挂了正式路由清单的 server（与生产同一条装配路径）。 */
-async function buildServer(): Promise<{ url: string; close: () => Promise<void> }> {
+/**
+ * 起一个只挂了正式路由清单的 server（与生产同一条装配路径）。
+ *
+ * @param opts.channels 覆盖 `PAYMENT_CHANNELS`。
+ * @param opts.withoutMockSecret 不设 `MOCK_CALLBACK_SECRET`。
+ *        ⚠️ 两个必须一起用才能造出"通道已下线"：开发环境下"未列出但有密钥"仍会注册 mock
+ *        （`channels.ts` 的 @limitation 三），只改 channels 的话 mock 照样在册。
+ */
+async function buildServer(
+  opts: { channels?: string; withoutMockSecret?: boolean } = {},
+): Promise<{ url: string; close: () => Promise<void> }> {
   const logger = createLogger({ env: 'test', destination: new MemorySink() });
   const config = loadConfig({
     NODE_ENV: 'development',
@@ -48,8 +57,10 @@ async function buildServer(): Promise<{ url: string; close: () => Promise<void> 
     HOST: '127.0.0.1',
     DATABASE_URL: TEST_DB_URL,
     JWT_SECRET,
-    PAYMENT_CHANNELS: 'mock',
-    MOCK_CALLBACK_SECRET: 'mock-secret-for-admin-order-route-test',
+    PAYMENT_CHANNELS: opts.channels ?? 'mock',
+    ...(opts.withoutMockSecret === true
+      ? {}
+      : { MOCK_CALLBACK_SECRET: 'mock-secret-for-admin-order-route-test' }),
     TERMS_VERSION: 'TOS-TEST-1',
   });
   const app = createHttpApp({
@@ -416,6 +427,50 @@ describe('POST /admin/orders/{id}/refund（全额退款）', () => {
     });
     expect(ok.status).toBe(202);
     expect((await db`select status from orders where id = 'o-1'`)[0]?.status).toBe('refunded');
+    await s.close();
+  });
+
+  // B8 / AJ-192：**通道解析必须在事务内、落 refunding 之前**。
+  // @why 这两条守的是"通道没了的时候，订单还能不能保持原样"。原实现把
+  //      `registry.getForRefund` 放在第一段事务**提交之后**：订单先迁到 refunding，
+  //      然后才发现拿不到 provider → 40001。此后每次重试都走重试分支（refunding 放行），
+  //      每次都拿同一个 40001 ⇒ 永久 refunding，而它一分钱都没动过。
+  // @why 用 `PAYMENT_CHANNELS: 'wechat'` + 不设 MOCK_CALLBACK_SECRET 造现场：
+  //      wechat 在 R1 前没有实现（`channels.ts` 静默跳过），所以注册表里**一个通道都没有**，
+  //      正是"审核结束后 mock 被移出"的真实形态。
+  it('通道已下线（注册表里没有该通道）→ 400，订单仍是 paid 且**没有** refunding 事件（B8）', async () => {
+    const s = await buildServer({ channels: 'wechat', withoutMockSecret: true });
+    await seedOrder({ id: 'o-1' }); // payments.provider = 'mock'
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/refund', { reason: '缺货' });
+    expect(r.status).toBe(400);
+    expect(r.json.code).toBe(40001);
+    expect((await db`select status from orders where id = 'o-1'`)[0]?.status).toBe('paid');
+    expect((await db`select status from payments where id = 'pay-o-1'`)[0]?.status).toBe(
+      'succeeded',
+    );
+    const ev = await db`select status from order_events where order_id = 'o-1'`;
+    expect(ev.map((e) => String(e['status']))).not.toContain('refunding');
+    await s.close();
+  });
+
+  // ⚠️ 诚实标注：**这条不是 B8 的红灯证据**。注入"解析搬回事务外"时它照样绿——
+  //    因为重试分支根本不写状态（refunding → refunding 不是迁移），解析在哪一步
+  //    对结果没有影响。它守的是另一件事：通道缺失时，重试分支不会把订单**推到别处**
+  //    （仍 400、状态仍是 refunding）、也不会写第二条 refunding 事件——
+  //    即"已经卡住的单，不会因为再点几次变得更糟"。
+  it('停在 refunding 的单在通道下线后重试 → 400，且不写第二条事件（B8 连带）', async () => {
+    const s = await buildServer({ channels: 'wechat', withoutMockSecret: true });
+    await seedOrder({ id: 'o-1' });
+    await db`update orders set status = 'refunding' where id = 'o-1'`;
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-1', 'refunding', '首次理由：缺货', 'admin', now() - interval '5 minutes')`;
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/refund', { reason: '再试' });
+    expect(r.status).toBe(400);
+    expect(r.json.code).toBe(40001);
+    expect((await db`select status from orders where id = 'o-1'`)[0]?.status).toBe('refunding');
+    const ev =
+      await db`select status from order_events where order_id = 'o-1' and status = 'refunding'`;
+    expect(ev.length).toBe(1); // 没有第二条 refunding 事件
     await s.close();
   });
 
