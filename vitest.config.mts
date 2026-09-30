@@ -57,6 +57,14 @@ export default defineConfig({
         //      表现为 Hook timed out ——而同一批复测用例单跑 db 层是 476/476 绿、137s。
         //      即：**红灯来自资源争用，不来自被测逻辑**。
         //      与 lint 层放宽 `testTimeout` 是同一类理由（那里是每个文件各建一个 TS Program）。
+        //
+        // ⚠️ 注意区分两件不同的事（2026-09-30 补记，@see AJ-216）：
+        //    - **本层内部**的互删 → 由本层的 `fileParallelism: false` 解决（上面第一段）；
+        //    - **跨 project**（db 与 e2e 在 `cov` 一轮里并发）的互删 → 由**分库**解决
+        //      （e2e 用 `japan_shop_e2e_test`，见本文件 e2e project 的 `env`）。
+        //      2026-09-27 那次把超时放宽到 30s 只缓解了"资源争用"，**没有**解决互删——
+        //      数据被别人删掉时用例跑得很快（只是断言读到 0 / 40101），再宽的超时也拦不住。
+        //      别再把"并发那一轮的随机红灯"归因到机器慢：先问串行还是并发，再问忙不忙。
         // @limitation 放宽超时**不承担**正确性判断：真死锁/真挂起仍会超过 30s 而失败，
         //              它只是把"机器忙"这一档噪声从结果里挪出去。
         //              🚫 因此不要把某条用例"偶发超时"直接归因到机器慢就了事——
@@ -75,8 +83,21 @@ export default defineConfig({
       {
         // e2e 层同样必须**串行**，理由比 db 层更隐蔽：两个文件各起一个服务，各自 `resetTestDb()` 会
         // 把对方的库清空；表现出来是"单跑这个文件绿、跑全套就随机红"，极难复现。
-        // @limitation 串行的代价是 e2e 变慢；当前 4 个文件（秒级），可接受。文件多了再考虑分库。
-        test: { name: 'e2e', include: ['test/e2e/**/*.test.ts'], fileParallelism: false },
+        // @limitation 串行的代价是 e2e 变慢；当前 7 个文件（20s 内），可接受。
+        //
+        // ⚠️ `env.TEST_DB_PROJECT` 是**并发隔离**，与上面的串行是两件事、缺一不可：
+        //    串行只让 e2e **内部**不打架；`cov` 一轮里 e2e 与 db 是**两个 project 并发**跑的，
+        //    它们各起各的服务、各自 TRUNCATE，共库时 db 的用例会被 e2e 的 reset 打掉
+        //    （2026-09-30 实测：`admin-ops-routes.db.test.ts` 两条同时红，
+        //     `count(*) from fx_rates` 读回 0、刚 seed 的管理员拿到 40101）。
+        //    分库后两边用的是两个物理库，谁也不会删谁的数据。
+        //    @see test/db/test-db.ts 的 `testDbNameFor`（库名的唯一生产者）
+        test: {
+          name: 'e2e',
+          include: ['test/e2e/**/*.test.ts'],
+          fileParallelism: false,
+          env: { TEST_DB_PROJECT: 'e2e' },
+        },
       },
       {
         /**

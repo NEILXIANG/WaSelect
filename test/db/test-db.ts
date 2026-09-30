@@ -40,7 +40,64 @@ function localRole(): string {
   return process.env.USER ?? process.env.LOGNAME ?? 'postgres';
 }
 
-const TEST_DB_NAME = 'japan_shop_test';
+/**
+ * 测试库名按 **vitest project 分库**（`''` = db / contract 等默认层）。
+ *
+ * @why `npm run cov` 把 unit / db / contract / e2e 四个 project 放进**同一个 vitest 进程并发跑**
+ *      （2026-09-30 实测：206 个文件，db 与 e2e 同时各起各的服务）。而 db 与 e2e 都要
+ *      `resetTestDb()`（`TRUNCATE` 全部业务表），共库时一方的 `beforeEach` 会把另一方
+ *      **正在跑的用例**刚写进去的数据清掉。实测症状（`admin-ops-routes.db.test.ts`）：
+ *      ① 两条汇率刚落库后 `count(*) from fx_rates` 读回 0；
+ *      ② 刚 seed 的管理员行被清掉，请求拿到 40101「未登录」。
+ *      两条**同时**红、都指向"数据没了"，但被测逻辑一个字都没动过。
+ *      ⚠️ 这类红灯只在 `cov` 一轮出现（`test:db` 与 `test:e2e` 分步跑都是绿的），
+ *      过去被当成"机器慢/偶发"而用放宽超时去缓解——那是把病因挪进抽屉：
+ *      超时只能挡住"跑得慢"，挡不住"数据被别人删"。真正的修法是**不共享可变状态**。
+ *      @see 本文件 `TEST_DB_URL`（名字一律由本函数决定，不信任外部串里的库名）
+ *
+ * @limitation 代价：多一个 project 标签 = 多一个库（多一次建库 + 一次迁移，约 1s，仅首次）。
+ *              换来的是"任何 project 组合下都不会互删"。若将来再拆 project，加标签即可。
+ * @tradeoff 放弃了"所有层共用一个库、跑得快一点"，因为一次 flake 的成本是
+ *           一整轮 10 分钟 gate + 一次归因排查，远大于 1s 建库。
+ *
+ * @param {string} project project 标签；空串 = 默认库。只允许 `[a-z][a-z0-9_]*`
+ * @returns {string} 一定以 `_test` 结尾（闸门 `assertIsTestDatabaseUrl` 的硬要求）
+ */
+export function testDbNameFor(project: string): string {
+  // 不 trim：标签来自我们自己的配置，带空格是写错了——静默归一化会让人以为"e2e"生效了
+  // 而实际连的是另一个库（分库失效后 flake 会回来，且看不出原因）。写错就响亮失败。
+  const p = typeof project === 'string' ? project : '';
+  if (p === '') return 'japan_shop_test';
+  // 标签会被拼进库名（无法参数化），必须先卡形状——这是 `create database` 的注入面
+  if (!/^[a-z][a-z0-9_]*$/.test(p)) {
+    throw new Error(
+      `测试库 project 标签不合法（只允许小写字母、数字、下划线）：${String(project)}`,
+    );
+  }
+  return `japan_shop_${p}_test`;
+}
+
+/** 本进程用的 project 标签（`vitest.config.mts` 里按 project 注入 `TEST_DB_PROJECT`）。 */
+const TEST_DB_PROJECT = envOrDefault(process.env.TEST_DB_PROJECT, () => '');
+
+/** 本进程用的测试库名。 */
+export const TEST_DB_NAME = testDbNameFor(TEST_DB_PROJECT);
+
+/**
+ * 把任意连接串的**库名**换成 {@link TEST_DB_NAME}，主机/端口/角色保持不变。
+ *
+ * @why 以前 `TEST_DATABASE_URL` 一旦显式设置，库名就以它为准、{@link TEST_DB_NAME} 被忽略——
+ *      于是"分库"会在任何配过 `TEST_DATABASE_URL` 的机器上静默失效，
+ *      表现是"本地改好了、CI 上照样 flake"。现在无论外部串叫什么，库名一律由本文件决定：
+ *      `TEST_DATABASE_URL` 只提供**连到哪里**（主机与凭据），不提供**连哪个库**。
+ *      @tradeoff 副作用是 CI 上不能再用 `TEST_DATABASE_URL` 指定一个自定义库名；
+ *               可接受——库名是隔离策略的一部分，不该由环境变量覆盖。
+ */
+function withTestDbName(base: string): string {
+  const url = new URL(base.trim());
+  url.pathname = `/${TEST_DB_NAME}`;
+  return url.toString();
+}
 
 /**
  * 推导测试库连接串：优先从 `DATABASE_URL` 换库名得到（CI 上 DATABASE_URL 指向专用实例，
@@ -49,9 +106,7 @@ const TEST_DB_NAME = 'japan_shop_test';
 function deriveTestUrl(): string {
   const base = process.env.DATABASE_URL;
   if (base !== undefined && base.trim().length > 0) {
-    const url = new URL(base.trim());
-    url.pathname = `/${TEST_DB_NAME}`;
-    return url.toString();
+    return withTestDbName(base);
   }
   return `postgres://${localRole()}@localhost:5432/${TEST_DB_NAME}`;
 }
@@ -123,9 +178,9 @@ export function envOrDefault(value: string | undefined, fallback: () => string):
   return value !== undefined && value.trim().length > 0 ? value : fallback();
 }
 
-/** 测试库连接串（与开发库 japan_shop 分开，避免误删真实数据）。 */
+/** 测试库连接串（与开发库 japan_shop 分开，避免误删真实数据；库名一律取 {@link TEST_DB_NAME}）。 */
 export const TEST_DB_URL = assertIsTestDatabaseUrl(
-  envOrDefault(process.env.TEST_DATABASE_URL, deriveTestUrl),
+  withTestDbName(envOrDefault(process.env.TEST_DATABASE_URL, deriveTestUrl)),
 );
 /** 用来建库的管理库连接串（本身不会被清空，但仍要求本机）。 */
 const ADMIN_DB_URL = ((): string => {
