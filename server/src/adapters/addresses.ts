@@ -16,6 +16,9 @@
  *              **无默认地址**状态——契约不禁止，前端要处理"没有默认"的展示。
  * @limitation 二：删除默认地址**不**自动提升其它地址为默认（哪条该升？这是个没有
  *              正确答案的业务问题，静默挑一条比"没有默认"更容易出错）。
+ * @limitation 三：`update` **先确认目标存在（带 `for update`）再动默认标记**（B23 / AJ-203）。
+ *              反过来做的话，"更新一个已被删掉的地址并勾选默认"会**提交**那句清默认，
+ *              于是用户拿到 404 的同时失去了默认地址——一个不报错、也不显示的损失。
  *
  * @see migrations/001_init.sql（addresses 表与 CHECK）、011（默认唯一部分索引）；
  *      app/address-routes.ts（调用方）；docs/I1阶段开发实施方案.md §3.5
@@ -100,6 +103,16 @@ export function createAddressRepo(db: Db): AddressRepo {
 
     async update(id: string, userId: string, input: AddressInput): Promise<AddressRow | null> {
       return withTransaction(db, async (tx) => {
+        // ⚠️ B23 / AJ-203：**先确认目标存在**，再动"默认"标记——顺序反了就是静默数据损坏。
+        //    曾经先 `update … set is_default = false where user_id = …`（清掉所有默认），
+        //    再更新目标行；目标不存在（另一个标签页刚删掉它）时更新 0 行 → 返回 null → 404，
+        //    但**清默认那句已经提交**了：用户得到一个 404，同时他的默认地址被悄悄清掉。
+        //    从用户视角是"保存失败"（他会再点一次），而真实损失（默认地址没了）不报错、不显示。
+        //    @why 用 `for update` 而不是普通 select：确认与写入之间必须**没有窗口**——
+        //        否则并发删除仍可插进来（那时损失小得多：更新 0 行、默认未被清，只是 404）。
+        const target =
+          await tx`select id from addresses where id = ${id} and user_id = ${userId} for update`;
+        if (target.length === 0) return null;
         if (input.is_default) {
           // 先清后设（文件头 @why 的 swap 问题）；把自己也一起清，下一步再设回来，语义不变
           await tx`update addresses set is_default = false where user_id = ${userId} and is_default`;

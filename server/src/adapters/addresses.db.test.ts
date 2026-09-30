@@ -107,6 +107,43 @@ describe('update / remove（归属过滤进 WHERE）', () => {
     expect(mine[0]?.recipient).toBe('Jane Doe');
   });
 
+  /**
+   * B23 / AJ-203：更新一个**不存在**（或已被别处删掉）的地址并勾选默认。
+   *
+   * @why 这条的坏法不报错也不显示：用户只看到 404「保存失败」（他会再点一次），
+   *      而**他的默认地址已经被清掉了**——下次下单静默用了一个没有默认的地址列表。
+   *      所以断言必须同时钉两头：① 返回 null（404 没变）；② **默认地址还在**。
+   *      只断言 ① 的话，旧实现（先清后设）也全绿——那正是这个缺陷藏了这么久的原因。
+   */
+  it('更新不存在的地址并勾默认 → null，且**原来的默认地址不被清掉**（B23 / AJ-203）', async () => {
+    await repo.create('a-1', 'u-1', input({ is_default: true }));
+    await repo.create('a-2', 'u-1', input());
+
+    const row = await repo.update('a-gone', 'u-1', input({ recipient: 'Ghost', is_default: true }));
+    expect(row).toBeNull();
+
+    const mine = await repo.listByUser('u-1');
+    // ② 才是本用例的重点：默认地址必须还在，且仍然是 a-1
+    expect(mine.filter((a) => a.is_default).map((a) => a.id)).toEqual(['a-1']);
+    expect(mine).toHaveLength(2);
+  });
+
+  it('更新别人已删掉的地址（先删后改）→ null 且默认不动（B23 的真实触发顺序）', async () => {
+    await repo.create('a-1', 'u-1', input({ is_default: true }));
+    await repo.create('a-2', 'u-1', input());
+    // 另一个标签页/设备把它删了
+    expect(await repo.remove('a-2', 'u-1')).toBe(true);
+
+    const row = await repo.update(
+      'a-2',
+      'u-1',
+      input({ recipient: 'Stale Tab', is_default: true }),
+    );
+    expect(row).toBeNull();
+    const mine = await repo.listByUser('u-1');
+    expect(mine.filter((a) => a.is_default).map((a) => a.id)).toEqual(['a-1']);
+  });
+
   it('删除返回是否真删了；删除默认不自动提升其它', async () => {
     await repo.create('a-1', 'u-1', input({ is_default: true }));
     await repo.create('a-2', 'u-1', input());
