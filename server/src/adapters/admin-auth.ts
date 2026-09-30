@@ -46,6 +46,20 @@ export function loginAttemptKey(email: string): string {
   return createHash('sha256').update(email.trim().toLowerCase(), 'utf8').digest('hex');
 }
 
+/**
+ * 登录额度的**来源桶**键：`sha256(lower(trim(email)) + "\n" + 来源)` 的 hex（AJ-243）。
+ * @param source 已归一的来源（调用方传 `ipKey(req.ip)`：IPv4 原样、IPv6 归到 /64）
+ * @why 只按邮箱计时，**一个** IP 就能让某个邮箱持续锁定（IP 限流与账号锁的周期相同）；
+ *      把来源混进键里，攻击者的失败只锁住攻击者自己那个来源。
+ *      总尝试数的上限由邮箱桶（`loginAttemptKey`）另外兜着。
+ * @why 分隔符用换行：邮箱里不可能出现换行（路由的形状校验拒绝空白），拼接不会有歧义。
+ */
+export function loginAttemptSourceKey(email: string, source: string): string {
+  return createHash('sha256')
+    .update(`${email.trim().toLowerCase()}\n${source}`, 'utf8')
+    .digest('hex');
+}
+
 /** 过期登录尝试的保留窗口（小时）：早于此刻且**已解锁**的行由 daily 作业清掉。 */
 export const LOGIN_ATTEMPT_RETENTION_HOURS = 24;
 
@@ -105,20 +119,24 @@ export async function findAdminCredential(db: Db, email: string): Promise<AdminC
  * @limitation 触发锁定的那一次**仍会返回 claimed**（这一次的口令照样要比对）——
  *             否则"第 5 次输对了"也会被拒，那对真管理员是不可接受的；
  *             锁定由下一次请求撞到 0 行来体现。
+ *             ⚠️ 这一次返回的 `lockedUntil` **非 null**（= 它自己刚置上的锁）：调用方比对通过后
+ *             必须把它原样传给 {@link clearLoginAttempt} 的 `ownLockUntil`，否则清不动自己上的锁（AJ-224）。
  */
 export async function claimLoginAttempt(
   db: Db,
   keyHash: string,
   now: Date,
   policy: LoginAttemptPolicy,
+  /** 该行属于哪个邮箱桶（来源桶填邮箱桶的键；邮箱桶自己不填）——供改密时一次清掉（AJ-243）。 */
+  scopeHash: string | null = null,
 ): Promise<LoginAttemptClaim> {
   const rows = await db<{ failed_count: number; locked_until: Date | null }[]>`
     insert into login_attempts as la
-      (key_hash, failed_count, locked_until, first_failed_at, last_failed_at)
+      (key_hash, failed_count, locked_until, first_failed_at, last_failed_at, scope_hash)
     values (${keyHash}, 1,
             case when 1 >= ${policy.maxFailures}
                  then ${now}::timestamptz + make_interval(mins => ${policy.lockMinutes}) end,
-            ${now}::timestamptz, ${now}::timestamptz)
+            ${now}::timestamptz, ${now}::timestamptz, ${scopeHash})
     on conflict (key_hash) do update set
       failed_count = case when la.failed_count + 1 >= ${policy.maxFailures}
                           then 0 else la.failed_count + 1 end,
@@ -153,18 +171,34 @@ export async function claimLoginAttempt(
  * @why 带"未锁定"条件且**区分 0 行的两种原因**：`absent` 是"这个键从没失败过"（正常，直接过），
  *      `locked` 是"在我比对口令的这 100ms 里，另一个并发请求把锁打上了"（必须 42901）。
  *      不区分就会把"竞态下已锁"当成"没锁过"放行——那正是 A1 要堵的洞的另一半。
+ * @why `ownLockUntil`（R-02 / AJ-224）：**本次请求自己那次 claim 置上的锁**可以被它自己清掉。
+ *      最后一次额度的 claim 在同一条语句里就把 `locked_until` 置上了；不给这个例外的话，
+ *      "错 4 次、第 5 次输对"的管理员会被自己这次请求锁 15 分钟——上面 `claimLoginAttempt`
+ *      的 @limitation 承诺的正是"这种情况不能被拒"，而实现曾经相反。
+ *      @measured(admin-auth-routes.db.test.ts「错 4 次、第 5 次输对」, 2026-09-30)：
+ *        修复前 → `expected 429 to be 200`；修复后 → 200，行被清成 `{failed_count:0, locked_until:null}`。
+ * @why 用"锁定时刻**相等**"识别"是不是我上的锁"，而不是再加一列 owner：
+ *      锁生效期间任何 claim 都拿不到额度（0 行），所以**同一把锁只可能由一次 claim 置上**；
+ *      别的请求手里的 `lockedUntil` 要么是 null（它不是触发者），要么是更早一轮的时刻（不相等）。
+ *      这不放宽封顶：能走到这里的请求必然持有一次额度，额度总数仍由 claim 原子地限定。
  * @limitation 口令对了但账号不是管理员 / 已封禁（40301）时**也要清**：
  *             他证明了自己持有这个账号的口令，继续计数没有意义。
+ * @limitation "我的额度是第 1–4 次、比对期间**别的**请求把锁打上了" 仍然返回 `locked`（42901）：
+ *             这是 A1 修复的既定取舍，本次不动——此时放行不会让攻击者多试一次，
+ *             但要区分"谁的锁"之外的第三种状态，收益只是并发突发下真管理员少等一轮。
  */
 export async function clearLoginAttempt(
   db: Db,
   keyHash: string,
   now: Date,
+  ownLockUntil: Date | null = null,
 ): Promise<ClearLoginAttemptResult> {
   const rows = await db<{ key_hash: string }[]>`
     update login_attempts set failed_count = 0, locked_until = null
      where key_hash = ${keyHash}
-       and (locked_until is null or locked_until <= ${now}::timestamptz)
+       and (locked_until is null
+            or locked_until <= ${now}::timestamptz
+            or locked_until = ${ownLockUntil}::timestamptz)
     returning key_hash
   `;
   if (rows.length > 0) return 'cleared';
@@ -220,4 +254,17 @@ export async function ensureInitialAdmin(
     if ((e as { code?: string }).code === '23505') return 'exists';
     throw e;
   }
+}
+
+/**
+ * 清掉某个邮箱名下的**全部**登录额度行：邮箱桶本身 + 记在它名下的所有来源桶（AJ-243）。
+ * @why 管理员改密（`npm run admin:password`）要能一次解锁：来源桶的键里混了来源，单凭邮箱算不出来，
+ *      所以来源桶的行上记了 `scope_hash`（＝邮箱桶的键，迁移 016）。
+ * @returns 删掉的行数
+ */
+export async function deleteLoginAttemptsForEmail(db: Db, email: string): Promise<number> {
+  const key = loginAttemptKey(email);
+  const rows = await db`
+    delete from login_attempts where key_hash = ${key} or scope_hash = ${key} returning key_hash`;
+  return rows.length;
 }

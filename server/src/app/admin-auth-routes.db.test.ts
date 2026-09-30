@@ -17,12 +17,21 @@ import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 import { buildChainServer, call, type ChainServer } from '../../../test/helpers/chain-server.js';
 import { hashPassword } from './auth.js';
-import { loginAttemptKey } from '../adapters/admin-auth.js';
-import { ADMIN_LOGIN_LOCK_MINUTES, ADMIN_LOGIN_MAX_FAILURES } from './admin-auth-routes.js';
+import { loginAttemptKey, loginAttemptSourceKey } from '../adapters/admin-auth.js';
+import {
+  ADMIN_LOGIN_GLOBAL_MAX_FAILURES,
+  ADMIN_LOGIN_LOCK_MINUTES,
+  ADMIN_LOGIN_MAX_FAILURES,
+} from './admin-auth-routes.js';
 
 const EMAIL = 'Ops.Admin@Example.com';
 const PASSWORD = 'correct horse battery staple';
 const ADMIN_KEY = loginAttemptKey(EMAIL);
+/**
+ * 本机用例的来源桶（AJ-243）：fetch 从 127.0.0.1 发出，`req.ip` 是 `::ffff:127.0.0.1`，经 ipKey 归一为 `127.0.0.1`。
+ * 连错 5 次锁的是**这个**桶（来源桶），不是邮箱桶（邮箱桶的上限是 30）。
+ */
+const ADMIN_SOURCE_KEY = loginAttemptSourceKey(EMAIL, '127.0.0.1');
 const GHOST_KEY = loginAttemptKey('ghost@example.com');
 
 let db: Db;
@@ -97,8 +106,10 @@ describe('POST /auth/admin/login（账号维度锁定；IP 限流放宽以免混
     for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
       expect((await login(EMAIL, `wrong-password-${String(i)}`)).status).toBe(401);
     }
-    const u = await attemptRow(ADMIN_KEY);
+    // AJ-243：锁的是**来源桶**；邮箱桶此时只累计了 5 次（上限 30），不锁
+    const u = await attemptRow(ADMIN_SOURCE_KEY);
     expect(u.lockedUntil).not.toBeNull();
+    expect(await attemptRow(ADMIN_KEY)).toEqual({ failedCount: 5, lockedUntil: null });
     const lockMs = (u.lockedUntil?.getTime() ?? 0) - Date.now();
     expect(lockMs).toBeGreaterThan((ADMIN_LOGIN_LOCK_MINUTES - 1) * 60_000);
     expect(lockMs).toBeLessThanOrEqual(ADMIN_LOGIN_LOCK_MINUTES * 60_000);
@@ -109,9 +120,35 @@ describe('POST /auth/admin/login（账号维度锁定；IP 限流放宽以免混
     expect(Number(locked.headers.get('retry-after'))).toBeGreaterThan(0);
     expect(srv.sink.find('admin_login_locked')).toHaveLength(1);
 
-    await db`update login_attempts set locked_until = now() - interval '1 second' where key_hash = ${ADMIN_KEY}`;
+    await db`update login_attempts set locked_until = now() - interval '1 second' where key_hash = ${ADMIN_SOURCE_KEY}`;
     expect((await login(EMAIL, PASSWORD)).status).toBe(200);
+    // 登录成功：两层都清零
+    expect(await attemptRow(ADMIN_SOURCE_KEY)).toEqual({ failedCount: 0, lockedUntil: null });
     expect(await attemptRow(ADMIN_KEY)).toEqual({ failedCount: 0, lockedUntil: null });
+  });
+
+  /**
+   * R-02 / AJ-224：A1 修复引入的回归——**最后一次额度输对口令也被拒，还顺手把自己锁 15 分钟**。
+   * @why 第 max 次 `claim` 在同一条语句里就把 `locked_until` 置上了（返回的仍是 claimed）；
+   *      口令比对通过后 `clearLoginAttempt` 的"未锁定"条件不成立 ⇒ `locked` ⇒ 42901。
+   *      `admin-auth.ts` 的 @limitation 与 AJ-187 写的都是"第 5 次输对了不能被拒"，实现正相反。
+   *      真实形态：管理员记错口令试了 4 次，第 5 次想起来了——被锁，且要等 15 分钟。
+   */
+  it(`🔴 错 ${ADMIN_LOGIN_MAX_FAILURES - 1} 次、第 ${ADMIN_LOGIN_MAX_FAILURES} 次输对 → 200，且额度清零（不把自己锁住）`, async () => {
+    for (let i = 1; i < ADMIN_LOGIN_MAX_FAILURES; i += 1) {
+      expect((await login(EMAIL, `wrong-password-${String(i)}`)).status).toBe(401);
+    }
+    const ok = await login(EMAIL, PASSWORD);
+    expect(ok.status).toBe(200);
+    expect(await attemptRow(ADMIN_KEY)).toEqual({ failedCount: 0, lockedUntil: null });
+    expect(srv.sink.find('admin_login_locked')).toHaveLength(0);
+  });
+
+  it(`第 ${ADMIN_LOGIN_MAX_FAILURES} 次仍输错 → 锁生效：此后正确口令也 429（上一条的例外不放宽封顶）`, async () => {
+    for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
+      expect((await login(EMAIL, `wrong-password-${String(i)}`)).status).toBe(401);
+    }
+    expect((await login(EMAIL, PASSWORD)).status).toBe(429);
   });
 
   /**
@@ -119,20 +156,31 @@ describe('POST /auth/admin/login（账号维度锁定；IP 限流放宽以免混
    * @why 断言的是**401 的条数 ≤ max**，不是"最终会锁"——旧实现最终也会锁，
    *      但它挡不住"同一瞬间冲进来 30 个请求全部走完比对"。
    */
-  it(`A1：并发 30 个错误口令 → 401 不超过 ${ADMIN_LOGIN_MAX_FAILURES} 条、其余 42901，夹在中间的正确口令拿不到 token`, async () => {
+  it(`A1：并发 30 个错误口令 + 1 个正确口令 → 真正走到口令比对的不超过 ${ADMIN_LOGIN_MAX_FAILURES} 次，其余全 42901`, async () => {
     const burst = await Promise.all([
       ...Array.from({ length: 30 }, (_, i) => login(EMAIL, `wrong-password-${String(i)}`)),
       login(EMAIL, PASSWORD),
     ]);
     const codes = burst.map((r) => r.json['code'] ?? r.status);
-    expect(codes.filter((c) => c === 40101)).toHaveLength(ADMIN_LOGIN_MAX_FAILURES);
-    // 其余全部拿不到额度（31 = 30 个错误口令 + 1 个正确口令；不手算差值，免得改了突发量就漂）
     expect(codes).toHaveLength(31);
-    expect(codes.filter((c) => c === 42901)).toHaveLength(31 - ADMIN_LOGIN_MAX_FAILURES);
-    // 正确口令那一条也在突发里：它要么被锁挡住（42901），要么拿不到额度（42901）——
-    // 总之不能是 200。旧实现下它有机会在锁生效前溜过去。
-    expect(codes.filter((c) => typeof c === 'string' && String(c).startsWith('2'))).toHaveLength(0);
-    expect(srv.sink.find('admin_login_ok')).toHaveLength(0);
+    const bad = codes.filter((c) => c === 40101).length;
+    const ok = burst.filter((r) => r.status === 200).length;
+    const locked = codes.filter((c) => c === 42901).length;
+    /**
+     * ⚠️ 这里原来断言"40101 **恰好** max 条、正确口令**一定**拿不到 token"——那是把
+     * "正确口令最后一个到达"当成了前提（AJ-224）。31 个请求并发到达的顺序不由用例决定：
+     * 正确口令若抢到 5 个额度之一，40101 就只有 4 条。旧断言因此是**偶发红**，
+     * 而它想守的不变量其实与顺序无关——
+     *   · 走到口令比对的请求数 ≤ max（封顶，A1 的全部意义）；
+     *   · 三种结局加起来恰好 31（没有第四种出口，比如 500）；
+     *   · 正确口令至多成功 1 次，且只有在它持有额度时才可能成功。
+     */
+    expect(bad + ok + locked).toBe(31);
+    expect(bad + ok).toBeLessThanOrEqual(ADMIN_LOGIN_MAX_FAILURES);
+    expect(bad).toBeGreaterThanOrEqual(ADMIN_LOGIN_MAX_FAILURES - 1);
+    expect(ok).toBeLessThanOrEqual(1);
+    expect(locked).toBeGreaterThanOrEqual(31 - ADMIN_LOGIN_MAX_FAILURES);
+    expect(srv.sink.find('admin_login_ok')).toHaveLength(ok);
     expect(srv.sink.find('admin_login_locked').length).toBeGreaterThan(0);
   });
 
@@ -179,5 +227,64 @@ describe('POST /auth/admin/login（IP 限流，D-52）', () => {
     const third = await login(EMAIL, PASSWORD);
     expect(third.status).toBe(429);
     expect(third.json['code']).toBe(42901);
+  });
+});
+
+/**
+ * AJ-243（第二轮审查 SEC2-01，用户 2026-09-30 授权自主决定）：锁定按「邮箱 × 来源 IP」分桶，
+ * 另设邮箱维度的全局上限——**一个 IP 只能锁住它自己**。
+ *
+ * @why 原来额度只按邮箱计、连错 5 次锁 15 分钟，而 IP 限流恰好也是 5 次 / 15 分钟：
+ *      知道管理员邮箱的人用**一个** IP 就能让管理员一直登不上（每 15 分钟补 5 次）。
+ *      按来源分桶之后，攻击者的 5 次只锁住攻击者自己那个来源；
+ *      邮箱全局上限（30 次 / 15 分钟）保留"总尝试数有顶"——代价是攻击者要凑够 6 个来源才能锁死所有人。
+ */
+describe('POST /auth/admin/login：按来源分桶（AJ-243）', () => {
+  beforeEach(async () => {
+    // TRUST_PROXY_HOPS=1：用 x-forwarded-for 模拟不同来源（与生产经一层反代同形）
+    srv = await buildChainServer(db, { RATE_LIMIT_LOGIN_PER_15MIN: '1000', TRUST_PROXY_HOPS: '1' });
+  });
+
+  const loginFrom = (ip: string, email: string, password: string) =>
+    call(srv, 'POST', '/api/v1/auth/admin/login', {
+      body: { email, password },
+      headers: { 'x-forwarded-for': ip },
+    });
+
+  it('🔴 攻击者从 IP A 连错 5 次把 A 锁住 → 管理员从 IP B 用正确口令照常登录', async () => {
+    for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
+      expect((await loginFrom('198.51.100.7', EMAIL, `wrong-password-${String(i)}`)).status).toBe(
+        401,
+      );
+    }
+    expect((await loginFrom('198.51.100.7', EMAIL, PASSWORD)).status).toBe(429); // A 自己被锁
+    expect((await loginFrom('203.0.113.9', EMAIL, PASSWORD)).status).toBe(200); // B 不受影响
+  });
+
+  it('🔴 同一个 /64 里换 IPv6 后缀不算"换了来源"（否则分桶等于没有上限）', async () => {
+    for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
+      await loginFrom(`2001:db8:1:2::${String(i)}`, EMAIL, `wrong-password-${String(i)}`);
+    }
+    expect((await loginFrom('2001:db8:1:2::99', EMAIL, PASSWORD)).status).toBe(429);
+  });
+
+  it(`🔴 邮箱全局上限：失败分散在多个来源、合计达到 ${ADMIN_LOGIN_GLOBAL_MAX_FAILURES} 次 → 任何来源都 429`, async () => {
+    let n = 0;
+    for (let ip = 1; n < ADMIN_LOGIN_GLOBAL_MAX_FAILURES; ip += 1) {
+      for (let i = 0; i < ADMIN_LOGIN_MAX_FAILURES && n < ADMIN_LOGIN_GLOBAL_MAX_FAILURES; i += 1) {
+        expect(
+          (await loginFrom(`198.51.100.${String(ip)}`, EMAIL, `wrong-${String(n)}-xxxxxx`)).status,
+        ).toBe(401);
+        n += 1;
+      }
+    }
+    expect((await loginFrom('203.0.113.200', EMAIL, PASSWORD)).status).toBe(429);
+  });
+
+  it('来源不同的两个管理员同时存在：各自的失败互不影响（桶里有邮箱，不是只按 IP）', async () => {
+    for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
+      await loginFrom('198.51.100.7', 'ghost@example.com', `wrong-password-${String(i)}`);
+    }
+    expect((await loginFrom('198.51.100.7', EMAIL, PASSWORD)).status).toBe(200);
   });
 });

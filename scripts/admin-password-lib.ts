@@ -25,6 +25,7 @@
  */
 import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
 import type { Db } from '../server/src/adapters/db.js';
+import { deleteLoginAttemptsForEmail } from '../server/src/adapters/admin-auth.js';
 import { hashPassword } from '../server/src/app/auth.js';
 
 export interface SetAdminPasswordArgs {
@@ -41,9 +42,10 @@ export type SetAdminPasswordResult =
 /**
  * 命令行参数 → 入参。
  * @returns `undefined` = 参数不对（用法错误，调用方应打印用法并退出非 0）。
- * @why 不接受环境变量传口令：口令会留在 shell history 与 `ps` 输出里，
- *      而命令行参数同样会进 `ps`——两者都不是"安全"的，但参数至少不会落进 history 文件。
- *      真正干净的形态是交互式输入（不回显），那是下一版的事（已登记为待办）。
+ * @limitation 口令走命令行参数：它**会**留在 shell history 里，也会出现在 `ps` 输出中
+ *      （此处曾写"参数至少不会落进 history 文件"——不成立，与 `admin-password.ts` 文件头的说法也相反，AJ-241 更正）。
+ *      环境变量传口令同样会进 history（`export` 那一行），两者都不干净。
+ *      真正干净的形态是交互式输入（不回显），已登记为待办；在那之前，跑完请清掉这条 history。
  */
 export function parseAdminPasswordArgs(argv: readonly string[]): SetAdminPasswordArgs | undefined {
   const [email, password] = argv;
@@ -70,5 +72,17 @@ export async function setAdminPassword(
   `;
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'admin_not_found' };
+  /**
+   * 改密成功后**解除该邮箱的登录锁定**（AJ-241）。
+   * @why 登录额度按邮箱计（`login_attempts`，键 = sha256(lower(email))），连错 5 次锁 15 分钟；
+   *      IP 限流也是 5 次 / 15 分钟——知道邮箱的人用一个 IP 就能让它一直锁着。
+   *      管理员被这样锁在门外时，唯一的自救手段就是本脚本；不清额度行的话，
+   *      改完的新口令照样 42901，而全库没有第二条解锁路径。
+   * @why 只在改密**成功**之后清：没改成却解了锁，等于给"知道邮箱的人"一个免费的重置计数器。
+   * @limitation 与上面的 update 不在同一个事务里：清额度行失败时口令已改、锁还在，再跑一次本脚本即可
+   *              （两步都是幂等的）。为此引入事务包装不值得。
+   */
+  // AJ-243：邮箱桶 + 记在它名下的全部来源桶一起清（来源桶的键里混了来源，单凭邮箱算不出来）
+  await deleteLoginAttemptsForEmail(db, args.email);
   return { ok: true, userId: String(row['id']), tokenVer: Number(row['token_ver']) };
 }

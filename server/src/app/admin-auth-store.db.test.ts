@@ -145,6 +145,29 @@ describe('admin-auth 仓储', () => {
     expect(await clearLoginAttempt(db, key, NOW)).toBe('locked');
   });
 
+  /**
+   * R-02 / AJ-224：上一条钉的是"**别人**上的锁清不动"；这一条钉"**自己**那次 claim 上的锁清得动"。
+   * @why 两条必须同时成立：只有前一条 ⇒ 第 max 次输对也被锁（回归）；只有后一条 ⇒ 任何人都能清锁（A1 复活）。
+   */
+  it('clearLoginAttempt：触发锁定的那次 claim 拿自己的 lockedUntil 能清；拿别的时刻清不动', async () => {
+    const key = loginAttemptKey('own-lock@example.com');
+    let last = await claimLoginAttempt(db, key, NOW, POLICY);
+    for (let i = 1; i < POLICY.maxFailures; i += 1) {
+      last = await claimLoginAttempt(db, key, NOW, POLICY);
+    }
+    if (last.kind !== 'claimed' || last.lockedUntil === null) {
+      throw new Error('前置不成立：第 max 次 claim 应返回 claimed 且带上它置的锁');
+    }
+    // 拿一个"差 1 毫秒"的时刻冒充 → 清不动（相等才算自己的锁）
+    const forged = new Date(last.lockedUntil.getTime() - 1);
+    expect(await clearLoginAttempt(db, key, NOW, forged)).toBe('locked');
+    // 不是触发者（手里是 null）→ 清不动
+    expect(await clearLoginAttempt(db, key, NOW, null)).toBe('locked');
+    // 触发者本人 → 清掉，行回到全新状态
+    expect(await clearLoginAttempt(db, key, NOW, last.lockedUntil)).toBe('cleared');
+    expect(await attemptRow(key)).toEqual({ failedCount: 0, lockedUntil: null });
+  });
+
   it('deleteStaleLoginAttempts：过期且已解锁的删；还在锁里的留（锁是生效中的安全状态）', async () => {
     const stale = loginAttemptKey('stale@example.com');
     const hot = loginAttemptKey('hot@example.com');

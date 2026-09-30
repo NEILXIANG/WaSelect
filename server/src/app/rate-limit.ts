@@ -62,21 +62,62 @@ import type { AppConfig } from '../config.js';
  *      该 IP 仍然有自己的桶（甚至更严格），不产生新的绕过面。
  *      拒掉或报错反而会让"取不到 IP"变成一种攻击手段（想办法让解析失败）。
  *
- * @limitation 只做**字符串**处理，不引 `net` 模块、不做真正的地址解析：
- *              限流键要的是"稳定且够粗"，不是"语义正确"——解析失败的路径比它带来的收益更贵。
- *              因此 `::1`（回环）与 `fe80::…`（链路本地）也走 /64 归一，
- *              它们在测试里表现为"共享一个桶"，与生产行为一致。
+ * @why **先展开 `::` 再取前 64 位**（AJ-234）：原实现是 `split(':').slice(0, 4)`，`::` 在 split 后
+ *      是一个空串、占掉一段——`2001:db8::1:2:3:4` 被取成 `2001:db8::1`，接口标识符的第一段混进了桶键，
+ *      同一个 /64 能拆出 65536 个桶。Node 给的 `req.ip` 正是压缩写法，所以这不是冷门输入。
+ *      @measured(rate-limit.unit.test.ts「压缩写法」, 2026-09-30)：
+ *        修复前 `ipKey('2001:db8::1:2:3:4')` = `2001:db8::1::/64`，与 `…::5:2:3:4` 不同桶；
+ *        修复后两者都是 `2001:db8:0:0::/64`。
+ *
+ * @limitation 只做**字符串**处理，不引 `net` 模块：限流键要的是"稳定且够粗"。
+ *              解析按 RFC 4291 的文本形态手写（至多一个 `::`、8 段、每段 1–4 位十六进制、
+ *              末 32 位可写成点分十进制、可带 `%zone`）；任何一条不满足就**原样返回**，不猜。
+ *              `::1`（回环）与 `fe80::…`（链路本地）同样归一到各自的 /64。
+ * @limitation 持有 /48 或 /56 前缀的来源仍有 256～65536 个 /64 可用——取 /64 是粒度取舍（见上），
+ *              不是上限；真要挡这一类得靠边缘（Cloudflare）的速率规则。
  */
 export function ipKey(ip: string): string {
-  if (ip.includes(':')) {
-    // IPv4-mapped：`::ffff:1.2.3.4` → `1.2.3.4`（与上面那种形态共用同一个桶）
-    const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
-    if (mapped?.[1] !== undefined) return mapped[1];
-    // 其余 IPv6：取前 4 段（= /64），丢弃后面 4 段。段数不足时原样返回（不认识就别猜）
-    const parts = ip.split(':');
-    if (parts.length >= 4) return `${parts.slice(0, 4).join(':')}::/64`;
+  if (!ip.includes(':')) return ip;
+  // IPv4-mapped：`::ffff:1.2.3.4` → `1.2.3.4`（与纯 IPv4 共用同一个桶）
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  if (mapped?.[1] !== undefined) return mapped[1];
+  const groups = expandIpv6(ip);
+  if (groups === null) return ip;
+  return `${groups.slice(0, 4).join(':')}::/64`;
+}
+
+/**
+ * 把 IPv6 文本展开成 8 段（每段去前导零、小写）；不是合法形态返回 null。
+ * @why 返回段数组而不是规范化字符串：调用方只要前 4 段，拼回完整地址再拆是多余的一来一回。
+ */
+function expandIpv6(ip: string): string[] | null {
+  // `%zone`（链路本地地址的接口名）不属于地址本身
+  let text = ip.split('%')[0] ?? '';
+  // 末 32 位写成点分十进制（如 `64:ff9b::192.0.2.33`）：折成两段十六进制
+  const v4 = /^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
+  if (v4 !== null) {
+    const o = v4.slice(2, 6).map(Number);
+    if (o.some((n) => n > 255)) return null;
+    const hi = ((o[0] ?? 0) << 8) | (o[1] ?? 0);
+    const lo = ((o[2] ?? 0) << 8) | (o[3] ?? 0);
+    text = `${v4[1] ?? ''}${hi.toString(16)}:${lo.toString(16)}`;
   }
-  return ip;
+  const halves = text.split('::');
+  if (halves.length > 2) return null; // 至多一个 `::`
+  const parse = (part: string): string[] | null => {
+    if (part === '') return [];
+    const gs = part.split(':');
+    return gs.every((g) => /^[0-9a-f]{1,4}$/i.test(g))
+      ? gs.map((g) => Number.parseInt(g, 16).toString(16))
+      : null;
+  };
+  const head = parse(halves[0] ?? '');
+  const tail = halves.length === 2 ? parse(halves[1] ?? '') : [];
+  if (head === null || tail === null) return null;
+  if (halves.length === 1) return head.length === 8 ? head : null;
+  const missing = 8 - head.length - tail.length;
+  if (missing < 1) return null; // `::` 至少代表一段零
+  return [...head, ...Array.from({ length: missing }, () => '0'), ...tail];
 }
 
 /** 一条限流规则：挂在哪个入口、窗口内允许多少次。 */

@@ -18,8 +18,13 @@
  * @why 锁住时**先于**口令校验拒绝（42901，与 IP 限流同码）：锁住期间放口令校验进来，
  *      攻击者仍能用"429 还是 401"区分口令对错——锁就只剩计数意义。
  * @why 口令对了才判 is_admin / blocked（40301）：顺序反过来，"这个邮箱是不是管理员"不用猜口令就能问出来。
- * @tradeoff 锁定会被人利用来**故意锁住**真管理员（知道邮箱就能连错 5 次）。接受：锁只有 15 分钟、
- *      IP 限流让单个攻击源每 15 分钟只能锁一次，而换来的是口令爆破在账号维度被封顶。
+ * @tradeoff 锁定会被人利用来**故意锁住**真管理员（知道邮箱就能连错 5 次），换来的是口令爆破在账号维度被封顶。
+ *      ⚠️ 这里曾写"IP 限流让单个攻击源每 15 分钟只能锁一次"来说明代价可接受——算错了（AJ-241）：
+ *      IP 限流是 5 次 / 15 分钟，锁是"5 次尝试 → 锁 15 分钟"，两个周期相同，
+ *      所以**一个 IP 就能让某个邮箱持续处于锁定**（每 15 分钟补 5 次）。
+ *      现在（AJ-243）额度分两层：**来源桶**（邮箱 × 来源 IP，5 次）+ **邮箱桶**（30 次），
+ *      单个 IP 只能锁住它自己；要锁死所有人得凑够 6 个来源。改密（`npm run admin:password`）一次清掉两层。
+ *      入口侧再加一道：部署时管理端 API 放到 Cloudflare Access 之后（D-81③），外部根本碰不到这个接口。
  * @limitation 日志只记 target_user_id（找得到人时）与结果，**不记邮箱**（约束七脱敏红线）；
  *      找不到人的失败因此无法按"哪个邮箱"检索——排查靠 IP 与时间。
  *
@@ -37,11 +42,20 @@ import {
   clearLoginAttempt,
   findAdminCredential,
   loginAttemptKey,
+  loginAttemptSourceKey,
 } from '../adapters/admin-auth.js';
 import { signToken, verifyPassword, type AuthConfig } from './auth.js';
+import { ipKey } from './rate-limit.js';
 
-/** 连续失败多少次锁定（D-38 ⑤：5 次）。 */
+/** 同一邮箱、**同一来源**连续失败多少次锁定该来源（D-38 ⑤：5 次；AJ-243 起按来源计）。 */
 export const ADMIN_LOGIN_MAX_FAILURES = 5;
+/**
+ * 同一邮箱、**不分来源**合计失败多少次锁定全部来源（AJ-243）。
+ * @why 来源桶让单个 IP 只能锁住自己，但也让"换 IP 慢慢试"不再有总上限；这一层把总数封顶。
+ *      取 30：攻击者要凑够 6 个来源才能把所有人锁住（原来 1 个就够）；
+ *      对口令爆破是 30 次 / 15 分钟 ≈ 每天 2,880 次，对 ≥12 位口令可忽略。
+ */
+export const ADMIN_LOGIN_GLOBAL_MAX_FAILURES = 30;
 /** 锁多久（分钟，D-38 ⑤：15 分钟）。 */
 export const ADMIN_LOGIN_LOCK_MINUTES = 15;
 
@@ -80,24 +94,46 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
         if (!parsed.success) throw new AppError(40001, { reason: 'admin_login_shape' });
         const { email, password } = parsed.data;
         const now = deps.clock.now();
-        const keyHash = loginAttemptKey(email);
-
-        // ① 先扣额度（原子）。已锁 → 拿不到额度 → 直接 42901，且不跑 bcrypt。
-        const claim = await claimLoginAttempt(deps.db, keyHash, now, {
-          maxFailures: ADMIN_LOGIN_MAX_FAILURES,
+        const globalKey = loginAttemptKey(email);
+        // 来源 = trust proxy 取到的 req.ip，再过 ipKey（IPv6 归 /64），与 IP 限流同一口径（AJ-243）
+        const sourceKey = loginAttemptSourceKey(email, ipKey(req.ip ?? 'unknown'));
+        const policy = (maxFailures: number) => ({
+          maxFailures,
           lockMinutes: ADMIN_LOGIN_LOCK_MINUTES,
         });
-        if (claim.kind === 'locked') {
-          const retrySec = Math.max(
-            1,
-            Math.ceil((claim.lockedUntil.getTime() - now.getTime()) / 1000),
-          );
+
+        // ① 先扣额度（原子），两层都要拿到：来源桶（5）+ 邮箱桶（30）。
+        //    任一已锁 → 42901，且不跑 bcrypt。来源桶在前：攻击者被锁在自己的来源上时，
+        //    不再消耗邮箱桶——否则他照样能把全局那 30 次耗光。
+        const bySource = await claimLoginAttempt(
+          deps.db,
+          sourceKey,
+          now,
+          policy(ADMIN_LOGIN_MAX_FAILURES),
+          globalKey,
+        );
+        const byEmail =
+          bySource.kind === 'locked'
+            ? bySource
+            : await claimLoginAttempt(
+                deps.db,
+                globalKey,
+                now,
+                policy(ADMIN_LOGIN_GLOBAL_MAX_FAILURES),
+              );
+        if (bySource.kind === 'locked' || byEmail.kind === 'locked') {
+          const until = (bySource.kind === 'locked' ? bySource : byEmail).lockedUntil ?? now;
+          const retrySec = Math.max(1, Math.ceil((until.getTime() - now.getTime()) / 1000));
           res.setHeader('retry-after', String(retrySec));
           const cred = await findAdminCredential(deps.db, email);
           deps.logger.warn('admin_login_locked', {
             result: 'rejected',
             ...(cred !== null ? { target_user_id: cred.id } : {}),
-            ctx: { retry_after_sec: retrySec, known_account: cred !== null },
+            ctx: {
+              retry_after_sec: retrySec,
+              known_account: cred !== null,
+              scope: bySource.kind === 'locked' ? 'source' : 'email',
+            },
           });
           throw new AppError(42901, { reason: 'admin_account_locked' });
         }
@@ -108,15 +144,26 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
           deps.logger.warn('admin_login_failed', {
             result: 'rejected',
             ...(cred !== null ? { target_user_id: cred.id } : {}),
-            ctx: { known_account: cred !== null, locked: claim.lockedUntil !== null },
+            ctx: {
+              known_account: cred !== null,
+              locked: bySource.lockedUntil !== null || byEmail.lockedUntil !== null,
+            },
           });
           throw new AppError(40101, { reason: 'admin_login_bad_credentials' });
         }
 
-        // ② 口令对了清额度。仍带"未锁定"条件：返回 locked 说明比对期间被并发请求上了锁，
+        // ② 口令对了清额度。仍带"未锁定"条件：返回 locked 说明比对期间被**别的**并发请求上了锁，
         //    此时不能发 token（否则"并发里夹一个对的"就能绕过锁）。
-        const cleared = await clearLoginAttempt(deps.db, keyHash, now);
-        if (cleared === 'locked') {
+        //    ⚠️ 自己这次 claim 置上的锁（最后一次额度）要能清掉——把它传进去（R-02 / AJ-224）；
+        //    不传的话"错 4 次、第 5 次输对"会被自己锁 15 分钟。
+        const clearedSource = await clearLoginAttempt(
+          deps.db,
+          sourceKey,
+          now,
+          bySource.lockedUntil,
+        );
+        const clearedEmail = await clearLoginAttempt(deps.db, globalKey, now, byEmail.lockedUntil);
+        if (clearedSource === 'locked' || clearedEmail === 'locked') {
           deps.logger.warn('admin_login_locked', {
             result: 'rejected',
             target_user_id: cred.id,

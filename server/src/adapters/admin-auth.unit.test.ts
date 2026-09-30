@@ -69,7 +69,8 @@ describe('登录路由的调用顺序（源码断言）', () => {
 
   it('拿不到额度时不得再碰 bcrypt：locked 分支里只有 42901，没有一次口令比对', () => {
     const code = codeLines.map((l) => l.text).join('\n');
-    const start = code.indexOf("if (claim.kind === 'locked') {");
+    // AJ-243：额度分两层（来源桶 + 邮箱桶），locked 分支是"任一层已锁"
+    const start = code.indexOf("if (bySource.kind === 'locked' || byEmail.kind === 'locked') {");
     expect(start).toBeGreaterThanOrEqual(0);
     // 分支闭合 = 下一个"缩进 8 空格的 }"（分支体缩进 10 空格，函数体其余部分亦然但不会更早出现）
     const end = code.indexOf('\n        }', start);

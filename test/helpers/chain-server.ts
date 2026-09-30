@@ -84,6 +84,8 @@ export async function buildChainServer(
     logger,
     // 与 main.ts 同口径：回调验签要原始字节，少这一环所有回调 50000
     rawBodyPaths: [PAY_CALLBACK_PREFIX],
+    // 与 main.ts 同口径：trust proxy 层数取自配置（默认 0；用例要模拟来源 IP 时传 TRUST_PROXY_HOPS）
+    trustProxyHops: config.TRUST_PROXY_HOPS,
     mount: (a) => {
       mountAllRoutes(a, { config, logger, db, events, storage: createMemoryStorage() });
     },
@@ -170,9 +172,10 @@ export async function call(
   srv: { url: string },
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
-  opts: { token?: string; key?: string; body?: unknown } = {},
+  opts: { token?: string; key?: string; body?: unknown; headers?: Record<string, string> } = {},
 ): Promise<HttpResult> {
-  const headers: Record<string, string> = {};
+  // 额外请求头（如 `x-forwarded-for`：配合 TRUST_PROXY_HOPS 模拟不同来源 IP）放最前，下面的固定头不被它覆盖
+  const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.token !== undefined) headers['authorization'] = `Bearer ${opts.token}`;
   if (opts.key !== undefined) headers['idempotency-key'] = opts.key;
   if (opts.body !== undefined) headers['content-type'] = 'application/json';
