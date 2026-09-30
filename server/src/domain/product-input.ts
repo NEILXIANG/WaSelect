@@ -113,9 +113,20 @@ function readImages(v: unknown): readonly ProductImageSet[] | 'invalid' {
 
 /**
  * 校验并归一化商品输入。
+ *
+ * @param maxPriceJpy 单价上限（调用方传 `config.MAX_ORDER_JPY`）。
+ *   @why 单价必须**有上界**（B25 / AJ-211）：`toMinor(price_jpy, rateInt)` 的乘积
+ *        超过 2^53 会抛 RangeError，而浏览页对每个商品都做一次换算 ⇒
+ *        **一个商品就能让整页 500**（文件头 AJ-108 承诺"浏览路径降级、不白屏"，被这一条打破）。
+ *        按含缓冲的人民币汇率，门槛约 1.8×10⁹ 円——离谱单价（录入多打几个零）很够得着。
+ *   @why 上界取**单笔订单上限**而不是另起一个常量：单价高于它就永远卖不出去
+ *        （买 1 件已到顶），且它会与 MAX_ORDER_JPY 一起调，不会像两个常量那样各自漂移。
+ *   @limitation 它是调用方传入的（本函数是纯函数、不读配置），
+ *        **调用方必须传 `config.MAX_ORDER_JPY`**——写死一个数字就退回"两处真值"。
+ *
  * @returns 通过时 `value` 是白名单字段的归一化对象；不通过时 `errors` 含**全部**问题。
  */
-export function validateProductInput(raw: unknown): ProductInputResult {
+export function validateProductInput(raw: unknown, maxPriceJpy: number): ProductInputResult {
   if (raw === null || typeof raw !== 'object') {
     return { ok: false, errors: [{ field: 'body', reason: 'not_object' }] };
   }
@@ -139,6 +150,8 @@ export function validateProductInput(raw: unknown): ProductInputResult {
   const price = b.price_jpy === undefined ? undefined : intAtLeast(b.price_jpy, 1);
   if (b.price_jpy === undefined) fail('price_jpy', 'price_required');
   else if (price === undefined) fail('price_jpy', 'price_invalid');
+  // 上界：见本函数 @param maxPriceJpy（B25 / AJ-211）。超限不是"贵"，是"会让整页 500"
+  else if (price !== undefined && price > maxPriceJpy) fail('price_jpy', 'price_too_large');
 
   const weight = b.weight_g === undefined ? undefined : intAtLeast(b.weight_g, 1);
   if (b.weight_g === undefined) fail('weight_g', 'weight_required');

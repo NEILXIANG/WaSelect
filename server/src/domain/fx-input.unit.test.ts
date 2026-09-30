@@ -52,6 +52,22 @@ describe('parseFxInput', () => {
     expect(parseFxInput({ quote: 'USD', raw_rate: 1000 }).rawRate).toBe(1000);
   });
 
+  /**
+   * B25 / AJ-211：**"正得离谱"和"≤0"是两种不同的录入错误**，都要挡。
+   *
+   * @why `rawRate > 0` 挡不住这一半：`applyFxBuffer` 会把值对齐到 1e-8 的网格，
+   *      小于 `0.5/1e8`（5×10⁻⁹）的正数一律**舍成 0** ⇒ `toRateInt(0)` 抛错 ⇒
+   *      保存汇率这条管理端写路径 500，之后每次读商品列表都撞上这个 0 汇率。
+   *      @why 只断言"被拒"是不够的——把下界删掉之后，`rawRate=1e-12` 会通过解析，
+   *      而落库时才炸（在另一个模块）；所以这里必须**用小到会舍成 0 的值**当输入。
+   */
+  it('raw_rate 小到会被网格舍成 0 → 40001 raw_rate_too_small（B25 / AJ-211）', () => {
+    expect(codeOf(() => parseFxInput({ quote: 'USD', raw_rate: 1e-12 }))).toBe(40001);
+    expect(codeOf(() => parseFxInput({ quote: 'USD', raw_rate: 4.9e-9 }))).toBe(40001);
+    // 刚好能活下来的边界仍通过（1e-8 > 0.5/1e8）
+    expect(parseFxInput({ quote: 'USD', raw_rate: 1e-8 }).rawRate).toBe(1e-8);
+  });
+
   it('effective_from 非法日期 → 40001；缺省 → null（调用方填 clock.now()）', () => {
     expect(
       codeOf(() => parseFxInput({ quote: 'USD', raw_rate: 0.0065, effective_from: 'x' })),

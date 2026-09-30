@@ -26,6 +26,7 @@ import { AppError } from '../errors.js';
 import type { Db } from '../adapters/db.js';
 import type { Clock } from '../ports/clock.js';
 import type { AppConfig } from '../config.js';
+import type { Logger } from '../logger.js';
 import { createCatalogRepo } from '../adapters/catalog.js';
 import { PRODUCT_CATEGORY, toMinor, toRateInt } from '@waselect/shared';
 import type { DisplayCurrency } from '../domain/quote.js';
@@ -65,13 +66,49 @@ export interface ProductRoutesDeps {
   db: Db;
   clock: Clock;
   config: AppConfig;
+  /** 展示价算不出时的降级日志（B25 / AJ-211）。 */
+  logger: Logger;
 }
 
 export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void {
   const catalog = createCatalogRepo(deps.db);
 
+  /**
+   * 单币种的展示价；算不出 → `undefined`（**降级，不是整页 500**，B25 / AJ-211）。
+   *
+   * @why 曾经整批换算是同一个 try ⇒ 一个商品（或一个币种）算不出就让**整页** 500。
+   *      `toMinor` 在 `price_jpy × rateInt` 超过 2^53 时抛 RangeError，
+   *      而新建的问题商品按 `created_at desc` 落在首页第一屏——
+   *      于是"录入时多打一个零"等于"全站商品列表打不开"，
+   *      正好违背文件头 AJ-108 承诺的"浏览路径降级、不白屏"。
+   * @why 省略该币种而不是报错：展示价是**文案**不是下单依据（报价/建单另走硬 50003，AJ-108），
+   *      缺一个币种比整页白屏好——与"fx 缺失就省略"是同一条口径。
+   * @limitation 每次失败都打一条 error 日志：它属于**数据问题**（库里有一个算不出的价格），
+   *      必须有人去看；写入侧的上界（B25 的另一半）只挡新建，挡不住存量脏数据。
+   */
+  function minorOrUndefined(
+    priceJpy: number,
+    rateInt: number,
+    currency: DisplayCurrency,
+    productId: string,
+  ): number | undefined {
+    try {
+      return toMinor(priceJpy, rateInt);
+    } catch (e) {
+      deps.logger.error('display_price_failed', {
+        result: 'failed',
+        ctx: { product_id: productId, currency, price_jpy: priceJpy, rate_int: rateInt },
+        err: e instanceof Error ? e : new Error(String(e)),
+      });
+      return undefined;
+    }
+  }
+
   /** 浏览降级版 display：能算几币种算几币种（@why 见文件头）。 */
-  async function displayOf(priceJpy: number): Promise<Partial<Record<DisplayCurrency, number>>> {
+  async function displayOf(
+    priceJpy: number,
+    productId: string,
+  ): Promise<Partial<Record<DisplayCurrency, number>>> {
     const currencies = deps.config.DISPLAY_CURRENCIES.filter(
       (c): c is DisplayCurrency => c !== 'JPY',
     );
@@ -79,7 +116,9 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
     const out: Partial<Record<DisplayCurrency, number>> = {};
     for (const c of currencies) {
       const rate = fx.get(c);
-      if (rate !== undefined) out[c] = toMinor(priceJpy, toRateInt(rate));
+      if (rate === undefined) continue;
+      const minor = minorOrUndefined(priceJpy, toRateInt(rate), c, productId);
+      if (minor !== undefined) out[c] = minor;
     }
     return out;
   }
@@ -120,7 +159,8 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
           items: items.map((p) => {
             const display: Partial<Record<DisplayCurrency, number>> = {};
             for (const [c, rateInt] of Object.entries(rateInts)) {
-              display[c as DisplayCurrency] = toMinor(p.price_jpy, rateInt);
+              const minor = minorOrUndefined(p.price_jpy, rateInt, c as DisplayCurrency, p.id);
+              if (minor !== undefined) display[c as DisplayCurrency] = minor;
             }
             const images = imagesOf(p.images);
             return {
@@ -155,7 +195,7 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
           title: p.title,
           category: p.category,
           price_jpy: p.price_jpy,
-          display: await displayOf(p.price_jpy),
+          display: await displayOf(p.price_jpy, p.id),
           images: imagesOf(p.images),
           stock: p.stock,
           status: p.status,

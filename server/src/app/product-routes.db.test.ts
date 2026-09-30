@@ -28,7 +28,11 @@ afterAll(async () => {
   await closeDb(db);
 });
 
-async function buildServer(): Promise<{ url: string; close: () => Promise<void> }> {
+async function buildServer(): Promise<{
+  url: string;
+  sink: MemorySink;
+  close: () => Promise<void>;
+}> {
   const sink = new MemorySink();
   const logger = createLogger({ env: 'test', destination: sink });
   const config = loadConfig({
@@ -52,7 +56,7 @@ async function buildServer(): Promise<{ url: string; close: () => Promise<void> 
       }),
   });
   const server = await listen(app);
-  return { url: `http://127.0.0.1:${server.port}`, close: server.close };
+  return { url: `http://127.0.0.1:${server.port}`, sink, close: server.close };
 }
 
 beforeEach(async () => {
@@ -73,6 +77,62 @@ async function get(url: string, path: string): Promise<{ status: number; json: n
   const res = await fetch(`${url}${path}`);
   return { status: res.status, json: (await res.json()) as never };
 }
+
+/**
+ * B25 / AJ-211：**一个离谱单价不得让整页 500**。
+ *
+ * @why 写入侧（validateProductInput 的上界）只能挡新建，挡不住存量脏数据——
+ *      脏数据的来源很多：迁移、手工改库、上界收紧之前建的旧商品。
+ *      所以读取侧必须**自己**能降级，不能假设"库里不会有"。
+ * @why 断言必须同时钉"页面还在"与"出声了"：只断言 200 的话，
+ *      把降级写成"静默跳过"（不打日志）也全绿，那就没人会去修那个脏价格。
+ */
+describe('B25 / AJ-211：脏价格只降级，不整页 500', () => {
+  it('列表里有算不出展示价的商品 → 整页仍 200，该商品缺那个币种，并记 error', async () => {
+    // 直接插库绕过写入侧校验：模拟"上界收紧之前就已存在的脏数据"。
+    // 2×10^10 円 × USD 的 rateInt(6.7×10^5) ≈ 1.34×10^16 > 2^53 ⇒ toMinor 抛 RangeError
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status, images, compliance_tags)
+      values ('p-bad', 'Absurd', 'daily', ${20_000_000_000}, 500, 1, 'JP', 'active', '[]'::jsonb, '[]'::jsonb)
+    `;
+    const srv = await buildServer();
+    try {
+      const r = await get(srv.url, '/api/v1/products?size=50');
+      expect(r.status).toBe(200);
+      const body = r.json as { items: Array<{ id: string; display: Record<string, number> }> };
+      const bad = body.items.find((p) => p.id === 'p-bad');
+      expect(bad).toBeDefined();
+      // 该商品的 USD 算不出 → 省略，而不是整页炸
+      expect(bad?.display['USD']).toBeUndefined();
+      // 其它商品照常算出来（降级只影响算不出的那一个）
+      const knife = body.items.find((p) => p.id === 'p-1');
+      expect(knife?.display['USD']).toBe(toMinor(8800, toRateInt('0.0067')));
+      // 且必须出声：这是数据问题，不是请求问题
+      const rows = srv.sink.find('display_price_failed');
+      expect(rows.length).toBeGreaterThanOrEqual(1);
+      expect(rows[0]?.ctx).toMatchObject({ product_id: 'p-bad' });
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('详情页同样降级（不是只修了列表）', async () => {
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status, images, compliance_tags)
+      values ('p-bad', 'Absurd', 'daily', ${20_000_000_000}, 500, 1, 'JP', 'active', '[]'::jsonb, '[]'::jsonb)
+    `;
+    const srv = await buildServer();
+    try {
+      const r = await get(srv.url, '/api/v1/products/p-bad');
+      expect(r.status).toBe(200);
+      const body = r.json as { id: string; price_jpy: number; display: Record<string, number> };
+      expect(body.price_jpy).toBe(20_000_000_000); // 日元原价照出（它本身没错）
+      expect(body.display['USD']).toBeUndefined();
+    } finally {
+      await srv.close();
+    }
+  });
+});
 
 describe('GET /products（公开，不鉴权）', () => {
   it('列表只出上架商品；display 能算就算（CNY 无汇率 → 降级省略，不炸）', async () => {

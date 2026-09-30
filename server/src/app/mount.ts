@@ -223,7 +223,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   });
 
   // ── 商品/配置公开端点 + 我的地址（I1-U5a）：全环境挂载（产品接口不是脚手架）──
-  mountProductRoutes(app, { db, clock: systemClock, config });
+  mountProductRoutes(app, { db, clock: systemClock, config, logger });
 
   // ── 管理端操作审计（流 B / ADR-29；F-02 / AJ-183）：**先于**所有管理端路由挂在 /api/v1/admin 前缀上——
   //    新增的管理端写路由自动被审计（admin-audit.ts @why）；挂在后面的话，前面那些路由就漏了 ──

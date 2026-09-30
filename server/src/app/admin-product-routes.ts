@@ -120,7 +120,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
   app.post('/api/v1/admin/products', guard, (req, res, next) => {
     void (async () => {
       try {
-        const r = validateProductInput(req.body);
+        const r = validateProductInput(req.body, deps.config.MAX_ORDER_JPY);
         if (!r.ok) rejectInvalid(deps.logger, r.errors);
         const row = await repo.insertProduct({
           id: deps.idGen.uuid(),
@@ -152,7 +152,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
     void (async () => {
       try {
         const id = String(req.params.id);
-        const r = validateProductInput(req.body);
+        const r = validateProductInput(req.body, deps.config.MAX_ORDER_JPY);
         if (!r.ok) rejectInvalid(deps.logger, r.errors);
         const row = await repo.updateProduct(id, {
           id,

@@ -27,16 +27,23 @@ function base(): Record<string, unknown> {
   };
 }
 
+/**
+ * 单价上界（B25 / AJ-211）。
+ * @why 显式写一个常量而不是复用 config：`validateProductInput` 是纯函数、上界由调用方注入，
+ *      测试若读 config 就变成"测的是配置值"；这里要钉的是"**超限会被拒**"这个行为。
+ */
+const MAX_PRICE = 180_000;
+
 /** 断言通过并取回归一化值。 */
 function ok(raw: unknown): ProductInput {
-  const r = validateProductInput(raw);
+  const r = validateProductInput(raw, MAX_PRICE);
   if (!r.ok) throw new Error(`期望通过，实际拒绝：${JSON.stringify(r.errors)}`);
   return r.value;
 }
 
 /** 断言被拒并返回错误里的 reason 列表。 */
 function reasons(raw: unknown): string[] {
-  const r = validateProductInput(raw);
+  const r = validateProductInput(raw, MAX_PRICE);
   if (r.ok) throw new Error('期望拒绝，实际通过');
   return r.errors.map((e) => e.reason);
 }
@@ -216,8 +223,20 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     expect(reasons({ ...base(), title: 'x'.repeat(256) })).toContain('title_too_long');
   });
 
+  /**
+   * B25 / AJ-211：单价必须有上界。
+   * @why 没有上界时，`toMinor(price_jpy, rateInt)` 的乘积会越过 2^53 抛 RangeError，
+   *      而浏览页对每个商品都做一次换算 ⇒ **一个离谱单价让整页 500**。
+   *      这条钉的是"写入侧挡住"，与 product-routes 的"读取侧降级"互为纵深。
+   */
+  it('price_jpy 超过上界 → 拒绝 price_too_large（不是"贵"，是会让整页 500）', () => {
+    expect(reasons({ ...base(), price_jpy: MAX_PRICE + 1 })).toContain('price_too_large');
+    // 恰好等于上界仍然通过（边界值：差 1 円就两种命运，必须各钉一条）
+    expect(ok({ ...base(), price_jpy: MAX_PRICE }).price_jpy).toBe(MAX_PRICE);
+  });
+
   it('一次收集多个错误，不是遇到第一个就停（表单要一次显示全部问题）', () => {
-    const errs = validateProductInput({ title: 'x', price_jpy: 0, weight_g: -1 });
+    const errs = validateProductInput({ title: 'x', price_jpy: 0, weight_g: -1 }, MAX_PRICE);
     expect(errs.ok).toBe(false);
     if (errs.ok) return;
     expect(errs.errors.length).toBeGreaterThanOrEqual(4);

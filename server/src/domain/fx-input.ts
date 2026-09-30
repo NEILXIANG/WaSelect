@@ -42,6 +42,21 @@ const MAX_RAW_RATE = 1000;
 /** NUMERIC(18,8) 的小数位；对齐到这个网格，让"存库截断"与"×1e8 取整"合为一次舍入。 */
 const RATE_GRID = 1e8;
 
+/**
+ * raw_rate 的**量纲下界**：小于它的值对齐到网格之后会变成 **0**（B25 / AJ-211）。
+ *
+ * @why 曾经只校验 `rawRate > 0`，而"正得离谱"的汇率同样是事故：
+ *      `applyFxBuffer` 会把 `raw × (1+buffer)` 对齐到 1e-8 的网格，
+ *      小于 `0.5 / RATE_GRID`（5×10⁻⁹）的值一律舍成 0 ⇒ `toRateInt(0)` 抛错 ⇒
+ *      保存汇率这条**管理端写路径**直接 500，而之后每次读商品列表都会撞上同一个 0 汇率。
+ * @why 取 `0.5 / RATE_GRID` 而不去算 buffer：buffer ≥ 0，所以
+ *      `raw ≥ 0.5/GRID` ⇒ 缓冲后的值 ≥ 0.5/GRID ⇒ 对齐后 ≥ 1e-8 > 0，
+ *      **对任意合法 buffer 都成立**——这样校验可以留在纯函数里，不需要知道配置。
+ * @limitation 它只挡"舍成 0"，不挡"舍成很小但非 0"（例如 1e-8 的汇率本身没有业务意义）。
+ *              那属于运营口径（A8 的二次确认与量级核对），不是本函数能判定的。
+ */
+const MIN_RAW_RATE = 0.5 / RATE_GRID;
+
 /** 校验后的汇率输入。 */
 export interface FxInputValue {
   quote: FxQuote;
@@ -77,6 +92,11 @@ export function parseFxInput(body: unknown): FxInputValue {
   // 0 与负数：数学上合法、业务上是事故（全站展示价变 0 或负数），与 toRateInt 的同源判断
   if (rawRate <= 0 || rawRate > MAX_RAW_RATE) {
     throw new AppError(40001, { reason: 'raw_rate_out_of_range' });
+  }
+  // 正得离谱 = 对齐网格后变 0（B25 / AJ-211，见 MIN_RAW_RATE 的 @why）：
+  // 分开报是为了让运营看得懂——"超出范围"与"小到会被舍成 0"是两种不同的录入错误
+  if (rawRate < MIN_RAW_RATE) {
+    throw new AppError(40001, { reason: 'raw_rate_too_small' });
   }
 
   const raw = b['effective_from'];

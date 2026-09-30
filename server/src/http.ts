@@ -256,6 +256,21 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
   // 层数而非 true：见 trustProxyHops 的 @why（D23，伪造 IP 可绕过未来的限流/锁定）
   app.set('trust proxy', opts.trustProxyHops ?? 0);
   app.disable('x-powered-by');
+  /**
+   * 路由**区分大小写**（B20 / AJ-210）。
+   * @why Express 默认不区分：`POST /API/V1/PAY/CALLBACK/stripe` 会命中真实回调路由，
+   *      但 raw-body 的前缀匹配（`pathMatchesPrefix`）是**区分**的 ⇒ 拿不到原始字节、
+   *      验签必然失败 ⇒ 50000 + error 级 `unhandled_error`。
+   *      一个请求头就能稳定制造 5xx，扫描器一天几百条，真实的 5xx 被淹没。
+   *      开启之后大写路径直接落到兜底 404（40400 + warn），与"没这个路由"同形。
+   * @why 选"严格路由"而不是"两侧统一小写"：小写化会把 `/API/...` 变成"真的能用的路由"——
+   *      那等于承认大小写都行，而 raw-body、CORS、源站豁免三处前缀匹配都得跟着改，
+   *      任何一处漏改就退化成今天这个洞（约束九：第二份判定必然漂移）。
+   *      严格路由是**一处决定、三处同时生效**。
+   * @limitation 大小写写错的客户端现在拿到 40400 而不是 500——这是有意的：
+   *              它本来就不是我们的路由，报"不存在"比报"服务器内部错误"更接近事实。
+   */
+  app.set('case sensitive routing', true);
 
   /**
    * 骨架自己的日志器：绑定 `module: 'http'`。
@@ -447,27 +462,63 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
  *      后果：一个真实的后端 bug 会被当成"用户传参有问题"报给用户和监控，
  *      于是线上出现 40001 时没人会去查服务端，真正的 bug 就长期潜伏。
  *      现在只认快递解析器自己打的标记（`type` / `status=400`），其余一律落到 50000。
- * @limitation 依赖 express 内部错误对象的形状（body-parser 约定）。
+ *
+ * @why **判据放宽到"body-parser 自己声明的 4xx"**（B20 / AJ-210）：此前逐个枚举 `type`，
+ *      漏掉的每一个都是"一个请求头就能刷 5xx"——`charset=x-evil`（415）、
+ *      `content-encoding: xyz`（415）、坏 gzip 流、`request.aborted`（400）全部落进
+ *      `unhandled_error` + 500。扫描器一天几百条，真实的 5xx 就被淹没了（与上面 @why 同一条理由，
+ *      只是这次漏的是**另一半**客户端错）。
+ *      判据取 `expose === true && 400 ≤ status < 500`——`expose` 正是 body-parser 用来
+ *      标记"这个错的详情可以给客户端看"的字段，等价于"我认为这是客户端的问题"。
+ *      比逐个枚举 type 更抗升级（新增一种 4xx 自动纳入），且不会误吞 5xx。
+ * @limitation 仍然依赖 body-parser 的错误对象形状（`expose` / `status`）。
  *              升级 express 大版本时应重跑本文件的"报文解析错误"用例确认标记未变。
+ * @limitation 响应码统一是 **40001（400）**而不是 body-parser 给的 415：
+ *              契约里没有 415 的错误码，且"请求体不合规格"在我方是同一类参数错误。
+ *              具体原因走 `reason`（见 {@link parseErrorReason}），不靠状态码区分。
  */
 function isBodyParseError(err: unknown): boolean {
-  const e = err as { type?: string; status?: number; statusCode?: number } | null;
-  if (e?.type === 'entity.too.large') return true;
-  return (
-    err instanceof SyntaxError &&
-    (e?.type === 'entity.parse.failed' || e?.status === 400 || e?.statusCode === 400)
-  );
+  // AppError 是我们自己的业务错，哪怕 status 落在 4xx 也不属于"报文解析"
+  if (err instanceof AppError) return false;
+  const e = err as { type?: string; status?: number; statusCode?: number; expose?: boolean } | null;
+  if (e?.expose !== true) return false;
+  const status = e?.status ?? e?.statusCode;
+  return typeof status === 'number' && status >= 400 && status < 500;
 }
 
 /**
  * 解析错误的日志摘要。**刻意不带原始 message**——
  * SyntaxError 的 message 里含请求体片段（`Unexpected token a in JSON at position 12`），
  * 而请求体是客户端可控内容：可能含卡号、地址、姓名。把原文写进日志等于绕过 redact。
+ *
+ * @why 按 `type` 给原因而不是一律"JSON 格式错误"（B20 / AJ-210）：
+ *      "统一原因"在这里是**有害**的——运营看到 40001 时若原因永远是"JSON 格式错误"，
+ *      遇到"我们不支持这种压缩编码"的真实客户会一路查错方向。
+ *      原因必须能让"客户端改什么"这件事可推断，所以逐类给，未识别的给兜底文案。
  */
 function parseErrorReason(err: unknown): string {
-  return (err as { type?: string } | null)?.type === 'entity.too.large'
-    ? '请求体超过大小上限'
-    : 'JSON 格式错误';
+  const type: string | undefined = (err as { type?: string } | null)?.type;
+  switch (type) {
+    case 'entity.too.large':
+      return '请求体超过大小上限';
+    case 'entity.parse.failed':
+      return 'JSON 格式错误';
+    case 'charset.unsupported':
+      return '不支持的字符集';
+    case 'encoding.unsupported':
+      return '不支持的内容编码';
+    case 'entity.verify.failed':
+      return '请求体校验失败';
+    case 'request.aborted':
+      return '请求体传输中断';
+    case 'parameters.too.many':
+      return '参数过多';
+    // `type` 缺失（不是 body-parser 抛的、或它没标类型）与"认不出的新类型"走同一兜底：
+    // 都是"报文不合规格但说不出是哪一类"，不能因为说不出就不给 40001。
+    case undefined:
+    default:
+      return '请求体无法解析';
+  }
 }
 
 /** 把各类异常归一成 {status, body, logFields}：解析错误也要有业务码，不能裸 500。 */

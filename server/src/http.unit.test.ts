@@ -1102,6 +1102,67 @@ describe('错误归类：解析错误 vs 服务端 bug', () => {
     expect(ok.status).toBe(200);
   });
 
+  /**
+   * B20 / AJ-210：body-parser 的**其它 4xx** 也必须落 warn，不能落 500 + error。
+   *
+   * @why 旧判据逐个枚举 `type`，只认 `entity.too.large` 与 `entity.parse.failed`，
+   *      于是 `charset=x-evil`（415）、`content-encoding: xyz`（415）、坏 gzip 流、
+   *      `request.aborted`（400）全部进 `unhandled_error`。
+   *      后果不是"多一条日志"而是**淹没**：扫描器每天几百条畸形请求，
+   *      真实的 5xx 在告警里就找不到了。
+   * @why 用 `content-type: application/json; charset=x-evil` 造现场：
+   *      它正是 body-parser 会抛 415 `charset.unsupported` 的那一条，不需要伪造流。
+   */
+  it('不支持的 charset → 40001 + warn request_rejected，不进 unhandled_error（B20 / AJ-210）', async () => {
+    const { baseUrl, sink } = await serve();
+    const res = await fetch(`${baseUrl}/healthz`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=x-evil' },
+      body: '{}',
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ code: 40001 });
+    expect(sink.find('unhandled_error')).toHaveLength(0);
+    const rejected = sink.find('request_rejected');
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.level).toBe('warn');
+    // 原因要说清是"字符集"，不能一律说 JSON 格式错误——否则运营永远查错方向
+    expect(JSON.stringify(rejected[0]?.reason)).toContain('字符集');
+  });
+
+  /**
+   * B20 / AJ-210：Express 默认**不区分**路由大小写，而 raw-body 的前缀匹配区分
+   * ⇒ 大写路径命中真实回调路由却拿不到原始字节 ⇒ 验签失败 ⇒ 50000 + error。
+   * 一个请求头就能稳定制造 5xx。开启严格路由后它应该落到兜底 404。
+   */
+  it('大写路径不再命中真实路由（拿不到原始字节的 500 变成 40400）', async () => {
+    const { baseUrl, sink } = await serve((app) => {
+      app.post(RAW_CALLBACK_PATH, (req, res) => res.json({ isBuffer: Buffer.isBuffer(req.body) }));
+    });
+    const res = await fetch(`${baseUrl}${RAW_CALLBACK_PATH.toUpperCase()}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'evt_1' }),
+    });
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toMatchObject({ code: 40400 });
+    expect(sink.find('unhandled_error')).toHaveLength(0);
+  });
+
+  it('小写路径照常工作且仍拿到原始字节（严格路由不得把正常请求也挡掉）', async () => {
+    const { baseUrl } = await serve((app) => {
+      app.post(RAW_CALLBACK_PATH, (req, res) => res.json({ isBuffer: Buffer.isBuffer(req.body) }));
+    });
+    const res = await fetch(`${baseUrl}${RAW_CALLBACK_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'evt_1' }),
+    });
+    expect(res.status).toBe(200);
+    // 不只是"200"：raw-body 前缀匹配必须仍然生效（严格路由不能顺手把验签能力关掉）
+    await expect(res.json()).resolves.toEqual({ isBuffer: true });
+  });
+
   it('业务代码抛的 SyntaxError → 50000，不能被误判成"用户传参错"', async () => {
     const { baseUrl, sink } = await serve((app) => {
       app.get('/bug', () => {
