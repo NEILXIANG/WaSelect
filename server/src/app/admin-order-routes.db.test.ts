@@ -610,9 +610,12 @@ describe('POST /admin/orders/{id}/address（发货前改址）', () => {
     const snap = rows[0]?.address_snapshot as { recipient?: string; country?: string };
     expect(snap.recipient).toBe('SAN ZHANG');
     expect(snap.country).toBe('US');
-    const evs = await db`select status, actor from order_events where order_id = 'o-1'`;
+    const evs = await db`select status, actor, note from order_events where order_id = 'o-1'`;
     expect(String(evs[0]?.status)).toBe('address_changed');
     expect(String(evs[0]?.actor)).toMatch(/^admin:/);
+    // B12 / AJ-208：路由层同样要留旧地址——仓储层的用例证明不了"这条路由真的把旧值带出来了"
+    const from = JSON.parse(String(evs[0]?.['note'])) as { from: { recipient?: string } };
+    expect(from.from.recipient).toBe('Jane Doe');
     await s.close();
   });
 

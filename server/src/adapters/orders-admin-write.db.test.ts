@@ -245,6 +245,64 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     expect(String(evs[0]?.actor)).toBe('admin:u-9');
   });
 
+  /**
+   * B12 / AJ-208：改址后**原地址必须还能查到**。
+   * @why 缺了它，"盗号 → 联系客服改址 → 货发给攻击者 → 真买家以未收到货拒付"这条链
+   *      在库里**查无实据**：`address_snapshot` 已被整体覆盖，拒付应诉时拿不出原地址。
+   * @why 断言必须钉**内容**而不是"note 非空"：固定文案同样满足非空，
+   *      而它恰恰答不出"改之前是什么"（§2 第 49 条：只验存在性是最容易假绿的一类断言）。
+   */
+  it('updateAddressSnapshot：事件 note 里带**改前**的完整旧地址（B12 / AJ-208）', async () => {
+    await seedPaidOrder('o-1');
+    const oldSnap = (await db`select address_snapshot from orders where id = 'o-1'`)[0]?.[
+      'address_snapshot'
+    ];
+    const next = { id: 'a-2', recipient: 'SAN ZHANG', line1: '2 Main St' };
+    await withTransaction(db, async (tx) => {
+      expect(await updateAddressSnapshot(tx, 'o-1', next as never, 'admin:u-9', new Date())).toBe(
+        true,
+      );
+    });
+    const evs =
+      await db`select note from order_events where order_id = 'o-1' and status = 'address_changed'`;
+    expect(evs).toHaveLength(1);
+    const parsed = JSON.parse(String(evs[0]?.['note'])) as { from: unknown };
+    // 旧地址完整还原（不是摘要、不是空对象），且与新快照不同
+    expect(parsed.from).toEqual(oldSnap);
+    expect((parsed.from as { recipient?: string }).recipient).not.toBe('SAN ZHANG');
+    // 同时新地址确实生效了——只断言"有旧值"的话，把写入方向写反（新旧互换）也全绿
+    const now = await db`select address_snapshot from orders where id = 'o-1'`;
+    expect((now[0]?.['address_snapshot'] as { recipient?: string }).recipient).toBe('SAN ZHANG');
+  });
+
+  it('连续改两次：每次的 note 都是**当时**的旧地址（不是第一次的、也不是最新快照）', async () => {
+    await seedPaidOrder('o-1');
+    const first = (await db`select address_snapshot from orders where id = 'o-1'`)[0]?.[
+      'address_snapshot'
+    ];
+    await withTransaction(db, async (tx) => {
+      await updateAddressSnapshot(
+        tx,
+        'o-1',
+        { recipient: 'MID' } as never,
+        'admin:u-9',
+        new Date(),
+      );
+      await updateAddressSnapshot(
+        tx,
+        'o-1',
+        { recipient: 'NEW' } as never,
+        'admin:u-9',
+        new Date(),
+      );
+    });
+    const notes =
+      await db`select note from order_events where order_id = 'o-1' and status = 'address_changed' order by id`;
+    expect(notes).toHaveLength(2);
+    expect(JSON.parse(String(notes[0]?.['note'])).from).toEqual(first);
+    expect(JSON.parse(String(notes[1]?.['note'])).from).toEqual({ recipient: 'MID' });
+  });
+
   it('updateAddressSnapshot：已发货 → false，快照保持原样', async () => {
     await seedPaidOrder('o-1', 'shipped');
     await withTransaction(db, async (tx) => {

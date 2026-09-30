@@ -661,6 +661,15 @@ export async function markRefunded(
  *      此前买家端小程序会把它渲染成"状态未知"，本注释当时只考虑了管理端）。
  *      @limitation 它不在 `ORDER_STATUS` 枚举里——`order_events.status` 是 VARCHAR 故不违反
  *      DB 约束，但任何"按 enum 校验事件状态"的将来逻辑都要把它列为例外。
+ * @why 事件的 note 存**改前地址的完整 JSON**（`{"from": …}`，B12 / AJ-208），不是固定文案：
+ *      盗号后联系客服改址、或买家事后以"未收到货"拒付时，必须答得出
+ *      "原地址是什么、何时被谁改成了什么"——改址恰恰是这类欺诈的典型手法，
+ *      而 `address_snapshot` 被整体覆盖之后，旧地址在全库**再无第二处**。
+ * @why 存 `order_events` 而不是 `admin_audit`：前者与 `orders` 同级、本就存着这份 PII
+ *      （收货信息是订单的一部分），约束七禁的是"PII 进**日志**"，不是进订单事件；
+ *      后者是全库 PII 的第二份聚集地、且 append-only 无法删除（AJ-207 的同一条理由）。
+ *      @limitation note 是 TEXT，管理端详情页按原文渲染——当前显示为一段 JSON，
+ *      可读性不如"管理员改址"，但**完整性**是这类证据的第一要求，美化留给前端。
  */
 export async function updateAddressSnapshot(
   tx: Db,
@@ -669,6 +678,11 @@ export async function updateAddressSnapshot(
   actor: string,
   at: Date,
 ): Promise<boolean> {
+  // B12 / AJ-208：先把**旧快照**读出来——它是"改址前发给谁"的唯一证据。
+  // `for update` 是为了让本函数自洽（不依赖调用方是否先调过 lockAdminOrder）：
+  // UPDATE 也会取同一把行锁，这里提前取只是把"读旧值"与"写新值"之间的窗口彻底关掉。
+  const before = await tx`select address_snapshot from orders where id = ${orderId} for update`;
+  const previous = before[0]?.['address_snapshot'] ?? null;
   const updated = await tx`
     update orders set address_snapshot = ${tx.json(snapshot)}, updated_at = now()
      where id = ${orderId} and status = 'paid'
@@ -676,7 +690,7 @@ export async function updateAddressSnapshot(
   if (updated.count === 0) return false;
   await tx`
     insert into order_events (order_id, status, note, actor, at)
-    values (${orderId}, 'address_changed', '管理员改址', ${actor}, ${at})
+    values (${orderId}, 'address_changed', ${JSON.stringify({ from: previous })}, ${actor}, ${at})
   `;
   return true;
 }
