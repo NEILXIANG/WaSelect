@@ -333,3 +333,25 @@ export function toRefundBody(form: unknown): { reason: string } {
   const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
   return { reason: typeof f['reason'] === 'string' ? f['reason'].trim() : '' };
 }
+
+/**
+ * 退款请求**出错**之后要不要给"结果未知"的提醒（B41 残留 / AJ-230）。
+ *
+ * @param code `ApiError.code`（业务码；网络层失败为负数）
+ * @returns 提醒文案；不需要提醒返回空串
+ *
+ * @why 退款是两段式：服务端先把订单提交为 `refunding`，再调机构。机构超时 / 报错时接口返回 5xx，
+ *      网络断开时前端连响应都拿不到——这两种情况下**订单很可能已经是"退款中"**，
+ *      而页面若只显示一句"服务器内部错误"，运营会当成"没退成"去机构后台手工退同一笔。
+ * @why 4xx 业务性拒绝（40907 拒付中、40001 参数、40902 状态不允许…）不提醒：
+ *      那是在落 `refunding` 之前就被拦下的，订单没动，提醒反而误导。
+ * @limitation 前端分不出"5xx 发生在落 refunding 之前还是之后"，所以一律提醒并**同时刷新详情**——
+ *              以刷新后的订单状态为准，文案也是这么说的。
+ */
+export function refundFailureNotice(code: unknown): string {
+  const c = typeof code === 'number' ? code : 0;
+  const unknownOutcome = c < 0 || c >= 50000;
+  return unknownOutcome
+    ? '⚠️ 这次退款的结果未知：请以上面刷新后的订单状态为准。若已是「退款中」，稍后再提交一次即可查询结果（不会重复退款）；不要去机构后台手工退款。'
+    : '';
+}

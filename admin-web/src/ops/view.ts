@@ -141,6 +141,8 @@ const SAMPLE_JPY = 10_000;
 export function fxPreview(args: unknown): {
   ratio: number | null;
   risky: boolean;
+  /** 没有可比对的当前生效值（首次配置 / 列表加载失败）——**不等于**"没问题"，见 `fxSaveStep`。 */
+  noBaseline: boolean;
   sampleText: string;
   reason: string;
 } {
@@ -151,14 +153,22 @@ export function fxPreview(args: unknown): {
 
   if (!Number.isFinite(raw) || raw <= 0) {
     // 填了非法值：不在这里造文案（fxFormErrors 负责），只说"给不出预览"
-    return { ratio: null, risky: false, sampleText: '', reason: '' };
+    return { ratio: null, risky: false, noBaseline: false, sampleText: '', reason: '' };
   }
 
   // 样例金额：¥10,000 折成该币种的主单位（USD / CNY 都是 2 位小数）
   const sampleText = `¥${SAMPLE_JPY.toLocaleString('en-US')} ≈ ${quote} ${(SAMPLE_JPY * raw).toFixed(2)}`;
 
   if (typeof current !== 'number' || !Number.isFinite(current) || current <= 0) {
-    return { ratio: null, risky: false, sampleText, reason: '' };
+    // ⚠️ 没有基准时**不能**当成"不可疑"（AJ-229）：上线前第一次录 USD、或列表没加载出来，
+    //    恰恰是最容易"反着填 150"的时刻，而此时倍数算不出来。明说"没法比"，由 `fxSaveStep` 要求勾选。
+    return {
+      ratio: null,
+      risky: false,
+      noBaseline: true,
+      sampleText,
+      reason: '没有可比对的当前生效值（首次配置或列表未加载），请按样例金额人工核对',
+    };
   }
 
   const ratio = raw / current;
@@ -169,11 +179,108 @@ export function fxPreview(args: unknown): {
   return {
     ratio,
     risky,
+    noBaseline: false,
     sampleText,
     reason: risky
       ? `与当前生效值相差约 ${pct.toFixed(0)}%（${ratio.toFixed(3)} 倍），请确认不是小数点错位`
       : '',
   };
+}
+
+/**
+ * 各币种**当前生效**的原始汇率（A8 残留 / AJ-229）。
+ *
+ * @param list `GET /admin/fx` 的响应：**全部行**（历史 + 未来），服务端按 `quote asc, effective_from desc` 排
+ * @param nowMs 当前时刻（毫秒）；由调用方给，纯函数不读时钟
+ * @returns 币种 → `raw_rate`；该币种没有已生效的行则不出现在结果里
+ *
+ * @why 面板原先逐行 `rates[q] = r`，后者覆盖前者——列表是按生效时间**倒序**的，
+ *      于是留下的是每个币种**最早**的一行。首条录错、后来更正过的环境里，
+ *      量级核对会反过来：录入正确值被标红，再次录错反而不标红。
+ *      @measured(FxPanel.dom.unit.test.ts「基准是当前生效那一行」, 2026-09-30)：
+ *        列表 = [未来 0.0071, 当前 0.0067, 最早 0.67]，修复前录 0.67 **不标可疑**（基准取成了 0.67）。
+ * @why 取 `raw_rate` 而不是 `rate`：表单录入的就是原始汇率；拿含缓冲的 `rate` 当基准，
+ *      倍数会恒偏 `1/(1+buffer)`（缓冲配大时原样重录也会被标红）。
+ * @why 不假设入参有序：逐行比较 `effective_from`，取不晚于 now 的最大者——
+ *      服务端哪天改了排序，这里不该跟着错。
+ */
+export function currentFxRawRates(list: unknown, nowMs: number): Record<string, number> {
+  const best = new Map<string, { at: number; raw: number }>();
+  for (const x of Array.isArray(list) ? list : []) {
+    const o = (typeof x === 'object' && x !== null ? x : {}) as Record<string, unknown>;
+    const quote = typeof o['quote'] === 'string' ? o['quote'] : '';
+    const raw = Number(o['raw_rate']);
+    const at = typeof o['effective_from'] === 'string' ? Date.parse(o['effective_from']) : NaN;
+    if (quote === '' || !Number.isFinite(raw) || raw <= 0) continue;
+    if (!Number.isFinite(at) || at > nowMs) continue; // 认不出时间 / 尚未生效：不算"当前"
+    const prev = best.get(quote);
+    if (prev === undefined || at > prev.at) best.set(quote, { at, raw });
+  }
+  return Object.fromEntries([...best].map(([q, v]) => [q, v.raw]));
+}
+
+/** 表单内容的指纹：确认与勾选都绑定在它上面，内容一变就自动作废（@see `fxSaveStep`）。 */
+export function fxFormKey(form: unknown): string {
+  const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
+  const s = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+  return `${s(f['quote'])}|${s(f['rawRate'])}|${s(f['effectiveFrom'])}`;
+}
+
+/** 点"保存"之后该做什么。 */
+export type FxSaveStep =
+  | { kind: 'invalid'; message: string }
+  | { kind: 'confirm'; requireAck: boolean }
+  | { kind: 'save' };
+
+/**
+ * 汇率保存的闸门（A8 残留 / AJ-229）：形状校验 → 一律二次确认 → 可疑或无基准时再要勾选。
+ *
+ * @param a.form 当前表单
+ * @param a.currentRate 该币种当前生效的原始汇率；取不到为 null
+ * @param a.confirmKey 已经点过"保存"进入确认态的那份表单的指纹（没有为 null）
+ * @param a.ackKey 已经勾过"我已核对"的那份表单的指纹（没有为 null）
+ *
+ * @why **一律两步**（不只在可疑时）：汇率直接乘进美元实扣额，录错在提交时不报任何错；
+ *      0.67–1.5 倍之间的改动（比如涨 45%）同样值得看一眼样例金额再确认。
+ * @why 确认与勾选**绑定表单指纹**而不是两个布尔：原来是"进入确认态 → 勾选 → 保存"三个独立状态，
+ *      确认态下改值或换币种都不复位，勾完再改成另一个量级可以直接提交。
+ *      绑定指纹后，内容一变，旧的确认与勾选自然对不上——没有"忘了复位"这种写法。
+ * @why 无基准（`currentRate === null`）按"要勾选"处理：算不出倍数不等于安全。
+ * @limitation 只是**前端**的闸：服务端 `POST /admin/fx` 仍只查形状与上下界，
+ *              拿着管理员 token 直接调接口可以绕过。服务端按倍数拦截要改契约（加确认标志），
+ *              登记为待办，未在本单元做。
+ */
+export function fxSaveStep(a: {
+  form: unknown;
+  currentRate: number | null;
+  confirmKey: string | null;
+  ackKey: string | null;
+}): FxSaveStep {
+  const check = fxFormErrors(a.form);
+  if (!check.ok) return { kind: 'invalid', message: check.first };
+  const f = (typeof a.form === 'object' && a.form !== null ? a.form : {}) as Record<
+    string,
+    unknown
+  >;
+  const preview = fxPreview({
+    quote: f['quote'],
+    rawRate: f['rawRate'],
+    currentRate: a.currentRate,
+  });
+  const requireAck = preview.risky || preview.noBaseline;
+  const key = fxFormKey(a.form);
+  if (a.confirmKey !== key) return { kind: 'confirm', requireAck };
+  if (requireAck && a.ackKey !== key) return { kind: 'confirm', requireAck };
+  return { kind: 'save' };
+}
+
+/** 保存成功后的提示：填了生效时间就不是"立即生效"（原文案恒说立即）。 */
+export function fxSavedText(form: unknown): string {
+  const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
+  const from = typeof f['effectiveFrom'] === 'string' ? f['effectiveFrom'].trim() : '';
+  return from === ''
+    ? '已保存（新的展示价立即按新汇率计算）'
+    : '已保存（到所填的生效时间后，展示价才按新汇率计算）';
 }
 
 /**
@@ -200,6 +307,33 @@ export interface RateViewRow {
   active: boolean;
   /** 同一上限出现多次（DB 有 UNIQUE(carrier, max_weight_g)，重复会整表替换失败）。 */
   duplicate: boolean;
+}
+
+/**
+ * 表单里哪些行是"档位重复"——**按表单行的原顺序**返回（AJ-232）。
+ *
+ * @param rows 编辑中的表单行（`carrier` 与 `maxWeightG` 文本）
+ * @returns 与入参**等长、同序**的布尔数组
+ *
+ * @why 面板原先用 `rateRows(...)[i].duplicate` 标记第 i 行，而 `rateRows` 会按重量**排序**：
+ *      表格没按重量排时，排序后的第 i 项不是表格的第 i 行，"档位重复"会标到别的行上。
+ *      运营照着标记去改，改的是没问题的那一行。
+ * @why 重量按**数值**比（`'500'` 与 `'0500'`、`' 500 '` 是同一档）：DB 的唯一约束比的是整数。
+ *      认不出数值的行（空 / 非数字）不参与判重——它们由 `rateErrors` 另行报"必填 / 非法"。
+ */
+export function rateDuplicates(rows: unknown): boolean[] {
+  if (!Array.isArray(rows)) return [];
+  const keyOf = (x: unknown): string | null => {
+    const o = (typeof x === 'object' && x !== null ? x : {}) as Record<string, unknown>;
+    const w = typeof o['maxWeightG'] === 'string' ? o['maxWeightG'].trim() : '';
+    if (!/^\d+$/.test(w)) return null;
+    const carrier = typeof o['carrier'] === 'string' ? o['carrier'].trim() : '';
+    return `${carrier}|${Number(w)}`;
+  };
+  const keys = rows.map(keyOf);
+  const count = new Map<string, number>();
+  for (const k of keys) if (k !== null) count.set(k, (count.get(k) ?? 0) + 1);
+  return keys.map((k) => k !== null && (count.get(k) ?? 0) > 1);
 }
 
 /**

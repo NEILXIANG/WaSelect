@@ -21,6 +21,7 @@ import {
   emptyShipForm,
   orderRows,
   refundErrors,
+  refundFailureNotice,
   refundGate,
   shipErrors,
   shipGate,
@@ -292,5 +293,27 @@ describe('ORDER_STATUS_LABELS 与契约 OrderStatus 的双向比对', () => {
   it('筛选选项覆盖全部状态 + 全部（少一个就筛不出来）', () => {
     expect(STATUS_FILTER_OPTIONS).toHaveLength(ORDER_STATUS.length + 1);
     expect(STATUS_FILTER_OPTIONS[0]?.value).toBe('all');
+  });
+});
+
+describe('refundFailureNotice（B41 残留 / AJ-230）', () => {
+  it('🔴 5xx 与网络层失败（负数码）→ 给"结果未知、不要去机构后台手工退"的提醒', () => {
+    for (const code of [50000, 50300, -1]) {
+      const text = refundFailureNotice(code);
+      expect(text, String(code)).toContain('结果未知');
+      expect(text, String(code)).toContain('不要去机构后台手工退款');
+      expect(text, String(code)).toContain('不会重复退款');
+    }
+  });
+
+  it('4xx 业务性拒绝 → 不提醒（订单没被改动，提醒反而误导）', () => {
+    for (const code of [40001, 40101, 40902, 40907, 42901]) {
+      expect(refundFailureNotice(code), String(code)).toBe('');
+    }
+  });
+
+  it('脏输入（不是数字）→ 不提醒、不抛', () => {
+    expect(refundFailureNotice(undefined)).toBe('');
+    expect(refundFailureNotice('50000')).toBe('');
   });
 });

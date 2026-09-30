@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { listProducts, setProductStatus, type AdminApi, type AdminProductLike } from './api.js';
-import { productRows, type ProductRow } from './view.js';
+import { productRows, withStatus, type ProductRow } from './view.js';
 
 /** 每页条数（契约默认 50；管理端用 20 让一屏放得下）。 */
 const PAGE_SIZE = 20;
@@ -76,16 +76,13 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
     async (row: ProductRow) => {
       const next = row.online ? 'offline' : 'active';
       setBusyId(row.id);
-      setRows((prev) =>
-        prev.map((r) => (r.id === row.id ? { ...r, online: !r.online, status: next } : r)),
-      );
+      // 三个状态字段一起改（`withStatus`）：只翻 online / status 的话状态列文案会留在旧值（AJ-231）
+      setRows((prev) => prev.map((r) => (r.id === row.id ? withStatus(r, next) : r)));
       try {
         await setProductStatus(api, row.id, next);
       } catch (e) {
         // ⚠️ 回滚：不回滚的表现是"UI 说已下架、服务端还在售"，而列表下一次刷新才暴露
-        setRows((prev) =>
-          prev.map((r) => (r.id === row.id ? { ...r, online: row.online, status: row.status } : r)),
-        );
+        setRows((prev) => prev.map((r) => (r.id === row.id ? withStatus(r, row.status) : r)));
         setError(e instanceof ApiError ? e.message : String(e));
       } finally {
         setBusyId('');

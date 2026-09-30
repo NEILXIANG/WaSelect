@@ -32,6 +32,7 @@ import {
   emptyShipForm,
   paymentSummary,
   refundErrors,
+  refundFailureNotice,
   refundGate,
   shipErrors,
   shipGate,
@@ -128,7 +129,16 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
       await load();
       onChanged();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      // ⚠️ 出错 ≠ 没退（B41 残留 / AJ-230）：服务端先落 `refunding` 再调机构，
+      //    机构超时 / 网络断开时订单很可能已经变了。所以这里**先重新取详情**（`load` 开头会清 error，
+      //    顺序不能反），再把错误与"结果未知"的提醒摆出来；确认态退出，不留一个还能再点的"确认退款"。
+      const message = e instanceof ApiError ? e.message : String(e);
+      const code = e instanceof ApiError ? e.code : 0;
+      setConfirming(false);
+      await load();
+      onChanged();
+      setError(message);
+      setNotice(refundFailureNotice(code));
     } finally {
       setBusy('');
     }

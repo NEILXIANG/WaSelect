@@ -88,11 +88,29 @@ export function productRows(items: unknown): ProductRow[] {
             : ((category as string) ?? ''),
         priceText: Number.isInteger(p['price_jpy']) ? `${p['price_jpy']} 円` : '',
         stockText: Number.isInteger(p['stock']) ? String(p['stock']) : '—',
-        status,
-        statusText: status === 'active' ? '在售' : '已下架',
-        online: status === 'active',
+        ...statusFields(status),
       };
     });
+}
+
+/**
+ * 由 `status` 推出的三个展示字段——**只在这一处算**（AJ-231）。
+ * @why 列表行里 `status` / `statusText` / `online` 是同一件事的三种写法。
+ *      乐观更新曾经只手改其中两个（`online`、`status`），`statusText` 留在旧值：
+ *      下架之后状态列仍写"在售"、按钮却变成"上架"，运营以为没生效再点一次，就把商品重新上架了。
+ *      三个字段一起出，就不存在"改了两个忘了第三个"。
+ */
+function statusFields(status: ProductStatus): Pick<ProductRow, 'status' | 'statusText' | 'online'> {
+  return {
+    status,
+    statusText: status === 'active' ? '在售' : '已下架',
+    online: status === 'active',
+  };
+}
+
+/** 把一行改成指定状态（乐观更新与失败回滚都用它；不改其它字段）。 */
+export function withStatus(row: ProductRow, status: ProductStatus): ProductRow {
+  return { ...row, ...statusFields(status) };
 }
 
 /** 商品表单模型（**全字符串**：受控输入的值恒为字符串，数值在提交时转）。 */

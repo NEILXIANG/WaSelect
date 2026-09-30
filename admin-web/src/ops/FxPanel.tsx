@@ -7,16 +7,28 @@
  * @limitation 一：`effective_from` 用 `datetime-local` 输入，按 **JST** 解释后
  *              转成带 `+09:00` 的 ISO——与管理端所有时间显示口径一致
  *              （@see ../format.ts @limitation 二）。留空 = 立即生效（契约可选项）。
- * @limitation 二：列表显示的是"当前生效"的汇率（服务端按 `effective_from <= now`
- *              取最新一条），**没有历史列表接口**；所以"改错了"只能再提交一条新的覆盖，
- *              页面不提供"删除"。
+ * @limitation 二：列表显示服务端返回的**全部行**（历史 + 尚未生效的，按生效时间倒序）；
+ *              "当前生效"是其中不晚于此刻的最新一行（@see ./view.ts `currentFxRawRates`）。
+ *              此处曾写"服务端只返回当前生效一条"——与实现不符，且正是量级核对取错基准的成因（AJ-229）。
+ *              "改错了"只能再提交一条新的覆盖，页面不提供"删除"。
+ * @limitation 三：保存前的核对是**前端**的闸（@see ./view.ts `fxSaveStep` @limitation）。
  *
  * @see ./view.ts（校验与请求体）；./api.ts
  */
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { listFx, setFx, type AdminApi } from './api.js';
-import { FX_QUOTES, emptyFxForm, fxFormErrors, fxPreview, fxRows, toFxBody } from './view.js';
+import {
+  FX_QUOTES,
+  currentFxRawRates,
+  emptyFxForm,
+  fxFormKey,
+  fxPreview,
+  fxRows,
+  fxSaveStep,
+  fxSavedText,
+  toFxBody,
+} from './view.js';
 
 export interface FxPanelProps {
   api: AdminApi;
@@ -25,7 +37,7 @@ export interface FxPanelProps {
 export function FxPanel({ api }: FxPanelProps) {
   const [rows, setRows] = useState<ReturnType<typeof fxRows>>([]);
   /**
-   * 各币种**当前生效**的 rate（数值），只用于保存前的倍数核对。
+   * 各币种**当前生效**的原始汇率（数值），只用于保存前的倍数核对（取法见 `currentFxRawRates`）。
    * @why `fxRows` 只输出展示文本（`rateText`），而"新值是旧值的几倍"必须用数值算；
    *      把数值塞进 `fxRows` 的返回会改变它的输出形状（它的用例是逐字段断言的），
    *      所以在面板里另存一份原始值——它不是展示数据，是核对用的输入。
@@ -35,10 +47,13 @@ export function FxPanel({ api }: FxPanelProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
-  /** 已进入二次确认态（只在"量级可疑"时为真）。 */
-  const [confirming, setConfirming] = useState(false);
-  /** 确认态下的勾选（"我核对过了"）。 */
-  const [ack, setAck] = useState(false);
+  /**
+   * 确认与勾选各自绑定的**表单指纹**（AJ-229）：不是布尔。
+   * 表单一变指纹就变，下面派生出的 `confirming` / `ack` 自动变回 false——
+   * 不存在"改了值却忘了复位确认"这种状态。
+   */
+  const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  const [ackKey, setAckKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,14 +61,7 @@ export function FxPanel({ api }: FxPanelProps) {
     try {
       const list = await listFx(api);
       setRows(fxRows(list));
-      const rates: Record<string, number> = {};
-      for (const x of Array.isArray(list) ? list : []) {
-        const o = (typeof x === 'object' && x !== null ? x : {}) as Record<string, unknown>;
-        const q = typeof o['quote'] === 'string' ? o['quote'] : '';
-        const r = Number(o['rate']);
-        if (q !== '' && Number.isFinite(r) && r > 0) rates[q] = r;
-      }
-      setCurrentRates(rates);
+      setCurrentRates(currentFxRawRates(list, Date.now()));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -65,43 +73,45 @@ export function FxPanel({ api }: FxPanelProps) {
     void load();
   }, [load]);
 
-  const preview = fxPreview({
-    quote: form.quote,
-    rawRate: form.rawRate,
-    currentRate: currentRates[form.quote] ?? null,
-  });
+  const currentRate = currentRates[form.quote] ?? null;
+  const preview = fxPreview({ quote: form.quote, rawRate: form.rawRate, currentRate });
+  const formKey = fxFormKey(form);
+  const confirming = confirmKey === formKey;
+  const ack = ackKey === formKey;
+  const step = fxSaveStep({ form, currentRate, confirmKey, ackKey });
 
   const save = async (): Promise<void> => {
     setError('');
     setOk('');
     try {
       await setFx(api, toFxBody(form));
+      setOk(fxSavedText(form));
       setForm(emptyFxForm());
-      setOk('已保存（新的展示价立即按新汇率计算）');
       await load();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
-      setConfirming(false);
-      setAck(false);
+      setConfirmKey(null);
+      setAckKey(null);
     }
   };
 
   /**
-   * 点"保存汇率"：先形状校验，再看**量级**——量级可疑时不直接提交，先要一次确认。
+   * "保存汇率"与"确认保存"共用这一个入口：每次都按**此刻的表单**重新过一遍 `fxSaveStep`。
    * @why 展示汇率直接乘进真实扣款额（`pay-intent.ts` 的 `resolveCharge`）：
    *      录成 0.00067 → 每笔美元订单少收 90%；录成 150 → 多收两万倍、引来拒付。
-   *      两种情况在提交时**都不报错**，所以只能在这个按钮上拦一道（全量审查 A8）。
+   *      两种情况在提交时**都不报错**，所以只能在这个按钮上拦（全量审查 A8）。
+   * @why 确认按钮也走它（AJ-229）：原先确认按钮直接调 `save()`，不再校验——
+   *      勾选之后改值就绕过了全部核对。
    */
-  const requestSave = (): void => {
-    const check = fxFormErrors(form);
-    if (!check.ok) {
-      setError(check.first);
+  const attempt = (): void => {
+    if (step.kind === 'invalid') {
+      setError(step.message);
       return;
     }
-    if (preview.risky) {
-      setConfirming(true);
-      setAck(false);
+    if (step.kind === 'confirm') {
+      setError('');
+      setConfirmKey(formKey);
       return;
     }
     void save();
@@ -126,7 +136,7 @@ export function FxPanel({ api }: FxPanelProps) {
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.quote}>
+            <tr key={`${r.quote}|${r.effectiveText}`}>
               <td>{r.quote}</td>
               <td>{r.rateText}</td>
               <td>{r.rawRateText}</td>
@@ -173,33 +183,44 @@ export function FxPanel({ api }: FxPanelProps) {
         </div>
         <p className="muted">生效时间留空 = 立即生效；填写时按 JST 解释</p>
         {preview.sampleText !== '' && (
-          <p className={preview.risky ? 'error' : 'muted'}>
+          <p className={preview.risky || preview.noBaseline ? 'error' : 'muted'}>
             核对：{preview.sampleText}
             {preview.reason !== '' ? `（${preview.reason}）` : ''}
           </p>
         )}
         {confirming ? (
           <div className="row2">
-            <label className="label">
-              <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-              我已核对上面的金额，确认不是小数点错位
-            </label>
-            <button type="button" className="btn" disabled={!ack} onClick={() => void save()}>
+            {step.kind === 'confirm' && step.requireAck && (
+              <label className="label">
+                <input
+                  type="checkbox"
+                  checked={ack}
+                  onChange={(e) => setAckKey(e.target.checked ? formKey : null)}
+                />
+                我已核对上面的金额，确认不是小数点错位
+              </label>
+            )}
+            <button
+              type="button"
+              className="btn"
+              disabled={step.kind === 'confirm' && step.requireAck && !ack}
+              onClick={attempt}
+            >
               确认保存（{form.quote}）
             </button>
             <button
               type="button"
               className="btn"
               onClick={() => {
-                setConfirming(false);
-                setAck(false);
+                setConfirmKey(null);
+                setAckKey(null);
               }}
             >
               取消
             </button>
           </div>
         ) : (
-          <button type="button" className="btn" onClick={requestSave}>
+          <button type="button" className="btn" onClick={attempt}>
             保存汇率
           </button>
         )}

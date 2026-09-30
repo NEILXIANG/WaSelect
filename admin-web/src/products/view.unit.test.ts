@@ -19,6 +19,7 @@ import {
   productFormErrors,
   productFormModel,
   productRows,
+  withStatus,
   toProductInput,
 } from './view.js';
 
@@ -239,5 +240,30 @@ describe('PRODUCT_CATEGORY 与契约的双向比对', () => {
     for (const c of PRODUCT_CATEGORY) {
       expect(CATEGORY_LABELS[c], `${c} 没有展示名`).not.toBe('');
     }
+  });
+});
+
+describe('withStatus：状态的三个展示字段一起改（AJ-231）', () => {
+  const [row] = productRows([
+    { id: 'p-1', title: 'x', category: 'beauty', price_jpy: 100, stock: 1, status: 'active' },
+  ]);
+  if (row === undefined) throw new Error('前置不成立：productRows 应产出一行');
+
+  it('🔴 改成 offline：status / statusText / online 三个都变（漏一个就是"文案说在售、按钮说上架"）', () => {
+    expect(withStatus(row, 'offline')).toMatchObject({
+      status: 'offline',
+      statusText: '已下架',
+      online: false,
+    });
+  });
+
+  it('改回 active 与 productRows 的产出逐字段一致（回滚用的就是它）', () => {
+    expect(withStatus(withStatus(row, 'offline'), 'active')).toEqual(row);
+  });
+
+  it('不改其它字段、不改入参', () => {
+    const next = withStatus(row, 'offline');
+    expect(next.title).toBe(row.title);
+    expect(row.statusText).toBe('在售');
   });
 });

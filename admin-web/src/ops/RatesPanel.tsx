@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { listShippingRates, replaceShippingRates, type AdminApi } from './api.js';
-import { emptyRateRow, rateErrors, rateRows, toRateBody, type RateRow } from './view.js';
+import { emptyRateRow, rateDuplicates, rateErrors, toRateBody, type RateRow } from './view.js';
 
 export interface RatesPanelProps {
   api: AdminApi;
@@ -29,6 +29,14 @@ export interface RatesPanelProps {
 export function RatesPanel({ api }: RatesPanelProps) {
   const [rows, setRows] = useState<RateRow[]>([]);
   const [loading, setLoading] = useState(false);
+  /**
+   * 列表**至少成功加载过一次**（AJ-232）。在那之前表格里的"空"不代表"没有档位"，
+   * 只代表"没取到"——此时放开编辑，保存就是拿一张空表去整表替换线上的真实运费表。
+   * @why 只禁用"新增一档"这一个入口就够：没加载成功时表格是空的，空表过不了 `rateErrors`，
+   *      "保存"本来就是禁用的；能把空表变成可保存的唯一动作是新增行。
+   *      （给保存按钮再加一道 `!loaded` 注回后没有任何用例变红——测不出来的防护不留。）
+   */
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
   /** 二次确认态（整表替换，@why 见文件头）。 */
@@ -47,6 +55,7 @@ export function RatesPanel({ api }: RatesPanelProps) {
           active: r.active !== false,
         })),
       );
+      setLoaded(true);
     } catch (e) {
       // ⚠️ 失败**不清空表格**：把已加载的档位清掉会让"改了一半的表"丢失
       setError(e instanceof ApiError ? e.message : String(e));
@@ -60,14 +69,8 @@ export function RatesPanel({ api }: RatesPanelProps) {
   }, [load]);
 
   const check = rateErrors(rows);
-  const view = rateRows(
-    rows.map((r) => ({
-      carrier: r.carrier,
-      max_weight_g: Number(r.maxWeightG),
-      price_jpy: Number(r.priceJpy),
-      active: r.active,
-    })),
-  );
+  // 按**表格行的原顺序**给出"是否重复"（不能拿排过序的视图按下标对，AJ-232）
+  const duplicates = rateDuplicates(rows);
 
   const save = async (): Promise<void> => {
     if (!check.ok) {
@@ -164,14 +167,24 @@ export function RatesPanel({ api }: RatesPanelProps) {
                 >
                   删除
                 </button>
-                {view[i]?.duplicate && <span className="error">档位重复</span>}
+                {duplicates[i] === true && <span className="error">档位重复</span>}
               </td>
             </tr>
           ))}
-          {rows.length === 0 && !loading && (
+          {rows.length === 0 && !loading && loaded && (
             <tr>
               <td className="muted" colSpan={5}>
                 还没有运费档位（所有订单都无法报价）
+              </td>
+            </tr>
+          )}
+          {!loaded && !loading && (
+            <tr>
+              <td className="error" colSpan={5}>
+                运费档位没有加载出来，暂时不能编辑（现在保存会用空表替换线上的整张运费表）。
+                <button type="button" className="link" onClick={() => void load()}>
+                  重新加载
+                </button>
               </td>
             </tr>
           )}
@@ -182,6 +195,7 @@ export function RatesPanel({ api }: RatesPanelProps) {
         <button
           type="button"
           className="btn"
+          disabled={!loaded}
           onClick={() => setRows((prev) => [...prev, emptyRateRow(prev[0]?.carrier ?? '')])}
         >
           新增一档

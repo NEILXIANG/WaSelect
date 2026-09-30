@@ -10,11 +10,16 @@ import { describe, expect, it } from 'vitest';
 import { toIsoJst } from '../format.js';
 import {
   FX_QUOTES,
+  currentFxRawRates,
   emptyFxForm,
   emptyRateRow,
   fxFormErrors,
+  fxFormKey,
   fxPreview,
   fxRows,
+  fxSaveStep,
+  fxSavedText,
+  rateDuplicates,
   rateErrors,
   rateRows,
   toFxBody,
@@ -331,5 +336,195 @@ describe('FX_QUOTES 与契约的双向比对', () => {
   it('两边集合相等', () => {
     const contract = (line.slice(line.indexOf('enum:')).match(/[A-Z]{3}/g) ?? []).sort();
     expect([...FX_QUOTES].sort()).toEqual(contract);
+  });
+});
+
+describe('currentFxRawRates：保存前核对用的基准（A8 残留 / AJ-229）', () => {
+  const NOW = Date.parse('2026-09-30T00:00:00.000Z');
+  const row = (quote: string, raw: number, at: string) => ({
+    quote,
+    raw_rate: raw,
+    rate: raw * 1.03,
+    buffer: 0.03,
+    effective_from: at,
+  });
+
+  it('🔴 取"不晚于此刻的最新一行"——不是最早的，也不是尚未生效的', () => {
+    const list = [
+      row('USD', 0.0071, '2099-01-01T00:00:00.000Z'), // 未来
+      row('USD', 0.0067, '2026-09-20T00:00:00.000Z'), // 当前
+      row('USD', 0.67, '2026-09-01T00:00:00.000Z'), // 最早（录错后被更正）
+    ];
+    expect(currentFxRawRates(list, NOW)).toEqual({ USD: 0.0067 });
+  });
+
+  it('不依赖入参顺序（服务端改了排序也不该跟着错）', () => {
+    const list = [
+      row('USD', 0.67, '2026-09-01T00:00:00.000Z'),
+      row('USD', 0.0067, '2026-09-20T00:00:00.000Z'),
+      row('USD', 0.0071, '2099-01-01T00:00:00.000Z'),
+    ];
+    expect(currentFxRawRates(list, NOW)).toEqual({ USD: 0.0067 });
+  });
+
+  it('取的是 raw_rate 而不是含缓冲的 rate（否则倍数恒偏 1/(1+buffer)）', () => {
+    expect(currentFxRawRates([row('CNY', 0.048, '2026-09-01T00:00:00.000Z')], NOW)).toEqual({
+      CNY: 0.048,
+    });
+  });
+
+  it('恰好此刻生效的算当前；只有未来行的币种不出现（= 没有基准）', () => {
+    expect(currentFxRawRates([row('USD', 0.0067, '2026-09-30T00:00:00.000Z')], NOW)).toEqual({
+      USD: 0.0067,
+    });
+    expect(currentFxRawRates([row('USD', 0.0071, '2026-09-30T00:00:00.001Z')], NOW)).toEqual({});
+  });
+
+  it('脏数据逐行跳过：非数组 / 缺字段 / 非正数 / 时间认不出', () => {
+    expect(currentFxRawRates(null, NOW)).toEqual({});
+    expect(
+      currentFxRawRates(
+        [
+          null,
+          { quote: 'USD' },
+          row('USD', 0, '2026-09-01T00:00:00.000Z'),
+          row('USD', 0.0067, 'not-a-date'),
+          row('', 0.0067, '2026-09-01T00:00:00.000Z'),
+        ],
+        NOW,
+      ),
+    ).toEqual({});
+  });
+});
+
+describe('fxPreview 的阈值边界与无基准（AJ-229）', () => {
+  it('倍数恰为 1.5 / 0.67 标可疑；1.49 / 0.68 不标（把阈值改成别的数这条必须红）', () => {
+    const at = (raw: string) => fxPreview({ quote: 'USD', rawRate: raw, currentRate: 1 });
+    expect(at('1.5').risky).toBe(true);
+    expect(at('1.49').risky).toBe(false);
+    expect(at('0.67').risky).toBe(true);
+    expect(at('0.68').risky).toBe(false);
+  });
+
+  it('🔴 没有基准：noBaseline 为真并给出理由（不是"不可疑"）', () => {
+    const p = fxPreview({ quote: 'USD', rawRate: '150', currentRate: null });
+    expect(p.noBaseline).toBe(true);
+    expect(p.risky).toBe(false);
+    expect(p.reason).toContain('没有可比对');
+    expect(p.sampleText).toContain('USD 1500000.00');
+  });
+
+  it('有基准时 noBaseline 为假；非法输入时也为假（那是 fxFormErrors 的事）', () => {
+    expect(fxPreview({ quote: 'USD', rawRate: '0.0068', currentRate: 0.0067 }).noBaseline).toBe(
+      false,
+    );
+    expect(fxPreview({ quote: 'USD', rawRate: 'abc', currentRate: null }).noBaseline).toBe(false);
+  });
+});
+
+describe('fxSaveStep：保存闸门（AJ-229）', () => {
+  const form = { quote: 'USD', rawRate: '0.0068', effectiveFrom: '' };
+  const key = fxFormKey(form);
+
+  it('形状不合法 → invalid，带 fxFormErrors 的文案', () => {
+    const s = fxSaveStep({
+      form: { ...form, rawRate: '1001' },
+      currentRate: 0.0067,
+      confirmKey: null,
+      ackKey: null,
+    });
+    expect(s.kind).toBe('invalid');
+  });
+
+  it('🔴 第一次点保存：一律进确认（哪怕倍数很正常）；不可疑则不要求勾选', () => {
+    expect(fxSaveStep({ form, currentRate: 0.0067, confirmKey: null, ackKey: null })).toEqual({
+      kind: 'confirm',
+      requireAck: false,
+    });
+  });
+
+  it('不可疑 + 已确认过**这份**表单 → save', () => {
+    expect(fxSaveStep({ form, currentRate: 0.0067, confirmKey: key, ackKey: null })).toEqual({
+      kind: 'save',
+    });
+  });
+
+  it('🔴 可疑：确认了但没勾选 → 仍是 confirm；勾的是别的表单也不算', () => {
+    const risky = { ...form, rawRate: '0.67' };
+    const k = fxFormKey(risky);
+    const base = { form: risky, currentRate: 0.0067 };
+    expect(fxSaveStep({ ...base, confirmKey: k, ackKey: null })).toEqual({
+      kind: 'confirm',
+      requireAck: true,
+    });
+    expect(fxSaveStep({ ...base, confirmKey: k, ackKey: key })).toEqual({
+      kind: 'confirm',
+      requireAck: true,
+    });
+    expect(fxSaveStep({ ...base, confirmKey: k, ackKey: k })).toEqual({ kind: 'save' });
+  });
+
+  it('🔴 确认的是旧表单（之后改了值）→ 回到 confirm，不会直接 save', () => {
+    const changed = { ...form, rawRate: '67' };
+    expect(
+      fxSaveStep({ form: changed, currentRate: 0.0067, confirmKey: key, ackKey: key }).kind,
+    ).toBe('confirm');
+  });
+
+  it('🔴 没有基准 → 要求勾选（算不出倍数不等于安全）', () => {
+    const k = fxFormKey(form);
+    expect(fxSaveStep({ form, currentRate: null, confirmKey: k, ackKey: null })).toEqual({
+      kind: 'confirm',
+      requireAck: true,
+    });
+  });
+
+  it('fxFormKey：三项任一变化都变；首尾空白不算变化', () => {
+    expect(fxFormKey({ ...form, rawRate: ' 0.0068 ' })).toBe(key);
+    expect(fxFormKey({ ...form, quote: 'CNY' })).not.toBe(key);
+    expect(fxFormKey({ ...form, rawRate: '0.0069' })).not.toBe(key);
+    expect(fxFormKey({ ...form, effectiveFrom: '2026-10-01T09:00' })).not.toBe(key);
+    expect(fxFormKey(null)).toBe('||');
+  });
+
+  it('fxSavedText：填了生效时间就不说"立即"', () => {
+    expect(fxSavedText(form)).toContain('立即');
+    expect(fxSavedText({ ...form, effectiveFrom: '2026-10-01T09:00' })).not.toContain('立即');
+    expect(fxSavedText(null)).toContain('立即');
+  });
+});
+
+describe('rateDuplicates：按表单行原顺序标重复（AJ-232）', () => {
+  const r = (carrier: string, maxWeightG: string) => ({
+    carrier,
+    maxWeightG,
+    priceJpy: '1',
+    active: true,
+  });
+
+  it('🔴 返回与入参等长、同序——不是按重量排序后的顺序', () => {
+    expect(rateDuplicates([r('EMS', '2000'), r('EMS', '500'), r('EMS', '500')])).toEqual([
+      false,
+      true,
+      true,
+    ]);
+  });
+
+  it('按数值比重量：`500`、` 500 `、`0500` 是同一档；不同承运商不算重复', () => {
+    expect(rateDuplicates([r('EMS', '500'), r('EMS', ' 500 '), r('EMS', '0500')])).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(rateDuplicates([r('EMS', '500'), r('DHL', '500')])).toEqual([false, false]);
+  });
+
+  it('认不出数值的行（空 / 非数字）不参与判重；非数组 → []', () => {
+    expect(rateDuplicates([r('EMS', ''), r('EMS', ''), r('EMS', 'abc')])).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    expect(rateDuplicates(null)).toEqual([]);
   });
 });
