@@ -36,3 +36,33 @@ export function cartRows(items) {
     priceText: Number.isInteger(i.priceJpy) ? formatJpy(i.priceJpy) : '',
   }));
 }
+
+/**
+ * 「去结算」按钮的状态与它下面那句话（B36 / AJ-219）。
+ *
+ * @param {{quoting?: unknown, hasTotal?: unknown, hasError?: unknown}|null|undefined} s
+ *   `quoting`  报价在途中（改了数量之后、新合计还没回来）
+ *   `hasTotal` 当前 quote 有权威合计（`quote.totalJpy !== null`）
+ *   `hasError` 上一次报价失败了
+ * @returns {{disabled: boolean, hint: string}} hint 空串 = 不渲染那行提示
+ *
+ * @why 以前 `checkoutHint` 是**一个写死的常量**"运费与合计还在计算中"，
+ *      于是两种完全不同的状态被同一句话盖住：
+ *      ① **改了数量、新合计还没回来**——此时页面上显示的合计是**上一次**的，
+ *         按钮却还是可点的（旧 quote 还在），点了就带着过期的合计进结算页；
+ *      ② **报价失败了**——提示仍说"还在计算中"，而它永远算不出来，
+ *         用户只会一直等（@limitation 二说"下一次改动会自然重试"，
+ *         但用户不知道要改一下才会重试）。
+ *      这两条都是"按钮看起来能用、实际带着错的数据走"，所以按状态分别给话。
+ * @why `quoting` 优先于 `hasTotal`：在途时**旧合计已经过期**，
+ *      它对应的是改数量之前的那一版——放行等于把过期的 `expected_total_jpy` 带进结算页
+ *      （40905 防线会被自己喂一个旧值，而结算页上看不出来）。
+ * @limitation 只产出"能不能点 + 说什么"，**不做跳转、不发请求**（约束十一）。
+ */
+export function checkoutGate(s) {
+  const a = s !== null && typeof s === 'object' ? s : {};
+  if (a.quoting === true) return { disabled: true, hint: '数量已改，正在重新计算…' };
+  if (a.hasError === true) return { disabled: true, hint: '合计未能获取，请稍后重试' };
+  if (a.hasTotal === true) return { disabled: false, hint: '' };
+  return { disabled: true, hint: '运费与合计还在计算中' };
+}

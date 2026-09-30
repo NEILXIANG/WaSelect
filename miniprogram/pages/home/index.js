@@ -28,6 +28,7 @@
  *      ../../utils/trace.js（trace_id 串联）；contracts/api-contract.yaml（ProductCard 形状）
  */
 import { errorMessage } from '../../utils/error-text.js';
+import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import {
   cartLabel,
@@ -91,6 +92,12 @@ Page({
   /** 本次浏览的 trace_id：进入 / 切分类 / 搜索各开一条新链，触底加载**沿用**同一条
    *  （同一轮浏览的分页是同一次用户操作，拆开会让服务端日志断成 N 截）。 */
   traceId: '',
+  /**
+   * 请求序号（B36 / AJ-219）：每次 reload / loadMore 领一个新号，
+   * 回来的响应号落后于当前号就整份丢弃（含错误与 loading 状态）。
+   * @see ../../utils/request-seq.js
+   */
+  seq: 0,
 
   onLoad() {
     // tab 先渲染（本地常量，不需要等网络）——首屏至少有东西可点，而不是一整页白
@@ -164,14 +171,19 @@ Page({
   async reload(category) {
     const traceId = newTraceId();
     this.traceId = traceId;
+    // B36 / AJ-219：领号。切分类/搜索连着点时，只有**最后一次**的结果能落到页面上
+    const seq = (this.seq = nextSeq(this.seq));
     this.setData({ loading: true, error: '', tabs: categoryTabs(category) });
     try {
       const res = await this.fetch(
         listQuery({ page: 1, category, keyword: this.data.keyword }),
         traceId,
       );
+      // 已经有更新的请求发出去了 → 这次的结果整份丢弃（含错误）
+      if (isStale(seq, this.seq)) return;
       this.apply(res, { reset: true, page: 1 });
     } catch (e) {
+      if (isStale(seq, this.seq)) return;
       // ⚠️ 失败时**清空列表**并明示错误：留着旧列表，用户会把它当成
       //    "新分类下的商品"——切到"食品"却还看到厨刀，比报错更伤信任。
       this.page = 0;
@@ -179,7 +191,8 @@ Page({
       this.total = 0;
       this.setData({ cards: [], empty: true, hasMore: false, error: errorMessage(e) });
     } finally {
-      this.setData({ loading: false });
+      // ⚠️ 过期请求不能把 loading 清掉：清了会显示"没在加载"，而新请求其实还在途中
+      if (!isStale(seq, this.seq)) this.setData({ loading: false });
     }
   },
 
@@ -193,19 +206,24 @@ Page({
     const next = nextPage({ page: this.page, loaded: this.loaded, total: this.total });
     if (next === null) return;
     this.loadingMore = true;
+    // B36 / AJ-219：领号。**切了分类之后**还在途中的"下一页"请求必须被丢弃，
+    // 否则它会把上一个分类的第 2 页追加到新分类的列表里（且不报错）。
+    const seq = (this.seq = nextSeq(this.seq));
     this.setData({ loadingMore: true });
     try {
       const res = await this.fetch(
         listQuery({ page: next, category: this.category, keyword: this.data.keyword }),
         this.traceId,
       );
+      if (isStale(seq, this.seq)) return;
       this.apply(res, { reset: false, page: next });
     } catch (e) {
+      if (isStale(seq, this.seq)) return;
       // 追加失败**不清列表**（已加载的商品还在），只提示；用户再触底会自然重试
       this.setData({ error: errorMessage(e) });
     } finally {
       this.loadingMore = false;
-      this.setData({ loadingMore: false });
+      if (!isStale(seq, this.seq)) this.setData({ loadingMore: false });
     }
   },
 

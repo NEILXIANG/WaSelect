@@ -12,18 +12,23 @@
  *      而报价端点带 429 限流（契约已声明）——客户端不该把自己限死。
  *      防抖只影响"打不打电话"，本地数量与金额显示是**立刻**更新的（不等待网络）。
  *
- * @limitation 一：**去结算只在报价出来后才可用**（`quote.totalJpy` 非 null）——
- *              结算页要拿这个数做 `expected_total_jpy` 防线（40905），
+ * @limitation 一：**去结算只在报价出来后才可用**（`gate.disabled`，由 vm 的
+ *              `checkoutGate` 产出）——结算页要拿这个数做 `expected_total_jpy` 防线（40905），
  *              没有合计就跳过去 = 带着一个"防线已降级"的状态下单，而页面上看不出来。
+ *              ⚠️ B36 / AJ-219 起，"报价在途中"也算禁用：那时页面上的合计是**改数量之前**
+ *              的那一版，放行等于把过期的 expected_total_jpy 喂给结算页。
  * @limitation 二：报价失败**不清列表**（本地条目还在，用户能继续改数量），
  *              只显示错误文案；下一次改动会自然重试。
+ *              ⚠️ 但提示语必须说"未能获取"（B36 / AJ-219）——以前一律说"还在计算中"，
+ *              用户会一直等一个永远算不出来的合计。
  *
  * @see ./index.vm.js（行视图真源）；../../utils/quote-view.js（报价区视图，共享层）；
  *      ../../utils/cart-store.js（本地状态真源）
  */
-import { cartRows } from './index.vm.js';
+import { cartRows, checkoutGate } from './index.vm.js';
 import { quoteView } from '../../utils/quote-view.js';
 import { errorMessage } from '../../utils/error-text.js';
+import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 
@@ -38,8 +43,12 @@ const QUOTE_DEBOUNCE_MS = 400;
 /** 结算页路径（跳转路径只在这一处出现）。 */
 const CHECKOUT_PAGE = '/pages/checkout/index';
 
-/** 去结算按钮的禁用原因（@see @limitation 一）。 */
-const CHECKOUT_HINT = '运费与合计还在计算中';
+/**
+ * 报价里有没有权威合计。
+ * @why `!= null` 同时排除 null 与 undefined：契约的 `total_jpy` 缺失与显式 null
+ *      在"能不能拿去做 expected_total_jpy"上是同一件事，不该分两种判据。
+ */
+const hasTotal = (quote) => quote?.totalJpy != null;
 
 Page({
   data: {
@@ -53,13 +62,16 @@ Page({
     quoting: false,
     /** 报价错误文案（空串 = 无错误）。 */
     quoteError: '',
-    checkoutHint: CHECKOUT_HINT,
+    /** 「去结算」的状态（vm `checkoutGate` 的输出：能不能点 + 说什么）。 */
+    gate: { disabled: true, hint: '运费与合计还在计算中' },
   },
 
   /** 防抖定时器句柄（不进 data：它不是渲染状态）。 */
   quoteTimer: null,
   /** 一次"逛购物车"一条链：报价请求都复用它。 */
   traceId: '',
+  /** 报价请求序号（B36 / AJ-219：只接受最新一次报价的结果）。 */
+  quoteSeq: 0,
 
   onLoad() {
     this.traceId = newTraceId();
@@ -88,7 +100,16 @@ Page({
     });
     if (rows.length === 0) {
       // 空车不报价：空 items 会被服务端 40001 拒，而"打开空购物车有个错误提示"是荒谬的
-      this.setData({ quote: null, quoteError: '' });
+      // ⚠️ 但必须**同时**清掉挂起的防抖定时器并把序号推进（B36 / AJ-219）：
+      //    不清的话，刚才连点"+"排上的那次报价仍会在 400ms 后发出——
+      //    此时购物车已经空了，它会拿空 items 去打报价，拿到 40001，
+      //    表现是"清空购物车之后冒出一个错误"（清空的动作看起来失败了）。
+      if (this.quoteTimer !== null) {
+        clearTimeout(this.quoteTimer);
+        this.quoteTimer = null;
+      }
+      this.quoteSeq = nextSeq(this.quoteSeq);
+      this.setData({ quote: null, quoteError: '', gate: checkoutGate({ hasTotal: false }) });
       return;
     }
     this.requestQuote();
@@ -105,7 +126,10 @@ Page({
 
   /** `POST /orders/quote`——合计的**唯一**来源（本地快照价不算钱）。 */
   async fetchQuote() {
-    this.setData({ quoting: true, quoteError: '' });
+    // B36 / AJ-219：领号。连点 +/- 之后防抖只发最后一次，但**上一次**可能还在途中——
+    // 它若后回来，会把旧合计盖回去（改完数量显示旧合计，且"去结算"带着它走）。
+    const seq = (this.quoteSeq = nextSeq(this.quoteSeq));
+    this.setData({ quoting: true, quoteError: '', gate: checkoutGate({ quoting: true }) });
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/quote`,
@@ -113,11 +137,27 @@ Page({
         data: { items: app.globalData.cart.toOrderItems() },
         traceId: this.traceId,
       });
-      this.setData({ quote: quoteView(res) });
+      if (isStale(seq, this.quoteSeq)) return;
+      const quote = quoteView(res);
+      this.setData({ quote, gate: checkoutGate({ hasTotal: hasTotal(quote) }) });
     } catch (e) {
-      this.setData({ quote: null, quoteError: errorMessage(e) });
+      if (isStale(seq, this.quoteSeq)) return;
+      this.setData({
+        quote: null,
+        quoteError: errorMessage(e),
+        gate: checkoutGate({ hasError: true }),
+      });
     } finally {
-      this.setData({ quoting: false });
+      // 同首页：过期请求不能把 quoting 清掉（新的还在途中）
+      if (!isStale(seq, this.quoteSeq)) {
+        this.setData({
+          quoting: false,
+          gate: checkoutGate({
+            hasTotal: hasTotal(this.data.quote),
+            hasError: this.data.quoteError !== '',
+          }),
+        });
+      }
     }
   },
 
@@ -150,7 +190,9 @@ Page({
    * @why 不传任何金额给结算页：金额一律由结算页自己向服务端要（跨页传金额 = 可被篡改）。
    */
   onCheckout() {
-    if (this.data.quote === null || this.data.quote.totalJpy === null) return;
+    // @see @limitation 一：权威合计没出来不让走；`gate` 是同一个判断的**渲染态**
+    if (this.data.gate?.disabled !== false) return;
+    if (!hasTotal(this.data.quote)) return;
     wxApi.navigateTo({ url: CHECKOUT_PAGE });
   },
 

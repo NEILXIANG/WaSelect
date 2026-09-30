@@ -11,8 +11,9 @@
  *
  * @see ./index.vm.js
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { cartRows } from './index.vm.js';
+import { cartRows, checkoutGate } from './index.vm.js';
 
 const ITEMS = [
   {
@@ -46,5 +47,71 @@ describe('cartRows（行视图）', () => {
   it('脏输入：非数组 → 空数组；qty 非整数 → 归一成 1', () => {
     expect(cartRows(undefined as never)).toEqual([]);
     expect(cartRows([{ productId: 'p-1', qty: '2' }])[0]?.qty).toBe(1);
+  });
+});
+
+describe('checkoutGate：去结算能不能点、下面写什么（B36 / AJ-219）', () => {
+  it('有权威合计 → 可点，不显示提示', () => {
+    expect(checkoutGate({ hasTotal: true })).toEqual({ disabled: false, hint: '' });
+  });
+
+  it('还没报价 → 禁用 + "还在计算中"', () => {
+    expect(checkoutGate({})).toEqual({ disabled: true, hint: '运费与合计还在计算中' });
+    expect(checkoutGate(undefined).disabled).toBe(true);
+    expect(checkoutGate(null).disabled).toBe(true);
+  });
+
+  it('⚠️ 改了数量、新合计还没回来 → 禁用，且不能沿用"还在计算中"', () => {
+    // @why 旧 quote 还在页面上，若只按 hasTotal 判，按钮就是可点的——
+    //      而那个合计对应的是**改数量之前**的那一版，会带着过期的
+    //      expected_total_jpy 进结算页（40905 防线被自己喂一个旧值）。
+    const g = checkoutGate({ quoting: true, hasTotal: true });
+    expect(g.disabled).toBe(true);
+    expect(g.hint).toContain('重新计算');
+    expect(g.hint).not.toBe('运费与合计还在计算中');
+  });
+
+  it('报价失败 → 说"未能获取"并给下一步；不能再说"还在计算中"（它永远算不出来）', () => {
+    const g = checkoutGate({ hasError: true });
+    expect(g.disabled).toBe(true);
+    expect(g.hint).toContain('重试');
+    expect(g.hint).not.toContain('还在计算中');
+  });
+
+  it('三种状态两两不同（同一句话盖住两种状态正是 B36 的病根）', () => {
+    const hints = [
+      checkoutGate({ quoting: true }).hint,
+      checkoutGate({ hasError: true }).hint,
+      checkoutGate({}).hint,
+    ];
+    expect(new Set(hints).size, `三条提示必须互不相同：${hints.join(' / ')}`).toBe(3);
+  });
+});
+
+/**
+ * 防复发：B36 的病根同样**在薄壳**（取数不看序号、按钮状态写死），
+ * vm 的纯函数用例在薄壳漏接线时一条都不会红（与 AJ-217 / AJ-218 同一条理由）。
+ */
+describe('防复发：购物车薄壳的乱序接线（B36 / AJ-219）', () => {
+  const code = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  const count = (needle: string): number => code.split(needle).length - 1;
+
+  it('自检：计数函数对已知文本有效（否则下面全是"0 >= n"的假红或"0 === 0"的假绿）', () => {
+    expect(count('wxApi'), '自检：wxApi 在薄壳里确实出现').toBeGreaterThan(0);
+    expect(count('这段字符串根本不存在')).toBe(0);
+  });
+
+  it('报价必须领号并在结果回来时判过期（连点 +/- 后旧合计不能盖回去）', () => {
+    // 精确值：报价一处 + 清空购物车时作废在途报价一处
+    expect(count('nextSeq(this.quoteSeq)'), '领号两处（报价 + 清空作废）').toBe(2);
+    expect(count('isStale(seq, this.quoteSeq)'), '判过期三处（成功 / 失败 / finally）').toBe(3);
+  });
+
+  it('按钮状态走 checkoutGate，不再用写死的 checkoutHint 常量', () => {
+    expect(code).toContain('checkoutGate(');
+    expect(code).not.toContain('CHECKOUT_HINT');
   });
 });

@@ -248,3 +248,34 @@ describe('分类枚举与契约同源（防前端 tab 静默漂移）', () => {
     expect(CATEGORIES).toEqual(contract);
   });
 });
+
+/**
+ * 防复发：B36 的病根**在薄壳**（`reload` / `loadMore` 都不看序号），
+ * vm 的纯函数用例在薄壳漏接线时一条都不会红（与 AJ-217 / AJ-218 同一条理由）。
+ *
+ * @why 首页这条比购物车更值得钉：快速切分类时"后到的旧响应覆盖新结果"，
+ *      表现是"切到食品却看到厨刀"——用户在首页遇到它，归因是"这个站数据乱"，
+ *      不会有人想到是前端没判序号。
+ */
+describe('防复发：首页薄壳的乱序接线（B36 / AJ-219）', () => {
+  const code = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  const count = (needle: string): number => code.split(needle).length - 1;
+
+  it('自检：计数函数对已知文本有效（否则下面全是"0 >= n"的假红）', () => {
+    expect(count('wxApi'), '自检：wxApi 在薄壳里确实出现').toBeGreaterThan(0);
+    expect(count('这段字符串根本不存在')).toBe(0);
+  });
+
+  it('reload 与 loadMore 都要领号（切分类后在途的"下一页"必须被丢弃）', () => {
+    expect(count('nextSeq(this.seq)'), '两处取数各领一次号').toBe(2);
+  });
+
+  it('结果回来后必须判过期——成功、失败、finally 三处都得判', () => {
+    // ⚠️ 少判 finally 的表现：过期请求把 loading 清掉 → 页面显示"没在加载"而新的还在途中
+    // reload / loadMore 各三处：成功 / 失败 / finally（精确值：改动接线就必须同步改这条）
+    expect(count('isStale(seq, this.seq)'), 'reload 与 loadMore 各三处').toBe(6);
+  });
+});

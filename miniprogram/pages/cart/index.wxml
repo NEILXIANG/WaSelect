@@ -54,15 +54,18 @@
       <text class="error">{{quoteError}}</text>
     </view>
 
-    <!-- 去结算：只有权威合计出来了才可点（@see index.js @limitation 一） -->
+    <!--
+      去结算：只有权威合计出来了才可点（@see index.js @limitation 一）。
+      B36 / AJ-219：提示语由 vm 的 checkoutGate 按状态给——
+      "在途（改了数量）"与"报价失败"是两件不同的事，以前被同一句"还在计算中"盖住，
+      后者的结果是用户一直等一个永远算不出来的合计。
+    -->
     <ws-button
       text="去结算"
       type="primary"
-      disabled="{{!quote || quote.totalJpy === null}}"
+      disabled="{{gate.disabled}}"
       bindtap="onCheckout"
     />
-    <text class="label checkout-hint" wx:if="{{!quote || quote.totalJpy === null}}">
-      {{checkoutHint}}
-    </text>
+    <text class="label checkout-hint" wx:if="{{gate.hint}}">{{gate.hint}}</text>
   </block>
 </view>
