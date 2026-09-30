@@ -16,6 +16,8 @@
  *           （除非引入日期库），收益不抵依赖。换算后仍走 `toISOString()` 取值，
  *           所以结果**不依赖运行机器的时区**——单测可以钉死。
  */
+import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
+
 /** JST 相对 UTC 的偏移（毫秒）。 */
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
@@ -23,6 +25,40 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 export function moneyText(jpy: unknown): string {
   if (!Number.isInteger(jpy)) return '—';
   return `${String(jpy).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} 円`;
+}
+
+/**
+ * 币种符号（只在 {@link minorMoneyText} 里用）。
+ * @why CNY 用 `CN¥` 而不是 `¥`：`¥` 同时是日元符号，两个币种共用一个符号时
+ *      "¥1,234" 到底是 1,234 円还是 12.34 元人民币，只能靠上下文猜——
+ *      而金额猜错的代价是客服给客户报错数字。宁可符号笨一点。
+ */
+const CURRENCY_SYMBOL: Readonly<Record<string, string>> = { JPY: '¥', USD: '$', CNY: 'CN¥' };
+
+/**
+ * **最小单位整数** → 带币种符号的展示文案（B43 / AJ-214）：`3350 + USD` → `$33.50`。
+ *
+ * @why 必须显式区分"最小单位"与"主单位"：库里存的、接口传的**一律是最小单位**
+ *      （JPY=円，USD=分），而人读的是主单位。少了这一步的表现是 `USD 3350`——
+ *      读大 100 倍，**不报错**，客服拿它答复客户、运营拿它判断是否应诉。
+ *      且只有美元单会错（日元无小数位，最小单位=主单位），更难被发现。
+ * @why 小数位取自 shared 的 `CURRENCY_MINOR_DIGITS` 而不是在这里写 `{JPY:0,USD:2}`：
+ *      那是"第几份口径"的问题——加一种货币时两边都要改，漏一处就是下一轮 B43。
+ *
+ * @returns 币种未知 / 金额非整数 → `—`（脏数据不许显示成一个"看起来合理"的数字）
+ */
+export function minorMoneyText(amount: unknown, currency: unknown): string {
+  if (typeof currency !== 'string' || !Number.isInteger(amount)) return '—';
+  const key = currency.toUpperCase();
+  const digits = CURRENCY_MINOR_DIGITS[key as CurrencyCode];
+  if (digits === undefined) return '—';
+  const symbol = CURRENCY_SYMBOL[key] ?? '';
+  const neg = (amount as number) < 0;
+  const abs = Math.abs(amount as number);
+  const major = digits === 0 ? String(abs) : (abs / 10 ** digits).toFixed(digits);
+  const [int = '0', frac] = major.split('.');
+  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${neg ? '-' : ''}${symbol}${frac === undefined ? grouped : `${grouped}.${frac}`}`;
 }
 
 /**

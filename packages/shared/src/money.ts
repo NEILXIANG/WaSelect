@@ -12,6 +12,23 @@
 
 export type CurrencyCode = 'JPY' | 'USD' | 'CNY';
 
+/**
+ * 各币种**最小单位的小数位**（B43 / AJ-214）：JPY=0（円就是最小单位），USD/CNY=2（分）。
+ *
+ * @why 这张表必须放 shared（跨端唯一真源）而不是各自在前端写：
+ *      "最小单位 → 主单位"的换算在**每个显示钱的地方**都会用到，而缺了它的表现是
+ *      **把 3350 显示成 USD 3350**（读大 100 倍）——不报错、不崩溃，
+ *      客服据此答复客户、运营据此判断是否应诉（B43 实锤：订单详情与拒付列表都是这么错的）。
+ *      前端再写一份常量就会变成两份口径，加一种货币时必漏一处（约束九）。
+ * @limitation 只覆盖 `CurrencyCode` 三个币种；将来加币种**必须同时**改这里与
+ *              契约的枚举（漏改的表现是显示时退回"原样输出最小单位"）。
+ */
+export const CURRENCY_MINOR_DIGITS: Readonly<Record<CurrencyCode, number>> = {
+  JPY: 0,
+  USD: 2,
+  CNY: 2,
+};
+
 export interface Money {
   /** 最小货币单位的整数金额（JPY=円，USD/CNY=分） */
   readonly amount: number;

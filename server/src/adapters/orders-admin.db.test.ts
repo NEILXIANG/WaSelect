@@ -72,9 +72,14 @@ async function insertOrder(o: {
                              weight_g, declared_value_usd)
     values (${`oi-${o.id}`}, ${o.id}, ${`p-${o.id}`}, '商品', 1, 1000, 500, 7)
   `;
+  // ⚠️ `charge_amount` 是**最小单位**（USD=分），必须与上面的 fx 自洽：
+  //    1000 円 × 0.0067 = 6.70 美元 = **670 分**。
+  //    曾经写 11（像是把"6.7 美元"随手取整）——它掩盖了"最小单位 vs 主单位"这层，
+  //    于是前端把 3350 显示成 `USD 3350`（读大 100 倍）这类错在夹具里永远看不出来（B43 / AJ-214）。
+  const chargeMinor = Math.round(1000 * 0.0067 * 100);
   await db`
     insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
-    values (${`pay-${o.id}`}, ${o.id}, 'stripe', 'succeeded', 'USD', 11)
+    values (${`pay-${o.id}`}, ${o.id}, 'stripe', 'succeeded', 'USD', ${chargeMinor})
   `;
   await db`
     insert into order_events (order_id, status, note, actor) values (${o.id}, 'paid', '落账', 'sys')

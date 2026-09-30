@@ -13,7 +13,7 @@
  *
  * @see ../../../contracts/api-contract.yaml（Dispute、/admin/users/{id}/block）；../format.ts
  */
-import { formatJst } from '../format.js';
+import { formatJst, minorMoneyText } from '../format.js';
 
 /** 契约 `Dispute.dispute_status` 枚举（单测与契约双向比对）。 */
 export const DISPUTE_STATUS = ['open', 'won', 'lost', 'withdrawn'] as const;
@@ -61,14 +61,17 @@ export function disputeRows(items: unknown): DisputeRow[] {
         ? (String(d['dispute_status']) as DisputeStatus)
         : null;
       const currency = typeof d['charge_currency'] === 'string' ? d['charge_currency'] : '';
-      const amount = Number.isInteger(d['dispute_amount']) ? String(d['dispute_amount']) : '';
+      // ⚠️ dispute_amount 是**最小单位**（USD=分），直接拼会把 33.50 美元显示成 3350（B43 / AJ-214）
+      const amount = minorMoneyText(d['dispute_amount'], currency);
       return {
         orderId: typeof d['order_id'] === 'string' ? d['order_id'] : '',
         orderNo: typeof d['order_no'] === 'string' ? d['order_no'] : '',
         disputeId: typeof d['dispute_id'] === 'string' ? d['dispute_id'] : '',
         status,
         statusText: status === null ? '未知状态' : DISPUTE_STATUS_LABELS[status],
-        amountText: [currency, amount].filter((s) => s !== '').join(' ') || '—',
+        // 币种符号已含在 amountText 里（`minorMoneyText`），不再重复拼代码：
+        // "USD $33.50" 里 USD 与 $ 说的是同一件事，多一个词只是多一处要维护
+        amountText: amount,
         openedText: formatJst(d['opened_at']),
         closedText: formatJst(d['closed_at']),
         urgent: status === 'open',

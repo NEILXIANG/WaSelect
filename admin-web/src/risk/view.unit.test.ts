@@ -30,7 +30,7 @@ describe('disputeRows', () => {
       disputeId: 'dp_1ABC',
       status: 'open',
       statusText: '进行中',
-      amountText: 'USD 8600',
+      amountText: '$86.00',
       openedText: '2026-09-27 13:05',
       closedText: '—',
       urgent: true,
@@ -53,9 +53,9 @@ describe('disputeRows', () => {
     expect(row?.statusText).toBe('未知状态');
   });
 
-  it('缺金额 → 占位符（不是 "USD undefined"）', () => {
+  it('缺金额 → 占位符（不是 "USD undefined" 也不是 "USD 0"）', () => {
     const [row] = disputeRows([{ ...DISPUTE, dispute_amount: undefined }]);
-    expect(row?.amountText).toBe('USD');
+    expect(row?.amountText).toBe('—');
     expect(disputeRows([{}])[0]?.amountText).toBe('—');
   });
 

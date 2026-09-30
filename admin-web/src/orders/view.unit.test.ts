@@ -113,12 +113,12 @@ describe('addressSummary / paymentSummary', () => {
       paymentSummary({
         payment: { channel: 'stripe', charge_currency: 'USD', charge_amount: 8600 },
       }),
-    ).toBe('stripe · USD 8600');
+    ).toBe('stripe · $86.00');
   });
 
-  it('⚠️ 缺 amount 时不显示 "USD undefined"', () => {
+  it('⚠️ 缺 amount 时不显示 "USD undefined"（缺值不许拼出一个假金额）', () => {
     expect(paymentSummary({ payment: { channel: 'wechat', charge_currency: 'JPY' } })).toBe(
-      'wechat · JPY',
+      'wechat',
     );
     expect(paymentSummary({})).toBe('—');
   });

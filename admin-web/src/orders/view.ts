@@ -30,7 +30,7 @@
  *      packages/shared/src/enums.ts（ORDER_STATUS 真源）；../../../docs/自主决策记录.md
  */
 import { ORDER_STATUS, REFUND_REASON_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
-import { formatJst, moneyText } from '../format.js';
+import { formatJst, minorMoneyText, moneyText } from '../format.js';
 
 /** 管理端状态文案（@see @limitation 一：比买家侧更细，十态互不合并）。 */
 export const ORDER_STATUS_LABELS: Readonly<Record<OrderStatus, string>> = {
@@ -238,10 +238,9 @@ export function paymentSummary(order: unknown): string {
   const o = (typeof p === 'object' && p !== null ? p : {}) as Record<string, unknown>;
   const channel = typeof o['channel'] === 'string' ? o['channel'] : '';
   const currency = typeof o['charge_currency'] === 'string' ? o['charge_currency'] : '';
-  const amount = Number.isInteger(o['charge_amount']) ? String(o['charge_amount']) : '';
-  const text = [channel, [currency, amount].filter((s) => s !== '').join(' ')]
-    .filter((s) => s !== '')
-    .join(' · ');
+  // ⚠️ `charge_amount` 是**最小单位**（USD=分）：直接拼就是 `USD 3350`（读大 100 倍，B43 / AJ-214）
+  const amount = currency === '' ? '—' : minorMoneyText(o['charge_amount'], currency);
+  const text = [channel, amount === '—' ? '' : amount].filter((s) => s !== '').join(' · ');
   return text === '' ? '—' : text;
 }
 
