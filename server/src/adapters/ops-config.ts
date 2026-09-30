@@ -28,6 +28,11 @@
  * @limitation 三：`shipping_rates` 的 `id` 是 `SERIAL`，整表替换后 id 会重新计数前移
  *              （`resetTestDb` 的 `restart identity` 同因）。没有外部引用依赖这个 id
  *              （orders 里存的是 `shipping_jpy` 数字快照），所以无影响。
+ * @limitation 四：整表替换开头有 `lock table shipping_rates in exclusive mode`（B22 / AJ-204）。
+ *              **写者排队、读者不挡**（EXCLUSIVE 不与 ACCESS SHARE 冲突），
+ *              所以报价路径不受影响；代价是并发保存运费会串行（低频操作，可接受）。
+ *              谁要在这张表上加第二个写路径（将来的承运商 API 同步），**必须**同样先取这把锁——
+ *              漏一处就退化成"两次替换的并集"（全站无法报价 / 静默算错运费）。
  *
  * @see migrations/001_init.sql（fx_rates / shipping_rates 两条 UNIQUE）；
  *      domain/fx-input.ts、domain/shipping-rates-input.ts（输入校验，写之前已过）；
@@ -140,6 +145,25 @@ export function createOpsConfigRepo(db: Db): OpsConfigRepo {
 
     async replaceShippingRates(rows: readonly ShippingRateInput[]): Promise<ShippingRateRow[]> {
       return withTransaction(db, async (tx) => {
+        // 🔴 B22 / AJ-204：**整表替换必须串行**（表级排他锁），否则结果是两次输入的**并集**。
+        //    READ COMMITTED 下：先到事务 A 的 `delete` + `insert` 都还没提交，
+        //    后到事务 B 的 `delete` **看不见** A 新插的行（表空时也根本没行可锁），
+        //    于是 B 删了个空、插入自己的档，A 随后提交 ⇒ 库里是 A ∪ B。
+        //    后果有两类：① 承运商 A 与 B 的档混在一起 ⇒ `resolveSingleActiveCarrier()`
+        //    返回 null ⇒ **全站 50004 无法报价**；② 同一承运商的新旧档混在一起 ⇒
+        //    **静默算错运费**（取档 SQL 只会取到其中一条，方向还可能错）。
+        //    请求体相同的双击则是第三种：两条都插同 (carrier, max_weight_g) ⇒ 23505 ⇒ 50000。
+        // @why `lock table … in exclusive mode` 而不是 advisory lock 或 `SERIALIZABLE`：
+        //    EXCLUSIVE 只挡**写者**（ROW EXCLUSIVE 及以上），**不挡 ACCESS SHARE（普通 SELECT）**——
+        //    也就是报价路径读运费表完全不受影响，只有"另一个人也在保存运费"才会排队。
+        //    advisory lock 也能做到，但它要求每个写者都自觉地取同一个 key——
+        //    忘了一处就退化成今天的 bug，而表锁是"进了这张表就要排队"，漏不掉。
+        // @limitation 排队时间受连接级 `lock_timeout`（5s）约束：
+        //              等待超过 5s → 55P03 → 兜底 50000。管理端保存运费是低频操作，
+        //              5s 内排不上队属于异常（有人持锁不提交），让它响出来比静默等待好。
+        // @limitation 锁在**事务提交时**释放：先到者提交后，后到者才继续——
+        //              所以"后保存的赢"，这与单次替换的语义一致（不是最后写入者合并）。
+        await tx`lock table shipping_rates in exclusive mode`;
         await tx`delete from shipping_rates`;
         // ⚠️ 逐条插入而不是批量 `values ${tx([[…]])}`：postgres.js 的多行 helper 类型
         //    （`EscapableArray`）只接受 string/number/Date，**不含 boolean**，

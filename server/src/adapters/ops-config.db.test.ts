@@ -175,6 +175,89 @@ describe('replaceShippingRates', () => {
     expect(await catalog.findShippingPriceJpy('placeholder', 2500)).toBeNull();
   });
 
+  /**
+   * B22 / AJ-204：两次并发整表替换，库里必须**恰好等于后到那次的输入**，不能是并集。
+   *
+   * @why 旧实现（没有表级锁）在 READ COMMITTED 下会得到并集：
+   *      B 的 `delete` 看不见 A 未提交的新行（空表起步时连"可锁的行"都没有），
+   *      于是 B 删了个空、插入自己的档，A 提交后库里就是 A ∪ B。
+   *      后果最重的两种：① 两个承运商的档混在一起 ⇒ `resolveSingleActiveCarrier()` 返回 null
+   *      ⇒ **全站 50004 无法报价**；② 同一承运商的新旧档混在一起 ⇒ **静默算错运费**。
+   * @how **不用 sleep 抢时序**：模拟"先到者 A 还没提交"这一确定状态——
+   *      A 的事务手动 `begin` 并持住（删 + 插完就等一个信号），此时 B 才进来。
+   *      这样"并集"是**必然**结果而不是概率结果（探针 5/5 是运气，用例不能靠运气）。
+   *      ⚠️ 修正（同一条用例的第一版）：光靠"并发发起"不够——实测 B 常常在 A 提交之后
+   *      才开始，于是顺序化、用例假绿。所以判据不是"多快"，而是**给足 500ms 看 B 能不能
+   *      自己跑完**：有锁 ⇒ 它必然跑不完（堵在表锁上）；无锁 ⇒ 几十毫秒就跑完 ⇒ 立刻红。
+   * @why 断言**库里的内容**而不只是返回值：B 的返回值来自它自己事务内的读，
+   *      即便没有锁也是"B 的行"（看不到 A）——只断言返回值会假绿。
+   *      **第二现场**（提交后再读一遍）才是这个缺陷真正的显影处（同 B23 的教训）。
+   */
+  it('并发整表替换：后到者整表覆盖，库里恰好等于后到那次（B22 / AJ-204）', async () => {
+    const repo = createOpsConfigRepo(db);
+    let release: () => void = () => {};
+    const released = new Promise<void>((r) => {
+      release = r;
+    });
+    let opened: () => void = () => {};
+    const openedP = new Promise<void>((r) => {
+      opened = r;
+    });
+
+    // 先到者 A：删空 + 插自己的档，然后**持住不提交**
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+    const holdA = db.begin(async (tx) => {
+      await tx`delete from shipping_rates`;
+      await tx`
+        insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
+        values ('A', 500, 1000, true), ('A', 2000, 4000, true)
+      `;
+      opened();
+      await released;
+    });
+    await openedP;
+
+    const B_ROWS = [{ carrier: 'B', maxWeightG: 700, priceJpy: 2000, active: true }];
+    let bSettled = false;
+    const bDone = repo.replaceShippingRates(B_ROWS).then(
+      (r) => {
+        bSettled = true;
+        return r;
+      },
+      (e: unknown) => {
+        bSettled = true;
+        throw e;
+      },
+    );
+    // 给 B 最多 500ms 让它"自己跑完"：无锁时它一次 delete + 一条 insert，几十毫秒必然完成；
+    // 有锁时它堵在表锁上，永远等不到——这正是本用例要钉的区别（判据不是快慢，是能不能）。
+    for (let i = 0; i < 50 && !bSettled; i += 1) await sleep(10);
+    expect(bSettled).toBe(false); // 🔴 无锁时这里是 true（B 抢在 A 提交之前跑完了）
+
+    release();
+    await holdA;
+    const out = await bDone;
+
+    // ① 返回值（B 自己看到的）
+    expect(out).toEqual([{ carrier: 'B', max_weight_g: 700, price_jpy: 2000, active: true }]);
+    // ② 库里：**两次都提交之后**再读一遍——无锁时这里是 A ∪ B（3 行）
+    expect(await repo.listShippingRates()).toEqual(out);
+  });
+
+  it('请求体相同的两次并发替换：都成功，不撞 23505（B22 的第三种表现）', async () => {
+    const repo = createOpsConfigRepo(db);
+    const same = [
+      { carrier: 'placeholder', maxWeightG: 500, priceJpy: 2100, active: true },
+      { carrier: 'placeholder', maxWeightG: 2000, priceJpy: 4950, active: true },
+    ];
+    const [r1, r2] = await Promise.all([
+      repo.replaceShippingRates(same),
+      repo.replaceShippingRates(same),
+    ]);
+    expect(r1).toEqual(r2);
+    expect(await repo.listShippingRates()).toHaveLength(2);
+  });
+
   it('停用全部档位后取档为 null（前端已挡，这里确认语义如此）', async () => {
     const repo = createOpsConfigRepo(db);
     await repo.replaceShippingRates([
