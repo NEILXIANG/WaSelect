@@ -83,6 +83,7 @@
     text="{{submitting ? '提交中…' : '提交订单'}}"
     type="primary"
     disabled="{{!gate.ok || submitting}}"
+    loading="{{submitting}}"
     bindtap="onSubmit"
   />
   <text class="label tip" wx:if="{{gate.reason}}">{{gate.reason}}</text>

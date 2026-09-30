@@ -78,6 +78,14 @@ describe('checkoutGate：去结算能不能点、下面写什么（B36 / AJ-219�
     expect(g.hint).not.toContain('还在计算中');
   });
 
+  it('已超过单笔上限（splitRequired）→ 禁用并说清原因（B38 / AJ-221）', () => {
+    // @why 结算页会 40906。在购物车就关掉入口，让用户在**能改数量**的这一页解决，
+    //      而不是跳过去再被弹回来（弹回来时他还得猜是哪一件的数量问题）。
+    const g = checkoutGate({ hasTotal: true, splitRequired: true });
+    expect(g.disabled).toBe(true);
+    expect(g.hint).toBe('已超过单笔上限，请分两单下单');
+  });
+
   it('三种状态两两不同（同一句话盖住两种状态正是 B36 的病根）', () => {
     const hints = [
       checkoutGate({ quoting: true }).hint,
@@ -113,5 +121,11 @@ describe('防复发：购物车薄壳的乱序接线（B36 / AJ-219）', () => {
   it('按钮状态走 checkoutGate，不再用写死的 checkoutHint 常量', () => {
     expect(code).toContain('checkoutGate(');
     expect(code).not.toContain('CHECKOUT_HINT');
+  });
+
+  it('薄壳必须把 splitRequired 传进 gate（B38 / AJ-221：超上限要在购物车就拦住）', () => {
+    // ⚠️ 精确计数而不是 `toContain`：报价成功与 finally 各有一次，
+    //    用 `toContain` 的话删掉其中一处仍然绿——守的是"还有一处"，不是"两处都在"。
+    expect(count('splitRequired:'), '报价成功分支 + finally 分支各一处').toBe(2);
   });
 });

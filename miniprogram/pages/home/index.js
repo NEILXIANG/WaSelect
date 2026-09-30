@@ -93,11 +93,22 @@ Page({
    *  （同一轮浏览的分页是同一次用户操作，拆开会让服务端日志断成 N 截）。 */
   traceId: '',
   /**
-   * 请求序号（B36 / AJ-219）：每次 reload / loadMore 领一个新号，
+   * 请求序号（B36 / AJ-219）：**每次 reload 领一个新号**（开启一代新列表），
+   * `loadMore` 借用当前号、不领新号（R-04 / AJ-226）。
    * 回来的响应号落后于当前号就整份丢弃（含错误与 loading 状态）。
    * @see ../../utils/request-seq.js
    */
   seq: 0,
+  /**
+   * 切分类 / 搜索的请求在途（R-04 / AJ-226）。在途期间**不发"下一页"**：
+   * 此刻屏幕上还是旧列表，"下一页"会用新分类 + 旧页码去取，取回来接在旧列表后面。
+   */
+  reloading: false,
+  /**
+   * **已提交**的搜索词（最近一次 `reload` 用的那个）。"下一页"只认它，不读输入框：
+   * 输入框里打了字但没点搜索时，列表仍是旧词的结果，翻页必须沿用旧词。
+   */
+  activeKeyword: '',
 
   onLoad() {
     // tab 先渲染（本地常量，不需要等网络）——首屏至少有东西可点，而不是一整页白
@@ -172,13 +183,24 @@ Page({
     const traceId = newTraceId();
     this.traceId = traceId;
     // B36 / AJ-219：领号。切分类/搜索连着点时，只有**最后一次**的结果能落到页面上
+    // ⚠️ **只有 reload 领号**（R-04 / AJ-226）：`loadMore` 曾经也领号，于是切分类在途时触底
+    //    会把**这次** reload 判成过期——结果被丢弃、loading 永不清。
+    //    规则：reload 开启一代新列表（换号），loadMore 属于当前这一代（借号不换号）。
     const seq = (this.seq = nextSeq(this.seq));
-    this.setData({ loading: true, error: '', tabs: categoryTabs(category) });
+    const keyword = this.data.keyword;
+    this.reloading = true;
+    this.activeKeyword = keyword;
+    // 上一代列表的"下一页"（若在途）从此过期：它的标志位由这里统一复位，
+    // 过期请求自己的 finally **不再碰**标志位（否则会清掉新一代"下一页"的标志）。
+    this.loadingMore = false;
+    this.setData({
+      loading: true,
+      loadingMore: false,
+      error: '',
+      tabs: categoryTabs(category),
+    });
     try {
-      const res = await this.fetch(
-        listQuery({ page: 1, category, keyword: this.data.keyword }),
-        traceId,
-      );
+      const res = await this.fetch(listQuery({ page: 1, category, keyword }), traceId);
       // 已经有更新的请求发出去了 → 这次的结果整份丢弃（含错误）
       if (isStale(seq, this.seq)) return;
       this.apply(res, { reset: true, page: 1 });
@@ -192,7 +214,10 @@ Page({
       this.setData({ cards: [], empty: true, hasMore: false, error: errorMessage(e) });
     } finally {
       // ⚠️ 过期请求不能把 loading 清掉：清了会显示"没在加载"，而新请求其实还在途中
-      if (!isStale(seq, this.seq)) this.setData({ loading: false });
+      if (!isStale(seq, this.seq)) {
+        this.reloading = false;
+        this.setData({ loading: false });
+      }
     }
   },
 
@@ -202,17 +227,21 @@ Page({
     //    （page-button-guard 拦的是按钮上的点击，防线收进组件那条规则管不到滚动事件）。
     //    滚动事件的重复触发只能用标志位挡：在途时再触底一次，会发出两个相同的
     //    第 N+1 页请求，列表里出现重复商品且不报错。
-    if (this.loadingMore) return;
+    // 切分类 / 搜索在途时不翻页（@see `reloading` 字段注释）
+    if (this.reloading || this.loadingMore) return;
     const next = nextPage({ page: this.page, loaded: this.loaded, total: this.total });
     if (next === null) return;
     this.loadingMore = true;
-    // B36 / AJ-219：领号。**切了分类之后**还在途中的"下一页"请求必须被丢弃，
+    // B36 / AJ-219：**切了分类之后**还在途中的"下一页"请求必须被丢弃，
     // 否则它会把上一个分类的第 2 页追加到新分类的列表里（且不报错）。
-    const seq = (this.seq = nextSeq(this.seq));
+    // ⚠️ 这里**借用当前号、不领新号**（R-04 / AJ-226，理由见 reload）：
+    //    reload 换号 ⇒ 本请求过期；本请求不换号 ⇒ 不会反过来把 reload 判过期。
+    const seq = this.seq;
     this.setData({ loadingMore: true });
     try {
       const res = await this.fetch(
-        listQuery({ page: next, category: this.category, keyword: this.data.keyword }),
+        // 关键词用**已提交**的那个，不读输入框（@see `activeKeyword` 字段注释）
+        listQuery({ page: next, category: this.category, keyword: this.activeKeyword }),
         this.traceId,
       );
       if (isStale(seq, this.seq)) return;
@@ -222,8 +251,12 @@ Page({
       // 追加失败**不清列表**（已加载的商品还在），只提示；用户再触底会自然重试
       this.setData({ error: errorMessage(e) });
     } finally {
-      this.loadingMore = false;
-      if (!isStale(seq, this.seq)) this.setData({ loadingMore: false });
+      // ⚠️ 过期的"下一页"**两个标志都不碰**：reload 已经把它们复位了，
+      //    而此刻实例标志可能属于新一代的"下一页"——清掉它会让同一页被发两次。
+      if (!isStale(seq, this.seq)) {
+        this.loadingMore = false;
+        this.setData({ loadingMore: false });
+      }
     }
   },
 

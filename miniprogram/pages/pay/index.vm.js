@@ -56,26 +56,49 @@ export function payPageView(order) {
 }
 
 /**
- * 从后台/上一页回到支付页时，要不要重新取数（B35 / AJ-218）。
+ * 从后台 / 浏览器 / 上一页回到支付页时该做什么（B35 / AJ-218 → AJ-227 改写）。
  *
  * @param {{payUrl?: unknown, guideTitle?: unknown, paying?: unknown}|null|undefined} args
- * @returns {boolean}
+ * @returns {'none'|'reload'|'status'}
+ *   - `none`：什么都不做；
+ *   - `reload`：整页重取（订单 + 支付方式）；
+ *   - `status`：**只查订单状态**——已不可付就收起支付方式与短链，仍可付则一个字都不动。
  *
  * @why 支付完成的真值在**服务端回调**里，本页不轮询（@see ../pay/index.js @limitation 一），
- *      所以"用户去浏览器付完款再回来"这一刻，只有重新取数才能把"已付款"显示出来——
- *      否则页面还挂着支付方式按钮，点了就是 40902。
- * @why 三种情况下**不**刷新（刷新会把用户正在用的东西弄没）：
- *      ① `payUrl !== ''`：copylink 屏正在用——用户切出去就是为粘贴这个链接，
- *         刷掉短链等于把人回家的路拆了；
- *      ② `guideTitle !== ''`：任何引导屏（auto / unsupported）同理；
- *      ③ `paying === true`：发起支付在途中，再取一次会并发两个"发起"。
- * @limitation 只做"要不要刷新"的判断，**不发起请求**：薄壳调用 `load()`。
+ *      所以"用户去浏览器付完款再回来"这一刻，只有再问一次服务端才能把"已付款"显示出来。
+ * @why copylink 屏 / 引导屏给 `status` 而不是 `none`（AJ-227）：原来这两屏一律不刷新，
+ *      理由是"刷掉短链等于把人回家的路拆了"——理由没错，但**去浏览器付款只发生在 copylink 屏**，
+ *      于是 B35 要修的那件事（付完回来还挂着支付方式，点了 40902）恰好没覆盖到银行卡这条主路径。
+ *      `status` 两头都守住：没付完 ⇒ 短链原样在；付完了 ⇒ 收起来，别让人再付一次。
+ * @why `paying === true` 仍是 `none`：发起支付在途中，再取一次会并发两个"发起"。
+ * @limitation 只做判断，**不发起请求**：薄壳按返回值调 `load()` / `checkStatus()`。
  */
-export function shouldRefreshOnShow(args) {
+export function onShowAction(args) {
   const a = args !== null && typeof args === 'object' ? args : {};
-  if (typeof a.payUrl === 'string' && a.payUrl !== '') return false;
-  if (typeof a.guideTitle === 'string' && a.guideTitle !== '') return false;
-  return a.paying !== true;
+  if (a.paying === true) return 'none';
+  if (typeof a.payUrl === 'string' && a.payUrl !== '') return 'status';
+  if (typeof a.guideTitle === 'string' && a.guideTitle !== '') return 'status';
+  return 'reload';
+}
+
+/** 没有引导内容时的 `guide`（与页面 data 的初值同形；wxml 靠 `guide.title` 为空来隐藏那一卡）。 */
+export const EMPTY_GUIDE = Object.freeze({ title: '', body: '', actionText: '' });
+
+/**
+ * 订单已不需要再支付时，支付页要 `setData` 的全部内容（AJ-227）。
+ * @param {string} closedText `payPageView(order).closedText`
+ * @why 收进一个函数：要同时清掉的有五样（支付方式、提示条、短链、引导、"已复制"），
+ *      漏清任何一样，页面上就会同时出现"无需再支付"和一个还能点的入口。
+ */
+export function closedScreen(closedText) {
+  return {
+    closedText,
+    channels: [],
+    notice: [],
+    payUrl: '',
+    guide: { ...EMPTY_GUIDE },
+    copied: false,
+  };
 }
 
 /**

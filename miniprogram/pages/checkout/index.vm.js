@@ -34,7 +34,12 @@ export function itemRows(items) {
 /**
  * 能否提交（按钮禁用 + 原因）。
  * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null,
- *          emailError?: string}} state
+ *          emailError?: string, splitRequired?: boolean,
+ *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean}} state
+ * @why `termsReady` / `termsFailed` / `quoteFailed` 三项（AJ-228）：
+ *      条款版本没取到时 `orderBody` 会抛一句**给开发者看的**报错，此前闸门不看它，
+ *      于是那句话被原样摆到用户面前；报价**失败**与报价**还没回来**此前是同一句"还在计算中"，
+ *      前者永远等不到结果，用户没有出路。三项都是"传了才生效"：不传等于不检查（老调用方不受影响）。
  * @returns {{ok: boolean, reason: string}}
  * @why 返回**原因**而不是只给 ok：禁用但不说为什么的按钮会被读成"这站坏了"，
  *      而原因文案必须由逻辑给（wxml 里写死一串 `wx:if` 会让四条判断各漂移一次）。
@@ -45,8 +50,16 @@ export function submitGate(state) {
     return { ok: false, reason: '购物车是空的' };
   if (typeof s.addressId !== 'string' || s.addressId === '')
     return { ok: false, reason: '请选择收货地址' };
+  if (s.termsFailed === true) return { ok: false, reason: '购买条款暂时取不到，请稍后再试' };
+  if (s.termsReady === false) return { ok: false, reason: '正在加载购买条款…' };
   if (s.termsAccepted !== true) return { ok: false, reason: '请先阅读并同意购买条款' };
+  // 失败排在"计算中"之前：失败了就不会再有结果，说"计算中"是让人白等
+  if (s.quoteFailed === true) return { ok: false, reason: '报价失败，请返回购物车检查商品后重试' };
   if (!Number.isInteger(s.totalJpy)) return { ok: false, reason: '运费与合计还在计算中' };
+  // B38 / AJ-221：`split_hint` 为 true = **已经超过**单笔上限（服务端 `total > maxOrderJpy`），
+  // 提交必然 40906。旧实现只把它当一句提示、照样放行——用户点了才知道被拒，
+  // 而这个失败还是"看起来像系统问题"的那一类。
+  if (s.splitRequired === true) return { ok: false, reason: '已超过单笔上限，请分两单下单' };
   // 选填邮箱填错了才拦（AJ-180）：排在最后——前四项是"能不能下单"，这一项只是"填的东西对不对"
   if (typeof s.emailError === 'string' && s.emailError !== '')
     return { ok: false, reason: s.emailError };
@@ -103,6 +116,76 @@ export function resolveAddressId(args) {
   if (inList(a.picked)) return a.picked;
   if (inList(a.current)) return a.current;
   return typeof a.fallback === 'string' ? a.fallback : '';
+}
+
+/**
+ * 建单失败之后，页面该做什么（B37 / AJ-220）。
+ *
+ * @param {unknown} code 服务端业务错误码（`ApiError.code`）；可能是任何东西
+ * @returns {'none' | 'requote' | 'reload_terms' | 'renew_key'}
+ *
+ * @why 服务端已经把"这个码该怎么处置"写进了错误码登记表
+ *      （`packages/shared/src/errors.ts` 每一条的 `action` 字段：
+ *      40905「提示刷新确认页」、40401/40901「提示并刷新」、40011「刷新页面重新加载条款后下单」）。
+ *      而结算页对**任何一个码**都只做一件事：显示文案、什么都不做。
+ *      于是典型死循环是：管理员改了价 → 用户提交得 40905 → 页面仍显示旧合计 →
+ *      再点仍带旧的 `expected_total_jpy` → 还是 40905，**只能退出重进**。
+ *      条款升级后的 40011 同理（重拉条款、复位勾选才行）。
+ *      ⚠️ 这份"处置指令"早就有了，只是没有人执行它——登记表因此是死数据。
+ *
+ * @why `requote` 必须**连带作废幂等键**：价格变了 = 意图内容变了
+ *      （`expected_total_jpy` 进 body）；沿用同一个键会被服务端判成
+ *      "同一个键提交了不同内容"（@see errors.ts 里那条 action），
+ *      表现是"重报价之后再点，被一个看不懂的码拒掉"。
+ *
+ * @limitation 只产出**意图**（要不要重报价 / 要不要重拉条款），
+ *              不发起请求、不碰宿主：执行在薄壳的 `createOrder` catch 里。
+ *              @tradeoff 保留了"哪些码值得自动恢复"这份清单在前端——
+ *              它没有下沉到 shared 是因为它是**页面动作**（重报价是结算页才有的事），
+ *              不是跨端口径；但每个码必须与 errors.ts 的 `action` 对得上（有测试守）。
+ */
+export function recoveryFor(code) {
+  if (code === 40905 || code === 40901 || code === 40401) return 'requote';
+  if (code === 40011) return 'reload_terms';
+  // 40908（同键不同内容，AJ-228）：登记表的 action 是"为每次新意图生成新的幂等键"。
+  // `keyAction` 让它正常情况下不会发生；真发生了就作废键——否则这一页每次再点都是同一个码。
+  if (code === 40908) return 'renew_key';
+  return 'none';
+}
+
+/**
+ * 这次提交该沿用幂等键还是换新键（AJ-228）。
+ *
+ * @param {Partial<{sentBody: string|null, body: string}>|null|undefined} args
+ *   `sentBody` = 当前这个键**上一次**带出去的请求体（JSON 文本）；从没发过为 null。
+ *   `body` = 这次要发的请求体（JSON 文本）。
+ * @returns {'reuse' | 'renew'}
+ *
+ * @why 入参刻意写成"可选 + 可为 null"而不是先写上具体对象类型：
+ *      这里是**调用方可能传脏值**的那一层（超时的老状态、`JSON.stringify` 之前的对象缺失），
+ *      而 `await` 之间的状态本来就可能是半个；把它声明成必填，只会让"防御分支"在类型层面无处可测
+ *      ——测试的脏输入用例（`null` / `{}`）会编译不过，防御代码反而因此被删。
+ *      ⚠️ 用 `Partial<…>` 而不是裸对象字面量联合（`{{…}|null|undefined}`）：
+ *      后者 JS 里没有与之对应的语法，TS 的 JSDoc 解析器处理嵌套大括号联合时会把
+ *      `?` 与联合都丢掉，得出一个"必填对象"类型——实测正是这 2 条 TS2345 的来源。
+ *
+ * @why 规则只有一句：**同一个键 ⇔ 同一份请求体**。服务端正是这样判的
+ *      （同键同指纹 → 重放首次结果；同键不同指纹 → 40908）。
+ *      A5（AJ-190）只在"成功"与"选了新地址"时作废键，漏了其它会改请求体的事：
+ *      改邮箱、切后台回来重报价后合计变了、当前地址被删后回落默认。
+ *      超时之后只要碰了其中任何一样再点，就是同键不同内容——40908，且这一页再也点不通。
+ * @why 比**整份请求体**而不是逐个字段登记"哪些变化要换键"：逐个登记正是漏掉的原因；
+ *      请求体就是服务端取指纹的对象，拿它比，永远不会与服务端的判定不一致。
+ * @tradeoff 上一次结果未知（超时）而内容又变了时，换键可能建出**第二张未付款的单**
+ *      （若上一次其实已建成）。它不会扣两次钱：两张都是待付款，多出来的那张 30 分钟后自动关单并回补库存。
+ *      另一个选择是不换键——那就是 40908 死路，用户只能退出重进，而退出重进同样会换键。
+ *      两害取其轻：让用户能把单下出去。
+ * @limitation 依赖请求体 JSON 的键序稳定：`orderBody` 每次按固定顺序建对象，成立。
+ */
+export function keyAction(args) {
+  const a = args && typeof args === 'object' ? args : {};
+  if (typeof a.sentBody !== 'string') return 'reuse';
+  return a.sentBody === a.body ? 'reuse' : 'renew';
 }
 
 /**

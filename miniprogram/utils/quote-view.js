@@ -24,7 +24,12 @@ import { displaySubLine, formatJpy } from './price-format.js';
  * Quote 响应 → 报价区视图。
  * @param {unknown} quote 契约 `Quote`；null/undefined = 还没报价（调用方不渲染报价区）
  * @returns {{lines: Array<{label: string, value: string}>, hasTotal: boolean,
- *            totalJpy: number|null, totalText: string, totalSub: string, hints: Array<string>}}
+ *            totalJpy: number|null, totalText: string, totalSub: string, hints: Array<string>,
+ *            splitRequired: boolean}}
+ *          `splitRequired` = 服务端的 `split_hint`（**已超**单笔上限）。
+ *          @why 单独给一个布尔而不是让页面去读 `split_hint`：它是**提交闸门的输入**
+ *          （超了就不能提交，B38 / AJ-221），让调用方自己解析同一个字段会导致
+ *          "有的地方拦、有的地方不拦"。
  */
 export function quoteView(quote) {
   const q = quote && typeof quote === 'object' ? quote : {};
@@ -47,7 +52,11 @@ export function quoteView(quote) {
     hints.push(`再买 ${formatJpy(q.free_shipping_remaining_jpy)} 免运费`);
   }
   if (q.split_hint === true) {
-    hints.push('单笔金额接近出口申报上限，建议拆成两单');
+    // B38 / AJ-221：⚠️ 服务端 `splitHint` 是 `total > maxOrderJpy`——**已经超了**，
+    // 旧文案写"接近上限，建议拆成两单"是**把既成事实写成提醒**，还放行提交，
+    // 于是用户提交必然吃 40906。措辞必须说"已超过"，且页面必须**不放行**（见 splitRequired）。
+    // ⚠️ 不提"申报"：为规避申报而拆单的措辞有审核与合规敏感性，只说"单笔上限"。
+    hints.push('已超过单笔上限，请分两单下单');
   }
   /**
    * `hasTotal` 是给 wxml 的开关：合计交给 `ws-price`（口径组件），
@@ -55,5 +64,13 @@ export function quoteView(quote) {
    * @why 不由 wxml 自己写 `!== null` 判断：WXML 表达式的能力边界各家写法不一，
    *      把判断留在可测的纯函数里更安全。
    */
-  return { lines, hasTotal, totalJpy, totalText, totalSub, hints };
+  return {
+    lines,
+    hasTotal,
+    totalJpy,
+    totalText,
+    totalSub,
+    hints,
+    splitRequired: q.split_hint === true,
+  };
 }

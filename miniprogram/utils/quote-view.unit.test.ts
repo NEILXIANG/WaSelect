@@ -57,7 +57,31 @@ describe('quoteView（报价区）', () => {
 
   it('免邮差额 > 0 → 提示"再买 X 免运费"；split_hint → 拆单提示', () => {
     const v = quoteView({ ...QUOTE, free_shipping_remaining_jpy: 1200, split_hint: true });
-    expect(v.hints).toEqual(['再买 1,200 円 免运费', '单笔金额接近出口申报上限，建议拆成两单']);
+    expect(v.hints).toEqual(['再买 1,200 円 免运费', '已超过单笔上限，请分两单下单']);
+  });
+
+  describe('split_hint（B38 / AJ-221：它是"已超过"，不是"接近"）', () => {
+    it('文案必须说"已超过"，且不许再出现"接近"', () => {
+      // @why 服务端 `splitHint = total > maxOrderJpy`——已经超了。
+      //      "接近上限，建议拆单"把既成事实写成提醒，页面还放行提交，
+      //      于是用户提交必然吃 40906（看起来像系统问题）。
+      const v = quoteView({ ...QUOTE, split_hint: true });
+      expect(v.hints).toEqual(['已超过单笔上限，请分两单下单']);
+      expect(v.hints.join('')).not.toContain('接近');
+    });
+
+    it('⚠️ 不提"申报"：为规避申报而拆单的措辞有审核与合规敏感性', () => {
+      const v = quoteView({ ...QUOTE, split_hint: true });
+      expect(v.hints.join('')).not.toContain('申报');
+    });
+
+    it('splitRequired 与 split_hint 同步（闸门的输入，不是只给一句话）', () => {
+      expect(quoteView({ ...QUOTE, split_hint: true }).splitRequired).toBe(true);
+      expect(quoteView({ ...QUOTE, split_hint: false }).splitRequired).toBe(false);
+      expect(quoteView({}).splitRequired).toBe(false);
+      // 形态不对也不该变成 true（"undefined === true"永远假，但字符串 'true' 不能算数）
+      expect(quoteView({ split_hint: 'true' }).splitRequired).toBe(false);
+    });
   });
 
   it('⚠️ 缺字段降级：只缺运费 → 其余行还在（不让整个报价区消失）', () => {

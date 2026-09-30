@@ -48,10 +48,11 @@ import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import {
   PAY_FAIL_TEXT,
+  closedScreen,
   copyResult,
+  onShowAction,
   payPageView,
   payStartDecision,
-  shouldRefreshOnShow,
 } from './index.vm.js';
 
 const app = getApp();
@@ -115,7 +116,8 @@ Page({
    *      只查 JPY 时它**永远不出现**（AJ-180）。
    */
   async load() {
-    this.setData({ loading: true });
+    // 清掉上一次的错误：不清的话旧错误会一直挂在重新取回来的内容上面
+    this.setData({ loading: true, error: '' });
     try {
       const order = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}`,
@@ -126,7 +128,7 @@ Page({
       const view = payPageView(order);
       this.setData({ totalJpy: total, closedText: view.closedText });
       if (!view.payable) {
-        this.setData({ channels: [], notice: [] });
+        this.setData(closedScreen(view.closedText));
         return;
       }
       if (total === null) {
@@ -157,21 +159,39 @@ Page({
    * 从后台或上一页回来时重新取数（B35 / AJ-218）。
    * @why 支付完成的真值在服务端回调里，本页不轮询；用户去浏览器付完款再回来，
    *      只有重新取数才能把"已付款"显示出来——否则支付方式按钮还挂着，点了就是 40902。
-   *      判断在 `shouldRefreshOnShow`（copylink / 引导屏 / 在途 三种情况不刷新）。
+   *      判断在 `onShowAction`（copylink / 引导屏 / 在途 三种情况不刷新）。
    */
   onShow() {
     if (this.loaded !== true) return;
     if (this.orderId === '') return;
-    if (
-      !shouldRefreshOnShow({
-        payUrl: this.data.payUrl,
-        guideTitle: this.data.guide?.title,
-        paying: this.data.paying,
-      })
-    ) {
-      return;
+    const action = onShowAction({
+      payUrl: this.data.payUrl,
+      guideTitle: this.data.guide?.title,
+      paying: this.data.paying,
+    });
+    if (action === 'reload') void this.load();
+    else if (action === 'status') void this.checkStatus();
+  },
+
+  /**
+   * 只查订单状态（copylink 屏 / 引导屏回到前台时用，AJ-227）。
+   * @why 不调 `load()`：那会重取支付方式并可能改写屏幕——用户切出去就是为了粘贴这条短链，
+   *      回来发现它没了等于把人回家的路拆掉。这里只在"**已经不需要支付**"时才动页面。
+   * @why 失败**静默**：这是一次顺手的核对，不是用户发起的动作；
+   *      网络抖一下就在他正在用的短链上面盖一条"加载失败"，比什么都不说更糟。
+   *      下一次回到前台还会再查，且"查看订单"始终可点。
+   */
+  async checkStatus() {
+    try {
+      const order = await app.globalData.api({
+        url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}`,
+        traceId: this.traceId,
+      });
+      const view = payPageView(order);
+      if (!view.payable) this.setData(closedScreen(view.closedText));
+    } catch {
+      // 见上：静默
     }
-    void this.load();
   },
 
   /** 选一个通道 → 发起支付。判断全在 `index.vm.js`（约束十一：薄壳只做编排）。 */
@@ -220,9 +240,12 @@ Page({
         // 微信支付成功后页面纹丝不动，用户再点一次得 40902（订单其实已经付了）。
         // 用 redirectTo 而不是 navigateTo：支付页不该留在返回栈里
         // （@see onViewOrders 同一条理由；订单已建好，这一页的历史使命结束）。
+        // ⚠️ 参数名是 `id` 不是 `orderId`（R-03 / AJ-225）：订单详情页读的是 `options.id`
+        //    （订单列表也传 `?id=`）。这里曾写成 `?orderId=`——付款成功后落地页显示
+        //    "订单不存在或链接无效"。参数名现在由 `miniprogram/nav-param-guard.unit.test.ts` 逐处核对。
         success: () =>
           wxApi.redirectTo({
-            url: `${ORDER_DETAIL_PAGE}?orderId=${encodeURIComponent(this.orderId)}`,
+            url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}`,
           }),
         // @see @limitation 三：取消与失败一视同仁。⚠️ 但不走 errorMessage——
         // 宿主 fail 的形状是 {errMsg}，读出来是 "requestPayment:fail cancel" 这种黑盒文案，
@@ -233,10 +256,13 @@ Page({
     }
     if (plan.kind === 'copylink') {
       // ⚠️ 不自动复制：剪贴板是用户的东西，未经动作就改写它是越界。用户点"复制链接"再复制。
-      this.setData({ payUrl: plan.url, guide: payGuide(plan) });
+      // ⚠️ `copied` 必须复位（AJ-227）：服务端每次发起都**轮换**短链 token，
+      //    这是一条新链接；按钮若还写着"已复制"，用户会去浏览器粘贴刚失效的那条。
+      this.setData({ payUrl: plan.url, guide: payGuide(plan), copied: false });
       return;
     }
-    this.setData({ guide: payGuide(plan) });
+    // 非 copylink 的引导屏：不该留着上一次的短链与"已复制"
+    this.setData({ guide: payGuide(plan), payUrl: '', copied: false });
   },
 
   /**

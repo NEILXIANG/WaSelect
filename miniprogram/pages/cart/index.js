@@ -139,7 +139,13 @@ Page({
       });
       if (isStale(seq, this.quoteSeq)) return;
       const quote = quoteView(res);
-      this.setData({ quote, gate: checkoutGate({ hasTotal: hasTotal(quote) }) });
+      this.setData({
+        quote,
+        gate: checkoutGate({
+          hasTotal: hasTotal(quote),
+          splitRequired: quote?.splitRequired === true,
+        }),
+      });
     } catch (e) {
       if (isStale(seq, this.quoteSeq)) return;
       this.setData({
@@ -155,6 +161,7 @@ Page({
           gate: checkoutGate({
             hasTotal: hasTotal(this.data.quote),
             hasError: this.data.quoteError !== '',
+            splitRequired: this.data.quote?.splitRequired === true,
           }),
         });
       }

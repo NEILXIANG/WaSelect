@@ -24,7 +24,15 @@
  * @see ./index.vm.js（商品行/闸门/请求体）；../../utils/idempotency.js（幂等键生命周期）；
  *      ../../utils/quote-view.js（报价区）；../../utils/address-form.js（地址摘要）
  */
-import { contactEmailOf, itemRows, orderBody, resolveAddressId, submitGate } from './index.vm.js';
+import {
+  contactEmailOf,
+  itemRows,
+  orderBody,
+  keyAction,
+  recoveryFor,
+  resolveAddressId,
+  submitGate,
+} from './index.vm.js';
 import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { addressSummary, defaultAddressId } from '../../utils/address-form.js';
 import { quoteView } from '../../utils/quote-view.js';
@@ -59,6 +67,10 @@ Page({
     emailError: '',
     /** 提交闸门：{ok, reason}。 */
     gate: { ok: false, reason: '' },
+    /** `GET /terms` 失败（闸门据此说明原因，而不是让提交时抛开发者报错，AJ-228）。 */
+    termsFailed: false,
+    /** 报价失败（与"报价还没回来"分开：失败不会再有结果，AJ-228）。 */
+    quoteFailed: false,
     loading: false,
     submitting: false,
     /** 错误文案（空串 = 无错误）。 */
@@ -69,6 +81,14 @@ Page({
   addressId: '',
   /** 幂等键的生命周期器（@see @limitation 二）；**不放在 data 里**（它不是渲染数据）。 */
   intentKey: null,
+  /**
+   * **上一次带出去的请求体**（JSON 文本；没发过为 null）。
+   * 规则：同一个键 ⇔ 同一份请求体（@see index.vm.js `keyAction`，AJ-228）。
+   * @why 键作废时**不必**清它：作废后 `acquire()` 必给新键，这份旧文本与下一次比出
+   *      "相同"还是"不同"都只是多 / 少作废一次已经作废的键，结果一样
+   *      （注回实验证实：清不清它，11 条行为用例无差别——所以不写一行测不出来的代码）。
+   */
+  sentBody: null,
   traceId: '',
 
   onLoad() {
@@ -80,21 +100,22 @@ Page({
     void this.refresh();
   },
 
-  /** 重读购物车 + 并发取三条 + 重算闸门。 */
-  async refresh() {
-    this.setData({ loading: true });
+  /**
+   * 重读购物车 + 并发取三条 + 重算闸门。
+   * @param {{keepError?: boolean}} [opts] `keepError=true` = **保留**当前错误文案
+   *        （B37 / AJ-220 的恢复路径用：重报价之后还得让用户看见"刚才为什么失败"）。
+   * @why 默认清掉：从条款页返回、切后台回来都会走 `onShow → refresh`，
+   *      留着上一次的错误条会让用户以为"我什么都没做，它又失败了"。
+   */
+  async refresh(opts) {
+    const keepError = opts !== null && typeof opts === 'object' && opts.keepError === true;
+    this.setData(keepError ? { loading: true } : { loading: true, error: '' });
     const items = app.globalData.cart.items();
     this.setData({ rows: itemRows(items) });
 
-    // ⚠️ 空车不报价也不建单：空 items 会被服务端 40001 拒，
-    //    而"打开空的结算页有个错误提示"是荒谬的
-    const gate = submitGate({
-      itemCount: items.length,
-      addressId: this.addressId,
-      termsAccepted: this.data.termsAccepted,
-      totalJpy: this.data.quote?.totalJpy ?? null,
-    });
-    this.setData({ gate });
+    // ⚠️ 闸门只有 `updateGate` 一处算（AJ-228）：这里曾另算一遍，漏了"超过单笔上限"与
+    //    "邮箱填错"两项——每次 onShow 到请求返回之间，已经被拦住的按钮会重新可点。
+    this.updateGate();
 
     if (items.length === 0) {
       this.setData({ loading: false, quote: null });
@@ -111,10 +132,11 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/terms`,
         traceId: this.traceId,
       });
-      this.setData({ termsVersion: typeof res?.version === 'string' ? res.version : '' });
+      const version = typeof res?.version === 'string' ? res.version : '';
+      this.setData({ termsVersion: version, termsFailed: version === '' });
     } catch (e) {
-      // ⚠️ 拿不到版本 = 不能下单（vm 的 orderBody 会抛）：明示而不是留空串让用户提交失败
-      this.setData({ error: errorMessage(e) });
+      // ⚠️ 拿不到版本 = 不能下单：由闸门拦住并说明（termsFailed），不留给提交时再失败
+      this.setData({ termsVersion: '', termsFailed: true, error: errorMessage(e) });
     }
     this.updateGate();
   },
@@ -162,9 +184,9 @@ Page({
         data: { items: items.map((i) => ({ product_id: i.productId, qty: i.qty })) },
         traceId: this.traceId,
       });
-      this.setData({ quote: quoteView(res) });
+      this.setData({ quote: quoteView(res), quoteFailed: false });
     } catch (e) {
-      this.setData({ quote: null, error: errorMessage(e) });
+      this.setData({ quote: null, quoteFailed: true, error: errorMessage(e) });
     }
     this.updateGate();
   },
@@ -177,6 +199,11 @@ Page({
       termsAccepted: this.data.termsAccepted,
       totalJpy: this.data.quote?.totalJpy ?? null,
       emailError: this.data.emailError,
+      // B38 / AJ-221：超过单笔上限时**不放行**（提交必然 40906）
+      splitRequired: this.data.quote?.splitRequired === true,
+      termsReady: this.data.termsVersion !== '',
+      termsFailed: this.data.termsFailed === true,
+      quoteFailed: this.data.quoteFailed === true,
     });
     this.setData({ gate });
   },
@@ -218,20 +245,36 @@ Page({
    */
   onSubmit() {
     if (!this.data.gate.ok || this.intentKey === null) return;
-    const { key } = this.intentKey.acquire();
-    void this.createOrder(key);
-  },
-
-  async createOrder(idemKey) {
-    this.setData({ submitting: true, error: '' });
+    let body;
     try {
-      const body = orderBody({
+      body = orderBody({
         items: app.globalData.cart.items(),
         addressId: this.addressId,
         termsVersion: this.data.termsVersion,
         expectedTotalJpy: this.data.quote?.totalJpy ?? null,
         contactEmail: contactEmailOf(this.data.email).value,
       });
+    } catch {
+      // 闸门已经拦住了会让 orderBody 抛的两种情形（没地址 / 没条款版本）；走到这里说明
+      // 闸门与 orderBody 的前提不同步了。不把那句给开发者看的报错摆出来，重算闸门让它自己说。
+      this.updateGate();
+      return;
+    }
+    // 同一个键 ⇔ 同一份请求体：内容变了就换键（AJ-228，@see index.vm.js `keyAction`）
+    const json = JSON.stringify(body);
+    if (keyAction({ sentBody: this.sentBody, body: json }) === 'renew') this.intentKey?.retire();
+    const { key } = this.intentKey.acquire();
+    this.sentBody = json;
+    void this.createOrder(key, body);
+  },
+
+  /**
+   * @param {string} idemKey
+   * @param {object} body `onSubmit` 组好的请求体（与取键时比对的是同一份）
+   */
+  async createOrder(idemKey, body) {
+    this.setData({ submitting: true, error: '' });
+    try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders`,
         method: 'POST',
@@ -245,8 +288,24 @@ Page({
       this.intentKey?.retire();
       wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${res?.order_id ?? ''}` });
     } catch (e) {
-      // ⚠️ 不 retire：键留给重试（弱网下用户看到错误再点一次必须还是同一个键）
+      const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
+      // ⚠️ 默认**不** retire：键留给重试（弱网下用户看到错误再点一次必须还是同一个键）
       this.setData({ error: errorMessage(e) });
+      // B37 / AJ-220：执行错误码登记表里写明的恢复动作——
+      // 不执行的话 40905（管理员改价）会变成"再点还是 40905，只能退出重进"。
+      if (recoveryFor(code) === 'requote') {
+        // 价格/库存/商品变了 = 意图内容变了 → 旧键不能沿用（同键提交不同内容会被拒）
+        this.intentKey?.retire();
+        // keepError：重报价之后仍要让用户看见"刚才为什么失败"（否则他不知道要重新确认金额）
+        void this.refresh({ keepError: true });
+      } else if (recoveryFor(code) === 'reload_terms') {
+        // 条款升级：重拉版本并把"已同意"复位（让用户对新条款重新确认，而不是对着旧版本点头）
+        this.setData({ termsAccepted: false });
+        void this.fetchTerms();
+      } else if (recoveryFor(code) === 'renew_key') {
+        // 40908：同键不同内容。作废键，下一次点击就是一次新的意图（AJ-228）
+        this.intentKey?.retire();
+      }
     } finally {
       this.setData({ submitting: false });
     }

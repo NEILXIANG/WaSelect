@@ -10,11 +10,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  EMPTY_GUIDE,
   PAY_FAIL_TEXT,
+  closedScreen,
   copyResult,
+  onShowAction,
   payPageView,
   payStartDecision,
-  shouldRefreshOnShow,
 } from './index.vm.js';
 
 const BASE = { paying: false, channel: 'stripe', lastChannel: '', hasKey: true };
@@ -182,26 +184,51 @@ describe('payPageView：这张单还能不能走支付流程（B35 / AJ-218）',
   });
 });
 
-describe('shouldRefreshOnShow：回到支付页要不要重新取数（B35 / AJ-218）', () => {
-  it('普通状态（还没发起、没有短链）→ 刷新（真值在服务端回调里，本页不轮询）', () => {
-    expect(shouldRefreshOnShow({ payUrl: '', guideTitle: '', paying: false })).toBe(true);
-    expect(shouldRefreshOnShow({})).toBe(true);
+describe('onShowAction：回到支付页该做什么（B35 / AJ-218 → AJ-227）', () => {
+  it('普通状态（还没发起、没有短链）→ reload（真值在服务端回调里，本页不轮询）', () => {
+    expect(onShowAction({ payUrl: '', guideTitle: '', paying: false })).toBe('reload');
+    expect(onShowAction({})).toBe('reload');
     // 参数整体不是对象也不能炸
-    expect(shouldRefreshOnShow(null)).toBe(true);
-    expect(shouldRefreshOnShow(undefined)).toBe(true);
+    expect(onShowAction(null)).toBe('reload');
+    expect(onShowAction(undefined)).toBe('reload');
   });
 
-  it('copylink 屏正在用 → 不刷新：刷掉短链等于把人回家的路拆了', () => {
-    expect(shouldRefreshOnShow({ payUrl: 'https://pay.test/l/abc' })).toBe(false);
+  /**
+   * ⚠️ 这条的期望值**改了**（原来是"copylink 屏 → 不刷新"）。
+   * @why "去浏览器付款"只发生在 copylink 屏；这一屏什么都不做，付完回来就还挂着支付方式，
+   *      点了 40902——B35 要修的正是它。现在是 `status`：只查订单，已不可付才收起，
+   *      仍可付则短链原样保留（这一半由 index.shell.unit.test.ts 的行为用例验）。
+   */
+  it('🔴 copylink 屏正在用 → status（只查订单状态，不是 none 也不是 reload）', () => {
+    expect(onShowAction({ payUrl: 'https://pay.test/l/abc' })).toBe('status');
   });
 
-  it('任何引导屏（auto / unsupported）→ 不刷新：别把用户正在看的东西弄没', () => {
-    expect(shouldRefreshOnShow({ guideTitle: '支付已完成' })).toBe(false);
-    expect(shouldRefreshOnShow({ guideTitle: '暂时无法支付' })).toBe(false);
+  it('任何引导屏（auto / unsupported）→ status：同理', () => {
+    expect(onShowAction({ guideTitle: '支付已完成' })).toBe('status');
+    expect(onShowAction({ guideTitle: '暂时无法支付' })).toBe('status');
   });
 
-  it('发起支付在途中 → 不刷新（再取一次会并发两个"发起"）', () => {
-    expect(shouldRefreshOnShow({ paying: true })).toBe(false);
+  it('发起支付在途中 → none（再取一次会并发两个"发起"），且优先于其它两条', () => {
+    expect(onShowAction({ paying: true })).toBe('none');
+    expect(onShowAction({ paying: true, payUrl: 'https://pay.test/l/abc' })).toBe('none');
+  });
+});
+
+describe('closedScreen：订单已不需要支付时要清掉的全部内容（AJ-227）', () => {
+  it('五样一起清：支付方式、提示条、短链、引导、"已复制"', () => {
+    expect(closedScreen('该订单已付款，无需再支付')).toEqual({
+      closedText: '该订单已付款，无需再支付',
+      channels: [],
+      notice: [],
+      payUrl: '',
+      guide: { title: '', body: '', actionText: '' },
+      copied: false,
+    });
+  });
+
+  it('每次返回新的 guide 对象（不把冻结的常量交给 setData）', () => {
+    expect(closedScreen('x').guide).not.toBe(EMPTY_GUIDE);
+    expect(Object.isFrozen(closedScreen('x').guide)).toBe(false);
   });
 });
 
@@ -242,10 +269,10 @@ describe('防复发：薄壳的三处接线（B35 / AJ-218）', () => {
     expect(call).not.toContain('errorMessage');
   });
 
-  it('取数必须用 payPageView 决定"要不要列通道"；onShow 必须走 shouldRefreshOnShow', () => {
+  it('取数必须用 payPageView 决定"要不要列通道"；onShow 必须走 onShowAction', () => {
     // @why 这两条是"接线存在性"的下限：漏接的表现是页面静默回到 B35 之前的行为，
     //      而所有纯函数用例仍然全绿。
     expect(code).toContain('payPageView(');
-    expect(code).toContain('shouldRefreshOnShow(');
+    expect(code).toContain('onShowAction(');
   });
 });

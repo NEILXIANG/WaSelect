@@ -106,7 +106,9 @@ export function payGuide(plan) {
   if (p.kind === 'auto') {
     return {
       title: '支付已完成',
-      body: '本次为审核期测试单，无需真实付款。',
+      // ⚠️ 不写"审核期 / 测试单"（AJ-244）：审核员看到的界面要与线上一致；
+      //    测试 SKU 与 mock 支付路径写进提审时的「审核备注」，不写进界面
+      body: '订单已确认，可在订单详情中查看进度。',
       actionText: '查看订单',
     };
   }
@@ -197,7 +199,7 @@ const CURRENCY_NAME = { JPY: '日元', USD: '美元' };
  * §14.2 支付前提示条（官方《小程序平台运营规范》§14.2："执行支付动作前，需在页面中对用户有明确的提示"，D-48）。
  * @param {ReturnType<typeof chargeOptions>} options
  * @param {unknown} order 读 created_at / expires_at（只做两个时刻相减，**不取"现在"**——F10 同口径）
- * @returns {string[]} 逐行文案：各通道实扣币种与金额 → copylink 离开微信 → 超时关单
+ * @returns {string[]} 逐行文案：各通道实扣币种与金额 → copylink 在浏览器完成 → 超时关单
  * @why 关单分钟数由订单自己的两个时刻算，而不是写死 30：TTL 是服务端配置（ORDER_PAYMENT_TTL_MIN），
  *      写死就是"改了配置、提示还说 30 分钟"。
  */
@@ -214,7 +216,8 @@ export function payNotice(options, order) {
   }
   for (const o of opts) {
     if (o.entryMode === 'copylink') {
-      lines.push(`选择「${o.label}」将离开微信，复制链接后在 Safari / Chrome 等浏览器中完成支付`);
+      // 只陈述事实（怎么付），不写"离开微信"（AJ-244：不替审核员把问题说出来；实物在外部支付不在禁止之列，R20b）
+      lines.push(`选择「${o.label}」需复制支付链接，在手机浏览器中打开完成支付`);
     }
   }
   const ord = order && typeof order === 'object' ? order : {};

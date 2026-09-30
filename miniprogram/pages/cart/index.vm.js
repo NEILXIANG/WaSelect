@@ -40,10 +40,12 @@ export function cartRows(items) {
 /**
  * 「去结算」按钮的状态与它下面那句话（B36 / AJ-219）。
  *
- * @param {{quoting?: unknown, hasTotal?: unknown, hasError?: unknown}|null|undefined} s
- *   `quoting`  报价在途中（改了数量之后、新合计还没回来）
- *   `hasTotal` 当前 quote 有权威合计（`quote.totalJpy !== null`）
- *   `hasError` 上一次报价失败了
+ * @param {{quoting?: unknown, hasTotal?: unknown, hasError?: unknown,
+ *          splitRequired?: unknown}|null|undefined} s
+ *   `quoting`       报价在途中（改了数量之后、新合计还没回来）
+ *   `hasTotal`      当前 quote 有权威合计（薄壳传 `hasTotal(quote)`）
+ *   `hasError`      上一次报价失败了
+ *   `splitRequired` 服务端 `split_hint`：**已超过**单笔上限（B38 / AJ-221）
  * @returns {{disabled: boolean, hint: string}} hint 空串 = 不渲染那行提示
  *
  * @why 以前 `checkoutHint` 是**一个写死的常量**"运费与合计还在计算中"，
@@ -63,6 +65,9 @@ export function checkoutGate(s) {
   const a = s !== null && typeof s === 'object' ? s : {};
   if (a.quoting === true) return { disabled: true, hint: '数量已改，正在重新计算…' };
   if (a.hasError === true) return { disabled: true, hint: '合计未能获取，请稍后重试' };
+  // B38 / AJ-221：已超单笔上限 → 结算页会 40906，在购物车就把入口关掉
+  // （让用户在**能改数量**的这一页解决，而不是跳过去再被弹回来）
+  if (a.splitRequired === true) return { disabled: true, hint: '已超过单笔上限，请分两单下单' };
   if (a.hasTotal === true) return { disabled: false, hint: '' };
   return { disabled: true, hint: '运费与合计还在计算中' };
 }

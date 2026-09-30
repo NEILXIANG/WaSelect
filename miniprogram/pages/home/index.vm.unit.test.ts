@@ -269,8 +269,12 @@ describe('防复发：首页薄壳的乱序接线（B36 / AJ-219）', () => {
     expect(count('这段字符串根本不存在')).toBe(0);
   });
 
-  it('reload 与 loadMore 都要领号（切分类后在途的"下一页"必须被丢弃）', () => {
-    expect(count('nextSeq(this.seq)'), '两处取数各领一次号').toBe(2);
+  it('只有 reload 领号；loadMore 借用当前号（R-04 / AJ-226：二者都领号会互相判过期）', () => {
+    // ⚠️ 这条原先钉的是"两处各领一次号 = 2"——那正是缺陷本身：loadMore 领走新号，
+    //    在途的 reload 就被判过期、结果丢弃、loading 永不清。行为由 index.shell.unit.test.ts 验，
+    //    这里只留一条廉价的文本哨兵，防有人顺手把 loadMore 改回领号。
+    expect(count('nextSeq(this.seq)'), '只有 reload 领号').toBe(1);
+    expect(count('const seq = this.seq;'), 'loadMore 借用当前号').toBe(1);
   });
 
   it('结果回来后必须判过期——成功、失败、finally 三处都得判', () => {

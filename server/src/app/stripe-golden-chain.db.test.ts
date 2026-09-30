@@ -418,7 +418,9 @@ describe('§14.2 支付前提示：小程序算出的"实扣币种与金额" = �
       currency: card?.charge.currency,
       amount: card?.charge.amount,
     });
-    expect(payNotice(opts, order.json).join('\n')).toContain('离开微信');
+    expect(payNotice(opts, order.json).join('\n')).toContain(
+      '在手机浏览器中打开完成支付' /* AJ-244：原为「离开微信」 */,
+    );
   });
 });
 
