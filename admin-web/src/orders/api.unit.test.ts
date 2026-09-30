@@ -134,7 +134,32 @@ describe('refundOrder', () => {
 
   it('⚠️ 202 也当作成功（契约的退款就是 202；只有 2xx 判定会把它当失败）', async () => {
     const { impl } = stubFetch(() => json({}, 202));
-    await expect(refundOrder(api(impl), 'o-1', { reason: 'x' })).resolves.toBeUndefined();
+    await expect(refundOrder(api(impl), 'o-1', { reason: 'x' })).resolves.toBe('unknown');
+  });
+
+  /**
+   * B41 / AJ-215：`outcome` 必须被读出来。
+   * @why 此前 `refundOrder` 返回 `void`，于是 `pending`（机构处理中）在界面上
+   *      **没有任何提示**——运营看到订单停在"退款中"、提示语又写着"失败可重试"，
+   *      会转去 Stripe 后台手工退同一笔（AJ-178 反向风险①：同一笔钱退两次）。
+   */
+  describe('outcome（B41 / AJ-215）', () => {
+    it('🔴 succeeded → 钱已退（界面可以说"已完成"）', async () => {
+      const { impl } = stubFetch(() => json({ order_id: 'o-1', outcome: 'succeeded' }, 202));
+      await expect(refundOrder(api(impl), 'o-1', { reason: 'x' })).resolves.toBe('succeeded');
+    });
+
+    it('🔴 pending → 机构处理中（**不是**失败：界面必须说出来，否则运营会去手工退）', async () => {
+      const { impl } = stubFetch(() => json({ order_id: 'o-1', outcome: 'pending' }, 202));
+      await expect(refundOrder(api(impl), 'o-1', { reason: 'x' })).resolves.toBe('pending');
+    });
+
+    it('⚠️ 认不出 → unknown，**不许猜成 pending**（那是在编造一个我们并不知道的事实）', async () => {
+      const { impl } = stubFetch(() => json({ order_id: 'o-1', outcome: 'weird' }, 202));
+      await expect(refundOrder(api(impl), 'o-1', { reason: 'x' })).resolves.toBe('unknown');
+      const { impl: b } = stubFetch(() => json({}, 202));
+      await expect(refundOrder(api(b), 'o-1', { reason: 'x' })).resolves.toBe('unknown');
+    });
   });
 
   it('⚠️ 40907（拒付中）原样抛出：文案要能让运营知道去拒付列表处理', async () => {

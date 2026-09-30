@@ -206,8 +206,13 @@ describe('订单：真服务端 → 列表行与闸门；闸门与服务端判�
     await db`insert into order_events (order_id, status, actor, note, at) values (${id}, 'refunding', 'admin', '缺货', now())`;
     const g = refundGate(await getOrder(api, id));
     expect(g.ok).toBe(true); // KD-4：服务端允许重试，前端不能把唯一入口堵死
-    expect(g.reason).toContain('重试');
-    await refundOrder(api, id, { reason: '再试一次' });
+    // B41（AJ-215）：提示必须覆盖三种结果，且不得编造"幂等键"这种服务端没有的行为
+    expect(g.reason).toContain('查询');
+    expect(g.reason).toContain('不会重复退两次');
+    expect(g.reason).not.toContain('同一幂等键');
+    // 退款接口现在回传机构结果：mock 通道同步完成 → succeeded（不是拿不到就猜 pending）
+    const outcome = await refundOrder(api, id, { reason: '再试一次' });
+    expect(outcome).toBe('succeeded');
     const done = await getOrder(api, id);
     expect(done.status).toBe('refunded');
     expect(refundGate(done)).toEqual({ ok: false, reason: '已退款' });

@@ -113,23 +113,43 @@ export async function shipOrder(
 }
 
 /**
+ * 退款结果（契约 0.6.11：`202 {order_id, outcome}`）。
+ *
+ * @why 判别联合而不是 `string`：调用方必须穷举三种——
+ *      `succeeded`（钱已退，订单 refunded）、`pending`（机构处理中，订单停在 refunding）、
+ *      `unknown`（响应形状认不出）。把它们折成一个布尔会让"处理中"与"失败"同形，
+ *      而运营对两者的动作**相反**（等 vs 重试），见 B41 / AJ-215。
+ */
+export type RefundOutcome = 'succeeded' | 'pending' | 'unknown';
+
+/**
  * `POST /admin/orders/{id}/refund`（全额退款；原币退）。
- * @why 返回值是 202 且不读响应体：契约没给退款响应结构，
- *      "看起来成功了"这件事由服务端的状态机（refunding → refunded）表达，
- *      前端要确认结果就再拉一次详情——凭空假设一个 `{refund_id}` 只会造出永不兑现的字段。
+ *
+ * @why **必须读 `outcome`**（B41 / AJ-215）：契约 0.6.11 起 202 带它，
+ *      而此前这里返回 `void`、注释写"契约没给响应结构"——于是
+ *      `pending`（机构处理中）在界面上**没有任何提示**，运营看到订单停在"退款中"、
+ *      提示语又写着"机构调用失败或超时，可重试"，会认定退款失败并转去 Stripe 后台手工退，
+ *      正落进 AJ-178 反向风险①（同一笔钱被退两次）。
+ * @why 认不出就返回 `unknown` 而不是猜成 `pending`：猜"处理中"会让界面显示
+ *      "已提交，等待机构确认"——那是一个**我们并不知道**的事实；
+ *      `unknown` 由界面按"结果未知，请刷新详情确认"处理，不编造。
  */
 export async function refundOrder(
   api: AdminApi,
   id: string,
   body: { reason: string },
   traceId?: string,
-): Promise<void> {
-  await api({
+): Promise<RefundOutcome> {
+  const res = await api({
     path: `/api/v1/admin/orders/${encodeURIComponent(id)}/refund`,
     method: 'POST',
     body,
     ...(traceId !== undefined ? { traceId } : {}),
   });
+  const outcome = (res as { outcome?: unknown } | null)?.['outcome'];
+  if (outcome === 'succeeded') return 'succeeded';
+  if (outcome === 'pending') return 'pending';
+  return 'unknown';
 }
 
 /** `POST /admin/orders/{id}/address`（发货前改址；请求体是 `AddressInput`）。 */

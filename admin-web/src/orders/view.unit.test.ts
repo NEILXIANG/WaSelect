@@ -164,11 +164,20 @@ describe('refundGate（退款闸门）', () => {
     expect(g.reason).toContain('取消');
   });
 
-  it('⚠️ refunding 放行为**重试**并说明（KD-12：服务端允许重试，前端不能把唯一入口堵死）', () => {
+  /**
+   * KD-12：服务端允许对停在 refunding 的单再提交，前端不能把唯一入口堵死。
+   * ⚠️ 文案按契约 0.6.11 / F-03（AJ-178）的**三种**情形说（B41 / AJ-215）：
+   *    在途→只查询 / 确认失败→换新键重发 / 结果未知→沿用同键。
+   *    旧文案"同一幂等键不会退两次"只覆盖第三种，运营照它理解第二种会以为"再点也白点"，
+   *    而第二种恰恰是必须再点的那一种。
+   */
+  it('⚠️ refunding 放行，且文案覆盖三种情形（不只说"重试"）', () => {
     const g = refundGate(withStatus('refunding'));
     expect(g.ok).toBe(true);
-    expect(g.reason).toContain('重试');
-    expect(g.reason).toContain('不会退两次');
+    expect(g.reason).toContain('查询');
+    expect(g.reason).toContain('不会重复退两次');
+    // 🔴 不许再说"同一幂等键"——确认失败时服务端会**换新键**重新发起，那句是错的
+    expect(g.reason).not.toContain('同一幂等键');
   });
 
   it('列表行收件人：取顶层 recipient（列表形状，0.6.9），缺失时回落 address.recipient（详情形状）', () => {

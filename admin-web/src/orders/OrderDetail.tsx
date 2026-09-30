@@ -53,6 +53,12 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
   const [order, setOrder] = useState<AdminOrderLike | null>(source);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  /**
+   * 信息性提示（不是错误）：退款提交后的 `outcome` 由这里说清楚（B41 / AJ-215）。
+   * @why 与 `error` 分开：`error` 的样式是红色的，把"机构处理中"显示成红色
+   *      会让运营当成失败——**正是 B41 要防的事**（他会转去 Stripe 后台手工退同一笔）。
+   */
+  const [notice, setNotice] = useState('');
   const [ship, setShip] = useState(emptyShipForm);
   const [refund, setRefund] = useState(emptyRefundForm);
   /** 退款的两步确认（null = 未发起）。 */
@@ -105,10 +111,20 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
       return;
     }
     setBusy('refund');
+    setNotice('');
     try {
-      await refundOrder(api, id, toRefundBody(refund));
+      const outcome = await refundOrder(api, id, toRefundBody(refund));
       setRefund(emptyRefundForm());
       setConfirming(false);
+      // ⚠️ 三种 outcome 必须分别说（B41 / AJ-215）：把它们一律当成"提交成功"的话，
+      //    `pending`（机构处理中）在界面上等于"什么都没发生"，运营会去 Stripe 后台手工退
+      //    ——同一笔钱退两次，且机构侧第二次很可能真的成功。
+      if (outcome === 'succeeded') setNotice('退款已完成（机构已确认），订单状态已更新');
+      else if (outcome === 'pending')
+        setNotice(
+          '已提交机构，处理中：订单保持在「退款中」。稍后可再提交一次查询最新结果（不会重复退款）',
+        );
+      else setNotice('已提交，但响应里没有确认结果：请刷新详情核对订单状态，不要重复提交');
       await load();
       onChanged();
     } catch (e) {
@@ -273,8 +289,10 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 退款
               </button>
             )}
-            {/* 放行时也可能带提示（refunding = 重试，KD-12）：有话就显示，不只在拦的时候 */}
+            {/* 放行时也可能带提示（refunding = 再查询/重发，KD-12）：有话就显示，不只在拦的时候 */}
             {refundG.reason !== '' && <p className="muted">{refundG.reason}</p>}
+            {/* 提交结果（B41）：pending 必须说出来，否则运营会当成失败去 Stripe 手工退 */}
+            {notice !== '' && <p className="muted">{notice}</p>}
           </div>
         </>
       )}
