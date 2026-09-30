@@ -46,7 +46,13 @@ import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { errorMessage } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
-import { payStartDecision } from './index.vm.js';
+import {
+  PAY_FAIL_TEXT,
+  copyResult,
+  payPageView,
+  payStartDecision,
+  shouldRefreshOnShow,
+} from './index.vm.js';
 
 const app = getApp();
 
@@ -56,18 +62,25 @@ const wxApi = createWxApi();
 /** 订单列表页路径（跳转路径只在这一处出现）。 */
 const ORDER_PAGE = '/pages/order/index';
 
+/** 订单详情页路径（支付成功后去这里：这一单的最新真值在详情页，不在本页）。 */
+const ORDER_DETAIL_PAGE = '/pages/order-detail/index';
+
 Page({
   data: {
     /** `chargeOptions` 的输出：每个通道带实扣币种与金额（§14.2，AJ-180）。 */
     channels: [],
     /** §14.2 支付前提示条（逐行文案；空数组 = 不渲染）。 */
     notice: [],
+    /** 订单已不可支付时的说明（空串 = 正常列通道；B35 / AJ-218）。 */
+    closedText: '',
     /** 订单合计（JPY 整数）；null = 还没拿到。 */
     totalJpy: null,
     /** 引导屏文案（copylink / auto / unsupported）；title 空串 = 不渲染引导屏。 */
     guide: { title: '', body: '', actionText: '' },
     /** copylink 的短链（D-49：银行卡唯一入口）。 */
     payUrl: '',
+    /** 短链是否已复制成功（决定按钮文案；失败由 `error` 显示并给兜底动作）。 */
+    copied: false,
     loading: false,
     paying: false,
     /** 错误文案（空串 = 无错误）。 */
@@ -81,6 +94,8 @@ Page({
   /** 上一次发起支付用的通道（空串 = 还没发起过）。 */
   lastChannel: '',
   traceId: '',
+  /** 是否已经取过一次数（`onShow` 的刷新只对"第二次及以后"生效，避免进页面取两遍）。 */
+  loaded: false,
 
   /** @param {{orderId?: string}} options 结算页带来的 `?orderId=…` */
   onLoad(options) {
@@ -107,7 +122,13 @@ Page({
         traceId: this.traceId,
       });
       const total = Number.isInteger(order?.total_jpy) ? order.total_jpy : null;
-      this.setData({ totalJpy: total });
+      // B35 / AJ-218：已付 / 已关 / 已退款的单**不列支付方式**（点了就是 40902）
+      const view = payPageView(order);
+      this.setData({ totalJpy: total, closedText: view.closedText });
+      if (!view.payable) {
+        this.setData({ channels: [], notice: [] });
+        return;
+      }
       if (total === null) {
         this.setData({ error: '订单金额还没确定，请稍后再试' });
         return;
@@ -126,7 +147,31 @@ Page({
       this.setData({ error: errorMessage(e) });
     } finally {
       this.setData({ loading: false });
+      // 首屏由 onLoad 触发；`onShow` 的刷新只对"已经取过一次"之后生效
+      // （微信里 onLoad 与 onShow 会连着各触发一次，不挡就是每次进页面取两遍）
+      this.loaded = true;
     }
+  },
+
+  /**
+   * 从后台或上一页回来时重新取数（B35 / AJ-218）。
+   * @why 支付完成的真值在服务端回调里，本页不轮询；用户去浏览器付完款再回来，
+   *      只有重新取数才能把"已付款"显示出来——否则支付方式按钮还挂着，点了就是 40902。
+   *      判断在 `shouldRefreshOnShow`（copylink / 引导屏 / 在途 三种情况不刷新）。
+   */
+  onShow() {
+    if (this.loaded !== true) return;
+    if (this.orderId === '') return;
+    if (
+      !shouldRefreshOnShow({
+        payUrl: this.data.payUrl,
+        guideTitle: this.data.guide?.title,
+        paying: this.data.paying,
+      })
+    ) {
+      return;
+    }
+    void this.load();
   },
 
   /** 选一个通道 → 发起支付。判断全在 `index.vm.js`（约束十一：薄壳只做编排）。 */
@@ -171,8 +216,18 @@ Page({
     if (plan.kind === 'in_app') {
       wxApi.requestPayment({
         ...plan.params,
-        // @see @limitation 三：取消与失败都不做特殊处理，停在支付页即可
-        fail: (err) => this.setData({ error: errorMessage(err) }),
+        // B35 / AJ-218：成功必须**离开这一页**——以前没有 success 回调，
+        // 微信支付成功后页面纹丝不动，用户再点一次得 40902（订单其实已经付了）。
+        // 用 redirectTo 而不是 navigateTo：支付页不该留在返回栈里
+        // （@see onViewOrders 同一条理由；订单已建好，这一页的历史使命结束）。
+        success: () =>
+          wxApi.redirectTo({
+            url: `${ORDER_DETAIL_PAGE}?orderId=${encodeURIComponent(this.orderId)}`,
+          }),
+        // @see @limitation 三：取消与失败一视同仁。⚠️ 但不走 errorMessage——
+        // 宿主 fail 的形状是 {errMsg}，读出来是 "requestPayment:fail cancel" 这种黑盒文案，
+        // 把"用户主动取消"显示成"加载失败"会让人以为付款出了故障。
+        fail: () => this.setData({ error: PAY_FAIL_TEXT }),
       });
       return;
     }
@@ -184,10 +239,23 @@ Page({
     this.setData({ guide: payGuide(plan) });
   },
 
-  /** 复制短链到剪贴板（D-49：银行卡唯一入口 = 短链 → Stripe Checkout 托管页）。 */
+  /**
+   * 复制短链到剪贴板（D-49：银行卡唯一入口 = 短链 → Stripe Checkout 托管页）。
+   *
+   * @why **必须传 success / fail**（B34 / AJ-217）：`setClipboardData` 是隐私接口，
+   *      用户拒绝隐私弹窗或隐私指引漏声明剪切板时会失败；此前不传回调的表现是
+   *      "点了没反应"，而这一屏在微信支付上线前是**唯一的付款路径**——
+   *      用户唯一的结论是"付不了款"。失败时给出兜底动作（长按链接），
+   *      链接文本本身也在页面上（`user-select`，见 index.wxml）。
+   * @limitation 失败文案由 `copyResult` 产出（约束十一：文案不在薄壳里写死）。
+   */
   onCopy() {
     if (this.data.payUrl === '') return;
-    wxApi.setClipboardData({ data: this.data.payUrl });
+    wxApi.setClipboardData({
+      data: this.data.payUrl,
+      success: () => this.setData(copyResult(true)),
+      fail: () => this.setData(copyResult(false)),
+    });
   },
 
   /**

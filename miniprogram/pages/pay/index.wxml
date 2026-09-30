@@ -31,6 +31,15 @@
     <text class="line" wx:for="{{notice}}" wx:key="*this">{{item}}</text>
   </view>
 
+  <!--
+    B35 / AJ-218：订单已经不需要再支付（已付 / 已发货… / 已退款）时**不给支付方式**。
+    以前这一屏完全不看状态，从返回栈回到已付单照样列出通道，点下去是 40902——
+    在"支付"这个动作上遇到它，用户第一反应是"刚才是不是没付成功"。
+  -->
+  <view class="card" wx:if="{{closedText}}">
+    <text class="label">{{closedText}}</text>
+  </view>
+
   <view class="card" wx:if="{{channels.length > 0}}">
     <view
       class="channel"
@@ -51,7 +60,18 @@
   <view class="card" wx:if="{{guide.title}}">
     <text class="label">{{guide.title}}</text>
     <text class="line">{{guide.body}}</text>
-    <ws-button text="复制链接" type="primary" bindtap="onCopy" wx:if="{{payUrl}}" />
+    <!--
+      B34 / AJ-217：链接**本身**要可见可选。`setClipboardData` 是隐私接口，会失败
+      （用户拒绝弹窗 / 隐私指引漏声明剪切板），失败时用户唯一的出路就是长按这里手动复制。
+      不把它渲染出来的话，"复制失败"这四个字等于一句没有出路的通知。
+    -->
+    <text class="line url" user-select wx:if="{{payUrl}}">{{payUrl}}</text>
+    <ws-button
+      text="{{copied ? '已复制' : '复制链接'}}"
+      type="primary"
+      bindtap="onCopy"
+      wx:if="{{payUrl}}"
+    />
   </view>
 
   <!-- 订单列表随时可去：支付完成的真值在那里（服务端回调落库），不在本页 -->

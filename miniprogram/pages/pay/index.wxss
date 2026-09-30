@@ -34,3 +34,12 @@
 .notice {
   border-left: var(--ws-border-width) solid var(--ws-color-fg);
 }
+
+/*
+  短链文本：必须能整段显示 + 长按可选（B34 / AJ-217 的兜底动作）。
+  @why 短链通常比屏宽长，不折行会被截断——被截断的链接复制出去是坏的，
+       而这个"看起来复制成功了、粘贴出来打不开"的失败比直接失败更难发现。
+*/
+.url {
+  word-break: break-all;
+}
