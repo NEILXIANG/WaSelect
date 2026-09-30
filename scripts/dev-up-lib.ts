@@ -29,21 +29,23 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { createDb } from '../server/src/adapters/db.js';
-import { assertSafeTarget, defaultDevUrl } from './seed-lib.js';
+import { createDb, type Db } from '../server/src/adapters/db.js';
+import { assertSafeTarget, defaultDevUrl, seedOnce } from './seed-lib.js';
 
 /* ── 命令行参数 ─────────────────────────────────────────────────────────── */
 
 export interface DevUpOptions {
   /** 灌完整商品目录（默认 demo 小店）。 */
   full: boolean;
-  /** 是否灌假数据。 */
+  /** 是否灌假数据（默认 true；但**只在库里还没有商品时**才真的灌，见 `seedStep`）。 */
   seed: boolean;
+  /** 清空业务表后重灌（显式要求才做；会过内容闸门，库里有真订单就拒绝）。 */
+  reseed: boolean;
   /** 是否最后起服务（--no-serve = 只准备环境）。 */
   serve: boolean;
 }
 
-const KNOWN_ARGS = ['--full', '--no-seed', '--no-serve'] as const;
+const KNOWN_ARGS = ['--full', '--no-seed', '--reseed', '--no-serve'] as const;
 
 export function parseDevUpArgs(argv: readonly string[]): DevUpOptions {
   const unknown = argv.filter((a) => !(KNOWN_ARGS as readonly string[]).includes(a));
@@ -51,11 +53,52 @@ export function parseDevUpArgs(argv: readonly string[]): DevUpOptions {
     // 手滑的 --no-ser 若被静默忽略，用户会以为服务没起是 bug——不认识的参数必须响亮
     throw new Error(`不认识的参数：${unknown.join(' ')}（只支持 ${KNOWN_ARGS.join(' / ')}）`);
   }
+  if (argv.includes('--no-seed') && argv.includes('--reseed')) {
+    // 一个说"别灌"，一个说"清空重灌"——不猜用户想要哪个
+    throw new Error('--no-seed 与 --reseed 互相矛盾：只能给其中一个');
+  }
   return {
     full: argv.includes('--full'),
     seed: !argv.includes('--no-seed'),
+    reseed: argv.includes('--reseed'),
     serve: !argv.includes('--no-serve'),
   };
+}
+
+/* ── 灌数据这一步 ───────────────────────────────────────────────────────── */
+
+/**
+ * "灌假数据"这一步：**库里已有商品就跳过**，只有显式 `--reseed` 才清空重灌（AJ-242）。
+ *
+ * @returns 给用户看的一句话（灌了什么 / 为什么跳过）
+ *
+ * @why `npm run dev` 原先每次都 `seedOnce`——它会先清空全部业务表。B31（AJ-184）为防"端口转发到生产时清库"
+ *      加了内容闸门：库里有 `is_test=false` 的订单或非 mock 的支付行就拒绝清表。
+ *      但那条闸门的前提——"dev 库的订单只可能是 is_test=true"——不成立：`is_test` 取自 `REVIEW_MODE`，
+ *      默认 off，本地下的每一张单都是 `is_test=false`。于是本地下过一张单之后，
+ *      下一次 `npm run dev` 就抛"拒绝清表"，服务起不来。
+ *      @measured(dev-up-lib.db.test.ts「默认：库里已有商品数据」, 2026-09-30)：
+ *        修复前同样的步骤（灌好的库 + 一张 is_test=false 的单 → 再跑一次默认流程）得到 `拒绝清表：库里有 1 张…`。
+ * @why 修法是**默认不清一个已有数据的库**，而不是给闸门加 `--force`：
+ *      "每次启动都清空你昨天的测试数据"本来就不是开发者想要的默认行为；
+ *      而内容闸门存在的唯一理由是没有后门（seed-lib.ts @limitation 三），不能为了日常开发把它拆掉。
+ * @why 以"有没有商品"判断是否已灌过：商品是 demo 数据里一定会有的东西，也是服务能不能用的前提；
+ *      订单 / 用户可能被开发者清过，不适合作为判据。
+ * @limitation 库里有商品但数据是"坏的"（手工改乱了）时不会自动修复——`--reseed` 就是为此准备的；
+ *              若届时被内容闸门拒绝，说明库里有本地下过的真订单：先删掉它们（或换一个库）再重灌。
+ */
+export async function seedStep(db: Db, opts: { full: boolean; reseed: boolean }): Promise<string> {
+  if (!opts.reseed) {
+    const rows = await db<{ yes: boolean }[]>`select exists(select 1 from products) as yes`;
+    if (rows[0]?.yes === true) {
+      return '库里已有商品数据，跳过灌数（你的订单与改动都保留）；要清空重灌请加 --reseed';
+    }
+  }
+  const { bundle, counts } = await seedOnce(db, { full: opts.full });
+  return (
+    `已灌入「${bundle.name}」：` +
+    `users=${counts.users} products=${counts.products} shipping_rates=${counts.shippingRates}`
+  );
 }
 
 /* ── .env 物化 ──────────────────────────────────────────────────────────── */

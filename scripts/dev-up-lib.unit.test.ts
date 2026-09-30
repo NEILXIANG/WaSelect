@@ -41,22 +41,32 @@ afterEach(() => {
 const FILL = { dbUser: 'alice', jwtSecret: 's'.repeat(64) };
 
 describe('parseDevUpArgs：命令行参数', () => {
-  it('默认：灌 demo 数据 + 起服务、非 full', () => {
-    expect(parseDevUpArgs([])).toEqual({ full: false, seed: true, serve: true });
+  it('默认：灌 demo 数据（仅当库是空的，见 seedStep）+ 起服务、非 full、不强制重灌', () => {
+    expect(parseDevUpArgs([])).toEqual({ full: false, seed: true, reseed: false, serve: true });
   });
 
-  it('三个开关各自生效', () => {
-    expect(parseDevUpArgs(['--full'])).toEqual({ full: true, seed: true, serve: true });
-    expect(parseDevUpArgs(['--no-seed'])).toEqual({ full: false, seed: false, serve: true });
-    expect(parseDevUpArgs(['--no-serve'])).toEqual({ full: false, seed: true, serve: false });
+  it('四个开关各自生效', () => {
+    const base = { full: false, seed: true, reseed: false, serve: true };
+    expect(parseDevUpArgs(['--full'])).toEqual({ ...base, full: true });
+    expect(parseDevUpArgs(['--no-seed'])).toEqual({ ...base, seed: false });
+    expect(parseDevUpArgs(['--no-serve'])).toEqual({ ...base, serve: false });
+    // AJ-242：清空重灌必须显式要求（默认不再清一个已有数据的库）
+    expect(parseDevUpArgs(['--reseed'])).toEqual({ ...base, reseed: true });
   });
 
   it('组合：--full --no-serve', () => {
     expect(parseDevUpArgs(['--full', '--no-serve'])).toEqual({
       full: true,
       seed: true,
+      reseed: false,
       serve: false,
     });
+  });
+
+  it('--no-seed 与 --reseed 同时给：互相矛盾，响亮拒绝（不猜用户想要哪个）', () => {
+    expect(() => parseDevUpArgs(['--no-seed', '--reseed'])).toThrow(
+      /--no-seed.*--reseed|--reseed.*--no-seed/,
+    );
   });
 
   it('不认识的参数响亮拒绝（手滑的 --no-ser 不该被静默忽略）', () => {

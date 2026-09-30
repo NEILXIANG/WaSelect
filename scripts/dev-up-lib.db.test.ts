@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { closeDb, createDb, type Db } from '../server/src/adapters/db.js';
 import { TEST_DB_URL } from '../test/db/test-db.js';
-import { ensureDatabase, migrateUp } from './dev-up-lib.js';
+import { ensureDatabase, migrateUp, seedStep } from './dev-up-lib.js';
 import { seedOnce } from './seed-lib.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -113,6 +113,62 @@ describe('dev-up 真库全链路：建库 → 迁移 → 灌数据', () => {
         profiles.map((r) => r.code),
         '灌数据不得清掉配置表种子',
       ).toEqual(['US']);
+    } finally {
+      await closeDb(db);
+    }
+  });
+
+  /**
+   * AJ-242（第二轮审查 DB2-01）：B31 的内容闸门把**日常开发**挡死了。
+   * @why 闸门的前提是"dev 库的订单只可能是 is_test=true"。实际上 `is_test` 取自 `REVIEW_MODE`，
+   *      而默认 `REVIEW_MODE=off`——本地下的每一张单都是 `is_test=false`。
+   *      `npm run dev` 又默认每次都清表重灌：于是本地下过一张单之后，下一次 `npm run dev`
+   *      就在"灌假数据"一步抛"拒绝清表…真订单…是否端口转发到生产"，服务起不来；
+   *      而闸门刻意没有 --force，开发者只能每次加 --no-seed 或者删库。
+   *      修法不是给闸门开后门，而是**默认不再清一个已经有数据的库**。
+   */
+  it('🔴 默认：库里已有商品数据 → 跳过灌数，本地下过的"真订单"原样保留（不抛、不清表）', async () => {
+    const db: Db = createDb({ url: probeUrl(), max: 2 });
+    try {
+      await seedOnce(db); // 先有一个灌好的库
+      const user = (await db<{ id: string }[]>`select id from users limit 1`)[0]?.id ?? '';
+      await db`
+        insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, weight_g,
+                            fx_snapshot, address_snapshot, terms_version, expires_at, is_test)
+        values ('o-local', 'W-LOCAL', ${user}, 'pending_payment', 1, 1, 1,
+                '{}'::jsonb, '{}'::jsonb, 'T', now() + interval '30 minutes', false)`;
+
+      const msg = await seedStep(db, { full: false, reseed: false });
+      expect(msg).toContain('跳过');
+      expect(msg).toContain('--reseed');
+      expect(await db`select 1 from orders where id = 'o-local'`).toHaveLength(1);
+    } finally {
+      await closeDb(db);
+    }
+  });
+
+  it('🔴 --reseed：显式要求清空重灌时才过内容闸门——库里有 is_test=false 的单就拒绝', async () => {
+    const db: Db = createDb({ url: probeUrl(), max: 2 });
+    try {
+      await expect(seedStep(db, { full: false, reseed: true })).rejects.toThrow(/拒绝清表/);
+      // 拒绝之后那张单还在（闸门在清表之前）
+      expect(await db`select 1 from orders where id = 'o-local'`).toHaveLength(1);
+    } finally {
+      await closeDb(db);
+    }
+  });
+
+  it('全新的库（没有商品）→ 默认就灌；--reseed 在没有真订单的库上照常清空重灌', async () => {
+    const db: Db = createDb({ url: probeUrl(), max: 2 });
+    try {
+      await db`delete from orders where id = 'o-local'`;
+      await db`truncate table products restart identity cascade`;
+      const first = await seedStep(db, { full: false, reseed: false });
+      expect(first).toContain('已灌入');
+      const n1 = (await db<{ n: number }[]>`select count(*)::int as n from products`)[0]?.n ?? 0;
+      expect(n1).toBeGreaterThan(0);
+      const again = await seedStep(db, { full: false, reseed: true });
+      expect(again).toContain('已灌入');
     } finally {
       await closeDb(db);
     }

@@ -3,9 +3,10 @@
  *      所有可被测试的逻辑都在 dev-up-lib.ts；本文件刻意薄到「没有值得测的东西」。
  *
  * 用法：
- *   npm run dev                  # .env（缺则物化）→ 建库（缺则创建）→ 迁移 → 灌 demo → 起服务
+ *   npm run dev                  # .env（缺则物化）→ 建库（缺则创建）→ 迁移 → 灌 demo（仅当库是空的）→ 起服务
  *   npm run dev -- --full        # 灌完整商品目录
  *   npm run dev -- --no-seed     # 不灌数据
+ *   npm run dev -- --reseed      # 清空业务表后重灌（库里已有数据时默认**不**灌；有真订单会被内容闸门拒绝）
  *   npm run dev -- --no-serve    # 只准备环境，不起服务
  *
  * @why 起服务**在进程内**调 `bootstrap()`：信号处理（SIGINT/SIGTERM → 优雅停机）复用
@@ -29,9 +30,10 @@ import {
   migrateUp,
   parseDevUpArgs,
   runSteps,
+  seedStep,
   type DevUpStep,
 } from './dev-up-lib.js';
-import { defaultDevUrl, seedOnce } from './seed-lib.js';
+import { defaultDevUrl } from './seed-lib.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -81,15 +83,12 @@ async function main(): Promise<void> {
   if (opts.seed) {
     steps.push({
       name: '灌假数据',
-      hint: '单独跑 npm run db:seed 看完整输出；加 --full 灌完整目录',
+      hint: '单独跑 npm run db:seed 看完整输出；加 --full 灌完整目录；加 --reseed 清空重灌',
       run: async () => {
         const db = createDb({ url: databaseUrl, max: 2 });
         try {
-          const { bundle, counts } = await seedOnce(db, { full: opts.full });
-          return (
-            `已灌入「${bundle.name}」：` +
-            `users=${counts.users} products=${counts.products} shipping_rates=${counts.shippingRates}`
-          );
+          // 已有数据就跳过；只有 --reseed 才清空重灌（AJ-242，逻辑与理由在 dev-up-lib.ts 的 seedStep）
+          return await seedStep(db, { full: opts.full, reseed: opts.reseed });
         } finally {
           await closeDb(db);
         }

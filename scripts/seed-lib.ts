@@ -90,12 +90,14 @@ export async function clearBusinessTables(db: Db): Promise<number> {
  *      两道闸门同时沉默，而 `npm run db:seed` 默认 TRUNCATE 全部业务表——
  *      `order_events` / `admin_audit` 的 append-only 触发器**挡不住 TRUNCATE**（只拦 UPDATE/DELETE），
  *      数据不可逆丢失且不报任何错。
- *      内容闸门不认名字：库里只要有"真业务"的痕迹就拒，因为 dev 库里的订单只可能是
- *      审核期测试单（`is_test=true`）、支付行只可能来自 `mock` 通道。
+ *      内容闸门不认名字：库里只要有"真业务"的痕迹（`is_test=false` 的订单、非 `mock` 的支付行）就拒。
+ *      ⚠️ 此处曾写"dev 库里的订单只可能是 is_test=true"——**不成立**（AJ-242）：`is_test` 取自 `REVIEW_MODE`，
+ *      默认 off，本地下的单就是 `is_test=false`；Stripe test mode 的支付行也不是 mock。
+ *      所以本机开发库**也会**被这道闸拦下。这是可接受的：它拦的是"清表"这个不可逆动作，
+ *      而 `npm run dev` 已改为默认不清已有数据的库（只有显式 `--reseed` / `npm run db:seed` 才走到这里）。
  *
  * @why 判据取"is_test=false 的订单"和"provider <> 'mock' 的支付行"，而不是"orders 非空"：
- *      本地开发本来就会下测试单（那是正常业务），按"非空"拦会把日常开发挡死，
- *      于是有人会把闸门删掉——**拦太宽比不拦更危险**（与闸门②不拦 "produce" 同一条理由）。
+ *      审核模式下的测试单（is_test=true）与 mock 支付行丢了可以重建；其余的丢了不能。
  *
  * @limitation 一：只查两张表。dev 库里可能有真实感的商品/地址/用户（那是 fixture 该有的样子），
  *              它们丢了能重建；订单与支付行丢了不能。判定标准就是"丢了能不能重建"。
@@ -112,16 +114,17 @@ export async function assertNotProductionData(db: Db): Promise<void> {
   const realOrders = Number(real[0]?.n ?? 0);
   if (realOrders > 0) {
     throw new Error(
-      `拒绝清表：库里有 ${realOrders} 张 is_test=false 的**真订单**（dev 库只应有审核期测试单）。` +
-        `这是不可逆操作，请确认 DATABASE_URL 指向的是本机开发库，而不是端口转发到生产的库。`,
+      `拒绝清表：库里有 ${realOrders} 张 is_test=false 的订单。清表不可逆，请先确认 DATABASE_URL ` +
+        `指向的是本机开发库，而不是端口转发到生产的库。` +
+        `若确实是本机库（REVIEW_MODE=off 时本地下的单就是 is_test=false）：先删掉这些订单，或换一个库，再重灌。`,
     );
   }
   const pays = await db`select count(*)::int as n from payments where provider <> 'mock'`;
   const realPayments = Number(pays[0]?.n ?? 0);
   if (realPayments > 0) {
     throw new Error(
-      `拒绝清表：库里有 ${realPayments} 条非 mock 通道的支付行（dev 库只应有 mock 假支付）。` +
-        `同上，请确认 DATABASE_URL 指向本机开发库。`,
+      `拒绝清表：库里有 ${realPayments} 条非 mock 通道的支付行。同上：先确认 DATABASE_URL 指向本机开发库；` +
+        `若确实是本机库（例如用 Stripe test mode 付过款），先删掉这些支付行与对应订单，或换一个库，再重灌。`,
     );
   }
 }
