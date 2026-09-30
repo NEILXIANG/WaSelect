@@ -120,6 +120,17 @@ export function createCircuitBreaker(opts: CircuitBreakerOptions = {}): CircuitB
     },
 
     after(key, kind) {
+      /**
+       * `unknown` **完全不动状态**（B4 / AJ-200）。
+       * @why 原来走的是"不计入 ⇒ 当作成功 ⇒ 复位计数"：一个看不懂的失败
+       *      （认不出的异常形状、1xx/3xx）会把已经攒下的连续失败**清零**，
+       *      于是"上游一直在坏、中间夹着几次认不出的失败"永远跳不了闸——
+       *      熔断在最需要它的时候是瞎的。
+       *      它也不该计入跳闸（`countsTowardTrip` 已排除，理由见端口的 @why：
+       *      看不懂的东西不能用来做"拒绝一切"这种强判断）。
+       *      两个方向都不是 ⇒ 唯一诚实的做法是**什么都不做**。
+       */
+      if (kind === 'unknown') return;
       const current = states.get(key) ?? initialCircuit();
       // ⚠️ "不计入"等价于"这次是好的"：4xx 是上游正确地答复了一个错误请求，
       //    说明它活着；half_open 的探测若返回 4xx，也必须据此复位——

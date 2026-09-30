@@ -80,7 +80,7 @@ export function createFakeStripeHttp(): FakeStripeHttp {
   /** payment_intent id → metadata（create 时从表单抓 + givenPaymentIntent 手工登记）。 */
   const paymentIntents = new Map<string, Record<string, string>>();
   let nextId = 1;
-  let forced: { status: number; body: string } | undefined;
+  let forced: { status: number; body: string; headers: Record<string, string> } | undefined;
   /**
    * `路径|幂等键` → 首次 **5xx** 响应。
    * @why B3 / AJ-199：@measured(docs.stripe.com/api/idempotent_requests, 2026-09-29)
@@ -90,12 +90,22 @@ export function createFakeStripeHttp(): FakeStripeHttp {
    * @limitation 只缓存 **5xx**：4xx（402 卡被拒 / 400 参数错）真 Stripe 的缓存口径文档没写明，
    *              且被测代码对 4xx 也不靠"换键"来恢复——不造没实测过的脾气。
    */
-  const failuresByKey = new Map<string, { status: number; body: string }>();
+  const failuresByKey = new Map<
+    string,
+    { status: number; body: string; headers: Record<string, string> }
+  >();
 
   const client: FakeStripeHttp = {
     calls,
     failNext(status, body = '{"error":{"message":"forced failure"}}') {
-      forced = { status, body };
+      // 5xx 一律回 `Stripe-Should-Retry: false`（B4 / AJ-200）：真 Stripe 只在
+      // "这次故障值得再试"时才回 true；替身默认给 false，于是"重发 5xx"这条路
+      // 在测试里走不通——正是生产上的真实形状（重发拿回的是缓存的同一个失败）。
+      forced = {
+        status,
+        body,
+        headers: status >= 500 ? { 'stripe-should-retry': 'false' } : {},
+      };
     },
     givenPaymentIntent(id, metadata) {
       paymentIntents.set(id, metadata);
@@ -124,7 +134,7 @@ export function createFakeStripeHttp(): FakeStripeHttp {
         if (req.method === 'POST' && idemKey.length > 0 && f.status >= 500) {
           failuresByKey.set(`${path}|${idemKey}`, f);
         }
-        return { status: f.status, body: f.body };
+        return { status: f.status, body: f.body, headers: f.headers };
       }
       // 没带鉴权头就像真 Stripe 一样拒绝：否则"忘了带 key"这个缺陷永远测不出来
       const auth = req.headers?.['authorization'] ?? '';

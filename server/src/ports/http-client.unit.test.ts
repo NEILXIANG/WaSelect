@@ -134,12 +134,51 @@ describe('shouldRetry：🔒 POST 无幂等键 → 绝不重试（重复扣款�
     expect(d.reason).toContain('幂等键');
   });
 
-  it('带上幂等键 → 同一批失败**都**可重试（正确的用法必须走得通）', () => {
-    for (const failure of ['timeout', 'server_error', 'network', 'unknown'] as const) {
+  /**
+   * B4 / AJ-200：**5xx 从这一组里拿掉**。
+   * @why 旧断言把"5xx + 幂等键 → 重发"钉成了正确，而它在真 Stripe 上是白等——
+   *      失败结果会按幂等键缓存（B3 / AJ-199），重发拿回的是同一个 500。
+   *      5xx 的判定移到了下面专门的一组（听上游的 `Stripe-Should-Retry`）。
+   */
+  it('带上幂等键 → 超时 / 网络 / 未知 可重试（正确的用法必须走得通）', () => {
+    for (const failure of ['timeout', 'network', 'unknown'] as const) {
       const d = shouldRetry(post({ 'idempotency-key': 'k-1' }), failure, 1, P);
       expect(d.retry, `${failure} 应当可重试`).toBe(true);
       expect(d.delayMs).toBe(200);
     }
+  });
+
+  it('🔒 5xx：没声明上游建议头 → **不重试**（重发拿回的是缓存的同一次失败，B4/AJ-200）', () => {
+    const d = shouldRetry(post({ 'idempotency-key': 'k-1' }), 'server_error', 1, P);
+    expect(d.retry).toBe(false);
+    expect(d.reason).toContain('没声明');
+  });
+
+  it('🔒 5xx：声明了建议头，但上游说 false → 不重试', () => {
+    const req = { ...post({ 'idempotency-key': 'k-1' }), retryAdviceHeader: 'stripe-should-retry' };
+    const d = shouldRetry(req, 'server_error', 1, P, () => 0, {
+      status: 500,
+      body: '',
+      headers: { 'stripe-should-retry': 'false' },
+    });
+    expect(d.retry).toBe(false);
+    expect(d.reason).toContain('false');
+  });
+
+  it('🔒 5xx：声明了建议头且上游说 true → 才重试（这是唯一该重试的 5xx）', () => {
+    const req = { ...post({ 'idempotency-key': 'k-1' }), retryAdviceHeader: 'stripe-should-retry' };
+    const d = shouldRetry(req, 'server_error', 1, P, () => 0, {
+      status: 500,
+      body: '',
+      headers: { 'stripe-should-retry': 'true' },
+    });
+    expect(d.retry).toBe(true);
+  });
+
+  it('🔒 5xx：声明了建议头但**响应里没有**这个头 → 按 false 处理（不重试）', () => {
+    const req = { ...post({ 'idempotency-key': 'k-1' }), retryAdviceHeader: 'stripe-should-retry' };
+    const d = shouldRetry(req, 'server_error', 1, P, () => 0, { status: 503, body: '' });
+    expect(d.retry).toBe(false);
   });
 
   it('头名**大小写不敏感**：`Idempotency-Key` 同样算有', () => {
@@ -196,10 +235,14 @@ describe('分类全集（防漏处理）', () => {
       'unknown',
     ];
     for (const k of kinds) {
-      // GET 无副作用，用它单测"分类本身"：只有 none / client_error 会停
+      // GET 无副作用，用它单测"分类本身"：none / client_error / server_error 会停
+      // （server_error 自 B4 / AJ-200 起：**没声明上游建议头就不重试**）
       const d = shouldRetry(GET, k, 1, P);
-      if (k === 'none' || k === 'client_error') expect(d.retry).toBe(false);
-      else expect(d.retry, `${k} 应可重试`).toBe(true);
+      if (k === 'none' || k === 'client_error' || k === 'server_error') {
+        expect(d.retry).toBe(false);
+      } else {
+        expect(d.retry, `${k} 应可重试`).toBe(true);
+      }
     }
   });
 });

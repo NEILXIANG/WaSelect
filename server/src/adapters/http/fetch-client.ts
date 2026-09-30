@@ -41,6 +41,7 @@ import {
   DEFAULT_RETRY_POLICY,
   httpStatusKind,
   shouldRetry,
+  type HttpFailureKind,
 } from '../../ports/http-client.js';
 import {
   breakerKey,
@@ -136,34 +137,21 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
       signal: AbortSignal.timeout(timeoutMs),
     };
     const res = await fetch(req.url, init);
-    return { status: res.status, body: await res.text() };
+    const body = await res.text();
+    // 键**一律小写**（HTTP 头名大小写不敏感，判定方不该为此写两份）：
+    // B4 / AJ-200 的"上游建议要不要重试"要读 `stripe-should-retry`，
+    // 读不到就等于"上游没建议"→ 5xx 不重试（保守默认）。
+    const headers: Record<string, string> = {};
+    res.headers.forEach((value, name) => {
+      headers[name.toLowerCase()] = value;
+    });
+    return { status: res.status, body, headers };
   }
 
   return {
     async send(req: HttpRequest): Promise<HttpResponse> {
       const startedAt = now();
       const key = breakerKey(req.url);
-
-      // 出发前：熔断说"别打"就不打。
-      // ⚠️ 这里**不发请求**，所以单独记一个 `http_outbound_circuit_open` 事件，
-      //    而不是混进 `http_outbound`——后者会被当成"我们打了一次上游"来统计，
-      //    而实际上一次网络往返都没发生（混进去会让"上游超时率"这类指标失准）。
-      if (breaker !== undefined) {
-        const gate = breaker.before(key);
-        if (!gate.allowed) {
-          logger?.error('http_outbound_circuit_open', {
-            result: 'circuit_open',
-            ctx: {
-              url: safeUrl(req.url),
-              method: req.method,
-              key,
-              state: gate.state,
-              retry_after_ms: gate.retryAfterMs,
-            },
-          });
-          throw new CircuitOpenError(key, gate.retryAfterMs);
-        }
-      }
 
       let attempt = 0;
       /**
@@ -175,7 +163,51 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
       let last:
         { kind: 'response'; res: HttpResponse } | { kind: 'error'; err: unknown } | undefined;
 
+      /**
+       * 本次逻辑请求的**最终结果**，只在出去的那一刻喂给熔断**一次**（B4 / AJ-200）。
+       *
+       * @why 原来**每一次尝试**都喂一次：一次逻辑请求最多打 3 次（DEFAULT_RETRY_POLICY），
+       *      于是"一个用户的一次失败"在熔断眼里是 3 次——阈值 5 意味着
+       *      **两位用户先后遇到就能跳闸**，而实际上只有 2 个逻辑请求失败。
+       *      跳闸后 30 秒内建会话 / 退款 / 作废会话 / 拒付反查全部快速失败，
+       *      等于把机构的一次抖动放大成我们自己的一次全局故障。
+       * @tradeoff 压掉了"中间那两次失败确实真实发生过"这层信息——但阈值的语义是
+       *      "连续多少个**用户请求**失败"，不是"多少次网络尝试"。
+       *      真要看尝试数，`http_outbound_retry` 日志里一条不少。
+       */
+      let finalKind: HttpFailureKind = 'unknown';
+      /** 收尾：无论从哪个出口出去，熔断只喂一次。 */
+      const settle = (): void => {
+        breaker?.after(key, finalKind);
+      };
+
       for (;;) {
+        // 出发前：熔断说"别打"就不打。
+        // ⚠️ 这里**不发请求**，所以单独记一个 `http_outbound_circuit_open` 事件，
+        //    而不是混进 `http_outbound`——后者会被当成"我们打了一次上游"来统计，
+        //    而实际上一次网络往返都没发生（混进去会让"上游超时率"这类指标失准）。
+        // ⚠️ **每一次尝试都问一遍**（B4 / AJ-200）：原来只在循环外问一次，
+        //    于是重试（最多 3 次）**绕过熔断**——half_open 声称"只放 1 个探测"，
+        //    实际会被同一条请求打满 3 次，"刚恢复的上游"立刻被砸回去。
+        //    被熔断拒绝**不**喂 `after`：它一次都没打出去，再记一次会把
+        //    "上游坏了"与"我们没让它打"混成同一件事。
+        if (breaker !== undefined) {
+          const gate = breaker.before(key);
+          if (!gate.allowed) {
+            logger?.error('http_outbound_circuit_open', {
+              result: 'circuit_open',
+              ctx: {
+                url: safeUrl(req.url),
+                method: req.method,
+                key,
+                state: gate.state,
+                retry_after_ms: gate.retryAfterMs,
+              },
+            });
+            throw new CircuitOpenError(key, gate.retryAfterMs);
+          }
+        }
+
         const remaining = totalBudgetMs - (now() - startedAt);
         // ⚠️ 剩余预算可能为 0/负：此时不能"再试一次但立刻超时"，
         //    那会白跑一趟网络并把超时噪声混进日志。预算用完就交出上一次的结果。
@@ -189,19 +221,18 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
           const res = await once(req, timeoutMs);
           last = { kind: 'response', res };
           const kind = httpStatusKind(res.status);
-          // ⚠️ **每一次尝试**都喂给熔断（不是"整个请求结束后喂一次"）：
-          //    重试了 3 次才成功，中间那两次失败是真实发生的，不该被最后一次的成功抹掉；
-          //    而 `circuitAfter` 的语义是"成功即复位"，所以成功会自然清掉连续计数。
-          breaker?.after(key, kind);
+          finalKind = kind;
           if (kind === 'none') {
             logger?.info('http_outbound', {
               result: 'ok',
               duration_ms: now() - startedAt,
               ctx: { url: safeUrl(req.url), method: req.method, status: res.status, attempt },
             });
+            settle();
             return res;
           }
-          const decision = shouldRetry(req, kind, attempt, policy, rand);
+          // ⚠️ 5xx 必须把**响应**交给判定：上游"要不要重试"的建议只在响应头里（B4 / AJ-200）
+          const decision = shouldRetry(req, kind, attempt, policy, rand, res);
           if (!decision.retry) {
             logger?.warn('http_outbound', {
               result: kind === 'client_error' ? 'client_error' : 'server_error',
@@ -213,6 +244,7 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
                 no_retry_reason: decision.reason,
               },
             });
+            settle();
             return res;
           }
           logger?.warn('http_outbound_retry', {
@@ -229,7 +261,8 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
         } catch (e) {
           last = { kind: 'error', err: e };
           const kind = classifyHttpFailure(e);
-          breaker?.after(key, kind);
+          finalKind = kind;
+          // 异常路径没有响应可看（超时 / 网络错误），判定只看失败分类
           const decision = shouldRetry(req, kind, attempt, policy, rand);
           if (!decision.retry) {
             logger?.error('http_outbound', {
@@ -238,6 +271,7 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
               err: e,
               ctx: { url: safeUrl(req.url), method: req.method, attempt, reason: decision.reason },
             });
+            settle();
             throw e;
           }
           logger?.warn('http_outbound_retry', {
@@ -261,6 +295,7 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
           last_status: last?.kind === 'response' ? last.res.status : undefined,
         },
       });
+      settle();
       if (last?.kind === 'response') return last.res;
       throw last?.err ?? new Error(`出站请求预算用尽：${safeUrl(req.url)}`);
     },

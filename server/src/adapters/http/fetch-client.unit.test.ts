@@ -40,9 +40,22 @@ function stubFetch(impl: (url: string, init: RequestInit, n: number) => Promise<
   const calls: Array<{ url: string; init: RequestInit }> = [];
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     calls.push({ url, init });
-    return impl(url, init, calls.length);
+    const r = (await impl(url, init, calls.length)) as {
+      status: number;
+      text: () => Promise<string>;
+      headers?: Map<string, string>;
+    };
+    // ⚠️ 替身必须补 headers（B4 / AJ-200 之后实现会读它）：
+    //    真 fetch 一定有 Headers 对象，而下面几十条用例写的是"只给 status/body"的极简形状。
+    //    在各用例里逐个补会让"我要验的东西"被样板淹没，所以收口在这一处。
+    return { ...r, headers: r.headers ?? new Map<string, string>() };
   });
   return calls;
+}
+
+/** 造一个空响应头袋（需要"上游建议重试"的用例用得着）。 */
+function headersOf(pairs: Record<string, string>): Map<string, string> {
+  return new Map(Object.entries(pairs));
 }
 
 /** 不抖的策略（延迟可精确断言）。 */
@@ -61,7 +74,9 @@ interface Harness {
  * @param tickMs 每次 fetch 消耗多少毫秒（模拟真实耗时，用来触发预算用尽）
  */
 function harness(opts: {
-  fetch: (n: number) => Promise<{ status: number; body?: string } | never>;
+  fetch: (
+    n: number,
+  ) => Promise<{ status: number; body?: string; headers?: Map<string, string> } | never>;
   policy?: RetryPolicy;
   budgetMs?: number;
   tickMs?: number;
@@ -73,7 +88,7 @@ function harness(opts: {
     clock += opts.tickMs ?? 0;
     const r = await opts.fetch(n);
     const body = r.body ?? '';
-    return { status: r.status, text: async () => body };
+    return { status: r.status, text: async () => body, headers: r.headers };
   });
   const sleeps: number[] = [];
   const client = createFetchClient({
@@ -118,7 +133,8 @@ describe('createFetchClient：基本转发', () => {
       headers: { authorization: 'Bearer sk' },
       body: 'mode=payment',
     });
-    expect(res).toEqual({ status: 201, body: '{"id":"cs_1"}' });
+    // ⚠️ B4 / AJ-200 起响应自带 headers（键一律小写），"上游建议重试"要靠它读
+    expect(res).toEqual({ status: 201, body: '{"id":"cs_1"}', headers: {} });
     expect(calls[0]?.url).toBe('https://api.stripe.test/v1/checkout/sessions');
     expect(calls[0]?.init.method).toBe('POST');
     expect(calls[0]?.init.body).toBe('mode=payment');
@@ -149,15 +165,52 @@ describe('createFetchClient：基本转发', () => {
 });
 
 describe('createFetchClient：重试（受幂等键与预算两道闸）', () => {
-  it('5xx + 有幂等键 → 真的重发，成功后返回 200', async () => {
+  /**
+   * B4 / AJ-200：这条**反过来**了。
+   * @why 旧断言钉的是"5xx + 幂等键 → 重发两次"，而它在真 Stripe 上是白等：
+   *      失败结果按幂等键缓存（B3 / AJ-199），重发拿回的是同一个 503，
+   *      还要白白吃掉 `totalBudgetMs` 里的一段——用户多等 200ms，什么也没换到。
+   */
+  it('🔒 5xx + 有幂等键但**没声明建议头** → 一次都不重试（重发拿回的是缓存的同一次失败）', async () => {
     const h = harness({
       fetch: async (n) => (n === 1 ? { status: 503 } : { status: 200, body: '{"id":"cs_1"}' }),
     });
     const res = await h.client.send(POST_WITH_KEY);
+    expect(res.status).toBe(503);
+    expect(h.calls).toHaveLength(1);
+    expect(h.sleeps).toHaveLength(0);
+  });
+
+  it('🔒 5xx + 声明了建议头且上游说 true → 才重发，成功后返回 200', async () => {
+    const h = harness({
+      fetch: async (n) =>
+        n === 1
+          ? { status: 503, headers: headersOf({ 'stripe-should-retry': 'true' }) }
+          : { status: 200, body: '{"id":"cs_1"}' },
+    });
+    const res = await h.client.send({
+      ...POST_WITH_KEY,
+      retryAdviceHeader: 'stripe-should-retry',
+    });
     expect(res.status).toBe(200);
     expect(h.calls).toHaveLength(2);
     // 退避按策略：第 1 次失败后等 base=200ms
     expect(h.sleeps).toEqual([200]);
+  });
+
+  it('🔒 5xx + 声明了建议头但上游说 false → 不重发', async () => {
+    const h = harness({
+      fetch: async (n) =>
+        n === 1
+          ? { status: 503, headers: headersOf({ 'stripe-should-retry': 'false' }) }
+          : { status: 200, body: '{"id":"cs_1"}' },
+    });
+    const res = await h.client.send({
+      ...POST_WITH_KEY,
+      retryAdviceHeader: 'stripe-should-retry',
+    });
+    expect(res.status).toBe(503);
+    expect(h.calls).toHaveLength(1);
   });
 
   it('🔒 5xx + **无幂等键** → 一次都不重试（重试 = 重复扣款）', async () => {
@@ -185,30 +238,51 @@ describe('createFetchClient：重试（受幂等键与预算两道闸）', () =>
      *      默认单次超时 10s、最多 3 次尝试，最坏 30s——而出站调用在**用户正在等**的同步链路。
      *      预算把"总共能花多久"单独封顶，与"每次最多等多久"是两件事。
      */
+    // ⚠️ 用**超时**而不是 503 来吃预算：B4 / AJ-200 之后 503 一次都不重试，
+    //    根本走不到"预算被退避吃光"这条路径（这正是"不再白等"的题中之意）。
     const h = harness({
-      fetch: async () => ({ status: 503 }),
+      fetch: async () => {
+        throw timeoutError();
+      },
       budgetMs: 1_000,
       tickMs: 900,
     });
-    const res = await h.client.send(POST_WITH_KEY);
+    await expect(h.client.send(POST_WITH_KEY)).rejects.toMatchObject({ name: 'TimeoutError' });
     // 第一次用掉 900ms + 退避 200ms = 1100ms > 1000ms 预算 → 没有第二次
     expect(h.calls).toHaveLength(1);
-    // 预算用尽且最后一次**拿到了响应** → 交出那个响应（它是上游的真实答复）
-    expect(res.status).toBe(503);
     expect(h.sink.find('http_outbound').some((r) => r.result === 'budget_exhausted')).toBe(true);
   });
 
   it('默认的等待实现（未注入 `sleep` 时）走真实定时器', async () => {
     // @why 这条覆盖的是**装配默认值**：生产不注入 sleep，退避必须真的等。
     //      用 1ms 的延迟，既验证了它被调用，也不会拖慢测试。
-    const calls = stubFetch(async (_u, _i, n) =>
-      n === 1 ? { status: 503, text: async () => '' } : { status: 200, text: async () => 'ok' },
-    );
+    // ⚠️ 用超时而不是 503：B4 / AJ-200 之后 503 不再重试，走不到这条路径
+    const calls = stubFetch(async (_u, _i, n) => {
+      if (n === 1) throw timeoutError();
+      return { status: 200, text: async () => 'ok' };
+    });
     const client = createFetchClient({
       retry: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 },
     });
     await expect(client.send(POST_WITH_KEY)).resolves.toMatchObject({ status: 200 });
     expect(calls).toHaveLength(2);
+  });
+
+  /**
+   * ⚠️ 用 429 而不是 503：B4 / AJ-200 之后 503 一次都不重试，"预算被退避吃光"这条路径
+   *    走不到了，而 429（上游明说"你慢点"）仍照旧重试——它才是现在唯一能用**响应**
+   *    把预算吃光的失败类型。
+   */
+  it('预算用尽且最后一次是**响应** → 交出那个响应（它是上游的真实答复）', async () => {
+    const h = harness({
+      fetch: async () => ({ status: 429 }),
+      budgetMs: 1_000,
+      tickMs: 900,
+    });
+    const res = await h.client.send(POST_WITH_KEY);
+    expect(h.calls).toHaveLength(1);
+    expect(res.status).toBe(429);
+    expect(h.sink.find('http_outbound').some((r) => r.result === 'budget_exhausted')).toBe(true);
   });
 
   it('预算用尽且最后一次是**异常** → 抛它（不吞、也不编造一个响应）', async () => {
@@ -248,10 +322,14 @@ describe('createFetchClient：计时日志（脱敏）', () => {
   });
 
   it('每次重试都留一条 `http_outbound_retry`（线上"上游抖了多久"要能回答）', async () => {
+    // ⚠️ 用 500 + `Stripe-Should-Retry: true`：B4 / AJ-200 之后这是**唯一**还会重试的 5xx
     const h = harness({
-      fetch: async (n) => (n === 1 ? { status: 500 } : { status: 200 }),
+      fetch: async (n) =>
+        n === 1
+          ? { status: 500, headers: headersOf({ 'stripe-should-retry': 'true' }) }
+          : { status: 200 },
     });
-    await h.client.send(POST_WITH_KEY);
+    await h.client.send({ ...POST_WITH_KEY, retryAdviceHeader: 'stripe-should-retry' });
     const retries = h.sink.find('http_outbound_retry');
     expect(retries).toHaveLength(1);
     expect(retries[0]?.ctx).toMatchObject({ status: 500, attempt: 1, delay_ms: 200 });
@@ -304,7 +382,7 @@ function breakerHarness(
   vi.stubGlobal('fetch', async () => {
     count += 1;
     const r = await impl(count);
-    return { status: r.status, text: async () => r.body ?? '' };
+    return { status: r.status, text: async () => r.body ?? '', headers: new Map<string, string>() };
   });
   const client = createFetchClient({
     retry: P,
@@ -389,15 +467,71 @@ describe('createFetchClient：熔断接线（默认开启，可显式关闭）',
     expect(h.calls).toBe(BP.failureThreshold * 2);
   });
 
-  it('一次请求内的**每次尝试**都计入（不因最后一次成功而抹掉中间的失败）', async () => {
-    // @why 这条钉的是"喂给熔断的粒度"。若只在整个请求结束后喂一次，
-    //      那么"重试 3 次才成功"会被记成一次成功 —— 上游的抖动就被完全隐藏了。
-    //      判据：阈值 5、每次请求最多 3 次尝试，所以**两个请求**就足以跳闸
-    //      （按请求粒度则需要 5 个请求）。
-    const h = breakerHarness({ fetch: async () => ({ status: 503 }) });
-    await h.client.send(POST_WITH_KEY); // 3 次尝试
-    await h.client.send(POST_WITH_KEY); // 第 5 次失败时跳闸，第 6 次尝试仍在本次请求内跑完
-    expect(h.calls).toBe(P.maxAttempts * 2);
+  /**
+   * B4 / AJ-200：这条**反过来**了——一个逻辑请求只喂熔断**一次**。
+   *
+   * @why 旧断言钉的是"每次尝试都计入"，于是"一个用户的一次失败"在熔断眼里是 3 次，
+   *      阈值 5 意味着**两位用户先后遇到就能跳闸**，跳闸后 30 秒内建会话 / 退款 /
+   *      作废会话 / 拒付反查全部快速失败——机构的一次抖动被我们自己放大成全局故障。
+   *      判据：阈值 5 ⇒ 需要 **5 个逻辑请求**才跳闸（按"尝试"粒度 2 个就够）。
+   * @why 用**超时**而不是 503：B4 之后 503 一次都不重试，"一个请求打满 3 次"
+   *      这件事就不成立了，这条用例会退化成数请求个数。
+   */
+  it('一个逻辑请求**只记一次**（重试的 3 次尝试不各算一次）', async () => {
+    const h = breakerHarness({
+      fetch: async () => {
+        throw timeoutError();
+      },
+    });
+    for (let i = 0; i < BP.failureThreshold - 1; i += 1) {
+      await expect(h.client.send(POST_WITH_KEY)).rejects.toMatchObject({ name: 'TimeoutError' });
+    }
+    expect(h.calls).toBe(P.maxAttempts * (BP.failureThreshold - 1));
+    // 第 5 个请求把计数推到阈值：它自己仍以超时失败（跳闸发生在它**结束**时）
+    await expect(h.client.send(POST_WITH_KEY)).rejects.toMatchObject({ name: 'TimeoutError' });
+    // 第 6 个请求才被拦下
+    await expect(h.client.send(POST_WITH_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+  });
+
+  it('重试**之前**也会问熔断：half_open 的探测名额不会被同一条请求打满（B4/AJ-200）', async () => {
+    // @why 旧实现只在循环外问一次，于是"放 1 个探测"实际会被同一条请求打 3 次，
+    //      "刚恢复的上游"立刻被砸回去。判据：冷却结束后的那条探测请求，
+    //      第 1 次尝试放行、第 2 次就被拦 ⇒ 只多打 1 次就抛 CircuitOpenError。
+    let n = 0;
+    const h = breakerHarness({
+      fetch: async () => {
+        n += 1;
+        throw timeoutError();
+      },
+    });
+    for (let i = 0; i < BP.failureThreshold; i += 1) {
+      await expect(h.client.send(POST_WITH_KEY)).rejects.toMatchObject({ name: 'TimeoutError' });
+    }
+    const before = n;
+    h.at(1_000_000); // 推过冷却 → half_open，放 1 个探测
+    await expect(h.client.send(POST_WITH_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(n - before).toBe(1);
+  });
+
+  it('`unknown` **不动**熔断状态（既不复位也不计入，B4/AJ-200）', async () => {
+    // @why 旧实现把 unknown 当成功 → 夹在连续失败之间的几次 unknown 会把计数**清零**，
+    //      于是"上游一直在坏、中间夹着认不出的失败"永远跳不了闸——熔断在最需要它时是瞎的。
+    //      判据：4 次真失败 + 1 次 unknown，之后**再来 1 次**真失败就该跳闸；
+    //      若 unknown 清零了计数，这里会一路放行。
+    const h = breakerHarness({
+      fetch: async () => {
+        throw timeoutError();
+      },
+    });
+    for (let i = 0; i < BP.failureThreshold - 1; i += 1) {
+      await expect(h.client.send(POST_WITH_KEY)).rejects.toMatchObject({ name: 'TimeoutError' });
+    }
+    h.setFetch(async () => ({ status: 199 })); // httpStatusKind → 'unknown'
+    await h.client.send(POST_WITH_KEY);
+    h.setFetch(async () => {
+      throw timeoutError();
+    });
+    await expect(h.client.send(POST_WITH_KEY)).rejects.toMatchObject({ name: 'TimeoutError' });
     await expect(h.client.send(POST_WITH_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
   });
 

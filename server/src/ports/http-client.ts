@@ -34,11 +34,32 @@ export interface HttpRequest {
   body?: string | undefined;
   /** 单次超时（毫秒）；实现必须遵守，缺省由实现自定（见实现的 @limitation）。 */
   timeoutMs?: number | undefined;
+  /**
+   * 5xx 时"要不要重试"的**上游建议头名**（小写；不给 = 5xx 一律不重试）。
+   *
+   * @why B4 / AJ-200：带幂等键的 POST 遇 5xx，重试**拿回的是同一个失败**——
+   *      Stripe 会把失败结果按幂等键缓存（≥24h），重发只是白等，还要白白吃掉
+   *      `totalBudgetMs`（6s）里的一段，把"用户能感知的等待"用在一个注定失败的动作上。
+   *      @measured(github.com/stripe/stripe-node#network-retries, 2026-09-29)：官方库读
+   *      `Stripe-Should-Retry` 响应头决定是否重试——**上游自己知道**这次故障是
+   *      "可以再试"还是"重试也没用"。
+   * @why 头名由**适配器声明**而不是写死在端口里：端口不认识任何机构（ADR-28）。
+   *      不声明的一方得到的是"5xx 不重试"这个保守默认——宁可少试一次，
+   *      也不要在一个按键缓存失败的机构上白等两轮。
+   */
+  retryAdviceHeader?: string | undefined;
 }
 
 export interface HttpResponse {
   status: number;
   body: string;
+  /**
+   * 响应头（**键一律小写**）。
+   * @why 原来只读 status 与 body（旧 @limitation 三），于是"上游建议要不要重试"这类
+   *      信息根本进不了判定——B4 必须为它开一个口子。
+   * @limitation 只透传**字符串值**：多值头（Set-Cookie）会丢，本端口没有这个需求。
+   */
+  headers?: Readonly<Record<string, string>> | undefined;
 }
 
 export interface HttpClient {
@@ -182,6 +203,7 @@ function hasIdempotencyKey(req: HttpRequest): boolean {
  * 该不该重试——**F12 里唯一一条不能写错的规则**。
  *
  * @param attempt **已经完成的尝试次数**（首次失败时为 1）。
+ * @param res 失败的**响应**（5xx 判"上游建议"要读它的头；超时/网络错误没有响应，不传）。
  */
 export function shouldRetry(
   req: HttpRequest,
@@ -189,6 +211,7 @@ export function shouldRetry(
   attempt: number,
   policy: RetryPolicy = DEFAULT_RETRY_POLICY,
   rand: () => number = () => 0,
+  res?: HttpResponse | undefined,
 ): RetryDecision {
   const stop = (reason: string): RetryDecision => ({ retry: false, delayMs: 0, reason });
   if (failure === 'none') return stop('未失败');
@@ -205,9 +228,35 @@ export function shouldRetry(
    *      这条规则写成"要求幂等键"而不是"禁止重试 POST"：前者让正确的用法走得通，
    *      后者会逼着人在真实需要重试时绕过它。
    * @why 429 例外：上游明确**没有处理**这个请求（它只是让你慢点），所以重试安全。
+   * @why 排在 5xx 那条**之前**："没带幂等键"是更严重的错（可能重复扣款），
+   *      日志里的 reason 必须说这一条，不能被"上游没建议重试"盖掉。
    */
   if (req.method === 'POST' && failure !== 'rate_limited' && !hasIdempotencyKey(req)) {
     return stop('POST 缺少幂等键：重试可能重复扣款');
   }
+
+  /**
+   * 🔒 5xx：**只有上游明确建议重试**才重试（B4 / AJ-200）。
+   *
+   * @why 对带幂等键的请求，重发 5xx 拿回的是**缓存的同一次失败**，不是"再试一次"；
+   *      真正该做的是把剩下的时间预算还给调用方（让它换通道 / 报错），而不是在这里空转。
+   * @why 判据放在端口而不是各适配器：`shouldRetry` 是"哪些失败可以重试"的唯一真源，
+   *      各适配器自己判就会长出 N 份口径（F12 第一单元立这条规则就是为了只有一份）。
+   * @tradeoff 对"上游瞬时过载"这类**真的**会好的 5xx，不重试等于放弃了最后一次机会；
+   *           但那种场景上游本来就该回 `Stripe-Should-Retry: true`（或 429 + Retry-After），
+   *           我们按它说的做。代价由"少试一次"承担，不由"白等两轮"承担。
+   * @limitation 没声明 `retryAdviceHeader` 的请求一律不重试 5xx——保守默认。
+   */
+  if (failure === 'server_error') {
+    const header = req.retryAdviceHeader;
+    if (header === undefined || header.length === 0) {
+      return stop('5xx：本请求没声明上游建议头，按保守默认不重试（B4/AJ-200）');
+    }
+    const advised = res?.headers?.[header];
+    if (advised !== 'true') {
+      return stop(`5xx：上游建议头 ${header}=${String(advised)}（非 true）`);
+    }
+  }
+
   return { retry: true, delayMs: backoffMs(attempt, policy, rand), reason: `${failure} 可重试` };
 }

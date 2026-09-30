@@ -50,6 +50,16 @@ import { ProviderRejectedError } from '../../ports/payment.js';
 export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
 /** 官方库默认容差 5 分钟；超过这个时间的报文即使签名正确也拒（防重放）。 */
 export const STRIPE_TOLERANCE_SEC = 300;
+/**
+ * 5xx 时"要不要重试"的**上游建议头**（B4 / AJ-200）。
+ * @why @measured(github.com/stripe/stripe-node, 2026-09-29)：官方库读 `Stripe-Should-Retry`
+ *      响应头决定是否重试——上游自己知道这次故障"再试一次会不会好"。
+ *      带幂等键的 POST 遇 5xx 时，重发拿回的是**缓存的同一次失败**（B3 / AJ-199），
+ *      只有头里明说 true 才值得再花掉一段总预算。
+ * @limitation 官方库只在"响应带这个头"时才读；本项目反过来——**没读到就当 false**。
+ *              方向不同是因为那边的默认行为是重试、我们这边默认不重试（保守方向）。
+ */
+export const STRIPE_SHOULD_RETRY_HEADER = 'stripe-should-retry';
 
 /**
  * **本系统标记**：`create()` 时连同 `order_id` 一起写进 Session 与 PaymentIntent 的 metadata（B5 / AJ-198）。
@@ -448,6 +458,7 @@ export function createStripeCheckoutProvider(
       const res = await deps.http.send({
         method: 'POST',
         url: `${apiBase}/v1/checkout/sessions`,
+        retryAdviceHeader: STRIPE_SHOULD_RETRY_HEADER,
         headers: {
           authorization: `Bearer ${opts.secretKey}`,
           'content-type': 'application/x-www-form-urlencoded',
@@ -616,6 +627,7 @@ export function createStripeCheckoutProvider(
       const res = await deps.http.send({
         method: 'POST',
         url: `${apiBase}/v1/refunds`,
+        retryAdviceHeader: STRIPE_SHOULD_RETRY_HEADER,
         headers: {
           authorization: `Bearer ${opts.secretKey}`,
           'content-type': 'application/x-www-form-urlencoded',
@@ -671,6 +683,7 @@ export function createStripeCheckoutProvider(
       const res = await deps.http.send({
         method: 'POST',
         url: `${apiBase}/v1/checkout/sessions/${encodeURIComponent(providerRef)}/expire`,
+        retryAdviceHeader: STRIPE_SHOULD_RETRY_HEADER,
         headers: {
           authorization: `Bearer ${opts.secretKey}`,
           'content-type': 'application/x-www-form-urlencoded',
