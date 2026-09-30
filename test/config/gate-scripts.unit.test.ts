@@ -35,6 +35,8 @@ const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
 
 /** gate 里必须出现的步骤（@see @limitation 二）。 */
 const REQUIRED_STEPS: readonly string[] = [
+  // AJ-238：Node 主版本闸门（本机曾长期在 25 上跑 gate 而 CI / 生产是 22）
+  'check:node',
   'format:check',
   'lint',
   'typecheck',

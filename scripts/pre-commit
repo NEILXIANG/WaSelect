@@ -6,6 +6,8 @@
 # @see docs/地基搭建清单.md F0/F1
 set -e
 cd "$(dirname "$0")/.."
+# AJ-238：Node 主版本不对时，下面三步跑出来的结果都不算数——先过这一步
+npm run check:node
 npm run lint
 npm run typecheck
 npm run test:fast
