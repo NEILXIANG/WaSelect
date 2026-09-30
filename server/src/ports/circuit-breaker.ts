@@ -64,7 +64,11 @@ export interface CircuitSnapshot {
   state: CircuitState;
   /** 连续失败计数（成功即清零）。 */
   failureCount: number;
-  /** 最近一次跳闸的时刻（毫秒）；未跳闸为 null——用 null 而不是 0，避免"0 时刻"被当成有效时间。 */
+  /**
+   * 计时起点（毫秒）；未跳闸为 null——用 null 而不是 0，避免"0 时刻"被当成有效时间。
+   * `open` 时 = 最近一次跳闸的时刻（冷却从它起算）；
+   * `half_open` 时 = 本轮探测放行的时刻（探测超时从它起算，见 `circuitBefore`）。
+   */
   openedAtMs: number | null;
   /** half_open 期间已放行的探测请求数。 */
   halfOpenProbes: number;
@@ -147,14 +151,37 @@ export function circuitBefore(
       next: {
         state: 'half_open',
         failureCount: s.failureCount,
-        openedAtMs: openedAt,
+        // ⚠️ 计时起点挪到**放行探测的这一刻**（R-01 / AJ-222）：half_open 期间这个字段的含义是
+        //    "本轮探测从什么时候开始"，下面的探测超时从它起算。沿用旧的跳闸时刻的话，
+        //    冷却早就过了才来的第一个探测会被当成"早已超时"，名额形同虚设。
+        openedAtMs: now,
         halfOpenProbes: 1,
       },
     };
   }
 
   // half_open
-  if (s.halfOpenProbes >= p.halfOpenMaxProbes) return { allowed: false, next: s };
+  if (s.halfOpenProbes >= p.halfOpenMaxProbes) {
+    /**
+     * 探测超时出口（R-01 / AJ-222）：名额用完、且本轮探测已放出去一个冷却期仍没有回写
+     * ⇒ 认定那个探测**有去无回**，开新一轮探测（名额与计时都重置）。
+     *
+     * @why half_open 此前只有 `after()` 能改状态。任何一条"放了探测却没回写"的路径
+     *      （B4 修复后就有一条：重试前被熔断拒绝直接抛出）都会让状态永远停在这里——
+     *      这个上游到进程重启前一个请求都打不出去。把出口做进状态机本身，
+     *      是为了不再依赖"每个调用方都记得回写"这件事（约束九：机制优先于补这一次）。
+     * @why 时限复用 `cooldownMs` 而不是另加一个策略项：一次逻辑请求的总预算是秒级
+     *      （`DEFAULT_RETRY_POLICY.totalBudgetMs`），远小于冷却期；
+     *      超过一个冷却期还没回写的探测不可能还在路上。少一个旋钮，少一处配错。
+     * @limitation 若把 `cooldownMs` 配得比出站总预算还短，会在上一个探测仍在途时再放一个——
+     *      后果只是多打一次上游，不是错误；默认 30s 对 6s 预算不会发生。
+     */
+    const startedAt = s.openedAtMs;
+    if (startedAt !== null && now - startedAt >= p.cooldownMs) {
+      return { allowed: true, next: { ...s, openedAtMs: now, halfOpenProbes: 1 } };
+    }
+    return { allowed: false, next: s };
+  }
   return { allowed: true, next: { ...s, halfOpenProbes: s.halfOpenProbes + 1 } };
 }
 

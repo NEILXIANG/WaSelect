@@ -513,6 +513,64 @@ describe('createFetchClient：熔断接线（默认开启，可显式关闭）',
     expect(n - before).toBe(1);
   });
 
+  /**
+   * R-01 / AJ-222：B4 的修复引入的回归——half_open 的探测失败后熔断**永久卡死**。
+   *
+   * @why 探测第 1 次尝试超时 → 判定可重试 → 第 2 圈 `before()` 因名额用完被拒 →
+   *      直接抛 `CircuitOpenError`、**没有 `after()`**。状态停在 half_open 且名额已满，
+   *      而 half_open 没有时间出口 ⇒ 此后这个主机的每个请求都被拒，直到进程重启。
+   *      触发场景正是"Stripe 故障刚过冷却期、探测仍超时"——最需要自动恢复的那一刻。
+   *      上面那条用例只断言到"抛 CircuitOpenError"为止，把卡死钉成了正确。
+   *      判据：探测失败后再过一个冷却期，上游已恢复 ⇒ 必须能打出去并拿到 200。
+   */
+  it('🔴 half_open 探测以可重试失败告终 → 回到 open 重新计时，冷却后能恢复（不永久卡死）', async () => {
+    const h = breakerHarness({
+      fetch: async () => {
+        throw timeoutError();
+      },
+    });
+    for (let i = 0; i < BP.failureThreshold; i += 1) {
+      await expect(h.client.send(POST_WITH_KEY)).rejects.toMatchObject({ name: 'TimeoutError' });
+    }
+    h.at(1_000_000); // 推过冷却 → half_open，放 1 个探测
+    expect(h.sink.find('circuit_open')).toHaveLength(1);
+    await expect(h.client.send(POST_WITH_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+    // 🔒 探测的失败**被回写了**：half_open → open 再跳一次（第 2 条 circuit_open）。
+    //    只靠状态机的探测超时兜底也能"最终恢复"，但那要白等一整个冷却期、且不留任何信号；
+    //    这一行钉的是"调用方自己收尾"，兜底只是兜底。
+    expect(h.sink.find('circuit_open')).toHaveLength(2);
+
+    // 探测失败 = 上游仍不行：冷却期内继续拒绝，且**一次网络往返都不发生**
+    const calls = h.calls;
+    h.at(1_000_000 + BP.cooldownMs - 1_000);
+    await expect(h.client.send(POST_WITH_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(h.calls).toBe(calls);
+
+    // 再过一个冷却期、上游已恢复 → 放行探测并完全恢复
+    h.at(1_000_000 + BP.cooldownMs * 3);
+    h.setFetch(async () => ({ status: 200, body: 'ok' }));
+    await expect(h.client.send(POST_WITH_KEY)).resolves.toMatchObject({ status: 200 });
+    await expect(h.client.send(POST_WITH_KEY)).resolves.toMatchObject({ status: 200 });
+  });
+
+  it('🔴 half_open 探测得到 `unknown` → 名额退回（下一个请求接着探测，不卡死也不跳闸）', async () => {
+    const h = breakerHarness({
+      fetch: async () => {
+        throw timeoutError();
+      },
+    });
+    for (let i = 0; i < BP.failureThreshold; i += 1) {
+      await expect(h.client.send(POST_WITH_KEY)).rejects.toMatchObject({ name: 'TimeoutError' });
+    }
+    h.at(1_000_000);
+    h.setFetch(async () => ({ status: 199 })); // httpStatusKind → 'unknown'
+    // 这条探测自己的出口是 CircuitOpenError：199 被判可重试，第 2 圈因名额已占被拒
+    await expect(h.client.send(POST_WITH_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+    // 看不懂的探测结果：既不算恢复也不算失败——但名额必须退回，否则下一个请求永远被拒
+    h.setFetch(async () => ({ status: 200, body: 'ok' }));
+    await expect(h.client.send(POST_WITH_KEY)).resolves.toMatchObject({ status: 200 });
+  });
+
   it('`unknown` **不动**熔断状态（既不复位也不计入，B4/AJ-200）', async () => {
     // @why 旧实现把 unknown 当成功 → 夹在连续失败之间的几次 unknown 会把计数**清零**，
     //      于是"上游一直在坏、中间夹着认不出的失败"永远跳不了闸——熔断在最需要它时是瞎的。

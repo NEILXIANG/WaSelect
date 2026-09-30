@@ -163,6 +163,38 @@ describe('half_open：只放探测请求，据此决定恢复还是再跳', () =
   });
 });
 
+describe('half_open：探测"有去无回"也必须有出口（R-01 / AJ-222）', () => {
+  /**
+   * @why half_open 此前**没有时间出口**：名额用完后只有 `after()` 能改状态。
+   *      一旦某条路径放走了探测却没回写（B4 修复后就有一条：重试前被熔断拒绝直接抛出），
+   *      状态永远停在 half_open、名额永远是满的——这个上游到进程重启前都打不出去。
+   *      判据：探测放行后**没有任何 after**，过一个冷却期必须能再放一个探测。
+   */
+  it('🔴 探测放出去后没有回写：过一个冷却期 → 再放行一个探测（不是永久拒绝）', () => {
+    const opened = fail(P.failureThreshold, 1_000);
+    const probeAt = 1_000 + P.cooldownMs;
+    const probing = circuitBefore(opened, P, probeAt).next;
+    // 名额已用完、还没到探测超时 → 仍拒绝
+    expect(circuitBefore(probing, P, probeAt + P.cooldownMs - 1).allowed).toBe(false);
+    // 探测超时（= 一个冷却期）→ 放行新的探测，状态仍是 half_open
+    const r = circuitBefore(probing, P, probeAt + P.cooldownMs);
+    expect(r.allowed).toBe(true);
+    expect(r.next.state).toBe('half_open');
+    expect(r.next.halfOpenProbes).toBe(1);
+    // 新探测自己也有一整个冷却期的时限（计时从它放行的时刻起算，不是沿用旧时刻）
+    expect(circuitBefore(r.next, P, probeAt + P.cooldownMs + 1).allowed).toBe(false);
+  });
+
+  it('进入 half_open 时把计时起点挪到**放行探测的时刻**（探测超时从这里起算）', () => {
+    const opened = fail(P.failureThreshold, 1_000);
+    const late = 1_000 + P.cooldownMs * 10; // 冷却早就过了才来第一个请求
+    const probing = circuitBefore(opened, P, late).next;
+    expect(probing.openedAtMs).toBe(late);
+    // 若沿用旧的跳闸时刻 1_000，这里会被当成"探测早就超时"而立刻再放一个
+    expect(circuitBefore(probing, P, late + 1).allowed).toBe(false);
+  });
+});
+
 describe('breakerKey：按**上游主机**分组（粒度是契约的一部分）', () => {
   it('同一主机的不同路径 / 不同查询串 → 同一个 key', () => {
     expect(breakerKey('https://api.stripe.com/v1/checkout/sessions')).toBe(

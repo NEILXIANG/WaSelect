@@ -113,8 +113,8 @@ export function createCircuitBreaker(opts: CircuitBreakerOptions = {}): CircuitB
       if (openedAt === null) {
         return { allowed: false, state: next.state, retryAfterMs: 0 };
       }
-      // ⚠️ 会被 clamp 到 0 的真实场景：half_open 的探测名额用完（此时冷却早就过了），
-      //    于是 cooldownMs - elapsed 是负数——语义是"不是还要等冷却，是这一轮名额没了"。
+      // `open`：距冷却结束还有多久；`half_open`（名额用完）：距探测超时还有多久——
+      // 两种状态下 `openedAtMs` 都是"本轮计时起点"，同一个算式成立（R-01 / AJ-222）。
       const retryAfterMs = Math.max(0, policy.cooldownMs - (now() - openedAt));
       return { allowed: false, state: next.state, retryAfterMs };
     },
@@ -130,8 +130,20 @@ export function createCircuitBreaker(opts: CircuitBreakerOptions = {}): CircuitB
        *      看不懂的东西不能用来做"拒绝一切"这种强判断）。
        *      两个方向都不是 ⇒ 唯一诚实的做法是**什么都不做**。
        */
-      if (kind === 'unknown') return;
       const current = states.get(key) ?? initialCircuit();
+      if (kind === 'unknown') {
+        /**
+         * 例外：**half_open 的探测**得到 unknown 时，把名额退回去（R-01 / AJ-222）。
+         * @why "什么都不做"在 closed / open 下是对的，在 half_open 下却是**卡死**：
+         *      探测名额已被这次请求占用，不回写就没人释放它。退回名额 = 当这次探测没发生过
+         *      ——既不据此恢复（看不懂不能当成功），也不据此再跳闸（看不懂不能当失败），
+         *      下一个请求接着探测。这与上面"两个方向都不是"的原则是同一条。
+         */
+        if (current.state === 'half_open' && current.halfOpenProbes > 0) {
+          commit(key, current, { ...current, halfOpenProbes: current.halfOpenProbes - 1 });
+        }
+        return;
+      }
       // ⚠️ "不计入"等价于"这次是好的"：4xx 是上游正确地答复了一个错误请求，
       //    说明它活着；half_open 的探测若返回 4xx，也必须据此复位——
       //    否则 half_open 的探测名额用完又不回到 open，会**永久卡住**（再也放不了行）。

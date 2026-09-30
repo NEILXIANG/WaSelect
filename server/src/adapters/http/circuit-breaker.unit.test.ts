@@ -77,7 +77,12 @@ describe('状态跨请求存活（熔断的全部意义）', () => {
     } satisfies CircuitSnapshot);
   });
 
-  it('half_open 的探测名额用完 → 等待时间报 **0**（不是"还要等冷却"，是这一轮名额没了）', () => {
+  /**
+   * R-01 / AJ-222：这条的期望值**反过来**了（原来钉的是 0）。
+   * @why half_open 现在有探测超时出口：名额用完后最多再等一个冷却期就会开新一轮探测，
+   *      所以"还要等多久"有了真实答案。报 0 会让调用方以为"马上重试就行"，而实际上会一直被拒。
+   */
+  it('half_open 的探测名额用完 → 等待时间 = 距探测超时还有多久（不再报 0）', () => {
     const { breaker, at } = harness();
     at(1_000);
     trip(breaker, 'a.com', P.failureThreshold);
@@ -86,7 +91,23 @@ describe('状态跨请求存活（熔断的全部意义）', () => {
     const gate = breaker.before('a.com'); // 名额用完
     expect(gate.allowed).toBe(false);
     expect(gate.state).toBe('half_open');
-    expect(gate.retryAfterMs).toBe(0);
+    expect(gate.retryAfterMs).toBe(P.cooldownMs);
+    // 探测超时一到就放行新一轮（不需要任何 after）
+    at(1_000 + P.cooldownMs * 2);
+    expect(breaker.before('a.com').allowed).toBe(true);
+  });
+
+  it('half_open 的探测得到 unknown → 名额退回；closed / open 下的 unknown 仍然什么都不做', () => {
+    const { breaker, at } = harness();
+    at(1_000);
+    trip(breaker, 'a.com', P.failureThreshold);
+    breaker.after('a.com', 'unknown'); // open 下：不动（不重新计时）
+    expect(breaker.snapshot('a.com').openedAtMs).toBe(1_000);
+    at(1_000 + P.cooldownMs);
+    expect(breaker.before('a.com').allowed).toBe(true); // 探测
+    breaker.after('a.com', 'unknown');
+    expect(breaker.snapshot('a.com')).toMatchObject({ state: 'half_open', halfOpenProbes: 0 });
+    expect(breaker.before('a.com').allowed).toBe(true); // 下一个请求接着探测
   });
 
   it('从没见过的 key 都是全新的 closed（不会出现"共享一个初始状态"）', () => {

@@ -189,11 +189,18 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
         // ⚠️ **每一次尝试都问一遍**（B4 / AJ-200）：原来只在循环外问一次，
         //    于是重试（最多 3 次）**绕过熔断**——half_open 声称"只放 1 个探测"，
         //    实际会被同一条请求打满 3 次，"刚恢复的上游"立刻被砸回去。
-        //    被熔断拒绝**不**喂 `after`：它一次都没打出去，再记一次会把
+        //    **一次都没打出去**就被拒的请求不喂 `after`：再记一次会把
         //    "上游坏了"与"我们没让它打"混成同一件事。
+        // ⚠️ 但**已经打出去过**（attempt > 0）再被拒的，必须照常收尾（R-01 / AJ-222）：
+        //    它手里有一次真实的失败结果，而且很可能正占着 half_open 的探测名额——
+        //    不回写的话名额永远不释放，这个上游到进程重启前都打不出去。
+        //    @measured(fetch-client.unit.test.ts「half_open 探测以可重试失败告终」, 2026-09-30)：
+        //      修复前：探测超时 → 第 2 圈被拒 → 此后每个请求都是 CircuitOpenError（推过 3 个冷却期仍然是）；
+        //      修复后：探测失败回到 open 重新计时，冷却后放行并拿到 200。
         if (breaker !== undefined) {
           const gate = breaker.before(key);
           if (!gate.allowed) {
+            if (attempt > 0) settle();
             logger?.error('http_outbound_circuit_open', {
               result: 'circuit_open',
               ctx: {

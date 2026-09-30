@@ -523,14 +523,21 @@ describe('访问日志（请求维度）', () => {
    *      这两条用**原始 socket + 真实中断**验：事件到底触不触发只能实测，不能靠读文档推断。
    */
   it('客户端在响应写出前断开 → 不再整条丢失（finish 会静默，prefinish/close 不会）', async () => {
+    const entered = signal();
     const { baseUrl, sink } = await serve({
       mount: (app) => {
-        app.get('/slow', (_req, res) => setTimeout(() => res.json({ ok: 1 }), 200));
+        app.get('/slow', (_req, res) => {
+          entered.fire();
+          setTimeout(() => res.json({ ok: 1 }), 200);
+        });
       },
     });
     const port = Number(new URL(baseUrl).port);
-    await abortRawGet(port, '/slow', 50);
-    await new Promise((r) => setTimeout(r, 400));
+    await abortRawGet(port, '/slow', entered.seen);
+    // 等"出现了"而不是"等够久"：固定等待在机器忙时会先于事件到期（AJ-223）
+    await vi.waitFor(() => expect(sink.find('http_request')).toHaveLength(1), WAIT);
+    // 再多等一拍：确认服务端后来写出的 200 **没有**补出第二条
+    await new Promise((r) => setTimeout(r, 300));
     const rows = sink.find('http_request');
     expect(rows).toHaveLength(1);
     expect(rows[0]?.http_path).toBe('/slow');
@@ -541,15 +548,16 @@ describe('访问日志（请求维度）', () => {
   });
 
   it('handler 从未写出响应（业务卡住）也同样留痕，不静默', async () => {
+    const entered = signal();
     const { baseUrl, sink } = await serve({
       mount: (app) => {
         // 永不响应：模拟"业务卡住 + 客户端先走"的最坏形状
-        app.get('/hang', () => undefined);
+        app.get('/hang', () => entered.fire());
       },
     });
     const port = Number(new URL(baseUrl).port);
-    await abortRawGet(port, '/hang', 50);
-    await new Promise((r) => setTimeout(r, 300));
+    await abortRawGet(port, '/hang', entered.seen);
+    await vi.waitFor(() => expect(sink.find('http_request')).toHaveLength(1), WAIT);
     const rows = sink.find('http_request');
     expect(rows).toHaveLength(1);
     expect(rows[0]?.result).toBe('client_aborted');
@@ -563,7 +571,7 @@ describe('访问日志（请求维度）', () => {
       },
     });
     await fetch(`${baseUrl}/ok`);
-    await new Promise((r) => setTimeout(r, 100));
+    await vi.waitFor(() => expect(sink.find('http_request')).toHaveLength(1), WAIT);
     const rows = sink.find('http_request');
     expect(rows).toHaveLength(1);
     expect(rows[0]?.result).toBe('ok');
@@ -571,22 +579,39 @@ describe('访问日志（请求维度）', () => {
   });
 });
 
+/** `vi.waitFor` 的上限：只在失败时才会等满，平时事件一到就过。 */
+const WAIT = { timeout: 3_000, interval: 10 } as const;
+
 /**
- * 发一个原始请求并在 `abortAfterMs` 之后**摧毁连接**（不等响应）。
+ * 发一个原始请求，等 `handlerEntered` 兑现（= 服务端 handler 已经开始执行）后**摧毁连接**（不等响应）。
  * @why 用原始 socket：中断必须发生在服务端已受理但还没写完响应的窗口里，
  *      fetch 的 abort 时序不受控，且它会在客户端就把连接关掉。
+ * @why 以"handler 已进入"为准、而不是"固定等 50ms"（AJ-223）：
+ *      @measured(2026-09-30，整套 gate 与 8 路只读扫描同时跑时)：固定 50ms 的写法红过一次
+ *      （`expected [] to have a length of 1`）——机器忙的时候 50ms 内服务端还没读到请求，
+ *      连接就被摧毁了，于是**根本没有请求**可记；单独重跑 6 次全绿。
+ *      那不是被测代码的缺陷，是用例把"机器够快"当成了前提。
  */
-function abortRawGet(port: number, path: string, abortAfterMs: number): Promise<void> {
+function abortRawGet(port: number, path: string, handlerEntered: Promise<void>): Promise<void> {
   return new Promise((resolve) => {
     const sock = connect(port, '127.0.0.1', () => {
       sock.write(`GET ${path} HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n`);
     });
     sock.on('error', () => undefined); // 中断后的 ECONNRESET 不是用例关心的结果
-    setTimeout(() => {
+    void handlerEntered.then(() => {
       sock.destroy();
       resolve();
-    }, abortAfterMs);
+    });
   });
+}
+
+/** 一个可以从外面兑现的信号：handler 里调 `fire()`，用例里 `await seen`。 */
+function signal(): { seen: Promise<void>; fire: () => void } {
+  let fire: () => void = () => undefined;
+  const seen = new Promise<void>((r) => {
+    fire = r;
+  });
+  return { seen, fire };
 }
 
 /**
@@ -944,6 +969,76 @@ describe('优雅关闭', () => {
     } finally {
       uninstall();
       await started.close().catch(() => undefined);
+    }
+  });
+
+  /**
+   * AJ-237（第二轮审查 INF2-01）：**排空失败也要走 afterDrain**。
+   * @why `started.close()` 超时（有一条连上了却没发完请求的连接、或一个超过宽限期的请求）时会 reject。
+   *      原实现在 catch 里 `finish(1); return;`——`afterDrain` 整段被跳过：
+   *      领域事件的订阅者没人等（B13 / AJ-202 的"先等订阅者再关库"在这条分支上不生效）、连接池没关，
+   *      2 秒后硬退出。后果是刚提交的取消 / 过期事件，其"作废机构会话"的订阅者被掐断，
+   *      已取消的单在会话自然过期前仍可付款；而日志里只有 `server_stop_failed`，看不出清理没做。
+   */
+  it('🔴 排空失败（close 超时）→ afterDrain 仍被调用，退出码 1，两件事各记一条', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const order: string[] = [];
+    const exits: number[] = [];
+    const stuck = {
+      close: async (): Promise<void> => {
+        order.push('close');
+        throw new Error('drain timed out after 10000ms');
+      },
+    } as unknown as Parameters<typeof installShutdownHandlers>[0];
+    const { uninstall, trigger } = installShutdownHandlers(stuck, {
+      logger,
+      beforeDrain: async () => {
+        order.push('beforeDrain');
+      },
+      afterDrain: async () => {
+        order.push('afterDrain');
+      },
+      exit: (code) => exits.push(code),
+      exitDelayMs: 10,
+    });
+    try {
+      trigger('SIGTERM');
+      await vi.waitFor(() => expect(exits).toEqual([1]), { timeout: 1000 });
+      expect(order).toEqual(['beforeDrain', 'close', 'afterDrain']);
+      expect(sink.find('server_stop_failed')).toHaveLength(1);
+      // 清理做了要有痕迹，但**不能**记成 server_stopped——那是"干净停机"的信号
+      expect(sink.find('server_stopped')).toHaveLength(0);
+      expect(sink.find('shutdown_cleanup_done_after_failed_drain')).toHaveLength(1);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it('排空失败且清理也失败 → 退出码仍是 1，两条错误日志都在（不互相吞掉）', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const exits: number[] = [];
+    const stuck = {
+      close: async (): Promise<void> => {
+        throw new Error('drain timed out');
+      },
+    } as unknown as Parameters<typeof installShutdownHandlers>[0];
+    const { uninstall, trigger } = installShutdownHandlers(stuck, {
+      logger,
+      afterDrain: async () => {
+        throw new Error('pool end failed');
+      },
+      exit: (code) => exits.push(code),
+      exitDelayMs: 10,
+    });
+    try {
+      trigger('SIGTERM');
+      await vi.waitFor(() => expect(exits).toEqual([1]), { timeout: 1000 });
+      expect(sink.find('server_stop_failed')).toHaveLength(1);
+      expect(sink.find('shutdown_cleanup_failed')).toHaveLength(1);
+    } finally {
+      uninstall();
     }
   });
 

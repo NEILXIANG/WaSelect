@@ -734,6 +734,7 @@ export function installShutdownHandlers(
     void (async () => {
       const startedAt = performance.now();
       const duration = (): number => Math.round(performance.now() - startedAt);
+      let drainFailed = false;
       try {
         // ── ① 摘流量 → ①.5 等平台发现（N7）→ ② 排空存量请求 → ③ 关资源 ──────
         //    顺序反了（先关资源再排空）的表现是"部署窗口内一批 500"，本地无法复现。
@@ -752,11 +753,23 @@ export function installShutdownHandlers(
           duration_ms: duration(),
           err: e instanceof Error ? e : new Error(String(e)),
         });
-        finish(1);
-        return;
+        // ⚠️ **不在这里 return**（AJ-237）：排空失败之后仍要走下面的 `afterDrain`。
+        //    原来是 `finish(1); return;`——事件订阅者没人等、连接池没关、2 秒后硬退出：
+        //    刚提交的"取消 / 过期"事件，其作废机构会话的订阅者被掐断，
+        //    已取消的单在会话自然过期前仍可付款。排空失败只决定**退出码**，不决定要不要收尾。
+        drainFailed = true;
       }
       try {
         await hooks.afterDrain?.();
+        if (drainFailed) {
+          // 清理做了要留痕，但不能记成 `server_stopped`：那是"干净停机"的信号，监控按它判断部署是否平滑
+          hooks.logger.warn('shutdown_cleanup_done_after_failed_drain', {
+            signal,
+            duration_ms: duration(),
+          });
+          finish(1);
+          return;
+        }
         hooks.logger.info('server_stopped', { signal, duration_ms: duration() });
         finish(successExitCode);
       } catch (e) {

@@ -9,7 +9,7 @@
 import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { connect } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import type { Request, Response } from 'express';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
@@ -140,7 +140,13 @@ describe('审计生命周期（B15 / AJ-206）', () => {
     port: number;
     sink: MemorySink;
     entries: AdminAuditEntry[];
+    /** handler 已开始执行时兑现——中断以它为准，不以"固定等 50ms"为准（AJ-223）。 */
+    entered: Promise<void>;
   }> {
+    let fire: () => void = () => undefined;
+    const entered = new Promise<void>((r) => {
+      fire = r;
+    });
     const sink = new MemorySink();
     const logger = createLogger({ env: 'test', destination: sink });
     const entries: AdminAuditEntry[] = [];
@@ -157,6 +163,7 @@ describe('审计生命周期（B15 / AJ-206）', () => {
       next();
     });
     app.post('/api/v1/admin/refund', (_req, res) => {
+      fire();
       setTimeout(() => {
         if (opts.respond) res.status(200).json({ ok: true });
       }, opts.delayMs);
@@ -167,24 +174,24 @@ describe('审计生命周期（B15 / AJ-206）', () => {
     server = s;
     const address = s.address();
     if (address === null || typeof address === 'string') throw new Error('无法获取端口');
-    return { port: address.port, sink, entries };
+    return { port: address.port, sink, entries, entered };
   }
 
   /**
-   * 发一个请求并在 `abortAfterMs` 之后**摧毁连接**（不等响应）。
+   * 发一个请求，等 handler 已开始执行（`handlerEntered`）后**摧毁连接**（不等响应）。
    * @why 用原始 socket 而不是 fetch().abort()：中断必须发生在**服务端已提交业务、
    *      但还没把响应写完**的窗口里，fetch 的取消时序不受控。
    */
-  function postThenAbort(port: number, abortAfterMs: number): Promise<void> {
+  function postThenAbort(port: number, handlerEntered: Promise<void>): Promise<void> {
     return new Promise((resolve) => {
       const sock = connect(port, '127.0.0.1', () => {
         sock.write('POST /api/v1/admin/refund HTTP/1.1\r\nHost: t\r\nContent-Length: 2\r\n\r\n{}');
       });
       sock.on('error', () => undefined); // 中断后的 ECONNRESET 不是用例关心的事
-      setTimeout(() => {
+      void handlerEntered.then(() => {
         sock.destroy();
         resolve();
-      }, abortAfterMs);
+      });
     });
   }
 
@@ -192,9 +199,10 @@ describe('审计生命周期（B15 / AJ-206）', () => {
     // @measured 时序：handler 200ms 后响应，客户端 50ms 时断开——
     // 事件发生的顺序是「客户端先断、服务端后 end」，正是生产里"退款已执行、页签已关"的形状。
     // 实测 `close` 在 50ms 就触发（此时 statusCode 还是默认 200），`prefinish` 在 200ms 触发。
-    const { port, entries, sink } = await startAdminApp({ delayMs: 200, respond: true });
-    await postThenAbort(port, 50);
-    await new Promise((r) => setTimeout(r, 400));
+    const { port, entries, sink, entered } = await startAdminApp({ delayMs: 200, respond: true });
+    await postThenAbort(port, entered);
+    // 等"出现了"而不是"等够久"（AJ-223：固定等待在机器忙时会先于事件到期）
+    await vi.waitFor(() => expect(entries).toHaveLength(1), { timeout: 3_000, interval: 10 });
     expect(entries).toHaveLength(1);
     expect(entries[0]?.action).toBe('POST /admin/refund');
     expect(entries[0]?.actor).toBe('admin:u-1');
@@ -204,8 +212,11 @@ describe('审计生命周期（B15 / AJ-206）', () => {
   });
 
   it('handler 从未 end（请求卡住）→ 不写审计，也不告警（没有 2xx 就没有"已发生的改动"）', async () => {
-    const { port, sink, entries } = await startAdminApp({ delayMs: 5_000, respond: false });
-    await postThenAbort(port, 50);
+    const { port, sink, entries, entered } = await startAdminApp({
+      delayMs: 5_000,
+      respond: false,
+    });
+    await postThenAbort(port, entered);
     await new Promise((r) => setTimeout(r, 300));
     expect(entries).toHaveLength(0);
     expect(sink.find('admin_audit_skipped_aborted')).toHaveLength(0);
