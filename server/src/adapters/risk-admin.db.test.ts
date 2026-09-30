@@ -166,7 +166,7 @@ describe('listDisputes', () => {
 describe('blockUser', () => {
   it('首次拉黑：blocked + already=false；库里 blocked_at 非空且 token_ver +1', async () => {
     const before = await db`select token_ver from users where id = 'u-1'`;
-    const out = await createRiskAdminRepo(db).blockUser('u-1');
+    const out = await createRiskAdminRepo(db).blockUser(db, 'u-1');
     expect(out).toEqual({ kind: 'blocked', already: false });
     const after = await db`select token_ver, blocked_at from users where id = 'u-1'`;
     expect(Number(after[0]?.['token_ver'])).toBe(Number(before[0]?.['token_ver']) + 1);
@@ -175,9 +175,9 @@ describe('blockUser', () => {
 
   it('🔴 重复拉黑：already=true，且**不刷新 blocked_at、不再 +1 token_ver**（幂等）', async () => {
     const repo = createRiskAdminRepo(db);
-    await repo.blockUser('u-1');
+    await repo.blockUser(db, 'u-1');
     const mid = await db`select token_ver, blocked_at from users where id = 'u-1'`;
-    const out = await repo.blockUser('u-1');
+    const out = await repo.blockUser(db, 'u-1');
     expect(out).toEqual({ kind: 'blocked', already: true });
     const end = await db`select token_ver, blocked_at from users where id = 'u-1'`;
     // 时间必须**严格相等**：刷新了就答不出"最初是什么时候封的"。
@@ -191,14 +191,14 @@ describe('blockUser', () => {
   });
 
   it('不存在的用户 → not_found；且不产生任何副作用', async () => {
-    expect(await createRiskAdminRepo(db).blockUser('nope')).toEqual({ kind: 'not_found' });
+    expect(await createRiskAdminRepo(db).blockUser(db, 'nope')).toEqual({ kind: 'not_found' });
     const n = await db`select count(*)::int as n from users`;
     expect(Number(n[0]?.['n'])).toBe(1);
   });
 
   it('🔴 管理员 → is_admin 且库里**一点没动**（拉黑管理员 = 把自己锁在门外）', async () => {
     await db`update users set is_admin = true where id = 'u-1'`;
-    const out = await createRiskAdminRepo(db).blockUser('u-1');
+    const out = await createRiskAdminRepo(db).blockUser(db, 'u-1');
     expect(out).toEqual({ kind: 'is_admin' });
     const row = await db`select blocked_at, token_ver from users where id = 'u-1'`;
     expect(row[0]?.['blocked_at']).toBeNull();
@@ -207,7 +207,7 @@ describe('blockUser', () => {
 
   it('拉黑之后**换一个读取方**（identity 端口）读到 blockedAt 非空', async () => {
     // §2 第 21 条：只查 users 表等于断言"我自己写进去的值"
-    await createRiskAdminRepo(db).blockUser('u-1');
+    await createRiskAdminRepo(db).blockUser(db, 'u-1');
     const rec = await createIdentityCheck(db).load('u-1');
     expect(rec).not.toBeNull();
     expect(rec?.blockedAt).not.toBeNull();

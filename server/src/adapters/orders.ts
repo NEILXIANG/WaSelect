@@ -577,7 +577,36 @@ export async function findLatestPaymentSummary(
 }
 
 /**
+ * 锁住某用户**所有**在途单（`created` / `pending_payment`），按 id 升序返回。
+ *
+ * @why 为 B28（拉黑连带取消）而加：拉黑要在一个事务里把该用户手上**全部**在途单关掉，
+ *      逐张查再逐张锁会把"哪些单算这一批"变成两个时刻的两个结果——
+ *      中间新发起的支付会漏掉，而漏掉的正是"刚发起、还没付"的那一批。
+ * @why `order by id` + `for update`：锁序必须**全局确定**，否则与关单 job /
+ *      落账事务形成 AB/BA → 40P01 死锁（A3：回补库存那条也是同一个理由）。
+ *      升序取 id 是"与业务无关但全局一致"的最小选择。
+ * @limitation 只锁在途单：`paid` 及之后的单**不碰**——已付的钱只能走退款链路，
+ *              取消已付单在迁移表层面本来就不可达（paid → cancelled 不在表里）。
+ */
+export async function lockPayableOrdersOfUser(tx: Db, userId: string): Promise<string[]> {
+  const rows = await tx`
+    select id from orders
+     where user_id = ${userId}
+       and status in ${tx([...PAYABLE_STATUSES])}
+     order by id
+       for update
+  `;
+  return rows.map((r) => String(r['id']));
+}
+
+/**
  * 把一张订单关为 `cancelled` 并写审计事件（同一事务；与 markOrderExpired 同构）。
+ *
+ * @param actor 写进 `order_events.actor`（B28 起显式传入）。
+ *      @why 曾经在这里写死 `user:${userId}`，于是"风控拉黑连带取消"在订单时间线上
+ *          显示成**用户自己取消的**——审计时答不出"是谁把这张单关掉的"，
+ *          而拉黑恰恰是最需要追责的动作（不可逆、影响真人）。
+ *          两个调用方各自传自己的 actor，比在本函数里猜调用方是谁可靠。
  *
  * @returns true = 本次真的迁了（随后应作废旧支付行 + 释放库存 + emit order.cancelled）；
  *          false = 0 行命中（非本人 / 不存在 / 状态已被抢先迁走——**不是错误**）。
@@ -590,6 +619,7 @@ export async function markOrderCancelled(
   orderId: string,
   userId: string,
   at: Date,
+  actor: string,
 ): Promise<boolean> {
   const updated = await tx`
     update orders
@@ -601,7 +631,7 @@ export async function markOrderCancelled(
   if (updated.count === 0) return false;
   await tx`
     insert into order_events (order_id, status, actor, at)
-    values (${orderId}, 'cancelled', ${`user:${userId}`}, ${at})
+    values (${orderId}, 'cancelled', ${actor}, ${at})
   `;
   return true;
 }

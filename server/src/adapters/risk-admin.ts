@@ -53,8 +53,15 @@ export type BlockOutcome =
 export interface RiskAdminRepo {
   /** 有拒付的支付行（@limitation 一/二）。 */
   listDisputes(status?: DisputeStatus): Promise<DisputeRow[]>;
-  /** 拉黑（@limitation 三）；**拒绝拉黑管理员**（路由层转 40911）。 */
-  blockUser(id: string): Promise<BlockOutcome>;
+  /**
+   * 拉黑（@limitation 三）；**拒绝拉黑管理员**（路由层转 40911）。
+   * @param tx **调用方的事务**（B28）：封号必须与"连带取消在途单"同事务，
+   *      不能出现"号封了但单没取消"（介于两者之间的那一瞬，短链仍能付款）。
+   * @why 签名改成接 tx 而不是继续用构造时捕获的 `db`：
+   *      用捕获的 db 时这几条 SQL 会跑在事务**之外**，
+   *      表现是"拉黑成功、库存没回补"或反过来，而且只在并发下才看得见。
+   */
+  blockUser(tx: Db, id: string): Promise<BlockOutcome>;
 }
 
 function toDisputeRow(r: Record<string, unknown>): DisputeRow {
@@ -99,13 +106,13 @@ export function createRiskAdminRepo(db: Db): RiskAdminRepo {
       return rows.map((r) => toDisputeRow(r as Record<string, unknown>));
     },
 
-    async blockUser(id: string): Promise<BlockOutcome> {
-      const found = await db`select is_admin, blocked_at from users where id = ${id}`;
+    async blockUser(tx: Db, id: string): Promise<BlockOutcome> {
+      const found = await tx`select is_admin, blocked_at from users where id = ${id}`;
       const row = found[0];
       if (row === undefined) return { kind: 'not_found' };
       if (row['is_admin'] === true) return { kind: 'is_admin' };
       const already = row['blocked_at'] !== null && row['blocked_at'] !== undefined;
-      const out = await db`
+      const out = await tx`
         update users
            set blocked_at = coalesce(blocked_at, now()),
                token_ver  = case when blocked_at is null then token_ver + 1 else token_ver end

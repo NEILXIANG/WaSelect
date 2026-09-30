@@ -19,25 +19,36 @@
  *              拉黑成功即留一行（actor / target / trace_id），本路由不直接写表。
  * @limitation 二：拉黑**本进程即时生效**（F-06 / AJ-183：成功后作废身份缓存）；多实例时其它实例仍要等
  *              60 秒 TTL——render.yaml 固定单实例并由 render-env.unit.test.ts 钉住。
+ * @limitation 三：拉黑**连带取消该用户的在途单**（B28 / AJ-213），由 `app/block-user.ts` 承担——
+ *              本路由只负责"翻译成 HTTP"：判别联合 → 40403 / 40911，成功 → 空体 + 日志。
+ *              ⚠️ 取消的订单 id 要进日志：封号是本项目唯一不可逆的写操作，
+ *              "连带关掉了哪几张单"将来只能靠日志答得出来。
  *
- * @see adapters/risk-admin.ts（仓储）；domain/dispute-input.ts（status 校验）；
+ * @see adapters/risk-admin.ts（仓储）；app/block-user.ts（拉黑用例）；
+ *      domain/dispute-input.ts（status 校验）；
  *      contracts/api-contract.yaml 0.6.5（Dispute、两条路由的响应清单）
  */
 import type { Express } from 'express';
 import { AppError } from '../errors.js';
 import type { Db } from '../adapters/db.js';
 import type { Logger } from '../logger.js';
+import type { Clock } from '../ports/clock.js';
+import type { EventBus } from '../ports/events.js';
 import type { AuthConfig } from './auth.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import { requireRole } from './auth.js';
 import { createRiskAdminRepo, type DisputeRow } from '../adapters/risk-admin.js';
 import { parseDisputeStatus } from '../domain/dispute-input.js';
+import { blockUser } from './block-user.js';
 
 export interface AdminRiskRoutesDeps {
   db: Db;
   logger: Logger;
   auth: AuthConfig;
   identity: IdentityCheck;
+  /** 拉黑要发 `order.cancelled`（连带作废机构会话），见 `app/block-user.ts` 文件头。 */
+  events: EventBus;
+  clock: Clock;
 }
 
 /** 仓储行 → 契约 `Dispute`（null / 未知值一律**省略字段**，不填空串或 0）。 */
@@ -77,7 +88,10 @@ export function mountAdminRiskRoutes(app: Express, deps: AdminRiskRoutesDeps): v
     void (async () => {
       try {
         const id = String(req.params.id);
-        const outcome = await repo.blockUser(id);
+        const outcome = await blockUser(
+          { db: deps.db, events: deps.events, clock: deps.clock, logger: deps.logger, repo },
+          id,
+        );
         if (outcome.kind === 'not_found') throw new AppError(40403, { target_user_id: id });
         if (outcome.kind === 'is_admin') throw new AppError(40911, { target_user_id: id });
         // 即时生效（F-06 / AJ-183）：作废本进程的身份缓存，被拉黑者的下一个请求就回源、就被拒——
@@ -87,7 +101,11 @@ export function mountAdminRiskRoutes(app: Express, deps: AdminRiskRoutesDeps): v
           result: 'ok',
           // ⚠️ 不能写 `actor`：那是 logger 的保留键（由 requireRole 写入上下文），
           //    调用点传会直接抛 TypeError → 500（§2 第 41 条）。记"对象"用 target_user_id。
-          ctx: { target_user_id: id, already_blocked: outcome.already },
+          ctx: {
+            target_user_id: id,
+            already_blocked: outcome.already,
+            cancelled_order_ids: outcome.cancelledOrderIds,
+          },
         });
         res.status(200).end();
       } catch (e) {

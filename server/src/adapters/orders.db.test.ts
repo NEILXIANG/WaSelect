@@ -314,8 +314,8 @@ describe('markOrderCancelled + voidInitiatedPayment（守卫 = 释放库存的�
   it('created / pending_payment → true + cancelled_at + order_events 行', async () => {
     await seedFullOrder('o-c1');
     await seedFullOrder('o-c2', { status: 'pending_payment' });
-    expect(await markOrderCancelled(db, 'o-c1', 'u-exp', NOW)).toBe(true);
-    expect(await markOrderCancelled(db, 'o-c2', 'u-exp', NOW)).toBe(true);
+    expect(await markOrderCancelled(db, 'o-c1', 'u-exp', NOW, 'user:u-exp')).toBe(true);
+    expect(await markOrderCancelled(db, 'o-c2', 'u-exp', NOW, 'user:u-exp')).toBe(true);
     const r = await db`select status, cancelled_at from orders where id = 'o-c1'`;
     expect(r[0]?.['status']).toBe('cancelled');
     expect(r[0]?.['cancelled_at']).not.toBeNull();
@@ -326,9 +326,9 @@ describe('markOrderCancelled + voidInitiatedPayment（守卫 = 释放库存的�
   it('paid / 他人 / 不存在 → false（0 行命中不是错误，调用方判 40400/40902）', async () => {
     await seedFullOrder('o-paid', { status: 'paid' });
     await seedFullOrder('o-theirs', { user: 'u-other' });
-    expect(await markOrderCancelled(db, 'o-paid', 'u-exp', NOW)).toBe(false);
-    expect(await markOrderCancelled(db, 'o-theirs', 'u-exp', NOW)).toBe(false);
-    expect(await markOrderCancelled(db, 'o-ghost', 'u-exp', NOW)).toBe(false);
+    expect(await markOrderCancelled(db, 'o-paid', 'u-exp', NOW, 'user:u-exp')).toBe(false);
+    expect(await markOrderCancelled(db, 'o-theirs', 'u-exp', NOW, 'user:u-exp')).toBe(false);
+    expect(await markOrderCancelled(db, 'o-ghost', 'u-exp', NOW, 'user:u-exp')).toBe(false);
   });
 
   it('voidInitiatedPayment：initiated → cancelled（返回 1）；succeeded 不动（返回 0）', async () => {

@@ -280,6 +280,9 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     logger,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity,
+    // B28 / AJ-213：拉黑连带取消在途单并发 `order.cancelled`（作废机构会话）
+    events,
+    clock: systemClock,
   });
 
   // ── 管理端上传（I2-U-I4）：storage 由依赖袋传入（测试用 memory 驱动断言 put）；

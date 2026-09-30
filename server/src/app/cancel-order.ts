@@ -51,7 +51,15 @@ export async function cancelOrder(
   assertTransition(asOrderStatus(order.status), 'cancelled', 'orders.cancel');
 
   // ── 3. 迁移（守卫 = 后续副作用的排他凭证；@limitation 二）────────────────────
-  const transitioned = await markOrderCancelled(tx, input.orderId, input.userId, clock.now());
+  // actor 显式给"用户本人"：B28 起 markOrderCancelled 不再替调用方猜是谁
+  // （风控拉黑连带取消必须显示成 admin 动作，不能显示成用户自己取消的）
+  const transitioned = await markOrderCancelled(
+    tx,
+    input.orderId,
+    input.userId,
+    clock.now(),
+    `user:${input.userId}`,
+  );
   if (!transitioned) {
     throw new AppError(40902, { from: order.status, to: 'cancelled', where: 'orders.cancel' });
   }

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.14
+  version: 0.6.15
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -173,6 +173,20 @@ info:
       断了之后唯一解法就是直连数据库改行——既不留痕也不可复核。
       ⚠️ 它**不碰** `payments.dispute_*`：解除的是限制，不是事实。
       已没锁的订单 → 409 / 40902 `dispute_not_locking`（不是幂等 200）。
+    0.6.15（B28 / AJ-213）：`POST /admin/users/{id}/block` **连带取消该用户的在途单**——
+      行为变更（响应形状不变，副作用变多）：拉黑时在同一事务里把该用户
+      `created` / `pending_payment` 的单迁 `cancelled`，回补库存、作废在途支付行（initiated → cancelled），
+      并分发 `order.cancelled`（订阅者顺带作废机构侧会话）。
+      @why 拉黑原本只写 `blocked_at` + `token_ver+1`，作用于**带 Bearer 的接口**；
+      无鉴权的 `/pay/link` 短链不查用户状态 ⇒ 拒付滥用者被拉黑后手上的单在支付窗口内照样能付，
+      付款后进 paid，运营会把货发给一个已知的拒付滥用者。
+      @why 选"取消订单"而不是"给短链加一次状态查询"：后者只堵四个入口里的一个，
+      而"这张单该不该继续存在"必须在**数据上**成立，一次取消让所有下游读到同一个事实。
+      ⚠️ **已付单不受影响**（`paid → cancelled` 不在状态迁移表里）：已付的钱只能走退款链路，
+      "已付未发货"是运营判断（退款还是照发），不由本接口代劳。
+      ⚠️ 被取消的单之后到账的钱按**迟到付款**处理（40902 `late_payment` → 转对账/人工退款），
+      不为"被拉黑的人付了款"新造判定路径。
+      ⚠️ 订单时间线的 `actor` 是 `admin:block`，不是 `user:<id>`：审计要答得出"是谁关的"。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -458,7 +472,7 @@ paths:
   /admin/users/{id}/block:
     post:
       summary: 拉黑用户（D-50）：users.blocked_at；此后**所有买家鉴权接口** 40301（0.6.10 更正：不只建单）
-      description: 0.6.5 补：**不可逆**（契约没有解除接口），前端必须二次确认。id 不存在 → **40403**；对方是管理员 → **40911**（拉黑管理员 = 把自己锁在后台门外）。已拉黑的账号重复调用 → 200 幂等，不刷新 blocked_at。无响应体
+      description: 0.6.5 补：**不可逆**（契约没有解除接口），前端必须二次确认。id 不存在 → **40403**；对方是管理员 → **40911**（拉黑管理员 = 把自己锁在后台门外）。已拉黑的账号重复调用 → 200 幂等，不刷新 blocked_at。⚠️ 0.6.15（B28 / AJ-213）：**连带取消该用户的在途单**（created / pending_payment → cancelled，同事务回补库存 + 作废旧支付行 + 发 order.cancelled）；已付单不碰，取消后到账的钱按迟到付款 40902 处理。无响应体
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       responses: {'200': {description: 'OK（无响应体：前端拉黑后重新拉列表）'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /pay/channels:
