@@ -56,6 +56,7 @@ function fakeBus(): { bus: EventBus; handlers: Map<string, EventHandler> } {
     publishAll: () => {
       throw new Error('本测试直接调 handler，不走 publishAll');
     },
+    drain: async () => 0, // 本测试直接调 handler，不产生在途订阅者
   };
   return { bus, handlers };
 }

@@ -8,8 +8,12 @@
  *
  * @limitation 一：**进程内、内存态**——进程重启后订阅关系要重新注册，
  *              已提交但还没分发完的事件会丢（见 ../ports/events.ts @limitation 二）。
- * @limitation 二：订阅者**同步**执行。订阅者内部若开异步任务，
- *              它的失败不在本总线的兜底范围内（总线已经返回了）。
+ * @limitation 二：订阅者**可以 async**，但总线**发后不等**（fire-and-forget）：
+ *              `publish` 返回时 async 订阅者可能还在跑。
+ *              ⚠️ 这不只是"失败收不到"的问题——**停机时它会直接被打断**：
+ *              停机流若先 `closeDb`，在途订阅者拿到的是"连接池已关闭"。
+ *              所以总线维护在途集合并提供 {@link EventBus.drain}（B13 / AJ-202），
+ *              停机流必须在关资源**之前**调一次。
  * @limitation 三：不做通配符订阅（`order.*`）。MVP 事件名个位数，
  *              加通配符就要引入匹配优先级与"谁先谁后"的语义，收益不抵复杂度；
  *              真需要"订阅所有事件"（比如统一埋点），显式对每个名字注册同一个 handler 即可。
@@ -22,8 +26,13 @@
  *          ① 事务内把事件插进 `outbox_events`（与业务写同事务，崩溃不丢）；
  *          ② 提交后由独立的投递 worker 轮询 outbox 并投递，失败按退避重试；
  *          ③ 订阅者允许异步、允许跨进程。
- *          触发条件：**出现第一个"事件丢了会造成资金或履约事故"的订阅者**时立刻升级，
- *          不要等到事件种类变多才想起来。
+ *          🔴 **升级的触发条件已经满足（B13 / AJ-202，2026-09-30 更正）**：
+ *          `app/close-session-events.ts` 就是"事件丢了会造成资金事故"的订阅者——
+ *          它负责作废机构侧会话，被中断 ⇒ 已取消/已过期的单还能被付款
+ *          （会话自然过期前最长约 30 分钟）。
+ *          本轮先做**缓解**（`drain` + 停机前等待），**不等于债务清零**：
+ *          drain 只覆盖"优雅停机"，覆盖不了 SIGKILL / OOM / 崩溃——那些情形事件照样丢。
+ *          欠账条目已登记（docs 侧），真正清零仍要 outbox。
  *          （v1.2 附录 #15 已裁定 outbox 降级——本注释就是那条裁定的落点。）
  *
  * @see ../ports/events.ts（契约与全部设计理由）；docs/地基搭建清单.md F10
@@ -42,6 +51,14 @@ const SUBSCRIBER_FAILED = 'domain_event_subscriber_failed';
  */
 export function createEventBus(logger: Logger): EventBus {
   const handlers = new Map<string, Set<EventHandler>>();
+  /**
+   * 在途的 async 订阅者（B13 / AJ-202）。
+   * @why "谁还在跑"这个事实**只有总线知道**：订阅者的 Promise 不发出来，
+   *      调用方（停机流）想等也无从下手。这是 {@link EventBus.drain} 的唯一依据。
+   * @limitation 只登记 **async** 订阅者。同步订阅者在 `publish` 返回前就跑完了，
+   *             记进集合只会让 drain 永远等一个已经结束的东西。
+   */
+  const inflight = new Set<Promise<unknown>>();
 
   const forName = (name: string): Set<EventHandler> => {
     const existing = handlers.get(name);
@@ -70,7 +87,18 @@ export function createEventBus(logger: Logger): EventBus {
       // 三审 P2-1：async 订阅者的 rejection 不走 try/catch——不接住就逃到进程级
       //    unhandledRejection（N25 → fatal + 停机）。这里"发后不等"：publish 仍是同步语义，
       //    只是把 rejection 收敛成同一条 subscriber_failed 日志。
-      if (r instanceof Promise) r.catch((e: unknown) => logFailed(event, e));
+      if (r instanceof Promise) {
+        // ⚠️ 登记必须在 `.catch()` **之前**用同一个 Promise 链：先接住失败（不让它逃出去），
+        //    再把"接住之后的那个 Promise"登记为在途——否则 drain 等的是原始 Promise，
+        //    它 reject 的那一路已经没人处理了。
+        const tracked = r.catch((e: unknown) => logFailed(event, e));
+        inflight.add(tracked);
+        // 跑完（成功或已记日志的失败）就移出在途集合——**失败也算跑完**：
+        // drain 的语义是"这次分发的后果已经尘埃落定"，不是"都成功了"。
+        // 用 finally 而不是 then：reject 分支已被上面的 catch 消化，但万一还有别的抛出，
+        // 也不能让一个永远不 settle 的 Promise 把停机挂死。
+        void tracked.finally(() => inflight.delete(tracked));
+      }
     } catch (e) {
       logFailed(event, e);
     }
@@ -97,11 +125,45 @@ export function createEventBus(logger: Logger): EventBus {
     };
   };
 
+  /**
+   * 等在途的 async 订阅者跑完（契约见 ../ports/events.ts）。
+   *
+   * @why **循环**而不是"等一次 `Promise.allSettled` 就完事"：等的过程中可能又有新事件进来
+   *      （drain 期间仍有请求在 publish），一次性等待会漏掉这一批。
+   *      循环到集合为空，才是"此刻真的没有了"。
+   * @why 超时用 `Promise.race` 而不是给每个订阅者加超时：订阅者自己不知道停机这回事，
+   *      把"最多等多久"塞进它们会污染业务语义（它们只是普通的 async 函数）。
+   * @limitation 定时器**必须 clearTimeout**：否则即使订阅者早早跑完，
+   *              这个挂着的 timer 也会把进程多留一个 `timeoutMs`（停机流最不需要的就是拖时间）。
+   * @tradeoff drain 期间进程仍在处理：这是"给在途订阅者一个善终"的代价，
+   *           由停机预算（SHUTDOWN_EVENT_DRAIN_MS）封顶，不会无限延后。
+   */
+  const drain = async (timeoutMs: number): Promise<number> => {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    for (;;) {
+      if (inflight.size === 0) return 0;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return inflight.size;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.allSettled([...inflight]),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, remaining);
+          }),
+        ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+  };
+
   return {
     subscribe,
     publish,
     publishAll: (events) => {
       for (const event of events) publish(event);
     },
+    drain,
   };
 }

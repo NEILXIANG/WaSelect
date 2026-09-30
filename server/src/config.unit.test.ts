@@ -96,6 +96,8 @@ describe('loadConfig 正常路径', () => {
     expect(c.CALLBACK_ORDER_GRACE_MS).toBe(900_000);
     expect(c.SCHEDULER_TICK_MS).toBe(60000);
     expect(c.SHUTDOWN_READY_DELAY_MS).toBe(5_000);
+    // B13 / AJ-202：8s = 出站总预算 6s + 2s 排队余量（等得比 6s 短 = 注定等不到订阅者里的机构调用）
+    expect(c.SHUTDOWN_EVENT_DRAIN_MS).toBe(8_000);
     expect(c.FX_BUFFER_RATE).toBeCloseTo(0.03, 10);
     expect(c.SHIP_WITHIN_BUSINESS_DAYS).toBe(7); // FTC 发货时限承诺（D-39⑦ / AJ-180）
     // A2 / AJ-197：默认 0（宁小勿大）——取到的是直连对端 IP（错但**不可伪造**），
@@ -417,6 +419,7 @@ describe('数值型配置的下限', () => {
     ['PACKAGING_WEIGHT_G', '0'], // 包材 0 克会让运费向下取错档（D-46 同源的方向性错误）
     ['CALLBACK_ORDER_GRACE_MS', '-1'], // 负宽限期无意义（0 合法 = 不要宽限期）
     ['SHUTDOWN_READY_DELAY_MS', '-1'], // 负摘流等待无意义（0 合法 = 不等，开发用）
+    ['SHUTDOWN_EVENT_DRAIN_MS', '-1'], // 负 drain 等待同理（0 合法 = 不等，开发用）
     ['FREE_SHIPPING_JPY', '0'], // 三审：0 / 负阈值 = 全场包邮，与"留空 = 不包邮"的语义相撞；要包邮就写正数
     ['FREE_SHIPPING_JPY', '-5'],
     ['MAX_ORDER_JPY', '200000'], // 三审：D-42 单笔必须低于 ¥200,000 出口申报阈值——超过就是每单要报关

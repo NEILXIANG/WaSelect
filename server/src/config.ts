@@ -368,6 +368,22 @@ const schema = z.object({
    *      拿到平台真实摘流延迟后再校准——配置项，调整不发版。0 合法（开发/测试不等）。
    */
   SHUTDOWN_READY_DELAY_MS: int(5_000, 0),
+  /**
+   * B13 / AJ-202：停机时"等异步领域事件订阅者跑完"的上限毫秒数（0 = 不等）。
+   *
+   * @why `order.cancelled` / `order.expired` 的订阅者要去**调机构作废支付会话**
+   *      （`app/close-session-events.ts`）。停机流若直接关连接池，它拿到的是
+   *      "连接池已关闭" ⇒ 已取消/已过期的单在会话自然过期前（最长约 30 分钟）还能被付款。
+   *      这段等待就是给它一个善终的机会。
+   * @why 8s 而不是拍一个小的：订阅者里的出站调用受 `ports/http-client.ts` 的
+   *      **总预算 6s** 约束，等得比 6s 短等于"注定等不到"。8s = 6s 预算 + 2s 排队与抖动余量。
+   * @limitation 它是**上限**不是"每次都等这么久"：没有在途订阅者时 `drain` 立即返回，
+   *             不消耗停机时间。到点仍在途则记 `event_drain_timeout` error 并照常关库。
+   * @limitation 与 `SHUTDOWN_READY_DELAY_MS`（默认 5s）**相加**计入停机总时长
+   *             （另加 exit 宽限 2s，合计约 15s）——平台停机宽限必须大于这个和，
+   *             否则平台会在我们 drain 完之前 SIGKILL。这条要在 staging 实测校准（同 A2/B18）。
+   */
+  SHUTDOWN_EVENT_DRAIN_MS: int(8_000, 0),
   AUTO_DELIVER_DAYS: int(30, 1),
   AUTO_COMPLETE_DAYS: int(7, 1),
   /** 建单必传且必须与服务端相等，否则 40011（D-43）。必填 → 忘了配就启动失败，而不是全站下单失败。 */

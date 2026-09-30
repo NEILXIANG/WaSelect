@@ -130,6 +130,105 @@ describe('事件总线：async 订阅者（三审 P2-1）', () => {
   });
 });
 
+describe('事件总线：drain——停机前等在途订阅者（B13 / AJ-202）', () => {
+  /**
+   * @why 这组用例的**判据是"等到了"而不是"等了"**：
+   *      只断言 `drain()` resolve 的话，把实现写成"直接 return 0"也全绿，
+   *      而那正是 B13 的缺陷本身（停机不等订阅者）。所以每条都必须有一个
+   *      "订阅者确实跑到了这一步"的事实（side effect / 计时）来证明。
+   */
+
+  it('没有在途订阅者 → 立即返回 0（不消耗停机时间）', async () => {
+    const { bus } = busWithSink();
+    const started = Date.now();
+    await expect(bus.drain(5_000)).resolves.toBe(0);
+    // 关键：不是"等满 5s 才返回"——停机时长预算不该被空 drain 吃掉
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('在途的 async 订阅者 → drain 等到它跑完才返回 0', async () => {
+    const { bus } = busWithSink();
+    let done = false;
+    bus.subscribe('order.cancelled', async () => {
+      await new Promise((r) => setTimeout(r, 200));
+      done = true;
+    });
+    bus.publish(ev('order.cancelled'));
+    expect(done).toBe(false); // publish 是"发后不等"，此刻确实还没跑完
+    await expect(bus.drain(5_000)).resolves.toBe(0);
+    expect(done).toBe(true); // ← 这一行才是 B13 要的：订阅者跑完了
+  });
+
+  it('订阅者跑不完 → 到点返回仍在途的数量（不让停机无限延后）', async () => {
+    const { bus } = busWithSink();
+    // 用一个**永不被 resolve** 的 Promise 而不是 setTimeout：不留下"跑 5 秒"的挂起定时器，
+    // 用例结束后立刻放掉，也不污染后续用例的时间轴
+    let release: () => void = () => {};
+    const blocked = new Promise<void>((r) => {
+      release = r;
+    });
+    let finished = false;
+    bus.subscribe('order.cancelled', async () => {
+      await blocked;
+      finished = true;
+    });
+    bus.publish(ev('order.cancelled'));
+    const started = Date.now();
+    try {
+      const pending = await bus.drain(150);
+      expect(pending).toBe(1);
+      expect(finished).toBe(false);
+      expect(Date.now() - started).toBeLessThan(1_000); // 没有傻等到它自己完成
+    } finally {
+      release();
+    }
+  });
+
+  /**
+   * @why **失败也算跑完**：drain 的语义是"这次分发的后果已经尘埃落定"，
+   *      不是"都成功了"。若把 reject 的订阅者留在在途集合里，
+   *      停机就会因为它而超时——一次下游抖动变成一次 `event_drain_timeout` 误报。
+   */
+  it('reject 的订阅者也算跑完（失败不拖住停机），且失败照样留痕', async () => {
+    const { bus, sink } = busWithSink();
+    bus.subscribe('order.cancelled', async () => {
+      await Promise.resolve();
+      throw new Error('boom-in-drain');
+    });
+    bus.publish(ev('order.cancelled'));
+    await expect(bus.drain(5_000)).resolves.toBe(0);
+    expect(sink.find('domain_event_subscriber_failed')).toHaveLength(1);
+  });
+
+  it('drain 期间又来了新事件 → 也算进去（循环等，不是只等一批）', async () => {
+    const { bus } = busWithSink();
+    const done: string[] = [];
+    // ⚠️ 用两个**不同**的事件名：同一个名字自触发会无限递归（订阅者里再 publish 同名事件）
+    bus.subscribe('order.cancelled', async () => {
+      await new Promise((r) => setTimeout(r, 150));
+      done.push('first');
+      // 跑完之后再发一个：模拟 drain 期间仍有请求在 publish
+      bus.publish(ev('order.expired', 'sk-late'));
+    });
+    bus.subscribe('order.expired', async () => {
+      await new Promise((r) => setTimeout(r, 150));
+      done.push('late');
+    });
+    bus.publish(ev('order.cancelled', 'sk-first'));
+    await expect(bus.drain(5_000)).resolves.toBe(0);
+    expect(done).toEqual(['first', 'late']);
+  });
+
+  it('只有同步订阅者 → drain 立即返回 0（同步的已经在 publish 里跑完了）', async () => {
+    const { bus } = busWithSink();
+    let hit = 0;
+    bus.subscribe('order.created', () => (hit += 1));
+    bus.publish(ev('order.created'));
+    expect(hit).toBe(1);
+    await expect(bus.drain(5_000)).resolves.toBe(0);
+  });
+});
+
 describe('事件总线：退订与批量', () => {
   it('退订后收不到；重复退订无副作用（幂等）', () => {
     const { bus } = busWithSink();

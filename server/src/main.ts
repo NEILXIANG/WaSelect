@@ -37,6 +37,7 @@ import { createEventBus } from './adapters/event-bus.js';
 import { resolveStorage } from './adapters/storage.js';
 import { systemClock } from './adapters/clock.js';
 import { registerBusinessEventLog } from './app/business-events.js';
+import { drainEventsThenClose } from './app/shutdown-cleanup.js';
 import { createCleanupIdempotencyJob } from './app/cleanup-idempotency.js';
 import { createDailyHeartbeatWatchJob } from './app/daily-heartbeat-watch.js';
 import { createExpireOrdersJob } from './app/expire-orders.js';
@@ -201,7 +202,16 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       readyDelayMs: config.SHUTDOWN_READY_DELAY_MS,
       // 关资源必须在排空之后（D1）：放在前面会让存量请求拿到"连接池已关闭"
       afterDrain: async () => {
-        await closeDb(db);
+        // B13 / AJ-202：ⓐ **先**等异步领域事件订阅者跑完，ⓑ 再关连接池。
+        //    直接关库的话，`order.cancelled` 之后作废机构会话的那个订阅者会拿到
+        //    "连接池已关闭" ⇒ 已取消/已过期的单在会话自然过期前（最长约 30 分钟）
+        //    还能被付款。等的时间由 SHUTDOWN_EVENT_DRAIN_MS 封顶，到点照常关库并记 error。
+        await drainEventsThenClose({
+          events,
+          db,
+          logger,
+          drainMs: config.SHUTDOWN_EVENT_DRAIN_MS,
+        });
       },
       ...(opts.exit !== undefined ? { exit: opts.exit } : {}),
     });
