@@ -5,8 +5,19 @@
  * @why 一个入口覆盖全部管理端写接口（而不是每条路由各写一行 insert）：
  *      ① 新增一条管理端写路由**自动**被审计，不靠"记得去写"——漏写审计不会报任何错，只会在出事那天查不到；
  *      ② 审计的形状（actor / action / target / 脱敏）只有一份实现，不会在第二份里漂移。
- * @why 在响应 `finish` 之后写、只写 2xx：此时业务事务已提交，"有审计行"⇔"改动真的发生了"；
- *      4xx / 5xx 不写（没有发生的改动不该出现在审计里；失败原因在运行日志里）。
+ * @why 在响应 **`prefinish`** 之后写（不是 `finish`）、只写 2xx：此时业务事务已提交，
+ *      "有审计行"⇔"改动真的发生了"；4xx / 5xx 不写（没有发生的改动不该出现在审计里；失败原因在运行日志里）。
+ *      ⚠️ `finish` 是"响应已交给操作系统"的意思：客户端在**业务已提交之后**断开（管理员关页签、
+ *      网络断开、Cloudflare 524）时它**不触发**（B15 / AJ-206）。退款要同步调 Stripe（最长约 6 秒），
+ *      这正是它最容易发生的场景——钱已经退了，审计里却一行都没有，而审计是 append-only、
+ *      事后补不回来。`prefinish` 在 `end()` 之后立即触发，与客户端死活无关。
+ * @why **刻意不再挂 `close` 兜底**（与访问日志不同，见 http.ts）：审计的前提是"业务已提交且回了 2xx"，
+ *      而"回了 2xx"必然经过 `end()` ⇒ `prefinish` 必然触发，与客户端死活无关——没有需要兜的洞。
+ *      反过来，若 handler 真的没跑到 `end()`（卡住、崩溃），那本来就没有"已发生的改动"可审。
+ *      @measured 实测：客户端在 50ms 断开、handler 200ms 后 `res.json()`，
+ *      `close` 在 50ms 就触发（此时 statusCode 还是默认的 200、路由与身份都已就位），
+ *      挂 `close` 会对每一次"退款成功但管理员关了页签"**误报一次 error**——
+ *      那恰恰是本条最想覆盖的场景，误报等于把真信号淹掉。
  * @why action 用**路由模板**（`PATCH /admin/products/:id/status`）而不是实际路径：按动作检索
  *      （"谁改过价"）不必做字符串模式匹配；具体对象在 target。
  * @why after = 请求体（脱敏后）：它就是管理员"要把它改成什么"。before 只有路由**显式**提供时才有
@@ -16,7 +27,15 @@
  *      不需要改任何一条路由的事务边界。反过来的错误（审计了但没改）不会发生（只写 2xx）。
  * @limitation 一：登录（/auth/admin/login）不在 /admin 前缀下，不进本表——登录成败在运行日志（admin_login_*）。
  * @limitation 二：multipart 上传的请求体不是 JSON，after 记为 null（上传结果的 key 在运行日志里）。
- * @limitation 三：脱敏是**键名黑名单**（PII_KEYS）：新增含 PII 的字段名必须补进来，否则会原样落库。
+ * @limitation 三：脱敏**直接复用 `redact.ts`**（全库唯一实现），本模块**没有**自己的键名清单。
+ *              曾经另起一份 `PII_KEYS`（7 个键名，B16 / AJ-207），于是 `postal_code` / `openid` /
+ *              `api_key` / `token` 全部**原样**落进 append-only 的审计表——改一次址就把买家 ZIP+4
+ *              永久写进去，而这张表没有保留期、触发器拒 UPDATE/DELETE，APPI/CCPA 的删除请求无法兑现。
+ *              名单制唯一的维护方式是"在 redact.ts 里加词 + 加断言"（redact.ts 文件头 @limitation 一），
+ *              第二份清单必然漂移（约束九）。
+ * @limitation 四：自由文本（退款理由 `reason`、备注）只能靠 redact 的**文本层**（邮箱 / 国际电话 /
+ *              openid / 凭证形状 / 卡号），按键名脱敏管不到字符串内部；长文本里的地址行仍会原样落库。
+ *              这是"审计要留痕"与"审计不可删"之间的已知缺口：**理由与备注不写 PII** 是操作规范层面的要求。
  *
  * @see ports/admin-audit.ts；adapters/admin-audit.ts；migrations/002_hardening.sql（表 + append-only 触发器）
  */
@@ -24,18 +43,9 @@ import type { RequestHandler, Response } from 'express';
 import type { Logger } from '../logger.js';
 import type { AdminAuditStore } from '../ports/admin-audit.js';
 import { currentContext } from '../context.js';
+import { redact } from '../redact.js';
 
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-/** 落库前替换成 `[redacted]` 的键名（约束七的 PII 清单：地址、电话、邮箱、口令）。 */
-export const PII_KEYS = new Set([
-  'password',
-  'phone',
-  'email',
-  'contact_email',
-  'recipient',
-  'line1',
-  'line2',
-]);
 const AUDIT_BEFORE_KEY = 'adminAuditBefore';
 
 /** 路由提供"改前值"（只对不可逆操作用，见文件头 @why）。 */
@@ -43,21 +53,17 @@ export function setAuditBefore(res: Response, before: unknown): void {
   res.locals[AUDIT_BEFORE_KEY] = before;
 }
 
-/** 请求体 → 审计 after：递归按键名脱敏；非对象 / 非数组 → null。 */
+/**
+ * 请求体 → 审计 after：整值走 {@link redact}（全库唯一的脱敏实现）；非对象 → null。
+ *
+ * @why 不再自己判键名（B16 / AJ-207）：自己判就得自己维护一份名单，
+ *      而这张表**删不掉**（append-only 触发器），漏一个键名就是永久事故。
+ * @limitation `redact` 面向日志设计，掩码口径（IDENTIFIER 保留尾 4 位 / URL 保留 origin+路径）
+ *      比"整值 `[redacted]`"更宽松——审计表同样满足"不可反推个人"，且保住了排障要的关联线索。
+ */
 export function auditPayload(body: unknown): unknown {
-  if (Array.isArray(body)) return body.map((v) => redact(v));
   if (body === null || typeof body !== 'object') return null;
   return redact(body);
-}
-
-function redact(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map((x) => redact(x));
-  if (v === null || typeof v !== 'object') return v;
-  const out: Record<string, unknown> = {};
-  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
-    out[k] = PII_KEYS.has(k) ? '[redacted]' : redact(x);
-  }
-  return out;
 }
 
 export function adminAuditMiddleware(deps: {
@@ -69,9 +75,10 @@ export function adminAuditMiddleware(deps: {
       next();
       return;
     }
-    // 上下文在进入时取（finish 回调不保证还在同一条异步链上）
+    // 上下文在进入时取（prefinish 回调不保证还在同一条异步链上）
     const { trace_id: traceId, req_id: reqId } = currentContext();
-    res.on('finish', () => {
+
+    res.on('prefinish', () => {
       const principal = req.auth;
       const routePath = (req.route as { path?: unknown } | undefined)?.path;
       if (res.statusCode < 200 || res.statusCode >= 300) return;

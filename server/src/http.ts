@@ -275,28 +275,52 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
     runWithContext({ trace_id, req_id }, () => next());
   });
 
-  // ── 2. 访问日志（请求维度，属用户行为流的一部分）───────────────────────────
+  /**
+   * ── 2. 访问日志（请求维度，属用户行为流的一部分）─────────────────────────
+   *
+   * @why 挂 **`prefinish`** 而不是 `finish`（INF-14 / AJ-206，与 admin-audit 同一条根因）：
+   *      `finish` 表示"响应已交给操作系统"，客户端在业务已提交之后断开时**不触发**——
+   *      于是"用户以为没成功而重试"的那个**首次请求**恰好没有任何访问日志，
+   *      排障时看到的是一次凭空出现的重试。退款、发货这类同步调外部的请求最长 6 秒，
+   *      用户/网关在这个窗口里断开是常态（Cloudflare 524 就是 100 秒也照样有人等不到）。
+   * @why 另挂 `close` 兜底：连接被销毁且从未 `end()` 时也要留一条
+   *      `result: 'client_aborted'`（http_status 用 0 表示"没有真实状态码"，
+   *      不用默认的 200——200 会把中断伪装成成功，污染可用性统计）。
+   */
   app.use((req, res, next) => {
     const startedAt = performance.now();
-    res.on('finish', () => {
+    let logged = false;
+    const emit = (): void => {
+      if (logged) return;
+      logged = true;
       if (silentPaths.includes(req.path)) return;
-      const status = res.statusCode;
+      const aborted = !res.writableEnded;
+      const status = aborted ? 0 : res.statusCode;
       const fields = {
         http_method: req.method,
         http_path: req.path,
         http_status: status,
         duration_ms: Math.round(performance.now() - startedAt),
-        result: status >= 500 ? 'error' : status >= 400 ? 'client_error' : 'ok',
+        result: aborted
+          ? 'client_aborted'
+          : status >= 500
+            ? 'error'
+            : status >= 400
+              ? 'client_error'
+              : 'ok',
         user_agent: req.header('user-agent'),
         // D22：限流按 IP 计时、风控看来源、审计要还原"谁从哪来"——三者都靠 client_ip。
         // 注意它**只在访问日志里出现**，不进业务事件，避免 PII 扩散到各处。
         client_ip: req.ip,
         resp_bytes: responseBytes(res),
       };
-      if (status >= 500) httpLog.error('http_request', fields);
+      if (aborted) httpLog.warn('http_request', fields);
+      else if (status >= 500) httpLog.error('http_request', fields);
       else if (status >= 400) httpLog.warn('http_request', fields);
       else httpLog.info('http_request', fields);
-    });
+    };
+    res.on('prefinish', emit);
+    res.on('close', emit);
     next();
   });
 

@@ -513,7 +513,81 @@ describe('访问日志（请求维度）', () => {
     expect(levels.request_rejected).toBe('warn');
     expect(levels.request_failed).toBe('error');
   });
+
+  /**
+   * INF-14 / AJ-206：访问日志挂 **`prefinish`** 而不是 `finish`——客户端断开时不能整条丢失。
+   *
+   * @why 丢掉的恰恰是最该看的那一条：退款/发货同步调外部要 6 秒，用户在窗口里关掉页签
+   *      （或 Cloudflare 524 先超时），服务端业务已提交但 `finish` 不触发
+   *      ⇒ 日志里只剩"用户重试了一次"，首次请求凭空消失。
+   *      这两条用**原始 socket + 真实中断**验：事件到底触不触发只能实测，不能靠读文档推断。
+   */
+  it('客户端在响应写出前断开 → 不再整条丢失（finish 会静默，prefinish/close 不会）', async () => {
+    const { baseUrl, sink } = await serve({
+      mount: (app) => {
+        app.get('/slow', (_req, res) => setTimeout(() => res.json({ ok: 1 }), 200));
+      },
+    });
+    const port = Number(new URL(baseUrl).port);
+    await abortRawGet(port, '/slow', 50);
+    await new Promise((r) => setTimeout(r, 400));
+    const rows = sink.find('http_request');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.http_path).toBe('/slow');
+    // 客户端已经走了，服务端后来写出的 200 对它没有意义；
+    // 状态码记 0 而不是默认的 200——200 会把中断伪装成成功，污染可用性统计
+    expect(rows[0]?.result).toBe('client_aborted');
+    expect(rows[0]?.http_status).toBe(0);
+  });
+
+  it('handler 从未写出响应（业务卡住）也同样留痕，不静默', async () => {
+    const { baseUrl, sink } = await serve({
+      mount: (app) => {
+        // 永不响应：模拟"业务卡住 + 客户端先走"的最坏形状
+        app.get('/hang', () => undefined);
+      },
+    });
+    const port = Number(new URL(baseUrl).port);
+    await abortRawGet(port, '/hang', 50);
+    await new Promise((r) => setTimeout(r, 300));
+    const rows = sink.find('http_request');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.result).toBe('client_aborted');
+    expect(rows[0]?.level).toBe('warn');
+  });
+
+  it('正常完成的请求**不得**被判成 client_aborted（判定写反就是全站告警）', async () => {
+    const { baseUrl, sink } = await serve({
+      mount: (app) => {
+        app.get('/ok', (_req, res) => res.json({ ok: 1 }));
+      },
+    });
+    await fetch(`${baseUrl}/ok`);
+    await new Promise((r) => setTimeout(r, 100));
+    const rows = sink.find('http_request');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.result).toBe('ok');
+    expect(rows[0]?.http_status).toBe(200);
+  });
 });
+
+/**
+ * 发一个原始请求并在 `abortAfterMs` 之后**摧毁连接**（不等响应）。
+ * @why 用原始 socket：中断必须发生在服务端已受理但还没写完响应的窗口里，
+ *      fetch 的 abort 时序不受控，且它会在客户端就把连接关掉。
+ */
+function abortRawGet(port: number, path: string, abortAfterMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const sock = connect(port, '127.0.0.1', () => {
+      sock.write(`GET ${path} HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n`);
+    });
+    sock.on('error', () => undefined); // 中断后的 ECONNRESET 不是用例关心的结果
+    setTimeout(() => {
+      sock.destroy();
+      resolve();
+    }, abortAfterMs);
+  });
+}
 
 /**
  * 监听地址与优雅关闭（P0 修复项）。
