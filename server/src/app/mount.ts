@@ -166,9 +166,11 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
         disposition: 'disputed',
       },
       /**
-       * 拒付结案（U-F4）：写 won/lost/withdrawn + 结案时刻，并据此复位 `orders.has_dispute`。
-       * @why 复位是这条的关键：发货/退款闸门读的就是 `has_dispute`，语义是"**未解除的拒付限制**"。
-       *      结案后该复位却不复位 = 这张单永远不能发货、不能退款，且没有任何一方报错
+       * 拒付结案（U-F4）：写 won/lost/withdrawn + 结案时刻，并据此决定 `orders.has_dispute`
+       * **是否解除**（lost 不解除，won 与 withdrawn 解除）。
+       * @why 解除与否是这条的关键：发货/退款闸门读的就是 `has_dispute`，
+       *      语义是"**未解除的拒付限制**"。
+       *      结案后该解除却不解除 = 这张单永远不能发货、不能退款，且没有任何一方报错
        *      （这正是 B1 / AJ-193 修掉的现场：查询函以 `warning_closed` 结案时旧实现走到
        *      `dispute_result_unknown`，`has_dispute` 从此永远是 true）。
        * ⚠️ 只有 **lost** 保持 true（钱已被机构拉回，发货 = 钱货两空、退款在机构侧必败）；

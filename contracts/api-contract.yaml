@@ -89,12 +89,12 @@ info:
       ② 结案结果（won / lost）取自 **Dispute 对象的 `status`**，事件类型本身不带它；
       由 domain 映射，**认不出就拒绝落库**（`dispute_result_unknown`），不猜默认值——
       "赢了却记成输了"与"输了却记成赢了"都是财务口径事故。
-      ③ 结案时 `has_dispute` **复位为 false**；已结案且结果相同 → 幂等；
+      ③ 结案时 `has_dispute` **复位为 false**（⚠️ **0.6.10① 起仅胜诉如此**：败诉保持 true，见下）；已结案且结果相同 → 幂等；
       结果不同 → 40902 `dispute_result_conflict`（不静默改判：财务口径留给人工裁决）。
       ④ 结案时刻取**入库时刻**（SQL now()），与开案时刻**相反**——
       开案时刻是举证期限的起点、必须取机构时间；结案时刻不是任何期限的起点，
       而 Stripe 的 dispute 对象上根本没有"结案时间"字段（能拿到的只有事件投递时刻）。
-      ⑤ `ListDispute.has_dispute`（列表列）同义：进行中的拒付，不含已结案的。
+      ⑤ `ListDispute.has_dispute`（列表列）同义：有未解除的拒付限制（进行中，**或已败诉**），不含已解除的。
     0.6.8（I2 U-I1）：`ImageSet` 增 **`image_key`**（可选，AJ-143 定论的落地）。
       @why `BannerInput.image_key` 要的是**键**而 `POST /admin/upload` 原本只回三档 URL——
       让前端从 URL 反解键是靠字符串巧合工作（URL 规则一变就静默产出错键且无人报错）；
@@ -122,7 +122,7 @@ info:
       （前后端接缝测试实测，KD-14）。只加姓名一列，其余地址字段仍只在详情（最小暴露）。
     0.6.10（AJ-176，代码↔文档一致性审计）：契约与实现对齐，两处**行为变更**，其余为漏列/措辞更正（①～⑦）。
       ① 行为变更：拒付**败诉**（dispute.closed + lost）后 `has_dispute` **保持 true**，发货 40909 / 退款 40907 继续拦；
-      只有**胜诉**复位（0.6.7 原为"won/lost 都复位"）。
+      只有**胜诉**复位（0.6.7 原为：胜诉与败诉都复位）。
       @why 败诉 = 钱已被机构拉回持卡人：再发货钱货两空；再退款 Stripe 必拒（`charge_disputed` /
       `refund_disputed_payment`，docs.stripe.com/error-codes 2026-09-28 核对），订单会卡在 refunding。
       `has_dispute` 的语义随之扩为"**有未解除的拒付限制**（进行中，或已败诉）"。
@@ -362,7 +362,7 @@ paths:
       responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/refund:
     post:
-      description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.7 起 `has_dispute` 的语义是「**有进行中的拒付**」：拒付结案（won/lost）时它被复位为 false，闸门随之解锁（U-F4）。0.6.9（AJ-175/KD-4）：状态为 **refunding**（上次机构调用失败）时允许再调重试，沿用首次退款原因与同一机构幂等键；refunded 仍 40902。0.6.11（AJ-178 / F-03）：上一笔机构退款在途（refund_pending）时再调只查询该笔、不再发起；机构确认失败后换新机构幂等键重新发起；结果未知（超时 / 机构报错）仍沿用同键
+      description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.10① 起 `has_dispute` 的语义是「**有未解除的拒付限制**」（进行中，或已败诉）：拒付结案时**仅胜诉与 withdrawn 复位**、闸门随之解锁，**败诉保持 true、闸门继续拦**（U-F4 / AJ-176；本句取代 0.6.7 的旧口径，那条已作废）。0.6.9（AJ-175/KD-4）：状态为 **refunding**（上次机构调用失败）时允许再调重试，沿用首次退款原因与同一机构幂等键；refunded 仍 40902。0.6.11（AJ-178 / F-03）：上一笔机构退款在途（refund_pending）时再调只查询该笔、不再发起；机构确认失败后换新机构幂等键重新发起；结果未知（超时 / 机构报错）仍沿用同键
       summary: 全额退款（MVP；按 charge_currency / charge_amount 原币退；缺货场景整单退款）
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500, description: '0.6.12（B7 / AJ-191）：上限 500（机构 metadata 值上限）；超限 40001 + reason refund_reason_too_long。上限唯一真源 = shared REFUND_REASON_MAX_LENGTH，由契约测试双向比对'}}}}}}

@@ -3,7 +3,7 @@
 设计文档在知识库仓库 `WaSelectDoc/50-产品与技术/`（两仓布局：本地治理/业务文档库目录名 `jp` ↔ git 仓库 `WaSelectDoc`；本工程库目录名 `jp_project` ↔ git 仓库 `WaSelect`；两边互指链接、不重复数字），代码以以下三份为契约：
 
 - `技术架构/技术文档.md`（v0.5.1，2026-09-28 一致性审计校正；**§0a 列出写成现行但尚未实现的项**）：编码约定、状态机、表结构 DDL、复制链接支付入口（Stripe Checkout 托管页）、拒付、域名 / 隐私 / 审核细则。支付端口定义以本库 `server/src/ports/payment.ts` 为准（技术文档 §4 的 v2.1 草图已被取代）
-- `技术架构/api-contract.yaml`（版本以 `info.version` 为准，当前 0.6.10；本库副本 `contracts/api-contract.yaml`，两份逐字一致由 `npm run check:contract` 比对）：OpenAPI 3.0，前后端共同依据
+- `技术架构/api-contract.yaml`（版本以 `info.version` 为准，当前 0.6.14；**真源在文档库**，本库副本 `contracts/api-contract.yaml`，两份逐字一致由 `npm run check:contract` 比对；改契约先改文档库那一份再同步下来）：OpenAPI 3.0，前后端共同依据
 - `需求与设计/需求文档PRD-v1.6.md` §3：P0 范围
 
 目录：`miniprogram/`（原生小程序：WXML/WXSS/JS 为主，`utils/storage.ts`、`utils/wx-api.ts` 等少数 TS 由微信开发者工具的 TypeScript 编译插件转译；**页面逻辑一律在 `pages/*/index.vm.js`**（CLAUDE.md 约束十一）；`app.json` 注册 13 页 = 11 个业务页 + `pages/comp` 组件样板页 + 已停用的 `pages/index`（提审前应移除后两者的登记）；基础组件 ws-button / ws-price）、`server/`（Node 22 + TypeScript + Express 5 + postgres.js；分层 `domain / ports / adapters / app`，见 ADR-28——《工程框架文档》里的「九模块 / `modules/`」是旧设计口径）、`migrations/`（纯 SQL，001–013）、`checkout-static/`（Cloudflare Pages 静态站：`_redirects` 把 `/o/*` 转到 API 短链 → Stripe Checkout 托管页；结果页 `/pay/done`、`/pay/cancelled`、`/pay/expired`）、`admin-web/`（独立管理后台，React 18 + Vite，前置 Cloudflare Access）。表数口径：当前 20 张（migrations 001–013），唯一真源是 `server/src/adapters/db.db.test.ts` 的表清单断言；文档里出现的「13 表 / 17 张」是成文时的旧基准。

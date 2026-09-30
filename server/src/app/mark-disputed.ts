@@ -112,11 +112,14 @@ export interface DisputeClosure {
 /**
  * 落一条**结案**（`charge.dispute.closed`）。
  *
- * @why 结案必须把 `orders.has_dispute` **复位成 false**：
+ * @why 结案必须**按结果**决定 `orders.has_dispute`（⚠️ 不是"两种结果都复位"）：
  *      发货/退款闸门（`domain/admin-order-actions.ts` 的 shipGuard / refundGate）
- *      读的就是这个布尔，它们的语义是"**进行中**的拒付"（deny reason 就叫 `dispute_open`）。
- *      结案后不复位 = 这张单**永远**不能发货、不能退款——
+ *      读的就是这个布尔，它的语义是"**有未解除的拒付限制**"（deny reason 叫 `dispute_open`）。
+ *      该复位却不复位 = 这张单**永远**不能发货、不能退款——
  *      那不是"显示不对"，是运营真的做不了事，而且没有任何一方报错。
+ *      ⚠️ **只有 lost 保持 true**（AJ-176 ⑧）：败诉 = 钱已被机构拉回持卡人，
+ *      此时发货钱货两空、退款在机构侧必败（`charge_disputed`）。
+ *      won 与 withdrawn 都复位（withdrawn = 机构撤回 / 未进入正式拒付，不计输赢）。
  *      ⚠️ 这条是 U-F3 留下来的真缺口（它的 @limitation 二：结案未实现），在此补上。
  *
  * @why 结案时刻取**入库时刻**（SQL `now()`）而不是机构时间，与开案相反：
