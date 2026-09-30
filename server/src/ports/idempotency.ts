@@ -46,16 +46,37 @@ export const DEFAULT_LEASE_MS = 30_000;
  * @why 直接用 `JSON.stringify` 会让**键顺序不同但内容相同**的两个请求算出不同指纹，
  *      于是"客户端复用幂等键"这个真 bug 抓不到，反而会在正常重放时误报 40908。
  */
-function canonical(value: unknown): string {
+function canonical(value: unknown, depth = 0): string {
   if (value === null || value === undefined) return 'null';
   if (typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  // 容器（对象 / 数组）才计深度；`depth` 是"已经套了几层容器"
+  if (depth >= MAX_FINGERPRINT_DEPTH) {
+    throw new AppError(40001, {
+      reason: 'request_too_deep',
+      ctx: { max: MAX_FINGERPRINT_DEPTH },
+    });
+  }
+  if (Array.isArray(value)) return `[${value.map((v) => canonical(v, depth + 1)).join(',')}]`;
   const obj = value as Record<string, unknown>;
   const parts = Object.keys(obj)
     .sort()
-    .map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`);
+    .map((k) => `${JSON.stringify(k)}:${canonical(obj[k], depth + 1)}`);
   return `{${parts.join(',')}}`;
 }
+
+/**
+ * 指纹素材允许的最大嵌套层数（对象 / 数组各算一层）。
+ *
+ * @why `canonical()` 是递归的，而建单与发起支付都把**未裁剪的请求体**交给它（AJ-235）。
+ *      登录用户发一个嵌套几千层的 JSON（几 KB），递归把栈打穿 → `RangeError` → 50000 +
+ *      `unhandled_error`：一个稳定可重复的"用小请求打出 500"的入口。
+ *      @measured(2026-09-30，第二轮审查 INF 分片探针，Node 25.3)：3000 层嵌套（约 6KB）即 `RangeError`。
+ * @why 32：真实请求体最深是建单的 `items[].{…}`（3 层）；32 留了一个数量级的余量，
+ *      又远小于能打穿栈的量级。超限回 **40001**（客户端传错了形状），不是 5xx。
+ * @limitation 只限制**指纹**这一处的递归。请求体本身的深度由 body-parser 照常解析
+ *              （`JSON.parse` 对深嵌套不递归爆栈）；其它地方若自己递归遍历请求体，需要各自设限。
+ */
+export const MAX_FINGERPRINT_DEPTH = 32;
 
 /**
  * 请求指纹：任意可序列化入参 → 64 位十六进制串。

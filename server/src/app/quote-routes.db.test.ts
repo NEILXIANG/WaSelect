@@ -193,13 +193,42 @@ describe('POST /orders/quote（接线）', () => {
     }
   });
 
-  it('超重（包裹 > 最大档）→ 50004；任一展示币汇率缺失 → 50003', async () => {
+  /**
+   * AJ-239（第二轮审查 ORD2-02）：**超重**与**运费表没配**是两件事，不能共用 50004。
+   * ⚠️ 这条原先钉的是"超重 → 50004"。
+   * @why 50004 是 HTTP 500「运费不可计算」，action 写的是"管理员补齐参数"——对"运费表没配"是对的；
+   *      但购物车只是**太重**（超过最大一档）时，买家看到的是系统错误、没有拆单指引，
+   *      而且每改一次数量就是一条 5xx + error 日志，会把真正的配置事故淹掉。
+   */
+  it('🔴 超重（有运费表，但包裹 > 最大档）→ 40912 拆单提示（warn 级，不是 5xx）', async () => {
     const srv = await buildServer();
     try {
       // 6 × 2000g + 250g 包材 = 12250g > 10000g 最大档
       const heavy = await postQuote(srv.url, { items: [{ product_id: 'p-heavy', qty: 6 }] }, token);
-      expect(heavy.json['code']).toBe(50004);
+      expect(heavy.status).toBe(409);
+      expect(heavy.json['code']).toBe(40912);
+      expect(String(heavy.json['message'])).toContain('拆单');
+      // 不是服务端故障：不得留下 error 级日志（否则会淹掉真正的配置事故）
+      expect(srv.sink.rows().filter((r) => r.level === 'error')).toHaveLength(0);
+    } finally {
+      await srv.close();
+    }
+  });
 
+  it('🔴 运费表一档都没有（配置缺失）→ 仍是 50004（那才是要管理员处理的事故）', async () => {
+    const srv = await buildServer();
+    try {
+      await db`update shipping_rates set active = false`;
+      const none = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 1 }] }, token);
+      expect(none.json['code']).toBe(50004);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('任一展示币汇率缺失 → 50003', async () => {
+    const srv = await buildServer();
+    try {
       await db`delete from fx_rates where quote = 'CNY'`;
       const noFx = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 1 }] }, token);
       expect(noFx.json['code']).toBe(50003);

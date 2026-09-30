@@ -26,7 +26,7 @@ export const RESULT_PAID_ALREADY = 'paid:already';
  *      "收下了但没反应"长得一样——而拒付是**有举证期限**的事，扫不到就是真金白银。
  */
 export const RESULT_DISPUTED = 'disputed';
-/** 拒付已结案（won / lost，`orders.has_dispute` 已复位）。 */
+/** 拒付已结案（won / lost / withdrawn；`orders.has_dispute` 只在 won 与 withdrawn 时复位，lost 保持 true）。 */
 export const RESULT_DISPUTE_CLOSED = 'dispute_closed';
 /** 迟到付款：钱扣了但订单已过支付窗口——需人工退款。 */
 export const RESULT_LATE_PAYMENT = 'late_payment';

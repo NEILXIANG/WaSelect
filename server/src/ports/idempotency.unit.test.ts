@@ -6,7 +6,13 @@
  *      它们就在端口里（理由见 ports/idempotency.ts @limitation 二）。
  */
 import { describe, expect, it } from 'vitest';
-import { MAX_CLIENT_KEY_LENGTH, requestFingerprint, scopeKey } from './idempotency.js';
+import { AppError } from '../errors.js';
+import {
+  MAX_CLIENT_KEY_LENGTH,
+  MAX_FINGERPRINT_DEPTH,
+  requestFingerprint,
+  scopeKey,
+} from './idempotency.js';
 
 /**
  * N16 定向：canonical() 的非常规输入形状。
@@ -72,5 +78,48 @@ describe('scopeKey：客户端幂等键 ≤128（存储型 DoS 防线）', () =>
       caught = e;
     }
     expect(caught).toMatchObject({ code: 40001 });
+  });
+});
+
+/**
+ * AJ-235（第二轮审查 INF2-03）：指纹素材的**嵌套深度**必须有上限。
+ * @why `canonical()` 是递归的。登录用户发一个嵌套几千层的请求体（几 KB 就够），
+ *      递归把栈打穿 → `RangeError` → 50000 + `unhandled_error` 日志——
+ *      一个稳定可重复的"用小请求打出 500"的入口（建单与发起支付都把未裁剪的 body 交给指纹）。
+ */
+describe('requestFingerprint：嵌套深度上限（AJ-235）', () => {
+  const nested = (depth: number): unknown => {
+    let v: unknown = 1;
+    for (let i = 0; i < depth; i += 1) v = { a: v };
+    return v;
+  };
+
+  it('🔴 超过上限 → AppError 40001（不是 RangeError / 50000）', () => {
+    let thrown: unknown;
+    try {
+      requestFingerprint(nested(MAX_FINGERPRINT_DEPTH + 1));
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe(40001);
+    expect((thrown as AppError).details).toMatchObject({ reason: 'request_too_deep' });
+  });
+
+  it('🔴 几千层（足以打穿递归栈的量级）→ 同样是 40001，而不是栈溢出', () => {
+    expect(() => requestFingerprint(nested(5_000))).toThrow(AppError);
+  });
+
+  it('恰好等于上限 → 正常出指纹；数组嵌套同样计入深度', () => {
+    expect(requestFingerprint(nested(MAX_FINGERPRINT_DEPTH))).toMatch(/^[0-9a-f]{64}$/);
+    let arr: unknown = 1;
+    for (let i = 0; i < MAX_FINGERPRINT_DEPTH + 1; i += 1) arr = [arr];
+    expect(() => requestFingerprint(arr)).toThrow(AppError);
+  });
+
+  it('真实请求体的深度远在上限之内（建单体：items 数组里的对象 = 3 层）', () => {
+    const body = { items: [{ product_id: 'p-1', qty: 2 }], address_id: 'a-1', terms_version: 'T' };
+    expect(requestFingerprint(body)).toMatch(/^[0-9a-f]{64}$/);
+    expect(MAX_FINGERPRINT_DEPTH).toBeGreaterThanOrEqual(8);
   });
 });

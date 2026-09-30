@@ -50,6 +50,8 @@ function deps(idGen: IdGen, sink: MemorySink): CreateOrderDeps {
     JWT_SECRET: 'create-order-test-secret-'.repeat(3),
     PAYMENT_CHANNELS: 'mock',
     TERMS_VERSION: 'TOS-TEST-1',
+    // 本文件的用例按需要反复给同一个用户建单；在途单上限（AJ-240）另有专门用例（order-routes.db.test.ts）
+    MAX_OPEN_ORDERS_PER_USER: '1000',
   });
   return {
     config,
@@ -190,8 +192,18 @@ describe('并发建单：相同商品、相反顺序（全量审计 P1：行锁�
         { productId: 'p-bowl', qty: 1 },
       ],
     };
+    // ⚠️ 两路用**不同的用户**（AJ-240）：建单现在先锁自己的 users 行，同一用户的建单是串行的——
+    //    那样这条用例就再也制造不出"两笔建单同时抢商品行"的交错，死锁探针会变成假绿。
+    //    真实的 AB / BA 交错本来就发生在不同买家之间。
+    await db`insert into users (id, openid) values ('u-2', 'o-2')`;
+    await db`
+      insert into addresses (id, user_id, recipient, phone, line1, city, state, postal_code, country)
+      values ('addr-2', 'u-2', 'John Roe', '+14155550124', '2 Infinite Loop', 'Cupertino', 'CA', '95014', 'US')
+    `;
     const ba = {
       ...INPUT,
+      userId: 'u-2',
+      addressId: 'addr-2',
       items: [
         { productId: 'p-bowl', qty: 1 },
         { productId: 'p-knife', qty: 1 },

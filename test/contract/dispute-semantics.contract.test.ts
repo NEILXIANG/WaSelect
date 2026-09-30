@@ -35,6 +35,9 @@ const SCANNED = [
   'contracts/api-contract.yaml',
   'server/src/app/mark-disputed.ts',
   'server/src/app/mount.ts',
+  // AJ-236：B33 改了三处，漏了这两处——它们当时不在扫描范围里，所以漏改没有任何东西会红
+  'server/src/app/pay-callback.ts',
+  'server/src/app/webhook-results.ts',
 ] as const;
 
 /**
@@ -50,6 +53,9 @@ const STALE_PHRASES = [
   '一律复位',
   '结案即复位',
   '结案必须把 `orders.has_dispute` **复位成 false**',
+  // AJ-236："已结案 = 已复位"的两种写法（败诉不复位，withdrawn 才是第三种会复位的结果）
+  'won / lost；has_dispute 已复位',
+  'won / lost，`orders.has_dispute` 已复位',
 ] as const;
 
 interface Hit {
@@ -81,7 +87,7 @@ function refundDescription(yaml: string): string {
 }
 
 describe('B33：拒付结案的 has_dispute 口径，契约与注释不得残留旧说法', () => {
-  it('四个扫描目标里没有任何一条旧说法', () => {
+  it('全部扫描目标里没有任何一条旧说法', () => {
     // 🔴 判定标准（§2 第 21 条）：把契约 refund 描述改回"结案（won/lost）时它被复位为 false"
     //    → 本条必须红。只改注释不改契约、或只改契约不改注释，都要各自红。
     for (const rel of SCANNED) {

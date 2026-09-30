@@ -92,6 +92,8 @@ describe('loadConfig 正常路径', () => {
     expect(c.PRICING_ANCHOR).toBe('JPY');
     expect(c.MAX_ORDER_JPY).toBe(180000);
     expect(c.PACKAGING_WEIGHT_G).toBe(250);
+    // AJ-240：每用户在途单上限，默认 3（order-routes.db.test.ts 的用例按这个默认值写）
+    expect(c.MAX_OPEN_ORDERS_PER_USER).toBe(3);
     expect(c.ORDER_PAYMENT_TTL_MIN).toBe(30);
     expect(c.CALLBACK_ORDER_GRACE_MS).toBe(900_000);
     expect(c.SCHEDULER_TICK_MS).toBe(60000);
@@ -417,6 +419,7 @@ describe('数值型配置的下限', () => {
     ['SHIP_WITHIN_BUSINESS_DAYS', '31'], // FTC 未写时限时默认 30 天；承诺比默认还长 = 文案自相矛盾
     ['PORT', '0'],
     ['PACKAGING_WEIGHT_G', '0'], // 包材 0 克会让运费向下取错档（D-46 同源的方向性错误）
+    ['MAX_OPEN_ORDERS_PER_USER', '0'], // 0 = 任何人都下不了单（AJ-240）
     ['CALLBACK_ORDER_GRACE_MS', '-1'], // 负宽限期无意义（0 合法 = 不要宽限期）
     ['SHUTDOWN_READY_DELAY_MS', '-1'], // 负摘流等待无意义（0 合法 = 不等，开发用）
     ['SHUTDOWN_EVENT_DRAIN_MS', '-1'], // 负 drain 等待同理（0 合法 = 不等，开发用）

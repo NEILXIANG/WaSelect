@@ -245,14 +245,21 @@ export async function markOrderDisputed(
       select id, provider, dispute_id, dispute_status, dispute_opened_at,
              charge_currency, charge_amount
         from payments
-       where order_id = ${orderId} and status = 'succeeded'
-       order by created_at desc
+       where order_id = ${orderId} and status in ('succeeded', 'refunded')
+       order by (status = 'succeeded') desc, created_at desc
        limit 1
        for update
     `;
+    /**
+     * 取"**收到过钱**的那一行"：`succeeded` 或 `refunded`（A4 残留 / AJ-233）。
+     * @why 退款后被拒付是真实形态（持卡人不知道已退款，或退款与拒付在机构侧交叉）。
+     *      原先只认 `succeeded`，已退款的单来拒付一律 `no_succeeded_payment`——
+     *      这条拒付进不了系统：风控页看不见、举证期限无人知晓，而机构会再从我们账上扣一次。
+     * @why `succeeded` 优先于 `refunded`：同一张单两种都有时，仍在我们手里的那笔钱才是拒付的对象。
+     */
     const p = pays[0];
     if (p === undefined) {
-      // 没有 succeeded 的支付行 = 这笔钱我们还没收到，拒付无从谈起。
+      // 没有收到过钱的支付行 = 拒付无从谈起（词表沿用 `no_succeeded_payment`，对账按它检索）。
       // 不猜"也许该挂在 initiated 那行上"：那会把"未付款"表现成"已付款但有争议"。
       throw new AppError(40902, { order_id: orderId, reason: 'no_succeeded_payment' });
     }
@@ -306,9 +313,20 @@ export async function markOrderDisputed(
     }
 
     const existingId = p.dispute_id as string | null;
-    if (existingId !== null && existingId !== d.disputeId) {
-      // 同一笔钱来了两个不同的拒付单号：不覆盖（覆盖会让前一条的证据链丢失），
-      // 由人来决定（都记进对账，风控页能看见第一条）。
+    const existingStatus = p.dispute_status as string | null;
+    /**
+     * 同一笔钱来了**另一个**拒付单号（AJ-233）：
+     *   · 上一条**仍在进行中**（open）→ 拒绝并转对账：不覆盖，覆盖会让进行中那条的举证跟丢；
+     *   · 上一条**已结案**（won / lost / withdrawn）→ 接受，下面照常按新开案落库。
+     * @why 已结案后的新拒付必须能进来：查询函被撤回后转正式拒付，正式拒付是**新的**单号
+     *      （上面 `markDisputeClosed` 的 @why 自己就写着）。原先一律 `dispute_id_conflict`——
+     *      `has_dispute` 已在结案时复位，新拒付又落不了库，订单不会重新上锁，
+     *      而机构已经把钱扣走了。
+     * @tradeoff 接受 = `payments.dispute_*` 被新单号覆盖。上一条的证据链留在 `order_events`
+     *      （`dispute_opened` / `dispute_closed` 的 note 带单号与结果）与 `webhook_events` 里，
+     *      支付行上只保留"当前这一条"。要同时查两条须看事件流——可查，但不在风控列表的一行里。
+     */
+    if (existingId !== null && existingId !== d.disputeId && existingStatus === 'open') {
       throw new AppError(40902, {
         order_id: orderId,
         reason: 'dispute_id_conflict',
@@ -325,7 +343,10 @@ export async function markOrderDisputed(
      * orders 那条没跟上"的半途状态（跨版本升级或人工修数据时可能出现）。
      */
     if (existingId === d.disputeId) {
-      if (order.has_dispute !== true) {
+      // ⚠️ 只在这条拒付**仍是 open** 时才补（AJ-233 / 第二轮审查 PAY2-03）：
+      //    won / withdrawn 结案后 `has_dispute` 已复位，旧的开案事件重放进来若把它写回 true，
+      //    订单会被重新锁上，而这条拒付**不会再有结案事件**来解锁它。
+      if (order.has_dispute !== true && existingStatus === 'open') {
         await tx`update orders set has_dispute = true, updated_at = now() where id = ${orderId}`;
         await tx`
           insert into order_events (order_id, status, note, actor, at)
@@ -346,7 +367,9 @@ export async function markOrderDisputed(
          set dispute_id = ${d.disputeId},
              dispute_status = 'open',
              dispute_amount = ${d.amountMinor},
-             dispute_opened_at = to_timestamp(${openedAtSec})
+             dispute_opened_at = to_timestamp(${openedAtSec}),
+             -- 上一条已结案后的新拒付：结案时刻属于上一条，必须清掉（否则"进行中"却带着结案时间）
+             dispute_closed_at = null
        where id = ${p.id}
       returning dispute_opened_at
     `;

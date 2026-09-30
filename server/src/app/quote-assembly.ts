@@ -50,7 +50,7 @@ export interface AssembledQuote {
 /**
  * 装配一次报价（重算）。
  *
- * @throws {AppError} 50004 承运商 ≠1 家活跃 / 包裹超重无档可取
+ * @throws {AppError} 50004 承运商 ≠1 家活跃（含运费表未配置）| 40912 包裹超过最大一档（AJ-239）
  * @throws {AppError} 50003 任一展示币汇率缺失（computeQuote 抛出）
  */
 export async function assembleQuote(
@@ -68,7 +68,23 @@ export async function assembleQuote(
   if (carrier === null) throw new AppError(50004, { reason: 'carrier_not_unambiguous' });
   const weightG = summary.goodsWeightG + config.PACKAGING_WEIGHT_G;
   const shippingJpy = await catalog.findShippingPriceJpy(carrier, weightG);
-  if (shippingJpy === null) throw new AppError(50004, { carrier, weight_g: weightG });
+  if (shippingJpy === null) {
+    /**
+     * 取不到档 = **包裹比最大一档还重**（AJ-239）→ 40912（409，拆单），不是 50004。
+     * @why 走到这里时"运费表没配"已经被排除：`resolveSingleActiveCarrier` 返回非 null
+     *      的前提就是这家承运商**至少有一档启用的运费**，所以剩下的唯一原因是超重。
+     *      此前两种情况共用 50004：买家看到"系统错误"没有拆单指引，
+     *      而且每改一次数量一条 5xx + error 日志，会把真正的配置事故淹掉。
+     * @limitation 管理员恰好在这两条查询之间整表替换运费（B22 的表锁只挡写-写）且新表更小时，
+     *              这里会把"档位刚被改掉"也说成超重。窗口是毫秒级、后果只是一次文案不准，未处理。
+     *              （曾多写一条"再查一次最大档、为 null 则回 50004"的分支——它在正常路径不可达，
+     *              注回后没有用例会红，按约束八删掉了。）
+     */
+    throw new AppError(40912, {
+      reason: 'over_max_shipping_weight',
+      ctx: { carrier, weight_g: weightG },
+    });
+  }
 
   // 目的国 + 展示币（表驱动，@limitation 二）
   const actives = await countryProfiles.listActive();

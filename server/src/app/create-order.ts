@@ -41,6 +41,7 @@ import {
   findOwnedAddress,
   insertOrder,
   insertOrderItems,
+  lockUserForOrdering,
   type OrderItemInsertRow,
 } from '../adapters/orders.js';
 import { createCatalogRepo } from '../adapters/catalog.js';
@@ -100,7 +101,8 @@ function isUniqueViolation(e: unknown): boolean {
  *
  * @throws {AppError} 40011 条款版本缺失/不匹配 | 40400 地址不存在或非本人 |
  *         40401 商品不存在/已下架 | 40901 库存不足 | 40905 价格已变动 |
- *         40906 超单笔上限 | 50003 汇率缺失 | 50004 运费不可计算 | 50000 单号三连撞
+ *         40906 超单笔上限 | 40912 包裹超重 | 40913 在途单过多 | 40301 已被拉黑 |
+ *         50003 汇率缺失 | 50004 运费表未配置 | 50000 单号三连撞
  */
 export async function createOrder(
   tx: Db,
@@ -115,6 +117,19 @@ export async function createOrder(
   }
   // 捕获为局部常量：属性收窄进不了 withSavepoint 的闭包（TS 对可变成员的窄化不跨闭包）
   const termsVersion = input.termsVersion;
+
+  // ── 1b. 锁用户行：拉黑复核 + 在途单上限（AJ-240）────────────────────────────
+  // 放在一切读写之前：这把锁让同一用户的建单串行，后面"数在途单 → 扣库存 → 插入"才不会被并发穿过。
+  const gate = await lockUserForOrdering(tx, input.userId);
+  if (gate === null || gate.blocked) {
+    throw new AppError(40301, { reason: gate === null ? 'user_missing' : 'user_blocked' });
+  }
+  if (gate.openOrders >= config.MAX_OPEN_ORDERS_PER_USER) {
+    throw new AppError(40913, {
+      reason: 'too_many_open_orders',
+      ctx: { open: gate.openOrders, max: config.MAX_OPEN_ORDERS_PER_USER },
+    });
+  }
 
   // ── 2. 收货地址（归属判定：非本人与不存在同码 40400，防存在性探测）─────────
   const address = await findOwnedAddress(tx, input.addressId, input.userId);

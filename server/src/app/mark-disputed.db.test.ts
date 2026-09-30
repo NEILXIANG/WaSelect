@@ -193,7 +193,7 @@ describe('markOrderDisputed：幂等（机构会重发 charge.dispute.created）
     expect((await paymentRow('o-1'))['dispute_status']).toBe('won');
   });
 
-  it('不同的 dispute_id 到达 → 40902 dispute_id_conflict（不静默覆盖）', async () => {
+  it('上一条拒付**仍在进行中**时来了不同的 dispute_id → 40902 dispute_id_conflict（不静默覆盖）', async () => {
     await seedPaid('o-1');
     await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
     await expect(
@@ -201,6 +201,90 @@ describe('markOrderDisputed：幂等（机构会重发 charge.dispute.created）
     ).rejects.toMatchObject({ code: 40902 });
     // 原拒付不被覆盖
     expect((await paymentRow('o-1'))['dispute_id']).toBe('dp_1');
+  });
+
+  /**
+   * AJ-233：上一条**已结案**之后来的新拒付必须能进系统。
+   * @why 真实形态：查询函（inquiry）被撤回后转正式拒付——正式拒付是**新的** dispute_id；
+   *      或胜诉后持卡人再次发起。旧实现一律 `dispute_id_conflict`：`has_dispute` 已在结案时复位，
+   *      新拒付又落不了库 ⇒ 订单**不会重新上锁**，照常可发货 / 可退款，而机构已经把钱扣走了。
+   */
+  it.each(['withdrawn', 'won'] as const)(
+    '🔴 上一条已结案（%s）后来了新的 dispute_id → 接受：重新上锁、换成新单号、留下两次开案事件',
+    async (result) => {
+      await seedPaid('o-1');
+      await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
+      await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+        channel: 'stripe',
+        disputeId: 'dp_1',
+        result,
+      });
+      expect((await orderRow('o-1'))['has_dispute']).toBe(false);
+
+      await markOrderDisputed(
+        db,
+        createEventBus(SILENT),
+        SILENT,
+        'o-1',
+        dispute({ disputeId: 'dp_2' }),
+      );
+      expect(await paymentRow('o-1')).toMatchObject({
+        dispute_id: 'dp_2',
+        dispute_status: 'open',
+        dispute_closed_at: null,
+      });
+      expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+      // 上一条的证据链在事件流里：开案 → 结案 → 再开案
+      expect(await events('o-1')).toEqual(['dispute_opened', 'dispute_closed', 'dispute_opened']);
+    },
+  );
+
+  it('上一条已**败诉**（lost）后来了新的 dispute_id → 同样接受（订单本来就锁着，换成新单号继续跟）', async () => {
+    await seedPaid('o-1');
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'lost',
+    });
+    await markOrderDisputed(
+      db,
+      createEventBus(SILENT),
+      SILENT,
+      'o-1',
+      dispute({ disputeId: 'dp_2' }),
+    );
+    expect(await paymentRow('o-1')).toMatchObject({ dispute_id: 'dp_2', dispute_status: 'open' });
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+  });
+
+  /**
+   * AJ-233（第二轮审查 PAY2-03）：**已结案**的拒付被重放时，不得把订单重新锁上。
+   * @why 重放分支原先只看 `has_dispute !== true` 就写回 true，不看拒付是否已结案。
+   *      won / withdrawn 结案后 `has_dispute` 已复位；此时一条旧的开案事件重放进来，
+   *      订单被重新上锁——而这条拒付**不会再有结案事件**来解锁它，只能人工解除。
+   *      上面那条"重放不得把 won 改回 open"只断言了 payments 侧，这条分支没被走到。
+   */
+  it('🔴 已结案（withdrawn）的拒付被重放 → 订单**不**重新上锁、不新增事件', async () => {
+    await seedPaid('o-1');
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_1',
+      result: 'withdrawn',
+    });
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
+    expect((await orderRow('o-1'))['has_dispute']).toBe(false);
+    expect((await paymentRow('o-1'))['dispute_status']).toBe('withdrawn');
+    expect(await events('o-1')).toEqual(['dispute_opened', 'dispute_closed']);
+  });
+
+  it('仍在进行中的拒付被重放、而 orders 侧没跟上（半途状态）→ 补上 has_dispute（原有行为保留）', async () => {
+    await seedPaid('o-1');
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
+    await db`update orders set has_dispute = false where id = 'o-1'`;
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
   });
 });
 
@@ -676,12 +760,47 @@ describe('markOrderDisputed：拒绝路径（每一条都要能进对账）', ()
     });
   });
 
-  it('金额不符但已退款的支付行 → 仍走 no_succeeded_payment（不因为有争议就放宽前置）', async () => {
+  /**
+   * A4 残留 / AJ-233：**已退款**的支付行来的拒付也要落库。
+   * ⚠️ 这条原先钉的是"已退款 → no_succeeded_payment"，而 A4 的标题里三种情形
+   *    （部分拒付 / 汇率波动 / **退款后拒付**）只修了前两种。
+   * @why 退款后被拒付是真实形态（持卡人不知道已退款、或退款与拒付在机构侧交叉）。
+   *      落不了库的后果：风控页看不见、举证期限无人知晓——而机构会再从我们账上扣一次钱。
+   */
+  it('🔴 已退款的支付行来拒付 → 照常落库：has_dispute=true，风控列表可见', async () => {
     await seedPaid('o-1', { amount: 1000 });
     await db`update payments set status = 'refunded' where order_id = 'o-1'`;
+    await db`update orders set status = 'refunded' where id = 'o-1'`;
+    await markOrderDisputed(
+      db,
+      createEventBus(SILENT),
+      SILENT,
+      'o-1',
+      dispute({ amountMinor: 700 }),
+    );
+    expect(await paymentRow('o-1')).toMatchObject({ dispute_id: 'dp_1', dispute_status: 'open' });
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+    // 货态不动：拒付标记与货态正交
+    expect((await orderRow('o-1'))['status']).toBe('refunded');
+    const listed = await createRiskAdminRepo(db).listDisputes();
+    expect(listed.map((x) => x.orderId)).toContain('o-1');
+  });
+
+  it('只有 initiated / failed 的支付行（钱从没收到过）→ 仍是 no_succeeded_payment', async () => {
+    await seedPaid('o-1');
+    await db`update payments set status = 'initiated' where order_id = 'o-1'`;
     await expect(
-      markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute({ amountMinor: 700 })),
-    ).rejects.toMatchObject({ code: 40902 });
+      markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute()),
+    ).rejects.toMatchObject({ code: 40902, details: { reason: 'no_succeeded_payment' } });
+  });
+
+  it('同一张单既有 refunded 又有 succeeded 的支付行 → 拒付挂在 succeeded 那一行上', async () => {
+    await seedPaid('o-1');
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount, created_at)
+             values ('p-old', 'o-1', 'stripe', 'refunded', 'USD', 1000, now() + interval '1 minute')`;
+    await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
+    const rows = await db`select id from payments where order_id = 'o-1' and dispute_id = 'dp_1'`;
+    expect(rows.map((r) => r.id)).toEqual(['p-o-1']);
   });
 
   it('币种不符 → 40902 currency_mismatch', async () => {

@@ -99,7 +99,9 @@ export function mountPayIntentRoutes(app: Express, deps: PayIntentRoutesDeps): v
               //    会话交给正在付这一单的人（钱进了 A 的会话，用户以为在付 B）。
               //    小程序历史上每次点击都现造键 ⇒ 当年不可达；A5 改成键复用之后变为可达。
               //    @see AJ-195；app/pay-intent.ts 的 reissuePayLinkOnReplay（它的安全性依赖这里）
-              request: { order_id: orderId, ...(body ?? {}) },
+              // ⚠️ `order_id` 写在展开**之后**（AJ-235）：写在前面时 body 里的同名字段会盖掉路径参数，
+              //    "换一张单 + body 里伪造上一张单的 order_id"两次指纹相等，上面要堵的跨单重放又可达。
+              request: { ...(body ?? {}), order_id: orderId },
               logger: deps.logger,
               // KD-3（AJ-175）：短链明文 token 不许随响应体进幂等表——落库前抹掉，重放时补发
               persist: redactPayToken,

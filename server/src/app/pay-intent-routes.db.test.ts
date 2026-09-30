@@ -205,6 +205,29 @@ describe('POST /orders/{id}/pay（mock 通道全链路）', () => {
     }
   });
 
+  /**
+   * AJ-235（B10 修复的漏口，第二轮审查 PAY2-04 / INF2-04）：body 里自带 `order_id` 不得盖掉路径里的。
+   * @why 指纹素材写成 `{ order_id: orderId, ...body }`——展开在后，body 的同名字段会覆盖路径参数。
+   *      于是"同键用在另一张单上、body 里再带一个 `order_id: <上一张单>`"两次指纹相等，
+   *      B10 要堵的跨单重放又可达了：正在付 b 的人拿到的是 a 的支付凭据。
+   */
+  it('🔴 body 里伪造 order_id 指向上一张单：指纹仍以**路径**为准 → 40908，不重放 a 的响应', async () => {
+    const srv = await buildServer();
+    try {
+      const a = await createOrder(srv.url);
+      const b = await createOrder(srv.url);
+      const first = await pay(srv.url, a, { channel: 'mock' }, 'forged-key');
+      expect(first.status).toBe(200);
+
+      const cross = await pay(srv.url, b, { channel: 'mock', order_id: a }, 'forged-key');
+      expect(cross.json['code']).toBe(40908);
+      const paysB = await db`select count(*)::int as n from payments where order_id = ${b}`;
+      expect(Number(paysB[0]?.['n'])).toBe(0);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('形状守卫：缺 channel → 40001；未注册通道 → 40001；他人单 → 40400；已过期 → 40904', async () => {
     const srv = await buildServer();
     try {

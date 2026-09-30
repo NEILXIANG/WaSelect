@@ -92,6 +92,9 @@ beforeEach(async () => {
   token = await signToken({ sub: 'u-1', role: 'user' }, { secret: JWT_SECRET, issuer: 'waselect' });
 });
 
+/** 配置默认值（用例不另设，测的就是默认行为；与 config.ts 的默认值由 config 单测钉住）。 */
+const MAX_OPEN_ORDERS_DEFAULT = 3;
+
 const BODY = {
   items: [
     { product_id: 'p-knife', qty: 1 },
@@ -267,7 +270,7 @@ describe('POST /orders（建单全链路）', () => {
     }
   });
 
-  it('库存不足 → 40901（整单回滚，其它商品也不扣）；他人地址 → 40400；超重 → 50004；缺 fx → 50003', async () => {
+  it('库存不足 → 40901（整单回滚，其它商品也不扣）；他人地址 → 40400；超重 → 40912；缺 fx → 50003', async () => {
     const srv = await buildServer();
     try {
       const stock = await create(
@@ -294,7 +297,8 @@ describe('POST /orders（建单全链路）', () => {
         { ...BODY, items: [{ product_id: 'p-heavy', qty: 6 }] },
         's3',
       );
-      expect(heavy.json['code']).toBe(50004);
+      // AJ-239：超重是买家可以自己解决的事（拆单），不是 5xx
+      expect(heavy.json['code']).toBe(40912);
 
       await db`delete from fx_rates where quote = 'USD'`;
       const noFx = await create(srv.url, BODY, 's4');
@@ -425,6 +429,105 @@ describe('POST /orders/{id}/cancel（I1-U5c：取消 = 迁移 + 作废旧支付�
       expect(others.json['code']).toBe(40400);
       const ghost = await cancel(srv.url, 'ord-ghost');
       expect(ghost.json['code']).toBe(40400);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+/**
+ * AJ-240（第二轮审查 ORD2-01）：每个用户的**在途单**（created / pending_payment）有数量上限。
+ *
+ * @why 库存在**建单时**就扣，30 分钟后才由关单作业回补；而限流只按 IP（每分钟 30 次）。
+ *      于是任何一个登录用户都能零成本地循环建单：每张单把若干 SKU 的库存占满，到期后立刻续上——
+ *      全店对其他买家一直是"库存不足"，而六类对账一条都不会报（每一张单都是"合法的待付款单"）。
+ *      上限同时兜住另一件事：结算页在"上一次提交结果未知 + 内容又变了"时会换幂等键（AJ-228），
+ *      可能多出一张未付款的单——有了上限，它不会无限多出来。
+ */
+describe('POST /orders：每用户在途单上限（AJ-240）', () => {
+  const ONE_CUP = { ...BODY, items: [{ product_id: 'p-cup', qty: 1 }] };
+  const stockOf = async (id: string): Promise<number> =>
+    Number((await db`select stock from products where id = ${id}`)[0]?.['stock']);
+
+  it('🔴 超过上限的那一张 → 409 / 40913，且**不扣库存**；已有的在途单不受影响', async () => {
+    const srv = await buildServer();
+    try {
+      for (let i = 1; i <= MAX_OPEN_ORDERS_DEFAULT; i += 1) {
+        expect((await create(srv.url, ONE_CUP, `cap-${String(i)}`)).status).toBe(201);
+      }
+      const before = await stockOf('p-cup');
+      const over = await create(srv.url, ONE_CUP, 'cap-over');
+      expect(over.status).toBe(409);
+      expect(over.json['code']).toBe(40913);
+      expect(await stockOf('p-cup')).toBe(before);
+      const open = await db`select count(*)::int as n from orders where user_id = 'u-1'`;
+      expect(Number(open[0]?.['n'])).toBe(MAX_OPEN_ORDERS_DEFAULT);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('取消一张之后可以再下；已付款 / 已取消的单不计入在途', async () => {
+    const srv = await buildServer();
+    try {
+      const ids: string[] = [];
+      for (let i = 1; i <= MAX_OPEN_ORDERS_DEFAULT; i += 1) {
+        const r = await create(srv.url, ONE_CUP, `cap-${String(i)}`);
+        ids.push(String(r.json['order_id']));
+      }
+      await db`update orders set status = 'cancelled' where id = ${ids[0] ?? ''}`;
+      await db`update orders set status = 'paid' where id = ${ids[1] ?? ''}`;
+      expect((await create(srv.url, ONE_CUP, 'cap-a')).status).toBe(201);
+      expect((await create(srv.url, ONE_CUP, 'cap-b')).status).toBe(201);
+      expect((await create(srv.url, ONE_CUP, 'cap-c')).json['code']).toBe(40913);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('上限按**用户**算：别人的在途单不占我的额度', async () => {
+    const srv = await buildServer();
+    try {
+      await db`insert into users (id, openid) values ('u-2', 'o-2')`;
+      for (let i = 1; i <= MAX_OPEN_ORDERS_DEFAULT; i += 1) {
+        await db`insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                                     total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
+                 values (${`o-other-${String(i)}`}, ${`W-other-${String(i)}`}, 'u-2', 'pending_payment', 1, 0, 0, 1, 1,
+                         '{}'::jsonb, '{}'::jsonb, 'T', now() + interval '30 minutes')`;
+      }
+      expect((await create(srv.url, ONE_CUP, 'cap-mine')).status).toBe(201);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 并发：同一用户同时发 8 张（各用各的幂等键）→ 恰好上限张成功，其余 40913，库存只扣成功的那几张', async () => {
+    const srv = await buildServer();
+    try {
+      const before = await stockOf('p-cup');
+      const burst = await Promise.all(
+        Array.from({ length: 8 }, (_, i) => create(srv.url, ONE_CUP, `burst-${String(i)}`)),
+      );
+      const created = burst.filter((r) => r.status === 201).length;
+      const capped = burst.filter((r) => r.json['code'] === 40913).length;
+      expect(created).toBe(MAX_OPEN_ORDERS_DEFAULT);
+      expect(capped).toBe(8 - MAX_OPEN_ORDERS_DEFAULT);
+      expect(await stockOf('p-cup')).toBe(before - MAX_OPEN_ORDERS_DEFAULT);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 建单事务内复核拉黑：token 还有效（身份缓存最长 60 秒）也不能再建单 → 40301', async () => {
+    const srv = await buildServer();
+    try {
+      // 先让身份进缓存，再拉黑——模拟"刚被拉黑的人 60 秒内还拿着有效身份"
+      expect((await create(srv.url, ONE_CUP, 'blk-1')).status).toBe(201);
+      await db`update users set blocked_at = now() where id = 'u-1'`;
+      const r = await create(srv.url, ONE_CUP, 'blk-2');
+      expect(r.json['code']).toBe(40301);
+      const n = await db`select count(*)::int as n from orders where user_id = 'u-1'`;
+      expect(Number(n[0]?.['n'])).toBe(1);
     } finally {
       await srv.close();
     }

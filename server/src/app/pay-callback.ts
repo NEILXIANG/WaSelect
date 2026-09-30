@@ -146,7 +146,7 @@ export type CallbackDisposition =
   | 'paid:already'
   /** 拒付已落库（payments.dispute_* + orders.has_dispute） */
   | 'disputed'
-  /** 拒付已结案（won / lost；has_dispute 已复位，发货/退款闸门解锁） */
+  /** 拒付已结案（won / lost / withdrawn）。`has_dispute` 只在 won 与 withdrawn 时复位；lost 保持 true（0.6.10①） */
   | 'dispute_closed'
   /** 其它状态冲突（重发也不会变） */
   | 'status_conflict'

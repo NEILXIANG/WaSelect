@@ -84,7 +84,7 @@ export interface CatalogRepo {
   resolveSingleActiveCarrier(): Promise<string | null>;
   /**
    * 运费取档（**D-46 唯一正确 SQL，全仓库只此一份**）：
-   * 第一个 `max_weight_g >= 包裹重` 的档（向上取档）。超重返回 null（路由层 → 50004）。
+   * 第一个 `max_weight_g >= 包裹重` 的档（向上取档）。超重返回 null（用例层 → 40912，AJ-239）。
    */
   findShippingPriceJpy(carrier: string, weightG: number): Promise<number | null>;
   /** 关税率（NUMERIC 原样字符串返回，转换在 domain 的 dutyRatioIntOf）；无行 → null。 */

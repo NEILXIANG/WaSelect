@@ -799,3 +799,33 @@ export async function findPayLinkTarget(db: Db, orderId: string): Promise<PayLin
     pay_url: r.pay_url === null ? null : String(r.pay_url),
   };
 }
+
+/**
+ * 建单前锁住用户行，并返回"是否已被拉黑 / 当前在途单数"（AJ-240）。
+ *
+ * @returns 用户不存在返回 null（token 有效而用户行没了——按无权限处理，由调用方决定码）
+ *
+ * @why `for update` 锁 **users 行**：在途单上限是"先数、再插"，两个并发建单各自数到 2、各自插入，
+ *      就会变成 4 张。锁住用户行让同一用户的建单**串行**，第二个进来时数到的是第一个已提交的结果。
+ *      跨用户互不影响（锁的是各自的行）。
+ * @why 锁序 users → products：与拉黑（`block-user.ts`：users → orders → products）同向，不成环。
+ *      建单此前不锁 users，所以这是**新增**的一把锁，而不是改顺序。
+ * @why 顺带读 `blocked_at`：鉴权层的身份有最长 60 秒缓存，刚被拉黑的人在窗口内仍能通过守卫；
+ *      拉黑会同事务取消其在途单（AJ-213），但窗口内新建的单会漏过那一轮扫描。
+ *      在这把锁下读到的拉黑状态与拉黑事务是串行的：要么拉黑先提交（这里读到已拉黑），
+ *      要么建单先提交（拉黑的连带取消会扫到这张单）。
+ * @limitation 在途单只按 `status` 数，不看 `expires_at`：已过期但关单作业还没扫到的单仍占名额（最长约一分钟）。
+ */
+export async function lockUserForOrdering(
+  tx: Db,
+  userId: string,
+): Promise<{ blocked: boolean; openOrders: number } | null> {
+  const users = await tx`select blocked_at from users where id = ${userId} for update`;
+  const u = users[0];
+  if (u === undefined) return null;
+  const rows = await tx`
+    select count(*)::int as n from orders
+     where user_id = ${userId} and status in ('created', 'pending_payment')
+  `;
+  return { blocked: u.blocked_at !== null, openOrders: Number(rows[0]?.n ?? 0) };
+}
