@@ -32,4 +32,23 @@ describe('errorMessage', () => {
       expect(errorMessage(e)).toBe('加载失败');
     }
   });
+
+  it('宿主 fail 的形状（只有 errMsg）→ 读 errMsg，不落到"加载失败"（B35 / AJ-218）', () => {
+    // @why 宿主给的原因（如 navigateTo:fail webview count limit exceed）是排障时唯一的线索，
+    //      在这一层被扔掉的话，页面上只剩四个字。
+    expect(errorMessage({ errMsg: 'navigateTo:fail webview count limit exceed' })).toBe(
+      'navigateTo:fail webview count limit exceed',
+    );
+  });
+
+  it('message 优先于 errMsg（顺序固定，不是"谁新谁赢"）', () => {
+    expect(errorMessage({ message: '业务说的原因', errMsg: '宿主说的原因' })).toBe('业务说的原因');
+    // message 是空白时仍回落到 errMsg
+    expect(errorMessage({ message: '  ', errMsg: '宿主说的原因' })).toBe('宿主说的原因');
+  });
+
+  it('errMsg 不是字符串 / 是空白 → 仍走兜底，不显示 [object Object]', () => {
+    expect(errorMessage({ errMsg: 42 })).toBe('加载失败');
+    expect(errorMessage({ errMsg: '   ' })).toBe('加载失败');
+  });
 });

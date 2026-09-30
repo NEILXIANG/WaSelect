@@ -17,11 +17,21 @@
 /**
  * @param {unknown} err 请求封装抛出的错误，也可能是任何东西（不要假设形状）
  * @returns {string} `code message` 或 `message` 或兜底文案；永不为空串
+ *
+ * @why `message` 读不到时兜底读 **`errMsg`**（B35 / AJ-218）：宿主回调（`wx.*` 的
+ *      `fail`）给的形状是 `{errMsg}`，不是 `{message}`。以前一律回落到"加载失败"，
+ *      于是宿主说 `navigateTo:fail webview count limit exceed` 时页面只显示"加载失败"——
+ *      ⚠️ 排障时**唯一**的信息（宿主给的原因）在这一层被扔掉了，
+ *      而它恰恰是能被机读、能对照官方文档的那一段。
+ *      @limitation 兜底只用于**读不到 message 时**：`ApiError` 有 `message`，
+ *                  不会被宿主形状顶掉（顺序固定，不是"谁新谁赢"）。
  */
 export function errorMessage(err) {
   const isObj = err !== null && typeof err === 'object';
   const code = isObj && Number.isInteger(err.code) ? String(err.code) : '';
-  const raw = isObj && typeof err.message === 'string' ? err.message.trim() : '';
-  const msg = raw === '' ? '加载失败' : raw;
+  const fromMessage = isObj && typeof err.message === 'string' ? err.message.trim() : '';
+  const fromErrMsg =
+    fromMessage === '' && isObj && typeof err.errMsg === 'string' ? err.errMsg.trim() : '';
+  const msg = (fromMessage || fromErrMsg) === '' ? '加载失败' : fromMessage || fromErrMsg;
   return code === '' ? msg : `${code} ${msg}`;
 }
