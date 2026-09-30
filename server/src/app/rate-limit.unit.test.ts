@@ -23,7 +23,7 @@ import { stubMountContext } from '../../../test/helpers/mount-ctx.js';
 import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
-import { rateLimitRules, rateLimiter, type RateLimiterDeps } from './rate-limit.js';
+import { ipKey, rateLimitRules, rateLimiter, type RateLimiterDeps } from './rate-limit.js';
 
 function makeDeps(clock?: Clock): { deps: RateLimiterDeps; sink: MemorySink } {
   const sink = new MemorySink();
@@ -59,6 +59,61 @@ function run(deps: RateLimiterDeps, ip: string | undefined): Captured {
   handler(req, res, next);
   return captured;
 }
+
+describe('ipKey：IPv6 归一到 /64（B18 / AJ-205）', () => {
+  /**
+   * @why 这里钉的是"**攻击面有没有真的缩小**"，不是"字符串长什么样"。
+   *      用完整 IPv6 当键时，同一台主机换一个后缀就是新桶——
+   *      管理员登录 5 次/15 分钟的防爆破（A1 的前置防线）对 IPv6 完全失效。
+   *      所以每条都必须落到"**同一个 /64 里的不同地址必须进同一个桶**"。
+   */
+  it('同一 /64 的不同地址 → 同一个桶（换了后缀也躲不开）', () => {
+    const a = ipKey('2001:db8:abcd:1234:1111:2222:3333:4444');
+    const b = ipKey('2001:db8:abcd:1234:dead:beef:0000:0001');
+    expect(a).toBe(b);
+    expect(a).toBe('2001:db8:abcd:1234::/64');
+  });
+
+  it('不同 /64 → 不同桶（不是把所有 IPv6 合成一个）', () => {
+    expect(ipKey('2001:db8:abcd:1234::1')).not.toBe(ipKey('2001:db8:abcd:5678::1'));
+  });
+
+  it('IPv4 原样（一个地址 = 一台主机的现实粒度）', () => {
+    expect(ipKey('1.2.3.4')).toBe('1.2.3.4');
+  });
+
+  /**
+   * @why IPv4-mapped（`::ffff:1.2.3.4`）**必须**转成 IPv4：
+   *      双栈环境下同一个来源一会儿是 `1.2.3.4` 一会儿是 `::ffff:1.2.3.4`，
+   *      不转就是两个桶、各算一半配额——攻击者靠"交替形态"把自己的配额翻倍。
+   */
+  it('IPv4-mapped 转成 IPv4：与纯 IPv4 共用同一个桶', () => {
+    expect(ipKey('::ffff:1.2.3.4')).toBe('1.2.3.4');
+    expect(ipKey('::FFFF:1.2.3.4')).toBe('1.2.3.4');
+  });
+
+  it('不认识的形状原样返回（不猜、不放行）', () => {
+    expect(ipKey('unknown')).toBe('unknown');
+    expect(ipKey('')).toBe('');
+    expect(ipKey('::1')).toBe('::1'); // 回环：段数不足，不归一
+  });
+
+  /**
+   * 中间件层：两个"看起来不同"的 IPv6 必须共用配额。
+   * @why 只测 `ipKey` 这个函数是不够的——把函数做对了但中间件没用它，
+   *      同样全绿（§2 第 35 条：能力存在 ≠ 能力被用上）。这一条走完整中间件路径。
+   */
+  it('中间件：同一 /64 的两个地址打满 2 次后，第三个地址就被 42901（B18 接线）', () => {
+    const { deps } = makeDeps();
+    run(deps, '2001:db8:abcd:1234::1');
+    run(deps, '2001:db8:abcd:1234:9999:8888:7777:6666'); // 同一个 /64，形态完全不同
+    const third = run(deps, '2001:db8:abcd:1234:aaaa::1');
+    expect(third.err).toBeInstanceOf(AppError);
+    expect((third.err as AppError).code).toBe(42901);
+    // 另一个 /64 不受影响（不是"把所有 IPv6 合成一个桶")
+    expect(run(deps, '2001:db8:abcd:5678::1').err).toBeUndefined();
+  });
+});
 
 describe('rateLimiter 中间件（桩）', () => {
   it('限额内放行（第 1、2 次无错误透传）', () => {

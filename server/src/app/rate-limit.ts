@@ -10,6 +10,9 @@
  *      ⚠️ `req.ip` 只在 `trust proxy` 层数正确时可信（http.ts @limitation 一，D23）——
  *      层数配错，攻击者改 `X-Forwarded-For` 就等于无限换 key。所以本中间件**绝不**自己读
  *      `X-Forwarded-For`，只用 `req.ip`（它的取值策略在骨架层统一管）。
+ *      ⚠️ IP 进 key 之前还要过 {@link ipKey}（IPv6 归到 /64，B18 / AJ-205）——
+ *      两件事是**两个防线**：trust proxy 管"这个 IP 是不是真的"，ipKey 管"真的 IP 有多碎"。
+ *      只做前者的话，攻击者用自己真实的 /64 就能换桶。
  *
  * @why 超限走 `AppError(42901)` 而不是直接 `res.status(429)`：响应形状（`{code, message}`）
  *      必须与其它业务错误一致（http.ts 统一兜底），前端不需要为限流单写一套解析。
@@ -38,6 +41,43 @@ import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
 import { isAllowed, retryAfterSecOf, type RateLimitStore } from '../ports/rate-limit.js';
 import type { AppConfig } from '../config.js';
+
+/**
+ * 客户端 IP → **限流桶**的键（B18 / AJ-205）。
+ *
+ * @why 直接用完整 IP 当键，IPv6 等于**没有限流**：一台主机通常拿到整个 /64（2^64 个地址），
+ *      攻击者每换一个后缀就是一个全新的桶。管理员登录 5 次/15 分钟的防爆破因此失效，
+ *      而它正是 A1（枚举管理员邮箱）的前置防线。
+ *      更糟的是第二条：**刷满 key 会触发存储层的 fail-open 驱逐**
+ *      （`rate-limit-memory.ts` @limitation 三 → 超过 `RATE_LIMIT_MAX_KEYS` 就删最老的），
+ *      于是 attacker 顺手把**其它来源**的计数也清零了。
+ *
+ * @why 归一到 /64 而不是更粗的 /48：/64 是"一台主机/一个子网"的通用粒度
+ *      （SLAAC 的最小分配单位就是 /64），比它粗会误伤同一家运营商的邻居，
+ *      比它细则挡不住换后缀。IPv4 原样（一个地址 = 一台主机的现实粒度）。
+ * @why `::ffff:a.b.c.d`（IPv4-mapped）**转成 IPv4**：它就是 IPv4，
+ *      只是 socket 层用 IPv6 结构装着——不转的话同一个来源在双栈环境里会拿到两个桶
+ *      （一会儿 IPv4 一会儿 IPv4-mapped），各算一半配额。
+ * @why 不认识的形状**原样返回**：它不是"放行"，只是"不归一"——
+ *      该 IP 仍然有自己的桶（甚至更严格），不产生新的绕过面。
+ *      拒掉或报错反而会让"取不到 IP"变成一种攻击手段（想办法让解析失败）。
+ *
+ * @limitation 只做**字符串**处理，不引 `net` 模块、不做真正的地址解析：
+ *              限流键要的是"稳定且够粗"，不是"语义正确"——解析失败的路径比它带来的收益更贵。
+ *              因此 `::1`（回环）与 `fe80::…`（链路本地）也走 /64 归一，
+ *              它们在测试里表现为"共享一个桶"，与生产行为一致。
+ */
+export function ipKey(ip: string): string {
+  if (ip.includes(':')) {
+    // IPv4-mapped：`::ffff:1.2.3.4` → `1.2.3.4`（与上面那种形态共用同一个桶）
+    const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+    if (mapped?.[1] !== undefined) return mapped[1];
+    // 其余 IPv6：取前 4 段（= /64），丢弃后面 4 段。段数不足时原样返回（不认识就别猜）
+    const parts = ip.split(':');
+    if (parts.length >= 4) return `${parts.slice(0, 4).join(':')}::/64`;
+  }
+  return ip;
+}
 
 /** 一条限流规则：挂在哪个入口、窗口内允许多少次。 */
 export interface RateLimitRule {
@@ -90,7 +130,8 @@ export function rateLimiter(deps: RateLimiterDeps, rule: RateLimitRule): Request
     const now = deps.clock.now().getTime();
     // 只读 req.ip（骨架层按 trust proxy 层数取值），绝不自己读 X-Forwarded-For（文件头 @why）
     const ip = req.ip ?? 'unknown';
-    const w = deps.store.hit(`${rule.routeKey}:${ip}`, rule.windowMs, now);
+    // B18 / AJ-205：IPv6 必须归到 /64 再进 key（否则一台主机就是 2^64 个桶）
+    const w = deps.store.hit(`${rule.routeKey}:${ipKey(ip)}`, rule.windowMs, now);
     if (isAllowed(w, rule.limit)) {
       next();
       return;
