@@ -119,6 +119,46 @@ describe('组装根 bootstrap（A1）', () => {
     }
   });
 
+  /**
+   * B17 / AJ-209：只配 `ADMIN_EMAIL`（口令已从平台删除）→ **服务照常启动**，seed 跳过并出声。
+   *
+   * @why 这条是 B17 的核心：AJ-181 与 .env.example 都承诺"建号后可删初始口令"，
+   *      而旧的 config 规则 1e 要求两者成对 ⇒ 删了口令就**拒绝启动**（探针证实）。
+   *      于是运维只能在"留着一个明文初始口令"与"服务起不来"之间二选一。
+   * @why 必须同时断言"**起了**"与"**出声了**"：只断言起得来的话，
+   *      seed 静默跳过也是一种全绿（那正是 B11 那类没有任何报错的失效）。
+   */
+  it('只配 ADMIN_EMAIL（口令已删）→ 照常启动、不建号、打 warn admin_seed_skipped（B17 / AJ-209）', async () => {
+    const db = testDb();
+    await resetTestDb(db);
+    const { lines, write } = sink();
+    let rt: Runtime | undefined;
+    try {
+      rt = await bootstrap({
+        env: { ...baseEnv(PORT_DEV), ADMIN_EMAIL: 'Boss@Example.com' },
+        logDestination: { write },
+        exit: () => undefined,
+      });
+      const res = await fetch(`http://127.0.0.1:${PORT_DEV}/healthz`);
+      expect(res.status).toBe(200);
+      // 不建号（没有口令就没有可建的东西），且不打 admin_seed（created/exists 都不该出现）
+      const rows = await db`select 1 from users where lower(email) = 'boss@example.com'`;
+      expect(rows).toHaveLength(0);
+      expect(lines.some((l) => l.includes('admin_seed,') || l.includes('"admin_seed"'))).toBe(
+        false,
+      );
+      const skipped = lines.find((l) => l.includes('admin_seed_skipped'));
+      expect(skipped).toBeDefined();
+      expect(skipped).toContain('missing_initial_password');
+    } finally {
+      rt?.uninstallSignals();
+      rt?.uninstallProcessErrors();
+      await rt?.server.close().catch(() => undefined);
+      await rt?.db.end().catch(() => undefined);
+      await db.end().catch(() => undefined);
+    }
+  });
+
   it('停机是「排空后关库」：afterDrain 之后连接池真的关了', async () => {
     const { write } = sink();
     const rt = await bootstrap({

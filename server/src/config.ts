@@ -29,7 +29,7 @@
  * @see .env.example（变量名唯一真源）、docs/地基搭建清单.md F3、技术文档 v0.5 §8、ADR-28（关税外置）
  */
 import { z } from 'zod';
-import { CURRENCY, PAYMENT_CHANNEL } from '@waselect/shared';
+import { ADMIN_PASSWORD_MIN_LENGTH, CURRENCY, PAYMENT_CHANNEL } from '@waselect/shared';
 
 /** 密钥类配置的键名：日志 / 诊断 / 错误上报一律脱敏（评审 #9 红线）。新增密钥类变量必须同步加这里。 */
 export const SECRET_KEYS = [
@@ -305,7 +305,7 @@ const schema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET 至少 32 字符，用 openssl rand -hex 32 生成'),
   ADMIN_OPENIDS: csv(),
   ADMIN_EMAIL: optionalText(),
-  ADMIN_INITIAL_PASSWORD: optionalSecret(12, 'ADMIN_INITIAL_PASSWORD'),
+  ADMIN_INITIAL_PASSWORD: optionalSecret(ADMIN_PASSWORD_MIN_LENGTH, 'ADMIN_INITIAL_PASSWORD'),
 
   // ── 数据库 ──────────────────────────────────────────────────────────────
   DATABASE_URL: z.string().min(1, 'DATABASE_URL 必填（postgresql://user@host:5432/db）'),
@@ -589,12 +589,17 @@ const crossField = schema.superRefine((c, ctx) => {
     );
   }
 
-  // 1e. 初始管理员 seed 成对（O-11 / AJ-181）：只配一个 = 启动时 seed 静默不跑，生产上无人能登管理端，
-  //     而服务照样起得来——与规则 1d（APP_ID 成对）同一类"半配比不配更隐蔽"。
-  if ((c.ADMIN_EMAIL === undefined) !== (c.ADMIN_INITIAL_PASSWORD === undefined)) {
+  // 1e. 初始管理员 seed（O-11 / AJ-181，B17 / AJ-209 起改**单向**）：
+  //     · 配了口令却没配邮箱 → **拒绝启动**：口令没有落点，等于"配了一个以为是口令的字符串"，
+  //       这类半配比不配更隐蔽（与规则 1d 的 APP_ID 成对同一类）。
+  //     · 只配邮箱、没配口令 → **允许**：这是"初始管理员已建号、把口令从平台删掉"的正常终态
+  //       ——AJ-181 的"建号后可删后者"此前被本规则否掉：删了就拒绝启动（B17）。
+  //       seed 会跳过，由 `main.ts` 打 warn `admin_seed_skipped`（静默才是真风险）。
+  if (c.ADMIN_EMAIL === undefined && c.ADMIN_INITIAL_PASSWORD !== undefined) {
     add(
-      c.ADMIN_EMAIL === undefined ? 'ADMIN_EMAIL' : 'ADMIN_INITIAL_PASSWORD',
-      'ADMIN_EMAIL 与 ADMIN_INITIAL_PASSWORD 必须同时配置或同时留空（初始管理员 seed 需要两者）',
+      'ADMIN_EMAIL',
+      `配置了 ADMIN_INITIAL_PASSWORD 就必须同时配置 ADMIN_EMAIL（否则口令没有落点）。` +
+        `只配 ADMIN_EMAIL 是允许的：表示"管理员已建号、口令已从平台删除"，此时 seed 跳过（AJ-209）`,
     );
   }
 

@@ -93,7 +93,10 @@ services:
         #           ⚠️ 审核期结束、PAYMENT_CHANNELS 去掉 mock 时必须在控制台**删除**此值：
         #           生产残留会被配置层拒启（config.ts 规则 1b，三审 S1），不是可选清理
       - key: ADMIN_INITIAL_PASSWORD
-        sync: false # ≥12 位；首次登录后应改密。seed 时 bcrypt 写入 users.password_hash
+        sync: false # ≥12 位。**只建号不改号**（改它不影响已有账号），建号后在控制台删除本值即可
+        #           （B17 / AJ-209 之前"删了会拒绝启动"；现在只配 ADMIN_EMAIL 是允许的终态）。
+        #           需要轮换/泄露时用本机 CLI：npm run admin:password -- <邮箱> <新口令>（旧 token 同步失效）
+        #           ⚠️ 本值在控制台里明文可见，能进 Render 的人就能看到它——这是它被"可删除"取代的原因
 
       # ── 业务口径 ──────────────────────────────────────────────
       - key: TERMS_VERSION

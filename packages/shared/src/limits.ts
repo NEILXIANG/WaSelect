@@ -40,3 +40,19 @@
  * @see docs/自主决策记录.md AJ-191（裁决 ⑨）；jp《全量逐行代码审查报告-2026-09-29》B7 条
  */
 export const REFUND_REASON_MAX_LENGTH = 500;
+
+/**
+ * 管理员口令的**最小长度**（12，N11）。
+ *
+ * @why 它是"下限"而不是"上限"，但同样会长成两份：`config.ts` 用 12 拒启动、
+ *      改密脚本用 12 校验，两边写死同一个数字，改一边漏一边的结果是
+ *      "脚本设了一个 8 位的口令，下次重启服务直接拒绝启动"——
+ *      而这类不一致只在**下一次部署**才暴露，中间还隔着一次真的改密。
+ *
+ * @limitation 只管长度，不管字符集/强度：强度规则（是否要求大小写数字符号）
+ *      属于产品决策，且各端提示文案不同，暂不共享（见文件头 @limitation）。
+ *
+ * @see server/src/config.ts（启动校验）；scripts/set-admin-password.ts（改密校验）；
+ *      docs/自主决策记录.md AJ-209（B17）
+ */
+export const ADMIN_PASSWORD_MIN_LENGTH = 12;

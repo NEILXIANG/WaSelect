@@ -655,13 +655,27 @@ describe('配置形状（N11）', () => {
     expect(issues.join('\n')).toContain('INTERNAL_JOB_SECRET');
   });
 
-  it('ADMIN_EMAIL 与 ADMIN_INITIAL_PASSWORD 必须成对（半配 = seed 静默不跑，生产无人能登管理端，AJ-181）', () => {
-    expect(expectReject({ ...baseEnv, ADMIN_EMAIL: 'boss@example.com' }).join('\n')).toContain(
-      'ADMIN_INITIAL_PASSWORD',
-    );
+  /**
+   * B17 / AJ-209：配对规则改为**单向**。
+   * @why 旧规则要求"成对或同时留空"，于是"建号后从平台删掉初始口令"会让服务**拒绝启动**
+   *      ——而"删掉初始口令"恰恰是 AJ-181 与 .env.example 承诺过的收尾动作（B17）。
+   *      两条放行/拒绝方向都必须各钉一条：只钉"只配口令要拒"的话，
+   *      把规则改回"成对"仍然全绿（因为那条本来就红）；只钉"只配邮箱放行"的话，
+   *      把规则整个删掉也全绿。两个方向同时钉住，规则才被**钉在**单向这一态。
+   */
+  it('只配 ADMIN_INITIAL_PASSWORD 没有 ADMIN_EMAIL → 拒启（口令没有落点）', () => {
     expect(
       expectReject({ ...baseEnv, ADMIN_INITIAL_PASSWORD: 'initial-password-123' }).join('\n'),
     ).toContain('ADMIN_EMAIL');
+  });
+
+  it('只配 ADMIN_EMAIL、没配口令 → **允许启动**（管理员已建号、口令已从平台删除的正常终态）', () => {
+    const c = loadConfig({ ...baseEnv, ADMIN_EMAIL: 'boss@example.com' });
+    expect(c.ADMIN_EMAIL).toBe('boss@example.com');
+    expect(c.ADMIN_INITIAL_PASSWORD).toBeUndefined();
+  });
+
+  it('两者都配 → seed 会跑（正常初装态）', () => {
     expect(
       loadConfig({
         ...baseEnv,

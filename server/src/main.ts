@@ -104,7 +104,8 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
     const major = await assertPostgresMajor(db);
     logger.info('postgres_checked', { major, result: 'ok' });
 
-    // 初始管理员 seed（D-38 ⑤ / O-11 / AJ-181）：配了才跑、幂等、不改已有账号；日志不带邮箱与口令
+    // 初始管理员 seed（D-38 ⑤ / O-11 / AJ-181，B17 / AJ-209）：配齐才跑、幂等、不改已有账号；
+    // 日志不带邮箱与口令（约束七）
     if (config.ADMIN_EMAIL !== undefined && config.ADMIN_INITIAL_PASSWORD !== undefined) {
       const seeded = await ensureInitialAdmin(
         db,
@@ -112,6 +113,17 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
         await hashPassword(config.ADMIN_INITIAL_PASSWORD),
       );
       logger.info('admin_seed', { result: seeded });
+    } else if (config.ADMIN_EMAIL !== undefined) {
+      /**
+       * 只配了邮箱（口令已从平台删掉——AJ-181 承诺的"建号后可删"，B17 之前会被拒绝启动）。
+       * @why 必须出声：这是"服务起起来了但没人建管理员"与"管理员已存在"无法从配置上区分的时刻。
+       *      静默的后果是"某天部署后谁也登不进管理端"，而日志里什么都没有（B11 那类失效）。
+       *      用 warn 而不是 error：已建号的正常终态本来就不该是 error。
+       */
+      logger.warn('admin_seed_skipped', {
+        result: 'skipped',
+        ctx: { reason: 'missing_initial_password' },
+      });
     }
 
     /**
