@@ -39,7 +39,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../errors.js';
-import { withTransaction, type Db } from './db.js';
+import { isLockNotAvailable, withTransaction, type Db } from './db.js';
 import {
   DEFAULT_LEASE_MS,
   requestFingerprint,
@@ -177,11 +177,28 @@ async function withIdempotency<T>(
  * @limitation 二：**handler 必须只做 DB 写入**。调外部服务（创建支付单、发邮件）不要放进这里——
  *              那会把 DB 事务和行锁架在一次 HTTP 调用上（连接被占、锁被拉长、对方抖动直接放大成
  *              本库压力）。有外部副作用的 handler 用 {@link withIdempotency}（非事务模式）。
+ *              ⚠️ **已知例外（B6 / AJ-201，登记在案 ≠ 默认允许）**：`app/pay-intent.ts` 在
+ *              handler 里调机构建会话。它要买的是"payments 行登记 ↔ 会话创建"的原子性
+ *              （AJ-93：行不在，回调核不到 → 付了钱落不了账），换不来别的方式。
+ *              代价：一次发起最长占住一条连接与订单行锁到出站总预算（6s），池 10 条时
+ *              机构变慢会表现为"全站排队"。**新增第二个"事务内调外部"的 handler 之前先回来读这条。**
  * @limitation 三：`leaseMs` / `renew` 参数在本模式下**无意义**（事务本身就是栅栏，
  *              回滚即释放，不存在"过期占位"）；传了也不会生效。同理本模式不产生
  *              `idempotency_lease_lost`——读到过期占位只可能来自非事务模式的写入，等超时后 40903。
  * @limitation 四：handler 内的慢语句仍受连接级 `statement_timeout`（15s，D20）约束；
  *              `lock_timeout` 只管"等锁"，不管"执行慢"。
+ * @limitation 五：占位用的 `SET LOCAL lock_timeout` **只在占位那一步有效**——抢到之后立刻
+ *              `SET LOCAL lock_timeout TO DEFAULT` 复位（B6 / AJ-201），handler 用的是连接级预算。
+ *              @why 不复位的话，handler 里**自己的**行锁等待也被收窄到"剩余的等待预算"
+ *              （默认 2s，最坏 1ms —— 见代码里的 `Math.max(1, …)`），比连接级默认的 5s 还短，
+ *              于是"另一个请求正持有这张单"这种**正常**并发会秒变 55P03 → 50000「服务器内部错误」。
+ *              发支付那条路径最疼：它在 handler 里调机构（@limitation 二的例外），等锁的人
+ *              撞上的不是"慢"而是"对方的出站 HTTP"。
+ *              @measured 这条泄漏全仓无人察觉，因为唯一一条相关用例（「handler 内部 55P03」）
+ *              **依赖**这次泄漏才通过（waitMs=300 配 600ms 持锁）。修复后该用例改用一条
+ *              显式设小 `lockTimeoutMs` 的连接，不再靠泄漏。
+ *              @tradeoff 复位之后 handler 内等锁最坏要等满连接级 5s：这是"让 handler 用正常预算"
+ *              的应有代价，不是回归。
  *
  * @see docs/二审意见甄别报告-2026-09-23.md §1 N2；migrations/003_idempotency_and_identity.sql
  */
@@ -215,6 +232,11 @@ async function withIdempotencyTx<T>(
           returning key
         `;
         if (claimed.length === 0) return { kind: 'conflict' };
+        // ⚠️ 复位 lock_timeout（@limitation 五 / B6 / AJ-201）：上一句是给**占位**这一步的预算，
+        //    不能顺延给 handler——否则 handler 里自己的行锁等待也被收窄到 1ms～2s，
+        //    正常并发（别人正持有这张单）会秒变 55P03 → 50000。
+        //    `TO DEFAULT` 回到**连接级**值（pool 的 lock_timeout=5s），不是 PG 的编译期默认 0。
+        await tx`set local lock_timeout to default`;
         inHandler = true;
         const result = await handler(tx);
         await tx`
@@ -232,7 +254,7 @@ async function withIdempotencyTx<T>(
       //    DB 副作用虽随事务回滚，handler 闭包里的内存副作用（收集的领域事件、已打的日志、
       //    已消耗的单号）不会——"executor 外收集事件再 publishAll"的形态会发出幽灵事件
       //    （三审 P2-2，用例「handler 内部 55P03 → 原样抛出且只执行一次」）。
-      if (isLockTimeout(e) && !inHandler) {
+      if (isLockNotAvailable(e) && !inHandler) {
         outcome = { kind: 'conflict' };
       } else {
         throw e;
@@ -259,15 +281,6 @@ async function withIdempotencyTx<T>(
     }
     await sleep(pollMs);
   }
-}
-
-/**
- * postgres.js 的错误对象在 `.code` 上带 SQLSTATE；55P03 = lock_not_available。
- * @why 不写进 message 匹配：`message` 的措辞随 PG 版本变，SQLSTATE 是协议级稳定标识
- *      （§2 诚实清单第 3 条：SQLSTATE 只在 .code 上，message 里没有）。
- */
-function isLockTimeout(e: unknown): boolean {
-  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === '55P03';
 }
 
 /**

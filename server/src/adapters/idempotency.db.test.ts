@@ -10,8 +10,8 @@
  * @see server/src/adapters/idempotency.ts @limitation；../ports/idempotency.ts（契约）
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeDb, type Db } from './db.js';
-import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
+import { closeDb, createDb, type Db } from './db.js';
+import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { requestFingerprint, scopeKey, type IdempotencyExecutor } from '../ports/idempotency.js';
 import { createIdempotencyExecutor } from './idempotency.js';
 import { createLogger } from '../logger.js';
@@ -598,28 +598,61 @@ describe('单事务幂等 withIdempotencyTx（N2）', () => {
    */
   it('handler 内部 55P03 → 原样抛出且 handler 只执行一次（不当占位冲突重跑）', async () => {
     await db`insert into users (id, openid) values ('u-lock', 'o-lock') on conflict do nothing`;
-    // 另一连接持有 users 行锁 600ms
-    // 就位信号用"锁真的拿到了"，不用 `setTimeout(50)` 猜（AJ-177）
-    let locked: () => void = () => {};
-    const ready = new Promise<void>((r) => {
-      locked = r;
-    });
-    const holder = db.begin(async (tx) => {
-      await tx`select id from users where id = 'u-lock' for update`;
-      locked();
-      await new Promise((r) => setTimeout(r, 600));
-    });
-    await ready;
-    let calls = 0;
-    await expect(
-      exec.runInTx({ ...txArgs('ktx-inner-lock'), waitMs: 300 }, async (tx) => {
-        calls += 1;
+    // B6 / AJ-201：本用例**曾经靠 lock_timeout 泄漏才成立**——waitMs=300 时 handler 的等锁预算
+    // 被泄漏成 ~300ms，于是 600ms 的持锁必然超时。泄漏修掉之后，handler 用的是连接级 5s，
+    // 600ms 的持锁根本等不到超时，用例会假绿（什么都不测也通过）。
+    // 所以等锁预算必须由**用例自己**显式设小（一条 lockTimeoutMs=300 的独立连接），
+    // 不能继续依赖执行器的副作用——否则"有没有泄漏"这件事永远没有守护。
+    const tight = createDb({ url: TEST_DB_URL, max: 2, lockTimeoutMs: 300 });
+    const tightExec = createIdempotencyExecutor(tight);
+    try {
+      // 另一连接持有 users 行锁 600ms（ > 300ms 的等锁预算）
+      // 就位信号用"锁真的拿到了"，不用 `setTimeout(50)` 猜（AJ-177）
+      let locked: () => void = () => {};
+      const ready = new Promise<void>((r) => {
+        locked = r;
+      });
+      const holder = tight.begin(async (tx) => {
         await tx`select id from users where id = 'u-lock' for update`;
-        return { status: 200, body: {} };
-      }),
-    ).rejects.toMatchObject({ code: '55P03' });
-    expect(calls).toBe(1);
-    await holder;
+        locked();
+        await new Promise((r) => setTimeout(r, 600));
+      });
+      await ready;
+      let calls = 0;
+      await expect(
+        tightExec.runInTx({ ...txArgs('ktx-inner-lock'), waitMs: 300 }, async (tx) => {
+          calls += 1;
+          await tx`select id from users where id = 'u-lock' for update`;
+          return { status: 200, body: {} };
+        }),
+      ).rejects.toMatchObject({ code: '55P03' });
+      expect(calls).toBe(1);
+      await holder;
+    } finally {
+      await closeDb(tight);
+    }
+  });
+
+  /**
+   * B6 / AJ-201：占位用的 `SET LOCAL lock_timeout` 必须**只在占位那一步**有效。
+   *
+   * @why 这条泄漏"越安静越致命"：handler 里自己的行锁等待被收窄到剩余的等待预算
+   *      （waitMs 默认 2s，最坏 1ms），比连接级默认的 5s 还短，于是"另一个请求正持有这行"
+   *      这种**正常**并发被判成等锁超时 → 55P03 → 50000「服务器内部错误」。
+   * @why 断言用「handler 里读到的 `current_setting('lock_timeout')`」与「池连接的 `show` 值」
+   *      **两者相等**，不写死 '5s'：写死等于把测试钉在 db.ts 的常量上（改常量要改两处），
+   *      而本用例要钉的是"handler 有没有被特殊对待"——**不相等**就是泄漏。
+   * @limitation 只验"值相等"，不验"handler 真的能等满 5s"（那要持锁 5s+，用例太慢）；
+   *      行为后果由上一条用例（显式小预算 → 55P03）与 pay-intent 的 40903 用例共同覆盖。
+   */
+  it('handler 内的 lock_timeout = 连接级默认值，不继承占位的等待预算（B6 / AJ-201）', async () => {
+    const poolDefault = String((await db`show lock_timeout`)[0]?.lock_timeout ?? '');
+    expect(poolDefault).not.toBe('');
+    const out = await exec.runInTx({ ...txArgs('ktx-lt'), waitMs: 300 }, async (tx) => {
+      const rows = await tx`select current_setting('lock_timeout') as lt`;
+      return { status: 200, body: { lt: String(rows[0]?.lt ?? '') } };
+    });
+    expect(out.body).toEqual({ lt: poolDefault });
   });
 
   it('同键不同内容 → 40908；键顺序不同但内容相同 → 重放', async () => {

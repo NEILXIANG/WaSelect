@@ -27,6 +27,9 @@
  *      机构侧残留的孤儿会话随 expiresAt 自然死亡（端口已透传订单 TTL）。
  * @tradeoff 订单行锁在 HTTP 期间被持有——MVP 单量下可接受；Stripe 延迟成为问题时
  *      再评估"先提交行、后补 provider_ref"的两阶段形态（那要处理 saga 补偿，更复杂）。
+ *      ⚠️ 等待方的体验由 {@link lockOrderForPay} 兜住（等锁超时 → 40903，B6 / AJ-201），
+ *      而"能等多久"由连接级 `lock_timeout`（5s）决定——幂等执行器在抢到占位后已把它复位，
+ *      否则等待方的预算只有 1ms～2s（adapters/idempotency.ts @limitation 五）。
  *
  * @why copylink 的 token **轮换**（复用也换新）：明文 token 永不落库（库里只有 sha256），
  *      所以"复用时返回同一个链接"在设计上不可能——重新签发并覆盖 hash 是唯一诚实做法。
@@ -45,7 +48,7 @@
  *      docs/I1阶段开发实施方案.md §3.6；技术文档 D-49（短链）
  */
 import { createHash } from 'node:crypto';
-import { withTransaction, type Db } from '../adapters/db.js';
+import { isLockNotAvailable, withTransaction, type Db } from '../adapters/db.js';
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
@@ -214,6 +217,7 @@ async function payloadFor(
  * 发起/复用支付意图（**必须在调用方的事务里调用**——锁随事务存活）。
  *
  * @throws {AppError} 40400 订单不存在或非本人 | 40902 当前状态不可支付 |
+ *         40903 这张单正被另一个请求处理（锁单超时，B6 / AJ-201） |
  *         40904 订单已过期（含"到点未扫"） | 40001 通道不可用/币种不支持 |
  *         50003 扣款所需汇率缺失 | 50000 配置缺 CHECKOUT_BASE_URL
  */
@@ -225,8 +229,7 @@ export async function createPayIntent(
   const { clock, idGen, logger, registry } = deps;
 
   // ── 1. 持锁读单（归属判定：非本人与不存在同 40400）─────────────────────────
-  const order = await lockOwnedOrderForPay(tx, input.orderId, input.userId);
-  if (order === null) throw new AppError(40400, { order_id: input.orderId });
+  const order = await lockOrderForPay(tx, input.orderId, input.userId);
 
   // ── 2. 状态与到期守卫（40904 优先于 40902：过期是更具体的拒绝理由）─────────
   const status = asOrderStatus(order.status);
@@ -333,6 +336,37 @@ export async function createPayIntent(
     payload,
     expiresAt: order.expires_at,
   };
+}
+
+/**
+ * 持锁读单；**另一事务正持有这张单** → 40903「重复提交」而不是 50000（B6 / AJ-201）。
+ *
+ * @why 发起支付在幂等事务里锁订单行（@see 文件头 @why），因此"两个请求同时为同一张单发起支付"
+ *      必然有一个要等锁：先到的持锁做完（含调机构，最长 ~6s），后到的在锁上等。
+ *      等锁超时是 **55P03**，而全仓对它的默认处理是折叠成 50000「服务器内部错误」——
+ *      用户看到的是"系统坏了"，事实只是"你点快了"。这类并发在本项目里是**正常的**
+ *      （弱网下用户连点、两台设备同一单），不该表现成服务端故障。
+ * @why 换成 **40903** 而不是新造一个码：40903 在契约里是「重复提交」，语义正是
+ *      "同一个操作已经在处理中"——与幂等执行器"抢不到占位"给外部的那个码是同一个，
+ *      前端不需要为这条路径学第二种处理（ADR-28：无消费方的字段/码是死数据）。
+ * @limitation 只认**锁单这一步**的 55P03：本函数之后的写（`markOrderPendingPayment` 等）
+ *              若也撞 55P03，仍然原样抛出——那时的持有者不是"另一笔发起支付"，
+ *              把别的写路径的锁冲突也说成"重复提交"会让排障方向从一开始就错。
+ * @tradeoff 40903 掩盖了"锁是谁持有的"：关单作业、管理端改单同样会持有这张单，
+ *           用户照样看到"重复提交"。可接受——这些都是"这张单现在动不了"，
+ *           而精确区分需要暴露内部作业信息，收益不抵。
+ */
+async function lockOrderForPay(tx: Db, orderId: string, userId: string): Promise<OrderPayRow> {
+  try {
+    const row = await lockOwnedOrderForPay(tx, orderId, userId);
+    if (row === null) throw new AppError(40400, { order_id: orderId });
+    return row;
+  } catch (e) {
+    if (isLockNotAvailable(e)) {
+      throw new AppError(40903, { order_id: orderId, reason: 'pay_in_progress' });
+    }
+    throw e;
+  }
 }
 
 /**

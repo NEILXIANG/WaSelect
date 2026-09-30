@@ -13,8 +13,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { toMinor, toRateInt } from '@waselect/shared';
-import { closeDb, withTransaction, type Db } from '../adapters/db.js';
-import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
+import { closeDb, createDb, withTransaction, type Db } from '../adapters/db.js';
+import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { fixedClock } from '../../../test/helpers/fixed-clock.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { createLogger } from '../logger.js';
@@ -593,5 +593,130 @@ describe('建会话失败后的幂等键（B3 / AJ-199）', () => {
       }).catch((e) => expect(codeOf(e)).toBe(50001));
     });
     expect(seen).toEqual(['pay-o-two-pa', 'pay-o-two-pa-f1', 'pay-o-two-pa-f2', 'pay-o-two-pb']);
+  });
+});
+
+// ── B6 / AJ-201：另一请求正持有这张单 → 40903，不是 50000 ────────────────────
+/**
+ * 另开一条连接持有指定订单行的行锁，直到调用方 `release()`。
+ *
+ * @why 两条用例都要这个形态，且**必须在 finally 里放掉持有者**：不放，
+ *      `closeDb` 会一直等这条连接（实测：断言失败时用例从"立即红"变成"超时 30s"——
+ *      真红灯被超时噪声盖住，等于白写）。收成函数就是为了让"放掉"只有一处可漏。
+ * @why 就位信号用"锁真的拿到了"（`ready`）而不是 `setTimeout(50)` 猜（AJ-177）。
+ */
+function holdOrderRow(
+  db: Db,
+  orderId: string,
+): { ready: Promise<void>; release: () => void; done: Promise<void> } {
+  let release: () => void = () => {};
+  const released = new Promise<void>((r) => {
+    release = r;
+  });
+  let locked: () => void = () => {};
+  const ready = new Promise<void>((r) => {
+    locked = r;
+  });
+  const done = db
+    .begin(async (tx) => {
+      await tx`select id from orders where id = ${orderId} for update`;
+      locked();
+      await released;
+    })
+    .then(() => undefined);
+  return { ready, release, done };
+}
+
+/**
+ * @why 发起支付在幂等事务里**锁订单行**（文件头 @why），所以"同一张单被两个请求同时发起"
+ *      必然有一个在锁上等。等锁超时是 55P03，而全仓对非 AppError 的兜底是 50000
+ *      「服务器内部错误」——用户看到"系统坏了"，事实只是"你点快了 / 另一台设备也在付"。
+ * @why 断言钉**码**而不是"抛错了"：50000 和 40903 都是抛错，只断言 `rejects` 会假绿。
+ */
+describe('并发：另一事务正持有这张单（B6 / AJ-201）', () => {
+  /** 等锁预算 300ms 的专用连接：持有者 1 条 + 等待方 1 条。 */
+  const tightPool = (): Db => createDb({ url: TEST_DB_URL, max: 2, lockTimeoutMs: 300 });
+
+  it('锁单等锁超时 → 40903「重复提交」，而不是 50000「服务器内部错误」', async () => {
+    const sink = new MemorySink();
+    const registry = fakeRegistry({ pa: fakeProvider('pa') });
+    await seedPayable('o-busy');
+
+    // 等锁预算由**用例自己**设小（300ms）：① 默认的 5s 会让本用例跑满 5 秒；
+    // ② "能等多久"必须在用例里看得见，不能依赖执行器当时的内部状态
+    //    （依赖它 = 断言和执行器的实现互为前提，改任何一边都会静默失效）。
+    const tight = tightPool();
+    const hold = holdOrderRow(tight, 'o-busy');
+    try {
+      await hold.ready;
+
+      // ⚠️ 断言挂在 `withTransaction` **外面**：失败必须让事务走 ROLLBACK 那条路。
+      //    写在 handler 里用 `.then(_, _)` 吞掉，执行器会去 COMMIT 一个**已中止**的事务——
+      //    实测那一步会挂住（PG 对已中止事务的 COMMIT 回的是 ROLLBACK 命令标记，
+      //    postgres.js 的等待逻辑不认），表现为"用例超时 30s"而不是"断言失败"。
+      await withTransaction(tight, (tx) =>
+        createPayIntent(tx, deps(registry, sink), {
+          orderId: 'o-busy',
+          userId: 'u-1',
+          channel: 'pa',
+        }),
+      ).then(
+        () => expect.unreachable('另一事务持锁时应 40903'),
+        (e: unknown) => {
+          expect(codeOf(e)).toBe(40903);
+          expect((e as AppError).details).toMatchObject({ reason: 'pay_in_progress' });
+        },
+      );
+    } finally {
+      hold.release();
+      await hold.done.catch(() => undefined);
+      await closeDb(tight);
+    }
+  });
+
+  /**
+   * 反向：40903 是"这张单现在动不了"，不是"这张单坏了"。
+   * @why 单看前一条用例，"抛 40903"也可能是把订单永久锁死的另一种写法——
+   *      比如换码时顺手把状态改坏。这条钉住"锁放掉之后一切照旧"，
+   *      两条一起才说明锁单超时是**并发信号**而不是**状态破坏**。
+   * @limitation 不直接构造"锁单**之后**的写撞 55P03"（那条路径的持有者不确定，用例会很脆）；
+   *             那条语义由代码注释守住（40903 只来自锁单那一步）。
+   */
+  it('锁释放后同一张单可以正常发起（40903 是"正在处理"，不是这张单坏了）', async () => {
+    const sink = new MemorySink();
+    const registry = fakeRegistry({ pa: fakeProvider('pa') });
+    await seedPayable('o-busy2');
+    const tight = tightPool();
+    const hold = holdOrderRow(tight, 'o-busy2');
+    try {
+      await hold.ready;
+      // 同上：断言挂在外面，让失败走 ROLLBACK 而不是去 COMMIT 一个已中止的事务
+      await withTransaction(tight, (tx) =>
+        createPayIntent(tx, deps(registry, sink), {
+          orderId: 'o-busy2',
+          userId: 'u-1',
+          channel: 'pa',
+        }),
+      ).then(
+        () => expect.unreachable('另一事务持锁时应 40903'),
+        (e: unknown) => expect(codeOf(e)).toBe(40903),
+      );
+
+      hold.release();
+      await hold.done;
+
+      const ok = await withTransaction(tight, async (tx) =>
+        createPayIntent(tx, deps(registry, sink), {
+          orderId: 'o-busy2',
+          userId: 'u-1',
+          channel: 'pa',
+        }),
+      );
+      expect(ok.channel).toBe('pa');
+    } finally {
+      hold.release();
+      await hold.done.catch(() => undefined);
+      await closeDb(tight);
+    }
   });
 });

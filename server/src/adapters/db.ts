@@ -239,6 +239,23 @@ export async function withSavepoint<T>(tx: Db, fn: (sp: Db) => Promise<T>): Prom
   return capable.savepoint(async (sp) => fn(sp as Db));
 }
 
+/**
+ * 判定 SQLSTATE **55P03**（`lock_not_available`：等锁超时，不是"锁冲突本身"）。
+ *
+ * @why 判定只能认 `.code` 上的 SQLSTATE：message 的措辞随 PG 版本/ locale 变，
+ *      SQLSTATE 是协议级稳定标识（§2 诚实清单第 3 条：SQLSTATE 只在 `.code` 上，message 里没有）。
+ * @why 收在 db.ts 而不是各处各写一份：55P03 有**两种截然相反的含义**，取决于谁在等——
+ *      ① 幂等执行器**抢占位**时超时 = "另一个同名请求正在执行"（不是失败，走冲突路径）；
+ *      ② handler **业务**里超时 = "我要改的行正被别人持有"（是失败，必须原样抛出或换成业务码）。
+ *      两处若各写一份判定，谁改了其中一份都不会报错、只会静默换错语义——集中一处至少让
+ *      "有两种含义"这件事只有一个地方要读（@see adapters/idempotency.ts 的 inHandler 分支）。
+ * @limitation 只判 55P03 一种。不要把 40P01（死锁检测）也算进来：死锁是 PG 主动牺牲一方，
+ *              语义是"请重试整个事务"，与"等锁超时"不是一回事。
+ */
+export function isLockNotAvailable(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === '55P03';
+}
+
 /** 关闭连接池（测试与优雅关闭用）。 */
 export async function closeDb(db: Db): Promise<void> {
   await db.end();

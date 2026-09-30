@@ -24,8 +24,13 @@
  *              **换通道**（同键重放会拿回上一个通道的凭据）与支付已发起成功。
  *              发起失败**不**作废——弱网下用户再点一次必须还是同一个键，
  *              否则同一张单会发起两次支付。
+ * @limitation 五：**在途不再发起**（B6 / AJ-201）：上一次 `POST /orders/{id}/pay`
+ *              还没回来时点第二个通道/再点一次，直接不动。服务端有幂等键兜底
+ *              （同键不会建第二个会话），但发起支付要调机构、一次最长 6s，
+ *              连接池只有 10 条时连点就是自己把自己排队——这里挡的是浪费，不是正确性。
  *
- * @see ../../utils/pay-plan.js（通道渲染 / 实扣金额与 §14.2 提示条 / 下一步做什么）；
+ * @see ./index.vm.js（点一下该做什么：纯函数，约束十一）；
+ *      ../../utils/pay-plan.js（通道渲染 / 实扣金额与 §14.2 提示条 / 下一步做什么）；
  *      ../../utils/idempotency.js（幂等键生命周期）；
  *      ../../utils/address-form.js（ADDRESS_COUNTRY_DEFAULT：通道过滤的目的国）
  */
@@ -41,6 +46,7 @@ import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { errorMessage } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+import { payStartDecision } from './index.vm.js';
 
 const app = getApp();
 
@@ -123,17 +129,22 @@ Page({
     }
   },
 
-  /** 选一个通道 → 发起支付。 */
+  /** 选一个通道 → 发起支付。判断全在 `index.vm.js`（约束十一：薄壳只做编排）。 */
   onPay(e) {
-    const channel = e?.currentTarget?.dataset?.channel;
-    if (typeof channel !== 'string' || channel === '') return;
-    if (this.intentKey === null) return;
+    const decision = payStartDecision({
+      paying: this.data.paying === true,
+      channel: e?.currentTarget?.dataset?.channel,
+      lastChannel: this.lastChannel,
+      hasKey: this.intentKey !== null,
+    });
+    if (decision.kind === 'ignore') return;
     // ⚠️ 换通道 = 请求参数变了：沿用旧键会被服务端**重放成上一个通道的 intent**，
     //    用户点了 B 却拿到 A 的支付凭据（同键同参才算重放，参数不同就不是）。
-    if (this.lastChannel !== '' && this.lastChannel !== channel) this.intentKey.retire();
-    this.lastChannel = channel;
+    //    必须在 acquire **之前**作废，否则拿到的是旧键。
+    if (decision.retireKey) this.intentKey.retire();
+    this.lastChannel = decision.channel;
     const { key } = this.intentKey.acquire();
-    void this.startPay(channel, key);
+    void this.startPay(decision.channel, key);
   },
 
   async startPay(channel, idemKey) {
