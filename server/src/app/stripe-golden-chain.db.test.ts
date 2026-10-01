@@ -64,6 +64,16 @@ let fake: FakeStripeHttp;
 const dropResponses = new Map<string, number>();
 const realFetch = globalThis.fetch;
 
+/**
+ * 取字符串 body（Stripe 这一侧恒为 form-urlencoded）。
+ * @why 端口 `HttpRequest.body` 自 B1 起是 `string | Buffer`（对象存储要发二进制），
+ *      这里显式收窄：非字符串按空串处理，随后的 `form.get(...)` 断言会红——
+ *      比 `String(body)` 好，后者会把图片字节变成乱码而断言照样跑。
+ */
+function textBodyLike(body: string | Buffer | undefined): string {
+  return typeof body === 'string' ? body : '';
+}
+
 function headersOf(h: RequestInit['headers']): Record<string, string> {
   const out: Record<string, string> = {};
   new Headers(h).forEach((v, k) => {
@@ -219,7 +229,7 @@ describe('Stripe 整链：建单 → 托管页 → 回调落账 → 退款', () 
     const creates = stripeCalls('/v1/checkout/sessions');
     expect(creates).toHaveLength(1);
     expect(creates[0]?.headers?.['idempotency-key']).toBe(`pay-${orderId}-stripe`);
-    const form = new URLSearchParams(creates[0]?.body ?? '');
+    const form = new URLSearchParams(textBodyLike(creates[0]?.body));
     const [o] = await db`select expires_at, total_jpy from orders where id = ${orderId}`;
     const orderExpSec = Math.ceil((o?.['expires_at'] as Date).getTime() / 1000);
     expect(Number(form.get('expires_at'))).toBe(
@@ -276,7 +286,7 @@ describe('Stripe 整链：建单 → 托管页 → 回调落账 → 退款', () 
     expect(gets).toHaveLength(1);
     const refunds = stripeCalls('/v1/refunds');
     expect(refunds).toHaveLength(1);
-    const rf = new URLSearchParams(refunds[0]?.body ?? '');
+    const rf = new URLSearchParams(textBodyLike(refunds[0]?.body));
     expect(rf.get('payment_intent')).toBe(`pi_for_${p.providerRef}`);
     expect(rf.get('amount')).toBe(String(p.amount));
     expect(refunds[0]?.headers?.['idempotency-key']).toBe(`refund:${orderId}`);
@@ -376,7 +386,7 @@ describe('KD-4：退款"机构已执行、响应丢失"后重试', () => {
     const bodies = stripeCalls('/v1/refunds').map((c) => c.body);
     expect(bodies.length).toBe(4);
     expect(new Set(bodies).size).toBe(1);
-    expect(new URLSearchParams(bodies[0]).get('metadata[reason]')).toBe('缺货');
+    expect(new URLSearchParams(textBodyLike(bodies[0])).get('metadata[reason]')).toBe('缺货');
     const note =
       await db`select note from order_events where order_id = ${orderId} and status = 'refunded'`;
     expect(note[0]?.['note']).toBe('re_test_0001'); // 机构侧只有一笔

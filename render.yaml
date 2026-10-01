@@ -141,6 +141,13 @@ services:
         sync: false
       - key: R2_BUCKET
         sync: false
+      # ⚠️ **留空 = 生产不启用上传**（装配层给 storage=null，上传路由 50000 响亮拒绝），
+      #    服务照常起得来——这是当前状态，等 R2 凭据下来再填。
+      #    填 `r2` 就必须**同时**填上面四个 R2_*：config 跨字段规则 1d-2 会**拒绝启动**
+      #    （缺一个就每次上传都是 500，启动期拦住比"运营录第一个商品时才发现"便宜）。
+      #    生产填 `fs` / `memory` 同样被拒（规则 1d：Render 易失盘，图会静默丢）。
+      - key: STORAGE_DRIVER
+        sync: false
       - key: MAIL_PROVIDER_API_KEY
         sync: false
       - key: SUBSCRIBE_TMPL_PAID

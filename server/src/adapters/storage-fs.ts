@@ -20,18 +20,7 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import type { ObjectStorage } from '../ports/storage.js';
-
-/**
- * 白名单：小写字母数字 / `-_.` / `/`，首字符须字母数字，禁连续斜杠与 `..`。
- * 先整体匹配再显式拒 `..`——两段都过才放行（单靠正则排除 `..` 会漏 `a/.` 之外的边角）。
- */
-const KEY_PATTERN = /^[a-z0-9][a-z0-9\-_./]*\.[a-z0-9]+$/;
-
-function assertSafeKey(key: string): void {
-  if (!KEY_PATTERN.test(key) || key.includes('..') || key.includes('//') || key.includes('\\')) {
-    throw new Error(`object_key_unsafe`);
-  }
-}
+import { assertSafeObjectKey } from './object-key.js';
 
 export function createFsStorage(rootDir: string): ObjectStorage {
   // ⚠️ 用 `resolve` 而**不是** `normalize` 拼根（PAY3-05）：
@@ -44,14 +33,14 @@ export function createFsStorage(rootDir: string): ObjectStorage {
   const root = resolve(rootDir) + sep;
   return {
     async put(key, bytes, _contentType) {
-      assertSafeKey(key);
+      assertSafeObjectKey(key);
       const full = resolve(root, key);
       if (!full.startsWith(root)) throw new Error(`object_key_unsafe`);
       await mkdir(dirname(full), { recursive: true });
       await writeFile(full, bytes);
     },
     async delete(key) {
-      assertSafeKey(key);
+      assertSafeObjectKey(key);
       const full = resolve(root, key);
       if (!full.startsWith(root)) throw new Error(`object_key_unsafe`);
       try {

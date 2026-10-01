@@ -100,6 +100,19 @@ function signed(
   return { raw: Buffer.from(body, 'utf8'), headers: { [HEADER]: withExtra } as HeaderBag };
 }
 
+/**
+ * 取 Stripe 请求的表单体（本文件 15 处共用）。
+ *
+ * @why 端口 `HttpRequest.body` 自 B1 起是 `string | Buffer`（对象存储要发二进制），
+ *      而 Stripe 这一侧**恒为字符串**。这里显式只收字符串、其余按空串处理
+ *      （随后的 `form.get(...)` 断言会红）——比 `String(body)` 好：后者会把图片字节
+ *      变成一段乱码而断言照样跑，看不出"发出去的东西根本不是表单"。
+ */
+function formBody(call: { body?: string | Buffer | undefined } | undefined): URLSearchParams {
+  const b = call?.body;
+  return new URLSearchParams(typeof b === 'string' ? b : '');
+}
+
 describe('create（建 Checkout Session）', () => {
   it('带上鉴权头与幂等键（缺任一项都会被真实机构拒绝）', async () => {
     const { http, provider } = build();
@@ -113,7 +126,7 @@ describe('create（建 Checkout Session）', () => {
   it('表单里带金额、币种与 order 元数据（回调要靠它回带单号）', async () => {
     const { http, provider } = build();
     await provider.create(REQ);
-    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    const form = formBody(http.calls[0]);
     expect(form.get('mode')).toBe('payment');
     expect(form.get('line_items[0][price_data][currency]')).toBe('jpy');
     expect(form.get('line_items[0][price_data][unit_amount]')).toBe('12000');
@@ -132,7 +145,7 @@ describe('create（建 Checkout Session）', () => {
      */
     const { http, provider } = build();
     await provider.create(REQ);
-    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    const form = formBody(http.calls[0]);
     expect(form.get('payment_method_types[0]')).toBe('card');
     expect(form.get('payment_method_types[1]')).toBeNull();
   });
@@ -149,7 +162,7 @@ describe('create（建 Checkout Session）', () => {
   it('显式关掉 Adaptive Pricing（PAY3-03：不赌 Dashboard 的账户级开关）', async () => {
     const { http, provider } = build();
     await provider.create(REQ);
-    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    const form = formBody(http.calls[0]);
     expect(form.get('adaptive_pricing[enabled]')).toBe('false');
   });
 
@@ -202,7 +215,7 @@ describe('create（建 Checkout Session）', () => {
   it('D-49：账单地址必收、3DS any、expires_at = 订单到期 + 30 分钟下限 + 2 分钟余量（KD-9）', async () => {
     const { http, provider } = build();
     await provider.create({ ...REQ, expiresAt: '2026-01-02T15:50:00.000Z' });
-    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    const form = formBody(http.calls[0]);
     expect(form.get('billing_address_collection')).toBe('required');
     expect(form.get('payment_method_options[card][request_three_d_secure]')).toBe('any');
     // 数字取自生产常量（单一来源）：写死 30*60 的话，改了下限这条会"绿着"骗人
@@ -218,7 +231,7 @@ describe('create（建 Checkout Session）', () => {
   it('订单到期带毫秒 → 向上取整到秒再加下限（不提前关会话）', async () => {
     const { http, provider } = build();
     await provider.create({ ...REQ, expiresAt: '2026-01-02T16:30:00.500Z' });
-    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    const form = formBody(http.calls[0]);
     expect(form.get('expires_at')).toBe(
       String(
         Math.ceil(Date.parse('2026-01-02T16:30:00.500Z') / 1000) +
@@ -250,7 +263,7 @@ describe('create（建 Checkout Session）', () => {
       early.http.calls[0]?.headers?.['idempotency-key'],
     );
     // 且在最晚的可付时刻（到期前 30 秒）仍满足 Stripe 的"创建后至少 30 分钟"
-    const sent = Number(new URLSearchParams(late.http.calls[0]?.body ?? '').get('expires_at'));
+    const sent = Number(formBody(late.http.calls[0]).get('expires_at'));
     expect(sent - Date.parse('2026-01-02T15:49:30.000Z') / 1000).toBeGreaterThan(
       STRIPE_MIN_SESSION_TTL_SEC,
     );
@@ -267,7 +280,7 @@ describe('create（建 Checkout Session）', () => {
   it('未传 expiresAt 时不发 expires_at（由机构默认；I1 建单必传，此处只保证不发坏值）', async () => {
     const { http, provider } = build();
     await provider.create(REQ);
-    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    const form = formBody(http.calls[0]);
     expect(form.get('expires_at')).toBeNull();
   });
 
@@ -794,7 +807,7 @@ describe('parseWebhook：dispute 事件的 order_id 反查（体检 P1-7）', ()
   it('B5：create 把本系统标记写进 Session 与 PaymentIntent 的 metadata（判据的两端都要发）', async () => {
     const { http, provider } = build();
     await provider.create(REQ);
-    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    const form = formBody(http.calls[0]);
     expect(form.get('metadata[source]')).toBe(STRIPE_SOURCE_TAG);
     // ⚠️ PI 那份才是 payment_intent.* / charge.* 事件的判据来源，漏了它那批事件全部变成"非本系统"
     expect(form.get('payment_intent_data[metadata][source]')).toBe(STRIPE_SOURCE_TAG);
@@ -836,7 +849,7 @@ describe('refund（原币全额退）', () => {
       reason: '缺货',
     });
     expect(r.outcome).toBe('succeeded');
-    const form = new URLSearchParams(http.calls.at(-1)?.body ?? '');
+    const form = formBody(http.calls.at(-1));
     // $80.00 = 8000 分（端口口径已是整数最小单位，适配器只透传）；
     // 写成"按 JPY 退"就会变成 12000 分（$120），多退 50%
     expect(form.get('amount')).toBe('8000');
@@ -882,12 +895,12 @@ describe('refund（原币全额退）', () => {
         reason: long,
       });
     await send();
-    const first = new URLSearchParams(http.calls.at(-1)?.body ?? '').get('metadata[reason]');
+    const first = formBody(http.calls.at(-1)).get('metadata[reason]');
     expect(first).not.toBeNull();
     expect(first?.length).toBe(REFUND_REASON_MAX_LENGTH);
     expect(long.startsWith(first ?? '')).toBe(true); // 是前缀，不是随便切一段
     await send();
-    const second = new URLSearchParams(http.calls.at(-1)?.body ?? '').get('metadata[reason]');
+    const second = formBody(http.calls.at(-1)).get('metadata[reason]');
     expect(second).toBe(first); // 同一输入 → 同一输出（重试同键同参）
   });
 
@@ -902,7 +915,7 @@ describe('refund（原币全额退）', () => {
       amountMinor: 12_000,
       reason,
     });
-    expect(new URLSearchParams(http.calls.at(-1)?.body ?? '').get('metadata[reason]')).toBe(reason);
+    expect(formBody(http.calls.at(-1)).get('metadata[reason]')).toBe(reason);
   });
 
   it('退款状态 pending / failed 都要如实回带（不能一律当成成功）', async () => {
@@ -1108,9 +1121,7 @@ describe('refund：生产里 providerRef 是 Checkout Session 号（KD-11，AJ-1
     expect(get?.url).toBe(`https://api.stripe.test/v1/checkout/sessions/${s.providerRef}`);
     expect(get?.headers?.['authorization']).toBe('Bearer sk_test_unit');
     expect(post?.url).toBe('https://api.stripe.test/v1/refunds');
-    expect(new URLSearchParams(post?.body ?? '').get('payment_intent')).toBe(
-      `pi_for_${s.providerRef}`,
-    );
+    expect(formBody(post).get('payment_intent')).toBe(`pi_for_${s.providerRef}`);
     // 回带的 providerRef 仍是登记值（上层按它找 payments 行），不是换算后的 PI
     expect(r.providerRef).toBe(s.providerRef);
   });
@@ -1134,9 +1145,7 @@ describe('refund：生产里 providerRef 是 Checkout Session 号（KD-11，AJ-1
     const { http, provider } = build();
     http.failNext(200, JSON.stringify({ id: 'cs_test_e', payment_intent: { id: 'pi_expanded' } }));
     await refundOf(provider)(refundReq('cs_test_e'));
-    expect(new URLSearchParams(http.calls.at(-1)?.body ?? '').get('payment_intent')).toBe(
-      'pi_expanded',
-    );
+    expect(formBody(http.calls.at(-1)).get('payment_intent')).toBe('pi_expanded');
     await expect(refundOf(provider)(refundReq('ch_123'))).rejects.toThrow(/无法识别的机构单号族/);
   });
 
@@ -1153,8 +1162,7 @@ describe('refund：生产里 providerRef 是 Checkout Session 号（KD-11，AJ-1
 });
 
 describe('create：收货信息附给 PaymentIntent（D-60①，一致性审计 C14 / AJ-176）', () => {
-  const formOf = (http: ReturnType<typeof build>['http']) =>
-    new URLSearchParams(http.calls.at(-1)?.body ?? '');
+  const formOf = (http: ReturnType<typeof build>['http']) => formBody(http.calls.at(-1));
 
   it('完整地址 → payment_intent_data[shipping] 各字段；空串的可选字段不发', async () => {
     const { http, provider } = build();

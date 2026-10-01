@@ -177,6 +177,34 @@ describe('render.yaml ↔ 配置 schema 一致', () => {
     ).toEqual([]);
   });
 
+  /**
+   * B1：生产**能不能上传**取决于这一个键在不在清单里。
+   *
+   * @why R2 适配器落地之后，生产仍然不上传的唯一原因就是"平台上没这个开关"：
+   *      装配层看见 `STORAGE_DRIVER` 未配置 → `storage=null` → 上传 50000。
+   *      这是**本机永远发现不了**的一类漏配（本机是 fs/memory），只有部署后运营录第一个
+   *      商品时才暴露，而那时它长得像"上传功能坏了"。钉住键的存在，让它变成部署前的问题。
+   * @why 同时要求四个 `R2_*` 都在：只声明开关而缺凭据是**更坏**的组合——
+   *      config 跨字段规则 1d-2 会**拒绝启动**，失败形态是"服务起不来"，
+   *      排查时最容易误判成代码问题。四个一起钉，等价于钉住"这个开关只能整体启用"。
+   */
+  it('必须声明 STORAGE_DRIVER 且四个 R2_* 同时声明（缺一 = 生产不能上传或启动被拒）', () => {
+    expect(
+      declaredKeys.has('STORAGE_DRIVER'),
+      'render.yaml 缺 STORAGE_DRIVER：生产装配层会拿到 storage=null，商品图上传一律 50000',
+    ).toBe(true);
+    const missing = [
+      'R2_ACCOUNT_ID',
+      'R2_ACCESS_KEY_ID',
+      'R2_SECRET_ACCESS_KEY',
+      'R2_BUCKET',
+    ].filter((k) => !declaredKeys.has(k));
+    expect(
+      missing,
+      `STORAGE_DRIVER 已声明，但缺这些凭据（config 规则 1d-2 会拒绝启动）：\n${missing.join('\n')}`,
+    ).toEqual([]);
+  });
+
   it('白名单里的键确实只属于平台（防止白名单写错而永久放水）', () => {
     for (const key of Object.keys(PLATFORM_KEYS)) {
       expect(declaredKeys.has(key), `${key} 已不在 render.yaml 里，白名单该删了`).toBe(true);

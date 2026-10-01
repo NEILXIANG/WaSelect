@@ -16,8 +16,10 @@
  *              但"要不要重试"这件事不能做成一个无脑中间件：
  *              支付类请求的重试必须与幂等键绑定，否则重试 = **重复扣款**。
  *              所以判定规则写在这里（可测、可审），由实现显式调用，不做成隐式行为。
- * @limitation 二：只支持 `GET` / `POST` 与字符串 body。
- *              文件上传（multipart）等形态等出现真实需求再加，不预先设计。
+ * @limitation 二：只支持 `GET` / `POST` / `PUT` / `DELETE`，body 是字符串或 `Buffer`。
+ *              multipart 等形态等出现真实需求再加，不预先设计。
+ *              ⚠️ 2026-10-01 订正（B1）：旧文案写"只支持 GET / POST 与字符串 body"
+ *              ——PUT/DELETE + Buffer 已随 R2 对象存储适配器落地（对象存储是第一个使用者）。
  * @limitation 三：**响应体是字符串**，不在此解析 JSON。
  *              解析失败要区分"上游返回了 HTML 错误页"与"JSON 字段缺失"，
  *              这两种的排障方向完全不同，所以留给调用方按上下文处理。
@@ -26,12 +28,22 @@
  *      docs/地基搭建清单.md F12
  */
 export interface HttpRequest {
-  method: 'GET' | 'POST';
+  /**
+   * `PUT` / `DELETE` 是**对象存储**带进来的（B1 / R2 适配器）：上传与删除走 S3 兼容接口。
+   * @why 没有真实使用者之前刻意只有 GET/POST（@limitation 二 的原文）；R2 适配器是
+   *      PUT/DELETE 的第一个真实使用者，有了它才扩，不预先设计。
+   * @why 走**同一个端口**而不是让存储适配器自己 fetch：超时 / 重试 / 熔断都在这一层，
+   *      自己发等于再养一条没有超时保护的出站路径——"没有超时"在生产上是请求永久挂起。
+   */
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   url: string;
   /** 请求头（按需给；鉴权头由调用方显式传入，不放隐式全局）。 */
   headers?: Readonly<Record<string, string>> | undefined;
-  /** 请求体原文（调用方负责编码，如 Stripe 的 form-urlencoded）。 */
-  body?: string | undefined;
+  /**
+   * 请求体原文。字符串 = 调用方负责编码（如 Stripe 的 form-urlencoded）；
+   * `Buffer` = 二进制（上传图片）。
+   */
+  body?: string | Buffer | undefined;
   /** 单次超时（毫秒）；实现必须遵守，缺省由实现自定（见实现的 @limitation）。 */
   timeoutMs?: number | undefined;
   /**
@@ -253,6 +265,12 @@ export function shouldRetry(
    * @why 429 例外：上游明确**没有处理**这个请求（它只是让你慢点），所以重试安全。
    * @why 排在 5xx 那条**之前**："没带幂等键"是更严重的错（可能重复扣款），
    *      日志里的 reason 必须说这一条，不能被"上游没建议重试"盖掉。
+   */
+  /**
+   * ⚠️ 只有 **POST** 受这条约束：`PUT` / `DELETE` 按 HTTP 语义本身幂等
+   * （PUT = 对同一 key 的覆写，DELETE = 删同一个 key；重发得到同一个终态），
+   * 所以对象存储的上传 / 删除**不要求**幂等键也能安全重试（B1 / R2 适配器）。
+   * 反过来强行要求它们带幂等键，等于把"重试"这条能力从对象存储身上拿走。
    */
   if (req.method === 'POST' && failure !== 'rate_limited' && !hasIdempotencyKey(req)) {
     return stop('POST 缺少幂等键：重试可能重复扣款');

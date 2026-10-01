@@ -554,11 +554,12 @@ const schema = z.object({
   PUBLIC_API_BASE: optionalUrl(),
 
   // ── 上传存储驱动（I2 U-I4）──────────────────────────────────────────────
-  // fs=本地盘（仅开发期，Render 易失盘）；memory=进程内存（仅测试/e2e）。
-  // r2 适配器未落地前生产只能留空（装配层给 storage=null，上传 50000 响亮拒绝）。
+  // fs=本地盘（仅开发期，Render 易失盘）；memory=进程内存（仅测试/e2e）；
+  // r2=Cloudflare R2（**生产驱动**，2026-10-01 B1 落地）。
+  // 未配置时装配层给 storage=null，上传 50000 响亮拒绝（"不需要上传的部署"仍可起）。
   STORAGE_DRIVER: z.preprocess(
     (v) => (v === undefined || v === '' ? undefined : v),
-    z.enum(['fs', 'memory']).optional(),
+    z.enum(['fs', 'memory', 'r2']).optional(),
   ),
   /** fs 驱动的落盘根目录；缺省 `./var/uploads`（装配层解析，不在此给默认值——默认值进 schema 会让"用户没配"与"用户配了同值"不可分）。 */
   STORAGE_FS_DIR: optionalText(),
@@ -634,8 +635,36 @@ const crossField = schema.superRefine((c, ctx) => {
   if (isProd && (c.STORAGE_DRIVER === 'fs' || c.STORAGE_DRIVER === 'memory')) {
     add(
       'STORAGE_DRIVER',
-      `生产环境禁止 STORAGE_DRIVER=${c.STORAGE_DRIVER}（易失盘/进程内存，上传的图会静默丢；生产待 R2 适配器落地）`,
+      `生产环境禁止 STORAGE_DRIVER=${c.STORAGE_DRIVER}（易失盘/进程内存，上传的图会静默丢；生产用 r2）`,
     );
+  }
+
+  /**
+   * 1d-2. 选了 r2 却缺 R2 四要素（B1）。
+   *
+   * @why 这是"配置看着合法、运行时每次都失败"的组合：驱动名写对了，于是装配层
+   *      真的去构造 R2 适配器，而凭据缺失要到**第一次上传**才暴露成 500。
+   *      启动期拦住它，换的是"发布当天发现"而不是"运营录第一个商品时发现"。
+   * @why 四个一起报而不是只报第一个：缺哪几个是一次就能看全的信息，
+   *      逐个报会让人改一次、重启一次、再看到下一个（启动失败的代价由发布时长承担）。
+   */
+  if (c.STORAGE_DRIVER === 'r2') {
+    const missing = (
+      [
+        ['R2_ACCOUNT_ID', c.R2_ACCOUNT_ID],
+        ['R2_ACCESS_KEY_ID', c.R2_ACCESS_KEY_ID],
+        ['R2_SECRET_ACCESS_KEY', c.R2_SECRET_ACCESS_KEY],
+        ['R2_BUCKET', c.R2_BUCKET],
+      ] as const
+    )
+      .filter(([, v]) => v === undefined)
+      .map(([k]) => k);
+    if (missing.length > 0) {
+      add(
+        'STORAGE_DRIVER',
+        `STORAGE_DRIVER=r2 但缺少 ${missing.join(' / ')}（缺了每次上传都是 500；四个都要配）`,
+      );
+    }
   }
 
   // 1e. 初始管理员 seed（O-11 / AJ-181，B17 / AJ-209 起改**单向**）：

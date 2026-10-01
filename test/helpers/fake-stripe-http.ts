@@ -67,6 +67,20 @@ export interface FakeStripeHttp extends HttpClient {
   setSessionPaymentStatus(sessionId: string, paymentStatus: string): void;
 }
 
+/**
+ * 取字符串 body（本替身是 Stripe **专用**的）。
+ *
+ * @why 端口 `HttpRequest.body` 自 B1 起是 `string | Buffer`（对象存储要发二进制），
+ *      而 Stripe 这一侧恒为 form-urlencoded 字符串。显式收窄而不是 `String(body)`：
+ *      真收到 Buffer 说明"发出去的东西根本不是表单"，报错比把它当字符串读下去好——
+ *      后者会让后续断言在一个错误的形状上继续跑，看起来像"表单字段错了"。
+ */
+function textBody(body: string | Buffer | undefined): string {
+  if (body === undefined) return '';
+  if (typeof body === 'string') return body;
+  throw new Error(`fake-stripe-http 只接受字符串 body，收到 Buffer(${body.length} 字节)`);
+}
+
 export function createFakeStripeHttp(): FakeStripeHttp {
   const calls: HttpRequest[] = [];
   /** idempotency-key → 已建的会话。 */
@@ -153,7 +167,7 @@ export function createFakeStripeHttp(): FakeStripeHttp {
       if (!auth.startsWith('Bearer ')) {
         return { status: 401, body: '{"error":{"message":"missing api key"}}' };
       }
-      const body = req.body ?? '';
+      const body = textBody(req.body);
       // 同键异参 → 报错（文件头 @why ①）。GET 不带键，不进这条
       if (req.method === 'POST' && idemKey.length > 0) {
         const slot = `${path}|${idemKey}`;

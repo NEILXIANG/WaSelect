@@ -235,6 +235,42 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     statements: 100,
   },
 
+  // B1 对象存储（生产驱动）：四个文件**全部 100%**。
+  // @why 这一组的失败形态与 F11 支付链路同类，但更难发现——它们不报错：
+  //      · `aws-sigv4.ts`：签名算错在生产上是 403，而"是签名错了"这件事没有任何一方会告诉你
+  //        （报的是泛化的 storage_put_failed）。它是全仓库唯一"必须与外部实现逐字节一致"的代码，
+  //        所以夹具取自 AWS 官方 botocore（见该文件 @measured），自证断言抓不住它。
+  //      · `storage-r2.ts`：端点拼错 / body 传成字符串 / 把 403 当成功，前两个要到真桶上才炸，
+  //        第三个是"存储根本没配好"伪装成"清理完成"。
+  //      · `object-key.ts`：两个驱动**共用同一份** key 校验（ADR-29）；各写一份的话，
+  //        收紧只发生在一边，于是某个 key **只在生产驱动上**能写穿——开发期测不出来。
+  //      · `storage.ts`："哪个环境用哪个驱动"的唯一落点。判错的表现不是报错，是**换了个驱动**：
+  //        生产漏配回落 fs 就是"上传成功、随后图静默消失"，且没有任何一方报错。
+  'server/src/adapters/http/aws-sigv4.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/adapters/storage-r2.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/adapters/object-key.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/adapters/storage.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+
   // F13 调度器契约：互斥与心跳是**看门狗的唯一依据**。它出错的形态不是报错，
   // 而是"某个 job 已经连续失败一天了，监控却显示刚刚还成功过"——
   // 那是比宕机更贵的一类失效（没人去看，也就没人发现）。归一化/汇总这两个纯函数是它的全部实现。

@@ -35,6 +35,8 @@ import { createLogger, type Logger } from './logger.js';
 import { PAY_CALLBACK_PREFIX } from './app/pay-routes.js';
 import { createEventBus } from './adapters/event-bus.js';
 import { resolveStorage } from './adapters/storage.js';
+import { createFetchClient } from './adapters/http/fetch-client.js';
+import { outboundHttpOptions } from './app/http-outbound.js';
 import { systemClock } from './adapters/clock.js';
 import { registerBusinessEventLog } from './app/business-events.js';
 import { drainEventsThenClose } from './app/shutdown-cleanup.js';
@@ -174,7 +176,15 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
     //    两处各建一条的话，"回调发的事件"与"job 发的事件"会落进两个世界，
     //    而订阅者只在其中一个世界里——那正是"能力存在 ≠ 能力被用上"的形态（决策记录 §2 第 35 条）。
     const events = createEventBus(logger);
-    const storage = resolveStorage(config);
+    /**
+     * 对象存储的出站客户端（B1）。
+     * @why **单独一个实例**而不是复用 mount 里那个：存储与支付是两家上游，
+     *      熔断是按主机计的——共用一个实例会让"R2 抽风"把支付通道一起判死。
+     * @why 在这里建而不是在 mount 里：storage 是 MountContext 的一部分，
+     *      必须在 `createHttpApp`（mount 回调同步执行）之前就拿到。
+     */
+    const storageHttp = createFetchClient({ logger, ...outboundHttpOptions(config) });
+    const storage = resolveStorage(config, { http: storageHttp, clock: systemClock });
     /**
      * OPS3-05：在途后台作业的登记表——停机会等它（见下面 `afterDrain`）。
      * @why 在**装配期**造好并交给 `mountAllRoutes`：daily 作业（202 之后在进程里跑）

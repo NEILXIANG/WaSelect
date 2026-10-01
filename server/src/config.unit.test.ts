@@ -270,6 +270,42 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     expect(c.STORAGE_DRIVER).toBeUndefined();
   });
 
+  /** r2 四要素齐备的夹具——@why 抽出来而不是每条用例内联：四条用例共享同一组"合法值"，各写一份会在改夹具值时漂移。 */
+  const r2Full = {
+    R2_ACCOUNT_ID: 'r2-account-id-like',
+    R2_ACCESS_KEY_ID: 'r2-access-key-id-like',
+    R2_SECRET_ACCESS_KEY: 'r2-secret-access-key-like',
+    R2_BUCKET: 'jp-shop-images',
+  };
+
+  it('STORAGE_DRIVER=r2 缺四要素 → 拒绝，且四个缺失键一次全列（逐个报 = 改一次重启一次）', () => {
+    const issues = expectReject(prod({ STORAGE_DRIVER: 'r2' }));
+    const joined = issues.join('\n');
+    expect(joined).toContain('STORAGE_DRIVER');
+    for (const key of ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET']) {
+      expect(joined).toContain(key);
+    }
+  });
+
+  it('STORAGE_DRIVER=r2 只缺 R2_BUCKET → 只报这一个（不把已配的混进去，否则会被读成"四个都要重配"）', () => {
+    const issues = expectReject(prod({ STORAGE_DRIVER: 'r2', ...r2Full, R2_BUCKET: '' }));
+    const joined = issues.join('\n');
+    expect(joined).toContain('R2_BUCKET');
+    expect(joined).not.toContain('R2_ACCOUNT_ID');
+    expect(joined).not.toContain('R2_SECRET_ACCESS_KEY');
+  });
+
+  it('生产 + STORAGE_DRIVER=r2 四要素齐 → 放行（r2 是生产唯一可用驱动）', () => {
+    const c = loadConfig(prod({ STORAGE_DRIVER: 'r2', ...r2Full }));
+    expect(c.STORAGE_DRIVER).toBe('r2');
+    expect(c.R2_BUCKET).toBe('jp-shop-images');
+  });
+
+  it('非生产 + STORAGE_DRIVER=r2 缺要素 → 同样拒绝（规则不分层：缺凭据在哪一层都是每次上传 500）', () => {
+    const issues = expectReject({ ...baseEnv, STORAGE_DRIVER: 'r2' });
+    expect(issues.join('\n')).toContain('R2_BUCKET');
+  });
+
   it('生产启用 stripe 却缺 CHECKOUT_BASE_URL → 拒绝（D-49 收银链接拼不出来，运行时才暴露）', () => {
     const issues = expectReject(prod({ CHECKOUT_BASE_URL: '' }));
     expect(issues.join('\n')).toContain('CHECKOUT_BASE_URL');

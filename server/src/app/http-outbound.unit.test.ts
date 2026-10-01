@@ -95,18 +95,30 @@ describe('出站 HTTP 参数来自配置（不是写死在实现里）', () => {
     //      @limitation 形式是源码字符串包含判断——改成 `createFetchClient({ logger })`
     //      这类写法会让它红，那正是想要的（那就是"忘了接"）。
     // ⚠️ I1-U1（AJ-103）：路由/通道装配从 main.ts 收敛到 `app/mount.ts`（唯一挂载清单），
-    //    本断言的读取目标同步改为 mount.ts——main.ts 只剩"调 mountAllRoutes"的一行，
-    //    通道装配（含 createFetchClient）全部在 mount.ts。
-    const mount = readFileSync(resolve(import.meta.dirname, './mount.ts'), 'utf8');
+    //    本断言的读取目标同步改为 mount.ts。
+    //    ⚠️ 2026-10-01 订正（B1）：main.ts 出现了**第二个**出站客户端（对象存储 storageHttp）。
+    //      它不是"装配没收敛"，而是被 mount 的依赖顺序逼出来的——storage 是 MountContext 的一部分，
+    //      必须在 `createHttpApp`（mount 回调同步执行）之前就构造好，所以留在 bootstrap 侧。
+    //      于是这里改成**两个装配点都查**：只查 mount.ts 的话，main.ts 那一条漏接 `outboundHttpOptions`
+    //      （写成 `createFetchClient({ logger })`）会静默回落到兜底常量——配置形同虚设且不报错。
+    const sources = ['./mount.ts', '../main.ts'].map((p) =>
+      readFileSync(resolve(import.meta.dirname, p), 'utf8'),
+    );
     // ⚠️ 先剥掉注释行再匹配（§2 第 53 条：注入点命中注释是本项目反复踩过的坑，
     //    反过来说明**断言**命中注释同样是假绿——有人在注释里写一句
     //    `createFetchClient({ ...outboundHttpOptions(config) })` 就能让旧版断言通过）。
-    const code = mount
-      .split('\n')
-      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-      .join('\n');
-    expect(code).toContain('outboundHttpOptions(');
-    expect(code).toMatch(/createFetchClient\(\{[^}]*outboundHttpOptions\(config\)/);
+    for (const src of sources) {
+      const code = src
+        .split('\n')
+        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+        .join('\n');
+      expect(code).toContain('outboundHttpOptions(');
+      expect(code).toMatch(/createFetchClient\(\{[^}]*outboundHttpOptions\(config\)/);
+    }
+    // 两个装配点**各自**一个实例：共用的话熔断按主机计，R2 抽风会把支付通道一起判死
+    const main = sources[1] ?? '';
+    expect(main).toMatch(/storageHttp/);
+    expect(main).not.toMatch(/outboundHttp\b/);
   });
 
   it('不传任何覆盖时，产物里没有 undefined（防止"加了字段但忘了映射"）', () => {

@@ -19,7 +19,8 @@
  *              调用方不得依赖"读回的 Content-Type 一定等于写入值"。
  *
  * @see adapters/storage-memory.ts（测试/e2e）；adapters/storage-fs.ts（开发期）；
- *      R2/S3 适配器待凭据落地另立单元
+ *      adapters/storage-r2.ts（**生产驱动**，2026-10-01 B1 落地：S3 兼容 + SigV4，无 SDK）；
+ *      adapters/object-key.ts（两个驱动共用的 key 校验）
  */
 export interface ObjectStorage {
   put(key: string, bytes: Buffer, contentType: string): Promise<void>;
