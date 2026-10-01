@@ -28,6 +28,7 @@
  *      adapters/ops-config.ts（唯一写入方）；app/admin-ops-routes.ts（唯一调用方）
  */
 import { AppError } from '../errors.js';
+import { tryParseRfc3339Ms } from './time-input.js';
 
 /** 契约 `POST /admin/fx` 的 quote 枚举（单测与契约双向比对；JPY 不在内，见 @limitation 一）。 */
 export const FX_QUOTES = ['CNY', 'USD'] as const;
@@ -67,8 +68,11 @@ export interface FxInputValue {
    *      连"把请求里的字符串解析成 Date"也命中（它分不出"取当前时间"与"解析输入"）。
    *      这里改用 `Date.parse`（规则明文不禁），Date 对象只在 adapters 侧构造
    *      （`clock.now()` 与仓储内部各一处，都在豁免清单内）。
-   *      附带好处：毫秒是规范化的 UTC 值，**没有时区歧义**——
-   *      原样传字符串给 PG 的话，不带偏移的输入会按服务端时区解释。
+   * ⚠️ 这里曾经写"毫秒是规范化的 UTC 值，**没有时区歧义**"——那句只对
+   *      **带偏移的 RFC 3339** 成立，而原来的实现是 `Date.parse` 兜底：
+   *      不带偏移的输入会按**本进程时区**解释（DOM3-03，本机 JST 与生产 UTC 差 8 小时），
+   *      `"1"` 还会被解析成 2001 年。现在入口是 `parseRfc3339Ms`（偏移必填），
+   *      这句话才真的成立——"没有歧义"是**收紧之后**的性质，不是 `Date.parse` 的性质。
    */
   effectiveFromMs: number | null;
 }
@@ -104,8 +108,11 @@ export function parseFxInput(body: unknown): FxInputValue {
     return { quote: quote as FxQuote, rawRate, effectiveFromMs: null };
   }
   if (typeof raw !== 'string') throw new AppError(40001, { reason: 'effective_from_invalid' });
-  const ms = Date.parse(raw);
-  if (Number.isNaN(ms)) throw new AppError(40001, { reason: 'effective_from_invalid' });
+  // ⚠️ 走 `parseRfc3339Ms` 而不是 `Date.parse`（DOM3-03）：后者对不带偏移的输入
+  //    按**本进程时区**解释（本机 JST / 生产 UTC 相差 8 小时），还接受 `"1"`（→ 2001 年）
+  //    这类非 RFC 3339 串。契约写的是 `format: date-time`，偏移必填。
+  const ms = tryParseRfc3339Ms(raw);
+  if (ms === null) throw new AppError(40001, { reason: 'effective_from_invalid' });
   return { quote: quote as FxQuote, rawRate, effectiveFromMs: ms };
 }
 

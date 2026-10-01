@@ -10,7 +10,8 @@
  * @why 用**黑名单短语**扫源码，而不是只盯那四个文件：
  *      漂移的传染方式就是"复制到新文件"，只盯原地的守卫挡不住它。
  *
- * @limitation 一：只扫 `ROOTS`（管理端源码 + 两个测试配置），**不做全仓扫描**。
+ * @limitation 一：只扫 `ROOTS`（管理端源码 + 两个测试配置 + Stripe 样本工厂 + API 契约），
+ *      **不做全仓扫描**。
  *      @why 全仓扫描实测 ~3s（2000+ 文件），会撞上 unit 层默认的 5s 测试超时——
  *      在机器忙的那一轮里它自己会变成**假红灯**（2026-10-01 实测：全仓版与另一条仓库扫描守卫
  *      `business-events.unit.test.ts` 在满载那一轮双双 timeout，单跑各自都绿）。
@@ -34,6 +35,8 @@ const ROOTS = [
   join(ROOT, 'admin-web/src'),
   join(ROOT, 'vitest.coverage-gates.ts'),
   join(ROOT, 'vitest.config.mts'),
+  join(ROOT, 'test/factories/stripe.ts'), // PAY3-06：样本工厂的"实现来源"与"没造哪些样本"两处口径
+  join(ROOT, 'contracts/api-contract.yaml'), // PAY3-06：锁定口径是前后端共同读的唯一真源
 ];
 
 /** 已经证伪的说法 → 命中即红（第二项是给人看的"应该说成什么"）。 */
@@ -42,13 +45,22 @@ const STALE: ReadonlyArray<readonly [string, string]> = [
   ['没有组件测试 harness', 'harness 已存在，组件用例只是成本比纯函数高'],
   ['未引入 testing-library', '刻意不引第三方库，自研 harness 三十行够用'],
   ['没有 jsdom / React Testing Library', '同上'],
+  ['会用官方 SDK', '生产验签是 stripe-checkout.ts 自己用 createHmac 写的，刻意不引 SDK（PAY3-06）'],
+  [
+    'dispute.closed` 等售后后续事件',
+    '`charge.dispute.closed` 早已在 STRIPE_EVENT_TYPES 里，也不在豁免名单中（PAY3-06）',
+  ],
+  [
+    '同一账号连续失败 5 次',
+    'AJ-243 后是两层桶：同邮箱 × 同来源 5 次，或同邮箱合计 30 次（PAY3-06）',
+  ],
 ];
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'coverage']);
 
 function* walk(p: string): Generator<string> {
   if (statSync(p).isFile()) {
-    if (/\.(ts|tsx|mts)$/.test(p)) yield p;
+    if (/\.(ts|tsx|mts|yaml)$/.test(p)) yield p;
     return;
   }
   for (const name of readdirSync(p)) {
@@ -77,8 +89,8 @@ function hits(): string[] {
   return out;
 }
 
-describe('注释不得重复已证伪的说法（ADM3-07）', () => {
-  it('🔴 管理端与测试配置里不再出现"没有 jsdom / 没有组件测试 harness"这类过时理由', () => {
+describe('注释不得重复已证伪的说法（ADM3-07 / PAY3-06）', () => {
+  it('🔴 受扫范围内不再出现已证伪的说法（jsdom、Stripe 验签来源、锁定口径等）', () => {
     expect(hits()).toEqual([]);
   });
 

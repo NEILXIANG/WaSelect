@@ -16,6 +16,7 @@ import { ADMIN_NOTE_MAX_LENGTH, refundGuard, shipGuard } from '../domain/admin-o
 import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
+import { waitUntil } from '../../../test/helpers/chain-server.js';
 import { createLogger } from '../logger.js';
 import { loadConfig } from '../config.js';
 import { createEventBus } from '../adapters/event-bus.js';
@@ -532,8 +533,16 @@ describe('POST /admin/orders/{id}/dispute/release（人工解除拒付限制，B
     expect(String(ev[0]?.note)).toBe('已与买家和解');
     expect(String(ev[0]?.actor)).toMatch(/^admin:/); // 人工动作，不是机构事件
 
-    const audit =
-      await db`select action, target, before, after from admin_audit where target = 'o-1'`;
+    // ⚠️ 审计是**响应之后**异步写的（中间件挂在 `prefinish`，不与业务同事务）：
+    //    必须"等它出现"，不能"响应回来了就直接查"——直接查在机器忙时会先于 insert 到期，
+    //    于是同一条用例在 `test:db` 里绿、在 `cov`（全量并发）里红（AJ-274 实测）。
+    const auditQ = () =>
+      db`select action, target, before, after from admin_audit where target = 'o-1'`;
+    await waitUntil(
+      async () => (await auditQ()).some((a) => String(a['action']).includes('dispute/release')),
+      'admin_audit 里没有这条解锁记录',
+    );
+    const audit = await auditQ();
     const row = audit.find((a) => String(a['action']).includes('dispute/release'));
     expect(row, 'admin_audit 里没有这条解锁记录').toBeDefined();
     // 不可逆操作要记改前值（admin-audit 中间件只在显式提供时才写 before）

@@ -44,6 +44,10 @@ export interface IdentityCheck {
    * @why 可选：无缓存的实现没有东西可作废；带缓存的实现（withIdentityCache）必须提供。
    * @limitation **只作废本进程**：多实例时其它实例仍要等 TTL（60 秒）——`render.yaml` 固定单实例，
    *             且 test/config/render-env.unit.test.ts 钉住 numInstances=1（扩容前必须先换成共享失效机制）。
+   * @limitation ⚠️ "下一次 load 必回源"这句**曾经**不是真的（DB3-01）：
+   *             作废只删条目，而**在途的那次回源**会把它读到的旧值在作废之后写回来，
+   *             于是"下一次 load"命中了一份刚写进去的旧值、不再回源。
+   *             现在带缓存的实现用**代际计数**挡这一条（见 `withIdentityCache` 里的 `gen`）。
    */
   invalidate?(sub: string): void;
 }
@@ -95,12 +99,32 @@ export function createIdentityCheck(db: Db): IdentityCheck {
  *              否则"不存在的用户"会被每个请求打一次库，成为放大攻击面。
  *              代价：刚被创建的用户最多 60 秒后才认得（登录流程本身会走非缓存路径）。
  */
+/**
+ * `withIdentityCache` 的返回类型：`IdentityCheck` 且 **`invalidate` 一定有**。
+ * @why 端口里 `invalidate` 是可选的（无缓存的实现没有东西可作废），但带缓存的实现
+ *      **必然**提供它——标成必有，调用方就不必写 `invalidate?.()`，
+ *      而"忘了接"会变成编译错误而不是静默的"没作废"（后者正是 DB3-01 那一类静默失效）。
+ */
+export type CachedIdentityCheck = IdentityCheck & Required<Pick<IdentityCheck, 'invalidate'>>;
+
 export function withIdentityCache(
   check: IdentityCheck,
   ttlMs: number = IDENTITY_CACHE_TTL_MS,
   maxEntries: number = IDENTITY_CACHE_MAX_ENTRIES,
-): IdentityCheck {
+): CachedIdentityCheck {
   const cache = new Map<string, { at: number; record: IdentityRecord | null }>();
+  /**
+   * 每个 sub 的**代际计数**（DB3-01）：`invalidate` 一次就 +1。
+   *
+   * @why 只有"删掉缓存条目"挡不住在途回源：删除与回写是两个时刻，中间那个
+   *      `await` 就是窗口。`load` 在回源**之前**记下代际，回来后对不上就丢弃结果——
+   *      代际是"这次回源还算不算数"的唯一判据。
+   * @limitation 代际只增不减、且只在 `invalidate` 时变：TTL 过期不 bump，
+   *             否则"过期 → 重查"这个正常路径会被自己的 bump 判成失效。
+   * @limitation `gen` 与 `cache` 一样是**进程内**状态（同上面的 @limitation）：
+   *             多实例扩容前必须先换成共享失效机制。
+   */
+  const gen = new Map<string, number>();
   return {
     async load(sub: string): Promise<IdentityRecord | null> {
       const hit = cache.get(sub);
@@ -111,7 +135,12 @@ export function withIdentityCache(
         cache.set(sub, hit);
         return hit.record;
       }
+      const before = gen.get(sub) ?? 0;
       const record = await check.load(sub);
+      // ⚠️ 回源期间有人作废过（拉黑 / 撤权）⇒ 这份结果是**旧世界**的，不写回。
+      //    @why 返回它仍然是对的（调用方这一刻拿到的就是这个值，丢掉反而要再造一次 IO），
+      //    但**不能进缓存**——进了就等于把"即时生效"的承诺往后推一个 TTL。
+      if ((gen.get(sub) ?? 0) !== before) return record;
       // ⚠️ 回写前**必须先 delete 自己**：Map.set() 对已存在的键只更新值、**不动插入位置**，
       //    于是"过期 → 重查 → 回写"之后这个条目仍停在旧位置，下一轮逐出会优先把它带走——
       //    刚花一次 IO 换来的结果立刻作废（表现为热点用户每次都 miss，而缓存大小/TTL 看着都正常）。
@@ -127,6 +156,12 @@ export function withIdentityCache(
     },
     invalidate(sub: string): void {
       cache.delete(sub);
+      // ⚠️ 代际 +1 必须在 `cache.delete` **之后**也做（DB3-01）：只删缓存挡不住
+      //    "在途回源"——回源查询在拉黑事务提交**之前**读到了旧值，它的结果在
+      //    `invalidate` 之后才回来，于是旧值又被写回缓存、再活满一个 TTL。
+      //    表现是"拉黑之后下一个请求就该被拒"（F-06 / AJ-183）不成立：
+      //    被拉黑者仍可放行最长 60 秒。
+      gen.set(sub, (gen.get(sub) ?? 0) + 1);
       check.invalidate?.(sub);
     },
   };

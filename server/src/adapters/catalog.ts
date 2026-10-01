@@ -87,6 +87,25 @@ export interface CatalogRepo {
    * 第一个 `max_weight_g >= 包裹重` 的档（向上取档）。超重返回 null（用例层 → 40912，AJ-239）。
    */
   findShippingPriceJpy(carrier: string, weightG: number): Promise<number | null>;
+  /**
+   * **一次快照**里同时做「选承运商」与「取档」（DB3-04）。
+   *
+   * @why 分成 `resolveSingleActiveCarrier()` 与 `findShippingPriceJpy()` 两条语句时，
+   *      READ COMMITTED 下每条语句各拿一个新快照，中间可以夹进一次**整表替换**提交
+   *      （运营把占位承运商换成真实承运商）：第一条读到 `placeholder`，第二条
+   *      `where carrier='placeholder' and active` 已经 0 行 ⇒ 返回 null ⇒
+   *      用例层按 AJ-239 抛 **40912「包裹超重」**。买家看到"超重"，实际是配置切换，
+   *      文案误导，且错误码被对账 / 告警误分类。
+   * @why 合并成一条 SQL 而不是把建单事务提到 REPEATABLE READ：
+   *      后者要改整条建单链路的隔离级别（影响面远大于这一处），
+   *      而"取档"这件事本来就只需要一个快照。
+   * @returns 判别联合——`no_carrier` = 活跃承运商 ≠1 家（→ 50004）；
+   *          `overweight` = 承运商明确、但包裹比最大一档还重（→ 40912）；
+   *          `ok` = 取到档。
+   *      @why 不返回 `null` 让调用方猜：这三种的处置完全不同（50004 / 40912 / 用），
+   *      返回 null 等价于要求调用方再查一次——而"再查一次"正是本次要消灭的第二次查询。
+   */
+  findSoleCarrierShippingJpy(weightG: number): Promise<ShippingQuoteRow>;
   /** 关税率（NUMERIC 原样字符串返回，转换在 domain 的 dutyRatioIntOf）；无行 → null。 */
   findDutyRate(origin: string, dest: string): Promise<string | null>;
   /**
@@ -95,6 +114,18 @@ export interface CatalogRepo {
    */
   findLatestFxRates(quotes: readonly string[], now: Date): Promise<ReadonlyMap<string, string>>;
 }
+
+/**
+ * `findSoleCarrierShippingJpy` 的结果（判别联合）。
+ * @why 三种结果对应三种**完全不同**的处置，用"null + 再查一次"会让调用方长出第二份判定
+ *      （ADR-29：同一判断的第二份实现就是漂移的起点），而且第二次查询本身就是竞态的入口。
+ */
+export type ShippingQuoteRow =
+  | { kind: 'ok'; carrier: string; priceJpy: number }
+  /** 承运商明确，但包裹比最大一档还重（用例层 → 40912，AJ-239）。 */
+  | { kind: 'overweight'; carrier: string }
+  /** 活跃承运商不是恰好一家（0 家或多家）→ 50004。 */
+  | { kind: 'no_carrier' };
 
 export function createCatalogRepo(db: Db): CatalogRepo {
   return {
@@ -194,6 +225,39 @@ export function createCatalogRepo(db: Db): CatalogRepo {
       `;
       const row = rows[0];
       return row === undefined ? null : Number(row.price_jpy);
+    },
+
+    async findSoleCarrierShippingJpy(weightG: number): Promise<ShippingQuoteRow> {
+      /**
+       * ⚠️ 一条 SQL、一个快照（DB3-04）。
+       * @why `with c as (...)` 里的 `distinct carrier` 与 lateral 子查询**同属一条语句**，
+       *      于是 PG 用同一个快照取两者：要么全是旧表、要么全是新表，不再有"半张表"。
+       * @why 仍然只保留**一份**取档口径（D-46 红线）：`max_weight_g >= $1` + 升序取第一行
+       *      与 `findShippingPriceJpy` 完全一致，没有第二份实现。
+       * @why `left join lateral ... on true`：承运商存在但**没有能装下这个包裹的档**时
+       *      lateral 返回 0 行，`left join` 保留 c 行且 `price_jpy` 为 null ⇒ 能区分
+       *      "没有承运商"与"有承运商但超重"（这正是 50004 与 40912 的分界）。
+       */
+      const rows = await db`
+        with c as (select distinct carrier from shipping_rates where active = true)
+        select (select count(*) from c) as n,
+               c.carrier,
+               r.price_jpy
+          from c
+          left join lateral (
+            select price_jpy from shipping_rates
+             where carrier = c.carrier and active = true and max_weight_g >= ${weightG}
+             order by max_weight_g asc
+             limit 1
+          ) r on true
+      `;
+      if (rows.length !== 1) return { kind: 'no_carrier' }; // 0 家或多家
+      const row = rows[0];
+      if (row === undefined) return { kind: 'no_carrier' };
+      const carrier = String(row.carrier);
+      const price = row.price_jpy;
+      if (price === null || price === undefined) return { kind: 'overweight', carrier };
+      return { kind: 'ok', carrier, priceJpy: Number(price) };
     },
 
     async findDutyRate(origin: string, dest: string): Promise<string | null> {

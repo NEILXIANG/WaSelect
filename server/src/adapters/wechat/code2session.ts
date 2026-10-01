@@ -19,6 +19,16 @@
  *              未做真机实测——公司主体 AppID 未下来，当前只按文档口径实现）。
  * @limitation 二：不做 code 级幂等缓存——微信 code 本身就是一次性的
  *              （重放 = 40163 = 40101），客户端重试会换新 code，缓存没有命中场景。
+ * @limitation 三：**这个 GET 只发一次**（`maxAttempts: 1`，PAY3-07）。
+ *              @why 出站客户端默认按"GET 天生幂等"重试，但 jscode2session **不是**：
+ *              它每次调用都**消耗** code。第一次请求其实已送达并被处理、只是响应在路上断了
+ *              （`ECONNRESET` → undici 抛 `TypeError: fetch failed`），重试必定拿回 40163，
+ *              而我们把它映射成 40101——**一次网络抖动被说成"用户侧的登录失败"**，
+ *              排障会去找用户和客户端。宁可让用户重登一次（客户端本来就会换新 code），
+ *              也不要拿一个注定错的错误码去掩盖真实原因。
+ *              @tradeoff 因此"网络抖了一下、code 其实没被消耗"这一半情形也一起牺牲了：
+ *              它本可以重试成功。取舍方向是"错误的归因比多一次登录更贵"——
+ *              前者会浪费一次排障，后者只是用户多点一下。
  *
  * @see ports/wechat-auth.ts（错误语义两档的定义处）；https://developers.weixin.qq.com/miniprogram/dev/OpenApiDoc/user-login/code2Session.html
  */
@@ -46,7 +56,12 @@ export function createWechatAuth(opts: WechatAuthOptions): WechatAuth {
         js_code: code,
         grant_type: 'authorization_code',
       });
-      const res = await opts.http.send({ method: 'GET', url: `${API_URL}?${query}` });
+      // ⚠️ `maxAttempts: 1`：这个 GET 不是幂等的——重试会用掉同一个 code（@limitation 三）
+      const res = await opts.http.send({
+        method: 'GET',
+        url: `${API_URL}?${query}`,
+        maxAttempts: 1,
+      });
       if (res.status !== 200) {
         // 微信自身故障/反爬拦截：不是用户的问题，折叠 50000
         throw new Error(`wechat code2session HTTP ${res.status}（openid 未取得）`);

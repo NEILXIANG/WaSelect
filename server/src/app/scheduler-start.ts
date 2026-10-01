@@ -23,6 +23,9 @@
  * @limitation 二：`stop()` **不打断**已经在跑的那一轮（只停定时器）。
  *              打断会让事务停在半开状态（`idle_in_transaction_session_timeout` 兜底 60s 才杀），
  *              优雅关闭的正确顺序是"先摘流量 → 停定时器 → 等在途请求 → 关连接池"。
+ *              ⚠️ 只调 `stop()` **不等于**"等到了那一轮跑完"——要等请用 `stopAndWait()`
+ *              （OPS3-05：tick 不是 HTTP 请求，没人会在排空时等它；它若在 drain 返回 0
+ *              之后才提交，`order.expired` 的事件订阅者就会撞上已关闭的连接池）。
  * @limitation 三：定时器 `unref()` 了——它**不会**让进程活着。
  *              生产上进程由 HTTP 服务器撑着；若哪天"只剩调度器"的进程形态出现，要把这一行去掉。
  *
@@ -75,6 +78,13 @@ export interface SchedulerHandle {
   tickNow(): Promise<SchedulerTickResult | undefined>;
   /** 停止定时器。已开始的那一轮不打断（见 @limitation 二）。 */
   stop(): void;
+  /**
+   * 停止定时器**并等在途的那一轮跑完**，至多 `budgetMs` 毫秒（OPS3-05）。
+   * @returns 到点前那一轮是否跑完；**没有在途轮次时返回 true**（"没得等"也是等到）。
+   * @limitation 超时后**不打断**它，只是不再等（同 `inflight-jobs.ts` @limitation 三）：
+   *             停机总预算（`SHUTDOWN_TOTAL_BUDGET_MS`）才是那道闸，这里不重复造。
+   */
+  stopAndWait(budgetMs: number): Promise<boolean>;
 }
 
 export interface StartSchedulerOptions<TTx> {
@@ -102,6 +112,13 @@ export interface StartSchedulerOptions<TTx> {
 export function startScheduler<TTx>(opts: StartSchedulerOptions<TTx>): SchedulerHandle {
   const log = opts.deps.logger.child({ module: 'scheduler', actor: 'scheduler' });
   let running = false;
+  /**
+   * 当前在途那一轮的 Promise（`stopAndWait` 要等的就是它）。
+   * @why 必须由**这一层**记住：`runSchedulerOnce` 返回的 Promise 在 `void tick()` 那里
+   *      被丢掉了，停机时没人拿得回来。不记句柄的话，"等在途 tick"只能靠 sleep 猜时间，
+   *      而猜出来的等待要么白等（拖慢发布）要么不够（又撞上已关的连接池）。
+   */
+  let inFlight: Promise<SchedulerTickResult | undefined> | undefined = undefined;
 
   const tick = async (): Promise<SchedulerTickResult | undefined> => {
     if (running) {
@@ -129,16 +146,50 @@ export function startScheduler<TTx>(opts: StartSchedulerOptions<TTx>): Scheduler
     }
   };
 
+  /** 跑一轮并**记住它的句柄**（OPS3-05）。 */
+  const runTick = (): Promise<SchedulerTickResult | undefined> => {
+    const p = tick();
+    inFlight = p;
+    // 跑完就把句柄摘掉：`stopAndWait` 之后再问"有没有在途"时不能还指着旧的那一轮。
+    // ⚠️ **成败都摘**：失败那一轮若留在表里，下一次 `stopAndWait` 会等一个早已结束的 Promise。
+    // ⚠️ 两个回调是**同一个函数**，不是两份实现：`tick()` 今天不会 reject（try/catch/finally
+    //    兜住了），但"它以后会不会"不由这里决定；写成两份，其中一份永远跑不到（覆盖率会
+    //    指出来），而改一处忘另一处正是"句柄摘不掉"这种没人会注意到的失效（ADR-29）。
+    const clearHandle = (): void => {
+      if (inFlight === p) inFlight = undefined;
+    };
+    void p.then(clearHandle, clearHandle);
+    return p;
+  };
+
   const timer = setInterval(() => {
-    void tick();
+    void runTick();
   }, opts.intervalMs);
   timer.unref(); // 见文件头 @limitation 三
-  if (opts.runImmediately === true) void tick();
+  if (opts.runImmediately === true) void runTick();
 
   return {
-    tickNow: tick,
+    tickNow: runTick,
     stop: () => {
       clearInterval(timer);
+    },
+    stopAndWait: async (budgetMs: number): Promise<boolean> => {
+      clearInterval(timer);
+      const p = inFlight;
+      if (p === undefined) return true; // 没有在途轮次："没得等"也是等到
+      if (budgetMs <= 0) return false;
+      // ⚠️ 成败都算**等到了**：这一轮跑完了，只是它失败了——与 `inflight-jobs.ts`
+      //    用 `allSettled` 而不是 `all` 同一个理由（作业失败 ≠ 没跑完）。
+      //    同一个函数给两个回调：理由见 `runTick` 里的 `clearHandle`。
+      const asTrue = (): boolean => true;
+      const done = await Promise.race([
+        p.then(asTrue, asTrue),
+        new Promise<false>((resolve) => {
+          const t = setTimeout(() => resolve(false), budgetMs);
+          t.unref();
+        }),
+      ]);
+      return done;
     },
   };
 }

@@ -164,6 +164,25 @@ describe('computeQuote', () => {
     expect(over.splitHint).toBe(true);
   });
 
+  /**
+   * 🔴 DOM3-05：`toMinor` 抛的是 **RangeError**（不是 AppError），
+   * 折叠前它是 50000 + `unhandled_error`。
+   * @why 汇率上界由 `fx-input` 放行到 1000（含缓冲 1500），而 money.ts 的安全论证
+   *      假定 rate ≤ 1——两个模块各自的"安全"对不上。管理员录错一个大汇率时，
+   *      报价 / 建单必须给出"汇率不可用"而不是"服务器内部错误"（后者会让人去查服务）。
+   */
+  it('🔴 汇率大到冲出安全整数域 → 50003「汇率不可用」，不是 RangeError/50000（DOM3-05）', () => {
+    // rate 618（`fx-input` 放行到 1000，含缓冲 1500）× 1e8
+    const huge = { fxRateIntByCurrency: { USD: 61_800_000_000, CNY: toRateInt('0.049') } };
+    // 对照组：同样的汇率、金额小一些时乘积仍落在 2^53 内（10 万 × 6.18e10 ≈ 6.2e15）
+    const ok = computeQuote(baseInput({ ...huge, itemsJpy: 100_000, shippingJpy: 0 }));
+    expect(ok.display.USD).toBe(toMinor(100_000, 61_800_000_000));
+    // 15 万 × 6.18e10 ≈ 9.27e15 > 2^53 ⇒ toMinor 抛 RangeError ⇒ 折成 50003
+    expect(
+      codeOf(() => computeQuote(baseInput({ ...huge, itemsJpy: 150_000, shippingJpy: 0 }))),
+    ).toBe(50003);
+  });
+
   it('展示币为空数组 → display 为空（不要求汇率，也不该 50003）', () => {
     const q = computeQuote(baseInput({ displayCurrencies: [] }));
     expect(q.display).toEqual({});

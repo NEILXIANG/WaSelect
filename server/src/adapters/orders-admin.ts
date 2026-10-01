@@ -678,7 +678,17 @@ export async function markRefunded(
  *      而 `address_snapshot` 被整体覆盖之后，旧地址在全库**再无第二处**。
  * @why 存 `order_events` 而不是 `admin_audit`：前者与 `orders` 同级、本就存着这份 PII
  *      （收货信息是订单的一部分），约束七禁的是"PII 进**日志**"，不是进订单事件；
- *      后者是全库 PII 的第二份聚集地、且 append-only 无法删除（AJ-207 的同一条理由）。
+ *      后者是全库 PII 的**第二份**聚集地，不该再复制一份（AJ-207 的同一条理由）。
+ *      ⚠️ 这里**曾经**还写着"后者 append-only 无法删除"作为选前者的理由之一——
+ *      那是错的（DB3-03）：`order_events` 同样挂着 `trg_order_events_append_only`
+ *      （`migrations/002_hardening.sql`），UPDATE / DELETE 一律 42501 拒绝。
+ *      两处都删不掉，这条理由不成立；真正剩下的理由只有"与订单同级、便于应诉检索"。
+ *      @limitation **删除请求（APPI / CCPA）在这里走不通**：`orders.address_snapshot`
+ *      可以改写，但历次改址留在 `order_events.note` 里的旧地址**改不了也删不掉**
+ *      ——要动它必须先 DROP 触发器，而那正是 002 要防的操作。
+ *      当前处置：登记为待办（见决策记录 AJ-272），首次真实删除请求到来前
+ *      走"新建可匿名化的 `order_address_history` 表 + note 只存该行 id"的结构修复；
+ *      在那之前，**不**为删除请求临时摘触发器（一次临时摘除 = 这条防线在谁的机器上失效过就说不清了）。
  *      @limitation note 是 TEXT，管理端详情页按原文渲染——当前显示为一段 JSON，
  *      可读性不如"管理员改址"，但**完整性**是这类证据的第一要求，美化留给前端。
  */

@@ -29,6 +29,7 @@ import { AppError } from '../errors.js';
 import { systemClock } from '../adapters/clock.js';
 import { systemIdGen } from '../adapters/ids.js';
 import { createSchedulerDeps } from './scheduler-start.js';
+import type { InflightJobs } from './inflight-jobs.js';
 import { runSchedulerOnce } from './scheduler.js';
 import { DAILY_JOB_ROW_NAME } from '../ports/scheduler.js';
 import { createDailyReconciliationJob } from './daily-reconciliation.js';
@@ -49,7 +50,14 @@ function secretMatches(got: string, want: string): boolean {
 
 export function mountInternalJobsRoutes(
   app: Express,
-  deps: { config: AppConfig; logger: Logger; db: Db; events: EventBus },
+  deps: {
+    config: AppConfig;
+    logger: Logger;
+    db: Db;
+    events: EventBus;
+    /** 在途作业登记表（OPS3-05）：停机会等它跑完再关库。 */
+    jobs: InflightJobs;
+  },
 ): void {
   app.post(`${INTERNAL_JOBS_PREFIX}/daily`, (req, res, next) => {
     void (async () => {
@@ -73,31 +81,36 @@ export function mountInternalJobsRoutes(
         const startedAt = systemClock.now().toISOString();
         // ⚠️ 必 catch：未捕获的 rejection 会被进程级处理器当 fatal（与 scheduler-start.ts 同一条纪律）。
         //    完成与否**不看这个 Promise**——看 `job_runs('daily')` 心跳（D-45）：
-        //    那是生产上唯一的可观测出口，也是调用方（cron）事后核实的依据；
-        //    刻意不把句柄存在模块里（模块级状态会被同进程的第二个 bootstrap 覆盖，
-        //    还容易让人以为"端点只会跑一次"——真正的互斥是调度器的 advisory lock）。
-        void runSchedulerOnce(
-          createSchedulerDeps(deps.db, deps.events, systemClock, deps.logger, {
-            // ⚠️ 名字与看门狗盯的那一行是**同一个常量**：两处字面量各自漂移时，
-            //    daily-reconciliation 的 `scanStalledHeartbeats` 会去盯一个不存在的行
-            name: DAILY_JOB_ROW_NAME,
-            lockKey: 'daily',
+        //    那是生产上唯一的可观测出口，也是调用方（cron）事后核实的依据。
+        // ⚠️ 但句柄**必须交出去**：登记到 `deps.jobs`（OPS3-05），停机时由它等到跑完。
+        //    刻意不把句柄存在**模块级变量**里（会被同进程的第二个 bootstrap 覆盖，
+        //    还容易让人以为"端点只会跑一次"——真正的互斥是调度器的 advisory lock）；
+        //    登记表是装配期传入的实例，谁等它、等几个，都是看得见的装配关系。
+        void deps.jobs.run(
+          `daily:${runId}`,
+          runSchedulerOnce(
+            createSchedulerDeps(deps.db, deps.events, systemClock, deps.logger, {
+              // ⚠️ 名字与看门狗盯的那一行是**同一个常量**：两处字面量各自漂移时，
+              //    daily-reconciliation 的 `scanStalledHeartbeats` 会去盯一个不存在的行
+              name: DAILY_JOB_ROW_NAME,
+              lockKey: 'daily',
+            }),
+            // 顺序即执行顺序：先把到期的单迁走（自动签收 → 自动完成，O-12 / AJ-182），对账看到的是迁移后的状态；
+            // 登录尝试行的清理放最后——它只删"已解锁且过期"的行，不参与任何业务判定，放前面只会拖长锁的持有时间
+            [
+              createAutoDeliverJob({ afterDays: deps.config.AUTO_DELIVER_DAYS }),
+              createAutoCompleteJob({ afterDays: deps.config.AUTO_COMPLETE_DAYS }),
+              createDailyReconciliationJob(),
+              createCleanupLoginAttemptsJob(),
+            ],
+          ).catch((e: unknown) => {
+            deps.logger.error('internal_job_crashed', {
+              result: 'error',
+              err: e,
+              ctx: { run_id: runId },
+            });
           }),
-          // 顺序即执行顺序：先把到期的单迁走（自动签收 → 自动完成，O-12 / AJ-182），对账看到的是迁移后的状态；
-          // 登录尝试行的清理放最后——它只删"已解锁且过期"的行，不参与任何业务判定，放前面只会拖长锁的持有时间
-          [
-            createAutoDeliverJob({ afterDays: deps.config.AUTO_DELIVER_DAYS }),
-            createAutoCompleteJob({ afterDays: deps.config.AUTO_COMPLETE_DAYS }),
-            createDailyReconciliationJob(),
-            createCleanupLoginAttemptsJob(),
-          ],
-        ).catch((e: unknown) => {
-          deps.logger.error('internal_job_crashed', {
-            result: 'error',
-            err: e,
-            ctx: { run_id: runId },
-          });
-        });
+        );
 
         res.status(202).json({ run_id: runId, started_at: startedAt });
       } catch (e) {

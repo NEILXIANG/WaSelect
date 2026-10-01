@@ -164,7 +164,19 @@ export function computeQuote(input: QuoteComputationInput): QuoteComputation {
   for (const c of input.displayCurrencies) {
     const rateInt = input.fxRateIntByCurrency[c];
     if (rateInt === undefined) throw new AppError(50003, { currency: c });
-    display[c] = toMinor(totalJpy, rateInt);
+    // ⚠️ DOM3-05：`toMinor` 在"金额 × 汇率"冲出安全整数域时抛 **RangeError**（不是 AppError）。
+    //    汇率上界由 `fx-input` 的 `MAX_RAW_RATE` 放行到 1000（含缓冲 1500），而 money.ts 的
+    //    安全论证假定的是 rate ≤ 1——两个模块各自的"安全"对不上，于是管理员录错一个
+    //    大汇率就能让报价 / 建单变成 50000 + `unhandled_error`（浏览页有 B25 逐商品降级兜着，
+    //    报价与建单没有）。这里把 RangeError 折成 **50003「汇率不可用」**：
+    //    与"缺汇率"同一处置——对调用方而言两者是同一件事（这一币种此刻报不出可信价格），
+    //    而 50000 会让人去查服务而不是去查汇率表。
+    try {
+      display[c] = toMinor(totalJpy, rateInt);
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+      throw new AppError(50003, { currency: c, reason: 'fx_rate_out_of_range' });
+    }
   }
 
   return {

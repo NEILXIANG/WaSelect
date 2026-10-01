@@ -106,6 +106,43 @@ describe('resolveSingleActiveCarrier（承运商选择规则未定前的唯一�
   });
 });
 
+/**
+ * DB3-04：选承运商 + 取档必须在**同一个快照**里完成。
+ * @why 分两条语句时，中间的整表替换提交会让第二条查不到刚读到的承运商，
+ *      ⇒ 把"配置切换"报成 40912「超重」（文案误导 + 错误码被对账误分类）。
+ */
+describe('findSoleCarrierShippingJpy（一次快照，DB3-04）', () => {
+  it('恰好一家 + 有档可装 → ok（且沿用 D-46 红线向量 w=1850 → 4950）', async () => {
+    await seedShipping();
+    const r = await repo.findSoleCarrierShippingJpy(1850);
+    expect(r).toEqual({ kind: 'ok', carrier: 'placeholder', priceJpy: 4950 });
+  });
+
+  it('恰好一家但超重 → overweight（用例层 40912，不是 50004）', async () => {
+    await seedShipping();
+    const r = await repo.findSoleCarrierShippingJpy(10_001);
+    expect(r).toEqual({ kind: 'overweight', carrier: 'placeholder' });
+  });
+
+  it('零家 / 多家 → no_carrier（用例层 50004）', async () => {
+    expect(await repo.findSoleCarrierShippingJpy(100)).toEqual({ kind: 'no_carrier' });
+    await seedShipping('a');
+    await seedShipping('b');
+    expect(await repo.findSoleCarrierShippingJpy(100)).toEqual({ kind: 'no_carrier' });
+  });
+
+  it('第二家全部 inactive 不影响唯一性；取档仍按 active 过滤', async () => {
+    await seedShipping('a');
+    await db`
+      insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
+      values ('b', 1000, 999, false)
+    `;
+    const r = await repo.findSoleCarrierShippingJpy(1850);
+    expect(r.kind).toBe('ok');
+    expect(r.kind === 'ok' && r.carrier).toBe('a');
+  });
+});
+
 describe('findDutyRate', () => {
   it("('JP','US') 命中迁移 010 的 seed（0.15，NUMERIC 原样字符串）", async () => {
     // duty_rates 是配置表：resetTestDb 不清它，seed 由迁移保证（见 010 文件头 @limitation 三）

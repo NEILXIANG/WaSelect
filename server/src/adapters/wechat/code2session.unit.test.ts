@@ -6,10 +6,15 @@
  *      secret 进 query 是微信唯一支持的形态，脱敏由 fetch-client 的 safeUrl 负责
  *      （这里断言"我们的确把 secret 放进了 query"——两边拼起来才是完整证据链）。
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createFetchClient } from '../http/fetch-client.js';
 import type { HttpClient, HttpRequest, HttpResponse } from '../../ports/http-client.js';
 import { createWechatAuth } from './code2session.js';
 import { createDevWechatAuth } from './dev-auth.js';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 /** 收集式假 HttpClient（响应按队列出；默认 200 空对象——各用例显式喂）。 */
 function fakeHttp(queue: HttpResponse[]): { http: HttpClient; calls: HttpRequest[] } {
@@ -81,6 +86,43 @@ describe('真实 code2session', () => {
     const { http } = fakeHttp([{ status: 200, body: '{"session_key":"x"}' }]);
     const auth = createWechatAuth({ http, ...OPTS });
     await expect(auth.code2session('x')).rejects.toThrow(/缺 openid/);
+  });
+
+  it('🔴 声明"只发一次"：请求里带 maxAttempts: 1（PAY3-07，防止有人把 GET 当成天然可重试而删掉）', async () => {
+    const { http, calls } = fakeHttp([
+      { status: 200, body: '{"openid":"o-real-1","session_key":"SK"}' },
+    ]);
+    const auth = createWechatAuth({ http, ...OPTS });
+    await auth.code2session('code-abc');
+
+    expect(calls[0]?.maxAttempts).toBe(1);
+  });
+
+  /**
+   * 🔴 端到端（适配器 + 真实 fetch-client）：网络层断开后**不再发第二次**。
+   *
+   * @why 只断言"请求里带了 maxAttempts"是不够的：它验的是我们**写了**这个字段，
+   *      而真正的风险是"写了但实现不认"（端口与实现各说一份口径）。
+   *      所以这条用真实 `createFetchClient` 驱动：第一次抛 `TypeError('fetch failed')`
+   *      （undici 对 ECONNRESET 的抛法），第二次喂 40163——
+   *      修复前会走到第二次、把一次网络抖动变成 40101（用户侧登录失败）。
+   */
+  it('🔴 网络错误后不重试：只打一次上游，且失败是网络错误而不是 40101（PAY3-07）', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      calls.push(url);
+      if (calls.length === 1) throw new TypeError('fetch failed'); // 响应在路上断了
+      return {
+        status: 200,
+        body: '{"errcode":40163,"errmsg":"code been used"}',
+        headers: new Map(),
+      };
+    });
+    const http = createFetchClient({ breaker: null, sleep: () => Promise.resolve() });
+    const auth = createWechatAuth({ http, ...OPTS });
+
+    await expect(auth.code2session('code-abc')).rejects.toThrow(/fetch failed/);
+    expect(calls).toHaveLength(1); // 第二次拿回的会是 40163 → 被当成用户侧失败
   });
 });
 

@@ -305,6 +305,58 @@ describe('createFetchClient：重试（受幂等键与预算两道闸）', () =>
     // ⚠️ 关键：不是"发一次但立刻超时"——那会白跑一趟网络，还把超时噪声混进日志
     expect(h.calls).toHaveLength(0);
   });
+
+  /**
+   * 🔴 PAY3-07：微信 code2session 是 GET，但**不幂等**（每次调用消耗 code）。
+   * @why 端口默认把 GET 当"重试天生安全"，这条钉住"调用方可以逐个请求关掉它"。
+   */
+  it('🔴 请求声明 maxAttempts: 1 → 网络错误也只发一次（一次性动作，如微信 code2session）', async () => {
+    const h = harness({
+      fetch: async () => {
+        throw new TypeError('fetch failed'); // undici 对连接被重置的抛法
+      },
+    });
+    const req: HttpRequest = {
+      method: 'GET',
+      url: 'https://api.weixin.test/sns/jscode2session?js_code=c1',
+      maxAttempts: 1,
+    };
+    await expect(h.client.send(req)).rejects.toThrow(/fetch failed/);
+    expect(h.calls).toHaveLength(1);
+    expect(h.sleeps).toHaveLength(0);
+  });
+
+  it('🔴 请求级 maxAttempts 只能往下调：想调大时以客户端策略为准（单个请求不能越过全局预算）', async () => {
+    const h = harness({
+      policy: { ...P, maxAttempts: 2 },
+      fetch: async () => {
+        throw new TypeError('fetch failed');
+      },
+    });
+    await expect(
+      h.client.send({ method: 'GET', url: 'https://api.weixin.test/x', maxAttempts: 5 }),
+    ).rejects.toThrow(/fetch failed/);
+    expect(h.calls).toHaveLength(2); // 不是 5，也不是默认策略的 3
+  });
+
+  /**
+   * @why `maxAttempts: 0` 是最容易写错的一种（"0 次"看起来像"不重试"，而写的人多半
+   *      想要的是"别改我的策略"）。若把它按 1 处理，某个适配器里的一处笔误会让整条
+   *      链路静默失去重试——日志上只看到"第一次就失败了"，看不出策略被改过。
+   */
+  it('🔴 请求级 maxAttempts 写成 0 / 负数 / NaN → 按客户端策略重试（不是"永不重试"）', async () => {
+    for (const bad of [0, -1, Number.NaN]) {
+      const h = harness({
+        fetch: async () => {
+          throw new TypeError('fetch failed');
+        },
+      });
+      await expect(
+        h.client.send({ method: 'GET', url: 'https://api.weixin.test/x', maxAttempts: bad }),
+      ).rejects.toThrow(/fetch failed/);
+      expect(h.calls, `maxAttempts=${bad} 不该改变客户端策略`).toHaveLength(P.maxAttempts);
+    }
+  });
 });
 
 describe('createFetchClient：计时日志（脱敏）', () => {

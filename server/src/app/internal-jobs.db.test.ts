@@ -21,6 +21,7 @@ import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { registerBusinessEventLog } from './business-events.js';
+import { createInflightJobs, type InflightJobs } from './inflight-jobs.js';
 import { seedCreatedOrder } from '../../../test/helpers/seed-order.js';
 import {
   RESULT_LATE_PAYMENT,
@@ -40,7 +41,11 @@ afterAll(async () => {
   await closeDb(db);
 });
 
-async function buildServer(opts: { withSecret: boolean }): Promise<{
+async function buildServer(opts: {
+  withSecret: boolean;
+  /** OPS3-05：停在途作业的表（生产由 main.ts 装配并交给停机流）。 */
+  inflightJobs?: InflightJobs | undefined;
+}): Promise<{
   url: string;
   sink: MemorySink;
   close: () => Promise<void>;
@@ -62,7 +67,14 @@ async function buildServer(opts: { withSecret: boolean }): Promise<{
     mount: (a) => {
       const events = createEventBus(logger);
       registerBusinessEventLog(events, logger);
-      mountAllRoutes(a, { config, logger, db, events, storage: createMemoryStorage() });
+      mountAllRoutes(a, {
+        config,
+        logger,
+        db,
+        events,
+        storage: createMemoryStorage(),
+        ...(opts.inflightJobs !== undefined ? { inflightJobs: opts.inflightJobs } : {}),
+      });
     },
   });
   const server = await listen(app);
@@ -179,6 +191,30 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       expect(summary).toHaveLength(1);
       expect(summary[0]?.['result']).toBe('ok');
       expect(srv.sink.find('reconciliation_anomaly')).toHaveLength(0);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  /**
+   * 🔴 OPS3-05：daily 作业 202 之后在进程里跑——它**不是** HTTP 请求（排空等不到），
+   * 也不是已 publish 的事件（事件 drain 等不到）。句柄必须交到登记表里，
+   * 否则部署窗口内触发的那一轮会被 `closeDb` 拦腰截断：整轮回滚、当天不再跑，
+   * 要等 26 小时后的看门狗才报得出来。
+   */
+  it('🔴 202 之后作业登记进停机等待表，跑完即摘（OPS3-05）', async () => {
+    const jobs = createInflightJobs();
+    const srv = await buildServer({ withSecret: true, inflightJobs: jobs });
+    try {
+      expect(jobs.pending).toBe(0);
+      const res = await trigger(srv.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      // ⚠️ 关键：响应已经回来了，但作业还在跑——此时登记表里必须有它
+      expect(jobs.pending).toBe(1);
+
+      await expect(jobs.wait(10_000)).resolves.toEqual({ settled: true, pending: 0 });
+      expect(jobs.pending).toBe(0);
+      await waitForDailyHeartbeat();
     } finally {
       await srv.close();
     }

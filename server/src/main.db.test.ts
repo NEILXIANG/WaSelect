@@ -28,6 +28,8 @@ import { emitRealSignal } from '../../test/signal-harness.js';
 
 /** 组装根测试专用端口（与 e2e 的 0 端口不冲突；db project 串行，彼此也不撞）。 */
 const PORT_DEV = 4611;
+/** OPS3-05：触发每日作业的共享密钥（≥32 字符，N11）。 */
+const INTERNAL_JOB_SECRET = 'main-test-internal-job-secret'.padEnd(40, 'x');
 const PORT_PROD = 4612;
 
 function baseEnv(port: number): Record<string, string> {
@@ -74,6 +76,41 @@ describe('组装根 bootstrap（A1）', () => {
       expect(configLine).toContain('"JWT_SECRET":"***"');
       expect(configLine).not.toContain('main-test-jwt-secret');
       expect(lines.some((l) => l.includes('server_started'))).toBe(true);
+    } finally {
+      rt?.uninstallSignals();
+      rt?.uninstallProcessErrors();
+      await rt?.server.close().catch(() => undefined);
+      await rt?.db.end().catch(() => undefined);
+    }
+  });
+
+  /**
+   * 🔴 OPS3-05：生产装配（main.ts）交给路由的**就是**停机流会等的那一份登记表。
+   *
+   * @why 只测"端点会登记"是不够的：mount.ts 在上下文没给时会**自建**一份，
+   *      于是"端点登记了"与"停机等到了"可以是两份不同的表——停机等的是一个永远为空的表，
+   *      看起来在等，实际什么也没等。这条从 `bootstrap()` 的返回值取表，
+   *      再用真实 HTTP 触发 daily，证明生产那一条装配链是通的。
+   */
+  it('🔴 daily 作业登记进 bootstrap 暴露的登记表（生产接线，OPS3-05）', async () => {
+    const { write } = sink();
+    let rt: Runtime | undefined;
+    try {
+      rt = await bootstrap({
+        env: { ...baseEnv(PORT_DEV), INTERNAL_JOB_SECRET: INTERNAL_JOB_SECRET },
+        logDestination: { write },
+        exit: () => undefined,
+      });
+      expect(rt.inflightJobs.pending).toBe(0);
+
+      const res = await fetch(`http://127.0.0.1:${PORT_DEV}/api/v1/internal/jobs/daily`, {
+        method: 'POST',
+        headers: { 'x-internal-job-secret': INTERNAL_JOB_SECRET },
+      });
+      expect(res.status).toBe(202);
+      expect(rt.inflightJobs.pending).toBe(1); // ← 修复前是 0：句柄没交出来
+
+      await expect(rt.inflightJobs.wait(10_000)).resolves.toEqual({ settled: true, pending: 0 });
     } finally {
       rt?.uninstallSignals();
       rt?.uninstallProcessErrors();

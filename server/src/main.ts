@@ -48,6 +48,7 @@ import {
 } from './app/scheduler-start.js';
 import { installProcessErrorHandlers } from './process-errors.js';
 import { mountAllRoutes } from './app/mount.js';
+import { createInflightJobs, type InflightJobs } from './app/inflight-jobs.js';
 import { ensureInitialAdmin } from './adapters/admin-auth.js';
 import { hashPassword } from './app/auth.js';
 
@@ -71,6 +72,14 @@ export interface Runtime {
    *      `stop()` 让测试能收掉定时器（它 `unref()` 了，但显式停更清楚）。
    */
   scheduler: SchedulerHandle;
+  /**
+   * 在途后台作业的登记表（OPS3-05）。
+   * @why 必须暴露：测试要能证明"生产交给路由的就是停机流会等的那一"。
+   *      mount.ts 在上下文没给时会自建一份，于是"端点登记了"与"停机等到了"
+   *      可以是两份不同的表——那种失效形态是**静默**的（门绿、日志正常，
+   *      只有隔天才显现的"已过期的单还能被付款"能暴露它），只能靠这条装配链上的断言抓。
+   */
+  inflightJobs: InflightJobs;
   /** 卸载信号处理器（生产不调用）。 */
   uninstallSignals: () => void;
   /** 卸载进程级错误处理器（uncaughtException/unhandledRejection；测试必须调，防监听器叠加）。 */
@@ -166,6 +175,15 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
     //    而订阅者只在其中一个世界里——那正是"能力存在 ≠ 能力被用上"的形态（决策记录 §2 第 35 条）。
     const events = createEventBus(logger);
     const storage = resolveStorage(config);
+    /**
+     * OPS3-05：在途后台作业的登记表——停机会等它（见下面 `afterDrain`）。
+     * @why 在**装配期**造好并交给 `mountAllRoutes`：daily 作业（202 之后在进程里跑）
+     *      的句柄要登记到这份实例上，而"谁来等"是这里的停机流。两边必须是同一个实例，
+     *      否则停机等的是一个永远为空的表（看起来在等，实际什么也没等）。
+     * @why 建在 `createHttpApp` **之前**：`mount` 回调在它内部同步执行（http.ts），
+     *      放在 `listen` 之后会撞 TDZ（"Cannot access before initialization"）。
+     */
+    const inflightJobs = createInflightJobs();
     registerBusinessEventLog(events, logger);
 
     const app = createHttpApp({
@@ -194,7 +212,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       readiness: async () => acceptingTraffic && (await ping(db)),
       // ⚠️ 路由挂载清单只有一份（app/mount.ts，I1-U1）：路由快照测试也走它，
       //    新增路由只改那一处——绝不要在这里再内联挂路由
-      mount: (a) => mountAllRoutes(a, { config, logger, db, events, storage }),
+      mount: (a) => mountAllRoutes(a, { config, logger, db, events, storage, inflightJobs }),
     });
 
     const server = await listen(app, { port: config.PORT, host: config.HOST });
@@ -234,7 +252,17 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       beforeDrain: async () => {
         // ⚠️ 先停定时器再摘流量：否则排空的那几秒里可能又开一轮，
         //    而那一轮拿到的锁会一直挂到停机之后（advisory lock 虽随连接释放，但顺序不该靠运气）
-        scheduler.stop();
+        // ⚠️ `stopAndWait` 而不是 `stop`（OPS3-05）：tick **不是** HTTP 请求，
+        //    排空等不到它，事件 drain 也只等已 publish 的事件。在途那一轮若在 drain
+        //    返回 0 之后才提交，`order.expired` 撞上已关闭的连接池 ⇒ 机构会话没作废
+        //    ⇒ 已过期的单在会话自然过期前仍可付款（`late_payment` ⇒ 人工退款）。
+        const settled = await scheduler.stopAndWait(config.SHUTDOWN_JOB_WAIT_MS);
+        if (!settled) {
+          logger.error('shutdown_tick_wait_timeout', {
+            result: 'timeout',
+            ctx: { budget_ms: config.SHUTDOWN_JOB_WAIT_MS },
+          });
+        }
         acceptingTraffic = false;
         logger.warn('traffic_draining', { result: 'ok', ctx: { port: config.PORT } });
       },
@@ -242,7 +270,17 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       readyDelayMs: config.SHUTDOWN_READY_DELAY_MS,
       // 关资源必须在排空之后（D1）：放在前面会让存量请求拿到"连接池已关闭"
       afterDrain: async () => {
-        // B13 / AJ-202：ⓐ **先**等异步领域事件订阅者跑完，ⓑ 再关连接池。
+        // OPS3-05：ⓐ **先**等在途后台作业（daily 作业 202 之后在进程里跑，
+        //    请求早就结束了——排空与事件 drain 都等不到它）。它跑完才会 emit 事件，
+        //    所以必须排在 ⓑ 之前，否则等的是一个"还没有事件"的空总线。
+        const jobs = await inflightJobs.wait(config.SHUTDOWN_JOB_WAIT_MS);
+        if (!jobs.settled) {
+          logger.error('shutdown_job_wait_timeout', {
+            result: 'timeout',
+            ctx: { budget_ms: config.SHUTDOWN_JOB_WAIT_MS, pending: jobs.pending },
+          });
+        }
+        // B13 / AJ-202：ⓑ **再**等异步领域事件订阅者跑完，ⓒ 最后关连接池。
         //    直接关库的话，`order.cancelled` 之后作废机构会话的那个订阅者会拿到
         //    "连接池已关闭" ⇒ 已取消/已过期的单在会话自然过期前（最长约 30 分钟）
         //    还能被付款。等的时间由 SHUTDOWN_EVENT_DRAIN_MS 封顶，到点照常关库并记 error。
@@ -286,6 +324,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       server,
       // 暴露调度器把手：测试要能"立刻跑一轮"而不等 60 秒，也要能显式停掉定时器（否则进程不退出）
       scheduler,
+      // OPS3-05：暴露在途作业表——**停机等的就是这一份**。测试据此证明"生产装配的
+      // 是停机流会等的那个实例"，而不是 mount 里自建的一份（那样等于没等）。
+      inflightJobs,
       uninstallSignals: shutdown.uninstall,
       uninstallProcessErrors,
     };

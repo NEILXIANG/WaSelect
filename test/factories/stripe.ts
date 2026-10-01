@@ -13,11 +13,18 @@
  *  - 容差：官方库默认 300 秒；验过签名但时间戳过旧仍应拒（防重放）。
  *
  * @limitation 一：这里的 `verifyStripeSignature` 是**测试用的交叉验证实现**，
- *              不是生产实现。F11 会用官方 SDK 的 `stripe.webhooks.constructEvent`；
- *              保留一份独立实现是为了能用"另一套算法"验我造的样本，避免自证。
+ *              不是生产实现——但生产实现**也不是官方 SDK**：`stripe-checkout.ts` 刻意自己
+ *              用 `createHmac` 按官方公开算法写（MVP 只需建会话 / 验签 / 退款三件事，
+ *              引 SDK 会带进整套对象模型与版本耦合）。
+ *              ⚠️ PAY3-06 订正：本注释曾写"生产侧会用官方 SDK 的
+ *              `stripe.webhooks.constructEvent`"——与实现正相反，照它读会以为换 SDK 只是时间问题。
+ *              两份实现各自独立，就是为了用"另一套代码"互相验，避免自证。
  * @limitation 二：造 `checkout.session.*` / `payment_intent.*` / `charge.refunded` /
- *              `charge.dispute.created` 四类。其余（refund.updated、dispute.closed 等售后后续事件）
- *              在用到时按同一方式补，不预先编（豁免名单见 STRIPE_EVENTS_NOT_SAMPLED）。
+ *              `charge.dispute.created` / `charge.dispute.closed` 五类。其余售后后续事件
+ *              （refund.updated 等）在用到时按同一方式补，不预先编。
+ *              ⚠️ 本注释曾把 `charge.dispute.closed` 算进"尚未造样本"——它早在
+ *              `STRIPE_EVENT_TYPES` 里、也不在豁免名单中（PAY3-06 订正）。
+ *              豁免名单 `STRIPE_EVENTS_NOT_SAMPLED` 是唯一真源，本句不重复列举。
  * @limitation 三：金额一律用**最小货币单位整数**（JPY 是零小数币种，1 円 = 1）。
  *              Stripe 对 JPY 不做 /100 处理，写成 amount=100 就是 100 円——
  *              与 USD（分）混用是跨境支付最常见的金额事故，这里刻意只造 JPY。
@@ -256,9 +263,11 @@ export function verifyStripeSignature(
  * @why **逐条抄自 `contracts/api-contract.yaml` 的 `/pay/callback/stripe`**，
  *      那里标注了 `（D-49/D-50）`。判定口径不必查外部资料——本仓库的契约自己写着，
  *      而且 `stripe.contract.test.ts` 会反过来要求：契约里列出的事件，样本工厂必须都造得出来。
- * @limitation `charge.refund.updated` / `refund.failed` 与 `charge.dispute.closed` 等
- *      在契约里列了但尚未造样本（当前业务用不到）；契约测试里走豁免名单并写明原因，
- *      用到时必须补，不能永久豁免。
+ * @limitation 契约里列了但**尚未造样本**的事件，只认 `STRIPE_EVENTS_NOT_SAMPLED`
+ *      （当前业务用不到；用到时必须补，不能永久豁免）。
+ *      ⚠️ 本注释曾写"与 `charge.dispute.closed` 等尚未造样本"——`charge.dispute.closed`
+ *      就在这个表里（`disputeClosed`），且不在豁免名单内（PAY3-06 订正）：注释与
+ *      名单互相矛盾时，有人会照注释去"补一个已有样本"，也会有人照名单把它永久豁免。
  */
 export const STRIPE_EVENT_TYPES = {
   // ── 主路径：Checkout 托管页（D-49）──

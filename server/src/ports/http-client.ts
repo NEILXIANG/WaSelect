@@ -48,6 +48,22 @@ export interface HttpRequest {
    *      也不要在一个按键缓存失败的机构上白等两轮。
    */
   retryAdviceHeader?: string | undefined;
+  /**
+   * 本次请求的**尝试次数上限**（缺省用客户端的策略）。给 `1` = **这个请求只发一次**。
+   *
+   * @why GET 被默认当作"天生幂等、随便重试"，但**幂等不等于无副作用**：
+   *      微信 `jscode2session` 就是 GET，而它每次调用都会**消耗掉**那个 code
+   *      （PAY3-07）。第一次请求其实已送达并被处理、只是响应在路上断了
+   *      （`ECONNRESET` / socket hang up，undici 抛 `TypeError: fetch failed`），
+   *      重试拿回的是 `errcode 40163`（code 已被使用），而我们把它映射成 40101
+   *      ——**一次网络抖动被说成"用户侧的登录失败"**，排障方向整个反掉。
+   *      "重试是否安全"只能由调用方回答：只有它知道这个动作是不是一次性的。
+   * @why 做成"次数上限"而不是 `retry: false` 布尔：上限能与客户端策略组合
+   *      （见实现的钳制规则），布尔则是一刀切，将来想"这个动作最多试 2 次"又要改形状。
+   * @limitation 只能把上限**往下调**，不能往上调（实现会钳到客户端策略之内）：
+   *      否则任何一个适配器都能悄悄越过全局策略，而全局策略是**产品级**的预算决定。
+   */
+  maxAttempts?: number | undefined;
 }
 
 export interface HttpResponse {
@@ -216,6 +232,13 @@ export function shouldRetry(
   const stop = (reason: string): RetryDecision => ({ retry: false, delayMs: 0, reason });
   if (failure === 'none') return stop('未失败');
   if (failure === 'client_error') return stop('4xx：请求本身有问题，重试不会变');
+  /**
+   * 声明只发一次的请求（PAY3-07）：**在任何失败分类上都停下来**，包括 429。
+   * @why 单独给一条 reason：走下面"尝试次数用尽（1/1）"也能停，但日志里看不出
+   *      这是"调用方声明的一次性动作"还是"真的试满了"。排障时这两种的含义相反——
+   *      前者是**设计如此**，后者是"上游一直坏"。
+   */
+  if (policy.maxAttempts <= 1) return stop('本请求声明只发一次（一次性动作，重试不安全）');
   if (attempt >= policy.maxAttempts)
     return stop(`尝试次数用尽（${attempt}/${policy.maxAttempts}）`);
 

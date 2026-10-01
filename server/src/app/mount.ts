@@ -67,6 +67,7 @@ import { mountPayLinkRoutes } from './pay-link-routes.js';
 import { registerSessionExpiryOnClose } from './close-session-events.js';
 import { mountWechatAuthRoutes } from './wechat-auth-routes.js';
 import { mountInternalJobsRoutes } from './internal-jobs-routes.js';
+import { createInflightJobs, type InflightJobs } from './inflight-jobs.js';
 import { createWechatAuth } from '../adapters/wechat/code2session.js';
 import { createDevWechatAuth } from '../adapters/wechat/dev-auth.js';
 
@@ -78,6 +79,19 @@ export interface MountContext {
   events: EventBus;
   /** 对象存储驱动（构造归 `adapters/storage.ts` 的 resolveStorage）；null = 生产未配置，上传路由 50000 响亮拒绝。 */
   storage: ObjectStorage | null;
+  /**
+   * 在途后台作业的登记表（OPS3-05）：`POST /internal/jobs/daily` 的作业句柄登记在这里，
+   * **停机流要等它**（main.ts `afterDrain`）。
+   *
+   * @why 放在上下文里由调用方传入，而不是本函数自建：
+   *      "谁在等这些作业"必须是**看得见的装配关系**——自建的话，main.ts 拿不到同一个实例，
+   *      停机流等的是一个永远为空的表（看起来在等，实际什么也没等）。
+   * @limitation 不传时本函数会自建一个（**只适用于测试**）：那时没有停机流，
+   *      等不等都无所谓；但生产（main.ts）必须传——由 `main.db.test.ts`
+   *      「daily 作业登记进 bootstrap 暴露的登记表」盯住这条接线（它从 `bootstrap()`
+   *      的返回值取表，再用真 HTTP 触发 daily，证明两边是同一个实例）。
+   */
+  inflightJobs?: InflightJobs | undefined;
 }
 
 /**
@@ -85,6 +99,8 @@ export interface MountContext {
  */
 export function mountAllRoutes(app: Express, ctx: MountContext): void {
   const { config, logger, db, events, storage } = ctx;
+  // ⚠️ 生产必须传（见 MountContext.inflightJobs 的 @limitation）；不传时自建仅供测试
+  const inflightJobs = ctx.inflightJobs ?? createInflightJobs();
   // ── 身份状态回源（D25）：**全站共用一份缓存实例**（KD-6，2026-09-28 测试审查读码确认；AJ-175）。
   //    曾经每组路由各自 `withIdentityCache(createIdentityCheck(db))`，共 11 份独立缓存——
   //    同一个人被封禁/撤权后，各组路由在不同时刻（最长各 60 秒）才生效：买家在订单页已被拒、
@@ -229,7 +245,12 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
 
   // ── 管理端操作审计（流 B / ADR-29；F-02 / AJ-183）：**先于**所有管理端路由挂在 /api/v1/admin 前缀上——
   //    新增的管理端写路由自动被审计（admin-audit.ts @why）；挂在后面的话，前面那些路由就漏了 ──
-  app.use('/api/v1/admin', adminAuditMiddleware({ store: createAdminAuditStore(db), logger }));
+  // ── ⚠️ `jobs` 必须是本函数顶部那一份（不是新建的）：审计写在响应之后，
+  //    停机排空等的是 `ctx.inflightJobs` 这张表（admin-audit.ts 文件头 @why）──
+  app.use(
+    '/api/v1/admin',
+    adminAuditMiddleware({ store: createAdminAuditStore(db), logger, jobs: inflightJobs }),
+  );
 
   // ── 管理端商品（I2-U-A3）：守卫在路由文件内共用一个实例（admin-product-routes @why）；
   //    identity 与其它路由共用同一份缓存实例——管理员也要能被即时撤权 ──
@@ -389,7 +410,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   });
 
   // ── 每日作业触发（I1-U7b / D-43）：Render Cron 的 HTTP 入口；异步执行走同一套调度器框架 ──
-  mountInternalJobsRoutes(app, { config, logger, db, events });
+  mountInternalJobsRoutes(app, { config, logger, db, events, jobs: inflightJobs });
 
   // ── D-50 关单连带（I1-U6a-2）：order.expired/cancelled → 作废在途支付行 +
   //    best-effort 作废机构会话。注册在这里（不在 main.ts）：registry 是本函数

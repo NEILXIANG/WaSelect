@@ -392,6 +392,20 @@ const schema = z.object({
    */
   SHUTDOWN_EVENT_DRAIN_MS: int(8_000, 0),
   /**
+   * OPS3-05：停机时"等**后台作业**跑完"的上限毫秒数（0 = 不等）。
+   *
+   * @why 在途 tick 与"202 之后还在跑"的 daily 作业都不是 HTTP 请求：排空等不到它们，
+   *      事件 drain 也只等**已 publish** 的事件。一轮在途 tick 若在 drain 返回 0 之后
+   *      才提交，它的 `order.expired` 会在 `closeDb` 之后才分发 ⇒ 机构会话没被作废
+   *      ⇒ 已过期的单在会话自然过期前仍可付款（`late_payment` ⇒ 人工退款）。
+   * @why 5s 而不是照抄 8s：这一步在 `beforeDrain`（还没开始等事件），
+   *      两步**串行相加**计入停机总时长；tick 一轮的正常耗时是百毫秒量级，
+   *      5s 足够一轮慢的 tick 善终，又不至于把 27s 总预算吃掉太多。
+   * @limitation 它是**上限**：没有在途 tick / daily 时立即返回，不消耗停机时间；
+   *             到点仍在途只记 error，不打断（打断的后果由作业自己的心跳与幂等承担）。
+   */
+  SHUTDOWN_JOB_WAIT_MS: int(5_000, 0),
+  /**
    * INF3-01：从**收到 SIGTERM 那一刻**起算的停机总预算（毫秒）。到点直接 `exit(1)`，不再等任何一步。
    *
    * @why AJ-237 把"排空失败"这条分支接进了 `afterDrain`（正确——清理必须做），

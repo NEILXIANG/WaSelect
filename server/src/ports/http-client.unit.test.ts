@@ -212,6 +212,27 @@ describe('shouldRetry：其余停止条件', () => {
     expect(shouldRetry(GET, 'timeout', 1, P).retry).toBe(true);
   });
 
+  /**
+   * 🔴 PAY3-07：一次性动作（微信 code2session）声明"只发一次"。
+   * @why 429 是唯一一个"连 POST 无幂等键都能重试"的例外——它靠"上游明确没处理"成立。
+   *      但"只发一次"是更强的声明：**无论上游有没有处理，第二次都不该发出去**
+   *      （这个 GET 会消耗 code，第二次拿回的就是"code 已使用"）。
+   *      所以这条把 429 一起钉住，防止有人把它理解成"只拦可重试的那几类"。
+   */
+  it('🔴 声明只发一次（maxAttempts=1）→ 连 429 也不重试，且 reason 说明是声明而非试满', () => {
+    const once: RetryPolicy = { ...P, maxAttempts: 1 };
+    for (const kind of [
+      'network',
+      'timeout',
+      'server_error',
+      'rate_limited',
+    ] as HttpFailureKind[]) {
+      const d = shouldRetry(GET, kind, 1, once);
+      expect(d.retry).toBe(false);
+      expect(d.reason).toContain('只发一次'); // 不是"尝试次数用尽"——那句会误导排障
+    }
+  });
+
   it('默认策略就是「最多 3 次尝试」且带 20% 抖动', () => {
     expect(DEFAULT_RETRY_POLICY.maxAttempts).toBe(3);
     expect(DEFAULT_RETRY_POLICY.jitterRatio).toBeGreaterThan(0);

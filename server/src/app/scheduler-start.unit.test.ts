@@ -15,13 +15,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Clock } from '../ports/clock.js';
-import type { DomainEvent } from '../ports/events.js';
+import type { Db } from '../adapters/db.js';
+import type { DomainEvent, EventBus } from '../ports/events.js';
 import { TICK_JOB_NAME, type SchedulerJob, type SchedulerTickResult } from '../ports/scheduler.js';
 import { createLogger } from '../logger.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import type { Emit } from './unit-of-work.js';
 import { runSchedulerOnce, type SchedulerDeps } from './scheduler.js';
-import { startScheduler, type SchedulerHandle } from './scheduler-start.js';
+import { createSchedulerDeps, startScheduler, type SchedulerHandle } from './scheduler-start.js';
 
 const BASE = Date.parse('2026-09-24T00:00:00.000Z');
 const INTERVAL = 60_000;
@@ -136,6 +137,112 @@ describe('定时器', () => {
     handle.stop();
     await vi.advanceTimersByTimeAsync(INTERVAL * 5);
     expect(h.runs).toHaveLength(1); // ← 没有再涨
+  });
+});
+
+/**
+ * OPS3-05：停机时 tick **不是** HTTP 请求——排空等不到它，事件 drain 也只等
+ * 已 publish 的事件。在途那一轮必须有人等，否则它 emit 的 `order.expired`
+ * 会在 `closeDb` 之后才分发（机构会话没作废 ⇒ 已过期的单还能被付款）。
+ */
+describe('停机：等在途的那一轮（OPS3-05）', () => {
+  it('🔴 `stopAndWait()` 等在途 tick 跑完才 resolve（`stop()` 只清定时器，不等）', async () => {
+    const h = harness();
+    const gate = deferred();
+    handle = startScheduler({
+      deps: h.deps,
+      jobs: [h.gateJob('slow', gate.promise)],
+      intervalMs: INTERVAL,
+    });
+
+    const first = handle.tickNow();
+    await vi.advanceTimersByTimeAsync(0); // 让 tick 进入 job（卡在 gate 上）
+
+    let settled: boolean | undefined = undefined;
+    const waiting = handle.stopAndWait(5_000).then((v) => {
+      settled = v;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // ⚠️ 关键断言：此刻那一轮还没跑完 ⇒ 必须还等着（等不到的实现会在这里就 true）
+    expect(settled).toBeUndefined();
+
+    gate.resolve();
+    await waiting;
+    expect(settled).toBe(true);
+    await first;
+    expect(h.runs).toHaveLength(1); // 心跳确实写了：这一轮是**跑完**的，不是被打断的
+  });
+
+  it('🔴 预算到点仍在途 → 返回 false（不无限等，剩下的交给停机总预算）', async () => {
+    const h = harness();
+    const gate = deferred();
+    handle = startScheduler({
+      deps: h.deps,
+      jobs: [h.gateJob('slow', gate.promise)],
+      intervalMs: INTERVAL,
+    });
+
+    void handle.tickNow();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // ⚠️ 不能 `await` 之后再推进假定时器——那样永远等不到超时（假时钟不会自己走）
+    const waiting = handle.stopAndWait(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(waiting).resolves.toBe(false);
+    // 超时后定时器已停：不会又开新一轮
+    await vi.advanceTimersByTimeAsync(INTERVAL * 3);
+    gate.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it('没有在途轮次时立即返回 true（"没得等"也是等到，不该白耗停机时间）', async () => {
+    const h = harness();
+    handle = startScheduler({ deps: h.deps, jobs: [], intervalMs: INTERVAL });
+    await expect(handle.stopAndWait(1_000)).resolves.toBe(true);
+  });
+
+  /**
+   * @why `budgetMs <= 0` 是"调用方明确不想等"（测试、以及停机总预算已经算过之后
+   *      的收尾），它与"超时尚未跑完"是**两个不同的返回值来源**：前者一进来就 false，
+   *      后者要等满预算才 false。混成一条会让"到底等没等"在日志里说不清。
+   */
+  it('`stopAndWait(0)` = 明确不等：有在途轮次也立刻 false（不是"等满预算才 false"）', async () => {
+    const h = harness();
+    const gate = deferred();
+    handle = startScheduler({
+      deps: h.deps,
+      jobs: [h.gateJob('slow', gate.promise)],
+      intervalMs: INTERVAL,
+    });
+    void handle.tickNow();
+    await vi.advanceTimersByTimeAsync(0); // 进入 job，卡在 gate 上（此刻真的有在途）
+    await expect(handle.stopAndWait(0)).resolves.toBe(false);
+    gate.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+});
+
+/**
+ * @why 工厂那 5 个参数里的 `opts` 是**可选**的，而"可选"必须有断言：
+ *      它承载的是"这一行心跳叫什么 / 抢哪把锁"（文件头 @why：tick 与 daily 复用
+ *      同一段编排，靠它区分）。写成必填会把这个区分能力丢掉，写成不传却没测试，
+ *      就会在某个 job 忘了传名字时静默变成"无名心跳"。
+ */
+describe('createSchedulerDeps（真实接线）', () => {
+  it('不传 opts 时 name / lockKey 都是 undefined（不是写死一个名字）', () => {
+    const deps = createSchedulerDeps(
+      {} as unknown as Db,
+      {} as unknown as EventBus,
+      { now: () => new Date(BASE) },
+      createLogger({ env: 'test', destination: new MemorySink() }),
+    );
+    expect(deps.name).toBeUndefined();
+    expect(deps.lockKey).toBeUndefined();
+    // 接线本身指向真实实现（不是被替身换掉）
+    expect(typeof deps.unitOfWork).toBe('function');
+    expect(typeof deps.savepoint).toBe('function');
+    expect(typeof deps.lock.tryAcquire).toBe('function');
+    expect(typeof deps.runs.record).toBe('function');
   });
 });
 

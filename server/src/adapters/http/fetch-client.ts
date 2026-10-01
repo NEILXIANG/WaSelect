@@ -107,9 +107,26 @@ function safeUrl(url: string): string {
   return at < 0 ? url : url.slice(0, at);
 }
 
+/**
+ * 本次请求生效的重试策略：`req.maxAttempts` 存在时**只往下调**（PAY3-07）。
+ *
+ * @why 往下钳而不是直接采用：客户端策略是装配处定的**产品级预算**（总共能让用户等多久、
+ *      最多打几次上游），单个请求不该有资格把它放大——那等于让任何一个适配器
+ *      悄悄越过全局决定，而"谁把它调大了"在排障时看不出来。
+ * @why 非法值（0 / 负数 / 非整数 / NaN）一律按"客户端策略"处理，而不是按 1 处理：
+ *      写错成 `maxAttempts: 0` 时静默变成"永不重试"也是一种越权，且与"没写"无法区分。
+ */
+function effectivePolicy(req: HttpRequest, base: RetryPolicy): RetryPolicy {
+  const n = req.maxAttempts;
+  if (n === undefined || !Number.isFinite(n)) return base;
+  const wanted = Math.floor(n);
+  if (wanted < 1) return base;
+  return { ...base, maxAttempts: Math.min(wanted, base.maxAttempts) };
+}
+
 export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
   const fallbackTimeout = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const policy = opts.retry ?? DEFAULT_RETRY_POLICY;
+  const basePolicy = opts.retry ?? DEFAULT_RETRY_POLICY;
   const totalBudgetMs = opts.totalBudgetMs ?? DEFAULT_TOTAL_BUDGET_MS;
   const logger = opts.logger;
   const rand = opts.rand ?? Math.random;
@@ -152,6 +169,8 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
     async send(req: HttpRequest): Promise<HttpResponse> {
       const startedAt = now();
       const key = breakerKey(req.url);
+      // ⚠️ 按请求覆盖（PAY3-07）：一次性动作（如微信 code2session）声明 `maxAttempts: 1`。
+      const policy = effectivePolicy(req, basePolicy);
 
       let attempt = 0;
       /**

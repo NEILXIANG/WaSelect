@@ -16,6 +16,7 @@ import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { createLogger } from '../logger.js';
 import type { AdminAuditEntry, AdminAuditStore } from '../ports/admin-audit.js';
 import { adminAuditMiddleware, auditPayload } from './admin-audit.js';
+import { createInflightJobs } from './inflight-jobs.js';
 
 describe('auditPayload（审计 after 脱敏）', () => {
   /**
@@ -156,7 +157,7 @@ describe('审计生命周期（B15 / AJ-206）', () => {
       },
     };
     const app = express();
-    app.use(adminAuditMiddleware({ store, logger }));
+    app.use(adminAuditMiddleware({ store, logger, jobs: createInflightJobs() }));
     // 模拟 requireRole('admin')：审计只认 2xx + 管理员
     app.use((req, _res, next) => {
       req.auth = { sub: 'u-1', role: 'admin' };
@@ -252,6 +253,7 @@ describe('审计生命周期（B15 / AJ-206）', () => {
         },
       },
       logger,
+      jobs: createInflightJobs(),
     });
     const makeRes = (status: number): Response & EventEmitter => {
       const res = new EventEmitter() as unknown as Response & EventEmitter;
@@ -274,5 +276,51 @@ describe('审计生命周期（B15 / AJ-206）', () => {
     fire(200, undefined);
     expect(entries).toHaveLength(0);
     expect(sink.find('admin_audit_skipped_aborted')).toHaveLength(0);
+  });
+
+  /**
+   * @why 审计写在响应**之后**，而停机排空只认"响应已 end"（AJ-274）：不登记的话，
+   *      进程在这段窗口里关掉连接池，这一行就永久丢失（`admin_audit` append-only，补不回来）。
+   *      所以钉的不是"它最终会成功"，而是**停机等待的那张表看得到它**。
+   * @limitation 这里只验登记与等待，不验"排空真的会调 wait"——那是 main.ts 的用例
+   *      （`main.db.test.ts`）与 `inflight-jobs.unit.test.ts` 各自的职责。
+   */
+  it('审计写入登记为在途作业：停机的排空等得到它（AJ-274）', async () => {
+    const jobs = createInflightJobs();
+    let release = (): void => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const entries: AdminAuditEntry[] = [];
+    const mw = adminAuditMiddleware({
+      store: {
+        append: async (e) => {
+          await gate;
+          entries.push(e);
+        },
+      },
+      logger: createLogger({ env: 'test', destination: new MemorySink() }),
+      jobs,
+    });
+
+    const res = new EventEmitter() as unknown as Response & EventEmitter;
+    Object.assign(res, { statusCode: 200, locals: {} });
+    const req = {
+      method: 'POST',
+      route: { path: '/api/v1/admin/x' },
+      params: { id: 'o-1' },
+      auth: { role: 'admin', sub: 'u-1' },
+      body: {},
+    } as unknown as Request;
+    mw(req, res, () => undefined);
+    res.emit('prefinish');
+
+    // 写入还没落地 ⇒ 登记表里必须看得见它（`wait()` 才等得到）
+    expect(jobs.pending, '审计写入没登记进在途表').toBe(1);
+    const waiting = jobs.wait(2_000);
+    release();
+    await expect(waiting).resolves.toMatchObject({ settled: true, pending: 0 });
+    expect(entries).toHaveLength(1);
+    expect(jobs.pending).toBe(0);
   });
 });

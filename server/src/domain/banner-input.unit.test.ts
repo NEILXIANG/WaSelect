@@ -88,6 +88,22 @@ describe('parseBannerInput', () => {
     expect(parseBannerInput(OK).startsAtMs).toBeNull();
   });
 
+  /**
+   * 🔴 DOM3-03：与 fx 同一条口径——`starts_at` / `ends_at` 在契约里是
+   * `format: date-time`（偏移必填）。不带偏移的串会被 `Date.parse` 按进程时区解释，
+   * "零点上线"在生产上变成早上 8 点（本机 JST vs Render UTC）。
+   */
+  it('🔴 起止时间不带偏移 → 40001（DOM3-03）', () => {
+    for (const raw of ['2026-10-01T00:00', '2026-10-01 00:00:00', '1']) {
+      expect(codeOf(() => parseBannerInput({ ...OK, starts_at: raw }))).toBe(40001);
+      expect(codeOf(() => parseBannerInput({ ...OK, ends_at: raw }))).toBe(40001);
+    }
+    // 带偏移的同样时刻仍收
+    expect(parseBannerInput({ ...OK, starts_at: '2026-10-01T00:00:00+09:00' }).startsAtMs).toBe(
+      Date.parse('2026-09-30T15:00:00Z'),
+    );
+  });
+
   it('🔴 结束早于（等于）开始 → 40001（填反了 banner 永远不展示，且没人报错）', () => {
     const bad = { ...OK, starts_at: '2026-10-02T00:00:00Z', ends_at: '2026-10-01T00:00:00Z' };
     expect(codeOf(() => parseBannerInput(bad))).toBe(40001);

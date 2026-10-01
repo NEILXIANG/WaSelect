@@ -77,6 +77,26 @@ describe('parseFxInput', () => {
     expect(parseFxInput({ quote: 'USD', raw_rate: 0.0065 }).effectiveFromMs).toBeNull();
   });
 
+  /**
+   * 🔴 DOM3-03：不带偏移的串"看起来合法"，而 `Date.parse` 会按**进程时区**解释它——
+   * 本机（JST）与生产（UTC）差 8 小时，同一个请求落库两个时刻。
+   */
+  it('🔴 effective_from 不带偏移 → 40001（时区歧义不得由服务端猜，DOM3-03）', () => {
+    for (const raw of ['2026-10-01T00:00', '2026-10-01T00:00:00', '2026/10/01', '1']) {
+      expect(
+        codeOf(() => parseFxInput({ quote: 'USD', raw_rate: 0.0065, effective_from: raw })),
+      ).toBe(40001);
+    }
+    // 带偏移的同样时刻仍然收（前端自己发的就是 +09:00）
+    expect(
+      parseFxInput({
+        quote: 'USD',
+        raw_rate: 0.0065,
+        effective_from: '2026-10-01T00:00:00+09:00',
+      }).effectiveFromMs,
+    ).toBe(Date.parse('2026-09-30T15:00:00Z'));
+  });
+
   it('合法输入：两币都收，effective_from 解析成 UTC 毫秒（带偏移也归一）', () => {
     const expectMs = Date.parse('2026-09-28T00:00:00Z');
     for (const q of FX_QUOTES) {

@@ -94,6 +94,20 @@ describe('toRateInt（汇率 ×1e8 整数化）', () => {
     expect(() => toRateInt('0')).toThrow(RangeError);
     expect(() => toRateInt(-0.00676)).toThrow(RangeError);
   });
+
+  /**
+   * 🔴 DOM3-04：`n <= 0` 那条守的是**小数域**，而下游用的是**整数化之后**的值。
+   * `0 < rate < 5e-9` 在小数域里是正数，×1e8 取整后却是 0——正是这条防线声称要消灭的
+   * "全站按 0 元收款"。所以判定必须发生在取整之后。
+   */
+  it('🔴 正但整数化后为 0 的汇率同样拒绝（判定在取整之后，DOM3-04）', () => {
+    expect(() => toRateInt(4e-9)).toThrow(RangeError);
+    expect(() => toRateInt('0.000000004')).toThrow(RangeError);
+    expect(() => toRateInt(4.99e-9)).toThrow(RangeError);
+    // 边界：5e-9 取整得 1（half-up），仍然通过——下界是"整数化后 > 0"，不是拍一个小数下界
+    expect(toRateInt(5e-9)).toBe(1);
+    expect(toRateInt(1e-8)).toBe(1); // NUMERIC(18,8) 的最小正值
+  });
 });
 
 describe('toMinor（唯一换算入口，整数运算）', () => {
@@ -200,6 +214,21 @@ describe('allocate（最大余额法拆分）', () => {
   it('含零权重的合法拆分：零权重项分到 0，其余照比例', () => {
     expect(allocate(17, [0, 1])).toEqual([0, 17]);
     expect(allocate(10, [1, 0, 1])).toEqual([5, 0, 5]);
+  });
+
+  /**
+   * 🔴 DOM3-06③：`Math.floor(-0) = -0`，负总额 + 零权重项会产出 `-0`。
+   * @why -0 与 0 在 `===` 下相等、`Object.is` 下不等：进 JSON 是 0、进日志是 0，
+   *      但任何"按符号分支"的消费者会分叉。本文件 `applyRate` / `toMinor` 都已归一，
+   *      只有 `allocate` 漏了——同文件两种口径是最容易复发的一种不一致。
+   */
+  it('🔴 负总额不产出 -0（与 applyRate / toMinor 同一口径，DOM3-06③）', () => {
+    const parts = allocate(-5, [0, 1]);
+    // ⚠️ 只能用 `Object.is` 判：`===` 与 `toEqual` 都把 -0 当 0，断言会假绿
+    expect(Object.is(parts[0], -0)).toBe(false);
+    expect(parts.every((v) => !Object.is(v, -0))).toBe(true);
+    // 和仍等于总额（归一不能改变分摊结果）
+    expect(parts.reduce((a, b) => a + b, 0)).toBe(-5);
   });
 });
 

@@ -72,7 +72,17 @@ export const RATE_SCALE = 100_000_000;
 /** `toMinor` 的除数：`jpy × rateInt / 1e6` = `jpy × rate × 100`（主单位 → 最小单位）。 */
 const MINOR_DIVISOR = 1_000_000;
 
-/** 汇率上限：超过它 `rate × 1e8` 会逼近 2^53 而失去整数精确性。JPY→USD/CNY 的汇率永远远小于此。 */
+/**
+ * 汇率上限（**量纲护栏**，不是精度边界）。
+ *
+ * @why 上界取 1e6 是"JPY→外币的汇率不可能到这个量级"（JPY→USD/CNY 约 0.0067 / 0.049），
+ *      用来挡"把汇率录成 600 或 100 万"这类**录入事故**——
+ *      它们会让 `toMinor` 的乘积冲出安全整数域，表现是报价 / 建单 50000（DOM3-05）。
+ * ⚠️ 这里**曾经**写"超过它 `rate × 1e8` 会逼近 2^53"——那是错的（DOM3-06②）：
+ *      `1e6 × 1e8 = 1e14`，距 2^53（≈9.007e15）还差近两个数量级，
+ *      真正的精度边界约在 rate ≈ 9e7。照旧注释读会以为 1e6 是一条**硬**精度边界，
+ *      于是"把上界放宽到 1e7"看起来是越界的改动，而它其实仍然安全。
+ */
 const MAX_RATE = 1_000_000;
 
 /**
@@ -95,13 +105,30 @@ export function toRateInt(rate: number | string): number {
     throw new RangeError(`汇率必须为正数，收到 ${n}`);
   }
   // 浮点乘法后取整：double 相对误差约 1e-16，乘 1e8 后绝对误差约 1e-8，远小于 0.5，故取整安全
-  return Math.round(n * RATE_SCALE);
+  const out = Math.round(n * RATE_SCALE);
+  /**
+   * ⚠️ **取整之后**再判一次（DOM3-04）：上面那条 `n <= 0` 挡不住 `0 < n < 5e-9`
+   * ——它们取整后同样是 0，于是"全站按 0 元收款"这个本条防线声称要消灭的事故照样发生。
+   * @why 判定必须发生在**取整之后**，因为整数化才是真正的精度闸门：
+   *      小数域里"正数"与"整数化后为 0"是两件事，而下游（`toMinor`）用的是后者。
+   * @why 当前生产路径不可达（库列 NUMERIC(18,8) 的最小正值是 1e-8，`fx-input` 也拒 < 5e-9），
+   *      但这条保证不该依赖"上游恰好是 NUMERIC(18,8)"——换数据源 / 放宽精度即失效。
+   */
+  if (out <= 0) {
+    throw new RangeError(`汇率过小，×1e8 整数化后为 0（最小可用值 ${1 / RATE_SCALE}）：${n}`);
+  }
+  return out;
 }
 
 /**
  * **唯一的**换算 + 取整入口：日元金额 → 目标币种的**最小单位**（USD/CNY 为「分」）。
  *
- * 公式（技术文档 §0）：`toMinor(jpy, rateInt) = Math.round(jpy × rateInt / 1e6)`
+ * 公式：`toMinor(jpy, rateInt) = round_half_away_from_zero(jpy × rateInt / 1e6)`
+ *
+ * ⚠️ 这里曾经照抄技术文档 §0 的 `Math.round(…)`（DOM3-06①）——**与实现相反**：
+ *    `Math.round` 是 half-up（向 +∞），`Math.round(-0.5) = -0`；本实现是
+ *    "远离零"的 half-up，`toMinor(-1, 500000) = -1`。两者只在**负数**上不同，
+ *    而负数金额出现在退款拆分里。文档库 §0 应同步为"远离零"（请一并改，否则两处继续互相矛盾）。
  *
  * @param jpy 日元金额（整数円）
  * @param rateInt `toRateInt()` 的结果（rate × 1e8 的整数），**不是裸小数汇率**
@@ -114,8 +141,12 @@ export function toRateInt(rate: number | string): number {
  *      **真正的修复在 `toRateInt`**：把小数汇率转成 ×1e8 整数，才消灭了
  *      `1250 × 0.0676 = 84.4999…` 那一类误差。保留整数实现只为将来放开单笔上限 / 汇率范围时不静默退化。
  *      实现：把除法拆成整数商 q 与余数 r，用 `2r >= 1e6` 判定进位，全程无浮点除法。
- * @limitation 乘积 `jpy × rateInt` 必须落在 2^53 内（约 9e15）。按 MAX_ORDER_JPY=180,000 与
- *             rateInt ≤ 1e8 计算，乘积上限 1.8e13，安全；若将来放开单笔上限，需先改走 BigInt。
+ * @limitation 乘积 `jpy × rateInt` 必须落在 2^53 内（约 9e15），超出抛 `RangeError`。
+ *             ⚠️ 这里曾经写"按 MAX_ORDER_JPY=180,000 与 rateInt ≤ 1e8 计算，乘积上限 1.8e13，安全"
+ *             ——那句**只在"汇率 ≤ 1"时成立**，而 `fx-input` 的放行上界是 `MAX_RAW_RATE = 1000`
+ *             （含缓冲可达 1500 ⇒ rateInt 1.5e11）：raw_rate ≳ 500 时，18 万円以内的金额就能
+ *             把它顶穿（DOM3-05）。安全域是**两个模块的乘积约束**，不是 money.ts 自己能承诺的，
+ *             所以本函数保持抛 RangeError（响亮），由 `domain/quote.ts` 折成 50003「汇率不可用」。
  */
 export function toMinor(jpy: number, rateInt: number): number {
   if (!Number.isInteger(jpy)) throw new RangeError(`日元金额必须是整数，收到 ${jpy}`);
@@ -220,5 +251,11 @@ export function allocate(total: number, weights: readonly number[]): number[] {
   // 后者在 `noUncheckedIndexedAccess` 下必须写 `out[i] ?? 0`，而那是一条**不可达分支**——
   // 既骗不过覆盖率门禁（实测卡住 money.ts 分支 96.66%），又暗示了不存在的风险。
   const bumped = new Set(order.slice(0, remainder).map((o) => o.i));
-  return floors.map((v, i) => (bumped.has(i) ? v + 1 : v));
+  // ⚠️ 末尾把 `-0` 归一成 `0`（DOM3-06③）：负总额 + 零权重项会走出 `Math.floor(-0) = -0`,
+  //    而本文件 `applyRate` / `toMinor` 都专门归一过它——-0 进 JSON / 日志后与 0 无法区分地漂移。
+  //    同文件两种口径是最容易复发的一种不一致（下一次改这里的人不会记得去看 toMinor）。
+  return floors.map((v, i) => {
+    const out = bumped.has(i) ? v + 1 : v;
+    return out === 0 ? 0 : out;
+  });
 }

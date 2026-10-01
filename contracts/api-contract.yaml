@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.19
+  version: 0.6.20
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -153,8 +153,10 @@ info:
       且响应返回时订单已被确认为 paid（经与真实回调同一条管线）；非审核模式为 false。
       `POST /admin/orders/{id}/ship` 对 `is_test` 订单 **409 / 40902**（测试单永不发货）。
       ③ `Product` 增 `ship_within_business_days`（发货时限承诺，工作日；配置 SHIP_WITHIN_BUSINESS_DAYS，D-39⑦ FTC）。
-      ④ `POST /auth/admin/login` **已实现**（移出 NOT_IMPLEMENTED）：补 400；同一账号连续失败 5 次锁 15 分钟，
+      ④ `POST /auth/admin/login` **已实现**（移出 NOT_IMPLEMENTED）：补 400；失败计数超限后锁 15 分钟，
       锁定期间一律 **429 / 42901**（带 Retry-After，与 IP 限流同码）；不存在的邮箱与口令错同为 40101；非管理员 / 已封禁 40301。
+      ⚠️ **0.6.20 订正**：此处原写"同一账号连续失败 5 次锁 15 分钟"——那是 AJ-243 **之前**的口径（单桶、按邮箱）。
+      现在是**两层桶**：同邮箱 × 同来源 5 次，或同邮箱不分来源合计 30 次（窗口都是 15 分钟，OPS3-04）。
       ⑤ 管理端写接口（/admin 前缀下 POST/PUT/PATCH/DELETE 成功时）写 `admin_audit`（流 B）；对外形状不变。
     0.6.12（B7 / AJ-191）：`POST /admin/orders/{id}/refund` 的请求体 `reason` 补 **maxLength: 500**——
       理由会原样写进机构的 metadata，超长时机构拒掉这一整笔退款；而重试必须沿用首次理由（KD-4 / AJ-175，同键同参）、
@@ -229,6 +231,14 @@ info:
       ⚠️ 该字段**缺省不算 true**：前端遇到缺失必须按"没有基准"处理（要求人工勾选确认），
       🈲 不得退回用本机时钟猜——猜出来的"不可疑"会一键写库。
       同币种**至多一行**为 true；判定与 `findLatestFxRate`（POST 侧算"上一条"）同源。
+    0.6.20（工程库第三轮审查 PAY3-06）：`POST /auth/admin/login` 的**锁定口径订正为两层桶**。
+      @why 契约自 0.6.11④ 起一直写着"同一账号连续失败 5 次锁 15 分钟"这句已被订正的说法，
+      而 AJ-243 早已把它拆成两层：
+      来源桶（同邮箱 × 同来源，5 次）挡"一个来源反复试"，邮箱桶（同邮箱不分来源，合计 30 次）挡
+      "换 IP 慢慢试同一个账号"。照旧文案实现的前/后端会把邮箱桶那一层整个漏掉。
+      两层的**窗口都是 15 分钟**（OPS3-04）：`failed_count` 曾是不带窗口的累计值，
+      "30 次 / 15 分钟"其实是"累计 30 次不分多久"，慢速攻击（每 15 分钟 5 次）约 90 分钟攒满。
+      对外形状不变（仍是一个 42901 + Retry-After），消费方只需知道"被锁"这件事。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -290,7 +300,7 @@ paths:
   /auth/admin/login:
     post:
       security: []
-      summary: 管理端（admin-web）邮箱密码登录；仅 is_admin 且未封禁的账号，JWT 12 小时（aud=admin，ver=users.token_ver）；同一账号连续失败 5 次锁 15 分钟（锁定期 429 / 42901 + Retry-After）；初始管理员由启动时 seed（ADMIN_EMAIL + ADMIN_INITIAL_PASSWORD，只建不改）
+      summary: 管理端（admin-web）邮箱密码登录；仅 is_admin 且未封禁的账号，JWT 12 小时（aud=admin，ver=users.token_ver）；防爆破三层——IP 限流（5 次 / 15 分钟）、来源桶（同邮箱 × 同来源失败 5 次 / 15 分钟窗口）、邮箱桶（同邮箱不分来源合计 30 次 / 15 分钟窗口），任一层超限即锁 15 分钟（锁定期 429 / 42901 + Retry-After，0.6.20 订正，AJ-243）；初始管理员由启动时 seed（ADMIN_EMAIL + ADMIN_INITIAL_PASSWORD，只建不改）
       description: 0.6.11（AJ-181）实现落地。不存在的邮箱与口令错同为 40101（不作邮箱探测器）；口令对了才判是否管理员 / 是否封禁（40301）；IP 维度另有 RATE_LIMIT_LOGIN_PER_15MIN 限流（D-52）
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 12}}}}}}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {token: {type: string}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}

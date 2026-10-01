@@ -2,9 +2,12 @@
  * 职责：`POST /api/v1/auth/admin/login`——管理端邮箱密码登录（D-38 ⑤；O-11 / AJ-181 / AJ-187）。
  *       签 aud=admin、12 小时的 JWT（auth.ts DEFAULT_TTL_SEC），ver = users.token_ver（改密/封禁即时失效，D25）。
  *
- * @why 两层防爆破，各管一类：① **IP 限流**（RATE_LIMIT_LOGIN_PER_15MIN，挂在路由前，D-52）挡同一出口的连发；
- *      ② **账号锁定**（连续失败 ADMIN_LOGIN_MAX_FAILURES 次锁 ADMIN_LOGIN_LOCK_MINUTES 分钟）
- *      挡"换 IP 慢慢试同一个账号"。只有①时住宅代理池能无限试；只有②时单 IP 能把所有管理员挨个锁死。
+ * @why 三层防爆破，各管一类：① **IP 限流**（RATE_LIMIT_LOGIN_PER_15MIN，挂在路由前，D-52）挡同一出口的连发；
+ *      ② **来源桶**（同邮箱 × 同来源，连续失败 ADMIN_LOGIN_MAX_FAILURES 次锁 ADMIN_LOGIN_LOCK_MINUTES 分钟）
+ *      让"一个 IP 只能锁住它自己"；③ **邮箱桶**（同邮箱不分来源，合计 ADMIN_LOGIN_GLOBAL_MAX_FAILURES 次）
+ *      挡"换 IP 慢慢试同一个账号"（AJ-243）。
+ *      ⚠️ 这里曾写"② 账号锁定（连续失败 5 次）挡换 IP 慢慢试"——那是 AJ-243 **之前**的口径；
+ *      5 次现在是**每来源**的额度，挡"换 IP"的是邮箱桶的 30 次（PAY3-06）。
  * @why 锁定的键是 **`sha256(lower(email))` 而不是账号 id**（AJ-187）：用 id 时"这个邮箱不存在"
  *      就无处计数、也永不锁定，于是"第 6 次是 429 还是 401"能问出这个邮箱有没有注册过——
  *      登录口就成了管理员邮箱探测器。按邮箱哈希计数后，**有没有这个人都是同一把锁**。

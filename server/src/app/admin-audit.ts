@@ -25,6 +25,14 @@
  * @tradeoff 审计写入**不与业务同事务**：极少数情况下（库在两次写之间断开）会出现"改了但没审计"，
  *      这时打 error 级 `admin_audit_write_failed`（带 action / target）让它可见。换来的是零侵入：
  *      不需要改任何一条路由的事务边界。反过来的错误（审计了但没改）不会发生（只写 2xx）。
+ * @why 写入虽然是"发出去不管"，但要**登记为在途作业**（OPS3-05 / AJ-274）。
+ *      @why 它落在响应之后，而 `server.close()` 的排空只认"响应已 end"——请求算结束了，
+ *      审计的 insert 可能还在路上。这一段窗口里进程一旦往下走（关连接池），这一行就永久丢失；
+ *      而 `admin_audit` 是 append-only，事后补不回来。文件头 @why 担心的是
+ *      "客户端断开 ⇒ 钱退了却没审计"，**服务端这一侧同样成立**，只是概率低到平时看不见。
+ *      @limitation 登记**不改变**"审计可能晚于响应"这件事：客户端拿到 200 时不保证审计已落库
+ *      （要那个保证就得让每个写接口多等一次库往返，代价与"审计失败该不该让请求失败"的
+ *      两难一起进来）。这里补的是"进程别在这段窗口里退出"，不是"响应前必须落库"。
  * @limitation 一：登录（/auth/admin/login）不在 /admin 前缀下，不进本表——登录成败在运行日志（admin_login_*）。
  * @limitation 二：multipart 上传的请求体不是 JSON，after 记为 null（上传结果的 key 在运行日志里）。
  * @limitation 三：脱敏**直接复用 `redact.ts`**（全库唯一实现），本模块**没有**自己的键名清单。
@@ -37,11 +45,13 @@
  *              openid / 凭证形状 / 卡号），按键名脱敏管不到字符串内部；长文本里的地址行仍会原样落库。
  *              这是"审计要留痕"与"审计不可删"之间的已知缺口：**理由与备注不写 PII** 是操作规范层面的要求。
  *
- * @see ports/admin-audit.ts；adapters/admin-audit.ts；migrations/002_hardening.sql（表 + append-only 触发器）
+ * @see ports/admin-audit.ts；adapters/admin-audit.ts；migrations/002_hardening.sql（表 + append-only 触发器）；
+ *      app/inflight-jobs.ts（OPS3-05：审计写入的等待方）；docs/自主决策记录.md AJ-274
  */
 import type { RequestHandler, Response } from 'express';
 import type { Logger } from '../logger.js';
 import type { AdminAuditStore } from '../ports/admin-audit.js';
+import type { InflightJobs } from './inflight-jobs.js';
 import { currentContext } from '../context.js';
 import { redact } from '../redact.js';
 
@@ -86,6 +96,8 @@ export function auditPayload(body: unknown): unknown {
 export function adminAuditMiddleware(deps: {
   store: AdminAuditStore;
   logger: Logger;
+  /** 在途作业登记表（OPS3-05）：审计写在响应之后，必须让停机排空等得到它（文件头 @why）。 */
+  jobs: InflightJobs;
 }): RequestHandler {
   return (req, res, next) => {
     if (!WRITE_METHODS.has(req.method)) {
@@ -112,7 +124,8 @@ export function adminAuditMiddleware(deps: {
         traceId: traceId ?? null,
         reqId: reqId ?? null,
       };
-      deps.store.append(entry).catch((e: unknown) => {
+      // ⚠️ 不是"发出去不管"：`run()` 把这条 insert 登记进在途表，停机的排空会等它（AJ-274）。
+      void deps.jobs.run('admin_audit', deps.store.append(entry)).catch((e: unknown) => {
         deps.logger.error('admin_audit_write_failed', {
           result: 'failed',
           err: e,

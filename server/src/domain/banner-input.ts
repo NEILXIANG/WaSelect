@@ -24,6 +24,7 @@
  *      admin-web/src/banners/view.ts（前端同一套规则）
  */
 import { AppError } from '../errors.js';
+import { tryParseRfc3339Ms } from './time-input.js';
 
 /** 契约 `BannerInput.link_type` 枚举（单测与契约双向比对）。 */
 export const BANNER_LINK_TYPES = ['none', 'product', 'category'] as const;
@@ -41,12 +42,19 @@ export interface BannerInputValue {
   endsAtMs: number | null;
 }
 
-/** 解析一个可空的 date-time 字符串（null / undefined → null；非法 → 抛）。 */
+/**
+ * 解析一个可空的 date-time 字符串（null / undefined → null；非法 → 抛）。
+ *
+ * @why 走 `parseRfc3339Ms` 而不是 `Date.parse`（DOM3-03）：后者会把不带偏移的
+ *      `"2026-10-01T00:00"` 按**本进程时区**解释（本机 JST / 生产 UTC 差 8 小时），
+ *      运营排的"零点上线"在生产上变成早上 8 点；`"1"` 还会被当成 2001 年。
+ *      契约两处写的是 `format: date-time`（偏移必填），入口就按它收。
+ */
 function parseAt(raw: unknown, field: string): number | null {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== 'string') throw new AppError(40001, { reason: `${field}_invalid` });
-  const ms = Date.parse(raw);
-  if (Number.isNaN(ms)) throw new AppError(40001, { reason: `${field}_invalid` });
+  const ms = tryParseRfc3339Ms(raw);
+  if (ms === null) throw new AppError(40001, { reason: `${field}_invalid` });
   return ms;
 }
 

@@ -64,27 +64,30 @@ export async function assembleQuote(
   const countryProfiles = createCountryProfileRepo(db);
 
   // 运费取档（D-46 唯一 SQL 在 catalog 仓储）
-  const carrier = await catalog.resolveSingleActiveCarrier();
-  if (carrier === null) throw new AppError(50004, { reason: 'carrier_not_unambiguous' });
   const weightG = summary.goodsWeightG + config.PACKAGING_WEIGHT_G;
-  const shippingJpy = await catalog.findShippingPriceJpy(carrier, weightG);
-  if (shippingJpy === null) {
-    /**
-     * 取不到档 = **包裹比最大一档还重**（AJ-239）→ 40912（409，拆单），不是 50004。
-     * @why 走到这里时"运费表没配"已经被排除：`resolveSingleActiveCarrier` 返回非 null
-     *      的前提就是这家承运商**至少有一档启用的运费**，所以剩下的唯一原因是超重。
-     *      此前两种情况共用 50004：买家看到"系统错误"没有拆单指引，
-     *      而且每改一次数量一条 5xx + error 日志，会把真正的配置事故淹掉。
-     * @limitation 管理员恰好在这两条查询之间整表替换运费（B22 的表锁只挡写-写）且新表更小时，
-     *              这里会把"档位刚被改掉"也说成超重。窗口是毫秒级、后果只是一次文案不准，未处理。
-     *              （曾多写一条"再查一次最大档、为 null 则回 50004"的分支——它在正常路径不可达，
-     *              注回后没有用例会红，按约束八删掉了。）
-     */
+  // ⚠️ 一条快照里做完"选承运商 + 取档"（DB3-04）：分开两条语句时，中间的整表替换
+  //    会让第二条查不到刚读到的承运商 ⇒ 把"配置切换"报成 40912「超重」。
+  const shipping = await catalog.findSoleCarrierShippingJpy(weightG);
+  if (shipping.kind === 'no_carrier') {
+    throw new AppError(50004, { reason: 'carrier_not_unambiguous' });
+  }
+  /**
+   * `overweight` = 承运商明确、但包裹比最大一档还重（AJ-239）→ 40912（409，拆单），不是 50004。
+   * @why 走到这里时"运费表没配"已被排除：`no_carrier` 已在上一条分流，而"承运商存在"
+   *      的前提是它**至少有一档启用的运费**，所以剩下的唯一原因是超重。
+   *      此前两种情况共用 50004：买家看到"系统错误"没有拆单指引，
+   *      而且每改一次数量一条 5xx + error 日志，会把真正的配置事故淹掉。
+   * @why 判别联合而不是"取不到档就再查一次"：再查一次就要拿第二个快照，
+   *      而第二个快照正是 DB3-04 那个竞态的入口（曾写过的那条"再查最大档"分支
+   *      在正常路径不可达，注回后没有用例会红，按约束八删掉了）。
+   */
+  if (shipping.kind === 'overweight') {
     throw new AppError(40912, {
       reason: 'over_max_shipping_weight',
-      ctx: { carrier, weight_g: weightG },
+      ctx: { carrier: shipping.carrier, weight_g: weightG },
     });
   }
+  const { carrier, priceJpy: shippingJpy } = shipping;
 
   // 目的国 + 展示币（表驱动，@limitation 二）
   const actives = await countryProfiles.listActive();
