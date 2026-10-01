@@ -81,6 +81,34 @@ export const STRIPE_SHOULD_RETRY_HEADER = 'stripe-should-retry';
  */
 export const STRIPE_SOURCE_TAG = 'waselect';
 
+/** 请求头名：出网请求用它**覆盖账户默认 API 版本**（官方口径 `Stripe-Version`）。 */
+export const STRIPE_VERSION_HEADER = 'stripe-version';
+
+/**
+ * 出网请求**固定**的 API 版本：`2025-03-31.basil`。
+ *
+ * @why 本适配器是裸 REST（不引官方 SDK），不带这个头时用的是**账户默认版本**——
+ *      于是"同一份代码的行为"取决于 Dashboard 里的一项配置，而这项配置不在我们的
+ *      版本控制里，也不在启动日志里。被它影响的是**落账的正确性**，不是显示：
+ *      - basil 起：Session/PaymentIntent 的 `currency` + `amount_total` **恒等于我们建的币种与金额**，
+ *        客户实际付的币种放进 `presentment_details.presentment_currency/amount`
+ *        （@measured docs.stripe.com/payments/currencies/localize-prices/adaptive-pricing, 2026-10-01）。
+ *      - basil 之前：`currency` 是**客户选的币种**，`currency_conversion.source_currency` 才是我们的币种；
+ *        官方已宣布 `currency_conversion` 将被移除。
+ *      而 `parseWebhook` 读的正是 `obj['currency']` / `obj['amount_total']`，
+ *      `mark-paid.ts` 又拿它与库里 `payments.charge_currency/charge_amount` **严格比对**——
+ *      旧版本 + Adaptive Pricing 生效时，加拿大客户用 CAD 付 → `currency=CAD` ≠ 库里 USD
+ *      → 订单卡在 pending_payment 直到过期，**钱已收、单未落** → 只能人工退款。
+ *      钉死版本 = 把这个"看账户配置脸色"的行为变成"看代码"的行为。
+ * @why 选 basil 而不是"更新到最新"：我们要的是**这一处语义的下界**（currency 语义在此版本定型），
+ *      追最新版本会在 Stripe 发版时把无关字段的变更一起带进来，而那些变更我们没测过。
+ * @tradeoff 固定版本意味着以后要**显式升级**才能拿到新字段/新行为（升级是一次有意为之的改动，
+ *           而不是某天 Stripe 替我们改的）——这正是本条要的：变更可见、可测、可回滚。
+ * @limitation 它只管**出网请求**。回调端点在 Dashboard 里另有独立的 API 版本设置，
+ *      那边同样应 ≥ basil（属部署清单，不是代码能钉住的；已在 OPS 部署文档标注）。
+ */
+export const STRIPE_API_VERSION = '2025-03-31.basil';
+
 /**
  * Stripe 会话寿命下限：会话创建后 **30 分钟**（三审 A3 / D-49）。
  *
@@ -240,6 +268,19 @@ export function createStripeCheckoutProvider(
   const apiBase = opts.apiBase ?? 'https://api.stripe.com';
 
   /**
+   * 出网请求头的基础部分：鉴权 + **固定 API 版本**（{@link STRIPE_API_VERSION} 的 @why）。
+   * @why 抽成函数而不是在 7 个调用点各写一遍：漏一个点就等于那个点的行为回到"账户默认版本"，
+   *      而**恰恰是最少被调用的那几个**（退款前反查 / 会话 expire）最容易漏——
+   *      漏了不会有测试红、不会有日志，只会在某天 Stripe 改默认版本时悄悄分叉。
+   */
+  function authHeaders(): Record<string, string> {
+    return {
+      authorization: `Bearer ${opts.secretKey}`,
+      [STRIPE_VERSION_HEADER]: STRIPE_API_VERSION,
+    };
+  }
+
+  /**
    * 验签（官方口径）：`HMAC-SHA256(secret, `${t}.${raw}`)` 与 `v1` 比较。
    *
    * @why 自己实现而不引官方 SDK：MVP 只需要"建会话 + 验签 + 退款"三件事，
@@ -331,7 +372,7 @@ export function createStripeCheckoutProvider(
     const res = await deps.http.send({
       method: 'GET',
       url: `${apiBase}/v1/payment_intents/${pi}`,
-      headers: { authorization: `Bearer ${opts.secretKey}` },
+      headers: authHeaders(),
     });
     if (res.status < 200 || res.status >= 300) {
       // @security 只带状态与前 200 字符：上游错误体可能含 PII，且只进日志
@@ -381,7 +422,7 @@ export function createStripeCheckoutProvider(
     const res = await deps.http.send({
       method: 'GET',
       url: `${apiBase}/v1/checkout/sessions/${encodeURIComponent(providerRef)}`,
-      headers: { authorization: `Bearer ${opts.secretKey}` },
+      headers: authHeaders(),
     });
     if (res.status < 200 || res.status >= 300) {
       throw new Error(
@@ -438,6 +479,21 @@ export function createStripeCheckoutProvider(
         //    `checkout.session.completed` 但 `payment_status='unpaid'` 的事件，
         //    没有下面的 payment_status 校验就会把"用户还没付钱"置成 paid（二次审查 P2-NEW-1）。
         'payment_method_types[0]': 'card',
+        // ⚠️ 显式关掉 Adaptive Pricing（PAY3-03）：它是 **Dashboard 的账户级开关**，
+        //    "今天关着"不构成"明天还关着"的保证，而它一旦生效就会把客户看到的币种
+        //    换成其所在地币种（客户付 CAD / EUR…）。本系统落账要的是**我们建的那一笔**
+        //    币种+金额（payments.charge_currency/charge_amount，mark-paid 严格比对），
+        //    客户换币 = 比对失败 = 订单卡在 pending_payment 直到过期、钱已收 → 人工退款。
+        // @measured(docs.stripe.com/payments/currencies/localize-prices/adaptive-pricing, 2026-10-01)：
+        //    官方口径 "Adaptive Pricing requires the currency for your prices to be one of your
+        //    settlement currencies"——日本主体结算 JPY、我们的 integration 币种是 USD，
+        //    按这条本就不该触发；但这条前提依赖"账户结算币配置"，同样不在版本控制里。
+        //    这里显式发 false，把这个判断从"依赖两处外部配置"降成"依赖本文件"。
+        // @tradeoff 多发一个常量字段：值恒为 'false'，所以不破坏 KD-9 的"同键同参"
+        //    （同一订单任何时刻重试，请求体仍逐字节相同）。
+        // @limitation 只在 basil 及以后被识别；更早的 API 版本会忽略未知参数——但出网请求
+        //    已由 STRIPE_API_VERSION 固定为 basil，所以不存在"发过去被忽略"的空档。
+        'adaptive_pricing[enabled]': 'false',
         success_url: opts.successUrl,
         cancel_url: opts.cancelUrl,
         client_reference_id: req.orderId,
@@ -484,7 +540,7 @@ export function createStripeCheckoutProvider(
         url: `${apiBase}/v1/checkout/sessions`,
         retryAdviceHeader: STRIPE_SHOULD_RETRY_HEADER,
         headers: {
-          authorization: `Bearer ${opts.secretKey}`,
+          ...authHeaders(),
           'content-type': 'application/x-www-form-urlencoded',
           // 机构侧幂等：同一键重试不会建第二个会话（我们自己的幂等表是另一层）
           'idempotency-key': req.idempotencyKey,
@@ -653,7 +709,7 @@ export function createStripeCheckoutProvider(
         url: `${apiBase}/v1/refunds`,
         retryAdviceHeader: STRIPE_SHOULD_RETRY_HEADER,
         headers: {
-          authorization: `Bearer ${opts.secretKey}`,
+          ...authHeaders(),
           'content-type': 'application/x-www-form-urlencoded',
           // ⚠️ 退款也必须带机构侧幂等键（与 create 同一层防线）：POST 超时后 Stripe 侧
           //    状态未知，而我们按红线**绝不重试无幂等键的 POST**——不带键时超时 = 只能靠
@@ -691,7 +747,7 @@ export function createStripeCheckoutProvider(
       const res = await deps.http.send({
         method: 'GET',
         url: `${apiBase}/v1/refunds/${encodeURIComponent(refundRef)}`,
-        headers: { authorization: `Bearer ${opts.secretKey}` },
+        headers: authHeaders(),
       });
       if (res.status < 200 || res.status >= 300) {
         throw new Error(
@@ -709,7 +765,7 @@ export function createStripeCheckoutProvider(
       const res = await deps.http.send({
         method: 'GET',
         url: `${apiBase}/v1/checkout/sessions/${encodeURIComponent(providerRef)}`,
-        headers: { authorization: `Bearer ${opts.secretKey}` },
+        headers: authHeaders(),
       });
       if (res.status < 200 || res.status >= 300) {
         throw new Error(
@@ -727,7 +783,7 @@ export function createStripeCheckoutProvider(
         url: `${apiBase}/v1/checkout/sessions/${encodeURIComponent(providerRef)}/expire`,
         retryAdviceHeader: STRIPE_SHOULD_RETRY_HEADER,
         headers: {
-          authorization: `Bearer ${opts.secretKey}`,
+          ...authHeaders(),
           'content-type': 'application/x-www-form-urlencoded',
           // ⚠️ 与 create/refund 同一层防线：POST 超时会话状态未知，我们按红线绝不自动
           //    重试无幂等键的 POST。键含 providerRef：对同一会话的人工/重试落到同一键，

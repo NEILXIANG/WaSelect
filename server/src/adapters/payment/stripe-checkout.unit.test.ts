@@ -34,9 +34,11 @@ import {
 import {
   createStripeCheckoutProvider,
   sessionOutcome,
+  STRIPE_API_VERSION,
   STRIPE_MIN_SESSION_TTL_SEC,
   STRIPE_SESSION_MARGIN_SEC,
   STRIPE_SOURCE_TAG,
+  STRIPE_VERSION_HEADER,
   STRIPE_SIGNATURE_HEADER as HEADER,
 } from './stripe-checkout.js';
 
@@ -133,6 +135,62 @@ describe('create（建 Checkout Session）', () => {
     const form = new URLSearchParams(http.calls[0]?.body ?? '');
     expect(form.get('payment_method_types[0]')).toBe('card');
     expect(form.get('payment_method_types[1]')).toBeNull();
+  });
+
+  /**
+   * PAY3-03：Adaptive Pricing 是 **Dashboard 的账户级开关**（"今天关着"不构成"明天还关着"）。
+   * @why 它一旦生效，客户在托管页看到的币种会被换成其所在地币种（加拿大客户看到 CAD 并付 CAD），
+   *      而本系统落账认的是**我们建的那一笔**币种+金额（payments.charge_currency/charge_amount，
+   *      mark-paid.ts 严格比对）→ 客户换币 = 比对失败 = 钱已收、订单卡在 pending_payment 直到过期
+   *      → 只能人工退款。显式发 false 就是把"依赖两处外部配置"降成"依赖本文件这一行"。
+   * @why 断言**报文里的实际值**而不是"配置里有这个字段"：后者会被"字段名拼错"骗过去，
+   *      而拼错的字段名在真实机构上就是被当未知参数忽略——等于什么都没关。
+   */
+  it('显式关掉 Adaptive Pricing（PAY3-03：不赌 Dashboard 的账户级开关）', async () => {
+    const { http, provider } = build();
+    await provider.create(REQ);
+    const form = new URLSearchParams(http.calls[0]?.body ?? '');
+    expect(form.get('adaptive_pricing[enabled]')).toBe('false');
+  });
+
+  /**
+   * @why 值是常量，所以不破坏 KD-9 的"同键同参"——这条用例把"关掉它不会让重试变成异参"
+   *      这件事钉住（否则将来有人改成按订单/时间算的值，幂等键会开始撞 400）。
+   */
+  it('Adaptive Pricing 字段是常量：同一张单不同时刻重试，请求体逐字节相同（KD-9）', async () => {
+    const withClock = (at: string) => {
+      const http = createFakeStripeHttp();
+      return {
+        http,
+        provider: createStripeCheckoutProvider(config(), {
+          http,
+          clock: fixedClock(at),
+          idGen: systemIdGen,
+        }),
+      };
+    };
+    const early = withClock('2026-01-02T15:21:00.000Z');
+    const late = withClock('2026-01-02T15:49:30.000Z');
+    const req = { ...REQ, expiresAt: '2026-01-02T15:50:00.000Z' };
+    await early.provider.create(req);
+    await late.provider.create(req);
+    expect(late.http.calls[0]?.body).toBe(early.http.calls[0]?.body);
+    // 编码后的字段名（URLSearchParams 用 %5B/%5D）：拼错或被省略都会让这条红
+    expect(late.http.calls[0]?.body).toContain('adaptive_pricing%5Benabled%5D=false');
+  });
+
+  it('出网固定 Stripe-Version（不固定则落账语义随 Dashboard 默认版本漂移）', async () => {
+    /**
+     * @why `parseWebhook` 读的是 Session 的 `currency` / `amount_total`。
+     *      basil（2025-03-31）之前，Adaptive Pricing 生效时 `currency` 是**客户选的币种**，
+     *      之后才是我们的 integration 币种（客户币种挪到 presentment_details）。
+     *      不带这个头 = 用账户默认版本 = 这段语义由控制台的一项配置决定，而它不在版本控制里。
+     */
+    const { http, provider } = build();
+    await provider.create(REQ);
+    expect(http.calls[0]?.headers?.[STRIPE_VERSION_HEADER]).toBe(STRIPE_API_VERSION);
+    // 钉住**字面值**：升级版本是一次有意为之的改动，必须让这条用例先红一次
+    expect(STRIPE_API_VERSION).toBe('2025-03-31.basil');
   });
 
   /**
@@ -1180,5 +1238,58 @@ describe('sessionStatus（取消前问机构，MP3-04）', () => {
     const s = await provider.create(REQ);
     http.failNext(502);
     await expect(provider.sessionStatus?.(s.providerRef)).rejects.toThrow(/502/);
+  });
+});
+
+describe('出网 API 版本覆盖全部调用点（PAY3-03 的下半：漏一个点就等于没钉）', () => {
+  /**
+   * @why 单独一组而不是只在 create 上断言一次：本适配器是裸 REST，7 个出网调用点
+   *      **各自**都要带 `Stripe-Version`，而最容易漏的恰恰是最少被调用的那几个
+   *      （退款前反查会话 / 作废会话 / 拒付反查 PaymentIntent）——漏了不会红、不会报警，
+   *      只会在某天 Stripe 改账户默认版本时，让"建会话"和"读会话"看到两套不同的语义。
+   * @why 用**遍历所有调用**而不是逐条 `expect(calls[i])`：
+   *      逐条断言在新增第 8 个调用点时不会红（新点漏了头照样全绿），
+   *      遍历则会——这正是"防复发"（约束九）要的形状。
+   */
+  it('create / sessionStatus / expireSession / refund(含反查) 的每一次出网都带同一版本', async () => {
+    const { http, provider } = build();
+    const s = await provider.create(REQ);
+    await provider.sessionStatus?.(s.providerRef);
+    await provider.expireSession?.(s.providerRef);
+    await provider.refund?.({
+      orderId: REQ.orderId,
+      providerRef: s.providerRef, // cs_…：走"先 GET 会话取 PI，再 POST 退款"两条请求
+      amountJpy: 12_000,
+      currency: 'JPY',
+      amountMinor: 12_000,
+      reason: '缺货',
+    });
+
+    expect(http.calls.length).toBeGreaterThanOrEqual(5);
+    for (const c of http.calls) {
+      // 消息里带 url：将来真漏了能一眼看出是哪个调用点，不用去数下标
+      expect(c.headers?.[STRIPE_VERSION_HEADER], `url=${c.url}`).toBe(STRIPE_API_VERSION);
+    }
+  });
+
+  it('拒付反查 PaymentIntent 那条 GET 也带版本（它只在拒付当天才跑）', async () => {
+    /**
+     * @why 这条路径**只有真实拒付才会走**（dispute 对象上没有 metadata → 反查 PI 取 order_id）。
+     *      它一辈子跑不了几次，因此不会有任何"跑得多所以暴露得早"的机会——
+     *      能守住它的只有一条明确写下的用例。
+     */
+    const { http, provider } = build();
+    // B5 / AJ-198：替身里的 PI 必须带本系统标记，否则会被当成"账户里非本系统的付款"
+    http.givenPaymentIntent('pi_dp_1', { order_id: REQ.orderId, source: STRIPE_SOURCE_TAG });
+    const body = JSON.stringify(
+      stripeEvent('charge.dispute.created', { ...dispute({ paymentIntent: 'pi_dp_1' }) }),
+    );
+    const ev = await provider.parseWebhook(Buffer.from(body, 'utf8'), {
+      [HEADER]: signStripePayload(body, SECRET, NOW_SEC),
+    } as HeaderBag);
+    expect(ev.orderId).toBe(REQ.orderId); // 前提：确实走了反查通道（否则下面断言的是空集）
+    const calls = http.calls.filter((c) => c.url.includes('/v1/payment_intents/'));
+    expect(calls.length).toBe(1);
+    for (const c of calls) expect(c.headers?.[STRIPE_VERSION_HEADER]).toBe(STRIPE_API_VERSION);
   });
 });
