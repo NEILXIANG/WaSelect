@@ -26,7 +26,7 @@ import { createWxApi } from './utils/wx-api.js';
 import { createStorage } from './utils/storage.js';
 import { loginWithWechat } from './utils/auth-session.js';
 import { createCartStore } from './utils/cart-store.js';
-import { API_BASE } from './config.js';
+import { resolveApiBase } from './config.js';
 
 /**
  * token 在本地存储里的键。
@@ -38,7 +38,12 @@ const TOKEN_KEY = 'token';
 App({
   globalData: {
     token: '',
-    apiBase: API_BASE,
+    /**
+     * 当前环境的 API 根地址——**在 onLaunch 里按宿主的 envVersion 解析后写入**。
+     * @why 不在模块顶层算：顶层求值时宿主还没准备好（且在 Node 单测里会直接崩）。
+     *      空串在这里只是"尚未解析"的初始值，真正的"没配"由 resolveApiBase 抛出来。
+     */
+    apiBase: '',
     /** 唯一的请求实例；页面通过 `getApp().globalData.api` 使用。 */
     api: null,
     /** 唯一的本地存储实例（带 `ws:` 前缀）；页面不要用宿主的 `getStorageSync`。 */
@@ -61,6 +66,13 @@ App({
     // ⚠️ 宿主能力**只在这里取一次**，然后往下传：app 是装配层，
     //    它知道"跑在小程序里"这件事，下面的 request / 页面不该再关心。
     const wxApi = createWxApi();
+    // 环境切换（B4）：小程序没有构建期环境注入，唯一可靠的判据是宿主的 envVersion。
+    // ⚠️ 解析失败会**抛**（域名没配）——刻意不吞：空着地址上线的表现是"全站请求失败且查不出原因"，
+    //    而白屏 + 一条明确的日志至少指到了 config.js 的 API_BASES。
+    const envVersion = wxApi.getAccountInfoSync()?.miniProgram?.envVersion;
+    const apiBase = resolveApiBase(envVersion);
+    this.globalData.apiBase = apiBase;
+
     // ⚠️ 本地存储一律走 `storage` 封装，**不要用 wxApi.getStorageSync**：
     //    那条路没有 `ws:` 前缀，会与同 appid 内任何第三方 SDK 的同名键互撞，
     //    而且互撞**不报错**（只是数据突然不对）。前缀规则由 `storage.js` 唯一持有。
@@ -79,7 +91,7 @@ App({
     // 登录专用请求器：不挂 token、不配 relogin（@why 见文件头——同请求器登录会死锁）
     const authApi = createRequester({ wx: wxApi, log });
     /** 登录一跳（wx.login → /auth/wechat/login → token 字符串）；失败原样抛出。 */
-    const relogin = () => loginWithWechat({ wx: wxApi, api: authApi, apiBase: API_BASE });
+    const relogin = () => loginWithWechat({ wx: wxApi, api: authApi, apiBase });
 
     this.globalData.api = createRequester({
       wx: wxApi,

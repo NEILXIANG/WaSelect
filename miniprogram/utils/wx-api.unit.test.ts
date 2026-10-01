@@ -13,7 +13,7 @@
  *      不是注入到函数里。这样才能验到"从宿主取"这条真实路径（`createWxApi()` 不传参）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createWxApi, type RealtimeLogger } from './wx-api.js';
+import { createWxApi, type RealtimeLogger, type WxAccountInfo } from './wx-api.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -24,6 +24,7 @@ function stubHost(
   over: {
     storage?: Record<string, unknown>;
     logger?: RealtimeLogger | undefined;
+    accountInfo?: WxAccountInfo | undefined;
   } = {},
 ) {
   const seen: string[] = [];
@@ -84,6 +85,9 @@ function stubHost(
       redirected.push(o.url);
     },
     ...(over.logger === undefined ? {} : { getRealtimeLogManager: () => over.logger }),
+    ...(over.accountInfo === undefined
+      ? {}
+      : { getAccountInfoSync: () => over.accountInfo as WxAccountInfo }),
   });
   return { seen, storage, requested, navigated, backDelta, modals, payments, clipped, redirected };
 }
@@ -111,6 +115,7 @@ describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => 
     ).toThrow(/wx 宿主不存在/);
     expect(() => api.setClipboardData({ data: 'x' })).toThrow(/wx 宿主不存在/);
     expect(() => api.redirectTo({ url: '/pages/order/index' })).toThrow(/wx 宿主不存在/);
+    expect(() => api.getAccountInfoSync()).toThrow(/wx 宿主不存在/);
   });
 
   it('**import 时不取宿主**——只有调用才取（否则 Node 侧连 import 都做不到）', () => {
@@ -172,6 +177,23 @@ describe('走真实宿主时的行为', () => {
     const logger: RealtimeLogger = { info: () => undefined };
     stubHost({ logger });
     expect(createWxApi().getRealtimeLogManager()).toBe(logger);
+  });
+
+  /**
+   * @why 这两条钉的是 B4 的环境判据来源。宿主没有这个方法（基础库 < 2.2.2）必须返回
+   *      **undefined**（由 config.js 回落 develop），而不是抛、也不是返回一个猜出来的对象——
+   *      猜的方向一旦反了就是"体验版打到了生产库"。@see wx-api.ts @limitation 十四
+   */
+  it('宿主没有 `getAccountInfoSync` → undefined（基础库过低，由上层回落 develop）', () => {
+    stubHost();
+    expect(createWxApi().getAccountInfoSync()).toBeUndefined();
+  });
+
+  it('有 `getAccountInfoSync` → 原样返回（envVersion 是唯一的运行环境判据）', () => {
+    const accountInfo: WxAccountInfo = { miniProgram: { envVersion: 'release' } };
+    stubHost({ accountInfo });
+    expect(createWxApi().getAccountInfoSync()).toBe(accountInfo);
+    expect(createWxApi().getAccountInfoSync()?.miniProgram?.envVersion).toBe('release');
   });
 
   it('navigateTo 原样转发 url（不做拼接、不补斜杠——路径错就该在真机上响亮失败）', () => {

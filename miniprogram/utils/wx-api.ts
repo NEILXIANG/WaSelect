@@ -203,6 +203,30 @@ export interface WxApi {
    *      替用户跳转的表现是"跳到一个打不开的页面"，比复制更糟。
    */
   setClipboardData(option: WxClipboardOption): void;
+  /**
+   * 当前账号信息（`wx.getAccountInfoSync`）——只用来取 `miniProgram.envVersion`（B4）。
+   *
+   * @why 小程序**没有**构建期环境注入（`process.env` 在小程序里根本不存在，
+   *      打包产物是"一份代码跑三个环境"），唯一可靠的"我现在跑在哪个环境"判据
+   *      就是宿主给的 `envVersion`（@measured 官方文档：合法值 develop / trial / release，
+   *      `miniProgram.envVersion` 自基础库 2.10.0 起；`getAccountInfoSync` 自 2.2.2 起）。
+   *      没有它，切环境只能靠"提审前手改一行常量再重新打包"——而漏改的形态是
+   *      **正式版打到了 localhost**，全站请求失败且只在真机上可见（开发工具里是好的）。
+   *
+   * @limitation 十四：**不做兜底**——宿主没有这个方法（基础库过低）时返回 `undefined`，
+   *      由 `config.js` 按 develop 回落。刻意不猜：猜错的形态是"体验版打到了生产库"，
+   *      那比"正式版全站失败"严重得多（后者响亮、立刻有人报；前者静默写坏生产数据）。
+   */
+  getAccountInfoSync(): WxAccountInfo | undefined;
+}
+
+/**
+ * `wx.getAccountInfoSync` 的返回形状——**只声明我们读的那一段**。
+ * @why 官方对象还有 appId / version / plugin 等字段，全声明进来等于把宿主类型
+ *      当成我们的契约去维护；只声明读到的部分，宿主加字段时这里不用跟着动。
+ */
+export interface WxAccountInfo {
+  miniProgram?: { envVersion?: string };
 }
 
 /** 宿主（`globalThis.wx`）上我们真正读到的形状——比 `WxApi` 宽松，因为官方签名返回 `unknown`。 */
@@ -219,6 +243,8 @@ interface WxHost {
   requestPayment(option: WxRequestPaymentOption): void;
   setClipboardData(option: WxClipboardOption): void;
   redirectTo(option: WxRedirectOption): void;
+  /** ⚠️ 可选：基础库 < 2.2.2 的宿主没有这个同步 API（@see WxApi.getAccountInfoSync @limitation 十四）。 */
+  getAccountInfoSync?: () => WxAccountInfo;
 }
 
 /**
@@ -284,6 +310,7 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     redirectTo: (option) => {
       host().redirectTo(option);
     },
+    getAccountInfoSync: () => host().getAccountInfoSync?.(),
   };
   return { ...real, ...over };
 }

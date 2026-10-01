@@ -17,7 +17,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { API_BASE } from './config.js';
+import { API_BASES } from './config.js';
 import { BRAND_NAME } from '../scripts/checkout-build-lib.js';
 
 // ⚠️ 不要拼 `'..'`：本文件就在 miniprogram/ 里，工程配置也在这里；
@@ -177,20 +177,35 @@ describe('project.config.json（MP1）', () => {
   });
 
   /**
-   * `urlCheck` 必须与 `API_BASE` 的"是否可上线"一致——这是**两个文件之间的不变式**。
+   * `urlCheck` 必须与"有没有任一环境指向本地"一致——这是**两个文件之间的不变式**。
    *
-   * @why 骨架期 `API_BASE` 是 `http://localhost:3000`：它永远进不了微信后台的合法域名白名单
-   *      （白名单要求 https + 备案域名），所以本地必须 `urlCheck: false` 才能发请求。
-   *      反过来，将来换成正式 https 域名后必须**改回 true**——
+   * @why 骨架期 `API_BASES.develop` 是 `http://localhost:3000`：它永远进不了微信后台的合法域名
+   *      白名单（白名单要求 https + 备案域名），所以本地必须 `urlCheck: false` 才能发请求。
+   *      反过来，**所有环境都换成 https 正式域名之后必须改回 true**——
    *      否则"忘了去后台配白名单"这件事在本地完全看不见，一直要到真机预览才炸，
    *      而真机排查成本远高于本地。这条断言把那个"将来的必须"钉在现在。
-   * @limitation 只读 `API_BASE` 这一个字段做判断：若将来配置拆成多环境（dev/stg/prod），
-   *              这里要改成判断"当前构建所选环境"的地址，而不是文件里的字面量。
+   *
+   * @why 2026-10-01（B4）判据从单个 `API_BASE` 改成"**任一**环境地址是本地"：
+   *      配置已拆成 develop / trial / release 三档（@see miniprogram/config.js）。
+   *      只要还有一档指向本地，`urlCheck: true` 会让**那一档彻底跑不起来**；
+   *      三档全 https 时还没有改回 true，则是上面那个"看不见"的风险。
+   *      ⚠️ 于是当前（develop=localhost）这条恒等于 `urlCheck: false`——
+   *      它看起来像常量断言，但把 develop 换成 https 联调域名的那天它就会翻过来。
+   * @limitation `urlCheck` 只影响开发者工具与真机调试（开发版）；体验版与正式版
+   *      **始终**强制校验合法域名。所以当 develop 仍是 localhost、
+   *      而 trial/release 已配 https 时，"trial/release 的域名没登记"在本地是看不见的——
+   *      那道缺口由 B5 的清单对账补（`test/config/wechat-domains.unit.test.ts`），
+   *      本条不重复承担。
    */
-  it('urlCheck 与 API_BASE 一致（localhost/http → 必须关校验；https 正式域名 → 必须开）', () => {
+  it('urlCheck 与"是否还有环境指向本地"一致（有 → 必须关校验；三档全 https → 必须开）', () => {
     const setting = cfg.setting as Record<string, unknown>;
-    const isLocal = /^http:\/\//.test(API_BASE) || /(^|\/)localhost|127\.0\.0\.1/.test(API_BASE);
-    expect(setting.urlCheck, `API_BASE=${API_BASE} 时 urlCheck 应为 ${!isLocal}`).toBe(!isLocal);
+    const isLocal = (base: string): boolean =>
+      /^http:\/\//.test(base) || /(^|\/)localhost|127\.0\.0\.1/.test(base);
+    const anyLocal = Object.values(API_BASES).some(isLocal);
+    expect(
+      setting.urlCheck,
+      `API_BASES=${JSON.stringify(API_BASES)} 时 urlCheck 应为 ${!anyLocal}`,
+    ).toBe(!anyLocal);
   });
 });
 
