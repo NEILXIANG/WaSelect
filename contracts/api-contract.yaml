@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.20
+  version: 0.6.21
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -239,6 +239,20 @@ info:
       两层的**窗口都是 15 分钟**（OPS3-04）：`failed_count` 曾是不带窗口的累计值，
       "30 次 / 15 分钟"其实是"累计 30 次不分多久"，慢速攻击（每 15 分钟 5 次）约 90 分钟攒满。
       对外形状不变（仍是一个 42901 + Retry-After），消费方只需知道"被锁"这件事。
+    0.6.21（工程库第三轮审查 ADM3-01 纵深防御）：`POST /admin/users/{id}/block` **接受可选请求体** `{order_id?}`。
+      ① 带了 `order_id`：服务端在**同一事务内、封号之前**核对"这张单属于 `{id}` 这个用户"；
+         不属于（含"这张单不存在"）→ **409 / 40915**，整条请求**一点不写**。
+         不带：不加约束（拉黑的对象是**用户**，不是订单）。
+      @why **可选**而不是必填：把它设成必填会把"拉黑用户"与"处理拒付"两个语义焊死，
+      将来若有别处要拉黑就得"随便传一个 order_id"绕过——那比不做校验更糟（**假校验**）。
+      而风控页是唯一调用方且**总是**带 order_id（确认面板只在拿到 orderId 时才出现），
+      所以实际防护强度等于必填，却没有焊死语义的代价。
+      @why **传了必校验**：拉黑是本契约唯一**不可逆**的写操作（没有解除接口，AJ-135），
+      且会连带取消该用户在途单、回补库存、作废机构会话。多一道凭据核对的成本是几行 SQL。
+      ⚠️ 它**挡不住**"运营看错了面板"（那种情况下请求里的 order_id 与 user_id 是自洽的，
+      AJ-256 已用前端清空待确认态解决）；它挡的是"order_id 与 user_id 配错"这一类请求级错误，
+      是纵深防御的**第二层**，不是第一层的替代品。
+      ② 新增错误码 **40915**（这张订单不属于你要拉黑的这个用户）。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -271,6 +285,7 @@ x-error-codes:
     40912: 包裹超过可配送的重量上限，请拆单（0.6.16：有运费表但超过最大一档；运费表缺失仍是 50004）
     40913: 未付款的订单太多了，请先完成支付或取消后再下单（0.6.16：每用户在途单上限）
     40914: 这个商品在你打开之后被别人改过了（0.6.18：PUT /admin/products/{id} 的乐观锁冲突；整行未写，前端须保留表单并提示刷新后对照最新值再保存）
+    40915: 这张订单不属于你要拉黑的这个用户（0.6.21：POST /admin/users/{id}/block 带了 order_id 但归属核对不过；整条请求未写）
     42901: 请求过于频繁
     50000: 服务器内部错误
     50001: 支付创建失败
@@ -528,8 +543,10 @@ paths:
     post:
       summary: 拉黑用户（D-50）：users.blocked_at；此后**所有买家鉴权接口** 40301（0.6.10 更正：不只建单）
       description: 0.6.5 补：**不可逆**（契约没有解除接口），前端必须二次确认。id 不存在 → **40403**；对方是管理员 → **40911**（拉黑管理员 = 把自己锁在后台门外）。已拉黑的账号重复调用 → 200 幂等，不刷新 blocked_at。⚠️ 0.6.15（B28 / AJ-213）：**连带取消该用户的在途单**（created / pending_payment → cancelled，同事务回补库存 + 作废旧支付行 + 发 order.cancelled）；已付单不碰，取消后到账的钱按迟到付款 40902 处理。无响应体
+      # 0.6.21：可选的订单凭据。带了就核对归属（409 / 40915），不带不加约束。@see info 0.6.21 ①
+      requestBody: {required: false, content: {application/json: {schema: {type: object, properties: {order_id: {type: string, description: '发起这次拉黑的那一单（风控页点"处理"的那一单）。带了就由服务端核对它属于 {id} 这个用户；不属于或该单不存在 → 409 / 40915，整条请求不写'}}}}}}
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: 'OK（无响应体：前端拉黑后重新拉列表）'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+      responses: {'200': {description: 'OK（无响应体：前端拉黑后重新拉列表）'}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /pay/channels:
     get:
       security: []

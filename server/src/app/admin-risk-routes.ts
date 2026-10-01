@@ -23,6 +23,10 @@
  *              本路由只负责"翻译成 HTTP"：判别联合 → 40403 / 40911，成功 → 空体 + 日志。
  *              ⚠️ 取消的订单 id 要进日志：封号是本项目唯一不可逆的写操作，
  *              "连带关掉了哪几张单"将来只能靠日志答得出来。
+ * @limitation 四：请求体可带**可选**的 `order_id` 凭据（ADM3-01 纵深防御 / AJ-290）：
+ *              带了由服务端核对"这张单属于 `{id}`"，不过 → **40915**（一点没写）；
+ *              不带 → 不加约束。🈲 非字符串 / 空串不得静默当成"没传"——
+ *              那会让校验看起来在而实际不在。@see app/block-user.ts @limitation 四
  *
  * @see adapters/risk-admin.ts（仓储）；app/block-user.ts（拉黑用例）；
  *      domain/dispute-input.ts（status 校验）；
@@ -88,12 +92,29 @@ export function mountAdminRiskRoutes(app: Express, deps: AdminRiskRoutesDeps): v
     void (async () => {
       try {
         const id = String(req.params.id);
+        // 可选的订单凭据（ADM3-01 纵深防御 / AJ-290）：**传了才校验**，不传不加约束。
+        // ⚠️ 非字符串（数字 / 数组 / 对象）一律 40001，不静默当成"没传"——
+        //    "静默退化成不校验"正是纵深防御最容易烂掉的方式（看起来在校验，实际没有）。
+        const rawOrderId = (req.body as { order_id?: unknown } | null)?.order_id;
+        let orderId: string | undefined;
+        if (rawOrderId !== undefined) {
+          if (typeof rawOrderId !== 'string' || rawOrderId.trim() === '') {
+            throw new AppError(40001, { reason: 'order_id_must_be_non_empty_string' });
+          }
+          orderId = rawOrderId.trim();
+        }
         const outcome = await blockUser(
           { db: deps.db, events: deps.events, clock: deps.clock, logger: deps.logger, repo },
-          id,
+          { userId: id, ...(orderId === undefined ? {} : { orderId }) },
         );
         if (outcome.kind === 'not_found') throw new AppError(40403, { target_user_id: id });
         if (outcome.kind === 'is_admin') throw new AppError(40911, { target_user_id: id });
+        // 归属核对不过：**一点没写**（核对在封号之前，@see app/block-user.ts）。
+        // ⚠️ 不能用 40403 / 40400：用户是在的，也不涉及"别人的资源要防探测"——
+        //    运营照那两个码会去刷用户列表，而该刷的是拒付列表。
+        if (outcome.kind === 'order_mismatch') {
+          throw new AppError(40915, { target_user_id: id, order_id: orderId ?? '' });
+        }
         // 即时生效（F-06 / AJ-183）：作废本进程的身份缓存，被拉黑者的下一个请求就回源、就被拒——
         // 不作废的话缓存命中还会放行最多 60 秒（IDENTITY_CACHE_TTL_MS）
         deps.identity.invalidate?.(id);
@@ -105,6 +126,8 @@ export function mountAdminRiskRoutes(app: Express, deps: AdminRiskRoutesDeps): v
             target_user_id: id,
             already_blocked: outcome.already,
             cancelled_order_ids: outcome.cancelledOrderIds,
+            // 凭据进日志：将来要答"这次拉黑是从哪一单发起的"，只有这里记着。
+            ...(orderId === undefined ? {} : { order_id: orderId }),
           },
         });
         res.status(200).end();

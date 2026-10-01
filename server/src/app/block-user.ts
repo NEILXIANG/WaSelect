@@ -29,8 +29,11 @@
  *              （理论上不该发生，但纵深上值得覆盖）会被这一轮补掉。
  * @limitation 三：库存回补**汇总后一次性**做（A3）：逐单回补的总锁序是"每单内升序"的串接，
  *              不是全局升序，与建单的扣减路径可能成环 → 40P01。
+ * @limitation 四：**可选**的 `order_id` 凭据（ADM3-01 纵深防御 / AJ-290）：带了就核对归属，
+ *              不带不加约束。它**挡不住**"人看错了面板"（那种情况下 order_id 与 user_id
+ *              是自洽的，那一层由前端清空待确认态解决，AJ-256）；它挡的是请求级的配错。
  *
- * @see adapters/risk-admin.ts（封号 SQL）；adapters/orders.ts（锁单 / 迁移 / 回补）；
+ * @see adapters/risk-admin.ts（封号 SQL）；adapters/orders.ts（锁单 / 迁移 / 回补 / 归属核对）；
  *      app/close-session-events.ts（事件订阅者）；app/admin-risk-routes.ts（唯一调用方）；
  *      app/mark-paid.ts @limitation 一b（迟到付款守卫：本用例的下游闭环）
  */
@@ -41,6 +44,7 @@ import type { Logger } from '../logger.js';
 import {
   lockPayableOrdersOfUser,
   markOrderCancelled,
+  orderBelongsToUser,
   restoreStockForOrders,
   voidInitiatedPayment,
 } from '../adapters/orders.js';
@@ -48,7 +52,10 @@ import { withUnitOfWork } from './unit-of-work.js';
 import type { BlockOutcome, RiskAdminRepo } from '../adapters/risk-admin.js';
 
 /** 结果 = 仓储的判别联合 + 连带取消的订单 id（调用方要写日志 / 要能测）。 */
-export type BlockUserResult = BlockOutcome & { cancelledOrderIds: string[] };
+export type BlockUserResult =
+  | (BlockOutcome & { cancelledOrderIds: string[] })
+  /** 带了 `order_id` 但归属核对不过（ADM3-01 纵深防御 / AJ-290）：**一点没写**。 */
+  | { kind: 'order_mismatch'; cancelledOrderIds: [] };
 
 export interface BlockUserDeps {
   db: Db;
@@ -58,16 +65,47 @@ export interface BlockUserDeps {
   repo: RiskAdminRepo;
 }
 
+export interface BlockUserInput {
+  /** 要拉黑的用户（路径参数 `{id}`）。 */
+  userId: string;
+  /**
+   * **可选**：发起这次拉黑的那一单（风控页点"处理"的那一单）。
+   * 带了就在封号**之前**核对它属于 `userId`（ADM3-01 纵深防御 / AJ-290）。
+   */
+  orderId?: string | undefined;
+}
+
 /**
  * 拉黑（幂等）。**封号与取消在途单要么一起落，要么一起滚。**
  *
- * @throws 不抛业务错：`not_found` / `is_admin` 以判别联合返回，由路由层转 40403 / 40911
- *         （两条路径的处置动作不同，折叠成一个码会误导运营，见 admin-risk-routes.ts @why）。
+ * @throws 不抛业务错：`not_found` / `is_admin` / `order_mismatch` 以判别联合返回，
+ *         由路由层转 40403 / 40911 / 40915（三条路径的处置动作不同，
+ *         折叠成一个码会误导运营，见 admin-risk-routes.ts @why）。
  */
-export async function blockUser(deps: BlockUserDeps, userId: string): Promise<BlockUserResult> {
+export async function blockUser(
+  deps: BlockUserDeps,
+  input: BlockUserInput,
+): Promise<BlockUserResult> {
   const { db, events, clock, logger, repo } = deps;
+  const { userId, orderId } = input;
 
   return withUnitOfWork(db, events, async (tx, emit) => {
+    // ── 凭据核对必须在**任何写入之前**（AJ-290）──
+    // @why 拉黑不可逆且没有解除接口。放在 `repo.blockUser` 之后的话，
+    //      "核对不过"这条路径上人已经被封了（事务里的 update 已经跑过），
+    //      此时返回"拒绝"是**谎言**——而返回"成功"就更糟。先核对，拒绝才真的是拒绝。
+    // @why 不抛 AppError 而走判别联合：与 not_found / is_admin 同一条约定
+    //      （本用例不抛业务错，转码是路由层的职责）。
+    // @limitation 四：**这条核对优先于 40403 / 40911**——若 `{id}` 不存在、
+    //      或对方是管理员**且**带了不属于他的 order_id，会先报 40915。
+    //      @why 风控页总是从同一张单的详情里同时拿到 order_id 与 user_id，
+    //      两者不可能只有一个错；能造出这种组合的只有手搓请求，
+    //      而 40915 的处置动作（关掉面板、回列表重新点"处理"）对它也成立。
+    //      ⚠️ 代价记在这里：不假装"码的优先级"在所有输入下都符合直觉。
+    if (orderId !== undefined && !(await orderBelongsToUser(tx, orderId, userId))) {
+      return { kind: 'order_mismatch', cancelledOrderIds: [] };
+    }
+
     const outcome = await repo.blockUser(tx, userId);
     if (outcome.kind !== 'blocked') {
       return { ...outcome, cancelledOrderIds: [] } as BlockUserResult;

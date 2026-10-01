@@ -123,6 +123,16 @@ async function seedDispute(
                    ${dispute.id}, ${dispute.status}, ${dispute.amount}, ${dispute.openedAt ?? null})`;
 }
 
+/** 造一张属于指定用户的在途单（拉黑凭据核对用；不需要拒付行）。 */
+async function seedOrderOf(orderId: string, userId: string): Promise<void> {
+  await db`insert into users (id, openid, email) values (${userId}, ${`o-${userId}`}, ${`${userId}@example.com`})
+           on conflict (id) do nothing`;
+  await db`insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                               total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
+           values (${orderId}, ${`W-${orderId}`}, ${userId}, 'created', 1000, 0, 0, 1000, 500,
+                   '{}'::jsonb, '{}'::jsonb, 'T', now() + interval '30 minutes')`;
+}
+
 describe('守卫', () => {
   it('两条路由：无 token → 40101；买家 token → 40301', async () => {
     const { url, close } = await buildServer();
@@ -271,6 +281,97 @@ describe('POST /admin/users/{id}/block', () => {
       expect((end[0]?.['blocked_at'] as Date | null)?.getTime()).toBe(
         (mid[0]?.['blocked_at'] as Date | null)?.getTime(),
       );
+    } finally {
+      await close();
+    }
+  });
+
+  it('🈲 带**别人**的 order_id → 40915，且库里**一点没动**（纵深防御 / AJ-290）', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await seedOrderOf('o-1', 'u-1');
+      await seedOrderOf('o-2', 'u-2');
+      const r = await call(
+        url,
+        'POST',
+        '/api/v1/admin/users/u-1/block',
+        { order_id: 'o-2' },
+        await bearer(),
+      );
+      expect(r.status).toBe(409);
+      expect(code(r)).toBe(40915);
+      // 三条"一点没动"：人没封、他自己的单没被取消、别人的单也没被取消
+      const u1 = await db`select blocked_at from users where id = 'u-1'`;
+      expect(u1[0]?.['blocked_at']).toBeNull();
+      const o1 = await db`select status from orders where id = 'o-1'`;
+      expect(String(o1[0]?.['status'])).toBe('created');
+      const o2 = await db`select status from orders where id = 'o-2'`;
+      expect(String(o2[0]?.['status'])).toBe('created');
+    } finally {
+      await close();
+    }
+  });
+
+  it('🈲 带**不存在**的 order_id → 40915（与"属于别人"同码：处置动作相同）', async () => {
+    const { url, close } = await buildServer();
+    try {
+      const r = await call(
+        url,
+        'POST',
+        '/api/v1/admin/users/u-1/block',
+        { order_id: 'o-none' },
+        await bearer(),
+      );
+      expect(r.status).toBe(409);
+      expect(code(r)).toBe(40915);
+      const u1 = await db`select blocked_at from users where id = 'u-1'`;
+      expect(u1[0]?.['blocked_at']).toBeNull();
+    } finally {
+      await close();
+    }
+  });
+
+  it('🈲 order_id 不是字符串 / 是空串 → 40001（🈲 静默当成"没传"——那等于关掉校验）', async () => {
+    const { url, close } = await buildServer();
+    try {
+      const token = await bearer();
+      for (const bad of [42, '', '   ', null, {}, ['o-1']]) {
+        const r = await call(
+          url,
+          'POST',
+          '/api/v1/admin/users/u-1/block',
+          { order_id: bad },
+          token,
+        );
+        expect(r.status, `order_id=${JSON.stringify(bad)}`).toBe(400);
+        expect(code(r), `order_id=${JSON.stringify(bad)}`).toBe(40001);
+      }
+      const u1 = await db`select blocked_at from users where id = 'u-1'`;
+      expect(u1[0]?.['blocked_at']).toBeNull();
+    } finally {
+      await close();
+    }
+  });
+
+  it('带**自己**的 order_id → 200 照常封（凭据不挡正当操作；日志里带 order_id）', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await seedOrderOf('o-1', 'u-1');
+      const r = await call(
+        url,
+        'POST',
+        '/api/v1/admin/users/u-1/block',
+        { order_id: 'o-1' },
+        await bearer(),
+      );
+      expect(r.status).toBe(200);
+      const u1 = await db`select blocked_at from users where id = 'u-1'`;
+      expect(u1[0]?.['blocked_at']).not.toBeNull();
+      const ctx = (sink.find('admin_user_blocked')[0] as unknown as Record<string, unknown>)[
+        'ctx'
+      ] as Record<string, unknown>;
+      expect(ctx['order_id']).toBe('o-1');
+      expect(ctx['cancelled_order_ids']).toEqual(['o-1']);
     } finally {
       await close();
     }

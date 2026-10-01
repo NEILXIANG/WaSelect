@@ -60,11 +60,11 @@ async function seedProduct(pid: string, stock: number, qtySold: number): Promise
   await db`update products set stock = ${stock - qtySold} where id = ${pid}`;
 }
 
-async function seedOrder(id: string, status: string): Promise<void> {
+async function seedOrder(id: string, status: string, userId = 'u-b'): Promise<void> {
   await db`
     insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
                         total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
-    values (${id}, ${`W-${id}`}, 'u-b', ${status}, 1000, 0, 0, 1000, 500,
+    values (${id}, ${`W-${id}`}, ${userId}, ${status}, 1000, 0, 0, 1000, 500,
             '{}'::jsonb, '{}'::jsonb, 'T', ${new Date(NOW.getTime() + 30 * 60_000)})
   `;
 }
@@ -126,7 +126,7 @@ describe('blockUser（B28 / AJ-213）', () => {
     await seedItem('oi-2', 'o-b', 'p-b-a', 2);
 
     const { deps } = makeDeps();
-    const out = await blockUser(deps, 'u-b');
+    const out = await blockUser(deps, { userId: 'u-b' });
     expect(blocked(out).cancelledOrderIds.sort()).toEqual(['o-a', 'o-b']);
     expect(await statusOf('o-a')).toBe('cancelled');
     expect(await statusOf('o-b')).toBe('cancelled');
@@ -141,7 +141,7 @@ describe('blockUser（B28 / AJ-213）', () => {
     await seedItem('oi-2', 'o-b', 'p-b-a', 2);
 
     const { deps } = makeDeps();
-    await blockUser(deps, 'u-b');
+    await blockUser(deps, { userId: 'u-b' });
     expect(await stockOf('p-b-a')).toBe(10);
     expect(await stockOf('p-b-z')).toBe(10);
   });
@@ -152,7 +152,7 @@ describe('blockUser（B28 / AJ-213）', () => {
     await seedItem('oi-p', 'o-paid', 'p-b-p', 1);
 
     const { deps } = makeDeps();
-    const out = await blockUser(deps, 'u-b');
+    const out = await blockUser(deps, { userId: 'u-b' });
     expect(blocked(out).cancelledOrderIds).toEqual([]);
     expect(await statusOf('o-paid')).toBe('paid');
     expect(await stockOf('p-b-p')).toBe(9); // 还在用户手上，不能回血
@@ -164,11 +164,11 @@ describe('blockUser（B28 / AJ-213）', () => {
     await seedItem('oi-1', 'o-a', 'p-b-a', 2);
 
     const { deps } = makeDeps();
-    const first = await blockUser(deps, 'u-b');
+    const first = await blockUser(deps, { userId: 'u-b' });
     expect(blocked(first).already).toBe(false);
     expect(await stockOf('p-b-a')).toBe(10);
 
-    const second = await blockUser(deps, 'u-b');
+    const second = await blockUser(deps, { userId: 'u-b' });
     expect(blocked(second).already).toBe(true);
     expect(blocked(second).cancelledOrderIds).toEqual([]);
     expect(await stockOf('p-b-a')).toBe(10);
@@ -186,7 +186,7 @@ describe('blockUser（B28 / AJ-213）', () => {
       expect(await statusOf(id)).toBe('cancelled');
     });
 
-    await blockUser(deps, 'u-b');
+    await blockUser(deps, { userId: 'u-b' });
     expect(seen.sort()).toEqual(['o-a', 'o-b']);
   });
 
@@ -194,7 +194,7 @@ describe('blockUser（B28 / AJ-213）', () => {
     await seedOrder('o-b', 'pending_payment');
     await seedInitiatedPayment('pay-b', 'o-b');
     const { deps } = makeDeps();
-    await blockUser(deps, 'u-b');
+    await blockUser(deps, { userId: 'u-b' });
     const rows = await db`select status from payments where id = 'pay-b'`;
     expect(String(rows[0]?.['status'])).toBe('cancelled');
   });
@@ -202,7 +202,7 @@ describe('blockUser（B28 / AJ-213）', () => {
   it('🔴 订单时间线写 actor=admin:block（审计要答得出"是谁关的"，不能显示成用户自己取消）', async () => {
     await seedOrder('o-a', 'created');
     const { deps } = makeDeps();
-    await blockUser(deps, 'u-b');
+    await blockUser(deps, { userId: 'u-b' });
     const ev =
       await db`select status, actor from order_events where order_id = 'o-a' and status = 'cancelled'`;
     expect(String(ev[0]?.['actor'])).toBe('admin:block');
@@ -212,7 +212,7 @@ describe('blockUser（B28 / AJ-213）', () => {
     await seedOrder('o-b', 'pending_payment');
     await seedInitiatedPayment('pay-b', 'o-b');
     const { deps } = makeDeps();
-    await blockUser(deps, 'u-b');
+    await blockUser(deps, { userId: 'u-b' });
 
     await expect(markOrderPaid(db, deps.events, clock, 'o-b', SETTLEMENT)).rejects.toMatchObject({
       code: 40902,
@@ -228,5 +228,49 @@ describe('blockUser（B28 / AJ-213）', () => {
     const out = await createRiskAdminRepo(db).blockUser(db, 'u-b');
     expect(out).toEqual({ kind: 'blocked', already: false });
     expect(await statusOf('o-b')).toBe('pending_payment');
+  });
+});
+
+describe('blockUser 的订单凭据（ADM3-01 纵深防御 / AJ-290）', () => {
+  beforeEach(async () => {
+    await db`insert into users (id, openid) values ('u-x', 'o-x') on conflict (id) do nothing`;
+  });
+
+  it('🔴 带**自己**的 order_id → 照常封号（凭据不挡正当操作）', async () => {
+    await seedOrder('o-a', 'created');
+    const { deps } = makeDeps();
+    const out = await blockUser(deps, { userId: 'u-b', orderId: 'o-a' });
+    expect(out.kind).toBe('blocked');
+    expect(blocked(out).cancelledOrderIds).toEqual(['o-a']);
+  });
+
+  it('🔴 带**别人**的 order_id → order_mismatch，且库里**一点没动**（人没封、单没取消）', async () => {
+    // @why 这条是本批的**核心红灯用例**：拉黑不可逆且没有解除接口，
+    //      "拒绝"如果发生在封号之后，返回什么都晚了——只能靠断言库里没动来证明。
+    await seedOrder('o-x', 'created', 'u-x');
+    await seedOrder('o-a', 'created');
+    const { deps } = makeDeps();
+    const out = await blockUser(deps, { userId: 'u-b', orderId: 'o-x' });
+    expect(out).toEqual({ kind: 'order_mismatch', cancelledOrderIds: [] });
+    const u = await db`select blocked_at from users where id = 'u-b'`;
+    expect(u[0]?.['blocked_at']).toBeNull();
+    expect(await statusOf('o-a')).toBe('created'); // 在途单也没被连带取消
+  });
+
+  it('🔴 带**不存在**的 order_id → order_mismatch（不区分"不存在"与"属于别人"）', async () => {
+    await seedOrder('o-a', 'created');
+    const { deps } = makeDeps();
+    const out = await blockUser(deps, { userId: 'u-b', orderId: 'o-none' });
+    expect(out).toEqual({ kind: 'order_mismatch', cancelledOrderIds: [] });
+    const u = await db`select blocked_at from users where id = 'u-b'`;
+    expect(u[0]?.['blocked_at']).toBeNull();
+  });
+
+  it('不带 order_id → 不加约束（可选凭据，不是必填）', async () => {
+    await seedOrder('o-a', 'created');
+    const { deps } = makeDeps();
+    const out = await blockUser(deps, { userId: 'u-b' });
+    expect(out.kind).toBe('blocked');
+    expect(await statusOf('o-a')).toBe('cancelled');
   });
 });

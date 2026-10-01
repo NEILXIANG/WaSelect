@@ -119,7 +119,11 @@ describe('风控页：拉黑串单（ADM3-01）', () => {
     await click(handle(el, 0));
     await click(button(el, '确认拉黑'));
 
-    expect(blocks()).toEqual([{ path: '/api/v1/admin/users/user-A/block', method: 'POST' }]);
+    // 带 order_id：服务端据此核对"这张单属于这个人"（ADM3-01 纵深防御 / AJ-290）。
+    // ❗ 少了 body 这一项，"页面真的把凭据发出去了"就没人守——服务端那条校验会永远拿不到调用。
+    expect(blocks()).toEqual([
+      { path: '/api/v1/admin/users/user-A/block', method: 'POST', body: { order_id: 'ord-A' } },
+    ]);
     expect(el.textContent).toContain('已拉黑');
     // 上一次失败留下的红字必须被清掉（"已拉黑"和"请求超时"同屏会让人以为没成功）
     expect(el.textContent).not.toContain('请求超时');

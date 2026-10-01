@@ -55,14 +55,32 @@ describe('listDisputes', () => {
 describe('blockUser', () => {
   it('POST 到 /admin/users/{id}/block，id 被 encode', async () => {
     const { impl, seen } = stubFetch(() => json({}, 200));
-    await blockUser(api(impl), 'u 1/x');
+    await blockUser(api(impl), { userId: 'u 1/x' });
     expect(seen[0]?.url).toContain('/api/v1/admin/users/u%201%2Fx/block');
     expect(seen[0]?.init.method).toBe('POST');
   });
 
   it('⚠️ 空 id → 直接抛，**一个请求都不发**（打到 /admin/users//block 会变成 404）', async () => {
     const { impl, seen } = stubFetch(() => json({}, 200));
-    await expect(blockUser(api(impl), '   ')).rejects.toThrow(/缺少用户 id/);
+    await expect(blockUser(api(impl), { userId: '   ' })).rejects.toThrow(/缺少用户 id/);
     expect(seen).toHaveLength(0);
+  });
+
+  it('🔴 带 order_id 时**真的发进请求体**（服务端据此核对归属，ADM3-01 纵深防御）', async () => {
+    const { impl, seen } = stubFetch(() => json({}, 200));
+    await blockUser(api(impl), { userId: 'u-1', orderId: 'o-1' });
+    expect(JSON.parse(String(seen[0]?.init.body))).toEqual({ order_id: 'o-1' });
+  });
+
+  it('不带 order_id → 请求体为空（可选凭据，不是必填）', async () => {
+    const { impl, seen } = stubFetch(() => json({}, 200));
+    await blockUser(api(impl), { userId: 'u-1' });
+    expect(seen[0]?.init.body).toBeUndefined();
+  });
+
+  it('order_id 是空串 → 当"没带"发（不送一个空串去撞 40001）', async () => {
+    const { impl, seen } = stubFetch(() => json({}, 200));
+    await blockUser(api(impl), { userId: 'u-1', orderId: '   ' });
+    expect(seen[0]?.init.body).toBeUndefined();
   });
 });

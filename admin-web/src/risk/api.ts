@@ -43,12 +43,31 @@ export async function listDisputes(
   return resp as DisputeLike[];
 }
 
+export interface BlockUserInput {
+  /** 要拉黑的用户（订单详情里的 `user_id`）。 */
+  userId: string;
+  /**
+   * **可选**：发起这次拉黑的那一单（面板上那一单）。
+   * @why 带上它的唯一理由是让服务端核对"这张单属于这个人"（ADM3-01 纵深防御，契约 0.6.21）：
+   *      拉黑不可逆且没有解除接口，多一道凭据核对的成本是几个字节。
+   *      ⚠️ 它**不**解决"人看错了面板"——那一层是面板清空（AJ-256）。
+   */
+  orderId?: string | undefined;
+}
+
 /**
  * `POST /admin/users/{id}/block`（拉黑；不可逆，@see @limitation 二）。
+ *
  * @throws {ApiError} 缺 id 时不发请求（打到 `/admin/users//block` 会变成 404 而不是 40001）
  */
-export async function blockUser(api: AdminApi, userId: string, traceId?: string): Promise<void> {
-  if (userId.trim() === '') {
+export async function blockUser(
+  api: AdminApi,
+  input: BlockUserInput,
+  traceId?: string,
+): Promise<void> {
+  const userId = input.userId.trim();
+  const orderId = input.orderId?.trim();
+  if (userId === '') {
     throw new ApiError(
       NETWORK_ERROR_CODE,
       '缺少用户 id（拉黑需要订单详情里的 user_id）',
@@ -56,8 +75,12 @@ export async function blockUser(api: AdminApi, userId: string, traceId?: string)
     );
   }
   await api({
-    path: `/api/v1/admin/users/${encodeURIComponent(userId.trim())}/block`,
+    path: `/api/v1/admin/users/${encodeURIComponent(userId)}/block`,
     method: 'POST',
+    // 空串当"没带"，而不是发一个 `order_id: ""` 去撞 40001：
+    // 面板只在拿到 orderId 时才出现，走到这里而 orderId 为空属于不该发生的分支，
+    // 但真发生了也该照常拉黑——凭据是**加**上去的保险，不是拉黑的前置条件。
+    ...(orderId === undefined || orderId === '' ? {} : { body: { order_id: orderId } }),
     ...(traceId !== undefined ? { traceId } : {}),
   });
 }

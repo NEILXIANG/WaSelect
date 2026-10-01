@@ -482,6 +482,29 @@ export async function findOwnedOrder(
 }
 
 /**
+ * **只判归属**：这张单是不是这个用户的（ADM3-01 纵深防御 / AJ-290）。
+ *
+ * @returns 属于 → true；不属于 / 单不存在 → **同为** false。
+ * @why 不加 `for update`：**订单的 `user_id` 建单后不再变**（没有改归属的写入路径），
+ *      所以"读到的归属"与"几毫秒后的归属"是同一个答案，持锁换不来任何额外的正确性，
+ *      只会把这条只读核对变成与落账 / 关单事务抢锁的一处新争用点。
+ * @why 不区分"不存在"与"属于别人"：两者的**处置动作相同**（关掉面板、回列表重新点"处理"），
+ *      分开只会多一个错误码与多一条契约，换不来不同的下一步动作。
+ *      ⚠️ 与 `findOwnedOrder` 的"同码防探测"是**同一个判据的两处复用**，
+ *      但那里是为了不泄露"这张单存在但不属于你"（买家侧），这里是管理端的可信调用方。
+ *
+ * @see app/block-user.ts（唯一调用方：封号**之前**的凭据核对）
+ */
+export async function orderBelongsToUser(
+  db: Db,
+  orderId: string,
+  userId: string,
+): Promise<boolean> {
+  const rows = await db`select 1 as hit from orders where id = ${orderId} and user_id = ${userId}`;
+  return rows.length > 0;
+}
+
+/**
  * 取消路径的第一步：**持行锁**读 {id,status}（FOR UPDATE）。
  * @why 取消 = 锁单 → 判迁移 → 迁移 + 作废支付行 + 释放库存，全在一个事务里；
  *      不持锁的话，"判完 created"与"改 cancelled"之间落账事务可以把单迁成 paid——

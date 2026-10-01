@@ -102,7 +102,11 @@ export function RiskPage({ api }: RiskPageProps) {
     setError('');
     setOk('');
     try {
-      await blockUser(api, userId);
+      // 带上 order_id 让服务端核对"这张单属于这个人"（ADM3-01 纵深防御 / AJ-290）：
+      // 拉黑不可逆、没有解除接口，多一道凭据核对的成本是请求体里多一个字段。
+      // ⚠️ 它**不是**"防手滑"——防手滑靠的是 prepare 清空待确认态（AJ-256）；
+      //    这里防的是"order_id 与 user_id 配错"这类请求级错误。
+      await blockUser(api, { userId, orderId });
       setOk(`已拉黑 ${userId}（该用户此后建单会被拒 40301）`);
       setOrderId('');
       setOrderNo('');
