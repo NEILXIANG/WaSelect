@@ -36,6 +36,7 @@ import { createWebhookStore } from '../adapters/webhooks.js';
 import { createIdempotencyExecutor } from '../adapters/idempotency.js';
 import { createIdentityCheck, withIdentityCache } from '../adapters/identity.js';
 import { systemClock } from '../adapters/clock.js';
+import type { Clock } from '../ports/clock.js';
 import { systemIdGen } from '../adapters/ids.js';
 import { outboundHttpOptions } from './http-outbound.js';
 import { mountPayRoutes } from './pay-routes.js';
@@ -92,6 +93,22 @@ export interface MountContext {
    *      的返回值取表，再用真 HTTP 触发 daily，证明两边是同一个实例）。
    */
   inflightJobs?: InflightJobs | undefined;
+  /**
+   * 时钟。**生产不传**（= `systemClock`）；测试可传固定时钟，让"时间相关"的接线可断言。
+   *
+   * @why 装配层曾经在 11 处**硬编码** `systemClock`（限流 / 支付注册 / 各组路由各一份）。
+   *      于是任何依赖"现在几点"的接线行为在测试里都不可控——真实形态是
+   *      `pay-intent-routes.db.test.ts` 那条限流用例：限流是**时钟对齐**的固定窗口
+   *      （`windowStartOf` = `floor(now/60000)×60000`），31 次请求一旦跨过整分边界，
+   *      计数就被重置，第 31 次拿不到 42901——用例的成败取决于它相对窗口边界的**相位**，
+   *      约 0.5% 的概率随机红（2026-10-01 C3 全量重读时实测撞上过一次）。
+   *      把时钟收进上下文后，注入一次就把全站时间变成确定量，不留概率。
+   * @why 收在**上下文**而不是逐个函数加参数：11 处各自加参数等于 11 次"这次要不要注入"的
+   *      判断，漏一处就回到"一半受控、一半随真实时钟漂移"——那比全不注入更难查。
+   * @limitation 只覆盖 `mountAllRoutes` 这一层；`main.ts` 里调度器、停机流等
+   *              装配期之外的时钟仍走 `systemClock`（它们在 bootstrap 层，不进本函数）。
+   */
+  clock?: Clock | undefined;
 }
 
 /**
@@ -99,6 +116,8 @@ export interface MountContext {
  */
 export function mountAllRoutes(app: Express, ctx: MountContext): void {
   const { config, logger, db, events, storage } = ctx;
+  // ⚠️ 生产不传 → 与改之前逐字等价（`systemClock`）；测试传 → 全站时间受控（@see MountContext.clock）
+  const clock = ctx.clock ?? systemClock;
   // ⚠️ 生产必须传（见 MountContext.inflightJobs 的 @limitation）；不传时自建仅供测试
   const inflightJobs = ctx.inflightJobs ?? createInflightJobs();
   // ── 身份状态回源（D25）：**全站共用一份缓存实例**（KD-6，2026-09-28 测试审查读码确认；AJ-175）。
@@ -126,7 +145,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     offline: offlineChannels,
   } = buildPaymentRegistry(config, {
     http: outboundHttp,
-    clock: systemClock,
+    clock,
     idGen: systemIdGen,
   });
   // ⚠️ configured / registered / offline 三个清单必须并列：
@@ -152,7 +171,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
       //    落账逐项核对它们与 `payments` 行（三审 S1② / U1），对不上就不落账
       succeeded: {
         apply: async (e, channel) =>
-          markOrderPaid(db, events, systemClock, e.orderId, {
+          markOrderPaid(db, events, clock, e.orderId, {
             channel,
             providerRef: e.providerRef,
             amountMinor: e.amountMinor,
@@ -226,7 +245,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
    * ⚠️ 进程内实现只在**单实例**下正确（rate-limit-memory.ts @limitation 一，R-I1-2）。
    */
   const rateLimitStore = createMemoryRateLimitStore();
-  const rateLimitDeps = { store: rateLimitStore, clock: systemClock, logger };
+  const rateLimitDeps = { store: rateLimitStore, clock, logger };
   app.use(
     '/api/v1/orders/quote',
     rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('orders.quote')),
@@ -234,14 +253,14 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   mountQuoteRoutes(app, {
     db,
     logger,
-    clock: systemClock,
+    clock,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity,
     config,
   });
 
   // ── 商品/配置公开端点 + 我的地址（I1-U5a）：全环境挂载（产品接口不是脚手架）──
-  mountProductRoutes(app, { db, clock: systemClock, config, logger });
+  mountProductRoutes(app, { db, clock, config, logger });
 
   // ── 管理端操作审计（流 B / ADR-29；F-02 / AJ-183）：**先于**所有管理端路由挂在 /api/v1/admin 前缀上——
   //    新增的管理端写路由自动被审计（admin-audit.ts @why）；挂在后面的话，前面那些路由就漏了 ──
@@ -269,7 +288,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     db,
     logger,
     config,
-    clock: systemClock,
+    clock,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity,
     registry,
@@ -280,7 +299,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     db,
     logger,
     config,
-    clock: systemClock,
+    clock,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity,
   });
@@ -303,7 +322,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     identity,
     // B28 / AJ-213：拉黑连带取消在途单并发 `order.cancelled`（作废机构会话）
     events,
-    clock: systemClock,
+    clock,
   });
 
   // ── 管理端上传（I2-U-I4）：storage 由依赖袋传入（测试用 memory 驱动断言 put）；
@@ -329,7 +348,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   mountOrderRoutes(app, {
     db,
     logger,
-    clock: systemClock,
+    clock,
     idGen: systemIdGen,
     config,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
@@ -356,7 +375,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   mountPayIntentRoutes(app, {
     db,
     logger,
-    clock: systemClock,
+    clock,
     idGen: systemIdGen,
     config,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
@@ -371,7 +390,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   // ── 短链落地（I1-U6a-2 / D-49）：无鉴权（token 即凭证）；限流 publicWrite（独立桶） ──
   mountPayLinkRoutes(app, {
     db,
-    clock: systemClock,
+    clock,
     logger,
     checkoutBaseUrl: config.CHECKOUT_BASE_URL,
     linkLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('pay.link')),
@@ -404,7 +423,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   mountAdminAuthRoutes(app, {
     db,
     logger,
-    clock: systemClock,
+    clock,
     authConfig: { secret: config.JWT_SECRET, issuer: 'waselect' },
     loginLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).adminLogin),
   });

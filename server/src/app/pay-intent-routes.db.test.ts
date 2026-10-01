@@ -20,6 +20,8 @@ import { createEventBus } from '../adapters/event-bus.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { createMemoryStorage } from '../adapters/storage-memory.js';
+import type { Clock } from '../ports/clock.js';
+import { fixedClock } from '../../../test/helpers/fixed-clock.js';
 import { registerBusinessEventLog } from './business-events.js';
 import { signToken } from './auth.js';
 
@@ -35,7 +37,12 @@ afterAll(async () => {
   await closeDb(db);
 });
 
-async function buildServer(): Promise<{ url: string; close: () => Promise<void> }> {
+/**
+ * 起一个接线完整的 server。
+ * @param clock 可选时钟。**不传 = 真实时钟**（其余用例不受影响）；
+ *               传固定时钟则全站时间受控——限流用例依赖它（见该用例里的 @why）。
+ */
+async function buildServer(clock?: Clock): Promise<{ url: string; close: () => Promise<void> }> {
   const sink = new MemorySink();
   const logger = createLogger({ env: 'test', destination: sink });
   const config = loadConfig({
@@ -52,7 +59,7 @@ async function buildServer(): Promise<{ url: string; close: () => Promise<void> 
     mount: (a) => {
       const events = createEventBus(logger);
       registerBusinessEventLog(events, logger);
-      mountAllRoutes(a, { config, logger, db, events, storage: createMemoryStorage() });
+      mountAllRoutes(a, { config, logger, db, events, storage: createMemoryStorage(), clock });
     },
   });
   const server = await listen(app);
@@ -262,7 +269,15 @@ describe('POST /orders/{id}/pay（mock 通道全链路）', () => {
   });
 
   it('限流挂在发起支付上：前 30 次穿过（被业务拦），第 31 次 42901', async () => {
-    const srv = await buildServer();
+    // ⚠️ 必须注入**固定**时钟，不能省。限流是**时钟对齐**的固定窗口
+    //    （ports/rate-limit.ts 的 windowStartOf = floor(now/60000)×60000）：
+    //    这 31 次请求一旦跨过整分边界，计数就被重置，第 31 次拿不到 42901
+    //    ——用例的成败取决于它相对窗口边界的**相位**，约 0.5% 概率随机红
+    //    （2026-10-01 C3 全量重读实测撞上过一次：单独跑绿、整包跑绿、gate 里红）。
+    //    冻结时钟后 31 次请求落在同一窗口，结果确定，概率归零。
+    // @why 冻结在**此刻**而不是写死的日期：JWT 的 iat/exp 仍与真实时间对齐，
+    //      否则这一条会先被 40101 拦下，测的根本不是限流。
+    const srv = await buildServer(fixedClock(new Date()));
     try {
       // 直接插单，不走建单端点：限流 key 是 routeKey+IP（publicWrite 按入口分桶：orders.pay 自己一个桶），
       // 建单会预消耗 1 次配额，探针数就说不清了

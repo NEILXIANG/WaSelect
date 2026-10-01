@@ -101,7 +101,16 @@ export function requestFingerprint(payload: unknown): string {
  */
 export const MAX_CLIENT_KEY_LENGTH = 128;
 
-/** 按 `用户 + 路由 + 客户端 key` 幂等键的作用域前缀，防止跨用户/跨接口撞键。 */
+/**
+ * 按 `用户 + 路由 + 客户端 key` 幂等键的作用域前缀，防止跨用户/跨接口撞键。
+ *
+ * @limitation ⚠️ `userId` 缺失时兜底成 `'anon'`，而那时**所有**未登录请求共用同一个命名空间：
+ *             两个不同的匿名用户传同一个 `Idempotency-Key` 会互相重放（后者拿到前者的响应体）。
+ *             当前两条生产路径（`orders.create` / `orders.pay`）都要求登录、`userId` 恒有值，
+ *             所以这条限制**今天不可达**——但它是个为将来埋的坑：
+ *             给未登录接口接幂等时，"跨用户撞键"这道防线会静默失效。
+ *             届时正确做法不是靠 `'anon'` 兜底，而是让调用方显式传一个"这一类是共享的"的语义键。
+ */
 export function scopeKey(parts: { userId?: string; route: string; clientKey: string }): string {
   if (parts.clientKey.length > MAX_CLIENT_KEY_LENGTH) {
     throw new AppError(40001, {

@@ -1,6 +1,6 @@
 /**
  * 职责：金额值对象 `Money` 与**唯一的**换算/取整实现（地基 F2b）。
- * 边界：纯函数，零依赖；不做汇率来源、不做格式化（格式化属前端/展示层）。
+ * 边界：纯函数，除同包 `enums.js` 的币种枚举（类型派生）外零依赖；不做汇率来源、不做格式化（格式化属前端/展示层）。
  * @see ADR-09（JPY 唯一锚，整数最小单位）、技术文档 v0.5 §0（汇率 ×1e8 整数）、§2.5、评审 #5
  * @limitation 金额一律**整数最小单位**（JPY=円，USD/CNY=分）；传小数直接抛错，不允许"先四舍五入再存"。
  * @tradeoff 取整规则定为 **half-up（远离零方向）** 并集中在 `toMinor` 一处：
@@ -9,8 +9,21 @@
  * @why 金额换算若散落在各处，`Math.round` / 浮点精度会让同一笔钱在不同路径算出不同结果（差 1 分钱级事故，
  *      且这种差异不会报错，只会在对账时冒出来）。所以这里定为**唯一入口**，业务代码禁止再自行取整。
  */
+import type { Currency } from './enums.js';
 
-export type CurrencyCode = 'JPY' | 'USD' | 'CNY';
+/**
+ * 币种代码（`Money.currency` 与 `CURRENCY_MINOR_DIGITS` 的键）。
+ *
+ * @why 刻意**从 `enums.CURRENCY` 派生**，而不是在本文件再写一份 `'JPY' | 'USD' | 'CNY'`：
+ *      那等于把"支持哪几种货币"记在两处，加一种货币时改一处漏一处——
+ *      漏的表现不是报错，而是 `CURRENCY_MINOR_DIGITS` 缺键、展示层退回 `—`
+ *      （B43 实锤过同类事故：把 3350 显示成 `USD 3350`，读大 100 倍且不报错）。
+ *      派生之后只有 `enums.CURRENCY` 一个入口；且因为 `CURRENCY_MINOR_DIGITS` 是
+ *      `Record<CurrencyCode, number>`，往 `CURRENCY` 加一种货币而漏补这张表时
+ *      **编译期就红**，不靠人记得。
+ * @see enums.ts（`CURRENCY`，唯一真源）
+ */
+export type CurrencyCode = Currency;
 
 /**
  * 各币种**最小单位的小数位**（B43 / AJ-214）：JPY=0（円就是最小单位），USD/CNY=2（分）。
@@ -37,7 +50,11 @@ export interface Money {
 
 /** 构造 Money：非整数 / 非有限数 / 未知币种一律抛错（把脏数据挡在边界上）。 */
 export function money(amount: number, currency: CurrencyCode): Money {
-  if (!Number.isInteger(amount) || !Number.isFinite(amount)) {
+  // ⚠️ 只判 `Number.isInteger` 一道：它**已经蕴含** isFinite（NaN 与 ±Infinity 都不是整数），
+  //    再并一条 `|| !Number.isFinite(amount)` 是永假分支——`||` 短路后它只在 isInteger 为真时被求值，
+  //    而那时 isFinite 必为真。留着它的代价不是性能，是**读错**：读者会以为这里有两道防线，
+  //    于是"非有限数由哪条挡住"变得含糊，而这类含糊正是下一次改这里的人踩坑的地方（C3-01）。
+  if (!Number.isInteger(amount)) {
     throw new RangeError(`金额必须是整数最小单位，收到 ${amount}`);
   }
   return { amount, currency };
@@ -140,7 +157,14 @@ export function toRateInt(rate: number | string): number {
  *      远小于 1e-6 的进位判定粒度），所以整数实现属**纵深防御**，不是已证实的修复。
  *      **真正的修复在 `toRateInt`**：把小数汇率转成 ×1e8 整数，才消灭了
  *      `1250 × 0.0676 = 84.4999…` 那一类误差。保留整数实现只为将来放开单笔上限 / 汇率范围时不静默退化。
- *      实现：把除法拆成整数商 q 与余数 r，用 `2r >= 1e6` 判定进位，全程无浮点除法。
+ *      实现：把除法拆成整数商 q 与余数 r，用 `2r >= 1e6` 判定进位。
+ *      ⚠️ 诚实标注（C3-01 更正）：上面曾经写"全程无浮点除法"——**与代码相反**，
+ *      本函数确实用了 `Math.floor(abs / MINOR_DIVISOR)`。真正的保障不是"没有浮点除法"，
+ *      而是**余数由 `abs - quotient × MINOR_DIVISOR` 重算**：即便浮点商少算了 1，
+ *      余数会相应多出整整一个除数（≈1e6），随后 `2r >= 1e6` 判进位把它加回来——
+ *      减一次加一次，误差被吸收，进位判定仍然正确。
+ *      ⚠️ 这与上方"注入实验显示换回浮点除法属性测试不会变红"**不矛盾**，是同一件事的两面：
+ *      在当前取值区间内两种写法结果本就一致，而"余数重算"保证的是放宽区间后**仍**一致。
  * @limitation 乘积 `jpy × rateInt` 必须落在 2^53 内（约 9e15），超出抛 `RangeError`。
  *             ⚠️ 这里曾经写"按 MAX_ORDER_JPY=180,000 与 rateInt ≤ 1e8 计算，乘积上限 1.8e13，安全"
  *             ——那句**只在"汇率 ≤ 1"时成立**，而 `fx-input` 的放行上界是 `MAX_RAW_RATE = 1000`

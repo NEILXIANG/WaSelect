@@ -9,6 +9,7 @@
  * @how 断言**具体字符串**而不是"包含数字"：包含式断言在少了分隔符时照样绿。
  */
 import { describe, expect, it } from 'vitest';
+import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
 import { displaySubLine, formatCnyFen, formatJpy, formatUsdCents } from './price-format.js';
 
 describe('千分位', () => {
@@ -172,5 +173,55 @@ describe('displaySubLine（副行文案，D-36 三币口径的展示侧）', () 
 
   it('0 分也显示（`$0.00` 是真实换算结果，不是缺失——缺失走的是"没有键"那条路）', () => {
     expect(displaySubLine({ USD: 0, CNY: 0 })).toBe('≈ $0.00 · ≈ ¥0.00');
+  });
+});
+
+/**
+ * 跨端对账：小程序端的"两位小数"是**硬编码**的（`formatMinor` 里的 `/ 100`），
+ * 而 shared 的 `CURRENCY_MINOR_DIGITS` 才是"每种货币几位小数"的真源。
+ *
+ * @why 本文件的运行时**不能** import shared——组件用 `miniprogram-simulate` 加载时
+ *      由 Node 的 `require` 执行，解析不到 `.ts`（price-format.js @limitation 四）。
+ *      所以小程序端只能自己写一份 `/ 100`，而 money.ts 的 @why 恰恰声明这张表
+ *      必须"跨端唯一真源、前端不许再写一份"——**两条约束直接冲突**，
+ *      结果就是"唯一真源"只覆盖到 admin-web，小程序端在它的射程之外。
+ * @why 但**测试侧**能 import shared（`@waselect/shared` 在 .ts 用例里可用），
+ *      于是这里补上那道缺的护栏：用 shared 的表当**尺子**去量小程序端的硬编码。
+ *      ⚠️ 关键：期望值来自 shared 的表，不是抄小程序端的输出——
+ *      抄自己的输出是自证（怎么改都绿），只有两个独立实现互相对账才抓得住漂移
+ *      （B43 的教训：把 3350 显示成 `USD 3350`，读大 100 倍且不报错）。
+ *
+ * @limitation 抓不住"新增一种货币但小程序端没加函数"以外的情形：
+ *             新币种若小数位为 0（如 JPY / KRW），它不会进下面的 `MINOR_FORMATTERS`，
+ *             需要走 `formatJpy` 那条 0 位实现——那一条尚未与 shared 对账（登记为待办）。
+ */
+describe('跨端对账：本文件硬编码的小数位 vs shared 的 CURRENCY_MINOR_DIGITS', () => {
+  /** 走 `formatMinor`（有小数位）的币种；JPY 走 `formatJpy`（0 位，另一条实现）。 */
+  const MINOR_FORMATTERS: readonly (readonly [string, (n: number) => string])[] = [
+    ['USD', formatUsdCents],
+    ['CNY', formatCnyFen],
+  ];
+
+  it('shared 里"有小数位"的币种集合 == 本文件有格式化函数的集合', () => {
+    const sharedWithDigits = Object.entries(CURRENCY_MINOR_DIGITS)
+      .filter(([, digits]) => digits > 0)
+      .map(([currency]) => currency)
+      .sort();
+    expect(MINOR_FORMATTERS.map(([c]) => c).sort()).toEqual(sharedWithDigits);
+  });
+
+  it.each(MINOR_FORMATTERS)('%s 的小数位数 == shared 表里的位数', (currency, format) => {
+    const digits = CURRENCY_MINOR_DIGITS[currency as CurrencyCode];
+    // 1 个最小单位 → 小数部分长度必须正好等于 digits（表若改成 3，这里立刻红）
+    const body = format(1).replace(/^[^0-9]*/, '');
+    expect(body.split('.')[1] ?? '').toHaveLength(digits);
+  });
+
+  it.each(MINOR_FORMATTERS)('%s 的除数 == 10^digits（不是写死的 100）', (currency, format) => {
+    const digits = CURRENCY_MINOR_DIGITS[currency as CurrencyCode];
+    // 10^digits 个最小单位 → 主单位的整数部分必须是 `1`；
+    // 若本文件仍除以 100 而表改成 3 位，1000 会被算成 `10.00` 而不是 `1.000`。
+    const body = format(10 ** digits).replace(/^[^0-9]*/, '');
+    expect(body.split('.')[0]).toBe('1');
   });
 });
