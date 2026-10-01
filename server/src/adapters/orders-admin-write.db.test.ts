@@ -263,8 +263,12 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
    *      在库里**查无实据**：`address_snapshot` 已被整体覆盖，拒付应诉时拿不出原地址。
    * @why 断言必须钉**内容**而不是"note 非空"：固定文案同样满足非空，
    *      而它恰恰答不出"改之前是什么"（§2 第 49 条：只验存在性是最容易假绿的一类断言）。
+   * @changed AJ-293（2026-10-01）：旧地址**不再**全文写进 `order_events.note`——
+   *      那张表挂 append-only，写进去就永久锁死，把 AJ-292 的匿名化出口整个堵死。
+   *      改为归档进 `order_address_history`，note 只留归档号。
+   *      取证链一步不变（按号回查得到完整旧地址），但这部分 PII 从此可匿名化 / 可删除。
    */
-  it('updateAddressSnapshot：事件 note 里带**改前**的完整旧地址（B12 / AJ-208）', async () => {
+  it('updateAddressSnapshot：改前地址归档进 order_address_history，note 只留归档号（B12 / AJ-293）', async () => {
     await seedPaidOrder('o-1');
     const oldSnap = (await db`select address_snapshot from orders where id = 'o-1'`)[0]?.[
       'address_snapshot'
@@ -278,16 +282,33 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     const evs =
       await db`select note from order_events where order_id = 'o-1' and status = 'address_changed'`;
     expect(evs).toHaveLength(1);
-    const parsed = JSON.parse(String(evs[0]?.['note'])) as { from: unknown };
-    // 旧地址完整还原（不是摘要、不是空对象），且与新快照不同
-    expect(parsed.from).toEqual(oldSnap);
-    expect((parsed.from as { recipient?: string }).recipient).not.toBe('SAN ZHANG');
-    // 同时新地址确实生效了——只断言"有旧值"的话，把写入方向写反（新旧互换）也全绿
+    const note = String(evs[0]?.['note']);
+
+    // ① note 本身不再带 PII——AJ-292 的目的就是让旧地址别再进这张删不掉的表
+    for (const leak of ['Jane Doe', 'Infinite Loop', 'a-1']) {
+      expect(note, `note 里不该出现旧地址的片段：${leak}`).not.toContain(leak);
+    }
+    expect(note).toContain('改址');
+
+    // ② 按 note 里的归档号**回查**得到完整的改前地址（取证链不变）
+    //    @why 写入点现在分裂成两处（note + 历史表），只断言"insert 成功了"会漏掉
+    //    "只插了一处"这种写法——而取证链断掉是**静默**的（AJ-293 反向风险第一条）。
+    const archiveMatch = note.match(/#(\d+)/);
+    expect(archiveMatch?.[1], 'note 里必须带归档号，否则取证无从查起').toBeDefined();
+    // @why toBeDefined() 断言**不会**帮 TS 收窄类型（vitest 不类型检查，只有 tsc 会拦），
+    //      这里必须显式收敛成 string，否则下面 db`...` 的重载匹配不上。
+    const archiveId = String(archiveMatch?.[1]);
+    const hist = await db`select snapshot from order_address_history where id = ${archiveId}`;
+    expect(hist).toHaveLength(1);
+    expect(hist[0]?.['snapshot']).toEqual(oldSnap);
+    expect((hist[0]?.['snapshot'] as { recipient?: string }).recipient).not.toBe('SAN ZHANG');
+
+    // ③ 新地址确实生效——只断言"有旧值"的话，把写入方向写反（新旧互换）也全绿
     const now = await db`select address_snapshot from orders where id = 'o-1'`;
     expect((now[0]?.['address_snapshot'] as { recipient?: string }).recipient).toBe('SAN ZHANG');
   });
 
-  it('连续改两次：每次的 note 都是**当时**的旧地址（不是第一次的、也不是最新快照）', async () => {
+  it('连续改两次：每次归档的都是**当时**的旧地址（不是第一次的、也不是最新快照）', async () => {
     await seedPaidOrder('o-1');
     const first = (await db`select address_snapshot from orders where id = 'o-1'`)[0]?.[
       'address_snapshot'
@@ -308,11 +329,45 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
         new Date(),
       );
     });
-    const notes =
-      await db`select note from order_events where order_id = 'o-1' and status = 'address_changed' order by id`;
-    expect(notes).toHaveLength(2);
-    expect(JSON.parse(String(notes[0]?.['note'])).from).toEqual(first);
-    expect(JSON.parse(String(notes[1]?.['note'])).from).toEqual({ recipient: 'MID' });
+    const hist =
+      await db`select snapshot from order_address_history where order_id = 'o-1' order by id`;
+    expect(hist).toHaveLength(2);
+    expect(hist[0]?.['snapshot']).toEqual(first);
+    expect(hist[1]?.['snapshot']).toEqual({ recipient: 'MID' });
+  });
+
+  /**
+   * AJ-293 的**目的本身**：这张表必须能被改、能被删。
+   *
+   * @why 断言"可以 DELETE"而不是只断言"表存在"：本表存在的全部理由就是**不挂** append-only。
+   *      将来谁为了"审计更严"给它补一个触发器，上面几条用例**全部照绿**——
+   *      旧地址又开始永久锁死，而没有任何东西会响。这一条是唯一的哨兵。
+   * @why 顺带验 UPDATE（匿名化的形态）：真实删除请求之外，更常见的处置是
+   *      "抹掉地址内容、保留'改过址'这个事实"，所以两种都要能走通。
+   */
+  it('order_address_history 可以 UPDATE / DELETE（不挂 append-only）：匿名化出口不能被堵回去（AJ-293）', async () => {
+    await seedPaidOrder('o-1');
+    await withTransaction(db, async (tx) => {
+      await updateAddressSnapshot(
+        tx,
+        'o-1',
+        { recipient: 'NEW' } as never,
+        'admin:u-9',
+        new Date(),
+      );
+    });
+    const rows = await db`select id from order_address_history where order_id = 'o-1'`;
+    expect(rows).toHaveLength(1);
+    // 匿名化：抹掉内容（若挂了触发器，这一步就会 42501）
+    await db`update order_address_history set snapshot = ${db.json({ redacted: true } as never)} where id = ${rows[0]?.['id']}`;
+    expect(
+      (await db`select snapshot from order_address_history where id = ${rows[0]?.['id']}`)[0]?.[
+        'snapshot'
+      ],
+    ).toEqual({ redacted: true });
+    // 删除：兑现删除请求
+    await db`delete from order_address_history where id = ${rows[0]?.['id']}`;
+    expect(await db`select id from order_address_history where order_id = 'o-1'`).toHaveLength(0);
   });
 
   it('updateAddressSnapshot：已发货 → false，快照保持原样', async () => {

@@ -88,6 +88,13 @@
         <text class="value">{{t.statusText}}</text>
         <text class="label">{{t.atText}}</text>
       </view>
+      <!--
+        AJ-295：把"没有通知"这件事**说出来**。
+        发货与签收不会有推送，也不会有邮件——不说的话用户会一直等一个不会来的消息，
+        而"等通知"正是跨境订单里最容易产生"你们是不是忘了我的单"的那一刻。
+        等通知链路真的上线（依赖 R1 与订阅消息口径确认），这句话再删掉。
+      -->
+      <text class="hint">发货与签收目前不会有推送通知，进度请回到这一页查看。</text>
     </view>
 
     <view class="card" wx:if="{{view.termsVersion || view.contactEmail}}">
@@ -96,7 +103,7 @@
         <text class="value">{{view.termsVersion}}</text>
       </view>
       <view class="row" wx:if="{{view.contactEmail}}">
-        <text class="label">通知邮箱</text>
+        <text class="label">联系邮箱</text>
         <text class="value">{{view.contactEmail}}</text>
       </view>
     </view>

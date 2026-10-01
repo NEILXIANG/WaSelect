@@ -15,7 +15,7 @@ import type { Request, Response } from 'express';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { createLogger } from '../logger.js';
 import type { AdminAuditEntry, AdminAuditStore } from '../ports/admin-audit.js';
-import { adminAuditMiddleware, auditPayload } from './admin-audit.js';
+import { adminAuditMiddleware, auditPayload, setAuditBefore } from './admin-audit.js';
 import { createInflightJobs } from './inflight-jobs.js';
 
 describe('auditPayload（审计 after 脱敏）', () => {
@@ -322,5 +322,91 @@ describe('审计生命周期（B15 / AJ-206）', () => {
     await expect(waiting).resolves.toMatchObject({ settled: true, pending: 0 });
     expect(entries).toHaveLength(1);
     expect(jobs.pending).toBe(0);
+  });
+});
+
+/**
+ * AJ-294：`before` 必须和 `after` 一样走 redact。
+ *
+ * @why 现有两个调用点（运费整表替换、banner）**恰好**都不含 PII，所以"不脱敏"在今天完全是绿的——
+ *      这条断言防的不是现状，是**将来**：某条改订单路由把订单对象传进 `setAuditBefore` 的那一天，
+ *      `address_snapshot` 会永久落进 append-only 表（触发器拒 UPDATE/DELETE，事后补不回来）。
+ *      AJ-207 在 `after` 上踩过同一个洞，这里是它的另一侧。
+ */
+describe('审计 before 脱敏（AJ-294）', () => {
+  it('setAuditBefore 传入的收件人 / 电话 / 街道 / 邮编，落库时与 after 同口径被脱敏', async () => {
+    const entries: AdminAuditEntry[] = [];
+    const mw = adminAuditMiddleware({
+      store: {
+        append: async (e) => {
+          entries.push(e);
+        },
+      },
+      logger: createLogger({ env: 'test', destination: new MemorySink() }),
+      jobs: createInflightJobs(),
+    });
+
+    const res = new EventEmitter() as unknown as Response & EventEmitter;
+    Object.assign(res, { statusCode: 200, locals: {} });
+    setAuditBefore(res, {
+      recipient: 'Jane Doe',
+      phone: '+14155550123',
+      line1: '1 Infinite Loop',
+      postal_code: '95014',
+      city: 'Cupertino',
+    });
+    const req = {
+      method: 'PATCH',
+      route: { path: '/api/v1/admin/orders/:id' },
+      params: { id: 'o-1' },
+      auth: { role: 'admin', sub: 'u-1' },
+      body: {},
+    } as unknown as Request;
+    mw(req, res, () => undefined);
+    res.emit('prefinish');
+
+    await vi.waitFor(() => expect(entries).toHaveLength(1), { timeout: 2_000, interval: 5 });
+    // 与 auditPayload 的口径逐字一致（同表对比，不是另写一份期望值）
+    expect(entries[0]?.before).toEqual({
+      recipient: 'J***',
+      phone: '***0123',
+      line1: '***',
+      postal_code: '***',
+      city: 'Cupertino',
+    });
+  });
+
+  /**
+   * @why 脱敏只放在**唯一落库点**（中间件），不在 `setAuditBefore` 里再脱一次：
+   *      `redact` 对 `pii-name` 类是 `` `${value[0]}***` ``（保留首字母），**不幂等**——
+   *      `{recipient:'***'}` 二次脱敏会得到 `'****'`，随调用次数一直长。
+   *      这条钉的是"脱敏恰好发生一次"，它同时是 ③（两处都做）被否掉那一条的回归哨兵。
+   */
+  it('脱敏只发生一次：姓名不会被二次加工成 ****（redact 对 pii-name 不幂等）', async () => {
+    const entries: AdminAuditEntry[] = [];
+    const mw = adminAuditMiddleware({
+      store: {
+        append: async (e) => {
+          entries.push(e);
+        },
+      },
+      logger: createLogger({ env: 'test', destination: new MemorySink() }),
+      jobs: createInflightJobs(),
+    });
+    const res = new EventEmitter() as unknown as Response & EventEmitter;
+    Object.assign(res, { statusCode: 200, locals: {} });
+    setAuditBefore(res, { recipient: 'Jane Doe' });
+    const req = {
+      method: 'PATCH',
+      route: { path: '/api/v1/admin/orders/:id' },
+      params: { id: 'o-1' },
+      auth: { role: 'admin', sub: 'u-1' },
+      body: {},
+    } as unknown as Request;
+    mw(req, res, () => undefined);
+    res.emit('prefinish');
+    await vi.waitFor(() => expect(entries).toHaveLength(1), { timeout: 2_000, interval: 5 });
+    expect(entries[0]?.before).toEqual({ recipient: 'J***' });
+    expect((entries[0]?.before as { recipient: string }).recipient).not.toBe('****');
   });
 });

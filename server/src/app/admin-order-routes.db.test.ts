@@ -622,9 +622,16 @@ describe('POST /admin/orders/{id}/address（发货前改址）', () => {
     const evs = await db`select status, actor, note from order_events where order_id = 'o-1'`;
     expect(String(evs[0]?.status)).toBe('address_changed');
     expect(String(evs[0]?.actor)).toMatch(/^admin:/);
-    // B12 / AJ-208：路由层同样要留旧地址——仓储层的用例证明不了"这条路由真的把旧值带出来了"
-    const from = JSON.parse(String(evs[0]?.['note'])) as { from: { recipient?: string } };
-    expect(from.from.recipient).toBe('Jane Doe');
+    // B12 / AJ-208：路由层同样要留旧地址——仓储层的用例证明不了"这条路由真的把旧值带出来了"。
+    // AJ-293 之后旧值**不再写在 note 里**（note 只留"人话 + 归档号"），改去归档表取。
+    // @why 断言必须**真的把 recipient 读出来比对**，不能降级成"查到 1 行就算过"——
+    //      只断言 count 的话，写入方向写反（把新值当旧值归档）也全绿，而取证拿到的是错的。
+    // @why 反过来，note 里**不许**再出现旧地址：原来这里 JSON.parse(note).from.recipient，
+    //      那条路径正是 AJ-293 要拆掉的暴露面（订单详情会把 note 原样渲染给运营看）。
+    expect(String(evs[0]?.['note'])).not.toContain('Jane Doe');
+    const hist = await db`select snapshot from order_address_history where order_id = 'o-1'`;
+    expect(hist).toHaveLength(1);
+    expect((hist[0]?.['snapshot'] as { recipient?: string }).recipient).toBe('Jane Doe');
     await s.close();
   });
 

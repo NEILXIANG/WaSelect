@@ -70,7 +70,9 @@ export function submitGate(state) {
 const EMAIL_ERROR = '邮箱格式不正确（可留空）';
 
 /**
- * 结算页"收货通知邮箱（选填）"输入 → 要发的值与错误（PRD §3 确认订单 / D-39；提审前必须，AJ-180）。
+ * 结算页"联系邮箱（选填）"输入 → 要发的值与错误（PRD §3 确认订单 / D-39；提审前必须，AJ-180）。
+ * ⚠️ AJ-295：此处原写"收货通知邮箱"——通知链路全库无使用方，那是句不成立的承诺，
+ *      文案已改为真实用途（订单有问题时联系买家）。
  * @param {unknown} raw 输入框原值
  * @returns {{value: string, error: string}} value 为空串 = 不带 contact_email
  * @why 口径与服务端入口（order-routes.ts contact_email）逐条一致：有 @、无空白、≤255；

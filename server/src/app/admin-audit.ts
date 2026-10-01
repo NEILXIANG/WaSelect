@@ -36,6 +36,9 @@
  * @limitation 一：登录（/auth/admin/login）不在 /admin 前缀下，不进本表——登录成败在运行日志（admin_login_*）。
  * @limitation 二：multipart 上传的请求体不是 JSON，after 记为 null（上传结果的 key 在运行日志里）。
  * @limitation 三：脱敏**直接复用 `redact.ts`**（全库唯一实现），本模块**没有**自己的键名清单。
+ *      `before` 与 `after` **都**走 `auditPayload`（AJ-294）：脱敏只放在**唯一落库点**（中间件里），
+ *      不在 `setAuditBefore` 里再脱一次——`redact` 对 `pii-name` 类是 `` `${value[0]}***` ``（保留首字母），
+ *      **不幂等**，重复调用会让 `'***'` 变成 `'****'` 并随次数增长。
  *              曾经另起一份 `PII_KEYS`（7 个键名，B16 / AJ-207），于是 `postal_code` / `openid` /
  *              `api_key` / `token` 全部**原样**落进 append-only 的审计表——改一次址就把买家 ZIP+4
  *              永久写进去，而这张表没有保留期、触发器拒 UPDATE/DELETE，APPI/CCPA 的删除请求无法兑现。
@@ -119,7 +122,10 @@ export function adminAuditMiddleware(deps: {
         actor: `admin:${principal.sub}`,
         action: `${req.method} ${routePath.replace(/^\/api\/v1/, '')}`,
         target: typeof id === 'string' ? id : null,
-        before: res.locals[AUDIT_BEFORE_KEY],
+        // AJ-294：before 与 after **同口径**走 redact。这里是唯一落库点——
+        // 路由给什么就存什么的话，将来任何一条"改订单"路由传进来的 address_snapshot
+        // 会永久锁进 append-only 表（AJ-207 踩过同一个洞，只是当时在 after 上）。
+        before: auditPayload(res.locals[AUDIT_BEFORE_KEY]),
         after: auditPayload(req.body),
         traceId: traceId ?? null,
         reqId: reqId ?? null,

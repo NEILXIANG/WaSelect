@@ -52,14 +52,20 @@
     <text class="label">正在计算运费…</text>
   </view>
 
-  <!-- 收货通知邮箱（选填，PRD §3 / D-39；AJ-180）：微信内没有推送兜底，发货通知靠它 -->
+  <!--
+    联系邮箱（选填，PRD §3 / D-39；AJ-180）。
+    ⚠️ AJ-295：这里**曾经**叫"收货通知邮箱"、placeholder 写"用于接收发货通知"——
+       但通知链路（MAIL_* / SUBSCRIBE_TMPL_*）全库无使用方，那是一句**不成立的承诺**：
+       用户是照着"会收到发货通知"才留下邮箱的。文案已改为现在就成立的真实用途
+       （订单有问题时联系买家）。将来通知真的做出来，这里再改回去。
+  -->
   <view class="card">
-    <text class="label">收货通知邮箱（选填）</text>
+    <text class="label">联系邮箱（选填）</text>
     <input
       class="input"
       type="text"
       value="{{email}}"
-      placeholder="用于接收发货通知，可留空"
+      placeholder="订单有问题时我们用它联系你，可留空"
       maxlength="255"
       bindinput="onEmailInput"
     />

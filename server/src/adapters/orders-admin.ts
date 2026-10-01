@@ -683,14 +683,17 @@ export async function markRefunded(
  *      那是错的（DB3-03）：`order_events` 同样挂着 `trg_order_events_append_only`
  *      （`migrations/002_hardening.sql`），UPDATE / DELETE 一律 42501 拒绝。
  *      两处都删不掉，这条理由不成立；真正剩下的理由只有"与订单同级、便于应诉检索"。
- *      @limitation **删除请求（APPI / CCPA）在这里走不通**：`orders.address_snapshot`
- *      可以改写，但历次改址留在 `order_events.note` 里的旧地址**改不了也删不掉**
- *      ——要动它必须先 DROP 触发器，而那正是 002 要防的操作。
- *      当前处置：登记为待办（见决策记录 AJ-272），首次真实删除请求到来前
- *      走"新建可匿名化的 `order_address_history` 表 + note 只存该行 id"的结构修复；
- *      在那之前，**不**为删除请求临时摘触发器（一次临时摘除 = 这条防线在谁的机器上失效过就说不清了）。
- *      @limitation note 是 TEXT，管理端详情页按原文渲染——当前显示为一段 JSON，
- *      可读性不如"管理员改址"，但**完整性**是这类证据的第一要求，美化留给前端。
+ *      ✅ **2026-10-01 已落地（AJ-293）**：旧快照改存 `order_address_history`（019 迁移，
+ *      刻意**不挂** append-only），`order_events.note` 只留一句人话 + 归档号。
+ *      取证链一步不变（按号查回完整旧地址），但这部分 PII 从此**可匿名化 / 可删除**——
+ *      这是 AJ-292 定的匿名化出口唯一被堵住的那一处。
+ *      @limitation **存量仍然删不掉**：019 之前写进 `order_events.note` 的旧地址
+ *      （形态是 `{"from":{...}}` 全文）改不了也删不掉——表能改，历史行改不了。
+ *      读取侧要同时认得两种形态：旧行读 note 里的 `from`，新行按 `from_id` / 归档号查历史表。
+ *      @limitation **仍不**为删除请求临时摘触发器：一次临时摘除 = 这条防线在谁的机器上失效过就说不清了（AJ-272）。
+ *      @limitation note 是 TEXT，管理端详情页按原文渲染。改格式**顺带**修掉了一个既有暴露面：
+ *      此前 `{"from":{...}}` 整段 JSON 直接显示 ⇒ **所有能看到订单详情的运营都能看到改前完整地址明文**；
+ *      现在只显示"改址：改前地址已归档（#N）"，PII 从"人人可见"收回"需要时按号查库"。
  */
 export async function updateAddressSnapshot(
   tx: Db,
@@ -709,9 +712,26 @@ export async function updateAddressSnapshot(
      where id = ${orderId} and status = 'paid'
   `;
   if (updated.count === 0) return false;
+  /**
+   * AJ-293：旧快照**先**归档到 `order_address_history`（019，刻意不挂 append-only），
+   * 再把**归档号**写进 note——note 所在的 `order_events` 删不掉，旧地址一旦进去就永久锁死。
+   *
+   * @why 顺序不能反：先插历史表拿到 id，再写 note。反过来（先写 note）会在两步之间
+   *      留下"note 说了有归档、但历史表里没有"的窗口，而取证链断掉是**静默**的。
+   * @why `previous` 不为 null 这件事由库保证（`orders.address_snapshot` 是 NOT NULL 列，
+   *      且本函数已 `for update` 锁行）。若哪天这个假设被打破，插入会因 NOT NULL 违反而抛错、
+   *      整条改址事务回滚——**不会**静默丢掉取证链，所以这里不为 null 写分支
+   *      （不可达分支写了也拿不到红灯，AJ-256 / AJ-291 的同一条纪律）。
+   */
+  const archived = await tx`
+    insert into order_address_history (order_id, snapshot, actor, at)
+    values (${orderId}, ${tx.json(previous as JSONValue)}, ${actor}, ${at})
+    returning id
+  `;
+  const archiveId = archived[0]?.['id'];
   await tx`
     insert into order_events (order_id, status, note, actor, at)
-    values (${orderId}, 'address_changed', ${JSON.stringify({ from: previous })}, ${actor}, ${at})
+    values (${orderId}, 'address_changed', ${`改址：改前地址已归档（#${String(archiveId)}）`}, ${actor}, ${at})
   `;
   return true;
 }
