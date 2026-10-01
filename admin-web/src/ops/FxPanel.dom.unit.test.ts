@@ -9,6 +9,15 @@
  *        ③ 进入确认态后改值或换币种，勾选不复位，保存时也不再校验；
  *        ④ 不可疑的值（倍数在 0.67–1.5 之间）一键保存，没有任何确认。
  *
+ * ⚠️ **2026-10-02（AJ-297）大批"可疑值"被换了**：本文件原来大量用 `0.67` / `150` / `67`
+ *      这类数当"录错的值"——它们现在会被 `fxFormErrors` 的 **per-quote 量纲区间**先拒掉，
+ *      面板直接显示错误、**根本进不到确认态**，于是下面这些 `ackBox(el)` 全是 null ⇒ 用例红。
+ *      改法不是"放宽断言"，而是**换成仍在区间内的可疑值**（0.0134 = 当前的 2 倍）：
+ *      `fxFormErrors` 管量纲（错一位）、`fxSaveStep` 管相对跳变，**两层各管各的**；
+ *      用越界值去测第二层，等于在测一个永远走不到的路径。
+ *      ⚠️ 顺带：两条 fixture 里"当初录错的历史行"（0.67）也改成了 0.0134——
+ *      0.67 在新护栏下**永远存不进去**，fixture 描述的是一个不可能再出现的状态。
+ *
  * @see ./FxPanel.tsx；./view.ts（`currentFxRawRates` / `fxSaveStep`）；../testing/dom.ts
  */
 import { createElement } from 'react';
@@ -50,12 +59,12 @@ const HISTORY = [
     effective_from: '2026-09-20T00:00:00.000Z',
     is_current: true,
   },
-  // 最早的一行：当初录错了（多了两个 0 的反方向），后来被上面那行更正
+  // 最早的一行：当初录错了（2 倍），后来被上面那行更正
   {
     quote: 'USD',
-    raw_rate: 0.67,
+    raw_rate: 0.0134,
     buffer: 0.03,
-    rate: 0.6901,
+    rate: 0.013802,
     effective_from: '2026-09-01T00:00:00.000Z',
     is_current: false,
   },
@@ -96,7 +105,7 @@ afterEach(async () => {
 describe('汇率面板：保存前核对（A8 残留 / AJ-229）', () => {
   it('🔴 基准是**当前生效**那一行（不是最早的、也不是未来的）：录 0.67 必须标可疑', async () => {
     const el = await open();
-    await type(rateInput(el), '0.67'); // 与最早那行（录错的）相同，与当前生效值差 100 倍
+    await type(rateInput(el), '0.0134'); // 与最早那行（录错的）相同，与当前生效值差 2 倍
     expect(el.textContent).toContain('请确认不是小数点错位');
     await click(button(el, '保存汇率'));
     expect(posts()).toHaveLength(0); // 没有直接提交
@@ -117,7 +126,7 @@ describe('汇率面板：保存前核对（A8 残留 / AJ-229）', () => {
 
   it('🔴 取不到当前汇率（加载失败）：不能当成"没问题"，必须勾选确认', async () => {
     const el = await open({ listFails: true });
-    await type(rateInput(el), '150'); // 典型的"反着填"
+    await type(rateInput(el), '0.0067'); // 值本身正常；本例要的是"没有基准"这件事
     await click(button(el, '保存汇率'));
     expect(posts()).toHaveLength(0);
     expect(ackBox(el)).not.toBeNull();
@@ -126,7 +135,7 @@ describe('汇率面板：保存前核对（A8 残留 / AJ-229）', () => {
 
   it('🔴 首次配置（一行都没有）：同样必须勾选确认', async () => {
     const el = await open({ list: [] });
-    await type(rateInput(el), '150');
+    await type(rateInput(el), '0.0067');
     await click(button(el, '保存汇率'));
     expect(posts()).toHaveLength(0);
     expect(ackBox(el)).not.toBeNull();
@@ -134,12 +143,12 @@ describe('汇率面板：保存前核对（A8 残留 / AJ-229）', () => {
 
   it('🔴 勾选之后再改值：确认作废，必须对**新值**重新走一遍', async () => {
     const el = await open();
-    await type(rateInput(el), '0.67');
+    await type(rateInput(el), '0.0134');
     await click(button(el, '保存汇率'));
     await click(ackBox(el));
     expect(confirmButton(el)?.disabled).toBe(false);
 
-    await type(rateInput(el), '67'); // 勾完再改成另一个量级
+    await type(rateInput(el), '0.02'); // 勾完再改成另一个值（仍在量纲区间内）
     // 确认态必须已经退出：屏幕上不应还有一个可点的"确认保存"
     expect(confirmButton(el)).toBeNull();
     expect(posts()).toHaveLength(0);
@@ -182,16 +191,16 @@ describe('汇率面板：当前生效行由服务端标（ADM3-05）', () => {
     },
     {
       quote: 'USD',
-      raw_rate: 0.67,
+      raw_rate: 0.0134,
       buffer: 0.03,
-      rate: 0.6901,
+      rate: 0.013802,
       effective_from: '2026-09-01T00:00:00.000Z',
       is_current: false,
     },
   ];
 
   it('🔴 基准取服务端标的那一行：按它微调（0.0068）**不标可疑**，也不要求勾选', async () => {
-    // 旧实现拿本机时钟把 2099 那行当未来行排除 → 基准变成 0.67 → 0.0068 是它的 1/100 → 标可疑
+    // 旧实现拿本机时钟把 2099 那行当未来行排除 → 基准变成 0.0134 → 0.0068 是它的 1/2 → 标可疑
     const el = await open({ list: CLOCK_SKEW });
     await type(rateInput(el), '0.0068');
     expect(el.textContent).not.toContain('小数点错位');
@@ -212,7 +221,7 @@ describe('汇率面板：当前生效行由服务端标（ADM3-05）', () => {
 describe('汇率面板：勾选可以被撤回（ADM3-03）', () => {
   it('🔴 勾选之后复选框**仍在**且仍是勾选态（旧实现勾完就把它卸载了）', async () => {
     const el = await open();
-    await type(rateInput(el), '0.67');
+    await type(rateInput(el), '0.0134');
     await click(button(el, '保存汇率'));
     await click(ackBox(el));
     expect(ackBox(el)).not.toBeNull(); // 没有被卸载
@@ -222,7 +231,7 @@ describe('汇率面板：勾选可以被撤回（ADM3-03）', () => {
 
   it('🔴 再点一次可撤回 → 确认按钮重新禁用（运营改主意想再核对一遍时找得到它）', async () => {
     const el = await open();
-    await type(rateInput(el), '0.67');
+    await type(rateInput(el), '0.0134');
     await click(button(el, '保存汇率'));
     await click(ackBox(el));
     await click(ackBox(el));

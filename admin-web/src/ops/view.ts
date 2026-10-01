@@ -21,6 +21,7 @@
  * @see ../../../contracts/api-contract.yaml（ShippingRate / FxRate）；
  *      ../format.ts（展示格式）；server/src/adapters/catalog.ts（D-46 取档唯一实现）
  */
+import { FX_RAW_RATE_BOUNDS } from '@waselect/shared';
 import { formatJst, moneyText, toIsoJst } from '../format.js';
 
 /** 一条运费分档（表单态：数值以字符串存，提交时转）。 */
@@ -111,14 +112,15 @@ export function fxFormErrors(form: unknown): { ok: boolean; first: string } {
   if (!(FX_QUOTES as readonly string[]).includes(quote))
     return { ok: false, first: '币种必须是 CNY 或 USD' };
   if (!Number.isFinite(raw) || raw <= 0) return { ok: false, first: '原始汇率必须是大于 0 的数字' };
-  // ⚠️ 上界与服务端 `domain/fx-input.ts` 的 `MAX_RAW_RATE` 同源（A8）：
-  //    前端不补这一条的话，"多打好几个 0"要等提交之后才被服务端 40001 拒，
-  //    而运营看到的是泛化的"参数缺失或格式错误"。它是量纲护栏不是"合理汇率范围"——
-  //    "反着填"（150）与"错一位"（0.067）都够不到 1000，那两类靠下面的 `fxPreview`。
-  if (raw > MAX_RAW_RATE)
+  // ⚠️ 量纲区间与服务端 `domain/fx-input.ts` **同源**（都引 `FX_RAW_RATE_BOUNDS`，AJ-297）：
+  //    前端不补这一条的话，"错一位"要等提交之后才被服务端 40001 拒，
+  //    而运营看到的是泛化的"参数缺失或格式错误"。
+  //    ✅ 现在区间是 per-quote 的，0.067（USD 错一位）在输入时就报，不用等提交。
+  const bounds = FX_RAW_RATE_BOUNDS[quote as FxQuote];
+  if (raw < bounds.min || raw > bounds.max)
     return {
       ok: false,
-      first: `原始汇率必须 ≤ ${MAX_RAW_RATE}（1 円换不到这么多外币，请检查小数点）`,
+      first: `${quote} 的汇率应在 ${bounds.min}–${bounds.max} 之间（1 円换 ${quote} 的数；你填的是 ${raw}，请检查小数点或币种）`,
     };
   if (from !== '' && toIsoJst(from) === '')
     return { ok: false, first: '生效时间格式为 YYYY-MM-DDTHH:mm（留空表示立即生效）' };
@@ -126,12 +128,17 @@ export function fxFormErrors(form: unknown): { ok: boolean; first: string } {
 }
 
 /**
- * raw_rate 的**量纲上界**（与服务端 `domain/fx-input.ts` 的 `MAX_RAW_RATE` 同值）。
- * @limitation 两处各写一份（前端这里 / 服务端那里）。@why 前端拿不到服务端的常量
- *              （shared 里放"管理端专属的校验上限"会让小程序包也带上它）；
- *              由 `fxFormErrors` 的用例钉住 1000 与 1001 的边界，改一边忘了另一边会红。
+ * ⚠️ **已删除** `MAX_RAW_RATE = 1000`（AJ-297）：它原本在前端这里与服务端
+ * `domain/fx-input.ts` **各写一份字面量**，注释自称"同源"，实际上改一边忘另一边**不会红**——
+ * 两份都是自己的数字，谁也不引用谁。
+ *
+ * 现在两端都引 `packages/shared/src/limits.ts` 的 `FX_RAW_RATE_BOUNDS`，只剩一处定义。
+ * 旧注释里"管理端专属的校验上限不该进 shared（会让小程序包带上它）"这条理由，
+ * 已被 `ADMIN_NOTE_MAX_LENGTH`（2026-10-02 移入 shared）的先例取代：
+ * 常量几十字节，而"两端漂移"的代价是真实的（前端放行、服务端拒绝 ⇒ 用户"提交才炸"）。
+ *
+ * 同时把上界 1000 换成 per-quote 区间——1000 挡不住"错一位"（0.067），区间能挡。
  */
-export const MAX_RAW_RATE = 1000;
 
 /** 折算样例用的日元金额：一个"中等订单"的量级，太大太小都看不出量级错没错。 */
 const SAMPLE_JPY = 10_000;
@@ -148,10 +155,16 @@ const SAMPLE_JPY = 10_000;
  *      录成 0.00067 之后每笔美元订单少收 90%；录成 150 多收两万倍，引来拒付——
  *      两种情况**在提交时都不报任何错**。
  *
- * @why 判据是"与当前生效值的**倍数**"，不是"这个数合不合理"：
- *      汇率本身会波动，绝对值没有合理范围（0.0067 和 0.049 都是对的），
- *      只有"相对上一次跳了多少"是可判的。阈值取 ≥1.5 或 ≤0.67（约 ±50%）——
- *      日波动超过这个幅度在主要货币对上极罕见，而"错一位"是 10 倍或 1/10，远远越过它。
+ * @why 判据是"与当前生效值的**倍数**"，不是"这个数合不合理"。
+ *      ⚠️ 这里原本还有一句"绝对值没有合理范围（0.0067 和 0.049 都是对的）"——
+ *      **那句论证是错的**（AJ-297 更正）：0.0067 是 USD、0.049 是 CNY，
+ *      两者差 7 倍恰恰因为它们是不同币种；它把"跨币种没有一个统一区间"
+ *      当成了"每个币种都没有区间"。**分币种看，两个都是有硬边界的物理量**，
+ *      所以 `fxFormErrors` 现在做 per-quote 的绝对区间硬拦（错一位在输入时就报）。
+ *      ⇒ 本函数的**相对**倍数核对并没有被取代，它拦的是另一类：
+ *      区间之内但相对上一次跳得离谱（例如 USD 从 0.0067 改成 0.012，在区间内但翻了近一倍），
+ *      以及"两个币种值串位"这类区间挡不住的错误。阈值取 ≥1.5 或 ≤0.67（约 ±50%）——
+ *      日波动超过这个幅度在主要货币对上极罕见。
  *
  * @why 同时给一个**样例金额**（¥10,000 ≈ USD 67.00）而不是只给倍数：
  *      运营核对的是"这个数看起来像不像我认识的价格"，倍数需要心算，金额一眼就能看出来。

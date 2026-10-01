@@ -149,23 +149,42 @@ describe('fxFormErrors / toFxBody', () => {
   });
 });
 
-describe('fxFormErrors 的上界（A8：与服务端 MAX_RAW_RATE 同源）', () => {
+describe('fxFormErrors 的量纲区间（AJ-297：与服务端同引 FX_RAW_RATE_BOUNDS）', () => {
   /**
-   * @why 服务端 `domain/fx-input.ts` 的 `MAX_RAW_RATE = 1000` 是量纲护栏
-   *      （"1 円换不到 1000 个外币单位"）。前端不补同一条的话，
-   *      "多打好几个 0"要等提交之后才被服务端 40001 拒，
-   *      而运营看到的是泛化的"参数缺失或格式错误"，不知道错在小数点。
-   *      ⚠️ 两个 1000 是**两处各写一份**（前端不能 import 服务端常量，见 MAX_RAW_RATE 的 @limitation）；
-   *      这两条用例钉住边界，改一边忘一边会红，但要改两边仍靠人记得。
+   * @why 旧的 `MAX_RAW_RATE = 1000` 在前端与服务端**各写一份字面量**，注释自称"同源"，
+   *      实际改一边忘一边**不会红**。现在两端都引 `packages/shared` 的同一个常量，
+   *      这份漂移被消掉——本组用例钉住"前端的边界就是服务端那条边界"：
+   *      只放行服务端也会放行的值，只拒服务端也会拒的值。
+   * @why 顺带把"错一位"从"提交后才被服务端拒"提前到"输入时就报"：
+   *      1000 挡不住 0.067（那正是最常发生的录入错误），per-quote 区间能挡。
    */
-  it('超过 1000 → 拒（且文案点明是小数点问题）', () => {
-    const r = fxFormErrors({ quote: 'USD', rawRate: '1001' });
-    expect(r.ok).toBe(false);
-    expect(r.first).toContain('1000');
+  it('每个币种：真实汇率放行，×10 / ÷10 都拒（10 倍不再是"提交才炸"）', () => {
+    expect(fxFormErrors({ quote: 'USD', rawRate: '0.0067' }).ok).toBe(true);
+    expect(fxFormErrors({ quote: 'USD', rawRate: '0.067' }).ok).toBe(false);
+    expect(fxFormErrors({ quote: 'USD', rawRate: '0.00067' }).ok).toBe(false);
+    expect(fxFormErrors({ quote: 'CNY', rawRate: '0.049' }).ok).toBe(true);
+    expect(fxFormErrors({ quote: 'CNY', rawRate: '0.49' }).ok).toBe(false);
+    expect(fxFormErrors({ quote: 'CNY', rawRate: '0.0049' }).ok).toBe(false);
   });
 
-  it('恰好 1000 → 放行（边界：不能把最大值本身拦掉）', () => {
-    expect(fxFormErrors({ quote: 'USD', rawRate: '1000' }).ok).toBe(true);
+  it('边界含在内：min / max 本身放行（不能把极值本身拦掉）', () => {
+    expect(fxFormErrors({ quote: 'USD', rawRate: '0.002' }).ok).toBe(true);
+    expect(fxFormErrors({ quote: 'USD', rawRate: '0.02' }).ok).toBe(true);
+  });
+
+  it('文案点明**币种与区间**，不是只说"太大"（运营要能自己对上是哪个币、差多少）', () => {
+    const r = fxFormErrors({ quote: 'USD', rawRate: '0.067' });
+    expect(r.ok).toBe(false);
+    expect(r.first).toContain('USD');
+    expect(r.first).toContain('0.002');
+    expect(r.first).toContain('0.02');
+    expect(r.first).toContain('0.067');
+    expect(r.first).toContain('小数点');
+  });
+
+  it('🔴 同一个数字在两个币种下结论相反（区间必须 per-quote，不能共用一个范围）', () => {
+    expect(fxFormErrors({ quote: 'USD', rawRate: '0.049' }).ok).toBe(false);
+    expect(fxFormErrors({ quote: 'CNY', rawRate: '0.049' }).ok).toBe(true);
   });
 });
 
@@ -176,8 +195,14 @@ describe('fxPreview（A8：保存前的量级核对）', () => {
    *      而保存按钮是"一点即提交"，前端只查 >0，服务端上界 1000 只挡"多打好几个 0"，
    *      挡不住"反着填"（150）或"错一位"（0.067 / 0.00067）。
    *      录成 0.00067 之后每笔美元订单少收 90%；录成 150 多收两万倍，引来拒付。
-   * @why 判据用**与当前生效值的倍数**而不是"这个数合不合理"：汇率本身会波动，
-   *      绝对值没有"合理范围"（0.0067 和 0.049 都是对的），只有"相对上一次跳了多少"是可判的。
+   *      ⇒ **"错一位"这一半已由 `fxFormErrors` 的 per-quote 量纲区间接走**（AJ-297），
+   *      面板上 0.067 根本走不到本函数。本函数剩下的是**区间之内**的可疑跳变。
+   * @why 判据用**与当前生效值的倍数**而不是"这个数合不合理"。
+   *      ⚠️ 原注释那句"绝对值没有合理范围（0.0067 和 0.049 都是对的）"**是错的**（AJ-297 更正）：
+   *      0.0067 是 USD、0.049 是 CNY，差 7 倍恰恰因为它们是不同币种；
+   *      它把"跨币种没有一个统一区间"当成了"每个币种都没有区间"。
+   * @limitation 下面两条例外值（0.067 / 0.00067）在真实面板上会被量纲护栏先拦，
+   *      这里仍按 `fxPreview` 自己的契约测——它是纯函数，不假设调用方已校验过。
    */
   it('与当前值相差不大 → 不标红（正常波动不该被拦成硬失败）', () => {
     const p = fxPreview({ quote: 'USD', rawRate: '0.0068', currentRate: 0.0067 });
@@ -521,7 +546,10 @@ describe('fxSaveStep：保存闸门（AJ-229）', () => {
   });
 
   it('🔴 可疑：确认了但没勾选 → 仍是 confirm；勾的是别的表单也不算', () => {
-    const risky = { ...form, rawRate: '0.67' };
+    // ⚠️ risky 值必须**仍在量纲区间内**（USD [0.002, 0.02]）：0.67 这类过去用来当"可疑值"的
+    //    数现在会被 `fxFormErrors` 的量纲护栏先拒掉（返回 invalid），根本走不到本闸门。
+    //    所以这里取 0.0134 —— 是 0.0067 的 2 倍（≥1.5 ⇒ 可疑），但仍在区间内。
+    const risky = { ...form, rawRate: '0.0134' };
     const k = fxFormKey(risky);
     const base = { form: risky, currentRate: 0.0067 };
     expect(fxSaveStep({ ...base, confirmKey: k, ackKey: null })).toEqual({
@@ -540,7 +568,8 @@ describe('fxSaveStep：保存闸门（AJ-229）', () => {
   });
 
   it('🔴 确认的是旧表单（之后改了值）→ 回到 confirm，不会直接 save', () => {
-    const changed = { ...form, rawRate: '67' };
+    // 同上：改用区间内的值，否则量纲护栏会先把它判成 invalid，测不到"确认作废"这条闸门
+    const changed = { ...form, rawRate: '0.0134' };
     expect(
       fxSaveStep({ form: changed, currentRate: 0.0067, confirmKey: key, ackKey: key }).kind,
     ).toBe('confirm');

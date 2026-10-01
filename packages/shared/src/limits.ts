@@ -74,3 +74,53 @@ export const ADMIN_NOTE_MAX_LENGTH = 500;
  *      docs/自主决策记录.md AJ-209（B17）
  */
 export const ADMIN_PASSWORD_MIN_LENGTH = 12;
+
+/**
+ * 展示汇率 `raw_rate` 的 **per-quote 量纲区间**（1 JPY = ? 外币；AJ-297 / 路线图 C7）。
+ *
+ * @why 分币种看，汇率是**有硬边界的物理量**。⚠️ 既有注释（`admin-web/src/ops/view.ts`）
+ *      写的是"绝对值没有合理范围（0.0067 和 0.049 都是对的）"——那个论证**错了**：
+ *      0.0067 是 USD、0.049 是 CNY，两者差 7 倍恰恰因为它们是**不同币种**；
+ *      它把"跨币种没有一个统一区间"当成了"每个币种都没有区间"。同一个币种从来都有区间。
+ * @why 边界取**浮动汇率时代的历史极值再各放宽约 1.7 倍**：
+ *      USD/JPY 浮动以来最强 75.8（2011-10）、最弱约 300（1971 前后）⇒ 取 50–500 JPY/USD；
+ *      CNY/JPY 近二十年 1 CNY ≈ 12–24 JPY ⇒ 取 6–50 JPY/CNY。
+ *      "错一位"是 10 倍 ⇒ 必然越界；真实波动远到不了 1.7 倍 ⇒ 拦得住且不误伤。
+ * @why 放在 shared 而不是两端各写一份：`MAX_RAW_RATE = 1000` 此前在
+ *      `server/src/domain/fx-input.ts` 与 `admin-web/src/ops/view.ts` 各有一份字面量，
+ *      后者注释自称"同源"但改一边忘另一边**不会红**——本常量把那份漂移一并消掉。
+ * @limitation 日元若真跌破 **500 JPY/USD**（或涨破 50），正确维护会被拒，
+ *              届时改这里一行并重部署。这是刻意的取舍：宁可"极端行情下改一行"，
+ *              也不要"日常误录静默入库"——录错一位就是全站展示价同时错 10 倍，
+ *              而这类错误在下单前**没有任何症状**。
+ * @limitation 新增展示币种（改 `FX_QUOTES`）**必须**同时在这里补区间，
+ *              否则该币种没有任何量纲护栏。
+ *
+ * @see server/src/domain/fx-input.ts（服务端拦截）；admin-web/src/ops/view.ts（前端即时校验）；
+ *      docs/自主决策记录.md AJ-297
+ */
+export const FX_RAW_RATE_BOUNDS: Record<'CNY' | 'USD', { min: number; max: number }> = {
+  CNY: { min: 0.02, max: 0.17 },
+  USD: { min: 0.002, max: 0.02 },
+};
+
+/**
+ * 运费档位的**绝对量纲上界**（AJ-297 / 路线图 C7）。
+ *
+ * @why 30kg：`max_weight_g` 的上界。Japan Post EMS 单件上限 30kg、USPS 国际件更低，
+ *      超过它的"档位"在业务上不存在 ⇒ 多打两个 0（2000 → 200000）必是录入错误。
+ * @why 10万円：`price_jpy` 的上界。在售商品是 1–3 万円量级，运费超过商品单价数倍的
+ *      档位不会上架 ⇒ 这个量级的数字必是误录。
+ * @limitation ⚠️ **这两条挡不住"多打一个 0"**：`2000 → 20000`（g）与 `2000 → 20000`（円）
+ *      都仍在上界之内，而 20kg / 2万円的档位本身完全合法。
+ *      精确抓住 10 倍只能靠"与上一版逐档比较"，而整表替换下这个比较在正常重构
+ *      （增删档、调整边界）时假阳性很高，且必须配"确认出口"才不会把"改正上次录错的值"
+ *      自己拦住——代价与收益不匹配，故本轮不做的完整理由见 AJ-297。
+ *      可观测侧已经够：路由层 `admin_shipping_rates_replaced` 把替换前后**整表逐档**记进日志。
+ *
+ * @see server/src/domain/shipping-rates-input.ts；docs/自主决策记录.md AJ-297
+ */
+export const SHIPPING_RATE_BOUNDS = {
+  maxWeightG: 30_000,
+  priceJpy: 100_000,
+} as const;

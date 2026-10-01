@@ -71,6 +71,31 @@ describe('parseShippingRates', () => {
     expect(parseShippingRates([{ ...OK[0], price_jpy: 0 }])[0]?.priceJpy).toBe(0);
   });
 
+  /**
+   * AJ-297：绝对量纲上界（30kg / 10万円）。
+   *
+   * @why 断言的是 **reason** 而不只是错误码：`max_weight_g_invalid`（不是整数）
+   *      与 `max_weight_g_out_of_range`（是整数但大得不可能）都是 40001，
+   *      只断言码的话，把上界整段删掉仍然全绿——被"非整数"那条守卫兜住了（覆盖假象）。
+   * @why "多打一个 0"（2000 → 20000）**故意不测**：它仍在合法区间内，本护栏挡不住，
+   *      这是 AJ-297 明写的已知缺口。写一条"它应该被拦"的用例等于假装解决了。
+   */
+  it('🔴 量纲上界：多打两个 0 → 40001，且 reason 与"填错格式"分开（AJ-297）', () => {
+    expect(reasonOf(() => parseShippingRates([{ ...OK[0], max_weight_g: 200_001 }]))).toBe(
+      'max_weight_g_out_of_range',
+    );
+    expect(reasonOf(() => parseShippingRates([{ ...OK[0], price_jpy: 100_001 }]))).toBe(
+      'price_jpy_out_of_range',
+    );
+    // 上界本身放行（不能把极值本身拦掉）
+    expect(
+      parseShippingRates([{ ...OK[0], max_weight_g: 30_000, price_jpy: 100_000 }])[0]?.maxWeightG,
+    ).toBe(30_000);
+    // ⚠️ 已知缺口：10 倍（20000 g / 20000 円）仍在区间内 ⇒ 放行。如实钉住，不假装拦了。
+    expect(parseShippingRates([{ ...OK[0], max_weight_g: 20_000 }])[0]?.maxWeightG).toBe(20_000);
+    expect(parseShippingRates([{ ...OK[1], price_jpy: 20_000 }])[0]?.priceJpy).toBe(20_000);
+  });
+
   it('同一承运商 + 上限重复 → 40001（DB UNIQUE 会拒，这里先给出可读原因）', () => {
     expect(codeOf(() => parseShippingRates([...OK, { ...OK[1] }]))).toBe(40001);
   });

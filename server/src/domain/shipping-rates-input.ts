@@ -13,11 +13,18 @@
  *      所以守卫必须在**这里**，不能指望 DB 约束（UNIQUE(carrier, max_weight_g) 只挡重复档，
  *      不挡"两家承运商"）。
  *
- * @limitation 一：⚠️ **没有重量上界 / 价格上界的量纲护栏**——
- *              2000 打成 20000 会让所有包裹落进最便宜那一档，每单少收钱且不报错。
- *              不做的原因与 fx-input @limitation 二 同源：需要一个"合理区间"的运营参数，
- *              没拍板；本单元只补"可观测"（路由层把替换前后的档数打进日志），
- *              数量级错误目前靠页面二次确认 + 对账发现。登记为待办。
+ * @limitation 一：⚠️ **只有"极端"量纲护栏（`SHIPPING_RATE_BOUNDS`，AJ-297），挡不住 10 倍**——
+ *              ✅ 已能挡：多打**两个** 0（`max_weight_g` 2000 → 200000、`price_jpy` 2000 → 200000）。
+ *              ❌ 挡不住：多打**一个** 0（2000 → 20000）——20kg / 2万円的档位**本身合法**，
+ *              而运费档位的合法区间天然跨一个数量级（¥2000 的轻小件档与 ¥40,000 的 20kg 档都对），
+ *              任何绝对阈值要么漏拦 10 倍、要么误拦真实档位，二者只能选一个。
+ *              ⇒ 10 倍的精确检测只能靠"与上一版逐档比较"，而整表替换下这个比较在**正常重构**
+ *              （增删档、调边界）时假阳性很高；更关键的是它必须配"确认出口"，
+ *              否则"改正上次录错的值"这个动作自己会被拦住（这是 fx 侧同样的问题，
+ *              那里改用绝对区间绕开了它，这里绕不开）。完整取舍见 AJ-297。
+ *              ✅ 可观测已足够：路由层 `admin_shipping_rates_replaced` 把替换前后**整表逐档**
+ *              写进日志，"之前是多少"随时可答，对账能直接定位到哪一档变了。
+ *              剩余风险由页面二次确认 + 对账承担（不再是"完全没有防护"）。
  * @limitation 二：不校验"档位是否连续覆盖"（比如只有 500g 一档，1kg 的包裹取不到档）。
  *              覆盖率是运营决策（有些重量本来就不卖），且超重已有 50004 兜底——
  *              拦在保存时会让"刻意只留一档"的合法配置也存不进去。
@@ -26,6 +33,7 @@
  *      adapters/catalog.ts（D-46 唯一取档 SQL + resolveSingleActiveCarrier）；
  *      admin-web/src/ops/view.ts（前端同一套整表校验：rateErrors）
  */
+import { SHIPPING_RATE_BOUNDS } from '@waselect/shared';
 import { AppError } from '../errors.js';
 
 /** 列宽（与 001 的 VARCHAR(32) 一致）：超长属"形状错"（40001），DB 兜底是最后一道。 */
@@ -68,6 +76,23 @@ export function parseShippingRates(body: unknown): ShippingRateInput[] {
     // 0 円运费合法（手动包邮）；负数不是
     if (!Number.isInteger(priceJpy) || (priceJpy as number) < 0) {
       throw new AppError(40001, { reason: 'price_jpy_invalid', index: i });
+    }
+    // AJ-297：绝对量纲上界。拦"多打两个 0"这类极端录入；10 倍拦不住，理由见 @limitation 一。
+    // @why 用独立的 reason 而不是复用 `_invalid`：形状错（不是整数）与量纲错（是整数但大得
+    //      不成立）在运营眼里是两件事——前者是"填错了格式"，后者是"数字打多了"。
+    if ((maxWeightG as number) > SHIPPING_RATE_BOUNDS.maxWeightG) {
+      throw new AppError(40001, {
+        reason: 'max_weight_g_out_of_range',
+        index: i,
+        max: SHIPPING_RATE_BOUNDS.maxWeightG,
+      });
+    }
+    if ((priceJpy as number) > SHIPPING_RATE_BOUNDS.priceJpy) {
+      throw new AppError(40001, {
+        reason: 'price_jpy_out_of_range',
+        index: i,
+        max: SHIPPING_RATE_BOUNDS.priceJpy,
+      });
     }
     const key = `${carrier}|${String(maxWeightG)}`;
     if (seen.has(key)) throw new AppError(40001, { reason: 'tier_duplicated', index: i });

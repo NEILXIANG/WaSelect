@@ -14,7 +14,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../errors.js';
 import { applyFxBuffer, FX_QUOTES, parseFxInput } from './fx-input.js';
-import { toRateInt } from '@waselect/shared';
+import { FX_RAW_RATE_BOUNDS, toRateInt } from '@waselect/shared';
 
 /** 取错误码（非 AppError 直接抛出，避免"没抛错也绿"）。 */
 function codeOf(fn: () => unknown): number {
@@ -26,6 +26,23 @@ function codeOf(fn: () => unknown): number {
   }
   throw new Error('预期抛 AppError，实际没有抛');
 }
+
+/** 取 `details.reason`（越界的两种录入错误要能分开报，只断言"被拒"证明不了）。 */
+function reasonOf(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (e) {
+    if (e instanceof AppError) return String((e.details as { reason?: unknown })?.reason ?? '');
+    throw e;
+  }
+  throw new Error('预期抛 AppError，实际没有抛');
+}
+
+/** 各币种的量纲区间与"真实汇率 / 错一位"的对照（AJ-297）。 */
+const FX_CASES: Array<{ quote: string; real: number }> = [
+  { quote: 'USD', real: 0.0067 }, // 1 USD ≈ 149 JPY
+  { quote: 'CNY', real: 0.049 }, // 1 CNY ≈ 20 JPY
+];
 
 describe('parseFxInput', () => {
   it('body 不是对象 → 40001', () => {
@@ -48,26 +65,80 @@ describe('parseFxInput', () => {
     expect(codeOf(() => parseFxInput({ quote: 'USD', raw_rate: -0.0065 }))).toBe(40001);
   });
 
-  it('raw_rate 超出量纲上限 → 40001（防"多打几个 0"）', () => {
-    expect(codeOf(() => parseFxInput({ quote: 'USD', raw_rate: 1001 }))).toBe(40001);
-    // 上限本身是合法边界内：不要求"必须小于 1"，否则量纲正确的 KRW 之类会被误伤
-    expect(parseFxInput({ quote: 'USD', raw_rate: 1000 }).rawRate).toBe(1000);
+  /**
+   * AJ-297：量纲区间是 **per-quote** 的，10 倍的"错一位"必然越界。
+   *
+   * @why 区间按币种分开取这件事本身就是本条要证明的东西：过去两端都写
+   *      "绝对值没有合理范围（0.0067 和 0.049 都是对的）"，那句话把"跨币种没有统一区间"
+   *      错当成了"每个币种都没有区间"——这里用**同一个数字在两个币种下结论相反**钉住它：
+   *      0.0067 在 USD 收、在 CNY 拒；0.049 在 CNY 收、在 USD 拒。
+   * @why 只测"通过值"证明不了护栏存在（把整段删掉也全绿），所以每个币种都必须有
+   *      **被拒**的值，且被拒的值要取"真实汇率 ×10 / ÷10"——即真实会发生的录入错误。
+   */
+  it('🔴 per-quote 量纲区间：真实汇率照收，错一位（×10 / ÷10）一律拒（AJ-297）', () => {
+    for (const c of FX_CASES) {
+      expect(parseFxInput({ quote: c.quote, raw_rate: c.real }).rawRate).toBe(c.real);
+      expect(
+        codeOf(() => parseFxInput({ quote: c.quote, raw_rate: c.real * 10 })),
+        `${c.quote} 多打一位（${c.real * 10}）必须被拦`,
+      ).toBe(40001);
+      expect(
+        codeOf(() => parseFxInput({ quote: c.quote, raw_rate: c.real / 10 })),
+        `${c.quote} 少打一位（${c.real / 10}）必须被拦`,
+      ).toBe(40001);
+    }
+    // 同一个数字在两个币种下结论相反——这是"区间必须 per-quote"的直接证据
+    expect(codeOf(() => parseFxInput({ quote: 'CNY', raw_rate: 0.0067 }))).toBe(40001);
+    expect(parseFxInput({ quote: 'USD', raw_rate: 0.0067 }).rawRate).toBe(0.0067);
+    expect(codeOf(() => parseFxInput({ quote: 'USD', raw_rate: 0.049 }))).toBe(40001);
+    expect(parseFxInput({ quote: 'CNY', raw_rate: 0.049 }).rawRate).toBe(0.049);
+  });
+
+  it('区间**边界含在内**：min / max 本身放行（不能把极值本身拦掉）', () => {
+    for (const q of FX_QUOTES) {
+      const b = FX_RAW_RATE_BOUNDS[q];
+      expect(parseFxInput({ quote: q, raw_rate: b.min }).rawRate).toBe(b.min);
+      expect(parseFxInput({ quote: q, raw_rate: b.max }).rawRate).toBe(b.max);
+      // 越一点点就拒
+      expect(codeOf(() => parseFxInput({ quote: q, raw_rate: b.max * 1.001 }))).toBe(40001);
+      expect(codeOf(() => parseFxInput({ quote: q, raw_rate: b.min * 0.999 }))).toBe(40001);
+    }
+  });
+
+  it('越界报 `raw_rate_magnitude`，detail 带币种与区间（运营要能自己核对"哪个币、该在多少之间"）', () => {
+    const d = (() => {
+      try {
+        parseFxInput({ quote: 'USD', raw_rate: 0.067 });
+      } catch (e) {
+        return ((e as AppError).details ?? {}) as Record<string, unknown>;
+      }
+      return {};
+    })();
+    expect(d['reason']).toBe('raw_rate_magnitude');
+    expect(d['quote']).toBe('USD');
+    expect(d['min']).toBe(FX_RAW_RATE_BOUNDS.USD.min);
+    expect(d['max']).toBe(FX_RAW_RATE_BOUNDS.USD.max);
   });
 
   /**
-   * B25 / AJ-211：**"正得离谱"和"≤0"是两种不同的录入错误**，都要挡。
+   * 🔴 旧的两个分支（`> 1000` 与 `< 5e-9`）被删掉了——本用例证明**删得对**：
+   * 新区间必须完全落在旧区间内部，且区间内任意值都不会让 rate 被网格舍成 0。
    *
-   * @why `rawRate > 0` 挡不住这一半：`applyFxBuffer` 会把值对齐到 1e-8 的网格，
-   *      小于 `0.5/1e8`（5×10⁻⁹）的正数一律**舍成 0** ⇒ `toRateInt(0)` 抛错 ⇒
-   *      保存汇率这条管理端写路径 500，之后每次读商品列表都撞上这个 0 汇率。
-   *      @why 只断言"被拒"是不够的——把下界删掉之后，`rawRate=1e-12` 会通过解析，
-   *      而落库时才炸（在另一个模块）；所以这里必须**用小到会舍成 0 的值**当输入。
+   * @why 直接删掉旧用例、新增例，看上去一样绿；但"新护栏真的覆盖了旧护栏"
+   *      是另一件事——少了这一条，将来有人把区间放宽到 1000 以上或收到 1e-9 以下，
+   *      旧的 `toRateInt(0)` 那条 500 链就会**复活**而没有任何用例报警。
    */
-  it('raw_rate 小到会被网格舍成 0 → 40001 raw_rate_too_small（B25 / AJ-211）', () => {
-    expect(codeOf(() => parseFxInput({ quote: 'USD', raw_rate: 1e-12 }))).toBe(40001);
-    expect(codeOf(() => parseFxInput({ quote: 'USD', raw_rate: 4.9e-9 }))).toBe(40001);
-    // 刚好能活下来的边界仍通过（1e-8 > 0.5/1e8）
-    expect(parseFxInput({ quote: 'USD', raw_rate: 1e-8 }).rawRate).toBe(1e-8);
+  it('🔴 被删掉的旧上界（1000）与旧下界（5e-9）确实不可达：新区间完全覆盖旧护栏', () => {
+    for (const q of FX_QUOTES) {
+      const b = FX_RAW_RATE_BOUNDS[q];
+      expect(b.max).toBeLessThanOrEqual(1000); // 旧 MAX_RAW_RATE 分支不可达
+      expect(b.min).toBeGreaterThan(0.5 / 1e8); // 旧 MIN_RAW_RATE 分支不可达
+      // 区间下界经过 buffer=0 的对齐后仍 > 0 ⇒ toRateInt 不会抛（B25 / AJ-211 那条链）
+      expect(toRateInt(applyFxBuffer(b.min, 0))).toBeGreaterThan(0);
+      expect(reasonOf(() => parseFxInput({ quote: q, raw_rate: 1e-12 }))).toBe(
+        'raw_rate_magnitude',
+      );
+    }
   });
 
   it('effective_from 非法日期 → 40001；缺省 → null（调用方填 clock.now()）', () => {
@@ -99,10 +170,14 @@ describe('parseFxInput', () => {
 
   it('合法输入：两币都收，effective_from 解析成 UTC 毫秒（带偏移也归一）', () => {
     const expectMs = Date.parse('2026-09-28T00:00:00Z');
+    // ⚠️ 两个币种的 raw_rate **不能**用同一个数（AJ-297）：0.0065 是 USD 的量级，
+    //    填到 CNY 上会被量纲区间拒——这条用例过去用同一个 0.0065 跑两个币，
+    //    正是"跨币种没有区间"那个错误认知留下的痕迹。
+    const perQuote: Record<string, number> = { USD: 0.0065, CNY: 0.048 };
     for (const q of FX_QUOTES) {
       const v = parseFxInput({
         quote: q,
-        raw_rate: 0.0065,
+        raw_rate: perQuote[q] as number,
         effective_from: '2026-09-28T00:00:00Z',
       });
       expect(v.quote).toBe(q);
@@ -112,7 +187,7 @@ describe('parseFxInput', () => {
     expect(
       parseFxInput({
         quote: 'USD',
-        raw_rate: 1,
+        raw_rate: 0.0065,
         effective_from: '2026-09-28T09:00:00+09:00',
       }).effectiveFromMs,
     ).toBe(expectMs);

@@ -307,7 +307,18 @@ describe('POST /admin/fx', () => {
     }
   });
 
-  it('突变 10 倍以上 → 打 fx_rate_jump 的 warn（只记不拦，AJ-148 ④）', async () => {
+  /**
+   * 突变 → 打 fx_rate_jump 的 warn（只记不拦，AJ-148 ④）。
+   *
+   * @why 2026-10-02（AJ-297）换了输入值：原来用 `0.65`（0.0065 多打两个 0，100 倍），
+   *      但 per-quote 量纲区间上线后 0.65 会被**拦在校验层**（400），根本到不了 warn ——
+   *      也就是说这条用例原来测的路径，现在归 `fx-input` 的量纲护栏管了。
+   *      ⇒ 本用例改用**区间之内**的突变（0.0065 → 0.02，约 3.1 倍，≥ FX_JUMP_RATIO）：
+   *      这正是"只记不拦"那层**剩下**的职责——量纲管得着的它不管，量纲管不着的它来记。
+   * @why 顺带钉住"阈值取 3 而不是 10"：0.02/0.002 = 10 是区间内可能的最大倍数，
+   *      只在两个端点之间成立；取 10 的话这条 warn 在真实维护里永远不触发。
+   */
+  it('突变超过阈值 → 打 fx_rate_jump 的 warn（只记不拦，AJ-148 ④ / AJ-297）', async () => {
     const { url, close } = await buildServer();
     try {
       const token = await bearer();
@@ -330,7 +341,9 @@ describe('POST /admin/fx', () => {
         '/api/v1/admin/fx',
         {
           quote: 'USD',
-          raw_rate: 0.65, // ← 多打两个 0：0.006695 → 0.6695，约 100 倍
+          // ← 仍在 USD 区间 [0.002, 0.02] 内，但相对上一条（0.006695）跳了约 3.1 倍
+          //   （0.65 这种"多打两个 0"现在由量纲护栏拦，走不到这里）
+          raw_rate: 0.02,
           effective_from: '2020-01-02T00:00:00Z',
         },
         token,
@@ -345,6 +358,8 @@ describe('POST /admin/fx', () => {
       expect(sets).toHaveLength(2);
       expect((sets[0]?.['ctx'] as { prev_rate?: number | null }).prev_rate).toBeNull();
       expect((sets[1]?.['ctx'] as { prev_rate?: number }).prev_rate).toBeCloseTo(0.006695, 8);
+      // 突变倍数进了日志：排障时不用自己拿两条记录去算
+      expect((warns[0]?.['ctx'] as { ratio?: number }).ratio).toBeGreaterThan(3);
       // 只记不拦：第二次仍是 201，没有被拒绝
       expect((await db`select count(*)::int as n from fx_rates`)[0]?.['n']).toBe(2);
     } finally {
