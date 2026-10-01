@@ -7,11 +7,14 @@
  *
  * @limitation 一：**不吞形状错误**——200 但形状不符按网络层异常抛（NETWORK_ERROR_CODE），
  *              与 `products/api.ts` @limitation 一 同口径。
- * @limitation 二：这三个写接口（发货 / 退款 / 改址）契约**没有声明 Idempotency-Key**
- *              （与 `POST /orders` / `POST /orders/{id}/pay` 不同），所以前端**不传**。
- *              防重复提交的兜底是服务端状态机（已发货不能再发货、refunding 期间不能退款）
- *              + 前端按钮禁用；⚠️ 这不是幂等，只是"第二次大概率被拒"——
+ * @limitation 二：这四个写接口（发货 / 退款 / 改址 / **解除拒付限制**）契约**没有声明
+ *              Idempotency-Key**（与 `POST /orders` / `POST /orders/{id}/pay` 不同），所以前端**不传**。
+ *              防重复提交的兜底是服务端状态机（已发货不能再发货、refunding 期间不能退款、
+ *              已没锁的单解除会 40902 `dispute_not_locking`）+ 前端按钮禁用；
+ *              ⚠️ 这不是幂等，只是"第二次大概率被拒"——
  *              将来契约补上幂等头时，这里要跟着传（否则超时重发真的会发两次货）。
+ *              ⚠️ 解除那一条**尤其**不幂等：契约没有"重新上锁"的接口，
+ *              解开了就收不回，所以前端用两步确认 + 按钮在提交期间禁用兜底。
  * @limitation 三：列表接口返回的是 **`AdminOrderListItem`**（契约 0.6.1 起，不再是 `Order`）：
  *              带 `has_dispute` / `is_test`，但**不带** `items` / `address` / `timeline` /
  *              `payments` / `events`——那些只有详情接口 `AdminOrder` 才有。
@@ -150,6 +153,42 @@ export async function refundOrder(
   if (outcome === 'succeeded') return 'succeeded';
   if (outcome === 'pending') return 'pending';
   return 'unknown';
+}
+
+/**
+ * `POST /admin/orders/{id}/dispute/release`——**人工解除拒付限制**（B1b / AJ-194 的逃生口）。
+ *
+ * @why 这个口的形状必须校验：**成功返回 `has_dispute:false` 是本动作的唯一证据**。
+ *      不校验的话，将来服务端改成返回别的形状，页面会拿着 undefined 当"已解除"，
+ *      而运营看到的是"点了、没报错、以为解开了"——这条链断掉的样子和退款的
+ *      `pending` 当成失败是同一类（@see `refundOrder` @why）。
+ * @why `has_dispute` 断言 **false** 而不是"是布尔就行"：契约写死了这个值是 false
+ *      （本接口就是把 true 改成 false）。返回 true 说明服务端没做成，
+ *      按"已解除"处理会让页面立刻放开发货按钮——那正是钱货两空的入口。
+ *
+ * @throws {ApiError} 响应形状与契约不符（NETWORK_ERROR_CODE）
+ */
+export async function releaseDisputeHold(
+  api: AdminApi,
+  id: string,
+  body: { reason: string },
+  traceId?: string,
+): Promise<{ order_id: string; has_dispute: false }> {
+  const res = await api({
+    path: `/api/v1/admin/orders/${encodeURIComponent(id)}/dispute/release`,
+    method: 'POST',
+    body,
+    ...(traceId !== undefined ? { traceId } : {}),
+  });
+  const o = res as { order_id?: unknown; has_dispute?: unknown } | null;
+  if (typeof o?.['order_id'] !== 'string' || o?.['has_dispute'] !== false) {
+    throw new ApiError(
+      NETWORK_ERROR_CODE,
+      '解除拒付限制的响应形状与契约不符（应为 {order_id, has_dispute:false}）',
+      traceId ?? '',
+    );
+  }
+  return { order_id: o['order_id'], has_dispute: false };
 }
 
 /** `POST /admin/orders/{id}/address`（发货前改址；请求体是 `AddressInput`）。 */

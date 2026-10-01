@@ -42,6 +42,24 @@
 export const REFUND_REASON_MAX_LENGTH = 500;
 
 /**
+ * 管理端**备注**（解除拒付限制的理由等进审计台账的自由文本）的字符上限。
+ *
+ * @why 500 与 `REFUND_REASON_MAX_LENGTH` **同值纯属巧合，不是同一个约束**：
+ *      那条是机构 metadata 的**硬**上限（超了机构拒整笔退款），
+ *      这条没有任何外部约束，取值只为不让审计行变成一篇长文。
+ *      ⚠️ 因此两条**不互相引用**：同值不是同源，改其中一条不该被另一条绊住。
+ * @why 2026-10-02 从 `server/src/domain/admin-order-actions.ts` **移进来**：
+ *      它原先刻意留在服务端，理由写的是"没有前端消费方，不放进 shared"——
+ *      管理端补上「人工解除拒付限制」按钮（AJ-194 的前端待办）之后这个理由不成立，
+ *      而前端再写一个 500 就是第三份（文件头 @why 要防的正是这件事）。
+ * @limitation 与 `REFUND_REASON_MAX_LENGTH` 同样按 **UTF-16 码元**计数（`.length`）。
+ *
+ * @see server/src/domain/admin-order-actions.ts（`releaseReasonGuard`）；
+ *      admin-web/src/orders/view.ts（`releaseErrors`）；docs/自主决策记录.md AJ-194 / AJ-291
+ */
+export const ADMIN_NOTE_MAX_LENGTH = 500;
+
+/**
  * 管理员口令的**最小长度**（12，N11）。
  *
  * @why 它是"下限"而不是"上限"，但同样会长成两份：`config.ts` 用 12 拒启动、

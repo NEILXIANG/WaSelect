@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ORDER_STATUS, REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import { ADMIN_NOTE_MAX_LENGTH, ORDER_STATUS, REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import {
   ORDER_STATUS_LABELS,
   STATUS_FILTER_OPTIONS,
@@ -18,14 +18,19 @@ import {
   addressSummary,
   paymentSummary,
   emptyRefundForm,
+  emptyReleaseForm,
   emptyShipForm,
   orderRows,
   refundErrors,
   refundFailureNotice,
   refundGate,
+  RELEASE_DONE_NOTICE,
+  releaseErrors,
+  isDisputeLocked,
   shipErrors,
   shipGate,
   toRefundBody,
+  toReleaseBody,
   toShipBody,
 } from './view.js';
 
@@ -293,6 +298,62 @@ describe('ORDER_STATUS_LABELS 与契约 OrderStatus 的双向比对', () => {
   it('筛选选项覆盖全部状态 + 全部（少一个就筛不出来）', () => {
     expect(STATUS_FILTER_OPTIONS).toHaveLength(ORDER_STATUS.length + 1);
     expect(STATUS_FILTER_OPTIONS[0]?.value).toBe('all');
+  });
+});
+
+/**
+ * 「人工解除拒付限制」的入口判据与表单（B1b / AJ-194 的前端落地，AJ-291）。
+ *
+ * @why 单独一组而不是并进"发货 / 退款表单"：这个动作**不可逆且没有反向接口**
+ *      （契约只有 release，没有 re-lock），它的闸门判反了的表现不是"点不动"，
+ *      而是"对一张没锁的订单点了解除"——服务端会响亮失败 40902，
+ *      但更糟的是将来有人把它加进列表页逐行按钮时的"点错单号"。
+ */
+describe('isDisputeLocked / releaseErrors（解除拒付限制，AJ-291）', () => {
+  it('🔴 只有 has_dispute === true 才给入口（没锁的单不出现按钮）', () => {
+    expect(isDisputeLocked(withStatus('paid', { has_dispute: true }))).toBe(true);
+    expect(isDisputeLocked(withStatus('paid', { has_dispute: false }))).toBe(false);
+    // ⚠️ 字段缺失**不放行**（与 refundGate 的"缺失即放行"相反）：解除不可逆，
+    //    在不知道有没有锁的时候给按钮 = 把不可逆动作变成试错。
+    expect(isDisputeLocked(withStatus('paid'))).toBe(false);
+    expect(isDisputeLocked(withStatus('paid', { has_dispute: 'true' }))).toBe(false);
+    expect(isDisputeLocked(null)).toBe(false);
+  });
+
+  it('不按订单状态分叉：拒付可能开在 paid，也可能开在已退款之后协商和好', () => {
+    for (const status of ORDER_STATUS) {
+      expect(isDisputeLocked(withStatus(status, { has_dispute: true })), status).toBe(true);
+      expect(isDisputeLocked(withStatus(status, { has_dispute: false })), status).toBe(false);
+    }
+  });
+
+  it('理由必填（无理由的解锁在审计里是一条说不清的记录）', () => {
+    expect(releaseErrors(emptyReleaseForm()).ok).toBe(false);
+    expect(releaseErrors({ reason: '   ' }).ok).toBe(false);
+    expect(releaseErrors({ reason: '机构已结案但漏发事件' }).ok).toBe(true);
+    expect(toReleaseBody({ reason: ' 已与买家协商和好 ' })).toEqual({ reason: '已与买家协商和好' });
+  });
+
+  it(`理由上限 ${String(ADMIN_NOTE_MAX_LENGTH)} 字由 shared 常量算出（不写死 500）`, () => {
+    const MAX = ADMIN_NOTE_MAX_LENGTH;
+    expect(releaseErrors({ reason: '理'.repeat(MAX) }).ok).toBe(true);
+    const tooLong = releaseErrors({ reason: '理'.repeat(MAX + 1) });
+    expect(tooLong.ok).toBe(false);
+    expect(tooLong.first).toContain(String(MAX));
+  });
+
+  it('脏输入当作空表单（不抛，也不让 undefined 穿透）', () => {
+    expect(releaseErrors(null).ok).toBe(false);
+    expect(releaseErrors(undefined).ok).toBe(false);
+    expect(toReleaseBody(undefined)).toEqual({ reason: '' });
+  });
+
+  it('🔴 成功提示必须说清"拒付**没有**结案"（否则运营会理解成"处理完了"就发货）', () => {
+    // @why 这条是文案断言，不是格式化检查：解除之后发货闸门立刻打开，
+    //      而"以为拒付已结案 → 发货"正是钱货两空的标准路径。
+    expect(RELEASE_DONE_NOTICE).toContain('没有结案');
+    expect(RELEASE_DONE_NOTICE).toContain('风控列表');
+    expect(RELEASE_DONE_NOTICE).toContain('不要因为按钮亮了就发');
   });
 });
 

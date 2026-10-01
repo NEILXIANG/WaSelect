@@ -12,7 +12,7 @@
  * @see ./OrderDetail.tsx；./view.ts（`refundFailureNotice`）；../testing/dom.ts
  */
 import { createElement } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
 import { button, click, mount, type, type Mounted } from '../testing/dom.js';
 import { OrderDetail } from './OrderDetail.js';
@@ -20,13 +20,17 @@ import { OrderDetail } from './OrderDetail.js';
 interface Call {
   path: string;
   method?: string;
+  body?: unknown;
 }
 
 let mounted: Mounted | undefined;
 let calls: Call[];
 /** 服务端此刻的订单状态（退款请求到达后由用例改写，模拟"第一段已提交"）。 */
 let status: string;
+/** 服务端此刻的拒付锁（解除请求到达后由用例改写）。 */
+let hasDispute: boolean;
 let refundBehaviour: () => unknown;
+let releaseBehaviour: () => unknown;
 let changed: number;
 
 const order = () => ({
@@ -34,7 +38,7 @@ const order = () => ({
   order_no: 'W260930-ABC123',
   status,
   total_jpy: 9150,
-  has_dispute: false,
+  has_dispute: hasDispute,
   items: [],
   events: [],
 });
@@ -45,6 +49,7 @@ async function open(): Promise<HTMLElement> {
   const api = async (req: Call): Promise<unknown> => {
     calls.push(req);
     if (req.path.endsWith('/refund')) return refundBehaviour();
+    if (req.path.endsWith('/dispute/release')) return releaseBehaviour();
     return order();
   };
   mounted = await mount(
@@ -75,9 +80,98 @@ afterEach(async () => {
   mounted = undefined;
 });
 
+/**
+ * 「人工解除拒付限制」的组件行为（B1b / AJ-194 的前端落地，AJ-291）。
+ *
+ * @why 必须走组件用例：`view.ts` 的纯函数只能证明"闸门判得对"，
+ *      证明不了"按钮挂上去了、点了真的打这个接口、成功之后真的刷新了"。
+ *      而 AJ-194 这条欠账的**全部内容**就是"接口在、UI 不在"——
+ *      只有组件级才守得住"将来有人把它摘掉"。
+ */
+describe('订单详情：人工解除拒付限制（AJ-291）', () => {
+  const RELEASE_BTN = '人工解除拒付限制';
+
+  beforeEach(() => {
+    hasDispute = false;
+    refundBehaviour = () => ({ order_id: 'o-1', outcome: 'succeeded' });
+    releaseBehaviour = () => ({ order_id: 'o-1', has_dispute: false });
+  });
+
+  it('🔴 没锁的订单**不出现**这个按钮（不可逆动作不能当试错）', async () => {
+    status = 'paid';
+    hasDispute = false;
+    const el = await open();
+    expect(button(el, RELEASE_BTN)).toBeNull();
+  });
+
+  it('🔴 锁着的订单：填理由 → 两步确认 → 打到 /dispute/release 且带 reason', async () => {
+    status = 'paid';
+    hasDispute = true;
+    const el = await open();
+    expect(button(el, RELEASE_BTN)).not.toBeNull();
+
+    await type(el.querySelector('input[placeholder^="解除理由"]'), '机构已结案但漏发事件');
+    await click(button(el, RELEASE_BTN));
+    expect(button(el, '确认解除（不可撤销）'), '必须有第二步').not.toBeNull();
+    // 第一步只是进入确认态，**不能**发出请求
+    expect(calls.filter((c) => c.path.endsWith('/dispute/release'))).toHaveLength(0);
+
+    await click(button(el, '确认解除（不可撤销）'));
+    const posted = calls.filter((c) => c.path.endsWith('/dispute/release'));
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.body).toEqual({ reason: '机构已结案但漏发事件' });
+  });
+
+  it('🔴 理由为空 → 不发请求，只报错（无理由的解锁在审计里是一条说不清的记录）', async () => {
+    status = 'paid';
+    hasDispute = true;
+    const el = await open();
+    await click(button(el, RELEASE_BTN));
+    await click(button(el, '确认解除（不可撤销）'));
+    expect(calls.filter((c) => c.path.endsWith('/dispute/release'))).toHaveLength(0);
+    expect(el.querySelector('.error')?.textContent).toContain('解除理由必填');
+  });
+
+  it('🔴 成功 → 刷新详情与列表，并明说"拒付没有结案"（否则运营会以为处理完就发货）', async () => {
+    status = 'paid';
+    hasDispute = true;
+    releaseBehaviour = () => {
+      hasDispute = false; // 服务端真的解开了
+      return { order_id: 'o-1', has_dispute: false };
+    };
+    const el = await open();
+    const before = detailFetches();
+    await type(el.querySelector('input[placeholder^="解除理由"]'), '已与买家协商和好');
+    await click(button(el, RELEASE_BTN));
+    await click(button(el, '确认解除（不可撤销）'));
+
+    expect(detailFetches()).toBe(before + 1);
+    expect(changed).toBe(1);
+    expect(el.textContent).toContain('没有结案');
+    expect(el.textContent).toContain('不要因为按钮亮了就发');
+    // 锁已解开 → 面板收起，不留一个还能再点的按钮
+    expect(button(el, RELEASE_BTN)).toBeNull();
+  });
+
+  it('🔴 服务端 40902（本来就没锁）→ 显示服务端的话，**不**显示成功提示', async () => {
+    status = 'paid';
+    hasDispute = true;
+    releaseBehaviour = () => {
+      throw new ApiError(40902, '订单状态不允许此操作', 't-3');
+    };
+    const el = await open();
+    await type(el.querySelector('input[placeholder^="解除理由"]'), '链断了');
+    await click(button(el, RELEASE_BTN));
+    await click(button(el, '确认解除（不可撤销）'));
+    expect(el.querySelector('.error')?.textContent).toContain('不允许此操作');
+    expect(el.textContent).not.toContain('没有结案');
+  });
+});
+
 describe('订单详情：退款提交出错之后（B41 残留 / AJ-230）', () => {
   it('🔴 机构超时（5xx）而订单已进入退款中：页面必须重新取详情，并明说"不要去机构后台手工退"', async () => {
     status = 'paid';
+    hasDispute = false;
     refundBehaviour = () => {
       status = 'refunding'; // 第一段已提交
       throw new ApiError(50000, '服务器内部错误', 't-1');

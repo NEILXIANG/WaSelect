@@ -414,9 +414,12 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
    *              本路由不自己 insert；额外用 `setAuditBefore` 记改前值——
    *              解锁是**不可逆**的（契约没有"重新上锁"的接口），
    *              按该中间件的口径，不可逆操作才取改前值。
-   * @limitation 三：管理端 UI 暂无这个按钮（属批次三），目前只能调接口。
-   *              它相对"手工改库"仍然是巨大改进（有留痕、有校验、有守卫），
-   *              但不把它写进契约与记录就会被忘掉——已登记为前端待办（AJ-194）。
+   * @limitation 三：~~管理端 UI 暂无这个按钮~~ **2026-10-02 已补齐（AJ-291）**：
+   *              订单详情页在 `has_dispute === true` 时出现「人工解除拒付限制」
+   *              （理由必填 + 两步确认），落点 `admin-web/src/orders/OrderDetail.tsx`。
+   *              ⚠️ 只在**详情页**给入口，**不**放进订单列表的每一行：
+   *              本动作不可逆且契约没有"重新上锁"，逐行按钮会把"点错单号"变成
+   *              一次真实且收不回的解除——服务端那条 40902 是兜底，不该是主防。
    */
   app.post('/api/v1/admin/orders/:id/dispute/release', guard, (req, res, next) => {
     void (async () => {

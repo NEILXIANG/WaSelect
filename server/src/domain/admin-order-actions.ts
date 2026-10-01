@@ -33,7 +33,12 @@
  *      admin-web/src/orders/view.ts（前端三个闸门，口径必须与本文件一致）；
  *      packages/shared/src/limits.ts（退款理由上限的唯一真源，B7 / AJ-191）
  */
-import { REFUND_REASON_MAX_LENGTH, type ErrorCode, type OrderStatus } from '@waselect/shared';
+import {
+  ADMIN_NOTE_MAX_LENGTH,
+  REFUND_REASON_MAX_LENGTH,
+  type ErrorCode,
+  type OrderStatus,
+} from '@waselect/shared';
 import { canTransition } from './order.js';
 
 /**
@@ -172,13 +177,12 @@ export function refundReasonGuard(raw: unknown): RefundReasonResult {
 }
 
 /**
- * 管理端备注的字符上限（解除拒付限制的理由等进审计台账的自由文本）。
- * @why 500 与 `REFUND_REASON_MAX_LENGTH` **同值纯属巧合，不是同一个约束**：
- *      那条是机构 metadata 的硬上限，这条没有外部约束，取值只为不让审计行变成一篇长文。
- *      ⚠️ 因此它**不**放进 shared（没有前端消费方），也不与退款那条互相引用——
- *      两条约束碰巧一样，改其中一条不该被另一条绊住。
+ * 2026-10-02（AJ-291）：本常量已移到 `packages/shared/src/limits.ts`——
+ * 原先"不放进 shared"的理由是"没有前端消费方"，而管理端补上「人工解除拒付限制」按钮
+ * （AJ-194 的前端待办）之后这个理由不成立；留下来的话前端要再写一个 500，那是第三份。
+ * 此处改为从 shared 转出，调用方无需改动。
  */
-export const ADMIN_NOTE_MAX_LENGTH = 500;
+export { ADMIN_NOTE_MAX_LENGTH };
 
 /**
  * "人工解除拒付限制"的理由校验（B1b / AJ-194）。

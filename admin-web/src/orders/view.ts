@@ -34,7 +34,12 @@
  * @see ../../../contracts/api-contract.yaml（OrderStatus / Order / AdminOrder / ship / refund）；
  *      packages/shared/src/enums.ts（ORDER_STATUS 真源）；../../../docs/自主决策记录.md
  */
-import { ORDER_STATUS, REFUND_REASON_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
+import {
+  ADMIN_NOTE_MAX_LENGTH,
+  ORDER_STATUS,
+  REFUND_REASON_MAX_LENGTH,
+  type OrderStatus,
+} from '@waselect/shared';
 import { formatJst, minorMoneyText, moneyText } from '../format.js';
 
 /** 管理端状态文案（@see @limitation 一：比买家侧更细，十态互不合并）。 */
@@ -364,3 +369,83 @@ export function refundFailureNotice(code: unknown): string {
     ? '⚠️ 这次退款的结果未知：请以上面刷新后的订单状态为准。若已是「退款中」，稍后再提交一次即可查询结果（不会重复退款）；不要去机构后台手工退款。'
     : '';
 }
+
+/**
+ * 这张单当前是不是**被拒付限制锁着**——决定「人工解除拒付限制」入口出不出来
+ * （B1b / AJ-194 的前端落地，AJ-291）。
+ *
+ * @why 抽成布尔函数而不在 JSX 里写 `order.has_dispute === true`：
+ *      这是**不可逆动作**（契约没有"重新上锁"的接口）的唯一入口开关，
+ *      判据要有一处能被单测钉住的边界表，而不是散在模板里的一个比较。
+ *      ⚠️ 刻意**不返回 Gate**：详情页只有在它为真时才渲染那一块，
+ *      返回 `{ok:false, reason}` 的话 reason 永远显示不出来——
+ *      那是一段走不到、也因此永远拿不到红灯证据的分支（约束八）。
+ *
+ * @why **不看订单状态**：拒付可能开在 `paid`，也可能开在已退款之后协商和好；
+ *      限制加在订单层、与状态机无关。按状态分叉只会造出一张没人维护的组合表。
+ * @limitation `has_dispute` **缺失即不放行**（与 `refundGate` 的"缺失即放行"相反）：
+ *      解除不可逆，且它的全部意义就是"把锁打开"——
+ *      在不知道有没有锁的时候给一个"可能有用"的按钮，等于把不可逆动作变成试错。
+ *      拦错的代价是"按钮不出现"，放行错的代价是"白解一次且留痕"。
+ *
+ * @see OrderDetail.tsx（唯一消费方）
+ */
+export function isDisputeLocked(order: unknown): boolean {
+  return (order as { has_dispute?: unknown } | null)?.has_dispute === true;
+}
+
+/** 解除拒付限制的表单（契约 `required: [reason]`）。 */
+export interface ReleaseForm {
+  reason: string;
+}
+
+export function emptyReleaseForm(): ReleaseForm {
+  return { reason: '' };
+}
+
+/**
+ * 解除理由校验：必填 + 不超过 `ADMIN_NOTE_MAX_LENGTH`。
+ *
+ * @why 理由**必须**填：这个口能把一张"钱可能已被机构拉回"的订单解锁成可发货、可退款，
+ *      是管理端权限最大的动作之一。没有理由的解锁在审计里就是一条说不清的记录，
+ *      而"当时为什么解开"这个问题一定发生在**出事之后**——那时没有理由就没有答案。
+ * @why 上限取自 shared 而不是再写一个 500：两端各写一份迟早漂成"前端放行、后端拒绝"
+ *      （与 `refundErrors` 同一条，ADR-28：禁写死上限）。
+ * @limitation 不校验"理由是否充分"（机器判断不了），也不设最短长度——
+ *      逼人填满 `aaaa` 比留一句短话更糟。
+ *
+ * @see packages/shared/src/limits.ts（`ADMIN_NOTE_MAX_LENGTH` 唯一真源）
+ */
+export function releaseErrors(form: unknown): { ok: boolean; first: string } {
+  const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
+  const reason = typeof f['reason'] === 'string' ? f['reason'].trim() : '';
+  if (reason === '') return { ok: false, first: '解除理由必填（会进审计台账与订单时间线）' };
+  if (reason.length > ADMIN_NOTE_MAX_LENGTH) {
+    return {
+      ok: false,
+      first: `解除理由不得超过 ${String(ADMIN_NOTE_MAX_LENGTH)} 字（当前 ${String(reason.length)} 字）`,
+    };
+  }
+  return { ok: true, first: '' };
+}
+
+/** 表单 → 契约请求体。 */
+export function toReleaseBody(form: unknown): { reason: string } {
+  const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
+  return { reason: typeof f['reason'] === 'string' ? f['reason'].trim() : '' };
+}
+
+/**
+ * 解除**成功之后**要摆在页面上的那句话（AJ-291）。
+ *
+ * @why 解除的是"限制"不是"事实"：`payments.dispute_*` **一个字都没动**，
+ *      这条拒付照样留在风控列表里、照样能被 Stripe 判定为败诉并把钱拉走。
+ *      不说这句，运营会理解成"拒付处理完了"，然后放心发货——
+ *      而那正是"钱货两空"的标准路径（发货闸门解除后立刻可点）。
+ * @why 与 `notice` 而不是 `ok` 同层：它是**提示**不是成功确认，
+ *      但必须和"已解除"同时出现，不能只闪一条 toast。
+ */
+export const RELEASE_DONE_NOTICE =
+  '⚠️ 已解除本单的拒付限制：现在可以发货 / 退款了。' +
+  '但拒付**本身没有结案**——风控列表里仍然看得到它，机构仍可能判定败诉并把钱收回。' +
+  '是否发货请按业务判断，不要因为按钮亮了就发。';

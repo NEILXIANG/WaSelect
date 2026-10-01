@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.21
+  version: 0.6.22
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -253,6 +253,17 @@ info:
       AJ-256 已用前端清空待确认态解决）；它挡的是"order_id 与 user_id 配错"这一类请求级错误，
       是纵深防御的**第二层**，不是第一层的替代品。
       ② 新增错误码 **40915**（这张订单不属于你要拉黑的这个用户）。
+    0.6.22（工程库 AJ-291）：**管理端补齐「人工解除拒付限制」的 UI**——订单详情页在
+      `has_dispute === true` 时出现该按钮（理由必填 + 两步确认），落点 `admin-web/src/orders/OrderDetail.tsx`。
+      @why 本接口自 0.6.14（AJ-194）起就实现并有留痕，但"只有接口没有 UI"意味着
+      运营遇到拒付链断（机构漏发 `charge.dispute.closed`、未知状态被拒落库、
+      败诉单后来与买家协商好了）时只能直连数据库改行——那既不留痕也不可复核。
+      ⚠️ 只在**详情页**给入口，**不**放进订单列表逐行：本动作不可逆且契约没有"重新上锁"，
+      逐行按钮会把"点错单号"变成一次真实且收不回的解除（40902 是兜底，不该是主防）。
+      ② `reason` 的上限 **500** 的唯一真源改为 **shared `ADMIN_NOTE_MAX_LENGTH`**
+      （原先只在服务端 `domain/admin-order-actions.ts`，理由是"没有前端消费方"；
+      现在前端输入框要用它，再写一份就是第三份 500）。
+      ⚠️ 它与退款理由的 500 **同值不同源**：那条是机构 metadata 的硬上限，两条不得互相引用。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -456,7 +467,7 @@ paths:
       summary: 人工解除拒付限制（B1b / AJ-194，逃生口）
       description: 把 orders.has_dispute 由 true 置回 false，解锁发货（40909）与退款（40907）。⚠️ **不碰 payments.dispute_***：解除的是"限制"不是"事实"，拒付记录照旧留在风控列表。0.6.14（AJ-194）：已没锁的订单返回 **409 / 40902** dispute_not_locking（不是幂等 200——静默成功会让"点错单号"变成看不见的事故）；成功写 admin_audit（含改前值）与 order_events(status=dispute_released)
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500, description: '解除理由必填（进审计台账与订单时间线）；上限 500 字'}}}}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500, description: '0.6.22（AJ-291）：解除理由必填（进审计台账与订单时间线）；上限 500 字，唯一真源 = shared ADMIN_NOTE_MAX_LENGTH（管理端补上 UI 后前端也需要它，故从服务端 domain 移入 shared）。⚠️ 与退款理由的 500 **同值不同源**：那条是机构 metadata 的硬上限，不可互相引用'}}}}}}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [order_id, has_dispute], properties: {order_id: {type: string}, has_dispute: {type: boolean}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/address:
     post:

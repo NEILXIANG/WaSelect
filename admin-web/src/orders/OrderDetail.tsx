@@ -1,5 +1,11 @@
 /**
- * 职责：订单详情 + 两个不可逆动作（发货 / 退款）。
+ * 职责：订单详情 + 三个不可逆动作（发货 / 退款 / **解除拒付限制**）。
+ *
+ * @why 第三个动作（B1b / AJ-194）是**逃生口**，不是常规操作：
+ *      `has_dispute` 一旦为 true，发货与退款就都被锁，而能让它变回 false 的
+ *      正常路径只有一条——机构发来 `charge.dispute.closed`。那条链会断在任何一环
+ *      （机构漏发、我们当时没接住、未知状态被拒落库、败诉单后来与买家协商好了），
+ *      断了之后的终点是"订单永久锁死，唯一解法是直连数据库改行"——既不留痕也不可复核。
  *
  * @why **打开详情时重新拉一次单条**（`GET /admin/orders/{id}`）而不是只用列表带过来的数据：
  *      列表（`AdminOrderListItem`）给的是**摘要**——没有 `items` / `address` / `payments` /
@@ -21,22 +27,34 @@
  * @see ./view.ts（闸门与请求体）；./api.ts；../../../contracts/api-contract.yaml（AdminOrder）
  */
 import { useCallback, useEffect, useState } from 'react';
-import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import { ADMIN_NOTE_MAX_LENGTH, REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
-import { getOrder, refundOrder, shipOrder, type AdminApi, type AdminOrderLike } from './api.js';
+import {
+  getOrder,
+  refundOrder,
+  releaseDisputeHold,
+  shipOrder,
+  type AdminApi,
+  type AdminOrderLike,
+} from './api.js';
 import { formatJst, moneyText } from '../format.js';
 import { OrderAddressForm } from './OrderAddressForm.js';
 import {
   addressSummary,
   emptyRefundForm,
+  emptyReleaseForm,
   emptyShipForm,
   paymentSummary,
   refundErrors,
   refundFailureNotice,
   refundGate,
+  RELEASE_DONE_NOTICE,
+  releaseErrors,
+  isDisputeLocked,
   shipErrors,
   shipGate,
   toRefundBody,
+  toReleaseBody,
   toShipBody,
 } from './view.js';
 
@@ -64,6 +82,9 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
   const [refund, setRefund] = useState(emptyRefundForm);
   /** 退款的两步确认（null = 未发起）。 */
   const [confirming, setConfirming] = useState(false);
+  /** 解除拒付限制的表单与两步确认（B1b / AJ-194；不可逆，契约没有"重新上锁"）。 */
+  const [release, setRelease] = useState(emptyReleaseForm);
+  const [releaseConfirming, setReleaseConfirming] = useState(false);
   const [busy, setBusy] = useState('');
 
   const load = useCallback(async () => {
@@ -144,6 +165,30 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
     }
   };
 
+  const doRelease = async (): Promise<void> => {
+    const check = releaseErrors(release);
+    if (!check.ok) {
+      setError(check.first);
+      return;
+    }
+    setBusy('release');
+    setNotice('');
+    try {
+      await releaseDisputeHold(api, id, toReleaseBody(release));
+      setRelease(emptyReleaseForm());
+      setReleaseConfirming(false);
+      // ⚠️ 这句不是"成功了"的确认，是**警告**（@see view.ts RELEASE_DONE_NOTICE）：
+      //    拒付本身没有结案，而发货闸门恰恰在这一刻打开了。
+      setNotice(RELEASE_DONE_NOTICE);
+      await load();
+      onChanged();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy('');
+    }
+  };
+
   const items = order?.items ?? [];
   const events = order?.events ?? [];
 
@@ -158,6 +203,9 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
 
       {loading && <p className="muted">加载中…</p>}
       {error !== '' && <p className="error">{error}</p>}
+      {/* 提在页面级：退款的 outcome 与"解除拒付限制"的警告都要能被看见，
+          放在某一个表单里的话，另一个动作的结果会被藏在折叠块里。 */}
+      {notice !== '' && <p className="muted">{notice}</p>}
 
       {order !== null && (
         <>
@@ -232,10 +280,55 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
             }}
           />
 
-          {order.has_dispute === true && (
-            <p className="error">
-              ⚠️ 该订单有进行中的拒付：退款会被拒（40907），发货前请先处理拒付
-            </p>
+          {isDisputeLocked(order) && (
+            <div className="form">
+              <span className="label">拒付限制（退款 40907 / 发货被拦）</span>
+              <p className="error">
+                ⚠️ 该订单有进行中的拒付：退款会被拒（40907），发货也会拦住（发货后钱货两空）。
+                若拒付链已断——机构漏发结案事件、或已与买家协商和好、或败诉单另作处置——
+                可在这里人工解除限制。
+              </p>
+              <input
+                className="input"
+                placeholder="解除理由（进审计台账与订单时间线）"
+                // 硬上限来自 shared（与服务端同一个常量，AJ-291）
+                maxLength={ADMIN_NOTE_MAX_LENGTH}
+                value={release.reason}
+                onChange={(e) => setRelease({ reason: e.target.value })}
+              />
+              {releaseConfirming ? (
+                <div className="row2">
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy !== ''}
+                    onClick={() => void doRelease()}
+                  >
+                    {busy === 'release' ? '提交中…' : '确认解除（不可撤销）'}
+                  </button>
+                  <button
+                    type="button"
+                    className="link"
+                    onClick={() => setReleaseConfirming(false)}
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy !== ''}
+                  onClick={() => setReleaseConfirming(true)}
+                >
+                  人工解除拒付限制
+                </button>
+              )}
+              <p className="muted">
+                解除的是「限制」不是「事实」：`payments.dispute_*` 一个字都不会改，
+                这条拒付仍留在风控列表，机构仍可能判败诉并把钱收回。
+              </p>
+            </div>
           )}
 
           <div className="form">
@@ -301,8 +394,6 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
             )}
             {/* 放行时也可能带提示（refunding = 再查询/重发，KD-12）：有话就显示，不只在拦的时候 */}
             {refundG.reason !== '' && <p className="muted">{refundG.reason}</p>}
-            {/* 提交结果（B41）：pending 必须说出来，否则运营会当成失败去 Stripe 手工退 */}
-            {notice !== '' && <p className="muted">{notice}</p>}
           </div>
         </>
       )}

@@ -10,7 +10,14 @@
 import { describe, expect, it } from 'vitest';
 import { createAdminApi } from '../api/client.js';
 import { NETWORK_ERROR_CODE } from '../api/errors.js';
-import { getOrder, listOrders, refundOrder, shipOrder, updateOrderAddress } from './api.js';
+import {
+  getOrder,
+  listOrders,
+  refundOrder,
+  releaseDisputeHold,
+  shipOrder,
+  updateOrderAddress,
+} from './api.js';
 
 /** 造一个假 fetch：记录每一次请求，返回预定响应。 */
 function stubFetch(handler: (url: string, init: RequestInit) => Response) {
@@ -166,6 +173,49 @@ describe('refundOrder', () => {
     const { impl } = stubFetch(() => json({ code: 40907, message: '订单存在进行中的拒付' }, 409));
     await expect(refundOrder(api(impl), 'o-1', { reason: 'x' })).rejects.toMatchObject({
       code: 40907,
+    });
+  });
+});
+
+/**
+ * `POST /admin/orders/{id}/dispute/release`（B1b / AJ-194 的逃生口；前端落地 AJ-291）。
+ *
+ * @why 这里钉的是"成功到底长什么样"：本接口的**唯一**成功证据就是 `has_dispute:false`。
+ *      不校验形状的话，将来服务端改形状，页面会拿着 undefined 当"已解除"——
+ *      而运营看到的是"点了、没报错、以为解开了"，随后去发货（钱货两空）。
+ */
+describe('releaseDisputeHold', () => {
+  it('POST 到 /dispute/release，请求体带 reason', async () => {
+    const { impl, seen } = stubFetch(() => json({ order_id: 'o-2609-0013', has_dispute: false }));
+    await releaseDisputeHold(api(impl), 'o-2609-0013', { reason: '机构已结案但漏发事件' });
+    expect(seen[0]?.url).toBe(
+      'http://localhost:3000/api/v1/admin/orders/o-2609-0013/dispute/release',
+    );
+    expect(seen[0]?.init.method).toBe('POST');
+    expect(JSON.parse(String(seen[0]?.init.body))).toEqual({ reason: '机构已结案但漏发事件' });
+  });
+
+  it('🔴 响应 has_dispute !== false → 抛（没有"已解除"的证据就不能当解除成功）', async () => {
+    const { impl } = stubFetch(() => json({ order_id: 'o-1', has_dispute: true }));
+    await expect(releaseDisputeHold(api(impl), 'o-1', { reason: 'x' })).rejects.toMatchObject({
+      code: NETWORK_ERROR_CODE,
+    });
+  });
+
+  it('🔴 响应缺 order_id / 不是对象 → 抛（不吞形状错误，@see api.ts @limitation 一）', async () => {
+    for (const body of [{ has_dispute: false }, null, [], 'ok']) {
+      const { impl } = stubFetch(() => json(body));
+      await expect(
+        releaseDisputeHold(api(impl), 'o-1', { reason: 'x' }),
+        JSON.stringify(body),
+      ).rejects.toMatchObject({ code: NETWORK_ERROR_CODE });
+    }
+  });
+
+  it('服务端的 40902（本来就没锁）原样抛出，不被当成网络错', async () => {
+    const { impl } = stubFetch(() => json({ code: 40902, message: '订单状态不允许此操作' }, 409));
+    await expect(releaseDisputeHold(api(impl), 'o-1', { reason: 'x' })).rejects.toMatchObject({
+      code: 40902,
     });
   });
 });
