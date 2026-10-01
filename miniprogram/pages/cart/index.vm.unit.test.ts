@@ -86,6 +86,33 @@ describe('checkoutGate：去结算能不能点、下面写什么（B36 / AJ-219�
     expect(g.hint).toBe('已超过单笔上限，请分两单下单');
   });
 
+  /**
+   * MP3-09：确定性失败（下架 / 超重 / 超金额上限）被说成"请稍后重试"——
+   * 错误条上写"请拆单"、按钮下写"稍后重试"，两句话方向相反，而重试永远不会好。
+   */
+  it('🔴 超重（40912）不许说"稍后重试"：它不会自己变轻，必须改购物车', () => {
+    const g = checkoutGate({ hasError: true, errorCode: 40912 });
+    expect(g.disabled).toBe(true);
+    expect(g.hint).not.toContain('稍后重试');
+    expect(g.hint).toContain('调整数量');
+  });
+
+  it('🔴 商品下架（40401）与超金额上限（40906）同理：同属"用户不改就永远好不了"', () => {
+    for (const code of [40401, 40906]) {
+      expect(checkoutGate({ hasError: true, errorCode: code }).hint, String(code)).not.toContain(
+        '稍后重试',
+      );
+    }
+  });
+
+  it('库存不足（40901）与网络错误 → 仍然说"稍后重试"（库存会被别人的取消回补）', () => {
+    for (const code of [40901, 0, undefined, -1, 50000]) {
+      expect(checkoutGate({ hasError: true, errorCode: code }).hint, String(code)).toContain(
+        '稍后重试',
+      );
+    }
+  });
+
   it('三种状态两两不同（同一句话盖住两种状态正是 B36 的病根）', () => {
     const hints = [
       checkoutGate({ quoting: true }).hint,

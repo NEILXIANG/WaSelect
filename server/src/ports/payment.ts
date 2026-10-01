@@ -60,6 +60,22 @@ export interface ProviderCapabilities {
   maxAmountJpy?: number | undefined;
   /** 通道下线后，已生成的支付单是否仍需可退款（见上 @why）。 */
   refundableWhenDisabled: boolean;
+  /**
+   * 能否**查询机构侧待支付会话的当前状态**（第三轮审查 MP3-04）。缺省 false。
+   *
+   * @why 只有它才能堵住"买家在浏览器里付完款、支付通知还没到，回微信点了取消订单"这个洞：
+   *      那一瞬间我方库里订单仍是 `pending_payment`、支付行仍是 `initiated`，
+   *      按本地状态**完全合法**的取消会把订单关掉、库存还回去，
+   *      几秒后支付通知到达 → 变成"钱收了、单关了"的迟到付款，只能人工退款。
+   *      堵它需要**问机构一句**：这个会话付了没有。不能问的通道（in_app 类，机构侧没有对应物）
+   *      只能靠前端的"刚刚付过"提示兜底。
+   * @why 可选而不是必填（与 `refund` 同口径，见 @limitation 三）：「机构侧有一个会话可查」
+   *      不是普遍事实——mock / 未来的微信 Native 的"会话"就是我们库里的 payments 行，
+   *      硬写必填会逼着这些通道实现一个返回常量的假方法，那比没有更糟（读代码的人会以为它真查了）。
+   * @limitation 它驱动的是**取消**这一条业务分支（查到"已付或不确定"就拒绝取消），
+   *            所以调用方必须先看它，不能假设每个通道都有 `sessionStatus()`。
+   */
+  supportsSessionQuery?: boolean;
 }
 
 /** 通道配置：运营侧开关（DB 表驱动，改它不改代码、不发版）。 */
@@ -231,6 +247,18 @@ export interface ProviderEvent {
   disputeStatus?: string | undefined;
 }
 
+/**
+ * 机构侧**待支付会话**的状态（MP3-04）。
+ *
+ * @why 三值而不是布尔"付没付"：`processing` 表示"机构没说没付，也说不准付了"
+ *      （异步支付方式、3DS 挑战中、机构返回的形态我们认不出）。
+ *      二值会逼着调用方把它并进某一支，而**并进 unpaid 就是允许取消**——
+ *      那正是这个洞本身。三值让"不确定"有地方可去，调用方按最保守的一支处理。
+ * @limitation 这是**查询那一刻**的快照，不是承诺：查询之后、取消事务提交之前
+ *             仍可能有支付完成（残余窗口，见 `cancel-order.ts` 的 @limitation）。
+ */
+export type SessionStatus = 'paid' | 'unpaid' | 'processing';
+
 export interface RefundRequest {
   orderId: string;
   providerRef: string;
@@ -315,6 +343,18 @@ export interface PaymentProvider {
    *             一律并入 pending，认不出的状态也并入 pending——只有机构明确说失败才算 failed。
    */
   refundStatus?(refundRef: string): Promise<RefundResult['outcome']>;
+
+  /**
+   * 查机构侧**待支付会话**的状态（MP3-04）。与 `capabilities.supportsSessionQuery` 同进同退（注册表强制）。
+   *
+   * @why 取消订单前必须能问这一句：本地库在"买家已付款、通知未达"的窗口里看不出任何异常，
+   *      而那一窗口对银行卡（Stripe 托管页）是**常态**——用户付完切回微信只要几秒，
+   *      回调常常还没到。没有这个查询，"取消"就只能凭本地状态放行。
+   * @throws 查询本身失败（网络 / 非 2xx）→ 抛；调用方按 fail-closed 处理
+   *         （查不到 = 不敢取消，而不是"查不到就当没付"）。
+   * @limitation 认不出的机构状态一律并入 `processing`（保守方向），与 `refundStatus` 同口径。
+   */
+  sessionStatus?(providerRef: string): Promise<SessionStatus>;
 
   /**
    * 作废机构侧的**待支付会话**（D-50：订单关单/取消的连带动作）。

@@ -73,3 +73,29 @@ export function jstDateTime(iso) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${j.y}-${pad(j.m)}-${pad(j.d)} ${pad(Math.floor(rem / 60))}:${pad(rem % 60)}`;
 }
+
+/** 买家可见时间串的时区后缀（MP3-02 / AJ-250）。 */
+const TZ_LABEL = '（日本时间）';
+
+/**
+ * `jstDateTime` 的**买家可见**形态：时刻 + 时区标注。
+ *
+ * @param {unknown} iso 形如 `2026-09-27T15:04:26.000Z`
+ * @returns {string|null} `2026-09-28 00:04（日本时间）`；解析不了 → **null**（与 `jstDateTime` 同）
+ *
+ * @why 不加后缀时，美国买家会把"请在 2026-09-30 22:30 前完成支付"读成**自己当地**的 22:30：
+ *      加州 PDT 与 JST 差 16 小时，他以为还有一整天，晚上回来时订单早已超时关闭
+ *      （再叠加 MP3-01，支付页还会对他说"无需再支付"，于是一张单白白丢掉）。
+ *      "错 9 / 16 小时"不会报任何错，只能靠**展示串自己把时区说出来**。
+ * @why 单独一个函数而不是改 `jstDateTime` 的输出：`jstDateTime` 是**换算**函数，
+ *      它的返回值还会被当成"纯时刻"使用；把展示口径并进去会让"换算对不对"和
+ *      "要不要标时区"两件事绑死。
+ * @why 用"（日本时间）"而不是"JST"：界面是中文，且收货人可能是第一次见 JST 这个缩写；
+ *      括号形态在"请在 …… 前完成支付"这种句子里读起来是顺的。
+ * @limitation 解析不了时返回 **null**（不加后缀）：宁可让调用方回落原串，
+ *              也不给一个"没换算过的时间"盖上"日本时间"的章——那是在替错误背书。
+ */
+export function jstDateTimeLabeled(iso) {
+  const s = jstDateTime(iso);
+  return s === null ? null : `${s}${TZ_LABEL}`;
+}

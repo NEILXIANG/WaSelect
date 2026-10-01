@@ -66,21 +66,76 @@ describe('detailView（整体）', () => {
 
   it('⚠️ 时间全部按 JST 显示（UTC 存、错 9 小时没有任何异常）', () => {
     const v = detailView(ORDER);
-    expect(v.createdAtText).toBe('2026-09-27 11:00');
+    expect(v.createdAtText).toBe('2026-09-27 11:00（日本时间）');
     expect(v.timeline.map((t) => t.atText)).toEqual([
-      '2026-09-27 11:00',
-      '2026-09-27 11:05',
-      '2026-09-29 00:04',
+      '2026-09-27 11:00（日本时间）',
+      '2026-09-27 11:05（日本时间）',
+      '2026-09-29 00:04（日本时间）',
     ]);
     expect(v.timeline.map((t) => t.statusText)).toEqual(['待付款', '已付款', '已发货']);
+  });
+
+  /**
+   * MP3-02：不带时区标注时，美国买家会把"请在 22:30 前完成支付"读成自己的本地时间
+   * （PDT 与 JST 差 16 小时）→ 以为还有一整天，回来时订单已超时关闭，且不会报任何错。
+   */
+  it('🔴 每个买家可见的时刻都必须带时区标注（MP3-02）', () => {
+    const pending = detailView({ ...ORDER, status: 'pending_payment' });
+    expect(pending.createdAtText).toMatch(/日本时间|JST/);
+    expect(pending.expiresAtText).toMatch(/日本时间|JST/);
+    for (const t of pending.timeline) expect(t.atText, t.statusText).toMatch(/日本时间|JST/);
+    // 换算不出来的时刻**不加**标注：不给"没换算过的时间"盖"日本时间"的章
+    const dirty = detailView({ ...ORDER, created_at: 'soon', status: 'pending_payment' });
+    expect(dirty.createdAtText).toBe('soon');
   });
 
   it('⚠️ 可付时才显示截止时刻，且可付 == 可取消（半开状态没有任何测试能抓，除非同源）', () => {
     const pending = detailView({ ...ORDER, status: 'created' });
     expect(pending.canPay).toBe(true);
     expect(pending.canCancel).toBe(true);
-    expect(pending.expiresAtText).toBe('2026-09-27 11:30');
+    expect(pending.expiresAtText).toBe('2026-09-27 11:30（日本时间）');
     expect(detailView(ORDER).expiresAtText).toBe('');
+  });
+
+  it('时间线行自带 wx:key 用的序号（不能用 index 当 key，开发者工具会告警）', () => {
+    const keys = detailView(ORDER).timeline.map((t) => t.key);
+    expect(keys).toEqual(['tl-0', 'tl-1', 'tl-2']);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  /**
+   * MP3-04（P1）：买家在托管页付完款、切回微信的那几秒里，服务端订单**仍是待付款**，
+   * 详情页若照常规口径给出「取消订单」，用户会以为刚才没付上而点它 → 钱随后到达、
+   * 订单已关、只能人工退款。
+   */
+  it('🔴 刚付过款（justPaid）且状态仍可付 → 不给「取消」也不给「继续支付」，改显示确认中', () => {
+    const v = detailView({ ...ORDER, status: 'pending_payment' }, { justPaid: true });
+    expect(v.canCancel).toBe(false);
+    expect(v.canPay).toBe(false);
+    expect(v.confirming).toBe(true);
+    expect(v.confirmHint).toBe('支付结果确认中，请稍后刷新');
+    expect(v.needsRecheck).toBe(true);
+  });
+
+  it('🔴 不带 justPaid 时行为完全不变（这条防线不能误伤日常取消）', () => {
+    const v = detailView({ ...ORDER, status: 'pending_payment' });
+    expect(v.canCancel).toBe(true);
+    expect(v.canPay).toBe(true);
+    expect(v.confirming).toBe(false);
+    expect(v.confirmHint).toBe('');
+    expect(v.needsRecheck).toBe(false);
+    // 第二参数缺省 / 传脏值都等于不传
+    expect(detailView({ ...ORDER, status: 'pending_payment' }, null).canCancel).toBe(true);
+    expect(detailView({ ...ORDER, status: 'pending_payment' }, { justPaid: 'yes' }).canCancel).toBe(
+      true,
+    );
+  });
+
+  it('🔴 justPaid 只在**仍可付**时生效：服务端已确认（paid）就不再遮住按钮', () => {
+    const v = detailView({ ...ORDER, status: 'paid' }, { justPaid: true });
+    expect(v.confirming).toBe(false);
+    expect(v.canCancel).toBe(false); // paid 本来就不可取消（与 justPaid 无关）
+    expect(v.needsRecheck).toBe(false);
   });
 
   // ⚠️ 这条是缺陷注入③首次**未变红**逼出来的：原用例只测了 created / shipped 两态，
@@ -177,6 +232,6 @@ describe('timelineRows（时间线）', () => {
         { at: '2026-09-27T02:00:00Z' },
         { status: 'paid', at: '2026-09-27T02:05:00Z' },
       ]),
-    ).toEqual([{ statusText: '已付款', atText: '2026-09-27 11:05' }]);
+    ).toEqual([{ key: 'tl-0', statusText: '已付款', atText: '2026-09-27 11:05（日本时间）' }]);
   });
 });

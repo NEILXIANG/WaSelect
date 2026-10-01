@@ -43,13 +43,25 @@ function codeOf(file: string): string {
     .join('\n');
 }
 
-/** 扫一个文件里的"页面路径常量"，例如 `const ORDER_DETAIL_PAGE = '/pages/order-detail/index';`。 */
-function pageConsts(code: string): Map<string, string> {
-  const consts = new Map<string, string>();
-  for (const m of code.matchAll(/const\s+(\w+)\s*=\s*'(\/pages\/[\w-]+\/index)'/g)) {
-    consts.set(m[1]!, m[2]!);
+/**
+ * 扫一个文件里的"页面路径常量"，例如 `const ORDER_DETAIL_PAGE = '/pages/order-detail/index';`。
+ *
+ * ⚠️ 常量里**允许带 query**（`'/pages/address/index?pick=1'`）——MP3-11 之前这里只认裸路径，
+ *    于是 `ADDRESS_PICK_PAGE` 及其唯一的一次跳转**整个不在扫描范围内**：
+ *    将来地址页把 `options.pick` 改名，守卫仍然全绿，而结算页的"选地址"会静默失效。
+ *    常量里写死的 query 与调用处拼的 query **同样要被校验**，所以这里把它解析出来一并返回。
+ */
+function pageConsts(code: string): Map<string, { path: string; params: string[] }> {
+  const consts = new Map<string, { path: string; params: string[] }>();
+  for (const m of code.matchAll(/const\s+(\w+)\s*=\s*'(\/pages\/[\w-]+\/index)(\?[\w=&-]*)?'/g)) {
+    consts.set(m[1]!, { path: m[2]!, params: queryParams(m[3] ?? '') });
   }
   return consts;
+}
+
+/** `?a=1&b=2` → `['a','b']`；空串 → []。 */
+function queryParams(query: string): string[] {
+  return [...query.replace(/^\?/, '').matchAll(/(?:^|&)(\w+)=/g)].map((p) => p[1]!);
 }
 
 /** 扫该页发起的**全部**跳转（含不带参数的）。 */
@@ -61,17 +73,28 @@ function collectAll(): Nav[] {
     const code = codeOf(file);
     const consts = pageConsts(code);
     for (const m of code.matchAll(/\$\{(\w+)\}([^`]*)`/g)) {
-      const targetPath = consts.get(m[1]!);
-      if (targetPath === undefined) continue;
+      const c = consts.get(m[1]!);
+      if (c === undefined) continue;
       const rest = m[2]!;
       // `${PAGE}?a=1&b=2` 或 `${PAGE}`；`${PAGE}/sub/path` 不是页面内跳转，跳过
       if (rest !== '' && !rest.startsWith('?')) continue;
       out.push({
         from: `pages/${dir}/index.js`,
-        targetPath,
-        // ⚠️ 先去掉开头的 `?` 再按 `&` 认参数名：带着它时 `(?:^|&)(\w+)=` 在位置 0 碰到的是 `?`，
-        //    一个参数都认不出来（自检会报「扫到 0 处」）。
-        params: [...rest.replace(/^\?/, '').matchAll(/(?:^|&)(\w+)=/g)].map((p) => p[1]!),
+        targetPath: c.path,
+        // ⚠️ 常量里写死的 query + 调用处拼的 query，两处都要校验（MP3-11）
+        params: [...c.params, ...queryParams(rest)],
+      });
+    }
+    // ⚠️ 第二种写法：`url: CONST`（**不在模板串里**）——结算页跳地址页就是这种
+    //    （`wxApi.navigateTo({ url: ADDRESS_PICK_PAGE })`）。上面那条正则只认 `${…}`，
+    //    漏了它等于这类跳转整个不进扫描范围（MP3-11）。
+    for (const m of code.matchAll(/\burl:\s*([A-Z_]+)\b/g)) {
+      const c = consts.get(m[1]!);
+      if (c === undefined) continue;
+      out.push({
+        from: `pages/${dir}/index.js`,
+        targetPath: c.path,
+        params: [...c.params],
       });
     }
   }
@@ -115,6 +138,20 @@ describe('页面跳转参数名守卫（R-03 / AJ-225）', () => {
    *      —— d2 的后果与 d1 一模一样（落地页显示"订单不存在"），而"传了有人读"这条规则
    *      对"没传"根本不会生成任何待检条目。这里显式钉住：到详情页的跳转必须带 `id`。
    */
+  /**
+   * MP3-11：常量里写死 query 的那类跳转（`ADDRESS_PICK_PAGE = '/pages/address/index?pick=1'`）
+   * 曾经是守卫的盲区——路径常量带 query 时 `pageConsts` 认不出它，整条跳转不在扫描范围内。
+   * 这条把盲区本身钉住：地址页的 `pick` 必须被列为待检项。
+   */
+  it('🔴 常量里写死的 query 也算参数（结算页 → 地址页的 `pick` 必须被扫到并校验）', () => {
+    const toAddress = all.filter((n) => n.targetPath === '/pages/address/index');
+    expect(toAddress.length, '至少要扫到一次到地址页的跳转').toBeGreaterThanOrEqual(1);
+    expect(toAddress.every((n) => n.params.includes('pick'))).toBe(true);
+    // 目标页确实在读它（与第 2 条同一规则，这里单独断言是为了让"扫不到"和"读了但不匹配"分开红）
+    const target = join(import.meta.dirname, 'pages/address/index.js');
+    expect(codeOf(target)).toMatch(/options\??\.pick\b/);
+  });
+
   it('跳到订单详情页的每一处都带了 `id`', () => {
     const toDetail = all.filter((n) => n.targetPath === '/pages/order-detail/index');
     expect(toDetail.length).toBeGreaterThanOrEqual(2);

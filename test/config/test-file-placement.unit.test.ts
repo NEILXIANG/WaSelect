@@ -46,12 +46,19 @@ function matchInclude(pattern: string, path: string): boolean {
   throw new Error(`匹配器不认识的 include 形态：${pattern}——扩展 matchInclude 或改回已知形态`);
 }
 
+/**
+ * 什么文件算"测试文件"。
+ * @why 第三轮审查 TST3-07：原来是 `ts|js|mts`，不认 `.tsx`——第一份用 JSX 写的管理端组件测试
+ *      既不会被任何一层收集，也不会被这里当成测试文件，于是"写了测试"与"测试在跑"又长得一样了。
+ */
+const TEST_FILE_RE = /\.test\.(ts|tsx|js|mts)$/;
+
 function collectTestFiles(dir: string, root: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (['node_modules', 'dist', '.git', 'coverage'].includes(entry.name)) continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) collectTestFiles(full, root, out);
-    else if (/\.test\.(ts|js|mts)$/.test(entry.name)) out.push(relative(root, full));
+    else if (TEST_FILE_RE.test(entry.name)) out.push(relative(root, full));
   }
   return out;
 }
@@ -93,5 +100,15 @@ describe('测试文件归属守卫：每个测试文件都属于五层之一', (
     expect(() => matchInclude('src/*/x.unit.test.ts', 'src/a/x.unit.test.ts')).toThrow(
       /不认识的 include 形态/,
     );
+  });
+});
+
+describe('JSX 测试文件（TST3-07）', () => {
+  it('`.tsx` 测试会被当成测试文件，且 unit 层收它', () => {
+    expect(TEST_FILE_RE.test('ProductsPage.dom.unit.test.tsx')).toBe(true);
+    const unit = readProjects().find((p) => p.name === 'unit');
+    expect(
+      unit?.include.some((pat) => matchInclude(pat, 'admin-web/src/products/X.dom.unit.test.tsx')),
+    ).toBe(true);
   });
 });

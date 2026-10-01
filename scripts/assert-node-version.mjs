@@ -18,6 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMain } from './is-main.mjs';
 
 /** 从 `.nvmrc` 的内容里取主版本；认不出返回空串。 */
 export function wantedMajor(nvmrc) {
@@ -51,7 +52,7 @@ export function checkNodeVersion(current, nvmrc) {
 }
 
 // 作为脚本直接运行时才执行检查（被测试 import 时不执行）
-if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url, process.argv[1])) {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..');
   const result = checkNodeVersion(
     process.versions.node,

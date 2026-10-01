@@ -17,8 +17,10 @@
  * @limitation 二：自带的 glob 匹配器只支持 `**` `*` `?` 三种语法（够用），
  *              不是完整 glob 实现——所以文件里对匹配器自身也做了断言（见最后一条用例）：
  *              验证脚本自己有 bug 是最难发现的一类假绿。
- * @limitation 三：放在 unit 层（而不是 lint 层）是为了让它进 `npm run test:fast`，
- *              即**提交时**就能拦住——lint 层只在 gate 里跑，反馈晚一轮。
+ * @limitation 三：放在 unit 层（而不是 lint 层）是为了让它在**提交时**就能拦住。
+ *              ⚠️ 原来写"进 `npm run test:fast` 就能拦住"不成立（第三轮审查 TST3-04）：
+ *              `test:fast` 是 `--changed`，而本测试读文件、不 import 被守的源码，搬走 auth.ts 时它不会被选中。
+ *              现在由提交钩子里固定的 `npm run test:guards`（`test/config` 整目录）保证它每次提交都跑。
  *
  * @see vitest.coverage-gates.ts（阈值唯一事实来源）；docs/自主决策记录.md AJ-46
  */

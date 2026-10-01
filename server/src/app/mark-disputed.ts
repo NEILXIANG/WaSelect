@@ -94,6 +94,7 @@ export const DISPUTE_MISMATCH_REASONS = [
   'no_succeeded_payment',
   'dispute_unverifiable',
   'dispute_id_conflict',
+  'dispute_after_lost',
   'dispute_not_open',
   'dispute_result_conflict',
   'dispute_result_unknown',
@@ -315,9 +316,13 @@ export async function markOrderDisputed(
     const existingId = p.dispute_id as string | null;
     const existingStatus = p.dispute_status as string | null;
     /**
-     * 同一笔钱来了**另一个**拒付单号（AJ-233）：
+     * 同一笔钱来了**另一个**拒付单号（AJ-233；第三轮审查 OPS3-02 修正 lost 一支）：
      *   · 上一条**仍在进行中**（open）→ 拒绝并转对账：不覆盖，覆盖会让进行中那条的举证跟丢；
-     *   · 上一条**已结案**（won / lost / withdrawn）→ 接受，下面照常按新开案落库。
+     *   · 上一条**已败诉**（lost）→ 拒绝（`dispute_after_lost`）并转对账：
+     *     覆盖会抹掉支付行上唯一的"已败诉"事实，新单号一旦以 won / withdrawn 结案，
+     *     `has_dispute` 就被复位——钱已被机构拉回的订单重新可发货、可退款（钱货两空）。
+     *     AJ-233 原先在这里接受，是回归；败诉的单本来就锁着，新单号只需要让人在对账里看见；
+     *   · 上一条以 won / withdrawn 结案 → 接受，下面照常按新开案落库。
      * @why 已结案后的新拒付必须能进来：查询函被撤回后转正式拒付，正式拒付是**新的**单号
      *      （上面 `markDisputeClosed` 的 @why 自己就写着）。原先一律 `dispute_id_conflict`——
      *      `has_dispute` 已在结案时复位，新拒付又落不了库，订单不会重新上锁，
@@ -326,6 +331,13 @@ export async function markOrderDisputed(
      *      （`dispute_opened` / `dispute_closed` 的 note 带单号与结果）与 `webhook_events` 里，
      *      支付行上只保留"当前这一条"。要同时查两条须看事件流——可查，但不在风控列表的一行里。
      */
+    if (existingId !== null && existingId !== d.disputeId && existingStatus === 'lost') {
+      throw new AppError(40902, {
+        order_id: orderId,
+        reason: 'dispute_after_lost',
+        ctx: { expected: existingId, got: d.disputeId },
+      });
+    }
     if (existingId !== null && existingId !== d.disputeId && existingStatus === 'open') {
       throw new AppError(40902, {
         order_id: orderId,

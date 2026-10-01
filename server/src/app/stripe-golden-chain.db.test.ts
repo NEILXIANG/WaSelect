@@ -510,6 +510,63 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
     expect(refundKeys()).toEqual([`refund:${orderId}`, `refund:${orderId}:1`]);
   });
 
+  /**
+   * 第三轮审查 OPS3-03：退款在途（refunding）期间落了拒付。
+   * @why 原 refundGuard 对 has_dispute 一律 40907——而 refunding 下的再次点击只是"查询在途那笔"或
+   *      "同一幂等键重放"，都不会让钱再动一次；挡住它们的结果是订单永远停在 refunding。
+   *      只有"换新键重新发起一笔"才会动钱，拒付下只拦这一步。
+   */
+  const disputeNow = (orderId: string) =>
+    db`update orders set has_dispute = true where id = ${orderId}`;
+
+  it('🔴 在途退款 + 期间落拒付 → 再点仍可**查询**：机构已完成 → refunded（不被 40907 挡死）', async () => {
+    const orderId = await paidOrder('f3e');
+    fake.nextRefundStatus('pending');
+    expect((await refund(orderId, 'rf-f3e-1')).json['outcome']).toBe('pending');
+    await disputeNow(orderId);
+    fake.settleRefund('re_test_0001', 'succeeded');
+    const r = await refund(orderId, 'rf-f3e-2');
+    expect(r.status).toBe(202);
+    expect(await orderStatus(orderId)).toBe('refunded');
+    expect(refundKeys()).toHaveLength(1);
+  });
+
+  it('🔴 在途退款 + 期间落拒付 → 查询结果是失败：记确认失败，但**不换键重发**（40907）', async () => {
+    const orderId = await paidOrder('f3f');
+    fake.nextRefundStatus('pending');
+    expect((await refund(orderId, 'rf-f3f-1')).json['outcome']).toBe('pending');
+    await disputeNow(orderId);
+    fake.settleRefund('re_test_0001', 'failed');
+    const r = await refund(orderId, 'rf-f3f-2');
+    expect(r.json['code']).toBe(40907);
+    expect(refundKeys()).toHaveLength(1); // 没有第二把键
+    expect((await events(orderId, 'refund_failed')).map((x) => x['note'])).toEqual([
+      'provider_failed:re_test_0001',
+    ]);
+    expect(await orderStatus(orderId)).toBe('refunding');
+  });
+
+  it('🔴 上次结果未知（网络）+ 期间落拒付 → 同一把键重放照常进行（不会动第二笔钱）', async () => {
+    const orderId = await paidOrder('f3g');
+    dropResponses.set('/v1/refunds', 10);
+    expect((await refund(orderId, 'rf-f3g-1')).status).toBe(500);
+    dropResponses.delete('/v1/refunds');
+    await disputeNow(orderId);
+    const r = await refund(orderId, 'rf-f3g-2');
+    expect(r.status).toBe(202);
+    expect(new Set(refundKeys())).toEqual(new Set([`refund:${orderId}`]));
+  });
+
+  it('🔴 上次机构确认失败（无在途单）+ 期间落拒付 → 40907，不发起新键', async () => {
+    const orderId = await paidOrder('f3h');
+    fake.nextRefundStatus('failed');
+    expect((await refund(orderId, 'rf-f3h-1')).status).toBe(500);
+    await disputeNow(orderId);
+    const r = await refund(orderId, 'rf-f3h-2');
+    expect(r.json['code']).toBe(40907);
+    expect(refundKeys()).toEqual([`refund:${orderId}`]);
+  });
+
   it('查询本身失败（网络）→ 50000、不 POST、不记"退款失败"（查不到 ≠ 退款失败）', async () => {
     const orderId = await paidOrder('f3d');
     fake.nextRefundStatus('pending');

@@ -9,6 +9,8 @@
  *      本函数的产出**只**被 toRateInt 消费（domain/quote.ts 经它算展示价）。
  *      两个模块各测各的，接缝处谁也不管——而接缝正是"两次舍入"会出错的地方。
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../errors.js';
 import { applyFxBuffer, FX_QUOTES, parseFxInput } from './fx-input.js';
@@ -108,5 +110,35 @@ describe('applyFxBuffer', () => {
     const rate = applyFxBuffer(0.0065, 0.03);
     expect(rate * 1e8).toBe(Math.round(rate * 1e8));
     expect(toRateInt(rate)).toBe(669500);
+  });
+});
+
+/**
+ * `FX_QUOTES` 与契约 `POST /admin/fx` 请求体 `quote` 的 enum 集合相等（第三轮审查 DOM3-01）。
+ * @why fx-input.ts 的注释原来就写着"单测与契约双向比对"，但全仓没有任何比对——
+ *      给 FX_QUOTES 加一个 EUR，测试照样全绿，服务端接受契约外的币种。
+ */
+describe('FX_QUOTES 与契约的双向比对（DOM3-01）', () => {
+  const yaml = readFileSync(
+    resolve(import.meta.dirname, '../../../contracts/api-contract.yaml'),
+    'utf8',
+  );
+  const lines = yaml.split('\n');
+  const at = lines.findIndex((l) => /^ {2}\/admin\/fx:\s*$/.test(l));
+  const body =
+    lines.slice(at, at + 20).find((l) => l.includes('requestBody:') && l.includes('quote:')) ?? '';
+
+  it('抽到了 /admin/fx 的请求体行', () => {
+    expect(at).toBeGreaterThan(0);
+    expect(body).toContain('raw_rate');
+  });
+
+  it('集合完全相等', () => {
+    const m = /quote:\s*\{type:\s*string,\s*enum:\s*\[([^\]]+)\]/.exec(body);
+    const inContract = (m?.[1] ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    expect(inContract).toEqual([...FX_QUOTES]);
   });
 });

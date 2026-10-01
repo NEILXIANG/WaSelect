@@ -15,6 +15,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ADDRESS_COUNTRY_DEFAULT,
+  ADDRESS_MAX_CHARS,
   ADDRESS_PATTERNS,
   addressSummary,
   defaultAddressId,
@@ -23,6 +24,8 @@ import {
   formModel,
   toAddressInput,
 } from './address-form.js';
+import { US_ADDRESSES, US_ADDRESS_INVALID, formatUsPhone } from '../../test/factories/catalog.js';
+import { ADDRESS_MAX_CHARS as SERVER_MAX } from '../../server/src/domain/address-input.js';
 
 /** 像真的美国地址（约束三：真实城市/州/邮编组合，不是 aaa/bbb）。 */
 const ADDR = {
@@ -217,5 +220,42 @@ describe('与契约 AddressInput 的双向比对', () => {
     const m = /state: \{type: string, minLength: 2, maxLength: 2\}/.exec(line);
     expect(m?.[0]).toBeTruthy();
     expect(ADDRESS_PATTERNS.state.source).toBe('^[A-Z]{2}$');
+  });
+});
+
+/**
+ * 形态清单的样本池接进前端预检（第三轮审查 TST3-02，与服务端 address-input 同池）。
+ * @why 见 `server/src/domain/address-input.unit.test.ts` 同名段：原来只有 CA 一种州码，
+ *      前端把州码收紧成 50 州白名单时全绿，驻日美军与波多黎各买家在表单上就被拦下。
+ */
+describe('US_ADDRESSES / US_ADDRESS_INVALID 样本池（TST3-02）', () => {
+  it.each(US_ADDRESSES.map((s) => [`${s.recipient} / ${s.state} ${s.postalCode}`, s] as const))(
+    '合法样本通过预检：%s',
+    (_label, s) => {
+      const r = formErrors({
+        recipient: s.recipient,
+        phone: formatUsPhone(s.areaCode, 5_000_000),
+        line1: s.line1,
+        line2: s.line2 ?? '',
+        city: s.city,
+        state: s.state,
+        postal_code: s.postalCode,
+      });
+      expect(r.errors).toEqual({});
+    },
+  );
+
+  it.each(US_ADDRESS_INVALID.map((c) => [c.name, c] as const))('反例被预检拦下：%s', (_n, c) => {
+    expect(formErrors({ ...ADDR, ...c.patch }).ok).toBe(false);
+  });
+});
+
+describe('ADDRESS_MAX_CHARS 与服务端同源（TST3-02）', () => {
+  it('逐键相等', () => {
+    expect(ADDRESS_MAX_CHARS).toEqual(SERVER_MAX);
+  });
+  it('刚好到上限放行、超 1 个字符拦下', () => {
+    expect(formErrors({ ...ADDR, line2: 'A'.repeat(200) }).errors.line2).toBeUndefined();
+    expect(formErrors({ ...ADDR, line2: 'A'.repeat(201) }).errors.line2).toBe('最多 200 个字符');
   });
 });

@@ -14,6 +14,7 @@
  *      ../../../server/src/app/pay-intent.ts（服务端对同一件事的护栏）
  */
 import { STATUS_LABELS, canPay, statusText } from '../../utils/order-status.js';
+import { payGuide } from '../../utils/pay-plan.js';
 
 /**
  * `requestPayment` 的**取消与失败**统一文案（B35 / AJ-218）。
@@ -35,7 +36,8 @@ export const PAY_FAIL_TEXT = '支付未完成，可重新选择支付方式';
  * 这一张单**还能不能走支付流程**（B35 / AJ-218）。
  *
  * @param {unknown} order `GET /orders/{id}` 响应（读 `status`）；可能是任何东西
- * @returns {{payable: boolean, closedText: string}}
+ * @returns {{payable: boolean, closedText: string, goHome: boolean}}
+ *   `goHome` 为真时薄壳给一个"回首页"的出口（仅 expired / cancelled，@see closedTextFor）
  *   `payable=false` 时薄壳不列通道，`closedText` 是给用户的说明（空串 = 不渲染）
  *
  * @why 以前支付页**完全不看订单状态**，从返回栈回到一张已付/已关的单，
@@ -47,18 +49,48 @@ export const PAY_FAIL_TEXT = '支付未完成，可重新选择支付方式';
  * @limitation 这是前端的**预判断**，不是权威：服务端状态机仍是唯一裁决
  *              （@see 本函数不改任何写路径）。
  */
+/**
+ * 「不需要再付钱」与「根本没付成」是**两件相反的事**，原来的文案把两者合成了一句
+ * （第三轮审查 MP3-01）。
+ *
+ * @why 后果不对等：银行卡是当前的**唯一**付款路径，用户在浏览器里被 3DS 或输错卡号耽搁、
+ *      超过 30 分钟再切回微信，看到的是"已超时关闭，无需再支付"——
+ *      很大一部分人会把这句读成"已经付好了"，然后去等一张永远不会发货的单。
+ *      这一屏是微信支付上线前必经的一屏，写错等于白丢一批订单。
+ * @why 只改**展示**不改状态口径：状态的真值仍在服务端（@see 本文件 @limitation）。
+ */
+function closedTextFor(status) {
+  const label = statusText(status);
+  // 退款类：钱的问题还没落定，只报状态，不引导任何动作
+  if (status === 'refunding' || status === 'refunded') return `该订单${label}`;
+  // 没付成类：必须说清"没付成"，并给出口（重新下单）
+  if (status === 'expired' || status === 'cancelled') {
+    return `该订单${label}，未完成付款；如需购买请重新下单`;
+  }
+  // 其余（paid / shipped / delivered / completed）：钱已经付了，这句才成立
+  return `该订单${label}，无需再支付`;
+}
+
 export function payPageView(order) {
   const o = order !== null && typeof order === 'object' ? order : {};
   const status = typeof o.status === 'string' ? o.status : '';
   const known = typeof STATUS_LABELS[status] === 'string';
   const payable = !known || canPay(status);
-  return { payable, closedText: payable ? '' : `该订单${statusText(status)}，无需再支付` };
+  if (payable) return { payable, closedText: '', goHome: false };
+  return {
+    payable,
+    closedText: closedTextFor(status),
+    // 只有"没付成"才给回首页的出口——已付款的单给它是把人往无关页面上引
+    goHome: status === 'expired' || status === 'cancelled',
+  };
 }
 
 /**
  * 从后台 / 浏览器 / 上一页回到支付页时该做什么（B35 / AJ-218 → AJ-227 改写）。
  *
- * @param {{payUrl?: unknown, guideTitle?: unknown, paying?: unknown}|null|undefined} args
+ * @param {{payUrl?: unknown, guideTitle?: unknown, paying?: unknown,
+ *          loading?: unknown}|null|undefined} args
+ *   `loading` 上一次整页重取是否还在途中（MP3-07）
  * @returns {'none'|'reload'|'status'}
  *   - `none`：什么都不做；
  *   - `reload`：整页重取（订单 + 支付方式）；
@@ -76,6 +108,9 @@ export function payPageView(order) {
 export function onShowAction(args) {
   const a = args !== null && typeof args === 'object' ? args : {};
   if (a.paying === true) return 'none';
+  // ⚠️ 重取在途（MP3-07）：再排一次不会更快，只会让两个 load 的结果互相覆盖
+  //    （旧的那个后到就把支付方式盖回"该订单已付款"旁边）。
+  if (a.loading === true) return 'none';
   if (typeof a.payUrl === 'string' && a.payUrl !== '') return 'status';
   if (typeof a.guideTitle === 'string' && a.guideTitle !== '') return 'status';
   return 'reload';
@@ -85,14 +120,22 @@ export function onShowAction(args) {
 export const EMPTY_GUIDE = Object.freeze({ title: '', body: '', actionText: '' });
 
 /**
- * 订单已不需要再支付时，支付页要 `setData` 的全部内容（AJ-227）。
- * @param {string} closedText `payPageView(order).closedText`
+ * 订单已不需要再支付时，支付页要 `setData` 的全部内容（AJ-227 → MP3-01 改签名）。
+ * @param {unknown} view `payPageView(order)` 的返回值（不信任它的形状）
+ * @returns {{closedText: string, goHome: boolean, channels: never[], notice: never[],
+ *            payUrl: string, guide: object, copied: boolean}}
  * @why 收进一个函数：要同时清掉的有五样（支付方式、提示条、短链、引导、"已复制"），
  *      漏清任何一样，页面上就会同时出现"无需再支付"和一个还能点的入口。
+ * @why 改成**整个 view 传进来**（原来是只传 `closedText` 字符串）：
+ *      文案与"要不要给回首页出口"是同一次判断的两个产物，分两处传就会出现
+ *      "说了请重新下单、却没有去下单的路"（MP3-01 修的正是这类半截子结局）。
+ * @limitation 只产出"页面该显示什么"，**不做跳转**：宿主调用在薄壳里。
  */
-export function closedScreen(closedText) {
+export function closedScreen(view) {
+  const v = view !== null && typeof view === 'object' ? view : {};
   return {
-    closedText,
+    closedText: typeof v.closedText === 'string' ? v.closedText : '',
+    goHome: v.goHome === true,
     channels: [],
     notice: [],
     payUrl: '',
@@ -101,27 +144,6 @@ export function closedScreen(closedText) {
   };
 }
 
-/**
- * 点"用这个方式支付"之后的决定。
- *
- * @param {{paying: boolean, channel: unknown, lastChannel: string, hasKey: boolean}|null|undefined} args
- *   传 null / undefined 也算"不该发起"（wxml 传错形态时页面只是不动，不能炸）。
- *   `paying`      上一次发起是否还在途中（B6 / AJ-201 的在途守卫）；
- *   `channel`     wxml `data-channel` 原值（可能是任何东西，不能直接信）；
- *   `lastChannel` 页面记住的上一次通道（空串 = 还没发起过）；
- *   `hasKey`      幂等键生命周期器是否已就绪。
- * @returns {{kind: 'ignore'} | {kind: 'start', channel: string, retireKey: boolean}}
- *
- * @why `paying` 那条守卫（B6 / AJ-201）：上一次发起还没回来就再点，会多打一次
- *      `POST /orders/{id}/pay`。服务端有幂等键兜底（同键不会建第二个会话），
- *      但仍然白占一次连接与一次订单行锁——发起支付这条路要调机构，一次最长 6s，
- *      连接池只有 10 条时"连点"就是自己把自己排队。
- *      ⚠️ 挡的是**浪费**，正确性仍由服务端负责：本函数不做任何重试判断。
- * @why `retireKey`（换通道必须作废键）：同键重放会被服务端判成"上一个通道的 intent"，
- *      用户点了 B 却拿到 A 的支付凭据——同键同参才算重放，参数不同就不是。
- * @limitation 只做"要不要发起 / 要不要换键"这两个判断，**不碰宿主 API、不读时间、
- *              不发起请求**：键的 acquire/retire 与 `requestPayment` 全在薄壳里。
- */
 /**
  * 复制短链**之后**页面该变成什么样（B34 / AJ-217）。
  *
@@ -145,6 +167,70 @@ export function copyResult(ok) {
   return { copied: false, error: '复制失败，请长按下方链接手动复制' };
 }
 
+/**
+ * 拿到支付意图**之后**这一屏该变成什么样（MP3-03）。
+ *
+ * @param {unknown} plan `payPlan(intent)` 的输出（判别联合；这里不信任它的形状）
+ * @returns {{payUrl: string, guide: {title: string, body: string, actionText: string}, copied: boolean}}
+ *   直接喂给 `setData` 的形状
+ *
+ * @why 三个分支**都必须显式给出** `payUrl` / `guide` / `copied`：
+ *      原先只有 copylink 分支设它们、auto 与 unsupported 清它们，**in_app 分支什么都不做**——
+ *      于是"先点银行卡拿到短链、再改点微信支付"之后，屏幕上仍挂着那条短链和「复制链接」，
+ *      而服务端换通道时已经把那个银行卡支付行作废了（`server/src/app/pay-intent.ts`）。
+ *      用户复制它去浏览器，落地是失效页；更糟的是他早先在浏览器打开过的托管页仍可付款，
+ *      于是两处各付一次，其中一笔变迟到款进人工退款。
+ * @why `copied` 一律复位：服务端每次发起都**轮换**短链 token，这是一条新链接；
+ *      "已复制"若挂着，用户会去粘贴刚失效的那条（AJ-227 同一条理由，这里扩到所有分支）。
+ * @limitation 只产出"这一屏显示什么"，**不发起支付、不跳转**：`requestPayment` / `redirectTo` 在薄壳里。
+ */
+export function afterIntent(plan) {
+  const p = plan !== null && typeof plan === 'object' ? plan : {};
+  // 只有 copylink 才该有短链：其余任何分支留着上一次的短链，都是一条已经作废的链接
+  const payUrl = p.kind === 'copylink' && typeof p.url === 'string' ? p.url : '';
+  return { payUrl, guide: payGuide(p), copied: false };
+}
+
+/**
+ * `auto`（审核期 mock 通道，响应到达时订单已 paid）之后要不要**离开这一页**（MP3-06）。
+ * @param {unknown} plan `payPlan(intent)` 的输出
+ * @returns {boolean} 真 = 薄壳 `redirectTo` 订单详情
+ *
+ * @why 原先 auto 只设 guide、不收起通道，于是一屏同时写着"支付已完成"和
+ *      "支付前请确认…将以日元扣款 / 30 分钟内未支付将自动关闭"，通道按钮**还能点**。
+ *      审核员看到的是自相矛盾的界面，容易被当成"功能不完整"驳回。
+ * @why 与 `in_app` 的 success 同口径（"订单已付了就不该再留在支付页"）：
+ *      契约写明 auto=true 时响应返回的那一刻订单已经是 paid，
+ *      所以 in_app 那条"成功后离开这一页"的理由对 auto 同样成立。
+ * @why 不留在这一屏改文案：留下来就得靠前端自己判断"已付"，
+ *      而支付完成的真值在服务端（`pages/pay` 不轮询，@see ./index.js @limitation 一）；
+ *      去详情页是让**服务端数据**说话，不是让前端替它下结论。
+ */
+export function leavesAfterAuto(plan) {
+  return plan !== null && typeof plan === 'object' && plan.kind === 'auto';
+}
+
+/**
+ * 点"用这个方式支付"之后的决定。
+ *
+ * @param {{paying: boolean, channel: unknown, lastChannel: string, hasKey: boolean}|null|undefined} args
+ *   传 null / undefined 也算"不该发起"（wxml 传错形态时页面只是不动，不能炸）。
+ *   `paying`      上一次发起是否还在途中（B6 / AJ-201 的在途守卫）；
+ *   `channel`     wxml `data-channel` 原值（可能是任何东西，不能直接信）；
+ *   `lastChannel` 页面记住的上一次通道（空串 = 还没发起过）；
+ *   `hasKey`      幂等键生命周期器是否已就绪。
+ * @returns {{kind: 'ignore'} | {kind: 'start', channel: string, retireKey: boolean}}
+ *
+ * @why `paying` 那条守卫（B6 / AJ-201）：上一次发起还没回来就再点，会多打一次
+ *      `POST /orders/{id}/pay`。服务端有幂等键兜底（同键不会建第二个会话），
+ *      但仍然白占一次连接与一次订单行锁——发起支付这条路要调机构，一次最长 6s，
+ *      连接池只有 10 条时"连点"就是自己把自己排队。
+ *      ⚠️ 挡的是**浪费**，正确性仍由服务端负责：本函数不做任何重试判断。
+ * @why `retireKey`（换通道必须作废键）：同键重放会被服务端判成"上一个通道的 intent"，
+ *      用户点了 B 却拿到 A 的支付凭据——同键同参才算重放，参数不同就不是。
+ * @limitation 只做"要不要发起 / 要不要换键"这两个判断，**不碰宿主 API、不读时间、
+ *              不发起请求**：键的 acquire/retire 与 `requestPayment` 全在薄壳里。
+ */
 export function payStartDecision(args) {
   const a = args && typeof args === 'object' ? args : {};
   const channel = typeof a.channel === 'string' ? a.channel : '';

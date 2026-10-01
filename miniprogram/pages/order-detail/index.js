@@ -18,6 +18,9 @@
  *              在详情页上渲染成一个"看起来正常"的错页面。
  * @limitation 二：**不做支付结果轮询**（与订单列表同一条 @limitation）：
  *              完成靠服务端回调，本页 onShow 重取即是用户可见的最新真值。
+ *              ⚠️ 唯一的例外是 MP3-04 的确认窗口：从支付页带 `justPaid=1` 过来时，
+ *              最多**退避重查两次**（见 scheduleRecheck）——那是"钱已动、只等确认"的几秒，
+ *              且两次之后一定放弃假设、把按钮还给用户，不是常规轮询。
  * @limitation 三：运单号复制成功只改"已复制"文案，不做 toast
  *              （`wx.showToast` 刻意未登记，@see utils/wx-api.js @limitation 九）。
  *
@@ -53,11 +56,31 @@ Page({
   orderId: '',
   traceId: '',
 
+  /**
+   * 「刚刚付过款，服务端还没确认」（MP3-04，P1）。
+   * @why 它由**支付页**带过来（`?justPaid=1`），因为"谁刚付过"只有支付页知道——
+   *      从订单数据里推不出来（那一刻服务端眼里就是一张普通的待付款单）。
+   * @limitation 是一次性假设：复核两次后放弃（见 scheduleRecheck）。
+   */
+  justPaid: false,
+  /** 已复核次数（上限 2，见 scheduleRecheck 的 @why）。 */
+  recheckCount: 0,
+  /** 复核定时器（onUnload 必清，否则页面销毁后还在 setData）。 */
+  recheckTimer: null,
+  /** 最近一次拿到的订单原文（放弃 justPaid 假设后要按它重渲染）。 */
+  lastOrder: null,
+
   onLoad(options) {
     this.orderId = typeof options?.id === 'string' ? options.id : '';
     this.traceId = newTraceId();
+    this.justPaid = options?.justPaid === '1';
+    this.recheckCount = 0;
     // @see @limitation 一：空 id 不发请求
     if (this.orderId === '') this.setData({ error: '订单不存在或链接无效' });
+  },
+
+  onUnload() {
+    if (this.recheckTimer !== null) clearTimeout(this.recheckTimer);
   },
 
   onShow() {
@@ -72,12 +95,43 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}`,
         traceId: this.traceId,
       });
-      this.setData({ view: detailView(res), error: '', copied: false });
+      this.lastOrder = res;
+      this.setData({
+        view: detailView(res, { justPaid: this.justPaid }),
+        error: '',
+        copied: false,
+      });
+      this.scheduleRecheck();
     } catch (e) {
       this.setData({ view: null, error: errorMessage(e) });
     } finally {
       this.setData({ loading: false });
     }
+  },
+
+  /**
+   * 「支付结果确认中」时退避重查（MP3-04）。
+   *
+   * @why 只在这一种状态下重查：这是"钱已经动了、只等服务端确认"的窗口，
+   *      轮询几次就能拿到真值；而常规状态不需要（onShow 重取已足够，@see @limitation 二）。
+   * @why **上限两次**然后放弃假设：justPaid 是支付页给的**假设**，它可能为假
+   *      （用户在托管页关掉了页面、付款其实没成）。假设为真时两次足够确认；
+   *      假设为假时必须把按钮还给用户——不能让人永久停在一个什么都点不了的屏幕上。
+   * @limitation 退避是固定 1.5s / 3s，不是指数：窗口只有几秒，再长的等待没有意义，
+   *              而页面销毁时定时器必清（onUnload），不会泄漏。
+   */
+  scheduleRecheck() {
+    const view = this.data.view;
+    if (view === null || view.needsRecheck !== true) return;
+    if (this.recheckCount >= 2) {
+      // 两次都没确认下来 → 放弃"刚付过"这个假设，恢复常规按钮
+      this.justPaid = false;
+      this.setData({ view: detailView(this.lastOrder, { justPaid: false }) });
+      return;
+    }
+    this.recheckCount += 1;
+    if (this.recheckTimer !== null) clearTimeout(this.recheckTimer);
+    this.recheckTimer = setTimeout(() => void this.load(), 1500 * this.recheckCount);
   },
 
   /** 继续支付（仅 `canPay`；不传金额，支付页自己向服务端要权威金额）。 */

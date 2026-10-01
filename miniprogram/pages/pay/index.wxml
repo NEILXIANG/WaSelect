@@ -14,13 +14,27 @@
     <text class="error">{{error}}</text>
   </view>
 
+  <!--
+    MP3-07：`payResult` 是"上一次支付动作"的结论，不随整页重取清空。
+    @why 拉起微信收银台会让平台触发 onHide → onShow → 整页重取，
+         而重取开头会清 `error`——把取消提示放那儿，用户永远看不到它。
+  -->
+  <view class="card" wx:if="{{payResult}}">
+    <text class="error">{{payResult}}</text>
+  </view>
+
   <view class="card" wx:if="{{loading}}">
     <text class="label">正在加载支付方式…</text>
   </view>
 
+  <!--
+    MP3-11：关单屏（已付款 / 已退款 / 已超时）把这一行的标签从「应付合计」改成「订单合计」。
+    @why 单已经付过了（或根本没付成），"应付"两个字是错的——用户会读成"我还要再付这么多"。
+         金额本身留着：它是用户核对"付了多少钱"的凭据，收掉反而更糟。
+  -->
   <view class="card" wx:if="{{totalJpy !== null}}">
     <view class="row">
-      <text class="label">应付合计</text>
+      <text class="label">{{closedText ? '订单合计' : '应付合计'}}</text>
       <ws-price jpy="{{totalJpy}}" size="lg" />
     </view>
   </view>
@@ -38,6 +52,12 @@
   -->
   <view class="card" wx:if="{{closedText}}">
     <text class="label">{{closedText}}</text>
+    <!--
+      MP3-01：只有"没付成"才有这个按钮（expired / cancelled）。
+      文案说了"如需购买请重新下单"却没地方可点，等于把人丢在死胡同里；
+      而这一屏是支付流程的终点，下面只有一个"查看订单"——他要的是买，不是看。
+    -->
+    <ws-button text="去首页重新下单" type="primary" bindtap="onGoHome" wx:if="{{goHome}}" />
   </view>
 
   <view class="card" wx:if="{{channels.length > 0}}">

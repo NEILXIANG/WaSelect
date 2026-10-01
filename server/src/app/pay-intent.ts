@@ -231,14 +231,18 @@ export async function createPayIntent(
   // ── 1. 持锁读单（归属判定：非本人与不存在同 40400）─────────────────────────
   const order = await lockOrderForPay(tx, input.orderId, input.userId);
 
-  // ── 2. 状态与到期守卫（40904 优先于 40902：过期是更具体的拒绝理由）─────────
+  // ── 2. 状态与到期守卫 ────────────────────────────────────────────────────────
+  // ⚠️ 顺序（第三轮审查 ORD3-01）：**先**判"已不在可付状态"（40902），**再**判到期（40904）。
+  //    原来到期判定在前：已付款 / 已发货 / 已退款的单只要过了 30 分钟窗口，再点支付拿到的都是
+  //    40904「订单已过期，请重新下单」——买家照做就会**重复购买**。到期只对可付状态才有意义。
+  //    expired 本身不在可付集合里，但它的正确答案仍是 40904（"过期了"比"状态不对"更具体），单独放行到下一步。
   const status = asOrderStatus(order.status);
+  if (status !== 'created' && status !== 'pending_payment' && status !== 'expired') {
+    throw new AppError(40902, { from: status, to: 'pending_payment', where: 'orders.pay' });
+  }
   if (status === 'expired' || clock.now() >= order.expires_at) {
     // "到点未扫"与已关单同码——mark-paid 守卫共享语义（可支付窗口 [created, expires_at)）
     throw new AppError(40904, { order_id: input.orderId });
-  }
-  if (status !== 'created' && status !== 'pending_payment') {
-    throw new AppError(40902, { from: status, to: 'pending_payment', where: 'orders.pay' });
   }
   if (order.dest_country === null) {
     // 地址快照一定有 country（建单时从 addresses 快照）；没有 = 数据已被写坏

@@ -35,6 +35,23 @@ export interface ResizedTier {
 const WEBP_QUALITY = 80;
 
 /**
+ * WebP 格式的**单边像素硬上限**（0x3FFF）。超过它 libwebp 直接拒编码（PAY3-02）。
+ *
+ * @why 三档原本只按**宽度**缩放，且 `withoutEnlargement: true`。于是宽度小于档宽的长图
+ *      ——中日电商最常见的商品详情图形态（750×20000）——高度被**原样保留**，
+ *      编码阶段抛 "Processed image is too large for the WebP format"。
+ *      路由把一切异常归成 40001 `image_decode_failed`，运营看到的是"图坏了"，
+ *      而这张图完全合法：排障方向整个被带偏（实测 750×20000 与 1200×17000 都 throw）。
+ * @why 用 `fit: 'inside'` 限高而不是**裁**高：详情长图的信息全在纵向顺序上，
+ *      sharp 默认的 `fit: 'cover'` 会把中间一段裁掉——那不是缩放失败，是**内容被吃掉**，
+ *      且同样静默（管理端缩略图看着正常）。等比限高保住全部内容，只是尺寸变小。
+ * @tradeoff 限高后长图的 detail 档宽度会**小于**档宽（750×20000 → 约 614×16383）。
+ *           宁可窄一点也不裁内容：详情页是竖屏阅读，宽度少 18% 看不出来，缺一段看得出来。
+ * @measured 2026-09-30 实测：750×20000 与 1200×17000 修复前 throw，修复后三档均产出且高度 ≤ 16383。
+ */
+const WEBP_MAX_EDGE = 16_383;
+
+/**
  * 原图字节 → 三档 webp（EXIF 归正 + 等比缩到档宽，小图不放大）。
  * @param imageId IdGen 产出（键形由 domain 单一真源 `imageObjectKey` 保证）
  */
@@ -42,9 +59,16 @@ export async function resizeToTiers(input: Buffer, imageId: string): Promise<Res
   const base = sharp(input).rotate();
   const out: ResizedTier[] = [];
   for (const tier of IMAGE_TIERS) {
+    // height + fit:'inside' 是 PAY3-02 的修复：只按宽度缩会让长图的高度原样突破 WebP 单边上限。
+    // ⚠️ `fit` 必须显式写：sharp 默认是 'cover'，只给 height 会把长图**裁**成中间一块。
     const bytes = await base
       .clone()
-      .resize({ width: tier.width, withoutEnlargement: true })
+      .resize({
+        width: tier.width,
+        height: WEBP_MAX_EDGE,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
       .webp({ quality: WEBP_QUALITY })
       .toBuffer();
     out.push({

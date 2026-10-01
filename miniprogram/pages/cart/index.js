@@ -62,6 +62,12 @@ Page({
     quoting: false,
     /** 报价错误文案（空串 = 无错误）。 */
     quoteError: '',
+    /**
+     * 上一次报价失败的业务错误码（0 = 没有 / 认不出）。
+     * @why 提示语要分"稍后重试就好"与"必须改购物车"两类（MP3-09）：
+     *      对超重（40912）说"请稍后重试"是句谎话——它不会自己变轻。
+     */
+    quoteErrorCode: 0,
     /** 「去结算」的状态（vm `checkoutGate` 的输出：能不能点 + 说什么）。 */
     gate: { disabled: true, hint: '运费与合计还在计算中' },
   },
@@ -109,7 +115,12 @@ Page({
         this.quoteTimer = null;
       }
       this.quoteSeq = nextSeq(this.quoteSeq);
-      this.setData({ quote: null, quoteError: '', gate: checkoutGate({ hasTotal: false }) });
+      this.setData({
+        quote: null,
+        quoteError: '',
+        quoteErrorCode: 0,
+        gate: checkoutGate({ hasTotal: false }),
+      });
       return;
     }
     this.requestQuote();
@@ -148,10 +159,12 @@ Page({
       });
     } catch (e) {
       if (isStale(seq, this.quoteSeq)) return;
+      const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
       this.setData({
         quote: null,
         quoteError: errorMessage(e),
-        gate: checkoutGate({ hasError: true }),
+        quoteErrorCode: code,
+        gate: checkoutGate({ hasError: true, errorCode: code }),
       });
     } finally {
       // 同首页：过期请求不能把 quoting 清掉（新的还在途中）
@@ -161,6 +174,7 @@ Page({
           gate: checkoutGate({
             hasTotal: hasTotal(this.data.quote),
             hasError: this.data.quoteError !== '',
+            errorCode: this.data.quoteErrorCode,
             splitRequired: this.data.quote?.splitRequired === true,
           }),
         });

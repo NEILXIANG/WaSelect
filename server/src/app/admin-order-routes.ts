@@ -375,6 +375,9 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           },
           progress: plan.progress,
           actor: adminActor(req),
+          // OPS3-03：拒付在途时"换新键重新发起"由执行层拦（40907）；闸门已放行 refunding 的查询与同键重放。
+          // ⚠️ 只能从 `plan.row` 取：`row` 是事务闭包内的局部变量，出了闭包就不存在。
+          hasDispute: Boolean(plan.row.has_dispute),
         });
         // pending：留在 refunding，单号已落库；再点即查询，超过 24h 由每日对账 stuck_refunds 报出
         deps.logger.info('admin_order_refund_accepted', {

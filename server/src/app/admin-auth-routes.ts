@@ -23,8 +23,15 @@
  *      IP 限流是 5 次 / 15 分钟，锁是"5 次尝试 → 锁 15 分钟"，两个周期相同，
  *      所以**一个 IP 就能让某个邮箱持续处于锁定**（每 15 分钟补 5 次）。
  *      现在（AJ-243）额度分两层：**来源桶**（邮箱 × 来源 IP，5 次）+ **邮箱桶**（30 次），
- *      单个 IP 只能锁住它自己；要锁死所有人得凑够 6 个来源。改密（`npm run admin:password`）一次清掉两层。
- *      入口侧再加一道：部署时管理端 API 放到 Cloudflare Access 之后（D-81③），外部根本碰不到这个接口。
+ *      单个来源只能锁住它自己；要锁死所有人得凑够 6 个来源。改密（`npm run admin:password`）一次清掉两层。
+ *      ⚠️ "6 个来源"这个论证在两种现实条件下**曾经是错的**（OPS3-04 / PAY3-01，2026-09-30 已修）：
+ *      ① 邮箱桶是**累计**计数（没有时间窗），一个来源每 15 分钟 5 次、约 90 分钟就能攒到 30；
+ *      ② IPv6 下凑来源**不要钱**——来源按 /64 归一，而一台持有 /56 的主机就有 256 个 /64。
+ *      现在两处都补上：计数带 15 分钟窗口（超时从这一轮重新起算），登录来源对 IPv6 归到 `/56`。
+ *      ⚠️ 但**没有一道是上限**：持有 /48 的来源仍有 256 个 /56 可用，慢速攻击只是被抬高成本。
+ *      真正的封顶在**边缘**：部署时管理端 API 放到 Cloudflare Access 之后（D-81③），
+ *      并**必须同时**配 `ORIGIN_VERIFY_SECRET`——Access 只拦经 CF 的流量，
+ *      源站 `.onrender.com` 是公网可达的，不配源站校验时直连源站就绕过了 Access。
  * @limitation 日志只记 target_user_id（找得到人时）与结果，**不记邮箱**（约束七脱敏红线）；
  *      找不到人的失败因此无法按"哪个邮箱"检索——排查靠 IP 与时间。
  *
@@ -45,7 +52,7 @@ import {
   loginAttemptSourceKey,
 } from '../adapters/admin-auth.js';
 import { signToken, verifyPassword, type AuthConfig } from './auth.js';
-import { ipKey } from './rate-limit.js';
+import { ipKeyForLogin } from './rate-limit.js';
 
 /** 同一邮箱、**同一来源**连续失败多少次锁定该来源（D-38 ⑤：5 次；AJ-243 起按来源计）。 */
 export const ADMIN_LOGIN_MAX_FAILURES = 5;
@@ -58,6 +65,16 @@ export const ADMIN_LOGIN_MAX_FAILURES = 5;
 export const ADMIN_LOGIN_GLOBAL_MAX_FAILURES = 30;
 /** 锁多久（分钟，D-38 ⑤：15 分钟）。 */
 export const ADMIN_LOGIN_LOCK_MINUTES = 15;
+/**
+ * 计数窗口（分钟，OPS3-04）：早于"现在 − 窗口"的失败**不再计入** `failed_count`。
+ *
+ * @why 没有它时 `failed_count` 是累计值，只在"达到上限置锁"与"登录成功"时归零，
+ *      于是路由头注释里那句"30 次 / 15 分钟"是假的——实际是"累计 30 次，不分多久"。
+ *      AJ-243 的论证（"单个 IP 只能锁住它自己；要锁死所有人得凑够 6 个来源"）因此在慢速攻击下不成立。
+ * @why 与 `ADMIN_LOGIN_LOCK_MINUTES` 同长（15）：语义就是"15 分钟内 N 次"，
+ *      与注释原本承诺的一致。分成两个常量而不是复用一个，是为了将来两层各自校准时不改语义。
+ */
+export const ADMIN_LOGIN_WINDOW_MINUTES = 15;
 
 /**
  * 找不到账号时拿来比对的哈希（让"没有这个人"也付一次 bcrypt 的时间）。
@@ -95,11 +112,16 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
         const { email, password } = parsed.data;
         const now = deps.clock.now();
         const globalKey = loginAttemptKey(email);
-        // 来源 = trust proxy 取到的 req.ip，再过 ipKey（IPv6 归 /64），与 IP 限流同一口径（AJ-243）
-        const sourceKey = loginAttemptSourceKey(email, ipKey(req.ip ?? 'unknown'));
+        // 来源 = trust proxy 取到的 req.ip，再过 `ipKeyForLogin`（IPv6 归 `/56`，比 IP 限流的 /64 更粗）。
+        // @why 不用 ipKey（PAY3-01）：来源桶要防的是"凑够 N 个来源去耗光邮箱桶"，
+        //      而 IPv6 下凑来源不要钱——一台 /56 的主机就有 256 个 /64。
+        const sourceKey = loginAttemptSourceKey(email, ipKeyForLogin(req.ip ?? 'unknown'));
+        // ⚠️ 带窗口（OPS3-04）：`failed_count` 原来是**累计**的，"30 次 / 15 分钟"这句承诺是假的——
+        //    慢速攻击（每 15 分钟 5 次）约 90 分钟就能把邮箱桶攒满，锁住所有来源。
         const policy = (maxFailures: number) => ({
           maxFailures,
           lockMinutes: ADMIN_LOGIN_LOCK_MINUTES,
+          windowMinutes: ADMIN_LOGIN_WINDOW_MINUTES,
         });
 
         // ① 先扣额度（原子），两层都要拿到：来源桶（5）+ 邮箱桶（30）。

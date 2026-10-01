@@ -239,7 +239,13 @@ describe('markOrderDisputed：幂等（机构会重发 charge.dispute.created）
     },
   );
 
-  it('上一条已**败诉**（lost）后来了新的 dispute_id → 同样接受（订单本来就锁着，换成新单号继续跟）', async () => {
+  /**
+   * 第三轮审查 OPS3-02：AJ-233 原先在这里**接受**新单号，是回归。
+   * @why 新单号覆盖了支付行上的 `lost`；新单号一旦以 won / withdrawn 结案，`has_dispute` 复位——
+   *      钱已被机构拉回的订单重新可发货、可退款（钱货两空），风控列表上那条败诉记录也消失。
+   *      败诉的单本来就锁着，新单号只需要进对账让人看见，不需要落库。
+   */
+  it('🔴 上一条已**败诉**（lost）后来了新的 dispute_id → 拒绝（dispute_after_lost），不覆盖、锁不解', async () => {
     await seedPaid('o-1');
     await markOrderDisputed(db, createEventBus(SILENT), SILENT, 'o-1', dispute());
     await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
@@ -247,14 +253,24 @@ describe('markOrderDisputed：幂等（机构会重发 charge.dispute.created）
       disputeId: 'dp_1',
       result: 'lost',
     });
-    await markOrderDisputed(
+    const err = await markOrderDisputed(
       db,
       createEventBus(SILENT),
       SILENT,
       'o-1',
       dispute({ disputeId: 'dp_2' }),
-    );
-    expect(await paymentRow('o-1')).toMatchObject({ dispute_id: 'dp_2', dispute_status: 'open' });
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AppError);
+    expect((err as AppError).code).toBe(40902);
+    expect(((err as AppError).details as { reason?: string }).reason).toBe('dispute_after_lost');
+    expect(await paymentRow('o-1')).toMatchObject({ dispute_id: 'dp_1', dispute_status: 'lost' });
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+    // 即使 dp_2 之后又来一条结案，也找不到它（dispute_not_open），锁仍在
+    await markDisputeClosed(db, createEventBus(SILENT), 'o-1', {
+      channel: 'stripe',
+      disputeId: 'dp_2',
+      result: 'withdrawn',
+    }).catch(() => undefined);
     expect((await orderRow('o-1'))['has_dispute']).toBe(true);
   });
 
@@ -370,6 +386,131 @@ describe('markOrderDisputed：接线（经回调管线，不是只测函数）',
       ...over,
     } as ProviderEvent;
   }
+
+  /**
+   * 第三轮审查 OPS3-01：拒付事件**乱序**到达。
+   * @why 查询函撤回（closed dp_1）与正式拒付（created dp_2）是同一时刻产生的两条事件，
+   *      @measured(docs.stripe.com/webhooks「Event ordering」, 2026-09-30)：
+   *      "Stripe doesn't guarantee the delivery of events in the order that they're generated"。
+   *      原实现两条路径都回 200（`dispute_id_conflict` / `dispute_not_open` 进 mismatch 词表）：
+   *      新拒付被丢，或"结案先到 → 开案后到"把订单永久锁住。现在宽限期内回 503 让机构重发。
+   */
+  it('🔴 乱序 ①：新单号开案先于旧单号结案 → 503 重发；旧的结案到了之后，重发的新拒付落库并上锁', async () => {
+    await seedPaid('o-1');
+    const { deps } = pipeline();
+    await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"o":1}'),
+      disputeEvent({ eventId: 'evt-open-1' }),
+    );
+    const early = await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"o":2}'),
+      disputeEvent({ eventId: 'evt-open-2', providerRef: 'dp_2' }),
+    );
+    expect(early.status).toBe(503);
+    await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"c":1}'),
+      closeEvent({ eventId: 'evt-close-1', disputeStatus: 'warning_closed' }),
+    );
+    expect((await orderRow('o-1'))['has_dispute']).toBe(false);
+    const retry = await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"o":2}'),
+      disputeEvent({ eventId: 'evt-open-2', providerRef: 'dp_2' }),
+    );
+    expect(retry.status).toBe(200);
+    expect(await paymentRow('o-1')).toMatchObject({ dispute_id: 'dp_2', dispute_status: 'open' });
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+  });
+
+  it('🔴 乱序 ②：结案先于开案 → 503 重发；开案到了之后，重发的结案正常结掉（不会永久锁住）', async () => {
+    await seedPaid('o-1');
+    const { deps } = pipeline();
+    const early = await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"c":1}'),
+      closeEvent({ eventId: 'evt-close-1', disputeStatus: 'won' }),
+    );
+    expect(early.status).toBe(503);
+    const [row] = await db`select processed_at from webhook_events where event_id = 'evt-close-1'`;
+    expect(row?.['processed_at'] ?? null).toBeNull();
+    await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"o":1}'),
+      disputeEvent({ eventId: 'evt-open-1' }),
+    );
+    expect((await orderRow('o-1'))['has_dispute']).toBe(true);
+    const retry = await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"c":1}'),
+      closeEvent({ eventId: 'evt-close-1', disputeStatus: 'won' }),
+    );
+    expect(retry.status).toBe(200);
+    expect((await paymentRow('o-1'))['dispute_status']).toBe('won');
+    expect((await orderRow('o-1'))['has_dispute']).toBe(false);
+  });
+
+  it('乱序宽限期过了仍对不上 → 200 + error 级 mismatch（不无限重发）', async () => {
+    await seedPaid('o-1');
+    const { deps, sink } = pipeline();
+    expect(
+      (
+        await handleProviderCallback(
+          deps,
+          'stripe',
+          Buffer.from('{"c":9}'),
+          closeEvent({ eventId: 'evt-close-9', providerRef: 'dp_9', disputeStatus: 'won' }),
+        )
+      ).status,
+    ).toBe(503);
+    // 首次到达时刻拨回宽限期之前（DB 时钟口径，与管线的 elapsed 计算同源）
+    await db`update webhook_events set received_at = now() - interval '25 hours' where event_id = 'evt-close-9'`;
+    const late = await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"c":9}'),
+      closeEvent({ eventId: 'evt-close-9', providerRef: 'dp_9', disputeStatus: 'won' }),
+    );
+    expect(late.status).toBe(200);
+    expect(sink.find('callback_settlement_mismatch')[0]?.level).toBe('error');
+    const [r] = await db`select result from webhook_events where event_id = 'evt-close-9'`;
+    expect(r?.['result']).toBe('mismatch:dispute_not_open');
+  });
+
+  it('败诉后来的新单号（dispute_after_lost）不属于乱序：直接 200 + mismatch，不重发', async () => {
+    await seedPaid('o-1');
+    const { deps } = pipeline();
+    await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"o":1}'),
+      disputeEvent({ eventId: 'evt-open-1' }),
+    );
+    await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"c":1}'),
+      closeEvent({ eventId: 'evt-close-1', disputeStatus: 'lost' }),
+    );
+    const out = await handleProviderCallback(
+      deps,
+      'stripe',
+      Buffer.from('{"o":2}'),
+      disputeEvent({ eventId: 'evt-open-2', providerRef: 'dp_2' }),
+    );
+    expect(out.status).toBe(200);
+    const [r] = await db`select result from webhook_events where event_id = 'evt-open-2'`;
+    expect(r?.['result']).toBe('mismatch:dispute_after_lost');
+  });
 
   it('disputed 事件经管线 → 落库，登记行写 `disputed`（对账能精确检索拒付）', async () => {
     await seedPaid('o-1');

@@ -256,7 +256,24 @@ export function isLockNotAvailable(e: unknown): boolean {
   return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === '55P03';
 }
 
-/** 关闭连接池（测试与优雅关闭用）。 */
-export async function closeDb(db: Db): Promise<void> {
-  await db.end();
+/**
+ * 关闭连接池（测试与优雅关闭用）。
+ *
+ * @param db 连接池
+ * @param timeoutMs 强关上限（毫秒）；不传 = 无限等（postgres.js 的缺省）。
+ *
+ * @why `db.end()` 会等在途查询**和在途事务**跑完（INF3-01 实测：
+ *      事务内空等 3s 时 `end()` 也等到 3s 才 resolve）——停机路径上这段等待
+ *      没有任何自有上限，只受 PG 的 statement_timeout 约束。给一个上限，
+ *      让"停机要花多久"成为我们可以预测的数，而不是取决于当时正在跑什么。
+ * @why 单位是**毫秒**而 postgres.js 的 `end({timeout})` 收的是**秒**
+ *      （源码 `setTimeout(destroy, timeout * 1000)`）——换算放在这里，
+ *      否则每个调用方都要记住这个坑，写错就变成"等 8000 秒"。
+ */
+export async function closeDb(db: Db, timeoutMs?: number): Promise<void> {
+  if (!Number.isFinite(timeoutMs) || (timeoutMs as number) <= 0) {
+    await db.end();
+    return;
+  }
+  await db.end({ timeout: Math.max(1, Math.ceil((timeoutMs as number) / 1000)) });
 }

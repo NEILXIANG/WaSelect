@@ -48,6 +48,20 @@ export const ADDRESS_PATTERNS = {
   state: /^[A-Z]{2}$/,
 };
 
+/**
+ * 各字段最大字符数（与服务端 `domain/address-input.ts` 的 `ADDRESS_MAX_CHARS`、表列宽一致）。
+ * @why TST3-02：原来前端只查格式不查长度，超长的第二行地址要提交后才被服务端以 40001 拒掉，
+ *      而用户看到的是一句笼统的请求错误。单测把这张表与服务端那张逐键比对，任一边改了另一边红。
+ */
+export const ADDRESS_MAX_CHARS = {
+  recipient: 100,
+  phone: 20,
+  line1: 200,
+  line2: 200,
+  city: 100,
+  postal_code: 10,
+};
+
 /** 表单字段（顺序 = 编辑页表单顺序；**不含** country/is_default，见 @limitation 一）。 */
 export const ADDRESS_FIELDS = [
   'recipient',
@@ -117,6 +131,10 @@ export function formErrors(model) {
   if (!ADDRESS_PATTERNS.state.test(m.state.trim())) errors.state = '州为两位大写缩写，如 CA';
   if (!ADDRESS_PATTERNS.postal.test(m.postal_code.trim()))
     errors.postal_code = '邮编为 5 位或 ZIP+4，如 94105 或 94105-1234';
+  for (const k of Object.keys(ADDRESS_MAX_CHARS)) {
+    if (errors[k] === undefined && m[k].trim().length > ADDRESS_MAX_CHARS[k])
+      errors[k] = `最多 ${ADDRESS_MAX_CHARS[k]} 个字符`;
+  }
   const first = Object.values(errors)[0] ?? '';
   return { ok: Object.keys(errors).length === 0, errors, first };
 }

@@ -12,8 +12,10 @@ import { describe, expect, it } from 'vitest';
 import {
   EMPTY_GUIDE,
   PAY_FAIL_TEXT,
+  afterIntent,
   closedScreen,
   copyResult,
+  leavesAfterAuto,
   onShowAction,
   payPageView,
   payStartDecision,
@@ -156,8 +158,16 @@ describe('防复发：薄壳的剪贴板调用必须带 success 与 fail（B34 /
 
 describe('payPageView：这张单还能不能走支付流程（B35 / AJ-218）', () => {
   it('created / pending_payment → 可付，且不显示说明', () => {
-    expect(payPageView({ status: 'created' })).toEqual({ payable: true, closedText: '' });
-    expect(payPageView({ status: 'pending_payment' })).toEqual({ payable: true, closedText: '' });
+    expect(payPageView({ status: 'created' })).toEqual({
+      payable: true,
+      closedText: '',
+      goHome: false,
+    });
+    expect(payPageView({ status: 'pending_payment' })).toEqual({
+      payable: true,
+      closedText: '',
+      goHome: false,
+    });
   });
 
   it('已付及之后的每一态 → 不可付，说明里带状态文案（不是空白、也不是英文状态码）', () => {
@@ -174,6 +184,36 @@ describe('payPageView：这张单还能不能走支付流程（B35 / AJ-218）',
   it('已取消 / 已超时关闭：同样不可付（点了是 40902，不是"再付一次就活了"）', () => {
     expect(payPageView({ status: 'cancelled' }).payable).toBe(false);
     expect(payPageView({ status: 'expired' }).payable).toBe(false);
+  });
+
+  /**
+   * MP3-01：关单屏原来对所有不可付状态一律写"无需再支付"。
+   * 对 expired / cancelled 来说这是**反的**——用户会读成"已经付好了"，然后去等一张不会发货的单。
+   * 银行卡是当前唯一付款路径，这一屏是必经的。
+   */
+  it('🔴 没付成的两态（expired / cancelled）不许说"无需再支付"，要给重新下单元的出口', () => {
+    for (const s of ['expired', 'cancelled']) {
+      const v = payPageView({ status: s });
+      expect(v.closedText, s).not.toContain('无需再支付');
+      expect(v.closedText, s).toContain('重新下单');
+      expect(v.goHome, s).toBe(true);
+    }
+  });
+
+  it('🔴 退款中的两态只报状态：不引导重新下单（钱还没退完，重下一单是重复购买）', () => {
+    for (const s of ['refunding', 'refunded']) {
+      const v = payPageView({ status: s });
+      expect(v.closedText, s).not.toContain('无需再支付');
+      expect(v.closedText, s).not.toContain('重新下单');
+      expect(v.goHome, s).toBe(false);
+    }
+  });
+
+  it('🔴 真正已付的四态仍然说"无需再支付"（这条不能改坏了）', () => {
+    for (const s of ['paid', 'shipped', 'delivered', 'completed']) {
+      expect(payPageView({ status: s }).closedText, s).toContain('无需再支付');
+      expect(payPageView({ status: s }).goHome, s).toBe(false);
+    }
   });
 
   it('状态读不到 / 认不出 → 按"可付"放行：不能付由服务端 40902 说出来，不由前端静默堵死', () => {
@@ -214,10 +254,64 @@ describe('onShowAction：回到支付页该做什么（B35 / AJ-218 → AJ-227�
   });
 });
 
-describe('closedScreen：订单已不需要支付时要清掉的全部内容（AJ-227）', () => {
+describe('afterIntent：拿到意图之后这一屏该变成什么样（MP3-03）', () => {
+  it('🔴 in_app 也必须是三键齐全且 payUrl 为空：改点微信支付后不能留着银行卡的旧短链', () => {
+    const d = afterIntent({ kind: 'in_app', params: { timeStamp: '1' } });
+    expect(d.payUrl).toBe('');
+    expect(d.guide.title).toBe('');
+    expect(d.copied).toBe(false);
+  });
+
+  it('🔴 只有 copylink 才有短链；auto / unsupported / 垃圾输入一律为空', () => {
+    expect(afterIntent({ kind: 'copylink', url: 'https://pay.test/l/abc' }).payUrl).toBe(
+      'https://pay.test/l/abc',
+    );
+    const junk: unknown[] = [
+      { kind: 'auto' },
+      { kind: 'unsupported', reason: 'x' },
+      {},
+      null,
+      undefined,
+      'copylink',
+    ];
+    for (const p of junk) {
+      expect(afterIntent(p).payUrl, JSON.stringify(p)).toBe('');
+    }
+  });
+
+  it('copylink 的短链非字符串 → 也清空（不把非字符串交给 wxml 的 user-select）', () => {
+    expect(afterIntent({ kind: 'copylink', url: 42 }).payUrl).toBe('');
+    expect(afterIntent({ kind: 'copylink' }).payUrl).toBe('');
+  });
+
+  it('copied 一律复位：服务端每次发起都轮换 token，"已复制"会骗人去粘贴失效的那条', () => {
+    for (const p of [{ kind: 'copylink', url: 'u' }, { kind: 'in_app' }, { kind: 'auto' }]) {
+      expect(afterIntent(p).copied, JSON.stringify(p)).toBe(false);
+    }
+  });
+});
+
+describe('leavesAfterAuto：审核期 auto 之后必须离开支付页（MP3-06）', () => {
+  it('🔴 auto → 离开；其余一律留下', () => {
+    expect(leavesAfterAuto({ kind: 'auto' })).toBe(true);
+    const others: unknown[] = [
+      { kind: 'in_app' },
+      { kind: 'copylink' },
+      { kind: 'unsupported' },
+      {},
+      null,
+    ];
+    for (const p of others) {
+      expect(leavesAfterAuto(p), JSON.stringify(p)).toBe(false);
+    }
+  });
+});
+
+describe('closedScreen：订单已不需要支付时要清掉的全部内容（AJ-227 → MP3-01 改签名）', () => {
   it('五样一起清：支付方式、提示条、短链、引导、"已复制"', () => {
-    expect(closedScreen('该订单已付款，无需再支付')).toEqual({
+    expect(closedScreen({ closedText: '该订单已付款，无需再支付', goHome: false })).toEqual({
       closedText: '该订单已付款，无需再支付',
+      goHome: false,
       channels: [],
       notice: [],
       payUrl: '',
@@ -226,9 +320,17 @@ describe('closedScreen：订单已不需要支付时要清掉的全部内容（A
     });
   });
 
+  it('🔴 `goHome` 一路带到 setData：说了"请重新下单"就必须同时给出那条路', () => {
+    expect(closedScreen({ closedText: 'x', goHome: true }).goHome).toBe(true);
+    // 非布尔值一律当假：wxml 的 wx:if 不吃字符串 "false"
+    expect(closedScreen({ closedText: 'x' }).goHome).toBe(false);
+    // 传字符串（旧签名）也不能把页面带进"可重新下单"的形态
+    expect(closedScreen('该订单已付款，无需再支付' as unknown).goHome).toBe(false);
+  });
+
   it('每次返回新的 guide 对象（不把冻结的常量交给 setData）', () => {
-    expect(closedScreen('x').guide).not.toBe(EMPTY_GUIDE);
-    expect(Object.isFrozen(closedScreen('x').guide)).toBe(false);
+    expect(closedScreen({ closedText: 'x' }).guide).not.toBe(EMPTY_GUIDE);
+    expect(Object.isFrozen(closedScreen({ closedText: 'x' }).guide)).toBe(false);
   });
 });
 
@@ -274,5 +376,23 @@ describe('防复发：薄壳的三处接线（B35 / AJ-218）', () => {
     //      而所有纯函数用例仍然全绿。
     expect(code).toContain('payPageView(');
     expect(code).toContain('onShowAction(');
+  });
+});
+
+/**
+ * MP3-07：拉起微信收银台会让平台触发 onHide → onShow，而 `load()` 开头会清 error。
+ * 两件事叠起来就是"支付未完成的提示在用户看到之前被抹掉"。
+ */
+describe('onShowAction：整页重取在途时不再排队（MP3-07）', () => {
+  it('🔴 loading → none（再排一次不会更快，只会让两个 load 的结果互相覆盖）', () => {
+    expect(onShowAction({ loading: true })).toBe('none');
+    // 在途优先于"有短链"：copylink 屏在重取时也不该再排
+    expect(onShowAction({ loading: true, payUrl: 'https://pay.test/l/abc' })).toBe('none');
+  });
+
+  it('loading 为假 / 认不出 → 不变（脏值不能把刷新静默关掉）', () => {
+    expect(onShowAction({ loading: false })).toBe('reload');
+    expect(onShowAction({ loading: 'yes' })).toBe('reload');
+    expect(onShowAction({})).toBe('reload');
   });
 });

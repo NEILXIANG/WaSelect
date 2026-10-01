@@ -34,11 +34,17 @@ import { PAYABLE, canPay, statusText } from '../../utils/order-status.js';
 import { displaySubLine, formatJpy } from '../../utils/price-format.js';
 import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 import { addressSummary } from '../../utils/address-form.js';
-import { jstDateTime } from '../../utils/jst-text.js';
+import { jstDateTimeLabeled } from '../../utils/jst-text.js';
 
-/** ISO → JST 展示串；解析失败回落原串（数据不能丢，宁可难看）。 */
+/**
+ * ISO → 买家可见的 JST 串（**带时区标注**）；解析失败回落原串（数据不能丢，宁可难看）。
+ *
+ * @why 带"（日本时间）"（MP3-02 / AJ-250）：收货人是美国地址的用户，
+ *      不给时区时"请在 22:30 前完成支付"会被读成本地时间（PDT 与 JST 差 16 小时）；
+ *      用户以为还有一整天，回来时订单已超时关闭——不会报任何错，只会白丢一单。
+ */
 function timeText(iso) {
-  return jstDateTime(iso) ?? (typeof iso === 'string' ? iso : '');
+  return jstDateTimeLabeled(iso) ?? (typeof iso === 'string' ? iso : '');
 }
 
 /**
@@ -84,20 +90,45 @@ export function amountLines(order) {
 /** 时间线行：状态中文 + JST 时刻。 */
 export function timelineRows(timeline) {
   if (!Array.isArray(timeline)) return [];
-  return timeline
-    .filter((t) => t && typeof t.status === 'string' && t.status !== '')
-    .map((t) => ({ statusText: statusText(t.status), atText: timeText(t.at) }));
+  return (
+    timeline
+      .filter((t) => t && typeof t.status === 'string' && t.status !== '')
+      // ⚠️ `key` 是给 wxml 的 `wx:key` 用的：行里没有一个天然唯一且稳定的字段
+      //    （同一状态理论上可能出现两次），`wx:key="index"` 会被开发者工具告警。
+      .map((t, i) => ({ key: `tl-${i}`, statusText: statusText(t.status), atText: timeText(t.at) }))
+  );
+}
+
+/**
+ * 「刚刚付过款，但服务端还没确认」的窗口（第三轮审查 MP3-04，P1）。
+ *
+ * @why 这个窗口是真实存在的：买家在 Stripe 托管页付完款、切回微信**只要几秒**，
+ *      而 `checkout.session.completed` 常常还没到。此刻服务端眼里订单仍是"待付款"，
+ *      `detailView` 按常规口径会同时给出「继续支付」和「取消订单」——
+ *      用户以为刚才没付上，点取消，订单关了、库存还了，钱几秒后才到 → 只能人工退款。
+ * @why 判据是 `justPaid`（支付页传来的**事实**）而不是"距 expires_at 还有多久"之类的猜测：
+ *      谁刚付过只有支付页知道，从订单数据里推不出来。
+ * @limitation 它是**一次性**的假设：状态一旦不再是可付态（服务端确认了）就自动失效；
+ *              薄壳最多复核两次，之后放弃这个假设、恢复常规按钮——
+ *              "刚刚付过"若为假（其实没付成），不能把人永久锁在确认屏上。
+ */
+function confirmingJustPaid(payable, justPaid) {
+  return justPaid === true && payable;
 }
 
 /**
  * `GET /orders/{id}` → 详情页视图。
  * @param {unknown} order 契约 `Order`；也可能是任何东西
+ * @param {unknown} [opts] `{ justPaid?: boolean }`——刚从支付页过来（MP3-04，见上）。
+ *       可选：不传与传脏值都等于"没刚付过"（存量调用方不必改）。
  * @returns 见各字段注释
  */
-export function detailView(order) {
+export function detailView(order, opts = undefined) {
   const o = order && typeof order === 'object' ? order : {};
+  const options = opts && typeof opts === 'object' ? opts : {};
   const status = typeof o.status === 'string' ? o.status : '';
   const payable = canPay(status);
+  const confirming = confirmingJustPaid(payable, options.justPaid === true);
   const hasTotal = Number.isInteger(o.total_jpy);
   const trackingNo = typeof o.tracking_no === 'string' ? o.tracking_no.trim() : '';
 
@@ -105,12 +136,20 @@ export function detailView(order) {
     orderId: typeof o.order_id === 'string' ? o.order_id : '',
     orderNo: typeof o.order_no === 'string' ? o.order_no : '',
     statusText: statusText(status),
-    canPay: payable,
+    // ⚠️ 确认中不给出「继续支付」：用户刚付过一次，再点就是第二笔钱（MP3-04）。
+    canPay: payable && !confirming,
     /**
      * 可取消态与可付态**故意同源**（PAYABLE，@see utils/order-status.js @limitation 二）：
      * 两边各写一份的话，"能付但取消不了"这种半开状态没有任何测试能抓住。
+     * ⚠️ 唯一的例外就是"刚付过款未确认"：那时本地状态仍是可付/可取消，
+     *    但取消会把一张可能已付款的单关掉——这一支由 `confirming` 单独排除。
      */
-    canCancel: PAYABLE.includes(status),
+    canCancel: PAYABLE.includes(status) && !confirming,
+    /** 确认屏：告诉用户"钱在确认中"，而不是让他自己猜刚才付没付上。 */
+    confirming,
+    confirmHint: confirming ? '支付结果确认中，请稍后刷新' : '',
+    /** 薄壳据此退避重查（最多两次，见 vm 的 @limitation）。 */
+    needsRecheck: confirming,
     createdAtText: timeText(o.created_at),
     // ⚠️ 截止时刻只在可付时显示（@see @limitation 一：骨架期不做倒计时）
     expiresAtText: payable ? timeText(o.expires_at) : '',

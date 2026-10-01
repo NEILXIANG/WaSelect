@@ -268,6 +268,15 @@ describe('recoveryFor：建单失败之后页面该做什么（B37 / AJ-220）',
     expect(recoveryFor(40908)).toBe('renew_key');
   });
 
+  /**
+   * MP3-09：40913（在途单已达上限）的 action 是"引导去订单列表支付或取消已有订单"。
+   * 只显示文案的话，用户要自己 回首页 → 我的 → 我的订单 → 逐张进详情取消——
+   * 大多数人做不到，结果是放弃这一单。
+   */
+  it('🔴 40913（在途单太多）→ 去订单列表（文案说了要去处理，就得给去处）', () => {
+    expect(recoveryFor(40913)).toBe('go_orders');
+  });
+
   it('脏输入（undefined / 字符串 / 0）→ none，不抛', () => {
     for (const c of [undefined, null, '40905', 0, 40905.5]) {
       expect(recoveryFor(c), String(c)).toBe('none');
@@ -282,7 +291,8 @@ describe('recoveryFor：建单失败之后页面该做什么（B37 / AJ-220）',
       'utf8',
     );
     expect(reg.length, '自检：登记表读到了内容').toBeGreaterThan(0);
-    for (const c of [40905, 40901, 40401, 40011]) {
+    // ⚠️ 40913 一并纳入：`go_orders` 的来源是登记表里那条"引导去订单列表"的 action
+    for (const c of [40905, 40901, 40401, 40011, 40913]) {
       expect(reg, `${c} 必须在登记表中`).toContain(`${c}:`);
     }
     expect(reg).toContain(

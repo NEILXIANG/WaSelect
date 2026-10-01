@@ -179,6 +179,16 @@ describe('守卫（归属/状态/到期）', () => {
     await seedPayable('o-exp', { status: 'expired' });
     await seedPayable('o-late', { expiresAt: new Date('2026-01-02T11:59:00.000Z') });
     await seedPayable('o-paid', { status: 'paid' });
+    // ORD3-01（第三轮审查）：已付款**且已过支付窗口**——原实现先判到期，返回 40904「已过期，请重新下单」，
+    // 买家照做就会重复购买；原来的 paid 用例是未过期的单，正好绕开了这个分支。
+    await seedPayable('o-pdl', {
+      status: 'paid',
+      expiresAt: new Date('2026-01-02T11:59:00.000Z'),
+    });
+    await seedPayable('o-rfl', {
+      status: 'refunded',
+      expiresAt: new Date('2026-01-02T11:59:00.000Z'),
+    });
 
     await withTransaction(db, async (tx) => {
       await createPayIntent(tx, deps(registry, sink), {
@@ -221,6 +231,20 @@ describe('守卫（归属/状态/到期）', () => {
         () => expect.unreachable('paid 应 40902'),
         (e) => expect(codeOf(e)).toBe(40902),
       );
+      for (const orderId of ['o-pdl', 'o-rfl']) {
+        await createPayIntent(tx, deps(registry, sink), {
+          orderId,
+          userId: 'u-1',
+          channel: 'pa',
+        }).then(
+          () => expect.unreachable(`${orderId} 应 40902`),
+          (e) =>
+            expect(
+              codeOf(e),
+              `${orderId}：已付类的单过了窗口仍应 40902，不是"已过期请重新下单"`,
+            ).toBe(40902),
+        );
+      }
       // 全部拒绝路径不得留下任何 payments 行——**必须在回滚之前、用同一个 tx 数**：
       // 回滚之后再数恒为 0（测试审查 U-J11：原写法是同义反复，拒绝路径写了行也会绿）
       const inTx = await tx`select count(*)::int as n from payments`;

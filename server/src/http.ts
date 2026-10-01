@@ -679,6 +679,23 @@ export interface ShutdownHooks {
   exit?: ((code: number) => void) | undefined;
   /** 设置退出码后到真正 exit 的宽限时间（默认 2000ms，给日志排空；测试注入 10ms 缩短等待）。 */
   exitDelayMs?: number;
+  /**
+   * INF3-01：从**收到信号那一刻**起算的停机总预算（毫秒）；0 / 不传 = 不设预算（旧行为）。
+   *
+   * @why AJ-237 之后"排空失败"这条分支会继续走 `afterDrain`（这是对的——清理必须做），
+   *      但那条分支里 `db.end()` 会等在途事务跑完，**没有任何自有上限**；
+   *      而 `finish`（硬退出定时器）要等 `afterDrain` 返回之后才上膛。
+   *      于是最坏停机时长从 17s 变成 31s+，超过平台宽限 30s ⇒ 被 SIGKILL ⇒
+   *      `shutdown_cleanup_done_after_failed_drain` 这行日志与 SonicBoom 缓冲里最后几行一起丢失，
+   *      退出形态从"码 1"变成"被杀"——AJ-237 想补的"留痕"在最需要它的场景里恰好留不下。
+   * @why 放在**入口**上膛而不是 `finish` 里：只有从入口起算才覆盖得到那段等待。
+   * @limitation 到点是 `exit(1)`（硬退），不是"温和地跳过某一步"：
+   *             预算已经耗尽时再讲优雅没有意义，平台 3 秒后本来就要 SIGKILL。
+   *             代价是在途事务被 PG 侧中断，但我们留下了"是被预算打断的"这条可检索日志。
+   */
+  totalBudgetMs?: number | undefined;
+  /** 总预算到点后、真正 exit 之前的日志 flush 窗口（默认 200ms；比 exitDelayMs 短，因为此刻已超预算）。 */
+  budgetFlushMs?: number | undefined;
 }
 
 /** installShutdownHandlers 的返回：卸载 + 内部触发通道。 */
@@ -718,10 +735,15 @@ export function installShutdownHandlers(
   const signals = ['SIGTERM', 'SIGINT'] as const;
   const exit = hooks.exit ?? process.exit;
   const delayMs = hooks.exitDelayMs ?? 2000;
+  const totalBudgetMs = hooks.totalBudgetMs ?? 0;
+  const flushMs = hooks.budgetFlushMs ?? 200;
   let closing = false;
+  /** 总预算定时器句柄（`finish` 里要清掉，避免正常停机被它抢先）。 */
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** 先设 exitCode 让进程自然退出（不丢日志），delayMs 后若仍未退出则强制 exit。 */
   const finish = (code: number): void => {
+    if (budgetTimer !== undefined) clearTimeout(budgetTimer);
     process.exitCode = code;
     const hard = setTimeout(() => exit(code), delayMs);
     hard.unref();
@@ -735,6 +757,23 @@ export function installShutdownHandlers(
       const startedAt = performance.now();
       const duration = (): number => Math.round(performance.now() - startedAt);
       let drainFailed = false;
+      // ⚠️ 总预算**在入口**上膛（INF3-01）：覆盖"排空失败 → afterDrain → db.end()"那段无上限等待。
+      //    `finish` 要等 afterDrain 返回才调用，那时已经太晚。已 done 的清理不受影响——
+      //    它只保证进程**一定会**在预算内带着退出码 1 走人，而不是被平台 SIGKILL 后什么都不留。
+      if (totalBudgetMs > 0) {
+        budgetTimer = setTimeout(() => {
+          hooks.logger.error('shutdown_budget_exhausted', {
+            signal,
+            duration_ms: duration(),
+            budget_ms: totalBudgetMs,
+            drain_failed: drainFailed,
+          });
+          process.exitCode = 1;
+          const hard = setTimeout(() => exit(1), flushMs);
+          hard.unref();
+        }, totalBudgetMs);
+        budgetTimer.unref();
+      }
       try {
         // ── ① 摘流量 → ①.5 等平台发现（N7）→ ② 排空存量请求 → ③ 关资源 ──────
         //    顺序反了（先关资源再排空）的表现是"部署窗口内一批 500"，本地无法复现。

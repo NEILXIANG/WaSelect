@@ -68,8 +68,12 @@ describe('admin-order-actions（管理端操作准入，I2 U-B2a）', () => {
     expect(codeOf(r)).toBe(40907);
   });
 
+  it('refundGuard：refunding + 拒付 → 放行（只查询 / 同键重放；换新键那一步由 refund-execution 拦，OPS3-03）', () => {
+    expect(refundGuard('refunding', true).ok).toBe(true);
+  });
+
   it('refundGuard：拒付与状态同时不合时，报的是拒付（40907）', () => {
-    expect(codeOf(refundGuard('refunding', true))).toBe(40907);
+    expect(codeOf(refundGuard('completed', true))).toBe(40907);
     expect(codeOf(refundGuard('refunded', false))).toBe(40902);
   });
 

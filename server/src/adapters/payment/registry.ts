@@ -82,6 +82,21 @@ export function createPaymentRegistry(opts: RegistryOptions): PaymentRegistry {
         `通道 ${channel} 实现了 refund()/refundStatus() 却声明 supportsRefund=false（调用方不会调它）`,
       );
     }
+    // MP3-04：会话查询与 refund 同口径——声明与实现必须同进同退。
+    // @why 声明能查却没实现，是最坏的那一类谎言：取消订单前"查一下机构"的调用点会直接
+    //      `TypeError: provider.sessionStatus is not a function`，而它发生在**用户点取消**的
+    //      那一刻——不是启动期，不是后台任务，是真实用户的操作路径上。
+    //      反过来（实现了却声明 false）同样要炸：那会让这条防线被静默跳过，
+    //      而跳过它的后果是"钱收了、单关了"。跟 refund 一样，让它注册时炸最便宜。
+    const canQuerySession = provider.capabilities.supportsSessionQuery === true;
+    if (canQuerySession && provider.sessionStatus === undefined) {
+      throw new Error(`通道 ${channel} 声明 supportsSessionQuery 但没有实现 sessionStatus()`);
+    }
+    if (!canQuerySession && provider.sessionStatus !== undefined) {
+      throw new Error(
+        `通道 ${channel} 实现了 sessionStatus() 却声明 supportsSessionQuery=false（调用方不会调它）`,
+      );
+    }
     // ⚠️ 配置声明的币种必须是能力声明的子集（二次审查 P3-2）：两层开关的语义是
     //    "我们开不开（配置）∩ 机构做不做得到（能力）"——配置超出能力的部分会在
     //    `listAvailable` 里**静默不出现**（过滤掉了），排障时看起来像通道丢了。

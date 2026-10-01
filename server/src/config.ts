@@ -391,6 +391,34 @@ const schema = z.object({
    *             否则平台会在我们 drain 完之前 SIGKILL。这条要在 staging 实测校准（同 A2/B18）。
    */
   SHUTDOWN_EVENT_DRAIN_MS: int(8_000, 0),
+  /**
+   * INF3-01：从**收到 SIGTERM 那一刻**起算的停机总预算（毫秒）。到点直接 `exit(1)`，不再等任何一步。
+   *
+   * @why AJ-237 把"排空失败"这条分支接进了 `afterDrain`（正确——清理必须做），
+   *      但那条分支**恰恰是最可能有在途事务的一条**（排空失败 = 还有请求没结束，
+   *      而 `db.end()` 会等在途查询与在途**事务**跑完——实测：事务内空等 3s 时 `end()` 也等到 3s 才 resolve）。
+   *      于是 AJ-237 之前"排空超时 → 2s 硬退出"的最坏 17s，变成了无自有上限的一段等待，
+   *      只受 PG 的 `statement_timeout` / `idle_in_transaction_session_timeout` 约束，实测可达 31s+，
+   *      超过平台停机宽限 30s（@see http.ts 的 "Render 给 30s"）。
+   *      后果不是"慢一点"：平台 SIGKILL 时 `shutdown_cleanup_done_after_failed_drain`
+   *      这行日志与 SonicBoom 缓冲里最后几行**一起丢失**——AJ-237 想补的"留痕"在最需要它的场景里恰好留不下，
+   *      退出形态也从"码 1"变成"被杀"，事后看不出清理做到了哪一步。
+   * @why 上膛位置放在 handler **入口**（而不是 `finish` 里）：只有从入口起算，
+   *      才能覆盖"排空失败 → afterDrain"那段。`finish` 要等 `afterDrain` 返回才调用，那已经太晚。
+   * @why 默认 27s = 平台宽限 30s − 3s：留 3s 给"到点后 exit(1) 之前的日志 flush"。
+   *      @tradeoff 到点强退意味着在途事务被 PG 侧中断——但那是平台 3 秒后本来就要做的事，
+   *      而我们至少能留下"是被预算打断的"这条可检索日志。
+   * @limitation 它是**兜底**不是调速：正常停机（排空成功、无在途事务）远不到这个值，
+   *             定时器在 `finish` 里被清掉。0 = 不设预算（回到 AJ-237 的行为，仅测试用）。
+   */
+  SHUTDOWN_TOTAL_BUDGET_MS: int(27_000, 0),
+  /**
+   * INF3-01：总预算到点之后、真正 `exit` 之前的日志 flush 窗口（毫秒）。
+   * @why 直接 `process.exit()` 会丢 SonicBoom 缓冲里最后几行——而那几行正是
+   *      "清理做到了哪一步"的唯一证据。给一个很短的窗口（默认 200ms）比 2s 的 `exitDelayMs` 合适：
+   *      此刻我们**已经超预算**了，不能再等 2s。
+   */
+  SHUTDOWN_BUDGET_FLUSH_MS: int(200, 0),
   AUTO_DELIVER_DAYS: int(30, 1),
   AUTO_COMPLETE_DAYS: int(7, 1),
   /** 建单必传且必须与服务端相等，否则 40011（D-43）。必填 → 忘了配就启动失败，而不是全站下单失败。 */

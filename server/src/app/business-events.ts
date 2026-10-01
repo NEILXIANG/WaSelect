@@ -19,12 +19,23 @@
 import type { EventBus } from '../ports/events.js';
 import type { Logger } from '../logger.js';
 
-/** 需要进日志的业务事件（新增事件时在这里登记）。 */
+/**
+ * 需要进日志的业务事件（新增事件时在这里登记）。
+ *
+ * ⚠️ 漏登记的后果是**静默**的：`emit` 出去没有任何订阅者，事件凭空消失，不报错、不告警，
+ *    而 `mark-disputed.ts` 的注释还写着"事件会进日志"（OPS3-07 实测到的正是这个状态）。
+ *    所以 `business-events.unit.test.ts` 有一条守卫：**扫源码里所有 emit 的事件名，
+ *    断言它们都在这个列表里**。新增事件忘了来这里加一行 → 红灯。
+ */
 export const LOGGED_EVENTS: readonly string[] = [
   'order.created',
   'order.paid',
   'order.expired',
   'order.cancelled',
+  // OPS3-07：拒付的开案 / 结案此前 emit 了却无人订阅，"拒付何时落库"只能从回调日志反推。
+  // payload 只有 dispute_id / result，无 PII（@limitation 一：这里只记日志）。
+  'order.dispute_opened',
+  'order.dispute_closed',
 ];
 
 /** 日志事件名——检索用；`domain_event` 放 ctx（写 `event:` 会被 logger 静默丢弃）。 */

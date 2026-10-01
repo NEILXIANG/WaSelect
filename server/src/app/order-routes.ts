@@ -35,8 +35,9 @@ import type { EventBus, DomainEvent } from '../ports/events.js';
 import { requireRole, type AuthConfig } from './auth.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import { scopeKey, type IdempotencyExecutor } from '../ports/idempotency.js';
+import type { PaymentRegistry } from '../ports/payment.js';
 import { createOrder } from './create-order.js';
-import { cancelOrder } from './cancel-order.js';
+import { assertNoPaidSession, cancelOrder } from './cancel-order.js';
 import { withUnitOfWork } from './unit-of-work.js';
 import { parseItems } from './quote-routes.js';
 
@@ -50,6 +51,13 @@ export interface OrderRoutesDeps {
   identity?: IdentityCheck | undefined;
   idempotency: IdempotencyExecutor<Db>;
   events: EventBus;
+  /**
+   * 支付通道注册表——**取消**路径要用（MP3-04）：取消前得问机构"这个会话付了没有"。
+   * @why 订单路由此前完全不需要 registry（建单/取消都不碰机构），而取消一旦要查会话，
+   *      装配处就必须把它传进来；漏传的表现是"取消前不查"——一个静默失效的防线，
+   *      所以它是**必填**而不是可选。
+   */
+  registry: PaymentRegistry;
   /** 限流中间件（装配处按 rateLimitRules.publicWrite 生成后传入；挂载点统一在 mount.ts）。 */
   createOrderLimiter: RequestHandler;
 }
@@ -192,6 +200,12 @@ export function mountOrderRoutes(app: Express, deps: OrderRoutesDeps): void {
           const raw = req.params['id'];
           const orderId = typeof raw === 'string' ? raw : '';
           if (orderId.length === 0) throw new AppError(40001, { reason: 'order_id_required' });
+          // MP3-04（P1）：**事务外**先问机构一句"这个会话付了没有"。
+          // 放在事务外是因为它会发一次出站 HTTP——持锁等它是 ORD3-02 的同型缺陷。
+          await assertNoPaidSession(
+            { db: deps.db, logger: deps.logger, registry: deps.registry },
+            { orderId, userId: sub },
+          );
           await withUnitOfWork(deps.db, deps.events, async (tx, emit) => {
             await cancelOrder(
               tx,

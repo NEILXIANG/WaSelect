@@ -52,6 +52,7 @@ export const COVERAGE_INCLUDE: string[] = [
 
 export const COVERAGE_EXCLUDE: string[] = [
   '**/*.test.ts',
+  '**/*.test.tsx',
   // 夹具是"故意违规"的样本，它不是被测代码（@see miniprogram/utils/wx-global.fixture.js）
   '**/*.fixture.js',
 ];

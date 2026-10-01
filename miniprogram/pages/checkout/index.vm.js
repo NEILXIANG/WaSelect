@@ -122,7 +122,7 @@ export function resolveAddressId(args) {
  * 建单失败之后，页面该做什么（B37 / AJ-220）。
  *
  * @param {unknown} code 服务端业务错误码（`ApiError.code`）；可能是任何东西
- * @returns {'none' | 'requote' | 'reload_terms' | 'renew_key'}
+ * @returns {'none' | 'requote' | 'reload_terms' | 'renew_key' | 'go_orders'}
  *
  * @why 服务端已经把"这个码该怎么处置"写进了错误码登记表
  *      （`packages/shared/src/errors.ts` 每一条的 `action` 字段：
@@ -147,6 +147,10 @@ export function resolveAddressId(args) {
 export function recoveryFor(code) {
   if (code === 40905 || code === 40901 || code === 40401) return 'requote';
   if (code === 40011) return 'reload_terms';
+  // 40913（在途单已达上限）：错误码登记表的 action 是"引导去订单列表支付或取消已有订单"。
+  // 只显示文案的话，用户得自己 回首页 → 我的 → 我的订单 → 逐张进详情取消——
+  // 大多数人做不到，结果是放弃这一单（AJ-240 记的"未做"项，此处补上）。
+  if (code === 40913) return 'go_orders';
   // 40908（同键不同内容，AJ-228）：登记表的 action 是"为每次新意图生成新的幂等键"。
   // `keyAction` 让它正常情况下不会发生；真发生了就作废键——否则这一页每次再点都是同一个码。
   if (code === 40908) return 'renew_key';

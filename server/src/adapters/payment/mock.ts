@@ -106,6 +106,10 @@ export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): 
       supportsPartialRefund: false,
       supportsDispute: false,
       refundableWhenDisabled: true,
+      // MP3-04：in_app 通道的"会话"就是我们库里的 payments 行，机构侧没有可查的对象
+      // （钱根本没离开我们的系统），所以**不声明**这个能力——取消前查机构这一步对它无意义。
+      // 显式写 false 而不是省略：读代码的人不用去猜"没写是默认什么"。
+      supportsSessionQuery: false,
     },
 
     async create(req: PaymentRequest): Promise<PaymentSession> {

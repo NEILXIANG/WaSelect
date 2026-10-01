@@ -531,6 +531,8 @@ describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
  */
 describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
   const PORT_PROD_LINK = 4614;
+  /** 控制组专用端口：与实验组分开，避免上一条用例的 TIME_WAIT 让"启动成功"变成偶发失败。 */
+  const PORT_PROD_ORIGIN_LINK = 4615;
 
   /** 与 render.yaml 同形状的最小生产配置；DATABASE_URL 由用例自行给出。 */
   function prodEnv(port: number, databaseUrl: string): Record<string, string> {
@@ -670,6 +672,123 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
       expect(configLine).toContain('"STRIPE_SECRET_KEY":"***"');
       expect(configLine).not.toContain('sk_live_e2e_placeholder');
       expect(lines.some((l) => l.includes('server_started'))).toBe(true);
+
+      // ⑤ PAY3-01 ②：生产 + 未配 ORIGIN_VERIFY_SECRET → 必须打 error（不是静默启动）
+      //    @why 这条日志是"源站可被直连、Access 没生效"**唯一**的主动信号。
+      //         它是一次"部署时忘了配"的事故里唯一会留在日志里的东西，
+      //         而这类事故的表现是"一切正常，只是管理端登录口对公网开着"。
+      const alarm = lines.find((l) => l.includes('origin_verify_disabled'));
+      expect(alarm).toBeDefined();
+      expect(alarm).toContain('"result":"unprotected"');
+      // 后果必须指名道姓到那个入口：泛指"源站未校验"的告警没人知道要去看哪里
+      expect(alarm).toContain('/api/v1/auth/admin/login');
+    } finally {
+      rt?.uninstallSignals();
+      rt?.uninstallProcessErrors();
+      await rt?.server.close().catch(() => undefined);
+      await rt?.db.end().catch(() => undefined);
+      await fwd.close();
+    }
+  });
+
+  /**
+   * PAY3-01②：生产 + 未配 `ORIGIN_VERIFY_SECRET` → **照常启动**，但打一条 error。
+   *
+   * @why 这条日志是"源站可被直连"这件事**唯一**的主动信号。它必须被钉住的理由有二：
+   *      ① 它是**报警**而不是拒启（拒启要等 A2 实测出拓扑），所以存在"哪天被人注释掉、
+   *         线上再也无声"的退化路径，没有测试就没人会发现；
+   *      ② 反过来它也不能误伤——配了密钥的生产环境如果也打这一行，运维会被狼来了
+   *         训练成无视它，那这条日志比没有更糟。所以**两条都要断言**（有 / 没有）。
+   * @how 用同一套 forwarder 起两次：未配（实验组）+ 已配（控制组）。
+   *      只断言实验组会漏掉"配了也报警"的假阳性；只断言控制组会漏掉"根本没打"的假阴性。
+   * @limitation 仍受 `lanIPv4()` 约束：没有非环回网卡的机器跳过并明示，不伪装成通过。
+   */
+  it('生产 + 未配 ORIGIN_VERIFY_SECRET → 照常启动但打 origin_verify_disabled（控制组配上即安静）', async () => {
+    const host = lanIPv4();
+    if (host === undefined) {
+      console.warn('[skip] 本机没有非环回 IPv4 网卡，生产装配链路用例无法运行');
+      return;
+    }
+    const target = new URL(TEST_DB_URL);
+    const fwd = await forwarder(host, Number(target.port || 5432));
+    const dbUrl = new URL(TEST_DB_URL);
+    dbUrl.hostname = host;
+    dbUrl.port = String(fwd.port);
+
+    const boot = async (
+      extra: Record<string, string>,
+    ): Promise<{ lines: string[]; close: () => Promise<void> }> => {
+      const { lines, write } = sink();
+      let rt: Runtime | undefined;
+      try {
+        rt = await bootstrap({
+          env: { ...prodEnv(PORT_PROD_LINK, dbUrl.toString()), ...extra },
+          logDestination: { write },
+          exit: () => undefined,
+        });
+        // 先证明"照常启动"：它是告警不是拒启，探活必须通
+        expect((await fetch(`http://127.0.0.1:${PORT_PROD_LINK}/healthz`)).status).toBe(200);
+        return { lines, close: async () => undefined };
+      } finally {
+        rt?.uninstallSignals();
+        rt?.uninstallProcessErrors();
+        await rt?.server.close().catch(() => undefined);
+        await rt?.db.end().catch(() => undefined);
+      }
+    };
+
+    try {
+      // 实验组：未配 → 必须报警，且说清后果
+      const bare = await boot({});
+      const alarm = bare.lines.find((l) => l.includes('origin_verify_disabled'));
+      expect(alarm).toBeDefined();
+      expect(alarm).toContain('"result":"unprotected"');
+      expect(alarm).toContain('/api/v1/auth/admin/login');
+      expect(bare.lines.some((l) => l.includes('server_started'))).toBe(true);
+
+      // 控制组：配上 → 一行都不许有（误报会把运维训练成无视它）
+      const guarded = await boot({
+        ORIGIN_VERIFY_SECRET: 'prod-origin-verify-secret-'.repeat(2),
+      });
+      expect(guarded.lines.some((l) => l.includes('origin_verify_disabled'))).toBe(false);
+      expect(guarded.lines.some((l) => l.includes('server_started'))).toBe(true);
+    } finally {
+      await fwd.close();
+    }
+  });
+
+  /**
+   * 控制组：生产 + **已配** `ORIGIN_VERIFY_SECRET` → 不打 `origin_verify_disabled`。
+   *
+   * @why 只测"该报时报"等于没测条件：把 `=== undefined` 写成 `!== undefined` 也能让上一条绿。
+   *      而误报的代价不是噪声——告警一旦在正常部署里天天出现，运维会学会忽略这一行，
+   *      真出事那天它也在，没人看。**比没有这条日志更糟**。
+   */
+  it('生产 + 已配 ORIGIN_VERIFY_SECRET → 不打 origin_verify_disabled（PAY3-01 ② 控制组）', async () => {
+    const host = lanIPv4();
+    if (host === undefined) {
+      console.warn('[skip] 本机没有非环回 IPv4 网卡，生产装配链路用例无法运行');
+      return;
+    }
+    const fwd = await forwarder(host, Number(new URL(TEST_DB_URL).port || 5432));
+    const dbUrl = new URL(TEST_DB_URL);
+    dbUrl.hostname = host;
+    dbUrl.port = String(fwd.port);
+    const { lines, write } = sink();
+    let rt: Runtime | undefined;
+    try {
+      rt = await bootstrap({
+        env: {
+          ...prodEnv(PORT_PROD_ORIGIN_LINK, dbUrl.toString()),
+          ORIGIN_VERIFY_SECRET: 'prod-origin-verify-secret-value-0001',
+        },
+        logDestination: { write },
+        exit: () => undefined,
+      });
+      // 起得来（证明绿的是"没告警"，不是"启动就失败了"）
+      expect((await fetch(`http://127.0.0.1:${PORT_PROD_ORIGIN_LINK}/healthz`)).status).toBe(200);
+      expect(lines.some((l) => l.includes('server_started'))).toBe(true);
+      expect(lines.some((l) => l.includes('origin_verify_disabled'))).toBe(false);
     } finally {
       rt?.uninstallSignals();
       rt?.uninstallProcessErrors();

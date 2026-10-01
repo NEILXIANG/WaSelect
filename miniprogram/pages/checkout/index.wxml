@@ -71,7 +71,12 @@
       <text class="label">{{termsAccepted ? '✓ 已阅读并同意购买条款' : '阅读并同意购买条款'}}</text>
     </view>
     <text class="hint" wx:if="{{termsVersion}}">条款版本 {{termsVersion}}</text>
-    <text class="hint" wx:else>条款版本加载中</text>
+    <!--
+      MP3-11：取不到条款时**不写"加载中"**。闸门此时已经在按钮上方写着
+      "购买条款暂时取不到，请稍后再试"，这一行再说"加载中"就是同屏两种相反的说法
+      （一个说失败了、一个说还在来），而它永远不会变成别的字。
+    -->
+    <text class="hint" wx:elif="{{!termsFailed}}">条款版本加载中</text>
     <!--
       ⚠️ 勾选框必须配一个"能真的读到条款"的去处：只有勾选没有正文，
       等于让用户同意一份他看不见的文本（我们手上却会有一份"已同意"的记录）。

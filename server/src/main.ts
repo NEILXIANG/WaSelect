@@ -127,6 +127,34 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
     }
 
     /**
+     * PAY3-01：生产环境**没有开源站校验**时必须出声。
+     *
+     * @why 管理端登录的最后一道防线被写成"部署时放到 Cloudflare Access 之后，外部根本碰不到这个接口"
+     *      （D-81③ / 清单 ⑦-0）。但 Access 只拦**经过 CF** 的流量：源站 `*.onrender.com`
+     *      是公网可达的，`ORIGIN_VERIFY_SECRET` 未配时 http.ts 的源站闸门不生效，
+     *      直连源站就绕过了 Access——包括绕过它保护的 `/api/v1/auth/admin/login`。
+     *      于是"外部碰不到"这个前提**取决于一个没被任何东西校验的配置**。
+     * @why 用 **error 级启动告警**而不是把它做成 `crossField` 的拒启规则：
+     *      config.ts 的口径是"只拦确定错误的组合"，而"还没配源站校验"在 A2（拓扑未实测）
+     *      之前是一个**合法的中间态**——拒启等于在 staging 实测完成前宣布生产永远起不来。
+     *      但它又绝不能静默：静默的后果是"所有人都以为 Access 在保护我们"，而它其实没生效。
+     *      ⚠️ 待 A2 实测出拓扑（是否经 CF、`TRUST_PROXY_HOPS` 定几）之后，
+     *         这一条应升级为 `crossField` 的**硬规则**（生产 + 声称在代理之后 ⇒ 必须配）。
+     */
+    if (config.NODE_ENV === 'production' && config.ORIGIN_VERIFY_SECRET === undefined) {
+      logger.error('origin_verify_disabled', {
+        result: 'unprotected',
+        ctx: {
+          reason: 'ORIGIN_VERIFY_SECRET 未配置',
+          consequence:
+            '源站可被直连，Cloudflare Access 与 TRUST_PROXY_HOPS 的假设都不成立；' +
+            '管理端登录口（/api/v1/auth/admin/login）对公网开放，仅剩额度与锁定两道防线',
+          fix: '配 ORIGIN_VERIFY_SECRET（≥32 字符）+ Cloudflare Transform Rule 注入同值请求头；A2 拓扑实测后改拒启',
+        },
+      });
+    }
+
+    /**
      * 是否还对外宣称"可以接流量"。停机时先置 false，`/readyz` 随即返回 503。
      * @why 用一个闭包变量而不是全局：状态属于**这一次装配**，测试里可以起多个 Runtime 互不干扰。
      */
@@ -223,8 +251,15 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           db,
           logger,
           drainMs: config.SHUTDOWN_EVENT_DRAIN_MS,
+          // ⚠️ 关库也要有上限（INF3-01）：`db.end()` 会等在途事务跑完，
+          //    而"排空失败"这条分支里最可能卡住的就是持事务的那次出站调用。
+          //    取 5s：比出站总预算 6s 略短，是"给常规善终留的机会"，剩下的交给总预算兜底。
+          closeTimeoutMs: 5_000,
         });
       },
+      // INF3-01：总预算从收到信号那一刻起算，到点 exit(1)（不再等任何一步）
+      totalBudgetMs: config.SHUTDOWN_TOTAL_BUDGET_MS,
+      budgetFlushMs: config.SHUTDOWN_BUDGET_FLUSH_MS,
       ...(opts.exit !== undefined ? { exit: opts.exit } : {}),
     });
 

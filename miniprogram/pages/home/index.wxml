@@ -19,7 +19,13 @@
       bindinput="onSearchInput"
       bindconfirm="onSearch"
     />
-    <ws-button class="search-btn" text="搜索" type="default" loading="{{loading}}" bindtap="onSearch" />
+    <!--
+      ⚠️ 这里**不接 loading**（MP3-08）：B36 之后 reload 本身就能安全并发、"最后一次赢"，
+      接了 loading 反而会在首屏/上一次搜索还在加载时**吞掉点击**且不给任何提示——
+      用户输入了新词点搜索却毫无反应，列表还是旧结果，看起来就是"搜索坏了"。
+      在途状态由列表区显示；正确性由 reload 的序号保证（@see ./index.js B36）。
+    -->
+    <ws-button class="search-btn" text="搜索" type="default" bindtap="onSearch" />
     <ws-button class="cart-btn" text="{{cartLabel}}" type="default" bindtap="onGoCart" />
     <ws-button class="mine-btn" text="我的" type="default" bindtap="onGoMine" />
   </view>

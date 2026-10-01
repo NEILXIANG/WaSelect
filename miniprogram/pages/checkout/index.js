@@ -49,6 +49,12 @@ const wxApi = createWxApi();
 const PAY_PAGE = '/pages/pay/index';
 const ADDRESS_PICK_PAGE = '/pages/address/index?pick=1';
 const LEGAL_PAGE = '/pages/legal/index';
+/**
+ * 订单列表页路径（40913「在途单太多」时把人送过去，MP3-09）。
+ * @why 那条错的文案说"请先完成支付或取消后再下单"，却没给去处的后果是
+ *      用户要自己 回首页 → 我的 → 我的订单 → 逐张进详情取消；大多数人做不到，直接放弃。
+ */
+const ORDER_PAGE = '/pages/order/index';
 
 Page({
   data: {
@@ -220,8 +226,18 @@ Page({
     this.updateGate();
   },
 
-  /** 换地址：跳地址页的选择模式（回传走一次性交接，@see 文件头）。 */
+  /**
+   * 换地址：跳地址页的选择模式（回传走一次性交接，@see 文件头）。
+   *
+   * ⚠️ 建单在途时**不跳**（MP3-10）：此时跳走，建单成功后 `navigateTo` 支付页会压在
+   *    地址选择页上面，栈变成 [购物车, 结算, 地址, 支付]。用户从支付页返回，
+   *    落在一张"为已下完的单选地址"的页面上；点"用这个地址"后回到的是空购物车的结算页。
+   * @why 这不是 AJ-74 禁止的"按钮连点守卫"：那一条挡的是"同一个动作发两次请求"，
+   *      这里挡的是**离开这一页**——页面栈的状态会被建单的返回路径改坏。
+   * @limitation 只是不跳，不给提示：转圈中的提交按钮已经说明了"正在处理"。
+   */
   onPickAddress() {
+    if (this.data.submitting === true) return;
     wxApi.navigateTo({ url: ADDRESS_PICK_PAGE });
   },
 
@@ -234,6 +250,8 @@ Page({
    *      （redirectTo 会把结算页关掉，用户得从购物车重走一遍）。
    */
   onOpenTerms() {
+    // @see onPickAddress：建单在途时不离开这一页（MP3-10）
+    if (this.data.submitting === true) return;
     wxApi.navigateTo({ url: LEGAL_PAGE });
   },
 
@@ -296,8 +314,17 @@ Page({
       if (recoveryFor(code) === 'requote') {
         // 价格/库存/商品变了 = 意图内容变了 → 旧键不能沿用（同键提交不同内容会被拒）
         this.intentKey?.retire();
+        // ⚠️ 报价**必须先作废再重取**（MP3-05）：`refresh` 一开头就调 `updateGate`，
+        //    此刻 `quote` 还是旧值 ⇒ 闸门以旧合计放行 ⇒ 用户再点一次必然再吃一次 40905
+        //    （请求体里的 expected_total_jpy 还是旧的）。弱网下可以循环好几轮。
+        //    置空之后闸门落到"运费与合计还在计算中"，把这一轮挡住，等新报价回来再放行。
+        this.setData({ quote: null, quoteFailed: false });
         // keepError：重报价之后仍要让用户看见"刚才为什么失败"（否则他不知道要重新确认金额）
         void this.refresh({ keepError: true });
+      } else if (recoveryFor(code) === 'go_orders') {
+        // 40913：在途单已达上限——文案说了"请先完成支付或取消"，就得给一个能去的地方。
+        // 用 navigateTo：购物车还没清（建单失败了），用户付掉/取消一张单后**还要回到这一页**。
+        wxApi.navigateTo({ url: ORDER_PAGE });
       } else if (recoveryFor(code) === 'reload_terms') {
         // 条款升级：重拉版本并把"已同意"复位（让用户对新条款重新确认，而不是对着旧版本点头）
         this.setData({ termsAccepted: false });

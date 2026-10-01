@@ -32,9 +32,13 @@ function fakeBus(pending: number): { bus: EventBus; calls: string[] } {
   return { bus, calls };
 }
 
-/** 假库：只记 `end` 被调用（shutdown-cleanup 只用到 closeDb → db.end()）。 */
+/** 假库：记 `end` 被调用**时的参数**（INF3-01 要断言带上了 timeout）。 */
 function fakeDb(calls: string[]): Db {
-  return { end: async () => calls.push('close') } as unknown as Db;
+  return {
+    end: async (opts?: { timeout?: number }) => {
+      calls.push(opts === undefined ? 'close' : `close:${JSON.stringify(opts)}`);
+    },
+  } as unknown as Db;
 }
 
 describe('drainEventsThenClose（B13 / AJ-202）', () => {
@@ -67,6 +71,52 @@ describe('drainEventsThenClose（B13 / AJ-202）', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.ctx).toMatchObject({ pending: 2, budget_ms: 8_000 });
     expect(rows[0]?.result).toBe('timeout');
+  });
+
+  /**
+   * INF3-01：`db.end()` 会等在途查询**和在途事务**跑完（实测：事务内空等 3s 时 `end()` 也等到 3s），
+   * 停机路径上没有自有上限 ⇒ 最坏停机时长不可预测，且可能超过平台宽限 30s 被 SIGKILL。
+   * 单位坑：postgres.js 的 `timeout` 收的是**秒**（源码 `setTimeout(destroy, timeout * 1000)`），
+   * 所以 5000ms 必须传成 5——直接把 ms 传进去会变成"等 5000 秒"。
+   */
+  it('🔴 closeTimeoutMs 传给 db.end 且按**秒**换算（postgres.js 的 timeout 单位是秒）', async () => {
+    const sink = new MemorySink();
+    const { bus, calls } = fakeBus(0);
+    await drainEventsThenClose({
+      events: bus,
+      db: fakeDb(calls),
+      logger: createLogger({ env: 'development', destination: sink }),
+      drainMs: 8_000,
+      closeTimeoutMs: 5_000,
+    });
+    expect(calls).toEqual(['drain:8000', 'close:{"timeout":5}']);
+  });
+
+  it('不传 closeTimeoutMs → 不给 end 传参（旧行为：无限等；只有测试这么用）', async () => {
+    const sink = new MemorySink();
+    const { bus, calls } = fakeBus(0);
+    await drainEventsThenClose({
+      events: bus,
+      db: fakeDb(calls),
+      logger: createLogger({ env: 'development', destination: sink }),
+      drainMs: 0,
+    });
+    expect(calls).toEqual(['drain:0', 'close']);
+  });
+
+  it('closeTimeoutMs 为脏值（0 / 负数 / NaN）→ 一律不给 end 传参（不把脏值换算成 1 秒）', async () => {
+    const sink = new MemorySink();
+    for (const bad of [0, -1, Number.NaN]) {
+      const { bus, calls } = fakeBus(0);
+      await drainEventsThenClose({
+        events: bus,
+        db: fakeDb(calls),
+        logger: createLogger({ env: 'development', destination: sink }),
+        drainMs: 0,
+        closeTimeoutMs: bad,
+      });
+      expect(calls[1], String(bad)).toBe('close');
+    }
   });
 
   it('drainMs=0 → 仍走一遍 drain（不等由总线决定，本函数不替它跳过）', async () => {

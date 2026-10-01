@@ -368,3 +368,34 @@ describe('注册期不变式（声明必须与实现一致）', () => {
     expect(() => r.register('a', () => stub('a'))).toThrow(/重复注册/);
   });
 });
+
+describe('会话查询能力的声明与实现一致性（MP3-04）', () => {
+  /**
+   * @why 这两条是"注册期炸"而不是"运行期炸"：取消订单前的会话查询发生在
+   *      **用户点取消**那一刻（真实用户的操作路径上）。声明与实现不一致时，
+   *      要么抛 TypeError，要么这条防线被静默跳过——后者更坏，因为它看起来"一切正常"。
+   */
+  it('🔴 声明 supportsSessionQuery 却没实现 sessionStatus → 注册即炸', () => {
+    const registry = createPaymentRegistry({ configs: [cfg({ channel: 'sq1' })] });
+    registry.register('sq1', () => stub('sq1', { supportsSessionQuery: true }));
+    expect(() => registry.get('sq1')).toThrow(/sessionStatus/);
+  });
+
+  it('🔴 实现了 sessionStatus 却声明 false → 注册即炸（不然这条防线会被静默跳过）', () => {
+    const registry = createPaymentRegistry({ configs: [cfg({ channel: 'sq2' })] });
+    registry.register('sq2', () => ({
+      ...stub('sq2', { supportsSessionQuery: false }),
+      sessionStatus: async () => 'unpaid',
+    }));
+    expect(() => registry.get('sq2')).toThrow(/supportsSessionQuery/);
+  });
+
+  it('声明 true 且真的实现 → 正常注册（真实通道能过这道闸）', () => {
+    const registry = createPaymentRegistry({ configs: [cfg({ channel: 'sq3' })] });
+    registry.register('sq3', () => ({
+      ...stub('sq3', { supportsSessionQuery: true }),
+      sessionStatus: async () => 'unpaid',
+    }));
+    expect(registry.get('sq3').capabilities.supportsSessionQuery).toBe(true);
+  });
+});

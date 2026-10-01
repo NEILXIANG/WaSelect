@@ -12,7 +12,7 @@
  * @see ../../../test/helpers/mp-page.ts；./index.js；./index.vm.js（`onShowAction`）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
+import { deferred, loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 
 interface Req {
   url: string;
@@ -28,6 +28,14 @@ let orderStatus: string;
 let linkSeq: number;
 let failOrderFetch: boolean;
 let clipboard: string[];
+/** `POST /orders/{id}/pay` 下发的意图形状（切换通道 / auto 两种场景要用）。 */
+let postPlan: 'copylink' | 'in_app' | 'auto';
+/** 非空 = 把 `GET /orders/{id}` 挂起（MP3-07：编排两个 load 的先后）。 */
+let orderHold: ReturnType<typeof deferred<unknown>> | null;
+/** `wx.requestPayment` 是否走 fail（收银台取消）。 */
+let payFails: boolean;
+/** `wx.redirectTo` 的落点（MP3-06：auto 之后必须离开这一页）。 */
+let redirects: string[];
 
 const ORDER_ID = 'o-1';
 
@@ -59,13 +67,24 @@ beforeEach(async () => {
   linkSeq = 0;
   failOrderFetch = false;
   clipboard = [];
+  postPlan = 'copylink';
+  orderHold = null;
+  payFails = false;
+  redirects = [];
   vi.stubGlobal('wx', {
     setClipboardData: (o: { data: string; success?: () => void }) => {
       clipboard.push(o.data);
       o.success?.();
     },
-    redirectTo: () => undefined,
+    redirectTo: (o: { url: string }) => {
+      redirects.push(o.url);
+    },
     navigateTo: () => undefined,
+    // in_app 分支会真的调它（MP3-03 / MP3-07 用例要用）；用开关决定走 success 还是 fail
+    requestPayment: (o: { success?: () => void; fail?: () => void }) => {
+      if (payFails) o.fail?.();
+      else o.success?.();
+    },
   });
   page = await loadPage(new URL('./index.js', import.meta.url).href, {
     globalData: {
@@ -79,9 +98,22 @@ beforeEach(async () => {
         }
         if (req.method === 'POST') {
           linkSeq += 1;
+          if (postPlan === 'in_app') {
+            return {
+              payload: {
+                timeStamp: '1',
+                nonceStr: 'n',
+                package: 'p',
+                signType: 'RSA',
+                paySign: 's',
+              },
+            };
+          }
+          if (postPlan === 'auto') return { payload: { auto: true } };
           return { payload: { pay_url: `https://pay.test/o/link-${String(linkSeq)}` } };
         }
         if (failOrderFetch) throw new Error('network down');
+        if (orderHold !== null) return orderHold.promise;
         return order();
       },
     },
@@ -162,5 +194,95 @@ describe('支付页薄壳：银行卡路径（AJ-227）', () => {
     call('onShow');
     await settle();
     expect(page.data['error']).toBe('');
+  });
+});
+
+describe('支付页薄壳：换通道与审核期 auto（MP3-03 / MP3-06）', () => {
+  it('🔴 拿到银行卡短链后改点 in_app：旧短链与引导屏必须一起收掉', async () => {
+    await toCopylinkScreen();
+    expect(page.data['payUrl']).toBe('https://pay.test/o/link-1');
+    expect((page.data['guide'] as { title: string }).title).not.toBe('');
+
+    postPlan = 'in_app';
+    tapChannel('wechat');
+    await settle();
+    // 服务端换通道时已作废那个银行卡支付行：这条短链再被复制去浏览器就是失效页
+    expect(page.data['payUrl']).toBe('');
+    expect((page.data['guide'] as { title: string }).title).toBe('');
+    expect(page.data['copied']).toBe(false);
+  });
+
+  it('🔴 审核期 auto（响应到达时订单已 paid）→ 离开这一页去订单详情', async () => {
+    postPlan = 'auto';
+    tapChannel('mock');
+    await settle();
+    expect(redirects).toEqual([`/pages/order-detail/index?id=${ORDER_ID}`]);
+  });
+
+  it('auto 分支也不留着上一次的短链（与 in_app 同一条口径）', async () => {
+    await toCopylinkScreen();
+    postPlan = 'auto';
+    tapChannel('mock');
+    await settle();
+    expect(page.data['payUrl']).toBe('');
+  });
+});
+
+describe('支付页薄壳：整页重取的序号与在途守卫（MP3-07）', () => {
+  it('🔴 重取在途时再触发 onShow：不排第二次（两个 load 的结果会互相覆盖）', async () => {
+    orderHold = deferred();
+    call('onShow'); // 第一次重取：挂在订单查询上
+    await settle();
+    expect(page.data['loading']).toBe(true);
+
+    const before = orderFetches();
+    call('onShow'); // 第二次：应当被"在途"挡掉
+    await settle();
+    expect(orderFetches()).toBe(before);
+
+    orderHold.resolve(order());
+    await settle();
+    expect(page.data['loading']).toBe(false);
+  });
+
+  it('🔴 两个 load 交错、旧的后到：不许把支付方式盖回"已付款"旁边', async () => {
+    const first = deferred();
+    orderHold = first;
+    void call('load'); // load #1：挂在订单查询上（它更慢）
+    await settle();
+
+    // load #2 完整跑完：用户已经在浏览器里付完了
+    orderHold = null;
+    orderStatus = 'paid';
+    await call('load');
+    expect(page.data['closedText']).not.toBe('');
+    expect(page.data['channels']).toEqual([]);
+
+    // 此刻 load #1 的订单响应才回来（仍是待付款）——它必须被判为过期
+    first.resolve({ ...order(), status: 'pending_payment' });
+    await settle();
+    expect(page.data['channels'], '旧响应不许把通道写回来').toEqual([]);
+    expect(page.data['closedText']).not.toBe('');
+  });
+
+  it('🔴 收银台取消后的提示不被整页重取抹掉（payResult 与 error 分开）', async () => {
+    postPlan = 'in_app';
+    payFails = true;
+    tapChannel('wechat');
+    await settle();
+    expect(page.data['payResult']).toContain('支付未完成');
+
+    // 拉起收银台 → 平台触发 onShow → 整页重取
+    call('onShow');
+    await settle();
+    expect(page.data['payResult'], '重取不许清掉上一次支付的结果').toContain('支付未完成');
+  });
+
+  it('取数的**错误**仍然会被重取清掉（payResult 分开不是为了把错误留住）', async () => {
+    page.setData({ error: '上一次取数失败', payResult: '支付未完成' });
+    call('onShow');
+    await settle();
+    expect(page.data['error']).toBe('');
+    expect(page.data['payResult']).toContain('支付未完成');
   });
 });

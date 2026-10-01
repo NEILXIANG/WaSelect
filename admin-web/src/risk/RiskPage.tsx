@@ -24,6 +24,7 @@ import {
   DISPUTE_STATUS_LABELS,
   disputeRows,
   orderUserId,
+  type DisputeRow,
 } from './view.js';
 
 export interface RiskPageProps {
@@ -38,6 +39,8 @@ export function RiskPage({ api }: RiskPageProps) {
   const [ok, setOk] = useState('');
   /** 正在处理的订单（先取详情拿 user_id）。 */
   const [orderId, setOrderId] = useState('');
+  /** 面板上显示的订单号（`order_no`），不是 UUID——运营是按订单号认单的（ADM3-01）。 */
+  const [orderNo, setOrderNo] = useState('');
   const [userId, setUserId] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -57,14 +60,33 @@ export function RiskPage({ api }: RiskPageProps) {
     void load();
   }, [load]);
 
-  /** 第一步：取订单详情 → 拿到 user_id。 */
-  const prepare = async (id: string): Promise<void> => {
+  /**
+   * 第一步：取订单详情 → 拿到 user_id。
+   *
+   * @why **进来第一件事是清空上一次的待确认状态**（ADM3-01）：
+   *      拉黑不可逆、契约没有解除接口，而取详情是会失败的（超时 / 5xx 都可能）。
+   *      不清空的后果是——对 A 单取详情成功、再对 B 单取详情失败时，
+   *      页面顶部出现红字、底部确认面板却**仍是 A 的**，
+   *      运营以为面板是刚点的那一单，点下去拉黑的是 A 的用户。
+   *      这不是"显示错误"，是**对一个不相干的人执行不可逆操作**。
+   * @why 收整行 `r` 而不是只收 `id`：面板要显示 `order_no`（运营认单用的是订单号），
+   *      而列表行里本来就有，不必再从详情里找、也不必另存一份映射。
+   */
+  const prepare = async (r: DisputeRow): Promise<void> => {
     setBusy(true);
     setError('');
+    setOk('');
+    setOrderId('');
+    setOrderNo('');
+    setUserId('');
+    // ⚠️ 不写"响应属于哪一单"的乱序核对：`busy` 已经把"处理"按钮禁用，
+    //    同一时刻只可能有一个 `prepare` 在飞，乱序**不会发生**。
+    //    加了就是一段永远走不到、也因此永远测不到的分支（约束护栏必须有红灯证据）。
     try {
-      const order = await getOrder(api, id);
+      const order = await getOrder(api, r.orderId);
       const uid = orderUserId(order);
-      setOrderId(id);
+      setOrderId(r.orderId);
+      setOrderNo(r.orderNo);
       setUserId(uid);
       if (uid === '') setError('该订单详情里没有 user_id（拉黑需要它）');
     } catch (e) {
@@ -76,10 +98,14 @@ export function RiskPage({ api }: RiskPageProps) {
 
   const confirmBlock = async (): Promise<void> => {
     setBusy(true);
+    // 不清的话，"已拉黑"与上一次失败留下的红字会同时出现在页面上（ADM3-01 附带）
+    setError('');
+    setOk('');
     try {
       await blockUser(api, userId);
       setOk(`已拉黑 ${userId}（该用户此后建单会被拒 40301）`);
       setOrderId('');
+      setOrderNo('');
       setUserId('');
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -141,7 +167,7 @@ export function RiskPage({ api }: RiskPageProps) {
                   type="button"
                   className="link"
                   disabled={busy || r.orderId === ''}
-                  onClick={() => void prepare(r.orderId)}
+                  onClick={() => void prepare(r)}
                 >
                   处理
                 </button>
@@ -162,7 +188,10 @@ export function RiskPage({ api }: RiskPageProps) {
         <div className="form">
           <span className="label">拉黑用户</span>
           <span className="muted">
-            订单 {orderId} · 用户 {userId}
+            {/* 显示 order_no：列表行给运营看的是订单号，而 order_id 是 UUID——两个对不上，
+                运营没法把面板上这一行和列表里的哪一行对起来（ADM3-01）。
+                order_no 缺失时退化到 UUID：宁可显示一个看不懂的串，也不要显示一个空档。 */}
+            订单 {orderNo !== '' ? orderNo : orderId} · 用户 {userId}
           </span>
           <span className="error">{BLOCK_CONFIRM_TEXT}</span>
           <div className="row2">

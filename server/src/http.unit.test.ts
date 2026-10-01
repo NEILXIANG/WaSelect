@@ -1015,6 +1015,69 @@ describe('优雅关闭', () => {
     }
   });
 
+  /**
+   * INF3-01：AJ-237 修好了"排空失败也要清理"，但那段清理**没有自有上限**——
+   * `db.end()` 会等在途事务跑完，而 `finish`（硬退出定时器）要等 `afterDrain` 返回之后才上膛。
+   * 实测最坏可达 31s+，超过平台停机宽限 30s ⇒ SIGKILL ⇒ 最后几行日志（含
+   * `shutdown_cleanup_done_after_failed_drain`）与 SonicBoom 缓冲一起丢失。
+   * 修法：总预算在**入口**上膛，到点 exit(1)。
+   */
+  it('🔴 排空失败 + afterDrain 永不返回 → 总预算到点仍以码 1 退出（不会被平台 SIGKILL）', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const exits: number[] = [];
+    const stuck = {
+      close: async (): Promise<void> => {
+        throw new Error('drain timed out after 10000ms');
+      },
+    } as unknown as Parameters<typeof installShutdownHandlers>[0];
+    const { uninstall, trigger } = installShutdownHandlers(stuck, {
+      logger,
+      // 永不返回：模拟 `db.end()` 等在途事务（事务里那次出站调用迟迟不回）
+      afterDrain: () => new Promise<void>(() => undefined),
+      exit: (code) => exits.push(code),
+      exitDelayMs: 60_000, // 现有那条硬退出定时器**救不了**这一局（它要等 afterDrain 返回）
+      totalBudgetMs: 200,
+      budgetFlushMs: 10,
+    });
+    try {
+      const t0 = performance.now();
+      trigger('SIGTERM');
+      await vi.waitFor(() => expect(exits).toEqual([1]), { timeout: 2000 });
+      expect(performance.now() - t0).toBeLessThan(1_500);
+      // 留痕：事后能看出"是被预算打断的"，而不是"进程凭空消失"
+      const ev = sink.find('shutdown_budget_exhausted')[0];
+      expect(ev?.budget_ms).toBe(200);
+      expect(ev?.drain_failed).toBe(true);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it('正常停机走完（afterDrain 立刻返回）→ 总预算定时器不抢先，退出码仍是 0', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'development', destination: sink });
+    const exits: number[] = [];
+    const started = await listen(createHttpApp({ logger }));
+    const { uninstall, trigger } = installShutdownHandlers(started, {
+      logger,
+      afterDrain: async () => undefined,
+      exit: (code) => exits.push(code),
+      exitDelayMs: 10,
+      totalBudgetMs: 5_000,
+      budgetFlushMs: 10,
+    });
+    try {
+      trigger('SIGTERM');
+      await vi.waitFor(() => expect(exits).toEqual([0]), { timeout: 1000 });
+      expect(sink.find('shutdown_budget_exhausted')).toHaveLength(0);
+      expect(sink.find('server_stopped')).toHaveLength(1);
+    } finally {
+      uninstall();
+      await started.close().catch(() => undefined);
+    }
+  });
+
   it('排空失败且清理也失败 → 退出码仍是 1，两条错误日志都在（不互相吞掉）', async () => {
     const sink = new MemorySink();
     const logger = createLogger({ env: 'development', destination: sink });

@@ -315,6 +315,8 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     identity,
     idempotency: createIdempotencyExecutor(db),
     events,
+    // MP3-04：取消订单前要问机构"这个会话付了没有"
+    registry,
     createOrderLimiter: rateLimiter(
       rateLimitDeps,
       rateLimitRules(config).publicWrite('orders.create'),

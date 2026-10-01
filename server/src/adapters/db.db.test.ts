@@ -509,30 +509,39 @@ describe('结构不变量：对新表自动生效', () => {
   });
 
   it('任何 status 列都有域约束（或在豁免名单里并写明原因）', async () => {
+    // TST3-05（第三轮审查）两处收紧：
+    // ① 列名按 `status` 或 `*_status` 匹配——原来只认恰好叫 status 的列，
+    //    `payments.dispute_status`（决定 has_dispute 是否复位的状态机列）因此从未进过覆盖；
+    // ② 判定按**列**而不是按表：约束的 conkey 必须包含这一列。原来只看"这张表上任意 CHECK 的定义含 status 子串"，
+    //    给 dispute_status 加一条 CHECK 之后，主状态列的约束即使被删，这条仍然是绿的。
     const cols = await db`
-      select c.relname as tbl, a.attname as col
+      select c.relname as tbl, a.attname as col, a.attnum as num, c.oid::int as rel
       from pg_attribute a
       join pg_class c on c.oid = a.attrelid
       where c.relnamespace = 'public'::regnamespace
         and a.attnum > 0 and not a.attisdropped
-        and a.attname = 'status'
+        and a.attname ~ '(^|_)status$'
         -- 只看普通表：索引在 pg_class 里也是一条关系、也有名为 status 的属性，
         -- 不过滤会把 idx_orders_open_status 当成一张"缺约束的表"（实测踩到）
         and c.relkind in ('r', 'p')
     `;
     const checks = await db`
-      select con.conrelid::regclass::text as tbl, pg_get_constraintdef(con.oid) as def
+      select con.conrelid::int as rel, con.conkey as keys
       from pg_constraint con
       where con.contype = 'c' and con.connamespace = 'public'::regnamespace
     `;
-    const constrained = new Set(
-      checks.filter((r) => String(r.def).includes('status')).map((r) => String(r.tbl)),
-    );
+    const covered = new Set<string>();
+    for (const c of checks) {
+      for (const k of (c.keys as number[] | null) ?? []) covered.add(`${String(c.rel)}:${k}`);
+    }
     const keys = cols.map((r) => keyOf(r.tbl, r.col));
-    const missing = keys.filter(
-      (key) => !constrained.has(key.split('.')[0] ?? '') && STATUS_EXEMPT[key] === undefined,
-    );
+    const missing = cols
+      .filter((r) => !covered.has(`${String(r.rel)}:${String(r.num)}`))
+      .map((r) => keyOf(r.tbl, r.col))
+      .filter((key) => STATUS_EXEMPT[key] === undefined);
     expect(missing).toEqual([]);
+    expect(keys, '列名匹配规则失效（一个 status 列都没找到）').toContain('orders.status');
+    expect(keys).toContain('payments.dispute_status');
     // 豁免名单里的键必须真的存在（防止名字写错后豁免永久失效）
     for (const key of Object.keys(STATUS_EXEMPT)) expect(keys).toContain(key);
   });

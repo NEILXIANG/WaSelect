@@ -66,6 +66,19 @@ export const LOGIN_ATTEMPT_RETENTION_HOURS = 24;
 export interface LoginAttemptPolicy {
   maxFailures: number;
   lockMinutes: number;
+  /**
+   * OPS3-04：计数窗口（分钟）；不给 = 与 `lockMinutes` 同长。
+   *
+   * @why 没有窗口时 `failed_count` 是**累计**的：只在"达到上限置锁"与"登录成功"时才归零。
+   *      于是"30 次 / 15 分钟"这句承诺是假的——它其实是"累计 30 次，不分多久"。
+   *      AJ-243 的论证（"单个 IP 只能锁住它自己；要锁死所有人得凑够 6 个来源"）因此在慢速攻击下不成立：
+   *      一个来源每 15 分钟试 5 次（恰好也在 IP 限流 5/15min 之内），约 90 分钟就把邮箱桶攒到 30，
+   *      锁住**所有来源**（含管理员的办公网络）15 分钟；计数归零后继续攒。
+   *      持续效果是"每约 90 分钟锁住管理员 15 分钟"——SEC2-01 只是被稀释，没有消除。
+   * @why 窗口取 `lockMinutes` 同长：语义就是"15 分钟内 N 次"，与路由头注释原本承诺的一致；
+   *      做成独立字段是为了让两层（来源 5 次 / 邮箱 30 次）将来可以各自校准而不改语义。
+   */
+  windowMinutes?: number | undefined;
 }
 
 /**
@@ -130,6 +143,12 @@ export async function claimLoginAttempt(
   /** 该行属于哪个邮箱桶（来源桶填邮箱桶的键；邮箱桶自己不填）——供改密时一次清掉（AJ-243）。 */
   scopeHash: string | null = null,
 ): Promise<LoginAttemptClaim> {
+  // OPS3-04：窗口过期 → 从这一次**重新起算**（计数归 1、窗口起点挪到现在）。
+  // ⚠️ 计算放在 JS 侧而不是在 SQL 里再写一遍 make_interval：窗口起点的比较只有一处，
+  //    两处各写一份迟早漂移（约束九）。
+  const windowStart = new Date(
+    now.getTime() - (policy.windowMinutes ?? policy.lockMinutes) * 60_000,
+  );
   const rows = await db<{ failed_count: number; locked_until: Date | null }[]>`
     insert into login_attempts as la
       (key_hash, failed_count, locked_until, first_failed_at, last_failed_at, scope_hash)
@@ -138,9 +157,22 @@ export async function claimLoginAttempt(
                  then ${now}::timestamptz + make_interval(mins => ${policy.lockMinutes}) end,
             ${now}::timestamptz, ${now}::timestamptz, ${scopeHash})
     on conflict (key_hash) do update set
-      failed_count = case when la.failed_count + 1 >= ${policy.maxFailures}
-                          then 0 else la.failed_count + 1 end,
+      failed_count = case
+                       -- 窗口过期：之前那些失败**已经作废**，这一次是新一轮的第 1 次
+                       when la.first_failed_at <= ${windowStart}::timestamptz then 1
+                       when la.failed_count + 1 >= ${policy.maxFailures} then 0
+                       else la.failed_count + 1
+                     end,
+      first_failed_at = case
+                          when la.first_failed_at <= ${windowStart}::timestamptz
+                            then ${now}::timestamptz
+                          else la.first_failed_at
+                        end,
       locked_until = case
+                       -- 新窗口：旧锁若已过期则一并清掉（能走到这里说明行未锁或锁已到期）
+                       when la.first_failed_at <= ${windowStart}::timestamptz
+                         then case when 1 >= ${policy.maxFailures}
+                              then ${now}::timestamptz + make_interval(mins => ${policy.lockMinutes}) end
                        when la.failed_count + 1 >= ${policy.maxFailures}
                          then ${now}::timestamptz + make_interval(mins => ${policy.lockMinutes})
                        -- 上一轮锁已到期：放行时顺手把它清掉，别留着一个"过期但看着像还在锁"的时刻。

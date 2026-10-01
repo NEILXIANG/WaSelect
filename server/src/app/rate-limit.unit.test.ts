@@ -23,7 +23,13 @@ import { stubMountContext } from '../../../test/helpers/mount-ctx.js';
 import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
-import { ipKey, rateLimitRules, rateLimiter, type RateLimiterDeps } from './rate-limit.js';
+import {
+  ipKey,
+  ipKeyForLogin,
+  rateLimitRules,
+  rateLimiter,
+  type RateLimiterDeps,
+} from './rate-limit.js';
 
 function makeDeps(clock?: Clock): { deps: RateLimiterDeps; sink: MemorySink } {
   const sink = new MemorySink();
@@ -278,5 +284,55 @@ describe('限流接线（真请求，防"组件对了但没挂上"）', () => {
     } finally {
       await server.close();
     }
+  });
+});
+
+/**
+ * PAY3-01：登录额度的**来源桶**对 IPv6 归到 `/56`，比全站限流的 /64 更粗。
+ *
+ * @why 两台机器的对手不同：全站限流的对手是"一个来源刷接口"，/64 够；
+ *      登录来源桶的对手是"凑够 N 个来源去耗光邮箱桶"——而 IPv6 下凑来源**不要钱**
+ *      （一台 /56 的主机就有 256 个 /64，HE 隧道免费给 /48）。
+ *      按 /64 计，一台机器每 15 分钟就能往邮箱桶里塞 256×5 次，
+ *      AJ-243 那句"要锁死所有人得凑够 6 个来源"等于没设防。
+ */
+describe('ipKeyForLogin：登录来源对 IPv6 归到 /56（PAY3-01）', () => {
+  it('🔴 同一个 /56 内 256 个不同的 /64 → 同一个来源桶', () => {
+    const base = ipKeyForLogin('2001:db8:1:00::1');
+    for (let i = 1; i < 256; i += 37) {
+      const g = i.toString(16);
+      expect(ipKeyForLogin(`2001:db8:1:${g}::1`), g).toBe(base);
+    }
+    expect(base).toBe('2001:db8:1:0::/56');
+  });
+
+  it('不同的 /56 → 不同桶（不是把所有 IPv6 合成一个）', () => {
+    expect(ipKeyForLogin('2001:db8:1:100::1')).not.toBe(ipKeyForLogin('2001:db8:1:200::1'));
+    expect(ipKeyForLogin('2001:db8:1:ff00::1')).not.toBe(ipKeyForLogin('2001:db8:1:0::1'));
+  });
+
+  it('第 4 段只取高 8 位（/56 = 3.5 段）', () => {
+    // 0x12ff 与 0x1200 同 /56；0x1300 不同
+    expect(ipKeyForLogin('2001:db8:1:12ff::1')).toBe('2001:db8:1:1200::/56');
+    expect(ipKeyForLogin('2001:db8:1:1300::1')).toBe('2001:db8:1:1300::/56');
+  });
+
+  it('IPv4 原样返回；IPv4-mapped 折成 IPv4（与纯 IPv4 共用同一个桶）', () => {
+    expect(ipKeyForLogin('203.0.113.9')).toBe('203.0.113.9');
+    expect(ipKeyForLogin('::ffff:203.0.113.9')).toBe('203.0.113.9');
+  });
+
+  it('认不出的形态原样返回（不猜，与 ipKey 同口径）', () => {
+    for (const bad of ['unknown', '', '2001:db8:zzzz:1::1', '1::2::3']) {
+      expect(ipKeyForLogin(bad), bad).toBe(bad);
+    }
+  });
+
+  it('比 ipKey 更粗，但**更粗**不等于"粗到没用"：/48 之间仍分开', () => {
+    const a = ipKeyForLogin('2001:db8:aaaa:100::1');
+    const b = ipKeyForLogin('2001:db8:bbbb:100::1');
+    expect(a).not.toBe(b);
+    // 同一 /64 当然也同桶（更粗的函数不会把同 /64 拆开）
+    expect(ipKeyForLogin('2001:db8:1:2::1')).toBe(ipKeyForLogin('2001:db8:1:2::ffff'));
   });
 });

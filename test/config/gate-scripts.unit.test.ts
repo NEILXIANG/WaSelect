@@ -50,6 +50,8 @@ const REQUIRED_STEPS: readonly string[] = [
   'test:lint',
   'audit:prod',
   'cov',
+  // TST3-03（第三轮审查）：逐文件覆盖率底线——全局阈值是汇总比较，拦不住单个零覆盖文件
+  'check:coverage-floor',
 ];
 
 /**
@@ -150,5 +152,30 @@ describe('gate 这道门禁本身必须完整', () => {
       scripts: Record<string, string>;
     };
     expect(adminPkg.scripts['prebuild']).toContain('assert-admin-deploy-env');
+  });
+});
+
+/**
+ * 提交钩子（TST3-04 / INF3-07，第三轮审查）。
+ * @why ① `test:fast` 是 `--changed`，只跑 import 图上相关的用例；扫描型守卫（覆盖率阈值键、vm、
+ *      测试归属、跳转参数、审核文案）读文件而不 import 被守的源码，真正会触发它们的改动
+ *      （搬走 auth.ts、新建 index.vm.js）提交时一条都不跑。
+ *      @measured（2026-09-30）：`vitest related server/src/app/auth.ts` 只命中 4 个文件，不含 coverage-threshold。
+ *      ② gate 第二步是 format:check，而钩子不查格式——第二轮就有一次 gate 因此红。
+ */
+describe('pre-commit 钩子', () => {
+  const hook = readFileSync(resolve(import.meta.dirname, '../../scripts/pre-commit'), 'utf8');
+  const steps = hook.split('\n').filter((l) => /^npm run /.test(l));
+
+  it('查格式', () => {
+    expect(steps).toContain('npm run format:check');
+  });
+
+  it('固定跑一遍扫描型守卫（不依赖 --changed）', () => {
+    expect(steps).toContain('npm run test:guards');
+    const guards = pkg.scripts['test:guards'] ?? '';
+    expect(guards).toMatch(/--project unit/);
+    expect(guards).toContain('test/config');
+    expect(guards).toContain('guard.unit.test');
   });
 });

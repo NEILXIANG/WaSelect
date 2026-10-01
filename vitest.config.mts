@@ -43,7 +43,8 @@ export default defineConfig({
     setupFiles: ['./test/setup/install-network-guard.ts'],
     projects: [
       {
-        test: { name: 'unit', include: ['**/*.unit.test.ts'] },
+        // `.tsx`：管理端用 JSX 写的组件测试（第三轮审查 TST3-07；不收的话它会静默不跑）
+        test: { name: 'unit', include: ['**/*.unit.test.ts', '**/*.unit.test.tsx'] },
       },
       {
         // db 层必须**串行**：所有 db 用例共用一个测试库，且用例之间靠 TRUNCATE 重置；

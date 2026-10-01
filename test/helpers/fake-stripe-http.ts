@@ -58,6 +58,13 @@ export interface FakeStripeHttp extends HttpClient {
   nextRefundStatus(status: string): void;
   /** 机构侧把某笔退款推进到新状态（模拟 pending → succeeded / failed 的异步完成）。 */
   settleRefund(refundId: string, status: string): void;
+  /**
+   * 设定会话的 `payment_status`（MP3-04：取消前"问机构一句"要读它）。缺省 `unpaid`
+   * ——刚建的会话就是没付款，这是真实形态。
+   * @why 单独给一个 setter 而不是让 GET 一律回某一种：这条查询的全部价值就在于
+   *      **机构说了什么**会改变行为；固定回一种的替身等于把被测分支钉死在一支上。
+   */
+  setSessionPaymentStatus(sessionId: string, paymentStatus: string): void;
 }
 
 export function createFakeStripeHttp(): FakeStripeHttp {
@@ -75,6 +82,8 @@ export function createFakeStripeHttp(): FakeStripeHttp {
     string,
     { id: string; object: 'refund'; status: string; payment_intent: string }
   >();
+  /** 会话 id → 机构侧的 `payment_status`（缺省 unpaid = 刚建还没付）。 */
+  const sessionPaymentStatus = new Map<string, string>();
   let nextRefund = 1;
   let pendingInitialStatus: string | undefined;
   /** payment_intent id → metadata（create 时从表单抓 + givenPaymentIntent 手工登记）。 */
@@ -117,6 +126,9 @@ export function createFakeStripeHttp(): FakeStripeHttp {
       const r = refundsById.get(refundId);
       if (r === undefined) throw new Error(`替身里没有这笔退款：${refundId}`);
       r.status = status;
+    },
+    setSessionPaymentStatus(sessionId, paymentStatus) {
+      sessionPaymentStatus.set(sessionId, paymentStatus);
     },
     async send(req: HttpRequest): Promise<HttpResponse> {
       calls.push(req);
@@ -207,6 +219,9 @@ export function createFakeStripeHttp(): FakeStripeHttp {
             ...found,
             object: 'checkout.session',
             payment_intent: `pi_for_${found.id}`,
+            // MP3-04：取消前要读它。缺省 unpaid（刚建的会话就是这个形态），
+            // 用例要造"已付但通知未达"时用 setSessionPaymentStatus 覆盖。
+            payment_status: sessionPaymentStatus.get(found.id) ?? 'unpaid',
           }),
         };
       }

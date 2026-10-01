@@ -13,6 +13,7 @@
  *
  * @see ../../../test/helpers/mp-page.ts（宿主与其 @limitation）；./index.js
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deferred, loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 
@@ -180,5 +181,28 @@ describe('首页薄壳：响应先后（R-04 / AJ-226）', () => {
     expect(page.data['loadingMore']).toBe(false);
     call('onReachBottom');
     expect(calls).toHaveLength(3);
+  });
+});
+
+/**
+ * MP3-08：搜索按钮上的 `loading` 守卫会**吞掉点击**（ws-button 在 loading 时静默 return），
+ * 而 B36 之后 reload 本身就能安全并发、"最后一次赢"——这个守卫挡的不是并发，是"最后一次被发出去"。
+ *
+ * @why 写成源码守卫而不是行为用例：薄壳测试不渲染 wxml，`loading` 接在组件上时
+ *      行为探针看不见它。而这条的形态特征很硬——"搜索按钮的标签里不得出现 loading="。
+ */
+describe('首页搜索按钮：不得用 loading 吞掉点击（MP3-08）', () => {
+  const src = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+
+  it('🔴 bindtap 是 onSearch 的那个 ws-button 里没有 loading=', () => {
+    const tags = src.match(/<ws-button\b[^>]*>/g) ?? [];
+    const search = tags.filter((t) => t.includes('bindtap="onSearch"'));
+    expect(search.length, '至少有一个搜索按钮').toBeGreaterThan(0);
+    for (const t of search) expect(t, t).not.toMatch(/\sloading=/);
+  });
+
+  it('搜索按钮仍然存在，且键盘确认键走同一个处理函数（两个入口行为一致）', () => {
+    expect(src).toMatch(/bindtap="onSearch"/);
+    expect(src).toMatch(/bindconfirm="onSearch"/);
   });
 });

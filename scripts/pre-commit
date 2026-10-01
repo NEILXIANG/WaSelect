@@ -8,6 +8,10 @@ set -e
 cd "$(dirname "$0")/.."
 # AJ-238：Node 主版本不对时，下面三步跑出来的结果都不算数——先过这一步
 npm run check:node
+# INF3-07：gate 第二步就是格式检查，钩子不查的后果是"提交时绿、gate 才红"
+npm run format:check
 npm run lint
 npm run typecheck
 npm run test:fast
+# TST3-04：扫描型守卫不在 import 图上，--changed 触发不了它们，这里固定跑一遍（毫秒级）
+npm run test:guards

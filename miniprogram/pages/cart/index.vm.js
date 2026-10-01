@@ -41,10 +41,11 @@ export function cartRows(items) {
  * 「去结算」按钮的状态与它下面那句话（B36 / AJ-219）。
  *
  * @param {{quoting?: unknown, hasTotal?: unknown, hasError?: unknown,
- *          splitRequired?: unknown}|null|undefined} s
+ *          errorCode?: unknown, splitRequired?: unknown}|null|undefined} s
  *   `quoting`       报价在途中（改了数量之后、新合计还没回来）
  *   `hasTotal`      当前 quote 有权威合计（薄壳传 `hasTotal(quote)`）
  *   `hasError`      上一次报价失败了
+ *   `errorCode`     失败的业务错误码（MP3-09：区分"重试就好"与"必须改购物车"）
  *   `splitRequired` 服务端 `split_hint`：**已超过**单笔上限（B38 / AJ-221）
  * @returns {{disabled: boolean, hint: string}} hint 空串 = 不渲染那行提示
  *
@@ -61,10 +62,30 @@ export function cartRows(items) {
  *      （40905 防线会被自己喂一个旧值，而结算页上看不出来）。
  * @limitation 只产出"能不能点 + 说什么"，**不做跳转、不发请求**（约束十一）。
  */
+/**
+ * 「重试也没用」的报价失败码（MP3-09）。
+ *
+ * @why 这三个码的共同点是：**服务端不会自己变好**，只有用户改了购物车才会变——
+ *      商品下架（40401）不会重新上架、超重（40912）与超金额上限（40906）不会自己变轻。
+ *      对它们说"请稍后重试"是把用户按在一个永远不会成功的动作上：
+ *      错误条上明明写着"请拆单"，按钮下却写着"稍后重试"，两句话方向相反。
+ * @why 库存不足（40901）**不**在里面：库存会被别人的取消回补，重试是真的可能成功的。
+ *      @tradeoff 分错类的代价是"多等一次"，把 40901 归进来则是"明明能成却拦住"——后者更糟。
+ */
+const MUST_CHANGE_CART = new Set([40401, 40906, 40912]);
+
+/** 报价失败提示：区分"稍后重试就好"与"必须改购物车"（MP3-09）。 */
+export function quoteErrorHint(code) {
+  return MUST_CHANGE_CART.has(code)
+    ? '报价未通过，请调整数量或移除商品'
+    : '合计未能获取，请稍后重试';
+}
+
 export function checkoutGate(s) {
   const a = s !== null && typeof s === 'object' ? s : {};
   if (a.quoting === true) return { disabled: true, hint: '数量已改，正在重新计算…' };
-  if (a.hasError === true) return { disabled: true, hint: '合计未能获取，请稍后重试' };
+  // ⚠️ 失败提示要看**码**：确定性失败（下架 / 超重 / 超上限）说"稍后重试"是句谎话（MP3-09）
+  if (a.hasError === true) return { disabled: true, hint: quoteErrorHint(a.errorCode) };
   // B38 / AJ-221：已超单笔上限 → 结算页会 40906，在购物车就把入口关掉
   // （让用户在**能改数量**的这一页解决，而不是跳过去再被弹回来）
   if (a.splitRequired === true) return { disabled: true, hint: '已超过单笔上限，请分两单下单' };

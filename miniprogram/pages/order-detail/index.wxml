@@ -1,7 +1,8 @@
 <!--
   订单详情（I2）："这单到底走到哪了"——时间线 / 运单号 / 地址快照 / 条款版本。
 
-  ⚠️ 时间全部按 JST 显示（UTC 存、JST 显，转换在 utils/jst-text.js 纯函数里，有单测）。
+  ⚠️ 时间全部按 JST 显示（UTC 存、JST 显，转换在 utils/jst-text.js 纯函数里，有单测），
+    且**每个时刻都带"（日本时间）"**——美国买家会把不带时区的截止时刻读成本地时间（MP3-02）。
 
   ⚠️ 关税是**信息字段**（含在商品价内），vm 给它的标签写死了"含在商品价内"——
   别在 wxml 里把它改成"关税：另收"那一类说法。
@@ -24,7 +25,13 @@
         <text class="label">{{view.orderNo}}</text>
         <text class="status">{{view.statusText}}</text>
       </view>
+      <!-- MP3-04：刚付过款、服务端还没确认——这时不给继续支付也不给取消，只说清在确认中 -->
+      <text class="hint" wx:if="{{view.confirmHint}}">{{view.confirmHint}}</text>
       <text class="hint" wx:if="{{view.createdAtText}}">建单 {{view.createdAtText}}</text>
+      <!--
+        MP3-02：`expiresAtText` 自带"（日本时间）"。收货人是美国地址的用户，
+        不标时区时这一行会被读成本地时间（PDT 与 JST 差 16 小时）→ 以为还有一整天。
+      -->
       <text class="hint" wx:if="{{view.expiresAtText}}">请在 {{view.expiresAtText}} 前完成支付</text>
     </view>
 
@@ -77,7 +84,7 @@
 
     <view class="card" wx:if="{{view.timeline.length > 0}}">
       <text class="label">订单进展</text>
-      <view class="row" wx:for="{{view.timeline}}" wx:for-item="t" wx:key="index">
+      <view class="row" wx:for="{{view.timeline}}" wx:for-item="t" wx:key="key">
         <text class="value">{{t.statusText}}</text>
         <text class="label">{{t.atText}}</text>
       </view>

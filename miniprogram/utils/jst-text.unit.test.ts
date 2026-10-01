@@ -10,7 +10,7 @@
  *      当 TZ 本地时间解析，输出 = 输入，是恒等映射，什么都没验到（§2 第 9 条）。
  */
 import { describe, expect, it } from 'vitest';
-import { jstDateTime } from './jst-text.js';
+import { jstDateTime, jstDateTimeLabeled } from './jst-text.js';
 
 describe('jstDateTime（UTC → JST）', () => {
   it('基本转换：2026-09-27T15:04:26.000Z → 2026-09-28 00:04', () => {
@@ -66,5 +66,19 @@ describe('jstDateTime（UTC → JST）', () => {
     expect(jstDateTime('2026-13-01T00:00:00Z')).toBeNull();
     expect(jstDateTime('2026-09-27T25:00:00Z')).toBeNull();
     expect(jstDateTime('2026-09-27T00:61:00Z')).toBeNull();
+  });
+});
+
+describe('jstDateTimeLabeled（买家可见：带时区标注，MP3-02）', () => {
+  it('在换算结果后面加"（日本时间）"，换算本身与 jstDateTime 完全一致', () => {
+    expect(jstDateTimeLabeled('2026-09-27T15:04:26.000Z')).toBe('2026-09-28 00:04（日本时间）');
+    expect(jstDateTimeLabeled('2026-09-27T02:00:00Z')).toBe('2026-09-27 11:00（日本时间）');
+  });
+
+  it('🔴 换算不出来 → null，且**不加**标注（不给没换算过的时间盖"日本时间"的章）', () => {
+    for (const bad of [null, undefined, '', 'not a date', '2026-09-27T15:04:26+09:00', 42]) {
+      expect(jstDateTimeLabeled(bad), String(bad)).toBeNull();
+    }
+    expect(jstDateTimeLabeled('x') ?? '').not.toContain('日本时间');
   });
 });

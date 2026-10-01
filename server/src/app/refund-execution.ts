@@ -7,6 +7,8 @@
  *   ② 发起退款：attempt = 已确认失败次数（换新幂等键）；
  *   ③ 发起的结果：成功 → refunded；在途 → 记 refund_pending（单号落库）；
  *      确认失败 → 记 `provider_failed:<单号>` 抛 50000；结果未知（抛错）→ 记 `provider_error` 抛 50000。
+ *   ⚠️ 另有**拒付在途**的一个前提（第三轮审查 OPS3-03）：`hasDispute` 时不发起**新键**（40907），
+ *      ① 的查询与 `attempt = 0` 的同键重放照常——它们不动第二笔钱。详见 `executeRefund` 内的注释。
  *
  * @why 原先 pending 只打一条 info 日志：单号没落库，重试沿用同一幂等键，机构回放的是**首次响应快照**
  *      （仍是 pending）——订单永远停在 refunding、没有告警（独立审查辨析 §3.1）。
@@ -53,6 +55,14 @@ export interface RefundPlan {
   progress: RefundProgress;
   /** `admin:<sub>`（order_events.actor 口径）。 */
   actor: string;
+  /**
+   * `orders.has_dispute`：拒付进行中（第三轮审查 OPS3-03）。
+   * @why 它必须**传进来**而不是在闸门里一次判完：本模块才知道"这一把是不是新键"
+   *      （`attempt = confirmedFailures`，见下），而"动第二笔钱"只发生在换键那一步。
+   *      闸门（`refundGuard`）只看 `status × has_dispute`，把 refunding 一律放行，
+   *      否则拒付在途时订单会永久卡在 refunding。
+   */
+  hasDispute: boolean;
 }
 
 export async function executeRefund(
@@ -94,6 +104,26 @@ export async function executeRefund(
       ctx: { provider: plan.channel, attempt: attempt + 1 },
     });
     attempt += 1;
+  }
+
+  // ── 拒付在途时，只在这一步拦（OPS3-03）──────────────────────────────────────
+  // `attempt > 0` = 这一把是**新键**（`refund:<orderId>:<attempt>`），即会向机构发起
+  // 一笔**新的**退款；`attempt === 0` 是同键重放，机构回放首次结果，钱不会动第二次。
+  // @why 拦在这里而不是把 refunding 一并挡在闸门里：挡闸门 = 连"查询在途那笔"都点不动
+  //      ⇒ 退款 pending 期间落了拒付的单永远退不掉，也回不到 paid（stuck_refunds 天天报）。
+  // @why 顺序在**记录确认失败之后**：上面 pending 查询拿到 failed 时已经写了
+  //      `refund_failed` 事件，那笔失败是事实，不能因为拒付就当没发生（否则 attempt 不进位，
+  //      下次点又会拿同一把键去撞那个已被确认失败的单号）。
+  // @limitation 拒付 + 同键重放仍可能落定：买家既拿到退款又赢了拒付。这是刻意选的方向——
+  //      另一个方向（一律挡）的后果是"订单永久卡死且无出口"，而这条路的钱只动一次、
+  //      `has_dispute` 仍在、对账看得见。
+  if (plan.hasDispute && attempt > 0) {
+    deps.logger.warn('admin_order_refund_blocked_by_dispute', {
+      result: 'blocked',
+      order_id: plan.orderId,
+      ctx: { provider: plan.channel, attempt },
+    });
+    throw new AppError(40907, { order_id: plan.orderId, reason: 'dispute_open' });
   }
 
   let out: RefundResult;

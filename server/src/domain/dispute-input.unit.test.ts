@@ -143,3 +143,38 @@ describe('DISPUTE_STATUS 与契约的双向比对', () => {
     expect(inContract).toEqual([...DISPUTE_STATUS]);
   });
 });
+
+/**
+ * 查询参数 `/admin/disputes?status=` 的 enum 也要与 `DISPUTE_STATUS` 相等（第三轮审查 DOM3-02）。
+ * @why `parseDisputeStatus` 服务的是**这个查询参数**，而上面那组比对锚在响应 schema 上——
+ *      契约参数 enum 漏了 withdrawn（第二轮 DB2-03），实现却接受它，gate 一直是绿的。
+ */
+describe('/admin/disputes 查询参数 status 与契约的双向比对（DOM3-02）', () => {
+  const yaml = readFileSync(
+    resolve(import.meta.dirname, '../../../contracts/api-contract.yaml'),
+    'utf8',
+  );
+  const lines = yaml.split('\n');
+  const at = lines.findIndex((l) => /^ {2}\/admin\/disputes:\s*$/.test(l));
+  const param =
+    lines.slice(at, at + 8).find((l) => l.includes('parameters:') && l.includes('name: status')) ??
+    '';
+
+  it('抽到了 /admin/disputes 的 status 参数行', () => {
+    expect(at).toBeGreaterThan(0);
+    expect(param).toContain('in: query');
+  });
+
+  it('集合完全相等', () => {
+    const m = /enum:\s*\[([^\]]+)\]/.exec(param);
+    const inContract = (m?.[1] ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    expect(inContract).toEqual([...DISPUTE_STATUS]);
+  });
+
+  it('withdrawn 作为查询值被接受', () => {
+    expect(parseDisputeStatus('withdrawn')).toBe('withdrawn');
+  });
+});

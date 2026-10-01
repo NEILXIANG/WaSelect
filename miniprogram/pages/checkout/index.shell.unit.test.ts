@@ -15,7 +15,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
+import { deferred, loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 
 interface Req {
   url: string;
@@ -42,6 +42,10 @@ let termsFail: boolean;
 let quoteFail: boolean;
 /** 建单接口的下一次行为：抛这个错；为 null 则成功。 */
 let orderError: (Error & { code?: number }) | null;
+/** 非空 = 把 `POST /orders/quote` 挂起（用来观察"重报价在途"这一瞬间的闸门）。 */
+let quoteHold: ReturnType<typeof deferred<unknown>> | null;
+/** 非空 = 把 `POST /orders` 挂起（用来观察"建单在途"这一瞬间的页面）。 */
+let orderHold: ReturnType<typeof deferred<unknown>> | null;
 let navigations: string[];
 let cartCleared: boolean;
 
@@ -63,6 +67,8 @@ beforeEach(async () => {
   termsFail = false;
   quoteFail = false;
   orderError = null;
+  quoteHold = null;
+  orderHold = null;
   navigations = [];
   cartCleared = false;
   vi.stubGlobal('wx', {
@@ -88,9 +94,11 @@ beforeEach(async () => {
         if (req.url.endsWith('/addresses')) return [ADDR];
         if (req.url.endsWith('/orders/quote')) {
           if (quoteFail) throw apiError(40401, '商品不存在或已下架');
+          if (quoteHold !== null) return quoteHold.promise;
           return quote;
         }
         posts.push(req);
+        if (orderHold !== null) return orderHold.promise;
         if (orderError !== null) throw orderError;
         return { order_id: 'o-1' };
       },
@@ -237,5 +245,59 @@ describe('结算页：连点防线落在 ws-button（约束：页面不得手写
     const tag = /<ws-button[^>]*bindtap="onSubmit"[^>]*\/>/s.exec(wxml)?.[0] ?? '';
     expect(tag, '自检：找到了提交按钮').not.toBe('');
     expect(tag).toContain('loading="{{submitting}}"');
+  });
+});
+
+describe('结算页薄壳：重报价窗口与两个跳转（MP3-05 / MP3-09 / MP3-10）', () => {
+  it('🔴 40905 之后、新报价还没回来：闸门关闭，再点也发不出去（不能拿旧合计再吃一次 40905）', async () => {
+    await ready();
+    quoteHold = deferred();
+    orderError = apiError(40905, '价格已变动');
+    call('onSubmit');
+    await settle();
+    // 重报价在途的这一刻：quote 必须已经被置空，闸门落到"还在计算中"
+    expect(gate().ok).toBe(false);
+    expect(gate().reason).toContain('计算中');
+    expect(page.data['quote']).toBeNull();
+    // 旧合计还在时闸门是开的 ⇒ 再点一次就是同一个 40905（弱网下能循环好几轮）
+    const before = posts.length;
+    call('onSubmit');
+    await settle();
+    expect(posts).toHaveLength(before);
+
+    quoteHold.resolve(quote);
+    await settle();
+    expect(gate().ok).toBe(true); // 新报价回来后才放行
+  });
+
+  it('🔴 40913（在途单已达上限）→ 跳订单列表：文案说了要去处理，就得给一个去处', async () => {
+    await ready();
+    orderError = apiError(40913, '未付款的订单太多了，请先完成支付或取消后再下单');
+    call('onSubmit');
+    await settle();
+    expect(navigations).toContain('/pages/order/index');
+    // 建单没成功 ⇒ 购物车不能清（用户处理完还要回来这一单）
+    expect(cartCleared).toBe(false);
+  });
+
+  it('🔴 建单在途时点「收货地址」/「查看条款全文」：不跳（支付页会压在地址页上面）', async () => {
+    await ready();
+    orderHold = deferred();
+    call('onSubmit');
+    await settle();
+    call('onPickAddress');
+    call('onOpenTerms');
+    expect(navigations, '在途时不许离开这一页').toEqual([]);
+
+    orderHold.resolve({ order_id: 'o-1' });
+    await settle();
+    expect(navigations).toContain('/pages/pay/index?orderId=o-1');
+  });
+
+  it('建单**不在**途时两个跳转照旧（不能把正常路径一起挡死）', async () => {
+    await ready();
+    call('onPickAddress');
+    call('onOpenTerms');
+    expect(navigations).toEqual(['/pages/address/index?pick=1', '/pages/legal/index']);
   });
 });

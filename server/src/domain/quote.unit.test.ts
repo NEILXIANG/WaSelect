@@ -152,6 +152,18 @@ describe('computeQuote', () => {
     expect(q.splitHint).toBe(true);
   });
 
+  it('splitHint 的边界：合计恰好等于上限 → false；多 1 円 → true（第三轮审查 DOM3-07）', () => {
+    // @why 比较方向必须与建单硬拦（create-order.ts 的 `>`）同向；原来只测了远离边界的 183,950，
+    //      把 `>` 改成 `>=` 全绿——恰好 180,000 円的购物车会被提示拆单，而建单实际放行。
+    const zeroDuty = { dutyRatioInt: toRatioInt('0.00000'), shippingJpy: 4950 };
+    const at = computeQuote(baseInput({ ...zeroDuty, itemsJpy: 175_050 }));
+    expect(at.totalJpy).toBe(180_000);
+    expect(at.splitHint).toBe(false);
+    const over = computeQuote(baseInput({ ...zeroDuty, itemsJpy: 175_051 }));
+    expect(over.totalJpy).toBe(180_001);
+    expect(over.splitHint).toBe(true);
+  });
+
   it('展示币为空数组 → display 为空（不要求汇率，也不该 50003）', () => {
     const q = computeQuote(baseInput({ displayCurrencies: [] }));
     expect(q.display).toEqual({});

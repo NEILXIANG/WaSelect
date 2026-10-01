@@ -43,6 +43,7 @@ import type {
   ProviderEvent,
   RefundRequest,
   RefundResult,
+  SessionStatus,
 } from '../../ports/payment.js';
 // 值导入（不是 type）：B3 / AJ-199 —— 适配器要**抛**这个契约错误，业务层按类型分辨"是否换幂等键"
 import { ProviderRejectedError } from '../../ports/payment.js';
@@ -143,6 +144,26 @@ function refundOutcome(status: unknown): RefundResult['outcome'] {
   if (status === 'succeeded') return 'succeeded';
   if (status === 'failed' || status === 'canceled') return 'failed';
   return 'pending';
+}
+
+/**
+ * 会话的 `payment_status` → `SessionStatus`（MP3-04：取消订单前的"问一句"）。
+ *
+ * @why **`unpaid` 直接判 unpaid**而不是一律保守成 processing：Stripe 对卡支付是
+ *      **同步**翻转 `payment_status` 的（支付成功那一刻它就变成 paid，webhook 随后才到），
+ *      所以"付了但通知没到"这一支查出来是 `paid`，判 unpaid 放行的都是**真的没付**。
+ *      反过来若把 unpaid 也保守成 processing，后果是"建了会话没付款的人也点不了取消"——
+ *      那会把一个防洞的补丁变成日常可用性的倒退（订单 30 分钟后才自动关）。
+ * @why 认不出的取值（`no_payment_required`、未来新增的枚举、字段缺失）一律 `processing`：
+ *      它们的共同点是"我们不知道钱有没有动"，而取消是**不可逆地关单 + 回补库存**，
+ *      不确定就必须不确定——宁可让人等 30 分钟自动过期，也不能关掉一张可能已付款的单。
+ * @tradeoff 代价：机构枚举新增未知取值时会短暂拒绝取消（fail-closed），
+ *      表现为"取消点不动"而不是"钱收了单关了"。前者可恢复（等过期 / 客服介入），后者要人工退款。
+ */
+export function sessionOutcome(paymentStatus: unknown): SessionStatus {
+  if (paymentStatus === 'paid') return 'paid';
+  if (paymentStatus === 'unpaid') return 'unpaid';
+  return 'processing';
 }
 
 /**
@@ -394,6 +415,9 @@ export function createStripeCheckoutProvider(
       supportsPartialRefund: false,
       supportsDispute: true,
       refundableWhenDisabled: true,
+      // MP3-04：Stripe 托管页是**唯一**会出现"付了钱、通知没到"的通道
+      // （钱在机构页面里付，买家切回微信只需几秒），所以只有它必须能查会话。
+      supportsSessionQuery: true,
     },
 
     async create(req: PaymentRequest): Promise<PaymentSession> {
@@ -675,6 +699,24 @@ export function createStripeCheckoutProvider(
         );
       }
       return refundOutcome((JSON.parse(res.body) as { status?: unknown }).status);
+    },
+
+    async sessionStatus(providerRef: string) {
+      // @measured(docs.stripe.com/api/checkout/sessions/retrieve, 2026-09-30)：
+      //   `GET /v1/checkout/sessions/{id}` 返回对象上的 `payment_status` 取值
+      //   "paid" / "unpaid" / "no_payment_required"，另有对象级 `status`（open/complete/expired）。
+      //   GET 不带幂等键（幂等只对 POST 有意义，与 refundStatus 同口径）。
+      const res = await deps.http.send({
+        method: 'GET',
+        url: `${apiBase}/v1/checkout/sessions/${encodeURIComponent(providerRef)}`,
+        headers: { authorization: `Bearer ${opts.secretKey}` },
+      });
+      if (res.status < 200 || res.status >= 300) {
+        throw new Error(
+          `stripe 查询会话失败：HTTP ${res.status} ${res.body.slice(0, 200)}（session=${providerRef}）`,
+        );
+      }
+      return sessionOutcome((JSON.parse(res.body) as { payment_status?: unknown }).payment_status);
     },
 
     async expireSession(providerRef: string): Promise<void> {

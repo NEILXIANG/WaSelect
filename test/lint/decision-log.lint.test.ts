@@ -47,6 +47,20 @@ function entries(doc: string): Entry[] {
     }));
 }
 
+/**
+ * 全文所有 `### AJ-xx` 标题行（行号从 1 起）。
+ * @why TST3-01（第三轮审查）：AJ-200～AJ-244 共 46 条被追加在 §4 之后，
+ *      而 {@link entries} 只解析 §1——七项字段、依据长度、编号唯一三项检查对它们全部不执行，
+ *      文件里出现了两条 `AJ-225` 门禁仍是绿的。"写错位置"必须本身就红，而不是被静默跳过。
+ */
+function allEntryHeadings(doc: string): { line: number; id: string }[] {
+  return doc
+    .split('\n')
+    .map((l, i) => ({ line: i + 1, text: l }))
+    .filter((x) => /^### AJ-\d+/.test(x.text))
+    .map((x) => ({ line: x.line, id: (x.text.match(/^### (AJ-\d+)/) ?? ['', ''])[1] ?? '' }));
+}
+
 describe('自主决策记录（docs/自主决策记录.md）', () => {
   it('文档存在且不是空壳（条目数有下限）', () => {
     const doc = readDoc();
@@ -82,15 +96,29 @@ describe('自主决策记录（docs/自主决策记录.md）', () => {
     const list = entries(readDoc());
     const ids = list.map((e) => (e.id.match(/^AJ-\d+/) ?? [''])[0] ?? '');
     expect(ids.filter((i) => i.length > 0).length, '有条目没有 AJ-xx 编号').toBe(list.length);
-    expect(new Set(ids).size).toBe(ids.length);
+    // TST3-01：唯一性按**全文**算——§1 之外的重复同样是重复
+    const all = allEntryHeadings(readDoc()).map((h) => h.id);
+    const dup = all.filter((id, i) => all.indexOf(id) !== i);
+    expect(dup, `编号重复：${dup.join('、')}`).toEqual([]);
+  });
+
+  it('所有 AJ 条目都在 §1 里（写在 §2 之后的条目不受上面任何检查，TST3-01）', () => {
+    const doc = readDoc();
+    const s2 = doc.split('\n').findIndex((l) => /^## 2\./.test(l)) + 1;
+    const outside = allEntryHeadings(doc).filter((h) => s2 > 0 && h.line > s2);
+    expect(
+      outside.map((h) => `${h.id}（第 ${h.line} 行）`),
+      '这些条目写在 §2 之后，七项字段 / 依据 / 编号检查都管不到它们——请移到 §1 末尾',
+    ).toEqual([]);
   });
 
   it('「被实测推翻的判断」与「仍需人拍板」两节都在（区分"我定了"和"该你定"）', () => {
     const doc = readDoc();
-    expect(doc).toMatch(/^## 2\./m);
-    expect(doc).toMatch(/^## 3\./m);
-    // §2 是本文件最有资料价值的一节：记录"我容易在什么地方错"
-    expect(doc, '§2 被删了——那是记录失败模式的一节').toContain('被实测推翻的判断');
-    expect(doc, '§3 被删了——会让人误以为所有事项都已由 AI 决定').toContain('仍然需要人拍板');
+    // TST3-01：标题按**行首整行**匹配。原来用 toContain 找"仍然需要人拍板"，
+    // 会被 §4.1 表格里的同一串字掩盖——§3 标题改名后仍然是绿的。
+    expect(doc, '§2 被删了——那是记录失败模式的一节').toMatch(/^## 2\. 被实测推翻的判断/m);
+    expect(doc, '§3 被删了——会让人误以为所有事项都已由 AI 决定').toMatch(
+      /^## 3\. 仍然需要人拍板的/m,
+    );
   });
 });

@@ -25,8 +25,12 @@
  */
 import { AppError } from '../errors.js';
 
-/** 列宽（与 001 的 VARCHAR 一致）：超长属"形状错"（40001），DB 兜底是最后一道。 */
-const LEN = {
+/**
+ * 列宽（与 001 的 VARCHAR 一致）：超长属"形状错"（40001），DB 兜底是最后一道。
+ * 导出供小程序 `utils/address-form.js` 的同名常量做单测比对（TST3-02：前端原来不查长度，
+ * 超长 line2 要到服务端才被拒）。
+ */
+export const ADDRESS_MAX_CHARS = {
   recipient: 100,
   phone: 20,
   line1: 200,
@@ -34,6 +38,7 @@ const LEN = {
   city: 100,
   postal_code: 10,
 } as const;
+const LEN = ADDRESS_MAX_CHARS;
 
 const ASCII_RE = /^[ -~]+$/;
 const ASCII_OR_EMPTY_RE = /^[ -~]*$/;

@@ -33,6 +33,7 @@ import {
 } from '../../../../test/factories/stripe.js';
 import {
   createStripeCheckoutProvider,
+  sessionOutcome,
   STRIPE_MIN_SESSION_TTL_SEC,
   STRIPE_SESSION_MARGIN_SEC,
   STRIPE_SOURCE_TAG,
@@ -1131,5 +1132,53 @@ describe('create：收货信息附给 PaymentIntent（D-60①，一致性审计 
       const keys = [...formOf(http).keys()].filter((k) => k.includes('[shipping]'));
       expect(keys).toEqual([]);
     }
+  });
+});
+
+describe('sessionStatus（取消前问机构，MP3-04）', () => {
+  /**
+   * @why 这张表是**整个防线的方向开关**：把 `unpaid` 误判成 processing 会让"没付款的人也取消不了"
+   *      （日常可用性倒退），把 paid 误判成 unpaid 会让洞继续开着。所以三种取值各自钉一条。
+   */
+  it('payment_status → SessionStatus：paid / unpaid 直通，认不出的一律 processing', () => {
+    expect(sessionOutcome('paid')).toBe('paid');
+    expect(sessionOutcome('unpaid')).toBe('unpaid');
+    // 认不出的三种真实形态：Stripe 的第三档、字段缺失、未来新增枚举
+    expect(sessionOutcome('no_payment_required')).toBe('processing');
+    expect(sessionOutcome(undefined)).toBe('processing');
+    expect(sessionOutcome('paid_or_unpaid?')).toBe('processing');
+  });
+
+  it('🔴 机构说已付 → paid（这正是"付了钱、通知还没到"那一刻要读到的值）', async () => {
+    const { http, provider } = build();
+    const s = await provider.create(REQ);
+    http.setSessionPaymentStatus(s.providerRef, 'paid');
+    await expect(provider.sessionStatus?.(s.providerRef)).resolves.toBe('paid');
+  });
+
+  it('刚建的会话（未付）→ unpaid：日常取消必须还能取消', async () => {
+    const { http, provider } = build();
+    const s = await provider.create(REQ);
+    http.setSessionPaymentStatus(s.providerRef, 'unpaid');
+    await expect(provider.sessionStatus?.(s.providerRef)).resolves.toBe('unpaid');
+  });
+
+  it('走 GET /v1/checkout/sessions/{id}，不带幂等键（幂等只对 POST 有意义）', async () => {
+    const { http, provider } = build();
+    const s = await provider.create(REQ);
+    http.calls.length = 0;
+    await provider.sessionStatus?.(s.providerRef);
+    const call = http.calls[0];
+    expect(call?.method).toBe('GET');
+    expect(call?.url).toBe(`https://api.stripe.test/v1/checkout/sessions/${s.providerRef}`);
+    expect(call?.headers?.['idempotency-key']).toBeUndefined();
+    expect(call?.headers?.['authorization']).toBe('Bearer sk_test_unit');
+  });
+
+  it('🔴 查不到（5xx）→ 抛错，由调用方按 fail-closed 处理（不静默当成"没付"）', async () => {
+    const { http, provider } = build();
+    const s = await provider.create(REQ);
+    http.failNext(502);
+    await expect(provider.sessionStatus?.(s.providerRef)).rejects.toThrow(/502/);
   });
 });

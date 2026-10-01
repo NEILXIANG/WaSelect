@@ -11,6 +11,11 @@
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../errors.js';
 import { parseAddressInput } from './address-input.js';
+import {
+  US_ADDRESSES,
+  US_ADDRESS_INVALID,
+  formatUsPhone,
+} from '../../../test/factories/catalog.js';
 
 const OK_ADDR = {
   recipient: 'Jane Doe',
@@ -117,5 +122,36 @@ describe('address-input（地址校验，I2 U-B2c）', () => {
   //      那时就要重新讨论"纯函数"这个性质还要不要。
   it('不校验国家：任意 country 都放行（国家归路由层表驱动）', () => {
     expect(parseAddressInput({ ...OK_ADDR, country: 'ZZ' }).country).toBe('ZZ');
+  });
+});
+
+/**
+ * 形态清单的样本池接进应用层校验（第三轮审查 TST3-02）。
+ * @why 池子（军邮 AA/AE/AP、属地 PR、PO Box、ZIP+4……）原来只喂给 DB CHECK；
+ *      真正拦用户的是这里（40002）与小程序 `address-form.js`。把州码收紧成 50 州白名单
+ *      （FX5 的原始形态）时，原有用例只用过 CA / NY，全绿——池子里的军邮与波多黎各会在填地址时被拒。
+ * @limitation 反例池的 `expect` 是 DB 约束名；这里只断言"应用层也拒"，不比对约束名。
+ */
+describe('US_ADDRESSES / US_ADDRESS_INVALID 样本池（TST3-02）', () => {
+  const toBody = (s: (typeof US_ADDRESSES)[number]) => ({
+    recipient: s.recipient,
+    phone: formatUsPhone(s.areaCode, 5_000_000),
+    line1: s.line1,
+    ...(s.line2 === null ? {} : { line2: s.line2 }),
+    city: s.city,
+    state: s.state,
+    postal_code: s.postalCode,
+  });
+
+  it.each(US_ADDRESSES.map((s) => [`${s.recipient} / ${s.state} ${s.postalCode}`, s] as const))(
+    '合法样本放行：%s',
+    (_label, seed) => {
+      expect(() => parseAddressInput(toBody(seed))).not.toThrow();
+    },
+  );
+
+  it.each(US_ADDRESS_INVALID.map((c) => [c.name, c] as const))('反例被拒：%s', (_n, c) => {
+    // 超长类是"形状错"（40001），其余是格式错（40002）——两者都是应用层拒绝
+    expect([40001, 40002]).toContain(fail({ ...OK_ADDR, ...c.patch }).code);
   });
 });

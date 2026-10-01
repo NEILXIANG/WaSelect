@@ -23,6 +23,12 @@ export interface ShutdownCleanupArgs {
   logger: Logger;
   /** 最多等订阅者多久（毫秒）；0 = 不等直接关库。 */
   drainMs: number;
+  /**
+   * 关连接池的强关上限（毫秒）；不传 = 无限等（INF3-01 之前的旧行为）。
+   * @why `db.end()` 会等在途**事务**跑完，而停机时最可能卡住的就是事务里那次出站调用
+   *      （`pay-intent.ts` 在建会话时持事务）。给上限，停机时长才是可预测的。
+   */
+  closeTimeoutMs?: number | undefined;
 }
 
 /** 超时后仍有订阅者在途 → 记这条（可检索、可告警）。别改成拼字符串。 */
@@ -50,6 +56,6 @@ export async function drainEventsThenClose(args: ShutdownCleanupArgs): Promise<n
       ctx: { pending, budget_ms: args.drainMs },
     });
   }
-  await closeDb(args.db);
+  await closeDb(args.db, args.closeTimeoutMs);
   return pending;
 }

@@ -89,3 +89,26 @@ describe('闸门接线（写了脚本却没人调 = 没有闸门）', () => {
     expect(lines[0]).toBe('npm run check:node');
   });
 });
+
+/**
+ * INF3-02（第三轮审查）：入口判断要穿透软链。
+ * @why 原来按字符串比 argv[1]，经软链直接执行时闸门静默 exit 0。
+ */
+describe('isMain（scripts/is-main.mjs）', () => {
+  it('经软链执行也认作入口；被别的入口 import 时不认', async () => {
+    const { isMain } = await import('../../scripts/is-main.mjs');
+    const { mkdtempSync, symlinkSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join, resolve } = await import('node:path');
+    const { pathToFileURL } = await import('node:url');
+    const real = resolve(import.meta.dirname, '../../scripts/assert-node-version.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'is-main-'));
+    const link = join(dir, 'gate.mjs');
+    symlinkSync(real, link);
+    const url = pathToFileURL(real).href;
+    expect(isMain(url, link)).toBe(true);
+    expect(isMain(url, real)).toBe(true);
+    expect(isMain(url, resolve(import.meta.dirname, '../../package.json'))).toBe(false);
+    expect(isMain(url, undefined)).toBe(false);
+  });
+});

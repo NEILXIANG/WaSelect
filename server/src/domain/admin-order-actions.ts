@@ -70,17 +70,37 @@ export function shipGuard(
 
 /**
  * 退款准入：`paid|shipped|delivered → refunding`，且无进行中的拒付（D-50：40907）。
- * @why 拒付拦在**状态判定之前**：一笔钱已经在争议里，再发一笔退款等于
- *      "同一笔扣款退两次"（机构侧 dispute 若判定我们赢，退款也回不来）；
- *      而状态码（40902）会把这个原因说成"状态不对"——客服照它去改状态，越改越错。
+ *
+ * ⚠️ 两个判定的**顺序**本身是结论（第三轮审查 OPS3-03 改过一次，见函数体内的 @why）：
+ * · `refunding` 重试放行**先于**拒付：refunding 下的再点只是查询或同键重放，不动钱；
+ *   拒付下挡死它 = 订单永久停在 refunding。会动钱的"换新键"由 `refund-execution.ts` 拦。
+ * · 拒付仍然**先于**其余状态判定：一笔钱已经在争议里，再发一笔退款等于
+ *   "同一笔扣款退两次"（机构侧 dispute 若判定我们赢，退款也回不来）；
+ *   而状态码（40902）会把这个原因说成"状态不对"——客服照它去改状态，越改越错。
+ *
+ * @limitation 本闸门只看 `status × has_dispute`，**看不出这一把是不是新键**——
+ *      它连"上一次退款到哪里"都不知道（那在 `findRefundProgress` 里）。
+ *      所以 40907 的**最终**判定点在 `app/refund-execution.ts`，本闸门是它的前置宽判。
+ *      两处口径必须一起改，否则会出现"闸门放行、执行也放行"的双退路径。
  */
 export function refundGuard(status: OrderStatus, hasDispute: boolean): AdminGateResult {
-  if (hasDispute) return deny(40907, 'dispute_open');
   // `refunding` 放行 = **重试**（KD-4，AJ-175）：上一次机构调用失败/超时后订单停在 refunding，
   // 路由头注释承诺"可人工重试"，但原判定只认状态机迁移，refunding → refunding 不在表里 → 40902，
   // 这张单从此退不了、也回不去。重试不是迁移（状态机表保持不变），双扣由机构侧幂等键兜住
   // （同一订单同一键 `refund:<orderId>`，且重试沿用首次的退款理由，保证同键同参）。
+  //
+  // ⚠️ 它必须**先于**拒付判定（第三轮审查 OPS3-03，原顺序是拒付在前）：
+  //    refunding 下的再次点击只有两条路——**查询**在途那笔，或用**同一把幂等键**重放，
+  //    两条都不会让钱再动一次（`refund:<orderId>` 同键同参，机构回放首次结果）；
+  //    而拒付在途时把它们挡死的结果是：退款 pending → 买家发起拒付 → 管理员再点想落定 → 40907
+  //    ⇒ 订单永远停在 refunding，`stuck_refunds` 每天报警但没人处理得了（钱卡在中间态）。
+  //    真正会动第二笔钱的是"换新键重新发起"，那一步的拦截**下移**到
+  //    `app/refund-execution.ts`（那里才知道这一把是不是新键），本闸门管不到。
+  // @tradeoff 代价是拒付在途时仍可能把一笔同键重放的退款落定（买家既拿到退款又赢了拒付）。
+  //      选它是因为另一个方向的后果更硬：订单永久卡在 refunding 且**没有任何出口**；
+  //      而同键重放的钱只可能动一次，动完后 `has_dispute` 仍在，对账看得见。
   if (status === 'refunding') return OK;
+  if (hasDispute) return deny(40907, 'dispute_open');
   return canTransition(status, 'refunding') ? OK : deny(40902, `status_${status}`);
 }
 

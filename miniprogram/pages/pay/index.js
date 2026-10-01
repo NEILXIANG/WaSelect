@@ -34,22 +34,19 @@
  *      ../../utils/idempotency.js（幂等键生命周期）；
  *      ../../utils/address-form.js（ADDRESS_COUNTRY_DEFAULT：通道过滤的目的国）
  */
-import {
-  CHARGE_CURRENCY_ORDER,
-  chargeOptions,
-  payGuide,
-  payNotice,
-  payPlan,
-} from '../../utils/pay-plan.js';
+import { CHARGE_CURRENCY_ORDER, chargeOptions, payNotice, payPlan } from '../../utils/pay-plan.js';
 import { ADDRESS_COUNTRY_DEFAULT } from '../../utils/address-form.js';
 import { createIntentIdempotency } from '../../utils/idempotency.js';
+import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { errorMessage } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import {
   PAY_FAIL_TEXT,
+  afterIntent,
   closedScreen,
   copyResult,
+  leavesAfterAuto,
   onShowAction,
   payPageView,
   payStartDecision,
@@ -66,6 +63,14 @@ const ORDER_PAGE = '/pages/order/index';
 /** 订单详情页路径（支付成功后去这里：这一单的最新真值在详情页，不在本页）。 */
 const ORDER_DETAIL_PAGE = '/pages/order-detail/index';
 
+/**
+ * 首页路径（没付成的单"重新下单"的落点，MP3-01）。
+ * @why 重新下单的**入口**在商品页，不在购物车：这一单的商品可能已经下架或改价，
+ *      直接跳购物车等于让人去结算一条服务端会拒绝的旧数据。首页是唯一不会说谎的起点。
+ * @why 用 `redirectTo`：支付页不该留在返回栈里（与 `onViewOrders` 同一条理由）。
+ */
+const HOME_PAGE = '/pages/home/index';
+
 Page({
   data: {
     /** `chargeOptions` 的输出：每个通道带实扣币种与金额（§14.2，AJ-180）。 */
@@ -74,6 +79,8 @@ Page({
     notice: [],
     /** 订单已不可支付时的说明（空串 = 正常列通道；B35 / AJ-218）。 */
     closedText: '',
+    /** 没付成时才为真：给一个"去首页重新下单"的出口（MP3-01；文案与按钮必须同生共死）。 */
+    goHome: false,
     /** 订单合计（JPY 整数）；null = 还没拿到。 */
     totalJpy: null,
     /** 引导屏文案（copylink / auto / unsupported）；title 空串 = 不渲染引导屏。 */
@@ -86,6 +93,13 @@ Page({
     paying: false,
     /** 错误文案（空串 = 无错误）。 */
     error: '',
+    /**
+     * **上一次支付动作**的结果（空串 = 没有；MP3-07）。
+     * @why 与 `error` 分开：`error` 是"取数出错"，每次重取都要清；
+     *      而"支付未完成"是用户刚做过的那件事的结论，
+     *      拉起收银台会触发 onShow → 重取，混在 `error` 里就会被自己清掉。
+     */
+    payResult: '',
   },
 
   /** 订单 id（空串 = 没带过来，此时不取数）。 */
@@ -97,6 +111,8 @@ Page({
   traceId: '',
   /** 是否已经取过一次数（`onShow` 的刷新只对"第二次及以后"生效，避免进页面取两遍）。 */
   loaded: false,
+  /** 整页重取的序号（MP3-07：连续切前后台会并发两个 load，只接受最后一次的结果）。 */
+  loadSeq: 0,
 
   /** @param {{orderId?: string}} options 结算页带来的 `?orderId=…` */
   onLoad(options) {
@@ -117,18 +133,26 @@ Page({
    */
   async load() {
     // 清掉上一次的错误：不清的话旧错误会一直挂在重新取回来的内容上面
+    // ⚠️ `payResult` **不在这里清**（MP3-07）：它是"上一次支付的结果"，不是"上一次取数的错误"。
+    //    微信收银台取消后会触发 onShow → reload，把"支付未完成"抹掉等于什么都没说。
     this.setData({ loading: true, error: '' });
+    // ⚠️ 领号（MP3-07）：连续两次切前后台会并发两个 load，
+    //    旧的那个若后到，会把"该订单已付款"旁边的支付方式**盖回去**——
+    //    首页与购物车在 B36 里已经用序号修过同一类问题，支付页没跟上。
+    const seq = (this.loadSeq = nextSeq(this.loadSeq));
     try {
       const order = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}`,
         traceId: this.traceId,
       });
+      if (isStale(seq, this.loadSeq)) return;
       const total = Number.isInteger(order?.total_jpy) ? order.total_jpy : null;
       // B35 / AJ-218：已付 / 已关 / 已退款的单**不列支付方式**（点了就是 40902）
       const view = payPageView(order);
       this.setData({ totalJpy: total, closedText: view.closedText });
       if (!view.payable) {
-        this.setData(closedScreen(view.closedText));
+        // 整个 view 交出去：文案与"给不给重新下单的出口"是同一次判断的两个产物
+        this.setData(closedScreen(view));
         return;
       }
       if (total === null) {
@@ -143,12 +167,15 @@ Page({
         });
         listings.push({ currency, resp });
       }
+      if (isStale(seq, this.loadSeq)) return;
       const channels = chargeOptions(listings, order);
       this.setData({ channels, notice: channels.length > 0 ? payNotice(channels, order) : [] });
     } catch (e) {
+      if (isStale(seq, this.loadSeq)) return;
       this.setData({ error: errorMessage(e) });
     } finally {
-      this.setData({ loading: false });
+      // 过期请求不能把 loading 清掉（新的还在途中）
+      if (!isStale(seq, this.loadSeq)) this.setData({ loading: false });
       // 首屏由 onLoad 触发；`onShow` 的刷新只对"已经取过一次"之后生效
       // （微信里 onLoad 与 onShow 会连着各触发一次，不挡就是每次进页面取两遍）
       this.loaded = true;
@@ -168,6 +195,9 @@ Page({
       payUrl: this.data.payUrl,
       guideTitle: this.data.guide?.title,
       paying: this.data.paying,
+      // MP3-07：整页重取在途时不该再排一次——上一次的通道列表回来之前又发一轮，
+      // 只是把自己排队（发起支付这条路要调机构，一次最长 6s）。
+      loading: this.data.loading === true,
     });
     if (action === 'reload') void this.load();
     else if (action === 'status') void this.checkStatus();
@@ -188,7 +218,7 @@ Page({
         traceId: this.traceId,
       });
       const view = payPageView(order);
-      if (!view.payable) this.setData(closedScreen(view.closedText));
+      if (!view.payable) this.setData(closedScreen(view));
     } catch {
       // 见上：静默
     }
@@ -213,7 +243,8 @@ Page({
   },
 
   async startPay(channel, idemKey) {
-    this.setData({ paying: true, error: '' });
+    // 新的一次发起 → 上一次的"支付结果"不再成立（它描述的是上一次动作）
+    this.setData({ paying: true, error: '', payResult: '' });
     try {
       const intent = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}/pay`,
@@ -234,6 +265,10 @@ Page({
   run(intent) {
     const plan = payPlan(intent);
     if (plan.kind === 'in_app') {
+      // ⚠️ 换通道必须先把上一次的短链收掉（MP3-03）：服务端已经作废了那个银行卡支付行，
+      //    这条短链再被复制去浏览器就是失效页；浏览器里早先开着的托管页仍可付款，
+      //    与微信里这一笔撞车会多出一笔迟到款。
+      this.setData(afterIntent(plan));
       wxApi.requestPayment({
         ...plan.params,
         // B35 / AJ-218：成功必须**离开这一页**——以前没有 success 回调，
@@ -243,14 +278,21 @@ Page({
         // ⚠️ 参数名是 `id` 不是 `orderId`（R-03 / AJ-225）：订单详情页读的是 `options.id`
         //    （订单列表也传 `?id=`）。这里曾写成 `?orderId=`——付款成功后落地页显示
         //    "订单不存在或链接无效"。参数名现在由 `miniprogram/nav-param-guard.unit.test.ts` 逐处核对。
+        // ⚠️ `justPaid=1`（MP3-04，P1）：微信支付在这里就算成功了，但服务端的
+        //    `payments` 行可能还没被回调推进——订单详情若照常规口径给「取消订单」，
+        //    用户会以为刚才没付上而点它。带上这个标记，详情页在确认前不给出取消与继续支付。
+        //    （参数名由 `nav-param-guard` 核对：详情页 `onLoad` 必须真的读它。）
         success: () =>
           wxApi.redirectTo({
-            url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}`,
+            url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}&justPaid=1`,
           }),
         // @see @limitation 三：取消与失败一视同仁。⚠️ 但不走 errorMessage——
         // 宿主 fail 的形状是 {errMsg}，读出来是 "requestPayment:fail cancel" 这种黑盒文案，
         // 把"用户主动取消"显示成"加载失败"会让人以为付款出了故障。
-        fail: () => this.setData({ error: PAY_FAIL_TEXT }),
+        // ⚠️ 写进 `payResult` 而不是 `error`（MP3-07）：`error` 会被 `load()` 开头清掉，
+        //    而拉起微信收银台会让平台触发 onHide → onShow → reload，
+        //    于是"支付未完成，可重新选择支付方式"在用户看到之前就被抹掉了。
+        fail: () => this.setData({ payResult: PAY_FAIL_TEXT }),
       });
       return;
     }
@@ -258,11 +300,16 @@ Page({
       // ⚠️ 不自动复制：剪贴板是用户的东西，未经动作就改写它是越界。用户点"复制链接"再复制。
       // ⚠️ `copied` 必须复位（AJ-227）：服务端每次发起都**轮换**短链 token，
       //    这是一条新链接；按钮若还写着"已复制"，用户会去浏览器粘贴刚失效的那条。
-      this.setData({ payUrl: plan.url, guide: payGuide(plan), copied: false });
+      this.setData(afterIntent(plan));
       return;
     }
-    // 非 copylink 的引导屏：不该留着上一次的短链与"已复制"
-    this.setData({ guide: payGuide(plan), payUrl: '', copied: false });
+    // auto / unsupported：不该留着上一次的短链与"已复制"（与 copylink 同一条口径）
+    this.setData(afterIntent(plan));
+    // ⚠️ auto = 响应到达时订单已 paid（MP3-06）：留下来会同时显示"支付已完成"和还能点的通道，
+    //    那是自相矛盾的界面。与微信支付成功同口径——离开这一页，让详情页用服务端数据说话。
+    if (leavesAfterAuto(plan)) {
+      wxApi.redirectTo({ url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}` });
+    }
   },
 
   /**
@@ -282,6 +329,17 @@ Page({
       success: () => this.setData(copyResult(true)),
       fail: () => this.setData(copyResult(false)),
     });
+  },
+
+  /**
+   * 没付成（expired / cancelled）时去首页重新下单（MP3-01）。
+   * @why 那句"如需购买请重新下单"必须配一个能点的地方——只说不做等于把用户丢在死胡同：
+   *      这一屏是支付流程的终点，下面只有一个"查看订单"，而他要的是**买**，不是看。
+   * @why 只对这两态出现：已付款 / 已退款的单给"重新下单"是把人往无关页面上引
+   *      （@see closedTextFor）。
+   */
+  onGoHome() {
+    wxApi.redirectTo({ url: HOME_PAGE });
   },
 
   /**

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.16
+  version: 0.6.17
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -199,6 +199,9 @@ info:
       @why 库存在建单时即扣、支付窗口（30 分钟）过后才回补，而限流只按 IP：没有每用户上限，
       一个账号就能循环建单把全店库存占满，且每张单都是"合法的待付款单"，对账不会报。
       同一接口另增一种 403 / 40301：建单事务内复核到该用户已被拉黑（鉴权层身份缓存最长 60 秒的窗口）。
+    0.6.17（工程库第三轮审查 DOM3-02 / 第二轮 DB2-03）：`GET /admin/disputes` 的查询参数 `status` 枚举补 `withdrawn`——
+      0.6.13 起 `Dispute.dispute_status` 已是四值（含 withdrawn），实现（`parseDisputeStatus`）也一直接受它，
+      只有这个查询参数的声明停在三值；单测原来只比对响应 schema，于是这处漂移一直是绿的。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -481,7 +484,7 @@ paths:
     get:
       summary: 拒付列表（D-50）：payments.dispute_status；证据在 Stripe Dashboard 提交，后台只标红、锁退款、拉黑
       description: 0.6.5 补：只出**带 dispute_id 的支付行**（无拒付的支付行不出现）；按开案时间倒序（NULL 最后）。`status` 非法 → **40001**，🈲 不得静默当成"不过滤"——那会让运营看到列表突然变长、按"拒付激增"这个错的结论去查业务
-      parameters: [{name: status, in: query, schema: {type: string, enum: [open, won, lost]}}]
+      parameters: [{name: status, in: query, schema: {type: string, enum: [open, won, lost, withdrawn]}}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Dispute'}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/users/{id}/block:
     post:

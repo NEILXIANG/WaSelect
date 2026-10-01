@@ -96,6 +96,52 @@ describe('admin-auth 仓储', () => {
   });
 
   /**
+   * OPS3-04：`failed_count` 原来是**累计**的（只在置锁与登录成功时归零），
+   * 于是"30 次 / 15 分钟"这句承诺是假的——实际是"累计 30 次，不分多久"。
+   * 后果：一个来源每 15 分钟试 5 次（恰好也在 IP 限流之内），约 90 分钟就把邮箱桶攒到 30，
+   * 锁住**所有来源**（含管理员的办公网络）15 分钟；计数归零后继续攒。
+   */
+  it('🔴 计数有窗口：慢速失败（每 16 分钟 2 次，max=3）永远攒不到锁', async () => {
+    const key = loginAttemptKey('slow@x.com');
+    const at = (mins: number) => new Date(NOW.getTime() + mins * 60_000);
+    // 第 1 轮：0 / 1 分钟各一次 → count=2
+    expect((await claimLoginAttempt(db, key, at(0), POLICY)).kind).toBe('claimed');
+    expect((await claimLoginAttempt(db, key, at(1), POLICY)).kind).toBe('claimed');
+    expect((await attemptRow(key)).failedCount).toBe(2);
+
+    // 第 2 轮（16 分钟之后）：窗口已过 → 从 1 重新起算，不是 3（否则这一下就锁了）
+    const later = await claimLoginAttempt(db, key, at(16), POLICY);
+    expect(later).toEqual({ kind: 'claimed', failedCount: 1, lockedUntil: null });
+    expect((await attemptRow(key)).failedCount).toBe(1);
+
+    // 再过 16 分钟：同样从 1 起算——慢速攻击永远攒不满
+    expect((await claimLoginAttempt(db, key, at(17), POLICY)).kind).toBe('claimed');
+    const again = await claimLoginAttempt(db, key, at(32), POLICY);
+    expect(again).toEqual({ kind: 'claimed', failedCount: 1, lockedUntil: null });
+  });
+
+  it('窗口**内**的连续失败照旧会锁（加了窗口不是让锁失效）', async () => {
+    const key = loginAttemptKey('burst@x.com');
+    // 同在 NOW 这一刻连错 3 次（max=3）：窗口没过，第 3 次照常置锁
+    await claimLoginAttempt(db, key, NOW, POLICY);
+    await claimLoginAttempt(db, key, NOW, POLICY);
+    expect((await claimLoginAttempt(db, key, NOW, POLICY)).kind).toBe('claimed');
+    expect((await attemptRow(key)).lockedUntil).not.toBeNull();
+    expect((await claimLoginAttempt(db, key, NOW, POLICY)).kind).toBe('locked');
+  });
+
+  it('窗口与锁时长可以不同（windowMinutes 显式给出时按它算）', async () => {
+    const key = loginAttemptKey('w2@x.com');
+    const p = { maxFailures: 100, lockMinutes: 15, windowMinutes: 10 };
+    await claimLoginAttempt(db, key, NOW, p);
+    await claimLoginAttempt(db, key, NOW, p);
+    expect((await attemptRow(key)).failedCount).toBe(2);
+    // 12 分钟 > 10 分钟窗口 → 归 1；但 < 15 分钟锁时长（若已锁则根本走不到这里）
+    const after = await claimLoginAttempt(db, key, new Date(NOW.getTime() + 12 * 60_000), p);
+    expect(after).toEqual({ kind: 'claimed', failedCount: 1, lockedUntil: null });
+  });
+
+  /**
    * A1 的核心：**额度是硬的**。旧实现先读锁再比对，30 个并发请求会全部读到"未锁"。
    */
   it('claimLoginAttempt 并发 30 次（max=5）：恰好 5 次拿到额度，其余 25 次全 locked', async () => {

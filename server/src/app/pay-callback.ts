@@ -70,6 +70,35 @@ const MISMATCH_REASONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * 拒付事件**乱序**造成的"暂时对不上"（第三轮审查 OPS3-01）：宽限期内回 503 让机构重发，而不是直接进 mismatch。
+ *
+ * @why 查询函撤回（closed 旧单号）与正式拒付（created 新单号）是同一时刻产生的两条事件，而
+ *      @measured(docs.stripe.com/webhooks「Event ordering」, 2026-09-30)：
+ *      "Stripe doesn't guarantee the delivery of events in the order that they're generated"。
+ *      原先这两个 reason 一律 200：新单号开案先到 → `dispute_id_conflict` → 正式拒付进不了系统；
+ *      结案先到 → `dispute_not_open` → 之后开案一到订单就永久锁住（不会再有结案事件）。
+ *      这两种都是"等另一条事件到了就对得上"，属于可重试。
+ * @why `dispute_after_lost` **不在**这里：败诉后来的新单号不会因为等待而变得对得上（mark-disputed.ts）。
+ * @limitation `dispute_id_conflict` 也覆盖"同一笔钱真的同时有两条进行中的拒付"——那种情况会重发到宽限期满，
+ *             再落 mismatch；代价是宽限期内机构多重发几次。
+ */
+const DISPUTE_OUT_OF_ORDER_REASONS: ReadonlySet<string> = new Set([
+  'dispute_id_conflict',
+  'dispute_not_open',
+]);
+
+/**
+ * 拒付乱序的宽限期：24 小时（从该事件**首次**到达算起，DB 时钟）。
+ * @why 不复用订单早到的 `graceMs`（默认 15 分钟）：那是"建单事务还没提交"的量级；
+ *      拒付乱序要等的是**另一条事件**的投递，它自己也可能在失败重试中。
+ *      @measured(docs.stripe.com/webhooks「Automatic retries」, 2026-09-30)：
+ *      "Stripe attempts to deliver events to your destination for up to three days with an exponential back off in live mode"。
+ *      24 小时在三天重试窗口之内，且给另一条事件留足了若干轮重试；超过它仍对不上就交给对账的人。
+ * @tradeoff 写成常量而不进配置：它由机构的重试窗口决定，不是运营参数；换机构时与该机构的适配器一起评估。
+ */
+export const DISPUTE_OUT_OF_ORDER_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/**
  * 一种 outcome 的**落账器**。
  *
  * @param channel 回调来自哪个通道。**必须**带进来（三审 S1②）：落账要把
@@ -357,6 +386,26 @@ export async function handleProviderCallback(
       //    "订单已 cancelled" 折成同一个 warn + `ignored:status_conflict`——"机构说收了 10 円、我方登记 1000 円"
       //    在日志里与普通过期冲突长得一样，且 reason / expected / got 全被丢弃。这里单独分层：error 级、
       //    带 reason 与期望值，result 写 `mismatch:<reason>` 供对账精确检索。机构仍拿 200：重发也不会变。
+      if (
+        typeof details?.reason === 'string' &&
+        DISPUTE_OUT_OF_ORDER_REASONS.has(details.reason) &&
+        claim.nowAt.getTime() - claim.firstReceivedAt.getTime() < DISPUTE_OUT_OF_ORDER_GRACE_MS
+      ) {
+        deps.logger.warn('callback_dispute_out_of_order', {
+          order_id: event.orderId,
+          provider: channel,
+          result: 'retry_scheduled',
+          ctx: { event_id: event.eventId, reason: details.reason },
+        });
+        // 同 callback_early：必须交还租约，否则机构的重投会被判成 inflight
+        await deps.webhooks.releaseLease({ ...webhook, token });
+        return {
+          disposition: 'early',
+          status: 503,
+          retryAfter: 300,
+          body: { received: false, order_id: event.orderId, reason: 'dispute_out_of_order' },
+        };
+      }
       if (typeof details?.reason === 'string' && MISMATCH_REASONS.has(details.reason)) {
         const ctx = (details as { ctx?: Record<string, unknown> }).ctx;
         deps.logger.error('callback_settlement_mismatch', {
