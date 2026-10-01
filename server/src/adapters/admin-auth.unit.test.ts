@@ -75,8 +75,16 @@ describe('登录路由的调用顺序（源码断言）', () => {
     // 分支闭合 = 下一个"缩进 8 空格的 }"（分支体缩进 10 空格，函数体其余部分亦然但不会更早出现）
     const end = code.indexOf('\n        }', start);
     const branch = code.slice(start, end === -1 ? code.length : end);
-    expect(branch).toContain('42901');
-    expect(branch).toContain('retry-after');
     expect(branch).not.toContain('verifyPassword(');
+
+    // ⚠️ 三个"已锁"出口已收敛成 `rejectLocked`（PAY3-04 起的 ⓪ 步还要复用它），
+    //    42901 / retry-after 不在分支里了 —— **跟着定义看**，否则把 reject 换成别的就假绿。
+    expect(branch).toContain('rejectLocked(');
+    const hs = code.indexOf('const rejectLocked =');
+    expect(hs).toBeGreaterThanOrEqual(0);
+    const helper = code.slice(hs, code.indexOf('\n        };', hs));
+    expect(helper).toContain('42901');
+    expect(helper).toContain('retry-after');
+    expect(helper).not.toContain('verifyPassword(');
   });
 });

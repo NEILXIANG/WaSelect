@@ -24,6 +24,9 @@
  * @limitation 二：`DELETE` **幂等**——不存在的 id 也返回 204（AJ-152）。
  *      管理端的 id 恒来自列表，"id 写错"这条路径不存在，而"双击删两次"是真实会发生的。
  *      代价：删一个已被别人删掉的 banner 也不会有提示。
+ *      ⚠️ 幂等与审计的接法（OPS3-08）：**删到了**才交改前值（审计写一行，答得出删了什么）；
+ *      0 行命中时**显式跳过审计**（`skipAudit`）——否则"双击删除"会留下两行审计，
+ *      第二行声称的删除根本没有发生，与中间件"有审计行 ⇔ 改动真的发生了"自相矛盾。
  * @limitation 三：`starts_at` / `ends_at` 不参与列表过滤（仓储 @why）：
  *      "当前该展示哪些"是买家侧 `/home` 的判定（I2 后续），管理端只给全量。
  *      两处各判一次会漂移。
@@ -40,6 +43,7 @@ import type { IdGen } from '../ports/ids.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
+import { setAuditBefore, skipAudit } from './admin-audit.js';
 import { createBannersAdminRepo, type BannerRow } from '../adapters/banners-admin.js';
 import { parseBannerInput } from '../domain/banner-input.js';
 
@@ -155,7 +159,20 @@ export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps
   app.delete('/api/v1/admin/banners/:id', guard, (req, res, next) => {
     void (async () => {
       try {
-        await repo.deleteBanner(String(req.params.id));
+        const id = String(req.params.id);
+        // ⚠️ 改前值**先读再删**（OPS3-08）：删除不可逆，审计里必须答得出
+        //    "被删的是哪张图、链到哪"——否则运营误删之后，审计只剩一行
+        //    `DELETE /admin/banners/:id` + target，与"什么都没发生"长得一样。
+        //    （与运费整表替换、汇率追加同一条理由：不可逆操作才取改前值。）
+        const before = await repo.findBanner(id);
+        if (before === null) {
+          // 0 行命中 = 没有改动发生 → **不写审计**（幂等删除的第二次也是这个分支）。
+          // 写了就破坏中间件自述的"有审计行 ⇔ 改动真的发生了"。
+          skipAudit(res);
+        } else {
+          setAuditBefore(res, toBanner(before, deps.config.IMG_BASE_URL));
+          await repo.deleteBanner(id);
+        }
         // 幂等：0 行命中也 204（@limitation 二）
         res.status(204).end();
       } catch (e) {

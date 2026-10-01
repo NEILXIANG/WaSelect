@@ -83,12 +83,20 @@ function parseBody(body: unknown): {
   if (b['contact_email'] !== undefined) {
     // 形状 + 长度在入口拦（全量审计 2026-09-26）：列是 VARCHAR(255)，超长会以 PG 22001 → 50000 暴露，
     // 而它是客户端可控输入，应是 40001；格式只做最低限度（有 @、无空白），不发明邮箱正则
+    // ⚠️ 字符类**排除控制字符**（ORD3-04）：`^[^\s@]+@[^\s@]+$` 放行 `\u0000`，
+    //    于是 `a\u0000@b` 一路走到 SQL，PG 拒收 0x00 → 22021 → 兜底 500 + error 日志，
+    //    恰好违背上面这行注释自己写的"应是 40001，不是 PG 报错 → 50000"。
+    //    （兜底层已把 22 类统一映射成 40001，这里是**入口这一层**的兑现：能挡的先挡。）
     const email = b['contact_email'];
     if (
       typeof email !== 'string' ||
       email.length === 0 ||
       email.length > 255 ||
-      !/^[^\s@]+@[^\s@]+$/.test(email)
+      // ⚠️ 下面那条正则**故意**含控制字符（ORD3-04）：本条规则防的是"手滑写进去"，
+      //    这里是刻意的白名单补洞——PG 拒收 0x00，但 BEL 等其它控制字符会被 PG **收下**
+      //    并入库（实测旧实现返回 201），所以必须显式排除。
+      // eslint-disable-next-line no-control-regex
+      !/^[^\s@\u0000-\u001f\u007f]+@[^\s@\u0000-\u001f\u007f]+$/.test(email)
     ) {
       throw new AppError(40001, { reason: 'contact_email_shape' });
     }

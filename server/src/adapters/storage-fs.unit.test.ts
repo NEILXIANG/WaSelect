@@ -72,6 +72,33 @@ describe('fs storage（开发期 ObjectStorage）', () => {
       Buffer.from([5]),
     );
   });
+  it('🔴 rootDir **带尾斜杠**也要能写（PAY3-05：`normalize` 保留尾斜杠，前缀变成 `root//`，每次上传都被判不安全）', async () => {
+    const root = await freshRoot();
+    const s = createFsStorage(`${root}/`); // .env 里 `STORAGE_FS_DIR=./var/uploads/` 是最常见写法
+    const bytes = Buffer.from([1, 2, 3]);
+    await s.put('img/a/t.webp', bytes, 'image/webp');
+    expect(await readFile(join(root, 'img/a/t.webp'))).toEqual(bytes);
+  });
+
+  it('🔴 rootDir 以 `/.` 结尾（等价于"当前目录"这种写法）同样能写，且落在 rootDir 下而不是 cwd', async () => {
+    const root = await freshRoot();
+    const s = createFsStorage(`${join(root, 'up')}/.`); // 形如 `var/uploads/.`
+    const bytes = Buffer.from([4, 5]);
+    await s.put('img/a/t.webp', bytes, 'image/webp');
+    expect(await readFile(join(root, 'up/img/a/t.webp'))).toEqual(bytes);
+  });
+
+  it('🔴 换成 `resolve` 之后前缀判定**仍然**拦得住穿越 key（尾斜杠下零落盘）', async () => {
+    const root = await freshRoot();
+    const s = createFsStorage(`${root}/`);
+    for (const bad of ['../escape.webp', '/abs/x.webp', 'a/../b.webp', 'a//b.webp']) {
+      await expect(s.put(bad, Buffer.from([1]), 'image/webp')).rejects.toThrow('object_key_unsafe');
+    }
+    await s.put('img/ok.webp', Buffer.from([1]), 'image/webp'); // 合法的仍能写（前缀没被拧坏）
+    expect(await readFile(join(root, 'img/ok.webp'))).toEqual(Buffer.from([1]));
+    expect(await readdir(root)).toEqual(['img']);
+  });
+
   it('delete：文件被删；再删一次不抛（ENOENT 视为已删）；穿越 key 一律拒', async () => {
     const root = await freshRoot();
     const s = createFsStorage(root);

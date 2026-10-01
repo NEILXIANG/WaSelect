@@ -263,6 +263,15 @@ describe('POST /orders（建单全链路）', () => {
         expect(r.status, bad.slice(0, 20)).toBe(400);
         expect(r.json['code']).toBe(40001);
       }
+      // ORD3-04：NUL（以及别的控制字符）必须**在入口这层**挡掉——放行的话 PG 拒收 0x00 → 22021，
+      // 兜底层虽然也能把它映射成 40001，但那已经是一次白跑的库查询 + 一条带 sqlstate 的日志
+      for (const [i, bad] of ['a\u0000@b', 'a@b\u0007', 'a\u001fb@c.io'].entries()) {
+        const r = await create(srv.url, { ...BODY, contact_email: bad }, `ce-ctl-${i}`);
+        expect(r.status, JSON.stringify(bad)).toBe(400);
+        expect(r.json['code']).toBe(40001);
+      }
+      // 没有落到"库拒收"分支上：入口挡住了，就不该出现 sqlstate
+      expect(srv.sink.find('request_rejected').filter((l) => 'sqlstate' in l)).toHaveLength(0);
       const ok = await create(srv.url, { ...BODY, contact_email: 'hanako@example.com' }, 'ce-ok');
       expect(ok.status).toBe(201);
     } finally {

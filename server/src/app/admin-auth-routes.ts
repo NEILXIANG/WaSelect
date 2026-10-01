@@ -50,6 +50,7 @@ import {
   findAdminCredential,
   loginAttemptKey,
   loginAttemptSourceKey,
+  peekLoginAttemptLock,
 } from '../adapters/admin-auth.js';
 import { signToken, verifyPassword, type AuthConfig } from './auth.js';
 import { ipKeyForLogin } from './rate-limit.js';
@@ -124,6 +125,30 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
           windowMinutes: ADMIN_LOGIN_WINDOW_MINUTES,
         });
 
+        /** 42901 + retry-after + warn：三个"已锁"出口共用（返回 never，调用处必然中断）。 */
+        const rejectLocked = async (scope: 'source' | 'email', until: Date): Promise<never> => {
+          const retrySec = Math.max(1, Math.ceil((until.getTime() - now.getTime()) / 1000));
+          res.setHeader('retry-after', String(retrySec));
+          const hit = await findAdminCredential(deps.db, email);
+          deps.logger.warn('admin_login_locked', {
+            result: 'rejected',
+            ...(hit !== null ? { target_user_id: hit.id } : {}),
+            ctx: { retry_after_sec: retrySec, known_account: hit !== null, scope },
+          });
+          throw new AppError(42901, { reason: 'admin_account_locked' });
+        };
+
+        // ⓪ **先只读**邮箱桶（PAY3-04）：已锁就直接 42901，**一次额度都不扣**。
+        //    @why 原来是"先扣来源桶、再扣邮箱桶，任一 locked 就 429"——邮箱桶锁着时
+        //    来源桶那一次已经扣掉了，于是管理员在别人造成的锁定期里每重试一次，
+        //    就往**自己**的来源桶上记一笔；记满 5 次来源桶自己也被锁上，
+        //    到期时刻还是"最后一次重试之后"的 15 分钟 ⇒ 攻击者停了，管理员还要多等一轮。
+        //    AJ-243 当初只论证了反方向（来源桶在前 ⇒ 攻击者不再消耗邮箱桶）。
+        //    @limitation 顺序反过来（先扣邮箱桶）不行：那会把"来源已锁"也记进邮箱桶，
+        //    正是 AJ-243 要堵的洞。所以只能**只读**地看一眼，不能改成"先扣后拒"。
+        const emailLock = await peekLoginAttemptLock(deps.db, globalKey, now);
+        if (emailLock !== null) await rejectLocked('email', emailLock);
+
         // ① 先扣额度（原子），两层都要拿到：来源桶（5）+ 邮箱桶（30）。
         //    任一已锁 → 42901，且不跑 bcrypt。来源桶在前：攻击者被锁在自己的来源上时，
         //    不再消耗邮箱桶——否则他照样能把全局那 30 次耗光。
@@ -144,20 +169,11 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
                 policy(ADMIN_LOGIN_GLOBAL_MAX_FAILURES),
               );
         if (bySource.kind === 'locked' || byEmail.kind === 'locked') {
-          const until = (bySource.kind === 'locked' ? bySource : byEmail).lockedUntil ?? now;
-          const retrySec = Math.max(1, Math.ceil((until.getTime() - now.getTime()) / 1000));
-          res.setHeader('retry-after', String(retrySec));
-          const cred = await findAdminCredential(deps.db, email);
-          deps.logger.warn('admin_login_locked', {
-            result: 'rejected',
-            ...(cred !== null ? { target_user_id: cred.id } : {}),
-            ctx: {
-              retry_after_sec: retrySec,
-              known_account: cred !== null,
-              scope: bySource.kind === 'locked' ? 'source' : 'email',
-            },
-          });
-          throw new AppError(42901, { reason: 'admin_account_locked' });
+          const locked = bySource.kind === 'locked' ? bySource : byEmail;
+          await rejectLocked(
+            bySource.kind === 'locked' ? 'source' : 'email',
+            locked.lockedUntil ?? now,
+          );
         }
 
         const cred = await findAdminCredential(deps.db, email);

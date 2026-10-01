@@ -199,6 +199,36 @@ export async function claimLoginAttempt(
 }
 
 /**
+ * **只读**地看某个桶此刻是否仍在锁定期（PAY3-04）。
+ *
+ * @returns 仍在锁中 → 锁定时刻；未锁 / 锁已到期 / 根本没有这一行 → null
+ *
+ * @why 登录路由要在**扣来源桶之前**先知道邮箱桶是不是已经锁了：
+ *      原来的顺序是"先扣来源桶，再扣邮箱桶，任一 locked 就 429"——邮箱桶已锁时，
+ *      来源桶那一次**已经扣掉了**，请求却在没比对口令的情况下被拒。
+ *      于是管理员在"邮箱桶被攻击者打满"的那 15 分钟里每重试一次，就往自己来源桶上记一笔；
+ *      5 次之后来源桶自己也被锁上，而它的到期时刻是**第 5 次重试之后**的 15 分钟
+ *      ——比邮箱桶那把锁还晚。攻击者早就停了，管理员却还要再等一轮（最长多 15 分钟）。
+ *      AJ-243 只论证了反方向（"来源桶在前：攻击者被锁在自己的来源上时不再消耗邮箱桶"），
+ *      这一侧当时没想到。
+ * @why 只是**窥视**，不扣额度也不上锁：封顶仍然由 {@link claimLoginAttempt} 原子地保证，
+ *      多这一次读不会让任何人多试一次（读之后并发置上的锁，claim 照样会撞到 0 行）。
+ */
+export async function peekLoginAttemptLock(
+  db: Db,
+  keyHash: string,
+  now: Date,
+): Promise<Date | null> {
+  const rows = await db<{ locked_until: Date | null }[]>`
+    select locked_until from login_attempts
+     where key_hash = ${keyHash}
+       and locked_until is not null
+       and locked_until > ${now}::timestamptz
+  `;
+  return (rows[0]?.locked_until as Date | null | undefined) ?? null;
+}
+
+/**
  * 登录成功：把额度清零。
  * @why 带"未锁定"条件且**区分 0 行的两种原因**：`absent` 是"这个键从没失败过"（正常，直接过），
  *      `locked` 是"在我比对口令的这 100ms 里，另一个并发请求把锁打上了"（必须 42901）。

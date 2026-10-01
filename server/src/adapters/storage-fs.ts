@@ -18,7 +18,7 @@
  * @see ports/storage.ts（端口语义）
  */
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join, normalize, sep } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import type { ObjectStorage } from '../ports/storage.js';
 
 /**
@@ -34,19 +34,25 @@ function assertSafeKey(key: string): void {
 }
 
 export function createFsStorage(rootDir: string): ObjectStorage {
-  // 尾部分隔符保证前缀判定：/root/evil 不以 "/root/" 开头，/root/x 才以它开头
-  const root = normalize(rootDir) + sep;
+  // ⚠️ 用 `resolve` 而**不是** `normalize` 拼根（PAY3-05）：
+  //    `normalize` **保留尾斜杠**——`normalize('/tmp/up/')` 仍是 `/tmp/up/`，
+  //    再 `+ sep` 就变成 `/tmp/up//`；而 `normalize(join(root, key))` 会折叠成 `/tmp/up/x.webp`，
+  //    `startsWith` 永远为假 ⇒ **每一次上传都被判"路径不安全"**（错误是 `object_key_unsafe`，
+  //    排障方向会被带去查 key，而 key 是好的）。`rootDir` 写成 `.` 时同理（前缀变成 `./`）。
+  //    `resolve` 同时做两件事：转绝对路径 + 去掉尾斜杠与 `.` 段。
+  //    尾部分隔符仍要留：/root/evil 不以 "/root/" 开头，/root/x 才以它开头。
+  const root = resolve(rootDir) + sep;
   return {
     async put(key, bytes, _contentType) {
       assertSafeKey(key);
-      const full = normalize(join(root, key));
+      const full = resolve(root, key);
       if (!full.startsWith(root)) throw new Error(`object_key_unsafe`);
       await mkdir(dirname(full), { recursive: true });
       await writeFile(full, bytes);
     },
     async delete(key) {
       assertSafeKey(key);
-      const full = normalize(join(root, key));
+      const full = resolve(root, key);
       if (!full.startsWith(root)) throw new Error(`object_key_unsafe`);
       try {
         await unlink(full);

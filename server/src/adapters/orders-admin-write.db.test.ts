@@ -229,6 +229,18 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     expect(ev.map((r) => r['actor'])).toEqual(['admin:u-a', 'admin:u-a']);
   });
 
+  it('🔴 同一把退款单号的失败**只算一次**（OPS3-06：并发双击会写两条 provider_failed:re_1）', async () => {
+    await seedPaidOrder('o-1', 'refunding');
+    const at = new Date('2026-09-29T01:00:00Z');
+    await recordRefundFailed(db, 'o-1', 'provider_failed:re_1', 'admin:u-a', at);
+    await recordRefundFailed(db, 'o-1', 'provider_failed:re_1', 'admin:u-b', at); // 并发的第二次
+    // 按事件行数会得 2 → 下一次换成第 3 把幂等键，而 KD-4 要求"结果未知"时沿用同一把
+    expect((await findRefundProgress(db, 'o-1')).confirmedFailures).toBe(1);
+
+    await recordRefundFailed(db, 'o-1', 'provider_failed:re_2', 'admin:u-a', at); // 换了单号才算新一次
+    expect((await findRefundProgress(db, 'o-1')).confirmedFailures).toBe(2);
+  });
+
   it('updateAddressSnapshot：重写快照 + 事件用伪状态 address_changed，**状态不变**', async () => {
     await seedPaidOrder('o-1');
     const next = { id: 'a-2', recipient: 'SAN ZHANG', line1: '2 Main St' };

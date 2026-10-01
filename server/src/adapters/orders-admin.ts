@@ -505,7 +505,10 @@ export async function recordRefundPending(
 export interface RefundProgress {
   /** 最新一条退款进度事件是 `refund_pending` 时 = 它的机构单号（下一步是**查询**，不是再 POST）。 */
   pendingRef: string | null;
-  /** 机构**确认**失败的次数（`provider_failed:*`）= 下一次发起用的 attempt（换新幂等键）。 */
+  /**
+   * 机构**确认**失败的次数（`provider_failed:*`）= 下一次发起用的 attempt（换新幂等键）。
+   * ⚠️ 按**不同单号**去重（OPS3-06）：同一把键被并发写两条事件只算一次。
+   */
   confirmedFailures: number;
 }
 
@@ -528,9 +531,17 @@ export async function findRefundProgress(db: Db, orderId: string): Promise<Refun
       latest?.status === 'refund_pending' && typeof latest.note === 'string' && latest.note !== ''
         ? latest.note
         : null,
-    confirmedFailures: rows.filter(
-      (r) => r.status === 'refund_failed' && (r.note ?? '').startsWith('provider_failed'),
-    ).length,
+    // ⚠️ 按**不同单号**去重，不是按事件行数计（OPS3-06）：
+    //    同一把幂等键（re_1）的失败被两个并发请求各写一条事件时，行数 = 2，
+    //    而"这把键已经确认失败过几次"只该是 1。多算一次的直接后果是**下一次换一把新幂等键**
+    //    （`attempt = confirmedFailures + 1`），而 KD-4 要求"结果未知"时**沿用同一把键**——
+    //    换键的代价取决于通道侧有没有额度校验：Stripe 会以"超过可退金额"拒（订单停在 refunding 等人工），
+    //    别的通道则没有这层保护。去重后，两个请求都失败也只是"这把键失败了 1 次"。
+    confirmedFailures: new Set(
+      rows
+        .filter((r) => r.status === 'refund_failed' && (r.note ?? '').startsWith('provider_failed'))
+        .map((r) => r.note ?? ''),
+    ).size,
   };
 }
 

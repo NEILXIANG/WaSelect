@@ -23,6 +23,7 @@ import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { signToken } from './auth.js';
+import { waitUntil } from '../../../test/helpers/chain-server.js';
 
 let db: Db;
 let sink: MemorySink;
@@ -328,6 +329,31 @@ describe('DELETE /admin/banners/{id}', () => {
     }
   });
 
+  it('🔴 审计要留**改前值**：答得出被删的是哪张图、链到哪（OPS3-08）', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await db`
+        insert into banners (id, image_key, link_type, link_id, sort)
+        values ('b-1', 'hero.png', 'product', 'p-cup', 3)
+      `;
+      const r = await call(url, 'DELETE', '/api/v1/admin/banners/b-1', undefined, await bearer());
+      expect(r.status).toBe(204);
+      // 审计是**响应之后**异步写的（中间件挂在 prefinish 上，不与业务同事务）
+      const q = () =>
+        db`select target, before from admin_audit where action = 'DELETE /admin/banners/:id'`;
+      await waitUntil(async () => (await q()).length === 1, '删除的审计行没写进来');
+      const rows = await q();
+      expect(rows).toHaveLength(1);
+      expect(String(rows[0]?.['target'])).toBe('b-1');
+      const before = rows[0]?.['before'] as Record<string, unknown> | null;
+      expect(String(before?.['image_key'])).toBe('hero.png');
+      expect(String(before?.['link_type'])).toBe('product');
+      expect(String(before?.['link_id'])).toBe('p-cup');
+    } finally {
+      await close();
+    }
+  });
+
   it('幂等：不存在的 id 也 204（重复删除不报错）', async () => {
     const { url, close } = await buildServer();
     try {
@@ -345,6 +371,29 @@ describe('DELETE /admin/banners/{id}', () => {
       expect(
         (await call(url, 'DELETE', '/api/v1/admin/banners/b-1', undefined, token)).status,
       ).toBe(204);
+    } finally {
+      await close();
+    }
+  });
+
+  it('🔴 双击删除只留**一行**审计：0 行命中的那次不写（有审计行 ⇔ 改动真的发生了）', async () => {
+    const { url, close } = await buildServer();
+    try {
+      const token = await bearer();
+      await db`
+        insert into banners (id, image_key, link_type, sort) values ('b-1', 'x.png', 'none', 1)
+      `;
+      await call(url, 'DELETE', '/api/v1/admin/banners/b-1', undefined, token);
+      const q = () => db`select target from admin_audit where action = 'DELETE /admin/banners/:id'`;
+      await waitUntil(async () => (await q()).length === 1, '第一次删除的审计行没写进来');
+      await call(url, 'DELETE', '/api/v1/admin/banners/b-1', undefined, token); // 第二次：什么都没删
+      await call(url, 'DELETE', '/api/v1/admin/banners/nope', undefined, token); // 从来就没这条
+      // ⚠️ "没有第二行"不能靠 waitUntil 证明（等不到就是"永远等不到"）：
+      //    给这两次 no-op 一个比审计写入更长的窗口，再断言仍是一行。
+      await new Promise((r) => setTimeout(r, 300));
+      const rows = await q();
+      expect(rows).toHaveLength(1);
+      expect(String(rows[0]?.['target'])).toBe('b-1');
     } finally {
       await close();
     }

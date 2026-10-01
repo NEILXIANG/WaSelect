@@ -281,6 +281,23 @@ describe('POST /auth/admin/login：按来源分桶（AJ-243）', () => {
     expect((await loginFrom('203.0.113.200', EMAIL, PASSWORD)).status).toBe(429);
   });
 
+  it('🔴 邮箱桶已被锁时重试**不扣**来源桶（PAY3-04）：锁到期后正确口令立刻 200，不是再等一轮', async () => {
+    // 攻击者从不同来源把邮箱桶打满（这里直接置锁，等价于"合计 30 次"的终态）
+    await db`
+      insert into login_attempts (key_hash, failed_count, locked_until, first_failed_at, last_failed_at)
+      values (${ADMIN_KEY}, 0, now() + interval '15 minutes', now(), now())
+      on conflict (key_hash) do update set locked_until = now() + interval '15 minutes'
+    `;
+    // 管理员从自己的来源重试 5 次：全是 429（邮箱桶锁着），但**不该**记到他的来源桶上
+    for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
+      expect((await loginFrom('203.0.113.9', EMAIL, PASSWORD)).status).toBe(429);
+    }
+    // 邮箱桶的锁到期 → 管理员应当能立刻登录（现状：他的来源桶被那 5 次扣满了 → 仍 429）
+    await db`update login_attempts set locked_until = now() - interval '1 second' where key_hash = ${ADMIN_KEY}`;
+    const r = await loginFrom('203.0.113.9', EMAIL, PASSWORD);
+    expect(r.status).toBe(200);
+  });
+
   it('来源不同的两个管理员同时存在：各自的失败互不影响（桶里有邮箱，不是只按 IP）', async () => {
     for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
       await loginFrom('198.51.100.7', 'ghost@example.com', `wrong-password-${String(i)}`);

@@ -118,6 +118,21 @@ describe('GET /pay/link/{id}（302 搬运）', () => {
     }
   });
 
+  it('🔴 id 含 NUL（%00）→ 400 / 40001，日志里**没有** unhandled_error（无鉴权可达，扫描器可刷）', async () => {
+    const srv = await buildServer();
+    try {
+      await seedLiveLink('o-live');
+      const res = await fetch(`${srv.url}/api/v1/pay/link/%00?t=${TOKEN}`, { redirect: 'manual' });
+      // PG 的 text 拒收 0x00（22021）。没有 SQLSTATE 22 类的映射时它是 500 + error 级日志，
+      // 而这个入口**不需要登录**，每 IP 每分钟可打 30 次 → 稳定的 5xx 噪声。
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { code?: number }).code).toBe(40001);
+      expect(sink.find('unhandled_error')).toHaveLength(0);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('不放行 CORS：带 Origin 也不回 access-control-allow-origin（契约承诺）', async () => {
     const srv = await buildServer();
     try {

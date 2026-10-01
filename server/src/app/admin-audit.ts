@@ -47,10 +47,27 @@ import { redact } from '../redact.js';
 
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const AUDIT_BEFORE_KEY = 'adminAuditBefore';
+const AUDIT_SKIP_KEY = 'adminAuditSkip';
 
 /** 路由提供"改前值"（只对不可逆操作用，见文件头 @why）。 */
 export function setAuditBefore(res: Response, before: unknown): void {
   res.locals[AUDIT_BEFORE_KEY] = before;
+}
+
+/**
+ * 路由**显式**声明"这次 2xx 没有改动发生，不要写审计"（OPS3-08）。
+ *
+ * @why 文件头那条等价关系（有审计行 ⇔ 改动真的发生了）在**幂等写**上会被打破：
+ *      `DELETE /admin/banners/{id}` 对不存在的 id 也回 204（幂等，@limitation 二），
+ *      于是"双击删除"会留下**两行**审计，而第二行声称的删除**根本没有发生**——
+ *      事后按审计回溯"什么时候删的、删了什么"，会数出两次删除。
+ *      审计是 append-only（触发器拒 UPDATE/DELETE），写进去就删不掉，所以只能不写。
+ * @why 做成显式的"跳过"而不是让中间件去猜（比如"before 为 null 就不写"）：
+ *      猜会让"真的删了但改前值取不到"这种情况**静默丢一行审计**——
+ *      而那正是最需要留痕的一类（删了什么说不清）。跳过必须是路由明说的。
+ */
+export function skipAudit(res: Response): void {
+  res.locals[AUDIT_SKIP_KEY] = true;
 }
 
 /**
@@ -83,6 +100,8 @@ export function adminAuditMiddleware(deps: {
       const routePath = (req.route as { path?: unknown } | undefined)?.path;
       if (res.statusCode < 200 || res.statusCode >= 300) return;
       if (principal?.role !== 'admin' || typeof routePath !== 'string') return;
+      // 路由显式声明"这次没有改动发生"（OPS3-08；@see skipAudit 的 @why）
+      if (res.locals[AUDIT_SKIP_KEY] === true) return;
       const id = req.params['id'];
       const entry = {
         actor: `admin:${principal.sub}`,

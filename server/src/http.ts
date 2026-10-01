@@ -420,7 +420,10 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
     // ⚠️ 判定顺序不能改：必须先判"是不是报文解析错"，再判"是不是 AppError"。
     //    解析错的**原始** err 是 SyntaxError（不是 AppError），若按 `instanceof AppError` 先判，
     //    它会落进 unhandled_error 的 error 通道——客户端畸形请求天天有，直接淹没真实的 5xx。
-    if (isBodyParseError(err)) {
+    // ⚠️ 两个"客户端可控"的分支共用 warn 通道（不改这里的话，SQLSTATE 22 类会被
+    //    `err instanceof AppError` 判否 → 落进下面的 error 级 `unhandled_error`，
+    //    修复了响应码却没修复告警噪声，那正是 ORD3-04 要去掉的一半）。
+    if (isBodyParseError(err) || sqlDataExceptionCode(err) !== null) {
       // 客户端可控输入导致的失败：不是我们的故障 → warn 级，且 normalizeError 已确保不带堆栈
       httpLog.warn('request_rejected', {
         http_method: req.method,
@@ -521,6 +524,31 @@ function parseErrorReason(err: unknown): string {
   }
 }
 
+/**
+ * SQLSTATE **22 类（Data Exception）**：库**拒收这个值**本身（NUL 字符 / 超长 / 形状不对）。
+ *
+ * @returns SQLSTATE（形如 `22021`）；不是这一类 → null
+ *
+ * @why 客户端把 PG 拒收的字符送进来时（最典型是 **NUL**：`%00` 被 Express 原样解码，
+ *      而 PG 的 `text` 不接受 `0x00`，报 `22021 invalid byte sequence`），
+ *      我们没有映射任何 SQLSTATE，于是它落成 **50000 + error 级 `unhandled_error`**——
+ *      一个不需要登录的入口（`GET /pay/link/%00?t=…`）就能被扫描器稳定刷出 5xx 告警。
+ *      这类错的**性质**是"客户端送了一个库不收的值"，与报文解析错同类：warn 级 + 40001。
+ *      放在兜底层一处映射，胜过在每个入口各判一次"字符串里有没有控制字符"
+ *      （各判一次必然漏，而漏了的那个入口就是下一个 5xx）。
+ * @why 判 **22 类**而不是只判 `22021`：22 类的全部子码都是"值本身有问题"
+ *      （`22001` 超长、`22003` 数值越界、`22P02` 文本转不成目标类型——`page=1e300` 那类
+ *      分页参数溢出就是它），没有一个是"系统故障"。相反 5xx 才是"我们这边坏了"，
+ *      把 22 类留在 500 里等于把"参数没校验好"表现成"服务挂了"。
+ * @limitation `22P02` 也可能是**我们**把没校验过的形状交给了 PG（校验缺失而不只是输入脏）——
+ *              那时 40001 会把它表现成"客户端的问题"。所以 reason 里**带上 SQLSTATE**，
+ *              运维按 `sql_data_exception:22P02` 能一眼区分，而不是淹没在泛化的 40001 里。
+ */
+function sqlDataExceptionCode(err: unknown): string | null {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && code.length === 5 && code.startsWith('22') ? code : null;
+}
+
 /** 把各类异常归一成 {status, body, logFields}：解析错误也要有业务码，不能裸 500。 */
 function normalizeError(err: unknown): {
   status: number;
@@ -534,6 +562,22 @@ function normalizeError(err: unknown): {
       status,
       body,
       logFields: { err_code: appErr.code, err_message: appErr.message, reason: appErr.details },
+    };
+  }
+  const sqlClass22 = sqlDataExceptionCode(err);
+  if (sqlClass22 !== null) {
+    // ⚠️ 与上面同一条理由（客户端送了库不收的值），但 reason 带 SQLSTATE 以便区分（见 @limitation）
+    const appErr = new AppError(40001, { reason: `sql_data_exception:${sqlClass22}` });
+    const { status, body } = toErrorResponse(appErr);
+    return {
+      status,
+      body,
+      logFields: {
+        err_code: appErr.code,
+        err_message: appErr.message,
+        reason: appErr.details,
+        sqlstate: sqlClass22,
+      },
     };
   }
   const { status, body } = toErrorResponse(err);
