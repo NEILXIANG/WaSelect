@@ -52,12 +52,45 @@ describe('fxRows', () => {
       },
     ]);
     expect(row).toEqual({
+      key: 'USD|2026-09-27T00:00:00Z|0.0067',
       quote: 'USD',
       rateText: '0.0066',
       rawRateText: '0.0067',
       bufferText: '0.01',
       effectiveText: '2026-09-27 09:00',
+      isCurrent: false,
     });
+  });
+
+  it('is_current 原样转述（服务端说当前生效就是当前生效，前端不重判）', () => {
+    const rows = fxRows([
+      { quote: 'USD', raw_rate: 0.0067, effective_from: '2099-01-01T00:00:00Z', is_current: true },
+      { quote: 'USD', raw_rate: 0.67, effective_from: '2026-09-01T00:00:00Z', is_current: false },
+    ]);
+    expect(rows.map((r) => r.isCurrent)).toEqual([true, false]);
+  });
+
+  it('🔴 同一分钟的两行 key 必须不同（ADM3-04：effectiveText 只到分钟，不能拿它当 key）', () => {
+    // 真实场景：留空生效时间 → 服务端按毫秒取当前时刻。同一分钟内录两次，两行展示文本完全相同。
+    const rows = fxRows([
+      {
+        quote: 'USD',
+        raw_rate: 0.0067,
+        rate: 0.0069,
+        buffer: 0.03,
+        effective_from: '2026-10-01T03:10:41.900Z',
+      },
+      {
+        quote: 'USD',
+        raw_rate: 0.0068,
+        rate: 0.007,
+        buffer: 0.03,
+        effective_from: '2026-10-01T03:10:12.100Z',
+      },
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.effectiveText).toBe(rows[1]?.effectiveText); // 展示文本确实撞了
+    expect(rows[0]?.key).not.toBe(rows[1]?.key); // 但 key 不能撞
   });
 
   it('⚠️ 缺字段显示占位符而不是 "undefined"', () => {
@@ -218,6 +251,31 @@ describe('rateErrors（整表校验）', () => {
     expect(r.errors.some((e) => e.includes('重复'))).toBe(true);
   });
 
+  it('🔴 重量**都没填**的两行：只报"必填"，不报"重复"（ADM3-06：两处口径必须一致）', () => {
+    // 场景：连点两次"新增一档"，重量都留空。旧实现用 `${carrier}|${String(max)}` 判重，
+    // String(null) === 'null' → 两行被判成同一档，错误区出现一条根本不存在的"重复"。
+    const r = rateErrors([
+      { carrier: 'yamato', maxWeightG: '', priceJpy: '2200', active: true },
+      { carrier: 'yamato', maxWeightG: '', priceJpy: '4050', active: true },
+    ]);
+    expect(r.errors.some((e) => e.includes('重复'))).toBe(false);
+    expect(r.errors.filter((e) => e.includes('重量上限必填'))).toHaveLength(2);
+    // 行上的"档位重复"标记（rateDuplicates）同样是 false——两边同口径
+    expect(
+      rateDuplicates([
+        { carrier: 'yamato', maxWeightG: '' },
+        { carrier: 'yamato', maxWeightG: '' },
+      ]),
+    ).toEqual([false, false]);
+  });
+
+  it('🔴 判重与 rateDuplicates 同口径：同一档填了两个不同运费 → 两边都说是重复', () => {
+    const rows = [formRow('2000', '4050'), formRow('2000', '4950')];
+    expect(rateErrors(rows).errors.some((e) => e.includes('重复'))).toBe(true);
+    // 重复组里的**每一行**都会被标（不是只标后出现的那行）
+    expect(rateDuplicates(rows)).toEqual([true, true]);
+  });
+
   it('⚠️ 上限非整数 / 小于 1 → 拒', () => {
     expect(rateErrors([formRow('0', '100')]).errors[0]).toContain('重量上限');
     expect(rateErrors([formRow('2.5', '100')]).errors[0]).toContain('重量上限');
@@ -339,60 +397,72 @@ describe('FX_QUOTES 与契约的双向比对', () => {
   });
 });
 
-describe('currentFxRawRates：保存前核对用的基准（A8 残留 / AJ-229）', () => {
-  const NOW = Date.parse('2026-09-30T00:00:00.000Z');
-  const row = (quote: string, raw: number, at: string) => ({
+describe('currentFxRawRates：保存前核对用的基准（A8 残留 / AJ-229 / ADM3-05）', () => {
+  /** 服务端行：`cur` = 服务端判定的"当前已生效"。 */
+  const row = (quote: string, raw: number, at: string, cur = false) => ({
     quote,
     raw_rate: raw,
     rate: raw * 1.03,
     buffer: 0.03,
     effective_from: at,
+    is_current: cur,
   });
 
-  it('🔴 取"不晚于此刻的最新一行"——不是最早的，也不是尚未生效的', () => {
+  it('🔴 基准取**服务端标的**那一行——即使它的生效时间晚于本机时钟（电脑慢了）', () => {
+    // 电脑慢：本机以为是 2026-09-30，服务端已把 2099 那行判为当前生效（真实场景是"慢几分钟"）
     const list = [
-      row('USD', 0.0071, '2099-01-01T00:00:00.000Z'), // 未来
-      row('USD', 0.0067, '2026-09-20T00:00:00.000Z'), // 当前
-      row('USD', 0.67, '2026-09-01T00:00:00.000Z'), // 最早（录错后被更正）
+      row('USD', 0.0067, '2099-01-01T00:00:00.000Z', true),
+      row('USD', 0.67, '2026-09-01T00:00:00.000Z'), // 录错后被更正的那条：不是基准
     ];
-    expect(currentFxRawRates(list, NOW)).toEqual({ USD: 0.0067 });
+    expect(currentFxRawRates(list)).toEqual({ USD: 0.0067 });
   });
 
-  it('不依赖入参顺序（服务端改了排序也不该跟着错）', () => {
+  it('🔴 生效时间更早但服务端**没标**的行不作基准（电脑快了：预约行不能被当成当前）', () => {
     const list = [
-      row('USD', 0.67, '2026-09-01T00:00:00.000Z'),
-      row('USD', 0.0067, '2026-09-20T00:00:00.000Z'),
+      row('USD', 0.0071, '2099-01-01T00:00:00.000Z'), // 预约行：本机时钟快的话会被误当当前
+      row('USD', 0.0067, '2026-09-20T00:00:00.000Z', true),
+    ];
+    expect(currentFxRawRates(list)).toEqual({ USD: 0.0067 });
+  });
+
+  it('每个币种各自取自己的当前行（多币种互不干扰）', () => {
+    const list = [
       row('USD', 0.0071, '2099-01-01T00:00:00.000Z'),
+      row('USD', 0.0067, '2026-09-20T00:00:00.000Z', true),
+      row('CNY', 0.048, '2026-09-20T00:00:00.000Z', true),
     ];
-    expect(currentFxRawRates(list, NOW)).toEqual({ USD: 0.0067 });
+    expect(currentFxRawRates(list)).toEqual({ USD: 0.0067, CNY: 0.048 });
   });
 
   it('取的是 raw_rate 而不是含缓冲的 rate（否则倍数恒偏 1/(1+buffer)）', () => {
-    expect(currentFxRawRates([row('CNY', 0.048, '2026-09-01T00:00:00.000Z')], NOW)).toEqual({
+    expect(currentFxRawRates([row('CNY', 0.048, '2026-09-01T00:00:00.000Z', true)])).toEqual({
       CNY: 0.048,
     });
   });
 
-  it('恰好此刻生效的算当前；只有未来行的币种不出现（= 没有基准）', () => {
-    expect(currentFxRawRates([row('USD', 0.0067, '2026-09-30T00:00:00.000Z')], NOW)).toEqual({
-      USD: 0.0067,
-    });
-    expect(currentFxRawRates([row('USD', 0.0071, '2026-09-30T00:00:00.001Z')], NOW)).toEqual({});
+  it('🔴 服务端没下发 is_current → **不猜**：该币种不出现（= 没有基准 → 要求勾选）', () => {
+    // 老包新包混部时最危险的是"拿本机时钟猜出一个基准、算出不可疑"——那是一键写库。
+    expect(currentFxRawRates([row('USD', 0.0067, '2026-09-01T00:00:00.000Z')])).toEqual({});
+    expect(currentFxRawRates([{ quote: 'USD', raw_rate: 0.0067, is_current: 'true' }])).toEqual({});
   });
 
-  it('脏数据逐行跳过：非数组 / 缺字段 / 非正数 / 时间认不出', () => {
-    expect(currentFxRawRates(null, NOW)).toEqual({});
+  it('同币种两行都标 true（口径异常）：取列表里第一条（倒序 = 最新的），不随遍历顺序漂移', () => {
+    const list = [
+      row('USD', 0.0067, '2026-09-20T00:00:00.000Z', true),
+      row('USD', 0.67, '2026-09-01T00:00:00.000Z', true),
+    ];
+    expect(currentFxRawRates(list)).toEqual({ USD: 0.0067 });
+  });
+
+  it('脏数据逐行跳过：非数组 / 缺字段 / 非正数', () => {
+    expect(currentFxRawRates(null)).toEqual({});
     expect(
-      currentFxRawRates(
-        [
-          null,
-          { quote: 'USD' },
-          row('USD', 0, '2026-09-01T00:00:00.000Z'),
-          row('USD', 0.0067, 'not-a-date'),
-          row('', 0.0067, '2026-09-01T00:00:00.000Z'),
-        ],
-        NOW,
-      ),
+      currentFxRawRates([
+        null,
+        { quote: 'USD', is_current: true },
+        { quote: 'USD', raw_rate: 0, is_current: true },
+        { quote: '', raw_rate: 0.0067, is_current: true },
+      ]),
     ).toEqual({});
   });
 });
@@ -443,9 +513,10 @@ describe('fxSaveStep：保存闸门（AJ-229）', () => {
     });
   });
 
-  it('不可疑 + 已确认过**这份**表单 → save', () => {
+  it('不可疑 + 已确认过**这份**表单 → save（requireAck=false 也要带上：面板靠它决定要不要渲染复选框）', () => {
     expect(fxSaveStep({ form, currentRate: 0.0067, confirmKey: key, ackKey: null })).toEqual({
       kind: 'save',
+      requireAck: false,
     });
   });
 
@@ -461,7 +532,11 @@ describe('fxSaveStep：保存闸门（AJ-229）', () => {
       kind: 'confirm',
       requireAck: true,
     });
-    expect(fxSaveStep({ ...base, confirmKey: k, ackKey: k })).toEqual({ kind: 'save' });
+    // ⚠️ save 分支**必须**带 requireAck=true（ADM3-03）：面板据此让复选框在勾选后继续留在屏幕上
+    expect(fxSaveStep({ ...base, confirmKey: k, ackKey: k })).toEqual({
+      kind: 'save',
+      requireAck: true,
+    });
   });
 
   it('🔴 确认的是旧表单（之后改了值）→ 回到 confirm，不会直接 save', () => {

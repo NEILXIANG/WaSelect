@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.17
+  version: 0.6.19
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -202,6 +202,33 @@ info:
     0.6.17（工程库第三轮审查 DOM3-02 / 第二轮 DB2-03）：`GET /admin/disputes` 的查询参数 `status` 枚举补 `withdrawn`——
       0.6.13 起 `Dispute.dispute_status` 已是四值（含 withdrawn），实现（`parseDisputeStatus`）也一直接受它，
       只有这个查询参数的声明停在三值；单测原来只比对响应 schema，于是这处漂移一直是绿的。
+    0.6.18（工程库第三轮审查 ADM3-02 + DB3-02）：`PUT /admin/products/{id}` **带乐观锁**。
+      ① 请求体在 `ProductInput` 之外**并列**增 `expected_updated_at`（**必填**，ISO 8601）：
+         服务端以 `where … and date_trunc('millisecond', updated_at) = $x` 更新，0 行命中时
+         ——id 不存在 → 404 / 40401；`updated_at` 对不上 → **409 / 40914**（整行**未写**）。
+         缺失或不是合法时间 → **400 / 40001**（不退化成"无锁覆盖"）。
+      @why 整行 PUT + 编辑页数据取自列表快照：运营只补一张图保存，就会把期间别人改过的
+      售价 / 重量 / 报关品名整条回滚，且不报任何错（ADM3-02）。"无锁但能用"比"带锁但会响亮失败"危险。
+      @why 用 `updated_at` 而不是新增版本号列：`products.updated_at` 已存在、已在响应里下发、
+      语义也正是"这一版是哪一版"，新增一列要动迁移 + 三处写入点；代价见 ②。
+      ⚠️ `date_trunc('millisecond', …)` **不能省**：Postgres `timestamptz` 默认精度 6 位（微秒），
+      而客户端拿到的是毫秒精度的 ISO 串——直接等值比较会让**每一笔** PUT 都被判成冲突。
+      ② 行为变更：`products.updated_at` 的语义收窄为「**商品信息**最后被改的时刻」——
+         `decrementStock` / `incrementStock`（下单扣减、取消与关单回补）**不再**刷新它。
+      @why 它同时是管理端列表的排序键：买家下一单就把商品顶到第 1 位，运营翻页时整体位移 → 漏行 + 重行（DB3-02）；
+      而在 ① 之后，每次成交还会把运营正在进行的编辑判定为"被别人改过"（AJ-175 的
+      "编辑期间下单仍能保存、不覆盖库存"就此失效）。库存是**实时余额**，不是商品信息。
+      ⚠️ `PATCH /admin/products/{id}/status`（上下架）**仍然**刷新它：上下架是商品信息的一部分。
+      ③ 新增错误码 **40914**（这个商品在你打开之后被别人改过了）。
+    0.6.19（工程库第三轮审查 ADM3-05）：`GET /admin/fx` 的 `FxRate` **增带 `is_current`**（boolean，服务端按自己的时钟判定）。
+      @why 前端原先拿**浏览器时钟**与 `effective_from` 比来推"哪一行当前生效"，而"立即生效"的时刻是服务端打的：
+      管理员电脑慢几分钟，刚保存的那行被判成"尚未生效"，保存前的量级核对基准回退到上一条
+      （先录错、马上改正时，第二次核对拿的是**错误值之前**那条）；快几小时则把预约行当成当前值。
+      "现在几点"只有一个权威，就是服务端。下发**布尔**而不是下发 `now`，
+      是为了让前端不存在第二份"哪一行是当前"的判定（第二份必然漂移）。
+      ⚠️ 该字段**缺省不算 true**：前端遇到缺失必须按"没有基准"处理（要求人工勾选确认），
+      🈲 不得退回用本机时钟猜——猜出来的"不可疑"会一键写库。
+      同币种**至多一行**为 true；判定与 `findLatestFxRate`（POST 侧算"上一条"）同源。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -233,6 +260,7 @@ x-error-codes:
     40911: 不能拉黑管理员账号
     40912: 包裹超过可配送的重量上限，请拆单（0.6.16：有运费表但超过最大一档；运费表缺失仍是 50004）
     40913: 未付款的订单太多了，请先完成支付或取消后再下单（0.6.16：每用户在途单上限）
+    40914: 这个商品在你打开之后被别人改过了（0.6.18：PUT /admin/products/{id} 的乐观锁冲突；整行未写，前端须保留表单并提示刷新后对照最新值再保存）
     42901: 请求过于频繁
     50000: 服务器内部错误
     50001: 支付创建失败
@@ -423,11 +451,11 @@ paths:
       responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/products/{id}:
     put:
-      summary: 更新商品字段（**不改上下架状态**；stock 省略即不改）；id 不存在 → **40401**
-      description: 0.6.9：上下架只走 PATCH `/status`，本接口不碰 status（原实现会把已下架商品悄悄改回 active）；stock 省略即保持当前库存（AJ-175）。0.6.6 补：🈲 不存在的 id **不得**返回 200——那会让运营以为改成功了、实际什么都没改（静默失败）。与 `/admin/banners/{id}` 的 PUT 同口径（40402）
+      summary: 更新商品字段（**不改上下架状态**；stock 省略即不改）；带**乐观锁**：expected_updated_at 对不上 → **40914**
+      description: 0.6.9：上下架只走 PATCH `/status`，本接口不碰 status（原实现会把已下架商品悄悄改回 active）；stock 省略即保持当前库存（AJ-175）。0.6.6 补：🈲 不存在的 id **不得**返回 200——那会让运营以为改成功了、实际什么都没改（静默失败）。与 `/admin/banners/{id}` 的 PUT 同口径（40402）。0.6.18 补：请求体**必须**带 `expected_updated_at`（编辑页打开时那一行的 `updated_at`，由 `GET /admin/products` 下发），服务端按它做乐观锁；对不上时**整行不写**并回 409 / 40914（不是 40401：商品在，只是版本不是你看到的那一版）。缺该字段或不是合法时间 → 400 / 40001，**不退化成无锁覆盖**
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProductInput'}}}}
-      responses: {'200': {description: 'OK（回整行 AdminProduct：与 Banner PUT 的空体不同，这里实现本就回整行，前端据此刷新表单）', content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+      requestBody: {required: true, content: {application/json: {schema: {allOf: [{$ref: '#/components/schemas/ProductInput'}, {type: object, required: [expected_updated_at], properties: {expected_updated_at: {type: string, format: date-time, description: '乐观锁凭据：编辑页打开时该行的 AdminProduct.updated_at（ISO 8601）。与库里当前值（按毫秒截断比较）不一致 → 409 / 40914'}}}]}}}}
+      responses: {'200': {description: 'OK（回整行 AdminProduct：与 Banner PUT 的空体不同，这里实现本就回整行，前端据此刷新表单）', content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/products/{id}/status:
     patch:
       summary: 上架 / 下架；id 不存在 → **40401**
@@ -443,8 +471,8 @@ paths:
       responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ImageSet'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/fx:
     get:
-      summary: 展示汇率列表（**含历史与未来生效行**；quote 升序、同币种内 effective_from 倒序）
-      description: 0.6.3 更正——旧文案「当前生效」会让人以为只返回已生效的行；实际不过滤，否则刚提交的未来汇率在列表里消失，运营会以为没保存成功（AJ-150 ①）。排序保证每个币种最新一行排在最上面
+      summary: 展示汇率列表（**含历史与未来生效行**；quote 升序、同币种内 effective_from 倒序；逐行带 is_current）
+      description: 0.6.3 更正——旧文案「当前生效」会让人以为只返回已生效的行；实际不过滤，否则刚提交的未来汇率在列表里消失，运营会以为没保存成功（AJ-150 ①）。排序保证每个币种最新一行排在最上面。0.6.19 补：每行带 `is_current`（服务端时钟判定，同币种至多一行 true）——"哪一行正在起作用"由服务端标注，消费方不得拿本机时钟推断（ADM3-05）
       responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/FxRate'}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
     post:
       summary: 管理员维护展示汇率（**追加一行**；rate 由服务端按 raw_rate × (1 + FX_BUFFER_RATE) 算出，不收 rate）
@@ -531,7 +559,7 @@ components:
     ImageSet: {type: object, properties: {thumb: {type: string}, card: {type: string}, detail: {type: string}, image_key: {type: string, description: '仅 POST /admin/upload 响应里出现（0.6.8）：detail 档存储键，供 BannerInput.image_key 使用（AJ-143/AJ-166）；存量 Product.images 条目没有它'}}}
     ProductCard: {type: object, properties: {id: {type: string}, title: {type: string}, category: {type: string}, price_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, image: {$ref: '#/components/schemas/ImageSet'}, stock: {type: integer}, status: {type: string}}}
     Product: {description: '商品详情。实现不返回 ProductCard.image（缩略图只在列表卡片用，详情用 images）；AdminProduct 另不返回 display / image（0.6.10 ⑦）', allOf: [{$ref: '#/components/schemas/ProductCard'}, {type: object, properties: {description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, weight_g: {type: integer}, compliance_tags: {type: array, items: {type: string}}, hs_code: {type: string}, customs_desc_en: {type: string}, origin_country: {type: string}, ship_within_business_days: {type: integer, minimum: 1, maximum: 30, description: '0.6.11（AJ-180）：发货时限承诺（付款后 N 个工作日内发出，FTC / D-39⑦）；店铺级配置 SHIP_WITHIN_BUSINESS_DAYS'}}}]}
-    AdminProduct: {description: '0.6.11：不返回 ship_within_business_days（店铺级配置，只随买家商品详情下发）', allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time}}}]}
+    AdminProduct: {description: '0.6.11：不返回 ship_within_business_days（店铺级配置，只随买家商品详情下发）', allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time, description: '商品**信息**最后被改的时刻（0.6.18：不含库存变动——下单扣减与取消/关单回补都不刷新它）。同时是 `PUT /admin/products/{id}` 的乐观锁凭据（`expected_updated_at`）与管理端列表的排序键'}}}]}
     ProductInput: {type: object, required: [title, category, price_jpy, weight_g, customs_desc_en, origin_country], properties: {title: {type: string}, category: {type: string, enum: [beauty, daily, kitchen, food]}, description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, price_jpy: {type: integer, minimum: 1}, cost_jpy: {type: integer}, weight_g: {type: integer, minimum: 1}, stock: {type: integer, minimum: 0, description: '可选（0.6.9/AJ-175）：POST 省略 = 0；PUT 省略 = 不改库存（防编辑页打开期间的买家扣减被旧值覆盖）。填了就必须是 ≥0 整数，否则 40001'}, compliance_tags: {type: array, items: {type: string, enum: [liquid, battery, cosmetic, food, flammable, aerosol, electrical, quasi_drug, sunscreen, children_product, alcohol]}, description: 'flammable / aerosol / electrical / quasi_drug / sunscreen / children_product / alcohol 七个标签上架即拒（40001）：前两者为日本邮便航空禁寄品（D-42），electrical 为 MVP 不上电器（D-45），quasi_drug（医薬部外品/薬用）与 sunscreen（SPF）在美国 FDA 口径属 OTC 药品、children_product 需 CPSIA 检测、alcohol 需酒类免许且不可邮寄（D-51）；customs_desc_en 含 medicated/whitening/SPF/sunscreen/drug 亦拒'}, hs_code: {type: string, description: '报关 HS 码；缺省时由 Zonos 自动识别、管理员核对；食品/化妆品必填（D-39/D-42）'}, customs_desc_en: {type: string, description: '英文报关品名，上架必填（D-39）'}, origin_country: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', enum: [JP], description: '原产地 ISO 3166-1 alpha-2，必填无默认，按商品包装实录；MVP 仅接受 JP——非 JP 一律 400 拒绝上架（D-42/D-43）'}, title_ja: {type: string, description: '日文品名（采购用）'}, jan_code: {type: string, description: 'JAN 码'}, purchase_source: {type: string, description: '采购渠道'}}}
     AddressInput: {type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, pattern: '^[ -~]+$'}, phone: {type: string, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, pattern: '^[ -~]+$'}, line2: {type: string, pattern: '^[ -~]*$'}, city: {type: string, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2}, postal_code: {type: string, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
     Address: {allOf: [{$ref: '#/components/schemas/AddressInput'}, {type: object, properties: {id: {type: string}}}]}
@@ -550,5 +578,5 @@ components:
     BannerInput: {type: object, required: [image_key], properties: {image_key: {type: string}, link_type: {type: string, enum: [none, product, category], default: none}, link_id: {type: string, description: 'link_type ≠ none 时必填（缺 → 40001 link_id_required）'}, sort: {type: integer, default: 0, minimum: 0}, active: {type: boolean, default: true}, starts_at: {type: string, format: date-time}, ends_at: {type: string, format: date-time}}}
     Banner: {allOf: [{$ref: '#/components/schemas/BannerInput'}, {type: object, properties: {id: {type: string}, image: {type: string, description: 'img.<domain> 完整 URL'}}}]}
     Dispute: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, payment_id: {type: string}, dispute_id: {type: string}, dispute_status: {type: string, enum: [open, won, lost, withdrawn], description: 'withdrawn（0.6.13 / B1 AJ-193）= 机构撤回、未进入正式拒付（查询函 warning_closed / Radar prevented）：解除 has_dispute 限制、不计输赢。lost 是唯一保持限制的结案结果'}, dispute_amount: {type: integer, description: '**最小货币单位**（同 charge_amount）：3350 = $33.50（B43 / AJ-214）'}, charge_currency: {type: string}, opened_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time}}}
-    FxRate: {type: object, properties: {quote: {type: string}, rate: {type: number}, raw_rate: {type: number}, buffer: {type: number}, effective_from: {type: string, format: date-time}}}
+    FxRate: {type: object, properties: {quote: {type: string}, rate: {type: number}, raw_rate: {type: number}, buffer: {type: number}, effective_from: {type: string, format: date-time}, is_current: {type: boolean, description: '0.6.19：这一行是否**当前已生效**，由服务端按自己的时钟判定（`effective_from <= now` 的同币种最新一行）。同币种至多一行为 true；全部行都未生效时为 false。🈲 消费方不得拿本机时钟自行推断——管理员电脑的时钟偏差会让"刚保存的立即生效行"被当成未来行'}}}
     ShippingRate: {type: object, required: [carrier, max_weight_g, price_jpy], properties: {carrier: {type: string}, max_weight_g: {type: integer}, price_jpy: {type: integer}, active: {type: boolean, default: true}}}

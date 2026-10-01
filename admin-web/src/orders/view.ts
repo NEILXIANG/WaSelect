@@ -1,8 +1,13 @@
 /**
  * 职责：订单管理的**视图纯函数**（列表行 / 三个操作的闸门 / 请求体 / 展示文案）。
  *
- * @why 与 `products/view.ts` 同一条纪律：vitest 的 unit 层是 node 环境，
- *      没有 jsdom 也没有组件测试 harness，逻辑写在 `.tsx` 里就只能靠人肉点。
+ * @why 与 `products/view.ts` 同一条纪律：逻辑抽成**纯函数**才能用**边界表**钉住——
+ *      订单状态 × 三个不可逆动作的组合有几十种，写在 `.tsx` 里每改一次都要人肉点一遍，
+ *      而这类组合错的表现恰恰是"该灰的按钮没灰"（点了才知道 = 把服务端 409 当交互设计）。
+ *      ⚠️ 2026-10-01 订正（ADM3-07）：这里原写"unit 层是 node 环境、没有 jsdom 也没有组件测试
+ *      harness"——`admin-web/src/testing/dom.ts` 落地后 jsdom 组件用例已可跑（`*.dom.unit.test.ts`），
+ *      那句已不是事实。真实的理由仍是成本：组件用例要挂载、要等异步、断言还依赖 DOM 结构，
+ *      而"输入 → 允许/不允许"的判定写成表格就是几行。**结论（逻辑放 view）不变，理由换成真的**。
  *
  * @why **前端要重复一遍"能不能点"的判断**（发货 / 退款 / 改址）：
  *      这三个按钮点了之后是**不可逆的资金或物流动作**——
@@ -227,8 +232,12 @@ export function addressGate(order: unknown): Gate {
  * 订单地址 → 一行文案（空段跳过，防止出现"Seattle，，WA"）。
  *
  * @why 放进 view 而不是写在 `.tsx` 里：那是**字符串拼装逻辑**，
- *      写在组件里就进不了门禁（tsx 不收覆盖率、也没有组件测试 harness），
- *      而它错的样子恰恰是"看一眼像对的"——多一个空逗号没人会发现。
+ *      写成纯函数可以直接断言"多一个空逗号"这种边界——它错的样子恰恰是"看一眼像对的"。
+ *      ⚠️ 2026-10-01 订正（ADM3-07）：原写"tsx 不收覆盖率、也没有组件测试 harness"，
+ *      后半句已不成立（`testing/dom.ts` 已可挂组件，本目录就有 `*.dom.unit.test.ts`）；
+ *      前半句仍是当前口径但理由要写准：`.tsx` **不进覆盖率统计**是刻意的
+ *      （@see vitest.coverage-gates.ts：组件用例断言依赖 DOM 结构，收进来会让阈值被 DOM 改动牵着走），
+ *      不是"测不了"。
  */
 export function addressSummary(order: unknown): string {
   const addr = (order as { address?: unknown } | null)?.address;

@@ -54,6 +54,14 @@ export function FxPanel({ api }: FxPanelProps) {
    */
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   const [ackKey, setAckKey] = useState<string | null>(null);
+  /**
+   * 提交中（ADM3-04）。
+   * @why 没有它时，"确认保存"连点两下就发出两笔 POST：第一笔用了当前时刻、第二笔也用当前时刻，
+   *      而 `UNIQUE(quote, effective_from)` 让其中一笔 40910；更常见的是先存了一笔错的、
+   *      再存一笔对的，两边都留下审计记录，"当时到底存了几次"从此说不清。
+   *      双击是运营改主意时最常见的动作，不能靠"手别抖"。
+   */
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,7 +69,8 @@ export function FxPanel({ api }: FxPanelProps) {
     try {
       const list = await listFx(api);
       setRows(fxRows(list));
-      setCurrentRates(currentFxRawRates(list, Date.now()));
+      // ⚠️ 不传本机时钟：`is_current` 由服务端按自己的时钟判定（ADM3-05），见 view.ts 的 @why
+      setCurrentRates(currentFxRawRates(list));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -83,6 +92,7 @@ export function FxPanel({ api }: FxPanelProps) {
   const save = async (): Promise<void> => {
     setError('');
     setOk('');
+    setSaving(true);
     try {
       await setFx(api, toFxBody(form));
       setOk(fxSavedText(form));
@@ -91,6 +101,7 @@ export function FxPanel({ api }: FxPanelProps) {
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
+      setSaving(false);
       setConfirmKey(null);
       setAckKey(null);
     }
@@ -105,6 +116,7 @@ export function FxPanel({ api }: FxPanelProps) {
    *      勾选之后改值就绕过了全部核对。
    */
   const attempt = (): void => {
+    if (saving) return; // 连点保护（ADM3-04）：按钮的 disabled 之外再兜一次
     if (step.kind === 'invalid') {
       setError(step.message);
       return;
@@ -136,12 +148,17 @@ export function FxPanel({ api }: FxPanelProps) {
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={`${r.quote}|${r.effectiveText}`}>
+            <tr key={r.key}>
               <td>{r.quote}</td>
               <td>{r.rateText}</td>
               <td>{r.rawRateText}</td>
               <td className="muted">{r.bufferText}</td>
-              <td className="muted">{r.effectiveText}</td>
+              {/* ⚠️ "当前生效"由服务端标（ADM3-05）：这张表是只能追加的历史视图，
+                  不标的话运营只能靠生效时间去推哪一行正在起作用（ADM-10）。 */}
+              <td className="muted">
+                {r.effectiveText}
+                {r.isCurrent ? '（当前生效）' : ''}
+              </td>
             </tr>
           ))}
           {rows.length === 0 && !loading && (
@@ -190,7 +207,10 @@ export function FxPanel({ api }: FxPanelProps) {
         )}
         {confirming ? (
           <div className="row2">
-            {step.kind === 'confirm' && step.requireAck && (
+            {/* ⚠️ 渲染条件是"这笔值要不要勾"（`requireAck`），不是"当前处于哪一步"（`kind`）：
+                勾选会让 `kind` 变成 `save`，按 `kind === 'confirm'` 渲染的旧写法会让复选框
+                勾完就消失——运营想撤回勾选再核对一遍时找不到它（ADM3-03）。 */}
+            {step.kind !== 'invalid' && step.requireAck && (
               <label className="label">
                 <input
                   type="checkbox"
@@ -203,10 +223,10 @@ export function FxPanel({ api }: FxPanelProps) {
             <button
               type="button"
               className="btn"
-              disabled={step.kind === 'confirm' && step.requireAck && !ack}
+              disabled={saving || (step.kind !== 'invalid' && step.requireAck && !ack)}
               onClick={attempt}
             >
-              确认保存（{form.quote}）
+              {saving ? '保存中…' : `确认保存（${form.quote}）`}
             </button>
             <button
               type="button"

@@ -187,10 +187,22 @@ export async function findOwnedAddress(
  *      同时买最后一件时，两边都读到 1、都扣成功 → 超卖（-1 被 CHECK 拦住时则是一边 500）。
  *      条件更新把"判定 + 扣减"压进一条语句，数据库用行锁保证只有一个成功者。
  *      建单事务里逐行调用：任一商品 false → 抛 40901 整单回滚（前面已扣的随行回滚）。
+ *
+ * @why ⚠️ **不写 `updated_at`**（DB3-02 / AJ-258）。`products.updated_at` 有两个消费方：
+ *      管理端列表的排序键（`catalog-admin.ts` 的 `order by updated_at desc, id`），
+ *      以及 ADM3-02 起商品 PUT 的**乐观锁凭据**。而库存是**并发写的实时余额**，不是商品信息：
+ *      ① 排序：买家下一单就把那件商品顶到列表第一位，运营翻页时整体位移 → 漏行 + 重行；
+ *      ② 乐观锁：运营正在编辑时来一单，凭据当场失效，"只改标题保存"被 40914 拒掉——
+ *         而"编辑期间买家下单仍能保存、且不覆盖库存"是 AJ-175 **专门实现并钉住**的行为。
+ *      所以本函数与 {@link incrementStock} 只动 `stock`。
+ *      @tradeoff 代价：`updated_at` 不再等于"这一行最后被写的时刻"（字面意义的 update）。
+ *              换来的是"买家行为不会作废运营的工作"；库存的变动时刻本就没落在任何列上，
+ *              需要时由 `order_events` 回答（按订单查，而不是按商品查）。
+ * @see {@link incrementStock}（对称，同样不写 updated_at）
  */
 export async function decrementStock(tx: Db, productId: string, qty: number): Promise<boolean> {
   const rows = await tx`
-    update products set stock = stock - ${qty}, updated_at = now()
+    update products set stock = stock - ${qty}
      where id = ${productId} and stock >= ${qty}
   `;
   return rows.count > 0;
@@ -199,10 +211,14 @@ export async function decrementStock(tx: Db, productId: string, qty: number): Pr
 /**
  * 原子增加库存（回补）。与 {@link decrementStock} 对称，但不带条件——
  * 回补不该有"加不进去"的情形（库存上限不是这个阶段的概念）。
+ *
+ * @why 同样**不写 `updated_at`**：理由与 {@link decrementStock} 完全一致（DB3-02）。
+ *      关单 job 每 60 秒回补一次，若这里刷新 `updated_at`，被回补的商品会持续
+ *      在管理端列表里"浮上来"，运营的翻页与编辑凭据都在持续失效。
  */
 export async function incrementStock(tx: Db, productId: string, qty: number): Promise<void> {
   await tx`
-    update products set stock = stock + ${qty}, updated_at = now()
+    update products set stock = stock + ${qty}
      where id = ${productId}
   `;
 }

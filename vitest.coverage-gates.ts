@@ -44,9 +44,12 @@ export const COVERAGE_INCLUDE: string[] = [
   'miniprogram/**/*.ts',
   'miniprogram/utils/*.js',
   'miniprogram/pages/**/*.vm.js',
-  // admin-web：只收 `.ts`（api 封装等纯逻辑）；`.tsx` 组件层不收——
-  // 与小程序 pages/components 不收同一口径：没有组件测试 harness（未引入 testing-library），
-  // 收进来是几个 0% 文件，只会拉低均值换不来信号。UI 的性质靠构建（vite build 进 gate）+ L4 人工验收。
+  // admin-web：只收 `.ts`（api 封装等纯逻辑）；`.tsx` 组件层**不收**——
+  // ⚠️ 2026-10-01 订正（ADM3-07）：旧注释写"没有组件测试 harness（未引入 testing-library）"，
+  //    已不是事实：`admin-web/src/testing/dom.ts` 起可以跑 jsdom 组件用例（`*.dom.unit.test.ts`）。
+  //    不收的**真实**理由是：组件用例的断言依赖 DOM 结构（改个 class 或嵌套就可能整片失配），
+  //    把它算进覆盖率会让"阈值"被 UI 改动牵着走，且组件行为本就由各自的组件用例钉住，
+  //    覆盖率数字换不来额外信号。UI 的性质靠构建（vite build 进 gate）+ L4 人工验收。
   'admin-web/src/**/*.ts',
 ];
 

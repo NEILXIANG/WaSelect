@@ -28,6 +28,15 @@
  *              撞上就是 40910，提示换时间——这是契约的形状决定的，不是本实现的疏漏。
  * @limitation 三：运费的"数量级写错"（2000 打成 20000）**没有自动防护**，只进日志。
  *              与 fx 同一条理由（@limitation 一），登记为待办。
+ * @limitation 四：`GET /admin/fx` 为每行下发 `is_current`（ADM3-05），由**服务端时钟**判定。
+ *              @why 前端曾经拿 `Date.now()` 与 `effective_from` 比（"不晚于此刻的最新一行"），
+ *              而"立即生效"的时刻是服务端 `clock.now()` 打的——管理员电脑慢 10 分钟，
+ *              刚保存的那行在前端被当成"尚未生效"而排除，量级核对的基准回退到上一条
+ *              （先录错、马上改正的场景里，第二次核对拿的是**错误值之前**的那条）；
+ *              电脑快几小时则相反，几小时后才生效的预约行被当成当前值。
+ *              "现在几点"只有一个权威，就是服务端；下发布尔而不是下发 `now`，
+ *              是为了让前端**没有第二份"哪一行是当前"的判定**（第二份必然漂移）。
+ *              判定复用 `repo.findLatestFxRate`（POST 侧算"上一条"用的就是它），不在本文件重写出一条。
  *
  * @see adapters/ops-config.ts（仓储）；domain/fx-input.ts、domain/shipping-rates-input.ts（校验）；
  *      contracts/api-contract.yaml（FxRate / ShippingRate）；admin-web/src/ops/（消费方）
@@ -45,6 +54,7 @@ import { setAuditBefore } from './admin-audit.js';
 import {
   createOpsConfigRepo,
   type FxRateRow,
+  type OpsConfigRepo,
   type ShippingRateRow,
 } from '../adapters/ops-config.js';
 import { applyFxBuffer, parseFxInput } from '../domain/fx-input.js';
@@ -62,15 +72,46 @@ export interface AdminOpsRoutesDeps {
   clock: Clock;
 }
 
+/**
+ * 一行的身份键（`quote` + `effective_from` 毫秒）。
+ * @why 键里**必须带 quote**：两个币种完全可能在同一毫秒被补录（"立即生效"取的就是服务端此刻，
+ *      批量补录时两行同一毫秒并不罕见），只按毫秒记会把另一币种的**历史**行也标成当前生效
+ *      （ADM3-05）。`UNIQUE(quote, effective_from)` 也说明"行"的身份本来就是这两项的复合。
+ */
+function fxRowKey(quote: string, at: Date): string {
+  return `${quote}|${String(at.getTime())}`;
+}
+
 /** 仓储行 → 契约 `FxRate`（NUMERIC 已是 number；时间统一 ISO 字符串）。 */
-function toFxRate(r: FxRateRow): Record<string, unknown> {
+function toFxRate(r: FxRateRow, isCurrent: boolean): Record<string, unknown> {
   return {
     quote: r.quote,
     rate: r.rate,
     raw_rate: r.raw_rate,
     buffer: r.buffer,
     effective_from: r.effective_from.toISOString(),
+    is_current: isCurrent,
   };
+}
+
+/**
+ * 哪些行"当前已生效"（`quote|ms` 的集合）。
+ * @why **复用** `findLatestFxRate`。在 SQL 里再写一遍 `effective_from <= now` 的最值
+ *      （窗口函数 / `distinct on`）会造出第二份"当前生效"的判定，而 POST 侧算突变倍数、
+ *      审计的改前值用的都是 `findLatestFxRate`——两份口径迟早漂移（ADR-29）。
+ *      币种是契约枚举（CNY / USD），多一次查询换"口径唯一"划算。
+ */
+async function currentFxKeys(
+  repo: OpsConfigRepo,
+  quotes: readonly string[],
+  now: Date,
+): Promise<Set<string>> {
+  const keys = new Set<string>();
+  for (const q of quotes) {
+    const latest = await repo.findLatestFxRate(q, now);
+    if (latest !== null) keys.add(fxRowKey(latest.quote, latest.effective_from));
+  }
+  return keys;
 }
 
 /** 仓储行 → 契约 `ShippingRate`。 */
@@ -97,7 +138,10 @@ export function mountAdminOpsRoutes(app: Express, deps: AdminOpsRoutesDeps): voi
       try {
         // 全部行（含历史与未来）：过滤掉未来行会让"刚提交的未来汇率"在列表里消失，
         // 运营会以为没保存成功。排序保证每个币种最新一行在最上面（AJ-150 ①）
-        res.json((await repo.listFxRates()).map(toFxRate));
+        const rows = await repo.listFxRates();
+        const now = deps.clock.now(); // @limitation 四：判"当前生效"用服务端时钟
+        const current = await currentFxKeys(repo, [...new Set(rows.map((r) => r.quote))], now);
+        res.json(rows.map((r) => toFxRate(r, current.has(fxRowKey(r.quote, r.effective_from)))));
       } catch (e) {
         next(e);
       }

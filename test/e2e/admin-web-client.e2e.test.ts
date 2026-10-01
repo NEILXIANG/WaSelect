@@ -47,6 +47,7 @@ import {
   productFormErrors,
   productFormModel,
   productRows,
+  sourceUpdatedAt,
   toProductInput,
 } from '../../admin-web/src/products/view.js';
 import { getOrder, listOrders, refundOrder } from '../../admin-web/src/orders/api.js';
@@ -113,6 +114,7 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
     const source = (await listProducts(api)).items.find((p) => p.id === created.id);
     const editForm = productFormModel(source);
     const originalStock = editForm.stock;
+    const cred = sourceUpdatedAt(source); // ⬅ 乐观锁凭据（ADM3-02 / 契约 0.6.18）
     // ……此时买家下单买走 1 件
     const buyer = await tokenFor('u-1');
     const o = await call(srv, 'POST', '/api/v1/orders', {
@@ -126,31 +128,112 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
     });
     expect(o.status).toBe(201);
     // ……运营只改了标题就保存
+    // ⚠️ 这一条同时钉住两件事：① AJ-175「编辑期间下单不覆盖库存」；
+    //    ② DB3-02「下单**不**推进 updated_at」——否则这里会拿到 40914，
+    //      而 AJ-175 的保证就没了（两条修复互为前提，缺一条这条用例就红）。
     await updateProduct(
       api,
       created.id,
       toProductInput({ ...editForm, title: 'Deba Knife 出刃包丁' }, originalStock),
+      cred,
     );
     const after = productRows((await listProducts(api)).items).find((r) => r.id === created.id);
     expect(after?.title).toBe('Deba Knife 出刃包丁');
     expect(after?.stockText).toBe('6'); // 不是打开页面时的 7
 
-    // 显式改库存 → 生效
+    // 显式改库存 → 生效（上一次保存推进了 updated_at，凭据必须重新取）
+    const again = (await listProducts(api)).items.find((p) => p.id === created.id);
+    const form2 = productFormModel(again);
     await updateProduct(
       api,
       created.id,
-      toProductInput({ ...editForm, stock: '20' }, originalStock),
+      toProductInput({ ...form2, stock: '20' }, form2.stock),
+      sourceUpdatedAt(again),
     );
     expect(
       productRows((await listProducts(api)).items).find((r) => r.id === created.id)?.stockText,
     ).toBe('20');
 
     // 下架后再编辑 → 仍是下架（PUT 不碰上下架）
+    // ⚠️ 下架**会**推进 updated_at（它是商品信息的一部分），所以这里要重新取凭据
     await setProductStatus(api, created.id, 'offline');
-    await updateProduct(api, created.id, toProductInput({ ...editForm, title: '改个名' }, '20'));
+    const third = (await listProducts(api)).items.find((p) => p.id === created.id);
+    const form3 = productFormModel(third);
+    await updateProduct(
+      api,
+      created.id,
+      toProductInput({ ...form3, title: '改个名' }, form3.stock),
+      sourceUpdatedAt(third),
+    );
     const off = productRows((await listProducts(api)).items).find((r) => r.id === created.id);
     expect(off?.statusText).toBe('已下架');
     expect(off?.online).toBe(false);
+  });
+
+  it('两个运营同时编辑：B 先改价保存 → A 用旧凭据保存拿 40914，改价不被回滚', async () => {
+    const api = adminApi();
+    const created = await createProduct(
+      api,
+      toProductInput({
+        ...emptyProductForm(),
+        title: 'Deba Knife 出刃包丁 165mm',
+        category: 'kitchen',
+        priceJpy: '12800',
+        weightG: '540',
+        stock: '7',
+        customsDescEn: 'kitchen knife, stainless steel',
+      }),
+    );
+    // A 打开编辑页（读到 12800）
+    const seenByA = (await listProducts(api)).items.find((p) => p.id === created.id);
+    const formA = productFormModel(seenByA);
+    const credA = sourceUpdatedAt(seenByA);
+
+    // B 把售价改成 15800 并保存
+    await updateProduct(
+      api,
+      created.id,
+      toProductInput({ ...formA, priceJpy: '15800' }, formA.stock),
+      credA,
+    );
+
+    // A 拿着**打开页面时**的凭据只改标题 → 必须被拒
+    const err = await updateProduct(
+      api,
+      created.id,
+      toProductInput({ ...formA, title: 'A 改的标题' }, formA.stock),
+      credA,
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe(40914); // 不是 40401：商品**在**，只是版本对不上
+    expect((err as ApiError).traceId).toMatch(/[0-9a-f-]{8,}/);
+
+    const row = (await listProducts(api)).items.find((p) => p.id === created.id);
+    expect(row?.price_jpy).toBe(15800); // B 的改价没被 A 回滚
+    expect(row?.title).toBe('Deba Knife 出刃包丁 165mm'); // A 的标题也没写进去
+  });
+
+  it('缺 expected_updated_at 的 PUT → 40001（不退化成无锁覆盖）', async () => {
+    const api = adminApi();
+    const created = await createProduct(
+      api,
+      toProductInput({
+        ...emptyProductForm(),
+        title: '无凭据商品',
+        category: 'kitchen',
+        priceJpy: '3000',
+        weightG: '300',
+        customsDescEn: 'pot',
+      }),
+    );
+    const err = await updateProduct(
+      api,
+      created.id,
+      toProductInput({ ...productFormModel(created), title: '改个名' }),
+      '',
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe(40001);
   });
 });
 

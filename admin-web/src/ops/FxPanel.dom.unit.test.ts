@@ -13,7 +13,7 @@
  */
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { button, click, mount, type, type Mounted } from '../testing/dom.js';
+import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { FxPanel } from './FxPanel.js';
 
 interface Call {
@@ -24,8 +24,13 @@ interface Call {
 
 let mounted: Mounted | undefined;
 let calls: Call[];
+/** 不为 null 时，POST 会挂在这个 promise 上（模拟"第一笔还没回来"）。 */
+let holdPost: Promise<void> | null = null;
 
-/** 服务端的真实形状：全部行，`quote asc, effective_from desc`（含历史与未来）。 */
+/**
+ * 服务端的真实形状：全部行，`quote asc, effective_from desc`（含历史与未来），
+ * 每行带服务端按自己时钟判定的 `is_current`（ADM3-05）。
+ */
 const HISTORY = [
   // 未来才生效的一行（已录入、尚未生效）
   {
@@ -34,6 +39,7 @@ const HISTORY = [
     buffer: 0.03,
     rate: 0.007313,
     effective_from: '2099-01-01T00:00:00.000Z',
+    is_current: false,
   },
   // 当前生效
   {
@@ -42,6 +48,7 @@ const HISTORY = [
     buffer: 0.03,
     rate: 0.006901,
     effective_from: '2026-09-20T00:00:00.000Z',
+    is_current: true,
   },
   // 最早的一行：当初录错了（多了两个 0 的反方向），后来被上面那行更正
   {
@@ -50,14 +57,19 @@ const HISTORY = [
     buffer: 0.03,
     rate: 0.6901,
     effective_from: '2026-09-01T00:00:00.000Z',
+    is_current: false,
   },
 ];
 
 async function open(opts: { list?: unknown; listFails?: boolean } = {}): Promise<HTMLElement> {
   calls = [];
+  holdPost = null;
   const api = async (req: Call): Promise<unknown> => {
     calls.push(req);
-    if (req.method === 'POST') return {};
+    if (req.method === 'POST') {
+      if (holdPost !== null) await holdPost;
+      return {};
+    }
     if (opts.listFails === true) throw new Error('network down');
     return opts.list ?? HISTORY;
   };
@@ -154,5 +166,138 @@ describe('汇率面板：保存前核对（A8 残留 / AJ-229）', () => {
     expect(posts()).toHaveLength(0);
     expect(confirmButton(el)).toBeNull();
     expect(el.querySelector('.error')).not.toBeNull();
+  });
+});
+
+describe('汇率面板：当前生效行由服务端标（ADM3-05）', () => {
+  /** 本机时钟比服务端慢：服务端说"2099 那行已生效"，本机看它是未来行。 */
+  const CLOCK_SKEW = [
+    {
+      quote: 'USD',
+      raw_rate: 0.0067,
+      buffer: 0.03,
+      rate: 0.006901,
+      effective_from: '2099-01-01T00:00:00.000Z',
+      is_current: true, // 服务端标的当前生效行
+    },
+    {
+      quote: 'USD',
+      raw_rate: 0.67,
+      buffer: 0.03,
+      rate: 0.6901,
+      effective_from: '2026-09-01T00:00:00.000Z',
+      is_current: false,
+    },
+  ];
+
+  it('🔴 基准取服务端标的那一行：按它微调（0.0068）**不标可疑**，也不要求勾选', async () => {
+    // 旧实现拿本机时钟把 2099 那行当未来行排除 → 基准变成 0.67 → 0.0068 是它的 1/100 → 标可疑
+    const el = await open({ list: CLOCK_SKEW });
+    await type(rateInput(el), '0.0068');
+    expect(el.textContent).not.toContain('小数点错位');
+    await click(button(el, '保存汇率'));
+    expect(ackBox(el)).toBeNull();
+    await click(confirmButton(el));
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('列表标出"当前生效"行（运营不用靠生效时间去推）', async () => {
+    const el = await open({ list: CLOCK_SKEW });
+    const cells = [...el.querySelectorAll('tbody td')].map((td) => td.textContent ?? '');
+    expect(cells.filter((t) => t.includes('当前生效'))).toHaveLength(1);
+    expect(cells.some((t) => t.includes('2099-01-01') && t.includes('当前生效'))).toBe(true);
+  });
+});
+
+describe('汇率面板：勾选可以被撤回（ADM3-03）', () => {
+  it('🔴 勾选之后复选框**仍在**且仍是勾选态（旧实现勾完就把它卸载了）', async () => {
+    const el = await open();
+    await type(rateInput(el), '0.67');
+    await click(button(el, '保存汇率'));
+    await click(ackBox(el));
+    expect(ackBox(el)).not.toBeNull(); // 没有被卸载
+    expect(ackBox(el)?.checked).toBe(true);
+    expect(confirmButton(el)?.disabled).toBe(false);
+  });
+
+  it('🔴 再点一次可撤回 → 确认按钮重新禁用（运营改主意想再核对一遍时找得到它）', async () => {
+    const el = await open();
+    await type(rateInput(el), '0.67');
+    await click(button(el, '保存汇率'));
+    await click(ackBox(el));
+    await click(ackBox(el));
+    expect(ackBox(el)?.checked).toBe(false);
+    expect(confirmButton(el)?.disabled).toBe(true);
+    expect(posts()).toHaveLength(0);
+  });
+
+  it('不可疑的值：全程不出现复选框（不是"每次都勾"）', async () => {
+    const el = await open();
+    await type(rateInput(el), '0.0068');
+    await click(button(el, '保存汇率'));
+    expect(ackBox(el)).toBeNull();
+    await click(confirmButton(el));
+    expect(ackBox(el)).toBeNull();
+    expect(posts()).toHaveLength(1);
+  });
+});
+
+describe('汇率面板：重复 key 与重复提交（ADM3-04）', () => {
+  /** 同一分钟内录两次的两行（留空生效时间 → 服务端按毫秒取当前时刻）。 */
+  const SAME_MINUTE = [
+    {
+      quote: 'USD',
+      raw_rate: 0.0067,
+      buffer: 0.03,
+      rate: 0.006901,
+      effective_from: '2026-10-01T03:10:41.900Z',
+      is_current: true,
+    },
+    {
+      quote: 'USD',
+      raw_rate: 0.0068,
+      buffer: 0.03,
+      rate: 0.007,
+      effective_from: '2026-10-01T03:10:12.100Z',
+      is_current: false,
+    },
+  ];
+
+  it('🔴 同一分钟两行同时渲染：console.error 里不得出现 "same key"', async () => {
+    const errs: unknown[][] = [];
+    const orig = console.error;
+    console.error = (...args: unknown[]) => {
+      errs.push(args);
+    };
+    try {
+      await open({ list: SAME_MINUTE });
+    } finally {
+      console.error = orig;
+    }
+    const joined = JSON.stringify(errs);
+    expect(joined).not.toContain('same key');
+    expect(joined).not.toContain('duplicate key');
+  });
+
+  it('🔴 第一笔 POST 还没回来时再点"确认保存"，POST 仍只有 1 个', async () => {
+    let release: (() => void) | undefined;
+    const el = await open();
+    holdPost = new Promise<void>((r) => {
+      release = r;
+    });
+    await type(rateInput(el), '0.0068');
+    await click(button(el, '保存汇率'));
+    await click(confirmButton(el));
+    // 此刻第一笔还没回来：按钮应已禁用且文案变成"保存中…"
+    const busy = [...el.querySelectorAll('button')].find((b) =>
+      (b.textContent ?? '').includes('保存中'),
+    );
+    expect(busy).toBeDefined();
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    await click(busy); // 禁用按钮的 click 不触发 onClick；且 attempt 里还有一道 if (saving)
+    expect(posts()).toHaveLength(1);
+    // ⚠️ 放行的那次状态更新也要包在 act 里（否则 React 会告警"update not wrapped in act"）
+    release?.();
+    await flush();
   });
 });

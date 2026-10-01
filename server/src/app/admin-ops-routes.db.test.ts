@@ -172,6 +172,49 @@ describe('GET /admin/fx', () => {
       expect(Number(rows[1]?.['raw_rate'])).toBe(0.0068);
       expect(typeof rows[0]?.['effective_from']).toBe('string');
       expect(Number(rows[0]?.['buffer'])).toBe(0.03);
+      // 🔴 ADM3-05：每行都带 is_current，且由**服务端时钟**判定（未来行 false / 已生效行 true）
+      expect(rows.map((x) => x['is_current'])).toEqual([true, false, true]);
+      expect(Number(rows[2]?.['raw_rate'])).toBe(0.0065); // USD 已生效的那行才是当前
+    } finally {
+      await close();
+    }
+  });
+
+  it('🔴 is_current 按 quote + 时刻复合判定：另一币种同一毫秒的历史行不得被标成当前（ADM3-05）', async () => {
+    // 批量补录时两个币种可能落在同一毫秒；只按毫秒记"当前"会把 CNY 的历史行也标成当前生效
+    const t1 = new Date(Date.now() - 3_600_000); // 1 小时前
+    const t2 = new Date(Date.now() - 1_800_000); // 30 分钟前（更晚）
+    await db`
+      insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)
+      values ('USD', 0.0067, 0.0065, 0.03, ${t1}),
+             ('CNY', 0.048, 0.047, 0.03, ${t1}),
+             ('CNY', 0.049, 0.048, 0.03, ${t2})
+    `;
+    const { url, close } = await buildServer();
+    try {
+      const r = await call(url, 'GET', '/api/v1/admin/fx', undefined, await bearer());
+      const rows = r.body as Array<Record<string, unknown>>;
+      const cur = rows.filter((x) => x['is_current'] === true);
+      expect(cur).toHaveLength(2); // 每个币种**恰好**一行
+      expect(cur.map((x) => x['quote']).sort()).toEqual(['CNY', 'USD']);
+      // CNY 的当前行必须是更晚那条（t2），不是与 USD 撞毫秒的那条（t1）
+      expect(Number(cur.find((x) => x['quote'] === 'CNY')?.['raw_rate'])).toBe(0.048);
+    } finally {
+      await close();
+    }
+  });
+
+  it('全部都是未来生效行时没有任何 is_current（前端据此判定"没有基准"，不会拿旧值当基准）', async () => {
+    await db`
+      insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)
+      values ('USD', 0.0070, 0.0068, 0.03, now() + interval '1 day')
+    `;
+    const { url, close } = await buildServer();
+    try {
+      const r = await call(url, 'GET', '/api/v1/admin/fx', undefined, await bearer());
+      const rows = r.body as Array<Record<string, unknown>>;
+      expect(rows).toHaveLength(1); // 行还在（不能因为"未生效"就从列表里消失）
+      expect(rows[0]?.['is_current']).toBe(false);
     } finally {
       await close();
     }

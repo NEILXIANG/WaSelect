@@ -332,6 +332,7 @@ describe('快照一致性：订单是下单那一刻的事实，不随源数据�
     const upd = await call(srv, 'PUT', '/api/v1/admin/products/p-knife', {
       token: admin,
       body: {
+        expected_updated_at: String(knife?.['updated_at']), // 乐观锁凭据（ADM3-02 / 契约 0.6.18）
         title: 'Chef Knife (Renamed)',
         category: 'kitchen',
         price_jpy: 9900,

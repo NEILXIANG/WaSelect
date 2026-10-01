@@ -2,8 +2,12 @@
  * 职责：商品管理的**视图纯函数**（列表行 / 表单模型 / 校验 / 请求体）。
  *
  * @why 管理端与小程序同一条纪律（CLAUDE.md 约束十一的同构要求）：
- *      vitest 的 unit 层是 node 环境（没有 jsdom / React Testing Library），
- *      逻辑写在 `.tsx` 里就只剩"人肉点一遍"。抽成纯函数才能进门禁。
+ *      逻辑抽成纯函数，才能把"十几个字段 × 各种空值与边界"写成**边界表**逐条断言；
+ *      写在 `.tsx` 里就只剩"人肉点一遍"。
+ *      ⚠️ 2026-10-01 订正（ADM3-07）：原写"unit 层是 node 环境、没有 jsdom / React Testing
+ *      Library"——`testing/dom.ts` 落地后 jsdom 组件用例已可跑（本目录就有 `*.dom.unit.test.ts`），
+ *      那句已不是事实。真实理由是成本：组件用例要挂载、等异步、断言依赖 DOM 结构，
+ *      而校验这类"输入 → 通过/报错"的判定用表格写就是几行。结论不变，理由换成真的。
  *
  * @why 前端要**重复一遍**服务端的上架校验（禁售标签、报关品名敏感词）：
  *      商品表单十几个字段，让运营提交后才知道"这个标签不能上架"是纯浪费——
@@ -190,6 +194,22 @@ export function productFormModel(p: unknown): ProductForm {
         })
       : [],
   };
+}
+
+/**
+ * 编辑态的**乐观锁凭据**：`source.updated_at`（服务端那一行最后被改的时刻）。
+ *
+ * @why 单独一个函数而不是塞进 `ProductForm`：它不是**运营填的字段**，
+ *      "商品长什么样"与"你看到的是哪一版"是两件事，混进表单模型会让
+ *      `toProductInput` 把它当成一个可编辑字段一起提交（而它不是商品属性），
+ *      也会让 `productFormErrors` 为它操心。它是 PUT 的准入凭据，只在提交那一刻用。
+ * @why 取不到时返回 `''` 而不是 `undefined`：空串会让服务端明确回 40001
+ *      （"缺 expected_updated_at"），而 `undefined` 会被 `JSON.stringify` 直接删掉字段，
+ *      服务端收到的是"没带"——两种失败在日志里长得不一样，空串留的线索更多。
+ */
+export function sourceUpdatedAt(p: unknown): string {
+  const src = (typeof p === 'object' && p !== null ? p : {}) as Record<string, unknown>;
+  return typeof src['updated_at'] === 'string' ? (src['updated_at'] as string) : '';
 }
 
 /**

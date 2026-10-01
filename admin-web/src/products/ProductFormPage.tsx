@@ -18,7 +18,15 @@ import { useState } from 'react';
 import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
 import { uploadImage } from '../api/upload.js';
 import { createProduct, updateProduct, type AdminApi } from './api.js';
-import { productFormErrors, productFormModel, toProductInput, type ProductForm } from './view.js';
+import {
+  CATEGORY_LABELS,
+  PRODUCT_CATEGORY,
+  productFormErrors,
+  productFormModel,
+  sourceUpdatedAt,
+  toProductInput,
+  type ProductForm,
+} from './view.js';
 import { Field, ImagePicker, TagPicker } from './ProductFormParts.js';
 import type { AdminProductLike } from './api.js';
 
@@ -53,6 +61,11 @@ export function ProductFormPage({
   const [originalStock] = useState<string | undefined>(() =>
     source === null ? undefined : productFormModel(source).stock,
   );
+  // 打开编辑页那一刻的版本凭据：保存时随 PUT 一起发，服务端据它判定"你改的是不是最新一版"
+  // （ADM3-02 / 契约 0.6.18；不带上服务端直接 40001，不会静默覆盖别人的改动）
+  const [expectedUpdatedAt] = useState<string>(() =>
+    source === null ? '' : sourceUpdatedAt(source),
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -79,12 +92,27 @@ export function ProductFormPage({
     setError('');
     try {
       const body = toProductInput(form, productId === null ? undefined : originalStock);
-      if (productId === null) await createProduct(api, body);
-      else await updateProduct(api, productId, body);
+      if (productId === null) {
+        await createProduct(api, body);
+      } else {
+        // ⚠️ 拿不到凭据时**就地拦下**给一句明白话，而不是发出去等服务端 40001：
+        //    "缺 updated_at"的 40001 与"报关品名不合法"的 40001 在运营眼里是同一句
+        //    "请求参数不合法"，他会去改品名、改十遍也改不对（@limitation 一：服务端字段级错误不透传）。
+        if (expectedUpdatedAt === '') {
+          setError('缺少商品版本信息（updated_at）：请返回列表重新进入编辑，再保存');
+          return;
+        }
+        await updateProduct(api, productId, body, expectedUpdatedAt);
+      }
       onDone();
     } catch (e) {
       // @see @limitation 一：失败保留表单
       setError(e instanceof ApiError ? e.message : String(e));
+      // 40914：表单**没被清**，但只说"被别人改过了"他会原地再点一次保存、再撞一次。
+      // 必须说出下一步：回列表重进编辑页（重进才会拿到新的 updated_at）。
+      if (e instanceof ApiError && e.code === 40914) {
+        setError(`${e.message}：你填的内容还在，请返回列表重新进入编辑，对照最新值再保存`);
+      }
     } finally {
       setSaving(false);
     }
@@ -197,10 +225,16 @@ export function ProductFormPage({
             value={form.category}
             onChange={(e) => set('category', e.target.value)}
           >
-            <option value="beauty">美妆护肤</option>
-            <option value="daily">日用杂货</option>
-            <option value="kitchen">厨房餐具</option>
-            <option value="food">食品</option>
+            {/* ⚠️ 选项由 `PRODUCT_CATEGORY` + `CATEGORY_LABELS` 生成，不写死四个 `<option>`（ADM3-08）：
+                写死时，契约新增分类后 view 层的"与契约 enum 双向比对"会红并被修好，
+                而这个下拉不会跟着变——编辑新分类的商品时，受控 select 的 value 不在选项里，
+                浏览器显示**第一项**、state 里却仍是新分类。运营看到的分类是错的，
+                他若手动选回第一项，就真的把商品改错了（约束五：文案走配置）。 */}
+            {PRODUCT_CATEGORY.map((c) => (
+              <option key={c} value={c}>
+                {CATEGORY_LABELS[c]}
+              </option>
+            ))}
           </select>
           {errors['category'] !== undefined && <span className="error">{errors['category']}</span>}
         </label>

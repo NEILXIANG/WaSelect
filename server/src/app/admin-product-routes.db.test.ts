@@ -39,7 +39,14 @@ beforeEach(async () => {
 
 /** 起一个只挂了正式路由清单的 server（与生产同一条装配路径）。 */
 async function buildServer(): Promise<{ url: string; close: () => Promise<void> }> {
-  const logger = createLogger({ env: 'test', destination: new MemorySink() });
+  return buildServerWithSink(new MemorySink());
+}
+
+/** 同上，但把日志落点交回给调用方（断言"这条 warn 到底留没留"）。 */
+async function buildServerWithSink(
+  sink: MemorySink,
+): Promise<{ url: string; close: () => Promise<void> }> {
+  const logger = createLogger({ env: 'test', destination: sink });
   const config = loadConfig({
     NODE_ENV: 'development',
     PORT: '1',
@@ -252,17 +259,39 @@ describe('PUT /admin/products/{id} 与 PATCH status', () => {
     return String(((await r.json()) as Record<string, unknown>).id);
   }
 
-  it('PUT 已存在 → 200 且库里标题变了', async () => {
-    const s = await buildServer();
-    const id = String(await createOne(s));
+  /** 库里那一行的 `updated_at`（乐观锁凭据的**真源**：响应里的也一样，但库才是事实）。 */
+  async function updatedAtOf(id: string): Promise<Date> {
+    const rows = await db`select updated_at from products where id = ${id}`;
+    return rows[0]?.['updated_at'] as Date;
+  }
+
+  /** 打一次 PUT（凭据默认取库里的当前值）。 */
+  async function put(
+    s: { url: string },
+    id: string,
+    overrides: Record<string, unknown> = {},
+    expectedUpdatedAt?: string,
+  ): Promise<{ status: number; json: Record<string, unknown> }> {
     const r = await fetch(`${s.url}/api/v1/admin/products/${id}`, {
       method: 'PUT',
       headers: {
         authorization: `Bearer ${await adminToken()}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify(body({ title: '改后标题' })),
+      body: JSON.stringify(
+        body({
+          ...overrides,
+          ...(expectedUpdatedAt === undefined ? {} : { expected_updated_at: expectedUpdatedAt }),
+        }),
+      ),
     });
+    return { status: r.status, json: (await r.json()) as Record<string, unknown> };
+  }
+
+  it('PUT 已存在 + 凭据匹配 → 200 且库里标题变了', async () => {
+    const s = await buildServer();
+    const id = await createOne(s);
+    const r = await put(s, id, { title: '改后标题' }, (await updatedAtOf(id)).toISOString());
     expect(r.status).toBe(200);
     expect((await db`select title from products where id = ${id}`)[0]?.title).toBe('改后标题');
     await s.close();
@@ -270,16 +299,62 @@ describe('PUT /admin/products/{id} 与 PATCH status', () => {
 
   it('PUT 不存在的 id → 40401（不是静默建一条新的）', async () => {
     const s = await buildServer();
-    const r = await fetch(`${s.url}/api/v1/admin/products/no-such-id`, {
-      method: 'PUT',
-      headers: {
-        authorization: `Bearer ${await adminToken()}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(body()),
-    });
+    const r = await put(s, 'no-such-id', {}, new Date().toISOString());
     expect(r.status).toBe(404);
-    expect(((await r.json()) as { code: number }).code).toBe(40401);
+    expect(r.json.code).toBe(40401);
+    await s.close();
+  });
+
+  // ── 以下四条是 ADM3-02（乐观锁）的红线 ──────────────────────────────────────
+  it('PUT **缺** expected_updated_at → 40001（不退化成"无锁覆盖"）', async () => {
+    // @why 这条是整个 ADM3-02 的前提：如果缺凭据时只是"照旧保存"，
+    //      老前端会一直能用、一直静默覆盖别人的改价——**比不能用危险得多**。
+    const s = await buildServer();
+    const id = await createOne(s);
+    const r = await put(s, id, { title: '无凭据保存' });
+    expect(r.status).toBe(400);
+    expect(r.json.code).toBe(40001);
+    expect((await db`select title from products where id = ${id}`)[0]?.title).toBe('货架测试商品');
+    await s.close();
+  });
+
+  it('PUT expected_updated_at 不是合法时间 → 40001（不是当成"永远匹配"）', async () => {
+    const s = await buildServer();
+    const id = await createOne(s);
+    for (const bad of ['', 'not-a-date', '2026-13-99T00:00:00.000Z']) {
+      const r = await put(s, id, { title: '脏凭据' }, bad);
+      expect(r.status, `凭据 ${JSON.stringify(bad)} 应被拒`).toBe(400);
+      expect(r.json.code).toBe(40001);
+    }
+    await s.close();
+  });
+
+  it('PUT 凭据过期 → 40914（**不是** 40401），且库里整行没被写', async () => {
+    // @why 必须断言"不是 40401"：把"被别人改过"说成"商品不存在"，
+    //      运营会去找一个根本不存在的商品，而不是去刷新——错误码指错方向比不报错更贵。
+    const s = await buildServer();
+    const id = await createOne(s);
+    const staleAt = new Date((await updatedAtOf(id)).getTime() - 60_000).toISOString();
+    const r = await put(s, id, { title: '覆盖者', price_jpy: 999 }, staleAt);
+    expect(r.status).toBe(409);
+    expect(r.json.code).toBe(40914);
+
+    const row = (await db`select title, price_jpy, updated_at from products where id = ${id}`)[0];
+    expect(row?.title).toBe('货架测试商品');
+    expect(row?.price_jpy).toBe(3600);
+    expect((row?.['updated_at'] as Date).toISOString()).not.toBe(staleAt);
+    await s.close();
+  });
+
+  it('PUT 冲突留 warn 日志 admin_product_update_stale（将来评估"要不要字段级合并"的数据来源）', async () => {
+    const sink = new MemorySink();
+    const s = await buildServerWithSink(sink);
+    const id = await createOne(s);
+    const staleAt = new Date((await updatedAtOf(id)).getTime() - 60_000).toISOString();
+    expect((await put(s, id, { title: '覆盖者' }, staleAt)).status).toBe(409);
+    const line = sink.lines.find((l) => l.includes('admin_product_update_stale'));
+    expect(line).toBeDefined();
+    expect(line).toContain(id); // 报障时能反查是哪一件商品
     await s.close();
   });
 

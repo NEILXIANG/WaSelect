@@ -90,17 +90,29 @@ export async function createProduct(
   return resp;
 }
 
-/** `PUT /admin/products/{id}`（全量更新）。 */
+/**
+ * `PUT /admin/products/{id}`（全量更新，**带乐观锁凭据**）。
+ *
+ * @param expectedUpdatedAt 编辑页打开时那一行的 `updated_at`（`sourceUpdatedAt` 取）。
+ *       服务端拿它做 `where updated_at = $x`：对不上 → **40914**，整行不写。
+ * @why 凭据是**独立参数**而不是让调用方塞进 `body`：PUT 是整行覆盖，
+ *      运营只补一张图保存就会把期间别人改过的售价/重量/报关品名整条回滚，且不报错。
+ *      独立的必填参数让"忘了带"在**编译期**就过不去，而塞进 body 的写法
+ *      缺了字段也能编译、只在真服务端上才暴露（ADM3-02）。
+ */
 export async function updateProduct(
   api: AdminApi,
   id: string,
   body: Record<string, unknown>,
+  expectedUpdatedAt: string,
   traceId?: string,
 ): Promise<void> {
   await api({
     path: `/api/v1/admin/products/${encodeURIComponent(id)}`,
     method: 'PUT',
-    body,
+    // ⚠️ 与 `ProductInput` **并列**而不是嵌套：它不属于商品字段（服务端同口径，
+    //    见 server/src/app/admin-product-routes.ts 的 expectedUpdatedAtOf 注释）。
+    body: { ...body, expected_updated_at: expectedUpdatedAt },
     ...(traceId !== undefined ? { traceId } : {}),
   });
 }

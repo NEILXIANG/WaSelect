@@ -48,11 +48,29 @@ export function emptyFxForm(): FxForm {
 
 /** 汇率列表行（展示用）。 */
 export interface FxRow {
+  /**
+   * React 列表的 `key`（ADM3-04）。
+   * @why 曾经用 `${quote}|${effectiveText}`，而 `effectiveText` 只精确到**分钟**：
+   *      留空生效时间时服务端按毫秒取当前时刻，同一币种在同一分钟内保存两次，
+   *      两行的展示文本完全相同 → React 报 duplicate key，刷新时行可能被复用错位或丢失。
+   *      汇率表是"只能追加"的审计视图，显示错位会让人判断错哪一行是当前生效的。
+   * @why 用**原始** `effective_from` + `raw_rate` 而不是展示文本：前者是毫秒级 ISO，
+   *      后者被 `formatJst` 抹掉了秒以下。库里 `UNIQUE(quote, effective_from)` 保证
+   *      这两项的组合在同一币种下不重复。
+   */
+  key: string;
   quote: string;
   rateText: string;
   rawRateText: string;
   bufferText: string;
   effectiveText: string;
+  /**
+   * 服务端判定的"这一行当前已生效"（ADM3-05）。
+   * @why 面板曾经用**浏览器时钟**与 `effective_from` 比，而"立即生效"的时刻是服务端打的：
+   *      管理员电脑慢几分钟，刚保存的那行被当成"尚未生效"，量级核对的基准回退到上一条。
+   *      现在只转述服务端下发的 `is_current`，前端不再有第二份判定。
+   */
+  isCurrent: boolean;
 }
 
 /** `FxRate[]` → 列表行（未知 quote 原样显示，不猜）。 */
@@ -60,13 +78,20 @@ export function fxRows(items: unknown): FxRow[] {
   if (!Array.isArray(items)) return [];
   return items
     .filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null)
-    .map((x) => ({
-      quote: typeof x['quote'] === 'string' ? x['quote'] : '—',
-      rateText: num(x['rate']),
-      rawRateText: num(x['raw_rate']),
-      bufferText: num(x['buffer']),
-      effectiveText: formatJst(x['effective_from']),
-    }));
+    .map((x) => {
+      const quote = typeof x['quote'] === 'string' ? x['quote'] : '—';
+      const rawEffective =
+        typeof x['effective_from'] === 'string' ? x['effective_from'] : String(x['effective_from']);
+      return {
+        key: `${quote}|${rawEffective}|${String(x['raw_rate'])}`,
+        quote,
+        rateText: num(x['rate']),
+        rawRateText: num(x['raw_rate']),
+        bufferText: num(x['buffer']),
+        effectiveText: formatJst(x['effective_from']),
+        isCurrent: x['is_current'] === true,
+      };
+    });
 }
 
 function num(v: unknown): string {
@@ -188,35 +213,42 @@ export function fxPreview(args: unknown): {
 }
 
 /**
- * 各币种**当前生效**的原始汇率（A8 残留 / AJ-229）。
+ * 各币种**当前生效**的原始汇率（A8 残留 / AJ-229 / ADM3-05）。
  *
- * @param list `GET /admin/fx` 的响应：**全部行**（历史 + 未来），服务端按 `quote asc, effective_from desc` 排
- * @param nowMs 当前时刻（毫秒）；由调用方给，纯函数不读时钟
- * @returns 币种 → `raw_rate`；该币种没有已生效的行则不出现在结果里
+ * @param list `GET /admin/fx` 的响应：**全部行**（历史 + 未来），服务端按 `quote asc, effective_from desc` 排，
+ *             每行带服务端判定的 `is_current`
+ * @returns 币种 → `raw_rate`；该币种没有标记为当前生效的行则不出现在结果里
  *
  * @why 面板原先逐行 `rates[q] = r`，后者覆盖前者——列表是按生效时间**倒序**的，
  *      于是留下的是每个币种**最早**的一行。首条录错、后来更正过的环境里，
  *      量级核对会反过来：录入正确值被标红，再次录错反而不标红。
  *      @measured(FxPanel.dom.unit.test.ts「基准是当前生效那一行」, 2026-09-30)：
  *        列表 = [未来 0.0071, 当前 0.0067, 最早 0.67]，修复前录 0.67 **不标可疑**（基准取成了 0.67）。
+ * @why 🔴 基准**只认服务端下发的 `is_current`**，不再拿本机时钟与 `effective_from` 比（ADM3-05）：
+ *      "立即生效"的时刻是服务端 `clock.now()` 打的，而管理员电脑的时钟不受我们控制——
+ *      慢几分钟，刚保存的那行被判成"尚未生效"，基准回退到上一条（先录错、马上改正时，
+ *      第二次核对拿的是**错误值之前**那条）；快几小时，几小时后才生效的预约行被当成当前值。
+ *      "现在几点"的权威只有一个，就是服务端；前端拿着 `is_current` 不需要知道现在几点。
  * @why 取 `raw_rate` 而不是 `rate`：表单录入的就是原始汇率；拿含缓冲的 `rate` 当基准，
  *      倍数会恒偏 `1/(1+buffer)`（缓冲配大时原样重录也会被标红）。
- * @why 不假设入参有序：逐行比较 `effective_from`，取不晚于 now 的最大者——
- *      服务端哪天改了排序，这里不该跟着错。
+ * @why 同币种出现多行 `is_current: true`（服务端口径异常 / 老包新包混部）时取**第一条**：
+ *      列表是同币种内倒序，第一条就是最新的那行。这不该发生，但发生了也不能让基准变成
+ *      "随遍历顺序而定"。
+ * @limitation `is_current` **缺失不算当前**（不回退到"用时钟猜"）：
+ *              那是"服务端没告诉我"，正确反应是**没有基准**——`fxSaveStep` 因此要求勾选确认
+ *              （AJ-229：算不出倍数不等于安全），而不是拿一个可能错的基准算出"不可疑"。
  */
-export function currentFxRawRates(list: unknown, nowMs: number): Record<string, number> {
-  const best = new Map<string, { at: number; raw: number }>();
+export function currentFxRawRates(list: unknown): Record<string, number> {
+  const best = new Map<string, number>();
   for (const x of Array.isArray(list) ? list : []) {
     const o = (typeof x === 'object' && x !== null ? x : {}) as Record<string, unknown>;
     const quote = typeof o['quote'] === 'string' ? o['quote'] : '';
     const raw = Number(o['raw_rate']);
-    const at = typeof o['effective_from'] === 'string' ? Date.parse(o['effective_from']) : NaN;
-    if (quote === '' || !Number.isFinite(raw) || raw <= 0) continue;
-    if (!Number.isFinite(at) || at > nowMs) continue; // 认不出时间 / 尚未生效：不算"当前"
-    const prev = best.get(quote);
-    if (prev === undefined || at > prev.at) best.set(quote, { at, raw });
+    if (quote === '' || !Number.isFinite(raw) || raw <= 0) continue; // 脏行逐条跳过
+    if (o['is_current'] !== true) continue;
+    if (!best.has(quote)) best.set(quote, raw);
   }
-  return Object.fromEntries([...best].map(([q, v]) => [q, v.raw]));
+  return Object.fromEntries(best);
 }
 
 /** 表单内容的指纹：确认与勾选都绑定在它上面，内容一变就自动作废（@see `fxSaveStep`）。 */
@@ -226,11 +258,18 @@ export function fxFormKey(form: unknown): string {
   return `${s(f['quote'])}|${s(f['rawRate'])}|${s(f['effectiveFrom'])}`;
 }
 
-/** 点"保存"之后该做什么。 */
+/**
+ * 点"保存"之后该做什么。
+ *
+ * @why `save` 分支也带 `requireAck`（ADM3-03）：面板曾用 `step.kind === 'confirm' && step.requireAck`
+ *      决定要不要渲染"我已核对"复选框，而勾选之后 `kind` 就变成了 `save`——复选框当场被卸载。
+ *      运营想撤回勾选再核对一遍时，页面上连那个框都没有了，只能"取消"重来，
+ *      事后也看不出这一步做过没有。"要不要勾"是**这一笔值**的性质，不该随"勾没勾"变化。
+ */
 export type FxSaveStep =
   | { kind: 'invalid'; message: string }
   | { kind: 'confirm'; requireAck: boolean }
-  | { kind: 'save' };
+  | { kind: 'save'; requireAck: boolean };
 
 /**
  * 汇率保存的闸门（A8 残留 / AJ-229）：形状校验 → 一律二次确认 → 可疑或无基准时再要勾选。
@@ -271,7 +310,7 @@ export function fxSaveStep(a: {
   const key = fxFormKey(a.form);
   if (a.confirmKey !== key) return { kind: 'confirm', requireAck };
   if (requireAck && a.ackKey !== key) return { kind: 'confirm', requireAck };
-  return { kind: 'save' };
+  return { kind: 'save', requireAck };
 }
 
 /** 保存成功后的提示：填了生效时间就不是"立即生效"（原文案恒说立即）。 */
@@ -401,7 +440,13 @@ export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; firs
   const errors: string[] = [];
   if (list.length === 0) errors.push('至少保留一档运费（空表会让所有订单无法报价）');
 
-  const seen = new Set<string>();
+  // ⚠️ 判重**复用** `rateDuplicates`，不在这里自己拼 key（ADM3-06）。
+  //    @why 这里曾经用 `${carrier}|${String(max)}`，而 `max` 为 null（重量没填）时
+  //    `String(null)` 是 `'null'`：连续点两次"新增一档"、重量都留空，
+  //    底部错误区就会出现"与前面某一档的承运商 + 上限重复（DB 唯一约束会拒）"——
+  //    而行上的"档位重复"标记（它读的是 `rateDuplicates`）**不亮**，两处说法互相矛盾，
+  //    运营会去找一个根本不存在的重复。判重的口径只能有一个来源。
+  const dupFlags = rateDuplicates(list);
   list.forEach((raw, i) => {
     const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
     const carrier = typeof r['carrier'] === 'string' ? r['carrier'].trim() : '';
@@ -429,9 +474,8 @@ export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; firs
           : `${at}：运费必须是 ≥0 的整数（円）`,
       );
     }
-    const key = `${carrier}|${String(max)}`;
-    if (seen.has(key)) errors.push(`${at}：与前面某一档的承运商 + 上限重复（DB 唯一约束会拒）`);
-    seen.add(key);
+    if (dupFlags[i] === true)
+      errors.push(`${at}：与前面某一档的承运商 + 上限重复（DB 唯一约束会拒）`);
   });
 
   if (!list.some((r) => (r as { active?: unknown } | null)?.active !== false))

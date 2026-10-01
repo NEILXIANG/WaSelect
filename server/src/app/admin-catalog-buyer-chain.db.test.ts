@@ -144,6 +144,8 @@ describe('管理端编辑商品 × 并发库存变化（AJ-175 拍板：库存�
       (p) => p['id'] === 'p-knife',
     );
     expect(seen?.['stock']).toBe(5); // 管理员打开编辑页时看到的值
+    // 乐观锁凭据（ADM3-02 / 契约 0.6.18）：编辑页打开那一刻的 `updated_at`
+    const cred = String(seen?.['updated_at']);
 
     const c = await call(srv, 'POST', '/api/v1/orders', {
       token: buyer,
@@ -157,9 +159,11 @@ describe('管理端编辑商品 × 并发库存变化（AJ-175 拍板：库存�
     expect(c.status).toBe(201);
 
     // admin-web 在库存没改时不发 stock（view.ts toProductInput）
+    // ⚠️ 同时钉住 DB3-02：下单**不**推进 `updated_at`，所以这里仍能拿打开页面时的凭据保存成功。
+    //    若有人把 `updated_at = now()` 加回 decrementStock，这一条立刻变红（AJ-258 注回实测）。
     const put = await call(srv, 'PUT', '/api/v1/admin/products/p-knife', {
       token: admin,
-      body: { ...PRODUCT_BODY, title: 'Chef Knife 改名' },
+      body: { ...PRODUCT_BODY, title: 'Chef Knife 改名', expected_updated_at: cred },
     });
     expect(put.status).toBe(200);
     expect(put.json['stock']).toBe(4);
@@ -172,9 +176,15 @@ describe('管理端编辑商品 × 并发库存变化（AJ-175 拍板：库存�
     expect(Number(stock[0]?.['stock'])).toBe(5);
 
     // 管理员**明确**改库存（盘点）仍是绝对值设置
+    // ⚠️ 上一次保存推进了 `updated_at`，凭据必须取新的（PUT 响应回整行，不必再拉一次列表）
     const set = await call(srv, 'PUT', '/api/v1/admin/products/p-knife', {
       token: admin,
-      body: { ...PRODUCT_BODY, title: 'Chef Knife 改名', stock: 20 },
+      body: {
+        ...PRODUCT_BODY,
+        title: 'Chef Knife 改名',
+        stock: 20,
+        expected_updated_at: String(put.json['updated_at']),
+      },
     });
     expect(set.json['stock']).toBe(20);
   });
@@ -188,9 +198,20 @@ describe('管理端编辑商品 × 并发库存变化（AJ-175 拍板：库存�
         })
       ).status,
     ).toBe(200);
+    // ⚠️ 下架（PATCH /status）**会**推进 `updated_at`（它是商品信息的一部分），凭据要在下架之后取
+    const afterOffline = await call(srv, 'GET', '/api/v1/admin/products?size=50', { token: admin });
+    const cup = (afterOffline.json['items'] as Record<string, unknown>[]).find(
+      (p) => p['id'] === 'p-cup',
+    );
     const put = await call(srv, 'PUT', '/api/v1/admin/products/p-cup', {
       token: admin,
-      body: { ...PRODUCT_BODY, title: 'Tea Cup 新文案', price_jpy: 3200, weight_g: 480 },
+      body: {
+        ...PRODUCT_BODY,
+        title: 'Tea Cup 新文案',
+        price_jpy: 3200,
+        weight_g: 480,
+        expected_updated_at: String(cup?.['updated_at']),
+      },
     });
     expect(put.status).toBe(200);
     expect(put.json['status']).toBe('offline');
@@ -219,9 +240,14 @@ describe('上传 → 商品图 → 买家看到的图', () => {
       expect(set[k].startsWith('https://img.example.test/')).toBe(true);
     }
 
+    const before = await call(srv, 'GET', '/api/v1/admin/products?size=50', { token: admin });
+    const knife = (before.json['items'] as Record<string, unknown>[]).find(
+      (p) => p['id'] === 'p-knife',
+    );
     const put = await call(srv, 'PUT', '/api/v1/admin/products/p-knife', {
       token: admin,
       body: {
+        expected_updated_at: String(knife?.['updated_at']),
         title: 'Chef Knife',
         category: 'kitchen',
         price_jpy: 8800,

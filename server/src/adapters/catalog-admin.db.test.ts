@@ -12,13 +12,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from './db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
+import { decrementStock, incrementStock } from './orders.js';
 import { makeProduct } from '../../../test/factories/entities.js';
 import { createRng } from '../../../test/factories/rng.js';
 import { createIds } from '../../../test/factories/entities.js';
-import type { AdminProductInsert } from './catalog-admin.js';
+import type { AdminProductInsert, AdminProductUpdate } from './catalog-admin.js';
 import { createCatalogAdminRepo } from './catalog-admin.js';
 
 let db: Db;
+
+/** 让 SQL `now()` 跨过至少一个毫秒（乐观锁按毫秒截断，同毫秒内的两次更新无法区分）。 */
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 beforeAll(async () => {
   await ensureTestDb();
@@ -55,6 +59,21 @@ function input(overrides: Partial<AdminProductInsert> = {}): AdminProductInsert 
     status: 'active',
     ...overrides,
   };
+}
+
+/**
+ * 一条合法的**更新**输入：`expectedUpdatedAt` 是乐观锁凭据（ADM3-02）。
+ * @why 不复用 `input()` 再在外面补一个字段：`updateProduct` 现在是**判别联合**入参，
+ *      缺了 `expectedUpdatedAt` 编译不过——但"编译不过"只保证类型对，不保证语义对；
+ *      独立造一个是为了让"凭据取哪一行"在每个用例里都看得见。
+ */
+function updateInput(
+  expectedUpdatedAt: string,
+  overrides: Partial<AdminProductUpdate> = {},
+): AdminProductUpdate {
+  const { status, ...rest } = input();
+  void status; // PUT 不碰上下架（AJ-175）：这里只是把它从"整行"里摘掉
+  return { ...rest, expectedUpdatedAt, ...overrides };
 }
 
 /** ⚠️ 每次调用必须给不同的 `tag`：id 序列由 seed 决定，同 seed 会撞主键。 */
@@ -126,6 +145,53 @@ describe('catalog-admin（管理端商品写仓储，I2 U-A2）', () => {
     for (const r of p2.items) expect(ids1).not.toContain(r.id);
   });
 
+  // ── DB3-02：排序键不得被库存变动刷新（也是 ADM3-02 乐观锁能成立的前提）──────────
+  it('⚠️ 翻页期间有商品被下单扣库存 → 两页合起来仍然不漏不重', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const row = await repo().insertProduct(input({ id: `p-page-${String(i)}`, stock: 10 }));
+      ids.push(row.id);
+      await sleep(10); // 三行要有严格递减的 updated_at，排序才有确定意义
+    }
+    const p1 = await repo().listAdminProducts({ page: 1, size: 2 });
+    // 看第 1 页期间，第 3 名的商品被买走一件（它原本在第 2 页）
+    const last = p1.items[p1.items.length - 1];
+    expect(last).toBeDefined();
+    const victim = ids.find((x) => !p1.items.some((r) => r.id === x));
+    expect(victim).toBeDefined();
+    expect(await decrementStock(db, String(victim), 1)).toBe(true);
+    const p2 = await repo().listAdminProducts({ page: 2, size: 2 });
+
+    // ⚠️ 先红断言：若 decrementStock 仍写 updated_at，被扣的那件会升到第 1 位，
+    //    第 2 页就会重复第 1 页的末行并漏掉它（DB3-02 报告里的场景，实测复现）。
+    expect([...p1.items, ...p2.items].map((r) => r.id).sort()).toEqual([...ids].sort());
+    expect((await db`select stock from products where id = ${String(victim)}`)[0]?.stock).toBe(9);
+  });
+
+  it('⚠️ 下单扣库存**不**推进 products.updated_at（否则运营正在进行的编辑被成交作废）', async () => {
+    const created = await repo().insertProduct(input({ stock: 10 }));
+    await sleep(10);
+    expect(await decrementStock(db, 'p-1', 1)).toBe(true);
+    const after = (await repo().listAdminProducts({ page: 1, size: 1 })).items[0];
+    expect(after?.stock).toBe(9); // 库存确实扣了
+    expect(after?.updated_at.getTime()).toBe(created.updated_at.getTime()); // 但版本凭据没变
+    // 于是：运营打开表单 → 买家下单 → 运营保存（AJ-175 钉住的行为）仍然成功
+    const saved = await repo().updateProduct(
+      'p-1',
+      updateInput(created.updated_at.toISOString(), { title: '编辑期间来了单' }),
+    );
+    expect(saved.ok).toBe(true);
+  });
+
+  it('⚠️ 关单回补库存同样**不**推进 updated_at（与扣减对称）', async () => {
+    const created = await repo().insertProduct(input({ stock: 10 }));
+    await sleep(10);
+    await incrementStock(db, 'p-1', 2);
+    const after = (await repo().listAdminProducts({ page: 1, size: 1 })).items[0];
+    expect(after?.stock).toBe(12);
+    expect(after?.updated_at.getTime()).toBe(created.updated_at.getTime());
+  });
+
   it('listAdminProducts：行含管理端专有列（cost_jpy / jan_code / purchase_source）', async () => {
     await repo().insertProduct(input({ cost_jpy: 2000, jan_code: '4901234567890' }));
     const list = await repo().listAdminProducts({ page: 1, size: 10 });
@@ -134,18 +200,66 @@ describe('catalog-admin（管理端商品写仓储，I2 U-A2）', () => {
   });
 
   it('updateProduct：改得到已填字段与可空字段（置 null 生效）', async () => {
-    await repo().insertProduct(input({ cost_jpy: 2000, jan_code: '4901234567890' }));
-    const before = (await repo().listAdminProducts({ page: 1, size: 1 })).items[0];
-    expect(before).toBeDefined();
-    await new Promise((r) => setTimeout(r, 5)); // 让 now() 至少推进一点
-    const after = await repo().updateProduct('p-1', input({ title: '改名后', jan_code: null }));
-    expect(after?.title).toBe('改名后');
-    expect(after?.jan_code).toBeNull();
-    expect(after?.updated_at.getTime()).toBeGreaterThan(before!.updated_at.getTime());
+    const created = await repo().insertProduct(
+      input({ cost_jpy: 2000, jan_code: '4901234567890' }),
+    );
+    await sleep(10); // 让 now() 至少推进一个毫秒
+    // ⚠️ 凭据**直接用 insert 回的 updated_at**（转毫秒精度的 ISO 串）：库里那一列是
+    //    timestamptz，精度 **6 位（微秒）**，而客户端拿到的恒为毫秒。仓储里若丢了
+    //    `date_trunc('millisecond', updated_at)`，两边永远不等 → 这一条**立刻变红**。
+    //    该缺陷只在真库上出现（内存假仓储看不见），所以必须钉在真库用例里。
+    const after = await repo().updateProduct(
+      'p-1',
+      updateInput(created.updated_at.toISOString(), { title: '改名后', jan_code: null }),
+    );
+    if (!after.ok) throw new Error(`本应命中，实际 ${after.reason}`);
+    expect(after.row.title).toBe('改名后');
+    expect(after.row.jan_code).toBeNull();
+    expect(after.row.updated_at.getTime()).toBeGreaterThan(created.updated_at.getTime());
   });
 
-  it('updateProduct：id 不存在 → null（路由层据此 40401）', async () => {
-    expect(await repo().updateProduct('no-such', input())).toBeNull();
+  it('updateProduct：id 不存在 → not_found（路由层据此 40401，不是 40914）', async () => {
+    expect(await repo().updateProduct('no-such', updateInput(new Date().toISOString()))).toEqual({
+      ok: false,
+      reason: 'not_found',
+    });
+  });
+
+  it('updateProduct：凭据是旧值 → stale，且**整行没被写**', async () => {
+    const created = await repo().insertProduct(input({ price_jpy: 3600 }));
+    const res = await repo().updateProduct(
+      'p-1',
+      updateInput(new Date(created.updated_at.getTime() - 60_000).toISOString(), {
+        title: '覆盖者',
+        price_jpy: 999,
+      }),
+    );
+    expect(res).toEqual({ ok: false, reason: 'stale' });
+    const row = (await repo().listAdminProducts({ page: 1, size: 1 })).items[0];
+    expect(row?.title).toBe('测试商品'); // 没被"覆盖者"写进去
+    expect(row?.price_jpy).toBe(3600);
+    expect(row?.updated_at.getTime()).toBe(created.updated_at.getTime()); // updated_at 也没被推进
+  });
+
+  it('updateProduct：A 打开表单后 B 先保存 → A 的凭据失效（真实并发场景）', async () => {
+    const created = await repo().insertProduct(input({ price_jpy: 3600 }));
+    const seenByA = created.updated_at; // A 打开编辑页那一刻读到的版本
+    await sleep(10); // ⚠️ 必须让 B 的 now() 与 insert 的 now() 跨过同一个毫秒，否则本用例会 flaky
+    const byB = await repo().updateProduct(
+      'p-1',
+      updateInput(seenByA.toISOString(), { price_jpy: 4200 }),
+    );
+    if (!byB.ok) throw new Error(`B 本应命中，实际 ${byB.reason}`);
+
+    const byA = await repo().updateProduct(
+      'p-1',
+      updateInput(seenByA.toISOString(), { title: 'A 改的标题' }),
+    );
+    expect(byA).toEqual({ ok: false, reason: 'stale' });
+
+    const row = (await repo().listAdminProducts({ page: 1, size: 1 })).items[0];
+    expect(row?.price_jpy).toBe(4200); // B 的改价**没有被 A 回滚**
+    expect(row?.title).toBe('测试商品'); // A 的标题也没写进去
   });
 
   it('setProductStatus：active ↔ offline 都能改；不存在 → false', async () => {

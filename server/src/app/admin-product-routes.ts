@@ -82,6 +82,36 @@ function rejectInvalid(
   throw new AppError(40001, { errors });
 }
 
+/** 服务端下发的 `updated_at` 恒为 `toISOString()`：毫秒 + `Z`，别的一律不认。 */
+const ISO_MS_Z = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/**
+ * 取 `expected_updated_at`（乐观锁凭据）；缺失或不是合法时间 → 40001。
+ *
+ * @why 单独一个函数而不是内联两行：它是"这个 PUT 能不能被接受"的**准入判定**，
+ *      形状校验、错误文案、日志三处必须一致，散在路由里改一处漏一处就会
+ *      出现"带了凭据却说不合法"或"没带凭据也能保存"这两种各自都很难复现的洞。
+ *
+ * @why 两步校验（**形状 → 取值**）而不用 `new Date(x).toISOString()` 归一化：
+ *      ① F10：业务侧不构造 `Date`（时钟与历法判定走 ports/clock，这条由 eslint 硬拦）；
+ *      ② 服务端下发的就是这个形状，要求它"必须长这样"比"接受任何能被 parse 的东西"更严——
+ *         `'2026-1-2'` 这种输入能被 parse，但解析结果随引擎而异，
+ *         而**凭据对不上的代价是运营被无理由地赶回去刷新**；宁可响亮地 40001。
+ *      `Date.parse` 那一步专治 `2026-13-99T00:00:00.000Z`（形状对、时间不存在）。
+ *      @tradeoff 代价：只接受 UTC `Z` 尾，带时区偏移的合法 ISO（`+09:00`）会被拒。
+ *              可接受——这个值的唯一生产者是服务端自己的 `toISOString()`。
+ */
+function expectedUpdatedAtOf(body: unknown): string {
+  const raw = (body as { expected_updated_at?: unknown } | undefined)?.expected_updated_at;
+  if (typeof raw !== 'string' || raw === '') {
+    throw new AppError(40001, { reason: 'expected_updated_at_required' });
+  }
+  if (!ISO_MS_Z.test(raw) || Number.isNaN(Date.parse(raw))) {
+    throw new AppError(40001, { reason: 'expected_updated_at_invalid' });
+  }
+  return raw;
+}
+
 export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDeps): void {
   const repo = createCatalogAdminRepo(deps.db);
   const guard = requireRole('admin', deps.auth, { identity: deps.identity });
@@ -154,7 +184,16 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         const id = String(req.params.id);
         const r = validateProductInput(req.body, deps.config.MAX_ORDER_JPY);
         if (!r.ok) rejectInvalid(deps.logger, r.errors);
-        const row = await repo.updateProduct(id, {
+        // ── 乐观锁凭据（ADM3-02 / AJ-258，契约 0.6.18）───────────────────────────
+        // ⚠️ 必须在 `validateProductInput` **之后**单独取：它不属于 `ProductInput`
+        //    （商品字段与"你看到的是哪一版"是两件事，混进同一个 schema 会让
+        //     "改一个字段"与"改的哪一版"在日志里说不清）。
+        // @why 缺了就 40001 而不是"退化成无锁更新"：无锁 = 静默覆盖他人改价，
+        //      那正是本条要堵的洞；宁可让不带凭据的旧前端**响亮失败**，
+        //      也不要它继续"能用"——能用但会丢别人的改动，比不能用危险得多。
+        const expected = expectedUpdatedAtOf(req.body);
+        const result = await repo.updateProduct(id, {
+          expectedUpdatedAt: expected,
           id,
           title: r.value.title,
           category: r.value.category,
@@ -173,8 +212,18 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           jan_code: r.value.jan_code ?? null,
           purchase_source: r.value.purchase_source ?? null,
         });
-        if (row === null) throw new AppError(40401, { product_id: id });
-        res.json(toAdminProduct(row));
+        if (!result.ok) {
+          if (result.reason === 'not_found') throw new AppError(40401, { product_id: id });
+          // 40914：库里那一行在运营打开表单之后被改过了。整行**没有写**（0 行命中）。
+          // @why 要留一条 warn 而不是只回码：这是"两个人同一分钟改同一件商品"的唯一信号，
+          //      没有它，将来评估"要不要改成字段级合并"时没有任何数据可用。
+          deps.logger.warn('admin_product_update_stale', {
+            result: 'conflict',
+            ctx: { product_id: id, expected, action: 'none（未写入）' },
+          });
+          throw new AppError(40914, { product_id: id, expected });
+        }
+        res.json(toAdminProduct(result.row));
       } catch (e) {
         next(e);
       }

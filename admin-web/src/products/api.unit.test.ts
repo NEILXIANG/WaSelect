@@ -78,9 +78,28 @@ describe('listProducts', () => {
 describe('updateProduct / setProductStatus', () => {
   it('PUT 走全量更新路径，id 被 encode（slug 里理论上没有特殊字符，但 id 是外部输入）', async () => {
     const { impl, seen } = stubFetch(() => json({ id: 'p-1' }));
-    await updateProduct(api(impl), 'p 1/x', { title: 'x' });
+    await updateProduct(api(impl), 'p 1/x', { title: 'x' }, '2026-10-01T00:00:00.000Z');
     expect(seen[0]?.url).toContain('/api/v1/admin/products/p%201%2Fx');
     expect(seen[0]?.init.method).toBe('PUT');
+  });
+
+  // ── ADM3-02：乐观锁凭据 ────────────────────────────────────────────────────
+  it('PUT 带上 expected_updated_at（与商品字段**并列**，不是嵌进去）', async () => {
+    const { impl, seen } = stubFetch(() => json({ id: 'p-1' }));
+    await updateProduct(api(impl), 'p-1', { title: 'x' }, '2026-10-01T12:34:56.789Z');
+    const sent = JSON.parse(String(seen[0]?.init.body)) as Record<string, unknown>;
+    expect(sent['expected_updated_at']).toBe('2026-10-01T12:34:56.789Z');
+    expect(sent['title']).toBe('x'); // 商品字段照旧在，没被凭据盖掉
+  });
+
+  it('⚠️ 空凭据也照发（不静默省略）：让服务端明确回 40001，而不是退化成无锁覆盖', async () => {
+    // @why 前端若在 `expectedUpdatedAt === ''` 时把字段删掉，服务端收到的是"没带凭据"
+    //      → 40001；这与"带了空串"结局相同，但**日志里少一条线索**。
+    //      真要拦，应在页面层拦（ProductFormPage 已拦并给人话），接口层不做隐式降级。
+    const { impl, seen } = stubFetch(() => json({ id: 'p-1' }));
+    await updateProduct(api(impl), 'p-1', { title: 'x' }, '');
+    const sent = JSON.parse(String(seen[0]?.init.body)) as Record<string, unknown>;
+    expect('expected_updated_at' in sent).toBe(true);
   });
 
   it('⚠️ 上下架走独立 PATCH 且只发 status（不整条覆盖，防两个管理员互相覆盖）', async () => {

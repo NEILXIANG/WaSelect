@@ -24,6 +24,11 @@ export interface FxRateLike {
   raw_rate?: number;
   buffer?: number;
   effective_from?: string;
+  /**
+   * 这一行是否**当前已生效**，由**服务端**按自己的时钟判定（ADM3-05）。
+   * @why 前端不拿本机时钟推：管理员电脑的时钟偏差会让"刚保存的立即生效行"被当成未来行。
+   */
+  is_current?: boolean;
 }
 
 /** 契约 `ShippingRate`。 */
@@ -35,7 +40,12 @@ export interface ShippingRateLike {
 }
 
 /**
- * `GET /admin/fx`（当前生效的展示汇率）。
+ * `GET /admin/fx`（展示汇率**全量**：历史 + 未来生效行）。
+ *
+ * ⚠️ 不叫"当前生效"（ADM3-07）：服务端**不过滤**——过滤掉未来行会让"刚保存的预约汇率"
+ * 在列表里消失，运营以为没保存成功（AJ-150 ①）。"哪一行当前生效"由每行的 `is_current`
+ * 单独标注（服务端时钟判定，ADM3-05），调用方读它，别自己跟本机时间比。
+ *
  * @throws {ApiError} 响应不是数组（契约是裸数组）
  */
 export async function listFx(api: AdminApi, traceId?: string): Promise<FxRateLike[]> {

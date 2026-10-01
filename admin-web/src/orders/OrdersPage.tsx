@@ -44,6 +44,16 @@ export function OrdersPage({ api }: OrdersPageProps) {
   const [error, setError] = useState('');
   /** 当前打开的订单 id（null = 看列表）。 */
   const [detailId, setDetailId] = useState<string | null>(null);
+  /**
+   * 手动刷新的自增计数（ADM3-09）。
+   * @why 列表只随 `page / status / applied` 变化而重载，而这三项在"用同一个关键词再点一次搜索"
+   *      时**一项都不变** → effect 不触发 → 列表不动。客服此时的场景正是"客户说刚付了款，
+   *      我再点一次搜索看看"，而页面纹丝不动会让他据此回复"还没收到款"。
+   *      唯一能刷新它的旁路是切页签再切回来，或进一趟详情——都是绕路。
+   *      @tradeoff 用计数而不是把 `load` 从 deps 里拿出来手动调：后者要人记住"哪些地方改了依赖还得手动补一次"，
+   *              计数只要加进 deps 就永远有效。
+   */
+  const [reloadTick, setReloadTick] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,7 +74,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
     } finally {
       setLoading(false);
     }
-  }, [api, page, status, applied]);
+  }, [api, page, status, applied, reloadTick]);
 
   useEffect(() => {
     void load();
@@ -119,11 +129,23 @@ export function OrdersPage({ api }: OrdersPageProps) {
           type="button"
           className="btn"
           onClick={() => {
-            setApplied(keyword.trim());
+            const next = keyword.trim();
+            // ⚠️ 关键词没变也要重载（ADM3-09）：只 setApplied 的话，值没变 → load 不变 → 不请求。
+            //    运营点"搜索"的意图里本来就包含"再查一次"，不该被 react 的依赖比较吞掉。
+            if (next === applied) setReloadTick((t) => t + 1);
+            else setApplied(next);
             setPage(1);
           }}
         >
           搜索
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setReloadTick((t) => t + 1)}
+          disabled={loading}
+        >
+          {loading ? '刷新中…' : '刷新'}
         </button>
       </div>
 
