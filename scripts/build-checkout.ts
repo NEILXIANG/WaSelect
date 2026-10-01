@@ -20,7 +20,9 @@ import { fileURLToPath } from 'node:url';
 import { WS_COLORS } from '@waselect/shared';
 import {
   assertDeployApiBase,
+  CHECKOUT_DIST_DIR,
   CHECKOUT_PAGES,
+  isDeployBuild,
   renderPage,
   renderRedirects,
   renderTokensCss,
@@ -28,7 +30,7 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const src = join(root, 'checkout-static');
-const dist = join(src, 'dist');
+const dist = join(root, CHECKOUT_DIST_DIR);
 
 function main(): void {
   const envFile = join(root, '.env');
@@ -36,8 +38,9 @@ function main(): void {
     process.loadEnvFile(envFile);
   }
   const apiBase = process.env.PUBLIC_API_BASE ?? 'http://localhost:3000';
-  // CF Pages 构建（平台注入 CF_PAGES）：漏配 PUBLIC_API_BASE 必须响亮失败（@see assertDeployApiBase）
-  if (process.env.CF_PAGES !== undefined) assertDeployApiBase(apiBase);
+  // 部署构建（CF Pages 注入 CF_PAGES / Render 由我们声明 DEPLOY_TARGET）：
+  // 漏配 PUBLIC_API_BASE 必须响亮失败——产物里的 `_redirects` 会静默指向 localhost
+  if (isDeployBuild()) assertDeployApiBase(apiBase);
 
   rmSync(dist, { recursive: true, force: true }); // 全量重建：产物目录无增量状态
   mkdirSync(join(dist, 'assets'), { recursive: true });

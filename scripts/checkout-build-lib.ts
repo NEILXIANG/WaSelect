@@ -23,6 +23,17 @@
 export const CHECKOUT_PAGES = ['/pay/done', '/pay/cancelled', '/pay/expired'] as const;
 
 /**
+ * 产物目录（**相对仓库根**）。
+ *
+ * @why 抽成常量而不是在构建脚本里现拼：Cloudflare Pages **没有 IaC**
+ *      （体检 N16 / B3），平台的"发布目录"是控制台里手填的一行，与这里各写一份的话
+ *      改了一处另一处**不会报错**——产物被发布到别的目录，站点看起来是空的。
+ *      所以部署清单（`deploy/cloudflare-pages.json`）里那份由本常量比对，
+ *      两边不一致时 `test/config/checkout-pages.unit.test.ts` 直接红。
+ */
+export const CHECKOUT_DIST_DIR = 'checkout-static/dist';
+
+/**
  * 品牌名单一来源。⚠️ 品牌名**待定**（候选 和選/WaSelect，见 jp README §5）——
  * 定稿后只改这一处，三张静态页由构建期替换（`__BRAND_NAME__` 占位）。
  */
@@ -52,19 +63,39 @@ export function renderRedirects(apiBase: string): string {
 }
 
 /**
- * 部署目标的 API 基址闸门：Cloudflare Pages 构建（平台会注入 `CF_PAGES`）时，
- * `PUBLIC_API_BASE` 必须是 https 公网地址。
+ * 判断本次构建是不是**部署构建**（而非本机/CI 联调构建）。
  *
- * @why CF Pages 没有 IaC（体检 N16）：环境变量漏配时构建**照样成功**，
- *      产物 `_redirects` 静默指向 localhost 默认值——用户点短链全部打不开，
- *      而发现它的方式是"用户说付款链接坏了"。部署构建要么拿到真值，要么响亮失败。
- * @limitation 只在 CF Pages 环境生效；本地/CI 构建故意允许 localhost（联调要用）。
+ * @why 判据刻意是"我们自己声明的哨兵变量"，不是"猜平台注入了什么"：
+ *      · `CF_PAGES` 由 Cloudflare Pages 注入（已有）；
+ *      · `DEPLOY_TARGET` 由**我们在 `render.yaml` 里显式写**（B2 新增的 admin 静态站）。
+ *        没有它，Render 的静态站构建与本机 `npm run build` 无法区分，
+ *        于是"产物里烤着 localhost"这件事就没有任何一道闸会拦——
+ *        而它的表现是"上线即全灭，且不报 CORS 错"（请求打在静态站自己身上，全是 404）。
+ * @why 不用 `NODE_ENV=production` 当判据：Vite 在 `vite build` 时会自己把它设成 production，
+ *      于是本机构建也会被判成部署构建，联调产物直接构建失败——闸门必须有**假阴性**，不能有假阳性。
+ *
+ * @limitation 只认这两个哨兵。将来换平台（Netlify / Vercel）要在这里加一条，
+ *             并在该平台的构建环境里显式声明哨兵——**不要**改成"检测某个环境变量是否存在"，
+ *             那种写法会在平台改名/改名变量时静默失效（闸门直接消失且不报错）。
+ */
+export function isDeployBuild(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CF_PAGES !== undefined || env.DEPLOY_TARGET !== undefined;
+}
+
+/**
+ * 部署构建的 API 基址闸门：`PUBLIC_API_BASE` / `VITE_API_BASE_URL` 必须是 https 公网地址。
+ *
+ * @why 静态站托管没有 IaC（体检 N16 / B2-B3）：环境变量漏配时构建**照样成功**，
+ *      产物静默指向 localhost 默认值——checkout 是"用户点短链全部打不开"，
+ *      admin 是"运营打开后台全是 404"。发现它们的方式都是"用户来说坏了"。
+ *      部署构建要么拿到真值，要么响亮失败。
+ * @limitation 只在本机/CI 联调构建时放行 localhost（那是刻意的：联调就要打本机 API）。
  */
 export function assertDeployApiBase(apiBase: string, varName = 'PUBLIC_API_BASE'): void {
   const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/.test(apiBase);
   if (isLocal || !apiBase.startsWith('https://')) {
     throw new Error(
-      `CF Pages 构建要求 ${varName} 是 https 公网地址（当前：${apiBase}）。` +
+      `部署构建要求 ${varName} 是 https 公网地址（当前：${apiBase}）。` +
         '漏配时产物会静默指向 localhost——宁可构建失败，也不要静默产出一个坏站点。',
     );
   }

@@ -43,6 +43,12 @@ const PLATFORM_KEYS: Readonly<Record<string, string>> = {
   NODE_VERSION: 'Render 平台的运行时版本开关，由平台自身读取，不属于应用配置',
   DAILY_JOB_TARGET:
     'cron 服务专用：由平台 fromService(property: hostport) 注入的 web 服务内网地址，只给 startCommand 用，应用不读（AJ-176）',
+  DEPLOY_TARGET:
+    '构建期哨兵（B2）：admin-web 静态站构建时由本清单显式声明，`scripts/assert-admin-deploy-env.ts` ' +
+    '只在它存在时才要求 VITE_API_BASE_URL 是 https 公网地址——删掉它等于把那道闸关掉',
+  VITE_API_BASE_URL:
+    'admin-web 专用构建期变量（Vite 只注入 VITE_ 前缀），由 admin-web/src/api/config.ts 读取；' +
+    '不进服务端 schema，所以不在 CONFIG_KEYS 里',
 };
 
 interface EnvEntry {
@@ -148,6 +154,34 @@ function parseDatabases(yaml: string): DatabaseEntry[] {
 
 const databases = parseDatabases(renderYaml);
 
+/**
+ * 按 `  - type:` 切出每个服务块（只认我们自己的缩进风格，与上面两个解析器同口径）。
+ * @why 静态站的形态断言需要一个"服务级"视角：envVars 是**跨服务汇总**的，
+ *      只看汇总集合能证明"键存在"，证明不了"它挂在正确的服务上"
+ *      ——而 `DEPLOY_TARGET` 挂在 web 服务上毫无意义（那里没有 admin 构建）。
+ */
+function parseServices(yaml: string): { header: string; body: string }[] {
+  const lines = yaml.split('\n');
+  const starts = lines.map((l, i) => (/^\s{2}-\s*type:\s*/.test(l) ? i : -1)).filter((i) => i >= 0);
+  return starts.map((s, k) => {
+    // 两个边界都算：下一个 `- type:`（同段内），以及**顶格键**（`databases:` = 服务段结束）。
+    // ⚠️ 少了后者会把 databases 段也算进最后一个服务——那正是"越界"最可能的形态。
+    let sectionEnd = lines.length;
+    for (let i = s + 1; i < lines.length; i += 1) {
+      if (/^\S/.test(lines[i] as string)) {
+        sectionEnd = i;
+        break;
+      }
+    }
+    const next = k + 1 < starts.length ? (starts[k + 1] as number) : lines.length;
+    const end = Math.min(sectionEnd, next);
+    return { header: lines[s] as string, body: lines.slice(s, end).join('\n') };
+  });
+}
+
+const services = parseServices(renderYaml);
+const adminService = services.find((s) => /^\s*name:\s*waselect-admin\s*$/m.test(s.body));
+
 describe('render.yaml ↔ 配置 schema 一致', () => {
   it('两边都非空，且含各自最关键的那几个键（防"空对空"永远绿）', () => {
     // @why 本项目第三次以上踩同一形态：解析失效 / 目录改名会让集合变空，
@@ -203,6 +237,76 @@ describe('render.yaml ↔ 配置 schema 一致', () => {
       missing,
       `STORAGE_DRIVER 已声明，但缺这些凭据（config 规则 1d-2 会拒绝启动）：\n${missing.join('\n')}`,
     ).toEqual([]);
+  });
+
+  /**
+   * B2：admin-web 的部署目标（此前"编译了但没有服务承载产物" ⇒ 运营进不去后台）。
+   *
+   * @why 形态断言而不是"存在性断言"：只断言 `waselect-admin` 存在的话，
+   *      把 `runtime: static` 写成 `runtime: node`（平台会去 `npm start` 一个静态目录）
+   *      或者把 `staticPublishPath` 指错目录（发布一个空站点）——两种都照样绿，
+   *      上线后却不工作。四条一起钉，才等于"这个服务真的会发布 admin-web 的产物"。
+   * @why SPA 回落那条单独钉：没有 `/* → /index.html` rewrite 时，
+   *      根路径能开、深链接与刷新一律 404——表现为"点进去能用，刷新就白屏"，
+   *      是最容易被误判成前端路由 bug 的一类部署缺口。
+   * @measured(docs.render.com/blueprint-spec 与 deploy-create-react-app，2026-10-01)：
+   *      静态站 = `runtime: static` + `staticPublishPath`；SPA 回落 = rewrite `/*` → `/index.html`。
+   */
+  it('admin-web 静态站：形态正确（runtime=static / 发布 dist / SPA 回落 / 构建带 --include=dev）', () => {
+    expect(adminService, 'render.yaml 里找不到名为 waselect-admin 的服务').toBeDefined();
+    const body = adminService?.body ?? '';
+    expect(body).toMatch(/^\s*runtime:\s*static\s*$/m);
+    expect(/^\s*staticPublishPath:\s*(\S+)/m.exec(body)?.[1]).toBe('./admin-web/dist');
+    // SPA 回落：三个字段必须成套出现（少了 destination 就是"重写到自己"）
+    expect(body).toMatch(/^\s*routes:\s*$/m);
+    // ⚠️ 允许行尾注释：否则在 `- type: rewrite` 后面写一句说明就会让断言红，
+    //    而那是"注释写得对、断言写得太严"——与 parseEnvEntries 只认裸 `- key: X` 不是一回事
+    expect(body).toMatch(/^\s*-\s*type:\s*rewrite\s*(?:#.*)?$/m);
+    expect(body).toMatch(/^\s*source:\s*\/\*\s*$/m);
+    expect(body).toMatch(/^\s*destination:\s*\/index\.html\s*$/m);
+    // 构建必须含 devDependencies：vite / tsx / tsc 全是 devDependencies
+    expect(/^\s*buildCommand:\s*(.+)$/m.exec(body)?.[1]).toMatch(/npm ci --include=dev/);
+    // 静态站不需要实例数/扩缩容（它不是常驻进程）；写上说明误当成 web 服务了
+    expect(body).not.toMatch(/^\s*(numInstances|scaling):/m);
+  });
+
+  /**
+   * @why `DEPLOY_TARGET` 是 admin-web 部署闸门的**唯一开关**（`scripts/assert-admin-deploy-env.ts`）。
+   *      它不在服务端 schema 里（也不是平台变量），所以"键存在"这类断言救不了它——
+   *      只有显式钉"这个服务上有它"，才防得住有人为了消掉一条构建告警把它删掉。
+   *      删掉的后果是：`VITE_API_BASE_URL` 漏配时构建照样成功，产物里烤着 localhost。
+   */
+  it('admin-web 静态站声明了 DEPLOY_TARGET 与 VITE_API_BASE_URL（前者是部署闸门的开关）', () => {
+    const body = adminService?.body ?? '';
+    expect(body).toMatch(/^\s*-\s*key:\s*DEPLOY_TARGET\s*$/m);
+    expect(body).toMatch(/^\s*-\s*key:\s*VITE_API_BASE_URL\s*$/m);
+    // 密钥/域名不得写字面值（本文件进仓库）
+    expect(body).not.toMatch(/-\s*key:\s*VITE_API_BASE_URL\s*\n\s*value:/);
+  });
+
+  it('解析器自检：服务块能按 `- type:` 切开、且互不越界（防"静态站断言读到 web 服务的字段"）', () => {
+    // @why 上面两条全靠 parseServices。它一旦把块边界切错（例如把 cron 也算进 web），
+    //      `staticPublishPath` 可能从别的服务里读到，断言就变成假绿灯。
+    const sample = [
+      'services:',
+      '  - type: web',
+      '    name: api',
+      '    runtime: node',
+      '  - type: cron',
+      '    name: daily',
+      '  - type: web',
+      '    name: admin',
+      '    runtime: static',
+      '    staticPublishPath: ./dist',
+      'databases:',
+      '  - name: pg',
+    ].join('\n');
+    const parsed = parseServices(sample);
+    expect(parsed).toHaveLength(3);
+    expect(parsed[0]?.body).toContain('name: api');
+    expect(parsed[0]?.body).not.toContain('name: daily');
+    expect(parsed[2]?.body).toContain('staticPublishPath: ./dist');
+    expect(parsed[2]?.body).not.toContain('name: pg');
   });
 
   it('白名单里的键确实只属于平台（防止白名单写错而永久放水）', () => {

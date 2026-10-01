@@ -24,6 +24,7 @@ import {
   BRAND_NAME,
   CHECKOUT_PAGES,
   collectCssVars,
+  isDeployBuild,
   matchRedirect,
   parseRedirects,
   renderPage,
@@ -90,6 +91,37 @@ describe('assertDeployApiBase：CF Pages 构建的部署闸门（体检 N16）',
     //      报错不带变量名时，运维拿到错误不知道去配哪一个（二次审查 P2 的连带修）
     expect(() => assertDeployApiBase('', 'VITE_API_BASE_URL')).toThrow(/VITE_API_BASE_URL/);
     expect(() => assertDeployApiBase('http://localhost:3000')).toThrow(/PUBLIC_API_BASE/);
+  });
+});
+
+describe('isDeployBuild：部署构建的判定（B2 起两个平台共用）', () => {
+  /**
+   * @why 2026-10-01（B2）：admin-web 的部署目标是 Render Static Site，而 Render
+   *      不注入 `CF_PAGES` ——旧判据只认 CF_PAGES 的话，那道闸在 Render 上**完全不生效**。
+   *      所以新增 `DEPLOY_TARGET`（我们在 render.yaml 里显式声明的哨兵）。
+   *      这两条一起意味着：**判定错了 = 闸门静默消失**，且不会有任何告警，必须各钉一条。
+   */
+  it('CF_PAGES 存在 → 部署构建（Cloudflare Pages）', () => {
+    expect(isDeployBuild({ CF_PAGES: '1' })).toBe(true);
+    expect(isDeployBuild({ CF_PAGES: '' })).toBe(true); // 空串也算：平台注入了就是部署环境
+  });
+
+  it('DEPLOY_TARGET 存在 → 部署构建（Render 静态站，哨兵由 render.yaml 声明）', () => {
+    expect(isDeployBuild({ DEPLOY_TARGET: 'render-static' })).toBe(true);
+  });
+
+  it('两个都没有 → 本机构建（放行 localhost，联调要用）', () => {
+    expect(isDeployBuild({})).toBe(false);
+    expect(isDeployBuild({ NODE_ENV: 'production' })).toBe(false);
+  });
+
+  /**
+   * @why 反向钉住"不拿 NODE_ENV 当判据"：Vite 在 `vite build` 时会自己把 NODE_ENV 设成
+   *      production，用它当判据的话**本机构建也会被判成部署构建**，联调产物直接构建失败。
+   *      这条断言把"闸门不能有假阳性"变成硬约束——它比"有假阴性"更妨碍开发。
+   */
+  it('NODE_ENV=production 仍判为本机构建（用它会让本地联调构建失败）', () => {
+    expect(isDeployBuild({ NODE_ENV: 'production', HOME: '/u' })).toBe(false);
   });
 });
 

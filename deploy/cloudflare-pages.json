@@ -1,0 +1,14 @@
+{
+  "$comment": "Cloudflare Pages 的部署清单（B3）。CF Pages 没有 IaC，平台上的设置只能手填——本文件是仓库里那份**受门禁约束**的真源：改了它要过 test/config/checkout-pages.unit.test.ts，照它填才不会把站点发到一个空目录。控制台路径：Workers & Pages → 你的项目 → Settings → Builds & deployments。",
+  "project": "waselect-checkout",
+  "whyCloudflareNotRender": "D-49 的短链第一跳 `/o/* → {API}/api/v1/pay/link/:splat` 需要 **302 + 路径捕获**。Render 的 Redirect 固定 301（@measured docs.render.com/docs/redirects-rewrites, 2026-10-01），支付链路上的 301 会被浏览器永久缓存，不能接受。CF Pages 两者都支持（AJ-279）。",
+  "buildCommand": "npm ci --include=dev && npm run build:checkout",
+  "outputDirectory": "checkout-static/dist",
+  "buildEnvVars": ["PUBLIC_API_BASE", "NODE_VERSION"],
+  "notes": [
+    "NODE_VERSION=22：与 .nvmrc / render.yaml 同版本，别让平台挑默认版本（挑错的表现是构建期语法错）",
+    "PUBLIC_API_BASE 必须是 https 公网地址；漏配时构建**照样成功**、产物 _redirects 静默指向 localhost（CF 会注入 CF_PAGES，闸门 scripts/build-checkout.ts 会拦，但只在漏配时响亮）",
+    "自定义域填进项目后，把同一个地址写进服务端配置的 CHECKOUT_BASE_URL（生产启用 stripe 时必填，缺了启动即拒）",
+    "首次上线必须手验一次：curl -I https://checkout.<domain>/o/<真实 token> 应返回 302 且 Location 指向 API 的 /api/v1/pay/link/<token>（带 ?t= 的真实短链要验一次——CF 对查询串是否随 302 保留没有文档承诺）"
+  ]
+}

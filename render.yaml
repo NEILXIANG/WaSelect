@@ -204,6 +204,41 @@ services:
           name: waselect-api
           property: hostport
 
+  # ── admin-web 静态站（B2，2026-10-01）────────────────────────────────────
+  # @why 在此之前 `npm run build` 编译了 admin-web，但**没有任何服务承载它的产物**
+  #      ⇒ 运营进不去后台。它是纯 SPA（不需要 splat / 不需要指定状态码），
+  #      所以能进 Render 静态站：**有 IaC**，且被 `test/config/render-env.unit.test.ts` 覆盖。
+  #      ⚠️ **checkout-static 不在这里**：D-49 的短链第一跳 `/o/* → /pay/link/:splat` 需要
+  #      **302**，而 Render 的 redirect **固定 301**（@measured docs.render.com/docs/redirects-rewrites,
+  #      2026-10-01：「Redirect … via a 301 Moved Permanently response code」）——
+  #      支付路径上的 301 会被浏览器永久缓存，不能接受。CF Pages 两者都支持，checkout 留在 CF Pages。
+  # @measured(docs.render.com/blueprint-spec, 2026-10-01)：静态站 = `- type: web` + `runtime: static`
+  #      + `staticPublishPath`（必填）；`routes` 支持 redirect / rewrite。
+  # @measured(docs.render.com/docs/deploy-create-react-app, 2026-10-01)：SPA 客户端路由必须
+  #      配 rewrite `/* → /index.html`，否则深链接与刷新一律 404。
+  - type: web
+    name: waselect-admin
+    runtime: static
+    buildCommand: npm ci --include=dev && npm run build -w admin-web
+    staticPublishPath: ./admin-web/dist
+    routes:
+      - type: rewrite # SPA 回落：没有它，`/orders/xxx` 刷新就是 404
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      # ⚠️ 这行是 admin-web 部署闸门的**开关**（`scripts/assert-admin-deploy-env.ts`）：
+      #    只有在它（或 CF Pages 的 CF_PAGES）存在时，构建才会要求 `VITE_API_BASE_URL`
+      #    是 https 公网地址。删掉它 = 闸门静默关闭 = 漏配时产物里烤着 localhost，
+      #    上线即全灭且不报 CORS 错（请求打在静态站自己身上，全是 404）。
+      - key: DEPLOY_TARGET
+        value: render-static
+      # ⚠️ 必须是 https 公网地址，且**与 web 服务的 CORS_ORIGINS 同源**——
+      #    CORS 白名单是精确匹配（不支持通配），两边不一致 = 管理端跨域全挂。
+      - key: VITE_API_BASE_URL
+        sync: false
+
 databases:
   - name: waselect-pg
     region: oregon # 与 web 同区：跨区会把每个查询的 RTT 加几十毫秒，且**按 egress 计费**
