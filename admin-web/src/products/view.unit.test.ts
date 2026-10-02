@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG } from '@waselect/shared';
+import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG, PRODUCT_MAX_CHARS } from '@waselect/shared';
 import {
   BLOCKED_CUSTOMS_WORDS,
   CATEGORY_LABELS,
@@ -43,6 +43,10 @@ const PRODUCT = {
   compliance_tags: ['cosmetic', 'liquid'],
   images: [{ thumb: 't.jpg', card: 'c.jpg', detail: 'd.jpg' }],
   updated_at: '2026-09-27T00:00:00Z',
+  // 编辑口径三列（020）：下行键名无前缀，与上面的 compliance_tags 是两套东西
+  why: '洗い流し不要なので、ダブル洗顔の手間が一つ消える。',
+  maker: '資生堂 掛川工場',
+  tags: ['無香料', 'マツエク可'],
 };
 
 describe('productRows（列表行）', () => {
@@ -85,7 +89,10 @@ describe('emptyProductForm / productFormModel', () => {
     const f = emptyProductForm();
     expect(f.category).toBe(PRODUCT_CATEGORY[0]);
     expect(f.originCountry).toBe('JP');
-    expect(f.tags).toEqual([]);
+    expect(f.complianceTags).toEqual([]);
+    expect(f.editorialWhy).toBe('');
+    expect(f.editorialMaker).toBe('');
+    expect(f.editorialTags).toEqual([]);
     expect(f.images).toEqual([]);
   });
 
@@ -94,14 +101,27 @@ describe('emptyProductForm / productFormModel', () => {
     expect(f.priceJpy).toBe('3600');
     expect(f.weightG).toBe('260');
     expect(f.customsDescEn).toBe('Cleansing oil 200ml');
-    expect(f.tags).toEqual(['cosmetic', 'liquid']);
+    expect(f.complianceTags).toEqual(['cosmetic', 'liquid']);
+    // ⚠️ 编辑口径三列**必须**进表单：漏了就随 PUT 整行覆盖被抹成 null（@see 下方 describe）
+    expect(f.editorialWhy).toBe('洗い流し不要なので、ダブル洗顔の手間が一つ消える。');
+    expect(f.editorialMaker).toBe('資生堂 掛川工場');
+    expect(f.editorialTags).toEqual(['無香料', 'マツエク可']);
     expect(f.images).toEqual([{ thumb: 't.jpg', card: 'c.jpg', detail: 'd.jpg' }]);
+  });
+
+  it('🔴 编辑口径三列：缺列 → 空值（不是"保持原值"，PUT 会写空）', () => {
+    // 这条不是"降级就行"：它描述的是当前行为，而下面的 toProductInput 用例
+    // 钉住的是"即便降级成空，也必须**带着**发出去"——空是明确的清空，
+    // 不带则是"服务端兜 null"，两者日志不同（@see view.ts 的 @why）。
+    expect(productFormModel({ ...PRODUCT, why: undefined }).editorialWhy).toBe('');
+    expect(productFormModel({ ...PRODUCT, maker: null }).editorialMaker).toBe('');
+    expect(productFormModel({ ...PRODUCT, tags: '無香料' }).editorialTags).toEqual([]);
   });
 
   it('脏输入：null / 字段类型不对 → 回落空值，不抛', () => {
     expect(productFormModel(null).title).toBe('');
     expect(productFormModel({ price_jpy: 3600.5 }).priceJpy).toBe('');
-    expect(productFormModel({ compliance_tags: 'cosmetic' }).tags).toEqual([]);
+    expect(productFormModel({ compliance_tags: 'cosmetic' }).complianceTags).toEqual([]);
     expect(productFormModel({ images: [null] }).images).toEqual([
       { thumb: '', card: '', detail: '' },
     ]);
@@ -120,15 +140,15 @@ describe('productFormErrors（上架预检）', () => {
   it('⚠️ 禁售标签勾上 → 报出来（shared 的 BLOCKED_COMPLIANCE_TAG 是真源）', () => {
     const r = productFormErrors({
       ...productFormModel(PRODUCT),
-      tags: ['cosmetic', 'sunscreen'],
+      complianceTags: ['cosmetic', 'sunscreen'],
     });
     expect(r.ok).toBe(false);
-    expect(r.errors['tags']).toContain('sunscreen');
+    expect(r.errors['complianceTags']).toContain('sunscreen');
   });
 
   it('⚠️ 七个禁售标签**每一个**都被拒（漏一个就是一条静默失效的合规拦截）', () => {
     for (const tag of BLOCKED_COMPLIANCE_TAG) {
-      const r = productFormErrors({ ...productFormModel(PRODUCT), tags: [tag] });
+      const r = productFormErrors({ ...productFormModel(PRODUCT), complianceTags: [tag] });
       expect(r.ok, `${tag} 没被拒`).toBe(false);
     }
   });
@@ -138,7 +158,51 @@ describe('productFormErrors（上架预检）', () => {
       (t) => !(BLOCKED_COMPLIANCE_TAG as readonly string[]).includes(t),
     );
     expect(allowed).toEqual(['liquid', 'battery', 'cosmetic', 'food']);
-    expect(productFormErrors({ ...productFormModel(PRODUCT), tags: allowed }).ok).toBe(true);
+    expect(productFormErrors({ ...productFormModel(PRODUCT), complianceTags: allowed }).ok).toBe(
+      true,
+    );
+  });
+
+  it('⚠️ 编辑标签**不受**合规枚举约束（自由文案；拿枚举值去套会把"南部铁器"拒掉）', () => {
+    const r = productFormErrors({
+      ...productFormModel(PRODUCT),
+      editorialTags: ['南部鉄器', '直火OK'],
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('编辑标签含空串 → 拒（服务端 tags_invalid 会拒整条请求，十几个字段白填）', () => {
+    const r = productFormErrors({
+      ...productFormModel(PRODUCT),
+      editorialTags: ['南部鉄器', '  '],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors['editorialTags']).toContain('空标签');
+  });
+
+  it('⚠️ why / maker 超限 → 拒（上限从 shared 取，不写死 200 / 120）', () => {
+    expect(
+      productFormErrors({
+        ...productFormModel(PRODUCT),
+        editorialWhy: 'あ'.repeat(PRODUCT_MAX_CHARS.why + 1),
+      }).errors['editorialWhy'],
+    ).toContain(String(PRODUCT_MAX_CHARS.why));
+    expect(
+      productFormErrors({
+        ...productFormModel(PRODUCT),
+        editorialMaker: 'あ'.repeat(PRODUCT_MAX_CHARS.maker + 1),
+      }).errors['editorialMaker'],
+    ).toContain(String(PRODUCT_MAX_CHARS.maker));
+  });
+
+  it('why / maker 恰好到上限 → 放行（边界是"≤"不是"<"）', () => {
+    expect(
+      productFormErrors({
+        ...productFormModel(PRODUCT),
+        editorialWhy: 'あ'.repeat(PRODUCT_MAX_CHARS.why),
+        editorialMaker: 'あ'.repeat(PRODUCT_MAX_CHARS.maker),
+      }).ok,
+    ).toBe(true);
   });
 
   it('⚠️ 报关品名含敏感词 → 拒（大小写不敏感）', () => {
@@ -188,8 +252,60 @@ describe('toProductInput（请求体）', () => {
       jan_code: '4901872071234',
       purchase_source: 'cosme.net',
       compliance_tags: ['cosmetic', 'liquid'],
+      why: '洗い流し不要なので、ダブル洗顔の手間が一つ消える。',
+      maker: '資生堂 掛川工場',
+      tags: ['無香料', 'マツエク可'],
       images: [{ thumb: 't.jpg', card: 'c.jpg', detail: 'd.jpg' }],
     });
+  });
+
+  /**
+   * 🔴 这是本轮修复要钉的**回归本身**（020 迁移引入，2026-10-05 修）。
+   *
+   * 背景：`PUT /admin/products/{id}` 是**整行覆盖**。表单若不回传编辑口径三列，
+   * 服务端就按"省略 → null / []"写入 ⇒ 运营改个价格点保存，
+   * 编辑撰写的 `why` 被抹掉，**不报错、无提示、无法回滚**（商品没有历史版本表）。
+   */
+  it('🔴 编辑态只改价格：why / maker / tags **原样回传**（PUT 整行覆盖，不回传 = 抹掉）', () => {
+    const f = productFormModel(PRODUCT);
+    const body = toProductInput({ ...f, priceJpy: '3980' }, f.stock);
+    expect(body['price_jpy']).toBe(3980);
+    expect(body['why']).toBe(PRODUCT.why);
+    expect(body['maker']).toBe(PRODUCT.maker);
+    expect(body['tags']).toEqual(PRODUCT.tags);
+  });
+
+  it('🔴 编辑口径三列在**清空**时也带着（空串/空数组 = 明确的清空，不是"没填"）', () => {
+    const f = productFormModel(PRODUCT);
+    const body = toProductInput(
+      { ...f, editorialWhy: '', editorialMaker: '', editorialTags: [] },
+      f.stock,
+    );
+    expect(body['why']).toBe('');
+    expect(body['maker']).toBe('');
+    expect(body['tags']).toEqual([]);
+  });
+
+  it('🔴 新建态：三列恒带（空串也会发，服务端 `?? null` 只在 undefined 时兜）', () => {
+    const body = toProductInput(emptyProductForm());
+    expect(body['why']).toBe('');
+    expect(body['maker']).toBe('');
+    expect(body['tags']).toEqual([]);
+  });
+
+  it('编辑标签两端空格 → 提交时 trim（否则卡片上出现对不齐的方块）', () => {
+    const body = toProductInput({ ...productFormModel(PRODUCT), editorialTags: [' 南部鉄器 '] });
+    expect(body['tags']).toEqual(['南部鉄器']);
+  });
+
+  it('⚠️ 合规标签与编辑标签**各行其道**（写错前缀会把禁售枚举印到买家卡片上）', () => {
+    const body = toProductInput({
+      ...productFormModel(PRODUCT),
+      complianceTags: ['liquid'],
+      editorialTags: ['南部鉄器'],
+    });
+    expect(body['compliance_tags']).toEqual(['liquid']);
+    expect(body['tags']).toEqual(['南部鉄器']);
   });
 
   it('⚠️ origin_country **强制 JP**（表单里出现别值也不照抄）', () => {

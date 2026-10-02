@@ -38,6 +38,19 @@ export interface AdminProductLike {
   jan_code?: string;
   purchase_source?: string;
   updated_at?: string;
+  /**
+   * 编辑口径三列（020 迁移新增，无前缀——契约里就是这三个名字）。
+   *
+   * @why 本接口**必须**收下它们：编辑页的原始数据是从列表页整条带过来的
+   *      （@see ProductFormPage 文件头：契约没有 `GET /admin/products/{id}`），
+   *      这里漏一个，`productFormModel` 就把它映射成空值，
+   *      而 PUT 是整行覆盖 → 运营改价保存即抹掉编辑撰写的 `why`，且不报错。
+   * @why 键名**不加** `compliance` 前缀：这是**服务端下行**的形状，
+   *      只有表单模型（view.ts 的 `ProductForm`）才需要区分两套标签。
+   */
+  why?: string;
+  maker?: string;
+  tags?: string[];
 }
 
 export interface ProductListResp {

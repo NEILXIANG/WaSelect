@@ -25,7 +25,7 @@
  * @see ../../../contracts/api-contract.yaml（ProductInput / AdminProduct）；
  *      packages/shared/src/enums.ts（COMPLIANCE_TAG / BLOCKED_COMPLIANCE_TAG 真源）
  */
-import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG } from '@waselect/shared';
+import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG, PRODUCT_MAX_CHARS } from '@waselect/shared';
 
 /** 商品状态（契约 `/admin/products` 的 status 枚举）。 */
 export const PRODUCT_STATUS = ['active', 'offline'] as const;
@@ -132,8 +132,38 @@ export interface ProductForm {
   titleJa: string;
   janCode: string;
   purchaseSource: string;
-  /** compliance_tags 的勾选集（**已去禁售标签**：禁售标签勾了也提交不出去）。 */
-  tags: string[];
+  /**
+   * **`compliance_tags`** 的勾选集（**已去禁售标签**：禁售标签勾了也提交不出去）。
+   *
+   * @why 字段名带 **compliance** 前缀而不是叫 `tags`（2026-10-05 改名，020 迁移引入
+   *      编辑口径的 `tags` 之后）：契约 `ProductInput` 里现在同时有
+   *      `compliance_tags`（能不能寄，封闭枚举）与 `tags`（值不值得买，自由文案），
+   *      而 `toProductInput` 会在**相邻两行**分别输出它们。
+   *      若表单里仍叫 `tags`，那两行就是 `compliance_tags: f.tags` 与 `tags: f.editorialTags`
+   *      ——哪天有人写快了打成 `tags: f.tags`，编译照样过、
+   *      禁售枚举会被当成卖点文案**直接印在买家看到的卡片上**。
+   *      带上前缀之后这行错话**读起来就不对**，是能在 review 里被拦住的那种错。
+   */
+  complianceTags: string[];
+  /**
+   * 以下三项 = **编辑口径**（020 迁移新增的 `products.why` / `maker` / `tags`），
+   * 与上面的 `complianceTags` **不是一回事**：
+   * - `complianceTags` 管"**能不能寄**"：封闭枚举，勾错是合规风险；
+   * - 这三项管"**值不值得买**"：自由文案，写在 `pick-card` 上给买家看。
+   *
+   * @why **必须**回传而不是让服务端"省略即不改"：
+   *      `PUT /admin/products/{id}` 是**整行覆盖**（`stock` 那种"省略即保持"
+   *      是给并发列单独开的口子，编辑口径三列不在其中）。
+   *      表单不回传 = 运营改个价格保存，就把编辑撰写的 `why` 整条抹成 null，
+   *      **而且不报错**——等发现时文案已经丢了，版本表里也找不回来
+   *      （`order_events` 只记订单，商品没有历史版本）。
+   */
+  /** `products.why`：为什么值得买（一句带判断的话，≤200 字）。 */
+  editorialWhy: string;
+  /** `products.maker`：产地 / 工房 / 匠人名（≤120 字，与列宽逐字一致）。 */
+  editorialMaker: string;
+  /** `products.tags`：编辑标签（自由文案，如「南部铁器」「无添加」）。 */
+  editorialTags: string[];
   /** 图片集（契约 ImageSet[]；来自 `/admin/upload`）。 */
   images: Array<{ thumb: string; card: string; detail: string }>;
 }
@@ -154,7 +184,10 @@ export function emptyProductForm(): ProductForm {
     titleJa: '',
     janCode: '',
     purchaseSource: '',
-    tags: [],
+    complianceTags: [],
+    editorialWhy: '',
+    editorialMaker: '',
+    editorialTags: [],
     images: [],
   };
 }
@@ -166,6 +199,11 @@ export function productFormModel(p: unknown): ProductForm {
     typeof src[k] === 'string' ? (src[k] as string) : fallback;
   const num = (k: string, fallback = ''): string =>
     Number.isInteger(src[k]) ? String(src[k]) : fallback;
+  /** 字符串数组（非数组 / 含非字符串 → 空数组，不抛）。 */
+  const arr = (k: string): string[] =>
+    Array.isArray(src[k])
+      ? (src[k] as unknown[]).filter((t): t is string => typeof t === 'string')
+      : [];
   return {
     title: str('title'),
     category: str('category', PRODUCT_CATEGORY[0]),
@@ -180,9 +218,13 @@ export function productFormModel(p: unknown): ProductForm {
     titleJa: str('title_ja'),
     janCode: str('jan_code'),
     purchaseSource: str('purchase_source'),
-    tags: Array.isArray(src['compliance_tags'])
-      ? (src['compliance_tags'] as unknown[]).filter((t): t is string => typeof t === 'string')
-      : [],
+    complianceTags: arr('compliance_tags'),
+    // 编辑口径三列（020）：服务端键名就是 `why` / `maker` / `tags`（无前缀）——
+    // 契约里它们与 `compliance_tags` 分居 ProductCard 与 ProductInput 两处，
+    // 前缀只在**本文件的表单模型**里存在（@see ProductForm.complianceTags 的 @why）。
+    editorialWhy: str('why'),
+    editorialMaker: str('maker'),
+    editorialTags: arr('tags'),
     images: Array.isArray(src['images'])
       ? (src['images'] as unknown[]).map((img) => {
           const o = (typeof img === 'object' && img !== null ? img : {}) as Record<string, unknown>;
@@ -242,9 +284,14 @@ function asForm(value: unknown): ProductForm {
     titleJa: str('titleJa', base.titleJa),
     janCode: str('janCode', base.janCode),
     purchaseSource: str('purchaseSource', base.purchaseSource),
-    tags: Array.isArray(f['tags'])
-      ? (f['tags'] as unknown[]).filter((t): t is string => typeof t === 'string')
-      : base.tags,
+    complianceTags: Array.isArray(f['complianceTags'])
+      ? (f['complianceTags'] as unknown[]).filter((t): t is string => typeof t === 'string')
+      : base.complianceTags,
+    editorialWhy: str('editorialWhy', base.editorialWhy),
+    editorialMaker: str('editorialMaker', base.editorialMaker),
+    editorialTags: Array.isArray(f['editorialTags'])
+      ? (f['editorialTags'] as unknown[]).filter((t): t is string => typeof t === 'string')
+      : base.editorialTags,
     images: Array.isArray(f['images'])
       ? productFormModel({ images: f['images'] }).images
       : base.images,
@@ -284,10 +331,29 @@ export function productFormErrors(form: unknown): {
   if (f.originCountry !== 'JP') errors['originCountry'] = 'MVP 原产地只接受 JP（D-42/D-43）';
 
   // 禁售标签：shared 是真源，这里只做"勾了就报"（比"勾了提交被拒"早一步）
-  const blocked = f.tags.filter((t) => (BLOCKED_COMPLIANCE_TAG as readonly string[]).includes(t));
-  if (blocked.length > 0) errors['tags'] = `这些标签上架即拒：${blocked.join('、')}`;
-  const unknown = f.tags.filter((t) => !(COMPLIANCE_TAG as readonly string[]).includes(t));
-  if (unknown.length > 0) errors['tags'] = `不在契约枚举内的标签：${unknown.join('、')}`;
+  const blocked = f.complianceTags.filter((t) =>
+    (BLOCKED_COMPLIANCE_TAG as readonly string[]).includes(t),
+  );
+  if (blocked.length > 0) errors['complianceTags'] = `这些标签上架即拒：${blocked.join('、')}`;
+  const unknown = f.complianceTags.filter(
+    (t) => !(COMPLIANCE_TAG as readonly string[]).includes(t),
+  );
+  if (unknown.length > 0) errors['complianceTags'] = `不在契约枚举内的标签：${unknown.join('、')}`;
+
+  // ── 编辑口径三列的预检（020）───────────────────────────────────────────────
+  // @why 上限**从 shared 取**而不是在这里写 200 / 120：写死就等于把
+  //      `product-domain.ts` 的 `why_too_long` 判定复制了一份，改一处漏一处时
+  //      运营会在"填到第 201 字提交被拒"上卡住，而错误文案是泛化的 40001。
+  // @why 编辑标签**只查空串**：它不像合规标签有枚举（自由文案是本意），
+  //      但空串标签会被服务端判 `tags_invalid` 拒掉整条请求。
+  if (f.editorialWhy.length > PRODUCT_MAX_CHARS.why)
+    errors['editorialWhy'] =
+      `「为什么值得买」最多 ${PRODUCT_MAX_CHARS.why} 字（当前 ${f.editorialWhy.length} 字）`;
+  if (f.editorialMaker.length > PRODUCT_MAX_CHARS.maker)
+    errors['editorialMaker'] =
+      `产地/工房最多 ${PRODUCT_MAX_CHARS.maker} 字（当前 ${f.editorialMaker.length} 字）`;
+  if (f.editorialTags.some((t) => t.trim() === ''))
+    errors['editorialTags'] = '编辑标签不能有空标签（会被服务端判定为非法值）';
 
   // 报关品名敏感词（D-51：会被美国 FDA 当成功效宣称 / OTC 药品）
   const lower = f.customsDescEn.toLowerCase();
@@ -324,7 +390,13 @@ export function toProductInput(form: unknown, originalStock?: string): Record<st
     title_ja: f.titleJa.trim(),
     jan_code: f.janCode.trim(),
     purchase_source: f.purchaseSource.trim(),
-    compliance_tags: f.tags,
+    compliance_tags: f.complianceTags,
+    // ⚠️ 编辑口径三列**恒带**（含空数组 / 空串）：PUT 是整行覆盖，
+    //    这里省略 = "把已撰写的内容清空"，而不是"我没改它"（@see ProductForm 的 @why）。
+    //    `why` / `maker` 的"未撰写"由**空串**表达（服务端 `?? null` 只兜 undefined）。
+    why: f.editorialWhy.trim(),
+    maker: f.editorialMaker.trim(),
+    tags: f.editorialTags.map((t) => t.trim()).filter((t) => t !== ''),
     images: f.images,
   };
 }

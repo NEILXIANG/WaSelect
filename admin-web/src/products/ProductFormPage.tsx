@@ -27,7 +27,7 @@ import {
   toProductInput,
   type ProductForm,
 } from './view.js';
-import { Field, ImagePicker, TagPicker } from './ProductFormParts.js';
+import { Field, FreeTagInput, ImagePicker, TagPicker } from './ProductFormParts.js';
 import type { AdminProductLike } from './api.js';
 
 export interface ProductFormPageProps {
@@ -261,10 +261,31 @@ export function ProductFormPage({
         />
         <Field label="商品描述" value={form.description} onChange={(v) => set('description', v)} />
 
+        {/* ── 编辑口径（020）：印在买家卡片上的内容，与下面的合规标签不是一回事 ── */}
+        <Field
+          label="为什么值得买（买家可见，一句带判断的话）"
+          value={form.editorialWhy}
+          onChange={(v) => set('editorialWhy', v)}
+          error={errors['editorialWhy'] ?? ''}
+          placeholder="铸铁蓄热足，水温掉得慢——但养锅比用锅费事"
+        />
+        <Field
+          label="产地 / 工房 / 匠人（买家可见）"
+          value={form.editorialMaker}
+          onChange={(v) => set('editorialMaker', v)}
+          error={errors['editorialMaker'] ?? ''}
+          placeholder="岩手县 伝統工房"
+        />
+        <FreeTagInput
+          value={form.editorialTags}
+          onChange={(tags) => set('editorialTags', tags)}
+          error={errors['editorialTags'] ?? ''}
+        />
+
         <TagPicker
-          value={form.tags}
-          onChange={(tags) => set('tags', tags)}
-          error={errors['tags'] ?? ''}
+          value={form.complianceTags}
+          onChange={(tags) => set('complianceTags', tags)}
+          error={errors['complianceTags'] ?? ''}
         />
 
         <ImagePicker

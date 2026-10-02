@@ -7,9 +7,15 @@
  * @limitation 一：**禁售标签仍可勾选**（勾选后由 `productFormErrors` 报错而不是禁用）：
  *      禁用它的表现是"我明明要标'含酒精'却点不动"，运营不知道为什么；
  *      让它能勾、勾了报"这些标签上架即拒"，才把规则说清楚。
+ * @limitation 二：**两套标签不能用同一个组件**——合规标签是封闭枚举（芯片勾选），
+ *      编辑标签是自由文案（输入 + 回车）。曾经考虑过合并成一个带 `allowCustom` 的组件，
+ *      但两者除"都显示成一排小方块"之外没有共同点：一个要校验枚举、
+ *      一个要处理回车/去重/空串；合并后每个分支都要判断一次参数，
+ *      反而比两个各 30 行的组件难读。
  *
  * @see ./view.ts（校验真源）；packages/shared/src/enums.ts（COMPLIANCE_TAG / BLOCKED_COMPLIANCE_TAG）
  */
+import { useState } from 'react';
 import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG } from '@waselect/shared';
 
 export interface FieldProps {
@@ -78,6 +84,71 @@ export function TagPicker({ value, onChange, error = '' }: TagPickerProps) {
           );
         })}
       </div>
+      {error !== '' && <span className="error">{error}</span>}
+    </div>
+  );
+}
+
+export interface FreeTagInputProps {
+  value: string[];
+  onChange: (tags: string[]) => void;
+  error?: string;
+}
+
+/**
+ * **编辑标签**输入（自由文案，回车添加，点 × 移除）——`products.tags`（020）。
+ *
+ * @why 与 `TagPicker` 分开：@see @limitation 二。
+ * @why 回车**去重**且**拒绝空串**而不是照单全收：
+ *      重复标签会印成两个一模一样的方块（买家读作"这个商品有两个标签"），
+ *      空标签则会被服务端 `tags_invalid` 拒掉**整条请求**——
+ *      运营填了十个字段，因为一个看不见的空格全部白填。
+ * @limitation **不做**数量上限：契约未规定，加上限等于凭空造一条规则；
+ *              真出现"一个商品三十个标签"时该改的是版式，不是这里。
+ */
+export function FreeTagInput({ value, onChange, error = '' }: FreeTagInputProps) {
+  const [draft, setDraft] = useState('');
+  const add = () => {
+    const t = draft.trim();
+    if (t === '' || value.includes(t)) {
+      setDraft('');
+      return;
+    }
+    onChange([...value, t]);
+    setDraft('');
+  };
+  return (
+    <div className="field">
+      <span className="label">编辑标签（自由文案，印在买家看到的卡片上）</span>
+      <div className="chips">
+        {value.map((t) => (
+          <span key={t} className="chip chip-on">
+            {t}
+            <button
+              type="button"
+              className="link"
+              aria-label={`移除标签 ${t}`}
+              onClick={() => onChange(value.filter((x) => x !== t))}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <input
+        className="input"
+        value={draft}
+        placeholder="输入后按回车添加，如「南部铁器」"
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          // ⚠️ 必须 preventDefault：input 在 form 里，回车会**直接提交表单**，
+          //    表现为"加了个标签、页面却跳回列表了"。
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            add();
+          }
+        }}
+      />
       {error !== '' && <span className="error">{error}</span>}
     </div>
   );

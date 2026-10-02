@@ -213,6 +213,91 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
     expect(row?.title).toBe('Deba Knife 出刃包丁 165mm'); // A 的标题也没写进去
   });
 
+  /**
+   * 🔴 编辑口径三列（`products.why` / `maker` / `tags`，020 迁移新增）的**接缝**验证。
+   *
+   * 危害原型：`PUT /admin/products/{id}` 是**整行覆盖**。修复前 `toProductInput`
+   * 不输出这三列 → 运营改个价格点保存，编辑撰写的 `why` 被写成 null，
+   * **不报错、无提示、无法回滚**（商品表没有历史版本）。
+   * 下面两条一起钉：① 三列在"只改价格"时原样存活；② 不带三列**确实**会被清空
+   * （"省略即不改"在这三列上不成立——那是 `stock` 独有的口子）。
+   */
+  it('🔴 只改价格保存 → 编辑口径三列原样存活（不回传 = 抹掉）', async () => {
+    const api = adminApi();
+    const why = '三枚合钢，刃口崩了也磨得回来——但碳钢会锈，用完必须擦干。';
+    const created = await createProduct(
+      api,
+      toProductInput({
+        ...emptyProductForm(),
+        title: 'Deba Knife 出刃包丁 165mm',
+        category: 'kitchen',
+        priceJpy: '12800',
+        weightG: '540',
+        stock: '7',
+        customsDescEn: 'kitchen knife, stainless steel',
+        editorialWhy: why,
+        editorialMaker: '堺 打刃物工房',
+        editorialTags: ['堺打刃物', '碳钢'],
+      }),
+    );
+
+    // 运营打开编辑页：三列从列表项进表单（这里断掉 = 表单是空的，保存即清空）
+    const seen = (await listProducts(api)).items.find((p) => p.id === created.id);
+    const form = productFormModel(seen);
+    expect(form.editorialWhy).toBe(why);
+    expect(form.editorialMaker).toBe('堺 打刃物工房');
+    expect(form.editorialTags).toEqual(['堺打刃物', '碳钢']);
+
+    // 只改价格保存（库存未动 → 不带 stock，AJ-175 那条同时成立）
+    await updateProduct(
+      api,
+      created.id,
+      toProductInput({ ...form, priceJpy: '13800' }, form.stock),
+      sourceUpdatedAt(seen),
+    );
+
+    const after = (await listProducts(api)).items.find((p) => p.id === created.id);
+    expect(after?.price_jpy).toBe(13800);
+    // 🔴 这三行就是本轮修复要钉的：少一行，编辑写的文案就在下一次改价时静默消失
+    expect(after?.['why']).toBe(why);
+    expect(after?.['maker']).toBe('堺 打刃物工房');
+    expect(after?.['tags']).toEqual(['堺打刃物', '碳钢']);
+  });
+
+  it('⚠️ 反证：PUT 不带三列 → 确实被清空（"省略即不改"在这三列上不成立）', async () => {
+    const api = adminApi();
+    const created = await createProduct(
+      api,
+      toProductInput({
+        ...emptyProductForm(),
+        title: 'Nakiri 菜切包丁',
+        category: 'kitchen',
+        priceJpy: '9800',
+        weightG: '420',
+        customsDescEn: 'kitchen knife, stainless steel',
+        editorialWhy: '薄刃，切丝不压伤纤维。',
+      }),
+    );
+    const seen = (await listProducts(api)).items.find((p) => p.id === created.id);
+    const body = toProductInput(productFormModel(seen), productFormModel(seen).stock);
+    // 模拟"修复前的请求体"：三列直接不带（JSON.stringify 也会删掉 undefined）
+    delete body['why'];
+    delete body['maker'];
+    delete body['tags'];
+    await updateProduct(api, created.id, body, sourceUpdatedAt(seen));
+
+    const after = (await listProducts(api)).items.find((p) => p.id === created.id);
+    // ⚠️ 三列的"空"是**两种**形状，别写成一样的期望：
+    //    - `why` / `maker` 是可空列（TEXT / VARCHAR），null 时 `toAdminProduct` **整键省略**
+    //      ⇒ "没写"与"写了空串"在响应里可区分（前端据此显示"未填写"占位）；
+    //    - `tags` 是 `JSONB NOT NULL DEFAULT '[]'`，**恒给数组**，空就是 `[]`
+    //      ⇒ 不存在的第三种形态"标签字段缺失"在契约里没有意义。
+    //    这条断言原本把两者都写成 undefined，跑出来 `[]`——期望值错了，语义没错。
+    expect(after?.['why']).toBeUndefined();
+    expect(after?.['maker']).toBeUndefined();
+    expect(after?.['tags']).toEqual([]);
+  });
+
   it('缺 expected_updated_at 的 PUT → 40001（不退化成无锁覆盖）', async () => {
     const api = adminApi();
     const created = await createProduct(
