@@ -1,38 +1,44 @@
 /**
- * 支付页样式。
+ * 支付页样式（S3 已切到设计体系基础类）。
  *
  * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
  * 硬编码色值 / 非 0 尺寸字面量直接红）。
  */
 
-.row {
+.total {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
 }
 
-/* 支付方式条目：整行可点（用 view 不是 button——页面不允许原生可点 button） */
-.channel {
-  padding: var(--ws-space-sm) 0;
-  border-bottom: var(--ws-border-width) solid var(--ws-color-muted);
+/*
+  支付前提示块：官方运营规范（§14.2 / D-48）要求它在支付按钮上方、点之前可见。
+  @why 用**内凹底色**而不是原来的强调左边框：左边框是"警告条"的语汇，
+       而这几行是**必须读的购买条件**（关税谁付、多久发货），不是"你有危险"。
+       把它做成警告色，用户会跳过——越是要求他读的东西，越不能做成会被跳过样式。
+*/
+.notice .ws-card {
+  background: var(--ws-surface-sunk);
+}
+
+.notice__title {
+  display: block;
+  margin-bottom: var(--ws-space-inline);
 }
 
 .line {
   display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+  margin-top: var(--ws-space-hair);
 }
 
-.tip {
-  display: block;
-  margin-top: var(--ws-space-sm);
-  text-align: center;
+/* 支付方式条目：整行可点（用 view 不是 button——页面不允许原生可点 button） */
+.channel {
+  padding: var(--ws-space-card) 0;
+  border-bottom: var(--ws-border-width) solid var(--ws-line);
 }
 
-/* §14.2 提示条：与普通卡片区分（强调边），颜色走 token */
-.notice {
-  border-left: var(--ws-border-width) solid var(--ws-color-fg);
+.channel:last-child {
+  border-bottom: 0;
 }
 
 /*
@@ -41,5 +47,24 @@
        而这个"看起来复制成功了、粘贴出来打不开"的失败比直接失败更难发现。
 */
 .url {
+  display: block;
+  margin-top: var(--ws-space-inline);
   word-break: break-all;
+}
+
+.cta-inner {
+  margin-top: var(--ws-space-card);
+}
+
+.cta {
+  padding-bottom: var(--ws-space-section);
+}
+
+/* 加载 / 错误 / 结论 */
+.state {
+  text-align: center;
+}
+
+.state__error {
+  color: var(--ws-danger);
 }

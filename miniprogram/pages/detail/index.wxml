@@ -1,17 +1,26 @@
 <!--
   商品详情页（I2）：轮播 + 标题/价格 + 规格 + 描述。
 
-  ⚠️ 刻意没有"加入购物车 / 立即购买"按钮：购物车与结算未落地，
-  放一个点了没反应的按钮 = "看起来能用、实际是坏的"（@see index.js 文件头 @why）。
-  购买动作落地时在 `.buy-bar` 的位置加 ws-button。
+  S3（2026-10-02）：版式换成设计体系（`.ws-*` 基础类），信息架构不动。
+
+  ⚠️ 底部动作区仍是**流式**而不是固定底栏：固定底栏要求页面给底部留白
+  （`padding-bottom` 与栏高必须对齐，否则最后一段内容被永久遮住），
+  而本页内容长度不定。等 tabBar（S5）与结算条一起定高时再统一处理。
+
+  样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss，
+  出现硬编码色值 / 尺寸字面量会直接红）。
 -->
-<view class="page">
-  <view class="card" wx:if="{{loading && !product}}">
-    <text class="label">加载中…</text>
+<view class="ws-page detail">
+  <view class="ws-gutter" wx:if="{{loading && !product}}">
+    <view class="ws-card state">
+      <text class="ws-note">加载中…</text>
+    </view>
   </view>
 
-  <view class="card" wx:if="{{error}}">
-    <text class="error">{{error}}</text>
+  <view class="ws-gutter" wx:if="{{error}}">
+    <view class="ws-card state">
+      <text class="ws-note state__error">{{error}}</text>
+    </view>
   </view>
 
   <block wx:if="{{product}}">
@@ -22,30 +31,32 @@
       </swiper-item>
     </swiper>
 
-    <view class="card">
-      <text class="title">{{product.title}}</text>
+    <view class="ws-gutter detail__head">
+      <text class="detail__title">{{product.title}}</text>
       <ws-price jpy="{{product.priceJpy}}" size="lg" />
-      <text class="sub-price" wx:if="{{product.subPrice}}">{{product.subPrice}}</text>
-      <text class="sold-out" wx:if="{{product.soldOut}}">已售罄</text>
+      <text class="ws-note" wx:if="{{product.subPrice}}">{{product.subPrice}}</text>
+      <text class="ws-tag ws-tag--danger detail__tag" wx:if="{{product.soldOut}}">已售罄</text>
       <!-- 提审前必须（PRD §3 / D-32 / D-39⑦ FTC）：关税口径 + 发货时限承诺，文案由 vm 给出 -->
-      <text class="note" wx:for="{{product.notes}}" wx:key="*this">{{item}}</text>
+      <text class="ws-note" wx:for="{{product.notes}}" wx:key="*this">{{item}}</text>
 
       <view class="specs" wx:if="{{product.specs.length > 0}}">
-        <view class="row" wx:for="{{product.specs}}" wx:key="label">
-          <text class="label">{{item.label}}</text>
-          <text class="value">{{item.value}}</text>
+        <view class="spec" wx:for="{{product.specs}}" wx:for-item="row" wx:key="label">
+          <text class="ws-note spec__k">{{row.label}}</text>
+          <text class="ws-body spec__v">{{row.value}}</text>
         </view>
       </view>
     </view>
 
-    <view class="card" wx:if="{{product.description}}">
-      <text class="label">商品描述</text>
-      <text class="description">{{product.description}}</text>
+    <view class="ws-gutter ws-section" wx:if="{{product.description}}">
+      <view class="ws-card">
+        <text class="ws-section-kicker">Description</text>
+        <text class="ws-body">{{product.description}}</text>
+      </view>
     </view>
 
     <!-- ⚠️ 刻意没有"立即购买"：它等于"加购 + 直奔结算"，而结算页未落地
          （@see index.js 文件头 @why）。加入购物车已闭环（购物车页存在）。 -->
-    <view class="buy-bar">
+    <view class="ws-gutter ws-section buy-bar">
       <ws-button
         text="加入购物车"
         type="primary"
@@ -53,7 +64,7 @@
         bindtap="onAddToCart"
       />
       <block wx:if="{{added}}">
-        <text class="label added">已加入购物车</text>
+        <text class="ws-note added">已加入购物车</text>
         <ws-button text="去购物车" type="default" bindtap="onGoCart" />
       </block>
     </view>

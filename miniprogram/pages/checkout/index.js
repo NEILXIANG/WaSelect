@@ -323,8 +323,16 @@ Page({
         void this.refresh({ keepError: true });
       } else if (recoveryFor(code) === 'go_orders') {
         // 40913：在途单已达上限——文案说了"请先完成支付或取消"，就得给一个能去的地方。
-        // 用 navigateTo：购物车还没清（建单失败了），用户付掉/取消一张单后**还要回到这一页**。
-        wxApi.navigateTo({ url: ORDER_PAGE });
+        // ⚠️ S5 之后订单是 tab 页，**只能** `switchTab`（navigateTo 会被宿主拒绝）。
+        // @tradeoff 原先的 navigateTo 是为了"用户付掉/取消一张单后**还能回到这一页**"；
+        //      switchTab 会关掉本页，那一层便利没有了。仍然这么改的理由：
+        //      ① 购物车在**本地 storage**（cart-store），不会被切 tab 清掉，
+        //         用户从「购物车」tab 重新进结算即可，商品没丢；
+        //      ② 收银台上唯一会丢的是"已勾选条款 / 选中的地址"，重选一次的成本
+        //         远小于"点了去订单却没反应"（宿主拒绝 navigateTo 时的表现）。
+        //      ⚠️ 若将来要把"回到结算页"找回来，正确做法是让订单页在结案后
+        //         `redirectTo` 结算页，而不是把订单从 tabBar 里挪出去。
+        wxApi.switchTab({ url: ORDER_PAGE });
       } else if (recoveryFor(code) === 'reload_terms') {
         // 条款升级：重拉版本并把"已同意"复位（让用户对新条款重新确认，而不是对着旧版本点头）
         this.setData({ termsAccepted: false });

@@ -1,3 +1,7 @@
 {
-  "navigationBarTitleText": "条款与政策"
+  "navigationBarTitleText": "条款与政策",
+  "usingComponents": {
+    "ws-section-head": "/components/ws-section-head/index",
+    "ws-state-block": "/components/ws-state-block/index"
+  }
 }

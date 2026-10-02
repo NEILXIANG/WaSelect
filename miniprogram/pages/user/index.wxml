@@ -1,5 +1,7 @@
 <!--
-  我的（I2）：登录态 + 三个入口——订单 / 地址 / 条款。
+  「我的」（I2）：登录态 + 三个入口——订单 / 地址 / 条款。
+
+  S3（2026-10-02）：版式换成设计体系（`.ws-*` 基础类），**信息架构与行为都不动**。
 
   ⚠️ 这三个页此前没有任何入口：注册了、能跑，但从首页出发走不到。
   本页是它们唯一的入口，所以入口清单在 vm 里集中维护，
@@ -7,16 +9,43 @@
 
   ⚠️ 刻意没有客服入口：客服账号未定、契约也没有该字段——
   写一个假的微信号比没有更贵（用户会真的去加）。@see index.vm.js @limitation 一
+
+  @why S5 之后本页是 4 个 tab 页之一（底部有自定义 tabBar），所以根容器用
+       `.ws-page--with-tabbar` 给底部留位——现在 tabBar 还没上，留位不影响布局，
+       等 S5 上 tabBar 时不会因为最后一行被挡住而再改一次这一页。
 -->
-<view class="page">
-  <view class="card">
-    <view class="row">
-      <text class="label">登录状态</text>
-      <text class="value">{{login.text}}</text>
+<view class="ws-page ws-page--with-tabbar">
+  <!-- 页头（S4：走 `ws-section-head` 组件，与其余页头同一份实现） -->
+  <ws-section-head class="ws-gutter mine__head" kicker="Mine" title="我的" />
+
+  <!-- 登录态：一行，左标签右值 -->
+  <view class="ws-gutter">
+    <view class="ws-card mine__card">
+      <view class="mine__row">
+        <text class="ws-note">登录状态</text>
+        <text class="mine__value">{{login.text}}</text>
+      </view>
     </view>
   </view>
 
-  <view class="card" wx:for="{{rows}}" wx:key="key" data-key="{{item.key}}" bindtap="onMenuTap">
-    <text class="entry-text">{{item.label}}</text>
+  <!-- 入口列表：三个入口进**同一张卡**，用发丝线分隔
+       @why 不三个入口三张卡：三张卡之间会露出底色缝，读起来是三块孤立内容；
+            一张卡 + 发丝线读起来是"一份菜单"，而菜单正是这一页的东西。 -->
+  <view class="ws-gutter mine__menu-wrap">
+    <view class="ws-card mine__menu">
+      <view
+        class="mine__entry"
+        wx:for="{{rows}}"
+        wx:key="key"
+        data-key="{{item.key}}"
+        hover-class="ws-press"
+        bindtap="onMenuTap"
+      >
+        <text class="mine__entry-text">{{item.label}}</text>
+        <!-- 右箭头：用字符 › 而不是图标组件——本页唯一的方向提示，
+             引组件会让"三个入口"多一个可选渲染分支。 -->
+        <text class="mine__entry-arrow">›</text>
+      </view>
+    </view>
   </view>
 </view>

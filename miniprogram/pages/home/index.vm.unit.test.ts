@@ -146,6 +146,54 @@ describe('productCards（列表加工）', () => {
     const [card] = productCards([null]);
     expect(card).toMatchObject({ id: '', title: '', image: PLACEHOLDER_IMAGE, soldOut: false });
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 编辑口径三字段（020 / AJ-296①）——喂给 S4 的 `ws-pick-card`
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  it('why / maker / tags 齐全 → 原样带出（pick-card 的三个区块都渲染得出来）', () => {
+    const [card] = productCards([
+      {
+        ...ITEMS[0],
+        why: '铸铁蓄热足，水温掉得慢。',
+        maker: '岩手 · 南部铁器',
+        tags: ['产地直送', '终身可用'],
+      },
+    ]);
+    expect(card?.why).toBe('铸铁蓄热足，水温掉得慢。');
+    expect(card?.maker).toBe('岩手 · 南部铁器');
+    expect(card?.tags).toEqual(['产地直送', '终身可用']);
+  });
+
+  /**
+   * `why` 缺失 → **空串**，组件据此降级。
+   * @why 这一条钉的是 AJ-296① 整条链路的最后一环：服务端整键省略 →
+   *      这里补空串 → 组件不渲染 why 块。任何一环"顺便给个默认值"
+   *      （比如这里给"精选好物"）都会让降级变成假文案——而假文案比留白更伤。
+   */
+  it('🔴 why / maker 缺失 → 空串（组件降级，不补任何通用话术）', () => {
+    const [card] = productCards([ITEMS[0]]);
+    expect(card?.why).toBe('');
+    expect(card?.maker).toBe('');
+    expect(card?.tags).toEqual([]);
+  });
+
+  it('tags 非数组 / 含非字符串 → 收敛成空数组或只留字符串项（渲染出 [object Object] 更糟）', () => {
+    expect(productCards([{ ...ITEMS[0], tags: '产地直送' }])[0]?.tags).toEqual([]);
+    expect(productCards([{ ...ITEMS[0], tags: null }])[0]?.tags).toEqual([]);
+    expect(productCards([{ ...ITEMS[0], tags: ['产地直送', 42] }])[0]?.tags).toEqual(['产地直送']);
+  });
+
+  /**
+   * `stock` 缺/非整数 → **-1**（未知），不能给 0。
+   * @why 0 在组件里是"售罄"的语义。给 0 会让**所有**商品都显示售罄——
+   *      那是一次能毁掉整个首页的默认值，而且不报错（数据看起来很正常）。
+   */
+  it('🔴 stock 缺失 / 非整数 → -1（未知），**不是** 0（0 会被读成售罄）', () => {
+    expect(productCards([{ ...ITEMS[0], stock: undefined }])[0]?.stock).toBe(-1);
+    expect(productCards([{ ...ITEMS[0], stock: '12' }])[0]?.stock).toBe(-1);
+    expect(productCards([{ ...ITEMS[0], stock: 3 }])[0]?.stock).toBe(3);
+  });
 });
 
 describe('listQuery（查询参数）', () => {

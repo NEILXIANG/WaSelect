@@ -18,5 +18,18 @@
     "navigationBarTextStyle": "black",
     "backgroundTextStyle": "light"
   },
+  "tabBar": {
+    "custom": true,
+    "color": "#8F8A80",
+    "selectedColor": "#2B2A27",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "white",
+    "list": [
+      { "pagePath": "pages/home/index", "text": "首页" },
+      { "pagePath": "pages/cart/index", "text": "购物车" },
+      { "pagePath": "pages/order/index", "text": "订单" },
+      { "pagePath": "pages/user/index", "text": "我的" }
+    ]
+  },
   "style": "v2"
 }

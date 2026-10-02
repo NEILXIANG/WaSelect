@@ -74,6 +74,8 @@ beforeEach(async () => {
   vi.stubGlobal('wx', {
     navigateTo: (o: { url: string }) => navigations.push(o.url),
     redirectTo: (o: { url: string }) => navigations.push(o.url),
+    // S5：订单升为 tab 页，40913 的恢复路径改用 switchTab（navigateTo 到 tab 页会被宿主拒绝）
+    switchTab: (o: { url: string }) => navigations.push(o.url),
   });
   page = await loadPage(new URL('./index.js', import.meta.url).href, {
     globalData: {
@@ -275,6 +277,9 @@ describe('结算页薄壳：重报价窗口与两个跳转（MP3-05 / MP3-09 / M
     orderError = apiError(40913, '未付款的订单太多了，请先完成支付或取消后再下单');
     call('onSubmit');
     await settle();
+    // S5：订单是 tab 页，走 switchTab（这里两种跳转的 url 都收进同一个数组，
+    //     所以断言不变——变的是"必须是 switchTab"这件事本身，
+    //     它由 project-config 的可达性门禁与真机点一遍共同保证）。
     expect(navigations).toContain('/pages/order/index');
     // 建单没成功 ⇒ 购物车不能清（用户处理完还要回来这一单）
     expect(cartCleared).toBe(false);

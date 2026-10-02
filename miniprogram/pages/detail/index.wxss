@@ -1,15 +1,19 @@
 /**
- * 商品详情页样式。
+ * 商品详情页样式（S3 已切到设计体系基础类）。
  *
  * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
  * 硬编码色值 / 非 0 尺寸字面量直接红）。
+ *
+ * @limitation 轮播**不显式给高度**（沿用 swiper 默认）：给死高需要一个"详情页主图高"的档位，
+ *             而真实商品图比例未定，现在定档等于替未来的运营决策拍板。
+ *             代价是不同图的展示高度一致但取景不同（`aspectFit` 保证全图可见）。
  */
 
 /* 轮播：aspectFit 让非一比一的商品图完整可见（详情页看全图比填满更重要，
-   与首页 widthFix 的取舍不同——那里是列表，这里是主图）。 */
+   与首页 aspectFill 裁切的取舍不同——那里是列表要整齐，这里是主图要看全）。 */
 .gallery {
   width: 100%;
-  background: var(--ws-color-card);
+  background: var(--ws-surface);
 }
 
 .gallery-image {
@@ -17,56 +21,63 @@
   display: block;
 }
 
-.title {
-  display: block;
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font-lg);
-  line-height: 1.4;
+/* 标题：详情主标用衬线大号，读作"刊物的标题"而不是"列表项的名字" */
+.detail__head {
+  padding-top: var(--ws-space-card);
 }
 
-.sub-price {
+.detail__title {
   display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+  font-family: var(--ws-font-serif);
+  font-size: var(--ws-f-xl);
+  line-height: var(--ws-lh-tight);
+  color: var(--ws-ink);
 }
 
-.sold-out {
-  display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-error);
-  font-size: var(--ws-font-sm);
+.detail__tag {
+  margin-top: var(--ws-space-inline);
 }
 
-/* 规格行与描述之间留一档小间距；行内间距复用全局 .row 的 8rpx（app.wxss） */
+/* 规格表：左侧窄标签、右侧值，行间用发丝线分隔 */
 .specs {
-  margin-top: var(--ws-space-sm);
+  margin-top: var(--ws-space-card);
+  border-top: var(--ws-border-width) solid var(--ws-line);
 }
 
-.description {
-  display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font);
-  line-height: 1.6;
+.spec {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--ws-space-inline) 0;
+  border-bottom: var(--ws-border-width) solid var(--ws-line);
+}
+
+.spec__k {
+  flex: none;
+  margin-right: var(--ws-space-stack);
+}
+
+.spec__v {
+  text-align: right;
   word-break: break-all;
 }
 
 /* 底部动作区：加购按钮 + 加购后的提示与"去购物车" */
 .buy-bar {
-  margin-top: var(--ws-space);
+  padding-bottom: var(--ws-space-section);
 }
 
 .added {
   display: block;
-  margin: var(--ws-space-sm) 0;
+  margin: var(--ws-space-inline) 0;
   text-align: center;
 }
 
-/* 关税口径 + 发货时限两行说明（AJ-180）：与副价行同一视觉层级 */
-.note {
-  display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+/* 加载 / 错误态 */
+.state {
+  text-align: center;
+}
+
+.state__error {
+  color: var(--ws-danger);
 }

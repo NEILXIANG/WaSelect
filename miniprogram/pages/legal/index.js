@@ -98,6 +98,15 @@ Page({
    * @why 记 `copied`（语种 key）而不是布尔：三个语种各有一个"复制"，
    *      一个布尔会让"复制了日语"在中文行上也显示"已复制"。
    */
+  /**
+   * 错误态里的「重试」（S4：状态块换成 `ws-state-block` 之后才有这个入口）。
+   * @why `load()` 是只读的条款版本查询，重复调用没有副作用——所以这里的重试是安全的。
+   *      ⚠️ 这个判断**不可**照搬到付款类动作（那里的重试必须走幂等键）。
+   */
+  onRetry() {
+    void this.load();
+  },
+
   onCopy(e) {
     const d = e?.currentTarget?.dataset;
     const url = typeof d?.url === 'string' ? d.url : '';

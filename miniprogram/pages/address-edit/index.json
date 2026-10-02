@@ -1,6 +1,9 @@
 {
   "navigationBarTitleText": "编辑地址",
   "usingComponents": {
-    "ws-button": "/components/ws-button/index"
+    "ws-button": "/components/ws-button/index",
+    "ws-section-head": "/components/ws-section-head/index",
+    "ws-field": "/components/ws-field/index",
+    "ws-state-block": "/components/ws-state-block/index"
   }
 }

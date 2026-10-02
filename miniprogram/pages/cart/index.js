@@ -31,6 +31,7 @@ import { errorMessage } from '../../utils/error-text.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+import { setActiveTab } from '../../utils/tabs.js';
 
 const app = getApp();
 
@@ -85,6 +86,10 @@ Page({
 
   onShow() {
     this.refresh();
+    // S5：注入底部 tabBar 的高亮（本页是第 1 个 tab）。
+    // @why 与取数**并列**而不是放进 refresh：refresh 也会被结算成功后调用，
+    //      而"更新高亮"是进屏的事，混进"重读购物车"会让两件事的触发时机绑在一起。
+    setActiveTab(this, 'cart');
   },
 
   onUnload() {

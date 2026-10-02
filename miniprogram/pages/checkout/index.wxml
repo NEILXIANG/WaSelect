@@ -1,55 +1,75 @@
 <!--
   确认订单（I2）：商品行 + 收货地址 + 权威报价 + 条款 → 建单 → 支付页。
 
+  S3（2026-10-02）：版式换成设计体系（`.ws-*` 基础类），信息架构与行为不动。
+
   ⚠️ 商品行**没有价格**：价格只信 POST /orders/quote（行里一有价格就会有人拿它算合计，
   而购物车快照价会过期）。@see index.vm.js @limitation 一
 
   ⚠️ 提交按钮禁用时**必须显示原因**（gate.reason）——禁用不说为什么会被读成"这站坏了"。
+
+  样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
-<view class="page">
-  <view class="card" wx:if="{{error}}">
-    <text class="error">{{error}}</text>
-  </view>
-
-  <view class="card" wx:if="{{rows.length > 0}}">
-    <view class="row" wx:for="{{rows}}" wx:key="productId">
-      <text class="label">{{item.title}}</text>
-      <text class="qty">× {{item.qty}}</text>
+<view class="ws-page checkout">
+  <view class="ws-gutter" wx:if="{{error}}">
+    <view class="ws-card state">
+      <text class="ws-note state__error">{{error}}</text>
     </view>
   </view>
 
-  <view class="card" wx:else>
-    <text class="label">购物车是空的</text>
-  </view>
-
-  <view class="card" bindtap="onPickAddress">
-    <text class="label">收货地址</text>
-    <block wx:if="{{address}}">
-      <text class="line">{{address.recipient}} · {{address.phone}}</text>
-      <text class="line">{{address.line1}}</text>
-      <text class="line" wx:if="{{address.line2}}">{{address.line2}}</text>
-      <text class="line">{{address.region}}</text>
-    </block>
-    <text class="line" wx:else>还没有地址，点这里新增</text>
-    <text class="hint">点此切换地址</text>
-  </view>
-
-  <view class="card" wx:if="{{quote}}">
-    <view class="row" wx:for="{{quote.lines}}" wx:for-item="line" wx:key="label">
-      <text class="label">{{line.label}}</text>
-      <text class="value">{{line.value}}</text>
+  <view class="ws-gutter ws-section" wx:if="{{rows.length > 0}}">
+    <view class="ws-card">
+      <text class="ws-section-kicker">Items</text>
+      <view class="item" wx:for="{{rows}}" wx:key="productId">
+        <text class="ws-body item__title">{{item.title}}</text>
+        <text class="ws-note item__qty">× {{item.qty}}</text>
+      </view>
     </view>
-
-    <view class="total">
-      <text class="label">应付合计</text>
-      <ws-price wx:if="{{quote.hasTotal}}" jpy="{{quote.totalJpy}}" size="lg" />
-    </view>
-    <text class="sub-price" wx:if="{{quote.totalSub}}">{{quote.totalSub}}</text>
-    <text class="label" wx:for="{{quote.hints}}" wx:for-item="hint" wx:key="*this">{{hint}}</text>
   </view>
 
-  <view class="card" wx:if="{{loading}}">
-    <text class="label">正在计算运费…</text>
+  <view class="ws-gutter ws-section" wx:else>
+    <view class="ws-card state">
+      <text class="ws-note">购物车是空的</text>
+    </view>
+  </view>
+
+  <view class="ws-gutter ws-section">
+    <view class="ws-card" hover-class="ws-press" bindtap="onPickAddress">
+      <text class="ws-section-kicker">Shipping to</text>
+      <block wx:if="{{address}}">
+        <text class="ws-body line">{{address.recipient}} · {{address.phone}}</text>
+        <text class="ws-body line">{{address.line1}}</text>
+        <text class="ws-body line" wx:if="{{address.line2}}">{{address.line2}}</text>
+        <text class="ws-body line">{{address.region}}</text>
+      </block>
+      <text class="ws-note line" wx:else>还没有地址，点这里新增</text>
+      <text class="ws-caption hint">点此切换地址</text>
+    </view>
+  </view>
+
+  <view class="ws-gutter ws-section" wx:if="{{quote}}">
+    <view class="ws-card">
+      <text class="ws-section-kicker">Order Summary</text>
+      <view class="quote-line" wx:for="{{quote.lines}}" wx:for-item="line" wx:key="label">
+        <text class="ws-note">{{line.label}}</text>
+        <text class="ws-body">{{line.value}}</text>
+      </view>
+
+      <view class="ws-hair total__rule" />
+
+      <view class="total">
+        <text class="ws-note">应付合计</text>
+        <ws-price wx:if="{{quote.hasTotal}}" jpy="{{quote.totalJpy}}" size="lg" />
+      </view>
+      <text class="ws-note" wx:if="{{quote.totalSub}}">{{quote.totalSub}}</text>
+      <text class="ws-caption" wx:for="{{quote.hints}}" wx:for-item="hint" wx:key="*this">{{hint}}</text>
+    </view>
+  </view>
+
+  <view class="ws-gutter" wx:if="{{loading}}">
+    <view class="ws-card state">
+      <text class="ws-note">正在计算运费…</text>
+    </view>
   </view>
 
   <!--
@@ -59,43 +79,50 @@
        用户是照着"会收到发货通知"才留下邮箱的。文案已改为现在就成立的真实用途
        （订单有问题时联系买家）。将来通知真的做出来，这里再改回去。
   -->
-  <view class="card">
-    <text class="label">联系邮箱（选填）</text>
-    <input
-      class="input"
-      type="text"
-      value="{{email}}"
-      placeholder="订单有问题时我们用它联系你，可留空"
-      maxlength="255"
-      bindinput="onEmailInput"
-    />
-    <text class="error" wx:if="{{emailError}}">{{emailError}}</text>
-  </view>
-
-  <view class="card">
-    <view class="terms" bindtap="onToggleTerms">
-      <text class="label">{{termsAccepted ? '✓ 已阅读并同意购买条款' : '阅读并同意购买条款'}}</text>
+  <view class="ws-gutter ws-section">
+    <view class="ws-card">
+      <text class="ws-section-kicker">Contact</text>
+      <text class="ws-note field__label">联系邮箱（选填）</text>
+      <input
+        class="input"
+        type="text"
+        value="{{email}}"
+        placeholder="订单有问题时我们用它联系你，可留空"
+        maxlength="255"
+        bindinput="onEmailInput"
+      />
+      <text class="ws-note state__error" wx:if="{{emailError}}">{{emailError}}</text>
     </view>
-    <text class="hint" wx:if="{{termsVersion}}">条款版本 {{termsVersion}}</text>
-    <!--
-      MP3-11：取不到条款时**不写"加载中"**。闸门此时已经在按钮上方写着
-      "购买条款暂时取不到，请稍后再试"，这一行再说"加载中"就是同屏两种相反的说法
-      （一个说失败了、一个说还在来），而它永远不会变成别的字。
-    -->
-    <text class="hint" wx:elif="{{!termsFailed}}">条款版本加载中</text>
-    <!--
-      ⚠️ 勾选框必须配一个"能真的读到条款"的去处：只有勾选没有正文，
-      等于让用户同意一份他看不见的文本（我们手上却会有一份"已同意"的记录）。
-    -->
-    <view class="act" bindtap="onOpenTerms">查看条款全文</view>
   </view>
 
-  <ws-button
-    text="{{submitting ? '提交中…' : '提交订单'}}"
-    type="primary"
-    disabled="{{!gate.ok || submitting}}"
-    loading="{{submitting}}"
-    bindtap="onSubmit"
-  />
-  <text class="label tip" wx:if="{{gate.reason}}">{{gate.reason}}</text>
+  <view class="ws-gutter ws-section">
+    <view class="ws-card">
+      <view class="terms" hover-class="ws-press" bindtap="onToggleTerms">
+        <text class="ws-body">{{termsAccepted ? '✓ 已阅读并同意购买条款' : '阅读并同意购买条款'}}</text>
+      </view>
+      <text class="ws-caption hint" wx:if="{{termsVersion}}">条款版本 {{termsVersion}}</text>
+      <!--
+        MP3-11：取不到条款时**不写"加载中"**。闸门此时已经在按钮上方写着
+        "购买条款暂时取不到，请稍后再试"，这一行再说"加载中"就是同屏两种相反的说法
+        （一个说失败了、一个说还在来），而它永远不会变成别的字。
+      -->
+      <text class="ws-caption hint" wx:elif="{{!termsFailed}}">条款版本加载中</text>
+      <!--
+        ⚠️ 勾选框必须配一个"能真的读到条款"的去处：只有勾选没有正文，
+        等于让用户同意一份他看不见的文本（我们手上却会有一份"已同意"的记录）。
+      -->
+      <view class="act" hover-class="ws-press" bindtap="onOpenTerms">查看条款全文</view>
+    </view>
+  </view>
+
+  <view class="ws-gutter ws-section cta">
+    <ws-button
+      text="{{submitting ? '提交中…' : '提交订单'}}"
+      type="primary"
+      disabled="{{!gate.ok || submitting}}"
+      loading="{{submitting}}"
+      bindtap="onSubmit"
+    />
+    <text class="ws-caption tip" wx:if="{{gate.reason}}">{{gate.reason}}</text>
+  </view>
 </view>

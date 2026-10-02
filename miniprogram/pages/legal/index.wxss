@@ -1,20 +1,48 @@
 /**
- * 法务页样式。
+ * 法务页样式（S3 已切到设计体系基础类）。
  *
  * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
  * 硬编码色值 / 非 0 尺寸字面量直接红）。
+ *
+ * @why 骨架期的注释写"token 里没有线色，所以语种块之间不加分隔线"——
+ *      S1 之后 token 里**有**线色了（`--ws-line`），所以这里补上线：
+ *      三块语种各自有"标签 + 复制链接 + url"三行，不加线时上一个语种的 url
+ *      和下一个语种的标签会读成一段（url 是灰小字，标签是深色，视觉上连着）。
  */
 
+/* ── 页头 ────────────────────────────────────────────────────────
+   S4：标题本身由 `ws-section-head` 组件给，这里只补"离页顶多远"。 */
+.legal__head {
+  padding-top: var(--ws-space-card);
+}
+
+/* ── 卡片 ────────────────────────────────────────────────────── */
+.legal__card {
+  padding: var(--ws-space-stack);
+}
+
+.legal__card + .legal__card {
+  margin-top: var(--ws-space-stack);
+}
+
+.legal__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
 /* 版本号：与左侧"当前生效版本"标签同基线对齐，用主色强调它是这一页的凭据 */
-.version {
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font-sm);
+.legal__version {
+  color: var(--ws-ink);
+  font-size: var(--ws-f-sm);
   word-break: break-all;
 }
 
-/* 语种块之间留一档小间距；三块共用一个 card，不加分隔线（token 里没有线色） */
+/* ── 语种块 ──────────────────────────────────────────────────── */
 .doc {
-  margin-top: var(--ws-space);
+  margin-top: var(--ws-space-stack);
+  padding-top: var(--ws-space-stack);
+  border-top: var(--ws-border-width) solid var(--ws-line);
 }
 
 .doc-head {
@@ -24,21 +52,23 @@
 }
 
 .doc-label {
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font-sm);
+  color: var(--ws-ink);
+  font-size: var(--ws-f-sm);
 }
 
-/* "复制链接 / 已复制"：整行可点的文字动作（用 text 不是 button——页面不允许原生可点 button） */
+/* "复制链接 / 已复制"：整行可点的文字动作（已改为 view——text 上 hover-class 不生效） */
 .doc-act {
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font-sm);
+  flex: none;
+  margin-left: var(--ws-space-inline);
+  color: var(--ws-accent);
+  font-size: var(--ws-f-sm);
 }
 
 /* url 整行显示且可长按选中（user-select）：复制失败时它是唯一的兜底手段 */
 .doc-url {
   display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+  margin-top: var(--ws-space-hair);
+  color: var(--ws-ink-mute);
+  font-size: var(--ws-f-xs);
   word-break: break-all;
 }

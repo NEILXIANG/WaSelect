@@ -19,6 +19,7 @@ import { emptyState, orderRows } from './index.vm.js';
 import { errorMessage } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+import { setActiveTab } from '../../utils/tabs.js';
 
 const app = getApp();
 
@@ -50,6 +51,8 @@ Page({
 
   onShow() {
     void this.load();
+    // S5：注入底部 tabBar 的高亮（本页是第 2 个 tab）。
+    setActiveTab(this, 'order');
   },
 
   /** 取订单列表。失败**清空列表**并明示错误（留旧数据 = 显示已取消的订单还待付款）。 */

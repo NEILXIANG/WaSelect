@@ -1,17 +1,67 @@
 /**
- * 「我的」页样式。
+ * 「我的」页样式（S3 已切到设计体系基础类）。
  *
  * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
  * 硬编码色值 / 非 0 尺寸字面量直接红）。
  *
- * @why 入口块**不加** `.entry` 之类的类：`.card` 已经给了间距 / 白底 / 圆角，
+ * @why 入口块**不加** `.entry` 之类的类：`.ws-card` 已经给了间距 / 白底 / 圆角，
  *      可点这件事在小程序里没有"鼠标悬停"可表达，加一个类只为了写 `cursor: pointer`
  *      是自欺（那个属性在真机上没有任何效果）。唯一需要的差别是文案的字号与颜色。
  */
 
-/* 入口文案：主色 + 正文字号，与 .label（muted / 小字）区分开——
-   用 muted 小字的话，三个入口看起来像三段说明文字，不像可以点的东西 */
-.entry-text {
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font);
+/* ── 页头 ────────────────────────────────────────────────────────
+   S4：标题本身由 `ws-section-head` 组件给，这里只补"离页顶多远"。 */
+.mine__head {
+  padding-top: var(--ws-space-card);
+}
+
+/* ── 登录态 ──────────────────────────────────────────────────── */
+.mine__card {
+  padding: var(--ws-space-stack);
+}
+
+.mine__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+/* 值：主色 + 正文字号，与左侧 muted 小标签区分开 */
+.mine__value {
+  color: var(--ws-ink);
+  font-size: var(--ws-f-sm);
+  word-break: break-all;
+}
+
+/* ── 入口菜单 ────────────────────────────────────────────────── */
+.mine__menu-wrap {
+  margin-top: var(--ws-space-stack);
+}
+
+.mine__menu {
+  padding: 0 var(--ws-space-stack);
+}
+
+.mine__entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--ws-space-stack) 0;
+}
+
+/* 入口之间：非第一个才给上边线（第一个贴着卡片上沿，加线会变成双线） */
+.mine__entry + .mine__entry {
+  border-top: var(--ws-border-width) solid var(--ws-line);
+}
+
+/* 入口文案：主色 + 正文字号
+   @why 不用 muted 小字：三个入口用 muted 小字看起来像三段说明文字，不像可以点的东西 */
+.mine__entry-text {
+  color: var(--ws-ink);
+  font-size: var(--ws-f-base);
+}
+
+.mine__entry-arrow {
+  color: var(--ws-ink-faint);
+  font-size: var(--ws-f-md);
 }

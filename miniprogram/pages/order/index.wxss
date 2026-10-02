@@ -1,32 +1,58 @@
 /**
- * 订单列表页样式。
+ * 订单列表页样式（S3 已切到设计体系基础类）。
  *
  * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
  * 硬编码色值 / 非 0 尺寸字面量直接红）。
  */
 
-.row {
+.order__list {
+  padding-top: var(--ws-space-card);
+}
+
+.order-card {
+  margin-bottom: var(--ws-space-stack);
+}
+
+.order-card__head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
 }
 
-/* 状态标签：用 muted 色与订单号区分（不引新色值——token 里没有"警示色"） */
-.status {
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+.order-card__no {
+  flex: 1;
+  min-width: 0;
 }
 
-.sub-price {
-  display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+/* 状态标签：用基础类 `.ws-tag` 的底与字色，不再单独引色值——
+   "订单状态"是标签语义，就该长成标签的样子，与其他标签同族。 */
+.order-card__status {
+  flex: none;
+  margin-left: var(--ws-space-inline);
+}
+
+.order-card__amount {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: var(--ws-space-inline);
 }
 
 /* "继续支付"：整行可点（用 view 不是 button——页面不允许原生可点 button） */
 .act {
-  margin-top: var(--ws-space);
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font-sm);
+  margin-top: var(--ws-space-inline);
+  padding-top: var(--ws-space-inline);
+  border-top: var(--ws-border-width) solid var(--ws-line);
+  color: var(--ws-accent);
+  font-size: var(--ws-f-sm);
+  text-align: right;
+}
+
+/* 加载 / 错误 / 空态 */
+.state {
+  text-align: center;
+}
+
+.state__error {
+  color: var(--ws-danger);
 }

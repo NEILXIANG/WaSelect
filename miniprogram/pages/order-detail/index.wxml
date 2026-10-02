@@ -1,6 +1,8 @@
 <!--
   订单详情（I2）："这单到底走到哪了"——时间线 / 运单号 / 地址快照 / 条款版本。
 
+  S3（2026-10-02）：版式换成设计体系（`.ws-*` 基础类），信息架构与行为不动。
+
   ⚠️ 时间全部按 JST 显示（UTC 存、JST 显，转换在 utils/jst-text.js 纯函数里，有单测），
     且**每个时刻都带"（日本时间）"**——美国买家会把不带时区的截止时刻读成本地时间（MP3-02）。
 
@@ -9,113 +11,144 @@
 
   ⚠️ 取消按钮只在可取消态出现（vm 的 canCancel，与可付态同源）；
   点了先弹模态确认（showModal），成功后原地重取。
+
+  样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
-<view class="page">
-  <view class="card" wx:if="{{error}}">
-    <text class="error">{{error}}</text>
+<view class="ws-page order-detail">
+  <view class="ws-gutter" wx:if="{{error}}">
+    <view class="ws-card state">
+      <text class="ws-note state__error">{{error}}</text>
+    </view>
   </view>
 
-  <view class="card" wx:if="{{loading && !view}}">
-    <text class="label">正在加载订单…</text>
+  <view class="ws-gutter" wx:if="{{loading && !view}}">
+    <view class="ws-card state">
+      <text class="ws-note">正在加载订单…</text>
+    </view>
   </view>
 
   <block wx:if="{{view}}">
-    <view class="card">
-      <view class="row">
-        <text class="label">{{view.orderNo}}</text>
-        <text class="status">{{view.statusText}}</text>
+    <view class="ws-gutter ws-section">
+      <view class="ws-card">
+        <view class="head">
+          <text class="ws-caption head__no">{{view.orderNo}}</text>
+          <text class="ws-tag head__status">{{view.statusText}}</text>
+        </view>
+        <!-- MP3-04：刚付过款、服务端还没确认——这时不给继续支付也不给取消，只说清在确认中 -->
+        <text class="ws-note hint" wx:if="{{view.confirmHint}}">{{view.confirmHint}}</text>
+        <text class="ws-caption hint" wx:if="{{view.createdAtText}}">建单 {{view.createdAtText}}</text>
+        <!--
+          MP3-02：`expiresAtText` 自带"（日本时间）"。收货人是美国地址的用户，
+          不标时区时这一行会被读成本地时间（PDT 与 JST 差 16 小时）→ 以为还有一整天。
+        -->
+        <text class="ws-caption hint" wx:if="{{view.expiresAtText}}">请在 {{view.expiresAtText}} 前完成支付</text>
       </view>
-      <!-- MP3-04：刚付过款、服务端还没确认——这时不给继续支付也不给取消，只说清在确认中 -->
-      <text class="hint" wx:if="{{view.confirmHint}}">{{view.confirmHint}}</text>
-      <text class="hint" wx:if="{{view.createdAtText}}">建单 {{view.createdAtText}}</text>
-      <!--
-        MP3-02：`expiresAtText` 自带"（日本时间）"。收货人是美国地址的用户，
-        不标时区时这一行会被读成本地时间（PDT 与 JST 差 16 小时）→ 以为还有一整天。
-      -->
-      <text class="hint" wx:if="{{view.expiresAtText}}">请在 {{view.expiresAtText}} 前完成支付</text>
     </view>
 
-    <view class="card" wx:if="{{view.items.length > 0}}">
-      <view class="item" wx:for="{{view.items}}" wx:key="productId">
-        <image class="item-img" src="{{item.image}}" mode="aspectFill" lazy-load />
-        <view class="item-body">
-          <text class="item-title">{{item.title}}</text>
-          <view class="row">
-            <text class="label" wx:if="{{item.unitPriceText}}">{{item.unitPriceText}}</text>
-            <text class="qty">× {{item.qty}}</text>
+    <view class="ws-gutter ws-section" wx:if="{{view.items.length > 0}}">
+      <view class="ws-card">
+        <text class="ws-section-kicker">Items</text>
+        <view class="item" wx:for="{{view.items}}" wx:key="productId">
+          <view class="ws-media ws-media--square item__media">
+            <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" />
+          </view>
+          <view class="item__body">
+            <text class="ws-title item__title">{{item.title}}</text>
+            <view class="item__meta">
+              <text class="ws-note" wx:if="{{item.unitPriceText}}">{{item.unitPriceText}}</text>
+              <text class="ws-note item__qty">× {{item.qty}}</text>
+            </view>
           </view>
         </view>
       </view>
     </view>
 
-    <view class="card">
-      <view class="row" wx:for="{{view.amountLines}}" wx:for-item="line" wx:key="label">
-        <text class="label">{{line.label}}</text>
-        <text class="value">{{line.value}}</text>
-      </view>
-      <view class="total">
-        <text class="label">应付合计</text>
-        <ws-price wx:if="{{view.totalJpy !== null}}" jpy="{{view.totalJpy}}" size="lg" />
-      </view>
-      <text class="sub-price" wx:if="{{view.totalSub}}">{{view.totalSub}}</text>
-    </view>
-
-    <view class="card" wx:if="{{view.address}}">
-      <text class="label">收货地址</text>
-      <text class="line">{{view.address.recipient}} · {{view.address.phone}}</text>
-      <text class="line">{{view.address.line1}}</text>
-      <text class="line" wx:if="{{view.address.line2}}">{{view.address.line2}}</text>
-      <text class="line">{{view.address.region}}</text>
-    </view>
-
-    <view class="card" wx:if="{{view.hasTracking}}">
-      <view class="row" wx:if="{{view.carrier}}">
-        <text class="label">承运商</text>
-        <text class="value">{{view.carrier}}</text>
-      </view>
-      <view class="row">
-        <text class="label">运单号</text>
-        <text class="track" data-no="{{view.trackingNo}}" bindtap="onCopyTracking">
-          {{copied ? '已复制' : view.trackingNo}}
-        </text>
-      </view>
-      <text class="hint">点运单号复制</text>
-    </view>
-
-    <view class="card" wx:if="{{view.timeline.length > 0}}">
-      <text class="label">订单进展</text>
-      <view class="row" wx:for="{{view.timeline}}" wx:for-item="t" wx:key="key">
-        <text class="value">{{t.statusText}}</text>
-        <text class="label">{{t.atText}}</text>
-      </view>
-      <!--
-        AJ-295：把"没有通知"这件事**说出来**。
-        发货与签收不会有推送，也不会有邮件——不说的话用户会一直等一个不会来的消息，
-        而"等通知"正是跨境订单里最容易产生"你们是不是忘了我的单"的那一刻。
-        等通知链路真的上线（依赖 R1 与订阅消息口径确认），这句话再删掉。
-      -->
-      <text class="hint">发货与签收目前不会有推送通知，进度请回到这一页查看。</text>
-    </view>
-
-    <view class="card" wx:if="{{view.termsVersion || view.contactEmail}}">
-      <view class="row" wx:if="{{view.termsVersion}}">
-        <text class="label">条款版本</text>
-        <text class="value">{{view.termsVersion}}</text>
-      </view>
-      <view class="row" wx:if="{{view.contactEmail}}">
-        <text class="label">联系邮箱</text>
-        <text class="value">{{view.contactEmail}}</text>
+    <view class="ws-gutter ws-section">
+      <view class="ws-card">
+        <text class="ws-section-kicker">Amount</text>
+        <view class="quote-line" wx:for="{{view.amountLines}}" wx:for-item="line" wx:key="label">
+          <text class="ws-note">{{line.label}}</text>
+          <text class="ws-body">{{line.value}}</text>
+        </view>
+        <view class="ws-hair total__rule" />
+        <view class="total">
+          <text class="ws-note">应付合计</text>
+          <ws-price wx:if="{{view.totalJpy !== null}}" jpy="{{view.totalJpy}}" size="lg" />
+        </view>
+        <text class="ws-caption" wx:if="{{view.totalSub}}">{{view.totalSub}}</text>
       </view>
     </view>
 
-    <ws-button wx:if="{{view.canPay}}" text="继续支付" type="primary" bindtap="onPay" />
-    <ws-button
-      wx:if="{{view.canCancel}}"
-      class="cancel-btn"
-      text="{{cancelling ? '取消中…' : '取消订单'}}"
-      type="default"
-      loading="{{cancelling}}"
-      bindtap="onCancelTap"
-    />
+    <view class="ws-gutter ws-section" wx:if="{{view.address}}">
+      <view class="ws-card">
+        <text class="ws-section-kicker">Shipping to</text>
+        <text class="ws-body line">{{view.address.recipient}} · {{view.address.phone}}</text>
+        <text class="ws-body line">{{view.address.line1}}</text>
+        <text class="ws-body line" wx:if="{{view.address.line2}}">{{view.address.line2}}</text>
+        <text class="ws-body line">{{view.address.region}}</text>
+      </view>
+    </view>
+
+    <view class="ws-gutter ws-section" wx:if="{{view.hasTracking}}">
+      <view class="ws-card">
+        <text class="ws-section-kicker">Tracking</text>
+        <view class="quote-line" wx:if="{{view.carrier}}">
+          <text class="ws-note">承运商</text>
+          <text class="ws-body">{{view.carrier}}</text>
+        </view>
+        <view class="quote-line">
+          <text class="ws-note">运单号</text>
+          <!-- ⚠️ 用 text 不是 view：`hover-class` 只支持 view/button/navigator，
+               而这里要的是"可长按选择的等宽文本"，按下反馈对它不适用。 -->
+          <text class="ws-body track" data-no="{{view.trackingNo}}" bindtap="onCopyTracking">
+            {{copied ? '已复制' : view.trackingNo}}
+          </text>
+        </view>
+        <text class="ws-caption hint">点运单号复制</text>
+      </view>
+    </view>
+
+    <view class="ws-gutter ws-section" wx:if="{{view.timeline.length > 0}}">
+      <view class="ws-card">
+        <text class="ws-section-kicker">Progress</text>
+        <text class="ws-note timeline__title">订单进展</text>
+        <view class="quote-line" wx:for="{{view.timeline}}" wx:for-item="t" wx:key="key">
+          <text class="ws-body">{{t.statusText}}</text>
+          <text class="ws-caption">{{t.atText}}</text>
+        </view>
+        <!--
+          AJ-295：把"没有通知"这件事**说出来**。
+          发货与签收不会有推送，也不会有邮件——不说的话用户会一直等一个不会来的消息，
+          而"等通知"正是跨境订单里最容易产生"你们是不是忘了我的单"的那一刻。
+          等通知链路真的上线（依赖 R1 与订阅消息口径确认），这句话再删掉。
+        -->
+        <text class="ws-caption hint">发货与签收目前不会有推送通知，进度请回到这一页查看。</text>
+      </view>
+    </view>
+
+    <view class="ws-gutter ws-section" wx:if="{{view.termsVersion || view.contactEmail}}">
+      <view class="ws-card">
+        <view class="quote-line" wx:if="{{view.termsVersion}}">
+          <text class="ws-note">条款版本</text>
+          <text class="ws-body">{{view.termsVersion}}</text>
+        </view>
+        <view class="quote-line" wx:if="{{view.contactEmail}}">
+          <text class="ws-note">联系邮箱</text>
+          <text class="ws-body">{{view.contactEmail}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="ws-gutter ws-section cta">
+      <ws-button wx:if="{{view.canPay}}" text="继续支付" type="primary" bindtap="onPay" />
+      <ws-button
+        wx:if="{{view.canCancel}}"
+        class="cancel-btn"
+        text="{{cancelling ? '取消中…' : '取消订单'}}"
+        type="default"
+        loading="{{cancelling}}"
+        bindtap="onCancelTap"
+      />
+    </view>
   </block>
 </view>

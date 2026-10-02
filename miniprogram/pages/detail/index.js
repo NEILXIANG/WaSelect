@@ -29,7 +29,11 @@ const app = getApp();
 /** 页面级宿主入口（wx-api 是无状态转发）。 */
 const wxApi = createWxApi();
 
-/** 购物车页路径（跳转路径只在这一处出现）。 */
+/**
+ * 购物车页路径（跳转路径只在这一处出现）。
+ * @why S5 之后它是 tab 页，跳转**必须**走 `switchTab`（`navigateTo` 会被宿主拒绝，
+ *      表现是"点了没反应"，日志里只有一行宿主文案）。
+ */
 const CART_PAGE = '/pages/cart/index';
 
 Page({
@@ -99,8 +103,14 @@ Page({
     this.setData({ added: true });
   },
 
-  /** 去购物车（加购提示里的入口）。 */
+  /**
+   * 去购物车（加购提示里的入口）。
+   * @why S5 之后用 `switchTab`：购物车是 tab 页。
+   *      ⚠️ 代价是**回不到本页**（switchTab 会关掉所有非 tab 页）——
+   *      但"去购物车"本来就是"我逛完了"的意思，返回需求由左上角返回键在
+   *      进购物车**之前**满足，进之后不再需要。
+   */
   onGoCart() {
-    wxApi.navigateTo({ url: CART_PAGE });
+    wxApi.switchTab({ url: CART_PAGE });
   },
 });

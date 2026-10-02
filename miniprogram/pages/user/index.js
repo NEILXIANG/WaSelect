@@ -20,6 +20,7 @@
  */
 import { MENU_ROWS, loginState } from './index.vm.js';
 import { createWxApi } from '../../utils/wx-api.js';
+import { setActiveTab } from '../../utils/tabs.js';
 
 const app = getApp();
 
@@ -33,6 +34,17 @@ const PAGE_BY_KEY = {
   legal: '/pages/legal/index',
 };
 
+/**
+ * S5 之后**已经是 tab 页**的入口：它们必须走 `switchTab`，`navigateTo` 会被宿主拒绝。
+ *
+ * @why 单独一张表而不是"看路径猜"：判断"这是不是 tab 页"的唯一真源是
+ *      `app.json` 的 `tabBar.list`，而这里不能读 app.json（运行时拿不到）。
+ *      于是这是一份**手写副本**——用一张显式的、带注释的表，
+ *      比在每个入口旁各写一个 if 更容易在加 tab 时被看见。
+ *      ⚠️ 漏登记的表现是"点了没反应"（宿主拒绝 navigateTo），且只在真机出现。
+ */
+const TAB_KEYS = new Set(['orders']);
+
 Page({
   data: {
     /** 入口清单（vm `MENU_ROWS`）。 */
@@ -44,6 +56,8 @@ Page({
   onShow() {
     // @see @limitation 二：token 可能在别处被刷新，每次进屏重读
     this.setData({ login: loginState(app.globalData.token) });
+    // S5：注入底部 tabBar 的高亮（本页是第 3 个 tab）。
+    setActiveTab(this, 'user');
   },
 
   /**
@@ -57,6 +71,11 @@ Page({
     const url = typeof key === 'string' ? PAGE_BY_KEY[key] : undefined;
     // ⚠️ 只认字符串：`PAGE_BY_KEY['constructor']` 拿到的是原型上的函数，不是路径
     if (typeof url !== 'string') return;
+    // S5：tab 页走 switchTab，其余走 navigateTo（用 navigateTo 跳 tab 页会被宿主拒绝）
+    if (typeof key === 'string' && TAB_KEYS.has(key)) {
+      wxApi.switchTab({ url });
+      return;
+    }
     wxApi.navigateTo({ url });
   },
 });

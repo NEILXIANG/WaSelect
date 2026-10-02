@@ -83,12 +83,21 @@ export function categoryTabs(active) {
 }
 
 /**
- * `GET /products` 的 items → 卡片视图数据。
+ * `GET /products` 的 items → 卡片视图数据（S4 起喂 `ws-pick-card`）。
  * @param {unknown} items 契约 `ProductCard[]`
- * @returns {Array<{id: string, title: string, image: string, priceJpy: unknown, subPrice: string, soldOut: boolean}>}
+ * @returns {Array<{id: string, title: string, image: string, priceJpy: unknown, subPrice: string,
+ *                  soldOut: boolean, stock: number, maker: string, why: string, tags: string[]}>}
  * @why `priceJpy` **原样透传、不做任何兜底**：`ws-price` 对非整数金额是抛错的
  *      （组件 @limitation 一：漏传被补成 0 会显示 `0 円`，而 `0 円` 会被读成"免费"）。
  *      在这里补 0 就等于把那道防线拆掉。
+ *
+ * @why `why` / `maker` **缺失时给空串而不是 null**：它们是**直接进组件属性**的字符串，
+ *      组件对空串的处理是"这一块不渲染"（降级），对 null 的处理在小程序里是
+ *      "属性变成 null 字符串"——后者会把卡片上渲染出字面量 "null"。
+ *      ⚠️ 这正是服务端对这两个字段"整键省略"的原因：省略 → 前端这里补空串 → 组件降级，
+ *      三段各司其职，任何一段想"顺便兜底"都会把脏数据洗白。
+ * @why `stock` 缺/非整数 → **-1** 而不是 0：0 在组件里是"售罄"的语义，
+ *      "不知道库存"与"没有库存"必须可区分（给 0 会让所有商品都显示售罄）。
  */
 export function productCards(items) {
   if (!Array.isArray(items)) return [];
@@ -101,6 +110,10 @@ export function productCards(items) {
       priceJpy: p.price_jpy,
       subPrice: displaySubLine(p.display),
       soldOut: Number(p.stock) === 0,
+      stock: Number.isInteger(p.stock) ? p.stock : -1,
+      maker: typeof p.maker === 'string' ? p.maker : '',
+      why: typeof p.why === 'string' ? p.why : '',
+      tags: Array.isArray(p.tags) ? p.tags.filter((t) => typeof t === 'string') : [],
     };
   });
 }

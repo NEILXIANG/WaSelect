@@ -48,11 +48,19 @@ function pathConsts(src: string): Record<string, string> {
 }
 
 /**
- * 某份页面 js 里**真的被 `navigateTo` / `redirectTo` 跳到**的页面路径（已去掉前导斜杠）。
+ * 某份页面 js 里**真的被跳转 API 跳到**的页面路径（已去掉前导斜杠）。
  *
  * @why 不扫"文件里出现过这个字面量"：常量声明本身就是字面量，那样会把
  *      "路径常量声明了、但没有任何跳转用它"也算成有入口（实测注入时 exit=0，
  *      见下面那条断言的 @how）。只有从调用点取证才不是自证。
+ *
+ * @why S5 之后加入 **`switchTab`**（此前只认 `navigateTo` / `redirectTo`）：
+ *      tab 页**只能**用 `switchTab` 跳，而这条门禁的初衷是"可达性"——
+ *      只认压栈式跳转会把"四个 tab 页"整片判成孤岛（实测：S5 切完立刻红两条），
+ *      于是这条门禁从"守可达性"变成"逼人不许用 tabBar"，与它的目的正好相反。
+ *      ⚠️ 这是补覆盖缺口，不是放宽门禁：`switchTab` 与 `navigateTo` 一样要求
+ *      "常量真的被某个调用点用过"，自证那条断言（下面那条）对两者同样成立。
+ *
  * @limitation 调用点的匹配是形态级正则（入参对象里 `url:` 的值），不是 AST：
  *      写成一个变量再传（`const u = PAY_PAGE; navigateTo({url: u})`）扫不到。
  */
@@ -62,7 +70,7 @@ function jumpTargets(src: string): string[] {
   const resolve = (name: string | undefined): string | undefined =>
     name === undefined ? undefined : consts[name];
   const out: string[] = [];
-  const calls = src.matchAll(/\b(?:navigateTo|redirectTo)\(\{[\s\S]*?\}\s*\)/g);
+  const calls = src.matchAll(/\b(?:navigateTo|redirectTo|switchTab)\(\{[\s\S]*?\}\s*\)/g);
   for (const call of calls) {
     const arg = call[0].slice(call[0].indexOf('url:'));
     // ① 直接字面量：`url: '/pages/x/index'` 或带 query
@@ -272,6 +280,11 @@ describe('sitemap.json（MP1）', () => {
 
 describe('app.json 与文件不漂移（MP1）', () => {
   const app = readJson('app.json');
+  /** `tabBar` 的形状（S5 之后才有）；没有 tabBar 时是 `{}`，下面的断言按此退化。 */
+  const tabBar = (app.tabBar ?? {}) as {
+    custom?: boolean;
+    list?: { pagePath?: string }[];
+  };
 
   it('pages 里每一项都有 .js / .wxml / .json 三个文件', () => {
     const pages = app.pages as string[];
@@ -394,6 +407,17 @@ describe('app.json 与文件不漂移（MP1）', () => {
     const targets = new Set<string>();
     for (const abs of files) {
       for (const t of jumpTargets(readFileSync(abs, 'utf8'))) targets.add(t);
+    }
+    /**
+     * tabBar 上的页面**天然有入口**：底部栏在 tab 页上一直可见。
+     * @why S5 之后必须把这一条显式写进来：tab 页的入口是"底部那四个格子"，
+     *      它不在任何页面的 js 里（宿主自己渲染），所以只扫 js 的跳转调用点
+     *      永远扫不到——不补这一条就会把 tabBar 本身判成"不可达"。
+     *      ⚠️ 这不是给 tab 页开后门：tabBar 的存在由宿主保证（`tabBar.custom` +
+     *      根下 `custom-tab-bar/` 目录），另有一条断言钉那两件事。
+     */
+    for (const p of (tabBar.list ?? []).map((it) => it.pagePath ?? '')) {
+      if (p !== '') targets.add(p);
     }
     expect(targets.size, '一个跳转目标都没扫到——正则或扫描根改坏了？').toBeGreaterThan(0);
     const islands = (app.pages as string[]).filter(

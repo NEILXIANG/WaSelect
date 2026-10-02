@@ -1,32 +1,69 @@
 /**
- * 地址编辑页样式。
+ * 地址编辑页样式（S3 已切到设计体系基础类）。
  *
  * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
  * 硬编码色值 / 非 0 尺寸字面量直接红）。
  * ⚠️ `border` 宽度只能用 `--ws-border-width`：0 以外的尺寸字面量会被门禁拦。
+ *
+ * @why 输入控件改成**内凹面**（`--ws-surface-sunk` + 细描边）而不是"白底 + 深色描边"：
+ *      表单里 7 个输入框都是白底描边时，空白处比内容多，整页会读成一张待填的表格；
+ *      内凹面让"这里可以填"这件事由**面**表达，描边只负责边界。
+ * @why 字段之间**不给分隔线**：字段自带 label + 内凹输入框，两个输入框之间的空白
+ *      已经是分组；再加 7 条线会把表单切成网格（而地址是线性的，不是表格）。
  */
 
-.field {
-  margin-bottom: var(--ws-space);
+/* ── 页头 ────────────────────────────────────────────────────────
+   S4：标题由 `ws-section-head` 组件给，这里只补"离页顶多远"。 */
+.aedit__head {
+  padding-top: var(--ws-space-card);
 }
 
+/* ── 表单 ────────────────────────────────────────────────────── */
+.aedit__form {
+  padding: var(--ws-space-stack);
+}
+
+/* S4：字段容器是 `ws-field`，它自带内边距与分隔线，这里只管**控件**长什么样。 */
 .input {
   display: block;
-  margin-top: var(--ws-space-sm);
-  padding: var(--ws-space-sm);
-  border: var(--ws-border-width) solid var(--ws-color-muted);
-  border-radius: var(--ws-radius);
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font);
+  padding: var(--ws-space-inline) var(--ws-space-stack);
+  border: var(--ws-border-width) solid var(--ws-line);
+  border-radius: var(--ws-radius-sm);
+  background: var(--ws-surface-sunk);
+  color: var(--ws-ink);
+  font-size: var(--ws-f-base);
+}
+
+/* 字段级错误：紧跟在输入框下面，用砖红小字
+   @why 不用 toast：页面内文案可见、可测、不依赖宿主时序（@see index.js @limitation 三） */
+.field__error {
+  display: block;
+  margin-top: var(--ws-space-hair);
+  color: var(--ws-danger);
+  font-size: var(--ws-f-xs);
 }
 
 /* 默认地址开关：整行可点（用 view 不是 button——页面不允许原生可点 button） */
 .def {
-  padding: var(--ws-space-sm) 0;
+  margin-top: var(--ws-space-stack);
+  padding: var(--ws-space-hair) 0;
+}
+
+/* ── 底部 ────────────────────────────────────────────────────── */
+.aedit__foot {
+  margin-top: var(--ws-space-section);
+  padding-bottom: var(--ws-space-section);
 }
 
 .tip {
   display: block;
-  margin-top: var(--ws-space);
+  margin-top: var(--ws-space-inline);
   text-align: center;
+}
+
+/* 占位符：比正文弱一档（--ws-ink-faint），让"示例"和"已填"一眼可分
+   ⚠️ 骨架期 `placeholder-class="ph"` 指向的类**在本页一直没有定义**（等于没生效），
+      S3 补上——否则示例文案（"Ken Tanaka"）和真填进去的收件人长得一样黑。 */
+.ph {
+  color: var(--ws-ink-faint);
 }

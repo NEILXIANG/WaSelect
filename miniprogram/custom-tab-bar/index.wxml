@@ -1,0 +1,22 @@
+<!--
+  自定义 tabBar：**纯文字**，没有图标槽位。
+  @why 图标要额外引入 8 个图片资源（2 态 × 4 项），既占主包又逼着做一套"日式线性图标"；
+       而纯文字 tab 本身就是杂志目录栏的形态，与品牌调性一致。
+  @why 选中态用**一条下划线**而不是"变色 + 加粗"：
+       下划线是"目录里你翻到这一页"，加粗变色是"App 导航栏"——前者才是我们要的语气。
+  @see ./index.js @limitation 一（active 由页面注入，组件不自己推导）
+-->
+<view class="ws-tabbar">
+  <view
+    class="ws-tabbar__item {{active === index ? 'ws-tabbar__item--active' : ''}}"
+    wx:for="{{list}}"
+    wx:key="pagePath"
+    data-path="{{item.pagePath}}"
+    data-index="{{index}}"
+    hover-class="ws-press"
+    bindtap="onSwitch"
+  >
+    <text class="ws-tabbar__label">{{item.text}}</text>
+    <view class="ws-tabbar__rule" />
+  </view>
+</view>

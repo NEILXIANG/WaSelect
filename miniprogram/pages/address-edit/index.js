@@ -92,6 +92,17 @@ Page({
    * 输入变更。
    * @why 只按白名单写字段（@see @limitation 一）：`data-field` 来自 wxml，等同外部输入。
    */
+  /**
+   * 错误态里的次要动作：返回列表（S4：状态块换成 `ws-state-block` 之后才有这个入口）。
+   * @why 这一页在**编辑态**才可能取数失败，而失败时表单是空的却写着"编辑地址"——
+   *      用户会以为自己要重填一遍，其实只是没取到。给一个明确的"返回列表"，
+   *      比让她自己猜返回键在哪（以及"返回会不会丢东西"）要好。
+   *      ⚠️ 只出栈，不做任何写操作，因此没有任何副作用需要论证。
+   */
+  onBack() {
+    wxApi.navigateBack();
+  },
+
   onInput(e) {
     const field = e?.currentTarget?.dataset?.field;
     if (typeof field !== 'string' || !ADDRESS_FIELDS.includes(field)) return;

@@ -1,76 +1,105 @@
 /**
- * 确认订单页样式。
+ * 确认订单页样式（S3 已切到设计体系基础类）。
  *
  * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
  * 硬编码色值 / 非 0 尺寸字面量直接红）。
- * ⚠️ 类与购物车页重复的（.row/.total/.sub-price）刻意重名不复制——
- *    两页共用同一套报价区视觉，改一处即两处（design token 的本意）。
+ *
+ * @why 报价区的类名（`.quote-line` / `.total`）与购物车页**刻意重名不复制**：
+ *      两页共用同一套报价视觉，改一处即两处（design token 的本意）。
+ *      ⚠️ 不用全局 `.row`：app.wxss 里有一个同名的基础类（padding 8rpx），
+ *         页面类覆盖它会让"全局基础类被悄悄改掉"，且只在这一页生效。
  */
 
-.row {
+.item {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  padding: var(--ws-space-hair) 0;
 }
 
-.qty {
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+.item__title {
+  flex: 1;
+  min-width: 0;
 }
 
+.item__qty {
+  flex: none;
+  margin-left: var(--ws-space-inline);
+}
+
+/* 地址行 */
 .line {
   display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font-sm);
+  margin-top: var(--ws-space-hair);
 }
 
 .hint {
   display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+  margin-top: var(--ws-space-inline);
+}
+
+/* 报价明细 */
+.quote-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--ws-space-hair) 0;
+}
+
+.total__rule {
+  margin: var(--ws-space-inline) 0;
 }
 
 .total {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-top: var(--ws-space-sm);
 }
 
-.sub-price {
+/* 表单 */
+.field__label {
   display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+  margin-bottom: var(--ws-space-hair);
+}
+
+.input {
+  display: block;
+  padding: var(--ws-space-inline) var(--ws-space-stack);
+  border: var(--ws-border-width) solid var(--ws-line);
+  border-radius: var(--ws-radius-sm);
+  background: var(--ws-surface-sunk);
+  color: var(--ws-ink);
+  font-size: var(--ws-f-base);
 }
 
 /* 条款勾选：整行可点（用 view 不是 button——页面不允许原生可点 button） */
 .terms {
-  padding: var(--ws-space-sm) 0;
+  padding: var(--ws-space-hair) 0;
 }
 
 .tip {
   display: block;
-  margin-top: var(--ws-space-sm);
+  margin-top: var(--ws-space-inline);
   text-align: center;
 }
 
-/* "查看条款全文"：整行可点（用 view 不是 button——页面不允许原生可点 button） */
+/* "查看条款全文"：整行可点（同上，用 view） */
 .act {
-  margin-top: var(--ws-space);
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font-sm);
+  margin-top: var(--ws-space-inline);
+  color: var(--ws-accent);
+  font-size: var(--ws-f-sm);
 }
 
-/* 收货通知邮箱输入框（AJ-180）：与地址编辑页同一套 token */
-.input {
-  display: block;
-  margin-top: var(--ws-space-sm);
-  padding: var(--ws-space-sm);
-  border: var(--ws-border-width) solid var(--ws-color-muted);
-  border-radius: var(--ws-radius);
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font);
+/* 底部动作区 */
+.cta {
+  padding-bottom: var(--ws-space-section);
+}
+
+/* 空态 / 错误 */
+.state {
+  text-align: center;
+}
+
+.state__error {
+  color: var(--ws-danger);
 }

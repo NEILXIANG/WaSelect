@@ -13,7 +13,7 @@
  *      收敛到一个入口后，这三点各有一处答案。
  *
  * @limitation 一：**只声明当前真用到的能力**（request / getStorageSync / setStorageSync /
- *              removeStorageSync / getRealtimeLogManager / navigateTo / login /
+ *              removeStorageSync / getRealtimeLogManager / navigateTo / switchTab / login /
  *              navigateBack / showModal / requestPayment / setClipboardData / redirectTo）。
  *              新增一个 wx API 就在这里加一个方法——
  *              不要预先铺满官方 API，铺了就会有人依赖上没被测试过的封装（本项目多次踩过"提前做是猜"）。
@@ -75,6 +75,21 @@ export interface RealtimeLogger {
 /** `wx.navigateTo` 的入参（只声明我们传的字段）。 */
 export interface WxNavigateOption {
   /** 以 `/` 开头的**页面内绝对路径**（小程序不支持相对路径跳转）。 */
+  url: string;
+}
+
+/**
+ * `wx.switchTab` 的入参（只声明我们传的字段）。
+ *
+ * @why S5 引入自定义 tabBar 之后登记：tab 页**只能**用 `switchTab` 跳，
+ *      `navigateTo` 到 tabBar 页会被宿主直接拒绝（`fail: navigateTo:fail can not navigate to tabBar page`），
+ *      而且**不带任何页面栈变化**——表现是"点了没反应"，日志里只有一行宿主文案。
+ * @limitation 与 `WxNavigateOption` **形状相同但刻意不复用**：两者是两种跳转语义
+ *      （压栈 vs 切 tab），复用一个类型会让"这里该用哪个"变成看不出来的一件事；
+ *      代价是改跳转语义时要显式换类型，而那正是要被评审看见的改动。
+ */
+export interface WxSwitchTabOption {
+  /** 以 `/` 开头的**页面内绝对路径**（必须是 `app.json` 的 `tabBar.list` 里登记过的页面）。 */
   url: string;
 }
 
@@ -149,6 +164,19 @@ export interface WxApi {
    *              @see @limitation 三（不吞异常，同一口径）
    */
   navigateTo(option: WxNavigateOption): void;
+  /**
+   * 切到 tab 页（`wx.switchTab`）——**关掉所有非 tab 页**，且**不能带参数**。
+   *
+   * @why S5 引入自定义 tabBar 之后登记：tab 页必须用它跳，`navigateTo` 会被宿主拒绝。
+   * @limitation 十三：**只登记不兜底**，且**不判"目标是不是 tab 页"**。
+   *      判错了的表现由宿主的 `fail` 报出来（文案明确指向 tabBar）；
+   *      这里"兜底成 navigateTo"的表现是"能跳过去，但 tabBar 不亮"——
+   *      一个看起来更成功、实际更错的降级。
+   * @limitation 十四：**不能带 query**（`?a=1` 会被宿主忽略）。
+   *      tab 页之间传状态只能走全局（本项目是 `app.globalData` / storage），
+   *      这点与 `navigateTo` 完全不同，别把 `navigateTo` 的习惯带过来。
+   */
+  switchTab(option: WxSwitchTabOption): void;
   /**
    * 微信登录 code（`wx.login`）。
    * @why I2 真实登录链（code → `/auth/wechat/login` → token）的第一步宿主调用。
@@ -237,6 +265,10 @@ interface WxHost {
   removeStorageSync(key: string): void;
   getRealtimeLogManager?: () => RealtimeLogger | undefined;
   navigateTo(option: WxNavigateOption): void;
+  /** ⚠️ 与 `WxApi.switchTab` 一一对应：这里漏登记不会红在业务行，
+   *      只会红在 `createWxApi` 里那一行 `host().switchTab(...)`——报错位置离根因一屏远。
+   *      （本次 S5 引入 `switchTab` 时正好踩到：`WxApi` 与实现都补了，宿主形状漏了。） */
+  switchTab(option: WxSwitchTabOption): void;
   login(option: WxLoginOption): void;
   navigateBack(option?: WxNavigateBackOption): void;
   showModal(option: WxShowModalOption): void;
@@ -291,6 +323,9 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     getRealtimeLogManager: () => host().getRealtimeLogManager?.(),
     navigateTo: (option) => {
       host().navigateTo(option);
+    },
+    switchTab: (option) => {
+      host().switchTab(option);
     },
     login: (option) => {
       host().login(option);

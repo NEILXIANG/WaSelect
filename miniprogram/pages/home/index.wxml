@@ -1,18 +1,36 @@
 <!--
   首页（I2，无 Banner 版）：分类 tab + 搜索 + 商品流 + 触底加载。
 
+  S3（2026-10-02）：版式换成设计体系（`.ws-*` 基础类），**信息架构不动**。
+  S4（2026-10-02）：列表换成 `ws-pick-card`（纵向编辑大卡），状态块/页头换成组件。
+
+  ⚠️ 原型首页的 Hero / 编辑精选 / 生活场景区块**仍然不在这里嫁接**：
+      Hero 图、`scenes` 数据真数据一项都没有，接上去就是"版式到位、内容空白"。
+      现在接的是 `pick-card`（**列表卡片**），它要的 `why` / `maker` / `tags`
+      已经在 020 迁移里落库 —— 这是它能迁过来的前提（AJ-296①）。
+
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss，
   出现硬编码色值 / 尺寸字面量会直接红）。
 
   商品卡 → 详情页：tap 生成导航意图（vm `intentForProduct`），路径只在本文件出现一次
   （`DETAIL_PAGE`），vm 不认识页面路径。
 -->
-<view class="page">
-  <!-- Banner 空位：后端 GET /home 落地后在此接轮播，本版刻意不做 -->
+<view class="ws-page ws-page--with-tabbar">
+  <!-- ── 报头：品牌字标 ──────────────────────────────────────────
+       @why 字标是**静态文案**，不需要后端数据，所以它在 S3 就能上：
+            它是"翻开一本刊物"这一版式意图里成本最低、收益最明显的一笔。
+       @why 不放"用户中心"图标在右上角（沿用原型口径）：右上角放头像会把首页变成"App"。
+            用户入口仍在下方「我的」按钮。 -->
+  <view class="ws-gutter home__bar">
+    <text class="home__mark-cn">日本選品</text>
+    <text class="home__mark-en">Japanese Selection</text>
+  </view>
 
-  <view class="toolbar">
+  <!-- 搜索：输入框 + 按钮。⚠️ 仍是首页原地筛选（生产没有独立搜索页），
+       与原型那个跳搜索页的 navigator 形态不同，这里**不改行为只改样式**。 -->
+  <view class="ws-gutter home__search-row">
     <input
-      class="search"
+      class="home__search"
       value="{{keyword}}"
       placeholder="搜索商品"
       confirm-type="search"
@@ -25,59 +43,79 @@
       用户输入了新词点搜索却毫无反应，列表还是旧结果，看起来就是"搜索坏了"。
       在途状态由列表区显示；正确性由 reload 的序号保证（@see ./index.js B36）。
     -->
-    <ws-button class="search-btn" text="搜索" type="default" bindtap="onSearch" />
-    <ws-button class="cart-btn" text="{{cartLabel}}" type="default" bindtap="onGoCart" />
-    <ws-button class="mine-btn" text="我的" type="default" bindtap="onGoMine" />
+    <ws-button class="home__go" text="搜索" type="primary" bindtap="onSearch" />
   </view>
 
-  <scroll-view class="tabs" scroll-x enable-flex>
+  <view class="ws-gutter home__quick">
+    <ws-button class="home__quick-btn" text="{{cartLabel}}" type="default" bindtap="onGoCart" />
+    <ws-button class="home__quick-btn" text="我的" type="default" bindtap="onGoMine" />
+  </view>
+
+  <!-- 分类 tab：横向可滚（分类数超过一屏时不出界、不断行） -->
+  <scroll-view class="tabs ws-gutter" scroll-x enable-flex>
     <view
       wx:for="{{tabs}}"
       wx:key="key"
       class="tab {{item.active ? 'tab--active' : ''}}"
       data-key="{{item.key}}"
+      hover-class="ws-press"
       bindtap="onCategoryTap"
     >
       {{item.label}}
     </view>
   </scroll-view>
 
-  <!-- 首屏加载：只有"列表还是空的 + 在加载"时才整屏转圈，追加时不打扰已加载的内容 -->
-  <view class="card" wx:if="{{loading && cards.length === 0}}">
-    <text class="label">加载中…</text>
-  </view>
+  <!-- 首屏加载：只有"列表还是空的 + 在加载"时才整屏占位，追加时不打扰已加载的内容 -->
+  <ws-state-block
+    wx:if="{{loading && cards.length === 0}}"
+    kind="loading"
+    title="正在挑选"
+    compact="{{true}}"
+  />
 
-  <view class="grid" wx:if="{{!loading || cards.length > 0}}">
-    <view
-      class="grid-item"
+  <!-- 商品流：S4 起是**纵向编辑大卡**（图 → 匠人 → 名 → why → 价），不再是两列网格。
+       @why 两列网格是卖场形态："先看图、再看价"；而本品牌的判断是
+            "先看值不值、再看多少钱"，`why` 那一整段需要横向的篇幅才读得下去。
+            原型的设计规范里，首页/发现/分类**都是**纵向大卡，两列是例外。 -->
+  <view class="ws-gutter home__list" wx:if="{{!loading || cards.length > 0}}">
+    <ws-pick-card
       wx:for="{{cards}}"
       wx:key="id"
+      class="home__pick"
       data-id="{{item.id}}"
+      image="{{item.image}}"
+      maker="{{item.maker}}"
+      name="{{item.title}}"
+      why="{{item.why}}"
+      priceJpy="{{item.priceJpy}}"
+      usdText="{{item.subPrice}}"
+      stock="{{item.stock}}"
+      tags="{{item.tags}}"
       bindtap="onProductTap"
-    >
-      <view class="product-card">
-        <image class="product-image" src="{{item.image}}" mode="widthFix" lazy-load />
-        <view class="product-body">
-          <text class="product-title">{{item.title}}</text>
-          <ws-price jpy="{{item.priceJpy}}" size="md" />
-          <text class="sub-price" wx:if="{{item.subPrice}}">{{item.subPrice}}</text>
-          <text class="sold-out" wx:if="{{item.soldOut}}">已售罄</text>
-        </view>
-      </view>
-    </view>
+    />
   </view>
 
-  <view class="card" wx:if="{{error}}">
-    <text class="error">{{error}}</text>
-  </view>
+  <!-- 错误 / 空态：走组件（三段式），不再每页各写一块 -->
+  <ws-state-block
+    wx:if="{{error}}"
+    kind="fail"
+    title="没能取到商品"
+    reason="{{error}}"
+    actionText="重试"
+    bindaction="onRetry"
+  />
 
-  <view class="card" wx:elif="{{empty}}">
-    <text class="label">该分类下暂时没有商品</text>
-  </view>
+  <ws-state-block
+    wx:elif="{{empty}}"
+    kind="empty"
+    title="这个分类下暂时没有商品"
+    reason="换个分类看看，或者清空搜索词"
+    compact="{{true}}"
+  />
 
   <view class="footer" wx:if="{{cards.length > 0}}">
-    <text class="label" wx:if="{{loadingMore}}">加载中…</text>
-    <text class="label" wx:elif="{{hasMore}}">上拉加载更多</text>
-    <text class="label" wx:else>没有更多了</text>
+    <text class="ws-caption" wx:if="{{loadingMore}}">加载中…</text>
+    <text class="ws-caption" wx:elif="{{hasMore}}">上拉加载更多</text>
+    <text class="ws-caption" wx:else>没有更多了</text>
   </view>
 </view>

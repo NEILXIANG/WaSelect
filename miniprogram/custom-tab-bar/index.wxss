@@ -1,0 +1,63 @@
+/**
+ * 自定义 tabBar 样式（S5 迁入）。
+ *
+ * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
+ * 硬编码色值 / 尺寸字面量直接红）。
+ *
+ * @limitation 本组件依赖 `styleIsolation: 'apply-shared'`（见 index.js）：
+ *             自定义组件默认**读不到 app.wxss 的类**，而这里用了 `.ws-press`（按下反馈）
+ *             ——少了它，点 tab 没有任何按下反馈，用户会以为没点到。
+ */
+
+.ws-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  /* ⚠️ 高度走 token（--ws-tabbar-h）而不是写死：tabBar 高度**有两个消费方**——
+     本组件自己，以及 tab 页底部要留出的占位（`.ws-page--with-tabbar`）。
+     写成两份字面量就是"改一处忘一处"，表现是滚到底时最后一行被挡住或露出空缝。 */
+  height: var(--ws-tabbar-h);
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--ws-surface);
+  border-top: var(--ws-border-width) solid var(--ws-line);
+  z-index: 900;
+}
+
+.ws-tabbar__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* ⚠️ 上下等高 + 居中，是为了**消掉图标留下的空档**——
+     保留图标槽位会让文字整体下移，视觉上出现一条说不清的空白。 */
+  height: 100%;
+}
+
+.ws-tabbar__label {
+  font-size: var(--ws-f-sm);
+  line-height: 1;
+  color: var(--ws-ink-mute);
+  letter-spacing: var(--ws-ls-display);
+}
+
+.ws-tabbar__item--active .ws-tabbar__label {
+  color: var(--ws-ink);
+}
+
+/* 选中态的下划线：未选中时**占位但透明**（不是 `display: none`），
+   否则选中/未选中切换时文字会跳一下高度。 */
+.ws-tabbar__rule {
+  width: var(--ws-space-gutter);
+  height: var(--ws-space-tight);
+  margin-top: var(--ws-space-hair);
+  border-radius: var(--ws-radius-xs);
+  background: transparent;
+  transition: background var(--ws-dur-fast) var(--ws-ease);
+}
+
+.ws-tabbar__item--active .ws-tabbar__rule {
+  background: var(--ws-accent);
+}

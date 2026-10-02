@@ -2,16 +2,22 @@
   支付（I2）：支付方式由 GET /pay/channels 下发并渲染，**不写死通道名与按钮**
   （ADR-28/F11：上下线一个通道改配置即可，无需发版）。
 
+  S3（2026-10-02）：版式换成设计体系（`.ws-*` 基础类），信息架构与行为不动。
+
   ⚠️ 按钮文案取自服务端的 `label`（外置文案）；entryMode 为 redirect 的通道
   在 utils/pay-plan.js 里就被滤掉了——小程序内没有"302 跳出去再回来"的闭环，
   显示了就是"点了没反应"。
 
   ⚠️ copylink 那一屏：只给"复制链接"，不自动复制、不代为跳转
   （剪贴板是用户的东西；跳出去也打不开——D-49 已废 web-view）。
+
+  样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
-<view class="page">
-  <view class="card" wx:if="{{error}}">
-    <text class="error">{{error}}</text>
+<view class="ws-page pay">
+  <view class="ws-gutter" wx:if="{{error}}">
+    <view class="ws-card state">
+      <text class="ws-note state__error">{{error}}</text>
+    </view>
   </view>
 
   <!--
@@ -19,12 +25,16 @@
     @why 拉起微信收银台会让平台触发 onHide → onShow → 整页重取，
          而重取开头会清 `error`——把取消提示放那儿，用户永远看不到它。
   -->
-  <view class="card" wx:if="{{payResult}}">
-    <text class="error">{{payResult}}</text>
+  <view class="ws-gutter" wx:if="{{payResult}}">
+    <view class="ws-card state">
+      <text class="ws-note state__error">{{payResult}}</text>
+    </view>
   </view>
 
-  <view class="card" wx:if="{{loading}}">
-    <text class="label">正在加载支付方式…</text>
+  <view class="ws-gutter" wx:if="{{loading}}">
+    <view class="ws-card state">
+      <text class="ws-note">正在加载支付方式…</text>
+    </view>
   </view>
 
   <!--
@@ -32,17 +42,23 @@
     @why 单已经付过了（或根本没付成），"应付"两个字是错的——用户会读成"我还要再付这么多"。
          金额本身留着：它是用户核对"付了多少钱"的凭据，收掉反而更糟。
   -->
-  <view class="card" wx:if="{{totalJpy !== null}}">
-    <view class="row">
-      <text class="label">{{closedText ? '订单合计' : '应付合计'}}</text>
-      <ws-price jpy="{{totalJpy}}" size="lg" />
+  <view class="ws-gutter ws-section" wx:if="{{totalJpy !== null}}">
+    <view class="ws-card">
+      <text class="ws-section-kicker">{{closedText ? 'Order Total' : 'Amount Due'}}</text>
+      <view class="total">
+        <text class="ws-note">{{closedText ? '订单合计' : '应付合计'}}</text>
+        <ws-price jpy="{{totalJpy}}" size="lg" />
+      </view>
     </view>
   </view>
 
   <!-- §14.2 支付前明确提示（官方运营规范强制，D-48 / AJ-180）：必须在支付按钮**上方**、点之前就看得到 -->
-  <view class="card notice" wx:if="{{notice.length > 0}}">
-    <text class="label">支付前请确认</text>
-    <text class="line" wx:for="{{notice}}" wx:key="*this">{{item}}</text>
+  <view class="ws-gutter ws-section notice" wx:if="{{notice.length > 0}}">
+    <view class="ws-card">
+      <text class="ws-section-kicker">Before You Pay</text>
+      <text class="ws-title notice__title">支付前请确认</text>
+      <text class="ws-body line" wx:for="{{notice}}" wx:key="*this">{{item}}</text>
+    </view>
   </view>
 
   <!--
@@ -50,50 +66,65 @@
     以前这一屏完全不看状态，从返回栈回到已付单照样列出通道，点下去是 40902——
     在"支付"这个动作上遇到它，用户第一反应是"刚才是不是没付成功"。
   -->
-  <view class="card" wx:if="{{closedText}}">
-    <text class="label">{{closedText}}</text>
-    <!--
-      MP3-01：只有"没付成"才有这个按钮（expired / cancelled）。
-      文案说了"如需购买请重新下单"却没地方可点，等于把人丢在死胡同里；
-      而这一屏是支付流程的终点，下面只有一个"查看订单"——他要的是买，不是看。
-    -->
-    <ws-button text="去首页重新下单" type="primary" bindtap="onGoHome" wx:if="{{goHome}}" />
-  </view>
-
-  <view class="card" wx:if="{{channels.length > 0}}">
-    <view
-      class="channel"
-      wx:for="{{channels}}"
-      wx:key="channel"
-      data-channel="{{item.channel}}"
-      bindtap="onPay"
-    >
-      <text class="label">{{item.buttonText}}</text>
+  <view class="ws-gutter ws-section" wx:if="{{closedText}}">
+    <view class="ws-card">
+      <text class="ws-body">{{closedText}}</text>
+      <!--
+        MP3-01：只有"没付成"才有这个按钮（expired / cancelled）。
+        文案说了"如需购买请重新下单"却没地方可点，等于把人丢在死胡同里；
+        而这一屏是支付流程的终点，下面只有一个"查看订单"——他要的是买，不是看。
+      -->
+      <view class="cta-inner" wx:if="{{goHome}}">
+        <ws-button text="去首页重新下单" type="primary" bindtap="onGoHome" />
+      </view>
     </view>
   </view>
 
-  <view class="card" wx:if="{{paying}}">
-    <text class="label">正在发起支付…</text>
+  <view class="ws-gutter ws-section" wx:if="{{channels.length > 0}}">
+    <view class="ws-card">
+      <text class="ws-section-kicker">Payment Method</text>
+      <view
+        class="channel"
+        wx:for="{{channels}}"
+        wx:key="channel"
+        data-channel="{{item.channel}}"
+        hover-class="ws-press"
+        bindtap="onPay"
+      >
+        <text class="ws-body">{{item.buttonText}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="ws-gutter" wx:if="{{paying}}">
+    <view class="ws-card state">
+      <text class="ws-note">正在发起支付…</text>
+    </view>
   </view>
 
   <!-- 引导屏：copylink（银行卡）/ auto（审核期）/ unsupported -->
-  <view class="card" wx:if="{{guide.title}}">
-    <text class="label">{{guide.title}}</text>
-    <text class="line">{{guide.body}}</text>
-    <!--
-      B34 / AJ-217：链接**本身**要可见可选。`setClipboardData` 是隐私接口，会失败
-      （用户拒绝弹窗 / 隐私指引漏声明剪切板），失败时用户唯一的出路就是长按这里手动复制。
-      不把它渲染出来的话，"复制失败"这四个字等于一句没有出路的通知。
-    -->
-    <text class="line url" user-select wx:if="{{payUrl}}">{{payUrl}}</text>
-    <ws-button
-      text="{{copied ? '已复制' : '复制链接'}}"
-      type="primary"
-      bindtap="onCopy"
-      wx:if="{{payUrl}}"
-    />
+  <view class="ws-gutter ws-section" wx:if="{{guide.title}}">
+    <view class="ws-card">
+      <text class="ws-title">{{guide.title}}</text>
+      <text class="ws-body line">{{guide.body}}</text>
+      <!--
+        B34 / AJ-217：链接**本身**要可见可选。`setClipboardData` 是隐私接口，会失败
+        （用户拒绝弹窗 / 隐私指引漏声明剪切板），失败时用户唯一的出路就是长按这里手动复制。
+        不把它渲染出来的话，"复制失败"这四个字等于一句没有出路的通知。
+      -->
+      <text class="ws-caption url" user-select wx:if="{{payUrl}}">{{payUrl}}</text>
+      <view class="cta-inner" wx:if="{{payUrl}}">
+        <ws-button
+          text="{{copied ? '已复制' : '复制链接'}}"
+          type="primary"
+          bindtap="onCopy"
+        />
+      </view>
+    </view>
   </view>
 
   <!-- 订单列表随时可去：支付完成的真值在那里（服务端回调落库），不在本页 -->
-  <ws-button text="查看订单" type="primary" bindtap="onViewOrders" />
+  <view class="ws-gutter ws-section cta">
+    <ws-button text="查看订单" type="primary" bindtap="onViewOrders" />
+  </view>
 </view>

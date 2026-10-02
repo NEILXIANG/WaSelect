@@ -1,42 +1,77 @@
 /**
- * 地址列表页样式。
+ * 地址列表页样式（S3 已切到设计体系基础类）。
  *
  * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
  * 硬编码色值 / 非 0 尺寸字面量直接红）。
+ *
+ * @why 地址行**保留发丝线把动作区和地址正文分开**：地址正文有 4 行，
+ *      不加线时"删除"看起来像是第 5 行地址的一部分（尤其 line2 为空时）。
  */
 
-/* 收件人 + 默认标记同一行（不用 flex gap，基础库支持不一致） */
-.addr-head {
+/* ── 页头 ────────────────────────────────────────────────────────
+   S4：标题本身由 `ws-section-head` 组件给，这里只补"离页顶多远"。
+   ⚠️ 组件刻意不带外边距（同 ws-button 的口径），位置是页面的决定。 */
+.addr__head {
+  padding-top: var(--ws-space-card);
+}
+
+/* ── 列表 ────────────────────────────────────────────────────── */
+.addr__list {
+  margin-top: var(--ws-space-stack);
+}
+
+/* 卡与卡之间：`.ws-stack` 不能直接套（它的首元素清零规则对 wx:for 生成的第一个有效，
+   但这里卡外面还包了一层 gutter），所以给"非第一张"加间距 */
+.addr + .addr {
+  margin-top: var(--ws-space-stack);
+}
+
+.addr__head {
   display: flex;
   align-items: baseline;
 }
 
-.name {
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font);
+.addr__name {
+  flex: none;
 }
 
-.tag {
-  margin-left: var(--ws-space-sm);
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+.addr__default {
+  margin-left: var(--ws-space-inline);
 }
 
-.line {
+/* 地址正文四行：行间距用 stack（20rpx）会让 4 行撑得很开，
+   这里收一档到 inline（12rpx）——地址是一个整体，读的时候要连着读 */
+.addr__line {
   display: block;
-  margin-top: var(--ws-space-sm);
-  color: var(--ws-color-muted);
-  font-size: var(--ws-font-sm);
+  margin-top: var(--ws-space-inline);
 }
 
-/* 操作区：文字按钮排一行（用 view 不是 button——页面不允许原生可点 button） */
-.acts {
+/* ── 动作区 ──────────────────────────────────────────────────── */
+.addr__rule {
+  margin-top: var(--ws-space-stack);
+}
+
+.addr__acts {
   display: flex;
-  margin-top: var(--ws-space);
+  align-items: center;
+  margin-top: var(--ws-space-stack);
 }
 
-.act {
-  margin-right: var(--ws-space);
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font-sm);
+.addr__act {
+  font-size: var(--ws-f-sm);
+  color: var(--ws-ink-soft);
+}
+
+.addr__act + .addr__act {
+  margin-left: var(--ws-space-card);
+}
+
+/* 「用这个地址」是选中态页面（?pick=1）的唯一目标动作，给它强调色 */
+.addr__act--accent {
+  color: var(--ws-accent);
+}
+
+/* ── 底部新增按钮 ────────────────────────────────────────────── */
+.addr__foot {
+  margin-top: var(--ws-space-section);
 }

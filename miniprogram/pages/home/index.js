@@ -40,6 +40,7 @@ import {
   productCards,
 } from './index.vm.js';
 import { newTraceId } from '../../utils/trace.js';
+import { setActiveTab } from '../../utils/tabs.js';
 
 const app = getApp();
 
@@ -49,13 +50,18 @@ const wxApi = createWxApi();
 /** 商品详情页路径（跳转路径只在这一处出现；vm 只给意图，不认识路径）。 */
 const DETAIL_PAGE = '/pages/detail/index';
 
-/** 购物车页路径（同上：页面路径只在这一处出现）。 */
+/**
+ * 购物车页路径（S5 起是 tab 页，跳转走 `switchTab`）。
+ * @why 路径只在这一处出现（vm 只给意图，不认识路径——约束十一）。
+ * @why S5 之后它是 tab 页：**不能再带 query**（`switchTab` 会忽略参数），
+ *      这点与 `DETAIL_PAGE` 完全不同，别把 navigateTo 的习惯带过来。
+ */
 const CART_PAGE = '/pages/cart/index';
 
 /**
- * 「我的」页路径。
- * @why 它是订单 / 地址 / 法务三个页**唯一的入口**——那三个页此前注册了也能跑，
- *      但从首页出发没有任何路径能走到（付完款回到首页，订单就找不到了）。
+ * 「我的」页路径（S5 起是 tab 页，跳转走 `switchTab`）。
+ * @why 它是**地址 / 法务**两个页的入口——那两个页不在 tabBar 上，只能从这里进。
+ *      ⚠️ 订单已随 S5 升为独立 tab（底部直达），不再只靠本页进。
  */
 const USER_PAGE = '/pages/user/index';
 
@@ -123,16 +129,24 @@ Page({
    */
   onShow() {
     this.setData({ cartLabel: cartLabel(app.globalData.cart.count()) });
+    // S5：注入底部 tabBar 的高亮（本页是第 0 个 tab）。
+    // @why 必须每次进屏都注入：从别的 tab 切回来会触发 onShow 而不触发 onLoad，
+    //      只在 onLoad 注的表现是"切回首页、高亮还停在上一页"。
+    setActiveTab(this, 'home');
   },
 
-  /** 去购物车。 */
+  /**
+   * 去购物车。
+   * @why S5 之后用 `switchTab` 而不是 `navigateTo`：购物车是 tab 页，
+   *      `navigateTo` 到 tab 页会被宿主直接拒绝，表现是"点了没反应"。
+   */
   onGoCart() {
-    wxApi.navigateTo({ url: CART_PAGE });
+    wxApi.switchTab({ url: CART_PAGE });
   },
 
-  /** 去「我的」（订单 / 地址 / 法务的唯一入口，@see USER_PAGE 注释）。 */
+  /** 去「我的」（地址 / 法务的入口；订单已升为 tab，@see USER_PAGE 注释）。 */
   onGoMine() {
-    wxApi.navigateTo({ url: USER_PAGE });
+    wxApi.switchTab({ url: USER_PAGE });
   },
 
   /**
@@ -173,6 +187,19 @@ Page({
   /** 触底加载下一页。 */
   onReachBottom() {
     this.loadMore();
+  },
+
+  /**
+   * 错误态里的「重试」（S4：状态块换成 `ws-state-block` 之后才有这个入口）。
+   *
+   * @why 之前首页失败时只有一行红字，**没有任何可做的动作**——用户只能杀掉小程序重开。
+   *      而"重试"在这里是安全的：`reload` 是幂等的整页替换（B36 之后还能安全并发），
+   *      它既不建单也不扣款，重复调用没有副作用。
+   *      ⚠️ 不是所有"重试"都这么安全：付款类的重试必须走幂等键，那里的重试按钮
+   *         要单独论证——这里的判断**不可**照搬到付款页。
+   */
+  onRetry() {
+    void this.reload(this.category);
   },
 
   /**
