@@ -44,6 +44,7 @@ import {
   emptyRefundForm,
   emptyReleaseForm,
   emptyShipForm,
+  eventStatusText,
   paymentSummary,
   refundErrors,
   refundFailureNotice,
@@ -53,6 +54,7 @@ import {
   isDisputeLocked,
   shipErrors,
   shipGate,
+  statusText,
   toRefundBody,
   toReleaseBody,
   toShipBody,
@@ -216,7 +218,11 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
             </div>
             <div className="field">
               <span className="label">状态</span>
-              <span>{order.status ?? '—'}</span>
+              {/* 🔴 走 `statusText` 而不是 `order.status`：直接渲染原文会让这一格显示 `paid`，
+                  而同一张单在列表页显示的是「待发货」——两个页面对同一个状态两种叫法，
+                  客服照详情页对客户说话时会说成"你那张 paid 的单"。
+                  （L4 浏览器验收 2026-10-02 发现；契约外的状态由它统一显示「未知状态」） */}
+              <span>{statusText(order)}</span>
             </div>
             <div className="field">
               <span className="label">合计</span>
@@ -264,7 +270,10 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
               <span className="label">事件</span>
               {events.map((e, i) => (
                 <span className="muted" key={i}>
-                  {formatJst(e.at)} {e.status ?? ''} {e.note ?? ''}
+                  {/* `eventStatusText` 而不是 `e.status`：事件流里有一半是"没迁状态、
+                      只记一件事"的伪状态（改址 / 拒付开案 / 退款失败……）。
+                      note 里虽然有中文说明，但"这是什么类别"仍要看 status 才认得出。 */}
+                  {formatJst(e.at)} {eventStatusText(e.status)} {e.note ?? ''}
                 </span>
               ))}
             </div>

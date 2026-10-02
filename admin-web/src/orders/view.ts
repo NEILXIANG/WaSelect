@@ -65,6 +65,33 @@ export const STATUS_FILTER_OPTIONS: ReadonlyArray<{
   ...ORDER_STATUS.map((s) => ({ value: s, label: ORDER_STATUS_LABELS[s] })),
 ];
 
+/**
+ * 事件流里**不是订单状态**的伪状态文案（只出现在管理端）。
+ *
+ * @why `order_events.status` 是 VARCHAR：它既存订单状态（`ORDER_STATUS` 十态），
+ *      也存"没迁状态、只记下发生过一件事"的伪状态（改址 / 拒付 / 退款失败……）。
+ *      管理端详情页此前直接显示 `status` 原文，于是这些英文**原样**出现在运营眼前——
+ *      而管理端是中文界面，且这几行恰恰是运营最需要读懂的（"这张单的退款失败过"）。
+ * @why 键不抽成服务端常量：这些串分散在 `adapters/orders-admin.ts`、
+ *      `app/mark-disputed.ts`、`app/payment-intent.ts` 三处的 SQL 字面量里，
+ *      抽常量要动服务端；前端这一份只是**文案层**的映射，
+ *      服务端新增一种事件时这里漏配的后果是"那一行显示英文"（看得见），
+ *      不是"信息被吃掉"（见 @limitation）。
+ *
+ * @limitation 认不出的值**原样返回**，不映射成"未知"：
+ *      新增一种管理事件而这里没跟上时，原样显示至少还留着服务端那个可检索的串；
+ *      映射成"未知状态"会把"发生过什么事"这层信息直接抹掉——那是静默丢信息。
+ */
+export const EVENT_STATUS_LABELS: Readonly<Record<string, string>> = {
+  address_changed: '改址',
+  dispute_opened: '拒付开案',
+  dispute_closed: '拒付结案',
+  refund_pending: '退款处理中',
+  refund_failed: '退款失败',
+  dispute_released: '解除拒付限制',
+  pay_create_failed: '机构拒建支付会话',
+};
+
 /** 闸门结果：不能操作时必须有**具体原因**（按钮禁用也要能 tooltip 出来）。 */
 export interface Gate {
   ok: boolean;
@@ -104,6 +131,33 @@ function readString(value: unknown, key: string): string {
   return typeof v === 'string' ? v : '';
 }
 
+/**
+ * 订单状态 → 中文文案；契约外 / 缺失 → `未知状态`（**不猜**成某个真实状态）。
+ *
+ * @why 抽成函数而不是让调用处自己写 `status === null ? '未知状态' : LABELS[status]`：
+ *      L4 浏览器验收（2026-10-02）发现订单详情页的「状态」与「事件」两处**直接渲染
+ *      服务端原文**（`created` / `paid` / `shipped`），而列表页用的是中文词表——
+ *      同一个状态在列表页叫「待发货」、在详情页叫 `paid`。根因就是这句三元表达式
+ *      **只写在 `orderRows` 内部**，详情页拿不到，于是照抄了 `order.status`。
+ *      抽出来之后，"状态怎么显示"只有一处答案，两处都调它。
+ */
+export function statusText(order: unknown): string {
+  const status = readStatus(order);
+  return status === null ? '未知状态' : ORDER_STATUS_LABELS[status];
+}
+
+/**
+ * 事件流一行的状态文案：订单状态走 {@link ORDER_STATUS_LABELS}，
+ * 伪状态走 {@link EVENT_STATUS_LABELS}，其余**原样返回**（见它的 @limitation）。
+ */
+export function eventStatusText(raw: unknown): string {
+  if (typeof raw !== 'string' || raw === '') return '';
+  if ((ORDER_STATUS as readonly string[]).includes(raw)) {
+    return ORDER_STATUS_LABELS[raw as OrderStatus];
+  }
+  return EVENT_STATUS_LABELS[raw] ?? raw;
+}
+
 /** `Order[]` / `AdminOrder[]` → 列表行。 */
 export function orderRows(items: unknown): OrderRow[] {
   if (!Array.isArray(items)) return [];
@@ -118,7 +172,7 @@ export function orderRows(items: unknown): OrderRow[] {
         id: o['order_id'] as string,
         orderNo: readString(o, 'order_no'),
         status,
-        statusText: status === null ? '未知状态' : ORDER_STATUS_LABELS[status],
+        statusText: statusText(o),
         totalText: moneyText(o['total_jpy']),
         createdText: formatJst(o['created_at']),
         // 列表行带顶层 `recipient`（0.6.9/KD-14）；详情形状（AdminOrder）只有 address.recipient——两种都认

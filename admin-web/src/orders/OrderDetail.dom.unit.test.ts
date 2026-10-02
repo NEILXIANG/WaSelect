@@ -32,6 +32,8 @@ let hasDispute: boolean;
 let refundBehaviour: () => unknown;
 let releaseBehaviour: () => unknown;
 let changed: number;
+/** 服务端此刻的事件流（状态文案用例会往里塞伪状态）。 */
+let events: Array<Record<string, unknown>>;
 
 const order = () => ({
   order_id: 'o-1',
@@ -40,7 +42,7 @@ const order = () => ({
   total_jpy: 9150,
   has_dispute: hasDispute,
   items: [],
-  events: [],
+  events,
 });
 
 async function open(): Promise<HTMLElement> {
@@ -68,6 +70,19 @@ async function open(): Promise<HTMLElement> {
 
 const detailFetches = (): number =>
   calls.filter((c) => c.method !== 'POST' && c.path.endsWith('/orders/o-1')).length;
+
+/** 按 label 取 `.field` 里那一格的值（详情页是 `<span class="label">名</span><span>值</span>`）。 */
+function fieldText(el: HTMLElement, label: string): string {
+  const field = [...el.querySelectorAll('.field')].find(
+    (f) => f.querySelector('.label')?.textContent?.trim() === label,
+  );
+  const spans = [...(field?.querySelectorAll(':scope > span') ?? [])];
+  return (spans[1]?.textContent ?? '').trim();
+}
+
+beforeEach(() => {
+  events = [];
+});
 
 async function submitRefund(el: HTMLElement): Promise<void> {
   await type(el.querySelector('input[placeholder^="退款原因"]'), '缺货');
@@ -226,3 +241,82 @@ describe('订单详情：退款提交出错之后（B41 残留 / AJ-230）', () 
     expect(el.querySelector('.error')).toBeNull();
   });
 });
+
+/**
+ * 🔴 回归：详情页的**中文化**（L4 浏览器验收 2026-10-02 发现）。
+ *
+ * @why 必须走组件用例：`view.unit.test.ts` 只能证明 `statusText` / `eventStatusText`
+ *      两个纯函数算得对，证明不了**详情页真的调了它们**——
+ *      而缺陷恰恰在 `.tsx` 里（模板直接写 `{order.status}`、`{e.status}`）。
+ *      少这一层，"函数对但没被用上"会一直绿下去，正是 L4 抓到的那个形态。
+ */
+describe('订单详情：状态与事件流显示中文（管理端只需要中文）', () => {
+  beforeEach(() => {
+    hasDispute = false;
+    refundBehaviour = () => ({ order_id: 'o-1', outcome: 'succeeded' });
+    releaseBehaviour = () => ({ order_id: 'o-1', has_dispute: false });
+  });
+
+  it('🔴 「状态」那一格显示中文，不显示服务端原文（缺陷注入点：改回 order.status 即红）', async () => {
+    status = 'paid';
+    const el = await open();
+    expect(fieldText(el, '状态')).toBe('待发货');
+    expect(fieldText(el, '状态')).not.toBe('paid');
+  });
+
+  it('🔴 已发货 / 待付款两态同样翻中文（同一个字段，同一条路径）', async () => {
+    status = 'shipped';
+    expect(fieldText(await opened(), '状态')).toBe('已发货');
+  });
+
+  it('🔴 事件流：订单状态值翻中文（缺陷注入点：改回 e.status 即红）', async () => {
+    status = 'paid';
+    events = [
+      { status: 'created', at: '2026-10-01T00:00:00Z' },
+      { status: 'pending_payment', at: '2026-10-01T00:01:00Z' },
+      { status: 'paid', at: '2026-10-01T00:03:00Z' },
+    ];
+    const el = await open();
+    const text = el.textContent ?? '';
+    expect(text).toContain('待付款（未发起）');
+    expect(text).toContain('待付款（支付中）');
+    expect(text).toContain('待发货');
+    // 原文不该再出现（"paid" 会混在别处吗？订单号/地址里没有它，所以这条站得住）
+    expect(text).not.toContain('pending_payment');
+  });
+
+  it('🔴 事件流：管理事件伪状态翻中文（改址 / 拒付开案 / 退款失败）', async () => {
+    status = 'paid';
+    events = [
+      {
+        status: 'address_changed',
+        note: '改址：改前地址已归档（#12）',
+        at: '2026-10-01T01:00:00Z',
+      },
+      { status: 'dispute_opened', note: 'dp_1', at: '2026-10-01T02:00:00Z' },
+      { status: 'refund_failed', note: 'provider_error', at: '2026-10-01T03:00:00Z' },
+    ];
+    const el = await open();
+    const text = el.textContent ?? '';
+    expect(text).toContain('改址');
+    expect(text).toContain('拒付开案');
+    expect(text).toContain('退款失败');
+    // 认不出的才原样保留；这三个都在词表里，不该出现英文
+    expect(text).not.toContain('address_changed');
+    expect(text).not.toContain('dispute_opened');
+    expect(text).not.toContain('refund_failed');
+  });
+
+  it('⚠️ 认不出的事件状态原样保留（"发生过什么事"这层信息不能被吃掉）', async () => {
+    status = 'paid';
+    events = [{ status: 'some_future_event', note: 'x', at: '2026-10-01T04:00:00Z' }];
+    const el = await open();
+    expect(el.textContent).toContain('some_future_event');
+    expect(el.textContent).not.toContain('未知状态');
+  });
+});
+
+/** `open()` 后直接拿到根元素（供单行断言用）。 */
+async function opened(): Promise<HTMLElement> {
+  return open();
+}

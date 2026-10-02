@@ -667,9 +667,14 @@ export async function markRefunded(
  * 改址：重写 `address_snapshot` 并记事件（**不改状态**）。
  * @returns false = 当前不是 paid（已被抢先发货 / 退款，**不是错误**）。
  * @why 事件用伪状态 `address_changed` 而不是复用 `paid`：时间线里两条都叫 paid 的话，
- *      "这笔单付过几次款"就成了猜谜。**管理端**详情页直接显示 `status` 原文，所以不会被渲染成"未知状态"；
- *      **买家**时间线（`listOrderTimeline`）按 ORDER_STATUS 过滤，看不到它（一致性审计 C2，AJ-176——
- *      此前买家端小程序会把它渲染成"状态未知"，本注释当时只考虑了管理端）。
+ *      "这笔单付过几次款"就成了猜谜。**买家**时间线（`listOrderTimeline`）按 ORDER_STATUS
+ *      过滤，看不到它（一致性审计 C2，AJ-176——此前买家端小程序会把它渲染成"状态未知"）。
+ *      ⚠️ 2026-10-02 更正（ADR-29：注释与事实不符即 bug）：本处原写"**管理端**详情页直接
+ *      显示 `status` 原文，所以不会被渲染成'未知状态'"——L4 浏览器验收发现那句话正是缺陷
+ *      本身（管理端详情页显示 `paid` 而列表页显示「待发货」，同一个状态两种叫法）。
+ *      现管理端走 `admin-web/src/orders/view.ts` 的 `eventStatusText`：
+ *      订单状态翻中文，伪状态查 `EVENT_STATUS_LABELS`（`address_changed` → 改址），
+ *      查不到才原样显示。⚠️ 新增伪状态或改文案时，要同步改那份词表。
  *      @limitation 它不在 `ORDER_STATUS` 枚举里——`order_events.status` 是 VARCHAR 故不违反
  *      DB 约束，但任何"按 enum 校验事件状态"的将来逻辑都要把它列为例外。
  * @why 事件的 note 存**改前地址的完整 JSON**（`{"from": …}`，B12 / AJ-208），不是固定文案：

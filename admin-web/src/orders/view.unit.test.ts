@@ -12,6 +12,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ADMIN_NOTE_MAX_LENGTH, ORDER_STATUS, REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import {
+  EVENT_STATUS_LABELS,
   ORDER_STATUS_LABELS,
   STATUS_FILTER_OPTIONS,
   addressGate,
@@ -20,6 +21,7 @@ import {
   emptyRefundForm,
   emptyReleaseForm,
   emptyShipForm,
+  eventStatusText,
   orderRows,
   refundErrors,
   refundFailureNotice,
@@ -29,6 +31,7 @@ import {
   isDisputeLocked,
   shipErrors,
   shipGate,
+  statusText,
   toRefundBody,
   toReleaseBody,
   toShipBody,
@@ -95,6 +98,87 @@ describe('orderRows', () => {
     const [row] = orderRows([{ ...ORDER, is_test: true, has_dispute: true }]);
     expect(row?.isTest).toBe(true);
     expect(row?.hasDispute).toBe(true);
+  });
+});
+
+/**
+ * 🔴 回归：L4 浏览器验收（2026-10-02）发现订单详情页的「状态」直接渲染 `order.status`
+ *    原文（`paid`），而列表页同一张单显示「待发货」——同一个状态两个页面两种叫法。
+ *    根因是"状态怎么显示"这句三元表达式只写在 `orderRows` 内部，详情页够不着。
+ *    下面这组是"两处现在共用同一个答案"的钉子。
+ */
+describe('statusText（列表与详情共用的状态文案）', () => {
+  it('十态全部给中文，且与列表行用的是同一份词表', () => {
+    for (const s of ORDER_STATUS) {
+      expect(statusText({ status: s }), s).toBe(ORDER_STATUS_LABELS[s]);
+      // 详情页曾用 `order.status ?? '—'`，于是这一格出现服务端原文
+      expect(statusText({ status: s }), s).not.toBe(s);
+    }
+  });
+
+  it('🔴 详情页那一格不再显示服务端原文（缺陷注入点：改回 order.status 即红）', () => {
+    expect(statusText({ status: 'paid' })).toBe('待发货');
+    expect(statusText({ status: 'created' })).toBe('待付款（未发起）');
+    expect(statusText({ status: 'shipped' })).toBe('已发货');
+  });
+
+  it('契约外 / 缺失 / null 输入 → "未知状态"（不猜成某个真实状态）', () => {
+    expect(statusText({ status: 'weird_status' })).toBe('未知状态');
+    expect(statusText({})).toBe('未知状态');
+    expect(statusText(null)).toBe('未知状态');
+    expect(statusText({ status: 123 })).toBe('未知状态');
+  });
+
+  it('列表行的 statusText 与详情共用同一个函数（两处不会各自漂移）', () => {
+    const [row] = orderRows([withStatus('refunding')]);
+    expect(row?.statusText).toBe(statusText({ status: 'refunding' }));
+  });
+});
+
+describe('eventStatusText（事件流：订单状态 + 管理事件伪状态）', () => {
+  it('订单状态值 → 走订单词表（created 而不是 created 原样）', () => {
+    expect(eventStatusText('created')).toBe('待付款（未发起）');
+    expect(eventStatusText('paid')).toBe('待发货');
+    expect(eventStatusText('shipped')).toBe('已发货');
+    expect(eventStatusText('refunded')).toBe('已退款');
+  });
+
+  it('🔴 管理事件伪状态 → 中文（缺陷注入点：这里曾直接渲染 e.status 原文）', () => {
+    expect(eventStatusText('address_changed')).toBe('改址');
+    expect(eventStatusText('dispute_opened')).toBe('拒付开案');
+    expect(eventStatusText('dispute_closed')).toBe('拒付结案');
+    expect(eventStatusText('refund_pending')).toBe('退款处理中');
+    expect(eventStatusText('refund_failed')).toBe('退款失败');
+    expect(eventStatusText('dispute_released')).toBe('解除拒付限制');
+    expect(eventStatusText('pay_create_failed')).toBe('机构拒建支付会话');
+  });
+
+  it('七种伪状态全部配了文案（服务端新增一种而这里没跟 → 那一行退回英文，看得见但仍是缺口）', () => {
+    expect(Object.keys(EVENT_STATUS_LABELS).sort()).toEqual([
+      'address_changed',
+      'dispute_closed',
+      'dispute_opened',
+      'dispute_released',
+      'pay_create_failed',
+      'refund_failed',
+      'refund_pending',
+    ]);
+  });
+
+  it('⚠️ 认不出的值**原样返回**：不映射成"未知"，否则"发生过什么事"这层信息被吃掉', () => {
+    expect(eventStatusText('some_future_event')).toBe('some_future_event');
+  });
+
+  it('空 / 非字符串 → 空串（时间线那一行不该出现 "undefined"）', () => {
+    expect(eventStatusText('')).toBe('');
+    expect(eventStatusText(undefined)).toBe('');
+    expect(eventStatusText(null)).toBe('');
+    expect(eventStatusText(42)).toBe('');
+  });
+
+  it('伪状态文案两两不同（合并了就分不清改址与拒付）', () => {
+    const labels = Object.values(EVENT_STATUS_LABELS);
+    expect(new Set(labels).size).toBe(labels.length);
   });
 });
 

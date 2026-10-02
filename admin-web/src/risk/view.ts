@@ -33,8 +33,30 @@ export const DISPUTE_STATUS_LABELS: Readonly<Record<DisputeStatus, string>> = {
   withdrawn: '已撤回（不计输赢）',
 };
 
-/** 拉黑后果的固定文案（@see @limitation 二：没有解除接口，点之前必须说清）。 */
-export const BLOCK_CONFIRM_TEXT = '拉黑后该用户不能再下单（40301），且后台没有解除入口——确认继续？';
+/**
+ * 拉黑后果的固定文案（@see @limitation 二：没有解除接口，点之前必须说清）。
+ *
+ * @why 三件后果**必须逐条列出**，尤其是第二条：
+ *      拉黑不是"只把这个人挡在门外"——`app/block-user.ts` 会**连带取消**该用户名下
+ *      所有在途单（`created` / `pending_payment`）并回补库存、作废在途支付行。
+ *      2026-10-02 的 L4 浏览器验收发现：确认面板只说了"不能再下单"与"没有解除入口"，
+ *      运营点下去之后才知道"这个人的未付款订单也没了"——
+ *      而那一步不可逆，且界面上没有任何一处提示过它。
+ *      ⚠️ 二审（ADR）：不可写在服务端日志里就完事——运营是在**点之前**需要知道它。
+ *
+ * @limitation 文案里不写"会取消几张单"：接口返回空体 200（`admin-risk-routes.ts`
+ *             @why），前端拿不到条数；写死一个数字比不写更糟。核对方式给"去订单列表"。
+ */
+export const BLOCK_CONFIRM_TEXT =
+  '拉黑后：① 该用户不能再下单（40301）；② 其名下**未付款**的订单（待付款 / 支付中）会被立即取消、库存回补；③ 后台没有解除入口。确认继续？';
+
+/**
+ * 拉黑成功后的提示（@see {@link BLOCK_CONFIRM_TEXT} 的 @limitation：条数拿不到，
+ * 所以只说"已一并取消"，并把核对动作指向订单列表）。
+ */
+export function blockDoneText(userId: string): string {
+  return `已拉黑 ${userId}（此后建单会被拒 40301；其名下未付款订单已一并取消——到「订单管理」按该用户核对）`;
+}
 
 /** 列表行。 */
 export interface DisputeRow {

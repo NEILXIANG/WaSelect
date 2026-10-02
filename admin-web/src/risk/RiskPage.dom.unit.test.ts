@@ -130,3 +130,29 @@ describe('风控页：拉黑串单（ADM3-01）', () => {
     expect(button(el, '确认拉黑')).toBeNull();
   });
 });
+
+/**
+ * 🔴 回归：确认面板必须把"连带取消未付款订单"显示出来（L4 浏览器验收 2026-10-02）。
+ *
+ * @why 必须走组件用例：`view.unit.test.ts` 只能证明 `BLOCK_CONFIRM_TEXT` 这串常量里
+ *      有那几个词，证明不了**面板渲染了它**——而缺陷正是"运营在点之前看不到这一条"。
+ *      少这一层，常量改了不挂上去也会一直绿。
+ */
+describe('风控页：确认面板说清全部后果', () => {
+  it('🔴 点之前看得到"连带取消未付款订单"（缺陷注入点：模板换回旧常量即红）', async () => {
+    const el = await open();
+    await click(handle(el, 0));
+    const panel = el.querySelector('.form');
+    const text = panel?.textContent ?? '';
+    expect(text).toContain('未付款');
+    expect(text).toContain('取消');
+    expect(text).toContain('没有解除入口');
+  });
+
+  it('🔴 拉黑成功后的提示同样提到"已一并取消"（结果不是只有"不能下单"这一件事）', async () => {
+    const el = await open();
+    await click(handle(el, 0));
+    await click(button(el, '确认拉黑'));
+    expect(el.textContent).toContain('未付款订单已一并取消');
+  });
+});

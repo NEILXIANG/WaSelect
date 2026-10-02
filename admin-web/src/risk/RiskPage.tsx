@@ -19,6 +19,7 @@ import { ApiError } from '../api/errors.js';
 import { getOrder } from '../orders/api.js';
 import { blockUser, listDisputes, type AdminApi } from './api.js';
 import {
+  blockDoneText,
   BLOCK_CONFIRM_TEXT,
   DISPUTE_STATUS,
   DISPUTE_STATUS_LABELS,
@@ -107,7 +108,7 @@ export function RiskPage({ api }: RiskPageProps) {
       // ⚠️ 它**不是**"防手滑"——防手滑靠的是 prepare 清空待确认态（AJ-256）；
       //    这里防的是"order_id 与 user_id 配错"这类请求级错误。
       await blockUser(api, { userId, orderId });
-      setOk(`已拉黑 ${userId}（该用户此后建单会被拒 40301）`);
+      setOk(blockDoneText(userId));
       setOrderId('');
       setOrderNo('');
       setUserId('');

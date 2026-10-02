@@ -8,7 +8,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DISPUTE_STATUS_LABELS, disputeRows, orderUserId } from './view.js';
+import {
+  BLOCK_CONFIRM_TEXT,
+  blockDoneText,
+  DISPUTE_STATUS_LABELS,
+  disputeRows,
+  orderUserId,
+} from './view.js';
 
 const DISPUTE = {
   order_id: 'o-2609-0013',
@@ -113,5 +119,40 @@ describe('DISPUTE_STATUS_LABELS 与契约的双向比对', () => {
     const text = DISPUTE_STATUS_LABELS['withdrawn'];
     expect(text).toContain('撤回');
     expect(text).not.toMatch(/胜诉|败诉/);
+  });
+});
+
+/**
+ * 🔴 回归：拉黑是管理端唯一不可逆且无解除入口的操作，而它**不止"挡住这个人"**——
+ *    `app/block-user.ts` 会在同一事务里连带取消该用户名下所有在途单。
+ *    L4 浏览器验收（2026-10-02）发现确认面板只说了两条后果、漏了这一条：
+ *    运营点下去之后才发现"这个人的未付款订单也没了"。
+ *    下面是"三件后果在点之前都得说清"的钉子。
+ */
+describe('拉黑文案：三件后果在点之前必须全部说清', () => {
+  it('🔴 确认文案提到连带取消未付款订单（缺陷注入点：删掉第②条即红）', () => {
+    expect(BLOCK_CONFIRM_TEXT).toContain('未付款');
+    expect(BLOCK_CONFIRM_TEXT).toContain('取消');
+    // 说清是**哪两种**状态会被取消，别让运营去猜"未付款"包不包括支付中
+    expect(BLOCK_CONFIRM_TEXT).toContain('待付款');
+    expect(BLOCK_CONFIRM_TEXT).toContain('支付中');
+  });
+
+  it('🔴 确认文案同时说清"不能下单"与"没有解除入口"（这两条原本就在，别改丢）', () => {
+    expect(BLOCK_CONFIRM_TEXT).toContain('40301');
+    expect(BLOCK_CONFIRM_TEXT).toContain('没有解除入口');
+  });
+
+  it('⚠️ 未付款订单会被取消这件事要写明"库存回补"（运营核对时找得到货）', () => {
+    expect(BLOCK_CONFIRM_TEXT).toContain('库存回补');
+  });
+
+  it('成功提示同样提到连带取消，并给出核对去处（条数拿不到，不能写死数字）', () => {
+    const text = blockDoneText('user-A');
+    expect(text).toContain('已拉黑 user-A');
+    expect(text).toContain('未付款订单已一并取消');
+    expect(text).toContain('订单管理');
+    // ❗ 不能出现"已取消 3 单"这类硬编码数字：接口返回空体，前端拿不到条数
+    expect(text).not.toMatch(/取消\s*\d+\s*单/);
   });
 });
