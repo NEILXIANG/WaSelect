@@ -228,14 +228,46 @@ export interface JobRunLog<TTx> {
  *           而 `job_runs.last_error` 是**库里的字段**——写进去就是持久化，不是"打印一下"。
  *           logger 不做自动脱敏（已核实），所以这里必须自己脱。
  *
- * @limitation 只压 message，不带 stack。栈要去日志里按 trace_id 看；
- *             把栈塞进 last_error 会让这一列变成几百行的噪音，且栈里同样可能有敏感值。
+ * @limitation 一：只压 message，不带 stack。栈要去日志里按 trace_id 看；
+ *              把栈塞进 last_error 会让这一列变成几百行的噪音，且栈里同样可能有敏感值。
+ * @limitation 二：非 Error 抛掷按 **JSON** 展开（{@link stringifyThrown}），
+ *              于是落进 last_error 的字段比"只取 message"更多。脱敏仍只走 `maskText`，
+ *              而它按**值的形状**（邮箱 / 电话 / token）匹配、不按键名匹配——
+ *              所以 `{"card_no":"4242..."}` 这类自定义键名的值不会被遮。
+ *              这是"要内容"换来的代价；真出现敏感键名，正确修法是在 {@link maskText} 加形状，
+ *              不是把这里退回 `[object Object]`。
  */
 export function oneLineError(err: unknown, max: number = MAX_ERROR_CHARS): string {
-  const raw = err instanceof Error ? err.message || err.name : String(err);
+  const raw = err instanceof Error ? err.message || err.name : stringifyThrown(err);
   const flat = maskText(raw).replace(/\s+/g, ' ').trim();
   if (flat.length === 0) return NO_ERROR_TEXT;
   return flat.length <= max ? flat : `${flat.slice(0, max)}…（已截断，共 ${flat.length} 字符）`;
+}
+
+/**
+ * 非 Error 的抛掷值 → 可读文本。
+ *
+ * @why 不能用 `String(err)`（AJ-300）：对普通对象它得到 `'[object Object]'`——
+ *      一个**长得像内容、实际零信息**的字符串。而 `last_error` 是
+ *      "这个 job 为什么失败"的**唯一**持久化证据（看门狗只看这一列，栈要去日志里另查）：
+ *      运维看到 `[object Object]` 无法区分"错误本身没内容"与"我们把内容丢了"，
+ *      这两种的下一步动作完全不同（前者去日志按 trace_id 查，后者是修代码）。
+ *      JS 里 `throw` 任意值是合法的，`Promise.reject({ code: 'E42' })` 这类三方形态会走到这里。
+ * @why 序列化失败时**降级**而不是抛：本函数常被调在 catch 块里，
+ *      它自己再抛一次会把"某个 job 失败"升级成"整轮 tick 崩溃"，连原始失败都一起丢掉。
+ *      宁可退回 `'[object Object]'`，也不能让**错误归一化本身**成为新的错误源。
+ */
+function stringifyThrown(err: unknown): string {
+  // 字符串先走：JSON.stringify('plain') 会给出 '"plain"'（多一对引号），不是想要的形态
+  if (typeof err === 'string') return err;
+  try {
+    const json = JSON.stringify(err);
+    // `undefined` / 函数 / symbol 序列化不出字符串，交给下面的 String()
+    if (typeof json === 'string') return json;
+  } catch {
+    // 循环引用 / BigInt 会让 JSON.stringify 抛；按上面的 @why 降级，不冒泡
+  }
+  return String(err);
 }
 
 /** 本轮是否全部子任务成功（空列表视为成功——没有子任务就没有失败）。 */

@@ -44,10 +44,29 @@ describe('oneLineError：错误文本归一化（进 last_error 与日志）', (
     expect(oneLineError(new Error(''))).toBe('Error');
   });
 
-  it('非 Error（字符串 / 对象 / undefined）走 String()', () => {
+  it('非 Error 的字符串 / undefined 走原样（不额外加引号）', () => {
     expect(oneLineError('plain')).toBe('plain');
-    expect(oneLineError({ code: 7 })).toBe('[object Object]');
+    // ⚠️ 钉的是 `undefined` 而不是 '"undefined"'：JSON.stringify(undefined) 返回 undefined
+    //    （不是字符串），所以走 String() 兜底——这两种形态在这里必须分开断言。
     expect(oneLineError(undefined)).toBe('undefined');
+  });
+
+  it('🔴 非 Error 的普通对象要展开出内容，不能是 [object Object]（AJ-300）', () => {
+    // @why `last_error` 是看门狗唯一的依据。`[object Object]` **长得像内容、实际零信息**，
+    //      且长得像"被脱敏遮住了"——运维据此不会去查 trace_id，于是失败原因彻底失查。
+    //      ⚠️ 本条在修复前断言的是 `'[object Object]'`（把当时的行为钉成了契约）；
+    //      那种"钉住现状"的用例会把缺陷固定成规格，发现时应当判为缺陷而不是照抄。
+    expect(oneLineError({ code: 7 })).toBe('{"code":7}');
+    expect(oneLineError({ code: 'E42', msg: 'boom' })).toBe('{"code":"E42","msg":"boom"}');
+  });
+
+  it('🔴 序列化不出来的（循环引用）降级回 String()，归一化本身绝不能抛（AJ-300）', () => {
+    // @why 本函数在 catch 里被调用：它自己抛一次会把"某个 job 失败"升级成"整轮 tick 崩溃"，
+    //      连原始失败的上下文一起丢掉。宁可退化成零信息的 '[object Object]'，也不能抛。
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => oneLineError(cyclic)).not.toThrow();
+    expect(oneLineError(cyclic)).toBe('[object Object]');
   });
 
   it('**脱敏**：错误里的邮箱必须打码（last_error 是持久化字段，不是日志）', () => {

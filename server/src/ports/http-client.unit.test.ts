@@ -15,6 +15,7 @@
  *             （F12 第二单元，`adapters/http/fetch-client.ts`）。
  */
 import { describe, expect, it } from 'vitest';
+import { countsTowardTrip } from './circuit-breaker.js';
 import {
   backoffMs,
   classifyHttpFailure,
@@ -76,6 +77,20 @@ describe('classifyHttpFailure（异常 → 失败分类）', () => {
     ).toBe('network');
     expect(classifyHttpFailure({ code: 'ECONNREFUSED' })).toBe('network');
     expect(classifyHttpFailure({ code: 'ENOTFOUND' })).toBe('network');
+  });
+
+  it('🔴 连接被对端掐断（ECONNRESET / EPIPE）归 network，不能落到 unknown（AJ-299）', () => {
+    // @why 这两个 code 是"连接已建立、随后被对端掐断"——正是"请求**可能已经到达**上游"
+    //      这一语义里最常见的形态，与 ECONNREFUSED / ENOTFOUND 同类。
+    //      落到 `unknown` 的代价**不在重试侧**（两者都要求幂等键才重试，表现一样），
+    //      而在熔断侧：`countsTowardTrip('unknown') === false`，于是上游持续重置连接时
+    //      熔断器**永远不跳闸**——故障被当成"健康的单次抖动"，重试放大照旧发生。
+    //      分类表漏掉它，表现为"有一类上游故障我们从不自我保护"，且不报任何错。
+    expect(classifyHttpFailure({ code: 'ECONNRESET' })).toBe('network');
+    expect(classifyHttpFailure({ code: 'EPIPE' })).toBe('network');
+    // 直接钉住后果（而不是只钉分类名）：这条才是"漏了会怎样"的可执行证据
+    expect(countsTowardTrip(classifyHttpFailure({ code: 'ECONNRESET' }))).toBe(true);
+    expect(countsTowardTrip(classifyHttpFailure({ code: 'EPIPE' }))).toBe(true);
   });
 
   it('认不出来 → unknown（**保守**，按"可能已到达"处理）', () => {

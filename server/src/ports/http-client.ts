@@ -173,6 +173,15 @@ export function httpStatusKind(status: number): HttpFailureKind {
  *      `fetch` 的超时是 `DOMException('TimeoutError')`、网络错误是 `TypeError: fetch failed`，
  *      不同 Node 版本与不同实现给出的对象不完全一样。
  *      认不出来时返回 `'unknown'`（**保守**：按"可能已到达"处理，即要求幂等键才重试）。
+ *
+ * @why `ECONNRESET` / `EPIPE` 必须在 **network** 这一支里（AJ-299）：
+ *      它们是"连接已建立、随后被对端掐断"，与 `ECONNREFUSED` / `ENOTFOUND` 同类，
+ *      恰恰是"请求**可能已经送到**上游了"最典型的形态。
+ *      归类错误在**重试侧看不出差别**（`network` 与 `unknown` 都要求幂等键才重试），
+ *      代价全在熔断侧：`countsTowardTrip('unknown') === false`
+ *      （@see ports/circuit-breaker.ts），于是上游持续重置连接时
+ *      **熔断器永不跳闸**——故障被当作"健康的单次抖动"，重试放大照旧发生，
+ *      且不产生任何报错。分类表漏项的形态一向是这类"从不自我保护"，不是报错。
  */
 export function classifyHttpFailure(err: unknown): HttpFailureKind {
   if (err === null || typeof err !== 'object') return 'unknown';
@@ -180,7 +189,16 @@ export function classifyHttpFailure(err: unknown): HttpFailureKind {
   if (e.name === 'TimeoutError' || e.name === 'AbortError' || e.code === 'ETIMEDOUT') {
     return 'timeout';
   }
-  if (e.name === 'TypeError' || e.code === 'ECONNREFUSED' || e.code === 'ENOTFOUND') {
+  // ⚠️ 这里是**白名单**：只列"确定属于网络层"的 code。
+  //    没列出的仍落 `unknown`（保守方向），但 `unknown` **不计入熔断**，
+  //    所以漏列的代价是"少保护一类故障"——发现新的 code 时要回来补，不要改成"其余都算 network"。
+  if (
+    e.name === 'TypeError' ||
+    e.code === 'ECONNREFUSED' ||
+    e.code === 'ENOTFOUND' ||
+    e.code === 'ECONNRESET' ||
+    e.code === 'EPIPE'
+  ) {
     return 'network';
   }
   return 'unknown';
