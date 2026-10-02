@@ -431,13 +431,36 @@ describe('租约续期：完成瞬间的续期不得误报易主（三审 P3-1�
   });
 });
 
+/**
+ * ⚠️ 本用例的时长参数是**刻意放大**过的（2026-10-02 修）：原为 `leaseMs: 200` +
+ * handler 800ms + `waitMs: 3000`，在 `npm run gate`（72 个 db 文件并行）下**随机红**。
+ *
+ * @why 抖动根因是**续期间隔的绝对量级**：`startRenewal` 的间隔是
+ *      `max(50, floor(leaseMs / 3))`，leaseMs=200 ⇒ **每 66ms 一次** DB 往返，
+ *      而每次续期只是把 `locked_until` 往后推 200ms。也就是说
+ *      **单次定时器漂移超过 200ms 就会被判定为易主**——并发方接管 →
+ *      先到者的结果写回撞上栅栏（0 行命中）→ 抛 50000 `idempotency_lease_lost`。
+ *      72 文件并行时 Node 的 `setInterval` 漂移很容易超过 200ms，
+ *      于是这条用例在整门禁下约两跑一红，单跑则恒绿（已实测：单跑 1/1 绿、整门禁 1/2 红）。
+ *
+ * @why 放大到 800 / 3200 / 12000 而**不是**把断言放宽：
+ *      断言的含义（"handler 跑满 4 倍租约也不被接管"）必须原样保留——
+ *      改成"允许 executions === 2"或"只在单跑时校验"等于把保护删掉。
+ *      放大后间隔变成 266ms、要漂过 800ms 才误判，余量提高 4 倍；
+ *      handler 与 leaseMs 仍严格保持 4:1，waitMs 仍留 3 倍以上余量。
+ *
+ * @limitation 代价：本用例从 ~0.8s 变成 ~3.2s（db 全量 236s → ~239s，约 +1%）。
+ *      这是"用时间换确定性"的取舍，不是消除抖动——**负载再高一档仍可能红**。
+ *      彻底解法是给 `startRenewal` 注入可控时钟（本模块目前没有时钟注入点），
+ *      那属于改造被测代码，不在本修的范围内，留作债务。
+ */
 describe('租约续期', () => {
   it('handler 超过租约时长但持续续期 → 不被接管，并发方重放同一结果', async () => {
     let executions = 0;
     const run = () =>
-      exec.run({ ...args('k-renew'), leaseMs: 200, waitMs: 3000 }, async () => {
+      exec.run({ ...args('k-renew'), leaseMs: 800, waitMs: 12000 }, async () => {
         executions += 1;
-        await new Promise((r) => setTimeout(r, 800)); // 4 倍于租约：续期生效才能不被接管
+        await new Promise((r) => setTimeout(r, 3200)); // 4 倍于租约：续期生效才能不被接管
         return { status: 201, body: { order_no: 'W-RENEW' } };
       });
     const p = run();
@@ -449,7 +472,7 @@ describe('租约续期', () => {
       await new Promise((r) => setTimeout(r, 10));
     }
     const [first, second] = await Promise.all([p, run()]);
-    expect(executions).toBe(1); // 没有续期时第二个会在 200ms 后接管并再执行一次
+    expect(executions).toBe(1); // 没有续期时第二个会在租约到期后接管并再执行一次
     expect(first.body).toEqual(second.body);
     expect([first.replayed, second.replayed].sort()).toEqual([false, true]);
   });
