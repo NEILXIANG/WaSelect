@@ -57,6 +57,15 @@ export interface ProductListRow {
   price_jpy: number;
   images: unknown;
   stock: number;
+  /**
+   * 编辑口径三字段（020 / AJ-296①）——S4 的 `pick-card` 要它们。
+   * @why 放在**列表行**而不只是详情行：`pick-card` 用在首页列表上，
+   *      "为什么值得买"必须是"要不要点进去"之前就能读到的东西——
+   *      只在详情里给的话，卡上那句 why 永远渲染不出来，组件迁过去等于没迁。
+   */
+  why: string | null;
+  maker: string | null;
+  tags: readonly string[];
 }
 
 /** 详情行（Product 全量公开列）。 */
@@ -153,7 +162,7 @@ export function createCatalogRepo(db: Db): CatalogRepo {
       // 静默错配，而且只有用户搜到怪结果才会被发现
       const kw = q.keyword?.replace(/[\\%_]/g, (m) => `\\${m}`);
       const rows = await db`
-        select id, title, category, price_jpy, images, stock
+        select id, title, category, price_jpy, images, stock, why, maker, tags
           from products
          where status = 'active'
            ${q.category !== undefined ? db`and category = ${q.category}` : db``}
@@ -176,6 +185,9 @@ export function createCatalogRepo(db: Db): CatalogRepo {
           price_jpy: Number(r.price_jpy),
           images: r.images,
           stock: Number(r.stock),
+          why: r.why === null || r.why === undefined ? null : String(r.why),
+          maker: r.maker === null || r.maker === undefined ? null : String(r.maker),
+          tags: (r.tags ?? []) as readonly string[],
         })),
         total: Number(counts[0]?.n ?? 0),
       };
@@ -184,7 +196,8 @@ export function createCatalogRepo(db: Db): CatalogRepo {
     async findProductDetail(id: string): Promise<ProductDetailRow | null> {
       const rows = await db`
         select id, title, category, price_jpy, images, stock, description, weight_g,
-               compliance_tags, hs_code, customs_desc_en, origin_country, status
+               compliance_tags, hs_code, customs_desc_en, origin_country, status,
+               why, maker, tags
           from products where id = ${id}
       `;
       const r = rows[0];
@@ -203,6 +216,9 @@ export function createCatalogRepo(db: Db): CatalogRepo {
         customs_desc_en: r.customs_desc_en === null ? null : String(r.customs_desc_en),
         origin_country: String(r.origin_country),
         status: String(r.status),
+        why: r.why === null || r.why === undefined ? null : String(r.why),
+        maker: r.maker === null || r.maker === undefined ? null : String(r.maker),
+        tags: (r.tags ?? []) as readonly string[],
       };
     },
 

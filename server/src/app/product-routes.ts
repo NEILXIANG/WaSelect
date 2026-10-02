@@ -172,6 +172,10 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
               ...(images[0] !== undefined ? { image: images[0] } : {}),
               stock: p.stock,
               status: 'active',
+              // 编辑口径三字段（020）：null / 空数组 = "编辑还没撰写"，前端**降级**而不是报错
+              ...(p.why !== null ? { why: p.why } : {}),
+              ...(p.maker !== null ? { maker: p.maker } : {}),
+              tags: [...p.tags],
             };
           }),
           total,
@@ -207,6 +211,10 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
           origin_country: p.origin_country,
           // FTC 发货时限承诺（D-39⑦ / AJ-180）：店铺级配置，随详情下发省一次请求；前端照此出文案、不编数字
           ship_within_business_days: deps.config.SHIP_WITHIN_BUSINESS_DAYS,
+          // 编辑口径三字段（020）：null = 没撰写 → 整键省略（前端据此降级，不用通用话术顶上）
+          ...(p.why !== null ? { why: p.why } : {}),
+          ...(p.maker !== null ? { maker: p.maker } : {}),
+          tags: [...p.tags],
         });
       } catch (e) {
         next(e);

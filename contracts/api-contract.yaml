@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.22
+  version: 0.6.23
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -264,6 +264,23 @@ info:
       （原先只在服务端 `domain/admin-order-actions.ts`，理由是"没有前端消费方"；
       现在前端输入框要用它，再写一份就是第三份 500）。
       ⚠️ 它与退款理由的 500 **同值不同源**：那条是机构 metadata 的硬上限，两条不得互相引用。
+    0.6.23（S4 前置 / AJ-296①）：`ProductCard` / `Product` / `ProductInput` 增三个**编辑口径**字段
+      ——`why`（为什么值得买）/ `maker`（产地·工房·匠人）/ `tags`（展示标签）。
+      ① **都必须可选**：`why` 是编辑撰写的内容，不是"商品能不能卖"的事实。
+        必填会逼运营"随便填一句"交差，首页立刻出现一批"高品质""匠心工艺"式的假文案——
+        这比留白更伤：`why` 退化成口号时整个品牌的差异化消失（用户旅程地图 A 旅程的判定点）。
+      ② **`why` 缺失时前端必须降级**，不报错、不用通用话术顶上（`pick-card` 降级为不含 why 的形态）。
+        服务端对 `why` / `maker` 为 null 的情形**整键省略**（不返回 null），
+        让"没写"与"写了空串"在 JSON 里可区分——后者是脏数据，该被看见而不是被洗白。
+        `tags` 恒为数组（DB 列 NOT NULL DEFAULT '[]'，只有"空数组"一种空态）。
+      ③ **不复用 `description`**：`description` 是客观描述（这东西是什么），`why` 是编辑口径
+        （为什么值得买）。混在一个字段里，将来想分别运营、分别国际化就分不开了
+        （本项目条款已有 zh/ja/en 三语，国际化不是假设）。
+      ④ **不与 `compliance_tags` 混用**：后者管"能不能寄"（封闭枚举，部分取值上架即拒），
+        `tags` 管"值不值得买"（自由文案，给买家看）。往 compliance_tags 里填营销词会让合规判断失效。
+      ⑤ 长度：`why` 200 / `maker` 120（shared `PRODUCT_MAX_CHARS`，与 DB 列宽与应用层上限同源）；
+        超限报 40001（`why_too_long` / `maker_too_long`）而**不静默截断**——
+        截断会把一句判断截成半句，而半句话读起来正好像口号（最坏的降级结果）。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -595,10 +612,16 @@ components:
     AuthResp: {type: object, properties: {token: {type: string}, user: {type: object, properties: {id: {type: string}, isAdmin: {type: boolean}}}}}
     Display: {type: object, description: 展示价，整数分（后端按当日汇率计算）, properties: {USD: {type: integer}, CNY: {type: integer}}}
     ImageSet: {type: object, properties: {thumb: {type: string}, card: {type: string}, detail: {type: string}, image_key: {type: string, description: '仅 POST /admin/upload 响应里出现（0.6.8）：detail 档存储键，供 BannerInput.image_key 使用（AJ-143/AJ-166）；存量 Product.images 条目没有它'}}}
-    ProductCard: {type: object, properties: {id: {type: string}, title: {type: string}, category: {type: string}, price_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, image: {$ref: '#/components/schemas/ImageSet'}, stock: {type: integer}, status: {type: string}}}
+    ProductCard: {type: object, properties: {id: {type: string}, title: {type: string}, category: {type: string}, price_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, image: {$ref: '#/components/schemas/ImageSet'}, stock: {type: integer}, status: {type: string},
+               why: {type: string, maxLength: 200, description: '0.6.23：编辑口径的"为什么值得买"（一句带判断的话）。可选；**缺失 = 编辑还没撰写**，前端降级为不含 why 的形态，不用通用话术顶上'},
+               maker: {type: string, maxLength: 120, description: '0.6.23：产地 / 工房 / 匠人署名。可选；缺失时前端不渲染这一行'},
+               tags: {type: array, items: {type: string}, description: '0.6.23：编辑展示标签（自由文案，给买家看）。⚠️ 与 compliance_tags（能不能寄，封闭枚举）分工不同，不可混填'}}}
     Product: {description: '商品详情。实现不返回 ProductCard.image（缩略图只在列表卡片用，详情用 images）；AdminProduct 另不返回 display / image（0.6.10 ⑦）', allOf: [{$ref: '#/components/schemas/ProductCard'}, {type: object, properties: {description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, weight_g: {type: integer}, compliance_tags: {type: array, items: {type: string}}, hs_code: {type: string}, customs_desc_en: {type: string}, origin_country: {type: string}, ship_within_business_days: {type: integer, minimum: 1, maximum: 30, description: '0.6.11（AJ-180）：发货时限承诺（付款后 N 个工作日内发出，FTC / D-39⑦）；店铺级配置 SHIP_WITHIN_BUSINESS_DAYS'}}}]}
     AdminProduct: {description: '0.6.11：不返回 ship_within_business_days（店铺级配置，只随买家商品详情下发）', allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time, description: '商品**信息**最后被改的时刻（0.6.18：不含库存变动——下单扣减与取消/关单回补都不刷新它）。同时是 `PUT /admin/products/{id}` 的乐观锁凭据（`expected_updated_at`）与管理端列表的排序键'}}}]}
-    ProductInput: {type: object, required: [title, category, price_jpy, weight_g, customs_desc_en, origin_country], properties: {title: {type: string}, category: {type: string, enum: [beauty, daily, kitchen, food]}, description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, price_jpy: {type: integer, minimum: 1}, cost_jpy: {type: integer}, weight_g: {type: integer, minimum: 1}, stock: {type: integer, minimum: 0, description: '可选（0.6.9/AJ-175）：POST 省略 = 0；PUT 省略 = 不改库存（防编辑页打开期间的买家扣减被旧值覆盖）。填了就必须是 ≥0 整数，否则 40001'}, compliance_tags: {type: array, items: {type: string, enum: [liquid, battery, cosmetic, food, flammable, aerosol, electrical, quasi_drug, sunscreen, children_product, alcohol]}, description: 'flammable / aerosol / electrical / quasi_drug / sunscreen / children_product / alcohol 七个标签上架即拒（40001）：前两者为日本邮便航空禁寄品（D-42），electrical 为 MVP 不上电器（D-45），quasi_drug（医薬部外品/薬用）与 sunscreen（SPF）在美国 FDA 口径属 OTC 药品、children_product 需 CPSIA 检测、alcohol 需酒类免许且不可邮寄（D-51）；customs_desc_en 含 medicated/whitening/SPF/sunscreen/drug 亦拒'}, hs_code: {type: string, description: '报关 HS 码；缺省时由 Zonos 自动识别、管理员核对；食品/化妆品必填（D-39/D-42）'}, customs_desc_en: {type: string, description: '英文报关品名，上架必填（D-39）'}, origin_country: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', enum: [JP], description: '原产地 ISO 3166-1 alpha-2，必填无默认，按商品包装实录；MVP 仅接受 JP——非 JP 一律 400 拒绝上架（D-42/D-43）'}, title_ja: {type: string, description: '日文品名（采购用）'}, jan_code: {type: string, description: 'JAN 码'}, purchase_source: {type: string, description: '采购渠道'}}}
+    ProductInput: {type: object, required: [title, category, price_jpy, weight_g, customs_desc_en, origin_country], properties: {title: {type: string}, category: {type: string, enum: [beauty, daily, kitchen, food]}, description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, price_jpy: {type: integer, minimum: 1}, cost_jpy: {type: integer}, weight_g: {type: integer, minimum: 1}, stock: {type: integer, minimum: 0, description: '可选（0.6.9/AJ-175）：POST 省略 = 0；PUT 省略 = 不改库存（防编辑页打开期间的买家扣减被旧值覆盖）。填了就必须是 ≥0 整数，否则 40001'}, compliance_tags: {type: array, items: {type: string, enum: [liquid, battery, cosmetic, food, flammable, aerosol, electrical, quasi_drug, sunscreen, children_product, alcohol]}, description: 'flammable / aerosol / electrical / quasi_drug / sunscreen / children_product / alcohol 七个标签上架即拒（40001）：前两者为日本邮便航空禁寄品（D-42），electrical 为 MVP 不上电器（D-45），quasi_drug（医薬部外品/薬用）与 sunscreen（SPF）在美国 FDA 口径属 OTC 药品、children_product 需 CPSIA 检测、alcohol 需酒类免许且不可邮寄（D-51）；customs_desc_en 含 medicated/whitening/SPF/sunscreen/drug 亦拒'}, hs_code: {type: string, description: '报关 HS 码；缺省时由 Zonos 自动识别、管理员核对；食品/化妆品必填（D-39/D-42）'}, customs_desc_en: {type: string, description: '英文报关品名，上架必填（D-39）'}, origin_country: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', enum: [JP], description: '原产地 ISO 3166-1 alpha-2，必填无默认，按商品包装实录；MVP 仅接受 JP——非 JP 一律 400 拒绝上架（D-42/D-43）'}, title_ja: {type: string, description: '日文品名（采购用）'}, jan_code: {type: string, description: 'JAN 码'}, purchase_source: {type: string, description: '采购渠道'},
+                 why: {type: string, maxLength: 200, description: '0.6.23：编辑口径的"为什么值得买"。可选（必填会逼运营编一句假文案）；超 200 字报 40001 why_too_long，**不静默截断**'},
+                 maker: {type: string, maxLength: 120, description: '0.6.23：产地 / 工房 / 匠人署名。可选；超 120 字报 40001 maker_too_long（与 DB VARCHAR(120) 同宽）'},
+                 tags: {type: array, items: {type: string, minLength: 1}, description: '0.6.23：编辑展示标签。**PUT 是整行覆盖**：带了（含空数组）= 覆盖，省略在新建路径按 [] 处理；逐项不得为空串（空串会渲染出一个空色块）'}}}
     AddressInput: {type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, pattern: '^[ -~]+$'}, phone: {type: string, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, pattern: '^[ -~]+$'}, line2: {type: string, pattern: '^[ -~]*$'}, city: {type: string, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2}, postal_code: {type: string, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
     Address: {allOf: [{$ref: '#/components/schemas/AddressInput'}, {type: object, properties: {id: {type: string}}}]}
     OrderItemsInput: {type: array, minItems: 1, items: {type: object, required: [product_id, qty], properties: {product_id: {type: string}, qty: {type: integer, minimum: 1}}}}

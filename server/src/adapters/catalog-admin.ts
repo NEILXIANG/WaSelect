@@ -50,6 +50,15 @@ export interface AdminProductInsert {
   jan_code: string | null;
   purchase_source: string | null;
   status: string;
+  /**
+   * 编辑口径三字段（020 / AJ-296①）。
+   * @why `tags` 是 **`string[]` 而不是 `null`**：DB 列是 `NOT NULL DEFAULT '[]'`，
+   *      与 `compliance_tags` 同形——读出来只有"空数组"一种空态，
+   *      前端不必同时处理 `null` 与 `[]`（两种空态 = 两种渲染分支，多一处可错）。
+   */
+  why: string | null;
+  maker: string | null;
+  tags: readonly string[];
 }
 
 /**
@@ -107,7 +116,7 @@ export interface CatalogAdminRepo {
 
 const COLS = `id, title, category, description, images, price_jpy, cost_jpy, weight_g, stock,
               compliance_tags, hs_code, customs_desc_en, origin_country, title_ja, jan_code,
-              purchase_source, status, updated_at`;
+              purchase_source, status, updated_at, why, maker, tags`;
 
 /** JSONB 列：postgres.js 需要显式 json()，否则数组参数会被当成 postgres array。 */
 function j(db: Db, v: readonly unknown[]): ReturnType<Db['json']> {
@@ -134,6 +143,9 @@ function toRow(r: Record<string, unknown>): AdminProductRow {
     purchase_source: r.purchase_source === null ? null : String(r.purchase_source),
     status: String(r.status),
     updated_at: r.updated_at as Date,
+    why: r.why === null || r.why === undefined ? null : String(r.why),
+    maker: r.maker === null || r.maker === undefined ? null : String(r.maker),
+    tags: (r.tags ?? []) as readonly string[],
   };
 }
 
@@ -157,12 +169,13 @@ export function createCatalogAdminRepo(db: Db): CatalogAdminRepo {
       const rows = await db`
         insert into products (id, title, category, description, images, price_jpy, cost_jpy,
                               weight_g, stock, compliance_tags, hs_code, customs_desc_en,
-                              origin_country, title_ja, jan_code, purchase_source, status)
+                              origin_country, title_ja, jan_code, purchase_source, status,
+                              why, maker, tags)
         values (${row.id}, ${row.title}, ${row.category}, ${row.description}, ${j(db, row.images)},
                 ${row.price_jpy}, ${row.cost_jpy}, ${row.weight_g}, ${row.stock},
                 ${j(db, row.compliance_tags)}, ${row.hs_code}, ${row.customs_desc_en},
                 ${row.origin_country}, ${row.title_ja}, ${row.jan_code}, ${row.purchase_source},
-                ${row.status})
+                ${row.status}, ${row.why}, ${row.maker}, ${j(db, row.tags)})
         returning ${db(COLS.split(',').map((c) => c.trim()))}
       `;
       return toRow(rows[0] as Record<string, unknown>);
@@ -185,6 +198,7 @@ export function createCatalogAdminRepo(db: Db): CatalogAdminRepo {
                hs_code = ${row.hs_code}, customs_desc_en = ${row.customs_desc_en},
                origin_country = ${row.origin_country}, title_ja = ${row.title_ja},
                jan_code = ${row.jan_code}, purchase_source = ${row.purchase_source},
+               why = ${row.why}, maker = ${row.maker}, tags = ${j(db, row.tags)},
                updated_at = now()
          where id = ${id}
            and date_trunc('millisecond', updated_at) = ${row.expectedUpdatedAt}::timestamptz

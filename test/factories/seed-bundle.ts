@@ -42,11 +42,12 @@ export async function insertProductRow(db: Db, p: ProductRow): Promise<void> {
     insert into products (
       id, title, title_ja, category, description, images, price_jpy, cost_jpy,
       weight_g, stock, compliance_tags, hs_code, customs_desc_en, origin_country,
-      jan_code, purchase_source, status
+      jan_code, purchase_source, status, why, maker, tags
     ) values (
       ${p.id}, ${p.title}, ${p.title_ja}, ${p.category}, ${p.description}, ${db.json(p.images)},
       ${p.price_jpy}, ${p.cost_jpy}, ${p.weight_g}, ${p.stock}, ${db.json(p.compliance_tags)},
-      ${p.hs_code}, ${p.customs_desc_en}, ${p.origin_country}, ${p.jan_code}, ${p.purchase_source}, ${p.status}
+      ${p.hs_code}, ${p.customs_desc_en}, ${p.origin_country}, ${p.jan_code}, ${p.purchase_source}, ${p.status},
+      ${p.why}, ${p.maker}, ${db.json(p.tags)}
     )
   `;
 }

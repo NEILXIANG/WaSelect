@@ -66,6 +66,17 @@ export interface ProductInput {
   title_ja?: string | undefined;
   jan_code?: string | undefined;
   purchase_source?: string | undefined;
+  /**
+   * 编辑口径的"为什么值得买"（020 迁移新增，`products.why`）。
+   * @why **可选**：必填会逼运营"随便填一句"交差，首页立刻出现一批假文案——
+   *      这比留白更伤（用户旅程地图：`why` 退化成口号 → 品牌差异化消失）。
+   * @see ../../../migrations/020_product_editorial_fields.sql
+   */
+  why?: string | undefined;
+  /** 产地 / 工房 / 匠人名（020 迁移新增，`products.maker`）；可选，留白时前端不渲染。 */
+  maker?: string | undefined;
+  /** 编辑展示标签（020 迁移新增，`products.tags`）；可选，默认 `[]`。 */
+  tags?: readonly string[] | undefined;
 }
 
 /** 字段级错误：`field` 用**契约键名**，前端直接按它定位表单项。 */
@@ -223,6 +234,34 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
     fail('hs_code', 'hs_code_too_long');
   }
 
+  // ── 编辑口径三字段（020 / AJ-296①）——S4 迁 pick-card 的前置 ──────────────
+  //
+  // @why 三者**全部可选**：它们的性质是"编辑撰写的内容"，不是"商品能不能卖的事实"。
+  //      缺了 `customs_desc_en` 商品发不出去，缺了 `why` 只是卡片降级——
+  //      把两者放在同一条必填线上，运营会为了上架而编一句，那正是设计侧点名的退化。
+  // @why 长度**逐个判**（与 AJ-298 那四个可选文本同口径）：超长会撞 PG 的 22001，
+  //      被兜底折成泛化的 40001「参数缺失或格式错误」——提示指向错误的字段。
+  const why = strOpt(b.why);
+  if (why !== undefined && why.length > PRODUCT_MAX_CHARS.why) fail('why', 'why_too_long');
+  const maker = strOpt(b.maker);
+  if (maker !== undefined && maker.length > PRODUCT_MAX_CHARS.maker) {
+    fail('maker', 'maker_too_long');
+  }
+
+  // tags：自由文案字符串数组（与 compliance_tags 的封闭枚举**分工不同**，见迁移注释）
+  // @why 逐项判"必须是非空字符串"而不是整体判 Array.isArray：
+  //      `tags: ['产地直送', null]` 会渲染出一个空的标签块（一个空的小色块），
+  //      而它在 DB 里存得下、在 JSON 里合法——唯一能拦的地方就是这里。
+  let editorialTags: readonly string[] | undefined;
+  if (b.tags !== undefined) {
+    if (!Array.isArray(b.tags)) fail('tags', 'tags_invalid');
+    else {
+      const list = (b.tags as unknown[]).map((t) => (typeof t === 'string' ? t.trim() : ''));
+      if (list.some((t) => t === '')) fail('tags', 'tags_invalid');
+      else editorialTags = list;
+    }
+  }
+
   if (errors.length > 0 || title === undefined || price === undefined || weight === undefined) {
     return { ok: false, errors };
   }
@@ -246,6 +285,13 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
       ...(strOpt(b.purchase_source) !== undefined
         ? { purchase_source: strOpt(b.purchase_source) }
         : {}),
+      ...(why !== undefined ? { why } : {}),
+      ...(maker !== undefined ? { maker } : {}),
+      // ⚠️ 空数组**也要带上**（`tags: []`）：PUT 的语义是"覆盖"，
+      //    省略 = 不改（与 `stock` 同口径），带了空数组才是"清空标签"。
+      //    把 [] 当成"没填"会让运营删掉最后一个标签时删不掉——
+      //    保存后标签又回来了，且没有任何报错。
+      ...(editorialTags !== undefined ? { tags: editorialTags } : {}),
     },
   };
 }

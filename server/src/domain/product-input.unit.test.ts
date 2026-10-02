@@ -274,4 +274,69 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     if (errs.ok) return;
     expect(errs.errors.length).toBeGreaterThanOrEqual(4);
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 编辑口径三字段（020 / AJ-296①）——S4 迁 `pick-card` 的前置
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // @why 这三条字段的性质与上面所有必填项**相反**：它们是"编辑撰写的内容"，
+  //      不是"商品能不能卖的事实"。所以这里钉的是"**可以没有**"以及
+  //      "**有就必须合法**"，而不是"必须有"。
+
+  it('三个编辑字段全部省略 → 通过（可选是刻意的：必填会逼运营编假文案）', () => {
+    const v = ok(base());
+    expect(v.why).toBeUndefined();
+    expect(v.maker).toBeUndefined();
+    expect(v.tags).toBeUndefined();
+  });
+
+  it('why / maker / tags 都填 → 原样带出（归一化后字段齐全，S4 的 pick-card 才渲染得出来）', () => {
+    const v = ok({
+      ...base(),
+      why: '铸铁蓄热足，水温掉得慢。',
+      maker: '岩手 · 南部铁器',
+      tags: ['产地直送', '终身可用'],
+    });
+    expect(v.why).toBe('铸铁蓄热足，水温掉得慢。');
+    expect(v.maker).toBe('岩手 · 南部铁器');
+    expect(v.tags).toEqual(['产地直送', '终身可用']);
+  });
+
+  it('why 超 200 字 → 拒绝 why_too_long（TEXT 列无列宽，上限在应用层；不静默截断）', () => {
+    // @why "不静默截断"是这条的关键：截断会把一句判断截成半句，
+    //      而半句话读起来正好像口号——那正是设计侧点名的最坏降级结果。
+    expect(reasons({ ...base(), why: 'x'.repeat(201) })).toContain('why_too_long');
+    expect(ok({ ...base(), why: 'x'.repeat(200) }).why).toBe('x'.repeat(200));
+  });
+
+  it('maker 超 120 字 → 拒绝 maker_too_long（与 DB VARCHAR(120) 同宽，否则撞 22001 变泛化 40001）', () => {
+    expect(reasons({ ...base(), maker: 'x'.repeat(121) })).toContain('maker_too_long');
+    expect(ok({ ...base(), maker: 'x'.repeat(120) }).maker).toBe('x'.repeat(120));
+  });
+
+  it('tags 不是数组 → 拒绝 tags_invalid', () => {
+    expect(reasons({ ...base(), tags: '产地直送' })).toContain('tags_invalid');
+  });
+
+  it('tags 含空串 / 非字符串 → 拒绝（空串会渲染出一个空色块，只有在入库前拦得住）', () => {
+    expect(reasons({ ...base(), tags: ['产地直送', ''] })).toContain('tags_invalid');
+    expect(reasons({ ...base(), tags: ['产地直送', null] })).toContain('tags_invalid');
+    expect(reasons({ ...base(), tags: [42] })).toContain('tags_invalid');
+  });
+
+  /**
+   * `tags: []` 与"省略"必须**可区分**。
+   * @why PUT 是整行覆盖：空数组 = "清空标签"，省略 = "不改"。
+   *      把 [] 当成"没填"会让运营删掉最后一个标签时**删不掉**——
+   *      保存后标签又回来了，且没有任何报错（典型"保存失败但不说"）。
+   */
+  it('🔴 tags 传空数组 → 带出 [] 而不是被当成"没填"（删除最后一个标签必须真的能删掉）', () => {
+    expect(ok({ ...base(), tags: [] }).tags).toEqual([]);
+  });
+
+  it('why / maker 传空串 → 当"没填"（空串不该落库替代 null）', () => {
+    const v = ok({ ...base(), why: '', maker: '' });
+    expect(v.why).toBeUndefined();
+    expect(v.maker).toBeUndefined();
+  });
 });

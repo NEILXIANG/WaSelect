@@ -66,6 +66,13 @@ function toAdminProduct(r: AdminProductRow): Record<string, unknown> {
     ...(r.title_ja !== null ? { title_ja: r.title_ja } : {}),
     ...(r.jan_code !== null ? { jan_code: r.jan_code } : {}),
     ...(r.purchase_source !== null ? { purchase_source: r.purchase_source } : {}),
+    // 编辑口径三字段（020）：`why` / `maker` 为 null 时**整键省略**而不是给 null
+    // @why 前端要区分"没写"（键不在）与"写了个空串"（键在、值空）——后者是脏数据，
+    //      该被看见；而 null 与"键不在"在 JSON 里是两种东西，混成 null 会把脏数据洗白。
+    //      `tags` 则恒给数组（DB 是 NOT NULL，只有"空数组"一种空态）。
+    ...(r.why !== null ? { why: r.why } : {}),
+    ...(r.maker !== null ? { maker: r.maker } : {}),
+    tags: [...r.tags],
     updated_at: r.updated_at.toISOString(),
   };
 }
@@ -170,6 +177,10 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           jan_code: r.value.jan_code ?? null,
           purchase_source: r.value.purchase_source ?? null,
           status: 'active',
+          // 编辑口径三字段（020）：省略 → null / []（"还没撰写"，前端降级）
+          why: r.value.why ?? null,
+          maker: r.value.maker ?? null,
+          tags: r.value.tags ?? [],
         });
         res.status(201).json(toAdminProduct(row));
       } catch (e) {
@@ -211,6 +222,11 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           title_ja: r.value.title_ja ?? null,
           jan_code: r.value.jan_code ?? null,
           purchase_source: r.value.purchase_source ?? null,
+          // PUT 是整行覆盖，三字段**必须显式给值**（与 stock 的"省略即不改"相反）：
+          // 运营删掉 why 保存 = 真的清空，而不是"保留上一次写的"。
+          why: r.value.why ?? null,
+          maker: r.value.maker ?? null,
+          tags: r.value.tags ?? [],
         });
         if (!result.ok) {
           if (result.reason === 'not_found') throw new AppError(40401, { product_id: id });

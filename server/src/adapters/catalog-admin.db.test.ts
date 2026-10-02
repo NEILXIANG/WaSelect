@@ -57,6 +57,9 @@ function input(overrides: Partial<AdminProductInsert> = {}): AdminProductInsert 
     jan_code: null,
     purchase_source: null,
     status: 'active',
+    why: null,
+    maker: null,
+    tags: [],
     ...overrides,
   };
 }

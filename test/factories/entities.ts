@@ -70,6 +70,15 @@ export interface ProductRow {
   jan_code: string | null;
   purchase_source: string | null;
   status: string;
+  /**
+   * 编辑口径三字段（020 / AJ-296①）。
+   * @why `why` / `maker` 用 `string` 而不是 `string | null`：工厂造的是**已撰写**的素材，
+   *      "没写 why"这个空态由调用方 `overrides: { why: null }` 显式造出来
+   *      ——默认给 null 的话，"留白时前端降级"这条分支就永远测不到。
+   */
+  why: string | null;
+  maker: string | null;
+  tags: string[];
 }
 
 export interface ShippingRateRow {
@@ -168,6 +177,9 @@ export function makeProduct(
     jan_code: seed.janCode,
     purchase_source: seed.purchaseSource,
     status: 'active',
+    why: seed.why,
+    maker: seed.maker === '' ? null : seed.maker,
+    tags: [...seed.tags],
   };
   return { ...base, ...overrides };
 }

@@ -52,6 +52,23 @@ export interface ProductSeed {
   hsCode: string;
   customsDescEn: string;
   purchaseSource: string;
+  /**
+   * 编辑口径的"为什么值得买"（`products.why`，020 迁移新增）。
+   *
+   * @why 假数据里**必须有真 why**：`pick-card` 的版式是"图在上、why 在中、价在下"，
+   *      没有 why 时它退化成一张普通商品卡——于是"S4 迁完 pick-card"这件事
+   *      看上去完成了，实际什么也没验证到。这与 @limitation 一（价格是占位）
+   *      **不同**：价格影响的是"能不能算对"，why 影响的是"版式成不成立"，
+   *      而占位文案（"高品质"）测出来的正是设计侧点名的**退化形态**。
+   * @why 每一条都写成"**一句带判断的话**"（有因果、有比较对象），不写形容词罗列：
+   *      用户旅程地图里"停留 → 读 why → 判定是不是话术"是 A 旅程的关键转化点，
+   *      假数据若写成"匠心工艺"，整条链路练的都是错的。
+   */
+  why: string;
+  /** 产地 / 工房 / 匠人署名（`products.maker`）。留空串 = 不署名（可选列的空态）。 */
+  maker: string;
+  /** 编辑展示标签（`products.tags`）。⚠️ 与 `compliance_tags`（能不能寄）分工不同。 */
+  tags: readonly string[];
 }
 
 /**
@@ -69,6 +86,9 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     janCode: '4979006001234',
     hsCode: '3304.99',
     customsDescEn: 'Facial treatment essence, 230mL',
+    why: '这瓶水的成分表二十年没变过，PITERA 的含量也只有原厂这一个规格——代购价差那一截，买的是真假。',
+    maker: '滋贺 · 原厂规格',
+    tags: ['正规格', '含税直邮'],
     purchaseSource: '松本清 免税店',
   },
   // ⚠️ 原为某品牌「乳液」——该类商品在日本**可能是医薬部外品**，而 `quasi_drug`
@@ -83,6 +103,9 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     janCode: '4901872088412',
     hsCode: '3304.99',
     customsDescEn: 'Skin lotion for sensitive skin, 200mL',
+    why: '无印这条线把香精、色素、酒精全去掉了，敏感肌能用的化妆水里它是最不挑人的一瓶；200mL 刚好是一个月的量。',
+    maker: '無印良品 · 大阪',
+    tags: ['无香精', '敏感肌可用'],
     purchaseSource: '無印良品',
   },
   {
@@ -94,6 +117,9 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     janCode: null, // 手作厨具常无 JAN 码——刻意保留，覆盖"无码商品"分支
     hsCode: '8211.10',
     customsDescEn: 'Kitchen knife, blade 165mm',
+    why: 'VG10 夹钢的好处是刃口能磨得很薄又不崩，代价是不能砍骨头——三德刀本来就是切菜刀，165mm 是单手最好控的长度。',
+    maker: '合羽橋 · 堺刀司',
+    tags: ['VG10 夹钢', '可重磨'],
     purchaseSource: '合羽橋 道具街',
   },
   {
@@ -105,6 +131,9 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     janCode: '4971878012345',
     hsCode: '9617.00',
     customsDescEn: 'Vacuum insulated tumbler, 500mL',
+    why: '膳魔师的真空层做到了 0.1mm 以下，所以 500mL 的杯子只有 200g 出头——同样 6 小时保温，它比同容量的国产款轻一半。',
+    maker: '膳魔师 · 新潟',
+    tags: ['6 小时保温', '轻量'],
     purchaseSource: 'ビックカメラ',
   },
   {
@@ -116,6 +145,9 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     janCode: null,
     hsCode: '7323.93',
     customsDescEn: 'Cast iron teapot, 0.6L',
+    why: '铸铁壶烧水会溶出二价铁，泡老茶时水温掉得慢；但内壁有氧化膜、不能干烧——这一条比「能补铁」重要得多。',
+    maker: '岩手 · 南部铁器 伝統工芸士',
+    tags: ['产地直送', '终身可用'],
     purchaseSource: '岩手 直送',
   },
   // ⚠️ 这里原本放的是獺祭清酒——**违反契约**：`compliance_tags` 含 `alcohol` 者
@@ -130,6 +162,9 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     janCode: '4973157001234',
     hsCode: '0902.10',
     customsDescEn: 'Green tea powder (matcha), 100g',
+    why: '宇治抹茶的鲜味来自覆下栽培，摘后四小时内必须蒸青——过了这个窗口就只剩苦。100g 是两个月喝完的量，再大就氧化了。',
+    maker: '京都 · 宇治 茶舗',
+    tags: ['覆下栽培', '当季新茶'],
     purchaseSource: '京都 茶舗',
   },
   {
@@ -141,6 +176,9 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     janCode: '4901351005678',
     hsCode: '1905.90',
     customsDescEn: 'Confectionery, 8 pieces',
+    why: '东京站限定，保质期只有 7 天，所以代购拿到手的常常已经是第五六天——直邮的意义在这里，不在价格。',
+    maker: '東京駅 · 土産店',
+    tags: ['车站限定', '短保'],
     purchaseSource: '東京駅 土産店',
   },
   // ── 下面两条刻意补足重货：只有轻货的话，运费取档的"高档位"和"超重"分支永远没数据可用 ──
@@ -153,6 +191,9 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     janCode: null,
     hsCode: '7323.93',
     customsDescEn: 'Cast iron wok, 30cm',
+    why: '2.4kg 的铁锅预热慢，但一旦热起来就不降温——中式爆炒要的就是这个蓄热，不粘锅给不了。',
+    maker: '岩手 · 南部铁器 伝統工芸士',
+    tags: ['产地直送', '无涂层'],
     purchaseSource: '岩手 直送',
   },
   {
@@ -164,6 +205,9 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     janCode: '4901234567890',
     hsCode: '1006.30',
     customsDescEn: 'Semi-milled rice, 5kg',
+    why: '免洗米在工厂里就把米糠磨掉了，淘米时不用再搓——代价是香味略薄，换来的五分钟是每天的。',
+    maker: '新潟 · JA 直送',
+    tags: ['免洗', '当年新米'],
     purchaseSource: '新潟 JA',
   },
   {
@@ -175,6 +219,9 @@ export const JP_PRODUCTS: readonly ProductSeed[] = [
     janCode: '4547315001234',
     hsCode: '9608.10',
     customsDescEn: 'Ball point pens, 5 pieces',
+    why: '0.5mm 凝胶笔里它最不容易断墨，五支装折下来一支两块多——这个价位谈「手感」是虚的，不断墨才是真需求。',
+    maker: '無印良品 · 大阪',
+    tags: ['不易断墨', '5 支装'],
     purchaseSource: '無印良品',
   },
 ];
