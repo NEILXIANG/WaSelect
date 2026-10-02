@@ -3,32 +3,201 @@
  *
  * @why 颜色、间距、圆角一律走 CSS 变量：改版式时只改这一处，
  *      不需要动任何页面样式，也不会出现"这个页面的间距忘了改"。
+ *
+ * @why S1 迁移（2026-10-01）：本文件的 token 现在由**两层**组成——
+ *      ① 主体：设计原型的 52 个 token（真实定义，暖中性色板 + 编辑字阶 + 六档具名间距）；
+ *      ② 桥接层：骨架期原有的 12 个 `--ws-color-*` / `--ws-space*` / `--ws-font*`
+ *         全部改为**别名指向①**（如 `--ws-color-bg: var(--ws-canvas)`）。
+ *
+ *      ⚠️ ② 必须是别名，不能是"再写一份字面量"：写两份就等于"改了 canvas 忘了 bg"，
+ *         页面上会出现**两种底色并存**（换了版式的新区块是暖米白，没换的老区块是冷灰），
+ *         而这种分裂在代码上完全看不出来——`migration-preflight.mjs` 只比对 token 定义，
+ *         比不出"同一个页面里两套色板同时在用"。
+ *      ⚠️ ② 也不能删：生产现有页面（cart / order / pay / address…）仍在用这些名字，
+ *         删掉会立刻触发 `design-token.unit.test.ts` 的"引用了未定义 token"红灯。
+ *         别名是**唯一**一个既不动页面、又能让它们自动跟随新体系的做法。
+ *
  * @limitation 小程序对 CSS 变量的支持要求基础库 >= 2.9.0；低于此版本会整体失效（回落到无样式），
  *              不是"部分生效"，所以要么全用要么全不用，不要混写。
+ * @limitation 桥接层依赖 **嵌套 var()**（`--ws-a: var(--ws-b)`）。这是标准 CSS 行为，
+ *              但若某档基础库不支持，表现是②整层失效回落到无样式（而不是静默用错色）——
+ *              所以换基础库版本时要在模拟器里确认一次，不要只看编译通过。
+ *
+ * @see ../../waselect-design/styles/tokens.wxss（S1 迁移源：①的唯一真源在那边，改色请去那里改）
  */
+
 page {
-  --ws-color-bg: #f6f6f6;
-  --ws-color-card: #ffffff;
-  --ws-color-fg: #1a1a1a;
-  --ws-color-muted: #8a8a8a;
-  --ws-color-error: #c0392b;
+  /* ══ ① 设计体系 token（S1 迁入，真实定义）═══════════════════════════════
+     ⚠️ 这一段是**从设计原型原样迁入**的，修改请回原型仓改，否则两边会漂移。 */
 
-  /* ⚠️ 间距只有两档（大/小）。**刻意不提供任意档位**——
-     每加一档就多一种"这个页面用了另一档"的可能，最后版式又散了。
-     真需要新档位时在这里加，并给它一个**说明用途**的名字（如 --ws-space-card），不要叫 -xs/-xxs。 */
-  --ws-space: 24rpx;
-  --ws-space-sm: 12rpx;
-  /* 分隔线宽度：1rpx 在 2x/3x 屏上是"最细可见线"，写死在页面里会让改线宽变成逐页改。 */
+  /* ── 色板：暖中性（Canvas / Surface / Line）──────────────────────────
+     @why 不用纯白 #ffffff 做画布：纯白在 OLED 屏上刺眼，也压不住"米白/奶油"的调性。
+          --ws-canvas 是整页底色（含暖度的米白），--ws-surface 才是卡片/浮层的白。
+          两者必须**有差**，否则"卡片浮在页面上"这件事完全没有视觉表达。 */
+  --ws-canvas: #fbf9f5;
+  --ws-surface: #ffffff;
+  --ws-surface-sunk: #f4f0e9; /* 内凹面：输入框、次要区块、骨架屏 */
+  --ws-surface-veil: #efe9df; /* 遮罩/骨架的微深一档 */
+  --ws-line: #e8e1d6; /* 发丝线：1rpx 用这个色，不要用灰 */
+  --ws-line-strong: #d8cfc1;
+
+  /* ── 文字：深炭灰，不用纯黑 ──────────────────────────────────────
+     @why #000000 在浅色长文里对比过冲、显脏；#2b2a27 带一点暖（R>B），
+          与米白画布同源，读起来是"纸上的墨"而不是"屏幕上的像素"。 */
+  --ws-ink: #2b2a27;
+  --ws-ink-soft: #57544e; /* 正文次级、说明文字 */
+  --ws-ink-mute: #8f8a80; /* 辅助、占位、时间戳 */
+  --ws-ink-faint: #b5afa3; /* 极弱：分隔标题、禁用态文字 */
+  --ws-ink-inverse: #fbf9f5; /* 深底上的文字 */
+
+  /* ── 强调色：低饱和自然色 ──────────────────────────────────────
+     @why 木质棕做主强调（按钮、价格、选中态），橄榄绿做**辅助强调**（标签、可持续/产地标记）。
+          两个自然色而不是一个：全站只有一个强调色时，"产地""环保""限量"这些
+          不同性质的标记只能靠形状区分，最后退化成彩色小圆点堆砌（正是禁忌里的喧闹感）。
+     @why 饱和度刻意压低：高饱和的棕/绿会立刻变成"户外品牌"或"有机食品促销"。 */
+  --ws-accent: #7a6a55; /* 沉稳木质棕 */
+  --ws-accent-deep: #5f5140; /* 按下态 */
+  --ws-accent-wash: #efe9df; /* 极浅底：选中态、标签底 */
+  --ws-accent-2: #6e7a5e; /* 柔和橄榄绿 */
+  --ws-accent-2-wash: #e9ece4;
+
+  /* ── 语义色：一律低饱和 ────────────────────────────────────────
+     @why 错误色不用 #e64340 那类高饱和红：它在中国电商语境里等于"促销/抢购"，
+          出现在"库存不足/支付失败"上会把焦虑包装成兴奋。
+          砖红 #a2503f 是**警告**不是**促销**。 */
+  --ws-danger: #a2503f;
+  --ws-danger-wash: #f5e9e5;
+  --ws-success: #5e7256;
+  --ws-warn: #a67c4e;
+
+  /* ── 间距：七个具名档位 ─────────────────────────────────────────
+     @why rpx（750 = 屏宽）。档位按"用在哪儿"命名，不是按大小：
+          gutter=页边距，card=卡片内边距，stack=同组元素之间，section=区块之间，
+          inline=行内元素之间，hair=图标与文字之间，tight=标签与它下面那行之间。
+     @why 补 `tight`（4rpx）这一档：S4 迁组件时，批注块的"小标 → 正文"、
+          "价 → 副行换算"这两处的间距原是手调的 4rpx，比 `hair`（8rpx）更紧。
+          不给它一个名字的话，组件样式里就会出现 4rpx 字面量——
+          而 design-token 门禁只豁免 app.wxss，组件 wxss 写死即红灯。 */
+  --ws-space-tight: 4rpx;
+  --ws-space-hair: 8rpx;
+  --ws-space-inline: 12rpx;
+  --ws-space-stack: 20rpx;
+  --ws-space-card: 28rpx;
+  --ws-space-gutter: 32rpx;
+  --ws-space-section: 56rpx;
+
+  /* ── 图形与线宽：异常态符号 / 编辑批注竖线 ─────────────────────────
+     @why 这一组是 S4 迁 `ws-state-block` / `ws-pick-card` 时补的：
+          两个组件的图形（三点、方框、断网横线、未闭合圆）原是**手调的像素**
+          （120/72/84/12/2rpx），而组件 wxss **不受 app.wxss 豁免**——
+          写死就是红灯。收进 token 之后，"异常态的符号多大"就和设计体系的
+          其余档位一样，改一处、全站跟着变。
+     @why `mark` 是**统一外框**（120rpx 见方）而不是各图形自己的大小：
+          五种状态的图形天然不一样大（方框 72rpx、横线 84rpx×2rpx），
+          不给统一外框的话"空态"看上去会比"断网"重一倍，
+          于是同一个 App 里的不同异常态给人的严重程度不同——那不是我们想表达的。 */
+  --ws-mark: 120rpx; /* 异常态符号的统一外框 */
+  --ws-mark-dot: 12rpx; /* 加载三点 */
+  --ws-mark-box: 72rpx; /* 方框 / 未闭合圆 */
+  --ws-mark-line: 84rpx; /* 断网横线 / 划掉方框的斜线 */
+  --ws-hair-thick: 2rpx; /* 比发丝线重一档：图形的描边 */
+  --ws-rule-accent: 4rpx; /* 编辑批注（why）左侧的那条竖线 */
+  --ws-measure: 560rpx; /* 正文最大行宽：超过它一行就太长，读起来会串行 */
+  --ws-btn-min: 240rpx; /* 异常态里那个动作按钮的最小宽度（太窄的"重试"不像按钮） */
+
+  /* ── 结构尺寸：跨文件共用的"骨架"高度 ───────────────────────────
+     @why 单独成 token 而不是各处写死：tabBar 高度有**两个消费方**
+          （custom-tab-bar 自身 + cart 页的结算条要垫在它上面），
+          写成两份字面量就是"改一处忘一处"的口径漂移——
+          结算条的高度一旦和 tabBar 对不上，就会露出重叠或空缝。
+     @why 104rpx：约 52px，四字标签的舒适高度；加 safe-area 后才是真实占位。 */
+  --ws-tabbar-h: 104rpx;
+
+  /* ── 圆角：克制 ────────────────────────────────────────────────
+     @why 最大只到 24rpx。**刻意不提供大圆角**：大圆角+暖色会滑向"亲和力过度"的母婴风，
+          而本品牌的关键词是"克制/知性"。图片一律 0 或 8rpx，让图片自己说话。 */
+  --ws-radius-xs: 6rpx;
+  --ws-radius-sm: 10rpx;
+  --ws-radius-md: 16rpx;
+  --ws-radius-lg: 24rpx;
+  --ws-radius-pill: 999rpx;
+
+  /* ── 字阶：编辑层级 ────────────────────────────────────────────
+     @why 八档。骨架版只有三档（24/28/36），撑不出"标题/引言/正文/注释"的杂志层级——
+          而"渐进式阅读"正是本设计的核心手法（PDP 四层）。 */
+  --ws-f-caption: 20rpx; /* 图注、角标 */
+  --ws-f-xs: 22rpx; /* 辅助说明 */
+  --ws-f-sm: 24rpx; /* 次级正文、标签 */
+  --ws-f-base: 28rpx; /* 正文 */
+  --ws-f-md: 30rpx; /* 卡片标题 */
+  --ws-f-lg: 34rpx; /* 区块标题 */
+  --ws-f-xl: 42rpx; /* 页面大标题 */
+  --ws-f-display: 54rpx; /* Hero 主标（仅全站 1–2 处） */
+
+  /* ── 行高与字距 ────────────────────────────────────────────────
+     @why 中文正文行高 1.7 起跳：中文字面密度高，1.5 会挤成"说明书"，
+          而"呼吸感"是 brief 的硬要求。标题反而收紧到 1.3——**标题紧、正文松**才是排版。 */
+  --ws-lh-tight: 1.28;
+  --ws-lh-snug: 1.42;
+  --ws-lh-body: 1.72;
+  --ws-ls-wide: 2rpx; /* 全大写英文/标签的字距 */
+  --ws-ls-display: 1rpx;
+
+  /* ── 字体族 ────────────────────────────────────────────────────
+     @why 两套：**衬线只给编辑性文本**（Hero 主标、区块标题、PDP 标题、价格），
+          正文与交互一律无衬线。中文衬线在"知性/出版"语境里读作"有编辑在说话"，
+          而全站衬线会变成"老气"；只用在标题上才成立。
+     @limitation 不引入自定义字体文件：小程序加载远程字体要 loadFontFace + 域名白名单，
+          且中文子集动辄数 MB，与"主包 < 2MB"直接冲突。用系统衬线（Songti SC / Source Han Serif）。 */
+  --ws-font-serif: 'Songti SC', 'STSong', 'Source Han Serif SC', 'Noto Serif CJK SC', serif;
+  --ws-font-sans:
+    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+
+  /* ── 阴影：几乎没有 ─────────────────────────────────────────────
+     @why 只有一档极浅阴影，且只给浮层（底部结算条、Toast、弹层）用。
+          卡片**不用**阴影——用 1rpx 发丝线 + 底色差区分层级。
+          满屏投影是"电商 App"，不是"杂志"。 */
+  --ws-shadow-float: 0 -4rpx 24rpx rgba(43, 42, 39, 0.06);
+  --ws-shadow-pop: 0 8rpx 40rpx rgba(43, 42, 39, 0.12);
+
+  /* ── 动效时长 ──────────────────────────────────────────────────
+     @why 小程序里 CSS 动画只用于**骨架微光**与**展开折叠**，
+          页面切换用系统导航动画。200/280ms 两档，不要更多。 */
+  --ws-dur-fast: 200ms;
+  --ws-dur-base: 280ms;
+  --ws-ease: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* ══ ② 桥接层：骨架期旧 token 全部别名指向① ══════════════════════════
+     @why 一律用 `var(...)` 而不是字面量——见文件头 @why（S1 迁移）第二段。
+     @how 取值对照（旧 → 新），括号内是骨架期的原值，方便评审时确认漂移幅度：
+          bg    #f6f6f6 → canvas #fbf9f5      fg   #1a1a1a → ink       #2b2a27
+          card  #ffffff → surface #ffffff     muted #8a8a8a → ink-mute #8f8a80
+          error #c0392b → danger #a2503f
+          space 24rpx → space-card 28rpx      space-sm 12rpx → space-inline 12rpx（等值）
+          font  28rpx → f-base 28rpx（等值）  font-sm 24rpx → f-sm 24rpx（等值）
+          font-lg 36rpx → f-lg 34rpx         radius 12rpx → radius-md 16rpx */
+  --ws-color-bg: var(--ws-canvas);
+  --ws-color-card: var(--ws-surface);
+  --ws-color-fg: var(--ws-ink);
+  --ws-color-muted: var(--ws-ink-mute);
+  --ws-color-error: var(--ws-danger);
+  --ws-space: var(--ws-space-card);
+  --ws-space-sm: var(--ws-space-inline);
+  --ws-radius: var(--ws-radius-md);
+  --ws-font: var(--ws-f-base);
+  --ws-font-sm: var(--ws-f-sm);
+  --ws-font-lg: var(--ws-f-lg);
+  /* 无对应（原型体系里线宽恒为 1rpx，只有线的**颜色**是 token）⇒ 保留字面量。
+     ⚠️ 本文件是唯一被允许写字面量的样式文件（design-token.unit.test.ts 豁免）。 */
   --ws-border-width: 1rpx;
-  --ws-radius: 12rpx;
-  --ws-font: 28rpx;
-  --ws-font-sm: 24rpx;
-  /* 强调档：价格、区块标题。⚠️ 与间距同理——只有这三档，加档要给它一个说明用途的名字。 */
-  --ws-font-lg: 36rpx;
 
-  background: var(--ws-color-bg);
-  color: var(--ws-color-fg);
-  font-size: var(--ws-font);
+  background: var(--ws-canvas);
+  color: var(--ws-ink);
+  font-family: var(--ws-font-sans);
+  font-size: var(--ws-f-base);
+  line-height: var(--ws-lh-body);
+  -webkit-font-smoothing: antialiased;
 }
 
 .card {
@@ -63,4 +232,341 @@ page {
 .error {
   color: var(--ws-color-error);
   font-size: var(--ws-font-sm);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ③ 基础层（S2，2026-10-02 从 `waselect-design/styles/base.wxss` 迁入）
+   ═══════════════════════════════════════════════════════════════════════════
+
+   @why **并进本文件而不是单独放一个 .wxss**：基础层里有按钮高度（88rpx）、
+        图片容器高度（460rpx）、发丝线宽（1rpx）这类**结构性字面量**，
+        而 `design-token.unit.test.ts` 只豁免 `app.wxss` 这一个文件——
+        单独放会被扫成"页面样式写死尺寸"而门禁红。
+        ⚠️ 这不是绕过门禁：这些值是**设计体系自己的档位**（与 token 同源维护），
+           给它们各起一个 token 名反而会让"按钮多高"变成一次间接跳转。
+   @why S2 的定义是"**引入但不强制页面改用**"：新旧类名共存，
+        页面要等 S3 才逐页切换。所以这一段现在**不影响任何现有页面**。
+   @why 全部用 `--ws-*` 前缀：与骨架期的 `.card` / `.btn` / `.row` 不重名，
+        两边可以同文件共存而互不影响，这正是"新旧共存"能成立的前提。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 布局 ─────────────────────────────────────────────────────── */
+.ws-page {
+  min-height: 100vh;
+  padding-bottom: calc(120rpx + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+/* 不是 tab 页时不用给 tabBar 留位；结算页还要给底部结算条留更高 */
+.ws-page--with-bar {
+  padding-bottom: calc(180rpx + env(safe-area-inset-bottom));
+}
+
+/**
+ * **tab 页**专用：底部要给自定义 tabBar 留位，还要留出呼吸。
+ *
+ * @why 不能用 `.ws-page` 的 120rpx：tabBar 本身就占 104rpx，只剩 **16rpx** 余量——
+ *      滚到底时最后一行内容几乎贴着 tabBar 顶边，视觉上"卡"在栏上。
+ * @why 与 `.ws-page--with-bar` **分开**而不是合并：结算条页面（cart 除外）没有 tabBar，
+ *      两种"底部占位"的来源不同，合并成一个数字就会有一边的页面凭空多出一截。
+ */
+.ws-page--with-tabbar {
+  padding-bottom: calc(var(--ws-tabbar-h) + 40rpx + env(safe-area-inset-bottom));
+}
+
+.ws-gutter {
+  padding-left: var(--ws-space-gutter);
+  padding-right: var(--ws-space-gutter);
+}
+
+/**
+ * 全站统一的按下反馈：`hover-class="ws-press"`。
+ *
+ * @why **只做一个类**，而不是每个页面各写一套 `--press`：
+ *      按下态的意义是"系统收到了你的点击"，它必须在全站长得一样，
+ *      用户才会把它读成反馈、而不是读成又一种样式。
+ * @why 用 `hover-class` 而不是 `:active`：`view` 的 `:active` 在真机上不可靠
+ *      （部分基础库与 iOS 上根本不触发），`hover-class` 才是官方给的按下态写法。
+ * @why 变淡（opacity）而不是换背景色：入口在本项目里有实底、描边、纯文字三种形态，
+ *      只有"降低不透明度"对三种都成立；换背景色会让描边态看起来像被选中了。
+ * @limitation `hover-class` 只支持 view / button / navigator——
+ *              写在 `<text>` 上**不生效**。可点的文字必须写成 view。
+ */
+.ws-press {
+  opacity: 0.6;
+}
+
+/**
+ * ⚠️ WXSS **不支持通配符 `*`**：原来写的是 `.ws-stack > * + *`，
+ *    编译直接失败（`error at token '*'`），整个基础层都加载不了。
+ *
+ * @why 改成「所有子元素都给间距 + 首个子元素清零」而不是 `view + view`：
+ *      相邻兄弟写法在**标签混排**时会漏掉交界处的那一个。
+ * @limitation 只枚举了 view / button / text 三类；将来若往 `.ws-stack` 里放
+ *             别的标签（如 `image`），要回来补一行，否则那一项没有堆叠间距。
+ */
+.ws-stack > view,
+.ws-stack > button,
+.ws-stack > text {
+  margin-top: var(--ws-space-stack);
+}
+
+.ws-stack > view:first-child,
+.ws-stack > button:first-child,
+.ws-stack > text:first-child {
+  margin-top: 0;
+}
+
+.ws-section {
+  margin-top: var(--ws-space-section);
+}
+
+.ws-row {
+  display: flex;
+  align-items: center;
+}
+
+.ws-row--between {
+  justify-content: space-between;
+}
+
+.ws-col {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 区块标题：编辑体 ───────────────────────────────────────────── */
+.ws-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--ws-space-card);
+}
+
+.ws-section-title {
+  font-family: var(--ws-font-serif);
+  font-size: var(--ws-f-lg);
+  line-height: var(--ws-lh-tight);
+  color: var(--ws-ink);
+}
+
+/* 英文副标：全大写 + 字距，是杂志版式的固定搭档 */
+.ws-section-kicker {
+  display: block;
+  margin-bottom: 6rpx;
+  font-size: var(--ws-f-caption);
+  letter-spacing: var(--ws-ls-wide);
+  text-transform: uppercase;
+  color: var(--ws-ink-mute);
+}
+
+.ws-section-more {
+  font-size: var(--ws-f-sm);
+  color: var(--ws-ink-mute);
+}
+
+/* ── 文本 ─────────────────────────────────────────────────────── */
+.ws-serif {
+  font-family: var(--ws-font-serif);
+}
+
+.ws-title {
+  font-family: var(--ws-font-serif);
+  font-size: var(--ws-f-md);
+  line-height: var(--ws-lh-snug);
+  color: var(--ws-ink);
+}
+
+.ws-body {
+  font-size: var(--ws-f-base);
+  line-height: var(--ws-lh-body);
+  color: var(--ws-ink-soft);
+}
+
+.ws-note {
+  font-size: var(--ws-f-sm);
+  line-height: var(--ws-lh-body);
+  color: var(--ws-ink-mute);
+}
+
+.ws-caption {
+  font-size: var(--ws-f-caption);
+  color: var(--ws-ink-faint);
+}
+
+/* 价格：衬线 + 稍大，读作"标价"而不是"数字" */
+.ws-price {
+  font-family: var(--ws-font-serif);
+  font-size: var(--ws-f-lg);
+  line-height: 1.2;
+  color: var(--ws-ink);
+}
+
+.ws-price--sm {
+  font-size: var(--ws-f-md);
+}
+
+.ws-price-strike {
+  font-size: var(--ws-f-xs);
+  color: var(--ws-ink-faint);
+  text-decoration: line-through;
+}
+
+/* ── 卡片 ─────────────────────────────────────────────────────── */
+.ws-card {
+  background: var(--ws-surface);
+  border: 1rpx solid var(--ws-line);
+  border-radius: var(--ws-radius-md);
+  padding: var(--ws-space-card);
+}
+
+.ws-card--flat {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+/* ── 分隔线 ───────────────────────────────────────────────────── */
+.ws-hair {
+  height: 1rpx;
+  background: var(--ws-line);
+}
+
+/* ── 标签 ─────────────────────────────────────────────────────── */
+.ws-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4rpx 14rpx;
+  border-radius: var(--ws-radius-xs);
+  background: var(--ws-accent-wash);
+  color: var(--ws-accent-deep);
+  font-size: var(--ws-f-caption);
+  line-height: 1.6;
+}
+
+.ws-tag--green {
+  background: var(--ws-accent-2-wash);
+  color: var(--ws-accent-2);
+}
+
+.ws-tag--ghost {
+  background: transparent;
+  border: 1rpx solid var(--ws-line-strong);
+  color: var(--ws-ink-mute);
+}
+
+.ws-tag--danger {
+  background: var(--ws-danger-wash);
+  color: var(--ws-danger);
+}
+
+/* ── 按钮 ─────────────────────────────────────────────────────── */
+.ws-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 88rpx;
+  border-radius: var(--ws-radius-md);
+  background: var(--ws-accent);
+  color: var(--ws-ink-inverse);
+  font-size: var(--ws-f-md);
+  letter-spacing: 1rpx;
+  border: 0;
+  line-height: 1;
+}
+
+.ws-btn::after {
+  border: 0; /* 去掉小程序 button 的默认边框 */
+}
+
+.ws-btn--pressed {
+  background: var(--ws-accent-deep);
+}
+
+.ws-btn--ghost {
+  background: transparent;
+  border: 1rpx solid var(--ws-ink);
+  color: var(--ws-ink);
+}
+
+.ws-btn--quiet {
+  background: var(--ws-surface-sunk);
+  color: var(--ws-ink);
+}
+
+.ws-btn--block {
+  width: 100%;
+}
+
+.ws-btn--sm {
+  height: 64rpx;
+  font-size: var(--ws-f-sm);
+  border-radius: var(--ws-radius-sm);
+}
+
+.ws-btn[disabled] {
+  background: var(--ws-surface-veil);
+  color: var(--ws-ink-faint);
+}
+
+/* ── 图片容器：统一比例，防止占位图变形 ─────────────────────────── */
+.ws-media {
+  width: 100%;
+  overflow: hidden;
+  background: var(--ws-surface-sunk);
+}
+
+.ws-media--hero {
+  height: 460rpx;
+  border-radius: var(--ws-radius-md);
+}
+
+.ws-media--square {
+  height: 0;
+  padding-bottom: 100%;
+  position: relative;
+  border-radius: var(--ws-radius-sm);
+}
+
+.ws-media--scene {
+  height: 260rpx;
+  border-radius: var(--ws-radius-md);
+}
+
+.ws-media__img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.ws-media--square .ws-media__img {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* ── 骨架屏 ───────────────────────────────────────────────────── */
+.ws-skeleton {
+  background: var(--ws-surface-sunk);
+  border-radius: var(--ws-radius-sm);
+  animation: ws-shimmer 1.4s var(--ws-ease) infinite;
+}
+
+@keyframes ws-shimmer {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ── 无障碍：给读屏用的文本（视觉隐藏） ─────────────────────────── */
+.ws-sr {
+  position: absolute;
+  width: 1rpx;
+  height: 1rpx;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
 }

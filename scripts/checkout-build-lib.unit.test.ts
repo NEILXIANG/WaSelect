@@ -195,10 +195,28 @@ describe('design token：颜色单一来源（packages/shared）', () => {
   it('小程序 app.wxss 的五色与 WS_COLORS 同值（两处共存，靠本条钉住漂移）', () => {
     // @limitation app.wxss 是手写维护的另一份（rpx 尺寸无法共享），
     //              颜色若改必须两边同改——本条就是那个"必须同改"的机器提醒。
+    //
+    // @why S1（2026-10-01）后 app.wxss 的旧名 token 改成**别名**（`--ws-color-bg: var(--ws-canvas)`），
+    //      所以这里比对两件事，缺一不可：
+    //      ① **桥接必须在**——只比颜色值的话，哪天有人把桥接改回字面量（或删掉），
+    //         颜色依然对得上，但页面会退回"新旧两套色板并存"的分裂状态，而**没有**任何测试会响；
+    //      ② **桥接终点的 token 值**必须与 WS_COLORS 一致——这才是"两边同色"的真正含义。
     const wxss = readFileSync(join(root, 'miniprogram/app.wxss'), 'utf8');
+    const ALIAS = {
+      bg: 'canvas',
+      card: 'surface',
+      fg: 'ink',
+      muted: 'ink-mute',
+      error: 'danger',
+    } as const;
     for (const k of ['bg', 'card', 'fg', 'muted', 'error'] as const) {
-      expect(wxss, `app.wxss 的 --ws-color-${k} 与 WS_COLORS 漂移`).toContain(
-        `--ws-color-${k}: ${WS_COLORS[k]};`,
+      const target = ALIAS[k];
+      expect(
+        wxss,
+        `app.wxss 的 --ws-color-${k} 应当桥接到 --ws-${target}（否则两套色板并存）`,
+      ).toContain(`--ws-color-${k}: var(--ws-${target});`);
+      expect(wxss, `app.wxss 的 --ws-${target} 与 WS_COLORS.${k} 漂移`).toContain(
+        `--ws-${target}: ${WS_COLORS[k]};`,
       );
     }
   });

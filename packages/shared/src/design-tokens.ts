@@ -8,19 +8,32 @@
  * @limitation 小程序 `app.wxss` 仍是手写的另一份（WXSS 不由构建生成）——
  *              两侧颜色漂移由 `scripts/checkout-build-lib.unit.test.ts` 的同源断言钉住：
  *              改一边不改另一边 → gate 红。
+ * @limitation S1（2026-10-01）后 `app.wxss` 里旧名的 token 全部改成**别名**
+ *              （`--ws-color-bg: var(--ws-canvas)`），所以同源断言比的是
+ *              **别名终点的那个 token 的值**，不是旧名那一行字面量。
+ *              改这里的值时必须同时改 `app.wxss` 里对应的新 token，否则 gate 红。
  *
  * @see miniprogram/app.wxss（五色同源）；scripts/checkout-build-lib.ts（tokens.css 生成）
  */
 
-/** 调色板。新增颜色必须给它一个**说明用途**的名字（同 app.wxss 的档位纪律）。 */
+/**
+ * 调色板。新增颜色必须给它一个**说明用途**的名字（同 app.wxss 的档位纪律）。
+ *
+ * ⚠️ S1 迁移（2026-10-01）：五个对账色已切到设计体系的暖中性色板，
+ *    与 `app.wxss` 的对应关系（旧名 → 新 token）：
+ *      bg → --ws-canvas｜card → --ws-surface｜fg → --ws-ink｜muted → --ws-ink-mute｜error → --ws-danger
+ *    @why 连 `success` 一起对齐：否则"小程序里的成功色（--ws-success）"与
+ *         "支付成功页的成功色"是两个绿，用户在付款回跳的那一刻会看到颜色跳变——
+ *         这恰好是整个流程里**最需要连贯**的一屏。
+ */
 export const WS_COLORS = {
-  bg: '#f6f6f6',
+  bg: '#fbf9f5',
   card: '#ffffff',
-  fg: '#1a1a1a',
-  muted: '#8a8a8a',
-  error: '#c0392b',
-  /** 支付完成等正向状态（checkout 静态页用；小程序侧暂无消费方，不强行同步进 wxss）。 */
-  success: '#1e8449',
+  fg: '#2b2a27',
+  muted: '#8f8a80',
+  error: '#a2503f',
+  /** 支付完成等正向状态。与小程序 `--ws-success` 同值（S1 起两侧对齐）。 */
+  success: '#5e7256',
 } as const;
 
 export type WsColorName = keyof typeof WS_COLORS;
