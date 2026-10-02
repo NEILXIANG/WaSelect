@@ -16,6 +16,7 @@
 | `地基搭建清单.md` | F0–F17 进度与欠账登记（表数口径唯一真源在 `db.db.test.ts`，本文只索引） |
 | `I1阶段开发实施方案.md` | 已执行的 I1 实施计划（历史口径）+ §10「实施偏差」回写；仍被 server/src 约 20 处 `@see` 引用，故留在活跃区——**以偏差节为准** |
 | `dev/stripe-listen-cloudflared.md` | 本地联调：Stripe 回调 / 公网隧道 |
+| `dev/小程序本地联调.md` | 本地联调：小程序模拟器 ↔ 本机服务端（`cli open` 起项目、dev 登录、三项证据确认真联动） |
 | `templates/` | ADR / 单元完成报告 / 缺陷登记三模板（有 `test/docs/doc-templates.unit.test.ts` 守着） |
 
 ## 审计与复盘报告（按时间倒序；最新一份代表当前结论，其余只作溯源）
