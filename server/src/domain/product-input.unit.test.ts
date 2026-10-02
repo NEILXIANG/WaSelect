@@ -114,6 +114,39 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     expect(reasons({ ...base(), weight_g: 10.5 })).toContain('weight_invalid');
   });
 
+  /**
+   * AJ-298：重量**上界**（与 `SHIPPING_RATE_BOUNDS.maxWeightG` 同源，30kg）。
+   *
+   * @why 必须与 `weight_invalid` 分开报：一个是"填错了格式"，一个是"填了一个超重的数"——
+   *      合起来的话运营看到"无效"会去改格式，而这个数根本不需要改格式。
+   * @why 上界本身放行（不能把极值本身拦掉）。
+   */
+  it('🔴 weight_g 超过单件上限 → weight_too_large（AJ-298：否则买家会看到莫名其妙的 40912）', () => {
+    expect(reasons({ ...base(), weight_g: 30_001 })).toContain('weight_too_large');
+    expect(ok({ ...base(), weight_g: 30_000 }).weight_g).toBe(30_000);
+  });
+
+  /**
+   * AJ-298：四个可选文本字段的**列宽**。
+   *
+   * @why 断言 reason 而不是只看"被拒"：超长此前会一路走到 PG 的 22001，
+   *      被 `http.ts` 的 22 类兜底折成 40001——**错误码本来就一样**，
+   *      所以"有没有被拒"证明不了"是在这一层被拒的"，只有 reason 能证明。
+   * @why 每个字段单独一条：批量断言会在注入时产生覆盖假象（改一处、另一处兜住）。
+   */
+  it('🔴 hs_code / customs_desc_en / title_ja / purchase_source 超列宽 → 逐字段拒绝（AJ-298）', () => {
+    expect(reasons({ ...base(), hs_code: '1'.repeat(11) })).toContain('hs_code_too_long');
+    expect(reasons({ ...base(), customs_desc_en: 'x'.repeat(121) })).toContain(
+      'customs_desc_too_long',
+    );
+    expect(reasons({ ...base(), title_ja: 'あ'.repeat(256) })).toContain('title_ja_too_long');
+    expect(reasons({ ...base(), purchase_source: 's'.repeat(256) })).toContain(
+      'purchase_source_too_long',
+    );
+    // 恰好等于列宽 → 放行（DB 能存下就不该拦）
+    expect(ok({ ...base(), hs_code: '1'.repeat(10) }).hs_code).toBe('1'.repeat(10));
+  });
+
   it('stock 负数 → 拒绝（0 允许：预售/缺货上架是正常运营动作）', () => {
     expect(reasons({ ...base(), stock: -1 })).toContain('stock_invalid');
     expect(ok({ ...base(), stock: 0 }).stock).toBe(0);

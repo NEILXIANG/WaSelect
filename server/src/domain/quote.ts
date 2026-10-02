@@ -165,12 +165,15 @@ export function computeQuote(input: QuoteComputationInput): QuoteComputation {
     const rateInt = input.fxRateIntByCurrency[c];
     if (rateInt === undefined) throw new AppError(50003, { currency: c });
     // ⚠️ DOM3-05：`toMinor` 在"金额 × 汇率"冲出安全整数域时抛 **RangeError**（不是 AppError）。
-    //    汇率上界由 `fx-input` 的 `MAX_RAW_RATE` 放行到 1000（含缓冲 1500），而 money.ts 的
-    //    安全论证假定的是 rate ≤ 1——两个模块各自的"安全"对不上，于是管理员录错一个
-    //    大汇率就能让报价 / 建单变成 50000 + `unhandled_error`（浏览页有 B25 逐商品降级兜着，
-    //    报价与建单没有）。这里把 RangeError 折成 **50003「汇率不可用」**：
-    //    与"缺汇率"同一处置——对调用方而言两者是同一件事（这一币种此刻报不出可信价格），
-    //    而 50000 会让人去查服务而不是去查汇率表。
+    //    这里把它折成 **50003「汇率不可用」**：与"缺汇率"同一处置——对调用方而言两者是
+    //    同一件事（这一币种此刻报不出可信价格），而 50000 会让人去查服务而不是去查汇率表。
+    //
+    //    ⚠️ **2026-10-02（AJ-297）重写过一次@why**：原注释写的是"汇率上界由 `fx-input`
+    //    的 `MAX_RAW_RATE` 放行到 1000（含缓冲 1500）"——那个常量已被 per-quote 区间
+    //    `FX_RAW_RATE_BOUNDS`（≤0.17）取代，按旧注释推理会得到"这条分支已经不可达"的
+    //    **错误结论**。按新上界重算：溢出只可能发生在**金额侧**——报价不硬拦
+    //    MAX_ORDER_JPY（它只是 split_hint），`itemsJpy` 可随 qty 放大，顶穿门槛约 ¥3.5 億。
+    //    ⇒ 分支**仍然可达**，保留。
     try {
       display[c] = toMinor(totalJpy, rateInt);
     } catch (e) {

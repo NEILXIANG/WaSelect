@@ -31,6 +31,8 @@ import {
   BLOCKED_COMPLIANCE_TAG,
   COMPLIANCE_TAG,
   PRODUCT_CATEGORY,
+  PRODUCT_MAX_CHARS,
+  PRODUCT_MAX_WEIGHT_G,
   isOneOf,
 } from '@waselect/shared';
 
@@ -139,7 +141,7 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   // ── 必填六项（契约 required）────────────────────────────────────────────
   const title = typeof b.title === 'string' ? b.title : undefined;
   if (title === undefined || title === '') fail('title', 'title_required');
-  else if (title.length > 255) fail('title', 'title_too_long');
+  else if (title.length > PRODUCT_MAX_CHARS.title) fail('title', 'title_too_long');
 
   const category = b.category;
   if (category === undefined) fail('category', 'category_required');
@@ -156,6 +158,9 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   const weight = b.weight_g === undefined ? undefined : intAtLeast(b.weight_g, 1);
   if (b.weight_g === undefined) fail('weight_g', 'weight_required');
   else if (weight === undefined) fail('weight_g', 'weight_invalid');
+  // 上界（AJ-298）：与运费档的 30kg 同源。缺它时"超重商品"能通过上架校验，
+  // 而后果落在买家身上——她没买几件却收到 40912「包裹超重」，且提示指向不了真正的原因。
+  else if (weight > PRODUCT_MAX_WEIGHT_G) fail('weight_g', 'weight_too_large');
 
   const desc = strOpt(b.customs_desc_en);
   if (desc === undefined) fail('customs_desc_en', 'customs_desc_required');
@@ -192,10 +197,31 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   }
 
   // ── 其余可选字段 ────────────────────────────────────────────────────────
+  // ⚠️ 四个可选文本字段此前**只判"填没填"不判长度**（AJ-298）：超长会撞 PG 的 22001，
+  //    被 `http.ts` 的 22 类兜底折成泛化的 40001「参数缺失或格式错误」——
+  //    运营看到的是"参数有问题"，而不是"这一项太长"，提示指向错误的字段。
+  const customsDesc = strOpt(b.customs_desc_en);
+  if (customsDesc !== undefined && customsDesc.length > PRODUCT_MAX_CHARS.customs_desc_en) {
+    fail('customs_desc_en', 'customs_desc_too_long');
+  }
+  const titleJa = strOpt(b.title_ja);
+  if (titleJa !== undefined && titleJa.length > PRODUCT_MAX_CHARS.title_ja) {
+    fail('title_ja', 'title_ja_too_long');
+  }
+  const source = strOpt(b.purchase_source);
+  if (source !== undefined && source.length > PRODUCT_MAX_CHARS.purchase_source) {
+    fail('purchase_source', 'purchase_source_too_long');
+  }
+
   const images = readImages(b.images);
   if (images === 'invalid') fail('images', 'image_invalid');
   const jan = strOpt(b.jan_code);
-  if (jan !== undefined && jan.length > 13) fail('jan_code', 'jan_code_invalid');
+  if (jan !== undefined && jan.length > PRODUCT_MAX_CHARS.jan_code) {
+    fail('jan_code', 'jan_code_invalid');
+  }
+  if (hs !== undefined && hs.length > PRODUCT_MAX_CHARS.hs_code) {
+    fail('hs_code', 'hs_code_too_long');
+  }
 
   if (errors.length > 0 || title === undefined || price === undefined || weight === undefined) {
     return { ok: false, errors };

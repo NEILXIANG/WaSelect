@@ -167,10 +167,21 @@ export function toRateInt(rate: number | string): number {
  *      在当前取值区间内两种写法结果本就一致，而"余数重算"保证的是放宽区间后**仍**一致。
  * @limitation 乘积 `jpy × rateInt` 必须落在 2^53 内（约 9e15），超出抛 `RangeError`。
  *             ⚠️ 这里曾经写"按 MAX_ORDER_JPY=180,000 与 rateInt ≤ 1e8 计算，乘积上限 1.8e13，安全"
- *             ——那句**只在"汇率 ≤ 1"时成立**，而 `fx-input` 的放行上界是 `MAX_RAW_RATE = 1000`
- *             （含缓冲可达 1500 ⇒ rateInt 1.5e11）：raw_rate ≳ 500 时，18 万円以内的金额就能
- *             把它顶穿（DOM3-05）。安全域是**两个模块的乘积约束**，不是 money.ts 自己能承诺的，
- *             所以本函数保持抛 RangeError（响亮），由 `domain/quote.ts` 折成 50003「汇率不可用」。
+ *             ——那句只在"汇率 ≤ 1"时成立（DOM3-05）。
+ *             ⚠️ **2026-10-02（AJ-297）再改一次**：上一版修正引用的是 `fx-input` 的
+ *             `MAX_RAW_RATE = 1000`（raw_rate ≳ 500 就顶穿），而那个常量已被 per-quote 区间
+ *             `FX_RAW_RATE_BOUNDS` 取代（USD ≤ 0.02 / CNY ≤ 0.17）——**引用一个已删除的常量
+ *             比算错更糟**，它让人按一条不存在的防线去推理。
+ *             · 按**新**上界重算：rate ≤ 0.17 × (1 + 缓冲 0.5) = 0.255 ⇒ rateInt ≤ 2.55e7，
+ *               单价又有 `validateProductInput` 的上界（MAX_ORDER_JPY=180,000）⇒
+ *               单件商品怎么都不可能顶穿（1.8e5 × 2.55e7 ≈ 4.6e12，差 3 个数量级）。
+ *             · **那是不是就不可达了？不是**——溢出换到了**金额侧**：报价**不硬拦**
+ *               MAX_ORDER_JPY（它只是 `split_hint`，建单才 40906），所以
+ *               `itemsJpy` 可以随 qty 放大到远超单笔上限；顶穿只需约 ¥3.5 億
+ *               （= 上限价 18 万円 × 约 2000 件库存的同一商品加进车里）。
+ *               ⇒ 本函数**仍然**保持抛 RangeError（响亮），由 `domain/quote.ts` 折成
+ *               50003「汇率不可用」。安全域是**两个模块的乘积约束**，
+ *               不是 money.ts 自己能承诺的——这正是它必须由调用方兜住的原因。
  */
 export function toMinor(jpy: number, rateInt: number): number {
   if (!Number.isInteger(jpy)) throw new RangeError(`日元金额必须是整数，收到 ${jpy}`);

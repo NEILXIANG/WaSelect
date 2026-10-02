@@ -124,3 +124,47 @@ export const SHIPPING_RATE_BOUNDS = {
   maxWeightG: 30_000,
   priceJpy: 100_000,
 } as const;
+
+/**
+ * 单件商品的**重量上界**（克；C3-01 DOM3 第二批 / 2026-10-02）。
+ *
+ * @why 与 `SHIPPING_RATE_BOUNDS.maxWeightG` **同值同源**——两者都是"承运商单件上限 30kg"
+ *      这一个事实的两处兑现：运费档的上界是"能寄多重的一票"，商品重量的上界是
+ *      "能寄多重的单件"。写成两个数字就是两份真源，改一处漏一处时
+ *      "商品能录 31kg 但运费表最多 30kg"这种矛盾不会报错，只会让含它的购物车 40912。
+ * @why 缺它的后果是**静默 + 指向错的人**：商品录成 50000g 能通过全部校验并上架，
+ *      但任何把它加进购物车的报价都会取不到档 ⇒ **40912「包裹超重」**——
+ *      买家没买几件却看到"包裹超重"，而真正的原因是管理端录错了一个数。
+ *      在上架入口拦住，错误才落在能改它的那个人面前。
+ * @limitation 它挡的是"单个商品就超重"，**挡不住**"多个商品加起来超重"——
+ *              后者是买家的购物车形态，本来就该走 40912。
+ * @limitation 若运费表把最大档调到 30kg 以下，仍会出现"商品合法但取不到档"。
+ *              彻底的解法是上架时按当前运费表校验，那需要查库（本层是纯函数），
+ *              故取常量；这个剩余风险按"配置与商品都应由运营一起维护"接受。
+ *
+ * @see server/src/domain/product-input.ts；docs/自主决策记录.md AJ-298
+ */
+export const PRODUCT_MAX_WEIGHT_G = 30_000;
+
+/**
+ * `products` 表各 VARCHAR 列的**字符上限**（与 001 的列宽逐字一致）。
+ *
+ * @why 缺列宽校验的后果不是"存不下"，而是 PG 报 **22001** → 兜底层把它折成
+ *      泛化的 **40001「参数缺失或格式错误」**（`http.ts` 的 22 类映射）。
+ *      运营看到的是"参数有问题"而**不是"这一项太长"**——提示指向了错误的字段，
+ *      而管理端表单若不限制长度，她会反复提交反复失败（`banner-input` 文件头
+ *      描述的正是这个失效形态）。
+ * @why 与 `ADDRESS_MAX_CHARS` 同口径：列宽是 DB 的事实，放在 shared 让服务端与
+ *      前端 `maxLength` 共用一处，而不是各写一份然后漂移。
+ *
+ * @see migrations/001_init.sql（`CREATE TABLE products`）；
+ *      server/src/domain/product-input.ts；server/src/domain/address-input.ts（同口径先例）
+ */
+export const PRODUCT_MAX_CHARS = {
+  title: 255,
+  hs_code: 10,
+  customs_desc_en: 120,
+  title_ja: 255,
+  jan_code: 13,
+  purchase_source: 255,
+} as const;
