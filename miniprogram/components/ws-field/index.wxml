@@ -1,0 +1,8 @@
+<!--
+  表单字段：标签 + 控件（默认 slot）。
+  @see ./index.js @limitation 一（为什么单槽）/ 二（为什么错误文案在 slot 里）
+-->
+<view class="ws-field">
+  <text wx:if="{{label}}" class="ws-field__label">{{label}}</text>
+  <slot />
+</view>

@@ -1,0 +1,47 @@
+<!--
+  编辑精选卡片。**核心是那句 why**。
+
+  结构固定：图 → 产地/匠人 → 名 → why → 价+标签。
+  @why 顺序不能改：`why` 必须在名字下面、价格上面（@see ./index.js 文件头）。
+
+  ⚠️ `why` 为空时**整卡降级**：不渲染 why 块，也不报错、不补通用话术（@see @limitation 一）。
+-->
+<view class="ws-pick" hover-class="ws-press" bindtap="onTap">
+  <view class="ws-media ws-media--scene">
+    <!-- ⚠️ 图为空时不渲染 <image>：空 src 在真机上是一个破图占位，
+         而 .ws-media 自带底色，留空就是一块干净的占位面。 -->
+    <image wx:if="{{image}}" class="ws-media__img" src="{{image}}" mode="aspectFill" />
+    <!--
+      库存角标两种，都是**事实**不是警告，所以一律用中性色（红在本体系里是"错误/警告"）：
+      · 售罄（stock === 0）：不能再买，是最重要的那一句；
+      · 仅剩 N 件（1–5）：快没了，但还能买。
+      ⚠️ `stock < 0`（未知）时**两个都不显示**：不知道库存就说不知道，
+         显示"仅剩 -1 件"是笑话，显示"售罄"是造假。
+    -->
+    <view wx:if="{{stock === 0}}" class="ws-pick__flag">已售罄</view>
+    <view wx:elif="{{stock > 0 && stock <= 5}}" class="ws-pick__flag">仅剩 {{stock}} 件</view>
+  </view>
+
+  <view wx:if="{{maker}}" class="ws-pick__maker">{{maker}}</view>
+  <view class="ws-title ws-pick__name">{{name}}</view>
+
+  <!-- 「为什么值得买」：整张卡的视觉重心
+       @why 左侧 4rpx 竖线 + 浅底，把它做成"编辑批注"而不是又一个商品参数块。
+            批注是**人在说话**，参数是**机器在列清单**。 -->
+  <view wx:if="{{why}}" class="ws-pick__why">
+    <text class="ws-pick__why-label">为什么值得买</text>
+    <text class="ws-pick__why-text">{{why}}</text>
+  </view>
+
+  <view class="ws-pick__foot">
+    <view class="ws-pick__price">
+      <ws-price jpy="{{priceJpy}}" size="md" />
+      <text wx:if="{{usdText}}" class="ws-pick__usd">{{usdText}}</text>
+    </view>
+    <view wx:if="{{tags.length > 0}}" class="ws-pick__tags">
+      <!-- wx:for-item="t"：默认的 item 会盖住组件的同名属性，
+           这里属性是扁平的所以不会撞，但保持这个写法以防将来再加一个 item 属性。 -->
+      <text class="ws-tag" wx:for="{{tags}}" wx:for-item="t" wx:key="*this">{{t}}</text>
+    </view>
+  </view>
+</view>

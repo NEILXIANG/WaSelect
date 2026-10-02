@@ -1,0 +1,26 @@
+/**
+ * 表单字段容器样式（S4 迁入）。
+ *
+ * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
+ * 硬编码色值 / 非 0 尺寸字面量直接红）。
+ *
+ * @why 分隔线用 `border-bottom` + `:last-child` 清零，而不是"每两个字段之间插一条 `<view class=line>`"：
+ *      插线的方式在**条件渲染**（`wx:if` 隐藏某个字段）时会露出一条孤立的线，
+ *      因为"上一个是谁"变了；`:last-child` 是渲染时算的，永远对。
+ */
+.ws-field {
+  display: flex;
+  flex-direction: column;
+  padding: var(--ws-space-inline) 0;
+  border-bottom: var(--ws-border-width) solid var(--ws-line);
+}
+
+.ws-field:last-child {
+  border-bottom: 0;
+}
+
+.ws-field__label {
+  margin-bottom: var(--ws-space-hair);
+  font-size: var(--ws-f-caption);
+  color: var(--ws-ink-mute);
+}

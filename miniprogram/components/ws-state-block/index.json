@@ -1,0 +1,6 @@
+{
+  "component": true,
+  "usingComponents": {
+    "ws-button": "/components/ws-button/index"
+  }
+}

@@ -1,0 +1,100 @@
+/**
+ * 编辑精选卡片样式（S4 迁入）。
+ *
+ * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
+ * 硬编码色值 / 尺寸字面量直接红）。
+ *
+ * @why 用 `.ws-pick__*` 前缀而不是沿用原型的 `.pick__*`：app.wxss 里已经有一批
+ *      骨架期的全局类（`.card` / `.row` / `.label`…），组件的类必须与之**不可能重名**。
+ *      ⚠️ 这一条在本组件尤其要紧：它开着 `styleIsolation: 'apply-shared'`，
+ *      页面样式能进到组件里——类名撞了就会被页面改掉（见 index.js 的 @limitation）。
+ *
+ * @limitation 本组件依赖 `styleIsolation: 'apply-shared'`（见 index.js）：
+ *             小程序自定义组件默认**读不到 app.wxss 的类**，而这里用了
+ *             `.ws-media` / `.ws-media--scene` / `.ws-title` / `.ws-tag` / `.ws-press`。
+ */
+
+.ws-pick {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 低库存角标：中性色（不是红色——红在本体系里是"错误/警告"，
+   而"仅剩 3 件"是**事实**，做成红色会让用户以为这件商品有问题） */
+.ws-pick__flag {
+  position: absolute;
+  left: var(--ws-space-inline);
+  top: var(--ws-space-inline);
+  padding: var(--ws-space-tight) var(--ws-space-inline);
+  border-radius: var(--ws-radius-xs);
+  background: var(--ws-canvas);
+  color: var(--ws-ink-soft);
+  font-size: var(--ws-f-caption);
+  opacity: 0.92;
+}
+
+.ws-pick__maker {
+  margin-top: var(--ws-space-inline);
+  font-size: var(--ws-f-caption);
+  color: var(--ws-ink-mute);
+  letter-spacing: var(--ws-ls-display);
+}
+
+.ws-pick__name {
+  margin-top: var(--ws-space-tight);
+}
+
+/* ── 「为什么值得买」：整张卡的视觉重心 ─────────────────────────────
+   @why 左侧竖线（`--ws-rule-accent`）+ 浅底，把它做成"编辑批注"的样子，
+        而不是又一个商品参数块。批注是**人在说话**，参数是**机器在列清单**。 */
+.ws-pick__why {
+  margin-top: var(--ws-space-inline);
+  padding: var(--ws-space-inline) var(--ws-space-stack);
+  border-left: var(--ws-rule-accent) solid var(--ws-accent);
+  background: var(--ws-surface-sunk);
+  border-radius: 0 var(--ws-radius-sm) var(--ws-radius-sm) 0;
+}
+
+.ws-pick__why-label {
+  display: block;
+  font-size: var(--ws-f-caption);
+  color: var(--ws-accent-deep);
+  letter-spacing: var(--ws-ls-wide);
+}
+
+.ws-pick__why-text {
+  display: block;
+  margin-top: var(--ws-space-tight);
+  font-size: var(--ws-f-sm);
+  line-height: var(--ws-lh-body);
+  color: var(--ws-ink-soft);
+}
+
+/* ── 底部：价 + 标签 ──────────────────────────────────────────── */
+.ws-pick__foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-top: var(--ws-space-stack);
+}
+
+.ws-pick__price {
+  display: flex;
+  align-items: baseline;
+}
+
+.ws-pick__usd {
+  margin-left: var(--ws-space-hair);
+  font-size: var(--ws-f-caption);
+  color: var(--ws-ink-mute);
+}
+
+.ws-pick__tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ws-pick__tags .ws-tag + .ws-tag {
+  margin-left: var(--ws-space-hair);
+}

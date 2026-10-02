@@ -1,0 +1,11 @@
+<!--
+  区块标题：英文小标（kicker）+ 中文衬线主标 + 右侧「全部」。
+  @see ./index.js 文件头（为什么 kicker 是独立属性、为什么 more 不带跳转）
+-->
+<view class="ws-section-head">
+  <view class="ws-section-head__left">
+    <text wx:if="{{kicker}}" class="ws-section-kicker">{{kicker}}</text>
+    <text wx:if="{{title}}" class="ws-section-title">{{title}}</text>
+  </view>
+  <text wx:if="{{more}}" class="ws-section-more">{{more}}</text>
+</view>

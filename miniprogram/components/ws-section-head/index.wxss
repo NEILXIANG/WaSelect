@@ -1,0 +1,21 @@
+/**
+ * 区块标题组件样式（S4 迁入）。
+ *
+ * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
+ * 硬编码色值 / 非 0 尺寸字面量直接红）。
+ *
+ * @why `align-items: flex-end` 而不是 `baseline`：kicker 是全大写小字 + 宽字距，
+ *      用 baseline 对齐时右侧「全部」会和**kicker**对齐而不是和主标对齐，
+ *      看起来像"全部"掉了下来。与主标底部对齐才是"这一行的两端"。
+ */
+.ws-section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: var(--ws-space-card);
+}
+
+.ws-section-head__left {
+  display: flex;
+  flex-direction: column;
+}

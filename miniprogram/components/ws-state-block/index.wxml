@@ -1,0 +1,33 @@
+<!--
+  通用异常态：**三段式**——发生什么 / 为什么 / 下一步怎么办。
+  @see ./index.js 文件头（三段为什么缺一不可；为什么只有五种 kind）
+-->
+<view class="ws-state {{compact ? 'ws-state--compact' : ''}}">
+  <!-- 第一段：符号（纯 CSS 画，不用图片——异常态最怕图片也加载不出来） -->
+  <view class="ws-state__mark ws-state__mark--{{kind}}">
+    <view wx:if="{{kind === 'loading'}}" class="ws-state__dots">
+      <view class="ws-state__dot" />
+      <view class="ws-state__dot" />
+      <view class="ws-state__dot" />
+    </view>
+    <view wx:elif="{{kind === 'empty'}}" class="ws-state__glyph ws-state__glyph--empty" />
+    <view wx:elif="{{kind === 'offline'}}" class="ws-state__glyph ws-state__glyph--offline" />
+    <view wx:elif="{{kind === 'gone'}}" class="ws-state__glyph ws-state__glyph--gone" />
+    <view wx:elif="{{kind === 'fail'}}" class="ws-state__glyph ws-state__glyph--fail" />
+  </view>
+
+  <text class="ws-state__title">{{title}}</text>
+
+  <!-- 第二段：为什么 -->
+  <text wx:if="{{reason}}" class="ws-state__reason">{{reason}}</text>
+
+  <!-- 第三段：下一步怎么办（至多两个动作，主次分明） -->
+  <view wx:if="{{actionText}}" class="ws-state__actions">
+    <!-- ⚠️ 走 ws-button 而不是原生 button：连点防线只有一份（@see index.js @limitation 一） -->
+    <ws-button class="ws-state__action" text="{{actionText}}" type="default" bindtap="onAction" />
+    <!-- ⚠️ 用 view 不是 text：hover-class 对 text 不生效（@see index.js @limitation 二） -->
+    <view wx:if="{{altText}}" class="ws-state__alt" hover-class="ws-press" bindtap="onAlt">
+      {{altText}}
+    </view>
+  </view>
+</view>

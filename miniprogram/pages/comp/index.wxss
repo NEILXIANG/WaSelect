@@ -8,7 +8,21 @@
  *              @see components/ws-button/index.wxss）；换到别的页面想去掉，改这里即可。
  */
 ws-price,
-ws-button {
+ws-button,
+ws-section-head,
+ws-state-block,
+ws-field,
+ws-pick-card {
   display: block;
   margin-top: var(--ws-space-sm);
+}
+
+/* 字段里的输入框：field 只管容器，控件长什么样由本页给（真实表单页同理） */
+.ws-field input {
+  padding: var(--ws-space-inline) var(--ws-space-stack);
+  border: var(--ws-border-width) solid var(--ws-line);
+  border-radius: var(--ws-radius-sm);
+  background: var(--ws-surface-sunk);
+  color: var(--ws-ink);
+  font-size: var(--ws-f-base);
 }

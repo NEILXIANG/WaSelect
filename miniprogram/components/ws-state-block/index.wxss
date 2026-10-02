@@ -1,0 +1,186 @@
+/**
+ * 异常态组件样式（S4 迁入）。
+ *
+ * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
+ * 硬编码色值 / 尺寸字面量直接红）。
+ *
+ * @why 符号区统一 **120rpx 见方**（`--ws-mark`）：五种状态的图形大小不同
+ *      （方框 72rpx、横线 84rpx×2rpx、圆 72rpx），不给一个统一外框的话，
+ *      "空态"看上去会比"断网"重一倍——于是同一个 App 里的不同异常态
+ *      给人的严重程度不同，而那不是我们想表达的。
+ *
+ * @limitation 本组件依赖 `styleIsolation: 'apply-shared'`（见 index.js）：
+ *             小程序自定义组件默认**读不到 app.wxss 的类**，而这里用了 `.ws-press`。
+ */
+
+.ws-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--ws-space-section) var(--ws-space-gutter);
+  text-align: center;
+}
+
+.ws-state--compact {
+  padding: var(--ws-space-card) var(--ws-space-gutter);
+}
+
+/* ── 符号区 ─────────────────────────────────────────────────── */
+.ws-state__mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ws-mark);
+  height: var(--ws-mark);
+  margin-bottom: var(--ws-space-card);
+}
+
+/* 加载中：三点，不转圈 —— 转圈在杂志语境里太"系统" */
+.ws-state__dots {
+  display: flex;
+  align-items: center;
+}
+
+.ws-state__dot {
+  width: var(--ws-mark-dot);
+  height: var(--ws-mark-dot);
+  margin: 0 var(--ws-space-hair);
+  border-radius: 50%;
+  background: var(--ws-ink-faint);
+  animation: ws-dot 1.2s var(--ws-ease) infinite;
+}
+
+.ws-state__dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.ws-state__dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes ws-dot {
+  0%,
+  100% {
+    opacity: 0.28;
+    transform: scale(0.86);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 空：一个开口的方框（"这里本来会有东西"） */
+.ws-state__glyph {
+  border-color: var(--ws-line-strong);
+  border-style: solid;
+  border-width: 0;
+}
+
+.ws-state__glyph--empty {
+  width: var(--ws-mark-box);
+  height: var(--ws-mark-box);
+  border-width: var(--ws-hair-thick);
+  border-radius: var(--ws-radius-sm);
+  background: var(--ws-surface-sunk);
+}
+
+/* 断网：一条被截断的横线 */
+.ws-state__glyph--offline {
+  width: var(--ws-mark-line);
+  height: var(--ws-hair-thick);
+  background: var(--ws-line-strong);
+  position: relative;
+}
+
+/* 两端各半个断开的环：位置是相对"线"的，用 calc 取负的间距档位，
+   而不是再写两个 -14rpx / -6rpx 的字面量 */
+.ws-state__glyph--offline::before,
+.ws-state__glyph--offline::after {
+  content: '';
+  position: absolute;
+  top: calc(-1 * var(--ws-space-inline));
+  width: calc(var(--ws-mark-dot) * 2.5);
+  height: calc(var(--ws-mark-dot) * 2.5);
+  border: var(--ws-hair-thick) solid var(--ws-line-strong);
+  border-radius: 50%;
+  border-bottom-color: transparent;
+  border-right-color: transparent;
+}
+
+.ws-state__glyph--offline::before {
+  left: calc(-1 * var(--ws-space-tight));
+  transform: rotate(-45deg);
+}
+
+.ws-state__glyph--offline::after {
+  right: calc(-1 * var(--ws-space-tight));
+  transform: rotate(135deg);
+}
+
+/* 下架 / 失效：一条斜杠划掉的方框 */
+.ws-state__glyph--gone {
+  width: var(--ws-mark-box);
+  height: var(--ws-mark-box);
+  border-width: var(--ws-hair-thick);
+  border-radius: var(--ws-radius-sm);
+  background: var(--ws-surface-sunk);
+  position: relative;
+}
+
+.ws-state__glyph--gone::after {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--ws-space-tight));
+  top: 50%;
+  width: var(--ws-mark-line);
+  height: var(--ws-hair-thick);
+  background: var(--ws-line-strong);
+  transform: rotate(-45deg);
+}
+
+/* 失败：一个未闭合的圆（"这件事没走完"），不用感叹号 */
+.ws-state__glyph--fail {
+  width: var(--ws-mark-box);
+  height: var(--ws-mark-box);
+  border-width: var(--ws-hair-thick);
+  border-radius: 50%;
+  border-left-color: transparent;
+  transform: rotate(-30deg);
+}
+
+/* ── 三段文本 ───────────────────────────────────────────────── */
+.ws-state__title {
+  font-family: var(--ws-font-serif);
+  font-size: var(--ws-f-md);
+  line-height: var(--ws-lh-snug);
+  color: var(--ws-ink);
+}
+
+.ws-state__reason {
+  margin-top: var(--ws-space-inline);
+  /* 最大行宽：居中文本超过这个宽度就会串行（--ws-measure，与正文同一条排版规则） */
+  max-width: var(--ws-measure);
+  font-size: var(--ws-f-sm);
+  line-height: var(--ws-lh-body);
+  color: var(--ws-ink-mute);
+}
+
+.ws-state__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  margin-top: var(--ws-space-card);
+}
+
+.ws-state__action {
+  min-width: var(--ws-btn-min);
+}
+
+.ws-state__alt {
+  margin-top: var(--ws-space-inline);
+  padding: var(--ws-space-hair) var(--ws-space-inline);
+  font-size: var(--ws-f-sm);
+  color: var(--ws-ink-mute);
+  text-decoration: underline;
+}

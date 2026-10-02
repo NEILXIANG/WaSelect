@@ -47,4 +47,62 @@
       <text class="value">{{taps}}</text>
     </view>
   </view>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       S4 迁入的四个组件（2026-10-02）
+       ══════════════════════════════════════════════════════════════════ -->
+
+  <view class="card">
+    <text class="label">ws-section-head · 三种形态（kicker 有无 / more 有无）</text>
+    <ws-section-head kicker="Address Book" title="收货地址" />
+    <ws-section-head title="只有主标（没有栏目小标）" />
+    <ws-section-head kicker="Curated" title="编辑精选" more="查看全部" />
+  </view>
+
+  <view class="card">
+    <text class="label">ws-state-block · 五种 kind（符号必须都画得出来）</text>
+    <ws-state-block kind="loading" title="正在加载" />
+    <ws-state-block kind="empty" title="还没有收货地址" reason="添加地址后，下次结算可以直接选它" />
+    <ws-state-block kind="offline" title="网络连接不可用" reason="请检查网络后重试" />
+    <ws-state-block kind="gone" title="这件商品已下架" reason="它可能已经售完，或正在调整上架信息" />
+    <ws-state-block
+      kind="fail"
+      title="加载失败"
+      reason="已扣款的单不会受影响，重试不会重复下单"
+      actionText="重试"
+      altText="返回首页"
+    />
+  </view>
+
+  <view class="card">
+    <text class="label">ws-field · 三个字段（最后一条不该有分隔线）</text>
+    <ws-field label="收件人"><input placeholder="Ken Tanaka" /></ws-field>
+    <ws-field label="电话"><input placeholder="+14155550123" /></ws-field>
+    <ws-field label="城市"><input placeholder="San Francisco" /></ws-field>
+  </view>
+
+  <view class="card">
+    <text class="label">ws-pick-card · 完整形态（有 why / 有 maker / 有标签 / 低库存）</text>
+    <ws-pick-card
+      maker="岩手 · 南部铁器 伝統工芸士"
+      name="南部铁器 铁壶 0.6L"
+      why="铸铁壶烧水会溶出二价铁，泡老茶时水温掉得慢；但内壁有氧化膜、不能干烧——这一条比「能补铁」重要得多。"
+      priceJpy="{{16000}}"
+      usdText="约 $104.00"
+      stock="{{3}}"
+      tags="{{['产地直送', '终身可用']}}"
+    />
+  </view>
+
+  <view class="card">
+    <text class="label">ws-pick-card · 降级形态（**没有 why** —— 不该渲染 why 块，也不该报错）</text>
+    <ws-pick-card
+      maker="無印良品 · 大阪"
+      name="无印良品 中性笔 0.5mm 5 支装"
+      priceJpy="{{550}}"
+      usdText="约 $3.60"
+      stock="{{120}}"
+      tags="{{[]}}"
+    />
+  </view>
 </view>
