@@ -5,6 +5,7 @@
  *      一次直接的 SQL 或后台脚本就能绕过（D-43）。
  * @see migrations/001_init.sql；docs/地基搭建清单.md F7
  */
+import type { TransactionSql } from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertPostgresMajor,
@@ -548,5 +549,160 @@ describe('结构不变量：对新表自动生效', () => {
     expect(keys).toContain('payments.dispute_status');
     // 豁免名单里的键必须真的存在（防止名字写错后豁免永久失效）
     for (const key of Object.keys(STATUS_EXEMPT)) expect(keys).toContain(key);
+  });
+
+  /**
+   * 同上，**金额列**的版本（DB-07 / 023 迁移）。
+   *
+   * @why 与 status 那条同一个道理：023 补的是"今天已经在的"那批金额列，
+   *      但下一次有人建一张带 `*_jpy` 列的新表，同样的缺口会一模一样地再出现一次。
+   *      断言"不变量"而不是"这几列要有约束"，新表才会自动进入覆盖范围。
+   * @why 命名约定（`_jpy` / `_amount` 后缀）在本仓是**一致的**——
+   *      最小货币单位的整数金额一律这两个后缀，没有第三种写法。
+   *      这是一条**约定**而不是 PG 的性质，所以它靠这条用例维持：
+   *      谁要是加了个叫 `money` 的列，这条不会红——那条缝由 review 兜，
+   *      与"列名匹配规则"本身的局限同类（已在下面用 `expect(keys).toContain(...)` 钉住规则没失效）。
+   *
+   * @limitation 只判"**有没有**覆盖这一列的 CHECK"，**不判约束写的是不是 >= 0**：
+   *              读 CHECK 表达式的语义需要解析 SQL，成本远高于收益——
+   *              漏约束是主要失败模式（今天就是它），写错方向是次要的。
+   * @limitation 汇率列 `fx_rates.rate` / `raw_rate` 不在这个正则里（`rate` 没有后缀），
+   *              由 023 单独加的 `fx_rates_*_positive` 钉住；这里不硬凑一个更宽的正则——
+   *              那会把 `duty_rates.rate`（比率，合法区间 [0,1)，语义完全不同）也卷进来。
+   */
+  const MONEY_EXEMPT: Readonly<Record<string, string>> = {
+    'payments.fee_jpy':
+      '至今没有任何写入方（全仓只读）；给一个没人写的列定域等于"顺手编一套取值"，口径定了之后会误拒合法数据（同 002 @limitation 一）',
+    'payments.settled_jpy':
+      '语义是净结算（收款 − 手续费），手续费大于收款时**可以为负**——那不是错误，而是"这一笔亏了"。定死 >= 0 会把这个真实形态变成一条永远写不进去的约束',
+  };
+
+  it('任何金额列（_jpy / _amount）都有符号约束（或在豁免名单里并写明原因）', async () => {
+    const cols = await db`
+      select c.relname as tbl, a.attname as col, a.attnum as num, c.oid::int as rel
+      from pg_attribute a
+      join pg_class c on c.oid = a.attrelid
+      where c.relnamespace = 'public'::regnamespace
+        and c.relkind in ('r', 'p')
+        and a.attnum > 0 and not a.attisdropped
+        and a.attname ~ '(_jpy|_amount)$'
+    `;
+    const checks = await db`
+      select con.conrelid::int as rel, con.conkey as keys
+      from pg_constraint con
+      where con.contype = 'c' and con.connamespace = 'public'::regnamespace
+    `;
+    const covered = new Set<string>();
+    for (const c of checks) {
+      for (const k of (c.keys as number[] | null) ?? []) covered.add(`${String(c.rel)}:${k}`);
+    }
+    const keys = cols.map((r) => keyOf(r.tbl, r.col));
+    const missing = cols
+      .filter((r) => !covered.has(`${String(r.rel)}:${String(r.num)}`))
+      .map((r) => keyOf(r.tbl, r.col))
+      .filter((key) => MONEY_EXEMPT[key] === undefined);
+    expect(
+      missing,
+      `以下金额列没有任何 CHECK 兜底（负号一旦写进去不会报错）：${missing.join(' / ')}`,
+    ).toEqual([]);
+    // 规则没失效：已知的两条必须被扫到（否则正则写错时会"零命中 = 全绿"）
+    expect(keys).toContain('orders.total_jpy');
+    expect(keys).toContain('payments.charge_amount');
+    // 豁免名单里的键必须真的存在（防止名字写错后豁免永久失效）
+    for (const key of Object.keys(MONEY_EXEMPT)) expect(keys).toContain(key);
+  });
+
+  /**
+   * 023 的约束**真的会拒绝**，而不只是"约束对象存在"（DB-07）。
+   *
+   * @why 上面两条不变量验的是"这一列有没有被 CHECK 覆盖"，属于**结构**；
+   *      "覆盖了"和"约束体写对了"是两件事——把 `>= 0` 写成 `>= -1000000` 同样满足结构检查。
+   *      这里补的是行为：真的往里写一次不合法的值，看 PG 拒不拒。
+   * @limitation 只挑每类一个代表（`link_type` / `category` / 运费档金额 / 汇率），
+   *              不是穷举全部 023 约束——穷举会让"加一条约束"变成"补一条用例"，
+   *              与"不变量自动覆盖"的初衷相冲。结构那层兜住"有没有"，这里兜住"写得对不对"。
+   * @limitation ⚠️ 每次试写都放在**必然回滚**的事务里：本仓踩过一次——
+   *              让"被测行为失败"来顺带触发 ROLLBACK，等于"行为失败的那天才有清理"，
+   *              而那天恰恰是最不需要清理的一天（§2 第 14 条）。所以一律显式抛哨兵。
+   */
+  describe('023 的约束真的会拒绝不合法的值', () => {
+    const ROLLBACK = '__rollback__';
+
+    /** 在必然回滚的事务里试写一次；返回"被拒的错误对象"，没被拒则返回 undefined。 */
+    async function tryWrite(work: (tx: TransactionSql<{ int8: number }>) => Promise<unknown>) {
+      let seen: unknown;
+      const outcome = await db
+        .begin(async (tx) => {
+          seen = await work(tx).then(
+            () => undefined,
+            (e: unknown) => e,
+          );
+          throw new Error(ROLLBACK);
+        })
+        .catch((e: unknown) => e);
+      expect(String((outcome as Error).message), '试写必须被哨兵带进回滚').toContain(ROLLBACK);
+      return seen;
+    }
+
+    /**
+     * ⚠️ 必须**可选链**：写成 `(e as {code?: string}).code` 的话，
+     *    "约束被删了、写入没被拒"时 `e` 是 undefined，还没走到断言就先抛
+     *    `TypeError: Cannot read properties of undefined`——红灯是对的，
+     *    但**看不出是哪一条约束没了**（注入实验里就是这个表现）。
+     *    返回 `'undefined'` 字符串，让后面那条带说明的断言来报。
+     */
+    const codeOf = (e: unknown): string => String((e as { code?: string } | undefined)?.code);
+
+    it('🔴 banner 的 link_type 出枚举就被拒（否则配了跳转但点了没反应，查配置查不出）', async () => {
+      const e = await tryWrite(
+        (tx) => tx`
+          insert into banners (id, image_key, link_type)
+          values ('probe-banner', 'probe-key', 'url')
+        `,
+      );
+      expect(codeOf(e), 'link_type=url 应被 banners_link_type_domain 拒').toBe('23514');
+      expect(String((e as Error).message)).toContain('banners_link_type_domain');
+    });
+
+    it('🔴 商品的 category 出枚举就被拒（否则 tab 上没有它，只能靠搜索找到）', async () => {
+      const e = await tryWrite(
+        (tx) => tx`
+          insert into products (id, title, category, price_jpy, weight_g, origin_country)
+          values ('probe-product', 'probe', 'books', 100, 100, 'JP')
+        `,
+      );
+      expect(codeOf(e), 'category=books 应被 products_category_domain 拒').toBe('23514');
+      expect(String((e as Error).message)).toContain('products_category_domain');
+    });
+
+    it('🔴 运费档：price_jpy 为负被拒；为 0 放行（免运费档是合法配置）', async () => {
+      const negative = await tryWrite(
+        (tx) => tx`
+          insert into shipping_rates (carrier, max_weight_g, price_jpy)
+          values ('probe-carrier', 1000, -1)
+        `,
+      );
+      expect(codeOf(negative), '负运费应被 shipping_rates_price_jpy_nonneg 拒').toBe('23514');
+
+      // @why 反向也要钉：只测"负的被拒"的话，把 `>= 0` 写成 `> 0` 照样是绿的，
+      //      而那会让"免运费档"这一合法业务形态存不进去。
+      const zero = await tryWrite(
+        (tx) => tx`
+          insert into shipping_rates (carrier, max_weight_g, price_jpy)
+          values ('probe-carrier', 1000, 0)
+        `,
+      );
+      expect(zero, 'price_jpy = 0（免运费档）必须放行').toBeUndefined();
+    });
+
+    it('🔴 运费档：max_weight_g = 0 被拒（0g 的档永远取不到）', async () => {
+      const e = await tryWrite(
+        (tx) => tx`
+          insert into shipping_rates (carrier, max_weight_g, price_jpy)
+          values ('probe-carrier', 0, 500)
+        `,
+      );
+      expect(codeOf(e), 'max_weight_g = 0 应被 positive 约束拒').toBe('23514');
+    });
   });
 });
