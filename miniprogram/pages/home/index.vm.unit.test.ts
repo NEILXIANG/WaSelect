@@ -23,8 +23,10 @@ import { describe, expect, it } from 'vitest';
 import {
   CATEGORIES,
   PAGE_SIZE,
+  bannerSlides,
   cartLabel,
   categoryTabs,
+  intentForBanner,
   hasMore,
   intentForProduct,
   listQuery,
@@ -67,13 +69,14 @@ const ITEMS = [
 
 describe('categoryTabs（分类 tab）', () => {
   it('未选分类时"全部"选中，四个分类都不选中', () => {
-    const tabs = categoryTabs('');
+    // 第一个参数为空 = "服务端还没下发"（首屏 / /home 未回来）→ 本地常量兜底
+    const tabs = categoryTabs([], '');
     expect(tabs.map((t) => t.label)).toEqual(['全部', '美妆护肤', '生活百货', '厨房餐具', '食品']);
     expect(tabs.filter((t) => t.active).map((t) => t.key)).toEqual(['']);
   });
 
   it('选中 kitchen 时只有它 active（其余全 false，不会出现两个高亮）', () => {
-    const tabs = categoryTabs('kitchen');
+    const tabs = categoryTabs([], 'kitchen');
     expect(tabs.filter((t) => t.active)).toEqual([
       { key: 'kitchen', label: '厨房餐具', active: true },
     ]);
@@ -82,8 +85,28 @@ describe('categoryTabs（分类 tab）', () => {
   it('非字符串 / 未传 → 与"全部"同一形态（不是抛错，也不是全部不高亮）', () => {
     // @why 分类来自 wxml 的 `data-key`，取不到时是 undefined——那一跳若没有 tab 高亮，
     //      用户会以为"点了个寂寞"，而页面上没有任何报错。
-    expect(categoryTabs(undefined).find((t) => t.active)?.key).toBe('');
-    expect(categoryTabs(null).find((t) => t.active)?.key).toBe('');
+    expect(categoryTabs([], undefined).find((t) => t.active)?.key).toBe('');
+    expect(categoryTabs([], null).find((t) => t.active)?.key).toBe('');
+  });
+
+  it('服务端下发了分类清单 → **以它为准**（否则 /home 的 categories 是没人消费的死数据）', () => {
+    const tabs = categoryTabs(['food', 'beauty'], '');
+    expect(tabs.map((t) => t.key)).toEqual(['', 'food', 'beauty']);
+    expect(tabs.map((t) => t.label)).toEqual(['全部', '食品', '美妆护肤']);
+  });
+
+  it('服务端下发了一个前端不认识的新分类 → 展示名回落到 key，不让它从分类栏消失', () => {
+    // @why @limitation 一：消失的话运营会以为"配了没生效"，而它只是缺一个展示名。
+    const tabs = categoryTabs(['kitchenware'], '');
+    expect(tabs).toContainEqual({ key: 'kitchenware', label: 'kitchenware', active: false });
+  });
+
+  it('服务端给了空数组 / 非数组 → 回落到本地 CATEGORIES（首屏不等网络，分类栏不抖）', () => {
+    // @why 等 /home 回来再渲染的话，首屏会先只显示「全部」再补出四个分类——
+    //      分类栏往上顶一下是用户能看见的抖动，而它们是常量，没理由等一次往返。
+    expect(categoryTabs([], '').map((t) => t.key)).toEqual(['', ...CATEGORIES]);
+    expect(categoryTabs(undefined, '').map((t) => t.key)).toEqual(['', ...CATEGORIES]);
+    expect(categoryTabs('not-an-array', '').map((t) => t.key)).toEqual(['', ...CATEGORIES]);
   });
 });
 
@@ -262,6 +285,123 @@ describe('intentForProduct（导航意图）', () => {
     expect(intentForProduct('')).toBeNull();
     expect(intentForProduct(undefined)).toBeNull();
     expect(intentForProduct(42)).toBeNull();
+  });
+});
+
+describe('bannerSlides（首页轮播）', () => {
+  const BANNERS = [
+    {
+      id: 'b-1',
+      image_key: 'banners/a.png',
+      link_type: 'product',
+      link_id: 'p-1',
+      sort: 1,
+      active: true,
+      image: 'https://img.example.com/banners/a.png',
+    },
+    {
+      id: 'b-2',
+      image_key: 'banners/b.png',
+      link_type: 'category',
+      link_id: 'kitchen',
+      sort: 2,
+      active: true,
+      image: 'https://img.example.com/banners/b.png',
+    },
+  ];
+
+  it('正常：只取 id 与 image（渲染不需要 image_key / link_*）', () => {
+    expect(bannerSlides(BANNERS)).toEqual([
+      { id: 'b-1', image: 'https://img.example.com/banners/a.png' },
+      { id: 'b-2', image: 'https://img.example.com/banners/b.png' },
+    ]);
+  });
+
+  it('⚠️ 缺 `image` 的条目**整条不展示**，且**不回落占位图**', () => {
+    // @why 这是全站唯一不回落 `PLACEHOLDER_IMAGE` 的图位：占位图说的是"商品没图"，
+    //      而 banner 缺 image 说的是"服务端没配 IMG_BASE_URL"——用占位图顶上，
+    //      就把一次配置故障洗成了"这张 banner 没图"，排查方向会跑偏到图床。
+    const out = bannerSlides([
+      BANNERS[0],
+      { ...BANNERS[1], image: undefined }, // IMG_BASE_URL 未配置 → 服务端整键省略
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.id).toBe('b-1');
+    expect(out[0]?.image).not.toBe(PLACEHOLDER_IMAGE);
+  });
+
+  it('🔴 缺 `image` 时若改成回落占位图 → 本条必须红（钉住上一条的取舍）', () => {
+    // @why 没有这条反向断言，"不回落"只是一个注释里的承诺：
+    //      有人为了"不让轮播空着"给它补上占位图，那条（上面的）用例仍然是绿的——
+    //      因为补完之后条目数变多、id 断言照样通过。
+    const noImage = [{ id: 'b-1', image_key: 'banners/a.png', link_type: 'none' }];
+    expect(bannerSlides(noImage)).toEqual([]);
+  });
+
+  it('id 缺失的也跳过（wx:key 用 id，缺 id 会让节点复用错乱）', () => {
+    expect(bannerSlides([{ image: 'https://img.example.com/a.png', link_type: 'none' }])).toEqual(
+      [],
+    );
+  });
+
+  it('非数组 / null / 脏条目 → []（不抛，轮播段只是不渲染）', () => {
+    for (const v of [undefined, null, 'x', 42, {}]) {
+      expect(bannerSlides(v)).toEqual([]);
+    }
+    expect(bannerSlides([null, undefined, 'x', 42])).toEqual([]);
+  });
+
+  it('⚠️ **不**在前端判 active / 起止时间：那是服务端按自己时钟做过的判定', () => {
+    // @why 前端再判一次就得用本机时钟——时钟偏的用户会看到"该下架的还在 / 该上线的没来"，
+    //      且表现是随机的。这条钉住"vm 不重复判定"：将来有人加了过滤，本条立刻红。
+    const out = bannerSlides([
+      { id: 'b-off', image: 'https://img.example.com/x.png', active: false },
+      {
+        id: 'b-expired',
+        image: 'https://img.example.com/y.png',
+        active: true,
+        starts_at: '2020-01-01T00:00:00Z',
+        ends_at: '2020-01-02T00:00:00Z',
+      },
+    ]);
+    expect(out.map((s) => s.id)).toEqual(['b-off', 'b-expired']);
+  });
+});
+
+describe('intentForBanner（轮播跳转）', () => {
+  const CATS = ['beauty', 'daily', 'kitchen', 'food'];
+
+  it('link_type=product → 去详情', () => {
+    expect(intentForBanner({ link_type: 'product', link_id: 'p-1' }, CATS)).toEqual({
+      go: 'detail',
+      id: 'p-1',
+    });
+  });
+
+  it('link_type=category 且该分类在清单里 → 切分类', () => {
+    expect(intentForBanner({ link_type: 'category', link_id: 'kitchen' }, CATS)).toEqual({
+      go: 'category',
+      key: 'kitchen',
+    });
+  });
+
+  it('⚠️ link_type=category 但分类**不在**清单里 → null（跳过去会拿到 40001）', () => {
+    // @why 直接拿 link_id 去打 /products?category= 的话，不合法的值会返回 40001，
+    //      页面上是"切了分类、列表空了、还有一行错误"——用户被带进了一个错误状态。
+    expect(intentForBanner({ link_type: 'category', link_id: 'nosuch' }, CATS)).toBeNull();
+    // 服务端没下发分类清单（/home 还没回来 / 失败）时同样不跳
+    expect(intentForBanner({ link_type: 'category', link_id: 'kitchen' }, [])).toBeNull();
+  });
+
+  it('link_type=none / 认不出的类型 / 缺 link_id → null（点了不动，不跳空页）', () => {
+    expect(intentForBanner({ link_type: 'none', link_id: 'p-1' }, CATS)).toBeNull();
+    expect(intentForBanner({ link_id: 'p-1' }, CATS)).toBeNull();
+    expect(intentForBanner({ link_type: 'product' }, CATS)).toBeNull();
+    expect(intentForBanner({ link_type: 'product', link_id: '   ' }, CATS)).toBeNull();
+    expect(intentForBanner(undefined, CATS)).toBeNull();
+    expect(intentForBanner(null, CATS)).toBeNull();
+    // 选了跳转却没填目标（管理端会拦，但前端这道是纵深防御）
+    expect(intentForBanner({ link_type: 'unknown_type', link_id: 'x' }, CATS)).toBeNull();
   });
 });
 

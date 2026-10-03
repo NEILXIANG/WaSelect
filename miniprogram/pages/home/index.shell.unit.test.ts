@@ -23,6 +23,8 @@ interface Call {
 }
 
 let calls: Call[];
+/** `GET /home` 的请求（轮播 + 分类）。**单独记录**，不进 `calls`。 */
+let homeCalls: Array<{ d: ReturnType<typeof deferred<unknown>> }>;
 let page: LoadedPage;
 
 /** 一页商品：id 带上分类与页码，列表里混了别的分类一眼能看出来。 */
@@ -51,12 +53,22 @@ const settle = async (): Promise<void> => {
 
 beforeEach(async () => {
   calls = [];
+  homeCalls = [];
   page = await loadPage(new URL('./index.js', import.meta.url).href, {
     globalData: {
       apiBase: 'http://api.test',
       cart: { count: () => 0 },
-      api: (req: { data: Call['data'] }) => {
+      api: (req: { url?: string; data: Call['data'] }) => {
         const d = deferred<unknown>();
+        // ⚠️ 按 url 分流：进屏时 `/home` 与商品流是**并发的两个链路**，
+        //    而下面"响应先后"那组用例全靠 `calls[n]` 的下标编排先后——
+        //    把 /home 也塞进 `calls`，所有下标与 `toHaveLength` 会整体错位，
+        //    表现是"列表突然是空的"，而真机上首页完全正常（典型的假红）。
+        //    分流之后 `calls` 的含义也变清楚了：**它就是商品流请求**。
+        if (String(req.url ?? '').includes('/api/v1/home')) {
+          homeCalls.push({ d });
+          return d.promise;
+        }
         calls.push({ data: req.data, d });
         return d.promise;
       },
@@ -181,6 +193,102 @@ describe('首页薄壳：响应先后（R-04 / AJ-226）', () => {
     expect(page.data['loadingMore']).toBe(false);
     call('onReachBottom');
     expect(calls).toHaveLength(3);
+  });
+});
+
+/** 进屏时发起了 `/home`（轮播 + 分类）与商品流**两个**请求。 */
+const home = (banners: unknown[], categories: string[]): void => {
+  homeCalls[0]!.d.resolve({ banners, categories });
+};
+
+describe('首页薄壳：`GET /home`（轮播与分类，D-51）', () => {
+  const BANNER = {
+    id: 'b-1',
+    image: 'https://img.example.com/banners/a.png',
+    link_type: 'category',
+    link_id: 'food',
+  };
+
+  it('进屏就发 `/home`，且与商品流**并发**（不等轮播回来才拉列表）', async () => {
+    call('onLoad');
+    expect(homeCalls).toHaveLength(1);
+    // 商品流已经在途了 —— 不等 /home
+    expect(calls).toHaveLength(1);
+    expect(page.data['loading']).toBe(true);
+  });
+
+  it('🔴 `/home` 失败 → 商品流照常落地，**不给整页错误**（装饰层的失败不放大成整页失败）', async () => {
+    call('onLoad');
+    homeCalls[0]!.d.reject(new Error('home down'));
+    calls[0]!.d.resolve(listOf('all', 1));
+    await settle();
+    expect(ids()).toHaveLength(20);
+    expect(page.data['error']).toBe('');
+    expect(page.data['slides']).toEqual([]);
+    // 分类 tab 用本地常量兜底（首屏不等网络，分类栏不抖）
+    expect((page.data['tabs'] as Array<{ key: string }>).map((t) => t.key)).toEqual([
+      '',
+      'beauty',
+      'daily',
+      'kitchen',
+      'food',
+    ]);
+  });
+
+  it('`/home` 成功 → 轮播落地，且分类 tab **改用服务端下发的清单**', async () => {
+    call('onLoad');
+    calls[0]!.d.resolve(listOf('all', 1));
+    home([BANNER], ['food', 'beauty']);
+    await settle();
+    expect(page.data['slides']).toEqual([
+      { id: 'b-1', image: 'https://img.example.com/banners/a.png' },
+    ]);
+    expect((page.data['tabs'] as Array<{ key: string }>).map((t) => t.key)).toEqual([
+      '',
+      'food',
+      'beauty',
+    ]);
+  });
+
+  it('🔴 `/home` 迟到（用户已切过分类才回来）→ tab 高亮**不跳回"全部"**', async () => {
+    // @why 页面的 bug 形态是"我刚点了美妆，它自己跳回全部了"：
+    //      loadHome 里若用空串重算 tab，就会覆盖掉用户已经做过的选择。
+    call('onLoad');
+    calls[0]!.d.resolve(listOf('all', 1));
+    await settle();
+    tapCategory('food');
+    calls[1]!.d.resolve(listOf('food', 1));
+    await settle();
+
+    home([BANNER], ['food', 'beauty']);
+    await settle();
+    const active = (page.data['tabs'] as Array<{ key: string; active: boolean }>).filter(
+      (t) => t.active,
+    );
+    expect(active).toEqual([{ key: 'food', label: '食品', active: true }]);
+  });
+
+  it('点轮播（link_type=category）→ 切到该分类，并**清掉当前搜索词**', async () => {
+    call('onLoad');
+    calls[0]!.d.resolve(listOf('all', 1));
+    home([BANNER], ['food', 'beauty']);
+    await settle();
+    call('onSearchInput', { detail: { value: '抹茶' } });
+
+    call('onBannerTap', { currentTarget: { dataset: { index: 0 } } });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.data).toMatchObject({ page: 1, category: 'food' });
+    // 轮播说的是"去逛这个分类"，不是"在当前搜索结果里换分类"
+    expect(calls[1]!.data.keyword).toBeUndefined();
+    expect(page.data['keyword']).toBe('');
+  });
+
+  it('轮播里没有 image 的条目不进 slides（`IMG_BASE_URL` 未配置时不显示裂图）', async () => {
+    call('onLoad');
+    calls[0]!.d.resolve(listOf('all', 1));
+    home([{ id: 'b-1', link_type: 'none' }], ['food']); // 服务端整键省略 image
+    await settle();
+    expect(page.data['slides']).toEqual([]);
   });
 });
 

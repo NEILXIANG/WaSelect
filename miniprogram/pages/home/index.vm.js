@@ -14,6 +14,10 @@
  * @limitation 一：**分类展示名落在前端这一处**（`CATEGORY_LABELS`）。
  *              后端 `GET /home` 的 `categories` 与 `GET /products` 的 `category` 都**只给 key**
  *              （契约现状，无 label 字段），所以展示名目前只能由前端持有。
+ *              ⚠️ `/home` 下发了一个前端不认识的新分类时，展示名**回落到 key 本身**
+ *              （`CATEGORY_LABELS[key] ?? key`）——宁可显示一串英文 key，
+ *              也不要让它从分类栏里**消失**：消失的话运营会以为"配了没生效"，
+ *              而实际上它只是缺一个展示名。
  *              @why 仍然集中在一处而不是写进 wxml：写进 wxml 就是四个 tab 各写一遍，
  *              "这个分类忘了译"不会有任何报错。后端给了 label 之后改这里一处即可。
  *              @tradeoff 与"UI 不写死"（约束五）的边界：这是**文案**，不是口径
@@ -68,17 +72,28 @@ function imageOf(image) {
 }
 
 /**
- * 分类 tab（`全部` + 四个分类）。
+ * 分类 tab（`全部` + 各分类）。
+ * @param {unknown} [categories] `GET /home` 下发的分类清单；空 / 非数组 → **回落到本地 `CATEGORIES`**。
+ *        @why 兜底而不是"等 `/home` 回来再渲染"：等的话首屏会先只显示一个「全部」、
+ *        再补出四个分类——分类栏**往上顶一下**是用户能看见的抖动，而分类是四个常量，
+ *        没有任何理由让它们等一次网络往返。
+ *        @why 但 `/home` 回来后**以它为准**：否则 `categories` 就是没人消费的死数据，
+ *        将来服务端加了第五个分类，前端会一直看不见（且不报错）。
  * @param {unknown} [active] 当前选中的分类 key；空 / 非字符串 = 未选（= 全部）。
  *        ⚠️ 类型是 `unknown` 而不是 `string`：它来自 wxml 的 `data-key`，取不到时是 `undefined`，
  *        类型上收紧成 string 会让"必须判空"这件事消失，而那正是要守的行为。
  * @returns {Array<{key: string, label: string, active: boolean}>}
  */
-export function categoryTabs(active) {
+export function categoryTabs(categories, active) {
   const cur = text(active);
+  const fromServer = Array.isArray(categories)
+    ? categories.filter((k) => typeof k === 'string' && k !== '')
+    : [];
+  // 服务端没给（首屏 / /home 失败）→ 本地常量兜底（@see 上一条 @why）
+  const keys = fromServer.length > 0 ? fromServer : CATEGORIES;
   return [
     { key: '', label: '全部', active: cur === '' },
-    ...CATEGORIES.map((key) => ({ key, label: CATEGORY_LABELS[key] ?? key, active: key === cur })),
+    ...keys.map((key) => ({ key, label: CATEGORY_LABELS[key] ?? key, active: key === cur })),
   ];
 }
 
@@ -167,6 +182,65 @@ export function mergeCards(existing, incoming, reset) {
  */
 export function intentForProduct(id) {
   return typeof id === 'string' && id !== '' ? { go: 'detail', id } : null;
+}
+
+/**
+ * `GET /home` 的 `banners` → 轮播视图数据。
+ * @param {unknown} banners 契约 `Banner[]`
+ * @returns {Array<{id: string, image: string}>}
+ *
+ * @why 没有 `image` 的条目**整条不展示**，且**不回落** `PLACEHOLDER_IMAGE`——
+ *      这是全站唯一不回落占位图的图位，理由是语义不同：
+ *      占位图说的是"这个商品没图"（@see utils/placeholder.js），
+ *      而 banner 缺 `image` 说的是"服务端没配 `IMG_BASE_URL`"（契约口径：未配置时整键省略）。
+ *      用占位图顶上，等于把一次**配置故障**洗成"这张 banner 没图"，
+ *      排查方向会直奔图床与图片本身，永远查不到 `.env`。
+ *      @see ../../../server/src/app/banner-view.ts @limitation 一（服务端的同一条口径）
+ * @why **不在这里判 `active` 与起止时间**：服务端 `/home` 已经按**自己的时钟**判过了
+ *      （契约：生效判定只在服务端做一次）。前端再判一次就得用**本机时钟**——
+ *      时钟偏的用户会看到"该下架的还在 / 该上线的没来"，而这种表现是**随机的**，
+ *      没人会往时钟方向查。与 `FxRate.is_current` 同一条口径。
+ * @why `id` 缺失也一并跳过：轮播的 `wx:key` 用 id，缺 id 会让列表在插入/删除时
+ *      复用错误的节点（表现为"图没换但指示器跳了"）。
+ */
+export function bannerSlides(banners) {
+  if (!Array.isArray(banners)) return [];
+  const out = [];
+  for (const raw of banners) {
+    const b = raw !== null && typeof raw === 'object' ? raw : {};
+    const image = typeof b.image === 'string' ? b.image.trim() : '';
+    const id = typeof b.id === 'string' || typeof b.id === 'number' ? String(b.id) : '';
+    if (image === '' || id === '') continue;
+    out.push({ id, image });
+  }
+  return out;
+}
+
+/**
+ * banner 的导航意图；不可跳 → null（点了没反应好过跳到一个空的详情页）。
+ * @param {unknown} banner 契约 `Banner`（`link_type` / `link_id`）
+ * @param {unknown} [categories] 当前已知的分类 key 清单（`GET /home` 下发的）
+ * @returns {{go: 'detail', id: string} | {go: 'category', key: string} | null}
+ *
+ * @why `link_type='category'` **只认已知分类**（在 `categories` 里才跳）：
+ *      直接拿 `link_id` 去打 `GET /products?category=` 的话，一个不合法的值会拿到 40001，
+ *      页面上是"切了分类、列表空了、还有一行错误"——用户被带进了一个错误状态。
+ *      不跳虽然也怪，但用户仍停在正常的首页。
+ *      @limitation 正解是**服务端在保存 banner 时就校验** `link_id` 是不是合法分类
+ *      （那是管理端表单里一条**有提示**的路径）；前端这道只是不把错误放大。
+ * @why `link_type='none'` / 认不出的类型 → null：banner 可以只做展示不跳转（契约默认值就是 none）。
+ */
+export function intentForBanner(banner, categories) {
+  const b = banner !== null && typeof banner === 'object' ? banner : {};
+  const type = typeof b.link_type === 'string' ? b.link_type : 'none';
+  const id = typeof b.link_id === 'string' ? b.link_id.trim() : '';
+  if (id === '') return null;
+  if (type === 'product') return { go: 'detail', id };
+  if (type === 'category') {
+    const known = Array.isArray(categories) ? categories.filter((k) => typeof k === 'string') : [];
+    return known.includes(id) ? { go: 'category', key: id } : null;
+  }
+  return null;
 }
 
 /**

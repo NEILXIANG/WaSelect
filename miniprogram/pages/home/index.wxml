@@ -1,5 +1,9 @@
 <!--
-  首页（I2，无 Banner 版）：分类 tab + 搜索 + 商品流 + 触底加载。
+  首页（I2）：分类 tab + 搜索 + 轮播 + 商品流 + 触底加载。
+
+  S5+（2026-10-02）：轮播接上了 `GET /home` 下发的**生效中** banner（D-51）。
+      此前首页刻意没有 Banner 段（后端 `/home` 未实现，接一个不存在的端点等于
+      "看起来能用、实际是坏的"）；现在服务端、管理端、轮播三段都就位，才把它接上来。
 
   S3（2026-10-02）：版式换成设计体系（`.ws-*` 基础类），**信息架构不动**。
   S4（2026-10-02）：列表换成 `ws-pick-card`（纵向编辑大卡），状态块/页头换成组件。
@@ -50,6 +54,31 @@
     <ws-button class="home__quick-btn" text="{{cartLabel}}" type="default" bindtap="onGoCart" />
     <ws-button class="home__quick-btn" text="我的" type="default" bindtap="onGoMine" />
   </view>
+
+  <!-- ── 轮播（D-51）：`GET /home` 下发的生效中 banner ──────────────────
+       @why 整段 `wx:if` 而不是留一个空壳：没有 banner 时（没配 / 都没生效 / 取不到）
+            留一块空白会被读成"图还没加载出来"，而空壳本身不提供任何信息。
+       @why **不在这里判** `active` 与起止时间：那是服务端按**自己的时钟**做过的判定
+            （契约：生效判定只在服务端做一次）。前端再判一次要用本机时钟——
+            时钟偏的用户会看到"该下架的还在 / 该上线的没来"，且表现是随机的。
+       @why 单张时不轮播、不显示指示点：只有一张图还在动，看起来像"页面在抖"。 -->
+  <swiper
+    wx:if="{{slides.length > 0}}"
+    class="home__swiper ws-gutter"
+    indicator-dots="{{slides.length > 1}}"
+    autoplay="{{slides.length > 1}}"
+    circular
+  >
+    <swiper-item
+      wx:for="{{slides}}"
+      wx:key="id"
+      data-index="{{index}}"
+      hover-class="ws-press"
+      bindtap="onBannerTap"
+    >
+      <image class="home__slide" src="{{item.image}}" mode="aspectFill" />
+    </swiper-item>
+  </swiper>
 
   <!-- 分类 tab：横向可滚（分类数超过一屏时不出界、不断行） -->
   <scroll-view class="tabs ws-gutter" scroll-x enable-flex>

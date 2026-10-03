@@ -31,8 +31,10 @@ import { errorMessage } from '../../utils/error-text.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import {
+  bannerSlides,
   cartLabel,
   categoryTabs,
+  intentForBanner,
   intentForProduct,
   listQuery,
   mergeCards,
@@ -69,6 +71,8 @@ Page({
   data: {
     /** 分类 tab（vm `categoryTabs` 的输出，含 active 标记）。 */
     tabs: [],
+    /** 首页轮播（vm `bannerSlides` 的输出）；空数组 = 整个轮播段不渲染。 */
+    slides: [],
     /** 商品卡（vm `productCards` 的输出）。 */
     cards: [],
     /** 搜索框内容（受控：只存值，触发请求在 `onSearch`）。 */
@@ -95,6 +99,22 @@ Page({
   loaded: 0,
   total: 0,
   category: '',
+  /**
+   * `GET /home` 下发的分类清单（不参与渲染，@see @limitation 二）。
+   * @why 供 `categoryTabs` 与 `intentForBanner` 共用：tab 以它为准，
+   *      banner 的"跳分类"也只认它里面的 key——两处共用同一份，才不会出现
+   *      "tab 上有这个分类、banner 点下去却不跳"。
+   */
+  homeCategories: [],
+  /**
+   * `GET /home` 的 **`banners` 原始数组**（不参与渲染）。
+   * @why 轮播渲染只需要 `{id, image}`（vm `bannerSlides` 的输出），但点击时要按
+   *      `link_type` / `link_id` 决定去哪——那两个字段**不在**渲染数据里。
+   *      存原始数组而不是"再从渲染数据反查"，是因为反查要靠 index 对齐，
+   *      而 `bannerSlides` 会**跳过**没有 image 的条目——index 一旦错位，
+   *      点第 2 张会跳到第 3 张的链接，且不报错。
+   */
+  banners: [],
   /** 本次浏览的 trace_id：进入 / 切分类 / 搜索各开一条新链，触底加载**沿用**同一条
    *  （同一轮浏览的分页是同一次用户操作，拆开会让服务端日志断成 N 截）。 */
   traceId: '',
@@ -117,8 +137,10 @@ Page({
   activeKeyword: '',
 
   onLoad() {
-    // tab 先渲染（本地常量，不需要等网络）——首屏至少有东西可点，而不是一整页白
-    this.setData({ tabs: categoryTabs('') });
+    // tab 先渲染（本地常量兜底，不需要等网络）——首屏至少有东西可点，而不是一整页白
+    this.setData({ tabs: categoryTabs(this.homeCategories, '') });
+    // 轮播与商品流**并发**拉取、互不等待（@see loadHome @why）
+    void this.loadHome();
     this.reload('');
   },
 
@@ -147,6 +169,67 @@ Page({
   /** 去「我的」（地址 / 法务的入口；订单已升为 tab，@see USER_PAGE 注释）。 */
   onGoMine() {
     wxApi.switchTab({ url: USER_PAGE });
+  },
+
+  /**
+   * 拉 `GET /home`（轮播 + 分类清单）。**只在进屏时拉一次**，切分类 / 搜索不重拉。
+   *
+   * @why 与商品流**并发且互不等待**：等 `/home` 回来再拉 `/products`，首屏就是两次串行往返；
+   *      而两块数据之间没有依赖（banner 不影响列表怎么取数）。
+   * @why 失败**静默**（轮播段不渲染、分类用本地常量兜底），不 setData error：
+   *      轮播是首页的**装饰层**，商品流才是正事——让一次 `/home` 失败把整页变成错误态，
+   *      是把装饰性内容的失败放大成整页失败。
+   *      ⚠️ 而且 `/home` 失败的原因（DB 挂了）大概率会让 `/products` 也失败，
+   *      那时商品流自己会报错，不需要轮播再报一次——两条错误叠在一起，
+   *      用户只看到"首页坏了"，反而更难判断坏在哪。
+   * @limitation 静默的代价：**运营侧看不见"轮播取不到"**——它与"今天没配 banner"
+   *      在页面上是同一个样子。这份可见性由**服务端**承担（`/home` 失败是 5xx，
+   *      走服务端日志与告警），不靠小程序；服务端因此也刻意**不**把故障降级成空数组
+   *      （@see server/src/app/home-routes.ts @limitation 一）。两端分工：
+   *      服务端不瞒故障，前端不放大故障。
+   */
+  async loadHome() {
+    try {
+      const res = await app.globalData.api({
+        url: `${app.globalData.apiBase}/api/v1/home`,
+        traceId: newTraceId(),
+      });
+      const categories = Array.isArray(res?.categories) ? res.categories : [];
+      this.homeCategories = categories;
+      this.banners = Array.isArray(res?.banners) ? res.banners : [];
+      this.setData({
+        slides: bannerSlides(res?.banners),
+        // ⚠️ 用**当前**分类重算 tab：`/home` 可能在用户已经切过分类之后才回来，
+        //    这里传空会让高亮跳回「全部」（表现为"我刚点了美妆，它自己跳回去了"）。
+        tabs: categoryTabs(categories, this.category),
+      });
+    } catch (e) {
+      // 静默（@why 见上）。`void e` 而不是空块：空 catch 会被 lint 判为"吞错"，
+      // 而这里是有理由的降级——留一个显式语句，逼后来者先读上面那段再改。
+      void e;
+    }
+  },
+
+  /**
+   * 点轮播图 → 按 `link_type` 去商品详情，或切到某个分类。
+   * @param {WechatMiniprogram.TouchEvent} e `data-index` 来自 wxml
+   */
+  onBannerTap(e) {
+    const index = Number(e?.currentTarget?.dataset?.index);
+    const banner = Number.isInteger(index) ? this.banners[index] : undefined;
+    const intent = intentForBanner(banner, this.homeCategories);
+    // 不可跳（link_type=none / 目标缺失 / 分类不在清单里）→ 点了不动，不跳空页
+    if (intent === null) return;
+    if (intent.go === 'detail') {
+      wxApi.navigateTo({ url: `${DETAIL_PAGE}?id=${encodeURIComponent(intent.id)}` });
+      return;
+    }
+    // 跳分类 = **切走当前搜索词**：轮播说的是"去逛这个分类"，
+    // 而不是"在当前搜索结果里换个分类"——带着旧词会把用户带到一个他没要过的组合
+    if (intent.key === this.category) return;
+    this.setData({ keyword: '' });
+    this.category = intent.key;
+    this.reload(intent.key);
   },
 
   /**
@@ -224,7 +307,7 @@ Page({
       loading: true,
       loadingMore: false,
       error: '',
-      tabs: categoryTabs(category),
+      tabs: categoryTabs(this.homeCategories, category),
     });
     try {
       const res = await this.fetch(listQuery({ page: 1, category, keyword }), traceId);
