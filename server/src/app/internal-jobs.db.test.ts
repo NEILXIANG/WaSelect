@@ -256,6 +256,33 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
     }
   });
 
+  /**
+   * SEC2-04：本路由**无鉴权、无限流**，而"未配密钥"曾经是在**每个**带
+   * `x-internal-job-secret` 头的请求上打一条 error 级日志——头的值任意即可，
+   * 于是任何人都能持续刷 error 与告警。配置缺口与请求量无关，就该只记一次。
+   *
+   * @why 断言"连打 5 次仍然只有 1 条"而不是"没有日志"：**完全不记**会让
+   *      "生产上忘了配密钥"变成静默（daily 作业永远不跑、没人知道）。
+   *      要的是"只响一次"，不是"不响"。
+   */
+  it('🔴 未配密钥时用任意请求头连打 5 次：仍是 50000，但 internal_job_disabled 只有装配期那 1 条（SEC2-04）', async () => {
+    const srv = await buildServer({ withSecret: false });
+    try {
+      const statuses: number[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        const r = await fetch(`${srv.url}/api/v1/internal/jobs/daily`, {
+          method: 'POST',
+          headers: { 'x-internal-job-secret': `whatever-${String(i)}` },
+        });
+        statuses.push(r.status);
+      }
+      expect(statuses).toEqual([500, 500, 500, 500, 500]);
+      expect(srv.sink.find('internal_job_disabled')).toHaveLength(1);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('回调异常回看窗口边界：47h 内计入 / 49h 外不计（窗口下界来自注入时钟）', async () => {
     const srv = await buildServer({ withSecret: true });
     try {

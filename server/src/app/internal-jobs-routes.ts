@@ -12,9 +12,17 @@
  * @why 未配置 `INTERNAL_JOB_SECRET` 时**挂路由但返回 50000**（不是不挂载）：
  *      404 会把"我们没配密钥"表现成"cron 打错地址"，排查方向整个反掉——
  *      与 wechat_login_not_configured（AJ-113 ④）同一个判断。
+ *      ⚠️ 但"没配密钥"这件事**只在装配期记一次**（SEC2-04 / AJ-337），不在每个请求上记：
+ *      它曾经是每个带 `X-Internal-Job-Secret` 头的请求都打一条 **error**——
+ *      而本路由无鉴权、无限流，任何人加一个任意值的头就能刷满 error 级日志与告警；
+ *      告警一旦可以被外人按一下就响，它就会被当成噪声忽略掉。
+ *      真正的响亮信号在调用方：render.yaml 的 cron 服务 `r.status !== 202` 就 `process.exit(1)`，
+ *      Render 会把它记成一次失败的 cron 运行——那才是"daily 没跑"该响的那一声。
  *
  * @tradeoff 不挂限流：它是带密钥的机器端点，调用频率是天级；攻击面在密钥本身
  *           （32 字节随机），不在频率。真出现被扫的迹象再按 rateLimitRules 表加规则。
+ *           ⚠️ 前提（SEC2-04 之后才成立）：每个请求的代价只是一次 `timingSafeEqual`。
+ *           曾经每个请求还带一条 error 日志，那条才是"不挂限流"的真正代价——现已摘掉。
  *
  * @see app/daily-reconciliation.ts（作业本体）；config.ts INTERNAL_JOB_SECRET；
  *      docs/I1阶段开发实施方案.md §3.7
@@ -59,6 +67,20 @@ export function mountInternalJobsRoutes(
     jobs: InflightJobs;
   },
 ): void {
+  // ── 装配期体检（SEC2-04）："没配密钥"是**配置缺口**，与任何请求都无关 ──
+  //    @why 放在这里而不是请求里：本路由无鉴权、无限流，把这条 error/log 留在请求路径上
+  //    等于"任何人带一个任意值的头就能按一次告警铃"（详见文件头 @why）。
+  //    @why 生产用 error 级：生产上没配 ⇒ daily 作业**永远不会跑**，而它的唯一症状是
+  //    "对账异常没人发现"——这是事故，不是提示。非生产（dev/test 常态不配）用 warn，
+  //    否则每次本地起服务都报一条 error，反而把真的 error 淹掉。
+  if (deps.config.INTERNAL_JOB_SECRET === undefined) {
+    const msg = {
+      result: 'refused',
+      ctx: { reason: 'INTERNAL_JOB_SECRET 未配置，daily 作业不会跑' },
+    };
+    if (deps.config.NODE_ENV === 'production') deps.logger.error('internal_job_disabled', msg);
+    else deps.logger.warn('internal_job_disabled', msg);
+  }
   app.post(`${INTERNAL_JOBS_PREFIX}/daily`, (req, res, next) => {
     void (async () => {
       try {
@@ -66,15 +88,10 @@ export function mountInternalJobsRoutes(
         const got = req.header('x-internal-job-secret') ?? '';
         // 先拒没带头的来访者（全量审计 2026-09-26 P2）：这是无鉴权、无限流的公网路径，
         // 若先判"配置缺失"再打 error，任何匿名请求都能刷一条 error 级日志/告警。
-        // 带了头、而我们没配密钥，才是配置缺口，此时响亮（文件头 @why ③）。
+        // ⚠️ 带了头、而我们没配密钥，仍然是 50000（响亮），但**不再逐请求记日志**——
+        //    那一条已挪到装配期（见上），否则"加个任意值的头"就能源源不断地制造 error（SEC2-04）。
         if (got.length === 0) throw new AppError(40101);
-        if (secret === undefined) {
-          deps.logger.error('internal_job_disabled', {
-            result: 'refused',
-            ctx: { reason: 'INTERNAL_JOB_SECRET 未配置' },
-          });
-          throw new AppError(50000);
-        }
+        if (secret === undefined) throw new AppError(50000);
         if (!secretMatches(got, secret)) throw new AppError(40101);
 
         const runId = systemIdGen.uuid();

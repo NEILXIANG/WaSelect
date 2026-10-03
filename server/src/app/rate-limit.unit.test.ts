@@ -188,6 +188,34 @@ describe('rateLimiter 中间件（桩）', () => {
     expect(log?.['http_path']).toBe('/api/v1/x');
   });
 
+  /**
+   * SEC-10：本中间件也会**挂在前缀上**（`mount.ts` 的 `app.use('/api/v1/orders/quote', …)`）。
+   *
+   * @why Express 会把挂载前缀从 `req.path` 里剥掉 ⇒ `req.path` 恒为 `'/'`，
+   *      于是 `rate_limited` 日志的 `http_path` 一条有用的信息都没有——
+   *      而限流是**按入口分桶**的，"哪个入口被限了"正是这条日志唯一要回答的问题。
+   *      路由级挂载（`app.post('/path', limiter, …)`）时 `baseUrl` 是空串，回落到 `req.path`。
+   */
+  it('🔴 挂在前缀上时日志的 http_path 是完整挂载路径，不是 "/"（SEC-10）', () => {
+    const { deps, sink } = makeDeps();
+    const handler = rateLimiter(deps, RULE);
+    const req = {
+      ip: '1.1.1.1',
+      method: 'POST',
+      path: '/',
+      baseUrl: '/api/v1/orders/quote',
+    } as unknown as Request;
+    for (let i = 0; i < 10; i += 1) {
+      handler(
+        req,
+        { setHeader: () => undefined } as unknown as Response,
+        (() => undefined) as unknown as NextFunction,
+      );
+    }
+    const log = sink.find('rate_limited')[0];
+    expect(log?.['http_path']).toBe('/api/v1/orders/quote');
+  });
+
   it('按 IP 隔离：A 超限不影响 B', () => {
     const { deps } = makeDeps();
     run(deps, '1.1.1.1');

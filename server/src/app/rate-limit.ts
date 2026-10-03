@@ -213,7 +213,12 @@ export function rateLimiter(deps: RateLimiterDeps, rule: RateLimitRule): Request
     res.setHeader('retry-after', String(retryAfter));
     log.warn('rate_limited', {
       http_method: req.method,
-      http_path: req.path,
+      // ⚠️ `req.baseUrl || req.path`，不是 `req.path`（SEC-10）：
+      //    本中间件也会被**挂在前缀上**（`mount.ts` 的 `app.use('/api/v1/orders/quote', …)`），
+      //    那时 Express 把挂载路径从 req.path 里剥掉了，req.path 恒为 `'/'`——
+      //    日志里就只剩"某个路径被限流了"，而限流是按入口分桶的，看不出是哪个桶。
+      //    `baseUrl` 是挂载前缀（路由级挂载时为空串，此时回落到 req.path 拿完整路径）。
+      http_path: req.baseUrl || req.path,
       result: 'rejected',
       ctx: {
         route_key: rule.routeKey,
