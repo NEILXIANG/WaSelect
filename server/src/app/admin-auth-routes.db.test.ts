@@ -108,6 +108,54 @@ describe('POST /auth/admin/login（账号维度锁定；IP 限流放宽以免混
     expect(srv.sink.find('admin_login_failed')).toHaveLength(2);
   });
 
+  /**
+   * B48 ①：**不存在的邮箱也要付一次 bcrypt**（DUMMY_HASH）。
+   *
+   * @why 上面那条只钉住了"答复逐字相同"，钉不住**耗时**：不存在的邮箱若直接 `return false`，
+   *      响应会快整整一次 bcrypt（cost 10，@measured 本机 93ms），
+   *      于是"401 来得快还是慢"就能问出这个邮箱注册过没有——登录口又变回邮箱探测器，
+   *      而且这一次**响应体完全一样**，上面那条用例依然是绿的。
+   *      所以这条必须单独钉，且只能靠耗时钉（这是它唯一的观测面）。
+   * @limitation 阈值 40ms 是**下界**判据：bcrypt 只会更慢不会更快（CPU 成本固定、
+   *      机器越忙越慢），所以这条不会误判成"没比对"；反过来它**不**保证"两者耗时相同"
+   *      （那是统计性质，用例里测不了）。若将来把 `BCRYPT_COST` 调低，这条阈值要跟着调。
+   */
+  it('🔴 不存在的邮箱也付一次 bcrypt（DUMMY_HASH）：不是"查不到就立刻回"', async () => {
+    const t0 = Date.now();
+    const ghost = await login('ghost@example.com', 'definitely-not-it');
+    const ghostMs = Date.now() - t0;
+    expect(ghost.status).toBe(401);
+    // 对照：形状错误（40001）连 bcrypt 都不跑，是"不比对"那一侧的耗时
+    const t1 = Date.now();
+    const bad = await login('', 'definitely-not-it');
+    const shapeMs = Date.now() - t1;
+    expect(bad.status).toBe(400);
+    // @measured（bcryptjs cost 10，本机）一次 compare ≈ 93ms；阈值 40 留了一倍余量
+    expect(ghostMs, '不存在的邮箱没有付 bcrypt ⇒ 登录口又成了邮箱探测器').toBeGreaterThan(40);
+    expect(shapeMs, '形状错误不该跑 bcrypt（对照组本身要成立）').toBeLessThan(40);
+  });
+
+  /**
+   * B48 ②：**失败路径的日志不含邮箱明文**（约束七）。
+   *
+   * @why 成功路径那句"日志有 target_user_id 无邮箱明文"已经钉住了 200 那一侧，
+   *      而失败路径（40101 / 42901）**从来没人断言过**——恰恰失败才是"把入参打进日志"最容易发生的地方
+   *      （排查登录问题的人第一反应就是把 email 塞进 ctx）。
+   *      `admin_audit` 是 append-only，运行日志有保留期，邮箱一旦进去就是持久的账号枚举清单。
+   */
+  it('🔴 失败路径（口令错 / 不存在 / 被锁）的日志里没有任何一处邮箱明文', async () => {
+    await login(EMAIL, 'definitely-not-it');
+    await login('ghost@example.com', 'definitely-not-it');
+    for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
+      await login(EMAIL, `wrong-password-${String(i)}`);
+    }
+    const text = JSON.stringify(srv.sink.lines).toLowerCase();
+    expect(text).toContain('admin_login_failed');
+    expect(text).toContain('admin_login_locked');
+    expect(text).not.toContain(EMAIL.toLowerCase());
+    expect(text).not.toContain('ghost@example.com');
+  });
+
   it(`连续失败 ${ADMIN_LOGIN_MAX_FAILURES} 次 → 锁 ${ADMIN_LOGIN_LOCK_MINUTES} 分钟：锁住时正确密码也 429；到期后可登且计数清零`, async () => {
     for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
       expect((await login(EMAIL, `wrong-password-${String(i)}`)).status).toBe(401);
@@ -182,10 +230,21 @@ describe('POST /auth/admin/login（账号维度锁定；IP 限流放宽以免混
      *   · 正确口令至多成功 1 次，且只有在它持有额度时才可能成功。
      */
     expect(bad + ok + locked).toBe(31);
-    expect(bad + ok).toBeLessThanOrEqual(ADMIN_LOGIN_MAX_FAILURES);
+    /**
+     * ⚠️ 上界与"正确口令有没有抢到额度"有关（SEC2-10 / AJ-345）。
+     *    旧断言写的是"走到比对的总数恒 ≤ max"——那在一种情形下是**错的**：
+     *    正确口令抢到额度 ⇒ 登录成功会把两层清零（`clearLoginAttempt`），
+     *    清零**之后**才 claim 的请求拿到的是**新一轮**额度 ⇒ 总数上界变成 2×max。
+     *    触发条件是"某个请求的 claim 晚于正确口令那次 bcrypt 完成（~100ms）"，
+     *    机器忙时才可能出现 ⇒ 旧断言表现为**偶发红**，而实现并没有坏：
+     *    成功登录重置计数本来就是产品上要的行为。
+     *    所以上界按 `ok` 分情况写，而不是写死 max。
+     */
+    const comparedCap = ADMIN_LOGIN_MAX_FAILURES * (ok === 1 ? 2 : 1);
+    expect(bad + ok).toBeLessThanOrEqual(comparedCap);
     expect(bad).toBeGreaterThanOrEqual(ADMIN_LOGIN_MAX_FAILURES - 1);
     expect(ok).toBeLessThanOrEqual(1);
-    expect(locked).toBeGreaterThanOrEqual(31 - ADMIN_LOGIN_MAX_FAILURES);
+    expect(locked).toBeGreaterThanOrEqual(31 - comparedCap);
     expect(srv.sink.find('admin_login_ok')).toHaveLength(ok);
     expect(srv.sink.find('admin_login_locked').length).toBeGreaterThan(0);
   });
