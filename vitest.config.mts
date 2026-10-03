@@ -5,8 +5,12 @@
  * @tradeoff（历史，F1 阶段）db/contract/e2e 当时尚无测试文件，passWithNoTests 曾放空通过——
  *          现已关闭（见下方 `passWithNoTests: false` 的注释），且各层均已有测试文件接入
  *          （F7 真库、F11 Provider 契约、F6c 起 e2e）。
- * @limitation 覆盖率阈值当前只覆盖已有文件（packages/shared），server/src 为空目录时不参与统计；
- *             后续每加一个模块，阈值约束自动生效（include 已含 server/src/**）。
+ * @limitation 覆盖率阈值是**逐文件**的（唯一真源在 `vitest.coverage-gates.ts`）：新文件只要落进
+ *             include，下一次 `check:coverage-floor` 就按"行 60% / 分支 50%"的底线要求它——
+ *             不是"先豁免、以后再说"，加文件时**不需要**也**不应该**回来改这份配置。
+ *             ⚠️ 这里曾经写"server/src 为空目录时不参与统计"（DB-14）——那是 F1 阶段的实况
+ *             （当时服务端还是空壳），现在 server/src 早已不是空目录，留着会让人以为
+ *             "服务端代码不在阈值覆盖内"，从而对新文件是否达标产生错误预期。
  */
 import { defineConfig } from 'vitest/config';
 // 阈值表单独成文件（唯一事实来源）：它还要被 test/config/coverage-threshold.unit.test.ts 读去验证

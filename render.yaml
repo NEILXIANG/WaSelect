@@ -123,7 +123,14 @@ services:
       - key: CORS_ORIGINS
         sync: false # 生产必填（跨字段校验会拦）；只放行 admin-web 域名
       - key: ADMIN_OPENIDS
-        sync: false # 逗号分隔；首次登录时写入 users.is_admin
+        # ⚠️ 这里曾经写"逗号分隔；首次登录时写入 users.is_admin"（DB-12②）——那句话描述的
+        #    是**没有任何代码在做**的事：全仓对它的唯一引用是 `config.ts` 里的**定义**
+        #    （`ADMIN_OPENIDS: csv()`），没有任何一处读它（AJ-176）。
+        #    照着旧注释在平台上填了 openid 的人，会以为自己已经把那个人提成了管理员，
+        #    而实际什么也没发生——**而且不会报错**（管理端是独立 Web + 邮箱口令，ADR-21，
+        #    小程序登录只签 aud=mp 的用户 token，这条"openid 提权"路径在现设计下走不通）。
+        #    保留这一项只为"将来真的实现时变量名已经就位"；在此之前**设了等于没设**。
+        sync: false # 当前无使用方：设了也不生效（见上）
       - key: ADMIN_EMAIL
         sync: false
       - key: PUBLIC_API_BASE

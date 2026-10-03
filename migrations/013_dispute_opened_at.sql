@@ -12,9 +12,15 @@
 --      用入库时间会把举证窗口算短。列允许 NULL，是为了让"没有开案时刻"这件事暴露出来
 --      （它表示写入方漏了字段），而不是被 `now()` 静默填平。
 --
--- @limitation 本迁移**只加列，不回填历史数据**：目前没有任何服务端代码写 `dispute_*` 这四列
---      （Stripe dispute 事件的落地尚未实现），所以表里不存在需要回填的历史行。
---      ⚠️ dispute 写入方落地时必须保证 `dispute_id` 与 `dispute_opened_at` **同时**写入——
+-- @limitation 本迁移**只加列，不回填历史数据**：写本迁移的当时还没有服务端代码写 `dispute_*`，
+--      所以不存在需要回填的历史行。
+--      ⚠️ 括号里那句"（Stripe dispute 事件的落地尚未实现）"**已经过期**（DB-14）：
+--      拒付写入方此后已落地——`server/src/app/mark-disputed.ts`（U-F4 / AJ-193）现在会写
+--      `dispute_id / dispute_status / dispute_amount / dispute_opened_at / dispute_closed_at` 五列。
+--      保留本段是因为"**本迁移当年没有回填**"这个事实不会随时间改变：
+--      若有人怀疑 013 之前的历史行缺 `dispute_opened_at`，答案是"确实缺，但那时本来就没有拒付数据"；
+--      反过来，**013 之后**的行缺这一列就是写入方的 bug，不该拿本段当免责理由。
+--      ⚠️ dispute 写入方必须保证 `dispute_id` 与 `dispute_opened_at` **同时**写入——
 --      只写前者会让这一条出现在列表里却带着空的开案时间（不好判定"是什么时候出的事"）。
 --
 -- @see contracts/api-contract.yaml（Dispute）；server/src/adapters/risk-admin.ts（唯一读取方）；
