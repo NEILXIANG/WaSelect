@@ -43,6 +43,8 @@ interface Harness {
   /** 手动推进注入的时钟（ms），让 duration_ms 可断言 */
   advance(ms: number): void;
   setAcquired(v: boolean): void;
+  /** 本轮打出的日志行（AJ-320：用来断言 tick 汇总按 job 名分别给数字）。 */
+  sink: MemorySink;
 }
 
 function harness(opts: { acquired?: boolean } = {}): Harness {
@@ -53,7 +55,8 @@ function harness(opts: { acquired?: boolean } = {}): Harness {
   let nowMs = BASE;
 
   const clock: Clock = { now: () => new Date(nowMs) };
-  const logger = createLogger({ env: 'test', destination: new MemorySink() });
+  const sink = new MemorySink();
+  const logger = createLogger({ env: 'test', destination: sink });
 
   const deps: SchedulerDeps<Tx> = {
     clock,
@@ -98,6 +101,7 @@ function harness(opts: { acquired?: boolean } = {}): Harness {
     setAcquired: (v) => {
       acquired = v;
     },
+    sink,
   };
 }
 
@@ -198,6 +202,27 @@ describe('抢到锁：顺序执行 + 各自 savepoint', () => {
     await runSchedulerOnce(h.deps, [job('a'), job('b')]);
     expect(h.runs[0]).toMatchObject({ name: TICK_JOB_NAME, ok: true });
     expect(h.runs[0]?.error).toBeUndefined();
+  });
+
+  /**
+   * AJ-320：`scheduler_tick_done` 此前只给一个**跨 job 求和**的数字，而
+   * `ports/scheduler.ts` @limitation 二 明确要求"日志里必须带上 job 名"——
+   * 关单的"关了几单"与看门狗的"0/1 停跑标志"混成一个数之后，日志也读不出是谁贡献的。
+   * 现在按 job 名分别给：这是"012 想要的那件事"今天真正落地的那一半。
+   */
+  it('tick 汇总日志**按 job 名**分别给 processed（不是只给一个求和值，AJ-320）', async () => {
+    const h = harness();
+    await runSchedulerOnce(h.deps, [
+      job('expire_orders', { processed: 3 }),
+      job('cleanup_idempotency', { processed: 5 }),
+    ]);
+    const rows = h.sink.rows().filter((r) => r.event === 'scheduler_tick_done');
+    expect(rows).toHaveLength(1);
+    const byJob = rows[0]?.['processed_by_job'];
+    expect(byJob).toEqual([
+      { job: 'expire_orders', processed: 3 },
+      { job: 'cleanup_idempotency', processed: 5 },
+    ]);
   });
 });
 

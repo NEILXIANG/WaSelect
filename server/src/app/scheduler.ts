@@ -175,8 +175,27 @@ export async function runSchedulerOnce<TTx>(
         }
 
         const ok = allJobsOk(results);
-        // 与日志里那个 processed 同一个数、同一条口径：一处算，两处用
-        // （012：它现在也进 `job_runs.last_processed`，让看门狗看表就知道扫出什么）
+        /**
+         * 🔴 0.6.27（AJ-320）：这个和是**跨 job 求和**，量纲混杂，**只能当"本轮有产出"的标记**，
+         *    ⛔ **不能**当异常条数读——`migrations/012` 原文那条"0 好 / >0 该看"的口径已作废。
+         *
+         * @why 求和之所以"没有意义"（`ports/scheduler.ts` @limitation 二）：
+         *      tick 一轮三个 job = 关掉的单数 + 删掉的幂等行数 + 看门狗的 0/1 停跑标志；
+         *      daily 一轮四个 job = 自动签收数 + 自动完成数 + 对账异常数 + 清理行数。
+         *      它们的量纲不同，加起来既不是异常数也不是工作量。
+         * @why 它骗人的**方向最坏**：最该被看见的那一支——**daily 停跑**——在和里只贡献 **1**，
+         *      数值最小、看着最无害；而每天自动签收几十单贡献几十，看着最"像异常"。
+         *      按 012 的旧口径设阈值告警，结果是"正常运营时天天报警、真停跑时只亮一个 1"。
+         * @why **保留写入、只订正读法**，而不是撤掉这一列：它今天在事实上承担了
+         *      "本轮跑完了"的表内标记（`internal-jobs.db.test` 就用它当等待判据——
+         *      `last_success_at` 被基线预置成健康值，等它出现会等到基线而不是本轮）。
+         *      撤掉它 = 改那条 db 用例的判据（换 `trace_id` / `updated_at`，且基线要同步清），
+         *      属**另一处改动**，不混在一轮逐行审查里做——已登记为未做的正解。
+         * @limitation 想"看一眼 job_runs 就知道扫出几条异常"，今天**做不到**：
+         *              对账的异常数只在 `daily-reconciliation` 的汇总日志里（带分类计数），
+         *              表里这一列是四五个 job 的混合物。要做成"看表即知"需另立项
+         *              （每 job 一行心跳，或给这一行加一列只对账数）。
+         */
         const processed = results.reduce((sum, r) => sum + (r.ok ? r.processed : 0), 0);
         await deps.runs.record(tx, {
           name: deps.name ?? TICK_JOB_NAME,
@@ -189,7 +208,12 @@ export async function runSchedulerOnce<TTx>(
         log.info('scheduler_tick_done', {
           ok,
           jobs: results.length,
-          processed,
+          // 按 job 名分别给（契约 @limitation 二："日志里必须带上 job 名"）；
+          // 失败的 job 没有 processed，给 null 而不是 0——"没上报"不能被读成"0 条"
+          processed_by_job: results.map((r) => ({
+            job: r.name,
+            processed: r.ok ? r.processed : null,
+          })),
         });
         return { ok, results };
       });
