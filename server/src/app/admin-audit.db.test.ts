@@ -75,6 +75,38 @@ describe('admin_audit：管理端写接口一处接入（F-02）', () => {
     expect((row?.['before'] as unknown[]).length).toBeGreaterThan(1);
   });
 
+  /**
+   * SEC-12 / AJ-344：**新建**类写操作没有路径 `:id`，审计行的 target 一直是 NULL——
+   * 于是"谁在什么时候建了东西"查得到，"**建了什么**"查不到，而后者才是要查的那一半。
+   * @why 放在这里而不是商品路由的用例里：这条钉的是**审计中间件与路由的契约**
+   *      （新建类路由必须显式声明 target），不是商品创建本身。
+   */
+  it('🔴 新建类写操作（POST /admin/products）的审计行 target = 新商品 id，不是 NULL', async () => {
+    const admin = await tokenFor('u-admin', 'admin');
+    const r = await call(srv, 'POST', '/api/v1/admin/products', {
+      token: admin,
+      body: {
+        title: '审计 target 验证商品',
+        category: 'beauty',
+        price_jpy: 3600,
+        weight_g: 800,
+        customs_desc_en: 'cosmetic set',
+        origin_country: 'JP',
+      },
+    });
+    expect(r.status).toBe(201);
+    const newId = String(r.json['id']);
+    await waitUntil(async () => (await audits()).length === 1, '审计行没写进来');
+    const [row] = await audits();
+    expect(row).toMatchObject({
+      actor: 'admin:u-admin',
+      action: 'POST /admin/products',
+      target: newId, // 不是 null：路由用 setAuditTarget 声明了"建的是这个 id"
+    });
+    // 顺带确认库里真的有这个商品（否则 target 对上一个不存在的 id 也毫无意义）
+    expect((await db`select 1 from products where id = ${newId}`).length).toBe(1);
+  });
+
   it('失败的写（4xx）、读（GET）、买家 token 都不留审计行', async () => {
     const admin = await tokenFor('u-admin', 'admin');
     expect(

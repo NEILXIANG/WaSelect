@@ -35,6 +35,7 @@ import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
 import { resizeToTiers } from '../adapters/image-resize.js';
 import { detailObjectKey, sniffImageType, UPLOAD_MAX_BYTES } from '../domain/upload-image.js';
+import { setAuditTarget } from './admin-audit.js';
 
 export interface AdminUploadRoutesDeps {
   logger: Logger;
@@ -146,6 +147,10 @@ export function mountAdminUploadRoutes(app: Express, deps: AdminUploadRoutesDeps
       const urlOf = (key: string): string | undefined =>
         imgBase === undefined ? undefined : `${imgBase}/${key}`;
       const [thumb, card, detail] = tiers.map((t) => urlOf(t.key));
+      // 上传也是"新建类"：target 记 **image_key**（业务表里存的就是它），
+      // 于是"这张图后来被用在哪条 Banner"可以按 key 反查（SEC-12 / AJ-344）。
+      // 不记 imageId：它只在本系统内部有意义，且业务表存的是 key 不是 id。
+      setAuditTarget(res, detailObjectKey(imageId));
       res.status(201).json({
         ...(thumb === undefined ? {} : { thumb }),
         ...(card === undefined ? {} : { card }),

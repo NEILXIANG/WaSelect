@@ -79,10 +79,28 @@ const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const AUDIT_BEFORE_KEY = 'adminAuditBefore';
 const AUDIT_SKIP_KEY = 'adminAuditSkip';
 const AUDIT_COMMITTED_KEY = 'adminAuditCommitted';
+const AUDIT_TARGET_KEY = 'adminAuditTarget';
 
 /** 路由提供"改前值"（只对不可逆操作用，见文件头 @why）。 */
 export function setAuditBefore(res: Response, before: unknown): void {
   res.locals[AUDIT_BEFORE_KEY] = before;
+}
+
+/**
+ * 路由**显式**声明"这次操作的对象是谁"（SEC-12 / AJ-344）。
+ *
+ * @why target 默认取路径里的 `:id`，而**新建**类写操作没有 `:id`——建商品、建 Banner、
+ *      上传图片、追加汇率，它们的审计行 target 一律是 NULL。
+ *      后果是这些行**只能回答"谁在什么时候建了东西"，回答不了"建了什么"**：
+ *      想查"这个商品是谁建的 / 什么时候建的"必须去别的表按时间猜，
+ *      而审计表存在的唯一理由就是不用猜。
+ * @why 由路由在**拿到新对象标识之后**声明（不是之前）：对象标识是服务端生成的，
+ *      声明早了只能写"打算建"，而"打算建"不是审计该记的东西（见 markAuditCommitted 的同一条理由）。
+ * @limitation 优先级**高于**路径 `:id`（`res.locals[AUDIT_TARGET_KEY] ?? targetId ?? null`）：
+ *      两者同时存在时以显式声明为准——路径 id 是"路由的形状"，显式声明是"这次操作实际动了什么"。
+ */
+export function setAuditTarget(res: Response, target: string): void {
+  res.locals[AUDIT_TARGET_KEY] = target;
 }
 
 /**
@@ -190,8 +208,9 @@ export function adminAuditMiddleware(deps: {
       const entry = {
         actor: `admin:${principal.sub}`,
         action: `${req.method} ${routePath.replace(/^\/api\/v1/, '')}`,
-        // 用快照而不是现取 `req.params`：错误路径上它已经被还原成空（见 captureTarget 的 @why）
-        target: targetId ?? null,
+        // 显式声明（新建类操作）优先于路径 id；后者用快照而不是现取 `req.params`
+        // （错误路径上它已经被还原成空，见 captureTarget 的 @why）
+        target: (res.locals[AUDIT_TARGET_KEY] as string | undefined) ?? targetId ?? null,
         // AJ-294：before 与 after **同口径**走 redact。这里是唯一落库点——
         // 路由给什么就存什么的话，将来任何一条"改订单"路由传进来的 address_snapshot
         // 会永久锁进 append-only 表（AJ-207 踩过同一个洞，只是当时在 after 上）。

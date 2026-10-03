@@ -20,6 +20,7 @@ import {
   auditPayload,
   markAuditCommitted,
   setAuditBefore,
+  setAuditTarget,
 } from './admin-audit.js';
 import { createInflightJobs } from './inflight-jobs.js';
 
@@ -334,6 +335,52 @@ describe('审计生命周期（B15 / AJ-206）', () => {
     await expect(waiting).resolves.toMatchObject({ settled: true, pending: 0 });
     expect(entries).toHaveLength(1);
     expect(jobs.pending).toBe(0);
+  });
+});
+
+/**
+ * SEC-12 / AJ-344：新建类写操作没有路径 `:id`，target 必须由路由显式声明。
+ *
+ * @why 没有这条能力时，建商品 / 建 Banner / 上传 / 追加汇率的审计行 target 全是 NULL：
+ *      能查"谁在什么时候点了一次新建"，查不出**建了什么**——而后者才是审计要回答的那一半。
+ * @why 优先级是"显式声明 > 路径 id"而不是相反：路径 id 是路由的形状，
+ *      显式声明是"这次操作实际动了什么"；两者同时存在时以后者为准。
+ */
+describe('setAuditTarget（新建类操作的 target，SEC-12）', () => {
+  it('🔴 声明过的 target 覆盖路径 id；没声明时仍回落到路径 id', async () => {
+    const entries: AdminAuditEntry[] = [];
+    const mw = adminAuditMiddleware({
+      store: {
+        append: async (e) => {
+          entries.push(e);
+        },
+      },
+      logger: createLogger({ env: 'test', destination: new MemorySink() }),
+      jobs: createInflightJobs(),
+    });
+
+    const fire = (target?: string): void => {
+      const res = new EventEmitter() as unknown as Response & EventEmitter;
+      Object.assign(res, { statusCode: 200, locals: {}, end: () => res });
+      if (target !== undefined) setAuditTarget(res, target);
+      mw(
+        {
+          method: 'POST',
+          route: { path: '/api/v1/admin/products' },
+          params: { id: 'from-path' },
+          auth: { role: 'admin', sub: 'u-1' },
+          body: {},
+        } as unknown as Request,
+        res,
+        () => undefined,
+      );
+      res.emit('prefinish');
+    };
+
+    fire('p-new');
+    fire();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(entries.map((e) => e.target)).toEqual(['p-new', 'from-path']);
   });
 });
 

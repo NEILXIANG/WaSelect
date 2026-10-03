@@ -61,7 +61,7 @@ import type { Clock } from '../ports/clock.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
-import { setAuditBefore } from './admin-audit.js';
+import { setAuditBefore, setAuditTarget } from './admin-audit.js';
 import {
   createOpsConfigRepo,
   type FxRateRow,
@@ -183,6 +183,9 @@ export function mountAdminOpsRoutes(app: Express, deps: AdminOpsRoutesDeps): voi
         const now = deps.clock.now();
         const prev = await repo.findLatestFxRate(input.quote, now);
         setAuditBefore(res, prev); // 审计流 B 的改前值（AJ-183）：汇率只追加不改，"上一条"就是改前值
+        // 追加汇率也没有路径 `:id`：审计的 target 记**哪个货币对**被调过（SEC-12 / AJ-344）——
+        // 建的是一行汇率，但"汇率被改"这件事的对象是货币对，按它检索才有意义。
+        setAuditTarget(res, input.quote);
         const effectiveFromMs = input.effectiveFromMs ?? now.getTime();
         try {
           await repo.insertFxRate({

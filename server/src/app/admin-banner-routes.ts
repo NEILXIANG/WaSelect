@@ -43,7 +43,7 @@ import type { IdGen } from '../ports/ids.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
-import { setAuditBefore, skipAudit } from './admin-audit.js';
+import { setAuditBefore, setAuditTarget, skipAudit } from './admin-audit.js';
 import { createBannersAdminRepo } from '../adapters/banners-admin.js';
 import { parseBannerInput } from '../domain/banner-input.js';
 import { toBannerView } from './banner-view.js';
@@ -100,6 +100,8 @@ export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps
           startsAtMs: input.startsAtMs,
           endsAtMs: input.endsAtMs,
         });
+        // 新建没有路径 `:id` ⇒ 审计行回答不了"建的是哪条 Banner"（SEC-12 / AJ-344）
+        setAuditTarget(res, row.id);
         res.status(201).json(toBannerView(row, deps.config.IMG_BASE_URL));
       } catch (e) {
         next(e);

@@ -33,6 +33,7 @@ import { requireRole } from './auth.js';
 import { toImageSet } from './product-routes.js';
 import { createCatalogAdminRepo, type AdminProductRow } from '../adapters/catalog-admin.js';
 import { validateProductInput } from '../domain/product-input.js';
+import { setAuditTarget } from './admin-audit.js';
 
 /** 契约 `PATCH status` 的两值枚举（下线不发版这条要改时，改这里 + 契约 + 前端三处）。 */
 const PRODUCT_STATUS = ['active', 'offline'] as const;
@@ -182,6 +183,8 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           maker: r.value.maker ?? null,
           tags: r.value.tags ?? [],
         });
+        // 新建没有路径 `:id`，审计的 target 会是 NULL ⇒ 审计行回答不了"建的是哪个商品"（SEC-12 / AJ-344）
+        setAuditTarget(res, row.id);
         res.status(201).json(toAdminProduct(row));
       } catch (e) {
         next(e);
