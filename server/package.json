@@ -7,14 +7,18 @@
   "dependencies": {
     "@waselect/shared": "*",
     "bcryptjs": "^3.0.3",
+    "busboy": "^1.6.0",
     "express": "^5.2.1",
     "jose": "^6.2.12",
     "pino": "^10.3.1",
     "postgres": "^3.4.9",
+    "sharp": "^0.35.5",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/busboy": "^1.5.4",
     "@types/express": "^5.0.6"
   },
-  "//": "依赖以**本包实际 import** 为准：pino 之前只在根 package.json 里声明（靠 workspaces 提升才可用），npm ci 在只装本包时会缺。node-pg-migrate 是迁移 CLI，属于工具链，声明在根 devDependencies。 @types/express 也放在本包（三审 P3）：它是 express 的类型伴生包，根上只放工具链。"
+  "//": "依赖以**本包实际 import** 为准：pino 之前只在根 package.json 里声明（靠 workspaces 提升才可用），npm ci 在只装本包时会缺。node-pg-migrate 是迁移 CLI，属于工具链，声明在根 devDependencies。 @types/express 也放在本包（三审 P3）：它是 express 的类型伴生包，根上只放工具链。",
+  "//deps": "`busboy` / `sharp` / `@types/busboy` 由根迁到本包（DB-11）。@why 它们只被本包的运行时代码 import；放在根上靠 workspaces 扁平提升虽然能跑，但**谁依赖什么不可见**——删掉上传模块时没人敢删 sharp，于是死依赖会永久留在生产镜像里。@limitation `sharp` 同时还在根 devDependencies 里（`test/e2e` 造测试图用），那是另一件事：根包自己的测试工具链。"
 }

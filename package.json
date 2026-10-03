@@ -51,8 +51,7 @@
   "comment:deps": "运行时依赖一律声明在**用到它的那个 workspace**（server / packages/shared），根 package.json 只放工具链。@why 曾经把 express/jose/bcryptjs/pino 装在根上：靠 npm workspaces 的扁平提升能跑，但 ① 谁依赖什么不可见，删模块时不敢删依赖；② node-pg-migrate 根本没进 package.json（装的时候被信号打断），npm ci 会装不出迁移工具——这个坑已经踩过一次。",
   "devDependencies": {
     "@eslint/js": "^9.34.0",
-    "@types/busboy": "^1.5.4",
-    "@types/node": "^24.5.2",
+    "@types/node": "^22.18.0",
     "@vitest/coverage-v8": "^5.0.1",
     "eslint": "^9.34.0",
     "eslint-config-prettier": "^10.1.8",
@@ -62,13 +61,12 @@
     "miniprogram-simulate": "^1.6.2",
     "node-pg-migrate": "^9.0.0",
     "prettier": "^3.6.2",
+    "sharp": "^0.35.5",
     "tsx": "^4.23.15",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.43.0",
     "vitest": "^5.0.1"
   },
-  "dependencies": {
-    "busboy": "^1.6.0",
-    "sharp": "^0.35.5"
-  }
+  "//deps": "根 package.json **不再有 `dependencies`**（DB-11）。@why `busboy` 与 `sharp` 曾经放在这里，而它们的**唯一运行时 import 方是 server**（admin-upload-routes.ts / image-resize.ts）——与本文件 `comment:deps` 自己写的规则（运行时依赖一律声明在用到它的 workspace，根只放工具链）直接矛盾。规则被自己的仓库违反一次，它就不再是一条规则：下一个人看到根上有 dependencies，会认为「放哪儿都行」。移走之后根上只剩工具链，`comment:deps` 重新成立。⚠️ `sharp` 仍在根 devDependencies 里是刻意的：`test/e2e/admin-web-client.e2e.test.ts` 真 import 它来造测试图，而 test/e2e 属于**根包**——那是测试工具链，不是运行时依赖；server 的运行时那份另行声明在 server/package.json。两边同一 semver 区间，npm workspaces 只装一份。",
+  "comment:types:node": "⚠️ `@types/node` 锁 **^22**（DB-11 / DB2-02 第 4 条），与 `engines.node`（>=22 <23）同口径。@why 类型包声明的是**编译期允许你用哪些 API**。声明 ^24 时，Node 23/24 才有的 `node:*` API 在本机 tsc 里**不报错**——而生产跑的是 Node 22（render.yaml 的 NODE_VERSION、ci.yml 的 node-version、.nvmrc 都是 22）。于是「写下一个 23+ 才有的 API」这件事在本机类型检查、lint、全部测试里**全是绿的**，只在 CI 或生产**启动时**才炸。这是本项目最贵的一类缺陷：**反馈周期最长**（写下代码 → 部署才发现）。锁 ^22 把反馈提前到写下的那一刻。@limitation 代价是 Node 22 之后新增的 API 用不了（今天没有需要它们的场景）；真要用时，正确做法是**同时**升 engines.node / .nvmrc / ci.yml / render.yaml 五处（同源断言在 test/config/node-version.unit.test.ts），而不是只把类型包放开。dependabot.yml 已对它的 semver-major 加 ignore，否则下周一就被自动升回去。"
 }

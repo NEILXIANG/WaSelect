@@ -24,6 +24,17 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # ⚠️ `@types/node` 的**主版本**升级一律忽略（DB-11）。
+    #    @why 它必须与 `engines.node`（>=22 <23）同口径，而不是"跟着最新走"：
+    #    类型包声明的是编译期允许用哪些 `node:*` API，一旦被自动升到 24，
+    #    Node 23/24 才有的 API 在本机与 CI 的类型检查里就全都合法了，
+    #    而生产跑的是 Node 22——问题会推迟到**部署后启动**才炸（见 package.json 的 `//types:node`）。
+    #    要升 Node 主版本，正确做法是**同时**改 engines / .nvmrc / ci.yml / render.yaml / 本文件
+    #    这五处（同源断言在 `test/config/node-version.unit.test.ts`），那是一次有意的人的决策，
+    #    不是一条每周自动出现的 PR。次版本与补丁（22.x.y）照常收。
+    ignore:
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     # 分组：把同一批次的补丁合并成一个 PR。
     # @why 逐个 PR 时，"升 vitest" 与 "升 @vitest/coverage-v8" 会互相冲突并各自红一次 CI，
     #      最后两个都得重跑——分组让它们一次性通过。

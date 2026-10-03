@@ -179,6 +179,44 @@ describe('loadConfig 拒绝路径（启动即失败，不静默降级）', () =>
     );
   });
 
+  /**
+   * DB-16（CAT-15）：`FX_BUFFER_RATE` 还要限**小数位数**。
+   *
+   * @why `fx_rates.buffer` 是 `NUMERIC(6,4)`，而 `rate` 是 JS 里用**未取整**的 buffer 算的。
+   *      @measured(PostgreSQL 16.15)：`0.03125::numeric(6,4)` → `0.0313`。
+   *      于是配 5 位小数时，库里同一行 `rate ≠ raw_rate × (1 + buffer)`——
+   *      对账时是一笔说不清的账（分不清"四舍五入"还是"算错"）。
+   *      它和上面那条是**两个不同的护栏**：那条挡量纲（30 当成 30%），这条挡精度。
+   * @limitation 这里只验"启动被拒"，不验落库后的数值——后者是 `fx_rates` 的真库用例的事。
+   */
+  it('🔴 FX_BUFFER_RATE 超过 4 位小数拒绝启动（buffer 列是 NUMERIC(6,4)）', () => {
+    for (const bad of ['0.03125', '0.00001', '0.12345']) {
+      const msg = expectReject({ ...baseEnv, FX_BUFFER_RATE: bad }).join('\n');
+      expect(msg, `${bad} 应被拒（第 5 位小数会让落库 buffer 与算 rate 用的值不一致）`).toContain(
+        'FX_BUFFER_RATE',
+      );
+    }
+  });
+
+  /**
+   * 容差必须**双向**钉住：只测"多一位小数被拒"的话，一个**把合法值也拒掉**的实现
+   * （例如直接 `Number.isInteger(v * 10_000)`）同样能过——它会让 `FX_BUFFER_RATE=0.07`
+   * 的机器**起不来**，而 0.07 是个再正常不过的值。
+   *
+   * ⚠️ 用例初版就是个假绿灯：我只放了 `0.03 / 0.0001 / 0.5 / 0 / 0.0312`，
+   *    而 `0.03 * 1e4` 实测是**精确**的 300（我原以为会漂成 300.00000000000006）。
+   *    全量扫过 0 → 0.5 步进 0.0001（5001 个合法值）才找到真正会漂的：
+   *    `0.07 → 700.0000000000001`、`0.0003 → 2.9999999999999996`；严格判法误拒 **576** 个。
+   *    下面这两个值就是那次扫描挑出来的代表性样本，不是随手写的。
+   */
+  it('FX_BUFFER_RATE 恰 4 位小数放行（含实测会漂的 0.07 / 0.0003）', () => {
+    for (const ok of ['0.03', '0.0001', '0.5', '0', '0.0312', '0.07', '0.0003']) {
+      expect(loadConfig({ ...baseEnv, FX_BUFFER_RATE: ok }).FX_BUFFER_RATE, `${ok} 应放行`).toBe(
+        Number(ok),
+      );
+    }
+  });
+
   it('展示币种出现未登记币种拒绝启动', () => {
     expect(expectReject({ ...baseEnv, DISPLAY_CURRENCIES: 'CNY,EUR' }).join('\n')).toContain(
       'DISPLAY_CURRENCIES',

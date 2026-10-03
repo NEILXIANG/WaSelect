@@ -324,8 +324,41 @@ const schema = z.object({
         : ['CNY', 'USD'],
     z.array(z.enum(CURRENCY)).min(1, 'DISPLAY_CURRENCIES 至少一种'),
   ),
-  /** 汇率缓冲（写 fx_rates.buffer）。上限 0.5 防止配置写成 0.3% 之类的量纲错误。 */
-  FX_BUFFER_RATE: num(0.03).pipe(z.number().min(0).max(0.5)),
+  /**
+   * 汇率缓冲（写 `fx_rates.buffer`）。上限 0.5 防止配置写成 0.3% 之类的量纲错误。
+   *
+   * ⚠️ 另外要求 **最多 4 位小数**（DB-16 / CAT-15）。
+   * @why `fx_rates.buffer` 是 `NUMERIC(6,4)`（001:48），而 `rate` 是**在 JS 里**用未取整的
+   *      buffer 算出来的（`applyFxBuffer`：`raw × (1 + buffer)` 再按 `RATE_GRID` 取整，
+   *      落 `NUMERIC(18,8)` 装得下）。于是 `FX_BUFFER_RATE=0.03125` 时 rate 按 0.03125 算、
+   *      buffer 落库被 PG 四舍五入成 **0.0313**——**同一行里 `rate ≠ raw_rate × (1 + buffer)`**。
+   *      对账时这是一笔说不清的账：拿库里这两列回算永远差一点点，
+   *      而没人能判断那是"四舍五入的正常误差"还是"算错了"。
+   *      @measured(PostgreSQL 16.15)：`select 0.03125::numeric(6,4)` → `0.0313`。
+   *      挡在启动阶段，比让运营配出一个"看起来合法、事后对不上账"的值便宜得多。
+   * @limitation ⚠️ 判据必须**带容差**，不能写 `Number.isInteger(v * 10_000)`。
+   *      @measured(Node 22.22.2，2026-10-03)：`0.07 * 1e4` = **700.0000000000001**、
+   *      `0.0003 * 1e4` = **2.9999999999999996**——都是**合法的** 4 位以内小数，
+   *      严格判整数会把它们拒掉。全量扫 0 → 0.5 步进 0.0001（5001 个合法值）：
+   *      严格判法**误拒 576 个**（11.5%），带容差判法误拒 **0 个**。
+   *      也就是说这条护栏如果写严了，`FX_BUFFER_RATE=0.07` 会让**服务起不来**——
+   *      而 0.07 是一个再正常不过的配置值。护栏把自己要保护的东西挡在门外，比没有护栏更糟。
+   *      容差取 1e-6：scaled 最大 5000，双精度绝对误差 ≪1e-6；
+   *      而"多一位小数"的最小偏差是 0.5，比容差大五个数量级，不会被误放行。
+   *      （⚠️ 别写成"`0.03 * 1e4` 会漂移"——实测它是**精确**的 300，那个例子是错的。）
+   * @limitation 只挡**配置**这一侧。`raw_rate` 有 8 位小数而它的列就是 `NUMERIC(18,8)`，
+   *              装得下，不存在同类问题，所以不对它加限制。
+   */
+  FX_BUFFER_RATE: num(0.03).pipe(
+    z
+      .number()
+      .min(0)
+      .max(0.5)
+      .refine(
+        (v) => Math.abs(v * 10_000 - Math.round(v * 10_000)) < 1e-6,
+        'FX_BUFFER_RATE 最多 4 位小数：fx_rates.buffer 是 NUMERIC(6,4)，多出来的位会被 PG 四舍五入，导致同一行 rate ≠ raw_rate × (1 + buffer)（对账时对不上）',
+      ),
+  ),
   /** 包邮阈值（整数円）；空 = 不包邮。 */
   FREE_SHIPPING_JPY: optionalInt(),
   /** 单笔上限（D-42）：低于 ¥200,000 出口申报阈值与 Zonos 预付上限；超出 → 40906。 */
