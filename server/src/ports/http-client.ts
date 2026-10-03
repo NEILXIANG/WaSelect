@@ -295,18 +295,32 @@ export function shouldRetry(
   }
 
   /**
-   * 🔒 5xx：**只有上游明确建议重试**才重试（B4 / AJ-200）。
+   * 🔒 5xx：**只有上游明确建议重试**才重试（B4 / AJ-200）——且**只对 POST**。
    *
-   * @why 对带幂等键的请求，重发 5xx 拿回的是**缓存的同一次失败**，不是"再试一次"；
+   * @why 对带幂等键的 **POST**，重发 5xx 拿回的是**缓存的同一次失败**，不是"再试一次"
+   *      （@measured github.com/stripe/stripe-node#network-retries, 2026-09-29：官方库读
+   *      `Stripe-Should-Retry` 决定是否重试；B3 / AJ-199：失败结果按键缓存 ≥24h）；
    *      真正该做的是把剩下的时间预算还给调用方（让它换通道 / 报错），而不是在这里空转。
    * @why 判据放在端口而不是各适配器：`shouldRetry` 是"哪些失败可以重试"的唯一真源，
    *      各适配器自己判就会长出 N 份口径（F12 第一单元立这条规则就是为了只有一份）。
+   * @why **只作用于 POST**（AJ-314，第二轮审查 PAY2-05 的修法）：B4 的论证链是
+   *      "重发 → 命中按键缓存 → 拿回同一个失败"，这条链**只对带幂等键的 POST 成立**。
+   *      把它套到 GET 上的后果是静默的韧性回退——Stripe 侧四处 GET（拒付反查
+   *      `payment_intents/{pi}`、退款前反查会话、查退款状态、查会话状态）遇一次瞬时 5xx
+   *      就直接失败：拒付回调回 500 → 机构按退避重发约三天 → **持续失败的端点被停用**，
+   *      这正是 B5 / AJ-198 要堵的同一类后果，却在 B4 里被重新打开了。
+   *      GET 天然幂等且没有按键缓存，重发拿到的是上游**当前**的结果，重试有意义。
+   * @why 这里写 `method === 'POST'` 就等价于"带幂等键的 POST"：无幂等键的 POST
+   *      已在上面那一条被拦下（`rate_limited` 除外，而它的 failure 不是 `server_error`），
+   *      所以能走到这里的 POST 必然带键——不需要再判一次，也避免两处判据各写一遍。
    * @tradeoff 对"上游瞬时过载"这类**真的**会好的 5xx，不重试等于放弃了最后一次机会；
    *           但那种场景上游本来就该回 `Stripe-Should-Retry: true`（或 429 + Retry-After），
    *           我们按它说的做。代价由"少试一次"承担，不由"白等两轮"承担。
-   * @limitation 没声明 `retryAdviceHeader` 的请求一律不重试 5xx——保守默认。
+   *           GET 不在这一支里：它重试的代价只是一段总预算（6s 封顶），且有熔断兜底。
+   * @limitation 没声明 `retryAdviceHeader` 的 **POST** 一律不重试 5xx——保守默认。
+   *             GET / PUT / DELETE 不受此限（按各自的失败分类走下面的通用判定）。
    */
-  if (failure === 'server_error') {
+  if (failure === 'server_error' && req.method === 'POST') {
     const header = req.retryAdviceHeader;
     if (header === undefined || header.length === 0) {
       return stop('5xx：本请求没声明上游建议头，按保守默认不重试（B4/AJ-200）');

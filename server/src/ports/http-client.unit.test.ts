@@ -228,6 +228,33 @@ describe('shouldRetry：其余停止条件', () => {
   });
 
   /**
+   * 🔴 AJ-314（第二轮审查 PAY2-05 的修法）：B4 / AJ-200 那条"5xx 要上游建议才重试"
+   * **只对带幂等键的 POST 成立**。
+   *
+   * @why 它成立的理由是"重发 → 命中机构按幂等键缓存的失败 → 拿回同一个 503"。
+   *      GET 不带幂等键、机构也不缓存 GET，重发拿到的是上游**当前**的结果。
+   *      套到 GET 上的后果是静默的韧性回退：Stripe 侧四处 GET（拒付反查 PI、
+   *      退款前反查会话、查退款状态、查会话状态）遇一次瞬时 5xx 就直接失败——
+   *      拒付回调回 500 → 机构按退避重发约三天 → **持续失败的端点被停用**，
+   *      这正是 B5 / AJ-198 花力气堵住的那一条，却在 B4 里被重新打开。
+   * @why 这条与下面"带幂等键的 POST 遇 5xx 不重试"**并存**，而不是互相推翻：
+   *      两条钉的是判据的两个半边——半边是方法，半边是上游建议。
+   */
+  it('🔴 GET 遇 5xx → 重试（B4 的理由是"拿回缓存的失败"，而 GET 没有按键缓存）', () => {
+    const d = shouldRetry(GET, 'server_error', 1, P);
+    expect(d.retry).toBe(true);
+    // 反证：不是因为"没声明建议头"被拦下的（那正是修复前 GET 拿到的理由）
+    expect(d.reason).not.toContain('没声明');
+  });
+
+  it('🔴 PUT / DELETE 遇 5xx 同样重试（对象存储的上传/删除，按 HTTP 语义幂等）', () => {
+    for (const method of ['PUT', 'DELETE'] as const) {
+      const d = shouldRetry({ method, url: 'https://r2.test/bucket/key' }, 'server_error', 1, P);
+      expect(d.retry, `${method} 应当可重试`).toBe(true);
+    }
+  });
+
+  /**
    * 🔴 PAY3-07：一次性动作（微信 code2session）声明"只发一次"。
    * @why 429 是唯一一个"连 POST 无幂等键都能重试"的例外——它靠"上游明确没处理"成立。
    *      但"只发一次"是更强的声明：**无论上游有没有处理，第二次都不该发出去**
@@ -271,13 +298,44 @@ describe('分类全集（防漏处理）', () => {
       'unknown',
     ];
     for (const k of kinds) {
-      // GET 无副作用，用它单测"分类本身"：none / client_error / server_error 会停
-      // （server_error 自 B4 / AJ-200 起：**没声明上游建议头就不重试**）
+      // GET 无副作用，用它单测"分类本身"：只有 none / client_error 会停。
+      // ⚠️ `server_error` **不**在这个停下的集合里（AJ-314）：B4 那条"要上游建议才重试"
+      //    只对带幂等键的 POST 成立，把它算进 GET 的停止集合正是本条修复掉的东西。
       const d = shouldRetry(GET, k, 1, P);
-      if (k === 'none' || k === 'client_error' || k === 'server_error') {
+      if (k === 'none' || k === 'client_error') {
         expect(d.retry).toBe(false);
       } else {
         expect(d.retry, `${k} 应可重试`).toBe(true);
+      }
+    }
+  });
+
+  /**
+   * 🔴 AJ-314：5xx 是**唯一**一个"重试与否取决于方法"的分类，两边都要钉。
+   *
+   * @why 上面那条只用 GET 交叉分类，会把 5xx 钉成"可重试"；而带幂等键的 POST 遇 5xx
+   *      在没有上游建议头时**不**重试（B4 / AJ-200）。只留任何一条，将来"改了方法判定"
+   *      或"改了建议头判定"的其中一半都不会变红——这正是本条要堵的形态：
+   *      规则其实有两条半边，测试却只写了半边。
+   * @why 顺带断言"除 5xx 之外 GET 与 POST 判定一致"：将来若有人给某个分类也加上方法分支，
+   *      这里会立刻变红，逼他把理由写进注释（方法不该悄悄成为第二条判据）。
+   */
+  it('🔴 5xx 是唯一随方法分叉的分类：GET 重试、无建议头的 POST 不重试', () => {
+    const kinds: HttpFailureKind[] = [
+      'timeout',
+      'network',
+      'server_error',
+      'rate_limited',
+      'unknown',
+    ];
+    for (const k of kinds) {
+      const get = shouldRetry(GET, k, 1, P).retry;
+      const postNoAdvice = shouldRetry(post({ 'idempotency-key': 'k-1' }), k, 1, P).retry;
+      if (k === 'server_error') {
+        expect(get, 'GET 的 5xx 应可重试（AJ-314）').toBe(true);
+        expect(postNoAdvice, '无建议头的 POST 5xx 不应重试（B4/AJ-200）').toBe(false);
+      } else {
+        expect(get, `${k}：GET 与 POST 不该分叉`).toBe(postNoAdvice);
       }
     }
   });
