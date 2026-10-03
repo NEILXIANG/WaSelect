@@ -51,6 +51,7 @@ import {
   STRIPE_MIN_SESSION_TTL_SEC,
   STRIPE_SESSION_MARGIN_SEC,
   STRIPE_SIGNATURE_HEADER,
+  STRIPE_SOURCE_TAG,
 } from '../adapters/payment/stripe-checkout.js';
 
 const WHSEC = 'whsec_chain_test_secret';
@@ -200,7 +201,10 @@ async function completeCheckout(orderId: string, eventId: string): Promise<Respo
         status: 'complete',
         amount_total: p.amount,
         currency: p.currency.toLowerCase(),
-        metadata: { order_id: orderId },
+        // ⚠️ 必须带本系统标记：`create()` 写进 Session 的就是 `order_id` + `source` **两键**
+        //    （B5 / AJ-198）。只写 order_id 的样本在"归属判定前移到取单号之前"（AJ-310）
+        //    之后会被判成"非本系统的钱" → 回调 ignored → 订单永远停在 pending_payment。
+        metadata: { order_id: orderId, source: STRIPE_SOURCE_TAG },
         payment_intent: `pi_for_${p.providerRef}`,
         created: Math.floor(Date.now() / 1000),
       },

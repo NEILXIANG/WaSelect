@@ -54,6 +54,17 @@ export interface FakeStripeHttp extends HttpClient {
    * 不登记就查到 = 404——替身有脾气：测得出"反查失败会怎么走"。
    */
   givenPaymentIntent(id: string, metadata: Record<string, string>): void;
+  /**
+   * 登记一个"机构侧已存在"的 **Charge**（AJ-311：没有 `payment_intent` 的拒付靠它反查）。
+   *
+   * @why 不经 PaymentIntent 的收款（旧 Charges API / 部分非卡支付方式）被拒付时，
+   *      Dispute 对象上 `payment_intent` 是 null（`charge` 才是它链回扣款的字段）。
+   *      替身必须能造这种形状，否则"拒付链不回订单"的缺口在测试里永远不可达。
+   * @why 与 `givenPaymentIntent` 分开登记而不是共用一张表：真 Stripe 上
+   *      Charge 的 metadata 是 PI metadata 的**副本**（建 Charge 那一刻复制），
+   *      两者可以不同；混成一张表会让"反查 charge 拿到的其实不是 charge 的东西"测不出来。
+   */
+  givenCharge(id: string, metadata: Record<string, string>): void;
   /** 下一笔**新建**退款的初始状态（缺省 `succeeded`）：造 pending / failed 形态（F-03）。 */
   nextRefundStatus(status: string): void;
   /** 机构侧把某笔退款推进到新状态（模拟 pending → succeeded / failed 的异步完成）。 */
@@ -102,6 +113,8 @@ export function createFakeStripeHttp(): FakeStripeHttp {
   let pendingInitialStatus: string | undefined;
   /** payment_intent id → metadata（create 时从表单抓 + givenPaymentIntent 手工登记）。 */
   const paymentIntents = new Map<string, Record<string, string>>();
+  /** charge id → metadata（AJ-311：不经 PI 的扣款，拒付反查走它）。 */
+  const charges = new Map<string, Record<string, string>>();
   let nextId = 1;
   let forced: { status: number; body: string; headers: Record<string, string> } | undefined;
   /**
@@ -132,6 +145,9 @@ export function createFakeStripeHttp(): FakeStripeHttp {
     },
     givenPaymentIntent(id, metadata) {
       paymentIntents.set(id, metadata);
+    },
+    givenCharge(id, metadata) {
+      charges.set(id, metadata);
     },
     nextRefundStatus(status) {
       pendingInitialStatus = status;
@@ -250,6 +266,19 @@ export function createFakeStripeHttp(): FakeStripeHttp {
         return {
           status: 200,
           body: JSON.stringify({ id: piMatch[1], object: 'payment_intent', metadata: pi }),
+        };
+      }
+
+      // dispute 上 `payment_intent` 为空时的**第二**条反查通道（AJ-311）
+      const chMatch = /^\/v1\/charges\/([^/]+)$/.exec(path);
+      if (chMatch !== null && req.method === 'GET') {
+        const ch = charges.get(chMatch[1] ?? '');
+        if (ch === undefined) {
+          return { status: 404, body: '{"error":{"message":"No such charge"}}' };
+        }
+        return {
+          status: 200,
+          body: JSON.stringify({ id: chMatch[1], object: 'charge', metadata: ch }),
         };
       }
 

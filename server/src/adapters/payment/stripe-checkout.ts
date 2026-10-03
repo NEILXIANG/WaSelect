@@ -357,39 +357,51 @@ export function createStripeCheckoutProvider(
   }
 
   /**
-   * Dispute 对象的专用取数通道：**反查 PaymentIntent**。
+   * Dispute 对象的专用取数通道：**反查 PaymentIntent / Charge**。
    *
    * @why Stripe 不会把 metadata 复制到 Dispute 上（与 Charge 不同——Charge 在建单时
-   *      会拿到 PaymentIntent 的 metadata 副本），dispute 对象上链回订单的唯一字段是
-   *      `payment_intent`；不反查的话 `charge.dispute.*` 事件全部取不到 order_id →
-   *      抛错 → 500 → 机构按节奏重发（ bounded 的重试风暴），且 `webhook_events` 里
+   *      会拿到 PaymentIntent 的 metadata 副本），dispute 对象上链回订单的字段只有
+   *      `payment_intent`（旧 Charges API / 部分非卡支付方式的扣款则只有 `charge`）；
+   *      不反查的话 `charge.dispute.*` 事件全部取不到 order_id →
+   *      抛错 → 500 → 机构按节奏重发（bounded 的重试风暴），且 `webhook_events` 里
    *      连一行"收到过"都没有（解析先于登记）——拒付这种"钱在被往回拉"的事件
    *      恰恰是最不能丢审计的一类（体检 P1-7）。
+   * @why 两条通道合成**一个函数**（AJ-311）：PI 与 Charge 的判定逻辑逐字相同
+   *      （"是不是我们的" → "有没有 order_id"），写成两个函数的话，改了一处判据
+   *      另一处不会红——那正是"拒付归属"这种不能错的地方最怕的形态。
+   *      @measured(docs.stripe.com/api/disputes/object, 2026-09-30)：Dispute 的
+   *      `payment_intent` 与 `charge` **都可空**，示例对象里 `payment_intent` 就是 null。
    * @limitation 一次回调多一次出站调用；失败（超时/5xx）则原样抛出让机构重发。
-   *             反查拿到的 PI 上也没有 order_id 时同样抛——那才是**我们的**缺陷。
+   *             反查拿到的对象上也没有 order_id 时同样抛——那才是**我们的**缺陷。
    */
-  async function orderIdViaPaymentIntent(pi: string): Promise<string> {
+  async function orderIdViaStripeObject(
+    path: 'payment_intents' | 'charges',
+    id: string,
+  ): Promise<string> {
+    // ⚠️ 必须编码：`id` 来自**入站报文**，不是我们自己拼的字符串。
+    //    同文件另外几处（会话反查 / 退款查询 / 会话作废）都编码，这里漏了就是唯一一处
+    //    "外部输入直接进 URL 路径"的口子（第二轮审查 PAY-16 的残留，随本条一并收口）。
     const res = await deps.http.send({
       method: 'GET',
-      url: `${apiBase}/v1/payment_intents/${pi}`,
+      url: `${apiBase}/v1/${path}/${encodeURIComponent(id)}`,
       headers: authHeaders(),
     });
     if (res.status < 200 || res.status >= 300) {
       // @security 只带状态与前 200 字符：上游错误体可能含 PII，且只进日志
       throw new Error(
-        `stripe 反查 payment_intent 失败：HTTP ${res.status} ${res.body.slice(0, 200)}（pi=${pi}）`,
+        `stripe 反查 ${path} 失败：HTTP ${res.status} ${res.body.slice(0, 200)}（id=${id}）`,
       );
     }
     const json = JSON.parse(res.body) as { metadata?: Record<string, unknown> };
     // B5 / AJ-198：先判"是不是我们的付款"。拒付也可能来自账户里非本系统的收款
-    // （Payment Link 收的钱被拒付），那种 dispute 反查回来的 PI 上没有我们的标记——
+    // （Payment Link 收的钱被拒付），那种 dispute 反查回来的对象上没有我们的标记——
     // 对它抛错同样会把端点拖向停用。注意区分：**没标记 = 别人的钱**（ignored），
     // **有标记却没有 order_id = 我们写漏了**（抛）。
     if (json.metadata?.['source'] !== STRIPE_SOURCE_TAG) return '';
     const orderId = json.metadata?.['order_id'];
     if (typeof orderId !== 'string' || orderId.length === 0) {
       throw new Error(
-        `stripe payment_intent 上没有 order_id（pi=${pi}）：create 时未写入 payment_intent_data.metadata`,
+        `stripe ${path} 上没有 order_id（id=${id}）：create 时未写入 metadata.order_id`,
       );
     }
     return orderId;
@@ -586,49 +598,73 @@ export function createStripeCheckoutProvider(
       };
       const obj = ev.data?.object ?? {};
       const type = typeof ev.type === 'string' ? ev.type : 'unknown';
-      // Dispute 对象结构上没有我们的 metadata（Stripe 不复制），走反查通道；
-      // 其余对象取不到就是 create 时漏写——保持"自己的缺陷必须抛"（见 orderIdOf）
+      /**
+       * 归属判定：**先问"是不是我们的钱"，再取单号**（AJ-310，第二轮审查 PAY2-01 的修法）。
+       *
+       * @why 旧实现先调 `orderIdOf(obj)`——只要对象上有 `metadata.order_id` 或
+       *      `client_reference_id` 就直接当成本系统订单，**永远不问 `isOurs`**。
+       *      于是 B5 / AJ-198 那条"没标记 = 非本系统的钱"被绕开了两条路：
+       *        · 同一账户上另一套集成写了 `metadata.order_id`（极常见的键名）→ 照单全收；
+       *        · 运营的 Payment Link 被付款人带 `?client_reference_id=<本系统单号>` 打开
+       *          （这个参数由 URL 指定，付款人可见）→ 照单全收。
+       *      后果与 B5 要堵的**完全一样**（钱到单未付的假告警、宽限期内每次投递回 503、
+       *      端点被拖向停用），只是 B5 只堵住了"连单号都没有"的那一半。
+       * @why 顺序反过来之后，"有标记却没有 order_id 必须抛"这条**对所有事件类型**成立——
+       *      旧实现里非 succeeded 类事件会先被"按事件类型放行"那条分支静默吞掉
+       *      （有标记却取不到单号的 `checkout.session.expired` 被当成 unknown 收下，
+       *      于是"我们自己写漏了 metadata"这个缺陷在过期类事件上永远看不见）。
+       * @why dispute 必须**单独走反查**，不能进 `isOurs` 这一支：Stripe 不把 metadata
+       *      复制到 dispute 对象上，它永远"没有标记"——对它用 `!isOurs` 判定会把
+       *      "链不回订单的拒付"静默 ignored，而那正是钱正在被拉回、必须有人看见的一类。
+       */
       let orderId: string;
-      try {
-        orderId = orderIdOf(obj);
-      } catch (firstError) {
+      if (obj['object'] === 'dispute') {
+        /**
+         * dispute 的两条链回扣款的字段（@measured docs.stripe.com/api/disputes/object,
+         * 2026-09-30：两者**都可空**，官方示例对象里 `payment_intent` 就是 null）。
+         *
+         * @why 补 `charge` 这一条（AJ-311，第二轮审查 PAY2-02 的修法）：账户里不经
+         *      PaymentIntent 的收款（旧 Charges API / 部分非卡支付方式）被拒付时，
+         *      dispute 上只有 `charge`。旧实现此时两条"收下"分支都把 dispute 排除在外，
+         *      落到最后 `throw` → 每一条 `charge.dispute.*` 都回 500 → 机构重发约三天
+         *      → **端点被停用**。本系统自己的付款一定有 PI，所以这一条补的是"账户里
+         *      别人的钱被拒付"那半边——它不该以 500 的形式把端点拖垮。
+         * @why Charge 上能取到 order_id：官方口径是"建 Charge 时 PaymentIntent 的
+         *      metadata 会复制到 Charge"（本文件 create() 的注释已引这条），
+         *      所以 `payment_intent_data[metadata]` 那一份在这里同样读得到。
+         */
         const pi = obj['payment_intent'];
-        if (obj['object'] === 'dispute' && typeof pi === 'string' && pi.length > 0) {
-          orderId = await orderIdViaPaymentIntent(pi);
-        } else if (OUTCOME_BY_TYPE[type] !== 'succeeded' && obj['object'] !== 'dispute') {
-          // 全量审计 2026-09-26 P1：端点订阅了哪些事件由 Stripe 控制台决定——`balance.available` /
-          //    `payout.*` / 控制台手工退款的 `refund.*` / 无 metadata 的 `charge.*` 根本没有我们的单号。
-          //    对它们抛错 = 500 → Stripe 按退避重发数天，持续失败的端点会被标记停用，届时真正的
-          //    `checkout.session.completed` 也收不到。与订单无关的事件按 unknown 收下（管线 200 +
-          //    `ignored:unknown` 留痕）；只有"本该落账却取不到单号"与"拒付却链不回订单"才抛——
-          //    前者是我们 create 漏写 metadata，后者是钱正在被拉回、必须有人看见（不能悄悄 ignored）。
-          // ⚠️ 2026-09-29 B5（AJ-198）**收窄**了上面这句：这一分支按**事件类型**判断，
-          //    挡不住"succeeded 类事件却是账户里非本系统收的款"（Payment Link / Dashboard 收款）——
-          //    它同样会走到抛错 → 500 → 端点被停用。那一条由下面的 `!isOurs` 分支兜住。
-          //    现在真正会抛的只有一种情形：**有我们的标记、却取不到 order_id**（自己写漏了）。
-          orderId = '';
-        } else if (!isOurs(obj) && obj['object'] !== 'dispute') {
-          // ⚠️ dispute **排除在外**：Stripe 不把 metadata 复制到 dispute 对象上，
-          //    所以 dispute 永远"没有标记"——对它不能用 `!isOurs` 判成非本系统，
-          //    否则"链不回订单的拒付"会被静默 ignored，而那正是钱正在被拉回、
-          //    必须有人看见的一类。dispute 的归属只由**反查 PI** 判定（上面那个分支）；
-          //    连 `payment_intent` 字段都没有的 dispute → 落到最后那个 throw。
-          // 🔴 B5 / AJ-198：**没有我们的标记 = 这个 Stripe 账户里非本系统收的款**
-          //    （Payment Link / Dashboard / Invoice 手工收款）。它们也会打到同一个端点，
-          //    而 `metadata.order_id` 理所当然没有。旧实现对它们一律 throw → 500
-          //    → Stripe 按退避重发约 3 天 → **持续失败的端点会被停用**，
-          //    届时真实订单的 `checkout.session.completed` 也一起收不到（钱收了、订单永远 pending_payment）。
-          //    这里按 unknown 收下：**200 + `ignored:unknown` 留痕**（管线给 warn 并写 webhook_events）。
-          // @limitation 它**不会**单独打一条 `stripe_foreign_event`：适配器没有 logger（`StripeProviderDeps`
-          //    刻意不含它），而 `ProviderEvent` 又明令不许再加字段（ports/payment.ts @limitation 二）。
-          //    代价是"非本系统付款"与"我们的 outcome 没注册"在日志里都叫 `ignored:unknown`，
-          //    要靠 `raw_type` 区分。**这是可接受的下一次改进点**，不是本次要堵的洞——
-          //    本次要堵的是 500（端点被停用），200 + 留痕已经彻底解决它。
-          orderId = '';
+        const ch = obj['charge'];
+        if (typeof pi === 'string' && pi.length > 0) {
+          orderId = await orderIdViaStripeObject('payment_intents', pi);
+        } else if (typeof ch === 'string' && ch.length > 0) {
+          orderId = await orderIdViaStripeObject('charges', ch);
         } else {
-          // 有我们的标记却没有 order_id = **自己 create 时写漏了**，必须看得见（不能 quietly ignored）
-          throw firstError;
+          // 连 charge 都没有 = 这条拒付链不回任何可查对象。抛（不 ignored）：
+          // 钱正在被往回拉，它必须看得见——而"看得见"在这里就是让机构重发 + 留 5xx。
+          throw new Error(
+            `stripe 回调里取不到 order_id（type=${type}）：dispute 上既没有 payment_intent 也没有 charge，无法反查`,
+          );
         }
+      } else if (!isOurs(obj)) {
+        // 🔴 B5 / AJ-198：**没有我们的标记 = 这个 Stripe 账户里非本系统收的款**
+        //    （Payment Link / Dashboard / Invoice 手工收款）。它们也会打到同一个端点，
+        //    而 `metadata.order_id` 理所当然没有。旧实现对它们一律 throw → 500
+        //    → Stripe 按退避重发约 3 天 → **持续失败的端点会被停用**，
+        //    届时真实订单的 `checkout.session.completed` 也一起收不到（钱收了、订单永远 pending_payment）。
+        //    这里按 unknown 收下：**200 + `ignored:unknown` 留痕**（管线给 warn 并写 webhook_events）。
+        //    ⚠️ 这一支也覆盖"与订单无关的事件"（`balance.available` / `payout.*` 等），
+        //    它们同样没有标记——不再需要按**事件类型**单列一条分支（旧实现的第二个分支）。
+        // @limitation 它**不会**单独打一条 `stripe_foreign_event`：适配器没有 logger（`StripeProviderDeps`
+        //    刻意不含它），而 `ProviderEvent` 又明令不许再加字段（ports/payment.ts @limitation 二）。
+        //    代价是"非本系统付款"与"我们的 outcome 没注册"在日志里都叫 `ignored:unknown`，
+        //    要靠 `raw_type` 区分。**这是可接受的下一次改进点**，不是本次要堵的洞——
+        //    本次要堵的是 500（端点被停用），200 + 留痕已经彻底解决它。
+        orderId = '';
+      } else {
+        // 有我们的标记 → 取单号；取不到就是**自己 create 时写漏了**，必须看得见
+        // （不能 quietly ignored）。`orderIdOf` 取不到时抛，这里不接住。
+        orderId = orderIdOf(obj);
       }
       const amount =
         typeof obj['amount_total'] === 'number'
@@ -697,6 +733,11 @@ export function createStripeCheckoutProvider(
         // 原币退（见 RefundRequest.currency 的 @why）：币种与金额都来自**扣款当时**的那笔
         amount: String(req.amountMinor),
         'metadata[order_id]': req.orderId,
+        // ⚠️ 本系统标记（AJ-310）：退款也是我们建出来的对象，`refund.*` 事件的归属判定
+        //    同样看它。缺了它的后果是——归属判定前移之后，我们自己发起的退款所产生的
+        //    `refund.created` / `refund.succeeded` 会被判成"非本系统"，
+        //    登记行里的 `order_id` 变成空串，退款事件从此链不回订单（可观测性倒退）。
+        'metadata[source]': STRIPE_SOURCE_TAG,
         // ⚠️ 不是 req.reason 本身（B7 / AJ-191）：理由原样进 metadata，而 Stripe 对
         //    metadata 的值有长度上限，超了直接拒掉这一整笔退款。
         //    路由入口已经拒掉超长的新理由，这里截断只为**存量**脏数据兜底

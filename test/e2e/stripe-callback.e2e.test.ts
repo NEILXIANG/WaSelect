@@ -69,7 +69,9 @@ function sessionCompleted(orderId: string, paymentStatus: string, eventId: strin
         payment_status: paymentStatus,
         amount_total: 12000,
         currency: 'usd',
-        metadata: { order_id: orderId },
+        // ⚠️ 必须带本系统标记（AJ-310）：`create()` 写进 Session 的是 `order_id` + `source`
+        //    **两键**，只写 order_id 的样本会被归属判定判成"非本系统的钱" → 不落账。
+        metadata: { order_id: orderId, source: STRIPE_SOURCE_TAG },
         payment_intent: 'pi_e2e_1',
       },
     },
@@ -172,7 +174,9 @@ describe('Stripe 回调全链路（真签名 → 统一分发 → 真库）', ()
       '{ "id": "evt_e2e_bytes", "type": "checkout.session.completed",  "data": { "object": {' +
       '"object": "checkout.session", "id": "cs_test_e2e_bytes", "payment_status": "paid",' +
       '"amount_total": 12000, "currency": "usd", "customer_details": { "name": "\\u30c6\\u30b9\\u30c8 太郎" },' +
-      `"metadata": { "order_id": "${orderId}" }, "payment_intent": "pi_e2e_bytes" } } }`;
+      // ⚠️ 同上：必须带本系统标记（AJ-310），否则归属判定把它判成"非本系统的钱"
+      `"metadata": { "order_id": "${orderId}", "source": "${STRIPE_SOURCE_TAG}" },` +
+      `"payment_intent": "pi_e2e_bytes" } } }`;
     const res = await postStripe(Buffer.from(raw, 'utf8'));
     expect(res.status).toBe(200);
     expect(await orderStatus(orderId)).toBe('paid');

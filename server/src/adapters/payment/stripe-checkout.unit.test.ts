@@ -92,8 +92,21 @@ function signed(
   // ⚠️ dispute 对象**不能**硬塞 metadata：真实的 Dispute 上没有它（Stripe 不复制），
   //    塞进去等于把"取不到 order_id → 反查 PaymentIntent"这条路径从测试里抹掉——
   //    P1-7 之所以藏到体检才被发现，这层"贴心的合并"就是掩盖层之一。
+  // ⚠️ 其余对象必须**同时**带上本系统标记（AJ-310）：`create()` 写进 Session / PI 的
+  //    就是 `metadata.order_id` 与 `metadata.source` **两键**（B5 / AJ-198）。
+  //    只塞 order_id 的样本在"归属判定前移到取单号之前"之后会被判成"非本系统的钱"
+  //    ——那不是被测代码错了，是样本脱离了真实形状，会让走本助手的用例集体假红。
+  //    想造"没有标记"的外部付款，请像 B5 那两条用例一样自己拼 body（不进本助手）。
+  const sampleMeta = (object['metadata'] as Record<string, unknown> | undefined) ?? {};
   const realistic =
-    object['object'] === 'dispute' ? object : { ...object, metadata: { order_id: REQ.orderId } };
+    object['object'] === 'dispute'
+      ? object
+      : {
+          ...object,
+          // ⚠️ `order_id` 沿用本助手原有的**覆盖**语义（样本自带的那个不保留，
+          //    多数用例断言的就是 `REQ.orderId`）；其余样本键照带，再无条件补 `source`。
+          metadata: { ...sampleMeta, order_id: REQ.orderId, source: STRIPE_SOURCE_TAG },
+        };
   const body = JSON.stringify(stripeEvent(type, realistic));
   const header = signStripePayload(body, opts.secret ?? SECRET, opts.t ?? NOW_SEC);
   const withExtra = opts.extra === undefined ? header : `${header},${opts.extra}`;
@@ -605,6 +618,9 @@ describe('parseWebhook（事件映射与验签细节）', () => {
       stripeEvent('checkout.session.completed', {
         id: 'cs_1',
         client_reference_id: 'sk-fallback',
+        // ⚠️ 必须带本系统标记：归属判定先于取单号（AJ-310），没有标记的会话一律"非本系统"，
+        //    `client_reference_id` 回退只在"**我们的**会话上 metadata 恰好缺 order_id"时成立。
+        metadata: { source: STRIPE_SOURCE_TAG },
       }),
     );
     const ev = await provider.parseWebhook(Buffer.from(body, 'utf8'), {
@@ -762,7 +778,7 @@ describe('parseWebhook：dispute 事件的 order_id 反查（体检 P1-7）', ()
     // 不登记这个 PI：替身返回 404（有脾气的替身，见 fake-stripe-http）
     const p = signedDispute('pi_not_registered');
     await expect(provider.parseWebhook(p.raw, p.headers)).rejects.toThrow(
-      /反查 payment_intent 失败：HTTP 404/,
+      /反查 payment_intents 失败：HTTP 404/,
     );
   });
 
@@ -813,15 +829,149 @@ describe('parseWebhook：dispute 事件的 order_id 反查（体检 P1-7）', ()
     expect(form.get('payment_intent_data[metadata][source]')).toBe(STRIPE_SOURCE_TAG);
   });
 
-  it('dispute 对象连 payment_intent 字段都没有 → 抛原始"取不到 order_id"（不编不猜）', async () => {
+  /**
+   * 🔴 AJ-311（第二轮审查 PAY2-02 的修法）：`payment_intent` 为空的 dispute 走 **charge** 反查。
+   *
+   * @why @measured(docs.stripe.com/api/disputes/object, 2026-09-30)：Dispute 的
+   *      `payment_intent` 与 `charge` **都可空**，官方示例对象里 `payment_intent` 就是 null。
+   *      不经 PaymentIntent 的收款（旧 Charges API / 部分非卡支付方式）被拒付时只有 `charge`；
+   *      旧实现此时两条"收下"分支都把 dispute 排除在外 → 一律抛 → **每一条拒付事件都回 500**
+   *      → 机构重发约三天 → 端点被停用。本系统自己的付款一定有 PI，这一条补的是
+   *      "账户里别人的钱被拒付"那半边——它不该以 500 的形式把端点拖垮。
+   */
+  it('🔴 dispute 上没有 payment_intent（只有 charge）→ 反查 charge 取回 order_id，不抛', async () => {
+    const { http, provider } = build();
+    http.givenCharge('ch_3P0000000000000000000000', {
+      order_id: REQ.orderId,
+      source: STRIPE_SOURCE_TAG,
+    });
+    const legacy = dispute();
+    delete legacy['payment_intent'];
+    const body = JSON.stringify(stripeEvent('charge.dispute.created', legacy));
+    const headers = { [HEADER]: signStripePayload(body, SECRET, NOW_SEC) } as HeaderBag;
+    const ev = await provider.parseWebhook(Buffer.from(body, 'utf8'), headers);
+    expect(ev.outcome).toBe('disputed');
+    expect(ev.orderId).toBe(REQ.orderId);
+    // 确实走的是 charge 那条反查通道（不是从别处碰巧取到）
+    expect(http.calls.filter((c) => c.method === 'GET').map((c) => c.url)).toEqual([
+      'https://api.stripe.test/v1/charges/ch_3P0000000000000000000000',
+    ]);
+  });
+
+  it('🔴 非本系统的扣款被拒付（charge 上没有我们的标记）→ unknown + 空单号，不抛', async () => {
+    const { http, provider } = build();
+    http.givenCharge('ch_foreign_00000000000000000', { order_id: 'someone-elses-order' });
+    const legacy = dispute();
+    delete legacy['payment_intent'];
+    legacy['charge'] = 'ch_foreign_00000000000000000';
+    const body = JSON.stringify(stripeEvent('charge.dispute.created', legacy));
+    const headers = { [HEADER]: signStripePayload(body, SECRET, NOW_SEC) } as HeaderBag;
+    const ev = await provider.parseWebhook(Buffer.from(body, 'utf8'), headers);
+    expect(ev.outcome).toBe('unknown');
+    expect(ev.orderId).toBe('');
+  });
+
+  it('dispute 上 payment_intent 与 charge 都没有 → 抛（链不回任何可查对象，不能悄悄 ignored）', async () => {
     const { provider } = build();
     const bare = dispute();
     delete bare['payment_intent'];
+    delete bare['charge'];
     const body = JSON.stringify(stripeEvent('charge.dispute.created', bare));
     const headers = { [HEADER]: signStripePayload(body, SECRET, NOW_SEC) } as HeaderBag;
     await expect(provider.parseWebhook(Buffer.from(body, 'utf8'), headers)).rejects.toThrow(
       /取不到 order_id/,
     );
+  });
+});
+
+/**
+ * 🔴 AJ-310（第二轮审查 PAY2-01 的修法）：**归属判定必须在取单号之前**。
+ *
+ * @why 旧实现先调 `orderIdOf(obj)`：只要对象上有 `metadata.order_id` 或
+ *      `client_reference_id` 就当成本系统订单，**永远不问 `isOurs`**。
+ *      于是 B5 那条"没标记 = 非本系统的钱"被绕开了两条真实路径——
+ *      下面两条用例各钉一条。它们的后果与 B5 要堵的完全一样：
+ *      进落账管线 → `markOrderPaid` 抛 40400 → 宽限期内每次投递回 503，
+ *      过宽限期落 `unmatched:order_not_found` 并打 error 级 `callback_unmatched`
+ *      （"钱到单未付"的假告警，每一笔外部付款一条，会淹没真告警）。
+ */
+describe('parseWebhook：归属判定先于取单号（AJ-310）', () => {
+  /** 手工拼一条"没有本系统标记"的事件报文（不走 signed 助手——它会注入标记）。 */
+  function foreignBody(
+    type: string,
+    object: Record<string, unknown>,
+  ): {
+    raw: Buffer;
+    headers: HeaderBag;
+  } {
+    const body = JSON.stringify(stripeEvent(type, object));
+    return {
+      raw: Buffer.from(body, 'utf8'),
+      headers: { [HEADER]: signStripePayload(body, SECRET, NOW_SEC) } as HeaderBag,
+    };
+  }
+
+  it('🔴 外部付款带 client_reference_id（付款人可经 URL 指定）但没有标记 → unknown，不进管线', async () => {
+    const { provider } = build();
+    const p = foreignBody(STRIPE_EVENT_TYPES.checkoutCompleted, {
+      ...objectForEvent(STRIPE_EVENT_TYPES.checkoutCompleted),
+      // ⚠️ 这个值在 Payment Link 场景下由**付款人**经 URL 指定（?client_reference_id=…），
+      //    填成本系统单号是完全做得到的
+      client_reference_id: REQ.orderId,
+      metadata: {},
+    });
+    const ev = await provider.parseWebhook(p.raw, p.headers);
+    expect(ev.orderId).toBe('');
+    expect(ev.outcome).toBe('unknown');
+  });
+
+  it('🔴 同一账户上另一套集成写了 metadata.order_id 但没有标记 → unknown，不进管线', async () => {
+    const { provider } = build();
+    const p = foreignBody(STRIPE_EVENT_TYPES.checkoutCompleted, {
+      ...objectForEvent(STRIPE_EVENT_TYPES.checkoutCompleted),
+      // `order_id` 是极常见的键名，另一套集成完全可能用它
+      metadata: { order_id: 'shopify-1001' },
+    });
+    const ev = await provider.parseWebhook(p.raw, p.headers);
+    expect(ev.orderId).toBe('');
+    expect(ev.outcome).toBe('unknown');
+  });
+
+  /**
+   * @why 旧实现里这条缺陷**只对 succeeded 类事件**成立：非 succeeded 类事件会先被
+   *      "按事件类型放行"那条分支吞掉（有标记却取不到单号 → 静默 unknown）。
+   *      判据前移之后，"有标记却取不到 order_id = 自己写漏了"对所有事件类型成立。
+   */
+  it('🔴 有本系统标记却取不到 order_id 的**非 succeeded** 事件也抛（旧实现会静默吞掉）', async () => {
+    const { provider } = build();
+    const body = JSON.stringify(
+      stripeEvent(STRIPE_EVENT_TYPES.checkoutExpired, {
+        ...objectForEvent(STRIPE_EVENT_TYPES.checkoutExpired),
+        metadata: { source: STRIPE_SOURCE_TAG }, // 有标记，但没有 order_id
+      }),
+    );
+    const headers = { [HEADER]: signStripePayload(body, SECRET, NOW_SEC) } as HeaderBag;
+    await expect(provider.parseWebhook(Buffer.from(body, 'utf8'), headers)).rejects.toThrow(
+      /取不到 order_id/,
+    );
+  });
+
+  it('退款也带本系统标记：我们自己发起的退款事件能链回订单（不是"非本系统的钱"）', async () => {
+    const { http, provider } = build();
+    await provider.create(REQ);
+    const { refund } = provider;
+    if (refund === undefined) throw new Error('stripe 必须支持退款');
+    await refund.call(provider, {
+      orderId: REQ.orderId,
+      providerRef: 'cs_test_0001',
+      amountJpy: 12_000,
+      currency: 'JPY',
+      amountMinor: 12_000,
+      reason: 'test',
+    });
+    const form = formBody(http.calls.at(-1));
+    expect(form.get('metadata[source]')).toBe(STRIPE_SOURCE_TAG);
+    expect(form.get('metadata[order_id]')).toBe(REQ.orderId);
   });
 });
 

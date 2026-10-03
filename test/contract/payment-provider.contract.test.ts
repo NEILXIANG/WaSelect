@@ -19,7 +19,10 @@ import {
 } from '../../server/src/adapters/payment/mock.js';
 import { systemClock } from '../../server/src/adapters/clock.js';
 import { systemIdGen } from '../../server/src/adapters/ids.js';
-import { createStripeCheckoutProvider } from '../../server/src/adapters/payment/stripe-checkout.js';
+import {
+  createStripeCheckoutProvider,
+  STRIPE_SOURCE_TAG,
+} from '../../server/src/adapters/payment/stripe-checkout.js';
 import { fixedClock } from '../helpers/fixed-clock.js';
 import { createFakeStripeHttp } from '../helpers/fake-stripe-http.js';
 import {
@@ -129,7 +132,9 @@ function stripeHarness(): ProviderHarness {
           id: e.providerRef,
           amountTotal: e.amountMinor,
           currency: 'jpy',
-          metadata: { order_id: e.orderId },
+          // ⚠️ 必须带本系统标记（AJ-310）：`create()` 写入 Session 的是 `order_id` + `source`
+          //    **两键**；只写 order_id 的样本会被归属判定判成"非本系统的钱"。
+          metadata: { order_id: e.orderId, source: STRIPE_SOURCE_TAG },
         }),
       ),
     );
