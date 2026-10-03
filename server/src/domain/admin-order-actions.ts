@@ -36,6 +36,7 @@
 import {
   ADMIN_NOTE_MAX_LENGTH,
   REFUND_REASON_MAX_LENGTH,
+  SHIP_MAX_CHARS,
   type ErrorCode,
   type OrderStatus,
 } from '@waselect/shared';
@@ -200,6 +201,50 @@ export function releaseReasonGuard(raw: unknown): RefundReasonResult {
     'release_reason_required',
     'release_reason_too_long',
   );
+}
+
+/** 发货表单的校验结果（AJ-315）：`ok:true` 时两个值都**已 trim**。 */
+export type ShipInfoResult =
+  | { ok: true; carrier: string; trackingNo: string }
+  | { ok: false; code: ErrorCode; reason: string };
+
+/**
+ * 发货表单准入：**两个字段都必填，且都不超过列宽**（AJ-315）。
+ *
+ * @why 长度必须**在入口判**——此前只判非空（第二轮审查 B24）：
+ *      `orders.carrier` 是 VARCHAR(32)、`tracking_no` 是 VARCHAR(64)（迁移 001），
+ *      超长撞 PG 的 22001 → 兜底层把它折成泛化的 **40001**（`http.ts` 的 22 类映射，
+ *      reason 带 `sql_data_exception:22001`）。运营看到的不是"运单号太长"而是
+ *      "参数缺失或格式错误"，提示指向了**错误的字段**；发货又在事务里，
+ *      每次失败都把这张单回滚回 paid——她会以为是自己没点上，于是再点一次。
+ * @why 两个 reason **分开**给（`carrier_too_long` / `tracking_no_too_long`，而不是合成一个
+ *      `ship_fields_invalid`）：它们进日志，得能一眼看出是**哪一列**撞了列宽；
+ *      合成一个词等于把两个现场混成一个（与 `textGuard` 的 @why 同口径）。
+ * @why 与 `shipGuard` **分开**：`shipGuard` 问"这张单现在能不能发货"（状态 × 拒付 × 测试单），
+ *      本函数问"这两个文本能不能落库"。合起来会让"状态不对"与"运单号太长"争同一个码，
+ *      而两者的处置完全不同（前者重试也没用，后者改短就行）——
+ *      与 `refundGuard` / `refundReasonGuard` 那一对是同一条分工。
+ * @limitation 按 **UTF-16 码元**量长度（JS 的 `.length`），而 PG 的 `VARCHAR(n)` 按**字符**量：
+ *      含 emoji / 部分罕用汉字的运单号会比库口径早一点被拒。方向是保守的——
+ *      少收一个字符只是提示早一点，多收一个就是上面那条 40001。
+ *
+ * @see packages/shared/src/limits.ts（`SHIP_MAX_CHARS` 唯一真源）；
+ *      app/admin-order-routes.ts（唯一调用方）；admin-web/src/orders/view.ts（`shipErrors`）
+ */
+export function shipInfoGuard(raw: unknown): ShipInfoResult {
+  const b = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const carrier = typeof b['carrier'] === 'string' ? b['carrier'].trim() : '';
+  const trackingNo = typeof b['tracking_no'] === 'string' ? b['tracking_no'].trim() : '';
+  if (carrier === '' || trackingNo === '') {
+    return { ok: false, code: 40001, reason: 'carrier_tracking_no_required' };
+  }
+  if (carrier.length > SHIP_MAX_CHARS.carrier) {
+    return { ok: false, code: 40001, reason: 'carrier_too_long' };
+  }
+  if (trackingNo.length > SHIP_MAX_CHARS.tracking_no) {
+    return { ok: false, code: 40001, reason: 'tracking_no_too_long' };
+  }
+  return { ok: true, carrier, trackingNo };
 }
 
 /**

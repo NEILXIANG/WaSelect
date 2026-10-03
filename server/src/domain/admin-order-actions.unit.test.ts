@@ -11,7 +11,12 @@
  *      给错的话客服会去改状态，越改越错（实现里的 @why 写了同一条）。
  */
 import { describe, expect, it } from 'vitest';
-import { ORDER_STATUS, REFUND_REASON_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
+import {
+  ORDER_STATUS,
+  REFUND_REASON_MAX_LENGTH,
+  SHIP_MAX_CHARS,
+  type OrderStatus,
+} from '@waselect/shared';
 import {
   ADMIN_NOTE_MAX_LENGTH,
   addressGuard,
@@ -20,6 +25,7 @@ import {
   refundReasonGuard,
   releaseReasonGuard,
   shipGuard,
+  shipInfoGuard,
 } from './admin-order-actions.js';
 
 /** 取失败码；断言"必须通过"前先断言 ok（否则 `code` 是 undefined，断言会假绿）。 */
@@ -211,5 +217,68 @@ describe('clipRefundReason：只截超限的存量脏数据，且必须确定性
     expect(a).toBe(b);
     expect(a.length).toBe(MAX);
     expect(long.startsWith(a)).toBe(true); // 是前缀，不是随便切一段
+  });
+});
+
+/**
+ * 发货表单的**列宽**校验（AJ-315 / 第二轮审查 B24）。
+ *
+ * @why 上限由 shared 常量算出，不在测试里再写 32 / 64——写两遍就等于两处都能改、
+ *      改一处另一处不红（契约 / 服务端 / 前端各一份正是这条要防的漂移）。
+ * @why 边界取"等于上限通过、超 1 拒"：列宽是硬边界（PG 的 VARCHAR(n)），
+ *      差一个字符就是 22001，所以这两个值必须都钉住。
+ */
+describe('shipInfoGuard：必填 + 不超过列宽（AJ-315）', () => {
+  const ok = { carrier: 'Japan Post', tracking_no: 'EL123456789JP' };
+
+  it('合规 → 通过，且两个值都 trim 过', () => {
+    const r = shipInfoGuard({ carrier: ' Japan Post ', tracking_no: ' EL123 ' });
+    if (!r.ok) throw new Error('期望通过');
+    expect(r.carrier).toBe('Japan Post');
+    expect(r.trackingNo).toBe('EL123');
+  });
+
+  it(`承运商等于上限（${String(SHIP_MAX_CHARS.carrier)}）通过，超 1 拒`, () => {
+    const at = shipInfoGuard({ ...ok, carrier: 'C'.repeat(SHIP_MAX_CHARS.carrier) });
+    expect(at.ok).toBe(true);
+    const over = shipInfoGuard({ ...ok, carrier: 'C'.repeat(SHIP_MAX_CHARS.carrier + 1) });
+    expect(over.ok).toBe(false);
+    if (over.ok) throw new Error('期望被拦');
+    expect(over.code).toBe(40001);
+    expect(over.reason).toBe('carrier_too_long');
+  });
+
+  it(`运单号等于上限（${String(SHIP_MAX_CHARS.tracking_no)}）通过，超 1 拒`, () => {
+    const at = shipInfoGuard({ ...ok, tracking_no: 'T'.repeat(SHIP_MAX_CHARS.tracking_no) });
+    expect(at.ok).toBe(true);
+    const over = shipInfoGuard({ ...ok, tracking_no: 'T'.repeat(SHIP_MAX_CHARS.tracking_no + 1) });
+    expect(over.ok).toBe(false);
+    if (over.ok) throw new Error('期望被拦');
+    expect(over.reason).toBe('tracking_no_too_long');
+  });
+
+  /**
+   * @why 两个理由必须**分开**：它们进日志，合成一个词等于把"承运商太长"与
+   *      "运单号太长"两个现场混成一个，排障时看不出是哪一列撞了列宽。
+   */
+  it('两个超长理由不同（不是合成一个 ship_fields_invalid）', () => {
+    const a = shipInfoGuard({ ...ok, carrier: 'C'.repeat(SHIP_MAX_CHARS.carrier + 1) });
+    const b = shipInfoGuard({ ...ok, tracking_no: 'T'.repeat(SHIP_MAX_CHARS.tracking_no + 1) });
+    if (a.ok || b.ok) throw new Error('期望都被拦');
+    expect(a.reason).not.toBe(b.reason);
+  });
+
+  it('缺字段 / 非对象 → 40001 carrier_tracking_no_required（不是抛）', () => {
+    for (const bad of [null, undefined, {}, { carrier: 'JP' }, { tracking_no: 'T1' }, 42]) {
+      const r = shipInfoGuard(bad);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('期望被拦');
+      expect(r.reason).toBe('carrier_tracking_no_required');
+    }
+  });
+
+  it('全空白 → 必填错而不是"通过"（trim 之后才是判据）', () => {
+    const r = shipInfoGuard({ carrier: '   ', tracking_no: '   ' });
+    expect(r.ok).toBe(false);
   });
 });

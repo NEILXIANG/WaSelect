@@ -10,7 +10,12 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ADMIN_NOTE_MAX_LENGTH, ORDER_STATUS, REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import {
+  ADMIN_NOTE_MAX_LENGTH,
+  ORDER_STATUS,
+  REFUND_REASON_MAX_LENGTH,
+  SHIP_MAX_CHARS,
+} from '@waselect/shared';
 import {
   EVENT_STATUS_LABELS,
   ORDER_STATUS_LABELS,
@@ -348,6 +353,32 @@ describe('发货 / 退款表单', () => {
     const tooLong = refundErrors({ reason: '理'.repeat(MAX + 1) });
     expect(tooLong.ok).toBe(false);
     expect(tooLong.first).toContain(String(MAX));
+  });
+
+  /**
+   * 🔴 AJ-315（第二轮审查 B24）：上限与服务端**同一个常量**（`SHIP_MAX_CHARS`），
+   * 所以"前端放行、服务端拒"这个形态结构上不可能出现——写死 32 / 64 就是第三份。
+   */
+  it(`承运商超过 ${String(SHIP_MAX_CHARS.carrier)} 字 → 拦下，提示带上限数字`, () => {
+    const at = shipErrors({ carrier: 'C'.repeat(SHIP_MAX_CHARS.carrier), trackingNo: 'EL123' });
+    expect(at.ok).toBe(true);
+    const over = shipErrors({ carrier: 'C'.repeat(SHIP_MAX_CHARS.carrier + 1), trackingNo: 'EL1' });
+    expect(over.ok).toBe(false);
+    expect(over.errors['carrier']).toContain(String(SHIP_MAX_CHARS.carrier));
+  });
+
+  it(`运单号超过 ${String(SHIP_MAX_CHARS.tracking_no)} 字 → 拦下，提示带上限数字`, () => {
+    const at = shipErrors({
+      carrier: 'Japan Post',
+      trackingNo: 'T'.repeat(SHIP_MAX_CHARS.tracking_no),
+    });
+    expect(at.ok).toBe(true);
+    const over = shipErrors({
+      carrier: 'Japan Post',
+      trackingNo: 'T'.repeat(SHIP_MAX_CHARS.tracking_no + 1),
+    });
+    expect(over.ok).toBe(false);
+    expect(over.errors['trackingNo']).toContain(String(SHIP_MAX_CHARS.tracking_no));
   });
 
   it('非对象输入当作空表单（不是抛，也不是 undefined 穿透）', () => {

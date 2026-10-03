@@ -54,6 +54,7 @@ import {
   refundReasonGuard,
   releaseReasonGuard,
   shipGuard,
+  shipInfoGuard,
 } from '../domain/admin-order-actions.js';
 import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import { setAuditBefore } from './admin-audit.js';
@@ -315,25 +316,35 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
     void (async () => {
       try {
         const id = String(req.params.id);
-        const b = req.body as { carrier?: unknown; tracking_no?: unknown } | null;
-        const carrier = typeof b?.carrier === 'string' ? b.carrier.trim() : '';
-        const trackingNo = typeof b?.tracking_no === 'string' ? b.tracking_no.trim() : '';
-        if (carrier === '' || trackingNo === '') {
-          throw new AppError(40001, { reason: 'carrier_tracking_no_required' });
-        }
+        // ⚠️ 必填 + **列宽**都在入口判（AJ-315 / 第二轮审查 B24）：此前只判非空，
+        //    超长会撞 PG 的 22001 → 兜底层折成泛化的 40001，运营看到的不是"运单号太长"。
+        const ship = shipInfoGuard(req.body);
+        if (!ship.ok) throw new AppError(ship.code, { reason: ship.reason, order_id: id });
         await withTransaction(deps.db, async (tx) => {
           const row = await lockAdminOrder(tx, id);
           if (row === null) throw new AppError(40400, { order_id: id });
           const gate = shipGuard(asOrderStatus(row.status), row.has_dispute, row.is_test);
           if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
           if (
-            !(await markShipped(tx, id, carrier, trackingNo, deps.clock.now(), adminActor(req)))
+            !(await markShipped(
+              tx,
+              id,
+              ship.carrier,
+              ship.trackingNo,
+              deps.clock.now(),
+              adminActor(req),
+            ))
           ) {
             throw new AppError(40902, { order_id: id, reason: 'status_raced' });
           }
         });
         deps.logger.info('admin_order_shipped', { result: 'ok', order_id: id });
-        res.json({ order_id: id, status: 'shipped', carrier, tracking_no: trackingNo });
+        res.json({
+          order_id: id,
+          status: 'shipped',
+          carrier: ship.carrier,
+          tracking_no: ship.trackingNo,
+        });
       } catch (e) {
         next(e);
       }

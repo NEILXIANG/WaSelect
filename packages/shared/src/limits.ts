@@ -191,3 +191,25 @@ export const PRODUCT_MAX_CHARS = {
    */
   why: 200,
 } as const;
+
+/**
+ * `orders` 表**发货两列**的字符上限（`carrier` VARCHAR(32) / `tracking_no` VARCHAR(64)，001）。
+ *
+ * @why 与 `PRODUCT_MAX_CHARS` **完全同口径**，且这处此前正是那个失效形态的漏网之鱼：
+ *      发货入口只判"填没填"不判长度（第二轮审查 B24），超长撞 PG 22001 →
+ *      由兜底层折成泛化的 **40001**（`http.ts` 的 22 类映射，reason 带 `sql_data_exception:22001`）。
+ *      运营看到的是"参数缺失或格式错误"而**不是"运单号太长"**——提示指向了错误的字段，
+ *      她会反复提交反复失败；而发货在事务里，每一次失败都连带把这张单回滚回 paid。
+ * @why 32 / 64 与列宽**逐字一致**（不"留点余量"）：放宽到 40 的话，校验放过 33 字的承运商，
+ *      结果就是上面那条 40001 又回来了——上限存在的全部理由就是不让 PG 有机会报 22001。
+ * @why 放在 shared 而不是服务端：管理端发货表单要 `maxLength` 与即时提示
+ *      （与 `ADMIN_NOTE_MAX_LENGTH` 同一条理由——前端再写一个 32 就是第三份）。
+ *
+ * @see migrations/001_init.sql（`CREATE TABLE orders`）；
+ *      server/src/domain/admin-order-actions.ts（`shipInfoGuard`）；
+ *      admin-web/src/orders/view.ts（`shipErrors`）；docs/自主决策记录.md AJ-315
+ */
+export const SHIP_MAX_CHARS = {
+  carrier: 32,
+  tracking_no: 64,
+} as const;

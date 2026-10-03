@@ -38,6 +38,7 @@ import {
   ADMIN_NOTE_MAX_LENGTH,
   ORDER_STATUS,
   REFUND_REASON_MAX_LENGTH,
+  SHIP_MAX_CHARS,
   type OrderStatus,
 } from '@waselect/shared';
 import { formatJst, minorMoneyText, moneyText } from '../format.js';
@@ -399,7 +400,16 @@ export function emptyShipForm(): ShipForm {
   return { carrier: '', trackingNo: '' };
 }
 
-/** 发货校验（与 `products` 同口径：一次返回全部错误，不留着让运营一条条试）。 */
+/**
+ * 发货校验（与 `products` 同口径：一次返回全部错误，不留着让运营一条条试）。
+ *
+ * @why 长度也在这里判（AJ-315 / 第二轮审查 B24）：上限与服务端同一个常量
+ *      （`SHIP_MAX_CHARS`），所以"前端放行、服务端拒"这个形态**结构上不可能出现**——
+ *      只写一份就不会漂。此前两边都只判非空，超长的后果是服务端撞 PG 22001 折成
+ *      泛化 40001，运营看到的提示指向错误的字段。
+ * @why 提示里**带上上限数字**（与退款理由那条同口径）：运营得知道该删到多短，
+ *      只知道"不能提交"会一直试。
+ */
 export function shipErrors(form: unknown): {
   ok: boolean;
   errors: Record<string, string>;
@@ -410,7 +420,13 @@ export function shipErrors(form: unknown): {
   const trackingNo = typeof f['trackingNo'] === 'string' ? f['trackingNo'].trim() : '';
   const errors: Record<string, string> = {};
   if (carrier === '') errors['carrier'] = '承运商必填';
+  else if (carrier.length > SHIP_MAX_CHARS.carrier) {
+    errors['carrier'] = `承运商最多 ${String(SHIP_MAX_CHARS.carrier)} 字`;
+  }
   if (trackingNo === '') errors['trackingNo'] = '运单号必填';
+  else if (trackingNo.length > SHIP_MAX_CHARS.tracking_no) {
+    errors['trackingNo'] = `运单号最多 ${String(SHIP_MAX_CHARS.tracking_no)} 字`;
+  }
   const first = Object.values(errors)[0] ?? '';
   return { ok: Object.keys(errors).length === 0, errors, first };
 }

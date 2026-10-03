@@ -11,7 +11,7 @@
  *      退款那条尤其重要——它跨了两次事务，响应 202 并不代表钱真的退了。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import { REFUND_REASON_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
 import { ADMIN_NOTE_MAX_LENGTH, refundGuard, shipGuard } from '../domain/admin-order-actions.js';
 import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
@@ -51,8 +51,12 @@ beforeEach(async () => {
  */
 async function buildServer(
   opts: { channels?: string; withoutMockSecret?: boolean } = {},
-): Promise<{ url: string; close: () => Promise<void> }> {
-  const logger = createLogger({ env: 'test', destination: new MemorySink() });
+): Promise<{ url: string; close: () => Promise<void>; sink: MemorySink }> {
+  // ⚠️ sink 一并返回（AJ-315）：`AppError.details` 结构上不进响应体，
+  //    "到底是入口拦的、还是 PG 报 22001 被兜底折的"只能靠日志里的 reason 区分——
+  //    两者对外都是 40001，看响应码分不出来。
+  const sink = new MemorySink();
+  const logger = createLogger({ env: 'test', destination: sink });
   const config = loadConfig({
     NODE_ENV: 'development',
     PORT: '1',
@@ -77,7 +81,7 @@ async function buildServer(
       }),
   });
   const server = await listen(app);
-  return { url: `http://127.0.0.1:${String(server.port)}`, close: server.close };
+  return { url: `http://127.0.0.1:${String(server.port)}`, close: server.close, sink };
 }
 
 /** 插一个用户（默认管理员）；id 由 tag 固定且 on conflict 幂等。 */
@@ -394,6 +398,46 @@ describe('POST /admin/orders/{id}/ship（发货）', () => {
     const s = await buildServer();
     await seedOrder({ id: 'o-1' });
     expect((await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/ship', {})).status).toBe(400);
+    await s.close();
+  });
+
+  /**
+   * 🔴 AJ-315（第二轮审查 B24）：超长必须在**入口**被拒（40001 + 指名哪一列），
+   *    而不是让 PG 报 22001 —— 后者会被兜底层折成泛化的 40001，
+   *    运营看到"参数缺失或格式错误"，提示指向错误的字段。
+   * 上限由 shared 常量算出：写死 32 / 64 就等于两处都能改、改一处另一处不红。
+   */
+  it(`carrier 超过 ${String(SHIP_MAX_CHARS.carrier)} 字 → 40001「太长」，且订单仍是 paid`, async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1' });
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/ship', {
+      carrier: 'C'.repeat(SHIP_MAX_CHARS.carrier + 1),
+      tracking_no: 'TRACK-1',
+    });
+    expect(r.status).toBe(400);
+    expect(r.json.code).toBe(40001);
+    // reason 只进日志（AppError 的 details 结构上不进响应体）
+    const reason = s.sink.lines.join('\n');
+    expect(reason).toContain('carrier_too_long');
+    // 🔴 反证：若是 PG 报 22001 被兜底折的，reason 会是 sql_data_exception:22001
+    expect(reason).not.toContain('sql_data_exception');
+    expect((await db`select status from orders where id = 'o-1'`)[0]?.status).toBe('paid');
+    await s.close();
+  });
+
+  it(`tracking_no 超过 ${String(SHIP_MAX_CHARS.tracking_no)} 字 → 40001「太长」，且订单仍是 paid`, async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1' });
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/ship', {
+      carrier: 'JPPOST',
+      tracking_no: 'T'.repeat(SHIP_MAX_CHARS.tracking_no + 1),
+    });
+    expect(r.status).toBe(400);
+    expect(r.json.code).toBe(40001);
+    const reason = s.sink.lines.join('\n');
+    expect(reason).toContain('tracking_no_too_long');
+    expect(reason).not.toContain('sql_data_exception');
+    expect((await db`select status from orders where id = 'o-1'`)[0]?.status).toBe('paid');
     await s.close();
   });
 

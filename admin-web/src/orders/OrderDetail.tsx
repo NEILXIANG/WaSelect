@@ -27,7 +27,7 @@
  * @see ./view.ts（闸门与请求体）；./api.ts；../../../contracts/api-contract.yaml（AdminOrder）
  */
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { ADMIN_NOTE_MAX_LENGTH, REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import { ADMIN_NOTE_MAX_LENGTH, REFUND_REASON_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import {
   getOrder,
@@ -354,15 +354,18 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
           <div className="form">
             <span className="label">发货</span>
             <div className="row2">
+              {/* maxLength 引 shared 常量（AJ-315）：与服务端同一个上限，不写第二个 32 / 64 */}
               <input
                 className="input"
                 placeholder="承运商（如 Japan Post）"
+                maxLength={SHIP_MAX_CHARS.carrier}
                 value={ship.carrier}
                 onChange={(e) => setShip((s) => ({ ...s, carrier: e.target.value }))}
               />
               <input
                 className="input"
                 placeholder="运单号"
+                maxLength={SHIP_MAX_CHARS.tracking_no}
                 value={ship.trackingNo}
                 onChange={(e) => setShip((s) => ({ ...s, trackingNo: e.target.value }))}
               />
