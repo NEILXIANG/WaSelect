@@ -15,8 +15,14 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
-import { buildChainServer, call, type ChainServer } from '../../../test/helpers/chain-server.js';
-import { hashPassword } from './auth.js';
+import {
+  buildChainServer,
+  call,
+  tokenFor,
+  type ChainServer,
+} from '../../../test/helpers/chain-server.js';
+import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
+import { hashPassword, PASSWORD_MAX_CHARS } from './auth.js';
 import { loginAttemptKey, loginAttemptSourceKey } from '../adapters/admin-auth.js';
 import {
   ADMIN_LOGIN_GLOBAL_MAX_FAILURES,
@@ -213,6 +219,63 @@ describe('POST /auth/admin/login（账号维度锁定；IP 限流放宽以免混
       body: { password: PASSWORD },
     });
     expect(noEmail.json['code']).toBe(40001);
+  });
+
+  /**
+   * 第二轮审查 SEC2-06：登录成功时**不清本进程的身份缓存**，于是改密之后的第一次重登
+   * 拿到的是"新口令签的新 token、却被旧缓存拒"——管理员看到"刚登录就过期"的循环。
+   *
+   * @why 这条要钉的是**端到端**那一段：`requireRole` 的回源比对（`identity.load`）带 60 秒缓存，
+   *      而改密脚本只改库里的 `token_ver`、调不到服务进程的 `invalidate`。
+   *      改密恰恰是应急动作（口令可能已泄露），"改完 60 秒登不上"最容易被误判成改密失败。
+   */
+  it('🔴 改密（token_ver+1）后重登：新 token **立刻**能过守卫，不被上一次登录留下的缓存拒成 40101', async () => {
+    // ① 预热：用当前 ver 的 token 访问一次管理端路由，进程内缓存里就有了 {tokenVer: N}
+    const warm = await call(srv, 'GET', '/api/v1/admin/orders', {
+      token: await tokenFor('u-adm', 'admin', 1),
+    });
+    expect(warm.status).toBe(200);
+    // ② 改密脚本做的事：`token_ver + 1`（旧 token 全部失效）
+    await db`update users set token_ver = token_ver + 1 where id = 'u-adm'`;
+    // ③ 用新口令重新登录（签名取的是库里的 ver，所以 token 与库一致）
+    const relogin = await login(EMAIL, PASSWORD);
+    expect(relogin.status).toBe(200);
+    // ④ 立刻访问：缓存里那份旧的 tokenVer 若在，这里就是 40101（表现为"刚登录就过期"）
+    const fresh = String(relogin.json['token']);
+    expect((await call(srv, 'GET', '/api/v1/admin/orders', { token: fresh })).status).toBe(200);
+  });
+});
+
+/**
+ * 第二轮审查 SEC2-11 ③：登录口的口令长度上下限曾经是**两个字面量**（12 / 1024），
+ * 而改密脚本与启动校验用的是 `packages/shared` 的 `ADMIN_PASSWORD_MIN_LENGTH`、
+ * 校验侧用的是 `auth.ts` 的 `PASSWORD_MAX_CHARS`——三处里只有登录口没接常量。
+ *
+ * @why 漂移的形态是"改了常量 → 脚本能设出登录口拒收的口令"（或反过来），
+ *      而它不会让任何现有用例变红：三处各自都能自圆其说。
+ *      所以这里**从常量推**出边界值去打登录口，而不是再抄一份数字。
+ */
+describe('登录口的口令长度与共享常量同源（SEC2-11 ③）', () => {
+  beforeEach(async () => {
+    srv = await buildChainServer(db, { RATE_LIMIT_LOGIN_PER_15MIN: '1000' });
+  });
+
+  const login = (password: string) =>
+    call(srv, 'POST', '/api/v1/auth/admin/login', { body: { email: EMAIL, password } });
+
+  // ⚠️ 这两条**取不到红灯**（字面量与常量今天恰好相等），所以标题不带 🔴——
+  //    真正的守卫是 admin-auth.unit.test.ts 里那条源码断言（§2 第 15 条）。
+  it(`恰好 ${String(ADMIN_PASSWORD_MIN_LENGTH)} 位被形状校验放行（走到口令比对 → 40101，不是 40001）`, async () => {
+    const exact = 'x'.repeat(ADMIN_PASSWORD_MIN_LENGTH);
+    expect((await login(exact)).json['code']).toBe(40101);
+    // 少一位即被拒：下限确实来自同一个常量
+    expect((await login('x'.repeat(ADMIN_PASSWORD_MIN_LENGTH - 1))).json['code']).toBe(40001);
+  });
+
+  it(`超过 ${String(PASSWORD_MAX_CHARS)} 位被形状校验拒绝（上限与 verifyPassword 同口径）`, async () => {
+    expect((await login('x'.repeat(PASSWORD_MAX_CHARS + 1))).json['code']).toBe(40001);
+    // 恰好到上限不拒（走比对 → 40101）
+    expect((await login('x'.repeat(PASSWORD_MAX_CHARS))).json['code']).toBe(40101);
   });
 });
 

@@ -425,12 +425,16 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   });
 
   // ── 管理员登录（D-38 ⑤ / O-11 / AJ-181）：IP 限流（adminLogin 规则，D-52）+ 账号锁定（路由内）──
+  // ⚠️ `identity` 必须是全站那一份：登录成功时用它作废本进程的身份缓存（SEC2-06），
+  //    否则改密（token_ver+1）之后管理员会撞上"新 token 被旧缓存拒成 40101"的循环。
+  //    传另一份实例 = 作废了一个没人读的缓存，症状照旧且更难查。
   mountAdminAuthRoutes(app, {
     db,
     logger,
     clock,
     authConfig: { secret: config.JWT_SECRET, issuer: 'waselect' },
     loginLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).adminLogin),
+    identity,
   });
 
   // ── 每日作业触发（I1-U7b / D-43）：Render Cron 的 HTTP 入口；异步执行走同一套调度器框架 ──

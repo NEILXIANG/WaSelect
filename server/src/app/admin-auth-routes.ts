@@ -55,7 +55,9 @@ import {
   loginAttemptSourceKey,
   peekLoginAttemptLock,
 } from '../adapters/admin-auth.js';
-import { signToken, verifyPassword, type AuthConfig } from './auth.js';
+import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
+import { PASSWORD_MAX_CHARS, signToken, verifyPassword, type AuthConfig } from './auth.js';
+import type { CachedIdentityCheck } from '../adapters/identity.js';
 import { ipKeyForLogin } from './rate-limit.js';
 
 /** 同一邮箱、**同一来源**连续失败多少次锁定该来源（D-38 ⑤：5 次；AJ-243 起按来源计）。 */
@@ -87,7 +89,17 @@ export const ADMIN_LOGIN_WINDOW_MINUTES = 15;
  */
 const DUMMY_HASH = '$2b$10$v0B4o0iWhgKRl/BcEw7snObpnEcHc3rKZuiTQ6KW7PN1Efy62ZZ1S';
 
-/** 契约：email 必填、password minLength 12（N11）；上限挡超长输入（DoS 面，auth.ts PASSWORD_MAX_CHARS 同口径）。 */
+/**
+ * 契约：email 必填；password 的上下限**引用共享常量**（第二轮审查 SEC2-11 ③）。
+ *
+ * @why 这里曾经是 `min(12).max(1024)` 两个字面量，而改密脚本（`scripts/admin-password-lib.ts`）
+ *      与启动校验（`config.ts`）用的是 `ADMIN_PASSWORD_MIN_LENGTH`、校验侧（`auth.ts`
+ *      的 `verifyPassword`）用的是 `PASSWORD_MAX_CHARS`——三处里只有登录口没接常量。
+ *      后果不是"登录口算错了"，而是**改常量时它会静默地不被改到**：
+ *      脚本能设出登录口拒收的口令（40001），或反过来。
+ * @why 行为用例抓不到这种漂移（字面量与常量**今天恰好相等**，改哪边都不红），
+ *      所以 `admin-auth.unit.test.ts` 里另有一条**源码断言**钉住"必须引用常量"。
+ */
 const bodySchema = z.object({
   email: z
     .string()
@@ -95,7 +107,7 @@ const bodySchema = z.object({
     .min(3)
     .max(255)
     .regex(/^[^\s@]+@[^\s@]+$/),
-  password: z.string().min(12).max(1024),
+  password: z.string().min(ADMIN_PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_CHARS),
 });
 
 export interface AdminAuthRoutesDeps {
@@ -105,6 +117,20 @@ export interface AdminAuthRoutesDeps {
   authConfig: AuthConfig;
   /** IP 限流中间件（装配处按 rateLimitRules.adminLogin 生成后传入）。 */
   loginLimiter: RequestHandler;
+  /**
+   * 身份状态缓存（**全站同一份**，mount.ts 装配）——登录成功时作废本进程的这一格。
+   *
+   * @why 第二轮审查 SEC2-06：`requireRole` 的回源比对带 60 秒缓存，而改密
+   *      （`npm run admin:password`）只改库里的 `token_ver`、调不到服务进程的 `invalidate`。
+   *      于是改密后管理员用新口令登录，签出的是 ver=N+1 的新 token，
+   *      第一个受保护请求却命中缓存里的 ver=N ⇒ **40101 token_version_mismatch**，
+   *      前端按"登录过期"跳回登录页，再登还是被拒——最长 60 秒的"刚登录就过期"循环。
+   *      改密恰恰是应急动作（口令可能已泄露），这个循环最容易被误判成"改密没成功"。
+   * @why 类型是 `CachedIdentityCheck`（`invalidate` **必有**）而不是 `IdentityCheck`：
+   *      传一个不带缓存的实现进来，作废这件事就无从谈起，而它只会表现为"偶发登不上"——
+   *      标成必有，忘接就是编译错误。
+   */
+  identity: CachedIdentityCheck;
 }
 
 export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): void {
@@ -222,6 +248,14 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
           throw new AppError(40301, { reason: 'admin_login_not_admin_or_blocked' });
         }
 
+        // ③ 签发**之前**先作废本进程的身份缓存（SEC2-06）。
+        //    @why 放在签发前而不是后：`withIdentityCache` 的作废是"删条目 + 代际 +1"，
+        //    代际只对**作废之后发起**的回源生效；放在签发后，签发这几十毫秒里在途的那次回源
+        //    仍会把旧值写回缓存（它是在作废**之前**发起的，代际对不上就不写回——所以必须早）。
+        //    @why 只作废**这个人**：别人的缓存格不受影响，代价是一次 Map 删除。
+        //    @limitation 仍然只作废**本进程**（多实例下其它实例等 TTL）——与 identity.ts 的同名
+        //    @limitation 是同一条，Render 单实例阶段由 `render-env.unit.test.ts` 钉住。
+        deps.identity.invalidate(cred.id);
         const token = await signToken(
           { sub: cred.id, role: 'admin', ver: cred.tokenVer },
           deps.authConfig,

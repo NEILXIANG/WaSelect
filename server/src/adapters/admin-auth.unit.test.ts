@@ -106,6 +106,22 @@ describe('登录路由的调用顺序（源码断言）', () => {
     expect(clear).toBeGreaterThan(verify);
   });
 
+  /**
+   * SEC2-11 ③：登录口的口令长度上下限必须是**引用常量**，不能是字面量。
+   *
+   * @why 行为用例钉不住这一条——字面量 12 / 1024 与 `ADMIN_PASSWORD_MIN_LENGTH` /
+   *      `PASSWORD_MAX_CHARS` **今天恰好相等**，改任何一边都不会让"11 位被拒"这种断言变红。
+   *      能红的只有源码断言：它守的是"两处是不是同一份事实"（约束九），不是"边界值对不对"。
+   * @why 顺带断言这一行里**没有数字**：留着 `min(12)` 换成 `min(ADMIN_PASSWORD_MIN_LENGTH - 0)`
+   *      之类的写法也算接了常量，但数字一进来就说明有人在重新引入第二份事实。
+   */
+  it('🔴 登录口 password 的 min/max 引用共享常量且不含任何数字字面量（SEC2-11 ③）', () => {
+    const line = codeLines.find((l) => l.text.includes('password: z.string()'))?.text ?? '';
+    expect(line).toContain('ADMIN_PASSWORD_MIN_LENGTH');
+    expect(line).toContain('PASSWORD_MAX_CHARS');
+    expect(line).not.toMatch(/\d/);
+  });
+
   it('拿不到额度时不得再碰 bcrypt：locked 分支里只有 42901，没有一次口令比对', () => {
     const code = codeLines.map((l) => l.text).join('\n');
     // AJ-243：额度分两层（来源桶 + 邮箱桶），locked 分支是"任一层已锁"
