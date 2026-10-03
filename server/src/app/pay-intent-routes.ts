@@ -45,7 +45,8 @@ export interface PayIntentRoutesDeps {
   idGen: IdGen;
   config: AppConfig;
   auth: AuthConfig;
-  identity?: IdentityCheck | undefined;
+  /** 身份状态查询（D25）。**必填**，理由见 {@link requireRole} 的 `@param identity`（app/auth.ts）。 */
+  identity: IdentityCheck;
   idempotency: IdempotencyExecutor<Db>;
   registry: PaymentRegistry;
   /** 限流中间件（装配处按 rateLimitRules.publicWrite 生成后传入）。 */

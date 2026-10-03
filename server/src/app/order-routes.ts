@@ -48,7 +48,8 @@ export interface OrderRoutesDeps {
   idGen: IdGen;
   config: AppConfig;
   auth: AuthConfig;
-  identity?: IdentityCheck | undefined;
+  /** 身份状态查询（D25）。**必填**，理由见 {@link requireRole} 的 `@param identity`（app/auth.ts）。 */
+  identity: IdentityCheck;
   idempotency: IdempotencyExecutor<Db>;
   events: EventBus;
   /**

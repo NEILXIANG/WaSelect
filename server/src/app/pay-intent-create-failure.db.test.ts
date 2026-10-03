@@ -26,6 +26,7 @@ import { loadConfig } from '../config.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountPayIntentRoutes } from './pay-intent-routes.js';
 import { createIdempotencyExecutor } from '../adapters/idempotency.js';
+import { createIdentityCheck } from '../adapters/identity.js';
 import { createPaymentRegistry } from '../adapters/payment/registry.js';
 import { signToken } from './auth.js';
 import { ProviderRejectedError } from '../ports/payment.js';
@@ -128,6 +129,9 @@ async function buildServer(
         idGen: stubIdGen('B3AAAA', 'uuid-b3-0001'),
         config,
         auth: { secret: JWT_SECRET, issuer: 'waselect' },
+        // 真身份检查：生产装配必传（deps 里已改成必填），这里也不能省——
+        // 省掉的话本用例跑的是一条生产上不存在的接线。
+        identity: createIdentityCheck(db),
         idempotency: createIdempotencyExecutor(db),
         registry,
         payLimiter: noopLimiter,

@@ -219,8 +219,15 @@ export async function claimLoginAttempt(
   `;
   const r = rows[0];
   if (r === undefined) {
-    // 0 行 = 撞到了"未锁定"条件的反面（已锁、且还没到期）。此时行一定存在且锁已生效，
-    // 回读一次拿锁定时刻是为了响应头的 retry-after；这个值是稳定的（锁只会到期、不会延长）。
+    // 0 行 = 撞到了"未锁定"条件的反面（已锁、且还没到期）。回读一次是为了响应头的 retry-after。
+    // ⚠️ 这里**曾经**写"此时行一定存在且锁已生效……这个值是稳定的（锁只会到期、不会延长）"——
+    //    加了 `ownLockUntil`（AJ-224）之后不成立了：持有额度且口令正确的那个请求会把它自己
+    //    刚置上的锁**清成 null**，改密也会把整行删掉（`clearLoginAttemptsForKey`）。
+    //    所以 0 行与这次回读之间，`cur?.locked_until` **真的可能是 null**，`?? now` 不是
+    //    "兜一个不可能的情况"。
+    //    ⚠️ 反过来别把它说成"锁到期也走这里"——**不对**：到期留下的仍是"过去时刻"而不是 null，
+    //    那一档根本不进 `??`（它照样回一个过去的时刻，retry-after 两侧都算出 1 秒，结果一样）。
+    //    `?? now` 只覆盖"锁被主动清掉 / 行被删掉"这两条，别把边界说宽。
     const [cur] = await db<{ locked_until: Date | null }[]>`
       select locked_until from login_attempts where key_hash = ${keyHash}`;
     return { kind: 'locked', lockedUntil: cur?.locked_until ?? now };

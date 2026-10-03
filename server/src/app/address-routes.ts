@@ -41,7 +41,12 @@ export interface AddressRoutesDeps {
   db: Db;
   logger: Logger;
   auth: AuthConfig;
-  identity?: IdentityCheck | undefined;
+  /**
+   * 身份状态查询（D25）。**必填**——曾经是可选的，于是"路由忘了传"是能编译通过的，
+   * 后果是封禁 / 改密 / 撤权要等 token 自然过期（管理员 12 小时）才生效，且**没有任何用例会红**。
+   * 完整理由见 {@link requireRole} 的 `@param identity`（app/auth.ts）。
+   */
+  identity: IdentityCheck;
   idGen: IdGen;
 }
 

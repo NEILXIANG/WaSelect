@@ -178,8 +178,12 @@ export function bearerOf(req: Request): string | undefined {
  *
  * @param role 期望角色；`user` 路由用 'user'，管理端路由一律 'admin'
  * @param cfg 鉴权配置
- * @param identity 身份状态查询（D25）。**不传则不查库**——保留给单元测试（生产装配一律传，见 mount.ts）；
- *                 生产装配必须传（main.ts），否则改密/封禁无法即时生效。
+ * @param identity 身份状态查询（D25）。**不传则不查库**——只有单元测试可以不传；
+ *                 生产装配**一律传**，装配点是 `app/mount.ts`（全站路由都在那里挂），
+ *                 不传则改密 / 封禁 / 撤权要等 token 自然过期（管理员 12 小时）才生效。
+ *                 ⚠️ 这里**曾经**把装配点写成 `main.ts`（上一轮 SEC-13 只改了一半：
+ *                 前一句改成"见 mount.ts"、后一句还留着 main.ts），而 `main.ts` 只做进程装配，
+ *                 不认识任何一条路由——照它去找的人会找错地方。
  */
 export function requireRole(
   role: Role,

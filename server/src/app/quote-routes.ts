@@ -57,7 +57,8 @@ export interface QuoteRoutesDeps {
   logger: Logger;
   clock: Clock;
   auth: AuthConfig;
-  identity?: IdentityCheck | undefined;
+  /** 身份状态查询（D25）。**必填**，理由见 {@link requireRole} 的 `@param identity`（app/auth.ts）。 */
+  identity: IdentityCheck;
   config: AppConfig;
 }
 
