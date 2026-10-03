@@ -48,6 +48,27 @@ export interface QuoteProduct {
   originCountry: string;
 }
 
+/**
+ * 一张订单的**行项目数量上限**（AJ-319；DB2-11：核对契约上限时发现实现根本没有这一条）。
+ *
+ * @why 此前唯一的约束是"非空"（`items_empty`），数量实际上只被 `http.ts` 的
+ *      `JSON_BODY_LIMIT = '100kb'` 间接限制——按最小行项目 `{"productId":"…","qty":1}`
+ *      约 40 字节算，客户端一次能送 ~2500 条。那不是"参数错误"，是**自造 DoS**：
+ *      每条都要查商品、判库存，建单时还要逐行 `INSERT order_items` 并锁住对应的
+ *      products 行——一个请求锁两千多行，而它只花了 100KB 流量。
+ * @why 取 **50** 而不是"尽量大"：MVP 是日本直邮、单笔金额上限 MAX_ORDER_JPY，
+ *      一票里 50 个**不同** SKU 已是远离现实的取值（同一 SKU 多件用 qty，不受此限）。
+ * @limitation 它挡的是"一个请求塞爆"，**不是**"购物车装不装得下"：小程序端
+ *              `utils/cart-store.js` 目前没有数量上限，用户理论上能攒到 51 件，
+ *              然后**在结算时**才撞 40001（reason `items_too_many`）。
+ *              这是**已知剩余风险**：彻底的解法是小程序端同步限制购物车容量，
+ *              而不是把本常量调大——调大只是把自造 DoS 的门槛抬高，不消除它。
+ *
+ * @see contracts/api-contract.yaml（`OrderItemsInput.maxItems`，由契约测试双向比对）；
+ *      app/http.ts（JSON_BODY_LIMIT，它挡的是"多大"，本常量挡的是"多少条"）
+ */
+export const MAX_QUOTE_ITEMS = 50;
+
 /** 行项目汇总结果（运费取档的前置输入）。 */
 export interface QuoteItemsSummary {
   itemsJpy: number;
@@ -100,7 +121,7 @@ export interface QuoteComputation {
 /**
  * 汇总行项目：校验 + 商品小计 + 商品总重。
  *
- * @throws {AppError} 40001 items 为空 / 数量非法 / 商品 id 重复（重复 id 的合并语义不明，响亮拒绝）
+ * @throws {AppError} 40001 items 为空 / **超过 MAX_QUOTE_ITEMS** / 数量非法 / 商品 id 重复（重复 id 的合并语义不明，响亮拒绝）
  * @throws {AppError} 40401 商品不存在或已下架
  * @throws {AppError} 40901 库存不足（报价时刻快照，见文件头 @limitation 二）
  */
@@ -109,6 +130,13 @@ export function summarizeQuoteItems(
   products: readonly QuoteProduct[],
 ): QuoteItemsSummary {
   if (items.length === 0) throw new AppError(40001, { reason: 'items_empty' });
+  if (items.length > MAX_QUOTE_ITEMS) {
+    throw new AppError(40001, {
+      reason: 'items_too_many',
+      count: items.length,
+      max: MAX_QUOTE_ITEMS,
+    });
+  }
 
   const byId = new Map(products.map((p) => [p.productId, p]));
   const seen = new Set<string>();

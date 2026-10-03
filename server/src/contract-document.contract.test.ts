@@ -20,8 +20,11 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
-import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import { REFUND_REASON_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
 import { MAX_CLIENT_KEY_LENGTH } from './ports/idempotency.js';
+import { ADDRESS_MAX_CHARS } from './domain/address-input.js';
+import { MAX_QUOTE_ITEMS } from './domain/quote.js';
+import { WECHAT_CODE_MAX_LENGTH } from './app/wechat-auth-routes.js';
 import { normalizeRoutePath, parseContractRoutes } from './app/route-snapshot.js';
 
 const { load: loadYaml } = createRequire(import.meta.url)('js-yaml') as {
@@ -140,5 +143,51 @@ describe('契约的输入上限与 shared 常量一致', () => {
       { schema?: { maxLength?: number } } | undefined;
     expect(idem, 'components.parameters.IdemKey 不存在').toBeDefined();
     expect(idem?.schema?.maxLength).toBe(MAX_CLIENT_KEY_LENGTH);
+  });
+
+  /**
+   * AJ-315：发货两列是 VARCHAR(32)/(64)，契约原先**只写 required**，连 maxLength 都没有。
+   * 与上面 reason 那条同口径——从 yaml 读出来与 shared 常量比，两头各自写死不算数。
+   */
+  it('POST /admin/orders/{id}/ship 的 carrier / tracking_no maxLength == SHIP_MAX_CHARS', () => {
+    const props = requestProps('/admin/orders/{id}/ship', 'post');
+    expect(props['carrier']?.['maxLength']).toBe(SHIP_MAX_CHARS.carrier);
+    expect(props['tracking_no']?.['maxLength']).toBe(SHIP_MAX_CHARS.tracking_no);
+  });
+
+  /**
+   * AJ-316：`code` 的上限 128 **只存在于路由文件里**，若契约另写一个数就成两份真源。
+   * 无鉴权入口的上限尤其不能漂：契约比实现宽松时，前端照契约放行、服务端照代码拒绝。
+   */
+  it('POST /auth/wechat/login 的 code.maxLength == WECHAT_CODE_MAX_LENGTH', () => {
+    const code = requestProps('/auth/wechat/login', 'post')['code'];
+    expect(code, '契约没有声明 code').toBeDefined();
+    expect(code?.['maxLength']).toBe(WECHAT_CODE_MAX_LENGTH);
+  });
+
+  /**
+   * AJ-319：这一条是**先有契约、后有实现**——核对时发现代码里根本没有 items 数量上限
+   * （唯一约束是 JSON_BODY_LIMIT）。钉住它，防止将来把常量改了而契约不跟。
+   */
+  it('OrderItemsInput.maxItems == MAX_QUOTE_ITEMS', () => {
+    const doc = loadYaml(TEXT) as Doc;
+    const items = doc.components['schemas']?.['OrderItemsInput'] as
+      { maxItems?: number } | undefined;
+    expect(items, 'components.schemas.OrderItemsInput 不存在').toBeDefined();
+    expect(items?.maxItems).toBe(MAX_QUOTE_ITEMS);
+  });
+
+  /** DB2-04：地址各字段上限逐字段比对（ADDRESS_MAX_CHARS 是唯一真源）。 */
+  it('AddressInput 各字段 maxLength == ADDRESS_MAX_CHARS', () => {
+    const doc = loadYaml(TEXT) as Doc;
+    const addr = doc.components['schemas']?.['AddressInput'] as
+      { properties?: Record<string, { maxLength?: number }> } | undefined;
+    expect(addr?.properties, 'components.schemas.AddressInput 不存在').toBeDefined();
+    for (const [field, max] of Object.entries(ADDRESS_MAX_CHARS)) {
+      expect(
+        addr?.properties?.[field]?.maxLength,
+        `AddressInput.${field} 的 maxLength 与 ADDRESS_MAX_CHARS 不一致`,
+      ).toBe(max);
+    }
   });
 });

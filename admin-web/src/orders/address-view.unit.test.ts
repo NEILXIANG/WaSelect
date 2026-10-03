@@ -166,14 +166,18 @@ describe('与契约 AddressInput 的双向比对', () => {
     expect(line).toContain('pattern');
   });
 
+  // 0.6.27（契约批次）：契约给各字段补了 `maxLength`，字段对象里的**键顺序不再固定**——
+  // 旧写法把 `{type: string, pattern: …}` 写死，加一个键就整条失配。
+  // 改成 `[^}]*` 跳过该字段对象内的其它键（与 miniprogram/utils/address-form 同口径，
+  // ⚠️ 这两处是**同一判据的两份拷贝**，改契约时要一起改）。
   it.each(ENTRIES)('字段 %s 的 pattern 与前端正则一致', (field, key) => {
-    const m = new RegExp(`${field}: \\{type: string, pattern: '([^']+)'\\}`).exec(line);
+    const m = new RegExp(`${field}: \\{[^}]*pattern: '([^']+)'`).exec(line);
     expect(m?.[1], `契约里没找到 ${field} 的 pattern`).toBeTruthy();
     expect(ADDRESS_PATTERNS[key].source).toBe(m?.[1]);
   });
 
   it('州：契约约束长度 2（大小写由本模块归一）', () => {
-    expect(/state: \{type: string, minLength: 2, maxLength: 2\}/.exec(line)?.[0]).toBeTruthy();
+    expect(/state: \{[^}]*minLength: 2[^}]*maxLength: 2/.exec(line)?.[0]).toBeTruthy();
     expect(ADDRESS_PATTERNS.state.source).toBe('^[A-Z]{2}$');
   });
 });

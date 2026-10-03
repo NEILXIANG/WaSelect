@@ -44,7 +44,7 @@ import { loginWithWechat } from './wechat-login.js';
  *
  * @see adapters/wechat/code2session.ts（查询串拼接处）；contracts/api-contract.yaml（code）
  */
-const WECHAT_CODE_MAX_LENGTH = 128;
+export const WECHAT_CODE_MAX_LENGTH = 128;
 
 const bodySchema = z.object({ code: z.string().min(1).max(WECHAT_CODE_MAX_LENGTH) }).strict();
 

@@ -52,6 +52,27 @@ describe('注册表完整性', () => {
     }
   });
 
+  /**
+   * AJ-318（0.6.27）：拒付闸门的两个码 —— 40907（退款）/ 40909（发货）—— 覆盖的是
+   * 「**有未解除的**拒付限制」，而**不只是"进行中"**：0.6.10① 起败诉同样保持
+   * `has_dispute = true`，闸门在败诉后**继续拦**（钱已被机构拉回）。
+   *
+   * @why 旧文案写"存在**进行中的**拒付"，客服看到会去**等结案**——而那张单已经结案了
+   *      （lost），等下去永远不会解锁，她只会得出"系统卡住了"，而不是
+   *      "这笔钱已经被拉回、要先处理争议"。文案把人引向错误的动作，按 ADR-29 算 bug。
+   * @why 钉住"文案覆盖败诉"而不是钉住整句：整句钉死会让每次措辞微调都红，
+   *      而真正不能丢的是"这条闸门也会因败诉而开"这个**语义**。
+   */
+  it('40907 / 40909 的文案覆盖「已败诉」，不只是「进行中」（AJ-318）', () => {
+    for (const code of [40907, 40909] as const) {
+      const spec = errorSpec(code);
+      expect(spec).toBeDefined();
+      expect(spec?.message, `${String(code)} message`).toContain('未解除');
+      expect(spec?.message, `${String(code)} message`).toContain('已败诉');
+      expect(spec?.action, `${String(code)} action`).toContain('已败诉');
+    }
+  });
+
   it('未登记码返回 undefined（调用方应映射 500）', () => {
     expect(isErrorCode(49999)).toBe(false);
     expect(errorSpec(49999)).toBeUndefined();

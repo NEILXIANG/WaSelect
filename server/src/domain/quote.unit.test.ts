@@ -14,6 +14,7 @@ import {
   buildDisplayFromRates,
   computeQuote,
   dutyRatioIntOf,
+  MAX_QUOTE_ITEMS,
   summarizeQuoteItems,
   type QuoteComputationInput,
   type QuoteProduct,
@@ -61,6 +62,41 @@ describe('summarizeQuoteItems', () => {
       { productId: 'p-1', qty: 2 },
     ];
     expect(codeOf(() => summarizeQuoteItems(items, [product()]))).toBe(40001);
+  });
+
+  /**
+   * AJ-319：这条此前不存在——`items` 只有"非空"一条约束，数量唯一的上限来自
+   * `http.ts` 的 `JSON_BODY_LIMIT`（100kb ≈ 2500 条），而每条都要查商品 / 判库存 /
+   * 建单时插一行并锁住对应 products 行，是自造 DoS。
+   */
+  it(`超过 MAX_QUOTE_ITEMS（${String(MAX_QUOTE_ITEMS)}）→ 40001 items_too_many（恰好等于上限放行）`, () => {
+    const at = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ productId: `p-${String(i)}`, qty: 1 }));
+    const products = (n: number) =>
+      Array.from({ length: n }, (_, i) => product({ productId: `p-${String(i)}` }));
+
+    // 恰好等于上限：放行（边界不能差一个）
+    expect(summarizeQuoteItems(at(MAX_QUOTE_ITEMS), products(MAX_QUOTE_ITEMS)).itemsJpy).toBe(
+      3000 * MAX_QUOTE_ITEMS,
+    );
+
+    // 超一条：拦
+    const n = MAX_QUOTE_ITEMS + 1;
+    try {
+      summarizeQuoteItems(at(n), products(n));
+      throw new Error('预期抛 AppError，实际没抛');
+    } catch (e) {
+      expect(e).toBeInstanceOf(AppError);
+      const err = e as AppError;
+      expect(err.code).toBe(40001);
+      // reason 必须指名是"条数太多"：同一条 40001 也用于 qty 非法 / id 重复，
+      // 只看码分不清（与 AJ-315 shipInfoGuard 把 reason 分开给同一口径）
+      expect(err.details).toMatchObject({
+        reason: 'items_too_many',
+        count: n,
+        max: MAX_QUOTE_ITEMS,
+      });
+    }
   });
 
   it('商品不存在 → 40401；已下架同码（不泄露"存在但被下架"）', () => {

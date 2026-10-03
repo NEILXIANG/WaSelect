@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.26
+  version: 0.6.27
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -322,6 +322,44 @@ info:
       就是"某个筛选下清单变空白"——形状固定 > 省流量（一页 ≤100 单、每单 1–3 行）。
       @why 服务端仍是**一次批量**取行项目（一条 `in (…)` 后按 order_id 归堆），
       不是按单循环——列表带 items 最容易掉进的坑就是 N+1。
+    0.6.27（DB 分片第五轮重读：DB2-03 余项 / DB2-04 / AJ-315 / AJ-316）——**全部是"契约比实现宽松/漏列"这一类**，无行为变更。
+      ⚠️ 这一版的共同形态：实现早就这么做了（有的做了几个月），契约停在更早的口径上。
+      契约宽松**不会让任何测试变红**（没有一处拿契约去校验请求），它只在"照契约写前端"那天
+      变成真实缺陷——前端不拦、服务端拦，用户填完了才炸。
+      ① **40907 / 40909 的文案订正**（AJ-318）：由「存在**进行中的**拒付」改为
+      「存在**未解除的**拒付限制（**进行中，或已败诉**）」。
+      @why 0.6.10① 起 `has_dispute` 的语义就是"未解除的限制"——败诉后保持 true，
+      两个闸门**继续拦**（钱已被机构拉回）。旧文案让客服去**等结案**，
+      而那张单已经结案了（lost），等下去永远不会解锁；她只会得出"系统卡住了"，
+      不会想到"这笔钱已经被拉回、要先处理争议"。文案与事实不符按 bug 算（ADR-29），
+      且这个方向是把人引向等待。`action` 同步改：败诉的出口是处理争议 / 人工解除（0.6.14）。
+      ② `POST /admin/orders/{id}/ship`：requestBody 补 `carrier` **maxLength 32**、
+      `tracking_no` **maxLength 64**（AJ-315），并补 **200 响应体** `{order_id, status, carrier, tracking_no}`。
+      @why 两列是 `VARCHAR(32)/(64)`（迁移 001），实现此前只判非空 ⇒ 超长撞 PG 22001 →
+      兜底折成泛化的 40001（reason 带 `sql_data_exception:22001`），运营看到的提示**指向错误的字段**。
+      现在入口拦（40001 + reason 指名哪一列），上限与前端 `maxLength` 共用 `SHIP_MAX_CHARS` 一份。
+      有响应体却写成无体，按 0.6.6② 自定的口径比漏列状态码更糟。
+      ③ `POST /auth/wechat/login` 的 `code` 补 **maxLength 128**（AJ-316）。
+      @why 这是**无鉴权**入口，code 是客户端唯一可控的输入，且会被原样拼进发往微信的查询串。
+      取值是"真实 js_code 约 32 字符 + 4 倍余量"，⚠️ 真微信 code 的长度**未见官方声明**。
+      ④ `OrderItemsInput` 补 **maxItems 50**（实现 `MAX_QUOTE_ITEMS`，超了 40001）；
+      `contact_email` 补 **maxLength 255**；`AddressInput` 各字段补 **maxLength**
+      （`ADDRESS_MAX_CHARS`：recipient 100 / phone 20 / line1 200 / line2 200 / city 100 / postal_code 10），
+      `state` 补 **pattern `^[A-Z]{2}$`**（不符是 40002 不是 40001）。
+      ⑤ **出站路径补 503 / 50300**：熔断打开时 `errors.ts` 把 `CircuitOpenError` 映射成
+      50300（HTTP 503 + `retry_after_ms`），而它此前只登记在 `/readyz` 与回调上。
+      逐条核对调用链后，实际会出站的**五条**路径是：
+      `POST /orders/{id}/pay`（建会话）、`POST /orders/{id}/cancel`（`assertNoPaidSession`
+      问机构"付了没有"，问不到 fail-closed 直接 50300，**不是**"查不到就当没付"）、
+      `POST /auth/wechat/login`（code2session）、`POST /admin/orders/{id}/refund`（机构退款，AJ-313）、
+      `POST /admin/upload`（对象存储 R2）。
+      ⚠️ 别把这里的 503 与 `POST /pay/callback/{channel}` 的 503 混为一谈：回调那个是
+      **业务语义**（"单不存在且在宽限期内 → 让机构重发"），本条的 503 是**熔断**语义。
+      ⑥ `POST /orders/{id}/cancel` 的状态码此前只登记 `200 / 409`，而代码实际还会回
+      400 / 401 / 403 / 404（40400：不存在**或非本人**同码，防存在性探测）/ 500 / 503；
+      `POST /auth/wechat/login` 此前缺 400（code 校验）与 500（50000 未配置 AppID）。
+      📌 已知仍缺（不在本版）：`AdminOrder.payments[]` 实回的 `created_at`、
+      `/internal/jobs/daily` 的 summary（已漂到四项）、`/auth/admin/login` 的 email/password maxLength。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -346,9 +384,9 @@ x-error-codes:
     40904: 订单已过期
     40905: 价格已变动
     40906: 订单金额超过上限，请拆单
-    40907: 该支付存在进行中的拒付，暂不可退款
+    40907: 该支付存在未解除的拒付限制（进行中，或已败诉），暂不可退款
     40908: 幂等键复用但请求内容不一致（D4：客户端须为每次新意图生成新键）
-    40909: 该支付存在进行中的拒付，暂不可发货（与 40907 同一事实的两个消费方：退款用 40907、发货用 40909）
+    40909: 该支付存在未解除的拒付限制（进行中，或已败诉），暂不可发货（与 40907 同一事实的两个消费方：退款用 40907、发货用 40909）
     40910: 该币种在此生效时间已有一条汇率
     40911: 不能拉黑管理员账号
     40912: 包裹超过可配送的重量上限，请拆单（0.6.16：有运费表但超过最大一档；运费表缺失仍是 50004）
@@ -379,8 +417,9 @@ paths:
     post:
       security: []
       summary: 小程序登录（wx.login code 换 token）
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [code], properties: {code: {type: string}}}}}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AuthResp'}}}}, '401': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [code], properties: {code: {type: string, maxLength: 128, description: '0.6.27：无鉴权入口也要有长度上限（AJ-316）。真实 js_code 约 32 字符，128 是 4 倍余量；⚠️ 微信未公开保证该上限，超界只能靠 40001 兜底，不是合规校验'}}}}}}
+      description: '0.6.27：状态码补 400（40001 code 缺失/超长——AJ-316 起入口才校验长度）、500（50000 wechat_login_not_configured：没配 AppID 是**我们的配置缺口**，不挂 404）、503（50300 code2session 出站熔断打开）'
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AuthResp'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}, '503': {$ref: '#/components/responses/Err'}}
   /auth/admin/login:
     post:
       security: []
@@ -483,7 +522,7 @@ paths:
       summary: 建单（不含支付；扣减 stock；写 fx_snapshot 与 expires_at）
       description: 0.6.11（AJ-179）：REVIEW_MODE=on 时只收 REVIEW_SKU_ID，含其它商品整单 40401；审核期建的单 is_test=true
       parameters: [{$ref: '#/components/parameters/IdemKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items, address_id, terms_version], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}, address_id: {type: string}, expected_total_jpy: {type: integer, description: '可选：前端确认页看到的合计；不等则 40905 价格已变动'}, contact_email: {type: string, format: email, description: '可选：收货通知兜底邮箱（D-39）'}, terms_version: {type: string, description: '建单时刻生效的条款版本（如 TOS-2026-09-20）；服务端与 TERMS_VERSION（GET /terms 返回的 version）不一致则 40011，缺失或不匹配一律拒单（D-43）'}}}}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items, address_id, terms_version], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}, address_id: {type: string}, expected_total_jpy: {type: integer, description: '可选：前端确认页看到的合计；不等则 40905 价格已变动'}, contact_email: {type: string, format: email, maxLength: 255, description: '0.6.27：orders.contact_email 是 VARCHAR(255)，超长 40001。可选：收货通知兜底邮箱（D-39）'}, terms_version: {type: string, description: '建单时刻生效的条款版本（如 TOS-2026-09-20）；服务端与 TERMS_VERSION（GET /terms 返回的 version）不一致则 40011，缺失或不匹配一律拒单（D-43）'}}}}}}
       responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/OrderCreated'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /orders/{id}:
     get:
@@ -495,7 +534,7 @@ paths:
       description: 0.6.9（AJ-175/KD-3）：同一 Idempotency-Key 重放时不产生第二个支付意图、不再调机构，但 `pay_url` 的 token 为**重新签发**（明文 token 不落幂等表），旧链接随之失效；订单已不可付时重放体里的链接落地即 40102
       parameters: [{name: id, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdemKey'}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [channel], properties: {channel: {type: string, description: '通道 key（D-56/D-59：任意字符串，新增支付方式不需要改本契约、不需要新增路由；前端取值来自 GET /pay/channels 返回的 channel 字段，不写死；不在顶层 x-payment-channels 登记表内即 40001）'}}}}}}
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/PaymentIntent'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}, '500': {description: '50001 机构建会话失败（重试或切换支付方式）/ 50003 扣款所需汇率缺失 / 50000 其它', content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/PaymentIntent'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}, '500': {description: '50001 机构建会话失败（重试或切换支付方式）/ 50003 扣款所需汇率缺失 / 50000 其它', content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}, '503': {description: '0.6.27 补：50300 出站熔断打开（CircuitOpenError 原样抛，带 retry_after_ms）——含义是"上游在恢复，稍后再试"，与 50001 "机构真的失败了"是两种相反的前端动作', content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}}
   /pay/link/{id}:
     get:
       security: []
@@ -505,8 +544,9 @@ paths:
   /orders/{id}/cancel:
     post:
       summary: 取消（仅 created / pending_payment；同时取消未完成支付意图）
+      description: '0.6.27：状态码此前只登记了 200 / 409，而代码实际还会回 40001（id 缺失）、40101（无 token）、40301（非 user 角色）、40400（订单不存在**或非本人**，两者同码防存在性探测）、50000、50300；MP3-04：调用前先问机构「这个会话付了没有」，问不到时 **fail-closed 拒取消**（50300 session_query_unavailable / session_query_failed），不是「查不到就当没付」'
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: {'200': {description: OK}, '409': {$ref: '#/components/responses/Err'}}
+      responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}, '503': {$ref: '#/components/responses/Err'}}
   /admin/orders:
     get:
       parameters:
@@ -523,15 +563,15 @@ paths:
     post:
       description: 仅 paid；has_dispute=true → 40909；0.6.11（AJ-179）：is_test（审核期测试单）→ 409 / 40902，测试单永不发货
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [carrier, tracking_no], properties: {carrier: {type: string}, tracking_no: {type: string}}}}}}
-      responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [carrier, tracking_no], properties: {carrier: {type: string, maxLength: 32, description: '0.6.27：orders.carrier 是 VARCHAR(32)，超长 40001 carrier_too_long（AJ-315）'}, tracking_no: {type: string, maxLength: 64, description: '0.6.27：orders.tracking_no 是 VARCHAR(64)，超长 40001 tracking_no_too_long（AJ-315）'}}}}}}
+      responses: {'200': {description: 'OK（0.6.27：响应体回 order_id / status / carrier / tracking_no 四个键，status 恒为 shipped；此前契约只写了 description: OK，与 admin-order-routes.ts 不一致）', content: {application/json: {schema: {type: object, required: [order_id, status, carrier, tracking_no], properties: {order_id: {type: string}, status: {type: string, enum: [shipped]}, carrier: {type: string}, tracking_no: {type: string}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/refund:
     post:
       description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.10① 起 `has_dispute` 的语义是「**有未解除的拒付限制**」（进行中，或已败诉）：拒付结案时**仅胜诉与 withdrawn 复位**、闸门随之解锁，**败诉保持 true、闸门继续拦**（U-F4 / AJ-176；本句取代 0.6.7 的旧口径，那条已作废）。0.6.9（AJ-175/KD-4）：状态为 **refunding**（上次机构调用失败）时允许再调重试，沿用首次退款原因与同一机构幂等键；refunded 仍 40902。0.6.11（AJ-178 / F-03）：上一笔机构退款在途（refund_pending）时再调只查询该笔、不再发起；机构确认失败后换新机构幂等键重新发起；结果未知（超时 / 机构报错）仍沿用同键
       summary: 全额退款（MVP；按 charge_currency / charge_amount 原币退；缺货场景整单退款）
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500, description: '0.6.12（B7 / AJ-191）：上限 500（机构 metadata 值上限）；超限 40001 + reason refund_reason_too_long。上限唯一真源 = shared REFUND_REASON_MAX_LENGTH，由契约测试双向比对'}}}}}}
-      responses: {'202': {description: 'Accepted（succeeded = 已退款，订单 refunded；pending = 机构处理中，订单停在 refunding，再调即查询）', content: {application/json: {schema: {type: object, required: [order_id, outcome], properties: {order_id: {type: string}, outcome: {type: string, enum: [succeeded, pending]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+      responses: {'202': {description: 'Accepted（succeeded = 已退款，订单 refunded；pending = 机构处理中，订单停在 refunding，再调即查询）', content: {application/json: {schema: {type: object, required: [order_id, outcome], properties: {order_id: {type: string}, outcome: {type: string, enum: [succeeded, pending]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}, '503': {description: '0.6.27 补：50300 出站熔断打开（AJ-313）——这一次请求**一次都没有发出去**，不记 refund_failed 事件、不落 50000，带 retry_after_ms 让管理员稍后重试', content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}}
   /admin/orders/{id}/dispute/release:
     post:
       summary: 人工解除拒付限制（B1b / AJ-194，逃生口）
@@ -574,7 +614,7 @@ paths:
       summary: 图片上传（multipart，服务端写对象存储并生成 thumb/card/detail 三档 webp；响应 ImageSet 增带 image_key = detail 档键）
       description: 0.6.8 补：单文件上限 **10MB**；只收 jpeg / png / webp，按 **magic bytes** 判定（不信客户端 Content-Type；svg 永不放行，heic 明拒）。类型不符 / 超限 → 40001。`image_key` 供 BannerInput 使用（AJ-143）
       requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, properties: {file: {type: string, format: binary}}}}}}
-      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ImageSet'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ImageSet'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}, '503': {description: '0.6.27 补：50300 对象存储（R2）出站熔断打开——上传是出站调用，熔断期无可用通道', content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}}
   /admin/fx:
     get:
       summary: 展示汇率列表（**含历史与未来生效行**；quote 升序、同币种内 effective_from 倒序；逐行带 is_current）
@@ -675,9 +715,9 @@ components:
                  why: {type: string, maxLength: 200, description: '0.6.23：编辑口径的"为什么值得买"。可选（必填会逼运营编一句假文案）；超 200 字报 40001 why_too_long，**不静默截断**'},
                  maker: {type: string, maxLength: 120, description: '0.6.23：产地 / 工房 / 匠人署名。可选；超 120 字报 40001 maker_too_long（与 DB VARCHAR(120) 同宽）'},
                  tags: {type: array, items: {type: string, minLength: 1}, description: '0.6.23：编辑展示标签。**PUT 是整行覆盖**：带了（含空数组）= 覆盖，省略在新建路径按 [] 处理；逐项不得为空串（空串会渲染出一个空色块）'}}}
-    AddressInput: {type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, pattern: '^[ -~]+$'}, phone: {type: string, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, pattern: '^[ -~]+$'}, line2: {type: string, pattern: '^[ -~]*$'}, city: {type: string, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2}, postal_code: {type: string, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
+    AddressInput: {description: '0.6.27：各字段补列宽上限（= ADDRESS_MAX_CHARS，与列宽逐字一致），超长 40001；state 补 pattern（不符是 **40002** 不是 40001）', type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, maxLength: 100, pattern: '^[ -~]+$'}, phone: {type: string, maxLength: 20, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, maxLength: 200, pattern: '^[ -~]+$'}, line2: {type: string, maxLength: 200, pattern: '^[ -~]*$'}, city: {type: string, maxLength: 100, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$'}, postal_code: {type: string, maxLength: 10, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
     Address: {allOf: [{$ref: '#/components/schemas/AddressInput'}, {type: object, properties: {id: {type: string}}}]}
-    OrderItemsInput: {type: array, minItems: 1, items: {type: object, required: [product_id, qty], properties: {product_id: {type: string}, qty: {type: integer, minimum: 1}}}}
+    OrderItemsInput: {type: array, minItems: 1, maxItems: 50, description: '0.6.27：maxItems 50 = domain/quote.ts 的 MAX_QUOTE_ITEMS（AJ-319）。⚠️ 这一版是**先有契约、后有实现**——核对时发现代码里根本没有数量上限，唯一约束是 http.ts 的 JSON_BODY_LIMIT=100kb（约可塞 2500 条），属于自造 DoS；本条登记的同时补了实现。超出 → 40001（reason items_too_many）。⚠️ 小程序端购物车（cart-store.js）目前**没有**数量上限，攒到 51 件会在结算时撞这条', items: {type: object, required: [product_id, qty], properties: {product_id: {type: string}, qty: {type: integer, minimum: 1}}}}
     # duty_jpy 可空 + duty_estimate（I1-U4 实现口径）：duty_rates 无此 (origin,dest) 行、或目的国/产地
     # 无法唯一确定时 duty_jpy=null 且 duty_estimate=false——duty 本是信息字段，缺失不阻止下单（基数口径 13b 已由工程 AJ-142 定为按成交价 ×15%）。
     Quote: {type: object, properties: {items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer, nullable: true, description: 信息字段，不计入 total（D-32）；null = 无法估算（见 duty_estimate）}, duty_estimate: {type: boolean, description: 'false 时 duty_jpy 为 null，前端不得展示具体关税数字'}, total_jpy: {type: integer}, weight_g: {type: integer, description: 含 PACKAGING_WEIGHT_G 包材重量（D-42）}, display: {$ref: '#/components/schemas/Display'}, free_shipping_remaining_jpy: {type: integer}, split_hint: {type: boolean, description: 金额超 MAX_ORDER_JPY 时为 true，提示拆单（D-42；建单时硬拦 40906）}}}
