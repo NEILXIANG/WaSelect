@@ -24,6 +24,18 @@
 --
 -- @see server/src/adapters/admin-auth.ts；server/src/app/admin-auth-routes.ts；
 --      server/src/app/login-attempts-cleanup.ts；docs/自主决策记录.md AJ-187
+--
+-- @breaking ⚠️ up 段 `ALTER TABLE users DROP COLUMN …`：删的是**旧版本代码仍在读的列**。
+--      Render 的部署顺序是 `preDeployCommand` 先跑迁移、旧实例在新实例健康前继续接流量，
+--      所以从迁移完成到新实例接管之间存在窗口，窗口里 014 口径的代码
+--      `select login_locked_until / failed_login_count` → **42703 → 50000**（管理员登录 500）。
+--      附带后果：正在生效的锁随列一起消失 ⇒ **部署即解锁**（有人正在爆破时尤甚）。
+--      **这一版之所以安全，只因为部署时生产还没有任何流量**（未上线、库是空的）。
+--      ⚠️ 这个理由**不会一直成立**：今后对 `orders` / `payments` / `users` 做同样的事，
+--      必须按 **expand → contract 两步走**——第一版只"停用"（代码不再读、写入新落点），
+--      确认全量切到新代码之后的**下一个版本**才删。
+--      @see test/lint/migrations.lint.test.ts（本标记的强制器，DB2-07 / AJ-317）
+--
 -- Up migration
 
 CREATE TABLE IF NOT EXISTS login_attempts (

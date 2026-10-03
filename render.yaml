@@ -33,8 +33,16 @@ services:
     #    构建必失败（或迁移命令找不到工具）。
     buildCommand: npm ci --include=dev && npm run build
     # 发布前先跑迁移（全量审计 2026-09-26 P1：此前生产没有任何迁移执行点，服务能起来但表/列不存在）。
-    # Blueprint 字段名 `preDeployCommand`（NEEDS VERIFICATION：以 render.com/docs/blueprint-spec 为准；
-    # 若平台不认此字段，退路是 `startCommand: npm run db:migrate && npm start`，代价是每个实例都跑一次迁移）
+    # Blueprint 字段名 `preDeployCommand`
+    #   @measured(render.com/docs/blueprint-spec，2026-09-30 取回)：该字段适用于 web service，
+    #   执行位置是 "after the service's buildCommand but before its startCommand"——
+    #   即**新实例启动之前**，而旧实例在新实例健康前**继续接流量**。字段本身已核实，不再标 NEEDS VERIFICATION。
+    # ⚠️ 由此推出一条**迁移纪律**（DB2-07 / AJ-317）：从"迁移完成"到"新实例接管"之间是**旧代码 + 新库**，
+    #   所以迁移的 up 段**删列 / 删表 / 收紧约束**都会让旧代码 500（42703 / 23514）。
+    #   破坏性变更必须 **expand → contract 两步走**：第一版只"停用"（代码不再读、写入新落点），
+    #   下一个版本才删。015 当时的 up 直接 `DROP COLUMN users.login_locked_until` 属此类，
+    #   没出事只因为那时生产还没有流量——那个理由不会一直成立。
+    #   强制器：`test/lint/migrations.lint.test.ts`（up 段有破坏性语句 ⇒ 文件头必须带 `@breaking` 说明理由）。
     preDeployCommand: npm run db:migrate
     startCommand: npm start
     # ⚠️ 健康检查刻意用 /healthz（存活）而**不是** /readyz（就绪）。
@@ -54,7 +62,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: NODE_VERSION
-        value: 22
+        value: '22'
       - key: HOST
         value: 0.0.0.0 # 容器平台从宿主机外部探端口，绑回环会导致健康检查超时/发布失败
       - key: TRUST_PROXY_HOPS
@@ -105,8 +113,11 @@ services:
       # R1（收单机构事前相談）通过后再改这里加 wechat——**改配置不改代码**，这正是通道可插拔的目的。
       - key: PAYMENT_CHANNELS
         value: mock
+      # ⚠️ 加引号是刻意的（DB-12 / DB2-10）：裸 `on` 是 **YAML 1.1 的布尔**（true），
+      #    某些解析器会把它读成布尔而不是字符串 "on"；`config.ts` 那一侧期望的是字符串。
+      #    与上面 `NODE_VERSION: '22'` 同一条口径——Platform 配置里的值一律引起来。
       - key: REVIEW_MODE
-        value: on
+        value: 'on'
       - key: REVIEW_SKU_ID
         sync: false
       - key: CORS_ORIGINS
@@ -227,7 +238,7 @@ services:
         destination: /index.html
     envVars:
       - key: NODE_VERSION
-        value: 22
+        value: '22'
       # ⚠️ 这行是 admin-web 部署闸门的**开关**（`scripts/assert-admin-deploy-env.ts`）：
       #    只有在它（或 CF Pages 的 CF_PAGES）存在时，构建才会要求 `VITE_API_BASE_URL`
       #    是 https 公网地址。删掉它 = 闸门静默关闭 = 漏配时产物里烤着 localhost，

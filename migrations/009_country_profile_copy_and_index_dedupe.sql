@@ -22,7 +22,14 @@
 --
 -- @see 决策日志 D-32；migrations/007_country_profiles.sql；migrations/003 / 005；
 --      docs/自主决策记录.md AJ-90
-
+--
+-- @breaking ⚠️ up 段 `ADD CONSTRAINT payments_status_domain CHECK`：收紧（同 002 那条）。
+--      窗口里仍在服务的旧代码若写入五个取值之外的值 → 23514 → 50000。
+--      另外 `DROP INDEX idx_webhook_events_pending` 会让窗口内旧代码的**查询变慢**
+--      （走另一份同名定义不同的索引、或顺序扫描），属于"慢"而不是"错"。
+--      **这一版之所以安全，只因为部署时生产还没有任何流量**（未上线、表是空的）。
+--      @see test/lint/migrations.lint.test.ts（本标记的强制器，DB2-07 / AJ-317）
+--
 -- Up migration
 
 UPDATE country_profiles
