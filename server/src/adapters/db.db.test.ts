@@ -463,6 +463,44 @@ describe('002 加固：约束真的会拦', () => {
     for (const key of expectIdx) expect(have.has(key)).toBe(true);
     expect(rows.length).toBeGreaterThan(0);
   });
+
+  /**
+   * 024 的两条索引（DB-13 / CAT-19）。
+   *
+   * @why 这两条**不是**外键索引，所以上面那条"外键列都有索引"的不变量**覆盖不到**它们——
+   *      它们对应的是两条具体的查询（清理作业的按时间删除、公开商品列表的按状态排序）。
+   *      索引被误删时没有任何查询会报错，只会**慢慢变慢**，而"变慢"在 MVP 阶段
+   *      根本不会有人注意到——等到注意到时，表已经大到要在活表上建索引了。
+   *      所以这里钉的是"索引还在"，不是"查询有多快"（后者是基准测试的事，不在门禁里）。
+   * @limitation 只断言"首列 + 表名"在索引里，不断言索引名与列顺序：
+   *              PG 用得上索引靠的是列的可匹配性，不是名字；把名字钉死会让
+   *              "换个更合适的列顺序"这种正常改动变成改测试。
+   */
+  it('024 的两条查询索引都在（清理作业按时间删、商品列表按状态排序）', async () => {
+    const rows = await db`
+      select t.relname as tbl, a.attname as col
+      from pg_index i
+      join pg_class t on t.oid = i.indrelid
+      join pg_attribute a on a.attrelid = t.oid and a.attnum = i.indkey[0]
+      where t.relnamespace = 'public'::regnamespace
+        and i.indpred is null
+        and i.indisvalid
+    `;
+    const have = new Set(rows.map((r) => `${String(r.tbl)}.${String(r.col)}`));
+    // ⚠️ 两条都带说明文案：写成 `expect(have.has(k)).toBe(true)` 的话，
+    //    注入（DROP INDEX）后只报 `expected false to be true`——红灯是对的，
+    //    但**看不出是哪一条索引没了**（实测就是如此）。
+    // ① 清理作业 deleteStaleLoginAttempts 的 `last_failed_at < cutoff`
+    expect(
+      have.has('login_attempts.last_failed_at'),
+      '缺 login_attempts(last_failed_at) 索引：清理作业会每天全表扫描一张只增不删的表',
+    ).toBe(true);
+    // ② catalog.ts 公开列表的 `status = 'active' … order by created_at desc, id`
+    expect(
+      have.has('products.status'),
+      '缺 products(status, created_at desc, id) 索引：公开商品列表每次请求全表扫描 + 排序',
+    ).toBe(true);
+  });
 });
 
 /**
