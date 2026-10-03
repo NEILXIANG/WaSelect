@@ -366,3 +366,57 @@ describe('拒付解锁回路（此前只验了"复位"，没验"复位之后真�
     }
   });
 });
+
+/**
+ * D-39：采购信息（日文原名 / JAN 码 / 采购来源）是**内部信息**，只在管理端下发。
+ *
+ * @why 这条放在"跨端一致性"文件里，是因为它**只能靠两个身份对比才能验**：
+ *      单看管理端响应，三个字段在 = 做完了；单看买家响应，三个字段不在 = 也没问题。
+ *      只有"同一张单、同一个库、两个 token"能证明**筛是对的而不是漏的**。
+ *      而失效形态恰恰很安静：某人把管理端的 `toAdminOrderItem` 当成通用映射去用
+ *      （或给买家侧复用了 `AdminOrderItemRow`），三个字段就一起出现在买家响应里，
+ *      管理端测试全绿、买家端测试也全绿——因为没人测"不该有"。
+ *
+ * @why 泄露的后果不是"多显示几个字"：`purchase_source` 是**我们从哪家店、什么渠道拿货**，
+ *      配上售价就等于把成本结构与供应链摊给买家；`jan_code` 则让买家可以脱离我们直接比价下单。
+ *      这类信息一旦进了响应，撤下来要等客户端发版，所以宁可在这里钉一道。
+ *
+ * @see migrations/021_order_item_purchase_snapshot.sql 的列注释（`purchase_source` 那条写明"🈲 买家可见"）；
+ *      contracts/api-contract.yaml（`OrderItem` 不含三列，`AdminOrderItem` = `OrderItem` + 三列）
+ */
+describe('D-39：采购信息只下发管理端，🈲 买家可见', () => {
+  const SECRET_KEYS = ['title_ja', 'jan_code', 'purchase_source'] as const;
+
+  it('管理端详情带三列；同一张单的买家详情一列都不带（整条响应里搜不到值）', async () => {
+    const s = await buildServer();
+    try {
+      await seedPaidOrder('o-purchase');
+      await db`
+        update order_items
+           set title_ja = 'シェフナイフ', jan_code = '4900000000009', purchase_source = 'Amazon JP'
+         where order_id = 'o-purchase'
+      `;
+
+      const admin = await req(s, 'GET', '/api/v1/admin/orders/o-purchase', true);
+      expect(admin.status).toBe(200);
+      const aItems = admin.json['items'] as Array<Record<string, unknown>>;
+      expect(aItems).toHaveLength(1);
+      for (const k of SECRET_KEYS) {
+        expect(aItems[0], `管理端缺 ${k}`).toHaveProperty(k);
+      }
+      expect(aItems[0]?.['purchase_source']).toBe('Amazon JP');
+
+      const buyer = await req(s, 'GET', '/api/v1/orders/o-purchase', false);
+      expect(buyer.status).toBe(200);
+      const bItems = buyer.json['items'] as Array<Record<string, unknown>>;
+      expect(bItems).toHaveLength(1);
+      for (const k of SECRET_KEYS) {
+        expect(bItems[0], `买家侧不该有 ${k}`).not.toHaveProperty(k);
+      }
+      // 兜底：不只是键名对不上，值也不能藏在别的键里（比如塞进 title 或 note）
+      expect(JSON.stringify(buyer.json)).not.toMatch(/Amazon JP|4900000000009|シェフナイフ/);
+    } finally {
+      await s.close();
+    }
+  });
+});

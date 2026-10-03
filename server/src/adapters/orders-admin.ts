@@ -123,6 +123,17 @@ export interface AdminOrderRow {
   updated_at: Date;
 }
 
+/**
+ * 管理端读出的 `order_items` 一行。
+ *
+ * @why 后三列是**采购快照**（迁移 021 / D-39），只在管理端读出：
+ *      采购来源与 JAN 码是**内部信息**，🈲 不得进任何买家可见的响应
+ *      （泄露采购渠道等于泄露成本结构与供应链）。
+ *      买家侧那两条读路径（`adapters/orders.ts` 的 `listOrderItemsWithImage` 等）
+ *      因此**刻意不 select 这三列**——不是忘了，是外泄面要在最窄的那一层收口。
+ * @why 类型为 `string | null`：`products` 上这三列可空（商品未填 / 没有 JAN 码），
+ *      且迁移之前的历史订单行是 NULL。null = "没记录"，由展示层决定降级文案。
+ */
 export interface AdminOrderItemRow {
   order_id: string;
   product_id: string;
@@ -131,6 +142,9 @@ export interface AdminOrderItemRow {
   unit_price_jpy: number;
   weight_g: number;
   declared_value_usd: number;
+  title_ja: string | null;
+  jan_code: string | null;
+  purchase_source: string | null;
 }
 
 export interface AdminPaymentRow {
@@ -290,7 +304,8 @@ export async function listOrderItemsFor(
 ): Promise<AdminOrderItemRow[]> {
   if (orderIds.length === 0) return [];
   const rows = await db`
-    select order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd
+    select order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd,
+           title_ja, jan_code, purchase_source
       from order_items where order_id in ${db([...orderIds])}
      order by order_id, id
   `;
@@ -302,6 +317,9 @@ export async function listOrderItemsFor(
     unit_price_jpy: Number(r.unit_price_jpy),
     weight_g: Number(r.weight_g),
     declared_value_usd: Number(r.declared_value_usd),
+    title_ja: strOrNull(r.title_ja),
+    jan_code: strOrNull(r.jan_code),
+    purchase_source: strOrNull(r.purchase_source),
   }));
 }
 

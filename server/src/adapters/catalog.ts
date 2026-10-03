@@ -30,7 +30,29 @@
  */
 import type { Db } from './db.js';
 
-/** products 表读出的一行（报价/建单视角的列集；title 报价不用、建单写 title_snapshot 用）。 */
+/**
+ * 可空字符串列 → `string | null`。
+ * @why 与 `orders-admin.ts` 里同名那份是**同一条规则**（NULL/未定义 → null，其余 String()），
+ *      两处各自私有而没有提到共享模块：它是 1 行，为它引一层"行归一化"依赖不值；
+ *      而两个文件都已经在用它处理自己那一组可空列，跨文件 import 会让
+ *      "catalog ← orders-admin" 这种无业务关系的依赖凭空出现。
+ */
+function strOrNull(v: unknown): string | null {
+  return v === null || v === undefined ? null : String(v);
+}
+
+/**
+ * products 表读出的一行（报价/建单视角的列集；title 报价不用、建单写 title_snapshot 用）。
+ *
+ * @why 带上 `title_ja` / `jan_code` / `purchase_source` 三列（迁移 021 / D-39）：
+ *      建单要把它们**快照**进 `order_items`，供管理端的待采购清单使用。
+ *      ⚠️ 这三列**只有建单消费**，报价与买家路径一个都不用——
+ *      所以它们不进 `ProductListRow` / `ProductDetailRow`：采购信息是**内部信息**，
+ *      多一处 select 就多一处"顺手下发给买家"的机会（泄露采购渠道 = 泄露供应链）。
+ * @why 三列在 `products` 上都可空 → 这里用 `string | null` 而不是给空串兜底：
+ *      "商品没填 JAN 码"与"JAN 码是空字符串"是两件事，前者是事实、后者是脏数据。
+ *      建单照着原样落快照（null 就落 null），由**展示层**决定怎么降级。
+ */
 export interface QuoteProductRow {
   id: string;
   title: string;
@@ -39,6 +61,9 @@ export interface QuoteProductRow {
   stock: number;
   status: string;
   origin_country: string;
+  title_ja: string | null;
+  jan_code: string | null;
+  purchase_source: string | null;
 }
 
 /** 商品列表查询（参数已在路由层校验过形状）。 */
@@ -141,7 +166,8 @@ export function createCatalogRepo(db: Db): CatalogRepo {
     async findProductsForQuote(ids: readonly string[]): Promise<QuoteProductRow[]> {
       if (ids.length === 0) return [];
       const rows = await db`
-        select id, title, price_jpy, weight_g, stock, status, origin_country
+        select id, title, price_jpy, weight_g, stock, status, origin_country,
+               title_ja, jan_code, purchase_source
           from products where id in ${db([...ids])}
       `;
       return rows.map((r) => ({
@@ -152,6 +178,9 @@ export function createCatalogRepo(db: Db): CatalogRepo {
         stock: Number(r.stock),
         status: String(r.status),
         origin_country: String(r.origin_country),
+        title_ja: strOrNull(r.title_ja),
+        jan_code: strOrNull(r.jan_code),
+        purchase_source: strOrNull(r.purchase_source),
       }));
     },
 

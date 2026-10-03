@@ -343,7 +343,17 @@ export async function isTestOrder(db: Db, orderId: string): Promise<boolean | nu
   return row === undefined ? null : row.is_test;
 }
 
-/** order_items 一行（declared_value_usd 由建单用 allocate 分摊好——这里只负责落库）。 */
+/**
+ * order_items 一行（declared_value_usd 由建单用 allocate 分摊好——这里只负责落库）。
+ *
+ * @why 后三列是**采购快照**（迁移 021 / D-39）：`title_ja` / `jan_code` / `purchase_source`。
+ *      它们与 `title_snapshot` / `unit_price_jpy` 同一条口径——**下单那一刻**的商品信息，
+ *      不是当前值。管理端的"待采购清单"照这三列去采购，所以商品改了采购渠道之后
+ *      这些列**不能跟着变**（JOIN `products` 会让历史订单的渠道被悄悄改写，且不报错）。
+ * @why 类型为 `string | null` 且**必填键**（不是可选）：调用方（建单）必须显式给一个值，
+ *      哪怕是 null。写成可选键的话，"忘了传"与"商品确实没有 JAN 码"在代码里长得一样，
+ *      而前者是 bug、后者是事实——用必填键逼调用方做这个区分。
+ */
 export interface OrderItemInsertRow {
   id: string;
   order_id: string;
@@ -353,6 +363,9 @@ export interface OrderItemInsertRow {
   unit_price_jpy: number;
   weight_g: number;
   declared_value_usd: number;
+  title_ja: string | null;
+  jan_code: string | null;
+  purchase_source: string | null;
 }
 
 export async function insertOrderItems(
@@ -362,9 +375,11 @@ export async function insertOrderItems(
   for (const it of items) {
     await tx`
       insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy,
-                               weight_g, declared_value_usd)
+                               weight_g, declared_value_usd,
+                               title_ja, jan_code, purchase_source)
       values (${it.id}, ${it.order_id}, ${it.product_id}, ${it.title_snapshot}, ${it.qty},
-              ${it.unit_price_jpy}, ${it.weight_g}, ${it.declared_value_usd})
+              ${it.unit_price_jpy}, ${it.weight_g}, ${it.declared_value_usd},
+              ${it.title_ja}, ${it.jan_code}, ${it.purchase_source})
     `;
   }
 }

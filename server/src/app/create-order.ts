@@ -269,6 +269,13 @@ export async function createOrder(
       unit_price_jpy: row.price_jpy,
       weight_g: row.weight_g,
       declared_value_usd: declaredByLine[i] ?? 0,
+      // ── 采购快照（迁移 021 / D-39）───────────────────────────────────────
+      // @why 照**下单那一刻**的 products 原样落库，null 就落 null：
+      //      "商品没填 JAN 码"是事实，"空字符串"是脏数据，两者不得在这里被抹平。
+      //      管理端待采购清单据此显示"未记录"还是真实值（降级在展示层做）。
+      title_ja: row.title_ja,
+      jan_code: row.jan_code,
+      purchase_source: row.purchase_source,
     };
   });
   await insertOrderItems(tx, itemRows);

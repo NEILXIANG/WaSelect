@@ -212,3 +212,50 @@ describe('orders-admin（管理端订单读仓储，I2 U-B1）', () => {
     await expect(listEventsFor(db, [])).resolves.toEqual([]);
   });
 });
+
+/**
+ * D-39：`listOrderItemsFor` 读出**采购三列**（待采购清单的数据来源）。
+ *
+ * @why 这两条的分工与 `create-order.db.test.ts` 那三条不同：那边验"下单时落下去"，
+ *      这边验"管理端读得出来"。中间隔着一层 `strOrNull`，而它的失败模式是
+ *      **静默的**——`select` 漏了列时 `r.title_ja` 是 `undefined`，`strOrNull` 照样返回 `null`，
+ *      于是"这一列从来没被读出来"看起来和"这单确实没记采购信息"一模一样。
+ *      所以**必须有一条三列有值的用例**：只有非空值能把"漏列"和"确实是空"区分开。
+ *
+ * @why 空串用例（第二条）钉的是**分层边界**：仓储**忠实**返回库里的空串，
+ *      把空串折叠成"未记录"是**展示层**（admin-web `purchaseLine`）的事。
+ *      若仓储自己折叠，将来要区分"编辑留空"与"编辑填了又删"就没有数据了。
+ */
+describe('D-39：管理端读出采购快照（待采购清单）', () => {
+  it('三列有值 → 原样读出（漏了 select 的列会在这里红，而不是静默变 null）', async () => {
+    await insertOrder({ id: 'o-p' });
+    await db`
+      update order_items
+         set title_ja = 'シェフナイフ', jan_code = '4900000000003', purchase_source = 'Amazon JP'
+       where order_id = 'o-p'
+    `;
+    const items = await listOrderItemsFor(db, ['o-p']);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.title_snapshot).toBe('商品');
+    expect(items[0]?.title_ja).toBe('シェフナイフ');
+    expect(items[0]?.jan_code).toBe('4900000000003');
+    expect(items[0]?.purchase_source).toBe('Amazon JP');
+  });
+
+  it('库里是空串 → 读出空串（折叠成"未记录"是展示层的事，仓储不擅自改数据）', async () => {
+    await insertOrder({ id: 'o-q' });
+    await db`update order_items set title_ja = '', jan_code = '', purchase_source = '' where order_id = 'o-q'`;
+    const items = await listOrderItemsFor(db, ['o-q']);
+    expect(items[0]?.title_ja).toBe('');
+    expect(items[0]?.jan_code).toBe('');
+    expect(items[0]?.purchase_source).toBe('');
+  });
+
+  it('库里是 NULL → 读出 null（不是 undefined，也不是空串）', async () => {
+    await insertOrder({ id: 'o-r' });
+    const items = await listOrderItemsFor(db, ['o-r']);
+    expect(items[0]?.title_ja).toBeNull();
+    expect(items[0]?.jan_code).toBeNull();
+    expect(items[0]?.purchase_source).toBeNull();
+  });
+});

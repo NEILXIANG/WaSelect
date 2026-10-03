@@ -206,6 +206,61 @@ describe('GET /admin/orders（管理端订单列表）', () => {
     await s.close();
   });
 
+  /**
+   * D-39 / 0.6.26：列表行带 `items`（含采购快照）——「待采购清单」就是这一页本身。
+   *
+   * @why 三条断言分工不同，缺任一都会留下"看起来做完了"的假象：
+   *      ① 有采购信息 → 列表带得到（这是"清单能用"的最低要求）；
+   *      ② 多单多行的**归属**正确（批量取之后按 order_id 归堆，归错就是
+   *         "这一单显示了别人的采购来源"——采购员照它去买，买到错的东西，
+   *         而且**没有任何报错**，是这一段最危险的失效形态）；
+   *      ③ 没有采购信息 → 三列整键省略（与详情同口径，前端显示"未记录"）。
+   */
+  it('列表行带 items 与采购快照；多单多行归属正确；无采购信息时整键省略', async () => {
+    const s = await buildServer();
+    // 两单各两条行项目，插入序故意交错（o-1 的 b 行插在 o-2 的 a 行之后）
+    await seedOrder({ id: 'o-1' });
+    await seedOrder({ id: 'o-2' });
+    await db`
+      insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy,
+                               weight_g, declared_value_usd, title_ja, jan_code, purchase_source)
+      values ('oi-1b', 'o-1', 'p-o-1', '包丁', 1, 1000, 500, 7, 'シェフナイフ', '4900000000011', 'Amazon JP'),
+             ('oi-2a', 'o-2', 'p-o-2', '茶碗', 2, 800, 300, 11, '茶碗', '4900000000022', '楽天市場'),
+             ('oi-1c', 'o-1', 'p-o-1', 'まな板', 1, 500, 800, 4, 'まな板', '4900000000033', '錦市場 直送')
+    `;
+    const ok = await adminFetch(s, 'GET', '/api/v1/admin/orders');
+    expect(ok.status).toBe(200);
+    const rows = ok.json.items as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(2);
+
+    const byId = new Map(rows.map((r) => [String(r['order_id']), r]));
+    const lineOf = (orderId: string, title: string): Record<string, unknown> => {
+      const lines = byId.get(orderId)?.['items'] as Array<Record<string, unknown>>;
+      const hit = lines.find((l) => l['title'] === title);
+      if (hit === undefined)
+        throw new Error(`${orderId} 里没有 ${title}：${JSON.stringify(lines)}`);
+      return hit;
+    };
+
+    // ① o-1 有三行（含种子那条），o-2 有两行
+    expect(byId.get('o-1')?.['items'] as unknown[]).toHaveLength(3);
+    expect(byId.get('o-2')?.['items'] as unknown[]).toHaveLength(2);
+
+    // ② 归属：每行带着**自己那一单**的采购来源
+    expect(lineOf('o-1', '包丁')['purchase_source']).toBe('Amazon JP');
+    expect(lineOf('o-1', 'まな板')['purchase_source']).toBe('錦市場 直送');
+    expect(lineOf('o-2', '茶碗')['purchase_source']).toBe('楽天市場');
+    expect(lineOf('o-1', '包丁')['jan_code']).toBe('4900000000011');
+    expect(lineOf('o-1', '包丁')['title_ja']).toBe('シェフナイフ');
+
+    // ③ 种子那条没填采购信息 → 三列整键省略（不是 null / 空串）
+    const plain = lineOf('o-1', '商品');
+    expect(plain).not.toHaveProperty('title_ja');
+    expect(plain).not.toHaveProperty('jan_code');
+    expect(plain).not.toHaveProperty('purchase_source');
+    await s.close();
+  });
+
   it('status 非法 → 40001；page/size 越界 → 40001', async () => {
     const s = await buildServer();
     expect((await adminFetch(s, 'GET', '/api/v1/admin/orders?status=nope')).status).toBe(400);

@@ -73,6 +73,7 @@ import {
   markShipped,
   releaseDisputeHold,
   updateAddressSnapshot,
+  type AdminOrderItemRow,
   type AdminOrderListRow,
   type AdminOrderRow,
 } from '../adapters/orders-admin.js';
@@ -97,14 +98,32 @@ function adminActor(req: Request): string {
   return `admin:${req.auth?.sub ?? 'unknown'}`;
 }
 
-/** 列表行 → 契约 `AdminOrderListItem`（主键改叫 order_id，见文件头 @why）。 */
-function toListItem(r: AdminOrderListRow): Record<string, unknown> {
+/**
+ * 列表行 → 契约 `AdminOrderListItem`（主键改叫 order_id，见文件头 @why）。
+ *
+ * @param lineItems 该单的行项目（已转成 `AdminOrderItem` 形状）。
+ *
+ * @why 列表**固定**带 `items`，而不是"只在 `status=paid` 时带"：
+ *      技术文档 §2.7 定义「待采购清单 = GET /admin/orders?status=paid」，
+ *      即清单就是这条查询——筛 `paid` 之后**这一页本身就是清单**，
+ *      行里必须有采购快照，否则采购员要一张张点开详情（50 单点 50 次）。
+ *      ⚠️ "按查询参数决定响应形状"看起来省流量，但代价是前端永远要写 `items?` 判空，
+ *      且契约只能标 optional——将来任何一处忘了判空就是"某个筛选下清单变空白"。
+ *      形状固定 > 省流量：一页最多 100 单、每单 1–3 行，多出来的只是几 KB。
+ * @tradeoff 放弃了"列表响应更小"（列表的其它用途，比如只看单号搜单，也带着 items）。
+ *           换取的是**一种形状、没有条件分支**，以及"清单"这个用法不需要额外端点。
+ */
+function toListItem(
+  r: AdminOrderListRow,
+  lineItems: readonly Record<string, unknown>[],
+): Record<string, unknown> {
   return {
     order_id: r.id,
     order_no: r.order_no,
     user_id: r.user_id,
     status: r.status,
     total_jpy: r.total_jpy,
+    items: lineItems,
     ...(r.contact_email !== null ? { contact_email: r.contact_email } : {}),
     ...(r.carrier !== null ? { carrier: r.carrier } : {}),
     ...(r.tracking_no !== null ? { tracking_no: r.tracking_no } : {}),
@@ -112,6 +131,31 @@ function toListItem(r: AdminOrderListRow): Record<string, unknown> {
     has_dispute: r.has_dispute,
     is_test: r.is_test,
     created_at: r.created_at.toISOString(),
+  };
+}
+
+/**
+ * `order_items` 行 → 契约的订单行项目。
+ *
+ * @why 抽成函数而不是内联：详情与（将来的）待采购清单都要同一份形状。
+ *      两处各写一份 `items.map(...)` 的结果是"详情带了 jan_code、清单没带"——
+ *      而那种不一致不会报错，只是采购员在某个页面看不到 JAN 码。
+ *
+ * @why 采购快照三列（`title_ja` / `jan_code` / `purchase_source`）为 null 时**整键省略**
+ *      而不是给 null 或空串：与 `why` / `maker` 同一条降级口径——
+ *      "没记录"用**字段缺席**表达，"空字符串"留给真正的脏数据（运营填了又删空）。
+ *      前端据此显示"未记录"（而不是空白，空白会被读成"这个值就是空的"）。
+ *      ⚠️ 迁移 021 之前的历史订单行三列都是 NULL → 全部走这个分支。
+ */
+function toAdminOrderItem(i: AdminOrderItemRow): Record<string, unknown> {
+  return {
+    product_id: i.product_id,
+    title: i.title_snapshot,
+    qty: i.qty,
+    unit_price_jpy: i.unit_price_jpy,
+    ...(i.title_ja !== null ? { title_ja: i.title_ja } : {}),
+    ...(i.jan_code !== null ? { jan_code: i.jan_code } : {}),
+    ...(i.purchase_source !== null ? { purchase_source: i.purchase_source } : {}),
   };
 }
 
@@ -199,7 +243,27 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           ...(status !== undefined ? { status } : {}),
           ...(rawKw !== undefined && rawKw !== '' ? { keyword: rawKw } : {}),
         });
-        res.json({ items: items.map(toListItem), total });
+        // 行项目**一次批量**取（N+1 的反面）：`listOrderItemsFor` 一条 `in (…)` 拿全部，
+        // 再按 order_id 归堆。⚠️ 空 ids 时它早退返回 []，不进 SQL（见仓储的用例）。
+        const lineItems = await listOrderItemsFor(
+          deps.db,
+          items.map((r) => r.id),
+        );
+        const byOrder = new Map<string, AdminOrderItemRow[]>();
+        for (const it of lineItems) {
+          const bucket = byOrder.get(it.order_id);
+          if (bucket === undefined) byOrder.set(it.order_id, [it]);
+          else bucket.push(it);
+        }
+        res.json({
+          items: items.map((r) =>
+            toListItem(
+              r,
+              (byOrder.get(r.id) ?? []).map((i) => toAdminOrderItem(i)),
+            ),
+          ),
+          total,
+        });
       } catch (e) {
         next(e);
       }
@@ -221,12 +285,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         res.json(
           toAdminOrder(
             order,
-            items.map((i) => ({
-              product_id: i.product_id,
-              title: i.title_snapshot,
-              qty: i.qty,
-              unit_price_jpy: i.unit_price_jpy,
-            })),
+            items.map((i) => toAdminOrderItem(i)),
             payments.map((p) => ({
               provider: p.provider,
               status: p.status,

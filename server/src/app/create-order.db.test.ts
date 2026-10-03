@@ -374,3 +374,84 @@ describe('A3：回补与建单的取锁序必须一致', () => {
     });
   });
 });
+
+/**
+ * D-39：采购信息**快照**落库（迁移 021）。
+ *
+ * @why 这三条用例是"落快照而不是 JOIN `products`"这条决策的**唯一防线**：
+ *      商品的 `purchase_source` 会换（换供应商 / 换采购渠道），`title_ja` 也会改。
+ *      JOIN 看起来更简单（不用多存三列），但结果是**历史订单的采购渠道被悄悄改写**，
+ *      且没有任何一方报错——采购员照着清单去找的却是新渠道，货不对板要等收货才发现。
+ *      换句话说：JOIN 与快照在"今天下的单"上行为完全一致，**只有历史单能区分它们**，
+ *      所以用例必须"下单 → 改商品 → 回看订单行"，只验落库值等于商品当前值的话，
+ *      换成 JOIN 也一样绿（这正是本 describe 存在的理由）。
+ *
+ * @see migrations/021_order_item_purchase_snapshot.sql（文件头写了落快照的 @why）；
+ *      adapters/orders.ts `OrderItemInsertRow`（三列是**必填键**，逼调用方区分
+ *      "忘了传"与"确实没有"）；技术文档 §2.7（待采购清单）
+ */
+describe('D-39：采购信息快照落 order_items', () => {
+  /** 建一张单（用 p-knife，qty=1）。 */
+  async function createOne(seq: string) {
+    const sink = new MemorySink();
+    return withTransaction(db, (tx) => createOrder(tx, deps(seqIdGen([seq]), sink), INPUT));
+  }
+
+  /** 读回该单唯一一条 order_items 的采购三列 + 标题快照。 */
+  async function rowOf(orderId: string) {
+    const rows = await db`
+      select title_snapshot, title_ja, jan_code, purchase_source
+        from order_items where order_id = ${orderId}
+    `;
+    expect(rows).toHaveLength(1);
+    return rows[0] as Record<string, unknown>;
+  }
+
+  it('商品三列都有值 → 原样落进 order_items', async () => {
+    await db`
+      update products
+         set title_ja = 'シェフナイフ', jan_code = '4900000000001', purchase_source = 'Amazon JP'
+       where id = 'p-knife'
+    `;
+    const created = await createOne('SNAP01');
+    const row = await rowOf(created.orderId);
+    // title_snapshot 存的是**中文展示名**，与 title_ja 是两列两回事
+    expect(row['title_snapshot']).toBe('Chef Knife');
+    expect(row['title_ja']).toBe('シェフナイフ');
+    expect(row['jan_code']).toBe('4900000000001');
+    expect(row['purchase_source']).toBe('Amazon JP');
+  });
+
+  it('商品三列都是 NULL（还没录采购信息）→ 落 NULL，不落空串', async () => {
+    // beforeEach 的商品没填这三列 → 三列都是 NULL
+    const created = await createOne('SNAP02');
+    const row = await rowOf(created.orderId);
+    // ⚠️ 断言 `toBeNull()` 而不是 `toBeFalsy()`：'' 也是 falsy，
+    //    那样"落空串"这个缺陷会悄悄通过，而空串在管理端展示层就是"有一条但看不见"
+    expect(row['title_ja']).toBeNull();
+    expect(row['jan_code']).toBeNull();
+    expect(row['purchase_source']).toBeNull();
+  });
+
+  it('立身之本：下单后改商品的采购来源 / 日文名 → 订单行一字不动', async () => {
+    await db`
+      update products
+         set title_ja = 'シェフナイフ', jan_code = '4900000000001', purchase_source = 'Amazon JP'
+       where id = 'p-knife'
+    `;
+    const created = await createOne('SNAP03');
+    const before = await rowOf(created.orderId);
+    expect(before['purchase_source']).toBe('Amazon JP');
+
+    // 换供应商、改日文名、补 JAN —— 商品侧的"当前值"整体变了
+    await db`
+      update products
+         set title_ja = 'コックナイフ', jan_code = '4900000000002', purchase_source = '楽天市場'
+       where id = 'p-knife'
+    `;
+    const after = await rowOf(created.orderId);
+    expect(after).toEqual(before);
+    expect(after['purchase_source']).toBe('Amazon JP');
+    expect(after['title_ja']).toBe('シェフナイフ');
+  });
+});
