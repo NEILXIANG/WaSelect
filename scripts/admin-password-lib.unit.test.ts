@@ -17,8 +17,12 @@
  * @see scripts/admin-password-lib.ts（被测）；scripts/admin-password.ts（CLI 薄壳）
  */
 import { describe, expect, it } from 'vitest';
+import { IDENTITY_CACHE_TTL_MS } from '../server/src/adapters/identity.js';
 import {
   describeDatabaseTarget,
+  formatResetSuccess,
+  hasYesFlag,
+  isLocalDatabaseTarget,
   parseAdminEmailArg,
   readNewPassword,
   type PasswordStdin,
@@ -113,6 +117,64 @@ describe('describeDatabaseTarget（只显示主机与库名）', () => {
     const s = describeDatabaseTarget('not a url at all');
     expect(s).toBe('(连接串无法解析，已省略)');
     expect(s).not.toContain('not a url');
+  });
+});
+
+describe('isLocalDatabaseTarget / hasYesFlag（远程库要显式确认，SEC2-05 ① / AJ-342）', () => {
+  /**
+   * @why 改密不可逆：改完才知道改错了库，而旧口令已经不在任何地方，
+   *      且所有已登录的管理员被立刻踢下线。打印目标库只能防"漏传 URL 改到本地"这一个方向，
+   *      防不住"shell 里的 DATABASE_URL 本来就是生产"——人不会细看自己每天都看到的那行字。
+   * @why 判本机而不是判生产名单：本机是最常见目标，免确认；其余一律要求 `--yes`。
+   *      判错的方向落在"多打一个参数"，不是"漏拦一次不可逆的写"。
+   */
+  it('本机写法 → true（不需要 --yes）：localhost / 127.0.0.1 / ::1', () => {
+    expect(isLocalDatabaseTarget('postgresql://u:p@localhost:5432/jp')).toBe(true);
+    expect(isLocalDatabaseTarget('postgresql://u:p@127.0.0.1:5432/jp')).toBe(true);
+    expect(isLocalDatabaseTarget('postgresql://u:p@[::1]:5432/jp')).toBe(true);
+  });
+
+  it('🔴 远程主机 → false（必须 --yes 才动）：大小写不敏感，环回以外一律不算本机', () => {
+    expect(isLocalDatabaseTarget('postgresql://u:p@db.example.com/jp')).toBe(false);
+    expect(isLocalDatabaseTarget('postgresql://u:p@LOCALHOST:5432/jp')).toBe(true); // 主机名本身不区分大小写
+    expect(isLocalDatabaseTarget('postgresql://u:p@127.0.0.2:5432/jp')).toBe(false);
+  });
+
+  /**
+   * @why 解析不出主机（少协议 / unix socket）时按**非本机**处理：那时连"改的是哪台机器"
+   *      都说不出来，唯一安全的做法是先问一句（与 describeDatabaseTarget 的占位串同一保守方向）。
+   */
+  it('🔴 主机为空 / 完全解析不了 → false（说不出口时不猜，要求确认）', () => {
+    expect(isLocalDatabaseTarget('postgresql:///japan_shop?host=/var/run/postgresql')).toBe(false);
+    expect(isLocalDatabaseTarget('user:secret-pass@dbhost/shop')).toBe(false);
+    expect(isLocalDatabaseTarget('not a url at all')).toBe(false);
+  });
+
+  it('hasYesFlag：只认整词 `--yes`，口令位与邮箱位不受影响', () => {
+    expect(hasYesFlag(['a@b.c', '--yes'])).toBe(true);
+    expect(hasYesFlag(['a@b.c'])).toBe(false);
+    expect(hasYesFlag(['a@b.c', '--yes-please'])).toBe(false);
+  });
+});
+
+describe('formatResetSuccess（"旧 token 何时真的失效"必须准确，SEC2-05 ③ / AJ-343）', () => {
+  /**
+   * @why 服务进程里的身份缓存（`IDENTITY_CACHE_TTL_MS`，60 秒）会在这段时间里
+   *      继续拿缓存里的旧 `token_ver` 放行旧 token，而 CLI 是另一个进程、调不到 `invalidate`。
+   *      ⚠️ 旧输出写"旧 token 已失效"：应急轮换的人据此以为攻击者已经出局，
+   *      实际还有最长 60 秒的窗口——**这句话是那一刻唯一的时间预期**，说错方向的代价是把窗口当成了零。
+   * @why 数字取自缓存 TTL 常量而不是写死（函数里已经这么做了）：
+   *      将来 TTL 调成 5 秒而输出还写 60，等于继续给人错误预期。
+   */
+  it('🔴 写"最迟 N 秒内失效"，不是"已失效"', () => {
+    const line = formatResetSuccess(2);
+    expect(line).toContain('token_ver=2');
+    expect(line).toContain('最迟 60 秒内失效');
+    expect(line).not.toContain('已失效');
+  });
+
+  it('N 与身份缓存 TTL 同源：TTL 变了，这句话跟着变', () => {
+    expect(formatResetSuccess(1)).toContain(String(Math.ceil(IDENTITY_CACHE_TTL_MS / 1000)));
   });
 });
 

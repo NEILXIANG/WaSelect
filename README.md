@@ -17,7 +17,7 @@ npm run dev        # 首次自动物化 .env、建库、迁移、灌 demo 数据
 
 `.env` 生成后按需填 Stripe 等占位；`npm run dev -- --no-serve` 只准备环境，`--full` 灌完整目录。本地联调（Stripe 回调 / 公网隧道）见 `docs/dev/stripe-listen-cloudflared.md`。完成判定只有一个信号：`npm run gate` 全绿。
 
-管理后台：`npm run dev -w admin-web`（Vite，**`:5174`**；商品 / 订单 / 运营配置 / Banner / 风控五个页签已落地，登录页走真实接口；跨域白名单见 `.env` 的 `CORS_ORIGINS`，已含本地 5174）。构建产物在 `admin-web/dist`（部署 = 静态站 + API 指 `VITE_API_BASE_URL`）。登录调 `POST /api/v1/auth/admin/login`（已实现：邮箱 + 口令，连错 5 次锁 15 分钟；初始管理员由启动时按 `ADMIN_INITIAL_EMAIL` / `ADMIN_INITIAL_PASSWORD` 建号，改密用 `npm run admin:password`，改密同时解除登录锁定）。此处曾写"该端点尚未实现、生产无法登录"——自 AJ-181 起已不成立（2026-09-30 更正）。
+管理后台：`npm run dev -w admin-web`（Vite，**`:5174`**；商品 / 订单 / 运营配置 / Banner / 风控五个页签已落地，登录页走真实接口；跨域白名单见 `.env` 的 `CORS_ORIGINS`，已含本地 5174）。构建产物在 `admin-web/dist`（部署 = 静态站 + API 指 `VITE_API_BASE_URL`）。登录调 `POST /api/v1/auth/admin/login`（已实现：邮箱 + 口令，连错 5 次锁 15 分钟；初始管理员由启动时按 `ADMIN_INITIAL_EMAIL` / `ADMIN_INITIAL_PASSWORD` 建号，改密用 `npm run admin:password`（新口令从 stdin 读、交互时不回显；**目标库不是本机时要带 `--yes`**；改密同时解除登录锁定；旧 token **最迟 60 秒**内失效——服务进程的身份缓存，不是立刻）。此处曾写"该端点尚未实现、生产无法登录"——自 AJ-181 起已不成立（2026-09-30 更正）。
 
 **可扩展性**：先读 `docs/可扩展架构设计-支付可插拔·多国家·UI可配置.md`（ADR-28）——业务核心不认识任何具体支付方式/国家/UI：支付走 Provider 注册表 + 能力声明 + 配置表；多国家走 `country_profiles` + `shipping_rates.dest_country` + `duty_rates`（⚠️ 现状：`payment_channels` 表已建但**未接线**，启用通道仍由 env `PAYMENT_CHANNELS` + 代码内置表决定；`shipping_rates.dest_country` **尚未建列**——两者都是已登记债务，见该文）；UI 走 design token + 页面/表单 schema，禁止写死色值、金额、国家、承运商、模块顺序。
 

@@ -12,8 +12,14 @@
  *         为一个低频动作新增一个长期在线的写接口，攻击面与维护成本都远大于收益（保守方向）；
  *      ② 谁能跑这个脚本 = 谁能连生产库 = 已经有全部权限，不新增权限边界。
  *
- * @why 顺带 `token_ver + 1`（D25）：改密之后旧 token 必须立刻失效，
+ * @why 顺带 `token_ver + 1`（D25）：改密之后旧 token 在下一次校验时即被拒，
  *      "改了口令但攻击者手里的 token 还能用 12 小时"等于没改。
+ *      ⚠️ 但**不是"立刻"**（SEC2-05 ③ / AJ-343）：服务进程里的身份缓存
+ *      （`adapters/identity.ts` 的 `IDENTITY_CACHE_TTL_MS` = 60 秒）在这段时间内
+ *      仍会拿缓存里的旧 `token_ver` 放行旧 token，而本 CLI 是**另一个进程**，
+ *      调不到服务端的 `invalidate`（它没有跨进程通道，MVP 也没有共享缓存）。
+ *      所以"改完即失效"只在**本进程签发的下一次登录**与 60 秒之后成立；
+ *      输出里必须写成"最迟 60 秒"，写成"已失效"会让应急轮换的人以为攻击者已经出局。
  *
  * @limitation 只按 **is_admin = true** 定位：不提供"给任意用户改密"的能力——
  *              那是客服越权的入口，MVP 的买家侧是微信登录（没有口令）。
@@ -33,6 +39,7 @@ import {
   normalizeAdminEmail,
 } from '../server/src/adapters/admin-auth.js';
 import { createAdminAuditStore } from '../server/src/adapters/admin-audit.js';
+import { IDENTITY_CACHE_TTL_MS } from '../server/src/adapters/identity.js';
 import { hashPassword } from '../server/src/app/auth.js';
 
 /**
@@ -109,6 +116,57 @@ export function describeDatabaseTarget(url: string): string {
     // 解析失败也绝不能回退成"原样打印"——那会把凭据打进终端
     return '(连接串无法解析，已省略)';
   }
+}
+
+/**
+ * 这个连接串指向的是**本机**库吗（决定要不要 `--yes` 确认，SEC2-05 ① / AJ-342）。
+ *
+ * @why 目标库已经打印出来了（`describeDatabaseTarget`），但打印只能防"改错库而不自知"的
+ *      **一个**方向：漏传 `DATABASE_URL` 时改成本机 dev 库。反方向同样有代价——
+ *      shell 里 `DATABASE_URL` 指向生产（或跳板机的 `.env` 就是生产），
+ *      "我只是想本地试一下"却把生产管理员的口令换了：口令轮换是**不可逆**的
+ *      （改完才知道自己改错了，而旧口令已经不在任何地方），且会立刻把所有已登录的管理员踢下线。
+ *      打印解决不了这个方向——人不会细看自己每天都看到的那行字。
+ * @why 判"本机"而不是判"生产名单"：本机是本脚本**最常见**的目标（dev / 本地排障），
+ *      给它免确认；除此之外一律要求显式 `--yes`。保守方向落在"多打一个参数"，
+ *      而不是"漏拦一次不可逆的生产写操作"。
+ * @limitation 解析不出主机时按**非本机**处理（要求确认）：那时我们连"改的是哪台机器"
+ *      都说不出来（`describeDatabaseTarget` 只能给占位串），唯一安全的做法就是先问一句。
+ *      代价是 unix socket 写法（`postgresql:///db?host=/var/run`）也要 `--yes`——
+ *      它在本地开发里并不罕见，这是刻意为"说不出口时不猜"付的小钱。
+ */
+export function isLocalDatabaseTarget(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.host === '') return false;
+    const host = u.hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
+/** 命令行里有没有 `--yes`（非本机库的确认闸门，见 {@link isLocalDatabaseTarget}）。 */
+export function hasYesFlag(argv: readonly string[]): boolean {
+  return argv.includes('--yes');
+}
+
+/**
+ * 改密成功后的那一行输出。
+ *
+ * @why 单独拎成函数：它含一句**必须准确**的话（旧 token 什么时候真的失效），
+ *      而"准确"这件事在 CLI 薄壳里没人测得到——薄壳不在任何测试里被跑到，
+ *      改错一个字不会有任何东西变红（同样的理由见 AJ-334 的源码断言）。
+ * @why 60 这个数字取自 `IDENTITY_CACHE_TTL_MS` 而不是写死：写死后缓存 TTL 调成 5 秒，
+ *      输出还在说"最迟 60 秒"，而**这句话是应急操作时唯一的时间预期**——
+ *      它错了，要么虚惊（以为还有 60 秒窗口，其实早就断了），要么误判（以为已经安全）。
+ */
+export function formatResetSuccess(tokenVer: number): string {
+  const seconds = Math.ceil(IDENTITY_CACHE_TTL_MS / 1000);
+  return (
+    `[admin:password] 已重设口令，token_ver=${String(tokenVer)}` +
+    `（旧 token 最迟 ${String(seconds)} 秒内失效——服务进程的身份缓存，不是立刻）`
+  );
 }
 
 /**
