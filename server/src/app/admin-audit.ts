@@ -5,14 +5,27 @@
  * @why 一个入口覆盖全部管理端写接口（而不是每条路由各写一行 insert）：
  *      ① 新增一条管理端写路由**自动**被审计，不靠"记得去写"——漏写审计不会报任何错，只会在出事那天查不到；
  *      ② 审计的形状（actor / action / target / 脱敏）只有一份实现，不会在第二份里漂移。
- * @why 在响应 **`prefinish`** 之后写（不是 `finish`）、只写 2xx：此时业务事务已提交，
- *      "有审计行"⇔"改动真的发生了"；4xx / 5xx 不写（没有发生的改动不该出现在审计里；失败原因在运行日志里）。
+ * @why 在响应 **`prefinish`** 之后写（不是 `finish`）：此时业务事务已提交，
+ *      "有审计行"⇔"改动真的发生了"。
  *      ⚠️ `finish` 是"响应已交给操作系统"的意思：客户端在**业务已提交之后**断开（管理员关页签、
  *      网络断开、Cloudflare 524）时它**不触发**（B15 / AJ-206）。退款要同步调 Stripe（最长约 6 秒），
  *      这正是它最容易发生的场景——钱已经退了，审计里却一行都没有，而审计是 append-only、
  *      事后补不回来。`prefinish` 在 `end()` 之后立即触发，与客户端死活无关。
- * @why **刻意不再挂 `close` 兜底**（与访问日志不同，见 http.ts）：审计的前提是"业务已提交且回了 2xx"，
- *      而"回了 2xx"必然经过 `end()` ⇒ `prefinish` 必然触发，与客户端死活无关——没有需要兜的洞。
+ *      ⚠️⚠️ 但 `prefinish` 也**不是**必然触发（SEC2-03，2026-10-03 补）：
+ *          同一连接上**管线化**的第二个请求、在第一个响应写完之前连接断开时，
+ *          handler 照常 `res.json()`，但那个 response 从未拿到 socket，
+ *          `prefinish` / `finish` / `close` 一个都不触发。所以本中间件**另外**包了一层 `res.end`
+ *          作兜底（调用 `end()` 与 socket 是否就位无关），两条路径由 `fired` 保证只写一次。
+ *          旧注释曾写"必然经过 `end()` ⇒ `prefinish` 必然触发，没有需要兜的洞"——那是错的。
+ * @why 只写 2xx —— **除**路由显式调用 `markAuditCommitted` 声明"改动已提交"的那些（SEC2-02）：
+ *      两段式写操作（退款）第一段事务提交后、第二段调机构失败 ⇒ 回 5xx 但改动已发生，
+ *      那种请求必须留痕；落库时把最终状态码写进 `status_code`（迁移 025）以区分"成了/没成"。
+ *      普通 4xx / 5xx 不写（没有发生的改动不该出现在审计里；失败原因在运行日志里）。
+ * @why **刻意不再挂 `close` 兜底**（与访问日志不同，见 http.ts）：
+ *      ⚠️ 本条**原来**写的是"审计的前提是'业务已提交且回了 2xx'，而'回了 2xx'必然经过 `end()`
+ *      ⇒ `prefinish` 必然触发，与客户端死活无关——没有需要兜的洞"。**前提对，结论错**（SEC2-03）：
+ *      `end()` 确实必然经过，但 `prefinish` 是**事件**，依赖 socket（见上面那段 ⚠️⚠️）；
+ *      "必然经过 `end()`"能推出的是"`end()` 兜底必然生效"，推不出"`prefinish` 必然触发"。
  *      反过来，若 handler 真的没跑到 `end()`（卡住、崩溃），那本来就没有"已发生的改动"可审。
  *      @measured 实测：客户端在 50ms 断开、handler 200ms 后 `res.json()`，
  *      `close` 在 50ms 就触发（此时 statusCode 还是默认的 200、路由与身份都已就位），
@@ -24,7 +37,11 @@
  *      （setAuditBefore）：取改前值要额外读库，只对**不可逆**的操作做（运费整表替换、汇率追加）。
  * @tradeoff 审计写入**不与业务同事务**：极少数情况下（库在两次写之间断开）会出现"改了但没审计"，
  *      这时打 error 级 `admin_audit_write_failed`（带 action / target）让它可见。换来的是零侵入：
- *      不需要改任何一条路由的事务边界。反过来的错误（审计了但没改）不会发生（只写 2xx）。
+ *      不需要改任何一条路由的事务边界。
+ *      ⚠️ 反过来的错误（审计了但没改）**曾经**靠"只写 2xx"保证不发生；SEC2-02 之后这条要写得精确：
+ *      非 2xx 也会写，但**只**写那些路由显式声明了"改动已提交"的（`markAuditCommitted`），
+ *      且把最终状态码一起落库（`status_code`）。于是"审计了但没改"仍然不会发生——
+ *      写了审计就一定有已提交的改动——而"改了、但后续步骤失败"这一类也不再丢。
  * @why 写入虽然是"发出去不管"，但要**登记为在途作业**（OPS3-05 / AJ-274）。
  *      @why 它落在响应之后，而 `server.close()` 的排空只认"响应已 end"——请求算结束了，
  *      审计的 insert 可能还在路上。这一段窗口里进程一旦往下走（关连接池），这一行就永久丢失；
@@ -61,10 +78,29 @@ import { redact } from '../redact.js';
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const AUDIT_BEFORE_KEY = 'adminAuditBefore';
 const AUDIT_SKIP_KEY = 'adminAuditSkip';
+const AUDIT_COMMITTED_KEY = 'adminAuditCommitted';
 
 /** 路由提供"改前值"（只对不可逆操作用，见文件头 @why）。 */
 export function setAuditBefore(res: Response, before: unknown): void {
   res.locals[AUDIT_BEFORE_KEY] = before;
+}
+
+/**
+ * 路由**显式**声明"这次改动**已经提交**，即使最后回的不是 2xx 也要写审计"（SEC2-02 / AJ-339）。
+ *
+ * @why 两段式写操作打破了"只写 2xx"那条等价关系：管理端退款的第一段事务把订单迁到
+ *      `refunding` 并**提交**，第二段调机构，超时 / 结果未知时抛 5xx。
+ *      于是最需要留痕的那一次退款（"钱可能已经退了、我们不知道"）在 `admin_audit` 里
+ *      **一行都没有**，而管理员若不再重试，这一行永远不会补上（表是 append-only）。
+ * @why 做成显式声明而不是"5xx 也写"：后者的等价关系变成"有审计行 ⇔ 有人点了一次"，
+ *      于是"审计了但没做成"这个**更坏**的方向被打开——事后回溯会把失败读成成功。
+ *      声明了已提交的请求才写，且把最终状态码一起记进 `status_code`（迁移 025），
+ *      两种情形在同一张表里可区分，且都不丢。
+ * @why 由路由在**事务提交之后**调用（不是之前）：它是"改动已发生"的证据，
+ *      调用点必须能证明这一点；放在事务里等于声明了一件可能回滚的事。
+ */
+export function markAuditCommitted(res: Response): void {
+  res.locals[AUDIT_COMMITTED_KEY] = true;
 }
 
 /**
@@ -107,26 +143,63 @@ export function adminAuditMiddleware(deps: {
       next();
       return;
     }
-    // 上下文在进入时取（prefinish 回调不保证还在同一条异步链上）
+    // 上下文在进入时取（写审计的回调不保证还在同一条异步链上）
     const { trace_id: traceId, req_id: reqId } = currentContext();
 
-    res.on('prefinish', () => {
+    /**
+     * 审计行的 target（路径里的 `id`）——**必须在 `next()` 返回后立刻取快照**，
+     * 不能在写审计的回调里现取（SEC2-02 附带发现，AJ-341）。
+     *
+     * @why router 在派发结束时把 `req.params` **还原**成上一层的值
+     *      （router@2.2.0 `index.js`：`restore(callback, req, 'baseUrl', 'next', 'params')`），
+     *      而**错误**路径上还原先于最终响应：`next(err)` 冒泡出这一层 router 之后才由上层
+     *      处理并 `res.end()` ⇒ 那时读 `req.params['id']` 是 `undefined`，审计行落库成
+     *      target = NULL。成功的路径读得到（async handler 那条分支不调用 `next`，
+     *      还原根本不发生）——这正是它一直没人发现的原因：**只有失败的写操作才丢 target**，
+     *      而 SEC2-02 之前失败根本不写审计。
+     * @why 丢了 target 的审计行几乎没法用：能查出"谁在什么时候点过退款"，
+     *      查不出**退的是哪一单**——而后者才是退款审计唯一要回答的问题。
+     * @why 快照取在 `next()` 返回**之后**（不是之前）：此刻 Express 已同步走到匹配上的那条路由，
+     *      而路由层是在**调用 handler 之前**写 `req.params` 的，所以拿得到最终值；
+     *      若响应在这一步之内就发完了，writeAudit 已经先跑过一次并写下了快照，这里不再改它
+     *      （`undefined` 的判断就是"还没取过"）。
+     * @limitation 只快照 `id`：本中间件能写进 target 的只有路径参数，而全库管理端路由
+     *      的路径参数一律叫 `id`（路由模板已经在 action 里，两者合起来才定位到一次操作）。
+     */
+    let targetId: string | null | undefined;
+    const captureTarget = (): void => {
+      if (targetId !== undefined) return;
+      const id = req.params['id'];
+      targetId = typeof id === 'string' ? id : null;
+    };
+
+    /** 只跑一次：`prefinish` 与下面的 `end` 兜底是同一件事的两条路径（SEC2-03）。 */
+    let fired = false;
+    const writeAudit = (): void => {
+      if (fired) return;
+      captureTarget();
       const principal = req.auth;
       const routePath = (req.route as { path?: unknown } | undefined)?.path;
-      if (res.statusCode < 200 || res.statusCode >= 300) return;
+      // 2xx ⇒ 写；非 2xx ⇒ 只有路由显式声明"改动已提交"才写（SEC2-02 / AJ-339）
+      const committed = res.locals[AUDIT_COMMITTED_KEY] === true;
+      if (!committed && (res.statusCode < 200 || res.statusCode >= 300)) return;
       if (principal?.role !== 'admin' || typeof routePath !== 'string') return;
       // 路由显式声明"这次没有改动发生"（OPS3-08；@see skipAudit 的 @why）
       if (res.locals[AUDIT_SKIP_KEY] === true) return;
-      const id = req.params['id'];
+      fired = true;
       const entry = {
         actor: `admin:${principal.sub}`,
         action: `${req.method} ${routePath.replace(/^\/api\/v1/, '')}`,
-        target: typeof id === 'string' ? id : null,
+        // 用快照而不是现取 `req.params`：错误路径上它已经被还原成空（见 captureTarget 的 @why）
+        target: targetId ?? null,
         // AJ-294：before 与 after **同口径**走 redact。这里是唯一落库点——
         // 路由给什么就存什么的话，将来任何一条"改订单"路由传进来的 address_snapshot
         // 会永久锁进 append-only 表（AJ-207 踩过同一个洞，只是当时在 after 上）。
         before: auditPayload(res.locals[AUDIT_BEFORE_KEY]),
         after: auditPayload(req.body),
+        // SEC2-02：把最终状态码一起落库——"提交了但后续失败"与"成功"必须能在同一张表里分开，
+        // 否则审计会把一次失败的退款说成成功的（那是比没有审计更坏的方向）。
+        statusCode: res.statusCode,
         traceId: traceId ?? null,
         reqId: reqId ?? null,
       };
@@ -138,7 +211,30 @@ export function adminAuditMiddleware(deps: {
           ctx: { action: entry.action, target: entry.target },
         });
       });
-    });
+    };
+
+    res.on('prefinish', writeAudit);
+    /**
+     * ⚠️ `end()` 兜底（SEC2-03）：文件头曾经写"`prefinish` 必然触发，与客户端死活无关
+     *    ——没有需要兜的洞"，**这句话是错的**。实测（express 5.2.1 / Node 25.3 探针）：
+     *    同一连接上**管线化**的第二个请求，在第一个响应写完之前连接断开时，
+     *    handler 照常执行 `res.json()`，但它的 response 从未拿到 socket，
+     *    `prefinish` / `finish` / `close` **一个都不触发** ⇒ 业务已提交、审计无行、访问日志也无行。
+     *    经反代时一般不会把管线化透传到源站（生产大概触发不了），
+     *    但它是"持有管理员 token 的人想做一次不留痕的写操作"的可构造路径。
+     * @why 兜底挂在 `end()` 而不是再加一个事件：调用 `end()` 这件事与 socket 是否就位**无关**，
+     *      而任何"响应已写完"的事件都依赖 socket。`fired` 保证两条路径只写一次。
+     */
+    const originalEnd = res.end.bind(res);
+    res.end = ((...args: Parameters<typeof originalEnd>) => {
+      const out = originalEnd(...args);
+      writeAudit();
+      return out;
+    }) as typeof res.end;
+
     next();
+    // ⚠️ 同步派发已经走完（路由层写 `req.params` 在调用 handler 之前）⇒ 这里拿得到最终值；
+    //    再晚一步（错误路径上 `next(err)` 冒泡出去之后）就被还原成空了（captureTarget @why）。
+    captureTarget();
   };
 }

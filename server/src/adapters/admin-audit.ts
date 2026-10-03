@@ -19,9 +19,10 @@ export function createAdminAuditStore(db: Db): AdminAuditStore {
   return {
     async append(e: AdminAuditEntry): Promise<void> {
       await db`
-        insert into admin_audit (actor, action, target, before, after, trace_id, req_id)
+        insert into admin_audit (actor, action, target, before, after, status_code, trace_id, req_id)
         values (${e.actor}, ${e.action.slice(0, 64)}, ${e.target === null ? null : e.target.slice(0, 128)},
-                ${jsonOrNull(db, e.before)}, ${jsonOrNull(db, e.after)}, ${e.traceId}, ${e.reqId})
+                ${jsonOrNull(db, e.before)}, ${jsonOrNull(db, e.after)}, ${e.statusCode},
+                ${e.traceId}, ${e.reqId})
       `;
     },
   };

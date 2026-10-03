@@ -508,6 +508,41 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
     expect((await events(orderId, 'refunded')).map((r) => r['note'])).toEqual(['re_test_0002']);
   });
 
+  /**
+   * SEC2-02：**机构调用失败、回 500 的那一次退款**，`admin_audit` 里必须有这一行。
+   *
+   * @why 这是全表最需要留痕的一类请求——"钱可能已经退了、我们不知道"。
+   *      而审计中间件默认只写 2xx ⇒ 它一行都没有；管理员若不再重试就永远补不上
+   *      （`admin_audit` 是 append-only，触发器拒 UPDATE/DELETE）。
+   *      修法是退款路由在第一段事务提交后调用 `markAuditCommitted`，并把最终状态码落库。
+   * @why 断言 `status_code = 500` 而不只是"有一行"：只写行而不记状态的话，
+   *      事后回溯会把"发起了但没成"读成"做成了"——那比没有审计更坏。
+   */
+  it('🔴 机构调用失败回 500 的那次退款：admin_audit 有这一行，且 status_code = 500（SEC2-02）', async () => {
+    const orderId = await paidOrder('f3i');
+    fake.nextRefundStatus('failed');
+    const r = await refund(orderId, 'rf-f3i-1');
+    expect(r.status).toBe(500);
+    // 订单真的停在 refunding（第一段事务已提交 ⇒ "改动已发生"这句成立）
+    expect(await orderStatus(orderId)).toBe('refunding');
+
+    // 审计写在响应之后（prefinish/end 回调里），且登记为在途作业 ⇒ 要等它落库
+    await waitUntil(
+      async () => (await db`select 1 from admin_audit where target = ${orderId}`).length > 0,
+      'admin_audit 里出现这次退款的审计行',
+    );
+    const rows = await db`
+      select action, target, status_code, after from admin_audit where target = ${orderId}`;
+    expect(rows).toHaveLength(1);
+    // AJ-341：target **必须**是订单号。错误路径上 router 会把 req.params 还原成空，
+    // 那时现取就落库成 NULL——"谁在什么时候点过退款"查得到，"退的是哪一单"查不到。
+    expect(String(rows[0]?.['target'])).toBe(orderId);
+    expect(String(rows[0]?.['action'])).toContain('refund');
+    expect(Number(rows[0]?.['status_code'])).toBe(500);
+    // after 是脱敏后的请求体（退款理由），不是 null
+    expect((rows[0]?.['after'] as { reason?: string } | null)?.['reason']).toBe('缺货');
+  });
+
   it('POST 直接回 failed → 50000 + 确认失败留痕 → 再点换新键（不是拿回缓存的失败）→ refunded', async () => {
     const orderId = await paidOrder('f3c');
     fake.nextRefundStatus('failed');

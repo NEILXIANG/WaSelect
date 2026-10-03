@@ -15,7 +15,12 @@ import type { Request, Response } from 'express';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { createLogger } from '../logger.js';
 import type { AdminAuditEntry, AdminAuditStore } from '../ports/admin-audit.js';
-import { adminAuditMiddleware, auditPayload, setAuditBefore } from './admin-audit.js';
+import {
+  adminAuditMiddleware,
+  auditPayload,
+  markAuditCommitted,
+  setAuditBefore,
+} from './admin-audit.js';
 import { createInflightJobs } from './inflight-jobs.js';
 
 describe('auditPayload（审计 after 脱敏）', () => {
@@ -257,7 +262,8 @@ describe('审计生命周期（B15 / AJ-206）', () => {
     });
     const makeRes = (status: number): Response & EventEmitter => {
       const res = new EventEmitter() as unknown as Response & EventEmitter;
-      Object.assign(res, { statusCode: status, locals: {} });
+      // 同上：`end` 是真 `ServerResponse` 的一部分，桩必须提供
+      Object.assign(res, { statusCode: status, locals: {}, end: () => res });
       return res;
     };
     const fire = (status: number, auth: unknown): void => {
@@ -265,6 +271,9 @@ describe('审计生命周期（B15 / AJ-206）', () => {
       const req = {
         method: 'POST',
         route: { path: '/api/v1/admin/x' },
+        // router 派发每一层之前都会写 `req.params`（没有路径参数时是 `{}`）⇒ 真请求里它一定存在。
+        // 桩不给的话，中间件读 `params['id']` 会抛——那是桩不完整，不是中间件该加容错分支。
+        params: {},
         auth,
       } as unknown as Request;
       mw(req, res, () => undefined);
@@ -304,7 +313,10 @@ describe('审计生命周期（B15 / AJ-206）', () => {
     });
 
     const res = new EventEmitter() as unknown as Response & EventEmitter;
-    Object.assign(res, { statusCode: 200, locals: {} });
+    // ⚠️ `end` 必须有：中间件会包一层 `res.end` 作为 `prefinish` 的兜底（SEC2-03）。
+    //    真的 `http.ServerResponse` 一定有这个方法——缺它是**这个桩不完整**，
+    //    不是中间件该为它加一条容错分支（那会在生产里留下一个永不执行的判断）。
+    Object.assign(res, { statusCode: 200, locals: {}, end: () => res });
     const req = {
       method: 'POST',
       route: { path: '/api/v1/admin/x' },
@@ -347,7 +359,10 @@ describe('审计 before 脱敏（AJ-294）', () => {
     });
 
     const res = new EventEmitter() as unknown as Response & EventEmitter;
-    Object.assign(res, { statusCode: 200, locals: {} });
+    // ⚠️ `end` 必须有：中间件会包一层 `res.end` 作为 `prefinish` 的兜底（SEC2-03）。
+    //    真的 `http.ServerResponse` 一定有这个方法——缺它是**这个桩不完整**，
+    //    不是中间件该为它加一条容错分支（那会在生产里留下一个永不执行的判断）。
+    Object.assign(res, { statusCode: 200, locals: {}, end: () => res });
     setAuditBefore(res, {
       recipient: 'Jane Doe',
       phone: '+14155550123',
@@ -394,7 +409,10 @@ describe('审计 before 脱敏（AJ-294）', () => {
       jobs: createInflightJobs(),
     });
     const res = new EventEmitter() as unknown as Response & EventEmitter;
-    Object.assign(res, { statusCode: 200, locals: {} });
+    // ⚠️ `end` 必须有：中间件会包一层 `res.end` 作为 `prefinish` 的兜底（SEC2-03）。
+    //    真的 `http.ServerResponse` 一定有这个方法——缺它是**这个桩不完整**，
+    //    不是中间件该为它加一条容错分支（那会在生产里留下一个永不执行的判断）。
+    Object.assign(res, { statusCode: 200, locals: {}, end: () => res });
     setAuditBefore(res, { recipient: 'Jane Doe' });
     const req = {
       method: 'PATCH',
@@ -408,5 +426,115 @@ describe('审计 before 脱敏（AJ-294）', () => {
     await vi.waitFor(() => expect(entries).toHaveLength(1), { timeout: 2_000, interval: 5 });
     expect(entries[0]?.before).toEqual({ recipient: 'J***' });
     expect((entries[0]?.before as { recipient: string }).recipient).not.toBe('****');
+  });
+});
+
+/**
+ * SEC2-02：两段式写操作（如退款）——第一段事务**已经提交**、第二段调机构失败回 5xx。
+ *
+ * @why 这是全表最需要留痕的一类请求：**钱可能已经退了、我们不知道**。
+ *      而"只写 2xx"会让它在 `admin_audit` 里**一行都没有**，且这条表 append-only、事后补不回来。
+ * @why 同时钉住反方向：不是"5xx 都写"。没有 `markAuditCommitted` 的 5xx 仍然不写——
+ *      否则等价关系变成"有审计行 ⇔ 有人点了一次"，而"审计了但没做成"比"没审"更坏
+ *      （事后回溯会把一次失败的退款读成成功的）。
+ * @why `status_code` 必须落库：有了它，两种情形在同一张表里可区分，且都不丢（迁移 025）。
+ */
+describe('SEC2-02：已提交但回非 2xx 的请求也要留痕（status_code 记着它没成）', () => {
+  const setup = () => {
+    const entries: AdminAuditEntry[] = [];
+    const mw = adminAuditMiddleware({
+      store: {
+        append: async (e) => {
+          entries.push(e);
+        },
+      },
+      logger: createLogger({ env: 'test', destination: new MemorySink() }),
+      jobs: createInflightJobs(),
+    });
+    const res = new EventEmitter() as unknown as Response & EventEmitter;
+    Object.assign(res, { statusCode: 500, locals: {}, end: () => res });
+    const req = {
+      method: 'POST',
+      route: { path: '/api/v1/admin/orders/:id/refund' },
+      params: { id: 'o-1' },
+      auth: { role: 'admin', sub: 'u-1' },
+      body: { reason: '缺货' },
+    } as unknown as Request;
+    return { entries, mw, req, res };
+  };
+
+  it('🔴 声明了 markAuditCommitted 的 5xx → 写审计，且 status_code = 500', async () => {
+    const { entries, mw, req, res } = setup();
+    mw(req, res, () => undefined);
+    markAuditCommitted(res); // 路由在第一段事务提交之后调用
+    res.emit('prefinish');
+    await vi.waitFor(() => expect(entries).toHaveLength(1), { timeout: 2_000, interval: 5 });
+    expect(entries[0]?.statusCode).toBe(500);
+    expect(entries[0]?.target).toBe('o-1');
+    expect(entries[0]?.action).toContain('refund');
+    // after 仍是脱敏后的请求体（不是 null）——"管理员要把它改成什么"照样要留
+    expect(entries[0]?.after).toEqual({ reason: '缺货' });
+  });
+
+  it('🔴 没声明的 5xx 仍然不写（不把"审计了但没做成"这个方向打开）', async () => {
+    const { entries, mw, req, res } = setup();
+    mw(req, res, () => undefined);
+    res.emit('prefinish');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(entries).toHaveLength(0);
+  });
+});
+
+/**
+ * SEC2-03：文件头曾经写"`prefinish` 必然触发，没有需要兜的洞"——**这句话是错的**。
+ *
+ * @measured(第二轮审查 SEC2-03 的探针，express 5.2.1 / Node 25.3)：
+ *   同一连接上**管线化**的第二个请求，在第一个响应写完之前连接断开时，
+ *   handler 照常执行 `res.json()`，但它的 response 从未拿到 socket，
+ *   `prefinish` / `finish` / `close` **一个都不触发** ⇒ 业务已提交、审计无行。
+ * @why 这里不重造"管线化 + 中断"那种场景（它依赖 socket 时序，做成用例必然偶发红），
+ *      而是直接钉住那个**机制**：即使 `prefinish` 一次都不触发，只要 `end()` 被调用，
+ *      审计就必须写。`end()` 被调用这件事与 socket 是否就位无关——这正是选它做兜底的理由。
+ */
+describe('SEC2-03：prefinish 不触发时，end() 兜底仍要写审计', () => {
+  it('🔴 只调 end()（不 emit prefinish）→ 审计照样写，且只写一次', async () => {
+    const entries: AdminAuditEntry[] = [];
+    const mw = adminAuditMiddleware({
+      store: {
+        append: async (e) => {
+          entries.push(e);
+        },
+      },
+      logger: createLogger({ env: 'test', destination: new MemorySink() }),
+      jobs: createInflightJobs(),
+    });
+    let endCalls = 0;
+    const res = new EventEmitter() as unknown as Response & EventEmitter;
+    Object.assign(res, {
+      statusCode: 202,
+      locals: {},
+      end: () => {
+        endCalls += 1;
+        return res;
+      },
+    });
+    const req = {
+      method: 'POST',
+      route: { path: '/api/v1/admin/orders/:id/refund' },
+      params: { id: 'o-1' },
+      auth: { role: 'admin', sub: 'u-1' },
+      body: {},
+    } as unknown as Request;
+    mw(req, res, () => undefined);
+    // 模拟"handler 调了 end()，但 prefinish 从未触发"（管线化 + 连接断开）
+    res.end();
+    await vi.waitFor(() => expect(entries).toHaveLength(1), { timeout: 2_000, interval: 5 });
+    expect(entries[0]?.statusCode).toBe(202);
+    // 兜底路径不能把 end 本身弄坏：原方法仍然被调用了一次，返回值也透传
+    expect(endCalls).toBe(1);
+    // 再补一次 prefinish：fired 保证不会写第二行
+    res.emit('prefinish');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(entries).toHaveLength(1);
   });
 });

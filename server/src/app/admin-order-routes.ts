@@ -57,7 +57,7 @@ import {
   shipInfoGuard,
 } from '../domain/admin-order-actions.js';
 import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
-import { setAuditBefore } from './admin-audit.js';
+import { markAuditCommitted, setAuditBefore } from './admin-audit.js';
 import { parseAddressInput } from '../domain/address-input.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
 import {
@@ -428,6 +428,14 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           const progress = await findRefundProgress(tx, id);
           return { row, pay, provider, providerRef: pay.provider_ref, refundReason, progress };
         });
+
+        // ⚠️ 声明"改动已提交"（SEC2-02 / AJ-339）：第一段事务到这里已经 COMMIT，
+        //    订单真的在 `refunding` 了。第二段调机构若失败会回 5xx，而审计中间件默认只写 2xx ⇒
+        //    "谁在什么时候发起了这笔退款"会**一行都没有**——偏偏那是最需要查的一次
+        //    （机构超时 = 钱可能已经退了）。审计是 append-only，事后补不回来。
+        //    ⚠️ 放在这里而不是第二段之后：`executeRefund` 抛错就不会走到后面，
+        //    而"抛错的那次"正是本条要覆盖的场景。
+        markAuditCommitted(res);
 
         // ── 第二段（事务外）：调机构。失败不回滚——停在 refunding 是**可见**的状态 ──
         // 查询在途单 / 确认失败换键 / 结果未知同键，全部在 refund-execution.ts（F-03，AJ-178）

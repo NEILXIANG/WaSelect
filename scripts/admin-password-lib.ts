@@ -191,6 +191,9 @@ export async function auditAdminPasswordReset(db: Db, userId: string): Promise<v
     target: userId,
     before: null,
     after: null,
+    // null（不是 200）：本路径**不经过 HTTP**，没有状态码可记（迁移 025 / SEC2-02）。
+    // 与历史行的 NULL 同形，语义也对得上——它只是"当时没记状态"，不是"成功了"。
+    statusCode: null,
     traceId: null,
     reqId: null,
   });

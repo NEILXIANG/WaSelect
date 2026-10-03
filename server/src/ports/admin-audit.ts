@@ -21,6 +21,17 @@ export interface AdminAuditEntry {
   before: unknown;
   /** 请求体（已脱敏）。 */
   after: unknown;
+  /**
+   * 最终 HTTP 状态码（SEC2-02 / AJ-339；迁移 025）。
+   *
+   * @why 有了它，"审计了但没做成"这个方向才被堵住：两段式写操作（如退款）
+   *      第一段事务提交后、第二段调机构失败 ⇒ 回 5xx，但**改动已经发生**（订单真的进了 refunding）。
+   *      这种请求必须留痕（否则最需要查的那次退款没有审计行），
+   *      而留痕就必须能区分"成了"与"没成"——否则审计反而会误导事后回溯。
+   * @limitation NULL = 这一行写入时还没有这一列（历史行），或当时的中间件不记状态；
+   *              **不是**"状态未知/成功"的默认值。
+   */
+  statusCode: number | null;
   traceId: string | null;
   reqId: string | null;
 }
