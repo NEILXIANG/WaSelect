@@ -36,6 +36,9 @@ import {
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
+// 值导入（不是 type）：AJ-313 —— 熔断拒绝必须**按类型**分辨出来原样抛，
+// 折叠成 50000 会把"约 N ms 后可重试"这条信息丢掉（errors.ts 对它映射 50300 + retry_after_ms）
+import { CircuitOpenError } from '../ports/circuit-breaker.js';
 import type { PaymentProvider, RefundRequest, RefundResult } from '../ports/payment.js';
 
 export interface RefundExecDeps {
@@ -130,6 +133,24 @@ export async function executeRefund(
   try {
     out = await refund.call(provider, { ...plan.request, attempt });
   } catch (e) {
+    // 🔴 **被熔断拒绝不是"机构失败"**（AJ-313）：这一次请求**一次都没有发出去**
+    //    ——熔断在出发前就把它拒了。若按下面 `provider_error` 处理，会发生两件事：
+    //    ① 记一条 `refund_failed` 事件，事件流于是写着"机构失败了"，而机构根本没被问过；
+    //    ② 抛 `AppError(50000)`，把 `CircuitOpenError` 自带的"约 N ms 后重试"丢掉
+    //       ——管理员看到"服务器内部错误"，真正该说的是"上游在恢复，稍后再试"。
+    //    同一类错误在**发起支付**那边是原样抛的（pay-intent.ts：`createSessionOr50001`
+    //    明令"熔断 CircuitOpenError 原样抛——翻成 50001 会丢掉重试时刻"），
+    //    这里必须同口径：50300 + `retry_after_ms` 由 errors.ts 统一映射。
+    // @why 不记事件：留痕由这条 warn 承担；写进 `order_events` 会污染"确认失败"的计数口径
+    //      （`findRefundProgress` 只数 `provider_failed:*`，所以不会换键，但事件流会误导人）。
+    if (e instanceof CircuitOpenError) {
+      deps.logger.warn('admin_order_refund_circuit_open', {
+        result: 'deferred',
+        order_id: plan.orderId,
+        ctx: { provider: plan.channel, retry_after_ms: e.retryAfterMs },
+      });
+      throw e;
+    }
     throw await fail(deps, plan, 'provider_error', e);
   }
   if (out.outcome === 'failed') throw await fail(deps, plan, `provider_failed:${out.refundRef}`);
@@ -157,6 +178,18 @@ async function queryStatus(
   try {
     return await q();
   } catch (e) {
+    // 与上面同口径（AJ-313）：查询被熔断拦下 = "没问成"，不是"机构答复了"。
+    // ⚠️ 这条尤其不能折成 50000：在途退款的唯一出口就是"再点一次即查询"
+    //    （文件头 ①），把"稍后再试"说成"服务器内部错误"会让人怀疑退款已经坏了，
+    //    进而去做手工改库这类更危险的事。
+    if (e instanceof CircuitOpenError) {
+      deps.logger.warn('admin_order_refund_status_circuit_open', {
+        result: 'deferred',
+        order_id: plan.orderId,
+        ctx: { provider: plan.channel, retry_after_ms: e.retryAfterMs },
+      });
+      throw e;
+    }
     deps.logger.error('admin_order_refund_status_query_failed', {
       result: 'failed',
       order_id: plan.orderId,
