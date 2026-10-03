@@ -126,6 +126,45 @@ describe('POST /auth/wechat/login（dev 装配）', () => {
       await srv.close();
     }
   });
+
+  /**
+   * 🔴 AJ-316（第二轮审查 DB2-08）：`code` 此前**只有下限**（`z.string().min(1)`），
+   *    而这是**无鉴权**入口——客户端能送多长，`code` 就有多长，且它会被原样拼进
+   *    发往微信的查询串、dev 替身下还直接参与 openid 的计算。
+   * 上限不写死 128：写死等于"改了上限、测试照旧绿"，所以断言的是"129 被入口拦"。
+   */
+  it(`code 超过上限 → 40001（入口拦，不是交给微信或 PG 去拒）`, async () => {
+    const srv = await buildServer({ WECHAT_DEV_LOGIN: 'dev-' });
+    try {
+      const res = await login(srv.url, { code: 'C'.repeat(129) });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { code: number }).code).toBe(40001);
+      // reason 只进日志：确认是**入口**这一层拦的（不是 dev 替身、也不是 PG 22001）
+      const log = srv.sink.lines.join('\n');
+      expect(log).toContain('code 必填');
+      expect(log).not.toContain('sql_data_exception');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  /**
+   * 🔴 AJ-316 的另一半：路由侧的上限**保证不了** `前缀 + code` 不超过 openid 列宽
+   * （前缀是 `WECHAT_DEV_LOGIN`，运营可配任意长）。所以 dev 替身自己守这一条，
+   * 且必须**响亮**说清是前缀/code 太长——不是让 PG 报 22001 折成泛化的 40001。
+   */
+  it('dev 替身：前缀 + code 超过 openid 列宽 → 响亮报错（不是 PG 22001 泛化 40001）', async () => {
+    const srv = await buildServer({ WECHAT_DEV_LOGIN: 'dev-' });
+    try {
+      const res = await login(srv.url, { code: 'C'.repeat(64) }); // 4 + 64 = 68 > 64
+      expect(res.status).toBe(500);
+      const log = srv.sink.lines.join('\n');
+      expect(log).toContain('users.openid 列宽 64');
+      expect(log).not.toContain('sql_data_exception');
+    } finally {
+      await srv.close();
+    }
+  });
 });
 
 describe('POST /auth/wechat/login（未配置 / 限流）', () => {

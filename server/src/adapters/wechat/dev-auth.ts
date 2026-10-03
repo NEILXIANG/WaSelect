@@ -20,10 +20,30 @@
  */
 import type { WechatAuth, WechatSession } from '../../ports/wechat-auth.js';
 
+/** `users.openid` 的列宽（migrations/001：VARCHAR(64)）。 */
+const OPENID_MAX_LENGTH = 64;
+
+/**
+ * @why 替身**自己**守住列宽（AJ-316）：`openid = 前缀 + code`，而前缀是运营可配的任意串
+ *      （`WECHAT_DEV_LOGIN`），所以路由侧那个 128 的 code 上限**保证不了**拼出来 ≤64。
+ *      不判的话超长会撞 PG 的 22001 → 兜底折成泛化的 40001「参数缺失或格式错误」——
+ *      提示指向错误的字段，而这条链路的输入只有 code 一个，联调的人会去查微信而不是查前缀。
+ * @limitation 这是 **dev/test 专用**路径（生产与 staging 由 loadConfig 规则 1c 拒启），
+ *      所以选择"响亮报错"而不是截断——截断会让两个不同 code 撞成同一个 openid，
+ *      那比报错危险得多（一个人登进另一个人的账号）。
+ */
 export function createDevWechatAuth(prefix: string): WechatAuth {
   return {
     code2session(code: string): Promise<WechatSession> {
-      return Promise.resolve({ openid: `${prefix}${code}` });
+      const openid = `${prefix}${code}`;
+      if (openid.length > OPENID_MAX_LENGTH) {
+        throw new Error(
+          `dev 登录：前缀 ${String(prefix.length)} + code ${String(code.length)} = ` +
+            `${String(openid.length)} 字符，超过 users.openid 列宽 ${String(OPENID_MAX_LENGTH)}` +
+            `（缩短 WECHAT_DEV_LOGIN 前缀或换一个短 code）`,
+        );
+      }
+      return Promise.resolve({ openid });
     },
   };
 }

@@ -26,7 +26,27 @@ import type { WechatAuth } from '../ports/wechat-auth.js';
 import type { AuthConfig } from './auth.js';
 import { loginWithWechat } from './wechat-login.js';
 
-const bodySchema = z.object({ code: z.string().min(1) }).strict();
+/**
+ * `code` 的**长度上限**（AJ-316，第二轮审查 DB2-08）。
+ *
+ * @why 这是**无鉴权**入口：`code` 是客户端唯一可控的输入，而它会被原样拼进发往
+ *      `api.weixin.qq.com` 的查询串（`code2session.ts`），dev 替身下还直接参与
+ *      `openid = 前缀 + code` 的计算。没有上限时，客户端可以送接近 JSON body 上限长度的
+ *      字符串，而我们**在入口什么都不判**。
+ * @why 取 **128** 而不是"按列宽推"：真实的 `js_code` 约 32 字符，128 是 4 倍余量，
+ *      不会误伤；而它要挡的是"送一个 10KB 字符串"这种量级的输入，不是卡边界。
+ *      ⚠️ 因此它**不保证** dev 替身下 `前缀 + code` 不超过 `users.openid` 的 VARCHAR(64)
+ *      ——那是 `WECHAT_DEV_LOGIN` 前缀自己的长度问题（前缀是运营可配的任意串），
+ *      且只存在于 development/test（生产与 staging 由 loadConfig 规则 1c 拒启）。
+ * @limitation 真微信 code 的长度**未见官方声明**（docs 无表述，未做真机实测）——
+ *              所以 128 是"宽松到不会误伤"的取值，不是"按文档卡死"的取值。
+ *              若将来拿到官方上限，应改这里并同步契约 `maxLength`。
+ *
+ * @see adapters/wechat/code2session.ts（查询串拼接处）；contracts/api-contract.yaml（code）
+ */
+const WECHAT_CODE_MAX_LENGTH = 128;
+
+const bodySchema = z.object({ code: z.string().min(1).max(WECHAT_CODE_MAX_LENGTH) }).strict();
 
 export interface WechatAuthRoutesDeps {
   db: Db;
@@ -47,7 +67,12 @@ export function mountWechatAuthRoutes(app: Express, deps: WechatAuthRoutesDeps):
           throw new AppError(50000, { reason: 'wechat_login_not_configured' });
         }
         const parsed = bodySchema.safeParse(req.body);
-        if (!parsed.success) throw new AppError(40001, { reason: 'code 必填（非空字符串）' });
+        // 文案带上区间（AJ-316）：只说"必填"的话，填了超长的人不知道是被长度拒的
+        if (!parsed.success) {
+          throw new AppError(40001, {
+            reason: `code 必填（1–${String(WECHAT_CODE_MAX_LENGTH)} 字符）`,
+          });
+        }
 
         const r = await loginWithWechat(
           deps.db,
