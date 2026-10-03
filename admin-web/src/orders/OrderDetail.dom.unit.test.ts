@@ -34,6 +34,8 @@ let releaseBehaviour: () => unknown;
 let changed: number;
 /** 服务端此刻的事件流（状态文案用例会往里塞伪状态）。 */
 let events: Array<Record<string, unknown>>;
+/** 服务端此刻的行项目（采购信息用例会往里塞 title_ja / jan_code / purchase_source）。 */
+let items: Array<Record<string, unknown>>;
 
 const order = () => ({
   order_id: 'o-1',
@@ -41,7 +43,7 @@ const order = () => ({
   status,
   total_jpy: 9150,
   has_dispute: hasDispute,
-  items: [],
+  items,
   events,
 });
 
@@ -82,6 +84,7 @@ function fieldText(el: HTMLElement, label: string): string {
 
 beforeEach(() => {
   events = [];
+  items = [];
 });
 
 async function submitRefund(el: HTMLElement): Promise<void> {
@@ -313,6 +316,61 @@ describe('订单详情：状态与事件流显示中文（管理端只需要中�
     const el = await open();
     expect(el.textContent).toContain('some_future_event');
     expect(el.textContent).not.toContain('未知状态');
+  });
+});
+
+/**
+ * 商品行的**采购信息**（D-39 待采购清单 / 迁移 021）。
+ *
+ * @why 必须走组件用例：`view.ts` 的 `purchaseLine` 只能证明"文案拼得对"，
+ *      证明不了它**被挂到了详情页的商品表格上**。
+ *      而这条欠账的形态正是"数据有了、UI 没接"——纯函数全绿、页面上一个字都没有。
+ */
+describe('订单详情：商品行显示采购信息（D-39）', () => {
+  beforeEach(() => {
+    status = 'paid';
+    hasDispute = false;
+    refundBehaviour = () => ({ order_id: 'o-1', outcome: 'succeeded' });
+    releaseBehaviour = () => ({ order_id: 'o-1', has_dispute: false });
+  });
+
+  it('🔴 三样齐全 → 页面上真能看到日文原名 / JAN / 采购来源', async () => {
+    items = [
+      {
+        product_id: 'p-1',
+        title: '南部鉄器 急須',
+        qty: 2,
+        unit_price_jpy: 8800,
+        title_ja: '南部鉄器 急須 0.6L',
+        jan_code: '4901234567890',
+        purchase_source: '楽天 南部鉄器本店',
+      },
+    ];
+    const el = await open();
+    const row = el.querySelector('.row-sub');
+    expect(row?.textContent ?? '').toContain('南部鉄器 急須 0.6L');
+    expect(row?.textContent ?? '').toContain('4901234567890');
+    expect(row?.textContent ?? '').toContain('楽天 南部鉄器本店');
+  });
+
+  it('🔴 历史订单（三样都没有）→ 说清"建于采购信息录入之前"，而不是留白', async () => {
+    items = [{ product_id: 'p-1', title: '南部鉄器 急須', qty: 1, unit_price_jpy: 8800 }];
+    const el = await open();
+    const row = el.querySelector('.row-sub');
+    expect(row?.textContent ?? '').toContain('未记录采购信息');
+    expect(row?.textContent ?? '').toContain('建于采购信息录入之前');
+  });
+
+  it('每一行商品都有自己那一行采购信息（行数对得上，不会串行）', async () => {
+    items = [
+      { product_id: 'p-1', title: 'A', qty: 1, unit_price_jpy: 100, jan_code: '1111111111111' },
+      { product_id: 'p-2', title: 'B', qty: 2, unit_price_jpy: 200, jan_code: '2222222222222' },
+    ];
+    const el = await open();
+    const rows = [...el.querySelectorAll('.row-sub')];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent ?? '').toContain('1111111111111');
+    expect(rows[1]?.textContent ?? '').toContain('2222222222222');
   });
 });
 

@@ -26,7 +26,7 @@
  *
  * @see ./view.ts（闸门与请求体）；./api.ts；../../../contracts/api-contract.yaml（AdminOrder）
  */
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH, REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import {
@@ -46,6 +46,7 @@ import {
   emptyShipForm,
   eventStatusText,
   paymentSummary,
+  purchaseLine,
   refundErrors,
   refundFailureNotice,
   refundGate,
@@ -247,11 +248,21 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
               <table className="table">
                 <tbody>
                   {items.map((it, i) => (
-                    <tr key={i}>
-                      <td>{String(it['title'] ?? '')}</td>
-                      <td>× {String(it['qty'] ?? '')}</td>
-                      <td>{moneyText(it['unit_price_jpy'])}</td>
-                    </tr>
+                    <Fragment key={i}>
+                      <tr>
+                        <td>{String(it['title'] ?? '')}</td>
+                        <td>× {String(it['qty'] ?? '')}</td>
+                        <td>{moneyText(it['unit_price_jpy'])}</td>
+                      </tr>
+                      {/* 采购信息另起一行：它是**执行依据**（照这三样去买），
+                          与上面那行"买了什么、多少钱"是两种用途，挤在一行里谁都读不清。
+                          走 `purchaseLine` 而不是直接拼字段：缺的字段要显示「未记录」，
+                          三样全缺时还要说清"这单建于采购信息录入之前"——
+                          省略会让人分不清"商品没有"和"系统没记"。 */}
+                      <tr className="row-sub">
+                        <td colSpan={3}>{purchaseLine(it)}</td>
+                      </tr>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

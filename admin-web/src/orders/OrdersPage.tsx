@@ -158,6 +158,8 @@ export function OrdersPage({ api }: OrdersPageProps) {
           <tr>
             <th>订单号</th>
             <th>状态</th>
+            {/* 待采购清单的本体（§2.7：清单 = 本页筛 status=paid） */}
+            <th>采购信息</th>
             <th>金额</th>
             <th>下单时间</th>
             <th>收件人</th>
@@ -173,6 +175,17 @@ export function OrdersPage({ api }: OrdersPageProps) {
                 {row.statusText}
                 {row.hasDispute && <span className="error"> · 拒付中</span>}
                 {row.isTest && <span className="muted"> · 测试单</span>}
+              </td>
+              <td className="purchase-cell">
+                {row.purchaseLines.length === 0 ? (
+                  '—'
+                ) : (
+                  <>
+                    {row.purchaseLines.map((line, i) => (
+                      <div key={i}>{line}</div>
+                    ))}
+                  </>
+                )}
               </td>
               <td>{row.totalText}</td>
               <td className="muted">{row.createdText}</td>

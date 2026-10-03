@@ -77,3 +77,78 @@ describe('订单列表：刷新入口（ADM3-09）', () => {
     expect(gets()).toHaveLength(3);
   });
 });
+
+/**
+ * 采购信息列（0.6.26 / 技术文档 §2.7「待采购清单 = GET /admin/orders?status=paid」）。
+ *
+ * @why 这三条是**接线**用例，不是 `purchaseLine` 的重复：`view.unit.test.ts` 已经证明
+ *      "给定一行 item 能拼出正确的文案"，但它证明不了"列表页真的把那一列渲染出来了"。
+ *      漏渲染的失效形态很安静——view 全绿、api 全绿、页面上整列空白，
+ *      采购员看到的是"今天没有要买的东西"，而实际上有 50 单。
+ */
+describe('订单列表：采购信息列（0.6.26）', () => {
+  /** 用给定的订单条目打开列表页（默认那个 `open()` 返回空列表）。 */
+  async function openWith(orders: unknown[]): Promise<HTMLElement> {
+    calls = [];
+    const api = async (req: Call): Promise<unknown> => {
+      calls.push(req);
+      return { items: orders, total: orders.length };
+    };
+    mounted = await mount(createElement(OrdersPage, { api: api as never }));
+    return mounted.el;
+  }
+
+  const ORDER = {
+    order_id: 'o-1',
+    order_no: 'NO-1',
+    status: 'paid',
+    total_jpy: 1000,
+    created_at: '2026-01-02T00:00:00.000Z',
+  };
+
+  it('列表页真的渲染出「采购信息」列，且内容含采购来源与 JAN 码', async () => {
+    const el = await openWith([
+      {
+        ...ORDER,
+        items: [
+          {
+            title: '包丁',
+            title_ja: 'シェフナイフ',
+            jan_code: '4900000000011',
+            purchase_source: 'Amazon JP',
+          },
+        ],
+      },
+    ]);
+    expect(el.textContent).toContain('采购信息');
+    const cell = el.querySelector('.purchase-cell');
+    expect(cell?.textContent).toContain('Amazon JP');
+    expect(cell?.textContent).toContain('4900000000011');
+    expect(cell?.textContent).toContain('シェフナイフ');
+  });
+
+  it('一单多个行项目 → 采购信息分行显示（不是挤成一坨）', async () => {
+    const el = await openWith([
+      {
+        ...ORDER,
+        items: [
+          { title: '包丁', purchase_source: 'Amazon JP' },
+          { title: '茶碗', purchase_source: '楽天市場' },
+        ],
+      },
+    ]);
+    const lines = [...el.querySelectorAll('.purchase-cell div')].map((d) => d.textContent ?? '');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('Amazon JP');
+    expect(lines[1]).toContain('楽天市場');
+  });
+
+  it('🧷 服务端没给 items（旧版响应）→ 显示「—」，不抛也不谎称"未记录"', async () => {
+    // @why "—" 与"未记录"是两个意思：前者是"没有行项目可显示"（服务端形状变了 / 空单），
+    //      后者是"这行没记采购信息"（要人工补）。混在一起，运营会去补一个不存在的缺口。
+    const el = await openWith([{ ...ORDER }]);
+    const cell = el.querySelector('.purchase-cell');
+    expect(cell?.textContent).toBe('—');
+    expect(el.textContent).not.toContain('未记录');
+  });
+});

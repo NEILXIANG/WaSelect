@@ -113,6 +113,8 @@ export interface OrderRow {
   recipientText: string;
   /** 承运商 + 运单号（未发货时为空串）。 */
   shipText: string;
+  /** 采购信息（每个行项目一行；空数组 = 服务端没给 items，列表显示"—"）。 */
+  purchaseLines: string[];
   hasDispute: boolean;
   isTest: boolean;
   actions: { ship: Gate; refund: Gate; address: Gate };
@@ -183,6 +185,7 @@ export function orderRows(items: unknown): OrderRow[] {
           carrier === '' && tracking === ''
             ? ''
             : [carrier, tracking].filter((s) => s !== '').join(' / '),
+        purchaseLines: purchaseLines(o),
         hasDispute: o['has_dispute'] === true,
         isTest: o['is_test'] === true,
         actions: { ship: shipGate(o), refund: refundGate(o), address: addressGate(o) },
@@ -317,6 +320,73 @@ export function paymentSummary(order: unknown): string {
   const amount = currency === '' ? '—' : minorMoneyText(o['charge_amount'], currency);
   const text = [channel, amount === '—' ? '' : amount].filter((s) => s !== '').join(' · ');
   return text === '' ? '—' : text;
+}
+
+/** 采购快照里"没有记录"时的占位文案。@see `purchaseLine` 的 @why ②③ */
+export const PURCHASE_UNRECORDED = '未记录';
+
+/**
+ * 一条订单行项目的**采购信息** → 一行小字（日文原名 / JAN 码 / 采购来源）。
+ *
+ * @why 三列都取自**下单那一刻的快照**（迁移 021 / D-39），不是商品的当前值：
+ *      采购员要买的是当时看到的那件。商品后来改了采购渠道，本行**不变**——
+ *      所以这里显示什么，取决于订单，不取决于商品现在长什么样。
+ *
+ * @why 缺的字段显示「未记录」而不是**省略整段**：
+ *      省略会让运营分不清"这个商品本来就没有 JAN 码"与"这单是在录入采购信息之前建的"——
+ *      前者的下一步是"那就照名字找"，后者是"去问编辑补"，两个动作完全不同。
+ *      「未记录」是可行动的：它明说"系统里没有"，而不是"这个值就是空的"。
+ *
+ * @why 三项**全缺**时给一句指向原因的话（而不是三个「未记录」摞在一起）：
+ *      三列同时为空几乎只可能来自"这单建于迁移 021 之前"（迁移刻意不回填历史行）。
+ *      写清原因，运营就不会以为系统漏了、也不会逐件去补商品——那补不上，
+ *      因为历史订单的采购渠道本来就没被记录过。
+ *
+ * @why 采购来源**只在管理端显示**（这里是唯一消费方）：
+ *      它是内部信息，泄露等于泄露成本结构与供应链；契约侧也因此把它收在
+ *      `AdminOrderItem` 里，买家 `OrderItem` 没有这一列。
+ *
+ * @param item 契约 `AdminOrderItem`（字段缺失 = 没记录）
+ */
+export function purchaseLine(item: unknown): string {
+  const o = (typeof item === 'object' && item !== null ? item : {}) as Record<string, unknown>;
+  const pick = (k: string): string | null => {
+    const v = o[k];
+    return typeof v === 'string' && v.trim() !== '' ? v.trim() : null;
+  };
+  const ja = pick('title_ja');
+  const jan = pick('jan_code');
+  const src = pick('purchase_source');
+  if (ja === null && jan === null && src === null) {
+    return '未记录采购信息（这单建于采购信息录入之前，需人工补）';
+  }
+  const parts = [
+    `日文原名：${ja ?? PURCHASE_UNRECORDED}`,
+    `JAN：${jan ?? PURCHASE_UNRECORDED}`,
+    `采购来源：${src ?? PURCHASE_UNRECORDED}`,
+  ];
+  return parts.join(' · ');
+}
+
+/**
+ * 列表行里的**采购信息** → 每个行项目一行小字（复用 {@link purchaseLine}，与详情同口径）。
+ *
+ * @why 列表页也要显示采购信息（契约 0.6.26）：技术文档 §2.7 定义
+ *      「待采购清单 = GET /admin/orders?status=paid」——筛完 `paid`，**这一页就是清单**。
+ *      只在详情里显示的话，采购员要一张张点开（50 单点 50 次），清单在事实上不可用。
+ *
+ * @why 复用 {@link purchaseLine} 而不是给列表另写一个"短版"：
+ *      两份文案的分歧是**静默的**——列表说「未记录」、详情说「这单建于采购信息录入之前」，
+ *      运营在两个页面得到的信息不一致，而没有任何测试会红（两份各自都有用例）。
+ *      列表窄就用 CSS 换行解决，不用第二套话术。
+ *
+ * @returns 每个行项目一行；没有 `items`（旧服务端 / 形状外）→ `[]`，由调用方显示"—"。
+ */
+export function purchaseLines(order: unknown): string[] {
+  const o = (typeof order === 'object' && order !== null ? order : {}) as Record<string, unknown>;
+  const items = o['items'];
+  if (!Array.isArray(items)) return [];
+  return items.map((it) => purchaseLine(it));
 }
 
 /** 发货表单（契约 `required: [carrier, tracking_no]`）。 */

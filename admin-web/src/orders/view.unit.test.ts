@@ -23,6 +23,9 @@ import {
   emptyShipForm,
   eventStatusText,
   orderRows,
+  PURCHASE_UNRECORDED,
+  purchaseLine,
+  purchaseLines,
   refundErrors,
   refundFailureNotice,
   refundGate,
@@ -460,5 +463,125 @@ describe('refundFailureNotice（B41 残留 / AJ-230）', () => {
   it('脏输入（不是数字）→ 不提醒、不抛', () => {
     expect(refundFailureNotice(undefined)).toBe('');
     expect(refundFailureNotice('50000')).toBe('');
+  });
+});
+
+describe('purchaseLine（D-39 待采购清单 / 迁移 021）', () => {
+  it('三样齐全 → 一行带标签的小字', () => {
+    expect(
+      purchaseLine({
+        title_ja: '南部鉄器 急須 0.6L',
+        jan_code: '4901234567890',
+        purchase_source: '楽天 南部鉄器本店',
+      }),
+    ).toBe('日文原名：南部鉄器 急須 0.6L · JAN：4901234567890 · 采购来源：楽天 南部鉄器本店');
+  });
+
+  it('🔴 缺的字段显示「未记录」，不是省略（运营要能分清"商品没有"和"系统没记"）', () => {
+    const line = purchaseLine({ jan_code: '4901234567890' });
+    expect(line).toContain('日文原名：未记录');
+    expect(line).toContain('JAN：4901234567890');
+    expect(line).toContain('采购来源：未记录');
+  });
+
+  it('🔴 三样全缺 → 说清"这单建于采购信息录入之前"（不是三个「未记录」摞一起）', () => {
+    // @why 迁移 021 刻意不回填历史行，所以"全空"几乎只可能来自老订单。
+    //      写清原因，运营就不会以为系统漏了、也不会逐件去补商品（那补不上）。
+    const line = purchaseLine({ product_id: 'p-1', title: '急須' });
+    expect(line).toContain('未记录采购信息');
+    expect(line).toContain('建于采购信息录入之前');
+    expect(line).not.toContain('日文原名：');
+  });
+
+  it('空串 / 纯空格当没记录（脏数据不显示成一个空的「JAN：」）', () => {
+    // ⚠️ 必须留一个**有效**字段：三样都无效会走"全缺"分支（那是下一条用例的事），
+    //    这里要验的是"部分有效时，无效的那一格显示什么"。
+    expect(purchaseLine({ title_ja: '急須', jan_code: '' })).toContain('JAN：未记录');
+    expect(purchaseLine({ title_ja: '急須', jan_code: '   ' })).toContain('JAN：未记录');
+    // 纯空格的 title_ja 同样不算有值
+    expect(purchaseLine({ title_ja: '  ', jan_code: '4901234567890' })).toContain(
+      '日文原名：未记录',
+    );
+  });
+
+  it('脏输入（null / 非对象）→ 走"全缺"那条，不抛', () => {
+    expect(purchaseLine(undefined)).toContain('未记录采购信息');
+    expect(purchaseLine(null)).toContain('未记录采购信息');
+    expect(purchaseLine('x')).toContain('未记录采购信息');
+  });
+
+  it('🧷 采购来源是**内部信息**：只在本函数的输出里，买家侧 OrderItem 没有这一列', () => {
+    // @why 这是一条**形状**断言而不是行为断言：契约把采购三列收在 AdminOrderItem，
+    //      买家 OrderItem 不带；本用例钉住"这里确实会显示它"（它是管理端唯一消费方），
+    //      顺带提醒改契约的人：给买家加上这一列 = 泄露供应链。
+    expect(PURCHASE_UNRECORDED).toBe('未记录');
+    expect(purchaseLine({ purchase_source: '京都 錦市場 直送' })).toContain('京都 錦市場 直送');
+  });
+});
+
+describe('purchaseLines（0.6.26：列表页也要有采购信息）', () => {
+  /**
+   * @why 单独为列表那一层写用例，是因为 `purchaseLines` 有自己的失效形态：
+   *      `purchaseLine` 全绿并不能保证"列表拿得到"——列表要先从订单条目里
+   *      取出 `items` 数组再逐行映射。取错键（比如读 `order_items` 或 `lines`）
+   *      不会报错，只会**静默返回 []**，列表页整列变成"—"，
+   *      而采购员看到的是"今天没有要买的东西"。
+   */
+  it('多行的订单 → 每行一条，顺序与 items 一致', () => {
+    const lines = purchaseLines({
+      order_id: 'o-1',
+      items: [
+        {
+          title: '包丁',
+          title_ja: 'シェフナイフ',
+          jan_code: '4900000000011',
+          purchase_source: 'Amazon JP',
+        },
+        { title: '茶碗', purchase_source: '楽天市場' },
+      ],
+    });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('Amazon JP');
+    expect(lines[0]).toContain('4900000000011');
+    expect(lines[1]).toContain('楽天市場');
+    // 第二行缺日文原名与 JAN → 那两格显示「未记录」，但**不能**走"全缺"那条
+    expect(lines[1]).toContain('日文原名：未记录');
+    expect(lines[1]).not.toContain('建于采购信息录入之前');
+  });
+
+  it('没有 items / items 不是数组 → []（列表显示"—"，不抛、不显示占位话术）', () => {
+    expect(purchaseLines({ order_id: 'o-1' })).toEqual([]);
+    expect(purchaseLines({ order_id: 'o-1', items: null })).toEqual([]);
+    expect(purchaseLines({ order_id: 'o-1', items: 'x' })).toEqual([]);
+    expect(purchaseLines(null)).toEqual([]);
+    expect(purchaseLines({ order_id: 'o-1', items: [] })).toEqual([]);
+  });
+
+  it('🧷 与详情同口径：列表的每一行就是 purchaseLine 的输出（不另写一套短版）', () => {
+    // @why 两份话术的分歧是静默的——列表说「未记录」、详情说「这单建于…之前」，
+    //      运营在两个页面得到的信息不一致，而两份各自都有用例，没人会红。
+    const item = { title: '急須', title_ja: '急須', jan_code: '4901234567890' };
+    expect(purchaseLines({ items: [item] })[0]).toBe(purchaseLine(item));
+    expect(purchaseLines({ items: [{}] })[0]).toBe(purchaseLine({}));
+  });
+});
+
+describe('orderRows 带 purchaseLines（0.6.26）', () => {
+  it('列表行直接带上采购信息；缺 items 的行是空数组', () => {
+    const rows = orderRows([
+      {
+        order_id: 'o-1',
+        order_no: 'NO-1',
+        status: 'paid',
+        items: [{ title: '包丁', purchase_source: 'Amazon JP' }],
+      },
+      { order_id: 'o-2', order_no: 'NO-2', status: 'paid' },
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.purchaseLines).toEqual([
+      purchaseLine({ title: '包丁', purchase_source: 'Amazon JP' }),
+    ]);
+    expect(rows[0]?.purchaseLines[0]).toContain('Amazon JP');
+    expect(rows[1]?.purchaseLines).toEqual([]);
   });
 });
