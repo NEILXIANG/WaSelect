@@ -39,7 +39,30 @@ export interface AdminCredential {
 }
 
 /**
- * 登录额度键：`sha256(lower(trim(email)))` 的 hex。
+ * 邮箱的**唯一归一结果**（SEC2-07 / AJ-335）：`trim` 之后按 JS 的 `toLowerCase()`。
+ *
+ * @why 额度键（本文件、JS 侧）与查人（`findAdminCredential`、PG 的 `lower()`）**必须用同一份结果**，
+ *      否则"能查到这个人"与"记到哪个桶"会分叉。分叉的真实形态（实测 en_US.UTF-8）：
+ *      · JS `'İ'.toLowerCase()` = `i` + U+0307 组合点（2 个码位）；
+ *      · PG `lower('İ')` = `i`（1 个码位，ascii 105）。
+ *      于是 `admİn@example.com` 经 PG 的 `lower()` **查得到** `admin@example.com` 这个人，
+ *      而它的额度键是 JS 归一的结果 ⇒ **另一个桶**。邮箱里每有一个 `i` 就多一倍桶，
+ *      AJ-243 那句"总尝试数由邮箱桶 30 次封顶"因此可以被绕过。
+ * @why 归一放在 **JS 侧**、查人改成 `where lower(email) = ${norm}`（不再对入参调 PG 的 `lower`）：
+ *      这样"查得到这个人"⇔"JS 归一结果 == PG 对库里那一列的 lower 结果"，
+ *      而后者只取决于库里存的值 ⇒ **凡是能查到这个人的输入，必然落进同一个桶**。
+ *      反过来（继续让 PG 归一入参）就永远存在两个归一函数，迟早还有第二个 `İ`。
+ * @limitation 若库里存的邮箱本身含非 ASCII 大写（例如 seed 进去的 `ADMİN@…`），
+ *      PG 的 `lower()` 会把它折成 `admin@…`，而 JS 归一对任何输入都保留组合点 ⇒ **永远查不到**。
+ *      现实里 `ADMIN_EMAIL` 是运维填的 ASCII 串，且唯一索引也是 PG 的 `lower()`；
+ *      真出现这种账号的表现是"这个邮箱登录不了"，而不是安全洞——已在此登记。
+ */
+export function normalizeAdminEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/**
+ * 登录额度键：`sha256(normalizeAdminEmail(email))` 的 hex。
  * @why 不存邮箱明文：这张表会为**根本不存在的邮箱**建行（B14 要求它们也要计数也要锁），
  *      存明文等于把"谁被探测过"落成一张表（约束七脱敏红线）。
  * @why 无盐确定性哈希：必须能"同一个邮箱每次算出同一个键"才能查得到；
@@ -47,12 +70,12 @@ export interface AdminCredential {
  *      （库被拖走后不直接给出邮箱清单）。加盐就查不到键了，不可行。
  */
 export function loginAttemptKey(email: string): string {
-  return createHash('sha256').update(email.trim().toLowerCase(), 'utf8').digest('hex');
+  return createHash('sha256').update(normalizeAdminEmail(email), 'utf8').digest('hex');
 }
 
 /**
- * 登录额度的**来源桶**键：`sha256(lower(trim(email)) + "\n" + 来源)` 的 hex（AJ-243）。
- * @param source 已归一的来源（调用方传 `ipKey(req.ip)`：IPv4 原样、IPv6 归到 /64）
+ * 登录额度的**来源桶**键：`sha256(normalizeAdminEmail(email) + "\n" + 来源)` 的 hex（AJ-243）。
+ * @param source 已归一的来源（调用方传 `ipKeyForLogin(req.ip)`：IPv4 原样、IPv6 归到 /56）
  * @why 只按邮箱计时，**一个** IP 就能让某个邮箱持续锁定（IP 限流与账号锁的周期相同）；
  *      把来源混进键里，攻击者的失败只锁住攻击者自己那个来源。
  *      总尝试数的上限由邮箱桶（`loginAttemptKey`）另外兜着。
@@ -60,7 +83,7 @@ export function loginAttemptKey(email: string): string {
  */
 export function loginAttemptSourceKey(email: string, source: string): string {
   return createHash('sha256')
-    .update(`${email.trim().toLowerCase()}\n${source}`, 'utf8')
+    .update(`${normalizeAdminEmail(email)}\n${source}`, 'utf8')
     .digest('hex');
 }
 
@@ -107,8 +130,11 @@ export async function findAdminCredential(db: Db, email: string): Promise<AdminC
       token_ver: number;
     }[]
   >`
+    -- ⚠️ 右边必须是 JS 归一的结果（normalizeAdminEmail），不能让 PG 再归一一次：
+    --    PG 的 lower() 与 JS 的 toLowerCase() 不是同一个函数（'İ' 上实测不同，见该函数 @why）。
+    --    两边各归一一次 ⇒ "查得到这个人"与"记到哪个桶"会分叉，邮箱桶的 30 次上限可被绕过（SEC2-07）。
     select id, is_admin, blocked_at, password_hash, token_ver
-      from users where lower(email) = lower(${email})
+      from users where lower(email) = ${normalizeAdminEmail(email)}
   `;
   const r = rows[0];
   if (r === undefined) return null;
@@ -310,9 +336,11 @@ export async function ensureInitialAdmin(
 ): Promise<'created' | 'exists'> {
   try {
     const rows = await db`
+      -- 右边同样用 **JS 归一的结果**（与 findAdminCredential 同一口径，SEC2-07）：
+      -- "这个邮箱建过了没有"与"登录时记到哪个桶"必须是同一份归一，否则 seed 判重与登录判重会分叉。
       insert into users (id, email, password_hash, is_admin)
       select ${`adm-${randomUUID()}`}, ${email}, ${passwordHash}, true
-       where not exists (select 1 from users where lower(email) = lower(${email}))
+       where not exists (select 1 from users where lower(email) = ${normalizeAdminEmail(email)})
       returning id
     `;
     return rows.length > 0 ? 'created' : 'exists';

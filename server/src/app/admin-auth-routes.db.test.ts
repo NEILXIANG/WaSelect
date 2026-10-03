@@ -222,6 +222,31 @@ describe('POST /auth/admin/login（账号维度锁定；IP 限流放宽以免混
   });
 
   /**
+   * 第二轮审查 SEC2-07：**额度键（JS `toLowerCase`）与查人（PG `lower()`）不是同一个函数**。
+   *
+   * @measured(psql -d japan_shop_test, 2026-10-03, datcollate=en_US.UTF-8)：
+   *   PG `lower('İ')` = `i`（1 个码位）；JS `'İ'.toLowerCase()` = `i` + U+0307（2 个码位）。
+   *   于是 `Ops.Admİn@Example.com` 经 PG 的 `lower()` **查得到** `Ops.Admin@Example.com` 这个人，
+   *   而额度键落在 JS 归一的**另一个桶**里 ⇒ 同一个账号有多个额度桶，邮箱桶的 30 次上限可被绕过。
+   *
+   * @why 这条必须钉在**真库**上：差异的一半在 PG 里（它怎么折 `İ` 取决于 collation），
+   *      用替身 Db 或只在 JS 侧断言都验不到"查得到人"那一半。
+   */
+  it('🔴 İ 扮演 i：不能再查到真账号（否则同一个账号有多个额度桶，封顶被绕过）', async () => {
+    const homoglyph = 'Ops.Admİn@Example.com';
+    const homoglyphKey = loginAttemptKey(homoglyph);
+    expect(homoglyphKey).not.toBe(ADMIN_KEY);
+    const r = await login(homoglyph, PASSWORD);
+    // 修复前：PG 把它折成 'ops.admin@example.com' ⇒ 查到真管理员、口令对 ⇒ **200**（且清了真账号的桶）
+    expect(r.status).toBe(401);
+    expect(r.json['code']).toBe(40101);
+    // 这一笔记在它自己那个桶里（修复前：登录成功 ⇒ 这一格被清成 0，等于影子桶没被计费）
+    expect((await attemptRow(homoglyphKey)).failedCount).toBe(1);
+    // 真账号照常可登（不受这个"影子桶"影响）
+    expect((await login(EMAIL, PASSWORD)).status).toBe(200);
+  });
+
+  /**
    * 第二轮审查 SEC2-06：登录成功时**不清本进程的身份缓存**，于是改密之后的第一次重登
    * 拿到的是"新口令签的新 token、却被旧缓存拒"——管理员看到"刚登录就过期"的循环。
    *

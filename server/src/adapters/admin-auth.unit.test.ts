@@ -15,6 +15,7 @@ import {
   loginAttemptKey,
   loginAttemptsCutoff,
   LOGIN_ATTEMPT_RETENTION_HOURS,
+  normalizeAdminEmail,
 } from './admin-auth.js';
 
 describe('loginAttemptKey', () => {
@@ -33,6 +34,52 @@ describe('loginAttemptKey', () => {
     const key = loginAttemptKey('Ops.Admin@Example.com');
     expect(key).not.toContain('ops.admin');
     expect(Buffer.from(key, 'hex')).toHaveLength(32);
+  });
+});
+
+/**
+ * SEC2-07：额度键（JS `toLowerCase`）与查人（PG `lower()`）**必须是同一个归一结果**。
+ *
+ * @measured(psql -d japan_shop_test, 2026-10-03, datcollate=en_US.UTF-8)
+ *   PG  `lower('İ')`          = `i`                       （1 个码位，ascii 105）
+ *   JS  `'İ'.toLowerCase()`   = `i` + U+0307 组合点        （2 个码位，105 / 775）
+ * @why 这个差异不是学术问题：`admİn@example.com` 经 PG 的 `lower()` **查得到** `admin@example.com`，
+ *      而额度键是 JS 归一的结果 ⇒ **另一个桶**。邮箱里每有一个 `i` 就多一倍桶，
+ *      AJ-243 "总尝试数由邮箱桶 30 次封顶"这条承诺可以被绕过。
+ *      归一的**方向**因此必须是单向的：一律用 JS 的结果，PG 只对**库里的那一列**做 lower。
+ */
+describe('normalizeAdminEmail（SEC2-07：两个 lower 不是同一个函数）', () => {
+  it('İ 在 JS 里变成 i + 组合点，不等于 PG 的 i —— 所以两个函数不能各归一一次', () => {
+    const js = normalizeAdminEmail('admİn@example.com');
+    expect(js.split('')).toHaveLength('admin@example.com'.length + 1); // i 后面多一个组合点
+    expect(js).not.toBe('admin@example.com');
+    // PG 侧（实测）会把同样的输入折成 'admin@example.com' —— 两个结果不同，正是分叉的来源
+    expect(loginAttemptKey('admİn@example.com')).not.toBe(loginAttemptKey('admin@example.com'));
+  });
+
+  it('🔴 查人 / seed 判重都用 JS 归一结果，不再出现 `lower(${email})`（让 PG 再归一一次）', () => {
+    const adminAuth = readFileSync(new URL('./admin-auth.ts', import.meta.url), 'utf8');
+    const adminAuthCode = adminAuth
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*|--)/.test(l))
+      .join('\n');
+    // findAdminCredential 与 ensureInitialAdmin 两处都必须是这个形状
+    expect(
+      adminAuthCode.match(/lower\(email\) = \$\{normalizeAdminEmail\(email\)\}/g),
+    ).toHaveLength(2);
+    expect(adminAuthCode).not.toContain('lower(${email})');
+
+    // 改密脚本：它清锁用的是 JS 归一的键，找人也必须同一份，否则会清掉一个没被锁的桶
+    const script = readFileSync(
+      new URL('../../../scripts/admin-password-lib.ts', import.meta.url),
+      'utf8',
+    );
+    const scriptCode = script
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*|--)/.test(l))
+      .join('\n');
+    expect(scriptCode).toContain('lower(email) = ${normalizeAdminEmail(args.email)}');
+    expect(scriptCode).not.toContain('lower(${args.email})');
   });
 });
 
@@ -120,6 +167,24 @@ describe('登录路由的调用顺序（源码断言）', () => {
     expect(line).toContain('ADMIN_PASSWORD_MIN_LENGTH');
     expect(line).toContain('PASSWORD_MAX_CHARS');
     expect(line).not.toMatch(/\d/);
+  });
+
+  /**
+   * SEC2-08：三个"已锁"出口都必须带 `retry-after`，不只是 `rejectLocked` 那两个。
+   *
+   * @why 第三条（`locked_while_verifying`：比对口令的 100ms 里被别的请求上了锁）曾经不设头，
+   *      于是同一个 42901 有两种响应形状——而契约 0.6.20 写的是"锁定期 429 / 42901 + Retry-After"。
+   *      它的触发需要并发（另一个请求在 bcrypt 期间把锁打上），做成真用例必然偶发红，
+   *      所以这里守的是**分支里有没有这个头**，不假装测到了并发。
+   */
+  it('🔴 三个"已锁"出口都带 retry-after：locked_while_verifying 分支也不例外（SEC2-08）', () => {
+    const code = codeLines.map((l) => l.text).join('\n');
+    const start = code.indexOf("if (clearedSource === 'locked' || clearedEmail === 'locked') {");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = code.indexOf('\n        }', start);
+    const branch = code.slice(start, end === -1 ? code.length : end);
+    expect(branch).toContain('42901');
+    expect(branch).toContain('retry-after');
   });
 
   it('拿不到额度时不得再碰 bcrypt：locked 分支里只有 42901，没有一次口令比对', () => {

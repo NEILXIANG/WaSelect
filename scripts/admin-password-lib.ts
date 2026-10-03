@@ -17,15 +17,21 @@
  *
  * @limitation 只按 **is_admin = true** 定位：不提供"给任意用户改密"的能力——
  *              那是客服越权的入口，MVP 的买家侧是微信登录（没有口令）。
- * @limitation 邮箱比对大小写不敏感（`lower(email)`），与 `ensureInitialAdmin` 同一口径
- *              （seed 的"已有同邮箱账号一律不动"也用 lower）。
+ * @limitation 邮箱比对大小写不敏感，且与登录侧**同一份归一**：SQL 写作
+ *              "lower(email) = JS 归一后的入参"（SEC2-07；normalizeAdminEmail）。
+ *              曾经写成"lower(email) = lower(入参)"，那是让 PG 再归一一次——
+ *              PG 的 `lower()` 与 JS 的 `toLowerCase()` 不是同一个函数，两份归一会让
+ *              "找得到这个人"与"登录记到哪个桶 / 改密清哪个桶"分叉。
  *
  * @see packages/shared/src/limits.ts（ADMIN_PASSWORD_MIN_LENGTH，与 config.ts 同源）；
  *      server/src/app/auth.ts（hashPassword）；server/src/adapters/admin-auth.ts（ensureInitialAdmin）
  */
 import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
 import type { Db } from '../server/src/adapters/db.js';
-import { deleteLoginAttemptsForEmail } from '../server/src/adapters/admin-auth.js';
+import {
+  deleteLoginAttemptsForEmail,
+  normalizeAdminEmail,
+} from '../server/src/adapters/admin-auth.js';
 import { createAdminAuditStore } from '../server/src/adapters/admin-audit.js';
 import { hashPassword } from '../server/src/app/auth.js';
 
@@ -200,9 +206,13 @@ export async function setAdminPassword(
     return { ok: false, reason: 'weak_password' };
   const hash = await hashPassword(args.password);
   const rows = await db`
+    -- ⚠️ 右边必须是 JS 归一的结果（normalizeAdminEmail），与登录侧同一口径（SEC2-07）：
+    --   PG 的 lower() 与 JS 的 toLowerCase() 不是同一个函数（'İ' 上实测不同）。
+    --   本函数紧接着用 deleteLoginAttemptsForEmail（键走 JS 归一）清锁——
+    --   若"找人"与"清哪个桶"用了两份归一，改密就可能清掉一个不是被锁住的那一个桶。
     update users
        set password_hash = ${hash}, token_ver = token_ver + 1
-     where lower(email) = lower(${args.email}) and is_admin = true
+     where lower(email) = ${normalizeAdminEmail(args.email)} and is_admin = true
      returning id, token_ver
   `;
   const row = rows[0];

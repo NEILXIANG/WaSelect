@@ -231,6 +231,22 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
         );
         const clearedEmail = await clearLoginAttempt(deps.db, globalKey, now, byEmail.lockedUntil);
         if (clearedSource === 'locked' || clearedEmail === 'locked') {
+          // SEC2-08：这个出口（"比对口令的 100ms 里被别的请求上了锁"）曾经**不设** retry-after，
+          //    于是同一个 42901 有两种响应形状。契约（0.6.20）写的是"锁定期 429 / 42901 + Retry-After"，
+          //    不带头的那一次是契约没兑现；客户端（将来 admin-web 要按它排重试）也无从知道等多久。
+          //    ⚠️ 这里**只读**地回读锁定时刻（peekLoginAttemptLock），不扣额度也不延长锁：
+          //    我们要的只是"还剩多久"，而偷看一眼不会让任何人多试一次。
+          const until =
+            [
+              await peekLoginAttemptLock(deps.db, sourceKey, now),
+              await peekLoginAttemptLock(deps.db, globalKey, now),
+            ]
+              .filter((d): d is Date => d !== null)
+              .reduce<Date | null>((acc, d) => (acc === null || d > acc ? d : acc), null) ?? now;
+          res.setHeader(
+            'retry-after',
+            String(Math.max(1, Math.ceil((until.getTime() - now.getTime()) / 1000))),
+          );
           deps.logger.warn('admin_login_locked', {
             result: 'rejected',
             target_user_id: cred.id,

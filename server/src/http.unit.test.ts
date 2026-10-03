@@ -347,6 +347,13 @@ describe('CORS 与就绪探针（D21）', () => {
       headers: { origin: 'https://admin.example.com' },
     });
     expect(res.headers.get('access-control-expose-headers')).toContain('x-trace-id');
+    /**
+     * SEC2-08：`retry-after` 是 **CORS 非简单响应头**——不在 expose 列表里时，
+     * 跨域的 JS 读不到它（服务端"设了头"与前端"能读到"是两件事）。
+     * 管理端登录锁定（42901）与全站限流都只在响应头里给等待时长，
+     * 前端读不到就只能盲重试。
+     */
+    expect(res.headers.get('access-control-expose-headers')).toContain('retry-after');
   });
 
   it('/readyz：依赖正常 200，依赖不可用 503（不能只看进程活着）', async () => {

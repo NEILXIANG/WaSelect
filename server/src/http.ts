@@ -219,8 +219,12 @@ function corsMiddleware(opts: CorsOptions): RequestHandler {
     }
     res.setHeader('access-control-allow-origin', origin);
     // expose-headers 要挂在**真实响应**上（预检响应带它也合法）：
-    // 管理端前端需要读到 x-trace-id 才能报障（N8）；x-request-id 同理
-    res.setHeader('access-control-expose-headers', 'x-trace-id, x-request-id');
+    // 管理端前端需要读到 x-trace-id 才能报障（N8）；x-request-id 同理。
+    // retry-after（SEC2-08）：429 的"还要等多久"只在这个头里，而它是 **CORS 非简单响应头**——
+    //   不进这个列表时，跨域的 JS 读不到它（`headers.get('retry-after')` 恒为 null），
+    //   服务端"设了头"与前端"能读到"是两件事。全站 429（限流 / 登录锁定 / 回调 503）都受益。
+    //   ⚠️ 契约 0.6.20 写的是"锁定期 429 / 42901 + Retry-After"，不带这一条等于只兑现了一半。
+    res.setHeader('access-control-expose-headers', 'x-trace-id, x-request-id, retry-after');
     if (req.method !== 'OPTIONS') {
       next();
       return;
