@@ -16,11 +16,11 @@
  *      表里存的是 `image_key`（AJ-143 的定论）。把完整 URL 存进业务表，
  *      换域名/换图床时要改历史数据；反过来让前端从 URL 反解 key，
  *      是靠字符串巧合工作，规则一变就静默产出错 key 且无人报错。
- *      ⚠️ 这是 `IMG_BASE_URL` 的**第一个消费方**（此前配置项存在但没人用）。
+ *      ⚠️ 这是 `IMG_BASE_URL` 的**第一个消费方**（此前配置项存在但没人用）；
+ *      第二个是买家侧 `GET /home`（`app/home-routes.ts`），两侧共用 `banner-view.ts` 那份转换。
  *
- * @limitation 一：`IMG_BASE_URL` **未配置时不带 `image` 字段**（而不是给空串）：
- *      空串会被前端当成"有一张图、图裂了"；字段缺席才是"没有可展示的 URL"。
- *      与浏览降级同口径（汇率缺币就少显示一个展示价，不显示 0）。
+ * @limitation 一：`IMG_BASE_URL` **未配置时不带 `image` 字段**（而不是给空串）——
+ *      理由与降级口径见 `app/banner-view.ts` @limitation 一（转换只此一份）。
  * @limitation 二：`DELETE` **幂等**——不存在的 id 也返回 204（AJ-152）。
  *      管理端的 id 恒来自列表，"id 写错"这条路径不存在，而"双击删两次"是真实会发生的。
  *      代价：删一个已被别人删掉的 banner 也不会有提示。
@@ -44,8 +44,9 @@ import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
 import { setAuditBefore, skipAudit } from './admin-audit.js';
-import { createBannersAdminRepo, type BannerRow } from '../adapters/banners-admin.js';
+import { createBannersAdminRepo } from '../adapters/banners-admin.js';
 import { parseBannerInput } from '../domain/banner-input.js';
+import { toBannerView } from './banner-view.js';
 
 export interface AdminBannerRoutesDeps {
   db: Db;
@@ -54,28 +55,6 @@ export interface AdminBannerRoutesDeps {
   idGen: IdGen;
   auth: AuthConfig;
   identity: IdentityCheck;
-}
-
-/**
- * 仓储行 → 契约 `Banner`。
- * @returns 不带 `image` 的情况见文件头 @limitation 一
- */
-function toBanner(r: BannerRow, imgBaseUrl: string | undefined): Record<string, unknown> {
-  const at = (d: Date | null): string | undefined => (d === null ? undefined : d.toISOString());
-  return {
-    id: r.id,
-    image_key: r.image_key,
-    link_type: r.link_type,
-    ...(r.link_id !== null ? { link_id: r.link_id } : {}),
-    sort: r.sort,
-    active: r.active,
-    ...(at(r.starts_at) === undefined ? {} : { starts_at: at(r.starts_at) as string }),
-    ...(at(r.ends_at) === undefined ? {} : { ends_at: at(r.ends_at) as string }),
-    // 尾部斜杠只在拼接处处理一次：库里存的是 key，不是 URL
-    ...(imgBaseUrl === undefined
-      ? {}
-      : { image: `${imgBaseUrl.replace(/\/+$/, '')}/${r.image_key}` }),
-  };
 }
 
 /** 校验失败 → 40001，字段明细写日志（与 admin-product-routes 同口径）。 */
@@ -95,7 +74,7 @@ export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps
     void (async () => {
       try {
         const rows = await repo.listBanners();
-        res.json(rows.map((r) => toBanner(r, deps.config.IMG_BASE_URL)));
+        res.json(rows.map((r) => toBannerView(r, deps.config.IMG_BASE_URL)));
       } catch (e) {
         next(e);
       }
@@ -121,7 +100,7 @@ export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps
           startsAtMs: input.startsAtMs,
           endsAtMs: input.endsAtMs,
         });
-        res.status(201).json(toBanner(row, deps.config.IMG_BASE_URL));
+        res.status(201).json(toBannerView(row, deps.config.IMG_BASE_URL));
       } catch (e) {
         next(e);
       }
@@ -170,7 +149,7 @@ export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps
           // 写了就破坏中间件自述的"有审计行 ⇔ 改动真的发生了"。
           skipAudit(res);
         } else {
-          setAuditBefore(res, toBanner(before, deps.config.IMG_BASE_URL));
+          setAuditBefore(res, toBannerView(before, deps.config.IMG_BASE_URL));
           await repo.deleteBanner(id);
         }
         // 幂等：0 行命中也 204（@limitation 二）

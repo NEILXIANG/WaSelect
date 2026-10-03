@@ -387,7 +387,19 @@ paths:
   /home:
     get:
       security: []
-      summary: ⚠️ **未实现**（契约先行；routes.contract.test NOT_IMPLEMENTED 登记）——首页数据（D-51）：生效中的 Banner（active 且在 starts_at/ends_at 内，按 sort）+ 分类
+      summary: |
+        首页数据（D-51）：生效中的 Banner（`active` 且在 starts_at/ends_at 内，按 sort）+ 分类清单。
+        @why 免鉴权：首屏首帧就要用，登录态不该挡住"看见这家店卖什么"。
+        @why 两块合成一个端点而不是首页打两次：都是首屏首帧要用的，小程序一次请求一次往返；
+        分成两个的代价是首屏要么等两次、要么先出一半（banner 后补会把列表往上顶一下）。
+        @why 生效判定**只在服务端做一次**（`active` + 时间窗，两端闭区间，starts_at/ends_at 为 null = 该侧不限制）：
+        前端拿本机时钟再判一次，时钟偏的用户会看到"该下架的还在 / 该上线的没来"，
+        而这种表现是**随机的**——排查不会往时钟方向走（与 FxRate.is_current 同一条口径）。
+        @why `categories` 是**分类清单**（shared PRODUCT_CATEGORY 全量），不是"库里有货的分类"：
+        后者会让分类栏随商品上下架跳动（用户第二次进来发现少了一个 tab）；
+        且 `GET /products?category` 的校验用同一份枚举——两份不一致就会出现"tab 上有、点了 40001"。
+        @why 失败**不降级**成 `{banners: []}`：空数组与"取不到"在页面上长得一样，
+        吞成空数组等于把一次 DB 故障伪装成"今天没配 banner"，运营会去查配置且永远查不到。
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {banners: {type: array, items: {$ref: '#/components/schemas/Banner'}}, categories: {type: array, items: {type: string}}}}}}}}
   /products:
     get:

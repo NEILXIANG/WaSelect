@@ -7,7 +7,7 @@
  *
  * @why 列表**不过滤** active、不过滤起止时间：管理端要能看见已停用与未开始的 banner，
  *      否则"停用"这个动作等于"永久删除视图"——运营再也找不到它来重新启用。
- *      "当前该展示哪些"是**买家侧** `/home` 的判定（I2 后续），不是管理端列表的职责。
+ *      "当前该展示哪些"是**买家侧** `adapters/banners.ts` 的判定（`/home`），不是管理端列表的职责。
  *
  * @limitation 一：`updateBanner` 是**整行覆盖**（PUT 语义，与契约一致），
  *              不做"只改传入字段"的合并——不存在"某个字段前端没传、于是被静默保留"的歧义。
@@ -20,23 +20,14 @@
  *              重复排序不是错误，顺序由 `sort asc, created_at asc` 兜底决定。
  *
  * @see migrations/001_init.sql（banners 表）；domain/banner-input.ts（输入校验，写之前已过）；
+ *      ./banners.ts（行类型与读列清单的真源，本文件 import 回来）；
  *      app/admin-banner-routes.ts（唯一调用方）
  */
 import type { Db } from './db.js';
+import { COLS, toRow, type BannerRow } from './banners.js';
 
-/** 读出行（与契约 `Banner` 对应；`image` 完整 URL 由路由层用 IMG_BASE_URL 拼，不在本层）。 */
-export interface BannerRow {
-  id: string;
-  image_key: string;
-  link_type: string;
-  link_id: string | null;
-  sort: number;
-  active: boolean;
-  starts_at: Date | null;
-  ends_at: Date | null;
-  created_at: Date;
-  updated_at: Date;
-}
+/** 行类型**转手再导出**：调用方（管理端路由）不必知道它现在住在 `banners.ts`。 */
+export type { BannerRow };
 
 /** 写入形状（时间用 UTC 毫秒：domain 侧产出，见 banner-input.ts @limitation 一）。 */
 export interface BannerWrite {
@@ -61,24 +52,6 @@ export interface BannersAdminRepo {
   /** 删除（@limitation 二）；0 行命中 → false。 */
   deleteBanner(id: string): Promise<boolean>;
 }
-
-function toRow(r: Record<string, unknown>): BannerRow {
-  return {
-    id: String(r['id']),
-    image_key: String(r['image_key']),
-    link_type: String(r['link_type']),
-    link_id: r['link_id'] === null ? null : String(r['link_id']),
-    sort: Number(r['sort']),
-    active: Boolean(r['active']),
-    starts_at: (r['starts_at'] as Date | null) ?? null,
-    ends_at: (r['ends_at'] as Date | null) ?? null,
-    created_at: r['created_at'] as Date,
-    updated_at: r['updated_at'] as Date,
-  };
-}
-
-const COLS =
-  'id, image_key, link_type, link_id, sort, active, starts_at, ends_at, created_at, updated_at';
 
 /** 毫秒 → Date（本文件在 adapters 豁免清单内，可以构造 Date；@see banner-input.ts @limitation 一）。 */
 function atOf(ms: number | null): Date | null {

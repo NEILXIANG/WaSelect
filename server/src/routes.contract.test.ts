@@ -64,19 +64,14 @@ const CODE_EXEMPTIONS: readonly { pattern: RegExp; reason: string }[] = [];
 /**
  * 契约侧未实现登记：允许"契约写了但代码还没有"的路由。**每条必须给理由；实现后必须删除（diffRoutes 规则④）。**
  * 这是 I1 的"施工围挡"：随着 U2–U7 落地，本清单只许变短不许变长。
+ *
+ * ⚠️ **本清单已于 2026-10-02 清空**（最后一条 `GET /home` 随 Banner 打通落地）：
+ *    契约里登记的路由现已全部实现。清空后 `ni()` 辅助函数一并删除——
+ *    没有调用方的函数是死代码（ADR-28），留着它等于留下"好像还有欠账"的错觉。
+ *    将来登记新欠账时，按 `NotImplementedRoute` 的形状（`{method, path, reason}`）
+ *    直接写一条即可；`diffRoutes` 的规则②③⑤ 不需要任何辅助函数就能工作。
  */
-function ni(method: string, path: string, reason: string): NotImplementedRoute {
-  return { method, path, reason };
-}
-const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [
-  // ✅ 管理员登录（含 seed）已随 AJ-181 落地并从本清单移除
-  ni('GET', '/home', 'I2：小程序首页聚合（依赖 Banner 管理端）'),
-  // ✅ 商品四条已随 I2-U-A3、订单五条已随 I2-U-B2d 落地并从本清单移除
-  //    （本清单只许变短不许变长；diffRoutes 规则④ 会在"已实现却仍登记"时报红）
-  // ✅ 上传已随 I2-U-I4 落地并从本清单移除
-  // ✅ 运营配置四条已随 I2-U-C3、Banner 四条已随 I2-U-D3、风控两条已随 I2-U-E3
-  //    落地并从本清单移除（本清单只许变短不许变长）
-];
+const NOT_IMPLEMENTED: readonly NotImplementedRoute[] = [];
 
 describe('代码路由 ↔ 契约路由（I1-U1）', () => {
   it('双向一致：豁免与未实现清单之外零漂移', () => {
