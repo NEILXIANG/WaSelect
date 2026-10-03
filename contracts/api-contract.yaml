@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.23
+  version: 0.6.24
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -281,6 +281,24 @@ info:
       ⑤ 长度：`why` 200 / `maker` 120（shared `PRODUCT_MAX_CHARS`，与 DB 列宽与应用层上限同源）；
         超限报 40001（`why_too_long` / `maker_too_long`）而**不静默截断**——
         截断会把一句判断截成半句，而半句话读起来正好像口号（最坏的降级结果）。
+    0.6.24（D-51 / Banner 打通，AJ-301～AJ-303）：`GET /home` **从未实现转为已实现**
+      ——返回「生效中的 Banner（`active` 且在 starts_at/ends_at 内，按 `sort` 升序）+ 分类清单」。
+      ① **生效判定只在服务端做一次**，时间取服务端时钟（`starts_at` / `ends_at` 两端**闭区间**，
+        为 NULL = 该侧不限制）。前端不得拿本机时钟再判——时钟偏的用户会看到
+        "该下架的还在 / 该上线的没来"，而那种表现是**随机的**，排查不会往时钟方向走
+        （与 `FxRate.is_current` 同一条口径）。
+      ② `categories` 是**分类清单**（shared `PRODUCT_CATEGORY` 全量），不是"库里有货的分类"：
+        后者会让分类栏随商品上下架跳动（用户第二次进来发现少了一个 tab），
+        且与 `GET /products?category` 的合法性校验不同源时，会出现"tab 上有、点了 40001"。
+      ③ 失败**不降级**成 `{banners: []}`，5xx 照实抛：空数组与"取不到"在页面上长得一样，
+        吞成空数组等于把一次 DB 故障伪装成"今天没配 banner"，运营会去查配置且永远查不到。
+        小程序端**静默**（轮播段不渲染）——它只是装饰层，把它失败放大成整页错误态不值。
+        两端分工：**服务端不瞒故障，前端不放大故障**。
+      ④ `IMG_BASE_URL` 未配置时 `image` **整键省略**（不是空串）：空串会被当成"有一张图、图裂了"，
+        字段缺席才是"没有可展示的 URL"。前端据此**整条不展示**且不回落占位图
+        （占位图是"商品没图"的语义，用在 banner 上会把配置故障洗成"这张 banner 没图"）；
+        该情形在服务端挂载期打一条 warn，否则整条链路**全静默**（服务端 200、
+        小程序无提示、运营在后台看得见自己配的那条）。
 servers:
   - url: https://api.example.com/api/v1
 security:
