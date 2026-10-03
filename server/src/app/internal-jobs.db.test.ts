@@ -28,6 +28,7 @@ import {
   RESULT_MISMATCH_PREFIX,
   RESULT_STATUS_CONFLICT,
 } from './webhook-results.js';
+import { RECONCILE_IDS_CAP } from './daily-reconciliation.js';
 
 let db: Db;
 const JOB_SECRET = 'internal-job-secret-'.padEnd(40, 'x');
@@ -282,6 +283,44 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       const ids = JSON.stringify(ctx?.['sample_ids']);
       expect(ids).toContain('evt-in-47h');
       expect(ids).not.toContain('evt-out-49h');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  /**
+   * 🔴 计数**不受取样截断影响**：`count` 是满足判据的全部行数，`sample_ids` 才截到 CAP。
+   *
+   * @why 这条专门针对"取样 + 计数"的实现形态。旧实现是两条 SQL（各写一份 WHERE），
+   *      改成 `count(*) over ()` 一条语句之后，**新写法成立的前提**是窗口函数在
+   *      `limit` **之前**求值——若哪天有人把 `total` 换成 `count(取样后的行)`，
+   *      报告会在积压时说"共 20 条"（实际 25 条），而"20"看起来完全合理，
+   *      没有任何报错。
+   * @why 用 **25 > CAP(20)** 这个量级而不是刚好卡边界：卡边界时"多算一条/少算一条"
+   *      的差异容易被误读成 off-by-one，越过 CAP 才是"截断有没有生效"的判据。
+   */
+  it('🔴 异常数超过取样上限：count 报全部命中数，sample_ids 才截到 CAP', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      const total = RECONCILE_IDS_CAP + 5;
+      for (let i = 0; i < total; i += 1) {
+        await db`
+          insert into webhook_events (event_id, provider, event_type, result, received_at)
+          values (${`evt-bulk-${String(i).padStart(2, '0')}`}, 'mock', 'payment.succeeded',
+                  ${RESULT_LATE_PAYMENT}, now() - interval '1 hour')
+        `;
+      }
+      const res = await trigger(srv.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      await waitForDailyHeartbeat();
+
+      const cb = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'callback_anomalies_48h');
+      const ctx = cb?.['ctx'] as Record<string, unknown> | undefined;
+      expect(ctx?.['count']).toBe(total); // ← 截断只影响取样，不影响计数
+      const ids = ctx?.['sample_ids'] as unknown[] | undefined;
+      expect(ids).toHaveLength(RECONCILE_IDS_CAP);
     } finally {
       await srv.close();
     }

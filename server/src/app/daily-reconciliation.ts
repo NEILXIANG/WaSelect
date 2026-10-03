@@ -93,31 +93,59 @@ interface AnomalyClass {
   ids: string[];
 }
 
+/**
+ * 把"取样行 + 窗口计数"收成 {@link AnomalyClass} 的**计数与取样**两半。
+ *
+ * @why 判据（WHERE）**只能出现一份**：本文件的六类扫描此前都是
+ *      「`select … where … limit N+1`」+「`select count(*) … where …`」**两条 SQL**，
+ *      于是同一个 WHERE 被写两遍。这正是 `adapters/risk-admin.ts` 文件头
+ *      `@limitation 一` 明令禁止的形态（"判据出现两份，改一处漏一处"）——
+ *      而它在本文件里**六处全中**，且判据最长的一类（卡住的回调）有四个条件。
+ *      漂移的后果特别适合本文件：**对账是"两本账不符"的唯一发现机制**，
+ *      漏报表现为"报告说 0 条异常"，而真相是"有一处条件没被改到"——
+ *      "没有新闻"恰好也是"一切正常"的样子，于是失效完全不可见。
+ *
+ * @why 收成 `count(*) over ()` **一条语句**而不是把 WHERE 抽成常量再拼两条 SQL：
+ *      后者判据只剩一份（解决了漂移），但两条语句在 READ COMMITTED 下
+ *      各拿一个快照——计数与取样仍可能来自两个时刻（中间来了新回调，
+ *      报告会说"共 5 条"却只列得出 3 条 id）。窗口函数与取样在**同一条语句**里，
+ *      两者必然同快照。
+ *      ⚠️ `count(*) over ()` 在 `limit` **之前**求值，所以 `total` 是满足 WHERE 的
+ *      全部行数（不受取样截断影响）——这是本函数成立的前提，由用例钉住。
+ *
+ * @param rows 取样行（`limit RECONCILE_IDS_CAP + 1`，含 `total` 列）
+ * @param idKey 取样列的名字（多数是 `id`，心跳那类是 `name`）
+ */
+function toAnomaly(
+  rows: readonly Record<string, unknown>[],
+  idKey = 'id',
+): { count: number; ids: string[] } {
+  return {
+    count: Number(rows[0]?.['total'] ?? 0),
+    ids: rows.slice(0, RECONCILE_IDS_CAP).map((r) => String(r[idKey])),
+  };
+}
+
 async function scanDanglingPayments(ctx: JobContext<Db>): Promise<AnomalyClass> {
-  const rows = await ctx.tx<{ id: string }[]>`
-    select p.id from payments p
+  const rows = await ctx.tx<{ id: string; total: string }[]>`
+    select p.id, count(*) over ()::text as total
+      from payments p
       join orders o on o.id = p.order_id
      where p.status = 'initiated'
        and o.status not in ('created', 'pending_payment')
      order by p.created_at
      limit ${RECONCILE_IDS_CAP + 1}
   `;
-  const countRows = await ctx.tx<{ count: string }[]>`
-    select count(*)::text as count from payments p
-      join orders o on o.id = p.order_id
-     where p.status = 'initiated'
-       and o.status not in ('created', 'pending_payment')
-  `;
   return {
     key: 'dangling_initiated_payments',
-    count: Number(countRows[0]?.count ?? 0),
-    ids: rows.slice(0, RECONCILE_IDS_CAP).map((r) => String(r.id)),
+    ...toAnomaly(rows),
   };
 }
 
 async function scanLedgerMismatch(ctx: JobContext<Db>): Promise<AnomalyClass> {
-  const rows = await ctx.tx<{ id: string }[]>`
-    select o.id from orders o
+  const rows = await ctx.tx<{ id: string; total: string }[]>`
+    select o.id, count(*) over ()::text as total
+      from orders o
      where o.status = 'paid'
        and coalesce(
          (select p.status from payments p
@@ -127,27 +155,18 @@ async function scanLedgerMismatch(ctx: JobContext<Db>): Promise<AnomalyClass> {
      order by o.id
      limit ${RECONCILE_IDS_CAP + 1}
   `;
-  const countRows = await ctx.tx<{ count: string }[]>`
-    select count(*)::text as count from orders o
-     where o.status = 'paid'
-       and coalesce(
-         (select p.status from payments p
-           where p.order_id = o.id order by p.created_at desc limit 1),
-         'none'
-       ) <> 'succeeded'
-  `;
   return {
     key: 'paid_without_succeeded_payment',
-    count: Number(countRows[0]?.count ?? 0),
-    ids: rows.slice(0, RECONCILE_IDS_CAP).map((r) => String(r.id)),
+    ...toAnomaly(rows),
   };
 }
 
 async function scanCallbackAnomalies(ctx: JobContext<Db>): Promise<AnomalyClass> {
   // ⚠️ 窗口下界在 SQL 里算（`startedAt - make_interval`），不在 JS 里 new Date——
   //    F10 禁业务侧 new Date：判定基准必须全部来自注入时钟（ctx.startedAt）
-  const rows = await ctx.tx<{ event_id: string }[]>`
-    select event_id from webhook_events
+  const rows = await ctx.tx<{ event_id: string; total: string }[]>`
+    select event_id, count(*) over ()::text as total
+      from webhook_events
      where received_at > ${ctx.startedAt}::timestamptz
                           - make_interval(hours => ${RECONCILE_LOOKBACK_HOURS})
        and (result in (${RESULT_LATE_PAYMENT}, ${RESULT_STATUS_CONFLICT})
@@ -156,18 +175,9 @@ async function scanCallbackAnomalies(ctx: JobContext<Db>): Promise<AnomalyClass>
      order by received_at
      limit ${RECONCILE_IDS_CAP + 1}
   `;
-  const countRows = await ctx.tx<{ count: string }[]>`
-    select count(*)::text as count from webhook_events
-     where received_at > ${ctx.startedAt}::timestamptz
-                          - make_interval(hours => ${RECONCILE_LOOKBACK_HOURS})
-       and (result in (${RESULT_LATE_PAYMENT}, ${RESULT_STATUS_CONFLICT})
-            or result like ${RESULT_MISMATCH_PREFIX + '%'}
-            or result like ${RESULT_UNMATCHED_PREFIX + '%'})
-  `;
   return {
     key: 'callback_anomalies_48h',
-    count: Number(countRows[0]?.count ?? 0),
-    ids: rows.slice(0, RECONCILE_IDS_CAP).map((r) => String(r.event_id)),
+    ...toAnomaly(rows, 'event_id'),
   };
 }
 
@@ -185,8 +195,9 @@ async function scanCallbackAnomalies(ctx: JobContext<Db>): Promise<AnomalyClass>
  *             继续每天报它只会成为噪声（与第三类取窗口的理由相同）。
  */
 async function scanUnfinishedCallbacks(ctx: JobContext<Db>): Promise<AnomalyClass> {
-  const rows = await ctx.tx<{ event_id: string }[]>`
-    select event_id from webhook_events
+  const rows = await ctx.tx<{ event_id: string; total: string }[]>`
+    select event_id, count(*) over ()::text as total
+      from webhook_events
      where processed_at is null
        and (processing_until is null or processing_until < ${ctx.startedAt}::timestamptz)
        and received_at <= ${ctx.startedAt}::timestamptz
@@ -196,19 +207,9 @@ async function scanUnfinishedCallbacks(ctx: JobContext<Db>): Promise<AnomalyClas
      order by received_at
      limit ${RECONCILE_IDS_CAP + 1}
   `;
-  const countRows = await ctx.tx<{ count: string }[]>`
-    select count(*)::text as count from webhook_events
-     where processed_at is null
-       and (processing_until is null or processing_until < ${ctx.startedAt}::timestamptz)
-       and received_at <= ${ctx.startedAt}::timestamptz
-                          - make_interval(mins => ${UNFINISHED_CALLBACK_MINUTES})
-       and received_at > ${ctx.startedAt}::timestamptz
-                          - make_interval(hours => ${RECONCILE_LOOKBACK_HOURS})
-  `;
   return {
     key: 'unfinished_callbacks',
-    count: Number(countRows[0]?.count ?? 0),
-    ids: rows.slice(0, RECONCILE_IDS_CAP).map((r) => String(r.event_id)),
+    ...toAnomaly(rows, 'event_id'),
   };
 }
 
@@ -228,8 +229,9 @@ async function scanUnfinishedCallbacks(ctx: JobContext<Db>): Promise<AnomalyClas
  *      "第一次跑必定报警"。tick 没有这个豁免——常驻调度器起不来是真故障。
  */
 async function scanStalledHeartbeats(ctx: JobContext<Db>): Promise<AnomalyClass> {
-  const stalled = await ctx.tx<{ name: string }[]>`
-    select name from job_runs
+  const stalled = await ctx.tx<{ name: string; total: string }[]>`
+    select name, count(*) over ()::text as total
+      from job_runs
      where (
              name = ${TICK_JOB_NAME}
              and (last_success_at is null
@@ -245,25 +247,9 @@ async function scanStalledHeartbeats(ctx: JobContext<Db>): Promise<AnomalyClass>
      order by name
      limit ${RECONCILE_IDS_CAP + 1}
   `;
-  const countRows = await ctx.tx<{ count: string }[]>`
-    select count(*)::text as count from job_runs
-     where (
-             name = ${TICK_JOB_NAME}
-             and (last_success_at is null
-                  or last_success_at < ${ctx.startedAt}::timestamptz
-                                       - make_interval(mins => ${TICK_STALL_MINUTES}))
-           )
-        or (
-             name = ${DAILY_JOB_ROW_NAME}
-             and last_success_at is not null
-             and last_success_at < ${ctx.startedAt}::timestamptz
-                                    - make_interval(hours => ${DAILY_STALL_HOURS})
-           )
-  `;
   return {
     key: 'stalled_heartbeats',
-    count: Number(countRows[0]?.count ?? 0),
-    ids: stalled.slice(0, RECONCILE_IDS_CAP).map((r) => String(r.name)),
+    ...toAnomaly(stalled, 'name'),
   };
 }
 
@@ -279,8 +265,9 @@ async function scanStalledHeartbeats(ctx: JobContext<Db>): Promise<AnomalyClass>
  *      落定之前每天都该报，报到有人处理为止。
  */
 async function scanStuckRefunds(ctx: JobContext<Db>): Promise<AnomalyClass> {
-  const rows = await ctx.tx<{ id: string }[]>`
-    select o.id from orders o
+  const rows = await ctx.tx<{ id: string; total: string }[]>`
+    select o.id, count(*) over ()::text as total
+      from orders o
      where o.status = 'refunding'
        and coalesce(
              (select max(e.at) from order_events e
@@ -290,19 +277,9 @@ async function scanStuckRefunds(ctx: JobContext<Db>): Promise<AnomalyClass> {
      order by o.id
      limit ${RECONCILE_IDS_CAP + 1}
   `;
-  const countRows = await ctx.tx<{ count: string }[]>`
-    select count(*)::text as count from orders o
-     where o.status = 'refunding'
-       and coalesce(
-             (select max(e.at) from order_events e
-               where e.order_id = o.id and e.status = 'refunding'),
-             o.updated_at
-           ) <= ${ctx.startedAt}::timestamptz - make_interval(hours => ${STUCK_REFUND_HOURS})
-  `;
   return {
     key: 'stuck_refunds',
-    count: Number(countRows[0]?.count ?? 0),
-    ids: rows.slice(0, RECONCILE_IDS_CAP).map((r) => String(r.id)),
+    ...toAnomaly(rows),
   };
 }
 
