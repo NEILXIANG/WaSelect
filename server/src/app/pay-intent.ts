@@ -186,7 +186,12 @@ export async function reissuePayLinkOnReplay(
     return replayed;
   }
   return withTransaction(db, async (tx) => {
-    const order = await lockOwnedOrderForPay(tx, input.orderId, input.userId);
+    // ⚠️ 与发起支付**同一把锁语义**（AJ-312，第二轮审查 PAY2-08 的修法）：
+    //    这里曾经直接调 `lockOwnedOrderForPay`，等锁超时（55P03）原样抛 → 50000
+    //    ——用户在重放时看到"服务器内部错误"，而事实只是"另一把键的发起支付正持有这张单"。
+    //    重放与首次发起撞同一张单是**正常并发**（幂等重放本就与首次请求竞争），
+    //    不该表现成服务端故障。翻成 40903 与 `lockOrderForPay` 同码同义。
+    const order = await lockOrderForPayOrNull(tx, input.orderId, input.userId);
     if (
       order === null ||
       asOrderStatus(order.status) !== 'pending_payment' ||
@@ -360,17 +365,36 @@ export async function createPayIntent(
  *           用户照样看到"重复提交"。可接受——这些都是"这张单现在动不了"，
  *           而精确区分需要暴露内部作业信息，收益不抵。
  */
-async function lockOrderForPay(tx: Db, orderId: string, userId: string): Promise<OrderPayRow> {
+/**
+ * 持锁读单的**唯一实现**：等锁超时 → 40903；行不存在 / 非本人 → `null`（不替调用方决定）。
+ *
+ * @why 把"55P03 翻成 40903"这一条**只写在这里**（AJ-312）：发起支付与幂等重放都要它，
+ *      而 `reissuePayLinkOnReplay` 曾经直接调 `lockOwnedOrderForPay` 裸着用。
+ *      两处各写一份的下场就是其中一处（最少被想到的重放路径）忘了翻——
+ *      表现是"重放撞上并发 → 50000"，排障时会被当成服务端故障去查。
+ * @why 用 `null` 表达"拿不到这张单"而不是抛 40400：两个调用方对它的处置**不同**
+ *      （发起支付要 40400；重放要"原样返回重放体"——那张单已经不可付，占位 token 的
+ *      链接落地即失效，正是想要的结果）。让调用方决定，本函数不猜。
+ */
+async function lockOrderForPayOrNull(
+  tx: Db,
+  orderId: string,
+  userId: string,
+): Promise<OrderPayRow | null> {
   try {
-    const row = await lockOwnedOrderForPay(tx, orderId, userId);
-    if (row === null) throw new AppError(40400, { order_id: orderId });
-    return row;
+    return await lockOwnedOrderForPay(tx, orderId, userId);
   } catch (e) {
     if (isLockNotAvailable(e)) {
       throw new AppError(40903, { order_id: orderId, reason: 'pay_in_progress' });
     }
     throw e;
   }
+}
+
+async function lockOrderForPay(tx: Db, orderId: string, userId: string): Promise<OrderPayRow> {
+  const row = await lockOrderForPayOrNull(tx, orderId, userId);
+  if (row === null) throw new AppError(40400, { order_id: orderId });
+  return row;
 }
 
 /**

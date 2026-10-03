@@ -30,7 +30,12 @@ import type {
 import { ProviderRejectedError } from '../ports/payment.js';
 import type { IdGen } from '../ports/ids.js';
 import { AppError } from '../errors.js';
-import { createPayIntent, type PayIntentDeps } from './pay-intent.js';
+import {
+  createPayIntent,
+  PAY_TOKEN_REDACTED,
+  reissuePayLinkOnReplay,
+  type PayIntentDeps,
+} from './pay-intent.js';
 import { recordPayCreateFailure } from './payment-intent.js';
 
 let db: Db;
@@ -742,5 +747,72 @@ describe('并发：另一事务正持有这张单（B6 / AJ-201）', () => {
       await hold.done.catch(() => undefined);
       await closeDb(tight);
     }
+  });
+
+  /**
+   * 🔴 AJ-312（第二轮审查 PAY2-08 的修法）：幂等**重放**补发短链走的是同一把行锁，
+   *    等锁超时必须与首次发起**同码**。
+   *
+   * @why 重放补发短链（`reissuePayLinkOnReplay`）与首次发起撞同一张单是**正常并发**：
+   *      幂等重放本就与"另一把客户端键的首次请求"竞争同一行。旧实现在这条路上裸调
+   *      `lockOwnedOrderForPay`，55P03 原样抛 → 50000"服务器内部错误"。
+   *      用户看到的是"系统坏了"，事实只是"你点快了"。
+   * @why 与上面两条**并排**而不是并入它们：40903 的语义在两条路径上必须一致，
+   *      但它们是两个不同的调用点（曾经只有一处翻了码）。分开钉，将来有人把重放路径
+   *      改回裸调时，红的是这一条而不是"发起支付"那一条——排障方向直接指到出问题的那一处。
+   */
+  it('重放补发短链时等锁超时 → 40903「重复提交」，而不是 50000', async () => {
+    const sink = new MemorySink();
+    const registry = fakeRegistry({ pa: fakeProvider('pa') });
+    await seedPayable('o-busy3');
+
+    const tight = tightPool();
+    const hold = holdOrderRow(tight, 'o-busy3');
+    try {
+      await hold.ready;
+      // ⚠️ 重放体必须带被抹掉的 token，否则本函数**原样返回**根本不会去加锁
+      //    （构造不出这个形状的话，这条用例会静默变成"什么都没测"）
+      const replayed = {
+        payload: { pay_url: `https://checkout.example.com/o/o-busy3?t=${PAY_TOKEN_REDACTED}` },
+      };
+      await reissuePayLinkOnReplay(
+        tight,
+        deps(registry, sink),
+        { orderId: 'o-busy3', userId: 'u-1' },
+        replayed,
+      ).then(
+        () => expect.unreachable('另一事务持锁时应 40903'),
+        (e: unknown) => {
+          expect(codeOf(e)).toBe(40903);
+          expect((e as AppError).details).toMatchObject({ reason: 'pay_in_progress' });
+        },
+      );
+    } finally {
+      hold.release();
+      await hold.done.catch(() => undefined);
+      await closeDb(tight);
+    }
+  });
+
+  /**
+   * 反向：重放路径上"行不存在 / 非本人"**不**抛 40400，而是原样返回重放体。
+   * @why 那张单已经不可付，占位 token 的链接落地即"已失效"——正是想要的结果。
+   *      若这条跟着抛 40400，一次针对已关闭订单的幂等重放会变成"订单不存在"报错，
+   *      而客户端此时手里已经有一份（过期的）响应，没必要再失败一次。
+   */
+  it('重放撞上"不是自己的单" → 原样返回重放体，不抛 40400', async () => {
+    const sink = new MemorySink();
+    const registry = fakeRegistry({ pa: fakeProvider('pa') });
+    await seedPayable('o-theirs', { user: 'u-2' });
+    const replayed = {
+      payload: { pay_url: `https://checkout.example.com/o/o-theirs?t=${PAY_TOKEN_REDACTED}` },
+    };
+    const out = await reissuePayLinkOnReplay(
+      db,
+      deps(registry, sink),
+      { orderId: 'o-theirs', userId: 'u-1' },
+      replayed,
+    );
+    expect(out).toBe(replayed);
   });
 });
