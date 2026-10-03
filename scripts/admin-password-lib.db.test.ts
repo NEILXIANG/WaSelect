@@ -13,7 +13,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from '../server/src/adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../test/db/test-db.js';
 import { hashPassword, verifyPassword } from '../server/src/app/auth.js';
-import { parseAdminPasswordArgs, setAdminPassword } from './admin-password-lib.js';
+// 只收邮箱 / 目标库描述 / stdin 读口令这三个**纯函数**不碰库，在
+// `admin-password-lib.unit.test.ts`（unit project）；这里只留要真库的：改密与审计落表。
+import { auditAdminPasswordReset, setAdminPassword } from './admin-password-lib.js';
 import { loginAttemptKey, loginAttemptSourceKey } from '../server/src/adapters/admin-auth.js';
 
 let db: Db;
@@ -156,18 +158,62 @@ describe('setAdminPassword（B17 / AJ-209）', () => {
   });
 });
 
-describe('parseAdminPasswordArgs（CLI 参数）', () => {
-  it('两个位置参数 → 入参；多余参数忽略', () => {
-    expect(parseAdminPasswordArgs(['a@b.c', 'pw-1234567890', '--force'])).toEqual({
-      email: 'a@b.c',
-      password: 'pw-1234567890',
+/**
+ * DB2-05：审计表此前只覆盖 HTTP 管理端写接口（中间件挂在 `/api/v1/admin` 前缀上），
+ * 本机 CLI 改密在系统里**一行痕都不留**——事后回答不了"这个管理员的口令最近被改过吗"。
+ */
+describe('auditAdminPasswordReset（CLI 改密也要留痕）', () => {
+  it('🔴 落一行：actor / action / target 正确，且**口令与前后值都不进审计**', async () => {
+    const id = await seedAdmin('boss@example.com', 'old-password-1234');
+    const r = await setAdminPassword(db, {
+      email: 'boss@example.com',
+      password: 'new-password-5678',
     });
+    expect(r.ok).toBe(true);
+
+    expect(await db`select 1 from admin_audit`).toHaveLength(0);
+    await auditAdminPasswordReset(db, id);
+
+    const rows = await db`select actor, action, target, before, after from admin_audit`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actor: 'cli:admin-password',
+      action: 'CLI admin.password.reset',
+      target: id,
+    });
+    // 口令绝不进审计表（append-only、无保留期）：连"前后值"字段也只能是 NULL
+    expect(rows[0]?.['before']).toBeNull();
+    expect(rows[0]?.['after']).toBeNull();
+    expect(JSON.stringify(rows[0])).not.toContain('new-password-5678');
   });
 
-  it('缺参 / 空串 / 全空白邮箱 → undefined（调用方应打印用法并退出非 0）', () => {
-    expect(parseAdminPasswordArgs([])).toBeUndefined();
-    expect(parseAdminPasswordArgs(['a@b.c'])).toBeUndefined();
-    expect(parseAdminPasswordArgs(['a@b.c', ''])).toBeUndefined();
-    expect(parseAdminPasswordArgs(['   ', 'pw-1234567890'])).toBeUndefined();
+  /**
+   * @why 这一条是上面那条的反面：**审计不是改密的一部分**。
+   *      CLI 里审计失败只告警、不回滚、也不把退出码改成失败（admin-password.ts:88-97）——
+   *      口令已经改完了，报成"失败"会让人再跑一次。所以这里要钉住的是
+   *      "审计抛错时**口令仍然是新的**"，而不是"抛了错"。
+   */
+  it('🔴 审计写失败会抛，但**口令已经是新的**（调用方只告警、不回滚）', async () => {
+    const id = await seedAdmin('boss@example.com', 'old-password-1234');
+    const r = await setAdminPassword(db, {
+      email: 'boss@example.com',
+      password: 'new-password-5678',
+    });
+    expect(r.ok).toBe(true);
+
+    // 假 Db：只会被当成标签模板调用一次（before / after 都是 null，不会走到 db.json）
+    const brokenDb = ((): never => {
+      throw new Error('模拟审计写入失败');
+    }) as unknown as Db;
+    await expect(auditAdminPasswordReset(brokenDb, id)).rejects.toThrow('模拟审计写入失败');
+
+    // 口令不受影响：审计是"事后补一笔"，不是"改密事务的一部分"
+    const row = (await db`select password_hash, token_ver from users where id = ${id}`)[0];
+    expect(row?.['token_ver']).toBe(4);
+    await expect(verifyPassword('new-password-5678', String(row?.['password_hash']))).resolves.toBe(
+      true,
+    );
+    // 失败的审计不会留下半行
+    expect(await db`select 1 from admin_audit`).toHaveLength(0);
   });
 });

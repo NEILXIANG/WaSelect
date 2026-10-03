@@ -9,7 +9,9 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import type { Db } from './db.js';
 import {
+  ensureInitialAdmin,
   loginAttemptKey,
   loginAttemptsCutoff,
   LOGIN_ATTEMPT_RETENTION_HOURS,
@@ -38,6 +40,43 @@ describe('loginAttemptsCutoff', () => {
   it(`基准时刻往前 ${LOGIN_ATTEMPT_RETENTION_HOURS} 小时（F10：由传入的时钟推导，不自己取 now）`, () => {
     const now = new Date('2026-09-29T12:00:00.000Z');
     expect(loginAttemptsCutoff(now).toISOString()).toBe('2026-09-28T12:00:00.000Z');
+  });
+});
+
+/**
+ * `ensureInitialAdmin` 的 catch 是**分诊**而不是"吞掉"（DB2-09 / AJ-324）。
+ *
+ * @why 两条各自钉一个方向，因为吞错方向的后果极不对称：
+ *      · 把 23505 也抛出去 ⇒ 两个实例同时启动时**后到的那个**报启动失败，
+ *        而它其实只需要承认"已经有了"——表现为"偶发起不来"，且只在多实例时发生；
+ *      · 把别的错也当成 23505 ⇒ **连接失败 / 表不存在 被当成"账号已存在"**，
+ *        启动照样成功、日志一片干净，而库里没有管理员 ⇒ 管理端无人可登，
+ *        且 `admin:password` 也改不到一个不存在的账号。第二条更安静、更贵。
+ * @limitation 两条都用"会抛指定 SQLSTATE 的替身 Db"，**不假装测到了并发**：
+ *      23505 的真实来源是"两个实例同时建号"的竞态窗口，做成用例必然偶发红。
+ *      这里只钉"错误码 → 语义"的映射本身；竞态形态本身按 🟡 登记在 AJ-324。
+ */
+describe('ensureInitialAdmin：catch 只认 23505，其余原样抛', () => {
+  const dbThrowing = (code: string): Db => {
+    const fn = (): never => {
+      throw Object.assign(new Error('injected'), { code });
+    };
+    return fn as unknown as Db;
+  };
+
+  it('🔴 23505（并发里后到的那个）→ "exists"，启动继续', async () => {
+    await expect(ensureInitialAdmin(dbThrowing('23505'), 'Boss@Example.com', 'hash')).resolves.toBe(
+      'exists',
+    );
+  });
+
+  it('🔴 非 23505（连接失败 / 表不存在）→ 原样抛，绝不静默当成"已有账号"', async () => {
+    await expect(
+      ensureInitialAdmin(dbThrowing('42P01'), 'Boss@Example.com', 'hash'),
+    ).rejects.toThrow('injected');
+    await expect(
+      ensureInitialAdmin(dbThrowing('ECONNREFUSED'), 'Boss@Example.com', 'hash'),
+    ).rejects.toThrow('injected');
   });
 });
 

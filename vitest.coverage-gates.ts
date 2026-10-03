@@ -355,4 +355,71 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
   // errors.ts 是同一出口的错误形状半边（AJ-86 拆分），同强度。
   'admin-web/src/api/client.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
   'admin-web/src/api/errors.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+
+  // ── DB2-09（AJ-324）：上一轮之后新增 / 重写的"钱与安全核心"补进门槛表 ──────────────
+  // @why 这五个文件在此之前**一条阈值都没有**，只受全局 85% 约束；而第五轮重读里
+  //      "第 5 次输对也被锁"（R-02 / AJ-224）正出在 `admin-auth.ts` 的一个分支上——
+  //      全局均值完全看不见它。CLAUDE.md 约束九把"关键模块门槛"列为防"靠全局均值蒙混"的机制，
+  //      名单漏项等于机制上开了个口子。
+  // @why 阈值**钉在实测可达的位置，不是一律 100%**：逐分支实测后，有 9 个分支是
+  //      **竞态窗口 / 不变式违反 / 类型守卫兜底**，做成用例必然偶发红（本项目对 flake 的
+  //      成本有过多次实测：一次 flake = 一整轮 10 分钟 gate + 一次归因）。
+  //      它们按《测试策略》§4.2 的 🟡 口径逐条登记了原因（@see docs/自主决策记录.md AJ-324），
+  //      而不是靠 `v8 ignore` 抹掉——忽略会连"这段从未被执行过"这个信号一起抹掉。
+  // ⚠️ 于是这几条数字是**下限不是目标**：新增分支必须补测试，补不了就要在 AJ-324 里补理由
+  //      （理由与代码同一次提交）；**不得**直接下调数字。
+  'server/src/app/refund-execution.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/adapters/admin-auth.ts': {
+    lines: 96,
+    functions: 100,
+    branches: 94,
+    statements: 99,
+  },
+  // 🟡 未达 100% 的那一个分支（AJ-324）：
+  //   `admin-auth.ts:200` `cur?.locked_until ?? now` 的 `?? now`——走到这一行时，
+  //   "刚被 UPDATE 判成已锁"的那行必然还在，`locked_until` 不会是 null；
+  //   只有"锁在这两条语句之间被并发清掉"才可能，属竞态窗口（做用例必然偶发红）。
+  //   ⚠️ 注意：23505 那条**已测**（`admin-auth.unit.test.ts`），但用的是会抛该 SQLSTATE 的替身 Db，
+  //      钉的是"错误码 → 语义"的映射，**不是**并发竞态本身；竞态形态同样按 🟡 登记。
+  'server/src/app/admin-auth-routes.ts': {
+    lines: 94,
+    functions: 100,
+    branches: 86,
+    statements: 94,
+  },
+  // 🟡 未达 100% 的分支（AJ-324）：全部是**竞态窗口**，单线程用例造不出来——
+  //   · `:122` `req.ip ?? 'unknown'`：express 在 supertest 下必然给出 `req.ip`，
+  //     只有"直连 socket 拿不到地址"才走兜底，测试装配里做不到；
+  //   · `:175 / :177 / :178` 邮箱桶在"⓪ 只读看一眼"之后、"① 扣额度"之前被**别的**并发请求锁上
+  //     ——⓪ 那一步正是为了让它不可能，所以只有交错才会发生；
+  //   · `:207-213` `locked_while_verifying`：口令比对期间（bcrypt ~100ms）被并发上锁。
+  //     三处都是"两个请求恰好交错"才成立，写成用例就是 flake。
+  //   ⚠️ 因此 `:207-213` 这**整块**（warn + 42901）当前确实没有测试覆盖；这是本条最实质的让步。
+  'server/src/app/block-user.ts': {
+    lines: 99,
+    functions: 100,
+    branches: 89,
+    statements: 94,
+  },
+  // 🟡 未达 100% 的分支（AJ-324）：`:120` 的 `continue`——`lockPayableOrdersOfUser`
+  //   与 `markOrderCancelled` 用的是**同一个** `status in PAYABLE_STATUSES` 谓词，
+  //   且前者带 `for update`，同一事务内不可能"一个选得出、一个更新不到"；
+  //   只有并发抢先迁走才可能（竞态窗口）。
+  'server/src/app/mark-disputed.ts': {
+    lines: 94,
+    functions: 100,
+    branches: 89,
+    statements: 94,
+  },
+  // 🟡 未达 100% 的分支（AJ-324）：
+  //   · `:197 / :391` "update 未命中支付行"→ 50000：不变式违反（行在持锁期间消失），
+  //     属"兜住不可能发生的事"，做成用例要先破坏不变式；
+  //   · `:421` `openedAtIso` 的 fallback：重放分支里 `dispute_opened_at` 为空
+  //     = "上次写 payments 成功、字段没跟上"的半途状态（该文件 @limitation 一自己点名），
+  //     正常路径进不去，造这种数据属于为覆盖率编造状态。
 };

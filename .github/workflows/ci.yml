@@ -73,8 +73,14 @@ jobs:
       #      而且某个变量哪天变成必填时，CI 因为有这份大而全的配置而照样绿，本地却会红——
       #      又制造一处"本地与 CI 不一致"。少即是准。
       #
-      # DATABASE_URL：test/db/test-db.ts 会由它推导出 japan_shop_test（换库名）与
-      #   管理库 postgres（换库名）。所以这里指向 postgres 库即可，不要手填 _test 库名。
+      # DATABASE_URL：test/db/test-db.ts 会由它换**库名**得到各层的测试库与建库用的管理库
+      #   （postgres）。所以这里指向 postgres 库即可，不要手填 _test 库名。
+      #   ⚠️ 两点容易踩（0.6.27 订正，DB2-10）：
+      #   ① 库名是**按 vitest project 分库**的：默认层是 japan_shop_test，e2e 层是
+      #      japan_shop_e2e_test（AJ-216 起，为的是 db 与 e2e 并发时不互相 TRUNCATE）；
+      #      本注释原写"推导出 japan_shop_test"一个名字，漏了 e2e 那一个。
+      #   ② 外部串（含 TEST_DATABASE_URL）里的**库名一律被忽略**，库名只由 test-db.ts 决定
+      #      ——手填自定义库名不会生效，只会让人以为生效了。主机/端口/角色才取自这里。
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       # JWT_SECRET：config.ts 要求 >=32 字符。这是一个**公开的、只在 CI 进程内存活的占位值**，
       #   不是密钥：它签出的 token 只能被同一次 CI 里的进程接受，任何生产环境都不用它。

@@ -12,6 +12,11 @@
  *
  * @limitation 只钉"被熔断拒绝"这一类的分诊；其余三态（succeeded / pending / failed）
  *      由 admin-order-routes 的真库用例与 F-03 的用例覆盖，这里不重复。
+ *
+ * DB2-09：本文件随后补了三条"**出口**"用例（通道不支持退款 / 查在途时被熔断 /
+ *      事件写不进去）。@why 这三条原先一行都没覆盖，而它们各自是一个**独立出口**：
+ *      不是"退款成不成"，而是"这条路上还有别的门，那扇门关着时说的是什么"。
+ *      它们与上面三条共用同一个计数 Db，所以"碰没碰库"仍然是可断言的事实。
  */
 import { describe, expect, it } from 'vitest';
 import { fixedClock } from '../../../test/helpers/fixed-clock.js';
@@ -68,6 +73,29 @@ function provider(refundThrow: unknown): PaymentProvider {
       });
     },
     refundStatus: () => Promise.resolve<RefundResult['outcome']>('succeeded'),
+    parseWebhook: () => Promise.reject(new Error('unused')),
+    create: () => Promise.reject(new Error('unused')),
+  };
+}
+
+/**
+ * 一个**不支持退款**的通道（`refund` / `refundStatus` 都没实现）。
+ * @why 这两个方法在端口上是**可选**的（ports/payment.ts @limitation 三），
+ *      注册表只强制"能退就必须能查"，不强制"必须能退"——所以这个形状是合法的，
+ *      而且正是"老通道下线后换了个不支持退款的新通道"时的形状。
+ */
+function providerWithoutRefund(): PaymentProvider {
+  return {
+    channel: 'stripe',
+    capabilities: {
+      currencies: ['JPY'],
+      countries: ['*'],
+      entryMode: 'copylink',
+      supportsRefund: false,
+      supportsPartialRefund: false,
+      supportsDispute: false,
+      refundableWhenDisabled: false,
+    },
     parseWebhook: () => Promise.reject(new Error('unused')),
     create: () => Promise.reject(new Error('unused')),
   };
@@ -143,5 +171,72 @@ describe('executeRefund：被熔断拒绝 ≠ 机构失败（AJ-313）', () => {
     expect(err).toBeInstanceOf(AppError);
     expect((err as AppError).code).toBe(50000);
     expect(counter.n, '结果未知必须留痕（否则下一次点击无从判断换不换键）').toBe(1);
+  });
+});
+
+describe('executeRefund：另外三个出口（DB2-09）', () => {
+  /**
+   * @why `refund` / `refundStatus` 是**可选**方法，所以"通道不支持退款"是一个合法状态，
+   *      而且它只在**有人点了退款**时才暴露——平时完全看不出来（通道照常能建单、能收回调）。
+   *      这条没被钉住的形态是：把"不支持"静默当成"成功"或"待处理"，
+   *      于是管理员看到 200 / pending，钱其实一分没退（AJ-37 禁止的"不报错的错"）。
+   */
+  it('🔴 通道没有 refund / refundStatus → 50000 refund_not_supported，且一次库都不碰', async () => {
+    const counter = { n: 0 };
+    const { d } = deps(counter);
+    const err = await executeRefund(d, providerWithoutRefund(), plan()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AppError);
+    expect((err as AppError).code).toBe(50000);
+    expect((err as AppError).details).toMatchObject({ reason: 'refund_not_supported' });
+    expect(counter.n, '还没发起任何请求，不该落任何事件').toBe(0);
+  });
+
+  /**
+   * @why 与"发起退款被熔断"**同口径的另一半**（AJ-313 只钉了发起那半）：
+   *      查询在途那笔时被熔断拦下，同样是"我们没问成"，不是"机构答复了"。
+   *      折成 50000 会丢掉重试时刻，而这条路的**唯一出口就是再点一次查询**
+   *      ——管理员看到"服务器内部错误"会以为退款已经坏了，进而去做手工改库这类更危险的事。
+   */
+  it('🔴 查在途那笔时被熔断拦下 → **原样**抛 + deferred 日志，不写事件（不是 50000）', async () => {
+    const counter = { n: 0 };
+    const { d, sink } = deps(counter);
+    const boom = new CircuitOpenError('api.stripe.com', 7_000);
+    const p = provider(undefined);
+    p.refundStatus = () => Promise.reject(boom);
+    const err = await executeRefund(d, p, {
+      ...plan(),
+      progress: { pendingRef: 're_1', confirmedFailures: 0 },
+    }).catch((e: unknown) => e);
+    expect(err).toBe(boom);
+    expect(counter.n, '被熔断拒绝的查询不该写 refund_failed').toBe(0);
+    const rows = sink.find('admin_order_refund_status_circuit_open');
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0]?.result)).toBe('deferred');
+    expect(rows[0]?.['ctx']).toMatchObject({ retry_after_ms: 7_000 });
+    expect(sink.find('admin_order_refund_failed')).toHaveLength(0);
+  });
+
+  /**
+   * @why 事件是 **best-effort**：它只用于"下一次点击该不该换键"的判断与排障，
+   *      不是钱的那条路。写不进去时正确的处置是"记一笔 not_written、退款照旧报 50000"，
+   *      而不是让整次请求因为审计写失败而变成另一种错误（那会让管理员以为退款成功了）。
+   *      ⚠️ 这条也是上面三条的补集：它们都断言"事件没写"，这一条断言"**想写但没写成**"。
+   */
+  it('🔴 refund_failed 事件写不进去 → 记 not_written 日志，仍然抛 50000（事件是 best-effort）', async () => {
+    const sink = new MemorySink();
+    const d: RefundExecDeps = {
+      db: ((): never => {
+        throw new Error('模拟事件写入失败');
+      }) as unknown as Db,
+      logger: createLogger({ env: 'test', destination: sink }),
+      clock: CLOCK,
+    };
+    const err = await executeRefund(d, provider(new Error('fetch failed')), plan()).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AppError);
+    expect((err as AppError).code).toBe(50000);
+    expect(sink.find('admin_order_refund_failed')).toHaveLength(1);
+    expect(sink.find('admin_order_refund_failed_event_not_written')).toHaveLength(1);
   });
 });
