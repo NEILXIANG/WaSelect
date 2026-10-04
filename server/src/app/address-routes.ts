@@ -97,7 +97,15 @@ export function mountAddressRoutes(app: Express, deps: AddressRoutesDeps): void 
           if (sub === undefined) throw new AppError(40101);
           const input = await parseAddress(req.body);
           const row = await addresses.create(`addr-${deps.idGen.uuid()}`, sub, input);
-          deps.logger.info('address_created', { result: 'ok' });
+          deps.logger.info('address_created', {
+            result: 'ok',
+            // ⚠️ 必须带 `address_id` 与 `is_default`（AJ-355）：约束七要求关键路径
+            //    答得出"谁、做了什么、**对哪个对象**"。只有 `result:'ok'` 时，
+            //    用户投诉"我的默认地址怎么变了"只能看到"有过一次新建"，
+            //    不知道是哪一条、有没有设成默认——而这两件事正是投诉的内容本身。
+            //    `address_id` 是服务端生成的 `addr-<uuid>`，不是 PII（收件人/电话才脱敏）。
+            ctx: { address_id: row.id, is_default: row.is_default },
+          });
           res.status(201).json(row);
         } catch (e) {
           next(e);
@@ -118,6 +126,14 @@ export function mountAddressRoutes(app: Express, deps: AddressRoutesDeps): void 
           const input = await parseAddress(req.body);
           const row = await addresses.update(id, sub, input);
           if (row === null) throw new AppError(40400, { address_id: id });
+          // ⚠️ 更新此前**完全不打日志**（AJ-355）：改地址是"谁、做了什么、对哪个对象"
+          //    里最容易有争议的一条——用户说"我没改过"，而日志里什么都没有。
+          //    带 `is_default`：改的到底是"把这条设成默认"还是"只是改了个门牌号"，
+          //    在日志里必须是两件能分开的事。
+          deps.logger.info('address_updated', {
+            result: 'ok',
+            ctx: { address_id: row.id, is_default: row.is_default },
+          });
           res.json(row);
         } catch (e) {
           next(e);
@@ -137,7 +153,11 @@ export function mountAddressRoutes(app: Express, deps: AddressRoutesDeps): void 
           const id = paramId(req.params.id);
           const ok = await addresses.remove(id, sub);
           if (!ok) throw new AppError(40400, { address_id: id });
-          deps.logger.info('address_deleted', { result: 'ok' });
+          // ⚠️ 同上（AJ-355）：删了哪一条必须可答。"我的默认地址没了"
+          //    这类投诉的唯一线索就在这里——没有 id 的话，日志只能说"有人删过一个地址"。
+          //    （不为了取 `is_default` 多查一次库：'谁删的'与'删了哪条'已足够定位，
+          //     "删之前它是不是默认"可以从这条 id 的创建/更新日志里串出来。）
+          deps.logger.info('address_deleted', { result: 'ok', ctx: { address_id: id } });
           res.status(204).end();
         } catch (e) {
           next(e);

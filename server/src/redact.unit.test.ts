@@ -117,6 +117,48 @@ describe('三类脱敏口径（N5/N6，AJ-33）', () => {
     expect(out.product_name).toBe('三德厨刀');
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // `…_id` / `…_ids` 是**引用**不是**内容**（AJ-355）
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // @why 🔴 词表制的固有坑：`address_id` 切词得 `address` → 命中 PII-地址词表 → 整值 `***`。
+  //      但 `address_id` 是服务端生成的定位键（`addr-<uuid>`），与 `order_id` / `trace_id` 同类，
+  //      本文件自己的 @limitation 写着"排查靠的是编号，从不需要在日志里看到完整地址"。
+  //      实际受害面：地址 CRUD 三条业务日志、`DELETE /addresses/{id}` 的 40400、
+  //      建单时"地址不存在"的 40400（create-order.ts）——**全都不带得出来是哪一个 id**。
+  //      用户投诉"我的默认地址怎么变了"时，日志只能回答"有过一次改动"：遮蔽的是线索本身。
+  // @why 反例必须同时断言（只测"活下来"会留下一个更危险的口子）：
+  //      ① 不带 `_id` 的地址**内容**仍整值遮蔽（`address` / `addresses`）；
+  //      ② 红线：`openid` / `unionid` 的 squeezed 也以 `id` 结尾，若把豁免放到
+  //         IDENTIFIER 判定**之前**，身份标识就会被整条放行——所以下面显式钉死它们仍被遮蔽。
+  it('🔴 `…_id`/`…_ids` 是引用键（保留），但地址内容与 openid 仍按原规则遮蔽', () => {
+    const out = redact({
+      // —— 引用键：必须原样保留，否则排障断链 ——
+      address_id: 'addr-01J8ZK3M7N5P9QRSTVWXY',
+      address_ids: ['addr-a', 'addr-b'],
+      recipient_id: 'rcp-1',
+      // —— 反例①：内容是内容，不带 `_id` 就没有豁免 ——
+      address: '1-2-3 Sakura Ave',
+      addresses: [{ line1: '1-2-3' }],
+      recipient: 'Tanaka Hanako',
+      // —— 反例②（红线）：squeezed 同样以 `id` 结尾，但走 SECRET/IDENTIFIER，豁免碰不到它们 ——
+      openid: 'o6_bmjrPTlm6_2sgVt7hMZOPfL2M',
+      api_key: 'sk_live_abc',
+    }) as Record<string, unknown>;
+
+    expect(out.address_id).toBe('addr-01J8ZK3M7N5P9QRSTVWXY');
+    expect(out.address_ids).toEqual(['addr-a', 'addr-b']);
+    expect(out.recipient_id).toBe('rcp-1');
+
+    expect(out.address).toBe('***');
+    expect(out.addresses).toEqual([{ line1: '***' }]);
+    expect(out.recipient).toBe('T***');
+
+    // 不写死具体掩码串（那是 maskIdentifier 的实现细节），钉死"确实被遮蔽了且不是原值"
+    expect(String(out.openid)).toMatch(/^\*\*\*/);
+    expect(out.api_key).toBe('***');
+  });
+
   it('嵌套对象里的收货人字段同样按 PII 遮蔽（N6 的真实形态：地址对象在 ctx/details 里）', () => {
     const out = redact({
       ctx: { recipient: 'Tanaka', line1: '1-2-3 Sakura', zip: '94108', city: 'SF' },

@@ -160,16 +160,39 @@ function hasWord(words: string[], set: ReadonlySet<string>): boolean {
   return words.some((w) => set.has(w) || set.has(singular(w)));
 }
 
+/**
+ * **引用**型键（`…_id` / `…_ids`）：指向某个对象的**编号**，不是那个对象的内容。
+ *
+ * @why 🔴 词表制的固有坑（AJ-355）：`address_id` 切词得 `address`，命中 PII-地址词表
+ *      ⇒ 整值打码成 `***`。而它是**定位键**，与 `order_id` / `trace_id` 同类——
+ *      本文件自己的 @limitation 写着"排查订单问题靠的是 order_id 与 trace_id，
+ *      从不需要在日志里看到完整地址"，`_id` 正是那一类。
+ *      实际后果：`DELETE /addresses/{id}` 的 40400 日志、
+ *      建单时"地址不存在"的 40400 日志、以及地址 CRUD 的三条业务日志，
+ *      **全都不带得出来是哪一个 id** —— 用户投诉"我的默认地址怎么变了"时，
+ *      日志只能回答"有过一次改动"。把编号和地址行混在同一条规则里，遮蔽的是线索本身。
+ * @why 只**豁免 PII 两类**，不动 SECRET / IDENTIFIER / URL：
+ *      `openid` / `unionid` 走 IDENTIFIER（判据在前面，不受本条影响），
+ *      `api_key` 走 SECRET——真正危险的那几类一条都没放宽。
+ *      PII 两类遮蔽的是**值**（姓名、街道、邮编），而编号从来不是这些值。
+ * @limitation 复数 `…_ids`（数组）同样豁免；但 **`addresses: [...]` 这类不带 `id` 后缀的
+ *             仍是整值遮蔽（切词得 `addresse` → `address`，正确——那是地址内容不是编号）。
+ */
+function isIdReference(squeezed: string): boolean {
+  return squeezed.endsWith('id') || squeezed.endsWith('ids');
+}
+
 export function classifyKey(key: string): SensitiveClass | undefined {
   const squeezed = key.toLowerCase().replace(/[^a-z0-9]/g, '');
   if (SENSITIVE_PHRASES.has(squeezed) || SENSITIVE_PHRASES.has(singular(squeezed))) return 'secret';
   const words = splitWords(key);
   if (hasWord(words, SECRET_WORDS)) return 'secret';
   if (hasWord(words, IDENTIFIER_WORDS)) return 'identifier';
+  const idRef = isIdReference(squeezed); // @see isIdReference 的 @why（AJ-355）
   if (PII_NAME_PHRASES.has(squeezed) || hasWord(words, PII_NAME_WORDS)) {
-    return 'pii-name';
+    return idRef ? undefined : 'pii-name';
   }
-  if (hasWord(words, PII_ADDRESS_WORDS)) return 'pii';
+  if (hasWord(words, PII_ADDRESS_WORDS)) return idRef ? undefined : 'pii';
   if (hasWord(words, URL_WORDS)) return 'url';
   return undefined;
 }

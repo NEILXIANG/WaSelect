@@ -26,7 +26,13 @@ afterAll(async () => {
   await closeDb(db);
 });
 
-async function buildServer(): Promise<{ url: string; close: () => Promise<void> }> {
+async function buildServer(): Promise<{
+  url: string;
+  close: () => Promise<void>;
+  sink: MemorySink;
+}> {
+  // ⚠️ sink 一并返回（AJ-355）：地址写操作的日志**字段**（改了哪一条）只进日志不进响应，
+  //    断言响应体永远证明不了它——与 admin-order-routes 的 `AppError.details` 同形。
   const sink = new MemorySink();
   const logger = createLogger({ env: 'test', destination: sink });
   const config = loadConfig({
@@ -50,7 +56,7 @@ async function buildServer(): Promise<{ url: string; close: () => Promise<void> 
       }),
   });
   const server = await listen(app);
-  return { url: `http://127.0.0.1:${server.port}`, close: server.close };
+  return { url: `http://127.0.0.1:${server.port}`, close: server.close, sink };
 }
 
 let token = '';
@@ -187,6 +193,65 @@ describe('PUT/DELETE /addresses/{id}', () => {
       const del = await call(srv.url, 'DELETE', `/api/v1/addresses/${id}`);
       expect(del.status).toBe(204);
       expect((await call(srv.url, 'GET', '/api/v1/addresses')).json).toEqual([]);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 写操作的日志必须答得出"**对哪个对象**"（AJ-355 / 约束七）
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // @why 断言**日志字段**而不是响应：这三个事件此前只写 `result: 'ok'`（PUT 连日志都没有），
+  //      而响应体里根本没有"改了哪一条"之外的信息——只看响应的话，把 `ctx` 删掉照样全绿。
+  // @why 三个事件各一条用例：合成一条的话，注入"去掉 PUT 那条日志"会被另外两条兜住
+  //      （本文件文件头的纪律：一条规则一个用例）。
+
+  it('🔴 POST 的 address_created 带 address_id 与 is_default（答得出建的是哪条、是不是默认）', async () => {
+    const srv = await buildServer();
+    try {
+      const created = await call(srv.url, 'POST', '/api/v1/addresses', {
+        ...VALID,
+        is_default: true,
+      });
+      const id = String(created.json['id']);
+      const rows = srv.sink.find('address_created');
+      expect(rows).toHaveLength(1);
+      const ctx = (rows[0]?.['ctx'] ?? {}) as Record<string, unknown>;
+      expect(String(ctx['address_id'])).toBe(id);
+      expect(ctx['is_default']).toBe(true);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 PUT 会打 address_updated 且带 address_id（此前更新成功完全不打日志）', async () => {
+    const srv = await buildServer();
+    try {
+      const created = await call(srv.url, 'POST', '/api/v1/addresses', VALID);
+      const id = String(created.json['id']);
+      await call(srv.url, 'PUT', `/api/v1/addresses/${id}`, { ...VALID, recipient: 'New Name' });
+      const rows = srv.sink.find('address_updated');
+      expect(rows).toHaveLength(1);
+      const ctx = (rows[0]?.['ctx'] ?? {}) as Record<string, unknown>;
+      expect(String(ctx['address_id'])).toBe(id);
+      // 没设默认 ⇒ is_default 是 false（"改门牌号"与"设成默认"在日志里必须能分开）
+      expect(ctx['is_default']).toBe(false);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 DELETE 的 address_deleted 带 address_id（答得出删的是哪条）', async () => {
+    const srv = await buildServer();
+    try {
+      const created = await call(srv.url, 'POST', '/api/v1/addresses', VALID);
+      const id = String(created.json['id']);
+      await call(srv.url, 'DELETE', `/api/v1/addresses/${id}`);
+      const rows = srv.sink.find('address_deleted');
+      expect(rows).toHaveLength(1);
+      const ctx = (rows[0]?.['ctx'] ?? {}) as Record<string, unknown>;
+      expect(String(ctx['address_id'])).toBe(id);
     } finally {
       await srv.close();
     }
