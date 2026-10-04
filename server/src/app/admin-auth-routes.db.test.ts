@@ -452,3 +452,93 @@ describe('POST /auth/admin/login：按来源分桶（AJ-243）', () => {
     expect((await loginFrom('198.51.100.7', EMAIL, PASSWORD)).status).toBe(200);
   });
 });
+
+/**
+ * SEC2-08 的**第二个** 42901 出口：**口令比对那 ~100ms 里被别的请求上了锁**。
+ *
+ * @why 这段（admin-auth-routes.ts 的 `clearedSource/clearedEmail === 'locked'` 分支）此前**零覆盖**——
+ *      它是 `npm run gate` 覆盖率底线唯一拦下的地方（functions 5/7、statements 48/54），
+ *      也就是说 SEC2-08 那条修复**加了代码没加用例**，上线与否全靠覆盖率底线偶然发现。
+ *      而它恰好是最容易悄悄坏的一种：契约写"锁定期 42901 + Retry-After"，
+ *      这个出口曾经**不设**头，于是同一个 42901 有两种响应形状，而所有既有用例都只走另一个出口。
+ *
+ * @why **不能**靠真并发去撞这个窗口来测：bcrypt 只有 ~93ms 的缝，撞得上与否是随机的。
+ *      偶发红的用例下一次会被人加 `.skip`，那比没有这条用例更糟（§2 第 14 条：
+ *      别把"随机红"先归因给机器慢）。这里用的是**确定性插入**——真库 + 一个
+ *      在"查凭证"那一步替并发者插一脚的 Db 替身。
+ *      ⚠️ 插入点**必须**在两次 claim **之后**：插在之前的话 ⓪ 的 `peekLoginAttemptLock`
+ *      会先把它拒掉，走的是另一个出口 —— 那条用例就变成了自我安慰（看起来在测"被并发上锁"，
+ *      实际测的是"进来时就已锁"，而后者早有其它用例钉着）。
+ */
+describe('SEC2-08：口令比对期间被别的请求上了锁（42901 的第二个出口）', () => {
+  const LOCK_SECONDS = ADMIN_LOGIN_LOCK_MINUTES * 60;
+  /** 邮箱桶故意锁得**更早**：两个桶都锁着时 retry-after 必须给更晚的那个（下面 ② 钉的就是它）。 */
+  const EMAIL_LOCK_SECONDS = 600;
+
+  beforeEach(async () => {
+    const sourceUntil = new Date(Date.now() + LOCK_SECONDS * 1000);
+    const emailUntil = new Date(Date.now() + EMAIL_LOCK_SECONDS * 1000);
+    let armed = true;
+    /**
+     * 只在"查凭证"这一次插脚：它在两次 claim 之后、两次 clear 之前，
+     * 正是真实竞态（"我比对口令的时候别人把锁打上了"）所在的位置。
+     *
+     * @limitation 这是**替身 Db**：只有模板调用形态（`db\`…\``）被转发，
+     *             真 `Db` 的 `.begin` 等成员没有。登录链路只用模板调用，所以够用；
+     *             哪天登录口改用事务，这里会以"某个方法不存在"炸出来——
+     *             炸出来是好事（比静默地不插脚好）。
+     */
+    const passthrough = (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown> =>
+      (db as unknown as (s: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>)(
+        strings,
+        ...values,
+      );
+    const proxy = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (!armed || !strings.join(' ').includes('lower(email) =')) {
+        return passthrough(strings, ...values);
+      }
+      armed = false;
+      // 并发者做的事：**两个桶都锁上**（值必须 ≠ 本次 claim 拿到的 ownLockUntil，否则会被自己清掉）。
+      // 锁两个而不是一个，是为了让"取更晚的那个"这条逻辑真的被执行到——
+      // 只锁一个桶时 `.reduce` 只有一次迭代，"两个都在、该报哪个"这条永远验不到。
+      return db`
+        update login_attempts
+           set locked_until = ${sourceUntil}, failed_count = ${ADMIN_LOGIN_MAX_FAILURES}
+         where key_hash = ${ADMIN_SOURCE_KEY}
+      `
+        .then(
+          () => db`
+        update login_attempts
+           set locked_until = ${emailUntil}, failed_count = ${ADMIN_LOGIN_GLOBAL_MAX_FAILURES}
+         where key_hash = ${ADMIN_KEY}
+      `,
+        )
+        .then(() => passthrough(strings, ...values));
+    }) as unknown as Db;
+    srv = await buildChainServer(proxy, { RATE_LIMIT_LOGIN_PER_15MIN: '1000' });
+  });
+
+  it('🔴 也要带 retry-after，且给的是"锁还剩多久"而不是兜底的 1', async () => {
+    const r = await login(EMAIL, PASSWORD);
+    expect(r.status).toBe(429);
+    expect(r.json['code']).toBe(42901);
+    expect(r.json['token']).toBeUndefined();
+
+    // ① 头必须在（修复前这个出口根本不设 → 同一个 42901 有两种形状）
+    const retryAfter = Number(r.headers.get('retry-after'));
+    expect(Number.isFinite(retryAfter)).toBe(true);
+    // ② 且不是兜底的 1：给的是"锁还有多久"，不是"一秒后再试"
+    expect(retryAfter).toBeGreaterThan(1);
+    // ③ 两个桶都锁着时给的是**更晚**的那个（来源桶 15 分钟 > 邮箱桶 10 分钟）——
+    //    给早的那个会让客户端在邮箱桶解锁后、来源桶还锁着时白重试一轮
+    expect(retryAfter).toBeGreaterThan(EMAIL_LOCK_SECONDS);
+    expect(retryAfter).toBeLessThanOrEqual(LOCK_SECONDS);
+
+    // ④ 走的确实是"比对期间被锁"这个出口，不是 ⓪ 的"进来时邮箱桶就已锁"
+    const warns = srv.sink.find('admin_login_locked');
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.['ctx']).toEqual({ reason: 'locked_while_verifying' });
+    // ⑤ 口令是对的，但绝不发 token：命中锁的那一次不能因为"他证明了他自己"就放行
+    expect(srv.sink.find('admin_login_ok')).toHaveLength(0);
+  });
+});
