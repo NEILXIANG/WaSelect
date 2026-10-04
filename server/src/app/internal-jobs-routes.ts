@@ -34,8 +34,8 @@ import type { EventBus } from '../ports/events.js';
 import type { Logger } from '../logger.js';
 import type { AppConfig } from '../config.js';
 import { AppError } from '../errors.js';
-import { systemClock } from '../adapters/clock.js';
 import { systemIdGen } from '../adapters/ids.js';
+import type { Clock } from '../ports/clock.js';
 import { createSchedulerDeps } from './scheduler-start.js';
 import type { InflightJobs } from './inflight-jobs.js';
 import { runSchedulerOnce } from './scheduler.js';
@@ -63,6 +63,16 @@ export function mountInternalJobsRoutes(
     logger: Logger;
     db: Db;
     events: EventBus;
+    /**
+     * 时钟（F10）。**必须注入**：`mount.ts` 承诺"测试传 clock ⇒ 全站时间受控"
+     * （`MountContext.clock`，生产不传时与 `systemClock` 逐字等价）。
+     * 这里曾经**直接 import `systemClock`**，于是注入时钟时全站只有这一条端点
+     * 仍在走真实时间：响应里的 `started_at`、以及它拉起的那一整串作业
+     * （自动签收 / 自动完成的 `afterDays`、对账的 48h 回看窗口）全都用真钟，
+     * 而同一个进程里其它路由用的是注入钟 —— **一半一半，且不报任何错**。
+     * 这是 SEC-14 余项里唯一有实际后果的一条（其余的 `Date.now()` 都不进业务判定）。
+     */
+    clock: Clock;
     /** 在途作业登记表（OPS3-05）：停机会等它跑完再关库。 */
     jobs: InflightJobs;
   },
@@ -94,8 +104,13 @@ export function mountInternalJobsRoutes(
         if (secret === undefined) throw new AppError(50000);
         if (!secretMatches(got, secret)) throw new AppError(40101);
 
+        // ⚠️ `runId` **刻意**用真 `systemIdGen` 而不是注入的 idGen：它是这一轮作业的**痕踪 id**，
+        //    唯一性比可预测性重要——测试注入的 idGen 返回的是**固定**串（如 `stubIdGen('B3AAAA')`），
+        //    拿它当 runId 会让两轮作业的 `deps.jobs.run('daily:<同一个 id>')` **撞键**。
+        //    而时钟必须注入（见 deps.clock 的 @why）：时钟决定作业**跑什么**（到期判定），
+        //    idGen 只决定**叫什么**。
         const runId = systemIdGen.uuid();
-        const startedAt = systemClock.now().toISOString();
+        const startedAt = deps.clock.now().toISOString();
         // ⚠️ 必 catch：未捕获的 rejection 会被进程级处理器当 fatal（与 scheduler-start.ts 同一条纪律）。
         //    完成与否**不看这个 Promise**——看 `job_runs('daily')` 心跳（D-45）：
         //    那是生产上唯一的可观测出口，也是调用方（cron）事后核实的依据。
@@ -106,7 +121,7 @@ export function mountInternalJobsRoutes(
         void deps.jobs.run(
           `daily:${runId}`,
           runSchedulerOnce(
-            createSchedulerDeps(deps.db, deps.events, systemClock, deps.logger, {
+            createSchedulerDeps(deps.db, deps.events, deps.clock, deps.logger, {
               // ⚠️ 名字与看门狗盯的那一行是**同一个常量**：两处字面量各自漂移时，
               //    daily-reconciliation 的 `scanStalledHeartbeats` 会去盯一个不存在的行
               name: DAILY_JOB_ROW_NAME,

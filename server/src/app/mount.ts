@@ -438,7 +438,9 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   });
 
   // ── 每日作业触发（I1-U7b / D-43）：Render Cron 的 HTTP 入口；异步执行走同一套调度器框架 ──
-  mountInternalJobsRoutes(app, { config, logger, db, events, jobs: inflightJobs });
+  // clock 与其它路由那一份是**同一个实例**（F10）：注入时钟时 daily 端点与它拉起的作业
+  // 必须跟着走，否则出现"路由用注入钟、作业用真钟"的分叉（internal-jobs-routes deps.clock 的 @why）。
+  mountInternalJobsRoutes(app, { config, logger, db, events, clock, jobs: inflightJobs });
 
   // ── D-50 关单连带（I1-U6a-2）：order.expired/cancelled → 作废在途支付行 +
   //    best-effort 作废机构会话。注册在这里（不在 main.ts）：registry 是本函数

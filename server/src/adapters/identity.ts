@@ -134,6 +134,10 @@ export function withIdentityCache(
   return {
     async load(sub: string): Promise<IdentityRecord | null> {
       const hit = cache.get(sub);
+      // ⚠️ 这里**刻意**用真实墙钟（`Date.now()`），不接注入的 Clock（F10）：
+      //    缓存要的是"**经过了**多少毫秒"，不是"现在业务上是几号"——它是度量而不是判定。
+      //    换成一个会被冻结的注入钟，缓存就永远不会过期（或永远立刻过期），
+      //    那样测出来的"60 秒生效"是假的。要控制它请改 `ttlMs` 参数（用例就是这么做的）。
       const now = Date.now();
       if (hit !== undefined && now - hit.at < ttlMs) {
         // 命中刷新新旧（Map 迭代序 = 插入序，尾部最新）：热点用户不该被逐出

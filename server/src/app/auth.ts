@@ -98,6 +98,12 @@ export async function signToken(principal: Principal, cfg: AuthConfig): Promise<
     throw new TypeError('sub 必须是非空字符串');
   }
   const ttl = cfg.ttlSec ?? DEFAULT_TTL_SEC[principal.role];
+  // ⚠️ 这里**刻意**用真实墙钟（`Date.now()`），不接注入的 Clock（F10）——
+  //    `iat` / `exp` 是给**验签方**看的：它必须回答"这张票在真实世界里到什么时候作废"。
+  //    换成注入时钟，测试里冻结出来的 token 会相对真实时间早已过期（或远未生效），
+  //    而它一旦被别处拿去真验签，结论与测试里的结论相反——那比"不好测"糟得多。
+  //    需要钉的是**有效期长度**（`exp - iat`），那是一个纯常量，不依赖钟：
+  //    auth.unit.test.ts 断言的就是 43200 / 604800 这两个差值。
   const now = Math.floor(Date.now() / 1000);
   return new SignJWT({ role: principal.role, ver: principal.ver ?? 1 })
     .setProtectedHeader({ alg: 'HS256' })

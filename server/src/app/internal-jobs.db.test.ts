@@ -22,6 +22,8 @@ import { mountAllRoutes } from './mount.js';
 import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { registerBusinessEventLog } from './business-events.js';
 import { createInflightJobs, type InflightJobs } from './inflight-jobs.js';
+import { fixedClock } from '../../../test/helpers/fixed-clock.js';
+import type { Clock } from '../ports/clock.js';
 import { seedCreatedOrder } from '../../../test/helpers/seed-order.js';
 import {
   RESULT_LATE_PAYMENT,
@@ -46,6 +48,8 @@ async function buildServer(opts: {
   withSecret: boolean;
   /** OPS3-05：停在途作业的表（生产由 main.ts 装配并交给停机流）。 */
   inflightJobs?: InflightJobs | undefined;
+  /** F10：注入时钟。不传 = 用 mount 的默认（`systemClock`），与生产同形。 */
+  clock?: Clock | undefined;
 }): Promise<{
   url: string;
   sink: MemorySink;
@@ -75,6 +79,7 @@ async function buildServer(opts: {
         events,
         storage: createMemoryStorage(),
         ...(opts.inflightJobs !== undefined ? { inflightJobs: opts.inflightJobs } : {}),
+        ...(opts.clock !== undefined ? { clock: opts.clock } : {}),
       });
     },
   });
@@ -563,6 +568,39 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       // 三类是三个**视角**，不是三个互斥集合，所以 processed（条数之和）≠ 异常类数。
       // 这条断言顺手把"重叠"钉住：将来有人把两类改成互斥，这里会红。
       expect(runs[0]?.last_processed).toBe(6);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+/**
+ * SEC-14：注入的时钟必须**贯穿到** daily 端点与它拉起的那一整串作业。
+ *
+ * @why `mount.ts` 承诺"测试传 `clock` ⇒ 全站时间受控"（`MountContext.clock`），
+ *      而这条端点曾经**直接 import `systemClock`**：于是注入时钟时，响应里的 `started_at`
+ *      与整串作业（自动签收 / 自动完成的 `afterDays`、对账的 48h 回看窗口）用真钟，
+ *      同一进程里其它路由用注入钟 —— **一半一半，且不报任何错**。
+ *      这类分叉最危险的地方在于：它只在"有人真的注入了时钟"之后才出现，
+ *      而那正是你想把时间钉住去测到期边界的时刻——你以为钉住了，其实没钉住。
+ *
+ * @limitation 只钉 `started_at` 这一个**可见**出口：`started_at` 是响应体里唯一的时间，
+ *      也是"时钟有没有穿透到这条路径"唯一的观测面（作业内部的到期判定要靠种数据才能观测，
+ *      那是各作业自己的用例的事）。
+ */
+describe('SEC-14：daily 端点走注入时钟（不是 systemClock）', () => {
+  it('🔴 注入时钟后响应的 started_at 就是那个时刻，不是真实时间', async () => {
+    const FIXED = '2026-01-02T12:00:00.000Z';
+    const srv = await buildServer({ withSecret: true, clock: fixedClock(FIXED) });
+    try {
+      const res = await trigger(srv.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      const body = (await res.json()) as { run_id: string; started_at: string };
+      // 真钟的话这里是"现在"，绝不会等于 2026-01-02（⚠️ 别在注释里写"差了好几年"这类
+      // 会随时间失真的具体量：只说"不等于"，它永远成立）
+      expect(body.started_at).toBe(FIXED);
+      // run_id 仍来自真 uuid：注入的 idGen 返回固定串，拿它当 runId 会让两轮作业撞键
+      expect(body.run_id).not.toBe('');
     } finally {
       await srv.close();
     }
