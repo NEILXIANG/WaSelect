@@ -35,6 +35,7 @@
  */
 import { SHIPPING_RATE_BOUNDS } from '@waselect/shared';
 import { AppError } from '../errors.js';
+import { optionalBool } from './bool-input.js';
 
 /** 列宽（与 001 的 VARCHAR(32) 一致）：超长属"形状错"（40001），DB 兜底是最后一道。 */
 const MAX_CARRIER_LEN = 32;
@@ -98,7 +99,13 @@ export function parseShippingRates(body: unknown): ShippingRateInput[] {
     if (seen.has(key)) throw new AppError(40001, { reason: 'tier_duplicated', index: i });
     seen.add(key);
 
-    const active = r['active'] !== false;
+    // ⚠️ AJ-353：旧写法 `r['active'] !== false` 把 `"false"` / `0` / `"no"` 一律当成**启用**。
+    //    运营想停用一个档位而传了字符串 "false"（CSV 导入最常见的列型事故），
+    //    结果是这个档**照常参与取档** ⇒ 运费可能算成另一个数，且没有任何一方报错。
+    //    与 product-input 的 `strField`（AJ-352）是同一条：填了但类型不对，必须响。
+    const active = optionalBool(r['active'], 'active', true, (reason) => {
+      throw new AppError(40001, { reason, index: i });
+    });
     if (active) activeCarriers.add(carrier);
     out.push({ carrier, maxWeightG: maxWeightG as number, priceJpy: priceJpy as number, active });
   });

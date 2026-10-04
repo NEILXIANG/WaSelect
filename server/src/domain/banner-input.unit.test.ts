@@ -118,6 +118,23 @@ describe('parseBannerInput', () => {
     expect(parseBannerInput({ ...OK, active: false }).active).toBe(false);
   });
 
+  /**
+   * 🔴 AJ-353："我要停用"不能被静默执行成"启用"。
+   * @why 旧写法 `b['active'] !== false` 对 `"false"` 求值为 true ⇒ 运营停用一张 banner
+   *      后它**照常出现在买家首页**：没有 4xx、没有日志，只有人眼看见才发现。
+   *      `"false"` 不是臆造的输入——CSV / Excel 导入时列型由工具决定，字符串是默认。
+   */
+  it('🔴 active 传字符串 "false" → 40001 active_invalid（不是被当成启用）', () => {
+    expect(codeOf(() => parseBannerInput({ ...OK, active: 'false' }))).toBe(40001);
+    expect(reasonOf(() => parseBannerInput({ ...OK, active: 'false' }))).toBe('active_invalid');
+    // 0 / 1 也不是布尔：JS 里 `0 !== false` 为真 ⇒ 旧写法同样把它们当启用
+    expect(codeOf(() => parseBannerInput({ ...OK, active: 0 }))).toBe(40001);
+  });
+
+  it('active 传 null → 当"没传"，取缺省 true（前端清空表单项 = null，是合法动作）', () => {
+    expect(parseBannerInput({ ...OK, active: null }).active).toBe(true);
+  });
+
   it('image_key 两侧空白被 trim；合法输入原样带出', () => {
     const v = parseBannerInput({
       image_key: '  banners/2026/a.png  ',

@@ -133,4 +133,29 @@ describe('parseShippingRates', () => {
       { carrier: 'placeholder', maxWeightG: 2000, priceJpy: 4950, active: false },
     ]);
   });
+
+  /**
+   * 🔴 AJ-353："我要停用"不能被静默执行成"启用"。
+   * @why 后果比 Banner 那条更重：运费档一旦启用就**参与取档**
+   *      （`catalog.findShippingPriceJpy` 的 `where active = true`）——
+   *      该停用的档位照常命中 ⇒ 同一个包裹取到另一个价，**运费算错且没有任何一方报错**。
+   *      旧写法 `r['active'] !== false` 对 `"false"` 求值为 true，正是这个形态。
+   * @why 顺带断言 reason 而不是只看码：整表校验里 40001 有七八个来源，
+   *      只断言码的话"注入去掉 active 守卫"会被别的守卫兜住（覆盖假象）。
+   */
+  it('🔴 active 传字符串 "false" → 40001 active_invalid（不是被当成启用）', () => {
+    const rows = [{ ...OK[0], active: 'false' }];
+    expect(codeOf(() => parseShippingRates(rows))).toBe(40001);
+    expect(reasonOf(() => parseShippingRates(rows))).toBe('active_invalid');
+    // 0 与 1 也不是布尔：JS 里 `0 !== false` 为真 ⇒ 旧写法同样把它们当启用
+    expect(codeOf(() => parseShippingRates([{ ...OK[0], active: 0 }]))).toBe(40001);
+    // 全表都传字符串时不能退化成"全停用"（那会给出 no_active_tier，方向反掉）
+    const all = OK.map((r) => ({ ...r, active: 'false' }));
+    expect(reasonOf(() => parseShippingRates(all))).toBe('active_invalid');
+  });
+
+  it('active 传 null → 当"没传"，取缺省 true（与 product-input 的 isBlank 同口径，AJ-352）', () => {
+    const out = parseShippingRates([{ ...OK[0], active: null }]);
+    expect(out[0]?.active).toBe(true);
+  });
 });

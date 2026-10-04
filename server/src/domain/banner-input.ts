@@ -25,6 +25,7 @@
  */
 import { AppError } from '../errors.js';
 import { tryParseRfc3339Ms } from './time-input.js';
+import { optionalBool } from './bool-input.js';
 
 /** 契约 `BannerInput.link_type` 枚举（单测与契约双向比对）。 */
 export const BANNER_LINK_TYPES = ['none', 'product', 'category'] as const;
@@ -102,7 +103,12 @@ export function parseBannerInput(body: unknown): BannerInputValue {
     linkType,
     linkId: rawLinkId === '' ? null : rawLinkId,
     sort: sort as number,
-    active: b['active'] !== false,
+    // ⚠️ AJ-353：旧写法 `b['active'] !== false` 把 `"false"` / `0` 一律当成**启用**。
+    //    运营想停用一个 banner 而传了字符串 "false"（CSV 导入 / 脚本改 banner 的常见形态），
+    //    结果是它**照常出现在买家首页**——没有 4xx、没有日志，只有人眼看见才发现。
+    active: optionalBool(b['active'], 'active', true, (reason) => {
+      throw new AppError(40001, { reason });
+    }),
     startsAtMs,
     endsAtMs,
   };
