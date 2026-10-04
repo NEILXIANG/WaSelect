@@ -1,7 +1,9 @@
 /**
  * 职责：鉴权骨架的 L0/L1 单测（F6b）。安全相关，逐条测"失败路径"而不只是成功路径。
  * @why 鉴权代码最危险的 bug 是"该拒绝的时候放行了"，只测成功路径等于没测。
- * @see server/src/auth.ts @limitation（无 token 黑名单 / bcrypt 72 字节截断）
+ * @see server/src/app/auth.ts @limitation（无 token 黑名单 / bcrypt 72 字节截断）
+ *      ⚠️ 这里**曾经**写 `server/src/auth.ts`——不存在的路径（本文件就在 `app/` 下，
+ *      同目录直接写 `./auth.ts` 或全限定写 `server/src/app/auth.ts`）。
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Express } from 'express';

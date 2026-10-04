@@ -15,7 +15,10 @@
  * @limitation 缓存是**每进程**的。多实例部署时，一个实例上的封禁在其他实例上最多延迟 60 秒生效。
  *             Render 单实例阶段无影响；将来扩容要把缓存换成共享存储（Redis）或把 TTL 降到几秒。
  *
- * @see server/src/auth.ts（requireRole 用它）、migrations/003（users.token_ver）
+ * @see server/src/app/auth.ts（requireRole 用它）、migrations/003（users.token_ver）
+ *      ⚠️ 这里**曾经**写 `server/src/auth.ts`——那是一个不存在的路径（鉴权骨架在 `app/` 下）。
+ *      断链的代价不是"少看一行"，是"照它去找的人找不到，于是放弃核对"：
+ *      本文件与 `requireRole` 之间的约定（回源查什么、缓存多久）恰恰是最该被核对的那类约定。
  */
 import type { Db } from './db.js';
 
@@ -67,8 +70,11 @@ export const IDENTITY_CACHE_MAX_ENTRIES = 10_000;
 /**
  * Postgres 实现。
  *
- * @why 只查两列、走主键：这是**每个请求**都可能走的路径（有缓存时是每 60 秒），
- *      任何多余的列或联表都会在最热的路径上累加成本。
+ * @why 只查**三列**（`token_ver` / `blocked_at` / `is_admin`）、走主键：这是**每个请求**
+ *      都可能走的路径（有缓存时是每 60 秒），任何多余的列或联表都会在最热的路径上累加成本。
+ *      ⚠️ 这里**曾经**写"只查两列"——`is_admin` 是二审 N9（撤权）之后加的第三列，
+ *      数字没跟着改。"两列"这种**可数的**说法最容易失真：改代码的人补了一列，
+ *      注释里的数字不会亮红灯，只有逐字读的人才会发现。写数量不如写列名（列名改了会编译红）。
  * @limitation `users` 表里管理员与小程序用户是同一张表（MVP 单表 + is_admin），
  *              所以这里不区分角色；将来若拆表，本函数是唯一的改动点。
  */
