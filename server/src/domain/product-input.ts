@@ -99,9 +99,48 @@ function intAtLeast(v: unknown, min: number): number | undefined {
   return typeof v === 'number' && Number.isInteger(v) && v >= min ? v : undefined;
 }
 
-/** 可选字符串：undefined 与空串都当"没填"（空串不该落库替代 null）。 */
-function strOpt(v: unknown): string | undefined {
-  return typeof v === 'string' && v !== '' ? v : undefined;
+/**
+ * 可选字符串：**填了却不是字符串 → 报 `<field>_invalid`**（CAT2-06 / AJ-352）。
+ *
+ * @why 旧实现是 `typeof v === 'string' && v !== '' ? v : undefined`——类型不对时返回
+ *      `undefined`，于是"**传错类型**"与"**没传**"在下游**不可区分**。而本函数的产出
+ *      直接进 `PUT /admin/products/{id}` 的整行覆盖：路由把 `undefined` 写成 `null` ⇒
+ *      非前端调用方（批量导入脚本、将来的接口使用者）传 `hs_code: 330499` 时——
+ *        · 不带 food / cosmetic 标签 ⇒ **200**，库里原有的 HS 码被**静默清空**，没有任何报错；
+ *        · 带 food 标签 ⇒ 报 `hs_code_required`，而真实原因是"类型填错了"——
+ *          提示指向"去补一个你其实已经补了的值"，运营会在那里反复折腾。
+ *      两类都属于"错了但不响"，与库存那条（AJ-175）是同一类静默丢失，只是方向相反。
+ * @why 空串与 `null` 仍按"没填"处理：空串不该落库替代 null（二者都是"这一项没有"）。
+ *      ⚠️ 因此"清空这个字段"的正确写法是显式 `null`，不是 `''`——`''` 与省略同义。
+ * @why 报错而不是"强转字符串"：`String(330499)` 会静默写出 `'330499'`，看起来"修好了"，
+ *      但它把调用方的错当成事实接受下来——他传的是数字，说明他那边的字段口径就不对，
+ *      今天能转的那几个值纯属运气（转成 `'[object Object]'` 也只是时间问题）。
+ */
+/**
+ * "没填"的判定——`undefined` / `null` / 空串三种同义。
+ *
+ * @why **一处定义、两处使用**（`strField` 判"要不要报错"、必填项判"要不要报 required"）：
+ *      同一个"什么算没填"写两遍，改一边漏一边的结果就是同一条输入出现两条矛盾的提示
+ *      ——"你没填"（required）与"你填的类型不对"（invalid）。
+ *      ⚠️ 判必填**必须**用它而不是"归一化后的值是 undefined"：后者在类型不对时
+ *      同样是 undefined，于是必填判定会把"类型错"误读成"没填"。
+ */
+function isBlank(v: unknown): boolean {
+  return v === undefined || v === null || v === '';
+}
+
+function strField(
+  b: Record<string, unknown>,
+  field: string,
+  fail: (field: string, reason: string) => void,
+): string | undefined {
+  const v = b[field];
+  if (isBlank(v)) return undefined;
+  if (typeof v !== 'string') {
+    fail(field, `${field}_invalid`);
+    return undefined;
+  }
+  return v;
 }
 
 function readImages(v: unknown): readonly ProductImageSet[] | 'invalid' {
@@ -173,9 +212,16 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   // 而后果落在买家身上——她没买几件却收到 40912「包裹超重」，且提示指向不了真正的原因。
   else if (weight > PRODUCT_MAX_WEIGHT_G) fail('weight_g', 'weight_too_large');
 
-  const desc = strOpt(b.customs_desc_en);
-  if (desc === undefined) fail('customs_desc_en', 'customs_desc_required');
-  else if (FORBIDDEN_DESC.test(desc)) fail('customs_desc_en', 'customs_desc_forbidden');
+  const desc = strField(b, 'customs_desc_en', fail);
+  // ⚠️ 判"没填"用 `isBlank(b['customs_desc_en'])` 而不是 `desc === undefined`：
+  //    传了非字符串时 `desc` 也是 undefined，但那时已经报过 `customs_desc_en_invalid`，
+  //    再补一条 `customs_desc_required` 就是两个互相矛盾的提示（"你没填" vs "类型不对"）。
+  if (isBlank(b['customs_desc_en'])) fail('customs_desc_en', 'customs_desc_required');
+  // `desc !== undefined` 这一半是给"填了但类型不对"兜的：那时 desc 是 undefined，
+  // 拿去 test() 会按字符串 "undefined" 比——不炸，但会多出一条毫无道理的 forbidden。
+  else if (desc !== undefined && FORBIDDEN_DESC.test(desc)) {
+    fail('customs_desc_en', 'customs_desc_forbidden');
+  }
 
   const origin = b.origin_country;
   if (origin === undefined) fail('origin_country', 'origin_required');
@@ -202,8 +248,12 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   }
 
   // ── HS 码：食品 / 化妆品必填 ────────────────────────────────────────────
-  const hs = strOpt(b.hs_code);
-  if (hs === undefined && tags.some((t) => HS_REQUIRED_TAGS.includes(t))) {
+  const hs = strField(b, 'hs_code', fail);
+  // ⚠️ 同上：判"没填"用 `isBlank(b['hs_code'])`，不用 `hs === undefined`——
+  //    传了数字 HS 码（Excel 导入最常见的形态）时后者为真，于是食品/化妆品会同时收到
+  //    `hs_code_required`（"你没填"）与 `hs_code_invalid`（"你填的类型不对"），
+  //    而运营按前者去补一个她其实已经补了的值，永远补不对。
+  if (isBlank(b['hs_code']) && tags.some((t) => HS_REQUIRED_TAGS.includes(t))) {
     fail('hs_code', 'hs_code_required');
   }
 
@@ -211,24 +261,28 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   // ⚠️ 四个可选文本字段此前**只判"填没填"不判长度**（AJ-298）：超长会撞 PG 的 22001，
   //    被 `http.ts` 的 22 类兜底折成泛化的 40001「参数缺失或格式错误」——
   //    运营看到的是"参数有问题"，而不是"这一项太长"，提示指向错误的字段。
-  const customsDesc = strOpt(b.customs_desc_en);
-  if (customsDesc !== undefined && customsDesc.length > PRODUCT_MAX_CHARS.customs_desc_en) {
+  if (desc !== undefined && desc.length > PRODUCT_MAX_CHARS.customs_desc_en) {
     fail('customs_desc_en', 'customs_desc_too_long');
   }
-  const titleJa = strOpt(b.title_ja);
+  const titleJa = strField(b, 'title_ja', fail);
   if (titleJa !== undefined && titleJa.length > PRODUCT_MAX_CHARS.title_ja) {
     fail('title_ja', 'title_ja_too_long');
   }
-  const source = strOpt(b.purchase_source);
+  const source = strField(b, 'purchase_source', fail);
   if (source !== undefined && source.length > PRODUCT_MAX_CHARS.purchase_source) {
     fail('purchase_source', 'purchase_source_too_long');
   }
+  const description = strField(b, 'description', fail);
 
   const images = readImages(b.images);
   if (images === 'invalid') fail('images', 'image_invalid');
-  const jan = strOpt(b.jan_code);
+  const jan = strField(b, 'jan_code', fail);
+  // ⚠️ reason 从 `jan_code_invalid` 改成 `jan_code_too_long`（AJ-352）：长度超限与类型不对
+  //    是两种修法（改短 vs 改成字符串），而 AJ-352 起"类型不对"占用了 `_invalid` 这个后缀
+  //    （与 `price_invalid` / `stock_invalid` 同口径）。沿用旧名会让两者**同一个 reason**，
+  //    运营与日志都分不清。其余五个字段的长度 reason 本来就是 `_too_long`，这次是补齐。
   if (jan !== undefined && jan.length > PRODUCT_MAX_CHARS.jan_code) {
-    fail('jan_code', 'jan_code_invalid');
+    fail('jan_code', 'jan_code_too_long');
   }
   if (hs !== undefined && hs.length > PRODUCT_MAX_CHARS.hs_code) {
     fail('hs_code', 'hs_code_too_long');
@@ -241,9 +295,9 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   //      把两者放在同一条必填线上，运营会为了上架而编一句，那正是设计侧点名的退化。
   // @why 长度**逐个判**（与 AJ-298 那四个可选文本同口径）：超长会撞 PG 的 22001，
   //      被兜底折成泛化的 40001「参数缺失或格式错误」——提示指向错误的字段。
-  const why = strOpt(b.why);
+  const why = strField(b, 'why', fail);
   if (why !== undefined && why.length > PRODUCT_MAX_CHARS.why) fail('why', 'why_too_long');
-  const maker = strOpt(b.maker);
+  const maker = strField(b, 'maker', fail);
   if (maker !== undefined && maker.length > PRODUCT_MAX_CHARS.maker) {
     fail('maker', 'maker_too_long');
   }
@@ -270,7 +324,7 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
     value: {
       title,
       category: String(category),
-      ...(strOpt(b.description) !== undefined ? { description: strOpt(b.description) } : {}),
+      ...(description !== undefined ? { description } : {}),
       images: images === 'invalid' ? [] : images,
       price_jpy: price,
       ...(cost !== undefined ? { cost_jpy: cost } : {}),
@@ -280,11 +334,9 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
       ...(hs !== undefined ? { hs_code: hs } : {}),
       customs_desc_en: desc ?? '',
       origin_country: 'JP',
-      ...(strOpt(b.title_ja) !== undefined ? { title_ja: strOpt(b.title_ja) } : {}),
+      ...(titleJa !== undefined ? { title_ja: titleJa } : {}),
       ...(jan !== undefined ? { jan_code: jan } : {}),
-      ...(strOpt(b.purchase_source) !== undefined
-        ? { purchase_source: strOpt(b.purchase_source) }
-        : {}),
+      ...(source !== undefined ? { purchase_source: source } : {}),
       ...(why !== undefined ? { why } : {}),
       ...(maker !== undefined ? { maker } : {}),
       // ⚠️ 空数组**也要带上**（`tags: []`）：PUT 的语义是"覆盖"，

@@ -248,7 +248,7 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
   });
 
   it('jan_code 超 13 字符 → 拒绝（DB VARCHAR(13)；超长会在入库时才炸）', () => {
-    expect(reasons({ ...base(), jan_code: '1'.repeat(14) })).toContain('jan_code_invalid');
+    expect(reasons({ ...base(), jan_code: '1'.repeat(14) })).toContain('jan_code_too_long');
     expect(ok({ ...base(), jan_code: '1'.repeat(13) }).jan_code).toBe('1'.repeat(13));
   });
 
@@ -336,6 +336,89 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
 
   it('why / maker 传空串 → 当"没填"（空串不该落库替代 null）', () => {
     const v = ok({ ...base(), why: '', maker: '' });
+    expect(v.why).toBeUndefined();
+    expect(v.maker).toBeUndefined();
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 可选文本字段的**类型**（CAT2-06 / AJ-352）
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // @why 旧的 `strOpt` 对"填了但不是字符串"返回 undefined ⇒ 与"没填"不可区分，
+  //      而 PUT 是**整行覆盖**（路由把 undefined 写成 null）⇒ 导入脚本传
+  //      `hs_code: 330499` 时库里原有的 HS 码被**静默清空**：200、没有任何报错，
+  //      运营看不到，只有报关那天才发现。这是"错了但不响"里最难查的一类。
+  // @why 每个字段单独一条（本文件文件头的纪律）：批量断言在缺陷注入时会产生
+  //      "改一处、另一处兜住"的覆盖假象——这里要的是"这一条真的被自己那条守着"。
+
+  /**
+   * 🔴 最关键的一条：提示**不能指错方向**。
+   * @why 修复前带 food 标签传数字 HS 码，报的是 `hs_code_required`——
+   *      运营照它去"补一个她其实已经补了的值"，永远补不对；
+   *      而不带标签时更糟：直接 200 通过、原值被清空。
+   */
+  it('🔴 hs_code 传数字 → hs_code_invalid，且**不**报 hs_code_required（提示不能指错方向）', () => {
+    const withFood = reasons({ ...base(), compliance_tags: ['food'], hs_code: 330499 });
+    expect(withFood).toContain('hs_code_invalid');
+    expect(withFood).not.toContain('hs_code_required');
+    // 不带 food / cosmetic 标签时同样要拒：否则 200 通过、原值被静默清空
+    expect(reasons({ ...base(), hs_code: 330499 })).toContain('hs_code_invalid');
+  });
+
+  it('🔴 customs_desc_en 传数字 → customs_desc_en_invalid，且**不**报 customs_desc_required', () => {
+    const r = reasons({ ...base(), customs_desc_en: 12345 });
+    expect(r).toContain('customs_desc_en_invalid');
+    expect(r).not.toContain('customs_desc_required');
+  });
+
+  it('title_ja 传数字 → title_ja_invalid（不是被当成"没填"）', () => {
+    expect(reasons({ ...base(), title_ja: 4901872 })).toContain('title_ja_invalid');
+  });
+
+  it('purchase_source 传对象 → purchase_source_invalid', () => {
+    expect(reasons({ ...base(), purchase_source: { shop: 'x' } })).toContain(
+      'purchase_source_invalid',
+    );
+  });
+
+  it('description 传布尔 → description_invalid', () => {
+    expect(reasons({ ...base(), description: true })).toContain('description_invalid');
+  });
+
+  it('jan_code 传数字 → jan_code_invalid（与超长的 jan_code_too_long 分开，两种修法）', () => {
+    expect(reasons({ ...base(), jan_code: 4901872071234 })).toContain('jan_code_invalid');
+    expect(reasons({ ...base(), jan_code: 4901872071234 })).not.toContain('jan_code_too_long');
+  });
+
+  it('why 传数字 → why_invalid（不是被当成"编辑还没撰写"）', () => {
+    expect(reasons({ ...base(), why: 42 })).toContain('why_invalid');
+  });
+
+  it('maker 传数组 → maker_invalid', () => {
+    expect(reasons({ ...base(), maker: ['岩手'] })).toContain('maker_invalid');
+  });
+
+  /**
+   * "没填"的语义**不能**被这次改动误伤。
+   * @why 修的是"填了但类型不对"，不是"没填"——把后者也拒了，等于逼运营给每个
+   *      可选字段都填点什么，那正是 `why` 刻意做成可选要防的退化（编一句假文案）。
+   */
+  it('🔴 省略 / null / 空串三种"没填"仍全部通过（不是被当成类型错）', () => {
+    const v = ok({
+      ...base(),
+      title_ja: null,
+      purchase_source: '',
+      description: undefined,
+      jan_code: '',
+      hs_code: null,
+      why: undefined,
+      maker: null,
+    });
+    expect(v.title_ja).toBeUndefined();
+    expect(v.purchase_source).toBeUndefined();
+    expect(v.description).toBeUndefined();
+    expect(v.jan_code).toBeUndefined();
+    expect(v.hs_code).toBeUndefined();
     expect(v.why).toBeUndefined();
     expect(v.maker).toBeUndefined();
   });
