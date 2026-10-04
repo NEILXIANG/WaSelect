@@ -71,6 +71,26 @@ export interface ShippingRateRow {
   active: boolean;
 }
 
+/**
+ * `replaceShippingRates` 的结果：**替换前后各留一份**。
+ *
+ * @why 🔴 `before` 必须是**仓储在锁内读出来**的那一版，不能由调用方（路由）在锁外读
+ *      （AJ-354 / CAT2-05）：整表替换带表级排他锁（B22），写者排队。两次并发保存时，
+ *      锁外读的 before **两个请求都是最初那张表**——后到者真正覆盖掉的，是先到者刚
+ *      **提交**的那张表，而那张表既不进后到者的审计 `before`，也不进它那条
+ *      `admin_shipping_rates_replaced` 日志。于是"之前是多少"这个审计流 B 存在的
+ *      唯一理由（文件头 @why：整表替换不可逆，一定要答得上来）在并发下失效——
+ *      答案指向一张早就不存在的表，而先到者写入的内容只能从它自己的 after 里反推。
+ * @why 做成**返回两个字段**而不是让路由再读一次：再读一次既是多余的一趟查询，
+ *      又把"before 该在哪读"这个判断重新交回调用方手里——那正是这次要消灭的分叉。
+ */
+export interface ShippingRatesReplaced {
+  /** 本次 delete 之前的表（**锁内**读出的那一版）。 */
+  before: ShippingRateRow[];
+  /** 本次 insert 之后的表。 */
+  after: ShippingRateRow[];
+}
+
 export interface OpsConfigRepo {
   /** 全部汇率行（含历史与未来）；排序见 @limitation 一。 */
   listFxRates(): Promise<FxRateRow[]>;
@@ -80,8 +100,8 @@ export interface OpsConfigRepo {
   findLatestFxRate(quote: string, now: Date): Promise<FxRateRow | null>;
   /** 全部档位（含停用）；carrier 升序、同承运商内上限升序。 */
   listShippingRates(): Promise<ShippingRateRow[]>;
-  /** 🔴 事务内整表替换（@why）；返回替换后的整表。 */
-  replaceShippingRates(rows: readonly ShippingRateInput[]): Promise<ShippingRateRow[]>;
+  /** 🔴 事务内整表替换（@why）；返回**替换前后**两张表（@see ShippingRatesReplaced）。 */
+  replaceShippingRates(rows: readonly ShippingRateInput[]): Promise<ShippingRatesReplaced>;
 }
 
 /** 取全部汇率行（事务内外共用：replaceShippingRates 要在同一事务里读回结果）。 */
@@ -143,7 +163,7 @@ export function createOpsConfigRepo(db: Db): OpsConfigRepo {
 
     listShippingRates: () => selectShippingRates(db),
 
-    async replaceShippingRates(rows: readonly ShippingRateInput[]): Promise<ShippingRateRow[]> {
+    async replaceShippingRates(rows: readonly ShippingRateInput[]): Promise<ShippingRatesReplaced> {
       return withTransaction(db, async (tx) => {
         // 🔴 B22 / AJ-204：**整表替换必须串行**（表级排他锁），否则结果是两次输入的**并集**。
         //    READ COMMITTED 下：先到事务 A 的 `delete` + `insert` 都还没提交，
@@ -164,6 +184,12 @@ export function createOpsConfigRepo(db: Db): OpsConfigRepo {
         // @limitation 锁在**事务提交时**释放：先到者提交后，后到者才继续——
         //              所以"后保存的赢"，这与单次替换的语义一致（不是最后写入者合并）。
         await tx`lock table shipping_rates in exclusive mode`;
+        // 🔴 AJ-354：改前值**在锁内**读——锁外读会在并发保存时给出一张早已被覆盖的表
+        //    （完整理由见 {@link ShippingRatesReplaced} 的 @why）。
+        //    @why 位置是"锁之后、delete 之前"：锁前读不到先到者刚提交的行（B 会一路堵到
+        //    `lock table` 才排队，但它若先读，那次读发生在 A 提交之前 ⇒ 还是旧表）；
+        //    delete 之后读则已经是空表。
+        const before = await selectShippingRates(tx);
         await tx`delete from shipping_rates`;
         // ⚠️ 逐条插入而不是批量 `values ${tx([[…]])}`：postgres.js 的多行 helper 类型
         //    （`EscapableArray`）只接受 string/number/Date，**不含 boolean**，
@@ -176,7 +202,7 @@ export function createOpsConfigRepo(db: Db): OpsConfigRepo {
             values (${r.carrier}, ${r.maxWeightG}, ${r.priceJpy}, ${r.active})
           `;
         }
-        return selectShippingRates(tx);
+        return { before, after: await selectShippingRates(tx) };
       });
     },
   };

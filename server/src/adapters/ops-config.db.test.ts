@@ -239,9 +239,85 @@ describe('replaceShippingRates', () => {
     const out = await bDone;
 
     // ① 返回值（B 自己看到的）
-    expect(out).toEqual([{ carrier: 'B', max_weight_g: 700, price_jpy: 2000, active: true }]);
+    expect(out.after).toEqual([{ carrier: 'B', max_weight_g: 700, price_jpy: 2000, active: true }]);
     // ② 库里：**两次都提交之后**再读一遍——无锁时这里是 A ∪ B（3 行）
-    expect(await repo.listShippingRates()).toEqual(out);
+    expect(await repo.listShippingRates()).toEqual(out.after);
+  });
+
+  /**
+   * 🔴 AJ-354：并发替换时，后到者的 `before` 必须是**先到者刚提交的那张表**。
+   *
+   * @why 审计流 B 存在的唯一理由是"整表替换不可逆，一定要答得上之前是多少"
+   *      （`admin-ops-routes.ts` 文件头）。改前值若在**锁外**读（旧实现：路由先
+   *      `listShippingRates()` 再调替换），两次并发保存时两个请求读到的都是
+   *      **最初**那张表 ⇒ 后到者的审计 before 指向一张早已被覆盖的表，
+   *      而"先到者写进去的是什么"只能从它自己的 after 里反推——
+   *      审计还能拼出事实，但**日志里那条 before 是错的**，且没有任何症状。
+   * @how 复用 B22 的"A 持住不提交"骨架：**先到者 A 的输入**是确定已知的，
+   *      所以断言可以写成"before 恰好等于 A 的输入"，而不是"before 不是最初那张表"
+   *      ——后者在 B 恰好也读到旧表时也可能成立，判据不够特异。
+   */
+  it('🔴 并发整表替换：后到者的 before = 先到者刚提交的表，不是最初那张（AJ-354）', async () => {
+    const repo = createOpsConfigRepo(db);
+    const INITIAL = [{ carrier: 'initial', maxWeightG: 300, priceJpy: 900, active: true }];
+    await repo.replaceShippingRates(INITIAL);
+
+    let release: () => void = () => {};
+    const released = new Promise<void>((r) => {
+      release = r;
+    });
+    let opened: () => void = () => {};
+    const openedP = new Promise<void>((r) => {
+      opened = r;
+    });
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+    // 先到者 A：手写 SQL 复刻 replaceShippingRates 的前三步（锁 → 删 → 插），**持住不提交**。
+    // @why 不能直接用 `repo.replaceShippingRates(A_ROWS)`：它自己会提交，那就造不出
+    //      "A 已写入但未提交"这个确定状态（B22 那条用例同因）。
+    const holdA = db.begin(async (tx) => {
+      await tx`lock table shipping_rates in exclusive mode`;
+      await tx`delete from shipping_rates`;
+      await tx`
+        insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
+        values ('A', 500, 1000, true)
+      `;
+      opened();
+      await released;
+    });
+    await openedP;
+
+    const B_ROWS = [{ carrier: 'B', maxWeightG: 700, priceJpy: 2000, active: true }];
+    let bSettled = false;
+    const bDone = repo.replaceShippingRates(B_ROWS).then(
+      (r) => {
+        bSettled = true;
+        return r;
+      },
+      (e: unknown) => {
+        bSettled = true;
+        throw e;
+      },
+    );
+    for (let i = 0; i < 50 && !bSettled; i += 1) await sleep(10);
+    expect(bSettled).toBe(false); // B 必然堵在表锁上（否则下面两条断言没有意义）
+
+    release();
+    await holdA;
+    const out = await bDone;
+
+    // ① before = A 刚提交的那张表（不是 initial）
+    expect(out.before).toEqual([
+      { carrier: 'A', max_weight_g: 500, price_jpy: 1000, active: true },
+    ]);
+    expect(out.before.map((r) => r.carrier)).not.toContain('initial');
+    // ② after = B 自己那张
+    expect(out.after).toEqual([{ carrier: 'B', max_weight_g: 700, price_jpy: 2000, active: true }]);
+    // ③ 单次（无并发）替换时 before 就是调用前那张表——语义不能被这次改动带偏
+    const solo = await repo.replaceShippingRates([
+      { carrier: 'C', maxWeightG: 900, priceJpy: 3000, active: true },
+    ]);
+    expect(solo.before).toEqual(out.after);
   });
 
   it('请求体相同的两次并发替换：都成功，不撞 23505（B22 的第三种表现）', async () => {
@@ -254,7 +330,7 @@ describe('replaceShippingRates', () => {
       repo.replaceShippingRates(same),
       repo.replaceShippingRates(same),
     ]);
-    expect(r1).toEqual(r2);
+    expect(r1.after).toEqual(r2.after);
     expect(await repo.listShippingRates()).toHaveLength(2);
   });
 

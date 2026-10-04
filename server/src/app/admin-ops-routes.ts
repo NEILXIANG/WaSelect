@@ -244,10 +244,12 @@ export function mountAdminOpsRoutes(app: Express, deps: AdminOpsRoutesDeps): voi
     void (async () => {
       try {
         const rows = parseShippingRates(req.body);
-        // 改前整表进日志：整表替换不可逆，没有 before 就再也答不出"之前是多少"
-        const before = await repo.listShippingRates();
+        // 改前整表进日志：整表替换不可逆，没有 before 就再也答不出"之前是多少"。
+        // 🔴 用**仓储在锁内读出的**那一份（AJ-354），不要在这里先读一次：
+        //    锁外读的 before 在并发保存时是"最初那张表"，而本次真正覆盖掉的是
+        //    "刚才别人提交的那张表"——审计会答错，且错得毫无症状。
+        const { before, after } = await repo.replaceShippingRates(rows);
         setAuditBefore(res, before.map(toShippingRate)); // 审计流 B 的改前值（AJ-183）：整表替换不可逆
-        const after = await repo.replaceShippingRates(rows);
         deps.logger.info('admin_shipping_rates_replaced', {
           result: 'ok',
           ctx: {

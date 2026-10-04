@@ -23,6 +23,7 @@ import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { signToken } from './auth.js';
 import { createCatalogRepo } from '../adapters/catalog.js';
+import { waitUntil } from '../../../test/helpers/chain-server.js';
 
 let db: Db;
 let sink: MemorySink;
@@ -490,6 +491,103 @@ describe('PUT /admin/shipping-rates', () => {
       // 红线向量：1850g → 2000 档（4950）。返回 2100 = 向下取档 = D-46 事故
       expect(await catalog.findShippingPriceJpy('placeholder', 1850)).toBe(4950);
       expect(await catalog.findShippingPriceJpy('placeholder', 500)).toBe(2100);
+    } finally {
+      await close();
+    }
+  });
+
+  /**
+   * 🔴 AJ-354（**接线级**）：并发保存运费时，审计行的 `before` 必须是先到者刚提交的那张表。
+   *
+   * @why 光有仓储层那条用例**不够**——它证明的是"仓储会返回正确的 before"，
+   *      证明不了"路由真的把它交给了 `setAuditBefore`"。旧实现正是路由自己在锁外
+   *      先读一次（`listShippingRates()`），那条路径在仓储层怎么改都不会红。
+   *      （同 §2 第 35 条的教训：组件做对了、组件测试全绿，不等于规则已落地。）
+   * @how 用 `db.begin` 持住先到者 A 的事务不提交（与 B22 同一套"确定状态"手法：
+   *      不用 sleep 抢时序），再让 B 走**真实 HTTP** 进来 ⇒ B 必然堵在表锁上；
+   *      释放 A 之后 B 才继续，此时它读到的表是确定的（= A 的输入）。
+   *      ⚠️ 初始表用**直接 SQL** 铺而不是再发一次 PUT：否则库里会有两行
+   *      同 action 的审计，断言"恰好一行"就不成立。
+   */
+  it('🔴 并发保存运费：审计的 before = 先到者刚提交的那张表（AJ-354）', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await db`
+        insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
+        values ('initial', 300, 900, true)
+      `;
+      let release: () => void = () => {};
+      const released = new Promise<void>((r) => {
+        release = r;
+      });
+      let opened: () => void = () => {};
+      const openedP = new Promise<void>((r) => {
+        opened = r;
+      });
+
+      // 先到者 A：锁表 → 清空 → 插入自己的档 → **持住不提交**
+      const holdA = db.begin(async (tx) => {
+        await tx`lock table shipping_rates in exclusive mode`;
+        await tx`delete from shipping_rates`;
+        await tx`
+          insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
+          values ('A', 500, 1000, true)
+        `;
+        opened();
+        await released;
+      });
+      await openedP;
+
+      const B_ROWS = [{ carrier: 'B', max_weight_g: 700, price_jpy: 2000, active: true }];
+      let bDone = false;
+      const putB = call(url, 'PUT', '/api/v1/admin/shipping-rates', B_ROWS, await bearer()).then(
+        (r) => {
+          bDone = true;
+          return r;
+        },
+        (e: unknown) => {
+          bDone = true;
+          throw e;
+        },
+      );
+      // 🔴 **必须先确认 B 真的堵在表锁上，再释放 A**——否则 B 可能整条跑在 A 提交之后，
+      //    那时"锁外读 before"与"锁内读 before"给出**同一个答案**，用例假绿。
+      //    ⚠️ 第一版就栽在这里：注入（改成锁外读）之后它照样绿，等于没测。
+      //    判据是 **pg_stat_activity 里有别的后端正在等 `lock table shipping_rates`**，
+      //    不是"等了多久"：等这把锁的只可能是 B（A 自己是 idle in transaction，不等锁）。
+      //    两种实现下 B 都会堵在 lock 上（锁外读时那句 select 取 ACCESS SHARE，
+      //    与 EXCLUSIVE 不冲突 ⇒ 读得到、然后才堵），所以"堵住"证明的是"B 已经开始了"。
+      await waitUntil(
+        async () => {
+          const rows = await db`
+            select count(*)::int as n from pg_stat_activity
+             where state = 'active' and wait_event_type = 'Lock'
+               and query like 'lock table shipping_rates%'
+          `;
+          return Number(rows[0]?.['n'] ?? 0) > 0;
+        },
+        'B 没有堵在运费表锁上（本用例的并发前提不成立）',
+        3000,
+      );
+      expect(bDone).toBe(false); // 顺带确认 B 此时还没结束（前提的一致性检查）
+      release();
+      await holdA;
+      const res = await putB;
+      expect(res.status).toBe(200);
+
+      // 审计是**响应之后**异步写的（中间件挂在 prefinish 上，不与业务同事务）
+      const q = () => db`select before from admin_audit where action = 'PUT /admin/shipping-rates'`;
+      await waitUntil(async () => (await q()).length === 1, '运费替换的审计行没写进来');
+      const rows = await q();
+      expect(rows).toHaveLength(1);
+      // ① 不是最初那张表（旧实现在这里给出 initial）
+      expect(rows[0]?.['before']).toEqual([
+        { carrier: 'A', max_weight_g: 500, price_jpy: 1000, active: true },
+      ]);
+      // ② 库里最终是 B 那张（顺带确认这次替换真的发生了，审计不是凭空写的）
+      expect(await db`select carrier, max_weight_g, price_jpy, active from shipping_rates`).toEqual(
+        [{ carrier: 'B', max_weight_g: 700, price_jpy: 2000, active: true }],
+      );
     } finally {
       await close();
     }
