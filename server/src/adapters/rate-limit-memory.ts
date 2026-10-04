@@ -55,7 +55,18 @@ export function createMemoryRateLimitStore(opts: { maxKeys?: number } = {}): Mem
         }
         if (map.size > maxKeys) {
           // Map 按插入序迭代：第一个就是最老的未被清理的 key。
-          // 当前 key 刚被 set/更新过，不会排在第一个，不会被误删。
+          // ⚠️ 这里**曾经**写"当前 key 刚被 set/更新过，不会排在第一个，不会被误删"——
+          //    **理由是错的**：`map.set()` 对**已存在**的键只更新值、**不动插入位置**
+          //    （实测：`m.set(a);m.set(b);m.set(a)` 之后迭代序仍是 `a,b`）。
+          //    本函数里"窗口过期后重新 set"走的正是这条不动位置的路径，
+          //    所以当前 key **完全可能**就是第一个。
+          //    真正挡住误删的是下面那句 `oldest !== key`——**显式排除**，不是靠顺序保证。
+          //    （与 `adapters/identity.ts` 缓存"回写前必须先 delete 自己"是同一个坑的两个位置。）
+          // ⚠️ 代价与边界：当前 key 恰是第一个时这一次**不驱逐**，size 停在 maxKeys+1，
+          //    下次 hit 才会带走它。我没有构造出 `maxKeys ≥ 1` 时能走到这里的输入
+          //    （size > maxKeys 要求上一次驱逐失败，而那又要求上一次走到了这里），
+          //    所以它目前是**防御性**的——别因为"看着不可达"就删掉它：
+          //    上面那段错误注释正是"以为顺序能保证"删掉它之后的形态。
           const oldest = map.keys().next().value;
           if (oldest !== undefined && oldest !== key) map.delete(oldest);
         }

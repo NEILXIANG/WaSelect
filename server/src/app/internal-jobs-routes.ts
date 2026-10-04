@@ -47,8 +47,20 @@ import { createCleanupLoginAttemptsJob } from './login-attempts-cleanup.js';
 export const INTERNAL_JOBS_PREFIX = '/api/v1/internal/jobs';
 
 /**
- * 比共享密钥（长度不一致也安全：先比长度再走 timingSafeEqual，不借长度差泄露信息——
- * 攻击者本来就知道"密钥是 32 字节以上"这一公开配置口径）。
+ * 比共享密钥。
+ *
+ * @why 先比长度再走 `timingSafeEqual`：`timingSafeEqual` 对不等长的 Buffer **直接抛**，
+ *      长度校验必须在它之前（与 `pay-link.ts` 的 `tokenMatchesHash` 同一条约束）。
+ * @limitation **长度差是会被观测到的**：`a.length !== b.length` 时提前返回，
+ *      于是"换个长度试一次"能问出密钥的**精确字节数**。
+ *      ⚠️ 这里**曾经**写"不借长度差泄露信息——攻击者本来就知道'密钥是 32 字节以上'"——
+ *      **说过了**：泄露的是精确长度（40 与 32 可区分），不是"≥32"这个公开口径。
+ *      **接受它的理由**（不是"没泄露"）：密钥是 ≥32 字节的随机串（`config.ts`
+ *      `optionalSecret(32, …)`），精确长度在 2^256 量级的空间里不构成可 exploitation 的信息增量；
+ *      要消掉它就把两边各过一次 digest 再比（`pay-link.ts` 就是这么做的），
+ *      代价是每次请求多两次 sha256 —— 相对"多一层无需论证的保证"是划算的，
+ *      之所以**没有**顺手改：改了也没有任何一条断言能区分两种实现（长度差的可观测性
+ *      只能靠计时测，那必然偶发红），本着"不加验不了的防线"（§2 第 15 条）维持现状并写明。
  */
 function secretMatches(got: string, want: string): boolean {
   const a = Buffer.from(got, 'utf8');
