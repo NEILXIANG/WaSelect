@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { isSensitiveKey, maskText, redact } from './redact.js';
+import { capForLog, isSensitiveKey, maskText, redact } from './redact.js';
 
 describe('键名脱敏（主要手段）', () => {
   it('敏感键名的值被掩码，非敏感键名原样保留', () => {
@@ -482,5 +482,64 @@ describe('三审 S2：支付链接 / 复数键 / 凭证形状的自由文本', (
     expect(out.err_message).not.toContain('sk_test_abcdefghijklmnop');
     expect(out.err_message).toContain('b***@example.com');
     expect(String(out.err_stack)).not.toContain('sk_test_abcdefghijklmnop');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// capForLog：日志出口的**限长**（CAT2-03 / AJ-356）
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// @why 与脱敏分开测：它管的不是"敏感不敏感"而是"多长"，且**不在** redact() 里——
+//      admin-audit 拿 redact 算落库的审计值，那条路**不能**被限长（见下面第三条用例）。
+describe('capForLog（日志出口限长，与脱敏是两件事）', () => {
+  it('🔴 超长字符串被截断，且**留可见标记**（不能让人把截断值当完整值去查库）', () => {
+    const long = 'a'.repeat(8000);
+    const out = capForLog({ http_path: long }) as Record<string, unknown>;
+    const v = String(out['http_path']);
+    expect(v.length).toBeLessThan(600);
+    expect(v.startsWith('a'.repeat(512))).toBe(true);
+    expect(v).toContain('…(+7488 字符)'); // 8000 - 512
+    expect(v).not.toContain('a'.repeat(600));
+  });
+
+  it('不超过上限的串原样保留（限长不得误伤正常字段）', () => {
+    const out = capForLog({ product_id: 'p-1', note: 'x'.repeat(512) }) as Record<string, unknown>;
+    expect(out['product_id']).toBe('p-1');
+    expect(out['note']).toBe('x'.repeat(512)); // 恰好等于上限 → 不截
+  });
+
+  it('嵌套与数组逐元素截断；数字/布尔/null 不受影响', () => {
+    const long = 'b'.repeat(900);
+    const out = capForLog({
+      ctx: { rows: [long, 1, true, null] },
+      n: 12345,
+    }) as Record<string, unknown>;
+    const ctx = out['ctx'] as Record<string, unknown>;
+    const rows = ctx['rows'] as unknown[];
+    expect(String(rows[0])).toContain('…(+388 字符)');
+    expect(rows[1]).toBe(1);
+    expect(rows[2]).toBe(true);
+    expect(rows[3]).toBeNull();
+    expect(out['n']).toBe(12345);
+  });
+
+  it('🔴 err_stack 豁免：堆栈是我们自己的内容，且是最需要看完整的那一处', () => {
+    const stack = 'Error: boom\n' + '    at f (/app/x.ts:1:1)\n'.repeat(200); // 约 5.2KB
+    const out = capForLog({ err_type: 'Error', err_stack: stack }) as Record<string, unknown>;
+    // 未截断：长度一致
+    expect(out['err_stack']).toBe(stack);
+    // 对照：同长度的普通字符串会被截（证明豁免不是"整条没走 capForLog"）
+    const other = capForLog({ other: stack }) as Record<string, unknown>;
+    expect(String(other['other'])).toContain('…(+');
+  });
+
+  // @why 这条是**反向**用例，守住 capForLog 的设计前提：
+  //      redact() 的第二个消费方是审计落库（admin-audit.ts 的 `auditPayload`），
+  //      它的输出要**完整**进 append-only 的审计表。若哪天有人把限长挪进 redact()，
+  //      这条会红——它红的含义是"审计数据开始被截断了"。
+  it('🔴 redact() 本身**不**限长（审计落库值必须完整）', () => {
+    const long = 'c'.repeat(900);
+    const out = redact({ description: long }) as Record<string, unknown>;
+    expect(out['description']).toBe(long);
   });
 });

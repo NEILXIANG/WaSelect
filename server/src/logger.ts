@@ -26,7 +26,7 @@
  * @see docs/代码注释规范与日志体系设计.md（流 A）、docs/地基搭建清单.md F5、server/src/redact.ts
  */
 import pino, { type DestinationStream, type Logger as PinoLogger } from 'pino';
-import { redact } from './redact.js';
+import { capForLog, redact } from './redact.js';
 import { currentContext } from './context.js';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
@@ -201,8 +201,11 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
         assertEvent(event);
         // @why 上下文与调用点字段都要过 redact：`actor: 'admin:bob@example.com'` 这类值键名不敏感、
         //      值敏感（复现缺陷 #4），键名名单制抓不到，只能靠字符串正则兜底。
-        const ctx = redact(currentContext()) as LogFields;
-        const { safe, dropped } = splitReserved(redact(fields ?? {}) as LogFields);
+        // ⚠️ 两处都要 `capForLog`（CAT2-03）：redact 只管"敏感不敏感"，不管"多长"。
+        //    客户端可控的串（路径段、user-agent、原样进 details 的路径参数）长度无界，
+        //    限长必须在**日志出口**这一处做——放进 redact 会连审计落库值一起截（见 capForLog 的 @why）。
+        const ctx = capForLog(redact(currentContext())) as LogFields;
+        const { safe, dropped } = splitReserved(capForLog(redact(fields ?? {})) as LogFields);
         if (dropped.length > 0) {
           if (strict) {
             throw new TypeError(
@@ -251,7 +254,10 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
         // 无请求上下文处（调度器/启动期）`log.child({ trace_id: 'FORGED' })` 能把伪造身份
         // 烙进每一行日志且无人纠正。现在与调用点同策略：非生产抛错、生产改名留痕，
         // 仅放行 CHILD_BINDABLE_KEYS（module/actor 这两个合法身份通道）。
-        const { safe, dropped } = splitReserved(redact(extra) as LogFields, CHILD_BINDABLE_KEYS);
+        const { safe, dropped } = splitReserved(
+          capForLog(redact(extra)) as LogFields,
+          CHILD_BINDABLE_KEYS,
+        );
         if (dropped.length > 0) {
           if (strict) {
             throw new TypeError(

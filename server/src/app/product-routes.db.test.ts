@@ -199,6 +199,51 @@ describe('GET /products/{id}', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CAT2-03：客户端可控的**无界串**不得撑出巨行日志
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// @why 断言**日志行的长度**而不是响应码：这条路由对超长 id 本来就回 40401（PG 查不到而已），
+//      响应侧看不出任何问题——真正的后果在日志：路径段会原样进 `http_path`
+//      （访问日志）与 `AppError.details`（`{ product_id: String(req.params.id) }`），
+//      于是**一条请求 = 一条 8KB 的日志行**，而这个端点不鉴权、无限流。
+//      只看响应的话，把限长去掉照样全绿。
+describe('CAT2-03：超长路径段不产生巨行日志', () => {
+  it('🔴 8000 字符的 id → 仍 40401，但每一行日志都被限长且不带原值', async () => {
+    const srv = await buildServer();
+    try {
+      const long = 'a'.repeat(8000);
+      const r = await get(srv.url, `/api/v1/products/${long}`);
+      expect(r.status).toBe(404);
+      expect((r.json as { code: number }).code).toBe(40401);
+
+      const lines = srv.sink.lines;
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line.length, line.slice(0, 60)).toBeLessThan(2000);
+      }
+      // 原值不得出现在任何一行里（截断了 + 留了标记）
+      expect(lines.join('')).not.toContain('a'.repeat(600));
+      expect(lines.join('')).toContain('…(+');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('正常长度的 id 照旧完整进 details（限长不得把排障要的线索也截掉）', async () => {
+    const srv = await buildServer();
+    try {
+      await get(srv.url, '/api/v1/products/ghost');
+      const rows = srv.sink.find('request_rejected');
+      expect(rows).toHaveLength(1);
+      const details = rows[0]?.['details'] as Record<string, unknown>;
+      expect(details['product_id']).toBe('ghost');
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
 describe('GET /terms 与 GET /fx（公开配置端点）', () => {
   it('/terms 返回环境变量的 TERMS_VERSION（40011 的比对源）', async () => {
     const srv = await buildServer();

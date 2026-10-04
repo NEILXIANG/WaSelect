@@ -352,6 +352,52 @@ export function maskText(text: string): string {
     });
 }
 
+/** 单条日志字段里字符串的**上限**（字符数）；超出截断并留可见标记。 */
+const LOG_STRING_CAP = 512;
+
+/**
+ * 截断标记：必须能让人一眼看出"这串被截过"。
+ * @why 静默截断比不截断更坏——排查的人会把截断后的串当成**完整值**去库里查，
+ *      查不到就开始怀疑别的地方（与"空值不产生掩码噪音"同一条理由：
+ *      "本来就没值"和"有值被处理过"在日志里必须是两件能分开的事）。
+ */
+function truncate(s: string): string {
+  return `${s.slice(0, LOG_STRING_CAP)}…(+${s.length - LOG_STRING_CAP} 字符)`;
+}
+
+/**
+ * 把**已脱敏**的日志字段里的长字符串截断（CAT2-03）。
+ *
+ * @why 客户端可控的字符串长度**无界**：路径段（`http_path`）、`user-agent`、
+ *      以及被原样塞进 `AppError.details` 的路径参数（`{ product_id: String(req.params.id) }`）。
+ *      `GET /api/v1/products/<8000 字符>` 一条请求就是一条 8KB 的日志行——
+ *      该端点**不鉴权、无限流**，于是任何人都能按量把日志写大；
+ *      巨行还会把检索界面冲垮（一条 8KB 的行盖住一屏）。
+ * @why 放在**日志出口**（`logger.ts` 的 emit）而不是 {@link redact} 内部：
+ *      `redact()` 有**第二个**消费方——`admin-audit.ts` 用它算审计的 after 值，
+ *      那个值要**落库**（审计表 append-only，写进去就改不了）。
+ *      在 redact 里截断会把"运营提交的商品描述"这类合法的长内容一起截掉，
+ *      而审计的意义正是**完整**留痕。所以限长是"写日志"这一件事的性质，不是脱敏的性质。
+ * @limitation 只截断**字符串值**，且**豁免 `err_stack`**：
+ *              堆栈由 V8 从**我们自己的**代码生成，不是客户端可控输入；
+ *              而 `unhandled_error`（唯一带堆栈的事件）恰恰是最需要看完整堆栈的地方。
+ *              豁免一个键名是有代价的（多一条规则），但代价落在"我们自己的内容"上，可以接受。
+ * @limitation 数字、布尔、null 不受影响；数组与对象**逐元素**递归截断，
+ *              因此"很多个中等长度的字符串"仍可能撑出一条较大的行——
+ *              本条守的是"**单个**值无界"这个主要形态，不是整行字节数上限。
+ */
+export function capForLog(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return value.length > LOG_STRING_CAP ? truncate(value) : value;
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= MAX_DEPTH) return '[Deep]';
+  if (Array.isArray(value)) return value.map((v) => capForLog(v, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = k === 'err_stack' ? v : capForLog(v, depth + 1);
+  }
+  return out;
+}
+
 /**
  * 脱敏任意值。
  * @param value 任意 JS 值（对象 / 数组 / Error / 原始值）
