@@ -537,6 +537,16 @@ describe('capForLog（日志出口限长，与脱敏是两件事）', () => {
   //      redact() 的第二个消费方是审计落库（admin-audit.ts 的 `auditPayload`），
   //      它的输出要**完整**进 append-only 的审计表。若哪天有人把限长挪进 redact()，
   //      这条会红——它红的含义是"审计数据开始被截断了"。
+  it('深度超过上限 → `[Deep]`（与 redact 同一口径，防自引用/超深对象拖死日志进程）', () => {
+    const long = 'z'.repeat(900);
+    // 第 7 层（`MAX_DEPTH = 6`）不再展开
+    const out = capForLog({ a: { b: { c: { d: { e: { f: { g: long } } } } } } }) as Record<
+      string,
+      unknown
+    >;
+    expect(out).toMatchObject({ a: { b: { c: { d: { e: { f: '[Deep]' } } } } } });
+  });
+
   it('🔴 redact() 本身**不**限长（审计落库值必须完整）', () => {
     const long = 'c'.repeat(900);
     const out = redact({ description: long }) as Record<string, unknown>;
