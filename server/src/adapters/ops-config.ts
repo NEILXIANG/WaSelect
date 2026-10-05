@@ -104,7 +104,17 @@ export interface OpsConfigRepo {
   replaceShippingRates(rows: readonly ShippingRateInput[]): Promise<ShippingRatesReplaced>;
 }
 
-/** 取全部汇率行（事务内外共用：replaceShippingRates 要在同一事务里读回结果）。 */
+/**
+ * 取全部汇率行。
+ *
+ * ⚠️ 曾经写"事务内外共用：`replaceShippingRates` 要在同一事务里读回结果"——**两句都不成立**：
+ *    ① `replaceShippingRates` 读的是**运费表**（`shipping_rates`），与本函数读的 `fx_rates`
+ *       不是一张表，它从来不需要"在同一个事务里读回汇率"；
+ *    ② 当前**三处**调用（`listFxRates` / `findLatestFxRate` / 管理端列表）**都传 `db`**，
+ *       没有任何调用方在事务里用它。
+ *    `tx` 形参保留，只是为了让"将来真要放进事务"不必改签名——它是**尚未用上的**能力，
+ *    不是正在使用的事实（把"预留"写成"在用"，会让读代码的人以为有一条事务路径要维护）。
+ */
 async function selectFxRates(tx: Db, where: readonly unknown[] = []): Promise<FxRateRow[]> {
   const rows = await tx`
     select quote, rate, raw_rate, buffer, effective_from

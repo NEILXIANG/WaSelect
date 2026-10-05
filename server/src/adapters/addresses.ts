@@ -63,7 +63,7 @@ export interface AddressRepo {
   listByUser(userId: string): Promise<AddressRow[]>;
   /** 新增（is_default=true 时同事务清掉旧默认）。 */
   create(id: string, userId: string, input: AddressInput): Promise<AddressRow>;
-  /** 全量更新（PUT 语义）；不存在或非本人 → false。 */
+  /** 全量更新（PUT 语义）；不存在或非本人 → `null`（⚠️ 曾经写 "→ false"，与下面的 `remove` 混了）。 */
   update(id: string, userId: string, input: AddressInput): Promise<AddressRow | null>;
   /** 删除；不存在或非本人 → false（不自动提升新默认，见 @limitation 二）。 */
   remove(id: string, userId: string): Promise<boolean>;

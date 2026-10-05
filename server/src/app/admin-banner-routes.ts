@@ -128,7 +128,12 @@ export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps
           startsAtMs: input.startsAtMs,
           endsAtMs: input.endsAtMs,
         });
-        // 🈲 不能当"改成功了"：那是静默失败（文件头 @why）
+        // 🈲 不能当"改成功了"：0 行命中 = **没有改动发生**，回 200 是静默失败。
+        //    ⚠️ 曾经括注"（文件头 @why）"——文件头并没有关于 PUT 0 行命中的 @why，
+        //       指到一个不存在的出处比不写更糟（读者会以为那里有更完整的论证而不再往下看）。
+        //       它与 `DELETE` 的幂等 204 是**相反**的两条口径（@see @limitation 二）：
+        //       DELETE 对"已经不在了"宽容（204 + 跳过审计），PUT 对"改不动"必须报错 40402——
+        //       因为 PUT 的 id 来自运营刚点开的那一项，"改不动"只可能是它已被别人删掉。
         if (row === null) throw new AppError(40402, { banner_id: id });
         res.status(200).end();
       } catch (e) {

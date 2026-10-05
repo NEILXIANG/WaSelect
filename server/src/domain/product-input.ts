@@ -2,7 +2,8 @@
  * 职责：管理端商品输入（`ProductInput`）的**纯校验与归一化**（I2）。
  *
  * 边界：只判"这个输入能不能进库"，不管"谁有权改"（那是 `requireAdmin`）、
- *      也不做落库（那是 `adapters/catalog.ts`）。domain 层不依赖 express / db。
+ *      也不做落库（那是 `adapters/catalog-admin.ts`；⚠️ 曾经写 `catalog.ts`——
+ *      那是**买家侧读**的仓储，写入方是 `catalog-admin.ts`）。domain 层不依赖 express / db。
  *
  * @why 合规拦截放在**校验函数**里而不是留在路由的 if 串里：七个"上架即拒"标签
  *      （D-42 航空禁寄 flammable/aerosol、D-45 不上电器 electrical、D-51 医薬部外品
@@ -228,7 +229,7 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   else if (origin !== 'JP') fail('origin_country', 'origin_invalid');
 
   // ── 可选数值（填了就必须合法；不填用默认）───────────────────────────────
-  // 库存省略 = 不改（见 ProductInputValue.stock 的 @why）；填了就必须合法
+  // 库存省略 = 不改（见 ProductInput.stock 的 @why；⚠️ 曾经写 ProductInputValue——没有这个类型）
   const stock = b.stock === undefined ? undefined : intAtLeast(b.stock, 0);
   if (b.stock !== undefined && stock === undefined) fail('stock', 'stock_invalid');
   const cost = b.cost_jpy === undefined ? undefined : intAtLeast(b.cost_jpy, 0);

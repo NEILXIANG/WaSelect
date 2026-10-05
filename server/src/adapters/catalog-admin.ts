@@ -65,7 +65,8 @@ export interface AdminProductInsert {
  * 管理端**更新**形状：不含 `status`、`stock` 可省略、`expectedUpdatedAt` 为乐观锁凭据。
  * @why `status` 只归 `PATCH /status` 管：曾经 PUT 写死 `status = 'active'`，
  *      管理员编辑一个**已下架**商品的标题，它就被悄悄重新上架、买家可以下单（AJ-175 顺带修正）。
- * @why `stock` 省略 = 保持原值（并发写的列，见 domain/product-input.ts ProductInputValue.stock）。
+ * @why `stock` 省略 = 保持原值（并发写的列，见 domain/product-input.ts `ProductInput.stock`
+ *      ——⚠️ 曾经写 `ProductInputValue.stock`，那个类型不存在，指向一个查不到的出处）。
  * @why `expectedUpdatedAt`（ADM3-02 / AJ-258）：PUT 是**整行覆盖**，而编辑页的数据取自列表快照
  *      ——列表在屏幕上停留多久，快照就旧多久。没有凭据时，运营只补一张图保存，
  *      就会把期间别人改过的售价 / 重量 / 报关品名整条回滚，且**不报任何错**。
