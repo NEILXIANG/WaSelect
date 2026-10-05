@@ -447,6 +447,30 @@ describe('AJ-361：管理端按 image_id 存商品图', () => {
     await s.close();
   });
 
+  it('🔴 库里报关品名为 NULL → 响应**整键省略**，不得出现字面量 "null"', async () => {
+    // @why 钉在**响应**上而不是只钉仓储：运营与前端看到的是 JSON。
+    //      字面量 "null" 会被 `isBlank` 判为"填了"，服务端校验放行 ⇒ 报关英文品名
+    //      真的变成 "null" 发往海关，而改它的人以为自己没动这一项（CAT-20）。
+    const s = await buildServer();
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, customs_desc_en, origin_country)
+      values ('p-null-desc', '缺报关品名', 'beauty', 3600, 800, null, 'JP')
+    `;
+    const r = await fetch(`${s.url}/api/v1/admin/products`, {
+      headers: { authorization: `Bearer ${await adminToken()}` },
+    });
+    expect(r.status).toBe(200);
+    const items = ((await r.json()) as { items: Array<Record<string, unknown>> }).items;
+    const item = items.find((x) => x['id'] === 'p-null-desc');
+    expect(item).toBeDefined();
+    // ⚠️ 断言"键不在"而不是"值不是 null"：给 null 与给 "null" 都是**下发了一个值**，
+    //    前端 `str()` 对两者都回落成空串/字符串，只有"键不在"才是"没有"的唯一表示
+    //    （与文件头 why / maker 的口径一致）。
+    expect('customs_desc_en' in (item ?? {})).toBe(false);
+    expect(JSON.stringify(items)).not.toContain('"null"');
+    await s.close();
+  });
+
   it('按三档 URL 存的存量条目 → 不带 image_id（不凭空造一个，也不改写它的形状）', async () => {
     const s = await buildServer('https://img.example.com');
     const r = await fetch(`${s.url}/api/v1/admin/products`, {

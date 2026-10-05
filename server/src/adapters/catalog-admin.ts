@@ -81,8 +81,21 @@ export type AdminProductUpdate = Omit<AdminProductInsert, 'status' | 'stock'> & 
   expectedUpdatedAt: string;
 };
 
-/** 读出行（含服务端生成的 updated_at）。 */
-export interface AdminProductRow extends AdminProductInsert {
+/**
+ * 读出行（含服务端生成的 updated_at）。
+ *
+ * @why `customs_desc_en` 在**读出行**里是 `string | null`，而写入形状 `AdminProductInsert`
+ *      里是必填 `string`（domain 层 `customs_desc_required` 保证写入侧一定有值）：
+ *      库列**可空**（001_init.sql:66 `customs_desc_en VARCHAR(120)`），
+ *      所以 NULL 只可能来自**绕过管理端**的写入——手工 SQL、将来的批量导入、seed。
+ * @why 读侧不能照旧写 `String(r.customs_desc_en)`（CAT-20）：NULL 经 `String()` 变成
+ *      **字面量 "null"**——它不报错、长得像数据。编辑页把它回显成一串 "null"，
+ *      运营点保存就写回库；而 `isBlank('null')` 为假，`customs_desc_required` 拦不住，
+ *      于是报关英文品名真的变成 "null" 发往海关（改它的人以为自己没动这一项）。
+ *      与 AJ-352 / AJ-357 同一族：**读侧不得凭空造值**，没有就是没有。
+ */
+export interface AdminProductRow extends Omit<AdminProductInsert, 'customs_desc_en'> {
+  customs_desc_en: string | null;
   updated_at: Date;
 }
 
@@ -137,7 +150,10 @@ function toRow(r: Record<string, unknown>): AdminProductRow {
     stock: Number(r.stock),
     compliance_tags: (r.compliance_tags ?? []) as readonly string[],
     hs_code: r.hs_code === null ? null : String(r.hs_code),
-    customs_desc_en: String(r.customs_desc_en),
+    customs_desc_en:
+      r.customs_desc_en === null || r.customs_desc_en === undefined
+        ? null
+        : String(r.customs_desc_en),
     origin_country: String(r.origin_country),
     title_ja: r.title_ja === null ? null : String(r.title_ja),
     jan_code: r.jan_code === null ? null : String(r.jan_code),

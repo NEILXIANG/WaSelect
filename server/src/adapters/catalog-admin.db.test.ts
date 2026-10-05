@@ -202,6 +202,21 @@ describe('catalog-admin（管理端商品写仓储，I2 U-A2）', () => {
     expect(list.items[0]?.jan_code).toBe('4901234567890');
   });
 
+  it('🔴 库里 customs_desc_en 为 NULL → 读出来是 null，不是字面量 "null"（CAT-20）', async () => {
+    // @why 直插 SQL 而不是走 insertProduct：写入形状把它定成必填 string（domain 必填），
+    //      走正规路径**造不出** NULL——而库列是可空的，NULL 只来自绕过管理端的写入
+    //      （手工 SQL / 批量导入 / seed）。验收"读侧不会凭空造值"必须造出这个脏行。
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, customs_desc_en, origin_country)
+      values ('p-null-desc', '缺报关品名', 'beauty', 3600, 800, null, 'JP')
+    `;
+    const row = (await repo().listAdminProducts({ page: 1, size: 10 })).items[0];
+    // ⚠️ 两条都要：只断言 `not.toBe('null')` 时，改成 `undefined` 也绿；
+    //    只断言 `toBeNull()` 时……其实够了，但留着第二条是为了让"为什么"看得见。
+    expect(row?.customs_desc_en).toBeNull();
+    expect(row?.customs_desc_en).not.toBe('null');
+  });
+
   it('updateProduct：改得到已填字段与可空字段（置 null 生效）', async () => {
     const created = await repo().insertProduct(
       input({ cost_jpy: 2000, jan_code: '4901234567890' }),

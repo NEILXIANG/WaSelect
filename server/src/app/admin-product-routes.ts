@@ -14,8 +14,13 @@
  * @limitation 一：**字段级错误目前只进日志，不透给前端**。契约 `Err` 只有
  *              `{code, message}`，`AppError.details` 按设计只写日志（errors.ts @security）。
  *              所以运营看到的是 40001 + 通用文案，具体哪个字段错要看日志。
- *              MVP 可接受是因为管理端前端**已有同一套校验**（会先拦一次），
- *              服务端这条是兜底；真要透传需扩契约 `Err` 加 `data`（登记为待办）。
+ *              MVP 可接受是因为管理端前端（`admin-web/src/products/view.ts`）**先拦一次**：
+ *              必填、整数、敏感词、`PRODUCT_MAX_CHARS` 的字数都在那里判，服务端这条多数走不到。
+ * @limitation 一·补：⚠️ 但**不是"同一套"**（这里曾经这么写，与事实不符）：
+ *              前端对 `price_jpy` 只判 `>= 1` 的整数（view.ts:343），**没有上界**，
+ *              所以 `price_too_large` 这类"服务端独有"的校验命中时，前端无从拦起，
+ *              运营只会看到 40001 + 通用文案、不知道是哪个字段。
+ *              真要透传需扩契约 `Err` 加 `data`（登记为待办）。
  * @limitation 二：不做删除——`status='offline'` 即下架（商品被订单引用，删了订单说不清卖了什么）。
  *
  * @see adapters/catalog-admin.ts（仓储）；domain/product-input.ts（校验）；
@@ -96,7 +101,13 @@ function toAdminProduct(
     weight_g: r.weight_g,
     compliance_tags: [...r.compliance_tags],
     ...(r.hs_code !== null ? { hs_code: r.hs_code } : {}),
-    customs_desc_en: r.customs_desc_en,
+    // ⚠️ NULL 时**整键省略**（与 hs_code 同口径），不能下发 `null`、更不能下发 "null"
+    // @why 报关品名在 domain 层是必填，库里出现 NULL 只可能是绕过管理端的写入（CAT-20）。
+    //      前端 `str('customs_desc_en')` 对"键不在"回落成空串 ⇒ 编辑页显示为未填 ⇒
+    //      保存被 `英文报关品名必填（D-39）` 拦住，运营**必须补上**才能继续。
+    //      若照旧 `String(null)` 给出字面量 "null"，则表单里是一串看着像内容的字符，
+    //      校验放行、写回库，报关品名就此变成 "null"（改的人以为自己没动这一项）。
+    ...(r.customs_desc_en !== null ? { customs_desc_en: r.customs_desc_en } : {}),
     origin_country: r.origin_country,
     ...(r.cost_jpy !== null ? { cost_jpy: r.cost_jpy } : {}),
     ...(r.title_ja !== null ? { title_ja: r.title_ja } : {}),
