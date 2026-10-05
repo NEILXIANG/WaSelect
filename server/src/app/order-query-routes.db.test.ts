@@ -255,6 +255,48 @@ describe('GET /orders/{id}（订单详情）', () => {
   });
 });
 
+describe('fx_snapshot 脏汇率：读路径降级，不许整页 500（AJ-359）', () => {
+  // @why 造脏数据用 jsonb_set 只改一个键、其余保持建单链路真值：
+  //      "整快照手写"会连带把 CNY 也固定成我猜的值，那就分不清"降级"与"我写错了"。
+  it('列表：脏的那个币种少显示，其余照常（≤0 那一支）', async () => {
+    const srv = await buildServer();
+    try {
+      const orderId = await createOrder(srv.url, 'q1');
+      // 不是"缺币"（那本来就降级），是"有币但是坏的"——0 会被 toRateInt 拒
+      await db`
+        update orders set fx_snapshot = jsonb_set(fx_snapshot, '{USD}', '0'::jsonb)
+        where id = ${orderId}
+      `;
+      const r = await get(srv.url, '/api/v1/orders');
+      expect(r.status).toBe(200);
+      const items = r.json['items'] as Array<Record<string, unknown>>;
+      expect(items).toHaveLength(1);
+      expect(items[0]?.['total_jpy']).toBe(TOTAL); // 金额段不受展示价影响
+      expect(items[0]?.['display']).toEqual({ CNY: toMinor(TOTAL, toRateInt('0.049')) });
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('详情：脏汇率同上（|rate| ≥ 1e6 那一支），其余字段照常出', async () => {
+    const srv = await buildServer();
+    try {
+      const orderId = await createOrder(srv.url, 'q1');
+      await db`
+        update orders set fx_snapshot = jsonb_set(fx_snapshot, '{CNY}', '1234567'::jsonb)
+        where id = ${orderId}
+      `;
+      const r = await get(srv.url, `/api/v1/orders/${orderId}`);
+      expect(r.status).toBe(200);
+      expect(r.json['display']).toEqual({ USD: toMinor(TOTAL, toRateInt('0.0067')) });
+      expect(r.json['items_jpy']).toBe(15_200);
+      expect(r.json['terms_version']).toBe('TOS-TEST-1');
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
 describe('鉴权策略的真路由级接线（三审 S3 / U23；骨架退役时从 skeleton.e2e 迁来）', () => {
   it('同密钥同签发者的"无 exp"与 HS512 令牌，走真路由都是 40101（策略层真的接进了路由）', async () => {
     // @why auth.unit.test 钉的是 verifyToken 本身；这里证明装配处的鉴权中间件
