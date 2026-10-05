@@ -56,7 +56,7 @@ import {
   shipGuard,
   shipInfoGuard,
 } from '../domain/admin-order-actions.js';
-import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import { REFUND_REASON_MAX_LENGTH, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { markAuditCommitted, setAuditBefore } from './admin-audit.js';
 import { parseAddressInput } from '../domain/address-input.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
@@ -237,7 +237,14 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         if (status !== undefined && !(ORDER_STATUS as readonly string[]).includes(status)) {
           throw new AppError(40001, { reason: 'status_invalid' });
         }
-        const rawKw = q.keyword === undefined ? undefined : String(q.keyword).trim();
+        // AJ-360：与公开 `/products` 同口径挡一次长度（同一个常量；CAT2-07）。
+        // 量的是**原始输入**（trim 之前）：上限要框住"客户端能送进来多少"，
+        // 而不是"去掉空格后还剩多少"——后者会让"64 字 + 一万空格"照样进 SQL。
+        const kwInput = q.keyword === undefined ? undefined : String(q.keyword);
+        if (kwInput !== undefined && kwInput.length > SEARCH_KEYWORD_MAX_LENGTH) {
+          throw new AppError(40001, { reason: 'keyword_too_long' });
+        }
+        const rawKw = kwInput === undefined ? undefined : kwInput.trim();
         const { items, total } = await listAdminOrders(deps.db, {
           page,
           size,

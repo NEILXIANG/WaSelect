@@ -15,7 +15,7 @@ import { createEventBus } from '../adapters/event-bus.js';
 import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
-import { toMinor, toRateInt } from '@waselect/shared';
+import { SEARCH_KEYWORD_MAX_LENGTH, toMinor, toRateInt } from '@waselect/shared';
 
 let db: Db;
 
@@ -175,6 +175,48 @@ describe('CAT2-04：脏汇率只降级，不整页 500', () => {
       expect(body.display['USD']).toBeUndefined();
       const rows = srv.sink.find('fx_rate_invalid');
       expect((rows[0]?.ctx as Record<string, unknown>)['product_id']).toBe('p-1');
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CAT2-07：keyword 必须有长度上限
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// @why 它是**唯一**一个不鉴权、不限流、原样进 `ILIKE '%kw%'` 的客户端可控输入：
+//      无上限时一次请求就能让 PG 拿几 KB 的模式串去全表扫（`products` 无索引，CAT-19），
+//      而连接池（`max: 10`）与支付回调共用——上限是这条路径上唯一的成本控制手段。
+// @why 上限值从 shared 常量取、不写死 65：写死的话改常量不红，
+//      而"契约写 64、代码拒 128"正是本仓反复出过的漂移（详见 AJ-360）。
+describe('CAT2-07：keyword 超过上限 → 40001（且原值不进日志）', () => {
+  it('🔴 超限一个字符 → 40001 + reason keyword_too_long，日志里不出现原值', async () => {
+    const srv = await buildServer();
+    try {
+      const long = 'あ'.repeat(SEARCH_KEYWORD_MAX_LENGTH + 1);
+      const r = await get(srv.url, `/api/v1/products?keyword=${encodeURIComponent(long)}`);
+      expect(r.status).toBe(400);
+      expect((r.json as Record<string, unknown>)['code']).toBe(40001);
+      // reason 只在日志里（响应体只有 code/message）——钉它才能区分"超限"与别的 40001
+      const rows = srv.sink.find('request_rejected');
+      expect(rows.length).toBeGreaterThanOrEqual(1);
+      expect((rows[0]?.['details'] as Record<string, unknown> | undefined)?.['reason']).toBe(
+        'keyword_too_long',
+      );
+      // 不回显：客户端可控的长串进 details 就等于把它复制一份进日志（CAT2-03 那条链）
+      expect(srv.sink.lines.join('\n')).not.toContain('あ');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('恰好等于上限 → 200（边界必须放行：64 字的搜索词是真实存在的）', async () => {
+    const srv = await buildServer();
+    try {
+      const exact = 'あ'.repeat(SEARCH_KEYWORD_MAX_LENGTH);
+      const r = await get(srv.url, `/api/v1/products?keyword=${encodeURIComponent(exact)}`);
+      expect(r.status).toBe(200);
     } finally {
       await srv.close();
     }

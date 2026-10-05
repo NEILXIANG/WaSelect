@@ -20,7 +20,11 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
-import { REFUND_REASON_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
+import {
+  REFUND_REASON_MAX_LENGTH,
+  SEARCH_KEYWORD_MAX_LENGTH,
+  SHIP_MAX_CHARS,
+} from '@waselect/shared';
 import { MAX_CLIENT_KEY_LENGTH } from './ports/idempotency.js';
 import { ADDRESS_MAX_CHARS } from './domain/address-input.js';
 import { MAX_QUOTE_ITEMS } from './domain/quote.js';
@@ -128,6 +132,32 @@ describe('契约的输入上限与 shared 常量一致', () => {
     expect(props, `${method.toUpperCase()} ${path} 没有请求体 properties`).toBeDefined();
     return props ?? {};
   }
+
+  /** 取某个路径下某个方法的**查询参数**（按 name；与 requestProps 同口径：从 yaml 读出来）。 */
+  function queryParam(
+    path: string,
+    method: string,
+    name: string,
+  ): { maxLength?: number } | undefined {
+    const doc = loadYaml(TEXT) as Doc;
+    const op = (doc.paths[path] as Record<string, Record<string, unknown>> | undefined)?.[
+      method
+    ] as { parameters?: Array<{ name?: string; schema?: { maxLength?: number } }> } | undefined;
+    return op?.parameters?.find((p) => p.name === name)?.schema;
+  }
+
+  /**
+   * AJ-360：`keyword` 是**唯一**一个原样进 `ILIKE '%kw%'` 的客户端可控输入（CAT2-07），
+   * 且公开 `/products`（不鉴权、不限流）与管理端 `/admin/orders` **两处**都没有上限。
+   * 只钉一处的话，另一处就是"契约没写、实现没挡"的同形状漏洞——故**两处都比**。
+   */
+  it('GET /products 与 GET /admin/orders 的 keyword.maxLength == SEARCH_KEYWORD_MAX_LENGTH', () => {
+    for (const path of ['/products', '/admin/orders']) {
+      const kw = queryParam(path, 'get', 'keyword');
+      expect(kw, `${path} 没有声明 keyword 参数`).toBeDefined();
+      expect(kw?.maxLength, `${path} 的 keyword.maxLength`).toBe(SEARCH_KEYWORD_MAX_LENGTH);
+    }
+  });
 
   it('POST /admin/orders/{id}/refund 的 reason.maxLength == REFUND_REASON_MAX_LENGTH', () => {
     const reason = requestProps('/admin/orders/{id}/refund', 'post')['reason'];

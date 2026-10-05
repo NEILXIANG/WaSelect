@@ -17,6 +17,10 @@
  *              updated_at 没有真实来源（TERMS_VERSION 来自环境变量，无时间维度），省略不编。
  * @limitation 三：GET /fx 的 rates 缺币时**省略该币**（降级同 display）；
  *              它是"仅供文案展示"的端点（契约 summary），不是下单依据。
+ * @limitation 四：`keyword` 有**长度上限** `SEARCH_KEYWORD_MAX_LENGTH`（超限 40001 +
+ *              `keyword_too_long`；CAT2-07 / AJ-360）。它原样进 `ILIKE '%kw%'` 且
+ *              `products` 上没有索引，而本文件**全部端点都不鉴权也不限流**——
+ *              上限是这条路径上唯一的成本控制手段（读路径配额按 U7 再定，见 AJ-360）。
  *
  * @see contracts/api-contract.yaml（ProductCard/Product/Terms/Fx 响应形状）；
  *      adapters/catalog.ts（取数）；docs/I1阶段开发实施方案.md §3.5
@@ -28,7 +32,7 @@ import type { Clock } from '../ports/clock.js';
 import type { AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
 import { createCatalogRepo } from '../adapters/catalog.js';
-import { PRODUCT_CATEGORY, toMinor, toRateInt } from '@waselect/shared';
+import { PRODUCT_CATEGORY, SEARCH_KEYWORD_MAX_LENGTH, toMinor, toRateInt } from '@waselect/shared';
 import type { DisplayCurrency } from '../domain/quote.js';
 
 // category 合法值：来自 shared（契约词汇表的唯一出处），本文件不再手抄一份。
@@ -173,8 +177,17 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
             throw new AppError(40001, { reason: 'category_invalid' });
           }
         }
-        if (q.keyword !== undefined && typeof q.keyword !== 'string') {
-          throw new AppError(40001, { reason: 'keyword_invalid' });
+        if (q.keyword !== undefined) {
+          if (typeof q.keyword !== 'string') {
+            throw new AppError(40001, { reason: 'keyword_invalid' });
+          }
+          // CAT2-07 / AJ-360：keyword 原样进 `ILIKE '%' || kw || '%'`（无索引，CAT-19），
+          // 而本端点既不鉴权也不限流 ⇒ 无上限时一次请求就能让 PG 拿几 KB 的模式串去全表扫。
+          // ⚠️ details 只带 reason、**不带原值**：超限的值正是"客户端可控的长串"，
+          //    回显它等于把 CAT2-03 那条链（可控输入进日志）又接回去（AJ-356 只截断了长度）。
+          if (q.keyword.length > SEARCH_KEYWORD_MAX_LENGTH) {
+            throw new AppError(40001, { reason: 'keyword_too_long' });
+          }
         }
         const { items, total } = await catalog.listActiveProducts({
           page,

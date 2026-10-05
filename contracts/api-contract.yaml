@@ -488,7 +488,7 @@ paths:
         - {name: page, in: query, schema: {type: integer, default: 1}}
         - {name: size, in: query, schema: {type: integer, default: 20, maximum: 50}}
         - {name: category, in: query, schema: {type: string, enum: [beauty, daily, kitchen, food]}}
-        - {name: keyword, in: query, schema: {type: string}}
+        - {name: keyword, in: query, schema: {type: string, maxLength: 64}}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/ProductCard'}}, total: {type: integer}}}}}}}
   /products/{id}:
     get:
@@ -551,7 +551,7 @@ paths:
     get:
       parameters:
         - {name: status, in: query, schema: {$ref: '#/components/schemas/OrderStatus'}}
-        - {name: keyword, in: query, schema: {type: string, description: order_no / 收件人 / 运单号}}
+        - {name: keyword, in: query, schema: {type: string, maxLength: 64, description: order_no / 收件人 / 运单号}}
         - {name: page, in: query, schema: {type: integer, default: 1}}
         - {name: size, in: query, schema: {type: integer, default: 20, maximum: 100}}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminOrderListItem'}}, total: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}

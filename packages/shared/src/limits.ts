@@ -219,3 +219,33 @@ export const SHIP_MAX_CHARS = {
   carrier: 32,
   tracking_no: 64,
 } as const;
+
+/**
+ * 列表**搜索词**（`keyword`）的字符上限（64；AJ-360 / 第二轮审查 CAT2-07）。
+ *
+ * @why 它是**唯一**一个客户端可控、且原样进 `ILIKE '%' || kw || '%'` 的输入：
+ *      无上限时一次请求可以让 PG 拿着几 KB 的模式串去逐行匹配（`products.keyword`
+ *      没有索引，CAT-19 已登记），而 `GET /products` **既不鉴权也不限流**
+ *      （读路径配额按 U7 有真实流量数据后再定，理由见 AJ-360）
+ *      ⇒ "刷长 keyword"是今天唯一能把连接池（`max: 10`，与支付回调共用）占住的手段。
+ *      它同时也是 CAT2-03 那条链（客户端可控长串进日志）里唯一还活着的一条：
+ *      日志侧已由 `capForLog` 截断（AJ-356），SQL 侧的成本只能靠上限挡。
+ * @why 取 **64** 而不是更短：真实搜索词是"南部鉄器"/"抹茶"这种 2–6 字；
+ *      管理端那侧搜的是 单号 / 收件人 / **运单号**，而运单号的上限本身就是
+ *      `SHIP_MAX_CHARS.tracking_no = 64`——取同一个数，"整串粘贴运单号去搜"永远搜得全。
+ *      再短就会开始误伤"粘贴一整串"这个真实动作，而再长没有任何收益
+ *      （没有人的搜索词超过 64 字，超过的一定是脚本）。
+ * @limitation 它**不是**存储上限（keyword 不落库），所以不与任何列宽对齐——
+ *              这是它与本文件其余常量的唯一区别：那些是"不这么定就存不下"，
+ *              这一条是"不这么定会白烧一次全表扫"。
+ * @limitation 两端的搜索框（admin-web `OrdersPage` 的输入、小程序 home 的搜索输入）
+ *              目前**没有**接这个常量：输入时不截断、提交时也没有即时提示，
+ *              超限的表现是**提交后** 40001（reason `keyword_too_long`）。
+ *              这与文件头 @why 想防的"前端再写一份上限"不冲突——那里要防的是
+ *              **两份**上限，而这里是**零份**，等要补即时提示时直接引用本常量即可。
+ *
+ * @see contracts/api-contract.yaml（`GET /products` 与 `GET /admin/orders` 的 keyword）；
+ *      server/src/app/product-routes.ts；server/src/app/admin-order-routes.ts；
+ *      docs/自主决策记录.md AJ-360
+ */
+export const SEARCH_KEYWORD_MAX_LENGTH = 64;

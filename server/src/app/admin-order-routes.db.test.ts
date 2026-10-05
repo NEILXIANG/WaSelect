@@ -11,7 +11,11 @@
  *      退款那条尤其重要——它跨了两次事务，响应 202 并不代表钱真的退了。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { REFUND_REASON_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
+import {
+  REFUND_REASON_MAX_LENGTH,
+  SEARCH_KEYWORD_MAX_LENGTH,
+  SHIP_MAX_CHARS,
+} from '@waselect/shared';
 import { ADMIN_NOTE_MAX_LENGTH, refundGuard, shipGuard } from '../domain/admin-order-actions.js';
 import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
@@ -270,6 +274,33 @@ describe('GET /admin/orders（管理端订单列表）', () => {
     expect((await adminFetch(s, 'GET', '/api/v1/admin/orders?status=nope')).status).toBe(400);
     expect((await adminFetch(s, 'GET', '/api/v1/admin/orders?page=0')).status).toBe(400);
     expect((await adminFetch(s, 'GET', '/api/v1/admin/orders?size=101')).status).toBe(400);
+    await s.close();
+  });
+
+  // AJ-360：管理端的 keyword 与公开 `/products` 是**同一个**客户端可控输入的两个面，
+  // 上限取同一个常量——只钉公开侧的话，这里就是"契约没写、实现没挡"的同形状漏洞。
+  it('🔴 keyword 超过 SEARCH_KEYWORD_MAX_LENGTH → 40001（CAT2-07）', async () => {
+    const s = await buildServer();
+    const long = 'ん'.repeat(SEARCH_KEYWORD_MAX_LENGTH + 1);
+    const r = await adminFetch(
+      s,
+      'GET',
+      `/api/v1/admin/orders?keyword=${encodeURIComponent(long)}`,
+    );
+    expect(r.status).toBe(400);
+    expect(r.json['code']).toBe(40001);
+    await s.close();
+  });
+
+  it('keyword 恰好等于上限 → 200（边界必须放行：整串粘贴运单号是真实动作）', async () => {
+    const s = await buildServer();
+    const exact = 'ん'.repeat(SEARCH_KEYWORD_MAX_LENGTH);
+    const r = await adminFetch(
+      s,
+      'GET',
+      `/api/v1/admin/orders?keyword=${encodeURIComponent(exact)}`,
+    );
+    expect(r.status).toBe(200);
     await s.close();
   });
 
