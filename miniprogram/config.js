@@ -18,10 +18,16 @@
  *
  * @limitation 一：`trial` / `release` 目前是**空串**（域名待 B9 一次定完，见 B5）。
  *      空串不是"配了 localhost"，是**故意没配**：`resolveApiBase` 遇到空串直接抛，
- *      于是"体验版/正式版没配域名"在启动时就响亮失败，而不是静默打到一个长得合法的地址上。
- *      这与服务端 `resolveStorage` 的 `needed()` 同一口径——**不静默补默认值**。
- *      ⚠️ 提审前必须把这两项填上：审核员打开的是**正式版**（envVersion=release），
- *      空着 = 审核即白屏。
+ *      于是"体验版/正式版没配域名"不会静默打到一个长得合法的地址上——
+ *      这与服务端 `resolveStorage` 的 `needed()` 同一口径：**不静默补默认值**。
+ *      ⚠️ 曾经这里接着写"于是在启动时就响亮失败"——**不成立**，已实测证伪（AJ-364）：
+ *      仅仅抛出是不够的。`app.js` 的 `onLaunch` 若让它冒出去，`globalData.api` 会保持 `null`，
+ *      页面 `app.globalData.api(...)` 抛的是 **TypeError**（与本因无关），形态是**白屏**，
+ *      而这条 message 只在实时日志里——用户与审核员什么都看不到。
+ *      正确形态是：由 `app.js` 接住它，换成 `utils/unconfigured-api.js` 的**替身请求器**，
+ *      让每个请求以 `ApiError(-2)` 继续把这个原因表达到页面已的错误出口上。
+ *      ⚠️ 提审前必须把这两项填上：审核员打开的是**正式版**（envVersion=release）。
+ * @see ../app.js（唯一调用方与接住它的地方）；./utils/unconfigured-api.js（替身请求器）
  * @limitation 二：⚠️ 小程序 `wx.request` 的域名必须在**微信后台配置为合法域名**才能访问，
  *      且每月只能改 5 次。因此这三个环境的域名要一次性规划好，不能临时换。
  *      `http://localhost` 仅在开发者工具里勾选"不校验合法域名"时可用。
