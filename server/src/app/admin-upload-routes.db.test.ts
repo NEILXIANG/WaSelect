@@ -158,6 +158,10 @@ describe('POST /admin/upload', () => {
       expect(body.thumb).toBe(`https://img.example.com/${base}/thumb.webp`);
       expect(body.card).toBe(`https://img.example.com/${base}/card.webp`);
       expect(body.detail).toBe(`https://img.example.com/${base}/detail.webp`);
+      // 0.6.28 / AJ-361：三档的**共同主键**（商品图要存它而不是三档 URL）。
+      // 断言它**等于**键里的那一段，而不是"存在一个字符串"：对不上就会出现
+      // "存了 id、但按这个 id 拼出的键在存储里没有"——那是最难查的一类错（存得进、读不出）。
+      expect(key).toBe(`img/${body.image_id}/detail.webp`);
       // 独立断言面：三档真的写进了存储，且内容是 webp（不是响应该有的样子，是存储实际的样子）
       for (const t of IMAGE_TIERS) {
         const stored = storage.get(`${base}/${t.name}.webp`);
@@ -360,6 +364,9 @@ describe('POST /admin/upload', () => {
       expect(body.card).toBeUndefined();
       expect(body.detail).toBeUndefined();
       expect(typeof body.image_key).toBe('string');
+      // AJ-361：`image_id` 与 `image_key` 一样**恒返回**——"图床域名还没配"不能让
+      // 存库的值换一种形态，否则同一批商品里会混着 id 与 URL 两种条目（且都看着合法）。
+      expect(typeof body.image_id).toBe('string');
     } finally {
       await srv.close();
     }

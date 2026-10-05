@@ -28,7 +28,12 @@ afterAll(async () => {
   await closeDb(db);
 });
 
-async function buildServer(): Promise<{
+/**
+ * @param imgBaseUrl 传了才塞进 config。
+ *      @why "没配"是本文件其余用例依赖的默认值，只有 AJ-361 那两条需要显式配一个，
+ *           所以做成可选参数而不是给所有用例都配上——配了之后"整键省略"那一支就再也走不到了。
+ */
+async function buildServer(imgBaseUrl?: string): Promise<{
   url: string;
   sink: MemorySink;
   close: () => Promise<void>;
@@ -43,6 +48,7 @@ async function buildServer(): Promise<{
     JWT_SECRET: 'product-test-jwt-secret-'.repeat(3),
     PAYMENT_CHANNELS: 'mock',
     TERMS_VERSION: 'TOS-TEST-1',
+    ...(imgBaseUrl === undefined ? {} : { IMG_BASE_URL: imgBaseUrl }),
   });
   const app = createHttpApp({
     logger,
@@ -358,6 +364,65 @@ describe('GET /terms 与 GET /fx（公开配置端点）', () => {
       await db`delete from fx_rates`;
       const empty = (await get(srv.url, '/api/v1/fx')).json as { rates: Record<string, number> };
       expect(empty.rates).toEqual({});
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AJ-361（CAT2-08 第一步）：商品图可以按 image_id 存（契约 0.6.28）
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// @why 这两条钉的是"**中间态不坏**"：本步只给服务端加**认得** image_id 的能力，
+//      管理端仍在存三档 URL。所以库里必然同时存在两种形态的条目——
+//      少认一种的表现是"一半商品的图没了"且不报错，这正是本步要排除的。
+// @why 直接插库而不是走 `POST /admin/products`：写入侧（第二步才切）与读侧要能**各自**
+//      独立验证；用 admin 接口建单会把"写入格式"也牵进来，红灯时说不清是哪一侧坏了。
+// @how ⚠️ images 用 **SQL 字面量**写，不要写 `${JSON.stringify([...])}::jsonb`：
+//      postgres.js 见到 `::jsonb` 会把参数**按 jsonb 序列化**，于是传入的 JSON **文本**
+//      被第二次编码 ⇒ 库里存的是"JSON 字符串包着 JSON"（`pg_typeof` 仍是 jsonb，
+//      `jsonb_typeof` 变成 string），读回是 string 不是 array，`imagesOf` 直接返回 `[]`。
+//      实测踩到：两条用例都拿到 `images: []`，而 SQL 与断言看上去都对。
+//      （本文件前面的 insert 用字面量也是这个原因，不是巧合。）
+describe('AJ-361：images 条目按 image_id 存 → 读侧拼出三档 URL', () => {
+  it('🔴 配了 IMG_BASE_URL → 三档 URL 由 image_id 生成（不是把 id 原样吐给前端）', async () => {
+    await db`
+      update products
+         set images = '[{"image_id":"img-7qk3m9vz2rx8"}]'::jsonb
+       where id = 'p-1'
+    `;
+    // 故意带尾斜杠：顺带钉住拼接处只归一一次（出现 //img/… 就是漏了归一化）
+    const srv = await buildServer('https://img.example.com/');
+    try {
+      const r = await get(srv.url, '/api/v1/products/p-1');
+      expect(r.status).toBe(200);
+      const body = r.json as { images: Array<{ thumb: string; card: string; detail: string }> };
+      expect(body.images).toEqual([
+        {
+          thumb: 'https://img.example.com/img/img-7qk3m9vz2rx8/thumb.webp',
+          card: 'https://img.example.com/img/img-7qk3m9vz2rx8/card.webp',
+          detail: 'https://img.example.com/img/img-7qk3m9vz2rx8/detail.webp',
+        },
+      ]);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 没配 IMG_BASE_URL → 按 id 存的条目整键省略、按 URL 存的照旧（页仍 200）', async () => {
+    await db`
+      update products
+         set images = '[{"image_id":"img-7qk3m9vz2rx8"},{"thumb":"a.webp","card":"b.webp","detail":"c.webp"}]'::jsonb
+       where id = 'p-1'
+    `;
+    const srv = await buildServer();
+    try {
+      const r = await get(srv.url, '/api/v1/products/p-1');
+      expect(r.status).toBe(200);
+      const body = r.json as { images: Array<{ thumb: string }> };
+      // 只剩旧形态那一条：按 id 存的渲染不出来 ⇒ 整键省略，不是吐一个拼不出域名的裸键
+      expect(body.images).toEqual([{ thumb: 'a.webp', card: 'b.webp', detail: 'c.webp' }]);
     } finally {
       await srv.close();
     }

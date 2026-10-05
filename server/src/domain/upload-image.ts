@@ -59,6 +59,24 @@ export function sniffImageType(bytes: Uint8Array): SniffedImageType | null {
 /** id 只来自 IdGen（小写字母数字 + 连字符）；正则拦截是防"将来有人把外部输入接进来"。 */
 const IMAGE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
+/**
+ * 这个字符串是不是一个**合法 image_id**。
+ *
+ * @why 判"存进 `products.images` 的条目是 id 还是完整 URL"必须有**一处**判断，
+ *      且它必须就是这个正则是唯一出处——`imageObjectKey` 用它拦 id，
+ *      读路径（`toImageSet`）用它决定"要不要按三档拼 URL"，
+ *      写入侧（`readImages`）用它决定"这个值存进去之后还渲染得出来吗"。
+ *      三处各写一个"像 id 的样子"，改一处漏两处的结果是：存得进去、读不出来、且没人报错
+ *      （静默少一张图，正是本节最难查的一类）。
+ * @why 它是**肯定式形状判定**，不是"不像 URL 就算 id"：后者把判定建立在
+ *      "URL 一定长什么样"这个没有保证的前提上，图床换成不带协议头的写法就翻。
+ * @limitation 空串与含 `.` / `/` / `_` / 大写的串都不是 id（与 `imageObjectKey` 同口径）；
+ *              旧数据里的完整 URL 因此**不会**被误判成 id，走旧形状照常渲染。
+ */
+export function isImageId(s: string): boolean {
+  return IMAGE_ID_PATTERN.test(s);
+}
+
 /** 存储键：`img/{imageId}/{tier}.webp`。id 非法 → 抛错（编程错误，折叠成 50000 是正确表现）。 */
 export function imageObjectKey(imageId: string, tier: ImageTierName): string {
   if (!IMAGE_ID_PATTERN.test(imageId)) throw new Error(`image_id_invalid:${imageId.length}chars`);

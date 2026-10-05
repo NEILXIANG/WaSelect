@@ -21,6 +21,10 @@
  *              `keyword_too_long`；CAT2-07 / AJ-360）。它原样进 `ILIKE '%kw%'` 且
  *              `products` 上没有索引，而本文件**全部端点都不鉴权也不限流**——
  *              上限是这条路径上唯一的成本控制手段（读路径配额按 U7 再定，见 AJ-360）。
+ * @limitation 五：`IMG_BASE_URL` 未配置时，按 **image_id** 存的图**整键省略**
+ *              （与 Banner 的 `toBannerView` @limitation 一 同口径）；
+ *              按完整 URL 存的旧条目不受影响（它们不需要拼域名）。
+ *              ⚠️ 因此"商品突然都没图了"要先看**存的是哪种形态**，不是一律"图床挂了"。
  *
  * @see contracts/api-contract.yaml（ProductCard/Product/Terms/Fx 响应形状）；
  *      adapters/catalog.ts（取数）；docs/I1阶段开发实施方案.md §3.5
@@ -34,25 +38,73 @@ import type { Logger } from '../logger.js';
 import { createCatalogRepo } from '../adapters/catalog.js';
 import { PRODUCT_CATEGORY, SEARCH_KEYWORD_MAX_LENGTH, toMinor, toRateInt } from '@waselect/shared';
 import type { DisplayCurrency } from '../domain/quote.js';
+import { imageObjectKey, isImageId } from '../domain/upload-image.js';
 
 // category 合法值：来自 shared（契约词汇表的唯一出处），本文件不再手抄一份。
 const PRODUCT_CATEGORIES = PRODUCT_CATEGORY;
 
-/** images JSONB 条目 → 契约 ImageSet（@why 见文件头）。U5c 起订单详情也复用（app→app helper 同 parseItems 先例）。 */
-export function toImageSet(raw: unknown): { thumb: string; card: string; detail: string } | null {
-  if (typeof raw === 'string') return { thumb: raw, card: raw, detail: raw };
-  if (raw !== null && typeof raw === 'object') {
-    const o = raw as { thumb?: unknown; card?: unknown; detail?: unknown };
-    if (typeof o.thumb === 'string' && typeof o.card === 'string' && typeof o.detail === 'string') {
-      return { thumb: o.thumb, card: o.card, detail: o.detail };
+/**
+ * images JSONB 条目 → 契约 ImageSet（@why 见文件头）。U5c 起订单详情也复用（app→app helper 同 parseItems 先例）。
+ *
+ * @param imgBaseUrl `IMG_BASE_URL`（未配置 = `undefined`）。**只在"条目是 image_id"时需要**
+ *      ——另两种形态的值是完整 URL，不需要拼。
+ * @returns 渲染不出来的条目返回 `null`（调用方 `filter` 掉 ⇒ 契约里整键缺席）。
+ *
+ * @why 条目有三种形态：
+ *      ① `{image_id}`（0.6.28 / AJ-361 **新**形态）→ 三档键由 `imageObjectKey` 生成再拼域名；
+ *      ② 裸字符串（**旧**形态：一档 URL）→ 三档同源；
+ *      ③ `{thumb,card,detail}`（管理端当前存的：三档完整 URL）→ 原样透传。
+ *      ① 做成**对象**而不是裸字符串 id，是为了让"这是 id"**写在形状里**——
+ *      裸字符串分支（②）对任何字符串都成立，若让 id 也走裸字符串，读路径只能靠
+ *      "像不像 id"去猜，那正是 AJ-143 已否掉的"靠字符串巧合工作"。
+ * @limitation 判定顺序 ① → ③ → ②；① 与 ③ **混填**时以 ① 为准（不报错也不降级）。
+ *              写入侧（`readImages`）已拒混填，所以这里只可能遇到**直改库**留下的脏数据，
+ *              按"能渲染就渲染"处理；不额外加一条实际走不到的分支——拿不到红灯证据的
+ *              分支留着就是自欺（AJ-256 里我自己写出来又删掉的那处同因）。
+ * @why ① 在 `IMG_BASE_URL` 未配置时返回 `null`（**整键省略**）而不是吐一个裸键：
+ *      与 Banner 的 `toBannerView` @limitation 一 同口径——空串/裸键会被前端当成
+ *      "有一张图、图裂了"，而事实是"没有可展示的 URL"，两件事的处置不同。
+ * @why 三档键走 `imageObjectKey` 而不是字符串拼接：键形只有 `domain/upload-image.ts`
+ *      一处定义（AJ-143 已否掉"消费方自己拼档位"——靠字符串巧合工作，规则一变就静默错）。
+ * @why `image_id` 不合法时返回 `null` 而**不抛**：它来自 `products.images` JSONB，
+ *      与脏价格 / 脏汇率同属"库里可能有脏数据"（AJ-211 / AJ-357 / AJ-359 同一条立场）——
+ *      读侧必须自己降级，不能让一条脏图把订单详情或商品列表打成 500。
+ */
+export function toImageSet(
+  raw: unknown,
+  imgBaseUrl: string | undefined,
+): { thumb: string; card: string; detail: string } | null {
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    const id = o['image_id'];
+    if (typeof id === 'string' && isImageId(id)) {
+      if (imgBaseUrl === undefined) return null; // @limitation 五
+      const base = imgBaseUrl.replace(/\/+$/, ''); // 尾部斜杠只在拼接处处理一次
+      return {
+        thumb: `${base}/${imageObjectKey(id, 'thumb')}`,
+        card: `${base}/${imageObjectKey(id, 'card')}`,
+        detail: `${base}/${imageObjectKey(id, 'detail')}`,
+      };
     }
+    if (
+      typeof o['thumb'] === 'string' &&
+      typeof o['card'] === 'string' &&
+      typeof o['detail'] === 'string'
+    ) {
+      return { thumb: o['thumb'], card: o['card'], detail: o['detail'] };
+    }
+    return null;
   }
+  if (typeof raw === 'string') return { thumb: raw, card: raw, detail: raw };
   return null;
 }
 
-function imagesOf(raw: unknown): Array<{ thumb: string; card: string; detail: string }> {
+function imagesOf(
+  raw: unknown,
+  imgBaseUrl: string | undefined,
+): Array<{ thumb: string; card: string; detail: string }> {
   if (!Array.isArray(raw)) return [];
-  return raw.map(toImageSet).filter((s) => s !== null);
+  return raw.map((it) => toImageSet(it, imgBaseUrl)).filter((s) => s !== null);
 }
 
 /** 分页参数：page >= 1、size 1..50（契约束 size maximum 50）。 */
@@ -76,6 +128,8 @@ export interface ProductRoutesDeps {
 
 export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void {
   const catalog = createCatalogRepo(deps.db);
+  // 商品图的域名：**未配置**时 `images` 里按 image_id 存的条目渲染不出来（整键省略，见 @limitation 五）
+  const imgBase = deps.config.IMG_BASE_URL;
 
   /**
    * 单币种的展示价；算不出 → `undefined`（**降级，不是整页 500**，B25 / AJ-211）。
@@ -214,7 +268,7 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
               const minor = minorOrUndefined(p.price_jpy, rateInt, c as DisplayCurrency, p.id);
               if (minor !== undefined) display[c as DisplayCurrency] = minor;
             }
-            const images = imagesOf(p.images);
+            const images = imagesOf(p.images, imgBase);
             return {
               id: p.id,
               title: p.title,
@@ -252,7 +306,7 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
           category: p.category,
           price_jpy: p.price_jpy,
           display: await displayOf(p.price_jpy, p.id),
-          images: imagesOf(p.images),
+          images: imagesOf(p.images, imgBase),
           stock: p.stock,
           status: p.status,
           description: p.description,

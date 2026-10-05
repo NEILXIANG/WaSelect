@@ -37,14 +37,21 @@ beforeEach(async () => {
   await resetTestDb(db);
 });
 
-/** 起一个只挂了正式路由清单的 server（与生产同一条装配路径）。 */
-async function buildServer(): Promise<{ url: string; close: () => Promise<void> }> {
-  return buildServerWithSink(new MemorySink());
+/**
+ * 起一个只挂了正式路由清单的 server（与生产同一条装配路径）。
+ * @param imgBaseUrl 传了才塞进 config（只有 AJ-361 那条用例需要显式配图床域名，
+ *      其余用例走"未配置"的默认值——配了就再也走不到"整键省略"那一支）。
+ */
+async function buildServer(
+  imgBaseUrl?: string,
+): Promise<{ url: string; close: () => Promise<void> }> {
+  return buildServerWithSink(new MemorySink(), imgBaseUrl);
 }
 
 /** 同上，但把日志落点交回给调用方（断言"这条 warn 到底留没留"）。 */
 async function buildServerWithSink(
   sink: MemorySink,
+  imgBaseUrl?: string,
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const logger = createLogger({ env: 'test', destination: sink });
   const config = loadConfig({
@@ -55,6 +62,7 @@ async function buildServerWithSink(
     JWT_SECRET,
     PAYMENT_CHANNELS: 'mock',
     TERMS_VERSION: 'TOS-TEST-1',
+    ...(imgBaseUrl === undefined ? {} : { IMG_BASE_URL: imgBaseUrl }),
   });
   const app = createHttpApp({
     logger,
@@ -386,6 +394,53 @@ describe('PUT /admin/products/{id} 与 PATCH status', () => {
       body: JSON.stringify({ status: 'deleted' }),
     });
     expect(r.status).toBe(400);
+    await s.close();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AJ-361（CAT2-08 第一步）：管理端也可以按 image_id 存商品图
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// @why 这条钉的是**两端都认新形态**：写入侧落库的是 id（不是三档 URL），
+//      管理端列表读回时缩略图能由 id 拼出。只认一半的表现是"运营上传完图、
+//      商品列表里却没有图"——而上传与列表是两个人、两个时刻，谁都不会立刻发现。
+// @why 落库断言查 `products` 表而不是只看响应：响应是路由自己拼的，库才是事实
+//      （§2 第 21 条：自证断言不算证据）。
+describe('AJ-361：管理端按 image_id 存商品图', () => {
+  it('🔴 提交 {image_id} → 落库是 id 本身；列表读回三档 URL', async () => {
+    const s = await buildServer('https://img.example.com');
+    const r = await fetch(`${s.url}/api/v1/admin/products`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${await adminToken()}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body({ images: [{ image_id: 'img-7qk3m9vz2rx8' }] })),
+    });
+    expect(r.status).toBe(201);
+    const id = String(((await r.json()) as { id: string }).id);
+
+    // ① 落库：存的是 id，不是三档 URL（换 CDN 不用改历史数据的前提就在这里）
+    const rows = await db`select images from products where id = ${id}`;
+    expect(rows[0]?.images).toEqual([{ image_id: 'img-7qk3m9vz2rx8' }]);
+
+    // ② 读回：管理端列表的缩略图由 id 拼出三档（键形来自 imageObjectKey）
+    const list = await fetch(`${s.url}/api/v1/admin/products`, {
+      headers: { authorization: `Bearer ${await adminToken()}` },
+    });
+    const items = (
+      (await list.json()) as {
+        items: Array<{ id: string; images: Array<Record<string, string>> }>;
+      }
+    ).items;
+    expect(items.find((x) => x.id === id)?.images).toEqual([
+      {
+        thumb: 'https://img.example.com/img/img-7qk3m9vz2rx8/thumb.webp',
+        card: 'https://img.example.com/img/img-7qk3m9vz2rx8/card.webp',
+        detail: 'https://img.example.com/img/img-7qk3m9vz2rx8/detail.webp',
+      },
+    ]);
     await s.close();
   });
 });

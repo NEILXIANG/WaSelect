@@ -78,7 +78,16 @@ export function mountOrderQueryRoutes(app: Express, deps: OrderQueryRoutesDeps):
           listOrderTimeline(deps.db, orderId),
           findLatestPaymentSummary(deps.db, orderId),
         ]);
-        res.status(200).json(toOrderDetail(order, { items, timeline, payment }, displayCurrencies));
+        res
+          .status(200)
+          .json(
+            toOrderDetail(
+              order,
+              { items, timeline, payment },
+              displayCurrencies,
+              deps.config.IMG_BASE_URL,
+            ),
+          );
       } catch (e) {
         next(e);
       }

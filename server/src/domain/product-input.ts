@@ -36,6 +36,7 @@ import {
   PRODUCT_MAX_WEIGHT_G,
   isOneOf,
 } from '@waselect/shared';
+import { isImageId } from './upload-image.js';
 
 export interface ProductImageSet {
   thumb: string;
@@ -43,12 +44,32 @@ export interface ProductImageSet {
   detail: string;
 }
 
+/**
+ * 按 **image_id** 存的图片条目（0.6.28 / AJ-361）。
+ *
+ * @why 与 `ProductImageSet`（三档完整 URL）**并存**是刻意的：商品图此前存的是三档 URL，
+ *      而 URL 里含域名/CDN 前缀（= 存储位置）——换图床时历史数据全部失效。
+ *      `image_id` 只是三档的**共同主键**（`img/{id}/{tier}.webp`），不含位置信息，
+ *      与 Banner 存 `image_key` 是同一条理由（AJ-143）。
+ * @why 商品**不能**照抄 Banner 存单个 `image_key`：Banner 只展示一档（detail），
+ *      商品要 thumb / card / detail 三档；由 key 反解出另外两档是"靠字符串巧合工作"
+ *      （AJ-143 已否）。所以存 id，三档键由 `imageObjectKey` 生成——键形只有一处定义。
+ * @limitation 它**不是**"替代" `ProductImageSet`：管理端当前仍在存三档 URL，
+ *              两种形态在库里会共存一段时间，读路径（`toImageSet`）两种都要认。
+ */
+export interface ProductImageRef {
+  image_id: string;
+}
+
+/** `products.images` 的一个条目：三档 URL（旧）或 image_id（新）。 */
+export type ProductImageEntry = ProductImageSet | ProductImageRef;
+
 /** 归一化后的商品输入（可选字段已补默认，可直接进仓储）。 */
 export interface ProductInput {
   title: string;
   category: string;
   description?: string | undefined;
-  images: readonly ProductImageSet[];
+  images: readonly ProductImageEntry[];
   price_jpy: number;
   cost_jpy?: number | undefined;
   weight_g: number;
@@ -144,22 +165,48 @@ function strField(
   return v;
 }
 
-function readImages(v: unknown): readonly ProductImageSet[] | 'invalid' {
+/**
+ * `images` 条目：三档 URL（旧形态）或 `{image_id}`（0.6.28 / AJ-361 新形态）。
+ *
+ * @why 新形态**必须是对象**而不是裸字符串 id：裸字符串在库里已经有含义（一档 URL），
+ *      让 id 也用裸字符串 ⇒ 读路径只能靠"像不像 id"去猜，规则一变就静默判错。
+ *      做成对象后"这是 id"写在形状里，两种形态**不需要任何启发式**就能分开。
+ * @why `image_id` **入库前就用 `isImageId` 判合法性**（而不是等读的时候渲染不出来）：
+ *      非法 id 存进去之后永远拼不出键，表现为"这张图不见了"，而写的人看到的是 200 ——
+ *      与脏价格 / 脏汇率同属"静默的错"，写入侧能拦就别留给读侧降级（AJ-211 同条立场）。
+ *      判定用 `isImageId`（`domain/upload-image.ts` 的单一真源），本文件不另写正则。
+ * @limitation `image_id` 与 `thumb/card/detail` **混填**判 invalid，**不是**"id 优先"：
+ *              两者若指向**不同**的图，取 id 的表现是"写入返回 200、显示的是另一张图"——
+ *              这是本项目最难查的一类错（没有任何一方报错）。让调用方先把话说清楚，
+ *              比替它猜便宜。与 AJ-353（"填了却不是布尔"报错而非静默当成启用）同一条立场。
+ *              ⚠️ `image_key` 不算混填：它不是档位，只是上传响应带出的附加键，
+ *              存量条目里本来就有（读侧同理忽略），拦它只会误拒合法的历史数据。
+ */
+function readImages(v: unknown): readonly ProductImageEntry[] | 'invalid' {
   if (v === undefined) return [];
   if (!Array.isArray(v)) return 'invalid';
-  const out: ProductImageSet[] = [];
+  const out: ProductImageEntry[] = [];
   for (const it of v) {
-    const o = it as { thumb?: unknown; card?: unknown; detail?: unknown } | null;
-    if (
-      o === null ||
-      typeof o !== 'object' ||
-      typeof o.thumb !== 'string' ||
-      typeof o.card !== 'string' ||
-      typeof o.detail !== 'string'
-    ) {
-      return 'invalid';
+    if (it === null || typeof it !== 'object' || Array.isArray(it)) return 'invalid';
+    const o = it as Record<string, unknown>;
+    const id = o['image_id'];
+    const hasTierKeys =
+      o['thumb'] !== undefined || o['card'] !== undefined || o['detail'] !== undefined;
+    if (id !== undefined) {
+      if (hasTierKeys) return 'invalid'; // 混填（@limitation）
+      if (typeof id !== 'string' || !isImageId(id)) return 'invalid';
+      out.push({ image_id: id });
+      continue;
     }
-    out.push({ thumb: o.thumb, card: o.card, detail: o.detail });
+    if (
+      typeof o['thumb'] === 'string' &&
+      typeof o['card'] === 'string' &&
+      typeof o['detail'] === 'string'
+    ) {
+      out.push({ thumb: o['thumb'], card: o['card'], detail: o['detail'] });
+      continue;
+    }
+    return 'invalid';
   }
   return out;
 }

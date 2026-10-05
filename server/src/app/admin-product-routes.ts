@@ -47,14 +47,21 @@ export interface AdminProductRoutesDeps {
   identity: IdentityCheck;
 }
 
-/** 仓储行 → 契约 AdminProduct（images 走 product-routes 的 ImageSet 映射，同一份逻辑）。 */
-function toAdminProduct(r: AdminProductRow): Record<string, unknown> {
+/**
+ * 仓储行 → 契约 AdminProduct（images 走 product-routes 的 ImageSet 映射，同一份逻辑）。
+ * @param imgBaseUrl `config.IMG_BASE_URL`：条目按 image_id 存时要用它拼出可展示的 URL
+ *      （0.6.28 / AJ-361；管理端列表/表单缩略图依赖这个，与买家侧同一份转换）。
+ */
+function toAdminProduct(
+  r: AdminProductRow,
+  imgBaseUrl: string | undefined,
+): Record<string, unknown> {
   return {
     id: r.id,
     title: r.title,
     category: r.category,
     price_jpy: r.price_jpy,
-    images: r.images.map(toImageSet).filter((s) => s !== null),
+    images: r.images.map((it) => toImageSet(it, imgBaseUrl)).filter((s) => s !== null),
     stock: r.stock,
     status: r.status,
     ...(r.description !== null ? { description: r.description } : {}),
@@ -123,6 +130,7 @@ function expectedUpdatedAtOf(body: unknown): string {
 export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDeps): void {
   const repo = createCatalogAdminRepo(deps.db);
   const guard = requireRole('admin', deps.auth, { identity: deps.identity });
+  const imgBase = deps.config.IMG_BASE_URL;
 
   app.get('/api/v1/admin/products', guard, (req, res, next) => {
     void (async () => {
@@ -148,7 +156,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           size,
           status: status as 'active' | 'offline' | undefined,
         });
-        res.json({ items: items.map(toAdminProduct), total });
+        res.json({ items: items.map((r) => toAdminProduct(r, imgBase)), total });
       } catch (e) {
         next(e);
       }
@@ -185,7 +193,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         });
         // 新建没有路径 `:id`，审计的 target 会是 NULL ⇒ 审计行回答不了"建的是哪个商品"（SEC-12 / AJ-344）
         setAuditTarget(res, row.id);
-        res.status(201).json(toAdminProduct(row));
+        res.status(201).json(toAdminProduct(row, imgBase));
       } catch (e) {
         next(e);
       }
@@ -242,7 +250,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           });
           throw new AppError(40914, { product_id: id, expected });
         }
-        res.json(toAdminProduct(result.row));
+        res.json(toAdminProduct(result.row, imgBase));
       } catch (e) {
         next(e);
       }

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.27
+  version: 0.6.28
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -360,6 +360,19 @@ info:
       `POST /auth/wechat/login` 此前缺 400（code 校验）与 500（50000 未配置 AppID）。
       📌 已知仍缺（不在本版）：`AdminOrder.payments[]` 实回的 `created_at`、
       `/internal/jobs/daily` 的 summary（已漂到四项）、`/auth/admin/login` 的 email/password maxLength。
+    0.6.28（CAT2-08 / AJ-361 第一步）：`ImageSet` 增 **`image_id`**（可选，仅 `POST /admin/upload`
+      响应里出现），并允许把它作为**一个** `Product.images` / `OrderItem.image` 的**条目形态**存库。
+      @why 与 `image_key` 同一条理由（AJ-143）：业务表里**不该存存储位置**（域名 / CDN 前缀）。
+      Banner 存的是 `image_key`、读时由服务端用 `IMG_BASE_URL` 拼；商品图此前恰恰相反——
+      `products.images` 里是**三档完整 URL**（前端把上传响应原样存库），
+      开发期域名指向本机静态服务、R2 落地后换 CDN ⇒ 届时所有已录商品的图全部失效，要一次数据迁移。
+      @why 商品不能照抄 Banner 存 `image_key`：Banner 只展示一档（detail），商品要 **thumb/card/detail
+      三档**；而"拿 key 反解出另外两档"正是 AJ-143 已否掉的"靠字符串巧合工作"。
+      所以存 **`image_id`**（三档的共同主键），读路径用 `imageObjectKey(id, tier)` 生成三档键——
+      键形只有 `domain/upload-image.ts` 一处定义，不是字符串拼接。
+      ⚠️ 本版**只加能力、不切写入格式**：管理端仍在存三档 URL 对象，旧形状照旧渲染（见下）。
+      切写入格式（管理端改存 `image_id`）是第二步，两步都可独立验证、中间态不坏。
+      `image_id` 与 `image_key` 一样**仅在上传响应**出现，存量条目没有它（故 optional）。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -704,7 +717,7 @@ components:
   schemas:
     AuthResp: {type: object, properties: {token: {type: string}, user: {type: object, properties: {id: {type: string}, isAdmin: {type: boolean}}}}}
     Display: {type: object, description: 展示价，整数分（后端按当日汇率计算）, properties: {USD: {type: integer}, CNY: {type: integer}}}
-    ImageSet: {type: object, properties: {thumb: {type: string}, card: {type: string}, detail: {type: string}, image_key: {type: string, description: '仅 POST /admin/upload 响应里出现（0.6.8）：detail 档存储键，供 BannerInput.image_key 使用（AJ-143/AJ-166）；存量 Product.images 条目没有它'}}}
+    ImageSet: {type: object, properties: {thumb: {type: string}, card: {type: string}, detail: {type: string}, image_key: {type: string, description: '仅 POST /admin/upload 响应里出现（0.6.8）：detail 档存储键，供 BannerInput.image_key 使用（AJ-143/AJ-166）；存量 Product.images 条目没有它'}, image_id: {type: string, description: '0.6.28（AJ-361）：仅 POST /admin/upload 响应里出现。三档的**共同主键**（img/{image_id}/{tier}.webp），供 Product.images 存它而不是存完整 URL——业务表不存存储位置（与 Banner 存 image_key 同一条理由）。读路径用它生成三档键，不由消费方拼字符串'}}}
     ProductCard: {type: object, properties: {id: {type: string}, title: {type: string}, category: {type: string}, price_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, image: {$ref: '#/components/schemas/ImageSet'}, stock: {type: integer}, status: {type: string},
                why: {type: string, maxLength: 200, description: '0.6.23：编辑口径的"为什么值得买"（一句带判断的话）。可选；**缺失 = 编辑还没撰写**，前端降级为不含 why 的形态，不用通用话术顶上'},
                maker: {type: string, maxLength: 120, description: '0.6.23：产地 / 工房 / 匠人署名。可选；缺失时前端不渲染这一行'},

@@ -16,11 +16,19 @@ import {
   UPLOAD_MAX_BYTES,
   detailObjectKey,
   imageObjectKey,
+  isImageId,
   sniffImageType,
 } from './upload-image.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const contractYaml = readFileSync(resolve(here, '../../../contracts/api-contract.yaml'), 'utf8');
+
+/**
+ * 契约 `ImageSet` 的 properties 段原文（两条用例共用）。
+ * @why properties 值本身带花括号，取错一处两条断言会一起假绿；抽出来只写一次取法。
+ */
+const IMAGESET_PROPS =
+  contractYaml.match(/ImageSet: \{type: object, properties: \{(.*)\}\}/)?.[1] ?? '';
 
 describe('sniffImageType（magic bytes，不信 Content-Type）', () => {
   it('jpeg：FF D8 FF 开头即认（SOI + marker，3 字节足够）', () => {
@@ -79,19 +87,63 @@ describe('imageObjectKey / detailObjectKey（存储键形）', () => {
   });
 });
 
+describe('isImageId（0.6.28 / AJ-361：id 的**肯定式**形状判定）', () => {
+  it('IdGen 形状 → true；URL / 大写 / 下划线 / 空串 → false', () => {
+    expect(isImageId('abc123')).toBe(true);
+    expect(isImageId('018f3c2a-7b1d-7e5f-9c2d-1a2b3c4d5e6f')).toBe(true);
+    // ⚠️ 旧数据里的完整 URL 必须判 false——否则"读路径按 id 拼键"会把三档 URL 当成 id，
+    //    拼出 img/https://…/thumb.webp，图全没了且不报错
+    expect(isImageId('https://img.example.com/img/abc/thumb.webp')).toBe(false);
+    expect(isImageId('img/abc123/detail.webp')).toBe(false);
+    expect(isImageId('ABC123')).toBe(false);
+    expect(isImageId('')).toBe(false);
+    expect(isImageId('a_b')).toBe(false);
+    expect(isImageId('-abc')).toBe(false);
+  });
+
+  it('与 imageObjectKey 同口径：判 true 的一定拼得出键，判 false 的一定抛', () => {
+    // @why 防的是"判定与生成器各写一份规则"：今天两侧都读 IMAGE_ID_PATTERN，这条恒绿；
+    //      哪天有人给某一侧另写一条（比如给读侧放宽成"不含 / 就算 id"），
+    //      写入拦截与读侧降级就分叉了——而分叉的表现正是"存得进去、读不出来"。
+    const canBuildKey = (s: string): boolean => {
+      try {
+        imageObjectKey(s, 'thumb');
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (const s of ['abc123', 'a-b', 'https://x/y.webp', 'ABC', '', 'img/x', '018f-3c2a']) {
+      expect(isImageId(s), `口径不一致：${s}`).toBe(canBuildKey(s));
+    }
+  });
+});
+
 describe('IMAGE_TIERS 与契约 ImageSet 双向比对', () => {
   it('tier 名集合 === 契约 ImageSet 的 URL 档键集合（image_key 除外）', () => {
     // ⚠️ properties 值本身带花括号（`{type: string}`），`[^}]+` 会在第一个内层 `}` 处断掉——
     //    用贪婪 `.*` 吃到行尾的 `\}\}`（properties 闭合 + schema 闭合）为止。
-    const m = contractYaml.match(/ImageSet: \{type: object, properties: \{(.*)\}\}/);
-    expect(m, '契约里找不到 ImageSet 定义（结构变了本断言就该跟着改）').not.toBe(null);
-    const props = m![1];
-    expect(props, 'ImageSet 的 properties 段为空').toBeDefined();
-    const contractKeys = [...(props ?? '').matchAll(/(\w+): \{type: string\}/g)]
+    expect(IMAGESET_PROPS, '契约里找不到 ImageSet 定义（结构变了本断言就该跟着改）').not.toBe('');
+    const contractKeys = [...IMAGESET_PROPS.matchAll(/(\w+): \{type: string\}/g)]
       .map((x) => x[1] ?? '')
-      .filter((k) => k !== '' && k !== 'image_key')
+      // ⚠️ `image_id`（0.6.28 / AJ-361）与 `image_key` 都不是**档位**，只是随上传响应带出的
+      //    附加键；新增非档位键必须同步加到这个过滤里，否则本条会把它当成一个不存在的档位。
+      .filter((k) => k !== '' && k !== 'image_key' && k !== 'image_id')
       .sort();
     expect([...IMAGE_TIERS.map((t) => t.name)].sort()).toEqual(contractKeys);
+  });
+
+  it('ImageSet 声明了 image_key 与 image_id（两个"非档位"键都还在契约里）', () => {
+    // @why 上一条只比对**档位**，挡不住"有人把 image_id 从契约里删掉"——
+    //      那样上传响应仍在返回 image_id、代码仍在存它，但对外文档里没有它，
+    //      调用方按契约写客户端就会发现"文档里没这个字段"（而服务端行为完全没变）。
+    //      契约是本项目的对外承诺面，承诺面少一项要有人先红。
+    // ⚠️ 按**声明形状**取（`key: {type: string`）而不是 `toContain('image_id')`：
+    //    description 正文里也写着 `img/{image_id}/{tier}.webp`，子串匹配会在
+    //    "字段被改名/删掉"之后照样绿——实测踩到（注入改名 → 17 条全绿）。
+    const declared = [...IMAGESET_PROPS.matchAll(/(\w+): \{type: string/g)].map((x) => x[1] ?? '');
+    expect(declared).toContain('image_key');
+    expect(declared).toContain('image_id');
   });
   it('档宽严格递增（thumb < card < detail）——反了就是缩略图比原图大', () => {
     const widths = IMAGE_TIERS.map((t) => t.width);

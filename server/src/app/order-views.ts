@@ -85,10 +85,18 @@ export function toOrderSummary(
   };
 }
 
-/** 行项目 → 契约 Order.items 条目（图取商品现图第一张，无图省略 image 字段）。 */
-export function toOrderItemView(item: OrderItemReadRow): JsonObject {
+/**
+ * 行项目 → 契约 Order.items 条目（图取商品现图第一张，无图省略 image 字段）。
+ * @param imgBaseUrl `IMG_BASE_URL`：商品图按 image_id 存时要用它拼 URL
+ *      （0.6.28 / AJ-361）。本文件是纯 mapper（文件头 @why），值由路由层传进来，
+ *      不在 mapper 里读配置——否则它就不再是"拿仓储行就能断言"的纯函数。
+ */
+export function toOrderItemView(
+  item: OrderItemReadRow,
+  imgBaseUrl: string | undefined,
+): JsonObject {
   const images = Array.isArray(item.images) ? item.images : [];
-  const image = images.length > 0 ? toImageSet(images[0]) : null;
+  const image = images.length > 0 ? toImageSet(images[0], imgBaseUrl) : null;
   return {
     product_id: item.product_id,
     title: item.title_snapshot,
@@ -118,12 +126,13 @@ export function toOrderDetail(
     payment: OrderPaymentSummary | null;
   },
   displayCurrencies: readonly DisplayCurrency[],
+  imgBaseUrl: string | undefined,
 ): JsonObject {
   return {
     ...toOrderSummary(row, displayCurrencies),
     ...(row.contact_email !== null ? { contact_email: row.contact_email } : {}),
     terms_version: row.terms_version,
-    items: parts.items.map(toOrderItemView),
+    items: parts.items.map((it) => toOrderItemView(it, imgBaseUrl)),
     address: row.address_snapshot,
     items_jpy: row.items_jpy,
     shipping_jpy: row.shipping_jpy,

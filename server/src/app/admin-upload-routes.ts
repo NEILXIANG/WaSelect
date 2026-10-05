@@ -156,6 +156,11 @@ export function mountAdminUploadRoutes(app: Express, deps: AdminUploadRoutesDeps
         ...(card === undefined ? {} : { card }),
         ...(detail === undefined ? {} : { detail }),
         image_key: detailObjectKey(imageId),
+        // 0.6.28 / AJ-361：三档的**共同主键**——商品图要存它而不是三档 URL
+        //（业务表不存存储位置，与 Banner 存 image_key 同一条理由；换 CDN 不用改历史数据）。
+        // 恒返回（不依赖 IMG_BASE_URL）：存库的值不能因为"图床域名没配"就换一种形态，
+        // 否则同一批商品里会混着 id 与 URL 两种条目，而它们看起来都合法。
+        image_id: imageId,
       });
     })().catch(next);
   });

@@ -38,7 +38,12 @@ afterAll(async () => {
   await closeDb(db);
 });
 
-async function buildServer(): Promise<{ url: string; close: () => Promise<void> }> {
+/**
+ * @param imgBaseUrl 传了才塞进 config（只有 AJ-361 那条用例需要显式配图床域名）。
+ */
+async function buildServer(
+  imgBaseUrl?: string,
+): Promise<{ url: string; close: () => Promise<void> }> {
   const sink = new MemorySink();
   const logger = createLogger({ env: 'test', destination: sink });
   const config = loadConfig({
@@ -49,6 +54,7 @@ async function buildServer(): Promise<{ url: string; close: () => Promise<void> 
     JWT_SECRET,
     PAYMENT_CHANNELS: 'mock',
     TERMS_VERSION: 'TOS-TEST-1',
+    ...(imgBaseUrl === undefined ? {} : { IMG_BASE_URL: imgBaseUrl }),
   });
   const app = createHttpApp({
     logger,
@@ -331,6 +337,46 @@ describe('鉴权策略的真路由级接线（三审 S3 / U23；骨架退役时�
       // 控制组：同密钥、正规签发（HS256 + exp）→ 200，证明拒的是策略不是密钥/签发者
       const ok = await get(srv.url, '/api/v1/orders');
       expect(ok.status).toBe(200);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AJ-361（CAT2-08 第一步）：订单详情的行项目图也认 image_id
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// @why 订单详情的图走的是**第三个**装配点（`order-views` → `toOrderItemView`），
+//      与买家商品页、管理端列表各一份 `IMG_BASE_URL` 的传递。三处只要漏一处，
+//      表现就是"订单里的商品图没了"——而订单是**快照**，商品页还正常，
+//      于是看起来像"这张图的存储被删了"，排障方向从一开始就错。
+// @why 改商品图必须在**建单之前**：`order_items.images` 是下单时的快照，
+//      建单后再改 `products.images` 不会影响这条订单（本文件其余用例都依赖这个语义）。
+describe('AJ-361：订单行项目图按 image_id 存', () => {
+  it('🔴 商品图存 {image_id} → 订单详情行项目读回三档 URL', async () => {
+    // ⚠️ 用 `db.json()` 而不是 `${JSON.stringify(...)}::jsonb`：后者会被 postgres.js
+    //    按 jsonb 二次编码（存进去是"JSON 字符串包着 JSON"，读回是 string 不是 array）。
+    await db`
+      update products
+         set images = ${db.json([{ image_id: 'img-7qk3m9vz2rx8' }])}
+       where id = 'p-knife'
+    `;
+    const srv = await buildServer('https://img.example.com');
+    try {
+      const orderId = await createOrder(srv.url, 'q1');
+      const r = await get(srv.url, `/api/v1/orders/${orderId}`);
+      expect(r.status).toBe(200);
+      const items = (
+        r.json as {
+          items: Array<{ product_id: string; image?: Record<string, string> }>;
+        }
+      ).items;
+      expect(items.find((i) => i.product_id === 'p-knife')?.image).toEqual({
+        thumb: 'https://img.example.com/img/img-7qk3m9vz2rx8/thumb.webp',
+        card: 'https://img.example.com/img/img-7qk3m9vz2rx8/card.webp',
+        detail: 'https://img.example.com/img/img-7qk3m9vz2rx8/detail.webp',
+      });
     } finally {
       await srv.close();
     }

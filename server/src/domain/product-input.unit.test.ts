@@ -247,6 +247,38 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     expect(reasons({ ...base(), images: ['a'] })).toContain('image_invalid');
   });
 
+  // ── images 的新形态：{image_id}（0.6.28 / AJ-361）──────────────────────────
+  it('images 条目可以是 {image_id}：存的是 id 本身，不是三档 URL', () => {
+    expect(ok({ ...base(), images: [{ image_id: 'img-7qk3m9vz2rx8' }] }).images).toEqual([
+      { image_id: 'img-7qk3m9vz2rx8' },
+    ]);
+  });
+
+  it('image_id 不合法 → 拒绝（存进去就永远拼不出键，写入侧先拦）', () => {
+    // 含大写、含点、含斜杠：都不是 IdGen 产出的形状（IMAGE_ID_PATTERN）
+    expect(reasons({ ...base(), images: [{ image_id: 'Bad_Id' }] })).toContain('image_invalid');
+    expect(reasons({ ...base(), images: [{ image_id: 'a.b' }] })).toContain('image_invalid');
+    expect(reasons({ ...base(), images: [{ image_id: 'img/abc' }] })).toContain('image_invalid');
+    expect(reasons({ ...base(), images: [{ image_id: '' }] })).toContain('image_invalid');
+    expect(reasons({ ...base(), images: [{ image_id: 123 }] })).toContain('image_invalid');
+  });
+
+  it('image_id 与 thumb/card/detail 混填 → 拒绝（形状不唯一，不许替调用方猜）', () => {
+    expect(
+      reasons({
+        ...base(),
+        images: [{ image_id: 'img-abc', thumb: 'a', card: 'b', detail: 'c' }],
+      }),
+    ).toContain('image_invalid');
+  });
+
+  it('带 image_key 不算混填：它不是档位，只是上传响应带出的附加键', () => {
+    expect(
+      ok({ ...base(), images: [{ image_id: 'img-abc', image_key: 'img/img-abc/detail.webp' }] })
+        .images,
+    ).toEqual([{ image_id: 'img-abc' }]);
+  });
+
   it('jan_code 超 13 字符 → 拒绝（DB VARCHAR(13)；超长会在入库时才炸）', () => {
     expect(reasons({ ...base(), jan_code: '1'.repeat(14) })).toContain('jan_code_too_long');
     expect(ok({ ...base(), jan_code: '1'.repeat(13) }).jan_code).toBe('1'.repeat(13));
