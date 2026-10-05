@@ -104,6 +104,41 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
     }
   }
 
+  /**
+   * 汇率 → ×1e8 整数；算不出来 → `undefined`（**降级，不是整页 500**，CAT2-04）。
+   *
+   * @why 与 {@link minorOrUndefined} 是**同一个承诺的两半**：那边守"脏价格"，这边守"脏汇率"。
+   *      `toRateInt` 会为 `|rate| ≥ 1e6` / `≤ 0` / 非有限值抛 RangeError，
+   *      而它此前在两个 try **之外**调用 ⇒ **一条**脏汇率让整页 500——
+   *      于是文件头那句"能算几币种算几币种"在汇率侧其实是空的：
+   *      脏价格（AJ-211）已经能降级，脏汇率却能把整个公开目录打挂。
+   * @why 不能靠"写入侧有上界"来排除可达性：`fx_rates` 的 DB 约束只有 `rate > 0`（023 迁移），
+   *      **没有上界**——与 `products.price_jpy` 一样。这正是 B25 当年决定
+   *      "读侧必须自己能降级"的理由：迁移、手工改库、上界收紧之前的旧数据，
+   *      都不是写入侧校验能拦住的。`MAX_RATE = 1e6` 会**抛**，抛出来之后由谁接住，就是本函数。
+   * @limitation 与 `minorOrUndefined` 一样是 **error 级**：库里有一个算不出的汇率是数据事故，
+   *      必须有人去看；但它**不阻断**请求——展示价是文案不是下单依据（AJ-108）。
+   * @param productId 详情页传（定位到商品）；列表页是"一次汇率影响全部商品"，不传。
+   */
+  function rateIntOrUndefined(
+    raw: string,
+    currency: DisplayCurrency,
+    productId?: string,
+  ): number | undefined {
+    try {
+      return toRateInt(raw);
+    } catch (e) {
+      deps.logger.error('fx_rate_invalid', {
+        result: 'failed',
+        // 不回显原始 rate：错误消息里已经带了具体值（toRateInt 的 RangeError），
+        // 再原样记一遍只是把客户端/库里的脏值复制一份进日志。
+        ctx: { currency, ...(productId === undefined ? {} : { product_id: productId }) },
+        err: e instanceof Error ? e : new Error(String(e)),
+      });
+      return undefined;
+    }
+  }
+
   /** 浏览降级版 display：能算几币种算几币种（@why 见文件头）。 */
   async function displayOf(
     priceJpy: number,
@@ -117,7 +152,9 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
     for (const c of currencies) {
       const rate = fx.get(c);
       if (rate === undefined) continue;
-      const minor = minorOrUndefined(priceJpy, toRateInt(rate), c, productId);
+      const rateInt = rateIntOrUndefined(rate, c, productId);
+      if (rateInt === undefined) continue; // 脏汇率：只丢这一个币种
+      const minor = minorOrUndefined(priceJpy, rateInt, c, productId);
       if (minor !== undefined) out[c] = minor;
     }
     return out;
@@ -153,7 +190,9 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
         const rateInts: Partial<Record<DisplayCurrency, number>> = {};
         for (const c of currencies) {
           const r = fx.get(c);
-          if (r !== undefined) rateInts[c] = toRateInt(r);
+          if (r === undefined) continue;
+          const ri = rateIntOrUndefined(r, c); // 列表页是"一次汇率影响全部商品"，没有 product_id
+          if (ri !== undefined) rateInts[c] = ri;
         }
         res.json({
           items: items.map((p) => {

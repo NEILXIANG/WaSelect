@@ -134,6 +134,53 @@ describe('B25 / AJ-211：脏价格只降级，不整页 500', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CAT2-04：脏**汇率**只降级，不整页 500（与 AJ-211 的脏价格是同一个承诺的两半）
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// @why 直接 `update fx_rates` 绕过写入侧：写入侧（`FX_RAW_RATE_BOUNDS`）有上界，
+//      但**DB 只有 `rate > 0`、没有上界（023）**——与 `products.price_jpy` 同形，
+//      而 B25 / AJ-211 当年正是据此决定"读侧必须自己能降级"。
+// @why 列表与详情**各一条**：两条路径各自算汇率（列表一次算好给全部商品、
+//      详情走 `displayOf`），只修一边是这类缺陷最常见的残留方式（AJ-211 就是两处一起修的）。
+describe('CAT2-04：脏汇率只降级，不整页 500', () => {
+  it('🔴 列表：某币种汇率超出可精确表示的范围 → 整页仍 200，该币种省略，并记 error', async () => {
+    await db`update fx_rates set rate = 1234567 where quote = 'USD'`;
+    const srv = await buildServer();
+    try {
+      const r = await get(srv.url, '/api/v1/products?size=50');
+      expect(r.status).toBe(200);
+      const body = r.json as {
+        items: Array<{ id: string; display: Record<string, number> }>;
+      };
+      const knife = body.items.find((p) => p.id === 'p-1');
+      expect(knife).toBeDefined();
+      expect(knife?.display['USD']).toBeUndefined(); // 那个币种丢了，页面还在
+      const rows = srv.sink.find('fx_rate_invalid');
+      expect(rows.length).toBeGreaterThanOrEqual(1);
+      expect(rows[0]?.ctx).toMatchObject({ currency: 'USD' });
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 详情：同样降级，且日志定位到具体商品（不是只修了列表）', async () => {
+    await db`update fx_rates set rate = 1234567 where quote = 'USD'`;
+    const srv = await buildServer();
+    try {
+      const r = await get(srv.url, '/api/v1/products/p-1');
+      expect(r.status).toBe(200);
+      const body = r.json as { price_jpy: number; display: Record<string, number> };
+      expect(body.price_jpy).toBe(8800); // 日元原价照出（它本身没错）
+      expect(body.display['USD']).toBeUndefined();
+      const rows = srv.sink.find('fx_rate_invalid');
+      expect((rows[0]?.ctx as Record<string, unknown>)['product_id']).toBe('p-1');
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
 describe('GET /products（公开，不鉴权）', () => {
   it('列表只出上架商品；display 能算就算（CNY 无汇率 → 降级省略，不炸）', async () => {
     const srv = await buildServer();
