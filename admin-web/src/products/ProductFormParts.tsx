@@ -17,6 +17,7 @@
  */
 import { useState } from 'react';
 import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG } from '@waselect/shared';
+import type { ProductImageEntry } from './view.js';
 
 export interface FieldProps {
   label: string;
@@ -155,7 +156,8 @@ export function FreeTagInput({ value, onChange, error = '' }: FreeTagInputProps)
 }
 
 export interface ImagePickerProps {
-  images: Array<{ thumb: string; card: string; detail: string }>;
+  /** 预览只用 `thumb`（最小的那档）；`image_id` 由提交侧负责，这里不读它。 */
+  images: ProductImageEntry[];
   onAdd: (file: File) => void;
   onRemove: (index: number) => void;
   uploading: boolean;

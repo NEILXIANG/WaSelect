@@ -38,20 +38,41 @@ const deps = (fetchImpl: typeof fetch) => ({
 describe('uploadImage（multipart，不走 JSON 封装）', () => {
   it('走 FormData 而不是 JSON.stringify（body 是 FormData 实例）', async () => {
     const { impl, seen } = stubFetch(() =>
-      json({ thumb: 't', card: 'c', detail: 'd', image_key: 'k' }, 201),
+      json({ thumb: 't', card: 'c', detail: 'd', image_key: 'k', image_id: 'id-1' }, 201),
     );
     const file = new Blob(['x'], { type: 'image/png' }) as unknown as File;
     const out = await uploadImage(deps(impl), file);
     expect(seen[0]?.init.body).toBeInstanceOf(FormData);
     // ⚠️ 没有 content-type: application/json（否则服务端拿不到 multipart 边界 → 40001）
     expect((seen[0]?.init.headers as Record<string, string>)['content-type']).toBeUndefined();
-    expect(out).toEqual({ thumb: 't', card: 'c', detail: 'd', image_key: 'k' });
+    expect(out).toEqual({
+      thumb: 't',
+      card: 'c',
+      detail: 'd',
+      image_key: 'k',
+      image_id: 'id-1',
+    });
+  });
+
+  it('⚠️ image_id 缺失或空串 → 抛（0.6.28 起恒返回；缺它商品图就只能存回三档 URL）', async () => {
+    // @why 与 `image_key` 不是同一条：三档 URL 可以全省略（图床域名没配），
+    //      image_id **不依赖** IMG_BASE_URL——它是"要存进库的值"。
+    //      静默放行的表现是"图存进去了、但存的是 URL"（AJ-361 第一步的收益被悄悄抹掉）。
+    for (const body of [
+      { thumb: 't', card: 'c', detail: 'd', image_key: 'k' },
+      { thumb: 't', card: 'c', detail: 'd', image_key: 'k', image_id: '' },
+    ]) {
+      const { impl } = stubFetch(() => json(body, 201));
+      await expect(uploadImage(deps(impl), new Blob(['x']) as unknown as File)).rejects.toThrow(
+        /image_id/,
+      );
+    }
   });
 
   it('⚠️ image_key 缺失或空串 → 抛（0.6.8 起服务端恒返回，缺了 Banner 提交的就是空 key）', async () => {
     for (const body of [
-      { thumb: 't', card: 'c', detail: 'd' },
-      { thumb: 't', card: 'c', detail: 'd', image_key: '' },
+      { thumb: 't', card: 'c', detail: 'd', image_id: 'id-1' },
+      { thumb: 't', card: 'c', detail: 'd', image_key: '', image_id: 'id-1' },
     ]) {
       const { impl } = stubFetch(() => json(body, 201));
       await expect(uploadImage(deps(impl), new Blob(['x']) as unknown as File)).rejects.toThrow(
@@ -62,17 +83,24 @@ describe('uploadImage（multipart，不走 JSON 封装）', () => {
 
   it('⚠️ 三档缺一/缺二 → 抛（畸形响应）；三档全缺 → 放行（IMG_BASE_URL 未配置的降级形状）', async () => {
     for (const missing of ['thumb', 'card', 'detail'] as const) {
-      const body: Record<string, string> = { thumb: 't', card: 'c', detail: 'd', image_key: 'k' };
+      const body: Record<string, string> = {
+        thumb: 't',
+        card: 'c',
+        detail: 'd',
+        image_key: 'k',
+        image_id: 'id-1',
+      };
       delete body[missing];
       const { impl } = stubFetch(() => json(body, 201));
       await expect(uploadImage(deps(impl), new Blob(['x']) as unknown as File)).rejects.toThrow(
         /三档不全/,
       );
     }
-    // 全缺是合法降级（banner image 同口径：字段缺席才是"没有 URL"），调用方自行决定能否接受
-    const { impl } = stubFetch(() => json({ image_key: 'k' }, 201));
+    // 全缺是合法降级（banner image 同口径：字段缺席才是"没有 URL"），调用方自行决定能否接受。
+    // ⚠️ `image_id` **不受**这条降级影响：它不依赖 IMG_BASE_URL（@limitation 四）。
+    const { impl } = stubFetch(() => json({ image_key: 'k', image_id: 'id-1' }, 201));
     const out = await uploadImage(deps(impl), new Blob(['x']) as unknown as File);
-    expect(out).toEqual({ image_key: 'k' });
+    expect(out).toEqual({ image_key: 'k', image_id: 'id-1' });
   });
 
   it('HTTP 非 2xx 且带业务码 → 抛**业务错**（KD-13 前这里断言的是"HTTP 400"——把缺陷行为钉成了期望）', async () => {

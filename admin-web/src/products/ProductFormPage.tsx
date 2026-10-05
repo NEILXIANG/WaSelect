@@ -123,18 +123,25 @@ export function ProductFormPage({
     setError('');
     try {
       const imageSet = await uploadImage({ baseUrl, getToken, onUnauthorized }, file);
-      // 商品图存的是三档 URL（products.images JSONB），IMG_BASE_URL 未配置时
-      // 上传只回 image_key——对 Banner 够用，对商品图不够，在这里拦给明白话。
+      // 商品图**存**的是 `image_id`（0.6.29 / AJ-362）——业务表不存存储位置；
+      // 三档 URL 只留在表单里做**预览**与"移除"按钮的缩略图。
+      // ⚠️ 所以三档 URL 仍必须拿到：拿不到就意味着编辑页看不见这张图
+      //    （存储侧是成功的，但运营会以为上传失败而反复重传）。
       // ⚠️ 先解构再判空：直接在闭包里读 imageSet.thumb 拿不到这里的判空收窄（TS 在回调内失效）。
-      const { thumb, card, detail } = imageSet;
+      const { thumb, card, detail, image_id } = imageSet;
       if (thumb === undefined || card === undefined || detail === undefined) {
         throw new ApiError(
           NETWORK_ERROR_CODE,
-          '服务端未配置 IMG_BASE_URL：上传成功但没有可展示的 URL，商品图无法保存',
+          '服务端未配置 IMG_BASE_URL：上传成功但没有可展示的 URL（商品图已存下 id，但编辑页预览不了）',
           '',
         );
       }
-      setForm((prev) => ({ ...prev, images: [...prev.images, { thumb, card, detail }] }));
+      // ⚠️ 提交时**只发 image_id**、不带三档 URL：服务端把"id + 三档 URL"判为混填并拒
+      //    （AJ-361）。丢 URL 这一步在 `toProductInput` 里做，这里保留它们只为预览。
+      setForm((prev) => ({
+        ...prev,
+        images: [...prev.images, { image_id, thumb, card, detail }],
+      }));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {

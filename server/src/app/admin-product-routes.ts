@@ -33,6 +33,7 @@ import { requireRole } from './auth.js';
 import { toImageSet } from './product-routes.js';
 import { createCatalogAdminRepo, type AdminProductRow } from '../adapters/catalog-admin.js';
 import { validateProductInput } from '../domain/product-input.js';
+import { isImageId } from '../domain/upload-image.js';
 import { setAuditTarget } from './admin-audit.js';
 
 /** 契约 `PATCH status` 的两值枚举（下线不发版这条要改时，改这里 + 契约 + 前端三处）。 */
@@ -45,6 +46,33 @@ export interface AdminProductRoutesDeps {
   config: AppConfig;
   auth: AuthConfig;
   identity: IdentityCheck;
+}
+
+/**
+ * 管理端的 `images` 条目 → 契约 ImageSet：**比买家侧多带一个 `image_id`**（0.6.29 / AJ-362）。
+ *
+ * @why 管理端必须**回显** id，这不是顺手加的字段，是"改存 image_id"这件事的**成立前提**——
+ *      编辑页拿不到 id ⇒ 保存时只能发回三档 URL ⇒ 一次"只改标题的编辑"就把这个商品
+ *      静默退回旧形态（业务表里又存回了存储位置），第一步的收益被**反向抹掉**，
+ *      而且没有任何一方报错：运营看到的是"保存成功、图还在"。
+ * @why 买家侧**不给** id（`toImageSet` 本身不带）：买家要的是可直接展示的 URL，
+ *      id 对他没有用途；"同一个 ImageSet 两端长得不一样"由**谁需要**划分，
+ *      不是图省事两端都给——两端都给的后果是契约里出现一个大部分消费者不认识的字段。
+ * @why 三档 URL 仍然走 `toImageSet`（同一份映射）：只有"要不要附 id"这一层是管理端独有的，
+ *      渲染逻辑与键形仍然只有一处；这里不重新实现"怎么拼 URL"。
+ * @limitation 只有**按 id 存的**条目才有 `image_id`：存量条目是三档 URL，没有 id，
+ *      前端据此保持旧形态提交（不会因为本次改动被改写成别的形状）。
+ */
+function toAdminImageSet(
+  raw: unknown,
+  imgBaseUrl: string | undefined,
+): Record<string, unknown> | null {
+  const set = toImageSet(raw, imgBaseUrl);
+  if (set === null) return null;
+  const o = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const id = o['image_id'];
+  // 判定复用 isImageId（domain/upload-image.ts 的单一真源）：本文件不另写一份"像 id 的样子"
+  return typeof id === 'string' && isImageId(id) ? { ...set, image_id: id } : set;
 }
 
 /**
@@ -61,7 +89,7 @@ function toAdminProduct(
     title: r.title,
     category: r.category,
     price_jpy: r.price_jpy,
-    images: r.images.map((it) => toImageSet(it, imgBaseUrl)).filter((s) => s !== null),
+    images: r.images.map((it) => toAdminImageSet(it, imgBaseUrl)).filter((s) => s !== null),
     stock: r.stock,
     status: r.status,
     ...(r.description !== null ? { description: r.description } : {}),

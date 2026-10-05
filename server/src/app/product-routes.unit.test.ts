@@ -32,6 +32,17 @@ describe('toImageSet（商品图条目 → ImageSet）', () => {
     });
   });
 
+  it('买家侧 ImageSet **不带** image_id（键恰好三档；id 只对管理端有意义）', () => {
+    // @why 0.6.29 / AJ-362：管理端要多带一个 image_id 才能回存，于是"ImageSet 到底几个键"
+    //      第一次有了分歧。钉住买家侧**恰好**三档，防止"给管理端加字段"顺手加到了公共映射上——
+    //      那会让契约里出现一个大部分消费者不认识的字段，且没有任何一方报错。
+    expect(Object.keys(toImageSet({ image_id: ID }, BASE) ?? {}).sort()).toEqual([
+      'card',
+      'detail',
+      'thumb',
+    ]);
+  });
+
   it('IMG_BASE_URL 带尾部斜杠 → 不出现双斜杠（只在拼接处归一一次）', () => {
     const r = toImageSet({ image_id: ID }, `${BASE}///`);
     expect(r).not.toBeNull();

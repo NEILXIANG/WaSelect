@@ -434,12 +434,45 @@ describe('AJ-361：管理端按 image_id 存商品图', () => {
         items: Array<{ id: string; images: Array<Record<string, string>> }>;
       }
     ).items;
+    // ③ **回显 image_id**（0.6.29 / AJ-362）：编辑页拿不到 id ⇒ 保存时只能发回三档 URL
+    //    ⇒ 一次"只改标题的编辑"就把这个商品静默退回旧形态。这一项是第二步的成立前提。
     expect(items.find((x) => x.id === id)?.images).toEqual([
       {
         thumb: 'https://img.example.com/img/img-7qk3m9vz2rx8/thumb.webp',
         card: 'https://img.example.com/img/img-7qk3m9vz2rx8/card.webp',
         detail: 'https://img.example.com/img/img-7qk3m9vz2rx8/detail.webp',
+        image_id: 'img-7qk3m9vz2rx8',
       },
+    ]);
+    await s.close();
+  });
+
+  it('按三档 URL 存的存量条目 → 不带 image_id（不凭空造一个，也不改写它的形状）', async () => {
+    const s = await buildServer('https://img.example.com');
+    const r = await fetch(`${s.url}/api/v1/admin/products`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${await adminToken()}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        body({
+          images: [{ thumb: 'a.webp', card: 'b.webp', detail: 'c.webp' }],
+        }),
+      ),
+    });
+    expect(r.status).toBe(201);
+    const id = String(((await r.json()) as { id: string }).id);
+    const list = await fetch(`${s.url}/api/v1/admin/products`, {
+      headers: { authorization: `Bearer ${await adminToken()}` },
+    });
+    const items = (
+      (await list.json()) as {
+        items: Array<{ id: string; images: Array<Record<string, string>> }>;
+      }
+    ).items;
+    expect(items.find((x) => x.id === id)?.images).toEqual([
+      { thumb: 'a.webp', card: 'b.webp', detail: 'c.webp' },
     ]);
     await s.close();
   });

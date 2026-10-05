@@ -128,6 +128,65 @@ describe('emptyProductForm / productFormModel', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// AJ-362（0.6.29）：商品图提交 `image_id`，三档 URL 只留在表单里做预览
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// @why 第一条与第二条是一件事的两半：**存** id 与**回显** id。只做前者的后果是——
+//      编辑页拿不到 id ⇒ 保存只能发回三档 URL ⇒ 一次"只改标题的编辑"就把商品
+//      静默退回旧形态（业务表里又存回了存储位置），而运营看到的是"保存成功、图还在"。
+describe('AJ-362：images 的提交形态', () => {
+  it('有 image_id → 只发 {image_id}，三档 URL 一个都不带（带上是混填 → 40001）', () => {
+    const out = toProductInput(
+      productFormModel({
+        images: [{ image_id: 'img-abc', thumb: 't.webp', card: 'c.webp', detail: 'd.webp' }],
+      }),
+    );
+    expect(out['images']).toEqual([{ image_id: 'img-abc' }]);
+  });
+
+  it('🔴 编辑往返：服务端回显的 image_id 经表单往返后**仍是** image_id（不许退回 URL）', () => {
+    // @why 这条是第二步的**成立前提**。0.6.28 的读路径会丢掉 image_id（AJ-362 前半修掉），
+    //      丢了的形态正是"保存成功、图还在、但库里又变回 URL"——没有任何一方报错，
+    //      而它恰好发生在运营第一次编辑这个商品的时候。
+    const row = {
+      ...PRODUCT,
+      images: [{ image_id: 'img-abc', thumb: 't.webp', card: 'c.webp', detail: 'd.webp' }],
+    };
+    expect(toProductInput(productFormModel(row))['images']).toEqual([{ image_id: 'img-abc' }]);
+  });
+
+  it('🔴 隔离「回显」这一半：productFormModel 直接保留 image_id（不经 toProductInput）', () => {
+    // @why 上面两条走的是**整条往返**，于是"读侧丢 id"与"提交时没丢 URL"两处退化
+    //      **撞在同一对用例上**（实测两次注入给出完全相同的两条红）——红灯出现了，
+    //      却说不清是哪一处坏了。这条只断言映射层，把"回显"单独钉住。
+    //      ⚠️ 反过来**隔离不了"提交"那一半**：`toProductInput` 内部的 `asForm` 会把
+    //      images 再过一遍 `productFormModel`（view.ts 就是这么实现的），
+    //      所以任何走 `toProductInput` 的用例都必然同时经过两侧——
+    //      这是本条用例存在的原因，也是它只能钉一半的原因。
+    expect(
+      productFormModel({
+        images: [{ image_id: 'img-abc', thumb: 't.webp', card: 'c.webp', detail: 'd.webp' }],
+      }).images,
+    ).toEqual([{ image_id: 'img-abc', thumb: 't.webp', card: 'c.webp', detail: 'd.webp' }]);
+  });
+
+  it('存量条目（按三档 URL 存）→ 没有 image_id，提交形态照旧（不自动迁移）', () => {
+    expect(toProductInput(productFormModel(PRODUCT))['images']).toEqual([
+      { thumb: 't.jpg', card: 'c.jpg', detail: 'd.jpg' },
+    ]);
+  });
+
+  it('空串 image_id 按"没有"处理（服务端回显的是键缺席，不是给个空串）', () => {
+    const out = toProductInput(
+      productFormModel({
+        images: [{ image_id: '', thumb: 't.webp', card: 'c.webp', detail: 'd.webp' }],
+      }),
+    );
+    expect(out['images']).toEqual([{ thumb: 't.webp', card: 'c.webp', detail: 'd.webp' }]);
+  });
+});
+
 describe('productFormErrors（上架预检）', () => {
   it('合法表单 → 无错误', () => {
     expect(productFormErrors(productFormModel(PRODUCT))).toEqual({

@@ -29,7 +29,11 @@ export interface AdminProductLike {
   stock?: number;
   status?: string;
   description?: string;
-  images?: Array<{ thumb?: string; card?: string; detail?: string }>;
+  /**
+   * `image_id`：0.6.29 / AJ-362 起，条目**按 id 存**时服务端回显它（编辑页靠它回存 id）；
+   * 存量条目（三档 URL）没有这个键。
+   */
+  images?: Array<{ thumb?: string; card?: string; detail?: string; image_id?: string }>;
   compliance_tags?: string[];
   hs_code?: string;
   customs_desc_en?: string;

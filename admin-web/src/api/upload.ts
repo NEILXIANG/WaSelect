@@ -17,17 +17,31 @@
  *              `IMG_BASE_URL` 未配置时三档全省略（banner `image` 同口径：字段缺席
  *              才是"没有可展示的 URL"）；缺一/缺二是畸形响应，抛。
  *              `image_key` 恒在（0.6.8 起，AJ-143），缺它即抛。
+ * @limitation 四：`image_id` 恒在（0.6.28 起 / AJ-361），缺它即抛。
+ *              它与三档 URL **不同命运**：三档可以全省略（图床域名没配），
+ *              `image_id` **不依赖** `IMG_BASE_URL`——因为它是"要存进库的值"，
+ *              不能因为"域名还没配"就换一种形态（否则同一批商品里会混着 id 与 URL 两种条目）。
+ *              商品表单从 0.6.29 / AJ-362 起**只存 `image_id`**，所以缺它必须响亮失败：
+ *              静默放行的表现是"图存进去了、但存的是 URL"（第一步的收益被悄悄抹掉）。
  *
  * @see ../../../contracts/api-contract.yaml（/admin/upload）
  */
 import { ApiError, NETWORK_ERROR_CODE, UNAUTHORIZED_CODE } from './errors.js';
 
-/** 上传响应：三档 URL 可选（IMG_BASE_URL 未配置时全省略），`image_key` 恒在。 */
+/**
+ * 上传响应：三档 URL 可选（IMG_BASE_URL 未配置时全省略），`image_key` 与 `image_id` **恒在**。
+ *
+ * @why 商品图从 0.6.29 / AJ-362 起**只存 `image_id`**（三档的共同主键）——
+ *      三档 URL 只是给编辑页**预览**用的，不是要存进库的值。
+ *      两者在响应里同时出现，但用途完全不同，别在表单里互相顶替。
+ */
 export interface UploadedImage {
   thumb?: string;
   card?: string;
   detail?: string;
   image_key: string;
+  /** `img/{image_id}/{tier}.webp` 里的那一段；**恒返回**（不依赖 IMG_BASE_URL）。 */
+  image_id: string;
 }
 
 /**
@@ -107,14 +121,21 @@ export async function uploadImage(
 }
 
 /**
- * 上传响应形状校验（@limitation 二）：`image_key` 必须非空；
+ * 上传响应形状校验（@limitation 二 / 四）：`image_key` 与 `image_id` 都必须非空；
  * 三档 URL **全在或全缺**（全缺 = 服务端 IMG_BASE_URL 未配置，调用方自行决定能否接受——
- * Banner 只要 key 不受影响，商品图要 URL，由商品表单拦）。
+ * Banner 只要 key 不受影响，商品图要 URL 做预览，由商品表单拦）。
  */
 function assertUploadResponse(value: unknown, traceId: string): asserts value is UploadedImage {
   const o = value as Record<string, unknown> | null;
   if (typeof o?.image_key !== 'string' || o.image_key === '') {
     throw new ApiError(NETWORK_ERROR_CODE, '上传响应缺 image_key（0.6.8 起服务端恒返回）', traceId);
+  }
+  if (typeof o?.image_id !== 'string' || o.image_id === '') {
+    throw new ApiError(
+      NETWORK_ERROR_CODE,
+      '上传响应缺 image_id（0.6.28 起服务端恒返回；缺了商品图只能存回三档 URL）',
+      traceId,
+    );
   }
   const present = ['thumb', 'card', 'detail'].filter(
     (k) => typeof o[k] === 'string' && (o[k] as string) !== '',

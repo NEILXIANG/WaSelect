@@ -164,8 +164,28 @@ export interface ProductForm {
   editorialMaker: string;
   /** `products.tags`：编辑标签（自由文案，如「南部铁器」「无添加」）。 */
   editorialTags: string[];
-  /** 图片集（契约 ImageSet[]；来自 `/admin/upload`）。 */
-  images: Array<{ thumb: string; card: string; detail: string }>;
+  /** 图片集（契约 ImageSet[]；来自 `/admin/upload` 与 `AdminProduct.images[]`）。 */
+  images: ProductImageEntry[];
+}
+
+/**
+ * 表单里的一张商品图。
+ *
+ * @why 从 0.6.29 / AJ-362 起，**提交的是 `image_id`（有它时），三档 URL 只留在表单里做预览**：
+ *      业务表不该存存储位置（域名 / CDN 前缀）——那是 AJ-143 / AJ-361 的同一条理由。
+ *      URL 仍在**本地**留着，是因为移除按钮与缩略图预览要它，而服务端读路径会重新拼出它们。
+ * @why 有 `image_id` 时**必须**丢掉三档 URL 再提交：服务端把"id + 三档 URL"判为**混填**并拒
+ *      （AJ-361：形状不唯一 ⇒ 不许替调用方猜）。所以这里不是"少发几个字段"的优化，是必须。
+ * @limitation 存量条目（此刻库里已是三档 URL 的那些）**没有** `image_id` ⇒ 仍按 URL 提交，
+ *      保持原形态不变；它们不会因为本次改动被"改写成"别的形状，也不会被自动迁移成 id。
+ */
+export interface ProductImageEntry {
+  /** 三档的共同主键（0.6.28 起上传响应恒带）。存量条目没有它。 */
+  image_id?: string;
+  /** 仅用于表单**预览**；有 `image_id` 时不提交。 */
+  thumb: string;
+  card: string;
+  detail: string;
 }
 
 /** 空表单（新建态）。 */
@@ -228,7 +248,11 @@ export function productFormModel(p: unknown): ProductForm {
     images: Array.isArray(src['images'])
       ? (src['images'] as unknown[]).map((img) => {
           const o = (typeof img === 'object' && img !== null ? img : {}) as Record<string, unknown>;
+          const id = typeof o['image_id'] === 'string' && o['image_id'] !== '' ? o['image_id'] : '';
           return {
+            // ⚠️ 空串当"没有"：服务端 0.6.29 起只在条目按 id 存时回显它，
+            //    存量条目没有这个键；补个空串进去会让下面的提交逻辑以为有 id。
+            ...(id !== '' ? { image_id: id } : {}),
             thumb: typeof o['thumb'] === 'string' ? o['thumb'] : '',
             card: typeof o['card'] === 'string' ? o['card'] : '',
             detail: typeof o['detail'] === 'string' ? o['detail'] : '',
@@ -397,6 +421,14 @@ export function toProductInput(form: unknown, originalStock?: string): Record<st
     why: f.editorialWhy.trim(),
     maker: f.editorialMaker.trim(),
     tags: f.editorialTags.map((t) => t.trim()).filter((t) => t !== ''),
-    images: f.images,
+    // ⚠️ 有 `image_id` 时**只**发 id，三档 URL 一个都不带：服务端把"id + 三档 URL"
+    //    判成**混填**并拒（AJ-361：形状不唯一，不许替调用方猜）。所以这不是"少发几个字段"，
+    //    带着 URL 一起发会直接 40001。
+    //    没有 id 的存量条目照旧发三档 URL，形态保持不变（不自动迁移，见 ProductImageEntry 的 @limitation）。
+    images: f.images.map((img) =>
+      img.image_id !== undefined && img.image_id !== ''
+        ? { image_id: img.image_id }
+        : { thumb: img.thumb, card: img.card, detail: img.detail },
+    ),
   };
 }
