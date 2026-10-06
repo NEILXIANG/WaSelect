@@ -1460,3 +1460,109 @@ describe('出网 API 版本覆盖全部调用点（PAY3-03 的下半：漏一个
     for (const c of calls) expect(c.headers?.[STRIPE_VERSION_HEADER]).toBe(STRIPE_API_VERSION);
   });
 });
+
+/**
+ * `charge.refunded` 的**金额口径**（AJ-376）。
+ *
+ * @why 这一组不是"正确行为"的守卫，而是**债务登记**：`refunded` 这个 outcome 目前
+ *      没有 applier（`refund-execution.ts` 的 @tradeoff 明写不接机构的退款回调），
+ *      所以取错金额**今天无人报错**。等到 F12 售后落账时，谁写 applier 谁就会读到
+ *      `event.amountMinor`——而它现在是**原扣款全额**，不是退款额。
+ *      把它们钉成断言，F12 改口径时这组会红，逼人确认而不是静默生效。
+ *
+ * @why 三个字段各说一件事，必须分开钉：`amount`（原扣款）/ `amount_refunded`（**累计**已退）
+ *      / `refunded` 布尔（**仅**全额退完才 true）。原注释只写了"取 amount_refunded"，
+ *      而它是**累计值**——第二次部分退款时它等于两次之和，拿它当"本次退了多少"会多退。
+ *
+ * @measured 真实事件样例与字段语义见 `stripe-checkout.ts` 的 OUTCOME_BY_TYPE['charge.refunded']
+ *      （五处独立来源一致）；本组的样本形状照抄那份样例，不是凭印象造。
+ */
+describe('charge.refunded 的金额口径（AJ-376：债务登记，F12 改口径时这一组会红）', () => {
+  /** 照抄实测样例的形状：一笔 10000 的扣款，第一次退 3000（部分退款）。 */
+  function chargeRefunded(over: Partial<Record<string, unknown>> = {}) {
+    return {
+      object: 'charge',
+      id: 'ch_x',
+      amount: 10_000, // 原扣款全额
+      amount_captured: 10_000,
+      amount_refunded: 3_000, // 累计已退 3000
+      refunded: false, // ⚠️ 部分退款时**仍是 false**
+      currency: 'jpy',
+      payment_intent: 'pi_x',
+      created: 1_694_109_201,
+      refunds: {
+        object: 'list',
+        data: [
+          {
+            object: 'refund',
+            id: 're_x',
+            amount: 3_000, // 本次退的
+            currency: 'jpy',
+            status: 'succeeded',
+            created: 1_694_109_201,
+          },
+        ],
+      },
+      ...over,
+    };
+  }
+
+  async function parse(object: Record<string, unknown>) {
+    const { provider } = build();
+    const { raw, headers } = signed('charge.refunded', { object });
+    return provider.parseWebhook(raw, headers);
+  }
+
+  it('🔴 当前口径：amountMinor 取的是**原扣款全额**（10000），不是退款额（3000）', async () => {
+    const ev = await parse(chargeRefunded());
+    expect(ev.outcome).toBe('refunded'); // 前提：确实归一化成了 refunded（否则下面断言的是空集）
+    expect(ev.amountMinor).toBe(10_000);
+  });
+
+  it('🔴 全额退款时两者相等——所以"取错了"只在**部分退款**时才暴露（最不容易被测到的那种）', async () => {
+    const ev = await parse(chargeRefunded({ amount_refunded: 10_000, refunded: true }));
+    // 全额退款：全额 == 累计已退，取哪个都对 ⇒ 只测全额的用例**永远绿**，测不出这个洞
+    expect(ev.amountMinor).toBe(10_000);
+  });
+
+  it('🔴 第二次部分退款：amount_refunded 是**累计**（6000），而 amountMinor 仍是全额 10000', async () => {
+    const ev = await parse(
+      chargeRefunded({
+        amount_refunded: 6_000, // 累计：3000 + 3000
+        refunds: {
+          object: 'list',
+          data: [
+            { object: 'refund', id: 're_1', amount: 3_000, status: 'succeeded' },
+            { object: 'refund', id: 're_2', amount: 3_000, status: 'succeeded' },
+          ],
+        },
+      }),
+    );
+    expect(ev.amountMinor).toBe(10_000);
+  });
+
+  /**
+   * @why 钉住"正确取法"在载荷里**确实存在**——否则 F12 的人会以为只能凑合用 `amount`。
+   *      本次退款额在 `refunds.data[]` 各自那条上，累计在 `amount_refunded`，
+   *      是否全额退完在 `refunded` 布尔。**三个都要，缺一个就会在某个场景记错账。**
+   */
+  it('载荷里三个口径都在（给 F12 留的取法：本次在 refunds.data[]，累计在 amount_refunded）', async () => {
+    const { http } = build();
+    const obj = chargeRefunded();
+    // 直接验样本形状：这三个键与本组第一条断言用的同一份对象
+    expect(obj.amount).toBe(10_000);
+    expect(obj.amount_refunded).toBe(3_000);
+    expect(obj.refunded).toBe(false);
+    expect((obj.refunds.data[0] as { amount: number }).amount).toBe(3_000);
+    // 前提自检：替身确实被建出来了（否则上面几条断言的 provider 可能没走真实现）
+    expect(http).toBeDefined();
+  });
+
+  it('部分退款的 refunded 布尔是 false——拿它当"已退款"判据会漏掉所有部分退款', async () => {
+    const ev = await parse(chargeRefunded());
+    // `refunded` 布尔不进 ProviderEvent（端口没这个字段），这里只钉住"它不参与判定"：
+    // outcome 由**事件类型**决定，与退了多少无关
+    expect(ev.outcome).toBe('refunded');
+    expect(ev.amountMinor).toBe(10_000);
+  });
+});

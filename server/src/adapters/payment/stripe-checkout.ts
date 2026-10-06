@@ -211,9 +211,25 @@ export const OUTCOME_BY_TYPE: Readonly<Record<string, ProviderEvent['outcome']>>
   'payment_intent.payment_failed': 'failed',
   'payment_intent.canceled': 'expired',
   'charge.refunded': 'refunded',
-  // ⚠️ `charge.refunded` 事件对象是**整张 Charge**：`amount` 是原扣款全额，退款额在
-  //    `amount_refunded`（NEEDS VERIFICATION：官方 changelog 未单列此事件载荷示例，
-  //    以 charge 对象结构推定）。F12 售后落账时取 `amount_refunded`，别用 `amount`。
+  // ⚠️⚠️ `charge.refunded` 的事件对象是**整张 Charge**（不是 Refund）。三个字段各说一件事，
+  //     搞混任何一个都会把账记错，而**当前没有一个消费方会报错**（refunded 这个 outcome 还没注册 applier）：
+  //     · `amount`         = **原扣款全额**（"Amount intended to be collected by this payment"）
+  //     · `amount_refunded`= **累计**已退（"can be less than the amount … if a partial refund
+  //                          was issued"）⇒ **不是本次退了多少**，第二次部分退款时它是两次之和
+  //     · `refunded`(bool) = 是否**已全额**退完 ⇒ 部分退款时它**仍是 false**（"If the charge is only
+  //                          partially refunded, this attribute will still be false"）
+  //     本次退款额只在 `refunds.data[]` 里（每个元素是一条 Refund，含自己的 `amount` 与 `status`）。
+  //     @measured ① 真实事件样例（api_version 2023-10-16，MagicBell 公开文档转载的 Stripe 原始载荷）：
+  //       data.object = { object:"charge", id:"ch_…", amount:2000, amount_captured:2000,
+  //                       amount_refunded:2000, refunded:true, payment_intent:"pi_…",
+  //                       refunds:{ data:[{ object:"refund", id:"re_…", amount:2000,
+  //                                         status:"succeeded" }] } }
+  //     @measured ② 字段语义（五处独立来源一致：docs.rs/async-stripe-core、docs.rs/stripe-rust、
+  //       apis.io 的 stripe-charge JSON Schema、Microsoft Learn 的 Stripe 连接器、
+  //       stripe.dev Terminal Android SDK 的 Charge.amountRefunded）：
+  //       `amount_refunded` = "Amount in cents refunded (can be less than the amount attribute
+  //       on the charge if a partial refund was issued)"；`refunded` 布尔在部分退款时为 false。
+  //     @see 下方 `parseWebhook` 的金额提取（当前取 `amount`，即全额——已由单测钉住，F12 改口径时那条会红）
   'charge.dispute.created': 'disputed',
   /**
    * 结案：**开案与结案分开两个 outcome**（@see ports/payment.ts ProviderEvent.outcome）。
@@ -668,6 +684,17 @@ export function createStripeCheckoutProvider(
         // （不能 quietly ignored）。`orderIdOf` 取不到时抛，这里不接住。
         orderId = orderIdOf(obj);
       }
+      /**
+       * 机构报的金额：优先 `amount_total`（Session / PI），其次 `amount`（Charge 等）。
+       *
+       * ⚠️ **`charge.refunded` 走的是第二支，取到的是原扣款全额，不是退款额**
+       *    （`amount_refunded` 才是累计已退，且它与"本次退了多少"也不是一回事）。
+       *    这不是实现缺陷而是**尚未决定的口径**：refunded 这个 outcome 目前没有 applier，
+       *    取错也无人报错；该由 F12 售后落账时按它需要的是"累计"还是"本次"来定，
+       *    所以这里**保留现状并把现状钉成断言**（`stripe-checkout.unit.test.ts` 的
+       *    「charge.refunded 的金额口径」一组），F12 改口径时那条会红，逼人确认而不是静默生效。
+       *    @see OUTCOME_BY_TYPE['charge.refunded'] 处三个字段的 @measured 语义
+       */
       const amount =
         typeof obj['amount_total'] === 'number'
           ? obj['amount_total']

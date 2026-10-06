@@ -16,9 +16,17 @@
  * @why "结果未知"与"确认失败"必须分开：前者换键可能退两次（机构已执行、我们没收到答复，KD-4），
  *      后者不换键永远拿回缓存的失败（机构对同键缓存执行结果 24h）。
  * @tradeoff 不接机构的退款回调（`charge.refunded` / `refund.updated`）自动落账：
- *      `charge.refunded` 在退款**创建**时还是**落定**时触发、部分退款时携带什么，未实测；
+ *      `charge.refunded` 在退款**创建**时还是**落定**时触发，未实测；
  *      按它迁 refunded 可能把在途甚至后来失败的退款记成已退。查询回的是退款对象本身的状态，语义确定。
  *      代价：pending 的单要靠人再点一次（或看到对账告警）才落定——MVP 退款量小，可接受。
+ *      ⚠️ 本条的**另一半已经实测**（AJ-376），不要再拿"载荷未知"当理由：
+ *        `charge.refunded` 的事件对象是**整张 Charge**，其中 `refunds.data[]` 每条带自己的 `status`
+ *        （@measured：真实事件样例 api_version 2023-10-16，`refunds.data[0].status:"succeeded"`），
+ *        所以"退款当前什么状态"其实**读得到**——真正没定的是**触发时机**（创建即发 vs 落定才发）。
+ *        也就是说：将来若要接这个回调，缺的不是"拿不到状态"，而是"不知道它在哪一刻发"——
+ *        实测办法是 `stripe listen --forward-to localhost:…/api/v1/pay/callback/stripe` 下发起一笔退款，
+ *        看事件与 `refunds.data[0].status` 的先后（计入 B9 之后的 Stripe test mode 联调清单）。
+ *        @see adapters/payment/stripe-checkout.ts 的 OUTCOME_BY_TYPE['charge.refunded']（三个金额字段的语义）
  * @limitation 一：机构侧"已被别处退掉"（如在 Stripe 后台手工退款）→ 我方 POST 被拒、记 provider_error，
  *              同键重试拿回同一个拒绝——走不出 refunding。由 stuck_refunds 报出后人工处理（改库需留痕）。
  * @limitation 二：Stripe 文档注明退款在 succeeded 之后仍可能转为 failed（极少见）；本模块只在
