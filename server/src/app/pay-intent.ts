@@ -70,7 +70,11 @@ import {
   voidInitiatedPayment,
   type OrderPayRow,
 } from '../adapters/orders.js';
-import { countPayCreateFailures, recordPaymentIntent } from './payment-intent.js';
+import {
+  countPayCreateFailures,
+  recordPaymentIntent,
+  updatePaymentProviderRef,
+} from './payment-intent.js';
 import { ProviderRejectedError } from '../ports/payment.js';
 import { asOrderStatus } from '../domain/order.js';
 import { toMinor, toRateInt } from '@waselect/shared';
@@ -316,6 +320,10 @@ export async function createPayIntent(
         });
 
   // ── 6. 登记 payments 行（复用不建行：同一意图同一行）─────────────────────────
+  // 复用但机构给了新会话号（M-03）：改登记新号，否则回调按单号核对对不上、钱到了单不落账
+  if (reusing && existing.provider_ref !== session.providerRef) {
+    await updatePaymentProviderRef(tx, existing.id, session.providerRef);
+  }
   if (!reusing) {
     await recordPaymentIntent(tx, {
       id: `pay-${idGen.uuid()}`,

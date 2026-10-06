@@ -427,7 +427,8 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
     // ⚠️ 两个"客户端可控"的分支共用 warn 通道（不改这里的话，SQLSTATE 22 类会被
     //    `err instanceof AppError` 判否 → 落进下面的 error 级 `unhandled_error`，
     //    修复了响应码却没修复告警噪声，那正是 ORD3-04 要去掉的一半）。
-    if (isBodyParseError(err) || sqlDataExceptionCode(err) !== null) {
+    // URIError = 路径参数解码失败（S-05），同属客户端可控输入
+    if (isBodyParseError(err) || sqlDataExceptionCode(err) !== null || err instanceof URIError) {
       // 客户端可控输入导致的失败：不是我们的故障 → warn 级，且 normalizeError 已确保不带堆栈
       httpLog.warn('request_rejected', {
         http_method: req.method,
@@ -559,6 +560,18 @@ function normalizeError(err: unknown): {
   body: { code: number; message: string };
   logFields: Record<string, unknown>;
 } {
+  // 路径参数里的非法百分号编码（S-05）：Express 5 解码参数失败抛 URIError（status=400、无 expose），
+  // 不单独处理就落进下面的"非 AppError"分支 → 500 + error 日志——任何匿名请求都能刷 5xx 与告警。
+  // @measured(express 5, 2026-10-05)：GET /x/%E0%A4%A → URIError「Failed to decode param '%E0%A4%A'」，status 400。
+  if (err instanceof URIError) {
+    const appErr = new AppError(40001, { reason: 'path_param_malformed' });
+    const { status, body } = toErrorResponse(appErr);
+    return {
+      status,
+      body,
+      logFields: { err_code: appErr.code, err_message: appErr.message, reason: appErr.details },
+    };
+  }
   if (isBodyParseError(err)) {
     const appErr = new AppError(40001, { reason: parseErrorReason(err) });
     const { status, body } = toErrorResponse(appErr);

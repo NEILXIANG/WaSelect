@@ -78,6 +78,24 @@ function int(defaultValue: number, min?: number) {
 }
 
 /**
+ * Node 定时器能表示的最大毫秒数（2^31 − 1）。
+ * @measured(node 22.22, 2026-10-05)：`setInterval(fn, 2**31)` → TimeoutOverflowWarning
+ *   「Timeout duration was set to 1.」，200ms 内触发 150 次。
+ */
+const TIMER_MAX_MS = 2_147_483_647;
+
+/**
+ * 会被喂给 setTimeout / setInterval 的毫秒配置（S-06）：在 int 之上加上限。
+ * @why 超过 2^31 − 1 时 Node 把定时器静默截成 1ms——调度器每毫秒跑一轮、停机预算 1ms 就到点。
+ */
+function timerMs(defaultValue: number, min: number) {
+  return z.preprocess(
+    (v) => (v === undefined || v === '' ? undefined : Number(v)),
+    z.number().int().min(min).max(TIMER_MAX_MS).default(defaultValue),
+  );
+}
+
+/**
  * 可选整数：空串 / 缺失 → undefined（用于"不设置即关闭该功能"的开关，如包邮阈值）。
  * @param min 下限（三审）：`FREE_SHIPPING_JPY=0` / 负数会变成"全场包邮"，与"留空 = 不包邮"
  *            的语义相撞——开关要么关（留空），要么是一个正阈值。
@@ -398,16 +416,22 @@ const schema = z.object({
    *      远小于机构放弃重发的窗口（小时级～3 天）。上线后拿到真实回调延迟分布再校准——
    *      它是配置项，调整不发版。
    */
-  CALLBACK_ORDER_GRACE_MS: int(900_000, 0),
+  CALLBACK_ORDER_GRACE_MS: timerMs(900_000, 0),
+  /**
+   * 有在途支付的单，到点后再等多久才由关单作业关闭（毫秒，M-01）。
+   * @why 窗口最后几秒付的款，支付通知往往晚几秒到；到点即关会把它判成迟到付款（钱扣了、单关了、库存回补）。
+   *      5 分钟远大于正常通知延迟（秒级），又不至于让库存被一张死单占太久。发起支付与短链仍按 expires_at 截止。
+   */
+  EXPIRE_PAYMENT_GRACE_MS: timerMs(300_000, 0),
   /** 常驻调度器 tick 间隔（D-43：web 进程内 setInterval + **事务级** pg_try_advisory_xact_lock（D-45②）；不是 Render Cron Job——每日作业才走 Cron，见 render.yaml）。 */
-  SCHEDULER_TICK_MS: int(60000, 1000),
+  SCHEDULER_TICK_MS: timerMs(60000, 1000),
   /**
    * N7：停机时摘流量（/readyz 转 503）后、close 前的等待毫秒数。
    * @why 平台健康检查有周期，立即 close 则 503 窗口≈0、在途请求被腰斩。
    *      5s 是**拍的**（Render 健康检查间隔量级为几秒）：够平台发现，又不至于显著拖慢发布。
    *      拿到平台真实摘流延迟后再校准——配置项，调整不发版。0 合法（开发/测试不等）。
    */
-  SHUTDOWN_READY_DELAY_MS: int(5_000, 0),
+  SHUTDOWN_READY_DELAY_MS: timerMs(5_000, 0),
   /**
    * B13 / AJ-202：停机时"等异步领域事件订阅者跑完"的上限毫秒数（0 = 不等）。
    *
@@ -423,7 +447,7 @@ const schema = z.object({
    *             （另加 exit 宽限 2s，合计约 15s）——平台停机宽限必须大于这个和，
    *             否则平台会在我们 drain 完之前 SIGKILL。这条要在 staging 实测校准（同 A2/B18）。
    */
-  SHUTDOWN_EVENT_DRAIN_MS: int(8_000, 0),
+  SHUTDOWN_EVENT_DRAIN_MS: timerMs(8_000, 0),
   /**
    * OPS3-05：停机时"等**后台作业**跑完"的上限毫秒数（0 = 不等）。
    *
@@ -437,7 +461,7 @@ const schema = z.object({
    * @limitation 它是**上限**：没有在途 tick / daily 时立即返回，不消耗停机时间；
    *             到点仍在途只记 error，不打断（打断的后果由作业自己的心跳与幂等承担）。
    */
-  SHUTDOWN_JOB_WAIT_MS: int(5_000, 0),
+  SHUTDOWN_JOB_WAIT_MS: timerMs(5_000, 0),
   /**
    * INF3-01：从**收到 SIGTERM 那一刻**起算的停机总预算（毫秒）。到点直接 `exit(1)`，不再等任何一步。
    *
@@ -458,14 +482,14 @@ const schema = z.object({
    * @limitation 它是**兜底**不是调速：正常停机（排空成功、无在途事务）远不到这个值，
    *             定时器在 `finish` 里被清掉。0 = 不设预算（回到 AJ-237 的行为，仅测试用）。
    */
-  SHUTDOWN_TOTAL_BUDGET_MS: int(27_000, 0),
+  SHUTDOWN_TOTAL_BUDGET_MS: timerMs(27_000, 0),
   /**
    * INF3-01：总预算到点之后、真正 `exit` 之前的日志 flush 窗口（毫秒）。
    * @why 直接 `process.exit()` 会丢 SonicBoom 缓冲里最后几行——而那几行正是
    *      "清理做到了哪一步"的唯一证据。给一个很短的窗口（默认 200ms）比 2s 的 `exitDelayMs` 合适：
    *      此刻我们**已经超预算**了，不能再等 2s。
    */
-  SHUTDOWN_BUDGET_FLUSH_MS: int(200, 0),
+  SHUTDOWN_BUDGET_FLUSH_MS: timerMs(200, 0),
   AUTO_DELIVER_DAYS: int(30, 1),
   AUTO_COMPLETE_DAYS: int(7, 1),
   /** 建单必传且必须与服务端相等，否则 40011（D-43）。必填 → 忘了配就启动失败，而不是全站下单失败。 */
@@ -554,7 +578,7 @@ const schema = z.object({
    *      必须与这里的默认值相等，由 `app/http-outbound.unit.test.ts` 的同源断言守着——
    *      两处各写一个数字，迟早会有一个被改而另一个没改，而那不会报错。
    */
-  HTTP_TIMEOUT_MS: int(10_000, 1),
+  HTTP_TIMEOUT_MS: timerMs(10_000, 1),
   /**
    * 一次调用的**总时长预算**（所有重试加起来，毫秒）。
    * @why 只给每次尝试设超时是不够的：10s × 3 次 = 30s，用户早就不在了，
@@ -562,11 +586,11 @@ const schema = z.object({
    * @why 6 秒是**产品决策**（用户能等多久），不是技术常数——所以它必须是配置项：
    *      拿到真实的"用户放弃率 vs 等待时长"之后要调，调整不该发版。
    */
-  HTTP_TOTAL_BUDGET_MS: int(6_000, 1),
+  HTTP_TOTAL_BUDGET_MS: timerMs(6_000, 1),
   /** 熔断：连续失败多少次才跳闸。⚠️ 必须 > `DEFAULT_RETRY_POLICY.maxAttempts`（=3），否则一次请求就把上游判死。 */
   CB_FAILURE_THRESHOLD: int(5, 4),
   /** 熔断：跳闸后冷却多久才放第一个探测（毫秒）。 */
-  CB_COOLDOWN_MS: int(30_000, 0),
+  CB_COOLDOWN_MS: timerMs(30_000, 0),
   /** 熔断：half_open 期间最多放行几个探测请求。 */
   CB_HALF_OPEN_PROBES: int(1, 1),
 

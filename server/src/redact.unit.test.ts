@@ -553,3 +553,11 @@ describe('capForLog（日志出口限长，与脱敏是两件事）', () => {
     expect(out['description']).toBe(long);
   });
 });
+
+/** Date 不能被当成普通对象吃成 `{}`（S-02）：审计表是 append-only，丢了就永远丢了。 */
+describe('redact：Date 值（S-02）', () => {
+  it('Date → ISO 串；无效日期 → null', () => {
+    expect(redact({ at: new Date(0) })).toEqual({ at: '1970-01-01T00:00:00.000Z' });
+    expect(redact({ at: new Date(Number.NaN) })).toEqual({ at: null });
+  });
+});

@@ -28,6 +28,7 @@
  * @see app/order-routes.ts（路由薄壳：HTTP 形状 + 幂等）；app/quote-assembly.ts（重算）；
  *      adapters/orders.ts（SQL）；docs/I1阶段开发实施方案.md §3.5；技术文档 §1（D-29/D-32）
  */
+import { createCountryProfileRepo } from '../adapters/country-profiles.js';
 import type { Db } from '../adapters/db.js';
 import { withSavepoint } from '../adapters/db.js';
 import { plusMs } from '../adapters/clock.js';
@@ -134,6 +135,12 @@ export async function createOrder(
   // ── 2. 收货地址（归属判定：非本人与不存在同码 40400，防存在性探测）─────────
   const address = await findOwnedAddress(tx, input.addressId, input.userId);
   if (address === null) throw new AppError(40400, { address_id: input.addressId });
+  // 收货国家必须仍然开放（M-04）：国家只在保存地址时校验过一次，运营下线某国后旧地址照样能下单，
+  // 而关税与展示币按"唯一开放的国家"取——收款口径与收货国家对不上。与地址簿同码 40002（field=country）。
+  const destProfile = await createCountryProfileRepo(tx).get(address.country);
+  if (destProfile === null || !destProfile.active) {
+    throw new AppError(40002, { field: 'country', reason: 'country_not_served' });
+  }
 
   // ── 2b. 审核模式（技术文档 §2.9 / AJ-179）：只有 REVIEW_SKU_ID 能下单 ──────────
   // @why 审核期全店只能走 mock（config 规则 2b），任何能下单的商品都能被"假付款"确认——
@@ -210,8 +217,9 @@ export async function createOrder(
           user_id: input.userId,
           items_jpy: q.itemsJpy,
           shipping_jpy: q.shippingJpy,
-          // duty 是信息字段不入应收；落库列 NOT NULL，无估算时存 0（口径：该列仅对账参考）
-          duty_jpy: q.dutyJpy ?? 0,
+          // duty 是信息字段不入应收；无法估算时存 null（W-05 / 迁移 026）——
+          // 原来存 0，订单详情就会把"未知"说成"关税 0 円"
+          duty_jpy: q.dutyJpy,
           total_jpy: q.totalJpy,
           weight_g: q.weightG,
           // JSONB 列传对象（tx.json 单重编码；`${字符串}::jsonb` 是双重编码，见 orders.ts ⚠️）

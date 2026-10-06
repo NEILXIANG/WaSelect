@@ -594,6 +594,8 @@ export function createStripeCheckoutProvider(
       const ev = parsed as {
         id?: string;
         type?: string;
+        /** 事件生成时刻（unix 秒）。@measured(docs.stripe.com/api/events/object, 2026-10-05)：Event 对象带 `created`。 */
+        created?: unknown;
         data?: { object?: Record<string, unknown> };
       };
       const obj = ev.data?.object ?? {};
@@ -723,6 +725,10 @@ export function createStripeCheckoutProvider(
           ? { occurredAtMs: Math.round(createdSec * 1000) }
           : {}),
         ...(disputeStatus !== undefined ? { disputeStatus } : {}),
+        // 事件生成时刻（envelope `created`，M-01）：支付成功事件据此判断"钱是不是在窗口内付的"
+        ...(typeof ev.created === 'number' && Number.isFinite(ev.created)
+          ? { eventAtMs: Math.round(ev.created * 1000) }
+          : {}),
       };
     },
 

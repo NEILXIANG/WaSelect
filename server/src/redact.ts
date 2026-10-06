@@ -427,6 +427,10 @@ export function redact(value: unknown, depth = 0, seen = new WeakSet<object>()):
     };
   }
 
+  // Date：转 ISO 串（S-02）。不单独处理时会落进下面的"普通对象"分支，`Object.entries` 为空 → `{}`，
+  //   审计表里"被替换的那条汇率是哪一期"就永久丢了（审计表 append-only，补不回来）。
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+
   if (depth >= MAX_DEPTH) return '[Deep]';
   if (seen.has(value as object)) return '[Circular]';
   seen.add(value as object);

@@ -231,6 +231,13 @@ export interface ProviderEvent {
    */
   occurredAtMs?: number | undefined;
   /**
+   * 机构**生成这条事件**的时刻（unix 毫秒；Stripe = 事件 envelope 的 `created`，在签名范围内）。
+   * @why 与 `occurredAtMs`（对象自身的创建时刻）不同：支付成功事件的对象是会话 / PaymentIntent，
+   *      它们的 `created` 是"发起支付"的时刻，不是"付款完成"的时刻；判迟到付款要的是后者（M-01）。
+   * @limitation 缺省 = 机构没给，消费方按自己的当前时刻判定。
+   */
+  eventAtMs?: number | undefined;
+  /**
    * **拒付对象**的机构状态原值（如 Stripe 的 `won` / `lost` / `needs_response`）。
    *
    * @why 结案必须知道**结果**（赢了还是输了），而这个信息只在机构对象的 `status` 上，

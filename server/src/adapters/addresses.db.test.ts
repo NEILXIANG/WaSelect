@@ -154,3 +154,34 @@ describe('update / remove（归属过滤进 WHERE）', () => {
     expect(mine[0]?.is_default).toBe(false); // @limitation 二：不自动提升
   });
 });
+
+/**
+ * 同一用户并发"新建并设为默认"（S-03）：两条都要成功，且恰好一条默认。
+ * @why READ COMMITTED 下两个事务都先清旧默认；后者在旧默认行的锁上等，前者提交后旧行已不是默认，
+ *      后者跳过它、照常插入一条默认，撞上前者刚插的默认行 → 23505 → 500（而其中一条其实已保存）。
+ *      连点两次保存、或网络重试，都会这样。
+ */
+describe('并发设默认（S-03）', () => {
+  it('🔴 已有默认地址时，两个"新建并设默认"并发到达 → 都成功，恰好 1 条默认', async () => {
+    await repo.create('a-0', 'u-1', input({ is_default: true }));
+    let locked: () => void = () => undefined;
+    const ready = new Promise<void>((r) => {
+      locked = r;
+    });
+    // 先持有旧默认行的锁，让两个建址事务都卡在"清默认"那一步，再一起放行
+    const holder = db.begin(async (tx) => {
+      await tx`select id from addresses where id = 'a-0' for update`;
+      locked();
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    await ready;
+    const results = await Promise.allSettled([
+      repo.create('a-1', 'u-1', input({ is_default: true })),
+      repo.create('a-2', 'u-1', input({ recipient: 'Bob Smith', is_default: true })),
+    ]);
+    await holder;
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
+    const defaults = await db`select id from addresses where user_id = 'u-1' and is_default`;
+    expect(defaults).toHaveLength(1);
+  });
+});

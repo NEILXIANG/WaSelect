@@ -346,7 +346,9 @@ export async function ensureInitialAdmin(
       -- 右边同样用 **JS 归一的结果**（与 findAdminCredential 同一口径，SEC2-07）：
       -- "这个邮箱建过了没有"与"登录时记到哪个桶"必须是同一份归一，否则 seed 判重与登录判重会分叉。
       insert into users (id, email, password_hash, is_admin)
-      select ${`adm-${randomUUID()}`}, ${email}, ${passwordHash}, true
+      -- 写入的也是归一后的邮箱（S-07）：原来写原值，控制台粘贴带了空格 / 换行时，
+      -- 库里存的是 'ops@example.com '，登录与改密脚本按归一值都查不到这个人，重启也修不好。
+      select ${`adm-${randomUUID()}`}, ${normalizeAdminEmail(email)}, ${passwordHash}, true
        where not exists (select 1 from users where lower(email) = ${normalizeAdminEmail(email)})
       returning id
     `;

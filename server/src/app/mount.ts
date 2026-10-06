@@ -177,6 +177,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
             providerRef: e.providerRef,
             amountMinor: e.amountMinor,
             currency: e.currency,
+            occurredAtMs: e.eventAtMs,
           }),
         result: RESULT_PAID,
         disposition: 'paid',

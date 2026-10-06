@@ -73,6 +73,11 @@ function readImageFile(req: Request): Promise<Buffer> {
     let truncated = false;
     bb.on('file', (_name, stream) => {
       seen = true;
+      // ⚠️ 文件流自己的 error 必须接住（S-01）：multipart 在文件分段中途结束（没有结尾边界）时，
+      //    busboy 收尾会 destroy(err) 这条流；没人监听就是未捕获异常，生产上整个服务重启。
+      //    `bb.on('error')` 只接得住 busboy 自身的错误，接不住文件流的。reject 幂等，两处同时触发无妨。
+      //    @measured(busboy 1.6, 2026-10-05)：截断报文 → 文件流 error「Unexpected end of form」，bb 不发 error。
+      stream.on('error', () => reject(new AppError(40001, { reason: 'upload_malformed' })));
       stream.on('data', (c: Buffer) => chunks.push(c));
       stream.on('limit', () => {
         truncated = true;
@@ -84,6 +89,8 @@ function readImageFile(req: Request): Promise<Buffer> {
       else if (truncated) reject(new AppError(40001, { reason: 'upload_file_too_large' }));
       else resolve(Buffer.concat(chunks));
     });
+    // 客户端中途断开：busboy 既不 finish 也不 error，promise 会永远挂着（S-01 附带）
+    req.on('aborted', () => reject(new AppError(40001, { reason: 'upload_aborted' })));
     req.pipe(bb);
   });
 }

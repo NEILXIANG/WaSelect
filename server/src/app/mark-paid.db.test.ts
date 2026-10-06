@@ -309,6 +309,41 @@ describe('I1-U2：pending_payment 迁移与迟到付款守卫（D-33）', () => 
     ).rejects.toMatchObject({ code: 40902, details: { reason: 'late_payment' } });
   });
 
+  it('🔴 窗口内付款、回调晚到（M-01）：付款时刻早于 expires_at → 正常落账，不判迟到', async () => {
+    await seedOrderAt('o-slow', 'pending_payment', '2026-01-02T00:30:00.000Z');
+    await seedIntent('o-slow');
+    const { events } = bus();
+    await markOrderPaid(db, events, fixedClock('2026-01-02T00:30:05.000Z'), 'o-slow', {
+      ...OK,
+      occurredAtMs: Date.parse('2026-01-02T00:29:59.000Z'),
+    });
+    expect((await db`select status from orders where id = 'o-slow'`)[0]?.status).toBe('paid');
+  });
+
+  it('付款时刻本身已过 expires_at → 仍是迟到（机构时刻只放宽"通知晚到"，不放宽"付晚了"）', async () => {
+    await seedOrderAt('o-late2', 'pending_payment', '2026-01-02T00:30:00.000Z');
+    await seedIntent('o-late2');
+    const { events } = bus();
+    await expect(
+      markOrderPaid(db, events, fixedClock('2026-01-02T00:30:05.000Z'), 'o-late2', {
+        ...OK,
+        occurredAtMs: Date.parse('2026-01-02T00:30:01.000Z'),
+      }),
+    ).rejects.toMatchObject({ code: 40902, details: { reason: 'late_payment' } });
+  });
+
+  it('机构时刻在"未来"（时钟偏差）→ 按我方当前时刻判定，不能借未来时刻绕开', async () => {
+    await seedOrderAt('o-skew', 'pending_payment', '2026-01-02T00:30:00.000Z');
+    await seedIntent('o-skew');
+    const { events } = bus();
+    await expect(
+      markOrderPaid(db, events, fixedClock('2026-01-02T00:30:05.000Z'), 'o-skew', {
+        ...OK,
+        occurredAtMs: Date.parse('2026-01-02T01:00:00.000Z'),
+      }),
+    ).rejects.toMatchObject({ code: 40902, details: { reason: 'late_payment' } });
+  });
+
   it('边界：expires_at 前 1ms → 正常落账', async () => {
     await seedOrderAt('o-edge2', 'created', '2026-01-02T00:30:00.000Z');
     await seedIntent('o-edge2');
@@ -340,4 +375,70 @@ describe('I1-U2：pending_payment 迁移与迟到付款守卫（D-33）', () => 
       ).toBe(closedAs);
     },
   );
+});
+
+/**
+ * 订单已付后又来一笔"支付成功"（M-02）：只有能证明是**同一笔钱**时才算重复通知。
+ * @why 原实现订单一旦 paid，任何成功回调都直接抛 {from:'paid'} → 管线记 info 级 paid:already、不进对账。
+ *      换通道后旧的 Stripe 页面又被付了一次（或 A→B→A 付了旧会话），那是**第二笔真实扣款**，被静默吞掉。
+ */
+describe('已付订单上的第二笔支付（M-02）', () => {
+  async function paidFirst(): Promise<void> {
+    await seedIntent('o-mp');
+    const { events } = bus();
+    await markOrderPaid(db, events, fixedClock('2026-01-02T00:00:00.000Z'), 'o-mp', OK);
+  }
+  const again = async (s: PaidSettlement): Promise<unknown> => {
+    const { events } = bus();
+    return markOrderPaid(db, events, fixedClock('2026-01-02T00:01:00.000Z'), 'o-mp', s).catch(
+      (e: unknown) => e,
+    );
+  };
+
+  it('同一笔钱的重复通知（同通道、同单号）→ 仍是 {from:paid}，不带 reason', async () => {
+    await paidFirst();
+    const err = (await again(OK)) as { code: number; details: Record<string, unknown> };
+    expect(err.code).toBe(40902);
+    expect(err.details['from']).toBe('paid');
+    expect(err.details['reason']).toBeUndefined();
+  });
+
+  it('🔴 另一个通道的支付成功 → duplicate_payment（真实的第二笔扣款，必须进对账）', async () => {
+    await paidFirst();
+    const err = (await again({ ...OK, channel: 'stripe', providerRef: 'cs_test_other' })) as {
+      details: Record<string, unknown>;
+    };
+    expect(err.details['reason']).toBe('duplicate_payment');
+  });
+
+  it('🔴 同通道、同 id 族但单号不同（付了旧会话）→ duplicate_payment', async () => {
+    await paidFirst();
+    const err = (await again({ ...OK, providerRef: 'cs_test_intent_OLD' })) as {
+      details: Record<string, unknown>;
+    };
+    expect(err.details['reason']).toBe('duplicate_payment');
+  });
+
+  it('同通道、跨 id 族（登记 cs_、事件回带 pi_）→ 无法比对，按重复通知处理（Stripe 同一笔钱两种事件是常态）', async () => {
+    await paidFirst();
+    const err = (await again({ ...OK, providerRef: 'pi_test_123' })) as {
+      details: Record<string, unknown>;
+    };
+    expect(err.details['from']).toBe('paid');
+    expect(err.details['reason']).toBeUndefined();
+  });
+
+  it('订单不在可付状态、但没有任何已收款支付行（数据异常）→ 不判"另一笔"，按原分支 {from}', async () => {
+    await db`update orders set status = 'shipped' where id = 'o-mp'`;
+    const err = (await again(OK)) as { details: Record<string, unknown> };
+    expect(err.details['from']).toBe('shipped');
+    expect(err.details['reason']).toBeUndefined();
+  });
+
+  it('同通道、回调没带单号 → 无法比对，按重复通知处理', async () => {
+    await paidFirst();
+    const err = (await again({ ...OK, providerRef: '' })) as { details: Record<string, unknown> };
+    expect(err.details['from']).toBe('paid');
+    expect(err.details['reason']).toBeUndefined();
+  });
 });

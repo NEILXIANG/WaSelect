@@ -73,9 +73,11 @@ function toAdminImageSet(
   imgBaseUrl: string | undefined,
 ): Record<string, unknown> | null {
   const set = toImageSet(raw, imgBaseUrl);
-  if (set === null) return null;
   const o = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
   const id = o['image_id'];
+  // 没配展示域名（IMG_BASE_URL）时拼不出三档 URL，但 **id 仍要回显**（S-04）：
+  // 原来整条被过滤掉，编辑页拿到空数组，运营只改个价格保存，PUT 就把库里的 image_id 覆盖成 []，不可恢复。
+  if (set === null) return typeof id === 'string' && isImageId(id) ? { image_id: id } : null;
   // 判定复用 isImageId（domain/upload-image.ts 的单一真源）：本文件不另写一份"像 id 的样子"
   return typeof id === 'string' && isImageId(id) ? { ...set, image_id: id } : set;
 }
@@ -155,7 +157,7 @@ const ISO_MS_Z = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
  *      @tradeoff 代价：只接受 UTC `Z` 尾，带时区偏移的合法 ISO（`+09:00`）会被拒。
  *              可接受——这个值的唯一生产者是服务端自己的 `toISOString()`。
  */
-function expectedUpdatedAtOf(body: unknown): string {
+export function expectedUpdatedAtOf(body: unknown): string {
   const raw = (body as { expected_updated_at?: unknown } | undefined)?.expected_updated_at;
   if (typeof raw !== 'string' || raw === '') {
     throw new AppError(40001, { reason: 'expected_updated_at_required' });

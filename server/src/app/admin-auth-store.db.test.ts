@@ -244,4 +244,10 @@ describe('admin-auth 仓储', () => {
     expect(after?.['password_hash']).toBe(u?.['password_hash']);
     expect(await db`select 1 from users`).toHaveLength(1);
   });
+
+  it('🔴 ADMIN_EMAIL 带首尾空白（控制台粘贴常见）→ 建出的账号能用干净邮箱登录（S-07）', async () => {
+    const hash = await hashPassword('initial-password-123');
+    expect(await ensureInitialAdmin(db, '  Ops@Example.com \n', hash)).toBe('created');
+    expect(await findAdminCredential(db, 'ops@example.com')).not.toBeNull();
+  });
 });

@@ -92,19 +92,37 @@ describe('insertBanner / findBanner', () => {
   });
 });
 
+/** 这条 Banner 此刻的版本凭据（乐观锁，S-09）。 */
+async function versionOf(id: string): Promise<string> {
+  const [r] = await db`select updated_at from banners where id = ${id}`;
+  return (r?.['updated_at'] as Date).toISOString();
+}
+
+/** 断言是改好的行（不是 'missing' / 'stale'）。 */
+function asRow<T>(v: T | 'missing' | 'stale'): T {
+  if (v === 'missing' || v === 'stale') throw new Error(`期望改好的行，实际 ${v}`);
+  return v;
+}
+
 describe('updateBanner', () => {
   it('整行覆盖：所有字段都按传入值改（含"改回 null"）', async () => {
     const repo = createBannersAdminRepo(db);
     await repo.insertBanner({ ...W, id: 'b-1' });
-    const out = await repo.updateBanner('b-1', {
-      imageKey: 'banners/2026/b.png',
-      linkType: 'none',
-      linkId: null, // ← 从 'p-1' 改成 null，验证不是"只改非空字段"
-      sort: 9,
-      active: false,
-      startsAtMs: null,
-      endsAtMs: null,
-    });
+    const out = asRow(
+      await repo.updateBanner(
+        'b-1',
+        {
+          imageKey: 'banners/2026/b.png',
+          linkType: 'none',
+          linkId: null, // ← 从 'p-1' 改成 null，验证不是"只改非空字段"
+          sort: 9,
+          active: false,
+          startsAtMs: null,
+          endsAtMs: null,
+        },
+        await versionOf('b-1'),
+      ),
+    );
     expect(out?.image_key).toBe('banners/2026/b.png');
     expect(out?.link_type).toBe('none');
     expect(out?.link_id).toBeNull();
@@ -118,7 +136,7 @@ describe('updateBanner', () => {
     const repo = createBannersAdminRepo(db);
     await repo.insertBanner({ ...W, id: 'b-1' });
     await repo.insertBanner({ ...W, id: 'b-2', imageKey: 'other.png', sort: 7 });
-    await repo.updateBanner('b-1', { ...W, imageKey: 'changed.png' });
+    await repo.updateBanner('b-1', { ...W, imageKey: 'changed.png' }, await versionOf('b-1'));
     const all = await repo.listBanners();
     expect(all).toHaveLength(2);
     const other = all.find((r) => r.id === 'b-2');
@@ -132,12 +150,22 @@ describe('updateBanner', () => {
     // 先把 updated_at 钉到一天前：间隔足够大，"没刷新"与"刷新了"不可能相等
     await db`update banners set updated_at = now() - interval '1 day' where id = ${'b-1'}`;
     const before = await repo.findBanner('b-1');
-    const after = await repo.updateBanner('b-1', W);
-    expect(after?.updated_at.getTime()).toBeGreaterThan(before?.updated_at.getTime() ?? 0);
+    const after = asRow(await repo.updateBanner('b-1', W, await versionOf('b-1')));
+    expect(after.updated_at.getTime()).toBeGreaterThan(before?.updated_at.getTime() ?? 0);
   });
 
-  it('id 不存在 → null（由路由转 404，绝不能当成"改成功了"）', async () => {
-    expect(await createBannersAdminRepo(db).updateBanner('nope', W)).toBeNull();
+  it('id 不存在 → missing（由路由转 404，绝不能当成"改成功了"）', async () => {
+    expect(
+      await createBannersAdminRepo(db).updateBanner('nope', W, '2026-10-01T00:00:00.000Z'),
+    ).toBe('missing');
+  });
+
+  it('🔴 版本凭据对不上（打开之后被别人改过）→ stale，且不写（S-09）', async () => {
+    const repo = createBannersAdminRepo(db);
+    await repo.insertBanner({ ...W, id: 'b-1' });
+    const stale = '2000-01-01T00:00:00.000Z';
+    expect(await repo.updateBanner('b-1', { ...W, sort: 99 }, stale)).toBe('stale');
+    expect((await repo.findBanner('b-1'))?.sort).toBe(W.sort);
   });
 });
 

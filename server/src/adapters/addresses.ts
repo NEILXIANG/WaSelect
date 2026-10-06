@@ -73,6 +73,18 @@ export interface AddressRepo {
 //    标识符拼接（`db(COLUMNS)` 会把整串当成**一个**列名加引号），两者都比手写危险。
 //    漏列不会静默：toRow 取到 undefined 会产出 "undefined" 字符串，真库用例当场红
 //    （与 country-profiles.ts @why 同口径）。
+/**
+ * 把同一用户的"设默认"串行化（S-03）：先锁住该用户的 users 行。
+ * @why READ COMMITTED 下两个并发的"清默认 → 写新默认"会互相看不见对方刚插入的默认行：
+ *      后者在旧默认行的锁上等，前者提交后旧行已不是默认，后者跳过它、照常插入一条默认，
+ *      撞上部分唯一索引 → 23505 → 500（而前一条其实已经保存了）。连点保存、网络重试都会触发。
+ * @why 锁 users 行而不是地址行：新建时还没有地址行可锁；锁序"先 users 后其它"与建单、拉黑一致，不会成环。
+ * @limitation 只在 is_default=true 时加锁：不设默认的写入不会撞这个索引，不必串行。
+ */
+async function lockUserDefaults(tx: Db, userId: string): Promise<void> {
+  await tx`select id from users where id = ${userId} for update`;
+}
+
 export function createAddressRepo(db: Db): AddressRepo {
   return {
     async listByUser(userId: string): Promise<AddressRow[]> {
@@ -88,6 +100,7 @@ export function createAddressRepo(db: Db): AddressRepo {
     async create(id: string, userId: string, input: AddressInput): Promise<AddressRow> {
       return withTransaction(db, async (tx) => {
         if (input.is_default) {
+          await lockUserDefaults(tx, userId);
           await tx`update addresses set is_default = false where user_id = ${userId} and is_default`;
         }
         await tx`
@@ -114,6 +127,7 @@ export function createAddressRepo(db: Db): AddressRepo {
           await tx`select id from addresses where id = ${id} and user_id = ${userId} for update`;
         if (target.length === 0) return null;
         if (input.is_default) {
+          await lockUserDefaults(tx, userId);
           // 先清后设（文件头 @why 的 swap 问题）；把自己也一起清，下一步再设回来，语义不变
           await tx`update addresses set is_default = false where user_id = ${userId} and is_default`;
         }

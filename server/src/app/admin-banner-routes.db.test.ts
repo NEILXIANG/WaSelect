@@ -116,6 +116,12 @@ async function call(
 
 const code = (r: { body: unknown }): number => Number((r.body as { code?: number })?.code);
 
+/** 这条 Banner 此刻的版本凭据（毫秒精度 ISO 串，与列表回显的 updated_at 同形）。 */
+async function versionOf(id: string): Promise<string> {
+  const [r] = await db`select updated_at from banners where id = ${id}`;
+  return (r?.['updated_at'] as Date).toISOString();
+}
+
 const INPUT = {
   image_key: 'banners/2026/autumn-sale.png',
   link_type: 'product',
@@ -254,7 +260,13 @@ describe('PUT /admin/banners/{id}', () => {
         url,
         'PUT',
         '/api/v1/admin/banners/b-1',
-        { image_key: 'new.png', link_type: 'none', sort: 8, active: false },
+        {
+          image_key: 'new.png',
+          link_type: 'none',
+          sort: 8,
+          active: false,
+          expected_updated_at: await versionOf('b-1'),
+        },
         await bearer(),
       );
       expect(r.status).toBe(200);
@@ -278,7 +290,7 @@ describe('PUT /admin/banners/{id}', () => {
         url,
         'PUT',
         '/api/v1/admin/banners/nope',
-        { image_key: 'x.png' },
+        { image_key: 'x.png', expected_updated_at: '2026-10-01T00:00:00.000Z' },
         await bearer(),
       );
       expect(r.status).toBe(404);
@@ -307,6 +319,76 @@ describe('PUT /admin/banners/{id}', () => {
       expect(code(r)).toBe(40001);
       const rows = await db`select image_key from banners where id = ${'b-1'}`;
       expect(String(rows[0]?.['image_key'])).toBe('old.png');
+    } finally {
+      await close();
+    }
+  });
+});
+
+/**
+ * Banner 编辑的乐观锁（S-09）：两个人同时编辑，后保存的不能静默覆盖前一个人的改动。
+ * @why PUT 是整行覆盖：运营 A 打开编辑准备调排序，B 把它紧急下线；A 保存时 active 被写回 true，
+ *      这条 Banner 又出现在首页，且没有任何提示。商品 PUT 早就有这把锁（ADM3-02），Banner 没有。
+ */
+describe('PUT /admin/banners/{id}：乐观锁（S-09）', () => {
+  it('🔴 两人拿同一个版本先后保存 → 第二个 409 / 40914，库里保留第一个人写的', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await db`
+        insert into banners (id, image_key, link_type, sort, active)
+        values ('b-1', 'old.png', 'none', 1, true)
+      `;
+      const v = await versionOf('b-1');
+      const first = await call(
+        url,
+        'PUT',
+        '/api/v1/admin/banners/b-1',
+        { image_key: 'old.png', link_type: 'none', sort: 1, active: false, expected_updated_at: v },
+        await bearer(),
+      );
+      expect(first.status).toBe(200);
+      const second = await call(
+        url,
+        'PUT',
+        '/api/v1/admin/banners/b-1',
+        { image_key: 'old.png', link_type: 'none', sort: 9, active: true, expected_updated_at: v },
+        await bearer(),
+      );
+      expect(second.status).toBe(409);
+      expect(code(second)).toBe(40914);
+      const [row] = await db`select active, sort from banners where id = 'b-1'`;
+      expect(row?.['active']).toBe(false);
+      expect(Number(row?.['sort'])).toBe(1);
+    } finally {
+      await close();
+    }
+  });
+
+  it('不带 expected_updated_at → 40001（没有凭据就不能判断是不是覆盖了别人）', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await db`insert into banners (id, image_key, link_type, sort) values ('b-1', 'old.png', 'none', 1)`;
+      const r = await call(
+        url,
+        'PUT',
+        '/api/v1/admin/banners/b-1',
+        { image_key: 'x.png', link_type: 'none', sort: 1 },
+        await bearer(),
+      );
+      expect(code(r)).toBe(40001);
+    } finally {
+      await close();
+    }
+  });
+
+  it('列表回显 updated_at（编辑页拿它当凭据）', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await db`insert into banners (id, image_key, link_type, sort) values ('b-1', 'old.png', 'none', 1)`;
+      const r = await call(url, 'GET', '/api/v1/admin/banners', undefined, await bearer());
+      expect((r.body as Array<{ updated_at?: string }>)[0]?.updated_at).toBe(
+        await versionOf('b-1'),
+      );
     } finally {
       await close();
     }

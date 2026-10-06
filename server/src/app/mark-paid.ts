@@ -81,6 +81,14 @@ export interface PaidSettlement {
    */
   amountMinor: number | undefined;
   currency: string | undefined;
+  /**
+   * 机构生成"支付成功"事件的时刻（unix 毫秒；Stripe 取事件 envelope 的 `created`，在签名范围内）。
+   * @why 判"迟到付款"要看**钱是什么时候付的**，不是通知什么时候到的（M-01）：
+   *      窗口最后几秒付的款，通知晚几秒到（网络、机构重投、我们部署重启），原来一律判成迟到付款。
+   * @limitation 只用来**放宽**判定：取 `min(它, 我方当前时刻)`，机构时刻在"未来"时按我方时刻算。
+   *              缺省 = 机构没给，按我方当前时刻判定（原行为）。
+   */
+  occurredAtMs?: number | undefined;
 }
 
 /**
@@ -101,6 +109,8 @@ export const SETTLEMENT_MISMATCH_REASONS = [
   'currency_mismatch',
   'amount_mismatch',
   'settlement_unverifiable',
+  // M-02：订单已付后又来一笔**另外的**支付成功（换通道后旧页面又被付了一次 / 付了旧会话）
+  'duplicate_payment',
 ] as const;
 
 async function assertSettlementMatches(
@@ -206,13 +216,30 @@ export async function markOrderPaid(
       });
     }
     if (!canTransition(from, 'paid')) {
+      // 已收过钱的单又来一笔"支付成功"（M-02）：先判断是不是**同一笔钱**的重复通知。
+      // 原实现在这里一律抛 {from}，管线按 paid:already 记 info、不进对账——
+      // 换通道后旧的 Stripe 页面又被付了一次，那第二笔真实扣款就被静默吞掉。
+      if (await isAnotherPayment(tx, orderId, settlement)) {
+        throw new AppError(40902, {
+          from,
+          reason: 'duplicate_payment',
+          ctx: { channel: settlement.channel, provider_ref: settlement.providerRef },
+        });
+      }
       throw new AppError(40902, { from, to: 'paid', where: 'mark-paid' });
     }
     // ⚠️ 迟到付款守卫（@limitation 一b）：到点即不可付，边界方向与关单 job 一致（含等号）。
     //    判定用注入时钟而不是 DB now()：与关单 job 的 startedAt 同源（应用时钟），
     //    两个判定者用两种时钟会让"恰在边界的那毫秒"出现第三种结果。
     const expiresAt = row?.expires_at as Date | undefined;
-    if (expiresAt !== undefined && clock.now() >= expiresAt) {
+    // 判定时刻 = 付款发生时刻（机构报的，M-01）与我方当前时刻取早者：
+    //   通知晚到不算迟到；机构时刻在"未来"（时钟偏差）时按我方时刻算，不能借它绕开窗口。
+    const nowMs = clock.now().getTime();
+    const paidMoment =
+      settlement.occurredAtMs !== undefined && Number.isFinite(settlement.occurredAtMs)
+        ? Math.min(settlement.occurredAtMs, nowMs)
+        : nowMs;
+    if (expiresAt !== undefined && paidMoment >= expiresAt.getTime()) {
       throw new AppError(40902, {
         from,
         reason: 'late_payment',
@@ -245,6 +272,33 @@ export async function markOrderPaid(
     // 登记（不是分发）：只有这个事务提交成功，订阅者才会收到 order.paid
     emit({ name: 'order.paid', at: paidAt.toISOString(), orderId });
   });
+}
+
+/**
+ * 这次"支付成功"是不是一笔**另外的**钱（订单已经收过一笔，M-02）。
+ *
+ * 判据（只在能证明"不是同一笔"时返回 true，证明不了就按重复通知处理）：
+ *   ① 订单上已收款的支付行（succeeded / refunded）都不是这个通道 → 另一笔；
+ *   ② 同通道的行里有与本次单号**同一 id 族**的单号（provider_ref / transaction_id），却没有一个相等 → 另一笔；
+ *   ③ 同通道但没有同族单号可比（Stripe 登记 cs_、事件回带 pi_）→ 证明不了，按重复通知。
+ * @tradeoff ③ 放行意味着"同通道、跨族"的第二笔钱仍可能被当成重复通知；要彻底区分需要按机构对象反查
+ *           （cs_ ↔ pi_ 关联），留给对账。①② 覆盖了已知的两条触发路径（换通道、付了旧会话）。
+ */
+async function isAnotherPayment(tx: Db, orderId: string, s: PaidSettlement): Promise<boolean> {
+  const rows = await tx`
+    select provider, provider_ref, transaction_id
+      from payments
+     where order_id = ${orderId} and status in ('succeeded', 'refunded')
+  `;
+  if (rows.length === 0) return false; // 没有已收款行：不是这里能判断的形态，按原分支处理
+  const sameChannel = rows.filter((r) => r['provider'] === s.channel);
+  if (sameChannel.length === 0) return true;
+  if (s.providerRef.length === 0) return false;
+  const comparable = sameChannel
+    .flatMap((r) => [r['provider_ref'], r['transaction_id']])
+    .filter((x): x is string => typeof x === 'string' && x.length > 0)
+    .filter((x) => sameRefFamily(x, s.providerRef));
+  return comparable.length > 0 && !comparable.includes(s.providerRef);
 }
 
 /**

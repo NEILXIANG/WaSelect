@@ -50,13 +50,17 @@ export const EXPIRE_ORDERS_JOB = 'expire_orders';
  */
 export const EXPIRE_BATCH_LIMIT = 100;
 
-export function createExpireOrdersJob(opts: { batchLimit?: number } = {}): SchedulerJob<Db> {
+export function createExpireOrdersJob(
+  opts: { batchLimit?: number; paymentGraceMs?: number } = {},
+): SchedulerJob<Db> {
   const limit = opts.batchLimit ?? EXPIRE_BATCH_LIMIT;
+  // 有在途支付的单到点后再等一会儿才关（M-01，@see adapters/orders.ts lockExpiredPayableOrders）
+  const paymentGraceMs = opts.paymentGraceMs ?? 0;
   return {
     name: EXPIRE_ORDERS_JOB,
     run: async (ctx: JobContext<Db>): Promise<JobOutcome> => {
       // 判定基准 = 本轮 tick 的 startedAt（同一轮所有 job 同一基准，ports/scheduler.ts 的既定口径）
-      const ids = await lockExpiredPayableOrders(ctx.tx, ctx.startedAt, limit);
+      const ids = await lockExpiredPayableOrders(ctx.tx, ctx.startedAt, limit, paymentGraceMs);
       // ── 两段式：先逐单迁移，再**一次性**按全局锁序回补 ────────────────────────
       // ⚠️ 不可在循环里逐单回补：那会让总锁序变成"每单内升序"的串接而不是全局升序，
       //    两个批次只要串接断点不同就可能成环（A3，2026-09-29 全量审查：

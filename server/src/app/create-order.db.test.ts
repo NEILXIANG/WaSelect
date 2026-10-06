@@ -455,3 +455,68 @@ describe('D-39：采购信息快照落 order_items', () => {
     expect(after['title_ja']).toBe('シェフナイフ');
   });
 });
+
+/**
+ * 建单要复核收货地址的国家仍然开放（M-04）。
+ * @why 国家只在保存地址时校验过一次；运营下线某国后，旧地址照样能下单、能付款，
+ *      而关税与展示币按"唯一开放的国家"取——收款口径与收货国家对不上，只能人工退款。
+ */
+describe('M-04：收货国家已下线 / 不存在 → 拒单', () => {
+  it('🔴 地址国家的档案已下线 → 40002（field=country），不扣库存、不建单', async () => {
+    await db`
+      insert into country_profiles (code, active, display_currencies, address_template, phone_pattern, postal_pattern, duty_note)
+      select 'CA', false, display_currencies, address_template, phone_pattern, postal_pattern, duty_note
+        from country_profiles where code = 'US'
+      on conflict (code) do update set active = false
+    `;
+    try {
+      await db`update addresses set country = 'CA' where id = 'addr-1'`;
+      const err = await withTransaction(db, (tx) =>
+        createOrder(tx, deps(seqIdGen(['AAAAAA']), new MemorySink()), INPUT),
+      ).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AppError);
+      expect((err as AppError).code).toBe(40002);
+      expect(
+        Number((await db`select stock from products where id = 'p-knife'`)[0]?.['stock']),
+      ).toBe(5);
+      expect(await db`select 1 from orders`).toHaveLength(0);
+    } finally {
+      // country_profiles 是配置表，resetTestDb 不清它：自己造的必须自己删
+      await db`delete from country_profiles where code = 'CA'`;
+    }
+  });
+
+  it('🔴 地址国家根本没有档案 → 40002', async () => {
+    await db`update addresses set country = 'ZZ' where id = 'addr-1'`;
+    const err = await withTransaction(db, (tx) =>
+      createOrder(tx, deps(seqIdGen(['AAAAAA']), new MemorySink()), INPUT),
+    ).catch((e: unknown) => e);
+    expect((err as AppError).code).toBe(40002);
+  });
+});
+
+/**
+ * 关税无法估算时，订单存"空"而不是 0（W-05）。
+ * @why 报价阶段 duty_jpy=null（前端据此不显示关税行），建单却存成 0，订单详情于是显示"预估关税 0 円"——
+ *      同一张单，结算时说不知道关税，详情里却说关税是 0。
+ */
+describe('W-05：无法估算的关税存 null', () => {
+  it('🔴 没有 (JP, US) 关税率行 → orders.duty_jpy 为 null', async () => {
+    const saved =
+      await db`select origin_country, dest_country, rate, note from duty_rates where origin_country = 'JP' and dest_country = 'US'`;
+    await db`delete from duty_rates where origin_country = 'JP' and dest_country = 'US'`;
+    try {
+      const created = await withTransaction(db, (tx) =>
+        createOrder(tx, deps(seqIdGen(['AAAAAA']), new MemorySink()), INPUT),
+      );
+      const [row] = await db`select duty_jpy from orders where id = ${created.orderId}`;
+      expect(row?.['duty_jpy']).toBeNull();
+    } finally {
+      // duty_rates 是配置表，resetTestDb 不清它：删掉的必须原样放回
+      for (const r of saved) {
+        await db`insert into duty_rates (origin_country, dest_country, rate, note)
+                 values (${r['origin_country']}, ${r['dest_country']}, ${r['rate']}, ${r['note']})`;
+      }
+    }
+  });
+});

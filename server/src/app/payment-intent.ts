@@ -106,6 +106,34 @@ export async function countPayCreateFailures(
   return Number(rows[0]?.n ?? 0);
 }
 
+/**
+ * 复用在途支付行时，机构给了**新的**会话号 → 改登记新号（M-03）。
+ * @why in_app 通道复用意图时会重新调机构 create（进程内会话缓存丢失、或机构确认拒绝后换了幂等键），
+ *      拿到的是新单号；行里仍是旧号的话，买家付了新单，回调按单号核对判 provider_ref_mismatch——钱到了单没落账。
+ * @limitation 只改 initiated 行；(provider, provider_ref) 唯一键冲突说明机构把别处的会话号复放给了我们，按 40902 拒。
+ */
+export async function updatePaymentProviderRef(
+  db: Db,
+  paymentId: string,
+  providerRef: string,
+): Promise<void> {
+  try {
+    await db`
+      update payments set provider_ref = ${providerRef}
+       where id = ${paymentId} and status = 'initiated'
+    `;
+  } catch (e) {
+    if ((e as { code?: string }).code === '23505') {
+      throw new AppError(40902, {
+        from: 'initiated',
+        to: 'initiated',
+        reason: 'provider_ref_taken',
+      });
+    }
+    throw e;
+  }
+}
+
 export async function recordPaymentIntent(db: Db, input: PaymentIntentInput): Promise<void> {
   try {
     await db`

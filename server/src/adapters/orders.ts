@@ -47,11 +47,24 @@ export async function lockExpiredPayableOrders(
   tx: Db,
   now: Date,
   limit: number,
+  /**
+   * 有在途支付（initiated 支付行）的单，到点后再等这么久才关（M-01）。
+   * @why 窗口最后几秒付的款，支付通知往往晚几秒到；到点即关的话，回调撞上"已关单"只能判迟到付款，
+   *      钱扣了、库存却被回补、可能被别人买走。发起支付与短链仍按 expires_at 截止，宽限期里不会产生新付款
+   *      （宽限期里真的付了，回调按付款时刻判迟到，结论与原来相同）。
+   */
+  paymentGraceMs = 0,
 ): Promise<string[]> {
+  const graceCutoff = new Date(now.getTime() - paymentGraceMs);
   const rows = await tx`
     select id from orders
      where status in ${tx([...PAYABLE_STATUSES])}
-       and expires_at <= ${now}
+       and expires_at <= case
+             when exists (select 1 from payments p
+                           where p.order_id = orders.id and p.status = 'initiated')
+               then ${graceCutoff}::timestamptz
+             else ${now}::timestamptz
+           end
      order by expires_at asc
      limit ${limit}
      for update skip locked
@@ -304,7 +317,8 @@ export interface OrderInsertRow {
   user_id: string;
   items_jpy: number;
   shipping_jpy: number;
-  duty_jpy: number;
+  /** null = 关税无法估算（W-05 / 迁移 026），不是 0。 */
+  duty_jpy: number | null;
   total_jpy: number;
   weight_g: number;
   fx_snapshot: JSONValue;
@@ -450,7 +464,8 @@ export async function listOwnedOrders(
 export interface OrderDetailRow extends OrderListRow {
   items_jpy: number;
   shipping_jpy: number;
-  duty_jpy: number;
+  /** null = 关税无法估算（W-05 / 迁移 026），不是 0。 */
+  duty_jpy: number | null;
   contact_email: string | null;
   terms_version: string;
   expires_at: Date;
@@ -483,7 +498,7 @@ export async function findOwnedOrder(
     status: String(r.status),
     items_jpy: Number(r.items_jpy),
     shipping_jpy: Number(r.shipping_jpy),
-    duty_jpy: Number(r.duty_jpy),
+    duty_jpy: r.duty_jpy === null ? null : Number(r.duty_jpy),
     total_jpy: Number(r.total_jpy),
     fx_snapshot: jsonbValue(r.fx_snapshot),
     address_snapshot: jsonbValue(r.address_snapshot),

@@ -47,6 +47,7 @@ import { setAuditBefore, setAuditTarget, skipAudit } from './admin-audit.js';
 import { createBannersAdminRepo } from '../adapters/banners-admin.js';
 import { parseBannerInput } from '../domain/banner-input.js';
 import { toBannerView } from './banner-view.js';
+import { expectedUpdatedAtOf } from './admin-product-routes.js';
 
 export interface AdminBannerRoutesDeps {
   db: Db;
@@ -74,7 +75,13 @@ export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps
     void (async () => {
       try {
         const rows = await repo.listBanners();
-        res.json(rows.map((r) => toBannerView(r, deps.config.IMG_BASE_URL)));
+        // 管理端额外回显 updated_at（S-09）：编辑页保存时拿它当乐观锁凭据（买家侧 /home 不需要）
+        res.json(
+          rows.map((r) => ({
+            ...toBannerView(r, deps.config.IMG_BASE_URL),
+            updated_at: r.updated_at.toISOString(),
+          })),
+        );
       } catch (e) {
         next(e);
       }
@@ -119,22 +126,30 @@ export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps
         } catch (e) {
           rejectInvalid(deps.logger, e);
         }
-        const row = await repo.updateBanner(id, {
-          imageKey: input.imageKey,
-          linkType: input.linkType,
-          linkId: input.linkId,
-          sort: input.sort,
-          active: input.active,
-          startsAtMs: input.startsAtMs,
-          endsAtMs: input.endsAtMs,
-        });
+        // 乐观锁凭据（S-09）：编辑页打开那一刻的 updated_at。没有它就分不清是不是覆盖了别人的改动
+        const expectedUpdatedAt = expectedUpdatedAtOf(req.body);
+        const row = await repo.updateBanner(
+          id,
+          {
+            imageKey: input.imageKey,
+            linkType: input.linkType,
+            linkId: input.linkId,
+            sort: input.sort,
+            active: input.active,
+            startsAtMs: input.startsAtMs,
+            endsAtMs: input.endsAtMs,
+          },
+          expectedUpdatedAt,
+        );
+        // 打开编辑之后被别人改过（S-09）：不写，回 40914，前端保留表单让运营刷新后对照再改
+        if (row === 'stale') throw new AppError(40914, { banner_id: id });
         // 🈲 不能当"改成功了"：0 行命中 = **没有改动发生**，回 200 是静默失败。
         //    ⚠️ 曾经括注"（文件头 @why）"——文件头并没有关于 PUT 0 行命中的 @why，
         //       指到一个不存在的出处比不写更糟（读者会以为那里有更完整的论证而不再往下看）。
         //       它与 `DELETE` 的幂等 204 是**相反**的两条口径（@see @limitation 二）：
         //       DELETE 对"已经不在了"宽容（204 + 跳过审计），PUT 对"改不动"必须报错 40402——
         //       因为 PUT 的 id 来自运营刚点开的那一项，"改不动"只可能是它已被别人删掉。
-        if (row === null) throw new AppError(40402, { banner_id: id });
+        if (row === 'missing') throw new AppError(40402, { banner_id: id });
         res.status(200).end();
       } catch (e) {
         next(e);

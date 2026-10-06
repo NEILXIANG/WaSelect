@@ -247,7 +247,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       // ⚠️ 顺序即语义（scheduler.ts @limitation 一）：关单永远最先——
       //    其它 job 对同一张单的判断都建立在"它是否还活着"之上
       jobs: [
-        createExpireOrdersJob(),
+        createExpireOrdersJob({ paymentGraceMs: config.EXPIRE_PAYMENT_GRACE_MS }),
         createCleanupIdempotencyJob(),
         // B11：daily 停跑的看门狗。只读一行、只打日志，放在最后不抢前面 job 的时间
         createDailyHeartbeatWatchJob({ processStartedAt }),

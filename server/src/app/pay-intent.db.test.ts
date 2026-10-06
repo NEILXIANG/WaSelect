@@ -306,6 +306,35 @@ describe('发起（JPY 通道）', () => {
     expect(Number(ev[0]?.['n'])).toBe(1);
   });
 
+  it('🔴 in_app 复用时机构给了**新的**会话号（M-03）→ 支付行改登记新号，回调才对得上', async () => {
+    const sink = new MemorySink();
+    let n = 0;
+    const drifting: PaymentProvider = {
+      ...fakeProvider('pa'),
+      // 每次 create 都开新会话（mock 进程重启后缓存丢失 / 机构确认拒绝后换键，都是这个形态）
+      async create(req: PaymentRequest): Promise<PaymentSession> {
+        n += 1;
+        return {
+          providerRef: `pa-session-${String(n)}`,
+          entry: { mode: 'in_app', params: { via: 'pa', orderId: req.orderId } },
+          expiresAt: req.expiresAt,
+        };
+      },
+    };
+    const registry = fakeRegistry({ pa: drifting });
+    await seedPayable('o-1');
+    await withTransaction(db, (tx) =>
+      createPayIntent(tx, deps(registry, sink), { orderId: 'o-1', userId: 'u-1', channel: 'pa' }),
+    );
+    const again = await withTransaction(db, (tx) =>
+      createPayIntent(tx, deps(registry, sink), { orderId: 'o-1', userId: 'u-1', channel: 'pa' }),
+    );
+    expect(again.providerRef).toBe('pa-session-2');
+    const rows =
+      await db`select provider_ref from payments where order_id = 'o-1' and status = 'initiated'`;
+    expect(rows.map((r) => r['provider_ref'])).toEqual(['pa-session-2']);
+  });
+
   it('换通道：旧 initiated 行作废（cancelled），新通道建行；payload 来自新通道', async () => {
     const sink = new MemorySink();
     const registry = fakeRegistry({ pa: fakeProvider('pa'), pb: fakeProvider('pb') });

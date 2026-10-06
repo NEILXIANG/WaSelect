@@ -447,6 +447,30 @@ describe('AJ-361：管理端按 image_id 存商品图', () => {
     await s.close();
   });
 
+  it('🔴 没配 IMG_BASE_URL 时，管理端列表仍回显 image_id（S-04：否则一次编辑保存就把商品图清空）', async () => {
+    const withBase = await buildServer('https://img.example.com');
+    const r = await fetch(`${withBase.url}/api/v1/admin/products`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${await adminToken()}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body({ images: [{ image_id: 'img-7qk3m9vz2rx8' }] })),
+    });
+    const id = String(((await r.json()) as { id: string }).id);
+    await withBase.close();
+
+    const noBase = await buildServer(undefined);
+    const list = await fetch(`${noBase.url}/api/v1/admin/products`, {
+      headers: { authorization: `Bearer ${await adminToken()}` },
+    });
+    const items = (
+      (await list.json()) as { items: Array<{ id: string; images: Array<Record<string, string>> }> }
+    ).items;
+    expect(items.find((x) => x.id === id)?.images).toEqual([{ image_id: 'img-7qk3m9vz2rx8' }]);
+    await noBase.close();
+  });
+
   it('🔴 库里报关品名为 NULL → 响应**整键省略**，不得出现字面量 "null"', async () => {
     // @why 钉在**响应**上而不是只钉仓储：运营与前端看到的是 JSON。
     //      字面量 "null" 会被 `isBlank` 判为"填了"，服务端校验放行 ⇒ 报关英文品名

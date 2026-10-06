@@ -277,6 +277,37 @@ describe('POST /admin/upload', () => {
     },
   );
 
+  it('🔴 multipart 在文件分段中途结束（没有结尾边界）→ 40001 upload_malformed，进程不崩（S-01）', async () => {
+    // @why 原实现文件流上没有 error 监听：busboy 收尾时 destroy(err) 变成未捕获异常，
+    //      生产上 process-errors 会走 fatal 并重启整个服务（支付回调一起中断）。
+    const uncaught: unknown[] = [];
+    const onUncaught = (e: unknown): void => {
+      uncaught.push(e);
+    };
+    process.on('uncaughtException', onUncaught);
+    const srv = await buildServer('https://img.example.com');
+    try {
+      const boundary = '----waselect-cut';
+      const body = Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`,
+        ),
+        Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]),
+      ]);
+      const res = await postUpload(srv.url, await bearer(), {
+        body,
+        ct: `multipart/form-data; boundary=${boundary}`,
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { code: number }).code).toBe(40001);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(uncaught).toEqual([]);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      await srv.close();
+    }
+  });
+
   it('KD-5 文件头合法、内容损坏的 jpeg → 40001 image_decode_failed，存储零写入，解码原因进 warn 日志', async () => {
     const srv = await buildServer('https://img.example.com');
     try {

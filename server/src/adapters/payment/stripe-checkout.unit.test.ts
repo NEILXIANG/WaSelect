@@ -407,6 +407,15 @@ describe('parseWebhook（事件映射与验签细节）', () => {
     }
   });
 
+  it('🔴 支付成功事件带**事件生成时刻** eventAtMs（取 envelope 的 created；M-01 据此判迟到）', async () => {
+    const { provider } = build();
+    const p = signed('checkout.session.completed');
+    const ev = await provider.parseWebhook(p.raw, p.headers);
+    expect(ev.outcome).toBe('succeeded');
+    // 样本 envelope 的 created = 1_700_000_000（见上一条 @measured）
+    expect(ev.eventAtMs).toBe(1_700_000_000 * 1000);
+  });
+
   it('🔴 拒付事件带**开案时刻**（取 Dispute 对象的 created，不是事件 envelope 的）', async () => {
     const { http, provider } = build();
     // B5 / AJ-198：替身里的 PI 必须带上本系统标记，否则会被当成"账户里非本系统的付款"

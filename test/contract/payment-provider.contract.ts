@@ -216,6 +216,8 @@ export function runProviderContract(name: string, make: () => ProviderHarness): 
         'providerRef',
         'amountMinor',
         'currency',
+        // 端口字段（M-01）：机构生成事件的时刻，判"钱是不是在支付窗口内付的"要用它
+        'eventAtMs',
       ]);
       const extra = Object.keys(ev).filter((k) => !allowed.has(k));
       expect(extra).toEqual([]);

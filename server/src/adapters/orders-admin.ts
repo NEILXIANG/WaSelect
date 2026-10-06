@@ -98,7 +98,8 @@ export interface AdminOrderRow {
   status: string;
   items_jpy: number;
   shipping_jpy: number;
-  duty_jpy: number;
+  /** null = 关税无法估算（W-05 / 迁移 026），不是 0。 */
+  duty_jpy: number | null;
   total_jpy: number;
   weight_g: number;
   fx_snapshot: unknown;
@@ -277,7 +278,7 @@ export async function findAdminOrder(db: Db, orderId: string): Promise<AdminOrde
     status: String(r.status),
     items_jpy: Number(r.items_jpy),
     shipping_jpy: Number(r.shipping_jpy),
-    duty_jpy: Number(r.duty_jpy),
+    duty_jpy: r.duty_jpy === null ? null : Number(r.duty_jpy),
     total_jpy: Number(r.total_jpy),
     weight_g: Number(r.weight_g),
     fx_snapshot: r.fx_snapshot,

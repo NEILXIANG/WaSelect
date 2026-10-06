@@ -767,3 +767,31 @@ describe('配置形状（N11）', () => {
     expect(issues.join('\n')).toContain('ADMIN_INITIAL_PASSWORD');
   });
 });
+
+/**
+ * 喂给 setTimeout / setInterval 的毫秒配置要有上限（S-06）。
+ * @why ≥ 2^31 ms 时 Node 把定时器截成 1ms（TimeoutOverflowWarning）：调度器每毫秒跑一轮打满数据库，
+ *      停机总预算 1ms 就到点、不排空直接退出。启动期拒掉比运行期出事好。
+ */
+describe('定时类毫秒配置的上限（S-06）', () => {
+  it.each([
+    'SCHEDULER_TICK_MS',
+    'SHUTDOWN_TOTAL_BUDGET_MS',
+    'SHUTDOWN_READY_DELAY_MS',
+    'SHUTDOWN_EVENT_DRAIN_MS',
+    'SHUTDOWN_JOB_WAIT_MS',
+    'SHUTDOWN_BUDGET_FLUSH_MS',
+    'HTTP_TIMEOUT_MS',
+    'HTTP_TOTAL_BUDGET_MS',
+    'CB_COOLDOWN_MS',
+  ])('%s=2147483648 → 拒启', (key) => {
+    const issues = expectReject({ ...baseEnv, [key]: '2147483648' });
+    expect(issues.join('\n')).toContain(key);
+  });
+
+  it('2147483647（定时器能表示的最大值）仍然接受', () => {
+    expect(loadConfig({ ...baseEnv, SCHEDULER_TICK_MS: '2147483647' }).SCHEDULER_TICK_MS).toBe(
+      2147483647,
+    );
+  });
+});

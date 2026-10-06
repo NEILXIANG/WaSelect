@@ -48,7 +48,15 @@ export interface BannersAdminRepo {
   /** 插入一行并返回读出行。 */
   insertBanner(row: BannerWrite & { id: string }): Promise<BannerRow>;
   /** 整行覆盖（@limitation 一）；0 行命中 → null。 */
-  updateBanner(id: string, row: BannerWrite): Promise<BannerRow | null>;
+  /**
+   * 带乐观锁的整行更新（S-09）：`expectedUpdatedAt` 与库里不一致时不写。
+   * @returns 改好的行；`'missing'` = 这条已不存在；`'stale'` = 打开编辑之后被别人改过
+   */
+  updateBanner(
+    id: string,
+    row: BannerWrite,
+    expectedUpdatedAt: string,
+  ): Promise<BannerRow | 'missing' | 'stale'>;
   /** 删除（@limitation 二）；0 行命中 → false。 */
   deleteBanner(id: string): Promise<boolean>;
 }
@@ -87,7 +95,12 @@ export function createBannersAdminRepo(db: Db): BannersAdminRepo {
       return toRow(r as Record<string, unknown>);
     },
 
-    async updateBanner(id: string, row: BannerWrite): Promise<BannerRow | null> {
+    async updateBanner(
+      id: string,
+      row: BannerWrite,
+      expectedUpdatedAt: string,
+    ): Promise<BannerRow | 'missing' | 'stale'> {
+      // 毫秒截断后比较：下发给前端的是 toISOString()（毫秒），库里是微秒（与商品 PUT 同口径）
       const out = await db`
         update banners
            set image_key = ${row.imageKey}, link_type = ${row.linkType}, link_id = ${row.linkId},
@@ -95,10 +108,13 @@ export function createBannersAdminRepo(db: Db): BannersAdminRepo {
                starts_at = ${atOf(row.startsAtMs)}, ends_at = ${atOf(row.endsAtMs)},
                updated_at = now()
          where id = ${id}
+           and date_trunc('millisecond', updated_at) = ${expectedUpdatedAt}::timestamptz
         returning ${db.unsafe(COLS)}
       `;
       const r = out[0];
-      return r === undefined ? null : toRow(r as Record<string, unknown>);
+      if (r !== undefined) return toRow(r as Record<string, unknown>);
+      const exists = await db`select 1 from banners where id = ${id}`;
+      return exists.length === 0 ? 'missing' : 'stale';
     },
 
     async deleteBanner(id: string): Promise<boolean> {

@@ -184,9 +184,9 @@ export function formatResetSuccess(tokenVer: number): string {
  * @why 管道分支不做 trim 以外的事：`echo "$PW" | npm run …` 时口令末尾的换行
  *      要去掉（否则 12 位长度校验被一个 \n 干扰得莫名其妙），但中间的空格是口令的一部分。
  *
- * @limitation 交互输入时按退格**不会**真的删字符（原始模式下要自己处理 `\u007f`），
- *              本次不做：退格在口令输入里极易按错且看不出来，宁可让人重来一次
- *              （Ctrl-C 取消）。要做就把 `\u007f` 从 buf 里 pop 掉并回退一格光标。
+ * @why 交互输入时自己处理退格（S-08）：原始模式下退格只是一个字节（`\u007f` / `\b`），
+ *      不处理就会被拼进口令。其它控制字符（Tab、方向键序列）直接拒绝，让人重来一次。
+ * @limitation 不做"再输一遍确认"：输入不回显，两次一致性要靠输入者自己；输错时用改密命令再改一次即可。
  */
 export async function readNewPassword(
   stdin: PasswordStdin,
@@ -208,8 +208,22 @@ export async function readNewPassword(
         //    实际提交的是一个半截口令，而终端上只看到几个 `*`，无从发现。
         if (cancel !== -1 && (cut === -1 || cancel < cut)) throw new Error('已取消');
         const take = cut === -1 ? s : s.slice(0, cut);
-        buf += take;
-        out('*'.repeat([...take].length));
+        // 逐字符处理（S-08）：退格删上一个字符并回退一格 *；其它控制字符一律拒绝——
+        // 原实现把它们原样拼进口令，存下的与输入者以为的不一样，之后登录失败且看不出原因。
+        for (const ch of take) {
+          if (ch === '\u007f' || ch === '\b') {
+            const chars = [...buf];
+            if (chars.length > 0) {
+              chars.pop();
+              buf = chars.join('');
+              out('\b \b');
+            }
+            continue;
+          }
+          if (ch < ' ') throw new Error('口令里不能有控制字符（Tab、方向键等）；请重新执行');
+          buf += ch;
+          out('*');
+        }
         if (cut !== -1) break;
       }
     } finally {

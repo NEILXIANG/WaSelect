@@ -1342,3 +1342,22 @@ describe('错误归类：解析错误 vs 服务端 bug', () => {
     expect(sink.find('unhandled_error').length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * 路径参数里的非法百分号编码（S-05）：是客户端的错，不能回 500、不能打 error 日志。
+ * @why Express 5 解码参数失败抛 URIError（status=400 但没有 expose），原来落进"非 AppError"分支 → 500
+ *      + error 级 unhandled_error；任何匿名请求都能用它刷 5xx 比例与告警，把真实故障淹掉。
+ */
+describe('路径参数解码失败（S-05）', () => {
+  it('🔴 /items/%E0%A4%A → 400 / 40001，日志没有 error 级', async () => {
+    const { baseUrl, sink } = await serve((app) => {
+      app.get('/items/:id', (req, res) => res.json({ id: req.params['id'] }));
+    });
+    const res = await fetch(`${baseUrl}/items/%E0%A4%A`);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: number }).code).toBe(40001);
+    expect(
+      sink.lines.filter((l) => l.includes('"level":"error"') || l.includes('"level":50')),
+    ).toEqual([]);
+  });
+});

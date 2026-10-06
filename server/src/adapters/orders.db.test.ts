@@ -434,3 +434,36 @@ describe('setPayTokenHash + findPayLinkTarget（D-49 短链的两端）', () => 
     expect(await findPayLinkTarget(db, 'o-ghost')).toBeNull();
   });
 });
+
+/**
+ * 有在途支付的单晚一点再关（M-01）：给"窗口内付款、通知晚到"的回调留出落账时间。
+ * @why 关单作业到点就关、回补库存；窗口最后几秒付的款，通知晚几秒到就会撞上"已关单 → 迟到付款"，
+ *      钱扣了、单关了、库存可能被别人买走，只能人工退款。
+ */
+describe('lockExpiredPayableOrders：在途支付的宽限（M-01）', () => {
+  const GRACE = 300_000;
+  async function seedInitiated(orderId: string): Promise<void> {
+    await db`insert into payments (id, order_id, provider, provider_ref, status, charge_currency, charge_amount)
+             values (${`pay-${orderId}`}, ${orderId}, 'stripe', ${`cs_test_${orderId}`}, 'initiated', 'USD', 700)`;
+  }
+
+  it('🔴 到点 1 秒、有 initiated 支付行 → 本轮不关', async () => {
+    await seedOrder('o-pay', { status: 'pending_payment' });
+    await seedInitiated('o-pay');
+    expect(await lockExpiredPayableOrders(db, NOW, 100, GRACE)).toEqual([]);
+  });
+
+  it('过了宽限期 → 关', async () => {
+    await seedOrder('o-pay2', {
+      status: 'pending_payment',
+      expiresAt: new Date(NOW.getTime() - GRACE - 1_000),
+    });
+    await seedInitiated('o-pay2');
+    expect(await lockExpiredPayableOrders(db, NOW, 100, GRACE)).toEqual(['o-pay2']);
+  });
+
+  it('没有在途支付的单不受影响：到点即关', async () => {
+    await seedOrder('o-nopay');
+    expect(await lockExpiredPayableOrders(db, NOW, 100, GRACE)).toEqual(['o-nopay']);
+  });
+});

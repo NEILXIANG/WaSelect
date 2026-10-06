@@ -242,6 +242,26 @@ describe('readNewPassword（口令从 stdin 来）', () => {
    *      先取"本轮字符"再判断取消的话，那次输入会被当成"输完了"——
    *      用户以为取消了，实际提交的是一个**半截口令**，而屏幕上只有几个 `*`，无从发现。
    */
+  /**
+   * @why 原实现把退格字节（\x7f / \b）原样拼进口令（S-08）：输错一个字母按退格改正，
+   *      实际存下的是 "correct-horsX\x7fe-battery"，之后用自以为的口令登录失败且看不出原因。
+   */
+  it('🔴 TTY：退格删掉上一个字符（并回退一格 *），不进口令', async () => {
+    const out: string[] = [];
+    const pw = await readNewPassword(fakeStdin(['abcX', '\x7f', 'd', '\r'], { tty: true }), (s) => {
+      out.push(s);
+    });
+    expect(pw).toBe('abcd');
+    expect(out.join('')).toContain('****\b \b*');
+    await expect(readNewPassword(fakeStdin(['ab\bc\r'], { tty: true }))).resolves.toBe('ac');
+  });
+
+  it('🔴 TTY：其它控制字符（如 Tab、方向键序列）→ 拒绝，而不是悄悄存进口令', async () => {
+    await expect(readNewPassword(fakeStdin(['ab\tc\r'], { tty: true }))).rejects.toThrow(
+      '控制字符',
+    );
+  });
+
   it('🔴 打了几个字符再按 Ctrl-C → 取消，而不是提交一个半截口令', async () => {
     await expect(readNewPassword(fakeStdin(['ab\u0003'], { tty: true }))).rejects.toThrow('已取消');
     await expect(readNewPassword(fakeStdin(['ab', 'c\u0003'], { tty: true }))).rejects.toThrow(
