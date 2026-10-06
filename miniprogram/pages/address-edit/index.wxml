@@ -98,7 +98,7 @@
 
       <!-- 剩余清单 4-5：州改为下拉（只给 USPS 真实州码），不再手输 -->
       <ws-field label="州">
-        <picker mode="selector" range="{{stateLabels}}" bindchange="onStatePick">
+        <picker mode="selector" range="{{stateLabels}}" value="{{stateIndex}}" bindchange="onStatePick">
           <view class="input {{form.state ? '' : 'ph'}}">{{form.state || '请选择州'}}</view>
         </picker>
         <text class="field__error" wx:if="{{errors.state}}">{{errors.state}}</text>

@@ -219,7 +219,7 @@ export const LEGAL_PAGES = [
 export const SELLER_PENDING_TEXT =
   '公司登记后公布 / 会社登記後に掲載 / To be published after incorporation';
 
-const SELLER_TOKENS = [
+export const SELLER_TOKENS = [
   'SELLER_NAME',
   'SELLER_REPRESENTATIVE',
   'SELLER_ADDRESS',

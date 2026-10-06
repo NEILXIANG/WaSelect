@@ -36,6 +36,12 @@ export interface AutoConfirmDeps {
   logger: Logger;
   /** 与 `/pay/callback/{channel}` 路由**同一份**管线依赖（mount.ts 只造一次，两处共用）。 */
   pipeline: CallbackPipelineDeps;
+  /**
+   * 本地模拟付款（MOCK_AUTO_CONFIRM=on 且 development / test）：第二道防线放行普通单。
+   * @why 本地演练要走到发货 / 退款，而测试单不能发货；公网环境 config 跨字段 1e 拒绝这个开关，
+   *      mount.ts 再按环境判一次——两道都在，因为这是"能把订单变成已付款"的门。
+   */
+  allowNonTestOrders?: boolean;
 }
 
 export function createAutoConfirm(deps: AutoConfirmDeps): AutoConfirm {
@@ -45,7 +51,10 @@ export function createAutoConfirm(deps: AutoConfirmDeps): AutoConfirm {
     if (selfConfirm === undefined) return; // 真实通道：钱到没到只能由机构说
     const base = { order_id: intent.orderId, channel: intent.channel };
     try {
-      if ((await isTestOrder(deps.db, intent.orderId)) !== true) {
+      if (
+        deps.allowNonTestOrders !== true &&
+        (await isTestOrder(deps.db, intent.orderId)) !== true
+      ) {
         deps.logger.error('pay_auto_confirm_refused', { ...base, result: 'rejected' });
         return;
       }

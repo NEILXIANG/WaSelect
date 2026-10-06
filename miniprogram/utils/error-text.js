@@ -29,6 +29,7 @@
 export function errorMessage(err) {
   const isObj = err !== null && typeof err === 'object';
   // 剩余清单 4-6：网络层失败（负数码）给人话；宿主原始串（request:fail timeout）只进 errorRef 小字
+  if (isObj && err.code === GATEWAY_CODE) return GATEWAY_TEXT;
   if (isObj && Number.isInteger(err.code) && err.code < 0 && err.code !== UNCONFIGURED_CODE) {
     return NETWORK_TEXT;
   }
@@ -41,6 +42,9 @@ export function errorMessage(err) {
 
 /** 网络层失败的人话（剩余清单 4-6）。 */
 const NETWORK_TEXT = '网络不太稳定，请检查网络后重试';
+/** 有响应无业务码（网关故障，request.js GATEWAY_ERROR_CODE）：问题在服务端，不让用户去查网络（扫描 W-06）。 */
+const GATEWAY_CODE = -3;
+const GATEWAY_TEXT = '服务暂时不可用，请稍后重试';
 /** "服务地址没配"（unconfigured-api，-2）的 message 本身就是给人看的说明，不替换。 */
 const UNCONFIGURED_CODE = -2;
 

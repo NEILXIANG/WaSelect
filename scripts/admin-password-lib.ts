@@ -79,10 +79,10 @@ export type SetAdminPasswordResult =
  *      且没有它就没法定位账号；约束七禁的是"完整邮箱进**日志/输出**"，history 不在此列。
  */
 export function parseAdminEmailArg(argv: readonly string[]): string | undefined {
-  const [email] = argv;
-  if (email === undefined) return undefined;
-  const trimmed = email.trim();
-  return trimmed === '' ? undefined : trimmed;
+  // 扫描 A-05：跳过 `--yes` 之类的选项；不像邮箱的不收——参数顺序写反时，
+  //    旧实现会建出一个邮箱叫 `--yes` 的生产管理员，还打印"已建管理员"
+  const email = argv.map((a) => a.trim()).find((a) => a !== '' && !a.startsWith('--'));
+  return email !== undefined && /^[^@\s]+@[^@\s]+$/.test(email) ? email : undefined;
 }
 
 /**

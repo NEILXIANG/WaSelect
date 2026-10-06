@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { closeDb, createDb, type Db } from '../server/src/adapters/db.js';
 import { TEST_DB_URL } from '../test/db/test-db.js';
-import { ensureDatabase, migrateUp, seedStep } from './dev-up-lib.js';
+import { ensureDatabase, ensureDevFxStep, migrateUp, seedStep } from './dev-up-lib.js';
 import { seedOnce } from './seed-lib.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -97,6 +97,27 @@ describe('dev-up 真库全链路：建库 → 迁移 → 灌数据', () => {
       // 种子配置表来自迁移（007）：它不是灌数据灌进去的
       const profiles = await db<{ code: string }[]>`select code from country_profiles`;
       expect(profiles.map((r) => r.code)).toEqual(['US']);
+    } finally {
+      await closeDb(db);
+    }
+  });
+
+  /**
+   * 本地演练实测（2026-10-06）：开发库的汇率是灌数那天录的，过了 FX_MAX_AGE_HOURS（72h）就整店报价 50003；
+   * 全新克隆则根本没有汇率。`npm run dev` 每次启动补一条"开发汇率"，已有新鲜汇率时不动。
+   */
+  it('🔴 开发汇率：没有或已过期 → 补 USD / CNY；新鲜的不动；再跑一次不重复补', async () => {
+    const db: Db = createDb({ url: probeUrl(), max: 1 });
+    try {
+      await db`delete from fx_rates`;
+      await db`insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)
+               values ('USD', 0.0067, 0.0067, 0, now() - interval '100 hours')`;
+      expect(await ensureDevFxStep(db, 72)).toContain('USD');
+      const fresh = await db<{ quote: string }[]>`
+        select quote from fx_rates where effective_from > now() - interval '72 hours' order by quote`;
+      expect(fresh.map((r) => r.quote)).toEqual(['CNY', 'USD']);
+      expect(await ensureDevFxStep(db, 72)).toContain('无需补录');
+      expect((await db`select 1 from fx_rates`).length).toBe(3);
     } finally {
       await closeDb(db);
     }

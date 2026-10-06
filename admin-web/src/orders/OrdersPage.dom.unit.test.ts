@@ -204,3 +204,19 @@ describe('订单列表：响应乱序（A-05）', () => {
     expect(el.querySelector('tbody')?.textContent).not.toContain('PAGE2-B');
   });
 });
+
+/** 扫描 A-02：最后一页唯一一张单处理掉之后，列表不能停在"第 2 / 1 页、没有订单"。 */
+describe('订单列表：总数变少时拉回最后一页（扫描 A-02）', () => {
+  it('🔴 第 2 页请求回来 total 只够 1 页 → 自动再请求第 1 页', async () => {
+    calls = [];
+    let n = 0;
+    const api = async (req: Call): Promise<unknown> => {
+      calls.push(req);
+      n += 1;
+      return { items: [], total: n === 1 ? 40 : 20 };
+    };
+    mounted = await mount(createElement(OrdersPage, { api: api as never }));
+    await click(button(mounted.el, '下一页'));
+    expect(gets().at(-1)?.path).toContain('page=1');
+  });
+});

@@ -821,6 +821,8 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
       // 控制组：配上 → 一行都不许有（误报会把运维训练成无视它）
       const guarded = await boot({
         ORIGIN_VERIFY_SECRET: 'prod-origin-verify-secret-'.repeat(2),
+        // 扫描 S-03：配了源站校验就必须信任两层反代（config 跨字段 8b），否则启动即拒
+        TRUST_PROXY_HOPS: '2',
       });
       expect(guarded.lines.some((l) => l.includes('origin_verify_disabled'))).toBe(false);
       expect(guarded.lines.some((l) => l.includes('server_started'))).toBe(true);
@@ -853,6 +855,8 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
         env: {
           ...prodEnv(PORT_PROD_ORIGIN_LINK, dbUrl.toString()),
           ORIGIN_VERIFY_SECRET: 'prod-origin-verify-secret-value-0001',
+          // 扫描 S-03：配了源站校验就必须信任两层反代（config 跨字段 8b），否则启动即拒
+          TRUST_PROXY_HOPS: '2',
         },
         logDestination: { write },
         exit: () => undefined,

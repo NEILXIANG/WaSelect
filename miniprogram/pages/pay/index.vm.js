@@ -124,7 +124,7 @@ export const EMPTY_GUIDE = Object.freeze({ title: '', body: '', actionText: '', 
  * 订单已不需要再支付时，支付页要 `setData` 的全部内容（AJ-227 → MP3-01 改签名）。
  * @param {unknown} view `payPageView(order)` 的返回值（不信任它的形状）
  * @returns {{closedText: string, goHome: boolean, channels: never[], notice: never[],
- *            payUrl: string, guide: object, copied: boolean}}
+ *            payUrl: string, guide: object, copied: boolean, countdown: string, payResult: string}}
  * @why 收进一个函数：要同时清掉的有五样（支付方式、提示条、短链、引导、"已复制"），
  *      漏清任何一样，页面上就会同时出现"无需再支付"和一个还能点的入口。
  * @why 改成**整个 view 传进来**（原来是只传 `closedText` 字符串）：
@@ -142,6 +142,9 @@ export function closedScreen(view) {
     payUrl: '',
     guide: { ...EMPTY_GUIDE },
     copied: false,
+    // 扫描 W-02 / W-03：倒计时与上一次支付结果同样作废——"已付款"旁边不能挂着"请在 12:34 内完成支付"或"支付未完成"
+    countdown: '',
+    payResult: '',
   };
 }
 
@@ -150,7 +153,7 @@ export function closedScreen(view) {
  *
  * @param {unknown} ok 宿主 `setClipboardData` 的 success 是否触发；任何非 `true` 都当失败
  * @param {unknown} [privacy] `app.globalData.privacy`（utils/privacy.js 的启动授权结果，剩余清单 4-3）
- * @returns {{copied: boolean, error: string}} 直接喂给 `setData` 的形状
+ * @returns {{copied: boolean, error: string, errorRef: string}} 直接喂给 `setData` 的形状
  *
  * @why 支付页这一屏是**微信支付上线前唯一的付款路径**（D-49：银行卡 = 短链 →
  *      Stripe 托管页），而 `setClipboardData` 是**隐私接口**——它可能失败：
@@ -165,9 +168,14 @@ export function closedScreen(view) {
  *              @see ./index.js（onCopy 传 success / fail）
  */
 export function copyResult(ok, privacy = undefined) {
-  if (ok === true) return { copied: true, error: '' };
+  // errorRef 一并清（扫描 W-05）：复制成败与之前的请求错误无关，挂着旧链路号会把客服引向错的日志
+  if (ok === true) return { copied: true, error: '', errorRef: '' };
   // 剩余清单 4-3：启动时拒绝过隐私授权 → 说清是被微信拦下的（否则用户以为按钮坏了）
-  return { copied: false, error: copyFailText(privacy, '复制失败，请长按下方链接手动复制') };
+  return {
+    copied: false,
+    error: copyFailText(privacy, '复制失败，请长按下方链接手动复制'),
+    errorRef: '',
+  };
 }
 
 /**

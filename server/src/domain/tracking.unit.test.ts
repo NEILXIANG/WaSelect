@@ -22,6 +22,12 @@ describe('trackingUrl', () => {
     expect(trackingUrl('ePacket', 'X1')).toBe(JP('X1'));
   });
 
+  /** 扫描 A-04：`includes('ems')` 把 "Yamato Transport Systems" 也当成日本邮便。 */
+  it('🔴 承运商名只按整词匹配：名字里碰巧含 ems 的不算日本邮便', () => {
+    expect(trackingUrl('Yamato Transport Systems', '1234-5678-9012')).toBeNull();
+    expect(trackingUrl('EMS (Japan Post)', '123456789012')).not.toBeNull();
+  });
+
   it('认不出的承运商 + 非日本邮便单号 → null（不猜链接：给错链接比不给更糟）', () => {
     expect(trackingUrl('yamato', '1234-5678-9012')).toBeNull();
     expect(trackingUrl(null, 'EE123456789US')).toBeNull();

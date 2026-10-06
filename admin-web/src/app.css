@@ -263,3 +263,8 @@ body {
   color: var(--ws-color-error);
   font-size: var(--ws-font-sm);
 }
+
+/* 扫描 A-03：整段可选中复制（内部 id）。 */
+.selectable {
+  user-select: all;
+}

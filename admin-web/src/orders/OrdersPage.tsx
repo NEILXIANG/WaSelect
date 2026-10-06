@@ -77,6 +77,9 @@ export function OrdersPage({ api }: OrdersPageProps) {
       setRaw(res.items);
       setRows(orderRows(res.items));
       setTotal(res.total);
+      // 扫描 A-02：当前页超出最后一页（例如最后一页唯一一张单刚发货）→ 拉回最后一页，不停在"空页"
+      const last = Math.max(1, Math.ceil(res.total / PAGE_SIZE));
+      if (page > last) setPage(last);
     } catch (e) {
       if (seq !== reqSeq.current) return;
       // ⚠️ 失败不清列表（同商品管理）：只显示错误，列表保留上一次结果

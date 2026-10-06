@@ -154,7 +154,7 @@ Page({
     // 清掉上一次的错误：不清的话旧错误会一直挂在重新取回来的内容上面
     // ⚠️ `payResult` **不在这里清**（MP3-07）：它是"上一次支付的结果"，不是"上一次取数的错误"。
     //    微信收银台取消后会触发 onShow → reload，把"支付未完成"抹掉等于什么都没说。
-    this.setData({ loading: true, error: '', noChannel: false });
+    this.setData({ loading: true, error: '', errorRef: '', noChannel: false });
     // ⚠️ 领号（MP3-07）：连续两次切前后台会并发两个 load，
     //    旧的那个若后到，会把"该订单已付款"旁边的支付方式**盖回去**——
     //    首页与购物车在 B36 里已经用序号修过同一类问题，支付页没跟上。
@@ -228,7 +228,11 @@ Page({
       loading: this.data.loading === true,
     });
     if (action === 'reload') void this.load();
-    else if (action === 'status') void this.checkStatus();
+    else if (action === 'status') {
+      // 扫描 W-01：onHide 停了表，"只查状态"这条路不走 load()——不在这里重启，倒计时就停在离开那一秒
+      if (this.expiresAt !== undefined && this.data.closedText === '') this.startCountdown();
+      void this.checkStatus();
+    }
   },
 
   /**
@@ -247,6 +251,7 @@ Page({
       });
       const view = payPageView(order);
       if (!view.payable) {
+        this.stopCountdown();
         this.setData({ ...closedScreen(view), confirmNote: '' });
         return;
       }

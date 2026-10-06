@@ -33,12 +33,19 @@ const JAPAN_POST = {
     '&search.x=1&search.y=1&locale=en&startingUrlPatten=',
 };
 
+function matchesWord(carrier: string, name: string): boolean {
+  if (!/^[a-z -]+$/.test(name)) return carrier.includes(name);
+  const escaped = name.replace(/[-\s]/g, (m) => (m === '-' ? '\\-' : '\\s'));
+  return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(carrier);
+}
+
 export function trackingUrl(carrier: string | null, trackingNo: string | null): string | null {
   const n = (trackingNo ?? '').replace(/\s+/g, '').toUpperCase();
   if (n === '') return null;
   if (S10_JP.test(n)) return JAPAN_POST.url(n);
   const c = (carrier ?? '').trim().toLowerCase();
-  if (JAPAN_POST.names.some((name) => c.includes(name))) return JAPAN_POST.url(n);
+  // 扫描 A-04：按整词比（拉丁词用词边界，中日文名本身就是完整词），否则 "Yamato Transport Systems" 含 ems 也会命中
+  if (JAPAN_POST.names.some((name) => matchesWord(c, name))) return JAPAN_POST.url(n);
   return null;
 }
 

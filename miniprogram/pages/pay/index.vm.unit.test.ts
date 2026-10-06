@@ -75,13 +75,13 @@ describe('copyResult × 隐私授权（剩余清单 4-3）', () => {
   it('🔴 启动时拒绝过隐私授权 → 失败文案说清原因（不是只说"复制失败"）', () => {
     expect(copyResult(false, 'denied').error).toContain('隐私保护指引');
     expect(copyResult(false, 'agreed').error).toBe('复制失败，请长按下方链接手动复制');
-    expect(copyResult(true, 'denied')).toEqual({ copied: true, error: '' });
+    expect(copyResult(true, 'denied')).toEqual({ copied: true, error: '', errorRef: '' });
   });
 });
 
 describe('copyResult（复制短链之后页面该显示什么，B34 / AJ-217）', () => {
   it('成功：按钮改"已复制"，且不带错误（成功时不该留下上一次的失败提示）', () => {
-    expect(copyResult(true)).toEqual({ copied: true, error: '' });
+    expect(copyResult(true)).toEqual({ copied: true, error: '', errorRef: '' });
   });
 
   it('失败：给兜底动作，而不是只说"失败"——链接就在屏幕上，长按可选', () => {
@@ -326,6 +326,9 @@ describe('closedScreen：订单已不需要支付时要清掉的全部内容（A
       payUrl: '',
       guide: { title: '', body: '', actionText: '', steps: [] },
       copied: false,
+      // 扫描 W-02 / W-03：关单屏还要清掉倒计时与上一次支付结果（否则"已付款"旁边挂着"请在 12:34 内完成支付"）
+      countdown: '',
+      payResult: '',
     });
   });
 
@@ -403,5 +406,12 @@ describe('onShowAction：整页重取在途时不再排队（MP3-07）', () => {
     expect(onShowAction({ loading: false })).toBe('reload');
     expect(onShowAction({ loading: 'yes' })).toBe('reload');
     expect(onShowAction({})).toBe('reload');
+  });
+});
+
+describe('copyResult 清掉旧的报障小字（扫描 W-05）', () => {
+  it('🔴 成功与失败都把 errorRef 置空（复制失败与之前的请求错误无关，不能挂着旧链路号）', () => {
+    expect(copyResult(true).errorRef).toBe('');
+    expect(copyResult(false).errorRef).toBe('');
   });
 });

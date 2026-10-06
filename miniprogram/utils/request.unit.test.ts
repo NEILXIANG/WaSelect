@@ -10,7 +10,13 @@
  *              需要真机验证的部分见 docs/地基搭建清单.md F14。
  */
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, createRequester, NETWORK_ERROR_CODE, RELOGIN_CODE } from './request.js';
+import {
+  ApiError,
+  createRequester,
+  GATEWAY_ERROR_CODE,
+  NETWORK_ERROR_CODE,
+  RELOGIN_CODE,
+} from './request.js';
 import { createWxApi, type WxRequestOption } from './wx-api.js';
 import { errorSpec } from '@waselect/shared';
 import { newTraceId } from './trace.js';
@@ -81,13 +87,18 @@ describe('收敛错误', () => {
     await expect(api({ url: 'https://api.test/x' })).rejects.toMatchObject({ code: 40101 });
   });
 
-  it('HTTP 500 无业务码 → 用网络错误码，不与 5 位业务码混淆', async () => {
+  /**
+   * 扫描 W-06：有 HTTP 响应但没有业务码（网关 502 / 504 的 HTML 页、413）原先也归 -1，
+   * 错误分层再把它说成"网络不太稳定"——服务端出故障时让所有用户去查自己的网络。现在单独归 -3。
+   */
+  it('🔴 HTTP 500 无业务码 → 网关错误码（-3），与网络失败（-1）和 5 位业务码都不混淆', async () => {
     const wx = fakeWx({ statusCode: 500, data: '<html>oops</html>' });
     const api = createRequester({ wx: wx.wx, log: () => undefined });
     const err = await api({ url: 'https://api.test/x' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
-    expect((err as ApiError).code).toBe(NETWORK_ERROR_CODE);
-    expect(NETWORK_ERROR_CODE).toBeLessThan(0);
+    expect((err as ApiError).code).toBe(GATEWAY_ERROR_CODE);
+    expect(GATEWAY_ERROR_CODE).toBeLessThan(0);
+    expect(GATEWAY_ERROR_CODE).not.toBe(NETWORK_ERROR_CODE);
   });
 
   it('wx.request fail（断网）→ NETWORK_ERROR_CODE，且带原始 errMsg', async () => {

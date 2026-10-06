@@ -7,7 +7,13 @@
  * @see docs/地基搭建清单.md F3；.env.example
  */
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig, redactConfig, SECRET_KEYS } from './config.js';
+import {
+  ConfigError,
+  loadConfig,
+  mockAutoConfirmEnabled,
+  redactConfig,
+  SECRET_KEYS,
+} from './config.js';
 
 /** 最小可启动环境：必填项齐备（PAYMENT_CHANNELS 刻意必填，见 config.ts @tradeoff）。 */
 const baseEnv: NodeJS.ProcessEnv = {
@@ -310,6 +316,31 @@ describe('跨字段校验：单项合法但组合成事故', () => {
       ).TRUST_PROXY_HOPS,
     ).toBe(2);
     expect(loadConfig(prod({ TRUST_PROXY_HOPS: '1' })).TRUST_PROXY_HOPS).toBe(1);
+  });
+
+  /** 扫描 S-02：生产配了告警收件人却没配邮件服务——告警只记日志，谁都收不到。 */
+  it('🔴 生产 + ALERT_EMAIL + 没配 MAIL_PROVIDER_API_KEY → 拒绝', () => {
+    expect(expectReject(prod({ ALERT_EMAIL: 'ops@example.com' })).join('\n')).toContain(
+      'ALERT_EMAIL',
+    );
+  });
+
+  /** 扫描 S-03：配了源站校验 = 所有请求都经 Cloudflare，层数还是 1 → req.ip 是边缘节点，整个地区共用一个限流桶。 */
+  it('🔴 生产 + ORIGIN_VERIFY_SECRET + TRUST_PROXY_HOPS < 2 → 拒绝', () => {
+    expect(
+      expectReject(
+        prod({
+          TRUST_PROXY_HOPS: '1',
+          ORIGIN_VERIFY_SECRET: 'cf-origin-verify-secret-0123456789abcdef',
+        }),
+      ).join('\n'),
+    ).toContain('TRUST_PROXY_HOPS');
+  });
+
+  it('🔴 生产配置 MOCK_AUTO_CONFIRM=on → 拒绝（自动确认只给本地模拟用）', () => {
+    expect(expectReject(prod({ MOCK_AUTO_CONFIRM: 'on' })).join('\n')).toContain(
+      'MOCK_AUTO_CONFIRM',
+    );
   });
 
   it('生产 + mock 通道 → 拒绝（会收真钱走假支付）', () => {
@@ -828,6 +859,17 @@ describe('定时类毫秒配置的上限（S-06）', () => {
   it('2147483647（定时器能表示的最大值）仍然接受', () => {
     expect(loadConfig({ ...baseEnv, SCHEDULER_TICK_MS: '2147483647' }).SCHEDULER_TICK_MS).toBe(
       2147483647,
+    );
+  });
+});
+
+describe('mockAutoConfirmEnabled（本地模拟付款，AJ-373）', () => {
+  it('只在开关 on 且 development / test 时生效；生产即使开关 on 也不生效（第二道防线）', () => {
+    expect(mockAutoConfirmEnabled({ MOCK_AUTO_CONFIRM: 'on', NODE_ENV: 'development' })).toBe(true);
+    expect(mockAutoConfirmEnabled({ MOCK_AUTO_CONFIRM: 'on', NODE_ENV: 'test' })).toBe(true);
+    expect(mockAutoConfirmEnabled({ MOCK_AUTO_CONFIRM: 'on', NODE_ENV: 'production' })).toBe(false);
+    expect(mockAutoConfirmEnabled({ MOCK_AUTO_CONFIRM: 'off', NODE_ENV: 'development' })).toBe(
+      false,
     );
   });
 });

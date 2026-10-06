@@ -39,6 +39,20 @@ describe('ExportBar（3-3）', () => {
     expect(blobs[0]?.type).toBe('text/csv;charset=utf-8');
   });
 
+  it('🔴 响应缺 csv / filename → 报错，不下载（扫描 A-07）', async () => {
+    const clicked: string[] = [];
+    const api = (): Promise<unknown> => Promise.resolve({ filename: 'x.csv' });
+    mounted = await mount(
+      createElement(ExportBar, {
+        api: api as never,
+        onDownload: (name: string) => clicked.push(name),
+      }),
+    );
+    await click(button(mounted.el, '导出订单总表'));
+    expect(mounted.el.textContent).toContain('形状');
+    expect(clicked).toEqual([]);
+  });
+
   it('失败 → 显示错误文案，不触发下载', async () => {
     const clicked: string[] = [];
     const api = (): Promise<unknown> => Promise.reject(new ApiError(50000, '服务器开小差了', 't'));

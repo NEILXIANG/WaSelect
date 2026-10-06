@@ -217,6 +217,12 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
               <span className="label">订单号</span>
               <span>{order.order_no ?? '—'}</span>
             </div>
+            {/* 扫描 A-03：运营日志按"对象 id"查的是内部 id（ord-…），列表与详情原来都不显示它，
+                按订单号去查永远"没有记录"。这里给出可选中复制的内部 id。 */}
+            <div className="field">
+              <span className="label">内部 ID（查运营日志用）</span>
+              <span className="muted selectable">{order.order_id ?? '—'}</span>
+            </div>
             <div className="field">
               <span className="label">状态</span>
               {/* 🔴 走 `statusText` 而不是 `order.status`：直接渲染原文会让这一格显示 `paid`，

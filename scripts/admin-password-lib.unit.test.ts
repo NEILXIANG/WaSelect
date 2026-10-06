@@ -72,6 +72,17 @@ describe('parseAdminEmailArg（命令行只收邮箱）', () => {
     expect(parseAdminEmailArg(['   '])).toBeUndefined();
   });
 
+  /**
+   * 扫描 A-05：`npm run admin:create -- --yes ops@x.com`（参数顺序写反）会建出一个邮箱叫 `--yes` 的生产管理员，
+   * 脚本还打印"已建管理员"。选项不是邮箱；不像邮箱的位置参数也不收。
+   */
+  it('🔴 跳过 -- 开头的选项取第一个邮箱；不像邮箱 → undefined', () => {
+    expect(parseAdminEmailArg(['--yes', 'ops@x.com'])).toBe('ops@x.com');
+    expect(parseAdminEmailArg(['--yes'])).toBeUndefined();
+    expect(parseAdminEmailArg(['ops'])).toBeUndefined();
+    expect(parseAdminEmailArg(['a b@c.d'])).toBeUndefined();
+  });
+
   it('前后空白被 trim：手抄邮箱带空格不该表现为"找不到这个管理员"', () => {
     expect(parseAdminEmailArg(['  a@b.c  '])).toBe('a@b.c');
   });

@@ -576,6 +576,12 @@ const schema = z.object({
   WECHAT_INSTITUTION_API_KEY: optionalText(),
   /** on 时仅 REVIEW_SKU_ID 商品允许 channel=mock（审核期用）。 */
   REVIEW_MODE: z.enum(['on', 'off']).default('off'),
+  /**
+   * 本地模拟付款：mock 通道自动确认（不必外部签名回调）。**只允许 development / test**（跨字段 1e）。
+   * @why 演练实测（2026-10-06）：非审核模式下 mock 不自动确认，小程序拿到 `{auto:false}` 显示"暂时无法支付"——
+   *      没有支付账号时，开发者工具里走不到"已付款"；而审核模式又只放行一件指定商品，不适合日常开发。
+   */
+  MOCK_AUTO_CONFIRM: z.enum(['on', 'off']).default('off'),
   REVIEW_SKU_ID: optionalText(),
 
   // ── 限流与内部任务（D-52 / D-43）────────────────────────────────────────
@@ -716,6 +722,13 @@ const crossField = schema.superRefine((c, ctx) => {
   }
   if (isProd && c.APP_ID === undefined) {
     add('APP_ID', '生产环境必须配置 APP_ID / APP_SECRET（小程序登录是唯一入口，缺了登录全部 500）');
+  }
+  // 1e. 本地模拟付款开关只给 development / test：公网环境打开 = 任何人下单都自动"付款成功"（mock 不收钱）
+  if ((isProd || c.NODE_ENV === 'staging') && c.MOCK_AUTO_CONFIRM === 'on') {
+    add(
+      'MOCK_AUTO_CONFIRM',
+      `${c.NODE_ENV} 环境禁止 MOCK_AUTO_CONFIRM=on（模拟付款自动确认只给本地开发用）`,
+    );
   }
   if ((isProd || c.NODE_ENV === 'staging') && c.WECHAT_DEV_LOGIN !== undefined) {
     add(
@@ -901,6 +914,21 @@ const crossField = schema.superRefine((c, ctx) => {
     }
     // 8.（剩余清单 5-2 / O5）信任两层以上反代就必须有源站校验：否则直连者伪造的 XFF 被采信，限流与锁定可被绕过
     //    （ORIGIN_VERIFY_SECRET 的 @why："层数取 2 + 源站只认 Cloudflare 注入的头"必须成对）
+    // 8b.（扫描 S-03）反方向同样成对：配了源站校验 = 所有请求都经 Cloudflare，层数还是 1 时 req.ip 是边缘节点，
+    //    同一地区的买家与管理员共用一个限流 / 登录锁定桶（一个人连错 5 次，整片管理员被锁 15 分钟）
+    if (c.ORIGIN_VERIFY_SECRET !== undefined && c.TRUST_PROXY_HOPS < 2) {
+      add(
+        'TRUST_PROXY_HOPS',
+        '生产配置了 ORIGIN_VERIFY_SECRET（经 Cloudflare）时 TRUST_PROXY_HOPS 必须 ≥ 2（否则取到的是边缘节点 IP）',
+      );
+    }
+    // 9.（扫描 S-02）配了告警收件人却没配邮件服务：告警只记日志，谁都收不到，而日志看起来一切正常
+    if (c.ALERT_EMAIL !== undefined && c.MAIL_PROVIDER_API_KEY === undefined) {
+      add(
+        'ALERT_EMAIL',
+        '生产配置了 ALERT_EMAIL 就必须配置 MAIL_PROVIDER_API_KEY（否则告警发不出去）',
+      );
+    }
     if (c.TRUST_PROXY_HOPS >= 2 && c.ORIGIN_VERIFY_SECRET === undefined) {
       add(
         'ORIGIN_VERIFY_SECRET',
@@ -911,6 +939,16 @@ const crossField = schema.superRefine((c, ctx) => {
 });
 
 export type AppConfig = z.infer<typeof schema>;
+
+/**
+ * 本地模拟付款是否生效（MOCK_AUTO_CONFIRM=on 且 development / test）。channels.ts 与 mount.ts 共用这一处判断。
+ * @why 公网环境已由跨字段 1e 拒绝启动；这里再按环境判一次是第二道防线——它是"能把订单变成已付款"的门，两处各写一份必然漂移。
+ */
+export function mockAutoConfirmEnabled(
+  c: Pick<AppConfig, 'MOCK_AUTO_CONFIRM' | 'NODE_ENV'>,
+): boolean {
+  return c.MOCK_AUTO_CONFIRM === 'on' && (c.NODE_ENV === 'development' || c.NODE_ENV === 'test');
+}
 
 /**
  * schema 认识的全部环境变量名。

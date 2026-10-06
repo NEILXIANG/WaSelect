@@ -84,3 +84,11 @@ describe('errorRef / errorFields（4-6）', () => {
     });
   });
 });
+
+describe('网关错误（扫描 W-06）', () => {
+  it('🔴 -3（有响应无业务码）→ 说"服务暂时不可用"，不说"检查网络"；小字带 HTTP 状态', () => {
+    const e = { code: -3, message: '请求失败（HTTP 502）', traceId: 'abcdef1234' };
+    expect(errorMessage(e)).toBe('服务暂时不可用，请稍后重试');
+    expect(errorRef(e)).toBe('错误码 -3 · 链路 abcdef12 · 请求失败（HTTP 502）');
+  });
+});

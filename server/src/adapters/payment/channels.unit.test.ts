@@ -160,6 +160,19 @@ describe('buildPaymentRegistry：mock 通道', () => {
   });
 });
 
+/**
+ * 本地模拟（2026-10-06 演练实测）：非审核模式下 mock 不自动确认，小程序拿到的是 `{auto:false}`，
+ * 支付页显示"暂时无法支付"，没有外部签名回调就走不到已付款。MOCK_AUTO_CONFIRM 只给本地开发 / 测试打开。
+ */
+describe('buildPaymentRegistry：MOCK_AUTO_CONFIRM（本地模拟付款）', () => {
+  it('🔴 development + MOCK_AUTO_CONFIRM=on → mock 自动确认（带自签确认能力）；默认 off → 不自动确认', () => {
+    const on = buildPaymentRegistry(loadConfig({ ...baseEnv, MOCK_AUTO_CONFIRM: 'on' }), deps());
+    expect(typeof on.registry.get('mock').selfConfirmation).toBe('function');
+    const off = buildPaymentRegistry(loadConfig(baseEnv), deps());
+    expect(off.registry.get('mock').selfConfirmation).toBeUndefined();
+  });
+});
+
 describe('buildPaymentRegistry：stripe 通道（三要素齐全才注册）', () => {
   it('三要素不全 → 不注册；但**不拖垮**其它通道的列表', async () => {
     // 故意只配两个密钥、缺 CHECKOUT_BASE_URL：这是"本地开发还没接 Stripe"的真实形态

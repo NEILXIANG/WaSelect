@@ -258,7 +258,29 @@ export async function markOrderDisputed(
      *      这条拒付进不了系统：风控页看不见、举证期限无人知晓，而机构会再从我们账上扣一次。
      * @why `succeeded` 优先于 `refunded`：同一张单两种都有时，仍在我们手里的那笔钱才是拒付的对象。
      */
-    const p = pays[0];
+    /**
+     * 扫描 M-02：迟到付款（剩余清单 1-5）的那笔钱没封口支付行（状态仍是 initiated / cancelled），
+     * 上面按"收到过钱"找不到它。订单上有 `late_paid` 凭据时，按与退款同一条规则找到那一行
+     * （凭据单号对上的优先，否则同通道最新一行，见 adapters/orders-admin.ts findLatePaidPayment）。
+     * @why 不落拒付的后果：订单上看不到拒付、举证期限无人追踪，退款按钮照样亮着，而机构会以 charge_disputed 拒退。
+     * @limitation 没有凭据的未收款支付行仍然不认（下面的注释："未付款"不能表现成"已付款但有争议"）。
+     */
+    const late =
+      pays[0] !== undefined
+        ? []
+        : await tx`
+      select p.id, p.provider, p.dispute_id, p.dispute_status, p.dispute_opened_at,
+             p.charge_currency, p.charge_amount
+        from payments p
+        join order_events e
+          on e.order_id = p.order_id and e.status = 'late_paid' and e.actor = 'provider:' || p.provider
+       where p.order_id = ${orderId} and p.provider_ref is not null
+       order by (p.provider_ref = e.note or p.transaction_id = e.note) desc nulls last,
+                e.id asc, p.created_at desc
+       limit 1
+       for update of p
+    `;
+    const p = pays[0] ?? late[0];
     if (p === undefined) {
       // 没有收到过钱的支付行 = 拒付无从谈起（词表沿用 `no_succeeded_payment`，对账按它检索）。
       // 不猜"也许该挂在 initiated 那行上"：那会把"未付款"表现成"已付款但有争议"。

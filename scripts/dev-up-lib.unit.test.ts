@@ -83,6 +83,13 @@ describe('localOsRole：本机角色名', () => {
 });
 
 describe('materializeEnv：把 .env.example 物化成可用的 .env', () => {
+  /** 缺口评估：全新克隆后 WECHAT_DEV_LOGIN 为空，小程序登录直接 50000——本地模拟全流程的第一步就断。 */
+  it('🔴 WECHAT_DEV_LOGIN 为空 → 填开发前缀；已有值不动', () => {
+    expect(materializeEnv('WECHAT_DEV_LOGIN=   # 注释', FILL)).toMatch(/^WECHAT_DEV_LOGIN=dev-/);
+    expect(materializeEnv('WECHAT_DEV_LOGIN=mine', FILL)).toBe('WECHAT_DEV_LOGIN=mine');
+    expect(materializeEnv('MOCK_AUTO_CONFIRM=  # x', FILL)).toMatch(/^MOCK_AUTO_CONFIRM=on/);
+  });
+
   const template = [
     '# 注释行',
     'NODE_ENV=development          # 带行内注释',

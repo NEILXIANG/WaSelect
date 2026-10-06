@@ -809,6 +809,54 @@ describe('迟到付款：已关单收到钱 → 管理端可退款（1-5）', ()
     expect(stripeCalls('/v1/refunds')).toHaveLength(0);
   });
 
+  /**
+   * 扫描 M-01：第一次退款没当场落定（机构回 pending / 超时 / 熔断）→ 订单进 refunding；
+   * 原实现再点时按"succeeded 支付行"找钱，迟到付款的支付行永远不是 succeeded → 40902，订单从此卡死。
+   */
+  it('🔴 迟到付款单第一次退款 pending → 订单 refunding → 机构完成后再点 → 查询并落定 refunded', async () => {
+    const { orderId } = await closedOrder('lp4');
+    await completeCheckout(orderId, 'evt_lp4');
+    fake.nextRefundStatus('pending');
+    const first = await refund(orderId, 'rf-lp4-1');
+    expect(first.json['outcome']).toBe('pending');
+    expect(await orderStatus(orderId)).toBe('refunding');
+    fake.settleRefund('re_test_0001', 'succeeded');
+    const again = await refund(orderId, 'rf-lp4-2');
+    expect(again.status).toBe(202);
+    expect(again.json['outcome']).toBe('succeeded');
+    expect(await orderStatus(orderId)).toBe('refunded');
+  });
+
+  /**
+   * 扫描 M-02：迟到付款的支付行不是 succeeded / refunded，拒付原先按 no_succeeded_payment 被拒——
+   * 订单上看不到拒付、举证期限无人追踪，退款按钮照样亮着（机构会以 charge_disputed 拒退）。
+   */
+  it('🔴 迟到付款单收到拒付 → has_dispute 落到订单上 → 退款被 40907 拦住', async () => {
+    const { orderId } = await closedOrder('lp5');
+    const p = await paymentRow(orderId);
+    await completeCheckout(orderId, 'evt_lp5');
+    const opened = await postStripeEvent({
+      id: 'evt_lp5_dp',
+      object: 'event',
+      type: 'charge.dispute.created',
+      data: {
+        object: {
+          object: 'dispute',
+          id: 'dp_lp5',
+          payment_intent: `pi_for_${p.providerRef}`,
+          amount: p.amount,
+          currency: p.currency.toLowerCase(),
+          created: Math.floor(Date.now() / 1000) - 60,
+          status: 'needs_response',
+        },
+      },
+    });
+    expect(opened.status).toBe(200);
+    const [o] = await db`select has_dispute from orders where id = ${orderId}`;
+    expect(o?.['has_dispute']).toBe(true);
+    expect((await refund(orderId, 'rf-lp5')).json['code']).toBe(40907);
+  });
+
   it('同一笔迟到付款的回调重投 → 只记一条 late_paid', async () => {
     const { orderId } = await closedOrder('lp3');
     await completeCheckout(orderId, 'evt_lp3');

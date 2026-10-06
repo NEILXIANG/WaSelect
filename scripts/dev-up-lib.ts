@@ -141,6 +141,14 @@ export function materializeEnv(
       if (/^JWT_SECRET=[ \t]*(#[^\n]*)?$/.test(line)) {
         return `JWT_SECRET=${fill.jwtSecret}  # 由 npm run dev 生成（仅本地开发；可按需自行更换）`;
       }
+      // 开发登录替身（缺口评估）：空着时小程序登录直接 50000，本地模拟全流程第一步就断。
+      //    只写进本地 .env；staging / production 配了它会被 config.ts 拒绝启动
+      if (/^MOCK_AUTO_CONFIRM=[ \t]*(#[^\n]*)?$/.test(line)) {
+        return 'MOCK_AUTO_CONFIRM=on  # 由 npm run dev 填写：模拟付款自动确认（仅本地）';
+      }
+      if (/^WECHAT_DEV_LOGIN=[ \t]*(#[^\n]*)?$/.test(line)) {
+        return 'WECHAT_DEV_LOGIN=dev-  # 由 npm run dev 填写：开发者工具里的 wx.login code 拼成 openid（仅本地）';
+      }
       return line;
     })
     .join('\n');
@@ -360,4 +368,38 @@ export async function runSteps(
     hooks.onStepDone?.(step.name, summary);
   }
   return done;
+}
+
+/* ── 开发汇率 ───────────────────────────────────────────────────────────── */
+
+/**
+ * 开发库的展示汇率（日元 → 外币）。只给本地报价用，**不是**真实汇率。
+ * @why 本地演练实测（2026-10-06）：开发库的汇率是灌数那天录的，超过 FX_MAX_AGE_HOURS（72h）后
+ *      报价一律 50003（这是生产要的保护）；全新克隆则根本没有汇率。本地每次 `npm run dev` 补一条，
+ *      避免"隔了三天再开发，整店报价全挂"。
+ */
+const DEV_FX: Readonly<Record<string, number>> = { USD: 0.0068, CNY: 0.0495 };
+
+/**
+ * 没有或已过期的币种补一条开发汇率（effective_from = now，buffer = 0，created_by = dev-up）。
+ * @returns 给终端看的一句话
+ * @limitation 只在 `npm run dev` 里调用；生产汇率只由管理端录入（没有自动拉取，见缺口清单）。
+ */
+export async function ensureDevFxStep(db: Db, maxAgeHours: number): Promise<string> {
+  const added: string[] = [];
+  for (const [quote, rate] of Object.entries(DEV_FX)) {
+    const fresh = await db`
+      select 1 from fx_rates
+       where quote = ${quote} and effective_from <= now()
+         and effective_from > now() - make_interval(hours => ${maxAgeHours})
+       limit 1`;
+    if (fresh.length > 0) continue;
+    await db`
+      insert into fx_rates (quote, rate, raw_rate, buffer, effective_from, created_by)
+      values (${quote}, ${rate}, ${rate}, 0, now(), 'dev-up')`;
+    added.push(quote);
+  }
+  return added.length === 0
+    ? '汇率都在有效期内，无需补录'
+    : `已补录开发汇率 ${added.join(' / ')}（仅本地报价用，不是真实汇率）`;
 }

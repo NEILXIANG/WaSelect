@@ -96,3 +96,12 @@ describe('地址编辑：州下拉（4-5）', () => {
     expect((page.data['form'] as { state: string }).state).toBe(before);
   });
 });
+
+describe('地址编辑：下拉定位到已有的州（扫描 W-04）', () => {
+  it('🔴 选中某州后 stateIndex 跟着变（下次打开下拉停在它上面）', async () => {
+    const { US_STATE_ROWS } = await import('../../utils/us-states.js');
+    const idx = US_STATE_ROWS.findIndex((r) => r.code === 'CA');
+    call('onStatePick', { detail: { value: String(idx) } });
+    expect(page.data['stateIndex']).toBe(idx);
+  });
+});

@@ -25,6 +25,7 @@ import { bootstrap } from '../server/src/main.js';
 import {
   DevUpStepError,
   ensureDatabase,
+  ensureDevFxStep,
   ensureEnvFile,
   localOsRole,
   migrateUp,
@@ -95,6 +96,21 @@ async function main(): Promise<void> {
       },
     });
   }
+
+  // 开发汇率：没有或已过期就补一条（本地演练实测：开发库汇率过 72 小时整店报价 50003）
+  steps.push({
+    name: '开发汇率',
+    hint: '也可在管理端「运营配置」里手动录入汇率',
+    run: async () => {
+      const db = createDb({ url: databaseUrl, max: 1 });
+      try {
+        const maxAge = Number(process.env.FX_MAX_AGE_HOURS ?? 72);
+        return await ensureDevFxStep(db, Number.isFinite(maxAge) && maxAge > 0 ? maxAge : 72);
+      } finally {
+        await closeDb(db);
+      }
+    },
+  });
 
   if (opts.serve) {
     steps.push({

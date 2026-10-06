@@ -67,6 +67,9 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
       setRaw(res.items);
       setRows(productRows(res.items));
       setTotal(res.total);
+      // 扫描 A-02：当前页超出最后一页（例如在"已下架"筛选里把最后一页唯一一件上架）→ 拉回最后一页
+      const last = Math.max(1, Math.ceil(res.total / PAGE_SIZE));
+      if (page > last) setPage(last);
     } catch (e) {
       if (seq !== reqSeq.current) return;
       // ⚠️ 失败**不清列表**（@why 见文件头）：只显示错误，列表保留上一次的结果

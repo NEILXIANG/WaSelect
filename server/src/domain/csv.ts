@@ -7,7 +7,7 @@
  * @why 公式注入防护（OWASP "CSV Injection"）：收件人姓名、地址是买家填的，`=HYPERLINK(...)` 一类内容
  *      在 Excel 里会被当公式执行。以 = + - @ \t \r 开头的**字符串**前加 `'`，Excel 按文本显示。
  * @tradeoff 防护会改动"真的以 - 开头"的文本（如地址 "-12 Main St" 显示成 "'-12 Main St"）——
- *           宁可多一个引号，也不让买家输入在运营电脑上执行。数字类型不受影响。
+ *           宁可多一个引号，也不让买家输入在运营电脑上执行。数字类型与号码形态的文本（电话）不受影响。
  * @limitation 不做流式：整表在内存里拼。MVP 量级（日百单）无压力；上万行再改。
  */
 export const CSV_BOM = '﻿';
@@ -15,11 +15,18 @@ export const CSV_BOM = '﻿';
 export type CsvCell = string | number | null | undefined;
 
 const FORMULA_LEAD = /^[=+\-@\t\r]/;
+/**
+ * 号码形态（E.164 电话、带空格括号的电话、负数文本）：只含数字、空格、括号、点、连字符，前面最多一个 + / -。
+ * @why 演练实测（2026-10-06）：报关清单电话 `+14155550120` 被导出成 `'+14155550120`，报关代理拿到的是错号码。
+ *      这种形态里没有函数名、没有单元格引用，Excel 至多把它当数字或算术，不会执行任何东西。
+ * @limitation `+1-1` 这类纯算术会被 Excel 当公式算成 0：无执行风险，但显示值会变；真实数据里不会出现这种电话。
+ */
+const NUMBER_LIKE = /^[+-]?[\d\s().-]+$/;
 
 function cell(v: CsvCell): string {
   if (v === null || v === undefined) return '';
   if (typeof v === 'number') return String(v);
-  const safe = FORMULA_LEAD.test(v) ? `'${v}` : v;
+  const safe = FORMULA_LEAD.test(v) && !NUMBER_LIKE.test(v) ? `'${v}` : v;
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 

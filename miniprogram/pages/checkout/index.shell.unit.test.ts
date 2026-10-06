@@ -392,3 +392,11 @@ describe('结算页：缺货退款说明（4-10）', () => {
     expect(String(page.data['stockRefundNote'])).toContain('全额退款');
   });
 });
+
+describe('结算页：立即购买单件丢失时的空态文案（扫描附记）', () => {
+  it('buynow 模式 → 不说"购物车是空的"；普通模式 → 说"购物车是空的"', () => {
+    expect(page.data['emptyText']).toBe('购物车是空的');
+    call('onLoad', { mode: 'buynow' });
+    expect(String(page.data['emptyText'])).toContain('立即购买');
+  });
+});

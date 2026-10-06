@@ -8,7 +8,7 @@
  * @see ../../../server/src/app/admin-export-routes.ts
  */
 import { useState } from 'react';
-import { ApiError } from '../api/errors.js';
+import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
 import type { AdminApi } from './api.js';
 
 const EXPORTS = [
@@ -17,12 +17,23 @@ const EXPORTS = [
   { kind: 'customs', label: '导出报关清单' },
 ] as const;
 
+/**
+ * 默认下载：链接挂进页面再点、点完移除。
+ * @why 扫描 A-01：不挂进 DOM、点完立刻释放 Blob 地址时，Safari 会报 WebKitBlobResource 错误或下载出空文件，
+ *      且页面不报任何错；释放推迟到 30 秒后（下载早已开始），见下方 run()。
+ * @limitation 真浏览器行为未实测（jsdom 不执行下载）；首次部署后在 Safari / Chrome 各导一次确认。
+ */
 function defaultDownload(filename: string, url: string): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
+  a.remove();
 }
+
+/** 释放 Blob 地址前等待的毫秒数（扫描 A-01）。 */
+const REVOKE_DELAY_MS = 30_000;
 
 export interface ExportBarProps {
   api: AdminApi;
@@ -39,12 +50,16 @@ export function ExportBar({ api, onDownload = defaultDownload }: ExportBarProps)
     setError('');
     try {
       const r = (await api({ path: `/api/v1/admin/exports/${kind}` })) as {
-        filename: string;
-        csv: string;
-      };
+        filename?: unknown;
+        csv?: unknown;
+      } | null;
+      // 扫描 A-07：形状不对就报错，不下载一个叫 undefined、内容是 "undefined" 的文件
+      if (typeof r?.filename !== 'string' || typeof r.csv !== 'string') {
+        throw new ApiError(NETWORK_ERROR_CODE, '导出响应形状与契约不符', '');
+      }
       const url = URL.createObjectURL(new Blob([r.csv], { type: 'text/csv;charset=utf-8' }));
       onDownload(r.filename, url);
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {

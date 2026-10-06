@@ -19,7 +19,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CHECKOUT_DIST_DIR } from '../../scripts/checkout-build-lib.js';
+import { CHECKOUT_DIST_DIR, SELLER_TOKENS } from '../../scripts/checkout-build-lib.js';
 
 const root = resolve(import.meta.dirname, '../..');
 const manifest = JSON.parse(
@@ -63,5 +63,14 @@ describe('Cloudflare Pages 部署清单（checkout 静态站，B3）', () => {
   it('构建期变量含 PUBLIC_API_BASE（_redirects 的第一跳目标；漏配会让短链指向 localhost）', () => {
     expect(manifest.buildEnvVars).toContain('PUBLIC_API_BASE');
     expect(manifest.buildEnvVars).toContain('NODE_VERSION');
+  });
+
+  /**
+   * 扫描 A-06：法务页构建期读 SELLER_*（特商法商家信息），清单原来只列了两个变量——
+   * 照清单填平台设置，特商法页就一直显示"公司登记后公布"，而 /terms 已经下发了商家信息。
+   * 名单取构建脚本自己的常量，不在这里再抄一份。
+   */
+  it('🔴 构建期变量含法务页用到的全部 SELLER_*（与构建脚本同源）', () => {
+    for (const key of SELLER_TOKENS) expect(manifest.buildEnvVars, key).toContain(key);
   });
 });

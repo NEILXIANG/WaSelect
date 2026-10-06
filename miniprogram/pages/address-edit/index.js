@@ -30,7 +30,7 @@ import {
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
-import { STATE_LABELS, US_STATE_ROWS } from '../../utils/us-states.js';
+import { STATE_LABELS, US_STATE_ROWS, stateIndexOf } from '../../utils/us-states.js';
 
 const app = getApp();
 
@@ -58,6 +58,11 @@ Page({
     saveError: '',
     /** 州下拉的选项（剩余清单 4-5：`CA · California`；只给 USPS 真实存在的州码）。 */
     stateLabels: STATE_LABELS,
+    /**
+     * 下拉的初始选中项（扫描 W-04）：编辑已有地址时定位到它原来的州；没有 / 不认识 → 0。
+     * 不绑它的话下拉总停在第 0 项 AL，用户打开看一眼点"确定"，州就悄悄变成 AL。
+     */
+    stateIndex: 0,
   },
 
   /** 编辑的地址 id（空串 = 新增）。 */
@@ -88,7 +93,8 @@ Page({
         this.setData({ error: '这个地址已不存在（可能已被删除）' });
         return;
       }
-      this.setData({ form: formModel(found) });
+      const form = formModel(found);
+      this.setData({ form, stateIndex: Math.max(0, stateIndexOf(form.state)) });
     } catch (e) {
       this.setData({ ...errorFields(e) });
     } finally {
@@ -133,6 +139,7 @@ Page({
     delete errors.state;
     this.setData({
       form: { ...this.data.form, state: row.code },
+      stateIndex: idx,
       errors,
       first: Object.values(errors)[0] ?? '',
     });
@@ -155,7 +162,7 @@ Page({
   },
 
   async submit() {
-    this.setData({ saving: true, saveError: '' });
+    this.setData({ saving: true, saveError: '', saveErrorRef: '' });
     const body = toAddressInput(this.data.form);
     try {
       if (this.addressId === '') {

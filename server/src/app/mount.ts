@@ -25,7 +25,7 @@
  *      docs/I1阶段开发实施方案.md §3.1
  */
 import type { Express } from 'express';
-import type { AppConfig } from '../config.js';
+import { mockAutoConfirmEnabled, type AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
 import type { Db } from '../adapters/db.js';
 import type { EventBus } from '../ports/events.js';
@@ -407,7 +407,14 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     registry,
     payLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('orders.pay')),
     // 审核模式自动确认（§2.9 / AJ-179）：是否真的确认由通道能力决定，这里全环境装配
-    autoConfirm: createAutoConfirm({ db, registry, logger, pipeline: callbackPipeline }),
+    autoConfirm: createAutoConfirm({
+      db,
+      registry,
+      logger,
+      pipeline: callbackPipeline,
+      // 本地模拟付款（仅 development / test；公网环境 config 已拒绝这个开关）
+      allowNonTestOrders: mockAutoConfirmEnabled(config),
+    }),
   });
 
   // ── 短链落地（I1-U6a-2 / D-49）：无鉴权（token 即凭证）；限流 publicWrite（独立桶） ──

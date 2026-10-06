@@ -163,7 +163,7 @@ Page({
     wxApi.setClipboardData({
       data: no,
       success: () => this.setData({ copied: kind }),
-      fail: () => this.setData({ error: '复制失败，请长按运单号手动复制' }),
+      fail: () => this.setData({ error: '复制失败，请长按运单号手动复制', errorRef: '' }),
     });
   },
 

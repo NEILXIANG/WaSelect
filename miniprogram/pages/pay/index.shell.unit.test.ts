@@ -379,3 +379,25 @@ describe('支付页：待付款倒计时（4-11）', () => {
     }
   });
 });
+
+/** 扫描 W-01：复制链接去浏览器付款，回到前台走的是"只查状态"——倒计时也要接着走。 */
+describe('支付页：回前台后倒计时继续（扫描 W-01）', () => {
+  it('🔴 有短链时 onHide → onShow：倒计时重新开始，不停在离开那一秒', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      vi.setSystemTime(new Date('2026-09-29T01:20:00.000Z'));
+      call('onRetry');
+      await settle();
+      page.setData({ payUrl: 'https://pay.test/o/link-x' });
+      call('onHide');
+      vi.setSystemTime(new Date('2026-09-29T01:25:00.000Z'));
+      vi.advanceTimersByTime(1000);
+      call('onShow');
+      await settle();
+      expect(page.data['countdown']).toBe('请在 04:59 内完成支付');
+      call('onUnload');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

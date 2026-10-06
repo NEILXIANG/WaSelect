@@ -39,6 +39,12 @@ import { createWxApi } from './wx-api.js';
  * 否则"网络不通"会和一个真实的业务错误码混淆，前端按码分支时会走错分支。
  */
 export const NETWORK_ERROR_CODE = -1;
+/**
+ * 有 HTTP 响应、但响应体里没有业务码（网关 502 / 504 的 HTML 页、413 等）。
+ * @why 扫描 W-06：原先与断网同归 -1，错误分层再说成"网络不太稳定"——服务端出故障时让所有用户去查自己的网络。
+ *      -2 已被"服务地址未配置"（unconfigured-api.js）占用，故取 -3。
+ */
+export const GATEWAY_ERROR_CODE = -3;
 
 /**
  * 需要"静默重登并重放"的业务码。
@@ -157,7 +163,7 @@ export function createRequester(deps = {}) {
             resolve(body);
             return;
           }
-          const errCode = code ?? NETWORK_ERROR_CODE;
+          const errCode = code ?? GATEWAY_ERROR_CODE;
           const message = body?.message ?? `请求失败（HTTP ${status}）`;
           log({
             event: 'api_failed',

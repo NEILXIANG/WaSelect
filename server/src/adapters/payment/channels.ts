@@ -40,7 +40,7 @@
  * @see ports/payment.ts；adapters/payment/registry.ts；docs/地基搭建清单.md F11；
  *      docs/可扩展架构设计-支付可插拔·多国家·UI可配置.md §2.2
  */
-import type { AppConfig } from '../../config.js';
+import { mockAutoConfirmEnabled, type AppConfig } from '../../config.js';
 import type { Clock } from '../../ports/clock.js';
 import type { HttpClient } from '../../ports/http-client.js';
 import type { IdGen } from '../../ports/ids.js';
@@ -218,7 +218,8 @@ function optionsFor(channel: string, config: AppConfig): Readonly<Record<string,
       secret: config.MOCK_CALLBACK_SECRET ?? 'dev-mock-callback-secret-do-not-use-in-prod',
       // 审核模式：服务端自签确认 mock 付款（技术文档 §2.9 / AJ-179）。审核模式下只允许 mock（config 规则 2b），
       // 非审核模式的 mock 只是测试/本地通道，付款靠显式签名回调驱动
-      autoConfirm: config.REVIEW_MODE === 'on',
+      // 本地模拟付款（MOCK_AUTO_CONFIRM，仅 development / test；config 跨字段 1e 拦公网环境）——第二道防线同样按环境判
+      autoConfirm: config.REVIEW_MODE === 'on' || mockAutoConfirmEnabled(config),
     };
   }
   if (channel === 'stripe') {

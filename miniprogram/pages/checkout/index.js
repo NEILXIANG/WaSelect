@@ -66,6 +66,8 @@ Page({
   data: {
     /** 缺货整单退款说明（剩余清单 4-10：与订单详情同一句，付款前就说清楚）。 */
     stockRefundNote: STOCK_REFUND_NOTE,
+    /** 空态文案（立即购买 / 购物车两种模式说法不同）。 */
+    emptyText: '购物车是空的',
     /** vm `itemRows` 的输出（**不含价格**）。 */
     rows: [],
     /** vm `quoteView` 的输出；null = 还没报价。 */
@@ -113,6 +115,13 @@ Page({
     this.traceId = newTraceId();
     this.intentKey = createIntentIdempotency();
     this.mode = options?.mode === BUY_NOW_MODE ? BUY_NOW_MODE : '';
+    // 扫描附记：立即购买的单件丢了（进程被回收）时，空态不能说"购物车是空的"——用户的购物车可能并不空
+    this.setData({
+      emptyText:
+        this.mode === BUY_NOW_MODE
+          ? '这件商品的购买信息已失效，请回到商品页重新点"立即购买"'
+          : '购物车是空的',
+    });
   },
 
   /** 本次结算的条目（立即购买 / 购物车，见 vm `checkoutItems`）。 */

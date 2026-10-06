@@ -167,3 +167,31 @@ describe('非审核模式（REVIEW_MODE=off）', () => {
     expect(await db`select 1 from webhook_events`).toHaveLength(0);
   });
 });
+
+/**
+ * 本地模拟付款（MOCK_AUTO_CONFIRM=on，仅 development / test）。
+ * @why 2026-10-06 本地演练实测：没有支付账号时，开发者工具里点"支付"走不到已付款——
+ *      非审核模式的 mock 要外部签名回调，而审核模式只放行一件指定商品。
+ * @why 订单**不标** is_test：测试单被设计成不能发货，那样发货 / 退款就没法在本地演练。
+ *      自动确认的第二道防线（只确认测试单）因此在这个开关下放行普通单；公网环境 config 拒绝这个开关。
+ */
+describe('本地模拟付款（MOCK_AUTO_CONFIRM=on）', () => {
+  beforeEach(async () => {
+    srv = await buildChainServer(db, { MOCK_AUTO_CONFIRM: 'on' });
+  });
+
+  it('🔴 任意商品下单 → mock 发起支付即已付款（auto=true）；订单不是测试单，管理员能发货', async () => {
+    const created = await createOrder([{ product_id: 'p-knife', qty: 1 }], 'mac-1');
+    const orderId = String(created.json['order_id']);
+    expect((await orderRow(orderId)).isTest).toBe(false);
+    const pay = await payMock(orderId, 'mac-pay-1');
+    expect((pay.json['payload'] as Record<string, unknown>)['auto']).toBe(true);
+    expect((await orderRow(orderId)).status).toBe('paid');
+    const ship = await call(srv, 'POST', `/api/v1/admin/orders/${orderId}/ship`, {
+      token: await tokenFor('u-admin', 'admin'),
+      key: 'mac-ship-1',
+      body: { carrier: 'EMS', tracking_no: 'EE123456789JP' },
+    });
+    expect(ship.status).toBe(200);
+  });
+});

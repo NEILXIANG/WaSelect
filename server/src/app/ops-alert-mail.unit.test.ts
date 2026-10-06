@@ -43,7 +43,8 @@ describe('对账异常告警邮件（2-4）', () => {
     expect(sent[0]?.text).toContain('stuck_refunds: 2');
     expect(sent[0]?.text).toContain('callback_anomalies_48h: 1');
     expect(sent[0]?.text).not.toContain('dangling_payments');
-    expect(sent[0]?.idempotencyKey).toBe('reconciliation:2026-10-06');
+    // 扫描 S-04：键带计数摘要——同一天重跑、数字变了要能再发；数字没变（重放）仍去重
+    expect(sent[0]?.idempotencyKey).toMatch(/^reconciliation:2026-10-06:[0-9a-f]{12}$/);
   });
 
   it('没配 ALERT_EMAIL → 不发，记 ops_alert_skipped', async () => {
@@ -60,5 +61,31 @@ describe('对账异常告警邮件（2-4）', () => {
     await bus.drain(1000);
     expect(sink.find('ops_alert_failed')).toHaveLength(1);
     expect(sink.find('domain_event_subscriber_failed')).toHaveLength(0);
+  });
+});
+
+describe('告警邮件幂等键与发送结果（扫描 S-02 / S-04）', () => {
+  it('🔴 同一天两次对账：计数相同 → 同一个键；计数不同 → 不同的键', async () => {
+    const { bus, sent } = setup('ops@example.com');
+    bus.publish(EVENT);
+    bus.publish(EVENT);
+    bus.publish({ ...EVENT, payload: { stuck_refunds: 3 } });
+    await bus.drain(1000);
+    expect(sent[0]?.idempotencyKey).toBe(sent[1]?.idempotencyKey);
+    expect(sent[2]?.idempotencyKey).not.toBe(sent[0]?.idempotencyKey);
+  });
+
+  it('🔴 邮件服务没配（mailer 回 skipped）→ 日志记 skipped，不记"已发送"', async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'test', destination: sink });
+    const bus = createEventBus(logger);
+    registerOpsAlertMail(bus, {
+      logger,
+      to: 'ops@example.com',
+      mailer: { send: () => Promise.resolve({ status: 'skipped', reason: 'no_provider' }) },
+    });
+    bus.publish(EVENT);
+    await bus.drain(1000);
+    expect(sink.find('ops_alert_sent')[0]?.['result']).toBe('skipped');
   });
 });
