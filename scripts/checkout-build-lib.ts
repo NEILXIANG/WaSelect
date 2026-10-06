@@ -18,6 +18,7 @@
  * @see scripts/build-checkout.ts（CLI）；server/src/adapters/payment/channels.ts（回跳路径同源）；
  *      https://developers.cloudflare.com/pages/configuration/redirects/
  */
+import { isPlaceholderHost } from '@waselect/shared';
 
 /** 页面清单（构建时逐张复制 + 测试逐张核对存在性）。失效页的消费者是 I1 的 /pay/link（链接过期时 302 到这）。 */
 export const CHECKOUT_PAGES = ['/pay/done', '/pay/cancelled', '/pay/expired'] as const;
@@ -90,6 +91,11 @@ export function isDeployBuild(env: NodeJS.ProcessEnv = process.env): boolean {
  *      admin 是"运营打开后台全是 404"。发现它们的方式都是"用户来说坏了"。
  *      部署构建要么拿到真值，要么响亮失败。
  * @limitation 只在本机/CI 联调构建时放行 localhost（那是刻意的：联调就要打本机 API）。
+ *
+ * @why 还要挡**占位域**（AJ-375）：只挡 localhost 时，`https://api.example.com` 照样通过——
+ *      它是合法的 https 公网地址，于是产物里烤着一个不存在的域，静态站每个请求都是 404，
+ *      而构建日志、部署日志、健康检查全绿。与服务端 `config.ts` 规则 4c 是同一条判据的两个落点
+ *      （启动期 / 构建期），共用 `packages/shared` 的 `isPlaceholderHost`，不各写一份。
  */
 export function assertDeployApiBase(apiBase: string, varName = 'PUBLIC_API_BASE'): void {
   const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/.test(apiBase);
@@ -97,6 +103,20 @@ export function assertDeployApiBase(apiBase: string, varName = 'PUBLIC_API_BASE'
     throw new Error(
       `部署构建要求 ${varName} 是 https 公网地址（当前：${apiBase}）。` +
         '漏配时产物会静默指向 localhost——宁可构建失败，也不要静默产出一个坏站点。',
+    );
+  }
+  let host = '';
+  try {
+    host = new URL(apiBase).hostname;
+  } catch {
+    // 解析不了说明它本就不像 URL——上面 `startsWith('https://')` 已放行到这里，
+    // 此时不额外报，避免同一处问题给出两条互相矛盾的提示
+    return;
+  }
+  if (isPlaceholderHost(host)) {
+    throw new Error(
+      `部署构建要求 ${varName} 是真实对外地址，当前是保留/占位域（${host}，RFC 2606 / 6761）。` +
+        '照模板原样部署的产物会把所有请求打到一个不存在的域——宁可构建失败，也不要静默产出一个坏站点。',
     );
   }
 }

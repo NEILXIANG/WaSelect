@@ -30,6 +30,21 @@ function hostOf(base: string): string {
   return base.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
 }
 
+/**
+ * B9 闸门（AJ-375）：清单"填了一半"的问题列表。
+ * @see 下方 `🔴 填了一半必须红` 用例的 @why / @limitation（为何只强制 downloadFile、为何不强制同源）
+ */
+function halfFilledIssues(m: { request: string[]; downloadFile: string[] }): string[] {
+  const issues: string[] = [];
+  if (m.request.length > 0 && m.downloadFile.length === 0) {
+    issues.push(
+      'request 已登记但 downloadFile 是空的：小程序商品图（<image>）全部加载失败且不报错；' +
+        '补登记还要再花一次「每月 5 次」的额度，而两次登记之间线上一直是坏的',
+    );
+  }
+  return issues;
+}
+
 describe('小程序合法域名清单（B5）', () => {
   it('四类字段都在（缺一类 = 提交时才发现漏了，白花一次修改次数）', () => {
     for (const key of ['request', 'uploadFile', 'downloadFile', 'socket']) {
@@ -53,6 +68,55 @@ describe('小程序合法域名清单（B5）', () => {
         host,
       );
     }
+  });
+
+  /**
+   * 🔴 B9 闸门（AJ-375）：**填了一半**必须红。
+   *
+   * @why 微信后台四类域名共用一个"每月 5 次"的额度，本文件自己的 constraints 就写着
+   *      「必须一次想全、一次填完」。但现存闸门只查**格式**（每项是不是合法 host、
+   *      有没有误抄 localhost），**不查"填了一半"**——而"填了一半"恰恰是最贵的那一种：
+   *      ① 商品图走 `downloadFile`：漏登记的表现是小程序 `<image>` **全部不显示**，
+   *         既不报错也不占位，页面上一片空白，排障方向会被带到"图片没上传"；
+   *      ② 要补登记得再花**一次额度**，而两次登记之间线上一直是坏的
+   *         （改域名后还需重新打包才生效，已发布版本用旧配置）。
+   *      所以闸门必须在"request 已登记"的那一刻就要求 downloadFile 同时登记。
+   *
+   * @why 只对 `downloadFile` 强制，`uploadFile` / `socket` **不强制**：
+   *      本文件的 notes 已写明这两类**刻意留空**（小程序端不直传图片、不用 WebSocket）。
+   *      把它们一起强制等于逼人去填两栏本来就不需要的东西，闸门会立刻被人绕开。
+   *
+   * @limitation 不要求 `downloadFile` 与 `request` **同 eTLD+1**：图片走 R2 自定义域，
+   *      将来换独立 CDN 域名是显式决定，不是遗漏——强制同源会误红，误红的成本是让人改一行配置、
+   *      进而开始怀疑整份清单。**这里守的是"完全没登记"（静默全挂），不是"登记了别的域"。**
+   *
+   * @how 做成纯函数而不是"直接断言当前文件"：当前 `request` 与 `downloadFile` **都是空的**
+   *      （B9 还没定域名），直接断言会让这条用例在域名定下来之前**永远绿**——
+   *      那正是本轮要消灭的那类假守卫。抽成函数后可以对样本清单做**自检**，
+   *      证明它在"填了一半"时确实会红（下面两条自检）。
+   */
+  it('🔴 填了一半必须红：request 已登记时 downloadFile 不得为空（商品图全不显示且不报错）', () => {
+    expect(
+      halfFilledIssues(manifest),
+      'request 已登记却没登记 downloadFile：小程序商品图全部加载失败且不报错，' +
+        '补登记还要再花一次「每月 5 次」里的额度',
+    ).toEqual([]);
+  });
+
+  it('自检：request 填了、downloadFile 空 → 闸门必须报（防"域名定下来之前永远绿"）', () => {
+    const issues = halfFilledIssues({ request: ['api.waselect.jp'], downloadFile: [] });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain('downloadFile');
+  });
+
+  it('自检：两类都空（B9 未定）→ 放行（"还没定"不是"定错了"，闸门不该逼人先填假值）', () => {
+    expect(halfFilledIssues({ request: [], downloadFile: [] })).toEqual([]);
+  });
+
+  it('自检：两类都填齐 → 放行（正常形态不能被自己的闸门拦住）', () => {
+    expect(
+      halfFilledIssues({ request: ['api.waselect.jp'], downloadFile: ['img.waselect.jp'] }),
+    ).toEqual([]);
   });
 
   it('登记进清单的域名必须是 host 形式（不带协议/路径/端口——后台不收）', () => {

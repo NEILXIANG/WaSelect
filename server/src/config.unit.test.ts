@@ -76,11 +76,14 @@ describe('NODE_ENV（D17）', () => {
       APP_ID: 'wx-prod-like',
       APP_SECRET: 'prod-like-app-secret',
       DATABASE_URL: 'postgres://u@db.internal.example:5432/waselect',
-      CORS_ORIGINS: 'https://admin.example.com',
+      // ⚠️ 这里**不能**再写 `*.example.com`：那正是规则 4c（AJ-375）要拦的占位域
+      //    （本夹具曾长期配着 `https://admin.example.com`——"一套合法生产配置"里装着模板值，
+      //     从来没有人反对过，这条用例因此成了那个缺口本身存在的证据）。
+      CORS_ORIGINS: 'https://admin.waselect.jp',
       PAYMENT_CHANNELS: 'stripe',
       STRIPE_SECRET_KEY: 'sk_live_dummy',
       STRIPE_WEBHOOK_SECRET: 'whsec_dummy',
-      CHECKOUT_BASE_URL: 'https://checkout.example.com',
+      CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
     };
     expect(loadConfig(prod).NODE_ENV).toBe('production');
   });
@@ -277,8 +280,9 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     PAYMENT_CHANNELS: 'stripe',
     STRIPE_SECRET_KEY: 'sk_live_x',
     STRIPE_WEBHOOK_SECRET: 'whsec_x',
-    CHECKOUT_BASE_URL: 'https://checkout.example.com',
-    CORS_ORIGINS: 'https://admin.example.com',
+    // ⚠️ 同上：生产夹具必须是**真实形态**的域名，否则规则 4c 会在这里先红（AJ-375）
+    CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+    CORS_ORIGINS: 'https://admin.waselect.jp',
     ...extra,
   });
 
@@ -547,6 +551,156 @@ describe('跨字段校验：单项合法但组合成事故', () => {
   });
 });
 
+/**
+ * 规则 4c：生产对外域名的**占位值**（B9 闸门，AJ-375）。
+ *
+ * @why 这一类值的共同点是「**能通过全部形状校验**」：`https://img.example.com` 是合法 https URL，
+ *      `https://admin.example.com` 是合法 origin。于是照 `.env.example` 抄一份部署上去，
+ *      服务**全绿启动**，而支付短链 / 商品图 / 管理端跨域全部指向不存在的地址，
+ *      且没有任何日志会说是域名错了——这是"漏了不报错"最典型的一型。
+ *
+ * @why 用**边界表**而不是"挑几个值"：误红的成本是让人改一行配置，误绿的成本是一次静默故障，
+ *      所以两侧都要钉，尤其是**放行侧**——放行侧少了"近似占位域"就会出现"宁可全拒"的过严实现。
+ */
+describe('🔴 生产对外域名不得是占位值（规则 4c，B9 闸门 / AJ-375）', () => {
+  const prod = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
+    DATABASE_URL: 'postgresql://app@db.internal:5432/japan_shop',
+    JWT_SECRET: 'a'.repeat(32),
+    PAYMENT_CHANNELS: 'stripe',
+    TERMS_VERSION: 'TOS-2026-09-20',
+    NODE_ENV: 'production',
+    APP_ID: 'wx-prod-like',
+    APP_SECRET: 'prod-like-app-secret',
+    STRIPE_SECRET_KEY: 'sk_live_x',
+    STRIPE_WEBHOOK_SECRET: 'whsec_x',
+    CORS_ORIGINS: 'https://admin.waselect.jp',
+    CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+    ...extra,
+  });
+
+  /** 基线自身必须绿——否则下面每一条"放行"都可能是"根本没走到规则"。 */
+  it('基线：一套真实形态的域名配置通过（防"规则写太宽导致全绿"）', () => {
+    expect(loadConfig(prod()).CHECKOUT_BASE_URL).toBe('https://checkout.waselect.jp');
+  });
+
+  /** 四个对外 URL 字段逐个占位 → 逐个红。 */
+  const URL_FIELDS = [
+    'CHECKOUT_BASE_URL',
+    'IMG_BASE_URL',
+    'PUBLIC_API_BASE',
+    'LEGAL_BASE_URL',
+  ] as const;
+
+  for (const field of URL_FIELDS) {
+    it(`🔴 生产 ${field} 是 example.com 占位域 → 拒绝（链接/图片指向不存在的地址且不报错）`, () => {
+      const issues = expectReject(prod({ [field]: 'https://img.example.com' })).join('\n');
+      expect(issues).toContain(field);
+      expect(issues).toContain('占位');
+    });
+  }
+
+  it('🔴 生产 CORS_ORIGINS 含占位域 → 拒绝（管理端跨域全挂，浏览器只报 CORS 错误）', () => {
+    const issues = expectReject(
+      prod({ CORS_ORIGINS: 'https://admin.waselect.jp,https://old.example.com' }),
+    ).join('\n');
+    expect(issues).toContain('CORS_ORIGINS');
+    expect(issues).toContain('old.example.com');
+  });
+
+  /** 保留域家族：RFC 2606 / 6761 / 6762 与回环，逐个都要拒。 */
+  const PLACEHOLDER_HOSTS: ReadonlyArray<[string, string]> = [
+    ['https://img.example.com', 'RFC 2606 example.com'],
+    ['https://cdn.example.com', 'RFC 2606 example.com 的子域'],
+    ['https://img.example.org', 'RFC 2606 example.org'],
+    ['https://img.example.net', 'RFC 2606 example.net'],
+    ['https://img.example.edu', 'RFC 2606 example.edu'],
+    ['https://pay.test', 'RFC 6761 .test'],
+    ['https://pay.invalid', 'RFC 6761 .invalid'],
+    ['https://pay.localhost', 'RFC 6761 .localhost'],
+    ['https://pay.local', 'RFC 6762 .local（mDNS）'],
+    ['https://pay.internal', 'ICANN 2024 保留 .internal'],
+    ['https://localhost', '回环主机名'],
+    ['https://127.0.0.1', 'IPv4 回环'],
+    ['https://[::1]', 'IPv6 回环'],
+    ['https://0.0.0.0', '任意地址（连的是本机）'],
+  ];
+
+  for (const [url, why] of PLACEHOLDER_HOSTS) {
+    it(`🔴 生产 IMG_BASE_URL=${url} → 拒绝（${why}）`, () => {
+      expect(expectReject(prod({ IMG_BASE_URL: url })).join('\n')).toContain('IMG_BASE_URL');
+    });
+  }
+
+  /**
+   * 放行侧——这一组比上面更重要：**过严的判据会让真实域名被拒**，
+   * 而"改一行配置"的代价远小于"服务起不来"，所以近似值必须逐个钉住。
+   */
+  const REAL_HOSTS: ReadonlyArray<[string, string]> = [
+    ['https://img.waselect.jp', '真实域名'],
+    ['https://example.com.cn', '不是保留域（eTLD+1 是 example.com.cn，可注册）'],
+    ['https://notexample.com', '不是保留域（不能按子串匹配）'],
+    ['https://myexample.com', '同上：前缀含 example 但可注册'],
+    ['https://img.example.commerce.jp', '多级真实域名'],
+    ['https://img.waselect.jp:8443', '带端口同样是真实地址（端口由别的规则管）'],
+  ];
+
+  for (const [url, why] of REAL_HOSTS) {
+    it(`放行：IMG_BASE_URL=${url}（${why}）`, () => {
+      expect(loadConfig(prod({ IMG_BASE_URL: url })).IMG_BASE_URL).toBe(url);
+    });
+  }
+
+  it('放行：未配置 IMG_BASE_URL（域名还没定下来，不该被判成"定错了"）', () => {
+    expect(loadConfig(prod()).IMG_BASE_URL).toBeUndefined();
+  });
+
+  /**
+   * @why 与规则 4b（https）是两类失败，不能互相替代：
+   *      `https://img.example.com` **满足** 4b（它确实是 https），只有 4c 拦得住。
+   */
+  it('占位域是 https 也照样拒（规则 4b 只管加密，管不了"域名不存在"）', () => {
+    const issues = expectReject(prod({ IMG_BASE_URL: 'https://img.example.com' })).join('\n');
+    expect(issues).toContain('IMG_BASE_URL');
+    expect(issues).not.toContain('必须是 https');
+  });
+
+  /**
+   * @why staging 放行是 2026-09-27 对规则 1d 的裁决口径（本条拦的是部署正确性，不是安全洞）。
+   *      钉住它以防有人"顺手"把 staging 也扩进来，堵死 localhost 调试这条路。
+   */
+  it('staging 允许 localhost（沿用 1d 的裁决：本类规则只拦生产）', () => {
+    const c = loadConfig({
+      ...prod(),
+      NODE_ENV: 'staging',
+      CHECKOUT_BASE_URL: 'http://localhost:4000',
+    });
+    expect(c.CHECKOUT_BASE_URL).toBe('http://localhost:4000');
+  });
+
+  it('开发环境允许占位域（本机照 .env.example 跑是常态）', () => {
+    const c = loadConfig({
+      ...prod(),
+      NODE_ENV: 'development',
+      IMG_BASE_URL: 'https://img.example.com',
+    });
+    expect(c.IMG_BASE_URL).toBe('https://img.example.com');
+  });
+
+  it('一次列出全部占位字段（改一次重启一次是最贵的修法）', () => {
+    const issues = expectReject(
+      prod({
+        IMG_BASE_URL: 'https://img.example.com',
+        PUBLIC_API_BASE: 'https://api.example.com',
+        LEGAL_BASE_URL: 'https://legal.example.com',
+        CORS_ORIGINS: 'https://admin.example.com',
+      }),
+    ).join('\n');
+    for (const k of ['IMG_BASE_URL', 'PUBLIC_API_BASE', 'LEGAL_BASE_URL', 'CORS_ORIGINS']) {
+      expect(issues).toContain(k);
+    }
+  });
+});
+
 /** 数值下限：挡住"值合法但量纲荒谬"的配置（曾经全部能正常启动）。 */
 describe('数值型配置的下限', () => {
   const bad: ReadonlyArray<[string, string]> = [
@@ -620,8 +774,9 @@ describe('配置形状（N11）', () => {
     PAYMENT_CHANNELS: 'stripe',
     STRIPE_SECRET_KEY: 'sk_live_x',
     STRIPE_WEBHOOK_SECRET: 'whsec_x',
-    CHECKOUT_BASE_URL: 'https://checkout.example.com',
-    CORS_ORIGINS: 'https://admin.example.com',
+    // ⚠️ 同上：真实形态的域名，不是占位域（规则 4c）
+    CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+    CORS_ORIGINS: 'https://admin.waselect.jp',
     ...extra,
   });
 
@@ -641,7 +796,10 @@ describe('配置形状（N11）', () => {
   });
 
   it('生产 CHECKOUT_BASE_URL 必须 https（http 短链会被当钓鱼域名拦截）', () => {
-    const issues = expectReject(prodLike({ CHECKOUT_BASE_URL: 'http://checkout.example.com' }));
+    // ⚠️ 用**真实形态**的域名 + http：这样本条只测"没加密"这一件事；
+    //    若写成 `http://checkout.example.com`，规则 4c 也会红，用例就同时测了两条规则，
+    //    将来任一条被改都会让另一条的用例莫名其妙变红（AJ-375 隔离变量）。
+    const issues = expectReject(prodLike({ CHECKOUT_BASE_URL: 'http://checkout.waselect.jp' }));
     expect(issues.join('\n')).toContain('CHECKOUT_BASE_URL');
   });
 

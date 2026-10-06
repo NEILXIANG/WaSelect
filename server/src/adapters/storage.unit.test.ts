@@ -54,8 +54,10 @@ const prodEnv: NodeJS.ProcessEnv = {
   PAYMENT_CHANNELS: 'stripe',
   STRIPE_SECRET_KEY: 'sk_live_dummy',
   STRIPE_WEBHOOK_SECRET: 'whsec_dummy',
-  CHECKOUT_BASE_URL: 'https://checkout.example.com',
-  CORS_ORIGINS: 'https://admin.example.com',
+  // ⚠️ 生产夹具必须是**真实形态**的域名：`*.example.com` 是保留/占位域，
+  //    会被配置层规则 4c（AJ-375）拒启，失败的就不是本文件要测的那件事了。
+  CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+  CORS_ORIGINS: 'https://admin.waselect.jp',
 };
 
 const KEY = 'img/probe/detail.webp';

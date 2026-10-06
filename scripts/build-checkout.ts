@@ -10,7 +10,10 @@
  *
  * 用法：
  *   npm run build:checkout                          # 缺省 PUBLIC_API_BASE=http://localhost:3000
- *   PUBLIC_API_BASE=https://api.example.com npm run build:checkout
+ *   PUBLIC_API_BASE=https://api.waselect.jp npm run build:checkout
+ *
+ * ⚠️ 示例里**不要**再写 `https://api.example.com`：部署构建（`CF_PAGES` / `DEPLOY_TARGET` 存在时）
+ *    会把它判成保留/占位域而**构建失败**（AJ-375）。占位域只在**非部署**构建里放行。
  *
  * @see scripts/checkout-build-lib.ts（全部逻辑与理由）；docs/地基搭建清单.md F15
  */

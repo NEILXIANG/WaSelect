@@ -76,11 +76,33 @@ describe('assertDeployApiBase：CF Pages 构建的部署闸门（体检 N16）',
   });
 
   it('http 公网地址 → 同样拒绝（生产必须 https）', () => {
-    expect(() => assertDeployApiBase('http://api.example.com')).toThrow(/https 公网地址/);
+    expect(() => assertDeployApiBase('http://api.waselect.jp')).toThrow(/https 公网地址/);
   });
 
-  it('https 公网地址 → 放行', () => {
-    expect(() => assertDeployApiBase('https://api.example.com')).not.toThrow();
+  /**
+   * ⚠️ 这一条**原来是反的**：它写的是 `assertDeployApiBase('https://api.example.com')` 不抛。
+   *    也就是说，这道"部署构建必须拿到真值"的闸门**一直把占位域当真值放行**——
+   *    产物里烤着 `api.example.com`，静态站每个请求都是 404，而构建/部署/健康检查全绿。
+   *    这与服务端规则 4c（AJ-375）是同一条判据的两个落点，本条就是它在这里的红灯证据。
+   */
+  it('🔴 https 但域名是保留/占位域 → 拒绝（产物会烤着一个不存在的域，全站 404 且构建全绿）', () => {
+    expect(() => assertDeployApiBase('https://api.example.com')).toThrow(/保留\/占位域/);
+    expect(() => assertDeployApiBase('https://api.test')).toThrow(/保留\/占位域/);
+    // 两个入口共用同一条判据：admin-web 的 VITE_API_BASE_URL 走的是同一个函数
+    expect(() => assertDeployApiBase('https://admin.example.com', 'VITE_API_BASE_URL')).toThrow(
+      /VITE_API_BASE_URL/,
+    );
+  });
+
+  it('https 真实域名 → 放行（含近似占位域——过严会误伤可注册域名）', () => {
+    expect(() => assertDeployApiBase('https://api.waselect.jp')).not.toThrow();
+    for (const real of [
+      'https://example.com.cn',
+      'https://notexample.com',
+      'https://myexample.com',
+    ]) {
+      expect(() => assertDeployApiBase(real), `${real} 是可注册域名，不该被拒`).not.toThrow();
+    }
   });
 
   it('自检：闸门对本机判定真的覆盖三种写法（扫歪了会静默放行）', () => {

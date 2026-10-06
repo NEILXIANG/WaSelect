@@ -30,7 +30,12 @@
  */
 import { z } from 'zod';
 import { parseSentryDsn } from './sentry-dsn.js';
-import { ADMIN_PASSWORD_MIN_LENGTH, CURRENCY, PAYMENT_CHANNEL } from '@waselect/shared';
+import {
+  ADMIN_PASSWORD_MIN_LENGTH,
+  CURRENCY,
+  isPlaceholderHost,
+  PAYMENT_CHANNEL,
+} from '@waselect/shared';
 
 /** 密钥类配置的键名：日志 / 诊断 / 错误上报一律脱敏（评审 #9 红线）。新增密钥类变量必须同步加这里。 */
 export const SECRET_KEYS = [
@@ -237,6 +242,9 @@ function corsOrigins() {
       .transform((items) => items.map((o) => new URL(o).origin))
   );
 }
+
+// 占位域判据（`isPlaceholderHost`）在 `packages/shared/src/reserved-domains.ts`：
+// 构建期的 `assertDeployApiBase` 要用同一个判据，两处各写一份必然漂移（ADR-29 同口径）。
 
 const schema = z.object({
   // ── 运行时 ──────────────────────────────────────────────────────────────
@@ -906,6 +914,58 @@ const crossField = schema.superRefine((c, ctx) => {
     ] as const) {
       if (value !== undefined && !value.startsWith('https://')) {
         add(key, `生产环境 ${key} 必须是 https（http 会被浏览器/渠道当不安全来源拦截）`);
+      }
+    }
+    // 4c.（B9 闸门，AJ-375）公网可达环境的对外域名**不得是占位值**。
+    //     @why 与 4b 是两类不同的失败：4b 拦的是"没加密"，这里拦的是"域名根本不存在"。
+    //          `https://img.example.com` 完全满足 4b（它确实是 https），于是照 `.env.example`
+    //          抄一份部署上去，服务**全绿启动**，而商品图 100% 指向一个不存在的域——
+    //          `<image>` 加载失败在小程序里既不报错也不占位，表现为"页面上一片空白"。
+    //          同上，`CORS_ORIGINS=https://admin.example.com` 会通过字段级形状校验，
+    //          结果是管理端每一次跨域请求都被拒，而浏览器只报 CORS 错误、服务端日志全绿。
+    //          这两类都不是配置"错了"，是配置"还是模板里的那个值"——只能靠保留域名单拦。
+    //     ⚠️ 只对**生产**生效（staging 放行），沿用 2026-09-27 对规则 1d 的同一条裁决：
+    //        本条拦的是"部署正确性"（域名还是模板里的那个值），与 1d（入口不可用）、4b（没加密）
+    //        同类；而 1c / 3b 那种"staging 同拒"留给**安全洞**（无密码登录、公开占位密钥）。
+    //        更直接的理由是：现有一条用例明确记录"staging 允许 http://localhost 调试用"
+    //        （`config.unit.test.ts`），扩到 staging 等于推翻一个已登记的口径。
+    //        **重评触发条件同 1d：AppID 就绪、staging 成为真正的完整预生产之后。**
+    //     @limitation 未配置（undefined）**放行**：域名还没定下来（B9）时这些变量本就该是空的，
+    //          那由各条的"生产必填"规则管，这里不重复报，也不把"还没定"判成"定错了"。
+    if (isProd) {
+      for (const [key, value] of [
+        ['CHECKOUT_BASE_URL', c.CHECKOUT_BASE_URL],
+        ['IMG_BASE_URL', c.IMG_BASE_URL],
+        ['PUBLIC_API_BASE', c.PUBLIC_API_BASE],
+        ['LEGAL_BASE_URL', c.LEGAL_BASE_URL],
+      ] as const) {
+        if (value === undefined) continue;
+        try {
+          const host = new URL(value).hostname.toLowerCase();
+          if (isPlaceholderHost(host)) {
+            add(
+              key,
+              `${key} 的域名 ${host} 是保留/占位域（RFC 2606 / 6761），不是真实对外地址——` +
+                `配它的表现是「支付链接与商品图全部指向不存在的域，且启动与运行都不报错」`,
+            );
+          }
+        } catch {
+          // URL 解析不了说明形状就不对，由字段级规则（optionalUrl*）报，这里不重复
+        }
+      }
+      for (const origin of c.CORS_ORIGINS) {
+        try {
+          const host = new URL(origin).hostname.toLowerCase();
+          if (isPlaceholderHost(host)) {
+            add(
+              'CORS_ORIGINS',
+              `CORS_ORIGINS 里的 ${origin} 是保留/占位域：管理端所有跨域请求会被静默拒绝` +
+                `（浏览器只报 CORS 错误，服务端日志全绿，排障方向会被带到"前端写错了"）`,
+            );
+          }
+        } catch {
+          // 同上：形状问题归字段级规则
+        }
       }
     }
     // 5. 生产必须声明 CORS 源：不声明 = 管理端所有跨域请求被拒，且只在浏览器里才看得出来

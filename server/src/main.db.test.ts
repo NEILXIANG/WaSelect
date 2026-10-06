@@ -621,8 +621,10 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
       STRIPE_WEBHOOK_SECRET: 'whsec_e2e_placeholder_not_real',
       APP_ID: 'wx-e2e-placeholder',
       APP_SECRET: 'e2e-placeholder-app-secret',
-      CHECKOUT_BASE_URL: 'https://checkout.example.com',
-      CORS_ORIGINS: 'https://admin.example.com',
+      // ⚠️ 生产夹具必须是**真实形态**的域名：`*.example.com` 是保留/占位域，
+      //    会被配置层规则 4c（AJ-375）拒启，红的就不是本文件要测的装配行为了。
+      CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+      CORS_ORIGINS: 'https://admin.waselect.jp',
       SHUTDOWN_READY_DELAY_MS: '50',
     };
   }

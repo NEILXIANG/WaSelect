@@ -17,3 +17,4 @@ export * from './orderNo.js';
 export * from './businessDay.js';
 export * from './design-tokens.js';
 export * from './us-states.js';
+export * from './reserved-domains.js';

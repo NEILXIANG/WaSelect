@@ -298,8 +298,9 @@ describe('buildPaymentRegistry：生产环境的 mock 门（三审 S1）', () =>
       PAYMENT_CHANNELS: 'stripe',
       STRIPE_SECRET_KEY: 'sk_live_x',
       STRIPE_WEBHOOK_SECRET: 'whsec_x',
-      CHECKOUT_BASE_URL: 'https://checkout.example.com',
-      CORS_ORIGINS: 'https://admin.example.com',
+      // ⚠️ 同上：真实形态的域名，占位域会被规则 4c（AJ-375）提前拒启
+      CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+      CORS_ORIGINS: 'https://admin.waselect.jp',
     });
     // 绕过配置层（模拟规则 1b 被放宽）：直接注入残留密钥
     const a = buildPaymentRegistry(
