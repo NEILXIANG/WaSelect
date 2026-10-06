@@ -14,8 +14,13 @@
  *              前端不知道何时完成。copylink 场景（浏览器里付）更是无法感知——
  *              所以引导屏只给"支付完成后回到这里查看订单"，不假装有实时状态。
  *              @tradeoff 代价是用户要自己回来看；MVP 可接受（回调落库后订单页即是真值）。
- * @limitation 二："查看订单"按钮当前禁用——`pages/order` 未落地，
- *              跳一个不存在的页面 = "看起来能用、实际是坏的"（与首页/详情同一条原则）。
+ * @limitation 二：**跳转方式由"目标是不是 tabBar 页"决定**，不看"我想不想留返回栈"。
+ *              ⚠️ 这里曾经写"『查看订单』按钮当前禁用——`pages/order` 未落地"——**早已不成立**
+ *              （S5 之后订单列表就是底部 tab 之一）。而顺着那句旧注释去看的人会以为这个按钮
+ *              现在仍然是坏的，从而不去怀疑跳转方式——这正是本次真缺陷能活到今天的原因（MP-02 / AJ-366）。
+ *              现状：`pages/order` 与 `pages/home` **都是 tabBar 页** ⇒ 只能 `switchTab`；
+ *              `redirectTo` / `navigateTo` 跳 tabBar 页会被宿主**直接拒绝**，表现是"点了没反应"。
+ *              ⚠️ 代价是 `switchTab` 不能带 query——这两处都不需要带（订单 id 走 `this.orderId`）。
  * @limitation 三：`requestPayment` 的**取消与失败一视同仁**（wx-api @limitation 十）：
  *              两者都停在支付页，订单仍是 pending_payment，用户可再点一次。
  *              解析宿主 fail 的文案去区分"取消 vs 失败"等于把宿主文案当契约。
@@ -339,7 +344,11 @@ Page({
    *      （@see closedTextFor）。
    */
   onGoHome() {
-    wxApi.redirectTo({ url: HOME_PAGE });
+    // ⚠️ 用 switchTab 而不是 redirectTo：首页是 **tabBar 页**，而 redirectTo 与 navigateTo
+    //    都跳不了 tabBar 页——宿主直接拒绝（"点了没反应"，MP-02 / AJ-366）。
+    //    @see ../../utils/wx-api.js @limitation 十三（tab 页只能 switchTab）；
+    //         ../../tab-nav-guard.unit.test.ts（这条由机器逐处核对）
+    wxApi.switchTab({ url: HOME_PAGE });
   },
 
   /**
@@ -349,6 +358,9 @@ Page({
    *      而订单已经建好了，支付页的历史使命结束。
    */
   onViewOrders() {
-    wxApi.redirectTo({ url: ORDER_PAGE });
+    // ⚠️ 同上：订单列表也是 tabBar 页，必须 switchTab。
+    //    这一处尤其要紧——copylink 场景里"支付完成后回到这里查看订单"是用户**唯一的退路**，
+    //    它被宿主拒绝的表现是"点了没反应"，而那时他已经在浏览器里付完钱了（MP-02 / AJ-366）。
+    wxApi.switchTab({ url: ORDER_PAGE });
   },
 });
