@@ -314,3 +314,21 @@ describe('首页搜索按钮：不得用 loading 吞掉点击（MP3-08）', () =
     expect(src).toMatch(/bindconfirm="onSearch"/);
   });
 });
+
+describe('轮播点击的下标必须来自「可见 banner」列表（防复发）', () => {
+  const src = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+
+  /**
+   * @why 渲染用的是 `bannerSlides()`（已过滤），点击若直取 `this.banners[index]`（未过滤），
+   *      下标只在"一条都没被跳过"时才相等 ⇒ 有一张没图就整体错位，表现为
+   *      **点第 2 张跳到第 3 张的链接**（图是对的、没有报错，最难发现的那一类）。
+   * @why 做成源码断言：过滤发生在 vm、点击发生在页面薄壳，两边分开演进，
+   *      行为用例只能钉 vm 那半；"薄壳有没有用对函数"只有扫描能守住。
+   */
+  it('🔴 onBannerTap 走 bannerAt(，不能按渲染下标直取 this.banners[', () => {
+    expect(src).toMatch(/bannerAt\(/);
+    expect(src, 'this.banners[ 的下标是 slides 的下标，与未过滤数组不对齐').not.toMatch(
+      /this\.banners\[/,
+    );
+  });
+});

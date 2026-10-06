@@ -203,7 +203,19 @@ export function intentForProduct(id) {
  * @why `id` 缺失也一并跳过：轮播的 `wx:key` 用 id，缺 id 会让列表在插入/删除时
  *      复用错误的节点（表现为"图没换但指示器跳了"）。
  */
-export function bannerSlides(banners) {
+/**
+ * **会被真正渲染出来**的那几条 banner（原对象，未改形）。
+ *
+ * @why 它单独存在，是为了让"渲染用的数组"与"点击时按下标取的那一份"**只能是同一份**。
+ *      首版里渲染走 `bannerSlides()`（过滤后），点击却取 `this.banners[index]`（未过滤）——
+ *      两份数组的下标只在"一条都没被过滤掉"时才相等；
+ *      只要有一条 banner 没图（管理端图没传完就先上架，很常见），后面每条整体前移一位，
+ *      表现为**点第 2 张跳到第 3 张的链接**——图是对的，只有链接错，没有任何一方报错。
+ * @why 放在 vm 里而不是在页面里再存一份"过滤后的数组"：两份数组靠人保持同步，
+ *      迟早有一处漏改，而漏改是静默的。这里让**下标解析**也走过滤函数，
+ *      从构造上排除错位（不是靠注释提醒"记得同步"）。
+ */
+export function visibleBanners(banners) {
   if (!Array.isArray(banners)) return [];
   const out = [];
   for (const raw of banners) {
@@ -211,9 +223,26 @@ export function bannerSlides(banners) {
     const image = typeof b.image === 'string' ? b.image.trim() : '';
     const id = typeof b.id === 'string' || typeof b.id === 'number' ? String(b.id) : '';
     if (image === '' || id === '') continue;
-    out.push({ id, image });
+    out.push(b);
   }
   return out;
+}
+
+export function bannerSlides(banners) {
+  return visibleBanners(banners).map((b) => ({
+    id: String(b.id),
+    image: String(b.image).trim(),
+  }));
+}
+
+/**
+ * 轮播下标 → banner（`data-index` 来自 `slides`，不是来自未过滤的 `banners`）。
+ * @returns 越界 / 下标不是整数 → `undefined`（由调用方决定"点了个寂寞"怎么办）
+ */
+export function bannerAt(banners, index) {
+  if (!Number.isInteger(index)) return undefined;
+  const visible = visibleBanners(banners);
+  return index >= 0 && index < visible.length ? visible[index] : undefined;
 }
 
 /**

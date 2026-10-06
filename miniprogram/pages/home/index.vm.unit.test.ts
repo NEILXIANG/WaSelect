@@ -23,10 +23,12 @@ import { describe, expect, it } from 'vitest';
 import {
   CATEGORIES,
   PAGE_SIZE,
+  bannerAt,
   bannerSlides,
   cartLabel,
   categoryTabs,
   intentForBanner,
+  visibleBanners,
   hasMore,
   intentForProduct,
   listQuery,
@@ -469,5 +471,62 @@ describe('防复发：首页薄壳的乱序接线（B36 / AJ-219）', () => {
     // ⚠️ 少判 finally 的表现：过期请求把 loading 清掉 → 页面显示"没在加载"而新的还在途中
     // reload / loadMore 各三处：成功 / 失败 / finally（精确值：改动接线就必须同步改这条）
     expect(count('isStale(seq, this.seq)'), 'reload 与 loadMore 各三处').toBe(6);
+  });
+});
+
+describe('轮播下标必须与「可见 banner」同源（点第 N 张跳第 N 张）', () => {
+  /**
+   * @why 首页渲染的是 `bannerSlides()` **过滤后**的数组（无图 / 无 id 的条目被跳过），
+   *      而原来点击时取的是 `this.banners[index]`——**未过滤**的那一份。
+   *      两条数组的下标只在"一个都没被过滤掉"时才相等；
+   *      只要有一张 banner 没图（管理端很常见：图没传完就先上架），
+   *      后面每一张整体前移一位 ⇒ 点第 2 张跳到第 3 张的链接，点了没反应还算好的。
+   * @why 修法是让"下标 → banner"这一步**也走同一个过滤函数**，
+   *      而不是在页面里再维护一份"过滤后的数组"：两份数组靠人保持同步，
+   *      迟早有一处漏改，而漏改的表现是静默的（图看起来是对的，只有链接错）。
+   */
+  const WITH_GAP = [
+    { id: 'b-0', image: '', link_type: 'product', link_id: 'p-0' },
+    {
+      id: 'b-1',
+      image: 'https://img.example.com/banners/1.png',
+      link_type: 'product',
+      link_id: 'p-1',
+    },
+    {
+      id: 'b-2',
+      image: 'https://img.example.com/banners/2.png',
+      link_type: 'category',
+      link_id: 'kitchen',
+    },
+  ];
+
+  it('visibleBanners 跳过无图 / 无 id 的条目', () => {
+    expect(visibleBanners(WITH_GAP).map((b) => b.id)).toEqual(['b-1', 'b-2']);
+    expect(visibleBanners(undefined)).toEqual([]);
+  });
+
+  it('🔴 bannerAt(0) 是第一张**可见**的 banner，不是 banners[0]', () => {
+    expect(bannerAt(WITH_GAP, 0)?.id).toBe('b-1');
+    expect(bannerAt(WITH_GAP, 1)?.id).toBe('b-2');
+  });
+
+  it('bannerAt 越界 / 非整数 / 缺失 → undefined（不静默取到别的位置）', () => {
+    expect(bannerAt(WITH_GAP, 2)).toBeUndefined();
+    expect(bannerAt(WITH_GAP, -1)).toBeUndefined();
+    expect(bannerAt(WITH_GAP, 1.5)).toBeUndefined();
+    expect(bannerAt(WITH_GAP, undefined)).toBeUndefined();
+  });
+
+  it('🔴 下标与 slides 一一对应：第 i 张 slide 的意图 = bannerAt(i) 的意图', () => {
+    const visible = visibleBanners(WITH_GAP);
+    const slides = bannerSlides(WITH_GAP);
+    expect(slides).toHaveLength(visible.length);
+    slides.forEach((s, i) => {
+      expect(s.id).toBe(String(visible[i].id));
+      expect(intentForBanner(bannerAt(WITH_GAP, i), CATEGORIES)).toEqual(
+        intentForBanner(visible[i], CATEGORIES),
+      );
+    });
   });
 });

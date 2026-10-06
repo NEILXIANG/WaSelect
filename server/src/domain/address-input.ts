@@ -69,8 +69,13 @@ export function parseAddressInput(body: unknown): AddressInputValue {
   const b = body as Record<string, unknown> | null;
   if (b === null || typeof b !== 'object') throw new AppError(40001, { reason: 'body_shape' });
 
+  // ⚠️ 判空用 `trim()` 而不是 `length === 0`：只判长度时，敲三个空格（或全角空格）
+  //    就能通过全部校验并存进地址簿。它在保存时不报错、在地址列表里也不显得异常
+  //    （就是"一行为空"），一直要到**打面单**或承运商校验那一步才炸——而那时货已在仓里。
+  //    @why 只收紧"必填"这一层，不在这 trim 掉两端空格后保存：
+  //    那是展示口径（`'  Jane  '` 目视无差别），一并改会牵动存量地址行的比对逻辑。
   for (const k of REQUIRED) {
-    if (typeof b[k] !== 'string' || (b[k] as string).length === 0) {
+    if (typeof b[k] !== 'string' || (b[k] as string).trim() === '') {
       throw new AppError(40001, { reason: `${k}_required` });
     }
   }

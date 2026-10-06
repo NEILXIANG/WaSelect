@@ -145,8 +145,24 @@ function intAtLeast(v: unknown, min: number): number | undefined {
  *      ⚠️ 判必填**必须**用它而不是"归一化后的值是 undefined"：后者在类型不对时
  *      同样是 undefined，于是必填判定会把"类型错"误读成"没填"。
  */
+/**
+ * "这一项算没填吗"。**纯空白也算没填**（不只空串）。
+ *
+ * @why 这三个形态在**报关单上没有任何区别**：`customs_desc_en` 是 `'   '` 时
+ *      导出的报关 CSV 这一栏就是空的，与没填的后果完全相同（承运商/海关退回）。
+ *      `hs_code` 早就按这个口径判了（见下方 hs 段），而 `customs_desc_en` 与 `title`
+ *      没有——同一份文件里两个必填字段两种口径，是"改了一半"的典型形态。
+ * @why 放在 `isBlank` 里而不是逐个调用点补 `trim()`：可选字段同样受益——
+ *      `description: '   '` 现在按"没填"处理（= 不改），而不是往库里写三个空格，
+ *      再在详情页渲染出一块看起来是空的区域。
+ * @limitation 它**不负责归一化**：`'  cosmetic set  '` 仍然原样保存（前后空格保留）。
+ *              收窄范围是因为"要不要 trim 掉两端空格"是展示口径而不是校验口径，
+ *              一并改会牵动存量数据与读侧渲染；这里只堵"整项都是空白"这个明确的事故。
+ * @limitation 全角空格 U+3000 同样算空白（JS 的 `trim()` 覆盖它）——
+ *              中文输入法下敲空格极易产出它，只按 ASCII 空格判等于没堵。
+ */
 function isBlank(v: unknown): boolean {
-  return v === undefined || v === null || v === '';
+  return v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
 }
 
 function strField(
@@ -236,7 +252,11 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
 
   // ── 必填六项（契约 required）────────────────────────────────────────────
   const title = typeof b.title === 'string' ? b.title : undefined;
-  if (title === undefined || title === '') fail('title', 'title_required');
+  // 用 isBlank 而不是 `=== ''`：纯空格的标题存进去之后，商品卡片上就是一块空白，
+  // 而管理端列表里它看起来"填过了"（不像空串那样明显），运营不会回去补。
+  // ⚠️ `title === undefined` 那一半不是冗余：`isBlank` 返回 `boolean` 而不是类型收窄，
+  //    少了它 TS 会认为下面 `title.length` 仍可能是 undefined（实测 TS18048）。
+  if (title === undefined || isBlank(title)) fail('title', 'title_required');
   else if (title.length > PRODUCT_MAX_CHARS.title) fail('title', 'title_too_long');
 
   const category = b.category;
@@ -302,11 +322,11 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   //    传了数字 HS 码（Excel 导入最常见的形态）时后者为真，于是食品/化妆品会同时收到
   //    `hs_code_required`（"你没填"）与 `hs_code_invalid`（"你填的类型不对"），
   //    而运营按前者去补一个她其实已经补了的值，永远补不对。
-  // 纯空白也算没填：'   ' 进了报关单与空白无异（类型错仍只报 hs_code_invalid，见上）
+  // 纯空白也算没填：'   ' 进了报关单与空白无异（类型错仍只报 hs_code_invalid，见上）。
+  // 这条口径已**上移到 `isBlank`**（本轮统一）：`title` / `customs_desc_en` 原先漏了同一条，
+  // 两处各写一遍就是两份真源，改一处漏一处时"HS 码堵住了、报关品名没堵住"这种错不会报错。
   const hsRaw = b['hs_code'];
-  if (isBlank(hsRaw) || (typeof hsRaw === 'string' && hsRaw.trim() === '')) {
-    fail('hs_code', 'hs_code_required');
-  }
+  if (isBlank(hsRaw)) fail('hs_code', 'hs_code_required');
 
   // ── 其余可选字段 ────────────────────────────────────────────────────────
   // ⚠️ 四个可选文本字段此前**只判"填没填"不判长度**（AJ-298）：超长会撞 PG 的 22001，

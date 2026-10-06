@@ -186,6 +186,12 @@ describe('签名', () => {
   it('验签比较必须用恒定时间函数（时序安全测不出行为差异，只能扫源码）', async () => {
     const { readFile } = await import('node:fs/promises');
     const src = await readFile(new URL('./stripe.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/timingSafeEqual/);
+    // ⚠️ 必须断言**带左括号的调用**，并且是"先比长度、再恒定时间比较"这个形状：
+    //    只写 /timingSafeEqual/ 时，`import { createHmac, timingSafeEqual }` 这一行本身就命中
+    //    ⇒ 把下面的真实调用改回 `got === expected`，这条**照样绿**（与 §2 第 83 条同一类假绿：
+    //    "出现过这个名字" ≠ "在这个位置以这种形态出现过"）。
+    //    带上长度闸门是因为：长度不等时 `timingSafeEqual` 会**抛**而不是返回 false，
+    //    少了它就是"验签在某些输入上直接 500"，同样是一种退化。
+    expect(src).toMatch(/\.length\s*===\s*\w+\.length\s*&&\s*timingSafeEqual\(/);
   });
 });

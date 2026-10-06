@@ -162,3 +162,37 @@ describe('US_ADDRESSES / US_ADDRESS_INVALID 样本池（TST3-02）', () => {
     expect([40001, 40002]).toContain(fail({ ...OK_ADDR, ...c.patch }).code);
   });
 });
+
+describe('🔴 必填文本：纯空白 ≠ 已填写（面单三要素）', () => {
+  /**
+   * @why 面单的收件人 / 街道 / 城市三个字段，原来只判 `length > 0`——
+   *      敲三个空格就能通过全部校验并存进地址簿。它不会在保存时报错，
+   *      也不会在地址列表里显得异常（一行看起来是空的），
+   *      一直要到**打面单**或**承运商校验**那一步才炸——而那时货已经在仓里了。
+   * @why 只钉这三个：`phone` / `state` / `postal_code` 有各自的格式正则
+   *      （`PHONE_RE` / `^[A-Z]{2}$` / `POSTAL_RE`），纯空格**本来就会**被它们拒掉，
+   *      不会静默通过；给它们补用例只会制造"这条守住了什么"的错觉。
+   */
+  it('recipient 为纯空格 → 40001 recipient_required', () => {
+    const r = fail({ ...OK_ADDR, recipient: '   ' });
+    expect(r.code).toBe(40001);
+    expect(r.reason).toBe('recipient_required');
+  });
+
+  it('line1 为纯空格 → 40001 line1_required', () => {
+    const r = fail({ ...OK_ADDR, line1: '   ' });
+    expect(r.code).toBe(40001);
+    expect(r.reason).toBe('line1_required');
+  });
+
+  it('city 为纯空格 → 40001 city_required', () => {
+    const r = fail({ ...OK_ADDR, city: '　 ' });
+    expect(r.code).toBe(40001);
+    expect(r.reason).toBe('city_required');
+  });
+
+  /** 反向：城市名含空格是真实存在的（San Francisco / Las Vegas）。 */
+  it('🔴 城市名含正常空格仍通过（不是把空格一律拒掉）', () => {
+    expect(() => parseAddressInput({ ...OK_ADDR, city: 'San Francisco' })).not.toThrow();
+  });
+});

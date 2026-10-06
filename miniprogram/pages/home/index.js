@@ -31,6 +31,7 @@ import { errorFields } from '../../utils/error-text.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import {
+  bannerAt,
   bannerSlides,
   cartLabel,
   categoryTabs,
@@ -216,7 +217,11 @@ Page({
    */
   onBannerTap(e) {
     const index = Number(e?.currentTarget?.dataset?.index);
-    const banner = Number.isInteger(index) ? this.banners[index] : undefined;
+    // ⚠️ 必须走 `bannerAt`（按"可见 banner"取），不能按渲染下标去索引未过滤的那份数组：
+    //    `slides` 是过滤掉无图 / 无 id 条目之后的子序列，两个数组的下标只在一条都没被
+    //    跳过时才相等。只要有一张 banner 没图，后面每张整体前移一位 ⇒ 点第 2 张跳到
+    //    第 3 张的链接（图是对的，只有链接错，没有任何一方报错）。
+    const banner = bannerAt(this.banners, index);
     const intent = intentForBanner(banner, this.homeCategories);
     // 不可跳（link_type=none / 目标缺失 / 分类不在清单里）→ 点了不动，不跳空页
     if (intent === null) return;

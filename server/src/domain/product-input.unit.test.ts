@@ -467,3 +467,40 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     expect(v.maker).toBeUndefined();
   });
 });
+
+describe('🔴 必填文本：纯空白 ≠ 已填写（报关口径）', () => {
+  /**
+   * @why `hs_code` 早就判了 `trim() === ''`（本文件 hs 段注释："纯空白也算没填"），
+   *      而**真正进报关单的** `customs_desc_en` 与商品名 `title` 没判——
+   *      同一份文件里两个必填字段两种口径，是"改了一半"的典型形态。
+   *      运营在表单里敲三个空格保存成功，报关 CSV 上这一栏是空的。
+   */
+  it('customs_desc_en 为纯空格 → customs_desc_required', () => {
+    expect(reasons({ ...base(), customs_desc_en: '   ' })).toContain('customs_desc_required');
+  });
+
+  it('title 为纯空格 → title_required', () => {
+    expect(reasons({ ...base(), title: '   ' })).toContain('title_required');
+  });
+
+  /** 已实现的那条要钉住，防止"统一口径"时被顺手改坏。 */
+  it('hs_code 为纯空格 → hs_code_required', () => {
+    expect(reasons({ ...base(), hs_code: '   ' })).toContain('hs_code_required');
+  });
+
+  /**
+   * 反向：不许把"含空格"一律拒掉。
+   * @why 修的是"只有空白"，不是"有空格"。把 `cosmetic set` 也拒了，
+   *      运营只能把报关品名写成连写单词，那反而更难过关。
+   */
+  it('🔴 文本中间/两端含正常空格仍通过，且原样保留', () => {
+    const v = ok({ ...base(), title: '测试 商品', customs_desc_en: 'cosmetic set' });
+    expect(v.title).toBe('测试 商品');
+    expect(v.customs_desc_en).toBe('cosmetic set');
+  });
+
+  /** 制表符与换行同样只是空白，不是内容。 */
+  it('customs_desc_en 为制表符/换行 → 同样算没填', () => {
+    expect(reasons({ ...base(), customs_desc_en: '\t\n' })).toContain('customs_desc_required');
+  });
+});
