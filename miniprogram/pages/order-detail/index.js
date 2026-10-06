@@ -50,7 +50,8 @@ Page({
     /** 取消请求在途（ws-button 会吞掉这期间的连点）。 */
     cancelling: false,
     /** 运单号已复制（复制成功后切换文案，@see @limitation 三）。 */
-    copied: false,
+    /** 刚复制的是哪一个：'no' 运单号 / 'url' 查件链接 / '' 都没有（两行各自显示「已复制」）。 */
+    copied: '',
   },
 
   /** 订单 id（来自 query；不参与渲染，放 this 上）。 */
@@ -104,7 +105,7 @@ Page({
       this.setData({
         view: detailView(res, { justPaid: this.justPaid }),
         error: '',
-        copied: false,
+        copied: '',
       });
       this.scheduleRecheck();
     } catch (e) {
@@ -150,10 +151,11 @@ Page({
    */
   onCopyTracking(e) {
     const no = e?.currentTarget?.dataset?.no;
+    const kind = e?.currentTarget?.dataset?.kind === 'url' ? 'url' : 'no';
     if (typeof no !== 'string' || no === '') return;
     wxApi.setClipboardData({
       data: no,
-      success: () => this.setData({ copied: true }),
+      success: () => this.setData({ copied: kind }),
       fail: () => this.setData({ error: '复制失败，请长按运单号手动复制' }),
     });
   },

@@ -67,6 +67,8 @@ import { mountOrderQueryRoutes } from './order-query-routes.js';
 import { mountPayIntentRoutes } from './pay-intent-routes.js';
 import { mountPayLinkRoutes } from './pay-link-routes.js';
 import { registerSessionExpiryOnClose } from './close-session-events.js';
+import { mountAdminExportRoutes } from './admin-export-routes.js';
+import { mountAdminOpsLogRoutes } from './admin-ops-log-routes.js';
 import { mountWechatAuthRoutes } from './wechat-auth-routes.js';
 import { mountInternalJobsRoutes } from './internal-jobs-routes.js';
 import { createInflightJobs, type InflightJobs } from './inflight-jobs.js';
@@ -299,6 +301,20 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     identity,
     registry,
     events,
+  });
+  // ── CSV 导出（剩余清单 3-3）：订单 / 待采购 / 待发货报关；导出动作显式进审计 ──
+  mountAdminExportRoutes(app, {
+    db,
+    logger,
+    clock,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+  });
+  // ── 运营日志（剩余清单 3-2）：审计查询 + 最近一次对账，只读 ──
+  mountAdminOpsLogRoutes(app, {
+    db,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
   });
   // ── 管理端运营配置（I2-U-C3）：展示汇率与运费分档。clock 必须注入——
   //    "立即生效"的 effective_from 取它，否则这条路由无法在假时间下测（F10）──

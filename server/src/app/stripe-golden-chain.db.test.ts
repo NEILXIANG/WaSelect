@@ -579,6 +579,17 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
       .filter((l) => l['order_id'] === orderId)
       .map((l) => l['ctx'] as { domain_event?: string; carrier?: string });
     expect(ev.find((e) => e.domain_event === 'order.shipped')?.carrier).toBe('EMS');
+    // 剩余清单 3-5：买家与管理端的订单详情都带官方查件链接（日本邮便 S10 单号）
+    const jp =
+      'https://trackings.post.japanpost.jp/services/srv/search?requestNo1=EM123456789JP&search.x=1&search.y=1&locale=en&startingUrlPatten=';
+    const buyer = await call(srv, 'GET', `/api/v1/orders/${orderId}`, {
+      token: await tokenFor('u-1'),
+    });
+    expect(buyer.json['tracking_url']).toBe(jp);
+    const admin = await call(srv, 'GET', `/api/v1/admin/orders/${orderId}`, {
+      token: await tokenFor('u-admin', 'admin'),
+    });
+    expect(admin.json['tracking_url']).toBe(jp);
   });
 
   it('已发货的单退款成功 → 库存不回补（货已经寄出）', async () => {

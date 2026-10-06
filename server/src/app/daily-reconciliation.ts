@@ -22,7 +22,7 @@
  *
  * @limitation 一：异常 id 清单**截断到 20 条**（计数不受截断影响）——
  *              日志不是报表，积压超过 20 条时人要的是"有多少"而不是"全部 id"。
- * @limitation 二：**只读**（不改任何行）。对账 job 在事务里跑只是为了共用框架的
+ * @limitation 二：**只读业务表**（不改任何业务行；唯一的写是追加一行 reconciliation_runs，剩余清单 3-2）。对账 job 在事务里跑只是为了共用框架的
  *              锁与心跳；它发现的问题一律靠人去修，不在事务里顺手改数据。
  * @limitation 三：三类是**三个视角，不是三个互斥集合**——同一行可以同时命中多类
  *              （典型：订单 paid 但支付行仍 initiated，既是①悬空支付、又是②两本账不符）。
@@ -32,6 +32,7 @@
  * @see app/internal-jobs-routes.ts（触发端点）；app/expire-orders.ts（同一框架的兄弟 job）
  */
 import type { Db } from '../adapters/db.js';
+import { insertReconciliationRun } from '../adapters/ops-log.js';
 import {
   DAILY_JOB_ROW_NAME,
   DAILY_STALL_HOURS,
@@ -308,6 +309,12 @@ export function createDailyReconciliationJob(): SchedulerJob<Db> {
         });
       }
       const counts = Object.fromEntries(classes.map((c) => [c.key, c.count]));
+      // 剩余清单 3-2：每跑一次追加一行（零异常也写：运营要能看到"昨晚跑过、没问题"，而不是"不知道跑没跑"）
+      await insertReconciliationRun(ctx.tx, {
+        ranAt: ctx.startedAt,
+        counts,
+        samples: Object.fromEntries(classes.filter((c) => c.count > 0).map((c) => [c.key, c.ids])),
+      });
       ctx.log.info('daily_reconciliation', {
         result: anomalies === 0 ? 'ok' : 'anomalies_found',
         ctx: counts,

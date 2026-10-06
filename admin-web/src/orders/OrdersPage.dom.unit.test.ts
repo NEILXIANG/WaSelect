@@ -43,6 +43,19 @@ afterEach(async () => {
   mounted = undefined;
 });
 
+describe('订单列表："含测试单"开关（剩余清单 3-4）', () => {
+  it('🔴 默认不带 include_test；勾选 → 重新请求且带 include_test=true、回到第 1 页', async () => {
+    const el = await open();
+    expect(gets()[0]?.path).not.toContain('include_test');
+    const box = el.querySelector(
+      'input[type="checkbox"][aria-label="含测试单"]',
+    ) as HTMLInputElement;
+    await click(box);
+    expect(gets().at(-1)?.path).toContain('include_test=true');
+    expect(gets().at(-1)?.path).toContain('page=1');
+  });
+});
+
 describe('订单列表：刷新入口（ADM3-09）', () => {
   it('挂载时拉一次列表', async () => {
     await open();

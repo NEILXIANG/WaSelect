@@ -252,6 +252,20 @@ describe('shipGate（发货闸门）', () => {
   });
 });
 
+describe('orderRows：查件链接（剩余清单 3-5）', () => {
+  it('🔴 有 https 的 tracking_url → trackingUrl；缺失或非 https → 空串', () => {
+    const url = 'https://trackings.post.japanpost.jp/services/srv/search?requestNo1=EM123456789JP';
+    const [a, b, c] = orderRows([
+      { order_id: 'o-1', status: 'shipped', tracking_no: 'EM123456789JP', tracking_url: url },
+      { order_id: 'o-2', status: 'shipped', tracking_no: 'X' },
+      { order_id: 'o-3', status: 'shipped', tracking_url: 'javascript:alert(1)' },
+    ]);
+    expect(a?.trackingUrl).toBe(url);
+    expect(b?.trackingUrl).toBe('');
+    expect(c?.trackingUrl).toBe('');
+  });
+});
+
 describe('refundGate（退款闸门）', () => {
   it('paid / shipped / delivered 可退', () => {
     for (const s of ['paid', 'shipped', 'delivered'] as const) {

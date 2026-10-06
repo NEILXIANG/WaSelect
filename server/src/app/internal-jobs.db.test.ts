@@ -202,6 +202,24 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
     }
   });
 
+  /** 剩余清单 3-4：归档作业挂在 daily 列表里（生产接线）——单测证明作业本身，这里证明它真的被跑到。 */
+  it('🔴 daily 一轮会归档付款满 24 小时的审核期测试单', async () => {
+    await db`insert into users (id, openid) values ('u-arch', 'o-arch') on conflict do nothing`;
+    await db`insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy, total_jpy, weight_g,
+                                 fx_snapshot, address_snapshot, terms_version, expires_at, is_test, paid_at)
+             values ('o-arch', 'NO-arch', 'u-arch', 'paid', 1000, 0, 0, 1000, 300, '{}'::jsonb, '{}'::jsonb, 'T',
+                     now(), true, now() - interval '30 hours')`;
+    const srv = await buildServer({ withSecret: true });
+    try {
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const [o] = await db`select status from orders where id = 'o-arch'`;
+      expect(o?.['status']).toBe('cancelled');
+    } finally {
+      await srv.close();
+    }
+  });
+
   /**
    * 🔴 OPS3-05：daily 作业 202 之后在进程里跑——它**不是** HTTP 请求（排空等不到），
    * 也不是已 publish 的事件（事件 drain 等不到）。句柄必须交到登记表里，

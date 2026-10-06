@@ -172,6 +172,14 @@ describe('detailView（整体）', () => {
     expect(detailView({ ...ORDER, tracking_no: undefined }).hasTracking).toBe(false);
   });
 
+  it('🔴 查件链接（剩余清单 3-5）：服务端给了 https 链接才显示；缺失 / 非 https → 空串（不显示"复制查件链接"）', () => {
+    const url =
+      'https://trackings.post.japanpost.jp/services/srv/search?requestNo1=EJ123456789JP&locale=en';
+    expect(detailView({ ...ORDER, tracking_url: url }).trackingUrl).toBe(url);
+    expect(detailView(ORDER).trackingUrl).toBe('');
+    expect(detailView({ ...ORDER, tracking_url: 'javascript:alert(1)' }).trackingUrl).toBe('');
+  });
+
   it('脏输入：null / 空对象 → 不崩，且**不**显示可付/可取消', () => {
     const v = detailView(null);
     expect(v.canPay).toBe(false);

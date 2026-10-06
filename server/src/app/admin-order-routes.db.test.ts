@@ -360,6 +360,29 @@ describe('GET /admin/orders（管理端订单列表）', () => {
   });
 });
 
+describe('GET /admin/orders?include_test（剩余清单 3-4）', () => {
+  it('🔴 默认不含测试单；include_test=true 含；非 true/false → 40001', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-real' });
+    await seedOrder({ id: 'o-test' });
+    await db`update orders set is_test = true where id = 'o-test'`;
+    const ids = (r: { json: Record<string, unknown> }) =>
+      (r.json['items'] as Array<{ order_id: string }>).map((i) => i.order_id).sort();
+    expect(ids(await adminFetch(s, 'GET', '/api/v1/admin/orders'))).toEqual(['o-real']);
+    expect(ids(await adminFetch(s, 'GET', '/api/v1/admin/orders?include_test=true'))).toEqual([
+      'o-real',
+      'o-test',
+    ]);
+    expect(ids(await adminFetch(s, 'GET', '/api/v1/admin/orders?include_test=false'))).toEqual([
+      'o-real',
+    ]);
+    expect((await adminFetch(s, 'GET', '/api/v1/admin/orders?include_test=1')).json['code']).toBe(
+      40001,
+    );
+    await s.close();
+  });
+});
+
 describe('GET /admin/orders/{id}（详情）', () => {
   it('存在 → 200 且带 items / payments / events 与地址', async () => {
     const s = await buildServer();

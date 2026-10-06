@@ -257,7 +257,15 @@ describe('异常链路：钱与订单状态不一致时，系统必须留下"人
       .find('business_event')
       .map((l) => l['ctx'] as Record<string, unknown>)
       .find((c) => c['domain_event'] === 'reconciliation.anomalies_found');
-    expect(found?.['callback_anomalies_48h']).toBeGreaterThanOrEqual(1);
+    expect(found?.['callback_anomalies_48h']).toBeGreaterThanOrEqual(1); // 剩余清单 3-2：对账结果落库（运营日志页读最近一次），取样带上这条回调
+    const [run] =
+      await db`select counts, samples from reconciliation_runs order by id desc limit 1`;
+    expect(
+      (run?.['counts'] as Record<string, number>)['callback_anomalies_48h'],
+    ).toBeGreaterThanOrEqual(1);
+    expect((run?.['samples'] as Record<string, string[]>)['callback_anomalies_48h']).toContain(
+      'evt-late',
+    );
   });
 
   it('关单作业已把单关成 expired 之后才到账 → 同样按迟到付款分类（late_payment + error），对账可见（KD-7 回归）', async () => {

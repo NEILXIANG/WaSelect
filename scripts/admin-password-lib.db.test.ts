@@ -15,7 +15,11 @@ import { ensureTestDb, resetTestDb, testDb } from '../test/db/test-db.js';
 import { hashPassword, verifyPassword } from '../server/src/app/auth.js';
 // 只收邮箱 / 目标库描述 / stdin 读口令这三个**纯函数**不碰库，在
 // `admin-password-lib.unit.test.ts`（unit project）；这里只留要真库的：改密与审计落表。
-import { auditAdminPasswordReset, setAdminPassword } from './admin-password-lib.js';
+import {
+  auditAdminPasswordReset,
+  createAdminAccount,
+  setAdminPassword,
+} from './admin-password-lib.js';
 import { loginAttemptKey, loginAttemptSourceKey } from '../server/src/adapters/admin-auth.js';
 
 let db: Db;
@@ -215,5 +219,63 @@ describe('auditAdminPasswordReset（CLI 改密也要留痕）', () => {
     );
     // 失败的审计不会留下半行
     expect(await db`select 1 from admin_audit`).toHaveLength(0);
+  });
+});
+
+/**
+ * 剩余清单 3-1：多管理员建号（`npm run admin:create`）。
+ * @why 此前只有启动时按 ADMIN_EMAIL 建**一个**初始管理员；第二个运营要登录只能改库，且无留痕。
+ */
+describe('createAdminAccount（3-1）', () => {
+  it('🔴 新邮箱 → 建出管理员（邮箱归一、口令可验），并落一条 CLI admin.create 审计', async () => {
+    const r = await createAdminAccount(db, {
+      email: '  Ops2@Example.com ',
+      password: 'ops2-password-1234',
+    });
+    expect(r.ok).toBe(true);
+    const [u] =
+      await db`select id, email, password_hash, is_admin from users where email = 'ops2@example.com'`;
+    expect(u?.['is_admin']).toBe(true);
+    await expect(verifyPassword('ops2-password-1234', String(u?.['password_hash']))).resolves.toBe(
+      true,
+    );
+    const audit = await db`select actor, action, target, before, after from admin_audit`;
+    expect(audit.map((a) => ({ ...a }))).toEqual([
+      {
+        actor: 'cli:admin-create',
+        action: 'CLI admin.create',
+        target: u?.['id'],
+        before: null,
+        after: null,
+      },
+    ]);
+  });
+
+  it('已存在同邮箱（管理员或普通账号）→ exists，不改口令、不提权、不写审计', async () => {
+    await seedAdmin('boss@example.com', 'old-password-1234');
+    await db`insert into users (id, email, password_hash, is_admin) values ('u-plain', 'plain@example.com', 'x', false)`;
+    expect(
+      await createAdminAccount(db, { email: 'BOSS@example.com', password: 'another-pass-9999' }),
+    ).toEqual({
+      ok: false,
+      reason: 'exists',
+    });
+    expect(
+      await createAdminAccount(db, { email: 'plain@example.com', password: 'another-pass-9999' }),
+    ).toEqual({
+      ok: false,
+      reason: 'exists',
+    });
+    const [p] = await db`select is_admin from users where id = 'u-plain'`;
+    expect(p?.['is_admin']).toBe(false);
+    expect(await db`select 1 from admin_audit`).toHaveLength(0);
+  });
+
+  it('口令短于下限 → weak_password，库里不多一行', async () => {
+    expect(await createAdminAccount(db, { email: 'x@example.com', password: 'short' })).toEqual({
+      ok: false,
+      reason: 'weak_password',
+    });
+    expect(await db`select 1 from users where email = 'x@example.com'`).toHaveLength(0);
   });
 });

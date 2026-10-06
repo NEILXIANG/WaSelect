@@ -272,13 +272,15 @@ describe('迁移本身', () => {
     // + 1（003 的 webhook_events）+ 1（007 的 country_profiles，F11 单元④）
     // + 3（010 的 duty_rates / payment_channels / app_config，I1-U7a）
     // + 1（015 的 login_attempts，A1+B14：登录额度从 users 两列搬到独立表）
-    // + 1（019 的 order_address_history，AJ-293：改址旧值迁出 append-only）= 22。
+    // + 1（019 的 order_address_history，AJ-293：改址旧值迁出 append-only）
+    // + 1（028 的 reconciliation_runs，剩余清单 3-2：对账结果落库供运营日志页读）= 23。
     // ✅ 文档侧已同步（2026-09-28，一致性审计 AJ-176）：010 落地后文档一度仍写 17（上一轮"已同步"只到 17），
     //    本轮 jp 技术文档 §3/§3.1、工程框架文档、PRD §5、jp README、本库 README / 测试策略 / 架构设计 / 日志规范 /
     //    地基清单统一改为"以本断言为准"（写数字的地方写 20 并注明真源），避免下一次加表再漂移。
     //    ADR-28 写"13 → 17（新增四张）"那份推演的基准是它成文时的 13 张，现以本断言为准。
-    expect(tables).toHaveLength(22);
+    expect(tables).toHaveLength(23);
     expect(tables).toContain('orders');
+    expect(tables).toContain('reconciliation_runs');
     expect(tables).toContain('login_attempts');
     expect(tables).toContain('job_runs');
     expect(tables).toContain('user_events');
@@ -426,6 +428,14 @@ describe('002 加固：约束真的会拦', () => {
     await expect(db`update admin_audit set action = 'x' where target = 'p-1'`).rejects.toThrow(
       /只允许 INSERT/,
     );
+  });
+
+  it('reconciliation_runs 同样 append-only（对账历史不可改，剩余清单 3-2）', async () => {
+    await db`insert into reconciliation_runs (ran_at, counts, samples) values (now(), '{}', '{}')`;
+    await expect(db`update reconciliation_runs set counts = '{"x":1}'`).rejects.toThrow(
+      /只允许 INSERT/,
+    );
+    await expect(db`delete from reconciliation_runs`).rejects.toThrow(/只允许 INSERT/);
   });
 
   it('外键列都有索引（否则父表删改会退化成子表全表扫描）', async () => {

@@ -31,6 +31,7 @@
  *      contracts/api-contract.yaml（OrderSummary/Order）
  */
 import { toRateInt } from '@waselect/shared';
+import { withTrackingUrl } from '../domain/tracking.js';
 import { buildDisplayFromRates, type DisplayCurrency } from '../domain/quote.js';
 import type {
   OrderDetailRow,
@@ -140,6 +141,8 @@ export function toOrderDetail(
     expires_at: row.expires_at.toISOString(),
     ...(row.carrier !== null ? { carrier: row.carrier } : {}),
     ...(row.tracking_no !== null ? { tracking_no: row.tracking_no } : {}),
+    // 剩余清单 3-5：官方查件链接（认不出承运商 → 整键省略，不猜）
+    ...withTrackingUrl(row.carrier, row.tracking_no),
     timeline: parts.timeline.map((t) => ({ status: t.status, at: t.at.toISOString() })),
     ...(parts.payment !== null ? { payment: toPaymentView(parts.payment) } : {}),
   };

@@ -36,6 +36,7 @@ import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
 import type { Db } from '../server/src/adapters/db.js';
 import {
   deleteLoginAttemptsForEmail,
+  ensureInitialAdmin,
   normalizeAdminEmail,
 } from '../server/src/adapters/admin-auth.js';
 import { createAdminAuditStore } from '../server/src/adapters/admin-audit.js';
@@ -305,4 +306,44 @@ export async function setAdminPassword(
   // AJ-243：邮箱桶 + 记在它名下的全部来源桶一起清（来源桶的键里混了来源，单凭邮箱算不出来）
   await deleteLoginAttemptsForEmail(db, args.email);
   return { ok: true, userId: String(row['id']), tokenVer: Number(row['token_ver']) };
+}
+
+// ── 剩余清单 3-1：多管理员建号（`npm run admin:create`）─────────────────────────
+
+export type CreateAdminResult =
+  { ok: true; userId: string } | { ok: false; reason: 'weak_password' | 'exists' };
+
+/**
+ * 新建一个管理员账号（口令从 stdin 读，同改密脚本）。
+ *
+ * @why 复用启动 seed 的 `ensureInitialAdmin`（同一条 `insert … where not exists`、同一份邮箱归一）：
+ *      "这个邮箱建过没有"在 seed、建号、登录三处必须是同一个判据（SEC2-07）。
+ * @why 已存在同邮箱（含普通账号）→ `exists`，**不改口令、不提权**：
+ *      覆盖口令该用 `admin:password`；把普通账号提成管理员是另一类动作，不该由"建号"顺手完成。
+ * @why 建成才写审计（`CLI admin.create`，target = 新账号 id；口令不进审计）：没建成的那次没有改动，写了只是噪音。
+ * @limitation 没有角色分级：建出来的都是全权管理员（P1 再做角色与账号管理页）。
+ * @limitation 建号与审计不在同一事务：审计写失败时账号已建，调用方提示"手工补记"（与改密脚本同口径）。
+ */
+export async function createAdminAccount(
+  db: Db,
+  args: SetAdminPasswordArgs,
+): Promise<CreateAdminResult> {
+  if (args.password.length < ADMIN_PASSWORD_MIN_LENGTH)
+    return { ok: false, reason: 'weak_password' };
+  const outcome = await ensureInitialAdmin(db, args.email, await hashPassword(args.password));
+  if (outcome === 'exists') return { ok: false, reason: 'exists' };
+  const [row] =
+    await db`select id from users where lower(email) = ${normalizeAdminEmail(args.email)}`;
+  const userId = String(row?.['id']);
+  await createAdminAuditStore(db).append({
+    actor: 'cli:admin-create',
+    action: 'CLI admin.create',
+    target: userId,
+    before: null,
+    after: null,
+    statusCode: null,
+    traceId: null,
+    reqId: null,
+  });
+  return { ok: true, userId };
 }

@@ -165,6 +165,14 @@ export function detailView(order, opts = undefined) {
     carrier: typeof o.carrier === 'string' ? o.carrier : '',
     trackingNo,
     hasTracking: trackingNo !== '',
+    /**
+     * 官方查件链接（剩余清单 3-5，服务端按单号形态生成）。小程序不能直接打开外部网页（需业务域名），
+     * 所以只给"复制链接"，买家粘贴到浏览器打开。只收 https：防御服务端以外的脏值被当链接复制出去。
+     */
+    trackingUrl:
+      typeof o.tracking_url === 'string' && o.tracking_url.startsWith('https://')
+        ? o.tracking_url
+        : '',
     timeline: timelineRows(o.timeline),
   };
 }

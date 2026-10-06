@@ -115,6 +115,8 @@ export interface OrderRow {
   recipientText: string;
   /** 承运商 + 运单号（未发货时为空串）。 */
   shipText: string;
+  /** 官方查件链接（认不出承运商 / 未发货 → 空串）。 */
+  trackingUrl: string;
   /** 采购信息（每个行项目一行；空数组 = 服务端没给 items，列表显示"—"）。 */
   purchaseLines: string[];
   hasDispute: boolean;
@@ -187,6 +189,10 @@ export function orderRows(items: unknown): OrderRow[] {
           carrier === '' && tracking === ''
             ? ''
             : [carrier, tracking].filter((s) => s !== '').join(' / '),
+        // 剩余清单 3-5：服务端生成的官方查件链接；只收 https（不把脏值渲染成可点链接）
+        trackingUrl: readString(o, 'tracking_url').startsWith('https://')
+          ? readString(o, 'tracking_url')
+          : '',
         purchaseLines: purchaseLines(o),
         hasDispute: o['has_dispute'] === true,
         isTest: o['is_test'] === true,

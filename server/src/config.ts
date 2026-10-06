@@ -498,6 +498,8 @@ const schema = z.object({
   SHUTDOWN_BUDGET_FLUSH_MS: timerMs(200, 0),
   AUTO_DELIVER_DAYS: int(30, 1),
   AUTO_COMPLETE_DAYS: int(7, 1),
+  /** 审核期测试单（is_test）付款满多少小时后归档（剩余清单 3-4，每日作业 archive_test_orders）。 */
+  TEST_ORDER_ARCHIVE_HOURS: int(24, 1),
   /** 建单必传且必须与服务端相等，否则 40011（D-43）。必填 → 忘了配就启动失败，而不是全站下单失败。 */
   /**
    * 条款版本（建单比对，D-43）。上界 **32 = `orders.terms_version` 的列宽**

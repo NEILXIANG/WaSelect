@@ -27,6 +27,7 @@
  * @see app/daily-reconciliation.ts（作业本体）；config.ts INTERNAL_JOB_SECRET；
  *      docs/I1阶段开发实施方案.md §3.7
  */
+import { createArchiveTestOrdersJob } from './archive-test-orders.js';
 import { timingSafeEqual } from 'node:crypto';
 import type { Express } from 'express';
 import type { Db } from '../adapters/db.js';
@@ -144,6 +145,8 @@ export function mountInternalJobsRoutes(
             [
               createAutoDeliverJob({ afterDays: deps.config.AUTO_DELIVER_DAYS }),
               createAutoCompleteJob({ afterDays: deps.config.AUTO_COMPLETE_DAYS }),
+              // 剩余清单 3-4：在对账之前跑——对账看到的是归档后的状态
+              createArchiveTestOrdersJob({ afterHours: deps.config.TEST_ORDER_ARCHIVE_HOURS }),
               createDailyReconciliationJob(),
               createCleanupLoginAttemptsJob(),
             ],

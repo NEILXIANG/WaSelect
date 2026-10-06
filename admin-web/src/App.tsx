@@ -28,6 +28,7 @@ import { BannersPage } from './banners/BannersPage.js';
 import { LoginForm } from './LoginForm.js';
 import { OrdersPage } from './orders/OrdersPage.js';
 import { RiskPage } from './risk/RiskPage.js';
+import { OpsLogPage } from './opslog/OpsLogPage.js';
 import { OpsPage } from './ops/OpsPage.js';
 import { ProductsPage } from './products/ProductsPage.js';
 import { ProductFormPage } from './products/ProductFormPage.js';
@@ -43,6 +44,7 @@ const TABS = [
   { key: 'ops', label: '运营配置' },
   { key: 'banners', label: '首页 Banner' },
   { key: 'risk', label: '风控' },
+  { key: 'opslog', label: '运营日志' },
 ] as const;
 
 type TabKey = (typeof TABS)[number]['key'];
@@ -124,6 +126,8 @@ export function App() {
       {tab === 'ops' && <OpsPage api={api} />}
 
       {tab === 'risk' && <RiskPage api={api} />}
+
+      {tab === 'opslog' && <OpsLogPage api={api} />}
 
       {tab === 'banners' && (
         <BannersPage

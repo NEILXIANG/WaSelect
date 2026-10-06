@@ -16,6 +16,7 @@
  *
  * @see ./view.ts（行视图与闸门）；./api.ts（接口层）；./OrderDetail.tsx
  */
+import { ExportBar } from './ExportBar.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OrderStatus } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
@@ -40,6 +41,8 @@ export function OrdersPage({ api }: OrdersPageProps) {
   /** 输入框里的值（未提交）；提交后写进 `applied`。 */
   const [keyword, setKeyword] = useState('');
   const [applied, setApplied] = useState('');
+  /** 剩余清单 3-4："含测试单"（审核期 mock 单默认不列）。 */
+  const [includeTest, setIncludeTest] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   /** 当前打开的订单 id（null = 看列表）。 */
@@ -68,6 +71,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
         size: PAGE_SIZE,
         keyword: applied,
         ...(status === 'all' ? {} : { status }),
+        includeTest,
       });
       if (seq !== reqSeq.current) return;
       setRaw(res.items);
@@ -80,7 +84,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
-  }, [api, page, status, applied, reloadTick]);
+  }, [api, page, status, applied, reloadTick, includeTest]);
 
   useEffect(() => {
     void load();
@@ -110,6 +114,9 @@ export function OrdersPage({ api }: OrdersPageProps) {
         <span className="muted">时间均为 JST</span>
       </header>
 
+      {/* 剩余清单 3-3：CSV 导出（订单总表 / 待采购 / 报关） */}
+      <ExportBar api={api} />
+
       <div className="filters">
         <select
           className="input"
@@ -125,6 +132,18 @@ export function OrdersPage({ api }: OrdersPageProps) {
             </option>
           ))}
         </select>
+        <label className="muted">
+          <input
+            type="checkbox"
+            aria-label="含测试单"
+            checked={includeTest}
+            onChange={(e) => {
+              setIncludeTest(e.target.checked);
+              setPage(1);
+            }}
+          />
+          含测试单
+        </label>
         <input
           className="input"
           placeholder="单号 / 收件人 / 运单号"
@@ -196,7 +215,17 @@ export function OrdersPage({ api }: OrdersPageProps) {
               <td>{row.totalText}</td>
               <td className="muted">{row.createdText}</td>
               <td>{row.recipientText}</td>
-              <td className="muted">{row.shipText === '' ? '—' : row.shipText}</td>
+              <td className="muted">
+                {row.shipText === '' ? '—' : row.shipText}
+                {row.trackingUrl !== '' && (
+                  <>
+                    {' '}
+                    <a href={row.trackingUrl} target="_blank" rel="noreferrer">
+                      查件
+                    </a>
+                  </>
+                )}
+              </td>
               <td>
                 <button type="button" className="link" onClick={() => setDetailId(row.id)}>
                   详情

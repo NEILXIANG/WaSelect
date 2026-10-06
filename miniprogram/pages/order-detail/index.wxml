@@ -100,11 +100,18 @@
           <text class="ws-note">运单号</text>
           <!-- ⚠️ 用 text 不是 view：`hover-class` 只支持 view/button/navigator，
                而这里要的是"可长按选择的等宽文本"，按下反馈对它不适用。 -->
-          <text class="ws-body track" data-no="{{view.trackingNo}}" bindtap="onCopyTracking">
-            {{copied ? '已复制' : view.trackingNo}}
+          <text class="ws-body track" data-no="{{view.trackingNo}}" data-kind="no" bindtap="onCopyTracking">
+            {{copied === 'no' ? '已复制' : view.trackingNo}}
           </text>
         </view>
         <text class="ws-caption hint">点运单号复制</text>
+        <!-- 剩余清单 3-5：官方查件链接（复制后到浏览器打开；小程序内不能直接打开外部网页） -->
+        <view class="quote-line" wx:if="{{view.trackingUrl}}">
+          <text class="ws-note">查件</text>
+          <text class="ws-body track" data-no="{{view.trackingUrl}}" data-kind="url" bindtap="onCopyTracking">
+            {{copied === 'url' ? '已复制' : '复制查件链接'}}
+          </text>
+        </view>
       </view>
     </view>
 

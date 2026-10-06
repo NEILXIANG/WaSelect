@@ -20,12 +20,8 @@
  *              ⚠️ 但"机构调用"里**有一半不属于事务外**：通道解析（`registry.getForRefund`）
  *              是纯配置查找，必须在事务内、落 refunding 之前做——放到事务外就是
  *              "订单已迁 refunding、却拿不到 provider"，永久卡单（B8 / AJ-192）。
- * @limitation 二：`includeTest` **不在路由上开放**（仓储支持、路由不接）：
- *              契约只声明了 status / keyword / page / size，而管理端目前没有
- *              "显示测试单"的开关。等要加开关的那天**先改契约再开参数**——
- *              顺序不能倒（否则又是"契约比实现严格"的漂移）。
- *              ⚠️ 因此"按单号搜测试单"仍然可用（keyword 会绕过 is_test 过滤，
- *              见 `orders-admin.ts` @limitation 三），只是列表里默认看不到。
+ * @limitation 二：测试单（is_test）默认不列；`include_test=true` 才列（契约 0.6.32 先开参数、再接路由，剩余清单 3-4）。
+ *              "按单号搜测试单"不受影响（keyword 会绕过 is_test 过滤，见 `orders-admin.ts` @limitation 三）。
  * @limitation 三：改址后的快照 `id` 恒为 **null**：它表示"这条地址来自哪个地址簿条目"，
  *              而管理员手改出来的地址**不属于任何一条地址簿记录**——
  *              沿用旧 id 会让快照声称自己等于一个它已经不等于的地址。
@@ -43,6 +39,7 @@ import type { Clock } from '../ports/clock.js';
 import type { PaymentRegistry } from '../ports/payment.js';
 import type { EventBus } from '../ports/events.js';
 import { executeRefund } from './refund-execution.js';
+import { withTrackingUrl } from '../domain/tracking.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
@@ -133,6 +130,7 @@ function toListItem(
     ...(r.contact_email !== null ? { contact_email: r.contact_email } : {}),
     ...(r.carrier !== null ? { carrier: r.carrier } : {}),
     ...(r.tracking_no !== null ? { tracking_no: r.tracking_no } : {}),
+    ...withTrackingUrl(r.carrier, r.tracking_no),
     ...(r.recipient !== null ? { recipient: r.recipient } : {}),
     has_dispute: r.has_dispute,
     is_test: r.is_test,
@@ -215,6 +213,7 @@ function toAdminOrder(
     ...(r.contact_email !== null ? { contact_email: r.contact_email } : {}),
     ...(r.carrier !== null ? { carrier: r.carrier } : {}),
     ...(r.tracking_no !== null ? { tracking_no: r.tracking_no } : {}),
+    ...withTrackingUrl(r.carrier, r.tracking_no),
     ...(r.paid_at !== null ? { paid_at: r.paid_at.toISOString() } : {}),
     ...(r.shipped_at !== null ? { shipped_at: r.shipped_at.toISOString() } : {}),
   };
@@ -242,8 +241,18 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           keyword?: unknown;
           page?: unknown;
           size?: unknown;
+          include_test?: unknown;
         };
         const { page, size } = readPaging(q);
+        // 剩余清单 3-4（契约 0.6.32）：只认 'true' / 'false'，其它 → 40001（不静默当成"不含"）
+        if (
+          q.include_test !== undefined &&
+          q.include_test !== 'true' &&
+          q.include_test !== 'false'
+        ) {
+          throw new AppError(40001, { reason: 'include_test_invalid' });
+        }
+        const includeTest = q.include_test === 'true';
         const status = q.status === undefined ? undefined : String(q.status);
         if (status !== undefined && !(ORDER_STATUS as readonly string[]).includes(status)) {
           throw new AppError(40001, { reason: 'status_invalid' });
@@ -261,6 +270,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           size,
           ...(status !== undefined ? { status } : {}),
           ...(rawKw !== undefined && rawKw !== '' ? { keyword: rawKw } : {}),
+          includeTest,
         });
         // 行项目**一次批量**取（N+1 的反面）：`listOrderItemsFor` 一条 `in (…)` 拿全部，
         // 再按 order_id 归堆。⚠️ 空 ids 时它早退返回 []，不进 SQL（见仓储的用例）。

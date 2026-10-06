@@ -61,6 +61,8 @@ export interface OrderListQuery {
   keyword?: string;
   page?: number;
   size?: number;
+  /** true = 连审核期测试单一起列（契约 0.6.32 include_test，剩余清单 3-4）。 */
+  includeTest?: boolean;
 }
 
 /**
@@ -77,6 +79,7 @@ export async function listOrders(
   if (query.keyword !== undefined && query.keyword !== '') params.set('keyword', query.keyword);
   if (query.page !== undefined) params.set('page', String(query.page));
   if (query.size !== undefined) params.set('size', String(query.size));
+  if (query.includeTest === true) params.set('include_test', 'true');
   const qs = params.toString();
   const resp = await api({
     path: `/api/v1/admin/orders${qs === '' ? '' : `?${qs}`}`,
