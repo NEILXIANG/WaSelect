@@ -223,3 +223,29 @@ export function orderBody(args) {
     body.contact_email = a.contactEmail;
   return body;
 }
+
+/** 结算模式：立即购买（剩余清单 4-4）。 */
+export const BUY_NOW_MODE = 'buynow';
+
+/**
+ * 结算的条目来源（剩余清单 4-4）：立即购买只结那一件，否则结购物车。
+ * @why 立即购买的单件丢了（小程序进程被回收后 globalData 清空）时返回**空**而不是回落到购物车：
+ *      回落的后果是用户点了"立即购买 A"，结算页却是购物车里的 B、C——他未必细看就付了。空态至少是诚实的。
+ */
+export function checkoutItems(args) {
+  if (args?.mode === BUY_NOW_MODE) {
+    const b = args.buyNow;
+    return b !== null &&
+      typeof b === 'object' &&
+      typeof b.productId === 'string' &&
+      b.productId !== ''
+      ? [b]
+      : [];
+  }
+  return Array.isArray(args?.cartItems) ? args.cartItems : [];
+}
+
+/** 建单成功后是否清空购物车：立即购买不清（车里的东西用户没打算现在买）。 */
+export function clearsCartAfterOrder(mode) {
+  return mode !== BUY_NOW_MODE;
+}

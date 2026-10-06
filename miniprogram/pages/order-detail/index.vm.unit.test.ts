@@ -8,7 +8,7 @@
  *      ④ 行项目缺图时留白（用户分不清"没图"和"图没加载出来"）。
  */
 import { describe, expect, it } from 'vitest';
-import { amountLines, detailView, itemRows, timelineRows } from './index.vm.js';
+import { amountLines, detailView, itemRows, STOCK_REFUND_NOTE, timelineRows } from './index.vm.js';
 
 const ORDER = {
   order_id: 'o-1',
@@ -271,5 +271,16 @@ describe('detailView：无法估算的关税不显示（W-05）', () => {
       detailView(o).amountLines.map((l: { label: string }) => l.label);
     expect(labels({ ...base, duty_jpy: null }).some((l: string) => l.includes('关税'))).toBe(false);
     expect(labels({ ...base, duty_jpy: 150 }).some((l: string) => l.includes('关税'))).toBe(true);
+  });
+});
+
+/** 剩余清单 4-10（A40）：缺货整单退款说明。 */
+describe('stockRefundNote（4-10）', () => {
+  it('🔴 已付款未发货（paid）→ 显示说明；其它状态 → 空串（发货后 / 未付款时说这句只会让人困惑）', () => {
+    expect(detailView({ ...ORDER, status: 'paid' }).stockRefundNote).toBe(STOCK_REFUND_NOTE);
+    for (const st of ['pending_payment', 'shipped', 'delivered', 'refunded', 'cancelled']) {
+      expect(detailView({ ...ORDER, status: st }).stockRefundNote, st).toBe('');
+    }
+    expect(STOCK_REFUND_NOTE).toContain('全额退款');
   });
 });

@@ -76,3 +76,23 @@ describe('地址编辑页：保存失败的提示（W-07）', () => {
     expect(String(page.data['saveError'])).not.toBe('');
   });
 });
+
+/** 剩余清单 4-5：州改为下拉。 */
+describe('地址编辑：州下拉（4-5）', () => {
+  it('🔴 下拉选第 i 项 → form.state = 该项的州码，并清掉州的旧错误', async () => {
+    const { US_STATE_ROWS } = await import('../../utils/us-states.js');
+    const idx = US_STATE_ROWS.findIndex((r) => r.code === 'NY');
+    page.setData({ errors: { state: '州为两位大写缩写，请从列表选择' } });
+    call('onStatePick', { detail: { value: String(idx) } });
+    expect((page.data['form'] as { state: string }).state).toBe('NY');
+    expect(page.data['errors']).toEqual({});
+    expect(Array.isArray(page.data['stateLabels'])).toBe(true);
+  });
+
+  it('下标越界 / 非数字 → 不改', () => {
+    const before = (page.data['form'] as { state: string }).state;
+    call('onStatePick', { detail: { value: '999' } });
+    call('onStatePick', { detail: { value: 'x' } });
+    expect((page.data['form'] as { state: string }).state).toBe(before);
+  });
+});

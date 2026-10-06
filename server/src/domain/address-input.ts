@@ -24,6 +24,7 @@
  *      app/admin-order-routes.ts（第二个消费方）
  */
 import { AppError } from '../errors.js';
+import { isUsStateCode } from '@waselect/shared';
 
 /**
  * 列宽（与 001 的 VARCHAR 一致）：超长属"形状错"（40001），DB 兜底是最后一道。
@@ -107,6 +108,11 @@ export function parseAddressInput(body: unknown): AddressInputValue {
   if (!ASCII_RE.test(input.city)) throw new AppError(40002, { field: 'city' });
   if (!PHONE_RE.test(input.phone)) throw new AppError(40002, { field: 'phone' });
   if (!/^[A-Z]{2}$/.test(input.state)) throw new AppError(40002, { field: 'state' });
+  // 剩余清单 4-5：美国地址的州码必须真实存在（USPS Pub 28 附录 B，shared/us-states.ts）——
+  //    只校验"两位大写"时 XX / ZZ 都能过，标签打出去才被承运商退件
+  if (input.country === 'US' && !isUsStateCode(input.state)) {
+    throw new AppError(40002, { field: 'state' });
+  }
   if (!POSTAL_RE.test(input.postal_code)) throw new AppError(40002, { field: 'postal_code' });
 
   return input;

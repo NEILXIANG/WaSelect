@@ -43,7 +43,8 @@ import { CHARGE_CURRENCY_ORDER, chargeOptions, payNotice, payPlan } from '../../
 import { ADDRESS_COUNTRY_DEFAULT } from '../../utils/address-form.js';
 import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
-import { errorMessage } from '../../utils/error-text.js';
+import { errorFields } from '../../utils/error-text.js';
+import { countdownText } from '../../utils/countdown.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { markExternalPay, recentExternalPay } from '../../utils/external-pay.js';
@@ -81,6 +82,8 @@ Page({
   data: {
     /** `chargeOptions` 的输出：每个通道带实扣币种与金额（§14.2，AJ-180）。 */
     channels: [],
+    /** 剩余清单 4-8：取到通道但一个都没有（金额 / 地区不支持）→ 显示空态而不是一片空白。 */
+    noChannel: false,
     /** §14.2 支付前提示条（逐行文案；空数组 = 不渲染）。 */
     notice: [],
     /** 订单已不可支付时的说明（空串 = 正常列通道；B35 / AJ-218）。 */
@@ -90,7 +93,9 @@ Page({
     /** 订单合计（JPY 整数）；null = 还没拿到。 */
     totalJpy: null,
     /** 引导屏文案（copylink / auto / unsupported）；title 空串 = 不渲染引导屏。 */
-    guide: { title: '', body: '', actionText: '' },
+    guide: { title: '', body: '', actionText: '', steps: [] },
+    /** 剩余清单 4-11：待付款倒计时文案（utils/countdown.js）；空串 = 不显示。 */
+    countdown: '',
     /** copylink 的短链（D-49：银行卡唯一入口）。 */
     payUrl: '',
     /** 短链是否已复制成功（决定按钮文案；失败由 `error` 显示并给兜底动作）。 */
@@ -122,6 +127,9 @@ Page({
   /** 浏览器付款后"确认中"的重查次数与定时器（W-02）。 */
   statusRetries: 0,
   statusTimer: null,
+  /** 倒计时句柄与截止时刻（剩余清单 4-11）。 */
+  countdownTimer: null,
+  expiresAt: undefined,
   /** 整页重取的序号（MP3-07：连续切前后台会并发两个 load，只接受最后一次的结果）。 */
   loadSeq: 0,
 
@@ -146,7 +154,7 @@ Page({
     // 清掉上一次的错误：不清的话旧错误会一直挂在重新取回来的内容上面
     // ⚠️ `payResult` **不在这里清**（MP3-07）：它是"上一次支付的结果"，不是"上一次取数的错误"。
     //    微信收银台取消后会触发 onShow → reload，把"支付未完成"抹掉等于什么都没说。
-    this.setData({ loading: true, error: '' });
+    this.setData({ loading: true, error: '', noChannel: false });
     // ⚠️ 领号（MP3-07）：连续两次切前后台会并发两个 load，
     //    旧的那个若后到，会把"该订单已付款"旁边的支付方式**盖回去**——
     //    首页与购物车在 B36 里已经用序号修过同一类问题，支付页没跟上。
@@ -163,9 +171,13 @@ Page({
       this.setData({ totalJpy: total, closedText: view.closedText });
       if (!view.payable) {
         // 整个 view 交出去：文案与"给不给重新下单的出口"是同一次判断的两个产物
-        this.setData(closedScreen(view));
+        this.stopCountdown();
+        this.setData({ ...closedScreen(view), countdown: '' });
         return;
       }
+      // 剩余清单 4-11：可付的单才倒计时
+      this.expiresAt = order?.expires_at;
+      this.startCountdown();
       if (total === null) {
         this.setData({ error: '订单金额还没确定，请稍后再试' });
         return;
@@ -180,10 +192,15 @@ Page({
       }
       if (isStale(seq, this.loadSeq)) return;
       const channels = chargeOptions(listings, order);
-      this.setData({ channels, notice: channels.length > 0 ? payNotice(channels, order) : [] });
+      this.setData({
+        channels,
+        notice: channels.length > 0 ? payNotice(channels, order) : [],
+        // 剩余清单 4-8：可付的单却一个通道都没有 → 空态（说明 + 重试 + 联系客服），不是空白屏
+        noChannel: channels.length === 0,
+      });
     } catch (e) {
       if (isStale(seq, this.loadSeq)) return;
-      this.setData({ error: errorMessage(e) });
+      this.setData({ ...errorFields(e) });
     } finally {
       // 过期请求不能把 loading 清掉（新的还在途中）
       if (!isStale(seq, this.loadSeq)) this.setData({ loading: false });
@@ -257,11 +274,34 @@ Page({
     if (this.statusTimer !== null) clearTimeout(this.statusTimer);
     this.statusTimer = null;
     this.statusRetries = 0;
+    this.stopCountdown();
   },
 
   onUnload() {
     if (this.statusTimer !== null) clearTimeout(this.statusTimer);
     this.statusTimer = null;
+    this.stopCountdown();
+  },
+
+  /**
+   * 倒计时（剩余清单 4-11）：每秒按本机时钟重算一次文案；到点停表（文案由 countdown.js 给）。
+   * @why 用链式 setTimeout 而不是 setInterval：小程序端全局白名单（eslint）只登记了 setTimeout / clearTimeout，
+   *      setInterval 在小程序运行时的可用性这次没找到官方页可核（文档链接 404），不凭记忆引入新全局。
+   */
+  startCountdown() {
+    this.stopCountdown();
+    const tick = () => {
+      const c = countdownText(this.expiresAt, Date.now());
+      this.setData({ countdown: c.text });
+      this.countdownTimer = c.expired ? null : setTimeout(tick, 1000);
+    };
+    tick();
+  },
+
+  stopCountdown() {
+    if (this.countdownTimer !== null && this.countdownTimer !== undefined)
+      clearTimeout(this.countdownTimer);
+    this.countdownTimer = null;
   },
 
   /** 选一个通道 → 发起支付。判断全在 `index.vm.js`（约束十一：薄壳只做编排）。 */
@@ -295,7 +335,7 @@ Page({
       });
       this.run(intent);
     } catch (err) {
-      this.setData({ error: errorMessage(err) });
+      this.setData({ ...errorFields(err) });
     } finally {
       this.setData({ paying: false });
     }
@@ -369,12 +409,17 @@ Page({
    *      链接文本本身也在页面上（`user-select`，见 index.wxml）。
    * @limitation 失败文案由 `copyResult` 产出（约束十一：文案不在薄壳里写死）。
    */
+  /** 错误态 / 无通道空态的"重试"（剩余清单 4-8）：重新取订单与通道。 */
+  onRetry() {
+    void this.load();
+  },
+
   onCopy() {
     if (this.data.payUrl === '') return;
     wxApi.setClipboardData({
       data: this.data.payUrl,
       success: () => this.setData(copyResult(true)),
-      fail: () => this.setData(copyResult(false)),
+      fail: () => this.setData(copyResult(false, app.globalData.privacy)),
     });
   },
 

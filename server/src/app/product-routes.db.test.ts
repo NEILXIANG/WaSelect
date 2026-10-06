@@ -33,7 +33,10 @@ afterAll(async () => {
  *      @why "没配"是本文件其余用例依赖的默认值，只有 AJ-361 那两条需要显式配一个，
  *           所以做成可选参数而不是给所有用例都配上——配了之后"整键省略"那一支就再也走不到了。
  */
-async function buildServer(imgBaseUrl?: string): Promise<{
+async function buildServer(
+  imgBaseUrl?: string,
+  extraEnv: Record<string, string> = {},
+): Promise<{
   url: string;
   sink: MemorySink;
   close: () => Promise<void>;
@@ -49,6 +52,7 @@ async function buildServer(imgBaseUrl?: string): Promise<{
     PAYMENT_CHANNELS: 'mock',
     TERMS_VERSION: 'TOS-TEST-1',
     ...(imgBaseUrl === undefined ? {} : { IMG_BASE_URL: imgBaseUrl }),
+    ...extraEnv,
   });
   const app = createHttpApp({
     logger,
@@ -348,6 +352,68 @@ describe('GET /terms 与 GET /fx（公开配置端点）', () => {
       expect((r.json as { version: string }).version).toBe('TOS-TEST-1');
     } finally {
       await srv.close();
+    }
+  });
+
+  /**
+   * 剩余清单 4-1：法务页绝对地址 + 商家信息（特商法表示）。
+   * @why 原先回 `/legal/terms.zh.html` 这类相对路径，小程序复制到浏览器打不开（W-06 已在前端兜住"不显示"，这里补"有得显示"）。
+   */
+  it('🔴 /terms：配了 LEGAL_BASE_URL → 四类文档 × 三语言的绝对地址；seller 只带已配置的字段', async () => {
+    const srv = await buildServer(undefined, {
+      LEGAL_BASE_URL: 'https://pay.example.com/',
+      SELLER_NAME: '株式会社ワセレクト',
+      SELLER_EMAIL: 'support@example.com',
+    });
+    try {
+      const r = (await get(srv.url, '/api/v1/terms')).json as {
+        urls: Record<string, string>;
+        documents: Record<string, Record<string, string>>;
+        seller: Record<string, string>;
+      };
+      expect(r.urls).toEqual({
+        zh: 'https://pay.example.com/legal/terms/#zh',
+        ja: 'https://pay.example.com/legal/terms/#ja',
+        en: 'https://pay.example.com/legal/terms/#en',
+      });
+      expect(Object.keys(r.documents).sort()).toEqual(['privacy', 'refund', 'terms', 'tokushoho']);
+      expect(r.documents['tokushoho']?.['ja']).toBe('https://pay.example.com/legal/tokushoho/#ja');
+      expect(r.seller).toEqual({ name: '株式会社ワセレクト', email: 'support@example.com' });
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('/terms：没配 LEGAL_BASE_URL 也没配 CHECKOUT_BASE_URL → 不给 urls / documents（不给坏链接）；seller 为空对象', async () => {
+    const srv = await buildServer();
+    try {
+      const r = (await get(srv.url, '/api/v1/terms')).json as Record<string, unknown>;
+      expect(r).not.toHaveProperty('urls');
+      expect(r).not.toHaveProperty('documents');
+      expect(r['seller']).toEqual({});
+    } finally {
+      await srv.close();
+    }
+  });
+
+  /** 剩余清单 4-2：客服联系方式（配置下发；没配的不给——假的联系方式比没有更贵）。 */
+  it('🔴 /support：只回已配置的客服字段；全没配 → 空对象', async () => {
+    const srv = await buildServer(undefined, {
+      SUPPORT_EMAIL: 'support@example.com',
+      SUPPORT_HOURS: '工作日 10:00–18:00（JST）',
+    });
+    try {
+      const r = await get(srv.url, '/api/v1/support');
+      expect(r.status).toBe(200);
+      expect(r.json).toEqual({ email: 'support@example.com', hours: '工作日 10:00–18:00（JST）' });
+    } finally {
+      await srv.close();
+    }
+    const bare = await buildServer();
+    try {
+      expect((await get(bare.url, '/api/v1/support')).json).toEqual({});
+    } finally {
+      await bare.close();
     }
   });
 

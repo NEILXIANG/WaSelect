@@ -54,12 +54,17 @@
       </view>
     </view>
 
-    <!-- ⚠️ 刻意没有"立即购买"：它等于"加购 + 直奔结算"，而结算页未落地
-         （@see index.js 文件头 @why）。加入购物车已闭环（购物车页存在）。 -->
+    <!-- 剩余清单 4-4："立即购买"只结这一件、不动购物车（结算页 ?mode=buynow）；"加入购物车"为次按钮 -->
     <view class="ws-gutter ws-section buy-bar">
       <ws-button
-        text="加入购物车"
+        text="立即购买"
         type="primary"
+        disabled="{{product.soldOut}}"
+        bindtap="onBuyNow"
+      />
+      <ws-button
+        text="加入购物车"
+        type="default"
         disabled="{{product.soldOut}}"
         bindtap="onAddToCart"
       />

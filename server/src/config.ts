@@ -536,6 +536,21 @@ const schema = z.object({
   ),
   // ⚠️ 用带"去尾斜杠"的版本：本字段会被三处拼路径（见 optionalUrlNoTrailingSlash 的 @why）
   CHECKOUT_BASE_URL: optionalUrlNoTrailingSlash(),
+  /**
+   * 法务静态页的站点基址（剩余清单 4-1）；不配则用 CHECKOUT_BASE_URL（法务页与支付落地页同一个静态站）。
+   * 两者都没有 → `/terms` 不给地址（不给相对路径，W-06）。
+   */
+  LEGAL_BASE_URL: optionalUrlNoTrailingSlash(),
+  /** 特商法表示的商家信息（剩余清单 4-1）。公司登记前不填：未填的字段不下发（不编占位值）。 */
+  SELLER_NAME: optionalText(),
+  SELLER_REPRESENTATIVE: optionalText(),
+  SELLER_ADDRESS: optionalText(),
+  SELLER_PHONE: optionalText(),
+  SELLER_EMAIL: optionalText(),
+  /** 客服联系方式（剩余清单 4-2，GET /support 下发）：未配置的不下发，小程序不显示该行。 */
+  SUPPORT_EMAIL: optionalText(),
+  SUPPORT_WECHAT: optionalText(),
+  SUPPORT_HOURS: optionalText(),
   STRIPE_SECRET_KEY: optionalText(),
   STRIPE_WEBHOOK_SECRET: optionalText(),
   /**
@@ -874,6 +889,7 @@ const crossField = schema.superRefine((c, ctx) => {
       ['CHECKOUT_BASE_URL', c.CHECKOUT_BASE_URL],
       ['IMG_BASE_URL', c.IMG_BASE_URL],
       ['PUBLIC_API_BASE', c.PUBLIC_API_BASE],
+      ['LEGAL_BASE_URL', c.LEGAL_BASE_URL],
     ] as const) {
       if (value !== undefined && !value.startsWith('https://')) {
         add(key, `生产环境 ${key} 必须是 https（http 会被浏览器/渠道当不安全来源拦截）`);

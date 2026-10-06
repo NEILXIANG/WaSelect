@@ -14,6 +14,7 @@
   <view class="ws-gutter" wx:if="{{error}}">
     <view class="ws-card state">
       <text class="ws-note state__error">{{error}}</text>
+      <text class="ws-caption" wx:if="{{errorRef}}" user-select>{{errorRef}}</text>
     </view>
   </view>
 
@@ -30,6 +31,7 @@
   <view class="ws-gutter ws-section" wx:else>
     <view class="ws-card state">
       <text class="ws-note">购物车是空的</text>
+      <ws-button text="去逛逛" type="default" bindtap="onGoShopping" />
     </view>
   </view>
 
@@ -113,6 +115,11 @@
       -->
       <view class="act" hover-class="ws-press" bindtap="onOpenTerms">查看条款全文</view>
     </view>
+  </view>
+
+  <!-- 剩余清单 4-10：付款前说清"采购不到会整单全额退款" -->
+  <view class="ws-gutter ws-section">
+    <text class="ws-note">{{stockRefundNote}}</text>
   </view>
 
   <view class="ws-gutter ws-section cta">

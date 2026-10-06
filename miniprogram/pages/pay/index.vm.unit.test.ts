@@ -71,6 +71,14 @@ describe('payStartDecision（点一下该做什么）', () => {
   });
 });
 
+describe('copyResult × 隐私授权（剩余清单 4-3）', () => {
+  it('🔴 启动时拒绝过隐私授权 → 失败文案说清原因（不是只说"复制失败"）', () => {
+    expect(copyResult(false, 'denied').error).toContain('隐私保护指引');
+    expect(copyResult(false, 'agreed').error).toBe('复制失败，请长按下方链接手动复制');
+    expect(copyResult(true, 'denied')).toEqual({ copied: true, error: '' });
+  });
+});
+
 describe('copyResult（复制短链之后页面该显示什么，B34 / AJ-217）', () => {
   it('成功：按钮改"已复制"，且不带错误（成功时不该留下上一次的失败提示）', () => {
     expect(copyResult(true)).toEqual({ copied: true, error: '' });
@@ -126,7 +134,8 @@ describe('防复发：薄壳的剪贴板调用必须带 success 与 fail（B34 /
     if (!call.includes('success:') || !call.includes('fail:')) return false;
     // 光"带了回调"还不够：fail 里若写 copyResult(true)，页面会在复制失败时显示"已复制"——
     // 那正是 B34 要防的形态（看起来成功、实际没写进剪贴板），所以连参数一起钉。
-    return call.includes('copyResult(true)') && call.includes('copyResult(false)');
+    // 第二个参数（隐私授权结果，剩余清单 4-3）可有可无：只钉"失败分支第一个参数是 false"
+    return call.includes('copyResult(true)') && /copyResult\(false[,)]/.test(call);
   };
 
   it('自检一：剥注释真的能剥掉（否则这条断言扫的是注释不是代码）', () => {
@@ -315,7 +324,7 @@ describe('closedScreen：订单已不需要支付时要清掉的全部内容（A
       channels: [],
       notice: [],
       payUrl: '',
-      guide: { title: '', body: '', actionText: '' },
+      guide: { title: '', body: '', actionText: '', steps: [] },
       copied: false,
     });
   });

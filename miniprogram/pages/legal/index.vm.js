@@ -95,3 +95,60 @@ export function legalState(s) {
     showEmpty: !loading && !failed && count === 0,
   };
 }
+
+/**
+ * 四类法务文档（剩余清单 4-1）：固定顺序 + 中文名。键与服务端 `server/src/domain/legal.ts` 的 LEGAL_DOCS 同名。
+ * @why 顺序写死在这里而不是跟随服务端对象的键序：JSON 对象键序不是契约的一部分，按它排会让页面顺序随服务端实现漂移。
+ */
+export const DOC_ROWS = [
+  { key: 'terms', title: '用户协议' },
+  { key: 'privacy', title: '隐私政策' },
+  { key: 'refund', title: '退货与退款政策' },
+  { key: 'tokushoho', title: '特定商取引法表示' },
+];
+
+/**
+ * `GET /terms` 的 `documents` → 每类文档的可复制链接。
+ * @why 与 termsView 同一条过滤口径（只留 https 绝对地址，W-06）；整类没有可用链接的文档不出现，
+ *      而不是显示一张"没有链接的卡"。不认识的文档类不出现（服务端加一类而这里没跟上 → 只是不显示，不会显示乱码标题）。
+ * @why 语种行的 key 带文档前缀（`terms:zh`）：页面的"已复制"按 key 标记，四类文档共用 zh 时不能串。
+ * @returns {Array<{key: string, title: string, langs: Array<{key: string, label: string, url: string}>}>}
+ */
+export function documentsView(res) {
+  const o = res !== null && typeof res === 'object' && !Array.isArray(res) ? res : {};
+  const docs =
+    o.documents !== null && typeof o.documents === 'object' && !Array.isArray(o.documents)
+      ? o.documents
+      : {};
+  return DOC_ROWS.map((d) => {
+    const urls = docs[d.key] !== null && typeof docs[d.key] === 'object' ? docs[d.key] : {};
+    const langs = LANG_ROWS.map((r) => ({
+      key: `${d.key}:${r.key}`,
+      label: r.label,
+      url: typeof urls[r.key] === 'string' ? urls[r.key].trim() : '',
+    })).filter((r) => /^https:\/\//.test(r.url));
+    return { key: d.key, title: d.title, langs };
+  }).filter((d) => d.langs.length > 0);
+}
+
+/** 特商法字段的展示顺序与标签（与静态页 tokushoho 同口径）。 */
+const SELLER_ROWS = [
+  { key: 'name', label: '販売業者' },
+  { key: 'representative', label: '负责人' },
+  { key: 'address', label: '所在地' },
+  { key: 'phone', label: '电话' },
+  { key: 'email', label: '联系邮箱' },
+];
+
+/**
+ * `GET /terms` 的 `seller` → 展示行。只列服务端给了的字段（公司登记前为空，不编占位值）。
+ * @returns {Array<{label: string, value: string}>}
+ */
+export function sellerRows(res) {
+  const o = res !== null && typeof res === 'object' && !Array.isArray(res) ? res : {};
+  const s =
+    o.seller !== null && typeof o.seller === 'object' && !Array.isArray(o.seller) ? o.seller : {};
+  return SELLER_ROWS.filter((r) => typeof s[r.key] === 'string' && s[r.key].trim() !== '').map(
+    (r) => ({ label: r.label, value: s[r.key].trim() }),
+  );
+}

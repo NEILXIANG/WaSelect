@@ -20,6 +20,8 @@
 
   <!-- 第二段：为什么 -->
   <text wx:if="{{reason}}" class="ws-state__reason">{{reason}}</text>
+  <!-- 报障小字（剩余清单 4-6）：可长按选中复制，用户截图 / 复制给客服 -->
+  <text wx:if="{{refText}}" class="ws-state__ref" user-select>{{refText}}</text>
 
   <!-- 第三段：下一步怎么办（至多两个动作，主次分明） -->
   <view wx:if="{{actionText}}" class="ws-state__actions">

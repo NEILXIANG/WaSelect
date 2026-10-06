@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
-import { detailView } from './index.vm.js';
+import { buyNowItem, detailView, shareCard } from './index.vm.js';
 
 /** 像真的商品（契约 Product 全形状：报关字段在，但视图不该透出它们）。 */
 const PRODUCT = {
@@ -141,5 +141,35 @@ describe('detailView（关税与发货时限说明）', () => {
         '价格含美国关税，国际运费按重量在结算时计算',
       ]);
     }
+  });
+});
+
+/** 剩余清单 4-4：立即购买的单件条目、分享卡片。 */
+describe('buyNowItem / shareCard（4-4）', () => {
+  const view = detailView({ title: '出刃包丁 165mm', price_jpy: 12800, stock: 3, images: [] });
+
+  it('🔴 buyNowItem：数量 1，快照与加购同形（title / image / priceJpy）；售罄或缺 id → null', () => {
+    expect(buyNowItem(view, 'p-knife')).toEqual({
+      productId: 'p-knife',
+      qty: 1,
+      title: '出刃包丁 165mm',
+      image: PLACEHOLDER_IMAGE,
+      priceJpy: 12800,
+    });
+    expect(buyNowItem({ ...view, soldOut: true }, 'p-knife')).toBeNull();
+    expect(buyNowItem(view, '')).toBeNull();
+    expect(buyNowItem(null, 'p-knife')).toBeNull();
+  });
+
+  it('🔴 shareCard：标题 = 商品名，路径带 id（id 做 URL 编码）；商品没拿到 → 只分享到详情页路径 + 品牌名', () => {
+    expect(shareCard(view, 'p-knife')).toEqual({
+      title: '出刃包丁 165mm',
+      path: '/pages/detail/index?id=p-knife',
+      imageUrl: PLACEHOLDER_IMAGE,
+    });
+    expect(shareCard(null, 'a&b')).toEqual({
+      title: 'WaSelect',
+      path: '/pages/detail/index?id=a%26b',
+    });
   });
 });

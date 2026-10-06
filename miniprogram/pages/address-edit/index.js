@@ -27,9 +27,10 @@ import {
   formModel,
   toAddressInput,
 } from '../../utils/address-form.js';
-import { errorMessage } from '../../utils/error-text.js';
+import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+import { STATE_LABELS, US_STATE_ROWS } from '../../utils/us-states.js';
 
 const app = getApp();
 
@@ -55,6 +56,8 @@ Page({
      * 不是"返回列表重开这一页"（照做会丢掉刚填的整张表单）。
      */
     saveError: '',
+    /** 州下拉的选项（剩余清单 4-5：`CA · California`；只给 USPS 真实存在的州码）。 */
+    stateLabels: STATE_LABELS,
   },
 
   /** 编辑的地址 id（空串 = 新增）。 */
@@ -87,7 +90,7 @@ Page({
       }
       this.setData({ form: formModel(found) });
     } catch (e) {
-      this.setData({ error: errorMessage(e) });
+      this.setData({ ...errorFields(e) });
     } finally {
       this.setData({ loading: false });
     }
@@ -116,6 +119,23 @@ Page({
     const errors = { ...this.data.errors };
     delete errors[field];
     this.setData({ [`form.${field}`]: value, errors, first: Object.values(errors)[0] ?? '' });
+  },
+
+  /**
+   * 州下拉选中（剩余清单 4-5）。
+   * @why 整体写 `form` 而不是 `form.state` 路径：与其余字段的 onInput 等价，且不依赖数据路径写法。
+   */
+  onStatePick(e) {
+    const idx = Number(e?.detail?.value);
+    const row = Number.isInteger(idx) ? US_STATE_ROWS[idx] : undefined;
+    if (row === undefined) return;
+    const errors = { ...this.data.errors };
+    delete errors.state;
+    this.setData({
+      form: { ...this.data.form, state: row.code },
+      errors,
+      first: Object.values(errors)[0] ?? '',
+    });
   },
 
   onToggleDefault() {
@@ -156,7 +176,7 @@ Page({
     } catch (e) {
       // ⚠️ 服务端的拒单（格式/字段）也要显示出来：前端预检不是权威，
       //    只信预检的表现是"前端说对、提交失败"却没有任何提示。
-      this.setData({ saveError: errorMessage(e) });
+      this.setData({ ...errorFields(e, 'saveError') });
       return;
     } finally {
       this.setData({ saving: false });

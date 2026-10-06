@@ -14,6 +14,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  checkoutItems,
+  clearsCartAfterOrder,
   contactEmailOf,
   itemRows,
   keyAction,
@@ -326,5 +328,27 @@ describe('防复发：结算页薄壳执行恢复动作（B37 / AJ-220）', () =
     expect(i, '自检：requote 分支存在').toBeGreaterThan(-1);
     const branch = code.slice(i, code.indexOf('} else if', i));
     expect(branch, 'requote 分支里必须 retire').toContain('retire()');
+  });
+});
+
+/** 剩余清单 4-4：立即购买走结算页时，条目来源与"建单后清不清购物车"。 */
+describe('checkoutItems / clearsCartAfterOrder（4-4）', () => {
+  const BUY = { productId: 'p-knife', qty: 1, title: '出刃包丁' };
+
+  it('🔴 buynow 模式 → 只结这一件（不碰购物车）；普通模式 → 购物车', () => {
+    expect(checkoutItems({ mode: 'buynow', buyNow: BUY, cartItems: ITEMS })).toEqual([BUY]);
+    expect(checkoutItems({ mode: '', buyNow: BUY, cartItems: ITEMS })).toEqual(ITEMS);
+  });
+
+  it('buynow 模式但单件丢了（进程被回收 / 脏值）→ 空数组（结算页显示空态），不回落到购物车', () => {
+    expect(checkoutItems({ mode: 'buynow', buyNow: null, cartItems: ITEMS })).toEqual([]);
+    expect(checkoutItems({ mode: 'buynow', buyNow: { productId: '' }, cartItems: ITEMS })).toEqual(
+      [],
+    );
+  });
+
+  it('🔴 建单成功后：普通模式清车；buynow 模式**不**清车（购物车里的东西用户没打算现在买）', () => {
+    expect(clearsCartAfterOrder('')).toBe(true);
+    expect(clearsCartAfterOrder('buynow')).toBe(false);
   });
 });

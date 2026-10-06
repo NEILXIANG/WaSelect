@@ -130,6 +130,7 @@
     kind="fail"
     title="没能取到商品"
     reason="{{error}}"
+    refText="{{errorRef}}"
     actionText="重试"
     bindaction="onRetry"
   />

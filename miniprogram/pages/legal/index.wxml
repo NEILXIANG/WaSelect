@@ -22,6 +22,7 @@
     kind="fail"
     title="没能取到条款"
     reason="{{error}}"
+    refText="{{errorRef}}"
     actionText="重试"
     bindaction="onRetry"
   />
@@ -48,7 +49,39 @@
     </view>
   </view>
 
-  <view class="ws-gutter" wx:if="{{state.showList}}">
+  <!-- 剩余清单 4-1：四类法务文档各一张卡（服务端给了 documents 时）；没给时退回下面只有用户协议的那张 -->
+  <view class="ws-gutter" wx:for="{{docs}}" wx:for-item="doc" wx:key="key">
+    <view class="ws-card legal__card">
+      <text class="doc-label">{{doc.title}}</text>
+      <text class="ws-note">复制链接后在浏览器中打开查看全文</text>
+      <view class="doc" wx:for="{{doc.langs}}" wx:key="key">
+        <view class="doc-head">
+          <text class="doc-label">{{item.label}}</text>
+          <view
+            class="doc-act"
+            data-url="{{item.url}}"
+            data-key="{{item.key}}"
+            hover-class="ws-press"
+            bindtap="onCopy"
+          >{{copied === item.key ? '已复制' : '复制链接'}}</view>
+        </view>
+        <text class="doc-url" user-select>{{item.url}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 剩余清单 4-1：特商法商家信息（公司登记前服务端不给，整卡不显示） -->
+  <view class="ws-gutter" wx:if="{{seller.length > 0}}">
+    <view class="ws-card legal__card">
+      <text class="doc-label">商家信息（特定商取引法）</text>
+      <view class="legal__row" wx:for="{{seller}}" wx:key="label">
+        <text class="ws-note">{{item.label}}</text>
+        <text class="ws-body" user-select>{{item.value}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="ws-gutter" wx:if="{{state.showList && docs.length === 0}}">
     <view class="ws-card legal__card">
       <text class="ws-note">复制链接后在浏览器中打开查看全文</text>
 
@@ -73,6 +106,6 @@
         <text class="doc-url" user-select>{{item.url}}</text>
       </view>
     </view>
-    <text class="ws-note" wx:if="{{copyError}}">{{copyError}}</text>
   </view>
+  <text class="ws-gutter ws-note" wx:if="{{copyError}}">{{copyError}}</text>
 </view>

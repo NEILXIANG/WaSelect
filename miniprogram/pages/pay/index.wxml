@@ -17,8 +17,21 @@
   <view class="ws-gutter" wx:if="{{error}}">
     <view class="ws-card state">
       <text class="ws-note state__error">{{error}}</text>
+      <text class="ws-caption" wx:if="{{errorRef}}" user-select>{{errorRef}}</text>
+      <!-- 剩余清单 4-8：错误态给出下一步（原先只有一行红字） -->
+      <ws-button text="重试" type="default" bindtap="onRetry" />
     </view>
   </view>
+
+  <!-- 剩余清单 4-8：可付的单却没有任何可用支付方式（金额 / 地区不支持） -->
+  <ws-state-block
+    wx:if="{{noChannel}}"
+    kind="empty"
+    title="暂时没有可用的支付方式"
+    reason="这笔订单的金额或收货地区暂不支持在线支付。可以稍后重试，或在「我的」里联系客服"
+    actionText="重试"
+    bindaction="onRetry"
+  />
 
   <!--
     MP3-07：`payResult` 是"上一次支付动作"的结论，不随整页重取清空。
@@ -45,6 +58,11 @@
     @why 单已经付过了（或根本没付成），"应付"两个字是错的——用户会读成"我还要再付这么多"。
          金额本身留着：它是用户核对"付了多少钱"的凭据，收掉反而更糟。
   -->
+  <!-- 剩余清单 4-11（A24）：待付款倒计时 -->
+  <view class="ws-gutter" wx:if="{{countdown}}">
+    <text class="ws-note">{{countdown}}</text>
+  </view>
+
   <view class="ws-gutter ws-section" wx:if="{{totalJpy !== null}}">
     <view class="ws-card">
       <text class="ws-section-kicker">{{closedText ? 'Order Total' : 'Amount Due'}}</text>
@@ -110,6 +128,12 @@
     <view class="ws-card">
       <text class="ws-title">{{guide.title}}</text>
       <text class="ws-body line">{{guide.body}}</text>
+      <!-- 剩余清单 4-11（A37）：银行卡三步图示 -->
+      <view class="steps" wx:if="{{guide.steps.length > 0}}">
+        <view class="step-row" wx:for="{{guide.steps}}" wx:key="*this">
+          <text class="ws-note">{{index + 1}}. {{item}}</text>
+        </view>
+      </view>
       <!--
         B34 / AJ-217：链接**本身**要可见可选。`setClipboardData` 是隐私接口，会失败
         （用户拒绝弹窗 / 隐私指引漏声明剪切板），失败时用户唯一的出路就是长按这里手动复制。

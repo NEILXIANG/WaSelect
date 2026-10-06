@@ -166,6 +166,32 @@ describe('POST /orders/quote（接线）', () => {
     }
   });
 
+  /**
+   * 剩余清单 4-7（M10）：失效商品要能被定位——响应 `data.product_id` 指出是哪一件。
+   * @why 购物车里五件商品、报价回"商品不存在或已下架"，用户只能逐件删掉试；带上 id 前端就能标红那一行。
+   * @why 只带 product_id（买家自己购物车里的 id，不是新信息）；库存数量等内部细节仍只进日志。
+   */
+  it('🔴 40401 / 40901 的响应带 data.product_id（指出是哪一件），不带库存数等内部细节', async () => {
+    const srv = await buildServer();
+    try {
+      const ghost = await postQuote(
+        srv.url,
+        {
+          items: [
+            { product_id: 'p-knife', qty: 1 },
+            { product_id: 'ghost', qty: 1 },
+          ],
+        },
+        token,
+      );
+      expect(ghost.json).toMatchObject({ code: 40401, data: { product_id: 'ghost' } });
+      const stock = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 6 }] }, token);
+      expect(stock.json['data']).toEqual({ product_id: 'p-knife' });
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('商品不存在 / 已下架 → 40401；库存不足 → 40901；形状坏 → 40001', async () => {
     const srv = await buildServer();
     try {

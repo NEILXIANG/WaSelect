@@ -263,3 +263,12 @@ describe('ADDRESS_MAX_CHARS 与服务端同源（TST3-02）', () => {
     expect(formErrors({ ...ADDR, line2: 'A'.repeat(201) }).errors.line2).toBe('最多 200 个字符');
   });
 });
+
+describe('州码白名单（剩余清单 4-5）', () => {
+  it('🔴 两位大写但不是真实州码（XX）→ 报错，提示从列表选；真实州码（含 DC / PR / AE）→ 不报', () => {
+    expect(formErrors({ ...formModel(ADDR), state: 'XX' }).errors.state).toContain('列表');
+    for (const st of ['DC', 'PR', 'AE']) {
+      expect(formErrors({ ...formModel(ADDR), state: st }).errors.state).toBeUndefined();
+    }
+  });
+});

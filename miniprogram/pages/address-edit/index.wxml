@@ -26,6 +26,7 @@
     kind="fail"
     title="没能取到这条地址"
     reason="{{error}}"
+    refText="{{errorRef}}"
     altText="返回列表重开这一页"
     bindalt="onBack"
   />
@@ -95,15 +96,11 @@
         <text class="field__error" wx:if="{{errors.city}}">{{errors.city}}</text>
       </ws-field>
 
-      <ws-field label="州（两位大写）">
-        <input
-          class="input"
-          value="{{form.state}}"
-          data-field="state"
-          bindinput="onInput"
-          placeholder="CA"
-          placeholder-class="ph"
-        />
+      <!-- 剩余清单 4-5：州改为下拉（只给 USPS 真实州码），不再手输 -->
+      <ws-field label="州">
+        <picker mode="selector" range="{{stateLabels}}" bindchange="onStatePick">
+          <view class="input {{form.state ? '' : 'ph'}}">{{form.state || '请选择州'}}</view>
+        </picker>
         <text class="field__error" wx:if="{{errors.state}}">{{errors.state}}</text>
       </ws-field>
 
@@ -131,6 +128,7 @@
   <view class="ws-gutter aedit__foot">
     <!-- 保存失败（W-07）：留在表单页、表单不清，用户改一改再点保存 -->
     <text class="field__error" wx:if="{{saveError}}">保存没有成功：{{saveError}}</text>
+    <text class="ws-caption" wx:if="{{saveErrorRef}}" user-select>{{saveErrorRef}}</text>
     <ws-button
       text="{{saving ? '保存中…' : '保存'}}"
       type="primary"

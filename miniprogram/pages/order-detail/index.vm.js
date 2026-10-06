@@ -117,6 +117,14 @@ function confirmingJustPaid(payable, justPaid) {
 }
 
 /**
+ * 缺货整单退款说明（剩余清单 4-10 / A40）。
+ * @why 本店是"付款后去日本采购"：偶尔会买不到。用户付了款、几天后收到全额退款，没有任何说明的话读起来像"被取消了"。
+ *      与服务端口径一致：缺货 → 管理端全额退款，原路原币原额退回（refund 政策页同一句话）。
+ */
+export const STOCK_REFUND_NOTE =
+  '我们会在日本为你采购这些商品。如果采购不到，会整单全额退款，原路退回到你的付款方式（约 5–10 个工作日到账）。';
+
+/**
  * `GET /orders/{id}` → 详情页视图。
  * @param {unknown} order 契约 `Order`；也可能是任何东西
  * @param {unknown} [opts] `{ justPaid?: boolean }`——刚从支付页过来（MP3-04，见上）。
@@ -174,5 +182,7 @@ export function detailView(order, opts = undefined) {
         ? o.tracking_url
         : '',
     timeline: timelineRows(o.timeline),
+    /** 只在"已付款、还没发货"时说（剩余清单 4-10）：那是唯一可能因缺货而退款的阶段。 */
+    stockRefundNote: status === 'paid' ? STOCK_REFUND_NOTE : '',
   };
 }

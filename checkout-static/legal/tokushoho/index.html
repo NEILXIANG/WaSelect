@@ -1,0 +1,79 @@
+<!--
+  特商法表示（商家信息构建期从 SELLER_* 填入；公司登记前显示"公司登记后公布"）
+  ⚠️ 草案：正文待律师定稿（上线推进计划 S1-4 / S2-4）。定稿后只替换三个 <section> 的正文，结构与锚点不动——
+     服务端 /terms 下发的是 <base>/legal/tokushoho/#zh|ja|en（server/src/domain/legal.ts）。__BRAND_NAME__ 等由构建期替换。
+-->
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>特定商取引法に基づく表記 – __BRAND_NAME__</title>
+    <link rel="stylesheet" href="/assets/tokens.css" />
+    <link rel="stylesheet" href="/assets/page.css" />
+  </head>
+  <body>
+    <main class="card legal">
+      <p class="draft">草案 · 待律师定稿 ／ 下書き・弁護士確認中 ／ Draft — pending legal review</p>
+      <nav class="footer">
+        <a href="#zh">中文</a> · <a href="#ja">日本語</a> · <a href="#en">English</a>
+      </nav>
+      <section id="zh">
+        <h1>特定商取引法表示</h1>
+        <dl class="seller">
+          <dt>販売業者（卖家）</dt>
+          <dd>__SELLER_NAME__</dd>
+          <dt>负责人</dt>
+          <dd>__SELLER_REPRESENTATIVE__</dd>
+          <dt>所在地</dt>
+          <dd>__SELLER_ADDRESS__</dd>
+          <dt>电话</dt>
+          <dd>__SELLER_PHONE__</dd>
+          <dt>邮箱</dt>
+          <dd>__SELLER_EMAIL__</dd>
+        </dl>
+        <p>
+          价格：商品页所示（含日本国内采购费用）；运费与预估关税在结算页单列。支付：银行卡（Stripe）。发货：采购到货后寄出。退货：见退货与退款政策。
+        </p>
+      </section>
+      <section id="ja">
+        <h1>特定商取引法に基づく表記</h1>
+        <dl class="seller">
+          <dt>販売業者</dt>
+          <dd>__SELLER_NAME__</dd>
+          <dt>運営統括責任者</dt>
+          <dd>__SELLER_REPRESENTATIVE__</dd>
+          <dt>所在地</dt>
+          <dd>__SELLER_ADDRESS__</dd>
+          <dt>電話番号</dt>
+          <dd>__SELLER_PHONE__</dd>
+          <dt>メールアドレス</dt>
+          <dd>__SELLER_EMAIL__</dd>
+        </dl>
+        <p>
+          販売価格：各商品ページに表示。送料・関税見込額：決済画面に別途表示。支払方法：クレジットカード（Stripe）。引渡時期：仕入れ後に発送。返品：返品・返金ポリシーをご覧ください。
+        </p>
+      </section>
+      <section id="en">
+        <h1>Specified Commercial Transactions Act Disclosure</h1>
+        <dl class="seller">
+          <dt>Seller</dt>
+          <dd>__SELLER_NAME__</dd>
+          <dt>Responsible person</dt>
+          <dd>__SELLER_REPRESENTATIVE__</dd>
+          <dt>Address</dt>
+          <dd>__SELLER_ADDRESS__</dd>
+          <dt>Phone</dt>
+          <dd>__SELLER_PHONE__</dd>
+          <dt>Email</dt>
+          <dd>__SELLER_EMAIL__</dd>
+        </dl>
+        <p>
+          Price: shown on each product page; shipping and estimated duties are listed separately at
+          checkout. Payment: card (Stripe). Delivery: shipped after the items are sourced in Japan.
+          Returns: see our Returns &amp; Refunds policy.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

@@ -54,10 +54,19 @@ export const NETWORK_ERROR_CODE = -1;
 export const RELOGIN_CODE = 40101;
 
 export class ApiError extends Error {
-  constructor(code, message) {
+  /**
+   * @param {number} code
+   * @param {string} message
+   * @param {string} [traceId] 本次请求的链路号（剩余清单 4-6：报障小字展示前 8 位，客服凭它查日志）
+   * @param {unknown} [data] 响应体的 data（契约 Err.data，只含服务端显式标注可对外的字段）
+   */
+  constructor(code, message, traceId = '', data = undefined) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
+    this.traceId = traceId;
+    /** 响应体的 `data`（剩余清单 4-7：40401 / 40901 带 product_id）；没有则 undefined。 */
+    this.data = data;
   }
 }
 
@@ -157,7 +166,7 @@ export function createRequester(deps = {}) {
             http_status: status,
             code: errCode,
           });
-          reject(new ApiError(errCode, message));
+          reject(new ApiError(errCode, message, traceId, body?.data));
         },
         fail: (err) => {
           log({
@@ -166,7 +175,7 @@ export function createRequester(deps = {}) {
             url: opts.url,
             err_msg: err?.errMsg,
           });
-          reject(new ApiError(NETWORK_ERROR_CODE, err?.errMsg ?? '网络请求失败'));
+          reject(new ApiError(NETWORK_ERROR_CODE, err?.errMsg ?? '网络请求失败', traceId));
         },
       });
     });

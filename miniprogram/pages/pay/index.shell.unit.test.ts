@@ -24,6 +24,8 @@ let page: LoadedPage;
 let requests: Req[];
 /** 订单当前状态（用例里改它来模拟"去浏览器付完了"）。 */
 let orderStatus: string;
+/** 剩余清单 4-8：true = 所有币种都没有可用通道。 */
+let noChannels = false;
 /** 发起支付时下发的短链序号（每次发起都换一条，与服务端轮换 token 同形）。 */
 let linkSeq: number;
 let failOrderFetch: boolean;
@@ -64,6 +66,7 @@ const channelFetches = (): number => requests.filter((r) => r.url.includes('/pay
 beforeEach(async () => {
   requests = [];
   orderStatus = 'pending_payment';
+  noChannels = false;
   linkSeq = 0;
   failOrderFetch = false;
   clipboard = [];
@@ -92,6 +95,7 @@ beforeEach(async () => {
       api: async (req: Req) => {
         requests.push(req);
         if (req.url.includes('/pay/channels')) {
+          if (noChannels) return { items: [] };
           return req.url.includes('currency=USD')
             ? { items: [{ channel: 'stripe', entryMode: 'copylink', label: '银行卡' }] }
             : { items: [] };
@@ -316,5 +320,62 @@ describe('支付页薄壳：银行卡付款后的确认中（W-02）', () => {
     await settle();
     expect(page.data['confirmNote']).toBe('');
     expect(page.data['payUrl']).toBe('https://pay.test/o/link-1');
+  });
+});
+
+/** 剩余清单 4-8（M11 / M13）：没有可用通道的空态、错误态可重试。 */
+describe('支付页：无通道空态与重试（4-8）', () => {
+  it('🔴 所有币种都没有通道 → noChannel = true（页面给空态，不是一片空白）；有通道 → false', async () => {
+    expect(page.data['noChannel']).toBe(false);
+    noChannels = true;
+    call('onRetry');
+    await settle();
+    expect(page.data['noChannel']).toBe(true);
+    expect(page.data['channels']).toEqual([]);
+  });
+
+  it('🔴 取订单失败 → 显示错误；点"重试" → 重新拉取，成功后错误清掉、通道出现', async () => {
+    failOrderFetch = true;
+    call('onRetry');
+    await settle();
+    expect(page.data['error']).not.toBe('');
+    failOrderFetch = false;
+    call('onRetry');
+    await settle();
+    expect(page.data['error']).toBe('');
+    expect((page.data['channels'] as unknown[]).length).toBeGreaterThan(0);
+  });
+});
+
+/** 剩余清单 4-11（A24）：待付款倒计时。 */
+describe('支付页：待付款倒计时（4-11）', () => {
+  it('🔴 可付的单 → countdown 按本机时钟显示剩余时间；每秒更新；离开页面停表', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      vi.setSystemTime(new Date('2026-09-29T01:20:00.000Z'));
+      call('onRetry');
+      await settle();
+      expect(page.data['countdown']).toBe('请在 10:00 内完成支付');
+      vi.advanceTimersByTime(1000);
+      expect(page.data['countdown']).toBe('请在 09:59 内完成支付');
+      call('onUnload');
+      vi.advanceTimersByTime(5000);
+      expect(page.data['countdown']).toBe('请在 09:59 内完成支付');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('已过截止 → 显示"支付时间已到"，且不起表', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      vi.setSystemTime(new Date('2026-09-29T02:00:00.000Z'));
+      call('onRetry');
+      await settle();
+      expect(page.data['countdown']).toContain('支付时间已到');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

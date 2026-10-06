@@ -13,7 +13,7 @@
  * ~~@limitation 一：category 合法值照抄契约枚举~~ **已解决（I2-U-A1）**：已提炼进
  *              shared 的 `PRODUCT_CATEGORY`（与契约 `GET /products?category` 由单测双向比对），
  *              本文件不再手抄——管理端上架是第二个消费方，两份手抄必然漂移。
- * @limitation 二：GET /terms 的 urls 是**占位相对路径**——法务静态页属 F15/内容阶段；
+ * @limitation 二：GET /terms 的 urls / documents 是法务静态页的**绝对地址**（剩余清单 4-1，基址未配则省略）；正文待律师定稿；
  *              updated_at 没有真实来源（TERMS_VERSION 来自环境变量，无时间维度），省略不编。
  * @limitation 三：GET /fx 的 rates 缺币时**省略该币**（降级同 display）；
  *              它是"仅供文案展示"的端点（契约 summary），不是下单依据。
@@ -30,6 +30,7 @@
  *      adapters/catalog.ts（取数）；docs/I1阶段开发实施方案.md §3.5
  */
 import type { Express } from 'express';
+import { legalDocuments, legalLinks, sellerInfo } from '../domain/legal.js';
 import { AppError } from '../errors.js';
 import type { Db } from '../adapters/db.js';
 import type { Clock } from '../ports/clock.js';
@@ -329,11 +330,29 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
   });
 
   app.get('/api/v1/terms', (_req, res) => {
+    // 剩余清单 4-1：绝对地址（基址未配 → 整键省略，不给相对路径）+ 已配置的商家信息
+    const base = deps.config.LEGAL_BASE_URL ?? deps.config.CHECKOUT_BASE_URL;
     res.json({
       version: deps.config.TERMS_VERSION,
-      // 占位路径（@limitation 二）：法务静态页落地前，前端按 version 做建单比对即可
-      urls: { zh: '/legal/terms.zh.html', ja: '/legal/terms.ja.html', en: '/legal/terms.en.html' },
+      ...(base === undefined
+        ? {}
+        : { urls: legalLinks(base, 'terms'), documents: legalDocuments(base) }),
+      seller: sellerInfo(deps.config),
     });
+  });
+
+  /**
+   * 客服联系方式（剩余清单 4-2）。只回已配置的字段：客服账号确定前全空，小程序据此不显示入口——
+   * 写一个假的微信号比没有更贵（用户会真的去加，@see miniprogram/pages/user/index.vm.js 原 @limitation 一）。
+   */
+  app.get('/api/v1/support', (_req, res) => {
+    const c = deps.config;
+    const pairs: Array<[string, string | undefined]> = [
+      ['email', c.SUPPORT_EMAIL],
+      ['wechat', c.SUPPORT_WECHAT],
+      ['hours', c.SUPPORT_HOURS],
+    ];
+    res.json(Object.fromEntries(pairs.filter((p): p is [string, string] => p[1] !== undefined)));
   });
 
   app.get('/api/v1/fx', (_req, res, next) => {

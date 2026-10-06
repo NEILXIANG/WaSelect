@@ -91,3 +91,47 @@ function specsOf(p) {
   }
   return specs;
 }
+
+/**
+ * 立即购买的单件条目（剩余清单 4-4）：与加购同一份快照形状，数量固定 1（改数量走购物车）。
+ * @why 不经购物车：立即购买 = "只买这一件"，塞进购物车再结算会把用户车里别的东西一起带进结算页。
+ * @returns {{productId: string, qty: number, title: string, image: string, priceJpy: unknown} | null}
+ *          null = 不能买（售罄 / 没 id / 商品没拿到），页面据此不跳转。
+ */
+export function buyNowItem(view, productId) {
+  if (view === null || typeof view !== 'object' || view.soldOut === true) return null;
+  if (typeof productId !== 'string' || productId === '') return null;
+  return {
+    productId,
+    qty: 1,
+    title: view.title,
+    image: Array.isArray(view.images) ? (view.images[0] ?? '') : '',
+    priceJpy: view.priceJpy,
+  };
+}
+
+/** 分享卡片的品牌兜底标题（商品没拿到时）。 */
+const SHARE_FALLBACK_TITLE = 'WaSelect';
+
+/**
+ * 分享卡片（剩余清单 4-4，`onShareAppMessage` 的返回值）。
+ * @why 路径只带商品 id：打开的人走的是同一个详情页，价格 / 库存实时取，不在分享里固化任何会变的东西。
+ * @limitation 分享卡片要上线（有 AppID）后才真正可点开；开发者工具里只能看到卡片形态。
+ */
+export function shareCard(view, productId) {
+  const path = `/pages/detail/index?id=${encodeURIComponent(typeof productId === 'string' ? productId : '')}`;
+  if (
+    view === null ||
+    typeof view !== 'object' ||
+    typeof view.title !== 'string' ||
+    view.title === ''
+  ) {
+    return { title: SHARE_FALLBACK_TITLE, path };
+  }
+  const imageUrl = Array.isArray(view.images) ? view.images[0] : undefined;
+  return {
+    title: view.title,
+    path,
+    ...(typeof imageUrl === 'string' && imageUrl !== '' ? { imageUrl } : {}),
+  };
+}

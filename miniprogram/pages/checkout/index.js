@@ -25,10 +25,13 @@
  *      ../../utils/quote-view.js（报价区）；../../utils/address-form.js（地址摘要）
  */
 import {
+  BUY_NOW_MODE,
+  checkoutItems,
+  clearsCartAfterOrder,
   contactEmailOf,
   itemRows,
-  orderBody,
   keyAction,
+  orderBody,
   recoveryFor,
   resolveAddressId,
   submitGate,
@@ -36,7 +39,8 @@ import {
 import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { addressSummary, defaultAddressId } from '../../utils/address-form.js';
 import { quoteView } from '../../utils/quote-view.js';
-import { errorMessage } from '../../utils/error-text.js';
+import { errorFields } from '../../utils/error-text.js';
+import { STOCK_REFUND_NOTE } from '../order-detail/index.vm.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 
@@ -55,9 +59,13 @@ const LEGAL_PAGE = '/pages/legal/index';
  *      用户要自己 回首页 → 我的 → 我的订单 → 逐张进详情取消；大多数人做不到，直接放弃。
  */
 const ORDER_PAGE = '/pages/order/index';
+/** 首页（tab 页，剩余清单 4-8 空态出口）。 */
+const HOME_PAGE = '/pages/home/index';
 
 Page({
   data: {
+    /** 缺货整单退款说明（剩余清单 4-10：与订单详情同一句，付款前就说清楚）。 */
+    stockRefundNote: STOCK_REFUND_NOTE,
     /** vm `itemRows` 的输出（**不含价格**）。 */
     rows: [],
     /** vm `quoteView` 的输出；null = 还没报价。 */
@@ -97,9 +105,23 @@ Page({
   sentBody: null,
   traceId: '',
 
-  onLoad() {
+  /** 结算模式（剩余清单 4-4）：'buynow' = 立即购买（只结 globalData.buyNow 那一件）；'' = 结购物车。 */
+  mode: '',
+
+  /** @param {{mode?: string}} [options] 详情页"立即购买"带 `?mode=buynow` 进来 */
+  onLoad(options) {
     this.traceId = newTraceId();
     this.intentKey = createIntentIdempotency();
+    this.mode = options?.mode === BUY_NOW_MODE ? BUY_NOW_MODE : '';
+  },
+
+  /** 本次结算的条目（立即购买 / 购物车，见 vm `checkoutItems`）。 */
+  items() {
+    return checkoutItems({
+      mode: this.mode,
+      buyNow: app.globalData.buyNow,
+      cartItems: app.globalData.cart.items(),
+    });
   },
 
   onShow() {
@@ -116,7 +138,7 @@ Page({
   async refresh(opts) {
     const keepError = opts !== null && typeof opts === 'object' && opts.keepError === true;
     this.setData(keepError ? { loading: true } : { loading: true, error: '' });
-    const items = app.globalData.cart.items();
+    const items = this.items();
     this.setData({ rows: itemRows(items) });
 
     // ⚠️ 闸门只有 `updateGate` 一处算（AJ-228）：这里曾另算一遍，漏了"超过单笔上限"与
@@ -142,7 +164,7 @@ Page({
       this.setData({ termsVersion: version, termsFailed: version === '' });
     } catch (e) {
       // ⚠️ 拿不到版本 = 不能下单：由闸门拦住并说明（termsFailed），不留给提交时再失败
-      this.setData({ termsVersion: '', termsFailed: true, error: errorMessage(e) });
+      this.setData({ termsVersion: '', termsFailed: true, ...errorFields(e) });
     }
     this.updateGate();
   },
@@ -176,7 +198,7 @@ Page({
       this.addressId = id;
       this.setData({ address: found === undefined ? null : addressSummary(found) });
     } catch (e) {
-      this.setData({ error: errorMessage(e) });
+      this.setData({ ...errorFields(e) });
     }
     this.updateGate();
   },
@@ -192,7 +214,7 @@ Page({
       });
       this.setData({ quote: quoteView(res), quoteFailed: false });
     } catch (e) {
-      this.setData({ quote: null, quoteFailed: true, error: errorMessage(e) });
+      this.setData({ quote: null, quoteFailed: true, ...errorFields(e) });
     }
     this.updateGate();
   },
@@ -269,7 +291,7 @@ Page({
     let body;
     try {
       body = orderBody({
-        items: app.globalData.cart.items(),
+        items: this.items(),
         addressId: this.addressId,
         termsVersion: this.data.termsVersion,
         expectedTotalJpy: this.data.quote?.totalJpy ?? null,
@@ -304,14 +326,18 @@ Page({
         traceId: this.traceId,
       });
       // @see @limitation 一：建单成功即清车（订单已存在，支付失败可去订单页继续）
-      app.globalData.cart.clear();
+      // 立即购买不清车（剩余清单 4-4，vm `clearsCartAfterOrder`）；单件条目用完即弃
+      if (clearsCartAfterOrder(this.mode)) app.globalData.cart.clear();
+      else app.globalData.buyNow = null;
       // 意图已完成：作废键。再点一次是**新的一张单**，沿用旧键会被重放成刚才那张
       this.intentKey?.retire();
-      wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${res?.order_id ?? ''}` });
+      // 剩余清单 4-8：redirectTo 而不是 navigateTo——车已清空，留在返回栈里的结算页只剩"购物车是空的"；
+      //    支付页按返回键应回到下单前的页面（购物车 / 商品详情），不是一张空结算页
+      wxApi.redirectTo({ url: `${PAY_PAGE}?orderId=${res?.order_id ?? ''}` });
     } catch (e) {
       const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
       // ⚠️ 默认**不** retire：键留给重试（弱网下用户看到错误再点一次必须还是同一个键）
-      this.setData({ error: errorMessage(e) });
+      this.setData({ ...errorFields(e) });
       // B37 / AJ-220：执行错误码登记表里写明的恢复动作——
       // 不执行的话 40905（管理员改价）会变成"再点还是 40905，只能退出重进"。
       if (recoveryFor(code) === 'requote') {
@@ -347,5 +373,10 @@ Page({
     } finally {
       this.setData({ submitting: false });
     }
+  },
+
+  /** 空态"去逛逛"（剩余清单 4-8）：首页是 tab 页，只能 switchTab。 */
+  onGoShopping() {
+    wxApi.switchTab({ url: HOME_PAGE });
   },
 });

@@ -7,20 +7,23 @@
  * @see ./error-text.js；../pages/home/index.vm.unit.test.ts（同组断言已随函数迁来此处）
  */
 import { describe, expect, it } from 'vitest';
-import { errorMessage } from './error-text.js';
+import { errorFields, errorMessage, errorRef } from './error-text.js';
 
 describe('errorMessage', () => {
-  it('带 code + message → `code message`（可机读，便于对照错误码表）', () => {
-    expect(errorMessage({ code: 50003, message: '汇率缺失' })).toBe('50003 汇率缺失');
+  // 剩余清单 4-6（M9）：错误分层——主文案只给人话，错误码与链路号挪到 errorRef 小字（原先 `code message` 拼在一行）
+  it('🔴 带 code + message → 主文案只有 message（不再把码拼在前面）', () => {
+    expect(errorMessage({ code: 50003, message: '汇率缺失' })).toBe('汇率缺失');
   });
 
-  it('网络层负数码同样保留（-1 与业务码是两种故障，文案里不该混同）', () => {
-    expect(errorMessage({ code: -1, message: '请求超时' })).toBe('-1 请求超时');
+  it('🔴 网络层失败（-1 / -2）→ 说人话（检查网络后重试），原始宿主串只进报障小字', () => {
+    expect(errorMessage({ code: -1, message: 'request:fail timeout' })).toBe(
+      '网络不太稳定，请检查网络后重试',
+    );
   });
 
   it('缺 message / message 是空白 → 兜底文案，不显示 undefined', () => {
-    expect(errorMessage({ code: 40011 })).toBe('40011 加载失败');
-    expect(errorMessage({ code: 40011, message: '   ' })).toBe('40011 加载失败');
+    expect(errorMessage({ code: 40011 })).toBe('加载失败');
+    expect(errorMessage({ code: 40011, message: '   ' })).toBe('加载失败');
   });
 
   it('Error 实例（没有 code）→ 只显示 message', () => {
@@ -50,5 +53,34 @@ describe('errorMessage', () => {
   it('errMsg 不是字符串 / 是空白 → 仍走兜底，不显示 [object Object]', () => {
     expect(errorMessage({ errMsg: 42 })).toBe('加载失败');
     expect(errorMessage({ errMsg: '   ' })).toBe('加载失败');
+  });
+});
+
+describe('errorRef / errorFields（4-6）', () => {
+  it('🔴 有码有链路 → `错误码 40002 · 链路 <前 8 位>`；只有码 → 只有码；什么都没有 → 空串（页面不显示小字）', () => {
+    expect(errorRef({ code: 40002, message: 'x', traceId: 'abcdef1234567890' })).toBe(
+      '错误码 40002 · 链路 abcdef12',
+    );
+    expect(errorRef({ code: 40002, message: 'x' })).toBe('错误码 40002');
+    expect(errorRef(new Error('x'))).toBe('');
+    expect(errorRef(null)).toBe('');
+  });
+
+  it('网络层失败 → 小字里带上宿主原始原因（排障唯一线索），主文案不带', () => {
+    expect(errorRef({ code: -1, message: 'request:fail timeout', traceId: 't1' })).toBe(
+      '错误码 -1 · 链路 t1 · request:fail timeout',
+    );
+  });
+
+  it('errorFields：一次给出 {error, errorRef}；可换键名（saveError / saveErrorRef）', () => {
+    const e = { code: 40002, message: '地址格式不对', traceId: 'abcdef1234' };
+    expect(errorFields(e)).toEqual({
+      error: '地址格式不对',
+      errorRef: '错误码 40002 · 链路 abcdef12',
+    });
+    expect(errorFields(e, 'saveError')).toEqual({
+      saveError: '地址格式不对',
+      saveErrorRef: '错误码 40002 · 链路 abcdef12',
+    });
   });
 });

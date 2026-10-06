@@ -156,7 +156,11 @@ export async function createOrder(
         result: 'rejected',
         ctx: { product_ids: outside.slice(0, 10) },
       });
-      throw new AppError(40401, { product_id: outside[0], reason: 'review_mode_sku_only' });
+      throw new AppError(
+        40401,
+        { product_id: outside[0], reason: 'review_mode_sku_only' },
+        { product_id: String(outside[0]) },
+      );
     }
   }
 
@@ -204,7 +208,14 @@ export async function createOrder(
   );
   for (const item of orderedItems) {
     const ok = await decrementStock(tx, item.productId, item.qty);
-    if (!ok) throw new AppError(40901, { product_id: item.productId, qty: item.qty });
+    // 剩余清单 4-7：与报价同口径，product_id 进响应 data（并发扣减输掉的那一件）
+    if (!ok) {
+      throw new AppError(
+        40901,
+        { product_id: item.productId, qty: item.qty },
+        { product_id: item.productId },
+      );
+    }
   }
 
   // ── 7. 写 orders（D32：order_no 撞 23505 → savepoint 重取，最多 3 次）────────

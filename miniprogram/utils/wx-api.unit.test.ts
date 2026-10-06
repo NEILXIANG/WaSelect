@@ -308,3 +308,45 @@ describe('注入是"部分覆盖"，不是"整体替换"', () => {
     expect(api.getStorageSync('token')).toBe('injected');
   });
 });
+
+describe('隐私 API（剩余清单 4-3）：宿主有才挂，没有就是 undefined', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('宿主有 getPrivacySetting / requirePrivacyAuthorize → 原样转发', () => {
+    const seen: string[] = [];
+    vi.stubGlobal('wx', {
+      getPrivacySetting: () => seen.push('get'),
+      requirePrivacyAuthorize: () => seen.push('require'),
+    });
+    const api = createWxApi();
+    api.getPrivacySetting?.({});
+    api.requirePrivacyAuthorize?.({});
+    expect(seen).toEqual(['get', 'require']);
+  });
+
+  it('基础库过低（宿主没有这两个方法）→ undefined（由 privacy.js 判 unsupported）', () => {
+    vi.stubGlobal('wx', {});
+    const api = createWxApi();
+    expect(api.getPrivacySetting).toBeUndefined();
+    expect(api.requirePrivacyAuthorize).toBeUndefined();
+  });
+});
+
+describe('getUpdateManager（剩余清单 4-9）：宿主有才挂', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  it('宿主有 → 返回宿主的管理器；没有 → undefined', () => {
+    const mgr = {
+      onUpdateReady: () => undefined,
+      onUpdateFailed: () => undefined,
+      applyUpdate: () => undefined,
+    };
+    vi.stubGlobal('wx', { getUpdateManager: () => mgr });
+    expect(createWxApi().getUpdateManager?.()).toBe(mgr);
+    vi.stubGlobal('wx', {});
+    expect(createWxApi().getUpdateManager).toBeUndefined();
+  });
+});

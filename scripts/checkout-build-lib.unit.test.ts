@@ -25,12 +25,16 @@ import {
   CHECKOUT_PAGES,
   collectCssVars,
   isDeployBuild,
+  LEGAL_PAGES,
   matchRedirect,
   parseRedirects,
   renderPage,
   renderRedirects,
+  renderLegalPage,
   renderTokensCss,
+  SELLER_PENDING_TEXT,
 } from './checkout-build-lib.js';
+import { LEGAL_DOCS } from '../server/src/domain/legal.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const API = 'https://api.example.com';
@@ -181,6 +185,33 @@ describe('页面清单：三张页都存在且与 channels.ts 同源', () => {
     //      静态站若没这两张页，用户付完款落到 404，且回调照样落账（钱收了、页面挂了）。
     expect(CHECKOUT_PAGES).toContain(STRIPE_RETURN_PATHS.success);
     expect(CHECKOUT_PAGES).toContain(STRIPE_RETURN_PATHS.cancel);
+  });
+});
+
+/**
+ * 剩余清单 4-1：法务静态页。
+ * @why 服务端 `/terms` 下发 `<base>/legal/<doc>/#<lang>`（domain/legal.ts）；这里钉住"那个地址真的有页、页里真的有那个锚点"——
+ *      两边各写一份清单，漂移时用户点开是 404 或停在页首找不到自己的语言。
+ */
+describe('法务静态页（4-1）', () => {
+  it('🔴 页面清单与服务端 LEGAL_DOCS 同源；每页都有 zh / ja / en 三个锚点与"待律师定稿"标记', () => {
+    expect(LEGAL_PAGES.map((p) => p.replace('/legal/', ''))).toEqual([...LEGAL_DOCS]);
+    for (const page of LEGAL_PAGES) {
+      const html = readFileSync(join(root, 'checkout-static', page, 'index.html'), 'utf8');
+      for (const lang of ['zh', 'ja', 'en'])
+        expect(html, `${page} 缺 #${lang}`).toContain(`id="${lang}"`);
+      expect(html, `${page} 缺草案标记`).toContain('class="draft"');
+    }
+  });
+
+  it('🔴 renderLegalPage：商家字段按配置填入（HTML 转义）；未配置的显示"公司登记后公布"；不留 __TOKEN__', () => {
+    const tpl = '<p>__BRAND_NAME__</p><dd>__SELLER_NAME__</dd><dd>__SELLER_PHONE__</dd>';
+    const out = renderLegalPage(tpl, { SELLER_NAME: 'A&B <株式会社>' });
+    expect(out).toContain('<dd>A&amp;B &lt;株式会社&gt;</dd>');
+    expect(out).toContain(`<dd>${SELLER_PENDING_TEXT}</dd>`);
+    expect(out).not.toMatch(/__[A-Z_]+__/);
+    const real = readFileSync(join(root, 'checkout-static/legal/tokushoho/index.html'), 'utf8');
+    expect(renderLegalPage(real, {})).not.toMatch(/__[A-Z_]+__/);
   });
 });
 

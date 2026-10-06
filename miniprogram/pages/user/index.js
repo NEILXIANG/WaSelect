@@ -21,6 +21,7 @@
 import { MENU_ROWS, loginState } from './index.vm.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { setActiveTab } from '../../utils/tabs.js';
+import { supportRows } from '../../utils/support.js';
 
 const app = getApp();
 
@@ -51,6 +52,10 @@ Page({
     rows: MENU_ROWS,
     /** vm `loginState` 的输出。 */
     login: { logged: false, text: '正在登录…' },
+    /** 剩余清单 4-2：客服联系方式（utils/support.js）；空数组 = 客服未配置，不显示整张卡。 */
+    support: [],
+    /** 刚复制的是哪一行（'' = 没有）。 */
+    supportCopied: '',
   },
 
   onShow() {
@@ -58,6 +63,32 @@ Page({
     this.setData({ login: loginState(app.globalData.token, app.globalData.loginFailed) });
     // S5：注入底部 tabBar 的高亮（本页是第 3 个 tab）。
     setActiveTab(this, 'user');
+    void this.loadSupport();
+  },
+
+  /**
+   * 拉客服联系方式（剩余清单 4-2）。
+   * @why 失败**静默**（只是不显示客服卡）：这是一张辅助卡，为它在「我的」页顶一个错误条不值得；
+   *      而失败时显示旧值也无妨——联系方式不是会过期的数据。
+   */
+  async loadSupport() {
+    try {
+      const res = await app.globalData.api({ url: `${app.globalData.apiBase}/api/v1/support` });
+      this.setData({ support: supportRows(res) });
+    } catch {
+      // 静默：见上
+    }
+  },
+
+  /** 点客服一行 → 复制（微信号 / 邮箱）。 */
+  onCopySupport(e) {
+    const key = e?.currentTarget?.dataset?.key;
+    const value = e?.currentTarget?.dataset?.value;
+    if (typeof value !== 'string' || value === '') return;
+    wxApi.setClipboardData({
+      data: value,
+      success: () => this.setData({ supportCopied: typeof key === 'string' ? key : '' }),
+    });
   },
 
   /**

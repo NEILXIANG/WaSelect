@@ -101,6 +101,13 @@ describe('address-input（地址校验，I2 U-B2c）', () => {
     expect(parseAddressInput({ ...OK_ADDR }).phone).toBe('+14155552671');
   });
 
+  it('🔴 美国地址的 state 必须在 USPS 州码白名单里（剩余清单 4-5）：XX 拒；DC / PR / AE 收', () => {
+    expect(fail({ ...OK_ADDR, state: 'XX' }).field).toBe('state');
+    expect(fail({ ...OK_ADDR, state: 'UM' }).field).toBe('state');
+    for (const st of ['DC', 'PR', 'AE'])
+      expect(() => parseAddressInput({ ...OK_ADDR, state: st })).not.toThrow();
+  });
+
   it('state 须两个大写字母（小写 / 一位 / 三位都拒）', () => {
     expect(fail({ ...OK_ADDR, state: 'ca' }).field).toBe('state');
     expect(fail({ ...OK_ADDR, state: 'C' }).field).toBe('state');

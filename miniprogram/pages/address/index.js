@@ -22,7 +22,7 @@
  */
 import { addressRows, emptyState } from './index.vm.js';
 import { formModel, toAddressInput } from '../../utils/address-form.js';
-import { errorMessage } from '../../utils/error-text.js';
+import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 
@@ -75,7 +75,7 @@ Page({
       this.setData({ rows, error: '', empty: emptyState(rows, '').showEmpty });
     } catch (e) {
       this.rawList = [];
-      this.setData({ rows: [], error: errorMessage(e), empty: false });
+      this.setData({ rows: [], ...errorFields(e), empty: false });
     } finally {
       this.setData({ loading: false });
     }
@@ -125,7 +125,7 @@ Page({
         traceId: this.traceId,
       });
     } catch (err) {
-      this.setData({ error: errorMessage(err) });
+      this.setData({ ...errorFields(err) });
       return;
     }
     await this.load();
@@ -149,7 +149,7 @@ Page({
         traceId: this.traceId,
       });
     } catch (err) {
-      this.setData({ error: errorMessage(err) });
+      this.setData({ ...errorFields(err) });
       return;
     }
     await this.load();

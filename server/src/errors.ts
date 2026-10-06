@@ -42,18 +42,24 @@ const INTERNAL_ERROR_MESSAGE = '服务器内部错误';
  *
  * @param code 必须是 shared 注册表里已登记的码（编译期强制；新增码要先改 shared + 技术文档 §7 + api-contract）
  * @param details 内部细节（SQL、上游响应、内部 ID 等），**只进日志**，`toErrorResponse` 不会输出它
+ * @param publicData **可对外**的结构化数据（剩余清单 4-7）：原样放进响应的 `data`。
+ *        @why 与 details 分成两个参数而不是"details 里挑几个键输出"：哪些能出去必须在抛错处**显式**写，
+ *             不能由序列化层按键名猜——猜的那一天，一个叫 product_id 的内部字段就会跟着出去。
+ *        ⚠️ 只放请求方本来就知道的东西（如买家自己购物车里的 product_id），不放库存数、SQL、上游细节。
  */
 export class AppError extends Error {
   readonly code: ErrorCode;
   readonly httpStatus: number;
   readonly details?: unknown;
+  readonly publicData?: Record<string, string | number> | undefined;
 
-  constructor(code: ErrorCode, details?: unknown) {
+  constructor(code: ErrorCode, details?: unknown, publicData?: Record<string, string | number>) {
     super(errorSpec(code)?.message ?? INTERNAL_ERROR_MESSAGE);
     this.name = 'AppError';
     this.code = code;
     this.httpStatus = httpStatusOf(code);
     this.details = details;
+    this.publicData = publicData;
   }
 }
 
@@ -65,7 +71,14 @@ export class AppError extends Error {
  */
 export function toErrorResponse(err: unknown): { status: number; body: ErrorBody } {
   if (err instanceof AppError) {
-    return { status: err.httpStatus, body: { code: err.code, message: err.message } };
+    return {
+      status: err.httpStatus,
+      body: {
+        code: err.code,
+        message: err.message,
+        ...(err.publicData !== undefined ? { data: err.publicData } : {}),
+      },
+    };
   }
   // C4：熔断打开抛出的 `CircuitOpenError` 是**暂时性**故障，不该被折叠成 500（"我方内部错误"）。
   //     映射成 50300（上游暂不可用），并把 `retry_after_ms` 透给前端做退避提示。

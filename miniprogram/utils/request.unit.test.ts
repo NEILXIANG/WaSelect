@@ -360,3 +360,23 @@ describe('静默重登并重放（40101）', () => {
     expect(events.filter((e) => e === 'api_relogin')).toHaveLength(2); // started + ok
   });
 });
+
+/** 剩余清单 4-6 / 4-7：ApiError 带上链路号与响应 data（报障小字、购物车定位失效商品）。 */
+describe('ApiError 携带 traceId 与 data（4-6 / 4-7）', () => {
+  it('🔴 业务错误：err.traceId = 本次链路号，err.data = 响应体 data', async () => {
+    const wx = fakeWx({
+      statusCode: 404,
+      data: { code: 40401, message: '商品不存在或已下架', data: { product_id: 'p-x' } },
+    });
+    const api = createRequester({ wx: wx.wx, log: () => undefined });
+    const err = await api({
+      url: 'https://api.test/orders/quote',
+      traceId: 'trace-12345678',
+    }).catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 40401,
+      traceId: 'trace-12345678',
+      data: { product_id: 'p-x' },
+    });
+  });
+});

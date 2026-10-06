@@ -156,10 +156,23 @@ export function summarizeQuoteItems(
     const p = byId.get(item.productId);
     // 不存在与已下架同码（40401 文案本就是"商品不存在或已下架"）：
     // 分开两条会向前端泄露"这个 id 存在但被下了"——与 readOwnedOrder 用 40400 防探测同一判断
-    if (p === undefined) throw new AppError(40401, { product_id: item.productId });
-    if (!p.active) throw new AppError(40401, { product_id: item.productId, reason: 'inactive' });
+    // 剩余清单 4-7：product_id 进响应 data（买家自己购物车里的 id，前端据此标出是哪一件）
+    if (p === undefined) {
+      throw new AppError(40401, { product_id: item.productId }, { product_id: item.productId });
+    }
+    if (!p.active) {
+      throw new AppError(
+        40401,
+        { product_id: item.productId, reason: 'inactive' },
+        { product_id: item.productId },
+      );
+    }
     if (p.stock < item.qty) {
-      throw new AppError(40901, { product_id: item.productId, stock: p.stock, qty: item.qty });
+      throw new AppError(
+        40901,
+        { product_id: item.productId, stock: p.stock, qty: item.qty },
+        { product_id: item.productId },
+      );
     }
     itemsJpy += p.priceJpy * item.qty;
     goodsWeightG += p.weightG * item.qty;

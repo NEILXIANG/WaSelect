@@ -7,8 +7,8 @@
   本页是它们唯一的入口，所以入口清单在 vm 里集中维护，
   "加一个入口忘了接跳转"由单测断言（index.vm.unit.test.ts 最后一组）。
 
-  ⚠️ 刻意没有客服入口：客服账号未定、契约也没有该字段——
-  写一个假的微信号比没有更贵（用户会真的去加）。@see index.vm.js @limitation 一
+  剩余清单 4-2：客服卡由 GET /support 驱动——客服账号未配置时服务端回空对象，整张卡不显示
+  （写一个假的微信号比没有更贵，用户会真的去加）。
 
   @why S5 之后本页是 4 个 tab 页之一（底部有自定义 tabBar），所以根容器用
        `.ws-page--with-tabbar` 给底部留位——现在 tabBar 还没上，留位不影响布局，
@@ -45,6 +45,25 @@
         <!-- 右箭头：用字符 › 而不是图标组件——本页唯一的方向提示，
              引组件会让"三个入口"多一个可选渲染分支。 -->
         <text class="mine__entry-arrow">›</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 剩余清单 4-2：联系客服（只在服务端给了联系方式时出现；可复制的行点一下即复制） -->
+  <view class="ws-gutter mine__menu-wrap" wx:if="{{support.length > 0}}">
+    <view class="ws-card mine__card">
+      <text class="ws-note">联系客服</text>
+      <view
+        class="mine__row"
+        wx:for="{{support}}"
+        wx:key="key"
+        data-key="{{item.key}}"
+        data-value="{{item.copyable ? item.value : ''}}"
+        hover-class="{{item.copyable ? 'ws-press' : 'none'}}"
+        bindtap="onCopySupport"
+      >
+        <text class="ws-note">{{item.label}}</text>
+        <text class="mine__value" user-select>{{supportCopied === item.key ? '已复制' : item.value}}</text>
       </view>
     </view>
   </view>

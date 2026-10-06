@@ -8,19 +8,18 @@
  *      （vm 的 `intentForProduct`），由首页 shell 拼路径跳过来。id 是唯一入参——
  *      没有它的详情页只会白屏，所以缺 id 时**明示错误**，不渲染空壳。
  *
- * @why 有「加入购物车」而**没有「立即购买」**：立即购买 = "加购 + 直奔结算"，
- *      而结算页（`pages/checkout`）尚未落地——放一个点了没反应的按钮 =
- *      "看起来能用、实际是坏的"。加入购物车则已经闭环（购物车页已存在）。
+ * @why「立即购买」（剩余清单 4-4）只结这一件：条目放 `globalData.buyNow`，结算页 `?mode=buynow` 只读它、
+ *      建单后不清购物车（vm `buyNowItem` / 结算页 vm `checkoutItems`）。
  *
- * @limitation 一：**无分享**（`onShareAppMessage`）——分享出去的小程序卡片需要
- *              真实域名与 AppID 才有意义，骨架期加了也只能在开发者工具里看。
+ * @limitation 一：分享（`onShareAppMessage`，剩余清单 4-4）卡片只带商品 id；有 AppID 之后才真正可点开，
+ *              开发者工具里只能看到卡片形态。
  * @limitation 二：轮播用原生 `swiper`，**没有**指示器自定义样式——默认圆点即可，
  *              为一个还没定版的页面先做指示器属于提前设计。
  *
  * @see ./index.vm.js（视图逻辑真源）；../home/index.vm.js（导航意图真源）
  */
-import { detailView } from './index.vm.js';
-import { errorMessage } from '../../utils/error-text.js';
+import { buyNowItem, detailView, shareCard } from './index.vm.js';
+import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 
@@ -35,6 +34,8 @@ const wxApi = createWxApi();
  *      表现是"点了没反应"，日志里只有一行宿主文案）。
  */
 const CART_PAGE = '/pages/cart/index';
+/** 结算页（立即购买带 mode=buynow，剩余清单 4-4）。 */
+const CHECKOUT_BUY_NOW = '/pages/checkout/index?mode=buynow';
 
 Page({
   data: {
@@ -76,7 +77,7 @@ Page({
       });
       this.setData({ product: detailView(res) });
     } catch (e) {
-      this.setData({ product: null, error: errorMessage(e) });
+      this.setData({ product: null, ...errorFields(e) });
     } finally {
       this.setData({ loading: false });
     }
@@ -112,5 +113,18 @@ Page({
    */
   onGoCart() {
     wxApi.switchTab({ url: CART_PAGE });
+  },
+
+  /** 立即购买（剩余清单 4-4）：只结这一件，不进购物车。 */
+  onBuyNow() {
+    const item = buyNowItem(this.data.product, this.productId);
+    if (item === null) return;
+    app.globalData.buyNow = item;
+    wxApi.navigateTo({ url: CHECKOUT_BUY_NOW });
+  },
+
+  /** 分享卡片（剩余清单 4-4）：标题 = 商品名，路径只带商品 id。 */
+  onShareAppMessage() {
+    return shareCard(this.data.product, this.productId);
   },
 });

@@ -53,6 +53,11 @@ Component({
     altText: { type: String, value: '' },
     /** 更矮的内边距（列表内的空态用）。@see @limitation 四 */
     compact: { type: Boolean, value: false },
+    /**
+     * 报障小字（剩余清单 4-6）：`错误码 40002 · 链路 abcdef12`，由 utils/error-text.js `errorRef` 产出。
+     * 空串 = 不渲染。主文案（title / reason）仍然**不写错误码**——码只在这一行小字里，给客服看。
+     */
+    refText: { type: String, value: '' },
   },
 
   methods: {

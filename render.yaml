@@ -173,6 +173,26 @@ services:
         sync: false
       - key: ALERT_EMAIL
         sync: false
+      # 剩余清单 4-1 / 4-2：法务页基址（留空用 CHECKOUT_BASE_URL）、特商法商家信息、客服联系方式——
+      #    公司登记 / 客服账号确定前都留空：未配置的字段服务端不下发，小程序不显示（不编占位值）
+      - key: LEGAL_BASE_URL
+        sync: false
+      - key: SELLER_NAME
+        sync: false
+      - key: SELLER_REPRESENTATIVE
+        sync: false
+      - key: SELLER_ADDRESS
+        sync: false
+      - key: SELLER_PHONE
+        sync: false
+      - key: SELLER_EMAIL
+        sync: false
+      - key: SUPPORT_EMAIL
+        sync: false
+      - key: SUPPORT_WECHAT
+        sync: false
+      - key: SUPPORT_HOURS
+        sync: false
       - key: SUBSCRIBE_TMPL_PAID
         sync: false
       - key: SUBSCRIBE_TMPL_SHIPPED

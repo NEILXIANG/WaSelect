@@ -92,3 +92,25 @@ export function checkoutGate(s) {
   if (a.hasTotal === true) return { disabled: false, hint: '' };
   return { disabled: true, hint: '运费与合计还在计算中' };
 }
+
+/** 能定位到某一件的报价失败码 → 那一行的提示（剩余清单 4-7）。 */
+const INVALID_TEXT = {
+  40401: '已下架或不存在，请移除',
+  40901: '库存不足，请减少数量',
+};
+
+/**
+ * 报价失败时标出是哪一件（剩余清单 4-7 / M10）：服务端在错误响应 `data.product_id` 里指出那一件。
+ * @why 购物车里五件商品、报价回"商品不存在或已下架"，用户只能逐件删掉试；标出那一行，一步就能改对。
+ * @why 拿不到 id、码不认识、id 不在车里 → **清空**所有标记，不猜：标错一行比不标更糟（用户会删掉一件好好的商品）。
+ * @returns {Array} 新的行数组（每行带 `invalidText`，空串 = 不标）
+ */
+export function markInvalid(rows, productId, code) {
+  const list = Array.isArray(rows) ? rows : [];
+  const text = INVALID_TEXT[code];
+  const hit =
+    typeof productId === 'string' &&
+    text !== undefined &&
+    list.some((r) => r.productId === productId);
+  return list.map((r) => ({ ...r, invalidText: hit && r.productId === productId ? text : '' }));
+}

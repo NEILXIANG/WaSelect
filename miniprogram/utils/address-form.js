@@ -25,6 +25,7 @@
  * @see ../../contracts/api-contract.yaml（AddressInput：pattern 的**真源**）；
  *      ../pages/address/index.vm.js（列表行）；../pages/checkout/（建单时用它摘要）
  */
+import { isUsStateCode } from './us-states.js';
 
 /** MVP 唯一目的国（@see @limitation 一）。 */
 export const ADDRESS_COUNTRY_DEFAULT = 'US';
@@ -128,7 +129,10 @@ export function formErrors(model) {
   if (!ADDRESS_PATTERNS.asciiOptional.test(m.line2.trim()))
     errors.line2 = '地址第二行请用英文/数字填写（可留空）';
   if (!ADDRESS_PATTERNS.ascii.test(m.city.trim())) errors.city = '城市请用英文/数字填写';
-  if (!ADDRESS_PATTERNS.state.test(m.state.trim())) errors.state = '州为两位大写缩写，如 CA';
+  if (!ADDRESS_PATTERNS.state.test(m.state.trim())) errors.state = '州为两位大写缩写，请从列表选择';
+  // 剩余清单 4-5：两位大写还不够，必须是 USPS 真实州码（与服务端 address-input.ts 同口径）
+  else if (!isUsStateCode(m.state.trim().toUpperCase()))
+    errors.state = '请从列表选择州（这个州码不存在）';
   if (!ADDRESS_PATTERNS.postal.test(m.postal_code.trim()))
     errors.postal_code = '邮编为 5 位或 ZIP+4，如 94105 或 94105-1234';
   for (const k of Object.keys(ADDRESS_MAX_CHARS)) {

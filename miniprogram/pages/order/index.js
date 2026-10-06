@@ -16,7 +16,7 @@
  * @see ./index.vm.js（状态词表与列表行，9 条单测）
  */
 import { emptyState, orderRows } from './index.vm.js';
-import { errorMessage } from '../../utils/error-text.js';
+import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { setActiveTab } from '../../utils/tabs.js';
@@ -31,6 +31,8 @@ const PAY_PAGE = '/pages/pay/index';
 
 /** 订单详情页路径（同上）。 */
 const DETAIL_PAGE = '/pages/order-detail/index';
+/** 首页（tab 页，剩余清单 4-8 空态出口）。 */
+const HOME_PAGE = '/pages/home/index';
 
 Page({
   data: {
@@ -66,7 +68,7 @@ Page({
       const rows = orderRows(res?.items);
       this.setData({ rows, error: '', empty: emptyState(rows, '').showEmpty });
     } catch (e) {
-      this.setData({ rows: [], error: errorMessage(e), empty: false });
+      this.setData({ rows: [], ...errorFields(e), empty: false });
     } finally {
       this.setData({ loading: false });
     }
@@ -92,5 +94,10 @@ Page({
     const id = e?.currentTarget?.dataset?.id;
     if (typeof id !== 'string' || id === '') return;
     wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${id}` });
+  },
+
+  /** 空态"去逛逛"（剩余清单 4-8）：首页是 tab 页，只能 switchTab。 */
+  onGoShopping() {
+    wxApi.switchTab({ url: HOME_PAGE });
   },
 });

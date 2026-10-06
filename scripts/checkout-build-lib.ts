@@ -201,3 +201,57 @@ export function collectCssVars(css: string, kind: 'definitions' | 'references'):
 export function renderPage(html: string, brand: string = BRAND_NAME): string {
   return html.replaceAll('__BRAND_NAME__', brand);
 }
+
+// ── 法务静态页（剩余清单 4-1）────────────────────────────────────────────────
+
+/**
+ * 法务页清单：与服务端 `server/src/domain/legal.ts` 的 LEGAL_DOCS 同序同名（单测双向比对）。
+ * @why 一份文档一张页、三语言是页内锚点（#zh / #ja / #en），见 domain/legal.ts @why。
+ */
+export const LEGAL_PAGES = [
+  '/legal/terms',
+  '/legal/privacy',
+  '/legal/refund',
+  '/legal/tokushoho',
+] as const;
+
+/** 商家字段未配置时显示的文字（不编占位值，见 domain/legal.ts @why）。 */
+export const SELLER_PENDING_TEXT =
+  '公司登记后公布 / 会社登記後に掲載 / To be published after incorporation';
+
+const SELLER_TOKENS = [
+  'SELLER_NAME',
+  'SELLER_REPRESENTATIVE',
+  'SELLER_ADDRESS',
+  'SELLER_PHONE',
+  'SELLER_EMAIL',
+] as const;
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * 法务页模板 → 成品：品牌名 + 商家字段（`__SELLER_NAME__` 等）构建期替换。
+ * @why 构建期而不是运行时：静态站没有服务端，也不该为了五个字段去调 API。
+ * @why HTML 转义：值来自部署环境变量，"A&B 株式会社"这种真实名称会把页面弄坏。
+ * @limitation 改商家信息要重新构建静态站（与服务端 /terms 的 seller 同源于同名环境变量，两边要一起配）。
+ */
+export function renderLegalPage(
+  html: string,
+  env: Partial<Record<(typeof SELLER_TOKENS)[number], string>>,
+): string {
+  let out = renderPage(html);
+  for (const key of SELLER_TOKENS) {
+    const v = env[key]?.trim();
+    out = out.replaceAll(
+      `__${key}__`,
+      v === undefined || v === '' ? SELLER_PENDING_TEXT : escapeHtml(v),
+    );
+  }
+  return out;
+}

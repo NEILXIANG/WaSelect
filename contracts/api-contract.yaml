@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.32
+  version: 0.6.33
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -405,6 +405,11 @@ info:
       ② 新增 `GET /admin/exports/{kind}`（orders / purchase / customs 三类 CSV，JSON 包装；每次导出进审计）。
       ③ `GET /admin/orders` 开放 `include_test`（'true' / 'false'）：管理端"含测试单"开关；审核期测试单付款满 24 小时由每日作业归档为 cancelled（事件 note = test_archived）。
       ④ `Order` / `AdminOrderListItem` 增加 `tracking_url`（官方查件链接，剩余清单 3-5）。
+    0.6.33（剩余工作清单 批次 4，AJ-371）：
+      ① `GET /terms`：`urls` 改为绝对地址（基址未配则省略）；新增 `documents`（四类法务文档 × 三语言）与 `seller`（特商法表示，只含已配置字段）。
+      ② 新增 `GET /support`（客服联系方式，只含已配置字段）。
+      ③ `AddressInput.state`：美国地址须为 USPS 62 个州码之一（`XX` 之类 → 40002）。
+      ④ 错误响应 `Err.data`：40401 / 40901（报价与建单）带 `product_id`，购物车据此标出失效的那一件。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -481,7 +486,13 @@ paths:
     get:
       security: []
       summary: 当前生效条款版本与法务页地址（D-45）；小程序法务页与建单前调用，建单时把 version 回传
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {version: {type: string, example: TOS-2026-09-20}, updated_at: {type: string, format: date-time, description: '0.6.10：当前实现不返回（可选）'}, urls: {type: object, description: '0.6.10：当前为占位相对路径，法务页上线后改绝对 URL', properties: {zh: {type: string}, ja: {type: string}, en: {type: string}}}}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {version: {type: string, example: TOS-2026-09-20}, updated_at: {type: string, format: date-time, description: '0.6.10：当前实现不返回（可选）'}, urls: {type: object, description: '0.6.33：用户协议的**绝对地址**（<base>/legal/terms/#zh|ja|en，base = LEGAL_BASE_URL 或 CHECKOUT_BASE_URL）；两者都未配置时**整键省略**（不再给相对路径）', properties: {zh: {type: string}, ja: {type: string}, en: {type: string}}}, documents: {type: object, description: '0.6.33：四类法务文档（terms / privacy / refund / tokushoho）各三语言的绝对地址，省略规则同 urls', additionalProperties: {type: object, properties: {zh: {type: string}, ja: {type: string}, en: {type: string}}}}, seller: {type: object, description: '0.6.33：特商法表示的商家信息，只含已配置的字段（公司登记前为空对象，不编占位值）', properties: {name: {type: string}, representative: {type: string}, address: {type: string}, phone: {type: string}, email: {type: string}}}}}}}}}
+  /support:
+    get:
+      security: []
+      summary: 客服联系方式（0.6.33，剩余清单 4-2）
+      description: 只回已配置的字段（SUPPORT_EMAIL / SUPPORT_WECHAT / SUPPORT_HOURS）；客服账号确定前为空对象，小程序据此不显示入口——不下发占位联系方式。
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {email: {type: string}, wechat: {type: string, description: 客服微信号}, hours: {type: string, description: 客服时间（展示文案）}}}}}}}
   /healthz:
     servers: [{url: 'https://api.example.com', description: '0.6.10：探针挂在根路径，不在 /api/v1 下'}]
     get:
@@ -763,7 +774,7 @@ components:
   parameters:
     IdemKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 128, description: '客户端段上限 128 字符（0.6.0②）；超限 40001 + reason idempotency_key_too_long'}}
   responses:
-    Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}
+    Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}, data: {type: object, description: '0.6.33：可对外的结构化数据（只有抛错处显式标注的字段）。40401 / 40901（报价与建单）带 product_id 指出是哪一件（剩余清单 4-7）；50300 带 retry_after_ms', properties: {product_id: {type: string}, retry_after_ms: {type: integer}}}}}}}}
   schemas:
     AuthResp: {type: object, properties: {token: {type: string}, user: {type: object, properties: {id: {type: string}, isAdmin: {type: boolean}}}}}
     Display: {type: object, description: 展示价，整数分（后端按当日汇率计算）, properties: {USD: {type: integer}, CNY: {type: integer}}}
@@ -778,7 +789,7 @@ components:
                  why: {type: string, maxLength: 200, description: '0.6.23：编辑口径的"为什么值得买"。可选（必填会逼运营编一句假文案）；超 200 字报 40001 why_too_long，**不静默截断**'},
                  maker: {type: string, maxLength: 120, description: '0.6.23：产地 / 工房 / 匠人署名。可选；超 120 字报 40001 maker_too_long（与 DB VARCHAR(120) 同宽）'},
                  tags: {type: array, items: {type: string, minLength: 1}, description: '0.6.23：编辑展示标签。**PUT 是整行覆盖**：带了（含空数组）= 覆盖，省略在新建路径按 [] 处理；逐项不得为空串（空串会渲染出一个空色块）'}}}
-    AddressInput: {description: '0.6.27：各字段补列宽上限（= ADDRESS_MAX_CHARS，与列宽逐字一致），超长 40001；state 补 pattern（不符是 **40002** 不是 40001）', type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, maxLength: 100, pattern: '^[ -~]+$'}, phone: {type: string, maxLength: 20, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, maxLength: 200, pattern: '^[ -~]+$'}, line2: {type: string, maxLength: 200, pattern: '^[ -~]*$'}, city: {type: string, maxLength: 100, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$'}, postal_code: {type: string, maxLength: 10, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
+    AddressInput: {description: '0.6.27：各字段补列宽上限（= ADDRESS_MAX_CHARS，与列宽逐字一致），超长 40001；state 补 pattern（不符是 **40002** 不是 40001）', type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, maxLength: 100, pattern: '^[ -~]+$'}, phone: {type: string, maxLength: 20, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, maxLength: 200, pattern: '^[ -~]+$'}, line2: {type: string, maxLength: 200, pattern: '^[ -~]*$'}, city: {type: string, maxLength: 100, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', description: '0.6.33：country = US 时必须是 USPS Pub 28 附录 B 的 62 个州码之一（50 州 + DC + 属地 / 自由联系国 + AA/AE/AP），否则 40002（剩余清单 4-5）'}, postal_code: {type: string, maxLength: 10, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
     Address: {allOf: [{$ref: '#/components/schemas/AddressInput'}, {type: object, properties: {id: {type: string}}}]}
     OrderItemsInput: {type: array, minItems: 1, maxItems: 50, description: '0.6.27：maxItems 50 = domain/quote.ts 的 MAX_QUOTE_ITEMS（AJ-319）。⚠️ 这一版是**先有契约、后有实现**——核对时发现代码里根本没有数量上限，唯一约束是 http.ts 的 JSON_BODY_LIMIT=100kb（约可塞 2500 条），属于自造 DoS；本条登记的同时补了实现。超出 → 40001（reason items_too_many）。⚠️ 小程序端购物车（cart-store.js）目前**没有**数量上限，攒到 51 件会在结算时撞这条', items: {type: object, required: [product_id, qty], properties: {product_id: {type: string}, qty: {type: integer, minimum: 1}}}}
     # duty_jpy 可空 + duty_estimate（I1-U4 实现口径）：duty_rates 无此 (origin,dest) 行、或目的国/产地

@@ -246,6 +246,15 @@ export interface WxApi {
    *      那比"正式版全站失败"严重得多（后者响亮、立刻有人报；前者静默写坏生产数据）。
    */
   getAccountInfoSync(): WxAccountInfo | undefined;
+  /**
+   * 隐私授权查询 / 主动触发（剩余清单 4-3，@see ./privacy.js 的 @measured）。
+   * ⚠️ 可选：基础库过低的宿主没有这两个 API——返回 undefined 的方法由 privacy.js 判成 unsupported，
+   *    交给微信在调用隐私接口时自行弹窗（同 getAccountInfoSync 的"不猜"口径）。
+   */
+  getPrivacySetting?: ((option: WxPrivacySettingOption) => void) | undefined;
+  requirePrivacyAuthorize?: ((option: WxRequirePrivacyOption) => void) | undefined;
+  /** 版本更新管理器（剩余清单 4-9，@see ./update.js）；可选：基础库 < 1.9.90 没有。 */
+  getUpdateManager?: (() => WxUpdateManager) | undefined;
 }
 
 /**
@@ -255,6 +264,25 @@ export interface WxApi {
  */
 export interface WxAccountInfo {
   miniProgram?: { envVersion?: string };
+}
+
+/** `wx.getPrivacySetting` 的入参（剩余清单 4-3；只声明我们读的字段）。 */
+export interface WxPrivacySettingOption {
+  success?: (res: { needAuthorization?: boolean; privacyContractName?: string }) => void;
+  fail?: (err: { errMsg?: string }) => void;
+}
+
+/** `wx.requirePrivacyAuthorize` 的入参（剩余清单 4-3）。 */
+export interface WxRequirePrivacyOption {
+  success?: () => void;
+  fail?: (err: { errMsg?: string }) => void;
+}
+
+/** `wx.getUpdateManager()` 的返回值（剩余清单 4-9；只声明我们用的方法）。 */
+export interface WxUpdateManager {
+  onUpdateReady(cb: () => void): void;
+  onUpdateFailed(cb: () => void): void;
+  applyUpdate(): void;
 }
 
 /** 宿主（`globalThis.wx`）上我们真正读到的形状——比 `WxApi` 宽松，因为官方签名返回 `unknown`。 */
@@ -277,6 +305,9 @@ interface WxHost {
   redirectTo(option: WxRedirectOption): void;
   /** ⚠️ 可选：基础库 < 2.2.2 的宿主没有这个同步 API（@see WxApi.getAccountInfoSync @limitation 十四）。 */
   getAccountInfoSync?: () => WxAccountInfo;
+  getPrivacySetting?: (option: WxPrivacySettingOption) => void;
+  requirePrivacyAuthorize?: (option: WxRequirePrivacyOption) => void;
+  getUpdateManager?: () => WxUpdateManager;
 }
 
 /**
@@ -347,5 +378,17 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     },
     getAccountInfoSync: () => host().getAccountInfoSync?.(),
   };
+  // 隐私 API 只在宿主真有时才挂（剩余清单 4-3）：没有就是 undefined，由调用方判 unsupported
+  const w = (globalThis as { wx?: WxHost }).wx;
+  if (typeof w?.getPrivacySetting === 'function') {
+    real.getPrivacySetting = (option) => host().getPrivacySetting?.(option);
+  }
+  if (typeof w?.requirePrivacyAuthorize === 'function') {
+    real.requirePrivacyAuthorize = (option) => host().requirePrivacyAuthorize?.(option);
+  }
+  // 剩余清单 4-9：同上，宿主有才挂
+  if (typeof w?.getUpdateManager === 'function') {
+    real.getUpdateManager = () => (host().getUpdateManager as () => WxUpdateManager)();
+  }
   return { ...real, ...over };
 }

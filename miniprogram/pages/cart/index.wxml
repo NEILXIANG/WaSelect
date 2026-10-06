@@ -17,6 +17,7 @@
   <view class="ws-gutter" wx:if="{{empty}}">
     <view class="ws-card state">
       <text class="ws-note">购物车是空的</text>
+      <ws-button text="去逛逛" type="default" bindtap="onGoShopping" />
     </view>
   </view>
 
@@ -30,6 +31,8 @@
           <view class="row-item__body">
             <text class="ws-title row-item__title">{{item.title}}</text>
             <text class="ws-note" wx:if="{{item.priceText}}">{{item.priceText}}</text>
+            <!-- 剩余清单 4-7：报价失败时服务端指出的那一件 -->
+            <text class="ws-note state__error" wx:if="{{item.invalidText}}">{{item.invalidText}}</text>
 
             <!-- 数量步进：− / 数量 / ＋ / 删除。
                  ⚠️ 步进块是 view 不是 button：它是"微调"不是"提交动作"，
@@ -72,6 +75,7 @@
     <view class="ws-gutter" wx:if="{{quoteError}}">
       <view class="ws-card state">
         <text class="ws-note state__error">{{quoteError}}</text>
+        <text class="ws-caption" wx:if="{{quoteErrorRef}}" user-select>{{quoteErrorRef}}</text>
       </view>
     </view>
 

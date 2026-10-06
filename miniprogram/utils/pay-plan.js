@@ -101,6 +101,12 @@ export function payGuide(plan) {
       title: '请在浏览器中完成支付',
       body: '银行卡支付由 Stripe 托管页完成。复制链接后在浏览器打开，支付完成后回到这里查看订单。',
       actionText: '复制链接',
+      // 剩余清单 4-11（A37）：三步图示——小程序里打不开托管页，用户最容易卡在"复制之后去哪儿"
+      steps: [
+        '点下方「复制链接」',
+        '打开手机浏览器（Safari / Chrome），粘贴链接并用银行卡完成支付',
+        '支付完成后回到小程序，在「订单」里查看状态',
+      ],
     };
   }
   if (p.kind === 'auto') {
@@ -110,16 +116,18 @@ export function payGuide(plan) {
       //    测试 SKU 与 mock 支付路径写进提审时的「审核备注」，不写进界面
       body: '订单已确认，可在订单详情中查看进度。',
       actionText: '查看订单',
+      steps: [],
     };
   }
   if (p.kind === 'in_app') {
     // ⚠️ in_app 不需要引导屏：这里返回全空是**信号**不是缺省——wxml 按 title 空与否决定是否渲染
-    return { title: '', body: '', actionText: '' };
+    return { title: '', body: '', actionText: '', steps: [] };
   }
   return {
     title: '暂时无法支付',
     body: typeof p.reason === 'string' ? p.reason : '该支付方式当前不可用，请改用其他支付方式。',
     actionText: '返回订单',
+    steps: [],
   };
 }
 

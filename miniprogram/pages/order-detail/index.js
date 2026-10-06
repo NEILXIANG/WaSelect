@@ -27,10 +27,11 @@
  * @see ./index.vm.js（视图逻辑真源，17 条单测）；../../utils/wx-api.js（showModal / setClipboardData）
  */
 import { detailView } from './index.vm.js';
-import { errorMessage } from '../../utils/error-text.js';
+import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { recentExternalPay } from '../../utils/external-pay.js';
+import { supportRows } from '../../utils/support.js';
 
 const app = getApp();
 
@@ -49,9 +50,10 @@ Page({
     error: '',
     /** 取消请求在途（ws-button 会吞掉这期间的连点）。 */
     cancelling: false,
-    /** 运单号已复制（复制成功后切换文案，@see @limitation 三）。 */
-    /** 刚复制的是哪一个：'no' 运单号 / 'url' 查件链接 / '' 都没有（两行各自显示「已复制」）。 */
+    /** 刚复制的是哪一个：'no' 运单号 / 'url' 查件链接 / '' 都没有（两行各自显示「已复制」，@see @limitation 三）。 */
     copied: '',
+    /** 剩余清单 4-2：客服联系方式（utils/support.js）；空数组 = 未配置，不显示。 */
+    support: [],
   },
 
   /** 订单 id（来自 query；不参与渲染，放 this 上）。 */
@@ -83,6 +85,11 @@ Page({
     this.recheckCount = 0;
     // @see @limitation 一：空 id 不发请求
     if (this.orderId === '') this.setData({ error: '订单不存在或链接无效' });
+    // 剩余清单 4-2：订单出问题时最需要客服——拉一次联系方式，失败静默（只是不显示这张卡）
+    app.globalData
+      .api({ url: `${app.globalData.apiBase}/api/v1/support`, traceId: this.traceId })
+      .then((res) => this.setData({ support: supportRows(res) }))
+      .catch(() => undefined);
   },
 
   onUnload() {
@@ -109,7 +116,7 @@ Page({
       });
       this.scheduleRecheck();
     } catch (e) {
-      this.setData({ view: null, error: errorMessage(e) });
+      this.setData({ view: null, ...errorFields(e) });
     } finally {
       this.setData({ loading: false });
     }
@@ -184,7 +191,7 @@ Page({
       });
       await this.load();
     } catch (e) {
-      this.setData({ error: errorMessage(e) });
+      this.setData({ ...errorFields(e) });
     } finally {
       this.setData({ cancelling: false });
     }

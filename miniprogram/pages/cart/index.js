@@ -25,9 +25,9 @@
  * @see ./index.vm.js（行视图真源）；../../utils/quote-view.js（报价区视图，共享层）；
  *      ../../utils/cart-store.js（本地状态真源）
  */
-import { cartRows, checkoutGate } from './index.vm.js';
+import { cartRows, checkoutGate, markInvalid } from './index.vm.js';
 import { quoteView } from '../../utils/quote-view.js';
-import { errorMessage } from '../../utils/error-text.js';
+import { errorFields } from '../../utils/error-text.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -43,6 +43,8 @@ const QUOTE_DEBOUNCE_MS = 400;
 
 /** 结算页路径（跳转路径只在这一处出现）。 */
 const CHECKOUT_PAGE = '/pages/checkout/index';
+/** 首页（tab 页，剩余清单 4-8 空态出口）。 */
+const HOME_PAGE = '/pages/home/index';
 
 /**
  * 报价里有没有权威合计。
@@ -157,6 +159,8 @@ Page({
       const quote = quoteView(res);
       this.setData({
         quote,
+        // 报价通过 → 清掉上一次的失效标记（剩余清单 4-7）
+        rows: markInvalid(this.data.rows, undefined, 0),
         gate: checkoutGate({
           hasTotal: hasTotal(quote),
           splitRequired: quote?.splitRequired === true,
@@ -167,7 +171,9 @@ Page({
       const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
       this.setData({
         quote: null,
-        quoteError: errorMessage(e),
+        // 剩余清单 4-7：服务端指出是哪一件（e.data.product_id）→ 标红那一行
+        rows: markInvalid(this.data.rows, e?.data?.product_id, code),
+        ...errorFields(e, 'quoteError'),
         quoteErrorCode: code,
         gate: checkoutGate({ hasError: true, errorCode: code }),
       });
@@ -226,5 +232,10 @@ Page({
   idOf(e) {
     const id = e?.currentTarget?.dataset?.id;
     return typeof id === 'string' ? id : '';
+  },
+
+  /** 空态"去逛逛"（剩余清单 4-8）：首页是 tab 页，只能 switchTab。 */
+  onGoShopping() {
+    wxApi.switchTab({ url: HOME_PAGE });
   },
 });

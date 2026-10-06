@@ -28,10 +28,44 @@
  */
 export function errorMessage(err) {
   const isObj = err !== null && typeof err === 'object';
-  const code = isObj && Number.isInteger(err.code) ? String(err.code) : '';
+  // 剩余清单 4-6：网络层失败（负数码）给人话；宿主原始串（request:fail timeout）只进 errorRef 小字
+  if (isObj && Number.isInteger(err.code) && err.code < 0 && err.code !== UNCONFIGURED_CODE) {
+    return NETWORK_TEXT;
+  }
   const fromMessage = isObj && typeof err.message === 'string' ? err.message.trim() : '';
   const fromErrMsg =
     fromMessage === '' && isObj && typeof err.errMsg === 'string' ? err.errMsg.trim() : '';
-  const msg = (fromMessage || fromErrMsg) === '' ? '加载失败' : fromMessage || fromErrMsg;
-  return code === '' ? msg : `${code} ${msg}`;
+  const msg = fromMessage || fromErrMsg;
+  return msg === '' ? '加载失败' : msg;
+}
+
+/** 网络层失败的人话（剩余清单 4-6）。 */
+const NETWORK_TEXT = '网络不太稳定，请检查网络后重试';
+/** "服务地址没配"（unconfigured-api，-2）的 message 本身就是给人看的说明，不替换。 */
+const UNCONFIGURED_CODE = -2;
+
+/**
+ * 报障小字（剩余清单 4-6 / M9）：`错误码 40002 · 链路 abcdef12`（网络层再附宿主原因）。
+ * @why 主文案给人看、小字给客服看：用户截图发给客服时，客服凭链路号能在日志里找到这一次请求的全部记录；
+ *      而把码与英文原因拼进主文案，用户读到的是一串看不懂的东西。
+ * @why 链路号只取前 8 位：够在日志里检索（trace_id 前缀匹配），又不至于一行放不下。
+ * @returns {string} 空串 = 没有可报的信息（页面不显示小字）
+ */
+export function errorRef(err) {
+  if (err === null || typeof err !== 'object' || !Number.isInteger(err.code)) return '';
+  const parts = [`错误码 ${String(err.code)}`];
+  if (typeof err.traceId === 'string' && err.traceId !== '')
+    parts.push(`链路 ${err.traceId.slice(0, 8)}`);
+  if (err.code < 0 && typeof err.message === 'string' && err.message.trim() !== '') {
+    parts.push(err.message.trim());
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * 页面一次写入主文案与小字：`setData({...errorFields(e)})` → `{error, errorRef}`。
+ * @param {string} [key] 主文案的键名（默认 error；保存错误用 saveError → 同时给 saveErrorRef）
+ */
+export function errorFields(err, key = 'error') {
+  return { [key]: errorMessage(err), [`${key}Ref`]: errorRef(err) };
 }

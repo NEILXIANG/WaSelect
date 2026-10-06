@@ -24,6 +24,8 @@
 import { createRequester } from './utils/request.js';
 import { createUnconfiguredApi } from './utils/unconfigured-api.js';
 import { createWxApi } from './utils/wx-api.js';
+import { ensurePrivacyAuthorized } from './utils/privacy.js';
+import { watchUpdate } from './utils/update.js';
 import { createStorage } from './utils/storage.js';
 import { loginWithWechat } from './utils/auth-session.js';
 import { createCartStore } from './utils/cart-store.js';
@@ -57,6 +59,11 @@ App({
      *      吞掉的定义是"之后再也查不到原因"，这里是"换个地方继续响"。
      */
     launchError: null,
+    /**
+     * 启动时的隐私授权结果（剩余清单 4-3，utils/privacy.js）：'' 尚未完成 / not_needed / agreed / denied / unsupported。
+     * 支付页复制链接失败时据此说清原因。
+     */
+    privacy: '',
     /** 唯一的请求实例；页面通过 `getApp().globalData.api` 使用。 */
     api: null,
     /** 唯一的本地存储实例（带 `ws:` 前缀）；页面不要用宿主的 `getStorageSync`。 */
@@ -119,6 +126,15 @@ App({
       });
     }
     this.globalData.apiBase = apiBase;
+
+    // 剩余清单 4-9：新版本下载好后问用户要不要重启（不支持的宿主静默跳过）
+    log({ event: 'update_watch', result: watchUpdate(wxApi) });
+
+    // 剩余清单 4-3：需要隐私授权时主动调起官方弹窗（不等用户在付款时撞上剪贴板）；结果只记录，不阻塞启动
+    void ensurePrivacyAuthorized(wxApi).then((r) => {
+      this.globalData.privacy = r;
+      log({ event: 'privacy_authorize', result: r });
+    });
 
     // 登录专用请求器：不挂 token、不配 relogin（@why 见文件头——同请求器登录会死锁）
     const authApi = createRequester({ wx: wxApi, log });

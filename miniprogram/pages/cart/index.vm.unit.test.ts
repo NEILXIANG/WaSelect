@@ -13,7 +13,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { cartRows, checkoutGate } from './index.vm.js';
+import { cartRows, checkoutGate, markInvalid } from './index.vm.js';
 
 const ITEMS = [
   {
@@ -154,5 +154,31 @@ describe('防复发：购物车薄壳的乱序接线（B36 / AJ-219）', () => {
     // ⚠️ 精确计数而不是 `toContain`：报价成功与 finally 各有一次，
     //    用 `toContain` 的话删掉其中一处仍然绿——守的是"还有一处"，不是"两处都在"。
     expect(count('splitRequired:'), '报价成功分支 + finally 分支各一处').toBe(2);
+  });
+});
+
+/** 剩余清单 4-7（M10）：报价失败时标出是哪一件。 */
+describe('markInvalid（4-7）', () => {
+  const rows = cartRows([
+    { productId: 'p-a', qty: 1, title: 'A' },
+    { productId: 'p-b', qty: 2, title: 'B' },
+  ]);
+
+  it('🔴 40401 → 那一行标"已下架或不存在"；40901 → "库存不足"；其余行不动', () => {
+    expect(markInvalid(rows, 'p-b', 40401).map((r) => r.invalidText)).toEqual([
+      '',
+      '已下架或不存在，请移除',
+    ]);
+    expect(markInvalid(rows, 'p-a', 40901).map((r) => r.invalidText)).toEqual([
+      '库存不足，请减少数量',
+      '',
+    ]);
+  });
+
+  it('没有 product_id / 不认识的码 / id 不在车里 → 全部清空标记（不猜是哪一件）', () => {
+    const marked = markInvalid(rows, 'p-a', 40401);
+    expect(markInvalid(marked, undefined, 40401).every((r) => r.invalidText === '')).toBe(true);
+    expect(markInvalid(rows, 'p-a', 50000).every((r) => r.invalidText === '')).toBe(true);
+    expect(markInvalid(rows, 'p-zzz', 40401).every((r) => r.invalidText === '')).toBe(true);
   });
 });

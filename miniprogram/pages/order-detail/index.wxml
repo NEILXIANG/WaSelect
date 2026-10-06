@@ -18,6 +18,7 @@
   <view class="ws-gutter" wx:if="{{error}}">
     <view class="ws-card state">
       <text class="ws-note state__error">{{error}}</text>
+      <text class="ws-caption" wx:if="{{errorRef}}" user-select>{{errorRef}}</text>
     </view>
   </view>
 
@@ -158,4 +159,20 @@
       />
     </view>
   </block>
+
+  <!-- 剩余清单 4-10：缺货整单退款说明（仅已付款未发货） -->
+  <view class="ws-gutter ws-section" wx:if="{{view.stockRefundNote}}">
+    <text class="ws-note">{{view.stockRefundNote}}</text>
+  </view>
+
+  <!-- 剩余清单 4-2：联系客服（服务端未配置时不显示；长按可选中复制） -->
+  <view class="ws-gutter ws-section" wx:if="{{support.length > 0}}">
+    <view class="ws-card">
+      <text class="ws-note">对订单有疑问？联系客服</text>
+      <view class="quote-line" wx:for="{{support}}" wx:key="key">
+        <text class="ws-note">{{item.label}}</text>
+        <text class="ws-body" user-select>{{item.value}}</text>
+      </view>
+    </view>
+  </view>
 </view>

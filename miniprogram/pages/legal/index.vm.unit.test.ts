@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { LANG_ROWS, legalState, termsView } from './index.vm.js';
+import { LANG_ROWS, documentsView, legalState, sellerRows, termsView } from './index.vm.js';
 
 const TERMS = {
   version: 'TOS-2026-09-20',
@@ -121,7 +121,10 @@ describe('legalState（三态）', () => {
 describe('LANG_ROWS 与契约 /terms 的 urls 双向比对', () => {
   const yaml = readFileSync(resolve(__dirname, '../../../contracts/api-contract.yaml'), 'utf8');
   const line = yaml.split('\n').find((l) => l.includes('urls: {type: object')) ?? '';
-  const contractLangs = [...line.matchAll(/([a-z]{2}):\s*\{\s*type: string\s*\}/g)].map(
+  // 只取 `urls: {…}` 这一段（0.6.33 起同一行后面还有 documents / seller，剩余清单 4-1）：
+  //    seller 的 name / phone 之类会被两字母正则误抓成 "me" / "ne"
+  const urlsSeg = line.slice(line.indexOf('urls: {type: object'), line.indexOf(', documents:'));
+  const contractLangs = [...urlsSeg.matchAll(/([a-z]{2}):\s*\{\s*type: string\s*\}/g)].map(
     (m) => m[1] ?? '',
   );
 
@@ -149,5 +152,51 @@ describe('termsView：只保留 https 绝对地址（W-06）', () => {
       urls: { zh: '/legal/terms.zh.html', ja: 'http://a.example/x', en: 'https://a.example/en' },
     });
     expect(view.langs.map((l) => l.key)).toEqual(['en']);
+  });
+});
+
+/**
+ * 剩余清单 4-1：四类法务文档 + 特商法商家信息。
+ * @why 原先只有用户协议的三语链接；隐私政策、退货政策、特商法表示在小程序里无处可找（A34 / A35）。
+ */
+describe('documentsView（4-1）', () => {
+  const base = 'https://pay.example.com/legal';
+  const RES = {
+    documents: {
+      terms: { zh: `${base}/terms/#zh`, ja: `${base}/terms/#ja`, en: `${base}/terms/#en` },
+      privacy: { zh: `${base}/privacy/#zh`, ja: ' ', en: `${base}/privacy/#en` },
+      refund: { zh: '/legal/refund/#zh' },
+      tokushoho: { ja: `${base}/tokushoho/#ja` },
+      unknown_doc: { zh: `${base}/x/#zh` },
+    },
+  };
+
+  it('🔴 按固定顺序给四类文档的中文名；每类只留 https 链接；整类没有可用链接的不出现；不认识的文档类不出现', () => {
+    const docs = documentsView(RES);
+    expect(docs.map((d) => d.key)).toEqual(['terms', 'privacy', 'tokushoho']);
+    expect(docs.map((d) => d.title)).toEqual(['用户协议', '隐私政策', '特定商取引法表示']);
+    expect(docs[1]?.langs.map((l) => l.key)).toEqual(['privacy:zh', 'privacy:en']);
+    expect(docs[0]?.langs[0]).toEqual({ key: 'terms:zh', label: '中文', url: `${base}/terms/#zh` });
+  });
+
+  it('脏输入（null / 数组 / 缺 documents）→ 空数组', () => {
+    expect(documentsView(null)).toEqual([]);
+    expect(documentsView({ documents: [] })).toEqual([]);
+    expect(documentsView({})).toEqual([]);
+  });
+});
+
+describe('sellerRows（4-1）', () => {
+  it('🔴 只列服务端给了的字段，按特商法顺序、中文标签；全没有 → 空数组（页面不显示这张卡）', () => {
+    expect(
+      sellerRows({
+        seller: { email: 'support@example.com', name: '株式会社ワセレクト', bogus: 'x' },
+      }),
+    ).toEqual([
+      { label: '販売業者', value: '株式会社ワセレクト' },
+      { label: '联系邮箱', value: 'support@example.com' },
+    ]);
+    expect(sellerRows({ seller: {} })).toEqual([]);
+    expect(sellerRows(null)).toEqual([]);
   });
 });

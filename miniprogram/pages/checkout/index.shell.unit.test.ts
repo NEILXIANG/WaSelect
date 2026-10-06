@@ -47,6 +47,9 @@ let quoteHold: ReturnType<typeof deferred<unknown>> | null;
 /** 非空 = 把 `POST /orders` 挂起（用来观察"建单在途"这一瞬间的页面）。 */
 let orderHold: ReturnType<typeof deferred<unknown>> | null;
 let navigations: string[];
+/** 剩余清单 4-8：单独记 redirectTo（结算 → 支付必须"替换"本页，不留空结算页在返回栈里）。 */
+let redirects: string[];
+let switches: string[];
 let cartCleared: boolean;
 
 const call = <T>(name: string, ...args: unknown[]): T =>
@@ -70,12 +73,20 @@ beforeEach(async () => {
   quoteHold = null;
   orderHold = null;
   navigations = [];
+  redirects = [];
+  switches = [];
   cartCleared = false;
   vi.stubGlobal('wx', {
     navigateTo: (o: { url: string }) => navigations.push(o.url),
-    redirectTo: (o: { url: string }) => navigations.push(o.url),
+    redirectTo: (o: { url: string }) => {
+      navigations.push(o.url);
+      redirects.push(o.url);
+    },
     // S5：订单升为 tab 页，40913 的恢复路径改用 switchTab（navigateTo 到 tab 页会被宿主拒绝）
-    switchTab: (o: { url: string }) => navigations.push(o.url),
+    switchTab: (o: { url: string }) => {
+      navigations.push(o.url);
+      switches.push(o.url);
+    },
   });
   page = await loadPage(new URL('./index.js', import.meta.url).href, {
     globalData: {
@@ -318,5 +329,66 @@ describe('结算页薄壳：连点提交（W-03）', () => {
     expect(posts).toHaveLength(1);
     orderHold.resolve({ order_id: 'o-1' });
     await settle();
+  });
+});
+
+/** 剩余清单 4-4：立即购买进结算页。 */
+describe('结算页薄壳：立即购买（4-4）', () => {
+  it('🔴 mode=buynow：报价 / 建单只带那一件；建单成功后**不**清购物车', async () => {
+    // 重新以 buynow 模式进页：单件放在 globalData.buyNow（详情页"立即购买"写入）
+    page = await loadPage(new URL('./index.js', import.meta.url).href, {
+      globalData: {
+        apiBase: 'http://api.test',
+        pickedAddressId: '',
+        buyNow: { productId: 'p-now', qty: 1, title: '出刃包丁' },
+        cart: {
+          items: () => [{ productId: 'p-1', qty: 2, title: '購物車里的別的東西' }],
+          clear: () => {
+            cartCleared = true;
+          },
+        },
+        api: async (req: Req) => {
+          if (req.url.endsWith('/terms')) return { version: 'TOS-TEST-1' };
+          if (req.url.endsWith('/addresses')) return [ADDR];
+          if (req.url.endsWith('/orders/quote')) {
+            posts.push(req);
+            return quote;
+          }
+          posts.push(req);
+          return { order_id: 'o-now' };
+        },
+      },
+    });
+    call('onLoad', { mode: 'buynow' });
+    await ready();
+    call('onSubmit');
+    await settle();
+    const quoteReq = posts.find((p) => p.url.endsWith('/orders/quote'));
+    expect(quoteReq?.data?.['items']).toEqual([{ product_id: 'p-now', qty: 1 }]);
+    const orderReq = posts.find((p) => p.url.endsWith('/orders'));
+    expect(orderReq?.data?.['items']).toEqual([{ product_id: 'p-now', qty: 1 }]);
+    expect(cartCleared).toBe(false);
+    expect(navigations).toEqual(['/pages/pay/index?orderId=o-now']);
+  });
+});
+
+/** 剩余清单 4-8（M11 / M13）：结算 → 支付不留空页；空态"去逛逛"。 */
+describe('结算页：不留空页与空态出口（4-8）', () => {
+  it('🔴 建单成功 → redirectTo 支付页（返回键不会回到一个已经清空的结算页）', async () => {
+    await ready();
+    call('onSubmit');
+    await settle();
+    expect(redirects).toEqual(['/pages/pay/index?orderId=o-1']);
+  });
+
+  it('🔴 空态点"去逛逛" → switchTab 首页', () => {
+    call('onGoShopping');
+    expect(switches).toEqual(['/pages/home/index']);
+  });
+});
+
+describe('结算页：缺货退款说明（4-10）', () => {
+  it('🔴 data 里带说明（与订单详情同一句，付款前就让用户知道）', () => {
+    expect(String(page.data['stockRefundNote'])).toContain('全额退款');
   });
 });

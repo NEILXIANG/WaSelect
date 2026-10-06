@@ -23,6 +23,8 @@ import {
   CHECKOUT_DIST_DIR,
   CHECKOUT_PAGES,
   isDeployBuild,
+  LEGAL_PAGES,
+  renderLegalPage,
   renderPage,
   renderRedirects,
   renderTokensCss,
@@ -55,8 +57,15 @@ function main(): void {
     writeFileSync(join(dist, page, 'index.html'), html, 'utf8');
   }
 
+  // 剩余清单 4-1：法务页（商家信息构建期从 SELLER_* 环境变量填入，未配置的显示"公司登记后公布"）
+  for (const page of LEGAL_PAGES) {
+    const html = renderLegalPage(readFileSync(join(src, page, 'index.html'), 'utf8'), process.env);
+    mkdirSync(join(dist, page), { recursive: true });
+    writeFileSync(join(dist, page, 'index.html'), html, 'utf8');
+  }
+
   process.stdout.write(
-    `[build:checkout] 产物就绪（API=${apiBase}）：dist/_redirects + tokens.css + ${CHECKOUT_PAGES.length} 张页\n`,
+    `[build:checkout] 产物就绪（API=${apiBase}）：dist/_redirects + tokens.css + ${CHECKOUT_PAGES.length} 张页 + ${LEGAL_PAGES.length} 张法务页\n`,
   );
 }
 

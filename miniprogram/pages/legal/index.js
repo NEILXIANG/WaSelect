@@ -28,8 +28,8 @@
  *
  * @see ./index.vm.js（版本与链接的转换，11 条单测）；../../utils/wx-api.js（setClipboardData）
  */
-import { legalState, termsView } from './index.vm.js';
-import { errorMessage } from '../../utils/error-text.js';
+import { documentsView, legalState, sellerRows, termsView } from './index.vm.js';
+import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 
@@ -44,6 +44,10 @@ Page({
     version: '',
     /** vm `termsView` 的 `langs`：三个语种里**真正有 url**的那些。 */
     langs: [],
+    /** 剩余清单 4-1：四类法务文档（vm `documentsView`）；为空时退回只显示用户协议的 `langs`。 */
+    docs: [],
+    /** 剩余清单 4-1：特商法商家信息（vm `sellerRows`）；为空时不显示这张卡。 */
+    seller: [],
     /** 最近一次复制成功的语种 key（空串 = 还没复制过）。 */
     copied: '',
     loading: false,
@@ -74,19 +78,24 @@ Page({
         traceId: this.traceId,
       });
       const view = termsView(res);
+      const docs = documentsView(res);
       this.setData({
         version: view.version,
         langs: view.langs,
+        docs,
+        seller: sellerRows(res),
         copied: '',
         error: '',
-        state: legalState({ loading: false, langCount: view.langs.length }),
+        state: legalState({ loading: false, langCount: docs.length + view.langs.length }),
       });
     } catch (e) {
       this.setData({
         version: '',
         langs: [],
-        error: errorMessage(e),
-        state: legalState({ loading: false, langCount: 0, error: errorMessage(e) }),
+        docs: [],
+        seller: [],
+        ...errorFields(e),
+        state: legalState({ loading: false, langCount: 0, ...errorFields(e) }),
       });
     } finally {
       this.setData({ loading: false });

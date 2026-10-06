@@ -184,3 +184,10 @@
   color: var(--ws-ink-mute);
   text-decoration: underline;
 }
+
+/* 报障小字（剩余清单 4-6）：比 reason 再弱一级，给客服看的不抢主文案 */
+.ws-state__ref {
+  margin-top: var(--ws-space-inline);
+  font-size: var(--ws-f-xs);
+  color: var(--ws-ink-mute);
+}

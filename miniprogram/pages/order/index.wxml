@@ -26,6 +26,7 @@
   <view class="ws-gutter" wx:if="{{empty}}">
     <view class="ws-card state">
       <text class="ws-note">还没有订单</text>
+      <ws-button text="去逛逛" type="default" bindtap="onGoShopping" />
     </view>
   </view>
 

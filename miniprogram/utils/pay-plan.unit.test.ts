@@ -127,7 +127,12 @@ describe('payGuide（引导文案）', () => {
   });
 
   it('⚠️ in_app 不需要引导屏 → 全空（wxml 按 title 空与否决定是否渲染那一屏）', () => {
-    expect(payGuide({ kind: 'in_app' })).toEqual({ title: '', body: '', actionText: '' });
+    expect(payGuide({ kind: 'in_app' })).toEqual({
+      title: '',
+      body: '',
+      actionText: '',
+      steps: [],
+    });
   });
 });
 
@@ -235,5 +240,19 @@ describe('payNotice（§14.2 提示条文案）', () => {
 
   it('时刻缺失 / 不可解析 → 不编分钟数，给不带数字的关单提示', () => {
     expect(payNotice([], { ...ORDER, created_at: 'bad' })).toEqual(['订单超时未支付将自动关闭']);
+  });
+});
+
+/** 剩余清单 4-11（A37）：银行卡三步图示。 */
+describe('payGuide.steps（4-11）', () => {
+  it('🔴 copylink → 三步（复制 / 浏览器里付 / 回来看订单）；其它分支 → 没有步骤', () => {
+    const steps = payGuide({ kind: 'copylink', url: 'https://x' }).steps;
+    expect(steps).toHaveLength(3);
+    expect(steps[0]).toContain('复制');
+    expect(steps[1]).toContain('浏览器');
+    expect(steps[2]).toContain('订单');
+    expect(payGuide({ kind: 'auto' }).steps).toEqual([]);
+    expect(payGuide({ kind: 'in_app' }).steps).toEqual([]);
+    expect(payGuide({ kind: 'unsupported' }).steps).toEqual([]);
   });
 });

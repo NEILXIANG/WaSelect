@@ -64,3 +64,29 @@ p {
   font-size: var(--ws-font-sm);
   color: var(--ws-color-muted);
 }
+
+/* ── 法务页（剩余清单 4-1）：长文、左对齐；宽度按"每行约 72 字符"的可读行长定（排版常量，不属主题尺寸） ── */
+.card.legal {
+  max-width: 72ch;
+  text-align: left;
+}
+.legal section {
+  margin-top: calc(var(--ws-space) * 2);
+}
+.legal .footer {
+  margin-top: var(--ws-space-sm);
+}
+.draft {
+  color: var(--ws-color-error);
+  font-size: var(--ws-font-sm);
+}
+.seller {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--ws-space-sm) var(--ws-space);
+  margin-bottom: var(--ws-space);
+  font-size: var(--ws-font-sm);
+}
+.seller dt {
+  color: var(--ws-color-muted);
+}

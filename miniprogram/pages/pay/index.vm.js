@@ -14,6 +14,7 @@
  *      ../../../server/src/app/pay-intent.ts（服务端对同一件事的护栏）
  */
 import { STATUS_LABELS, canPay, statusText } from '../../utils/order-status.js';
+import { copyFailText } from '../../utils/privacy.js';
 import { payGuide } from '../../utils/pay-plan.js';
 
 /**
@@ -117,7 +118,7 @@ export function onShowAction(args) {
 }
 
 /** 没有引导内容时的 `guide`（与页面 data 的初值同形；wxml 靠 `guide.title` 为空来隐藏那一卡）。 */
-export const EMPTY_GUIDE = Object.freeze({ title: '', body: '', actionText: '' });
+export const EMPTY_GUIDE = Object.freeze({ title: '', body: '', actionText: '', steps: [] });
 
 /**
  * 订单已不需要再支付时，支付页要 `setData` 的全部内容（AJ-227 → MP3-01 改签名）。
@@ -148,6 +149,7 @@ export function closedScreen(view) {
  * 复制短链**之后**页面该变成什么样（B34 / AJ-217）。
  *
  * @param {unknown} ok 宿主 `setClipboardData` 的 success 是否触发；任何非 `true` 都当失败
+ * @param {unknown} [privacy] `app.globalData.privacy`（utils/privacy.js 的启动授权结果，剩余清单 4-3）
  * @returns {{copied: boolean, error: string}} 直接喂给 `setData` 的形状
  *
  * @why 支付页这一屏是**微信支付上线前唯一的付款路径**（D-49：银行卡 = 短链 →
@@ -162,9 +164,10 @@ export function closedScreen(view) {
  * @limitation 只产出"页面该显示什么"，**不碰剪贴板**：宿主调用在薄壳里。
  *              @see ./index.js（onCopy 传 success / fail）
  */
-export function copyResult(ok) {
+export function copyResult(ok, privacy = undefined) {
   if (ok === true) return { copied: true, error: '' };
-  return { copied: false, error: '复制失败，请长按下方链接手动复制' };
+  // 剩余清单 4-3：启动时拒绝过隐私授权 → 说清是被微信拦下的（否则用户以为按钮坏了）
+  return { copied: false, error: copyFailText(privacy, '复制失败，请长按下方链接手动复制') };
 }
 
 /**

@@ -27,7 +27,7 @@
  * @see ./index.vm.js（视图逻辑真源）；../../utils/request.js（错误形状：ApiError{code,message}）；
  *      ../../utils/trace.js（trace_id 串联）；contracts/api-contract.yaml（ProductCard 形状）
  */
-import { errorMessage } from '../../utils/error-text.js';
+import { errorFields } from '../../utils/error-text.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import {
@@ -321,7 +321,7 @@ Page({
       this.page = 0;
       this.loaded = 0;
       this.total = 0;
-      this.setData({ cards: [], empty: true, hasMore: false, error: errorMessage(e) });
+      this.setData({ cards: [], empty: true, hasMore: false, ...errorFields(e) });
     } finally {
       // ⚠️ 过期请求不能把 loading 清掉：清了会显示"没在加载"，而新请求其实还在途中
       if (!isStale(seq, this.seq)) {
@@ -359,7 +359,7 @@ Page({
     } catch (e) {
       if (isStale(seq, this.seq)) return;
       // 追加失败**不清列表**（已加载的商品还在），只提示；用户再触底会自然重试
-      this.setData({ error: errorMessage(e) });
+      this.setData({ ...errorFields(e) });
     } finally {
       // ⚠️ 过期的"下一页"**两个标志都不碰**：reload 已经把它们复位了，
       //    而此刻实例标志可能属于新一代的"下一页"——清掉它会让同一页被发两次。
