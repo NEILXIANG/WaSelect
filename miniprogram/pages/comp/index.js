@@ -16,8 +16,7 @@
  * @limitation 二：点击计数只用于证明"loading / disabled 的按钮点了不计"，
  *              不做持久化——页面重建归零是刻意的，免得误把它当成业务数据。
  *
- * @see ../../components/ws-price/index.js；../../components/ws-button/index.js；
- *      ../showcase-guard.unit.test.ts（断言本页登记了每一个已建组件）
+ * @see ../../components/ws-price/index.js；../../components/ws-button/index.js
  */
 Page({
   data: {

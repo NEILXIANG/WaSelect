@@ -43,10 +43,8 @@ const REQUIRED_STEPS: readonly string[] = [
   'build',
   'build:checkout',
   'check:contract',
-  'test:unit',
-  'test:db',
-  'test:contract',
-  'test:e2e',
+  // unit / db / contract / e2e 四层不再单独列：`cov` 已经把它们完整跑一遍（下面那条用例钉住 cov 的项目清单）。
+  // @why 2026-10-05 测试瘦身（AJ-365）：原来四层先各跑一遍、cov 再全跑一遍，测试被执行两次。
   'test:lint',
   'audit:prod',
   'cov',
@@ -112,7 +110,7 @@ describe('gate 这道门禁本身必须完整', () => {
     // @why 上面四条全部依赖 missingSteps / hasFullAudit。它们写坏的最可能后果
     //      不是报错，而是**永远返回空 → 所有断言永真**（本项目第四次以上踩同一形态）。
     const sample = 'npm run lint && npm run typecheck && npm run cov';
-    expect(missingSteps(sample, REQUIRED_STEPS)).toContain('test:db');
+    expect(missingSteps(sample, REQUIRED_STEPS)).toContain('test:lint');
     expect(missingSteps(sample, REQUIRED_STEPS)).toContain('audit:prod');
     // ⚠️ `lint` 不能命中 `lint:fix`：这条防的是"把 lint 换成 lint:fix"那种瘦身
     expect(missingSteps('npm run lint:fix && npm run typecheck', ['lint'])).toEqual(['lint']);
@@ -177,5 +175,32 @@ describe('pre-commit 钩子', () => {
     expect(guards).toMatch(/--project unit/);
     expect(guards).toContain('test/config');
     expect(guards).toContain('guard.unit.test');
+  });
+});
+
+/**
+ * gate 里不得再把 unit / db / contract / e2e 单独跑一遍（AJ-365）。
+ * @why cov 已经覆盖这四层；重复执行只会让每次 gate 多等一倍时间。
+ */
+describe('gate 不重复执行测试', () => {
+  it('四层测试只经由 cov 跑一次', () => {
+    for (const step of ['test:unit', 'test:db', 'test:contract', 'test:e2e']) {
+      expect(gate, `gate 里又单独跑了 ${step}`).not.toMatch(
+        new RegExp(`npm run ${step}(?![\\w:-])`),
+      );
+    }
+  });
+
+  it('gate:fast 存在，且与提交钩子同一组步骤（本地快档 / CI 全量档分开）', () => {
+    const fast = pkg.scripts['gate:fast'] ?? '';
+    const steps = fast.split('&&').map((x) => x.trim().replace(/^npm run /, ''));
+    expect(steps).toEqual([
+      'check:node',
+      'format:check',
+      'lint',
+      'typecheck',
+      'test:fast',
+      'test:guards',
+    ]);
   });
 });

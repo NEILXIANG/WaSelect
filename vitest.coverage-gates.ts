@@ -62,12 +62,20 @@ export const COVERAGE_EXCLUDE: string[] = [
 
 /**
  * 覆盖率阈值。键是**文件路径**（相对仓库根），值是四个维度；
- * 另有一组全局键（lines/functions/branches/statements）作为兜底底线。
+ * 另有一组全局键（lines/functions/branches/statements）作为兜底底线，
+ * 再加 `scripts/check-coverage-floor.mjs` 的逐文件底线（行 60 / 分支 50）。
  *
  * ⚠️ **路径必须跟着文件走**：文件搬目录后如果这里不改，该条阈值会**静默失效**
- * （vitest 对匹配不到文件的阈值既不报错也不生效，全局底线还在，于是 gate 照绿）。
- * 2026-09-24 就真实发生过一次（auth.ts→app/、webhooks.ts→adapters/）。
- * 防复发靠 `test/config/coverage-threshold.unit.test.ts`。
+ * （vitest 对匹配不到文件的阈值既不报错也不生效）。防复发靠 `test/config/coverage-threshold.unit.test.ts`。
+ *
+ * @why **按风险分级**（2026-10-05 用户批准的测试瘦身，AJ-365）：逐文件 100% 只留给
+ *      「钱 / 订单状态 / 幂等与回调登记 / 鉴权 / 脱敏」——这些模块错了不报错、却会直接造成资金或安全事故。
+ *      此前名单有 44 个文件，基础设施类（日志、时钟、存储、调度、熔断、出站 HTTP、小程序宿主封装、
+ *      管理端请求封装等）也钉在 100%，每加一个分支就得补测试，测试规模因此涨到源码的 1.5 倍。
+ *      这些文件**现有测试一条没删**，只是不再强制 100%，改由全局 85% 与逐文件底线约束。
+ *      被移出名单的文件与当时的理由见 git 历史（本文件 2026-10-05 之前的版本）。
+ * @limitation 未达 100% 的几条（admin-auth / admin-auth-routes / block-user / mark-disputed）
+ *      是竞态窗口或不变式违反的兜底分支，数字是**下限**，原因见 docs/自主决策记录.md AJ-324。
  */
 export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>> = {
   lines: 85,
@@ -75,55 +83,10 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
   branches: 85,
   statements: 85,
 
-  // 《测试策略与验证门禁》§4.2 要求关键模块分支 100%，这里把它变成门禁而不是口头要求。
-  // 审查指出：money.ts 分支只有 75% 也能过 gate——就是因为门槛只设了全局值。
-  'packages/shared/src/money.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  'packages/shared/src/orderNo.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-
-  // 日志与上下文：脱敏是"漏一行就出事故"的能力，且缺陷形态是"重复键覆盖"（见 logger.ts @limitation 四），
-  // 靠肉眼 review 看不出来。用 100% 闸门把它钉住——新增分支必须补测试，不能靠全局均值蒙混。
-  'server/src/logger.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-  'server/src/context.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-
-  // N16：脱敏 / 幂等 / 回调台账同属"错一处就是资金或合规事故"的模块，提到同一强度。
-  // 真防御分支（竞态窗口、类型守卫的唯一调用方已保证）允许 `v8 ignore` + 中文理由注释，
-  // 但不允许为凑覆盖率写假测试或删防御代码（见 docs/自主决策记录.md AJ-37）。
-  'server/src/redact.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-  'server/src/adapters/idempotency.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  'server/src/adapters/webhooks.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-
-  // 时钟与单号：两者都是"口径级"代码——错了不会报错，只会让全站单号的日期段悄悄错一天。
-  // 100% 的理由不是它们复杂（都只有几行），而是**它们的边界只能靠注入才测得到**，
-  // 而"注入是否真的被用上"这件事如果没有阈值压着，改回 `new Date()` 也照样能提交。
-  'server/src/adapters/clock.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-  'server/src/adapters/ids.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  // ── 钱：金额换算、单号、支付端口与通道、回调入口、落账、退款、拒付 ──
+  'packages/shared/src/money.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  'packages/shared/src/orderNo.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
   'server/src/domain/order-no.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-
-  // F11 支付链路：端口、注册表、两个 Provider 实现、出站 HTTP——**全部 100%**。
-  // @why 这一组是"钱"经过的路径，且它们的失败形态多为"不报错"：
-  //      通道少出现一个（转化率静默下降）、下线通道还能建单（资金走错路）、
-  //      金额少算 100 倍（零小数币种）、验签容差失效（重放）。
-  //      更重要的理由是**新人加第三个 Provider 时要有同等的尺**：这些阈值就是那把尺。
   'server/src/ports/payment.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
   'server/src/adapters/payment/registry.ts': {
     lines: 100,
@@ -143,48 +106,30 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     branches: 100,
     statements: 100,
   },
-  // 出站 HTTP：只有 20 行，但"没超时"这一条在生产上是挂死，必须锁住
-  'server/src/adapters/http/fetch-client.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-
-  // F11 第三单元（统一回调分发）：这四条同样 100%，理由比上面那一组更直白——
-  // **它们是所有通道唯一的钱入口**。以前每个通道一条路由，写错只影响那一个通道；
-  // 合并之后，`channels.ts` 少注册一个通道、`pay-routes.ts` 忘了登记 rawBodyPaths、
-  // `pay-callback.ts` 把 40902 判成 40400，都是**全线**事故且不一定报错。
-  // 100% 不是追求数字，是逼"加第三个 Provider 的人"必须同时补分支用例。
   'server/src/adapters/payment/channels.ts': {
     lines: 100,
     functions: 100,
     branches: 100,
     statements: 100,
   },
-  'server/src/app/pay-routes.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  'server/src/app/pay-callback.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
+  'server/src/app/pay-routes.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  'server/src/app/pay-callback.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
   'server/src/app/mark-paid.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-  // 测试审查第二轮（AJ-175）：两处"钱/状态核心、已实测 100%、但此前没钉"的文件补钉。
-  // ① unit-of-work：**提交后才分发**的唯一实现，"钱没落库、通知却已发出"的最后一道闸。
-  //    护栏两层：unit-of-work.unit.test（假 begin 按序断言）+ mark-paid-fault（真库 COMMIT 失败）。
-  // ② admin-order-actions：退款/发货/改址三道准入闸（40907 拒付锁、refunding 可重试 KD-4）。
-  //    准入判定错一条就是"钱退两次"或"拒付中发货"，且都返回 2xx。
-  // 未钉的（有意）：daily-reconciliation（64% 分支，未覆盖的是结果行的 `?.`/`??` 兜底）、
-  //    close-session-events（67%，未覆盖的是日志字段的 `??` 兜底）——补满需要造"库里查出 undefined"的假行，
-  //    属 AJ-37 禁止的"为覆盖率写假测试"；它们的行为分支已由 golden-chain / close-session 用例逐条覆盖。
-  'server/src/app/unit-of-work.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-  // 状态机迁移表本体（一致性审计 C6，AJ-176）：《测试策略》§4.2 写"已钉 100%"而此处从未钉——文档先于闸门。
+  'server/src/app/refund-execution.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/app/mark-disputed.ts': { lines: 94, functions: 100, branches: 89, statements: 94 },
+  'miniprogram/utils/price-format.js': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+
+  // ── 订单状态与准入：状态机迁移表、退款 / 发货 / 改址闸门、"提交后才分发" ──
   'server/src/domain/order.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
   'server/src/domain/admin-order-actions.ts': {
     lines: 100,
@@ -192,240 +137,34 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     branches: 100,
     statements: 100,
   },
+  'server/src/app/unit-of-work.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
 
-  // F11 单元④ 国家档案：它是**配置数据进入进程的唯一门**，而且进门的失败形态全部不报错——
-  // 脏 JSONB 被强转后变成半截对象（表单少一个输入框）、坏正则要等到用户提交才炸、
-  // SELECT 少一列在 strip 下静默丢字段。更关键的是它是**将来所有按国家分支的逻辑共用的数据源**
-  // （地址校验 / 展示币 / 承运商 / 关税文案）：这里错一次，后面每个国家分支都拿到错的东西，
-  // 而每一个都不会报错。100% 的另一个用途是逼"加第二个国家的人"同时补字段级同源用例。
-  'server/src/adapters/country-profiles.ts': {
+  // ── 幂等与回调登记：重复扣款、重复落账的最后一道闸 ──
+  'server/src/adapters/idempotency.ts': {
     lines: 100,
     functions: 100,
     branches: 100,
     statements: 100,
   },
-
-  // F12 重试判定：**唯一一种"加了会让事情更糟"的容错**——不重试最多是失败，
-  // 而错的重试会制造出本来不存在的第二次扣款，且上下游都认为自己是第一次。
-  // 这一组纯函数就是那条红线的全部实现，必须 100%，且每个分类都要有对应用例。
-  'server/src/ports/http-client.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-
-  // F12 熔断状态机：它是**唯一一种"主动让本来能成功的请求失败"**的容错，
-  // 判错的代价高于重试——把 4xx 计入会误杀健康的上游，冷却算错会让恢复后的流量迟迟回不来。
-  // 三态迁移必须 100%，否则"上游其实已经好了、我们还在拒绝"这类问题没有任何信号。
-  'server/src/ports/circuit-breaker.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  // F12 熔断**状态存放**：状态机对了不代表熔断成立——状态还得**跨请求活下来**。
-  // 写错的形态是"每个请求都当成第一次失败"，于是永远跳不了闸、门却一直绿着；
-  // 另一个形态是"key 不隔离"，一个上游挂了把所有上游一起拒掉（Stripe 故障 → 微信也不能用）。
-  // 这两条都只有跨调用的状态断言能测到，纯函数层测不出来，所以单独钉 100%。
-  'server/src/adapters/http/circuit-breaker.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-
-  // B1 对象存储（生产驱动）：四个文件**全部 100%**。
-  // @why 这一组的失败形态与 F11 支付链路同类，但更难发现——它们不报错：
-  //      · `aws-sigv4.ts`：签名算错在生产上是 403，而"是签名错了"这件事没有任何一方会告诉你
-  //        （报的是泛化的 storage_put_failed）。它是全仓库唯一"必须与外部实现逐字节一致"的代码，
-  //        所以夹具取自 AWS 官方 botocore（见该文件 @measured），自证断言抓不住它。
-  //      · `storage-r2.ts`：端点拼错 / body 传成字符串 / 把 403 当成功，前两个要到真桶上才炸，
-  //        第三个是"存储根本没配好"伪装成"清理完成"。
-  //      · `object-key.ts`：两个驱动**共用同一份** key 校验（ADR-29）；各写一份的话，
-  //        收紧只发生在一边，于是某个 key **只在生产驱动上**能写穿——开发期测不出来。
-  //      · `storage.ts`："哪个环境用哪个驱动"的唯一落点。判错的表现不是报错，是**换了个驱动**：
-  //        生产漏配回落 fs 就是"上传成功、随后图静默消失"，且没有任何一方报错。
-  'server/src/adapters/http/aws-sigv4.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  'server/src/adapters/storage-r2.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  'server/src/adapters/object-key.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  'server/src/adapters/storage.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-
-  // F13 调度器契约：互斥与心跳是**看门狗的唯一依据**。它出错的形态不是报错，
-  // 而是"某个 job 已经连续失败一天了，监控却显示刚刚还成功过"——
-  // 那是比宕机更贵的一类失效（没人去看，也就没人发现）。归一化/汇总这两个纯函数是它的全部实现。
-  'server/src/ports/scheduler.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  // 适配器侧是"互斥"与"心跳"的唯一实现：锁 ID 跨进程一致（否则多实例各锁各的）、
-  // 失败不动 last_success_at（否则看门狗失明）——两条都是**错了也不报错**的形态，
-  // 只能靠真库用例 + 100% 闸门压住。
-  'server/src/adapters/scheduler.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  // 编排层：三条"错了也不报错"的性质全在这里——没抢到锁就什么都不做、
-  // 一个子任务失败不影响其它子任务、**失败 job 的 emit 不分发**（幽灵副作用）。
-  // 它们是所有定时任务共有的，靠 job 作者各自实现一遍等于交给概率。
-  'server/src/app/scheduler.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  // 启动层：定时器回调里抛出的 rejection **没有任何人接**，Node 默认配置下会终止进程
-  // ——"某个 job 抛了一次异常"变成"服务重启"，日志上只看到进程没了。
-  // 同进程内重叠、stop 是否真的停、runImmediately 默认值，都是这条链上的失效点。
-  'server/src/app/scheduler-start.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-
-  // F14 第一单元：宿主能力封装。它是**小程序侧唯一的第三方入口**——
-  // 它错了的形态是"宿主缺失时崩在业务行"，或者"getStorageSync 读出个对象"。
-  // 与 server 侧的 ports 同强度（100%）：两边都是"边界层"，边界层的价值就在于它没有第二种实现。
-  'miniprogram/utils/wx-api.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-  // F14 本地存储：它的三种失效形态**全部不报错**——key 不前缀会与同 appid 内的其它键互撞
-  // （表现为"数据突然不对"）、损坏的 JSON 一抛就是**启动崩溃**、remove 写回空串只是"看起来没了"。
-  // 另有一条只有这条阈值能压住的事：上面十来条用例全走注入，
-  // 于是"不注入时连的是真实宿主"这条**生产上唯一在跑的路径**天然没人覆盖——
-  // 默认值写成空实现会让所有数据静默消失，绿着出事。
-  'miniprogram/utils/storage.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-
-  // miniprogram/utils 下的存量 JS（2026-09-24 随统计范围一起收进来）：
-  // 它们每一个都有独立的单测且在收口时实测 100%，钉住是为了让"改坏了"立刻红，
-  // 而不是等某天有人发现"这个模块好像没人管"。
-  // ⚠️ `request.js` **不在此列**：它是 97%（还有两行没覆盖），单独设阈值会把底线钉在当前值，
-  //    反而让人不敢动它；它当前受全局 85% 约束，缺口已在清单里登记。
+  'server/src/adapters/webhooks.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
   'miniprogram/utils/idempotency.js': {
     lines: 100,
     functions: 100,
     branches: 100,
     statements: 100,
   },
-  'miniprogram/utils/price-format.js': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  'miniprogram/utils/random-id.js': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  'miniprogram/utils/trace.js': { lines: 100, functions: 100, branches: 100, statements: 100 },
 
-  // 鉴权分支多（伪造 token 的每个维度都是独立分支），个别分支只能随管理端功能上线补齐；
-  // 先钉 branch≥95%（当前 92.15 就是靠这条发现缺口），其余维度仍受全局 85% 约束。
+  // ── 鉴权与风控 ──
   'server/src/app/auth.ts': { branches: 95 },
-
-  // F15 单元② admin-web 请求封装：管理端**所有**写操作（发货/退款/上下架）的唯一出口。
-  // 它错的形态全部不报错——带错 token 形状、超时取消被当成"服务端没执行"而重发、
-  // 401 不登出让管理员对着过期会话白点按钮。与小程序 request.js / server 出站 HTTP 同强度（100%），
-  // 它是"边界层"，边界层的价值就在于没有第二种实现。
-  // errors.ts 是同一出口的错误形状半边（AJ-86 拆分），同强度。
-  'admin-web/src/api/client.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-  'admin-web/src/api/errors.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
-
-  // ── DB2-09（AJ-324）：上一轮之后新增 / 重写的"钱与安全核心"补进门槛表 ──────────────
-  // @why 这五个文件在此之前**一条阈值都没有**，只受全局 85% 约束；而第五轮重读里
-  //      "第 5 次输对也被锁"（R-02 / AJ-224）正出在 `admin-auth.ts` 的一个分支上——
-  //      全局均值完全看不见它。CLAUDE.md 约束九把"关键模块门槛"列为防"靠全局均值蒙混"的机制，
-  //      名单漏项等于机制上开了个口子。
-  // @why 阈值**钉在实测可达的位置，不是一律 100%**：逐分支实测后，有 9 个分支是
-  //      **竞态窗口 / 不变式违反 / 类型守卫兜底**，做成用例必然偶发红（本项目对 flake 的
-  //      成本有过多次实测：一次 flake = 一整轮 10 分钟 gate + 一次归因）。
-  //      它们按《测试策略》§4.2 的 🟡 口径逐条登记了原因（@see docs/自主决策记录.md AJ-324），
-  //      而不是靠 `v8 ignore` 抹掉——忽略会连"这段从未被执行过"这个信号一起抹掉。
-  // ⚠️ 于是这几条数字是**下限不是目标**：新增分支必须补测试，补不了就要在 AJ-324 里补理由
-  //      （理由与代码同一次提交）；**不得**直接下调数字。
-  'server/src/app/refund-execution.ts': {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  },
-  'server/src/adapters/admin-auth.ts': {
-    lines: 96,
-    functions: 100,
-    branches: 94,
-    statements: 99,
-  },
-  // 🟡 未达 100% 的那一个分支（AJ-324）：
-  //   `admin-auth.ts:200` `cur?.locked_until ?? now` 的 `?? now`——走到这一行时，
-  //   "刚被 UPDATE 判成已锁"的那行必然还在，`locked_until` 不会是 null；
-  //   只有"锁在这两条语句之间被并发清掉"才可能，属竞态窗口（做用例必然偶发红）。
-  //   ⚠️ 注意：23505 那条**已测**（`admin-auth.unit.test.ts`），但用的是会抛该 SQLSTATE 的替身 Db，
-  //      钉的是"错误码 → 语义"的映射，**不是**并发竞态本身；竞态形态同样按 🟡 登记。
+  'server/src/adapters/admin-auth.ts': { lines: 96, functions: 100, branches: 94, statements: 99 },
   'server/src/app/admin-auth-routes.ts': {
     lines: 94,
     functions: 100,
     branches: 86,
     statements: 94,
   },
-  // 🟡 未达 100% 的分支（AJ-324，2026-10-03 按实测**重写**：行号已漂移，且原说明漏了一半）：
-  //   当前实测 100 / 100 / 88.88 / 100（lines / functions / branches / statements），剩 5 条分支——
-  //   · `:148` `req.ip ?? 'unknown'`：express 在 supertest/fetch 下必然给出 `req.ip`，
-  //     只有"直连 socket 拿不到地址"才走兜底，测试装配里做不到；
-  //   · `:201 / :203 / :204` **邮箱桶**在"⓪ 只读看一眼"之后、"① 扣额度"之前被**别的**并发请求锁上
-  //     ——⓪ 那一步正是为了让它不可能（锁着就直接 429 了），所以只有交错才会发生；
-  //   · `:240` 数组字面量里"两个桶的到期时刻都取到了"之后的那个兜底（`?? now` 一类）。
-  //   ⚠️ 2026-10-03 之前这里写的是"`:207-213` `locked_while_verifying` **整块没有测试覆盖**"——
-  //     那是 SEC2-08 那次**加了代码没加用例**留下的：全量门禁的覆盖率底线把它拦下来了
-  //     （functions 5/7 < 门槛 100）。现已由 `admin-auth-routes.db.test.ts` 的
-  //     「口令比对期间被别的请求上了锁」一条**确定性**用例覆盖（真库 + 替身 Db 在查凭证那一步插脚，
-  //     不靠撞并发窗口），并把"两个桶都锁时取更晚的那个"也钉住了。
-  //     教训：**"竞态窗口 ⇒ 写不了用例"这个判断本身要留余地**——窗口可以用替身 Db 精确地插进去，
-  //     真正写不了的只是"靠真并发去撞"这一种做法。
-  'server/src/app/block-user.ts': {
-    lines: 99,
-    functions: 100,
-    branches: 89,
-    statements: 94,
-  },
-  // 🟡 未达 100% 的分支（AJ-324）：`:120` 的 `continue`——`lockPayableOrdersOfUser`
-  //   与 `markOrderCancelled` 用的是**同一个** `status in PAYABLE_STATUSES` 谓词，
-  //   且前者带 `for update`，同一事务内不可能"一个选得出、一个更新不到"；
-  //   只有并发抢先迁走才可能（竞态窗口）。
-  'server/src/app/mark-disputed.ts': {
-    lines: 94,
-    functions: 100,
-    branches: 89,
-    statements: 94,
-  },
-  // 🟡 未达 100% 的分支（AJ-324）：
-  //   · `:197 / :391` "update 未命中支付行"→ 50000：不变式违反（行在持锁期间消失），
-  //     属"兜住不可能发生的事"，做成用例要先破坏不变式；
-  //   · `:421` `openedAtIso` 的 fallback：重放分支里 `dispute_opened_at` 为空
-  //     = "上次写 payments 成功、字段没跟上"的半途状态（该文件 @limitation 一自己点名），
-  //     正常路径进不去，造这种数据属于为覆盖率编造状态。
+  'server/src/app/block-user.ts': { lines: 99, functions: 100, branches: 89, statements: 94 },
+
+  // ── 脱敏：漏一行就是个人信息进日志 ──
+  'server/src/redact.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
 };

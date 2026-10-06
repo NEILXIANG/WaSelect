@@ -50,7 +50,7 @@ describe('MENU_ROWS（入口清单）', () => {
  *      加了一个入口却忘了接跳转的表现是"点了没反应"：不报错、不崩溃，
  *      而且 vm 自己的测试全绿（它不知道页面那边有没有接上）。
  *      这类"两个文件各对一半"的失效，只能靠其中一个去读另一个才能发现。
- * @how 读 `index.js` 源码做形态匹配（与 `project-config` / `showcase-guard` 同套路）。
+ * @how 读 `index.js` 源码做形态匹配（与 `project-config` 同套路）。
  */
 describe('MENU_ROWS 与 index.js 跳转表的双向比对', () => {
   const js = readFileSync(resolve(__dirname, 'index.js'), 'utf8');
