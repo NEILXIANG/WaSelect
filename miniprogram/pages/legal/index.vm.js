@@ -62,7 +62,9 @@ export function termsView(res) {
     // ⚠️ trim 而不是原样透传：`urls.zh = ' https://… '` 复制进浏览器是打不开的，
     //    而它不会报错——用户只会觉得"这个站给我一个坏链接"（@see @limitation 三）
     url: typeof urls[r.key] === 'string' ? urls[r.key].trim() : '',
-  })).filter((r) => r.url !== '');
+    // 只给出浏览器打得开的绝对地址（W-06）：服务端在法务页上线前返回的是 `/legal/terms.zh.html`
+    // 这类占位相对路径，复制到浏览器打不开；宁可落到"暂时没有可查看的条款"，也不给一个坏链接。
+  })).filter((r) => /^https:\/\//.test(r.url));
 
   return { version, hasVersion: version !== '', langs };
 }

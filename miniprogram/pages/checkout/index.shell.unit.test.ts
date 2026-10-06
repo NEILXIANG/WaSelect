@@ -306,3 +306,17 @@ describe('结算页薄壳：重报价窗口与两个跳转（MP3-05 / MP3-09 / M
     expect(navigations).toEqual(['/pages/address/index?pick=1', '/pages/legal/index']);
   });
 });
+
+/** 连点「提交订单」（W-03）：页面必须自己挡住第二次，不能只靠按钮组件的属性。 */
+describe('结算页薄壳：连点提交（W-03）', () => {
+  it('🔴 建单在途时再点一次 → 只发出一次 POST /orders', async () => {
+    await ready();
+    orderHold = deferred();
+    call('onSubmit');
+    call('onSubmit');
+    await settle();
+    expect(posts).toHaveLength(1);
+    orderHold.resolve({ order_id: 'o-1' });
+    await settle();
+  });
+});

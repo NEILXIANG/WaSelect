@@ -235,3 +235,33 @@ describe('timelineRows（时间线）', () => {
     ).toEqual([{ key: 'tl-0', statusText: '已付款', atText: '2026-09-27 11:05（日本时间）' }]);
   });
 });
+
+/** 合计标签按状态切换（W-04）：已付款的单写"应付合计"，用户会读成"还要再付这么多"。 */
+describe('detailView：合计标签（W-04）', () => {
+  it.each([
+    ['created', '应付合计'],
+    ['pending_payment', '应付合计'],
+    ['paid', '订单合计'],
+    ['shipped', '订单合计'],
+    ['refunded', '订单合计'],
+  ])('%s → %s', (status, label) => {
+    expect(detailView({ order_id: 'o-1', status, total_jpy: 1000 }).totalLabel).toBe(label);
+  });
+});
+
+/** 关税无法估算时服务端回 null（W-05 / 契约 0.6.30）：不能显示成"预估关税 0 円"。 */
+describe('detailView：无法估算的关税不显示（W-05）', () => {
+  it('duty_jpy=null → 没有关税行；整数 → 有', () => {
+    const base = {
+      order_id: 'o-1',
+      status: 'paid',
+      items_jpy: 1000,
+      shipping_jpy: 500,
+      total_jpy: 1500,
+    };
+    const labels = (o: Record<string, unknown>) =>
+      detailView(o).amountLines.map((l: { label: string }) => l.label);
+    expect(labels({ ...base, duty_jpy: null }).some((l: string) => l.includes('关税'))).toBe(false);
+    expect(labels({ ...base, duty_jpy: 150 }).some((l: string) => l.includes('关税'))).toBe(true);
+  });
+});

@@ -72,7 +72,7 @@
         </view>
         <view class="ws-hair total__rule" />
         <view class="total">
-          <text class="ws-note">应付合计</text>
+          <text class="ws-note">{{view.totalLabel}}</text>
           <ws-price wx:if="{{view.totalJpy !== null}}" jpy="{{view.totalJpy}}" size="lg" />
         </view>
         <text class="ws-caption" wx:if="{{view.totalSub}}">{{view.totalSub}}</text>

@@ -55,7 +55,7 @@ Page({
 
   onShow() {
     // @see @limitation 二：token 可能在别处被刷新，每次进屏重读
-    this.setData({ login: loginState(app.globalData.token) });
+    this.setData({ login: loginState(app.globalData.token, app.globalData.loginFailed) });
     // S5：注入底部 tabBar 的高亮（本页是第 3 个 tab）。
     setActiveTab(this, 'user');
   },

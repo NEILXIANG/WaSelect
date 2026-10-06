@@ -39,6 +39,8 @@ const TOKEN_KEY = 'token';
 App({
   globalData: {
     token: '',
+    /** 启动时的自动登录是否已失败（W-08：「我的」页据此不再一直显示"正在登录…"）。 */
+    loginFailed: false,
     /**
      * 当前环境的 API 根地址——**在 onLaunch 里按宿主的 envVersion 解析后写入**。
      * @why 不在模块顶层算：顶层求值时宿主还没准备好（且在 Node 单测里会直接崩）。
@@ -144,6 +146,8 @@ App({
       void relogin()
         .then((t) => this.setToken(t))
         .catch((e) => {
+          // 记下失败（W-08）：「我的」页据此不再显示"正在登录…"
+          this.globalData.loginFailed = true;
           log({ event: 'auto_login', result: 'failed', err_msg: e?.message ?? String(e) });
         });
     }
@@ -152,6 +156,7 @@ App({
   /** 写入 token（登录回调与 relogin 调用）。 */
   setToken(token) {
     this.globalData.token = token;
+    this.globalData.loginFailed = false;
     // ⚠️ 这里没有注入口（app.js 本身不可测，它是装配层）：storage 写失败会**原样抛出**，
     //    不吞——"token 没存上"若被吞掉，表现是"用户每次都要重新登录"且日志里什么都没有。
     //    `storage.js` 与 `wx-api.js` 都遵守同一口径（见各自的 @limitation：不吞异常）。

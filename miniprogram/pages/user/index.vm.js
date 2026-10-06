@@ -43,6 +43,7 @@ export const MENU_ROWS = [
  * 本地 token → 登录态文案。
  *
  * @param {unknown} token `app.globalData.token`；也可能是任何东西
+ * @param {unknown} [failed] `app.globalData.loginFailed`：启动自动登录是否已失败（W-08）
  * @returns {{logged: boolean, text: string}}
  *
  * @why 未登录时显示"正在登录…"而不是"未登录"：登录是**无感**的（code 换 token，没有登录页），
@@ -50,7 +51,10 @@ export const MENU_ROWS = [
  *      真失败时（启动登录失败）首个受保护请求会 40101 → relogin 再试一次，
  *      用户不需要做任何事——所以这里**不需要**失败态（@see @limitation 二）。
  */
-export function loginState(token) {
+export function loginState(token, failed = false) {
   const t = typeof token === 'string' ? token.trim() : '';
-  return t === '' ? { logged: false, text: '正在登录…' } : { logged: true, text: '已登录（微信）' };
+  if (t !== '') return { logged: true, text: '已登录（微信）' };
+  // 启动时的自动登录已经失败（W-08）：此刻并没有在登录，再写"正在登录…"就是一句永远不会变的话
+  if (failed === true) return { logged: false, text: '登录暂未成功，下次操作时会自动重试' };
+  return { logged: false, text: '正在登录…' };
 }

@@ -72,3 +72,16 @@ describe('MENU_ROWS 与 index.js 跳转表的双向比对', () => {
     expect([...keys].sort()).toEqual(MENU_ROWS.map((r) => r.key).sort());
   });
 });
+
+/** 启动自动登录失败后不能一直显示"正在登录…"（W-08）：那时其实没有在登录。 */
+describe('loginState：自动登录失败（W-08）', () => {
+  it('无 token 且启动登录已失败 → 不是"正在登录…"', () => {
+    const s = loginState('', true);
+    expect(s.logged).toBe(false);
+    expect(s.text).not.toBe('正在登录…');
+    expect(s.text).toContain('自动重试');
+  });
+  it('有 token 时忽略失败标记', () => {
+    expect(loginState('tk', true)).toEqual({ logged: true, text: '已登录（微信）' });
+  });
+});

@@ -262,6 +262,9 @@ Page({
    *      不会建出第二张单（A5）。失败路径刻意**不** `retire()`——键要留给重试。
    */
   onSubmit() {
+    // 建单在途时直接忽略（W-03）：页面的 data 在 setData 后同步更新，而按钮组件的 loading 属性
+    // 要等视图层回传——只靠按钮挡，快速双击的第二下会穿透，压入两个支付页。
+    if (this.data.submitting === true) return;
     if (!this.data.gate.ok || this.intentKey === null) return;
     let body;
     try {

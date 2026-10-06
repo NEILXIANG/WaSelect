@@ -6,7 +6,7 @@
 
   ⚠️ `why` 为空时**整卡降级**：不渲染 why 块，也不报错、不补通用话术（@see @limitation 一）。
 -->
-<view class="ws-pick" hover-class="ws-press" bindtap="onTap">
+<view class="ws-pick" hover-class="ws-press" catchtap="onTap">
   <view class="ws-media ws-media--scene">
     <!-- ⚠️ 图为空时不渲染 <image>：空 src 在真机上是一个破图占位，
          而 .ws-media 自带底色，留空就是一块干净的占位面。 -->

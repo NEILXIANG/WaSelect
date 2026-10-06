@@ -30,6 +30,7 @@ import { detailView } from './index.vm.js';
 import { errorMessage } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+import { recentExternalPay } from '../../utils/external-pay.js';
 
 const app = getApp();
 
@@ -73,7 +74,11 @@ Page({
   onLoad(options) {
     this.orderId = typeof options?.id === 'string' ? options.id : '';
     this.traceId = newTraceId();
-    this.justPaid = options?.justPaid === '1';
+    // 刚从支付页过来（微信支付成功带 justPaid=1），或这张单刚在浏览器里发起过银行卡付款（W-02）：
+    // 两种情况支付通知都可能还没到，先显示"确认中"、退避重查，而不是给出"继续支付 / 取消订单"。
+    this.justPaid =
+      options?.justPaid === '1' ||
+      recentExternalPay(app.globalData.externalPay, this.orderId, Date.now());
     this.recheckCount = 0;
     // @see @limitation 一：空 id 不发请求
     if (this.orderId === '') this.setData({ error: '订单不存在或链接无效' });

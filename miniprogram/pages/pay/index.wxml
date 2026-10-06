@@ -25,6 +25,9 @@
     @why 拉起微信收银台会让平台触发 onHide → onShow → 整页重取，
          而重取开头会清 `error`——把取消提示放那儿，用户永远看不到它。
   -->
+  <view class="ws-gutter" wx:if="{{confirmNote}}">
+    <text class="ws-note">{{confirmNote}}</text>
+  </view>
   <view class="ws-gutter" wx:if="{{payResult}}">
     <view class="ws-card state">
       <text class="ws-note state__error">{{payResult}}</text>

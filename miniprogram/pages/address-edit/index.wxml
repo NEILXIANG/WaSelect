@@ -129,10 +129,13 @@
   </view>
 
   <view class="ws-gutter aedit__foot">
+    <!-- 保存失败（W-07）：留在表单页、表单不清，用户改一改再点保存 -->
+    <text class="field__error" wx:if="{{saveError}}">保存没有成功：{{saveError}}</text>
     <ws-button
       text="{{saving ? '保存中…' : '保存'}}"
       type="primary"
       disabled="{{saving}}"
+      loading="{{saving}}"
       bindtap="onSave"
     />
     <text class="ws-note tip">收件信息请用英文/数字填写（国际面单不支持中文与全角）</text>

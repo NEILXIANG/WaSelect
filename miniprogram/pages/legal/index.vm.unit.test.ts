@@ -140,3 +140,14 @@ describe('LANG_ROWS 与契约 /terms 的 urls 双向比对', () => {
     }
   });
 });
+
+/** 占位相对路径不能当链接给出去（W-06）：复制到浏览器打不开。 */
+describe('termsView：只保留 https 绝对地址（W-06）', () => {
+  it('相对路径 / http → 过滤掉；https → 保留', () => {
+    const view = termsView({
+      version: 'v',
+      urls: { zh: '/legal/terms.zh.html', ja: 'http://a.example/x', en: 'https://a.example/en' },
+    });
+    expect(view.langs.map((l) => l.key)).toEqual(['en']);
+  });
+});

@@ -49,6 +49,8 @@ Page({
     loading: false,
     /** 错误文案（空串 = 无错误）。 */
     error: '',
+    /** 复制链接失败的提示（W-07：不复用取数错误，否则页面会说"没能取到条款"）。 */
+    copyError: '',
     /** vm `legalState` 的输出：加载中 / 有条款 / 暂时没有。 */
     state: { showLoading: true, showList: false, showEmpty: false },
   },
@@ -115,9 +117,10 @@ Page({
     if (url === '' || key === '') return;
     wxApi.setClipboardData({
       data: url,
-      success: () => this.setData({ copied: key, error: '' }),
+      success: () => this.setData({ copied: key, copyError: '' }),
       // @see @limitation 二：失败要说一句话，并给出兜底动作
-      fail: () => this.setData({ copied: '', error: '复制失败，请长按上方链接手动复制' }),
+      // 复制失败与"取不到条款"分开（W-07）：条款列表还在，只是剪贴板没写进去
+      fail: () => this.setData({ copied: '', copyError: '复制失败，请长按上方链接手动复制' }),
     });
   },
 });

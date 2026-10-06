@@ -156,6 +156,8 @@ export function detailView(order, opts = undefined) {
     items: itemRows(o.items),
     amountLines: amountLines(o),
     totalJpy: hasTotal ? o.total_jpy : null,
+    /** 只有还能付的单才叫"应付合计"（W-04）；已付 / 已退的单写"应付"会被读成"还要再付"。 */
+    totalLabel: payable ? '应付合计' : '订单合计',
     totalSub: displaySubLine(o.display),
     address: o.address !== null && typeof o.address === 'object' ? addressSummary(o.address) : null,
     contactEmail: typeof o.contact_email === 'string' ? o.contact_email : '',

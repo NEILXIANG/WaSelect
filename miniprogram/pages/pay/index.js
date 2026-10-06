@@ -46,6 +46,7 @@ import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { errorMessage } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+import { markExternalPay, recentExternalPay } from '../../utils/external-pay.js';
 import {
   PAY_FAIL_TEXT,
   afterIntent,
@@ -105,6 +106,8 @@ Page({
      *      拉起收银台会触发 onShow → 重取，混在 `error` 里就会被自己清掉。
      */
     payResult: '',
+    /** 浏览器付款后的"确认中"提示（W-02）；空串 = 不显示。 */
+    confirmNote: '',
   },
 
   /** 订单 id（空串 = 没带过来，此时不取数）。 */
@@ -116,6 +119,9 @@ Page({
   traceId: '',
   /** 是否已经取过一次数（`onShow` 的刷新只对"第二次及以后"生效，避免进页面取两遍）。 */
   loaded: false,
+  /** 浏览器付款后"确认中"的重查次数与定时器（W-02）。 */
+  statusRetries: 0,
+  statusTimer: null,
   /** 整页重取的序号（MP3-07：连续切前后台会并发两个 load，只接受最后一次的结果）。 */
   loadSeq: 0,
 
@@ -223,10 +229,39 @@ Page({
         traceId: this.traceId,
       });
       const view = payPageView(order);
-      if (!view.payable) this.setData(closedScreen(view));
+      if (!view.payable) {
+        this.setData({ ...closedScreen(view), confirmNote: '' });
+        return;
+      }
+      // 仍是待付款、但刚在浏览器里发起过付款（W-02）：多半是支付通知还在路上。
+      // 显示"确认中"并有限次重查；两次之后放弃假设，不让页面永远停在"确认中"。
+      if (recentExternalPay(app.globalData.externalPay, this.orderId, Date.now())) {
+        if (this.statusRetries >= 2) {
+          this.setData({ confirmNote: '' });
+          return;
+        }
+        this.setData({
+          confirmNote: '如已在浏览器完成付款，结果正在确认，请稍候…（请勿重复付款）',
+        });
+        this.statusRetries += 1;
+        if (this.statusTimer !== null) clearTimeout(this.statusTimer);
+        this.statusTimer = setTimeout(() => void this.checkStatus(), 2000 * this.statusRetries);
+      }
     } catch {
       // 见上：静默
     }
+  },
+
+  onHide() {
+    // 离开前台就停掉重查；回来时 onShow 会重新开始一轮
+    if (this.statusTimer !== null) clearTimeout(this.statusTimer);
+    this.statusTimer = null;
+    this.statusRetries = 0;
+  },
+
+  onUnload() {
+    if (this.statusTimer !== null) clearTimeout(this.statusTimer);
+    this.statusTimer = null;
   },
 
   /** 选一个通道 → 发起支付。判断全在 `index.vm.js`（约束十一：薄壳只做编排）。 */
@@ -302,6 +337,13 @@ Page({
       return;
     }
     if (plan.kind === 'copylink') {
+      // 记下"这张单在浏览器里发起过付款"（W-02）：切回来时支付通知往往还没到，
+      // 支付页与订单详情据此显示"确认中"，而不是照常给出"继续支付 / 取消订单"。
+      app.globalData.externalPay = markExternalPay(
+        app.globalData.externalPay,
+        this.orderId,
+        Date.now(),
+      );
       // ⚠️ 不自动复制：剪贴板是用户的东西，未经动作就改写它是越界。用户点"复制链接"再复制。
       // ⚠️ `copied` 必须复位（AJ-227）：服务端每次发起都**轮换**短链 token，
       //    这是一条新链接；按钮若还写着"已复制"，用户会去浏览器粘贴刚失效的那条。

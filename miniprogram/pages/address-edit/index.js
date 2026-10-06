@@ -48,8 +48,13 @@ Page({
     editing: false,
     loading: false,
     saving: false,
-    /** 取数/提交错误文案（空串 = 无错误）。 */
+    /** **取数**错误文案（空串 = 无错误）；只在编辑态拉地址失败时出现。 */
     error: '',
+    /**
+     * **保存**错误文案（W-07）：与取数错误分开——保存失败时表单还在，用户要的是改一改再点，
+     * 不是"返回列表重开这一页"（照做会丢掉刚填的整张表单）。
+     */
+    saveError: '',
   },
 
   /** 编辑的地址 id（空串 = 新增）。 */
@@ -119,6 +124,8 @@ Page({
 
   /** 保存：先过 `formErrors`，不过就不发请求（@see @limitation 三）。 */
   onSave() {
+    // 保存在途时忽略（W-03）：POST /addresses 没有幂等键，双击会建出两条一样的地址
+    if (this.data.saving === true) return;
     const result = formErrors(this.data.form);
     if (!result.ok) {
       this.setData({ errors: result.errors, first: result.first });
@@ -128,7 +135,7 @@ Page({
   },
 
   async submit() {
-    this.setData({ saving: true, error: '' });
+    this.setData({ saving: true, saveError: '' });
     const body = toAddressInput(this.data.form);
     try {
       if (this.addressId === '') {
@@ -149,7 +156,7 @@ Page({
     } catch (e) {
       // ⚠️ 服务端的拒单（格式/字段）也要显示出来：前端预检不是权威，
       //    只信预检的表现是"前端说对、提交失败"却没有任何提示。
-      this.setData({ error: errorMessage(e) });
+      this.setData({ saveError: errorMessage(e) });
       return;
     } finally {
       this.setData({ saving: false });

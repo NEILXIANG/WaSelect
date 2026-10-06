@@ -73,5 +73,6 @@
         <text class="doc-url" user-select>{{item.url}}</text>
       </view>
     </view>
+    <text class="ws-note" wx:if="{{copyError}}">{{copyError}}</text>
   </view>
 </view>

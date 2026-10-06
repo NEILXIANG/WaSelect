@@ -123,6 +123,9 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  // 停掉"确认中"的重查定时器（W-02），否则它会在后面的用例里继续发请求
+  call('onUnload');
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -284,5 +287,34 @@ describe('支付页薄壳：整页重取的序号与在途守卫（MP3-07）', (
     await settle();
     expect(page.data['error']).toBe('');
     expect(page.data['payResult']).toContain('支付未完成');
+  });
+});
+
+/** 浏览器付款后切回来（W-02）：通知还没到时显示"确认中"并重查，而不是照常给出支付方式。 */
+describe('支付页薄壳：银行卡付款后的确认中（W-02）', () => {
+  it('🔴 回来时仍是待付款 → 显示确认中；重查拿到已付 → 收起支付方式', async () => {
+    await toCopylinkScreen();
+    vi.useFakeTimers();
+    call('onShow');
+    await settle();
+    expect(String(page.data['confirmNote'])).toContain('确认');
+    orderStatus = 'paid';
+    await vi.advanceTimersByTimeAsync(2000);
+    await settle();
+    expect(page.data['closedText']).not.toBe('');
+    expect(page.data['confirmNote']).toBe('');
+  });
+
+  it('重查两次仍未确认 → 不再显示确认中（不让页面永远停在"确认中"）', async () => {
+    await toCopylinkScreen();
+    vi.useFakeTimers();
+    call('onShow');
+    await settle();
+    await vi.advanceTimersByTimeAsync(2000);
+    await settle();
+    await vi.advanceTimersByTimeAsync(4000);
+    await settle();
+    expect(page.data['confirmNote']).toBe('');
+    expect(page.data['payUrl']).toBe('https://pay.test/o/link-1');
   });
 });
