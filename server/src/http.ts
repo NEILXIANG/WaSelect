@@ -242,6 +242,16 @@ function corsMiddleware(opts: CorsOptions): RequestHandler {
   };
 }
 
+/** 安全响应头（剩余清单 5-1）；值的理由见 createHttpApp 内第 0 段。 */
+const SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
+  ['x-content-type-options', 'nosniff'],
+  ['x-frame-options', 'DENY'],
+  ['referrer-policy', 'no-referrer'],
+  ['content-security-policy', "default-src 'none'; frame-ancestors 'none'"],
+  ['strict-transport-security', 'max-age=31536000; includeSubDomains'],
+  ['cross-origin-opener-policy', 'same-origin'],
+];
+
 /** 从请求头取链路 ID：符合形状才沿用，否则新建。 */
 function traceIdFrom(req: Request): string {
   const header = req.header('x-trace-id');
@@ -283,6 +293,19 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
    *      module 属于"这段代码属于谁"，应该由**写这行日志的 logger** 声明，而不是由传输层中间件声明。
    */
   const httpLog = opts.logger.child({ module: 'http' });
+
+  /**
+   * ── 0. 安全响应头（剩余清单 5-1 / O11）：挂在最前面，404 与错误响应同样带上 ──
+   * @why API 只回 JSON / 302、从不回 HTML（2026-10-06 全库扫描无 res.send / text/html）：
+   *      最严的 CSP（default-src 'none'）与禁止被嵌入都没有副作用，却能挡住"某条错误路径意外回了可执行内容"与点击劫持。
+   * @why HSTS 不判断当前是不是 https：TLS 在平台反代处终结，这里看到的是 http；浏览器对 http 响应里的 HSTS 本就忽略。
+   * @limitation 不发 Permissions-Policy / CORP：前者对 JSON API 无意义；后者会影响管理端跨域读取（CORS 已单独控制）。
+   * @tradeoff 不引 helmet：六个固定头一个中间件即可，引依赖换不来什么（完全自研）。
+   */
+  app.use((_req, res, next) => {
+    for (const [k, v] of SECURITY_HEADERS) res.setHeader(k, v);
+    next();
+  });
 
   // ── 1. 请求上下文：后续所有日志自动带 trace_id / req_id ────────────────────
   app.use((req, res, next) => {

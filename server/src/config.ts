@@ -899,6 +899,14 @@ const crossField = schema.superRefine((c, ctx) => {
     if (c.CORS_ORIGINS.length === 0) {
       add('CORS_ORIGINS', '生产环境必须配置 CORS_ORIGINS（管理端 Web 的域名）');
     }
+    // 8.（剩余清单 5-2 / O5）信任两层以上反代就必须有源站校验：否则直连者伪造的 XFF 被采信，限流与锁定可被绕过
+    //    （ORIGIN_VERIFY_SECRET 的 @why："层数取 2 + 源站只认 Cloudflare 注入的头"必须成对）
+    if (c.TRUST_PROXY_HOPS >= 2 && c.ORIGIN_VERIFY_SECRET === undefined) {
+      add(
+        'ORIGIN_VERIFY_SECRET',
+        '生产 TRUST_PROXY_HOPS ≥ 2 时必须配置 ORIGIN_VERIFY_SECRET（否则源站可被直连并伪造 X-Forwarded-For）',
+      );
+    }
   }
 });
 

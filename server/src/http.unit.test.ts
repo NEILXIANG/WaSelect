@@ -1361,3 +1361,37 @@ describe('路径参数解码失败（S-05）', () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * 剩余清单 5-1（O11）：安全响应头——所有响应（含 404 与错误）都带。
+ * @why API 只回 JSON / 302，从不回 HTML：最严的 CSP（default-src 'none'）与禁止被嵌入都没有副作用，
+ *      却能挡住"某个错误路径意外回了一段可执行内容"与点击劫持这两类。
+ */
+describe('安全响应头（5-1）', () => {
+  const EXPECTED: Record<string, string> = {
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+    'referrer-policy': 'no-referrer',
+    'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
+    'strict-transport-security': 'max-age=31536000; includeSubDomains',
+    'cross-origin-opener-policy': 'same-origin',
+  };
+
+  it('🔴 健康检查、404、业务错误三种响应都带全部安全头；不带 x-powered-by', async () => {
+    const s = await start((app) => {
+      app.get('/boom', () => {
+        throw new AppError(40001, { reason: 'x' });
+      });
+    });
+    try {
+      for (const path of ['/healthz', '/nope', '/boom']) {
+        const res = await fetch(`${s.baseUrl}${path}`);
+        for (const [k, v] of Object.entries(EXPECTED))
+          expect(res.headers.get(k), `${path} ${k}`).toBe(v);
+        expect(res.headers.get('x-powered-by')).toBeNull();
+      }
+    } finally {
+      await s.close();
+    }
+  });
+});

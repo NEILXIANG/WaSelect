@@ -73,6 +73,10 @@ services:
         # （Cloudflare Transform Rule 注入 x-origin-verify），否则直连者伪造的 XFF 会被采信
         # ⇒ 限流与账号封禁可被任意绕过（比"取错 IP"严重得多）。
         value: 1 # Render 前置一层反代（D23）。必须是层数，不是 true
+      # 剩余清单 5-2：源站校验密钥（Cloudflare Transform Rule 注入 x-origin-verify 的值，≥32 字符）。
+      #    TRUST_PROXY_HOPS ≥ 2 时**必须**配（config 跨字段 8，缺了启动即拒）；层数 1 时可留空（闸门不启用）
+      - key: ORIGIN_VERIFY_SECRET
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: waselect-pg

@@ -291,6 +291,27 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     ).toBe('https://abc123@o1.ingest.sentry.io/42');
   });
 
+  /**
+   * 剩余清单 5-2（O5）：生产信任两层以上反代却没有源站校验 → 拒绝启动。
+   * @why 层数 ≥ 2 = 采信 XFF 倒数第二跳；源站若还能被直连，直连者伪造的 XFF 会被当成真客户端 IP，
+   *      限流与登录锁定可被任意绕过（config.ts ORIGIN_VERIFY_SECRET 的 @why 早就写明"两件事必须成对"，此前无人强制）。
+   * @why 不是"生产一律必填"：api 尚未接入 Cloudflare 时没有人注入这个头，一律必填 = 全站 403。
+   */
+  it('🔴 生产 + TRUST_PROXY_HOPS ≥ 2 + 没配 ORIGIN_VERIFY_SECRET → 拒绝；配了 → 放行；层数 1 不要求', () => {
+    expect(expectReject(prod({ TRUST_PROXY_HOPS: '2' })).join('\n')).toContain(
+      'ORIGIN_VERIFY_SECRET',
+    );
+    expect(
+      loadConfig(
+        prod({
+          TRUST_PROXY_HOPS: '2',
+          ORIGIN_VERIFY_SECRET: 'cf-origin-verify-secret-0123456789abcdef',
+        }),
+      ).TRUST_PROXY_HOPS,
+    ).toBe(2);
+    expect(loadConfig(prod({ TRUST_PROXY_HOPS: '1' })).TRUST_PROXY_HOPS).toBe(1);
+  });
+
   it('生产 + mock 通道 → 拒绝（会收真钱走假支付）', () => {
     const issues = expectReject(prod({ PAYMENT_CHANNELS: 'mock,stripe' }));
     expect(issues.join('\n')).toContain('PAYMENT_CHANNELS');
