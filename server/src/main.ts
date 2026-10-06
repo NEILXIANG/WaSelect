@@ -39,6 +39,12 @@ import { createFetchClient } from './adapters/http/fetch-client.js';
 import { outboundHttpOptions } from './app/http-outbound.js';
 import { systemClock } from './adapters/clock.js';
 import { registerBusinessEventLog } from './app/business-events.js';
+import pino from 'pino';
+import { parseSentryDsn } from './sentry-dsn.js';
+import { createSentryTee } from './adapters/sentry.js';
+import { registerOrderMail } from './app/order-mail.js';
+import { registerOpsAlertMail } from './app/ops-alert-mail.js';
+import { selectMailer } from './adapters/mail/select.js';
 import { drainEventsThenClose } from './app/shutdown-cleanup.js';
 import { createCleanupIdempotencyJob } from './app/cleanup-idempotency.js';
 import { createDailyHeartbeatWatchJob } from './app/daily-heartbeat-watch.js';
@@ -98,9 +104,18 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
   const config = loadConfig(opts.env ?? process.env);
   // ⚠️ `exactOptionalPropertyTypes` 下不能写 `destination: undefined`——
   //    必须条件展开，否则"不传"和"传 undefined"被当成两回事（pino 会把后者当显式空目标）。
+  // 剩余清单 2-3：配了 SENTRY_DSN 就在日志输出流上分流 error / fatal（已脱敏的行）到 Sentry；
+  //    DSN 形状已由 config 跨字段 7 校验，这里解析失败只可能是 config 被绕过，按"不上报"处理
+  const sentryDsn = config.SENTRY_DSN === undefined ? null : parseSentryDsn(config.SENTRY_DSN);
+  const baseDestination =
+    opts.logDestination ?? (sentryDsn !== null ? pino.destination(1) : undefined);
+  const destination =
+    sentryDsn !== null && baseDestination !== undefined
+      ? createSentryTee(baseDestination, { dsn: sentryDsn, environment: config.NODE_ENV })
+      : baseDestination;
   const logger = createLogger({
     env: config.NODE_ENV,
-    ...(opts.logDestination !== undefined ? { destination: opts.logDestination } : {}),
+    ...(destination !== undefined ? { destination } : {}),
   });
 
   // ⚠️ 配置要在**用之前**打印一次（脱敏后）："少配了某个变量"在日志里长得和
@@ -195,6 +210,14 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
      */
     const inflightJobs = createInflightJobs();
     registerBusinessEventLog(events, logger);
+    // 剩余清单 2-2：订单通知邮件（D-41 兜底）。没配 MAIL_PROVIDER_API_KEY 时只记 mail_skipped
+    // 剩余清单 2-2 / 2-4：订单通知邮件与对账告警邮件共用一个 Mailer
+    const mailer = selectMailer(config, {
+      http: createFetchClient({ logger, ...outboundHttpOptions(config) }),
+      logger,
+    });
+    registerOrderMail(events, { db, logger, mailer });
+    registerOpsAlertMail(events, { logger, mailer, to: config.ALERT_EMAIL });
 
     const app = createHttpApp({
       logger,

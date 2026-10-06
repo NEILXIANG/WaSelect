@@ -41,6 +41,13 @@ function advanceJob(
         note: `auto:${String(afterDays)}d`,
         limit: AUTO_ADVANCE_BATCH_LIMIT,
       });
+      // 剩余清单 2-1：签收是"售后窗口开始计时"的业务事实，发事件供日志 / 通知订阅（提交后才分发）。
+      // completed 不发：它只是窗口关闭，没有订阅者需要它（加了也只多一条无人消费的事件）。
+      if (to === 'delivered') {
+        for (const id of ids) {
+          ctx.emit({ name: 'order.delivered', at: ctx.startedAt.toISOString(), orderId: id });
+        }
+      }
       ctx.log.info(logKey, {
         result: 'ok',
         count: ids.length,

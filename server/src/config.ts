@@ -29,6 +29,7 @@
  * @see .env.example（变量名唯一真源）、docs/地基搭建清单.md F3、技术文档 v0.5 §8、ADR-28（关税外置）
  */
 import { z } from 'zod';
+import { parseSentryDsn } from './sentry-dsn.js';
 import { ADMIN_PASSWORD_MIN_LENGTH, CURRENCY, PAYMENT_CHANNEL } from '@waselect/shared';
 
 /** 密钥类配置的键名：日志 / 诊断 / 错误上报一律脱敏（评审 #9 红线）。新增密钥类变量必须同步加这里。 */
@@ -603,6 +604,10 @@ const schema = z.object({
   SENTRY_DSN: optionalText(),
   CORS_ORIGINS: corsOrigins(),
   MAIL_PROVIDER_API_KEY: optionalText(),
+  /** 发件人（"Name <addr>"，域名须在服务商验证）；配了 MAIL_PROVIDER_API_KEY 就必须配（跨字段 6）。 */
+  MAIL_FROM: optionalText(),
+  /** 运营告警收件人（剩余清单 2-4：每日对账有异常时发信）；留空 = 只记日志。 */
+  ALERT_EMAIL: optionalText(),
   SUBSCRIBE_TMPL_PAID: optionalText(),
   SUBSCRIBE_TMPL_SHIPPED: optionalText(),
   SUBSCRIBE_TMPL_DELIVERED: optionalText(),
@@ -643,6 +648,18 @@ const crossField = schema.superRefine((c, ctx) => {
   const add = (path: string, message: string): void => {
     ctx.addIssue({ code: 'custom', path: [path], message });
   };
+
+  // 6.（剩余清单 2-2）配了邮件密钥却没配发件人：每封信都会被服务商拒，且只在第一次发信时才暴露
+  if (c.MAIL_PROVIDER_API_KEY !== undefined && c.MAIL_FROM === undefined) {
+    add(
+      'MAIL_FROM',
+      '配置了 MAIL_PROVIDER_API_KEY 就必须配置 MAIL_FROM（发件人，域名须在服务商验证）',
+    );
+  }
+  // 7.（剩余清单 2-3）DSN 解析不了 = 错误监控静默失效，启动时就拒
+  if (c.SENTRY_DSN !== undefined && parseSentryDsn(c.SENTRY_DSN) === null) {
+    add('SENTRY_DSN', 'SENTRY_DSN 形状不对（应为 https://PUBLIC_KEY@HOST/PROJECT_ID）');
+  }
 
   // 1. 生产跑假支付：最危险的一条——用户能正常下单、钱不到账，且日志里长得跟"放弃支付"一样
   if (isProd && c.PAYMENT_CHANNELS.includes('mock') && c.REVIEW_MODE !== 'on') {

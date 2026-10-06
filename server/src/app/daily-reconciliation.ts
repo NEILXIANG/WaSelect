@@ -307,10 +307,19 @@ export function createDailyReconciliationJob(): SchedulerJob<Db> {
           ctx: { class: c.key, count: c.count, sample_ids: c.ids },
         });
       }
+      const counts = Object.fromEntries(classes.map((c) => [c.key, c.count]));
       ctx.log.info('daily_reconciliation', {
         result: anomalies === 0 ? 'ok' : 'anomalies_found',
-        ctx: Object.fromEntries(classes.map((c) => [c.key, c.count])),
+        ctx: counts,
       });
+      // 剩余清单 2-4：有异常才发（提交后分发），运营告警邮件订阅它（app/ops-alert-mail.ts）
+      if (anomalies > 0) {
+        ctx.emit({
+          name: 'reconciliation.anomalies_found',
+          at: ctx.startedAt.toISOString(),
+          payload: counts,
+        });
+      }
       return { processed: anomalies };
     },
   };

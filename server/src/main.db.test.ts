@@ -85,6 +85,41 @@ describe('组装根 bootstrap（A1）', () => {
   });
 
   /**
+   * 🔴 剩余清单 2-3：配了 SENTRY_DSN → bootstrap 的日志器真的把 error 行送到 envelope 端点；info 不送。
+   * @why 分流挂在装配处（main.ts），单测只证明分流本身——"生产装配有没有接上"只能在这里验。
+   */
+  it('🔴 SENTRY_DSN → error 日志经 envelope 端点上报（生产接线，2-3）', async () => {
+    const { write } = sink();
+    const posts: string[] = [];
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('/api/42/envelope/')) {
+        posts.push(String(init?.body));
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      }
+      return Promise.reject(new Error(`unexpected fetch ${url}`));
+    });
+    let rt: Runtime | undefined;
+    try {
+      rt = await bootstrap({
+        env: { ...baseEnv(4616), SENTRY_DSN: 'https://abc123@sentry.example.com/42' },
+        logDestination: { write },
+        exit: () => undefined,
+      });
+      rt.logger.info('probe_info', { result: 'ok' });
+      rt.logger.error('probe_failed', { result: 'failed' });
+      expect(posts).toHaveLength(1);
+      expect(posts[0]).toContain('"message":"probe_failed"');
+    } finally {
+      vi.unstubAllGlobals();
+      rt?.uninstallSignals();
+      rt?.uninstallProcessErrors();
+      await rt?.server.close().catch(() => undefined);
+      await rt?.db.end().catch(() => undefined);
+    }
+  });
+
+  /**
    * 🔴 OPS3-05：生产装配（main.ts）交给路由的**就是**停机流会等的那一份登记表。
    *
    * @why 只测"端点会登记"是不够的：mount.ts 在上下文没给时会**自建**一份，

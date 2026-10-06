@@ -298,6 +298,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity,
     registry,
+    events,
   });
   // ── 管理端运营配置（I2-U-C3）：展示汇率与运费分档。clock 必须注入——
   //    "立即生效"的 effective_from 取它，否则这条路由无法在假时间下测（F10）──

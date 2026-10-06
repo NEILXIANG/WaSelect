@@ -252,6 +252,12 @@ describe('异常链路：钱与订单状态不一致时，系统必须留下"人
     // 对账：这笔"钱到了、单没了"的回调必须出现在待人工清单里
     await runDailyReconciliation(db, srv, new Date());
     expect(reconciliationSample(srv.sink, 'callback_anomalies_48h')).toContain('evt-late');
+    // 剩余清单 2-4：有异常 → 发 reconciliation.anomalies_found（运营告警邮件的订阅源），带各类计数
+    const found = srv.sink
+      .find('business_event')
+      .map((l) => l['ctx'] as Record<string, unknown>)
+      .find((c) => c['domain_event'] === 'reconciliation.anomalies_found');
+    expect(found?.['callback_anomalies_48h']).toBeGreaterThanOrEqual(1);
   });
 
   it('关单作业已把单关成 expired 之后才到账 → 同样按迟到付款分类（late_payment + error），对账可见（KD-7 回归）', async () => {

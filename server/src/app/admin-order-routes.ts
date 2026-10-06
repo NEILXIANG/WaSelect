@@ -41,6 +41,7 @@ import type { Logger } from '../logger.js';
 import type { AppConfig } from '../config.js';
 import type { Clock } from '../ports/clock.js';
 import type { PaymentRegistry } from '../ports/payment.js';
+import type { EventBus } from '../ports/events.js';
 import { executeRefund } from './refund-execution.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
@@ -89,6 +90,8 @@ export interface AdminOrderRoutesDeps {
   identity: IdentityCheck;
   clock: Clock;
   registry: PaymentRegistry;
+  /** 业务事件总线（剩余清单 2-1：发货 / 退款落定后发事件，邮件订阅者据此发信）。 */
+  events: EventBus;
 }
 
 /**
@@ -354,6 +357,13 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           }
         });
         deps.logger.info('admin_order_shipped', { result: 'ok', order_id: id });
+        // 事务已提交才发（与 unit-of-work 同口径：回滚了就不该有人收到"已发货"）
+        deps.events.publish({
+          name: 'order.shipped',
+          at: deps.clock.now().toISOString(),
+          orderId: id,
+          payload: { carrier: ship.carrier },
+        });
         res.json({
           order_id: id,
           status: 'shipped',

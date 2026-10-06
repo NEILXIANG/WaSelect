@@ -276,6 +276,21 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     ...extra,
   });
 
+  it('配了邮件密钥却没配 MAIL_FROM → 拒绝（每封信都会被服务商拒，且只在第一次发信时才暴露，2-2）', () => {
+    expect(expectReject(prod({ MAIL_PROVIDER_API_KEY: 're_x' })).join('\n')).toContain('MAIL_FROM');
+    expect(
+      loadConfig(prod({ MAIL_PROVIDER_API_KEY: 're_x', MAIL_FROM: 'Waselect <shop@example.com>' }))
+        .MAIL_FROM,
+    ).toBe('Waselect <shop@example.com>');
+  });
+
+  it('SENTRY_DSN 形状不对 → 拒绝（解析失败 = 错误静默不上报，2-3）', () => {
+    expect(expectReject(prod({ SENTRY_DSN: 'not-a-dsn' })).join('\n')).toContain('SENTRY_DSN');
+    expect(
+      loadConfig(prod({ SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42' })).SENTRY_DSN,
+    ).toBe('https://abc123@o1.ingest.sentry.io/42');
+  });
+
   it('生产 + mock 通道 → 拒绝（会收真钱走假支付）', () => {
     const issues = expectReject(prod({ PAYMENT_CHANNELS: 'mock,stripe' }));
     expect(issues.join('\n')).toContain('PAYMENT_CHANNELS');

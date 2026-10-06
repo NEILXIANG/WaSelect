@@ -36,6 +36,12 @@ export const LOGGED_EVENTS: readonly string[] = [
   // payload 只有 dispute_id / result，无 PII（@limitation 一：这里只记日志）。
   'order.dispute_opened',
   'order.dispute_closed',
+  // 剩余清单 2-1：履约与退款事件（payload 只有承运商名，无 PII；运单号不进事件）
+  'order.shipped',
+  'order.delivered',
+  'order.refunded',
+  // 剩余清单 2-4：对账异常汇总（payload 只有各类计数）
+  'reconciliation.anomalies_found',
 ];
 
 /** 日志事件名——检索用；`domain_event` 放 ctx（写 `event:` 会被 logger 静默丢弃）。 */

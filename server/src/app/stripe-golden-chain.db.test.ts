@@ -43,6 +43,7 @@ import {
 } from '../../../test/helpers/chain-server.js';
 import { PAY_CALLBACK_PREFIX } from './pay-routes.js';
 import { executeRefund } from './refund-execution.js';
+import { createEventBus } from '../adapters/event-bus.js';
 import type { PaymentProvider } from '../ports/payment.js';
 import {
   CHARGE_CURRENCY_ORDER,
@@ -513,6 +514,12 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
     const r = await refund(orderId, 'rf-rs1');
     expect(r.json['outcome']).toBe('succeeded');
     expect(await stockOf()).toBe(before);
+    // 剩余清单 2-1：退款落定发 order.refunded（进业务日志，邮件订阅者据此发信）
+    const logged = srv.sink
+      .find('business_event')
+      .filter((l) => l['order_id'] === orderId)
+      .map((l) => (l['ctx'] as { domain_event?: string }).domain_event);
+    expect(logged).toContain('order.refunded');
   });
 
   /**
@@ -531,24 +538,47 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
         Promise.resolve({ providerRef: 'cs', refundRef: 're_again', outcome: 'succeeded' }),
       refundStatus: () => Promise.resolve('succeeded'),
     };
-    await executeRefund({ db, logger: srv.logger, clock: { now: () => new Date() } }, provider, {
-      orderId,
-      paymentId: String(pay?.['id']),
-      channel: 'stripe',
-      request: {
+    const bus = createEventBus(srv.logger);
+    const refunded: string[] = [];
+    bus.subscribe('order.refunded', (e) => refunded.push(String(e.orderId)));
+    await executeRefund(
+      { db, logger: srv.logger, clock: { now: () => new Date() }, events: bus },
+      provider,
+      {
         orderId,
-        providerRef: 'cs',
-        amountJpy: 1,
-        currency: 'USD',
-        amountMinor: 1,
-        reason: 'x',
+        paymentId: String(pay?.['id']),
+        channel: 'stripe',
+        request: {
+          orderId,
+          providerRef: 'cs',
+          amountJpy: 1,
+          currency: 'USD',
+          amountMinor: 1,
+          reason: 'x',
+        },
+        progress: { pendingRef: null, confirmedFailures: 0 },
+        actor: 'admin:u-admin',
+        hasDispute: false,
       },
-      progress: { pendingRef: null, confirmedFailures: 0 },
-      actor: 'admin:u-admin',
-      hasDispute: false,
-    });
+    );
+    expect(refunded).toEqual([]); // 第二次落定不再发 order.refunded（不会重复通知买家）
     expect(await stockOf()).toBe(before);
     expect(await orderStatus(orderId)).toBe('refunded');
+  });
+
+  it('🔴 管理端发货 → 发 order.shipped（带承运商，2-1）', async () => {
+    const orderId = await paidOrder('sh1');
+    const r = await call(srv, 'POST', `/api/v1/admin/orders/${orderId}/ship`, {
+      token: await tokenFor('u-admin', 'admin'),
+      key: 'ship-sh1',
+      body: { carrier: 'EMS', tracking_no: 'EM123456789JP' },
+    });
+    expect(r.status).toBe(200);
+    const ev = srv.sink
+      .find('business_event')
+      .filter((l) => l['order_id'] === orderId)
+      .map((l) => l['ctx'] as { domain_event?: string; carrier?: string });
+    expect(ev.find((e) => e.domain_event === 'order.shipped')?.carrier).toBe('EMS');
   });
 
   it('已发货的单退款成功 → 库存不回补（货已经寄出）', async () => {

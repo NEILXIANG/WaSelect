@@ -137,7 +137,7 @@ services:
         sync: false # 小程序 request 合法域名（微信后台每月仅可改 5 次，开局一次性规划）
 
       # ── 占位：有的已接线（CHECKOUT_BASE_URL / INTERNAL_JOB_SECRET / IMG_BASE_URL / STRIPE_*），
-      #    有的尚无使用方（R2_* / MAIL_* / SUBSCRIBE_* / WECHAT_INSTITUTION_* / SENTRY_DSN）——
+      #    有的尚无使用方（SUBSCRIBE_* / WECHAT_INSTITUTION_*；MAIL_* / SENTRY_DSN / ALERT_EMAIL 自剩余清单批次 2 起已接线）——
       #    是否接线以 server/src/config.ts 的使用方为准（一致性审计 C9，AJ-176 更正原"尚未接线"一句）──
       - key: STRIPE_SECRET_KEY
         sync: false
@@ -167,6 +167,11 @@ services:
       - key: STORAGE_DRIVER
         sync: false
       - key: MAIL_PROVIDER_API_KEY
+        sync: false
+      # 剩余清单 2-2 / 2-4：配了 MAIL_PROVIDER_API_KEY 就必须配 MAIL_FROM（config 跨字段校验，缺了启动即拒）
+      - key: MAIL_FROM
+        sync: false
+      - key: ALERT_EMAIL
         sync: false
       - key: SUBSCRIBE_TMPL_PAID
         sync: false

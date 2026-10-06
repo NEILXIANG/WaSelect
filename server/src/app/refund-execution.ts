@@ -37,6 +37,7 @@ import { restoreStockForOrder } from '../adapters/orders.js';
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
+import type { EventBus } from '../ports/events.js';
 // 值导入（不是 type）：AJ-313 —— 熔断拒绝必须**按类型**分辨出来原样抛，
 // 折叠成 50000 会把"约 N ms 后可重试"这条信息丢掉（errors.ts 对它映射 50300 + retry_after_ms）
 import { CircuitOpenError } from '../ports/circuit-breaker.js';
@@ -46,6 +47,8 @@ export interface RefundExecDeps {
   db: Db;
   logger: Logger;
   clock: Clock;
+  /** 退款落定后发 `order.refunded`（剩余清单 2-1）。 */
+  events: EventBus;
 }
 
 /** 第一段（事务内）判定完、交给第二段的全部输入。 */
@@ -174,22 +177,21 @@ export async function executeRefund(
  * @why 迟到付款的单（`paid_at` 为空，剩余清单 1-5）不回补：关单那一刻库存已经还过一次，再还就是凭空多货。
  */
 async function settle(deps: RefundExecDeps, plan: RefundPlan, refundRef: string): Promise<void> {
-  await withTransaction(deps.db, async (tx) => {
-    const done = await markRefunded(
-      tx,
-      plan.orderId,
-      plan.paymentId,
-      refundRef,
-      deps.clock.now(),
-      plan.actor,
-    );
-    if (!done) return;
+  const at = deps.clock.now();
+  const done = await withTransaction(deps.db, async (tx) => {
+    const settled = await markRefunded(tx, plan.orderId, plan.paymentId, refundRef, at, plan.actor);
+    if (!settled) return false;
     const restock = await tx`
       select 1 from orders
        where id = ${plan.orderId} and shipped_at is null and paid_at is not null
     `;
     if (restock.length > 0) await restoreStockForOrder(tx, plan.orderId);
+    return true;
   });
+  // 提交之后才发；第二次落定（done=false）不发，避免同一笔退款通知两次
+  if (done) {
+    deps.events.publish({ name: 'order.refunded', at: at.toISOString(), orderId: plan.orderId });
+  }
 }
 
 /** 查询失败 ≠ 退款失败：只打 error 日志、抛 50000，**不**写 refund_failed（否则会被数成确认失败）。 */

@@ -102,6 +102,30 @@ describe('自动签收（shipped → delivered，AUTO_DELIVER_DAYS）', () => {
   });
 });
 
+/**
+ * 剩余清单 2-1：自动签收发 `order.delivered`（提交后分发），供通知 / 日志订阅。
+ * @why 签收是"售后窗口开始计时"的业务事实，此前只写了 order_events，没人能订阅它。
+ */
+describe('自动签收发出 order.delivered 事件（2-1）', () => {
+  it('🔴 迁走一单就发一条，带 orderId；不到期的单不发', async () => {
+    await seed('o-due', 'shipped', { shipped: ago(30 * DAY) });
+    await seed('o-early', 'shipped', { shipped: ago(30 * DAY - 1000) });
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'test', destination: sink });
+    const bus = createEventBus(logger);
+    const got: Array<string | undefined> = [];
+    bus.subscribe('order.delivered', (e) => got.push(e.orderId));
+    await runSchedulerOnce(
+      createSchedulerDeps(db, bus, fixedClock(NOW.toISOString()), logger, {
+        name: 'fulfil-test',
+        lockKey: 'fulfil-test',
+      }),
+      [createAutoDeliverJob({ afterDays: 30 })],
+    );
+    expect(got).toEqual(['o-due']);
+  });
+});
+
 describe('自动完成（delivered → completed，AUTO_COMPLETE_DAYS）', () => {
   it('恰好满 7 天到期、差 1 秒不到期；拒付中不碰；只迁 delivered（不越级迁 shipped）', async () => {
     await seed('o-due', 'delivered', { shipped: ago(40 * DAY), delivered: ago(7 * DAY) });

@@ -22,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import { fixedClock } from '../../../test/helpers/fixed-clock.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { createLogger } from '../logger.js';
+import { createEventBus } from '../adapters/event-bus.js';
 import { AppError } from '../errors.js';
 import { CircuitOpenError } from '../ports/circuit-breaker.js';
 import type { Db } from '../adapters/db.js';
@@ -46,6 +47,7 @@ function deps(counter: { n: number }): { d: RefundExecDeps; sink: MemorySink } {
       db: fakeDb(counter),
       logger: createLogger({ env: 'test', destination: sink }),
       clock: CLOCK,
+      events: createEventBus(createLogger({ env: 'test', destination: sink })),
     },
     sink,
   };
@@ -230,6 +232,7 @@ describe('executeRefund：另外三个出口（DB2-09）', () => {
       }) as unknown as Db,
       logger: createLogger({ env: 'test', destination: sink }),
       clock: CLOCK,
+      events: createEventBus(createLogger({ env: 'test', destination: sink })),
     };
     const err = await executeRefund(d, provider(new Error('fetch failed')), plan()).catch(
       (e: unknown) => e,
