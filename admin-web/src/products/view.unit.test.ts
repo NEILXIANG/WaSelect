@@ -442,3 +442,15 @@ describe('withStatus：状态的三个展示字段一起改（AJ-231）', () => 
     expect(row.statusText).toBe('在售');
   });
 });
+
+/** 库存框清空不能被当成 0（A-06）：`Number('') === 0` 会让"清空重打"的商品直接售罄。 */
+describe('productFormErrors：库存必填（A-06）', () => {
+  it.each(['', ' '])('库存为 %j → 报"库存必填"', (stock) => {
+    const r = productFormErrors({ ...productFormModel(PRODUCT), stock });
+    expect(r.ok).toBe(false);
+    expect(r.errors['stock']).toContain('必填');
+  });
+  it('库存 0 仍然合法（真的卖完了）', () => {
+    expect(productFormErrors({ ...productFormModel(PRODUCT), stock: '0' }).ok).toBe(true);
+  });
+});

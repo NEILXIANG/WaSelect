@@ -290,7 +290,10 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
             </div>
           )}
 
+          {/* key 随地址变化（A-02）：首帧用的是列表快照（没有 address），表单的初值只在挂载时取；
+              详情带着地址回来、或改址保存后地址变了，都要重新挂载一次才会预填当前地址。 */}
           <OrderAddressForm
+            key={JSON.stringify((order as { address?: unknown }).address ?? null)}
             api={api}
             id={id}
             order={order}

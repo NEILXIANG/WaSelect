@@ -14,7 +14,7 @@
  *
  * @see ./view.ts；./api.ts；../orders/api.ts（getOrder）；契约 D-50
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { getOrder } from '../orders/api.js';
 import { blockUser, listDisputes, type AdminApi } from './api.js';
@@ -45,15 +45,22 @@ export function RiskPage({ api }: RiskPageProps) {
   const [userId, setUserId] = useState('');
   const [busy, setBusy] = useState(false);
 
+  /** 请求序号（A-05）：晚到的旧响应不得覆盖新列表，只有最后一次发起的请求能写。 */
+  const reqSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     setError('');
     try {
-      setRows(disputeRows(await listDisputes(api, status === 'all' ? undefined : status)));
+      const list = await listDisputes(api, status === 'all' ? undefined : status);
+      if (seq !== reqSeq.current) return;
+      setRows(disputeRows(list));
     } catch (e) {
+      if (seq !== reqSeq.current) return;
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, [api, status]);
 

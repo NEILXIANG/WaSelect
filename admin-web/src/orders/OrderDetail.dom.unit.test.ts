@@ -14,7 +14,7 @@
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
-import { button, click, mount, type, type Mounted } from '../testing/dom.js';
+import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { OrderDetail } from './OrderDetail.js';
 
 interface Call {
@@ -378,3 +378,39 @@ describe('订单详情：商品行显示采购信息（D-39）', () => {
 async function opened(): Promise<HTMLElement> {
   return open();
 }
+
+/**
+ * 从列表点进详情时改址表单要预填当前地址（A-02）。
+ * @why 详情先用列表快照（没有 address 字段）渲染一帧，改址表单的 useState 只在首次挂载取值，
+ *      详情回来后不会重新预填——7 格全空，只改电话也得重打整个地址。
+ */
+describe('订单详情：改址表单预填（A-02）', () => {
+  it('🔴 source 是列表形状（无地址）→ 详情回来后表单预填详情里的地址', async () => {
+    status = 'paid';
+    hasDispute = false;
+    const address = {
+      recipient: 'Jane Doe',
+      phone: '+14155550123',
+      line1: '1 Main St',
+      line2: '',
+      city: 'San Francisco',
+      state: 'CA',
+      postal_code: '94105',
+      country: 'US',
+    };
+    const api = async (): Promise<unknown> => ({ ...order(), address });
+    mounted = await mount(
+      createElement(OrderDetail, {
+        api: api as never,
+        id: 'o-1',
+        source: { order_id: 'o-1', order_no: 'W260930-ABC123', status: 'paid', total_jpy: 9150 },
+        onBack: () => undefined,
+        onChanged: () => undefined,
+      }),
+    );
+    await flush();
+    const values = [...mounted.el.querySelectorAll('input')].map((i) => i.value);
+    expect(values).toContain('Jane Doe');
+    expect(values).toContain('1 Main St');
+  });
+});

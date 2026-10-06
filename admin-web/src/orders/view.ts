@@ -246,7 +246,11 @@ export function shipGate(order: unknown): Gate {
 export function refundGate(order: unknown): Gate {
   const status = readStatus(order);
   if (status === null) return NO('订单状态未知，不能操作');
-  if ((order as { has_dispute?: unknown } | null)?.has_dispute === true)
+  // ⚠️ 顺序与服务端 refundGuard 一致（A-01）：`refunding` 先于拒付判断。
+  //    拒付期间再点只会查询在途那笔或同键重放，不会动第二笔钱；"换新键重新发起"由服务端拦。
+  //    先判拒付的旧写法会把 refunding + 拒付 的单永久锁在退款中。
+  const disputed = (order as { has_dispute?: unknown } | null)?.has_dispute === true;
+  if (disputed && status !== 'refunding')
     return NO('有拒付进行中，退款会被拒（40907）；请先在拒付列表处理');
   switch (status) {
     case 'paid':
@@ -269,8 +273,9 @@ export function refundGate(order: unknown): Gate {
       //    并把"退款原因沿用首次"这句去掉——② 换新键时原因仍沿用，但"沿用原因"不是运营要做的判断。
       return {
         ok: true,
-        reason:
-          '上一笔退款尚未确认完成（机构处理中 / 失败 / 结果未知）。可再提交一次：服务端会先查询上一笔的结果，确认失败才重新发起，不会重复退两次',
+        reason: disputed
+          ? '上一笔退款尚未确认完成，且期间有拒付。可再提交一次：只会查询上一笔的结果或用同一键重发；若上一笔确认失败，因有拒付不会重新发起'
+          : '上一笔退款尚未确认完成（机构处理中 / 失败 / 结果未知）。可再提交一次：服务端会先查询上一笔的结果，确认失败才重新发起，不会重复退两次',
       };
     case 'refunded':
       return NO('已退款');

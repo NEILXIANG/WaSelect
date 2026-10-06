@@ -16,7 +16,7 @@
  *
  * @see ./view.ts（行视图与闸门）；./api.ts（接口层）；./OrderDetail.tsx
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OrderStatus } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { listOrders, type AdminApi, type AdminOrderLike } from './api.js';
@@ -55,7 +55,11 @@ export function OrdersPage({ api }: OrdersPageProps) {
    */
   const [reloadTick, setReloadTick] = useState(0);
 
+  /** 请求序号（A-05）：晚到的旧响应不得覆盖新列表，只有最后一次发起的请求能写。 */
+  const reqSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     setError('');
     try {
@@ -65,14 +69,16 @@ export function OrdersPage({ api }: OrdersPageProps) {
         keyword: applied,
         ...(status === 'all' ? {} : { status }),
       });
+      if (seq !== reqSeq.current) return;
       setRaw(res.items);
       setRows(orderRows(res.items));
       setTotal(res.total);
     } catch (e) {
+      if (seq !== reqSeq.current) return;
       // ⚠️ 失败不清列表（同商品管理）：只显示错误，列表保留上一次结果
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, [api, page, status, applied, reloadTick]);
 

@@ -11,12 +11,16 @@
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
-import { button, click, mount, type Mounted } from '../testing/dom.js';
+import { button, click, flush, mount, type Mounted } from '../testing/dom.js';
 import { ProductsPage } from './ProductsPage.js';
 
 let mounted: Mounted | undefined;
 let patchFails: boolean;
 let patches: Array<{ path: string; body?: unknown }>;
+/** 服务端此刻的状态与 updated_at（PATCH 成功会改写它们，与真服务端一致）。 */
+let serverStatus: string;
+let serverUpdatedAt: string;
+let edited: Array<Record<string, unknown> | null>;
 
 const PRODUCT = {
   id: 'p-1',
@@ -29,16 +33,31 @@ const PRODUCT = {
 
 async function open(): Promise<HTMLElement> {
   patches = [];
+  edited = [];
+  serverStatus = PRODUCT.status;
+  serverUpdatedAt = '2026-10-01T00:00:00.000Z';
   const api = async (req: { path: string; method?: string; body?: unknown }): Promise<unknown> => {
     if (req.method === 'PATCH') {
       patches.push(req);
       if (patchFails) throw new ApiError(50000, '服务器内部错误', 't-1');
-      return {};
+      serverStatus = (req.body as { status: string }).status;
+      serverUpdatedAt = '2026-10-05T00:00:00.000Z';
+      return { id: PRODUCT.id, status: serverStatus };
     }
-    return { items: [PRODUCT], total: 1, page: 1, size: 20 };
+    return {
+      items: [{ ...PRODUCT, status: serverStatus, updated_at: serverUpdatedAt }],
+      total: 1,
+      page: 1,
+      size: 20,
+    };
   };
   mounted = await mount(
-    createElement(ProductsPage, { api: api as never, onEdit: () => undefined }),
+    createElement(ProductsPage, {
+      api: api as never,
+      onEdit: (_id: string | null, source?: unknown) => {
+        edited.push((source ?? null) as Record<string, unknown> | null);
+      },
+    }),
   );
   return mounted.el;
 }
@@ -80,5 +99,21 @@ describe('商品列表：上下架后的状态显示（AJ-231）', () => {
     await click(button(el, '上架'));
     expect(patches.map((p) => p.body)).toEqual([{ status: 'offline' }, { status: 'active' }]);
     expect(statusCell(el)).toBe('在售');
+  });
+});
+
+/**
+ * 上下架之后再编辑，不能撞上自己的乐观锁（A-03）。
+ * @why 服务端上下架会刷新 updated_at；列表只做乐观更新、不重新取，编辑页拿到旧的 updated_at，
+ *      保存必报 40914「被别人改过了」——"下架 → 改价 → 上架"每次都撞。
+ */
+describe('商品列表：上下架后编辑（A-03）', () => {
+  it('🔴 下架成功后点编辑，传给编辑页的是服务端最新的 updated_at', async () => {
+    patchFails = false;
+    const el = await open();
+    await click(button(el, '下架'));
+    await flush();
+    await click(button(el, '编辑'));
+    expect(edited.at(-1)?.['updated_at']).toBe('2026-10-05T00:00:00.000Z');
   });
 });

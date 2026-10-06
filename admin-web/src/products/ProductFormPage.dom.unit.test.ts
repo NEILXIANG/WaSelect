@@ -19,7 +19,7 @@
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
-import { button, click, mount, type as typeInto, type Mounted } from '../testing/dom.js';
+import { button, click, flush, mount, type as typeInto, type Mounted } from '../testing/dom.js';
 import { CATEGORY_LABELS, PRODUCT_CATEGORY } from './view.js';
 import { ProductFormPage } from './ProductFormPage.js';
 
@@ -50,7 +50,7 @@ async function openWith(source: Record<string, unknown> | null): Promise<HTMLEle
   const api = async (req: { path: string; method?: string; body?: unknown }): Promise<unknown> => {
     calls.push(req);
     if (putCode !== 0)
-      throw new ApiError(putCode, '这个商品在你打开之后被别人改过了', 'trace-40914');
+      throw new ApiError(putCode, '这条内容在你打开之后被别人改过了', 'trace-40914');
     return { id: 'p-1' };
   };
   mounted = await mount(
@@ -152,5 +152,52 @@ describe('商品编辑：保存撞上 40914（ADM3-02）', () => {
     expect(calls[0]?.method).toBe('POST');
     expect(calls[0]?.body).not.toHaveProperty('expected_updated_at');
     expect(doneCount).toBe(1);
+  });
+});
+
+/** 编辑标签框里打了字没按回车就保存（A-04）：标签不能被悄悄丢掉。 */
+describe('商品表单：未按回车的标签草稿（A-04）', () => {
+  it('🔴 标签框有草稿时点保存 → 草稿并入 tags 一起提交', async () => {
+    const el = await open();
+    const tagInput = el.querySelector('input[placeholder^="输入后按回车添加"]');
+    await typeInto(tagInput, '南部鉄器');
+    await click(button(el, '保存'));
+    const put = calls.find((c) => c.method === 'PUT');
+    expect((put?.body as { tags?: string[] } | undefined)?.tags).toEqual(['南部鉄器']);
+  });
+
+  it('🔴 输入法合成中的回车（isComposing）不加入标签（A-09）', async () => {
+    const el = await open();
+    const tagInput = el.querySelector('input[placeholder^="输入后按回车添加"]') as HTMLInputElement;
+    await typeInto(tagInput, 'なんぶ');
+    tagInput.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true }),
+    );
+    await flush();
+    expect(el.querySelectorAll('button[aria-label^="移除标签"]')).toHaveLength(0);
+    expect(tagInput.value).toBe('なんぶ');
+  });
+});
+
+/** 图片还在上传时点保存（A-08）：不能先把商品存下来、把这张图丢掉。 */
+describe('商品表单：上传中不能保存（A-08）', () => {
+  it('🔴 上传挂起时点保存 → 不发 PUT，按钮显示上传中', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (() => new Promise(() => undefined)) as typeof fetch;
+    try {
+      const el = await open();
+      const fileInput = el.querySelector('input[type="file"]') as HTMLInputElement;
+      const file = new File([new Uint8Array([1, 2, 3])], 'a.jpg', { type: 'image/jpeg' });
+      Object.defineProperty(fileInput, 'files', { value: [file] });
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      await flush();
+      const save = el.querySelector('button[type="submit"]') as HTMLButtonElement;
+      expect(save.disabled).toBe(true);
+      save.form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await flush();
+      expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(0);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

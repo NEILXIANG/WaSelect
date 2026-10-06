@@ -348,8 +348,10 @@ export function productFormErrors(form: unknown): {
   const weight = Number(f.weightG);
   if (!Number.isInteger(weight) || weight < 1)
     errors['weightG'] = '重量必须是 ≥1 的整数（克，含包材口径见 D-42）';
+  // 先判空（A-06）：`Number('') === 0`，清空库存框会被当成 0 提交，商品直接售罄
   const stock = Number(f.stock);
-  if (!Number.isInteger(stock) || stock < 0) errors['stock'] = '库存必须是 ≥0 的整数';
+  if (f.stock.trim() === '') errors['stock'] = '库存必填（≥0 的整数；真的卖完了请填 0）';
+  else if (!Number.isInteger(stock) || stock < 0) errors['stock'] = '库存必须是 ≥0 的整数';
 
   if (f.customsDescEn.trim() === '') errors['customsDescEn'] = '英文报关品名必填（D-39）';
   if (f.originCountry !== 'JP') errors['originCountry'] = 'MVP 原产地只接受 JP（D-42/D-43）';

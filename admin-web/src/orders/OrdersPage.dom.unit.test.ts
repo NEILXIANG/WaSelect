@@ -12,7 +12,7 @@
  */
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { button, click, mount, type, type Mounted } from '../testing/dom.js';
+import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { OrdersPage } from './OrdersPage.js';
 
 interface Call {
@@ -150,5 +150,44 @@ describe('订单列表：采购信息列（0.6.26）', () => {
     const cell = el.querySelector('.purchase-cell');
     expect(cell?.textContent).toBe('—');
     expect(el.textContent).not.toContain('未记录');
+  });
+});
+
+/**
+ * 旧请求晚到不得覆盖新列表（A-05）。
+ * @why 网络慢时先点「下一页」再点「上一页」：第 1 页先回、第 2 页后回，
+ *      页码显示第 1 页，表格却是第 2 页的单——待采购清单里会混进别的状态的订单。
+ */
+describe('订单列表：响应乱序（A-05）', () => {
+  it('🔴 第 2 页的响应晚于第 1 页到达 → 表格仍是第 1 页的内容', async () => {
+    const pending: Array<{ page: string; resolve: (v: unknown) => void }> = [];
+    const row = (no: string) => ({
+      order_id: no,
+      order_no: no,
+      status: 'paid',
+      total_jpy: 1000,
+      created_at: '2026-10-01T00:00:00.000Z',
+      recipient: 'Jane',
+    });
+    const api = (req: Call): Promise<unknown> => {
+      const page = /[?&]page=(\d+)/.exec(req.path)?.[1] ?? '1';
+      if (pending.length === 0 && page === '1') {
+        return Promise.resolve({ items: [row('PAGE1-A')], total: 40 });
+      }
+      return new Promise((resolve) => pending.push({ page, resolve }));
+    };
+    mounted = await mount(createElement(OrdersPage, { api: api as never }));
+    const el = mounted.el;
+    await click(button(el, '下一页'));
+    await click(button(el, '上一页'));
+    const p1 = pending.find((p) => p.page === '1');
+    const p2 = pending.find((p) => p.page === '2');
+    p1?.resolve({ items: [row('PAGE1-A')], total: 40 });
+    await flush();
+    p2?.resolve({ items: [row('PAGE2-B')], total: 40 });
+    await flush();
+    expect(el.textContent).toContain('第 1 /');
+    expect(el.querySelector('tbody')?.textContent).toContain('PAGE1-A');
+    expect(el.querySelector('tbody')?.textContent).not.toContain('PAGE2-B');
   });
 });

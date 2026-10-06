@@ -15,7 +15,7 @@
  *
  * @see ./view.ts（校验真源）；packages/shared/src/enums.ts（COMPLIANCE_TAG / BLOCKED_COMPLIANCE_TAG）
  */
-import { useState } from 'react';
+
 import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG } from '@waselect/shared';
 import type { ProductImageEntry } from './view.js';
 
@@ -93,6 +93,12 @@ export function TagPicker({ value, onChange, error = '' }: TagPickerProps) {
 export interface FreeTagInputProps {
   value: string[];
   onChange: (tags: string[]) => void;
+  /**
+   * 尚未按回车的草稿（受控，A-04）：由表单持有，保存时并入 tags。
+   * @why 草稿原来是组件内部状态，表单提交看不到它——打了字没按回车就点保存，标签被悄悄丢掉。
+   */
+  draft: string;
+  onDraftChange: (draft: string) => void;
   error?: string;
 }
 
@@ -107,8 +113,13 @@ export interface FreeTagInputProps {
  * @limitation **不做**数量上限：契约未规定，加上限等于凭空造一条规则；
  *              真出现"一个商品三十个标签"时该改的是版式，不是这里。
  */
-export function FreeTagInput({ value, onChange, error = '' }: FreeTagInputProps) {
-  const [draft, setDraft] = useState('');
+export function FreeTagInput({
+  value,
+  onChange,
+  draft,
+  onDraftChange: setDraft,
+  error = '',
+}: FreeTagInputProps) {
   const add = () => {
     const t = draft.trim();
     if (t === '' || value.includes(t)) {
@@ -144,7 +155,9 @@ export function FreeTagInput({ value, onChange, error = '' }: FreeTagInputProps)
         onKeyDown={(e) => {
           // ⚠️ 必须 preventDefault：input 在 form 里，回车会**直接提交表单**，
           //    表现为"加了个标签、页面却跳回列表了"。
-          if (e.key === 'Enter') {
+          // ⚠️ 输入法合成中的回车是在**确认候选词**，不是"添加"（A-09）：
+          //    不排除的话，日文 / 中文输入法会把半截拼写当成标签加进去。
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
             e.preventDefault();
             add();
           }

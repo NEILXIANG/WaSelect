@@ -23,6 +23,8 @@ export interface BannerLike {
   active?: boolean;
   starts_at?: string;
   ends_at?: string;
+  /** 管理端列表回显（S-09）：保存时作为乐观锁凭据 `expected_updated_at` 发回去。 */
+  updated_at?: string;
 }
 
 /** `GET /admin/banners`。 */

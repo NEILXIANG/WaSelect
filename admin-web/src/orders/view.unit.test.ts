@@ -7,6 +7,8 @@
  *      ③ 状态文案缺一个键 → 那一列显示"未知状态"，客服对客户说不出订单怎么了；
  *      ④ 时间/金额格式化依赖机器时区或语言区 → 两台机器显示两个数字。
  */
+import type { OrderStatus } from '@waselect/shared';
+import { refundGuard } from '../../../server/src/domain/admin-order-actions.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -614,5 +616,24 @@ describe('orderRows 带 purchaseLines（0.6.26）', () => {
     ]);
     expect(rows[0]?.purchaseLines[0]).toContain('Amazon JP');
     expect(rows[1]?.purchaseLines).toEqual([]);
+  });
+});
+
+/**
+ * 退款闸门与服务端 `refundGuard` 逐格对照（A-01）。
+ * @why 服务端先放行 `refunding`、再判拒付（拒付期间仍允许查询在途那笔 / 同键重放，
+ *      换新键重新发起由 refund-execution 拦）。前端原来先判拒付，`refunding + 拒付` 的单按钮被锁死，
+ *      订单永远停在退款中。两端顺序不一致只能靠逐格对照发现。
+ */
+describe('refundGate 与服务端 refundGuard 逐格一致（A-01）', () => {
+  it.each(
+    ORDER_STATUS.flatMap((s) => [
+      [s, false],
+      [s, true],
+    ]) as Array<[OrderStatus, boolean]>,
+  )('status=%s has_dispute=%s', (status, dispute) => {
+    expect(refundGate(withStatus(status, { has_dispute: dispute })).ok).toBe(
+      refundGuard(status, dispute).ok,
+    );
   });
 });

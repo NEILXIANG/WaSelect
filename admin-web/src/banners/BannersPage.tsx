@@ -13,7 +13,7 @@
  *
  * @see ./view.ts（校验）；./api.ts；../api/upload.ts（图片上传）
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { uploadImage } from '../api/upload.js';
 import {
@@ -53,6 +53,12 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState('');
+  /**
+   * 当前表单对应哪一条（'new' = 新建）。上传完成时拿它核对（A-07）：
+   * 上传要几秒，期间运营可能点了另一条的「编辑」；不核对的话，图会写进**另一条**的表单。
+   */
+  const formTarget = useRef('new');
+  formTarget.current = editing?.id ?? 'new';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,13 +102,24 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     try {
       const body = toBannerInput(form);
       if (editing === null) await createBanner(api, body);
-      else await updateBanner(api, editing.id, body);
+      // 带上打开编辑时的版本（S-09）：期间被别人改过时服务端回 40914，而不是静默覆盖
+      else
+        await updateBanner(api, editing.id, {
+          ...body,
+          expected_updated_at: editing.updated_at ?? '',
+        });
       setError('');
       startNew();
       await load();
     } catch (e) {
       // ⚠️ 失败保留表单（清了等于让运营重传一遍图）
-      setError(e instanceof ApiError ? e.message : String(e));
+      setError(
+        e instanceof ApiError && e.code === 40914
+          ? `${e.message}：你填的内容还在，请点「取消编辑」后重新打开这条，对照最新值再保存`
+          : e instanceof ApiError
+            ? e.message
+            : String(e),
+      );
     } finally {
       setBusy(false);
     }
@@ -123,11 +140,16 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
 
   const onPickFile = async (file: File | undefined): Promise<void> => {
     if (file === undefined) return;
+    const target = formTarget.current;
     setBusy(true);
     try {
       // 0.6.8 起上传响应恒带 image_key（= detail 档键，AJ-143/AJ-166），直接提交；
       // 服务端拿它与 IMG_BASE_URL 拼出 Banner.image 的完整 URL。
       const set = await uploadImage({ baseUrl, getToken, onUnauthorized }, file);
+      if (formTarget.current !== target) {
+        setError('上传完成时你已切换到另一条 Banner，这张图没有放进当前表单；如需使用请重新选择');
+        return;
+      }
       setForm((s) => ({ ...s, imageKey: set.image_key }));
       setErrors((e) => ({ ...e, imageKey: '' }));
     } catch (e) {

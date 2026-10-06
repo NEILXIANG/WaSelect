@@ -70,6 +70,8 @@ export function ProductFormPage({
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  /** 编辑标签框里尚未按回车的草稿（A-04：保存时并入 tags，不悄悄丢掉）。 */
+  const [tagDraft, setTagDraft] = useState('');
 
   const set = (key: keyof ProductForm, value: string | string[]) => {
     setForm((prev) => ({ ...prev, [key]: value }) as ProductForm);
@@ -82,7 +84,19 @@ export function ProductFormPage({
   };
 
   const onSubmit = async () => {
-    const result = productFormErrors(form);
+    // 图片还在上传时不能保存（A-08）：否则商品建好了却不带这张图，存储里多一套孤儿对象
+    if (uploading) return;
+    // 标签草稿并入（A-04）：打了字没按回车就点保存，本意就是要这个标签
+    const pending = tagDraft.trim();
+    const submitted =
+      pending !== '' && !form.editorialTags.includes(pending)
+        ? { ...form, editorialTags: [...form.editorialTags, pending] }
+        : form;
+    if (submitted !== form) {
+      setForm(submitted);
+      setTagDraft('');
+    }
+    const result = productFormErrors(submitted);
     if (!result.ok) {
       setErrors(result.errors);
       setError(result.first);
@@ -91,7 +105,7 @@ export function ProductFormPage({
     setSaving(true);
     setError('');
     try {
-      const body = toProductInput(form, productId === null ? undefined : originalStock);
+      const body = toProductInput(submitted, productId === null ? undefined : originalStock);
       if (productId === null) {
         await createProduct(api, body);
       } else {
@@ -286,6 +300,8 @@ export function ProductFormPage({
         <FreeTagInput
           value={form.editorialTags}
           onChange={(tags) => set('editorialTags', tags)}
+          draft={tagDraft}
+          onDraftChange={setTagDraft}
           error={errors['editorialTags'] ?? ''}
         />
 
@@ -304,8 +320,8 @@ export function ProductFormPage({
           uploading={uploading}
         />
 
-        <button type="submit" className="btn" disabled={saving}>
-          {saving ? '保存中…' : '保存'}
+        <button type="submit" className="btn" disabled={saving || uploading}>
+          {saving ? '保存中…' : uploading ? '图片上传中…' : '保存'}
         </button>
       </form>
     </section>

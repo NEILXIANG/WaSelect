@@ -13,7 +13,7 @@
  *
  * @see ./view.ts（行视图与校验的真源）；./api.ts（接口层）
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { listProducts, setProductStatus, type AdminApi, type AdminProductLike } from './api.js';
 import { productRows, withStatus, type ProductRow } from './view.js';
@@ -47,7 +47,14 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
   /** 正在执行上下架的商品 id（按钮禁用态，空串 = 没有）。 */
   const [busyId, setBusyId] = useState('');
 
+  /**
+   * 请求序号（A-05）：翻页 / 切筛选时，晚到的旧响应不得覆盖新状态。
+   * 只有最后一次发起的请求可以写列表。
+   */
+  const reqSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     setError('');
     try {
@@ -56,14 +63,16 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
         size: PAGE_SIZE,
         ...(status === 'all' ? {} : { status }),
       });
+      if (seq !== reqSeq.current) return;
       setRaw(res.items);
       setRows(productRows(res.items));
       setTotal(res.total);
     } catch (e) {
+      if (seq !== reqSeq.current) return;
       // ⚠️ 失败**不清列表**（@why 见文件头）：只显示错误，列表保留上一次的结果
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, [api, page, status]);
 
@@ -80,6 +89,9 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
       setRows((prev) => prev.map((r) => (r.id === row.id ? withStatus(r, next) : r)));
       try {
         await setProductStatus(api, row.id, next);
+        // 服务端上下架会刷新 updated_at（A-03）：不重新取列表，编辑页拿到的就是旧值，
+        // 保存时撞上自己的乐观锁报 40914「被别人改过了」。
+        void load();
       } catch (e) {
         // ⚠️ 回滚：不回滚的表现是"UI 说已下架、服务端还在售"，而列表下一次刷新才暴露
         setRows((prev) => prev.map((r) => (r.id === row.id ? withStatus(r, row.status) : r)));
@@ -88,7 +100,7 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
         setBusyId('');
       }
     },
-    [api],
+    [api, load],
   );
 
   const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
