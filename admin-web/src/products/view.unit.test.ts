@@ -278,9 +278,16 @@ describe('productFormErrors（上架预检）', () => {
   it('必填与数值：售价/重量/库存/品名/分类各自有提示', () => {
     const r = productFormErrors(emptyProductForm());
     expect(Object.keys(r.errors).sort()).toEqual(
-      ['category'.slice(0, 0) + 'customsDescEn', 'priceJpy', 'title', 'weightG'].sort(),
+      ['category'.slice(0, 0) + 'customsDescEn', 'hsCode', 'priceJpy', 'title', 'weightG'].sort(),
     );
     expect(r.first).toBe(r.errors['title']);
+  });
+
+  it('HS 编码所有商品必填，纯空白也算没填（剩余清单 1-4，与服务端同口径）', () => {
+    expect(
+      productFormErrors({ ...productFormModel(PRODUCT), hsCode: '' }).errors['hsCode'],
+    ).toContain('必填');
+    expect(productFormErrors({ ...productFormModel(PRODUCT), hsCode: '  ' }).ok).toBe(false);
   });
 
   it('⚠️ 原产地非 JP → 拒（MVP 只接受 JP，D-42/D-43）', () => {

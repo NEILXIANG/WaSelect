@@ -69,6 +69,8 @@ export interface AdminOrderListRow {
   tracking_no: string | null;
   has_dispute: boolean;
   is_test: boolean;
+  /** 有迟到付款凭据（`late_paid` 事件，剩余清单 1-5）：已关单也可退款。 */
+  late_paid: boolean;
   created_at: Date;
   /**
    * 收件人（地址快照里的 recipient；0.6.9 / KD-14）。
@@ -117,6 +119,8 @@ export interface AdminOrderRow {
   tracking_no: string | null;
   has_dispute: boolean;
   is_test: boolean;
+  /** 同 AdminOrderListRow.late_paid。 */
+  late_paid: boolean;
   expires_at: Date;
   paid_at: Date | null;
   shipped_at: Date | null;
@@ -146,6 +150,10 @@ export interface AdminOrderItemRow {
   title_ja: string | null;
   jan_code: string | null;
   purchase_source: string | null;
+  /** 迁移 027 快照：成本价（内部）/ HS 码 / 英文报关品名；历史行为 NULL。 */
+  cost_jpy: number | null;
+  hs_code: string | null;
+  customs_desc_en: string | null;
 }
 
 export interface AdminPaymentRow {
@@ -238,6 +246,7 @@ function toListRow(r: Record<string, unknown>): AdminOrderListRow {
     tracking_no: strOrNull(r.tracking_no),
     has_dispute: bool(r.has_dispute),
     is_test: bool(r.is_test),
+    late_paid: bool(r.late_paid),
     created_at: r.created_at as Date,
     recipient: strOrNull(r.recipient),
   };
@@ -249,7 +258,10 @@ export async function listAdminOrders(
   q: AdminOrderListQuery,
 ): Promise<{ items: AdminOrderListRow[]; total: number }> {
   const rows = await db`
-    select ${db([...LIST_COLS])}, address_snapshot ->> 'recipient' as recipient from orders
+    select ${db([...LIST_COLS])}, address_snapshot ->> 'recipient' as recipient,
+           exists (select 1 from order_events e
+                    where e.order_id = orders.id and e.status = 'late_paid') as late_paid
+      from orders
     ${buildWhere(db, q)}
      order by created_at desc, id desc
      limit ${q.size} offset ${(q.page - 1) * q.size}
@@ -266,7 +278,9 @@ export async function findAdminOrder(db: Db, orderId: string): Promise<AdminOrde
     select id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy, total_jpy,
            weight_g, fx_snapshot, address_snapshot, contact_email, terms_version,
            charge_currency, charge_amount, carrier, tracking_no, has_dispute, is_test,
-           expires_at, paid_at, shipped_at, created_at, updated_at
+           expires_at, paid_at, shipped_at, created_at, updated_at,
+           exists (select 1 from order_events e
+                    where e.order_id = orders.id and e.status = 'late_paid') as late_paid
       from orders where id = ${orderId}
   `;
   const r = rows[0] as Record<string, unknown> | undefined;
@@ -291,6 +305,7 @@ export async function findAdminOrder(db: Db, orderId: string): Promise<AdminOrde
     tracking_no: strOrNull(r.tracking_no),
     has_dispute: bool(r.has_dispute),
     is_test: bool(r.is_test),
+    late_paid: bool(r.late_paid),
     expires_at: r.expires_at as Date,
     paid_at: (r.paid_at as Date | null) ?? null,
     shipped_at: (r.shipped_at as Date | null) ?? null,
@@ -306,7 +321,7 @@ export async function listOrderItemsFor(
   if (orderIds.length === 0) return [];
   const rows = await db`
     select order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd,
-           title_ja, jan_code, purchase_source
+           title_ja, jan_code, purchase_source, cost_jpy, hs_code, customs_desc_en
       from order_items where order_id in ${db([...orderIds])}
      order by order_id, id
   `;
@@ -321,6 +336,9 @@ export async function listOrderItemsFor(
     title_ja: strOrNull(r.title_ja),
     jan_code: strOrNull(r.jan_code),
     purchase_source: strOrNull(r.purchase_source),
+    cost_jpy: r.cost_jpy === null ? null : Number(r.cost_jpy),
+    hs_code: strOrNull(r.hs_code),
+    customs_desc_en: strOrNull(r.customs_desc_en),
   }));
 }
 
@@ -428,6 +446,53 @@ export interface RefundablePaymentRow {
  * @why 按 `created_at desc` 取一：一次成功 + 一次失败的行可能并存，
  *      "这笔钱现在在哪"只由最新那条回答。
  */
+/**
+ * 订单上有没有迟到付款凭据（`late_paid` 事件，见 app/mark-paid.ts `recordLatePaid`）。
+ * @see 剩余清单 1-5 / AJ-368
+ */
+export async function hasLatePaid(db: Db, orderId: string): Promise<boolean> {
+  const rows = await db`
+    select 1 from order_events where order_id = ${orderId} and status = 'late_paid' limit 1
+  `;
+  return rows.length > 0;
+}
+
+/**
+ * 迟到付款要退的那一笔支付行：凭据里的机构单号与支付行**精确对上**的优先，否则取同通道最新一行。
+ *
+ * @why 迟到的钱没有封口支付行（status 仍是 initiated / cancelled），`findRefundablePayment`
+ *      按 succeeded 找不到它；这里按凭据去找。
+ * @why 回退到"同通道最新一行"：凭据单号可能是 pi_ 族（payment_intent.succeeded 先到），
+ *      而支付行登记的是 cs_ 会话号——两者对不上不代表不是这一笔（同 mark-paid `sameRefFamily` 的 @limitation）。
+ * @limitation 换过通道又付了旧会话的极端形态，回退可能选中错误的那一行 → 机构侧拒退（会话无 PI）→
+ *             订单停在 refunding，由每日对账 stuck_refunds 报出后人工处理。不会多退钱。
+ */
+export async function findLatePaidPayment(
+  db: Db,
+  orderId: string,
+): Promise<RefundablePaymentRow | null> {
+  const rows = await db`
+    select p.id, p.provider, p.provider_ref, p.charge_currency, p.charge_amount
+      from payments p
+      join order_events e
+        on e.order_id = p.order_id and e.status = 'late_paid'
+       and e.actor = 'provider:' || p.provider
+     where p.order_id = ${orderId} and p.provider_ref is not null
+     order by (p.provider_ref = e.note or p.transaction_id = e.note) desc nulls last,
+              e.id asc, p.created_at desc
+     limit 1
+  `;
+  const r = rows[0] as Record<string, unknown> | undefined;
+  if (r === undefined) return null;
+  return {
+    id: String(r.id),
+    provider: String(r.provider),
+    provider_ref: strOrNull(r.provider_ref),
+    charge_currency: String(r.charge_currency),
+    charge_amount: Number(r.charge_amount),
+  };
+}
+
 export async function findRefundablePayment(
   db: Db,
   orderId: string,
@@ -580,9 +645,15 @@ export async function markRefunding(
   /** `admin:<sub>`（同 markShipped）。 */
   actor: string,
 ): Promise<boolean> {
+  // expired / cancelled 只在有迟到付款凭据时可迁（剩余清单 1-5）：与 refundGuard 同口径，
+  //    这里再写一次是 SQL 层的最后一道——闸门之外的调用方也绕不过去
   const updated = await tx`
     update orders set status = 'refunding', updated_at = now()
-     where id = ${orderId} and status in ${tx(['paid', 'shipped', 'delivered'])}
+     where id = ${orderId}
+       and (status in ${tx(['paid', 'shipped', 'delivered'])}
+            or (status in ${tx(['expired', 'cancelled'])}
+                and exists (select 1 from order_events
+                             where order_id = ${orderId} and status = 'late_paid')))
   `;
   if (updated.count === 0) return false;
   await tx`

@@ -113,6 +113,7 @@ function body(overrides: Record<string, unknown> = {}): Record<string, unknown> 
     price_jpy: 3600,
     weight_g: 800,
     customs_desc_en: 'cosmetic set',
+    hs_code: '3304.99',
     origin_country: 'JP',
     ...overrides,
   };

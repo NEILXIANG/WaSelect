@@ -92,6 +92,8 @@ export function mountQuoteRoutes(app: Express, deps: QuoteRoutesDeps): void {
             deps.config,
             deps.clock,
             summary,
+            [],
+            deps.logger,
           );
 
           deps.logger.info('quote_computed', {

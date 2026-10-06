@@ -97,6 +97,7 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
       weightG: '540',
       stock: '7',
       customsDescEn: 'kitchen knife, stainless steel',
+      hsCode: '8211.91',
     };
     expect(productFormErrors(form).ok).toBe(true);
     const created = await createProduct(api, toProductInput(form));
@@ -182,6 +183,7 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
         weightG: '540',
         stock: '7',
         customsDescEn: 'kitchen knife, stainless steel',
+        hsCode: '8211.91',
       }),
     );
     // A 打开编辑页（读到 12800）
@@ -235,6 +237,7 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
         weightG: '540',
         stock: '7',
         customsDescEn: 'kitchen knife, stainless steel',
+        hsCode: '8211.91',
         editorialWhy: why,
         editorialMaker: '堺 打刃物工房',
         editorialTags: ['堺打刃物', '碳钢'],
@@ -275,6 +278,7 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
         priceJpy: '9800',
         weightG: '420',
         customsDescEn: 'kitchen knife, stainless steel',
+        hsCode: '8211.91',
         editorialWhy: '薄刃，切丝不压伤纤维。',
       }),
     );
@@ -309,6 +313,7 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
         priceJpy: '3000',
         weightG: '300',
         customsDescEn: 'pot',
+        hsCode: '7323.93',
       }),
     );
     const err = await updateProduct(
@@ -413,6 +418,7 @@ describe('上传：admin-web 的 multipart 封装 → 真上传路由（sharp �
         priceJpy: '4200',
         weightG: '380',
         customsDescEn: 'ceramic tea bowl',
+        hsCode: '6912.00',
         images: [{ thumb: up.thumb ?? '', card: up.card ?? '', detail: up.detail ?? '' }],
       }),
     );

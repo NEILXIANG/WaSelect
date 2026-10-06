@@ -35,12 +35,15 @@ import {
   call,
   mockCallback,
   orderBody,
+  CHAIN_ITEMS,
   seedChainFixture,
   tokenFor,
   waitUntil,
   type ChainServer,
 } from '../../../test/helpers/chain-server.js';
 import { PAY_CALLBACK_PREFIX } from './pay-routes.js';
+import { executeRefund } from './refund-execution.js';
+import type { PaymentProvider } from '../ports/payment.js';
 import {
   CHARGE_CURRENCY_ORDER,
   chargeOptions,
@@ -491,6 +494,73 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
     expect(refundKeys()).toHaveLength(1);
   });
 
+  /**
+   * 退款回补库存（剩余清单 1-1 / C32）：未发货的单退款后，库存要还回去。
+   * @why 原来只有关单、取消、拉黑会回补；缺货退款恰恰是最常见的退款原因，
+   *      退完库存却停在扣减后的值——运营要记得手动改库存，否则这件商品"少了"几件。
+   * @why 已发货的单**不**回补：货已经寄出去了，退款不代表货回来了。
+   */
+  const stockOf = async (): Promise<number> => {
+    const id = CHAIN_ITEMS[0].product_id;
+    const [r] = await db`select stock from products where id = ${id}`;
+    return Number(r?.['stock']);
+  };
+
+  it('🔴 未发货的单退款成功 → 库存回补', async () => {
+    const before = await stockOf();
+    const orderId = await paidOrder('rs1');
+    expect(await stockOf()).toBeLessThan(before);
+    const r = await refund(orderId, 'rf-rs1');
+    expect(r.json['outcome']).toBe('succeeded');
+    expect(await stockOf()).toBe(before);
+  });
+
+  /**
+   * @why 回补不幂等：同一笔退款被落定两次（两个管理员几乎同时点、都查到 succeeded）时，
+   *      只有 markRefunded 返回 true 的那一次能回补；第二次必须原样返回，不再加库存。
+   */
+  it('🔴 同一笔退款第二次落定（已 refunded）→ 不再回补库存', async () => {
+    const before = await stockOf();
+    const orderId = await paidOrder('rs3');
+    expect((await refund(orderId, 'rf-rs3')).json['outcome']).toBe('succeeded');
+    expect(await stockOf()).toBe(before);
+    const [pay] = await db`select id from payments where order_id = ${orderId}`;
+    const provider: PaymentProvider = {
+      ...({} as PaymentProvider),
+      refund: () =>
+        Promise.resolve({ providerRef: 'cs', refundRef: 're_again', outcome: 'succeeded' }),
+      refundStatus: () => Promise.resolve('succeeded'),
+    };
+    await executeRefund({ db, logger: srv.logger, clock: { now: () => new Date() } }, provider, {
+      orderId,
+      paymentId: String(pay?.['id']),
+      channel: 'stripe',
+      request: {
+        orderId,
+        providerRef: 'cs',
+        amountJpy: 1,
+        currency: 'USD',
+        amountMinor: 1,
+        reason: 'x',
+      },
+      progress: { pendingRef: null, confirmedFailures: 0 },
+      actor: 'admin:u-admin',
+      hasDispute: false,
+    });
+    expect(await stockOf()).toBe(before);
+    expect(await orderStatus(orderId)).toBe('refunded');
+  });
+
+  it('已发货的单退款成功 → 库存不回补（货已经寄出）', async () => {
+    const before = await stockOf();
+    const orderId = await paidOrder('rs2');
+    const after = await stockOf();
+    await db`update orders set status = 'shipped', shipped_at = now(), carrier = 'EMS', tracking_no = 'EM123' where id = ${orderId}`;
+    expect((await refund(orderId, 'rf-rs2')).json['outcome']).toBe('succeeded');
+    expect(await stockOf()).toBe(after);
+    expect(after).toBeLessThan(before);
+  });
+
   it('pending → 机构判失败 → 再点：记"确认失败" + 换新键重新发起 → refunded', async () => {
     const orderId = await paidOrder('f3b');
     fake.nextRefundStatus('pending');
@@ -628,6 +698,83 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
     expect(refundKeys()).toHaveLength(1);
     expect(await events(orderId, 'refund_failed')).toHaveLength(0);
     expect(srv.sink.find('admin_order_refund_status_query_failed')).toHaveLength(1);
+  });
+});
+
+/**
+ * 迟到付款的退款出口（剩余清单 1-5 / B2，AJ-368）。
+ * @why 订单已关（expired / cancelled）后钱才到：落账被拒（late_payment）是对的，但此前**没有出口**——
+ *      退款闸门只认 paid / shipped / delivered，运营只能去 Stripe 后台手退，系统里没有任何留痕。
+ * @why 闸门放行的凭据是回调落下的 `late_paid` 事件，而不是"订单已关"本身：
+ *      没收到钱的已关单若也能点退款，订单会迁进 refunding、机构侧必败（会话没有 PI），从此卡单。
+ * @why 不回补库存：关单那一刻库存已经还回去了，再还一次就是凭空多出货。
+ */
+describe('迟到付款：已关单收到钱 → 管理端可退款（1-5）', () => {
+  const stockOf = async (): Promise<number> => {
+    const [r] = await db`select stock from products where id = ${CHAIN_ITEMS[0].product_id}`;
+    return Number(r?.['stock']);
+  };
+  /** 建单 → 建会话 → 模拟关单作业（迁 expired + 回补库存）。 */
+  async function closedOrder(tag: string): Promise<{ orderId: string; stockAfterClose: number }> {
+    const before = await stockOf();
+    const orderId = await createOrder(`k-${tag}`);
+    await payStripe(orderId, `pay-${tag}`);
+    await db`update orders set status = 'expired', updated_at = now() where id = ${orderId}`;
+    await db`update products set stock = ${before} where id = ${CHAIN_ITEMS[0].product_id}`;
+    return { orderId, stockAfterClose: before };
+  }
+  const refund = async (orderId: string, key: string) =>
+    call(srv, 'POST', `/api/v1/admin/orders/${orderId}/refund`, {
+      token: await tokenFor('u-admin', 'admin'),
+      key,
+      body: { reason: '迟到付款，订单已关闭' },
+    });
+
+  it('🔴 已关单收到钱 → 记 late_paid（带机构单号）→ 退款 202 → refunded、支付行 refunded、库存不重复回补', async () => {
+    const { orderId, stockAfterClose } = await closedOrder('lp1');
+    const p = await paymentRow(orderId);
+    expect((await completeCheckout(orderId, 'evt_lp1')).status).toBe(200);
+    expect(await orderStatus(orderId)).toBe('expired');
+    const marks =
+      await db`select note, actor from order_events where order_id = ${orderId} and status = 'late_paid'`;
+    expect(marks.map((r) => r['note'])).toEqual([p.providerRef]);
+    expect(marks[0]?.['actor']).toBe('provider:stripe');
+    const detail = await call(srv, 'GET', `/api/v1/admin/orders/${orderId}`, {
+      token: await tokenFor('u-admin', 'admin'),
+    });
+    expect(detail.json['late_paid']).toBe(true); // 管理端据此在已关单上亮出退款按钮
+
+    const r = await refund(orderId, 'rf-lp1');
+    expect(r.status).toBe(202);
+    expect(r.json['outcome']).toBe('succeeded');
+    expect(await orderStatus(orderId)).toBe('refunded');
+    expect((await paymentRow(orderId)).status).toBe('refunded');
+    const rf = new URLSearchParams(textBodyLike(stripeCalls('/v1/refunds')[0]?.body));
+    expect(rf.get('payment_intent')).toBe(`pi_for_${p.providerRef}`);
+    expect(rf.get('amount')).toBe(String(p.amount));
+    expect(await stockOf()).toBe(stockAfterClose);
+  });
+
+  it('已关单但没有收到钱（无 late_paid）→ 40902，不迁状态、不调机构', async () => {
+    const { orderId } = await closedOrder('lp2');
+    const r = await refund(orderId, 'rf-lp2');
+    expect(r.status).toBe(409);
+    expect(r.json['code']).toBe(40902);
+    expect(await orderStatus(orderId)).toBe('expired');
+    const detail = await call(srv, 'GET', `/api/v1/admin/orders/${orderId}`, {
+      token: await tokenFor('u-admin', 'admin'),
+    });
+    expect(detail.json['late_paid']).toBe(false);
+    expect(stripeCalls('/v1/refunds')).toHaveLength(0);
+  });
+
+  it('同一笔迟到付款的回调重投 → 只记一条 late_paid', async () => {
+    const { orderId } = await closedOrder('lp3');
+    await completeCheckout(orderId, 'evt_lp3');
+    await completeCheckout(orderId, 'evt_lp3b'); // 不同事件 id、同一笔钱（如 async_payment_succeeded 又到）
+    const n =
+      await db`select count(*)::int n from order_events where order_id = ${orderId} and status = 'late_paid'`;
+    expect(n[0]?.['n']).toBe(1);
   });
 });
 

@@ -174,7 +174,14 @@ export async function createOrder(
   const summary = summarizeQuoteItems(input.items, products);
 
   // ── 4. 服务端重算（与报价同一份装配；申报价值必须 USD，并入同一次 fx 查询）──
-  const { q, fxMap, carrier, dest } = await assembleQuote(tx, config, clock, summary, ['USD']);
+  const { q, fxMap, carrier, dest } = await assembleQuote(
+    tx,
+    config,
+    clock,
+    summary,
+    ['USD'],
+    logger,
+  );
 
   // ── 5. 客户端确认价对账（40905）与单笔上限（40906，D-42）──────────────────
   if (input.expectedTotalJpy !== undefined && input.expectedTotalJpy !== q.totalJpy) {
@@ -284,6 +291,10 @@ export async function createOrder(
       title_ja: row.title_ja,
       jan_code: row.jan_code,
       purchase_source: row.purchase_source,
+      // 剩余清单 1-3（迁移 027）：成本 / 报关三列同口径落快照——改商品不改历史单的毛利与报关资料
+      cost_jpy: row.cost_jpy,
+      hs_code: row.hs_code,
+      customs_desc_en: row.customs_desc_en,
     };
   });
   await insertOrderItems(tx, itemRows);

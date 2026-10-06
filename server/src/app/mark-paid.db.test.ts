@@ -296,7 +296,9 @@ describe('I1-U2：pending_payment 迁移与迟到付款守卫（D-33）', () => 
     expect((await db`select status from payments where order_id = 'o-late'`)[0]?.status).toBe(
       'initiated',
     );
-    expect(await db`select 1 from order_events where order_id = 'o-late'`).toHaveLength(0);
+    // 唯一允许的事件：迟到付款凭据（剩余清单 1-5），带机构单号，供管理端退款
+    const evs = await db`select status, note from order_events where order_id = 'o-late'`;
+    expect(evs.map((e) => ({ ...e }))).toEqual([{ status: 'late_paid', note: OK.providerRef }]);
     expect(paidEvents).toBe(0);
   });
 

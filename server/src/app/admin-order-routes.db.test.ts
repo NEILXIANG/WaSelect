@@ -231,10 +231,14 @@ describe('GET /admin/orders（管理端订单列表）', () => {
     await seedOrder({ id: 'o-2' });
     await db`
       insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy,
-                               weight_g, declared_value_usd, title_ja, jan_code, purchase_source)
-      values ('oi-1b', 'o-1', 'p-o-1', '包丁', 1, 1000, 500, 7, 'シェフナイフ', '4900000000011', 'Amazon JP'),
-             ('oi-2a', 'o-2', 'p-o-2', '茶碗', 2, 800, 300, 11, '茶碗', '4900000000022', '楽天市場'),
-             ('oi-1c', 'o-1', 'p-o-1', 'まな板', 1, 500, 800, 4, 'まな板', '4900000000033', '錦市場 直送')
+                               weight_g, declared_value_usd, title_ja, jan_code, purchase_source,
+                               cost_jpy, hs_code, customs_desc_en)
+      values ('oi-1b', 'o-1', 'p-o-1', '包丁', 1, 1000, 500, 7, 'シェフナイフ', '4900000000011', 'Amazon JP',
+              620, '8211.91', 'Kitchen knife'),
+             ('oi-2a', 'o-2', 'p-o-2', '茶碗', 2, 800, 300, 11, '茶碗', '4900000000022', '楽天市場',
+              null, null, null),
+             ('oi-1c', 'o-1', 'p-o-1', 'まな板', 1, 500, 800, 4, 'まな板', '4900000000033', '錦市場 直送',
+              null, null, null)
     `;
     const ok = await adminFetch(s, 'GET', '/api/v1/admin/orders');
     expect(ok.status).toBe(200);
@@ -266,6 +270,13 @@ describe('GET /admin/orders（管理端订单列表）', () => {
     expect(plain).not.toHaveProperty('title_ja');
     expect(plain).not.toHaveProperty('jan_code');
     expect(plain).not.toHaveProperty('purchase_source');
+
+    // ④ 迁移 027 快照：有值下发、NULL 整键省略（剩余清单 1-3）
+    expect(lineOf('o-1', '包丁')['cost_jpy']).toBe(620);
+    expect(lineOf('o-1', '包丁')['hs_code']).toBe('8211.91');
+    expect(lineOf('o-1', '包丁')['customs_desc_en']).toBe('Kitchen knife');
+    expect(lineOf('o-2', '茶碗')).not.toHaveProperty('cost_jpy');
+    expect(lineOf('o-2', '茶碗')).not.toHaveProperty('hs_code');
     await s.close();
   });
 

@@ -339,6 +339,7 @@ describe('快照一致性：订单是下单那一刻的事实，不随源数据�
         weight_g: 620,
         stock: Number(knife?.['stock']),
         customs_desc_en: 'kitchen knife, stainless steel',
+        hs_code: '8211.91',
         origin_country: 'JP',
       },
     });

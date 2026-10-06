@@ -68,6 +68,14 @@ describe('admin-order-actions（管理端操作准入，I2 U-B2a）', () => {
     expect(refundGuard('refunded', false).ok).toBe(false); // 已退完的不能再退
   });
 
+  it('refundGuard：迟到付款（late_paid）只放行 expired / cancelled，其余态与无凭据时口径不变（1-5）', () => {
+    const allowed = ORDER_STATUS.filter((s) => refundGuard(s, false, true).ok);
+    expect(allowed).toEqual(['paid', 'shipped', 'delivered', 'cancelled', 'expired', 'refunding']);
+    expect(refundGuard('expired', false, false).ok).toBe(false);
+    expect(refundGuard('cancelled', false).ok).toBe(false);
+    expect(codeOf(refundGuard('expired', true, true))).toBe(40907); // 拒付仍优先
+  });
+
   it('refundGuard：有进行中的拒付 → 40907（D-50）', () => {
     const r = refundGuard('paid', true);
     expect(r.ok).toBe(false);

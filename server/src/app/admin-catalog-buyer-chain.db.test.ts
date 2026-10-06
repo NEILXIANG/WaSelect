@@ -135,6 +135,7 @@ describe('管理端编辑商品 × 并发库存变化（AJ-175 拍板：库存�
     price_jpy: 8800,
     weight_g: 620,
     customs_desc_en: 'kitchen knife, stainless steel',
+    hs_code: '8211.91',
     origin_country: 'JP',
   };
 
@@ -254,6 +255,7 @@ describe('上传 → 商品图 → 买家看到的图', () => {
         weight_g: 620,
         stock: 5,
         customs_desc_en: 'kitchen knife, stainless steel',
+        hs_code: '8211.91',
         origin_country: 'JP',
         images: [{ thumb: set.thumb, card: set.card, detail: set.detail }],
       },

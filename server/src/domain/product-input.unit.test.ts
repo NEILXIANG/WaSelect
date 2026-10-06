@@ -24,6 +24,7 @@ function base(): Record<string, unknown> {
     weight_g: 800,
     customs_desc_en: 'cosmetic set',
     origin_country: 'JP',
+    hs_code: '330499',
   };
 }
 
@@ -219,20 +220,32 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
   });
 
   // ── HS 码（食品 / 化妆品必填，D-39/D-42）────────────────────────────────
+  /** 去掉 hs_code 的 base（剩余清单 1-4 起所有商品必填）。 */
+  function noHs(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    const rest = base();
+    delete rest['hs_code'];
+    return { ...rest, ...extra };
+  }
+
   it('food 标签且无 hs_code → 拒绝', () => {
-    expect(reasons({ ...base(), compliance_tags: ['food'] })).toContain('hs_code_required');
+    expect(reasons(noHs({ compliance_tags: ['food'] }))).toContain('hs_code_required');
   });
 
   it('cosmetic 标签且无 hs_code → 拒绝', () => {
-    expect(reasons({ ...base(), compliance_tags: ['cosmetic'] })).toContain('hs_code_required');
+    expect(reasons(noHs({ compliance_tags: ['cosmetic'] }))).toContain('hs_code_required');
   });
 
   it('food + hs_code → 通过（补了就放行）', () => {
     expect(ok({ ...base(), compliance_tags: ['food'], hs_code: '210690' }).hs_code).toBe('210690');
   });
 
-  it('无 food/cosmetic 标签时 hs_code 缺省 → 通过（不由我们编造 HS 码）', () => {
-    expect(ok(base()).hs_code).toBeUndefined();
+  /**
+   * 剩余清单 1-4（PRD §7 / GUI「HS 码上架必填」，AJ-368）：不带任何标签也必须填。
+   * @why 契约原写"缺省由 Zonos 识别"，但 Zonos 从未接入——缺省的结果是报关单上 HS 码空白。
+   */
+  it('无标签且 hs_code 缺省 / 空白 → 拒绝（所有商品必填）', () => {
+    expect(reasons(noHs())).toContain('hs_code_required');
+    expect(reasons(noHs({ hs_code: '   ' }))).toContain('hs_code_required');
   });
 
   // ── 形状与长度 ──────────────────────────────────────────────────────────
@@ -442,7 +455,7 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
       purchase_source: '',
       description: undefined,
       jan_code: '',
-      hs_code: null,
+      // hs_code 自剩余清单 1-4 起必填，不再属于"可选字段没填"
       why: undefined,
       maker: null,
     });
@@ -450,7 +463,6 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     expect(v.purchase_source).toBeUndefined();
     expect(v.description).toBeUndefined();
     expect(v.jan_code).toBeUndefined();
-    expect(v.hs_code).toBeUndefined();
     expect(v.why).toBeUndefined();
     expect(v.maker).toBeUndefined();
   });

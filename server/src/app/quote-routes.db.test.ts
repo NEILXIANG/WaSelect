@@ -237,6 +237,33 @@ describe('POST /orders/quote（接线）', () => {
     }
   });
 
+  /**
+   * 汇率过期保护（剩余清单 1-2 / B3）：最近一次录入早于 FX_MAX_AGE_HOURS（默认 72 小时）→ 当作缺失。
+   * @why 原来只取"已生效的最新一行"，管理员一个月没更新照样报价、照样按它收美元，汇损自担且无人知道。
+   */
+  it('🔴 汇率最近一次录入在 4 天前 → 50003（停止报价），并打 error 日志', async () => {
+    const srv = await buildServer();
+    try {
+      await db`update fx_rates set effective_from = now() - interval '4 days'`;
+      const r = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 1 }] }, token);
+      expect(r.json['code']).toBe(50003);
+      expect(srv.sink.find('fx_rate_stale').length).toBeGreaterThan(0);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('2 天前录入的汇率仍可用', async () => {
+    const srv = await buildServer();
+    try {
+      await db`update fx_rates set effective_from = now() - interval '2 days'`;
+      const r = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 1 }] }, token);
+      expect(r.status).toBe(200);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('限流挂在真路由上：前 30 次 40101（无 token 被鉴权拦），第 31 次 42901', async () => {
     const srv = await buildServer();
     try {

@@ -22,8 +22,9 @@
  *              但反过来也意味着"drug.store"这种拆写能绕过。**这是刻意不补的洞**：
  *              报关品名由管理员手填且商品量极小，海关侧的最终责任在申报人；
  *              把规则做成"猜运营商怎么写"只会产出误伤。
- * @limitation 二：`hs_code` 只判**填没填**（food / cosmetic 必填，D-39/D-42），
- *              不校验它是真实存在的 HS 编码——那是 Zonos / 通関業者的职责。
+ * @limitation 二：`hs_code` 只判**填没填**（所有商品必填，剩余清单 1-4 / AJ-368；
+ *              此前仅 food / cosmetic 必填，D-39/D-42），不校验它是真实存在的 HS 编码——
+ *              那是通関業者的职责。
  *
  * @see contracts/api-contract.yaml（ProductInput）；packages/shared/src/enums.ts
  *      （PRODUCT_CATEGORY / COMPLIANCE_TAG / BLOCKED_COMPLIANCE_TAG）
@@ -112,9 +113,6 @@ export type ProductInputResult =
 
 /** 报关品名禁词（D-51）：命中即拒，大小写不敏感、按词边界（@limitation 一）。 */
 const FORBIDDEN_DESC = /\b(medicated|whitening|spf|sunscreen|drug)\b/i;
-
-/** 这两个标签必须带 HS 码（D-39/D-42 食品 / 化妆品）。 */
-const HS_REQUIRED_TAGS: readonly string[] = ['food', 'cosmetic'];
 
 /** 正整数（≥min），非整数/非数字/越界一律 undefined（由调用方转成错误）。 */
 function intAtLeast(v: unknown, min: number): number | undefined {
@@ -295,13 +293,18 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
     }
   }
 
-  // ── HS 码：食品 / 化妆品必填 ────────────────────────────────────────────
+  // ── HS 码：所有商品必填（剩余清单 1-4 / AJ-368）──────────────────────────
+  // @why PRD §7 与 GUI 都写"上架必填"；契约原先的"缺省由 Zonos 识别"从未落地（Zonos 未接入），
+  //      缺省的真实后果是报关单 / 报关 CSV 上 HS 码一栏空白。原"只有 food / cosmetic 必填"一并收紧。
+  // @tradeoff 存量没填 HS 码的商品，下一次编辑保存时会被要求补齐（不做静默回填——编不出真实 HS 码）。
   const hs = strField(b, 'hs_code', fail);
   // ⚠️ 同上：判"没填"用 `isBlank(b['hs_code'])`，不用 `hs === undefined`——
   //    传了数字 HS 码（Excel 导入最常见的形态）时后者为真，于是食品/化妆品会同时收到
   //    `hs_code_required`（"你没填"）与 `hs_code_invalid`（"你填的类型不对"），
   //    而运营按前者去补一个她其实已经补了的值，永远补不对。
-  if (isBlank(b['hs_code']) && tags.some((t) => HS_REQUIRED_TAGS.includes(t))) {
+  // 纯空白也算没填：'   ' 进了报关单与空白无异（类型错仍只报 hs_code_invalid，见上）
+  const hsRaw = b['hs_code'];
+  if (isBlank(hsRaw) || (typeof hsRaw === 'string' && hsRaw.trim() === '')) {
     fail('hs_code', 'hs_code_required');
   }
 

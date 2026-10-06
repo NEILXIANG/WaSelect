@@ -319,6 +319,19 @@ export function withoutWebhooks(snap: Record<string, unknown>): Record<string, u
   return Object.fromEntries(Object.entries(snap).filter(([k]) => k !== 'webhooks'));
 }
 
+/**
+ * 去掉回调登记表与迟到付款凭据（`late_paid` 事件）后的快照（剩余清单 1-5 / AJ-368）。
+ * @why 迟到付款的回调除了登记一行，还**有意**在 order_events 记一条凭据（管理端退款闸门据此放行）；
+ *      "其它一行都不能动"的断言要把这条凭据单独拿出来断言，而不是让它混进整体比较里被当成污染。
+ */
+export function withoutCallbackTrace(snap: Record<string, unknown>): Record<string, unknown> {
+  const rest = withoutWebhooks(snap);
+  const events = (rest['events'] as Array<Record<string, unknown>>).filter(
+    (e) => e['status'] !== 'late_paid',
+  );
+  return { ...rest, events };
+}
+
 /** 轮询直到 `probe()` 为真（提交后分发的订阅者是异步的）；超时抛错，不假绿。 */
 export async function waitUntil(
   probe: () => Promise<boolean>,

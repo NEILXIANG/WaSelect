@@ -354,6 +354,8 @@ export function productFormErrors(form: unknown): {
   else if (!Number.isInteger(stock) || stock < 0) errors['stock'] = '库存必须是 ≥0 的整数';
 
   if (f.customsDescEn.trim() === '') errors['customsDescEn'] = '英文报关品名必填（D-39）';
+  // 剩余清单 1-4（AJ-368）：与服务端 validateProductInput 同口径——所有商品必填，纯空白算没填
+  if (f.hsCode.trim() === '') errors['hsCode'] = 'HS 编码必填（报关单与报关清单都要用）';
   if (f.originCountry !== 'JP') errors['originCountry'] = 'MVP 原产地只接受 JP（D-42/D-43）';
 
   // 禁售标签：shared 是真源，这里只做"勾了就报"（比"勾了提交被拒"早一步）

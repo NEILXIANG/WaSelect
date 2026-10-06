@@ -64,6 +64,10 @@ export interface QuoteProductRow {
   title_ja: string | null;
   jan_code: string | null;
   purchase_source: string | null;
+  /** 剩余清单 1-3（迁移 027）：成本价 / HS 码 / 英文报关品名，同样只供建单落快照。 */
+  cost_jpy: number | null;
+  hs_code: string | null;
+  customs_desc_en: string | null;
 }
 
 /** 商品列表查询（参数已在路由层校验过形状）。 */
@@ -147,6 +151,17 @@ export interface CatalogRepo {
    * @returns quote → rate（NUMERIC 原样字符串）；缺失的币种**不在 map 里**（调用方判 50003）。
    */
   findLatestFxRates(quotes: readonly string[], now: Date): Promise<ReadonlyMap<string, string>>;
+  /**
+   * 同 {@link findLatestFxRates}，但**超过 `maxAgeHours` 未更新的币种当作缺失**，并单独列出（剩余清单 1-2）。
+   * @why 只取"已生效的最新一行"时，管理员一个月没录汇率照样报价、照样按它收美元，汇损自担且无人知道。
+   *      报价与建单（收钱路径）用它；商品浏览的展示价仍用 findLatestFxRates（只是参考，降级展示即可）。
+   * @returns `rates`：仍然新鲜的币种；`stale`：有汇率但已过期的币种（调用方据此打 error 日志）
+   */
+  findFreshFxRates(
+    quotes: readonly string[],
+    now: Date,
+    maxAgeHours: number,
+  ): Promise<{ rates: ReadonlyMap<string, string>; stale: readonly string[] }>;
 }
 
 /**
@@ -167,7 +182,7 @@ export function createCatalogRepo(db: Db): CatalogRepo {
       if (ids.length === 0) return [];
       const rows = await db`
         select id, title, price_jpy, weight_g, stock, status, origin_country,
-               title_ja, jan_code, purchase_source
+               title_ja, jan_code, purchase_source, cost_jpy, hs_code, customs_desc_en
           from products where id in ${db([...ids])}
       `;
       return rows.map((r) => ({
@@ -181,6 +196,9 @@ export function createCatalogRepo(db: Db): CatalogRepo {
         title_ja: strOrNull(r.title_ja),
         jan_code: strOrNull(r.jan_code),
         purchase_source: strOrNull(r.purchase_source),
+        cost_jpy: r.cost_jpy === null ? null : Number(r.cost_jpy),
+        hs_code: strOrNull(r.hs_code),
+        customs_desc_en: strOrNull(r.customs_desc_en),
       }));
     },
 
@@ -329,6 +347,29 @@ export function createCatalogRepo(db: Db): CatalogRepo {
       `;
       for (const r of rows) out.set(String(r.quote).trim(), String(r.rate));
       return out;
+    },
+
+    async findFreshFxRates(
+      quotes: readonly string[],
+      now: Date,
+      maxAgeHours: number,
+    ): Promise<{ rates: ReadonlyMap<string, string>; stale: readonly string[] }> {
+      const rates = new Map<string, string>();
+      const stale: string[] = [];
+      if (quotes.length === 0) return { rates, stale };
+      const rows = await db`
+        select distinct on (quote) quote, rate,
+               effective_from <= ${now}::timestamptz - make_interval(hours => ${maxAgeHours}) as is_stale
+          from fx_rates
+         where quote in ${db([...quotes])} and effective_from <= ${now}
+         order by quote, effective_from desc
+      `;
+      for (const r of rows) {
+        const q = String(r.quote).trim();
+        if (r.is_stale === true) stale.push(q);
+        else rates.set(q, String(r.rate));
+      }
+      return { rates, stale };
     },
   };
 }

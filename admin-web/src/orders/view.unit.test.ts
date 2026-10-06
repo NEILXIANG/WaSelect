@@ -163,12 +163,13 @@ describe('eventStatusText（事件流：订单状态 + 管理事件伪状态）'
     expect(eventStatusText('pay_create_failed')).toBe('机构拒建支付会话');
   });
 
-  it('七种伪状态全部配了文案（服务端新增一种而这里没跟 → 那一行退回英文，看得见但仍是缺口）', () => {
+  it('八种伪状态全部配了文案（服务端新增一种而这里没跟 → 那一行退回英文，看得见但仍是缺口）', () => {
     expect(Object.keys(EVENT_STATUS_LABELS).sort()).toEqual([
       'address_changed',
       'dispute_closed',
       'dispute_opened',
       'dispute_released',
+      'late_paid',
       'pay_create_failed',
       'refund_failed',
       'refund_pending',
@@ -295,6 +296,16 @@ describe('refundGate（退款闸门）', () => {
 
   it('⚠️ has_dispute 字段缺失时放行（列表接口没有这个字段，拦了正常单也点不动）', () => {
     expect(refundGate(withStatus('paid')).ok).toBe(true);
+  });
+
+  it('🔴 迟到付款（late_paid=true）的 expired / cancelled → 放行，原因说明"关单后才收到钱"（1-5）', () => {
+    for (const s of ['expired', 'cancelled'] as const) {
+      const g = refundGate(withStatus(s, { late_paid: true }));
+      expect(g.ok, `${s} 带凭据应可退`).toBe(true);
+      expect(g.reason).toContain('关闭后');
+    }
+    // 凭据只对已关单有意义：refunded 带它也不放行
+    expect(refundGate(withStatus('refunded', { late_paid: true })).ok).toBe(false);
   });
 
   it('终态（cancelled / expired / refunded / completed）全拦且有原因', () => {

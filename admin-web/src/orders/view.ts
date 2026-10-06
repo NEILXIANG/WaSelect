@@ -91,6 +91,7 @@ export const EVENT_STATUS_LABELS: Readonly<Record<string, string>> = {
   refund_failed: '退款失败',
   dispute_released: '解除拒付限制',
   pay_create_failed: '机构拒建支付会话',
+  late_paid: '迟到付款（关单后收到钱）',
 };
 
 /** 闸门结果：不能操作时必须有**具体原因**（按钮禁用也要能 tooltip 出来）。 */
@@ -252,6 +253,15 @@ export function refundGate(order: unknown): Gate {
   const disputed = (order as { has_dispute?: unknown } | null)?.has_dispute === true;
   if (disputed && status !== 'refunding')
     return NO('有拒付进行中，退款会被拒（40907）；请先在拒付列表处理');
+  // 迟到付款（剩余清单 1-5）：已关单收到了钱，服务端凭 late_paid 放行；与服务端 refundGuard 同口径
+  const latePaid = (order as { late_paid?: unknown } | null)?.late_paid === true;
+  if (latePaid && (status === 'expired' || status === 'cancelled')) {
+    return {
+      ok: true,
+      reason:
+        '订单关闭后才收到这笔钱（迟到付款），需全额退回给买家；退款不会回补库存（关单时已回补）',
+    };
+  }
   switch (status) {
     case 'paid':
     case 'shipped':

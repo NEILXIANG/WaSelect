@@ -142,7 +142,8 @@ describe('同一张待支付单：取消 × 回调 同时到达', () => {
       expect(s.status).toBe('cancelled');
       expect(s.payments).toEqual(['cancelled']);
       expect(s.stock).toEqual({ 'p-cup': 10, 'p-knife': 5 }); // 回补一次，不是两次
-      expect(s.events).toEqual(['created', 'pending_payment', 'cancelled']);
+      // late_paid：回调按迟到付款拒落账时记下的凭据（剩余清单 1-5）
+      expect(s.events).toEqual(['created', 'pending_payment', 'cancelled', 'late_paid']);
       const late = srv.sink.find('callback_late_payment').find((l) => l['order_id'] === orderId);
       expect(late?.level).toBe('error');
       expect((late?.['ctx'] as { from?: string }).from).toBe('cancelled');

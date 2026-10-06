@@ -22,6 +22,7 @@
 import type { Db } from '../adapters/db.js';
 import type { Clock } from '../ports/clock.js';
 import type { AppConfig } from '../config.js';
+import type { Logger } from '../logger.js';
 import { AppError } from '../errors.js';
 import { createCatalogRepo } from '../adapters/catalog.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
@@ -59,6 +60,8 @@ export async function assembleQuote(
   clock: Clock,
   summary: QuoteItemsSummary,
   extraFxQuotes: readonly string[] = [],
+  /** 汇率过期时打 error 日志用（剩余清单 1-2）；不传则只按缺失处理。 */
+  logger?: Logger,
 ): Promise<AssembledQuote> {
   const catalog = createCatalogRepo(db);
   const countryProfiles = createCountryProfileRepo(db);
@@ -106,7 +109,18 @@ export async function assembleQuote(
   // extraFxQuotes（如建单的申报价值必须 USD）并入**同一次**查询但不进 display——
   // "重算用的汇率"与"落快照/申报的汇率"必须是同一次读取（文件头 @why）
   const fxQuotes = [...new Set([...displayCurrencies, ...extraFxQuotes])];
-  const fxMap = await catalog.findLatestFxRates(fxQuotes, clock.now());
+  // 超过 FX_MAX_AGE_HOURS 未更新的汇率当作缺失（→ 50003 停止报价）：收钱路径不能用过期汇率
+  const { rates: fxMap, stale } = await catalog.findFreshFxRates(
+    fxQuotes,
+    clock.now(),
+    config.FX_MAX_AGE_HOURS,
+  );
+  if (stale.length > 0) {
+    logger?.error('fx_rate_stale', {
+      result: 'rejected',
+      ctx: { quotes: stale, max_age_hours: config.FX_MAX_AGE_HOURS },
+    });
+  }
   const fxRateIntByCurrency: Partial<Record<DisplayCurrency, number>> = {};
   for (const c of displayCurrencies) {
     const rate = fxMap.get(c);

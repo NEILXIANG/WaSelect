@@ -62,7 +62,9 @@ import { parseAddressInput } from '../domain/address-input.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
 import {
   findAdminOrder,
+  findLatePaidPayment,
   findRefundablePayment,
+  hasLatePaid,
   listAdminOrders,
   listEventsFor,
   listOrderItemsFor,
@@ -131,6 +133,7 @@ function toListItem(
     ...(r.recipient !== null ? { recipient: r.recipient } : {}),
     has_dispute: r.has_dispute,
     is_test: r.is_test,
+    late_paid: r.late_paid,
     created_at: r.created_at.toISOString(),
   };
 }
@@ -157,6 +160,10 @@ function toAdminOrderItem(i: AdminOrderItemRow): Record<string, unknown> {
     ...(i.title_ja !== null ? { title_ja: i.title_ja } : {}),
     ...(i.jan_code !== null ? { jan_code: i.jan_code } : {}),
     ...(i.purchase_source !== null ? { purchase_source: i.purchase_source } : {}),
+    // 迁移 027 快照，同一条"null 整键省略"口径
+    ...(i.cost_jpy !== null ? { cost_jpy: i.cost_jpy } : {}),
+    ...(i.hs_code !== null ? { hs_code: i.hs_code } : {}),
+    ...(i.customs_desc_en !== null ? { customs_desc_en: i.customs_desc_en } : {}),
   };
 }
 
@@ -187,6 +194,7 @@ function toAdminOrder(
     created_at: r.created_at.toISOString(),
     has_dispute: r.has_dispute,
     is_test: r.is_test,
+    late_paid: r.late_paid,
     payments,
     events,
     // `payment` 是契约 Order 里的"最新一条摘要"（{channel, charge_currency, charge_amount}）；与 payments 末条同源。
@@ -376,9 +384,14 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         const plan = await withTransaction(deps.db, async (tx) => {
           const row = await lockAdminOrder(tx, id);
           if (row === null) throw new AppError(40400, { order_id: id });
-          const gate = refundGuard(asOrderStatus(row.status), row.has_dispute);
+          // 迟到付款（剩余清单 1-5）：已关单只有带 late_paid 凭据才放行，退的是凭据对应的那笔
+          const closed = row.status === 'expired' || row.status === 'cancelled';
+          const latePaid = closed && (await hasLatePaid(tx, id));
+          const gate = refundGuard(asOrderStatus(row.status), row.has_dispute, latePaid);
           if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
-          const pay = await findRefundablePayment(tx, id);
+          const pay = latePaid
+            ? await findLatePaidPayment(tx, id)
+            : await findRefundablePayment(tx, id);
           if (pay === null) {
             throw new AppError(40902, { order_id: id, reason: 'no_succeeded_payment' });
           }

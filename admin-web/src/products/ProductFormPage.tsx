@@ -202,9 +202,10 @@ export function ProductFormPage({
           placeholder="Cleansing oil 200ml"
         />
         <Field
-          label="HS 编码（食品/化妆品建议填）"
+          label="HS 编码（必填）"
           value={form.hsCode}
           onChange={(v) => set('hsCode', v)}
+          error={errors['hsCode'] ?? ''}
           placeholder="3304.99"
         />
 

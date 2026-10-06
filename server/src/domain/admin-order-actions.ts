@@ -89,7 +89,16 @@ export function shipGuard(
  *      所以 40907 的**最终**判定点在 `app/refund-execution.ts`，本闸门是它的前置宽判。
  *      两处口径必须一起改，否则会出现"闸门放行、执行也放行"的双退路径。
  */
-export function refundGuard(status: OrderStatus, hasDispute: boolean): AdminGateResult {
+/**
+ * @param latePaid 订单上有 `late_paid` 事件（迟到付款：关单后钱才到，剩余清单 1-5 / AJ-368）。
+ *        只对 expired / cancelled 起作用：这两态"没收过钱"是常态，凭据证明这一单例外地收到了钱。
+ *        @why 凭据而不是"已关单一律可退"：没收到钱的单迁进 refunding 后机构侧必败（会话无 PI），从此卡单。
+ */
+export function refundGuard(
+  status: OrderStatus,
+  hasDispute: boolean,
+  latePaid = false,
+): AdminGateResult {
   // `refunding` 放行 = **重试**（KD-4，AJ-175）：上一次机构调用失败/超时后订单停在 refunding，
   // 路由头注释承诺"可人工重试"，但原判定只认状态机迁移，refunding → refunding 不在表里 → 40902，
   // 这张单从此退不了、也回不去。重试不是迁移（状态机表保持不变），双扣由机构侧幂等键兜住
@@ -107,6 +116,8 @@ export function refundGuard(status: OrderStatus, hasDispute: boolean): AdminGate
   //      而同键重放的钱只可能动一次，动完后 `has_dispute` 仍在，对账看得见。
   if (status === 'refunding') return OK;
   if (hasDispute) return deny(40907, 'dispute_open');
+  // 迟到付款的出口：不改状态机表（expired → refunding 不是常规迁移），只在有凭据时由闸门放行
+  if (latePaid && (status === 'expired' || status === 'cancelled')) return OK;
   return canTransition(status, 'refunding') ? OK : deny(40902, `status_${status}`);
 }
 

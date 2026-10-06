@@ -191,6 +191,56 @@ export async function markOrderPaid(
   orderId: string,
   settlement: PaidSettlement,
 ): Promise<void> {
+  try {
+    await settle(db, events, clock, orderId, settlement);
+  } catch (e) {
+    if (
+      e instanceof AppError &&
+      (e.details as { reason?: unknown } | undefined)?.reason === 'late_payment'
+    ) {
+      await recordLatePaid(db, clock, orderId, settlement);
+    }
+    throw e;
+  }
+}
+
+/**
+ * 迟到付款留凭据：`order_events` 记一条 `late_paid`（note = 机构单号，actor = provider:<通道>）。
+ *
+ * @why 落账事务已因 late_payment 回滚，凭据必须**另起一条语句**写——放进同一事务会随回滚消失。
+ *      它是管理端退款闸门放行已关单的唯一依据（剩余清单 1-5 / AJ-368）：
+ *      不留凭据，运营只能去机构后台手退，系统里没有任何"这单收过钱、已退"的痕迹。
+ * @why 不改订单状态：订单在我方账上从没收过钱（paid_at 仍为空），关单时库存也已回补；
+ *      买家时间线只取订单状态值，这条事件对买家不可见。
+ * @why 同一机构单号只记一次（重投 / 同一笔钱的另一种事件），由 `not exists` 去重。
+ * @limitation 同一笔钱以两种单号族到达（cs_ 与 pi_）会各记一条；退款按订单只退一次（幂等键 refund:<orderId>），
+ *             多一条凭据不会多退钱，只是事件流里多一行。
+ * @limitation 凭据写失败（库不可用）会顶替原 40902 抛出 → 管线回 5xx、机构重投，下一次再写。
+ */
+async function recordLatePaid(
+  db: Db,
+  clock: Clock,
+  orderId: string,
+  s: PaidSettlement,
+): Promise<void> {
+  await db`
+    insert into order_events (order_id, status, note, actor, at)
+    select ${orderId}, 'late_paid', ${s.providerRef}, ${`provider:${s.channel}`}, ${clock.now()}
+     where exists (select 1 from orders where id = ${orderId})
+       and not exists (
+         select 1 from order_events
+          where order_id = ${orderId} and status = 'late_paid' and note = ${s.providerRef}
+       )
+  `;
+}
+
+async function settle(
+  db: Db,
+  events: EventBus,
+  clock: Clock,
+  orderId: string,
+  settlement: PaidSettlement,
+): Promise<void> {
   await withUnitOfWork(db, events, async (tx, emit) => {
     // for update：并发回调（机构重发）时排队，避免两次都读到待支付态各写一次事件
     const rows = await tx`select status, expires_at from orders where id = ${orderId} for update`;

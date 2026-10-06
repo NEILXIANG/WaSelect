@@ -40,6 +40,7 @@ import {
   snapshotState,
   tokenFor,
   waitUntil,
+  withoutCallbackTrace,
   withoutWebhooks,
   type ChainServer,
 } from '../../../test/helpers/chain-server.js';
@@ -233,7 +234,13 @@ describe('异常链路：钱与订单状态不一致时，系统必须留下"人
     // 关单作业（同一条总线）→ expired + 库存回补 + 关单连带作废支付行（提交后异步）
     await runExpireJob(db, srv, new Date());
     expect((await orderRow(orderId))['status']).toBe('expired');
-    expect(await eventTrail(orderId)).toEqual(['created', 'pending_payment', 'expired']);
+    // late_paid：迟到付款凭据（剩余清单 1-5），订单状态不因它变化
+    expect(await eventTrail(orderId)).toEqual([
+      'created',
+      'pending_payment',
+      'late_paid',
+      'expired',
+    ]);
     expect(await stock()).toEqual({ 'p-cup': 10, 'p-knife': 5 });
     await waitUntil(
       async () => (await paymentRows(orderId))[0]?.['status'] === 'cancelled',
@@ -260,7 +267,8 @@ describe('异常链路：钱与订单状态不一致时，系统必须留下"人
     expect(late).toHaveLength(1);
     expect(late[0]?.['level']).toBe('error');
     expect(srv.sink.find('callback_conflict')).toHaveLength(0); // 不再落到普通冲突的 warn
-    expect(withoutWebhooks(await snapshotState(db))).toEqual(withoutWebhooks(before));
+    expect(await eventTrail(orderId)).toContain('late_paid');
+    expect(withoutCallbackTrace(await snapshotState(db))).toEqual(withoutCallbackTrace(before));
 
     await runDailyReconciliation(db, srv, new Date());
     expect(reconciliationSample(srv.sink, 'callback_anomalies_48h')).toContain('evt-after-expire');
@@ -291,11 +299,18 @@ describe('异常链路：钱与订单状态不一致时，系统必须留下"人
         paid_currency: null,
       },
     ]);
-    expect(await eventTrail(orderId)).toEqual(['created', 'pending_payment', 'cancelled']);
+    expect(await eventTrail(orderId)).toEqual([
+      'created',
+      'pending_payment',
+      'cancelled',
+      'late_paid',
+    ]);
     expect(await stock()).toEqual({ 'p-cup': 10, 'p-knife': 5 });
     expect(domainEvents(srv.sink, orderId)).not.toContain('order.paid');
-    // 除了多一条回调登记，其它一行没动
-    expect(withoutWebhooks(await snapshotState(db))).toEqual(withoutWebhooks(afterCancel));
+    // 除了多一条回调登记与一条迟到付款凭据，其它一行没动
+    expect(withoutCallbackTrace(await snapshotState(db))).toEqual(
+      withoutCallbackTrace(afterCancel),
+    );
     expect(await webhookResult('evt-after-cancel')).toBe('late_payment'); // KD-7：已关单的到账 = 迟到付款
     expect(srv.sink.find('callback_late_payment')[0]?.['level']).toBe('error');
 

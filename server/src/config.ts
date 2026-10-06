@@ -423,6 +423,11 @@ const schema = z.object({
    *      5 分钟远大于正常通知延迟（秒级），又不至于让库存被一张死单占太久。发起支付与短链仍按 expires_at 截止。
    */
   EXPIRE_PAYMENT_GRACE_MS: timerMs(300_000, 0),
+  /**
+   * 汇率最长多久必须更新一次（小时，剩余清单 1-2）：超过即当作缺失，报价与建单返回 50003 并打 error 日志。
+   * @why 72 小时：周末两天不录也不会停售，再久就意味着没人在管汇率——按旧汇率收美元的汇损由我们承担。
+   */
+  FX_MAX_AGE_HOURS: int(72, 1),
   /** 常驻调度器 tick 间隔（D-43：web 进程内 setInterval + **事务级** pg_try_advisory_xact_lock（D-45②）；不是 Render Cron Job——每日作业才走 Cron，见 render.yaml）。 */
   SCHEDULER_TICK_MS: timerMs(60000, 1000),
   /**

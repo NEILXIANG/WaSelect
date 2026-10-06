@@ -162,7 +162,24 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     expect(String(evs[0]?.actor)).toBe('admin:u-admin');
   });
 
-  it('markRefunding：cancelled / expired / refunding 一律不迁（false）', async () => {
+  it('markRefunding：cancelled / expired 带 late_paid 凭据才迁（SQL 层最后一道，1-5）', async () => {
+    for (const from of ['cancelled', 'expired']) {
+      const id = `o-${from}`;
+      await seedPaidOrder(id, from);
+      await db`insert into order_events (order_id, status, note, actor)
+               values (${id}, 'late_paid', 'cs_test_late', 'provider:stripe')`;
+      await withTransaction(db, async (tx) => {
+        expect(await markRefunding(tx, id, '迟到付款', new Date(), 'admin:u-admin')).toBe(true);
+      });
+    }
+    // 凭据只属于自己那一单：别的单有凭据不放行本单
+    await seedPaidOrder('o-other', 'expired');
+    await withTransaction(db, async (tx) => {
+      expect(await markRefunding(tx, 'o-other', 'x', new Date(), 'admin:u-admin')).toBe(false);
+    });
+  });
+
+  it('markRefunding：cancelled / expired（无凭据）/ refunding 一律不迁（false）', async () => {
     for (const from of ['cancelled', 'expired', 'refunding']) {
       const id = `o-${from}`;
       await seedPaidOrder(id, from);

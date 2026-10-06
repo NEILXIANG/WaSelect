@@ -33,6 +33,7 @@ import {
   recordRefundPending,
   type RefundProgress,
 } from '../adapters/orders-admin.js';
+import { restoreStockForOrder } from '../adapters/orders.js';
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
@@ -163,9 +164,31 @@ export async function executeRefund(
   return 'succeeded';
 }
 
+/**
+ * 退款落定：订单 → refunded、支付行 → refunded；**未发货的单同时回补库存**（剩余清单 1-1 / C32）。
+ * @why 缺货是最常见的退款原因，退完库存却停在扣减后的值，运营要记得手动改——
+ *      技术文档 §2.3 本来就写"cancelled / expired / 退款时释放"，退款这一条此前没兑现。
+ * @why 已发货（`shipped_at` 非空）不回补：货已经寄出，退款不代表货回来了；退货入库属人工流程。
+ * @why 回补跟在 `markRefunded` 返回 true 之后、同一事务：true 是"这次落定是我做的"的排他凭证，
+ *      回补不幂等，必须只做一次（与关单、取消同一口径）。锁序先 orders 后 products，与关单一致。
+ * @why 迟到付款的单（`paid_at` 为空，剩余清单 1-5）不回补：关单那一刻库存已经还过一次，再还就是凭空多货。
+ */
 async function settle(deps: RefundExecDeps, plan: RefundPlan, refundRef: string): Promise<void> {
   await withTransaction(deps.db, async (tx) => {
-    await markRefunded(tx, plan.orderId, plan.paymentId, refundRef, deps.clock.now(), plan.actor);
+    const done = await markRefunded(
+      tx,
+      plan.orderId,
+      plan.paymentId,
+      refundRef,
+      deps.clock.now(),
+      plan.actor,
+    );
+    if (!done) return;
+    const restock = await tx`
+      select 1 from orders
+       where id = ${plan.orderId} and shipped_at is null and paid_at is not null
+    `;
+    if (restock.length > 0) await restoreStockForOrder(tx, plan.orderId);
   });
 }
 

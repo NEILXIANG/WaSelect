@@ -380,6 +380,9 @@ export interface OrderItemInsertRow {
   title_ja: string | null;
   jan_code: string | null;
   purchase_source: string | null;
+  cost_jpy: number | null;
+  hs_code: string | null;
+  customs_desc_en: string | null;
 }
 
 export async function insertOrderItems(
@@ -390,10 +393,12 @@ export async function insertOrderItems(
     await tx`
       insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy,
                                weight_g, declared_value_usd,
-                               title_ja, jan_code, purchase_source)
+                               title_ja, jan_code, purchase_source,
+                               cost_jpy, hs_code, customs_desc_en)
       values (${it.id}, ${it.order_id}, ${it.product_id}, ${it.title_snapshot}, ${it.qty},
               ${it.unit_price_jpy}, ${it.weight_g}, ${it.declared_value_usd},
-              ${it.title_ja}, ${it.jan_code}, ${it.purchase_source})
+              ${it.title_ja}, ${it.jan_code}, ${it.purchase_source},
+              ${it.cost_jpy}, ${it.hs_code}, ${it.customs_desc_en})
     `;
   }
 }

@@ -91,6 +91,7 @@ describe('admin_audit：管理端写接口一处接入（F-02）', () => {
         price_jpy: 3600,
         weight_g: 800,
         customs_desc_en: 'cosmetic set',
+        hs_code: '3304.99',
         origin_country: 'JP',
       },
     });

@@ -33,6 +33,7 @@ const SOURCE = {
   stock: 12,
   status: 'active',
   customs_desc_en: 'cleansing oil 200ml',
+  hs_code: '3304.99',
   origin_country: 'JP',
   compliance_tags: [],
   images: [],
@@ -147,6 +148,7 @@ describe('商品编辑：保存撞上 40914（ADM3-02）', () => {
     await typeInto(field(el, '售价（円）'), '12800');
     await typeInto(field(el, '重量（克）'), '540');
     await typeInto(field(el, '英文报关品名（必填，D-39）'), 'kitchen knife');
+    await typeInto(field(el, 'HS 编码（必填）'), '8211.91');
     await click(button(el, '保存'));
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe('POST');

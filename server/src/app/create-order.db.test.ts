@@ -454,6 +454,35 @@ describe('D-39：采购信息快照落 order_items', () => {
     expect(after['purchase_source']).toBe('Amazon JP');
     expect(after['title_ja']).toBe('シェフナイフ');
   });
+
+  /**
+   * 剩余清单 1-3（B4 / B5）：成本价、HS 码、英文报关品名同样落快照。
+   * @why 成本价改了，历史单的毛利就被悄悄重算；HS 码 / 报关品名改了，
+   *      已发出包裹的报关资料与面单对不上——两者都只有"下单 → 改商品 → 回看"能抓到。
+   */
+  it('成本价 / HS 码 / 英文报关品名：下单落快照，之后改商品不影响订单行', async () => {
+    await db`
+      update products set cost_jpy = 4200, hs_code = '8211.91', customs_desc_en = 'Kitchen knife, stainless steel'
+       where id = 'p-knife'
+    `;
+    const created = await createOne('SNAP04');
+    const snap = async () =>
+      (
+        await db`select cost_jpy, hs_code, customs_desc_en from order_items where order_id = ${created.orderId}`
+      )[0] as Record<string, unknown>;
+    // @measured: 本库 postgres.js 连接把 BIGINT 读成 number（首跑断言 '4200' 失败，Received 4200）
+    expect(await snap()).toEqual({
+      cost_jpy: 4200,
+      hs_code: '8211.91',
+      customs_desc_en: 'Kitchen knife, stainless steel',
+    });
+    await db`
+      update products set cost_jpy = 5000, hs_code = '8211.92', customs_desc_en = 'Chef knife'
+       where id = 'p-knife'
+    `;
+    expect((await snap())['cost_jpy']).toBe(4200);
+    expect((await snap())['hs_code']).toBe('8211.91');
+  });
 });
 
 /**
