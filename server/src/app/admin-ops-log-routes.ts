@@ -59,6 +59,7 @@ export function mountAdminOpsLogRoutes(app: Express, deps: AdminOpsLogRoutesDeps
           items: r.items.map((i) => ({
             id: i.id,
             actor: i.actor,
+            ...(i.actorEmail !== null ? { actor_email: i.actorEmail } : {}),
             action: i.action,
             ...(i.target !== null ? { target: i.target } : {}),
             ...(i.statusCode !== null ? { status_code: i.statusCode } : {}),

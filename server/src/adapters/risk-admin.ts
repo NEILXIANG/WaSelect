@@ -74,7 +74,15 @@ export interface RiskAdminRepo {
   >;
   /** 已拉黑的用户（AJ-384：解除入口要能找到人）。按拉黑时间倒序，最多 200 条。 */
   listBlockedUsers(): Promise<
-    Array<{ id: string; blockedAt: Date; createdAt: Date; orderCount: number }>
+    Array<{
+      id: string;
+      blockedAt: Date;
+      createdAt: Date;
+      orderCount: number;
+      /** 最近一单的收件人 / 联系邮箱（三端联动 UI 模拟 2026-10-08：列表原先只有内部 id，运营认不出是谁）。 */
+      lastRecipient: string | null;
+      lastContactEmail: string | null;
+    }>
   >;
 }
 
@@ -136,7 +144,12 @@ export function createRiskAdminRepo(db: Db): RiskAdminRepo {
     async listBlockedUsers() {
       const rows = await db`
         select u.id, u.blocked_at, u.created_at,
-               (select count(*)::int from orders o where o.user_id = u.id) as order_count
+               (select count(*)::int from orders o where o.user_id = u.id) as order_count,
+               (select o.address_snapshot ->> 'recipient' from orders o
+                 where o.user_id = u.id order by o.created_at desc limit 1) as last_recipient,
+               (select o.contact_email from orders o
+                 where o.user_id = u.id and o.contact_email is not null
+                 order by o.created_at desc limit 1) as last_contact_email
           from users u
          where u.blocked_at is not null
          order by u.blocked_at desc, u.id
@@ -147,6 +160,9 @@ export function createRiskAdminRepo(db: Db): RiskAdminRepo {
         blockedAt: r['blocked_at'] as Date,
         createdAt: r['created_at'] as Date,
         orderCount: Number(r['order_count']),
+        lastRecipient: typeof r['last_recipient'] === 'string' ? r['last_recipient'] : null,
+        lastContactEmail:
+          typeof r['last_contact_email'] === 'string' ? r['last_contact_email'] : null,
       }));
     },
 

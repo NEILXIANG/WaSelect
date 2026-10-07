@@ -64,7 +64,8 @@ async function open(): Promise<HTMLElement> {
 
 /** 第一行的"状态"单元格文字（表头顺序：商品 / 分类 / 售价 / 库存 / 状态 / 操作）。 */
 const statusCell = (el: HTMLElement): string =>
-  el.querySelector('tbody tr')?.querySelectorAll('td')[4]?.textContent ?? '';
+  // 第 0 列是缩略图（三端联动模拟 2026-10-08 新增），状态列随之后移一位
+  el.querySelector('tbody tr')?.querySelectorAll('td')[5]?.textContent ?? '';
 
 afterEach(async () => {
   await mounted?.unmount();

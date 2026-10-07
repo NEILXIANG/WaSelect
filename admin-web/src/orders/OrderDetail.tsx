@@ -75,6 +75,12 @@ export interface OrderDetailProps {
   onChanged: () => void;
 }
 
+/** 行项目首图的 thumb（只收 http(s)；三端联动 UI 模拟 2026-10-08）。 */
+function itemThumb(it: Record<string, unknown>): string {
+  const t = (it['image'] as { thumb?: unknown } | undefined)?.thumb;
+  return typeof t === 'string' && /^https?:\/\//.test(t) ? t : '';
+}
+
 export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailProps) {
   const [order, setOrder] = useState<AdminOrderLike | null>(source);
   const [loading, setLoading] = useState(true);
@@ -277,6 +283,16 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
             <span>{addressSummary(order)}</span>
           </div>
 
+          {/* 联系邮箱（三端联动 UI 模拟 2026-10-08：客服要联系买家时原先只能去库里查） */}
+          <div className="field">
+            <span className="label">联系邮箱</span>
+            <span className="selectable">
+              {typeof (order as { contact_email?: unknown }).contact_email === 'string'
+                ? String((order as { contact_email?: unknown }).contact_email)
+                : '买家未留邮箱'}
+            </span>
+          </div>
+
           <div className="field">
             <span className="label">商品</span>
             {items.length === 0 ? (
@@ -287,7 +303,12 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                   {items.map((it, i) => (
                     <Fragment key={i}>
                       <tr>
-                        <td>{String(it['title'] ?? '')}</td>
+                        <td>
+                          {itemThumb(it) !== '' && (
+                            <img className="thumb" src={itemThumb(it)} alt="" loading="lazy" />
+                          )}{' '}
+                          {String(it['title'] ?? '')}
+                        </td>
                         <td>× {String(it['qty'] ?? '')}</td>
                         <td>{moneyText(it['unit_price_jpy'])}</td>
                       </tr>
@@ -334,8 +355,8 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
             api={api}
             id={id}
             order={order}
-            onDone={() => {
-              void load();
+            onDone={(message) => {
+              void load().then(() => setNotice(message));
               onChanged();
             }}
           />

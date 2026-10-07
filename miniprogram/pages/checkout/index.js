@@ -35,6 +35,7 @@ import {
   recoveryFor,
   resolveAddressId,
   submitGate,
+  namedItemError,
 } from './index.vm.js';
 import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { addressSummary, defaultAddressId } from '../../utils/address-form.js';
@@ -239,7 +240,13 @@ Page({
       });
       this.setData({ quote: quoteView(res), quoteFailed: false });
     } catch (e) {
-      this.setData({ quote: null, quoteFailed: true, ...errorFields(e) });
+      const named = namedItemError(e, items); // U9：点名是哪一件
+      this.setData({
+        quote: null,
+        quoteFailed: true,
+        ...errorFields(e),
+        ...(named !== '' ? { error: named } : {}),
+      });
     }
     this.updateGate();
   },
@@ -364,7 +371,8 @@ Page({
     } catch (e) {
       const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
       // ⚠️ 默认**不** retire：键留给重试（弱网下用户看到错误再点一次必须还是同一个键）
-      this.setData({ ...errorFields(e) });
+      const named = namedItemError(e, this.items()); // U9：点名是哪一件
+      this.setData({ ...errorFields(e), ...(named !== '' ? { error: named } : {}) });
       // B37 / AJ-220：执行错误码登记表里写明的恢复动作——
       // 不执行的话 40905（管理员改价）会变成"再点还是 40905，只能退出重进"。
       if (recoveryFor(code) === 'requote') {

@@ -140,9 +140,12 @@ describe('拉黑文案：三件后果在点之前必须全部说清', () => {
     expect(BLOCK_CONFIRM_TEXT).toContain('支付中');
   });
 
-  it('🔴 确认文案同时说清"不能下单"与"没有解除入口"（这两条原本就在，别改丢）', () => {
-    expect(BLOCK_CONFIRM_TEXT).toContain('40301');
-    expect(BLOCK_CONFIRM_TEXT).toContain('没有解除入口');
+  it('🔴 确认文案说清"不能下单"、"可在下方解除"、"已取消的订单不会恢复"（AJ-384 之后；三端联动 UI 模拟 2026-10-08 订正）', () => {
+    expect(BLOCK_CONFIRM_TEXT).toContain('不能再下单');
+    expect(BLOCK_CONFIRM_TEXT).toContain('解除');
+    expect(BLOCK_CONFIRM_TEXT).toContain('不会恢复');
+    expect(BLOCK_CONFIRM_TEXT).not.toContain('没有解除入口');
+    expect(BLOCK_CONFIRM_TEXT).not.toContain('**'); // 不把 Markdown 原样显示
   });
 
   it('⚠️ 未付款订单会被取消这件事要写明"库存回补"（运营核对时找得到货）', () => {

@@ -129,6 +129,8 @@ describe('Banner：保存撞上 40914（P2-44）', () => {
         if (puts.length === 1) throw new ApiError(40914, '这条内容在你打开之后被别人改过了', 't');
         return {};
       }
+      // 跳转目标的商品候选（三端联动 UI 模拟 2026-10-08 新增的请求）：不计入 Banner 列表次数
+      if (req.path.includes('/admin/products')) return { items: [], total: 0 };
       listCalls += 1;
       // 第一次列表是打开时的版本；之后是别人改过排序的最新版
       return listCalls === 1

@@ -35,7 +35,11 @@ async function open(): Promise<HTMLElement> {
 }
 
 const gets = (): Call[] =>
-  calls.filter((c) => c.method !== 'POST' && c.path.includes('/admin/orders'));
+  // 列表请求；待办计数（TodoBar，size=1）另算（三端联动 UI 模拟 2026-10-08）
+  calls.filter(
+    (c) =>
+      c.method !== 'POST' && c.path.includes('/admin/orders') && !/[?&]size=1(&|$)/.test(c.path),
+  );
 const keywordInput = (el: HTMLElement): HTMLInputElement =>
   el.querySelector('input[placeholder^="单号"]') as HTMLInputElement;
 

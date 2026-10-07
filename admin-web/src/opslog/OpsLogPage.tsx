@@ -61,8 +61,9 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
   const pages = Math.max(1, Math.ceil(total / AUDIT_PAGE_SIZE));
 
   return (
-    <section>
-      <h2>最近一次对账</h2>
+    // 与其它页同一套卡片样式（三端联动 UI 模拟 2026-10-08：原先没有 panel，标题直接压在背景上）
+    <section className="panel">
+      <h2 className="title">最近一次对账</h2>
       {reconError !== '' && <p className="error">{reconError}</p>}
       {recon !== null && (
         <div className="form">
@@ -75,15 +76,17 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
         </div>
       )}
 
-      <h2>管理员操作记录</h2>
-      <div className="row2">
+      <h2 className="title">管理员操作记录</h2>
+      <div className="filters">
         <input
+          className="input"
           aria-label="操作人"
-          placeholder="操作人（如 admin:u-xxx）"
+          placeholder="操作人邮箱（或 admin:内部 id）"
           value={actor}
           onChange={(e) => setActor(e.target.value)}
         />
         <input
+          className="input"
           aria-label="对象 id"
           placeholder="对象 id（订单 / 商品）"
           value={target}
@@ -116,7 +119,10 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
             <tr key={r.id}>
               <td className="muted">{r.timeText}</td>
               <td>{r.actor}</td>
-              <td>{r.action}</td>
+              <td>
+                {r.action}
+                {r.action !== r.actionRaw && <span className="muted"> · {r.actionRaw}</span>}
+              </td>
               <td>{r.targetText}</td>
               <td className={r.failed ? 'error' : 'muted'}>{r.statusText}</td>
             </tr>

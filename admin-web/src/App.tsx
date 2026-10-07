@@ -72,6 +72,8 @@ export function App() {
 function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionControls }) {
   const [tab, setTab] = useState<TabKey>('products');
   const [editing, setEditing] = useState<Editing | null>(null);
+  /** 商品保存成功后回到列表时显示一次的提示（三端联动 UI 模拟 2026-10-08）。 */
+  const [flash, setFlash] = useState('');
   // 40101 的唯一出口：JSON 封装与上传封装共用（KD-13：上传曾不走这里，过期后反复"HTTP 401"）
   const { onUnauthorized, logout } = session;
 
@@ -129,7 +131,11 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
         (editing === null ? (
           <ProductsPage
             api={api}
-            onEdit={(id, source) => setEditing({ id, source: source ?? null })}
+            onEdit={(id, source) => {
+              setFlash('');
+              setEditing({ id, source: source ?? null });
+            }}
+            flash={flash}
           />
         ) : (
           <ProductFormPage
@@ -139,7 +145,10 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
             onUnauthorized={onUnauthorized}
             productId={editing.id}
             source={editing.source}
-            onDone={() => setEditing(null)}
+            onDone={(message) => {
+              setFlash(message ?? '');
+              setEditing(null);
+            }}
           />
         ))}
     </main>

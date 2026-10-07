@@ -17,6 +17,7 @@
  */
 
 import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG } from '@waselect/shared';
+import { COMPLIANCE_TAG_LABELS } from './view.js';
 import { UPLOAD_ACCEPT } from '../api/upload.js';
 import type { ProductImageEntry } from './view.js';
 
@@ -31,6 +32,8 @@ export interface FieldProps {
   placeholder?: string;
   /** 只读（用于 MVP 固定值，如原产地 JP）。 */
   readOnly?: boolean;
+  /** 多行（商品描述等长文本；三端联动 UI 模拟 2026-10-08：原先描述是单行框）。 */
+  multiline?: boolean;
 }
 
 export function Field({
@@ -41,18 +44,30 @@ export function Field({
   type = 'text',
   placeholder = '',
   readOnly = false,
+  multiline = false,
 }: FieldProps) {
   return (
     <label className="field">
       <span className="label">{label}</span>
-      <input
-        className="input"
-        type={type}
-        value={value}
-        placeholder={placeholder}
-        readOnly={readOnly}
-        onChange={(e) => onChange(e.target.value)}
-      />
+      {multiline ? (
+        <textarea
+          className="input"
+          rows={4}
+          value={value}
+          placeholder={placeholder}
+          readOnly={readOnly}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      ) : (
+        <input
+          className="input"
+          type={type}
+          value={value}
+          placeholder={placeholder}
+          readOnly={readOnly}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
       {error !== '' && <span className="error">{error}</span>}
     </label>
   );
@@ -80,7 +95,7 @@ export function TagPicker({ value, onChange, error = '' }: TagPickerProps) {
               className={on ? 'chip chip-on' : 'chip'}
               onClick={() => onChange(on ? value.filter((t) => t !== tag) : [...value, tag])}
             >
-              {tag}
+              {COMPLIANCE_TAG_LABELS[tag] ?? tag}
               {blocked.includes(tag) ? '（禁售）' : ''}
             </button>
           );

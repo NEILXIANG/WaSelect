@@ -71,8 +71,19 @@ function productFromSeed(seed: ProductSeed, rng: Rng, nextId: () => string): Pro
     customs_desc_en: seed.customsDescEn,
     jan_code: seed.janCode,
     purchase_source: seed.purchaseSource,
+    // ⚠️ 编辑口径三列也要覆盖（三端联动模拟 2026-10-08）：漏了它们，makeProduct 会用它**随机抽到的另一件**素材填，
+    //    于是"东京香蕉蛋糕"挂着化妆水的推荐语，演示与界面核对都被误导
+    why: seed.why,
+    maker: seed.maker === '' ? null : seed.maker,
+    tags: [...seed.tags],
   });
 }
+
+/**
+ * 开发种子的承运商名（三端联动模拟 2026-10-08）：原先是 `placeholder`，运营在运费表 / 发货页看到的是一个占位词。
+ * MVP 唯一承运商是日本邮便 EMS（E12）；单测里显式传 'placeholder' 的地方不受影响。
+ */
+const DEV_CARRIER = 'Japan Post EMS';
 
 /** 完整商品目录 + 完整运费档 + 一个用户与默认地址。供全量联调与"灌满看一看"。 */
 export function fullCatalog(rng: Rng, nextId: () => string): SeedBundle {
@@ -83,7 +94,7 @@ export function fullCatalog(rng: Rng, nextId: () => string): SeedBundle {
     users: [user],
     addresses: [makeAddress(rng, nextId, user.id, { is_default: true })],
     products: JP_PRODUCTS.map((s) => productFromSeed(s, rng, nextId)),
-    shippingRates: makeShippingRates(),
+    shippingRates: makeShippingRates(DEV_CARRIER),
   };
 }
 
@@ -97,7 +108,7 @@ export function demoShop(rng: Rng, nextId: () => string): SeedBundle {
     users: [user],
     addresses: [makeAddress(rng, nextId, user.id, { is_default: true })],
     products,
-    shippingRates: makeShippingRates(),
+    shippingRates: makeShippingRates(DEV_CARRIER),
   };
 }
 

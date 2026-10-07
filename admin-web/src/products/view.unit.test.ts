@@ -69,7 +69,22 @@ describe('productRows（列表行）', () => {
       status: 'active',
       statusText: '在售',
       online: true,
+      thumb: '', // 夹具无图
+      lowStock: false, // 夹具库存 12
     });
+  });
+
+  it('首图缩略图：取 images[0].thumb；只收 http(s)（三端联动模拟 2026-10-08）', () => {
+    const img = {
+      image_id: 'x',
+      thumb: 'http://localhost:3000/dev-img/img/x/thumb.webp',
+      card: 'c',
+      detail: 'd',
+    };
+    expect(productRows([{ ...PRODUCT, images: [img] }])[0]?.thumb).toBe(img.thumb);
+    expect(
+      productRows([{ ...PRODUCT, images: [{ thumb: 'javascript:alert(1)' }] }])[0]?.thumb,
+    ).toBe('');
   });
 
   it('⚠️ 状态不在枚举内 → 按 offline 处理但**保留原值**（不静默改数据）', () => {
@@ -364,7 +379,15 @@ describe('productFormErrors（上架预检）', () => {
   it('必填与数值：售价/重量/库存/品名/分类各自有提示', () => {
     const r = productFormErrors(emptyProductForm());
     expect(Object.keys(r.errors).sort()).toEqual(
-      ['category'.slice(0, 0) + 'customsDescEn', 'hsCode', 'priceJpy', 'title', 'weightG'].sort(),
+      // 新建库存默认留空 → 也要报"库存必填"（三端联动 UI 模拟 2026-10-08：原先默认 0，直接输入得 "030"）
+      [
+        'category'.slice(0, 0) + 'customsDescEn',
+        'hsCode',
+        'priceJpy',
+        'stock',
+        'title',
+        'weightG',
+      ].sort(),
     );
     expect(r.first).toBe(r.errors['title']);
   });

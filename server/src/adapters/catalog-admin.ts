@@ -110,6 +110,10 @@ export interface AdminProductListQuery {
   size: number;
   /** 不传 = 全部（含下架，见文件头 @why）。 */
   status?: 'active' | 'offline' | undefined;
+  /** 关键词：商品名 / 日文名 / JAN 码，不区分大小写、按字面匹配（三端联动 UI 模拟 2026-10-08）。 */
+  keyword?: string | undefined;
+  /** true = 只出库存 ≤ `lowStockAt` 的商品。 */
+  lowStockAt?: number | undefined;
 }
 
 /**
@@ -175,15 +179,27 @@ function toRow(r: Record<string, unknown>): AdminProductRow {
 export function createCatalogAdminRepo(db: Db): CatalogAdminRepo {
   return {
     async listAdminProducts(q) {
+      // 关键词用 position(lower) 而不是 ilike：用户输入里的 % _ 不该是通配符（与订单搜索同口径，orders-admin.ts）
+      const kw = q.keyword === undefined || q.keyword === '' ? null : q.keyword.toLowerCase();
+      const where = db`where true
+         ${q.status !== undefined ? db`and status = ${q.status}` : db``}
+         ${
+           kw !== null
+             ? db`and (position(${kw} in lower(title)) > 0
+                  or position(${kw} in lower(coalesce(title_ja, ''))) > 0
+                  or position(${kw} in lower(coalesce(jan_code, ''))) > 0)`
+             : db``
+         }
+         ${q.lowStockAt !== undefined ? db`and stock <= ${q.lowStockAt}` : db``}`;
       const rows = await db`
         select ${db(COLS.split(',').map((c) => c.trim()))} from products
-         ${q.status !== undefined ? db`where status = ${q.status}` : db``}
+         ${where}
          order by updated_at desc, id
          limit ${q.size} offset ${(q.page - 1) * q.size}
       `;
       const counts = await db`
         select count(*)::int as n from products
-         ${q.status !== undefined ? db`where status = ${q.status}` : db``}
+         ${where}
       `;
       return { items: rows.map(toRow), total: Number(counts[0]?.n ?? 0) };
     },

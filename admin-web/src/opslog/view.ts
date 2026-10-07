@@ -19,11 +19,47 @@ export const RECONCILE_CLASS_LABELS: Readonly<Record<string, string>> = {
   fx_rate_aging: '汇率快过期（请尽快在运营配置里录入）',
 };
 
+/**
+ * 审计 action（`METHOD 路径模板` / `CLI …`）→ 中文操作名（三端联动 UI 模拟 2026-10-08：原先直接显示
+ * `POST /admin/users/:id/unblock`，运营读不懂）。认不出的原样显示（看得见，不静默丢）。
+ */
+export const ACTION_LABELS: Readonly<Record<string, string>> = {
+  'POST /admin/products': '新建商品',
+  'PUT /admin/products/:id': '编辑商品',
+  'PATCH /admin/products/:id/status': '商品上下架',
+  'POST /admin/upload': '上传图片',
+  'POST /admin/banners': '新建 Banner',
+  'PUT /admin/banners/:id': '编辑 Banner',
+  'DELETE /admin/banners/:id': '删除 Banner',
+  'POST /admin/orders/:id/ship': '发货',
+  'PATCH /admin/orders/:id/shipment': '改运单号',
+  'POST /admin/orders/:id/address': '发货前改址',
+  'POST /admin/orders/:id/cancel': '取消未付订单',
+  'POST /admin/orders/:id/refund': '全额退款',
+  'POST /admin/refund': '退款',
+  'POST /admin/orders/:id/partial-refunds': '部分退款',
+  'POST /admin/orders/:id/partial-refunds/:refundId/sync': '同步部分退款',
+  'POST /admin/orders/:id/dispute/release': '解除拒付限制',
+  'POST /admin/users/:id/block': '拉黑用户',
+  'POST /admin/users/:id/unblock': '解除拉黑',
+  'PUT /admin/ops/sales-pause': '停售 / 恢复接单',
+  'PUT /admin/shipping-rates': '替换运费表',
+  'POST /admin/fx': '维护汇率',
+  'GET /admin/exports/:kind': '导出 CSV',
+  'CLI admin.create': '命令行建管理员',
+  'CLI admin.password.reset': '命令行改密',
+  'CLI admin.totp.enable': '开通二次验证',
+  'CLI admin.totp.disable': '关闭二次验证',
+};
+
 export interface AuditRowView {
   id: number;
   timeText: string;
   actor: string;
+  /** 中文操作名；认不出时等于 `actionRaw`。 */
   action: string;
+  /** 原始 action（小字附在旁边，查日志 / 对代码用）。 */
+  actionRaw: string;
   targetText: string;
   statusText: string;
   /** 状态码 ≥ 400：这次操作没成功（例如退款调机构失败），行标红。 */
@@ -38,8 +74,13 @@ export function auditRows(items: readonly unknown[]): AuditRowView[] {
       return {
         id: Number(i['id']),
         timeText: formatJst(i['created_at']),
-        actor: String(i['actor'] ?? ''),
-        action: String(i['action'] ?? ''),
+        // 有邮箱显示邮箱（运营认得同事邮箱，不认得内部 id）
+        actor:
+          typeof i['actor_email'] === 'string' && i['actor_email'] !== ''
+            ? i['actor_email']
+            : String(i['actor'] ?? ''),
+        action: ACTION_LABELS[String(i['action'] ?? '')] ?? String(i['action'] ?? ''),
+        actionRaw: String(i['action'] ?? ''),
         targetText: typeof i['target'] === 'string' && i['target'] !== '' ? i['target'] : '—',
         statusText: status === null ? '—' : String(status),
         failed: status !== null && status >= 400,

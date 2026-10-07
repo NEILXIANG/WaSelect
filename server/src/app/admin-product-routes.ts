@@ -27,6 +27,7 @@
  *      contracts/api-contract.yaml（AdminProduct / ProductInput）
  */
 import type { Express } from 'express';
+import { LOW_STOCK_THRESHOLD, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import type { Db } from '../adapters/db.js';
 import type { Logger } from '../logger.js';
@@ -189,7 +190,13 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
   app.get('/api/v1/admin/products', guard, (req, res, next) => {
     void (async () => {
       try {
-        const q = req.query as { status?: unknown; page?: unknown; size?: unknown };
+        const q = req.query as {
+          status?: unknown;
+          page?: unknown;
+          size?: unknown;
+          keyword?: unknown;
+          low_stock?: unknown;
+        };
         const page = q.page === undefined ? 1 : Number(q.page);
         const size = q.size === undefined ? 50 : Number(q.size);
         if (
@@ -205,10 +212,20 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         if (status !== undefined && !(PRODUCT_STATUS as readonly string[]).includes(status)) {
           throw new AppError(40001, { reason: 'status_invalid' });
         }
+        // 搜索与低库存（三端联动 UI 模拟 2026-10-08）：上限与订单搜索同一个 shared 常量
+        const keyword = typeof q.keyword === 'string' ? q.keyword.trim() : '';
+        if (keyword.length > SEARCH_KEYWORD_MAX_LENGTH) {
+          throw new AppError(40001, { reason: 'keyword_too_long' });
+        }
+        if (q.low_stock !== undefined && q.low_stock !== 'true' && q.low_stock !== 'false') {
+          throw new AppError(40001, { reason: 'low_stock_invalid' });
+        }
         const { items, total } = await repo.listAdminProducts({
           page,
           size,
           status: status as 'active' | 'offline' | undefined,
+          ...(keyword !== '' ? { keyword } : {}),
+          ...(q.low_stock === 'true' ? { lowStockAt: LOW_STOCK_THRESHOLD } : {}),
         });
         res.json({ items: items.map((r) => toAdminProduct(r, imgBase)), total });
       } catch (e) {

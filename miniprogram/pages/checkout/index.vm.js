@@ -253,3 +253,25 @@ export function checkoutItems(args) {
 export function clearsCartAfterOrder(mode) {
   return mode !== BUY_NOW_MODE;
 }
+
+/** 能点名到某一件的失败码 → 说法（U9）。 */
+const NAMED_ITEM_TEXT = {
+  40401: '已下架或不存在，请返回购物车移除后再下单',
+  40901: '库存不足，请返回购物车减少数量后再下单',
+};
+
+/**
+ * 报价 / 建单失败时点名是哪一件（U9，三端联动模拟 2026-10-08）。
+ * @why 原先结算页只说"商品不存在或已下架"，不说哪一件——购物车里五件时用户只能挨个猜；
+ *      服务端在 `data.product_id` 里已经指出了那一件，购物车页早就用它标红了（剩余清单 4-7）。
+ * @returns {string} 点名文案；码不认识 / 没带 id / id 不在这次的商品里 → 空串（调用方沿用通用文案，不猜）
+ */
+export function namedItemError(err, items) {
+  const code = err !== null && typeof err === 'object' ? err.code : undefined;
+  const id = err !== null && typeof err === 'object' ? err.data?.product_id : undefined;
+  const text = NAMED_ITEM_TEXT[code];
+  if (text === undefined || typeof id !== 'string') return '';
+  const hit = Array.isArray(items) ? items.find((i) => i?.productId === id) : undefined;
+  const title = typeof hit?.title === 'string' && hit.title !== '' ? hit.title : '';
+  return title === '' ? '' : `「${title}」${text}`;
+}

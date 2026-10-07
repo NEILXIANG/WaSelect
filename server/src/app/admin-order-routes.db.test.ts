@@ -178,6 +178,28 @@ async function adminFetch(
   return { status: r.status, json };
 }
 
+describe('GET /admin/orders/{id}：行项目带商品图（三端联动 UI 模拟 2026-10-08）', () => {
+  it('🔴 详情的行项目带商品首图（运营对照实物发货）；商品无图 → 不带 image', async () => {
+    await seedOrder({ id: 'o-img' });
+    await seedOrder({ id: 'o-noimg' });
+    const img = {
+      thumb: 'https://img.test/t.webp',
+      card: 'https://img.test/c.webp',
+      detail: 'https://img.test/d.webp',
+    };
+    await db`update products set images = ${db.json([img] as never)} where id = 'p-o-img'`;
+    const s = await buildServer();
+    try {
+      const a = await adminFetch(s, 'GET', '/api/v1/admin/orders/o-img');
+      expect((a.json['items'] as Array<Record<string, unknown>>)[0]?.['image']).toEqual(img);
+      const b = await adminFetch(s, 'GET', '/api/v1/admin/orders/o-noimg');
+      expect((b.json['items'] as Array<Record<string, unknown>>)[0]).not.toHaveProperty('image');
+    } finally {
+      await s.close();
+    }
+  });
+});
+
 describe('GET /admin/orders（管理端订单列表）', () => {
   it('无 token → 40101', async () => {
     const s = await buildServer();

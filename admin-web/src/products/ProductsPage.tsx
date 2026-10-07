@@ -13,6 +13,7 @@
  *
  * @see ./view.ts（行视图与校验的真源）；./api.ts（接口层）
  */
+import { LOW_STOCK_THRESHOLD, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { listProducts, setProductStatus, type AdminApi, type AdminProductLike } from './api.js';
@@ -33,9 +34,11 @@ export interface ProductsPageProps {
    *      所以由列表页把它带过去（App.tsx @limitation 一 同一条理由）。
    */
   onEdit: (id: string | null, source?: AdminProductLike) => void;
+  /** 编辑页带回来的成功提示（空串 = 不显示）。 */
+  flash?: string;
 }
 
-export function ProductsPage({ api, onEdit }: ProductsPageProps) {
+export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
   const [rows, setRows] = useState<ProductRow[]>([]);
   /** 服务端原始条目（编辑页要用，@see ProductsPageProps.onEdit）。 */
   const [raw, setRaw] = useState<AdminProductLike[]>([]);
@@ -46,6 +49,10 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
   const [error, setError] = useState('');
   /** 正在执行上下架的商品 id（按钮禁用态，空串 = 没有）。 */
   const [busyId, setBusyId] = useState('');
+  /** 搜索框（未提交）与已生效的关键词；库存紧张筛选（三端联动 UI 模拟 2026-10-08）。 */
+  const [keyword, setKeyword] = useState('');
+  const [applied, setApplied] = useState('');
+  const [lowStock, setLowStock] = useState(false);
   /**
    * 待确认上下架的商品 id（三端联动模拟 2026-10-08）。
    * @why 原先一点即生效，且生效后列表按更新时间重排、被操作的行跳到第一行——
@@ -68,6 +75,8 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
         page,
         size: PAGE_SIZE,
         ...(status === 'all' ? {} : { status }),
+        ...(applied !== '' ? { keyword: applied } : {}),
+        ...(lowStock ? { lowStock: true } : {}),
       });
       if (seq !== reqSeq.current) return;
       setRaw(res.items);
@@ -83,7 +92,7 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
-  }, [api, page, status]);
+  }, [api, page, status, applied, lowStock]);
 
   useEffect(() => {
     void load();
@@ -137,15 +146,56 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
             {s === 'all' ? '全部' : s === 'active' ? '在售' : '已下架'}
           </button>
         ))}
+        <button
+          type="button"
+          className={lowStock ? 'chip chip-on' : 'chip'}
+          onClick={() => {
+            setLowStock((v) => !v);
+            setPage(1);
+          }}
+        >
+          库存紧张（≤ {LOW_STOCK_THRESHOLD}）
+        </button>
+        <input
+          className="input"
+          placeholder="搜商品名 / 日文名 / JAN 码"
+          maxLength={SEARCH_KEYWORD_MAX_LENGTH}
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+              setApplied(keyword.trim());
+              setPage(1);
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="btn"
+          onClick={() => {
+            setApplied(keyword.trim());
+            setPage(1);
+          }}
+        >
+          搜索
+        </button>
       </div>
 
+      {flash !== '' && (
+        <p className="ok" role="status">
+          {flash}
+        </p>
+      )}
       {error !== '' && <p className="error">{error}</p>}
       {loading && <p className="muted">加载中…</p>}
-      {!loading && rows.length === 0 && error === '' && <p className="muted">还没有商品</p>}
+      {!loading && rows.length === 0 && error === '' && (
+        <p className="muted">{applied !== '' || lowStock ? '没有符合条件的商品' : '还没有商品'}</p>
+      )}
 
       <table className="table">
         <thead>
           <tr>
+            <th aria-label="图片" />
             <th>商品</th>
             <th>分类</th>
             <th>售价</th>
@@ -157,10 +207,20 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.id}>
+              <td>
+                {row.thumb !== '' ? (
+                  <img className="thumb" src={row.thumb} alt="" loading="lazy" />
+                ) : (
+                  <span className="thumb thumb-empty">无图</span>
+                )}
+              </td>
               <td>{row.title}</td>
               <td className="muted">{row.categoryLabel}</td>
               <td>{row.priceText}</td>
-              <td>{row.stockText}</td>
+              <td className={row.lowStock ? 'error' : undefined}>
+                {row.stockText}
+                {row.lowStock ? '（紧张）' : ''}
+              </td>
               <td className={row.online ? 'ok' : 'muted'}>{row.statusText}</td>
               <td>
                 <button

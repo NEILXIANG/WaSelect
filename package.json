@@ -44,6 +44,7 @@
     "admin:password": "tsx scripts/admin-password.ts",
     "admin:create": "tsx scripts/admin-create.ts",
     "admin:totp": "tsx scripts/admin-totp.ts",
+    "dev:images": "tsx scripts/dev-images.ts",
     "dev": "tsx scripts/dev-up.ts",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "audit": "npm audit",

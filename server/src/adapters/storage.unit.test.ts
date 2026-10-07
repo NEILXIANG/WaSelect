@@ -22,7 +22,7 @@ import { describe, expect, it } from 'vitest';
 import type { HttpClient, HttpRequest, HttpResponse } from '../ports/http-client.js';
 import { loadConfig } from '../config.js';
 import { fixedClock } from '../../../test/helpers/fixed-clock.js';
-import { resolveStorage } from './storage.js';
+import { devImageDir, resolveStorage } from './storage.js';
 
 /** 最小可启动环境（与 config.unit.test.ts 同口径）。 */
 const baseEnv: NodeJS.ProcessEnv = {
@@ -208,5 +208,29 @@ describe('resolveStorage：r2 缺要素时不静默补默认值', () => {
     expect(() => resolveStorage({ ...ok, R2_SECRET_ACCESS_KEY: '' }, deps)).toThrow(
       /r2_storage_config_missing:R2_SECRET_ACCESS_KEY/,
     );
+  });
+});
+
+describe('devImageDir（三端联动模拟 2026-10-08：开发期本地图片）', () => {
+  it('development + fs（缺省或显式）→ 上传目录的绝对路径', () => {
+    expect(devImageDir(loadConfig({ ...baseEnv, NODE_ENV: 'development' }))).toMatch(
+      /var\/uploads$/,
+    );
+    expect(
+      devImageDir(
+        loadConfig({
+          ...baseEnv,
+          NODE_ENV: 'development',
+          STORAGE_DRIVER: 'fs',
+          STORAGE_FS_DIR: '/tmp/x',
+        }),
+      ),
+    ).toBe('/tmp/x');
+  });
+  it('🔴 test / memory 驱动 → null（生产另由 config 禁止 fs，这里不再加一道）', () => {
+    expect(devImageDir(loadConfig({ ...baseEnv, NODE_ENV: 'test' }))).toBeNull();
+    expect(
+      devImageDir(loadConfig({ ...baseEnv, NODE_ENV: 'development', STORAGE_DRIVER: 'memory' })),
+    ).toBeNull();
   });
 });

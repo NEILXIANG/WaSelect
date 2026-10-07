@@ -154,6 +154,8 @@ export interface AdminOrderItemRow {
   cost_jpy: number | null;
   hs_code: string | null;
   customs_desc_en: string | null;
+  /** 商品**当前**首图（原样 JSONB 元素；拼 URL 归路由层）。行项目快照不存图，取现图（三端联动 UI 模拟 2026-10-08）。 */
+  first_image: unknown;
 }
 
 export interface AdminPaymentRow {
@@ -320,10 +322,12 @@ export async function listOrderItemsFor(
 ): Promise<AdminOrderItemRow[]> {
   if (orderIds.length === 0) return [];
   const rows = await db`
-    select order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd,
-           title_ja, jan_code, purchase_source, cost_jpy, hs_code, customs_desc_en
-      from order_items where order_id in ${db([...orderIds])}
-     order by order_id, line_no nulls last, id
+    select oi.order_id, oi.product_id, oi.title_snapshot, oi.qty, oi.unit_price_jpy, oi.weight_g,
+           oi.declared_value_usd, oi.title_ja, oi.jan_code, oi.purchase_source, oi.cost_jpy, oi.hs_code,
+           oi.customs_desc_en, p.images -> 0 as first_image
+      from order_items oi left join products p on p.id = oi.product_id
+     where oi.order_id in ${db([...orderIds])}
+     order by oi.order_id, oi.line_no nulls last, oi.id
   `;
   return rows.map((r) => ({
     order_id: String(r.order_id),
@@ -339,6 +343,7 @@ export async function listOrderItemsFor(
     cost_jpy: r.cost_jpy === null ? null : Number(r.cost_jpy),
     hs_code: strOrNull(r.hs_code),
     customs_desc_en: strOrNull(r.customs_desc_en),
+    first_image: r.first_image ?? null,
   }));
 }
 

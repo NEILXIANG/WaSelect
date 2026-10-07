@@ -67,6 +67,10 @@ export interface ProductListQuery {
   status?: 'active' | 'offline';
   page?: number;
   size?: number;
+  /** 商品名 / 日文名 / JAN 码（契约 0.6.40）。 */
+  keyword?: string;
+  /** true = 只看库存紧张的（≤ shared LOW_STOCK_THRESHOLD）。 */
+  lowStock?: boolean;
 }
 
 /**
@@ -82,6 +86,8 @@ export async function listProducts(
   if (query.status !== undefined) params.set('status', query.status);
   if (query.page !== undefined) params.set('page', String(query.page));
   if (query.size !== undefined) params.set('size', String(query.size));
+  if (query.keyword !== undefined && query.keyword !== '') params.set('keyword', query.keyword);
+  if (query.lowStock === true) params.set('low_stock', 'true');
   const qs = params.toString();
   const resp = await api({
     path: `/api/v1/admin/products${qs === '' ? '' : `?${qs}`}`,

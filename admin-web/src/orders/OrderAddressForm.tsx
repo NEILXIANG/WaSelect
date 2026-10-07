@@ -39,8 +39,8 @@ export interface OrderAddressFormProps {
   api: AdminApi;
   id: string;
   order: AdminOrderLike;
-  /** 保存成功后（父组件刷新详情）。 */
-  onDone: () => void;
+  /** 保存成功后（父组件刷新详情并显示 `message`）。 */
+  onDone: (message: string) => void;
 }
 
 export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormProps) {
@@ -48,21 +48,32 @@ export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormPro
   const [errors, setErrors] = useState<Partial<Record<AddressField, string>>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  /**
+   * 两步确认（三端联动 UI 模拟 2026-10-08）：改址一点即生效、也没有成功提示——
+   * 而它改的是"货寄到哪"，写错就是寄丢。先核对一遍新地址再提交，与发货 / 退款同口径。
+   */
+  const [confirming, setConfirming] = useState(false);
 
   const gate = addressGate(order);
 
-  const save = async (): Promise<void> => {
+  const ask = (): void => {
     const check = addressFormErrors(form);
     setErrors(check.errors);
     if (!check.ok) {
       setError(check.first);
       return;
     }
+    setError('');
+    setConfirming(true);
+  };
+
+  const save = async (): Promise<void> => {
     setBusy(true);
     try {
       await updateOrderAddress(api, id, toAddressInput(form));
       setError('');
-      onDone();
+      setConfirming(false);
+      onDone('收货地址已更新（改前地址已归档，可在事件里查）');
     } catch (e) {
       // ⚠️ 失败保留已填内容：清了表单等于让运营把七个字段重新输一遍
       setError(e instanceof ApiError ? e.message : String(e));
@@ -80,14 +91,34 @@ export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormPro
           <input
             className="input"
             value={form[f]}
-            onChange={(e) => setForm((s) => ({ ...s, [f]: e.target.value }))}
+            onChange={(e) => {
+              setConfirming(false);
+              setForm((s) => ({ ...s, [f]: e.target.value }));
+            }}
           />
           {errors[f] !== undefined && <span className="error">{errors[f]}</span>}
         </div>
       ))}
-      <button type="button" className="btn" disabled={!gate.ok || busy} onClick={() => void save()}>
-        {busy ? '保存中…' : '保存新地址'}
-      </button>
+      {confirming ? (
+        <div className="row2">
+          <span className="muted">
+            核对新地址：
+            {ADDRESS_FIELDS.map((k) => form[k])
+              .filter((v) => v.trim() !== '')
+              .join('，')}
+          </span>
+          <button type="button" className="btn" disabled={busy} onClick={() => void save()}>
+            {busy ? '保存中…' : '确认改址'}
+          </button>
+          <button type="button" className="link" onClick={() => setConfirming(false)}>
+            取消
+          </button>
+        </div>
+      ) : (
+        <button type="button" className="btn" disabled={!gate.ok || busy} onClick={ask}>
+          保存新地址
+        </button>
+      )}
       {!gate.ok && <p className="muted">{gate.reason}</p>}
       {error !== '' && <p className="error">{error}</p>}
     </div>

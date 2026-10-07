@@ -109,6 +109,8 @@ export function mountAdminRiskRoutes(app: Express, deps: AdminRiskRoutesDeps): v
             blocked_at: r.blockedAt.toISOString(),
             created_at: r.createdAt.toISOString(),
             order_count: r.orderCount,
+            ...(r.lastRecipient !== null ? { last_recipient: r.lastRecipient } : {}),
+            ...(r.lastContactEmail !== null ? { last_contact_email: r.lastContactEmail } : {}),
           })),
         });
       } catch (e) {

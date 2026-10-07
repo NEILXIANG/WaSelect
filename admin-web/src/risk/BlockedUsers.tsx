@@ -16,7 +16,16 @@ import { blockedListTitle } from './view.js';
  * @param refreshKey 变了就重新拉列表（P2-47）：风控页拉黑成功后递增它，新拉黑的人立刻出现在这里，
  *                   不用整页刷新——否则运营会以为拉黑没生效再点一次（第二次是 409/空操作，徒增审计噪音）。
  */
-export function BlockedUsers({ api, refreshKey = 0 }: { api: AdminApi; refreshKey?: number }) {
+export function BlockedUsers({
+  api,
+  refreshKey = 0,
+  onChanged,
+}: {
+  api: AdminApi;
+  refreshKey?: number;
+  /** 解除成功后通知父页（清掉父页上"已拉黑 …"的旧提示，三端联动 UI 模拟 2026-10-08）。 */
+  onChanged?: (() => void) | undefined;
+}) {
   const [rows, setRows] = useState<BlockedUser[]>([]);
   const [target, setTarget] = useState('');
   const [reason, setReason] = useState('');
@@ -43,6 +52,7 @@ export function BlockedUsers({ api, refreshKey = 0 }: { api: AdminApi; refreshKe
       await unblockUser(api, target, reason.trim());
       setTarget('');
       setReason('');
+      onChanged?.();
       await load();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -61,7 +71,11 @@ export function BlockedUsers({ api, refreshKey = 0 }: { api: AdminApi; refreshKe
           <tbody>
             {rows.map((u) => (
               <tr key={u.id}>
-                <td className="selectable">{u.id}</td>
+                <td className="selectable">
+                  {u.last_recipient ?? '（无订单）'}
+                  {u.last_contact_email !== undefined ? ` · ${u.last_contact_email}` : ''}
+                  <span className="muted"> · {u.id}</span>
+                </td>
                 <td>{formatJst(u.blocked_at)}</td>
                 <td>{u.order_count} 单</td>
                 <td>

@@ -18,7 +18,7 @@ import { createIds } from './entities.js';
 import { createRng } from './rng.js';
 import { insertBundle } from './seed-bundle.js';
 import { demoShop, fullCatalog, TIER_REDLINE_CASES, tierBoundaryCases } from './scenarios.js';
-import { pickTier, SHIPPING_TIERS } from './catalog.js';
+import { JP_PRODUCTS, pickTier, SHIPPING_TIERS } from './catalog.js';
 
 let db: Db;
 beforeAll(async () => {
@@ -74,6 +74,24 @@ describe('场景整体入库（FK 与 JSONB 列序）', () => {
     const rates = await db`select count(*)::int as n from shipping_rates`;
     expect(Number(products[0]?.n)).toBe(4);
     expect(Number(rates[0]?.n)).toBe(SHIPPING_TIERS.length);
+  });
+});
+
+describe('目录场景：每件商品的文案属于它自己（三端联动模拟 2026-10-08）', () => {
+  it('🔴 why / maker / tags 与同名素材一致（原先落回 makeProduct 随机抽的另一件：香蕉蛋糕配化妆水的推荐语）', () => {
+    for (const seedName of ['a', 'b', 'c']) {
+      const bundle = fullCatalog(createRng(seedName), createIds(seedName));
+      for (const p of bundle.products) {
+        const src = JP_PRODUCTS.find((s) => s.title === p.title);
+        expect(src, p.title).toBeDefined();
+        expect(p.why, p.title).toBe(src?.why);
+        expect(p.maker, p.title).toBe(src?.maker === '' ? null : src?.maker);
+        expect(p.tags, p.title).toEqual(src?.tags);
+      }
+      expect(new Set(bundle.shippingRates.map((r) => r.carrier))).toEqual(
+        new Set(['Japan Post EMS']),
+      );
+    }
   });
 });
 

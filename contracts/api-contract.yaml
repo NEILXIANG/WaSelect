@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.39
+  version: 0.6.40
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -444,6 +444,12 @@ info:
       ① `Quote` 增 `lines`（逐行**当前**单价）：小程序购物车据此刷新加购时的快照价——店家改价后同一屏
          "行价 / 商品合计"对不上。只读展示，不参与计价（钱仍以 items_jpy / total_jpy 为准）。
       ② `SalesPause`（GET）增 `actor_email`：停售状态行能看出是哪位管理员操作的（原先只有 admin:<内部 id>）。
+    0.6.40（AJ-389：管理端设计审视——搜索、低库存、可读的审计与风控）：
+      ① `GET /admin/products` 增 `keyword`（商品名 / 日文名 / JAN 码，字面匹配不区分大小写，上限 SEARCH_KEYWORD_MAX_LENGTH）
+         与 `low_stock=true`（只出库存 ≤ shared LOW_STOCK_THRESHOLD = 5）；`low_stock` 非 true/false → 40001。
+      ② `GET /admin/users?blocked=true` 行增 `last_recipient` / `last_contact_email`（最近一单的收件人与联系邮箱，没有时省略）。
+      ③ `GET /admin/audit` 行增 `actor_email`；`actor` 含 @ 时按管理员邮箱筛（不区分大小写）。
+      ④ `GET /admin/orders/{id}` 的 `items[].image`：商品**当前**首图（行项目快照不存图），商品无图时省略。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -714,7 +720,7 @@ paths:
   /admin/products:
     get:
       summary: 商品列表（管理端；status 非法或 page/size 非法 → 40001）
-      parameters: [{name: status, in: query, schema: {type: string, enum: [active, offline]}}, {name: page, in: query, schema: {type: integer, default: 1}}, {name: size, in: query, schema: {type: integer, default: 50, minimum: 1, maximum: 100}}]
+      parameters: [{name: keyword, in: query, schema: {type: string}, description: '0.6.40：商品名 / 日文名 / JAN 码，字面匹配、不区分大小写'}, {name: low_stock, in: query, schema: {type: string, enum: ['true', 'false']}, description: '0.6.40：true = 只出库存 ≤ LOW_STOCK_THRESHOLD（5）'}, {name: status, in: query, schema: {type: string, enum: [active, offline]}}, {name: page, in: query, schema: {type: integer, default: 1}}, {name: size, in: query, schema: {type: integer, default: 50, minimum: 1, maximum: 100}}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminProduct'}}, total: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
     post:
       summary: 管理员建商品（响应带 id：前端用它打后续的 PUT /{id}）
@@ -791,7 +797,7 @@ paths:
       summary: 已拉黑用户列表（0.6.36 / AJ-384；解除拉黑的入口）
       description: '目前只支持 blocked=true（其它取值 40001）。按拉黑时间倒序，最多 200 条。只给 id / 时刻 / 订单数，不给 openid 等身份字段。'
       parameters: [{name: blocked, in: query, required: true, schema: {type: string, enum: ['true']}}]
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [items], properties: {items: {type: array, items: {type: object, required: [id, blocked_at, created_at, order_count], properties: {id: {type: string}, blocked_at: {type: string, format: date-time}, created_at: {type: string, format: date-time}, order_count: {type: integer}}}}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [items], properties: {items: {type: array, items: {type: object, required: [id, blocked_at, created_at, order_count], properties: {last_recipient: {type: string, description: '0.6.40：最近一单的收件人'}, last_contact_email: {type: string, description: '0.6.40：最近一单的联系邮箱'}, id: {type: string}, blocked_at: {type: string, format: date-time}, created_at: {type: string, format: date-time}, order_count: {type: integer}}}}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/users/{id}/unblock:
     post:
       summary: 解除拉黑（0.6.36 / AJ-384）
@@ -820,7 +826,7 @@ paths:
     get:
       summary: 运营日志——管理员操作审计分页（0.6.32，剩余清单 3-2）
       description: 按 created_at 倒序。`actor` / `target` 精确过滤（非字符串或空串 → 40001，不静默当成"不过滤"）。🈲 不下发 before / after（改动前后的业务快照可能含地址等业务数据；要看细节去库里按 id 查）。只读：审计表 append-only。
-      parameters: [{name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}, {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}, {name: actor, in: query, schema: {type: string}, description: '如 admin:u-xxx / cli:admin-create'}, {name: target, in: query, schema: {type: string}, description: '如订单 id / 商品 id'}]
+      parameters: [{name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}, {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}, {name: actor, in: query, schema: {type: string}, description: '如 admin:u-xxx / cli:admin-create；0.6.40 起含 @ 时按管理员邮箱筛'}, {name: target, in: query, schema: {type: string}, description: '如订单 id / 商品 id'}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [total, items], properties: {total: {type: integer}, items: {type: array, items: {$ref: '#/components/schemas/AdminAuditEntry'}}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/exports/{kind}:
     get:
@@ -900,7 +906,7 @@ components:
     ChannelView: {type: object, required: [channel, entryMode, label], properties: {channel: {type: string, description: '通道 key（任意字符串：新增支付方式不需要改本契约的枚举）'}, entryMode: {type: string, enum: [in_app, copylink, redirect], description: 'in_app=小程序内直接调起；copylink=复制链接到外部浏览器（D-49：Stripe Checkout 托管页）；redirect=302 跳转'}, label: {type: string, description: 展示名（外置文案，前端不写死）}, icon: {type: string, description: 图标 key（同上）}}}
     PaymentIntent: {type: object, properties: {channel: {type: string, description: '通道 key（同 POST /orders/{id}/pay：任意字符串，见 x-payment-channels）'}, charge: {type: object, properties: {currency: {type: string, enum: [JPY, USD]}, amount: {type: integer}}}, payload: {type: object, additionalProperties: true, description: 'wechat: wx.requestPayment 五参数；stripe: {pay_url, expires_at}（D-49 短链）；mock: {auto, orderId, amountJpy, currency}——auto 为布尔：仅审核模式（服务端会自动确认、响应返回时订单已 paid）为 true，否则 false（0.6.11 / AJ-179；0.5.6 起的 auto:true 恒真已废）'}, expires_at: {type: string, format: date-time}}}
     BannerInput: {type: object, required: [image_key], properties: {image_key: {type: string}, link_type: {type: string, enum: [none, product, category], default: none}, link_id: {type: string, description: 'link_type ≠ none 时必填（缺 → 40001 link_id_required）'}, sort: {type: integer, default: 0, minimum: 0}, active: {type: boolean, default: true}, starts_at: {type: string, format: date-time}, ends_at: {type: string, format: date-time}}}
-    AdminAuditEntry: {type: object, description: '0.6.32：管理员操作审计一行（不含 before / after）。status_code 缺失 = 当时没记（CLI 路径或迁移 025 之前）', required: [id, actor, action, created_at], properties: {id: {type: integer}, actor: {type: string}, action: {type: string}, target: {type: string}, status_code: {type: integer}, trace_id: {type: string}, created_at: {type: string, format: date-time}}}
+    AdminAuditEntry: {type: object, description: '0.6.32：管理员操作审计一行（不含 before / after）。status_code 缺失 = 当时没记（CLI 路径或迁移 025 之前）', required: [id, actor, action, created_at], properties: {id: {type: integer}, actor: {type: string}, actor_email: {type: string, description: '0.6.40：actor 为 admin:<id> 时的管理员邮箱；CLI / 已删账号省略'}, action: {type: string}, target: {type: string}, status_code: {type: integer}, trace_id: {type: string}, created_at: {type: string, format: date-time}}}
     Banner: {allOf: [{$ref: '#/components/schemas/BannerInput'}, {type: object, properties: {id: {type: string}, image: {type: string, description: 'img.<domain> 完整 URL'}, updated_at: {type: string, format: date-time, description: '0.6.30：仅 GET /admin/banners 回显，作为 PUT 的 expected_updated_at'}}}]}
     Dispute: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, payment_id: {type: string}, dispute_id: {type: string}, dispute_status: {type: string, enum: [open, won, lost, withdrawn], description: 'withdrawn（0.6.13 / B1 AJ-193）= 机构撤回、未进入正式拒付（查询函 warning_closed / Radar prevented）：解除 has_dispute 限制、不计输赢。lost 是唯一保持限制的结案结果'}, dispute_amount: {type: integer, description: '**最小货币单位**（同 charge_amount）：3350 = $33.50（B43 / AJ-214）'}, charge_currency: {type: string}, opened_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time}}}
     FxRate: {type: object, properties: {quote: {type: string}, rate: {type: number}, raw_rate: {type: number}, buffer: {type: number}, effective_from: {type: string, format: date-time}, is_current: {type: boolean, description: '0.6.19：这一行是否**当前已生效**，由服务端按自己的时钟判定（`effective_from <= now` 的同币种最新一行）。同币种至多一行为 true；全部行都未生效时为 false。🈲 消费方不得拿本机时钟自行推断——管理员电脑的时钟偏差会让"刚保存的立即生效行"被当成未来行'}}}

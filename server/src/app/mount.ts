@@ -24,7 +24,8 @@
  * @see main.ts（调用方，生产装配）；routes.contract.test.ts（调用方，路由快照）；
  *      docs/I1阶段开发实施方案.md §3.1
  */
-import type { Express } from 'express';
+import express, { type Express } from 'express';
+import { devImageDir } from '../adapters/storage.js';
 import { mockAutoConfirmEnabled, type AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
 import type { Db } from '../adapters/db.js';
@@ -423,6 +424,11 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     clock,
   });
 
+  // ── 开发期本地图片（三端联动模拟 2026-10-08）：fs 驱动落盘的图由 API 进程直接提供，仅 development ──
+  const devImg = devImageDir(config);
+  if (devImg !== null) {
+    app.use('/dev-img', express.static(devImg, { index: false, fallthrough: false, maxAge: '1h' }));
+  }
   // ── 管理端上传（I2-U-I4）：storage 由依赖袋传入（测试用 memory 驱动断言 put）；
   //    null = 生产未配置，路由照挂、调用时 50000 storage_not_configured（wechat 同款）──
   mountAdminUploadRoutes(app, {

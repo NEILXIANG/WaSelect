@@ -155,7 +155,7 @@ describe('风控页：确认面板说清全部后果', () => {
     const text = panel?.textContent ?? '';
     expect(text).toContain('未付款');
     expect(text).toContain('取消');
-    expect(text).toContain('没有解除入口');
+    expect(text).toContain('不会恢复');
   });
 
   it('🔴 拉黑成功后的提示同样提到"已一并取消"（结果不是只有"不能下单"这一件事）', async () => {

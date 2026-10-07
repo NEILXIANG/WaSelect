@@ -240,9 +240,15 @@ describe('商品编辑：保存撞上 40914（ADM3-02）', () => {
     await typeInto(field(el, '重量（克）'), '540');
     await typeInto(field(el, '英文报关品名（必填，D-39）'), 'kitchen knife');
     await typeInto(field(el, 'HS 编码（必填）'), '8211.91');
+    // 新建库存默认留空、必填（三端联动 UI 模拟 2026-10-08）：不填先被拦
+    expect(field(el, '库存').value).toBe('');
+    await click(button(el, '保存'));
+    expect(calls).toHaveLength(0);
+    await typeInto(field(el, '库存'), '30');
     await click(button(el, '保存'));
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.body).toMatchObject({ stock: 30 });
     expect(calls[0]?.body).not.toHaveProperty('expected_updated_at');
     expect(doneCount).toBe(1);
   });

@@ -24,6 +24,7 @@ import {
   resolveAddressId,
   submitGate,
 } from './index.vm.js';
+import { namedItemError } from './index.vm.js';
 
 const ITEMS = [
   { productId: 'p-shiro-cleansing-oil', qty: 2, title: '資生堂 クレンジングオイル 200ml' },
@@ -355,5 +356,26 @@ describe('checkoutItems / clearsCartAfterOrder（4-4）', () => {
   it('🔴 建单成功后：普通模式清车；buynow 模式**不**清车（购物车里的东西用户没打算现在买）', () => {
     expect(clearsCartAfterOrder('')).toBe(true);
     expect(clearsCartAfterOrder('buynow')).toBe(false);
+  });
+});
+
+describe('namedItemError（U9，三端联动模拟 2026-10-08）', () => {
+  const items = [
+    { productId: 'p-1', title: '东京香蕉蛋糕 8 个装', qty: 1 },
+    { productId: 'p-2', title: '京都宇治抹茶粉 100g', qty: 1 },
+  ];
+  it('🔴 40401 / 40901 带 product_id → 点名是哪一件', () => {
+    expect(namedItemError({ code: 40401, data: { product_id: 'p-2' } }, items)).toBe(
+      '「京都宇治抹茶粉 100g」已下架或不存在，请返回购物车移除后再下单',
+    );
+    expect(namedItemError({ code: 40901, data: { product_id: 'p-1' } }, items)).toContain(
+      '「东京香蕉蛋糕 8 个装」库存不足',
+    );
+  });
+  it('其它码 / 没带 id / id 不在这次的商品里 → 空串（沿用通用文案，不猜）', () => {
+    expect(namedItemError({ code: 40905, data: { product_id: 'p-1' } }, items)).toBe('');
+    expect(namedItemError({ code: 40401 }, items)).toBe('');
+    expect(namedItemError({ code: 40401, data: { product_id: 'p-x' } }, items)).toBe('');
+    expect(namedItemError(null, items)).toBe('');
   });
 });

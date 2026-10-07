@@ -16,6 +16,8 @@
  *
  * @see scripts/dev-up-lib.ts（全部逻辑与理由）；scripts/seed-lib.ts（闸门与灌数据）
  */
+import { attachDevImages } from './dev-images-lib.js';
+import { createFsStorage } from '../server/src/adapters/storage-fs.js';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -105,12 +107,38 @@ async function main(): Promise<void> {
       const db = createDb({ url: databaseUrl, max: 1 });
       try {
         const maxAge = Number(process.env.FX_MAX_AGE_HOURS ?? 72);
-        return await ensureDevFxStep(db, Number.isFinite(maxAge) && maxAge > 0 ? maxAge : 72);
+        const buf = Number(process.env.FX_BUFFER_RATE ?? 0.03);
+        return await ensureDevFxStep(
+          db,
+          Number.isFinite(maxAge) && maxAge > 0 ? maxAge : 72,
+          Number.isFinite(buf) && buf >= 0 ? buf : 0.03,
+        );
       } finally {
         await closeDb(db);
       }
     },
   });
+
+  // 开发商品图（三端联动模拟 2026-10-08）：种子商品没有图，页面上只有占位图。只在本地盘存储时做。
+  const driver = process.env.STORAGE_DRIVER ?? '';
+  if (driver === '' || driver === 'fs') {
+    steps.push({
+      name: '开发商品图',
+      hint: '单独跑 npm run dev:images；图片经 /dev-img 提供，需 IMG_BASE_URL=http://localhost:3000/dev-img',
+      run: async () => {
+        const db = createDb({ url: databaseUrl, max: 1 });
+        try {
+          const n = await attachDevImages(
+            db,
+            createFsStorage(process.env.STORAGE_FS_DIR ?? './var/uploads'),
+          );
+          return n === 0 ? '商品都已有图' : `已为 ${String(n)} 件商品生成图片`;
+        } finally {
+          await closeDb(db);
+        }
+      },
+    });
+  }
 
   if (opts.serve) {
     steps.push({

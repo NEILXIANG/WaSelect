@@ -90,6 +90,9 @@ export interface BlockedUser {
   id: string;
   blocked_at: string;
   order_count: number;
+  /** 最近一单的收件人 / 联系邮箱（契约 0.6.40；没有时缺省）。 */
+  last_recipient?: string;
+  last_contact_email?: string;
 }
 
 /** `GET /admin/users?blocked=true`：形状不对的行丢掉（不让一行脏数据拖垮整张表）。 */
@@ -98,7 +101,19 @@ export async function listBlockedUsers(api: AdminApi): Promise<BlockedUser[]> {
   const items = (res as { items?: unknown } | null)?.items;
   return (Array.isArray(items) ? items : []).flatMap((r: Record<string, unknown>) =>
     typeof r?.['id'] === 'string' && typeof r['blocked_at'] === 'string'
-      ? [{ id: r['id'], blocked_at: r['blocked_at'], order_count: Number(r['order_count'] ?? 0) }]
+      ? [
+          {
+            id: r['id'],
+            blocked_at: r['blocked_at'],
+            order_count: Number(r['order_count'] ?? 0),
+            ...(typeof r['last_recipient'] === 'string'
+              ? { last_recipient: r['last_recipient'] }
+              : {}),
+            ...(typeof r['last_contact_email'] === 'string'
+              ? { last_contact_email: r['last_contact_email'] }
+              : {}),
+          },
+        ]
       : [],
   );
 }

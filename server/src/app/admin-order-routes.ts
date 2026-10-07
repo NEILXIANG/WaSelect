@@ -35,6 +35,7 @@ import type { Db } from '../adapters/db.js';
 import { withTransaction } from '../adapters/db.js';
 import type { Logger } from '../logger.js';
 import type { AppConfig } from '../config.js';
+import { toImageSet } from './product-routes.js';
 import type { Clock } from '../ports/clock.js';
 import type { PaymentRegistry } from '../ports/payment.js';
 import type { EventBus } from '../ports/events.js';
@@ -155,8 +156,11 @@ function toListItem(
  *      前端据此显示"未记录"（而不是空白，空白会被读成"这个值就是空的"）。
  *      ⚠️ 迁移 021 之前的历史订单行三列都是 NULL → 全部走这个分支。
  */
-function toAdminOrderItem(i: AdminOrderItemRow): Record<string, unknown> {
+function toAdminOrderItem(i: AdminOrderItemRow, imgBase?: string): Record<string, unknown> {
+  // 商品现图（三端联动 UI 模拟 2026-10-08）：运营对照实物发货 / 采购要看图，详情原先只有文字
+  const image = i.first_image === null ? null : toImageSet(i.first_image, imgBase);
   return {
+    ...(image !== null ? { image } : {}),
     product_id: i.product_id,
     title: i.title_snapshot,
     qty: i.qty,
@@ -320,7 +324,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         res.json({
           ...toAdminOrder(
             order,
-            items.map((i) => toAdminOrderItem(i)),
+            items.map((i) => toAdminOrderItem(i, deps.config.IMG_BASE_URL)),
             payments.map((p) => ({
               provider: p.provider,
               status: p.status,

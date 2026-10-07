@@ -48,7 +48,8 @@ export interface ProductFormPageProps {
   /** 编辑态的原始数据（列表页带过来，@see 文件头）。 */
   source: AdminProductLike | null;
   /** 完成 / 取消（回列表）。 */
-  onDone: () => void;
+  /** 结束编辑；`message` 非空 = 保存成功的提示（列表页顶部显示一次，三端联动 UI 模拟 2026-10-08）。 */
+  onDone: (message?: string) => void;
 }
 
 export function ProductFormPage({
@@ -130,7 +131,11 @@ export function ProductFormPage({
         }
         await updateProduct(api, productId, body, expectedUpdatedAt);
       }
-      onDone();
+      onDone(
+        productId === null
+          ? `已创建「${submitted.title.trim()}」`
+          : `已保存「${submitted.title.trim()}」`,
+      );
     } catch (e) {
       // @see @limitation 一：失败保留表单
       setError(e instanceof ApiError ? e.message : String(e));
@@ -204,7 +209,7 @@ export function ProductFormPage({
     <section className="panel">
       <header className="panel-head">
         <h1 className="title">{productId === null ? '新建商品' : '编辑商品'}</h1>
-        <button type="button" className="link" onClick={onDone}>
+        <button type="button" className="link" onClick={() => onDone()}>
           返回列表
         </button>
       </header>
@@ -364,7 +369,12 @@ export function ProductFormPage({
           onChange={(v) => set('purchaseSource', v)}
           placeholder="cosme.net"
         />
-        <Field label="商品描述" value={form.description} onChange={(v) => set('description', v)} />
+        <Field
+          label="商品描述"
+          multiline
+          value={form.description}
+          onChange={(v) => set('description', v)}
+        />
 
         {/* ── 编辑口径（020）：印在买家卡片上的内容，与下面的合规标签不是一回事 ── */}
         <Field

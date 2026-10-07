@@ -36,6 +36,27 @@ describe('auditRows', () => {
   });
 });
 
+describe('auditRows：中文操作名与操作人邮箱（三端联动 UI 模拟 2026-10-08）', () => {
+  it('认得的 action 显示中文、保留原文；有邮箱显示邮箱；认不出的原样', () => {
+    const [a, b] = auditRows([
+      {
+        id: 1,
+        actor: 'admin:adm-1',
+        actor_email: 'ops@example.com',
+        action: 'POST /admin/users/:id/unblock',
+        created_at: '',
+      },
+      { id: 2, actor: 'admin:adm-1', action: 'POST /admin/new-thing', created_at: '' },
+    ]);
+    expect([a?.actor, a?.action, a?.actionRaw]).toEqual([
+      'ops@example.com',
+      '解除拉黑',
+      'POST /admin/users/:id/unblock',
+    ]);
+    expect([b?.actor, b?.action]).toEqual(['admin:adm-1', 'POST /admin/new-thing']);
+  });
+});
+
 describe('reconciliationView', () => {
   it('没跑过 → 明确说"还没有对账记录"', () => {
     expect(reconciliationView(null)).toEqual({ headline: '还没有对账记录', ok: false, lines: [] });

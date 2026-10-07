@@ -20,6 +20,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { UPLOAD_ACCEPT, uploadImage } from '../api/upload.js';
+import { PRODUCT_CATEGORY } from '@waselect/shared';
+import { listProducts } from '../products/api.js';
+import { CATEGORY_LABELS } from '../products/view.js';
 import {
   createBanner,
   deleteBanner,
@@ -62,6 +65,13 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
   const [conflict, setConflict] = useState(false);
   const [latest, setLatest] = useState<BannerLike | null>(null);
   /**
+   * 跳转目标的候选商品（三端联动 UI 模拟 2026-10-08）：原先要运营手填商品内部 id——列表上根本看不到 id。
+   * 取前 100 件（管理端商品量在百级，与 findProductById 同口径）；取不到就退回手填。
+   */
+  const [products, setProducts] = useState<{ id: string; title: string; online: boolean }[]>([]);
+  /** 当前表单图片的预览（上传结果或正在编辑那条的现图）。 */
+  const [preview, setPreview] = useState('');
+  /**
    * 当前表单对应哪一条（'new' = 新建）。上传完成时拿它核对（A-07）：
    * 上传要几秒，期间运营可能点了另一条的「编辑」；不核对的话，图会写进**另一条**的表单。
    */
@@ -72,9 +82,18 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     setLoading(true);
     setError('');
     try {
-      const items = await listBanners(api);
+      const [items, plist] = await Promise.all([
+        listBanners(api),
+        listProducts(api, { size: 100 }).catch(() => ({ items: [], total: 0 })),
+      ]);
+      const opts = plist.items.map((p) => ({
+        id: String(p['id']),
+        title: String(p['title'] ?? ''),
+        online: p['status'] === 'active',
+      }));
+      setProducts(opts);
       setRaw(items);
-      setRows(bannerRows(items));
+      setRows(bannerRows(items, (id) => opts.find((o) => o.id === id)?.title));
     } catch (e) {
       // ⚠️ 失败不清列表（同其它页）：只显示错误
       setError(e instanceof ApiError ? e.message : String(e));
@@ -97,6 +116,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     setEditing(null);
     setForm(emptyBannerForm());
     setErrors({});
+    setPreview('');
   };
 
   const startEdit = (b: BannerLike): void => {
@@ -104,6 +124,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     setEditing(b);
     setForm(bannerFormModel(b));
     setErrors({});
+    setPreview(typeof b['image'] === 'string' ? b['image'] : '');
   };
 
   const save = async (): Promise<void> => {
@@ -195,6 +216,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
         return;
       }
       setForm((s) => ({ ...s, imageKey: set.image_key }));
+      setPreview(set.card ?? set.detail ?? '');
       setErrors((e) => ({ ...e, imageKey: '' }));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -289,53 +311,112 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
         </span>
 
         <div className="field">
-          <span className="label">图片（上传后得到 image_key，不支持手填）</span>
+          <span className="label">图片（建议横图 2.5:1，如 1500×600）</span>
           <input
             className="input"
             type="file"
             accept={UPLOAD_ACCEPT}
             onChange={(e) => void onPickFile(e.target.files?.[0])}
           />
-          <span className="muted">{form.imageKey === '' ? '未上传' : form.imageKey}</span>
+          {preview !== '' ? (
+            <img className="banner-preview" src={preview} alt="Banner 预览" />
+          ) : (
+            <span className="muted">{form.imageKey === '' ? '未上传' : '已上传（暂无预览）'}</span>
+          )}
           {errors['imageKey'] !== undefined && <span className="error">{errors['imageKey']}</span>}
         </div>
 
+        {/* 每个输入都带标签（三端联动 UI 模拟 2026-10-08：原先排序框只写"0"、两个时间框分不清起止） */}
         <div className="row2">
-          <select
-            className="input"
-            value={form.linkType}
-            onChange={(e) => setForm((s) => ({ ...s, linkType: e.target.value }))}
-          >
-            {LINK_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {LINK_LABELS[t]}
-              </option>
-            ))}
-          </select>
-          <input
-            className="input"
-            placeholder="目标 id（商品 id / 分类 key）"
-            value={form.linkId}
-            onChange={(e) => setForm((s) => ({ ...s, linkId: e.target.value }))}
-          />
-          <input
-            className="input"
-            placeholder="排序（小的在前）"
-            value={form.sort}
-            onChange={(e) => setForm((s) => ({ ...s, sort: e.target.value }))}
-          />
-          <input
-            className="input"
-            type="datetime-local"
-            value={form.startsAt}
-            onChange={(e) => setForm((s) => ({ ...s, startsAt: e.target.value }))}
-          />
-          <input
-            className="input"
-            type="datetime-local"
-            value={form.endsAt}
-            onChange={(e) => setForm((s) => ({ ...s, endsAt: e.target.value }))}
-          />
+          <label className="field">
+            <span className="label">点击跳转到</span>
+            <select
+              className="input"
+              value={form.linkType}
+              onChange={(e) => setForm((s) => ({ ...s, linkType: e.target.value, linkId: '' }))}
+            >
+              {LINK_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {LINK_LABELS[t]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {form.linkType === 'product' && products.length > 0 && (
+            <label className="field">
+              <span className="label">目标商品</span>
+              <select
+                className="input"
+                value={form.linkId}
+                onChange={(e) => setForm((s) => ({ ...s, linkId: e.target.value }))}
+              >
+                <option value="">请选择商品</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.title}
+                    {p.online ? '' : '（已下架）'}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {form.linkType === 'category' && (
+            <label className="field">
+              <span className="label">目标分类</span>
+              <select
+                className="input"
+                value={form.linkId}
+                onChange={(e) => setForm((s) => ({ ...s, linkId: e.target.value }))}
+              >
+                <option value="">请选择分类</option>
+                {PRODUCT_CATEGORY.map((c) => (
+                  <option key={c} value={c}>
+                    {CATEGORY_LABELS[c]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {form.linkType === 'product' && products.length === 0 && (
+            <label className="field">
+              <span className="label">目标商品 id（商品列表取不到时手填）</span>
+              <input
+                className="input"
+                value={form.linkId}
+                onChange={(e) => setForm((s) => ({ ...s, linkId: e.target.value }))}
+              />
+            </label>
+          )}
+        </div>
+        <div className="row2">
+          <label className="field">
+            <span className="label">排序（数字小的排前面）</span>
+            <input
+              className="input"
+              inputMode="numeric"
+              placeholder="排序（小的在前）"
+              value={form.sort}
+              onChange={(e) => setForm((s) => ({ ...s, sort: e.target.value }))}
+            />
+          </label>
+          <label className="field">
+            <span className="label">开始时间（JST，留空 = 立即）</span>
+            <input
+              className="input"
+              type="datetime-local"
+              value={form.startsAt}
+              onChange={(e) => setForm((s) => ({ ...s, startsAt: e.target.value }))}
+            />
+          </label>
+          <label className="field">
+            <span className="label">结束时间（JST，留空 = 不结束）</span>
+            <input
+              className="input"
+              type="datetime-local"
+              value={form.endsAt}
+              onChange={(e) => setForm((s) => ({ ...s, endsAt: e.target.value }))}
+            />
+          </label>
           <label className="label">
             <input
               type="checkbox"

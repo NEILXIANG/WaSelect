@@ -156,6 +156,33 @@ describe('GET /api/v1/admin/audit（3-2）', () => {
     }
   });
 
+  it('🔴 带操作人邮箱；按邮箱（不区分大小写）筛（三端联动 UI 模拟 2026-10-08）', async () => {
+    const tk = await bearer(); // 建了 u-admin（u-admin@example.com）
+    await audit(1, 'admin:u-admin', 'PUT /admin/products/:id', '2026-10-01T00:00:00Z');
+    await audit(2, 'cli:admin-create', 'CLI admin.create', '2026-10-02T00:00:00Z');
+    const { url, close } = await buildServer();
+    try {
+      const all = await call(url, 'GET', '/api/v1/admin/audit', undefined, tk);
+      const items = (all.body as { items: Array<{ actor: string; actor_email?: string }> }).items;
+      expect(items.find((i) => i.actor === 'admin:u-admin')?.actor_email).toBe(
+        'u-admin@example.com',
+      );
+      expect(items.find((i) => i.actor === 'cli:admin-create')).not.toHaveProperty('actor_email');
+      const byEmail = await call(
+        url,
+        'GET',
+        '/api/v1/admin/audit?actor=U-Admin@Example.com',
+        undefined,
+        tk,
+      );
+      expect(
+        (byEmail.body as { items: Array<{ actor: string }> }).items.map((i) => i.actor),
+      ).toEqual(['admin:u-admin']);
+    } finally {
+      await close();
+    }
+  });
+
   it('size 超上限 / page 非法 → 40001；非管理员 → 403', async () => {
     const { url, close } = await buildServer();
     try {

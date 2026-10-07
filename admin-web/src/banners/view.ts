@@ -16,6 +16,7 @@
  *
  * @see ../../../contracts/api-contract.yaml（BannerInput / Banner）；../format.ts
  */
+import { CATEGORY_LABELS } from '../products/view.js';
 import { formatJst, toIsoJst } from '../format.js';
 
 /** 契约 `BannerInput.link_type` 枚举（单测与契约双向比对）。 */
@@ -88,7 +89,14 @@ export interface BannerRow {
 }
 
 /** `Banner[]` → 列表行（按 sort 升序）。 */
-export function bannerRows(items: unknown): BannerRow[] {
+/**
+ * @param titleOf 商品 id → 商品名（三端联动 UI 模拟 2026-10-08：列表原先只显示 `商品：<长 id>`，运营认不出是哪件）；
+ *        查不到时退回显示 id（商品被删 / 列表没取到），不编名字。
+ */
+export function bannerRows(
+  items: unknown,
+  titleOf: (productId: string) => string | undefined = () => undefined,
+): BannerRow[] {
   if (!Array.isArray(items)) return [];
   return items
     .filter((b): b is Record<string, unknown> => typeof b === 'object' && b !== null)
@@ -103,7 +111,13 @@ export function bannerRows(items: unknown): BannerRow[] {
         linkText:
           type === 'none'
             ? LINK_LABELS.none
-            : `${(LINK_LABELS as Record<string, string>)[type] ?? type}：${id}`,
+            : `${(LINK_LABELS as Record<string, string>)[type] ?? type}：${
+                type === 'product'
+                  ? (titleOf(id) ?? id)
+                  : type === 'category'
+                    ? ((CATEGORY_LABELS as Record<string, string>)[id] ?? id)
+                    : id
+              }`,
         sortText: Number.isInteger(b['sort']) ? String(b['sort']) : '0',
         active: b['active'] !== false,
         periodText: [formatJst(b['starts_at']), formatJst(b['ends_at'])]

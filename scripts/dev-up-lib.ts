@@ -27,6 +27,7 @@
  * @see scripts/dev-up.ts（CLI 入口）；scripts/seed-lib.ts（闸门与灌数据）；docs/地基搭建清单.md F17
  */
 import { execFile } from 'node:child_process';
+import { applyFxBuffer } from '../server/src/domain/fx-input.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createDb, type Db } from '../server/src/adapters/db.js';
@@ -381,13 +382,23 @@ export async function runSteps(
 const DEV_FX: Readonly<Record<string, number>> = { USD: 0.0068, CNY: 0.0495 };
 
 /**
- * 没有或已过期的币种补一条开发汇率（effective_from = now，buffer = 0，created_by = dev-up）。
+ * 没有或已过期的币种补一条开发汇率（effective_from = now，按 FX_BUFFER_RATE 套缓冲，created_by = dev-up）。
  * @returns 给终端看的一句话
  * @limitation 只在 `npm run dev` 里调用；生产汇率只由管理端录入（没有自动拉取，见缺口清单）。
  */
-export async function ensureDevFxStep(db: Db, maxAgeHours: number): Promise<string> {
+export async function ensureDevFxStep(
+  db: Db,
+  maxAgeHours: number,
+  /**
+   * 缓冲比例（= FX_BUFFER_RATE，缺省 0.03）。三端联动 UI 模拟 2026-10-08：原先写死 buffer = 0、生效汇率 = 原始汇率，
+   * 管理端汇率表显示"缓冲 0"，本地报价比生产口径低 3%——本地看到的价格不是线上会看到的价格。
+   */
+  buffer = 0.03,
+): Promise<string> {
   const added: string[] = [];
-  for (const [quote, rate] of Object.entries(DEV_FX)) {
+  for (const [quote, raw] of Object.entries(DEV_FX)) {
+    // 与管理端录入同一个换算（domain/fx-input.ts applyFxBuffer），不另写一份
+    const rate = applyFxBuffer(raw, buffer);
     const fresh = await db`
       select 1 from fx_rates
        where quote = ${quote} and effective_from <= now()
@@ -396,7 +407,7 @@ export async function ensureDevFxStep(db: Db, maxAgeHours: number): Promise<stri
     if (fresh.length > 0) continue;
     await db`
       insert into fx_rates (quote, rate, raw_rate, buffer, effective_from, created_by)
-      values (${quote}, ${rate}, ${rate}, 0, now(), 'dev-up')`;
+      values (${quote}, ${rate}, ${raw}, ${buffer}, now(), 'dev-up')`;
     added.push(quote);
   }
   return added.length === 0

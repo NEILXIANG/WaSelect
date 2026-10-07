@@ -116,6 +116,12 @@ describe('dev-up 真库全链路：建库 → 迁移 → 灌数据', () => {
       const fresh = await db<{ quote: string }[]>`
         select quote from fx_rates where effective_from > now() - interval '72 hours' order by quote`;
       expect(fresh.map((r) => r.quote)).toEqual(['CNY', 'USD']);
+      // 套缓冲（三端联动 UI 模拟 2026-10-08）：生效汇率 = 原始 × (1 + 0.03)，与管理端录入同一口径
+      const [usd] = await db`select rate, raw_rate, buffer from fx_rates
+                              where quote = 'USD' and created_by = 'dev-up'`;
+      expect([Number(usd?.['raw_rate']), Number(usd?.['buffer']), Number(usd?.['rate'])]).toEqual([
+        0.0068, 0.03, 0.007004,
+      ]);
       expect(await ensureDevFxStep(db, 72)).toContain('无需补录');
       expect((await db`select 1 from fx_rates`).length).toBe(3);
     } finally {

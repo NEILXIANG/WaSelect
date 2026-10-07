@@ -115,7 +115,47 @@ body {
 
 .filters {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--ws-space-sm);
+}
+
+/* 三端联动模拟 2026-10-08（U2）：窄窗口（如分屏后的 800px）下筛选区挤压——"含测试单"被挤成竖排、输入框被拉高。
+   输入框可伸缩但有下限，标签与按钮不折行。 */
+.filters > .input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.filters > label,
+.filters > .btn {
+  white-space: nowrap;
+}
+
+/* 商品列表首图缩略图（三端联动模拟 2026-10-08） */
+.thumb {
+  display: inline-block;
+  width: calc(var(--ws-space) * 3);
+  height: calc(var(--ws-space) * 3);
+  object-fit: cover;
+  border-radius: var(--ws-radius);
+  vertical-align: middle;
+}
+
+.banner-preview {
+  width: 100%;
+  max-width: calc(var(--ws-space) * 30);
+  aspect-ratio: 5 / 2;
+  object-fit: cover;
+  border-radius: var(--ws-radius);
+}
+
+.thumb-empty {
+  line-height: calc(var(--ws-space) * 3);
+  text-align: center;
+  font-size: var(--ws-font-sm);
+  color: var(--ws-color-muted);
+  border: var(--ws-border) dashed var(--ws-color-muted);
 }
 
 /* 表格：不用斑马纹（不引新色值），靠行分隔线区分 */
@@ -135,6 +175,19 @@ body {
 .table th {
   color: var(--ws-color-muted);
   font-weight: normal;
+  /* 窄窗口下表头不拆字（原先"库存""状态"被拆成上下两行） */
+  white-space: nowrap;
+}
+
+/* 窄窗口（≤ 56rem ≈ 900px）：收紧外边距，把宽度留给表格 */
+@media (max-width: 56rem) {
+  .page {
+    padding: var(--ws-space-sm);
+  }
+
+  .panel {
+    padding: var(--ws-space);
+  }
 }
 
 /* ── 表格里的次级行（商品下面的采购信息）─────────────────────────────
@@ -190,7 +243,8 @@ body {
 }
 
 .thumb-img {
-  width: calc(var(--ws-space) * 4);
+  /* Banner 是 2.5:1 横图（三端联动 UI 模拟 2026-10-08：原先裁成正方形，看不出整张图） */
+  width: calc(var(--ws-space) * 10);
   height: calc(var(--ws-space) * 4);
   object-fit: cover;
   border-radius: var(--ws-radius);

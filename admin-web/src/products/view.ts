@@ -29,6 +29,7 @@
  */
 import {
   BLOCKED_COMPLIANCE_TAG,
+  LOW_STOCK_THRESHOLD,
   COMPLIANCE_TAG,
   PRODUCT_CATEGORY,
   PRODUCT_MAX_CHARS,
@@ -79,6 +80,13 @@ export interface ProductRow {
   statusText: string;
   /** true = 当前上架（列表页据此显示"下架"而不是"上架"）。 */
   online: boolean;
+  /**
+   * 首图缩略图地址（三端联动模拟 2026-10-08：列表原先没有图，运营只能靠文字认商品）；无图为空串。
+   * 只收 http(s)——脏值不进 `<img src>`。
+   */
+  thumb: string;
+  /** 库存 ≤ shared LOW_STOCK_THRESHOLD（列表标红）。 */
+  lowStock: boolean;
 }
 
 /**
@@ -105,9 +113,20 @@ export function productRows(items: unknown): ProductRow[] {
         // 与订单页同一个格式化（千分位 + 円；非整数显示 —），P2-52
         priceText: moneyText(p['price_jpy']),
         stockText: Number.isInteger(p['stock']) ? String(p['stock']) : '—',
+        thumb: firstThumb(p['images']),
+        lowStock: Number.isInteger(p['stock']) && (p['stock'] as number) <= LOW_STOCK_THRESHOLD,
         ...statusFields(status),
       };
     });
+}
+
+/** 首图的 thumb 档（AdminProduct.images[0].thumb）；拿不到或不是 http(s) → 空串。 */
+function firstThumb(images: unknown): string {
+  const first = Array.isArray(images)
+    ? (images[0] as Record<string, unknown> | undefined)
+    : undefined;
+  const t = first?.['thumb'];
+  return typeof t === 'string' && /^https?:\/\//.test(t) ? t : '';
 }
 
 /**
@@ -129,6 +148,24 @@ function statusFields(status: ProductStatus): Pick<ProductRow, 'status' | 'statu
 export function withStatus(row: ProductRow, status: ProductStatus): ProductRow {
   return { ...row, ...statusFields(status) };
 }
+
+/**
+ * 合规标签中文名（三端联动 UI 模拟 2026-10-08：原先直接显示 liquid / quasi_drug 等代码，运营看不懂）。
+ * 键与 shared COMPLIANCE_TAG 一一对应；漏一个时界面退回显示代码（看得见，不静默）。
+ */
+export const COMPLIANCE_TAG_LABELS: Readonly<Record<string, string>> = {
+  liquid: '液体',
+  battery: '含电池',
+  cosmetic: '化妆品',
+  food: '食品',
+  flammable: '易燃品',
+  aerosol: '喷雾 / 气雾',
+  electrical: '电器',
+  quasi_drug: '医药部外品',
+  sunscreen: '防晒（SPF）',
+  children_product: '儿童用品',
+  alcohol: '含酒精',
+};
 
 /** 商品表单模型（**全字符串**：受控输入的值恒为字符串，数值在提交时转）。 */
 export interface ProductForm {
@@ -209,7 +246,9 @@ export function emptyProductForm(): ProductForm {
     priceJpy: '',
     costJpy: '',
     weightG: '',
-    stock: '0',
+    // 新建时留空（三端联动 UI 模拟 2026-10-08）：原先默认 '0'，运营点进去直接输入 30 得到 "030"，
+    // 漏填则一上架就是售罄。留空 + 必填校验（productFormErrors 已有"库存必填"）
+    stock: '',
     description: '',
     customsDescEn: '',
     originCountry: 'JP',
@@ -243,7 +282,8 @@ export function productFormModel(p: unknown): ProductForm {
     priceJpy: num('price_jpy'),
     costJpy: num('cost_jpy'),
     weightG: num('weight_g'),
-    stock: num('stock', '0'),
+    // 缺省留空（新建 = productFormModel(null)）：与 emptyProductForm 同口径，见那里的说明
+    stock: num('stock', ''),
     description: str('description'),
     customsDescEn: str('customs_desc_en'),
     originCountry: str('origin_country', 'JP'),

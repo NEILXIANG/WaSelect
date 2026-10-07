@@ -9,6 +9,7 @@
  * @why 落库断言直接查 `products` 表，不接受"响应说建了"——
  *      响应是路由自己拼的，库才是事实（§2 第 21 条：自证断言不算证据）。
  */
+import { LOW_STOCK_THRESHOLD } from '@waselect/shared';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
@@ -182,6 +183,45 @@ describe('GET /admin/products（管理端商品列表）', () => {
       expect(r.status, `${method} ${path} 疑似缺守卫`).toBe(401);
     }
     await s.close();
+  });
+});
+
+describe('GET /admin/products 搜索与低库存（三端联动 UI 模拟 2026-10-08）', () => {
+  it('🔴 keyword 按商品名 / 日文名 / JAN 码（不区分大小写）筛；low_stock=true 只出库存 ≤ LOW_STOCK_THRESHOLD 的', async () => {
+    const s = await buildServer();
+    try {
+      const tk = await adminToken();
+      const mk = async (title: string, extra: Record<string, unknown>) =>
+        fetch(`${s.url}/api/v1/admin/products`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${tk}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body({ title, ...extra })),
+        });
+      await mk('Shiroi Koibito 12', { title_ja: '白い恋人', jan_code: '4902777012345', stock: 30 });
+      await mk('南部铁器 铁壶', { stock: 3 });
+      await mk('无印良品 中性笔', { stock: LOW_STOCK_THRESHOLD });
+      const get = async (qs: string) =>
+        (await (
+          await fetch(`${s.url}/api/v1/admin/products?${qs}`, {
+            headers: { authorization: `Bearer ${tk}` },
+          })
+        ).json()) as { items: { title: string }[]; total: number };
+      expect((await get('keyword=koibito')).items.map((i) => i.title)).toEqual([
+        'Shiroi Koibito 12',
+      ]);
+      expect((await get('keyword=%E7%99%BD%E3%81%84')).total).toBe(1); // 日文名「白い」
+      expect((await get('keyword=4902777')).total).toBe(1); // JAN
+      expect((await get('keyword=100%25')).total).toBe(0); // % 不是通配符
+      const low = await get('low_stock=true');
+      expect(low.items.map((i) => i.title).sort()).toEqual(['南部铁器 铁壶', '无印良品 中性笔']);
+      expect((await get('low_stock=true&keyword=铁壶')).total).toBe(1);
+      const bad = await fetch(`${s.url}/api/v1/admin/products?low_stock=yes`, {
+        headers: { authorization: `Bearer ${tk}` },
+      });
+      expect(bad.status).toBe(400);
+    } finally {
+      await s.close();
+    }
   });
 });
 

@@ -24,6 +24,7 @@ import type { AppConfig } from '../config.js';
 import type { Clock } from '../ports/clock.js';
 import type { HttpClient } from '../ports/http-client.js';
 import type { ObjectStorage } from '../ports/storage.js';
+import { resolve as resolvePath } from 'node:path';
 import { createMemoryStorage } from './storage-memory.js';
 import { createFsStorage } from './storage-fs.js';
 import { createR2Storage } from './storage-r2.js';
@@ -59,6 +60,19 @@ function needed(value: string | undefined, name: string): string {
  * @param deps r2 驱动要用（fs / memory 不用）；传它是为了"出网与时钟由装配期决定"——
  *             适配器自己 `fetch` 等于绕过超时与重试（见 storage-r2.ts 文件头 @why）。
  */
+/**
+ * 开发期本地图片的静态目录（三端联动模拟 2026-10-08）：只在 `development` 且实际驱动是 fs 时返回绝对路径。
+ * @why 开发期上传落在本地盘，而 `IMG_BASE_URL` 指向的是线上 R2 自定义域（开发机上不存在）——
+ *      管理端、小程序拿到的图片地址全是坏链接，页面上只剩占位图，"上传好不好用"根本看不出来。
+ *      由 API 进程把这个目录挂在 `/dev-img/` 下，`IMG_BASE_URL=http://localhost:3000/dev-img` 即可看到真图。
+ * @limitation 只给 development：staging / production 一律 null（生产图片走 R2 + CDN，不经 API 进程）。
+ */
+export function devImageDir(config: AppConfig): string | null {
+  if (config.NODE_ENV !== 'development') return null;
+  const fs = config.STORAGE_DRIVER === 'fs' || config.STORAGE_DRIVER === undefined;
+  return fs ? resolvePath(config.STORAGE_FS_DIR ?? DEFAULT_FS_DIR) : null;
+}
+
 export function resolveStorage(config: AppConfig, deps: StorageAssemblyDeps): ObjectStorage | null {
   if (config.STORAGE_DRIVER === 'memory') return createMemoryStorage();
   if (config.STORAGE_DRIVER === 'fs')

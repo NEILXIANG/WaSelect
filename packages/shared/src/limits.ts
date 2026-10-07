@@ -222,6 +222,12 @@ export const PRODUCT_MAX_CHARS = {
  *      server/src/domain/admin-order-actions.ts（`shipInfoGuard`）；
  *      admin-web/src/orders/view.ts（`shipErrors`）；docs/自主决策记录.md AJ-315
  */
+/**
+ * 低库存阈值（三端联动 UI 模拟 2026-10-08）：库存 ≤ 它的商品在管理端标红，`GET /admin/products?low_stock=true` 只出这些。
+ * @why 取 5：代购单件为主、每单 1–3 件，5 件约是一两天的量——再低就来不及从日本补货。
+ */
+export const LOW_STOCK_THRESHOLD = 5;
+
 export const SHIP_MAX_CHARS = {
   carrier: 32,
   tracking_no: 64,

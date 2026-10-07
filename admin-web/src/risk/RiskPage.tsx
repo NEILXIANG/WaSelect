@@ -118,7 +118,7 @@ export function RiskPage({ api }: RiskPageProps) {
       // ⚠️ 它**不是**"防手滑"——防手滑靠的是 prepare 清空待确认态（AJ-256）；
       //    这里防的是"order_id 与 user_id 配错"这类请求级错误。
       await blockUser(api, { userId, orderId });
-      setOk(blockDoneText(userId));
+      setOk(blockDoneText(userId, orderNo));
       setBlockedTick((t) => t + 1);
       setOrderId('');
       setOrderNo('');
@@ -234,7 +234,7 @@ export function RiskPage({ api }: RiskPageProps) {
       )}
 
       {/* 解除拉黑（AJ-384）：误拉黑的唯一出口，走审计 */}
-      <BlockedUsers api={api} refreshKey={blockedTick} />
+      <BlockedUsers api={api} refreshKey={blockedTick} onChanged={() => setOk('')} />
     </section>
   );
 }

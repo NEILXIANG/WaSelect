@@ -19,6 +19,8 @@ export interface AuditListQuery {
 export interface AuditRow {
   id: number;
   actor: string;
+  /** 操作人邮箱（actor = `admin:<id>` 时按 users 查得；CLI / 已删账号为 null。三端联动 UI 模拟 2026-10-08）。 */
+  actorEmail: string | null;
   action: string;
   target: string | null;
   statusCode: number | null;
@@ -36,20 +38,31 @@ export async function listAdminAudit(
   db: Db,
   q: AuditListQuery,
 ): Promise<{ items: AuditRow[]; total: number }> {
+  // 操作人可按**邮箱**筛（含 @ 时）：运营记得的是同事邮箱，不是 `admin:<内部 id>`（三端联动 UI 模拟 2026-10-08）。
+  //   邮箱 → id 走 users 主键表，仍落在 (actor, created_at) 索引上。
+  const actorCond =
+    q.actor === undefined
+      ? db`true`
+      : q.actor.includes('@')
+        ? db`a.actor in (select 'admin:' || u2.id from users u2 where lower(u2.email) = ${q.actor.toLowerCase()})`
+        : db`a.actor = ${q.actor}`;
   const where = db`
-    where (${q.actor === undefined ? db`true` : db`actor = ${q.actor}`})
-      and (${q.target === undefined ? db`true` : db`target = ${q.target}`})`;
+    where (${actorCond})
+      and (${q.target === undefined ? db`true` : db`a.target = ${q.target}`})`;
   const rows = await db`
-    select id, actor, action, target, status_code, trace_id, created_at
-      from admin_audit ${where}
-     order by created_at desc, id desc
+    select a.id, a.actor, a.action, a.target, a.status_code, a.trace_id, a.created_at, u.email as actor_email
+      from admin_audit a
+      left join users u on a.actor = 'admin:' || u.id
+      ${where}
+     order by a.created_at desc, a.id desc
      limit ${q.size} offset ${(q.page - 1) * q.size}`;
-  const [c] = await db`select count(*)::int as n from admin_audit ${where}`;
+  const [c] = await db`select count(*)::int as n from admin_audit a ${where}`;
   return {
     total: Number(c?.['n'] ?? 0),
     items: rows.map((r) => ({
       id: Number(r['id']),
       actor: String(r['actor']),
+      actorEmail: typeof r['actor_email'] === 'string' ? r['actor_email'] : null,
       action: String(r['action']),
       target: r['target'] === null ? null : String(r['target']),
       statusCode: r['status_code'] === null ? null : Number(r['status_code']),

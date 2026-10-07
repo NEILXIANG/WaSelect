@@ -16,6 +16,7 @@
  *
  * @see ./view.ts（行视图与闸门）；./api.ts（接口层）；./OrderDetail.tsx
  */
+import { TodoBar } from './TodoBar.js';
 import { ExportBar } from './ExportBar.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SEARCH_KEYWORD_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
@@ -125,6 +126,17 @@ export function OrdersPage({ api }: OrdersPageProps) {
         <h1 className="title">订单管理</h1>
         <span className="muted">时间均为 JST</span>
       </header>
+
+      {/* 待办计数（三端联动 UI 模拟 2026-10-08）：点一下即筛到那一类 */}
+      <TodoBar
+        api={api}
+        refreshKey={reloadTick}
+        current={status}
+        onPick={(s) => {
+          setStatus(s);
+          setPage(1);
+        }}
+      />
 
       {/* 剩余清单 3-3：CSV 导出（订单总表 / 待采购 / 报关） */}
       <ExportBar api={api} />
