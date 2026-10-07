@@ -11,8 +11,8 @@
  *
  * @limitation 只扫非注释行（注释里解释审核机制是正当的）；只认列在 FORBIDDEN 里的字样。
  * @why 服务端下发的通道名也扫（第三轮审查 TST3-06）：原来这里写"通道 label 是管理端配置的事"而不扫，
- *      但 `payment_channels` 表尚未接线（CLAUDE.md 约束四现状差距），支付页按钮上的字来自
- *      `server/src/adapters/payment/channels.ts` 的内置表——那是代码，不是配置。
+ *      而 AJ-379 起 label 由 `payment_channels` 表驱动；内置表（`server/src/adapters/payment/channels.ts`）
+ *      与迁移 seed 逐字同源，所以扫内置表仍覆盖 seed。运行时有人改库里的 label 不在本守卫范围内。
  *      mock 通道的「模拟支付」**刻意保留**（AJ-244：不把模拟支付伪装成真实支付；审核备注里说明），
  *      所以它不在 FORBIDDEN 里；这里守的是"内置表里不出现对审核员自述的字样"。
  */

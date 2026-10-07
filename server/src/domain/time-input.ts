@@ -42,7 +42,7 @@ const MAX_YEAR = 2100;
  *
  * @returns UTC 毫秒
  * @throws {RangeError} 不是带显式偏移的 RFC 3339、年份越界、或本身不是一个真实时刻
- *      （如 `2026-02-30T00:00:00Z`——正则只管形状，`Date.parse` 负责日历真实性）
+ *      （如 `2026-02-30T00:00:00Z`——正则只管形状，日历真实性由本函数自校，见下方 @measured）
  */
 export function parseRfc3339Ms(raw: string): number {
   const m = RFC3339.exec(raw);

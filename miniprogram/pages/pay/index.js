@@ -74,7 +74,8 @@ const ORDER_DETAIL_PAGE = '/pages/order-detail/index';
  * 首页路径（没付成的单"重新下单"的落点，MP3-01）。
  * @why 重新下单的**入口**在商品页，不在购物车：这一单的商品可能已经下架或改价，
  *      直接跳购物车等于让人去结算一条服务端会拒绝的旧数据。首页是唯一不会说谎的起点。
- * @why 用 `redirectTo`：支付页不该留在返回栈里（与 `onViewOrders` 同一条理由）。
+ * @why 用 `switchTab`：首页是 tabBar 页，`redirectTo` 对 tabBar 页会被宿主拒绝（AJ-366 / MP-02）；
+ *      switchTab 同样会把支付页移出返回栈。（复核 2026-10-06 订正原"用 redirectTo"。）
  */
 const HOME_PAGE = '/pages/home/index';
 

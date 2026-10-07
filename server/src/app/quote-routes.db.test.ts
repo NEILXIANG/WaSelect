@@ -220,6 +220,26 @@ describe('POST /orders/quote（接线）', () => {
   });
 
   /**
+   * 复核 AJ-319（2026-10-06）：条数上限原先在路由层与 domain 各有一份，路由层先拦且 reason 是 items_shape，
+   * 契约写的 items_too_many 经 HTTP 永远不可达。钉住"经真路由超限 → items_too_many"。
+   */
+  it('🔴 51 行 → 40001 items_too_many（与契约 OrderItemsInput.maxItems 同口径）', async () => {
+    const srv = await buildServer();
+    try {
+      const items = Array.from({ length: 51 }, (_, i) => ({
+        product_id: `p-${String(i)}`,
+        qty: 1,
+      }));
+      const r = await postQuote(srv.url, { items }, token);
+      expect(r.json['code']).toBe(40001);
+      const rej = srv.sink.find('request_rejected').at(-1);
+      expect(rej?.['details']).toMatchObject({ reason: 'items_too_many', max: 50 });
+    } finally {
+      await srv.close();
+    }
+  });
+
+  /**
    * AJ-239（第二轮审查 ORD2-02）：**超重**与**运费表没配**是两件事，不能共用 50004。
    * ⚠️ 这条原先钉的是"超重 → 50004"。
    * @why 50004 是 HTTP 500「运费不可计算」，action 写的是"管理员补齐参数"——对"运费表没配"是对的；

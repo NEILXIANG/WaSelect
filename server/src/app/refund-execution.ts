@@ -19,13 +19,13 @@
  *      `charge.refunded` 在退款**创建**时还是**落定**时触发，未实测；
  *      按它迁 refunded 可能把在途甚至后来失败的退款记成已退。查询回的是退款对象本身的状态，语义确定。
  *      代价：pending 的单要靠人再点一次（或看到对账告警）才落定——MVP 退款量小，可接受。
- *      ⚠️ 本条的**另一半已经实测**（AJ-376），不要再拿"载荷未知"当理由：
- *        `charge.refunded` 的事件对象是**整张 Charge**，其中 `refunds.data[]` 每条带自己的 `status`
- *        （@measured：真实事件样例 api_version 2023-10-16，`refunds.data[0].status:"succeeded"`），
- *        所以"退款当前什么状态"其实**读得到**——真正没定的是**触发时机**（创建即发 vs 落定才发）。
- *        也就是说：将来若要接这个回调，缺的不是"拿不到状态"，而是"不知道它在哪一刻发"——
- *        实测办法是 `stripe listen --forward-to localhost:…/api/v1/pay/callback/stripe` 下发起一笔退款，
- *        看事件与 `refunds.data[0].status` 的先后（计入 B9 之后的 Stripe test mode 联调清单）。
+ *      ⚠️ 复核 AJ-376（2026-10-06）订正：`charge.refunded` 的事件对象是**整张 Charge**，但 Stripe 自
+ *        API 2022-11-15 起 Charge **不再自动展开 `refunds`**（本仓钉 2025-03-31.basil），webhook 载荷里
+ *        大概率拿不到 `refunds.data[]`——AJ-376 引的样例是 2023-10-16 版本的第三方转载，不能套用。
+ *        所以将来要接回调，应订阅 `refund.created` / `refund.updated`（对象就是 Refund，自带 status），
+ *        而不是解析 charge.refunded。触发时机同样未实测。
+ *        实测办法：`stripe listen --forward-to localhost:…/api/v1/pay/callback/stripe` 下发起一笔退款，
+ *        看收到哪些事件、载荷里有什么（计入 B9 之后的 Stripe test mode 联调清单）。
  *        @see adapters/payment/stripe-checkout.ts 的 OUTCOME_BY_TYPE['charge.refunded']（三个金额字段的语义）
  * @limitation 一：机构侧"已被别处退掉"（如在 Stripe 后台手工退款）→ 我方 POST 被拒、记 provider_error，
  *              同键重试拿回同一个拒绝——走不出 refunding。由 stuck_refunds 报出后人工处理（改库需留痕）。

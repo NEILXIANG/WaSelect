@@ -58,7 +58,8 @@ export const API_BASES = {
  *
  * @param {string | undefined} envVersion 宿主的 `wx.getAccountInfoSync().miniProgram.envVersion`
  * @returns {string} 可用的 API 根地址
- * @throws 目标环境**没配**地址时抛——宁可启动白屏，也不要静默打到一个错误的地址
+ * @throws 目标环境**没配**地址时抛——不静默打到一个错误的地址；抛出后由 app.js 接住并换成替身请求器，
+ *         页面显示错误态而不是白屏（AJ-364；复核 2026-10-06 订正原"宁可启动白屏"）
  *         （@see @limitation 一）
  */
 export function resolveApiBase(envVersion) {

@@ -26,7 +26,11 @@ import {
   toRateBody,
 } from './view.js';
 
-/** 像真的运费表（锚点：2kg = 4,950 円；重量上限是"含"的上限——D-46）。 */
+/**
+ * 三档示意运费表（重量上限是"含"的上限——D-46）。
+ * ⚠️ 不是 §2.5 的真实分档（真实锚点 w=1850 → 4950 由服务端运费向量测试钉住）；这里只测表单与排序逻辑。
+ * 复核 2026-10-06（AJ-185 登记的 TSB-13）：原注释写"2kg = 4,950"，与下面的数据（2000 → 4050）矛盾。
+ */
 const RATES = [
   { carrier: 'placeholder', max_weight_g: 500, price_jpy: 2200, active: true },
   { carrier: 'placeholder', max_weight_g: 2000, price_jpy: 4050, active: true },

@@ -30,17 +30,31 @@ import type { AppConfig } from '../config.js';
 import { requireRole, type AuthConfig } from './auth.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import { createCatalogRepo } from '../adapters/catalog.js';
-import { summarizeQuoteItems, type QuoteItemInput, type QuoteProduct } from '../domain/quote.js';
+import {
+  MAX_QUOTE_ITEMS,
+  summarizeQuoteItems,
+  type QuoteItemInput,
+  type QuoteProduct,
+} from '../domain/quote.js';
 import { assembleQuote } from './quote-assembly.js';
 
-/** 请求形状护栏：单报价最多 50 行（@limitation 一）。建单（U5b）同上限。 */
-export const MAX_QUOTE_ITEMS = 50;
-
-/** 校验并取出 items（形状层）；数量/重复/库存的语义校验在 domain。建单路由复用本函数。 */
+/**
+ * 校验并取出 items（形状层）；数量/重复/库存的语义校验在 domain。建单路由复用本函数。
+ * @why 条数上限只有一份（domain/quote.ts 的 MAX_QUOTE_ITEMS）。这里提前拦，是为了不让超长数组
+ *      走到逐条 map 与查库；reason 与 domain 同为 items_too_many，和契约 OrderItemsInput 一致。
+ *      复核 AJ-319（2026-10-06）：原先这里另有一份同值常量、reason 为 items_shape，契约写的 reason 经 HTTP 不可达。
+ */
 export function parseItems(body: unknown): QuoteItemInput[] {
   const items = (body as { items?: unknown } | null)?.items;
-  if (!Array.isArray(items) || items.length === 0 || items.length > MAX_QUOTE_ITEMS) {
-    throw new AppError(40001, { reason: 'items_shape', max: MAX_QUOTE_ITEMS });
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new AppError(40001, { reason: 'items_shape' });
+  }
+  if (items.length > MAX_QUOTE_ITEMS) {
+    throw new AppError(40001, {
+      reason: 'items_too_many',
+      count: items.length,
+      max: MAX_QUOTE_ITEMS,
+    });
   }
   return items.map((raw) => {
     const it = raw as { product_id?: unknown; qty?: unknown };

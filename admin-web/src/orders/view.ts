@@ -204,11 +204,11 @@ export function orderRows(items: unknown): OrderRow[] {
 /**
  * 发货闸门：只有 `paid` 能发货（契约 `/admin/orders/{id}/ship` 的 409 口径）。
  *
- * @limitation 四：`has_dispute=true` 时**这里也拦发货**，但契约只在退款处写了 40907
- *               ——服务端目前并不阻止"拒付进行中照常发货"。
- *              拦的理由是业务不是契约：拒付还在争议就发货，赢了拿回钱、输了钱货两空。
- *              ⚠️ 这是**前端单边口径**，若将来服务端明确允许拒付中发货，这里要跟着改，
- *              否则会出现"服务端放行、前端点不动"的不一致。
+ * @limitation 四：`has_dispute=true` 时**这里也拦发货**，与服务端 shipGuard 同口径
+ *               （40909 dispute_open，AJ-145；契约 `/admin/orders/{id}/ship` 已写明）。
+ *              含义是"有未解除的拒付限制"：进行中或已败诉（AJ-176 ⑧，lost 保持 has_dispute）。
+ *              拦的理由：拒付还在争议就发货，赢了拿回钱、输了钱货两空。
+ *              （复核 2026-10-06：原写"前端单边口径、服务端不拦"，AJ-145 起已不成立。）
  */
 export function shipGate(order: unknown): Gate {
   const status = readStatus(order);

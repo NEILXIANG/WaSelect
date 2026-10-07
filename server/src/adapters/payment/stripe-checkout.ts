@@ -218,8 +218,14 @@ export const OUTCOME_BY_TYPE: Readonly<Record<string, ProviderEvent['outcome']>>
   //                          was issued"）⇒ **不是本次退了多少**，第二次部分退款时它是两次之和
   //     · `refunded`(bool) = 是否**已全额**退完 ⇒ 部分退款时它**仍是 false**（"If the charge is only
   //                          partially refunded, this attribute will still be false"）
-  //     本次退款额只在 `refunds.data[]` 里（每个元素是一条 Refund，含自己的 `amount` 与 `status`）。
-  //     @measured ① 真实事件样例（api_version 2023-10-16，MagicBell 公开文档转载的 Stripe 原始载荷）：
+  //     本次退款额与状态在 **Refund 对象**上（各自的 `amount` 与 `status`）。
+  //     ⚠️ 复核 AJ-376（2026-10-06）：**不要指望事件里的 `refunds.data[]`**——Stripe 自 API 2022-11-15 起
+  //       Charge 不再自动展开 `refunds`（docs.stripe.com/changelog/2022-11-15/deprecates-charges-auto-expand），
+  //       而本仓钉的是 2025-03-31.basil，webhook 载荷不能 expand。下面样例 ① 带 refunds，是因为转载方的
+  //       端点版本更旧或样例不完整，不能推到我们的版本上。F12 若要接退款回调，应订阅 `refund.created` /
+  //       `refund.updated`（对象就是 Refund，自带 amount 与 status），或收到 charge.refunded 后再
+  //       `GET /v1/refunds?charge=…` 查。Stripe test mode 联调时以真实载荷为准再定。
+  //     @measured ① 真实事件样例（api_version 2023-10-16，MagicBell 公开文档转载的 Stripe 原始载荷——见上方 ⚠️，版本不同不可直接套用）：
   //       data.object = { object:"charge", id:"ch_…", amount:2000, amount_captured:2000,
   //                       amount_refunded:2000, refunded:true, payment_intent:"pi_…",
   //                       refunds:{ data:[{ object:"refund", id:"re_…", amount:2000,

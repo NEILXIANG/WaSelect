@@ -72,11 +72,12 @@ export interface SchedulerDeps<TTx> {
 /**
  * job 专用日志器：强制带上 `job` / `module` / `actor`。
  *
- * @why 不直接把 `Logger` 交给 job：`logger.child()` **只接受 module 与 actor** 两个键
- *      （见 logger.ts 的 CHILD_BINDABLE_KEYS），所以 `child({ job })` 会被**静默丢掉**——
- *      表现为"日志里根本没有 job 字段"，而写代码的人以为自己已经绑上了。
- *      包一层把 `job` 硬塞进每一次调用的 fields，且**放在展开之后**——
+ * @why 包一层把 `job` 硬塞进每一次调用的 fields，且**放在展开之后**——
  *      调用方想伪造 `job` 也伪造不了（与保留键同一套思路）。
+ *      复核 AJ-59（2026-10-06）订正：原先这里还写"`child({ job })` 会被静默丢掉"，不成立——
+ *      `child()` 只拦保留键（logger.ts 的 splitReserved），`job` 不是保留键，会正常带上
+ *      （@measured：`log.child({module:'scheduler',actor:'scheduler',job:'close-expired'}).info('probe_evt')`
+ *      输出含 `"job":"close-expired"`）。保留这层包装的理由只剩"不可被调用方覆盖"。
  */
 function jobLogger(logger: Logger, job: string): JobLogger {
   const log = logger.child({ module: 'scheduler', actor: 'scheduler' });

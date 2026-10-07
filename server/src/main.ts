@@ -30,7 +30,14 @@ import { loadChannelConfigs } from './adapters/payment-channel-config.js';
 import { closeDb, createDb, assertPostgresMajor, ping, type Db } from './adapters/db.js';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, redactConfig, ConfigError, type AppConfig } from './config.js';
+import {
+  loadConfig,
+  redactConfig,
+  ConfigError,
+  SHUTDOWN_DB_CLOSE_MS,
+  SHUTDOWN_HTTP_GRACE_MS,
+  type AppConfig,
+} from './config.js';
 import { createHttpApp, installShutdownHandlers, listen, type StartedServer } from './http.js';
 import { createLogger, type Logger } from './logger.js';
 import { PAY_CALLBACK_PREFIX } from './app/pay-routes.js';
@@ -267,7 +274,12 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
         mountAllRoutes(a, { config, logger, db, events, storage, inflightJobs, channelDefaults }),
     });
 
-    const server = await listen(app, { port: config.PORT, host: config.HOST });
+    // 排空上限进停机预算算式（shutdownWorstCaseMs，复核 AJ-267）：不传则用 http.ts 默认 10s，各步之和会超总预算
+    const server = await listen(app, {
+      port: config.PORT,
+      host: config.HOST,
+      graceMs: SHUTDOWN_HTTP_GRACE_MS,
+    });
 
     /**
      * ── 常驻调度器（D-43）：进程内 `setInterval` + advisory lock ──────────────
@@ -343,8 +355,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
           drainMs: config.SHUTDOWN_EVENT_DRAIN_MS,
           // ⚠️ 关库也要有上限（INF3-01）：`db.end()` 会等在途事务跑完，
           //    而"排空失败"这条分支里最可能卡住的就是持事务的那次出站调用。
-          //    取 5s：比出站总预算 6s 略短，是"给常规善终留的机会"，剩下的交给总预算兜底。
-          closeTimeoutMs: 5_000,
+          //    取 2s（复核 AJ-267，原 5s）：走到这一步时排空已过 6s、事件已等过，持事务的出站调用
+          //    多半已结束；剩下的交给总预算兜底。数值进了 shutdownWorstCaseMs 的算式。
+          closeTimeoutMs: SHUTDOWN_DB_CLOSE_MS,
         });
       },
       // INF3-01：总预算从收到信号那一刻起算，到点 exit(1)（不再等任何一步）

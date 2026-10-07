@@ -153,7 +153,7 @@ function intAtLeast(v: unknown, min: number): number | undefined {
  *      `hs_code` 早就按这个口径判了（见下方 hs 段），而 `customs_desc_en` 与 `title`
  *      没有——同一份文件里两个必填字段两种口径，是"改了一半"的典型形态。
  * @why 放在 `isBlank` 里而不是逐个调用点补 `trim()`：可选字段同样受益——
- *      `description: '   '` 现在按"没填"处理（= 不改），而不是往库里写三个空格，
+ *      `description: '   '` 现在按"没填"处理（PUT 下 = **清空**写 NULL，与 `''` / `null` 同；复核 AJ-374 订正原"= 不改"），而不是往库里写三个空格，
  *      再在详情页渲染出一块看起来是空的区域。
  * @limitation 它**不负责归一化**：`'  cosmetic set  '` 仍然原样保存（前后空格保留）。
  *              收窄范围是因为"要不要 trim 掉两端空格"是展示口径而不是校验口径，

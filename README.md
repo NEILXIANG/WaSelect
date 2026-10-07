@@ -3,7 +3,7 @@
 设计文档在知识库仓库 `WaSelectDoc/50-产品与技术/`（两仓布局：本地治理/业务文档库目录名 `jp` ↔ git 仓库 `WaSelectDoc`；本工程库目录名 `jp_project` ↔ git 仓库 `WaSelect`；两边互指链接、不重复数字），代码以以下三份为契约：
 
 - `技术架构/技术文档.md`（v0.5.1，2026-09-28 一致性审计校正；**§0a 列出写成现行但尚未实现的项**）：编码约定、状态机、表结构 DDL、复制链接支付入口（Stripe Checkout 托管页）、拒付、域名 / 隐私 / 审核细则。支付端口定义以本库 `server/src/ports/payment.ts` 为准（技术文档 §4 的 v2.1 草图已被取代）
-- `技术架构/api-contract.yaml`（版本以 `info.version` 为准，当前 0.6.17；**真源在文档库**，本库副本 `contracts/api-contract.yaml`，两份逐字一致由 `npm run check:contract` 比对；改契约先改文档库那一份再同步下来）：OpenAPI 3.0，前后端共同依据
+- `技术架构/api-contract.yaml`（版本以 `info.version` 为准——这里不写具体号，写了就会漂（2026-10-06 复核时它停在 0.6.17，实际已 0.6.33+）；**真源在文档库**，本库副本 `contracts/api-contract.yaml`，两份逐字一致由 `npm run check:contract` 比对；改契约先改文档库那一份再同步下来）：OpenAPI 3.0，前后端共同依据
 - `需求与设计/需求文档PRD-v1.6.md` §3：P0 范围
 
 目录：`miniprogram/`（原生小程序：WXML/WXSS/JS 为主，`utils/storage.ts`、`utils/wx-api.ts` 等少数 TS 由微信开发者工具的 TypeScript 编译插件转译；**页面逻辑一律在 `pages/*/index.vm.js`**（CLAUDE.md 约束十一）；`app.json` 注册 11 页（全部为业务页；开发用的 `pages/index` 骨架页与 `pages/comp` 组件样板页**已不登记**，并由 `project.config.json` 的 `packOptions.ignore` 按目录排除出发布包，AJ-180）；基础组件 ws-button / ws-price）、`server/`（Node 22 + TypeScript + Express 5 + postgres.js；分层 `domain / ports / adapters / app`，见 ADR-28——《工程框架文档》里的「九模块 / `modules/`」是旧设计口径）、`migrations/`（纯 SQL，001–028）、`checkout-static/`（Cloudflare Pages 静态站：`_redirects` 把 `/o/*` 转到 API 短链 → Stripe Checkout 托管页；结果页 `/pay/done`、`/pay/cancelled`、`/pay/expired`）、`admin-web/`（独立管理后台，React 18 + Vite，前置 Cloudflare Access）。表数口径：当前 23 张（migrations 001–028），唯一真源是 `server/src/adapters/db.db.test.ts` 的表清单断言；文档里出现的「13 表 / 17 张 / 21 张」都是成文时的旧基准。
@@ -21,9 +21,9 @@ npm run dev        # 首次自动物化 .env、建库、迁移、灌 demo 数据
 
 `.env` 生成后按需填 Stripe 等占位；`npm run dev -- --no-serve` 只准备环境，`--full` 灌完整目录。本地联调（Stripe 回调 / 公网隧道）见 `docs/dev/stripe-listen-cloudflared.md`。完成判定只有一个信号：`npm run gate` 全绿。
 
-管理后台：`npm run dev -w admin-web`（Vite，**`:5174`**；商品 / 订单 / 运营配置 / Banner / 风控五个页签已落地，登录页走真实接口；跨域白名单见 `.env` 的 `CORS_ORIGINS`，已含本地 5174）。构建产物在 `admin-web/dist`（部署 = 静态站 + API 指 `VITE_API_BASE_URL`）。登录调 `POST /api/v1/auth/admin/login`（已实现：邮箱 + 口令，连错 5 次锁 15 分钟；初始管理员由启动时按 `ADMIN_INITIAL_EMAIL` / `ADMIN_INITIAL_PASSWORD` 建号，改密用 `npm run admin:password`（新口令从 stdin 读、交互时不回显；**目标库不是本机时要带 `--yes`**；改密同时解除登录锁定；旧 token **最迟 60 秒**内失效——服务进程的身份缓存，不是立刻）。此处曾写"该端点尚未实现、生产无法登录"——自 AJ-181 起已不成立（2026-09-30 更正）。
+管理后台：`npm run dev -w admin-web`（Vite，**`:5174`**；商品 / 订单 / 运营配置 / Banner / 风控五个页签已落地，登录页走真实接口；跨域白名单见 `.env` 的 `CORS_ORIGINS`，已含本地 5174）。构建产物在 `admin-web/dist`（部署 = 静态站 + API 指 `VITE_API_BASE_URL`）。登录调 `POST /api/v1/auth/admin/login`（已实现：邮箱 + 口令，连错 5 次锁 15 分钟；初始管理员由启动时按 `ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD` 建号，改密用 `npm run admin:password`（新口令从 stdin 读、交互时不回显；**目标库不是本机时要带 `--yes`**；改密同时解除登录锁定；旧 token **最迟 60 秒**内失效——服务进程的身份缓存，不是立刻）。此处曾写"该端点尚未实现、生产无法登录"——自 AJ-181 起已不成立（2026-09-30 更正）。
 
-**可扩展性**：先读 `docs/可扩展架构设计-支付可插拔·多国家·UI可配置.md`（ADR-28）——业务核心不认识任何具体支付方式/国家/UI：支付走 Provider 注册表 + 能力声明 + 配置表；多国家走 `country_profiles` + `shipping_rates.dest_country` + `duty_rates`（⚠️ 现状：`payment_channels` 表已建但**未接线**，启用通道仍由 env `PAYMENT_CHANNELS` + 代码内置表决定；`shipping_rates.dest_country` **尚未建列**——两者都是已登记债务，见该文）；UI 走 design token + 页面/表单 schema，禁止写死色值、金额、国家、承运商、模块顺序。
+**可扩展性**：先读 `docs/可扩展架构设计-支付可插拔·多国家·UI可配置.md`（ADR-28）——业务核心不认识任何具体支付方式/国家/UI：支付走 Provider 注册表 + 能力声明 + 配置表；多国家走 `country_profiles` + `shipping_rates.dest_country` + `duty_rates`（现状：`payment_channels` **已接线**（AJ-379）——排序 / 市场 / 币种 / 文案由表驱动，但"开不开放"仍只认 env `PAYMENT_CHANNELS`，表里 `enabled` 列刻意不接；`shipping_rates.dest_country` **尚未建列**，属有条件延期（开第二个国家时做，N-14），见该文）；UI 走 design token + 页面/表单 schema，禁止写死色值、金额、国家、承运商、模块顺序。
 
 **注释与日志**：先读 `docs/代码注释规范与日志体系设计.md`（ADR-29）——注释必须写清逻辑、**缺点**与优点（`@limitation` / `@tradeoff` / `@see ADR-xx`）；日志三条流（运行 / 业务审计 / 用户行为）统一 `trace_id` 串联，脱敏红线见该文 §8，关键路径测试必须断言日志与事件落库。
 

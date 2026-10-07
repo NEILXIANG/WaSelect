@@ -227,7 +227,7 @@ describe('US_ADDRESS_INVALID 每一条都被真库拒绝（FX5）', () => {
  * @todo 应用层地址校验（按 country 取 country_profiles 校验州码）——属业务期「地址校验」单元。
  */
 describe('已知缺口：state / country 在 DB 层不校验', () => {
-  it('州码写 ZZ、国家写 XX 目前都能入库（ADR-28 不在 DB 层硬编码，应用层校验待建）', async () => {
+  it('州码写 ZZ、国家写 XX 目前都能入库（ADR-28 不在 DB 层硬编码；应用层已拦 US 州码，AJ-371）', async () => {
     const u = await insertUser();
     const base = US_ADDRESSES[0];
     if (base === undefined) throw new Error('地址样本为空，这条断言没有意义');

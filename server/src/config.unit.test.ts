@@ -13,6 +13,7 @@ import {
   mockAutoConfirmEnabled,
   redactConfig,
   SECRET_KEYS,
+  shutdownWorstCaseMs,
 } from './config.js';
 
 /** 最小可启动环境：必填项齐备（PAYMENT_CHANNELS 刻意必填，见 config.ts @tradeoff）。 */
@@ -107,8 +108,12 @@ describe('loadConfig 正常路径', () => {
     expect(c.CALLBACK_ORDER_GRACE_MS).toBe(900_000);
     expect(c.SCHEDULER_TICK_MS).toBe(60000);
     expect(c.SHUTDOWN_READY_DELAY_MS).toBe(5_000);
-    // B13 / AJ-202：8s = 出站总预算 6s + 2s 排队余量（等得比 6s 短 = 注定等不到订阅者里的机构调用）
-    expect(c.SHUTDOWN_EVENT_DRAIN_MS).toBe(8_000);
+    // B13 / AJ-202：出站总预算 6s + 1s 余量（等得比 6s 短 = 注定等不到订阅者里的机构调用）。
+    // 复核 AJ-267（2026-10-06）：原 8s，与其它几步串行相加超过 27s 总预算，压到 7s。
+    expect(c.SHUTDOWN_EVENT_DRAIN_MS).toBe(7_000);
+    expect(c.SHUTDOWN_JOB_WAIT_MS).toBe(3_000);
+    // 默认值下停机最坏耗时必须落在总预算之内（否则最后两步——作废机构会话、关库——会被总预算强退跳过）
+    expect(shutdownWorstCaseMs(c)).toBeLessThanOrEqual(c.SHUTDOWN_TOTAL_BUDGET_MS);
     expect(c.FX_BUFFER_RATE).toBeCloseTo(0.03, 10);
     expect(c.SHIP_WITHIN_BUSINESS_DAYS).toBe(7); // FTC 发货时限承诺（D-39⑦ / AJ-180）
     // A2 / AJ-197：默认 0（宁小勿大）——取到的是直连对端 IP（错但**不可伪造**），
@@ -1113,6 +1118,37 @@ describe('定时类毫秒配置的上限（S-06）', () => {
     expect(loadConfig({ ...baseEnv, SCHEDULER_TICK_MS: '2147483647' }).SCHEDULER_TICK_MS).toBe(
       2147483647,
     );
+  });
+});
+
+it('IMG_BASE_URL 去尾斜杠（复核 AJ-184：它被三处拼路径，尾斜杠 = 双斜杠坏图）', () => {
+  expect(loadConfig({ ...baseEnv, IMG_BASE_URL: 'https://img.example.com//' }).IMG_BASE_URL).toBe(
+    'https://img.example.com',
+  );
+});
+
+/**
+ * 复核 AJ-267（2026-10-06）：停机各步的等待上限是**串行相加**的，原默认值合计 38s > 总预算 27s。
+ * 总预算到点直接 exit(1)，排在最后的"等事件订阅者（作废机构会话）"与"关库"会被跳过——
+ * 正是这些等待想保住的东西。启动期就拒绝"各步之和超过总预算"的组合。
+ */
+describe('停机各步上限之和不得超过总预算（规则 10，复核 AJ-267）', () => {
+  it('各步之和 > 总预算 → 拒启，消息里点名 SHUTDOWN_TOTAL_BUDGET_MS', () => {
+    const issues = expectReject({ ...baseEnv, SHUTDOWN_EVENT_DRAIN_MS: '20000' });
+    expect(issues.join('\n')).toContain('SHUTDOWN_TOTAL_BUDGET_MS');
+  });
+  it('恰好等于总预算 → 接受；总预算 0（不设预算，仅测试）→ 不检查', () => {
+    const c = loadConfig(baseEnv);
+    const exact = String(
+      c.SHUTDOWN_TOTAL_BUDGET_MS - shutdownWorstCaseMs(c) + c.SHUTDOWN_EVENT_DRAIN_MS,
+    );
+    expect(loadConfig({ ...baseEnv, SHUTDOWN_EVENT_DRAIN_MS: exact }).SHUTDOWN_EVENT_DRAIN_MS).toBe(
+      Number(exact),
+    );
+    expect(
+      loadConfig({ ...baseEnv, SHUTDOWN_TOTAL_BUDGET_MS: '0', SHUTDOWN_EVENT_DRAIN_MS: '20000' })
+        .SHUTDOWN_EVENT_DRAIN_MS,
+    ).toBe(20_000);
   });
 });
 

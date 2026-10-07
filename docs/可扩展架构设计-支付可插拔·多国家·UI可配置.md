@@ -20,7 +20,7 @@
 | # | 原则 | 反例（禁止） |
 |---|---|---|
 | **E-1** | **端口与适配器**：领域层只依赖接口（PaymentProvider / ShippingQuoter / Notifier / Storage / FxSource），实现放 `adapters/` | 订单服务里直接 `import Stripe` 或写 `if (channel === 'stripe')` |
-| **E-2** | **配置驱动，而非代码分支**：通道是否启用、优先级、适用国家/币种、UI 变体、开关，全部来自配置（DB 表），改配置不改代码、不重新发版（⚠️ 现状**仍是右列反例形态**：启用由 env `PAYMENT_CHANNELS` 决定，优先级 / 国家 / 币种 / 展示名来自 `adapters/payment/channels.ts` 的内置表 `CHANNEL_DEFAULTS`；`payment_channels` 表只有种子、消费方未接线——已登记债务 R2-4，上线前迁表，AJ-176） | `PAYMENT_CHANNELS` 只从 env 读、写死在代码常量里 |
+| **E-2** | **配置驱动，而非代码分支**：通道是否启用、优先级、适用国家/币种、UI 变体、开关，全部来自配置（DB 表），改配置不改代码、不重新发版（现状，2026-10-06 更新：R2-4 已还——AJ-379 起优先级 / 国家 / 币种 / 展示名由 `payment_channels` 表驱动（装配期读一次，改完重启生效），`CHANNEL_DEFAULTS` 退为回退值；**启用与否仍由 env `PAYMENT_CHANNELS` 决定**，表的 `enabled` 列刻意不接——否则一行 UPDATE 能绕过 config.ts 的生产闸门，见 `server/src/adapters/payment-channel-config.ts`） | `PAYMENT_CHANNELS` 只从 env 读、写死在代码常量里 |
 | **E-3** | **能力声明（capabilities）**：每个适配器自报能力（支持币种 / 国家 / 退款 / 拒付 / 部分退 / 入口形态 / 上下限），由框架按能力筛选可用项，不在业务里判断"这个能不能用" | 前端写死"微信支付按钮 + 银行卡按钮"两个入口 |
 | **E-4** | **领域事件解耦副作用**：通知、履约、对账、风控通过订阅领域事件实现（`order_events` 已是天然事件日志） | 支付回调里直接发邮件、直接调物流 |
 | **E-5** | **规则外置**：上架校验、通道路由、定价/关税、地址校验都是"规则对象 + 注册表"，新增规则不改主体 | 上架校验 9 条写成一个大 `if` 块 |
@@ -186,7 +186,7 @@ server/src/
 |---|---|---|---|
 | **P0（写第一行业务代码前就定，零回归）** | 目录分层 `domain/ports/adapters/app` + ESLint 依赖方向约束；`PaymentProvider` 加 `capabilities`；Provider 注册表 + `/pay/callback/:channel`；前端 design token 单源（落地为 `packages/shared/src/design-tokens.ts`）；`app_config` KV 表 | 低 | 不改现有行为，只加扩展点 |
 | **P0（同上）** | `country_profiles` 表 + seed（US 一条，值 = 现有硬编码） | 低 | 为后续铺路 |
-| **P1（I1 内）** | `shipping_rates` 加 `dest_country`（默认 'US'）+ 取档 SQL 加国家条件（**7 条向量回归必须绿**）；`duty_rates` 表 + seed；`payment_channels` 配置表（AJ-176 现状：`duty_rates` / `payment_channels` / `app_config` 已随 010 建表，`duty_rates` 已接线；`dest_country` **未做**（计划）；`payment_channels` / `app_config` 未接线） | 中 | 需改技术文档 v0.6 / OpenAPI 0.6.0 |
+| **P1（I1 内）** | `shipping_rates` 加 `dest_country`（默认 'US'）+ 取档 SQL 加国家条件（**7 条向量回归必须绿**）；`duty_rates` 表 + seed；`payment_channels` 配置表（AJ-176 现状：`duty_rates` / `payment_channels` / `app_config` 已随 010 建表，`duty_rates` 已接线；`dest_country` **未做**（计划）；`payment_channels` 已接线（AJ-379，enabled 列除外）；`app_config` 未接线） | 中 | 需改技术文档 v0.6 / OpenAPI 0.6.0 |
 | **P2（真要加国家时）** | 地址校验 country-aware（应用层 + DB 约束迁移）、地址表单 schema 渲染、`seller_entity` 多主体路由 | 中 | 触发条件：新增第一个非美国目的国 |
 | **P3（真要加支付时）** | 新 Provider 实现（复用契约测试）、前端入口已自动出现（⚠️ 现状还需同步改 shared `PAYMENT_CHANNEL` 枚举 + 契约 `x-payment-channels` 登记表，见 §0，AJ-176） | 低 | 触发条件：新增第一个新通道 |
 

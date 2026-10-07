@@ -159,9 +159,9 @@ function optionalUrl() {
  * @limitation 一：只去**路径末尾**的斜杠，不动 query 与其余部分；
  *              根路径 `https://x.com/` 归一成 `https://x.com`（与不带斜杠等价）。
  * @limitation 二：与 `optionalUrl()` 的差别**只有**这一步归一化。
- *              `IMG_BASE_URL` / `PUBLIC_API_BASE` 仍在用不带归一化的版本——
- *              它们目前没有"拼接路径"的用法（都是整值下发），改了反而可能造成
- *              "前端拿到的值与我配的不一样"的困惑。**它们一旦开始拼路径，就改用本函数。**
+ *              `PUBLIC_API_BASE` 仍在用不带归一化的版本（整值下发，不拼路径）。
+ *              `IMG_BASE_URL` 2026-10-06 起改用本函数：它其实早就在三处拼路径（复核 AJ-184）。
+ *              **其它字段一旦开始拼路径，就改用本函数。**
  */
 function optionalUrlNoTrailingSlash() {
   return z.preprocess(
@@ -373,7 +373,7 @@ const schema = z.object({
    *      也就是说这条护栏如果写严了，`FX_BUFFER_RATE=0.07` 会让**服务起不来**——
    *      而 0.07 是一个再正常不过的配置值。护栏把自己要保护的东西挡在门外，比没有护栏更糟。
    *      容差取 1e-6：scaled 最大 5000，双精度绝对误差 ≪1e-6；
-   *      而"多一位小数"的最小偏差是 0.5，比容差大五个数量级，不会被误放行。
+   *      而"多一位小数"的最小偏差是 0.1（如 0.03121 → 312.1），仍比容差大五个数量级，不会被误放行。
    *      （⚠️ 别写成"`0.03 * 1e4` 会漂移"——实测它是**精确**的 300，那个例子是错的。）
    * @limitation 只挡**配置**这一侧。`raw_rate` 有 8 位小数而它的列就是 `NUMERIC(18,8)`，
    *              装得下，不存在同类问题，所以不对它加限制。
@@ -455,15 +455,16 @@ const schema = z.object({
    *      （`app/close-session-events.ts`）。停机流若直接关连接池，它拿到的是
    *      "连接池已关闭" ⇒ 已取消/已过期的单在会话自然过期前（最长约 30 分钟）还能被付款。
    *      这段等待就是给它一个善终的机会。
-   * @why 8s 而不是拍一个小的：订阅者里的出站调用受 `ports/http-client.ts` 的
-   *      **总预算 6s** 约束，等得比 6s 短等于"注定等不到"。8s = 6s 预算 + 2s 排队与抖动余量。
+   * @why 7s 而不是拍一个小的：订阅者里的出站调用受 `ports/http-client.ts` 的
+   *      **总预算 6s** 约束，等得比 6s 短等于"注定等不到"。7s = 6s 预算 + 1s 排队与抖动余量。
+   *      （复核 AJ-267，2026-10-06：原 8s，与其它几步串行相加超过总预算，压到 7s，见规则 10。）
    * @limitation 它是**上限**不是"每次都等这么久"：没有在途订阅者时 `drain` 立即返回，
    *             不消耗停机时间。到点仍在途则记 `event_drain_timeout` error 并照常关库。
-   * @limitation 与 `SHUTDOWN_READY_DELAY_MS`（默认 5s）**相加**计入停机总时长
-   *             （另加 exit 宽限 2s，合计约 15s）——平台停机宽限必须大于这个和，
-   *             否则平台会在我们 drain 完之前 SIGKILL。这条要在 staging 实测校准（同 A2/B18）。
+   * @limitation 与其它几步**串行相加**计入停机总时长，算式见 {@link shutdownWorstCaseMs}；
+   *             默认值合计 26s，规则 10 保证它不超过 `SHUTDOWN_TOTAL_BUDGET_MS`。
+   *             平台停机宽限（Render 30s）要在 staging 实测校准（同 A2/B18）。
    */
-  SHUTDOWN_EVENT_DRAIN_MS: timerMs(8_000, 0),
+  SHUTDOWN_EVENT_DRAIN_MS: timerMs(7_000, 0),
   /**
    * OPS3-05：停机时"等**后台作业**跑完"的上限毫秒数（0 = 不等）。
    *
@@ -471,13 +472,13 @@ const schema = z.object({
    *      事件 drain 也只等**已 publish** 的事件。一轮在途 tick 若在 drain 返回 0 之后
    *      才提交，它的 `order.expired` 会在 `closeDb` 之后才分发 ⇒ 机构会话没被作废
    *      ⇒ 已过期的单在会话自然过期前仍可付款（`late_payment` ⇒ 人工退款）。
-   * @why 5s 而不是照抄 8s：这一步在 `beforeDrain`（还没开始等事件），
-   *      两步**串行相加**计入停机总时长；tick 一轮的正常耗时是百毫秒量级，
-   *      5s 足够一轮慢的 tick 善终，又不至于把 27s 总预算吃掉太多。
+   * @why 3s：这个值**用两次**（`beforeDrain` 等 tick、`afterDrain` 等后台作业），都串行计入停机总时长；
+   *      tick 一轮的正常耗时是百毫秒量级，3s 足够一轮慢的 tick 善终。
+   *      （复核 AJ-267，2026-10-06：原 5s，各步之和 38s 超出 27s 总预算，压到 3s，见规则 10。）
    * @limitation 它是**上限**：没有在途 tick / daily 时立即返回，不消耗停机时间；
    *             到点仍在途只记 error，不打断（打断的后果由作业自己的心跳与幂等承担）。
    */
-  SHUTDOWN_JOB_WAIT_MS: timerMs(5_000, 0),
+  SHUTDOWN_JOB_WAIT_MS: timerMs(3_000, 0),
   /**
    * INF3-01：从**收到 SIGTERM 那一刻**起算的停机总预算（毫秒）。到点直接 `exit(1)`，不再等任何一步。
    *
@@ -666,7 +667,9 @@ const schema = z.object({
   R2_ACCESS_KEY_ID: optionalText(),
   R2_SECRET_ACCESS_KEY: optionalText(),
   R2_BUCKET: optionalText(),
-  IMG_BASE_URL: optionalUrl(),
+  // 复核 AJ-184（2026-10-06）：本字段早已被三处拼路径（banner-view / product-routes / admin-upload-routes），
+  // 原先靠各处自己 replace 去尾斜杠——第四处一漏就是双斜杠坏图。归一挪到配置层。
+  IMG_BASE_URL: optionalUrlNoTrailingSlash(),
   PUBLIC_API_BASE: optionalUrl(),
 
   // ── 上传存储驱动（I2 U-I4）──────────────────────────────────────────────
@@ -692,6 +695,33 @@ const schema = z.object({
  * @limitation 只拦"确定错误"的组合，不做"提醒级"校验（例如建议配 Sentry）。
  *              提醒一旦进启动校验就会被当成噪音忽略，宁可少而硬。
  */
+/** 停机时 HTTP 排空的上限（毫秒），交给 `listen({ graceMs })`。复核 AJ-267：原用 http.ts 默认 10s。 */
+export const SHUTDOWN_HTTP_GRACE_MS = 6_000;
+/** 停机时关连接池的上限（毫秒），交给 `drainEventsThenClose({ closeTimeoutMs })`。复核 AJ-267：原 5s。 */
+export const SHUTDOWN_DB_CLOSE_MS = 2_000;
+
+/**
+ * 停机各步上限**串行相加**的最坏耗时（毫秒）。
+ * 顺序：等 tick（JOB_WAIT）→ 摘流等待（READY_DELAY）→ HTTP 排空 → 等后台作业（JOB_WAIT）→ 等事件订阅者（EVENT_DRAIN）→ 关库。
+ * @why 复核 AJ-267（2026-10-06）：原默认值合计 5+5+10+5+8+5 = 38s，而总预算 27s 到点直接 exit(1)，
+ *      排在最后的"作废机构会话"与"关库"恰好被跳过。规则 10 用这个和去比总预算。
+ * @limitation 这是**上限之和**，正常停机远小于它；各步自己的实测耗时仍要在 staging 校准。
+ */
+export function shutdownWorstCaseMs(
+  c: Pick<
+    AppConfig,
+    'SHUTDOWN_JOB_WAIT_MS' | 'SHUTDOWN_READY_DELAY_MS' | 'SHUTDOWN_EVENT_DRAIN_MS'
+  >,
+): number {
+  return (
+    2 * c.SHUTDOWN_JOB_WAIT_MS +
+    c.SHUTDOWN_READY_DELAY_MS +
+    SHUTDOWN_HTTP_GRACE_MS +
+    c.SHUTDOWN_EVENT_DRAIN_MS +
+    SHUTDOWN_DB_CLOSE_MS
+  );
+}
+
 /**
  * @param now **注入的"当前时刻"**（F10：时间只从外面进来）。审核期截止日的判定要用到"今天"，
  *            而 `new Date()` 写在规则里就等于把时间钉死在进程内部——测试只能写相对日期，
@@ -715,6 +745,14 @@ const crossField = (now: Date) =>
     // 7.（剩余清单 2-3）DSN 解析不了 = 错误监控静默失效，启动时就拒
     if (c.SENTRY_DSN !== undefined && parseSentryDsn(c.SENTRY_DSN) === null) {
       add('SENTRY_DSN', 'SENTRY_DSN 形状不对（应为 https://PUBLIC_KEY@HOST/PROJECT_ID）');
+    }
+    // 10.（复核 AJ-267）停机各步上限串行相加不得超过总预算：超了，总预算到点强退会跳过最后的
+    //     "作废机构会话 + 关库"——已取消的单在会话自然过期前仍能被付款。总预算 0 = 不设预算（仅测试），不查。
+    if (c.SHUTDOWN_TOTAL_BUDGET_MS > 0 && shutdownWorstCaseMs(c) > c.SHUTDOWN_TOTAL_BUDGET_MS) {
+      add(
+        'SHUTDOWN_TOTAL_BUDGET_MS',
+        `停机各步上限之和 ${String(shutdownWorstCaseMs(c))}ms 超过 SHUTDOWN_TOTAL_BUDGET_MS（${String(c.SHUTDOWN_TOTAL_BUDGET_MS)}ms）：调小 SHUTDOWN_JOB_WAIT_MS×2 / SHUTDOWN_READY_DELAY_MS / SHUTDOWN_EVENT_DRAIN_MS`,
+      );
     }
 
     // 1. 生产跑假支付：最危险的一条——用户能正常下单、钱不到账，且日志里长得跟"放弃支付"一样
@@ -759,7 +797,7 @@ const crossField = (now: Date) =>
         '生产环境必须配置 APP_ID / APP_SECRET（小程序登录是唯一入口，缺了登录全部 500）',
       );
     }
-    // 1e. 本地模拟付款开关只给 development / test：公网环境打开 = 任何人下单都自动"付款成功"（mock 不收钱）
+    // 1g. 本地模拟付款开关只给 development / test：公网环境打开 = 任何人下单都自动"付款成功"（mock 不收钱）
     if ((isProd || c.NODE_ENV === 'staging') && c.MOCK_AUTO_CONFIRM === 'on') {
       add(
         'MOCK_AUTO_CONFIRM',
@@ -841,7 +879,7 @@ const crossField = (now: Date) =>
       add('PAYMENT_CHANNELS', 'REVIEW_MODE=on 时仅允许 mock 通道（审核期真实通道必须离线，AJ-30）');
     }
 
-    // 2d / 2e / 2f. 生产审核模式必须有**截止日**（A7 / AJ-378）。
+    // 2e / 2f / 2g. 生产审核模式必须有**截止日**（A7 / AJ-378）。（原标 2d/2e/2f，与下方「2d. Stripe 密钥形状」撞号，2026-10-06 改）
     //
     // @why 这是"忘了改也不会红"的第二类静默缺口：规则 1 与 2b 只保证"开审核模式时别开真实通道"，
     //      没有任何一条会告诉你"审核已经结束了、该关了"。R1（收单机构事前相談）通过之后，
@@ -1131,7 +1169,7 @@ export class ConfigError extends Error {
 /**
  * 校验环境变量；任一项不合法即抛 `ConfigError`（**不做兜底默认值**）。
  * @param env 默认 process.env；测试注入用，保证纯函数可测。
- * @param now 判定"今天"用的时刻（默认 `new Date()`）；仅供审核期截止日这类需要当前日期的规则使用（F10）。
+ * @param now 判定"今天"用的时刻（默认 `systemClock.now()`，理由见下方参数注释）；仅供审核期截止日这类需要当前日期的规则使用（F10）。
  * @throws {ConfigError} 校验失败时，issues 里列出全部问题（不是第一条就停）。
  */
 export function loadConfig(

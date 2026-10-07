@@ -26,8 +26,9 @@
  *              解析不到 `.ts`（vite 的 `.js → .ts` 映射只存在于测试侧）。
  *              代价是本文件没有类型检查（根 tsconfig `checkJs: false`），靠 JSDoc + 单测兜。
  *
- * @see ../components/ws-price/index.js、utils/pay-plan.js、utils/quote-view.js
- *      （三处消费方。⚠️ 这里曾写"唯一调用方"——与事实不符：pay-plan 的支付选项金额、
+ * @see 消费方见 `grep -rl price-format miniprogram`，不在此列举（复核 2026-10-06：曾列"三处"，
+ *      实际已有 8 处，含 home / detail / order / order-detail / cart 五个页面 vm——列举必然过时）。
+ *      （⚠️ 更早这里曾写"唯一调用方"——与事实不符：pay-plan 的支付选项金额、
  *      quote-view 的报价明细行都在用本文件。写"唯一"的代价是改本文件时只想得到组件那一条路，
  *      于是另两处的展示口径被悄悄改掉而没人复核（C3-01 更正））；
  *      docs/地基搭建清单.md F14

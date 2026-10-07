@@ -85,7 +85,7 @@ const SILENT_DROP_KEYS: ReadonlySet<string> = new Set(['event']);
  *      - `actor`：调度器 / 启动期 / 脚本这类**没有请求上下文**的地方，actor 没有任何其他来源，
  *        禁止 child 绑定等于让这批日志永远没有追责维度。
  * @why 其余保留键**刻意不开放**：trace_id / req_id 必须由 `runWithContext()` 在每一跳开头现取
- *      （调度器每个 job 建自己的链），user_id 由登录态决定，service/env/level/ts 是基础设施字段——
+ *      （调度器每轮 tick 一条链，AJ-57），user_id 由登录态决定，service/env/level/ts 是基础设施字段——
  *      允许 child 绑定它们，等于允许一段代码永久伪造一整片日志的身份，且无上下文处无人能纠正（N30）。
  */
 const CHILD_BINDABLE_KEYS: ReadonlySet<string> = new Set(['module', 'actor']);
