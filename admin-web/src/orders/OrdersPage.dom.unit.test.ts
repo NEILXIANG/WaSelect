@@ -12,6 +12,7 @@
  */
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { OrdersPage } from './OrdersPage.js';
 
@@ -77,6 +78,7 @@ describe('订单列表：刷新入口（ADM3-09）', () => {
     await click(button(el, '搜索'));
     expect(gets()).toHaveLength(2);
     expect(gets()[1]?.path).toContain('keyword=W-2601');
+    expect(keywordInput(el).maxLength).toBe(SEARCH_KEYWORD_MAX_LENGTH); // P2-47
     // 关键词已生效后再点一次（不变）→ 仍然重载
     await click(button(el, '搜索'));
     expect(gets()).toHaveLength(3);

@@ -14,7 +14,13 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CODES } from '@waselect/shared';
-import { ApiError, NETWORK_ERROR_CODE, UNAUTHORIZED_CODE } from './errors.js';
+import {
+  ApiError,
+  NETWORK_ERROR_CODE,
+  UNAUTHORIZED_CODE,
+  parseRetryAfter,
+  retryAfterMsSec,
+} from './errors.js';
 import { createAdminApi, DEFAULT_TIMEOUT_MS } from './client.js';
 import { DEFAULT_API_BASE, normalizeBaseUrl, resolveApiBase } from './config.js';
 import { createTokenStore, TOKEN_STORAGE_KEY } from './token-store.js';
@@ -160,6 +166,23 @@ describe('错误收敛（统一 ApiError 形状）', () => {
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).code).toBe(40902);
     expect((err as ApiError).message).toBe('订单状态不允许此操作');
+  });
+
+  it('P2-43/49：错误体的 data 与 retry-after 头原样带出（50300 退避、42901 锁定剩余）', async () => {
+    const spy = fetchSpy(async () =>
+      jsonResponse({ code: 50300, message: '服务暂不可用', data: { retry_after_ms: 4200 } }, 503, {
+        'retry-after': '900',
+      }),
+    );
+    const { api } = makeApi({ fetchImpl: spy.impl });
+    const err = (await api({ path: '/x', method: 'POST' }).catch((e: unknown) => e)) as ApiError;
+    expect(err.data).toEqual({ retry_after_ms: 4200 });
+    expect(err.retryAfterSec).toBe(900);
+    expect(retryAfterMsSec(err)).toBe(5);
+    // 头缺失 / 非整数秒 → undefined（不能变成"0 分钟后再试"）
+    expect(parseRetryAfter(null)).toBeUndefined();
+    expect(parseRetryAfter('')).toBeUndefined();
+    expect(parseRetryAfter('Wed, 21 Oct 2026 07:28:00 GMT')).toBeUndefined();
   });
 
   it('2xx 但 body 带 code → 仍按业务错（与小程序端同口径：成功 = 2xx 且无 code）', async () => {

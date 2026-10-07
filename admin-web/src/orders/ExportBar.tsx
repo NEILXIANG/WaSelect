@@ -32,6 +32,12 @@ function defaultDownload(filename: string, url: string): void {
   a.remove();
 }
 
+/**
+ * 导出请求的超时（P2-52）：全量订单表要在服务端拼 CSV，默认 10s 在数据量上来后会先超时——
+ * 而超时只是"不等了"，服务端仍在算（client.ts @limitation 二），运营会以为导出坏了反复点。
+ */
+export const EXPORT_TIMEOUT_MS = 60_000;
+
 /** 释放 Blob 地址前等待的毫秒数（扫描 A-01）。 */
 const REVOKE_DELAY_MS = 30_000;
 
@@ -49,7 +55,10 @@ export function ExportBar({ api, onDownload = defaultDownload }: ExportBarProps)
     setBusy(true);
     setError('');
     try {
-      const r = (await api({ path: `/api/v1/admin/exports/${kind}` })) as {
+      const r = (await api({
+        path: `/api/v1/admin/exports/${kind}`,
+        timeoutMs: EXPORT_TIMEOUT_MS,
+      })) as {
         filename?: unknown;
         csv?: unknown;
       } | null;

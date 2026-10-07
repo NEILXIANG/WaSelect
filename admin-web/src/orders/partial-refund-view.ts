@@ -9,7 +9,8 @@
  * @see server/src/domain/partial-refund.ts；./PartialRefunds.tsx；契约 0.6.35 PartialRefund
  */
 import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
-import type { Gate } from './view.js';
+import { UPSTREAM_UNAVAILABLE_CODE } from '../api/errors.js';
+import { upstreamUnavailableNotice, type Gate } from './view.js';
 
 interface RefundLike {
   id?: unknown;
@@ -114,4 +115,43 @@ export function partialRefundRows(order: unknown): PartialRefundRowView[] {
     createdAt: String(r.created_at ?? ''),
     canSync: IN_FLIGHT.has(String(r.status)),
   }));
+}
+
+/**
+ * 部分退款出错后、**重新取回订单之后**的提示（第三轮缺口 P2-49）：按那一行的真实状态说话。
+ *
+ * @param a.refundId 同步某一行时传它的 id；发起新一笔时不传，取 `knownIds` 之外新出现的那行
+ * @param a.knownIds 发起前已有的行 id（用来认出"这次新建的那一行"）
+ * @why 原实现一律只显示服务端 message（"服务器内部错误"），而行的状态其实已经定了：
+ *      failed = 机构确认没退、额度已释放，可以放心重新发起；unknown / initiated = 结果未知，
+ *      要点「同步」——这时去 Stripe 后台手工退就是同一笔退两次。
+ * @why 50300 单独说：服务端把熔断拒绝记成 failed（请求没发出去），额度同样已释放。
+ * @limitation 4xx（金额超额度、拒付中…）在建行之前就被拒，找不到新行 → 返回 ''（只显示服务端 message）。
+ */
+export function partialRefundErrorNotice(a: {
+  code: unknown;
+  retryAfterSec?: number | undefined;
+  order: unknown;
+  refundId?: string | undefined;
+  knownIds?: readonly string[] | undefined;
+}): string {
+  if (a.code === UPSTREAM_UNAVAILABLE_CODE)
+    return `${upstreamUnavailableNotice(a.retryAfterSec)}（这一笔已记为失败，额度已释放）`;
+  const rows = refundsOf(a.order);
+  const known = new Set(a.knownIds ?? []);
+  const row =
+    a.refundId !== undefined
+      ? rows.find((r) => String(r.id) === a.refundId)
+      : rows.filter((r) => !known.has(String(r.id))).at(-1);
+  if (row === undefined) return '';
+  switch (String(row.status)) {
+    case 'failed':
+      return '机构确认失败，额度已释放，可重新发起';
+    case 'succeeded':
+      return '刷新后这一笔已是「已退款」：实际已退成功，无需再操作';
+    case 'pending':
+      return '机构处理中：请稍后点「同步」取回结果，不要去 Stripe 后台重复退';
+    default:
+      return '结果未知，请点「同步」取回结果，不要去 Stripe 后台重复退';
+  }
 }

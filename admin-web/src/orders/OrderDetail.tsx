@@ -14,7 +14,7 @@
  *      ⚠️ 0.6.1 起列表也带 `has_dispute`，所以"按钮亮着、点了一定失败"这一条已不再是主因，
  *      但"快照可能过期"仍在——重新拉取解决的是后者。
  *
- * @why 退款是**两步确认**（点「退款」→ 出现「确认退款 / 取消」）而不是一次性提交：
+ * @why 发货与退款都是**两步确认**（点「发货」/「退款」→ 出现「确认… / 取消」；发货于 P2-51 补）而不是一次性提交：
  *      退款是钱出去的动作，且 MVP 只支持全额退款、没有"撤销"。
  *      ⚠️ 二次确认不能替代闸门——它只防误点，不防"这单本来就不该退"。
  *
@@ -28,7 +28,7 @@
  */
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH, REFUND_REASON_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
-import { ApiError } from '../api/errors.js';
+import { ApiError, retryAfterMsSec } from '../api/errors.js';
 import {
   getOrder,
   refundOrder,
@@ -48,8 +48,8 @@ import {
   eventStatusText,
   paymentSummary,
   purchaseLine,
+  fullRefundErrorNotice,
   refundErrors,
-  refundFailureNotice,
   refundGate,
   RELEASE_DONE_NOTICE,
   releaseErrors,
@@ -86,19 +86,29 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
   const [refund, setRefund] = useState(emptyRefundForm);
   /** 退款的两步确认（null = 未发起）。 */
   const [confirming, setConfirming] = useState(false);
+  /**
+   * 发货的两步确认（P2-51）。
+   * @why 发货后订单不能再改址、全额退款也不回补库存，而运单号填错目前只能等服务端加"改运单号"接口；
+   *      与退款同口径先点「发货」→ 核对承运商与运单号 → 「确认发货」。改了输入框内容即退出确认态。
+   */
+  const [shipConfirming, setShipConfirming] = useState(false);
   /** 解除拒付限制的表单与两步确认（B1b / AJ-194；不可逆，契约没有"重新上锁"）。 */
   const [release, setRelease] = useState(emptyReleaseForm);
   const [releaseConfirming, setReleaseConfirming] = useState(false);
   const [busy, setBusy] = useState('');
 
-  const load = useCallback(async () => {
+  /** 取详情；返回取到的订单（失败为 null），供"出错后按真实状态说话"使用（P2-49）。 */
+  const load = useCallback(async (): Promise<AdminOrderLike | null> => {
     setLoading(true);
     setError('');
     try {
-      setOrder(await getOrder(api, id));
+      const fresh = await getOrder(api, id);
+      setOrder(fresh);
+      return fresh;
     } catch (e) {
       // ⚠️ 取详情失败**不清空已有数据**：留着上一次的列表面也比整页空白好排查
       setError(e instanceof ApiError ? e.message : String(e));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -121,13 +131,25 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
     try {
       await shipOrder(api, id, toShipBody(ship));
       setShip(emptyShipForm());
+      setShipConfirming(false);
       await load();
       onChanged();
     } catch (e) {
+      setShipConfirming(false);
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setBusy('');
     }
+  };
+
+  const askShip = (): void => {
+    const check = shipErrors(ship);
+    if (!check.ok) {
+      setError(check.first);
+      return;
+    }
+    setError('');
+    setShipConfirming(true);
   };
 
   const doRefund = async (): Promise<void> => {
@@ -160,10 +182,11 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
       const message = e instanceof ApiError ? e.message : String(e);
       const code = e instanceof ApiError ? e.code : 0;
       setConfirming(false);
-      await load();
+      const fresh = await load();
       onChanged();
       setError(message);
-      setNotice(refundFailureNotice(code));
+      // 按刷新后的真实状态说话（P2-49）：已退成 / 机构确认失败 / 结果未知 / 50300 未发出，四种下一步各不相同
+      setNotice(fullRefundErrorNotice({ code, retryAfterSec: retryAfterMsSec(e), order: fresh }));
     } finally {
       setBusy('');
     }
@@ -370,24 +393,49 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 placeholder="承运商（如 Japan Post）"
                 maxLength={SHIP_MAX_CHARS.carrier}
                 value={ship.carrier}
-                onChange={(e) => setShip((s) => ({ ...s, carrier: e.target.value }))}
+                onChange={(e) => {
+                  setShipConfirming(false);
+                  setShip((s) => ({ ...s, carrier: e.target.value }));
+                }}
               />
               <input
                 className="input"
                 placeholder="运单号"
                 maxLength={SHIP_MAX_CHARS.tracking_no}
                 value={ship.trackingNo}
-                onChange={(e) => setShip((s) => ({ ...s, trackingNo: e.target.value }))}
+                onChange={(e) => {
+                  setShipConfirming(false);
+                  setShip((s) => ({ ...s, trackingNo: e.target.value }));
+                }}
               />
             </div>
-            <button
-              type="button"
-              className="btn"
-              disabled={!shipG.ok || busy !== ''}
-              onClick={() => void doShip()}
-            >
-              {busy === 'ship' ? '提交中…' : '确认发货'}
-            </button>
+            {shipConfirming ? (
+              <div className="row2">
+                <span className="muted">
+                  核对：{ship.carrier.trim()} / {ship.trackingNo.trim()}
+                </span>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!shipG.ok || busy !== ''}
+                  onClick={() => void doShip()}
+                >
+                  {busy === 'ship' ? '提交中…' : '确认发货'}
+                </button>
+                <button type="button" className="link" onClick={() => setShipConfirming(false)}>
+                  取消
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn"
+                disabled={!shipG.ok || busy !== ''}
+                onClick={askShip}
+              >
+                发货
+              </button>
+            )}
             {!shipG.ok && <p className="muted">{shipG.reason}</p>}
           </div>
 
@@ -435,10 +483,12 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
             orderId={id}
             order={order}
             onDone={async () => {
-              await load();
+              const fresh = await load();
               onChanged();
+              return fresh;
             }}
             onError={setError}
+            onNotice={setNotice}
           />
         </>
       )}

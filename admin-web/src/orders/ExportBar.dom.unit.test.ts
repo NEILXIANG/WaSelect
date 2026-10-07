@@ -16,6 +16,7 @@ afterEach(async () => {
 describe('ExportBar（3-3）', () => {
   it('🔴 点"导出报关清单" → 请求 customs，把返回的 csv 存成同名文件（Blob + a.download）', async () => {
     const paths: string[] = [];
+    const timeouts: Array<number | undefined> = [];
     const blobs: Blob[] = [];
     vi.stubGlobal('URL', {
       ...URL,
@@ -23,8 +24,9 @@ describe('ExportBar（3-3）', () => {
       revokeObjectURL: () => undefined,
     });
     const clicked: string[] = [];
-    const api = (req: { path: string }): Promise<unknown> => {
+    const api = (req: { path: string; timeoutMs?: number }): Promise<unknown> => {
       paths.push(req.path);
+      timeouts.push(req.timeoutMs);
       return Promise.resolve({ filename: 'customs-20261006.csv', csv: '﻿a\r\n1\r\n' });
     };
     mounted = await mount(
@@ -35,6 +37,7 @@ describe('ExportBar（3-3）', () => {
     );
     await click(button(mounted.el, '导出报关清单'));
     expect(paths).toEqual(['/api/v1/admin/exports/customs']);
+    expect(timeouts).toEqual([60_000]); // P2-52：导出用长超时
     expect(clicked).toEqual(['customs-20261006.csv']);
     expect(blobs[0]?.type).toBe('text/csv;charset=utf-8');
   });

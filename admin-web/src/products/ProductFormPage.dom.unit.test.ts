@@ -11,8 +11,9 @@
  *         运营以为保存了，实际整行没写。
  *      这两条都是"纯函数层全绿也照样发生"的缺陷，只有把组件挂起来才测得出来（AJ-229 同型）。
  *
- * @why 断言里要求错误文案给出**下一步**（"重新进入编辑"）而不只是复述码：
+ * @why 断言里要求错误文案给出**下一步**（"加载最新值对照"）而不只是复述码：
  *      只说"被别人改过了"，运营会原地再点一次保存——凭据没变，再撞一次。
+ *      （P2-44 订正：旧的下一步是"重新进入编辑"，那会丢掉整张表单。）
  *
  * @see ./ProductFormPage.tsx；./api.ts（updateProduct 的 expectedUpdatedAt）；./view.ts（sourceUpdatedAt）
  */
@@ -104,14 +105,60 @@ describe('商品编辑：保存撞上 40914（ADM3-02）', () => {
     expect(calls[0]?.body).toMatchObject({ expected_updated_at: '2026-10-01T00:00:00.000Z' });
   });
 
-  it('🔴 错误文案给出**下一步**（重新进入编辑），不是只复述错误码', async () => {
+  it('🔴 错误文案给出**下一步**（加载最新值对照），不是只复述错误码，也不叫人回列表', async () => {
     putCode = 40914;
     const el = await open();
     await click(button(el, '保存'));
     const msg = pageError(el);
     expect(msg).toContain('被别人改过了');
-    expect(msg).toContain('重新进入编辑');
-    expect(msg).toContain('内容还在');
+    expect(msg).toContain('加载最新值对照');
+    expect(msg).toContain('内容都还在');
+    expect(msg).not.toContain('返回列表');
+    expect(button(el, '加载最新值对照')).not.toBeNull();
+  });
+
+  it('🔴 P2-44 加载最新值对照：表单不动、旁边列出最新值并标出不同；再保存带最新一版的凭据', async () => {
+    const latest = { ...SOURCE, price_jpy: 3280, updated_at: '2026-10-02T00:00:00.000Z' };
+    const reqs: Array<{ path: string; method?: string; body?: unknown }> = [];
+    let puts = 0;
+    const api = async (req: {
+      path: string;
+      method?: string;
+      body?: unknown;
+    }): Promise<unknown> => {
+      reqs.push(req);
+      if (req.method === 'PUT') {
+        puts += 1;
+        if (puts === 1) throw new ApiError(40914, '这条内容在你打开之后被别人改过了', 't');
+        return { id: 'p-1' };
+      }
+      return { items: [latest], total: 1 };
+    };
+    mounted = await mount(
+      createElement(ProductFormPage, {
+        api: api as never,
+        baseUrl: 'http://localhost',
+        getToken: () => 'tk',
+        productId: 'p-1',
+        source: SOURCE as never,
+        onDone: () => undefined,
+      }),
+    );
+    const el = mounted.el;
+    await typeInto(field(el, '商品名（面向买家）'), '改过的标题');
+    await click(button(el, '保存'));
+    await click(button(el, '加载最新值对照'));
+    expect(field(el, '商品名（面向买家）').value).toBe('改过的标题');
+    const diffRows = [...el.querySelectorAll('tr')].map((tr) => tr.textContent ?? '');
+    expect(
+      diffRows.some((t) => t.includes('≠ 售价') && t.includes('2980') && t.includes('3280')),
+    ).toBe(true);
+    await click(button(el, '保存'));
+    const lastPut = reqs.filter((r) => r.method === 'PUT').at(-1);
+    expect(lastPut?.body).toMatchObject({
+      title: '改过的标题',
+      expected_updated_at: '2026-10-02T00:00:00.000Z',
+    });
   });
 
   it('保存成功 → 回列表（对照组：上一条的"不回列表"是因为失败，不是因为压根没提交）', async () => {

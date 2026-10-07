@@ -13,7 +13,7 @@
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
-import { button, click, mount, type Mounted } from '../testing/dom.js';
+import { button, click, flush, mount, type Mounted } from '../testing/dom.js';
 import { RatesPanel } from './RatesPanel.js';
 
 let mounted: Mounted | undefined;
@@ -86,5 +86,35 @@ describe('运费分档面板：加载失败时不可编辑（AJ-232）', () => {
       (tr.textContent ?? '').includes('档位重复'),
     );
     expect(flags).toEqual([false, true, true]);
+  });
+});
+
+describe('运费分档面板：确认替换的在途保护（P2-47）', () => {
+  it('🔴 PUT 在途时"确认"按钮禁用，连点只发一次', async () => {
+    list = [{ carrier: 'JP_POST_EMS', max_weight_g: 500, price_jpy: 2950, active: true }];
+    let release: () => void = () => {};
+    const pending = new Promise<void>((r) => {
+      release = r;
+    });
+    let putCount = 0;
+    const api = async (req: { method?: string }): Promise<unknown> => {
+      if (req.method === 'PUT') {
+        putCount += 1;
+        await pending;
+        return {};
+      }
+      return list;
+    };
+    mounted = await mount(createElement(RatesPanel, { api: api as never }));
+    const el = mounted.el;
+    await click(saveButton(el));
+    await click(button(el, '确认：用当前 1 档替换全部'));
+    const busy = button(el, '保存中…');
+    expect(busy?.disabled).toBe(true);
+    await click(busy);
+    expect(putCount).toBe(1);
+    release();
+    await flush();
+    expect(el.textContent).toContain('已整表替换');
   });
 });

@@ -21,7 +21,7 @@
  * @see ../../../contracts/api-contract.yaml（ShippingRate / FxRate）；
  *      ../format.ts（展示格式）；server/src/adapters/catalog.ts（D-46 取档唯一实现）
  */
-import { FX_RAW_RATE_BOUNDS } from '@waselect/shared';
+import { FX_RAW_RATE_BOUNDS, SHIPPING_RATE_BOUNDS } from '@waselect/shared';
 import { formatJst, moneyText, toIsoJst } from '../format.js';
 
 /** 一条运费分档（表单态：数值以字符串存，提交时转）。 */
@@ -479,6 +479,11 @@ export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; firs
       );
     } else if (max < 1) {
       errors.push(`${at}：重量上限必须是 ≥1 的整数（克）`);
+    } else if (max > SHIPPING_RATE_BOUNDS.maxWeightG) {
+      // 与服务端 `max_weight_g_out_of_range` 同源（shared 常量）：不补的话服务端只回泛化的 40001
+      errors.push(
+        `${at}：重量上限不能超过 ${SHIPPING_RATE_BOUNDS.maxWeightG} 克（承运商单件上限 30kg；请检查是否多打了 0）`,
+      );
     }
     if (price === null) {
       errors.push(
@@ -486,6 +491,8 @@ export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; firs
           ? `${at}：运费必填（包邮请显式填 0，不要留空）`
           : `${at}：运费必须是 ≥0 的整数（円）`,
       );
+    } else if (price > SHIPPING_RATE_BOUNDS.priceJpy) {
+      errors.push(`${at}：运费不能超过 ${SHIPPING_RATE_BOUNDS.priceJpy} 円（请检查是否多打了 0）`);
     }
     if (dupFlags[i] === true)
       errors.push(`${at}：与前面某一档的承运商 + 上限重复（DB 唯一约束会拒）`);
@@ -493,6 +500,21 @@ export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; firs
 
   if (!list.some((r) => (r as { active?: unknown } | null)?.active !== false))
     errors.push('至少要有一档是启用状态（全停用 = 没有运费可算）');
+
+  // 🔴 启用档位必须**恰好一家**承运商（服务端 `carrier_not_single`，D-46 同源守卫）。
+  //    @why 服务端拒绝时回的是泛化的 40001「参数缺失或格式错误」，运营看不出是哪里错；
+  //    前端在这里把原因说清楚。两家以上同时启用 = 取档不知道该用哪家的表 ⇒ 全站报价 50004。
+  //    @limitation 承运商名按 trim 后**原样**比较（大小写不同算两家），与服务端口径一致。
+  const activeCarriers = new Set<string>();
+  for (const raw of list) {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+    const c = typeof r['carrier'] === 'string' ? r['carrier'].trim() : '';
+    if (r['active'] !== false && c !== '') activeCarriers.add(c);
+  }
+  if (activeCarriers.size > 1)
+    errors.push(
+      `启用中的档位只能属于同一家承运商（现在有 ${[...activeCarriers].join('、')}）：请停用其他承运商的档位，或改成同一个承运商名`,
+    );
 
   return { ok: errors.length === 0, errors, first: errors[0] ?? '' };
 }

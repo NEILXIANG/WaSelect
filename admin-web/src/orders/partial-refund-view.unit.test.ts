@@ -8,6 +8,7 @@ import {
   parseAmountToMinor,
   partialRefundGate,
   partialRefundRows,
+  partialRefundErrorNotice,
   refundableMinor,
 } from './partial-refund-view.js';
 
@@ -116,5 +117,36 @@ describe('partialRefundRows', () => {
       ['rf-1', '10.00 USD', '已退款', false],
       ['rf-2', '0.50 USD', '结果未知（点同步取回）', true],
     ]);
+  });
+});
+
+describe('partialRefundErrorNotice（P2-49）', () => {
+  const order = (rows: unknown[]): unknown => ({ partial_refunds: rows });
+  it('同步某一行：按那一行的状态说；发起：取新出现的那行；4xx 找不到新行 → 空', () => {
+    expect(
+      partialRefundErrorNotice({
+        code: 50000,
+        order: order([{ id: 'a', status: 'failed' }]),
+        refundId: 'a',
+      }),
+    ).toContain('额度已释放');
+    expect(
+      partialRefundErrorNotice({
+        code: 50000,
+        order: order([
+          { id: 'old', status: 'failed' },
+          { id: 'new', status: 'initiated' },
+        ]),
+        knownIds: ['old'],
+      }),
+    ).toContain('结果未知');
+    expect(
+      partialRefundErrorNotice({ code: 40001, order: order([{ id: 'old' }]), knownIds: ['old'] }),
+    ).toBe('');
+  });
+  it('50300 → 请求未发出 + 秒数', () => {
+    expect(partialRefundErrorNotice({ code: 50300, retryAfterSec: 2, order: null })).toContain(
+      '约 2 秒后可重试',
+    );
   });
 });

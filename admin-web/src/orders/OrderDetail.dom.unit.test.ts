@@ -201,10 +201,37 @@ describe('订单详情：退款提交出错之后（B41 残留 / AJ-230）', () 
     expect(detailFetches()).toBe(before + 1); // 重新取了详情
     expect(changed).toBe(1); // 通知了列表
     expect(el.textContent).toContain('退款中');
-    expect(el.textContent).toContain('不要去机构后台手工退款');
+    // P2-49：刷新后是「退款中」且没有"机构确认失败"事件 → 按"结果未知"说，指明不要去 Stripe 后台重复退
+    expect(el.textContent).toContain('结果未知');
+    expect(el.textContent).toContain('不要去 Stripe 后台重复退');
     // 错误本身仍要显示（带出服务端的话），且确认态已退出——不留一个还能再点的"确认退款"
     expect(el.querySelector('.error')?.textContent).toContain('服务器内部错误');
     expect(button(el, '确认退款')).toBeNull();
+  });
+
+  it('P2-49 刷新后发现机构已确认失败（refund_failed provider_failed:…）→ 说可重新发起', async () => {
+    status = 'paid';
+    refundBehaviour = () => {
+      status = 'refunding';
+      events = [
+        { status: 'refund_failed', note: 'provider_failed:re_3Q', at: '2026-10-06T01:00:00Z' },
+      ];
+      throw new ApiError(50000, '服务器内部错误', 't-3');
+    };
+    const el = await open();
+    await submitRefund(el);
+    expect(el.textContent).toContain('机构确认失败');
+    expect(el.textContent).not.toContain('不要去 Stripe 后台重复退');
+  });
+
+  it('P2-49 50300（熔断，请求未发出）→ 带 retry_after_ms 的秒数', async () => {
+    status = 'paid';
+    refundBehaviour = () => {
+      throw new ApiError(50300, '服务暂时不可用', 't-4', { data: { retry_after_ms: 8000 } });
+    };
+    const el = await open();
+    await submitRefund(el);
+    expect(el.textContent).toContain('上游暂时不可用，请求未发出，约 8 秒后可重试');
   });
 
   it('🔴 网络错误（结果未知）：同样重新取详情并给出同一条提醒', async () => {
@@ -412,5 +439,33 @@ describe('订单详情：改址表单预填（A-02）', () => {
     const values = [...mounted.el.querySelectorAll('input')].map((i) => i.value);
     expect(values).toContain('Jane Doe');
     expect(values).toContain('1 Main St');
+  });
+});
+
+describe('订单详情：发货两步确认（P2-51）', () => {
+  beforeEach(() => {
+    hasDispute = false;
+    refundBehaviour = () => ({ order_id: 'o-1', outcome: 'succeeded' });
+    releaseBehaviour = () => ({ order_id: 'o-1', has_dispute: false });
+  });
+
+  const shipPosts = (): Call[] => calls.filter((c) => c.path.endsWith('/ship'));
+
+  it('🔴 点「发货」只进入核对态、不发请求；「确认发货」才发；改输入即退出确认态', async () => {
+    status = 'paid';
+    const el = await open();
+    await type(el.querySelector('input[placeholder^="承运商"]'), 'Japan Post');
+    await type(el.querySelector('input[placeholder="运单号"]'), 'EJ123456789JP');
+    await click(button(el, '发货'));
+    expect(shipPosts()).toHaveLength(0);
+    expect(el.textContent).toContain('核对：Japan Post / EJ123456789JP');
+
+    await type(el.querySelector('input[placeholder="运单号"]'), 'EJ987654321JP');
+    expect(button(el, '确认发货')).toBeNull();
+
+    await click(button(el, '发货'));
+    await click(button(el, '确认发货'));
+    expect(shipPosts()).toHaveLength(1);
+    expect(shipPosts()[0]?.body).toEqual({ carrier: 'Japan Post', tracking_no: 'EJ987654321JP' });
   });
 });

@@ -29,6 +29,35 @@
 import { ApiError, NETWORK_ERROR_CODE, UNAUTHORIZED_CODE } from './errors.js';
 
 /**
+ * 单文件上限（字节）：**镜像**服务端 `server/src/domain/upload-image.ts` 的 `UPLOAD_MAX_BYTES`
+ * （由 `server/src/app/admin-upload-routes.ts` 消费）。改服务端那份时**必须同步改这里**。
+ * @why 不在 shared：服务端常量住在 domain 层且不在 shared 里，本轮约定不改服务端；
+ *      前端这份只用于"上传前就告诉运营太大了"，即使漂移，最终仍以服务端为准（多拒或少拒一次预检）。
+ */
+export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+/** 服务端只认这三族（按 magic bytes 嗅探，见 upload-image.ts @limitation 二）；也用作 `<input accept>`。 */
+export const UPLOAD_ACCEPT_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+export const UPLOAD_ACCEPT = UPLOAD_ACCEPT_TYPES.join(',');
+
+/**
+ * 上传前预检（P2-45）：返回给运营看的错误文案；通过返回 ''。
+ * @why 10MB 的图要传完才被服务端拒，运营等了几十秒只看到一句泛化错误；HEIC（iPhone 直出）同理。
+ * @limitation `file.type` 是浏览器按扩展名猜的，可被改名绕过——这只是体验预检，真闸门是服务端的字节嗅探。
+ *             `type` 为空串（系统认不出）时放行，交给服务端判。
+ */
+export function uploadPrecheck(file: { size: number; type: string; name?: string }): string {
+  if (file.type !== '' && !(UPLOAD_ACCEPT_TYPES as readonly string[]).includes(file.type)) {
+    return `不支持的图片格式（${file.type}）：只收 JPEG / PNG / WebP，iPhone 的 HEIC 请先转成 JPEG`;
+  }
+  if (file.size > UPLOAD_MAX_BYTES) {
+    const mb = (file.size / 1024 / 1024).toFixed(1);
+    return `图片太大（${mb}MB）：单张不能超过 10MB，请压缩后再传`;
+  }
+  return '';
+}
+
+/**
  * 上传响应：三档 URL 可选（IMG_BASE_URL 未配置时全省略），`image_key` 与 `image_id` **恒在**。
  *
  * @why 商品图从 0.6.29 / AJ-362 起**只存 `image_id`**（三档的共同主键）——
@@ -73,6 +102,9 @@ export async function uploadImage(
   file: File,
   traceId?: string,
 ): Promise<UploadedImage> {
+  // 预检不过不发请求（P2-45）；用 40001 与服务端"格式不收"同码，调用方按 message 展示
+  const pre = uploadPrecheck(file);
+  if (pre !== '') throw new ApiError(40001, pre, traceId ?? '');
   const doFetch = deps.fetchImpl ?? fetch;
   const form = new FormData();
   form.set('file', file);

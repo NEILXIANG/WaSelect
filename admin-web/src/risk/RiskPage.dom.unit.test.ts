@@ -122,7 +122,11 @@ describe('风控页：拉黑串单（ADM3-01）', () => {
 
     // 从 A 重新进入（B 的失败没有留下可点的面板）
     await click(handle(el, 0));
+    const blockedLoads = (): number => calls.filter((c) => c.path.includes('blocked=true')).length;
+    const before = blockedLoads();
     await click(button(el, '确认拉黑'));
+    // P2-47：拉黑成功后「已拉黑用户」重新取数（新拉黑的人立刻出现）
+    expect(blockedLoads()).toBe(before + 1);
 
     // 带 order_id：服务端据此核对"这张单属于这个人"（ADM3-01 纵深防御 / AJ-290）。
     // ❗ 少了 body 这一项，"页面真的把凭据发出去了"就没人守——服务端那条校验会永远拿不到调用。

@@ -20,6 +20,9 @@ import {
   BLOCKED_CUSTOMS_WORDS,
   CATEGORY_LABELS,
   PRODUCT_CATEGORY,
+  hsCodeShapeOk,
+  productConflictRows,
+  productFormWarnings,
   emptyProductForm,
   productFormErrors,
   productFormModel,
@@ -61,7 +64,7 @@ describe('productRows（列表行）', () => {
       id: 'p-shiro-cleansing-oil',
       title: '資生堂 クレンジングオイル 200ml',
       categoryLabel: '美妆护肤',
-      priceText: '3600 円',
+      priceText: '3,600 円', // P2-52：与订单页同一个 moneyText（千分位）
       stockText: '12',
       status: 'active',
       statusText: '在售',
@@ -76,9 +79,9 @@ describe('productRows（列表行）', () => {
     expect(row?.statusText).toBe('已下架');
   });
 
-  it('缺字段降级：价格/库存非整数 → 空串与 —（不把脏数据渲染成数字）', () => {
+  it('缺字段降级：价格/库存非整数 → —（不把脏数据渲染成数字）', () => {
     const row = productRows([{ id: 'x', status: 'offline' }])[0];
-    expect(row?.priceText).toBe('');
+    expect(row?.priceText).toBe('—');
     expect(row?.stockText).toBe('—');
   });
 
@@ -189,6 +192,53 @@ describe('AJ-362：images 的提交形态', () => {
       }),
     );
     expect(out['images']).toEqual([{ thumb: 't.webp', card: 'c.webp', detail: 'd.webp' }]);
+  });
+});
+
+describe('P2-51 数值不收科学计数法 / HS 编码形状 / 成本≥售价提醒', () => {
+  const base = (): ReturnType<typeof productFormModel> => productFormModel(PRODUCT);
+
+  it('1e3 这类科学计数法 → 拒，并点明原因', () => {
+    for (const key of ['priceJpy', 'weightG', 'stock', 'costJpy'] as const) {
+      const r = productFormErrors({ ...base(), [key]: '1e3' });
+      expect(r.errors[key], key).toContain('科学计数法');
+    }
+  });
+
+  it.each([
+    ['6912.00', true],
+    ['330499', true],
+    ['3304995000', true],
+    ['3304', false],
+    ['3304,99', false],
+    ['HS330499', false],
+    ['33049950001', false],
+  ])('hsCodeShapeOk(%s) → %s', (raw, ok) => {
+    expect(hsCodeShapeOk(raw)).toBe(ok);
+  });
+
+  it('HS 编码形状不对 → 报错；带点号的 10 位 HTS（12 字符）被列宽挡下', () => {
+    expect(productFormErrors({ ...base(), hsCode: '3304,99' }).errors['hsCode']).toContain(
+      '6–10 位数字',
+    );
+    expect(productFormErrors({ ...base(), hsCode: '3304.99.5000' }).errors['hsCode']).toContain(
+      '最多 10 字',
+    );
+  });
+
+  it('成本 ≥ 售价只提醒不拦截', () => {
+    const f = { ...base(), priceJpy: '1000', costJpy: '1000' };
+    expect(productFormErrors(f).ok).toBe(true);
+    expect(productFormWarnings(f)[0]).toContain('不低于售价');
+    expect(productFormWarnings({ ...f, costJpy: '999' })).toEqual([]);
+    expect(productFormWarnings({ ...f, costJpy: '' })).toEqual([]);
+  });
+
+  it('productConflictRows：逐字段对照，标出不同项', () => {
+    const rows = productConflictRows({ ...base(), priceJpy: '9999' }, PRODUCT);
+    const price = rows.find((r) => r.label === '售价（円）');
+    expect(price).toMatchObject({ mine: '9999', differs: true });
+    expect(rows.find((r) => r.label === '商品名')?.differs).toBe(false);
   });
 });
 

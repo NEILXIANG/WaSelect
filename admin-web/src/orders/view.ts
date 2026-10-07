@@ -41,6 +41,7 @@ import {
   SHIP_MAX_CHARS,
   type OrderStatus,
 } from '@waselect/shared';
+import { UPSTREAM_UNAVAILABLE_CODE } from '../api/errors.js';
 import { formatJst, minorMoneyText, moneyText } from '../format.js';
 
 /** 管理端状态文案（@see @limitation 一：比买家侧更细，十态互不合并）。 */
@@ -92,6 +93,9 @@ export const EVENT_STATUS_LABELS: Readonly<Record<string, string>> = {
   dispute_released: '解除拒付限制',
   pay_create_failed: '机构拒建支付会话',
   late_paid: '迟到付款（关单后收到钱）',
+  // AJ-383 部分退款的两条事件（server/src/app/partial-refund.ts）；第三轮缺口 P2-50 补
+  partial_refunded: '部分退款成功',
+  partial_failed: '部分退款失败',
 };
 
 /** 闸门结果：不能操作时必须有**具体原因**（按钮禁用也要能 tooltip 出来）。 */
@@ -246,9 +250,9 @@ export function shipGate(order: unknown): Gate {
  * @why `created` / `pending_payment` 给的是"去取消"而不是"去退款"：
  *      没付过的钱没有可退的支付记录，走退款只会拿到 409，
  *      而运营真正要做的是取消订单——文案不指明这一点，他会反复点退款。
- * @limitation 五：`completed`（已完成）**前端拦**，理由是 MVP 只支持全额退款、
- *      完成单的退款需要线下处理；契约本身没有把 completed 排除在外，
- *      所以这条同样是前端口径，服务端将来若支持应同步放开。
+ * @limitation 五：`completed`（已完成）**全额退款入口**前端拦——售后退款走「部分退款」
+ *      （AJ-383：订单状态不动，可退到全额）。原文案"MVP 不支持完成后退款（走线下处理）"
+ *      在 AJ-383 之后已不成立（第三轮缺口 P2-50 订正）。
  */
 export function refundGate(order: unknown): Gate {
   const status = readStatus(order);
@@ -296,7 +300,7 @@ export function refundGate(order: unknown): Gate {
     case 'refunded':
       return NO('已退款');
     case 'completed':
-      return NO('已完成，MVP 不支持完成后退款（走线下处理）');
+      return NO('已完成的订单请用下方「部分退款」处理售后（可退到全额）');
     case 'cancelled':
       return NO('已取消，未成交无需退款');
     case 'expired':
@@ -523,12 +527,58 @@ export function toRefundBody(form: unknown): { reason: string } {
  * @limitation 前端分不出"5xx 发生在落 refunding 之前还是之后"，所以一律提醒并**同时刷新详情**——
  *              以刷新后的订单状态为准，文案也是这么说的。
  */
-export function refundFailureNotice(code: unknown): string {
+export function refundFailureNotice(code: unknown, retryAfterSec?: number): string {
   const c = typeof code === 'number' ? code : 0;
+  // 50300 单独说（P2-49）：熔断在出发前就拒了，请求**没有发到机构**——说"结果未知"会把人吓去机构后台
+  if (c === UPSTREAM_UNAVAILABLE_CODE) return upstreamUnavailableNotice(retryAfterSec);
   const unknownOutcome = c < 0 || c >= 50000;
   return unknownOutcome
     ? '⚠️ 这次退款的结果未知：请以上面刷新后的订单状态为准。若已是「退款中」，稍后再提交一次即可查询结果（不会重复退款）；不要去机构后台手工退款。'
     : '';
+}
+
+/** 50300 的统一文案（全额 / 部分退款共用）；秒数取自 `data.retry_after_ms`，没有就不编数字。 */
+export function upstreamUnavailableNotice(retryAfterSec?: number): string {
+  return retryAfterSec !== undefined
+    ? `上游暂时不可用，请求未发出，约 ${Math.max(1, retryAfterSec)} 秒后可重试`
+    : '上游暂时不可用，请求未发出，请稍后重试';
+}
+
+/**
+ * 全额退款出错后、**重新取回订单之后**的提示（P2-49）：按刷新后的真实状态说话，而不是一律"结果未知"。
+ *
+ * @param a.order 刷新后的订单（取不到为 null → 回落到 `refundFailureNotice`）
+ * @why 服务端两种失败都记 `refund_failed` 事件，靠 note 区分（orders-admin.ts `recordRefundFailed`）：
+ *      `provider_failed:<ref>` = 机构**确认**失败（再提交会换新键重新发起）；
+ *      `provider_error` = 机构超时 / 报错（结果未知，再提交只查询或同键重发）。
+ *      两者对运营的下一步含义相反，不能混成一句。
+ * @limitation 只看**最后一条**退款相关事件（refund_failed / refund_pending）；事件写入是 best-effort，
+ *             缺事件时按"结果未知"说（保守：不让人以为可以放心重新发起）。
+ */
+export function fullRefundErrorNotice(a: {
+  code: unknown;
+  retryAfterSec?: number | undefined;
+  order: unknown;
+}): string {
+  const base = refundFailureNotice(a.code, a.retryAfterSec);
+  if (base === '' || a.code === UPSTREAM_UNAVAILABLE_CODE || a.order === null) return base;
+  const status = readStatus(a.order);
+  if (status === 'refunded') return '刷新后订单已是「已退款」：这笔退款实际已完成，无需再操作。';
+  if (status !== 'refunding') return base;
+  const events = (a.order as { events?: unknown }).events;
+  const last = (Array.isArray(events) ? events : [])
+    .filter(
+      (e: { status?: unknown }) => e?.status === 'refund_failed' || e?.status === 'refund_pending',
+    )
+    .at(-1) as { status?: unknown; note?: unknown } | undefined;
+  if (
+    last?.status === 'refund_failed' &&
+    typeof last.note === 'string' &&
+    last.note.startsWith('provider_failed')
+  ) {
+    return '机构确认失败（钱没有退出去）：订单停在「退款中」，可再提交一次重新发起。';
+  }
+  return '结果未知：请再点一次「退款」取回结果（只会查询或同键重发，不会退两次），不要去 Stripe 后台重复退。';
 }
 
 /**

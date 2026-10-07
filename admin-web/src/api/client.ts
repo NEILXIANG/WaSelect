@@ -19,7 +19,7 @@
  *
  * @see ./errors.ts（错误形状）；./config.ts（baseUrl 校验）；docs/地基搭建清单.md F15
  */
-import { ApiError, NETWORK_ERROR_CODE, UNAUTHORIZED_CODE } from './errors.js';
+import { ApiError, NETWORK_ERROR_CODE, UNAUTHORIZED_CODE, parseRetryAfter } from './errors.js';
 import { normalizeBaseUrl } from './config.js';
 
 /** 默认单次超时（与小程序端 request.js 的 10s 同口径；写操作建议显式给更长的值）。 */
@@ -148,7 +148,11 @@ export function createAdminApi(deps: AdminApiDeps) {
       http_status: res.status,
       code: errCode,
     });
-    const err = new ApiError(errCode, message, serverTraceId);
+    // data 与 retry-after 原样带出（P2-43 / P2-49）：50300 的退避时长、42901 的锁定剩余都在这两处
+    const err = new ApiError(errCode, message, serverTraceId, {
+      data: (body as { data?: unknown } | null)?.data,
+      retryAfterSec: parseRetryAfter(res.headers.get('retry-after')),
+    });
     if (errCode === UNAUTHORIZED_CODE) deps.onUnauthorized?.(err);
     throw err;
   };

@@ -41,4 +41,14 @@ describe('BlockedUsers', () => {
     expect(calls.find((c) => c.path.endsWith('/unblock'))?.body).toEqual({ reason: '误拉黑' });
     expect(el.textContent).toContain('没有被拉黑的用户');
   });
+
+  it('P2-47 正好 200 行（服务端上限）→ 标题说"最多显示 200 条"，不暗示总数', async () => {
+    const items = Array.from({ length: 200 }, (_, i) => ({
+      id: `u-${i}`,
+      blocked_at: '2026-10-06T03:00:00Z',
+      order_count: 1,
+    }));
+    mounted = await mount(createElement(BlockedUsers, { api: (async () => ({ items })) as never }));
+    expect(mounted.el.textContent).toContain('最多显示 200 条');
+  });
 });

@@ -45,6 +45,8 @@ export function RiskPage({ api }: RiskPageProps) {
   const [orderNo, setOrderNo] = useState('');
   const [userId, setUserId] = useState('');
   const [busy, setBusy] = useState(false);
+  /** 拉黑成功后递增，让下方「已拉黑用户」重新取数（P2-47）。 */
+  const [blockedTick, setBlockedTick] = useState(0);
 
   /** 请求序号（A-05）：晚到的旧响应不得覆盖新列表，只有最后一次发起的请求能写。 */
   const reqSeq = useRef(0);
@@ -117,6 +119,7 @@ export function RiskPage({ api }: RiskPageProps) {
       //    这里防的是"order_id 与 user_id 配错"这类请求级错误。
       await blockUser(api, { userId, orderId });
       setOk(blockDoneText(userId));
+      setBlockedTick((t) => t + 1);
       setOrderId('');
       setOrderNo('');
       setUserId('');
@@ -231,7 +234,7 @@ export function RiskPage({ api }: RiskPageProps) {
       )}
 
       {/* 解除拉黑（AJ-384）：误拉黑的唯一出口，走审计 */}
-      <BlockedUsers api={api} />
+      <BlockedUsers api={api} refreshKey={blockedTick} />
     </section>
   );
 }

@@ -18,7 +18,7 @@
  */
 import { ExportBar } from './ExportBar.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { OrderStatus } from '@waselect/shared';
+import { SEARCH_KEYWORD_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { listOrders, type AdminApi, type AdminOrderLike } from './api.js';
 import { STATUS_FILTER_OPTIONS, orderRows, type OrderRow } from './view.js';
@@ -150,6 +150,8 @@ export function OrdersPage({ api }: OrdersPageProps) {
         <input
           className="input"
           placeholder="单号 / 收件人 / 运单号"
+          // 与服务端同一个上限（shared）：超长关键词服务端会 40001，前端直接不让输（P2-47）
+          maxLength={SEARCH_KEYWORD_MAX_LENGTH}
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
         />

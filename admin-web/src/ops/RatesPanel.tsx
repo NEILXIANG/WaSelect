@@ -41,6 +41,8 @@ export function RatesPanel({ api }: RatesPanelProps) {
   const [ok, setOk] = useState('');
   /** 二次确认态（整表替换，@why 见文件头）。 */
   const [confirming, setConfirming] = useState(false);
+  /** 整表替换请求在途（P2-47）：连点"确认"会把同一张表 PUT 两次，第二次可能覆盖别人刚做的改动。 */
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -73,12 +75,14 @@ export function RatesPanel({ api }: RatesPanelProps) {
   const duplicates = rateDuplicates(rows);
 
   const save = async (): Promise<void> => {
+    if (saving) return;
     if (!check.ok) {
       setError(check.first);
       return;
     }
     setError('');
     setOk('');
+    setSaving(true);
     try {
       await replaceShippingRates(api, toRateBody(rows));
       setOk('已整表替换（下一次报价立即按新档位计算）');
@@ -86,6 +90,7 @@ export function RatesPanel({ api }: RatesPanelProps) {
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
+      setSaving(false);
       setConfirming(false);
     }
   };
@@ -202,10 +207,15 @@ export function RatesPanel({ api }: RatesPanelProps) {
         </button>
         {confirming ? (
           <>
-            <button type="button" className="btn" onClick={() => void save()}>
-              确认：用当前 {rows.length} 档替换全部
+            <button type="button" className="btn" disabled={saving} onClick={() => void save()}>
+              {saving ? '保存中…' : `确认：用当前 ${rows.length} 档替换全部`}
             </button>
-            <button type="button" className="link" onClick={() => setConfirming(false)}>
+            <button
+              type="button"
+              className="link"
+              disabled={saving}
+              onClick={() => setConfirming(false)}
+            >
               取消
             </button>
           </>
