@@ -153,6 +153,14 @@
 
     <view class="ws-gutter ws-section cta">
       <ws-button wx:if="{{view.canPay}}" text="继续支付" type="primary" bindtap="onPay" />
+      <!-- P2-13（AJ-387）：确认收货；不点也会在发货 30 天后自动签收 -->
+      <ws-button
+        wx:if="{{view.canConfirmReceipt}}"
+        text="{{confirmingReceipt ? '提交中…' : '确认收货'}}"
+        type="primary"
+        loading="{{confirmingReceipt}}"
+        bindtap="onConfirmReceiptTap"
+      />
       <ws-button
         wx:if="{{view.canCancel}}"
         class="cancel-btn"

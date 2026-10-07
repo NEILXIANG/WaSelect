@@ -68,6 +68,7 @@ import { mountAdminUploadRoutes } from './admin-upload-routes.js';
 import { mountAddressRoutes } from './address-routes.js';
 import { mountOrderRoutes } from './order-routes.js';
 import { mountOrderQueryRoutes } from './order-query-routes.js';
+import { mountConfirmReceiptRoutes } from './confirm-receipt-routes.js';
 import { mountPayIntentRoutes } from './pay-intent-routes.js';
 import { mountPayLinkRoutes } from './pay-link-routes.js';
 import { registerSessionExpiryOnClose } from './close-session-events.js';
@@ -466,6 +467,15 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     config,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity,
+  });
+  // ── 买家确认收货（P2-13 / AJ-387）：shipped → delivered；自动签收仍是兜底 ──
+  mountConfirmReceiptRoutes(app, {
+    db,
+    logger,
+    clock,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+    events,
   });
 
   // ── 发起支付（I1-U6a）：幂等 + 限流；注册表用本函数顶部装配的那一份（可插拔唯一出处）──

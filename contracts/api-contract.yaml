@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.37
+  version: 0.6.38
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -436,6 +436,10 @@ info:
          邮箱桶锁着时"口令 + 正确的码"仍可登录（来源桶照常封顶）。
       ⑥ `/admin/exports/{kind}`：时间列改名 `*_jst` 并按 JST `YYYY-MM-DD HH:mm:ss` 输出；邮编 / 电话 / HS / JAN / 运单号
          这几列的纯号码值输出成 `="…"`（Excel 按文本显示，不丢前导零）。
+    0.6.38（AJ-387：买家确认收货）：
+      ① 新增 `POST /orders/{id}/confirm-receipt`：shipped → delivered（写 delivered_at、事件 actor = user:<id>）；
+         已 delivered / completed → 200 原样；其余状态或有拒付限制 → 409 / 40902；非本人与不存在同为 40400。
+         自动签收（发货满 AUTO_DELIVER_DAYS 天）仍是兜底。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -631,6 +635,12 @@ paths:
       description: '0.6.27：状态码此前只登记了 200 / 409，而代码实际还会回 40001（id 缺失）、40101（无 token）、40301（非 user 角色）、40400（订单不存在**或非本人**，两者同码防存在性探测）、50000、50300；MP3-04：调用前先问机构「这个会话付了没有」，问不到时 **fail-closed 拒取消**（50300 session_query_unavailable / session_query_failed），不是「查不到就当没付」'
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       responses: {'200': {description: OK}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}, '503': {$ref: '#/components/responses/Err'}}
+  /orders/{id}/confirm-receipt:
+    post:
+      summary: 买家确认收货（0.6.38 / AJ-387，P2-13）
+      description: 'shipped → delivered；已 delivered / completed → 200 原样返回（幂等，不多写事件）；其余状态或有拒付限制 → 409 / 40902；非本人与不存在同为 40400（防存在性探测）。不发邮件。'
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [order_id, status], properties: {order_id: {type: string}, status: {type: string, enum: [delivered, completed]}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/orders:
     get:
       parameters:

@@ -52,6 +52,7 @@ Page({
     error: '',
     /** 取消请求在途（ws-button 会吞掉这期间的连点）。 */
     cancelling: false,
+    confirmingReceipt: false,
     /** 刚复制的是哪一个：'no' 运单号 / 'url' 查件链接 / '' 都没有（两行各自显示「已复制」，@see @limitation 三）。 */
     copied: '',
     /** 剩余清单 4-2：客服联系方式（utils/support.js）；空数组 = 未配置，不显示。 */
@@ -186,6 +187,35 @@ Page({
         if (r?.confirm === true) void this.cancel();
       },
     });
+  },
+
+  /** 确认收货（P2-13 / AJ-387）：二次确认后 POST，成功原地重取。 */
+  onConfirmReceiptTap() {
+    wxApi.showModal({
+      title: '确认收货',
+      content: '确认已收到全部商品？确认后订单进入售后期，有问题仍可联系客服。',
+      confirmText: '已收到',
+      cancelText: '还没收到',
+      success: (r) => {
+        if (r?.confirm === true) void this.confirmReceipt();
+      },
+    });
+  },
+
+  async confirmReceipt() {
+    this.setData({ confirmingReceipt: true, error: '' });
+    try {
+      await app.globalData.api({
+        url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}/confirm-receipt`,
+        method: 'POST',
+        traceId: this.traceId,
+      });
+      await this.load();
+    } catch (e) {
+      this.setData({ ...errorFields(e) });
+    } finally {
+      this.setData({ confirmingReceipt: false });
+    }
   },
 
   /** 发取消请求；成功后**原地重取**（@see 文件头 @why）。 */

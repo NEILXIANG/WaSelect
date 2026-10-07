@@ -286,6 +286,15 @@ describe('stockRefundNote（4-10）', () => {
   });
 });
 
+describe('detailView：确认收货（P2-13，AJ-387）', () => {
+  it('🔴 只有已发货的单给"确认收货"；其余状态不给', () => {
+    expect(detailView({ status: 'shipped' }).canConfirmReceipt).toBe(true);
+    for (const s of ['paid', 'delivered', 'completed', 'refunding', '']) {
+      expect(detailView({ status: s }).canConfirmReceipt).toBe(false);
+    }
+  });
+});
+
 describe('detailView：部分退款与迟到付款（P2-11 / P2-12，AJ-386）', () => {
   it('🔴 部分退款按币种格式化、成功 / 处理中分开说；没有则空数组', () => {
     const v = detailView({

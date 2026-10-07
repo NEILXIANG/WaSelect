@@ -213,5 +213,10 @@ export function detailView(order, opts = undefined) {
     partialRefunds: partialRefundRows(o.partial_refunds),
     /** 关单后才到的付款（P2-11）：钱已扣，告诉买家会原路退回，别再下一单。 */
     latePaidNote: o.late_paid === true ? LATE_PAID_NOTE : '',
+    /**
+     * 确认收货（P2-13）：只在已发货时给。拒付中的单服务端回 40902（买家视图不含 has_dispute，不在前端猜）。
+     * 不点也没关系：发货满 30 天系统自动签收。
+     */
+    canConfirmReceipt: status === 'shipped',
   };
 }
