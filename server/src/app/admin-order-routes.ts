@@ -39,6 +39,9 @@ import type { Clock } from '../ports/clock.js';
 import type { PaymentRegistry } from '../ports/payment.js';
 import type { EventBus } from '../ports/events.js';
 import { executeRefund } from './refund-execution.js';
+import { sumPartialRefunds, listPartialRefunds } from '../adapters/order-refunds.js';
+import { partialRefundView } from './partial-refund-routes.js';
+import { fullRefundAmount } from '../domain/partial-refund.js';
 import { withTrackingUrl } from '../domain/tracking.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
@@ -306,13 +309,14 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         const order = await findAdminOrder(deps.db, id);
         if (order === null) throw new AppError(40400, { order_id: id });
         // 三类附属数据各**一次**批量查询（本页只有一张单，但形态与列表将来共用）
-        const [items, payments, events] = await Promise.all([
+        const [items, payments, events, partials] = await Promise.all([
           listOrderItemsFor(deps.db, [id]),
           listPaymentsFor(deps.db, [id]),
           listEventsFor(deps.db, [id]),
+          listPartialRefunds(deps.db, id),
         ]);
-        res.json(
-          toAdminOrder(
+        res.json({
+          ...toAdminOrder(
             order,
             items.map((i) => toAdminOrderItem(i)),
             payments.map((p) => ({
@@ -333,7 +337,9 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
               at: e.at.toISOString(),
             })),
           ),
-        );
+          // 部分退款（AJ-383，契约 0.6.35）：按发起顺序；没有时是空数组（形状固定）
+          partial_refunds: partials.map(partialRefundView),
+        });
       } catch (e) {
         next(e);
       }
@@ -424,6 +430,20 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           if (pay.provider_ref === null) {
             throw new AppError(50000, { order_id: id, reason: 'provider_ref_missing' });
           }
+          // ── 部分退款（AJ-383）：整单退款只退**余额**，且不与在途的部分退款并行 ──
+          // @why 先部分退过的单，按实收全额去退会被机构以"超出可退金额"拒绝 ⇒ 订单卡死在 refunding。
+          // @why 有一笔部分退款在途（可能已经退出去）时拒绝：余额此刻不确定，算错就是多退。
+          //      同一把订单行锁之下判定，部分退款路由也在这把锁里登记——两边互相看得见。
+          // @why refunding 重试时同样算：部分退款在 refunding 期间被闸门挡住（状态不在可部分退款之列），
+          //      余额不会变，重试的金额与首次一致（同键同参）。
+          const partials = await sumPartialRefunds(tx, id);
+          if (partials.inFlight) {
+            throw new AppError(40902, { order_id: id, reason: 'partial_refund_in_flight' });
+          }
+          const refundAmountMinor = fullRefundAmount(pay.charge_amount, partials.succeededMinor);
+          if (refundAmountMinor === 0) {
+            throw new AppError(40902, { order_id: id, reason: 'fully_refunded_by_partials' });
+          }
           // ── B8（AJ-192）：通道**必须在事务内、落 refunding 之前**解析 ──
           // @why 通道查找是纯配置查找（`registry.getForRefund`），没有任何理由放在事务外，
           //      而放在事务外的后果是"通道不可用"发生在订单**已经**迁到 refunding 之后：
@@ -472,7 +492,15 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           //    而 `RefundRequest.providerRef` 是 `string`——不带上就得在调用点再判一次
           //    （或用 `!`，那等于把"这里不可能为 null"的论证从类型里拿掉）。
           const progress = await findRefundProgress(tx, id);
-          return { row, pay, provider, providerRef: pay.provider_ref, refundReason, progress };
+          return {
+            row,
+            pay,
+            provider,
+            providerRef: pay.provider_ref,
+            refundReason,
+            progress,
+            refundAmountMinor,
+          };
         });
 
         // ⚠️ 声明"改动已提交"（SEC2-02 / AJ-339）：第一段事务到这里已经 COMMIT，
@@ -485,18 +513,22 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
 
         // ── 第二段（事务外）：调机构。失败不回滚——停在 refunding 是**可见**的状态 ──
         // 查询在途单 / 确认失败换键 / 结果未知同键，全部在 refund-execution.ts（F-03，AJ-178）
+        // 发给机构的请求单独成一个值：下面的 accepted 日志记的就是**它**的金额——
+        // 日志若另算一遍，"实际发出去多少"与"日志说多少"可以不一致而没人发现（AJ-383 注回验证时踩到）
+        const request = {
+          orderId: id,
+          providerRef: plan.providerRef,
+          amountJpy: plan.row.total_jpy,
+          currency: plan.pay.charge_currency,
+          // 余额而不是实收（AJ-383）：见第一段"部分退款"那条
+          amountMinor: plan.refundAmountMinor,
+          reason: plan.refundReason,
+        };
         const outcome = await executeRefund(deps, plan.provider, {
           orderId: id,
           paymentId: plan.pay.id,
           channel: plan.pay.provider,
-          request: {
-            orderId: id,
-            providerRef: plan.providerRef,
-            amountJpy: plan.row.total_jpy,
-            currency: plan.pay.charge_currency,
-            amountMinor: plan.pay.charge_amount,
-            reason: plan.refundReason,
-          },
+          request,
           progress: plan.progress,
           actor: adminActor(req),
           // OPS3-03：拒付在途时"换新键重新发起"由执行层拦（40907）；闸门已放行 refunding 的查询与同键重放。
@@ -507,7 +539,11 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         deps.logger.info('admin_order_refund_accepted', {
           result: 'ok',
           order_id: id,
-          ctx: { outcome },
+          ctx: {
+            outcome,
+            currency: request.currency,
+            amount_minor: request.amountMinor,
+          },
         });
         res.status(202).json({ order_id: id, outcome });
       } catch (e) {

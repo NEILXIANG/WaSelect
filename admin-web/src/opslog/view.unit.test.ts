@@ -64,12 +64,13 @@ describe('reconciliationView', () => {
     ]);
   });
 
-  it('六类异常都配了中文名（服务端 daily-reconciliation.ts 的 key）', () => {
+  it('各类异常都配了中文名（服务端 daily-reconciliation.ts 的 key；AJ-383 加部分退款滞留）', () => {
     expect(Object.keys(RECONCILE_CLASS_LABELS).sort()).toEqual([
       'callback_anomalies_48h',
       'dangling_initiated_payments',
       'paid_without_succeeded_payment',
       'stalled_heartbeats',
+      'stuck_partial_refunds',
       'stuck_refunds',
       'unfinished_callbacks',
     ]);

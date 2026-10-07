@@ -411,6 +411,41 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
     }
   });
 
+  /**
+   * AJ-383：部分退款不改订单状态，停在 pending / unknown 的那一笔**没有任何别的东西会报**
+   * （stuck_refunds 只看 orders.status = refunding）。买家等着钱、运营看不到。
+   */
+  it('🔴 部分退款滞留：pending / unknown / initiated 超过 24h 报 stuck_partial_refunds；succeeded 与 23h 的不报', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      await db`
+        insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                            total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
+        values ('o-pr', 'W-PR-1', 'u-recon', 'delivered', 1000, 0, 0, 1000, 500,
+                '{}'::jsonb, '{}'::jsonb, 'T', now())`;
+      await db`
+        insert into payments (id, order_id, provider, provider_ref, status, charge_currency, charge_amount)
+        values ('pay-pr', 'o-pr', 'mock', 'mock_pr', 'succeeded', 'JPY', 1000)`;
+      await db`
+        insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, created_at)
+        values ('rf-old-unknown', 'o-pr', 'pay-pr', 'JPY', 100, 'x', 'unknown', 'admin:a', now() - interval '25 hours'),
+               ('rf-old-done',    'o-pr', 'pay-pr', 'JPY', 100, 'x', 'succeeded', 'admin:a', now() - interval '25 hours'),
+               ('rf-fresh',       'o-pr', 'pay-pr', 'JPY', 100, 'x', 'pending', 'admin:a', now() - interval '23 hours')`;
+      const res = await trigger(srv.url, JOB_SECRET);
+      expect(res.status).toBe(202);
+      await waitForDailyHeartbeat();
+      const hit = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'stuck_partial_refunds');
+      expect(hit, '滞留的部分退款必须报出').toBeDefined();
+      const ctx = hit?.['ctx'] as Record<string, unknown> | undefined;
+      expect(ctx?.['count']).toBe(1);
+      expect(JSON.stringify(ctx?.['sample_ids'])).toContain('rf-old-unknown');
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('每日作业含自动签收 / 自动完成（O-12 / AJ-182 接线）：31 天前发货的单被签收，且排在对账之前', async () => {
     const srv = await buildServer({ withSecret: true });
     try {

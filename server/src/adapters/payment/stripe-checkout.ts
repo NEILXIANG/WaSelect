@@ -798,10 +798,14 @@ export function createStripeCheckoutProvider(
           //    Stripe 会返回第一次的退款而不是再扣一次。
           //    F-03（AJ-178）：上一笔被机构**确认失败**后调用方才把 attempt 加一 → 新键
           //    （同键只会拿回缓存的那次失败）；attempt 0 保持旧键形态，存量重试语义不变。
+          //    AJ-383：部分退款按笔取键（`refund-part:<order_refunds.id>`），与整单退款的键空间分开——
+          //    同一订单的第二笔部分退款若落到 `refund:<orderId>` 上，Stripe 回放第一笔 ⇒ 第二笔一分钱没退。
           'idempotency-key':
-            (req.attempt ?? 0) > 0
-              ? `refund:${req.orderId}:${String(req.attempt)}`
-              : `refund:${req.orderId}`,
+            req.partialRefundId !== undefined
+              ? `refund-part:${req.partialRefundId}`
+              : (req.attempt ?? 0) > 0
+                ? `refund:${req.orderId}:${String(req.attempt)}`
+                : `refund:${req.orderId}`,
         },
         body: form.toString(),
       });

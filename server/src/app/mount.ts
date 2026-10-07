@@ -58,6 +58,7 @@ import { mountProductRoutes } from './product-routes.js';
 import { mountHomeRoutes } from './home-routes.js';
 import { mountAdminProductRoutes } from './admin-product-routes.js';
 import { mountAdminOrderRoutes } from './admin-order-routes.js';
+import { mountPartialRefundRoutes } from './partial-refund-routes.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAdminBannerRoutes } from './admin-banner-routes.js';
 import { mountAdminRiskRoutes } from './admin-risk-routes.js';
@@ -335,6 +336,16 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     identity,
     registry,
     events,
+  });
+  // ── 部分退款 / 完成后售后退款（AJ-383）：与整单退款共用注册表与订单行锁 ──
+  mountPartialRefundRoutes(app, {
+    db,
+    logger,
+    clock,
+    idGen: systemIdGen,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+    registry,
   });
   // ── CSV 导出（剩余清单 3-3）：订单 / 待采购 / 待发货报关；导出动作显式进审计 ──
   mountAdminExportRoutes(app, {

@@ -131,6 +131,13 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
 
   // ── 订单状态与准入：状态机迁移表、退款 / 发货 / 改址闸门、"提交后才分发" ──
   'server/src/domain/order.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  // AJ-383：部分退款准入与整单退款余额——"最多退多少"的唯一判定处，错一个边界就是多退
+  'server/src/domain/partial-refund.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
   'server/src/domain/admin-order-actions.ts': {
     lines: 100,
     functions: 100,

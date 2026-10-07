@@ -1,0 +1,120 @@
+/**
+ * 部分退款的管理端纯函数层（AJ-383）。
+ * @why 金额换算是这一页唯一会"差一个数量级"的地方：USD 10.00 必须提交 1000（分），JPY 1000 必须提交 1000（円）。
+ */
+import { describe, expect, it } from 'vitest';
+import {
+  formatMinor,
+  parseAmountToMinor,
+  partialRefundGate,
+  partialRefundRows,
+  refundableMinor,
+} from './partial-refund-view.js';
+
+const order = (over: Record<string, unknown> = {}) => ({
+  status: 'delivered',
+  has_dispute: false,
+  payments: [{ status: 'succeeded', charge_currency: 'USD', charge_amount: 8160 }],
+  partial_refunds: [] as unknown[],
+  ...over,
+});
+
+describe('parseAmountToMinor', () => {
+  it('USD：10 / 10.5 / 10.05 → 1000 / 1050 / 1005', () => {
+    expect(parseAmountToMinor('10', 'USD')).toEqual({ ok: true, minor: 1000 });
+    expect(parseAmountToMinor('10.5', 'USD')).toEqual({ ok: true, minor: 1050 });
+    expect(parseAmountToMinor(' 10.05 ', 'USD')).toEqual({ ok: true, minor: 1005 });
+  });
+  it('JPY：1200 → 1200；1200.5 → 拒（円没有小数）', () => {
+    expect(parseAmountToMinor('1200', 'JPY')).toEqual({ ok: true, minor: 1200 });
+    expect(parseAmountToMinor('1200.5', 'JPY').ok).toBe(false);
+  });
+  it.each(['', '0', '0.00', '-1', 'abc', '1.234', '1e3', '0x10'])('🔴 %j → 拒', (raw) => {
+    expect(parseAmountToMinor(raw, 'USD').ok).toBe(false);
+  });
+  it('不走浮点：0.29 → 29（浮点 0.29*100 = 28.999…）', () => {
+    expect(parseAmountToMinor('0.29', 'USD')).toEqual({ ok: true, minor: 29 });
+  });
+});
+
+describe('formatMinor', () => {
+  it('USD 1005 → 10.05 USD；JPY 1200 → 1,200 JPY', () => {
+    expect(formatMinor(1005, 'USD')).toBe('10.05 USD');
+    expect(formatMinor(1200, 'JPY')).toBe('1,200 JPY');
+  });
+});
+
+describe('refundableMinor', () => {
+  it('实收 − 除 failed 外的部分退款', () => {
+    expect(
+      refundableMinor(
+        order({
+          partial_refunds: [
+            { status: 'succeeded', amount_minor: 1000 },
+            { status: 'failed', amount_minor: 500 },
+            { status: 'unknown', amount_minor: 300 },
+          ],
+        }),
+      ),
+    ).toEqual({ currency: 'USD', minor: 6860 });
+  });
+  it('没有 succeeded 支付行 → null', () => {
+    expect(refundableMinor(order({ payments: [] }))).toBeNull();
+  });
+});
+
+describe('partialRefundGate（与服务端 partialRefundGuard 同口径）', () => {
+  it.each(['paid', 'shipped', 'delivered', 'completed'])('%s → 可退', (status) => {
+    expect(partialRefundGate(order({ status })).ok).toBe(true);
+  });
+  it('🔴 refunding / refunded / cancelled → 不可', () => {
+    for (const status of ['refunding', 'refunded', 'cancelled']) {
+      expect(partialRefundGate(order({ status })).ok).toBe(false);
+    }
+  });
+  it('🔴 拒付中 → 不可；有在途的一笔 → 不可（先同步它）', () => {
+    expect(partialRefundGate(order({ has_dispute: true })).ok).toBe(false);
+    const g = partialRefundGate(
+      order({ partial_refunds: [{ status: 'pending', amount_minor: 1 }] }),
+    );
+    expect(g.ok).toBe(false);
+    expect(g.reason).toContain('同步');
+  });
+  it('🔴 额度已用完 → 不可', () => {
+    expect(
+      partialRefundGate(order({ partial_refunds: [{ status: 'succeeded', amount_minor: 8160 }] }))
+        .ok,
+    ).toBe(false);
+  });
+});
+
+describe('partialRefundRows', () => {
+  it('每行：金额文本、中文状态、在途才可同步', () => {
+    const rows = partialRefundRows(
+      order({
+        partial_refunds: [
+          {
+            id: 'rf-1',
+            status: 'succeeded',
+            currency: 'USD',
+            amount_minor: 1000,
+            reason: '缺一件',
+            created_at: '2026-10-06T03:00:00Z',
+          },
+          {
+            id: 'rf-2',
+            status: 'unknown',
+            currency: 'USD',
+            amount_minor: 50,
+            reason: '破损',
+            created_at: '2026-10-06T04:00:00Z',
+          },
+        ],
+      }),
+    );
+    expect(rows.map((r) => [r.id, r.amount, r.statusText, r.canSync])).toEqual([
+      ['rf-1', '10.00 USD', '已退款', false],
+      ['rf-2', '0.50 USD', '结果未知（点同步取回）', true],
+    ]);
+  });
+});

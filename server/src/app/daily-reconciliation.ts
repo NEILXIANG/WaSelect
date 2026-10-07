@@ -14,6 +14,7 @@
  *      ④ 调度器心跳停滞（AJ-102 的替代方案）；
  *      ⑤ 卡住的回调：登记了却没有任何结果、租约已过期（KD-2 / AJ-175，见 scanUnfinishedCallbacks）；
  *      ⑥ 退款滞留：订单停在 refunding 超过 24 小时（F-03 / AJ-178，见 scanStuckRefunds）；
+ *      ⑧ 部分退款滞留：order_refunds 在途超过 24 小时（AJ-383，见 scanStuckPartialRefunds）；
  *      ⑦ 审核模式仍在生产开启：临到期或已过期（A7 / AJ-378，见 reviewWindowAnomaly）。
  *      自动修任何一类都需要业务裁决（退不退？发不发？），MVP 把它留给人——
  *      但没有这个 job，这些行就只能在库里静默躺着（欠账①被评为致命级的原因）。
@@ -289,6 +290,24 @@ async function scanStuckRefunds(ctx: JobContext<Db>): Promise<AnomalyClass> {
 }
 
 /**
+ * 第八类：**部分退款滞留**（AJ-383）——`order_refunds` 里 initiated / pending / unknown 超过 24 小时。
+ * @why 部分退款**不改订单状态**，所以第六类（看 orders.status = refunding）永远看不见它；
+ *      停在在途的那一笔还占着额度、挡着下一笔，买家在等钱。与第六类同阈值、同"不设回看上界"口径。
+ * @why 起点取 `created_at`（登记时刻）：在途期间这一行不会被别的流程刷新，不存在"被洗新"的问题。
+ */
+async function scanStuckPartialRefunds(ctx: JobContext<Db>): Promise<AnomalyClass> {
+  const rows = await ctx.tx<{ id: string; total: string }[]>`
+    select r.id, count(*) over ()::text as total
+      from order_refunds r
+     where r.status in ('initiated', 'pending', 'unknown')
+       and r.created_at <= ${ctx.startedAt}::timestamptz - make_interval(hours => ${STUCK_REFUND_HOURS})
+     order by r.id
+     limit ${RECONCILE_IDS_CAP + 1}
+  `;
+  return { key: 'stuck_partial_refunds', ...toAnomaly(rows) };
+}
+
+/**
  * 第七类：**审核模式仍在生产开启**（A7 / AJ-378）——临到期或已过期时报一条。
  *
  * @why 启动闸门（`config.ts` 规则 2f）只能拦"**启动那一刻**已过期"：
@@ -347,6 +366,7 @@ export function createDailyReconciliationJob(input: {
         await scanStalledHeartbeats(ctx),
         await scanUnfinishedCallbacks(ctx),
         await scanStuckRefunds(ctx),
+        await scanStuckPartialRefunds(ctx),
         reviewWindowAnomaly({
           ...input.reviewMode,
           todayUtc: utcDay(ctx.startedAt),

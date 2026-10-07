@@ -273,12 +273,14 @@ describe('迁移本身', () => {
     // + 3（010 的 duty_rates / payment_channels / app_config，I1-U7a）
     // + 1（015 的 login_attempts，A1+B14：登录额度从 users 两列搬到独立表）
     // + 1（019 的 order_address_history，AJ-293：改址旧值迁出 append-only）
-    // + 1（028 的 reconciliation_runs，剩余清单 3-2：对账结果落库供运营日志页读）= 23。
+    // + 1（028 的 reconciliation_runs，剩余清单 3-2：对账结果落库供运营日志页读）
+    // + 1（030 的 order_refunds，AJ-383：部分退款 / 完成后售后退款）= 24。
     // ✅ 文档侧已同步（2026-09-28，一致性审计 AJ-176）：010 落地后文档一度仍写 17（上一轮"已同步"只到 17），
     //    本轮 jp 技术文档 §3/§3.1、工程框架文档、PRD §5、jp README、本库 README / 测试策略 / 架构设计 / 日志规范 /
     //    地基清单统一改为"以本断言为准"（写数字的地方写 20 并注明真源），避免下一次加表再漂移。
     //    ADR-28 写"13 → 17（新增四张）"那份推演的基准是它成文时的 13 张，现以本断言为准。
-    expect(tables).toHaveLength(23);
+    expect(tables).toHaveLength(24);
+    expect(tables).toContain('order_refunds');
     expect(tables).toContain('orders');
     expect(tables).toContain('reconciliation_runs');
     expect(tables).toContain('login_attempts');

@@ -287,6 +287,14 @@ export interface RefundRequest {
    *      由调用方按落库的失败事件计数，适配器只把它编进幂等键，不自己判断。
    */
   attempt?: number;
+  /**
+   * 部分退款的本地 id（`order_refunds.id`，AJ-383）。有值 = 这是一笔**部分退款**，`amountMinor` 是本笔金额。
+   * @why 机构幂等键必须**按笔**而不是按订单：同一订单先后退几笔时，按订单的键会让第二笔落到第一笔上，
+   *      机构回放第一笔的结果 ⇒ 第二笔"成功"而一分钱没退。适配器据此换键，不自己判断是不是部分退款。
+   * @why 部分退款**不用 attempt**：机构确认失败的那笔在本地标 failed，下一次是新的一行、新的 id、新的键；
+   *      结果未知（unknown）重试时沿用同一行同一把键——换键与否由"是不是新的一行"决定。
+   */
+  partialRefundId?: string;
 }
 
 export interface RefundResult {

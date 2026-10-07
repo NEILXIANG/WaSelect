@@ -231,3 +231,35 @@ function assertOrder(value: unknown, traceId: string): asserts value is AdminOrd
     throw new ApiError(NETWORK_ERROR_CODE, '订单响应形状与契约不符（缺 order_id）', traceId);
   }
 }
+
+/**
+ * `POST /admin/orders/{id}/partial-refunds`（AJ-383，契约 0.6.35）——发起一笔部分退款。
+ * @param body.amount_minor 支付币种**最小单位**（由 `parseAmountToMinor` 换算，不在这里换）
+ * @why 返回整行而不是只回 outcome：页面紧接着要显示这一笔的状态（成功 / 处理中 / 结果未知）。
+ */
+export async function createPartialRefund(
+  api: AdminApi,
+  id: string,
+  body: { amount_minor: number; reason: string },
+): Promise<unknown> {
+  const res = await api({
+    path: `/api/v1/admin/orders/${encodeURIComponent(id)}/partial-refunds`,
+    method: 'POST',
+    body,
+  });
+  return (res as { refund?: unknown } | null)?.refund ?? null;
+}
+
+/** `POST /admin/orders/{id}/partial-refunds/{refundId}/sync`——pending 查询 / 结果未知同键重放。 */
+export async function syncPartialRefund(
+  api: AdminApi,
+  id: string,
+  refundId: string,
+): Promise<unknown> {
+  const res = await api({
+    path: `/api/v1/admin/orders/${encodeURIComponent(id)}/partial-refunds/${encodeURIComponent(refundId)}/sync`,
+    method: 'POST',
+    body: {},
+  });
+  return (res as { refund?: unknown } | null)?.refund ?? null;
+}

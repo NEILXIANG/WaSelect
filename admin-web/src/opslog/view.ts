@@ -14,6 +14,7 @@ export const RECONCILE_CLASS_LABELS: Readonly<Record<string, string>> = {
   unfinished_callbacks: '回调登记后未处理完',
   stalled_heartbeats: '定时任务心跳停滞',
   stuck_refunds: '退款滞留超过 24 小时',
+  stuck_partial_refunds: '部分退款滞留超过 24 小时',
 };
 
 export interface AuditRowView {

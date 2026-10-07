@@ -1035,6 +1035,27 @@ describe('refund（原币全额退）', () => {
   });
 
   /**
+   * AJ-383：部分退款**每笔一把键**（`refund-part:<部分退款 id>`），与整单退款的 `refund:<orderId>` 分开。
+   * @why 同一订单可以先后退好几笔：若沿用 `refund:<orderId>`，第二笔会落到第一笔的键上，
+   *      Stripe 回放第一笔的结果 ⇒ 第二笔"成功"了却一分钱没退。金额照传（部分退款就靠它）。
+   */
+  it('🔴 部分退款：键为 refund-part:{partialRefundId}，金额为本笔金额（不是实收）', async () => {
+    const { http, provider } = build();
+    await mustRefund(provider)({
+      orderId: REQ.orderId,
+      providerRef: 'pi_1',
+      amountJpy: 0,
+      currency: 'USD',
+      amountMinor: 1_000,
+      reason: '缺一件',
+      partialRefundId: 'rf-abc',
+    });
+    const last = http.calls.at(-1);
+    expect(last?.headers?.['idempotency-key']).toBe('refund-part:rf-abc');
+    expect(new URLSearchParams(String(last?.body)).get('amount')).toBe('1000');
+  });
+
+  /**
    * B7 / AJ-191：metadata 的值有长度上限，超了机构拒这一整笔退款。
    * @why 断言的是**报文里的实际值**而不是"有没有调用 clip"：后者是拿被测对象内部
    *      状态自证（§2 第 21 条），把 `clipRefundReason` 换成恒等函数它照样绿。

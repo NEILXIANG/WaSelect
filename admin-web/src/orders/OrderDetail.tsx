@@ -39,6 +39,7 @@ import {
 } from './api.js';
 import { formatJst, moneyText } from '../format.js';
 import { OrderAddressForm } from './OrderAddressForm.js';
+import { PartialRefunds } from './PartialRefunds.js';
 import {
   addressSummary,
   emptyRefundForm,
@@ -427,6 +428,18 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
             {/* 放行时也可能带提示（refunding = 再查询/重发，KD-12）：有话就显示，不只在拦的时候 */}
             {refundG.reason !== '' && <p className="muted">{refundG.reason}</p>}
           </div>
+
+          {/* 部分退款 / 完成后售后退款（AJ-383）：订单状态不变；结束后刷新详情与列表 */}
+          <PartialRefunds
+            api={api}
+            orderId={id}
+            order={order}
+            onDone={async () => {
+              await load();
+              onChanged();
+            }}
+            onError={setError}
+          />
         </>
       )}
     </section>
