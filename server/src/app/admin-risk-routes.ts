@@ -47,6 +47,8 @@ import { requireRole } from './auth.js';
 import { createRiskAdminRepo, type DisputeRow } from '../adapters/risk-admin.js';
 import { parseDisputeStatus } from '../domain/dispute-input.js';
 import { blockUser } from './block-user.js';
+import { releaseReasonGuard } from '../domain/admin-order-actions.js';
+import { setAuditBefore } from './admin-audit.js';
 
 export interface AdminRiskRoutesDeps {
   db: Db;
@@ -85,6 +87,57 @@ export function mountAdminRiskRoutes(app: Express, deps: AdminRiskRoutesDeps): v
         const status = parseDisputeStatus(req.query['status']);
         const rows = await repo.listDisputes(status);
         res.json(rows.map(toDispute));
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  /**
+   * 已拉黑的用户（AJ-384）：解除入口要先能找到人。只给 id / 拉黑时刻 / 注册时刻 / 订单数，不给 openid 等身份字段。
+   */
+  app.get('/api/v1/admin/users', guard, (req, res, next) => {
+    void (async () => {
+      try {
+        if (req.query['blocked'] !== 'true') {
+          throw new AppError(40001, { reason: 'only_blocked_true_supported' });
+        }
+        const rows = await repo.listBlockedUsers();
+        res.json({
+          items: rows.map((r) => ({
+            id: r.id,
+            blocked_at: r.blockedAt.toISOString(),
+            created_at: r.createdAt.toISOString(),
+            order_count: r.orderCount,
+          })),
+        });
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  /**
+   * 解除拉黑（AJ-384；工程缺口第二轮 §6.3 G7）。原因必填（进审计）。
+   * @why 原先没有解除接口，误拉黑只能直接改库——绕过审计，事后答不出谁、为什么解封。
+   * @why 拉黑时被连带取消的在途单**不恢复**：库存已回补，恢复会超卖；买家重新下单即可。
+   * @why 作废本进程身份缓存：不作废的话"已拉黑"还会被缓存最多 60 秒（与拉黑同口径）。
+   */
+  app.post('/api/v1/admin/users/:id/unblock', guard, (req, res, next) => {
+    void (async () => {
+      try {
+        const id = String(req.params.id);
+        const reason = releaseReasonGuard((req.body as { reason?: unknown } | null)?.reason);
+        if (!reason.ok) throw new AppError(reason.code, { reason: reason.reason });
+        const out = await repo.unblockUser(id);
+        if (out.kind === 'not_found') throw new AppError(40403, { target_user_id: id });
+        setAuditBefore(res, { blocked_at: out.blockedAt?.toISOString() ?? null });
+        deps.identity.invalidate?.(id);
+        deps.logger.info('admin_user_unblocked', {
+          result: 'ok',
+          ctx: { target_user_id: id, already_unblocked: out.already },
+        });
+        res.json({ already_unblocked: out.already });
       } catch (e) {
         next(e);
       }

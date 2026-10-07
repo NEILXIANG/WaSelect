@@ -255,3 +255,11 @@ export const SHIP_MAX_CHARS = {
  *      docs/自主决策记录.md AJ-360
  */
 export const SEARCH_KEYWORD_MAX_LENGTH = 64;
+
+/**
+ * 每个买家最多保存多少条收货地址（工程缺口第二轮 §6.3 G8，AJ-384）。超出 → 40917。
+ * @why 地址新增没有限流也没有上限：一个账号就能写入任意多行；而地址簿越长，买家下单时选错地址的概率越高
+ *      （跨境寄错一次的代价是整单退回）。20 条远超真实需求（家、公司、亲友），又足以挡住滥用。
+ * @limitation 只管条数，不管写入频率；频率限制仍是登记项（G8 后半）。
+ */
+export const MAX_ADDRESSES_PER_USER = 20;

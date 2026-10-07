@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { getOrder } from '../orders/api.js';
 import { blockUser, listDisputes, type AdminApi } from './api.js';
+import { BlockedUsers } from './BlockedUsers.js';
 import {
   blockDoneText,
   BLOCK_CONFIRM_TEXT,
@@ -228,6 +229,9 @@ export function RiskPage({ api }: RiskPageProps) {
           </div>
         </div>
       )}
+
+      {/* 解除拉黑（AJ-384）：误拉黑的唯一出口，走审计 */}
+      <BlockedUsers api={api} />
     </section>
   );
 }

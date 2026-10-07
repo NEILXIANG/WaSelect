@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.35
+  version: 0.6.36
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -419,6 +419,11 @@ info:
          部分退款**不改订单状态**；金额是支付币种最小单位；已退 + 在途 + 本次 ≤ 实收；一次只能有一笔在途。
       ② `AdminOrder` 增 `partial_refunds`（`PartialRefund[]`，按发起顺序；没有时为空数组）。
       ③ `/admin/orders/{id}/refund`（整单退款）：只退**余额**（实收 − 已成功的部分退款）；有部分退款在途 → 40902；已被部分退款退光 → 40902。
+    0.6.36（AJ-384：停售开关 / 地址上限 / 解除拉黑）：
+      ① 新增 `GET|PUT /admin/ops/sales-pause`（全局停售开关，存 app_config，立即生效）；停售中 `POST /orders/quote`、`POST /orders`、`POST /orders/{id}/pay` 一律 **409 / 40916**（先于鉴权与限流）。
+      ② `POST /addresses`：每人最多 20 条（shared MAX_ADDRESSES_PER_USER），超出 **409 / 40917**。
+      ③ 新增 `POST /admin/users/{id}/unblock`（解除拉黑，原因必填）与 `GET /admin/users?blocked=true`（已拉黑用户列表）。
+      ④ 新增错误码 40916 / 40917。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -451,6 +456,8 @@ x-error-codes:
     40912: 包裹超过可配送的重量上限，请拆单（0.6.16：有运费表但超过最大一档；运费表缺失仍是 50004）
     40913: 未付款的订单太多了，请先完成支付或取消后再下单（0.6.16：每用户在途单上限）
     40914: 这条内容在你打开之后被别人改过了（0.6.18：PUT /admin/products/{id} 的乐观锁冲突；0.6.30 起 PUT /admin/banners/{id} 同用；整行未写，前端须保留表单并提示刷新后对照最新值再保存）
+    40916: 店铺暂停接单，请稍后再来（0.6.36：全局停售开关打开时，报价 / 建单 / 发起支付返回本码；回调、退款、发货不受影响）
+    40917: 收货地址已达上限（20 个），请先删除不用的地址（0.6.36：POST /addresses）
     40915: 这张订单不属于你要拉黑的这个用户（0.6.21：POST /admin/users/{id}/block 带了 order_id 但归属核对不过；整条请求未写）
     42901: 请求过于频繁
     50000: 服务器内部错误
@@ -565,7 +572,7 @@ paths:
     post:
       summary: 新增地址（美国格式，ASCII）
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddressInput'}}}}
-      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Address'}}}}, '400': {$ref: '#/components/responses/Err'}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Address'}}}}, '400': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /addresses/{id}:
     put:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
@@ -739,6 +746,28 @@ paths:
       description: 0.6.5 补：只出**带 dispute_id 的支付行**（无拒付的支付行不出现）；按开案时间倒序（NULL 最后）。`status` 非法 → **40001**，🈲 不得静默当成"不过滤"——那会让运营看到列表突然变长、按"拒付激增"这个错的结论去查业务
       parameters: [{name: status, in: query, schema: {type: string, enum: [open, won, lost, withdrawn]}}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Dispute'}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/users:
+    get:
+      summary: 已拉黑用户列表（0.6.36 / AJ-384；解除拉黑的入口）
+      description: '目前只支持 blocked=true（其它取值 40001）。按拉黑时间倒序，最多 200 条。只给 id / 时刻 / 订单数，不给 openid 等身份字段。'
+      parameters: [{name: blocked, in: query, required: true, schema: {type: string, enum: ['true']}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [items], properties: {items: {type: array, items: {type: object, required: [id, blocked_at, created_at, order_count], properties: {id: {type: string}, blocked_at: {type: string, format: date-time}, created_at: {type: string, format: date-time}, order_count: {type: integer}}}}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+  /admin/users/{id}/unblock:
+    post:
+      summary: 解除拉黑（0.6.36 / AJ-384）
+      description: '原因必填（进审计，改前值 blocked_at 记 before）；本来就没被拉黑 → 200 already_unblocked=true（幂等）；用户不存在 → 40403。只清 blocked_at，不动 token_ver（拉黑时旧 token 已失效，解除后重新登录）。拉黑时被连带取消的在途单不恢复。'
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [already_unblocked], properties: {already_unblocked: {type: boolean}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}
+  /admin/ops/sales-pause:
+    get:
+      summary: 全局停售开关当前状态（0.6.36 / AJ-384）
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/SalesPause'}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+    put:
+      summary: 打开 / 关闭全局停售（0.6.36 / AJ-384）
+      description: '立即生效、不用重启。停售中报价 / 建单 / 发起支付返回 40916；回调、退款、发货、查询不受影响。原因必填（进审计，改前状态记 before）。'
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [paused, reason], properties: {paused: {type: boolean}, reason: {type: string, maxLength: 500}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/SalesPause'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/users/{id}/block:
     post:
       summary: 拉黑用户（D-50）：users.blocked_at；此后**所有买家鉴权接口** 40301（0.6.10 更正：不只建单）
@@ -824,6 +853,7 @@ components:
     OrderItem: {type: object, description: '订单行项目（**交易视角**：买了什么、多少钱、几件）。⚠️ 采购信息（title_ja / jan_code / purchase_source）**刻意不在这里**——它是内部信息，只在 `AdminOrderItem` 下发；买家可见的响应里出现采购来源等于泄露供应链', properties: {product_id: {type: string}, title: {type: string}, qty: {type: integer}, unit_price_jpy: {type: integer}, image: {$ref: '#/components/schemas/ImageSet'}}}
     AdminOrderItem: {description: '0.6.25（D-39 待采购清单）：管理端的订单行项目 = 交易事实 + **采购快照**。三列都取**下单那一刻**的 products 值（迁移 021），不随商品改动而变——采购员要买的是当时看到的那件。为 NULL（商品未填 / 历史订单未记录）时**整键省略**，前端显示"未记录"而不是空白（空白会被读成"这个值就是空的"）。', allOf: [{$ref: '#/components/schemas/OrderItem'}, {type: object, properties: {title_ja: {type: string, description: '日文原名快照：采购员在日本店铺 / 网站搜货用'}, jan_code: {type: string, description: 'JAN 码（13 位）快照，精确对货用。相当一部分手作 / 工房商品没有 JAN 码——那是**事实**，用字段缺席表达，不是"缺数据"'}, purchase_source: {type: string, description: '采购来源快照（去哪买）。🈲 内部信息：不得出现在任何买家可见的响应里'}, cost_jpy: {type: integer, description: '0.6.31（迁移 027）：下单那一刻的成本价快照。🈲 内部信息（泄露成本 = 泄露毛利）；NULL 时整键省略'}, hs_code: {type: string, description: '0.6.31（迁移 027）：下单那一刻的 HS 码快照，报关用；NULL 时整键省略'}, customs_desc_en: {type: string, description: '0.6.31（迁移 027）：下单那一刻的英文报关品名快照；NULL 时整键省略'}}}]}
     AdminOrderListItem: {type: object, description: '0.6.26（D-39）：增 `items`（含采购快照的行项目）——「待采购清单」就是 `GET /admin/orders?status=paid` 这一页本身，行里必须有采购信息，否则采购员要逐单点开详情。固定下发，不随 status 参数变化（形状固定 > 省流量）。', properties: {order_id: {type: string}, order_no: {type: string}, user_id: {type: string}, status: {$ref: '#/components/schemas/OrderStatus'}, total_jpy: {type: integer}, items: {type: array, items: {$ref: '#/components/schemas/AdminOrderItem'}}, contact_email: {type: string}, carrier: {type: string}, tracking_no: {type: string}, tracking_url: {type: string, description: '0.6.32：官方查件链接（日本邮便 S10 单号或承运商为日本邮便时生成，locale=en）；认不出 → 整键省略'}, recipient: {type: string, description: '收件人姓名（0.6.9/KD-14）：列表支持按收件人搜索，行里要能回显；电话/街道等其余地址字段仍只在详情'}, has_dispute: {type: boolean, description: '列表也带（0.6.1）：客服在列表页就能看见拒付单'}, is_test: {type: boolean}, late_paid: {type: boolean, description: '0.6.31：有迟到付款凭据（已关单收到钱）；为 true 时 expired / cancelled 单可退款'}, created_at: {type: string, format: date-time}}}
+    SalesPause: {type: object, description: '0.6.36（AJ-384）：从未设置过时只有 paused=false', required: [paused], properties: {paused: {type: boolean}, reason: {type: string}, actor: {type: string}, updated_at: {type: string, format: date-time}}}
     PartialRefund: {type: object, description: '0.6.35（AJ-383）：一笔部分退款。status：initiated 已登记未答复 / pending 机构处理中 / succeeded / failed 机构确认失败（不占额度）/ unknown 结果未知（仍占额度，sync 同键重放）', required: [id, status, currency, amount_minor, reason, actor, created_at], properties: {id: {type: string}, status: {type: string, enum: [initiated, pending, succeeded, failed, unknown]}, currency: {type: string}, amount_minor: {type: integer}, reason: {type: string}, actor: {type: string}, created_at: {type: string, format: date-time}, settled_at: {type: string, format: date-time}}}
     AdminOrder: {description: '0.6.10：实际响应不带 display / timeline（管理端看 events 全量），另带 paid_at / shipped_at；payment 为 {channel, charge_currency, charge_amount}。0.6.25：`items` 收窄为 `AdminOrderItem[]`（带采购快照，D-39）', allOf: [{$ref: '#/components/schemas/Order'}, {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminOrderItem'}}, paid_at: {type: string, format: date-time}, shipped_at: {type: string, format: date-time}, user_id: {type: string}, contact_email: {type: string, format: email, description: '客服可见（D-42）'}, is_test: {type: boolean, description: '审核期 mock 通道测试单；管理端列表默认过滤'}, late_paid: {type: boolean, description: '0.6.31：有迟到付款凭据（已关单收到钱）；为 true 时 expired / cancelled 单可退款'}, has_dispute: {type: boolean, description: '0.6.10：有未解除的拒付限制——进行中，或已败诉（钱已被拉回）；为 true 时退款 40907、发货 40909。胜诉或撤回（withdrawn）结案复位，只有败诉保持（D-50 / AJ-162 / AJ-176 ⑧ / AJ-193）'}, fx_snapshot: {type: object}, partial_refunds: {type: array, description: '0.6.35（AJ-383）：部分退款，按发起顺序；没有时为空数组', items: {$ref: '#/components/schemas/PartialRefund'}}, payments: {type: array, items: {type: object, properties: {provider: {type: string}, provider_ref: {type: string}, transaction_id: {type: string}, status: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer}, settled_jpy: {type: integer}, fee_jpy: {type: integer}}}}, events: {type: array, items: {type: object, properties: {status: {type: string}, note: {type: string}, actor: {type: string}, at: {type: string, format: date-time}}}}}}]}
     ChannelView: {type: object, required: [channel, entryMode, label], properties: {channel: {type: string, description: '通道 key（任意字符串：新增支付方式不需要改本契约的枚举）'}, entryMode: {type: string, enum: [in_app, copylink, redirect], description: 'in_app=小程序内直接调起；copylink=复制链接到外部浏览器（D-49：Stripe Checkout 托管页）；redirect=302 跳转'}, label: {type: string, description: 展示名（外置文案，前端不写死）}, icon: {type: string, description: 图标 key（同上）}}}

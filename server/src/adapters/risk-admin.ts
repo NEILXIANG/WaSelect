@@ -62,6 +62,20 @@ export interface RiskAdminRepo {
    *      表现是"拉黑成功、库存没回补"或反过来，而且只在并发下才看得见。
    */
   blockUser(tx: Db, id: string): Promise<BlockOutcome>;
+  /**
+   * 解除拉黑（AJ-384）。只清 `blocked_at`；**不动 `token_ver`**——拉黑时已 +1，旧 token 早已失效，
+   * 解除后用户重新登录即可；再 +1 只会把"拉黑之后新登录的"（不存在）作废，没有意义。
+   * @returns `{kind:'unblocked', already}`：already = 本来就没被拉黑（幂等，不报错）。
+   */
+  unblockUser(
+    id: string,
+  ): Promise<
+    { kind: 'unblocked'; already: boolean; blockedAt: Date | null } | { kind: 'not_found' }
+  >;
+  /** 已拉黑的用户（AJ-384：解除入口要能找到人）。按拉黑时间倒序，最多 200 条。 */
+  listBlockedUsers(): Promise<
+    Array<{ id: string; blockedAt: Date; createdAt: Date; orderCount: number }>
+  >;
 }
 
 function toDisputeRow(r: Record<string, unknown>): DisputeRow {
@@ -104,6 +118,36 @@ export function createRiskAdminRepo(db: Db): RiskAdminRepo {
          order by p.dispute_opened_at desc nulls last, p.created_at desc
       `;
       return rows.map((r) => toDisputeRow(r as Record<string, unknown>));
+    },
+
+    async unblockUser(id: string) {
+      // 一条语句里取改前值并清空：读与写之间没有窗口（返回的是**改前**的 blocked_at，审计要它）
+      const rows = await db`
+        with prev as (select id, blocked_at from users where id = ${id} for update)
+        update users u set blocked_at = null from prev where u.id = prev.id
+        returning prev.blocked_at
+      `;
+      const row = rows[0];
+      if (row === undefined) return { kind: 'not_found' as const };
+      const blockedAt = (row['blocked_at'] as Date | null) ?? null;
+      return { kind: 'unblocked' as const, already: blockedAt === null, blockedAt };
+    },
+
+    async listBlockedUsers() {
+      const rows = await db`
+        select u.id, u.blocked_at, u.created_at,
+               (select count(*)::int from orders o where o.user_id = u.id) as order_count
+          from users u
+         where u.blocked_at is not null
+         order by u.blocked_at desc, u.id
+         limit 200
+      `;
+      return rows.map((r) => ({
+        id: String(r['id']),
+        blockedAt: r['blocked_at'] as Date,
+        createdAt: r['created_at'] as Date,
+        orderCount: Number(r['order_count']),
+      }));
     },
 
     async blockUser(tx: Db, id: string): Promise<BlockOutcome> {

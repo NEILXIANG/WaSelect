@@ -23,6 +23,8 @@
  * @see migrations/001_init.sql（addresses 表与 CHECK）、011（默认唯一部分索引）；
  *      app/address-routes.ts（调用方）；docs/I1阶段开发实施方案.md §3.5
  */
+import { MAX_ADDRESSES_PER_USER } from '@waselect/shared';
+import { AppError } from '../errors.js';
 import { withTransaction, type Db } from './db.js';
 
 /** 地址输入（已通过路由层 40001/40002 校验）。 */
@@ -99,8 +101,14 @@ export function createAddressRepo(db: Db): AddressRepo {
 
     async create(id: string, userId: string, input: AddressInput): Promise<AddressRow> {
       return withTransaction(db, async (tx) => {
+        // 用户行锁**无条件**先取（AJ-384）：条数上限要在锁内数，否则并发两次新增都看见 19 条、都插进去。
+        // 原先只在设默认时取这把锁；同一把锁，取得更早而已，锁序不变。
+        await lockUserDefaults(tx, userId);
+        const [cnt] = await tx`select count(*)::int as n from addresses where user_id = ${userId}`;
+        if (Number(cnt?.['n'] ?? 0) >= MAX_ADDRESSES_PER_USER) {
+          throw new AppError(40917, { reason: 'addresses_too_many', max: MAX_ADDRESSES_PER_USER });
+        }
         if (input.is_default) {
-          await lockUserDefaults(tx, userId);
           await tx`update addresses set is_default = false where user_id = ${userId} and is_default`;
         }
         await tx`

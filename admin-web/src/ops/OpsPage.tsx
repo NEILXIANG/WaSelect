@@ -13,6 +13,7 @@
 import type { AdminApi } from './api.js';
 import { FxPanel } from './FxPanel.js';
 import { RatesPanel } from './RatesPanel.js';
+import { SalesPausePanel } from './SalesPausePanel.js';
 
 export interface OpsPageProps {
   api: AdminApi;
@@ -21,6 +22,8 @@ export interface OpsPageProps {
 export function OpsPage({ api }: OpsPageProps) {
   return (
     <>
+      {/* 停售开关放最上面（AJ-384）：开着忘了关 = 店一直关门，必须显眼 */}
+      <SalesPausePanel api={api} />
       <RatesPanel api={api} />
       <FxPanel api={api} />
     </>

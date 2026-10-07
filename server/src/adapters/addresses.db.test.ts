@@ -9,6 +9,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from './db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
+import { ERROR_CODES, MAX_ADDRESSES_PER_USER } from '@waselect/shared';
 import { createAddressRepo, type AddressInput, type AddressRepo } from './addresses.js';
 
 let db: Db;
@@ -43,6 +44,40 @@ function input(over: Partial<AddressInput> = {}): AddressInput {
     ...over,
   };
 }
+
+describe('每人地址条数上限（工程缺口第二轮 §6.3 G8）', () => {
+  /**
+   * @why 地址新增没有限流、也没有条数上限：一个账号就能写入任意多行（存储与列表接口都被拖慢），
+   *      且地址簿越长，买家选错收货地址的概率越高。上限在**用户行锁内**计数，并发两次新增不能同时卡过线。
+   */
+  it(`🔴 已有 ${'$'}{MAX_ADDRESSES_PER_USER} 条 → 再建 40917；删一条后可再建`, async () => {
+    for (let i = 0; i < MAX_ADDRESSES_PER_USER; i++) {
+      await repo.create(`addr-cap-${String(i)}`, 'u-1', input());
+    }
+    await expect(repo.create('addr-cap-over', 'u-1', input())).rejects.toMatchObject({
+      code: 40917,
+    });
+    // 文案里写死的上限必须与常量一致（shared errors.ts 的 message 不能插值）
+    expect(ERROR_CODES[40917].message).toContain(String(MAX_ADDRESSES_PER_USER));
+    await db`delete from addresses where id = 'addr-cap-0'`;
+    await expect(repo.create('addr-cap-again', 'u-1', input())).resolves.toMatchObject({
+      id: 'addr-cap-again',
+    });
+  });
+
+  it('🔴 并发两次新增卡在线上（已有 上限−1 条）→ 只成功一次', async () => {
+    for (let i = 0; i < MAX_ADDRESSES_PER_USER - 1; i++) {
+      await repo.create(`addr-race-${String(i)}`, 'u-1', input());
+    }
+    const results = await Promise.allSettled([
+      repo.create('addr-race-a', 'u-1', input()),
+      repo.create('addr-race-b', 'u-1', input()),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const [c] = await db`select count(*)::int as n from addresses where user_id = 'u-1'`;
+    expect(c?.['n']).toBe(MAX_ADDRESSES_PER_USER);
+  });
+});
 
 describe('create / listByUser', () => {
   it('新增后可读回；列表只含本人（u-2 的地址不串）', async () => {

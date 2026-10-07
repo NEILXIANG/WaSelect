@@ -84,3 +84,30 @@ export async function blockUser(
     ...(traceId !== undefined ? { traceId } : {}),
   });
 }
+
+/** 已拉黑用户一行（`GET /admin/users?blocked=true`，AJ-384）。 */
+export interface BlockedUser {
+  id: string;
+  blocked_at: string;
+  order_count: number;
+}
+
+/** `GET /admin/users?blocked=true`：形状不对的行丢掉（不让一行脏数据拖垮整张表）。 */
+export async function listBlockedUsers(api: AdminApi): Promise<BlockedUser[]> {
+  const res = await api({ path: '/api/v1/admin/users?blocked=true', method: 'GET' });
+  const items = (res as { items?: unknown } | null)?.items;
+  return (Array.isArray(items) ? items : []).flatMap((r: Record<string, unknown>) =>
+    typeof r?.['id'] === 'string' && typeof r['blocked_at'] === 'string'
+      ? [{ id: r['id'], blocked_at: r['blocked_at'], order_count: Number(r['order_count'] ?? 0) }]
+      : [],
+  );
+}
+
+/** `POST /admin/users/{id}/unblock`（AJ-384）：原因必填（进审计）。 */
+export async function unblockUser(api: AdminApi, userId: string, reason: string): Promise<void> {
+  await api({
+    path: `/api/v1/admin/users/${encodeURIComponent(userId)}/unblock`,
+    method: 'POST',
+    body: { reason },
+  });
+}

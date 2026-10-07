@@ -59,6 +59,7 @@ import { mountHomeRoutes } from './home-routes.js';
 import { mountAdminProductRoutes } from './admin-product-routes.js';
 import { mountAdminOrderRoutes } from './admin-order-routes.js';
 import { mountPartialRefundRoutes } from './partial-refund-routes.js';
+import { mountSalesPauseRoutes, salesOpenGuard } from './sales-pause.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAdminBannerRoutes } from './admin-banner-routes.js';
 import { mountAdminRiskRoutes } from './admin-risk-routes.js';
@@ -283,6 +284,12 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
    *    限流也必须全环境存在（不能只在某个环境才有计数）。
    * ⚠️ 进程内实现只在**单实例**下正确（rate-limit-memory.ts @limitation 一，R-I1-2）。
    */
+  // ── 全局停售（AJ-384）：挂在三个"新的钱"入口的**最前面**（先于限流与鉴权），停售中一律 40916 ──
+  // ⚠️ 逐条注册而不是传路径数组：路由快照（route-snapshot.ts）按字符串路径内省，数组会让它崩
+  const salesOpen = salesOpenGuard(db, logger);
+  for (const p of ['/api/v1/orders/quote', '/api/v1/orders', '/api/v1/orders/:id/pay']) {
+    app.post(p, salesOpen);
+  }
   const rateLimitStore = createMemoryRateLimitStore();
   const rateLimitDeps = { store: rateLimitStore, clock, logger };
   app.use(
@@ -363,6 +370,12 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   });
   // ── 管理端运营配置（I2-U-C3）：展示汇率与运费分档。clock 必须注入——
   //    "立即生效"的 effective_from 取它，否则这条路由无法在假时间下测（F10）──
+  mountSalesPauseRoutes(app, {
+    db,
+    logger,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+  });
   mountAdminOpsRoutes(app, {
     db,
     logger,

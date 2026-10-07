@@ -398,3 +398,96 @@ describe('POST /admin/users/{id}/block', () => {
     }
   });
 });
+
+/**
+ * AJ-384：拉黑原先**没有解除接口**（工程缺口第二轮 §6.3 G7），误拉黑只能直接改库——
+ * 而直接改库绕过审计，事后答不出"谁、为什么解封的"。
+ */
+describe('POST /admin/users/{id}/unblock + GET /admin/users?blocked=true', () => {
+  it('🔴 拉黑 → 列表里能看到 → 解除（必填原因）→ 列表里没了，被拉黑者能再次通过身份校验', async () => {
+    const srv = await buildServer();
+    try {
+      const admin = await bearer(true);
+      await seedOrderOf('o-ub', 'u-ub');
+      expect(
+        (await call(srv.url, 'POST', '/api/v1/admin/users/u-ub/block', {}, admin)).status,
+      ).toBe(200);
+
+      const listed = await call(
+        srv.url,
+        'GET',
+        '/api/v1/admin/users?blocked=true',
+        undefined,
+        admin,
+      );
+      expect(listed.status).toBe(200);
+      expect((listed.body as { items: Array<{ id: string }> }).items.map((u) => u.id)).toEqual([
+        'u-ub',
+      ]);
+
+      const noReason = await call(
+        srv.url,
+        'POST',
+        '/api/v1/admin/users/u-ub/unblock',
+        { reason: ' ' },
+        admin,
+      );
+      expect(code(noReason)).toBe(40001);
+
+      const ok = await call(
+        srv.url,
+        'POST',
+        '/api/v1/admin/users/u-ub/unblock',
+        { reason: '误拉黑：拒付已撤回' },
+        admin,
+      );
+      expect(ok.status).toBe(200);
+      expect(ok.body).toMatchObject({ already_unblocked: false });
+      const [u] = await db`select blocked_at from users where id = 'u-ub'`;
+      expect(u?.['blocked_at']).toBeNull();
+      const after = await call(
+        srv.url,
+        'GET',
+        '/api/v1/admin/users?blocked=true',
+        undefined,
+        admin,
+      );
+      expect((after.body as { items: unknown[] }).items).toEqual([]);
+      const audit = await db`select action from admin_audit where target = 'u-ub' order by id`;
+      expect(audit.map((a) => String(a['action']))).toEqual([
+        expect.stringContaining('/block'),
+        expect.stringContaining('/unblock'),
+      ]);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('未拉黑的用户 → 200 already_unblocked（幂等）；不存在 → 40403；买家 token → 403', async () => {
+    const srv = await buildServer();
+    try {
+      const admin = await bearer(true);
+      await seedOrderOf('o-ub2', 'u-ub2');
+      const r = await call(
+        srv.url,
+        'POST',
+        '/api/v1/admin/users/u-ub2/unblock',
+        { reason: '核对' },
+        admin,
+      );
+      expect(r.body).toMatchObject({ already_unblocked: true });
+      expect(
+        code(
+          await call(srv.url, 'POST', '/api/v1/admin/users/u-nope/unblock', { reason: 'x' }, admin),
+        ),
+      ).toBe(40403);
+      const buyer = await bearer(false);
+      expect(
+        (await call(srv.url, 'POST', '/api/v1/admin/users/u-ub2/unblock', { reason: 'x' }, buyer))
+          .status,
+      ).toBe(403);
+    } finally {
+      await srv.close();
+    }
+  });
+});
