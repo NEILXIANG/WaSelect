@@ -55,6 +55,12 @@ interface EnvEntry {
   key: string;
   /** 这一条是否带了字面量 `value:`（密钥类绝不允许）。 */
   literal: boolean;
+  /**
+   * 字面量值的原文（**含**可能的引号）；未带 `value:` 时为 undefined。
+   * @why 显式写 `| undefined`：`exactOptionalPropertyTypes` 下 `value?: string` 不接受显式赋 undefined，
+   *      而解析时"这一行没有 `value:`"正是要记成 undefined。
+   */
+  value?: string | undefined;
 }
 
 /**
@@ -85,7 +91,11 @@ function parseEnvEntries(yaml: string): EnvEntry[] {
       out.push(current);
       continue;
     }
-    if (current !== undefined && /^\s+value:/.test(raw)) current.literal = true;
+    if (current !== undefined && /^\s+value:/.test(raw)) {
+      current.literal = true;
+      // 值可能带引号（`REVIEW_MODE: 'on'`——DB-12 的 YAML 1.1 布尔陷阱），原文保留、由用例自己剥
+      current.value = /^\s+value:\s*(.*?)\s*$/.exec(raw)?.[1];
+    }
   }
   return out;
 }
@@ -199,6 +209,25 @@ describe('render.yaml ↔ 配置 schema 一致', () => {
       missing,
       `这些变量没有默认值、部署时却没配（本机 .env 里有，平台上没有 → 部署后才炸）：\n${missing.join('\n')}`,
     ).toEqual([]);
+  });
+
+  /**
+   * A7 / AJ-378：**条件必填**是 `REQUIRED_ENV_KEYS` 那条比对**抓不到**的一类漏配。
+   *
+   * @why 那条比对的判据是"单个字段能否接受 undefined"，而 `REVIEW_MODE_UNTIL` 单独看永远合法——
+   *      它只在"生产 + `REVIEW_MODE=on`"时才必填。偏偏 render.yaml **就是**把 REVIEW_MODE 声明成 `on`
+   *      的那份文件，漏配它的表现是**部署之后服务起不来**（启动闸门 2d），
+   *      而"起不来"最容易被误判成代码问题（与 B1 那条的 @why 同一形态）。
+   *      条件必填只能一条一条补断言，没有通用判据可用。
+   */
+  it('REVIEW_MODE=on 时必须同时声明 REVIEW_MODE_UNTIL（条件必填，漏配 = 部署后起不来）', () => {
+    const raw = declared.find((e) => e.key === 'REVIEW_MODE')?.value;
+    const reviewOn = raw?.replace(/^['"]|['"]$/g, '') === 'on';
+    expect(
+      reviewOn,
+      'render.yaml 里 REVIEW_MODE 不是 on：若审核期已结束，本条断言与 REVIEW_MODE_UNTIL 声明可一并删掉',
+    ).toBe(true);
+    expect(declaredKeys.has('REVIEW_MODE_UNTIL')).toBe(true);
   });
 
   it('render.yaml 里每个键都被配置层认得（拼错会被 zod 静默忽略）', () => {

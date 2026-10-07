@@ -29,6 +29,8 @@
  * @see .env.example（变量名唯一真源）、docs/地基搭建清单.md F3、技术文档 v0.5 §8、ADR-28（关税外置）
  */
 import { z } from 'zod';
+import { systemClock } from './adapters/clock.js';
+import { daysUntil, parseReviewUntil, utcDay } from './review-window.js';
 import { parseSentryDsn } from './sentry-dsn.js';
 import {
   ADMIN_PASSWORD_MIN_LENGTH,
@@ -591,6 +593,22 @@ const schema = z.object({
    */
   MOCK_AUTO_CONFIRM: z.enum(['on', 'off']).default('off'),
   REVIEW_SKU_ID: optionalText(),
+  /**
+   * 审核模式的**截止日**（`YYYY-MM-DD`，UTC 日历日）。仅当 生产 + `REVIEW_MODE=on` 时必填（跨字段 2d–2f）。
+   *
+   * @why 没有这条变量，"到期"这个概念根本不存在——配置层拿不到"审核期该结束了"的任何依据，
+   *      于是 A7 那条"R1 通过后忘了关 REVIEW_MODE"永远不会被任何东西发现：
+   *      真实买家照常下单、mock 照常自动确认、单一律 `is_test=true` 而管理端默认看不见，
+   *      买家看到"支付成功"却永远收不到货，且**日志与正常单完全一样**。
+   *      填一个日期这个动作本身，就是"承诺一个结束时间"。
+   * @why 到期**拒绝启动**而不是打一条 warn：MVP 唯一真正有人看的告警通道
+   *      （`app/ops-alert-mail.ts`）只在对账发现异常时发信，`ALERT_EMAIL` 未配就退化成日志——
+   *      而"没人每天翻日志"正是那个文件自己的 @why。要让这件事被看见，只剩"让服务起不来"这一条。
+   *      代价可接受：审核期真实通道被规则 2b 拦着（没有真实买家），起不来的后果只是"审核员暂时打不开"，
+   *      恢复方式是一行配置（延长日期 or 关掉审核模式切正式）。
+   * @limitation 判据在 `review-window.ts`（唯一一份），本文件只做组合判断，不含日期算术。
+   */
+  REVIEW_MODE_UNTIL: optionalText(),
 
   // ── 限流与内部任务（D-52 / D-43）────────────────────────────────────────
   // 限流配额（I1-U3 已接线，不再是"契约先行"的欠账）：这两个值的唯一消费者是
@@ -674,329 +692,386 @@ const schema = z.object({
  * @limitation 只拦"确定错误"的组合，不做"提醒级"校验（例如建议配 Sentry）。
  *              提醒一旦进启动校验就会被当成噪音忽略，宁可少而硬。
  */
-const crossField = schema.superRefine((c, ctx) => {
-  const isProd = c.NODE_ENV === 'production';
-  const add = (path: string, message: string): void => {
-    ctx.addIssue({ code: 'custom', path: [path], message });
-  };
+/**
+ * @param now **注入的"当前时刻"**（F10：时间只从外面进来）。审核期截止日的判定要用到"今天"，
+ *            而 `new Date()` 写在规则里就等于把时间钉死在进程内部——测试只能写相对日期，
+ *            于是用例会随真实时间腐坏（今天写的 `+30 天`，明年就过期了）。
+ *            注入之后，边界表可以写死具体日期，永远可复现。
+ */
+const crossField = (now: Date) =>
+  schema.superRefine((c, ctx) => {
+    const isProd = c.NODE_ENV === 'production';
+    const add = (path: string, message: string): void => {
+      ctx.addIssue({ code: 'custom', path: [path], message });
+    };
 
-  // 6.（剩余清单 2-2）配了邮件密钥却没配发件人：每封信都会被服务商拒，且只在第一次发信时才暴露
-  if (c.MAIL_PROVIDER_API_KEY !== undefined && c.MAIL_FROM === undefined) {
-    add(
-      'MAIL_FROM',
-      '配置了 MAIL_PROVIDER_API_KEY 就必须配置 MAIL_FROM（发件人，域名须在服务商验证）',
-    );
-  }
-  // 7.（剩余清单 2-3）DSN 解析不了 = 错误监控静默失效，启动时就拒
-  if (c.SENTRY_DSN !== undefined && parseSentryDsn(c.SENTRY_DSN) === null) {
-    add('SENTRY_DSN', 'SENTRY_DSN 形状不对（应为 https://PUBLIC_KEY@HOST/PROJECT_ID）');
-  }
-
-  // 1. 生产跑假支付：最危险的一条——用户能正常下单、钱不到账，且日志里长得跟"放弃支付"一样
-  if (isProd && c.PAYMENT_CHANNELS.includes('mock') && c.REVIEW_MODE !== 'on') {
-    add(
-      'PAYMENT_CHANNELS',
-      '生产环境不得启用 mock 通道（会收真钱走假支付）。审核期确需时须同时设 REVIEW_MODE=on 与 REVIEW_SKU_ID',
-    );
-  }
-
-  // 1b. 生产**未列出** mock 却残留 MOCK_CALLBACK_SECRET（三审 S1）：装配层"凭据在即注册"的
-  //     下线语义对 mock 是反向的——审核期结束后残留的密钥 = 伪造"支付成功"回调的门一直开着，
-  //     而落账不核对"订单属于哪个通道"，持有该密钥者能把任意真实订单置 paid。
-  //     mock 在生产只有"列出 + REVIEW_MODE=on"这一条合法路（规则 1）；其余一律拒启。
-  if (isProd && !c.PAYMENT_CHANNELS.includes('mock') && c.MOCK_CALLBACK_SECRET !== undefined) {
-    add(
-      'MOCK_CALLBACK_SECRET',
-      '生产环境未启用 mock 通道却配置了 MOCK_CALLBACK_SECRET（审核期残留）：mock 的回调门在生产不得保留，请删除该变量',
-    );
-  }
-
-  // 1c. 生产/staging 残留 dev 登录（I1-U6b）：它等价于无密码登录（任意 code 字符串
-  //     都能登进对应账号），危险性不低于"生产跑假支付"（规则 1）——而且同样是
-  //     "联调期合法、结束后残留"的形态，处理口径一致：配了就是配置错误，拒启。
-  //     staging 同拒（P3-7 同口径）：staging 是公网可达环境，无密码门开在公网 =
-  //     任何人能登进任意账号；本机/CI 才是它唯一合法的生存环境。
-  // 1d. 微信登录配置成对 + 生产必配（全量审计 2026-09-26 P2）：APP_ID / APP_SECRET 缺一，装配层就不建
-  //     wechatAuth，登录一律 50000——服务照样起得来，审核期唯一的入口却是死的。半配比不配更隐蔽。
-  //     ⚠️ 只对**生产**强制（staging 不强制，2026-09-27 裁决，理由见下）：
-  //        AppID 依赖日本公司登记 → 海外主体注册，粗估 6–10 周才拿得到；
-  //        在这之前强制 staging 必配 = 宣布 staging 永远起不来（规则把环境判死了）。
-  //        与规则 1c / 3b 的"staging 同拒"不是同一类：**那两条拦的是安全洞**
-  //        （无密码登录、公开占位密钥），有没有 AppID 都不影响它们成立；
-  //        本条拦的是"入口不可用"，而它在 AppID 下来前是**既定现实**不是错误。
-  //        AppID 就绪后本条是否扩到 staging 应重评——届时 staging 才有"完整预生产"的意义。
-  if ((c.APP_ID === undefined) !== (c.APP_SECRET === undefined)) {
-    add('APP_ID', 'APP_ID 与 APP_SECRET 必须同时配置或同时留空（只配一个 = 登录 500）');
-  }
-  if (isProd && c.APP_ID === undefined) {
-    add('APP_ID', '生产环境必须配置 APP_ID / APP_SECRET（小程序登录是唯一入口，缺了登录全部 500）');
-  }
-  // 1e. 本地模拟付款开关只给 development / test：公网环境打开 = 任何人下单都自动"付款成功"（mock 不收钱）
-  if ((isProd || c.NODE_ENV === 'staging') && c.MOCK_AUTO_CONFIRM === 'on') {
-    add(
-      'MOCK_AUTO_CONFIRM',
-      `${c.NODE_ENV} 环境禁止 MOCK_AUTO_CONFIRM=on（模拟付款自动确认只给本地开发用）`,
-    );
-  }
-  if ((isProd || c.NODE_ENV === 'staging') && c.WECHAT_DEV_LOGIN !== undefined) {
-    add(
-      'WECHAT_DEV_LOGIN',
-      `${c.NODE_ENV} 环境禁止配置 WECHAT_DEV_LOGIN（dev 登录等价无密码登录，公网环境不得保留；仅 development/test 可用）`,
-    );
-  }
-
-  // 1d. 生产显式选易失/内存存储驱动（I2 U-I4，AJ-168 反向风险的拦截）：fs=Render 易失盘、
-  //     memory=进程死即丢——两者在生产都是"上传成功、随后图静默消失"且没有任何一方报错。
-  //     ⚠️ 生产**未配置**（undefined）不在此拦：那会连"不需要上传的部署"都起不来；
-  //     未配置由装配层给 storage=null、上传路由 50000 响亮拒绝（wechat 未配置的同款处理）。
-  if (isProd && (c.STORAGE_DRIVER === 'fs' || c.STORAGE_DRIVER === 'memory')) {
-    add(
-      'STORAGE_DRIVER',
-      `生产环境禁止 STORAGE_DRIVER=${c.STORAGE_DRIVER}（易失盘/进程内存，上传的图会静默丢；生产用 r2）`,
-    );
-  }
-
-  /**
-   * 1d-2. 选了 r2 却缺 R2 四要素（B1）。
-   *
-   * @why 这是"配置看着合法、运行时每次都失败"的组合：驱动名写对了，于是装配层
-   *      真的去构造 R2 适配器，而凭据缺失要到**第一次上传**才暴露成 500。
-   *      启动期拦住它，换的是"发布当天发现"而不是"运营录第一个商品时发现"。
-   * @why 四个一起报而不是只报第一个：缺哪几个是一次就能看全的信息，
-   *      逐个报会让人改一次、重启一次、再看到下一个（启动失败的代价由发布时长承担）。
-   */
-  if (c.STORAGE_DRIVER === 'r2') {
-    const missing = (
-      [
-        ['R2_ACCOUNT_ID', c.R2_ACCOUNT_ID],
-        ['R2_ACCESS_KEY_ID', c.R2_ACCESS_KEY_ID],
-        ['R2_SECRET_ACCESS_KEY', c.R2_SECRET_ACCESS_KEY],
-        ['R2_BUCKET', c.R2_BUCKET],
-      ] as const
-    )
-      .filter(([, v]) => v === undefined)
-      .map(([k]) => k);
-    if (missing.length > 0) {
+    // 6.（剩余清单 2-2）配了邮件密钥却没配发件人：每封信都会被服务商拒，且只在第一次发信时才暴露
+    if (c.MAIL_PROVIDER_API_KEY !== undefined && c.MAIL_FROM === undefined) {
       add(
-        'STORAGE_DRIVER',
-        `STORAGE_DRIVER=r2 但缺少 ${missing.join(' / ')}（缺了每次上传都是 500；四个都要配）`,
+        'MAIL_FROM',
+        '配置了 MAIL_PROVIDER_API_KEY 就必须配置 MAIL_FROM（发件人，域名须在服务商验证）',
       );
     }
-  }
+    // 7.（剩余清单 2-3）DSN 解析不了 = 错误监控静默失效，启动时就拒
+    if (c.SENTRY_DSN !== undefined && parseSentryDsn(c.SENTRY_DSN) === null) {
+      add('SENTRY_DSN', 'SENTRY_DSN 形状不对（应为 https://PUBLIC_KEY@HOST/PROJECT_ID）');
+    }
 
-  // 1e. 初始管理员 seed（O-11 / AJ-181，B17 / AJ-209 起改**单向**）：
-  //     · 配了口令却没配邮箱 → **拒绝启动**：口令没有落点，等于"配了一个以为是口令的字符串"，
-  //       这类半配比不配更隐蔽（与规则 1d 的 APP_ID 成对同一类）。
-  //     · 只配邮箱、没配口令 → **允许**：这是"初始管理员已建号、把口令从平台删掉"的正常终态
-  //       ——AJ-181 的"建号后可删后者"此前被本规则否掉：删了就拒绝启动（B17）。
-  //       seed 会跳过，由 `main.ts` 打 warn `admin_seed_skipped`（静默才是真风险）。
-  if (c.ADMIN_EMAIL === undefined && c.ADMIN_INITIAL_PASSWORD !== undefined) {
-    add(
-      'ADMIN_EMAIL',
-      `配置了 ADMIN_INITIAL_PASSWORD 就必须同时配置 ADMIN_EMAIL（否则口令没有落点）。` +
-        `只配 ADMIN_EMAIL 是允许的：表示"管理员已建号、口令已从平台删除"，此时 seed 跳过（AJ-209）`,
-    );
-  }
+    // 1. 生产跑假支付：最危险的一条——用户能正常下单、钱不到账，且日志里长得跟"放弃支付"一样
+    if (isProd && c.PAYMENT_CHANNELS.includes('mock') && c.REVIEW_MODE !== 'on') {
+      add(
+        'PAYMENT_CHANNELS',
+        '生产环境不得启用 mock 通道（会收真钱走假支付）。审核期确需时须同时设 REVIEW_MODE=on 与 REVIEW_SKU_ID',
+      );
+    }
 
-  // 2. 审核模式必须指定 SKU，否则所有商品都不能用 mock 下单，等于审核期全站不可用
-  if (c.REVIEW_MODE === 'on' && c.REVIEW_SKU_ID === undefined) {
-    add('REVIEW_SKU_ID', 'REVIEW_MODE=on 时必须指定 REVIEW_SKU_ID（否则审核期没有任何商品可下单）');
-  }
+    // 1b. 生产**未列出** mock 却残留 MOCK_CALLBACK_SECRET（三审 S1）：装配层"凭据在即注册"的
+    //     下线语义对 mock 是反向的——审核期结束后残留的密钥 = 伪造"支付成功"回调的门一直开着，
+    //     而落账不核对"订单属于哪个通道"，持有该密钥者能把任意真实订单置 paid。
+    //     mock 在生产只有"列出 + REVIEW_MODE=on"这一条合法路（规则 1）；其余一律拒启。
+    if (isProd && !c.PAYMENT_CHANNELS.includes('mock') && c.MOCK_CALLBACK_SECRET !== undefined) {
+      add(
+        'MOCK_CALLBACK_SECRET',
+        '生产环境未启用 mock 通道却配置了 MOCK_CALLBACK_SECRET（审核期残留）：mock 的回调门在生产不得保留，请删除该变量',
+      );
+    }
 
-  // 2b. 审核模式 = 上线前状态：只允许 mock 通道（AJ-30）。
-  //     若真实通道同时在线，审核人员的测试下单会产生真实扣款；
-  //     商店已上线后不需要也不应再开 REVIEW_MODE（那是首版审核专用状态，见 AJ-30 的权衡）。
-  if (c.REVIEW_MODE === 'on' && c.PAYMENT_CHANNELS.some((ch) => ch !== 'mock')) {
-    add('PAYMENT_CHANNELS', 'REVIEW_MODE=on 时仅允许 mock 通道（审核期真实通道必须离线，AJ-30）');
-  }
+    // 1c. 生产/staging 残留 dev 登录（I1-U6b）：它等价于无密码登录（任意 code 字符串
+    //     都能登进对应账号），危险性不低于"生产跑假支付"（规则 1）——而且同样是
+    //     "联调期合法、结束后残留"的形态，处理口径一致：配了就是配置错误，拒启。
+    //     staging 同拒（P3-7 同口径）：staging 是公网可达环境，无密码门开在公网 =
+    //     任何人能登进任意账号；本机/CI 才是它唯一合法的生存环境。
+    // 1d. 微信登录配置成对 + 生产必配（全量审计 2026-09-26 P2）：APP_ID / APP_SECRET 缺一，装配层就不建
+    //     wechatAuth，登录一律 50000——服务照样起得来，审核期唯一的入口却是死的。半配比不配更隐蔽。
+    //     ⚠️ 只对**生产**强制（staging 不强制，2026-09-27 裁决，理由见下）：
+    //        AppID 依赖日本公司登记 → 海外主体注册，粗估 6–10 周才拿得到；
+    //        在这之前强制 staging 必配 = 宣布 staging 永远起不来（规则把环境判死了）。
+    //        与规则 1c / 3b 的"staging 同拒"不是同一类：**那两条拦的是安全洞**
+    //        （无密码登录、公开占位密钥），有没有 AppID 都不影响它们成立；
+    //        本条拦的是"入口不可用"，而它在 AppID 下来前是**既定现实**不是错误。
+    //        AppID 就绪后本条是否扩到 staging 应重评——届时 staging 才有"完整预生产"的意义。
+    if ((c.APP_ID === undefined) !== (c.APP_SECRET === undefined)) {
+      add('APP_ID', 'APP_ID 与 APP_SECRET 必须同时配置或同时留空（只配一个 = 登录 500）');
+    }
+    if (isProd && c.APP_ID === undefined) {
+      add(
+        'APP_ID',
+        '生产环境必须配置 APP_ID / APP_SECRET（小程序登录是唯一入口，缺了登录全部 500）',
+      );
+    }
+    // 1e. 本地模拟付款开关只给 development / test：公网环境打开 = 任何人下单都自动"付款成功"（mock 不收钱）
+    if ((isProd || c.NODE_ENV === 'staging') && c.MOCK_AUTO_CONFIRM === 'on') {
+      add(
+        'MOCK_AUTO_CONFIRM',
+        `${c.NODE_ENV} 环境禁止 MOCK_AUTO_CONFIRM=on（模拟付款自动确认只给本地开发用）`,
+      );
+    }
+    if ((isProd || c.NODE_ENV === 'staging') && c.WECHAT_DEV_LOGIN !== undefined) {
+      add(
+        'WECHAT_DEV_LOGIN',
+        `${c.NODE_ENV} 环境禁止配置 WECHAT_DEV_LOGIN（dev 登录等价无密码登录，公网环境不得保留；仅 development/test 可用）`,
+      );
+    }
 
-  // 2c. mock 密钥独立（P1-4）：与 JWT_SECRET 相同 = 回调验签挂在登录密钥上，轮换/泄露互相牵连
-  if (c.MOCK_CALLBACK_SECRET !== undefined && c.MOCK_CALLBACK_SECRET === c.JWT_SECRET) {
-    add(
-      'MOCK_CALLBACK_SECRET',
-      'MOCK_CALLBACK_SECRET 不得与 JWT_SECRET 相同（泄露半径与轮换周期都不同）',
-    );
-  }
+    // 1d. 生产显式选易失/内存存储驱动（I2 U-I4，AJ-168 反向风险的拦截）：fs=Render 易失盘、
+    //     memory=进程死即丢——两者在生产都是"上传成功、随后图静默消失"且没有任何一方报错。
+    //     ⚠️ 生产**未配置**（undefined）不在此拦：那会连"不需要上传的部署"都起不来；
+    //     未配置由装配层给 storage=null、上传路由 50000 响亮拒绝（wechat 未配置的同款处理）。
+    if (isProd && (c.STORAGE_DRIVER === 'fs' || c.STORAGE_DRIVER === 'memory')) {
+      add(
+        'STORAGE_DRIVER',
+        `生产环境禁止 STORAGE_DRIVER=${c.STORAGE_DRIVER}（易失盘/进程内存，上传的图会静默丢；生产用 r2）`,
+      );
+    }
 
-  // 3b. mock 密钥：生产启用 mock 只可能发生在审核模式（规则 1 已拦其它情况）；
-  //     **staging 同规则**（二次审查 P3-7）——staging 是公网可达环境，占位密钥是仓库里的
-  //     公开值，回落 = 任何人都能伪造"支付成功"回调把订单置 paid。development/test 才允许回落。
-  const isStaging = c.NODE_ENV === 'staging';
-  if (
-    (isProd || isStaging) &&
-    c.PAYMENT_CHANNELS.includes('mock') &&
-    c.MOCK_CALLBACK_SECRET === undefined
-  ) {
-    add(
-      'MOCK_CALLBACK_SECRET',
-      `${c.NODE_ENV} 环境启用 mock 必须显式配置 MOCK_CALLBACK_SECRET，不得回落到开发占位值（公网环境，占位值是公开的）`,
-    );
-  }
-
-  // 2d. Stripe 密钥形状（二次审查 P3-6）：形状错的表现是"第一次调用/验签才炸"，
-  //     而那是用户正在付款的时刻——启动期拦下。生产必须 live：配 sk_test_ 的表现是
-  //     "真实用户全部无法付款"，比启动失败难看得多。
-  if (c.STRIPE_SECRET_KEY !== undefined && !/^sk_(test|live)_/.test(c.STRIPE_SECRET_KEY)) {
-    add(
-      'STRIPE_SECRET_KEY',
-      '形状必须是 sk_test_… 或 sk_live_…（贴错值/配错环境是最高频的 Stripe 配置事故）',
-    );
-  }
-  if (c.STRIPE_WEBHOOK_SECRET !== undefined && !c.STRIPE_WEBHOOK_SECRET.startsWith('whsec_')) {
-    add(
-      'STRIPE_WEBHOOK_SECRET',
-      '形状必须是 whsec_…（webhook 端点密钥，不是 API key——两者混淆是最常见的验签失败原因）',
-    );
-  }
-  if (isProd && c.STRIPE_SECRET_KEY !== undefined && !c.STRIPE_SECRET_KEY.startsWith('sk_live_')) {
-    add('STRIPE_SECRET_KEY', '生产环境必须配置 sk_live_…（配 sk_test_ 的表现是真实用户无法付款）');
-  }
-
-  // 3. 启用真实通道就必须有对应密钥：缺密钥的表现是"下单报 500"，而不是"启动时告诉我少配了东西"
-  if (isProd) {
-    if (c.PAYMENT_CHANNELS.includes('stripe')) {
-      if (c.STRIPE_SECRET_KEY === undefined) {
-        add('STRIPE_SECRET_KEY', '启用了 stripe 通道：生产环境必须配置 STRIPE_SECRET_KEY');
-      }
-      if (c.STRIPE_WEBHOOK_SECRET === undefined) {
+    /**
+     * 1d-2. 选了 r2 却缺 R2 四要素（B1）。
+     *
+     * @why 这是"配置看着合法、运行时每次都失败"的组合：驱动名写对了，于是装配层
+     *      真的去构造 R2 适配器，而凭据缺失要到**第一次上传**才暴露成 500。
+     *      启动期拦住它，换的是"发布当天发现"而不是"运营录第一个商品时发现"。
+     * @why 四个一起报而不是只报第一个：缺哪几个是一次就能看全的信息，
+     *      逐个报会让人改一次、重启一次、再看到下一个（启动失败的代价由发布时长承担）。
+     */
+    if (c.STORAGE_DRIVER === 'r2') {
+      const missing = (
+        [
+          ['R2_ACCOUNT_ID', c.R2_ACCOUNT_ID],
+          ['R2_ACCESS_KEY_ID', c.R2_ACCESS_KEY_ID],
+          ['R2_SECRET_ACCESS_KEY', c.R2_SECRET_ACCESS_KEY],
+          ['R2_BUCKET', c.R2_BUCKET],
+        ] as const
+      )
+        .filter(([, v]) => v === undefined)
+        .map(([k]) => k);
+      if (missing.length > 0) {
         add(
-          'STRIPE_WEBHOOK_SECRET',
-          '启用了 stripe 通道：生产环境必须配置 STRIPE_WEBHOOK_SECRET（回调验签）',
+          'STORAGE_DRIVER',
+          `STORAGE_DRIVER=r2 但缺少 ${missing.join(' / ')}（缺了每次上传都是 500；四个都要配）`,
         );
       }
-      // D-49 的 H5 收银依赖它拼支付链接；缺了的表现是"小程序外支付链接拼不出来"——运行时才暴露
-      if (c.CHECKOUT_BASE_URL === undefined) {
+    }
+
+    // 1e. 初始管理员 seed（O-11 / AJ-181，B17 / AJ-209 起改**单向**）：
+    //     · 配了口令却没配邮箱 → **拒绝启动**：口令没有落点，等于"配了一个以为是口令的字符串"，
+    //       这类半配比不配更隐蔽（与规则 1d 的 APP_ID 成对同一类）。
+    //     · 只配邮箱、没配口令 → **允许**：这是"初始管理员已建号、把口令从平台删掉"的正常终态
+    //       ——AJ-181 的"建号后可删后者"此前被本规则否掉：删了就拒绝启动（B17）。
+    //       seed 会跳过，由 `main.ts` 打 warn `admin_seed_skipped`（静默才是真风险）。
+    if (c.ADMIN_EMAIL === undefined && c.ADMIN_INITIAL_PASSWORD !== undefined) {
+      add(
+        'ADMIN_EMAIL',
+        `配置了 ADMIN_INITIAL_PASSWORD 就必须同时配置 ADMIN_EMAIL（否则口令没有落点）。` +
+          `只配 ADMIN_EMAIL 是允许的：表示"管理员已建号、口令已从平台删除"，此时 seed 跳过（AJ-209）`,
+      );
+    }
+
+    // 2. 审核模式必须指定 SKU，否则所有商品都不能用 mock 下单，等于审核期全站不可用
+    if (c.REVIEW_MODE === 'on' && c.REVIEW_SKU_ID === undefined) {
+      add(
+        'REVIEW_SKU_ID',
+        'REVIEW_MODE=on 时必须指定 REVIEW_SKU_ID（否则审核期没有任何商品可下单）',
+      );
+    }
+
+    // 2b. 审核模式 = 上线前状态：只允许 mock 通道（AJ-30）。
+    //     若真实通道同时在线，审核人员的测试下单会产生真实扣款；
+    //     商店已上线后不需要也不应再开 REVIEW_MODE（那是首版审核专用状态，见 AJ-30 的权衡）。
+    if (c.REVIEW_MODE === 'on' && c.PAYMENT_CHANNELS.some((ch) => ch !== 'mock')) {
+      add('PAYMENT_CHANNELS', 'REVIEW_MODE=on 时仅允许 mock 通道（审核期真实通道必须离线，AJ-30）');
+    }
+
+    // 2d / 2e / 2f. 生产审核模式必须有**截止日**（A7 / AJ-378）。
+    //
+    // @why 这是"忘了改也不会红"的第二类静默缺口：规则 1 与 2b 只保证"开审核模式时别开真实通道"，
+    //      没有任何一条会告诉你"审核已经结束了、该关了"。R1（收单机构事前相談）通过之后，
+    //      若没人记得把 REVIEW_MODE 改回 off，真实买家的每一单都是假支付——
+    //      mock 自动确认 → 单一律 `is_test=true` → 管理端默认过滤、不得采购发货，
+    //      于是买家看到"支付成功"、货永远不发，而**运营在默认视图里根本看不见这些单**。
+    // @why 只拦**生产**：staging 没有真实买家，这是"部署/运营状态"类而不是安全洞类
+    //      （2026-09-27 对规则 1d 的裁决口径：staging 同拒只留给安全洞）。
+    // @why 到期即拒启而不是 warn：见 `REVIEW_MODE_UNTIL` 的 @why——MVP 没有必达的告警通道。
+    //      误红的代价是改一行配置再重启（分钟级），误绿的代价是持续产生发不出货的假单。
+    if (isProd && c.REVIEW_MODE === 'on') {
+      const today = utcDay(now);
+      if (c.REVIEW_MODE_UNTIL === undefined) {
         add(
-          'CHECKOUT_BASE_URL',
-          '启用了 stripe 通道：生产环境必须配置 CHECKOUT_BASE_URL（D-49 短链域名）',
+          'REVIEW_MODE_UNTIL',
+          '生产 REVIEW_MODE=on 必须配置 REVIEW_MODE_UNTIL（审核期截止日，YYYY-MM-DD）：' +
+            '没有截止日就没有任何机制会提醒你关掉它（A7 / AJ-378）',
         );
+      } else {
+        const until = parseReviewUntil(c.REVIEW_MODE_UNTIL);
+        if (until === undefined) {
+          add(
+            'REVIEW_MODE_UNTIL',
+            `REVIEW_MODE_UNTIL=${c.REVIEW_MODE_UNTIL} 不是合法的 YYYY-MM-DD（如 2026-11-15）：` +
+              '填错日期等于没填——它会被读成"永不过期"，闸门静默失效',
+          );
+        } else if (daysUntil(today, until) < 0) {
+          add(
+            'REVIEW_MODE_UNTIL',
+            `审核期已于 ${until} 到期（今天是 ${today}）：` +
+              '要继续审核就把 REVIEW_MODE_UNTIL 往后挪；审核已过就设 REVIEW_MODE=off 并切到真实通道（去掉 mock）',
+          );
+        }
       }
     }
-    if (c.PAYMENT_CHANNELS.includes('wechat')) {
-      if (c.WECHAT_INSTITUTION_MERCHANT_ID === undefined) {
-        add('WECHAT_INSTITUTION_MERCHANT_ID', '启用了 wechat 通道：生产环境必须配置机构商户号');
-      }
-      if (c.WECHAT_INSTITUTION_API_KEY === undefined) {
-        add('WECHAT_INSTITUTION_API_KEY', '启用了 wechat 通道：生产环境必须配置机构 API Key');
-      }
+
+    // 2c. mock 密钥独立（P1-4）：与 JWT_SECRET 相同 = 回调验签挂在登录密钥上，轮换/泄露互相牵连
+    if (c.MOCK_CALLBACK_SECRET !== undefined && c.MOCK_CALLBACK_SECRET === c.JWT_SECRET) {
+      add(
+        'MOCK_CALLBACK_SECRET',
+        'MOCK_CALLBACK_SECRET 不得与 JWT_SECRET 相同（泄露半径与轮换周期都不同）',
+      );
     }
-    // 4. 生产连到本地库：漏配 DATABASE_URL 时最典型的静默错误——服务起得来、写的却是另一个库。
-    //    N11：按 **URL hostname** 判定而不是正则碰运气——`[::1]`（IPv6 环回）与 127.x 整段
-    //    都能绕过 `/(localhost|127\.0\.0\.1)/` 这类字面匹配。
-    try {
-      const host = new URL(c.DATABASE_URL).hostname.toLowerCase();
-      // `0.0.0.0` / `[::]` 作为连接目标会被内核路由到本机（@measured: node `net.connect({host:'0.0.0.0'})`
-      // 连上的是 127.0.0.1 上的监听）——三审链路补盲发现它不在名单里，与 test-db.ts 闸门对齐补上
-      const isLocal =
-        host === 'localhost' ||
-        host === '::1' ||
-        host === '[::1]' ||
-        host === '::' ||
-        host === '[::]' ||
-        host === '0.0.0.0' ||
-        host.startsWith('127.');
-      if (isLocal) {
-        add(
-          'DATABASE_URL',
-          '生产环境的 DATABASE_URL 不得指向本机（localhost / 127.x / ::1 / 0.0.0.0 / ::；漏配环境变量的典型症状）',
-        );
-      }
-    } catch {
-      // URL 解析失败说明它本就不像 postgres URL——由字段级 min(1) 之外的其他规则兜，这里不重复报
-      add('DATABASE_URL', 'DATABASE_URL 不是合法的 URL 形状（postgresql://user@host:5432/db）');
+
+    // 3b. mock 密钥：生产启用 mock 只可能发生在审核模式（规则 1 已拦其它情况）；
+    //     **staging 同规则**（二次审查 P3-7）——staging 是公网可达环境，占位密钥是仓库里的
+    //     公开值，回落 = 任何人都能伪造"支付成功"回调把订单置 paid。development/test 才允许回落。
+    const isStaging = c.NODE_ENV === 'staging';
+    if (
+      (isProd || isStaging) &&
+      c.PAYMENT_CHANNELS.includes('mock') &&
+      c.MOCK_CALLBACK_SECRET === undefined
+    ) {
+      add(
+        'MOCK_CALLBACK_SECRET',
+        `${c.NODE_ENV} 环境启用 mock 必须显式配置 MOCK_CALLBACK_SECRET，不得回落到开发占位值（公网环境，占位值是公开的）`,
+      );
     }
-    // 4b. 生产对外 URL 必须 https（N11）：http 的支付短链/图片域名会被浏览器与渠道当钓鱼拦截
-    for (const [key, value] of [
-      ['CHECKOUT_BASE_URL', c.CHECKOUT_BASE_URL],
-      ['IMG_BASE_URL', c.IMG_BASE_URL],
-      ['PUBLIC_API_BASE', c.PUBLIC_API_BASE],
-      ['LEGAL_BASE_URL', c.LEGAL_BASE_URL],
-    ] as const) {
-      if (value !== undefined && !value.startsWith('https://')) {
-        add(key, `生产环境 ${key} 必须是 https（http 会被浏览器/渠道当不安全来源拦截）`);
-      }
+
+    // 2d. Stripe 密钥形状（二次审查 P3-6）：形状错的表现是"第一次调用/验签才炸"，
+    //     而那是用户正在付款的时刻——启动期拦下。生产必须 live：配 sk_test_ 的表现是
+    //     "真实用户全部无法付款"，比启动失败难看得多。
+    if (c.STRIPE_SECRET_KEY !== undefined && !/^sk_(test|live)_/.test(c.STRIPE_SECRET_KEY)) {
+      add(
+        'STRIPE_SECRET_KEY',
+        '形状必须是 sk_test_… 或 sk_live_…（贴错值/配错环境是最高频的 Stripe 配置事故）',
+      );
     }
-    // 4c.（B9 闸门，AJ-375）公网可达环境的对外域名**不得是占位值**。
-    //     @why 与 4b 是两类不同的失败：4b 拦的是"没加密"，这里拦的是"域名根本不存在"。
-    //          `https://img.example.com` 完全满足 4b（它确实是 https），于是照 `.env.example`
-    //          抄一份部署上去，服务**全绿启动**，而商品图 100% 指向一个不存在的域——
-    //          `<image>` 加载失败在小程序里既不报错也不占位，表现为"页面上一片空白"。
-    //          同上，`CORS_ORIGINS=https://admin.example.com` 会通过字段级形状校验，
-    //          结果是管理端每一次跨域请求都被拒，而浏览器只报 CORS 错误、服务端日志全绿。
-    //          这两类都不是配置"错了"，是配置"还是模板里的那个值"——只能靠保留域名单拦。
-    //     ⚠️ 只对**生产**生效（staging 放行），沿用 2026-09-27 对规则 1d 的同一条裁决：
-    //        本条拦的是"部署正确性"（域名还是模板里的那个值），与 1d（入口不可用）、4b（没加密）
-    //        同类；而 1c / 3b 那种"staging 同拒"留给**安全洞**（无密码登录、公开占位密钥）。
-    //        更直接的理由是：现有一条用例明确记录"staging 允许 http://localhost 调试用"
-    //        （`config.unit.test.ts`），扩到 staging 等于推翻一个已登记的口径。
-    //        **重评触发条件同 1d：AppID 就绪、staging 成为真正的完整预生产之后。**
-    //     @limitation 未配置（undefined）**放行**：域名还没定下来（B9）时这些变量本就该是空的，
-    //          那由各条的"生产必填"规则管，这里不重复报，也不把"还没定"判成"定错了"。
+    if (c.STRIPE_WEBHOOK_SECRET !== undefined && !c.STRIPE_WEBHOOK_SECRET.startsWith('whsec_')) {
+      add(
+        'STRIPE_WEBHOOK_SECRET',
+        '形状必须是 whsec_…（webhook 端点密钥，不是 API key——两者混淆是最常见的验签失败原因）',
+      );
+    }
+    if (
+      isProd &&
+      c.STRIPE_SECRET_KEY !== undefined &&
+      !c.STRIPE_SECRET_KEY.startsWith('sk_live_')
+    ) {
+      add(
+        'STRIPE_SECRET_KEY',
+        '生产环境必须配置 sk_live_…（配 sk_test_ 的表现是真实用户无法付款）',
+      );
+    }
+
+    // 3. 启用真实通道就必须有对应密钥：缺密钥的表现是"下单报 500"，而不是"启动时告诉我少配了东西"
     if (isProd) {
+      if (c.PAYMENT_CHANNELS.includes('stripe')) {
+        if (c.STRIPE_SECRET_KEY === undefined) {
+          add('STRIPE_SECRET_KEY', '启用了 stripe 通道：生产环境必须配置 STRIPE_SECRET_KEY');
+        }
+        if (c.STRIPE_WEBHOOK_SECRET === undefined) {
+          add(
+            'STRIPE_WEBHOOK_SECRET',
+            '启用了 stripe 通道：生产环境必须配置 STRIPE_WEBHOOK_SECRET（回调验签）',
+          );
+        }
+        // D-49 的 H5 收银依赖它拼支付链接；缺了的表现是"小程序外支付链接拼不出来"——运行时才暴露
+        if (c.CHECKOUT_BASE_URL === undefined) {
+          add(
+            'CHECKOUT_BASE_URL',
+            '启用了 stripe 通道：生产环境必须配置 CHECKOUT_BASE_URL（D-49 短链域名）',
+          );
+        }
+      }
+      if (c.PAYMENT_CHANNELS.includes('wechat')) {
+        if (c.WECHAT_INSTITUTION_MERCHANT_ID === undefined) {
+          add('WECHAT_INSTITUTION_MERCHANT_ID', '启用了 wechat 通道：生产环境必须配置机构商户号');
+        }
+        if (c.WECHAT_INSTITUTION_API_KEY === undefined) {
+          add('WECHAT_INSTITUTION_API_KEY', '启用了 wechat 通道：生产环境必须配置机构 API Key');
+        }
+      }
+      // 4. 生产连到本地库：漏配 DATABASE_URL 时最典型的静默错误——服务起得来、写的却是另一个库。
+      //    N11：按 **URL hostname** 判定而不是正则碰运气——`[::1]`（IPv6 环回）与 127.x 整段
+      //    都能绕过 `/(localhost|127\.0\.0\.1)/` 这类字面匹配。
+      try {
+        const host = new URL(c.DATABASE_URL).hostname.toLowerCase();
+        // `0.0.0.0` / `[::]` 作为连接目标会被内核路由到本机（@measured: node `net.connect({host:'0.0.0.0'})`
+        // 连上的是 127.0.0.1 上的监听）——三审链路补盲发现它不在名单里，与 test-db.ts 闸门对齐补上
+        const isLocal =
+          host === 'localhost' ||
+          host === '::1' ||
+          host === '[::1]' ||
+          host === '::' ||
+          host === '[::]' ||
+          host === '0.0.0.0' ||
+          host.startsWith('127.');
+        if (isLocal) {
+          add(
+            'DATABASE_URL',
+            '生产环境的 DATABASE_URL 不得指向本机（localhost / 127.x / ::1 / 0.0.0.0 / ::；漏配环境变量的典型症状）',
+          );
+        }
+      } catch {
+        // URL 解析失败说明它本就不像 postgres URL——由字段级 min(1) 之外的其他规则兜，这里不重复报
+        add('DATABASE_URL', 'DATABASE_URL 不是合法的 URL 形状（postgresql://user@host:5432/db）');
+      }
+      // 4b. 生产对外 URL 必须 https（N11）：http 的支付短链/图片域名会被浏览器与渠道当钓鱼拦截
       for (const [key, value] of [
         ['CHECKOUT_BASE_URL', c.CHECKOUT_BASE_URL],
         ['IMG_BASE_URL', c.IMG_BASE_URL],
         ['PUBLIC_API_BASE', c.PUBLIC_API_BASE],
         ['LEGAL_BASE_URL', c.LEGAL_BASE_URL],
       ] as const) {
-        if (value === undefined) continue;
-        try {
-          const host = new URL(value).hostname.toLowerCase();
-          if (isPlaceholderHost(host)) {
-            add(
-              key,
-              `${key} 的域名 ${host} 是保留/占位域（RFC 2606 / 6761），不是真实对外地址——` +
-                `配它的表现是「支付链接与商品图全部指向不存在的域，且启动与运行都不报错」`,
-            );
-          }
-        } catch {
-          // URL 解析不了说明形状就不对，由字段级规则（optionalUrl*）报，这里不重复
+        if (value !== undefined && !value.startsWith('https://')) {
+          add(key, `生产环境 ${key} 必须是 https（http 会被浏览器/渠道当不安全来源拦截）`);
         }
       }
-      for (const origin of c.CORS_ORIGINS) {
-        try {
-          const host = new URL(origin).hostname.toLowerCase();
-          if (isPlaceholderHost(host)) {
-            add(
-              'CORS_ORIGINS',
-              `CORS_ORIGINS 里的 ${origin} 是保留/占位域：管理端所有跨域请求会被静默拒绝` +
-                `（浏览器只报 CORS 错误，服务端日志全绿，排障方向会被带到"前端写错了"）`,
-            );
+      // 4c.（B9 闸门，AJ-375）公网可达环境的对外域名**不得是占位值**。
+      //     @why 与 4b 是两类不同的失败：4b 拦的是"没加密"，这里拦的是"域名根本不存在"。
+      //          `https://img.example.com` 完全满足 4b（它确实是 https），于是照 `.env.example`
+      //          抄一份部署上去，服务**全绿启动**，而商品图 100% 指向一个不存在的域——
+      //          `<image>` 加载失败在小程序里既不报错也不占位，表现为"页面上一片空白"。
+      //          同上，`CORS_ORIGINS=https://admin.example.com` 会通过字段级形状校验，
+      //          结果是管理端每一次跨域请求都被拒，而浏览器只报 CORS 错误、服务端日志全绿。
+      //          这两类都不是配置"错了"，是配置"还是模板里的那个值"——只能靠保留域名单拦。
+      //     ⚠️ 只对**生产**生效（staging 放行），沿用 2026-09-27 对规则 1d 的同一条裁决：
+      //        本条拦的是"部署正确性"（域名还是模板里的那个值），与 1d（入口不可用）、4b（没加密）
+      //        同类；而 1c / 3b 那种"staging 同拒"留给**安全洞**（无密码登录、公开占位密钥）。
+      //        更直接的理由是：现有一条用例明确记录"staging 允许 http://localhost 调试用"
+      //        （`config.unit.test.ts`），扩到 staging 等于推翻一个已登记的口径。
+      //        **重评触发条件同 1d：AppID 就绪、staging 成为真正的完整预生产之后。**
+      //     @limitation 未配置（undefined）**放行**：域名还没定下来（B9）时这些变量本就该是空的，
+      //          那由各条的"生产必填"规则管，这里不重复报，也不把"还没定"判成"定错了"。
+      if (isProd) {
+        for (const [key, value] of [
+          ['CHECKOUT_BASE_URL', c.CHECKOUT_BASE_URL],
+          ['IMG_BASE_URL', c.IMG_BASE_URL],
+          ['PUBLIC_API_BASE', c.PUBLIC_API_BASE],
+          ['LEGAL_BASE_URL', c.LEGAL_BASE_URL],
+        ] as const) {
+          if (value === undefined) continue;
+          try {
+            const host = new URL(value).hostname.toLowerCase();
+            if (isPlaceholderHost(host)) {
+              add(
+                key,
+                `${key} 的域名 ${host} 是保留/占位域（RFC 2606 / 6761），不是真实对外地址——` +
+                  `配它的表现是「支付链接与商品图全部指向不存在的域，且启动与运行都不报错」`,
+              );
+            }
+          } catch {
+            // URL 解析不了说明形状就不对，由字段级规则（optionalUrl*）报，这里不重复
           }
-        } catch {
-          // 同上：形状问题归字段级规则
+        }
+        for (const origin of c.CORS_ORIGINS) {
+          try {
+            const host = new URL(origin).hostname.toLowerCase();
+            if (isPlaceholderHost(host)) {
+              add(
+                'CORS_ORIGINS',
+                `CORS_ORIGINS 里的 ${origin} 是保留/占位域：管理端所有跨域请求会被静默拒绝` +
+                  `（浏览器只报 CORS 错误，服务端日志全绿，排障方向会被带到"前端写错了"）`,
+              );
+            }
+          } catch {
+            // 同上：形状问题归字段级规则
+          }
         }
       }
+      // 5. 生产必须声明 CORS 源：不声明 = 管理端所有跨域请求被拒，且只在浏览器里才看得出来
+      if (c.CORS_ORIGINS.length === 0) {
+        add('CORS_ORIGINS', '生产环境必须配置 CORS_ORIGINS（管理端 Web 的域名）');
+      }
+      // 8.（剩余清单 5-2 / O5）信任两层以上反代就必须有源站校验：否则直连者伪造的 XFF 被采信，限流与锁定可被绕过
+      //    （ORIGIN_VERIFY_SECRET 的 @why："层数取 2 + 源站只认 Cloudflare 注入的头"必须成对）
+      // 8b.（扫描 S-03）反方向同样成对：配了源站校验 = 所有请求都经 Cloudflare，层数还是 1 时 req.ip 是边缘节点，
+      //    同一地区的买家与管理员共用一个限流 / 登录锁定桶（一个人连错 5 次，整片管理员被锁 15 分钟）
+      if (c.ORIGIN_VERIFY_SECRET !== undefined && c.TRUST_PROXY_HOPS < 2) {
+        add(
+          'TRUST_PROXY_HOPS',
+          '生产配置了 ORIGIN_VERIFY_SECRET（经 Cloudflare）时 TRUST_PROXY_HOPS 必须 ≥ 2（否则取到的是边缘节点 IP）',
+        );
+      }
+      // 9.（扫描 S-02）配了告警收件人却没配邮件服务：告警只记日志，谁都收不到，而日志看起来一切正常
+      if (c.ALERT_EMAIL !== undefined && c.MAIL_PROVIDER_API_KEY === undefined) {
+        add(
+          'ALERT_EMAIL',
+          '生产配置了 ALERT_EMAIL 就必须配置 MAIL_PROVIDER_API_KEY（否则告警发不出去）',
+        );
+      }
+      if (c.TRUST_PROXY_HOPS >= 2 && c.ORIGIN_VERIFY_SECRET === undefined) {
+        add(
+          'ORIGIN_VERIFY_SECRET',
+          '生产 TRUST_PROXY_HOPS ≥ 2 时必须配置 ORIGIN_VERIFY_SECRET（否则源站可被直连并伪造 X-Forwarded-For）',
+        );
+      }
     }
-    // 5. 生产必须声明 CORS 源：不声明 = 管理端所有跨域请求被拒，且只在浏览器里才看得出来
-    if (c.CORS_ORIGINS.length === 0) {
-      add('CORS_ORIGINS', '生产环境必须配置 CORS_ORIGINS（管理端 Web 的域名）');
-    }
-    // 8.（剩余清单 5-2 / O5）信任两层以上反代就必须有源站校验：否则直连者伪造的 XFF 被采信，限流与锁定可被绕过
-    //    （ORIGIN_VERIFY_SECRET 的 @why："层数取 2 + 源站只认 Cloudflare 注入的头"必须成对）
-    // 8b.（扫描 S-03）反方向同样成对：配了源站校验 = 所有请求都经 Cloudflare，层数还是 1 时 req.ip 是边缘节点，
-    //    同一地区的买家与管理员共用一个限流 / 登录锁定桶（一个人连错 5 次，整片管理员被锁 15 分钟）
-    if (c.ORIGIN_VERIFY_SECRET !== undefined && c.TRUST_PROXY_HOPS < 2) {
-      add(
-        'TRUST_PROXY_HOPS',
-        '生产配置了 ORIGIN_VERIFY_SECRET（经 Cloudflare）时 TRUST_PROXY_HOPS 必须 ≥ 2（否则取到的是边缘节点 IP）',
-      );
-    }
-    // 9.（扫描 S-02）配了告警收件人却没配邮件服务：告警只记日志，谁都收不到，而日志看起来一切正常
-    if (c.ALERT_EMAIL !== undefined && c.MAIL_PROVIDER_API_KEY === undefined) {
-      add(
-        'ALERT_EMAIL',
-        '生产配置了 ALERT_EMAIL 就必须配置 MAIL_PROVIDER_API_KEY（否则告警发不出去）',
-      );
-    }
-    if (c.TRUST_PROXY_HOPS >= 2 && c.ORIGIN_VERIFY_SECRET === undefined) {
-      add(
-        'ORIGIN_VERIFY_SECRET',
-        '生产 TRUST_PROXY_HOPS ≥ 2 时必须配置 ORIGIN_VERIFY_SECRET（否则源站可被直连并伪造 X-Forwarded-For）',
-      );
-    }
-  }
-});
+  });
 
 export type AppConfig = z.infer<typeof schema>;
 
@@ -1056,10 +1131,19 @@ export class ConfigError extends Error {
 /**
  * 校验环境变量；任一项不合法即抛 `ConfigError`（**不做兜底默认值**）。
  * @param env 默认 process.env；测试注入用，保证纯函数可测。
+ * @param now 判定"今天"用的时刻（默认 `new Date()`）；仅供审核期截止日这类需要当前日期的规则使用（F10）。
  * @throws {ConfigError} 校验失败时，issues 里列出全部问题（不是第一条就停）。
  */
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const parsed = crossField.safeParse(env);
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  /**
+   * 判定"今天"的时刻。默认取 `systemClock.now()` 而**不是 `new Date()`**：F10 要求时间只有一个来源，
+   * 配置层的默认时钟也必须走那个来源——否则"生产默认"与"测试注入"是两条路，
+   * 而默认那条恰恰是最常走的一条（于是它永远测不到）。
+   */
+  now: Date = systemClock.now(),
+): AppConfig {
+  const parsed = crossField(now).safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
     throw new ConfigError('配置校验失败，服务拒绝启动', issues);

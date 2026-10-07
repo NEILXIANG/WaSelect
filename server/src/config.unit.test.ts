@@ -31,9 +31,9 @@ function without(env: NodeJS.ProcessEnv, key: string): NodeJS.ProcessEnv {
 }
 
 /** 断言 loadConfig 一定抛 ConfigError，并返回 issues 便于进一步断言。 */
-function expectReject(env: NodeJS.ProcessEnv): readonly string[] {
+function expectReject(env: NodeJS.ProcessEnv, now?: Date): readonly string[] {
   try {
-    loadConfig(env);
+    loadConfig(env, now);
   } catch (e) {
     expect(e).toBeInstanceOf(ConfigError);
     return (e as ConfigError).issues;
@@ -353,13 +353,17 @@ describe('跨字段校验：单项合法但组合成事故', () => {
   });
 
   it('生产 + mock + 审核模式 → 放行（审核期是唯一合法场景）', () => {
+    // ⚠️ 审核期现在**必须**带截止日（规则 2d / AJ-378）：这个夹具原先没有 REVIEW_MODE_UNTIL，
+    //    加闸门后它是第一个变红的用例——放行侧会红，正说明闸门真的生效了
     const c = loadConfig(
       prod({
         PAYMENT_CHANNELS: 'mock',
         REVIEW_MODE: 'on',
         REVIEW_SKU_ID: 'sku-1',
+        REVIEW_MODE_UNTIL: '2026-11-20',
         MOCK_CALLBACK_SECRET: 'review-mock-callback-secret-2026-period',
       }),
+      new Date('2026-11-15T00:00:00Z'),
     );
     expect(c.REVIEW_MODE).toBe('on');
   });
@@ -548,6 +552,97 @@ describe('跨字段校验：单项合法但组合成事故', () => {
 
   it('开发环境不受生产规则约束（占位期还没签约，不能一上来就启动不了）', () => {
     expect(loadConfig(baseEnv).PAYMENT_CHANNELS).toEqual(['mock', 'stripe']);
+  });
+
+  /**
+   * 规则 2d / 2e / 2f：生产审核期的**截止日**（A7 / AJ-378）。
+   *
+   * @why 这是"忘了改也不会红"的一类缺口：审核结束（R1 通过）之后若没人记得把 REVIEW_MODE 关掉，
+   *      真实买家照常下单、mock 照常自动确认、单一律 `is_test=true` 而管理端默认看不见——
+   *      买家看到"支付成功"却永远收不到货，且**日志与正常单完全一样**。
+   * @why 边界表里**放行侧与拒绝侧同样重要**：放行侧是"审核期填了正确日期能不能正常启动"，
+   *      它若被闸门误伤，代价是审核期服务起不来（一次审核延期）——误红必须尽早看见。
+   * @why "今天"用注入的固定时刻而不是 `new Date()`：写 `+30 天` 那种相对值会让用例
+   *      在真实时间越过那一天之后**自己变红**，而那时代码一行没改（F10：时间只从外面进来）。
+   */
+  describe('生产审核期的截止日（规则 2d/2e/2f，A7 / AJ-378）', () => {
+    /** 固定的"今天"（UTC 2026-11-15）。 */
+    const TODAY = new Date('2026-11-15T00:00:00Z');
+    /** 审核期的生产夹具：唯一合法形态（只开 mock + 指定 SKU + 独立回调密钥）。 */
+    const review = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
+      prod({
+        PAYMENT_CHANNELS: 'mock',
+        REVIEW_MODE: 'on',
+        REVIEW_SKU_ID: 'sku-1',
+        MOCK_CALLBACK_SECRET: 'review-mock-callback-secret-2026-period',
+        ...extra,
+      });
+
+    it.each([
+      ['2026-11-15', '截止日当天：填这天的人想的是"这天还能用"'],
+      ['2026-11-16', '还剩一天'],
+      ['2026-12-15', '还剩一个月'],
+      ['2027-11-15', '还剩一年'],
+    ])('REVIEW_MODE_UNTIL=%s → 放行（%s）', (until) => {
+      const c = loadConfig(review({ REVIEW_MODE_UNTIL: until }), TODAY);
+      expect(c.REVIEW_MODE_UNTIL).toBe(until);
+    });
+
+    it.each([
+      ['2026-11-14', '昨天'],
+      ['2026-11-01', '半个月前'],
+      ['2025-11-15', '一年前'],
+    ])('REVIEW_MODE_UNTIL=%s（已过期，%s）→ 拒绝', (until) => {
+      const issues = expectReject(review({ REVIEW_MODE_UNTIL: until }), TODAY);
+      const joined = issues.join('\n');
+      expect(joined).toContain('REVIEW_MODE_UNTIL');
+      expect(joined).toContain('到期');
+    });
+
+    it.each([
+      ['2026-13-01', '月份 13 → Invalid Date，比较恒 NaN 即永不过期'],
+      ['2026-02-30', '2 月 30 日：会被 Date 静默滚成 03-02'],
+      ['2026/11/15', '用了斜杠'],
+      ['2026-11-15T00:00:00Z', '带时刻'],
+      ['tomorrow', '不是日期'],
+    ])('REVIEW_MODE_UNTIL=%s（%s）→ 拒绝（填错日期等于没填）', (until) => {
+      expect(expectReject(review({ REVIEW_MODE_UNTIL: until }), TODAY).join('\n')).toContain(
+        'REVIEW_MODE_UNTIL',
+      );
+    });
+
+    it('生产审核模式没配截止日 → 拒绝（没有截止日就没有任何机制会提醒你关掉它）', () => {
+      const issues = expectReject(review({ REVIEW_MODE_UNTIL: '' }), TODAY);
+      expect(issues.join('\n')).toContain('REVIEW_MODE_UNTIL');
+    });
+
+    /**
+     * @why 只拦生产：2026-09-27 对规则 1d 的裁决口径——"staging 同拒"只留给安全洞
+     *      （无密码登录、公开占位密钥），"部署/运营状态"类只拦生产；staging 没有真实买家。
+     */
+    it.each(['development', 'test', 'staging'])(
+      '%s 开审核模式不带截止日 → 放行（非生产不拦）',
+      (nodeEnv) => {
+        const c = loadConfig(
+          {
+            ...baseEnv,
+            NODE_ENV: nodeEnv,
+            PAYMENT_CHANNELS: 'mock',
+            REVIEW_MODE: 'on',
+            REVIEW_SKU_ID: 'sku-1',
+            // staging 启用 mock 必须显式密钥（P3-7），否则撞的是另一条规则
+            MOCK_CALLBACK_SECRET: 'review-mock-callback-secret-2026-period',
+          },
+          TODAY,
+        );
+        expect(c.REVIEW_MODE_UNTIL).toBeUndefined();
+      },
+    );
+
+    it('REVIEW_MODE=off 时填了截止日 → 放行（多余但无害，不该制造噪音）', () => {
+      const c = loadConfig(prod({ REVIEW_MODE_UNTIL: '2026-11-01' }), TODAY);
+      expect(c.REVIEW_MODE_UNTIL).toBe('2026-11-01');
+    });
   });
 });
 

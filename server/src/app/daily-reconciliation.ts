@@ -1,6 +1,8 @@
 /**
- * 职责：**每日对账 job**（I1-U7b，欠账① / D-45）——把"需要人工看一眼"的三类账务异常
+ * 职责：**每日对账 job**（I1-U7b，欠账① / D-45）——把"需要人工看一眼"的各类异常
  *       扫出来，计数 + 取样落日志。
+ *       ⚠️ 类数随发现而增长（当前七类，①–⑦ 列在下面），**不要再从这里的措辞推断有几类**——
+ *          文件头曾长期写"三类"而实际已有六类，照它读的人会以为清单到此为止（§2 第 88 条）。
  *
  * @why 只**报告**不自动修：三类异常的处置都是"人看了再定"——
  *      ① initiated 支付行挂在已关闭的单上（D-50 连带作废 best-effort 失败的残留）：
@@ -11,7 +13,8 @@
  *         "钱扣了但不能发货"与"钱到了找不到单"，每一条都要人工跟进；
  *      ④ 调度器心跳停滞（AJ-102 的替代方案）；
  *      ⑤ 卡住的回调：登记了却没有任何结果、租约已过期（KD-2 / AJ-175，见 scanUnfinishedCallbacks）；
- *      ⑥ 退款滞留：订单停在 refunding 超过 24 小时（F-03 / AJ-178，见 scanStuckRefunds）。
+ *      ⑥ 退款滞留：订单停在 refunding 超过 24 小时（F-03 / AJ-178，见 scanStuckRefunds）；
+ *      ⑦ 审核模式仍在生产开启：临到期或已过期（A7 / AJ-378，见 reviewWindowAnomaly）。
  *      自动修任何一类都需要业务裁决（退不退？发不发？），MVP 把它留给人——
  *      但没有这个 job，这些行就只能在库里静默躺着（欠账①被评为致命级的原因）。
  *
@@ -24,7 +27,7 @@
  *              日志不是报表，积压超过 20 条时人要的是"有多少"而不是"全部 id"。
  * @limitation 二：**只读业务表**（不改任何业务行；唯一的写是追加一行 reconciliation_runs，剩余清单 3-2）。对账 job 在事务里跑只是为了共用框架的
  *              锁与心跳；它发现的问题一律靠人去修，不在事务里顺手改数据。
- * @limitation 三：三类是**三个视角，不是三个互斥集合**——同一行可以同时命中多类
+ * @limitation 三：各类是**不同视角，不是互斥集合**——同一行可以同时命中多类
  *              （典型：订单 paid 但支付行仍 initiated，既是①悬空支付、又是②两本账不符）。
  *              于是 `processed` 是**异常条数之和**，不是"有问题的行数"，更不是异常类数；
  *              读它时不要以为 4 条 = 4 个不同的问题。
@@ -41,6 +44,7 @@ import {
   type JobOutcome,
   type SchedulerJob,
 } from '../ports/scheduler.js';
+import { daysUntil, REVIEW_WINDOW_WARN_DAYS, utcDay } from '../review-window.js';
 import {
   RESULT_LATE_PAYMENT,
   RESULT_MISMATCH_PREFIX,
@@ -284,7 +288,55 @@ async function scanStuckRefunds(ctx: JobContext<Db>): Promise<AnomalyClass> {
   };
 }
 
-export function createDailyReconciliationJob(): SchedulerJob<Db> {
+/**
+ * 第七类：**审核模式仍在生产开启**（A7 / AJ-378）——临到期或已过期时报一条。
+ *
+ * @why 启动闸门（`config.ts` 规则 2f）只能拦"**启动那一刻**已过期"：
+ *      一个跑起来之后就再没重启过的进程（审核期最常见的形态——没人发版、没人改配置），
+ *      截止日过了它照样在服务，假单照常产生，而闸门一次都没机会跑。
+ *      每日对账是唯一每天都会执行的作业，把它挂在这里，"过期"这件事**至少每天被说一次**。
+ * @why 与前六类不同：这一类**不查库**——它是配置层的事实。判据因此写成纯函数并在单测里直接钉住，
+ *      不用为了它去造数据。
+ * @why 只在**最后 {@link REVIEW_WINDOW_WARN_DAYS} 天或已过期**时响，不是"开着就报"：
+ *      审核期通常一两周，天天报同一句话会让人把告警当噪音关掉——
+ *      而"人把告警关掉"比"晚三天发现"贵得多
+ *      （`app/daily-heartbeat-watch.ts` @limitation 二 是同一条教训）。
+ * @limitation 一：报出**不等于**停掉——本类只报告，不自动关审核模式。
+ *              关掉它意味着切换支付通道，那是运维动作，且配错了方向（提前切真实通道）比晚切更糟。
+ * @limitation 二：`on` 且 `until` 缺失这一支在生产**不可达**（启动闸门 2d 会先拒），
+ *              留着它是因为一旦将来有人放宽了闸门，这一支会立刻报出"连截止日都没有"，
+ *              而不是让整类检查静默失明。
+ */
+export function reviewWindowAnomaly(input: {
+  /** 是否为"**生产** + `REVIEW_MODE=on`"；由装配处判定后传入，本函数不认识 config。 */
+  on: boolean;
+  /** `REVIEW_MODE_UNTIL`（可能未配）。 */
+  until: string | undefined;
+  /** "今天"（UTC 日历日，由 `ctx.startedAt` 推出——F10：时间只从外面进来）。 */
+  todayUtc: string;
+}): { key: string; count: number; ids: string[] } {
+  if (!input.on) return { key: 'review_mode', count: 0, ids: [] };
+  if (input.until === undefined) {
+    return { key: 'review_mode_no_deadline', count: 1, ids: [] };
+  }
+  const left = daysUntil(input.todayUtc, input.until);
+  if (left < 0) {
+    return { key: 'review_mode_expired', count: 1, ids: [`${input.until}(已过${-left}天)`] };
+  }
+  if (left <= REVIEW_WINDOW_WARN_DAYS) {
+    return { key: 'review_mode_closing', count: 1, ids: [`${input.until}(剩${left}天)`] };
+  }
+  return { key: 'review_mode', count: 0, ids: [] };
+}
+
+export function createDailyReconciliationJob(input: {
+  /**
+   * 审核模式是否在**生产**开启（`main` 侧按 `NODE_ENV` + `REVIEW_MODE` 判定后传入）。
+   * @why 不传 config 进来：本 job 一旦认识 config，它就再也离不开装配根，
+   *      而这里唯一需要的只是两个布尔/字符串——传最小事实，单测才能直接钉住判据。
+   */
+  reviewMode: { on: boolean; until: string | undefined };
+}): SchedulerJob<Db> {
   return {
     name: DAILY_RECONCILIATION_JOB,
     run: async (ctx: JobContext<Db>): Promise<JobOutcome> => {
@@ -295,6 +347,10 @@ export function createDailyReconciliationJob(): SchedulerJob<Db> {
         await scanStalledHeartbeats(ctx),
         await scanUnfinishedCallbacks(ctx),
         await scanStuckRefunds(ctx),
+        reviewWindowAnomaly({
+          ...input.reviewMode,
+          todayUtc: utcDay(ctx.startedAt),
+        }),
       ];
       let anomalies = 0;
       for (const c of classes) {

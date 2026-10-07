@@ -147,7 +147,14 @@ export function mountInternalJobsRoutes(
               createAutoCompleteJob({ afterDays: deps.config.AUTO_COMPLETE_DAYS }),
               // 剩余清单 3-4：在对账之前跑——对账看到的是归档后的状态
               createArchiveTestOrdersJob({ afterHours: deps.config.TEST_ORDER_ARCHIVE_HOURS }),
-              createDailyReconciliationJob(),
+              // A7 / AJ-378：审核模式是否在生产开启由这里判定后传进去——
+              //   job 只拿"事实"，不认识 config（也不会自己去猜 NODE_ENV）
+              createDailyReconciliationJob({
+                reviewMode: {
+                  on: deps.config.NODE_ENV === 'production' && deps.config.REVIEW_MODE === 'on',
+                  until: deps.config.REVIEW_MODE_UNTIL,
+                },
+              }),
               createCleanupLoginAttemptsJob(),
             ],
           ).catch((e: unknown) => {

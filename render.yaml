@@ -124,6 +124,11 @@ services:
         value: 'on'
       - key: REVIEW_SKU_ID
         sync: false
+      # 审核期截止日（A7 / AJ-378）：生产 + REVIEW_MODE=on 时**必填**，到期后服务拒绝启动。
+      # ⚠️ 它不是"无默认值"变量，`REQUIRED_ENV_KEYS` 的那条比对**抓不到**它——
+      #    条件必填只能靠人在这里声明（test/config/render-env.unit.test.ts 补了一条针对性断言）。
+      - key: REVIEW_MODE_UNTIL
+        sync: false
       - key: CORS_ORIGINS
         sync: false # 生产必填（跨字段校验会拦）；只放行 admin-web 域名
       - key: ADMIN_OPENIDS

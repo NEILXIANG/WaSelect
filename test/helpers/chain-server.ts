@@ -255,6 +255,12 @@ export async function runDailyReconciliation(
   db: Db,
   srv: ChainServer,
   at: Date,
+  /**
+   * 审核模式是否在**生产**开启（A7 / AJ-378 的第七类）。
+   * @why 默认 `on: false`：绝大多数用例对账的是真实运营状态；生产的真实装配只走
+   *      `app/internal-jobs-routes.ts`（那里由 `config` 判定后传入），这个默认值不是兜底而是"常态"。
+   */
+  reviewMode: { on: boolean; until: string | undefined } = { on: false, until: undefined },
 ): Promise<Record<string, number>> {
   srv.sink.clear();
   await runSchedulerOnce(
@@ -262,7 +268,7 @@ export async function runDailyReconciliation(
       name: 'daily',
       lockKey: 'daily',
     }),
-    [createDailyReconciliationJob()],
+    [createDailyReconciliationJob({ reviewMode })],
   );
   const summary = srv.sink.find('daily_reconciliation')[0];
   return (summary?.['ctx'] ?? {}) as Record<string, number>;
