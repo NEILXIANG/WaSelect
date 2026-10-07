@@ -89,8 +89,23 @@ beforeEach(() => {
 
 async function submitRefund(el: HTMLElement): Promise<void> {
   await type(el.querySelector('input[placeholder^="退款原因"]'), '缺货');
+  // 第一批①：「退款」只打开确认弹层，「确认退款」在弹层里
   await click(button(el, '退款'));
   await click(button(el, '确认退款'));
+}
+
+/**
+ * 失败提示的文本（第一批①：改走右下角 Toast，页面里不再有 `<p class="error">`）。
+ * @why 只取 `.toast-error` 而不是整页 textContent：整页里还有"发货前改址"等常驻文案，
+ *      用整页文本断言"显示了错误"会把常驻文案也算进去——那就是一条永远不会红的断言。
+ */
+function errorToastText(el: HTMLElement): string {
+  return [...el.querySelectorAll('.toast-error')].map((t) => t.textContent ?? '').join('\n');
+}
+
+/** 全部提示的文本（含成功 / 信息）。 */
+function toastText(el: HTMLElement): string {
+  return [...el.querySelectorAll('.toast')].map((t) => t.textContent ?? '').join('\n');
 }
 
 afterEach(async () => {
@@ -144,10 +159,11 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     status = 'paid';
     hasDispute = true;
     const el = await open();
+    // 第一批①：校验不过就**进不去弹层**——连"确认解除"这个按钮都不会出现
     await click(button(el, RELEASE_BTN));
-    await click(button(el, '确认解除（不可撤销）'));
+    expect(button(el, '确认解除（不可撤销）')).toBeNull();
     expect(calls.filter((c) => c.path.endsWith('/dispute/release'))).toHaveLength(0);
-    expect(el.querySelector('.error')?.textContent).toContain('解除理由必填');
+    expect(errorToastText(el)).toContain('解除理由必填');
   });
 
   it('🔴 成功 → 刷新详情与列表，并明说"拒付没有结案"（否则运营会以为处理完就发货）', async () => {
@@ -181,8 +197,8 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     await type(el.querySelector('input[placeholder^="解除理由"]'), '链断了');
     await click(button(el, RELEASE_BTN));
     await click(button(el, '确认解除（不可撤销）'));
-    expect(el.querySelector('.error')?.textContent).toContain('不允许此操作');
-    expect(el.textContent).not.toContain('没有结案');
+    expect(errorToastText(el)).toContain('不允许此操作');
+    expect(toastText(el)).not.toContain('没有结案');
   });
 });
 
@@ -204,9 +220,11 @@ describe('订单详情：退款提交出错之后（B41 残留 / AJ-230）', () 
     // P2-49：刷新后是「退款中」且没有"机构确认失败"事件 → 按"结果未知"说，指明不要去 Stripe 后台重复退
     expect(el.textContent).toContain('结果未知');
     expect(el.textContent).toContain('不要去 Stripe 后台重复退');
-    // 错误本身仍要显示（带出服务端的话），且确认态已退出——不留一个还能再点的"确认退款"
-    expect(el.querySelector('.error')?.textContent).toContain('服务器内部错误');
+    // 错误本身仍要显示（带出服务端的话），且弹层已关闭——不留一个还能再点的"确认退款"
+    expect(errorToastText(el)).toContain('服务器内部错误');
     expect(button(el, '确认退款')).toBeNull();
+    // 第一批①：错误 Toast 还带着报障码（traceId），报障时能按它检索日志
+    expect(errorToastText(el)).toContain('t-1');
   });
 
   it('P2-49 刷新后发现机构已确认失败（refund_failed provider_failed:…）→ 说可重新发起', async () => {
@@ -253,8 +271,8 @@ describe('订单详情：退款提交出错之后（B41 残留 / AJ-230）', () 
     };
     const el = await open();
     await submitRefund(el);
-    expect(el.querySelector('.error')?.textContent).toContain('拒付');
-    expect(el.textContent).not.toContain('不要去机构后台手工退款');
+    expect(errorToastText(el)).toContain('拒付');
+    expect(toastText(el)).not.toContain('不要去机构后台手工退款');
   });
 
   it('成功（202 pending）：原有行为不变——提示"处理中"，刷新详情', async () => {
@@ -267,8 +285,10 @@ describe('订单详情：退款提交出错之后（B41 残留 / AJ-230）', () 
     const before = detailFetches();
     await submitRefund(el);
     expect(detailFetches()).toBe(before + 1);
-    expect(el.textContent).toContain('处理中');
-    expect(el.querySelector('.error')).toBeNull();
+    expect(toastText(el)).toContain('处理中');
+    expect(el.querySelector('.toast-error')).toBeNull();
+    // 第一批①：pending 这一档带 sticky（写的是"下一步怎么办"，不能 3 秒就消失）
+    expect(el.querySelector('.toast-info')).not.toBeNull();
   });
 });
 
@@ -451,22 +471,30 @@ describe('订单详情：发货两步确认（P2-51）', () => {
 
   const shipPosts = (): Call[] => calls.filter((c) => c.path.endsWith('/ship'));
 
-  it('🔴 点「发货」只进入核对态、不发请求；「确认发货」才发；改输入即退出确认态', async () => {
+  it('🔴 点「发货」只打开确认弹层、不发请求；弹层里必须重打运单号才发', async () => {
     status = 'paid';
     const el = await open();
     await type(el.querySelector('input[placeholder^="承运商"]'), 'Japan Post');
     await type(el.querySelector('input[placeholder="运单号"]'), 'EJ123456789JP');
     await click(button(el, '发货'));
     expect(shipPosts()).toHaveLength(0);
-    expect(el.textContent).toContain('核对：Japan Post / EJ123456789JP');
 
-    await type(el.querySelector('input[placeholder="运单号"]'), 'EJ987654321JP');
-    expect(button(el, '确认发货')).toBeNull();
+    // 第一批①：核对内容搬进弹层（此前是页面内一行「核对：…」）
+    const dialogText = el.querySelector('.dialog')?.textContent ?? '';
+    expect(dialogText).toContain('Japan Post');
+    expect(dialogText).toContain('EJ123456789JP');
 
-    await click(button(el, '发货'));
+    // ❗ 关键不变量：**不重打运单号就发不出去**（运单号是从邮件里复制来的，看一遍看不出首尾错字）
+    expect(button(el, '确认发货')?.disabled, '没重打运单号时主按钮必须是禁用的').toBe(true);
+    // 打错一个字同样不放行（否则"重打"形同虚设）
+    await type(el.querySelector('.dialog input'), 'EJ123456789J');
+    expect(button(el, '确认发货')?.disabled).toBe(true);
+    expect(shipPosts()).toHaveLength(0);
+
+    await type(el.querySelector('.dialog input'), 'EJ123456789JP');
     await click(button(el, '确认发货'));
     expect(shipPosts()).toHaveLength(1);
-    expect(shipPosts()[0]?.body).toEqual({ carrier: 'Japan Post', tracking_no: 'EJ987654321JP' });
+    expect(shipPosts()[0]?.body).toEqual({ carrier: 'Japan Post', tracking_no: 'EJ123456789JP' });
   });
 
   it('🔴 运单号形状认不出时，**确认之前**就提示（发货邮件随确认发出，事后提示已晚；三端联动模拟 2026-10-08）', async () => {
@@ -474,11 +502,12 @@ describe('订单详情：发货两步确认（P2-51）', () => {
     const el = await open();
     await type(el.querySelector('input[placeholder^="承运商"]'), 'Japan Post EMS');
     await type(el.querySelector('input[placeholder="运单号"]'), 'EM12345678JP'); // 少一位
+    // 第一批①：警告在**表单里**就显示，不必先点「发货」（点发货会打开弹层，那时才提示已晚）
+    expect(el.textContent).toContain('形状认不出');
     await click(button(el, '发货'));
     expect(el.textContent).toContain('形状认不出');
     expect(shipPosts()).toHaveLength(0);
     await type(el.querySelector('input[placeholder="运单号"]'), 'EM123456789JP');
-    await click(button(el, '发货'));
     expect(el.textContent).not.toContain('形状认不出');
   });
 });

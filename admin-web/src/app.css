@@ -344,3 +344,95 @@ body {
 .modal-body {
   position: relative;
 }
+
+/* ── Toast（第一批①：统一操作反馈）─────────────────────────────────────
+   @why 固定在**右下角**而不是页面顶部：订单详情有五段表单，退款按钮在第四段，
+        顶部的提示要点完还得往上滚回去才看得见；右下角与"点完的那个按钮"在同一屏。
+   @why z-index 高于 .modal（10）：确认弹层里提交失败时，错误提示不能被弹层盖住。 */
+.toast-stack {
+  position: fixed;
+  right: var(--ws-space);
+  bottom: var(--ws-space);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space-sm);
+  max-width: calc(var(--ws-space) * 22);
+}
+
+.toast {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space-sm);
+  position: relative;
+  padding: var(--ws-space) calc(var(--ws-space) * 2) var(--ws-space) calc(var(--ws-space) * 1.5);
+  border-radius: var(--ws-radius);
+  background: var(--ws-color-card);
+  border: var(--ws-border) solid var(--ws-color-muted);
+  /* 一条提示可能是一整句（退款的三种 outcome 各有一句），不设宽度上限会拉到半屏宽 */
+  box-shadow: 0 0 0 calc(var(--ws-border) * 2) var(--ws-color-bg);
+  font-size: var(--ws-font-sm);
+}
+
+/* 左侧色条：颜色不是唯一信号（标题与文案本身也说清了），但让人一眼分出"成了 / 没成" */
+.toast-success {
+  border-left: calc(var(--ws-border) * 3) solid var(--ws-color-success);
+}
+
+.toast-info {
+  border-left: calc(var(--ws-border) * 3) solid var(--ws-color-muted);
+}
+
+.toast-error {
+  border-left: calc(var(--ws-border) * 3) solid var(--ws-color-error);
+}
+
+.toast-text {
+  white-space: pre-wrap;
+}
+
+.toast-trace {
+  color: var(--ws-color-muted);
+}
+
+.toast-close {
+  position: absolute;
+  top: var(--ws-space-sm);
+  right: var(--ws-space-sm);
+  border: 0;
+  background: none;
+  color: var(--ws-color-muted);
+  font-size: var(--ws-font-sm);
+  cursor: pointer;
+  padding: 0 var(--ws-space-sm);
+}
+
+/* ── 确认弹层（第一批①：危险操作统一确认）───────────────────────────── */
+.dialog {
+  background: var(--ws-color-card);
+  border-radius: var(--ws-radius);
+  padding: calc(var(--ws-space) * 1.5);
+  width: calc(var(--ws-space) * 24);
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space);
+}
+
+.dialog-title {
+  margin: 0;
+  font-size: var(--ws-font-lg);
+}
+
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ws-space);
+}
+
+/* 危险动作主按钮：与常规 .btn 唯一的差别是底色转错误色——
+   让人在"保存"和"退款"之间多一次停顿，而不必去读按钮上的字。 */
+.btn-danger {
+  background: var(--ws-color-error);
+  color: var(--ws-color-card);
+}

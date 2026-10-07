@@ -32,11 +32,13 @@ describe('BlockedUsers', () => {
     mounted = await mount(createElement(BlockedUsers, { api: api as never }));
     const el = mounted.el;
     expect(el.textContent).toContain('u-9');
+    // 第一批①：三道口子依次为「解除拉黑」（入口）→「去确认」（填完原因）→「确认解除」（弹层）
     await click(button(el, '解除拉黑'));
-    await click(button(el, '确认解除'));
+    await click(button(el, '去确认'));
     expect(calls.some((c) => c.path.endsWith('/unblock'))).toBe(false);
     expect(el.textContent).toContain('请填写解除原因');
     await type(el.querySelector('input[name="unblock-reason"]'), '误拉黑');
+    await click(button(el, '去确认'));
     await click(button(el, '确认解除'));
     expect(calls.find((c) => c.path.endsWith('/unblock'))?.body).toEqual({ reason: '误拉黑' });
     expect(el.textContent).toContain('没有被拉黑的用户');

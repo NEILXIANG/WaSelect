@@ -3,11 +3,15 @@
  *
  * @why 拉黑原先没有解除入口，误拉黑只能直接改库（绕过审计）。解除要求填原因、两步确认，与拉黑同等慎重。
  * @limitation 拉黑时被连带取消的在途单**不会恢复**（库存已回补，恢复会超卖）——这里明说，买家需重新下单。
+ * @limitation 第一批①（2026-10-08）：解除确认走 `ui/ConfirmDialog`，反馈走 `ui/Toast`。
+ *             解除与拉黑同样是"改动一个风控事实"，却不像拉黑那样显眼——
+ *             把它做成同款弹层，是为了让"撤销风控决定"和"作出风控决定"在手上一样重。
  * @see server/src/app/admin-risk-routes.ts（unblock / GET users?blocked=true）
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
-import { ApiError } from '../api/errors.js';
+import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
+import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { formatJst } from '../format.js';
 import { listBlockedUsers, unblockUser, type AdminApi, type BlockedUser } from './api.js';
 import { blockedListTitle } from './view.js';
@@ -29,36 +33,62 @@ export function BlockedUsers({
   const [rows, setRows] = useState<BlockedUser[]>([]);
   const [target, setTarget] = useState('');
   const [reason, setReason] = useState('');
-  const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const sink = useToasts();
+  /** 解除确认弹层（null = 没开）。 */
+  const [dialog, setDialog] = useState<ConfirmSpec | null>(null);
+  /** 弹层确认后要跑的动作（与订单详情同口径：函数不进 state）。 */
+  const dialogRun = useRef<() => void>(() => undefined);
 
   const load = useCallback(async () => {
     try {
       setRows(await listBlockedUsers(api));
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '取已拉黑用户失败');
+      sink.error(text, { traceId });
     }
-  }, [api]);
+  }, [api, sink.error]);
 
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
 
   const submit = async (): Promise<void> => {
-    if (reason.trim() === '') return setError('请填写解除原因（进审计台账）');
+    if (reason.trim() === '') {
+      sink.error('请填写解除原因（进审计台账）');
+      setDialog(null);
+      return;
+    }
     setBusy(true);
-    setError('');
     try {
       await unblockUser(api, target, reason.trim());
       setTarget('');
       setReason('');
+      setDialog(null);
       onChanged?.();
       await load();
+      sink.success(`已解除 ${target} 的拉黑：对方重新登录即可下单`);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      setDialog(null);
+      const { text, traceId } = toastError(e, '解除拉黑失败');
+      sink.error(text, { traceId });
     } finally {
       setBusy(false);
     }
+  };
+
+  const askUnblock = (): void => {
+    if (reason.trim() === '') {
+      sink.error('请填写解除原因（进审计台账）');
+      return;
+    }
+    dialogRun.current = () => void submit();
+    setDialog({
+      title: '解除后对方重新登录即可下单',
+      body: `${target}。拉黑时被取消的订单不会恢复（库存已回补，恢复会超卖），买家需重新下单。解除原因会进审计台账。`,
+      confirmText: '确认解除',
+      danger: true,
+    });
   };
 
   return (
@@ -101,17 +131,30 @@ export function BlockedUsers({
             value={reason}
             onChange={(e) => setReason(e.target.value)}
           />
-          <div className="row2">
-            <button type="button" className="btn" disabled={busy} onClick={() => void submit()}>
-              {busy ? '提交中…' : '确认解除'}
-            </button>
-            <button type="button" className="link" onClick={() => setTarget('')}>
-              取消
-            </button>
-          </div>
+          {/*
+            按钮文字用「去确认」而不是再来一个「解除拉黑」：
+            列表行上已经有一个同名按钮了，同屏两个「解除拉黑」时
+            运营（和组件用例按文字找按钮的测试）都分不清哪个是入口、哪个是提交。
+            第一批① 才暴露出来——此前这颗按钮自己就是最后一道确认，没人需要区分。
+          */}
+          <button type="button" className="btn btn-danger" disabled={busy} onClick={askUnblock}>
+            去确认
+          </button>
+          <button type="button" className="link" onClick={() => setTarget('')}>
+            取消
+          </button>
         </div>
       )}
-      {error !== '' && <p className="error">{error}</p>}
+
+      <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
+      {dialog !== null && (
+        <ConfirmDialog
+          spec={dialog}
+          busy={busy}
+          onConfirm={() => dialogRun.current()}
+          onCancel={() => setDialog(null)}
+        />
+      )}
     </div>
   );
 }

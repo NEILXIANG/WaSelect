@@ -11,11 +11,14 @@
  *              避免运营以为在这里传了材料就算完成举证。
  * @limitation 二：复用订单模块的 `getOrder` 拿 user_id（不为它另起一份封装）；
  *              跨模块只引用**接口层**函数，不引用页面。
+ * @limitation 三：第一批①（2026-10-08）起反馈走 `ui/Toast`、拉黑确认走 `ui/ConfirmDialog`
+ *              ——与订单详情同一套，不再各写一份行内红字。
  *
  * @see ./view.ts；./api.ts；../orders/api.ts（getOrder）；契约 D-50
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError } from '../api/errors.js';
+import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
+import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { getOrder } from '../orders/api.js';
 import { blockUser, listDisputes, type AdminApi } from './api.js';
 import { BlockedUsers } from './BlockedUsers.js';
@@ -37,8 +40,10 @@ export function RiskPage({ api }: RiskPageProps) {
   const [rows, setRows] = useState<ReturnType<typeof disputeRows>>([]);
   const [status, setStatus] = useState<'all' | (typeof DISPUTE_STATUS)[number]>('all');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [ok, setOk] = useState('');
+  /** 统一反馈出口（第一批①）。 */
+  const sink = useToasts();
+  /** 拉黑确认弹层（null = 没开）。 */
+  const [dialog, setDialog] = useState<ConfirmSpec | null>(null);
   /** 正在处理的订单（先取详情拿 user_id）。 */
   const [orderId, setOrderId] = useState('');
   /** 面板上显示的订单号（`order_no`），不是 UUID——运营是按订单号认单的（ADM3-01）。 */
@@ -54,14 +59,14 @@ export function RiskPage({ api }: RiskPageProps) {
   const load = useCallback(async () => {
     const seq = ++reqSeq.current;
     setLoading(true);
-    setError('');
     try {
       const list = await listDisputes(api, status === 'all' ? undefined : status);
       if (seq !== reqSeq.current) return;
       setRows(disputeRows(list));
     } catch (e) {
       if (seq !== reqSeq.current) return;
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '取拒付列表失败');
+      sink.error(text, { traceId });
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
@@ -85,8 +90,6 @@ export function RiskPage({ api }: RiskPageProps) {
    */
   const prepare = async (r: DisputeRow): Promise<void> => {
     setBusy(true);
-    setError('');
-    setOk('');
     setOrderId('');
     setOrderNo('');
     setUserId('');
@@ -99,9 +102,10 @@ export function RiskPage({ api }: RiskPageProps) {
       setOrderId(r.orderId);
       setOrderNo(r.orderNo);
       setUserId(uid);
-      if (uid === '') setError('该订单详情里没有 user_id（拉黑需要它）');
+      if (uid === '') sink.error('该订单详情里没有 user_id（拉黑需要它）');
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '取订单详情失败');
+      sink.error(text, { traceId });
     } finally {
       setBusy(false);
     }
@@ -109,25 +113,38 @@ export function RiskPage({ api }: RiskPageProps) {
 
   const confirmBlock = async (): Promise<void> => {
     setBusy(true);
-    // 不清的话，"已拉黑"与上一次失败留下的红字会同时出现在页面上（ADM3-01 附带）
-    setError('');
-    setOk('');
     try {
       // 带上 order_id 让服务端核对"这张单属于这个人"（ADM3-01 纵深防御 / AJ-290）：
       // 拉黑不可逆、没有解除接口，多一道凭据核对的成本是请求体里多一个字段。
       // ⚠️ 它**不是**"防手滑"——防手滑靠的是 prepare 清空待确认态（AJ-256）；
       //    这里防的是"order_id 与 user_id 配错"这类请求级错误。
       await blockUser(api, { userId, orderId });
-      setOk(blockDoneText(userId, orderNo));
+      sink.success(blockDoneText(userId, orderNo));
       setBlockedTick((t) => t + 1);
       setOrderId('');
       setOrderNo('');
       setUserId('');
+      setDialog(null);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      setDialog(null);
+      const { text, traceId } = toastError(e, '拉黑失败');
+      sink.error(text, { traceId });
     } finally {
       setBusy(false);
     }
+  };
+
+  /** 打开拉黑确认弹层（第一批①：拉黑此前是行内「确认拉黑 / 取消」，与"保存"同款按钮）。 */
+  const askBlock = (): void => {
+    setDialog({
+      title: '拉黑会进审计台账，用户此后无法下单',
+      // ⚠️ 正文直接引 view.ts 的常量，不在这里重写一遍：
+      //    它连"未付款订单会被取消、库存回补"都写全了，重写的必然是缩水版，
+      //    而后果清单缩水正是这类弹层最危险的失效方式。
+      body: `${BLOCK_CONFIRM_TEXT}\n\n订单 ${orderNo !== '' ? orderNo : orderId} · 用户 ${userId}`,
+      confirmText: '确认拉黑',
+      danger: true,
+    });
   };
 
   return (
@@ -155,9 +172,6 @@ export function RiskPage({ api }: RiskPageProps) {
           ))}
         </select>
       </div>
-
-      {error !== '' && <p className="error">{error}</p>}
-      {ok !== '' && <p className="ok">{ok}</p>}
 
       <table className="table">
         <thead>
@@ -209,32 +223,34 @@ export function RiskPage({ api }: RiskPageProps) {
                 order_no 缺失时退化到 UUID：宁可显示一个看不懂的串，也不要显示一个空档。 */}
             订单 {orderNo !== '' ? orderNo : orderId} · 用户 {userId}
           </span>
-          <span className="error">{BLOCK_CONFIRM_TEXT}</span>
-          <div className="row2">
-            <button
-              type="button"
-              className="btn"
-              disabled={busy}
-              onClick={() => void confirmBlock()}
-            >
-              确认拉黑
-            </button>
-            <button
-              type="button"
-              className="link"
-              onClick={() => {
-                setOrderId('');
-                setUserId('');
-              }}
-            >
-              取消
-            </button>
-          </div>
+          <button type="button" className="btn btn-danger" disabled={busy} onClick={askBlock}>
+            拉黑用户
+          </button>
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              setOrderId('');
+              setUserId('');
+            }}
+          >
+            取消
+          </button>
         </div>
       )}
 
       {/* 解除拉黑（AJ-384）：误拉黑的唯一出口，走审计 */}
-      <BlockedUsers api={api} refreshKey={blockedTick} onChanged={() => setOk('')} />
+      <BlockedUsers api={api} refreshKey={blockedTick} />
+
+      <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
+      {dialog !== null && (
+        <ConfirmDialog
+          spec={dialog}
+          busy={busy}
+          onConfirm={() => void confirmBlock()}
+          onCancel={() => setDialog(null)}
+        />
+      )}
     </section>
   );
 }

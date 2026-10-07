@@ -95,11 +95,11 @@ describe('风控页：拉黑串单（ADM3-01）', () => {
     expect(handle(el, 1)).not.toBeNull();
 
     await click(handle(el, 0)); // A：成功
-    expect(button(el, '确认拉黑'), 'A 取详情成功后应出现确认面板').not.toBeNull();
+    expect(button(el, '拉黑用户'), 'A 取详情成功后应出现确认面板').not.toBeNull();
 
     await click(handle(el, 1)); // B：失败
     // ❗ 修复前这里不为 null（面板仍是 A 的，点下去拉黑 user-A）
-    expect(button(el, '确认拉黑'), 'B 取详情失败后，面板必须消失').toBeNull();
+    expect(button(el, '拉黑用户'), 'B 取详情失败后，面板必须消失').toBeNull();
     // 失败要有话说，且不能发出任何拉黑请求
     expect(el.textContent).toContain('请求超时');
     expect(blocks()).toEqual([]);
@@ -124,6 +124,8 @@ describe('风控页：拉黑串单（ADM3-01）', () => {
     await click(handle(el, 0));
     const blockedLoads = (): number => calls.filter((c) => c.path.includes('blocked=true')).length;
     const before = blockedLoads();
+    // 第一批①：面板上只有「拉黑用户」，后果与「确认拉黑」在弹层里
+    await click(button(el, '拉黑用户'));
     await click(button(el, '确认拉黑'));
     // P2-47：拉黑成功后「已拉黑用户」重新取数（新拉黑的人立刻出现）
     expect(blockedLoads()).toBe(before + 1);
@@ -134,9 +136,11 @@ describe('风控页：拉黑串单（ADM3-01）', () => {
       { path: '/api/v1/admin/users/user-A/block', method: 'POST', body: { order_id: 'ord-A' } },
     ]);
     expect(el.textContent).toContain('已拉黑');
-    // 上一次失败留下的红字必须被清掉（"已拉黑"和"请求超时"同屏会让人以为没成功）
+    // 上一次失败留下的红字必须被清掉（"已拉黑"和"请求超时"同屏会让人以为没成功）。
+    // ⚠️ 第一批① 之前这条靠"成功时清空 error state"成立；改走 Toast 后它是**跨 kind 并存**，
+    //    于是这里真的红了——修法是给 Toast 定"成功即清屏"的规则（@see ui/toast.tsx @limitation 二）。
     expect(el.textContent).not.toContain('请求超时');
-    expect(button(el, '确认拉黑')).toBeNull();
+    expect(button(el, '拉黑用户')).toBeNull();
   });
 });
 
@@ -147,20 +151,26 @@ describe('风控页：拉黑串单（ADM3-01）', () => {
  *      有那几个词，证明不了**面板渲染了它**——而缺陷正是"运营在点之前看不到这一条"。
  *      少这一层，常量改了不挂上去也会一直绿。
  */
-describe('风控页：确认面板说清全部后果', () => {
-  it('🔴 点之前看得到"连带取消未付款订单"（缺陷注入点：模板换回旧常量即红）', async () => {
+describe('风控页：确认弹层说清全部后果', () => {
+  it('🔴 点确认之前看得到"连带取消未付款订单"（缺陷注入点：弹层 body 换回旧文案即红）', async () => {
     const el = await open();
     await click(handle(el, 0));
-    const panel = el.querySelector('.form');
-    const text = panel?.textContent ?? '';
+    await click(button(el, '拉黑用户'));
+    // 第一批①：后果从"面板里的一行红字"搬进了弹层——断言也跟着搬，
+    // 仍守同一件事：**点下去之前**要看得见（而不是成功之后才知道）。
+    const dialog = el.querySelector('.dialog');
+    const text = dialog?.textContent ?? '';
     expect(text).toContain('未付款');
     expect(text).toContain('取消');
     expect(text).toContain('不会恢复');
+    // 弹层主按钮必须是危险色：拉黑与"保存商品"不该长得一样
+    expect(el.querySelector('.dialog .btn-danger')).not.toBeNull();
   });
 
   it('🔴 拉黑成功后的提示同样提到"已一并取消"（结果不是只有"不能下单"这一件事）', async () => {
     const el = await open();
     await click(handle(el, 0));
+    await click(button(el, '拉黑用户'));
     await click(button(el, '确认拉黑'));
     expect(el.textContent).toContain('未付款订单已一并取消');
   });
