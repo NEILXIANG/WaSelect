@@ -28,6 +28,28 @@ export const NETWORK_ERROR_CODE = -1;
  */
 export const UNAUTHORIZED_CODE = 40101;
 
+/** 上游熔断打开（`data.retry_after_ms` 给出退避时长）。@see packages/shared/src/errors.ts 50300 */
+export const UPSTREAM_UNAVAILABLE_CODE = 50300;
+
+/**
+ * 解析 `retry-after` 头（只认非负整数秒）。
+ * @why 单独导出：头缺失、空串、HTTP-date、负数都要回 undefined，而不是 `Number('')` 的 0（"0 分钟后再试"是错话）。
+ */
+export function parseRetryAfter(v: string | null | undefined): number | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  return /^\d+$/.test(t) ? Number(t) : undefined;
+}
+
+/** 从 ApiError 取 50300 的退避秒数（向上取整；没有就 undefined）。 */
+export function retryAfterMsSec(err: unknown): number | undefined {
+  if (!(err instanceof ApiError)) return undefined;
+  const ms = err.data?.['retry_after_ms'];
+  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0
+    ? Math.ceil(ms / 1000)
+    : undefined;
+}
+
 /** 统一错误：业务错（带服务端 code）与网络错（NETWORK_ERROR_CODE）共用同一形状。 */
 export class ApiError extends Error {
   /** 业务错误码（见 shared 注册表）或 NETWORK_ERROR_CODE。 */
@@ -38,11 +60,34 @@ export class ApiError extends Error {
    *      没有这个字段，"刚才那个报错"就只能口头描述时间点和操作，对不上日志。
    */
   readonly traceId: string;
+  /**
+   * 错误体里的 `data`（服务端统一错误形状的可选附加字段，如 50300 的 `retry_after_ms`）。
+   * @why 第三轮缺口 P2-49：50300（上游熔断）要告诉运营"约 N 秒后可重试"，这个数只在 `data` 里；
+   *      之前封装层把它丢了，页面只能说一句泛化的"服务暂不可用"。不是对象时为 undefined。
+   */
+  readonly data: Record<string, unknown> | undefined;
+  /**
+   * 响应头 `retry-after`（秒）解析出的等待时长；缺失 / 不是非负整数时为 undefined。
+   * @why 42901（登录锁定）的"还要等多久"只在这个头里（服务端 http.ts 已把它列进 expose-headers，SEC2-08）。
+   * @limitation 只认"秒数"形态，不认 HTTP-date 形态（服务端只发秒数，见 admin-auth-routes.ts）。
+   */
+  readonly retryAfterSec: number | undefined;
 
-  constructor(code: number, message: string, traceId: string) {
+  constructor(
+    code: number,
+    message: string,
+    traceId: string,
+    extra?: { data?: unknown; retryAfterSec?: number | undefined },
+  ) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.traceId = traceId;
+    const d = extra?.data;
+    this.data =
+      typeof d === 'object' && d !== null && !Array.isArray(d)
+        ? (d as Record<string, unknown>)
+        : undefined;
+    this.retryAfterSec = extra?.retryAfterSec;
   }
 }

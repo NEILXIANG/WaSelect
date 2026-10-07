@@ -2,10 +2,9 @@
  * 职责：admin-web 根组件（F15 单元③）——登录态分流 + 登录后的一级导航。
  * 边界：只做"登录态装配"与"当前看哪个页"；请求语义在 api/，页面在各自组件里。
  *
- * @why token 状态放 React state 而不是只读 tokenStore：
- *      40101 时封装层调 onUnauthorized → 这里清 store + 置空 state → **立刻**渲染登录页；
- *      只清 store 不动 state 的话，页面还停在"已登录"壳里，下一次点击才报错——
- *      管理员会以为"发货发出去了"，实际请求根本没带上有效身份。
+ * @why 登录态交给 `AuthGate`（P1-7）：40101 时**不再卸载整个 App**，而是在当前页面上盖一层
+ *      重新登录浮层——商品表单填到一半、图已传完时过期，重登后内容都还在。
+ *      token 仍在 40101 当下就清掉（AuthGate 内），之后误点的请求不会带着失效身份再发。
  *
  * @why 页面切换是 **state 而不是 react-router**（ProductsPage @limitation 一 同口径）：
  *      管理端一共几个页面，路由库带来的是一整套 URL↔视图约定与依赖，
@@ -17,15 +16,15 @@
  *              这个形状是**被接口形状逼出来的**，不是设计偏好；将来补了单条接口，
  *              这里应改成传 id、由表单页自己取数。
  *
- * @see ./api/client.ts（40101 → onUnauthorized 的语义）；docs/地基搭建清单.md F15
+ * @see ./AuthGate.tsx（登录态与重新登录浮层）；./api/client.ts（40101 → onUnauthorized 的语义）；docs/地基搭建清单.md F15
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { AuthGate, type SessionControls } from './AuthGate.js';
 import { createAdminApi } from './api/client.js';
 import { resolveApiBase } from './api/config.js';
 import { login } from './api/endpoints.js';
 import { createTokenStore } from './api/token-store.js';
 import { BannersPage } from './banners/BannersPage.js';
-import { LoginForm } from './LoginForm.js';
 import { OrdersPage } from './orders/OrdersPage.js';
 import { RiskPage } from './risk/RiskPage.js';
 import { OpsLogPage } from './opslog/OpsLogPage.js';
@@ -56,18 +55,22 @@ interface Editing {
 }
 
 export function App() {
-  const [token, setToken] = useState<string>(() => tokenStore.get());
+  const baseUrl = useMemo(() => resolveApiBase(import.meta.env), []);
+  // 登录专用的请求实例：**不接 onUnauthorized**——登录接口的 40101 是"口令不对"，不是"会话失效"
+  const loginApi = useMemo(() => createAdminApi({ baseUrl, getToken: () => '' }), [baseUrl]);
+  return (
+    <AuthGate store={tokenStore} login={(email, password) => login(loginApi, { email, password })}>
+      {(session) => <AdminShell baseUrl={baseUrl} session={session} />}
+    </AuthGate>
+  );
+}
+
+/** 登录后的壳：一级导航 + 当前页。会话失效时它**不卸载**（AuthGate 盖浮层），state 保留。 */
+function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionControls }) {
   const [tab, setTab] = useState<TabKey>('products');
   const [editing, setEditing] = useState<Editing | null>(null);
-
-  const baseUrl = useMemo(() => resolveApiBase(import.meta.env), []);
-
   // 40101 的唯一出口：JSON 封装与上传封装共用（KD-13：上传曾不走这里，过期后反复"HTTP 401"）
-  const onUnauthorized = useCallback((): void => {
-    // 管理端没有静默重登（AJ-83）：token 失效的唯一出路是回登录页重新输密码
-    tokenStore.clear();
-    setToken('');
-  }, []);
+  const { onUnauthorized, logout } = session;
 
   const api = useMemo(
     () =>
@@ -79,18 +82,6 @@ export function App() {
       }),
     [baseUrl, onUnauthorized],
   );
-
-  if (!token) {
-    return (
-      <LoginForm
-        onLogin={async (email, password) => {
-          const jwt = await login(api, { email, password });
-          tokenStore.set(jwt);
-          setToken(jwt);
-        }}
-      />
-    );
-  }
 
   return (
     <main className="page">
@@ -109,14 +100,7 @@ export function App() {
             {t.label}
           </button>
         ))}
-        <button
-          type="button"
-          className="link"
-          onClick={() => {
-            tokenStore.clear();
-            setToken('');
-          }}
-        >
+        <button type="button" className="link" onClick={logout}>
           退出登录
         </button>
       </nav>

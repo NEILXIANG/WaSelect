@@ -12,17 +12,23 @@
  *              草稿要引入"草稿 vs 已保存"两种状态与合并规则，而商品录入是低频操作，
  *              低频 + 复杂状态不划算。
  *
+ * @why 40914（编辑期间被别人改过）**不再让人"返回列表重进"**（P2-44）：那样会丢掉整张表单与已传的图。
+ *      现在原地保留表单，给「加载最新值对照」：取最新一版只读摆在旁边（逐字段标出不同），
+ *      并把版本凭据换成最新一版——运营核对后再点保存，就是"看过对方改动之后，用我的内容覆盖"。
+ *
  * @see ./view.ts（模型与校验真源）；./api.ts（提交与上传）；./ProductFormParts.tsx（字段组件）
  */
 import { useState } from 'react';
 import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
 import { uploadImage } from '../api/upload.js';
-import { createProduct, updateProduct, type AdminApi } from './api.js';
+import { createProduct, findProductById, updateProduct, type AdminApi } from './api.js';
 import {
   CATEGORY_LABELS,
   PRODUCT_CATEGORY,
+  productConflictRows,
   productFormErrors,
   productFormModel,
+  productFormWarnings,
   sourceUpdatedAt,
   toProductInput,
   type ProductForm,
@@ -63,9 +69,13 @@ export function ProductFormPage({
   );
   // 打开编辑页那一刻的版本凭据：保存时随 PUT 一起发，服务端据它判定"你改的是不是最新一版"
   // （ADM3-02 / 契约 0.6.18；不带上服务端直接 40001，不会静默覆盖别人的改动）
-  const [expectedUpdatedAt] = useState<string>(() =>
+  const [expectedUpdatedAt, setExpectedUpdatedAt] = useState<string>(() =>
     source === null ? '' : sourceUpdatedAt(source),
   );
+  /** 40914 后进入冲突态；`latest` = 载入的最新一版（只读对照，P2-44）。 */
+  const [conflict, setConflict] = useState(false);
+  const [latest, setLatest] = useState<AdminProductLike | null>(null);
+  const [loadingLatest, setLoadingLatest] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -122,13 +132,36 @@ export function ProductFormPage({
     } catch (e) {
       // @see @limitation 一：失败保留表单
       setError(e instanceof ApiError ? e.message : String(e));
-      // 40914：表单**没被清**，但只说"被别人改过了"他会原地再点一次保存、再撞一次。
-      // 必须说出下一步：回列表重进编辑页（重进才会拿到新的 updated_at）。
+      // 40914：表单**没被清**；下一步是"加载最新值对照"，而不是回列表（那会丢掉表单，P2-44）
       if (e instanceof ApiError && e.code === 40914) {
-        setError(`${e.message}：你填的内容还在，请返回列表重新进入编辑，对照最新值再保存`);
+        setConflict(true);
+        setLatest(null);
+        setError(
+          `${e.message}：你填的内容都还在。请点「加载最新值对照」看对方改了什么，核对后再保存`,
+        );
       }
     } finally {
       setSaving(false);
+    }
+  };
+
+  const loadLatest = async (): Promise<void> => {
+    if (productId === null) return;
+    setLoadingLatest(true);
+    try {
+      const fresh = await findProductById(api, productId);
+      if (fresh === null) {
+        setError('在商品列表里找不到这条商品（可能已被删除）：你填的内容还在，可复制留存');
+        return;
+      }
+      setLatest(fresh);
+      // 换成最新一版的凭据：之后保存 = 看过对方改动后，用你的内容覆盖最新一版
+      setExpectedUpdatedAt(sourceUpdatedAt(fresh));
+      setError('');
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setLoadingLatest(false);
     }
   };
 
@@ -173,6 +206,52 @@ export function ProductFormPage({
       </header>
 
       {error !== '' && <p className="error">{error}</p>}
+
+      {conflict && latest === null && (
+        <button
+          type="button"
+          className="btn"
+          disabled={loadingLatest}
+          onClick={() => void loadLatest()}
+        >
+          {loadingLatest ? '加载中…' : '加载最新值对照'}
+        </button>
+      )}
+      {latest !== null && (
+        <div className="field">
+          <span className="label">
+            最新一版（只读）与你填的对照：标 ≠
+            的是不同项。核对后点「保存」将用你填的内容覆盖最新一版。
+          </span>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>字段</th>
+                <th>你填的</th>
+                <th>最新值</th>
+              </tr>
+            </thead>
+            <tbody>
+              {productConflictRows(form, latest).map((r) => (
+                <tr key={r.label} className={r.differs ? 'error' : undefined}>
+                  <td>
+                    {r.differs ? '≠ ' : ''}
+                    {r.label}
+                  </td>
+                  <td>{r.mine}</td>
+                  <td>{r.latest}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {productFormWarnings(form).map((w) => (
+        <p className="muted" key={w}>
+          ⚠️ {w}
+        </p>
+      ))}
 
       <form
         className="form"

@@ -4,6 +4,7 @@
  */
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ApiError } from '../api/errors.js';
 import { button, click, mount, type, type Mounted } from '../testing/dom.js';
 import { PartialRefunds } from './PartialRefunds.js';
 
@@ -82,5 +83,46 @@ describe('PartialRefunds', () => {
     expect(el.textContent).toContain('0.50 USD');
     await click(button(el, '同步'));
     expect(calls.some((c) => c.path.endsWith('/partial-refunds/rf-u/sync'))).toBe(true);
+  });
+
+  it('P2-49 发起出错 → 先刷新、再按新出现那一行的真实状态提示（failed / unknown 各一句）', async () => {
+    for (const [rowStatus, expected] of [
+      ['failed', '机构确认失败，额度已释放，可重新发起'],
+      ['unknown', '结果未知，请点「同步」取回结果，不要去 Stripe 后台重复退'],
+    ] as const) {
+      const messages: string[] = [];
+      const order = {
+        status: 'delivered',
+        has_dispute: false,
+        payments: [{ status: 'succeeded', charge_currency: 'USD', charge_amount: 8160 }],
+        partial_refunds: [] as unknown[],
+      };
+      const api = async (): Promise<unknown> => {
+        throw new ApiError(50000, '服务器内部错误', 't');
+      };
+      mounted = await mount(
+        createElement(PartialRefunds, {
+          api: api as never,
+          orderId: 'o-1',
+          order,
+          onDone: async () => ({
+            ...order,
+            partial_refunds: [
+              { id: 'rf-1', status: rowStatus, currency: 'USD', amount_minor: 1050 },
+            ],
+          }),
+          onError: (m: string) => messages.push(m),
+          onNotice: (m: string) => messages.push(`notice:${m}`),
+        }),
+      );
+      const el = mounted.el;
+      await type(el.querySelector('input[name="partial-amount"]'), '10.50');
+      await type(el.querySelector('input[name="partial-reason"]'), '缺一件');
+      await click(button(el, '部分退款'));
+      await click(button(el, '确认部分退款'));
+      expect(messages).toEqual(['服务器内部错误', `notice:${expected}`]);
+      await mounted.unmount();
+      mounted = undefined;
+    }
   });
 });

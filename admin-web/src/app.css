@@ -268,3 +268,25 @@ body {
 .selectable {
   user-select: all;
 }
+
+/* P1-7：会话过期时的重新登录浮层——盖住页面但不卸载它（表单里填了一半的内容保留）。
+   遮罩用 fg 色 + opacity，不写 rgba（token 门禁不允许色值函数）。 */
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--ws-color-fg);
+  opacity: 0.4;
+}
+
+.modal-body {
+  position: relative;
+}

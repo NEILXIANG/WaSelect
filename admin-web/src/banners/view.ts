@@ -193,3 +193,32 @@ export function toBannerInput(form: unknown): Record<string, unknown> {
     ...(ends === '' ? {} : { ends_at: ends }),
   };
 }
+
+/** 冲突对照的一行（与商品表单同形，P2-44）。 */
+export interface BannerConflictRow {
+  label: string;
+  mine: string;
+  latest: string;
+  differs: boolean;
+}
+
+/**
+ * 40914 后的对照表：表单当前值 vs 服务端最新一版（P2-44）。
+ * @why 原文案让运营"取消编辑后重新打开"——取消就丢了表单（含刚上传的图）。现在表单原地保留，最新值只读对照。
+ */
+export function bannerConflictRows(form: BannerForm, latest: unknown): BannerConflictRow[] {
+  const theirs = bannerFormModel(latest);
+  const link = (f: BannerForm): string =>
+    f.linkType === 'none'
+      ? LINK_LABELS.none
+      : `${(LINK_LABELS as Record<string, string>)[f.linkType] ?? f.linkType}：${f.linkId}`;
+  const pairs: Array<[string, string, string]> = [
+    ['图片', form.imageKey, theirs.imageKey],
+    ['跳转', link(form), link(theirs)],
+    ['排序', form.sort, theirs.sort],
+    ['启用', form.active ? '启用' : '停用', theirs.active ? '启用' : '停用'],
+    ['开始（JST）', form.startsAt, theirs.startsAt],
+    ['结束（JST）', form.endsAt, theirs.endsAt],
+  ];
+  return pairs.map(([label, mine, l]) => ({ label, mine, latest: l, differs: mine !== l }));
+}

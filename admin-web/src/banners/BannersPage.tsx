@@ -11,11 +11,15 @@
  * @limitation 二：`image_key` 由上传得到（表单里**不手填**）：
  *      手填的 key 多半不存在，服务端存了也不报错，直到首页图裂了才发现。
  *
+ * @why 40914（编辑期间被别人改过）原地保留表单，给「加载最新值对照」（P2-44）：
+ *      旧文案让人"取消编辑后重新打开"，那会丢掉表单与刚上传的图。载入后版本凭据换成最新一版，
+ *      核对后再保存 = 用你的内容覆盖最新一版。
+ *
  * @see ./view.ts（校验）；./api.ts；../api/upload.ts（图片上传）
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
-import { uploadImage } from '../api/upload.js';
+import { UPLOAD_ACCEPT, uploadImage } from '../api/upload.js';
 import {
   createBanner,
   deleteBanner,
@@ -27,6 +31,7 @@ import {
 import {
   LINK_LABELS,
   LINK_TYPES,
+  bannerConflictRows,
   bannerFormErrors,
   bannerFormModel,
   bannerRows,
@@ -53,6 +58,9 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState('');
+  /** 40914 冲突态与载入的最新一版（只读对照，P2-44）。 */
+  const [conflict, setConflict] = useState(false);
+  const [latest, setLatest] = useState<BannerLike | null>(null);
   /**
    * 当前表单对应哪一条（'new' = 新建）。上传完成时拿它核对（A-07）：
    * 上传要几秒，期间运营可能点了另一条的「编辑」；不核对的话，图会写进**另一条**的表单。
@@ -79,13 +87,20 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     void load();
   }, [load]);
 
+  const clearConflict = (): void => {
+    setConflict(false);
+    setLatest(null);
+  };
+
   const startNew = (): void => {
+    clearConflict();
     setEditing(null);
     setForm(emptyBannerForm());
     setErrors({});
   };
 
   const startEdit = (b: BannerLike): void => {
+    clearConflict();
     setEditing(b);
     setForm(bannerFormModel(b));
     setErrors({});
@@ -113,13 +128,42 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
       await load();
     } catch (e) {
       // ⚠️ 失败保留表单（清了等于让运营重传一遍图）
+      const isConflict = e instanceof ApiError && e.code === 40914;
+      if (isConflict) {
+        setConflict(true);
+        setLatest(null);
+      }
       setError(
-        e instanceof ApiError && e.code === 40914
-          ? `${e.message}：你填的内容还在，请点「取消编辑」后重新打开这条，对照最新值再保存`
+        isConflict
+          ? `${(e as ApiError).message}：你填的内容都还在。请点「加载最新值对照」看对方改了什么，核对后再保存`
           : e instanceof ApiError
             ? e.message
             : String(e),
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadLatest = async (): Promise<void> => {
+    if (editing === null) return;
+    setBusy(true);
+    try {
+      const items = await listBanners(api);
+      const fresh = items.find((b) => b.id === editing.id);
+      if (fresh === undefined) {
+        setError('列表里已找不到这条 Banner（可能已被删除）：你填的内容还在');
+        return;
+      }
+      setLatest(fresh);
+      // 换成最新一版的凭据（表单不动）：之后保存 = 看过对方改动后，用你的内容覆盖
+      setEditing({
+        ...editing,
+        ...(fresh.updated_at !== undefined ? { updated_at: fresh.updated_at } : {}),
+      });
+      setError('');
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -249,7 +293,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
           <input
             className="input"
             type="file"
-            accept="image/*"
+            accept={UPLOAD_ACCEPT}
             onChange={(e) => void onPickFile(e.target.files?.[0])}
           />
           <span className="muted">{form.imageKey === '' ? '未上传' : form.imageKey}</span>
@@ -301,6 +345,35 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
             启用
           </label>
         </div>
+
+        {conflict && latest === null && editing !== null && (
+          <button type="button" className="btn" disabled={busy} onClick={() => void loadLatest()}>
+            加载最新值对照
+          </button>
+        )}
+        {latest !== null && (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>字段（≠ 为不同）</th>
+                <th>你填的</th>
+                <th>最新值（只读）</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bannerConflictRows(form, latest).map((r) => (
+                <tr key={r.label} className={r.differs ? 'error' : undefined}>
+                  <td>
+                    {r.differs ? '≠ ' : ''}
+                    {r.label}
+                  </td>
+                  <td>{r.mine}</td>
+                  <td>{r.latest}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
 
         {Object.values(errors)
           .filter((v) => v !== '')

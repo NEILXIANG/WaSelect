@@ -91,6 +91,25 @@ export async function listProducts(
   return resp;
 }
 
+/** 翻页查找单条时最多翻几页（× 100 条/页）：管理端商品量在百级（@limitation 二），20 页是余量。 */
+const FIND_MAX_PAGES = 20;
+
+/**
+ * 按 id 取一条商品的**最新版本**（40914 冲突后"加载最新值对照"用，P2-44）。
+ * @why 契约没有 `GET /admin/products/{id}`，只能翻列表找；size 取契约上限 100 减少往返。
+ * @returns 找不到（已被删除 / 超出翻页上限）为 null
+ * @limitation 翻页期间列表若有增删，可能漏看一条（顺延到下一页）；对照用途下可接受，找不到时会明说。
+ */
+export async function findProductById(api: AdminApi, id: string): Promise<AdminProductLike | null> {
+  for (let page = 1; page <= FIND_MAX_PAGES; page += 1) {
+    const { items, total } = await listProducts(api, { page, size: 100 });
+    const hit = items.find((p) => p.id === id);
+    if (hit !== undefined) return hit;
+    if (items.length === 0 || page * 100 >= total) return null;
+  }
+  return null;
+}
+
 /** `POST /admin/products`（新建）。 */
 export async function createProduct(
   api: AdminApi,

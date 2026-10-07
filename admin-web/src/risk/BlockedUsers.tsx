@@ -10,8 +10,13 @@ import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { formatJst } from '../format.js';
 import { listBlockedUsers, unblockUser, type AdminApi, type BlockedUser } from './api.js';
+import { blockedListTitle } from './view.js';
 
-export function BlockedUsers({ api }: { api: AdminApi }) {
+/**
+ * @param refreshKey 变了就重新拉列表（P2-47）：风控页拉黑成功后递增它，新拉黑的人立刻出现在这里，
+ *                   不用整页刷新——否则运营会以为拉黑没生效再点一次（第二次是 409/空操作，徒增审计噪音）。
+ */
+export function BlockedUsers({ api, refreshKey = 0 }: { api: AdminApi; refreshKey?: number }) {
   const [rows, setRows] = useState<BlockedUser[]>([]);
   const [target, setTarget] = useState('');
   const [reason, setReason] = useState('');
@@ -28,7 +33,7 @@ export function BlockedUsers({ api }: { api: AdminApi }) {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   const submit = async (): Promise<void> => {
     if (reason.trim() === '') return setError('请填写解除原因（进审计台账）');
@@ -48,7 +53,7 @@ export function BlockedUsers({ api }: { api: AdminApi }) {
 
   return (
     <div className="form">
-      <span className="label">已拉黑用户（{rows.length}）</span>
+      <span className="label">{blockedListTitle(rows.length)}</span>
       {rows.length === 0 ? (
         <p className="muted">没有被拉黑的用户</p>
       ) : (

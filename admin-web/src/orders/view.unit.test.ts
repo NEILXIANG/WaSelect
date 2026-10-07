@@ -35,6 +35,7 @@ import {
   purchaseLines,
   refundErrors,
   refundFailureNotice,
+  fullRefundErrorNotice,
   refundGate,
   RELEASE_DONE_NOTICE,
   releaseErrors,
@@ -161,15 +162,19 @@ describe('eventStatusText（事件流：订单状态 + 管理事件伪状态）'
     expect(eventStatusText('refund_failed')).toBe('退款失败');
     expect(eventStatusText('dispute_released')).toBe('解除拒付限制');
     expect(eventStatusText('pay_create_failed')).toBe('机构拒建支付会话');
+    expect(eventStatusText('partial_refunded')).toBe('部分退款成功');
+    expect(eventStatusText('partial_failed')).toBe('部分退款失败');
   });
 
-  it('八种伪状态全部配了文案（服务端新增一种而这里没跟 → 那一行退回英文，看得见但仍是缺口）', () => {
+  it('十种伪状态全部配了文案（服务端新增一种而这里没跟 → 那一行退回英文，看得见但仍是缺口）', () => {
     expect(Object.keys(EVENT_STATUS_LABELS).sort()).toEqual([
       'address_changed',
       'dispute_closed',
       'dispute_opened',
       'dispute_released',
       'late_paid',
+      'partial_failed',
+      'partial_refunded',
       'pay_create_failed',
       'refund_failed',
       'refund_pending',
@@ -504,12 +509,17 @@ describe('isDisputeLocked / releaseErrors（解除拒付限制，AJ-291）', () 
 
 describe('refundFailureNotice（B41 残留 / AJ-230）', () => {
   it('🔴 5xx 与网络层失败（负数码）→ 给"结果未知、不要去机构后台手工退"的提醒', () => {
-    for (const code of [50000, 50300, -1]) {
+    for (const code of [50000, -1]) {
       const text = refundFailureNotice(code);
       expect(text, String(code)).toContain('结果未知');
       expect(text, String(code)).toContain('不要去机构后台手工退款');
       expect(text, String(code)).toContain('不会重复退款');
     }
+  });
+
+  it('P2-49 50300（熔断，请求未发出）单独说，带退避秒数；没秒数不编', () => {
+    expect(refundFailureNotice(50300, 5)).toBe('上游暂时不可用，请求未发出，约 5 秒后可重试');
+    expect(refundFailureNotice(50300)).toBe('上游暂时不可用，请求未发出，请稍后重试');
   });
 
   it('4xx 业务性拒绝 → 不提醒（订单没被改动，提醒反而误导）', () => {
@@ -521,6 +531,36 @@ describe('refundFailureNotice（B41 残留 / AJ-230）', () => {
   it('脏输入（不是数字）→ 不提醒、不抛', () => {
     expect(refundFailureNotice(undefined)).toBe('');
     expect(refundFailureNotice('50000')).toBe('');
+  });
+});
+
+describe('fullRefundErrorNotice（P2-49：出错后按刷新后的真实状态说话）', () => {
+  const refunding = (events: unknown[]): unknown => ({ status: 'refunding', events });
+
+  it('机构确认失败（refund_failed + provider_failed:…）→ 说可重新发起', () => {
+    const t = fullRefundErrorNotice({
+      code: 50000,
+      order: refunding([{ status: 'refund_failed', note: 'provider_failed:re_123' }]),
+    });
+    expect(t).toContain('机构确认失败');
+  });
+
+  it('机构超时（provider_error）/ 没有事件 → 结果未知，不要去 Stripe 后台重复退', () => {
+    for (const ev of [[{ status: 'refund_failed', note: 'provider_error' }], []]) {
+      const t = fullRefundErrorNotice({ code: -1, order: refunding(ev) });
+      expect(t).toContain('结果未知');
+      expect(t).toContain('不要去 Stripe 后台重复退');
+    }
+  });
+
+  it('刷新后已 refunded → 说已完成；4xx → 不提醒；50300 → 未发出', () => {
+    expect(fullRefundErrorNotice({ code: 50000, order: { status: 'refunded' } })).toContain(
+      '实际已完成',
+    );
+    expect(fullRefundErrorNotice({ code: 40907, order: refunding([]) })).toBe('');
+    expect(
+      fullRefundErrorNotice({ code: 50300, retryAfterSec: 3, order: refunding([]) }),
+    ).toContain('约 3 秒后可重试');
   });
 });
 

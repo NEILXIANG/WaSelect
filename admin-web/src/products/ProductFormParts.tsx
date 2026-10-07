@@ -17,6 +17,7 @@
  */
 
 import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG } from '@waselect/shared';
+import { UPLOAD_ACCEPT } from '../api/upload.js';
 import type { ProductImageEntry } from './view.js';
 
 export interface FieldProps {
@@ -199,7 +200,7 @@ export function ImagePicker({ images, onAdd, onRemove, uploading, error = '' }: 
       <input
         className="input"
         type="file"
-        accept="image/*"
+        accept={UPLOAD_ACCEPT}
         disabled={uploading}
         onChange={(e) => {
           const file = e.target.files?.[0];

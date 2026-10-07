@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './errors.js';
-import { uploadImage } from './upload.js';
+import { UPLOAD_ACCEPT, UPLOAD_MAX_BYTES, uploadImage, uploadPrecheck } from './upload.js';
 
 /** 造一个假 fetch：记录最后一次请求，返回预定响应。 */
 function stubFetch(handler: (url: string, init: RequestInit) => Response) {
@@ -33,6 +33,28 @@ const deps = (fetchImpl: typeof fetch) => ({
   baseUrl: 'http://localhost:3000',
   getToken: () => 'tk',
   fetchImpl,
+});
+
+describe('uploadPrecheck（P2-45：上传前的大小与格式预检）', () => {
+  it('accept 只列服务端认的三族；10MB 边界本身放行', () => {
+    expect(UPLOAD_ACCEPT).toBe('image/jpeg,image/png,image/webp');
+    expect(uploadPrecheck({ size: UPLOAD_MAX_BYTES, type: 'image/jpeg' })).toBe('');
+    expect(uploadPrecheck({ size: 10, type: '' })).toBe(''); // 系统认不出类型 → 交服务端嗅探
+  });
+
+  it('超 10MB / HEIC → 不发请求，直接给明白话', async () => {
+    expect(uploadPrecheck({ size: UPLOAD_MAX_BYTES + 1, type: 'image/png' })).toContain(
+      '不能超过 10MB',
+    );
+    expect(uploadPrecheck({ size: 10, type: 'image/heic' })).toContain('HEIC');
+    const { impl, seen } = stubFetch(() => json({}, 201));
+    const big = new Blob([new Uint8Array(UPLOAD_MAX_BYTES + 1)], {
+      type: 'image/jpeg',
+    }) as unknown as File;
+    const err = await uploadImage(deps(impl), big).catch((e: unknown) => e);
+    expect((err as ApiError).message).toContain('不能超过 10MB');
+    expect(seen).toHaveLength(0);
+  });
 });
 
 describe('uploadImage（multipart，不走 JSON 封装）', () => {

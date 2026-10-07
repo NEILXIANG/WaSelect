@@ -107,3 +107,19 @@ export function orderUserId(order: unknown): string {
   const id = (order as { user_id?: unknown } | null)?.user_id;
   return typeof id === 'string' ? id : '';
 }
+
+/**
+ * 已拉黑列表的服务端上限（`server/src/adapters/risk-admin.ts` 的 `limit 200`）。
+ * @why 镜像而非 shared：服务端是 SQL 字面量，本轮不改服务端；漂移的代价只是提示文案不准。
+ */
+export const BLOCKED_LIST_LIMIT = 200;
+
+/**
+ * 已拉黑列表的标题（P2-47）。
+ * @why 服务端最多回 200 行；正好 200 行时说"（200）"会被读成"一共 200 人"，实际可能更多。
+ */
+export function blockedListTitle(count: number): string {
+  return count >= BLOCKED_LIST_LIMIT
+    ? `已拉黑用户（最多显示 ${BLOCKED_LIST_LIMIT} 条，可能还有更多）`
+    : `已拉黑用户（${count}）`;
+}

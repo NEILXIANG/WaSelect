@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BLOCK_CONFIRM_TEXT,
   blockDoneText,
+  blockedListTitle,
   DISPUTE_STATUS_LABELS,
   disputeRows,
   orderUserId,
@@ -155,5 +156,13 @@ describe('拉黑文案：三件后果在点之前必须全部说清', () => {
     expect(text).toContain('订单管理');
     // ❗ 不能出现"已取消 3 单"这类硬编码数字：接口返回空体，前端拿不到条数
     expect(text).not.toMatch(/取消\s*\d+\s*单/);
+  });
+});
+
+describe('blockedListTitle（P2-47）', () => {
+  it('不到上限说条数；到上限说"最多显示"', () => {
+    expect(blockedListTitle(3)).toBe('已拉黑用户（3）');
+    expect(blockedListTitle(199)).toBe('已拉黑用户（199）');
+    expect(blockedListTitle(200)).toContain('最多显示 200 条');
   });
 });

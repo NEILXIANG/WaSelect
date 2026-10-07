@@ -5,15 +5,18 @@
  *      逻辑全在 `partial-refund-view.ts`（纯函数、有单测），这里只做渲染与调用。
  * @why 金额框填的是**主单位**（10.50），提交前换成最小单位（1050）；换算失败就不发请求、原地提示。
  * @limitation 失败 / 结果未知统一交给父组件的错误条显示，并刷新详情——行状态以服务端为准，不在前端编造。
+ * @why 出错时**先刷新、再报错**（P2-49）：父组件的 `load` 开头会清错误条，旧顺序（先 onError 再 onDone）
+ *      让错误一闪就没了；刷新后再按那一行的真实状态给提示（`partialRefundErrorNotice`）。
  *
  * @see ./partial-refund-view.ts；server/src/app/partial-refund-routes.ts
  */
 import { useState } from 'react';
 import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
-import { ApiError } from '../api/errors.js';
+import { ApiError, retryAfterMsSec } from '../api/errors.js';
 import { createPartialRefund, syncPartialRefund, type AdminApi } from './api.js';
 import {
   parseAmountToMinor,
+  partialRefundErrorNotice,
   partialRefundGate,
   partialRefundRows,
   refundableMinor,
@@ -23,12 +26,21 @@ export interface PartialRefundsProps {
   api: AdminApi;
   orderId: string;
   order: unknown;
-  /** 一次写操作结束（成功或失败都调）：父组件据此刷新详情与列表。 */
-  onDone: () => void | Promise<void>;
+  /** 一次写操作结束（成功或失败都调）：父组件据此刷新详情与列表，返回刷新后的订单（取不到为 null）。 */
+  onDone: () => unknown;
   onError: (message: string) => void;
+  /** 信息性提示（失败后的"下一步怎么办"）；不传则并入错误条。 */
+  onNotice?: ((message: string) => void) | undefined;
 }
 
-export function PartialRefunds({ api, orderId, order, onDone, onError }: PartialRefundsProps) {
+export function PartialRefunds({
+  api,
+  orderId,
+  order,
+  onDone,
+  onError,
+  onNotice,
+}: PartialRefundsProps) {
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -39,16 +51,27 @@ export function PartialRefunds({ api, orderId, order, onDone, onError }: Partial
   const currency = refundableMinor(order)?.currency ?? '';
   const rows = partialRefundRows(order);
 
-  const run = async (fn: () => Promise<unknown>): Promise<void> => {
+  const run = async (fn: () => Promise<unknown>, refundId?: string): Promise<void> => {
     setBusy(true);
+    const knownIds = rows.map((r) => r.id);
+    let failure: unknown = undefined;
     try {
       await fn();
     } catch (e) {
-      onError(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setBusy(false);
-      await onDone();
+      failure = e ?? new Error('unknown');
     }
+    setBusy(false);
+    const fresh = await onDone();
+    if (failure === undefined) return;
+    onError(failure instanceof ApiError ? failure.message : String(failure));
+    const notice = partialRefundErrorNotice({
+      code: failure instanceof ApiError ? failure.code : 0,
+      retryAfterSec: retryAfterMsSec(failure),
+      order: fresh,
+      refundId,
+      knownIds,
+    });
+    if (notice !== '') (onNotice ?? onError)(notice);
   };
 
   const ask = (): void => {
@@ -90,7 +113,7 @@ export function PartialRefunds({ api, orderId, order, onDone, onError }: Partial
                       type="button"
                       className="link"
                       disabled={busy}
-                      onClick={() => void run(() => syncPartialRefund(api, orderId, r.id))}
+                      onClick={() => void run(() => syncPartialRefund(api, orderId, r.id), r.id)}
                     >
                       同步
                     </button>

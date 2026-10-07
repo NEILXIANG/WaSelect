@@ -8,7 +8,8 @@
  */
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { button, click, flush, mount, type Mounted } from '../testing/dom.js';
+import { ApiError } from '../api/errors.js';
+import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { BannersPage } from './BannersPage.js';
 
 let mounted: Mounted | undefined;
@@ -111,5 +112,53 @@ describe('Banner：保存带 expected_updated_at（S-09）', () => {
     expect((puts.at(-1)?.body as { expected_updated_at?: string }).expected_updated_at).toBe(
       '2026-10-01T00:00:00.000Z',
     );
+  });
+});
+
+describe('Banner：保存撞上 40914（P2-44）', () => {
+  it('🔴 表单原地保留 → 加载最新值对照 → 标出不同 → 再保存带最新一版的凭据', async () => {
+    const puts: Array<{ path: string; body?: unknown }> = [];
+    let listCalls = 0;
+    const api = async (req: {
+      path: string;
+      method?: string;
+      body?: unknown;
+    }): Promise<unknown> => {
+      if (req.method === 'PUT') {
+        puts.push(req);
+        if (puts.length === 1) throw new ApiError(40914, '这条内容在你打开之后被别人改过了', 't');
+        return {};
+      }
+      listCalls += 1;
+      // 第一次列表是打开时的版本；之后是别人改过排序的最新版
+      return listCalls === 1
+        ? [banner('b-A', 'banners/a.webp')]
+        : [{ ...banner('b-A', 'banners/a.webp'), sort: 9, updated_at: '2026-10-05T00:00:00.000Z' }];
+    };
+    mounted = await mount(
+      createElement(BannersPage, {
+        api: api as never,
+        baseUrl: 'http://localhost',
+        getToken: () => 'tk',
+        onUnauthorized: () => undefined,
+      }),
+    );
+    const el = mounted.el;
+    await click([...el.querySelectorAll('button')].find((b) => b.textContent === '编辑'));
+    await type(el.querySelector('input[placeholder="排序（小的在前）"]'), '3');
+    await click(button(el, '保存'));
+    expect(el.textContent).toContain('加载最新值对照');
+    expect(el.textContent).not.toContain('取消编辑」后重新打开');
+    await click(button(el, '加载最新值对照'));
+    expect(
+      (el.querySelector('input[placeholder="排序（小的在前）"]') as HTMLInputElement).value,
+    ).toBe('3');
+    const rows = [...el.querySelectorAll('tr')].map((tr) => tr.textContent ?? '');
+    expect(rows.some((t) => t.includes('≠ 排序') && t.includes('3') && t.includes('9'))).toBe(true);
+    await click(button(el, '保存'));
+    expect(puts.at(-1)?.body).toMatchObject({
+      sort: 3,
+      expected_updated_at: '2026-10-05T00:00:00.000Z',
+    });
   });
 });

@@ -16,7 +16,9 @@
  *      两处名单不一致由单测与 shared / 契约的双向比对钉住。
  *
  * @limitation 一：分类展示名落**本文件**而不是服务端下发——契约只给 key。
- *              与小程序 `pages/home/index.vm.js` 的 CATEGORY_LABELS 是**两份真源**，
+ *              分类 **key** 自第三轮缺口 §4 起从 shared 引（`PRODUCT_CATEGORY`），不再自备一份；
+ *              但**展示名**仍与小程序 `pages/home/index.vm.js` 的 CATEGORY_LABELS 是**两份真源**
+ *              （且现状不一致：daily 管理端「日用杂货」、小程序「生活百货」——待用户拍板统一口径），
  *              由各自的"与契约 enum 双向比对"守着；多语言（本项目有 zh/ja/en）落地时
  *              两处要一起改成下发式，届时这条 @limitation 应被删除。
  * @limitation 二：**不做图片裁剪/尺寸校验**（那是 `POST /admin/upload` 与 R2 的事），
@@ -28,17 +30,22 @@
 import {
   BLOCKED_COMPLIANCE_TAG,
   COMPLIANCE_TAG,
+  PRODUCT_CATEGORY,
   PRODUCT_MAX_CHARS,
   PRODUCT_MAX_WEIGHT_G,
+  type ProductCategory,
 } from '@waselect/shared';
+import { moneyText } from '../format.js';
 
 /** 商品状态（契约 `/admin/products` 的 status 枚举）。 */
 export const PRODUCT_STATUS = ['active', 'offline'] as const;
 export type ProductStatus = (typeof PRODUCT_STATUS)[number];
 
-/** 分类（与契约 `/products` 的 category 枚举逐字一致，单测双向比对）。 */
-export const PRODUCT_CATEGORY = ['beauty', 'daily', 'kitchen', 'food'] as const;
-export type ProductCategory = (typeof PRODUCT_CATEGORY)[number];
+/**
+ * 分类（与契约 `/products` 的 category 枚举逐字一致，单测双向比对）。
+ * @why 从 shared 再导出而不是自备一份（第三轮缺口 §4）：三端同一个枚举只该有一处定义。
+ */
+export { PRODUCT_CATEGORY, type ProductCategory };
 
 /** 分类展示名（@see @limitation 一）。 */
 export const CATEGORY_LABELS: Readonly<Record<ProductCategory, string>> = {
@@ -95,7 +102,8 @@ export function productRows(items: unknown): ProductRow[] {
           typeof category === 'string' && category in CATEGORY_LABELS
             ? CATEGORY_LABELS[category as ProductCategory]
             : ((category as string) ?? ''),
-        priceText: Number.isInteger(p['price_jpy']) ? `${p['price_jpy']} 円` : '',
+        // 与订单页同一个格式化（千分位 + 円；非整数显示 —），P2-52
+        priceText: moneyText(p['price_jpy']),
         stockText: Number.isInteger(p['stock']) ? String(p['stock']) : '—',
         ...statusFields(status),
       };
@@ -344,27 +352,32 @@ export function productFormErrors(form: unknown): {
   if (!PRODUCT_CATEGORY.includes(f.category as ProductCategory))
     errors['category'] = '请选择一个分类';
 
-  const price = Number(f.priceJpy);
-  if (!Number.isInteger(price) || price < 1) errors['priceJpy'] = '售价必须是 ≥1 的整数（円）';
+  // ⚠️ 数值一律走 `plainInt`（P2-51）：`Number('1e3') === 1000` 是整数，旧写法会放行科学计数法，
+  //    而 `<input type="number">` 恰恰允许输入 e——运营手滑多按一个 e，售价就成了另一个数。
+  const price = plainInt(f.priceJpy);
+  if (price === null || price < 1)
+    errors['priceJpy'] = `售价必须是 ≥1 的整数（円）${sciHint(f.priceJpy)}`;
   if (f.costJpy.trim() !== '') {
-    const cost = Number(f.costJpy);
-    if (!Number.isInteger(cost) || cost < 0) errors['costJpy'] = '成本价必须是 ≥0 的整数（円）';
+    const cost = plainInt(f.costJpy);
+    if (cost === null) errors['costJpy'] = `成本价必须是 ≥0 的整数（円）${sciHint(f.costJpy)}`;
   }
-  const weight = Number(f.weightG);
-  if (!Number.isInteger(weight) || weight < 1)
-    errors['weightG'] = '重量必须是 ≥1 的整数（克，含包材口径见 D-42）';
+  const weight = plainInt(f.weightG);
+  if (weight === null || weight < 1)
+    errors['weightG'] = `重量必须是 ≥1 的整数（克，含包材口径见 D-42）${sciHint(f.weightG)}`;
   // 上界与服务端 weight_too_large 同源（shared；工程缺口第二轮 §3.6 #1 起已为包材留出余量）
   else if (weight > PRODUCT_MAX_WEIGHT_G)
     errors['weightG'] =
       `单件重量最多 ${PRODUCT_MAX_WEIGHT_G} 克（再重就超出运费表最大档，无法下单）`;
   // 先判空（A-06）：`Number('') === 0`，清空库存框会被当成 0 提交，商品直接售罄
-  const stock = Number(f.stock);
   if (f.stock.trim() === '') errors['stock'] = '库存必填（≥0 的整数；真的卖完了请填 0）';
-  else if (!Number.isInteger(stock) || stock < 0) errors['stock'] = '库存必须是 ≥0 的整数';
+  else if (plainInt(f.stock) === null) errors['stock'] = `库存必须是 ≥0 的整数${sciHint(f.stock)}`;
 
   if (f.customsDescEn.trim() === '') errors['customsDescEn'] = '英文报关品名必填（D-39）';
   // 剩余清单 1-4（AJ-368）：与服务端 validateProductInput 同口径——所有商品必填，纯空白算没填
   if (f.hsCode.trim() === '') errors['hsCode'] = 'HS 编码必填（报关单与报关清单都要用）';
+  else if (!hsCodeShapeOk(f.hsCode))
+    errors['hsCode'] =
+      'HS 编码只能是数字（可用点号分段），共 6–10 位数字，如 6912.00 或 3304995000';
   if (f.originCountry !== 'JP') errors['originCountry'] = 'MVP 原产地只接受 JP（D-42/D-43）';
 
   // 禁售标签：shared 是真源，这里只做"勾了就报"（比"勾了提交被拒"早一步）
@@ -416,6 +429,91 @@ export function productFormErrors(form: unknown): {
 
   const first = Object.values(errors)[0] ?? '';
   return { ok: Object.keys(errors).length === 0, errors, first };
+}
+
+/** 十进制非负整数字符串 → 数；空 / 小数 / 负数 / 科学计数法 / 十六进制 → null（与 ops/view.ts parseCount 同口径）。 */
+function plainInt(raw: string): number | null {
+  const t = raw.trim();
+  return /^\d+$/.test(t) ? Number(t) : null;
+}
+
+/** 填了 e / E 时补一句"不要用科学计数法"，否则运营看不出 1e3 哪里不是整数。 */
+function sciHint(raw: string): string {
+  return /e/i.test(raw) ? '；不要用科学计数法（如 1e3）' : '';
+}
+
+/**
+ * HS 编码形状（P2-51）：数字，可用点号分段，数字合计 6–10 位（国际 6 位 → 美国 HTS 10 位）。
+ * @why 服务端只判"填没填"（product-input.ts @limitation 二），"3304,99" "HS3304" 这类录入会原样进报关单。
+ * @limitation 列宽是 VARCHAR(10)（`PRODUCT_MAX_CHARS.hs_code`），带点号的 10 位 HTS（`3304.99.5000`，12 字符）
+ *             会被长度检查拦下——需要去掉点号录入。是否放宽列宽属数据库迁移，不在本轮。
+ */
+export function hsCodeShapeOk(raw: string): boolean {
+  const t = raw.trim();
+  if (!/^\d+(\.\d+)*$/.test(t)) return false;
+  const digits = t.replace(/\./g, '').length;
+  return digits >= 6 && digits <= 10;
+}
+
+/**
+ * **不拦截**的提醒（P2-51）：成本 ≥ 售价（每卖一件都亏）。
+ * @why 不做成错误：清仓、赠品、引流款都可能故意亏本卖；但多数情况是把两个框填反了，值得提醒一眼。
+ */
+export function productFormWarnings(form: unknown): string[] {
+  const f = asForm(form);
+  const price = plainInt(f.priceJpy);
+  const cost = f.costJpy.trim() === '' ? null : plainInt(f.costJpy);
+  const out: string[] = [];
+  if (price !== null && cost !== null && cost >= price)
+    out.push(`采购成本（${cost} 円）不低于售价（${price} 円）：每卖一件都不赚钱，请确认没有填反`);
+  return out;
+}
+
+/** 冲突对照的一行（40914 后"你填的 vs 最新值"）。 */
+export interface ConflictRow {
+  label: string;
+  mine: string;
+  latest: string;
+  differs: boolean;
+}
+
+/**
+ * 40914 后的对照表（P2-44）：表单当前值 vs 服务端最新一版，**逐字段**列出，标出不同的。
+ * @why 原文案让运营"返回列表重新进入编辑"——那会**丢掉**整张表单（含已上传的图）。
+ *      现在表单原地保留，最新值只读摆在旁边，运营自己决定保留哪边。
+ * @limitation 图片只比**张数**（URL / id 逐张比对在这里没有可读的展示方式）。
+ */
+export function productConflictRows(form: unknown, latest: unknown): ConflictRow[] {
+  const mine = asForm(form);
+  const theirs = productFormModel(latest);
+  const fields: Array<[string, keyof ProductForm]> = [
+    ['商品名', 'title'],
+    ['分类', 'category'],
+    ['售价（円）', 'priceJpy'],
+    ['采购成本（円）', 'costJpy'],
+    ['重量（克）', 'weightG'],
+    ['库存', 'stock'],
+    ['英文报关品名', 'customsDescEn'],
+    ['HS 编码', 'hsCode'],
+    ['日文品名', 'titleJa'],
+    ['JAN 码', 'janCode'],
+    ['采购渠道', 'purchaseSource'],
+    ['商品描述', 'description'],
+    ['为什么值得买', 'editorialWhy'],
+    ['产地 / 工房', 'editorialMaker'],
+    ['编辑标签', 'editorialTags'],
+    ['合规标签', 'complianceTags'],
+  ];
+  const text = (v: unknown): string => (Array.isArray(v) ? v.join('、') : String(v ?? ''));
+  const rows = fields.map(([label, key]) => {
+    const a = text(mine[key]);
+    const b = text(theirs[key]);
+    return { label, mine: a, latest: b, differs: a !== b };
+  });
+  const a = `${mine.images.length} 张`;
+  const b = `${theirs.images.length} 张`;
+  rows.push({ label: '图片', mine: a, latest: b, differs: a !== b });
+  return rows;
 }
 
 /**

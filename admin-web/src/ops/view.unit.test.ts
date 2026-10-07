@@ -314,6 +314,28 @@ describe('rateErrors（整表校验）', () => {
     expect(rateErrors([formRow('500', '-1')]).errors[0]).toContain('运费');
   });
 
+  it('P2-42 启用档位跨两家承运商 → 拒，并点名是哪几家（服务端 carrier_not_single 只回泛化 40001）', () => {
+    const r = rateErrors([
+      { carrier: 'yamato', maxWeightG: '500', priceJpy: '2200', active: true },
+      { carrier: 'japanpost', maxWeightG: '2000', priceJpy: '4050', active: true },
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.includes('同一家承运商') && e.includes('japanpost'))).toBe(true);
+    // 另一家的档位停用后就合法（停用的档位不参与取档）
+    expect(
+      rateErrors([
+        { carrier: 'yamato', maxWeightG: '500', priceJpy: '2200', active: true },
+        { carrier: 'japanpost', maxWeightG: '2000', priceJpy: '4050', active: false },
+      ]).ok,
+    ).toBe(true);
+  });
+
+  it('P2-42 重量 / 运费超过 SHIPPING_RATE_BOUNDS → 拒（边界值本身放行）', () => {
+    expect(rateErrors([formRow('30000', '100000')]).ok).toBe(true);
+    expect(rateErrors([formRow('30001', '2200')]).first).toContain('不能超过 30000 克');
+    expect(rateErrors([formRow('500', '100001')]).first).toContain('不能超过 100000 円');
+  });
+
   it('⚠️ 全部停用 → 拒（没有启用档 = 没有运费可算）', () => {
     const r = rateErrors([formRow('500', '2200', false)]);
     expect(r.first).toContain('启用');
