@@ -16,6 +16,8 @@
 import { STATUS_LABELS, canPay, statusText } from '../../utils/order-status.js';
 import { copyFailText } from '../../utils/privacy.js';
 import { payGuide } from '../../utils/pay-plan.js';
+import { countdownText } from '../../utils/countdown.js';
+import { ADDRESS_COUNTRY_DEFAULT } from '../../utils/address-form.js';
 
 /**
  * `requestPayment` 的**取消与失败**统一文案（B35 / AJ-218）。
@@ -33,6 +35,40 @@ import { payGuide } from '../../utils/pay-plan.js';
  */
 export const PAY_FAIL_TEXT = '支付未完成，可重新选择支付方式';
 
+/** 状态读不到 / 认不出时的说明（P2-41：白名单之外不列支付方式，但要给去处）。 */
+export const UNKNOWN_STATUS_TEXT = '订单状态暂时无法确认，请到「我的订单」查看最新状态';
+
+/**
+ * 倒计时到点后的关闭屏文案（P2-35）。
+ * @why 说"未完成付款"而不是"已关闭"：到点那一刻服务端可能还没关单（作业每分钟一轮），
+ *      但对用户来说结论已经确定——这一单付不了了，要买就重新下单。
+ */
+export const EXPIRED_CLOSED_TEXT = '支付时间已到，该订单未完成付款，将自动关闭；如需购买请重新下单';
+
+/**
+ * 通道查询用的目的国（P2-39）：取订单收货地址的 `country`。
+ * @param {unknown} order `GET /orders/{id}` 响应（契约 Order.address: Address）
+ * @returns {string} 两位大写国家码；缺失 / 形状不对 → `ADDRESS_COUNTRY_DEFAULT`
+ * @why 原来写死默认国家：接第二个国家那天，支付页会按美国去过滤加拿大订单的通道（约束四：不写死国家）。
+ * @why 只收 `^[A-Z]{2}$`：它要拼进查询串，脏值（`U&`）会改写查询参数。
+ */
+export function channelCountry(order) {
+  const c = order?.address?.country;
+  return typeof c === 'string' && /^[A-Z]{2}$/.test(c) ? c : ADDRESS_COUNTRY_DEFAULT;
+}
+
+/**
+ * 发起支付被拒后要不要**重查订单**（P2-40）。
+ * @param {unknown} code `ApiError.code`
+ * @returns {boolean}
+ * @why 40902（状态不允许）/ 40904（已过期）的登记表 action 是"刷新订单 / 重新下单"：
+ *      多半是这张单已经付了（浏览器那边）或已经关了。只显示一句错误、按钮还在，用户会一直点。
+ *      重查后由 `payPageView` 决定换不换关闭屏；仍可付就只留那句错误。
+ */
+export function recheckAfterPayError(code) {
+  return code === 40902 || code === 40904;
+}
+
 /**
  * 这一张单**还能不能走支付流程**（B35 / AJ-218）。
  *
@@ -44,9 +80,13 @@ export const PAY_FAIL_TEXT = '支付未完成，可重新选择支付方式';
  * @why 以前支付页**完全不看订单状态**，从返回栈回到一张已付/已关的单，
  *      照样列出支付方式——点下去是 40902。那是个"看起来能用、实际是坏的"按钮，
  *      而用户在支付这个动作上遇到它，第一反应是"是不是刚才没付成功"。
- * @why `status` 读不到时按**可付**处理：与 `refundGate` 对字段缺失放行的防御同口径——
- *      "读不到"不等于"不能付"，把唯一入口堵死的代价比多给一次被服务端拒绝的点击大
- *      （服务端 40902 会把原因说清楚，而前端静默不给按钮不会说任何话）。
+ * @why **白名单**（P2-41，2026-10-07 改）：只有 created / pending_payment 可付，读不到 / 认不出一律**不可付**，
+ *      并明说"状态无法确认"（`UNKNOWN_STATUS_TEXT`）。原来按"可付"放行，理由是"读不到不等于不能付"——
+ *      但服务端新增一个状态时，前端会对一张根本不该付的单列出支付方式，那是钱的方向上的错；
+ *      而"不可付 + 说清去哪看"并不静默：用户有明确的下一步（我的订单），不会卡死。
+ * @why `nowMs`（P2-35）：待付款但已过 `expires_at` 的单同样不可付——服务端关单作业每分钟一轮，
+ *      到点后的那几十秒里订单仍是 pending，此时付款会落成迟到款（走人工退款）。
+ *      判定口径与 `countdownText` 同一处（含等号，KD-7）。不传 nowMs = 不按时间判。
  * @limitation 这是前端的**预判断**，不是权威：服务端状态机仍是唯一裁决
  *              （@see 本函数不改任何写路径）。
  */
@@ -72,12 +112,19 @@ function closedTextFor(status) {
   return `该订单${label}，无需再支付`;
 }
 
-export function payPageView(order) {
+export function payPageView(order, nowMs) {
   const o = order !== null && typeof order === 'object' ? order : {};
   const status = typeof o.status === 'string' ? o.status : '';
   const known = typeof STATUS_LABELS[status] === 'string';
-  const payable = !known || canPay(status);
-  if (payable) return { payable, closedText: '', goHome: false };
+  if (!known) return { payable: false, closedText: UNKNOWN_STATUS_TEXT, goHome: false };
+  const payable = canPay(status);
+  if (payable) {
+    // P2-35：到点即收起（服务端关单有延迟，这段时间付款只会变成迟到款）
+    if (Number.isFinite(nowMs) && countdownText(o.expires_at, nowMs).expired) {
+      return { payable: false, closedText: EXPIRED_CLOSED_TEXT, goHome: true };
+    }
+    return { payable, closedText: '', goHome: false };
+  }
   return {
     payable,
     closedText: closedTextFor(status),
@@ -224,12 +271,14 @@ export function leavesAfterAuto(plan) {
 /**
  * 点"用这个方式支付"之后的决定。
  *
- * @param {{paying: boolean, channel: unknown, lastChannel: string, hasKey: boolean}|null|undefined} args
+ * @param {{paying: boolean, channel: unknown, lastChannel: string, hasKey: boolean,
+ *          closed?: boolean}|null|undefined} args
  *   传 null / undefined 也算"不该发起"（wxml 传错形态时页面只是不动，不能炸）。
  *   `paying`      上一次发起是否还在途中（B6 / AJ-201 的在途守卫）；
  *   `channel`     wxml `data-channel` 原值（可能是任何东西，不能直接信）；
  *   `lastChannel` 页面记住的上一次通道（空串 = 还没发起过）；
- *   `hasKey`      幂等键生命周期器是否已就绪。
+ *   `hasKey`      幂等键生命周期器是否已就绪；
+ *   `closed`      页面已是关闭屏（已付 / 已关 / 倒计时到点，P2-35）。
  * @returns {{kind: 'ignore'} | {kind: 'start', channel: string, retireKey: boolean}}
  *
  * @why `paying` 那条守卫（B6 / AJ-201）：上一次发起还没回来就再点，会多打一次
@@ -246,6 +295,8 @@ export function payStartDecision(args) {
   const a = args && typeof args === 'object' ? args : {};
   const channel = typeof a.channel === 'string' ? a.channel : '';
   if (channel === '') return { kind: 'ignore' };
+  // P2-35：关闭屏（含倒计时到点）之后不再发起——按钮消失前的那一下不该打到服务端
+  if (a.closed === true) return { kind: 'ignore' };
   if (a.hasKey !== true) return { kind: 'ignore' };
   if (a.paying === true) return { kind: 'ignore' };
   const last = typeof a.lastChannel === 'string' ? a.lastChannel : '';

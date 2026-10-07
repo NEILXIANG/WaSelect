@@ -10,7 +10,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import simulate from 'miniprogram-simulate';
 
 const root = resolve(import.meta.dirname, '../..');
@@ -21,15 +21,23 @@ interface DomLike {
   dispatchEvent(event: Event): void;
 }
 interface CompLike {
-  dom: DomLike;
+  dom: DomLike & { textContent: string | null };
   attach(parent: unknown): void;
   addEventListener(name: string, fn: (e: unknown) => void): void;
 }
 
+/** 组件 id —— 只 load 一次（simulate 重复 load 后 render 返回 undefined，见 ws-price 单测文件头）。 */
+let loadedId = '';
+function loadOnce(): string {
+  if (loadedId === '') {
+    loadedId = simulate.load(`${root}/components/ws-pick-card/index`, { rootPath: root });
+  }
+  return loadedId;
+}
+
 describe('ws-pick-card：点击事件', () => {
   it('🔴 点一下，页面只收到 1 次 tap', async () => {
-    const id = simulate.load(`${root}/components/ws-pick-card/index`, { rootPath: root });
-    const comp = simulate.render(id, {
+    const comp = simulate.render(loadOnce(), {
       name: '南部鉄器 急須',
       why: '一生用',
       priceJpy: 8800,
@@ -57,5 +65,37 @@ describe('ws-pick-card：点击事件', () => {
   it('wxml 用 catchtap（不让内部原生 tap 冒出组件）', () => {
     const wxml = readFileSync(resolve(root, 'components/ws-pick-card/index.wxml'), 'utf8');
     expect(wxml).toContain('catchtap="onTap"');
+  });
+});
+
+describe('ws-pick-card：缺价格不能显示 0 円（P1-6）', () => {
+  /**
+   * @why `priceJpy` 曾声明为 `{ type: Number, value: 0 }`：列表接口漏了 `price_jpy` 时
+   *      卡片照样渲染 `0 円`，用户读成"免费"。改成 `type: null` 后漏传是 null，
+   *      ws-price 走它自己的响亮失败（空白 + 控制台报错）。
+   */
+  it('不传 priceJpy → 卡上没有 "0 円"，控制台有报错', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const comp = simulate.render(loadOnce(), {
+        name: '南部鉄器 急須',
+        why: '一生用',
+      }) as unknown as CompLike;
+      comp.attach(document.body);
+      expect(comp.dom.textContent ?? '').not.toContain('0 円');
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('传了 priceJpy → 正常显示千分位价格', () => {
+    const comp = simulate.render(loadOnce(), {
+      name: '南部鉄器 急須',
+      why: '一生用',
+      priceJpy: 8800,
+    }) as unknown as CompLike;
+    comp.attach(document.body);
+    expect(comp.dom.textContent ?? '').toContain('8,800 円');
   });
 });

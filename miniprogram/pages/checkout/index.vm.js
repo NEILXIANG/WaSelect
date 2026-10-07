@@ -148,6 +148,10 @@ export function resolveAddressId(args) {
  */
 export function recoveryFor(code) {
   if (code === 40905 || code === 40901 || code === 40401) return 'requote';
+  // P2-40：40912（包裹超重）/ 40906（超单笔上限）——登记表 action 是"提示减少数量或分多单 / 提示拆分订单"。
+  // 建单时才撞上说明报价之后购物车或价格变了；重报价后闸门会给出"已超过单笔上限，请分两单下单"
+  // 或"报价失败，请返回购物车检查商品"，而不是停在一句错误上、按钮还能再点出同一个码。
+  if (code === 40912 || code === 40906) return 'requote';
   if (code === 40011) return 'reload_terms';
   // 40913（在途单已达上限）：错误码登记表的 action 是"引导去订单列表支付或取消已有订单"。
   // 只显示文案的话，用户得自己 回首页 → 我的 → 我的订单 → 逐张进详情取消——

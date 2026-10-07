@@ -37,6 +37,7 @@
       class="home__search"
       value="{{keyword}}"
       placeholder="搜索商品"
+      maxlength="64"
       confirm-type="search"
       bindinput="onSearchInput"
       bindconfirm="onSearch"
@@ -61,7 +62,9 @@
        @why **不在这里判** `active` 与起止时间：那是服务端按**自己的时钟**做过的判定
             （契约：生效判定只在服务端做一次）。前端再判一次要用本机时钟——
             时钟偏的用户会看到"该下架的还在 / 该上线的没来"，且表现是随机的。
-       @why 单张时不轮播、不显示指示点：只有一张图还在动，看起来像"页面在抖"。 -->
+       @why 单张时不轮播、不显示指示点：只有一张图还在动，看起来像"页面在抖"。
+       ⚠️ hover-class 放在 swiper-item **里面**那层 view 上（P2-41）：官方只给 view / button / navigator
+            支持 hover-class，写在 swiper-item 上不生效（点了没有按下反馈）。tap 也随之放到内层 view。 -->
   <swiper
     wx:if="{{slides.length > 0}}"
     class="home__swiper ws-gutter"
@@ -69,14 +72,10 @@
     autoplay="{{slides.length > 1}}"
     circular
   >
-    <swiper-item
-      wx:for="{{slides}}"
-      wx:key="id"
-      data-index="{{index}}"
-      hover-class="ws-press"
-      bindtap="onBannerTap"
-    >
-      <image class="home__slide" src="{{item.image}}" mode="aspectFill" />
+    <swiper-item wx:for="{{slides}}" wx:key="id">
+      <view class="home__slide-hit" data-index="{{index}}" hover-class="ws-press" bindtap="onBannerTap">
+        <image class="home__slide" src="{{item.image}}" mode="aspectFill" />
+      </view>
     </swiper-item>
   </swiper>
 

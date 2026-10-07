@@ -12,7 +12,7 @@
  * @see ./auth-session.js
  */
 import { describe, expect, it } from 'vitest';
-import { loginWithWechat, wxLoginCode } from './auth-session.js';
+import { loginWithWechat, singleFlight, wxLoginCode } from './auth-session.js';
 import { createWxApi, type WxLoginOption } from './wx-api.js';
 
 const BASE = 'https://api.example.com';
@@ -99,5 +99,50 @@ describe('loginWithWechat', () => {
       }),
     ).rejects.toThrow(/denied/);
     expect(called).toBe(0);
+  });
+});
+
+describe('singleFlight：启动自动登录与请求层重登共用一个在途登录（P2-34）', () => {
+  /** 一个计数的登录一跳：wx.login + /auth/wechat/login，后者挂起直到 release()。 */
+  function countingLogin() {
+    let posts = 0;
+    let release: (token: string) => void = () => undefined;
+    const login = singleFlight(() =>
+      loginWithWechat({
+        wx: wxWith((o) => o.success?.({ code: 'c' })),
+        api: () => {
+          posts += 1;
+          return new Promise((r) => {
+            release = (t) => r({ token: t });
+          });
+        },
+        apiBase: BASE,
+      }),
+    );
+    return { login, posts: () => posts, release: (t: string) => release(t) };
+  }
+
+  it('🔴 两个并发调用方（启动登录 + 40101 重登）→ 只发一次登录请求，拿到同一个 token', async () => {
+    const h = countingLogin();
+    const a = h.login();
+    const b = h.login();
+    await Promise.resolve();
+    await Promise.resolve();
+    h.release('jwt-1');
+    expect(await a).toBe('jwt-1');
+    expect(await b).toBe('jwt-1');
+    expect(h.posts()).toBe(1);
+  });
+
+  it('结束后（成功或失败）再调 → 发起新的一次（不永远复用旧结果）', async () => {
+    let n = 0;
+    const flaky = singleFlight(async () => {
+      n += 1;
+      if (n === 1) throw new Error('first fails');
+      return `t-${String(n)}`;
+    });
+    await expect(flaky()).rejects.toThrow('first fails');
+    expect(await flaky()).toBe('t-2');
+    expect(await flaky()).toBe('t-3');
   });
 });

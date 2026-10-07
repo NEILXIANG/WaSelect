@@ -69,3 +69,31 @@ export async function loginWithWechat(deps) {
   }
   return res.token;
 }
+
+/**
+ * 把一个"发起登录"的函数包成 **single-flight**：在途时再调用，复用同一个 Promise（P2-34）。
+ *
+ * @param {() => Promise<string>} fn 登录一跳（通常是 `() => loginWithWechat(...)`）
+ * @returns {() => Promise<string>} 共享在途的登录函数
+ *
+ * @why app.js 里有**两个**登录入口：启动时无 token 的自动登录，与 request.js 收到 40101 的重登。
+ *      request.js 的 single-flight 只管住它自己那一路——启动登录还在途时首页的受保护请求撞上 40101，
+ *      会再发一次 `wx.login` + `/auth/wechat/login`：两次 code 换两个 token，后写回的不一定是后签发的，
+ *      表现为"刚登录完又 401"（与 request.js `relogining` 注释里那条 token 倒退是同一个病）。
+ *      两路都调这里包出来的同一个函数，就只有一个在途登录。
+ * @why 成功与失败**都清掉**在途句柄：只在成功时清，一次失败会让之后所有调用永远拿到那个 rejected 的 Promise。
+ * @limitation 不写 token（写回仍是调用方的事，见 @limitation 三）：两路各自 `setToken` 同一个值，重复写一次无害。
+ */
+export function singleFlight(fn) {
+  let inflight = null;
+  return function shared() {
+    if (inflight !== null) return inflight;
+    const task = (async () => fn())();
+    inflight = task;
+    const clear = () => {
+      inflight = null;
+    };
+    task.then(clear, clear);
+    return task;
+  };
+}

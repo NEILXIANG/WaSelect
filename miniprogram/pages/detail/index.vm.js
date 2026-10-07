@@ -24,6 +24,7 @@
 
 import { displaySubLine } from '../../utils/price-format.js';
 import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
+import { MAX_CART_LINES } from '../../utils/cart-store.js';
 
 /** 原产地 ISO 码 → 展示名。@see @limitation 一 */
 const ORIGIN_LABELS = { JP: '日本' };
@@ -134,4 +135,43 @@ export function shareCard(view, productId) {
     path,
     ...(typeof imageUrl === 'string' && imageUrl !== '' ? { imageUrl } : {}),
   };
+}
+
+/**
+ * 加购连点守卫窗口（毫秒，P2-37）。
+ * @why "加入购物车"不走请求、没有在途态可挡（ws-button 的 loading 也就无从谈起），
+ *      手抖双击 = 同一件商品 qty 变成 2，用户到购物车才发现。800ms 覆盖一次双击，又不妨碍有意的"再加一件"。
+ * @tradeoff 用时间窗而不是"加过就禁用"：有人确实想连加两件；窗口外的第二下照常生效。
+ */
+export const ADD_TAP_GUARD_MS = 800;
+
+/**
+ * 这一下"加入购物车"要不要接受（P2-37）。
+ * @param {unknown} lastAtMs 上一次被接受的时刻（没有 = undefined / 0）
+ * @param {number} nowMs 当前时刻（**由薄壳传入**，vm 不读时钟）
+ * @returns {boolean}
+ * @why 时钟回拨（now < last）按接受处理：否则改一次手机时间就会把按钮锁死很久。
+ */
+export function acceptAddTap(lastAtMs, nowMs) {
+  if (!Number.isFinite(lastAtMs) || lastAtMs <= 0) return true;
+  if (!Number.isFinite(nowMs)) return true;
+  const gap = nowMs - lastAtMs;
+  return gap < 0 || gap >= ADD_TAP_GUARD_MS;
+}
+
+/**
+ * `cart.add()` 的结果 → 页面 `setData`（P2-31 / P2-37）。
+ * @param {unknown} result cart-store `add` 的返回值
+ * @returns {{added: boolean, addNote: string}} `addNote` 非空 = 没加进去的原因（页内显示，不弹 toast）
+ */
+export function addFeedback(result) {
+  const r = result !== null && typeof result === 'object' ? result : {};
+  if (r.added === true) return { added: true, addNote: '' };
+  if (r.reason === 'full') {
+    return {
+      added: false,
+      addNote: `购物车最多放 ${String(MAX_CART_LINES)} 种商品，请先结算或移除一些再加`,
+    };
+  }
+  return { added: false, addNote: '' };
 }

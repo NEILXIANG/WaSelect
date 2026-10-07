@@ -18,7 +18,7 @@
  *
  * @see ./index.vm.js（视图逻辑真源）；../home/index.vm.js（导航意图真源）
  */
-import { buyNowItem, detailView, shareCard } from './index.vm.js';
+import { acceptAddTap, addFeedback, buyNowItem, detailView, shareCard } from './index.vm.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -46,7 +46,14 @@ Page({
     error: '',
     /** true = 本次加购已成功（页内提示，不弹 toast——又一个宿主 API 不值得登记）。 */
     added: false,
+    /** 没加进去的原因（P2-31：品种已满）；空串 = 不显示。 */
+    addNote: '',
+    /** 错误态是否给"重试"（P2-38）：缺 id 时重试也没用，不给按钮。 */
+    retryable: false,
   },
+
+  /** 上一次被接受的加购时刻（P2-37 连点守卫；不进 data：不是渲染状态）。 */
+  lastAddAt: 0,
 
   productId: '',
   /** 一次"看一个商品"是一条链：详情页只有一次取数，链路从 onLoad 开始。 */
@@ -61,7 +68,7 @@ Page({
     //    decode 对含 % 的恶意串会抛 URIError——原样透传给服务端去拒更安全。
     this.productId = typeof options?.id === 'string' ? options.id : '';
     if (this.productId === '') {
-      this.setData({ error: '缺少商品 id' });
+      this.setData({ error: '缺少商品 id', retryable: false });
       return;
     }
     this.load();
@@ -77,7 +84,7 @@ Page({
       });
       this.setData({ product: detailView(res) });
     } catch (e) {
-      this.setData({ product: null, ...errorFields(e) });
+      this.setData({ product: null, ...errorFields(e), retryable: true });
     } finally {
       this.setData({ loading: false });
     }
@@ -93,7 +100,11 @@ Page({
     const p = this.data.product;
     if (p === null || p.soldOut) return;
     if (this.productId === '') return;
-    app.globalData.cart.add({
+    // P2-37：双击守卫——手抖点两下会让 qty 静默变成 2（判断在 vm，时间由这里传入）
+    const now = Date.now();
+    if (!acceptAddTap(this.lastAddAt, now)) return;
+    this.lastAddAt = now;
+    const result = app.globalData.cart.add({
       productId: this.productId,
       qty: 1,
       title: p.title,
@@ -101,7 +112,14 @@ Page({
       priceJpy: p.priceJpy,
     });
     // ⚠️ 只提示、不跳走：加购后自动跳购物车会打断"继续逛"——用户自己点"去购物车"
-    this.setData({ added: true });
+    // P2-31：品种已满时 `added=false` + 说明，不假装加上了
+    this.setData(addFeedback(result));
+  },
+
+  /** 错误态的"重试"（P2-38）：重新取详情。缺 id 时 wxml 不给按钮（retryable=false）。 */
+  onRetry() {
+    if (this.productId === '') return;
+    void this.load();
   },
 
   /**

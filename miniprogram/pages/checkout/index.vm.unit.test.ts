@@ -254,6 +254,11 @@ describe('recoveryFor：建单失败之后页面该做什么（B37 / AJ-220）',
     expect(recoveryFor(40401)).toBe('requote');
   });
 
+  it('40912（包裹超重）/ 40906（超单笔上限）→ 重新报价（P2-40：报价会给出拆单提示，而不是停在一句错误上）', () => {
+    expect(recoveryFor(40912)).toBe('requote');
+    expect(recoveryFor(40906)).toBe('requote');
+  });
+
   it('40011（条款版本不一致）→ 重拉条款', () => {
     expect(recoveryFor(40011)).toBe('reload_terms');
   });
@@ -295,7 +300,7 @@ describe('recoveryFor：建单失败之后页面该做什么（B37 / AJ-220）',
     );
     expect(reg.length, '自检：登记表读到了内容').toBeGreaterThan(0);
     // ⚠️ 40913 一并纳入：`go_orders` 的来源是登记表里那条"引导去订单列表"的 action
-    for (const c of [40905, 40901, 40401, 40011, 40913]) {
+    for (const c of [40905, 40901, 40401, 40011, 40913, 40912, 40906]) {
       expect(reg, `${c} 必须在登记表中`).toContain(`${c}:`);
     }
     expect(reg).toContain(

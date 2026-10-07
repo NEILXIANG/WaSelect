@@ -13,7 +13,13 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { cartRows, checkoutGate, markInvalid } from './index.vm.js';
+import {
+  TOO_MANY_LINES_TEXT,
+  cartRows,
+  checkoutGate,
+  markInvalid,
+  quoteErrorText,
+} from './index.vm.js';
 
 const ITEMS = [
   {
@@ -180,5 +186,22 @@ describe('markInvalid（4-7）', () => {
     expect(markInvalid(marked, undefined, 40401).every((r) => r.invalidText === '')).toBe(true);
     expect(markInvalid(rows, 'p-a', 50000).every((r) => r.invalidText === '')).toBe(true);
     expect(markInvalid(rows, 'p-zzz', 40401).every((r) => r.invalidText === '')).toBe(true);
+  });
+});
+
+describe('品种超限（P2-31）：40001 + 超过 50 种 → 说清怎么办', () => {
+  it('40001 且行数 > 50 → 可操作的提示（不是"稍后重试"）', () => {
+    const g = checkoutGate({ hasError: true, errorCode: 40001, lineCount: 51 });
+    expect(g).toEqual({ disabled: true, hint: TOO_MANY_LINES_TEXT });
+    expect(TOO_MANY_LINES_TEXT).toContain('50');
+    expect(quoteErrorText(40001, 51, '参数错误')).toBe(TOO_MANY_LINES_TEXT);
+  });
+
+  it('40001 但行数没超 → 仍按原口径（不乱归因）', () => {
+    expect(checkoutGate({ hasError: true, errorCode: 40001, lineCount: 3 }).hint).toBe(
+      '合计未能获取，请稍后重试',
+    );
+    expect(quoteErrorText(40001, 3, '参数错误')).toBe('参数错误');
+    expect(quoteErrorText(40901, 60, '库存不足')).toBe('库存不足');
   });
 });

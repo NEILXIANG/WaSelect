@@ -33,6 +33,9 @@ export function errorMessage(err) {
   if (isObj && Number.isInteger(err.code) && err.code < 0 && err.code !== UNCONFIGURED_CODE) {
     return NETWORK_TEXT;
   }
+  // P2-40：两个"服务端原文说不清下一步"的码，换成能照着做的话
+  if (isObj && err.code === BUSY_CODE) return busyText(err.data);
+  if (isObj && err.code === FORBIDDEN_CODE) return FORBIDDEN_TEXT;
   const fromMessage = isObj && typeof err.message === 'string' ? err.message.trim() : '';
   const fromErrMsg =
     fromMessage === '' && isObj && typeof err.errMsg === 'string' ? err.errMsg.trim() : '';
@@ -47,6 +50,28 @@ const GATEWAY_CODE = -3;
 const GATEWAY_TEXT = '服务暂时不可用，请稍后重试';
 /** "服务地址没配"（unconfigured-api，-2）的 message 本身就是给人看的说明，不替换。 */
 const UNCONFIGURED_CODE = -2;
+
+/**
+ * 上游熔断（50300，P2-40）：服务端在 `data.retry_after_ms` 里给了退避时长（server/src/errors.ts）。
+ * @why 原文"服务暂时不可用，请稍后重试"没有"稍后"是多久；用户一般立刻再点，撞上的还是熔断。
+ *      有数就说"约 N 秒"（向上取整：说少了用户会提前再点一次），没数或数不合法就不编。
+ */
+const BUSY_CODE = 50300;
+function busyText(data) {
+  const ms = data !== null && typeof data === 'object' ? data.retry_after_ms : undefined;
+  if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0) {
+    return `服务繁忙，约 ${String(Math.ceil(ms / 1000))} 秒后再试`;
+  }
+  return '服务繁忙，请稍后再试';
+}
+
+/**
+ * 40301（P2-40）：买家侧接口返回它几乎只有一种原因——账号被拉黑（create-order / 鉴权层复核 blocked）。
+ * @why 原文"无权限"会被读成"我哪里没登录 / 没授权"，用户会去反复重进小程序；真正的出路是找客服。
+ * @limitation 鉴权层的"角色不符"也是 40301，但买家小程序不会调管理端接口，不在这里区分。
+ */
+const FORBIDDEN_CODE = 40301;
+const FORBIDDEN_TEXT = '账号已被限制使用，如有疑问请联系客服';
 
 /**
  * 报障小字（剩余清单 4-6 / M9）：`错误码 40002 · 链路 abcdef12`（网络层再附宿主原因）。

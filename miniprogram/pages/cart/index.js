@@ -25,9 +25,9 @@
  * @see ./index.vm.js（行视图真源）；../../utils/quote-view.js（报价区视图，共享层）；
  *      ../../utils/cart-store.js（本地状态真源）
  */
-import { cartRows, checkoutGate, markInvalid } from './index.vm.js';
+import { cartRows, checkoutGate, markInvalid, quoteErrorText } from './index.vm.js';
 import { quoteView } from '../../utils/quote-view.js';
-import { errorFields } from '../../utils/error-text.js';
+import { errorFields, errorMessage } from '../../utils/error-text.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -169,13 +169,16 @@ Page({
     } catch (e) {
       if (isStale(seq, this.quoteSeq)) return;
       const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
+      const lineCount = this.data.rows.length;
       this.setData({
         quote: null,
         // 剩余清单 4-7：服务端指出是哪一件（e.data.product_id）→ 标红那一行
         rows: markInvalid(this.data.rows, e?.data?.product_id, code),
         ...errorFields(e, 'quoteError'),
+        // P2-31：品种超限（40001 + >50 行）换成"请移除一些"，否则永远是一句重试不好的错
+        quoteError: quoteErrorText(code, lineCount, errorMessage(e)),
         quoteErrorCode: code,
-        gate: checkoutGate({ hasError: true, errorCode: code }),
+        gate: checkoutGate({ hasError: true, errorCode: code, lineCount }),
       });
     } finally {
       // 同首页：过期请求不能把 quoting 清掉（新的还在途中）
@@ -186,6 +189,7 @@ Page({
             hasTotal: hasTotal(this.data.quote),
             hasError: this.data.quoteError !== '',
             errorCode: this.data.quoteErrorCode,
+            lineCount: this.data.rows.length,
             splitRequired: this.data.quote?.splitRequired === true,
           }),
         });

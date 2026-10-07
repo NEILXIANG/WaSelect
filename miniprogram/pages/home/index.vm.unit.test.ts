@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CATEGORIES,
   PAGE_SIZE,
+  SEARCH_KEYWORD_MAX,
   bannerAt,
   bannerSlides,
   cartLabel,
@@ -35,7 +36,9 @@ import {
   mergeCards,
   nextPage,
   productCards,
+  searchKeyword,
 } from './index.vm.js';
+import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
 
 /**
@@ -528,5 +531,35 @@ describe('轮播下标必须与「可见 banner」同源（点第 N 张跳第 N 
         intentForBanner(visible[i], CATEGORIES),
       );
     });
+  });
+});
+
+describe('searchKeyword（P2-32：服务端 >64 字符一律 40001）', () => {
+  it('上限与 shared 的 SEARCH_KEYWORD_MAX_LENGTH 同值', () => {
+    expect(SEARCH_KEYWORD_MAX).toBe(SEARCH_KEYWORD_MAX_LENGTH);
+  });
+
+  it('先 trim 再截断到上限', () => {
+    expect(searchKeyword('  急須  ')).toBe('急須');
+    const long = 'あ'.repeat(SEARCH_KEYWORD_MAX + 10);
+    expect(searchKeyword(long)).toHaveLength(SEARCH_KEYWORD_MAX);
+    expect(searchKeyword(`   ${long}`)).toHaveLength(SEARCH_KEYWORD_MAX);
+  });
+
+  it('截断不切开代理对（半个 emoji 会让 encodeURIComponent 抛 URIError）', () => {
+    const raw = `${'a'.repeat(SEARCH_KEYWORD_MAX - 1)}😀`;
+    const k = searchKeyword(raw);
+    expect(k).toBe('a'.repeat(SEARCH_KEYWORD_MAX - 1));
+    expect(() => encodeURIComponent(k)).not.toThrow();
+  });
+
+  it('非字符串 → 空串', () => {
+    expect(searchKeyword(undefined)).toBe('');
+    expect(searchKeyword(42)).toBe('');
+  });
+
+  it('listQuery 发出去的 keyword 不超过上限', () => {
+    const q: Record<string, unknown> = listQuery({ page: 1, keyword: 'x'.repeat(200) });
+    expect(q['keyword']).toHaveLength(SEARCH_KEYWORD_MAX);
   });
 });

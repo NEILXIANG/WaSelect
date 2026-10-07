@@ -20,6 +20,7 @@ import {
   addressSummary,
   defaultAddressId,
   emptyForm,
+  normalizeUsPhone,
   formErrors,
   formModel,
   toAddressInput,
@@ -86,7 +87,7 @@ describe('formErrors（格式预检）', () => {
   });
 
   it('⚠️ 多字段同时错 → 全部返回（不是一个一个报，让用户提交七次）', () => {
-    const r = formErrors({ ...emptyForm(), recipient: '田中', phone: '4155550123' });
+    const r = formErrors({ ...emptyForm(), recipient: '田中', phone: '415555012' });
     expect(r.ok).toBe(false);
     // 六个：空表单里除 line2（允许空）外全不合法，加上中收件人
     expect(Object.keys(r.errors).sort()).toEqual(
@@ -98,7 +99,7 @@ describe('formErrors（格式预检）', () => {
   });
 
   it('电话少 +1 / 邮编非 5 位 / 州非两位 → 各自有对应提示', () => {
-    expect(formErrors({ ...formModel(ADDR), phone: '4155550123' }).errors.phone).toContain('+1');
+    expect(formErrors({ ...formModel(ADDR), phone: '415555012' }).errors.phone).toContain('+1');
     expect(formErrors({ ...formModel(ADDR), postal_code: '9410' }).errors.postal_code).toContain(
       '5 位',
     );
@@ -249,9 +250,28 @@ describe('US_ADDRESSES / US_ADDRESS_INVALID 样本池（TST3-02）', () => {
     },
   );
 
-  it.each(US_ADDRESS_INVALID.map((c) => [c.name, c] as const))('反例被预检拦下：%s', (_n, c) => {
-    expect(formErrors({ ...ADDR, ...c.patch }).ok).toBe(false);
-  });
+  /**
+   * P2-37 之后有一类反例**不再被拦**，而是被前端修好：带分隔符的本土电话（212-555-0000）
+   * 对数据库仍是非法值（样本池服务于 DB CHECK 用例，不改），但前端会先归一成 E.164 再发。
+   * 所以这里分两路断言：能被归一的 → 发出去的值合法；其余 → 预检拦下。
+   */
+  const fixable = (c: (typeof US_ADDRESS_INVALID)[number]): boolean =>
+    typeof c.patch.phone === 'string' && normalizeUsPhone(c.patch.phone) !== c.patch.phone.trim();
+
+  it.each(US_ADDRESS_INVALID.filter((c) => !fixable(c)).map((c) => [c.name, c] as const))(
+    '反例被预检拦下：%s',
+    (_n, c) => {
+      expect(formErrors({ ...ADDR, ...c.patch }).ok).toBe(false);
+    },
+  );
+
+  it.each(US_ADDRESS_INVALID.filter(fixable).map((c) => [c.name, c] as const))(
+    '反例被前端归一修好（发出去的是合法 E.164）：%s',
+    (_n, c) => {
+      expect(formErrors({ ...ADDR, ...c.patch }).ok).toBe(true);
+      expect(ADDRESS_PATTERNS.phone.test(toAddressInput({ ...ADDR, ...c.patch }).phone)).toBe(true);
+    },
+  );
 });
 
 describe('ADDRESS_MAX_CHARS 与服务端同源（TST3-02）', () => {
@@ -270,5 +290,38 @@ describe('州码白名单（剩余清单 4-5）', () => {
     for (const st of ['DC', 'PR', 'AE']) {
       expect(formErrors({ ...formModel(ADDR), state: st }).errors.state).toBeUndefined();
     }
+  });
+});
+
+describe('normalizeUsPhone：美国电话常见写法归一成 E.164（P2-37）', () => {
+  it('🔴 常见写法 → +14155550123', () => {
+    for (const raw of [
+      '(415) 555-0123',
+      '415-555-0123',
+      '1 415 555 0123',
+      '+1 415-555-0123',
+      '415.555.0123',
+      '4155550123',
+      ' +14155550123 ',
+      '+1 (415) 555-0123',
+    ]) {
+      expect(normalizeUsPhone(raw), raw).toBe('+14155550123');
+    }
+  });
+
+  it('认不出的不硬改（原样 trim 后交给校验去拒，不猜）', () => {
+    expect(normalizeUsPhone('415555012')).toBe('415555012'); // 9 位
+    expect(normalizeUsPhone('2 415 555 0123')).toBe('2 415 555 0123'); // 11 位但不是 1 开头
+    expect(normalizeUsPhone('+44 20 7946 0958')).toBe('+44 20 7946 0958'); // 外国号
+    expect(normalizeUsPhone('+4155550123')).toBe('+4155550123'); // 带 + 却没有国家码 1
+    expect(normalizeUsPhone('415-555-0123 ext 9')).toBe('415-555-0123 ext 9');
+    expect(normalizeUsPhone(undefined)).toBe('');
+  });
+
+  it('formErrors 按归一后的值校验；toAddressInput 发出去的是 E.164（服务端规则 ^\\+1\\d{10}$ 不变）', () => {
+    const m = { ...formModel(ADDR), phone: '(415) 555-0123' };
+    expect(formErrors(m).errors.phone).toBeUndefined();
+    expect(toAddressInput(m).phone).toBe('+14155550123');
+    expect(ADDRESS_PATTERNS.phone.test(toAddressInput(m).phone)).toBe(true);
   });
 });

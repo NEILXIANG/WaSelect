@@ -12,7 +12,7 @@
  *              那一步是 B5 的清单与真机验收的事（@see deploy/wechat-domains.json）。
  */
 import { describe, expect, it } from 'vitest';
-import { API_BASES, resolveApiBase } from './config.js';
+import { API_BASES, DEVELOP_DEVICE_API_BASE, resolveApiBase } from './config.js';
 
 describe('resolveApiBase：按 envVersion 选地址', () => {
   it('develop → localhost（开发者工具勾"不校验合法域名"后可用）', () => {
@@ -64,5 +64,43 @@ describe('API_BASES 的形状（填了就必须填对）', () => {
 
   it('develop 是 http + localhost（唯一不需要在微信后台登记的域名）', () => {
     expect(API_BASES.develop).toMatch(/^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/);
+  });
+});
+
+/**
+ * P2-33：开发版在**真机预览**里也是 envVersion=develop，原来一律给 localhost——
+ * 手机上的 localhost 是手机自己，每个请求都 `request:fail`，页面说"网络不太稳定"，
+ * 排障方向被带到网络上。真机（platform 不是 devtools）且没配局域网地址时，按"没配地址"处理（-2 那条说明）。
+ */
+describe('resolveApiBase：开发版区分模拟器与真机（P2-33）', () => {
+  it('开发者工具（platform=devtools）→ localhost，模拟器照旧可用', () => {
+    expect(resolveApiBase('develop', 'devtools')).toBe(API_BASES.develop);
+  });
+
+  it('🔴 真机预览（ios / android / ohos …）且没配局域网地址 → 抛 develop-device 未配置（不给 localhost）', () => {
+    if (DEVELOP_DEVICE_API_BASE !== '') return; // 配了就走下一条
+    for (const platform of ['ios', 'android', 'ohos', 'windows', 'mac']) {
+      expect(() => resolveApiBase('develop', platform), platform).toThrow(
+        /api_base_not_configured:develop-device/,
+      );
+    }
+    // envVersion 认不出时按 develop 处理，真机同样不给 localhost
+    expect(() => resolveApiBase(undefined, 'ios')).toThrow(/develop-device/);
+  });
+
+  it('拿不到 platform（宿主过旧 / 单测不传）→ 保持原行为（localhost）', () => {
+    expect(resolveApiBase('develop', undefined)).toBe(API_BASES.develop);
+    expect(resolveApiBase('develop', '')).toBe(API_BASES.develop);
+  });
+
+  it('体验版 / 正式版不看 platform（仍按各自的地址，没配就抛各自的键）', () => {
+    expect(() => resolveApiBase('trial', 'ios')).toThrow(/api_base_not_configured:trial/);
+    expect(() => resolveApiBase('release', 'devtools')).toThrow(/api_base_not_configured:release/);
+  });
+
+  it('DEVELOP_DEVICE_API_BASE 填了就必须是 http(s)://主机[:端口]，不带路径、不是 localhost', () => {
+    if (DEVELOP_DEVICE_API_BASE === '') return;
+    expect(DEVELOP_DEVICE_API_BASE).toMatch(/^https?:\/\/[^/]+$/);
+    expect(DEVELOP_DEVICE_API_BASE).not.toMatch(/localhost|127\.0\.0\.1/);
   });
 });

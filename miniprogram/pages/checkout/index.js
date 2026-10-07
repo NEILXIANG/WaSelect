@@ -40,7 +40,7 @@ import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { addressSummary, defaultAddressId } from '../../utils/address-form.js';
 import { quoteView } from '../../utils/quote-view.js';
 import { errorFields } from '../../utils/error-text.js';
-import { STOCK_REFUND_NOTE } from '../order-detail/index.vm.js';
+import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 
@@ -110,8 +110,19 @@ Page({
   /** 结算模式（剩余清单 4-4）：'buynow' = 立即购买（只结 globalData.buyNow 那一件）；'' = 结购物车。 */
   mode: '',
 
+  /**
+   * 页面是否还活着（P2-36）：onUnload 置 false。
+   * @why 建单在途时用户按了返回，响应回来仍会 `redirectTo` 支付页——用户已经离开结算，
+   *      却被拽进一张支付页（还替换掉了他返回到的那一页）。销毁后只做"必须做的"（清车），不再导航。
+   * @limitation 幂等键是**每个页面实例一份**（onLoad 里 createIntentIdempotency）：用户返回后再进结算页
+   *      会拿到新键——上一次若其实已建成，就会多出一张待付款单（30 分钟后自动关单回补库存）。
+   *      这是刻意保留的设计：键跨页面实例共享，就得回答"什么时候算同一个意图"，而购物车随时可改。
+   */
+  alive: true,
+
   /** @param {{mode?: string}} [options] 详情页"立即购买"带 `?mode=buynow` 进来 */
   onLoad(options) {
+    this.alive = true;
     this.traceId = newTraceId();
     this.intentKey = createIntentIdempotency();
     this.mode = options?.mode === BUY_NOW_MODE ? BUY_NOW_MODE : '';
@@ -135,6 +146,11 @@ Page({
 
   onShow() {
     void this.refresh();
+  },
+
+  onUnload() {
+    // P2-36：在途的建单回来后不再跳转（@see alive）
+    this.alive = false;
   },
 
   /**
@@ -340,6 +356,8 @@ Page({
       else app.globalData.buyNow = null;
       // 意图已完成：作废键。再点一次是**新的一张单**，沿用旧键会被重放成刚才那张
       this.intentKey?.retire();
+      // P2-36：用户已经离开这一页（按了返回）→ 不再把他拽进支付页；订单可在「我的订单」里继续付
+      if (!this.alive) return;
       // 剩余清单 4-8：redirectTo 而不是 navigateTo——车已清空，留在返回栈里的结算页只剩"购物车是空的"；
       //    支付页按返回键应回到下单前的页面（购物车 / 商品详情），不是一张空结算页
       wxApi.redirectTo({ url: `${PAY_PAGE}?orderId=${res?.order_id ?? ''}` });
@@ -382,6 +400,16 @@ Page({
     } finally {
       this.setData({ submitting: false });
     }
+  },
+
+  /**
+   * 错误态的"重新加载"（P2-38）：重取条款 / 地址 / 报价。
+   * @why 不重发建单：建单只由「提交订单」触发（幂等键在那条路上），这里只刷新页面数据。
+   *      建单在途时不动——refresh 会改写闸门与报价，和在途的建单结果互相覆盖。
+   */
+  onRetry() {
+    if (this.data.submitting === true) return;
+    void this.refresh();
   },
 
   /** 空态"去逛逛"（剩余清单 4-8）：首页是 tab 页，只能 switchTab。 */

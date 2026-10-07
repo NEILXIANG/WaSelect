@@ -350,3 +350,38 @@ describe('getUpdateManager（剩余清单 4-9）：宿主有才挂', () => {
     expect(createWxApi().getUpdateManager).toBeUndefined();
   });
 });
+
+describe('getPlatform（P2-33：开发版区分模拟器与真机）', () => {
+  it('有 getDeviceInfo → 取它的 platform', () => {
+    vi.stubGlobal('wx', { getDeviceInfo: () => ({ platform: 'ios' }) });
+    try {
+      expect(createWxApi().getPlatform()).toBe('ios');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('没有 getDeviceInfo、有 getSystemInfoSync（旧基础库）→ 退回它', () => {
+    vi.stubGlobal('wx', { getSystemInfoSync: () => ({ platform: 'devtools' }) });
+    try {
+      expect(createWxApi().getPlatform()).toBe('devtools');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('两个都没有 / 返回形状不对 → undefined（由 config.js 保持原行为，不猜）', () => {
+    vi.stubGlobal('wx', {});
+    try {
+      expect(createWxApi().getPlatform()).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    vi.stubGlobal('wx', { getDeviceInfo: () => ({ platform: 3 }) });
+    try {
+      expect(createWxApi().getPlatform()).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

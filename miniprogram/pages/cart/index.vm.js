@@ -19,6 +19,7 @@
  *      ../../utils/quote-view.js（报价区视图）；contracts/api-contract.yaml（Quote）
  */
 import { formatJpy } from '../../utils/price-format.js';
+import { MAX_CART_LINES } from '../../utils/cart-store.js';
 
 /**
  * 本地条目 → 行视图。
@@ -41,12 +42,13 @@ export function cartRows(items) {
  * 「去结算」按钮的状态与它下面那句话（B36 / AJ-219）。
  *
  * @param {{quoting?: unknown, hasTotal?: unknown, hasError?: unknown,
- *          errorCode?: unknown, splitRequired?: unknown}|null|undefined} s
+ *          errorCode?: unknown, splitRequired?: unknown, lineCount?: unknown}|null|undefined} s
  *   `quoting`       报价在途中（改了数量之后、新合计还没回来）
  *   `hasTotal`      当前 quote 有权威合计（薄壳传 `hasTotal(quote)`）
  *   `hasError`      上一次报价失败了
  *   `errorCode`     失败的业务错误码（MP3-09：区分"重试就好"与"必须改购物车"）
  *   `splitRequired` 服务端 `split_hint`：**已超过**单笔上限（B38 / AJ-221）
+ *   `lineCount`     购物车品种数（P2-31：40001 + 超 50 种 → 说"请移除一些"）
  * @returns {{disabled: boolean, hint: string}} hint 空串 = 不渲染那行提示
  *
  * @why 以前 `checkoutHint` 是**一个写死的常量**"运费与合计还在计算中"，
@@ -74,18 +76,43 @@ export function cartRows(items) {
  */
 const MUST_CHANGE_CART = new Set([40401, 40906, 40912]);
 
-/** 报价失败提示：区分"稍后重试就好"与"必须改购物车"（MP3-09）。 */
-export function quoteErrorHint(code) {
+/**
+ * 品种超限时的文案（P2-31）。
+ * @why 服务端对 >50 种商品回 40001（与其它参数错误同码），以前落到"合计未能获取，请稍后重试"——
+ *      重试一万次也是 40001。码相同所以要结合**行数**判断，而行数只有前端知道。
+ */
+export const TOO_MANY_LINES_TEXT = `购物车最多结算 ${String(MAX_CART_LINES)} 种商品，请移除一些后再结算`;
+
+/** 这次 40001 是不是"品种太多"（P2-31）。@limitation 只按行数推断：40001 的其它原因在行数没超时照旧。 */
+function tooManyLines(code, lineCount) {
+  return code === 40001 && Number.isInteger(lineCount) && lineCount > MAX_CART_LINES;
+}
+
+/** 报价失败提示：区分"稍后重试就好"与"必须改购物车"（MP3-09 / P2-31）。 */
+export function quoteErrorHint(code, lineCount) {
+  if (tooManyLines(code, lineCount)) return TOO_MANY_LINES_TEXT;
   return MUST_CHANGE_CART.has(code)
     ? '报价未通过，请调整数量或移除商品'
     : '合计未能获取，请稍后重试';
+}
+
+/**
+ * 报价错误条的主文案（P2-31）：品种超限换成可操作的话，其余原样用 `errorMessage` 的结果。
+ * @param {unknown} code 错误码
+ * @param {unknown} lineCount 购物车当前品种数
+ * @param {string} fallback `errorMessage(e)` 的结果
+ */
+export function quoteErrorText(code, lineCount, fallback) {
+  return tooManyLines(code, lineCount) ? TOO_MANY_LINES_TEXT : fallback;
 }
 
 export function checkoutGate(s) {
   const a = s !== null && typeof s === 'object' ? s : {};
   if (a.quoting === true) return { disabled: true, hint: '数量已改，正在重新计算…' };
   // ⚠️ 失败提示要看**码**：确定性失败（下架 / 超重 / 超上限）说"稍后重试"是句谎话（MP3-09）
-  if (a.hasError === true) return { disabled: true, hint: quoteErrorHint(a.errorCode) };
+  if (a.hasError === true) {
+    return { disabled: true, hint: quoteErrorHint(a.errorCode, a.lineCount) };
+  }
   // B38 / AJ-221：已超单笔上限 → 结算页会 40906，在购物车就把入口关掉
   // （让用户在**能改数量**的这一页解决，而不是跳过去再被弹回来）
   if (a.splitRequired === true) return { disabled: true, hint: '已超过单笔上限，请分两单下单' };

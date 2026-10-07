@@ -175,6 +175,11 @@ describe('project.config.json（MP1）', () => {
     }
   });
 
+  it('macOS 的 .DS_Store 不进上传包（P2-41：Finder 在每个目录自动生成，会被原样打包上传）', () => {
+    const pack = cfg.packOptions as { ignore?: { type: string; value: string }[] };
+    expect(pack.ignore).toContainEqual({ type: 'glob', value: '**/.DS_Store' });
+  });
+
   it('开发页不进发布包：骨架页 pages/index 与样板页 pages/comp 不登记、按目录排除（提审前 O-14，AJ-180）', () => {
     const pages = readJson('app.json').pages as string[];
     expect(pages).not.toContain('pages/index/index');

@@ -10,7 +10,8 @@
  * @see ./cart-store.js
  */
 import { describe, expect, it } from 'vitest';
-import { createCartStore } from './cart-store.js';
+import { MAX_QUOTE_ITEMS } from '../../server/src/domain/quote.js';
+import { MAX_CART_LINES, createCartStore } from './cart-store.js';
 import { createStorage } from './storage.js';
 import { createWxApi } from './wx-api.js';
 
@@ -137,5 +138,42 @@ describe('持久化（D-52）', () => {
     data['ws:cart'] = '{broken json';
     const cart = createCartStore({ storage });
     expect(cart.items()).toEqual([]);
+  });
+});
+
+describe('品种上限（P2-31：报价端 >50 行一律 40001）', () => {
+  /** 造 n 个不同商品的条目。 */
+  const lines = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      productId: `p-${String(i)}`,
+      qty: 1,
+      title: `商品${String(i)}`,
+    }));
+
+  it('上限与服务端 MAX_QUOTE_ITEMS 同值（漂移即红）', () => {
+    expect(MAX_CART_LINES).toBe(MAX_QUOTE_ITEMS);
+  });
+
+  it('第 51 种商品加不进去：返回 full，购物车不变、不落盘', () => {
+    const { storage, data } = memStorage();
+    const cart = createCartStore({ storage, initial: lines(MAX_CART_LINES) });
+    const before = data['ws:cart'];
+    const r = cart.add({ productId: 'p-new', qty: 1 });
+    expect(r).toEqual({ added: false, reason: 'full' });
+    expect(cart.items()).toHaveLength(MAX_CART_LINES);
+    expect(data['ws:cart']).toBe(before);
+  });
+
+  it('满 50 种时给已有商品加数量仍可以（上限只管品种数，不管件数）', () => {
+    const { storage } = memStorage();
+    const cart = createCartStore({ storage, initial: lines(MAX_CART_LINES) });
+    expect(cart.add({ productId: 'p-0', qty: 2 })).toEqual({ added: true });
+    expect(cart.items()[0]?.qty).toBe(3);
+  });
+
+  it('正常加购返回 added: true', () => {
+    const { storage } = memStorage();
+    const cart = createCartStore({ storage });
+    expect(cart.add(OIL)).toEqual({ added: true });
   });
 });

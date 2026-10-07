@@ -10,7 +10,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
-import { buyNowItem, detailView, shareCard } from './index.vm.js';
+import {
+  ADD_TAP_GUARD_MS,
+  acceptAddTap,
+  addFeedback,
+  buyNowItem,
+  detailView,
+  shareCard,
+} from './index.vm.js';
 
 /** 像真的商品（契约 Product 全形状：报关字段在，但视图不该透出它们）。 */
 const PRODUCT = {
@@ -171,5 +178,31 @@ describe('buyNowItem / shareCard（4-4）', () => {
       title: 'WaSelect',
       path: '/pages/detail/index?id=a%26b',
     });
+  });
+});
+
+describe('加购连点守卫与结果文案（P2-37 / P2-31）', () => {
+  it('第一次点（从没加过）→ 接受', () => {
+    expect(acceptAddTap(undefined, 1_000_000)).toBe(true);
+    expect(acceptAddTap(0, 1_000_000)).toBe(true);
+  });
+
+  it('守卫窗口内的第二下 → 忽略；过了窗口 → 接受', () => {
+    const t0 = 1_000_000;
+    expect(acceptAddTap(t0, t0 + 1)).toBe(false);
+    expect(acceptAddTap(t0, t0 + ADD_TAP_GUARD_MS - 1)).toBe(false);
+    expect(acceptAddTap(t0, t0 + ADD_TAP_GUARD_MS)).toBe(true);
+  });
+
+  it('时钟回拨（now < last）→ 接受（不把用户永久锁住）', () => {
+    expect(acceptAddTap(2_000_000, 1_000_000)).toBe(true);
+  });
+
+  it('加购结果 → 页面文案：成功 / 品种已满', () => {
+    expect(addFeedback({ added: true })).toEqual({ added: true, addNote: '' });
+    const full = addFeedback({ added: false, reason: 'full' });
+    expect(full.added).toBe(false);
+    expect(full.addNote).toContain('50');
+    expect(addFeedback(undefined)).toEqual({ added: false, addNote: '' });
   });
 });
