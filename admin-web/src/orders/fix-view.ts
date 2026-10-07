@@ -48,6 +48,10 @@ export function shipmentFixErrors(f: {
   return e;
 }
 
+/** 确认发货 / 确认改单号之前的提示（形状规则与服务端同一份：shared trackingNoRecognized）。 */
+export const TRACKING_SHAPE_WARNING =
+  '⚠️ 这个运单号的形状认不出（日本邮便应为 2 字母 + 9 位数字 + JP，如 EM123456789JP）：确认后会立刻发邮件给买家，请先核对';
+
 /** 发货 / 改运单号的响应里 `tracking_recognized === false` → 给一句核对提示（已保存，不回滚）。 */
 export function trackingWarning(resp: unknown): string {
   return (resp as { tracking_recognized?: unknown } | null)?.tracking_recognized === false

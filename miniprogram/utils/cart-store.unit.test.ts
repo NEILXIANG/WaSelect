@@ -38,6 +38,32 @@ const OIL = {
   priceJpy: 3600,
 };
 
+describe('syncPrices（契约 0.6.39 Quote.lines；三端联动模拟 2026-10-08）', () => {
+  it('🔴 报价里的当前单价覆盖加购时的快照价并落盘；没变 / 脏行 / 不在车里的 → 不动', () => {
+    const disk = new Map<string, unknown>();
+    const storage = {
+      getJson: (k: string) => disk.get(k) ?? null,
+      setJson: (k: string, v: unknown) => void disk.set(k, JSON.parse(JSON.stringify(v))),
+    };
+    const cart = createCartStore({ storage } as never);
+    cart.add({ productId: 'p-1', title: '香蕉蛋糕', image: '', priceJpy: 1400 } as never);
+    cart.add({ productId: 'p-2', title: '抹茶', image: '', priceJpy: 2380 } as never);
+    expect(
+      cart.syncPrices([
+        { product_id: 'p-1', unit_price_jpy: 1600 },
+        { product_id: 'p-2', unit_price_jpy: 2380 },
+        { product_id: 'p-x', unit_price_jpy: 1 },
+        { product_id: 'p-2', unit_price_jpy: -5 },
+        null,
+      ]),
+    ).toBe(true);
+    expect(cart.items().map((i) => (i as { priceJpy?: number }).priceJpy)).toEqual([1600, 2380]);
+    expect(JSON.stringify(disk.get([...disk.keys()][0] as string))).toContain('1600');
+    expect(cart.syncPrices([{ product_id: 'p-1', unit_price_jpy: 1600 }])).toBe(false);
+    expect(cart.syncPrices(undefined)).toBe(false);
+  });
+});
+
 describe('add（加购与合并）', () => {
   it('新商品进一行；读出来的 items 是副本（改返回值不改购物车）', () => {
     const cart = createCartStore({ storage: memStorage().storage });

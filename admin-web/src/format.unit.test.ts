@@ -34,8 +34,9 @@ describe('minorMoneyText（最小单位 → 主单位，B43）', () => {
   });
 
   it('🔴 JPY 无小数位：最小单位即主单位，不补 .00', () => {
-    expect(minorMoneyText(12800, 'JPY')).toBe('¥12,800');
-    expect(minorMoneyText(1234567, 'JPY')).toBe('¥1,234,567');
+    // 日元用「円」后缀，不用 ¥（¥ 是人民币，D-36；三端联动模拟 2026-10-08）
+    expect(minorMoneyText(12800, 'JPY')).toBe('12,800 円');
+    expect(minorMoneyText(1234567, 'JPY')).toBe('1,234,567 円');
   });
 
   it('CNY 用 CN¥ 而不是 ¥（¥ 已被日元占用，两个币种共一个符号只能靠猜）', () => {

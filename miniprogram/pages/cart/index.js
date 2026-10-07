@@ -157,10 +157,17 @@ Page({
       });
       if (isStale(seq, this.quoteSeq)) return;
       const quote = quoteView(res);
+      // 行价跟着报价走（契约 0.6.39 lines；三端联动模拟 2026-10-08）：店家改价后快照价过期，
+      // 原先同一屏"行价 1,400 円 / 商品合计 1,600 円"对不上
+      const repriced = app.globalData.cart.syncPrices(res?.lines);
       this.setData({
         quote,
         // 报价通过 → 清掉上一次的失效标记（剩余清单 4-7）
-        rows: markInvalid(this.data.rows, undefined, 0),
+        rows: markInvalid(
+          repriced ? cartRows(app.globalData.cart.items()) : this.data.rows,
+          undefined,
+          0,
+        ),
         gate: checkoutGate({
           hasTotal: hasTotal(quote),
           splitRequired: quote?.splitRequired === true,

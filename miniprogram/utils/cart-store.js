@@ -142,6 +142,30 @@ export function createCartStore(deps) {
       persist();
     },
 
+    /**
+     * 用报价返回的**当前单价**刷新快照价（契约 0.6.39 `Quote.lines`；三端联动模拟 2026-10-08）。
+     * @why 快照价是加购那一刻的：店家改价后购物车同一屏"行价 1,400 円 / 商品合计 1,600 円"对不上，
+     *      买家会以为算错了钱。报价是钱的唯一来源，行价跟着它走。
+     * @returns {boolean} 有任何一行变了（调用方据此重画行）
+     * @limitation 只改已有条目的价格；`lines` 缺失 / 形状不对 = 什么都不做（旧服务端兼容）。
+     */
+    syncPrices(lines) {
+      if (!Array.isArray(lines)) return false;
+      let changed = false;
+      for (const l of lines) {
+        const id = l?.product_id;
+        const price = l?.unit_price_jpy;
+        if (typeof id !== 'string' || !Number.isInteger(price) || price <= 0) continue;
+        const found = items.find((i) => i.productId === id);
+        if (found !== undefined && found.priceJpy !== price) {
+          found.priceJpy = price;
+          changed = true;
+        }
+      }
+      if (changed) persist();
+      return changed;
+    },
+
     /** 组装 quote / 建单的 items 形状（契约 OrderItemsInput）。 */
     toOrderItems() {
       return items.map((i) => ({ product_id: i.productId, qty: i.qty }));

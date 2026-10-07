@@ -63,7 +63,8 @@ describe('OrderFixActions', () => {
       body: { reason: '价格录错' },
     });
     expect(done.n).toBe(1);
-    expect(notices[0]).toContain('已取消');
+    expect(notices.at(-1)).toContain('已取消');
+    expect(notices[0]).toBe(''); // 提交前先清掉上一个动作的提示
   });
 
   it('🔴 改运单号：预填现值 → PATCH /shipment；服务端认不出形状 → 提示核对', async () => {
@@ -83,6 +84,8 @@ describe('OrderFixActions', () => {
       method: 'PATCH',
       body: { carrier: 'EMS', tracking_no: 'EM123456789JP', reason: '少录一位' },
     });
-    expect(notices[0]).toContain('核对');
+    expect(notices.at(-1)).toContain('核对');
+    // 确认那一步就提示形状认不出（发邮件之前）
+    expect(el.textContent).not.toContain('形状认不出'); // 已提交后确认区收起
   });
 });

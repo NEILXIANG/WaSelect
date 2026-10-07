@@ -84,6 +84,25 @@ describe('订单列表：刷新入口（ADM3-09）', () => {
     expect(gets()).toHaveLength(3);
   });
 
+  it('🔴 在搜索框里按回车 = 点"搜索"（三端联动模拟 2026-10-08：原先回车没反应）；输入法选字的回车不算', async () => {
+    const el = await open();
+    const input = keywordInput(el);
+    await type(input, 'Kenji');
+    const { act } = await import('react');
+    await act(async () => {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true }),
+      );
+    });
+    expect(gets()).toHaveLength(1);
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    await flush();
+    expect(gets()).toHaveLength(2);
+    expect(gets()[1]?.path).toContain('keyword=Kenji');
+  });
+
   it('🔴 "刷新"按钮：不依赖关键词或页码，点一次就重载一次', async () => {
     const el = await open();
     await click(button(el, '刷新'));

@@ -75,6 +75,8 @@ export function cartRows(items) {
  *      @tradeoff 分错类的代价是"多等一次"，把 40901 归进来则是"明明能成却拦住"——后者更糟。
  */
 const MUST_CHANGE_CART = new Set([40401, 40906, 40912]);
+/** 全局停售（AJ-384）。 */
+const SALES_PAUSED_CODE = 40916;
 
 /**
  * 品种超限时的文案（P2-31）。
@@ -91,6 +93,8 @@ function tooManyLines(code, lineCount) {
 /** 报价失败提示：区分"稍后重试就好"与"必须改购物车"（MP3-09 / P2-31）。 */
 export function quoteErrorHint(code, lineCount) {
   if (tooManyLines(code, lineCount)) return TOO_MANY_LINES_TEXT;
+  // 停售（40916）：不是"稍后重试"能解决的，也不是购物车的问题（三端联动模拟 2026-10-08）
+  if (code === SALES_PAUSED_CODE) return '店铺暂停接单中，恢复后即可结算';
   return MUST_CHANGE_CART.has(code)
     ? '报价未通过，请调整数量或移除商品'
     : '合计未能获取，请稍后重试';

@@ -71,12 +71,32 @@ afterEach(async () => {
   mounted = undefined;
 });
 
+/** 上下架是两步（点一下出「确认」，再点才生效）。 */
+async function toggleStatus(el: HTMLElement, label: '下架' | '上架'): Promise<void> {
+  await click(button(el, label));
+  await click(button(el, `确认${label}`));
+}
+
+describe('商品列表：上下架两步确认（三端联动模拟 2026-10-08）', () => {
+  it('🔴 只点一下「下架」→ 不发请求，出现「确认下架 / 取消」；点取消回到原样', async () => {
+    patchFails = false;
+    const el = await open();
+    await click(button(el, '下架'));
+    expect(patches).toHaveLength(0);
+    expect(button(el, '确认下架')).not.toBeNull();
+    await click(button(el, '取消'));
+    expect(button(el, '确认下架')).toBeNull();
+    expect(patches).toHaveLength(0);
+    expect(statusCell(el)).toBe('在售');
+  });
+});
+
 describe('商品列表：上下架后的状态显示（AJ-231）', () => {
   it('🔴 下架成功：状态列变成"已下架"，按钮变成"上架"——两者说同一件事', async () => {
     patchFails = false;
     const el = await open();
     expect(statusCell(el)).toBe('在售');
-    await click(button(el, '下架'));
+    await toggleStatus(el, '下架');
     expect(patches).toHaveLength(1);
     expect(patches[0]!.body).toEqual({ status: 'offline' });
     expect(statusCell(el)).toBe('已下架');
@@ -86,7 +106,7 @@ describe('商品列表：上下架后的状态显示（AJ-231）', () => {
   it('🔴 下架失败：状态列与按钮一起回到"在售 / 下架"，并显示错误', async () => {
     patchFails = true;
     const el = await open();
-    await click(button(el, '下架'));
+    await toggleStatus(el, '下架');
     expect(statusCell(el)).toBe('在售');
     expect(button(el, '下架')).not.toBeNull();
     expect(el.querySelector('.error')?.textContent).toContain('服务器内部错误');
@@ -95,8 +115,8 @@ describe('商品列表：上下架后的状态显示（AJ-231）', () => {
   it('连续两次：下架再上架，状态列每次都跟着变', async () => {
     patchFails = false;
     const el = await open();
-    await click(button(el, '下架'));
-    await click(button(el, '上架'));
+    await toggleStatus(el, '下架');
+    await toggleStatus(el, '上架');
     expect(patches.map((p) => p.body)).toEqual([{ status: 'offline' }, { status: 'active' }]);
     expect(statusCell(el)).toBe('在售');
   });
@@ -111,7 +131,7 @@ describe('商品列表：上下架后编辑（A-03）', () => {
   it('🔴 下架成功后点编辑，传给编辑页的是服务端最新的 updated_at', async () => {
     patchFails = false;
     const el = await open();
-    await click(button(el, '下架'));
+    await toggleStatus(el, '下架');
     await flush();
     await click(button(el, '编辑'));
     expect(edited.at(-1)?.['updated_at']).toBe('2026-10-05T00:00:00.000Z');

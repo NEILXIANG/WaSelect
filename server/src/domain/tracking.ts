@@ -12,56 +12,27 @@
  * @why locale=en：收件人在美国。
  * @limitation 只认日本邮便（MVP 唯一承运商，见 E12）；接别的承运商在 CARRIERS 表里加一行。
  */
-const S10_JP = /^[A-Z]{2}\d{9}JP$/;
+import {
+  isJapanPostCarrier,
+  normalizeTrackingNo,
+  S10_JP,
+  trackingNoRecognized,
+} from '@waselect/shared';
 
-const JAPAN_POST = {
-  names: [
-    'ems',
-    'epacket',
-    'e-packet',
-    'japan post',
-    'japanpost',
-    'jppost',
-    'jp post',
-    '日本郵便',
-    '日本邮便',
-    '国際小包',
-    '国际小包',
-  ],
-  url: (n: string): string =>
-    `https://trackings.post.japanpost.jp/services/srv/search?requestNo1=${encodeURIComponent(n)}` +
-    '&search.x=1&search.y=1&locale=en&startingUrlPatten=',
-};
+/** 形状判定与日本邮便名单住在 shared（管理端确认发货前也要用，三端联动模拟 2026-10-08）。 */
+export { trackingNoRecognized };
 
-function matchesWord(carrier: string, name: string): boolean {
-  if (!/^[a-z -]+$/.test(name)) return carrier.includes(name);
-  const escaped = name.replace(/[-\s]/g, (m) => (m === '-' ? '\\-' : '\\s'));
-  return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(carrier);
-}
+const japanPostUrl = (n: string): string =>
+  `https://trackings.post.japanpost.jp/services/srv/search?requestNo1=${encodeURIComponent(n)}` +
+  '&search.x=1&search.y=1&locale=en&startingUrlPatten=';
 
 export function trackingUrl(carrier: string | null, trackingNo: string | null): string | null {
-  const n = (trackingNo ?? '').replace(/\s+/g, '').toUpperCase();
+  const n = normalizeTrackingNo(trackingNo);
   if (n === '') return null;
-  if (S10_JP.test(n)) return JAPAN_POST.url(n);
-  const c = (carrier ?? '').trim().toLowerCase();
+  if (S10_JP.test(n)) return japanPostUrl(n);
   // 扫描 A-04：按整词比（拉丁词用词边界，中日文名本身就是完整词），否则 "Yamato Transport Systems" 含 ems 也会命中
-  if (JAPAN_POST.names.some((name) => matchesWord(c, name))) return JAPAN_POST.url(n);
+  if (isJapanPostCarrier(carrier)) return japanPostUrl(n);
   return null;
-}
-
-/**
- * 运单号**形状**是否认得出（第三轮缺口 P1-10，AJ-386）：发货 / 改单号的响应带上它，管理端据此提示"请核对"，**不拦**。
- * @why 不能用 `trackingUrl !== null` 判：承运商名是日本邮便时它不看单号就给链接（`=HYPERLINK(...)` 也会"认得出"）。
- * @why 日本邮便必须是 S10（两字母 + 9 位数字 + JP）；其它承运商不认识格式，只排除明显不是单号的（非字母数字、过短 / 过长）。
- * @limitation 只是形状：形状对的错号（少一位以外的笔误）照样认得出。
- */
-export function trackingNoRecognized(carrier: string | null, trackingNo: string | null): boolean {
-  const n = (trackingNo ?? '').replace(/\s+/g, '').toUpperCase();
-  if (n === '') return false;
-  const c = (carrier ?? '').trim().toLowerCase();
-  if (S10_JP.test(n)) return true;
-  if (JAPAN_POST.names.some((name) => matchesWord(c, name))) return false;
-  return /^[A-Z0-9-]{6,30}$/.test(n);
 }
 
 /** 响应展开用：有链接 → `{tracking_url}`，没有 → `{}`（整键省略，与 tracking_no 同口径）。 */

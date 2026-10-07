@@ -505,9 +505,12 @@ export function productConflictRows(form: unknown, latest: unknown): ConflictRow
     ['合规标签', 'complianceTags'],
   ];
   const text = (v: unknown): string => (Array.isArray(v) ? v.join('、') : String(v ?? ''));
+  // 分类显示中文名（三端联动模拟 2026-10-08：对照表里原样显示 daily）
+  const show = (key: keyof ProductForm, v: unknown): string =>
+    key === 'category' ? (CATEGORY_LABELS[v as ProductCategory] ?? text(v)) : text(v);
   const rows = fields.map(([label, key]) => {
-    const a = text(mine[key]);
-    const b = text(theirs[key]);
+    const a = show(key, mine[key]);
+    const b = show(key, theirs[key]);
     return { label, mine: a, latest: b, differs: a !== b };
   });
   const a = `${mine.images.length} 张`;

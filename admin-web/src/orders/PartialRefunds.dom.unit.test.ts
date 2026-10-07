@@ -120,7 +120,7 @@ describe('PartialRefunds', () => {
       await type(el.querySelector('input[name="partial-reason"]'), '缺一件');
       await click(button(el, '部分退款'));
       await click(button(el, '确认部分退款'));
-      expect(messages).toEqual(['服务器内部错误', `notice:${expected}`]);
+      expect(messages).toEqual(['notice:', '服务器内部错误', `notice:${expected}`]); // 先清上一个动作的提示
       await mounted.unmount();
       mounted = undefined;
     }

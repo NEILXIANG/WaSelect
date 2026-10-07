@@ -64,7 +64,9 @@ export function ProductFormPage({
     source === null ? productFormModel(null) : productFormModel(source),
   );
   // 打开编辑页那一刻的库存：保存时只有它被改动了才提交 stock（toProductInput @see AJ-175）
-  const [originalStock] = useState<string | undefined>(() =>
+  // ⚠️ 可更新：「加载最新值对照」后要换成最新库存（三端联动实测 2026-10-08）——它是 expected_stock 的来源，
+  //    不换的话核对后再保存仍带打开时的旧库存，服务端永远 40914，运营只能退出重进。
+  const [originalStock, setOriginalStock] = useState<string | undefined>(() =>
     source === null ? undefined : productFormModel(source).stock,
   );
   // 打开编辑页那一刻的版本凭据：保存时随 PUT 一起发，服务端据它判定"你改的是不是最新一版"
@@ -157,6 +159,8 @@ export function ProductFormPage({
       setLatest(fresh);
       // 换成最新一版的凭据：之后保存 = 看过对方改动后，用你的内容覆盖最新一版
       setExpectedUpdatedAt(sourceUpdatedAt(fresh));
+      // 库存凭据同步换成最新值：之后保存 = "看过最新库存后，用我填的数覆盖"（与上一行同一语义）
+      setOriginalStock(productFormModel(fresh).stock);
       setError('');
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));

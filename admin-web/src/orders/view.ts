@@ -96,6 +96,10 @@ export const EVENT_STATUS_LABELS: Readonly<Record<string, string>> = {
   // AJ-383 部分退款的两条事件（server/src/app/partial-refund.ts）；第三轮缺口 P2-50 补
   partial_refunded: '部分退款成功',
   partial_failed: '部分退款失败',
+  // 三端联动模拟 2026-10-08：这三条原先原样显示英文
+  shipment_fixed: '改运单号',
+  refunded_by_parts: '部分退款已退满',
+  test_archived: '测试单归档',
 };
 
 /** 闸门结果：不能操作时必须有**具体原因**（按钮禁用也要能 tooltip 出来）。 */

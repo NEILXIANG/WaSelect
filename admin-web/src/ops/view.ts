@@ -166,7 +166,7 @@ const SAMPLE_JPY = 10_000;
  *      以及"两个币种值串位"这类区间挡不住的错误。阈值取 ≥1.5 或 ≤0.67（约 ±50%）——
  *      日波动超过这个幅度在主要货币对上极罕见。
  *
- * @why 同时给一个**样例金额**（¥10,000 ≈ USD 67.00）而不是只给倍数：
+ * @why 同时给一个**样例金额**（10,000 円 ≈ USD 67.00）而不是只给倍数：
  *      运营核对的是"这个数看起来像不像我认识的价格"，倍数需要心算，金额一眼就能看出来。
  *
  * @limitation 一：**不做硬拦截**，只标红并要求勾选确认。
@@ -195,7 +195,8 @@ export function fxPreview(args: unknown): {
   }
 
   // 样例金额：¥10,000 折成该币种的主单位（USD / CNY 都是 2 位小数）
-  const sampleText = `¥${SAMPLE_JPY.toLocaleString('en-US')} ≈ ${quote} ${(SAMPLE_JPY * raw).toFixed(2)}`;
+  // 日元写「円」（¥ 在本项目口径里是人民币，D-36）
+  const sampleText = `${SAMPLE_JPY.toLocaleString('en-US')} 円 ≈ ${quote} ${(SAMPLE_JPY * raw).toFixed(2)}`;
 
   if (typeof current !== 'number' || !Number.isFinite(current) || current <= 0) {
     // ⚠️ 没有基准时**不能**当成"不可疑"（AJ-229）：上线前第一次录 USD、或列表没加载出来，

@@ -22,6 +22,8 @@ interface State {
   paused: boolean;
   reason?: string;
   actor?: string;
+  /** 操作人邮箱（服务端按 actor 查得；三端联动模拟 2026-10-08）。 */
+  actor_email?: string;
   updated_at?: string;
 }
 
@@ -63,12 +65,16 @@ export function SalesPausePanel({ api }: { api: AdminApi }) {
         setError('已经是该状态（可能刚被其他管理员修改）');
         return;
       }
+      const written = (await api({
+        path: '/api/v1/admin/ops/sales-pause',
+        method: 'PUT',
+        body: { paused: target, reason: reason.trim() },
+      })) as State;
+      // 再取一次：GET 才带操作人邮箱（actor_email）；取失败就用 PUT 的回包，不让状态行空着
       setState(
-        (await api({
-          path: '/api/v1/admin/ops/sales-pause',
-          method: 'PUT',
-          body: { paused: target, reason: reason.trim() },
-        })) as State,
+        ((await api({ path: '/api/v1/admin/ops/sales-pause', method: 'GET' }).catch(
+          () => written,
+        )) as State) ?? written,
       );
       setReason('');
       setTarget(null);
@@ -88,8 +94,8 @@ export function SalesPausePanel({ api }: { api: AdminApi }) {
         <p className="muted">加载中…</p>
       ) : paused ? (
         <p className="error">
-          ⛔ 已暂停接单：买家无法报价、下单、付款。原因：{state.reason ?? '—'}（{state.actor ?? '—'}
-          ，{formatJst(state.updated_at)}）
+          ⛔ 已暂停接单：买家无法报价、下单、付款。原因：{state.reason ?? '—'}（
+          {state.actor_email ?? state.actor ?? '—'}，{formatJst(state.updated_at)}）
         </p>
       ) : (
         <p className="muted">

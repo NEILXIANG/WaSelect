@@ -161,6 +161,50 @@ describe('商品编辑：保存撞上 40914（ADM3-02）', () => {
     });
   });
 
+  it('🔴 三端联动实测：改库存撞 40914（期间被买走一件）→ 加载最新值 → 再保存带**最新库存**作 expected_stock（否则无限冲突）', async () => {
+    // 浏览器实测（2026-10-08）：运营打开时库存 12，期间买家买走一件（库里 11），运营改成 100 保存 → 40914；
+    // 点「加载最新值对照」后再保存，旧实现仍带 expected_stock=12 → 服务端再 40914，永远保存不了。
+    const latest = { ...SOURCE, stock: 11, updated_at: '2026-10-02T00:00:00.000Z' };
+    const reqs: Array<{ path: string; method?: string; body?: unknown }> = [];
+    let puts = 0;
+    const api = async (req: {
+      path: string;
+      method?: string;
+      body?: unknown;
+    }): Promise<unknown> => {
+      reqs.push(req);
+      if (req.method === 'PUT') {
+        puts += 1;
+        if (puts === 1) throw new ApiError(40914, '这条内容在你打开之后被别人改过了', 't');
+        return { id: 'p-1' };
+      }
+      return { items: [latest], total: 1 };
+    };
+    mounted = await mount(
+      createElement(ProductFormPage, {
+        api: api as never,
+        baseUrl: 'http://localhost',
+        getToken: () => 'tk',
+        productId: 'p-1',
+        source: SOURCE as never,
+        onDone: () => undefined,
+      }),
+    );
+    const el = mounted.el;
+    await typeInto(field(el, '库存'), '100');
+    await click(button(el, '保存'));
+    expect(reqs.filter((r) => r.method === 'PUT')[0]?.body).toMatchObject({
+      stock: 100,
+      expected_stock: 12,
+    });
+    await click(button(el, '加载最新值对照'));
+    await click(button(el, '保存'));
+    expect(reqs.filter((r) => r.method === 'PUT').at(-1)?.body).toMatchObject({
+      stock: 100,
+      expected_stock: 11,
+    });
+  });
+
   it('保存成功 → 回列表（对照组：上一条的"不回列表"是因为失败，不是因为压根没提交）', async () => {
     putCode = 0;
     const el = await open();

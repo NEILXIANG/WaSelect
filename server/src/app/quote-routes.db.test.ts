@@ -156,6 +156,12 @@ describe('POST /orders/quote（接线）', () => {
         CNY: toMinor(total, toRateInt('0.049')),
       });
       expect(r.json['split_hint']).toBe(false);
+      // 0.6.39（三端联动模拟 2026-10-08）：逐行**当前**单价——购物车据此刷新加购时的快照价，
+      // 否则同一屏"行价 1,400 円 / 商品合计 1,600 円"对不上
+      expect(r.json['lines']).toEqual([
+        { product_id: 'p-knife', unit_price_jpy: 8800 },
+        { product_id: 'p-cup', unit_price_jpy: 3200 },
+      ]);
       expect(r.json['free_shipping_remaining_jpy']).toBeUndefined(); // 未配置包邮 → 字段不出现
       // 流 A：报价留一条 info（高频只读，不进审计流）
       const log = srv.sink.find('quote_computed')[0];

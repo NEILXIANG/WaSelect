@@ -79,7 +79,15 @@ export function mountSalesPauseRoutes(app: Express, deps: SalesPauseRoutesDeps):
   const guard = requireRole('admin', deps.auth, { identity: deps.identity });
 
   app.get('/api/v1/admin/ops/sales-pause', guard, (_req, res, next) => {
-    readSalesPause(deps.db).then((s) => res.json(s), next);
+    void (async () => {
+      const s = await readSalesPause(deps.db);
+      // 带上操作人邮箱（三端联动模拟 2026-10-08）：状态行原先只显示 `admin:adm-d2b4…`，看不出是谁停的。
+      // 只在管理端 GET 查，不进守卫热路径；查不到（账号已删）就只给原始 actor。
+      const id = s.actor?.startsWith('admin:') === true ? s.actor.slice('admin:'.length) : '';
+      const [u] = id === '' ? [] : await deps.db`select email from users where id = ${id}`;
+      const email = u?.['email'];
+      res.json({ ...s, ...(typeof email === 'string' ? { actor_email: email } : {}) });
+    })().catch(next);
   });
 
   app.put('/api/v1/admin/ops/sales-pause', guard, (req, res, next) => {

@@ -134,6 +134,12 @@ export function mountQuoteRoutes(app: Express, deps: QuoteRoutesDeps): void {
               ? { free_shipping_remaining_jpy: q.freeShippingRemainingJpy }
               : {}),
             split_hint: q.splitHint,
+            // 逐行当前单价（0.6.39，三端联动模拟 2026-10-08）：小程序购物车存的是加购那一刻的快照价，
+            // 店家改价后同一屏"行价 / 商品合计"对不上；有了它前端就地刷新快照。只读展示，不参与计价。
+            lines: items.map((i) => ({
+              product_id: i.productId,
+              unit_price_jpy: products.find((p) => p.productId === i.productId)?.priceJpy ?? 0,
+            })),
           });
         } catch (e) {
           next(e);

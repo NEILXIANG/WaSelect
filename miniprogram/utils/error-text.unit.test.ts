@@ -125,3 +125,12 @@ describe('按码给出可执行的话（P2-40）', () => {
     );
   });
 });
+
+describe('停售 40916（三端联动模拟 2026-10-08）', () => {
+  it('说清"暂时不能付、到期自动关、不扣款、恢复后重下"，而不是一句"稍后再来"', () => {
+    const t = errorMessage({ code: 40916, message: '店铺暂停接单，请稍后再来' });
+    expect(t).toContain('暂停接单');
+    expect(t).toContain('自动关闭');
+    expect(t).toContain('不扣款');
+  });
+});

@@ -22,6 +22,14 @@ import {
   refundableMinor,
 } from './partial-refund-view.js';
 
+/**
+ * 金额框示例按币种的小数位给（三端联动模拟 2026-10-08：日元单写着"如 10.50"，日元没有小数）。
+ */
+function amountPlaceholder(currency: string): string {
+  if (currency === '') return '金额';
+  return currency === 'JPY' ? '金额（JPY，整数，如 500）' : `金额（${currency}，如 10.50）`;
+}
+
 export interface PartialRefundsProps {
   api: AdminApi;
   orderId: string;
@@ -53,6 +61,7 @@ export function PartialRefunds({
 
   const run = async (fn: () => Promise<unknown>, refundId?: string): Promise<void> => {
     setBusy(true);
+    onNotice?.(''); // 上一个动作的提示不留到这次
     const knownIds = rows.map((r) => r.id);
     let failure: unknown = undefined;
     try {
@@ -62,7 +71,11 @@ export function PartialRefunds({
     }
     setBusy(false);
     const fresh = await onDone();
-    if (failure === undefined) return;
+    if (failure === undefined) {
+      // 成功也要说一句（原先沿用上一个动作的提示，运营会以为"又重发了一封邮件"）
+      onNotice?.('部分退款已提交：结果以上方记录的状态为准（处理中的可点「同步」）');
+      return;
+    }
     onError(failure instanceof ApiError ? failure.message : String(failure));
     const notice = partialRefundErrorNotice({
       code: failure instanceof ApiError ? failure.code : 0,
@@ -127,7 +140,7 @@ export function PartialRefunds({
       <input
         className="input"
         name="partial-amount"
-        placeholder={currency === '' ? '金额' : `金额（${currency}，如 10.50）`}
+        placeholder={amountPlaceholder(currency)}
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
       />

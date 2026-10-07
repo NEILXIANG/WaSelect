@@ -108,6 +108,11 @@ describe('全局停售开关', () => {
     });
     expect(on.status).toBe(200);
     expect(on.json).toMatchObject({ paused: true, reason: '价格录错，紧急止血' });
+    // 三端联动模拟 2026-10-08：状态行要能看出是谁停的（原先只有 admin:<内部 id>）
+    expect((await req('GET', '/api/v1/admin/ops/sales-pause', admin)).json).toMatchObject({
+      actor: 'admin:u-admin',
+      actor_email: 'admin@example.com',
+    });
     expect((await req('POST', '/api/v1/orders/quote', buyer, ITEMS)).json['code']).toBe(40916);
     expect((await req('POST', '/api/v1/orders', buyer, ITEMS)).json['code']).toBe(40916);
     expect(

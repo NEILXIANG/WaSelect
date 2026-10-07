@@ -468,4 +468,17 @@ describe('订单详情：发货两步确认（P2-51）', () => {
     expect(shipPosts()).toHaveLength(1);
     expect(shipPosts()[0]?.body).toEqual({ carrier: 'Japan Post', tracking_no: 'EJ987654321JP' });
   });
+
+  it('🔴 运单号形状认不出时，**确认之前**就提示（发货邮件随确认发出，事后提示已晚；三端联动模拟 2026-10-08）', async () => {
+    status = 'paid';
+    const el = await open();
+    await type(el.querySelector('input[placeholder^="承运商"]'), 'Japan Post EMS');
+    await type(el.querySelector('input[placeholder="运单号"]'), 'EM12345678JP'); // 少一位
+    await click(button(el, '发货'));
+    expect(el.textContent).toContain('形状认不出');
+    expect(shipPosts()).toHaveLength(0);
+    await type(el.querySelector('input[placeholder="运单号"]'), 'EM123456789JP');
+    await click(button(el, '发货'));
+    expect(el.textContent).not.toContain('形状认不出');
+  });
 });

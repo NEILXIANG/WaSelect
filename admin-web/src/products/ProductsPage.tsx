@@ -46,6 +46,12 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
   const [error, setError] = useState('');
   /** 正在执行上下架的商品 id（按钮禁用态，空串 = 没有）。 */
   const [busyId, setBusyId] = useState('');
+  /**
+   * 待确认上下架的商品 id（三端联动模拟 2026-10-08）。
+   * @why 原先一点即生效，且生效后列表按更新时间重排、被操作的行跳到第一行——
+   *      原位置换成了另一件商品，连点两下就会误下架（或误上架）另一件。改成两步：点一下出「确认」，再点才生效。
+   */
+  const [confirmId, setConfirmId] = useState('');
 
   /**
    * 请求序号（A-05）：翻页 / 切筛选时，晚到的旧响应不得覆盖新状态。
@@ -169,14 +175,33 @@ export function ProductsPage({ api, onEdit }: ProductsPageProps) {
                 >
                   编辑
                 </button>
-                <button
-                  type="button"
-                  className="link"
-                  disabled={busyId === row.id}
-                  onClick={() => void toggle(row)}
-                >
-                  {row.online ? '下架' : '上架'}
-                </button>
+                {confirmId === row.id ? (
+                  <>
+                    <button
+                      type="button"
+                      className="link"
+                      disabled={busyId === row.id}
+                      onClick={() => {
+                        setConfirmId('');
+                        void toggle(row);
+                      }}
+                    >
+                      {row.online ? '确认下架' : '确认上架'}
+                    </button>
+                    <button type="button" className="link" onClick={() => setConfirmId('')}>
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="link"
+                    disabled={busyId === row.id}
+                    onClick={() => setConfirmId(row.id)}
+                  >
+                    {row.online ? '下架' : '上架'}
+                  </button>
+                )}
               </td>
             </tr>
           ))}

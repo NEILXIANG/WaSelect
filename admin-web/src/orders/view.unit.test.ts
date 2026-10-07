@@ -166,7 +166,7 @@ describe('eventStatusText（事件流：订单状态 + 管理事件伪状态）'
     expect(eventStatusText('partial_failed')).toBe('部分退款失败');
   });
 
-  it('十种伪状态全部配了文案（服务端新增一种而这里没跟 → 那一行退回英文，看得见但仍是缺口）', () => {
+  it('十三种伪状态全部配了文案（服务端新增一种而这里没跟 → 那一行退回英文，看得见但仍是缺口）', () => {
     expect(Object.keys(EVENT_STATUS_LABELS).sort()).toEqual([
       'address_changed',
       'dispute_closed',
@@ -178,6 +178,9 @@ describe('eventStatusText（事件流：订单状态 + 管理事件伪状态）'
       'pay_create_failed',
       'refund_failed',
       'refund_pending',
+      'refunded_by_parts',
+      'shipment_fixed',
+      'test_archived',
     ]);
   });
 

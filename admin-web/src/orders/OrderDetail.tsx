@@ -41,7 +41,8 @@ import { formatJst, moneyText } from '../format.js';
 import { OrderAddressForm } from './OrderAddressForm.js';
 import { PartialRefunds } from './PartialRefunds.js';
 import { OrderFixActions } from './OrderFixActions.js';
-import { trackingWarning } from './fix-view.js';
+import { TRACKING_SHAPE_WARNING, trackingWarning } from './fix-view.js';
+import { trackingNoRecognized } from '@waselect/shared';
 import {
   addressSummary,
   emptyRefundForm,
@@ -130,6 +131,7 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
       return;
     }
     setBusy('ship');
+    setNotice('');
     try {
       const resp = await shipOrder(api, id, toShipBody(ship));
       setShip(emptyShipForm());
@@ -419,6 +421,10 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 <span className="muted">
                   核对：{ship.carrier.trim()} / {ship.trackingNo.trim()}
                 </span>
+                {/* 确认**之前**就提示（三端联动模拟 2026-10-08）：发货邮件随确认一起发出，事后提示已晚 */}
+                {!trackingNoRecognized(ship.carrier, ship.trackingNo) && (
+                  <span className="error">{TRACKING_SHAPE_WARNING}</span>
+                )}
                 <button
                   type="button"
                   className="btn"

@@ -57,6 +57,15 @@ export function OrdersPage({ api }: OrdersPageProps) {
    *              计数只要加进 deps 就永远有效。
    */
   const [reloadTick, setReloadTick] = useState(0);
+  /** 提交搜索（按钮与回车共用）。 */
+  const search = (): void => {
+    const next = keyword.trim();
+    // ⚠️ 关键词没变也要重载（ADM3-09）：只 setApplied 的话，值没变 → load 不变 → 不请求。
+    //    运营点"搜索"的意图里本来就包含"再查一次"，不该被 react 的依赖比较吞掉。
+    if (next === applied) setReloadTick((t) => t + 1);
+    else setApplied(next);
+    setPage(1);
+  };
 
   /** 请求序号（A-05）：晚到的旧响应不得覆盖新列表，只有最后一次发起的请求能写。 */
   const reqSeq = useRef(0);
@@ -154,19 +163,13 @@ export function OrdersPage({ api }: OrdersPageProps) {
           maxLength={SEARCH_KEYWORD_MAX_LENGTH}
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
-        />
-        <button
-          type="button"
-          className="btn"
-          onClick={() => {
-            const next = keyword.trim();
-            // ⚠️ 关键词没变也要重载（ADM3-09）：只 setApplied 的话，值没变 → load 不变 → 不请求。
-            //    运营点"搜索"的意图里本来就包含"再查一次"，不该被 react 的依赖比较吞掉。
-            if (next === applied) setReloadTick((t) => t + 1);
-            else setApplied(next);
-            setPage(1);
+          // 回车即搜索（三端联动模拟 2026-10-08：输入单号后按回车没反应，运营以为搜不到）。
+          // ⚠️ 输入法合成中的回车是在选字，不是提交（与商品标签框 A-09 同口径）
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) search();
           }}
-        >
+        />
+        <button type="button" className="btn" onClick={search}>
           搜索
         </button>
         <button

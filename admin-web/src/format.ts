@@ -33,7 +33,7 @@ export function moneyText(jpy: unknown): string {
  *      "¥1,234" 到底是 1,234 円还是 12.34 元人民币，只能靠上下文猜——
  *      而金额猜错的代价是客服给客户报错数字。宁可符号笨一点。
  */
-const CURRENCY_SYMBOL: Readonly<Record<string, string>> = { JPY: '¥', USD: '$', CNY: 'CN¥' };
+const CURRENCY_SYMBOL: Readonly<Record<string, string>> = { USD: '$', CNY: 'CN¥' };
 
 /**
  * **最小单位整数** → 带币种符号的展示文案（B43 / AJ-214）：`3350 + USD` → `$33.50`。
@@ -58,7 +58,11 @@ export function minorMoneyText(amount: unknown, currency: unknown): string {
   const major = digits === 0 ? String(abs) : (abs / 10 ** digits).toFixed(digits);
   const [int = '0', frac] = major.split('.');
   const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${neg ? '-' : ''}${symbol}${frac === undefined ? grouped : `${grouped}.${frac}`}`;
+  const body = frac === undefined ? grouped : `${grouped}.${frac}`;
+  // 日元写「円」后缀（三端联动模拟 2026-10-08）：`¥` 在本项目口径里是人民币（D-36），
+  // 管理端详情原先显示 `mock · ¥2,700`，与同页「合计 2,700 円」并排，运营会读成人民币
+  if (key === 'JPY') return `${neg ? '-' : ''}${body} 円`;
+  return `${neg ? '-' : ''}${symbol}${body}`;
 }
 
 /**

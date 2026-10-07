@@ -219,7 +219,7 @@ describe('fxPreview（A8：保存前的量级核对）', () => {
     expect(p.risky).toBe(true);
     expect(p.ratio).toBeCloseTo(10, 6);
     expect(p.reason).toContain('倍');
-    expect(p.sampleText).toBe('¥10,000 ≈ USD 670.00');
+    expect(p.sampleText).toBe('10,000 円 ≈ USD 670.00');
   });
 
   it('🔴 小数点错位（1/10）→ 同样标红（少收 90% 的方向更危险）', () => {
@@ -232,7 +232,7 @@ describe('fxPreview（A8：保存前的量级核对）', () => {
     const p = fxPreview({ quote: 'USD', rawRate: '0.0067', currentRate: null });
     expect(p.ratio).toBeNull();
     expect(p.risky).toBe(false);
-    expect(p.sampleText).toBe('¥10,000 ≈ USD 67.00');
+    expect(p.sampleText).toBe('10,000 円 ≈ USD 67.00');
   });
 
   it('填了非法值 → 给不出预览（由 fxFormErrors 负责报错，这里不重复造文案）', () => {

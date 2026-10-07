@@ -36,6 +36,7 @@ export function errorMessage(err) {
   // P2-40：两个"服务端原文说不清下一步"的码，换成能照着做的话
   if (isObj && err.code === BUSY_CODE) return busyText(err.data);
   if (isObj && err.code === FORBIDDEN_CODE) return FORBIDDEN_TEXT;
+  if (isObj && err.code === SALES_PAUSED_CODE) return SALES_PAUSED_TEXT;
   const fromMessage = isObj && typeof err.message === 'string' ? err.message.trim() : '';
   const fromErrMsg =
     fromMessage === '' && isObj && typeof err.errMsg === 'string' ? err.errMsg.trim() : '';
@@ -72,6 +73,15 @@ function busyText(data) {
  */
 const FORBIDDEN_CODE = 40301;
 const FORBIDDEN_TEXT = '账号已被限制使用，如有疑问请联系客服';
+
+/**
+ * 40916 全局停售（AJ-384）。
+ * @why 三端联动模拟（2026-10-08）：停售中支付页倒计时照走、付款被拦，原文"请稍后再来"让买家一直重试到订单过期。
+ *      说清楚：未付款的单到期会自动关，恢复后重新下单即可（没扣钱）。
+ */
+const SALES_PAUSED_CODE = 40916;
+const SALES_PAUSED_TEXT =
+  '店铺暂停接单中，暂时无法下单或付款；未付款的订单到期会自动关闭（不扣款），恢复后重新下单即可';
 
 /**
  * 报障小字（剩余清单 4-6 / M9）：`错误码 40002 · 链路 abcdef12`（网络层再附宿主原因）。

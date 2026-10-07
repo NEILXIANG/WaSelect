@@ -11,7 +11,14 @@ import { useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { cancelOrder, fixShipment, type AdminApi } from './api.js';
-import { cancelGate, shipmentFixErrors, shipmentFixGate, trackingWarning } from './fix-view.js';
+import { trackingNoRecognized } from '@waselect/shared';
+import {
+  cancelGate,
+  shipmentFixErrors,
+  shipmentFixGate,
+  TRACKING_SHAPE_WARNING,
+  trackingWarning,
+} from './fix-view.js';
 
 export interface OrderFixActionsProps {
   api: AdminApi;
@@ -41,6 +48,16 @@ export function OrderFixActions({
   const [busy, setBusy] = useState(false);
 
   if (!cancel.ok && !fix.ok) return null;
+
+  // 输入即清掉该栏旧错误（三端联动模拟 2026-10-08：填好原因后红字「必填」还挂着）
+  const clearError = (k: string): void => {
+    setConfirming(false);
+    setErrors((e) => {
+      const rest = { ...e };
+      delete rest[k];
+      return rest;
+    });
+  };
 
   const reset = (): void => {
     setMode('');
@@ -73,6 +90,7 @@ export function OrderFixActions({
 
   const submit = async (): Promise<void> => {
     setBusy(true);
+    onNotice(''); // 上一个动作的提示不留到这次（三端联动模拟：改单号的提示挂到了部分退款之后）
     let message = '';
     let warn = '';
     try {
@@ -107,10 +125,10 @@ export function OrderFixActions({
   };
 
   return (
-    <div className="card">
-      <h3 className="title">订单修正</h3>
+    <div className="form">
+      <span className="label">订单修正</span>
       {mode === '' && (
-        <div className="row">
+        <div className="row2">
           {cancel.ok && (
             <button className="btn" type="button" onClick={() => open('cancel')}>
               取消订单（未付款）
@@ -131,7 +149,10 @@ export function OrderFixActions({
               className="input"
               maxLength={SHIP_MAX_CHARS.carrier}
               value={carrier}
-              onChange={(e) => setCarrier(e.target.value)}
+              onChange={(e) => {
+                setCarrier(e.target.value);
+                clearError('carrier');
+              }}
             />
             {errors['carrier'] !== undefined && <span className="error">{errors['carrier']}</span>}
           </label>
@@ -141,7 +162,10 @@ export function OrderFixActions({
               className="input"
               maxLength={SHIP_MAX_CHARS.tracking_no}
               value={trackingNo}
-              onChange={(e) => setTrackingNo(e.target.value)}
+              onChange={(e) => {
+                setTrackingNo(e.target.value);
+                clearError('trackingNo');
+              }}
             />
             {errors['trackingNo'] !== undefined && (
               <span className="error">{errors['trackingNo']}</span>
@@ -157,17 +181,23 @@ export function OrderFixActions({
               className="input"
               maxLength={ADMIN_NOTE_MAX_LENGTH}
               value={reason}
-              onChange={(e) => setReason(e.target.value)}
+              onChange={(e) => {
+                setReason(e.target.value);
+                clearError('reason');
+              }}
             />
             {errors['reason'] !== undefined && <span className="error">{errors['reason']}</span>}
           </label>
           {confirming ? (
-            <div className="row">
+            <div className="row2">
               <span className="muted">
                 {mode === 'cancel'
                   ? '确认取消？不可撤销，库存会回补。'
                   : '确认修改？会给买家重发一封发货邮件。'}
               </span>
+              {mode === 'fix' && !trackingNoRecognized(carrier, trackingNo) && (
+                <span className="error">{TRACKING_SHAPE_WARNING}</span>
+              )}
               <button className="btn" type="button" disabled={busy} onClick={() => void submit()}>
                 {busy ? '提交中…' : '确认'}
               </button>
@@ -181,11 +211,11 @@ export function OrderFixActions({
               </button>
             </div>
           ) : (
-            <div className="row">
+            <div className="row2">
               <button className="btn" type="button" onClick={ask}>
                 {mode === 'cancel' ? '取消这张订单' : '保存运单号'}
               </button>
-              <button className="btn" type="button" onClick={reset}>
+              <button className="link" type="button" onClick={reset}>
                 收起
               </button>
             </div>

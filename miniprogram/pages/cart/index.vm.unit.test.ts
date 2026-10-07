@@ -205,3 +205,11 @@ describe('品种超限（P2-31）：40001 + 超过 50 种 → 说清怎么办', 
     expect(quoteErrorText(40901, 60, '库存不足')).toBe('库存不足');
   });
 });
+
+describe('checkoutGate：停售（三端联动模拟 2026-10-08）', () => {
+  it('40916 → 说"暂停接单"，不说"合计未能获取，请稍后重试"', () => {
+    const g = checkoutGate({ hasError: true, errorCode: 40916, lineCount: 1 });
+    expect(g.disabled).toBe(true);
+    expect(g.hint).toContain('暂停接单');
+  });
+});
