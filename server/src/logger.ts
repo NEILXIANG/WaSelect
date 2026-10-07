@@ -12,8 +12,11 @@
  * @limitation 二：`event` 非字符串或空串会**抛 TypeError**。这是刻意的硬失败：事件名写错等于这条日志白记，
  *              宁可在测试期炸掉，也不要在生产里产生一堆无法聚合的 `undefined` 事件。
  *              代价：生产若真有这种调用点，会变成 500（被 F6 的全局兜底捕获并记为 50000）。
- * @limitation 三：pino 默认异步写（sonic-boom）。进程被 SIGKILL 时最后几条日志可能丢；
- *              本项目的关单/退款是关键路径，F13 调度器会在关键事件上**额外**落 `order_events`（流 B，同步事务内）。
+ * @limitation 三：进程被 SIGKILL 时正在写的那一行可能丢；关单/退款是关键路径，
+ *              F13 调度器会在关键事件上**额外**落 `order_events`（流 B，同步事务内）。
+ * @measured 2026-10-07 pino 10.3.1 默认 destination（未传 `opts.destination`，即生产形态）是**同步写** stdout：
+ *           连写 20000 行后立即 `process.exit(0)`，经管道（`| wc -l`）与重定向到文件都收到 20001/20001 行。
+ *           所以 `process.exit` **不会**丢日志（第三轮缺口 P2-25 更正；此前"丢最后几行"的说法没有实测）。
  * @limitation 四：**不用 pino 的 `mixin` 注入上下文，也不给 child 建 pino 级绑定**（见 createLogger 内注释）。
  *              两者的代价都是：pino 会把两处同名字段**先后写进同一行 JSON**（重复键），
  *              `JSON.parse` 取后者 → 一旦我们漏脱敏一边，明文就会覆盖掉脱敏值，且肉眼在单行 JSON 里看不出来。

@@ -72,19 +72,21 @@ async function notify(
   }
 }
 
+/**
+ * 同一订单同一事件可能发多封的区分键：部分退款按笔（`refund_id`），改运单号后重发发货邮件（`mail_key`，AJ-386）。
+ * 没有则 undefined（幂等键退回 `事件:订单`，与原口径一致）。
+ */
+function mailSubKey(payload: Record<string, unknown> | undefined): string | undefined {
+  const k = payload?.['refund_id'] ?? payload?.['mail_key'];
+  return typeof k === 'string' ? k : undefined;
+}
+
 export function registerOrderMail(bus: EventBus, deps: OrderMailDeps): void {
   for (const name of MAIL_EVENTS) {
     bus.subscribe(name, (event) =>
       event.orderId === undefined
         ? undefined
-        : notify(
-            deps,
-            name,
-            event.orderId,
-            typeof event.payload?.['refund_id'] === 'string'
-              ? event.payload['refund_id']
-              : undefined,
-          ),
+        : notify(deps, name, event.orderId, mailSubKey(event.payload)),
     );
   }
 }

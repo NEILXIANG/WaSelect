@@ -40,6 +40,8 @@ import {
 import { formatJst, moneyText } from '../format.js';
 import { OrderAddressForm } from './OrderAddressForm.js';
 import { PartialRefunds } from './PartialRefunds.js';
+import { OrderFixActions } from './OrderFixActions.js';
+import { trackingWarning } from './fix-view.js';
 import {
   addressSummary,
   emptyRefundForm,
@@ -129,11 +131,14 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
     }
     setBusy('ship');
     try {
-      await shipOrder(api, id, toShipBody(ship));
+      const resp = await shipOrder(api, id, toShipBody(ship));
       setShip(emptyShipForm());
       setShipConfirming(false);
       await load();
       onChanged();
+      // P1-10：服务端认不出运单号形状时提醒核对（已保存；录错可在「订单修正」里改）
+      const warn = trackingWarning(resp);
+      if (warn !== '') setNotice(warn);
     } catch (e) {
       setShipConfirming(false);
       setError(e instanceof ApiError ? e.message : String(e));
@@ -486,6 +491,19 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
               const fresh = await load();
               onChanged();
               return fresh;
+            }}
+            onError={setError}
+            onNotice={setNotice}
+          />
+
+          {/* 取消未付单 / 改运单号（AJ-386 P1-10 / P1-11）：门槛不满足时整块不渲染 */}
+          <OrderFixActions
+            api={api}
+            orderId={id}
+            order={order}
+            onDone={async () => {
+              await load();
+              onChanged();
             }}
             onError={setError}
             onNotice={setNotice}

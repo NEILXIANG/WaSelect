@@ -50,6 +50,7 @@ import type { Clock } from '../ports/clock.js';
 import {
   claimLoginAttempt,
   clearLoginAttempt,
+  consumeTotpStep,
   findAdminCredential,
   loginAttemptKey,
   loginAttemptSourceKey,
@@ -59,6 +60,7 @@ import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
 import { PASSWORD_MAX_CHARS, signToken, verifyPassword, type AuthConfig } from './auth.js';
 import type { CachedIdentityCheck } from '../adapters/identity.js';
 import { ipKeyForLogin } from './rate-limit.js';
+import { verifyTotp } from '../adapters/totp.js';
 
 /** 同一邮箱、**同一来源**连续失败多少次锁定该来源（D-38 ⑤：5 次；AJ-243 起按来源计）。 */
 export const ADMIN_LOGIN_MAX_FAILURES = 5;
@@ -108,6 +110,11 @@ const bodySchema = z.object({
     .max(255)
     .regex(/^[^\s@]+@[^\s@]+$/),
   password: z.string().min(ADMIN_PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_CHARS),
+  /** TOTP 6 位码（P1-5 / AJ-386）：开了第二因素的账号必填；没开的账号带了也忽略。 */
+  totp: z
+    .string()
+    .regex(/^\d{6}$/)
+    .optional(),
 });
 
 export interface AdminAuthRoutesDeps {
@@ -139,7 +146,7 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
       try {
         const parsed = bodySchema.safeParse(req.body);
         if (!parsed.success) throw new AppError(40001, { reason: 'admin_login_shape' });
-        const { email, password } = parsed.data;
+        const { email, password, totp } = parsed.data;
         const now = deps.clock.now();
         const globalKey = loginAttemptKey(email);
         // 来源 = trust proxy 取到的 req.ip，再过 `ipKeyForLogin`（IPv6 归 `/56`，比 IP 限流的 /64 更粗）。
@@ -176,7 +183,15 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
         //    @limitation 顺序反过来（先扣邮箱桶）不行：那会把"来源已锁"也记进邮箱桶，
         //    正是 AJ-243 要堵的洞。所以只能**只读**地看一眼，不能改成"先扣后拒"。
         const emailLock = await peekLoginAttemptLock(deps.db, globalKey, now);
-        if (emailLock !== null) await rejectLocked('email', emailLock);
+        // P1-5（AJ-386）：邮箱桶锁着、但请求带了 TOTP 码 → 不在这里拒，改走"只扣来源桶"的绕行。
+        //   @why 邮箱桶是攻击者凑够 6 个来源就能锁死的（文件头 @tradeoff）；真管理员手里有码、攻击者没有，
+        //        锁住"没有码的尝试"就够了。绕行只认**开了 TOTP 的账号 + 码对**（见下方 credentialOk），
+        //        没开的账号带码绕行一律 401——否则任何人加个 totp 字段就绕开了邮箱桶。
+        //   @why 绕行仍扣**来源桶**（5 次 / 15 分钟）：每个来源对 6 位码的猜测上限不变，
+        //        猜中概率 ≈ 3 / 10^6 每次，与"没锁时"同一封顶。
+        //   @limitation 绕行模式下"有没有开 TOTP"不经响应泄露：没开 / 码错 / 口令错都是同一个 40101。
+        const totpBypass = emailLock !== null && totp !== undefined;
+        if (emailLock !== null && !totpBypass) await rejectLocked('email', emailLock);
 
         // ① 先扣额度（原子），两层都要拿到：来源桶（5）+ 邮箱桶（30）。
         //    任一已锁 → 42901，且不跑 bcrypt。来源桶在前：攻击者被锁在自己的来源上时，
@@ -189,7 +204,7 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
           globalKey,
         );
         const byEmail =
-          bySource.kind === 'locked'
+          bySource.kind === 'locked' || totpBypass
             ? bySource
             : await claimLoginAttempt(
                 deps.db,
@@ -207,13 +222,31 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
 
         const cred = await findAdminCredential(deps.db, email);
         const ok = await verifyPassword(password, cred?.passwordHash ?? DUMMY_HASH);
-        if (cred === null || cred.passwordHash === null || !ok) {
+        // 第二因素（P1-5）：口令对了才比对码、才登记步数——没有口令的人连"烧掉一个步数"都做不到。
+        //   开了 TOTP：码必须对且这一步没用过（consumeTotpStep 防重放）；
+        //   没开：正常模式下忽略码，绕行模式下一律失败（绕行只为开了 TOTP 的账号存在）。
+        const secondFactorOk =
+          cred === null || !ok
+            ? false
+            : cred.totpSecret === null
+              ? !totpBypass
+              : await (async () => {
+                  const step =
+                    totp === undefined
+                      ? null
+                      : verifyTotp(cred.totpSecret ?? '', totp, now.getTime());
+                  return step !== null && (await consumeTotpStep(deps.db, cred.id, step));
+                })();
+        if (cred === null || cred.passwordHash === null || !ok || !secondFactorOk) {
           deps.logger.warn('admin_login_failed', {
             result: 'rejected',
             ...(cred !== null ? { target_user_id: cred.id } : {}),
             ctx: {
               known_account: cred !== null,
               locked: bySource.lockedUntil !== null || byEmail.lockedUntil !== null,
+              // 口令对、第二因素不对：只进日志（响应与口令错同一个 40101），排查"为什么登不上"用
+              second_factor_failed: ok && cred !== null && !secondFactorOk,
+              totp_bypass: totpBypass,
             },
           });
           throw new AppError(40101, { reason: 'admin_login_bad_credentials' });
@@ -229,7 +262,11 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
           now,
           bySource.lockedUntil,
         );
-        const clearedEmail = await clearLoginAttempt(deps.db, globalKey, now, byEmail.lockedUntil);
+        // 绕行模式不碰邮箱桶：那把锁是攻击者上的，清掉它只会让攻击者立刻重新开始计数；
+        // 没开 TOTP 的账号仍受它保护（P1-5）。
+        const clearedEmail = totpBypass
+          ? 'cleared'
+          : await clearLoginAttempt(deps.db, globalKey, now, byEmail.lockedUntil);
         if (clearedSource === 'locked' || clearedEmail === 'locked') {
           // SEC2-08：这个出口（"比对口令的 100ms 里被别的请求上了锁"）曾经**不设** retry-after，
           //    于是同一个 42901 有两种响应形状。契约（0.6.20）写的是"锁定期 429 / 42901 + Retry-After"，

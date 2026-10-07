@@ -35,7 +35,7 @@ function isLoginResp(value: unknown): value is LoginResp {
  */
 export async function login(
   api: AdminApi,
-  cred: { email: string; password: string },
+  cred: { email: string; password: string; totp?: string },
 ): Promise<string> {
   // ⚠️ 显式生成 traceId 并复用（二次审查 P3）：形状校验失败抛错时要把它带出去——
   //    曾经这里写的是常量 'login-shape' 冒充报障码，服务端日志按它什么都查不到，
@@ -44,7 +44,12 @@ export async function login(
   const resp = await api({
     path: '/api/v1/auth/admin/login',
     method: 'POST',
-    body: { email: cred.email, password: cred.password },
+    // P1-5：二次验证码只在填了时带（没开 TOTP 的账号不受影响；服务端对没开的账号忽略它）
+    body: {
+      email: cred.email,
+      password: cred.password,
+      ...(cred.totp !== undefined && cred.totp !== '' ? { totp: cred.totp } : {}),
+    },
     traceId,
   });
   if (!isLoginResp(resp)) {

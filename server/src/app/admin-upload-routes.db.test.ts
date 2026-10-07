@@ -331,6 +331,33 @@ describe('POST /admin/upload', () => {
     }
   });
 
+  it('🔴 P2-16 像素炸弹（7000×7000 纯色 PNG，只有 150KB）→ 40001，不解码、存储零写入', async () => {
+    // @why 512MB 实例上，10MB 以内的 16383² PNG 解码要 ≈1GB——OOM 杀掉的是整个进程（含在途支付回调）。
+    //      字节上限挡不住：纯色图压缩比极高，体积小、像素多。
+    const srv = await buildServer('https://img.example.com');
+    try {
+      const bomb = await sharp({
+        create: { width: 7000, height: 7000, channels: 3, background: '#ffffff' },
+      })
+        .png({ compressionLevel: 9 })
+        .toBuffer();
+      const res = await postUpload(
+        srv.url,
+        await bearer(),
+        multipart(bomb, 'bomb.png', 'image/png'),
+      );
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { code: number }).code).toBe(40001);
+      expect(storage.size()).toBe(0);
+      const warn = sink.lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .find((r) => r['event'] === 'admin_upload_decode_failed');
+      expect(String(warn?.['err'])).toContain('pixel limit');
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('KD-8 第二档写存储失败 → 50000，已写成的第一档被删掉（不留半套孤儿对象），补偿过程进 error 日志', async () => {
     let n = 0;
     const flaky: MemoryStorage = {

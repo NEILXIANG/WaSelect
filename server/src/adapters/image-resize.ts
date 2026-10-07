@@ -52,11 +52,22 @@ const WEBP_QUALITY = 80;
 const WEBP_MAX_EDGE = 16_383;
 
 /**
+ * 解码前的像素上限（第三轮缺口 P2-16，AJ-386）：4000 万像素。
+ * @why sharp 默认上限 ≈2.68 亿像素；10MB 以内的纯色 16383² PNG 解码要 ≈1GB，512MB 实例直接 OOM，
+ *      被杀的是整个进程（含在途支付回调）。字节上限挡不住：纯色图压缩比极高。
+ * @why 4000 万留足真实素材：手机原图 4000×3000 = 1200 万、详情长图 1200×17000 = 2040 万都在内。
+ * @limitation 只挡"像素多"，挡不住"帧多"（动图）——sharp 默认只读第一帧，暂无风险。
+ * @measured 2026-10-07 sharp 0.35：7000×7000 纯色 PNG（156KB）→ `Error: Input image exceeds pixel limit`；
+ *           1200×17000 → 正常产出。上传路由把它归 40001 image_decode_failed（原文进 warn 日志）。
+ */
+const MAX_INPUT_PIXELS = 40_000_000;
+
+/**
  * 原图字节 → 三档 webp（EXIF 归正 + 等比缩到档宽，小图不放大）。
  * @param imageId IdGen 产出（键形由 domain 单一真源 `imageObjectKey` 保证）
  */
 export async function resizeToTiers(input: Buffer, imageId: string): Promise<ResizedTier[]> {
-  const base = sharp(input).rotate();
+  const base = sharp(input, { limitInputPixels: MAX_INPUT_PIXELS }).rotate();
   const out: ResizedTier[] = [];
   for (const tier of IMAGE_TIERS) {
     // height + fit:'inside' 是 PAY3-02 的修复：只按宽度缩会让长图的高度原样突破 WebP 单边上限。

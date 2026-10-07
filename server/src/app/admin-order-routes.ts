@@ -42,7 +42,7 @@ import { executeRefund } from './refund-execution.js';
 import { sumPartialRefunds, listPartialRefunds } from '../adapters/order-refunds.js';
 import { partialRefundView } from './partial-refund-routes.js';
 import { fullRefundAmount } from '../domain/partial-refund.js';
-import { withTrackingUrl } from '../domain/tracking.js';
+import { trackingNoRecognized, withTrackingUrl } from '../domain/tracking.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
@@ -387,6 +387,8 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           status: 'shipped',
           carrier: ship.carrier,
           tracking_no: ship.trackingNo,
+          // 形状认得出（能生成官方查件链接）才是 true；false 只提示运营核对，不拦（P1-10，AJ-386）
+          tracking_recognized: trackingNoRecognized(ship.carrier, ship.trackingNo),
         });
       } catch (e) {
         next(e);

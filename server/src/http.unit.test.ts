@@ -235,6 +235,41 @@ describe('源站校验（A2 / AJ-197）', () => {
     expect((await fetch(`${baseUrl}/healthz`)).status).toBe(200);
     expect((await fetch(`${baseUrl}/readyz`)).status).toBe(200);
   });
+
+  it('🔴 P2-18 支付回调豁免（它有自己的签名；Dashboard 填直连地址时不能全部 40301、3 天后丢事件）', async () => {
+    const { baseUrl } = await serve({
+      originVerifySecret: SECRET,
+      mount: (app) => {
+        app.post(RAW_CALLBACK_PATH, (_req, res) => res.json({ ok: true }));
+        app.post('/api/v1/pay/callbackx', (_req, res) => res.json({ ok: true }));
+      },
+    });
+    expect((await fetch(`${baseUrl}${RAW_CALLBACK_PATH}`, { method: 'POST' })).status).toBe(200);
+    // 前缀按段匹配：`callbackx` 不是回调路径，照样要过源站校验
+    expect((await fetch(`${baseUrl}/api/v1/pay/callbackx`, { method: 'POST' })).status).toBe(403);
+  });
+});
+
+describe('兜底错误处理：响应头已发出（P2-27）', () => {
+  it('🔴 写了一半再报错 → 断开连接（客户端立刻看到中断，而不是挂到超时）', async () => {
+    // @why Express 默认处理器在 headersSent 时会 destroy socket；兜底处理器只 return 不收尾，
+    //      连接就一直挂着（导出 CSV 中途失败时，浏览器下载会卡住而不是报错）。
+    const { baseUrl } = await serve((app) => {
+      app.get('/half', (_req, res, next) => {
+        res.write('partial');
+        next(new Error('boom after headers'));
+      });
+    });
+    // 写入的片段可能还在缓冲里就被断开：fetch 本身 reject 或读 body 时 reject 都算"看到中断"
+    const err = await fetch(`${baseUrl}/half`, { signal: AbortSignal.timeout(3000) })
+      .then((r) => r.text())
+      .then(
+        () => null,
+        (e: unknown) => e as Error,
+      );
+    expect(err).not.toBeNull();
+    expect(err?.name).not.toBe('TimeoutError');
+  });
 });
 
 /**

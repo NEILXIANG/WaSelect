@@ -164,6 +164,22 @@
     </view>
   </block>
 
+  <!-- P2-12（AJ-386）：部分退款（成功 / 处理中） -->
+  <view class="ws-gutter ws-section" wx:if="{{view.partialRefunds.length > 0}}">
+    <view class="ws-card">
+      <text class="ws-note">部分退款</text>
+      <view class="quote-line" wx:for="{{view.partialRefunds}}" wx:for-item="r" wx:key="key">
+        <text class="ws-body">{{r.amountText}} · {{r.statusText}}</text>
+        <text class="ws-caption">{{r.atText}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- P2-11（AJ-386）：关单后才到的付款 -->
+  <view class="ws-gutter ws-section" wx:if="{{view.latePaidNote}}">
+    <text class="ws-note">{{view.latePaidNote}}</text>
+  </view>
+
   <!-- 剩余清单 4-10：缺货整单退款说明（仅已付款未发货） -->
   <view class="ws-gutter ws-section" wx:if="{{view.stockRefundNote}}">
     <text class="ws-note">{{view.stockRefundNote}}</text>

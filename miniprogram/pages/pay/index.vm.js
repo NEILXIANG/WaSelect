@@ -100,12 +100,14 @@ export function recheckAfterPayError(code) {
  *      这一屏是微信支付上线前必经的一屏，写错等于白丢一批订单。
  * @why 只改**展示**不改状态口径：状态的真值仍在服务端（@see 本文件 @limitation）。
  */
-function closedTextFor(status) {
+function closedTextFor(status, latePaid) {
   const label = statusText(status);
   // 退款类：钱的问题还没落定，只报状态，不引导任何动作
   if (status === 'refunding' || status === 'refunded') return `该订单${label}`;
   // 没付成类：必须说清"没付成"，并给出口（重新下单）
   if (status === 'expired' || status === 'cancelled') {
+    // P2-11（AJ-386）：关单后才到的付款——钱**已经扣了**。说"未完成付款，请重新下单"会让人再付一次。
+    if (latePaid) return `该订单${label}，但我们已收到你的付款，款项会原路退回，无需重新付款`;
     return `该订单${label}，未完成付款；如需购买请重新下单`;
   }
   // 其余（paid / shipped / delivered / completed）：钱已经付了，这句才成立
@@ -127,7 +129,7 @@ export function payPageView(order, nowMs) {
   }
   return {
     payable,
-    closedText: closedTextFor(status),
+    closedText: closedTextFor(status, o.late_paid === true),
     // 只有"没付成"才给回首页的出口——已付款的单给它是把人往无关页面上引
     goHome: status === 'expired' || status === 'cancelled',
   };

@@ -103,14 +103,17 @@ export async function getOrder(
   return resp;
 }
 
-/** `POST /admin/orders/{id}/ship`（发货；已发货 → 服务端 409）。 */
+/**
+ * `POST /admin/orders/{id}/ship`（发货；已发货 → 服务端 409）。
+ * @returns 响应原样（契约 0.6.37 起带 `tracking_recognized`，交给 `fix-view.ts` 的 trackingWarning 转述）
+ */
 export async function shipOrder(
   api: AdminApi,
   id: string,
   body: { carrier: string; tracking_no: string },
   traceId?: string,
-): Promise<void> {
-  await api({
+): Promise<unknown> {
+  return api({
     path: `/api/v1/admin/orders/${encodeURIComponent(id)}/ship`,
     method: 'POST',
     body,
@@ -192,6 +195,39 @@ export async function releaseDisputeHold(
     );
   }
   return { order_id: o['order_id'], has_dispute: false };
+}
+
+/** `POST /admin/orders/{id}/cancel`（取消**未付**订单，原因必填；P1-11 / AJ-386）。 */
+export async function cancelOrder(
+  api: AdminApi,
+  id: string,
+  body: { reason: string },
+  traceId?: string,
+): Promise<void> {
+  await api({
+    path: `/api/v1/admin/orders/${encodeURIComponent(id)}/cancel`,
+    method: 'POST',
+    body,
+    ...(traceId !== undefined ? { traceId } : {}),
+  });
+}
+
+/**
+ * `PATCH /admin/orders/{id}/shipment`（改**已发货**订单的承运商 / 运单号，原因必填；P1-10 / AJ-386）。
+ * 服务端会按新运单号重发一封发货邮件；响应带 `tracking_recognized`。
+ */
+export async function fixShipment(
+  api: AdminApi,
+  id: string,
+  body: { carrier: string; tracking_no: string; reason: string },
+  traceId?: string,
+): Promise<unknown> {
+  return api({
+    path: `/api/v1/admin/orders/${encodeURIComponent(id)}/shipment`,
+    method: 'PATCH',
+    body,
+    ...(traceId !== undefined ? { traceId } : {}),
+  });
 }
 
 /** `POST /admin/orders/{id}/address`（发货前改址；请求体是 `AddressInput`）。 */

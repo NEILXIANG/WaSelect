@@ -35,6 +35,7 @@ import type { EventBus } from '../ports/events.js';
 import type { Logger } from '../logger.js';
 import type { AppConfig } from '../config.js';
 import { AppError } from '../errors.js';
+import { currentContext } from '../context.js';
 import { systemIdGen } from '../adapters/ids.js';
 import type { Clock } from '../ports/clock.js';
 import { createSchedulerDeps } from './scheduler-start.js';
@@ -124,6 +125,9 @@ export function mountInternalJobsRoutes(
         //    idGen 只决定**叫什么**。
         const runId = systemIdGen.uuid();
         const startedAt = deps.clock.now().toISOString();
+        // P2-26：作业沿用本请求的 trace（见 runSchedulerOnce 的 opts），并留一行 run_id ↔ trace 的对应
+        const traceId = currentContext().trace_id;
+        deps.logger.info('internal_job_accepted', { result: 'accepted', ctx: { run_id: runId } });
         // ⚠️ 必 catch：未捕获的 rejection 会被进程级处理器当 fatal（与 scheduler-start.ts 同一条纪律）。
         //    完成与否**不看这个 Promise**——看 `job_runs('daily')` 心跳（D-45）：
         //    那是生产上唯一的可观测出口，也是调用方（cron）事后核实的依据。
@@ -159,6 +163,7 @@ export function mountInternalJobsRoutes(
               }),
               createCleanupLoginAttemptsJob(),
             ],
+            { traceId },
           ).catch((e: unknown) => {
             deps.logger.error('internal_job_crashed', {
               result: 'error',

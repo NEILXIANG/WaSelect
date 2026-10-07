@@ -288,3 +288,19 @@ describe('catalog-admin（管理端商品写仓储，I2 U-A2）', () => {
     expect(await repo().setProductStatus('no-such', 'offline')).toBe(false);
   });
 });
+
+describe('hs_code 列宽（迁移 031，AJ-386）', () => {
+  it('🔴 带点的美国 10 位 HTS（12 字）能存进 products 与 order_items 快照', async () => {
+    await db`insert into products (id, title, category, price_jpy, weight_g, origin_country, hs_code)
+             values ('p-hts', 'SK-II 精华', 'beauty', 25300, 620, 'JP', '3304.99.5000')`;
+    const [p] = await db`select hs_code from products where id = 'p-hts'`;
+    expect(p?.['hs_code']).toBe('3304.99.5000');
+    const cols = await db`
+      select table_name, character_maximum_length as len from information_schema.columns
+       where column_name = 'hs_code' and table_name in ('products', 'order_items') order by table_name`;
+    expect(cols.map((c) => [c['table_name'], c['len']])).toEqual([
+      ['order_items', 16],
+      ['products', 16],
+    ]);
+  });
+});

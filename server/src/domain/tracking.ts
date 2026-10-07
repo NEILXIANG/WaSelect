@@ -49,6 +49,21 @@ export function trackingUrl(carrier: string | null, trackingNo: string | null): 
   return null;
 }
 
+/**
+ * 运单号**形状**是否认得出（第三轮缺口 P1-10，AJ-386）：发货 / 改单号的响应带上它，管理端据此提示"请核对"，**不拦**。
+ * @why 不能用 `trackingUrl !== null` 判：承运商名是日本邮便时它不看单号就给链接（`=HYPERLINK(...)` 也会"认得出"）。
+ * @why 日本邮便必须是 S10（两字母 + 9 位数字 + JP）；其它承运商不认识格式，只排除明显不是单号的（非字母数字、过短 / 过长）。
+ * @limitation 只是形状：形状对的错号（少一位以外的笔误）照样认得出。
+ */
+export function trackingNoRecognized(carrier: string | null, trackingNo: string | null): boolean {
+  const n = (trackingNo ?? '').replace(/\s+/g, '').toUpperCase();
+  if (n === '') return false;
+  const c = (carrier ?? '').trim().toLowerCase();
+  if (S10_JP.test(n)) return true;
+  if (JAPAN_POST.names.some((name) => matchesWord(c, name))) return false;
+  return /^[A-Z0-9-]{6,30}$/.test(n);
+}
+
 /** 响应展开用：有链接 → `{tracking_url}`，没有 → `{}`（整键省略，与 tracking_no 同口径）。 */
 export function withTrackingUrl(
   carrier: string | null,

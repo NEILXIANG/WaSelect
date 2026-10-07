@@ -285,3 +285,49 @@ describe('stockRefundNote（4-10）', () => {
     expect(STOCK_REFUND_NOTE).toContain('全额退款');
   });
 });
+
+describe('detailView：部分退款与迟到付款（P2-11 / P2-12，AJ-386）', () => {
+  it('🔴 部分退款按币种格式化、成功 / 处理中分开说；没有则空数组', () => {
+    const v = detailView({
+      status: 'delivered',
+      partial_refunds: [
+        {
+          status: 'succeeded',
+          currency: 'USD',
+          amount_minor: 1250,
+          created_at: '2026-10-06T01:00:00.000Z',
+        },
+        {
+          status: 'pending',
+          currency: 'JPY',
+          amount_minor: 800,
+          created_at: '2026-10-06T02:00:00.000Z',
+        },
+      ],
+    });
+    expect(
+      v.partialRefunds.map((r: { amountText: string; statusText: string }) => [
+        r.amountText,
+        r.statusText,
+      ]),
+    ).toEqual([
+      ['$12.50', '已退回'],
+      ['800 円', '退款处理中'],
+    ]);
+    expect(detailView({ status: 'paid' }).partialRefunds).toEqual([]);
+  });
+
+  it('认不出的币种 / 脏数据：不编金额，行照常列（买家至少知道有一笔退款）', () => {
+    const v = detailView({
+      status: 'delivered',
+      partial_refunds: [{ status: 'succeeded', currency: 'EUR', amount_minor: 100 }, null, 'x'],
+    });
+    expect(v.partialRefunds).toHaveLength(1);
+    expect(v.partialRefunds[0]?.amountText).toBe('EUR（金额以银行账单为准）');
+  });
+
+  it('🔴 late_paid → 给一句"已收到付款，会原路退回"；否则空串', () => {
+    expect(detailView({ status: 'expired', late_paid: true }).latePaidNote).toContain('原路退回');
+    expect(detailView({ status: 'expired' }).latePaidNote).toBe('');
+  });
+});

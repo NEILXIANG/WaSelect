@@ -24,6 +24,7 @@ import {
 import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
 import { hashPassword, PASSWORD_MAX_CHARS } from './auth.js';
 import { loginAttemptKey, loginAttemptSourceKey } from '../adapters/admin-auth.js';
+import { totpAt } from '../adapters/totp.js';
 import {
   ADMIN_LOGIN_GLOBAL_MAX_FAILURES,
   ADMIN_LOGIN_LOCK_MINUTES,
@@ -540,5 +541,97 @@ describe('SEC2-08：口令比对期间被别的请求上了锁（42901 的第二
     expect(warns[0]?.['ctx']).toEqual({ reason: 'locked_while_verifying' });
     // ⑤ 口令是对的，但绝不发 token：命中锁的那一次不能因为"他证明了他自己"就放行
     expect(srv.sink.find('admin_login_ok')).toHaveLength(0);
+  });
+});
+
+describe('P1-5（AJ-386）：TOTP 第二因素', () => {
+  const SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+  beforeEach(async () => {
+    srv = await buildChainServer(db, { RATE_LIMIT_LOGIN_PER_15MIN: '1000', TRUST_PROXY_HOPS: '1' });
+    await db`update users set totp_secret = ${SECRET} where id = 'u-adm'`;
+  });
+  const loginWith = (body: Record<string, unknown>, ip = '203.0.113.9') =>
+    call(srv, 'POST', '/api/v1/auth/admin/login', { body, headers: { 'x-forwarded-for': ip } });
+  const lockEmailBucket = () => db`
+    insert into login_attempts (key_hash, failed_count, locked_until, first_failed_at, last_failed_at)
+    values (${ADMIN_KEY}, 0, now() + interval '15 minutes', now(), now())
+    on conflict (key_hash) do update set locked_until = now() + interval '15 minutes'`;
+
+  it('🔴 开了 TOTP：只给口令 → 40101（与口令错同一答复，不泄露"口令是对的"）', async () => {
+    const r = await loginWith({ email: EMAIL, password: PASSWORD });
+    expect(r.status).toBe(401);
+    expect((r.json as { code: number }).code).toBe(40101);
+  });
+
+  it('🔴 口令 + 正确的码 → 200，并记下用过的步数', async () => {
+    const r = await loginWith({
+      email: EMAIL,
+      password: PASSWORD,
+      totp: totpAt(SECRET, Date.now()),
+    });
+    expect(r.status).toBe(200);
+    const [u] = await db`select totp_last_step from users where id = 'u-adm'`;
+    expect(Number(u?.['totp_last_step'])).toBeGreaterThan(0);
+  });
+
+  it('🔴 同一个码用第二次 → 40101（防重放：肩窥到的码不能再用）', async () => {
+    const code = totpAt(SECRET, Date.now());
+    expect((await loginWith({ email: EMAIL, password: PASSWORD, totp: code })).status).toBe(200);
+    expect((await loginWith({ email: EMAIL, password: PASSWORD, totp: code })).status).toBe(401);
+  });
+
+  it('码错 → 40101，且照常计入来源桶（码也是凭据的一部分）', async () => {
+    const r = await loginWith({ email: EMAIL, password: PASSWORD, totp: '000000' });
+    expect(r.status).toBe(401);
+    expect((await attemptRow(loginAttemptSourceKey(EMAIL, '203.0.113.9'))).failedCount).toBe(1);
+  });
+
+  it('码的形状不对 → 40001（不是 401，也不去比对口令）', async () => {
+    expect((await loginWith({ email: EMAIL, password: PASSWORD, totp: '12345' })).status).toBe(400);
+  });
+
+  it('没开 TOTP 的账号带了码 → 照常按口令判（码被忽略），不因多一个字段被拒', async () => {
+    await db`update users set totp_secret = null where id = 'u-adm'`;
+    expect((await loginWith({ email: EMAIL, password: PASSWORD, totp: '123456' })).status).toBe(
+      200,
+    );
+  });
+
+  it('🔴 邮箱桶被攻击者锁死：口令 + 正确码 → 200（锁不死真管理员）；只给口令 → 429', async () => {
+    await lockEmailBucket();
+    expect((await loginWith({ email: EMAIL, password: PASSWORD })).status).toBe(429);
+    const r = await loginWith({
+      email: EMAIL,
+      password: PASSWORD,
+      totp: totpAt(SECRET, Date.now()),
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it('🔴 没开 TOTP 的账号：邮箱桶锁着时随便带个码 → 401，绕不开邮箱桶', async () => {
+    await db`update users set totp_secret = null where id = 'u-adm'`;
+    await lockEmailBucket();
+    expect((await loginWith({ email: EMAIL, password: PASSWORD, totp: '123456' })).status).toBe(
+      401,
+    );
+  });
+
+  it('🔴 邮箱桶锁着时带码绕行仍受**来源桶**封顶：同一来源错 5 次后，正确的码也 429', async () => {
+    await lockEmailBucket();
+    for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
+      expect(
+        (
+          await loginWith(
+            { email: EMAIL, password: PASSWORD, totp: String(100000 + i) },
+            '198.51.100.7',
+          )
+        ).status,
+      ).toBe(401);
+    }
+    const r = await loginWith(
+      { email: EMAIL, password: PASSWORD, totp: totpAt(SECRET, Date.now()) },
+      '198.51.100.7',
+    );
+    expect(r.status).toBe(429);
   });
 });

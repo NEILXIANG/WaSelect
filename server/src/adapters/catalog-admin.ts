@@ -77,6 +77,12 @@ export interface AdminProductInsert {
  */
 export type AdminProductUpdate = Omit<AdminProductInsert, 'status' | 'stock'> & {
   stock?: number | undefined;
+  /**
+   * 写 `stock` 时必带：运营打开表单时看到的库存（P2-8，AJ-386）。库里已不是这个数 → stale。
+   * @why `updated_at` 护不住库存：下单扣减 / 关单回补只动 `stock` 不碰 `updated_at`（orders.ts），
+   *      绝对值覆盖会把期间的扣减抹掉、多卖出不存在的货。
+   */
+  expectedStock?: number | undefined;
   /** ISO 8601（`YYYY-MM-DDTHH:mm:ss.sssZ`，即 `toISOString()` 的形状）。 */
   expectedUpdatedAt: string;
 };
@@ -219,6 +225,7 @@ export function createCatalogAdminRepo(db: Db): CatalogAdminRepo {
                updated_at = now()
          where id = ${id}
            and date_trunc('millisecond', updated_at) = ${row.expectedUpdatedAt}::timestamptz
+           and (${row.expectedStock ?? null}::int is null or stock = ${row.expectedStock ?? null}::int)
         returning ${db(COLS.split(',').map((c) => c.trim()))}
       `;
       const r = rows[0] as Record<string, unknown> | undefined;

@@ -444,10 +444,12 @@ export const IDEMPOTENCY_TTL_HOURS = 24;
  * @why `delete` 而不是 `update ... 标记过期`：标记之后"过期"这件事还要有人来解释，
  *      而解释它的地方就是下一个会漏掉的地方。删掉之后表里剩下的每一行都还在有效期内，
  *      "这张表有多大"直接等于"最近 24h 有多少次写请求"——可观测性也顺带好了。
- * @limitation **只删已经完成的**（`completed_at is not null`）：还在执行的行由栅栏/租约保护，
- *      清理任务在任何实例上跑，早删一步就等于替另一个实例把租约抹掉。
- *      ⚠️ 副作用：崩溃遗留的"占位但未完成"行不会被本函数清掉——那些行靠租约过期
- *      让下一个同键请求接管，属于既有设计，不在这里引入第二种清理语义。
+ * @why 未完成的行**只在租约已过期时**删（第三轮缺口 P2-21，AJ-386）：还在续租的行由栅栏/租约保护，
+ *      清理任务在任何实例上跑，早删一步就等于替另一个实例把租约抹掉；而崩溃遗留的占位行
+ *      （租约早已到期、过了 TTL 也没人用同一个键来接管）此前**永不回收**。
+ * @why `locked_until is null` 的未完成行也算孤儿：事务版执行器的占位与结果同一事务提交，
+ *      已提交的行不会"未完成且无租约"；只有手工修复或旧版本遗留会出现这种形态。
+ * @limitation 进行中的事务（事务版执行器）里的占位行对本语句不可见，无从误删。
  */
 /**
  * 由"当前时刻"推出清理截止点：`now - {@link IDEMPOTENCY_TTL_HOURS}`。
@@ -468,7 +470,7 @@ export async function deleteExpiredIdempotencyKeys(db: Db, cutoff: Date): Promis
   const rows = await db`
     delete from idempotency_keys
      where created_at < ${cutoff}
-       and completed_at is not null
+       and (completed_at is not null or locked_until is null or locked_until < now())
     returning key
   `;
   return rows.length;

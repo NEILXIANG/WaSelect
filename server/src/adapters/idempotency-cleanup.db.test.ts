@@ -48,13 +48,16 @@ async function insertKey(
   key: string,
   createdMinutesAgo: number,
   completed: boolean,
+  /** 未完成行的租约到期点（相对现在的分钟数，正 = 未来 = 仍在执行并续租）；默认 +5 分钟。 */
+  leaseMinutesFromNow = 5,
 ): Promise<void> {
   await db`
     insert into idempotency_keys (key, route, status_code, response, request_hash,
-                                  created_at, completed_at)
+                                  created_at, completed_at, locked_until)
     values (${key}, 'POST /orders', 201, '{"ok":true}'::jsonb, '',
             now() - ${`${createdMinutesAgo} minutes`}::interval,
-            ${completed ? db`now() - interval '1 minute'` : null})
+            ${completed ? db`now() - interval '1 minute'` : null},
+            ${completed ? null : db`now() + ${`${leaseMinutesFromNow} minutes`}::interval`})
   `;
 }
 
@@ -85,6 +88,15 @@ describe('deleteExpiredIdempotencyKeys', () => {
     // 截止时刻推到"未来"——即便如此，未完成的行也不能动
     await deleteExpiredIdempotencyKeys(db, new Date(Date.now() + 3_600_000));
     expect(await db`select key from idempotency_keys where key = 'k-inflight'`).toHaveLength(1);
+  });
+
+  it('🔴 P2-21 崩溃遗留的占位行（未完成、租约早已过期）过了 TTL 也被清掉——否则永不回收', async () => {
+    await insertKey('k-orphan', 25 * HOUR, false, -23 * HOUR); // 进程崩溃：租约 23h 前就到期了
+    await insertKey('k-orphan-young', 2 * HOUR, false, -HOUR); // 未过 TTL：留给同键请求接管
+    await insertKey('k-renewing', 25 * HOUR, false, 5); // 长任务仍在续租 → 不动
+    await expect(deleteExpiredIdempotencyKeys(db, idempotencyCutoff(new Date()))).resolves.toBe(1);
+    const left = await db`select key from idempotency_keys order by key`;
+    expect(left.map((r) => r.key)).toEqual(['k-orphan-young', 'k-renewing']);
   });
 
   it('边界：恰好 24h 前创建且已完成的键被删（`<` 而不是 `<=` 的同一侧）', async () => {

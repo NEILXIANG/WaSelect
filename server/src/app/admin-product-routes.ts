@@ -157,6 +157,19 @@ const ISO_MS_Z = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
  *      @tradeoff 代价：只接受 UTC `Z` 尾，带时区偏移的合法 ISO（`+09:00`）会被拒。
  *              可接受——这个值的唯一生产者是服务端自己的 `toISOString()`。
  */
+/**
+ * 取 `expected_stock`（P2-8，AJ-386）：PUT 带 `stock` 时必填（≥0 整数），不带 `stock` 时忽略。
+ * @why 与 `expected_updated_at` 同理"缺了就 40001"：无凭据的绝对值覆盖会抹掉期间的下单扣减。
+ * @tradeoff 运营改库存那一刻恰好有人下单 → 40914 要刷新重填；比"多卖出不存在的货"便宜。
+ */
+export function expectedStockOf(body: unknown, sendsStock: boolean): number | undefined {
+  if (!sendsStock) return undefined;
+  const raw = (body as { expected_stock?: unknown } | undefined)?.expected_stock;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0)
+    throw new AppError(40001, { reason: 'expected_stock_required' });
+  return raw;
+}
+
 export function expectedUpdatedAtOf(body: unknown): string {
   const raw = (body as { expected_updated_at?: unknown } | undefined)?.expected_updated_at;
   if (typeof raw !== 'string' || raw === '') {
@@ -255,8 +268,10 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         //      那正是本条要堵的洞；宁可让不带凭据的旧前端**响亮失败**，
         //      也不要它继续"能用"——能用但会丢别人的改动，比不能用危险得多。
         const expected = expectedUpdatedAtOf(req.body);
+        const expectedStock = expectedStockOf(req.body, r.value.stock !== undefined);
         const result = await repo.updateProduct(id, {
           expectedUpdatedAt: expected,
+          ...(expectedStock !== undefined ? { expectedStock } : {}),
           id,
           title: r.value.title,
           category: r.value.category,
@@ -287,7 +302,12 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           //      没有它，将来评估"要不要改成字段级合并"时没有任何数据可用。
           deps.logger.warn('admin_product_update_stale', {
             result: 'conflict',
-            ctx: { product_id: id, expected, action: 'none（未写入）' },
+            ctx: {
+              product_id: id,
+              expected,
+              expected_stock: expectedStock,
+              action: 'none（未写入）',
+            },
           });
           throw new AppError(40914, { product_id: id, expected });
         }

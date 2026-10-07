@@ -40,6 +40,26 @@ import type {
   OrderPaymentSummary,
 } from '../adapters/orders.js';
 import { toImageSet } from './product-routes.js';
+import type { PartialRefundRow } from '../adapters/order-refunds.js';
+
+/**
+ * 部分退款 → 买家视图（P2-12，AJ-386）。
+ * @why 只出 成功 / 处理中（initiated / pending / unknown 都折成 `pending`）：failed 是钱没动的内部重试，
+ *      给买家看只会制造"退了又没退"的困惑。
+ * @why 不出 `reason` / `actor` / `provider_ref`：原因是管理员写给自己看的（可能是"客户难缠"），
+ *      操作人是内部账号——两者都不该出现在买家可见的响应里。
+ */
+export function toBuyerPartialRefunds(rows: readonly PartialRefundRow[]): JsonObject[] {
+  return rows
+    .filter((r) => r.status !== 'failed')
+    .map((r) => ({
+      status: r.status === 'succeeded' ? 'succeeded' : 'pending',
+      currency: r.currency,
+      amount_minor: r.amount_minor,
+      created_at: r.created_at.toISOString(),
+      ...(r.settled_at !== null ? { settled_at: r.settled_at.toISOString() } : {}),
+    }));
+}
 
 type JsonObject = Record<string, unknown>;
 
@@ -125,6 +145,9 @@ export function toOrderDetail(
     items: readonly OrderItemReadRow[];
     timeline: readonly { status: string; at: Date }[];
     payment: OrderPaymentSummary | null;
+    /** 关单后才到的付款（late_paid 事件，P2-11）：买家侧据此说"已收到付款，正在退款"。 */
+    latePaid: boolean;
+    partialRefunds: readonly PartialRefundRow[];
   },
   displayCurrencies: readonly DisplayCurrency[],
   imgBaseUrl: string | undefined,
@@ -145,5 +168,7 @@ export function toOrderDetail(
     ...withTrackingUrl(row.carrier, row.tracking_no),
     timeline: parts.timeline.map((t) => ({ status: t.status, at: t.at.toISOString() })),
     ...(parts.payment !== null ? { payment: toPaymentView(parts.payment) } : {}),
+    late_paid: parts.latePaid,
+    partial_refunds: toBuyerPartialRefunds(parts.partialRefunds),
   };
 }

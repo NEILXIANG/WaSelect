@@ -11,11 +11,10 @@
  *      调度器有心跳（`job_runs`）与锁，清理这件事因此是**可观测**的
  *      ——"最后一次成功清理是什么时候"是一个能直接回答的问题。
  *
- * @limitation 一：只删**已完成**的行（见 `deleteExpiredIdempotencyKeys` 的 @limitation）。
+ * @limitation 一：删已完成的行，以及**租约已过期**的崩溃遗留占位行（P2-21，AJ-386）；
+ *      仍在续租的行不动（见 `deleteExpiredIdempotencyKeys` 的 @why）。
  * @limitation 二：`processed` 是删除行数；**0 是正常的**，不代表 job 失败
  *      （`ports/scheduler.ts` 的 JobOutcome 口径）。
- * @limitation 三：不删"占位但未完成"的崩溃遗留行——那部分靠租约过期接管（既有设计），
- *      引入第二种清理语义只会让"什么时候该删"变成两处答案。
  *
  * @see ../adapters/idempotency.ts（SQL 与 TTL 常量）；docs/地基搭建清单.md 欠账 ①
  */

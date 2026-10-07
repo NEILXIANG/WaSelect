@@ -36,6 +36,8 @@ export interface AdminCredential {
   blocked: boolean;
   passwordHash: string | null;
   tokenVer: number;
+  /** TOTP 密钥（base32）；null = 未开通第二因素（P1-5，迁移 033）。 */
+  totpSecret: string | null;
 }
 
 /**
@@ -128,12 +130,13 @@ export async function findAdminCredential(db: Db, email: string): Promise<AdminC
       blocked_at: Date | null;
       password_hash: string | null;
       token_ver: number;
+      totp_secret: string | null;
     }[]
   >`
     -- ⚠️ 右边必须是 JS 归一的结果（normalizeAdminEmail），不能让 PG 再归一一次：
     --    PG 的 lower() 与 JS 的 toLowerCase() 不是同一个函数（'İ' 上实测不同，见该函数 @why）。
     --    两边各归一一次 ⇒ "查得到这个人"与"记到哪个桶"会分叉，邮箱桶的 30 次上限可被绕过（SEC2-07）。
-    select id, is_admin, blocked_at, password_hash, token_ver
+    select id, is_admin, blocked_at, password_hash, token_ver, totp_secret
       from users where lower(email) = ${normalizeAdminEmail(email)}
   `;
   const r = rows[0];
@@ -144,7 +147,21 @@ export async function findAdminCredential(db: Db, email: string): Promise<AdminC
     blocked: r.blocked_at !== null,
     passwordHash: r.password_hash,
     tokenVer: r.token_ver,
+    totpSecret: r.totp_secret,
   };
+}
+
+/**
+ * 登记一次 TOTP 步数（防重放，P1-5 / AJ-386）：只接受**大于**上次的步，原子条件更新。
+ * @returns false = 这一步（或更晚的一步）已经用过——同一个码第二次提交、或两个并发请求拿同一个码。
+ * @why 条件写在 `where` 里而不是先读后比：先读后比在并发下两个请求都读到旧值、都放行（与 A1 同一类洞）。
+ */
+export async function consumeTotpStep(db: Db, userId: string, step: number): Promise<boolean> {
+  const rows = await db`
+    update users set totp_last_step = ${step}
+     where id = ${userId} and (totp_last_step is null or totp_last_step < ${step})
+    returning id`;
+  return rows.length > 0;
 }
 
 /**

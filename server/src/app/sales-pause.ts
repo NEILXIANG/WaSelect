@@ -44,10 +44,21 @@ export async function readSalesPause(db: Db): Promise<SalesPauseState> {
   };
 }
 
-/** 三个入口前的守卫：停售中 → 40916；读库失败 → 放行并记 error（@limitation 一）。 */
+/**
+ * 三个入口前的守卫：停售中 → 40916；读库失败 → 放行并记 error（@limitation 一）。
+ * @why single-flight（P2-24，AJ-386）：同一时刻在途的请求共用**一次**读库；洪峰下 DB 读数与并发数脱钩。
+ *      不做 TTL 缓存：缓存会让"停售"晚生效几秒，而停售是止血开关，要的就是立即。
+ */
 export function salesOpenGuard(db: Db, logger: Logger): RequestHandler {
+  let inflight: Promise<SalesPauseState> | undefined;
+  const read = (): Promise<SalesPauseState> => {
+    inflight ??= readSalesPause(db).finally(() => {
+      inflight = undefined;
+    });
+    return inflight;
+  };
   return (_req, _res, next) => {
-    void readSalesPause(db).then(
+    void read().then(
       (s) => next(s.paused ? new AppError(40916, { reason: 'sales_paused' }) : undefined),
       (e: unknown) => {
         logger.error('sales_pause_read_failed', { result: 'failed', err: e });

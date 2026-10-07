@@ -12,7 +12,7 @@
  */
 export const CSV_BOM = '﻿';
 
-export type CsvCell = string | number | null | undefined;
+export type CsvCell = string | number | null | undefined | CsvText;
 
 const FORMULA_LEAD = /^[=+\-@\t\r]/;
 /**
@@ -23,9 +23,31 @@ const FORMULA_LEAD = /^[=+\-@\t\r]/;
  */
 const NUMBER_LIKE = /^[+-]?[\d\s().-]+$/;
 
+/**
+ * 必须在 Excel 里**保持文本**的号码列（第三轮缺口 P1-8，AJ-386）：邮编、电话、HS 码、运单号、JAN 码。
+ * @why Excel 打开 CSV 会把纯号码当数字：邮编 `02134` → `2134`、电话丢 `+`、HS 码 `6912.00` → `6912`、
+ *      长运单号变科学计数——报关代理拿到的就是错单。号码形态的值输出成 `="…"`，三大表格软件都按文本显示。
+ * @why 只对 NUMBER_LIKE 生效：含字母的值（`EE123456789JP`）本来就是文本；公式形态的值仍走注入防护加 `'`，
+ *      `="…"` 里只可能出现数字、空格、括号、点、连字符、加号，不会成为注入面。
+ * @limitation 用别的程序（脚本、数据库导入）读这份 CSV 时会看到字面的 `="02134"`——导出的受众是人和表格软件。
+ */
+export interface CsvText {
+  readonly kind: 'text';
+  readonly value: string | null | undefined;
+}
+
+export function asText(value: string | null | undefined): CsvText {
+  return { kind: 'text', value };
+}
+
 function cell(v: CsvCell): string {
   if (v === null || v === undefined) return '';
   if (typeof v === 'number') return String(v);
+  if (typeof v === 'object') {
+    const t = v.value;
+    if (t === null || t === undefined || t === '') return '';
+    return NUMBER_LIKE.test(t) ? `"=""${t}"""` : cell(t);
+  }
   const safe = FORMULA_LEAD.test(v) && !NUMBER_LIKE.test(v) ? `'${v}` : v;
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }

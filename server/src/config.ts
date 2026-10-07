@@ -502,9 +502,10 @@ const schema = z.object({
   SHUTDOWN_TOTAL_BUDGET_MS: timerMs(27_000, 0),
   /**
    * INF3-01：总预算到点之后、真正 `exit` 之前的日志 flush 窗口（毫秒）。
-   * @why 直接 `process.exit()` 会丢 SonicBoom 缓冲里最后几行——而那几行正是
-   *      "清理做到了哪一步"的唯一证据。给一个很短的窗口（默认 200ms）比 2s 的 `exitDelayMs` 合适：
-   *      此刻我们**已经超预算**了，不能再等 2s。
+   * @measured 2026-10-07（P2-25 更正）：生产形态的 pino 默认 destination 是**同步写**，`process.exit()` 不丢行
+   *           （logger.ts @limitation 三）。原先"直接 exit 会丢 SonicBoom 缓冲里最后几行"的前提不成立。
+   * @why 仍保留这 200ms：只对**异步** destination（将来若换成 `pino.destination({ sync: false })` 或 transport）有用；
+   *      代价只是超预算停机多等 200ms，远小于 Render 的 30s 宽限。不值得为删它改配置契约。
    */
   SHUTDOWN_BUDGET_FLUSH_MS: timerMs(200, 0),
   AUTO_DELIVER_DAYS: int(30, 1),

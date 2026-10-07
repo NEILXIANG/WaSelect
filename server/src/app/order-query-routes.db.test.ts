@@ -261,6 +261,57 @@ describe('GET /orders/{id}（订单详情）', () => {
   });
 });
 
+describe('买家可见的迟到付款与部分退款（P2-11 / P2-12，AJ-386）', () => {
+  it('🔴 默认：late_paid=false，partial_refunds=[]', async () => {
+    const srv = await buildServer();
+    try {
+      const orderId = await createOrder(srv.url, 'q1');
+      const r = await get(srv.url, `/api/v1/orders/${orderId}`);
+      expect(r.json['late_paid']).toBe(false);
+      expect(r.json['partial_refunds']).toEqual([]);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 关单后才到的付款 → late_paid=true（买家看到"已收到付款，正在退款"，而不是"请重新下单"）', async () => {
+    const srv = await buildServer();
+    try {
+      const orderId = await createOrder(srv.url, 'q1');
+      await db`insert into order_events (order_id, status, actor, note)
+               values (${orderId}, 'late_paid', 'provider:stripe', 'pay-x')`;
+      const r = await get(srv.url, `/api/v1/orders/${orderId}`);
+      expect(r.json['late_paid']).toBe(true);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 部分退款：成功与处理中的带出（不含管理员原因与操作人）；失败的不出现（钱没动）', async () => {
+    const srv = await buildServer();
+    try {
+      const orderId = await createOrder(srv.url, 'q1');
+      await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+               values ('pay-1', ${orderId}, 'mock', 'succeeded', 'USD', 14000)`;
+      await db`
+        insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, created_at)
+        values ('rf-1', ${orderId}, 'pay-1', 'USD', 1200, '内部备注：客户难缠', 'succeeded', 'admin:u-a', now() - interval '2 hours'),
+               ('rf-2', ${orderId}, 'pay-1', 'USD', 800, 'x', 'pending', 'admin:u-a', now() - interval '1 hour'),
+               ('rf-3', ${orderId}, 'pay-1', 'USD', 500, 'x', 'failed', 'admin:u-a', now())`;
+      const r = await get(srv.url, `/api/v1/orders/${orderId}`);
+      const rows = r.json['partial_refunds'] as Array<Record<string, unknown>>;
+      expect(rows.map((x) => [x['status'], x['amount_minor'], x['currency']])).toEqual([
+        ['succeeded', 1200, 'USD'],
+        ['pending', 800, 'USD'],
+      ]);
+      expect(JSON.stringify(rows)).not.toContain('客户难缠');
+      expect(JSON.stringify(rows)).not.toContain('admin:');
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
 describe('fx_snapshot 脏汇率：读路径降级，不许整页 500（AJ-359）', () => {
   // @why 造脏数据用 jsonb_set 只改一个键、其余保持建单链路真值：
   //      "整快照手写"会连带把 CNY 也固定成我猜的值，那就分不清"降级"与"我写错了"。

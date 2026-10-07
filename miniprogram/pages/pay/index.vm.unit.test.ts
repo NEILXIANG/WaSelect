@@ -426,6 +426,21 @@ describe('copyResult 清掉旧的报障小字（扫描 W-05）', () => {
   });
 });
 
+describe('payPageView：关单后才到的付款（late_paid，P2-11 / AJ-386）', () => {
+  it('🔴 已关单 + late_paid → 说"已收到付款、会原路退回"，不说"未完成付款，请重新下单"', () => {
+    for (const status of ['expired', 'cancelled']) {
+      const v = payPageView({ status, late_paid: true });
+      expect(v.payable).toBe(false);
+      expect(v.closedText).toContain('已收到');
+      expect(v.closedText).toContain('退回');
+      expect(v.closedText).not.toContain('重新下单');
+    }
+  });
+  it('没有 late_paid（或为 false）→ 原文案不变', () => {
+    expect(payPageView({ status: 'expired', late_paid: false }).closedText).toContain('重新下单');
+  });
+});
+
 describe('payPageView：倒计时到点即收起支付方式（P2-35）', () => {
   const EXP = '2026-10-06T10:30:00.000Z';
   const exp = Date.parse(EXP);

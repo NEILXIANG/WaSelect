@@ -144,3 +144,53 @@ describe('全局停售开关', () => {
     expect(audit).toHaveLength(0);
   });
 });
+
+describe('P2-24（AJ-386）：停售守卫跑在报价限流**之后**', () => {
+  /**
+   * @why 匿名刷 `/orders/quote` 时，限流挡在前面才保护得了守卫那次 DB 读；
+   *      守卫在前 = 每个被限流的请求照样先打一次库。被限流的请求应拿到 42901 而不是 40916。
+   */
+  it('🔴 报价超限 + 停售中 → 第二次是 42901（限流先判），不是 40916', async () => {
+    const logger = createLogger({ env: 'test', destination: new MemorySink() });
+    const config = loadConfig({
+      NODE_ENV: 'development',
+      PORT: '1',
+      HOST: '127.0.0.1',
+      DATABASE_URL: TEST_DB_URL,
+      JWT_SECRET,
+      PAYMENT_CHANNELS: 'mock',
+      MOCK_CALLBACK_SECRET: 'mock-secret-for-sales-pause-test',
+      TERMS_VERSION: 'TOS-TEST-1',
+      RATE_LIMIT_QUOTE_PER_MIN: '1',
+    });
+    const app = createHttpApp({
+      logger,
+      mount: (a) =>
+        mountAllRoutes(a, {
+          config,
+          logger,
+          db,
+          events: createEventBus(logger),
+          storage: createMemoryStorage(),
+        }),
+    });
+    const s = await listen(app);
+    try {
+      await db`insert into app_config (key, value) values ('sales.paused', '{"paused":true,"reason":"t"}'::jsonb)
+               on conflict (key) do update set value = excluded.value`;
+      const hit = async () =>
+        (
+          await fetch(`http://127.0.0.1:${String(s.port)}/api/v1/orders/quote`, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${buyer}`, 'content-type': 'application/json' },
+            body: JSON.stringify(ITEMS),
+          })
+        ).json() as Promise<{ code: number }>;
+      expect((await hit()).code).toBe(40916);
+      expect((await hit()).code).toBe(42901);
+    } finally {
+      await db`delete from app_config where key = 'sales.paused'`;
+      await s.close();
+    }
+  });
+});

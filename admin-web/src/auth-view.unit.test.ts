@@ -7,9 +7,9 @@ import { ApiError } from './api/errors.js';
 import { expiryWarning, jwtExpMs, loginErrorText, loginPrecheck } from './auth-view.js';
 
 describe('loginErrorText（P2-43）', () => {
-  it('40101 在登录页说"邮箱或口令不正确"，不说"登录已过期"', () => {
+  it('40101 在登录页说"邮箱、口令或二次验证码不正确"，不说"登录已过期"', () => {
     const t = loginErrorText(new ApiError(40101, '未登录或登录已过期', 'tr-1'));
-    expect(t).toBe('邮箱或口令不正确（报障码：tr-1）');
+    expect(t).toBe('邮箱、口令或二次验证码不正确（报障码：tr-1）');
   });
 
   it('42901 读 retry-after 换算分钟（向上取整）；头缺失时不编数字', () => {
@@ -25,6 +25,19 @@ describe('loginErrorText（P2-43）', () => {
   it('其它错误码透出服务端 message；非 ApiError 给通用文案', () => {
     expect(loginErrorText(new ApiError(50000, '服务器内部错误', 't'))).toContain('服务器内部错误');
     expect(loginErrorText(new Error('boom'))).toBe('登录失败，请稍后重试');
+  });
+});
+
+describe('loginPrecheck：二次验证码（P1-5）', () => {
+  it('🔴 留空放行（没开 TOTP）；填了就必须是 6 位数字', () => {
+    const pw = 'x'.repeat(20);
+    expect(loginPrecheck(pw, '')).toBe('');
+    expect(loginPrecheck(pw, '012345')).toBe('');
+    expect(loginPrecheck(pw, '12345')).toContain('6 位数字');
+    expect(loginPrecheck(pw, '12a456')).toContain('6 位数字');
+  });
+  it('40101 文案提到二次验证码（开了 TOTP 时口令对、码错也是这个答复）', () => {
+    expect(loginErrorText(new ApiError(40101, 'x', ''))).toContain('二次验证码');
   });
 });
 

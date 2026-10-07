@@ -153,7 +153,9 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
    * @why 每个字段单独一条：批量断言会在注入时产生覆盖假象（改一处、另一处兜住）。
    */
   it('🔴 hs_code / customs_desc_en / title_ja / purchase_source 超列宽 → 逐字段拒绝（AJ-298）', () => {
-    expect(reasons({ ...base(), hs_code: '1'.repeat(11) })).toContain('hs_code_too_long');
+    // 列宽 16（迁移 031，AJ-386）：带点的美国 10 位 HTS `3304.99.5000` 是 12 字，原先 VARCHAR(10) 存不进
+    expect(reasons({ ...base(), hs_code: '1'.repeat(17) })).toContain('hs_code_too_long');
+    expect(ok({ ...base(), hs_code: '3304.99.5000' }).hs_code).toBe('3304.99.5000');
     expect(reasons({ ...base(), customs_desc_en: 'x'.repeat(121) })).toContain(
       'customs_desc_too_long',
     );
@@ -162,7 +164,7 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
       'purchase_source_too_long',
     );
     // 恰好等于列宽 → 放行（DB 能存下就不该拦）
-    expect(ok({ ...base(), hs_code: '1'.repeat(10) }).hs_code).toBe('1'.repeat(10));
+    expect(ok({ ...base(), hs_code: '1'.repeat(16) }).hs_code).toBe('1'.repeat(16));
   });
 
   it('stock 负数 → 拒绝（0 允许：预售/缺货上架是正常运营动作）', () => {

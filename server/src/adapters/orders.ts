@@ -716,6 +716,8 @@ export async function markOrderCancelled(
   userId: string,
   at: Date,
   actor: string,
+  /** 管理端取消的原因（AJ-386）；买家取消 / 拉黑连带取消不传。 */
+  note: string | null = null,
 ): Promise<boolean> {
   const updated = await tx`
     update orders
@@ -726,8 +728,8 @@ export async function markOrderCancelled(
   `;
   if (updated.count === 0) return false;
   await tx`
-    insert into order_events (order_id, status, actor, at)
-    values (${orderId}, 'cancelled', ${actor}, ${at})
+    insert into order_events (order_id, status, note, actor, at)
+    values (${orderId}, 'cancelled', ${note}, ${actor}, ${at})
   `;
   return true;
 }

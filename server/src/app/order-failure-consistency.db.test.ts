@@ -338,6 +338,7 @@ describe('快照一致性：订单是下单那一刻的事实，不随源数据�
         price_jpy: 9900,
         weight_g: 620,
         stock: Number(knife?.['stock']),
+        expected_stock: Number(knife?.['stock']), // 0.6.37（P2-8）
         customs_desc_en: 'kitchen knife, stainless steel',
         hs_code: '8211.91',
         origin_country: 'JP',

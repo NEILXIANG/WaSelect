@@ -1,6 +1,7 @@
 /** 职责：查件链接（剩余清单 3-5）。 */
 import { describe, expect, it } from 'vitest';
 import { trackingUrl } from './tracking.js';
+import { trackingNoRecognized } from './tracking.js';
 
 const JP = (n: string) =>
   `https://trackings.post.japanpost.jp/services/srv/search?requestNo1=${n}&search.x=1&search.y=1&locale=en&startingUrlPatten=`;
@@ -37,5 +38,19 @@ describe('trackingUrl', () => {
     expect(trackingUrl('EMS', null)).toBeNull();
     expect(trackingUrl('EMS', '   ')).toBeNull();
     expect(trackingUrl('EMS', 'A&locale=ja')).toBe(JP('A%26LOCALE%3DJA'));
+  });
+});
+
+describe('trackingNoRecognized（第三轮缺口 P1-10：发货 / 改单号时提示核对，不拦）', () => {
+  it.each([
+    ['EMS', 'EE123456789JP', true],
+    ['ems', 'ee 123456789 jp', true],
+    ['EMS', 'EE12345678JP', false],
+    ['EMS', '=HYPERLINK("x")', false],
+    ['Yamato', '1234-5678-9012', true],
+    ['Yamato', '12', false],
+    ['', '', false],
+  ] as const)('%s / %s → %s', (carrier, no, expected) => {
+    expect(trackingNoRecognized(carrier, no)).toBe(expected);
   });
 });

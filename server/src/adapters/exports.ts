@@ -15,7 +15,7 @@
  * @see app/admin-export-routes.ts；domain/csv.ts
  */
 import type { Db } from './db.js';
-import type { CsvCell } from '../domain/csv.js';
+import { asText, type CsvCell } from '../domain/csv.js';
 
 export const EXPORT_KINDS = ['orders', 'purchase', 'customs'] as const;
 export type ExportKind = (typeof EXPORT_KINDS)[number];
@@ -27,7 +27,15 @@ export interface ExportTable {
 
 const str = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
-const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : null);
+/**
+ * 日本时间 `YYYY-MM-DD HH:mm:ss`（第三轮缺口 P2-46，AJ-386）：管理端页面全部是 JST，导出原先是 UTC `…Z`，
+ * 运营对照列表与 CSV 差 9 小时，按日统计会错一天。表头相应带 `_jst` 后缀，读的人不用猜时区。
+ * @why 不用 Intl：结果只取决于 UTC 时刻 + 固定 9 小时（日本无夏令时），纯算术最确定。
+ */
+const jst = (v: unknown): string | null =>
+  v instanceof Date
+    ? new Date(v.getTime() + 9 * 3600_000).toISOString().slice(0, 19).replace('T', ' ')
+    : null;
 const usd = (cents: unknown): string | null =>
   cents === null || cents === undefined ? null : (Number(cents) / 100).toFixed(2);
 
@@ -43,9 +51,9 @@ async function ordersTable(db: Db, status: string | undefined): Promise<ExportTa
     header: [
       'order_no',
       'status',
-      'created_at',
-      'paid_at',
-      'shipped_at',
+      'created_at_jst',
+      'paid_at_jst',
+      'shipped_at_jst',
       'items_jpy',
       'shipping_jpy',
       'duty_jpy',
@@ -59,9 +67,9 @@ async function ordersTable(db: Db, status: string | undefined): Promise<ExportTa
     rows: rows.map((r) => [
       str(r['order_no']),
       str(r['status']),
-      iso(r['created_at']),
-      iso(r['paid_at']),
-      iso(r['shipped_at']),
+      jst(r['created_at']),
+      jst(r['paid_at']),
+      jst(r['shipped_at']),
       num(r['items_jpy']),
       num(r['shipping_jpy']),
       num(r['duty_jpy']),
@@ -70,7 +78,7 @@ async function ordersTable(db: Db, status: string | undefined): Promise<ExportTa
       str(r['state']),
       str(r['country']),
       str(r['carrier']),
-      str(r['tracking_no']),
+      asText(str(r['tracking_no'])),
     ]),
   };
 }
@@ -85,7 +93,7 @@ async function purchaseTable(db: Db): Promise<ExportTable> {
   return {
     header: [
       'order_no',
-      'paid_at',
+      'paid_at_jst',
       'product_id',
       'title',
       'title_ja',
@@ -97,11 +105,11 @@ async function purchaseTable(db: Db): Promise<ExportTable> {
     ],
     rows: rows.map((r) => [
       str(r['order_no']),
-      iso(r['paid_at']),
+      jst(r['paid_at']),
       str(r['product_id']),
       str(r['title_snapshot']),
       str(r['title_ja']),
-      str(r['jan_code']),
+      asText(str(r['jan_code'])),
       str(r['purchase_source']),
       num(r['qty']),
       num(r['unit_price_jpy']),
@@ -146,15 +154,15 @@ async function customsTable(db: Db): Promise<ExportTable> {
       return [
         str(r['order_no']),
         str(a['recipient']),
-        str(a['phone']),
+        asText(str(a['phone'])),
         str(a['line1']),
         str(a['line2']),
         str(a['city']),
         str(a['state']),
-        str(a['postal_code']),
+        asText(str(a['postal_code'])),
         str(a['country']),
         str(r['customs_desc_en']),
-        str(r['hs_code']),
+        asText(str(r['hs_code'])),
         str(r['origin_country']),
         num(r['qty']),
         num(r['weight_g']),

@@ -14,9 +14,12 @@ import { ApiError } from './api/errors.js';
  * @why 服务端对短于 12 位的口令直接拒（契约 minLength），前端先拦，省一次请求、
  *      也不让"口令太短"消耗登录失败计数。只查长度，不做强度规则（强度以服务端为准）。
  */
-export function loginPrecheck(password: string): string {
+export function loginPrecheck(password: string, totp = ''): string {
   if (password.length < ADMIN_PASSWORD_MIN_LENGTH)
     return `口令至少 ${ADMIN_PASSWORD_MIN_LENGTH} 位`;
+  // P1-5：二次验证码可留空（账号没开 TOTP）；填了就得是 6 位数字——形状不对服务端回 40001，先在这里拦
+  if (totp !== '' && !/^\d{6}$/.test(totp))
+    return '二次验证码是 6 位数字（验证器 App 上显示的那串）';
   return '';
 }
 
@@ -29,7 +32,8 @@ export function loginPrecheck(password: string): string {
 export function loginErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return '登录失败，请稍后重试';
   const tail = err.traceId !== '' ? `（报障码：${err.traceId}）` : '';
-  if (err.code === 40101) return `邮箱或口令不正确${tail}`;
+  // 开了 TOTP 的账号：口令对、码错也是同一个 40101（服务端刻意不区分，不泄露"口令是对的"）
+  if (err.code === 40101) return `邮箱、口令或二次验证码不正确${tail}`;
   if (err.code === 42901) {
     const sec = err.retryAfterSec;
     return sec !== undefined

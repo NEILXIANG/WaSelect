@@ -202,6 +202,26 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
     }
   });
 
+  it('🔴 P2-26 作业的 trace 就是触发它的 HTTP 请求的 trace，且有一行 internal_job_accepted 带 run_id', async () => {
+    // @why 原先调度器每轮新起一个 trace：cron 端看到的 202（x-trace-id）与作业日志、job_runs.trace_id 对不上，
+    //      "这一轮是哪次 cron 调起来的"只能靠时间猜。
+    const srv = await buildServer({ withSecret: true });
+    try {
+      const res = await trigger(srv.url, JOB_SECRET);
+      const traceId = res.headers.get('x-trace-id');
+      const { run_id: runId } = (await res.json()) as { run_id: string };
+      await waitForDailyHeartbeat();
+      const runs = await db`select trace_id from job_runs where name = 'daily'`;
+      expect(runs[0]?.['trace_id']).toBe(traceId);
+      const accepted = srv.sink.find('internal_job_accepted');
+      expect(accepted).toHaveLength(1);
+      expect((accepted[0]?.['ctx'] as { run_id?: string }).run_id).toBe(runId);
+      expect(accepted[0]?.['trace_id']).toBe(traceId);
+    } finally {
+      await srv.close();
+    }
+  });
+
   /** 剩余清单 3-4：归档作业挂在 daily 列表里（生产接线）——单测证明作业本身，这里证明它真的被跑到。 */
   it('🔴 daily 一轮会归档付款满 24 小时的审核期测试单', async () => {
     await db`insert into users (id, openid) values ('u-arch', 'o-arch') on conflict do nothing`;

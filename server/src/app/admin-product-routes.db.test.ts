@@ -367,6 +367,51 @@ describe('PUT /admin/products/{id} 与 PATCH status', () => {
     await s.close();
   });
 
+  // ── P2-8（第三轮缺口，AJ-386）：库存是并发写的列，updated_at 凭据护不住它 ───────────
+  // @why 下单扣减 / 关单回补只动 stock、不碰 updated_at（orders.ts decrementStock 的 @why），
+  //      所以运营打开表单时库存 10、期间卖出 2 件（库里 8）、运营改成 15 保存——凭据照样匹配，
+  //      15 覆盖了 8，多卖出 2 件根本不存在的货。
+  it('🔴 PUT 带 stock 却缺 expected_stock → 40001，库存不变', async () => {
+    const s = await buildServer();
+    const id = await createOne(s);
+    const before = (await db`select stock from products where id = ${id}`)[0]?.stock as number;
+    const r = await put(s, id, { stock: 15 }, (await updatedAtOf(id)).toISOString());
+    expect(r.status).toBe(400);
+    expect(r.json.code).toBe(40001);
+    expect((await db`select stock from products where id = ${id}`)[0]?.stock).toBe(before);
+    await s.close();
+  });
+
+  it('🔴 PUT stock 期间被下单扣减（expected_stock 对不上）→ 40914，整行不写', async () => {
+    const s = await buildServer();
+    const id = await createOne(s);
+    await db`update products set stock = 10 where id = ${id}`;
+    const at = (await updatedAtOf(id)).toISOString();
+    await db`update products set stock = stock - 2 where id = ${id}`; // 买家下单，不碰 updated_at
+    const r = await put(s, id, { stock: 15, expected_stock: 10, title: '改库存' }, at);
+    expect(r.status).toBe(409);
+    expect(r.json.code).toBe(40914);
+    const row = (await db`select stock, title from products where id = ${id}`)[0];
+    expect(row?.stock).toBe(8);
+    expect(row?.title).toBe('货架测试商品');
+    await s.close();
+  });
+
+  it('PUT stock + expected_stock 匹配 → 200 且库存写入', async () => {
+    const s = await buildServer();
+    const id = await createOne(s);
+    await db`update products set stock = 10 where id = ${id}`;
+    const r = await put(
+      s,
+      id,
+      { stock: 15, expected_stock: 10 },
+      (await updatedAtOf(id)).toISOString(),
+    );
+    expect(r.status).toBe(200);
+    expect((await db`select stock from products where id = ${id}`)[0]?.stock).toBe(15);
+    await s.close();
+  });
+
   it('PATCH status=offline → 200 且库里 status 变了', async () => {
     const s = await buildServer();
     const id = await createOne(s);

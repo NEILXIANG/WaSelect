@@ -134,7 +134,14 @@ export async function assertNoPaidSession(
 export async function cancelOrder(
   tx: Db,
   deps: { clock: Clock; logger: Logger },
-  input: { orderId: string; userId: string },
+  input: {
+    orderId: string;
+    userId: string;
+    /** 默认 `user:<userId>`；管理端代为取消时传 `admin:<sub>`（AJ-386）。 */
+    actor?: string;
+    /** 管理端取消的原因，进 order_events.note。 */
+    note?: string;
+  },
 ): Promise<void> {
   const { clock, logger } = deps;
 
@@ -153,7 +160,8 @@ export async function cancelOrder(
     input.orderId,
     input.userId,
     clock.now(),
-    `user:${input.userId}`,
+    input.actor ?? `user:${input.userId}`,
+    input.note ?? null,
   );
   if (!transitioned) {
     throw new AppError(40902, { from: order.status, to: 'cancelled', where: 'orders.cancel' });

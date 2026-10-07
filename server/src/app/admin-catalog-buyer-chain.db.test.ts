@@ -184,6 +184,8 @@ describe('管理端编辑商品 × 并发库存变化（AJ-175 拍板：库存�
         ...PRODUCT_BODY,
         title: 'Chef Knife 改名',
         stock: 20,
+        // 0.6.37（P2-8）：改库存必须带"看到的库存"（库里此刻是 5）
+        expected_stock: 5,
         expected_updated_at: String(put.json['updated_at']),
       },
     });
@@ -254,6 +256,7 @@ describe('上传 → 商品图 → 买家看到的图', () => {
         price_jpy: 8800,
         weight_g: 620,
         stock: 5,
+        expected_stock: Number(knife?.['stock']),
         customs_desc_en: 'kitchen knife, stainless steel',
         hs_code: '8211.91',
         origin_country: 'JP',

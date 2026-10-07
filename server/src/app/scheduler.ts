@@ -152,8 +152,13 @@ async function runOneJob<TTx>(
 export async function runSchedulerOnce<TTx>(
   deps: SchedulerDeps<TTx>,
   jobs: readonly SchedulerJob<TTx>[],
+  /**
+   * 沿用的 trace_id（P2-26，AJ-386）：由 HTTP 触发的一轮（`/internal/jobs/daily`）传入请求的 trace，
+   * 于是 cron 看到的 202、作业日志、`job_runs.trace_id` 是同一个值；进程内定时器不传，自建一条。
+   */
+  opts: { traceId?: string | undefined } = {},
 ): Promise<SchedulerTickResult> {
-  const traceId = newTraceId();
+  const traceId = opts.traceId ?? newTraceId();
   // 定时任务不在任何请求的异步链里，必须自己建一条——context.ts @limitation 一 点名的就是这里。
   return runWithContext(
     { trace_id: traceId, module: 'scheduler', actor: 'scheduler' },

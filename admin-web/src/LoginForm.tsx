@@ -25,7 +25,8 @@ export function LoginForm({
   hint = '',
   bare = false,
 }: {
-  onLogin: (email: string, password: string) => Promise<void>;
+  /** totp：二次验证码（P1-5），没开 TOTP 的账号留空即可。 */
+  onLogin: (email: string, password: string, totp: string) => Promise<void>;
   /** 标题（会话过期浮层里改成"登录已过期，请重新登录"）。 */
   title?: string;
   /** 标题下的说明（浮层里用来告诉管理员"你填的内容还在"）。 */
@@ -35,13 +36,14 @@ export function LoginForm({
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [totp, setTotp] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault();
     if (busy) return; // 防连点：重复提交打的是同一个登录接口，服务端限流会先受不了
-    const pre = loginPrecheck(password);
+    const pre = loginPrecheck(password, totp.trim());
     if (pre !== '') {
       setError(pre);
       return;
@@ -49,7 +51,8 @@ export function LoginForm({
     setError('');
     setBusy(true);
     try {
-      await onLogin(email.trim(), password);
+      await onLogin(email.trim(), password, totp.trim());
+      setTotp(''); // 码一次性（服务端防重放）；留着会让下一次登录拿旧码撞 40101
     } catch (err) {
       // 未知异常（代码 bug）给通用文案——细节在控制台与 traceId
       setError(loginErrorText(err));
@@ -82,6 +85,19 @@ export function LoginForm({
           autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+        />
+      </label>
+      <label className="field">
+        <span className="label">二次验证码（已开通时必填）</span>
+        <input
+          className="input"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          maxLength={6}
+          pattern="[0-9]{6}"
+          placeholder="验证器 App 上的 6 位数字"
+          value={totp}
+          onChange={(e) => setTotp(e.target.value)}
         />
       </label>
       {error !== '' && (

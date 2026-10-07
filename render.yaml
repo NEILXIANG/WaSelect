@@ -221,6 +221,8 @@ services:
   # @measured(本地桩服务，2026-09-28，同一条 startCommand)：202 → 打印「daily job HTTP 202」exit 0；
   #      401 → exit 1；地址不可达 → exit 1（非 0 退出让 Render 把这次作业标成失败，控制台可见）。
   # @limitation 发现延迟 = 一天一轮（tick 停摆最迟约 24 小时才被看见）；要更快需另起高频作业。
+  # @why 30 秒超时 + 打印 x-trace-id（第三轮缺口 P2-26，AJ-386）：端点只回 202 不等作业，30 秒不回就是服务没起来，
+  #      挂着不退出会让 Render 把这一轮显示成"进行中"；trace 与作业日志、job_runs.trace_id 是同一个值，可直接反查。
   # @limitation 私网请求不经公网 TLS，由共享密钥头鉴权（x-internal-job-secret，≥32 字符，恒定时间比较）。
   - type: cron
     name: waselect-daily
@@ -232,8 +234,9 @@ services:
     buildCommand: 'true' # 不装依赖：只发一个 HTTP 请求（Node 22 自带 fetch）
     startCommand: >-
       node -e "fetch('http://' + process.env.DAILY_JOB_TARGET + '/api/v1/internal/jobs/daily',
-      {method: 'POST', headers: {'x-internal-job-secret': process.env.INTERNAL_JOB_SECRET}})
-      .then((r) => { console.log('daily job HTTP', r.status); if (r.status !== 202) process.exit(1); })
+      {method: 'POST', headers: {'x-internal-job-secret': process.env.INTERNAL_JOB_SECRET},
+      signal: AbortSignal.timeout(30000)})
+      .then((r) => { console.log('daily job HTTP', r.status, 'trace', r.headers.get('x-trace-id')); if (r.status !== 202) process.exit(1); })
       .catch((e) => { console.error(e); process.exit(1); })"
     envVars:
       - key: NODE_VERSION

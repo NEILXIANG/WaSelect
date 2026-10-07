@@ -59,7 +59,10 @@ export function App() {
   // 登录专用的请求实例：**不接 onUnauthorized**——登录接口的 40101 是"口令不对"，不是"会话失效"
   const loginApi = useMemo(() => createAdminApi({ baseUrl, getToken: () => '' }), [baseUrl]);
   return (
-    <AuthGate store={tokenStore} login={(email, password) => login(loginApi, { email, password })}>
+    <AuthGate
+      store={tokenStore}
+      login={(email, password, totp) => login(loginApi, { email, password, totp })}
+    >
       {(session) => <AdminShell baseUrl={baseUrl} session={session} />}
     </AuthGate>
   );

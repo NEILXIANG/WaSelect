@@ -174,7 +174,8 @@ export const PRODUCT_MAX_WEIGHT_G = SHIPPING_RATE_BOUNDS.maxWeightG - PRODUCT_PA
  */
 export const PRODUCT_MAX_CHARS = {
   title: 255,
-  hs_code: 10,
+  // 迁移 031（AJ-386）：10 → 16，带点的美国 10 位 HTS（`3304.99.5000`，12 字）要能存
+  hs_code: 16,
   customs_desc_en: 120,
   title_ja: 255,
   jan_code: 13,

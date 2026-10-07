@@ -18,7 +18,7 @@
  * @limitation 一：分类展示名落**本文件**而不是服务端下发——契约只给 key。
  *              分类 **key** 自第三轮缺口 §4 起从 shared 引（`PRODUCT_CATEGORY`），不再自备一份；
  *              但**展示名**仍与小程序 `pages/home/index.vm.js` 的 CATEGORY_LABELS 是**两份真源**
- *              （且现状不一致：daily 管理端「日用杂货」、小程序「生活百货」——待用户拍板统一口径），
+ *              （daily 两端统一叫「生活百货」，用户 2026-10-07 拍板），
  *              由各自的"与契约 enum 双向比对"守着；多语言（本项目有 zh/ja/en）落地时
  *              两处要一起改成下发式，届时这条 @limitation 应被删除。
  * @limitation 二：**不做图片裁剪/尺寸校验**（那是 `POST /admin/upload` 与 R2 的事），
@@ -50,7 +50,7 @@ export { PRODUCT_CATEGORY, type ProductCategory };
 /** 分类展示名（@see @limitation 一）。 */
 export const CATEGORY_LABELS: Readonly<Record<ProductCategory, string>> = {
   beauty: '美妆护肤',
-  daily: '日用杂货',
+  daily: '生活百货', // 与小程序同名（用户 2026-10-07 拍板）
   kitchen: '厨房餐具',
   food: '食品',
 };
@@ -445,8 +445,8 @@ function sciHint(raw: string): string {
 /**
  * HS 编码形状（P2-51）：数字，可用点号分段，数字合计 6–10 位（国际 6 位 → 美国 HTS 10 位）。
  * @why 服务端只判"填没填"（product-input.ts @limitation 二），"3304,99" "HS3304" 这类录入会原样进报关单。
- * @limitation 列宽是 VARCHAR(10)（`PRODUCT_MAX_CHARS.hs_code`），带点号的 10 位 HTS（`3304.99.5000`，12 字符）
- *             会被长度检查拦下——需要去掉点号录入。是否放宽列宽属数据库迁移，不在本轮。
+ * @why 列宽 16（迁移 031，AJ-386）：带点号的 10 位 HTS（`3304.99.5000`，12 字符）可原样录入，与报关代理写法一致。
+ * @limitation 点号位置不校验（`33.0499.5000` 也算合法）；只管"是数字、位数对"。
  */
 export function hsCodeShapeOk(raw: string): boolean {
   const t = raw.trim();
@@ -534,6 +534,10 @@ export function toProductInput(form: unknown, originalStock?: string): Record<st
     cost_jpy: f.costJpy.trim() === '' ? undefined : Number(f.costJpy),
     weight_g: Number(f.weightG),
     ...(stockChanged ? { stock: Number(f.stock) } : {}),
+    // P2-8（AJ-386）：改库存时带上"打开表单时看到的数"，期间被下单扣减过 → 服务端 40914，不会覆盖
+    ...(stockChanged && originalStock !== undefined
+      ? { expected_stock: Number(originalStock) }
+      : {}),
     description: f.description.trim(),
     customs_desc_en: f.customsDescEn.trim(),
     origin_country: 'JP',

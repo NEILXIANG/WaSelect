@@ -59,6 +59,7 @@ import { mountHomeRoutes } from './home-routes.js';
 import { mountAdminProductRoutes } from './admin-product-routes.js';
 import { mountAdminOrderRoutes } from './admin-order-routes.js';
 import { mountPartialRefundRoutes } from './partial-refund-routes.js';
+import { mountAdminOrderFixRoutes } from './admin-order-fix-routes.js';
 import { mountSalesPauseRoutes, salesOpenGuard } from './sales-pause.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAdminBannerRoutes } from './admin-banner-routes.js';
@@ -284,18 +285,21 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
    *    限流也必须全环境存在（不能只在某个环境才有计数）。
    * ⚠️ 进程内实现只在**单实例**下正确（rate-limit-memory.ts @limitation 一，R-I1-2）。
    */
-  // ── 全局停售（AJ-384）：挂在三个"新的钱"入口的**最前面**（先于限流与鉴权），停售中一律 40916 ──
-  // ⚠️ 逐条注册而不是传路径数组：路由快照（route-snapshot.ts）按字符串路径内省，数组会让它崩
-  const salesOpen = salesOpenGuard(db, logger);
-  for (const p of ['/api/v1/orders/quote', '/api/v1/orders', '/api/v1/orders/:id/pay']) {
-    app.post(p, salesOpen);
-  }
   const rateLimitStore = createMemoryRateLimitStore();
   const rateLimitDeps = { store: rateLimitStore, clock, logger };
   app.use(
     '/api/v1/orders/quote',
     rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('orders.quote')),
   );
+  // ── 全局停售（AJ-384）：挂在三个"新的钱"入口前（先于鉴权），停售中一律 40916 ──
+  // P2-24（AJ-386）：报价的守卫挪到**报价限流之后**——匿名刷报价时，被限流的请求不再先打一次库。
+  //   建单 / 发起支付的限流在各自路由链里（createOrderLimiter / payLimiter），守卫仍在其前；
+  //   那两条要登录，且守卫读库已做 single-flight（sales-pause.ts），并发洪峰只打一次库。
+  // ⚠️ 逐条注册而不是传路径数组：路由快照（route-snapshot.ts）按字符串路径内省，数组会让它崩
+  const salesOpen = salesOpenGuard(db, logger);
+  for (const p of ['/api/v1/orders/quote', '/api/v1/orders', '/api/v1/orders/:id/pay']) {
+    app.post(p, salesOpen);
+  }
   mountQuoteRoutes(app, {
     db,
     logger,
@@ -354,6 +358,17 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     identity,
     registry,
     events,
+  });
+  // ── 管理端手滑出口（AJ-386）：取消未付单 / 改运单号 ──
+  mountAdminOrderFixRoutes(app, {
+    db,
+    logger,
+    clock,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+    registry,
+    events,
+    idGen: systemIdGen,
   });
   // ── CSV 导出（剩余清单 3-3）：订单 / 待采购 / 待发货报关；导出动作显式进审计 ──
   mountAdminExportRoutes(app, {

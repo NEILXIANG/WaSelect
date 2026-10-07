@@ -1,6 +1,6 @@
 /** 职责：CSV 编码（剩余清单 3-3）——RFC 4180 转义、公式注入防护、Excel 中文不乱码。 */
 import { describe, expect, it } from 'vitest';
-import { CSV_BOM, toCsv } from './csv.js';
+import { CSV_BOM, asText, toCsv } from './csv.js';
 
 describe('toCsv', () => {
   it('🔴 逗号 / 引号 / 换行按 RFC 4180 包引号、引号加倍；行尾 CRLF；首行表头', () => {
@@ -53,5 +53,32 @@ describe('toCsv：号码形态不加引号', () => {
       "'+SUM(A1)",
       "'-2+3*cmd",
     ]);
+  });
+});
+
+/**
+ * 第三轮缺口 P1-8（AJ-386）：Excel 打开 CSV 时把号码列当数字——邮编 `02134` 变 `2134`、电话 `+1415…` 丢 `+`、
+ * HS 码 `6912.00` 变 `6912`、长运单号变科学计数。报关代理拿到的就是错单。
+ * `asText` 标记的列输出成 `="…"`（Excel / Numbers / Google Sheets 都按文本显示），且只对号码形态生效。
+ */
+describe('toCsv：asText 列在 Excel 里保持文本', () => {
+  it('🔴 号码形态 → ="…"（CSV 转义后两侧引号加倍）；空值仍为空', () => {
+    const lines = toCsv(
+      ['zip', 'phone', 'hs'],
+      [
+        [asText('02134'), asText('+14155550120'), asText('6912.00')],
+        [asText(null), asText(''), asText(undefined)],
+      ],
+    )
+      .split('\r\n')
+      .slice(1, 3);
+    expect(lines).toEqual(['"=""02134""","=""+14155550120""","=""6912.00"""', ',,']);
+  });
+
+  it('🔴 非号码形态（含字母 / 公式）不包 ="…"，仍走公式注入防护', () => {
+    const lines = toCsv(['x'], [[asText('EE123456789JP')], [asText('=HYPERLINK("x")')]])
+      .split('\r\n')
+      .slice(1, 3);
+    expect(lines).toEqual(['EE123456789JP', `"'=HYPERLINK(""x"")"`]);
   });
 });

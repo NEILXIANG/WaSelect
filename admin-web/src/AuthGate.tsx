@@ -33,7 +33,7 @@ export interface SessionControls {
 export interface AuthGateProps {
   store: TokenStore;
   /** 用邮箱口令换 JWT（失败抛 ApiError，由 LoginForm 展示）。 */
-  login: (email: string, password: string) => Promise<string>;
+  login: (email: string, password: string, totp: string) => Promise<string>;
   children: (session: SessionControls) => ReactNode;
   /** 时钟（测试注入；默认 Date.now）。 */
   now?: () => number;
@@ -64,8 +64,8 @@ export function AuthGate({ store, login, children, now = Date.now }: AuthGatePro
     setToken('');
   }, [store]);
 
-  const doLogin = async (email: string, password: string): Promise<void> => {
-    const jwt = await login(email, password);
+  const doLogin = async (email: string, password: string, totp: string): Promise<void> => {
+    const jwt = await login(email, password, totp);
     store.set(jwt);
     setToken(jwt);
     setExpired(false);

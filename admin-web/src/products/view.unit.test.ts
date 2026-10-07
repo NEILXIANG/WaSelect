@@ -217,12 +217,12 @@ describe('P2-51 数值不收科学计数法 / HS 编码形状 / 成本≥售价�
     expect(hsCodeShapeOk(raw)).toBe(ok);
   });
 
-  it('HS 编码形状不对 → 报错；带点号的 10 位 HTS（12 字符）被列宽挡下', () => {
+  it('HS 编码形状不对 → 报错；带点号的 10 位 HTS（12 字符）可录（迁移 031 列宽 16，AJ-386）', () => {
     expect(productFormErrors({ ...base(), hsCode: '3304,99' }).errors['hsCode']).toContain(
       '6–10 位数字',
     );
-    expect(productFormErrors({ ...base(), hsCode: '3304.99.5000' }).errors['hsCode']).toContain(
-      '最多 10 字',
+    expect(productFormErrors({ ...base(), hsCode: '3304.99.5000' }).errors['hsCode']).toBe(
+      undefined,
     );
   });
 
@@ -308,7 +308,11 @@ describe('productFormErrors（上架预检）', () => {
   ] as const)('🔴 %s 超过 PRODUCT_MAX_CHARS.%s → 该栏报错且带出上限', (field, key) => {
     const err = productFormErrors({
       ...productFormModel(PRODUCT),
-      [field]: '1'.repeat(PRODUCT_MAX_CHARS[key] + 1),
+      // HS 码纯数字超 10 位先被形状检查拦下；用点号分段凑长度，才走得到列宽检查（形状合法、17 字）
+      [field]:
+        field === 'hsCode'
+          ? `${'1.'.repeat(PRODUCT_MAX_CHARS[key] / 2)}1`
+          : '1'.repeat(PRODUCT_MAX_CHARS[key] + 1),
     }).errors[field];
     expect(err).toContain(String(PRODUCT_MAX_CHARS[key]));
   });
@@ -473,6 +477,13 @@ describe('toProductInput（请求体）', () => {
     const f = productFormModel(PRODUCT);
     expect(toProductInput({ ...f, stock: '30' }, f.stock)['stock']).toBe(30);
     expect(toProductInput(f)['stock']).toBe(12);
+  });
+
+  it('🔴 改了库存 → 带 expected_stock = 打开时的原值（P2-8）；没改 / 新建 → 不带', () => {
+    const f = productFormModel(PRODUCT);
+    expect(toProductInput({ ...f, stock: '30' }, f.stock)['expected_stock']).toBe(12);
+    expect(toProductInput({ ...f, title: 'x' }, f.stock)['expected_stock']).toBeUndefined();
+    expect(toProductInput(f)['expected_stock']).toBeUndefined();
   });
 
   it('成本价留空 → 不带该字段（不是塞 0，0 会被当成"零成本"）', () => {

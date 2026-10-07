@@ -4,7 +4,7 @@
  * 一笔部分退款 = 一行 = 一把机构幂等键（`refund-part:<id>`）。结果四种：
  *   ① succeeded → 行落定 + 事件 `partial_refunded`；
  *   ② pending   → 记单号，之后"同步"按单号查询；
- *   ③ failed（机构确认）→ 行 failed，**释放额度**（下一笔是新的一行、新的键）+ 事件 `partial_failed`（order_events.status 是 VARCHAR(16)）；
+ *   ③ failed（机构确认）→ 行 failed，**释放额度**（下一笔是新的一行、新的键）+ 事件 `partial_failed`（order_events.status 是 VARCHAR(20)，伪状态名须 ≤20 字）；
  *   ④ 抛错（超时 / 断连）→ 行 unknown：**仍占额度**（钱可能已经退出去了），之后"同步"用**同一把键**重放取回结果。
  *
  * @why ④ 必须与 ③ 分开（与整单退款 KD-4 同口径）：把"结果未知"当失败释放额度，下一笔换新键 ⇒ 可能退两次。

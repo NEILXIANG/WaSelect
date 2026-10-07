@@ -51,13 +51,18 @@ const RAW_BODY_LIMIT = '256kb';
 const ORIGIN_VERIFY_HEADER = 'x-origin-verify';
 
 /**
- * 源站校验的豁免路径（平台内网直连源站的三类流量，见 2c 的 @why）。
+ * 源站校验的豁免路径（平台内网直连源站的三类流量 + 支付回调，见 2c 的 @why）。
  * @why `/api/v1/internal/jobs` 用**前缀**：Cron 调的是它的子路径 `/daily`。
+ * @why `/api/v1/pay/callback` 豁免（第三轮缺口 P2-18，AJ-386）：回调有**自己的签名**（比静态共享密钥强），
+ *      而 Stripe Dashboard 填的 webhook 地址若是 `*.onrender.com` 直连，不经 Cloudflare、不带头 →
+ *      全部 40301 → Stripe 重试 3 天后放弃，付款事件丢失。与 `pay-routes.ts` 的 `PAY_CALLBACK_PREFIX` 同值
+ *      （http 层不 import app 层，写字面量；`http.unit.test.ts` 用同一路径钉住）。
  */
 const ORIGIN_VERIFY_EXEMPT_PATHS: readonly string[] = [
   '/healthz',
   '/readyz',
   '/api/v1/internal/jobs',
+  '/api/v1/pay/callback',
 ];
 
 /** 比共享密钥（先比长度再走 timingSafeEqual，不借长度差泄露信息）。 */
@@ -373,6 +378,7 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
    * ── 2c. 源站校验：只接受经 Cloudflare 的流量（A2 / AJ-197）─────────────────
    *
    * @why 放在**报文解析之前**：被拒的请求不该先花力气解析 body。
+   * @why 支付回调另有豁免（签名把关，见 ORIGIN_VERIFY_EXEMPT_PATHS 的 @why，P2-18）。
    * @why 豁免 `/healthz` `/readyz` 与 `/api/v1/internal/jobs`：这三类是**平台内网直连源站**的
    *      （Render 的存活探针与 Cron 不经过 Cloudflare）。把它们一起挡掉的结果是
    *      "实例被判死"或"每日作业静默停跑"——后者正是 B11 那类**没有任何报错**的失效，
@@ -478,7 +484,12 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
         ...normalized.logFields,
       });
     }
-    if (res.headersSent) return;
+    // P2-27（AJ-386）：头已发出就无法再改状态码；断开连接让客户端看到"中断"，
+    // 而不是挂到超时（Express 默认处理器同样是 destroy）。
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
     res.status(normalized.status).json(normalized.body);
   });
 
@@ -770,7 +781,7 @@ export interface ShutdownHooks {
    *      但那条分支里 `db.end()` 会等在途事务跑完，**没有任何自有上限**；
    *      而 `finish`（硬退出定时器）要等 `afterDrain` 返回之后才上膛。
    *      于是最坏停机时长从 17s 变成 31s+，超过平台宽限 30s ⇒ 被 SIGKILL ⇒
-   *      `shutdown_cleanup_done_after_failed_drain` 这行日志与 SonicBoom 缓冲里最后几行一起丢失，
+   *      `shutdown_cleanup_done_after_failed_drain` 这行日志根本来不及写出，
    *      退出形态从"码 1"变成"被杀"——AJ-237 想补的"留痕"在最需要它的场景里恰好留不下。
    * @why 放在**入口**上膛而不是 `finish` 里：只有从入口起算才覆盖得到那段等待。
    * @limitation 到点是 `exit(1)`（硬退），不是"温和地跳过某一步"：
@@ -808,8 +819,9 @@ export interface ShutdownControl {
  *      但关单/发货这类我们自己发起的写操作没有重放者，必须由我们自己在退出前收尾。
  * @limitation 一：只处理 SIGTERM/SIGINT。**不处理 SIGKILL**（OS 级，无法捕获）——
  *              OOM 被杀时本函数无效，靠 order_events（流 B）事后对账。
- * @limitation 二：退出用 `process.exitCode` 而不是 `process.exit()`，让 Node 自然排空 stdout
- *              （pino 走 sonic-boom 异步写，立即 exit 会丢最后几条日志）。
+ * @limitation 二：退出用 `process.exitCode` 而不是 `process.exit()`，让 Node 自然排空句柄。
+ *              （原注"pino 异步写、立即 exit 会丢日志"已被实测推翻：生产形态是同步写，见 logger.ts
+ *              @limitation 三的 @measured；保留 exitCode 写法是为了让 DB 池等句柄正常收尾。）
  *              代价：若有句柄忘了关（DB 池没 end），进程会挂住——因此加了 2s 硬退出的兜底定时器。
  */
 export function installShutdownHandlers(

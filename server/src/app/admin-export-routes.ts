@@ -55,7 +55,8 @@ export function mountAdminExportRoutes(app: Express, deps: AdminExportRoutesDeps
         try {
           await audit.append({
             actor: `admin:${req.auth?.sub ?? 'unknown'}`,
-            action: 'GET /api/v1/admin/exports/:kind',
+            // 与审计中间件同形态（去 /api/v1 前缀，admin-audit.ts）：审计页按 action 过滤时只认一种写法（P2-23）
+            action: 'GET /admin/exports/:kind',
             target: kind,
             before: null,
             after: { rows: table.rows.length },

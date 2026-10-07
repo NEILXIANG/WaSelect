@@ -146,7 +146,9 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
       expect(ls[0]).toContain('hs_code');
       expect(ls[1]).toContain('WSo-1');
       expect(ls[1]).toContain('Jane Doe');
-      expect(ls[1]).toContain('95014');
+      // P1-8：号码列以 ="…" 输出，Excel 里保持文本（邮编前导零、电话 +、HS 码 .00 都不丢）
+      expect(ls[1]).toContain('"=""95014"""');
+      expect(ls[1]).toContain('"=""+14155550123"""');
       expect(ls[1]).toContain('8211.91');
       expect(ls[1]).toContain('85.76');
       expect(ls[1]).toContain('Kitchen knife, stainless');
@@ -178,6 +180,10 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
     try {
       const all = await call(url, 'GET', '/api/v1/admin/exports/orders', undefined, await bearer());
       expect(lines((all.body as { csv: string }).csv)).toHaveLength(3);
+      // P2-46：时间列是日本时间（页面全部 JST，导出原先是 UTC Z，跨日统计会错一天）
+      expect(lines((all.body as { csv: string }).csv)[0]).toContain('created_at_jst');
+      expect((all.body as { csv: string }).csv).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+      expect((all.body as { csv: string }).csv).not.toMatch(/T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
       const shipped = await call(
         url,
         'GET',
@@ -199,7 +205,7 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
       const [a] = await db`select actor, action, target, after from admin_audit`;
       expect(a).toMatchObject({
         actor: 'admin:u-admin',
-        action: 'GET /api/v1/admin/exports/:kind',
+        action: 'GET /admin/exports/:kind', // P2-23：与中间件同形态（去 /api/v1 前缀）,
         target: 'customs',
       });
       expect(a?.['after']).toEqual({ rows: 1 });

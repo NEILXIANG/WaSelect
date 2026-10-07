@@ -32,6 +32,14 @@ describe('login', () => {
     expect(typeof calls[0]?.['traceId']).toBe('string');
   });
 
+  it('🔴 P1-5：填了二次验证码就带 totp；留空不带（没开 TOTP 的账号不受影响）', async () => {
+    const { api, calls } = stubApi({ token: 'jwt.abc' });
+    await login(api, { email: 'a@b.co', password: 'x'.repeat(12), totp: '012345' });
+    await login(api, { email: 'a@b.co', password: 'x'.repeat(12), totp: '' });
+    expect(calls[0]?.['body']).toMatchObject({ totp: '012345' });
+    expect(calls[1]?.['body']).not.toHaveProperty('totp');
+  });
+
   it.each([
     ['没有 token', {}],
     ['token 为空串', { token: '' }],

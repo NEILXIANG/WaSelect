@@ -31,7 +31,40 @@
  *      ../../../contracts/api-contract.yaml（Order / POST /orders/{id}/cancel）
  */
 import { PAYABLE, STOCK_REFUND_NOTE, canPay, statusText } from '../../utils/order-status.js';
-import { displaySubLine, formatJpy } from '../../utils/price-format.js';
+import {
+  displaySubLine,
+  formatCnyFen,
+  formatJpy,
+  formatUsdCents,
+} from '../../utils/price-format.js';
+
+/**
+ * 买家可见的部分退款行（P2-12，AJ-386；服务端已滤掉 failed、隐去原因与操作人）。
+ * @why 按币种用对应的最小单位格式化：退款按**支付币种**记（USD 分 / JPY 円 / CNY 分），
+ *      一律按 JPY 显示会把 $12.50 写成 1,250 円。
+ * @limitation 认不出的币种不编金额（"以银行账单为准"）——比按错的小数位显示一个数字安全。
+ */
+const MINOR_FORMATTERS = { USD: formatUsdCents, JPY: formatJpy, CNY: formatCnyFen };
+function partialRefundRows(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((r) => r !== null && typeof r === 'object')
+    .map((r, i) => {
+      const fmt = MINOR_FORMATTERS[r.currency];
+      const amountText =
+        fmt !== undefined && Number.isInteger(r.amount_minor)
+          ? fmt(r.amount_minor)
+          : `${String(r.currency)}（金额以银行账单为准）`;
+      return {
+        key: `rf-${i}`,
+        amountText,
+        statusText: r.status === 'succeeded' ? '已退回' : '退款处理中',
+        atText: timeText(r.created_at),
+      };
+    });
+}
+
+const LATE_PAID_NOTE = '我们已收到你的付款，但这张订单已关闭；款项会原路退回，无需重新付款。';
 import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 import { addressSummary } from '../../utils/address-form.js';
 import { jstDateTimeLabeled } from '../../utils/jst-text.js';
@@ -176,5 +209,9 @@ export function detailView(order, opts = undefined) {
     timeline: timelineRows(o.timeline),
     /** 只在"已付款、还没发货"时说（剩余清单 4-10）：那是唯一可能因缺货而退款的阶段。 */
     stockRefundNote: status === 'paid' ? STOCK_REFUND_NOTE : '',
+    /** 部分退款（P2-12）：成功 / 处理中；服务端已滤掉失败的那几笔。 */
+    partialRefunds: partialRefundRows(o.partial_refunds),
+    /** 关单后才到的付款（P2-11）：钱已扣，告诉买家会原路退回，别再下一单。 */
+    latePaidNote: o.late_paid === true ? LATE_PAID_NOTE : '',
   };
 }
