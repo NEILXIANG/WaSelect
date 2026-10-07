@@ -10,11 +10,12 @@
  *
  * @see ./OrdersPage.tsx；./api.ts；../testing/dom.ts
  */
-import { createElement } from 'react';
+import { createElement, useCallback, useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { OrdersPage } from './OrdersPage.js';
+import { parseHash, type Route } from '../router.js';
 
 interface Call {
   path: string;
@@ -23,14 +24,29 @@ interface Call {
 
 let mounted: Mounted | undefined;
 let calls: Call[];
+let apiImpl: (req: Call) => Promise<unknown>;
 
-async function open(): Promise<HTMLElement> {
+/**
+ * 宿主：替页面持有"当前路由"，`onNavigate` 换掉它并触发一次**重渲染**。
+ * @why 不在用例里 unmount + 重新 mount 来模拟换路由：**重新挂载会重置组件 state**，
+ *      于是每次换筛选都多一次挂载请求，"点了搜索共发几次"这类断言（ADM3-09）
+ *      会把挂载次数也算进去，断言就不再是在验它声称要验的东西。
+ * @why `onNavigate` 用 `useCallback` 包住：它进了 `OrdersPage` 里 `patch` 的依赖数组，
+ *      每次渲染都新建的话 `patch` 会一直变 → 每次渲染都重新拉列表（乃至死循环）。
+ */
+function Harness({ initial }: { initial: Route }): React.JSX.Element {
+  const [route, setRoute] = useState<Route>(initial);
+  const onNavigate = useCallback((next: Route) => setRoute(next), []);
+  return createElement(OrdersPage, { api: apiImpl as never, route, onNavigate });
+}
+
+async function open(hash = '#/orders'): Promise<HTMLElement> {
   calls = [];
-  const api = async (req: Call): Promise<unknown> => {
+  apiImpl = async (req: Call): Promise<unknown> => {
     calls.push(req);
     return { items: [], total: 0 };
   };
-  mounted = await mount(createElement(OrdersPage, { api: api as never }));
+  mounted = await mount(createElement(Harness, { initial: parseHash(hash) }));
   return mounted.el;
 }
 
@@ -128,11 +144,11 @@ describe('订单列表：采购信息列（0.6.26）', () => {
   /** 用给定的订单条目打开列表页（默认那个 `open()` 返回空列表）。 */
   async function openWith(orders: unknown[]): Promise<HTMLElement> {
     calls = [];
-    const api = async (req: Call): Promise<unknown> => {
+    apiImpl = async (req: Call): Promise<unknown> => {
       calls.push(req);
       return { items: orders, total: orders.length };
     };
-    mounted = await mount(createElement(OrdersPage, { api: api as never }));
+    mounted = await mount(createElement(Harness, { initial: parseHash('#/orders') }));
     return mounted.el;
   }
 
@@ -214,7 +230,8 @@ describe('订单列表：响应乱序（A-05）', () => {
       }
       return new Promise((resolve) => pending.push({ page, resolve }));
     };
-    mounted = await mount(createElement(OrdersPage, { api: api as never }));
+    apiImpl = api;
+    mounted = await mount(createElement(Harness, { initial: parseHash('#/orders') }));
     const el = mounted.el;
     await click(button(el, '下一页'));
     await click(button(el, '上一页'));
@@ -240,7 +257,8 @@ describe('订单列表：总数变少时拉回最后一页（扫描 A-02）', ()
       n += 1;
       return { items: [], total: n === 1 ? 40 : 20 };
     };
-    mounted = await mount(createElement(OrdersPage, { api: api as never }));
+    apiImpl = api;
+    mounted = await mount(createElement(Harness, { initial: parseHash('#/orders') }));
     await click(button(mounted.el, '下一页'));
     expect(gets().at(-1)?.path).toContain('page=1');
   });

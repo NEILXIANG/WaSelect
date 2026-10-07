@@ -13,8 +13,17 @@
  * @limitation 三：关键词搜索是**显式点搜索**（不是边打边搜）——
  *              每敲一个字发一次请求会让分页与结果在输入过程中反复抖动，
  *              而运营搜单号通常是整段粘贴。
+ * @limitation 四（第一批②）：**筛选条件与当前打开的订单都以 URL 为唯一真源**
+ *              （`status` / `q` / `test` / `page` 四个查询参数 + 路径上的订单 id）。
+ *              @why 不做"组件 state 与 URL 双向同步"：那需要两边互相写，
+ *                   而"改筛选 → 写 URL → 触发 hashchange → 又写回 state"这类环
+ *                   一旦有一处比较不严就是抖动或死循环。单向（URL → 组件）没有这个失效形态。
+ *              @why 因此"筛好一个列表发给同事"是**字面意义上**的一个链接：
+ *                   `#/orders?status=paid` 打开即待发货列表，刷新、后退、收藏都一样。
+ *              @limitation 默认值（`all` / 第 1 页 / 不含测试单）**不写进 URL**：
+ *                         写了会让地址栏拖一串没有信息的 `?status=all&page=1&test=0`。
  *
- * @see ./view.ts（行视图与闸门）；./api.ts（接口层）；./OrderDetail.tsx
+ * @see ./view.ts（行视图与闸门）；./api.ts（接口层）；./OrderDetail.tsx；../router.ts
  */
 import { TodoBar } from './TodoBar.js';
 import { ExportBar } from './ExportBar.js';
@@ -24,30 +33,69 @@ import { ApiError } from '../api/errors.js';
 import { listOrders, type AdminApi, type AdminOrderLike } from './api.js';
 import { STATUS_FILTER_OPTIONS, orderRows, type OrderRow } from './view.js';
 import { OrderDetail } from './OrderDetail.js';
+import type { Route } from '../router.js';
 
 /** 每页条数（契约默认 20；与商品管理同口径，一屏放得下）。 */
 const PAGE_SIZE = 20;
 
+/** 四个查询参数的键（改这里要同步改 @limitation 四 与 router 的用法说明）。 */
+const Q = { status: 'status', q: 'q', test: 'test', page: 'page' } as const;
+
 export interface OrdersPageProps {
   api: AdminApi;
+  /** 当前路由（筛选真源，@see @limitation 四）。 */
+  route: Route;
+  /** 换页 / 改筛选 / 开详情：由外层执行真正的地址栏写入。 */
+  onNavigate: (next: Route) => void;
 }
 
-export function OrdersPage({ api }: OrdersPageProps) {
+export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
+  /**
+   * 改查询参数（**不改路径上的订单 id**，那是另一件事）。
+   * @why 值等于默认值的键直接删掉而不是写 `status=all`：地址栏是给人看和复制的，
+   *      多余的参数会让人以为"我筛过了"，也会让两个实际相同的列表看起来是两个地址。
+   */
+  const patch = useCallback(
+    (next: Partial<Record<(typeof Q)[keyof typeof Q], string>>): void => {
+      const query = new URLSearchParams(route.query);
+      for (const [key, value] of Object.entries(next)) {
+        const drop =
+          value === undefined ||
+          value === '' ||
+          (key === Q.status && value === 'all') ||
+          (key === Q.page && value === '1') ||
+          (key === Q.test && value === '0');
+        if (drop) query.delete(key);
+        else query.set(key, value);
+      }
+      onNavigate({ page: 'orders', id: '', query });
+    },
+    // ⚠️ `patch` 进了 `load` 的依赖数组：它必须是稳定的，否则每次渲染都会重新拉列表（乃至死循环）。
+    //    `route.query` 在同一个路由下是同一个实例（外层只在 hashchange 时换 route），`onNavigate` 由外层 useCallback 固定。
+    [route.query, onNavigate],
+  );
+
+  // ── 以下四项全部由 URL 派生（@see @limitation 四）────────────────────
+  const status = (route.query.get(Q.status) ?? 'all') as OrderStatus | 'all';
+  const applied = route.query.get(Q.q) ?? '';
+  const includeTest = route.query.get(Q.test) === '1';
+  const page = Math.max(1, Number(route.query.get(Q.page) ?? '1') || 1);
   const [rows, setRows] = useState<OrderRow[]>([]);
   /** 服务端原始条目：详情页要先拿到 has_dispute 才知道能不能退款（@see @limitation 一）。 */
   const [raw, setRaw] = useState<AdminOrderLike[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [status, setStatus] = useState<OrderStatus | 'all'>('all');
-  /** 输入框里的值（未提交）；提交后写进 `applied`。 */
-  const [keyword, setKeyword] = useState('');
-  const [applied, setApplied] = useState('');
-  /** 剩余清单 3-4："含测试单"（审核期 mock 单默认不列）。 */
-  const [includeTest, setIncludeTest] = useState(false);
+  /** 输入框里的值（未提交）；提交后写进 URL 的 `q`（@limitation 四）。 */
+  const [keyword, setKeyword] = useState(applied);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  /** 当前打开的订单 id（null = 看列表）。 */
-  const [detailId, setDetailId] = useState<string | null>(null);
+  /** 当前打开的订单 id（null = 看列表）——来自路径，不是本地 state。 */
+  const detailId = route.id === '' ? null : route.id;
+
+  // URL 上的 `q` 变了（前进 / 后退 / 从工作台跳进来）→ 输入框跟着变，
+  // 否则会出现"列表是按 abc 筛的，搜索框里却还写着 xyz"。
+  useEffect(() => {
+    setKeyword(applied);
+  }, [applied]);
   /**
    * 手动刷新的自增计数（ADM3-09）。
    * @why 列表只随 `page / status / applied` 变化而重载，而这三项在"用同一个关键词再点一次搜索"
@@ -61,11 +109,10 @@ export function OrdersPage({ api }: OrdersPageProps) {
   /** 提交搜索（按钮与回车共用）。 */
   const search = (): void => {
     const next = keyword.trim();
-    // ⚠️ 关键词没变也要重载（ADM3-09）：只 setApplied 的话，值没变 → load 不变 → 不请求。
+    // ⚠️ 关键词没变也要重载（ADM3-09）：只改 URL 的话，值没变 → load 的依赖不变 → 不请求。
     //    运营点"搜索"的意图里本来就包含"再查一次"，不该被 react 的依赖比较吞掉。
     if (next === applied) setReloadTick((t) => t + 1);
-    else setApplied(next);
-    setPage(1);
+    else patch({ q: next, page: '1' }); // 同时回第 1 页（@why 文件头第一段）
   };
 
   /** 请求序号（A-05）：晚到的旧响应不得覆盖新列表，只有最后一次发起的请求能写。 */
@@ -89,7 +136,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
       setTotal(res.total);
       // 扫描 A-02：当前页超出最后一页（例如最后一页唯一一张单刚发货）→ 拉回最后一页，不停在"空页"
       const last = Math.max(1, Math.ceil(res.total / PAGE_SIZE));
-      if (page > last) setPage(last);
+      if (page > last) patch({ page: String(last) });
     } catch (e) {
       if (seq !== reqSeq.current) return;
       // ⚠️ 失败不清列表（同商品管理）：只显示错误，列表保留上一次结果
@@ -97,7 +144,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
-  }, [api, page, status, applied, reloadTick, includeTest]);
+  }, [api, page, status, applied, reloadTick, includeTest, patch]);
 
   useEffect(() => {
     void load();
@@ -111,10 +158,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
         api={api}
         id={detailId}
         source={raw.find((o) => o.order_id === detailId) ?? null}
-        onBack={() => {
-          setDetailId(null);
-          void load();
-        }}
+        onBack={() => onNavigate({ page: 'orders', id: '', query: route.query })}
         onChanged={() => void load()}
       />
     );
@@ -132,10 +176,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
         api={api}
         refreshKey={reloadTick}
         current={status}
-        onPick={(s) => {
-          setStatus(s);
-          setPage(1);
-        }}
+        onPick={(s) => patch({ status: s, page: '1' })}
       />
 
       {/* 剩余清单 3-3：CSV 导出（订单总表 / 待采购 / 报关） */}
@@ -145,10 +186,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
         <select
           className="input"
           value={status}
-          onChange={(e) => {
-            setStatus(e.target.value as OrderStatus | 'all');
-            setPage(1);
-          }}
+          onChange={(e) => patch({ status: e.target.value, page: '1' })}
         >
           {STATUS_FILTER_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -161,10 +199,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
             type="checkbox"
             aria-label="含测试单"
             checked={includeTest}
-            onChange={(e) => {
-              setIncludeTest(e.target.checked);
-              setPage(1);
-            }}
+            onChange={(e) => patch({ test: e.target.checked ? '1' : '0', page: '1' })}
           />
           含测试单
         </label>
@@ -247,7 +282,11 @@ export function OrdersPage({ api }: OrdersPageProps) {
                 )}
               </td>
               <td>
-                <button type="button" className="link" onClick={() => setDetailId(row.id)}>
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => onNavigate({ page: 'orders', id: row.id, query: route.query })}
+                >
                   详情
                 </button>
               </td>
@@ -261,7 +300,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
           type="button"
           className="btn"
           disabled={page <= 1}
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          onClick={() => patch({ page: String(Math.max(1, page - 1)) })}
         >
           上一页
         </button>
@@ -272,7 +311,7 @@ export function OrdersPage({ api }: OrdersPageProps) {
           type="button"
           className="btn"
           disabled={page >= lastPage}
-          onClick={() => setPage((p) => p + 1)}
+          onClick={() => patch({ page: String(page + 1) })}
         >
           下一页
         </button>

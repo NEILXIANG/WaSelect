@@ -43,6 +43,76 @@ body {
   margin-right: var(--ws-space);
 }
 
+/* ── 侧栏 + 主区（第一批②）─────────────────────────────────────────
+   @why 一级导航从**顶部一行**挪到**左侧一列**：顶部那一行在加了第七个页签之后
+        会换行（窄窗口下把筛选区一起挤变形，三端联动模拟 U2 撞过），
+        而侧栏的高度是免费的——再加五个页签也只是往下长。
+   @why 侧栏 `sticky`：订单列表很长，翻到第 40 单时不必滚回顶部才能换页。 */
+.shell {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ws-space);
+  min-height: 100vh;
+  padding: var(--ws-space);
+  max-width: calc(var(--ws-space) * 80);
+  margin: 0 auto;
+}
+
+.sidebar {
+  flex: 0 0 auto;
+  width: calc(var(--ws-space) * 10);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space-sm);
+  position: sticky;
+  top: var(--ws-space);
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space-sm);
+}
+
+.nav-item {
+  text-align: left;
+  font-size: var(--ws-font);
+  padding: var(--ws-space-sm) var(--ws-space);
+  border-radius: var(--ws-radius);
+  border: var(--ws-border) solid var(--ws-color-muted);
+  background: var(--ws-color-card);
+  color: var(--ws-color-fg);
+  cursor: pointer;
+}
+
+.nav-item-on {
+  background: var(--ws-color-fg);
+  color: var(--ws-color-card);
+}
+
+/* `min-width: 0`：否则表格会把主区撑破（flex 子项默认不肯收缩到内容宽度以下） */
+.main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 窄窗口（≤ 56rem）：侧栏躺平到顶部横排——竖排侧栏会把主区挤到只剩一半 */
+@media (max-width: 56rem) {
+  .shell {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    position: static;
+  }
+
+  .sidebar nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
 /* 页签：选中态用反色，未选中用描边（不引新色值——token 里没有"主色"） */
 .chip {
   font-size: var(--ws-font-sm);
