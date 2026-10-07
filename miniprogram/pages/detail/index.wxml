@@ -17,11 +17,16 @@
     </view>
   </view>
 
-  <view class="ws-gutter" wx:if="{{error}}">
-    <view class="ws-card state">
-      <text class="ws-note state__error">{{error}}</text>
-    </view>
-  </view>
+  <!-- P2-38：错误态走三段式组件并给"重试"（以前只有一行红字，用户只能退出重进） -->
+  <ws-state-block
+    wx:if="{{error}}"
+    kind="fail"
+    title="没能取到这件商品"
+    reason="{{error}}"
+    refText="{{errorRef}}"
+    actionText="{{retryable ? '重试' : ''}}"
+    bindaction="onRetry"
+  />
 
   <block wx:if="{{product}}">
     <!-- 轮播：images 已由 vm 保证至少一条（空 → 占位图），不会出现空 swiper -->
@@ -68,6 +73,7 @@
         disabled="{{product.soldOut}}"
         bindtap="onAddToCart"
       />
+      <text class="ws-note state__error" wx:if="{{addNote}}">{{addNote}}</text>
       <block wx:if="{{added}}">
         <text class="ws-note added">已加入购物车</text>
         <ws-button text="去购物车" type="default" bindtap="onGoCart" />

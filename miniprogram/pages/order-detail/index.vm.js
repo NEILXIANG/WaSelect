@@ -30,7 +30,7 @@
  *      ../../utils/jst-text.js（UTC → JST 纯函数）；
  *      ../../../contracts/api-contract.yaml（Order / POST /orders/{id}/cancel）
  */
-import { PAYABLE, canPay, statusText } from '../../utils/order-status.js';
+import { PAYABLE, STOCK_REFUND_NOTE, canPay, statusText } from '../../utils/order-status.js';
 import { displaySubLine, formatJpy } from '../../utils/price-format.js';
 import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 import { addressSummary } from '../../utils/address-form.js';
@@ -115,14 +115,6 @@ export function timelineRows(timeline) {
 function confirmingJustPaid(payable, justPaid) {
   return justPaid === true && payable;
 }
-
-/**
- * 缺货整单退款说明（剩余清单 4-10 / A40）。
- * @why 本店是"付款后去日本采购"：偶尔会买不到。用户付了款、几天后收到全额退款，没有任何说明的话读起来像"被取消了"。
- *      与服务端口径一致：缺货 → 管理端全额退款，原路原币原额退回（refund 政策页同一句话）。
- */
-export const STOCK_REFUND_NOTE =
-  '我们会在日本为你采购这些商品。如果采购不到，会整单全额退款，原路退回到你的付款方式（约 5–10 个工作日到账）。';
 
 /**
  * `GET /orders/{id}` → 详情页视图。

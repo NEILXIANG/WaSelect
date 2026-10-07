@@ -64,3 +64,13 @@ export function statusText(status) {
 export function canPay(status) {
   return PAYABLE.includes(typeof status === 'string' ? status : '');
 }
+
+/**
+ * 缺货整单退款说明（剩余清单 4-10 / A40）。
+ * @why 本店是"付款后去日本采购"：偶尔会买不到。用户付了款、几天后收到全额退款，没有任何说明的话读起来像"被取消了"。
+ *      与服务端口径一致：缺货 → 管理端全额退款，原路原币原额退回（refund 政策页同一句话）。
+ * @why 住在共享层（P2-39，从 `pages/order-detail/index.vm.js` 下沉）：结算页与订单详情页都要显示它，
+ *      结算页从详情页 vm import 是"页面依赖页面"（同 STATUS_LABELS 的下沉理由，见文件头）。
+ */
+export const STOCK_REFUND_NOTE =
+  '我们会在日本为你采购这些商品。如果采购不到，会整单全额退款，原路退回到你的付款方式（约 5–10 个工作日到账）。';

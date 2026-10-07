@@ -400,3 +400,25 @@ describe('结算页：立即购买单件丢失时的空态文案（扫描附记�
     expect(String(page.data['emptyText'])).toContain('立即购买');
   });
 });
+
+describe('结算页薄壳：页面已销毁时不再跳转（P2-36）', () => {
+  it('🔴 建单在途时用户按了返回（onUnload）→ 结果回来**不** redirectTo 支付页，但购物车照样清', async () => {
+    await ready();
+    orderHold = deferred<unknown>();
+    call('onSubmit');
+    await settle();
+    call('onUnload');
+    orderHold.resolve({ order_id: 'o-1' });
+    await settle();
+    expect(redirects).toEqual([]);
+    // 订单已经建出来了：不清车的话用户回到购物车会再下一单
+    expect(cartCleared).toBe(true);
+  });
+
+  it('页面还在 → 照常 redirectTo 支付页', async () => {
+    await ready();
+    call('onSubmit');
+    await settle();
+    expect(redirects).toEqual(['/pages/pay/index?orderId=o-1']);
+  });
+});

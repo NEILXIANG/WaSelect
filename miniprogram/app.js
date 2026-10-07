@@ -27,7 +27,7 @@ import { createWxApi } from './utils/wx-api.js';
 import { ensurePrivacyAuthorized } from './utils/privacy.js';
 import { watchUpdate } from './utils/update.js';
 import { createStorage } from './utils/storage.js';
-import { loginWithWechat } from './utils/auth-session.js';
+import { loginWithWechat, singleFlight } from './utils/auth-session.js';
 import { createCartStore } from './utils/cart-store.js';
 import { resolveApiBase } from './config.js';
 
@@ -112,9 +112,11 @@ App({
     //    而真正的原因只在实时日志里，用户与审核员什么都看不到。
     //    接住之后交由 `createUnconfiguredApi` 继续表达（@see ../utils/unconfigured-api.js @why）。
     const envVersion = wxApi.getAccountInfoSync()?.miniProgram?.envVersion;
+    // P2-33：开发版要区分模拟器与真机（真机上 localhost 没有意义，@see config.js DEVELOP_DEVICE_API_BASE）
+    const platform = wxApi.getPlatform();
     let apiBase = '';
     try {
-      apiBase = resolveApiBase(envVersion);
+      apiBase = resolveApiBase(envVersion, platform);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       this.globalData.launchError = reason;
@@ -122,6 +124,7 @@ App({
         event: 'launch',
         result: 'api_base_missing',
         env_version: String(envVersion),
+        platform: String(platform),
         err_msg: reason,
       });
     }
@@ -138,8 +141,12 @@ App({
 
     // 登录专用请求器：不挂 token、不配 relogin（@why 见文件头——同请求器登录会死锁）
     const authApi = createRequester({ wx: wxApi, log });
-    /** 登录一跳（wx.login → /auth/wechat/login → token 字符串）；失败原样抛出。 */
-    const relogin = () => loginWithWechat({ wx: wxApi, api: authApi, apiBase });
+    /**
+     * 登录一跳（wx.login → /auth/wechat/login → token 字符串）；失败原样抛出。
+     * ⚠️ 用 `singleFlight` 包一层（P2-34）：启动自动登录与请求层 40101 重登**共用**它，
+     *    启动登录在途时撞上 40101 不会再发第二次登录（@see utils/auth-session.js singleFlight）。
+     */
+    const relogin = singleFlight(() => loginWithWechat({ wx: wxApi, api: authApi, apiBase }));
 
     const { launchError } = this.globalData;
     this.globalData.api =

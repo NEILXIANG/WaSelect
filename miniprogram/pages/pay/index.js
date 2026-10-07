@@ -37,10 +37,9 @@
  * @see ./index.vm.js（点一下该做什么：纯函数，约束十一）；
  *      ../../utils/pay-plan.js（通道渲染 / 实扣金额与 §14.2 提示条 / 下一步做什么）；
  *      ../../utils/idempotency.js（幂等键生命周期）；
- *      ../../utils/address-form.js（ADDRESS_COUNTRY_DEFAULT：通道过滤的目的国）
+ *      index.vm.js `channelCountry`（通道过滤的目的国：取订单收货地址，P2-39）
  */
 import { CHARGE_CURRENCY_ORDER, chargeOptions, payNotice, payPlan } from '../../utils/pay-plan.js';
-import { ADDRESS_COUNTRY_DEFAULT } from '../../utils/address-form.js';
 import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { errorFields } from '../../utils/error-text.js';
@@ -49,14 +48,17 @@ import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { markExternalPay, recentExternalPay } from '../../utils/external-pay.js';
 import {
+  EXPIRED_CLOSED_TEXT,
   PAY_FAIL_TEXT,
   afterIntent,
+  channelCountry,
   closedScreen,
   copyResult,
   leavesAfterAuto,
   onShowAction,
   payPageView,
   payStartDecision,
+  recheckAfterPayError,
 } from './index.vm.js';
 
 const app = getApp();
@@ -168,7 +170,8 @@ Page({
       if (isStale(seq, this.loadSeq)) return;
       const total = Number.isInteger(order?.total_jpy) ? order.total_jpy : null;
       // B35 / AJ-218：已付 / 已关 / 已退款的单**不列支付方式**（点了就是 40902）
-      const view = payPageView(order);
+      // P2-35：待付款但已过 expires_at 同样不列（时间由这里传入，vm 不读时钟）
+      const view = payPageView(order, Date.now());
       this.setData({ totalJpy: total, closedText: view.closedText });
       if (!view.payable) {
         // 整个 view 交出去：文案与"给不给重新下单的出口"是同一次判断的两个产物
@@ -184,9 +187,11 @@ Page({
         return;
       }
       const listings = [];
+      // P2-39：目的国取订单收货地址（缺失才回落默认），不写死国家
+      const country = channelCountry(order);
       for (const currency of CHARGE_CURRENCY_ORDER) {
         const resp = await app.globalData.api({
-          url: `${app.globalData.apiBase}/api/v1/pay/channels?country=${ADDRESS_COUNTRY_DEFAULT}&currency=${currency}&amount_jpy=${total}`,
+          url: `${app.globalData.apiBase}/api/v1/pay/channels?country=${country}&currency=${currency}&amount_jpy=${total}`,
           traceId: this.traceId,
         });
         listings.push({ currency, resp });
@@ -250,7 +255,7 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}`,
         traceId: this.traceId,
       });
-      const view = payPageView(order);
+      const view = payPageView(order, Date.now());
       if (!view.payable) {
         this.stopCountdown();
         this.setData({ ...closedScreen(view), confirmNote: '' });
@@ -298,8 +303,19 @@ Page({
     this.stopCountdown();
     const tick = () => {
       const c = countdownText(this.expiresAt, Date.now());
+      if (c.expired) {
+        // P2-35：到点不只是改文案——收起通道换关闭屏（按钮还能点 = 付款落成迟到款），
+        // 再向服务端核对一次真值（可能其实已付，那就换成"无需再支付"）。
+        this.countdownTimer = null;
+        this.setData({
+          ...closedScreen({ closedText: EXPIRED_CLOSED_TEXT, goHome: true }),
+          confirmNote: '',
+        });
+        void this.checkStatus();
+        return;
+      }
       this.setData({ countdown: c.text });
-      this.countdownTimer = c.expired ? null : setTimeout(tick, 1000);
+      this.countdownTimer = setTimeout(tick, 1000);
     };
     tick();
   },
@@ -317,6 +333,8 @@ Page({
       channel: e?.currentTarget?.dataset?.channel,
       lastChannel: this.lastChannel,
       hasKey: this.intentKey !== null,
+      // P2-35：关闭屏（含倒计时到点）之后不再发起
+      closed: this.data.closedText !== '',
     });
     if (decision.kind === 'ignore') return;
     // ⚠️ 换通道 = 请求参数变了：沿用旧键会被服务端**重放成上一个通道的 intent**，
@@ -342,6 +360,8 @@ Page({
       this.run(intent);
     } catch (err) {
       this.setData({ ...errorFields(err) });
+      // P2-40：40902 / 40904 多半是这张单已经付了或关了——重查一次，由 payPageView 决定换不换关闭屏
+      if (recheckAfterPayError(err?.code)) void this.checkStatus();
     } finally {
       this.setData({ paying: false });
     }

@@ -2,6 +2,7 @@
   "navigationBarTitleText": "订单详情",
   "usingComponents": {
     "ws-button": "/components/ws-button/index",
-    "ws-price": "/components/ws-price/index"
+    "ws-price": "/components/ws-price/index",
+    "ws-state-block": "/components/ws-state-block/index"
   }
 }

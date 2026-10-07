@@ -141,16 +141,39 @@ export function productCards(items) {
  * @param {object} args
  * @param {unknown} [args.page] 页码；非正整数一律归一成 1（服务端对 page<1 是 40001）
  * @param {unknown} [args.category] 分类 key；空 / 非字符串 → 省略
- * @param {unknown} [args.keyword] 搜索词；去空格后为空 → 省略
+ * @param {unknown} [args.keyword] 搜索词；去空格后为空 → 省略；超长截断（`searchKeyword`，P2-32）
  * @param {number} [args.size] 每页条数，默认 `PAGE_SIZE`（上限 50 由服务端守）
  */
 export function listQuery({ page, category, keyword, size = PAGE_SIZE }) {
   const q = { page: Number.isInteger(page) && page > 0 ? page : 1, size };
   const c = text(category);
-  const k = text(keyword);
+  const k = searchKeyword(keyword);
   if (c !== '') q.category = c;
   if (k !== '') q.keyword = k;
   return q;
+}
+
+/**
+ * 搜索词长度上限（P2-32）。
+ * @why 与 `packages/shared/src/limits.ts` 的 `SEARCH_KEYWORD_MAX_LENGTH` 同值：服务端超限一律 40001，
+ *      而小程序 js 引不了 shared 的 ts——这里是第二份真值，由 vm 单测 import shared 比对，漂移即红。
+ *      wxml 的 `maxlength="64"` 是第一道（输入时就停住），这里是第二道（粘贴 / 旧数据 / 宿主差异）。
+ */
+export const SEARCH_KEYWORD_MAX = 64;
+
+/**
+ * 输入框原值 → 发给服务端的搜索词：trim 后截断到 `SEARCH_KEYWORD_MAX`（P2-32）。
+ * @why 截断而不是拒绝：搜索词是"尽量帮你找"，长出来的尾巴丢掉比弹一个错误更有用；
+ *      服务端按 UTF-16 码元（`.length`）判，这里同口径。
+ * @why 不切开代理对：截断点落在 emoji 中间会留下半个代理项，`encodeURIComponent` 对它抛 URIError，
+ *      表现是"点搜索没反应"。所以落在高位代理项上时再少取一位。
+ */
+export function searchKeyword(raw) {
+  const k = text(raw);
+  if (k.length <= SEARCH_KEYWORD_MAX) return k;
+  const last = k.charCodeAt(SEARCH_KEYWORD_MAX - 1);
+  const end = last >= 0xd800 && last <= 0xdbff ? SEARCH_KEYWORD_MAX - 1 : SEARCH_KEYWORD_MAX;
+  return k.slice(0, end);
 }
 
 /** 是否还有下一页（触底加载的开关）。`total` 非整数 → 一律 false（宁可不加载，也不要无限刷）。 */

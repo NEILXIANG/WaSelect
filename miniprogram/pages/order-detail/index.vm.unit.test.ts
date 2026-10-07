@@ -8,7 +8,8 @@
  *      ④ 行项目缺图时留白（用户分不清"没图"和"图没加载出来"）。
  */
 import { describe, expect, it } from 'vitest';
-import { amountLines, detailView, itemRows, STOCK_REFUND_NOTE, timelineRows } from './index.vm.js';
+import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
+import { amountLines, detailView, itemRows, timelineRows } from './index.vm.js';
 
 const ORDER = {
   order_id: 'o-1',

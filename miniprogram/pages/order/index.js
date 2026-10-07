@@ -96,6 +96,11 @@ Page({
     wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${id}` });
   },
 
+  /** 错误态的"重试"（P2-38）：重新取列表。 */
+  onRetry() {
+    void this.load();
+  },
+
   /** 空态"去逛逛"（剩余清单 4-8）：首页是 tab 页，只能 switchTab。 */
   onGoShopping() {
     wxApi.switchTab({ url: HOME_PAGE });

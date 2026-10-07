@@ -64,8 +64,14 @@ Component({
     name: { type: String, value: '' },
     /** 编辑口径的"为什么值得买"。空串 = **整卡降级**（@see @limitation 一）。 */
     why: { type: String, value: '' },
-    /** 日元单价（整数円）。 */
-    priceJpy: { type: Number, value: 0 },
+    /**
+     * 日元单价（整数円）。
+     * ⚠️ `type: null` 且不给默认值（P1-6）：原来是 `{ type: Number, value: 0 }`，
+     *    列表数据漏了 `price_jpy` 时卡片照样显示 `0 円`——用户读成"免费"。
+     *    不做类型转换后漏传就是 null，交给 ws-price 响亮失败（空白 + 控制台报错）。
+     * @see ../ws-price/index.js @limitation 一（同一条理由，实测过 Number 会被补 0）
+     */
+    priceJpy: { type: null },
     /** 副行换算文案（如"约 $23.40"）；由页面算好传进来。空串 = 不渲染。 */
     usdText: { type: String, value: '' },
     /** 库存；≤5 时显示"仅剩 N 件"角标（0 时不显示——售罄由页面另给标记）。 */

@@ -46,6 +46,8 @@ Page({
     /** vm `detailView` 的输出；null = 还没拉到（此时只显示加载/错误）。 */
     view: null,
     loading: false,
+    /** 错误态是否给"重试"（P2-38）：链接里没有订单 id 时为 false。 */
+    retryable: false,
     /** 错误文案（空串 = 无错误）。 */
     error: '',
     /** 取消请求在途（ws-button 会吞掉这期间的连点）。 */
@@ -84,7 +86,8 @@ Page({
       recentExternalPay(app.globalData.externalPay, this.orderId, Date.now());
     this.recheckCount = 0;
     // @see @limitation 一：空 id 不发请求
-    if (this.orderId === '') this.setData({ error: '订单不存在或链接无效' });
+    if (this.orderId === '') this.setData({ error: '订单不存在或链接无效', retryable: false });
+    else this.setData({ retryable: true });
     // 剩余清单 4-2：订单出问题时最需要客服——拉一次联系方式，失败静默（只是不显示这张卡）
     app.globalData
       .api({ url: `${app.globalData.apiBase}/api/v1/support`, traceId: this.traceId })
@@ -94,6 +97,11 @@ Page({
 
   onUnload() {
     if (this.recheckTimer !== null) clearTimeout(this.recheckTimer);
+  },
+
+  /** 错误态的"重试"（P2-38）：重新取这张单（没有 id 时 wxml 不给按钮）。 */
+  onRetry() {
+    if (this.orderId !== '') void this.load();
   },
 
   onShow() {

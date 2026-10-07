@@ -54,17 +54,52 @@ export const API_BASES = {
 };
 
 /**
+ * 开发版**真机预览 / 真机调试**用的 API 根地址（开发机的局域网地址，如 `http://192.168.1.10:3000`；P2-33）。
+ *
+ * @why 真机预览的 envVersion 也是 `develop`，原来一律给 `API_BASES.develop`（localhost）——
+ *      手机上的 localhost 是手机自己，每个请求都 `request:fail`，页面说"网络不太稳定，请检查网络"，
+ *      把排障方向带到网络上，而真正的原因是"这个地址在手机上没有意义"。
+ * @why 默认**空串**（不猜局域网 IP）：空串 ⇒ `resolveApiBase` 抛 `api_base_not_configured:develop-device`，
+ *      由 app.js 换成替身请求器（-2），页面上直接显示这句说明——与 trial / release 没配地址同一条路。
+ * @limitation 只在拿得到 platform 且不是 `devtools` 时生效；拿不到 platform（宿主过旧）保持原行为（localhost）。
+ *              ⚠️ 需要开发者工具"不校验合法域名"或真机调试打开调试模式，http 局域网地址才放行（同 develop 一条）。
+ *              这是个人开发机地址：填了**不要提交**（换网络就变）。
+ */
+export const DEVELOP_DEVICE_API_BASE = '';
+
+/** 开发者工具（模拟器）的 platform 值（@see utils/wx-api.ts getPlatform）。 */
+const DEVTOOLS_PLATFORM = 'devtools';
+
+/**
  * 按 `envVersion` 选 API 根地址。
  *
  * @param {string | undefined} envVersion 宿主的 `wx.getAccountInfoSync().miniProgram.envVersion`
+ * @param {string | undefined} [platform] 宿主的 `platform`（`devtools` / `ios` / `android` …；P2-33）。
+ *        只影响 develop：非 devtools ⇒ 真机，改用 `DEVELOP_DEVICE_API_BASE`；不传 / 空串 ⇒ 原行为。
  * @returns {string} 可用的 API 根地址
  * @throws 目标环境**没配**地址时抛——不静默打到一个错误的地址；抛出后由 app.js 接住并换成替身请求器，
  *         页面显示错误态而不是白屏（AJ-364；复核 2026-10-06 订正原"宁可启动白屏"）
  *         （@see @limitation 一）
  */
-export function resolveApiBase(envVersion) {
+export function resolveApiBase(envVersion, platform) {
   // ⚠️ 未知/缺失一律按 develop 处理（方向见 @limitation 三），不是按 release。
   const key = Object.prototype.hasOwnProperty.call(API_BASES, envVersion) ? envVersion : 'develop';
+  // P2-33：开发版跑在真机上时 localhost 没有意义（@see DEVELOP_DEVICE_API_BASE）
+  const onDevice =
+    key === 'develop' &&
+    typeof platform === 'string' &&
+    platform !== '' &&
+    platform !== DEVTOOLS_PLATFORM;
+  if (onDevice) {
+    if (DEVELOP_DEVICE_API_BASE === '') {
+      throw new Error(
+        'api_base_not_configured:develop-device——开发版在真机上连不到开发机的 localhost，' +
+          '请在 config.js 的 DEVELOP_DEVICE_API_BASE 填入开发机局域网地址（如 http://192.168.1.10:3000），' +
+          '或改用体验版',
+      );
+    }
+    return DEVELOP_DEVICE_API_BASE;
+  }
   const base = API_BASES[key];
   if (typeof base !== 'string' || base === '') {
     throw new Error(

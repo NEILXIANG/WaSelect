@@ -15,6 +15,10 @@
         "value": "**/*.fixture.js"
       },
       {
+        "type": "glob",
+        "value": "**/.DS_Store"
+      },
+      {
         "type": "folder",
         "value": "pages/index"
       },

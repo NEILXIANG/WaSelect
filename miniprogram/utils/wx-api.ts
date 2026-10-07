@@ -247,6 +247,17 @@ export interface WxApi {
    */
   getAccountInfoSync(): WxAccountInfo | undefined;
   /**
+   * 运行平台（P2-33）：`devtools`（开发者工具）/ `ios` / `android` / `ohos` / `windows` / `mac` …
+   *
+   * @why 开发版（envVersion=develop）在模拟器与真机预览里都是同一个 envVersion，
+   *      而 localhost 只在模拟器里有意义——`config.js` 靠它区分两者。
+   * @why 先取 `getDeviceInfo`（新接口），没有再退回 `getSystemInfoSync`（旧接口，官方已标为不推荐）。
+   *      依据官方文档（**未在真机实测**，AppID 未下来前无法真机预览）：两者返回值都有 `platform`，
+   *      开发者工具里为 `devtools`。
+   * @limitation 十五：拿不到 / 形状不对 → `undefined`，由 `config.js` 保持原行为（localhost）。不猜。
+   */
+  getPlatform(): string | undefined;
+  /**
    * 隐私授权查询 / 主动触发（剩余清单 4-3，@see ./privacy.js 的 @measured）。
    * ⚠️ 可选：基础库过低的宿主没有这两个 API——返回 undefined 的方法由 privacy.js 判成 unsupported，
    *    交给微信在调用隐私接口时自行弹窗（同 getAccountInfoSync 的"不猜"口径）。
@@ -305,6 +316,9 @@ interface WxHost {
   redirectTo(option: WxRedirectOption): void;
   /** ⚠️ 可选：基础库 < 2.2.2 的宿主没有这个同步 API（@see WxApi.getAccountInfoSync @limitation 十四）。 */
   getAccountInfoSync?: () => WxAccountInfo;
+  /** ⚠️ 可选（@see WxApi.getPlatform）：新基础库才有 getDeviceInfo；只读 `platform`。 */
+  getDeviceInfo?: () => { platform?: unknown } | undefined;
+  getSystemInfoSync?: () => { platform?: unknown } | undefined;
   getPrivacySetting?: (option: WxPrivacySettingOption) => void;
   requirePrivacyAuthorize?: (option: WxRequirePrivacyOption) => void;
   getUpdateManager?: () => WxUpdateManager;
@@ -377,6 +391,12 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
       host().redirectTo(option);
     },
     getAccountInfoSync: () => host().getAccountInfoSync?.(),
+    getPlatform: () => {
+      const h = host();
+      const info = h.getDeviceInfo?.() ?? h.getSystemInfoSync?.();
+      const platform = info?.platform;
+      return typeof platform === 'string' ? platform : undefined;
+    },
   };
   // 隐私 API 只在宿主真有时才挂（剩余清单 4-3）：没有就是 undefined，由调用方判 unsupported
   const w = (globalThis as { wx?: WxHost }).wx;

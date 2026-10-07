@@ -111,6 +111,27 @@ export function formModel(addr) {
 }
 
 /**
+ * 美国电话的常见写法 → E.164（`+1` + 10 位，P2-37）。
+ * @param {unknown} raw 用户输入
+ * @returns {string} 认得出 → `+1XXXXXXXXXX`；认不出 → **原样 trim**（交给 `formErrors` 去拒，不猜）
+ * @why 美国人写电话几乎从不带 `+1`：`(415) 555-0123`、`415-555-0123`、`1 415 555 0123` 都是日常写法。
+ *      以前一律报"格式为 +1 开头"，用户得自己猜要删掉哪些括号横线——这是表单里最常见的卡点。
+ * @why 只认两种数字形态：10 位（本地号）与 1 开头的 11 位（带国家码）；分隔符只认空格 ( ) - . 和开头一个 +。
+ *      带 `+` 却不是 `+1`（外国号）、位数不对、夹了字母（ext 分机）——一律不动，由校验给出提示。
+ * @limitation 只管美国（单一目的国，见 @limitation 一）；服务端规则 `^\+1\d{10}$` 不变，这里只是把输入凑成它。
+ *              不校验区号合法性（NANP 首位不能是 0/1）：服务端也不校验，前端多拒一层会出现"前端拒、服务端收"。
+ */
+export function normalizeUsPhone(raw) {
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  if (!/^\+?[0-9 ().-]+$/.test(s)) return s;
+  const digits = s.replace(/[^0-9]/g, '');
+  const plus = s.startsWith('+');
+  if (!plus && digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return s;
+}
+
+/**
  * 校验表单。
  * @param {unknown} model
  * @returns {{ok: boolean, errors: Record<string, string>, first: string}}
@@ -123,7 +144,9 @@ export function formErrors(model) {
   const errors = {};
   if (!ADDRESS_PATTERNS.ascii.test(m.recipient.trim()))
     errors.recipient = '收件人请用英文/数字填写（面单不支持中文或全角）';
-  if (!ADDRESS_PATTERNS.phone.test(m.phone.trim()))
+  // P2-37：先归一常见写法再校验（与 toAddressInput 发出去的是同一个值）
+  m.phone = normalizeUsPhone(m.phone);
+  if (!ADDRESS_PATTERNS.phone.test(m.phone))
     errors.phone = '电话格式为 +1 开头加 10 位数字，如 +14155550123';
   if (!ADDRESS_PATTERNS.ascii.test(m.line1.trim())) errors.line1 = '地址第一行请用英文/数字填写';
   if (!ADDRESS_PATTERNS.asciiOptional.test(m.line2.trim()))
@@ -156,7 +179,8 @@ export function toAddressInput(model) {
   const m = formModel(model);
   return {
     recipient: m.recipient.trim(),
-    phone: m.phone.trim(),
+    // P2-37：发出去的是归一后的 E.164（服务端只认 ^\+1\d{10}$）
+    phone: normalizeUsPhone(m.phone),
     line1: m.line1.trim(),
     line2: m.line2.trim(),
     city: m.city.trim(),

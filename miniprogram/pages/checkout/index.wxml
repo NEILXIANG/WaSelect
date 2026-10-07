@@ -11,12 +11,17 @@
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
 <view class="ws-page checkout">
-  <view class="ws-gutter" wx:if="{{error}}">
-    <view class="ws-card state">
-      <text class="ws-note state__error">{{error}}</text>
-      <text class="ws-caption" wx:if="{{errorRef}}" user-select>{{errorRef}}</text>
-    </view>
-  </view>
+  <!-- P2-38：错误态给"重新加载"（重取条款 / 地址 / 报价；不会重复下单——建单只由「提交订单」触发） -->
+  <ws-state-block
+    wx:if="{{error}}"
+    kind="fail"
+    title="有一步没有完成"
+    reason="{{error}}"
+    refText="{{errorRef}}"
+    actionText="重新加载"
+    compact="{{true}}"
+    bindaction="onRetry"
+  />
 
   <view class="ws-gutter ws-section" wx:if="{{rows.length > 0}}">
     <view class="ws-card">

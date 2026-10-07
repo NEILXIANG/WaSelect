@@ -12,14 +12,18 @@ import { describe, expect, it } from 'vitest';
 import {
   EMPTY_GUIDE,
   PAY_FAIL_TEXT,
+  UNKNOWN_STATUS_TEXT,
   afterIntent,
+  channelCountry,
   closedScreen,
   copyResult,
   leavesAfterAuto,
   onShowAction,
   payPageView,
   payStartDecision,
+  recheckAfterPayError,
 } from './index.vm.js';
+import { ADDRESS_COUNTRY_DEFAULT } from '../../utils/address-form.js';
 
 const BASE = { paying: false, channel: 'stripe', lastChannel: '', hasKey: true };
 
@@ -225,10 +229,16 @@ describe('payPageView：这张单还能不能走支付流程（B35 / AJ-218）',
     }
   });
 
-  it('状态读不到 / 认不出 → 按"可付"放行：不能付由服务端 40902 说出来，不由前端静默堵死', () => {
+  /**
+   * P2-41：原来"认不出就按可付"——服务端新增一个状态（比如某种审核中）前端会照样列出支付方式，
+   * 而那一刻真正的答案是"不知道能不能付"。白名单：只有 created / pending_payment 可付。
+   */
+  it('🔴 状态读不到 / 认不出 → **不可付**，说清"状态无法确认"，不给回首页出口', () => {
     for (const o of [undefined, null, {}, { status: 42 }, { status: 'some_new_status' }]) {
-      expect(payPageView(o).payable, JSON.stringify(o)).toBe(true);
-      expect(payPageView(o).closedText).toBe('');
+      const v = payPageView(o);
+      expect(v.payable, JSON.stringify(o)).toBe(false);
+      expect(v.closedText).toBe(UNKNOWN_STATUS_TEXT);
+      expect(v.goHome).toBe(false);
     }
   });
 });
@@ -413,5 +423,81 @@ describe('copyResult 清掉旧的报障小字（扫描 W-05）', () => {
   it('🔴 成功与失败都把 errorRef 置空（复制失败与之前的请求错误无关，不能挂着旧链路号）', () => {
     expect(copyResult(true).errorRef).toBe('');
     expect(copyResult(false).errorRef).toBe('');
+  });
+});
+
+describe('payPageView：倒计时到点即收起支付方式（P2-35）', () => {
+  const EXP = '2026-10-06T10:30:00.000Z';
+  const exp = Date.parse(EXP);
+
+  it('🔴 待付款但已过 expires_at（含等号）→ 不可付，说清"时间已到"，给重新下单出口', () => {
+    for (const now of [exp, exp + 1, exp + 60_000]) {
+      const v = payPageView({ status: 'pending_payment', expires_at: EXP }, now);
+      expect(v.payable).toBe(false);
+      expect(v.closedText).toContain('支付时间已到');
+      expect(v.goHome).toBe(true);
+    }
+  });
+
+  it('还没到点 → 可付', () => {
+    expect(payPageView({ status: 'pending_payment', expires_at: EXP }, exp - 1).payable).toBe(true);
+  });
+
+  it('不传 now / expires_at 认不出 → 不按时间判（只看状态）', () => {
+    expect(payPageView({ status: 'pending_payment', expires_at: EXP }).payable).toBe(true);
+    expect(payPageView({ status: 'pending_payment', expires_at: 'x' }, exp).payable).toBe(true);
+  });
+
+  it('已付的单不受时间影响（文案仍是"无需再支付"）', () => {
+    expect(payPageView({ status: 'paid', expires_at: EXP }, exp + 1).closedText).toContain(
+      '无需再支付',
+    );
+  });
+});
+
+describe('payStartDecision：页面已关闭时点通道一律不动（P2-35）', () => {
+  it('closed → ignore（倒计时到点那一瞬按钮还没来得及消失）', () => {
+    expect(
+      payStartDecision({
+        paying: false,
+        channel: 'stripe',
+        lastChannel: '',
+        hasKey: true,
+        closed: true,
+      }),
+    ).toEqual({ kind: 'ignore' });
+  });
+});
+
+describe('channelCountry：通道按订单的收货国家过滤（P2-39）', () => {
+  it('取订单 address.country', () => {
+    expect(channelCountry({ address: { country: 'US' } })).toBe('US');
+    expect(channelCountry({ address: { country: 'CA' } })).toBe('CA');
+  });
+
+  it('缺失 / 形状不对 → 回落默认国家（不把脏值拼进查询串）', () => {
+    for (const o of [
+      undefined,
+      null,
+      {},
+      { address: null },
+      { address: { country: 'usa' } },
+      { address: { country: 'U&' } },
+    ]) {
+      expect(channelCountry(o), JSON.stringify(o)).toBe(ADDRESS_COUNTRY_DEFAULT);
+    }
+  });
+});
+
+describe('recheckAfterPayError：发起支付被拒后要不要重查订单（P2-40）', () => {
+  it('40902（状态不允许）/ 40904（已过期）→ 重查（多半已关单或已付，换成关闭屏）', () => {
+    expect(recheckAfterPayError(40902)).toBe(true);
+    expect(recheckAfterPayError(40904)).toBe(true);
+  });
+
+  it('其它码 → 不重查', () => {
+    for (const c of [40001, 50300, -1, undefined, '40902']) {
+      expect(recheckAfterPayError(c), String(c)).toBe(false);
+    }
   });
 });

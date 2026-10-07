@@ -19,6 +19,11 @@
  * @limitation 二：数量上限不做业务限制（服务端建单会按库存拒）。
  *              客户端限了等于在两个地方各定一次规则，漂移时表现为
  *              "客户端说能买 99 件、服务端说库存只有 3"——那不如只有服务端一处。
+ * @limitation 四：**品种数**有上限 `MAX_CART_LINES`（P2-31），与 @limitation 二的"件数不限"不矛盾：
+ *              报价 / 建单端对 >50 个**不同**商品一律 40001（server/src/domain/quote.ts `MAX_QUOTE_ITEMS`），
+ *              客户端不拦的表现是第 51 种照常加进来，到购物车页才撞 40001，提示还是"请稍后重试"——永远重试不好。
+ *              ⚠️ 只拦**新增品种**；已存在的商品加数量照常（那受库存约束，归服务端）。
+ *              ⚠️ 旧版本已攒下 >50 种的购物车**不截断**（截掉哪些都是替用户做决定），由购物车页说清"请移除一些"。
  * @limitation 三：持久化走 `storage` 封装（`ws:` 前缀、JSON、损坏兜底），
  *              **不直接碰宿主 storage**（storage-guard 会扫）。
  *
@@ -28,6 +33,13 @@
 
 /** 持久化键（`ws:` 前缀由 storage.js 加）。 */
 const CART_KEY = 'cart';
+
+/**
+ * 购物车最多放多少种**不同**商品（P2-31）。
+ * @why 与服务端 `MAX_QUOTE_ITEMS`（server/src/domain/quote.ts）同值：小程序 js 引不了服务端 / shared 的 ts，
+ *      所以这里是第二份真值，由 `cart-store.unit.test.ts` 直接 import 服务端常量比对，漂移即红。
+ */
+export const MAX_CART_LINES = 50;
 
 /**
  * 购物车条目。
@@ -69,6 +81,9 @@ export function createCartStore(deps) {
     /**
      * 加入购物车；已有同商品则**合并数量**（不加第二行）。
      * @param {CartItem} item 快照信息由调用方（详情页 vm）备好——这里不取数
+     * @returns {{added: true} | {added: false, reason: 'full'}}
+     *          `full` = 已有 `MAX_CART_LINES` 种商品、这是第 N+1 种（@see @limitation 四）；
+     *          调用方据此给用户说清楚，**不抛**：这是用户能理解并自己处理的状态，不是编程错误。
      * @why 数量不进位阶校验（负数/0 直接拒）：加购入口只允许 >= 1，
      *      放进来 0 或负数的表现是"加了但购物车是空的"，离根因隔一层。
      */
@@ -84,6 +99,7 @@ export function createCartStore(deps) {
       if (found !== undefined) {
         found.qty += qty;
       } else {
+        if (items.length >= MAX_CART_LINES) return { added: false, reason: 'full' };
         items.push({
           productId: item.productId,
           qty,
@@ -93,6 +109,7 @@ export function createCartStore(deps) {
         });
       }
       persist();
+      return { added: true };
     },
 
     /**

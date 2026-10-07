@@ -38,6 +38,15 @@ let orderHold: ReturnType<typeof deferred<unknown>> | null;
 let payFails: boolean;
 /** `wx.redirectTo` 的落点（MP3-06：auto 之后必须离开这一页）。 */
 let redirects: string[];
+/**
+ * 订单的 `expires_at`。默认"现在起 30 分钟后"（P2-35 起已过期的待付款单直接是关闭屏，
+ * 固定写死一个过去的时刻会让所有用例都落在关闭屏上）；倒计时用例自己改成固定时刻 + 假时钟。
+ */
+let expiresAt: string;
+/** 订单收货国家（P2-39：通道按它过滤）。 */
+let country: string;
+/** 非空 = `POST /orders/{id}/pay` 抛这个错（P2-40）。 */
+let postError: (Error & { code?: number }) | null;
 
 const ORDER_ID = 'o-1';
 
@@ -48,7 +57,8 @@ function order() {
     total_jpy: 12_000,
     display: { USD: 8_040 },
     created_at: '2026-09-29T01:00:00.000Z',
-    expires_at: '2026-09-29T01:30:00.000Z',
+    expires_at: expiresAt,
+    address: { country },
   };
 }
 
@@ -74,6 +84,9 @@ beforeEach(async () => {
   orderHold = null;
   payFails = false;
   redirects = [];
+  expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
+  country = 'US';
+  postError = null;
   vi.stubGlobal('wx', {
     setClipboardData: (o: { data: string; success?: () => void }) => {
       clipboard.push(o.data);
@@ -101,6 +114,7 @@ beforeEach(async () => {
             : { items: [] };
         }
         if (req.method === 'POST') {
+          if (postError !== null) throw postError;
           linkSeq += 1;
           if (postPlan === 'in_app') {
             return {
@@ -353,6 +367,7 @@ describe('支付页：待付款倒计时（4-11）', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     try {
       vi.setSystemTime(new Date('2026-09-29T01:20:00.000Z'));
+      expiresAt = '2026-09-29T01:30:00.000Z';
       call('onRetry');
       await settle();
       expect(page.data['countdown']).toBe('请在 10:00 内完成支付');
@@ -366,13 +381,16 @@ describe('支付页：待付款倒计时（4-11）', () => {
     }
   });
 
-  it('已过截止 → 显示"支付时间已到"，且不起表', async () => {
+  it('已过截止 → 直接是关闭屏（"支付时间已到"、不列通道），且不起表（P2-35）', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     try {
       vi.setSystemTime(new Date('2026-09-29T02:00:00.000Z'));
+      expiresAt = '2026-09-29T01:30:00.000Z';
       call('onRetry');
       await settle();
-      expect(page.data['countdown']).toContain('支付时间已到');
+      expect(page.data['closedText']).toContain('支付时间已到');
+      expect(page.data['channels']).toEqual([]);
+      expect(page.data['goHome']).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -386,6 +404,7 @@ describe('支付页：回前台后倒计时继续（扫描 W-01）', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     try {
       vi.setSystemTime(new Date('2026-09-29T01:20:00.000Z'));
+      expiresAt = '2026-09-29T01:30:00.000Z';
       call('onRetry');
       await settle();
       page.setData({ payUrl: 'https://pay.test/o/link-x' });
@@ -399,5 +418,64 @@ describe('支付页：回前台后倒计时继续（扫描 W-01）', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/** P2-35：倒计时走到 0 时只改了文案，通道按钮还能点。 */
+describe('支付页：倒计时到点即关闭（P2-35）', () => {
+  it('🔴 页面开着时走到 0 → 收起通道、换关闭屏、重查订单；再点通道不发请求', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      vi.setSystemTime(new Date('2026-09-29T01:29:58.000Z'));
+      expiresAt = '2026-09-29T01:30:00.000Z';
+      call('onRetry');
+      await settle();
+      expect(page.data['channels']).toHaveLength(1);
+      const fetchesBefore = orderFetches();
+      vi.advanceTimersByTime(2000);
+      await settle();
+      expect(page.data['closedText']).toContain('支付时间已到');
+      expect(page.data['channels']).toEqual([]);
+      expect(page.data['countdown']).toBe('');
+      expect(orderFetches()).toBe(fetchesBefore + 1);
+      const posts = requests.filter((r) => r.method === 'POST').length;
+      tapChannel('stripe');
+      await settle();
+      expect(requests.filter((r) => r.method === 'POST')).toHaveLength(posts);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/** P2-39：通道按订单的收货国家查，不写死默认国家。 */
+describe('支付页：通道目的国取自订单地址（P2-39）', () => {
+  it('🔴 订单寄往 CA → /pay/channels 带 country=CA', async () => {
+    country = 'CA';
+    call('onRetry');
+    await settle();
+    const urls = requests.filter((r) => r.url.includes('/pay/channels')).map((r) => r.url);
+    expect(urls.at(-1)).toContain('country=CA');
+  });
+});
+
+/** P2-40：发起支付被 40902 / 40904 拒 → 重查订单，已关 / 已付就换关闭屏。 */
+describe('支付页：发起被拒后重查订单（P2-40）', () => {
+  it('🔴 40902 且订单其实已付 → 关闭屏（不再挂着通道让人一直点）', async () => {
+    postError = Object.assign(new Error('订单状态不允许此操作'), { code: 40902 });
+    orderStatus = 'paid';
+    tapChannel('stripe');
+    await settle();
+    expect(page.data['closedText']).toContain('无需再支付');
+    expect(page.data['channels']).toEqual([]);
+  });
+
+  it('其它错误（50000）→ 只显示错误，不重查', async () => {
+    postError = Object.assign(new Error('服务器内部错误'), { code: 50000 });
+    const before = orderFetches();
+    tapChannel('stripe');
+    await settle();
+    expect(page.data['error']).not.toBe('');
+    expect(orderFetches()).toBe(before);
   });
 });

@@ -92,3 +92,36 @@ describe('网关错误（扫描 W-06）', () => {
     expect(errorRef(e)).toBe('错误码 -3 · 链路 abcdef12 · 请求失败（HTTP 502）');
   });
 });
+
+describe('按码给出可执行的话（P2-40）', () => {
+  it('50300 + retry_after_ms → "服务繁忙，约 N 秒后再试"（向上取整到秒）', () => {
+    const e = {
+      code: 50300,
+      message: '服务暂时不可用，请稍后重试',
+      data: { retry_after_ms: 12_300 },
+    };
+    expect(errorMessage(e)).toBe('服务繁忙，约 13 秒后再试');
+  });
+
+  it('50300 没带 / 带了坏的 retry_after_ms → 不编数字', () => {
+    expect(errorMessage({ code: 50300, message: 'x' })).toBe('服务繁忙，请稍后再试');
+    expect(errorMessage({ code: 50300, message: 'x', data: { retry_after_ms: -5 } })).toBe(
+      '服务繁忙，请稍后再试',
+    );
+    expect(errorMessage({ code: 50300, message: 'x', data: { retry_after_ms: '3000' } })).toBe(
+      '服务繁忙，请稍后再试',
+    );
+  });
+
+  it('40301 → 账号被限制的说明（不是一句"无权限"）', () => {
+    expect(errorMessage({ code: 40301, message: '无权限' })).toBe(
+      '账号已被限制使用，如有疑问请联系客服',
+    );
+  });
+
+  it('报障小字照旧带码（客服仍能对照）', () => {
+    expect(errorRef({ code: 40301, message: '无权限', traceId: 'abcdef1234' })).toBe(
+      '错误码 40301 · 链路 abcdef12',
+    );
+  });
+});

@@ -15,12 +15,16 @@
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
 <view class="ws-page order-detail">
-  <view class="ws-gutter" wx:if="{{error}}">
-    <view class="ws-card state">
-      <text class="ws-note state__error">{{error}}</text>
-      <text class="ws-caption" wx:if="{{errorRef}}" user-select>{{errorRef}}</text>
-    </view>
-  </view>
+  <!-- P2-38：错误态给"重试"；链接里没有订单 id 时重试也没用，不给按钮（retryable） -->
+  <ws-state-block
+    wx:if="{{error}}"
+    kind="fail"
+    title="订单信息没能取到或操作没有完成"
+    reason="{{error}}"
+    refText="{{errorRef}}"
+    actionText="{{retryable ? '重试' : ''}}"
+    bindaction="onRetry"
+  />
 
   <view class="ws-gutter" wx:if="{{loading && !view}}">
     <view class="ws-card state">
