@@ -12,7 +12,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from './db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
-import { decrementStock, lockExpiredPayableOrders, markOrderExpired } from './orders.js';
+import {
+  decrementStock,
+  insertOrderItems,
+  lockExpiredPayableOrders,
+  markOrderExpired,
+} from './orders.js';
 import {
   findInitiatedPayment,
   findLatestPaymentSummary,
@@ -181,6 +186,18 @@ describe('decrementStock（U5b：原子扣减的唯一正确形态）', () => {
 
     expect(await decrementStock(db, 'p-stock', 1)).toBe(false); // 0 件也不能再扣
   });
+
+  /**
+   * 工程缺口第二轮复核（建单 TOCTOU）：建单先不加锁读商品快照，中间算报价（运费 / 汇率 / 关税），
+   * 再扣库存。READ COMMITTED 下这段时间里运营把商品下架并提交，扣减照样成功 ⇒ 已下架（可能是合规停售）
+   * 的商品落成订单、进待采购清单。条件更新里带上 status，判定与扣减仍在同一语句。
+   */
+  it('🔴 商品已下架 → false 且库存不变（扣减与上架判定在同一语句里）', async () => {
+    await db`update products set status = 'offline' where id = 'p-stock'`;
+    expect(await decrementStock(db, 'p-stock', 1)).toBe(false);
+    const r = await db`select stock from products where id = 'p-stock'`;
+    expect(Number(r[0]?.['stock'])).toBe(5);
+  });
 });
 
 // ── I1-U5c：查询 / 取消 ─────────────────────────────────────────────────────
@@ -268,6 +285,34 @@ describe('listOrderItemsWithImage / listOrderTimeline / findLatestPaymentSummary
     `;
   });
 
+  /**
+   * 工程缺口第二轮复核：行 id 是 `oi-<uuid v4>`，原先三处读取都按 id 排序 = **随机顺序**——
+   * 买家按 A、B、C 下单，详情 / 管理端 / 待采购 / 报关 CSV 里的行序每张单各不相同。
+   * 迁移 029 加 `line_no`（下单顺序），读取按它排。
+   */
+  it('🔴 行按下单顺序返回，而不是按（随机的）行 id 排', async () => {
+    await db`delete from order_items where order_id = 'o-det'`;
+    const row = (id: string, title: string) => ({
+      id,
+      order_id: 'o-det',
+      product_id: 'p-det',
+      title_snapshot: title,
+      qty: 1,
+      unit_price_jpy: 1000,
+      weight_g: 100,
+      declared_value_usd: 7,
+      title_ja: null,
+      jan_code: null,
+      purchase_source: null,
+      cost_jpy: null,
+      hs_code: null,
+      customs_desc_en: null,
+    });
+    await insertOrderItems(db, [row('oi-zzz', 'A'), row('oi-mmm', 'B'), row('oi-aaa', 'C')]);
+    const items = await listOrderItemsWithImage(db, 'o-det');
+    expect(items.map((i) => i.title_snapshot)).toEqual(['A', 'B', 'C']);
+  });
+
   it('items 带出 products.images——商品已下架（offline）也照出：历史订单看的是下单时的事实', async () => {
     const items = await listOrderItemsWithImage(db, 'o-det');
     expect(items).toHaveLength(1);
@@ -303,6 +348,20 @@ describe('listOrderItemsWithImage / listOrderTimeline / findLatestPaymentSummary
     const p = await findLatestPaymentSummary(db, 'o-det');
     expect(p?.provider).toBe('stripe');
     expect(p?.charge_amount).toBe(800);
+  });
+
+  /**
+   * 工程缺口第二轮复核：`payments.created_at` 默认 `now()` = **事务开始**时刻。并发换通道时，
+   * 先开事务、后拿到锁的那一方插入的新行 created_at 反而**更早**；它作废的旧行时间更晚 ⇒
+   * 只按 created_at 取，买家详情显示的是已作废那笔（币种金额都不对），付款成功后仍是。
+   */
+  it('🔴 已作废行的 created_at 更晚（并发换通道）→ 仍取未作废的那一行', async () => {
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount, created_at)
+      values ('pay-live', 'o-det', 'stripe', 'succeeded', 'USD', 800, ${new Date(NOW.getTime() - 2_000)}),
+             ('pay-void', 'o-det', 'mock', 'cancelled', 'JPY', 1200, ${new Date(NOW.getTime() - 1_000)})`;
+    const p = await findLatestPaymentSummary(db, 'o-det');
+    expect(p?.provider).toBe('stripe');
+    expect(p?.status).toBe('succeeded');
   });
 });
 

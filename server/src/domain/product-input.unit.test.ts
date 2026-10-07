@@ -13,6 +13,11 @@
  * @see domain/product-input.ts（被测）；contracts/api-contract.yaml ProductInput
  */
 import { describe, expect, it } from 'vitest';
+import {
+  PRODUCT_MAX_WEIGHT_G,
+  PRODUCT_PACKAGING_HEADROOM_G,
+  SHIPPING_RATE_BOUNDS,
+} from '@waselect/shared';
 import { validateProductInput, type ProductInput } from './product-input.js';
 
 /** 一条合法输入（每个用例只改自己关心的那一两个字段）。 */
@@ -124,7 +129,19 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
    */
   it('🔴 weight_g 超过单件上限 → weight_too_large（AJ-298：否则买家会看到莫名其妙的 40912）', () => {
     expect(reasons({ ...base(), weight_g: 30_001 })).toContain('weight_too_large');
-    expect(ok({ ...base(), weight_g: 30_000 }).weight_g).toBe(30_000);
+    expect(ok({ ...base(), weight_g: PRODUCT_MAX_WEIGHT_G }).weight_g).toBe(PRODUCT_MAX_WEIGHT_G);
+  });
+
+  /**
+   * 工程缺口第二轮 §3.6 #1：计费重 = 商品重 + 包材（PACKAGING_WEIGHT_G，默认 250g）。上界原先等于运费表
+   * 最大档 30 000g，于是 29 751–30 000g 的单件能上架、却任何购物车都报"包裹超重请拆单"——单件拆不了。
+   * 上界改为 30 000 − 包材余量 1 000 = 29 000g；包材配置由 config 规则钉在余量之内。
+   */
+  it('🔴 单件上界给包材留余量：29 001g → weight_too_large；上界 + 余量 = 运费表最大档', () => {
+    expect(reasons({ ...base(), weight_g: 29_001 })).toContain('weight_too_large');
+    expect(PRODUCT_MAX_WEIGHT_G + PRODUCT_PACKAGING_HEADROOM_G).toBe(
+      SHIPPING_RATE_BOUNDS.maxWeightG,
+    );
   });
 
   /**

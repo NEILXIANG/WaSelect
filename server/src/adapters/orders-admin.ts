@@ -323,7 +323,7 @@ export async function listOrderItemsFor(
     select order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd,
            title_ja, jan_code, purchase_source, cost_jpy, hs_code, customs_desc_en
       from order_items where order_id in ${db([...orderIds])}
-     order by order_id, id
+     order by order_id, line_no nulls last, id
   `;
   return rows.map((r) => ({
     order_id: String(r.order_id),

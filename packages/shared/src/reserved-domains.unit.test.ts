@@ -31,6 +31,9 @@ describe('isPlaceholderHost：保留/占位域名（B9 闸门）', () => {
     ['::1', 'IPv6 回环（不带方括号）'],
     ['::', 'IPv6 任意地址'],
     ['0.0.0.0', 'IPv4 任意地址'],
+    // 工程缺口第二轮复核 F3：URL 的 hostname 会保留结尾的点（FQDN 写法），精确匹配与后缀匹配都判不中
+    ['img.example.com.', '结尾带点的 FQDN 写法'],
+    ['localhost.', '结尾带点的回环主机名'],
   ];
 
   for (const [host, why] of PLACEHOLDER) {

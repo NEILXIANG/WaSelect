@@ -214,9 +214,11 @@ export async function findOwnedAddress(
  * @see {@link incrementStock}（对称，同样不写 updated_at）
  */
 export async function decrementStock(tx: Db, productId: string, qty: number): Promise<boolean> {
+  // `status = 'active'` 进同一条条件更新（工程缺口第二轮复核）：建单先不加锁读快照、再算报价、最后扣减，
+  // READ COMMITTED 下中间若有人下架并提交，不带这一条就会把已下架（可能是合规停售）的商品扣成订单。
   const rows = await tx`
     update products set stock = stock - ${qty}
-     where id = ${productId} and stock >= ${qty}
+     where id = ${productId} and stock >= ${qty} and status = 'active'
   `;
   return rows.count > 0;
 }
@@ -389,16 +391,18 @@ export async function insertOrderItems(
   tx: Db,
   items: readonly OrderItemInsertRow[],
 ): Promise<void> {
-  for (const it of items) {
+  // line_no = 数组下标 + 1：调用方按买家下单顺序传入（create-order 用 input.items 原序，
+  // 不是取锁用的排序后数组），读取按它排（迁移 029）
+  for (const [i, it] of items.entries()) {
     await tx`
       insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy,
                                weight_g, declared_value_usd,
                                title_ja, jan_code, purchase_source,
-                               cost_jpy, hs_code, customs_desc_en)
+                               cost_jpy, hs_code, customs_desc_en, line_no)
       values (${it.id}, ${it.order_id}, ${it.product_id}, ${it.title_snapshot}, ${it.qty},
               ${it.unit_price_jpy}, ${it.weight_g}, ${it.declared_value_usd},
               ${it.title_ja}, ${it.jan_code}, ${it.purchase_source},
-              ${it.cost_jpy}, ${it.hs_code}, ${it.customs_desc_en})
+              ${it.cost_jpy}, ${it.hs_code}, ${it.customs_desc_en}, ${i + 1})
     `;
   }
 }
@@ -581,7 +585,7 @@ export async function listOrderItemsWithImage(
     select oi.product_id, oi.title_snapshot, oi.qty, oi.unit_price_jpy, p.images
       from order_items oi join products p on p.id = oi.product_id
      where oi.order_id = ${orderId}
-     order by oi.id
+     order by oi.line_no nulls last, oi.id
   `;
   return rows.map((r) => ({
     product_id: String(r.product_id),
@@ -626,6 +630,9 @@ export interface OrderPaymentSummary {
 
 /**
  * 取订单最新一条 payments 行（换通道重发后旧行不该盖新行，按 created_at desc 取一）。
+ * @why 先排除已作废（cancelled）再比时间（工程缺口第二轮复核）：`created_at` 默认 `now()` 是**事务开始**时刻，
+ *      并发换通道时后拿到锁的一方新插的行时间反而更早，而被它作废的旧行更晚——只按时间取，
+ *      买家详情就显示那笔已作废的（币种、金额都不对），付款成功后仍是。全部已作废时照常取最新一条。
  * @limitation "最新"指的是我方登记时间——机构侧的真实先后以回调为准（落账在 mark-paid）。
  */
 export async function findLatestPaymentSummary(
@@ -635,7 +642,7 @@ export async function findLatestPaymentSummary(
   const rows = await db`
     select provider, status, charge_currency, charge_amount, paid_amount, paid_currency
       from payments where order_id = ${orderId}
-      order by created_at desc
+      order by (status = 'cancelled') asc, created_at desc
       limit 1
   `;
   const r = rows[0];

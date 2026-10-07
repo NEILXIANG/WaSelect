@@ -283,3 +283,36 @@ describe('逐条 down 的往返（B51）', () => {
     runMigrations('up', names.length);
   }, 300_000);
 });
+
+/**
+ * 工程缺口第二轮 §3.6 #5：026 的 down 原先把 `duty_jpy` 的 NULL 回填成 0 再收紧——
+ * 回滚一次就把"关税无法估算"重新说成"预估关税 0 円"，正是 026 的 up 要消灭的缺陷，且不留痕。
+ * 改为：有 NULL 就**响亮失败**，由人决定这些单怎么处理（down 在生产本就不自动执行）。
+ */
+describe('026 down：存在关税未知的订单时拒绝回滚', () => {
+  it('🔴 有 duty_jpy IS NULL 的订单 → 026 down 失败，数据不被改成 0', async () => {
+    const names = migrationNames();
+    const i026 = names.findIndex((n) => n.startsWith('026_'));
+    expect(i026).toBeGreaterThan(0);
+    try {
+      // 退到"026 是最后一条"的状态
+      runMigrations('down', names.length - 1 - i026);
+      await db`insert into users (id, openid) values ('u-m026', 'o-m026')`;
+      await db`
+        insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                            total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
+        values ('o-m026', 'W-M026', 'u-m026', 'created', 1000, 200, null, 1200, 500,
+                ${db.json({ USD: 0.0066 })},
+                ${db.json({ recipient: 'Taro', phone: '+12025550123', line1: '1 Main St', city: 'Springfield', state: 'IL', postal_code: '62701', country: 'US' })},
+                'TOS-2026-09-20', now() + interval '30 minutes')
+      `;
+      expect(() => runMigrations('down', 1)).toThrow(/duty_jpy/);
+      const [row] = await db`select duty_jpy from orders where id = 'o-m026'`;
+      expect(row?.['duty_jpy']).toBeNull();
+    } finally {
+      await db`delete from orders where id = 'o-m026'`;
+      await db`delete from users where id = 'u-m026'`;
+      runMigrations('up');
+    }
+  }, 120_000);
+});

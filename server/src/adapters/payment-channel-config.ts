@@ -52,24 +52,41 @@ interface RawRow {
 }
 
 /**
- * JSONB 列取出来必须是**字符串数组**。
+ * JSONB 列取出来必须是**非空的范围码数组**：元素是 `*`，或国家码（两位大写）/ 币种码（三位大写）。
  *
  * @why 不校验的后果是"静默不匹配"：`countries` 若是 `[1,2]` 或 `'US'`（不是数组），
  *      `matchesScope` 会一路返回 false，表现是**这个通道在所有市场都不出现**——
  *      而它长得跟"这个通道被下线了"一模一样（空对空那一类失效）。
  *      宁可启动期抛错（改数据即可恢复），也不要让运营去猜通道为什么消失。
+ * @why 空数组与小写码同属这一类（工程缺口第二轮复核 F2）：迁移的 CHECK 只管 `jsonb_typeof = 'array'`，
+ *      `[]` 与 `["us"]` 都进得了库，而 `matchesScope` 按大写码精确比对——原先只查"是字符串"，两者都漏。
+ * @limitation 只校验**形状**，不校验"US 是不是真实存在的国家码"；那由 country_profiles 与能力声明兜。
  */
-function stringArray(value: unknown, channel: string, field: string): string[] {
+export function scopeArray(
+  value: unknown,
+  channel: string,
+  field: 'countries' | 'currencies',
+): string[] {
   if (!Array.isArray(value)) {
     throw new Error(`payment_channels[${channel}].${field} 不是数组（JSONB 列必须是数组）`);
   }
-  const out = value.map((v) => {
+  if (value.length === 0) {
+    throw new Error(
+      `payment_channels[${channel}].${field} 是空数组（= 在所有市场都不出现；不限请写 ["*"]）`,
+    );
+  }
+  const shape = field === 'countries' ? /^[A-Z]{2}$/ : /^[A-Z]{3}$/;
+  return value.map((v) => {
     if (typeof v !== 'string') {
       throw new Error(`payment_channels[${channel}].${field} 含非字符串元素：${String(v)}`);
     }
+    if (v !== '*' && !shape.test(v)) {
+      throw new Error(
+        `payment_channels[${channel}].${field} 含不合形状的值：${v}（应为 * 或${field === 'countries' ? '两位' : '三位'}大写码）`,
+      );
+    }
     return v;
   });
-  return out;
 }
 
 /** 读取全部通道属性（按 channel 排序，便于日志与测试稳定比对）。 */
@@ -82,8 +99,8 @@ export async function loadChannelConfigs(db: Db): Promise<readonly ChannelConfig
   return rows.map((r) => ({
     channel: r.channel,
     priority: r.priority,
-    countries: stringArray(r.countries, r.channel, 'countries'),
-    currencies: stringArray(r.currencies, r.channel, 'currencies'),
+    countries: scopeArray(r.countries, r.channel, 'countries'),
+    currencies: scopeArray(r.currencies, r.channel, 'currencies'),
     label: r.label,
     icon: r.icon ?? undefined,
   }));

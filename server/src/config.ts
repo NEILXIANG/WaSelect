@@ -37,6 +37,7 @@ import {
   CURRENCY,
   isPlaceholderHost,
   PAYMENT_CHANNEL,
+  PRODUCT_PACKAGING_HEADROOM_G,
 } from '@waselect/shared';
 
 /** 密钥类配置的键名：日志 / 诊断 / 错误上报一律脱敏（评审 #9 红线）。新增密钥类变量必须同步加这里。 */
@@ -332,7 +333,6 @@ const schema = z.object({
   // ── 服务端与管理员 ──────────────────────────────────────────────────────
   /** 自定义 token 密钥；≥32 字符（openssl rand -hex 32）。生产环境绝不允许短密钥。 */
   JWT_SECRET: z.string().min(32, 'JWT_SECRET 至少 32 字符，用 openssl rand -hex 32 生成'),
-  ADMIN_OPENIDS: csv(),
   ADMIN_EMAIL: optionalText(),
   ADMIN_INITIAL_PASSWORD: optionalSecret(ADMIN_PASSWORD_MIN_LENGTH, 'ADMIN_INITIAL_PASSWORD'),
 
@@ -746,6 +746,14 @@ const crossField = (now: Date) =>
     if (c.SENTRY_DSN !== undefined && parseSentryDsn(c.SENTRY_DSN) === null) {
       add('SENTRY_DSN', 'SENTRY_DSN 形状不对（应为 https://PUBLIC_KEY@HOST/PROJECT_ID）');
     }
+    // 11.（工程缺口第二轮 §3.6 #1）包材不得超过商品重量上界预留的余量：超了，
+    //     接近上界的单件商品"能上架、任何购物车都报包裹超重"——而单件没法拆单
+    if (c.PACKAGING_WEIGHT_G > PRODUCT_PACKAGING_HEADROOM_G) {
+      add(
+        'PACKAGING_WEIGHT_G',
+        `PACKAGING_WEIGHT_G 不得超过 ${String(PRODUCT_PACKAGING_HEADROOM_G)}g（商品重量上界为包材预留的余量，见 shared limits.ts）`,
+      );
+    }
     // 10.（复核 AJ-267）停机各步上限串行相加不得超过总预算：超了，总预算到点强退会跳过最后的
     //     "作废机构会话 + 关库"——已取消的单在会话自然过期前仍能被付款。总预算 0 = 不设预算（仅测试），不查。
     if (c.SHUTDOWN_TOTAL_BUDGET_MS > 0 && shutdownWorstCaseMs(c) > c.SHUTDOWN_TOTAL_BUDGET_MS) {
@@ -986,6 +994,13 @@ const crossField = (now: Date) =>
         }
       }
       if (c.PAYMENT_CHANNELS.includes('wechat')) {
+        // 3c.（工程缺口第二轮 §3.5）wechat 通道代码里**没有工厂**（R1 前不实现）：凭据配齐服务也照起，
+        //     通道却被装配层静默跳过——运营以为开了微信支付，买家永远看不到。不论 R1 走哪条路都该响亮失败。
+        //     实现落地时删掉这一条（下面的凭据规则保留）。
+        add(
+          'PAYMENT_CHANNELS',
+          'wechat 通道尚未实现（R1 结论前没有工厂，列出也只会被静默跳过）：生产请从 PAYMENT_CHANNELS 去掉',
+        );
         if (c.WECHAT_INSTITUTION_MERCHANT_ID === undefined) {
           add('WECHAT_INSTITUTION_MERCHANT_ID', '启用了 wechat 通道：生产环境必须配置机构商户号');
         }
@@ -1093,6 +1108,15 @@ const crossField = (now: Date) =>
         add(
           'TRUST_PROXY_HOPS',
           '生产配置了 ORIGIN_VERIFY_SECRET（经 Cloudflare）时 TRUST_PROXY_HOPS 必须 ≥ 2（否则取到的是边缘节点 IP）',
+        );
+      }
+      // 9b.（工程缺口第二轮复核）生产至少要有一个告警通道：两个都不配时对账异常、daily 停跑
+      //     （daily_heartbeat_stalled 只走 Sentry、不发邮件）都只进日志——日志没人每天翻，等于没有告警。
+      //     Sentry 免费档即可，不依赖域名（告警邮件要等发件域验证），所以上线前总能配上一个。
+      if (c.SENTRY_DSN === undefined && c.ALERT_EMAIL === undefined) {
+        add(
+          'SENTRY_DSN',
+          '生产必须至少配置一个告警通道：SENTRY_DSN 或 ALERT_EMAIL（两者都没有时，对账异常与每日作业停跑没人会知道）',
         );
       }
       // 9.（扫描 S-02）配了告警收件人却没配邮件服务：告警只记日志，谁都收不到，而日志看起来一切正常

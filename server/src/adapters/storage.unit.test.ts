@@ -58,6 +58,7 @@ const prodEnv: NodeJS.ProcessEnv = {
   //    会被配置层规则 4c（AJ-375）拒启，失败的就不是本文件要测的那件事了。
   CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
   CORS_ORIGINS: 'https://admin.waselect.jp',
+  SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // config 规则 9b：生产至少一个告警通道
 };
 
 const KEY = 'img/probe/detail.webp';

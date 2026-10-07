@@ -632,6 +632,9 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
       //    会被配置层规则 4c（AJ-375）拒启，红的就不是本文件要测的装配行为了。
       CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
       CORS_ORIGINS: 'https://admin.waselect.jp',
+      // config 规则 9b：生产至少一个告警通道。指向本机一个不监听的端口：真装配会建 Sentry 转发，
+      // 但出错时上报立即连接失败——测试不出网、也不依赖外部服务
+      SENTRY_DSN: 'https://abc123@127.0.0.1:9/1',
       SHUTDOWN_READY_DELAY_MS: '50',
     };
   }

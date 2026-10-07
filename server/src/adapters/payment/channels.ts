@@ -242,6 +242,17 @@ export function buildPaymentRegistry(
   }
 
   // wechat：R1（日本收单机构事前相談）通过前没有实现 → 配置里写了也只是静默跳过
+  //         （生产列出 wechat 由 config.ts 规则 3c 拒启，见那里）
+
+  /**
+   * 装配期把每个已注册通道**构造一次**（工程缺口第二轮复核 F1）。
+   * @why 注册表里"配置币种 ⊆ 能力币种"等一致性校验在首次 resolve 时才跑、抛错后不缓存。
+   *      AJ-379 之后属性来自 `payment_channels` 表——运营改错一行币种、重启，健康检查全绿，
+   *      而 `GET /pay/channels`、回调、自动确认从第一个请求起全部 500。放在这里，错误落在启动那一刻。
+   * @why 只构造**已注册**的：工厂只在凭据齐全时才注册（见上），构造它们不会因为"本地没配密钥"而炸。
+   */
+  for (const ch of registered) registry.getForCallback(ch);
+
   const offline = registered.filter((c) => !listed.has(c));
   return { registry, registered, offline, attrSources };
 }
@@ -263,7 +274,7 @@ function optionsFor(channel: string, config: AppConfig): Readonly<Record<string,
       secret: config.MOCK_CALLBACK_SECRET ?? 'dev-mock-callback-secret-do-not-use-in-prod',
       // 审核模式：服务端自签确认 mock 付款（技术文档 §2.9 / AJ-179）。审核模式下只允许 mock（config 规则 2b），
       // 非审核模式的 mock 只是测试/本地通道，付款靠显式签名回调驱动
-      // 本地模拟付款（MOCK_AUTO_CONFIRM，仅 development / test；config 跨字段 1e 拦公网环境）——第二道防线同样按环境判
+      // 本地模拟付款（MOCK_AUTO_CONFIRM，仅 development / test；config 跨字段 1g 拦公网环境）——第二道防线同样按环境判
       autoConfirm: config.REVIEW_MODE === 'on' || mockAutoConfirmEnabled(config),
     };
   }

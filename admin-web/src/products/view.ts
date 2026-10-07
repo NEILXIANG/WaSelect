@@ -25,7 +25,12 @@
  * @see ../../../contracts/api-contract.yaml（ProductInput / AdminProduct）；
  *      packages/shared/src/enums.ts（COMPLIANCE_TAG / BLOCKED_COMPLIANCE_TAG 真源）
  */
-import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG, PRODUCT_MAX_CHARS } from '@waselect/shared';
+import {
+  BLOCKED_COMPLIANCE_TAG,
+  COMPLIANCE_TAG,
+  PRODUCT_MAX_CHARS,
+  PRODUCT_MAX_WEIGHT_G,
+} from '@waselect/shared';
 
 /** 商品状态（契约 `/admin/products` 的 status 枚举）。 */
 export const PRODUCT_STATUS = ['active', 'offline'] as const;
@@ -348,6 +353,10 @@ export function productFormErrors(form: unknown): {
   const weight = Number(f.weightG);
   if (!Number.isInteger(weight) || weight < 1)
     errors['weightG'] = '重量必须是 ≥1 的整数（克，含包材口径见 D-42）';
+  // 上界与服务端 weight_too_large 同源（shared；工程缺口第二轮 §3.6 #1 起已为包材留出余量）
+  else if (weight > PRODUCT_MAX_WEIGHT_G)
+    errors['weightG'] =
+      `单件重量最多 ${PRODUCT_MAX_WEIGHT_G} 克（再重就超出运费表最大档，无法下单）`;
   // 先判空（A-06）：`Number('') === 0`，清空库存框会被当成 0 提交，商品直接售罄
   const stock = Number(f.stock);
   if (f.stock.trim() === '') errors['stock'] = '库存必填（≥0 的整数；真的卖完了请填 0）';
@@ -367,6 +376,22 @@ export function productFormErrors(form: unknown): {
     (t) => !(COMPLIANCE_TAG as readonly string[]).includes(t),
   );
   if (unknown.length > 0) errors['complianceTags'] = `不在契约枚举内的标签：${unknown.join('、')}`;
+
+  // ── 文本列长度预检（工程缺口第二轮 §3.6 #2）────────────────────────────────
+  // @why 上限从 shared 取（与列宽、服务端判定同源）。超长原先只能等提交被拒，拿到的是泛化 40001，
+  //      reason 只进日志——运营看不出是哪一栏。已有错误（如必填）时不覆盖。
+  const LENGTH_CHECKS = [
+    ['title', f.title, PRODUCT_MAX_CHARS.title, '商品名'],
+    ['customsDescEn', f.customsDescEn, PRODUCT_MAX_CHARS.customs_desc_en, '英文报关品名'],
+    ['hsCode', f.hsCode, PRODUCT_MAX_CHARS.hs_code, 'HS 编码'],
+    ['titleJa', f.titleJa, PRODUCT_MAX_CHARS.title_ja, '日文品名'],
+    ['janCode', f.janCode, PRODUCT_MAX_CHARS.jan_code, 'JAN 码'],
+    ['purchaseSource', f.purchaseSource, PRODUCT_MAX_CHARS.purchase_source, '采购来源'],
+  ] as const;
+  for (const [key, value, max, label] of LENGTH_CHECKS) {
+    if (errors[key] === undefined && value.length > max)
+      errors[key] = `${label}最多 ${max} 字（当前 ${value.length} 字）`;
+  }
 
   // ── 编辑口径三列的预检（020）───────────────────────────────────────────────
   // @why 上限**从 shared 取**而不是在这里写 200 / 120：写死就等于把

@@ -85,6 +85,7 @@ describe('NODE_ENV（D17）', () => {
       STRIPE_SECRET_KEY: 'sk_live_dummy',
       STRIPE_WEBHOOK_SECRET: 'whsec_dummy',
       CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+      SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // 规则 9b：生产至少一个告警通道
     };
     expect(loadConfig(prod).NODE_ENV).toBe('production');
   });
@@ -145,11 +146,6 @@ describe('空串 = 未设置（.env.example 的 KEY= 是占位）', () => {
   it('FREE_SHIPPING_JPY 留空为 undefined——若当成 0 会变成"全场包邮"', () => {
     expect(loadConfig({ ...baseEnv, FREE_SHIPPING_JPY: '' }).FREE_SHIPPING_JPY).toBeUndefined();
     expect(loadConfig({ ...baseEnv, FREE_SHIPPING_JPY: '10000' }).FREE_SHIPPING_JPY).toBe(10000);
-  });
-
-  it('ADMIN_OPENIDS 留空为空数组', () => {
-    expect(loadConfig({ ...baseEnv, ADMIN_OPENIDS: '' }).ADMIN_OPENIDS).toEqual([]);
-    expect(loadConfig({ ...baseEnv, ADMIN_OPENIDS: 'o1,o2' }).ADMIN_OPENIDS).toEqual(['o1', 'o2']);
   });
 });
 
@@ -288,6 +284,7 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     // ⚠️ 同上：生产夹具必须是**真实形态**的域名，否则规则 4c 会在这里先红（AJ-375）
     CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
     CORS_ORIGINS: 'https://admin.waselect.jp',
+    SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // 规则 9b：生产至少一个告警通道
     ...extra,
   });
 
@@ -539,6 +536,34 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     );
   });
 
+  /**
+   * 工程缺口第二轮 §3.5：wechat 通道**代码里没有工厂**（R1 前不实现），配置层却只要求凭据——
+   * 凭据配齐后服务照起，通道被装配层静默跳过：运营以为开了微信支付，买家永远看不到。
+   * 不论 R1 结论走哪条路，"列出一个不存在的实现"都该在启动时响亮失败。
+   */
+  /**
+   * 工程缺口第二轮复核（新增缺口）：生产原先可以**一个告警通道都没有**就启动——对账异常、
+   * daily 停跑（daily_heartbeat_stalled 只走 Sentry，不发邮件）都只进日志，没人看。
+   */
+  it('🔴 生产既没配 SENTRY_DSN 也没配 ALERT_EMAIL → 拒绝；配任一个即可', () => {
+    const bare = prod({});
+    delete bare['SENTRY_DSN'];
+    delete bare['ALERT_EMAIL'];
+    expect(expectReject(bare).join('\n')).toContain('SENTRY_DSN');
+    expect(loadConfig(prod({})).NODE_ENV).toBe('production');
+  });
+
+  it('🔴 生产列出 wechat（即使凭据齐全）→ 拒绝：通道尚未实现', () => {
+    const issues = expectReject(
+      prod({
+        PAYMENT_CHANNELS: 'wechat',
+        WECHAT_INSTITUTION_MERCHANT_ID: 'm-1',
+        WECHAT_INSTITUTION_API_KEY: 'k'.repeat(32),
+      }),
+    );
+    expect(issues.join('\n')).toMatch(/wechat.*尚未实现/);
+  });
+
   it('生产启用 wechat 却缺机构配置 → 拒绝', () => {
     const issues = expectReject(prod({ PAYMENT_CHANNELS: 'wechat' }));
     expect(issues.join('\n')).toContain('WECHAT_INSTITUTION_MERCHANT_ID');
@@ -675,6 +700,7 @@ describe('🔴 生产对外域名不得是占位值（规则 4c，B9 闸门 / AJ
     STRIPE_WEBHOOK_SECRET: 'whsec_x',
     CORS_ORIGINS: 'https://admin.waselect.jp',
     CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+    SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // 规则 9b
     ...extra,
   });
 
@@ -877,6 +903,7 @@ describe('配置形状（N11）', () => {
     // ⚠️ 同上：真实形态的域名，不是占位域（规则 4c）
     CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
     CORS_ORIGINS: 'https://admin.waselect.jp',
+    SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // 规则 9b：生产至少一个告警通道
     ...extra,
   });
 
@@ -1119,6 +1146,13 @@ describe('定时类毫秒配置的上限（S-06）', () => {
       2147483647,
     );
   });
+});
+
+it('PACKAGING_WEIGHT_G 超过包材余量 1000g → 拒启；恰好 1000 接受（工程缺口第二轮 §3.6 #1）', () => {
+  expect(expectReject({ ...baseEnv, PACKAGING_WEIGHT_G: '1001' }).join('\n')).toContain(
+    'PACKAGING_WEIGHT_G',
+  );
+  expect(loadConfig({ ...baseEnv, PACKAGING_WEIGHT_G: '1000' }).PACKAGING_WEIGHT_G).toBe(1000);
 });
 
 it('IMG_BASE_URL 去尾斜杠（复核 AJ-184：它被三处拼路径，尾斜杠 = 双斜杠坏图）', () => {

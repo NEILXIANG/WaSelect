@@ -81,7 +81,7 @@ async function purchaseTable(db: Db): Promise<ExportTable> {
            oi.qty, oi.unit_price_jpy, oi.cost_jpy
       from order_items oi join orders o on o.id = oi.order_id
      where o.status = 'paid' and o.is_test = false
-     order by o.paid_at, o.id, oi.id`;
+     order by o.paid_at, o.id, oi.line_no nulls last, oi.id`;
   return {
     header: [
       'order_no',
@@ -121,7 +121,7 @@ async function customsTable(db: Db): Promise<ExportTable> {
       join orders o on o.id = oi.order_id
       join products p on p.id = oi.product_id
      where o.status = 'paid' and o.is_test = false
-     order by o.paid_at, o.id, oi.id`;
+     order by o.paid_at, o.id, oi.line_no nulls last, oi.id`;
   return {
     header: [
       'order_no',

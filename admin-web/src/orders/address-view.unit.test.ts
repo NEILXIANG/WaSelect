@@ -181,3 +181,27 @@ describe('与契约 AddressInput 的双向比对', () => {
     expect(ADDRESS_PATTERNS.state.source).toBe('^[A-Z]{2}$');
   });
 });
+
+describe('州码白名单（工程缺口第二轮 §3.6 #3）', () => {
+  /**
+   * @why 契约 / 服务端 / 小程序三处都已收紧到 USPS 62 个州码（AJ-371），唯独管理端改址只判"两位大写"：
+   *      填 `XX` 能过前端，提交才被服务端 40002 拒，而泛化错误不指向州这一栏。
+   */
+  const valid = {
+    recipient: 'Jane Doe',
+    phone: '+14155550123',
+    line1: '1 Main St',
+    line2: '',
+    city: 'Springfield',
+    state: 'IL',
+    postal_code: '62701',
+  };
+  it('🔴 XX（形状对、不是州码）→ 州字段报错', () => {
+    expect(addressFormErrors({ ...valid, state: 'XX' }).errors['state']).toBeTruthy();
+  });
+  it('IL / 小写 ca / 领地 PR → 通过', () => {
+    expect(addressFormErrors(valid).ok).toBe(true);
+    expect(addressFormErrors({ ...valid, state: 'ca' }).errors['state']).toBeUndefined();
+    expect(addressFormErrors({ ...valid, state: 'PR' }).errors['state']).toBeUndefined();
+  });
+});

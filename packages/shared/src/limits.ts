@@ -134,7 +134,7 @@ export const SHIPPING_RATE_BOUNDS = {
 /**
  * 单件商品的**重量上界**（克；C3-01 DOM3 第二批 / 2026-10-02）。
  *
- * @why 与 `SHIPPING_RATE_BOUNDS.maxWeightG` **同值同源**——两者都是"承运商单件上限 30kg"
+ * @why 与 `SHIPPING_RATE_BOUNDS.maxWeightG` **同源**（由它推出，见下方余量）——两者都是"承运商单件上限 30kg"
  *      这一个事实的两处兑现：运费档的上界是"能寄多重的一票"，商品重量的上界是
  *      "能寄多重的单件"。写成两个数字就是两份真源，改一处漏一处时
  *      "商品能录 31kg 但运费表最多 30kg"这种矛盾不会报错，只会让含它的购物车 40912。
@@ -148,9 +148,15 @@ export const SHIPPING_RATE_BOUNDS = {
  *              彻底的解法是上架时按当前运费表校验，那需要查库（本层是纯函数），
  *              故取常量；这个剩余风险按"配置与商品都应由运营一起维护"接受。
  *
- * @see server/src/domain/product-input.ts；docs/自主决策记录.md AJ-298
+ * @why ⚠️ 2026-10-06 改为"最大档 − 包材余量"（工程缺口第二轮 §3.6 #1）：计费重 = 商品重 + 包材
+ *      （`PACKAGING_WEIGHT_G`，默认 250g）。上界原先等于最大档 30 000g，于是 29 751–30 000g 的单件
+ *      能上架、却任何购物车都报 40912"包裹超重请拆单"——**单件没法拆**。留 1 000g 余量，
+ *      并由 config 规则保证 `PACKAGING_WEIGHT_G ≤` 余量，两边合起来"单件 + 包材"必然落在最大档内。
+ *
+ * @see server/src/domain/product-input.ts；server/src/config.ts（包材上限规则）；docs/自主决策记录.md AJ-298
  */
-export const PRODUCT_MAX_WEIGHT_G = 30_000;
+export const PRODUCT_PACKAGING_HEADROOM_G = 1_000;
+export const PRODUCT_MAX_WEIGHT_G = SHIPPING_RATE_BOUNDS.maxWeightG - PRODUCT_PACKAGING_HEADROOM_G;
 
 /**
  * `products` 表各 VARCHAR 列的**字符上限**（与 001 的列宽逐字一致）。

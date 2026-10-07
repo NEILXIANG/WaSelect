@@ -10,7 +10,12 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BLOCKED_COMPLIANCE_TAG, COMPLIANCE_TAG, PRODUCT_MAX_CHARS } from '@waselect/shared';
+import {
+  BLOCKED_COMPLIANCE_TAG,
+  COMPLIANCE_TAG,
+  PRODUCT_MAX_CHARS,
+  PRODUCT_MAX_WEIGHT_G,
+} from '@waselect/shared';
 import {
   BLOCKED_CUSTOMS_WORDS,
   CATEGORY_LABELS,
@@ -237,6 +242,33 @@ describe('productFormErrors（上架预检）', () => {
     });
     expect(r.ok).toBe(false);
     expect(r.errors['editorialTags']).toContain('空标签');
+  });
+
+  /**
+   * 工程缺口第二轮 §3.6 #2：其余六个文本字段原先没有长度预检——超长提交拿到的是泛化 40001
+   * （响应体只回 code/message，reason 只进日志），运营看不出是哪一栏太长。
+   */
+  it.each([
+    ['title', 'title'],
+    ['customsDescEn', 'customs_desc_en'],
+    ['hsCode', 'hs_code'],
+    ['titleJa', 'title_ja'],
+    ['janCode', 'jan_code'],
+    ['purchaseSource', 'purchase_source'],
+  ] as const)('🔴 %s 超过 PRODUCT_MAX_CHARS.%s → 该栏报错且带出上限', (field, key) => {
+    const err = productFormErrors({
+      ...productFormModel(PRODUCT),
+      [field]: '1'.repeat(PRODUCT_MAX_CHARS[key] + 1),
+    }).errors[field];
+    expect(err).toContain(String(PRODUCT_MAX_CHARS[key]));
+  });
+
+  it('🔴 重量超过单件上界（shared PRODUCT_MAX_WEIGHT_G）→ 该栏报错', () => {
+    const err = productFormErrors({
+      ...productFormModel(PRODUCT),
+      weightG: String(PRODUCT_MAX_WEIGHT_G + 1),
+    }).errors['weightG'];
+    expect(err).toContain(String(PRODUCT_MAX_WEIGHT_G));
   });
 
   it('⚠️ why / maker 超限 → 拒（上限从 shared 取，不写死 200 / 120）', () => {

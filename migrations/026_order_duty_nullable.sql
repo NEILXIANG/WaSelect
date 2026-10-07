@@ -6,7 +6,9 @@
 --      0 与"未知"是两回事：日本原产按 15% 计，0 只可能是"没估"，不可能是"真的是 0"。
 -- @why 只放宽、不改存量：已有的 0 无法区分是"未估"还是别的，原样保留；
 --      非负约束（023 的 orders_duty_jpy_nonneg）对 NULL 天然放行，不用动。
--- @limitation down 段把 NULL 回填成 0 再收紧——回滚后"未知"又会被说成 0（与本迁移之前同样的问题）。
+-- @limitation down 段**遇到 NULL 就失败**（工程缺口第二轮 §3.6 #5，2026-10-06 改）：原先回填成 0 再收紧，
+--      回滚一次就把"关税未知"重新说成"预估关税 0 円"，正是 up 要消灭的缺陷，且不留痕。
+--      真要回滚，先由人决定这些单怎么处理（down 在生产不自动执行）。
 --
 -- @see server/src/app/create-order.ts（写入）；server/src/app/order-views.ts（读出）；
 --      contracts/api-contract.yaml（0.6.30：Order.duty_jpy nullable）；docs/自主决策记录.md AJ-367
@@ -18,6 +20,11 @@ ALTER TABLE orders ALTER COLUMN duty_jpy DROP DEFAULT;
 
 -- Down migration
 
-UPDATE orders SET duty_jpy = 0 WHERE duty_jpy IS NULL;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM orders WHERE duty_jpy IS NULL) THEN
+    RAISE EXCEPTION '026 down 拒绝执行：存在 duty_jpy IS NULL（关税未知）的订单，回填成 0 会把"未知"说成"0 円"。请先人工处理这些订单';
+  END IF;
+END $$;
 ALTER TABLE orders ALTER COLUMN duty_jpy SET DEFAULT 0;
 ALTER TABLE orders ALTER COLUMN duty_jpy SET NOT NULL;

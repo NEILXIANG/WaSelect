@@ -115,12 +115,17 @@ function canonicalHeaderValue(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-/** 按头名排序后的 `name:value\n` 拼接（SigV4 要求字典序）。 */
+/**
+ * 按头名排序后的 `name:value\n` 拼接（SigV4 要求字典序）。
+ * @why 先建"小写名 → 原值"的表再取值：原先把键小写后**回原对象**取值，调用方一旦传了
+ *      `Content-Type` 这类大小写混合的键，取到的是 `undefined`，签进摘要的是字符串 "undefined"
+ *      ⇒ 403 SignatureDoesNotMatch（工程缺口第二轮 §3.6 #6；当时调用方全传小写，不可触发）。
+ */
 function canonicalHeaders(headers: Readonly<Record<string, string>>): string {
-  return Object.keys(headers)
-    .map((k) => k.toLowerCase())
+  const lower = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+  return [...lower.keys()]
     .sort()
-    .map((k) => `${k}:${canonicalHeaderValue(String(headers[k]))}\n`)
+    .map((k) => `${k}:${canonicalHeaderValue(String(lower.get(k)))}\n`)
     .join('');
 }
 

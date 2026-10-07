@@ -190,4 +190,16 @@ describe('aws-sigv4：形状与编码（这些是签名之外的独立失效点�
     });
     expect(cr).toBe('PUT\n/k\n\nhost:h.example.com\n\nhost\n' + 'x'.repeat(64));
   });
+
+  it('🔴 头名大小写混合 → 值照样签进去（不是字符串 "undefined"）', () => {
+    // 工程缺口第二轮 §3.6 #6：原先把键小写后回原对象取值，`Content-Type` 取到 undefined → 403 SignatureDoesNotMatch
+    const cr = canonicalRequest({
+      method: 'PUT',
+      canonicalUri: '/k',
+      headers: { Host: 'h.example.com', 'Content-Type': 'image/webp' },
+      payloadHash: 'x'.repeat(64),
+    });
+    expect(cr).toContain('content-type:image/webp\nhost:h.example.com\n');
+    expect(cr).not.toContain('undefined');
+  });
 });

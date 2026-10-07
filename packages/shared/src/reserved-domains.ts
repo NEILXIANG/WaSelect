@@ -56,7 +56,9 @@ const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
 ]);
 
 export function isPlaceholderHost(host: string): boolean {
-  const h = host.toLowerCase();
+  // 去掉结尾的点：`new URL('https://img.example.com.').hostname` 会保留它（FQDN 写法），
+  // 不去的话精确匹配与后缀匹配都会被绕过（工程缺口第二轮复核 F3）
+  const h = host.toLowerCase().replace(/\.$/, '');
   if (LOOPBACK_HOSTS.has(h) || h.startsWith('127.')) return true;
   for (const d of RESERVED_EXAMPLE_DOMAINS) {
     if (h === d || h.endsWith(`.${d}`)) return true;

@@ -220,6 +220,29 @@ describe('通道属性来自 payment_channels 表（R2-4 / AJ-379）', () => {
   });
 });
 
+describe('表里的属性超出通道能力 → 装配期就失败（工程缺口第二轮复核 F1）', () => {
+  /**
+   * @why AJ-379 之后币种来自表，而"配置币种 ⊆ 能力币种"的校验原先是**懒执行**的（首次 resolve 才跑，
+   *      抛错后不缓存）——改表里一行、重启，健康检查全绿，`GET /pay/channels` 却从第一个请求起整体 500，
+   *      回调与自动确认也一起挂。装配期把每个已注册通道构造一次，错误落在启动日志里。
+   */
+  it('mock 的币种被改成 USD（mock 只支持 JPY）→ buildPaymentRegistry 抛，消息点名通道与币种', () => {
+    const c = loadConfig({ ...baseEnv, PAYMENT_CHANNELS: 'mock' });
+    expect(() =>
+      buildPaymentRegistry(c, deps(), [
+        {
+          channel: 'mock',
+          priority: 1,
+          countries: ['*'],
+          currencies: ['USD'],
+          label: 'm',
+          icon: undefined,
+        },
+      ]),
+    ).toThrow(/mock.*USD/);
+  });
+});
+
 describe('buildPaymentRegistry：mock 通道', () => {
   it('未配 MOCK_CALLBACK_SECRET → 回落到开发占位密钥，且该密钥**真的能验过签**', async () => {
     const c = loadConfig(baseEnv);
@@ -403,6 +426,7 @@ describe('buildPaymentRegistry：生产环境的 mock 门（三审 S1）', () =>
       // ⚠️ 同上：真实形态的域名，占位域会被规则 4c（AJ-375）提前拒启
       CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
       CORS_ORIGINS: 'https://admin.waselect.jp',
+      SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // config 规则 9b：生产至少一个告警通道
     });
     // 绕过配置层（模拟规则 1b 被放宽）：直接注入残留密钥
     const a = buildPaymentRegistry(
