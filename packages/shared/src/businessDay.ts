@@ -59,3 +59,50 @@ export function startOfJstDayUtc(at: Date): Date {
 export function isSameJstDay(a: Date, b: Date): boolean {
   return jstDate(a) === jstDate(b);
 }
+
+/**
+ * JST 当日 00:00 **往前推 `days` 天**的 UTC 时刻（含当日在内的 N 日窗口起点用 `days = N - 1`）。
+ *
+ * @why 放在 shared 而不是服务端业务层：那里禁止 `new Date()`（F10，时钟必须注入），
+ *      而"把一天的开始往前挪几天"是**纯算术**，不涉及取当前时间——
+ *      挪到这里既守住了那条规则，又让这段算术有单元测试（挪进适配器就只能靠真库用例间接覆盖）。
+ * @limitation 按 24 小时整挪，不经由日历加减：JST 无夏令时（@see 文件头 @limitation），
+ *             所以"一天前"恒等于"减 24 小时"；将来若改行夏令时，这里必须跟着换成日历运算。
+ */
+export function startOfJstDayUtcMinusDays(at: Date, days: number): Date {
+  return new Date(startOfJstDayUtc(at).getTime() - days * 86_400_000);
+}
+
+/** 一个**左闭右开**的时间窗口（`from` 含，`to` 不含）。 */
+export interface JstDayWindow {
+  from: Date;
+  to: Date;
+}
+
+/**
+ * 以 `at` 所在 JST 日**为最后一天**、往前含 **`days` 个自然日**的窗口（左闭右开）。
+ *
+ * - `days = 1` → 今日：`[今日 00:00 JST, 明日 00:00 JST)`
+ * - `days = 7` → 含今日的近 7 日：`[6 天前 00:00 JST, 明日 00:00 JST)`
+ *
+ * @why **右端恒定是"明日 00:00"而不是"此刻"**：统计窗口的右端若取"此刻"，
+ *      同一天内每刷新一次数字都在变，且"今日"与"近 7 天"两个窗口的右端会不一致
+ *      （一次请求里取了两次时钟的话更是两个值）。右端统一为日界，
+ *      "近 7 天"就**严格包含**"今日"，两者可以互相校验（`today ⊆ last7`）。
+ * @why 与 `startOfJstDayUtcMinusDays` 同理由放在 shared：服务端业务层禁 `new Date()`
+ *      （F10，时钟必须注入），而"日界 + 加减整天"是纯算术。
+ * @throws {RangeError} `days` 不是 ≥ 1 的整数——静默把 0 / -1 / 1.5 当成"今天"
+ *          会让窗口退化成一段空的或反向的区间，而空区间在统计里的表现是"销售额 0"，
+ *          看起来完全合理（空对空假绿灯），必须响亮失败。
+ * @limitation 同样按 24 小时整挪（JST 无夏令时，@see 文件头 @limitation）。
+ */
+export function jstDayWindow(at: Date, days: number): JstDayWindow {
+  if (!Number.isInteger(days) || days < 1) {
+    throw new RangeError(`窗口天数必须是 ≥ 1 的整数，收到 ${String(days)}`);
+  }
+  const todayStart = startOfJstDayUtc(at);
+  return {
+    from: new Date(todayStart.getTime() - (days - 1) * 86_400_000),
+    to: new Date(todayStart.getTime() + 86_400_000),
+  };
+}

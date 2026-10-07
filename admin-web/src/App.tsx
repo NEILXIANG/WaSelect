@@ -35,6 +35,7 @@ import { resolveApiBase } from './api/config.js';
 import { login } from './api/endpoints.js';
 import { createTokenStore } from './api/token-store.js';
 import { BannersPage } from './banners/BannersPage.js';
+import { DashboardPage } from './dashboard/DashboardPage.js';
 import { OrdersPage } from './orders/OrdersPage.js';
 import { RiskPage } from './risk/RiskPage.js';
 import { OpsLogPage } from './opslog/OpsLogPage.js';
@@ -49,11 +50,11 @@ const tokenStore = createTokenStore();
 
 /**
  * 侧栏项（新增一个管理页就在这里加一项）。
- * @why 侧栏不含「工作台」：第一批③才会做它。在那之前 `#/dashboard` 与 `#/` 都落到订单列表——
- *      "打开后台第一眼看到什么"这个问题现在有答案（运营每天第一件事就是看单），
- *      等工作台做完再把 `HOME_PAGE` 与这一项一起改回来（@see router.ts）。
+ * @why 「工作台」排第一且是 `HOME_PAGE`：打开后台第一眼应当是"今天该干什么 + 今天卖了多少"，
+ *      而不是某个业务列表（附件 §3.1：成熟平台无一例外）。
  */
 const NAV: ReadonlyArray<{ key: PageKey; label: string }> = [
+  { key: 'dashboard', label: '工作台' },
   { key: 'orders', label: '订单管理' },
   { key: 'products', label: '商品管理' },
   { key: 'ops', label: '运营配置' },
@@ -112,8 +113,8 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
     [baseUrl, onUnauthorized],
   );
 
-  /** 未登录 / 认不出时落到这里；第一批③会把「工作台」做成真正的首页。 */
-  const view: PageKey = route.page === 'dashboard' ? 'orders' : route.page;
+  // 认不出的网址由 `parseHash` 兜成首页（router.ts @limitation：不带 id / query），这里不再兜第二遍
+  const view: PageKey = route.page;
 
   return (
     <div className="shell">
@@ -140,6 +141,8 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
       </aside>
 
       <main className="main">
+        {view === 'dashboard' && <DashboardPage api={api} onNavigate={go} />}
+
         {view === 'orders' && (
           <OrdersPage
             api={api}

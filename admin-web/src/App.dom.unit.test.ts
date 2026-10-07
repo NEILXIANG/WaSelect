@@ -24,11 +24,17 @@ let mounted: Mounted | undefined;
 /** 所有页面发出的请求（假 fetch 记录）。 */
 let requested: string[];
 
-/** 假后端：一律回 200 空列表，只记录 URL（测的是路由不是业务）。 */
+/**
+ * 假后端：一律回 200，只记录 URL（测的是路由不是业务）。
+ * @why body 里同时带 `items/total` 与 `today/last7`：列表页与工作台页的形状校验都在
+ *      `*.api.ts` 里硬失败（@limitation 一），缺任一半都会让对应那一页抛错，
+ *      于是"页面切过去了没有"会被一串错误提示盖住——那是路由用例不该有的噪音。
+ */
 function stubFetch(): void {
+  const window = { from: 'x', to: 'y', orders: 0, paid_orders: 0, sales_jpy: 0, avg_jpy: null };
   vi.stubGlobal('fetch', async (url: unknown) => {
     requested.push(String(url));
-    return new Response(JSON.stringify({ items: [], total: 0 }), {
+    return new Response(JSON.stringify({ items: [], total: 0, today: window, last7: window }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
@@ -66,12 +72,20 @@ afterEach(async () => {
 });
 
 describe('App：侧栏', () => {
-  it('六个一级页都在侧栏里（新增页面忘挂 = 没人能点进去）', async () => {
+  it('七个一级页都在侧栏里，工作台在最前（新增页面忘挂 = 没人能点进去）', async () => {
     const el = await open('#/orders');
     const labels = [...el.querySelectorAll('.sidebar .nav-item')].map((b) =>
       (b.textContent ?? '').trim(),
     );
-    expect(labels).toEqual(['订单管理', '商品管理', '运营配置', '首页 Banner', '风控', '运营日志']);
+    expect(labels).toEqual([
+      '工作台',
+      '订单管理',
+      '商品管理',
+      '运营配置',
+      '首页 Banner',
+      '风控',
+      '运营日志',
+    ]);
   });
 
   it('当前页在侧栏里高亮（只有一个，避免"看着像在两处"）', async () => {
@@ -101,9 +115,15 @@ describe('App：地址栏 → 页面（刷新 / 分享 / 后退都要成立）',
     expect(heading(el), 'hashchange 没有驱动换页').toBe('商品管理');
   });
 
-  it('认不出的地址回落订单页，不白屏', async () => {
+  it('认不出的地址回落首页（工作台），不白屏', async () => {
     const el = await open('#/nope');
-    expect(heading(el)).toBe('订单管理');
+    expect(location.hash).toBe('#/nope');
+    expect(el.querySelector('.sidebar .nav-item-on')?.textContent?.trim()).toBe('工作台');
+  });
+
+  it('#/dashboard 打开即工作台（HOME_PAGE）', async () => {
+    await open('#/dashboard');
+    expect(requested.some((u) => u.includes('/admin/dashboard/sales'))).toBe(true);
   });
 });
 

@@ -75,6 +75,7 @@ import { mountPayLinkRoutes } from './pay-link-routes.js';
 import { registerSessionExpiryOnClose } from './close-session-events.js';
 import { mountAdminExportRoutes } from './admin-export-routes.js';
 import { mountAdminOpsLogRoutes } from './admin-ops-log-routes.js';
+import { mountAdminDashboardRoutes } from './admin-dashboard-routes.js';
 import { mountWechatAuthRoutes } from './wechat-auth-routes.js';
 import { mountInternalJobsRoutes } from './internal-jobs-routes.js';
 import { createInflightJobs, type InflightJobs } from './inflight-jobs.js';
@@ -385,6 +386,14 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     db,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity,
+  });
+  // ── 工作台销售统计（AJ-393，管理后台对标分析第一批③）：只读聚合。
+  //    clock 必须注入——窗口右端与"当前生效汇率"都取它，否则这条路由无法在假时间下测（F10）──
+  mountAdminDashboardRoutes(app, {
+    db,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+    clock,
   });
   // ── 管理端运营配置（I2-U-C3）：展示汇率与运费分档。clock 必须注入——
   //    "立即生效"的 effective_from 取它，否则这条路由无法在假时间下测（F10）──

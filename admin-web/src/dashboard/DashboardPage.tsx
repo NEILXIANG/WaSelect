@@ -1,0 +1,194 @@
+/**
+ * 职责：首页工作台（AJ-393；管理后台对标分析第一批③）——今日待办 + 今日 / 近 7 日数据。
+ *
+ * @why 待办放**第一屏**且每一项可点直达筛好的列表：成熟电商后台的共同做法是
+ *      "打开就知道今天该干什么"。此前运营要自己逐页翻（附件 §3.1），
+ *      而"待发货"是有发货时限承诺的一类，漏掉是真实损失。
+ * @why 待办计数**复用订单页的 `TodoBar`**（它用列表接口的 `total`，`size=1`）：
+ *      同一个数字有两条口径时，漂移的表现是"工作台写着 3、点进去列表只有 2 条"，
+ *      而两边各自都自洽、没有任何一处会报错。复用 = 口径只有一份。
+ *
+ * @limitation 一：**円为主、USD 灰字辅显、标 ≈**（§8-2）。
+ *              USD 只是"方便与 Stripe 后台 / 买家沟通"的换算，不是记账值；
+ *              换算走 shared 的 `toMinor(toRateInt(rate), …)`——**唯一**换算入口，
+ *              不在这里另写一次乘法（B43 那一类教训：写第二份迟早漂移）。
+ * @limitation 二：**实收 / 已退 / 拒付按扣款币种原样显示，不折算**。
+ *              这三个数要和支付机构对账（§8-2），折算后对不上；
+ *              所以它们按币种**分行**显示，而不是加成一个"总退款额"。
+ * @limitation 三：加载中显示「…」、失败显示「—」，**不显示 0**。
+ *              "取不到"与"真的是 0"在经营判断里是两件事——
+ *              把前者显示成 0 会让运营以为今天一分钱没卖出去。
+ *
+ * @see ./api.ts；../orders/TodoBar.tsx（待办计数）；../format.ts（金额文案）；
+ *      ../../../server/src/adapters/dashboard.ts（服务端口径）
+ */
+import { useEffect, useState, type JSX } from 'react';
+import { toMinor, toRateInt } from '@waselect/shared';
+import { moneyText, minorMoneyText } from '../format.js';
+import { ToastStack, toastError, useToasts } from '../ui/toast.js';
+import { TodoBar } from '../orders/TodoBar.js';
+import {
+  getSalesOverview,
+  type AdminApi,
+  type MoneyByCurrency,
+  type SalesOverviewLike,
+} from './api.js';
+import type { Route } from '../router.js';
+
+export interface DashboardPageProps {
+  api: AdminApi;
+  /** 待办点一下 → 跳到筛好的订单列表（`#/orders?status=paid`）。 */
+  onNavigate: (next: Route) => void;
+}
+
+/**
+ * 円 → USD 的**辅显**文案；拿不到汇率或换算不可行时返回 `null`（不显示那一行）。
+ *
+ * @why 吞掉 `RangeError` 而不是让它冒泡：`toRateInt` 会拒 0 / 负 / 过大的汇率，
+ *      那是"汇率配错了"，它已经有服务端与运维侧的告警；
+ *      工作台**少显示一行 ≈USD** 是对的降级，让整页崩掉是错的降级。
+ */
+export function usdApproxText(jpy: unknown, rate: unknown): string | null {
+  if (typeof jpy !== 'number' || typeof rate !== 'number') return null;
+  try {
+    return `≈ ${minorMoneyText(toMinor(jpy, toRateInt(rate)), 'USD')}`;
+  } catch {
+    return null;
+  }
+}
+
+/** 一组"按币种分行"的钱 → 展示文案；空数组 → 「无」。 */
+function moneyRowsText(rows: readonly MoneyByCurrency[] | undefined): string {
+  if (rows === undefined || rows.length === 0) return '无';
+  return rows.map((m) => minorMoneyText(m.amount, m.currency)).join(' / ');
+}
+
+function Card({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string | null;
+}): JSX.Element {
+  return (
+    <div className="stat-card">
+      <span className="stat-label">{label}</span>
+      <span className="stat-value">{value}</span>
+      {sub !== undefined && sub !== null && <span className="stat-sub">{sub}</span>}
+    </div>
+  );
+}
+
+export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
+  const [data, setData] = useState<SalesOverviewLike | null>(null);
+  const [failed, setFailed] = useState(false);
+  const toasts = useToasts();
+  // ⚠️ 依赖数组里只能放**稳定**的那一个函数：`useToasts()` 每次渲染返回新对象，
+  //    把整个 `toasts` 放进依赖会让它每次渲染都重新拉一次统计（乃至死循环）。
+  //    `toasts.error` 是 `useCallback([push])` 且 `push` 是 `useCallback([])`，引用稳定。
+  const { error: showError } = toasts;
+
+  useEffect(() => {
+    let alive = true;
+    getSalesOverview(api)
+      .then((r) => {
+        if (alive) setData(r);
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setFailed(true);
+        const t = toastError(e, '工作台数据加载失败');
+        showError(t.text, { traceId: t.traceId });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [api, showError]);
+
+  const rate = data?.fx?.usd_rate;
+  const today = data?.today;
+  const last7 = data?.last7;
+
+  return (
+    <div>
+      <ToastStack toasts={toasts.toasts} onDismiss={(id) => toasts.dismiss(id)} />
+
+      <section className="panel">
+        <h2 className="title">今日待办</h2>
+        <TodoBar
+          api={api}
+          current="all"
+          onPick={(status) => {
+            onNavigate({ page: 'orders', id: '', query: new URLSearchParams({ status }) });
+          }}
+        />
+      </section>
+
+      <section className="panel">
+        <h2 className="title">今日数据</h2>
+        <div className="stat-cards">
+          <Card
+            label="销售额"
+            value={today === undefined ? (failed ? '—' : '…') : moneyText(today.sales_jpy ?? 0)}
+            sub={usdApproxText(today?.sales_jpy ?? 0, rate)}
+          />
+          <Card
+            label="已付款订单"
+            value={today === undefined ? (failed ? '—' : '…') : String(today.paid_orders ?? 0)}
+          />
+          <Card
+            label="客单价"
+            value={
+              today === undefined
+                ? failed
+                  ? '—'
+                  : '…'
+                : today.avg_jpy === null || today.avg_jpy === undefined
+                  ? '—'
+                  : moneyText(today.avg_jpy)
+            }
+          />
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2 className="title">近 7 天</h2>
+        <div className="stat-cards">
+          <Card
+            label="销售额"
+            value={last7 === undefined ? (failed ? '—' : '…') : moneyText(last7.sales_jpy ?? 0)}
+            sub={usdApproxText(last7?.sales_jpy ?? 0, rate)}
+          />
+          <Card
+            label="已付款订单"
+            value={last7 === undefined ? (failed ? '—' : '…') : String(last7.paid_orders ?? 0)}
+          />
+          <Card
+            label="客单价"
+            value={
+              last7 === undefined
+                ? failed
+                  ? '—'
+                  : '…'
+                : last7.avg_jpy === null || last7.avg_jpy === undefined
+                  ? '—'
+                  : moneyText(last7.avg_jpy)
+            }
+          />
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2 className="title">今日实收 / 已退 / 拒付</h2>
+        <p className="muted">按实际扣款币种原样显示，不折算——这三个数要和支付机构对账（§8-2）。</p>
+        <div className="form">
+          <span>实收：{moneyRowsText(today?.received)}</span>
+          <span>已退：{moneyRowsText(today?.refunded)}</span>
+          <span>拒付：{moneyRowsText(today?.disputed)}</span>
+        </div>
+      </section>
+    </div>
+  );
+}

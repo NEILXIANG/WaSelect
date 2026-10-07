@@ -506,3 +506,38 @@ body {
   background: var(--ws-color-error);
   color: var(--ws-color-card);
 }
+
+/* ── 工作台统计卡片（第一批③）───────────────────────────────────────── */
+/* 卡片横排、窄窗口自动换行：工作台第一屏要能一眼看到三四个数字，
+   竖排会把"近 7 天"挤到第二屏，而那一屏恰恰是用来跟"今日"对比的。 */
+.stat-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ws-space);
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space-sm);
+  padding: var(--ws-space);
+  border: var(--ws-border) solid var(--ws-color-muted);
+  border-radius: var(--ws-radius);
+  background: var(--ws-color-card);
+  min-width: calc(var(--ws-space) * 9);
+}
+
+.stat-label {
+  font-size: var(--ws-font-sm);
+  color: var(--ws-color-muted);
+}
+
+.stat-value {
+  font-size: var(--ws-font-lg);
+}
+
+/* 折算值：灰字 + 前置 ≈，明确它不是记账值（§8-2） */
+.stat-sub {
+  font-size: var(--ws-font-sm);
+  color: var(--ws-color-muted);
+}
