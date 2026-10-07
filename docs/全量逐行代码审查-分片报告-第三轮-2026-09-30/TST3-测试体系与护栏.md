@@ -85,6 +85,7 @@
 
 - **位置**：`miniprogram/review-wording-guard.unit.test.ts:11-12,19`（`FORBIDDEN` 只有三个词，不扫服务端）；`server/src/adapters/payment/channels.ts:75`（`mock: {…, label: '模拟支付'}`）；`miniprogram/utils/pay-plan.js:48,163-170`（按钮文案 = `label（金额）`）。
 - **问题**：守卫头注释说审核期全店只开 mock 通道，所以不许在界面上自述“审核期/测试单”。而审核员在支付页实际看到的按钮是「模拟支付（¥…）」，这个文案来自 `channels.ts` 的内置表，不是管理端配置：CLAUDE.md 约束四写明 `payment_channels` 表尚未接线。守卫的 `@limitation` 以“那是管理端配置的事”为由排除服务端，这个前提与现状不符。
+- **⚠️ 2026-10-06 更新（AJ-379）**：`payment_channels` **已接线**，通道 `label` 现在由库里那行决定（改数据 + 重启即生效，不必发版）。本条的**前提已变**——"文案写死在常量里"不再成立；但**结论不变**（审核员仍会看到「模拟支付」，因为 seed 里就是这个值）。修复路径因此多了一条最省的：**提审前 UPDATE 那一行 label**；守卫是否要扫服务端仍是独立问题。
 - **触发场景**：提审时，审核员在支付页看到“模拟支付”，与 AJ-244 要避免的“审核版与线上版不一致”是同一类驳回理由，而守卫一直是绿的。
 - **证据【读码确认】**：见上述行号。
 - **修复方案**：守卫扫描范围加上 `server/src/adapters/payment/channels.ts` 里的 `label:` 值，`FORBIDDEN` 加「模拟」；或者把 mock 的 label 改为中性文案，并在提审备注里说明。修的时候与 MP 分片对齐，不要各改一半。

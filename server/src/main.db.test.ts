@@ -491,6 +491,13 @@ describe('配置驱动的通道下线（P1-NEW-1 链路级证明）', () => {
       expect(regLine).toContain('"registered":["mock"]');
       expect(regLine).toContain('"offline":["mock"]');
 
+      // ② 续：`attrs_source` 必须写 `table`——**生产装配有没有把表读进来**只有这里盯得住。
+      //    @why `main.ts` 是唯一把 `payment_channels` 的行传进装配的地方；
+      //    漏传的后果是"全站静默改用内置常量"，而内置值与 seed 逐字相同
+      //    ⇒ **行为一模一样、日志之外无任何差别**。这条断言就是那件事的唯一报警器。
+      expect(regLine).toContain('"attrs_source"');
+      expect(regLine).toContain('"mock":"table"');
+
       // ③ 在途回调照样落账——钱不能因为运维改配置而丢
       //    ⚠️ 先登记支付意图（走**真函数**而不是裸 SQL）：落账必须核对
       //    "这笔单本来打算在哪个通道、按什么金额收"（AJ-93 的 S1② / U1）。

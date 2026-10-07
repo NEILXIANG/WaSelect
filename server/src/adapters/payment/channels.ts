@@ -9,13 +9,15 @@
  * @why 放在 `adapters/`：它**知道**有哪些具体 Provider（谁实现了什么），
  *      这正是适配器层的职责；业务只见 `ports/payment.ts` 的 `PaymentRegistry` 接口。
  *
- * @limitation 一：**通道的默认属性（优先级 / 国家 / 币种 / 展示名）目前是内置表**。
- *              这是 ADR-28 明令要消灭的形态（"禁止写死国家"）。`payment_channels` 表已由迁移 010 建好并写入
- *              同值种子，但**消费方尚未接线**（与本表由同源测试钉住；一致性审计 C9 更正原"还没有表可查"）。
- *              ⚠️ 所以这张表被刻意写得**很小、很显眼**，并且只服务两件事：
- *              排序与展示；真正的"开不开放"来自 `PAYMENT_CHANNELS`（配置，非代码）。
- *              @todo R2-4（`payment_channels` 表落地后改为读表，本文件退化为 seed/回退）
- *              @limitation 一·续：在这之前，改一个国家/币种要改代码并发版——这是已知债务，不是设计。
+ * @limitation 一：**通道的默认属性有两个来源，`payment_channels` 表优先**（R2-4 已接线，AJ-379）。
+ *              ① `payment_channels` 表（迁移 010 建表 + seed，`adapters/payment-channel-config.ts` 读）——**运行期真源**，
+ *                 改排序 / 国家 / 币种 / 文案改数据即可，不发版；
+ *              ② {@link CHANNEL_DEFAULTS}（本文件内置常量）——退化为**表的 seed 真源与回退值**，
+ *                 只在"表里没有这一行"时生效（表里少一行 = 静默回退，所以回退必须可见，见 `attrSources`）。
+ *              ⚠️ 表的定位是**排序与展示**，真正的"开不开放"永远来自 `PAYMENT_CHANNELS`（配置，非代码）：
+ *              让库里一行 UPDATE 能打开通道，等于绕过 `config.ts` 的三条安全闸门
+ *              （生产 mock 只在审核期、审核期只允许 mock）——**库里的数据不过任何一道闸门**。
+ *              @see adapters/payment-channel-config.ts 文件头的 @why（这条取舍的完整论证）。
  * @limitation 二：**配置里有、代码里没注册的通道静默跳过**。
  *              这不是宽容：配置可以比代码先行（先关掉、后删代码），
  *              否则"配置里留着旧通道名"会让服务起不来，而删配置与删代码的节奏本就不同步。
@@ -40,6 +42,7 @@
  * @see ports/payment.ts；adapters/payment/registry.ts；docs/地基搭建清单.md F11；
  *      docs/可扩展架构设计-支付可插拔·多国家·UI可配置.md §2.2
  */
+import type { ChannelConfigRow } from '../payment-channel-config.js';
 import { mockAutoConfirmEnabled, type AppConfig } from '../../config.js';
 import type { Clock } from '../../ports/clock.js';
 import type { HttpClient } from '../../ports/http-client.js';
@@ -50,15 +53,20 @@ import { createMockProvider } from './mock.js';
 import { createStripeCheckoutProvider } from './stripe-checkout.js';
 
 /**
- * 通道的**默认属性**（@limitation 一：临时内置表，待 `payment_channels` 表取代）。
+ * 通道的**默认属性**——`payment_channels` 表的 seed 真源与**回退值**（@limitation 一）。
  *
  * @why `priority` 小者优先：微信支付是我们唯一能在小程序内直接调起的通道（D-15），
  *      通过率最高、也最符合用户在微信内的预期，所以排第一；银行卡是覆盖"没有大陆钱包"
  *      用户的第二路径（D-49），排第二；mock 只在审核 / 本地演示用，垫底。
+ * @why 接线之后它的身份变了：不再是"通道配置"，而是"表里没这一行时用什么"。
+ *      这个身份必须写在注释里——否则下一个人会以为改这里就能改线上行为，
+ *      而实际上表里有那一行、改常量完全不生效（**改了没反应，比没得改更容易骗人**）。
  */
 /**
- * ⚠️ 导出只为一件事：`payment_channels` 表的迁移 seed（010）与本表**字段级同源比对**
- *    （payment-channels-seed.db.test.ts）——seed 值逐字等于这里的声明，改一边不改另一边立即红。
+ * ⚠️ 导出只为两件事：
+ *    ① `payment_channels` 表的迁移 seed（010）与本表**字段级同源比对**
+ *       （payment-channels-seed.db.test.ts）——seed 值逐字等于这里的声明，改一边不改另一边立即红；
+ *    ② 上表的**回退值**（本文件装配时用）。
  *    业务代码不得把它当"通道配置的读取口"（运行期读注册表，不读本常量）。
  */
 export const CHANNEL_DEFAULTS: Readonly<
@@ -111,6 +119,14 @@ export function describeChannels(config: AppConfig): string[] {
   return [...config.PAYMENT_CHANNELS];
 }
 
+/**
+ * 一个通道的属性来自哪里。
+ * - `table`：`payment_channels` 表里有这一行（**接线生效**）；
+ * - `builtin`：表里没有，回退到 {@link CHANNEL_DEFAULTS}；
+ * - `fallback`：表里没有、内置表也没有（新增通道的过渡态），回退到 `FALLBACK_DEFAULT`。
+ */
+export type ChannelAttrSource = 'table' | 'builtin' | 'fallback';
+
 /** 装配产物：注册表 + 两个清单（与配置清单对照，差集各有含义，见各字段注释）。 */
 export interface PaymentAssembly {
   registry: PaymentRegistry;
@@ -119,6 +135,15 @@ export interface PaymentAssembly {
    * stripe 密钥不全 / 未知通道。启动日志必须把它与 configured 并列（见 `describeChannels` 的 @why）。
    */
   registered: string[];
+  /**
+   * 每个已装配通道的**属性来源**（启动时打进日志，见下面的 @why）。
+   *
+   * @why 接线最大的风险不是"读错"，而是**读了个空**还一切正常：表里少一行、
+   *      查询返回空、或者压根忘了把表的行传进来——三种情况都会静默回退到内置常量，
+   *      表现与"接线生效"完全一样（空对空假绿灯）。
+   *      把它打进启动日志，"这次到底读的是表还是常量"才有据可查。
+   */
+  attrSources: Readonly<Record<string, ChannelAttrSource>>;
   /**
    * **已下线但仍保留回调/退款能力**的通道（`registered − configured`）：
    * 凭据还在所以工厂注册了，但不在 `PAYMENT_CHANNELS` 里（`enabled=false`，不接新单）。
@@ -140,6 +165,14 @@ export interface PaymentAssembly {
 export function buildPaymentRegistry(
   config: AppConfig,
   deps: ChannelAssemblyDeps,
+  /**
+   * `payment_channels` 表读出来的属性（**表优先**，R2-4 / AJ-379）。
+   * @why 注入而不是在本函数里查库：装配处是**同步**的（`mountAllRoutes` 也是），
+   *      让它变 async 会波及十几个调用点；而"读表"本来就该发生在装配之前
+   *      （`main.ts` 里那一次 await），这是 F10"IO 只从外面进来"的同一条纪律。
+   *      undefined = **未接线**（测试与未接线的装配路径）→ 全部走内置常量。
+   */
+  channelRows: readonly ChannelConfigRow[] | undefined = undefined,
 ): PaymentAssembly {
   const stripeReady =
     config.STRIPE_SECRET_KEY !== undefined &&
@@ -159,8 +192,20 @@ export function buildPaymentRegistry(
   if (mockRegistered) names.add('mock');
   if (stripeReady) names.add('stripe');
 
+  const fromTable = new Map((channelRows ?? []).map((r) => [r.channel, r]));
+  const attrSources: Record<string, ChannelAttrSource> = {};
   const configs: ChannelConfig[] = [...names].map((channel) => {
-    const base = CHANNEL_DEFAULTS[channel] ?? FALLBACK_DEFAULT;
+    const row = fromTable.get(channel);
+    const builtin = CHANNEL_DEFAULTS[channel];
+    // 表 > 内置常量 > 兜底（@limitation 一）。⚠️ 顺序里没有 `row.enabled`：开关只认配置
+    const base = row ?? builtin ?? FALLBACK_DEFAULT;
+    /**
+     * ⚠️ 来源按**实际取到的那个对象**判定，不按"表里有没有这一行"判定。
+     * @why 分开算的话来源会**说谎**：把上面的 precedence 改了（内置优先），
+     *      日志里写的仍是 `table`，而实际用的是内置值——"接线生效"这个结论
+     *      就成了一句谁也证伪不了的话。用对象同一性判定，两者不可能不一致。
+     */
+    attrSources[channel] = base === row ? 'table' : base === builtin ? 'builtin' : 'fallback';
     return {
       channel,
       // 在 `PAYMENT_CHANNELS` 里出现 = 开放新单；不在 = 只保留在途订单的回调/退款（@limitation 三）
@@ -198,7 +243,7 @@ export function buildPaymentRegistry(
 
   // wechat：R1（日本收单机构事前相談）通过前没有实现 → 配置里写了也只是静默跳过
   const offline = registered.filter((c) => !listed.has(c));
-  return { registry, registered, offline };
+  return { registry, registered, offline, attrSources };
 }
 
 /**

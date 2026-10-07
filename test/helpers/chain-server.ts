@@ -26,6 +26,7 @@ import type { Db } from '../../server/src/adapters/db.js';
 import { loadConfig } from '../../server/src/config.js';
 import { createEventBus } from '../../server/src/adapters/event-bus.js';
 import { createMemoryStorage } from '../../server/src/adapters/storage-memory.js';
+import { loadChannelConfigs } from '../../server/src/adapters/payment-channel-config.js';
 import { createHttpApp, listen } from '../../server/src/http.js';
 import { createLogger } from '../../server/src/logger.js';
 import { mountAllRoutes } from '../../server/src/app/mount.js';
@@ -80,6 +81,15 @@ export async function buildChainServer(
   });
   const events = createEventBus(logger);
   registerBusinessEventLog(events, logger);
+  /**
+   * 通道属性**也走表**（与 `main.ts` 同一条装配路径，A1）。
+   *
+   * @why 测试链若不读表，那张表在所有链路上都只是"建了、没人用"——而接线是否生效
+   *      **只能**在与生产同形的链路上被证伪。这里读一次，等于把"表 → 装配"这一段
+   *      放进每一个链路用例里；改表数据能改变 `GET /pay/channels` 的顺序，
+   *      就是这条接线存在的唯一硬证据（`pay-channels-config.db.test.ts` 钉住它）。
+   */
+  const channelDefaults = await loadChannelConfigs(db);
   const app = createHttpApp({
     logger,
     // 与 main.ts 同口径：回调验签要原始字节，少这一环所有回调 50000
@@ -87,7 +97,14 @@ export async function buildChainServer(
     // 与 main.ts 同口径：trust proxy 层数取自配置（默认 0；用例要模拟来源 IP 时传 TRUST_PROXY_HOPS）
     trustProxyHops: config.TRUST_PROXY_HOPS,
     mount: (a) => {
-      mountAllRoutes(a, { config, logger, db, events, storage: createMemoryStorage() });
+      mountAllRoutes(a, {
+        config,
+        logger,
+        db,
+        events,
+        storage: createMemoryStorage(),
+        channelDefaults,
+      });
     },
   });
   const server = await listen(app);

@@ -26,6 +26,7 @@
  *
  * @see docs/地基搭建清单.md F6 / A1；server/src/http.ts（createHttpApp / installShutdownHandlers）
  */
+import { loadChannelConfigs } from './adapters/payment-channel-config.js';
 import { closeDb, createDb, assertPostgresMajor, ping, type Db } from './adapters/db.js';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -208,6 +209,21 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
      * @why 建在 `createHttpApp` **之前**：`mount` 回调在它内部同步执行（http.ts），
      *      放在 `listen` 之后会撞 TDZ（"Cannot access before initialization"）。
      */
+    /**
+     * ── 通道属性：`payment_channels` 表 → 支付装配（R2-4 接线 / AJ-379）────────────
+     * @why 读在**装配之前**（`mountAllRoutes` 是同步的）：这是本函数唯一一次读这张配置表，
+     *      之后进程生命周期内不再读（改数据要重启生效，`payment-channel-config.ts`
+     *      @limitation 二 说出口的口径）。放在这里而不是 mount 里，是为了让"读没读到"
+     *      在启动日志里有据可查——装配处拿到的行数是 0 会打 error。
+     * @why 失败**不吞**：启动期读不到通道配置 = 不知道该按什么顺序展示支付入口，
+     *      让它炸在启动期比让全站静默用内置值便宜（后者表现为"运营改了数据没反应"）。
+     */
+    const channelDefaults = await loadChannelConfigs(db);
+    logger.info('payment_channel_config_loaded', {
+      result: 'ok',
+      ctx: { rows: channelDefaults.length },
+    });
+
     const inflightJobs = createInflightJobs();
     registerBusinessEventLog(events, logger);
     // 剩余清单 2-2：订单通知邮件（D-41 兜底）。没配 MAIL_PROVIDER_API_KEY 时只记 mail_skipped
@@ -245,7 +261,10 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       readiness: async () => acceptingTraffic && (await ping(db)),
       // ⚠️ 路由挂载清单只有一份（app/mount.ts，I1-U1）：路由快照测试也走它，
       //    新增路由只改那一处——绝不要在这里再内联挂路由
-      mount: (a) => mountAllRoutes(a, { config, logger, db, events, storage, inflightJobs }),
+      // ⚠️ `channelDefaults` 必须传：不传 = 全站走内置常量，而"接线没生效"与
+      //    "接线生效了"在日志里本来长得一样（attrs_source 就是为此加的）
+      mount: (a) =>
+        mountAllRoutes(a, { config, logger, db, events, storage, inflightJobs, channelDefaults }),
     });
 
     const server = await listen(app, { port: config.PORT, host: config.HOST });

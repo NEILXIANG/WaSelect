@@ -31,6 +31,7 @@ import type { Db } from '../adapters/db.js';
 import type { EventBus } from '../ports/events.js';
 import type { ObjectStorage } from '../ports/storage.js';
 import { createFetchClient } from '../adapters/http/fetch-client.js';
+import type { ChannelConfigRow } from '../adapters/payment-channel-config.js';
 import { buildPaymentRegistry, describeChannels } from '../adapters/payment/channels.js';
 import { createWebhookStore } from '../adapters/webhooks.js';
 import { createIdempotencyExecutor } from '../adapters/idempotency.js';
@@ -97,6 +98,19 @@ export interface MountContext {
    */
   inflightJobs?: InflightJobs | undefined;
   /**
+   * 通道的展示/匹配属性（`payment_channels` 表读出来的行；R2-4 接线，AJ-379）。
+   *
+   * @why 由调用方在**装配之前**读好再传进来：本函数是同步的，而读库是异步的。
+   *      藏在里面的话要么把整条挂载链改成 async（十几个调用点），要么在同步函数里
+   *      fire-and-forget 一个 Promise——后者的表现是"启动时偶尔用上了、偶尔没有"。
+   * @why **不传** = 走内置常量（`CHANNEL_DEFAULTS`），且启动日志里
+   *      `attrs_source` 会如实写成 `builtin`——回退**必须可见**，
+   *      否则"接线没生效"与"接线生效了"在日志里长得一样。
+   * @why **传了空数组** = 表在但没行（配置表被清后不自动补 seed），打 error：
+   *      那是"运营以为在改数据、其实全站都在用内置值"的状态，必须响。
+   */
+  channelDefaults?: readonly ChannelConfigRow[] | undefined;
+  /**
    * 时钟。**生产不传**（= `systemClock`）；测试可传固定时钟，让"时间相关"的接线可断言。
    *
    * @why 装配层曾经在 11 处**硬编码** `systemClock`（限流 / 支付注册 / 各组路由各一份）。
@@ -146,11 +160,29 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     registry,
     registered: registeredChannels,
     offline: offlineChannels,
-  } = buildPaymentRegistry(config, {
-    http: outboundHttp,
-    clock,
-    idGen: systemIdGen,
-  });
+    attrSources: channelAttrSources,
+  } = buildPaymentRegistry(
+    config,
+    {
+      http: outboundHttp,
+      clock,
+      idGen: systemIdGen,
+    },
+    ctx.channelDefaults,
+  );
+  /**
+   * ⚠️ 表在但**一行都没有** = 回退已经发生，而它看起来跟正常一模一样。
+   * @why 配置表与业务表不同：被清之后不会自动补回 seed（`test-db.ts` @limitation），
+   *      所以"空表"不是"还没配"，是"配好的东西没了"。此时全站静默改用内置常量，
+   *      运营在库里改的排序一条都不生效，而**没有任何一处会报错**——
+   *      这正是 R2-4 接线之后最可能出现的失效形态，必须有一条 error。
+   */
+  if (ctx.channelDefaults !== undefined && ctx.channelDefaults.length === 0) {
+    logger.error('payment_channel_config_empty', {
+      result: 'fail',
+      ctx: { reason: 'table_empty_using_builtin_defaults' },
+    });
+  }
   // ⚠️ configured / registered / offline 三个清单必须并列：
   //    configured−registered = 被静默跳过的通道（wechat 未实现 / stripe 密钥不全），
   //    offline = 已下线但在途订单还活着的通道（二次审查 P1-NEW-1）——只打 configured 等于没打
@@ -160,6 +192,8 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
       configured: describeChannels(config),
       registered: registeredChannels,
       offline: offlineChannels,
+      // 每个通道的属性来自表还是内置常量（见 PaymentAssembly.attrSources 的 @why）
+      attrs_source: channelAttrSources,
     },
   });
   // 回调管线依赖**只造这一份**：`/pay/callback/{channel}` 与审核模式自动确认（AJ-179）共用——

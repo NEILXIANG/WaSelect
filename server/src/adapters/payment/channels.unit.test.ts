@@ -26,6 +26,7 @@ import type { ChannelQuery, PaymentProvider, ProviderEvent } from '../../ports/p
 import { fixedClock } from '../../../../test/helpers/fixed-clock.js';
 import { stubIdGen } from '../../../../test/helpers/stub-id-gen.js';
 import { createFakeStripeHttp } from '../../../../test/helpers/fake-stripe-http.js';
+import type { ChannelConfigRow } from '../payment-channel-config.js';
 import { buildPaymentRegistry, describeChannels, type ChannelAssemblyDeps } from './channels.js';
 import { MOCK_SIGNATURE_HEADER } from './mock.js';
 
@@ -115,6 +116,107 @@ describe('describeChannels（启动日志用）', () => {
     });
     const a2 = buildPaymentRegistry(full, deps());
     expect(a2.registered).toEqual(['mock', 'stripe']);
+  });
+});
+
+/**
+ * 通道属性来自 `payment_channels` 表（R2-4 接线 / AJ-379）。
+ *
+ * @why 这一组是"接线到底有没有生效"的**唯一硬证据**：内置常量与表的 seed 逐字相同
+ *      （由 payment-channels-seed.db.test.ts 钉住），所以"读表"和"没读表"在
+ *      **seed 状态下行为完全一致**——改表数据之前，任何一条用例都分不出两者。
+ *      因此这里的放行侧必须**给一个与内置值不同的表行**，否则就是空对空全绿。
+ */
+describe('通道属性来自 payment_channels 表（R2-4 / AJ-379）', () => {
+  /** mock + stripe 都装配得起来的配置（两个通道才看得出顺序变化）。 */
+  const twoChannels: AppConfig = loadConfig({
+    ...baseEnv,
+    PAYMENT_CHANNELS: 'mock,stripe',
+    STRIPE_SECRET_KEY: 'sk_test_1',
+    STRIPE_WEBHOOK_SECRET: 'whsec_1',
+    CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+  });
+
+  /** 表行构造器：缺省与 seed 同形，个别字段由用例改掉。 */
+  const row = (channel: string, over: Partial<ChannelConfigRow> = {}): ChannelConfigRow => ({
+    channel,
+    priority: 50,
+    countries: ['*'],
+    currencies: ['*'],
+    label: `${channel}-label`,
+    icon: undefined,
+    ...over,
+  });
+
+  it('不传第三个参数 → 全部走内置常量（未接线的装配路径，行为与接线前一致）', () => {
+    const a = buildPaymentRegistry(twoChannels, deps());
+    expect(a.attrSources['mock']).toBe('builtin');
+    expect(a.attrSources['stripe']).toBe('builtin');
+  });
+
+  it('表里没有这一行 → 回退内置常量，并如实记为 builtin（回退必须可见）', () => {
+    const a = buildPaymentRegistry(twoChannels, deps(), [row('mock')]);
+    expect(a.attrSources['mock']).toBe('table');
+    expect(a.attrSources['stripe']).toBe('builtin');
+  });
+
+  it('表里没有、内置也没有 → 兜底值，记为 fallback（新增通道的过渡态）', () => {
+    /**
+     * @why 用类型断言绕过 `PAYMENT_CHANNELS` 的枚举校验（与下面"其他支付方式"那条同一手法）：
+     *      枚举里加新通道名与补 `CHANNEL_DEFAULTS` 之间必然有一段过渡态，
+     *      本条测的就是装配层在那段里**会不会把来源说清楚**（而不是它能不能被配出来）。
+     */
+    const c = {
+      ...loadConfig({ ...baseEnv, PAYMENT_CHANNELS: 'mock' }),
+      PAYMENT_CHANNELS: ['mock', 'paypay'],
+    } as unknown as AppConfig;
+    const a = buildPaymentRegistry(c, deps(), [row('mock')]);
+    expect(a.attrSources['mock']).toBe('table');
+    expect(a.attrSources['paypay']).toBe('fallback');
+  });
+
+  /**
+   * @why 这一条是整组的核心：内置表里 stripe 只做 USD，所以它在 JPY 市场**不出现**；
+   *      表里把 `currencies` 改成 `['*']` 之后它就出现了——同一个配置、同一份代码，
+   *      唯一变化的是库里那一行。**改数据即改行为**，这就是接线本身。
+   */
+  it('表里的 currencies 生效：内置只做 USD 的 stripe，改成 * 后出现在 JPY 市场', () => {
+    const before = buildPaymentRegistry(twoChannels, deps());
+    expect(before.registry.listAvailable(US_JPY).map((v) => v.channel)).toEqual(['mock']);
+
+    const after = buildPaymentRegistry(twoChannels, deps(), [
+      row('mock', { priority: 90, currencies: ['JPY'] }),
+      row('stripe', { priority: 1, currencies: ['*'], label: 'クレジットカード' }),
+    ]);
+    const views = after.registry.listAvailable(US_JPY);
+    expect(views.map((v) => v.channel)).toEqual(['stripe', 'mock']); // 表里 stripe 的 priority=1 排到最前
+    expect(views[0]?.label).toBe('クレジットカード'); // 展示名也来自表
+  });
+
+  /**
+   * @why 这是本接线**最该被钉住**的一条：表里有一行，也**不能**让未列出的通道开放。
+   *      `enabled` 只认 `PAYMENT_CHANNELS`（配置），因为配置是唯一经过启动闸门的东西——
+   *      库里一行 UPDATE 不过任何一道闸门（生产 mock 只许审核期 / 审核期只许 mock）。
+   *      若不钉住它，将来有人"顺手把 enabled 也接上"就会静默绕过那三条闸门。
+   */
+  it('表里有一行也不能让未列出的通道开放（开关只认 PAYMENT_CHANNELS）', () => {
+    const onlyMock: AppConfig = loadConfig({
+      ...baseEnv,
+      PAYMENT_CHANNELS: 'mock',
+      STRIPE_SECRET_KEY: 'sk_test_1',
+      STRIPE_WEBHOOK_SECRET: 'whsec_1',
+      CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+    });
+    const a = buildPaymentRegistry(onlyMock, deps(), [
+      row('stripe', { priority: 1, currencies: ['*'] }),
+    ]);
+    // 属性确实来自表（否则这条用例验的就不是"表不能开通道"而是"表没被读到"）
+    expect(a.attrSources['stripe']).toBe('table');
+    // 凭据齐全 → 工厂照样注册（下线只停新单，@limitation 三）
+    expect(a.registered).toContain('stripe');
+    expect(a.offline).toContain('stripe');
+    // 但**不接新单**：表里有这一行也不开放
+    expect(a.registry.listAvailable(US_USD).map((v) => v.channel)).not.toContain('stripe');
   });
 });
 

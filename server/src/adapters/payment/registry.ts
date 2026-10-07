@@ -11,9 +11,14 @@
  *      否则"配置里留着旧通道名"会让服务起不来，而删配置与删代码的节奏本就不同步。
  *
  * @limitation 一：配置在**构造时**注入，运行时改配置需要重建注册表（进程重启）。
- *              @upgrade `payment_channels` 表落地后，把 `configs` 换成仓储查询即可，
- *              届时 `listAvailable` 会变成 async——**这是一次有意为之的局部破坏**，
- *              影响面只有 `/pay/channels` 与下单选通道两处调用点，不需要动 Provider。
+ *              ⚠️ **这条 @upgrade 已过期（2026-10-06，AJ-379）**：`payment_channels` 表**已接线**，
+ *              但接法是"装配之前读一次表、把行**注入**进来"（`adapters/payment-channel-config.ts`），
+ *              而不是"把 `configs` 换成仓储查询"——所以 `listAvailable` **没有**变成 async，
+ *              本文件一行未改。
+ *              @why 不改 async 是刻意的：变 async 会波及 `/pay/channels` 与下单选通道两处调用点，
+ *              连带它们的每一个测试；而"属性在装配期读一次"本来就是这张配置表的语义
+ *              （改数据要重启生效，见 payment-channel-config.ts @limitation 二）。
+ *              原注释留着会让人以为"还没接、接的时候要改这里"——**注释写的计划不等于现状**。
  * @limitation 二：**不做**路由策略（成功率最优 / 成本最优）。当前只按 `priority` 排序，
  *              因为"最优"需要数据（成功率、费率），MVP 没有；强行写只会写出一个假的排序键。
  * @limitation 三：Provider 实例**按通道缓存**。所以工厂必须是纯装配（不含每次请求的状态），
