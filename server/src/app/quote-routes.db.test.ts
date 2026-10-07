@@ -272,10 +272,21 @@ describe('POST /orders/quote（接线）', () => {
     }
   });
 
-  it('任一展示币汇率缺失 → 50003', async () => {
+  /**
+   * 第三轮缺口 P1-12（AJ-385）：原先**任一**展示币缺汇率都 50003——美国买家根本不看 CNY，
+   * 漏录 / 过期一个 CNY 就全店停售。改为：只展示用的币缺 → 省略该币并 warn；
+   * 收钱与申报要用的 USD 缺 → 仍 50003（报价与建单同口径，免得报价能看、下单才失败）。
+   */
+  it('🔴 只缺展示币 CNY → 报价照常（display 不含 CNY）+ warn；缺 USD → 50003', async () => {
     const srv = await buildServer();
     try {
       await db`delete from fx_rates where quote = 'CNY'`;
+      const ok = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 1 }] }, token);
+      expect(ok.status).toBe(200);
+      expect(ok.json['display']).not.toHaveProperty('CNY');
+      expect(ok.json['display']).toHaveProperty('USD');
+      expect(srv.sink.find('fx_display_currency_missing')).toHaveLength(1);
+      await db`delete from fx_rates where quote = 'USD'`;
       const noFx = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 1 }] }, token);
       expect(noFx.json['code']).toBe(50003);
     } finally {

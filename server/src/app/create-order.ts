@@ -58,7 +58,7 @@ import {
 } from '../domain/quote.js';
 import { buildOrderNo } from '../domain/order-no.js';
 import { compareProductIdForLock } from '../domain/stock-lock.js';
-import { assembleQuote } from './quote-assembly.js';
+import { assembleQuote, SETTLEMENT_FX_QUOTES } from './quote-assembly.js';
 import { allocate, toMinor, toRateInt } from '@waselect/shared';
 
 /** D32：单号撞唯一约束的最大尝试次数（含首次）。 */
@@ -187,7 +187,7 @@ export async function createOrder(
     config,
     clock,
     summary,
-    ['USD'],
+    SETTLEMENT_FX_QUOTES,
     logger,
   );
 

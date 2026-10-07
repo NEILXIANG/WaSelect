@@ -49,10 +49,17 @@ export interface AssembledQuote {
 }
 
 /**
+ * 报价与建单都**必需**的汇率（第三轮缺口 P1-12）：美国报关申报价值按 USD 记（create-order 第 8 步），
+ * 扣款也走 USD。缺它就不能收钱，所以报价期就 50003——报价与建单同口径，免得"报价能看、下单才失败"。
+ * @limitation 写死 USD 是单一目的国（US）下的现状；开第二个国家时应改由 country_profiles 提供（N-14 同批）。
+ */
+export const SETTLEMENT_FX_QUOTES: readonly string[] = ['USD'];
+
+/**
  * 装配一次报价（重算）。
  *
  * @throws {AppError} 50004 承运商 ≠1 家活跃（含运费表未配置）| 40912 包裹超过最大一档（AJ-239）
- * @throws {AppError} 50003 任一展示币汇率缺失（computeQuote 抛出）
+ * @throws {AppError} 50003 **必需**币种（`extraFxQuotes`，如申报价值的 USD）汇率缺失；只用于展示的币缺失则省略该币并 warn（P1-12）
  */
 export async function assembleQuote(
   db: Db,
@@ -121,8 +128,25 @@ export async function assembleQuote(
       ctx: { quotes: stale, max_age_hours: config.FX_MAX_AGE_HOURS },
     });
   }
+  // 第三轮缺口 P1-12（AJ-385）：**必需**的币（申报价值 / 扣款，调用方经 extraFxQuotes 传入）缺 → 50003；
+  // 只用于展示的币缺 → 省略该币并 warn。原先任一展示币缺都 50003，美国买家不看的 CNY 漏录一次就全店停售。
+  const missingRequired = extraFxQuotes.filter((c) => !fxMap.has(c));
+  if (missingRequired.length > 0) {
+    throw new AppError(50003, {
+      currency: missingRequired.join(','),
+      reason: 'required_fx_missing',
+    });
+  }
+  const shownCurrencies = displayCurrencies.filter((c) => fxMap.has(c));
+  const droppedCurrencies = displayCurrencies.filter((c) => !fxMap.has(c));
+  if (droppedCurrencies.length > 0) {
+    logger?.warn('fx_display_currency_missing', {
+      result: 'degraded',
+      ctx: { dropped: droppedCurrencies },
+    });
+  }
   const fxRateIntByCurrency: Partial<Record<DisplayCurrency, number>> = {};
-  for (const c of displayCurrencies) {
+  for (const c of shownCurrencies) {
     const rate = fxMap.get(c);
     if (rate !== undefined) fxRateIntByCurrency[c] = toRateInt(rate);
   }
@@ -134,9 +158,9 @@ export async function assembleQuote(
     shippingJpy,
     dutyRatioInt: dutyRatioIntOf(dutyRate),
     fxRateIntByCurrency,
-    displayCurrencies,
+    displayCurrencies: shownCurrencies,
     freeShippingThresholdJpy: config.FREE_SHIPPING_JPY ?? null,
     maxOrderJpy: config.MAX_ORDER_JPY,
   });
-  return { q, fxMap, carrier, dest, displayCurrencies };
+  return { q, fxMap, carrier, dest, displayCurrencies: shownCurrencies };
 }

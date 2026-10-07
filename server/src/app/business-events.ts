@@ -40,6 +40,8 @@ export const LOGGED_EVENTS: readonly string[] = [
   'order.shipped',
   'order.delivered',
   'order.refunded',
+  // 第三轮缺口 P2-12：部分退款成功（payload 只有 refund_id）
+  'order.partially_refunded',
   // 剩余清单 2-4：对账异常汇总（payload 只有各类计数）
   'reconciliation.anomalies_found',
 ];

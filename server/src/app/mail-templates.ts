@@ -34,6 +34,11 @@ export const MAIL_TEMPLATES: Readonly<Record<string, (o: MailOrderFacts) => Mail
       `Your order ${o.orderNo} has shipped.\n` +
       `Carrier: ${o.carrier ?? '-'}\nTracking number: ${o.trackingNo ?? '-'}${SIGN_OFF}`,
   }),
+  // 第三轮缺口 P2-12：部分退款（AJ-383）此前买家完全不可见——没有邮件、订单状态也不变
+  'order.partially_refunded': (o) => ({
+    subject: `Partial refund issued for order ${o.orderNo}`,
+    text: `A partial refund for order ${o.orderNo} has been issued to your original payment method. It may take 5-10 business days to appear on your statement. Open the order in the mini program to see the details.${SIGN_OFF}`,
+  }),
   'order.refunded': (o) => ({
     subject: `Refund issued for order ${o.orderNo}`,
     text: `A full refund for order ${o.orderNo} has been issued to your original payment method. It may take 5-10 business days to appear on your statement.${SIGN_OFF}`,

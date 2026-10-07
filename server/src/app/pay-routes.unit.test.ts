@@ -18,6 +18,7 @@ import { createHmac } from 'node:crypto';
 import { request } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createLogger } from '../logger.js';
+import { AppError } from '../errors.js';
 import { createHttpApp, listen } from '../http.js';
 import { createPaymentRegistry } from '../adapters/payment/registry.js';
 import { createMockProvider } from '../adapters/payment/mock.js';
@@ -304,6 +305,24 @@ describe('POST /pay/callback/:channel（统一分发）', () => {
     expect(res.status).toBe(401);
     await expect(res.json()).resolves.toMatchObject({ code: 40103 });
     expect(s.applied).toHaveLength(0);
+    // 第三轮缺口 P1-1：带了签名却对不上 = 密钥 / 端点配错的典型症状，必须 error 级（进 Sentry），不能只是 warn
+    const hit = s.sink.find('callback_signature_rejected');
+    expect(hit).toHaveLength(1);
+    expect(hit[0]?.['level']).toBe('error');
+  });
+
+  it('验签失败但不像配错（缺签名 / 签名格式坏）→ 仍 40103，只 warn 不升 error（扫描器噪声，P1-1）', async () => {
+    const registry = buildRegistry();
+    const real = registry.getForCallback('a');
+    const wrapped = {
+      ...real,
+      parseWebhook: () =>
+        Promise.reject(new AppError(40103, { channel: 'a', reason: 'x_no_signature' })),
+    };
+    const s = await start({ registry: { ...registry, getForCallback: () => wrapped } });
+    const res = await postCallback('a', eventBody());
+    expect(res.status).toBe(401);
+    expect(s.sink.find('callback_signature_rejected')).toHaveLength(0);
   });
 
   it('报文不是合法 JSON → 40001（客户端可控输入，不是我们的故障）', async () => {
@@ -341,6 +360,14 @@ describe('POST /pay/callback/:channel（统一分发）', () => {
     });
     expect(s.applied).toHaveLength(0);
     expect(s.rec.finished[0]?.result).toBe('ignored:expired');
+  });
+
+  it('🔴 机构侧退款（refunded）→ 登记 note 以 order:<id> 开头（对账据此找"本地没记过的退款"，第三轮缺口 P1-4）', async () => {
+    const s = await start();
+    const res = await postCallback('a', eventBody({ type: 'charge.refunded' }));
+    expect(res.status).toBe(200);
+    expect(s.rec.finished[0]?.result).toBe('ignored:refunded');
+    expect(s.rec.finished[0]?.note).toMatch(/^order:sk-1 /);
   });
 
   it('🔒 已下线通道的回调**仍能落账**（用 get() 接回调 = 吞掉一批已付款订单）', async () => {

@@ -97,9 +97,12 @@ export interface PaidSettlement {
  * @why 顺序是"通道 → 机构单号 → 币种 → 金额"：前两项是**身份**（谁收的钱），
  *      后两项是**数额**（收了多少）。身份先错就没必要再谈数额，
  *      而告警里最先要看的也正是"钱从一条我没发起过的通道进来"。
- * @limitation 只取**最近一条** `payments` 行（`created_at desc`）。
- *              ⚠️ 换通道重付的场景（旧行 cancelled、新行 initiated）在 I1 状态机里
- *              应当先作废旧行；本函数不猜"该用哪一行"，取最新的那条。
+ * @why 取**在途**（initiated）那一行优先，其次非作废行，最后才按时间（第三轮缺口 P1-3，AJ-385）：
+ *      `payments.created_at` 默认 `now()` = **事务开始**时刻。买家连点两个通道时，后拿到订单锁的一方
+ *      新插的行时间反而更早、被它作废的旧行更晚——只按 `created_at desc` 取到的是作废那行，
+ *      付款成功的回调被判 `channel_mismatch`，钱扣了单不落账。`uq_payments_one_initiated` 保证在途行至多一条。
+ * @limitation 没有在途行（已作废 / 已关单）时仍按时间取最新的非作废行，再不行取作废行——
+ *              那些情形由迟到守卫与 `duplicate_payment` 分支处理，本函数只负责"选哪一行来核对"。
  */
 /** 核对失败的 reason 全集（回调管线据此把它们与普通状态冲突分层）。 */
 export const SETTLEMENT_MISMATCH_REASONS = [
@@ -123,7 +126,7 @@ async function assertSettlementMatches(
     select id, provider, provider_ref, charge_currency, charge_amount
       from payments
      where order_id = ${orderId}
-     order by created_at desc
+     order by (status = 'initiated') desc, (status = 'cancelled') asc, created_at desc
      limit 1
   `;
   const p = rows[0];
@@ -259,6 +262,9 @@ async function settle(
     //    @tradeoff cancelled 也归入 late_payment 而不是新造一个 `closed_payment`：运营动作完全相同（退款），
     //    多一个词只多一条对账分支；区分"是过期还是取消"看 `details.from`，日志里有。
     if (CLOSED_UNPAID.has(from)) {
+      // 先核对再判迟到（第三轮缺口 P2-3，AJ-385）：本机实测金额不符的回调被归为 late_payment、记了 late_paid 凭据，
+      // 管理端随后按支付行 charge_amount 退款——而实收是另一个数。对不上的走 mismatch 进对账，不留迟到凭据。
+      await assertSettlementMatches(tx, orderId, settlement, from);
       throw new AppError(40902, {
         from,
         reason: 'late_payment',
@@ -290,6 +296,7 @@ async function settle(
         ? Math.min(settlement.occurredAtMs, nowMs)
         : nowMs;
     if (expiresAt !== undefined && paidMoment >= expiresAt.getTime()) {
+      await assertSettlementMatches(tx, orderId, settlement, from); // 同上（P2-3）
       throw new AppError(40902, {
         from,
         reason: 'late_payment',

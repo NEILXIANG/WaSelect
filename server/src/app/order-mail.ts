@@ -1,5 +1,5 @@
 /**
- * 职责：订单通知邮件订阅者（剩余清单 2-2 / D-41 邮件兜底）——付款成功、已发货、已退款三类各发一封给 `contact_email`。
+ * 职责：订单通知邮件订阅者（剩余清单 2-2 / D-41 邮件兜底）——付款成功、已发货、部分退款（每笔一封，P2-12）、已退款各发一封给 `contact_email`。
  *
  * @why 订阅事件而不是在路由里发信：发信是"事务提交之后的副作用"，总线保证只有提交成功才分发；
  *      写在路由里要么在事务内（回滚了信已发出），要么每条路由各写一份。
@@ -18,7 +18,12 @@ import type { Mailer } from '../ports/mailer.js';
 import { MAIL_TEMPLATES } from './mail-templates.js';
 
 /** 会发邮件的事件（顺序即登记顺序）。 */
-export const MAIL_EVENTS = ['order.paid', 'order.shipped', 'order.refunded'] as const;
+export const MAIL_EVENTS = [
+  'order.paid',
+  'order.shipped',
+  'order.partially_refunded',
+  'order.refunded',
+] as const;
 
 export interface OrderMailDeps {
   db: Db;
@@ -26,7 +31,13 @@ export interface OrderMailDeps {
   logger: Logger;
 }
 
-async function notify(deps: OrderMailDeps, tag: string, orderId: string): Promise<void> {
+async function notify(
+  deps: OrderMailDeps,
+  tag: string,
+  orderId: string,
+  /** 同一订单可能有多笔（部分退款）：带上它，服务商侧幂等键才不会把第二笔当成重放。 */
+  subKey?: string,
+): Promise<void> {
   const [o] = await deps.db`
     select order_no, contact_email, carrier, tracking_no from orders where id = ${orderId}`;
   const email = o?.['contact_email'];
@@ -48,7 +59,7 @@ async function notify(deps: OrderMailDeps, tag: string, orderId: string): Promis
     const r = await deps.mailer.send({
       to: email,
       ...content,
-      idempotencyKey: `${tag}:${orderId}`,
+      idempotencyKey: subKey === undefined ? `${tag}:${orderId}` : `${tag}:${orderId}:${subKey}`,
       tag,
     });
     deps.logger.info('order_mail_sent', { order_id: orderId, result: r.status, ctx: { tag } });
@@ -64,7 +75,16 @@ async function notify(deps: OrderMailDeps, tag: string, orderId: string): Promis
 export function registerOrderMail(bus: EventBus, deps: OrderMailDeps): void {
   for (const name of MAIL_EVENTS) {
     bus.subscribe(name, (event) =>
-      event.orderId === undefined ? undefined : notify(deps, name, event.orderId),
+      event.orderId === undefined
+        ? undefined
+        : notify(
+            deps,
+            name,
+            event.orderId,
+            typeof event.payload?.['refund_id'] === 'string'
+              ? event.payload['refund_id']
+              : undefined,
+          ),
     );
   }
 }

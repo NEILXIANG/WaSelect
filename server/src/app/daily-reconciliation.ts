@@ -47,6 +47,7 @@ import {
 } from '../ports/scheduler.js';
 import { daysUntil, REVIEW_WINDOW_WARN_DAYS, utcDay } from '../review-window.js';
 import {
+  RESULT_IGNORED_PREFIX,
   RESULT_LATE_PAYMENT,
   RESULT_MISMATCH_PREFIX,
   RESULT_STATUS_CONFLICT,
@@ -153,11 +154,11 @@ async function scanLedgerMismatch(ctx: JobContext<Db>): Promise<AnomalyClass> {
     select o.id, count(*) over ()::text as total
       from orders o
      where o.status = 'paid'
-       and coalesce(
-         (select p.status from payments p
-           where p.order_id = o.id order by p.created_at desc limit 1),
-         'none'
-       ) <> 'succeeded'
+       -- 判"有没有一笔 succeeded"，不判"最新一行是不是 succeeded"（第三轮缺口 P2-10，AJ-385）：
+       -- 并发换通道时被作废的旧行 created_at 反而更晚，取最新一行会把正常已付单误报成没收到钱
+       and not exists (
+         select 1 from payments p where p.order_id = o.id and p.status = 'succeeded'
+       )
      order by o.id
      limit ${RECONCILE_IDS_CAP + 1}
   `;
@@ -185,6 +186,60 @@ async function scanCallbackAnomalies(ctx: JobContext<Db>): Promise<AnomalyClass>
     key: 'callback_anomalies_48h',
     ...toAnomaly(rows, 'event_id'),
   };
+}
+
+/**
+ * 第十类：**汇率快过期**（第三轮缺口 P1-9，AJ-385）。
+ * @why 汇率超过 `FX_MAX_AGE_HOURS` 未更新就当作缺失、整店 50003（剩余清单 1-2），这是对的保护；
+ *      但此前**没有任何预警**：`fx_rate_stale` 只在有人报价时打，周五录、周一早上已停售一整夜。
+ *      对账每天跑，提前一天报（默认 72−24=48h），跟着告警邮件 / Sentry 走。
+ * @why 样本是币种代码而不是行 id：运营要做的动作是"去录这个币"，不是"去看哪一行"。
+ * @limitation 每日一次：48h 阈值保证在真正停售前至少被报一次；更细的粒度要靠报价时的 `fx_rate_stale`。
+ */
+async function scanFxRateAging(ctx: JobContext<Db>, warnAfterHours: number): Promise<AnomalyClass> {
+  const rows = await ctx.tx<{ id: string; total: string }[]>`
+    select quote as id, count(*) over ()::text as total
+      from (
+        select quote, max(effective_from) as latest
+          from fx_rates
+         where effective_from <= ${ctx.startedAt}::timestamptz
+         group by quote
+      ) f
+     where f.latest <= ${ctx.startedAt}::timestamptz - make_interval(hours => ${warnAfterHours})
+     order by quote
+     limit ${RECONCILE_IDS_CAP + 1}
+  `;
+  return { key: 'fx_rate_aging', ...toAnomaly(rows) };
+}
+
+/**
+ * 第九类：**机构侧退款、本地无记录**（第三轮缺口 P1-4，AJ-385）。
+ * @why `charge.refunded` 等退款事件没有落账器（F12 未做），登记为 `ignored:refunded` 后就再没人看——
+ *      运营在 Stripe 后台手退一次（运维手册禁止，但人会犯），本地订单仍 paid / shipped，可再发货、可再退一次。
+ *      我们自己发起的退款也会产生这类事件，所以只报"本地既不在 refunding / refunded、也没有任何非失败部分退款"的。
+ * @why 订单号取自 note 前缀 `order:<id> `（pay-callback.ts 写入）：webhook_events 没有 order_id 列，
+ *      为一个对账类加列不值；前缀格式由 pay-routes 单测钉住。
+ * @limitation 与第三类同一个 48 小时回看窗口；只是**报出**，不落账（落账要等 F12 实测退款事件载荷）。
+ */
+async function scanProviderRefundUnrecorded(ctx: JobContext<Db>): Promise<AnomalyClass> {
+  const rows = await ctx.tx<{ id: string; total: string }[]>`
+    select w.order_id as id, count(*) over ()::text as total
+      from (
+        select distinct substring(note from '^order:([^ ]+) ') as order_id
+          from webhook_events
+         where result = ${RESULT_IGNORED_PREFIX + 'refunded'}
+           and received_at > ${ctx.startedAt}::timestamptz
+                             - make_interval(hours => ${RECONCILE_LOOKBACK_HOURS})
+      ) w
+      join orders o on o.id = w.order_id
+     where o.status not in ('refunding', 'refunded')
+       and not exists (
+         select 1 from order_refunds r where r.order_id = o.id and r.status <> 'failed'
+       )
+     order by w.order_id
+     limit ${RECONCILE_IDS_CAP + 1}
+  `;
+  return { key: 'provider_refund_unrecorded', ...toAnomaly(rows) };
 }
 
 /**
@@ -355,6 +410,10 @@ export function createDailyReconciliationJob(input: {
    *      而这里唯一需要的只是两个布尔/字符串——传最小事实，单测才能直接钉住判据。
    */
   reviewMode: { on: boolean; until: string | undefined };
+  /**
+   * 汇率"快过期"预警阈值（小时，P1-9）。装配处传 `FX_MAX_AGE_HOURS − 24`；不传 = 48（默认 72 的提前一天）。
+   */
+  fxWarnAfterHours?: number;
 }): SchedulerJob<Db> {
   return {
     name: DAILY_RECONCILIATION_JOB,
@@ -367,6 +426,8 @@ export function createDailyReconciliationJob(input: {
         await scanUnfinishedCallbacks(ctx),
         await scanStuckRefunds(ctx),
         await scanStuckPartialRefunds(ctx),
+        await scanProviderRefundUnrecorded(ctx),
+        await scanFxRateAging(ctx, input.fxWarnAfterHours ?? 48),
         reviewWindowAnomaly({
           ...input.reviewMode,
           todayUtc: utcDay(ctx.startedAt),

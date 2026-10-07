@@ -142,6 +142,56 @@ describe('markOrderPaid（真库）', () => {
   });
 });
 
+describe('并发换通道：核对取在途那一行，不取被作废的（第三轮缺口 P1-3）', () => {
+  /**
+   * @why `payments.created_at` 默认 `now()` = **事务开始**时刻。买家连点两个通道时，后拿到订单锁的一方
+   *      新插的行时间反而更早，被它作废的旧行更晚——按 `created_at desc` 取到的是已作废那行，
+   *      付款成功的回调被判 `channel_mismatch`，钱扣了、单停在待付款直到过期。
+   */
+  it('🔴 initiated 行 created_at 更早、cancelled 行更晚 → 按 initiated 那行核对并落账', async () => {
+    await db`
+      insert into payments (id, order_id, provider, provider_ref, status, charge_currency, charge_amount, created_at)
+      values ('pay-live', 'o-mp', 'mock', 'cs_test_intent_1', 'initiated', ${CHARGE.currency}, ${CHARGE.amountMinor}, now() - interval '2 seconds'),
+             ('pay-void', 'o-mp', 'stripe', 'cs_test_void', 'cancelled', 'USD', 700, now() - interval '1 second')`;
+    await db`update orders set status = 'pending_payment' where id = 'o-mp'`;
+    const { events } = bus();
+    await markOrderPaid(db, events, fixedClock('2026-01-02T00:00:00.000Z'), 'o-mp', OK);
+    const [o] = await db`select status from orders where id = 'o-mp'`;
+    expect(o?.['status']).toBe('paid');
+    const [p] = await db`select status from payments where id = 'pay-live'`;
+    expect(p?.['status']).toBe('succeeded');
+  });
+});
+
+describe('迟到付款也要先核对金额（第三轮缺口 P2-3）', () => {
+  /**
+   * @why 本机实测：对已关单发一条**金额不符**的签名回调 → 归为 late_payment 并记 late_paid 凭据，
+   *      管理端随后按支付行 charge_amount 全额退款，而实收是另一个数。核对必须先于迟到判定。
+   */
+  it('🔴 已关单 + 金额不符 → amount_mismatch（不是 late_payment）', async () => {
+    await seedIntent('o-mp');
+    await db`update payments set status = 'cancelled' where order_id = 'o-mp'`;
+    await db`update orders set status = 'expired' where id = 'o-mp'`;
+    const { events } = bus();
+    await expect(
+      markOrderPaid(db, events, fixedClock('2026-01-02T00:00:00.000Z'), 'o-mp', {
+        ...OK,
+        amountMinor: 1,
+      }),
+    ).rejects.toMatchObject({ code: 40902, details: { reason: 'amount_mismatch' } });
+  });
+
+  it('已关单 + 金额相符 → 仍是 late_payment', async () => {
+    await seedIntent('o-mp');
+    await db`update payments set status = 'cancelled' where order_id = 'o-mp'`;
+    await db`update orders set status = 'expired' where id = 'o-mp'`;
+    const { events } = bus();
+    await expect(
+      markOrderPaid(db, events, fixedClock('2026-01-02T00:00:00.000Z'), 'o-mp', OK),
+    ).rejects.toMatchObject({ code: 40902, details: { reason: 'late_payment' } });
+  });
+});
+
 describe('落账绑定通道与金额（三审 S1② / U1）', () => {
   it('通道不符 → 40902 channel_mismatch，不置 paid、不写事件', async () => {
     await seedIntent('o-mp');
@@ -358,6 +408,9 @@ describe('I1-U2：pending_payment 迁移与迟到付款守卫（D-33）', () => 
     '已 %s 的单到账 → 40902{reason:late_payment}（关单作业先跑掉/用户已取消：与"到点未关"同一分类，KD-7）',
     async (closedAs) => {
       await seedOrderAt(`o-closed-${closedAs}`, closedAs, '2026-01-02T00:30:00.000Z');
+      // 关单时 initiated 行被作废（close-session-events）：迟到判定前要先核对它（P2-3），没有支付行就是 no_payment_intent
+      await seedIntent(`o-closed-${closedAs}`);
+      await db`update payments set status = 'cancelled' where order_id = ${`o-closed-${closedAs}`}`;
       const { events } = bus();
       await expect(
         markOrderPaid(

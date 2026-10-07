@@ -16,7 +16,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { createServer, connect, type Server as NetServer } from 'node:net';
-import { networkInterfaces } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
+import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { bootstrap, type Runtime } from './main.js';
 import { PAY_CALLBACK_PREFIX, PAY_CHANNELS_PATH } from './app/pay-routes.js';
@@ -28,6 +31,7 @@ import { emitRealSignal } from '../../test/signal-harness.js';
 
 /** 组装根测试专用端口（与 e2e 的 0 端口不冲突；db project 串行，彼此也不撞）。 */
 const PORT_DEV = 4611;
+const MIGRATIONS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../migrations');
 /** OPS3-05：触发每日作业的共享密钥（≥32 字符，N11）。 */
 const INTERNAL_JOB_SECRET = 'main-test-internal-job-secret'.padEnd(40, 'x');
 const PORT_PROD = 4612;
@@ -380,6 +384,30 @@ describe('组装根 bootstrap（A1）', () => {
       rt?.uninstallProcessErrors();
       await rt?.server.close().catch(() => undefined);
       await rt?.db.end().catch(() => undefined);
+    }
+  });
+
+  /**
+   * 第三轮缺口 P1-2：库里少跑了一条迁移时，原先服务照常启动、探活全绿、建单全 500。
+   * 用一个临时目录模拟"代码比库多一条迁移"，启动必须失败且点名缺的那条。
+   */
+  it('🔴 代码带的迁移库里没跑过 → 启动失败并点名', async () => {
+    const { write } = sink();
+    const dir = mkdtempSync(join(tmpdir(), 'mig-'));
+    for (const f of readdirSync(MIGRATIONS_DIR))
+      copyFileSync(join(MIGRATIONS_DIR, f), join(dir, f));
+    writeFileSync(join(dir, '999_not_applied_yet.sql'), '-- Up migration\n-- Down migration\n');
+    try {
+      await expect(
+        bootstrap({
+          env: baseEnv(PORT_DEV),
+          logDestination: { write },
+          exit: () => undefined,
+          migrationsDir: dir,
+        }),
+      ).rejects.toThrow(/999_not_applied_yet/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

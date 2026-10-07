@@ -105,7 +105,7 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
     const row = productRows((await listProducts(api)).items).find((r) => r.id === created.id);
     expect(row).toMatchObject({
       title: 'Deba Knife 出刃包丁 165mm',
-      priceText: '12800 円',
+      priceText: '12,800 円',
       stockText: '7',
       statusText: '在售',
       online: true,

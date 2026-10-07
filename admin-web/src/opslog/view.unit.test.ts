@@ -68,7 +68,9 @@ describe('reconciliationView', () => {
     expect(Object.keys(RECONCILE_CLASS_LABELS).sort()).toEqual([
       'callback_anomalies_48h',
       'dangling_initiated_payments',
+      'fx_rate_aging',
       'paid_without_succeeded_payment',
+      'provider_refund_unrecorded',
       'stalled_heartbeats',
       'stuck_partial_refunds',
       'stuck_refunds',

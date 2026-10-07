@@ -55,8 +55,32 @@ const publish = async (bus: ReturnType<typeof createEventBus>, name: string, ord
 };
 
 describe('订单通知邮件（2-2）', () => {
-  it('订阅的正是三类：付款成功 / 已发货 / 已退款', () => {
-    expect([...MAIL_EVENTS]).toEqual(['order.paid', 'order.shipped', 'order.refunded']);
+  it('订阅的正是四类：付款成功 / 已发货 / 部分退款（P2-12）/ 已退款', () => {
+    expect([...MAIL_EVENTS]).toEqual([
+      'order.paid',
+      'order.shipped',
+      'order.partially_refunded',
+      'order.refunded',
+    ]);
+  });
+
+  it('🔴 部分退款：每笔一封，幂等键带 refund_id（同一订单第二笔不会被服务商当成重放吞掉）', async () => {
+    await seed('o-3', 'jane.doe@example.com');
+    const { bus, sent } = setup();
+    for (const rid of ['rf-a', 'rf-b']) {
+      bus.publish({
+        name: 'order.partially_refunded',
+        at: '2026-10-06T00:00:00.000Z',
+        orderId: 'o-3',
+        payload: { refund_id: rid },
+      });
+    }
+    expect(await bus.drain(2000)).toBe(0);
+    expect(sent.map((m) => m.idempotencyKey)).toEqual([
+      'order.partially_refunded:o-3:rf-a',
+      'order.partially_refunded:o-3:rf-b',
+    ]);
+    expect(sent[0]?.subject).toContain('Partial refund');
   });
 
   it('🔴 已发货：发给 contact_email，正文含单号、承运商与运单号；幂等键 = 事件:订单', async () => {

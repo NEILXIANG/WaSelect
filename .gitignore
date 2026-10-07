@@ -32,3 +32,6 @@ coverage/
 .DS_Store
 Thumbs.db
 var/uploads/
+
+# Claude Code 并行分身的工作树（整仓副本，合并后即删）
+.claude/worktrees/

@@ -36,7 +36,7 @@ import {
   type QuoteItemInput,
   type QuoteProduct,
 } from '../domain/quote.js';
-import { assembleQuote } from './quote-assembly.js';
+import { assembleQuote, SETTLEMENT_FX_QUOTES } from './quote-assembly.js';
 
 /**
  * 校验并取出 items（形状层）；数量/重复/库存的语义校验在 domain。建单路由复用本函数。
@@ -106,7 +106,7 @@ export function mountQuoteRoutes(app: Express, deps: QuoteRoutesDeps): void {
             deps.config,
             deps.clock,
             summary,
-            [],
+            SETTLEMENT_FX_QUOTES,
             deps.logger,
           );
 

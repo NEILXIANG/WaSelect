@@ -35,7 +35,8 @@ export default defineConfig({
      */
     passWithNoTests: false,
     environment: 'node',
-    exclude: ['**/node_modules/**', '**/dist/**'],
+    // `.claude/worktrees/`：并行分身的工作树（整仓副本），不排除会把另一份代码的测试一并跑进来
+    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**'],
     /**
      * 外网闸门（F12）：**每个测试文件**运行前都装上——未放行的出站请求直接抛错。
      * @why 放在 setupFiles 而不是让每个测试自己记得调用：靠"记得"的闸门等于没有闸门。

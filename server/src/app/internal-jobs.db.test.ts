@@ -415,6 +415,94 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
    * AJ-383：部分退款不改订单状态，停在 pending / unknown 的那一笔**没有任何别的东西会报**
    * （stuck_refunds 只看 orders.status = refunding）。买家等着钱、运营看不到。
    */
+  /**
+   * 第三轮缺口 P2-10：并发换通道时被作废的旧行 created_at 反而更晚。原扫描取"最新一行"判断，
+   * 取到 cancelled → 把一张正常已付单误报成 paid_without_succeeded_payment。
+   */
+  it('🔴 已付单：succeeded 行更早、cancelled 行更晚 → 不报 paid_without_succeeded_payment', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      await db`
+        insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                            total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
+        values ('o-race', 'W-RACE-1', 'u-recon', 'paid', 1000, 0, 0, 1000, 500,
+                '{}'::jsonb, '{}'::jsonb, 'T', now())`;
+      await db`
+        insert into payments (id, order_id, provider, provider_ref, status, charge_currency, charge_amount, created_at)
+        values ('pay-ok', 'o-race', 'mock', 'mock_ok', 'succeeded', 'JPY', 1000, now() - interval '2 seconds'),
+               ('pay-void', 'o-race', 'stripe', 'cs_void', 'cancelled', 'USD', 700, now() - interval '1 second')`;
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const hit = srv.sink
+        .find('reconciliation_anomaly')
+        .find(
+          (r) =>
+            (r['ctx'] as Record<string, unknown>)?.['class'] === 'paid_without_succeeded_payment',
+        );
+      expect(hit, '正常已付单不该被报成没收到钱').toBeUndefined();
+    } finally {
+      await srv.close();
+    }
+  });
+
+  /**
+   * 第三轮缺口 P1-4：机构侧退款（运营在 Stripe 后台手退）原先只登记 ignored:refunded，不落账也不进对账——
+   * 本地订单仍 paid / shipped，可再发货、可再退一次。新增一类：48h 内机构说退了、本地却没有任何退款记录。
+   */
+  it('🔴 机构侧退款而本地无退款记录 → 报 provider_refund_unrecorded；本地已退的不报', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      await db`
+        insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                            total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
+        values ('o-pr-x', 'W-PRX-1', 'u-recon', 'shipped', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now()),
+               ('o-pr-ok', 'W-PRX-2', 'u-recon', 'refunded', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now())`;
+      await db`
+        insert into webhook_events (provider, event_id, event_type, result, note, processed_at)
+        values ('stripe', 'evt_rf_x', 'charge.refunded', 'ignored:refunded', 'order:o-pr-x 机构侧退款', now()),
+               ('stripe', 'evt_rf_ok', 'charge.refunded', 'ignored:refunded', 'order:o-pr-ok 机构侧退款', now())`;
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const hit = srv.sink
+        .find('reconciliation_anomaly')
+        .find(
+          (r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'provider_refund_unrecorded',
+        );
+      expect(hit, '机构退了、本地没记的必须报出').toBeDefined();
+      const ctx = hit?.['ctx'] as Record<string, unknown>;
+      expect(ctx['count']).toBe(1);
+      expect(JSON.stringify(ctx['sample_ids'])).toContain('o-pr-x');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  /**
+   * 第三轮缺口 P1-9：汇率超过 FX_MAX_AGE_HOURS（72h）就整店 50003，但此前没有任何预警——
+   * 周五录、周一早上已停售一整夜。对账提前 24 小时报（默认 72−24=48h）。
+   */
+  it('🔴 汇率最近一次生效超过 48h → 报 fx_rate_aging 并点名币种；新录的不报', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      await db`delete from fx_rates`;
+      await db`
+        insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)
+        values ('USD', 0.0070, 0.0068, 0.03, now() - interval '50 hours'),
+               ('CNY', 0.0510, 0.0495, 0.03, now() - interval '1 hour')`;
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const hit = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'fx_rate_aging');
+      expect(hit, '快过期的汇率必须提前报').toBeDefined();
+      const ctx = hit?.['ctx'] as Record<string, unknown>;
+      expect(ctx['count']).toBe(1);
+      expect(JSON.stringify(ctx['sample_ids'])).toContain('USD');
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('🔴 部分退款滞留：pending / unknown / initiated 超过 24h 报 stuck_partial_refunds；succeeded 与 23h 的不报', async () => {
     const srv = await buildServer({ withSecret: true });
     try {

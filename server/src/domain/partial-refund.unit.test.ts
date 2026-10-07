@@ -12,6 +12,7 @@ const base = {
   reservedMinor: 0,
   inFlight: false,
   amountMinor: 1000,
+  channelSupportsPartial: true,
 };
 
 describe('partialRefundGuard', () => {
@@ -30,6 +31,14 @@ describe('partialRefundGuard', () => {
     expect(partialRefundGuard({ ...base, hasDispute: true })).toMatchObject({
       ok: false,
       code: 40907,
+    });
+  });
+
+  it('🔴 通道能力声明不支持部分退款 → 40902 partial_refund_not_supported（第三轮缺口 P2-4）', () => {
+    expect(partialRefundGuard({ ...base, channelSupportsPartial: false })).toEqual({
+      ok: false,
+      code: 40902,
+      reason: 'partial_refund_not_supported',
     });
   });
 

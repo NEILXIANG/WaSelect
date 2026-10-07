@@ -108,6 +108,16 @@ function rawBody(req: Request): Buffer {
   });
 }
 
+/**
+ * 验签失败里"像配置错误"的那几类（第三轮缺口 P1-1）：签名头齐全、格式正确，只是算出来对不上 / 时刻过期。
+ * @limitation reason 由各适配器给；新增通道时把它的同类 reason 加进来，否则只会 warn。
+ */
+const SIGNATURE_MISCONFIG_REASONS: ReadonlySet<string> = new Set([
+  'stripe_signature_mismatch',
+  'stripe_timestamp_expired',
+  'mock_signature_mismatch',
+]);
+
 export function mountPayRoutes(app: Express, deps: PayRoutesDeps): void {
   /**
    * ── 1. 可用通道列表（前端入口的唯一来源）─────────────────────────────────
@@ -184,6 +194,20 @@ export function mountPayRoutes(app: Express, deps: PayRoutesDeps): void {
         if (outcome.retryAfter !== undefined) res.set('retry-after', String(outcome.retryAfter));
         res.status(outcome.status).json(outcome.body);
       } catch (e) {
+        // 第三轮缺口 P1-1（AJ-385）：报文**带着格式正确的签名却对不上**（或签名时刻过期）——
+        // 这是"webhook 密钥配错 / 端点 URL 指向了错的环境"的典型症状，而这类事故是**静默**的：
+        // 机构判投递失败、几天后放弃，买家付了钱订单却过期。40103 默认 warn 级不进 Sentry，这里单独升 error。
+        // 缺签名 / 签名格式坏的不升级：那是扫描器乱打，升级只会制造告警噪声。
+        if (e instanceof AppError && e.code === 40103) {
+          // Object(...)：details 缺失时得到空对象而不是抛错（读不到 reason → 'undefined'，不在名单里 → 只 warn）
+          const reason = String((Object(e.details) as { reason?: unknown }).reason);
+          if (SIGNATURE_MISCONFIG_REASONS.has(reason)) {
+            deps.logger.error('callback_signature_rejected', {
+              result: 'rejected',
+              ctx: { channel: String(req.params.channel), reason },
+            });
+          }
+        }
         next(e);
       }
     })();

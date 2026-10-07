@@ -154,6 +154,8 @@ export function mountInternalJobsRoutes(
                   on: deps.config.NODE_ENV === 'production' && deps.config.REVIEW_MODE === 'on',
                   until: deps.config.REVIEW_MODE_UNTIL,
                 },
+                // P1-9：真正停售前一天报（最少 1 小时，防 FX_MAX_AGE_HOURS 配得很小时阈值变负）
+                fxWarnAfterHours: Math.max(1, deps.config.FX_MAX_AGE_HOURS - 24),
               }),
               createCleanupLoginAttemptsJob(),
             ],

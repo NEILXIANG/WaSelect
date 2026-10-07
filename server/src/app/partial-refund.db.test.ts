@@ -10,6 +10,7 @@ import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 import { closeDb, type Db } from '../adapters/db.js';
 import { createLogger } from '../logger.js';
+import { createEventBus } from '../adapters/event-bus.js';
 import {
   insertPartialRefund,
   listPartialRefunds,
@@ -71,14 +72,25 @@ const PLAN: PartialRefundPlan = {
 };
 
 function deps(): {
-  d: { db: Db; logger: ReturnType<typeof createLogger>; clock: typeof CLOCK };
+  d: {
+    db: Db;
+    logger: ReturnType<typeof createLogger>;
+    clock: typeof CLOCK;
+    events: ReturnType<typeof createEventBus>;
+  };
   sink: MemorySink;
+  published: Array<{ name: string; payload?: Record<string, unknown> | undefined }>;
 } {
   const sink = new MemorySink();
-  return {
-    d: { db, logger: createLogger({ env: 'test', destination: sink }), clock: CLOCK },
-    sink,
-  };
+  const logger = createLogger({ env: 'test', destination: sink });
+  const events = createEventBus(logger);
+  const published: Array<{ name: string; payload?: Record<string, unknown> | undefined }> = [];
+  for (const n of ['order.partially_refunded', 'order.refunded']) {
+    events.subscribe(n, (e) => {
+      published.push({ name: e.name, payload: e.payload });
+    });
+  }
+  return { d: { db, logger, clock: CLOCK, events }, sink, published };
 }
 
 /** 假通道：refund 按 `next` 返回或抛；记下每次收到的请求。 */
@@ -176,5 +188,47 @@ describe('syncPartialRefund', () => {
     expect(await syncPartialRefund(deps().d, f.provider, PLAN)).toBe('succeeded');
     expect(f.calls).toHaveLength(0);
     expect(f.statusCalls).toHaveLength(0);
+  });
+});
+
+describe('部分退款的买家通知与"退满"收尾（第三轮缺口 P2-1 / P2-12）', () => {
+  it('🔴 成功一笔 → 发 order.partially_refunded（payload 带 refund_id），不发整单退款事件', async () => {
+    const { d, published } = deps();
+    const f = fake({ providerRef: 'cs_test_p', refundRef: 're_1', outcome: 'succeeded' });
+    await executePartialRefund(d, f.provider, PLAN);
+    expect(published).toEqual([
+      { name: 'order.partially_refunded', payload: { refund_id: 'rf-1' } },
+    ]);
+  });
+
+  it('🔴 部分退款累计退满实收（未发货）→ 事件 refunded_by_parts + 回补库存 + 发 order.refunded', async () => {
+    await db`insert into products (id, title, category, price_jpy, weight_g, stock, origin_country)
+             values ('p-pr', '抹茶粉', 'food', 10000, 400, 5, 'JP')`;
+    await db`insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd)
+             values ('oi-pr', 'o-p', 'p-pr', '抹茶粉', 2, 5000, 400, 3400)`;
+    await db`update orders set status = 'paid', paid_at = now(), shipped_at = null where id = 'o-p'`;
+    await db`update order_refunds set amount_minor = 8160 where id = 'rf-1'`;
+    const { d, published } = deps();
+    const f = fake({ providerRef: 'cs_test_p', refundRef: 're_full', outcome: 'succeeded' });
+    await executePartialRefund(d, f.provider, { ...PLAN, amountMinor: 8160 });
+    expect(await events()).toContainEqual(['refunded_by_parts', 'USD:8160']);
+    const [p] = await db`select stock from products where id = 'p-pr'`;
+    expect(p?.['stock']).toBe(7);
+    expect(published.map((x) => x.name)).toEqual(['order.refunded']);
+  });
+
+  it('退满但已发货 → 记事件、不回补库存（货已寄出，退货入库是人工流程）', async () => {
+    await db`insert into products (id, title, category, price_jpy, weight_g, stock, origin_country)
+             values ('p-pr', '抹茶粉', 'food', 10000, 400, 5, 'JP')`;
+    await db`insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd)
+             values ('oi-pr', 'o-p', 'p-pr', '抹茶粉', 2, 5000, 400, 3400)`;
+    await db`update orders set paid_at = now(), shipped_at = now() where id = 'o-p'`;
+    await db`update order_refunds set amount_minor = 8160 where id = 'rf-1'`;
+    const { d } = deps();
+    const f = fake({ providerRef: 'cs_test_p', refundRef: 're_full', outcome: 'succeeded' });
+    await executePartialRefund(d, f.provider, { ...PLAN, amountMinor: 8160 });
+    expect(await events()).toContainEqual(['refunded_by_parts', 'USD:8160']);
+    const [p] = await db`select stock from products where id = 'p-pr'`;
+    expect(p?.['stock']).toBe(5);
   });
 });

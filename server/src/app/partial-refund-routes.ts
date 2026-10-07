@@ -34,6 +34,7 @@ import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
 import type { IdGen } from '../ports/ids.js';
 import type { PaymentRegistry } from '../ports/payment.js';
+import type { EventBus } from '../ports/events.js';
 import { markAuditCommitted } from './admin-audit.js';
 import { requireRole, type AuthConfig } from './auth.js';
 import {
@@ -50,6 +51,8 @@ export interface PartialRefundRoutesDeps {
   auth: AuthConfig;
   identity: IdentityCheck;
   registry: PaymentRegistry;
+  /** 部分退款成功 / 退满后的买家通知（P2-12）。 */
+  events: EventBus;
 }
 
 const actorOf = (req: Request): string => `admin:${req.auth?.sub ?? 'unknown'}`;
@@ -105,6 +108,8 @@ export function mountPartialRefundRoutes(app: Express, deps: PartialRefundRoutes
             if (pay === null) {
               throw new AppError(40902, { order_id: id, reason: `no_succeeded_payment:${status}` });
             }
+            // 通道先解析（B8 同口径：拿不到通道整体回滚），能力声明进准入判定（P2-4）
+            const provider = deps.registry.getForRefund(pay.provider);
             const sums = await sumPartialRefunds(tx, id);
             const gate = partialRefundGuard({
               status,
@@ -113,11 +118,11 @@ export function mountPartialRefundRoutes(app: Express, deps: PartialRefundRoutes
               reservedMinor: sums.reservedMinor,
               inFlight: sums.inFlight,
               amountMinor,
+              channelSupportsPartial: provider.capabilities.supportsPartialRefund,
             });
             if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
             if (pay.provider_ref === null)
               throw new AppError(50000, { order_id: id, reason: 'provider_ref_missing' });
-            const provider = deps.registry.getForRefund(pay.provider);
             const refundId = `rf-${deps.idGen.uuid()}`;
             await insertPartialRefund(tx, {
               id: refundId,

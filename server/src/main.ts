@@ -28,8 +28,10 @@
  */
 import { loadChannelConfigs } from './adapters/payment-channel-config.js';
 import { closeDb, createDb, assertPostgresMajor, ping, type Db } from './adapters/db.js';
+import { checkMigrations, readMigrationNames } from './adapters/migration-check.js';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import {
   loadConfig,
   redactConfig,
@@ -68,6 +70,9 @@ import { createInflightJobs, type InflightJobs } from './app/inflight-jobs.js';
 import { ensureInitialAdmin } from './adapters/admin-auth.js';
 import { hashPassword } from './app/auth.js';
 
+/** 仓库根的 `migrations/`：`server/src/main.ts` 与 `server/dist/main.js` 往上两级都是仓库根。 */
+const DEFAULT_MIGRATIONS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../migrations');
+
 export interface BootstrapOptions {
   /** 环境变量来源（测试注入用，生产走 process.env）。 */
   env?: NodeJS.ProcessEnv | undefined;
@@ -75,6 +80,8 @@ export interface BootstrapOptions {
   logDestination?: Parameters<typeof createLogger>[0]['destination'];
   /** 停机时的退出函数，仅测试注入（@see http.ts ShutdownHooks.exit）。 */
   exit?: ((code: number) => void) | undefined;
+  /** 迁移目录（启动期比对用）。生产不传 = 仓库根的 `migrations/`；测试注入临时目录模拟"代码多一条迁移"。 */
+  migrationsDir?: string | undefined;
 }
 
 export interface Runtime {
@@ -137,6 +144,24 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
   try {
     const major = await assertPostgresMajor(db);
     logger.info('postgres_checked', { major, result: 'ok' });
+
+    // 迁移齐全校验（第三轮缺口 P1-2，AJ-385）：缺一条就拒启——否则服务"健康"地对所有建单返回 500。
+    // 库比代码新只告警：只回滚代码时已执行的加列迁移对旧代码无害，拒启会堵死回滚这条路。
+    const migrations = await checkMigrations(
+      db,
+      readMigrationNames(opts.migrationsDir ?? DEFAULT_MIGRATIONS_DIR),
+    );
+    if (migrations.missing.length > 0) {
+      throw new Error(
+        `数据库迁移未执行完：缺 ${migrations.missing.join(', ')}。请先运行 npm run db:migrate（生产由 preDeployCommand 执行，检查部署日志）`,
+      );
+    }
+    if (migrations.ahead.length > 0) {
+      logger.warn('migrations_ahead_of_code', {
+        result: 'ahead',
+        ctx: { names: migrations.ahead },
+      });
+    }
 
     // 初始管理员 seed（D-38 ⑤ / O-11 / AJ-181，B17 / AJ-209）：配齐才跑、幂等、不改已有账号；
     // 日志不带邮箱与口令（约束七）

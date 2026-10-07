@@ -15,6 +15,8 @@ export const RECONCILE_CLASS_LABELS: Readonly<Record<string, string>> = {
   stalled_heartbeats: '定时任务心跳停滞',
   stuck_refunds: '退款滞留超过 24 小时',
   stuck_partial_refunds: '部分退款滞留超过 24 小时',
+  provider_refund_unrecorded: '机构侧已退款、本地无退款记录（勿再发货）',
+  fx_rate_aging: '汇率快过期（请尽快在运营配置里录入）',
 };
 
 export interface AuditRowView {

@@ -353,6 +353,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity,
     registry,
+    events,
   });
   // ── CSV 导出（剩余清单 3-3）：订单 / 待采购 / 待发货报关；导出动作显式进审计 ──
   mountAdminExportRoutes(app, {

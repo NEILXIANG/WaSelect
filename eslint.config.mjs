@@ -135,6 +135,7 @@ function layeringBlocks(root) {
 export default tseslint.config(
   {
     ignores: [
+      '.claude/**',
       'node_modules/**',
       '**/node_modules/**',
       // ⚠️ 必须写 `**/dist/**`：`dist/**` 只匹配**根级**的 dist，

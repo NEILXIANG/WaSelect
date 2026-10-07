@@ -17,8 +17,14 @@
  *
  * @see migrations/030_order_refunds.sql；adapters/order-refunds.ts；app/partial-refund-routes.ts
  */
-import type { Db } from '../adapters/db.js';
-import { listPartialRefunds, settlePartialRefund } from '../adapters/order-refunds.js';
+import { withTransaction, type Db } from '../adapters/db.js';
+import {
+  listPartialRefunds,
+  settlePartialRefund,
+  sumPartialRefunds,
+} from '../adapters/order-refunds.js';
+import { restoreStockForOrder } from '../adapters/orders.js';
+import type { EventBus } from '../ports/events.js';
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
@@ -29,6 +35,8 @@ export interface PartialRefundDeps {
   db: Db;
   logger: Logger;
   clock: Clock;
+  /** 买家通知（第三轮缺口 P2-12）：成功一笔发 `order.partially_refunded`，退满发 `order.refunded`。 */
+  events: EventBus;
 }
 
 export interface PartialRefundPlan {
@@ -142,6 +150,18 @@ async function applyOutcome(
         amount_minor: plan.amountMinor,
       },
     });
+    const fullyRefunded = await closeOutIfFullyRefunded(deps, plan, at);
+    // 提交之后才发（本函数里每条写都已各自提交）；退满时只发整单退款那封，不再多发一封"部分退款"
+    deps.events.publish(
+      fullyRefunded
+        ? { name: 'order.refunded', at: at.toISOString(), orderId: plan.orderId }
+        : {
+            name: 'order.partially_refunded',
+            at: at.toISOString(),
+            orderId: plan.orderId,
+            payload: { refund_id: plan.refundId },
+          },
+    );
   }
   if (outcome === 'failed') {
     if (changed)
@@ -154,6 +174,54 @@ async function applyOutcome(
     throw new AppError(50000, { order_id: plan.orderId, reason: 'partial_failed' });
   }
   return outcome;
+}
+
+/**
+ * 部分退款累计**退满实收**时的收尾（第三轮缺口 P2-1，AJ-385）：记 `refunded_by_parts` 事件；
+ * 未发货（`shipped_at is null` 且 `paid_at` 非空）的单回补库存——与整单退款 `settle` 同一口径。
+ * @why 订单状态**不改**：completed / shipped 的单走到 refunded 需要新的状态机边（技术文档 §1 未定义）；
+ *      事件 + 库存是"账与货"层面的收尾，状态口径留给 F12 定。
+ * @why 订单行锁 + "事件已存在就跳过"：两笔并发同步不可能都走到这里（一次只允许一笔在途），锁只是兜底，
+ *      但回补不幂等，必须只做一次。
+ * @returns 是否本次完成了收尾（调用方据此决定发哪个事件）。
+ */
+async function closeOutIfFullyRefunded(
+  deps: PartialRefundDeps,
+  plan: PartialRefundPlan,
+  at: Date,
+): Promise<boolean> {
+  return withTransaction(deps.db, async (tx) => {
+    const [o] = await tx`
+      select o.shipped_at, o.paid_at, p.charge_amount, p.charge_currency
+        from orders o
+        join order_refunds r on r.order_id = o.id and r.id = ${plan.refundId}
+        join payments p on p.id = r.payment_id
+       where o.id = ${plan.orderId}
+       for update of o
+    `;
+    if (o === undefined) return false;
+    const sums = await sumPartialRefunds(tx, plan.orderId);
+    if (sums.succeededMinor < Number(o['charge_amount'])) return false;
+    const done = await tx`
+      select 1 from order_events where order_id = ${plan.orderId} and status = 'refunded_by_parts'
+    `;
+    if (done.length > 0) return false;
+    await event(
+      tx,
+      plan,
+      'refunded_by_parts',
+      `${String(o['charge_currency'])}:${String(sums.succeededMinor)}`,
+      at,
+    );
+    if (o['shipped_at'] === null && o['paid_at'] !== null)
+      await restoreStockForOrder(tx, plan.orderId);
+    deps.logger.info('admin_partial_refund_fully_refunded', {
+      result: 'ok',
+      order_id: plan.orderId,
+      ctx: { restocked: o['shipped_at'] === null && o['paid_at'] !== null },
+    });
+    return true;
+  });
 }
 
 async function event(

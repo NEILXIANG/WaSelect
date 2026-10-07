@@ -289,7 +289,9 @@ export async function handleProviderCallback(
       ...webhook,
       result: resultValue(RESULT_IGNORED_PREFIX, event.outcome),
       token,
-      note: `归一化结果为 ${event.outcome}：本环境没有给它注册落账器（F12 接状态机后补）`,
+      // note 以 `order:<id> ` 开头（第三轮缺口 P1-4，AJ-385）：webhook_events 没有 order_id 列，
+      // 每日对账 `provider_refund_unrecorded` 据此把"机构侧退了"接回订单，找出本地没有任何退款记录的那几笔
+      note: `order:${event.orderId} 归一化结果为 ${event.outcome}：本环境没有给它注册落账器（F12 接状态机后补）`,
     });
     return {
       disposition: 'ignored',

@@ -487,7 +487,8 @@ export function createStripeCheckoutProvider(
       countries: ['*'],
       entryMode: 'copylink',
       supportsRefund: true,
-      supportsPartialRefund: false,
+      // 第三轮缺口 P2-4：部分退款（AJ-383）按笔传 amount + 独立幂等键，本通道支持；此声明由 partialRefundGuard 读取
+      supportsPartialRefund: true,
       supportsDispute: true,
       refundableWhenDisabled: true,
       // MP3-04：Stripe 托管页是**唯一**会出现"付了钱、通知没到"的通道

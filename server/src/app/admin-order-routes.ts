@@ -178,7 +178,9 @@ function toAdminOrder(
   payments: readonly Record<string, unknown>[],
   events: readonly Record<string, unknown>[],
 ): Record<string, unknown> {
-  const latest = payments[payments.length - 1] as
+  // 取最后一笔**非作废**的（第三轮缺口 P1-3 同病：并发换通道时作废行的 created_at 可能更晚）；全作废才取最后一笔
+  const latest = ([...payments].reverse().find((p) => p['status'] !== 'cancelled') ??
+    payments[payments.length - 1]) as
     | { provider?: unknown; charge_currency?: unknown; charge_amount?: unknown; status?: unknown }
     | undefined;
   return {

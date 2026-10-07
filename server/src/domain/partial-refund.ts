@@ -28,6 +28,11 @@ export interface PartialRefundInput {
   inFlight: boolean;
   /** 本次要退的金额（最小单位）。 */
   amountMinor: number;
+  /**
+   * 通道能力声明 `supportsPartialRefund`（第三轮缺口 P2-4，AJ-385）。
+   * @why 原先所有通道都声明 false、却没有人读它——部分退款照样发出去；下一个真不支持部分退款的通道不会被拦。
+   */
+  channelSupportsPartial: boolean;
 }
 
 /**
@@ -39,6 +44,9 @@ export function partialRefundGuard(i: PartialRefundInput): AdminGateResult {
     return { ok: false, code: 40902, reason: `status_${i.status}` };
   }
   if (i.hasDispute) return { ok: false, code: 40907, reason: 'dispute_open' };
+  if (!i.channelSupportsPartial) {
+    return { ok: false, code: 40902, reason: 'partial_refund_not_supported' };
+  }
   if (i.inFlight) return { ok: false, code: 40902, reason: 'partial_refund_in_flight' };
   if (!Number.isInteger(i.amountMinor) || i.amountMinor < 1) {
     return { ok: false, code: 40001, reason: 'amount_invalid' };

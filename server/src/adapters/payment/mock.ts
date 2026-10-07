@@ -103,7 +103,8 @@ export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): 
       countries: ['*'],
       entryMode: 'in_app',
       supportsRefund: true,
-      supportsPartialRefund: false,
+      // 第三轮缺口 P2-4：部分退款（AJ-383）按笔传 amount + 独立幂等键，本通道支持；此声明由 partialRefundGuard 读取
+      supportsPartialRefund: true,
       supportsDispute: false,
       refundableWhenDisabled: true,
       // MP3-04：in_app 通道的"会话"就是我们库里的 payments 行，机构侧没有可查的对象
