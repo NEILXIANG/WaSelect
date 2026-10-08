@@ -60,6 +60,20 @@ describe('listOrders', () => {
     expect(res.total).toBe(1);
   });
 
+  it('AJ-400：多状态逗号拼接；日期两端按 created_from / created_to 发；空状态数组不带 status', async () => {
+    const { impl, seen } = stubFetch(() => json({ items: [], total: 0 }));
+    await listOrders(api(impl), {
+      status: ['refunding', 'refunded'],
+      createdFrom: '2026-10-01',
+      createdTo: '2026-10-07',
+    });
+    expect(seen[0]?.url).toBe(
+      'http://localhost:3000/api/v1/admin/orders?status=refunding%2Crefunded&created_from=2026-10-01&created_to=2026-10-07',
+    );
+    await listOrders(api(impl), { status: [] });
+    expect(seen[1]?.url).toBe('http://localhost:3000/api/v1/admin/orders');
+  });
+
   it('⚠️ 空 keyword 不进 query（带空值会让服务端去匹配空串，筛出 0 条）', async () => {
     const { impl, seen } = stubFetch(() => json({ items: [], total: 0 }));
     await listOrders(api(impl), { keyword: '' });

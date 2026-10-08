@@ -92,7 +92,7 @@ describe('orders-admin（管理端订单读仓储，I2 U-B1）', () => {
     await insertOrder({ id: 'o-2', status: 'shipped' });
     const all = await listAdminOrders(db, { page: 1, size: 20 });
     expect(all.total).toBe(2);
-    const paid = await listAdminOrders(db, { page: 1, size: 20, status: 'paid' });
+    const paid = await listAdminOrders(db, { page: 1, size: 20, statuses: ['paid'] });
     expect(paid.items).toHaveLength(1);
     expect(paid.items[0]?.id).toBe('o-1');
     // @why total 必须是**过滤后**的条数（分页条数按它算）。只断言 items 长度的话，

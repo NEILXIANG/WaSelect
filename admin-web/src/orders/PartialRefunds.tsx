@@ -13,7 +13,8 @@
 import { useState } from 'react';
 import { useFormDirty } from '../ui/unsaved.js';
 import { useDrawerBusy } from '../ui/drawer.js';
-import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
+import { composeRefundReason, emptyRefundReason } from './refund-reason.js';
+import { RefundReasonField } from './RefundReasonField.js';
 import { ApiError, retryAfterMsSec } from '../api/errors.js';
 import { createPartialRefund, syncPartialRefund, type AdminApi } from './api.js';
 import {
@@ -64,8 +65,12 @@ export function PartialRefunds({
   onSuccess,
 }: PartialRefundsProps) {
   const [amount, setAmount] = useState('');
-  const [reason, setReason] = useState('');
-  useFormDirty({ amount: amount.trim(), reason: reason.trim() }, { amount: '', reason: '' });
+  // AJ-400：原因 = 预设 + 补充说明（./refund-reason.ts），拼好后再进原有的额度 / 必填校验
+  const [reason, setReason] = useState(emptyRefundReason);
+  useFormDirty(
+    { amount: amount.trim(), preset: reason.preset, note: reason.note.trim() },
+    { amount: '', preset: '', note: '' },
+  );
   const [confirming, setConfirming] = useState(false);
   const [hint, setHint] = useState('');
   const [busy, setBusy] = useState(false);
@@ -105,8 +110,17 @@ export function PartialRefunds({
     if (notice !== '') (onNotice ?? onError)(notice);
   };
 
+  /** 先拼原因（预设必选 / 「其它」必填），再走原有校验（金额格式 → 额度）。 */
+  const inputCheck = ():
+    { ok: true; minor: number; reason: string } | { ok: false; reason: string } => {
+    const composed = composeRefundReason(reason);
+    if (!composed.ok) return { ok: false, reason: composed.error };
+    const check = partialRefundInputCheck({ amount, reason: composed.reason, order });
+    return check.ok ? { ok: true, minor: check.minor, reason: composed.reason } : check;
+  };
+
   const ask = (): void => {
-    const check = partialRefundInputCheck({ amount, reason, order });
+    const check = inputCheck();
     if (!check.ok) return setHint(check.reason);
     setHint('');
     setConfirming(true);
@@ -114,7 +128,7 @@ export function PartialRefunds({
 
   const submit = async (): Promise<void> => {
     // 二次确认那一步也要重算：确认期间额度可能已被别的操作占掉（这里的额度来自这份 order 快照）
-    const check = partialRefundInputCheck({ amount, reason, order });
+    const check = inputCheck();
     if (!check.ok) {
       setConfirming(false);
       setHint(check.reason);
@@ -124,10 +138,10 @@ export function PartialRefunds({
     await run(async () => {
       await createPartialRefund(api, orderId, {
         amount_minor: check.minor,
-        reason: reason.trim(),
+        reason: check.reason,
       });
       setAmount('');
-      setReason('');
+      setReason(emptyRefundReason());
     });
   };
 
@@ -166,14 +180,7 @@ export function PartialRefunds({
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
       />
-      <input
-        className="input"
-        name="partial-reason"
-        placeholder="退款原因（进审计台账）"
-        maxLength={REFUND_REASON_MAX_LENGTH}
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-      />
+      <RefundReasonField value={reason} onChange={setReason} noteName="partial-reason" />
       {confirming ? (
         <div className="row2">
           <button type="button" className="btn" disabled={busy} onClick={() => void submit()}>

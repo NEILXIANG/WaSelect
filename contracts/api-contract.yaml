@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.43
+  version: 0.6.44
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -475,6 +475,14 @@ info:
          `data.product_id` 指出最重的那件）。没有任何生效档时不判（报价本就 50004）。
       ② 0.6.41 ⑤ `refunded` 口径订正（AJ-397）：整单退款那笔记**实际出账** `charge_amount − 已成功部分退款`，按 `orders.refunded_at` 落窗；
          部分退款 `succeeded` 行按各自落定时刻落窗，**不再**因订单后来整单退而排除。全时段合计不变，按天的读数由此对上真实出账。
+    0.6.44（AJ-400：管理端第二批 A——订单状态页签 + 下单日期筛选）：`GET /admin/orders` 两处放宽，老调用方不受影响：
+      ① `status` 可**逗号分隔多选**（任一命中），例如 `refunding,refunded`；单个值的老写法照旧。空串、空段（`paid,`）、
+         任一段不在 `OrderStatus` 里、或重复给参数（`?status=a&status=b`）→ 400 / 40001 `status_invalid`；重复的值去重。
+      ② 新增 `created_from` / `created_to`：**JST 日历日** `YYYY-MM-DD`，两端都含（服务端换成 `[from 00:00 JST, to 次日 00:00 JST)`，
+         与工作台 `jstDayWindow` 同一口径）。可只给一端。格式错 / 日期不存在（2026-02-30）/ 空串 / 重复参数 →
+         40001 `created_from_invalid` 或 `created_to_invalid`；起点晚于终点 → 40001 `created_range_invalid`（不静默对调）。
+         与 `status` / `keyword` / `include_test` 是 AND。`total` 与 `items` 同一过滤条件。
+      ③ CSV 导出（`/admin/exports/{kind}`）**不变**：不接日期参数。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -680,8 +688,10 @@ paths:
   /admin/orders:
     get:
       parameters:
-        - {name: status, in: query, schema: {$ref: '#/components/schemas/OrderStatus'}}
+        - {name: status, in: query, schema: {type: string, description: '0.6.44：一个或多个 OrderStatus，逗号分隔（任一命中），如 refunding,refunded；空段 / 非法值 → 40001 status_invalid'}}
         - {name: keyword, in: query, schema: {type: string, maxLength: 64, description: order_no / 收件人 / 运单号}}
+        - {name: created_from, in: query, schema: {type: string, format: date, description: '0.6.44：下单日期下界，JST 日历日 YYYY-MM-DD（含当日）；非法 → 40001 created_from_invalid'}}
+        - {name: created_to, in: query, schema: {type: string, format: date, description: '0.6.44：下单日期上界，JST 日历日 YYYY-MM-DD（含当日）；非法 → 40001 created_to_invalid；早于 created_from → 40001 created_range_invalid'}}
         - {name: page, in: query, schema: {type: integer, default: 1}}
         - {name: size, in: query, schema: {type: integer, default: 20, maximum: 100}}
         - {name: include_test, in: query, schema: {type: string, enum: ['true', 'false'], default: 'false'}, description: '0.6.32：true = 连审核期测试单（is_test）一起列出（默认过滤；给了 keyword 时本来就不过滤）。其它取值 → 40001'}

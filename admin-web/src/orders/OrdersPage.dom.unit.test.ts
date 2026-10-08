@@ -82,7 +82,50 @@ describe('订单列表：URL 上认不出的 status（AJ-398）', () => {
     const el = await open('#/orders?status=foo');
     expect(gets()).toHaveLength(1);
     expect(gets()[0]?.path).not.toContain('status=');
-    expect((el.querySelector('select') as HTMLSelectElement | null)?.value).toBe('all');
+    // AJ-400：下拉改页签——回落后高亮的是「全部」页签
+    expect(el.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('全部');
+  });
+});
+
+/**
+ * AJ-400：状态页签 + 计数、下单日期。URL 仍是唯一真源（`status` 逗号分隔、`range` 存预设名）。
+ */
+describe('订单列表：状态页签与日期筛选（AJ-400）', () => {
+  const tab = (el: HTMLElement, label: string): HTMLElement =>
+    [...el.querySelectorAll('[role="tab"]')].find((t) =>
+      (t.textContent ?? '').startsWith(label),
+    ) as HTMLElement;
+
+  it('点「售后·退款」→ 请求带 status=refunding,refunded、回第 1 页，且该页签高亮；每个页签都去取了计数', async () => {
+    const el = await open('#/orders?page=3');
+    await click(tab(el, '售后·退款'));
+    const last = decodeURIComponent(gets().at(-1)?.path ?? '');
+    expect(last).toContain('status=refunding,refunded');
+    expect(last).toContain('page=1');
+    expect(tab(el, '售后·退款').getAttribute('aria-selected')).toBe('true');
+    const countCalls = calls.filter((c) => /[?&]size=1(&|$)/.test(c.path));
+    expect(countCalls.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('工作台的单状态链接（status=refunding）照常请求；不高亮页签而是明说"当前筛选：退款中"', async () => {
+    const el = await open('#/orders?status=refunding');
+    expect(gets()[0]?.path).toContain('status=refunding');
+    expect(el.querySelector('[role="tab"][aria-selected="true"]')).toBeNull();
+    expect(el.textContent).toContain('当前筛选：退款中');
+  });
+
+  it('选「近 7 天」→ 请求带 created_from / created_to（JST 日历日）', async () => {
+    const el = await open();
+    await type(el.querySelector('select[aria-label="下单日期"]'), '7d');
+    const last = gets().at(-1)?.path ?? '';
+    expect(last).toMatch(/created_from=\d{4}-\d{2}-\d{2}/);
+    expect(last).toMatch(/created_to=\d{4}-\d{2}-\d{2}/);
+  });
+
+  it('自定义日期起点晚于终点 → 提示且不发请求', async () => {
+    const el = await open('#/orders?range=custom&from=2026-10-08&to=2026-10-01');
+    expect(gets()).toHaveLength(0);
+    expect(el.textContent).toContain('开始日期晚于结束日期');
   });
 });
 

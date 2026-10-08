@@ -1,0 +1,94 @@
+/**
+ * 职责：订单列表的**筛选纯函数**（AJ-400）——状态页签 ↔ URL `status`、日期预设 ↔ `created_from` / `created_to`。
+ *
+ * @why 页签按**运营的工作阶段**分组，而不是十态各一个：运营每天问的是"有几单要发货""有几单在售后"，
+ *      不是"有几单 pending_payment"。一个页签对应几个状态（契约 0.6.44 起 `status` 可逗号分隔）：
+ *      待付款 = created + pending_payment；已发货 = shipped + delivered；售后·退款 = refunding + refunded；
+ *      另加「已关闭」= cancelled + expired——不加的话这两态只能从「全部」里翻，十态就不是全覆盖。
+ * @why URL 仍以 `status=` 为唯一真源（不另造 `tab=`）：工作台的待办链接 `#/orders?status=paid`、
+ *      已有收藏与"复制链接发同事"都依赖它。页签只是 URL 的一种**读法**：状态集合恰好等于某个页签 → 高亮它；
+ *      否则（如工作台的 `status=refunding`，只是售后页签的一半）不高亮任何页签，页面另显示"当前筛选：退款中"。
+ * @why 日期在 URL 里存**预设名**（`range=7d`），自定义才存具体日期：收藏的"近 7 天"明天打开仍是近 7 天，
+ *      存死日期的话收藏就成了一段过去的时间。
+ *
+ * @limitation 一：日界按 JST（与工作台 `jstDayWindow` 同一函数），"今天"取的是调用方传入的 `now`——
+ *              组件传 `new Date()`，所以跨过 JST 零点后要刷新才会滚到新的一天。
+ * @limitation 二：URL 上认不出的 `status` / `range` 一律回落"全部"（AJ-398 同口径），不把坏值发给服务端换一个 40001。
+ * @see ../../../packages/shared/src/order-list-filter.ts（服务端同一套校验）；./OrdersPage.tsx
+ */
+import {
+  jstDate,
+  jstDayWindow,
+  parseJstDateRange,
+  parseOrderStatusList,
+  type OrderStatus,
+} from '@waselect/shared';
+
+export interface StatusTab {
+  key: string;
+  label: string;
+  /** 空数组 = 不按状态过滤（「全部」）。 */
+  statuses: readonly OrderStatus[];
+}
+
+export const STATUS_TABS: readonly StatusTab[] = [
+  { key: 'all', label: '全部', statuses: [] },
+  { key: 'unpaid', label: '待付款', statuses: ['created', 'pending_payment'] },
+  { key: 'to_ship', label: '待发货', statuses: ['paid'] },
+  { key: 'shipped', label: '已发货', statuses: ['shipped', 'delivered'] },
+  { key: 'completed', label: '已完成', statuses: ['completed'] },
+  { key: 'after_sale', label: '售后·退款', statuses: ['refunding', 'refunded'] },
+  { key: 'closed', label: '已关闭', statuses: ['cancelled', 'expired'] },
+];
+
+/** 页签 → URL 的 `status` 值（「全部」= 空串，由页面删掉这个键）。 */
+export function tabStatusParam(tab: StatusTab): string {
+  return tab.statuses.join(',');
+}
+
+/**
+ * URL 的 `status` → 实际要发的状态集合 + 应高亮的页签。
+ * @returns `statuses` 为空数组表示不过滤；`tabKey` 为 null 表示不是任何一个页签（自定义集合）。
+ */
+export function readStatusFilter(raw: string | null): {
+  statuses: OrderStatus[];
+  tabKey: string | null;
+} {
+  const parsed = raw === null ? null : parseOrderStatusList(raw);
+  if (parsed === null) return { statuses: [], tabKey: 'all' };
+  const same = (t: StatusTab): boolean =>
+    t.statuses.length === parsed.length && t.statuses.every((s) => parsed.includes(s));
+  return { statuses: parsed, tabKey: STATUS_TABS.find(same)?.key ?? null };
+}
+
+export const DATE_PRESETS: ReadonlyArray<{ key: string; label: string; days?: number }> = [
+  { key: '', label: '全部时间' },
+  { key: 'today', label: '今天', days: 1 },
+  { key: '7d', label: '近 7 天', days: 7 },
+  { key: '30d', label: '近 30 天', days: 30 },
+  { key: 'custom', label: '自定义' },
+];
+
+/**
+ * 日期预设（+ 自定义的两端）→ 请求参数（JST 日历日，两端都含）。
+ * @returns `error` 非空 = 自定义输入有误（不发请求，页面提示）；两端都缺 = 不限日期。
+ */
+export function resolveDateRange(
+  range: string,
+  from: string,
+  to: string,
+  now: Date,
+): { createdFrom?: string; createdTo?: string; error?: string } {
+  const preset = DATE_PRESETS.find((p) => p.key === range);
+  if (preset?.days !== undefined) {
+    return { createdFrom: jstDate(jstDayWindow(now, preset.days).from), createdTo: jstDate(now) };
+  }
+  if (range !== 'custom') return {};
+  const r = parseJstDateRange(from === '' ? undefined : from, to === '' ? undefined : to);
+  if (!r.ok) {
+    return {
+      error: r.reason === 'created_range_invalid' ? '开始日期晚于结束日期' : '日期格式不对',
+    };
+  }
+  return { ...(from !== '' ? { createdFrom: from } : {}), ...(to !== '' ? { createdTo: to } : {}) };
+}

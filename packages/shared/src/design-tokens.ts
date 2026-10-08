@@ -34,6 +34,10 @@ export const WS_COLORS = {
   error: '#a2503f',
   /** 支付完成等正向状态。与小程序 `--ws-success` 同值（S1 起两侧对齐）。 */
   success: '#5e7256',
+  /** 需要处理（待发货 / 退款中）的徽章色（AJ-400）。与小程序 `--ws-warn` 同值。 */
+  warn: '#a67c4e',
+  /** 进行中、无需处理（已发货 / 已签收）的徽章色（AJ-400，管理端首用；小程序暂无对应 token）。 */
+  info: '#56708a',
 } as const;
 
 export type WsColorName = keyof typeof WS_COLORS;

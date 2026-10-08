@@ -58,8 +58,12 @@ export interface OrderListResp {
 
 /** 列表查询参数（契约：`status` / `keyword` 可选，`page` / `size` 有默认值）。 */
 export interface OrderListQuery {
-  status?: OrderStatus;
+  /** 一个或多个状态（多个 = 任一命中，契约 0.6.44 逗号分隔；AJ-400 页签用）。空数组 = 不过滤。 */
+  status?: OrderStatus | readonly OrderStatus[];
   keyword?: string;
+  /** 下单日期（JST 日历日 `YYYY-MM-DD`，两端都含；契约 0.6.44 created_from / created_to）。 */
+  createdFrom?: string;
+  createdTo?: string;
   page?: number;
   size?: number;
   /** true = 连审核期测试单一起列（契约 0.6.32 include_test，剩余清单 3-4）。 */
@@ -76,7 +80,10 @@ export async function listOrders(
   traceId?: string,
 ): Promise<OrderListResp> {
   const params = new URLSearchParams();
-  if (query.status !== undefined) params.set('status', query.status);
+  const status = typeof query.status === 'string' ? query.status : query.status?.join(',');
+  if (status !== undefined && status !== '') params.set('status', status);
+  if (query.createdFrom !== undefined) params.set('created_from', query.createdFrom);
+  if (query.createdTo !== undefined) params.set('created_to', query.createdTo);
   if (query.keyword !== undefined && query.keyword !== '') params.set('keyword', query.keyword);
   if (query.page !== undefined) params.set('page', String(query.page));
   if (query.size !== undefined) params.set('size', String(query.size));

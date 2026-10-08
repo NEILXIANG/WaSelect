@@ -58,14 +58,7 @@ export const ORDER_STATUS_LABELS: Readonly<Record<OrderStatus, string>> = {
   refunded: '已退款',
 };
 
-/** 筛选下拉的选项（`all` 是前端概念：服务端不传 status 即不过滤）。 */
-export const STATUS_FILTER_OPTIONS: ReadonlyArray<{
-  value: OrderStatus | 'all';
-  label: string;
-}> = [
-  { value: 'all', label: '全部' },
-  ...ORDER_STATUS.map((s) => ({ value: s, label: ORDER_STATUS_LABELS[s] })),
-];
+// 状态筛选的选项已由 ./list-filter.ts 的 STATUS_TABS 取代（AJ-400：下拉改页签，页签覆盖十态由其单测钉住）。
 
 /**
  * 事件流里**不是订单状态**的伪状态文案（只出现在管理端）。

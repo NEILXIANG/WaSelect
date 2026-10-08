@@ -1,5 +1,5 @@
 /**
- * 职责：订单列表页（状态筛选 / 关键词搜索 / 分页 / 去详情）。
+ * 职责：订单列表页（状态页签 / 下单日期 / 关键词搜索 / 分页 / 去详情）。
  *
  * @why **筛选条件变了要回到第 1 页**：不回的话会出现"筛选后停在第 3 页、
  *      结果只有 2 条但页面显示空白"，运营会以为订单消失了。
@@ -14,7 +14,8 @@
  *              每敲一个字发一次请求会让分页与结果在输入过程中反复抖动，
  *              而运营搜单号通常是整段粘贴。
  * @limitation 四（第一批②）：**筛选条件与当前打开的订单都以 URL 为唯一真源**
- *              （`status` / `q` / `test` / `page` 四个查询参数 + 路径上的订单 id）。
+ *              （`status` / `q` / `test` / `page` / `range` / `from` / `to` 查询参数 + 路径上的订单 id）。
+ *              AJ-400：`status` 可逗号分隔（页签 = 几个状态），日期存预设名（`range=7d`），自定义才存 `from` / `to`。
  *              @why 不做"组件 state 与 URL 双向同步"：那需要两边互相写，
  *                   而"改筛选 → 写 URL → 触发 hashchange → 又写回 state"这类环
  *                   一旦有一处比较不严就是抖动或死循环。单向（URL → 组件）没有这个失效形态。
@@ -25,13 +26,17 @@
  *
  * @see ./view.ts（行视图与闸门）；./api.ts（接口层）；./OrderDetail.tsx；../router.ts
  */
-import { TodoBar } from './TodoBar.js';
 import { ExportBar } from './ExportBar.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SEARCH_KEYWORD_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { listOrders, type AdminApi, type AdminOrderLike } from './api.js';
-import { STATUS_FILTER_OPTIONS, orderRows, type OrderRow } from './view.js';
+import { ORDER_STATUS_LABELS, orderRows, type OrderRow } from './view.js';
+import { readStatusFilter, resolveDateRange, tabStatusParam } from './list-filter.js';
+import { StatusTabs } from './StatusTabs.js';
+import { DateFilter } from './DateFilter.js';
+import { Badge } from '../ui/badge.js';
+import { flagBadges, statusBadge } from './badges.js';
 import { OrderDetail } from './OrderDetail.js';
 import type { Route } from '../router.js';
 
@@ -39,7 +44,15 @@ import type { Route } from '../router.js';
 const PAGE_SIZE = 20;
 
 /** 四个查询参数的键（改这里要同步改 @limitation 四 与 router 的用法说明）。 */
-const Q = { status: 'status', q: 'q', test: 'test', page: 'page' } as const;
+const Q = {
+  status: 'status',
+  q: 'q',
+  test: 'test',
+  page: 'page',
+  range: 'range',
+  from: 'from',
+  to: 'to',
+} as const;
 
 export interface OrdersPageProps {
   api: AdminApi;
@@ -62,7 +75,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         const drop =
           value === undefined ||
           value === '' ||
-          (key === Q.status && value === 'all') ||
+          (key === Q.status && value === 'all') || // 旧收藏里的 `status=all` 也当默认
           (key === Q.page && value === '1') ||
           (key === Q.test && value === '0');
         if (drop) query.delete(key);
@@ -75,13 +88,22 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
     [route.query, onNavigate],
   );
 
-  // ── 以下四项全部由 URL 派生（@see @limitation 四）────────────────────
+  // ── 以下全部由 URL 派生（@see @limitation 四）────────────────────
   // 认不出的 `?status=`（手改地址、旧收藏）回落为「全部」（AJ-398）：原样发给服务端会得到 40001，
-  // 而下拉框里又没有这个值可选——页面一片空白、看不出是筛选坏了。
-  const rawStatus = route.query.get(Q.status) ?? 'all';
-  const status: OrderStatus | 'all' = STATUS_FILTER_OPTIONS.some((o) => o.value === rawStatus)
-    ? (rawStatus as OrderStatus | 'all')
-    : 'all';
+  // 页面一片空白、看不出是筛选坏了。页签与 URL 的对应见 list-filter.ts。
+  const { statuses, tabKey } = readStatusFilter(route.query.get(Q.status));
+  /** 进 load 依赖的是字符串：`statuses` 每次渲染都是新数组，直接放进依赖会每次渲染都重拉列表。 */
+  const statusKey = statuses.join(',');
+  const dateValue = {
+    range: route.query.get(Q.range) ?? '',
+    from: route.query.get(Q.from) ?? '',
+    to: route.query.get(Q.to) ?? '',
+  };
+  // 日界按 JST（list-filter @limitation 一）；自定义有误 → 提示、不发请求
+  const dates = resolveDateRange(dateValue.range, dateValue.from, dateValue.to, new Date());
+  const dateError = dates.error ?? '';
+  const createdFrom = dates.createdFrom;
+  const createdTo = dates.createdTo;
   const applied = route.query.get(Q.q) ?? '';
   const includeTest = route.query.get(Q.test) === '1';
   const page = Math.max(1, Number(route.query.get(Q.page) ?? '1') || 1);
@@ -124,6 +146,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   const reqSeq = useRef(0);
 
   const load = useCallback(async () => {
+    if (dateError !== '') return; // 自定义日期有误：保留上一次的列表，等运营改对
     const seq = ++reqSeq.current;
     setLoading(true);
     setError('');
@@ -132,7 +155,9 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         page,
         size: PAGE_SIZE,
         keyword: applied,
-        ...(status === 'all' ? {} : { status }),
+        ...(statusKey === '' ? {} : { status: statusKey.split(',') as OrderStatus[] }),
+        ...(createdFrom !== undefined ? { createdFrom } : {}),
+        ...(createdTo !== undefined ? { createdTo } : {}),
         includeTest,
       });
       if (seq !== reqSeq.current) return;
@@ -149,7 +174,18 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
-  }, [api, page, status, applied, reloadTick, includeTest, patch]);
+  }, [
+    api,
+    page,
+    statusKey,
+    applied,
+    reloadTick,
+    includeTest,
+    patch,
+    createdFrom,
+    createdTo,
+    dateError,
+  ]);
 
   useEffect(() => {
     void load();
@@ -176,29 +212,39 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         <span className="muted">时间均为 JST</span>
       </header>
 
-      {/* 待办计数（三端联动 UI 模拟 2026-10-08）：点一下即筛到那一类 */}
-      <TodoBar
+      {/* 状态页签 + 计数（AJ-400）：取代原来的状态下拉与页内待办条（工作台仍保留待办条） */}
+      <StatusTabs
         api={api}
+        current={tabKey}
+        base={{
+          keyword: applied,
+          includeTest,
+          ...(createdFrom !== undefined ? { createdFrom } : {}),
+          ...(createdTo !== undefined ? { createdTo } : {}),
+        }}
         refreshKey={reloadTick}
-        current={status}
-        onPick={(s) => patch({ status: s, page: '1' })}
+        onPick={(t) => patch({ status: tabStatusParam(t), page: '1' })}
       />
+      {tabKey === null && (
+        // 工作台待办这类"单个状态"的链接（如 status=refunding）不是任何一个页签：明说当前筛的是什么
+        <p className="muted">
+          当前筛选：{statuses.map((s) => ORDER_STATUS_LABELS[s]).join('、')}{' '}
+          <button type="button" className="link" onClick={() => patch({ status: '', page: '1' })}>
+            清除
+          </button>
+        </p>
+      )}
 
       {/* 剩余清单 3-3：CSV 导出（订单总表 / 待采购 / 报关） */}
       <ExportBar api={api} />
 
+      <DateFilter
+        value={dateValue}
+        error={dateError}
+        onChange={(v) => patch({ range: v.range, from: v.from, to: v.to, page: '1' })}
+      />
+
       <div className="filters">
-        <select
-          className="input"
-          value={status}
-          onChange={(e) => patch({ status: e.target.value, page: '1' })}
-        >
-          {STATUS_FILTER_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
         <label className="muted">
           <input
             type="checkbox"
@@ -257,9 +303,15 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
             <tr key={row.id}>
               <td>{row.orderNo}</td>
               <td>
-                {row.statusText}
-                {row.hasDispute && <span className="error"> · 拒付中</span>}
-                {row.isTest && <span className="muted"> · 测试单</span>}
+                {/* AJ-400：彩色徽章（statusText 文案不变，色调见 badges.ts） */}
+                {[
+                  statusBadge(raw.find((o) => o.order_id === row.id) ?? { status: '' }),
+                  ...flagBadges({ has_dispute: row.hasDispute, is_test: row.isTest }),
+                ].map((b) => (
+                  <Badge key={b.text} tone={b.tone}>
+                    {b.text}
+                  </Badge>
+                ))}
               </td>
               <td className="purchase-cell">
                 {row.purchaseLines.length === 0 ? (

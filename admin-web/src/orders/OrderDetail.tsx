@@ -23,6 +23,8 @@ import { formatJst, moneyText } from '../format.js';
 import { OrderActions } from './OrderActions.js';
 import { OrderItems } from './OrderItems.js';
 import { OrderTimeline } from './OrderTimeline.js';
+import { Badge } from '../ui/badge.js';
+import { detailBadges } from './badges.js';
 import { addressSummary, isDisputeLocked, paymentSummary, statusText } from './view.js';
 
 export interface OrderDetailProps {
@@ -69,6 +71,16 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
     <section className="panel">
       <header className="panel-head">
         <h1 className="title">订单详情</h1>
+        {/* AJ-400：支付 / 履约 / 拒付 / 测试单 各一枚徽章（口径见 badges.ts），一眼看出"钱扣了没、货发了没" */}
+        {order !== null && (
+          <span aria-label="订单状态徽章">
+            {detailBadges(order).map((b) => (
+              <Badge key={b.text} tone={b.tone}>
+                {b.text}
+              </Badge>
+            ))}
+          </span>
+        )}
         <button type="button" className="link" onClick={onBack}>
           返回列表
         </button>

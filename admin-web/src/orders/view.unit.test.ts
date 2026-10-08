@@ -21,7 +21,6 @@ import {
 import {
   EVENT_STATUS_LABELS,
   ORDER_STATUS_LABELS,
-  STATUS_FILTER_OPTIONS,
   addressGate,
   addressSummary,
   paymentSummary,
@@ -463,11 +462,6 @@ describe('ORDER_STATUS_LABELS 与契约 OrderStatus 的双向比对', () => {
   it('⚠️ 十态文案两两不同（合并了就等于退回买家视角，客服分辨不出"没发起"和"支付中"）', () => {
     const labels = Object.values(ORDER_STATUS_LABELS);
     expect(new Set(labels).size).toBe(labels.length);
-  });
-
-  it('筛选选项覆盖全部状态 + 全部（少一个就筛不出来）', () => {
-    expect(STATUS_FILTER_OPTIONS).toHaveLength(ORDER_STATUS.length + 1);
-    expect(STATUS_FILTER_OPTIONS[0]?.value).toBe('all');
   });
 });
 

@@ -52,17 +52,19 @@ describe('PartialRefunds', () => {
   it('填 10.50 美元 + 原因 → 两步确认 → 请求体 amount_minor = 1050；完成后通知父组件刷新', async () => {
     const { el, calls, done } = await open();
     await type(el.querySelector('input[name="partial-amount"]'), '10.50');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '缺货'); // AJ-400：预设必选
     await type(el.querySelector('input[name="partial-reason"]'), '缺一件：抹茶粉');
     await click(button(el, '部分退款'));
     await click(button(el, '确认部分退款'));
     const post = calls.find((c) => c.path.endsWith('/partial-refunds'));
-    expect(post?.body).toEqual({ amount_minor: 1050, reason: '缺一件：抹茶粉' });
+    expect(post?.body).toEqual({ amount_minor: 1050, reason: '缺货：缺一件：抹茶粉' });
     expect(done.n).toBe(1);
   });
 
   it('🔴 金额格式不对 → 不发请求', async () => {
     const { el, calls } = await open();
     await type(el.querySelector('input[name="partial-amount"]'), '10.555');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '缺货'); // AJ-400：预设必选
     await type(el.querySelector('input[name="partial-reason"]'), '原因');
     await click(button(el, '部分退款'));
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
@@ -93,6 +95,7 @@ describe('PartialRefunds', () => {
   it('🔴 超过可退额度 → 不发请求，且提示写明"最多可退"多少', async () => {
     const { el, calls } = await open(); // 可退 81.60 USD
     await type(el.querySelector('input[name="partial-amount"]'), '999999');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '缺货'); // AJ-400：预设必选
     await type(el.querySelector('input[name="partial-reason"]'), '整车退款');
     await click(button(el, '部分退款'));
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
@@ -110,15 +113,17 @@ describe('PartialRefunds', () => {
   it('刚好等于额度放行；多一分都要拦', async () => {
     const { el, calls } = await open();
     await type(el.querySelector('input[name="partial-amount"]'), '81.60');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '缺货'); // AJ-400：预设必选
     await type(el.querySelector('input[name="partial-reason"]'), '全部余款');
     await click(button(el, '部分退款'));
     await click(button(el, '确认部分退款'));
     expect(calls.find((c) => c.path.endsWith('/partial-refunds'))?.body).toEqual({
       amount_minor: 8160,
-      reason: '全部余款',
+      reason: '缺货：全部余款',
     });
     const over = await open();
     await type(over.el.querySelector('input[name="partial-amount"]'), '81.61');
+    await type(over.el.querySelector('select[aria-label="退款原因"]'), '缺货'); // AJ-400：预设必选
     await type(over.el.querySelector('input[name="partial-reason"]'), '全部余款');
     await click(button(over.el, '部分退款'));
     expect(over.calls.filter((c) => c.method === 'POST')).toHaveLength(0);
@@ -151,6 +156,7 @@ describe('PartialRefunds', () => {
     );
     const el = mounted.el;
     await type(el.querySelector('input[name="partial-amount"]'), '10.00');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '缺货'); // AJ-400：预设必选
     await type(el.querySelector('input[name="partial-reason"]'), '缺一件');
     await click(button(el, '部分退款'));
     await click(button(el, '确认部分退款'));
@@ -190,6 +196,7 @@ describe('PartialRefunds', () => {
       );
       const el = mounted.el;
       await type(el.querySelector('input[name="partial-amount"]'), '10.50');
+      await type(el.querySelector('select[aria-label="退款原因"]'), '缺货'); // AJ-400：预设必选
       await type(el.querySelector('input[name="partial-reason"]'), '缺一件');
       await click(button(el, '部分退款'));
       await click(button(el, '确认部分退款'));
@@ -197,5 +204,23 @@ describe('PartialRefunds', () => {
       await mounted.unmount();
       mounted = undefined;
     }
+  });
+});
+
+describe('PartialRefunds：退款原因预设（AJ-400）', () => {
+  it('选「其它」不写说明 → 提示且不进确认；补上说明后请求体是「其它：说明」', async () => {
+    const { el, calls } = await open();
+    await type(el.querySelector('input[name="partial-amount"]'), '1.00');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '其它');
+    await click(button(el, '部分退款'));
+    expect(el.querySelector('p.error')?.textContent).toContain('选「其它」时请写明原因');
+    expect(button(el, '确认部分退款')).toBeNull();
+    await type(el.querySelector('input[name="partial-reason"]'), '海关退运');
+    await click(button(el, '部分退款'));
+    await click(button(el, '确认部分退款'));
+    expect(calls.find((c) => c.path.endsWith('/partial-refunds'))?.body).toEqual({
+      amount_minor: 100,
+      reason: '其它：海关退运',
+    });
   });
 });

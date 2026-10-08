@@ -84,8 +84,21 @@ export interface AdminOrderListRow {
 export interface AdminOrderListQuery {
   page: number;
   size: number;
-  /** 不传 = 全部状态。 */
-  status?: string | undefined;
+  /** 不传 = 全部状态；多个 = 任一命中（AJ-400：一个页签对应几个状态，如售后·退款 = refunding + refunded）。 */
+  statuses?: readonly string[] | undefined;
+  /**
+   * 下单时间窗（AJ-400）：`created_at >= createdFrom` 且 `< createdTo`（左闭右开，日界由 shared `parseJstDateRange` 算好）。
+   * @measured 2026-10-07 本机测试库（PG16），`set local enable_seqscan = off` 后
+   *   `explain select id from orders where is_test = false and status in ('paid','shipped')
+   *    and created_at >= now() - interval '7 days' and created_at < now() order by created_at desc, id desc limit 20`
+   *   → `Index Scan using idx_orders_is_test_created on orders`
+   *     `Index Cond: ((is_test = false) AND (created_at >= (now() - '7 days'::interval)) AND (created_at < now()))`
+   *     `Filter: ((status)::text = ANY ('{paid,shipped}'::text[]))`，其上是 `Incremental Sort (Presorted Key: created_at)`。
+   *   即复用迁移 032 的 (is_test, created_at DESC)，日期走索引条件、状态是行过滤——不新增索引。
+   * @limitation 状态是行过滤而不是索引条件：单量很大且某个状态极稀疏时会多扫；量起来再看 EXPLAIN（同迁移 032 @limitation）。
+   */
+  createdFrom?: Date | undefined;
+  createdTo?: Date | undefined;
   /** 单号 / 收件人 / 运单号 子串匹配（三列 OR，大小写无关）。 */
   keyword?: string | undefined;
   /** true = 连 `is_test` 的审核期 mock 单一起返回（见文件头 @limitation 三）。 */
@@ -223,8 +236,10 @@ function buildWhere(db: Db, q: AdminOrderListQuery) {
   const kw = normalizeKeyword(q.keyword);
   const hideTest = q.includeTest !== true && kw === null;
   return db`
-    where (${q.status === undefined ? db`true` : db`status = ${q.status}`})
+    where (${q.statuses === undefined ? db`true` : db`status in ${db([...q.statuses])}`})
       and (${hideTest ? db`is_test = false` : db`true`})
+      and (${q.createdFrom === undefined ? db`true` : db`created_at >= ${q.createdFrom}`})
+      and (${q.createdTo === undefined ? db`true` : db`created_at < ${q.createdTo}`})
       ${
         kw === null
           ? db``

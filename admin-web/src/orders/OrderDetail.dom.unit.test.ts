@@ -92,7 +92,7 @@ beforeEach(() => {
 async function submitRefund(el: HTMLElement): Promise<void> {
   // AJ-398：表单收进抽屉，先点操作条上的「全额退款…」打开它
   await click(button(el, '全额退款…'));
-  await type(el.querySelector('input[placeholder^="退款原因"]'), '缺货');
+  await type(el.querySelector('select[aria-label="退款原因"]'), '缺货'); // AJ-400：预设下拉
   // 第一批①：「退款」只打开确认弹层，「确认退款」在弹层里
   await click(button(el, '退款'));
   await click(button(el, '确认退款'));
@@ -586,10 +586,27 @@ describe('订单详情：操作抽屉（AJ-398）', () => {
   it('填了内容再点「关闭」→ 先问「放弃修改」；确认后才关', async () => {
     const el = await open();
     await click(button(el, '全额退款…'));
-    await type(el.querySelector('input[placeholder^="退款原因"]'), '缺货');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '缺货'); // AJ-400：预设下拉
     await click(button(el, '关闭'));
     expect(el.querySelector('.drawer'), '有内容时不能直接关').not.toBeNull();
     await click(button(el, '放弃修改'));
     expect(el.querySelector('.drawer')).toBeNull();
+  });
+});
+
+describe('详情页头的状态徽章（AJ-400）', () => {
+  it('待发货 + 拒付中：页头出「已付款」「待发货」「拒付中」三枚，色调各自对应', async () => {
+    status = 'paid';
+    hasDispute = true;
+    const el = await open();
+    const badges = [...el.querySelectorAll('[aria-label="订单状态徽章"] .badge')].map((b) => [
+      b.textContent,
+      b.className,
+    ]);
+    expect(badges).toEqual([
+      ['已付款', 'badge badge-success'],
+      ['待发货', 'badge badge-warn'],
+      ['拒付中', 'badge badge-danger'],
+    ]);
   });
 });

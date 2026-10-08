@@ -157,12 +157,33 @@ describe('App：筛选进地址栏（第一批③工作台的跳转依赖它）'
 
   it('筛选变默认时不留 `?status=all` 这种没有信息的尾巴', async () => {
     const el = await open('#/orders?status=paid');
-    const select = el.querySelector('.filters select') as HTMLSelectElement;
-    select.value = 'all';
-    await act(async () => {
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    // AJ-400：状态下拉改成页签——回到默认 = 点「全部」页签
+    const all = [...el.querySelectorAll('[role="tab"]')].find((t) =>
+      (t.textContent ?? '').startsWith('全部'),
+    );
+    await click(all);
     expect(location.hash).toBe('#/orders');
+  });
+
+  it('🔴 多状态页签进地址栏、再从地址栏读回来（AJ-400：刷新 / 收藏 / 发同事都是同一个列表）', async () => {
+    const el = await open('#/orders');
+    const tab = [...el.querySelectorAll('[role="tab"]')].find((t) =>
+      (t.textContent ?? '').startsWith('售后·退款'),
+    );
+    await click(tab);
+    expect(new URLSearchParams(location.hash.split('?')[1]).get('status')).toBe(
+      'refunding,refunded',
+    );
+    // 模拟"刷新"：卸掉再按同一个地址挂一次
+    const hash = location.hash;
+    await mounted?.unmount();
+    requested = [];
+    const again = await open(hash);
+    const list = requested.filter((u) => u.includes('/admin/orders') && !u.includes('size=1'));
+    expect(decodeURIComponent(list[0] ?? '')).toContain('status=refunding,refunded');
+    expect(again.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain(
+      '售后·退款',
+    );
   });
 });
 

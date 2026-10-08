@@ -5,25 +5,34 @@
  *      出错后"先刷新详情再按真实状态说话"（AJ-230 / P2-49）都与拆分前逐字一致。
  * @why 成功（含 pending / 无确认结果）后关抽屉；**失败不关**：原因还在框里，看完提示可以直接再提交。
  *
+ * @why AJ-400：原因改为"预设 + 补充说明"（./refund-reason.ts），拼好后再走原来的 `refundErrors` / `toRefundBody`，
+ *      所以服务端看到的仍是一个 reason 字符串，长度口径不变。
+ *
  * @limitation 出错 ≠ 没退：服务端先落 `refunding` 再调机构，超时时订单很可能已经变了，
  *              所以 catch 里先 `reload()`，提示按刷新后的订单给（`fullRefundErrorNotice`）。
  * @see ./view.ts（refundGate / refundErrors / fullRefundErrorNotice）
  */
 import { useState } from 'react';
-import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import { useFormDirty } from '../ui/unsaved.js';
 import { ApiError, retryAfterMsSec } from '../api/errors.js';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { moneyText } from '../format.js';
 import { refundOrder } from './api.js';
 import type { OrderActionFormProps } from './ShipForm.js';
-import {
-  emptyRefundForm,
-  fullRefundErrorNotice,
-  refundErrors,
-  refundGate,
-  toRefundBody,
-} from './view.js';
+import { fullRefundErrorNotice, refundErrors, refundGate, toRefundBody } from './view.js';
+import { composeRefundReason, emptyRefundReason } from './refund-reason.js';
+import { RefundReasonField } from './RefundReasonField.js';
+
+/** 预设 + 说明 → 原有校验的输入形状；拼不出来时带上提示，由 check 统一报。 */
+function checkReason(input: ReturnType<typeof emptyRefundReason>): {
+  ok: boolean;
+  first: string;
+  reason: string;
+} {
+  const composed = composeRefundReason(input);
+  if (!composed.ok) return { ok: false, first: composed.error, reason: '' };
+  return { ...refundErrors({ reason: composed.reason }), reason: composed.reason };
+}
 
 export function RefundForm({
   api,
@@ -35,8 +44,8 @@ export function RefundForm({
   onDone,
   onBusy,
 }: OrderActionFormProps) {
-  const [refund, setRefund] = useState(emptyRefundForm);
-  useFormDirty(refund, emptyRefundForm());
+  const [refund, setRefund] = useState(emptyRefundReason);
+  useFormDirty(refund, emptyRefundReason());
   const [dialog, setDialog] = useState<ConfirmSpec | null>(null);
   const [busy, setBusyState] = useState(false);
   const setBusy = (b: boolean): void => {
@@ -46,7 +55,7 @@ export function RefundForm({
   const gate = refundGate(order);
 
   const doRefund = async (): Promise<void> => {
-    const check = refundErrors(refund);
+    const check = checkReason(refund);
     if (!check.ok) {
       sink.error(check.first);
       setDialog(null);
@@ -54,8 +63,8 @@ export function RefundForm({
     }
     setBusy(true);
     try {
-      const outcome = await refundOrder(api, id, toRefundBody(refund));
-      setRefund(emptyRefundForm());
+      const outcome = await refundOrder(api, id, toRefundBody({ reason: check.reason }));
+      setRefund(emptyRefundReason());
       setDialog(null);
       // ⚠️ 三种 outcome 必须分别说（B41 / AJ-215）：pending 当成"成功"会让运营去 Stripe 后台手工再退一次。
       //    后两档给 sticky：它们写的是"下一步怎么办"，3 秒后消失等于没说。
@@ -90,7 +99,7 @@ export function RefundForm({
   };
 
   const ask = (): void => {
-    const check = refundErrors(refund);
+    const check = checkReason(refund);
     if (!check.ok) {
       sink.error(check.first);
       return;
@@ -105,14 +114,8 @@ export function RefundForm({
 
   return (
     <div className="form">
-      <input
-        className="input"
-        placeholder="退款原因（进审计台账）"
-        // 硬上限来自 shared（B7 / AJ-191）：超长会被机构拒且订单卡在退款中
-        maxLength={REFUND_REASON_MAX_LENGTH}
-        value={refund.reason}
-        onChange={(e) => setRefund({ reason: e.target.value })}
-      />
+      {/* 硬上限来自 shared（B7 / AJ-191）：超长会被机构拒且订单卡在退款中——按拼好后的整串校验 */}
+      <RefundReasonField value={refund} onChange={setRefund} />
       <button type="button" className="btn btn-danger" disabled={!gate.ok || busy} onClick={ask}>
         退款
       </button>

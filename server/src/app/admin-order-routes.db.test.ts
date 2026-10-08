@@ -405,6 +405,91 @@ describe('GET /admin/orders?include_test（剩余清单 3-4）', () => {
   });
 });
 
+/**
+ * AJ-400（契约 0.6.44）：状态页签要"一个页签 = 几个状态"（售后·退款 = refunding + refunded），
+ * 日期筛选按 JST 日历日、两端都含。边界样本直接钉在 JST 日界两侧（UTC 15:00 = JST 次日 00:00）。
+ */
+describe('GET /admin/orders：多状态与下单日期筛选（AJ-400）', () => {
+  const ids = (r: { json: Record<string, unknown> }): string[] =>
+    (r.json['items'] as Array<{ order_id: string }>).map((i) => i.order_id).sort();
+
+  it('🔴 status 逗号分隔 = 任一命中；total 与 items 同口径', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-paid', status: 'paid' });
+    await seedOrder({ id: 'o-rfing', status: 'refunding' });
+    await seedOrder({ id: 'o-rfed', status: 'refunded' });
+    const r = await adminFetch(s, 'GET', '/api/v1/admin/orders?status=refunding,refunded');
+    expect(ids(r)).toEqual(['o-rfed', 'o-rfing']);
+    expect(r.json['total']).toBe(2);
+    // 单状态的老写法照旧（工作台待办链接 `#/orders?status=paid` 依赖它）
+    expect(ids(await adminFetch(s, 'GET', '/api/v1/admin/orders?status=paid'))).toEqual(['o-paid']);
+    await s.close();
+  });
+
+  it('🔴 status 含空段或非法段 → 40001 status_invalid（不悄悄丢掉那一段）', async () => {
+    const s = await buildServer();
+    for (const bad of ['paid,', 'paid,nope', ',paid', '']) {
+      const r = await adminFetch(s, 'GET', `/api/v1/admin/orders?status=${bad}`);
+      expect(r.json['code'], bad).toBe(40001);
+    }
+    expect(s.sink.lines.join('\n')).toContain('status_invalid');
+    await s.close();
+  });
+
+  it('🔴 created_from / created_to 按 JST 日界、两端都含（日界两侧各一单）', async () => {
+    const s = await buildServer();
+    const at: ReadonlyArray<readonly [string, string]> = [
+      ['o-1006-late', '2026-10-06T14:59:59.999Z'], // JST 10-06 23:59:59.999
+      ['o-1007-early', '2026-10-06T15:00:00.000Z'], // JST 10-07 00:00
+      ['o-1007-late', '2026-10-07T14:59:59.999Z'], // JST 10-07 23:59:59.999
+      ['o-1008-early', '2026-10-07T15:00:00.000Z'], // JST 10-08 00:00
+    ];
+    for (const [id, ts] of at) {
+      await seedOrder({ id });
+      await db`update orders set created_at = ${new Date(ts)} where id = ${id}`;
+    }
+    const q = (qs: string) => adminFetch(s, 'GET', `/api/v1/admin/orders?${qs}`);
+    const day = await q('created_from=2026-10-07&created_to=2026-10-07');
+    expect(ids(day)).toEqual(['o-1007-early', 'o-1007-late']);
+    expect(day.json['total']).toBe(2);
+    expect(ids(await q('created_from=2026-10-07'))).toEqual([
+      'o-1007-early',
+      'o-1007-late',
+      'o-1008-early',
+    ]);
+    expect(ids(await q('created_to=2026-10-07'))).toEqual([
+      'o-1006-late',
+      'o-1007-early',
+      'o-1007-late',
+    ]);
+    // 与状态 / 关键词叠加（AND，不是 OR）
+    expect(
+      ids(await q('created_from=2026-10-07&created_to=2026-10-07&keyword=NO-o-1007-l')),
+    ).toEqual(['o-1007-late']);
+    expect(ids(await q('created_from=2026-10-07&status=shipped'))).toEqual([]);
+    await s.close();
+  });
+
+  it('🔴 日期非法 / 不存在的日 / 起点晚于终点 → 40001，reason 指明哪一端', async () => {
+    const s = await buildServer();
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['created_from=2026-02-30', 'created_from_invalid'],
+      ['created_from=2026-10-07T00:00:00Z', 'created_from_invalid'],
+      ['created_from=', 'created_from_invalid'],
+      ['created_to=yesterday', 'created_to_invalid'],
+      ['created_from=2026-10-08&created_to=2026-10-07', 'created_range_invalid'],
+      // 重复参数（Express 解析成数组）不是合法日期
+      ['created_from=2026-10-01&created_from=2026-10-02', 'created_from_invalid'],
+    ];
+    for (const [qs, reason] of cases) {
+      const r = await adminFetch(s, 'GET', `/api/v1/admin/orders?${qs}`);
+      expect(r.json['code'], qs).toBe(40001);
+      expect(s.sink.lines.join('\n'), qs).toContain(reason);
+    }
+    await s.close();
+  });
+});
+
 describe('GET /admin/orders/{id}（详情）', () => {
   it('存在 → 200 且带 items / payments / events 与地址', async () => {
     const s = await buildServer();

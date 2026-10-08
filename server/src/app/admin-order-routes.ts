@@ -22,6 +22,9 @@
  *              "订单已迁 refunding、却拿不到 provider"，永久卡单（B8 / AJ-192）。
  * @limitation 二：测试单（is_test）默认不列；`include_test=true` 才列（契约 0.6.32 先开参数、再接路由，剩余清单 3-4）。
  *              "按单号搜测试单"不受影响（keyword 会绕过 is_test 过滤，见 `orders-admin.ts` @limitation 三）。
+ * @limitation 二½（AJ-400，契约 0.6.44）：列表的 `status` 可逗号分隔多选；`created_from` / `created_to` 是 JST 日历日、两端都含，
+ *              解析与日界换算只在 shared `order-list-filter.ts`。CSV 导出（admin-export-routes）是**另一条 SQL**、不共用这组参数，
+ *              本次不接日期筛选（导出不分页，接之前要先定区间跨度上限）。
  * @limitation 三：改址后的快照 `id` 恒为 **null**：它表示"这条地址来自哪个地址簿条目"，
  *              而管理员手改出来的地址**不属于任何一条地址簿记录**——
  *              沿用旧 id 会让快照声称自己等于一个它已经不等于的地址。
@@ -47,7 +50,7 @@ import { trackingNoRecognized, withTrackingUrl } from '../domain/tracking.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
-import { ORDER_STATUS } from '@waselect/shared';
+import { parseJstDateRange, parseOrderStatusList } from '@waselect/shared';
 import { asOrderStatus } from '../domain/order.js';
 import {
   ADMIN_NOTE_MAX_LENGTH,
@@ -228,6 +231,16 @@ function toAdminOrder(
   };
 }
 
+/**
+ * 查询参数 → 单个字符串；没给 → undefined。
+ * @why 重复参数被 Express 解析成数组，这里把它变成一个**必然非法**的值（`'\u0000'`）交给下游判错，
+ *      而不是取第一个——"取第一个"会让 `?created_from=a&created_from=b` 静默按 a 筛。
+ */
+function asQueryString(v: unknown): string | undefined {
+  if (v === undefined) return undefined;
+  return typeof v === 'string' ? v : '\u0000';
+}
+
 /** 分页参数校验（契约：page 默认 1，size 默认 20、最大 100）。 */
 function readPaging(q: { page?: unknown; size?: unknown }): { page: number; size: number } {
   const page = q.page === undefined ? 1 : Number(q.page);
@@ -251,6 +264,8 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           page?: unknown;
           size?: unknown;
           include_test?: unknown;
+          created_from?: unknown;
+          created_to?: unknown;
         };
         const { page, size } = readPaging(q);
         // 剩余清单 3-4（契约 0.6.32）：只认 'true' / 'false'，其它 → 40001（不静默当成"不含"）
@@ -262,10 +277,18 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           throw new AppError(40001, { reason: 'include_test_invalid' });
         }
         const includeTest = q.include_test === 'true';
-        const status = q.status === undefined ? undefined : String(q.status);
-        if (status !== undefined && !(ORDER_STATUS as readonly string[]).includes(status)) {
-          throw new AppError(40001, { reason: 'status_invalid' });
-        }
+        // AJ-400（契约 0.6.44）：逗号分隔的多状态（页签"售后·退款" = refunding,refunded）。
+        // ⚠️ 重复参数（`?status=a&status=b`）Express 解析成数组——不是 string 一律非法，不去猜拼接方式。
+        const statuses =
+          q.status === undefined
+            ? undefined
+            : typeof q.status === 'string'
+              ? parseOrderStatusList(q.status)
+              : null;
+        if (statuses === null) throw new AppError(40001, { reason: 'status_invalid' });
+        // AJ-400：下单日期（JST 日历日、两端都含）；日界换算只在 shared 里做一次
+        const range = parseJstDateRange(asQueryString(q.created_from), asQueryString(q.created_to));
+        if (!range.ok) throw new AppError(40001, { reason: range.reason });
         // AJ-360：与公开 `/products` 同口径挡一次长度（同一个常量；CAT2-07）。
         // 量的是**原始输入**（trim 之前）：上限要框住"客户端能送进来多少"，
         // 而不是"去掉空格后还剩多少"——后者会让"64 字 + 一万空格"照样进 SQL。
@@ -277,8 +300,10 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         const { items, total } = await listAdminOrders(deps.db, {
           page,
           size,
-          ...(status !== undefined ? { status } : {}),
+          ...(statuses !== undefined ? { statuses } : {}),
           ...(rawKw !== undefined && rawKw !== '' ? { keyword: rawKw } : {}),
+          ...(range.from !== null ? { createdFrom: range.from } : {}),
+          ...(range.to !== null ? { createdTo: range.to } : {}),
           includeTest,
         });
         // 行项目**一次批量**取（N+1 的反面）：`listOrderItemsFor` 一条 `in (…)` 拿全部，
