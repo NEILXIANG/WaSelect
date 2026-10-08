@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from '../../server/src/adapters/db.js';
 import { closeDb } from '../../server/src/adapters/db.js';
-import { ensureTestDb, runMigrations, testDb } from './test-db.js';
+import { ensureTestDb, resetTestDb, runMigrations, testDb } from './test-db.js';
 
 /**
  * 迁移文件名（不含扩展名），即 `pgmigrations.name`。
@@ -43,6 +43,11 @@ let db: Db;
 beforeAll(async () => {
   await ensureTestDb();
   db = testDb();
+  // 先清业务数据：别的 db 测试文件会留下"关税未知"（duty_jpy IS NULL）的订单，
+  // 而 026 的 down 遇到这种单会**按设计**拒绝回滚（见本文件末尾 026 用例）⇒ 本文件红不红取决于文件执行顺序。
+  // 复现（2026-10-07 实测）：先单独跑 order-mail.db.test.ts（剩 1 单 duty_jpy IS NULL），再跑本文件 → 2 红；
+  // 本文件测的是 schema 往返，不是"带着残留数据回滚"——后者由 026 用例专门造数据去测。
+  await resetTestDb(db);
 }, 30_000);
 
 afterAll(async () => {
