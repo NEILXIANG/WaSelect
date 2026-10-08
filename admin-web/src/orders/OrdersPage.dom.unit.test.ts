@@ -325,3 +325,53 @@ describe('订单列表：总数变少时拉回最后一页（扫描 A-02）', ()
     expect(gets().at(-1)?.path).toContain('page=1');
   });
 });
+
+/**
+ * AJ-411 浏览器验收（2026-10-09）：改版后导航变宽，物流列 "Japan Post EMS / EM…JP 查件" 被挤成 4 行、
+ * 采购信息挤成 4–7 行，一屏只剩 3 单。改为：物流两行不折行（运单号等宽）、采购信息悬停看全文。
+ */
+describe('订单列表：物流列分两行、采购信息有全文提示（AJ-411 验收）', () => {
+  it('承运商与运单号各占一行，查件链接跟在运单号后；采购信息单元格 title 是完整文本', async () => {
+    calls = [];
+    apiImpl = async (req: Call): Promise<unknown> => {
+      calls.push(req);
+      return {
+        items: [
+          {
+            order_id: 'o-1',
+            order_no: '261009-30YX28',
+            status: 'shipped',
+            total_jpy: 16800,
+            created_at: '2026-10-08T17:51:00Z',
+            recipient: 'Kenji Tanaka',
+            carrier: 'Japan Post EMS',
+            tracking_no: 'EM300000001JP',
+            tracking_url: 'https://trackings.post.japanpost.jp/x',
+            items: [
+              {
+                title_ja: '新潟産コシヒカリ 無洗米 5kg',
+                jan_code: '4901234567890',
+                purchase_source: '新潟 JA',
+              },
+            ],
+          },
+        ],
+        total: 1,
+      };
+    };
+    mounted = await mount(createElement(Harness, { initial: parseHash('#/orders') }));
+    await flush();
+    const el = mounted.el;
+    const lines = [...el.querySelectorAll('tbody td.ship-cell > div')].map((d) =>
+      d.textContent?.trim(),
+    );
+    expect(lines).toEqual(['Japan Post EMS', 'EM300000001JP 查件']);
+    expect(el.querySelector('tbody td.ship-cell > div.mono')?.textContent).toContain(
+      'EM300000001JP',
+    );
+    const purchase = el.querySelector('tbody td.purchase-cell');
+    expect(purchase?.getAttribute('title')).toBe(
+      [...(purchase?.querySelectorAll('div') ?? [])].map((d) => d.textContent).join('\n'),
+    );
+  });
+});

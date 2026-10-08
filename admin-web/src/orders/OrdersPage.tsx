@@ -444,7 +444,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
                   </Badge>
                 ))}
               </td>
-              <td className="purchase-cell">
+              <td className="purchase-cell" title={row.purchaseLines.join('\n')}>
                 {row.purchaseLines.length === 0 ? (
                   '—'
                 ) : (
@@ -455,19 +455,26 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
                   </>
                 )}
               </td>
-              <td>{row.totalText}</td>
-              <td className="muted">{row.createdText}</td>
+              <td className="cell-nowrap">{row.totalText}</td>
+              <td className="muted cell-nowrap">{row.createdText}</td>
               <td>{row.recipientText}</td>
-              <td className="muted">
-                {row.shipText === '' ? '—' : row.shipText}
-                {row.trackingUrl !== '' && (
-                  <>
-                    {' '}
-                    <a href={row.trackingUrl} target="_blank" rel="noreferrer">
-                      查件
-                    </a>
-                  </>
-                )}
+              {/* 承运商与运单号各占一行、不折行：原先 "Japan Post EMS / EM…JP 查件" 被挤成 4 行（2026-10-09 验收） */}
+              <td className="muted ship-cell">
+                {row.shipText === ''
+                  ? '—'
+                  : row.shipText.split(' / ').map((part, i) => (
+                      <div key={i} className={i === 1 ? 'mono' : undefined}>
+                        {part}
+                        {i === row.shipText.split(' / ').length - 1 && row.trackingUrl !== '' && (
+                          <>
+                            {' '}
+                            <a href={row.trackingUrl} target="_blank" rel="noreferrer">
+                              查件
+                            </a>
+                          </>
+                        )}
+                      </div>
+                    ))}
               </td>
               <td>
                 {/* N12：待发货页签每行直接发货（同一张发货表单 ShipForm，闸门与校验不另写） */}
