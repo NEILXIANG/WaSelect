@@ -34,7 +34,7 @@ const ACTIONS: ReadonlyArray<{ key: ActionKey; button: string; title: string }> 
   { key: 'ship', button: '发货…', title: '发货' },
   { key: 'refund', button: '全额退款…', title: '全额退款（原币退，不可撤销）' },
   { key: 'partial', button: '部分退款…', title: '部分退款 / 售后退款' },
-  { key: 'release', button: '解除拒付限制…', title: '拒付限制（退款 40907 / 发货被拦）' },
+  { key: 'release', button: '解除拒付限制…', title: '解除拒付限制（退款与发货已被锁）' },
   { key: 'address', button: '改址…', title: '发货前改址' },
   { key: 'fix', button: '订单修正…', title: '取消订单 / 修改运单号' },
 ];

@@ -2,6 +2,7 @@
 /**
  * 部分退款面板（AJ-383）的渲染 + 交互：换算后的最小单位真的进了请求体、在途那一笔能同步。
  */
+import { pressEnter } from '../testing/keys.js';
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
@@ -105,8 +106,9 @@ describe('PartialRefunds', () => {
      *    写成后者的话，把额度校验整段删掉测试照样全绿（缺陷注入已验证）。
      *    真正的行为差别是：**没有进入两步确认**，也就是「确认部分退款」按钮不该出现。
      */
-    expect(el.querySelector('p.error')?.textContent).toContain('最多可退');
-    expect(el.querySelector('p.error')?.textContent).toContain('81.60 USD');
+    // AJ-410 / N29：文案改为「最多还能退 … 美元」（原「最多可退 … USD」）
+    expect(el.querySelector('p.error')?.textContent).toContain('最多还能退');
+    expect(el.querySelector('p.error')?.textContent).toContain('81.60 美元');
     expect(button(el, '确认部分退款')).toBeNull();
   });
 
@@ -222,5 +224,37 @@ describe('PartialRefunds：退款原因预设（AJ-400）', () => {
       amount_minor: 100,
       reason: '其它：海关退运',
     });
+  });
+});
+
+/** AJ-410 / N28～N30：新手可用性。 */
+describe('PartialRefunds：金额标签、可退额度、过期红字（AJ-410）', () => {
+  it('一打开就显示"最多还能退 81.60 美元"；金额标签写中文币种，不写 USD', async () => {
+    const { el } = await open();
+    expect(el.textContent).toContain('最多还能退 81.60 美元');
+    expect(el.textContent).toContain('金额（美元，最多两位小数）');
+    expect(el.textContent).not.toContain('进审计台账');
+  });
+
+  it('🔴 选了退款原因后，旧的「请选择退款原因」立刻消失（N30）', async () => {
+    const { el } = await open();
+    await type(el.querySelector('input[name="partial-amount"]'), '10.50');
+    await click(button(el, '部分退款'));
+    expect(el.querySelector('p.error')?.textContent).toBe('请选择退款原因');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '缺货');
+    expect(el.querySelector('p.error')).toBeNull();
+  });
+
+  it('🔴 在金额框按回车 = 点「部分退款」（打开确认）；确认按钮上按回车不提交（N19 / N21）', async () => {
+    const { el, calls } = await open();
+    await type(el.querySelector('input[name="partial-amount"]'), '10.50');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '缺货');
+    await pressEnter(el.querySelector('input[name="partial-amount"]'));
+    const confirm = button(el, '确认部分退款');
+    expect(confirm).not.toBeNull();
+    expect(el.textContent).toContain('请用鼠标点击「确认部分退款」按钮');
+    const prevented = await pressEnter(confirm);
+    expect(prevented).toBe(true);
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
   });
 });

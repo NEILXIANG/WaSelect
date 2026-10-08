@@ -15,7 +15,14 @@
  */
 import type { ReactNode } from 'react';
 import { CATEGORY_LABELS, PRODUCT_CATEGORY, type ProductForm } from './view.js';
-import { Field, FreeTagInput, ImagePicker, TagPicker } from './ProductFormParts.js';
+import {
+  Field,
+  FreeTagInput,
+  ImagePicker,
+  productFieldId,
+  RequiredMark,
+  TagPicker,
+} from './ProductFormParts.js';
 
 /** 一张分组卡片（标题 + 内容）。 */
 export function FormCard({ title, children }: { title: string; children: ReactNode }) {
@@ -51,6 +58,8 @@ export function ProductMainColumn(p: MainColumnProps) {
       <FormCard title="基本信息">
         <Field
           label="商品名（面向买家）"
+          required
+          fieldKey="title"
           value={form.title}
           onChange={(v) => set('title', v)}
           error={errors['title'] ?? ''}
@@ -58,6 +67,7 @@ export function ProductMainColumn(p: MainColumnProps) {
         />
         <Field
           label="日文品名（采购用）"
+          fieldKey="titleJa"
           value={form.titleJa}
           onChange={(v) => set('titleJa', v)}
           error={errors['titleJa'] ?? ''}
@@ -65,6 +75,7 @@ export function ProductMainColumn(p: MainColumnProps) {
         />
         <Field
           label="商品描述"
+          fieldKey="description"
           multiline
           value={form.description}
           onChange={(v) => set('description', v)}
@@ -72,6 +83,7 @@ export function ProductMainColumn(p: MainColumnProps) {
         {/* 编辑口径（020）：印在买家卡片上的内容，与侧栏的合规标签不是一回事 */}
         <Field
           label="为什么值得买（买家可见，一句带判断的话）"
+          fieldKey="editorialWhy"
           value={form.editorialWhy}
           onChange={(v) => set('editorialWhy', v)}
           error={errors['editorialWhy'] ?? ''}
@@ -79,6 +91,7 @@ export function ProductMainColumn(p: MainColumnProps) {
         />
         <Field
           label="产地 / 工房 / 匠人（买家可见）"
+          fieldKey="editorialMaker"
           value={form.editorialMaker}
           onChange={(v) => set('editorialMaker', v)}
           error={errors['editorialMaker'] ?? ''}
@@ -107,14 +120,17 @@ export function ProductMainColumn(p: MainColumnProps) {
       <FormCard title="价格与库存">
         <div className="row2">
           <Field
-            label="售价（円）"
+            label="售价（日元）"
+            required
+            fieldKey="priceJpy"
             type="number"
             value={form.priceJpy}
             onChange={(v) => set('priceJpy', v)}
             error={errors['priceJpy'] ?? ''}
           />
           <Field
-            label="采购成本（円，可留空）"
+            label="采购成本（日元，可留空）"
+            fieldKey="costJpy"
             type="number"
             value={form.costJpy}
             onChange={(v) => set('costJpy', v)}
@@ -122,6 +138,8 @@ export function ProductMainColumn(p: MainColumnProps) {
           />
           <Field
             label="重量（克）"
+            required
+            fieldKey="weightG"
             type="number"
             value={form.weightG}
             onChange={(v) => set('weightG', v)}
@@ -129,6 +147,8 @@ export function ProductMainColumn(p: MainColumnProps) {
           />
           <Field
             label="库存"
+            required
+            fieldKey="stock"
             type="number"
             value={form.stock}
             onChange={(v) => set('stock', v)}
@@ -139,22 +159,28 @@ export function ProductMainColumn(p: MainColumnProps) {
 
       <FormCard title="报关与合规">
         <Field
-          label="英文报关品名（必填，D-39）"
+          label="英文报关品名"
+          required
+          fieldKey="customsDescEn"
+          hint="海关看的英文品名，写清是什么东西，例：Cleansing oil 200ml"
           value={form.customsDescEn}
           onChange={(v) => set('customsDescEn', v)}
           error={errors['customsDescEn'] ?? ''}
           placeholder="例：Cleansing oil 200ml"
         />
         <Field
-          label="HS 编码（必填）"
+          label="HS 编码"
+          required
+          fieldKey="hsCode"
+          hint="海关商品编码，6–10 位数字，例：3304.99；不清楚可问采购或查日本税关网站"
           value={form.hsCode}
           onChange={(v) => set('hsCode', v)}
           error={errors['hsCode'] ?? ''}
           placeholder="例：3304.99"
         />
-        {/* 原产地只读：MVP 只接受 JP（D-42/D-43），让它可改只会造出必然被拒的请求 */}
+        {/* 原产地只读：目前只接受 JP（D-42/D-43），让它可改只会造出必然被拒的请求 */}
         <Field
-          label="原产地（MVP 固定 JP）"
+          label="原产地（目前只支持日本 JP）"
           value={form.originCountry}
           onChange={() => {}}
           readOnly
@@ -176,8 +202,12 @@ export function ProductSideColumn({ form, set, errors, statusCard }: SideColumnP
       <FormCard title="状态">{statusCard}</FormCard>
       <FormCard title="分类与标签">
         <label className="field">
-          <span className="label">分类</span>
+          <span className="label">
+            分类
+            <RequiredMark />
+          </span>
           <select
+            id={productFieldId('category')}
             className="input"
             value={form.category}
             onChange={(e) => set('category', e.target.value)}
@@ -201,6 +231,7 @@ export function ProductSideColumn({ form, set, errors, statusCard }: SideColumnP
       <FormCard title="采购">
         <Field
           label="JAN 码"
+          fieldKey="janCode"
           value={form.janCode}
           onChange={(v) => set('janCode', v)}
           error={errors['janCode'] ?? ''}
@@ -208,6 +239,7 @@ export function ProductSideColumn({ form, set, errors, statusCard }: SideColumnP
         />
         <Field
           label="采购渠道"
+          fieldKey="purchaseSource"
           value={form.purchaseSource}
           onChange={(v) => set('purchaseSource', v)}
           error={errors['purchaseSource'] ?? ''}

@@ -36,6 +36,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
+import { TraceLine } from './trace.js';
 
 /** 成功 / 信息类提示的自动消失时长（毫秒）。 */
 export const TOAST_AUTO_DISMISS_MS = 3000;
@@ -158,11 +159,8 @@ function ToastRow({
   return (
     <div className={`toast toast-${toast.kind}`} data-kind={toast.kind}>
       <span className="toast-text">{toast.text}</span>
-      {hasTrace && (
-        <span className="toast-trace">
-          报障码 <span className="selectable">{toast.traceId}</span>
-        </span>
-      )}
+      {/* 报障码单独一行小灰字、说清用途（AJ-410 / N5：混在句子里新手会以为那串编号就是错误本身） */}
+      {hasTrace && <TraceLine traceId={toast.traceId} />}
       <button
         type="button"
         className="toast-close"

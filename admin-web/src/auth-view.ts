@@ -1,12 +1,19 @@
 /**
- * 职责：登录与会话相关的**视图纯函数**（登录错误文案、口令长度预检、JWT 过期提醒）。
+ * 职责：登录与会话相关的**视图纯函数**（登录错误文案、密码长度预检、JWT 过期提醒）。
+ *
+ * @why 界面一律叫「密码」「手机验证码」（AJ-410 / N5、N2）：标签写密码、报错写口令，新手会以为是两样东西；
+ *      「二次验证码」对新手是黑话，它其实是手机验证器 App 上的 6 位数字。
  *
  * @why 从 LoginForm / App 抽出：文案分支与"什么时候提醒快过期"都是可测的纯逻辑，
  *      留在组件里只能靠真机点（第三轮缺口 P1-7 / P2-43）。
  *
  * @see ./LoginForm.tsx；./App.tsx；packages/shared/src/limits.ts（ADMIN_PASSWORD_MIN_LENGTH）
  */
-import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
+import {
+  ADMIN_LOGIN_LOCK_MINUTES,
+  ADMIN_LOGIN_MAX_FAILURES,
+  ADMIN_PASSWORD_MIN_LENGTH,
+} from '@waselect/shared';
 import { ApiError } from './api/errors.js';
 
 /**
@@ -26,31 +33,51 @@ export function loginPrecheck(email: string, password: string, totp = ''): strin
   if (mail === '') return '请填写邮箱';
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) return '邮箱格式不正确（形如 name@example.com）';
   if (password.length < ADMIN_PASSWORD_MIN_LENGTH)
-    return `口令至少 ${ADMIN_PASSWORD_MIN_LENGTH} 位`;
+    return `密码至少 ${ADMIN_PASSWORD_MIN_LENGTH} 位`;
   // P1-5：二次验证码可留空（账号没开 TOTP）；填了就得是 6 位数字——形状不对服务端回 40001，先在这里拦
   if (totp !== '' && !/^\d{6}$/.test(totp))
-    return '二次验证码是 6 位数字（验证器 App 上显示的那串）';
+    return '手机验证码是 6 位数字（手机验证器 App 上显示的那串）';
   return '';
 }
 
+/** 登录失败的三段展示：红字原因、（可选）提醒、报障码（单独一行小灰字，AJ-410 / N5）。 */
+export interface LoginErrorView {
+  text: string;
+  /** 输错时的锁定提醒（N6）；'' = 不提醒。 */
+  hint: string;
+  /** 报障码；'' = 没有。 */
+  traceId: string;
+}
+
 /**
- * 登录失败 → 给管理员看的文案（带报障码）。
- * @why 40101 在登录接口上的含义是"邮箱或口令不对"，而不是通用注册表里的"未登录或登录已过期"——
+ * 登录失败 → 给管理员看的文案。
+ * @why 40101 在登录接口上的含义是"邮箱或密码不对"，而不是通用注册表里的"未登录或登录已过期"——
  *      照搬后者，管理员会以为是会话问题去清缓存（P2-43）。
  * @why 42901 读 `retry-after`（秒）换算成分钟（向上取整）；头读不到时只说"稍后再试"，不编数字。
+ * @why 报障码不再拼进红字（AJ-410 / N5）：由调用方用 `TraceLine` 单独一行显示。
+ * @why 输错时提醒"连续输错会锁定"（N6），数字来自 shared 常量（与服务端同一个）；
+ *      只说**规则**，不说"还剩几次"——后者会给暴力破解者计数（LoginForm @limitation 二）。
  */
-export function loginErrorText(err: unknown): string {
-  if (!(err instanceof ApiError)) return '登录失败，请稍后重试';
-  const tail = err.traceId !== '' ? `（报障码：${err.traceId}）` : '';
-  // 开了 TOTP 的账号：口令对、码错也是同一个 40101（服务端刻意不区分，不泄露"口令是对的"）
-  if (err.code === 40101) return `邮箱、口令或二次验证码不正确${tail}`;
+export function loginErrorText(err: unknown): LoginErrorView {
+  if (!(err instanceof ApiError)) return { text: '登录失败，请稍后重试', hint: '', traceId: '' };
+  const traceId = err.traceId;
+  // 开了手机验证的账号：密码对、码错也是同一个 40101（服务端刻意不区分，不泄露"密码是对的"）
+  if (err.code === 40101) {
+    return {
+      text: '邮箱、密码或手机验证码不正确',
+      hint: `请看清再输：连续输错 ${ADMIN_LOGIN_MAX_FAILURES} 次会暂时锁定 ${ADMIN_LOGIN_LOCK_MINUTES} 分钟`,
+      traceId,
+    };
+  }
   if (err.code === 42901) {
     const sec = err.retryAfterSec;
-    return sec !== undefined
-      ? `尝试过多，请约 ${Math.max(1, Math.ceil(sec / 60))} 分钟后再试${tail}`
-      : `尝试过多，请稍后再试${tail}`;
+    const text =
+      sec !== undefined
+        ? `输错次数太多，已暂时锁定，请约 ${Math.max(1, Math.ceil(sec / 60))} 分钟后再试`
+        : '输错次数太多，已暂时锁定，请稍后再试';
+    return { text, hint: '', traceId };
   }
-  return `${err.message}${tail}`;
+  return { text: err.message, hint: '', traceId };
 }
 
 /**

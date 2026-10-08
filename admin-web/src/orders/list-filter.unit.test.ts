@@ -19,18 +19,39 @@ describe('状态页签', () => {
     }
   });
 
-  it('顺序不同的同一集合仍认作该页签；工作台的单状态链接（refunding）不高亮任何页签', () => {
+  // AJ-410 / N27：行为变更——单状态链接属于某个页签时高亮那个页签（原为不高亮任何页签），并标 narrowed
+  it('顺序不同的同一集合仍认作该页签；单状态链接（refunding / shipped）高亮所属页签并标"只显示一部分"', () => {
     expect(readStatusFilter('refunded,refunding')).toEqual({
       statuses: ['refunded', 'refunding'],
       tabKey: 'after_sale',
+      narrowed: false,
     });
-    expect(readStatusFilter('paid').tabKey).toBe('to_ship');
-    expect(readStatusFilter('refunding')).toEqual({ statuses: ['refunding'], tabKey: null });
+    expect(readStatusFilter('paid')).toEqual({
+      statuses: ['paid'],
+      tabKey: 'to_ship',
+      narrowed: false,
+    });
+    expect(readStatusFilter('refunding')).toEqual({
+      statuses: ['refunding'],
+      tabKey: 'after_sale',
+      narrowed: true,
+    });
+    expect(readStatusFilter('shipped')).toEqual({
+      statuses: ['shipped'],
+      tabKey: 'shipped',
+      narrowed: true,
+    });
+    // 跨页签的集合仍不高亮任何页签
+    expect(readStatusFilter('paid,shipped')).toEqual({
+      statuses: ['paid', 'shipped'],
+      tabKey: null,
+      narrowed: false,
+    });
   });
 
   it('认不出的 status 回落「全部」（不把坏值发给服务端）', () => {
-    expect(readStatusFilter('foo')).toEqual({ statuses: [], tabKey: 'all' });
-    expect(readStatusFilter('paid,')).toEqual({ statuses: [], tabKey: 'all' });
+    expect(readStatusFilter('foo')).toEqual({ statuses: [], tabKey: 'all', narrowed: false });
+    expect(readStatusFilter('paid,')).toEqual({ statuses: [], tabKey: 'all', narrowed: false });
   });
 });
 

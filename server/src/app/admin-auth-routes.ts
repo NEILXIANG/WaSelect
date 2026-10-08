@@ -56,14 +56,21 @@ import {
   loginAttemptSourceKey,
   peekLoginAttemptLock,
 } from '../adapters/admin-auth.js';
-import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
+import {
+  ADMIN_LOGIN_LOCK_MINUTES,
+  ADMIN_LOGIN_MAX_FAILURES,
+  ADMIN_PASSWORD_MIN_LENGTH,
+} from '@waselect/shared';
 import { PASSWORD_MAX_CHARS, signToken, verifyPassword, type AuthConfig } from './auth.js';
 import type { CachedIdentityCheck } from '../adapters/identity.js';
 import { ipKeyForLogin } from './rate-limit.js';
 import { verifyTotp } from '../adapters/totp.js';
 
-/** 同一邮箱、**同一来源**连续失败多少次锁定该来源（D-38 ⑤：5 次；AJ-243 起按来源计）。 */
-export const ADMIN_LOGIN_MAX_FAILURES = 5;
+/**
+ * 同一邮箱、**同一来源**连续失败次数上限与锁定时长：唯一真源在 shared（AJ-410，管理端登录页要据此提醒），
+ * 这里原样 re-export，服务端既有引用（含 db 用例）不变。
+ */
+export { ADMIN_LOGIN_LOCK_MINUTES, ADMIN_LOGIN_MAX_FAILURES };
 /**
  * 同一邮箱、**不分来源**合计失败多少次锁定全部来源（AJ-243）。
  * @why 来源桶让单个 IP 只能锁住自己，但也让"换 IP 慢慢试"不再有总上限；这一层把总数封顶。
@@ -71,8 +78,6 @@ export const ADMIN_LOGIN_MAX_FAILURES = 5;
  *      对口令爆破是 30 次 / 15 分钟 ≈ 每天 2,880 次，对 ≥12 位口令可忽略。
  */
 export const ADMIN_LOGIN_GLOBAL_MAX_FAILURES = 30;
-/** 锁多久（分钟，D-38 ⑤：15 分钟）。 */
-export const ADMIN_LOGIN_LOCK_MINUTES = 15;
 /**
  * 计数窗口（分钟，OPS3-04）：早于"现在 − 窗口"的失败**不再计入** `failed_count`。
  *

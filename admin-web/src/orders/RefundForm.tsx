@@ -22,6 +22,7 @@ import type { OrderActionFormProps } from './ShipForm.js';
 import { fullRefundErrorNotice, refundErrors, refundGate, toRefundBody } from './view.js';
 import { composeRefundReason, emptyRefundReason } from './refund-reason.js';
 import { RefundReasonField } from './RefundReasonField.js';
+import { enterClicksPrimary } from '../ui/keys.js';
 
 /** 预设 + 说明 → 原有校验的输入形状；拼不出来时带上提示，由 check 统一报。 */
 function checkReason(input: ReturnType<typeof emptyRefundReason>): {
@@ -106,17 +107,23 @@ export function RefundForm({
     }
     setDialog({
       title: '全额退款：原币退，不可撤销',
-      body: `订单 ${order.order_no ?? id}，合计 ${moneyText(order.total_jpy)}。退款原因会进审计台账。`,
+      body: `订单 ${order.order_no ?? id}，合计 ${moneyText(order.total_jpy)}。退款原因会记录下来。`,
       confirmText: '确认退款',
       danger: true,
     });
   };
 
   return (
-    <div className="form">
+    <div className="form" onKeyDown={enterClicksPrimary}>
       {/* 硬上限来自 shared（B7 / AJ-191）：超长会被机构拒且订单卡在退款中——按拼好后的整串校验 */}
       <RefundReasonField value={refund} onChange={setRefund} />
-      <button type="button" className="btn btn-danger" disabled={!gate.ok || busy} onClick={ask}>
+      <button
+        type="button"
+        className="btn btn-danger"
+        data-primary-action
+        disabled={!gate.ok || busy}
+        onClick={ask}
+      >
         退款
       </button>
       {/* 放行时也可能带提示（refunding = 再查询/重发，KD-12） */}

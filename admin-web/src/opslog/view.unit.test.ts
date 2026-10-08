@@ -58,8 +58,13 @@ describe('auditRows：中文操作名与操作人邮箱（三端联动 UI 模拟
 });
 
 describe('reconciliationView', () => {
-  it('没跑过 → 明确说"还没有对账记录"', () => {
-    expect(reconciliationView(null)).toEqual({ headline: '还没有对账记录', ok: false, lines: [] });
+  // AJ-410：「对账」改白话「自动核对」
+  it('没跑过 → 明确说"还没有自动核对记录"', () => {
+    expect(reconciliationView(null)).toEqual({
+      headline: '还没有自动核对记录',
+      ok: false,
+      lines: [],
+    });
   });
 
   it('零异常 → ok，标题带 JST 时间', () => {
@@ -68,7 +73,11 @@ describe('reconciliationView', () => {
       counts: { stuck_refunds: 0 },
       samples: {},
     });
-    expect(v).toEqual({ headline: '最近一次对账 2026-10-06 03:00：无异常', ok: true, lines: [] });
+    expect(v).toEqual({
+      headline: '最近一次自动核对 2026-10-06 03:00：无异常',
+      ok: true,
+      lines: [],
+    });
   });
 
   it('🔴 有异常 → 只列非零类，中文类名 + 计数 + 取样 id；不认识的类名原样显示', () => {

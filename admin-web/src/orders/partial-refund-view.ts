@@ -61,6 +61,19 @@ export function parseAmountToMinor(
   return { ok: true, minor };
 }
 
+/** 币种的中文名（给运营看的金额标签用，AJ-410 / N28）；认不出的原样返回。 */
+export function currencyName(currency: string): string {
+  return (
+    ({ JPY: '日元', USD: '美元', CNY: '人民币' } as Record<string, string>)[currency] ?? currency
+  );
+}
+
+/** 1005 USD → "10.05 美元"（运营看的提示用中文币种名；记录行仍用 {@link formatMinor}）。 */
+export function formatMinorCn(minor: number, currency: string): string {
+  const plain = formatMinor(minor, currency);
+  return `${plain.slice(0, plain.length - currency.length)}${currencyName(currency)}`;
+}
+
 /** 1005 USD → "10.05 USD"；JPY 带千分位。 */
 export function formatMinor(minor: number, currency: string): string {
   const digits = digitsOf(currency);
@@ -87,14 +100,18 @@ export function partialRefundGate(order: unknown): Gate {
     return { ok: false, reason: '只有已付款 / 已发货 / 已签收 / 已完成的订单可以部分退款' };
   }
   if ((order as { has_dispute?: unknown }).has_dispute === true) {
-    return { ok: false, reason: '有拒付进行中，部分退款会被拒（40907）' };
+    return {
+      ok: false,
+      reason: '买家正在通过银行要回货款（拒付），现在不能退款；请先到「风控」页处理',
+    };
   }
   if (refundsOf(order).some((r) => IN_FLIGHT.has(String(r.status)))) {
     return { ok: false, reason: '已有一笔部分退款在途，请先点它的「同步」取回结果' };
   }
   const left = refundableMinor(order);
   if (left === null || left.minor < 1) return { ok: false, reason: '已没有可退金额' };
-  return { ok: true, reason: `最多可退 ${formatMinor(left.minor, left.currency)}` };
+  // AJ-410 / N29：抽屉一打开就看得到还能退多少（中文币种名）
+  return { ok: true, reason: `最多还能退 ${formatMinorCn(left.minor, left.currency)}` };
 }
 
 /**
@@ -123,9 +140,9 @@ export function partialRefundInputCheck(a: {
   if (left === null) return { ok: false, reason: '这笔订单没有已成功的支付记录，无法退款' };
   const parsed = parseAmountToMinor(a.amount, left.currency);
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
-  if (a.reason.trim() === '') return { ok: false, reason: '请填写退款原因（进审计台账）' };
+  if (a.reason.trim() === '') return { ok: false, reason: '请填写退款原因（会记录下来）' };
   if (parsed.minor > left.minor) {
-    return { ok: false, reason: `最多可退 ${formatMinor(left.minor, left.currency)}` };
+    return { ok: false, reason: `最多还能退 ${formatMinorCn(left.minor, left.currency)}` };
   }
   return { ok: true, minor: parsed.minor };
 }

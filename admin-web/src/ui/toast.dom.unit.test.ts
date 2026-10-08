@@ -12,6 +12,7 @@
  *
  * @see ./toast.tsx（@limitation 二 堆叠规则）；../../docs/管理后台对标分析-成熟电商平台-2026-10-08.md §8-1①
  */
+import { TRACE_HINT } from './trace.js';
 import { act, createElement, Fragment, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/errors.js';
@@ -140,7 +141,9 @@ describe('Toast：报障码与手动关闭', () => {
     const el = await open();
     await click(button(el, 'bad'));
     expect(el.querySelector('.toast-error')?.textContent ?? '').toContain('tr-42');
-    expect(el.querySelector('.toast-trace .selectable')?.textContent ?? '').toBe('tr-42');
+    // AJ-410 / N5：报障码单独一行、说清用途（原为 `.toast-trace` 里的「报障码 …」）
+    expect(el.querySelector('.trace-line .selectable')?.textContent ?? '').toBe('tr-42');
+    expect(el.querySelector('.trace-line')?.textContent ?? '').toContain(TRACE_HINT);
   });
 
   it('没有提示时不渲染浮层（空浮层会挡住页面右下角的按钮）', async () => {

@@ -153,6 +153,15 @@ describe('工作台：实收 / 已退 / 拒付', () => {
     expect(text).toContain('$81.00');
   });
 
+  /** AJ-410 / N8、N9：页面上不出现文档编号与行话；经营词旁边有白话解释。 */
+  it('不出现「§」「折算」「对账」；客单价 / 拒付带白话解释', async () => {
+    const el = await open();
+    const text = el.textContent ?? '';
+    for (const jargon of ['§', '折算', '对账']) expect(text).not.toContain(jargon);
+    expect(text).toContain('平均每单金额');
+    expect(text).toContain('买家通过银行或信用卡公司把钱要回去');
+  });
+
   it('没有退款 / 拒付时显示「无」（空数组不是"0 円"）', async () => {
     const el = await open();
     const text = el.textContent ?? '';
@@ -163,7 +172,8 @@ describe('工作台：实收 / 已退 / 拒付', () => {
 describe('工作台：待办点即跳到筛好的列表', () => {
   it('🔴 点「待发货」→ 跳到 `#/orders?status=paid`（附件 §3.1：待办每一项都可点直达）', async () => {
     const el = await open();
-    await click(button(el, '待发货 0'));
+    // AJ-410 / N7：按钮文字带「去处理 →」（原为「待发货 0」）
+    await click(button(el, '待发货 0 · 去处理 →'));
     expect(navigated).toHaveLength(1);
     expect(navigated[0]?.page).toBe('orders');
     expect(navigated[0]?.id).toBe('');

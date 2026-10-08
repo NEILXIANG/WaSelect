@@ -104,7 +104,7 @@ export function RatesPanel({ api }: RatesPanelProps) {
 
       {/* 三端联动模拟 2026-10-08：原先把 Markdown（反引号、双星号）原样显示在页面上 */}
       <p className="muted">
-        「重量上限」含本数：包裹重量取第一个 ≥ 它的档（向上取档，D-46）。保存是
+        「重量上限」含本数：包裹重量取第一个 ≥ 它的档（向上取档）。保存是
         <strong>整表替换</strong>
         ——表里删掉的档会从线上消失。
       </p>

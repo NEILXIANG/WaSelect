@@ -104,6 +104,7 @@ export function BatchSubmit({
       <button
         type="button"
         className="btn"
+        data-primary-action
         disabled={busy || (items.length === 0 && revealed)}
         onClick={() => {
           if (!revealed && skipped > 0) {

@@ -46,11 +46,11 @@ export const ACTION_LABELS: Readonly<Record<string, string>> = {
   'PUT /admin/ops/sales-pause': '停售 / 恢复接单',
   'PUT /admin/shipping-rates': '替换运费表',
   'POST /admin/fx': '维护汇率',
-  'GET /admin/exports/:kind': '导出 CSV',
+  'GET /admin/exports/:kind': '导出表格',
   'CLI admin.create': '命令行建管理员',
   'CLI admin.password.reset': '命令行改密',
-  'CLI admin.totp.enable': '开通二次验证',
-  'CLI admin.totp.disable': '关闭二次验证',
+  'CLI admin.totp.enable': '开通手机验证',
+  'CLI admin.totp.disable': '关闭手机验证',
 };
 
 export interface AuditRowView {
@@ -102,12 +102,13 @@ export interface ReconciliationView {
 }
 
 export function reconciliationView(run: ReconciliationRun | null): ReconciliationView {
-  if (run === null) return { headline: '还没有对账记录', ok: false, lines: [] };
+  if (run === null) return { headline: '还没有自动核对记录', ok: false, lines: [] };
   const when = formatJst(run.ran_at);
   const bad = Object.entries(run.counts).filter(([, n]) => n > 0);
-  if (bad.length === 0) return { headline: `最近一次对账 ${when}：无异常`, ok: true, lines: [] };
+  if (bad.length === 0)
+    return { headline: `最近一次自动核对 ${when}：无异常`, ok: true, lines: [] };
   return {
-    headline: `最近一次对账 ${when}：发现 ${String(bad.length)} 类异常，需要人工处理`,
+    headline: `最近一次自动核对 ${when}：发现 ${String(bad.length)} 类异常，需要人工处理`,
     ok: false,
     lines: bad.map(([k, n]) => {
       const ids = run.samples[k] ?? [];

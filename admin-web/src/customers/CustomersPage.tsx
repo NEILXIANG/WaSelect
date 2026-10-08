@@ -122,7 +122,7 @@ function CustomerList({
             <th>联系邮箱</th>
             <th>订单</th>
             <th>累计实付</th>
-            <th>最近下单（JST）</th>
+            <th>最近下单（日本时间）</th>
             <th>状态</th>
             <th>操作</th>
           </tr>

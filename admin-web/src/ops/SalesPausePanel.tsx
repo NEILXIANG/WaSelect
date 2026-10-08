@@ -51,7 +51,7 @@ export function SalesPausePanel({ api }: { api: AdminApi }) {
 
   const submit = async (): Promise<void> => {
     if (target === null) return;
-    if (reason.trim() === '') return setError('请填写原因（进审计台账）');
+    if (reason.trim() === '') return setError('请填写原因（会记录下来）');
     setBusy(true);
     setError('');
     try {

@@ -252,7 +252,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
             <th>图</th>
             <th>跳转</th>
             <th>状态</th>
-            <th>起止（JST）</th>
+            <th>起止（日本时间）</th>
             <th>操作</th>
           </tr>
         </thead>
@@ -408,7 +408,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
             />
           </label>
           <label className="field">
-            <span className="label">开始时间（JST，留空 = 立即）</span>
+            <span className="label">开始时间（日本时间，留空 = 立即）</span>
             <input
               className="input"
               type="datetime-local"
@@ -417,7 +417,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
             />
           </label>
           <label className="field">
-            <span className="label">结束时间（JST，留空 = 不结束）</span>
+            <span className="label">结束时间（日本时间，留空 = 不结束）</span>
             <input
               className="input"
               type="datetime-local"

@@ -450,7 +450,7 @@ export function productFormErrors(form: unknown): {
   }
   const weight = plainInt(f.weightG);
   if (weight === null || weight < 1)
-    errors['weightG'] = `重量必须是 ≥1 的整数（克，含包材口径见 D-42）${sciHint(f.weightG)}`;
+    errors['weightG'] = `重量必须是 ≥1 的整数（克）${sciHint(f.weightG)}`;
   // 上界与服务端 weight_too_large 同源（shared；工程缺口第二轮 §3.6 #1 起已为包材留出余量）
   else if (weight > PRODUCT_MAX_WEIGHT_G)
     errors['weightG'] =
@@ -459,13 +459,13 @@ export function productFormErrors(form: unknown): {
   if (f.stock.trim() === '') errors['stock'] = '库存必填（≥0 的整数；真的卖完了请填 0）';
   else if (plainInt(f.stock) === null) errors['stock'] = `库存必须是 ≥0 的整数${sciHint(f.stock)}`;
 
-  if (f.customsDescEn.trim() === '') errors['customsDescEn'] = '英文报关品名必填（D-39）';
+  if (f.customsDescEn.trim() === '') errors['customsDescEn'] = '英文报关品名必填';
   // 剩余清单 1-4（AJ-368）：与服务端 validateProductInput 同口径——所有商品必填，纯空白算没填
   if (f.hsCode.trim() === '') errors['hsCode'] = 'HS 编码必填（报关单与报关清单都要用）';
   else if (!hsCodeShapeOk(f.hsCode))
     errors['hsCode'] =
       'HS 编码只能是数字（可用点号分段），共 6–10 位数字，如 6912.00 或 3304995000';
-  if (f.originCountry !== 'JP') errors['originCountry'] = 'MVP 原产地只接受 JP（D-42/D-43）';
+  if (f.originCountry !== 'JP') errors['originCountry'] = '原产地目前只支持日本（JP）';
 
   // 禁售标签：shared 是真源，这里只做"勾了就报"（比"勾了提交被拒"早一步）
   const blocked = f.complianceTags.filter((t) =>
@@ -475,7 +475,7 @@ export function productFormErrors(form: unknown): {
   const unknown = f.complianceTags.filter(
     (t) => !(COMPLIANCE_TAG as readonly string[]).includes(t),
   );
-  if (unknown.length > 0) errors['complianceTags'] = `不在契约枚举内的标签：${unknown.join('、')}`;
+  if (unknown.length > 0) errors['complianceTags'] = `系统不认识的标签：${unknown.join('、')}`;
 
   // ── 文本列长度预检（工程缺口第二轮 §3.6 #2）────────────────────────────────
   // @why 上限从 shared 取（与列宽、服务端判定同源）。超长原先只能等提交被拒，拿到的是泛化 40001，

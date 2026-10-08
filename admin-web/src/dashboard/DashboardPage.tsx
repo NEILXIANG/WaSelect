@@ -8,7 +8,7 @@
  *      同一个数字有两条口径时，漂移的表现是"工作台写着 3、点进去列表只有 2 条"，
  *      而两边各自都自洽、没有任何一处会报错。复用 = 口径只有一份。
  *
- * @limitation 一：**円为主、USD 灰字辅显、标 ≈**（§8-2）。
+ * @limitation 一：**円为主、USD 灰字辅显、标 ≈**（对标分析 §8-2）。
  *              USD 只是"方便与 Stripe 后台 / 买家沟通"的换算，不是记账值；
  *              换算走 shared 的 `toMinor(toRateInt(rate), …)`——**唯一**换算入口，
  *              不在这里另写一次乘法（B43 那一类教训：写第二份迟早漂移）。
@@ -63,6 +63,17 @@ function moneyRowsText(rows: readonly MoneyByCurrency[] | undefined): string {
   return rows.map((m) => minorMoneyText(m.amount, m.currency)).join(' / ');
 }
 
+/**
+ * 经营词的白话解释（AJ-410 / N9）：卡片上一行小字常显 + 悬停提示。
+ * @why 只做悬停的话，新手不知道"可以悬停"；常显一行小字最稳。
+ */
+export const TERM_HINTS: Readonly<Record<string, string>> = {
+  客单价: '平均每单金额（销售额 ÷ 已付款订单数）',
+  实收: '买家实际付到店里的钱',
+  已退: '已经退还给买家的钱',
+  拒付: '买家通过银行或信用卡公司把钱要回去（需要尽快处理）',
+};
+
 function Card({
   label,
   value,
@@ -72,11 +83,13 @@ function Card({
   value: string;
   sub?: string | null;
 }): JSX.Element {
+  const hint = TERM_HINTS[label];
   return (
-    <div className="stat-card">
+    <div className="stat-card" title={hint}>
       <span className="stat-label">{label}</span>
       <span className="stat-value">{value}</span>
       {sub !== undefined && sub !== null && <span className="stat-sub">{sub}</span>}
+      {hint !== undefined && <span className="stat-hint">{hint}</span>}
     </div>
   );
 }
@@ -117,6 +130,7 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
 
       <section className="panel">
         <h2 className="title">今日待办</h2>
+        <p className="muted">点下面的按钮，直接打开要处理的那些订单</p>
         <TodoBar
           api={api}
           current="all"
@@ -182,11 +196,22 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
 
       <section className="panel">
         <h2 className="title">今日实收 / 已退 / 拒付</h2>
-        <p className="muted">按实际扣款币种原样显示，不折算——这三个数要和支付机构对账（§8-2）。</p>
+        <p className="muted">
+          按买家实际付款用的币种显示（付的是美元就显示美元，不换算成日元），方便和支付平台后台的记录一笔一笔核对。
+        </p>
         <div className="form">
-          <span>实收：{moneyRowsText(today?.received)}</span>
-          <span>已退：{moneyRowsText(today?.refunded)}</span>
-          <span>拒付：{moneyRowsText(today?.disputed)}</span>
+          {(
+            [
+              ['实收', today?.received],
+              ['已退', today?.refunded],
+              ['拒付', today?.disputed],
+            ] as const
+          ).map(([label, rows]) => (
+            <span key={label} title={TERM_HINTS[label]}>
+              {label}：{moneyRowsText(rows)}
+              <span className="stat-hint"> （{TERM_HINTS[label]}）</span>
+            </span>
+          ))}
         </div>
       </section>
     </div>

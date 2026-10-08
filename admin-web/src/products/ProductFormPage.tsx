@@ -50,6 +50,7 @@ import {
   type ProductStatus,
 } from './view.js';
 import { ProductMainColumn, ProductSideColumn } from './ProductFormSections.js';
+import { productFieldId, productFieldLabel } from './ProductFormParts.js';
 import { useFormDirty } from '../ui/unsaved.js';
 import type { AdminProductLike } from './api.js';
 
@@ -275,6 +276,18 @@ export function ProductFormPage({
       </header>
 
       {error !== '' && <p className="error">{error}</p>}
+      {/* AJ-410 / N26：列出要改的字段名，点一下跳到那一格并把光标放进去（原先只说"有 N 项需要修正"，要自己往下找）。
+          只列字段名不重复原因：原因已在那一格下面（productFormSummary 的 @why：同一句话不在一屏出现两次） */}
+      {Object.keys(errors).length > 0 && (
+        <div className="error-list" aria-label="需要修正的项">
+          <span className="muted">点一下跳过去：</span>
+          {Object.keys(errors).map((key) => (
+            <button key={key} type="button" className="link" onClick={() => focusProductField(key)}>
+              {productFieldLabel(key)}
+            </button>
+          ))}
+        </div>
+      )}
 
       {conflict && latest === null && (
         <button
@@ -368,38 +381,52 @@ export function ProductFormPage({
                   ? '在售商品的上下架请在列表页操作'
                   : '草稿与已下架商品买家都看不见；「保存并上架」会先保存，再检查重量是否超出运费表'}
               </p>
-              <div className="action-bar">
-                {/* 有「保存并上架」时它是主动作（实心），保存降为描边；在售商品只剩「保存」，它就是主动作 */}
-                <button
-                  type="submit"
-                  className={status !== 'active' ? 'btn btn-secondary' : 'btn'}
-                  disabled={saving || uploading}
-                >
-                  {saving
-                    ? '保存中…'
-                    : uploading
-                      ? '图片上传中…'
-                      : editId === null
-                        ? '保存为草稿'
-                        : '保存'}
-                </button>
-                {status !== 'active' && (
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={saving || uploading}
-                    onClick={() => void onSubmit(true)}
-                  >
-                    保存并上架
-                  </button>
-                )}
-              </div>
             </>
           }
         />
+        {/* AJ-410 / N25：保存按钮放在页底**吸底**条里——长表单填到下面时不用再滚回顶部找按钮 */}
+        <div className="sticky-actions">
+          <div className="action-bar">
+            {/* 有「保存并上架」时它是主动作（实心），保存降为描边；在售商品只剩「保存」，它就是主动作 */}
+            <button
+              type="submit"
+              className={status !== 'active' ? 'btn btn-secondary' : 'btn'}
+              disabled={saving || uploading}
+            >
+              {saving
+                ? '保存中…'
+                : uploading
+                  ? '图片上传中…'
+                  : editId === null
+                    ? '保存为草稿'
+                    : '保存'}
+            </button>
+            {status !== 'active' && (
+              <button
+                type="button"
+                className="btn"
+                disabled={saving || uploading}
+                onClick={() => void onSubmit(true)}
+              >
+                保存并上架
+              </button>
+            )}
+          </div>
+        </div>
       </form>
     </section>
   );
+}
+
+/**
+ * 顶部错误清单点一下 → 滚到那一格并聚焦（N26）。
+ * @limitation 只有带 `fieldKey` 的文本框 / 下拉有 id；标签类控件（合规 / 编辑标签）找不到时不动——清单里仍写着是哪一项。
+ */
+function focusProductField(key: string): void {
+  const el = document.getElementById(productFieldId(key));
+  if (el === null) return;
+  el.scrollIntoView?.({ block: 'center' });
+  el.focus();
 }
 
 /** 行里的 status → 已知状态；认不出 / 没有 → null（状态卡显示"新建"语义只在 source 为 null 时成立）。 */

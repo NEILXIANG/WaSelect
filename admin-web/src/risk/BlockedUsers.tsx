@@ -55,7 +55,7 @@ export function BlockedUsers({
 
   const submit = async (): Promise<void> => {
     if (reason.trim() === '') {
-      sink.error('请填写解除原因（进审计台账）');
+      sink.error('请填写解除原因（会记录下来）');
       setDialog(null);
       return;
     }
@@ -79,13 +79,13 @@ export function BlockedUsers({
 
   const askUnblock = (): void => {
     if (reason.trim() === '') {
-      sink.error('请填写解除原因（进审计台账）');
+      sink.error('请填写解除原因（会记录下来）');
       return;
     }
     dialogRun.current = () => void submit();
     setDialog({
       title: '解除后对方重新登录即可下单',
-      body: `${target}。拉黑时被取消的订单不会恢复（库存已回补，恢复会超卖），买家需重新下单。解除原因会进审计台账。`,
+      body: `${target}。拉黑时被取消的订单不会恢复（库存已回补，恢复会超卖），买家需重新下单。解除原因会记录下来。`,
       confirmText: '确认解除',
       danger: true,
     });
@@ -132,7 +132,7 @@ export function BlockedUsers({
           <input
             className="input"
             name="unblock-reason"
-            placeholder="解除原因（进审计台账）"
+            placeholder="例：核实是误拉黑，已与买家确认"
             maxLength={ADMIN_NOTE_MAX_LENGTH}
             value={reason}
             onChange={(e) => setReason(e.target.value)}

@@ -6,11 +6,21 @@
  *      请求体用了 order_no 而不是 order_id——这些只在组件层看得见。
  * @see ./OrdersPage.tsx；./ShipBatchDrawer.tsx；./CsvShipImport.tsx；./BatchSubmit.tsx
  */
+import { OTHER_CARRIER } from './carrier.js';
 import { createElement, useCallback, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { OrdersPage } from './OrdersPage.js';
 import { parseHash, type Route } from '../router.js';
+
+/**
+ * 承运商改成下拉（AJ-410 / N18）后，填"别的承运商"要先选「其他（手动填写）」再打字。
+ * @param selectId 下拉的 id（批量：batch-carrier；导入：csv-carrier）
+ */
+async function chooseCarrier(el: Element, selectId: string, text: string): Promise<void> {
+  await type(el.querySelector(`#${selectId}`), OTHER_CARRIER);
+  await type(el.querySelector('input[aria-label="承运商名称"]'), text);
+}
 
 interface Call {
   path: string;
@@ -65,6 +75,16 @@ function Harness({ initial }: { initial: Route }): React.JSX.Element {
       );
       return { results, succeeded: 1, failed: results.length - 1 };
     }
+    if (req.method === 'POST' && /\/orders\/[^/]+\/ship$/.test(req.path)) {
+      // 行内「发货」（AJ-410 / N12）走单单发货接口
+      const body = req.body as { carrier: string; tracking_no: string };
+      return {
+        order_id: req.path.split('/').at(-2),
+        status: 'shipped',
+        ...body,
+        tracking_recognized: true,
+      };
+    }
     const m = /keyword=([^&]+)/.exec(req.path);
     if (m !== null && hold !== null) await hold;
     const kw = m?.[1] === undefined ? undefined : decodeURIComponent(m[1]);
@@ -105,7 +125,7 @@ describe('订单列表「待发货」：勾选批量发货', () => {
     await click(el.querySelector('input[aria-label="选择 261007-7K3QXA"]'));
     expect(el.textContent).toContain('已选 1 单');
     expect(button(el, '批量发货（1）')).toBeNull();
-    expect(button(el, '导入运单号（CSV）')).toBeNull();
+    expect(button(el, '导入运单号（Excel/表格文件）')).toBeNull();
   });
 
   it('🔴 拒付单不能勾；勾两单 → 抽屉每单一行 → 输入单数确认 → 请求体是 order_id，结果按行显示', async () => {
@@ -116,7 +136,7 @@ describe('订单列表「待发货」：勾选批量发货', () => {
     await click(box('261007-7K3QXA'));
     await click(box('261007-8M2WRD'));
     await click(button(el, '批量发货（2）'));
-    await type(el.querySelector('input[aria-label="统一承运商"]'), 'Japan Post');
+    await chooseCarrier(el, 'batch-carrier', 'Japan Post');
     await type(el.querySelector('input[aria-label="261007-7K3QXA 运单号"]'), 'EJ123456789JP');
     // 第二单不填运单号、也没动过它 → 先不红（验收 2026-10-08：没碰过的行不该一打开就满屏红字）
     expect(el.textContent).not.toContain('运单号必填');
@@ -157,6 +177,8 @@ describe('批量发货：行内错误的显示时机（验收 2026-10-08）', ()
     await click(el.querySelector('input[aria-label="选择 261007-7K3QXA"]'));
     await click(el.querySelector('input[aria-label="选择 261007-8M2WRD"]'));
     await click(button(el, '批量发货（2）'));
+    // AJ-410 / N18：承运商默认 EMS；本组要"承运商也空着"——选「其他」且不填，与原起点一致
+    await type(el.querySelector('#batch-carrier'), OTHER_CARRIER);
     expect(el.textContent).not.toContain('必填');
     expect(el.textContent).not.toContain('行有问题');
     // 编辑第一行的运单号 → 只有这一行亮出自己的问题（承运商没填）
@@ -188,7 +210,7 @@ describe('批量发货整次失败', () => {
     const el = await open('#/orders?status=paid');
     await click(el.querySelector('input[aria-label="选择 261007-7K3QXA"]'));
     await click(button(el, '批量发货（1）'));
-    await type(el.querySelector('input[aria-label="统一承运商"]'), 'Japan Post');
+    await chooseCarrier(el, 'batch-carrier', 'Japan Post');
     await type(el.querySelector('input[aria-label="261007-7K3QXA 运单号"]'), 'EJ123456789JP');
     await click(button(el, '批量发货 1 单'));
     await confirmWith(el, '1');
@@ -198,11 +220,11 @@ describe('批量发货整次失败', () => {
   });
 });
 
-describe('导入运单号（CSV）', () => {
+describe('导入运单号（Excel/表格文件）', () => {
   it('🔴 粘贴 → 预检（按单号查）→ 不存在 / 拒付 / 重复标出 → 只提交干净行', async () => {
     const el = await open('#/orders?status=paid');
-    await click(button(el, '导入运单号（CSV）'));
-    await type(el.querySelector('input[aria-label="默认承运商"]'), 'EMS');
+    await click(button(el, '导入运单号（Excel/表格文件）'));
+    await chooseCarrier(el, 'csv-carrier', 'EMS');
     await type(
       el.querySelector('textarea[aria-label="CSV 内容"]'),
       '\uFEFF注文番号,追跡番号\r\n261007-7K3QXA,EJ123456789JP\r\n261007-9P4TZE,EJ000000003JP\r\n261007-ZZZZZZ,EJ1\r\n261007-8M2WRD,EJ2\r\n261007-8M2WRD,EJ3\r\n',
@@ -223,7 +245,7 @@ describe('导入运单号（CSV）', () => {
 
   it('🔴 粘贴了内容未提交就关 → 问「放弃修改」（验收 2026-10-08：原先直接关掉、内容丢失）；空着关直接关', async () => {
     const el = await open('#/orders?status=paid');
-    await click(button(el, '导入运单号（CSV）'));
+    await click(button(el, '导入运单号（Excel/表格文件）'));
     const drawer = (): HTMLElement => el.querySelector('.drawer') as HTMLElement;
     await type(el.querySelector('textarea[aria-label="CSV 内容"]'), 'order_no,tracking_no\n');
     await click(button(drawer(), '关闭'));
@@ -231,14 +253,14 @@ describe('导入运单号（CSV）', () => {
     await click(button(el, '放弃修改'));
     expect(el.querySelector('.drawer')).toBeNull();
     // 对照组：没填任何内容 → 不问，直接关
-    await click(button(el, '导入运单号（CSV）'));
+    await click(button(el, '导入运单号（Excel/表格文件）'));
     await click(button(drawer(), '关闭'));
     expect(el.querySelector('.drawer')).toBeNull();
   });
 
   it('表头认不出 → 文件级错误，不发任何查询', async () => {
     const el = await open('#/orders?status=paid');
-    await click(button(el, '导入运单号（CSV）'));
+    await click(button(el, '导入运单号（Excel/表格文件）'));
     const before = calls.length;
     await type(el.querySelector('textarea[aria-label="CSV 内容"]'), '收件人,电话\nA,1\n');
     await click(button(el, '预检'));
@@ -248,7 +270,7 @@ describe('导入运单号（CSV）', () => {
 
   it('改了文本，旧预检作废（必须重新预检才能提交）', async () => {
     const el = await open('#/orders?status=paid');
-    await click(button(el, '导入运单号（CSV）'));
+    await click(button(el, '导入运单号（Excel/表格文件）'));
     const ta = el.querySelector('textarea[aria-label="CSV 内容"]');
     await type(ta, 'order_no,carrier,tracking_no\n261007-7K3QXA,EMS,EJ123456789JP\n');
     await click(button(el, '预检'));
@@ -259,7 +281,7 @@ describe('导入运单号（CSV）', () => {
 
   it('🔴 预检在飞时改了文本：旧预检回来后被丢弃（不把旧文本的结果填回来）', async () => {
     const el = await open('#/orders?status=paid');
-    await click(button(el, '导入运单号（CSV）'));
+    await click(button(el, '导入运单号（Excel/表格文件）'));
     const ta = el.querySelector('textarea[aria-label="CSV 内容"]');
     await type(ta, 'order_no,carrier,tracking_no\n261007-7K3QXA,EMS,EJ123456789JP\n');
     let release = (): void => undefined;
@@ -273,5 +295,38 @@ describe('导入运单号（CSV）', () => {
     await flush();
     expect(el.querySelector('table[aria-label="预检结果"]')).toBeNull();
     expect(button(el, '批量发货 1 单')).toBeNull();
+  });
+});
+
+/** AJ-410（新手走查）：待发货页签的行内发货、灰按钮提示、导入入口的说明。 */
+describe('订单列表「待发货」：新手可用性（AJ-410）', () => {
+  it('批量发货灰着时说清怎么让它能点（N11）', async () => {
+    const el = await open('#/orders?status=paid');
+    const batch = button(el, '批量发货（0）');
+    expect(batch?.disabled).toBe(true);
+    expect(batch?.title).toContain('先勾选左边方框');
+    expect(el.textContent).toContain('先勾选左边方框');
+    expect(el.textContent).toContain('另存为 CSV');
+    expect(el.textContent).toContain('时间均为日本时间');
+  });
+
+  it('🔴 每行「发货」打开同一张发货表单（N12）：拒付单没有这颗按钮；填运单号 → 确认 → 发单单发货请求', async () => {
+    const el = await open('#/orders?status=paid');
+    const rowButtons = [...el.querySelectorAll('tbody button')].filter(
+      (b) => (b.textContent ?? '').trim() === '发货',
+    );
+    expect(rowButtons).toHaveLength(2); // ord_c 有拒付，不给
+    await click(rowButtons[0]);
+    const drawer = el.querySelector('.drawer') as HTMLElement;
+    expect(drawer.textContent).toContain('261007-7K3QXA');
+    await type(drawer.querySelector('input[name="tracking_no"]'), 'em 123456789 jp');
+    await click(button(drawer, '发货'));
+    await type(el.querySelector('.dialog input'), 'EM123456789JP');
+    await click(button(el, '确认发货'));
+    const ship = calls.filter((c) => c.method === 'POST' && c.path.endsWith('/ship'));
+    expect(ship).toHaveLength(1);
+    expect(ship[0]?.path).toContain('/ord_a/ship');
+    expect(ship[0]?.body).toEqual({ carrier: 'Japan Post EMS', tracking_no: 'em 123456789 jp' });
+    expect(el.querySelector('.drawer'), '成功后抽屉关闭').toBeNull();
   });
 });

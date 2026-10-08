@@ -6,11 +6,18 @@
  * @why 两步确认、重打运单号：运单号是从承运商邮件里复制来的，看一遍看不出首尾错字（第一批①）。
  * @why 行内错误只在点过「发货」之后才显示：空表单是初始状态，不是错误状态。
  *
+ * @why 新手可用性（AJ-410 / N16～N19）：输入框上方是真标签（原先只有占位灰字，一打字就看不见在填什么）；
+ *      打开即聚焦第一格；承运商是下拉，默认「Japan Post EMS（日本邮政）」，其余选「其他（手动填写）」；
+ *      运单号下方写明"在邮局给的单据上"；在输入框里按回车 = 点「发货」（只打开确认，不会直接发货）。
+ *      同一张表单也用在订单列表每行的「发货」抽屉（RowShipDrawer）。
  * @limitation 成功后由父组件刷新整页详情（状态以服务端为准），本组件只负责请求与提示。
  * @see ./view.ts（shipGate / shipErrors / toShipBody）；../ui/confirm.tsx
  */
 import { useState } from 'react';
 import { normalizeTrackingNo, SHIP_MAX_CHARS, trackingNoRecognized } from '@waselect/shared';
+import { enterClicksPrimary } from '../ui/keys.js';
+import { DEFAULT_CARRIER } from './carrier.js';
+import { CarrierPicker } from './CarrierPicker.js';
 import { useFormDirty } from '../ui/unsaved.js';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { toastError, type ToastSink } from '../ui/toast.js';
@@ -43,8 +50,13 @@ export function ShipForm({
   onDone,
   onBusy,
 }: OrderActionFormProps) {
-  const [ship, setShip] = useState(emptyShipForm);
-  useFormDirty(ship, emptyShipForm());
+  // 承运商默认 EMS（N18）：基线也是它，只打开不填不算"未保存"
+  const initial = (): ReturnType<typeof emptyShipForm> => ({
+    ...emptyShipForm(),
+    carrier: DEFAULT_CARRIER,
+  });
+  const [ship, setShip] = useState(initial);
+  useFormDirty(ship, initial());
   const [touched, setTouched] = useState(false);
   const [dialog, setDialog] = useState<ConfirmSpec | null>(null);
   const [busy, setBusyState] = useState(false);
@@ -65,7 +77,7 @@ export function ShipForm({
     setBusy(true);
     try {
       const resp = await shipOrder(api, id, toShipBody(ship));
-      setShip(emptyShipForm());
+      setShip(initial());
       setDialog(null);
       await reload();
       onChanged();
@@ -106,25 +118,35 @@ export function ShipForm({
   const bad = (k: string): boolean => touched && check.errors[k] !== undefined;
 
   return (
-    <div className="form">
-      <div className="row2">
-        {/* maxLength 引 shared 常量（AJ-315）：与服务端同一个上限 */}
-        <input
-          className={`input${bad('carrier') ? ' input-error' : ''}`}
-          placeholder="承运商（例：Japan Post）"
-          maxLength={SHIP_MAX_CHARS.carrier}
+    <div className="form" onKeyDown={enterClicksPrimary}>
+      {/* maxLength 引 shared 常量（AJ-315）：与服务端同一个上限 */}
+      <div className="field">
+        <label className="label" htmlFor={`ship-carrier-${id}`}>
+          承运商（快递公司）
+        </label>
+        <CarrierPicker
+          id={`ship-carrier-${id}`}
           value={ship.carrier}
-          aria-invalid={bad('carrier')}
-          onChange={(e) => setShip((s) => ({ ...s, carrier: e.target.value }))}
+          invalid={bad('carrier')}
+          autoFocus
+          onChange={(carrier) => setShip((s) => ({ ...s, carrier }))}
         />
+      </div>
+      <div className="field">
+        <label className="label" htmlFor={`ship-tracking-${id}`}>
+          运单号
+        </label>
         <input
+          id={`ship-tracking-${id}`}
+          name="tracking_no"
           className={`input${bad('trackingNo') ? ' input-error' : ''}`}
-          placeholder="运单号"
+          placeholder="例：EM123456789JP"
           maxLength={SHIP_MAX_CHARS.tracking_no}
           value={ship.trackingNo}
           aria-invalid={bad('trackingNo')}
           onChange={(e) => setShip((s) => ({ ...s, trackingNo: e.target.value }))}
         />
+        <span className="muted">在邮局给的单据上，例：EM123456789JP（字母大小写、空格不用管）</span>
       </div>
       {/* 行内错误：缺哪项就红在哪一项下面（三端联动模拟 2026-10-08） */}
       {touched && (
@@ -140,7 +162,13 @@ export function ShipForm({
       {ship.trackingNo.trim() !== '' && !trackingNoRecognized(ship.carrier, ship.trackingNo) && (
         <span className="error">{TRACKING_SHAPE_WARNING}</span>
       )}
-      <button type="button" className="btn" disabled={!gate.ok || busy} onClick={ask}>
+      <button
+        type="button"
+        className="btn"
+        data-primary-action
+        disabled={!gate.ok || busy}
+        onClick={ask}
+      >
         发货
       </button>
       {!gate.ok && <p className="muted">{gate.reason}</p>}

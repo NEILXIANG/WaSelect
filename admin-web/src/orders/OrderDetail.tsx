@@ -106,12 +106,6 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                   <span className="label">订单号</span>
                   <span>{order.order_no ?? '—'}</span>
                 </div>
-                {/* 扫描 A-03：运营日志按"对象 id"查的是内部 id（ord-…），列表与详情原来都不显示它，
-                按订单号去查永远"没有记录"。这里给出可选中复制的内部 id。 */}
-                <div className="field">
-                  <span className="label">内部 ID（查运营日志用）</span>
-                  <span className="muted selectable">{order.order_id ?? '—'}</span>
-                </div>
                 <div className="field">
                   <span className="label">状态</span>
                   {/* 🔴 走 `statusText` 而不是 `order.status`：直接渲染原文会让这一格显示 `paid`，
@@ -125,7 +119,7 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                   <span>{moneyText(order.total_jpy)}</span>
                 </div>
                 <div className="field">
-                  <span className="label">下单时间（JST）</span>
+                  <span className="label">下单时间（日本时间）</span>
                   <span>{formatJst(order.created_at)}</span>
                 </div>
               </div>
@@ -148,6 +142,16 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 onError={(text, traceId) => sink.error(text, { traceId })}
                 onSuccess={(text) => sink.success(text)}
               />
+
+              {/* 扫描 A-03：运营日志按"对象 id"查的是内部 id（ord-…），按订单号查永远"没有记录"——所以仍要给出。
+                AJ-410 / N14：但它是给技术人员的，一长串乱码放在订单号旁边会让新手以为是另一个单号——收进页底折叠的「技术信息」。 */}
+              <details className="tech-info">
+                <summary>技术信息</summary>
+                <span className="muted">
+                  内部编号（技术人员查操作日志用）：
+                  <span className="selectable">{order.order_id ?? '—'}</span>
+                </span>
+              </details>
             </div>
             {/* ← 主区结束：基本信息 → 商品 → 支付 → 时间线 */}
 

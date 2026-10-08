@@ -9,6 +9,7 @@ import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
 import { mount, type Mounted } from '../testing/dom.js';
+import { NOT_SET } from './view.js';
 import { SettingsPage } from './SettingsPage.js';
 
 let mounted: Mounted | undefined;
@@ -73,12 +74,33 @@ describe('SettingsPage', () => {
     const rows = [...el.querySelectorAll('tbody tr')].map((tr) =>
       [...tr.querySelectorAll('td')].map((td) => (td.textContent ?? '').trim()),
     );
+    // AJ-410 / N31：主文案改白话；环境变量名收进第四格的折叠「技术信息」（原第三格直接写 `环境变量 SELLER_NAME`）
     expect(rows).toEqual([
-      ['商家名称', '株式会社ワセレクト', '环境变量 SELLER_NAME · 改后需重启'],
-      ['商家地址', '未配置', '环境变量 SELLER_ADDRESS · 改后需重启'],
-      ['运费分档', '在「运营配置」页查看与修改', '数据库 · 立即生效'],
-      ['错误上报（Sentry）', '未配置', '部署环境变量 · 改后需重启'],
+      [
+        '商家名称',
+        '株式会社ワセレクト',
+        '技术人员在服务器上修改 · 改后需重启',
+        '技术信息环境变量 SELLER_NAME',
+      ],
+      [
+        '商家地址',
+        NOT_SET,
+        '技术人员在服务器上修改 · 改后需重启',
+        '技术信息环境变量 SELLER_ADDRESS',
+      ],
+      ['运费分档', '在「运营配置」页查看与修改', '在后台修改 · 立即生效', '技术信息存放在数据库'],
+      [
+        '错误上报（Sentry）',
+        '未开通，上线前请让技术人员配置',
+        '技术人员在服务器上修改 · 改后需重启',
+        '技术信息部署环境变量',
+      ],
     ]);
+    // 环境变量名只在折叠的 <details> 里，不在主文案里
+    for (const tr of el.querySelectorAll('tbody tr')) {
+      const main = [...tr.querySelectorAll('td')].slice(0, 3).map((td) => td.textContent ?? '');
+      expect(main.join('')).not.toMatch(/[A-Z]{2,}_[A-Z]/);
+    }
     expect(el.querySelector('a[href="#/ops"]')).not.toBeNull();
   });
 

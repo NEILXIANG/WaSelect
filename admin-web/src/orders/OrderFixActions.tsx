@@ -12,6 +12,8 @@ import { useFormDirty } from '../ui/unsaved.js';
 import { useDrawerBusy } from '../ui/drawer.js';
 import { ADMIN_NOTE_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
+import { blockEnter, enterClicksPrimary } from '../ui/keys.js';
+import { mouseOnlyHint } from '../ui/confirm.js';
 import { cancelOrder, fixShipment, type AdminApi } from './api.js';
 import { trackingNoRecognized } from '@waselect/shared';
 import {
@@ -103,7 +105,7 @@ export function OrderFixActions({
       mode === 'fix'
         ? shipmentFixErrors({ carrier, trackingNo, reason })
         : reason.trim() === ''
-          ? { reason: '取消原因必填（进审计）' }
+          ? { reason: '取消原因必填（会记录下来）' }
           : reason.trim().length > ADMIN_NOTE_MAX_LENGTH
             ? { reason: `取消原因最多 ${ADMIN_NOTE_MAX_LENGTH} 字` }
             : {};
@@ -148,7 +150,7 @@ export function OrderFixActions({
   };
 
   return (
-    <div className="form">
+    <div className="form" onKeyDown={enterClicksPrimary}>
       <span className="label">订单修正</span>
       {mode === '' && (
         <div className="row2">
@@ -221,7 +223,13 @@ export function OrderFixActions({
               {mode === 'fix' && !trackingNoRecognized(carrier, trackingNo) && (
                 <span className="error">{TRACKING_SHAPE_WARNING}</span>
               )}
-              <button className="btn" type="button" disabled={busy} onClick={() => void submit()}>
+              <button
+                className="btn"
+                type="button"
+                disabled={busy}
+                onKeyDown={blockEnter}
+                onClick={() => void submit()}
+              >
                 {busy ? '提交中…' : '确认'}
               </button>
               <button
@@ -232,10 +240,11 @@ export function OrderFixActions({
               >
                 再看看
               </button>
+              <span className="muted">{mouseOnlyHint('确认')}</span>
             </div>
           ) : (
             <div className="row2">
-              <button className="btn" type="button" onClick={ask}>
+              <button className="btn" type="button" data-primary-action onClick={ask}>
                 {mode === 'cancel' ? '取消这张订单' : '保存运单号'}
               </button>
               <button className="link" type="button" onClick={reset}>

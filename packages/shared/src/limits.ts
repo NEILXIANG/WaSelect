@@ -94,6 +94,15 @@ export const ORDER_NOTE_MAX_LENGTH = 1000;
 export const ADMIN_PASSWORD_MIN_LENGTH = 12;
 
 /**
+ * 管理员登录：同一邮箱、**同一来源**连续失败多少次锁定该来源（D-38 ⑤：5 次；AJ-243 起按来源计）。
+ * @why 放进 shared（AJ-410，原在 server/src/app/admin-auth-routes.ts）：管理端登录页输错时要提醒"多次输错会锁定"，
+ *      数字只能来自同一个常量，前端抄一份 5 / 15 迟早与服务端漂移。服务端仍从 admin-auth-routes.ts 导出同名常量（re-export）。
+ */
+export const ADMIN_LOGIN_MAX_FAILURES = 5;
+/** 管理员登录锁定时长（分钟，D-38 ⑤：15 分钟）。 */
+export const ADMIN_LOGIN_LOCK_MINUTES = 15;
+
+/**
  * 展示汇率 `raw_rate` 的 **per-quote 量纲区间**（1 JPY = ? 外币；AJ-297 / 路线图 C7）。
  *
  * @why 分币种看，汇率是**有硬边界的物理量**。⚠️ 既有注释（`admin-web/src/ops/view.ts`）

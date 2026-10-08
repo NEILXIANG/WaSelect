@@ -23,14 +23,19 @@ import {
   partialRefundInputCheck,
   partialRefundRows,
   refundableMinor,
+  currencyName,
 } from './partial-refund-view.js';
+import { enterClicksPrimary, blockEnter } from '../ui/keys.js';
+import { mouseOnlyHint } from '../ui/confirm.js';
 
 /**
- * 金额框示例按币种的小数位给（三端联动模拟 2026-10-08：日元单写着"如 10.50"，日元没有小数）。
+ * 金额框的标签与示例按币种给（三端联动模拟 2026-10-08：日元单写着"如 10.50"，日元没有小数）。
+ * @why AJ-410 / N28：标签写中文币种名与"整数 / 两位小数"，不写 `JPY`——新手不认识币种代码。
  */
-function amountPlaceholder(currency: string): string {
-  if (currency === '') return '金额';
-  return currency === 'JPY' ? '金额（JPY，整数，如 500）' : `金额（${currency}，如 10.50）`;
+export function amountLabel(currency: string): { label: string; example: string } {
+  if (currency === '') return { label: '金额', example: '' };
+  if (currency === 'JPY') return { label: '金额（日元，整数）', example: '例：500' };
+  return { label: `金额（${currencyName(currency)}，最多两位小数）`, example: '例：10.50' };
 }
 
 export interface PartialRefundsProps {
@@ -146,7 +151,7 @@ export function PartialRefunds({
   };
 
   return (
-    <div className="form">
+    <div className="form" onKeyDown={enterClicksPrimary}>
       <span className="label">部分退款 / 售后退款（订单状态不变，不回补库存）</span>
       {rows.length > 0 && (
         <table className="table">
@@ -173,30 +178,59 @@ export function PartialRefunds({
           </tbody>
         </table>
       )}
-      <input
-        className="input"
-        name="partial-amount"
-        placeholder={amountPlaceholder(currency)}
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
+      {/* N29：一打开就说还能退多少（放在输入框上面，填之前就看得到） */}
+      {gate.reason !== '' && <p className="muted">{gate.reason}</p>}
+      <label className="field">
+        <span className="label">{amountLabel(currency).label}</span>
+        <input
+          className="input"
+          name="partial-amount"
+          placeholder={amountLabel(currency).example}
+          value={amount}
+          onChange={(e) => {
+            setAmount(e.target.value);
+            setHint(''); // N30：改了就清掉旧提示，不让过期的红字挂着
+            setConfirming(false);
+          }}
+        />
+      </label>
+      <RefundReasonField
+        value={reason}
+        onChange={(next) => {
+          setReason(next);
+          setHint(''); // N30：选了原因后「请选择退款原因」不该还挂着
+          setConfirming(false);
+        }}
+        noteName="partial-reason"
       />
-      <RefundReasonField value={reason} onChange={setReason} noteName="partial-reason" />
       {confirming ? (
         <div className="row2">
-          <button type="button" className="btn" disabled={busy} onClick={() => void submit()}>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onKeyDown={blockEnter}
+            onClick={() => void submit()}
+          >
             {busy ? '提交中…' : '确认部分退款'}
           </button>
           <button type="button" className="link" onClick={() => setConfirming(false)}>
             取消
           </button>
+          <span className="muted">{mouseOnlyHint('确认部分退款')}</span>
         </div>
       ) : (
-        <button type="button" className="btn" disabled={!gate.ok || busy} onClick={ask}>
+        <button
+          type="button"
+          className="btn"
+          data-primary-action
+          disabled={!gate.ok || busy}
+          onClick={ask}
+        >
           部分退款
         </button>
       )}
       {hint !== '' && <p className="error">{hint}</p>}
-      {gate.reason !== '' && <p className="muted">{gate.reason}</p>}
     </div>
   );
 }

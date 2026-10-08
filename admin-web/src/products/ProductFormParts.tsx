@@ -34,6 +34,47 @@ export interface FieldProps {
   readOnly?: boolean;
   /** 多行（商品描述等长文本；三端联动 UI 模拟 2026-10-08：原先描述是单行框）。 */
   multiline?: boolean;
+  /** 必填：标签后统一显示「*必填」（AJ-410 / N24，原先有的写"（必填）"、有的不写）。 */
+  required?: boolean;
+  /** 输入框下方的一行说明（如 HS 编码是什么、去哪查，N23）。 */
+  hint?: string;
+  /** 错误键（= productFormErrors 的键）：生成输入框 id，顶部错误清单点一下就能跳到这里（N26）。 */
+  fieldKey?: string;
+}
+
+/** 表单字段的 DOM id（顶部错误清单据此聚焦，N26）。 */
+export function productFieldId(key: string): string {
+  return `pf-${key}`;
+}
+
+/** 错误键 → 字段名（顶部"点一下跳过去"清单用，N26）；认不出的键原样显示。 */
+const FIELD_LABELS: Readonly<Record<string, string>> = {
+  title: '商品名',
+  titleJa: '日文品名',
+  description: '商品描述',
+  editorialWhy: '为什么值得买',
+  editorialMaker: '产地 / 工房 / 匠人',
+  editorialTags: '编辑标签',
+  category: '分类',
+  priceJpy: '售价',
+  costJpy: '采购成本',
+  weightG: '重量',
+  stock: '库存',
+  customsDescEn: '英文报关品名',
+  hsCode: 'HS 编码',
+  originCountry: '原产地',
+  complianceTags: '合规标签',
+  janCode: 'JAN 码',
+  purchaseSource: '采购渠道',
+};
+
+export function productFieldLabel(key: string): string {
+  return FIELD_LABELS[key] ?? key;
+}
+
+/** 必填标记（N24）。 */
+export function RequiredMark(): React.JSX.Element {
+  return <span className="required-mark"> *必填</span>;
 }
 
 export function Field({
@@ -45,12 +86,20 @@ export function Field({
   placeholder = '',
   readOnly = false,
   multiline = false,
+  required = false,
+  hint = '',
+  fieldKey,
 }: FieldProps) {
+  const id = fieldKey !== undefined ? productFieldId(fieldKey) : undefined;
   return (
     <label className="field">
-      <span className="label">{label}</span>
+      <span className="label">
+        {label}
+        {required && <RequiredMark />}
+      </span>
       {multiline ? (
         <textarea
+          id={id}
           className="input"
           rows={4}
           value={value}
@@ -60,6 +109,7 @@ export function Field({
         />
       ) : (
         <input
+          id={id}
           className="input"
           type={type}
           value={value}
@@ -68,6 +118,7 @@ export function Field({
           onChange={(e) => onChange(e.target.value)}
         />
       )}
+      {hint !== '' && <span className="muted">{hint}</span>}
       {error !== '' && <span className="error">{error}</span>}
     </label>
   );

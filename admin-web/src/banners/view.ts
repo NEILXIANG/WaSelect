@@ -166,7 +166,7 @@ export function bannerFormErrors(form: unknown): {
   const errors: Record<string, string> = {};
   if (f.imageKey.trim() === '') errors['imageKey'] = '图片必填（先上传，拿到 image_key）';
   if (!(LINK_TYPES as readonly string[]).includes(f.linkType))
-    errors['linkType'] = '跳转类型不在契约枚举内';
+    errors['linkType'] = '跳转类型不对，请从下拉里重新选一个';
   if (f.linkType !== 'none' && f.linkId.trim() === '')
     errors['linkId'] = '选择了跳转就必须填目标 id（否则点了会跳到不存在的页面）';
   const sort = Number(f.sort);
@@ -231,8 +231,8 @@ export function bannerConflictRows(form: BannerForm, latest: unknown): BannerCon
     ['跳转', link(form), link(theirs)],
     ['排序', form.sort, theirs.sort],
     ['启用', form.active ? '启用' : '停用', theirs.active ? '启用' : '停用'],
-    ['开始（JST）', form.startsAt, theirs.startsAt],
-    ['结束（JST）', form.endsAt, theirs.endsAt],
+    ['开始（日本时间）', form.startsAt, theirs.startsAt],
+    ['结束（日本时间）', form.endsAt, theirs.endsAt],
   ];
   return pairs.map(([label, mine, l]) => ({ label, mine, latest: l, differs: mine !== l }));
 }

@@ -10,7 +10,7 @@
  * @see ./ship-batch.ts；./BatchSubmit.tsx
  */
 import { useRef, useState } from 'react';
-import { SHIP_BATCH_MAX, SHIP_MAX_CHARS } from '@waselect/shared';
+import { SHIP_BATCH_MAX } from '@waselect/shared';
 import { ActionDrawer } from '../ui/drawer.js';
 import { FormDirty } from '../ui/unsaved.js';
 import { toastError } from '../ui/toast.js';
@@ -18,6 +18,8 @@ import { findOrdersByNo, type AdminApi } from './api.js';
 import { BatchSubmit } from './BatchSubmit.js';
 import { BatchRowIssues } from './BatchRowIssues.js';
 import { readLastCarrier, saveLastCarrier } from './last-carrier.js';
+import { DEFAULT_CARRIER } from './carrier.js';
+import { CarrierPicker } from './CarrierPicker.js';
 import {
   buildCsvPreview,
   csvOrderNos,
@@ -36,7 +38,7 @@ export interface CsvShipImportProps {
 
 export function CsvShipImport({ api, onClose, onDone, onError }: CsvShipImportProps) {
   const [text, setText] = useState('');
-  const [carrier, setCarrier] = useState(readLastCarrier);
+  const [carrier, setCarrier] = useState(() => readLastCarrier() || DEFAULT_CARRIER);
   const [rows, setRows] = useState<BatchRow[] | null>(null);
   /** 文件级问题（空 / 表头 / 超上限）：属于这份输入，红在输入框下面。 */
   const [fileError, setFileError] = useState('');
@@ -85,9 +87,14 @@ export function CsvShipImport({ api, onClose, onDone, onError }: CsvShipImportPr
   };
 
   return (
-    <ActionDrawer wide title="导入运单号（CSV）" onClose={onClose}>
+    <ActionDrawer wide title="导入运单号（Excel/表格文件）" onClose={onClose}>
       {/* 脏态必须在抽屉里面上报（FormDirty @why）；已提交拿到结果后不再算未保存 */}
       <FormDirty current={done ? '' : text} pristine="" />
+      {/* AJ-410 / N13：新手不知道 CSV 是什么——先说怎么从 Excel 得到它 */}
+      <p className="muted">
+        在 Excel / Numbers / WPS
+        里做好表格后，「另存为」选「CSV（逗号分隔）」，再在下面选择这个文件；也可以直接把表格内容复制粘贴到下面的大框里。
+      </p>
       <p className="muted">
         第一行是表头，需含「订单号」「运单号」两列，「承运商」可选（支持 order_no / carrier /
         tracking_no， 以及 注文番号 / 配送業者 / 追跡番号 等写法）。一次最多 {SHIP_BATCH_MAX} 行。
@@ -111,19 +118,19 @@ export function CsvShipImport({ api, onClose, onDone, onError }: CsvShipImportPr
           <span className="error">{fileError}</span>
         </div>
       )}
-      <label className="muted">
-        默认承运商（承运商列缺失或为空时用）{' '}
-        <input
-          className="input"
-          aria-label="默认承运商"
-          maxLength={SHIP_MAX_CHARS.carrier}
+      <div className="field">
+        <label className="label" htmlFor="csv-carrier">
+          默认承运商（表格里没写承运商的行用它）
+        </label>
+        <CarrierPicker
+          id="csv-carrier"
           value={carrier}
-          onChange={(e) => {
-            setCarrier(e.target.value);
+          onChange={(v) => {
+            setCarrier(v);
             invalidate();
           }}
         />
-      </label>
+      </div>
       <button
         type="button"
         className="btn"

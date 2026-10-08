@@ -31,7 +31,11 @@ describe('TodoBar', () => {
     expect(el.textContent).toContain('待发货 3');
     expect(el.textContent).toContain('待付款 1');
     expect(el.textContent).toContain('退款中 —');
-    await click(button(el, '待发货 3'));
+    // AJ-410 / N7：每格是带「去处理 →」的按钮（原按钮文字只有「待发货 3」）；有待办的格用提醒色
+    const due = button(el, '待发货 3 · 去处理 →');
+    expect(due?.className).toContain('todo-chip-due');
+    expect(button(el, '退款中 — · 去处理 →')?.className).not.toContain('todo-chip-due');
+    await click(due);
     expect(picked).toEqual(['paid']);
   });
 });

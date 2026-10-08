@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { useFormDirty } from '../ui/unsaved.js';
+import { enterClicksPrimary } from '../ui/keys.js';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { toastError } from '../ui/toast.js';
 import { releaseDisputeHold } from './api.js';
@@ -69,32 +70,44 @@ export function ReleaseForm({
     }
     setDialog({
       title: '解除后发货闸门立即打开，且不可撤销',
-      body: '拒付本身不会结案：`payments.dispute_*` 一个字都不会改，这条拒付仍留在风控列表，机构仍可能判败诉并把钱收回。确认后这张单可以被发货、被退款。',
+      body: '拒付本身不会因此结束：这条拒付仍留在风控列表，支付平台仍可能判店铺输、把钱收回。确认后这张单可以被发货、被退款。',
       confirmText: '确认解除（不可撤销）',
       danger: true,
     });
   };
 
   return (
-    <div className="form">
+    <div className="form" onKeyDown={enterClicksPrimary}>
       <p className="error">
-        ⚠️ 该订单有进行中的拒付：退款会被拒（40907），发货也会拦住（发货后钱货两空）。
+        ⚠️
+        这张订单的买家正在通过银行要回货款（拒付）：现在退款和发货都被系统锁住了（防止钱和货都没了）。
         若拒付链已断——机构漏发结案事件、或已与买家协商和好、或败诉单另作处置——
         可在这里人工解除限制。
       </p>
-      <input
-        className="input"
-        placeholder="解除理由（进审计台账与订单时间线）"
-        // 硬上限来自 shared（与服务端同一个常量，AJ-291）
-        maxLength={ADMIN_NOTE_MAX_LENGTH}
-        value={release.reason}
-        onChange={(e) => setRelease({ reason: e.target.value })}
-      />
-      <button type="button" className="btn btn-danger" disabled={busy} onClick={ask}>
+      <label className="field">
+        <span className="label">解除理由（会记录在订单时间线里）</span>
+        <input
+          className="input"
+          name="release-reason"
+          autoFocus
+          placeholder="例：已与买家协商和好，买家已撤回拒付"
+          // 硬上限来自 shared（与服务端同一个常量，AJ-291）
+          maxLength={ADMIN_NOTE_MAX_LENGTH}
+          value={release.reason}
+          onChange={(e) => setRelease({ reason: e.target.value })}
+        />
+      </label>
+      <button
+        type="button"
+        className="btn btn-danger"
+        data-primary-action
+        disabled={busy}
+        onClick={ask}
+      >
         人工解除拒付限制
       </button>
       <p className="muted">
-        解除的是「限制」不是「事实」：`payments.dispute_*` 一个字都不会改，
+        解除的只是系统的「锁」，不是拒付本身：拒付记录不会被改动，
         这条拒付仍留在风控列表，机构仍可能判败诉并把钱收回。
       </p>
       {dialog !== null && (

@@ -19,28 +19,37 @@ export function RefundReasonField({
 }) {
   return (
     <>
-      <select
-        className="input"
-        aria-label="退款原因"
-        value={value.preset}
-        onChange={(e) => onChange({ ...value, preset: e.target.value })}
-      >
-        <option value="">选择退款原因（进审计台账）</option>
-        {REFUND_REASON_PRESETS.map((p) => (
-          <option key={p} value={p}>
-            {p}
-          </option>
-        ))}
-      </select>
-      <input
-        className="input"
-        {...(noteName !== undefined ? { name: noteName } : {})}
-        placeholder={value.preset === '其它' ? '补充说明（必填）' : '补充说明（选填）'}
-        // 整串上限另由 composeRefundReason 按"预设：说明"算；这里只挡住明显超长的粘贴
-        maxLength={REFUND_REASON_MAX_LENGTH}
-        value={value.note}
-        onChange={(e) => onChange({ ...value, note: e.target.value })}
-      />
+      {/* AJ-410：真标签在上方（原先只有下拉第一项与占位灰字说明这一格是什么） */}
+      <label className="field">
+        <span className="label">退款原因（会记录下来）</span>
+        <select
+          className="input"
+          aria-label="退款原因"
+          value={value.preset}
+          onChange={(e) => onChange({ ...value, preset: e.target.value })}
+        >
+          <option value="">请选择退款原因</option>
+          {REFUND_REASON_PRESETS.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="label">
+          {value.preset === '其它' ? '补充说明（必填）' : '补充说明（选填）'}
+        </span>
+        <input
+          className="input"
+          {...(noteName !== undefined ? { name: noteName } : {})}
+          placeholder="例：买家收到时外盒破损"
+          // 整串上限另由 composeRefundReason 按"预设：说明"算；这里只挡住明显超长的粘贴
+          maxLength={REFUND_REASON_MAX_LENGTH}
+          value={value.note}
+          onChange={(e) => onChange({ ...value, note: e.target.value })}
+        />
+      </label>
     </>
   );
 }

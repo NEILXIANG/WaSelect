@@ -57,7 +57,7 @@ export function DateFilter({
             value={value.to}
             onChange={(e) => onChange({ ...value, to: e.target.value })}
           />
-          <span className="muted">（JST，含两端）</span>
+          <span className="muted">（日本时间，含两端）</span>
         </>
       )}
       {error !== '' && <span className="error">{error}</span>}

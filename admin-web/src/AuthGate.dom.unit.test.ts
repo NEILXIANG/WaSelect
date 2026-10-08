@@ -88,7 +88,8 @@ describe('AuthGate（P1-7：过期浮层，不卸载页面）', () => {
     expect(store.value()).toBe('new-token');
   });
 
-  it('浮层里口令不对（40101）→ 说"邮箱、口令或二次验证码不正确"，浮层不消失，页面仍在', async () => {
+  // AJ-410 / N5：文案「口令 / 二次验证码」统一为「密码 / 手机验证码」
+  it('浮层里密码不对（40101）→ 说"邮箱、密码或手机验证码不正确"，浮层不消失，页面仍在', async () => {
     const store = memStore('old-token');
     mounted = await mount(
       createElement(AuthGate, {
@@ -102,7 +103,7 @@ describe('AuthGate（P1-7：过期浮层，不卸载页面）', () => {
     const el = mounted.el;
     await click(button(el, '模拟 40101'));
     await fillLogin(el);
-    expect(el.textContent).toContain('邮箱、口令或二次验证码不正确');
+    expect(el.textContent).toContain('邮箱、密码或手机验证码不正确');
     expect(el.querySelector('[role="dialog"]')).not.toBeNull();
     expect(el.querySelector('[data-testid="draft"]')).not.toBeNull();
   });
@@ -115,7 +116,8 @@ describe('AuthGate（P1-7：过期浮层，不卸载页面）', () => {
         children: (s: SessionControls) => createElement(DraftPage, { session: s }),
       }),
     );
-    expect(mounted.el.textContent).toContain('管理后台登录');
+    // AJ-410 / N1：整页登录写明品牌「WaSelect 管理后台」（原标题「管理后台登录」）
+    expect(mounted.el.textContent).toContain('WaSelect 管理后台');
     expect(mounted.el.querySelector('[data-testid="draft"]')).toBeNull();
   });
 

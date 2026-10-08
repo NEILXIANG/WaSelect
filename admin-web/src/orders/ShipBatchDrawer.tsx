@@ -18,6 +18,9 @@ import type { AdminApi, AdminOrderLike } from './api.js';
 import { BatchSubmit } from './BatchSubmit.js';
 import { BatchRowIssues } from './BatchRowIssues.js';
 import { readLastCarrier, saveLastCarrier } from './last-carrier.js';
+import { enterClicksPrimary } from '../ui/keys.js';
+import { DEFAULT_CARRIER } from './carrier.js';
+import { CarrierPicker } from './CarrierPicker.js';
 import { selectionRows, validateRows, type BatchRow } from './ship-batch.js';
 
 export interface ShipBatchDrawerProps {
@@ -30,7 +33,10 @@ export interface ShipBatchDrawerProps {
 }
 
 export function ShipBatchDrawer({ api, orders, onClose, onDone, onError }: ShipBatchDrawerProps) {
-  const [initial] = useState(() => validateRows(selectionRows(orders, readLastCarrier())));
+  // 默认承运商：上一次批量用过的；没有就 EMS（AJ-410 / N18，原先空着让人填）
+  const [initial] = useState(() =>
+    validateRows(selectionRows(orders, readLastCarrier() || DEFAULT_CARRIER)),
+  );
   const [rows, setRows] = useState<BatchRow[]>(initial);
   const [carrier, setCarrier] = useState(initial[0]?.carrier ?? '');
   /** 已提交（拿到结果）：输入不再算"未保存"，关抽屉不必再问。 */
@@ -54,23 +60,20 @@ export function ShipBatchDrawer({ api, orders, onClose, onDone, onError }: ShipB
   return (
     // 单数取打开时的快照：发货后列表重载会清空勾选，`orders` 随之变空，标题不能跟着变成"已选 0 单"
     <ActionDrawer wide title={`批量发货（已选 ${String(initial.length)} 单）`} onClose={onClose}>
-      <>
+      {/* 在运单号框里按回车 = 点「批量发货 N 单」（只打开确认，AJ-410 / N19） */}
+      <div className="form" onKeyDown={enterClicksPrimary}>
         {/* 脏态必须在抽屉里面上报（FormDirty @why） */}
         <FormDirty
           current={done ? [] : rows.map((r) => r.trackingNo)}
           pristine={done ? [] : initial.map((r) => r.trackingNo)}
         />
-        <label className="muted">
-          统一承运商{' '}
-          <input
-            className="input"
-            aria-label="统一承运商"
-            maxLength={SHIP_MAX_CHARS.carrier}
-            value={carrier}
-            placeholder="例：Japan Post"
-            onChange={(e) => setAllCarriers(e.target.value)}
-          />
-        </label>
+        <div className="field">
+          <label className="label" htmlFor="batch-carrier">
+            统一承运商（改这里 = 下面每一行一起改）
+          </label>
+          <CarrierPicker id="batch-carrier" value={carrier} onChange={setAllCarriers} />
+        </div>
+        <p className="muted">运单号在邮局给的单据上，例：EM123456789JP</p>
         <table className="table">
           <thead>
             <tr>
@@ -121,7 +124,7 @@ export function ShipBatchDrawer({ api, orders, onClose, onDone, onError }: ShipB
             onDone();
           }}
         />
-      </>
+      </div>
     </ActionDrawer>
   );
 }

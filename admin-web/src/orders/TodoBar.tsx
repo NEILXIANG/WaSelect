@@ -18,6 +18,16 @@ const TODO: ReadonlyArray<{ status: OrderStatus; label: string }> = [
   { status: 'pending_payment', label: '待付款' },
 ];
 
+/**
+ * 待办格的样式（AJ-410 / N7）。
+ * @why 原先与筛选小标签同一个样式，新手看不出能点；现在是带「去处理 →」的按钮，
+ *      **有待办（> 0）时用提醒色**——0 单与 3 单长得一样，等于没提醒。取数失败 / 加载中不算有待办。
+ */
+export function todoChipClass(on: boolean, n: number | null | undefined): string {
+  const base = on ? 'chip chip-on todo-chip' : 'chip todo-chip';
+  return typeof n === 'number' && n > 0 ? `${base} todo-chip-due` : base;
+}
+
 export function TodoBar({
   api,
   refreshKey = 0,
@@ -56,10 +66,10 @@ export function TodoBar({
           <button
             key={t.status}
             type="button"
-            className={current === t.status ? 'chip chip-on' : 'chip'}
+            className={todoChipClass(current === t.status, n)}
             onClick={() => onPick(t.status)}
           >
-            {t.label} {n === undefined ? '…' : n === null ? '—' : n}
+            {t.label} {n === undefined ? '…' : n === null ? '—' : n} · 去处理 →
           </button>
         );
       })}

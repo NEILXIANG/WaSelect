@@ -11,11 +11,21 @@
  *
  * @see ./OrderDetail.tsx；./view.ts（`refundFailureNotice`）；../testing/dom.ts
  */
+import { OTHER_CARRIER } from './carrier.js';
+import { pressEnter } from '../testing/keys.js';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
 import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { OrderDetail } from './OrderDetail.js';
+
+/**
+ * 承运商改成下拉（AJ-410 / N18，默认 Japan Post EMS）后，填别的承运商要先选「其他（手动填写）」再打字。
+ */
+async function chooseCarrier(el: Element, text: string): Promise<void> {
+  await type(el.querySelector('.drawer select'), OTHER_CARRIER);
+  await type(el.querySelector('input[aria-label="承运商名称"]'), text);
+}
 
 interface Call {
   path: string;
@@ -149,7 +159,7 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     await click(button(el, '解除拒付限制…'));
     expect(button(el, RELEASE_BTN)).not.toBeNull();
 
-    await type(el.querySelector('input[placeholder^="解除理由"]'), '机构已结案但漏发事件');
+    await type(el.querySelector('input[name="release-reason"]'), '机构已结案但漏发事件');
     await click(button(el, RELEASE_BTN));
     expect(button(el, '确认解除（不可撤销）'), '必须有第二步').not.toBeNull();
     // 第一步只是进入确认态，**不能**发出请求
@@ -183,7 +193,7 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     const el = await open();
     const before = detailFetches();
     await click(button(el, '解除拒付限制…'));
-    await type(el.querySelector('input[placeholder^="解除理由"]'), '已与买家协商和好');
+    await type(el.querySelector('input[name="release-reason"]'), '已与买家协商和好');
     await click(button(el, RELEASE_BTN));
     await click(button(el, '确认解除（不可撤销）'));
 
@@ -204,7 +214,7 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     };
     const el = await open();
     await click(button(el, '解除拒付限制…'));
-    await type(el.querySelector('input[placeholder^="解除理由"]'), '链断了');
+    await type(el.querySelector('input[name="release-reason"]'), '链断了');
     await click(button(el, RELEASE_BTN));
     await click(button(el, '确认解除（不可撤销）'));
     expect(errorToastText(el)).toContain('不允许此操作');
@@ -338,8 +348,9 @@ describe('订单详情：状态与事件流显示中文（管理端只需要中�
     ];
     const el = await open();
     const text = el.textContent ?? '';
-    expect(text).toContain('待付款（未发起）');
-    expect(text).toContain('待付款（支付中）');
+    // AJ-410 / N15：文案改白话（原「待付款（未发起）/（支付中）」）
+    expect(text).toContain('已下单，等待买家付款');
+    expect(text).toContain('买家正在付款');
     expect(text).toContain('待发货');
     // 原文不该再出现（"paid" 会混在别处吗？订单号/地址里没有它，所以这条站得住）
     expect(text).not.toContain('pending_payment');
@@ -486,8 +497,8 @@ describe('订单详情：发货两步确认（P2-51）', () => {
     status = 'paid';
     const el = await open();
     await click(button(el, '发货…'));
-    await type(el.querySelector('input[placeholder^="承运商"]'), 'Japan Post');
-    await type(el.querySelector('input[placeholder="运单号"]'), 'EJ123456789JP');
+    await chooseCarrier(el, 'Japan Post');
+    await type(el.querySelector('input[name="tracking_no"]'), 'EJ123456789JP');
     await click(button(el, '发货'));
     expect(shipPosts()).toHaveLength(0);
 
@@ -514,8 +525,8 @@ describe('订单详情：发货两步确认（P2-51）', () => {
     status = 'paid';
     const el = await open();
     await click(button(el, '发货…'));
-    await type(el.querySelector('input[placeholder^="承运商"]'), 'Japan Post');
-    await type(el.querySelector('input[placeholder="运单号"]'), 'em 123456789 jp');
+    await chooseCarrier(el, 'Japan Post');
+    await type(el.querySelector('input[name="tracking_no"]'), 'em 123456789 jp');
     await click(button(el, '发货'));
     expect(el.querySelector('.dialog')?.textContent ?? '').toContain('EM123456789JP');
     await type(el.querySelector('.dialog input'), 'em123456789JP');
@@ -526,14 +537,14 @@ describe('订单详情：发货两步确认（P2-51）', () => {
     status = 'paid';
     const el = await open();
     await click(button(el, '发货…'));
-    await type(el.querySelector('input[placeholder^="承运商"]'), 'Japan Post EMS');
-    await type(el.querySelector('input[placeholder="运单号"]'), 'EM12345678JP'); // 少一位
+    await chooseCarrier(el, 'Japan Post EMS');
+    await type(el.querySelector('input[name="tracking_no"]'), 'EM12345678JP'); // 少一位
     // 第一批①：警告在**表单里**就显示，不必先点「发货」（点发货会打开弹层，那时才提示已晚）
     expect(el.textContent).toContain('形状认不出');
     await click(button(el, '发货'));
     expect(el.textContent).toContain('形状认不出');
     expect(shipPosts()).toHaveLength(0);
-    await type(el.querySelector('input[placeholder="运单号"]'), 'EM123456789JP');
+    await type(el.querySelector('input[name="tracking_no"]'), 'EM123456789JP');
     expect(el.textContent).not.toContain('形状认不出');
   });
 });
@@ -584,14 +595,14 @@ describe('订单详情：操作抽屉（AJ-398）', () => {
     expect(el.querySelector('.drawer'), '未点之前不该有抽屉').toBeNull();
     await click(button(el, '发货…'));
     expect(el.querySelector('.drawer')).not.toBeNull();
-    await type(el.querySelector('.drawer input[placeholder^="承运商"]'), 'Japan Post');
-    await type(el.querySelector('.drawer input[placeholder="运单号"]'), 'EJ123456789JP');
+    // AJ-410 / N18：承运商是下拉、默认 Japan Post EMS——不动它直接填运单号（原为手填 'Japan Post'）
+    await type(el.querySelector('.drawer input[name="tracking_no"]'), 'EJ123456789JP');
     await click(button(el, '发货'));
     await type(el.querySelector('.dialog input'), 'EJ123456789JP');
     await click(button(el, '确认发货'));
     const posts = calls.filter((c) => c.path.endsWith('/ship'));
     expect(posts).toHaveLength(1);
-    expect(posts[0]?.body).toEqual({ carrier: 'Japan Post', tracking_no: 'EJ123456789JP' });
+    expect(posts[0]?.body).toEqual({ carrier: 'Japan Post EMS', tracking_no: 'EJ123456789JP' });
     expect(el.querySelector('.drawer'), '成功后抽屉应关闭').toBeNull();
     expect(toastText(el)).toContain('已发货');
   });
@@ -651,5 +662,67 @@ describe('订单详情操作条：主按钮每屏只留一个（对标 §238，�
     const el = await open();
     expect(el.querySelectorAll('.action-bar .btn').length).toBeGreaterThan(0);
     expect(solid(el)).toEqual([]);
+  });
+});
+
+/** AJ-410（新手走查）：发货抽屉的标签 / 焦点 / 回车，确认框的回车，技术编号的位置，改址红字。 */
+describe('订单详情：新手可用性（AJ-410）', () => {
+  beforeEach(() => {
+    hasDispute = false;
+    status = 'paid';
+  });
+
+  it('发货抽屉：输入框上方有真标签；打开即聚焦承运商下拉，默认 Japan Post EMS（日本邮政）；运单号下有找单号的说明', async () => {
+    const el = await open();
+    await click(button(el, '发货…'));
+    const drawer = el.querySelector('.drawer') as HTMLElement;
+    const labels = [...drawer.querySelectorAll('label.label')].map((l) => l.textContent);
+    expect(labels).toEqual(['承运商（快递公司）', '运单号']);
+    const select = drawer.querySelector('select') as HTMLSelectElement;
+    expect(document.activeElement).toBe(select);
+    expect(select.selectedOptions[0]?.textContent).toBe('Japan Post EMS（日本邮政）');
+    expect([...select.options].map((o) => o.textContent)).toContain('其他（手动填写）');
+    expect(drawer.textContent).toContain('在邮局给的单据上，例：EM123456789JP');
+  });
+
+  it('🔴 运单号框里按回车 = 点「发货」：只打开确认框、不发请求；确认框里按回车不确认，并提示用鼠标点', async () => {
+    const el = await open();
+    await click(button(el, '发货…'));
+    const tracking = el.querySelector('.drawer input[name="tracking_no"]');
+    await type(tracking, 'EM123456789JP');
+    await pressEnter(tracking);
+    expect(el.querySelector('.dialog')).not.toBeNull();
+    expect(calls.filter((c) => c.path.endsWith('/ship'))).toHaveLength(0);
+    // 确认框：先把运单号重打对（让主按钮可点），再按回车——仍不应发货
+    const confirmInput = el.querySelector('.dialog input');
+    await type(confirmInput, 'EM123456789JP');
+    expect(button(el, '确认发货')?.disabled).toBe(false);
+    expect(await pressEnter(confirmInput)).toBe(true);
+    expect(await pressEnter(button(el, '确认发货'))).toBe(true);
+    expect(calls.filter((c) => c.path.endsWith('/ship'))).toHaveLength(0);
+    expect(el.querySelector('.dialog')?.textContent).toContain(
+      '请用鼠标点击「确认发货」按钮（按回车不会确认）',
+    );
+  });
+
+  it('内部编号不在订单号旁边，而在页底折叠的「技术信息」里（N14）', async () => {
+    const el = await open();
+    const labels = [...el.querySelectorAll('.detail-main .label')].map((l) => l.textContent);
+    expect(labels.some((t) => (t ?? '').includes('内部'))).toBe(false);
+    const tech = el.querySelector('details.tech-info');
+    expect(tech?.querySelector('summary')?.textContent).toBe('技术信息');
+    expect(tech?.textContent).toContain('o-1');
+  });
+
+  it('🔴 改址：点保存报了"必填"后，改那一格红字立刻消失（N30）', async () => {
+    const el = await open();
+    await click(button(el, '改址…'));
+    const recipient = el.querySelector('#addr-recipient');
+    await type(recipient, '');
+    await click(button(el, '保存新地址'));
+    const field = recipient?.closest('.field');
+    expect(field?.querySelector('.error')).not.toBeNull();
+    await type(recipient, 'Jane Doe');
+    expect(field?.querySelector('.error')).toBeNull();
   });
 });

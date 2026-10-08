@@ -46,8 +46,9 @@ import { formatJst, minorMoneyText, moneyText } from '../format.js';
 
 /** 管理端状态文案（@see @limitation 一：比买家侧更细，十态互不合并）。 */
 export const ORDER_STATUS_LABELS: Readonly<Record<OrderStatus, string>> = {
-  created: '待付款（未发起）',
-  pending_payment: '待付款（支付中）',
+  // AJ-410 / N15：白话（原「待付款（未发起）/（支付中）」）；列表、详情、时间线都只读这一处
+  created: '已下单，等待买家付款',
+  pending_payment: '买家正在付款',
   paid: '待发货',
   shipped: '已发货',
   delivered: '已签收',
@@ -297,7 +298,7 @@ export function refundGate(order: unknown): Gate {
   //    先判拒付的旧写法会把 refunding + 拒付 的单永久锁在退款中。
   const disputed = (order as { has_dispute?: unknown } | null)?.has_dispute === true;
   if (disputed && status !== 'refunding')
-    return NO('有拒付进行中，退款会被拒（40907）；请先在拒付列表处理');
+    return NO('买家正在通过银行要回货款（拒付），现在不能退款；请先到「风控」页处理这条拒付');
   // 迟到付款（剩余清单 1-5）：已关单收到了钱，服务端凭 late_paid 放行；与服务端 refundGuard 同口径
   const latePaid = (order as { late_paid?: unknown } | null)?.late_paid === true;
   if (latePaid && (status === 'expired' || status === 'cancelled')) {
@@ -545,7 +546,7 @@ export function emptyRefundForm(): RefundForm {
 export function refundErrors(form: unknown): { ok: boolean; first: string } {
   const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
   const reason = typeof f['reason'] === 'string' ? f['reason'].trim() : '';
-  if (reason === '') return { ok: false, first: '退款原因必填（会进审计台账）' };
+  if (reason === '') return { ok: false, first: '退款原因必填（会记录下来）' };
   if (reason.length > REFUND_REASON_MAX_LENGTH) {
     return {
       ok: false,
@@ -678,7 +679,7 @@ export function emptyReleaseForm(): ReleaseForm {
 export function releaseErrors(form: unknown): { ok: boolean; first: string } {
   const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
   const reason = typeof f['reason'] === 'string' ? f['reason'].trim() : '';
-  if (reason === '') return { ok: false, first: '解除理由必填（会进审计台账与订单时间线）' };
+  if (reason === '') return { ok: false, first: '解除理由必填（会记录在订单时间线里）' };
   if (reason.length > ADMIN_NOTE_MAX_LENGTH) {
     return {
       ok: false,

@@ -1,5 +1,5 @@
 /**
- * 职责：运营日志页（剩余清单 3-2）——上半部分"最近一次对账"，下半部分管理员操作审计（可按操作人 / 对象过滤、翻页）。
+ * 职责：运营日志页（剩余清单 3-2）——上半部分"最近一次自动核对（订单与支付记录）"，下半部分管理员操作审计（可按操作人 / 对象过滤、翻页）。
  *
  * @why 两件事放一页：都是"出事之后来查"的，运营要回答的问题是"昨晚对账有没有异常、谁动过这张单"。
  * @why 请求序号（同 RiskPage A-05）：快速翻页 / 改过滤时，晚到的旧响应不得覆盖新列表。
@@ -63,7 +63,7 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
   return (
     // 与其它页同一套卡片样式（三端联动 UI 模拟 2026-10-08：原先没有 panel，标题直接压在背景上）
     <section className="panel">
-      <h2 className="title">最近一次对账</h2>
+      <h2 className="title">最近一次自动核对（订单与支付记录）</h2>
       {reconError !== '' && <p className="error">{reconError}</p>}
       {recon !== null && (
         <div className="form">
@@ -107,7 +107,7 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
       <table className="table">
         <thead>
           <tr>
-            <th>时间（JST）</th>
+            <th>时间（日本时间）</th>
             <th>操作人</th>
             <th>操作</th>
             <th>对象</th>

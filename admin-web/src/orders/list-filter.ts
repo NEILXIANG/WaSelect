@@ -7,7 +7,9 @@
  *      另加「已关闭」= cancelled + expired——不加的话这两态只能从「全部」里翻，十态就不是全覆盖。
  * @why URL 仍以 `status=` 为唯一真源（不另造 `tab=`）：工作台的待办链接 `#/orders?status=paid`、
  *      已有收藏与"复制链接发同事"都依赖它。页签只是 URL 的一种**读法**：状态集合恰好等于某个页签 → 高亮它；
- *      否则（如工作台的 `status=refunding`，只是售后页签的一半）不高亮任何页签，页面另显示"当前筛选：退款中"。
+ *      是某个页签的一部分（如工作台的 `status=refunding`，只是售后页签的一半）→ 也高亮那个页签，
+ *      页面另说"此页签下只显示：退款中"（AJ-410 / N27：原先什么都不高亮，新手以为点错了页面）；
+ *      跨页签的自定义集合才不高亮任何页签。
  * @why 日期在 URL 里存**预设名**（`range=7d`），自定义才存具体日期：收藏的"近 7 天"明天打开仍是近 7 天，
  *      存死日期的话收藏就成了一段过去的时间。
  *
@@ -53,12 +55,21 @@ export function tabStatusParam(tab: StatusTab): string {
 export function readStatusFilter(raw: string | null): {
   statuses: OrderStatus[];
   tabKey: string | null;
+  /** true = 状态集合只是该页签的**一部分**（如 `status=shipped` 只是「已发货」页签里的一半）。 */
+  narrowed: boolean;
 } {
   const parsed = raw === null ? null : parseOrderStatusList(raw);
-  if (parsed === null) return { statuses: [], tabKey: 'all' };
+  if (parsed === null) return { statuses: [], tabKey: 'all', narrowed: false };
   const same = (t: StatusTab): boolean =>
     t.statuses.length === parsed.length && t.statuses.every((s) => parsed.includes(s));
-  return { statuses: parsed, tabKey: STATUS_TABS.find(same)?.key ?? null };
+  const exact = STATUS_TABS.find(same);
+  if (exact !== undefined) return { statuses: parsed, tabKey: exact.key, narrowed: false };
+  // AJ-410 / N27：单个状态（工作台待办、收藏的 `status=shipped`）属于某个页签时，高亮那个页签；
+  // 筛选仍按 URL 原样（不偷偷扩成整组），页面另说一句"只显示其中的 …"。页签互不相交，所以至多一个匹配。
+  const owner = STATUS_TABS.find(
+    (t) => t.statuses.length > 0 && parsed.every((s) => t.statuses.includes(s)),
+  );
+  return { statuses: parsed, tabKey: owner?.key ?? null, narrowed: owner !== undefined };
 }
 
 export const DATE_PRESETS: ReadonlyArray<{ key: string; label: string; days?: number }> = [

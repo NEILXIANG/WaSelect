@@ -367,7 +367,8 @@ describe('订单：真服务端 → 列表行与闸门；闸门与服务端判�
     const detail = await getOrder(api, id);
     const gate = refundGate(detail);
     expect(gate.ok).toBe(false);
-    expect(gate.reason).toContain('40907');
+    // AJ-410：给运营看的原因不再带内部码 40907（改白话）；"与服务端同一个码"由下面对服务端错误码的断言钉住
+    expect(gate.reason).toContain('拒付');
     // 前端闸门说拦 → 服务端也确实拦（若有人绕过按钮直接调，得到的是同一个码）
     const err = await refundOrder(api, id, { reason: '缺货' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);

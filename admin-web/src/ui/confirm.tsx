@@ -22,12 +22,22 @@
  *              两次点击之间那一个 tick 内 `disabled` 还没生效；没有这把锁就是双击退两笔。
  *              失败时父组件**必须关闭弹层**（与既有 `setConfirming(false)` 同形），
  *              需要重试就重新打开——所以这把锁不会把人卡死。
+ * @why **危险确认按回车不放行**（AJ-410 / N21）：新手在抽屉里按回车打开了确认框，再按一次回车就会把
+ *      不可逆的动作（发货 / 退款 / 解除拒付）执行掉——确认框存在的意义就没了。所以危险确认只能鼠标点
+ *      （或键盘空格），按钮下面写明"请用鼠标点击「…」"。打开时焦点移进弹层，回车不会落回背后的表单。
+ *      非危险确认（如"放弃修改"以外的普通确认）不拦。
  * @limitation 三：它**不做**业务校验（金额上限、状态闸门仍在 `orders/view.ts` 与服务端）；
  *              弹层只回答"你确定吗"，不回答"能这样做吗"。
  *
  * @see ../../docs/管理后台对标分析-成熟电商平台-2026-10-08.md §8-1①；./toast.tsx（操作反馈）
  */
 import { useEffect, useRef, useState } from 'react';
+import { blockEnter } from './keys.js';
+
+/** 危险确认按钮下面的提示（N21）。 */
+export function mouseOnlyHint(confirmText: string): string {
+  return `请用鼠标点击「${confirmText}」按钮（按回车不会确认）`;
+}
 
 export interface ConfirmSpec {
   /** 标题：说清**后果**，不是动作名（「退款后不可撤销」而不是「退款」）。 */
@@ -112,8 +122,11 @@ export function ConfirmDialog({
   }, [busy]);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
+    // 焦点移进弹层：否则焦点还停在背后表单的输入框里，回车会再触发一次背后的主按钮
     if (needsType) inputRef.current?.focus();
+    else bodyRef.current?.focus();
   }, [needsType]);
 
   const danger = spec.danger === true;
@@ -126,7 +139,18 @@ export function ConfirmDialog({
           if (!busy) cancel.current();
         }}
       />
-      <div className="modal-body dialog">
+      <div
+        className="modal-body dialog"
+        ref={bodyRef}
+        tabIndex={-1}
+        // 危险确认：弹层里任何地方的回车都不执行（也不冒泡到背后的表单，N21）
+        onKeyDown={(e) => {
+          if (danger && e.key === 'Enter') {
+            blockEnter(e);
+            e.stopPropagation();
+          }
+        }}
+      >
         <h2 className={`dialog-title${danger ? ' error' : ''}`}>{spec.title}</h2>
         {typeof spec.body === 'string' && spec.body !== '' && <p className="muted">{spec.body}</p>}
 
@@ -172,6 +196,7 @@ export function ConfirmDialog({
             取消
           </button>
         </div>
+        {danger && <p className="muted">{mouseOnlyHint(spec.confirmText)}</p>}
       </div>
     </div>
   );

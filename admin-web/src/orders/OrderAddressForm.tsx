@@ -25,6 +25,8 @@ import {
   type AddressField,
 } from './address-view.js';
 import { addressGate } from './view.js';
+import { blockEnter, enterClicksPrimary } from '../ui/keys.js';
+import { mouseOnlyHint } from '../ui/confirm.js';
 
 /** 字段展示名（顺序沿用 ADDRESS_FIELDS）。 */
 const LABELS: Readonly<Record<AddressField, string>> = {
@@ -88,17 +90,28 @@ export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormPro
   };
 
   return (
-    <div className="form">
+    <div className="form" onKeyDown={enterClicksPrimary}>
       <span className="label">发货前改址</span>
-      {ADDRESS_FIELDS.map((f) => (
+      {ADDRESS_FIELDS.map((f, i) => (
         <div className="field" key={f}>
-          <span className="label">{LABELS[f]}</span>
+          <label className="label" htmlFor={`addr-${f}`}>
+            {LABELS[f]}
+          </label>
           <input
+            id={`addr-${f}`}
             className="input"
+            autoFocus={i === 0}
             value={form[f]}
             onChange={(e) => {
               setConfirming(false);
               setForm((s) => ({ ...s, [f]: e.target.value }));
+              // N30：改了这一格就清掉它的旧错误（原先改对了红字还挂着）
+              setErrors((old) => {
+                const rest = { ...old };
+                delete rest[f];
+                return rest;
+              });
+              setError('');
             }}
           />
           {errors[f] !== undefined && <span className="error">{errors[f]}</span>}
@@ -112,15 +125,28 @@ export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormPro
               .filter((v) => v.trim() !== '')
               .join('，')}
           </span>
-          <button type="button" className="btn" disabled={busy} onClick={() => void save()}>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onKeyDown={blockEnter}
+            onClick={() => void save()}
+          >
             {busy ? '保存中…' : '确认改址'}
           </button>
           <button type="button" className="link" onClick={() => setConfirming(false)}>
             取消
           </button>
+          <span className="muted">{mouseOnlyHint('确认改址')}</span>
         </div>
       ) : (
-        <button type="button" className="btn" disabled={!gate.ok || busy} onClick={ask}>
+        <button
+          type="button"
+          className="btn"
+          data-primary-action
+          disabled={!gate.ok || busy}
+          onClick={ask}
+        >
           保存新地址
         </button>
       )}

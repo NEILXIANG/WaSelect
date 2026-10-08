@@ -137,7 +137,7 @@ export function RiskPage({ api }: RiskPageProps) {
   /** 打开拉黑确认弹层（第一批①：拉黑此前是行内「确认拉黑 / 取消」，与"保存"同款按钮）。 */
   const askBlock = (): void => {
     setDialog({
-      title: '拉黑会进审计台账，用户此后无法下单',
+      title: '拉黑后用户无法再下单（这次操作会记录下来）',
       // ⚠️ 正文直接引 view.ts 的常量，不在这里重写一遍：
       //    它连"未付款订单会被取消、库存回补"都写全了，重写的必然是缩水版，
       //    而后果清单缩水正是这类弹层最危险的失效方式。
@@ -179,8 +179,8 @@ export function RiskPage({ api }: RiskPageProps) {
             <th>订单号</th>
             <th>状态</th>
             <th>争议金额（原币）</th>
-            <th>开案（JST）</th>
-            <th>结案（JST）</th>
+            <th>开案（日本时间）</th>
+            <th>结案（日本时间）</th>
             <th>操作</th>
           </tr>
         </thead>

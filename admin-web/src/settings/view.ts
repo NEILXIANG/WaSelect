@@ -3,7 +3,9 @@
  *
  * @why 文案在前端、服务端只给稳定 `key`（约束五：文案不写死在业务代码里）；服务端新加一项而这里还没登记时
  *      原样显示 key，不吞掉——少一个中文名比少一行配置好查。
- * @why 三种"空"分开说：`null` = 未配置；带 `edit_page` = 去那一页看；`false` = 配置为否 / 未配置（通知类）。
+ * @why 三种"空"分开说：`null` = 未填写；带 `edit_page` = 去那一页看；`false` = 未开通（通知类）。
+ * @why AJ-410 / N31：主文案只说运营能懂的话（"未填写，上线前请让技术人员配置""技术人员在服务器上修改"），
+ *      环境变量名（SELLER_NAME…）这类给技术人员的信息由 {@link techText} 单独给，页面上收进折叠的「技术信息」。
  * @why 关税率按字符串移位成百分比，不做浮点乘法：`0.13040 × 100` 在浮点里是 13.040000000000001。
  * @limitation 支付通道"仅处理存量订单"= 凭据在但不在 PAYMENT_CHANNELS 里（服务端 offline 语义）；
  *             这里只转述 `enabled`，不推断原因。
@@ -81,26 +83,33 @@ function ratePercent(rate: string): string {
 
 function channelText(ch: Record<string, unknown>): string {
   const cur = Array.isArray(ch['currencies']) ? (ch['currencies'] as string[]).join('/') : '';
-  const src = ch['attrs_source'] === 'table' ? '属性来自配置表' : '属性来自内置默认';
   const rest = [
-    ch['enabled'] === true ? '开放新单' : '仅处理存量订单',
-    `优先级 ${String(ch['priority'])}`,
+    ch['enabled'] === true ? '接受新订单' : '只处理已有订单',
+    `排序 ${String(ch['priority'])}`,
     cur,
-    src,
   ].join(' · ');
-  return `${String(ch['label'])}（${String(ch['channel'])}）· ${rest}`;
+  return `${String(ch['label'])} · ${rest}`;
 }
+
+/** 支付通道的技术信息（通道代号、属性来源）——收进「技术信息」。 */
+function channelTech(ch: Record<string, unknown>): string {
+  const src = ch['attrs_source'] === 'table' ? '属性来自配置表' : '属性来自内置默认';
+  return `${String(ch['channel'])}：${src}`;
+}
+
+/** 没填的配置项（N31）。 */
+export const NOT_SET = '未填写，上线前请让技术人员配置';
 
 export function valueText(item: SettingItemLike): string {
   const v = item.value;
   if (item.edit_page === 'ops') return '在「运营配置」页查看与修改';
-  if (v === null || v === undefined) return '未配置';
-  if (typeof v === 'boolean') return v ? '已配置' : '未配置';
+  if (v === null || v === undefined) return NOT_SET;
+  if (typeof v === 'boolean') return v ? '已开通' : '未开通，上线前请让技术人员配置';
   if (item.key === 'fx_buffer_rate' && typeof v === 'number') {
     return `${ratePercent(String(v))}%`;
   }
   if (Array.isArray(v)) {
-    if (v.length === 0) return '未配置';
+    if (v.length === 0) return NOT_SET;
     if (item.key === 'payment_channels') {
       return v.map((c) => channelText(c as Record<string, unknown>)).join('；');
     }
@@ -119,6 +128,18 @@ export function valueText(item: SettingItemLike): string {
 
 export function applyText(item: SettingItemLike): string {
   const when = item.apply === 'immediate' ? '立即生效' : '改后需重启';
-  if (item.source === 'db') return `数据库 · ${when}`;
-  return item.env !== undefined ? `环境变量 ${item.env} · ${when}` : `部署环境变量 · ${when}`;
+  if (item.source === 'db') return `在后台修改 · ${when}`;
+  return `技术人员在服务器上修改 · ${when}`;
+}
+
+/**
+ * 给技术人员的信息（环境变量名 / 存放位置 / 支付通道代号），页面上收进折叠的「技术信息」（N31）。
+ * @limitation 密钥类（没有 `env` 名的）只说"部署环境变量"——服务端白名单本就不下发它们的名字。
+ */
+export function techText(item: SettingItemLike): string {
+  if (item.key === 'payment_channels' && Array.isArray(item.value)) {
+    return item.value.map((c) => channelTech(c as Record<string, unknown>)).join('；');
+  }
+  if (item.source === 'db') return '存放在数据库';
+  return item.env !== undefined ? `环境变量 ${item.env}` : '部署环境变量';
 }

@@ -76,7 +76,9 @@ const open = (): Promise<HTMLElement> => openWith(SOURCE);
 /** 按标签文字取输入框（比按 DOM 顺序取稳：字段顺序调整不会让用例说谎）。 */
 function field(el: HTMLElement, label: string): HTMLInputElement {
   for (const l of el.querySelectorAll('label.field')) {
-    if ((l.querySelector('span.label')?.textContent ?? '').trim() === label) {
+    // AJ-410 / N24：必填项标签后多了「 *必填」标记，按字段名匹配时去掉它
+    const text = (l.querySelector('span.label')?.textContent ?? '').replace(/\s*\*必填$/, '');
+    if (text.trim() === label) {
       const input = l.querySelector('input');
       if (input !== null) return input as HTMLInputElement;
     }
@@ -284,10 +286,10 @@ describe('商品编辑：保存撞上 40914（ADM3-02）', () => {
   it('新建态不要求凭据：POST 体里**没有** expected_updated_at', async () => {
     const el = await openWith(null);
     await typeInto(field(el, '商品名（面向买家）'), 'Deba Knife 出刃包丁 165mm');
-    await typeInto(field(el, '售价（円）'), '12800');
+    await typeInto(field(el, '售价（日元）'), '12800');
     await typeInto(field(el, '重量（克）'), '540');
-    await typeInto(field(el, '英文报关品名（必填，D-39）'), 'kitchen knife');
-    await typeInto(field(el, 'HS 编码（必填）'), '8211.91');
+    await typeInto(field(el, '英文报关品名'), 'kitchen knife');
+    await typeInto(field(el, 'HS 编码'), '8211.91');
     // 新建库存默认留空、必填（三端联动 UI 模拟 2026-10-08）：不填先被拦
     expect(field(el, '库存').value).toBe('');
     // AJ-403：新建的保存按钮叫「保存为草稿」（新建恒为草稿；另有「保存并上架」）
@@ -439,11 +441,11 @@ describe('商品表单：草稿与保存并上架（AJ-403）', () => {
 
   async function fillNew(el: HTMLElement): Promise<void> {
     await typeInto(field(el, '商品名（面向买家）'), 'Nambu Tekki 南部鉄器 急須 0.65L');
-    await typeInto(field(el, '售价（円）'), '9800');
+    await typeInto(field(el, '售价（日元）'), '9800');
     await typeInto(field(el, '重量（克）'), '1200');
     await typeInto(field(el, '库存'), '30');
-    await typeInto(field(el, '英文报关品名（必填，D-39）'), 'cast iron teapot');
-    await typeInto(field(el, 'HS 编码（必填）'), '7323.91');
+    await typeInto(field(el, '英文报关品名'), 'cast iron teapot');
+    await typeInto(field(el, 'HS 编码'), '7323.91');
   }
 
   it('🔴 新建：「保存为草稿」只发 POST，回列表并说"草稿"', async () => {
@@ -505,7 +507,7 @@ describe('商品表单：草稿与保存并上架（AJ-403）', () => {
 
   it('示例占位符都以「例：」开头（验收 2026-10-08：原先像已填好的值）', async () => {
     const el = await openForm(null);
-    const examples = ['商品名（面向买家）', '日文品名（采购用）', 'HS 编码（必填）'].map(
+    const examples = ['商品名（面向买家）', '日文品名（采购用）', 'HS 编码'].map(
       (l) => (field(el, l) as HTMLInputElement | null)?.placeholder ?? '',
     );
     for (const p of examples) expect(p.startsWith('例：')).toBe(true);
@@ -565,5 +567,38 @@ describe('商品表单：图片排序与主图（AJ-403）', () => {
     expect(dirtyOf(el)).toBe('no');
     await click(el.querySelector('[aria-label="把第 2 张下移"]'));
     expect(dirtyOf(el)).toBe('yes');
+  });
+});
+
+/** AJ-410（新手走查）N22～N26：标签无内部编号、必填统一标记、HS 编码说明、错误清单可点、保存条吸底。 */
+describe('商品表单：新手可用性（AJ-410）', () => {
+  it('标签里没有「D-39」「MVP」；必填项统一标「*必填」；HS 编码有一行说明', async () => {
+    const el = await openWith(null);
+    const text = el.textContent ?? '';
+    expect(text).not.toMatch(/D-\d+|MVP/);
+    const required = [...el.querySelectorAll('.label')]
+      .filter((l) => l.querySelector('.required-mark') !== null)
+      .map((l) => (l.textContent ?? '').replace(/\s*\*必填$/, ''));
+    expect(required).toEqual(
+      expect.arrayContaining([
+        '商品名（面向买家）',
+        '售价（日元）',
+        '英文报关品名',
+        'HS 编码',
+        '分类',
+      ]),
+    );
+    expect(text).toContain('海关商品编码，6–10 位数字，例：3304.99');
+  });
+
+  it('🔴 空表单点保存 → 顶部列出要改的字段，点「HS 编码」光标跳到那一格（N26）；保存按钮在吸底条里（N25）', async () => {
+    const el = await openWith(null);
+    const save = button(el, '保存为草稿');
+    expect(save?.closest('.sticky-actions')).not.toBeNull();
+    await click(save);
+    const list = el.querySelector('[aria-label="需要修正的项"]') as HTMLElement;
+    expect(list).not.toBeNull();
+    await click(button(list, 'HS 编码'));
+    expect(document.activeElement).toBe(field(el, 'HS 编码'));
   });
 });

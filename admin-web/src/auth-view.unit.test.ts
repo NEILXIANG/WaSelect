@@ -2,7 +2,11 @@
  * 职责：`auth-view.ts` 单测（登录错误文案 / 口令预检 / 过期提醒）。
  */
 import { describe, expect, it } from 'vitest';
-import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
+import {
+  ADMIN_LOGIN_LOCK_MINUTES,
+  ADMIN_LOGIN_MAX_FAILURES,
+  ADMIN_PASSWORD_MIN_LENGTH,
+} from '@waselect/shared';
 import { ApiError } from './api/errors.js';
 import { expiryWarning, jwtExpMs, loginErrorText, loginPrecheck } from './auth-view.js';
 
@@ -10,24 +14,30 @@ import { expiryWarning, jwtExpMs, loginErrorText, loginPrecheck } from './auth-v
 const EMAIL = 'dev@waselect.test';
 
 describe('loginErrorText（P2-43）', () => {
-  it('40101 在登录页说"邮箱、口令或二次验证码不正确"，不说"登录已过期"', () => {
+  // AJ-410 / N5、N6：「口令」统一为「密码」；报障码不再拼进红字（单独一行）；输错时提醒锁定规则（数字来自 shared）
+  it('40101 在登录页说"邮箱、密码或手机验证码不正确"，不说"登录已过期"；报障码单独给；提醒锁定规则', () => {
     const t = loginErrorText(new ApiError(40101, '未登录或登录已过期', 'tr-1'));
-    expect(t).toBe('邮箱、口令或二次验证码不正确（报障码：tr-1）');
+    expect(t.text).toBe('邮箱、密码或手机验证码不正确');
+    expect(t.traceId).toBe('tr-1');
+    expect(t.hint).toContain(`连续输错 ${ADMIN_LOGIN_MAX_FAILURES} 次`);
+    expect(t.hint).toContain(`锁定 ${ADMIN_LOGIN_LOCK_MINUTES} 分钟`);
   });
 
   it('42901 读 retry-after 换算分钟（向上取整）；头缺失时不编数字', () => {
-    expect(loginErrorText(new ApiError(42901, 'x', 't', { retryAfterSec: 840 }))).toContain(
+    expect(loginErrorText(new ApiError(42901, 'x', 't', { retryAfterSec: 840 })).text).toContain(
       '约 14 分钟后再试',
     );
-    expect(loginErrorText(new ApiError(42901, 'x', 't', { retryAfterSec: 30 }))).toContain(
+    expect(loginErrorText(new ApiError(42901, 'x', 't', { retryAfterSec: 30 })).text).toContain(
       '约 1 分钟',
     );
-    expect(loginErrorText(new ApiError(42901, 'x', 't'))).toContain('请稍后再试');
+    expect(loginErrorText(new ApiError(42901, 'x', 't')).text).toContain('请稍后再试');
   });
 
   it('其它错误码透出服务端 message；非 ApiError 给通用文案', () => {
-    expect(loginErrorText(new ApiError(50000, '服务器内部错误', 't'))).toContain('服务器内部错误');
-    expect(loginErrorText(new Error('boom'))).toBe('登录失败，请稍后重试');
+    expect(loginErrorText(new ApiError(50000, '服务器内部错误', 't')).text).toContain(
+      '服务器内部错误',
+    );
+    expect(loginErrorText(new Error('boom')).text).toBe('登录失败，请稍后重试');
   });
 });
 
@@ -39,8 +49,8 @@ describe('loginPrecheck：二次验证码（P1-5）', () => {
     expect(loginPrecheck(EMAIL, pw, '12345')).toContain('6 位数字');
     expect(loginPrecheck(EMAIL, pw, '12a456')).toContain('6 位数字');
   });
-  it('40101 文案提到二次验证码（开了 TOTP 时口令对、码错也是这个答复）', () => {
-    expect(loginErrorText(new ApiError(40101, 'x', ''))).toContain('二次验证码');
+  it('40101 文案提到手机验证码（开了 TOTP 时密码对、码错也是这个答复）', () => {
+    expect(loginErrorText(new ApiError(40101, 'x', '')).text).toContain('手机验证码');
   });
 });
 

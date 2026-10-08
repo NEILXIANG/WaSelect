@@ -43,7 +43,8 @@ import { CsvShipImport } from './CsvShipImport.js';
 import { SelectionBar } from './SelectionBar.js';
 import { PrintSheet } from './PrintSheet.js';
 import { ToastStack, useToasts } from '../ui/toast.js';
-import { readStatusFilter, resolveDateRange, tabStatusParam } from './list-filter.js';
+import { readStatusFilter, resolveDateRange, STATUS_TABS, tabStatusParam } from './list-filter.js';
+import { RowShipDrawer } from './RowShipDrawer.js';
 import { StatusTabs } from './StatusTabs.js';
 import { DateFilter } from './DateFilter.js';
 import { Badge } from '../ui/badge.js';
@@ -102,7 +103,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   // ── 以下全部由 URL 派生（@see @limitation 四）────────────────────
   // 认不出的 `?status=`（手改地址、旧收藏）回落为「全部」（AJ-398）：原样发给服务端会得到 40001，
   // 页面一片空白、看不出是筛选坏了。页签与 URL 的对应见 list-filter.ts。
-  const { statuses, tabKey } = readStatusFilter(route.query.get(Q.status));
+  const { statuses, tabKey, narrowed } = readStatusFilter(route.query.get(Q.status));
   /** 进 load 依赖的是字符串：`statuses` 每次渲染都是新数组，直接放进依赖会每次渲染都重拉列表。 */
   const statusKey = statuses.join(',');
   const dateValue = {
@@ -130,6 +131,9 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [batch, setBatch] = useState<'select' | 'csv' | null>(null);
   const batchMode = tabKey === 'to_ship';
+  /** 行内「发货」打开的订单 id（AJ-410 / N12）；null = 没开。 */
+  const [shipId, setShipId] = useState<string | null>(null);
+  const shipOrderRow = shipId === null ? undefined : raw.find((o) => o.order_id === shipId);
   /** 打印页（AJ-407）：点击时冻结的所选 id；null = 看列表。 */
   const [printIds, setPrintIds] = useState<string[] | null>(null);
   /** 批量发货的整次失败走 Toast（ui/adoption 门禁：新页面不写行内反馈）。 */
@@ -242,7 +246,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
     <section className="panel">
       <header className="panel-head">
         <h1 className="title">订单管理</h1>
-        <span className="muted">时间均为 JST</span>
+        <span className="muted">时间均为日本时间</span>
       </header>
 
       {/* 状态页签 + 计数（AJ-400）：取代原来的状态下拉与页内待办条（工作台仍保留待办条） */}
@@ -258,8 +262,24 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         refreshKey={reloadTick}
         onPick={(t) => patch({ status: tabStatusParam(t), page: '1' })}
       />
+      {narrowed && tabKey !== null && (
+        // AJ-410 / N27：单状态链接（工作台待办、`status=shipped`）高亮所属页签，并说清只显示其中一部分
+        <p className="muted">
+          此页签下只显示：{statuses.map((s) => ORDER_STATUS_LABELS[s]).join('、')}{' '}
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              const t = STATUS_TABS.find((x) => x.key === tabKey);
+              if (t !== undefined) patch({ status: tabStatusParam(t), page: '1' });
+            }}
+          >
+            显示本页签全部
+          </button>
+        </p>
+      )}
       {tabKey === null && (
-        // 工作台待办这类"单个状态"的链接（如 status=refunding）不是任何一个页签：明说当前筛的是什么
+        // 跨页签的自定义状态集合：明说当前筛的是什么
         <p className="muted">
           当前筛选：{statuses.map((s) => ORDER_STATUS_LABELS[s]).join('、')}{' '}
           <button type="button" className="link" onClick={() => patch({ status: '', page: '1' })}>
@@ -281,11 +301,11 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         <label className="muted">
           <input
             type="checkbox"
-            aria-label="含测试单"
+            aria-label="显示测试订单"
             checked={includeTest}
             onChange={(e) => patch({ test: e.target.checked ? '1' : '0', page: '1' })}
           />
-          含测试单
+          显示测试订单
         </label>
         <input
           className="input"
@@ -324,13 +344,17 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
             type="button"
             className="btn"
             disabled={selected.size === 0}
+            // N11：灰着的按钮要说清怎么让它能点
+            title={selected.size === 0 ? '先勾选左边方框，选中要发货的订单' : undefined}
             onClick={() => setBatch('select')}
           >
             批量发货（{selected.size}）
           </button>
+          {selected.size === 0 && <span className="muted">先勾选左边方框</span>}
           <button type="button" className="btn btn-secondary" onClick={() => setBatch('csv')}>
-            导入运单号（CSV）
+            导入运单号（Excel/表格文件）
           </button>
+          <span className="muted">一次填好多单的运单号：把表格另存为 CSV 后导入</span>
         </div>
       )}
       <SelectionBar
@@ -356,6 +380,15 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
           onClose={() => setBatch(null)}
           onDone={() => setReloadTick((t) => t + 1)}
           onError={batchError}
+        />
+      )}
+      {shipId !== null && shipOrderRow !== undefined && (
+        <RowShipDrawer
+          api={api}
+          order={shipOrderRow}
+          sink={sink}
+          onClose={() => setShipId(null)}
+          onShipped={() => setReloadTick((t) => t + 1)}
         />
       )}
       <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
@@ -437,6 +470,16 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
                 )}
               </td>
               <td>
+                {/* N12：待发货页签每行直接发货（同一张发货表单 ShipForm，闸门与校验不另写） */}
+                {batchMode && row.actions.ship.ok && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setShipId(row.id)}
+                  >
+                    发货
+                  </button>
+                )}{' '}
                 <button
                   type="button"
                   className="link"

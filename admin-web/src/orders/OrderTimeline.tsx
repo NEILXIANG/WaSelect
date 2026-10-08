@@ -17,6 +17,7 @@ import { useFormDirty } from '../ui/unsaved.js';
 import { ORDER_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { formatJst } from '../format.js';
 import { toastError } from '../ui/toast.js';
+import { TraceLine } from '../ui/trace.js';
 import { addOrderNote, listOrderNotes, type AdminApi } from './api.js';
 import {
   mergeTimeline,
@@ -37,8 +38,10 @@ export interface OrderTimelineProps {
 
 export function OrderTimeline({ api, orderId, events, onError, onSuccess }: OrderTimelineProps) {
   const [notes, setNotes] = useState<OrderNote[]>([]);
-  /** 取备注失败的行内说明（含报障码）；'' = 没失败。 */
-  const [loadErr, setLoadErr] = useState('');
+  /** 取备注失败的行内说明（报障码单独一行，AJ-410 / N5）；text 为 '' = 没失败。 */
+  const [loadErr, setLoadErr] = useState<{ text: string; traceId?: string | undefined }>({
+    text: '',
+  });
   const [draft, setDraft] = useState('');
   // 只填空格不算草稿（与「添加备注」按钮的禁用口径一致）
   useFormDirty(draft.trim(), '');
@@ -47,10 +50,10 @@ export function OrderTimeline({ api, orderId, events, onError, onSuccess }: Orde
   const load = useCallback(async (): Promise<void> => {
     try {
       setNotes(await listOrderNotes(api, orderId));
-      setLoadErr('');
+      setLoadErr({ text: '' });
     } catch (e) {
       const { text, traceId } = toastError(e, '取备注失败');
-      setLoadErr(traceId !== undefined && traceId !== '' ? `${text}（报障码 ${traceId}）` : text);
+      setLoadErr({ text, traceId });
     }
   }, [api, orderId]);
 
@@ -97,7 +100,12 @@ export function OrderTimeline({ api, orderId, events, onError, onSuccess }: Orde
           </div>
         ),
       )}
-      {loadErr !== '' && <span className="error">{loadErr}</span>}
+      {loadErr.text !== '' && (
+        <>
+          <span className="error">{loadErr.text}</span>
+          <TraceLine traceId={loadErr.traceId} />
+        </>
+      )}
 
       <textarea
         className="input"

@@ -143,7 +143,7 @@ export function FxPanel({ api }: FxPanelProps) {
             <th>生效汇率</th>
             <th>原始汇率</th>
             <th>缓冲</th>
-            <th>生效时间（JST）</th>
+            <th>生效时间（日本时间）</th>
           </tr>
         </thead>
         <tbody>
@@ -198,7 +198,7 @@ export function FxPanel({ api }: FxPanelProps) {
             onChange={(e) => setForm((s) => ({ ...s, effectiveFrom: e.target.value }))}
           />
         </div>
-        <p className="muted">生效时间留空 = 立即生效；填写时按 JST 解释</p>
+        <p className="muted">生效时间留空 = 立即生效；填写的时间按日本时间算</p>
         {preview.sampleText !== '' && (
           <p className={preview.risky || preview.noBaseline ? 'error' : 'muted'}>
             核对：{preview.sampleText}

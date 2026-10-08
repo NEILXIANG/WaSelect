@@ -54,7 +54,7 @@ export function CustomerRiskActions({
 
   const askBlock = (): void =>
     setDialog({
-      title: '拉黑会进审计台账，客户此后无法下单',
+      title: '拉黑后客户无法再下单（这次操作会记录下来）',
       body: `${CUSTOMER_BLOCK_CONFIRM_TEXT}\n\n客户 ${userId}`,
       confirmText: '确认拉黑',
       danger: true,
@@ -69,12 +69,12 @@ export function CustomerRiskActions({
   const askUnblock = (): void => {
     const r = reason.trim();
     if (r === '') {
-      sink.error('请填写解除原因（进审计台账）');
+      sink.error('请填写解除原因（会记录下来）');
       return;
     }
     setDialog({
       title: '解除后对方重新登录即可下单',
-      body: `客户 ${userId}。拉黑时被取消的订单不会恢复（库存已回补，恢复会超卖），买家需重新下单。解除原因会进审计台账。`,
+      body: `客户 ${userId}。拉黑时被取消的订单不会恢复（库存已回补，恢复会超卖），买家需重新下单。解除原因会记录下来。`,
       confirmText: '确认解除',
       danger: true,
       run: () =>
@@ -96,7 +96,7 @@ export function CustomerRiskActions({
           <input
             className="input"
             name="customer-unblock-reason"
-            placeholder="例：客服核实为误拉黑（进审计台账）"
+            placeholder="例：客服核实为误拉黑"
             maxLength={ADMIN_NOTE_MAX_LENGTH}
             value={reason}
             onChange={(e) => setReason(e.target.value)}

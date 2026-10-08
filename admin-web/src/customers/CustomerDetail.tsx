@@ -75,7 +75,7 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
               <span className="selectable">{c.contact_email ?? '—'}</span>
             </div>
             <div className="field">
-              <span className="label">注册（JST）</span>
+              <span className="label">注册（日本时间）</span>
               <span>{formatJst(c.created_at)}</span>
             </div>
           </div>
@@ -130,7 +130,7 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
                 <th>订单号</th>
                 <th>状态</th>
                 <th>合计</th>
-                <th>下单（JST）</th>
+                <th>下单（日本时间）</th>
               </tr>
             </thead>
             <tbody>

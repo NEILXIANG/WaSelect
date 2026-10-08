@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { formatJst } from '../format.js';
 import { getSettings, type AdminApi, type SettingsLike } from './api.js';
-import { applyText, groupTitle, itemLabel, valueText } from './view.js';
+import { applyText, groupTitle, itemLabel, techText, valueText } from './view.js';
 
 export function SettingsPage({ api }: { api: AdminApi }) {
   const [data, setData] = useState<SettingsLike | null>(null);
@@ -43,12 +43,12 @@ export function SettingsPage({ api }: { api: AdminApi }) {
         {loading && <span className="muted">加载中…</span>}
       </header>
       <p className="muted">
-        只读：环境变量在部署平台修改、改后需重启；运费与汇率在{' '}
+        这一页只能看、不能改：店铺信息等由技术人员在服务器上修改，改后需要重启；运费与汇率在{' '}
         <a className="link" href="#/ops">
           运营配置
         </a>{' '}
         页修改。
-        {data?.generated_at !== undefined && `取数时刻 ${formatJst(data.generated_at)}（JST）`}
+        {data?.generated_at !== undefined && `取数时刻 ${formatJst(data.generated_at)}（日本时间）`}
       </p>
       {data?.groups.map((g) => (
         <div className="form-card" key={g.key}>
@@ -60,6 +60,12 @@ export function SettingsPage({ api }: { api: AdminApi }) {
                   <td>{itemLabel(it.key)}</td>
                   <td className="selectable">{valueText(it)}</td>
                   <td className="muted">{applyText(it)}</td>
+                  <td>
+                    <details className="tech-info">
+                      <summary>技术信息</summary>
+                      {techText(it)}
+                    </details>
+                  </td>
                 </tr>
               ))}
             </tbody>

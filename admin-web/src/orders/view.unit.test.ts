@@ -129,7 +129,7 @@ describe('statusText（列表与详情共用的状态文案）', () => {
 
   it('🔴 详情页那一格不再显示服务端原文（缺陷注入点：改回 order.status 即红）', () => {
     expect(statusText({ status: 'paid' })).toBe('待发货');
-    expect(statusText({ status: 'created' })).toBe('待付款（未发起）');
+    expect(statusText({ status: 'created' })).toBe('已下单，等待买家付款'); // AJ-410 / N15 改白话
     expect(statusText({ status: 'shipped' })).toBe('已发货');
   });
 
@@ -148,7 +148,7 @@ describe('statusText（列表与详情共用的状态文案）', () => {
 
 describe('eventStatusText（事件流：订单状态 + 管理事件伪状态）', () => {
   it('订单状态值 → 走订单词表（created 而不是 created 原样）', () => {
-    expect(eventStatusText('created')).toBe('待付款（未发起）');
+    expect(eventStatusText('created')).toBe('已下单，等待买家付款'); // AJ-410 / N15 改白话
     expect(eventStatusText('paid')).toBe('待发货');
     expect(eventStatusText('shipped')).toBe('已发货');
     expect(eventStatusText('refunded')).toBe('已退款');
@@ -310,10 +310,13 @@ describe('refundGate（退款闸门）', () => {
     expect(detail[0]?.recipientText).toBe('Taro');
   });
 
-  it('⚠️ has_dispute=true 拦且原因带 40907（服务端就是这么拒的，文案要能自查）', () => {
+  // AJ-410：行为变更——原因不再带内部错误码 40907（运营看不懂），改为白话说清"为什么"和"去哪处理"
+  it('⚠️ has_dispute=true 拦，原因用白话说清是拒付、去哪处理（不带错误码）', () => {
     const g = refundGate(withStatus('paid', { has_dispute: true }));
     expect(g.ok).toBe(false);
-    expect(g.reason).toContain('40907');
+    expect(g.reason).toContain('拒付');
+    expect(g.reason).toContain('风控');
+    expect(g.reason).not.toMatch(/\d{5}/);
   });
 
   it('⚠️ has_dispute 字段缺失时放行（列表接口没有这个字段，拦了正常单也点不动）', () => {

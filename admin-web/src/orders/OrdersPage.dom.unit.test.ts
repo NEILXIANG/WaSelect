@@ -64,12 +64,13 @@ afterEach(async () => {
   mounted = undefined;
 });
 
-describe('订单列表："含测试单"开关（剩余清单 3-4）', () => {
+// AJ-410 / N13：开关文案「含测试单」改为「显示测试订单」
+describe('订单列表："显示测试订单"开关（剩余清单 3-4）', () => {
   it('🔴 默认不带 include_test；勾选 → 重新请求且带 include_test=true、回到第 1 页', async () => {
     const el = await open();
     expect(gets()[0]?.path).not.toContain('include_test');
     const box = el.querySelector(
-      'input[type="checkbox"][aria-label="含测试单"]',
+      'input[type="checkbox"][aria-label="显示测试订单"]',
     ) as HTMLInputElement;
     await click(box);
     expect(gets().at(-1)?.path).toContain('include_test=true');
@@ -107,11 +108,20 @@ describe('订单列表：状态页签与日期筛选（AJ-400）', () => {
     expect(countCalls.length).toBeGreaterThanOrEqual(7);
   });
 
-  it('工作台的单状态链接（status=refunding）照常请求；不高亮页签而是明说"当前筛选：退款中"', async () => {
+  // AJ-410 / N27：行为变更——单状态链接高亮所属页签（原为不高亮、显示「当前筛选：…」）
+  it('🔴 工作台的单状态链接（status=refunding）照常请求；高亮「售后·退款」并说"只显示：退款中"，可一键看整个页签', async () => {
     const el = await open('#/orders?status=refunding');
     expect(gets()[0]?.path).toContain('status=refunding');
-    expect(el.querySelector('[role="tab"][aria-selected="true"]')).toBeNull();
-    expect(el.textContent).toContain('当前筛选：退款中');
+    expect(tab(el, '售后·退款').getAttribute('aria-selected')).toBe('true');
+    expect(el.textContent).toContain('此页签下只显示：退款中');
+    await click(button(el, '显示本页签全部'));
+    expect(decodeURIComponent(gets().at(-1)?.path ?? '')).toContain('status=refunding,refunded');
+  });
+
+  it('🔴 status=shipped（只是「已发货」页签的一半）→ 高亮「已发货」，不再显示"当前筛选 … 清除"', async () => {
+    const el = await open('#/orders?status=shipped');
+    expect(tab(el, '已发货').getAttribute('aria-selected')).toBe('true');
+    expect(el.textContent).not.toContain('当前筛选');
   });
 
   it('选「近 7 天」→ 请求带 created_from / created_to（JST 日历日）', async () => {

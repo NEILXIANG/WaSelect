@@ -5,6 +5,7 @@
  * @why 必须走组件用例：`notes-view.ts` 的纯函数只能证明"混排算得对"，
  *      证明不了组件真的取了备注、真的把新追加的那条并进列表、取失败时主区没被挡住。
  */
+import { TRACE_HINT } from '../ui/trace.js';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
@@ -133,7 +134,9 @@ describe('订单时间线（AJ-396）', () => {
       throw new ApiError(50000, '服务器内部错误', 'trace-abc');
     };
     const el = await open();
-    expect(el.textContent).toContain('服务器内部错误（报障码 trace-abc）');
+    // AJ-410 / N5：报障码不再拼进红字，单独一行说明用途
+    expect(el.querySelector('.error')?.textContent).toBe('服务器内部错误');
+    expect(el.querySelector('.trace-line')?.textContent).toBe(`${TRACE_HINT}trace-abc`);
     expect(el.textContent).toContain('已发货');
   });
 });
