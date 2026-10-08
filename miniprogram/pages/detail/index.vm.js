@@ -30,6 +30,7 @@ import { displaySubLine } from '../../utils/price-format.js';
 import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 import { MAX_CART_LINES } from '../../utils/cart-store.js';
 import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
+import { cartBadgeText } from '../../utils/tabs.js';
 
 /** 原产地 ISO 码 → 展示名。@see @limitation 一 */
 const ORIGIN_LABELS = { JP: '日本' };
@@ -231,4 +232,27 @@ export function addFeedback(result) {
     };
   }
   return { added: false, addNote: '' };
+}
+
+/**
+ * 底部固定购买栏的视图（M-13，AJ-406）：价格 + 购物车入口（带件数）+ 加入购物车 + 立即购买。
+ *
+ * @param {{cartCount?: unknown, added?: unknown, soldOut?: unknown}|null|undefined} s
+ *   `cartCount` cart-store `count()`；`added` 本次已加购；`soldOut` 详情的售罄态
+ * @returns {{cartText: string, cartAria: string, disabled: boolean}}
+ * @why 购物车入口**常驻**在栏里，取代原先"加购成功后才冒出来的「去购物车」按钮"：
+ *      两个去购物车的入口同屏就是重复（对标分析 M-14 同一条），而常驻入口在加购前也能用。
+ * @why 加购反馈写进这个入口（"已加入购物车 · 3"）而不是另起一行：反馈在按钮旁边（§4"位置在按钮附近即可"），
+ *      且不改变栏高（栏高是 token，页面底部留白按它算）。
+ * @limitation 件数是本地购物车（cart-store），与 tabBar 角标同一来源，不是服务端数据。
+ */
+export function buyBarView(s) {
+  const a = s !== null && typeof s === 'object' ? s : {};
+  const badge = cartBadgeText(a.cartCount);
+  const base = a.added === true ? '已加入购物车' : '购物车';
+  return {
+    cartText: badge === '' ? base : `${base} · ${badge}`,
+    cartAria: badge === '' ? `${base}，去购物车` : `${base}，共 ${badge} 件，去购物车`,
+    disabled: a.soldOut === true,
+  };
 }

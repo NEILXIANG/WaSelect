@@ -47,6 +47,25 @@
   color: var(--ws-ink);
 }
 
+/* M-14：购物车角标——挂在文字右上，不改变文字位置（absolute），所以有无角标时 tab 文字不跳。 */
+.ws-tabbar__label-wrap {
+  position: relative;
+}
+
+.ws-tabbar__badge {
+  position: absolute;
+  top: calc(-1 * var(--ws-space-stack));
+  left: 100%;
+  min-width: var(--ws-space-card);
+  padding: 0 var(--ws-space-hair);
+  border-radius: var(--ws-radius-pill);
+  background: var(--ws-danger);
+  color: var(--ws-ink-inverse);
+  font-size: var(--ws-f-caption);
+  line-height: var(--ws-space-card);
+  text-align: center;
+}
+
 /* 选中态的下划线：未选中时**占位但透明**（不是 `display: none`），
    否则选中/未选中切换时文字会跳一下高度。 */
 .ws-tabbar__rule {

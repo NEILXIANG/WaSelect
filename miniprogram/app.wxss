@@ -117,6 +117,12 @@ page {
           结算条的高度一旦和 tabBar 对不上，就会露出重叠或空缝。
      @why 104rpx：约 52px，四字标签的舒适高度；加 safe-area 后才是真实占位。 */
   --ws-tabbar-h: 104rpx;
+  /* M-13（AJ-406）：详情页底部固定购买栏的高度（不含 safe-area）。两个消费方：栏自身 + 页面底部留白
+     （`.ws-page--with-buybar`），与 tabBar 同一理由收成 token。112rpx = 88rpx 按钮 + 上下各 12rpx。 */
+  --ws-buybar-h: 112rpx;
+  /* M-19（AJ-406）：主要动作的最小触控边长。88rpx ≈ 44pt（750rpx 宽 = 375pt 设计宽，1pt = 2rpx）；
+     44pt 是常见的触控目标下限。实际手感【需真机实测确认】（无 AppID）。 */
+  --ws-touch-min: 88rpx;
 
   /* ── 圆角：克制 ────────────────────────────────────────────────
      @why 最大只到 24rpx。**刻意不提供大圆角**：大圆角+暖色会滑向"亲和力过度"的母婴风，
@@ -277,6 +283,11 @@ page {
  */
 .ws-page--with-tabbar {
   padding-bottom: calc(var(--ws-tabbar-h) + 40rpx + env(safe-area-inset-bottom));
+}
+
+/* M-13：带底部固定购买栏的非 tab 页（详情页）。与 tabBar 页同一算法：栏高 + 呼吸 + 安全区。 */
+.ws-page--with-buybar {
+  padding-bottom: calc(var(--ws-buybar-h) + 40rpx + env(safe-area-inset-bottom));
 }
 
 .ws-gutter {

@@ -1,5 +1,5 @@
 <button
-  class="ws-button {{typeClass}}"
+  class="ws-button {{typeClass}} {{block ? 'ws-button--block' : ''}}"
   loading="{{loading}}"
   disabled="{{disabled}}"
   catchtap="onTap"

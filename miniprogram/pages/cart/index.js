@@ -25,13 +25,24 @@
  * @see ./index.vm.js（行视图真源）；../../utils/quote-view.js（报价区视图，共享层）；
  *      ../../utils/cart-store.js（本地状态真源）
  */
-import { cartRows, checkoutGate, markInvalid, quoteErrorText } from './index.vm.js';
+import {
+  UNDO_WINDOW_MS,
+  cartRows,
+  checkoutGate,
+  intentForRow,
+  markInvalid,
+  pendingRemoval,
+  quoteErrorText,
+  quoteRetryable,
+  undoAvailable,
+  undoView,
+} from './index.vm.js';
 import { quoteView } from '../../utils/quote-view.js';
 import { errorFields, errorMessage } from '../../utils/error-text.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
-import { setActiveTab } from '../../utils/tabs.js';
+import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
 
 const app = getApp();
 
@@ -43,6 +54,8 @@ const QUOTE_DEBOUNCE_MS = 400;
 
 /** 结算页路径（跳转路径只在这一处出现）。 */
 const CHECKOUT_PAGE = '/pages/checkout/index';
+/** 商品详情（M-14：点行进详情；非 tab 页，navigateTo）。 */
+const DETAIL_PAGE = '/pages/detail/index';
 /** 首页（tab 页，剩余清单 4-8 空态出口）。 */
 const HOME_PAGE = '/pages/home/index';
 
@@ -71,6 +84,10 @@ Page({
      *      对超重（40912）说"请稍后重试"是句谎话——它不会自己变轻。
      */
     quoteErrorCode: 0,
+    /** M-14（AJ-406）：报价失败时给不给"重试"（vm `quoteRetryable`）。 */
+    quoteRetry: false,
+    /** M-14：删除后"已删除 · 撤销"那一行（vm `undoView`）。 */
+    undo: { show: false, index: -1, text: '' },
     /** 「去结算」的状态（vm `checkoutGate` 的输出：能不能点 + 说什么）。 */
     gate: { disabled: true, hint: '运费与合计还在计算中' },
   },
@@ -81,6 +98,10 @@ Page({
   traceId: '',
   /** 报价请求序号（B36 / AJ-219：只接受最新一次报价的结果）。 */
   quoteSeq: 0,
+  /** M-14：最近一次删除的可撤销状态（vm `pendingRemoval`）；null = 没有。不进 data：渲染态是 `undo`。 */
+  pending: null,
+  /** M-14：撤销窗口到点后收起那一行的定时器（只管"收起"，能否撤销以时刻为准，见 vm `undoAvailable`）。 */
+  undoTimer: null,
 
   onLoad() {
     this.traceId = newTraceId();
@@ -101,16 +122,22 @@ Page({
       clearTimeout(this.quoteTimer);
       this.quoteTimer = null;
     }
+    this.clearUndoTimer();
   },
 
   /** 重读本地购物车并（防抖地）重新报价。 */
   refresh() {
     const rows = cartRows(app.globalData.cart.items());
+    // M-14：删光最后一件时仍要显示"已删除 · 撤销"——此时不能切到空态，否则撤销入口跟着消失
+    const undo = undoView(this.pending, Date.now());
     this.setData({
       rows,
+      undo,
       count: app.globalData.cart.count(),
-      empty: rows.length === 0,
+      empty: rows.length === 0 && !undo.show,
     });
+    // M-14（AJ-406）：tabBar 角标——进屏与本页每次改动都走这里（utils/tabs.js 唯一更新方）
+    setCartBadge(this, app.globalData.cart);
     if (rows.length === 0) {
       // 空车不报价：空 items 会被服务端 40001 拒，而"打开空购物车有个错误提示"是荒谬的
       // ⚠️ 但必须**同时**清掉挂起的防抖定时器并把序号推进（B36 / AJ-219）：
@@ -147,7 +174,12 @@ Page({
     // B36 / AJ-219：领号。连点 +/- 之后防抖只发最后一次，但**上一次**可能还在途中——
     // 它若后回来，会把旧合计盖回去（改完数量显示旧合计，且"去结算"带着它走）。
     const seq = (this.quoteSeq = nextSeq(this.quoteSeq));
-    this.setData({ quoting: true, quoteError: '', gate: checkoutGate({ quoting: true }) });
+    this.setData({
+      quoting: true,
+      quoteError: '',
+      quoteRetry: false,
+      gate: checkoutGate({ quoting: true }),
+    });
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/quote`,
@@ -185,6 +217,8 @@ Page({
         // P2-31：品种超限（40001 + >50 行）换成"请移除一些"，否则永远是一句重试不好的错
         quoteError: quoteErrorText(code, lineCount, errorMessage(e)),
         quoteErrorCode: code,
+        // M-14：重试可能有用时才给按钮（下架 / 超重等必须改购物车的不给）
+        quoteRetry: quoteRetryable(code, lineCount),
         gate: checkoutGate({ hasError: true, errorCode: code, lineCount }),
       });
     } finally {
@@ -213,9 +247,61 @@ Page({
     this.changeQty(this.idOf(e), 1);
   },
 
+  /**
+   * 删除（M-14，AJ-406）：立刻删，行内给"撤销"，不弹确认框（对标分析 §4：撤销优于弹窗，不打断）。
+   * @why 再删第二件时**覆盖**上一个撤销：只保留最近一次——同时挂两条"已删除"会把列表变成墓地，
+   *      而"连删两件后想撤回第一件"在 5 秒内极少见。
+   */
   onRemove(e) {
-    app.globalData.cart.remove(this.idOf(e));
+    const id = this.idOf(e);
+    if (id === '') return;
+    const cart = app.globalData.cart;
+    this.pending = pendingRemoval(cart.items(), id, Date.now());
+    cart.remove(id);
+    this.clearUndoTimer();
+    if (this.pending !== null) {
+      // 到点只负责把那一行收起来；能否撤销由 vm 按时刻判（定时器在后台会被冻结）
+      this.undoTimer = setTimeout(() => {
+        this.undoTimer = null;
+        this.pending = null;
+        this.refresh();
+      }, UNDO_WINDOW_MS);
+    }
     this.refresh();
+  },
+
+  /** 撤销删除（M-14）：窗口内放回原位置；过了窗口只收起那一行。 */
+  onUndo() {
+    const pending = this.pending;
+    this.pending = null;
+    this.clearUndoTimer();
+    if (undoAvailable(pending, Date.now()))
+      app.globalData.cart.restore(pending.item, pending.index);
+    this.refresh();
+  },
+
+  clearUndoTimer() {
+    if (this.undoTimer !== null) {
+      clearTimeout(this.undoTimer);
+      this.undoTimer = null;
+    }
+  },
+
+  /**
+   * 报价失败后的"重试"（M-14）：直接重报一次（不走防抖——用户明确要求了现在就算）。
+   * @why 在途时不重复发：序号会丢弃旧结果，但多打一次报价端点（有 429 限流）没有意义。
+   */
+  onRetryQuote() {
+    if (this.data.quoting === true) return;
+    if (this.data.rows.length === 0) return;
+    void this.fetchQuote();
+  },
+
+  /** 点行（图 / 标题）进详情（M-14）。步进与删除是单独的点击区，不会误触跳走。 */
+  onOpenDetail(e) {
+    const intent = intentForRow(this.idOf(e));
+    if (intent === null) return;
+    wxApi.navigateTo({ url: `${DETAIL_PAGE}?id=${encodeURIComponent(intent.id)}` });
   },
 
   changeQty(productId, delta) {

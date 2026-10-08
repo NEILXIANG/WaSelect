@@ -19,6 +19,12 @@ import {
   checkoutGate,
   markInvalid,
   quoteErrorText,
+  intentForRow,
+  pendingRemoval,
+  quoteRetryable,
+  undoAvailable,
+  undoView,
+  UNDO_WINDOW_MS,
 } from './index.vm.js';
 
 const ITEMS = [
@@ -211,5 +217,71 @@ describe('checkoutGate：停售（三端联动模拟 2026-10-08）', () => {
     const g = checkoutGate({ hasError: true, errorCode: 40916, lineCount: 1 });
     expect(g.disabled).toBe(true);
     expect(g.hint).toContain('暂停接单');
+  });
+});
+
+describe('M-14 购物车：行进详情 / 删除撤销 / 报价重试（AJ-406）', () => {
+  const T0 = Date.parse('2026-10-08T03:00:00.000Z');
+  const ITEMS = [
+    {
+      productId: 'p-shiro-cleansing-oil',
+      qty: 1,
+      title: '資生堂 クレンジングオイル 200ml',
+      image: '',
+      priceJpy: 3600,
+    },
+    {
+      productId: 'p-sakai-gyuto-210',
+      qty: 2,
+      title: '堺孝行 牛刀 210mm',
+      image: '',
+      priceJpy: 18_700,
+    },
+  ];
+
+  it('intentForRow：有 id → 去详情；空 / 非字符串 → null', () => {
+    expect(intentForRow('p-sakai-gyuto-210')).toEqual({ go: 'detail', id: 'p-sakai-gyuto-210' });
+    expect(intentForRow('')).toBeNull();
+    expect(intentForRow(undefined)).toBeNull();
+  });
+
+  it('🔴 删第 2 行 → 记下原下标与快照；窗口内可撤销，"已删除「…」"插回原位', () => {
+    const p = pendingRemoval(ITEMS, 'p-sakai-gyuto-210', T0);
+    expect(p).toEqual({ item: ITEMS[1], index: 1, expiresAt: T0 + UNDO_WINDOW_MS });
+    expect(undoAvailable(p, T0 + UNDO_WINDOW_MS - 1)).toBe(true);
+    expect(undoView(p, T0 + 1000)).toEqual({
+      show: true,
+      index: 1,
+      text: '已删除「堺孝行 牛刀 210mm」',
+    });
+  });
+
+  it('🔴 到点（含恰好等于 expiresAt）→ 不能撤销、那一行消失', () => {
+    const p = pendingRemoval(ITEMS, 'p-sakai-gyuto-210', T0);
+    expect(undoAvailable(p, T0 + UNDO_WINDOW_MS)).toBe(false);
+    expect(undoView(p, T0 + UNDO_WINDOW_MS + 1)).toEqual({ show: false, index: -1, text: '' });
+  });
+
+  it('找不到那一件 / 入参脏 / 没有时刻 → 不可撤销', () => {
+    expect(pendingRemoval(ITEMS, 'p-none', T0)).toBeNull();
+    expect(pendingRemoval(null, 'p-sakai-gyuto-210', T0)).toBeNull();
+    expect(pendingRemoval(ITEMS, 'p-sakai-gyuto-210', Number.NaN)).toBeNull();
+    expect(undoAvailable(null, T0)).toBe(false);
+    expect(undoAvailable({ expiresAt: T0 + 1 }, undefined)).toBe(false);
+  });
+
+  it('缺标题 → 通用说法（不显示空引号）', () => {
+    const p = pendingRemoval([{ productId: 'p-x', qty: 1 }], 'p-x', T0);
+    expect(undoView(p, T0).text).toBe('已删除 1 件商品');
+  });
+
+  it('quoteRetryable：网络 / 5xx / 库存不足给重试；下架、超重、超上限、品种超限、停售不给', () => {
+    expect(quoteRetryable(-1, 1)).toBe(true);
+    expect(quoteRetryable(50000, 1)).toBe(true);
+    expect(quoteRetryable(40901, 1)).toBe(true);
+    for (const code of [40401, 40906, 40912, 40916])
+      expect(quoteRetryable(code, 1), String(code)).toBe(false);
+    expect(quoteRetryable(40001, 51)).toBe(false);
+    expect(quoteRetryable(40001, 3)).toBe(true);
   });
 });

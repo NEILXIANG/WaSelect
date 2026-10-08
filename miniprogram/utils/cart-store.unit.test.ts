@@ -203,3 +203,57 @@ describe('品种上限（P2-31：报价端 >50 行一律 40001）', () => {
     expect(cart.add(OIL)).toEqual({ added: true });
   });
 });
+
+describe('restore（撤销删除放回原位，M-14 / AJ-406）', () => {
+  const KNIFE = {
+    productId: 'p-sakai-gyuto-210',
+    qty: 1,
+    title: '堺孝行 牛刀 210mm',
+    image: 'https://img.example.com/p2/card.jpg',
+    priceJpy: 18_700,
+  };
+  const TEA = {
+    productId: 'p-uji-matcha-40g',
+    qty: 2,
+    title: '宇治抹茶 40g',
+    image: '',
+    priceJpy: 2_160,
+  };
+
+  it('🔴 删中间一行再 restore → 回到原下标（不是末尾），快照价原样，并落盘', () => {
+    const { storage, data } = memStorage();
+    const cart = createCartStore({ storage });
+    cart.add(OIL);
+    cart.add(KNIFE);
+    cart.add(TEA);
+    const before = cart.items();
+    cart.remove(KNIFE.productId);
+    expect(cart.restore(before[1]!, 1)).toBe(true);
+    expect(cart.items()).toEqual(before);
+    expect(JSON.parse(data['ws:cart'] ?? '[]')).toEqual(before);
+  });
+
+  it('撤销窗口内同商品又被加进来 → 合并数量，不出第二行', () => {
+    const cart = createCartStore({ storage: memStorage().storage });
+    cart.add(OIL);
+    cart.remove(OIL.productId);
+    cart.add({ ...OIL, qty: 1 });
+    expect(cart.restore({ ...OIL, qty: 2 }, 0)).toBe(true);
+    expect(cart.items()).toHaveLength(1);
+    expect(cart.items()[0]?.qty).toBe(3);
+  });
+
+  it('下标越界 / 非整数 → 放到末尾；脏条目 → false 不动', () => {
+    const cart = createCartStore({ storage: memStorage().storage });
+    cart.add(OIL);
+    expect(cart.restore(TEA, 99)).toBe(true);
+    expect(cart.restore(KNIFE, Number.NaN)).toBe(true);
+    expect(cart.items().map((i) => i.productId)).toEqual([
+      OIL.productId,
+      TEA.productId,
+      KNIFE.productId,
+    ]);
+    expect(cart.restore({ ...OIL, qty: 0 }, 0)).toBe(false);
+    expect(cart.restore(null as never, 0)).toBe(false);
+  });
+});

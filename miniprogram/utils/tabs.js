@@ -19,9 +19,10 @@
  *                  但调用错了也不该白屏）；② 开发者工具上 `getTabBar()` 在某些
  *                  基础库/场景（如页面首次 attach 前）返回 null。
  *                  这里抛错的代价（白屏）远大于"高亮晚一帧"。
- * @limitation 二：只设 `active`，**不改 tabBar 的其它状态**（如购物车角标）。
- *              角标一旦进来，"谁负责更新它"就有两个答案，而两个答案都会漏更新。
- *              真要角标时，在组件里加一个属性 + 一个明确的更新方，不要从这里顺手 setData。
+ * @limitation 二：`setActiveTab` 只设 `active`，**不顺手改**其它状态。
+ *              购物车角标（M-14，AJ-406）由**唯一**的更新方 `setCartBadge` 负责：
+ *              四个 tab 页的 `onShow` + 购物车页改动之后各调一次。两个函数分开，
+ *              是为了"谁负责更新角标"只有一个答案（同一个 setData 里顺带写，漏更新时无从查起）。
  *
  * @see ../custom-tab-bar/index.js；../app.json
  */
@@ -56,5 +57,35 @@ export function setActiveTab(page, name) {
   const bar = typeof page?.getTabBar === 'function' ? page.getTabBar() : null;
   if (bar === null || bar === undefined || typeof bar.setData !== 'function') return false;
   bar.setData({ active: index });
+  return true;
+}
+
+/**
+ * 购物车角标文案（M-14，AJ-406）。
+ * @param {unknown} count `cart-store.count()` 的件数
+ * @returns {string} 空串 = 不显示角标；超过 99 显示 `99+`
+ * @why 0 件不显示（同原首页 `cartLabel`：空车显示 0 是噪音）；`99+` 是为了角标不把 tab 文字挤变形。
+ */
+export function cartBadgeText(count) {
+  if (!Number.isInteger(count) || count <= 0) return '';
+  return count > 99 ? '99+' : String(count);
+}
+
+/**
+ * 把购物车件数注入 tabBar 角标（M-14）。**唯一**的角标更新方（@see @limitation 二）。
+ *
+ * @param {unknown} page 页面实例（`this`）
+ * @param {unknown} cart `app.globalData.cart`（读 `count()`；缺失 = 0 件）
+ * @returns {boolean} 是否真的注入了（取不到 tabBar 时 false，同 `setActiveTab`）
+ * @why 渲染在**自定义 tabBar 组件里**而不是调 `wx.setTabBarBadge`：本项目 `tabBar.custom: true`，
+ *      底栏是我们自己的组件；宿主角标 API 作用于原生 tabBar，自定义模式下是否生效没有实测依据【需真机确认】，
+ *      而组件内渲染是确定可控、且能被单测覆盖的那一条。
+ */
+export function setCartBadge(page, cart) {
+  const c = cart !== null && typeof cart === 'object' ? cart : {};
+  const count = typeof c.count === 'function' ? c.count() : 0;
+  const bar = typeof page?.getTabBar === 'function' ? page.getTabBar() : null;
+  if (bar === null || bar === undefined || typeof bar.setData !== 'function') return false;
+  bar.setData({ cartBadge: cartBadgeText(count) });
   return true;
 }

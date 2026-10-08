@@ -32,7 +32,6 @@ import { createWxApi } from '../../utils/wx-api.js';
 import {
   bannerAt,
   bannerSlides,
-  cartLabel,
   categoryTabs,
   intentForBanner,
   intentForProduct,
@@ -42,7 +41,7 @@ import {
   productCards,
 } from './index.vm.js';
 import { newTraceId } from '../../utils/trace.js';
-import { setActiveTab } from '../../utils/tabs.js';
+import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
 
 const app = getApp();
 
@@ -51,21 +50,6 @@ const wxApi = createWxApi();
 
 /** 商品详情页路径（跳转路径只在这一处出现；vm 只给意图，不认识路径）。 */
 const DETAIL_PAGE = '/pages/detail/index';
-
-/**
- * 购物车页路径（S5 起是 tab 页，跳转走 `switchTab`）。
- * @why 路径只在这一处出现（vm 只给意图，不认识路径——约束十一）。
- * @why S5 之后它是 tab 页：**不能再带 query**（`switchTab` 会忽略参数），
- *      这点与 `DETAIL_PAGE` 完全不同，别把 navigateTo 的习惯带过来。
- */
-const CART_PAGE = '/pages/cart/index';
-
-/**
- * 「我的」页路径（S5 起是 tab 页，跳转走 `switchTab`）。
- * @why 它是**地址 / 法务**两个页的入口——那两个页不在 tabBar 上，只能从这里进。
- *      ⚠️ 订单已随 S5 升为独立 tab（底部直达），不再只靠本页进。
- */
-const USER_PAGE = '/pages/user/index';
 
 Page({
   data: {
@@ -85,8 +69,6 @@ Page({
     empty: false,
     /** 是否还有下一页（vm `nextPage` 的布尔化，控制底部提示与触底行为）。 */
     hasMore: false,
-    /** 购物车入口文案（vm `cartLabel`：带件数角标）。 */
-    cartLabel: '',
     /** 错误文案（utils/error-text，真源唯一）；空串 = 无错误。 */
     error: '',
   },
@@ -145,30 +127,18 @@ Page({
   },
 
   /**
-   * 每次进屏刷新购物车角标。
+   * 每次进屏刷新 tabBar 高亮与购物车角标。
    * @why 用 onShow 而不是只 onLoad：从详情页加购后**返回**首页不会触发 onLoad
    *      （页面在栈里没销毁），只看 onLoad 的表现是"加了东西，角标还是 0"。
+   * @why M-14（AJ-406）：首页原有"购物车 · N""我的"两个按钮与底部 tabBar **重复**，已去掉；
+   *      件数角标改由 tabBar 购物车格显示（utils/tabs.js setCartBadge），首屏多出一行商品位。
    */
   onShow() {
-    this.setData({ cartLabel: cartLabel(app.globalData.cart.count()) });
     // S5：注入底部 tabBar 的高亮（本页是第 0 个 tab）。
     // @why 必须每次进屏都注入：从别的 tab 切回来会触发 onShow 而不触发 onLoad，
     //      只在 onLoad 注的表现是"切回首页、高亮还停在上一页"。
     setActiveTab(this, 'home');
-  },
-
-  /**
-   * 去购物车。
-   * @why S5 之后用 `switchTab` 而不是 `navigateTo`：购物车是 tab 页，
-   *      `navigateTo` 到 tab 页会被宿主直接拒绝，表现是"点了没反应"。
-   */
-  onGoCart() {
-    wxApi.switchTab({ url: CART_PAGE });
-  },
-
-  /** 去「我的」（地址 / 法务的入口；订单已升为 tab，@see USER_PAGE 注释）。 */
-  onGoMine() {
-    wxApi.switchTab({ url: USER_PAGE });
+    setCartBadge(this, app.globalData.cart);
   },
 
   /**

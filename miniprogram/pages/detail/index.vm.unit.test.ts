@@ -15,6 +15,7 @@ import {
   ADD_TAP_GUARD_MS,
   acceptAddTap,
   addFeedback,
+  buyBarView,
   buyNowItem,
   detailView,
   shareCard,
@@ -283,5 +284,30 @@ describe('加购连点守卫与结果文案（P2-37 / P2-31）', () => {
     expect(full.added).toBe(false);
     expect(full.addNote).toContain('50');
     expect(addFeedback(undefined)).toEqual({ added: false, addNote: '' });
+  });
+});
+
+describe('buyBarView（M-13 底部固定购买栏，AJ-406）', () => {
+  it('🔴 购物车有 3 件、未加购 → "购物车 · 3"；加购后 → "已加入购物车 · 4"（反馈就在按钮旁）', () => {
+    expect(buyBarView({ cartCount: 3, added: false, soldOut: false })).toEqual({
+      cartText: '购物车 · 3',
+      cartAria: '购物车，共 3 件，去购物车',
+      disabled: false,
+    });
+    expect(buyBarView({ cartCount: 4, added: true }).cartText).toBe('已加入购物车 · 4');
+  });
+
+  it('空车不显示 · 0；超过 99 件显示 99+（与 tabBar 角标同一函数）', () => {
+    expect(buyBarView({ cartCount: 0 }).cartText).toBe('购物车');
+    expect(buyBarView({ cartCount: 120 }).cartText).toBe('购物车 · 99+');
+  });
+
+  it('售罄 → 两个按钮禁用；脏输入 → 不抛、按空车可买处理', () => {
+    expect(buyBarView({ soldOut: true }).disabled).toBe(true);
+    expect(buyBarView(null)).toEqual({
+      cartText: '购物车',
+      cartAria: '购物车，去购物车',
+      disabled: false,
+    });
   });
 });

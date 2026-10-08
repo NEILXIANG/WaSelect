@@ -294,15 +294,3 @@ export function intentForBanner(banner, categories) {
   }
   return null;
 }
-
-/**
- * 购物车入口文案（带件数角标）。
- * @param {unknown} count `cart-store.count()` 的件数
- * @returns {string} `购物车` / `购物车 · 3`
- * @why 角标由 vm 拼而不是 wxml 里拼：wxml 只适合简单表达式，
- *      "0 件时不显示数字"这种判断散在模板里迟早有人忘；而忘了的表现是
- *      "空车也显示 购物车 · 0"——那是在提醒用户"你什么都没买"，属于多余噪音。
- */
-export function cartLabel(count) {
-  return Number.isInteger(count) && count > 0 ? `购物车 · ${count}` : '购物车';
-}

@@ -20,7 +20,7 @@
  */
 import { MENU_ROWS, loginRetryView, loginState } from './index.vm.js';
 import { createWxApi } from '../../utils/wx-api.js';
-import { setActiveTab } from '../../utils/tabs.js';
+import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
 import { supportRows } from '../../utils/support.js';
 
 const app = getApp();
@@ -66,6 +66,8 @@ Page({
     this.renderLogin();
     // S5：注入底部 tabBar 的高亮（本页是第 3 个 tab）。
     setActiveTab(this, 'user');
+    // M-14（AJ-406）：购物车角标（每个 tab 页进屏都更新，utils/tabs.js 唯一更新方）
+    setCartBadge(this, app.globalData.cart);
     void this.loadSupport();
   },
 

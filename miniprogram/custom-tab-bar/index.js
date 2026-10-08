@@ -36,6 +36,7 @@
  * @see ../../waselect-design/custom-tab-bar（S5 迁移源）；../app.json（tabBar.list）
  */
 import { createWxApi } from '../utils/wx-api.js';
+import { TAB_INDEX } from '../utils/tabs.js';
 
 /** 页面级宿主入口（wx-api 是无状态转发）。 */
 const wxApi = createWxApi();
@@ -57,6 +58,12 @@ Component({
      *      真正的高亮永远来自页面注入。
      */
     active: 0,
+    /**
+     * 购物车角标文案（M-14，AJ-406）；空串 = 不显示。**只由** `utils/tabs.js setCartBadge` 写入。
+     */
+    cartBadge: '',
+    /** 角标挂在哪一格：取 `TAB_INDEX.cart`，不在这里再写一份序号。 */
+    cartIndex: TAB_INDEX.cart,
     /**
      * tab 清单。**顺序必须与 `app.json` 的 `tabBar.list` 一致**。
      * @why 它是第三份"路径 → 序号"映射（另两份是 app.json 的 list 与四个页面的

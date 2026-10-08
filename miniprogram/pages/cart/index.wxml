@@ -23,28 +23,48 @@
 
   <block wx:else>
     <view class="ws-gutter cart__list">
-      <view class="ws-card row-item" wx:for="{{rows}}" wx:key="productId">
-        <view class="row-item__main">
-          <view class="ws-media ws-media--square row-item__media">
-            <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" />
-          </view>
-          <view class="row-item__body">
-            <text class="ws-title row-item__title">{{item.title}}</text>
-            <text class="ws-note" wx:if="{{item.priceText}}">{{item.priceText}}</text>
-            <!-- 剩余清单 4-7：报价失败时服务端指出的那一件 -->
-            <text class="ws-note state__error" wx:if="{{item.invalidText}}">{{item.invalidText}}</text>
+      <block wx:for="{{rows}}" wx:key="productId">
+        <!-- M-14（AJ-406）：删除后在原位置给"撤销"（5 秒，vm undoView），不弹确认框 -->
+        <view class="ws-card undo-row" wx:if="{{undo.show && undo.index === index}}">
+          <text class="ws-note undo-row__text">{{undo.text}}</text>
+          <view class="undo-row__act" hover-class="ws-press" bindtap="onUndo" aria-role="button" aria-label="撤销删除">撤销</view>
+        </view>
+        <view class="ws-card row-item">
+          <view class="row-item__main">
+            <!-- M-14：点图或标题进详情（步进 / 删除是独立点击区，不会误触跳走）；M-18：列表图懒加载 -->
+            <view
+              class="ws-media ws-media--square row-item__media"
+              data-id="{{item.productId}}"
+              bindtap="onOpenDetail"
+              aria-role="link"
+              aria-label="查看 {{item.title}} 详情"
+            >
+              <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
+            </view>
+            <view class="row-item__body">
+              <text class="ws-title row-item__title" data-id="{{item.productId}}" bindtap="onOpenDetail">{{item.title}}</text>
+              <text class="ws-note" wx:if="{{item.priceText}}">{{item.priceText}}</text>
+              <!-- 剩余清单 4-7：报价失败时服务端指出的那一件 -->
+              <text class="ws-note state__error" wx:if="{{item.invalidText}}">{{item.invalidText}}</text>
 
-            <!-- 数量步进：− / 数量 / ＋ / 删除。
-                 ⚠️ 步进块是 view 不是 button：它是"微调"不是"提交动作"，
-                 且 page-button-guard 约束的是提交类按钮必须走 ws-button。 -->
-            <view class="qty">
-              <view class="step" data-id="{{item.productId}}" hover-class="ws-press" bindtap="onMinus">−</view>
-              <text class="qty-value">{{item.qty}}</text>
-              <view class="step" data-id="{{item.productId}}" hover-class="ws-press" bindtap="onPlus">＋</view>
-              <view class="remove" data-id="{{item.productId}}" hover-class="ws-press" bindtap="onRemove">删除</view>
+              <!-- 数量步进：− / 数量 / ＋ / 删除。
+                   ⚠️ 步进块是 view 不是 button：它是"微调"不是"提交动作"，
+                   且 page-button-guard 约束的是提交类按钮必须走 ws-button。
+                   M-19（AJ-406）：触控区 ≥ 88rpx（约 44pt）；字符图标带 aria-label（读屏不会把"−"念成"减号"了事）。 -->
+              <view class="qty">
+                <view class="step" data-id="{{item.productId}}" hover-class="ws-press" bindtap="onMinus" aria-role="button" aria-label="减少数量">−</view>
+                <text class="qty-value" aria-label="数量 {{item.qty}}">{{item.qty}}</text>
+                <view class="step" data-id="{{item.productId}}" hover-class="ws-press" bindtap="onPlus" aria-role="button" aria-label="增加数量">＋</view>
+                <view class="remove" data-id="{{item.productId}}" hover-class="ws-press" bindtap="onRemove" aria-role="button" aria-label="删除 {{item.title}}">删除</view>
+              </view>
             </view>
           </view>
         </view>
+      </block>
+      <!-- 删掉的是最后一行（或删光了）：撤销行接在列表末尾 -->
+      <view class="ws-card undo-row" wx:if="{{undo.show && undo.index >= rows.length}}">
+        <text class="ws-note undo-row__text">{{undo.text}}</text>
+        <view class="undo-row__act" hover-class="ws-press" bindtap="onUndo" aria-role="button" aria-label="撤销删除">撤销</view>
       </view>
     </view>
 
@@ -76,6 +96,8 @@
       <view class="ws-card state">
         <text class="ws-note state__error">{{quoteError}}</text>
         <text class="ws-caption" wx:if="{{quoteErrorRef}}" user-select>{{quoteErrorRef}}</text>
+        <!-- M-14：重试可能有用时才给（vm quoteRetryable）；此前只有红字，用户得改一下数量才会重报 -->
+        <ws-button wx:if="{{quoteRetry}}" text="重试" type="default" bindtap="onRetryQuote" />
       </view>
     </view>
 
@@ -85,7 +107,7 @@
       "在途（改了数量）"与"报价失败"是两件不同的事，以前被同一句"还在计算中"盖住，
       后者的结果是用户一直等一个永远算不出来的合计。
     -->
-    <view class="ws-gutter ws-section cart__cta">
+    <view class="ws-gutter ws-section cart__cta" wx:if="{{rows.length > 0}}">
       <ws-button
         text="去结算"
         type="primary"

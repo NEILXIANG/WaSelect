@@ -26,7 +26,6 @@ import {
   SEARCH_KEYWORD_MAX,
   bannerAt,
   bannerSlides,
-  cartLabel,
   categoryTabs,
   intentForBanner,
   visibleBanners,
@@ -407,19 +406,6 @@ describe('intentForBanner（轮播跳转）', () => {
     expect(intentForBanner(null, CATS)).toBeNull();
     // 选了跳转却没填目标（管理端会拦，但前端这道是纵深防御）
     expect(intentForBanner({ link_type: 'unknown_type', link_id: 'x' }, CATS)).toBeNull();
-  });
-});
-
-describe('cartLabel（购物车入口角标）', () => {
-  it('有件数 → `购物车 · N`', () => {
-    expect(cartLabel(3)).toBe('购物车 · 3');
-    expect(cartLabel(1)).toBe('购物车 · 1');
-  });
-
-  it('⚠️ 0 件 / 非整数 / 缺失 → 只有「购物车」（不显示 · 0）', () => {
-    for (const n of [0, -1, undefined, null, '2', 1.5]) {
-      expect(cartLabel(n)).toBe('购物车');
-    }
   });
 });
 

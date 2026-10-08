@@ -59,20 +59,6 @@
   margin-left: var(--ws-space-inline);
 }
 
-/* ── 快捷入口（购物袋 / 我的）────────────────────────────────────── */
-.home__quick {
-  display: flex;
-  margin-top: var(--ws-space-inline);
-}
-
-.home__quick-btn {
-  flex: 1;
-}
-
-.home__quick-btn + .home__quick-btn {
-  margin-left: var(--ws-space-inline);
-}
-
 /* ── 轮播（D-51）──────────────────────────────────────────────────
    @why 高度走 `--ws-banner-h` 而不是百分比撑高：swiper 是**固定高度**组件，
         它的高度不由内容撑开（`padding-bottom` 那套对 swiper 无效），

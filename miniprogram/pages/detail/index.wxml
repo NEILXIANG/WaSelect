@@ -3,14 +3,14 @@
 
   S3（2026-10-02）：版式换成设计体系（`.ws-*` 基础类），信息架构不动。
 
-  ⚠️ 底部动作区仍是**流式**而不是固定底栏：固定底栏要求页面给底部留白
-  （`padding-bottom` 与栏高必须对齐，否则最后一段内容被永久遮住），
-  而本页内容长度不定。等 tabBar（S5）与结算条一起定高时再统一处理。
+  M-13（AJ-406）：底部**固定**购买栏（价格 + 购物车入口 + 加入购物车 + 立即购买），
+  栏高走 token `--ws-buybar-h`，页面根用 `.ws-page--with-buybar` 留出同样的底部空白（含 safe-area），
+  最后一段内容不会被栏遮住。原先加购后出现的「去购物车」按钮去掉：购物车入口已常驻在栏里，不重复。
 
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss，
   出现硬编码色值 / 尺寸字面量会直接红）。
 -->
-<view class="ws-page detail">
+<view class="ws-page detail {{product ? 'ws-page--with-buybar' : ''}}">
   <view class="ws-gutter" wx:if="{{loading && !product}}">
     <view class="ws-card state">
       <text class="ws-note">加载中…</text>
@@ -32,7 +32,8 @@
     <!-- 轮播：images 已由 vm 保证至少一条（空 → 占位图），不会出现空 swiper -->
     <swiper class="gallery" indicator-dots>
       <swiper-item wx:for="{{product.images}}" wx:key="*this">
-        <image class="gallery-image" src="{{item}}" mode="aspectFit" />
+        <!-- M-18（AJ-406）：首张之外的图滑到附近才加载（swiper 内 lazy-load 生效范围【需真机确认】） -->
+        <image class="gallery-image" src="{{item}}" mode="aspectFit" lazy-load="{{index > 0}}" />
       </swiper-item>
     </swiper>
 
@@ -117,25 +118,31 @@
       </view>
     </view>
 
-    <!-- 剩余清单 4-4："立即购买"只结这一件、不动购物车（结算页 ?mode=buynow）；"加入购物车"为次按钮 -->
-    <view class="ws-gutter ws-section buy-bar">
-      <ws-button
-        text="立即购买"
-        type="primary"
-        disabled="{{product.soldOut}}"
-        bindtap="onBuyNow"
-      />
-      <ws-button
-        text="加入购物车"
-        type="default"
-        disabled="{{product.soldOut}}"
-        bindtap="onAddToCart"
-      />
-      <text class="ws-note state__error" wx:if="{{addNote}}">{{addNote}}</text>
-      <block wx:if="{{added}}">
-        <text class="ws-note added">已加入购物车</text>
-        <ws-button text="去购物车" type="default" bindtap="onGoCart" />
-      </block>
+    <!--
+      M-13（AJ-406）：底部固定购买栏。剩余清单 4-4："立即购买"只结这一件、不动购物车（结算页 ?mode=buynow）；
+      "加入购物车"为次按钮。左侧价格下面是常驻的购物车入口（带件数；加购后变"已加入购物车 · N"）。
+      加不进去的原因（品种已满，P2-31）在栏的最上方一行，紧挨按钮。
+    -->
+    <view class="buy-bar">
+      <text class="ws-note state__error buy-bar__note" wx:if="{{addNote}}">{{addNote}}</text>
+      <view class="buy-bar__row">
+        <view class="buy-bar__info">
+          <ws-price jpy="{{product.priceJpy}}" size="md" />
+          <view
+            class="buy-bar__cart"
+            hover-class="ws-press"
+            bindtap="onGoCart"
+            aria-role="link"
+            aria-label="{{bar.cartAria}}"
+          >{{bar.cartText}} ›</view>
+        </view>
+        <view class="buy-bar__btn">
+          <ws-button text="加入购物车" type="default" block="{{true}}" disabled="{{bar.disabled}}" bindtap="onAddToCart" />
+        </view>
+        <view class="buy-bar__btn">
+          <ws-button text="立即购买" type="primary" block="{{true}}" disabled="{{bar.disabled}}" bindtap="onBuyNow" />
+        </view>
+      </view>
     </view>
   </block>
 </view>

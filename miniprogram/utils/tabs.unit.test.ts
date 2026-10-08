@@ -16,7 +16,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { TAB_COUNT, TAB_INDEX, setActiveTab } from './tabs.js';
+import { TAB_COUNT, TAB_INDEX, cartBadgeText, setActiveTab, setCartBadge } from './tabs.js';
 
 const root = resolve(import.meta.dirname, '../..');
 
@@ -123,6 +123,44 @@ describe('三处 tab 清单必须一致（漂移 = 高亮错位，不报错）',
     for (const name of names) {
       const src = readFileSync(resolve(root, `miniprogram/pages/${name}/index.js`), 'utf8');
       expect(src, `pages/${name}/index.js 的 onShow 里没有注入 active`).toMatch(/setActiveTab\(/);
+    }
+  });
+});
+
+describe('购物车角标（M-14，AJ-406）', () => {
+  it('cartBadgeText：0 / 非整数不显示；1–99 原样；>99 → 99+', () => {
+    expect(cartBadgeText(0)).toBe('');
+    expect(cartBadgeText(-1)).toBe('');
+    expect(cartBadgeText(1.5)).toBe('');
+    expect(cartBadgeText(undefined)).toBe('');
+    expect(cartBadgeText(1)).toBe('1');
+    expect(cartBadgeText(99)).toBe('99');
+    expect(cartBadgeText(100)).toBe('99+');
+  });
+
+  it('🔴 setCartBadge：读购物车件数写进 tabBar 的 cartBadge（只写这一个键）', () => {
+    const bar = fakeBar();
+    expect(setCartBadge({ getTabBar: () => bar }, { count: () => 3 })).toBe(true);
+    expect(bar.calls).toEqual([{ cartBadge: '3' }]);
+  });
+
+  it('购物车缺失 → 按 0 件（清掉角标）；取不到 tabBar → false 且不抛', () => {
+    const bar = fakeBar();
+    expect(setCartBadge({ getTabBar: () => bar }, undefined)).toBe(true);
+    expect(bar.calls).toEqual([{ cartBadge: '' }]);
+    expect(setCartBadge({ getTabBar: () => null }, { count: () => 3 })).toBe(false);
+    expect(setCartBadge(undefined, { count: () => 3 })).toBe(false);
+  });
+
+  it('角标挂在购物车那一格：组件的 cartIndex 取自 TAB_INDEX.cart（不另写序号）', () => {
+    const src = readFileSync(resolve(root, 'miniprogram/custom-tab-bar/index.js'), 'utf8');
+    expect(src).toMatch(/cartIndex:\s*TAB_INDEX\.cart/);
+  });
+
+  it('四个 tab 页的 onShow 都更新角标（漏一个 = 切到那一页角标停在旧数）', () => {
+    for (const page of ['home', 'cart', 'order', 'user']) {
+      const src = readFileSync(resolve(root, `miniprogram/pages/${page}/index.js`), 'utf8');
+      expect(src, page).toMatch(/setCartBadge\(this, app\.globalData\.cart\)/);
     }
   });
 });

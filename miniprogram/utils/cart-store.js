@@ -136,6 +136,37 @@ export function createCartStore(deps) {
       persist();
     },
 
+    /**
+     * 撤销删除：把刚删掉的条目**放回原位置**（M-14，AJ-406）。
+     * @param {CartItem} item 删除前的那一行（含快照）
+     * @param {number} index 删除前的下标（越界按末尾）
+     * @returns {boolean} 是否放回了
+     * @why 用 `add` 会把它放到末尾——用户眼里"撤销"就是那一行回到原处，换了位置会被读成"加了一件新的"。
+     * @why 同商品已经在车里（撤销窗口内又从别处加了）→ 合并数量，不出第二行（与 `add` 同口径）。
+     * @limitation 品种已满（`MAX_CART_LINES`）时放不回，返回 false——正常路径到不了（删一件才有撤销）。
+     */
+    restore(item, index) {
+      if (!item || typeof item.productId !== 'string' || item.productId === '') return false;
+      if (!Number.isInteger(item.qty) || item.qty < 1) return false;
+      const found = items.find((i) => i.productId === item.productId);
+      if (found !== undefined) {
+        found.qty += item.qty;
+      } else {
+        if (items.length >= MAX_CART_LINES) return false;
+        const at =
+          Number.isInteger(index) && index >= 0 ? Math.min(index, items.length) : items.length;
+        items.splice(at, 0, {
+          productId: item.productId,
+          qty: item.qty,
+          title: typeof item.title === 'string' ? item.title : '',
+          image: typeof item.image === 'string' ? item.image : '',
+          priceJpy: item.priceJpy,
+        });
+      }
+      persist();
+      return true;
+    },
+
     /** 清空（建单成功后调用）。 */
     clear() {
       items = [];

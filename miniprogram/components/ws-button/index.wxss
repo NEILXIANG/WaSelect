@@ -21,3 +21,12 @@
   background: var(--ws-color-card);
   color: var(--ws-color-fg);
 }
+
+/* M-13：撑满父容器（详情页底栏并排两键）。
+   @why 双类选择器：原生 button 的默认宽度规则带属性选择器，单个类的优先级压不过它。
+   @limitation 该判断未在真机 / 开发者工具实测（无 AppID）。 */
+.ws-button.ws-button--block {
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+}

@@ -145,3 +145,71 @@ export function markInvalid(rows, productId, code) {
     list.some((r) => r.productId === productId);
   return list.map((r) => ({ ...r, invalidText: hit && r.productId === productId ? text : '' }));
 }
+
+/**
+ * 点行进详情（M-14，AJ-406）：只给意图，不认识路径（与首页 `intentForProduct` 同口径）。
+ * @returns {{go: 'detail', id: string} | null}
+ */
+export function intentForRow(productId) {
+  return typeof productId === 'string' && productId !== '' ? { go: 'detail', id: productId } : null;
+}
+
+/**
+ * 删除后可撤销的时长（M-14）。
+ * @why 5 秒：够看清"删了哪一件"并点到，又短到不让"已删除"那一行长期占位。
+ *      不弹确认框（对标分析 §4"购物车用'撤销'而非弹窗"：不打断连续操作）。
+ * @limitation 数值是取舍不是实测（无真机用户数据），上线后可按埋点调。
+ */
+export const UNDO_WINDOW_MS = 5000;
+
+/**
+ * 删除那一刻记下"可撤销"状态（M-14）。
+ * @param {unknown} items 删除**之前**的 cart-store 条目
+ * @param {unknown} productId 要删的那一件
+ * @param {unknown} nowMs 当前时刻（由薄壳传入，vm 不读时钟——约束十一）
+ * @returns {{item: object, index: number, expiresAt: number} | null} null = 不可撤销（找不到 / 入参脏）
+ */
+export function pendingRemoval(items, productId, nowMs) {
+  if (!Array.isArray(items) || typeof productId !== 'string' || !Number.isFinite(nowMs))
+    return null;
+  const index = items.findIndex((i) => i && i.productId === productId);
+  if (index < 0) return null;
+  return { item: { ...items[index] }, index, expiresAt: nowMs + UNDO_WINDOW_MS };
+}
+
+/**
+ * 此刻还能不能撤销（M-14）。
+ * @why 到点判"不能"而不是只靠定时器把它清掉：定时器在小程序切后台时会被冻结，
+ *      回来后先于定时器到达的一次点击仍会撤销一件早该删定的商品；以时刻为准才确定。
+ */
+export function undoAvailable(pending, nowMs) {
+  if (pending === null || typeof pending !== 'object') return false;
+  if (!Number.isFinite(nowMs) || !Number.isFinite(pending.expiresAt)) return false;
+  return nowMs < pending.expiresAt;
+}
+
+/**
+ * "已删除 · 撤销"那一行的视图（M-14）。
+ * @returns {{show: boolean, index: number, text: string}} `index` = 插在第几行之前（≥ 行数 = 列表末尾）
+ */
+export function undoView(pending, nowMs) {
+  if (!undoAvailable(pending, nowMs)) return { show: false, index: -1, text: '' };
+  const title = typeof pending.item?.title === 'string' ? pending.item.title : '';
+  return {
+    show: true,
+    index: Number.isInteger(pending.index) ? pending.index : 0,
+    text: title === '' ? '已删除 1 件商品' : `已删除「${title}」`,
+  };
+}
+
+/**
+ * 报价失败后给不给"重试"按钮（M-14）。
+ * @why 只给"重试可能有用"的失败：必须改购物车的码（下架 / 超重 / 超上限）、品种超限、停售——
+ *      重试一万次结果都一样，给按钮就是把用户按在一个不会成功的动作上（同 `quoteErrorHint` 的分类）。
+ *      库存不足（40901）给：库存会被别人的取消回补。
+ */
+export function quoteRetryable(code, lineCount) {
+  if (tooManyLines(code, lineCount)) return false;
+  if (code === SALES_PAUSED_CODE) return false;
+  return !MUST_CHANGE_CART.has(code);
+}

@@ -40,8 +40,14 @@
   margin-top: var(--ws-space-inline);
 }
 
+/* M-19（AJ-406）：步进与"删除"的触控区 ≥ --ws-touch-min（约 44pt）。
+   @why 原先只有左右 12rpx 内边距，"−"字形本身就是全部可点面积，误触与点不中都常见。 */
 .step {
-  padding: 0 var(--ws-space-inline);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--ws-touch-min);
+  min-height: var(--ws-touch-min);
   color: var(--ws-ink);
   font-size: var(--ws-f-lg);
 }
@@ -53,9 +59,35 @@
 }
 
 .remove {
-  margin-left: var(--ws-space-card);
+  display: flex;
+  align-items: center;
+  min-height: var(--ws-touch-min);
+  margin-left: var(--ws-space-stack);
+  padding: 0 var(--ws-space-inline);
   color: var(--ws-ink-mute);
-  font-size: var(--ws-f-sm);
+  font-size: var(--ws-f-base);
+}
+
+/* M-14：删除后的"已删除 · 撤销"行——内凹面读作"临时状态"，不与商品行混淆 */
+.undo-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--ws-surface-sunk);
+}
+
+.undo-row__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.undo-row__act {
+  display: flex;
+  align-items: center;
+  min-height: var(--ws-touch-min);
+  padding: 0 var(--ws-space-stack);
+  color: var(--ws-accent-deep);
+  font-size: var(--ws-f-base);
 }
 
 /* 报价明细 */

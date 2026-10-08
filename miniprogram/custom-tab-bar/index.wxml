@@ -15,8 +15,14 @@
     data-index="{{index}}"
     hover-class="ws-press"
     bindtap="onSwitch"
+    aria-role="tab"
+    aria-label="{{index === cartIndex && cartBadge ? item.text + '，' + cartBadge + ' 件' : item.text}}"
   >
-    <text class="ws-tabbar__label">{{item.text}}</text>
+    <view class="ws-tabbar__label-wrap">
+      <text class="ws-tabbar__label">{{item.text}}</text>
+      <!-- M-14（AJ-406）：购物车件数角标（自定义 tabBar 自己渲染，见 utils/tabs.js setCartBadge） -->
+      <text class="ws-tabbar__badge" wx:if="{{index === cartIndex && cartBadge}}">{{cartBadge}}</text>
+    </view>
     <view class="ws-tabbar__rule" />
   </view>
 </view>

@@ -21,7 +21,14 @@
  *
  * @see ./index.vm.js（视图逻辑真源）；../home/index.vm.js（导航意图真源）
  */
-import { acceptAddTap, addFeedback, buyNowItem, detailView, shareCard } from './index.vm.js';
+import {
+  acceptAddTap,
+  addFeedback,
+  buyBarView,
+  buyNowItem,
+  detailView,
+  shareCard,
+} from './index.vm.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -56,6 +63,8 @@ Page({
     retryable: false,
     /** M-03：客服联系方式（utils/support.js）；空数组 = 未配置，不显示。 */
     support: [],
+    /** M-13（AJ-406）：底部固定购买栏（vm `buyBarView`）。 */
+    bar: { cartText: '购物车', cartAria: '购物车，去购物车', disabled: false },
   },
 
   /** 上一次被接受的加购时刻（P2-37 连点守卫；不进 data：不是渲染状态）。 */
@@ -85,6 +94,25 @@ Page({
       .catch(() => undefined);
   },
 
+  /**
+   * 进屏刷新购买栏的购物车件数（M-13）：从购物车返回本页不触发 onLoad，只看 onLoad 件数会停在旧值。
+   */
+  onShow() {
+    this.renderBar();
+  },
+
+  /** 购买栏 = 购物车件数 + 本次加购结果 + 售罄态（vm `buyBarView`）。 */
+  renderBar() {
+    const cart = app.globalData.cart;
+    this.setData({
+      bar: buyBarView({
+        cartCount: typeof cart?.count === 'function' ? cart.count() : 0,
+        added: this.data.added,
+        soldOut: this.data.product?.soldOut === true,
+      }),
+    });
+  },
+
   /** 取详情。失败**清空商品**并明示错误：留旧数据会让人把别的商品当成这一个。 */
   async load() {
     this.setData({ loading: true, error: '' });
@@ -94,6 +122,7 @@ Page({
         traceId: this.traceId,
       });
       this.setData({ product: detailView(res) });
+      this.renderBar();
     } catch (e) {
       this.setData({ product: null, ...errorFields(e), retryable: true });
     } finally {
@@ -125,6 +154,7 @@ Page({
     // ⚠️ 只提示、不跳走：加购后自动跳购物车会打断"继续逛"——用户自己点"去购物车"
     // P2-31：品种已满时 `added=false` + 说明，不假装加上了
     this.setData(addFeedback(result));
+    this.renderBar();
   },
 
   /** 错误态的"重试"（P2-38）：重新取详情。缺 id 时 wxml 不给按钮（retryable=false）。 */
@@ -134,7 +164,7 @@ Page({
   },
 
   /**
-   * 去购物车（加购提示里的入口）。
+   * 去购物车（M-13 起是底部购买栏里的常驻入口）。
    * @why S5 之后用 `switchTab`：购物车是 tab 页。
    *      ⚠️ 代价是**回不到本页**（switchTab 会关掉所有非 tab 页）——
    *      但"去购物车"本来就是"我逛完了"的意思，返回需求由左上角返回键在

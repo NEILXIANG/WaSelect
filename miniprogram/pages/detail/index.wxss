@@ -138,15 +138,55 @@
   word-break: break-all;
 }
 
-/* 底部动作区：加购按钮 + 加购后的提示与"去购物车" */
+/* M-13（AJ-406）：底部固定购买栏。
+   @why 栏高走 --ws-buybar-h（页面留白 `.ws-page--with-buybar` 用同一个 token），安全区单独加在内边距里，
+        所以 iPhone 底部手势条不会压住按钮。 */
 .buy-bar {
-  padding-bottom: var(--ws-space-section);
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0 var(--ws-space-gutter) env(safe-area-inset-bottom);
+  background: var(--ws-surface);
+  border-top: var(--ws-border-width) solid var(--ws-line);
+  box-shadow: var(--ws-shadow-float);
+  z-index: 900;
 }
 
-.added {
+.buy-bar__note {
   display: block;
-  margin: var(--ws-space-inline) 0;
-  text-align: center;
+  padding-top: var(--ws-space-hair);
+}
+
+.buy-bar__row {
+  display: flex;
+  align-items: center;
+  min-height: var(--ws-buybar-h);
+}
+
+.buy-bar__info {
+  flex: none;
+  margin-right: var(--ws-space-inline);
+}
+
+/* 购物车入口：次要的文字动作，高度 56rpx（约 28pt）——**未达** 44pt：栏高只有 112rpx，
+   价格 + 88rpx 的入口会把栏撑高、多遮一截内容。主要动作（两个按钮）满足 44pt（M-19）；
+   这一处是取舍，记在 AJ-406，真机手感不行再改成整列可点。 */
+.buy-bar__cart {
+  display: flex;
+  align-items: center;
+  min-height: var(--ws-space-section);
+  color: var(--ws-ink-soft);
+  font-size: var(--ws-f-sm);
+}
+
+.buy-bar__btn {
+  flex: 1;
+  min-width: 0;
+}
+
+.buy-bar__btn + .buy-bar__btn {
+  margin-left: var(--ws-space-hair);
 }
 
 /* 加载 / 错误态 */

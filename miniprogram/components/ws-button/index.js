@@ -61,6 +61,13 @@ Component({
     loading: { type: Boolean, value: false },
     /** 禁用：由原生 button 挡住点击。@see @limitation 二 */
     disabled: { type: Boolean, value: false },
+    /**
+     * 撑满父容器宽度（M-13，AJ-406）：详情页底栏两个按钮并排，各占一格。
+     * @why 不让页面去覆盖原生 button 的宽度：样式隔离下页面 wxss 进不来组件内部，
+     *      而 style v2 下原生 button 有自己的默认宽度——只能由组件自己给一档。
+     * @limitation 实际宽度表现【需真机 / 开发者工具确认】（无 AppID，未实测）。
+     */
+    block: { type: Boolean, value: false },
   },
 
   data: {

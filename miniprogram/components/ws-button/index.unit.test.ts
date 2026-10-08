@@ -101,6 +101,17 @@ describe('ws-button：渲染', () => {
     expect(cls).toContain('ws-button--default');
   });
 
+  it('block（M-13）→ 带 ws-button--block；默认不带', () => {
+    const on = render({ text: 'x', block: true });
+    expect(on.dom.querySelector('wx-button')?.getAttribute('class') ?? '').toContain(
+      'ws-button--block',
+    );
+    const off = render({ text: 'x' });
+    expect(off.dom.querySelector('wx-button')?.getAttribute('class') ?? '').not.toContain(
+      'ws-button--block',
+    );
+  });
+
   it('type 默认 primary', () => {
     const comp = render({ text: 'x' });
     const cls = comp.dom.querySelector('wx-button')?.getAttribute('class') ?? '';

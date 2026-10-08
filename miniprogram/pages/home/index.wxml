@@ -24,7 +24,7 @@
        @why 字标是**静态文案**，不需要后端数据，所以它在 S3 就能上：
             它是"翻开一本刊物"这一版式意图里成本最低、收益最明显的一笔。
        @why 不放"用户中心"图标在右上角（沿用原型口径）：右上角放头像会把首页变成"App"。
-            用户入口仍在下方「我的」按钮。 -->
+            用户入口在底部 tabBar「我的」（M-14 起首页不再重复放"购物车 / 我的"按钮）。 -->
   <view class="ws-gutter home__bar">
     <text class="home__mark-cn">日本選品</text>
     <text class="home__mark-en">Japanese Selection</text>
@@ -49,11 +49,6 @@
       在途状态由列表区显示；正确性由 reload 的序号保证（@see ./index.js B36）。
     -->
     <ws-button class="home__go" text="搜索" type="primary" bindtap="onSearch" />
-  </view>
-
-  <view class="ws-gutter home__quick">
-    <ws-button class="home__quick-btn" text="{{cartLabel}}" type="default" bindtap="onGoCart" />
-    <ws-button class="home__quick-btn" text="我的" type="default" bindtap="onGoMine" />
   </view>
 
   <!-- ── 轮播（D-51）：`GET /home` 下发的生效中 banner ──────────────────
