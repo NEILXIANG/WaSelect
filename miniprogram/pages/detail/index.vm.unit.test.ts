@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
+import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
 import {
   ADD_TAP_GUARD_MS,
   acceptAddTap,
@@ -130,24 +131,102 @@ describe('detailView（描述与规格）', () => {
 });
 
 /**
- * 提审前必须的两行说明（PRD §3 商品详情 / GUI §3.2 / D-32 / D-39⑦；AJ-180）。
+ * M-03（AJ-405）：购买保障区——原来价格下的两行说明（关税口径 + 发货时限，AJ-180）并入这里，
+ * 改成"标签 + 说明"两层；两条既有约束原样保留：关税口径一字不改、时限数字只取服务端。
  * @why FTC 邮购规则：商品页写了"X 个工作日内发出"，就必须在时限内发出——数字来自服务端配置，
- *      前端不编；没有就**不出这一行**（写错的承诺比不写更糟）。
+ *      前端不编；没有就**不出这一条**（写错的承诺比不写更糟）。
  */
-describe('detailView（关税与发货时限说明）', () => {
-  it('两行齐全：含美国关税 + 付款后 N 个工作日内发出（N 取自 ship_within_business_days）', () => {
-    expect(detailView({ ...PRODUCT, ship_within_business_days: 7 }).notes).toEqual([
-      '价格含美国关税，国际运费按重量在结算时计算',
+describe('detailView（购买保障，M-03）', () => {
+  it('四条齐全：日本采购直邮 / 含美国关税 / N 个工作日内发出 / 缺货整单全额退款', () => {
+    const g = detailView({ ...PRODUCT, ship_within_business_days: 7 }).guarantees;
+    expect(g.map((x: { tag: string }) => x.tag)).toEqual([
+      '日本采购 · 日本直邮',
+      '价格含美国关税',
       '付款后 7 个工作日内发出',
+      '缺货整单全额退款',
+    ]);
+    // 关税口径的说明沿用 DUTY_NOTE 原句（D-32 / D-69②，提审前必须项）
+    expect(g[1]?.detail).toBe('价格含美国关税，国际运费按重量在结算时计算');
+    // 缺货退款的说明与结算页、订单详情同一句（STOCK_REFUND_NOTE 真源）
+    expect(g[3]?.detail).toBe(STOCK_REFUND_NOTE);
+    for (const x of g) expect(x.detail, x.tag).not.toBe('');
+  });
+
+  it('🔴 时限缺失 / 非正整数 → 不出"N 个工作日"那一条（不编数字），其余三条照常', () => {
+    for (const bad of [undefined, 0, -1, 2.5, '7', null]) {
+      const tags = detailView({ ...PRODUCT, ship_within_business_days: bad }).guarantees.map(
+        (x: { tag: string }) => x.tag,
+      );
+      expect(tags, String(bad)).toEqual([
+        '日本采购 · 日本直邮',
+        '价格含美国关税',
+        '缺货整单全额退款',
+      ]);
+    }
+  });
+
+  it('🔴 不写无法兑现 / 需资质背书的承诺用语（AJ-295 同口径）', () => {
+    const text = JSON.stringify(detailView({ ...PRODUCT, ship_within_business_days: 7 }));
+    for (const w of ['正品', '保真', '包邮', '天内送达', '日达', '假一赔'])
+      expect(text).not.toContain(w);
+  });
+});
+
+/**
+ * M-03（AJ-405 / AJ-402 Q2）：运输流程分段说明——**没有天数**。
+ * @why 天数要等首批 EMS 实测后由服务端配置下发；在那之前写任何数字都是猜（写错的承诺比不写更糟）。
+ */
+describe('shippingSteps（运输流程分段，M-03）', () => {
+  it('四段固定顺序：日本采购 → 日本发出 → 国际运输 → 清关派送', () => {
+    expect(detailView(PRODUCT).shippingSteps.map((s: { title: string }) => s.title)).toEqual([
+      '日本采购',
+      '日本发出',
+      '国际运输',
+      '清关派送',
     ]);
   });
 
-  it('时限缺失 / 非正整数 → 只出关税一行（不编数字）', () => {
-    for (const bad of [undefined, 0, -1, 2.5, '7']) {
-      expect(detailView({ ...PRODUCT, ship_within_business_days: bad }).notes).toEqual([
-        '价格含美国关税，国际运费按重量在结算时计算',
-      ]);
+  it('🔴 任何一段都不出现阿拉伯数字（天数 / 时效在实测前一律不写）', () => {
+    for (const s of detailView({ ...PRODUCT, ship_within_business_days: 7 }).shippingSteps) {
+      expect(`${s.title}${s.detail}`, s.title).not.toMatch(/[0-9０-９]/);
     }
+  });
+
+  it('脏输入（null）也给出完整四段（流程是店铺事实，不随商品变）', () => {
+    expect(detailView(null).shippingSteps).toHaveLength(4);
+  });
+});
+
+/** M-02（AJ-405）：编辑口径三字段——与首页卡片同源；契约里都可缺（0.6.23 ②）。 */
+describe('detailView（为什么值得买 / 产地匠人 / 标签，M-02）', () => {
+  const EDITORIAL = {
+    why: '  一瓶卸全妆，乳化快、不搓脸，敏感肌也敢天天用。 ',
+    maker: '東京 · 資生堂',
+    tags: ['敏感肌可用', '  ', 42, '日本药妆店常年前三'],
+  };
+
+  it('三项透出：why / maker 去首尾空白；tags 只留非空字符串（去空白）', () => {
+    const v = detailView({ ...PRODUCT, ...EDITORIAL });
+    expect(v.why).toBe('一瓶卸全妆，乳化快、不搓脸，敏感肌也敢天天用。');
+    expect(v.maker).toBe('東京 · 資生堂');
+    expect(v.tags).toEqual(['敏感肌可用', '日本药妆店常年前三']);
+  });
+
+  it('🔴 缺失（服务端整键省略）/ null / 空白 / 非字符串 → 空串与空数组，不用通用话术顶上', () => {
+    for (const bad of [undefined, null, '   ', 42, {}]) {
+      const v = detailView({ ...PRODUCT, why: bad, maker: bad, tags: bad });
+      expect(v.why, String(bad)).toBe('');
+      expect(v.maker, String(bad)).toBe('');
+      expect(v.tags, String(bad)).toEqual([]);
+    }
+    const none = detailView(PRODUCT);
+    expect([none.why, none.maker, none.tags]).toEqual(['', '', []]);
+  });
+
+  it('⚠️ 编辑标签不与报关 compliance_tags 混用（后者仍不透出）', () => {
+    const v = detailView({ ...PRODUCT, ...EDITORIAL, compliance_tags: ['quasi_drug'] });
+    expect(v.tags).not.toContain('quasi_drug');
+    expect(JSON.stringify(v)).not.toContain('quasi_drug');
   });
 });
 

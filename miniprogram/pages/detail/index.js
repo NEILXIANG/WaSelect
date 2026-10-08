@@ -16,12 +16,16 @@
  * @limitation 二：轮播用原生 `swiper`，**没有**指示器自定义样式——默认圆点即可，
  *              为一个还没定版的页面先做指示器属于提前设计。
  *
+ * @why M-03（AJ-405）：客服联系方式与订单详情同源（`GET /support` → utils/support.js）；
+ *      拉取失败静默——它只是"多一个出口"，不该让整页报错。
+ *
  * @see ./index.vm.js（视图逻辑真源）；../home/index.vm.js（导航意图真源）
  */
 import { acceptAddTap, addFeedback, buyNowItem, detailView, shareCard } from './index.vm.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+import { supportRows } from '../../utils/support.js';
 
 const app = getApp();
 
@@ -50,6 +54,8 @@ Page({
     addNote: '',
     /** 错误态是否给"重试"（P2-38）：缺 id 时重试也没用，不给按钮。 */
     retryable: false,
+    /** M-03：客服联系方式（utils/support.js）；空数组 = 未配置，不显示。 */
+    support: [],
   },
 
   /** 上一次被接受的加购时刻（P2-37 连点守卫；不进 data：不是渲染状态）。 */
@@ -72,6 +78,11 @@ Page({
       return;
     }
     this.load();
+    // M-03（AJ-405）：保障区的客服入口——与订单详情同一条 GET /support，失败静默（只是不显示这张卡）
+    app.globalData
+      .api({ url: `${app.globalData.apiBase}/api/v1/support`, traceId: this.traceId })
+      .then((res) => this.setData({ support: supportRows(res) }))
+      .catch(() => undefined);
   },
 
   /** 取详情。失败**清空商品**并明示错误：留旧数据会让人把别的商品当成这一个。 */

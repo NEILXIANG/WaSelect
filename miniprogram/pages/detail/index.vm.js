@@ -18,6 +18,10 @@
  * @limitation 三：`weight_g` 展示成"约 N g"——它是**申报重量**（含包材口径在报价域另有
  *              PACKAGING_WEIGHT_G，D-42），与商品实重本就有差；"约"字是刻意留的余地。
  *
+ * @limitation 四（M-03，AJ-405）：购买保障与运输流程是**店铺级**文案，写在本文件常量里；
+ *              运输天数**刻意没有**——要等首批 EMS 实测后由服务端配置下发（AJ-402 Q2），
+ *              届时加一个可选字段，本文件只多一个"有就显示"的分支。
+ *
  * @see ../home/index.vm.js（首页 vm，同一套约束）；../../utils/price-format.js（displaySubLine）；
  *      ../../utils/placeholder.js（占位图真源）；contracts/api-contract.yaml（Product 形状）
  */
@@ -25,6 +29,7 @@
 import { displaySubLine } from '../../utils/price-format.js';
 import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 import { MAX_CART_LINES } from '../../utils/cart-store.js';
+import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
 
 /** 原产地 ISO 码 → 展示名。@see @limitation 一 */
 const ORIGIN_LABELS = { JP: '日本' };
@@ -37,11 +42,72 @@ const ORIGIN_LABELS = { JP: '日本' };
 export const DUTY_NOTE = '价格含美国关税，国际运费按重量在结算时计算';
 
 /**
+ * 运输流程分段说明（M-03，AJ-405）——**不写天数**。
+ * @why 每一段只陈述"谁在哪一步做什么"，可核验：日本采购（STOCK_REFUND_NOTE 同一事实）、从日本发出
+ *      （MVP 只卖日本原产、日本发货，D-43）、国际运输、清关派送（D-32 DDP：关税已含在价内，买家无需清关动作，对标分析 §3.5 合规提示行）。
+ * @why 没有数字：EMS 实际时效未实测（对标分析 §7）；写错的送达承诺比不写更糟（AJ-402 Q2 / FTC 同口径）。
+ * @limitation 承运商不点名（"EMS"）：承运商由管理端发货时填，店铺未来可能换；点名就是又一处要同步的写死。
+ */
+export const SHIPPING_STEPS = [
+  { key: 'buy', title: '日本采购', detail: '付款后我们在日本为你采购商品' },
+  { key: 'send', title: '日本发出', detail: '打包后从日本寄出，发货后可在订单里看到运单号' },
+  { key: 'intl', title: '国际运输', detail: '包裹在国际运输途中，可凭运单号查件' },
+  {
+    key: 'last',
+    title: '清关派送',
+    detail: '关税已含在商品价内，清关不需要你另外办理或付费，之后派送到你的收货地址',
+  },
+];
+
+/**
+ * 购买保障（M-03，AJ-405）：价格下的一排标签 + 保障区里逐条说明。
+ * @why 每一条都必须是**已定的业务事实**，出处写在这里：
+ *      ① 日本采购 · 日本直邮：代购模式（付款后在日本采购，STOCK_REFUND_NOTE）+ 只卖日本原产、从日本发货（D-43）；
+ *      ② 价格含美国关税：D-32 / D-69②（DDP，商品价含关税）——说明一字不改沿用 DUTY_NOTE；
+ *      ③ 付款后 N 个工作日内发出：N **只取服务端** `ship_within_business_days`（FTC，D-39⑦ / AJ-180）；
+ *      ④ 缺货整单全额退款：剩余清单 4-10，与结算页 / 订单详情同一句 STOCK_REFUND_NOTE。
+ * @why 不写"正品保障 / 包邮 / X 天送达"：前者需要资质背书，后两者与现行规则不符（运费按重量单列；时效未实测）。
+ */
+function guaranteesOf(p) {
+  const days = p.ship_within_business_days;
+  const list = [
+    { key: 'origin', tag: '日本采购 · 日本直邮', detail: '商品在日本采购，从日本直接寄往美国' },
+    { key: 'duty', tag: '价格含美国关税', detail: DUTY_NOTE },
+  ];
+  // 时限数字**只取服务端下发**（配置 SHIP_WITHIN_BUSINESS_DAYS）：拿不到合法正整数就不出这一条——
+  //    写错的承诺比不写更糟（FTC 未写时限时默认 30 天，不写不违规）
+  if (Number.isInteger(days) && days > 0) {
+    list.push({
+      key: 'ship',
+      tag: `付款后 ${days} 个工作日内发出`,
+      detail: `付款后 ${days} 个工作日内从日本发出；发出不等于送达，运输过程见下方流程`,
+    });
+  }
+  list.push({ key: 'refund', tag: '缺货整单全额退款', detail: STOCK_REFUND_NOTE });
+  return list;
+}
+
+/** 可选字符串（why / maker）：非字符串或空白 → 空串（AJ-296①：缺失时降级，不用通用话术顶上）。 */
+function optionalText(v) {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+/** 编辑标签：只留非空字符串（契约恒为数组，这里仍防脏值——与首页 vm 同口径再加去空白）。 */
+function editorialTags(v) {
+  if (!Array.isArray(v)) return [];
+  return v.filter((t) => typeof t === 'string' && t.trim() !== '').map((t) => t.trim());
+}
+
+/**
  * `GET /products/{id}` 的 Product → 详情视图数据。
  * @param {unknown} product 契约 `Product`（请求失败时页面根本不会调这里）
  * @returns {{title: string, priceJpy: unknown, subPrice: string, images: string[],
  *            description: string, specs: Array<{label: string, value: string}>, soldOut: boolean,
- *            notes: string[]}}
+ *            why: string, maker: string, tags: string[],
+ *            guarantees: Array<{key: string, tag: string, detail: string}>,
+ *            shippingSteps: Array<{key: string, title: string, detail: string}>}}
+ * @why M-02：`why` / `maker` / `tags` 详情接口本就下发（product-routes.ts 详情分支，契约 0.6.23），
+ *      此前详情页漏取——首页卡片说了"为什么值得买"，点进来反而没了。
  * @why `priceJpy` **原样透传、不做任何兜底**（与首页同一口径）：`ws-price` 对非整数
  *      会响亮失败，在这里补 0 会显示 `0 円`——那是价格组件最贵的失败形态。
  */
@@ -55,21 +121,12 @@ export function detailView(product) {
     description: typeof p.description === 'string' ? p.description.trim() : '',
     specs: specsOf(p),
     soldOut: Number(p.stock) === 0,
-    notes: notesOf(p),
+    why: optionalText(p.why),
+    maker: optionalText(p.maker),
+    tags: editorialTags(p.tags),
+    guarantees: guaranteesOf(p),
+    shippingSteps: SHIPPING_STEPS,
   };
-}
-
-/**
- * 价格区下方的两行说明：关税口径 + 发货时限承诺（FTC 邮购规则，D-39⑦；AJ-180）。
- * @why 时限数字**只取服务端下发**（`ship_within_business_days`，配置 SHIP_WITHIN_BUSINESS_DAYS）：
- *      这是法律承诺，前端写死就是"运营改了配置、页面还是旧承诺"；拿不到合法正整数就不出这一行——
- *      写错的承诺比不写更糟（FTC 未写时限时默认 30 天，不写不违规）。
- */
-function notesOf(p) {
-  const days = p.ship_within_business_days;
-  return Number.isInteger(days) && days > 0
-    ? [DUTY_NOTE, `付款后 ${days} 个工作日内发出`]
-    : [DUTY_NOTE];
 }
 
 /** ImageSet[] → 主图 URL 列表；一条图都没有 → [占位图]（不留空数组，轮播会整个消失）。 */

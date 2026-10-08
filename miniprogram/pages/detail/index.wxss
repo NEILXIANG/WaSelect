@@ -38,6 +38,82 @@
   margin-top: var(--ws-space-inline);
 }
 
+/* M-02：产地 / 匠人与「为什么值得买」——与 ws-pick-card 同一组 token（组件样式隔离，类不能直接复用） */
+.detail__maker {
+  display: block;
+  margin-bottom: var(--ws-space-tight);
+  font-size: var(--ws-f-caption);
+  color: var(--ws-ink-mute);
+  letter-spacing: var(--ws-ls-display);
+}
+
+.detail__why {
+  margin: var(--ws-space-inline) 0;
+  padding: var(--ws-space-inline) var(--ws-space-stack);
+  border-left: var(--ws-rule-accent) solid var(--ws-accent);
+  background: var(--ws-surface-sunk);
+  border-radius: 0 var(--ws-radius-sm) var(--ws-radius-sm) 0;
+}
+
+.detail__why-label {
+  display: block;
+  font-size: var(--ws-f-caption);
+  color: var(--ws-accent-deep);
+  letter-spacing: var(--ws-ls-wide);
+}
+
+.detail__why-text {
+  display: block;
+  margin-top: var(--ws-space-tight);
+  font-size: var(--ws-f-sm);
+  line-height: var(--ws-lh-body);
+  color: var(--ws-ink-soft);
+}
+
+/* 编辑标签 / 保障标签：横排可换行 */
+.detail__tags {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: var(--ws-space-inline);
+}
+
+.detail__tags .ws-tag {
+  margin: 0 var(--ws-space-hair) var(--ws-space-hair) 0;
+}
+
+/* M-03：购买保障逐条 */
+.assure {
+  padding: var(--ws-space-inline) 0;
+  border-bottom: var(--ws-border-width) solid var(--ws-line);
+}
+
+.assure__tag {
+  display: block;
+  color: var(--ws-ink);
+}
+
+/* M-03：运输流程分段（左序号、右说明） */
+.step {
+  display: flex;
+  align-items: flex-start;
+  padding: var(--ws-space-inline) 0;
+}
+
+.step__no {
+  flex: none;
+  margin-right: var(--ws-space-inline);
+}
+
+.step__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.step__title {
+  display: block;
+  color: var(--ws-ink);
+}
+
 /* 规格表：左侧窄标签、右侧值，行间用发丝线分隔 */
 .specs {
   margin-top: var(--ws-space-card);

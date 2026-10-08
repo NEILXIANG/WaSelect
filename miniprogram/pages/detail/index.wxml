@@ -1,5 +1,5 @@
 <!--
-  商品详情页（I2）：轮播 + 标题/价格 + 规格 + 描述。
+  商品详情页（I2）：轮播 + 标题/价格 + 规格 + 描述；M-02 编辑口径、M-03 购买保障 / 运输流程 / 客服（AJ-405）。
 
   S3（2026-10-02）：版式换成设计体系（`.ws-*` 基础类），信息架构不动。
 
@@ -36,13 +36,32 @@
       </swiper-item>
     </swiper>
 
+    <!--
+      M-02（AJ-405）：与首页 ws-pick-card 同一套视觉语言——产地/匠人在名字上方一行小字，
+      「为什么值得买」在名字下、价格上（编辑批注样式：左竖线 + 浅底），编辑标签跟在价格后。
+      三项都可缺（契约 0.6.23②）：缺了整块不渲染，不用通用话术顶上。
+    -->
     <view class="ws-gutter detail__head">
+      <text class="detail__maker" wx:if="{{product.maker}}">{{product.maker}}</text>
       <text class="detail__title">{{product.title}}</text>
+      <view class="detail__why" wx:if="{{product.why}}">
+        <text class="detail__why-label">为什么值得买</text>
+        <text class="detail__why-text">{{product.why}}</text>
+      </view>
       <ws-price jpy="{{product.priceJpy}}" size="lg" />
       <text class="ws-note" wx:if="{{product.subPrice}}">{{product.subPrice}}</text>
       <text class="ws-tag ws-tag--danger detail__tag" wx:if="{{product.soldOut}}">已售罄</text>
-      <!-- 提审前必须（PRD §3 / D-32 / D-39⑦ FTC）：关税口径 + 发货时限承诺，文案由 vm 给出 -->
-      <text class="ws-note" wx:for="{{product.notes}}" wx:key="*this">{{item}}</text>
+      <view class="detail__tags" wx:if="{{product.tags.length > 0}}">
+        <text class="ws-tag" wx:for="{{product.tags}}" wx:key="*this">{{item}}</text>
+      </view>
+      <!--
+        M-03（AJ-405）：保障标签条。提审前必须的关税口径与发货时限（PRD §3 / D-32 / D-39⑦ FTC）
+        以标签出现在价格下方，逐条说明在下面的「购买保障」区；文案全部由 vm 给出。
+        绿色标签与上面的编辑标签区分：这里是**店铺承诺**，那里是**编辑口径**。
+      -->
+      <view class="detail__tags">
+        <text class="ws-tag ws-tag--green" wx:for="{{product.guarantees}}" wx:key="key">{{item.tag}}</text>
+      </view>
 
       <view class="specs" wx:if="{{product.specs.length > 0}}">
         <view class="spec" wx:for="{{product.specs}}" wx:for-item="row" wx:key="label">
@@ -56,6 +75,45 @@
       <view class="ws-card">
         <text class="ws-section-kicker">Description</text>
         <text class="ws-body">{{product.description}}</text>
+      </view>
+    </view>
+
+    <!-- M-03：购买保障逐条说明（与价格下的标签一一对应） -->
+    <view class="ws-gutter ws-section">
+      <view class="ws-card">
+        <text class="ws-section-kicker">Guarantee</text>
+        <view class="assure" wx:for="{{product.guarantees}}" wx:key="key">
+          <text class="ws-body assure__tag">{{item.tag}}</text>
+          <text class="ws-note">{{item.detail}}</text>
+        </view>
+      </view>
+    </view>
+
+    <!--
+      M-03：运输流程分段说明。⚠️ **不写天数**（AJ-402 Q2）：EMS 实测前任何数字都是猜，
+      实测后由服务端配置下发，在这里加一行"约 X–Y 天（参考）"。
+    -->
+    <view class="ws-gutter ws-section">
+      <view class="ws-card">
+        <text class="ws-section-kicker">Shipping</text>
+        <view class="step" wx:for="{{product.shippingSteps}}" wx:key="key">
+          <text class="ws-tag ws-tag--ghost step__no">{{index + 1}}</text>
+          <view class="step__body">
+            <text class="ws-body step__title">{{item.title}}</text>
+            <text class="ws-note">{{item.detail}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- M-03：联系客服（复用 GET /support 与 utils/support.js；服务端未配置时不显示，长按可选中复制） -->
+    <view class="ws-gutter ws-section" wx:if="{{support.length > 0}}">
+      <view class="ws-card">
+        <text class="ws-note">有疑问？联系客服</text>
+        <view class="spec" wx:for="{{support}}" wx:key="key">
+          <text class="ws-note spec__k">{{item.label}}</text>
+          <text class="ws-body spec__v" user-select>{{item.value}}</text>
+        </view>
       </view>
     </view>
 
