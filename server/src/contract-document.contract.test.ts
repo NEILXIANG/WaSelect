@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import {
+  ORDER_NOTE_MAX_LENGTH,
   REFUND_REASON_MAX_LENGTH,
   SEARCH_KEYWORD_MAX_LENGTH,
   SHIP_MAX_CHARS,
@@ -163,6 +164,12 @@ describe('契约的输入上限与 shared 常量一致', () => {
     const reason = requestProps('/admin/orders/{id}/refund', 'post')['reason'];
     expect(reason, '契约没有声明 reason').toBeDefined();
     expect(reason?.['maxLength']).toBe(REFUND_REASON_MAX_LENGTH);
+  });
+
+  it('POST /admin/orders/{id}/notes 的 body.maxLength == ORDER_NOTE_MAX_LENGTH（0.6.42 / AJ-396）', () => {
+    const body = requestProps('/admin/orders/{id}/notes', 'post')['body'];
+    expect(body, '契约没有声明 body').toBeDefined();
+    expect(body?.['maxLength']).toBe(ORDER_NOTE_MAX_LENGTH);
   });
 
   // @why 不用 "JSON.stringify 里包含 128" 那种包含式断言：128 在别处也可能出现，

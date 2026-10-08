@@ -66,6 +66,18 @@ export const REFUND_REASON_MAX_LENGTH = 500;
 export const ADMIN_NOTE_MAX_LENGTH = 500;
 
 /**
+ * 订单**内部备注**（`order_notes.body`，迁移 034）的字符上限（第一批⑤，AJ-396）。
+ *
+ * @why 1000 而不是复用 `ADMIN_NOTE_MAX_LENGTH`（500）：那条是"一次操作的理由"，一两句话；
+ *      内部备注是"把微信里的售后来回记下来"（对标文档 §8-3：买家售后申请立项前用它兜），
+ *      常是几段多行文字。两者语义不同，不互相引用（与上面两条同口径：同值不同源，异值更不同源）。
+ * @limitation 按 **UTF-16 码元**计（`.length`）；库里的 CHECK 用 `char_length`（码位）≤ 1000，
+ *      应用层更严 ⇒ 库约束永远不会先于应用层拒绝（emoji 会被提前拒，方向与退款理由一致）。
+ * @see migrations/034_order_notes.sql；server/src/domain/order-note.ts；admin-web/src/orders/OrderNotes.tsx
+ */
+export const ORDER_NOTE_MAX_LENGTH = 1000;
+
+/**
  * 管理员口令的**最小长度**（12，N11）。
  *
  * @why 它是"下限"而不是"上限"，但同样会长成两份：`config.ts` 用 12 拒启动、

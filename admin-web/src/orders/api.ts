@@ -27,6 +27,7 @@
  */
 import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
 import type { OrderStatus } from '@waselect/shared';
+import type { OrderNote } from './notes-view.js';
 
 export type AdminApi = ReturnType<typeof import('../api/client.js').createAdminApi>;
 
@@ -298,4 +299,44 @@ export async function syncPartialRefund(
     body: {},
   });
   return (res as { refund?: unknown } | null)?.refund ?? null;
+}
+
+/** `OrderNote` 形状校验（契约 0.6.42）：缺 id / body / created_at 的行渲染出来是空气泡。 */
+function isOrderNote(x: unknown): x is OrderNote {
+  const n = x as Record<string, unknown> | null;
+  return (
+    typeof n === 'object' &&
+    n !== null &&
+    typeof n['id'] === 'string' &&
+    typeof n['author'] === 'string' &&
+    typeof n['body'] === 'string' &&
+    typeof n['created_at'] === 'string'
+  );
+}
+
+/**
+ * `GET /admin/orders/{id}/notes`（订单内部备注，第一批⑤，AJ-396）。
+ * @throws {ApiError} 响应形状与契约不符（@see 文件头 @limitation 一）
+ */
+export async function listOrderNotes(api: AdminApi, id: string): Promise<OrderNote[]> {
+  const resp = await api({ path: `/api/v1/admin/orders/${encodeURIComponent(id)}/notes` });
+  const items = (resp as { items?: unknown } | null)?.items;
+  if (!Array.isArray(items) || !items.every(isOrderNote)) {
+    throw new ApiError(NETWORK_ERROR_CODE, '备注列表响应形状与契约不符', '');
+  }
+  return items;
+}
+
+/** `POST /admin/orders/{id}/notes`（append-only：没有改 / 删接口）。返回新追加的那一条。 */
+export async function addOrderNote(api: AdminApi, id: string, body: string): Promise<OrderNote> {
+  const resp = await api({
+    path: `/api/v1/admin/orders/${encodeURIComponent(id)}/notes`,
+    method: 'POST',
+    body: { body },
+  });
+  const note = (resp as { note?: unknown } | null)?.note;
+  if (!isOrderNote(note)) {
+    throw new ApiError(NETWORK_ERROR_CODE, '备注已提交，但响应形状与契约不符：请刷新核对', '');
+  }
+  return note;
 }

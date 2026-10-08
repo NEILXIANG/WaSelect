@@ -54,6 +54,8 @@ async function open(): Promise<HTMLElement> {
     calls.push(req);
     if (req.path.endsWith('/refund')) return refundBehaviour();
     if (req.path.endsWith('/dispute/release')) return releaseBehaviour();
+    // 第一批⑤（AJ-396）：时间线自己取备注；本文件不测备注，回空列表
+    if (req.path.endsWith('/notes')) return { items: [] };
     return order();
   };
   mounted = await mount(

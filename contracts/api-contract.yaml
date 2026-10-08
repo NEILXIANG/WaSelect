@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.41
+  version: 0.6.42
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -460,6 +460,14 @@ info:
          全额退款**不写** `order_refunds`，只取一个来源必然漏一半；
       ⑥ `fx`（当日生效 USD 展示汇率）**在没有已生效汇率时整键省略**（与 0.6.33 的 urls / seller 同口径：没配就不编占位值）；
       ⑦ `avg_jpy` 在窗口内零收款订单时为 **null 而不是 0**——"0 円客单价"分不清是没单还是算错。
+    0.6.42（AJ-396：管理后台对标分析第一批⑤——订单内部备注）：新增 `GET /admin/orders/{id}/notes` 与
+      `POST /admin/orders/{id}/notes`、schema `OrderNote`。口径要点：
+      ① 备注 **append-only**（迁移 034 触发器拒 UPDATE / DELETE）：没有改 / 删接口，写错了再追加一条更正；
+      ② `body` 去首尾空白后 1–1000 字（UTF-16 码元，上限 = shared `ORDER_NOTE_MAX_LENGTH`）；空 / 只有空白（含全角空格）→
+         400 / 40001 `order_note_required`，超长 → 400 / 40001 `order_note_too_long`；订单不存在 → 404 / 40400；
+      ③ `author` 恒为 `admin:<id>`；`author_email` 为作者**当前**邮箱，取不到时**省略键**（与 0.6.40 `actor_email` 同口径）；
+      ④ 任何订单状态都可追加（售后沟通常发生在退款之后）；POST 照常进 `admin_audit`；
+      ⑤ 仅管理端可见：不进买家侧任何响应，也不发通知。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -694,6 +702,18 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [carrier, tracking_no, reason], properties: {carrier: {type: string, maxLength: 32}, tracking_no: {type: string, maxLength: 64}, reason: {type: string, maxLength: 500}}}}}}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [order_id, carrier, tracking_no, tracking_recognized], properties: {order_id: {type: string}, carrier: {type: string}, tracking_no: {type: string}, tracking_recognized: {type: boolean}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/orders/{id}/notes:
+    get:
+      summary: 订单内部备注列表（0.6.42 / AJ-396）
+      description: '按 created_at 先后（同刻按 id）。没有备注时 items 为空数组。订单不存在 → 404 / 40400。'
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/OrderNote'}}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}
+    post:
+      summary: 追加一条订单内部备注（0.6.42 / AJ-396）
+      description: '仅管理端可见，append-only（无改 / 删）。body 去首尾空白后 1–1000 字（shared ORDER_NOTE_MAX_LENGTH，UTF-16 码元）；空白 → 40001 order_note_required，超长 → 40001 order_note_too_long；订单不存在 → 40400。任何订单状态都可追加。进 admin_audit。'
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [body], properties: {body: {type: string, minLength: 1, maxLength: 1000}}}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {type: object, required: [note], properties: {note: {$ref: '#/components/schemas/OrderNote'}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/refund:
     post:
       description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.10① 起 `has_dispute` 的语义是「**有未解除的拒付限制**」（进行中，或已败诉）：拒付结案时**仅胜诉与 withdrawn 复位**、闸门随之解锁，**败诉保持 true、闸门继续拦**（U-F4 / AJ-176；本句取代 0.6.7 的旧口径，那条已作废）。0.6.9（AJ-175/KD-4）：状态为 **refunding**（上次机构调用失败）时允许再调重试，沿用首次退款原因与同一机构幂等键；refunded 仍 40902。0.6.11（AJ-178 / F-03）：上一笔机构退款在途（refund_pending）时再调只查询该笔、不再发起；机构确认失败后换新机构幂等键重新发起；结果未知（超时 / 机构报错）仍沿用同键
@@ -922,6 +942,7 @@ components:
     PaymentIntent: {type: object, properties: {channel: {type: string, description: '通道 key（同 POST /orders/{id}/pay：任意字符串，见 x-payment-channels）'}, charge: {type: object, properties: {currency: {type: string, enum: [JPY, USD]}, amount: {type: integer}}}, payload: {type: object, additionalProperties: true, description: 'wechat: wx.requestPayment 五参数；stripe: {pay_url, expires_at}（D-49 短链）；mock: {auto, orderId, amountJpy, currency}——auto 为布尔：仅审核模式（服务端会自动确认、响应返回时订单已 paid）为 true，否则 false（0.6.11 / AJ-179；0.5.6 起的 auto:true 恒真已废）'}, expires_at: {type: string, format: date-time}}}
     BannerInput: {type: object, required: [image_key], properties: {image_key: {type: string}, link_type: {type: string, enum: [none, product, category], default: none}, link_id: {type: string, description: 'link_type ≠ none 时必填（缺 → 40001 link_id_required）'}, sort: {type: integer, default: 0, minimum: 0}, active: {type: boolean, default: true}, starts_at: {type: string, format: date-time}, ends_at: {type: string, format: date-time}}}
     AdminAuditEntry: {type: object, description: '0.6.32：管理员操作审计一行（不含 before / after）。status_code 缺失 = 当时没记（CLI 路径或迁移 025 之前）', required: [id, actor, action, created_at], properties: {id: {type: integer}, actor: {type: string}, actor_email: {type: string, description: '0.6.40：actor 为 admin:<id> 时的管理员邮箱；CLI / 已删账号省略'}, action: {type: string}, target: {type: string}, status_code: {type: integer}, trace_id: {type: string}, created_at: {type: string, format: date-time}}}
+    OrderNote: {type: object, description: '0.6.42：订单内部备注（迁移 034，append-only）', required: [id, author, body, created_at], properties: {id: {type: string}, author: {type: string, description: '恒为 admin:<id>'}, author_email: {type: string, description: '作者当前邮箱；取不到时省略'}, body: {type: string, maxLength: 1000}, created_at: {type: string, format: date-time}}}
     MoneyByCurrency: {type: object, description: '0.6.41：按币种分行的一笔钱。`amount` 恒为该币种的**最小单位**（JPY=円，USD=分），不折算、不跨币种相加', required: [currency, amount], properties: {currency: {type: string, description: 'ISO 4217，如 JPY / USD'}, amount: {type: integer}}}
     AdminSalesWindow: {type: object, description: '0.6.41：一个窗口（左闭右开，JST 日界）的销售统计', required: [from, to, orders, paid_orders, sales_jpy, received, refunded, disputed], properties: {from: {type: string, format: date-time, description: '含'}, to: {type: string, format: date-time, description: '不含；恒为某个 JST 日的 00:00（今日窗口的 to = 明日 00:00）'}, orders: {type: integer, description: '窗口内创建的订单数（不含测试单）'}, paid_orders: {type: integer, description: '窗口内收款的订单数（paid_at 落窗）'}, sales_jpy: {type: integer, description: '窗口内收款订单的 total_jpy 合计（円）'}, avg_jpy: {type: integer, nullable: true, description: '客单价（円，四舍五入）；窗口内零收款订单时为 **null 而不是 0**'}, received: {type: array, description: '实收：payments 的实扣金额，按扣款币种分行', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, refunded: {type: array, description: '已退：全额退款单 + 部分退款 succeeded 行，按币种分行', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, disputed: {type: array, description: '拒付：机构报的 dispute_amount，按开案时间落窗', items: {$ref: '#/components/schemas/MoneyByCurrency'}}}}
     AdminSalesOverview: {type: object, description: '0.6.41：`GET /admin/dashboard/sales` 的响应', required: [generated_at, today, last7], properties: {generated_at: {type: string, format: date-time, description: '服务端取钟时刻；两个窗口共用它，故 today ⊆ last7'}, today: {$ref: '#/components/schemas/AdminSalesWindow'}, last7: {$ref: '#/components/schemas/AdminSalesWindow', description: '含当日在内的 7 个自然日'}, fx: {type: object, description: '当日生效的 USD 展示汇率（含缓冲），供前端把円折成 ≈USD 灰字辅显（§8-2）。**没有已生效汇率时整键省略**', required: [usd_rate, usd_effective_from], properties: {usd_rate: {type: number, description: '1 JPY = ? USD；与 `fx_rates.rate` 同值（raw_rate × (1 + buffer)）'}, usd_effective_from: {type: string, format: date-time}}}}}

@@ -606,3 +606,17 @@ body {
   font-size: var(--ws-font-sm);
   color: var(--ws-color-muted);
 }
+
+/* 时间线里的内部备注（第一批⑤，AJ-396）：与系统事件区分开——左侧竖线 + 正文保留换行 */
+.timeline-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space-sm);
+  padding-left: var(--ws-space-sm);
+  border-left: var(--ws-border) solid var(--ws-color-muted);
+}
+
+.timeline-note-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

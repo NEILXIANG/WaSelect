@@ -49,6 +49,7 @@ import { formatJst, moneyText } from '../format.js';
 import { OrderAddressForm } from './OrderAddressForm.js';
 import { PartialRefunds } from './PartialRefunds.js';
 import { OrderFixActions } from './OrderFixActions.js';
+import { OrderTimeline } from './OrderTimeline.js';
 import { TRACKING_SHAPE_WARNING, trackingWarning } from './fix-view.js';
 import { trackingNoRecognized } from '@waselect/shared';
 import {
@@ -56,7 +57,6 @@ import {
   emptyRefundForm,
   emptyReleaseForm,
   emptyShipForm,
-  eventStatusText,
   paymentSummary,
   purchaseLine,
   fullRefundErrorNotice,
@@ -417,19 +417,15 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 </div>
               )}
 
-              {events.length > 0 && (
-                <div className="field">
-                  <span className="label">事件</span>
-                  {events.map((e, i) => (
-                    <span className="muted" key={i}>
-                      {/* `eventStatusText` 而不是 `e.status`：事件流里有一半是"没迁状态、
-                      只记一件事"的伪状态（改址 / 拒付开案 / 退款失败……）。
-                      note 里虽然有中文说明，但"这是什么类别"仍要看 status 才认得出。 */}
-                      {formatJst(e.at)} {eventStatusText(e.status)} {e.note ?? ''}
-                    </span>
-                  ))}
-                </div>
-              )}
+              {/* 时间线（第一批⑤，AJ-396）：系统事件与内部备注按时间混排，底部追加备注。
+                取数与提交在 OrderTimeline 里，不随详情刷新（备注 append-only，追加后就地并入） */}
+              <OrderTimeline
+                api={api}
+                orderId={id}
+                events={events}
+                onError={(text, traceId) => sink.error(text, { traceId })}
+                onSuccess={(text) => sink.success(text)}
+              />
             </div>
             {/* ← 主区结束：基本信息 → 商品 → 支付 → 时间线 */}
 

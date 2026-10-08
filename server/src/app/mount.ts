@@ -61,6 +61,7 @@ import { mountAdminProductRoutes } from './admin-product-routes.js';
 import { mountAdminOrderRoutes } from './admin-order-routes.js';
 import { mountPartialRefundRoutes } from './partial-refund-routes.js';
 import { mountAdminOrderFixRoutes } from './admin-order-fix-routes.js';
+import { mountAdminOrderNoteRoutes } from './admin-order-note-routes.js';
 import { mountSalesPauseRoutes, salesOpenGuard } from './sales-pause.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAdminBannerRoutes } from './admin-banner-routes.js';
@@ -372,6 +373,14 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     registry,
     events,
     idGen: systemIdGen,
+  });
+  // ── 订单内部备注（第一批⑤，AJ-396）：append-only，审计由中间件自动写 ──
+  mountAdminOrderNoteRoutes(app, {
+    db,
+    logger,
+    clock,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
   });
   // ── CSV 导出（剩余清单 3-3）：订单 / 待采购 / 待发货报关；导出动作显式进审计 ──
   mountAdminExportRoutes(app, {
