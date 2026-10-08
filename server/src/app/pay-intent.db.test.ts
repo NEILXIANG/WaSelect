@@ -627,7 +627,10 @@ describe('建会话失败后的幂等键（B3 / AJ-199）', () => {
           orderId: 'o-two',
           userId: 'u-1',
           channel: 'pa',
-        }).catch((e) => expect(codeOf(e)).toBe(50001));
+        }).then(
+          () => expect.unreachable('应 50001（机构拒绝）'),
+          (e) => expect(codeOf(e)).toBe(50001),
+        );
       });
       await recordPayCreateFailure(db, {
         orderId: 'o-two',

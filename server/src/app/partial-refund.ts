@@ -24,6 +24,7 @@ import {
   sumPartialRefunds,
 } from '../adapters/order-refunds.js';
 import { restoreStockForOrder } from '../adapters/orders.js';
+import { markRefunded, markRefunding } from '../adapters/orders-admin.js';
 import type { EventBus } from '../ports/events.js';
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
@@ -77,11 +78,20 @@ export async function executePartialRefund(
   } catch (e) {
     const at = deps.clock.now();
     if (e instanceof CircuitOpenError) {
-      await settlePartialRefund(deps.db, plan.refundId, 'failed', null, at);
+      // 🔴 AJ-414：熔断拒绝分两种——`attempted=false` 是"一次都没发出去"（可当失败、释放额度）；
+      //    `attempted=true` 是"第 1 次已发出且结果未知、重试前才被拒"：机构可能已经退了这笔钱，
+      //    此时必须按 unknown 处理（占住额度、下次 sync 同键重放），否则管理员重试会建新行新键 → 双退。
+      const status = e.attempted ? 'unknown' : 'failed';
+      await settlePartialRefund(deps.db, plan.refundId, status, null, at);
       deps.logger.warn('admin_partial_refund_circuit_open', {
-        result: 'deferred',
+        result: e.attempted ? 'unknown' : 'deferred',
         order_id: plan.orderId,
-        ctx: { provider: plan.channel, refund_id: plan.refundId, retry_after_ms: e.retryAfterMs },
+        ctx: {
+          provider: plan.channel,
+          refund_id: plan.refundId,
+          retry_after_ms: e.retryAfterMs,
+          attempted: e.attempted,
+        },
       });
       throw e;
     }
@@ -178,9 +188,16 @@ async function applyOutcome(
 
 /**
  * 部分退款累计**退满实收**时的收尾（第三轮缺口 P2-1，AJ-385）：记 `refunded_by_parts` 事件；
- * 未发货（`shipped_at is null` 且 `paid_at` 非空）的单回补库存——与整单退款 `settle` 同一口径。
- * @why 订单状态**不改**：completed / shipped 的单走到 refunded 需要新的状态机边（技术文档 §1 未定义）；
- *      事件 + 库存是"账与货"层面的收尾，状态口径留给 F12 定。
+ * 未发货（`shipped_at is null` 且 `paid_at` 非空）的单回补库存——与整单退款 `settle` 同一口径；
+ * 并把订单**沿状态机**迁到 refunded（AJ-414：`paid | shipped | delivered → refunding → refunded`，同一事务）。
+ * @why 要迁状态：此前只记事件不改状态，"钱已全退"的单仍是 paid——发货闸门放行、待采购 / 报关清单照出、
+ *      列表「待发货」照列，而库存又已回补 ⇒ 运营会把一张全退的单采购发出，钱货两空、库存多卖一件。
+ *      发货 / 导出 / 列表 / 工作台全都认 `orders.status`，改状态是唯一不漏消费方的修法。
+ * @why 走 `markRefunding` + `markRefunded` 而不是直接 UPDATE 成 refunded：状态机没有 `paid → refunded` 的边，
+ *      两步走让 `order_events` 留下与整单退款一致的轨迹，`payments.status` 也同步成 refunded
+ *      （工作台"已退"口径 ①：全额那笔 = charge − 已成功部分退款 = 0，部分退款行各自按落定时刻计——合计不重不漏）。
+ * @limitation completed 的单没有退款边（completed: []）：只记事件 + 日志，状态不变——它已不会再被发货，
+ *             但仍会出现在"已完成"里；真要改口径需要先给状态机加边（技术文档 §1）。
  * @why 订单行锁 + "事件已存在就跳过"：两笔并发同步不可能都走到这里（一次只允许一笔在途），锁只是兜底，
  *      但回补不幂等，必须只做一次。
  * @returns 是否本次完成了收尾（调用方据此决定发哪个事件）。
@@ -192,7 +209,7 @@ async function closeOutIfFullyRefunded(
 ): Promise<boolean> {
   return withTransaction(deps.db, async (tx) => {
     const [o] = await tx`
-      select o.shipped_at, o.paid_at, p.charge_amount, p.charge_currency
+      select o.shipped_at, o.paid_at, p.id as payment_id, p.charge_amount, p.charge_currency
         from orders o
         join order_refunds r on r.order_id = o.id and r.id = ${plan.refundId}
         join payments p on p.id = r.payment_id
@@ -215,10 +232,24 @@ async function closeOutIfFullyRefunded(
     );
     if (o['shipped_at'] === null && o['paid_at'] !== null)
       await restoreStockForOrder(tx, plan.orderId);
+    // AJ-414：沿状态机迁到 refunded；completed 没有边 → markRefunding 返回 false，状态保持（@limitation）
+    const moved =
+      (await markRefunding(tx, plan.orderId, 'refunded_by_parts', at, plan.actor)) &&
+      (await markRefunded(
+        tx,
+        plan.orderId,
+        String(o['payment_id']),
+        'refunded_by_parts',
+        at,
+        plan.actor,
+      ));
     deps.logger.info('admin_partial_refund_fully_refunded', {
       result: 'ok',
       order_id: plan.orderId,
-      ctx: { restocked: o['shipped_at'] === null && o['paid_at'] !== null },
+      ctx: {
+        restocked: o['shipped_at'] === null && o['paid_at'] !== null,
+        status_moved: moved,
+      },
     });
     return true;
   });

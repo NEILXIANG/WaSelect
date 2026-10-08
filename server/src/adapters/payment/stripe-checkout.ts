@@ -582,6 +582,15 @@ export function createStripeCheckoutProvider(
         },
         body: form.toString(),
       });
+      if (res.status === 409 && res.body.includes('idempotency_key_in_use')) {
+        // AJ-414：同键的上一次请求**仍在 Stripe 处理中**（首次 create 在我方预算内超时、用户立刻重试）。
+        //   这不是"机构确定拒绝"，是"结果未知"——按 ProviderRejectedError 处理会被记成确认失败并换键（-f1），
+        //   第三次就建出第二个会话（首个成为孤儿、多一条 pay_create_failed 事件）。抛普通 Error ⇒ 调用方保留同一把键重试。
+        //   @measured 无法对真 Stripe 实测（无测试密钥，P2-9）；错误码取自 Stripe 文档 `idempotency_key_in_use`（409）。
+        throw new Error(
+          `stripe 建会话：同键请求仍在处理中（HTTP 409 idempotency_key_in_use，order=${req.orderId}），结果未知、保留同键重试`,
+        );
+      }
       if (res.status < 200 || res.status >= 300) {
         // B3 / AJ-199：必须是 `ProviderRejectedError` 而不是普通 Error——
         //   "机构给了确定答复"与"结果未知"在业务层是**相反**的处理（换键 vs 不换键）。

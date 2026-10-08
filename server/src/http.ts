@@ -33,6 +33,7 @@ import express, {
   type Response,
 } from 'express';
 import { AppError, toErrorResponse } from './errors.js';
+import { CircuitOpenError } from './ports/circuit-breaker.js';
 import { timingSafeEqual } from 'node:crypto';
 import { newTraceId, runWithContext } from './context.js';
 import type { Logger } from './logger.js';
@@ -460,6 +461,15 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
     if (isBodyParseError(err) || sqlDataExceptionCode(err) !== null || err instanceof URIError) {
       // 客户端可控输入导致的失败：不是我们的故障 → warn 级，且 normalizeError 已确保不带堆栈
       httpLog.warn('request_rejected', {
+        http_method: req.method,
+        http_path: req.path,
+        ...normalized.logFields,
+      });
+    } else if (err instanceof CircuitOpenError) {
+      // 熔断拒绝（AJ-414）：上游在恢复期、我们主动没打——不是我方故障，也不是未知异常。
+      //    errors.ts 已把它映射成 50300 / 503；fetch-client 另有 `http_outbound_circuit_open` 留痕。
+      //    落进下面的 `unhandled_error`（error 级 + 堆栈）会让一次上游故障期内每个请求都多一条告警，真 5xx 被淹没。
+      httpLog.warn('upstream_unavailable', {
         http_method: req.method,
         http_path: req.path,
         ...normalized.logFields,

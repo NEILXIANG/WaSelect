@@ -465,7 +465,7 @@ function breakerHarness(
 }
 
 describe('createFetchClient：熔断接线（默认开启，可显式关闭）', () => {
-  it('默认就带熔断：连续失败到阈值后**不再打上游**，直接抛 CircuitOpenError', async () => {
+  it('默认就带熔断：连续失败到阈值后**不再打上游**，直接抛 CircuitOpenError（attempted=false：一次都没发出去）', async () => {
     const h = breakerHarness({ fetch: async () => ({ status: 503 }) });
     for (let i = 0; i < BP.failureThreshold; i += 1) await h.client.send(POST_NO_KEY);
     expect(h.calls).toBe(BP.failureThreshold);
@@ -586,7 +586,12 @@ describe('createFetchClient：熔断接线（默认开启，可显式关闭）',
     }
     h.at(1_000_000); // 推过冷却 → half_open，放 1 个探测
     expect(h.sink.find('circuit_open')).toHaveLength(1);
-    await expect(h.client.send(POST_WITH_KEY)).rejects.toBeInstanceOf(CircuitOpenError);
+    // 🔴 AJ-414：探测那一次**已经打出去了**（超时），第 2 轮才被拒 ⇒ attempted 必须为 true，
+    //    否则部分退款会把"可能已退"的一笔当成"一次没发"而释放额度（重试即双退）
+    await expect(h.client.send(POST_WITH_KEY)).rejects.toMatchObject({
+      name: 'CircuitOpenError',
+      attempted: true,
+    });
     // 🔒 探测的失败**被回写了**：half_open → open 再跳一次（第 2 条 circuit_open）。
     //    只靠状态机的探测超时兜底也能"最终恢复"，但那要白等一整个冷却期、且不留任何信号；
     //    这一行钉的是"调用方自己收尾"，兜底只是兜底。

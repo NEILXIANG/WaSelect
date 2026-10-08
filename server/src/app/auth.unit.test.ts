@@ -68,6 +68,9 @@ describe('signToken / verifyToken', () => {
     const adminToken = decodeJwt(await signToken(admin, cfg));
     expect((adminToken.exp as number) - (adminToken.iat as number)).toBe(43200);
     expect((adminToken.iat as number) - now).toBeLessThanOrEqual(2);
+    // 用户侧同样解码真 token（审查 2026-10-09 C11）：只断言常量钉不住 signToken 里 ttl 取错键
+    const userToken = decodeJwt(await signToken(user, cfg));
+    expect((userToken.exp as number) - (userToken.iat as number)).toBe(604_800);
   });
 
   it('受众不符 → 40301（已验签但不属于该入口，不能让前端误判为"登录失效"）', async () => {

@@ -297,6 +297,7 @@ describe('一轮一个 trace_id 与统一 startedAt', () => {
     };
     const r = await runSchedulerOnce(h.deps, [slow]);
     expect(r.durationMs).toBe(4_000);
+    expect(r.acquired).toBe(true); // 没拿到锁时下面整段静默跳过（审查 2026-10-09 C8）
     if (!r.acquired) return;
     expect(r.jobs[0]).toMatchObject({ name: 'slow', ok: true, durationMs: 4_000 });
   });

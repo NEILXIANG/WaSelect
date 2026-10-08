@@ -244,7 +244,7 @@ export function RiskPage({ api }: RiskPageProps) {
       )}
 
       {/* 解除拉黑（AJ-384）：误拉黑的唯一出口，走审计 */}
-      <BlockedUsers api={api} refreshKey={blockedTick} />
+      <BlockedUsers api={api} refreshKey={blockedTick} sink={sink} />
 
       <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
       {dialog !== null && (

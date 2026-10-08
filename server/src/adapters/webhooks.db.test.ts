@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from './db.js';
 import { createWebhookStore } from './webhooks.js';
-import { payloadHash, type WebhookStore } from '../ports/webhooks.js';
+import { DEFAULT_PROCESSING_LEASE_MS, payloadHash, type WebhookStore } from '../ports/webhooks.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 
 let db: Db;
@@ -318,5 +318,34 @@ describe('payloadHash', () => {
     expect(payloadHash(Buffer.from('abc'))).toBe(payloadHash('abc'));
     expect(payloadHash('abc')).not.toBe(payloadHash('abd'));
     expect(payloadHash('abc')).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe('租约时长真的写进了 processing_until（审查 2026-10-09 C13）', () => {
+  const leaseSec = async (eventId: string): Promise<number> => {
+    const [r] = await db`
+      select extract(epoch from processing_until - now()) as sec from webhook_events where event_id = ${eventId}
+    `;
+    return Number(r?.['sec']);
+  };
+
+  it('🔴 claim 默认租约 = DEFAULT_PROCESSING_LEASE_MS；显式 leaseMs 按毫秒生效（单位写错会放大 1000 倍）', async () => {
+    expect(DEFAULT_PROCESSING_LEASE_MS).toBe(10_000);
+    await store.claim(event('evt-lease-default'));
+    const d = await leaseSec('evt-lease-default');
+    expect(d).toBeGreaterThan(DEFAULT_PROCESSING_LEASE_MS / 1000 - 1);
+    expect(d).toBeLessThanOrEqual(DEFAULT_PROCESSING_LEASE_MS / 1000);
+    await store.claim(event('evt-lease-3s'), 3_000);
+    const e = await leaseSec('evt-lease-3s');
+    expect(e).toBeGreaterThan(2);
+    expect(e).toBeLessThanOrEqual(3);
+  });
+
+  it('🔴 005 之前的旧行（processing_until IS NULL 且未处理）→ 可接管（retry），不会永久卡住', async () => {
+    await store.claim(event('evt-old'));
+    await db`update webhook_events set processing_until = null, processing_token = null where event_id = 'evt-old'`;
+    const r = await store.claim(event('evt-old'));
+    expect(r.state).toBe('retry');
+    expect(await leaseSec('evt-old')).toBeGreaterThan(0);
   });
 });

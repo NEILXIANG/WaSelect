@@ -101,6 +101,12 @@ export function useToasts(): ToastSink {
   const seq = useRef(0);
 
   const push = useCallback((kind: ToastKind, text: string, opts?: ToastOptions) => {
+    // 空文本 = "清掉这一类的旧提示"（订单修正 / 部分退款提交前会 onNotice('')），不新增一个只有 × 的空白气泡
+    //   （审查 2026-10-09 #4：新手会把它当成"出了个没内容的错误"）
+    if (text.trim() === '') {
+      setToasts((list) => list.filter((t) => t.kind !== kind));
+      return;
+    }
     seq.current += 1;
     const id = seq.current;
     setToasts((list) => {

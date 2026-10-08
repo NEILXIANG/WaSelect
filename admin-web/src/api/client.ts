@@ -71,6 +71,8 @@ export function createAdminApi(deps: AdminApiDeps) {
   return async function requestApi(opts: RequestOptions): Promise<unknown> {
     const traceId = opts.traceId ?? newTraceId();
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    // 日志只记路径、不记 query：列表的 keyword 常常就是买家邮箱 / 收件人（约束七脱敏红线，审查 2026-10-09 #8）
+    const logPath = opts.path.split('?')[0] ?? opts.path;
 
     const headers: Record<string, string> = {
       'content-type': 'application/json',
@@ -97,7 +99,7 @@ export function createAdminApi(deps: AdminApiDeps) {
       log({
         event: 'api_network_error',
         trace_id: traceId,
-        path: opts.path,
+        path: logPath,
         reason: timedOut ? 'timeout' : 'network',
       });
       throw new ApiError(
@@ -133,7 +135,7 @@ export function createAdminApi(deps: AdminApiDeps) {
         : undefined;
     // 成功 = 2xx 且 body 不带业务码（与小程序端同口径：body 带 code 一律按业务错，哪怕 2xx）
     if (res.ok && parsed && code === undefined) {
-      log({ event: 'api_ok', trace_id: serverTraceId, path: opts.path, http_status: res.status });
+      log({ event: 'api_ok', trace_id: serverTraceId, path: logPath, http_status: res.status });
       return body;
     }
 
@@ -144,7 +146,7 @@ export function createAdminApi(deps: AdminApiDeps) {
     log({
       event: 'api_failed',
       trace_id: serverTraceId,
-      path: opts.path,
+      path: logPath,
       http_status: res.status,
       code: errCode,
     });

@@ -83,6 +83,9 @@ describe('toRateInt（汇率 ×1e8 整数化）', () => {
     expect(() => toRateInt(Number.NaN)).toThrow(RangeError);
     expect(() => toRateInt('abc')).toThrow(RangeError);
     expect(() => toRateInt(2_000_000)).toThrow(RangeError);
+    // 边界恰好值（审查 2026-10-09 C5）：判定是 `>=`，1_000_000 必拒、999_999 必收——`>` 写法在这两点上红
+    expect(() => toRateInt(1_000_000)).toThrow(RangeError);
+    expect(toRateInt(999_999)).toBe(99_999_900_000_000);
   });
 
   /**

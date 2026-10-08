@@ -20,7 +20,7 @@
  * @see ./PrintSheet.tsx；./view.ts purchaseLine；server/src/adapters/exports.ts customsTable
  */
 import { minorMoneyText } from '../format.js';
-import { PURCHASE_UNRECORDED } from './view.js';
+import { PURCHASE_UNRECORDED, shipGate } from './view.js';
 
 /** 打印页抬头的说明（@limitation 一）。 */
 export const PRINT_NOTICE =
@@ -122,7 +122,9 @@ export function printModel(orders: readonly unknown[]): PrintModel {
   const out: PrintModel = { orders: [], skipped: [] };
   for (const raw of orders) {
     const o = rec(raw);
-    if (o['status'] === 'paid') out.orders.push(toPrintOrder(o));
+    // 与「待发货」页签勾选、详情页发货按钮同一个闸门（拒付中 / 测试单不能打）：
+    //   审查 2026-10-09 #5——"全部"页签勾一张拒付中的 paid 单也能打出拣货单，仓库会照单采购打包
+    if (shipGate(o).ok) out.orders.push(toPrintOrder(o));
     else out.skipped.push(text(o['order_no']) || text(o['order_id']));
   }
   return out;

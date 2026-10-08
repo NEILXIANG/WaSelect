@@ -230,7 +230,8 @@ export function createFetchClient(opts: FetchClientOptions = {}): HttpClient {
                 retry_after_ms: gate.retryAfterMs,
               },
             });
-            throw new CircuitOpenError(key, gate.retryAfterMs);
+            // attempted = 已经打出去过（attempt > 0）：调用方据此区分"可当失败"与"结果未知"（AJ-414）
+            throw new CircuitOpenError(key, gate.retryAfterMs, attempt > 0);
           }
         }
 

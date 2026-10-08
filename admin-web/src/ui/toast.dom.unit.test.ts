@@ -206,3 +206,19 @@ describe('toastError：把抛出的东西转成错误态', () => {
     expect(toastError(new Error('')).text).toBe('操作失败');
   });
 });
+
+describe('空文本（审查 2026-10-09 #4）', () => {
+  it("🔴 info('') 只清掉上一条 info，不新增空白气泡", async () => {
+    mounted = await mount(createElement(Host));
+    await click(button(mounted.el, 'info'));
+    expect(mounted.el.querySelectorAll('.toast')).toHaveLength(1);
+    await act(async () => {
+      sink?.info('');
+    });
+    expect(mounted.el.querySelectorAll('.toast')).toHaveLength(0);
+    await act(async () => {
+      sink?.error('   ');
+    });
+    expect(mounted.el.querySelectorAll('.toast')).toHaveLength(0);
+  });
+});

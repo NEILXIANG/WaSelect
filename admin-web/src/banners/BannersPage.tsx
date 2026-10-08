@@ -41,7 +41,9 @@ import {
   emptyBannerForm,
   toBannerInput,
 } from './view.js';
-import { useFormDirty } from '../ui/unsaved.js';
+import { sameForm, useFormDirty } from '../ui/unsaved.js';
+import { LEAVE_UNSAVED_SPEC } from '../ui/leave-spec.js';
+import { ConfirmDialog } from '../ui/confirm.js';
 
 export interface BannersPageProps {
   api: AdminApi;
@@ -60,6 +62,12 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
   /** 「未改动基线」：新建 / 打开编辑 / 保存成功后跟着 `form` 一起重置（第一批⑥）。 */
   const [pristine, setPristine] = useState(emptyBannerForm());
   useFormDirty(form, pristine);
+  // 页内切换编辑对象（新建 / 编辑另一条 / 取消编辑）不经 App 的 leave()，脏态要在这里自己拦（审查 2026-10-09 #2）
+  const [pendingSwitch, setPendingSwitch] = useState<(() => void) | null>(null);
+  const guarded = (fn: () => void): void => {
+    if (sameForm(form, pristine)) fn();
+    else setPendingSwitch(() => fn);
+  };
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -237,7 +245,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     <section className="panel">
       <header className="panel-head">
         <h1 className="title">首页 Banner</h1>
-        <button type="button" className="btn btn-secondary" onClick={startNew}>
+        <button type="button" className="btn btn-secondary" onClick={() => guarded(startNew)}>
           新建
         </button>
       </header>
@@ -276,7 +284,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
                   className="link"
                   onClick={() => {
                     const found = raw.find((b) => b.id === r.id);
-                    if (found !== undefined) startEdit(found);
+                    if (found !== undefined) guarded(() => startEdit(found));
                   }}
                 >
                   编辑
@@ -477,12 +485,23 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
             {busy ? '提交中…' : '保存'}
           </button>
           {editing !== null && (
-            <button type="button" className="link" onClick={startNew}>
+            <button type="button" className="link" onClick={() => guarded(startNew)}>
               取消编辑
             </button>
           )}
         </div>
       </div>
+      {pendingSwitch !== null && (
+        <ConfirmDialog
+          spec={LEAVE_UNSAVED_SPEC}
+          onConfirm={() => {
+            const fn = pendingSwitch;
+            setPendingSwitch(null);
+            fn();
+          }}
+          onCancel={() => setPendingSwitch(null)}
+        />
+      )}
     </section>
   );
 }

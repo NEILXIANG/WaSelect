@@ -18,6 +18,7 @@ import { createLogger } from '../logger.js';
 import type { ProviderEvent } from '../ports/payment.js';
 import type { ClaimState, WebhookEventInput, WebhookStore } from '../ports/webhooks.js';
 import {
+  DISPUTE_OUT_OF_ORDER_GRACE_MS,
   handleProviderCallback,
   type CallbackPipelineDeps,
   type OutcomeApplier,
@@ -467,5 +468,36 @@ describe('handleProviderCallback：栅栏（N22）', () => {
     const { d: d2 } = deps(rec2, async () => undefined);
     await handleProviderCallback(d2, 'stripe', Buffer.from('{"hello":"world" }'), event());
     expect(rec2.claimed[0]?.hash).not.toBe(h1);
+  });
+});
+
+/** 拒付乱序宽限期的恰好边界（审查 2026-10-09 C6）：判定是 `<`，24h 整点必须转 mismatch，24h − 1ms 必须 503 重发。 */
+describe('拒付乱序宽限期边界（DISPUTE_OUT_OF_ORDER_GRACE_MS）', () => {
+  const disputedApplier = (): OutcomeHandler => ({
+    apply: () => Promise.reject(new AppError(40902, { reason: 'dispute_not_open' })),
+    result: RESULT_DISPUTED,
+    disposition: 'disputed',
+  });
+  const disputedEvent = () => event({ outcome: 'disputed', rawType: 'charge.dispute.closed' });
+
+  it('🔴 elapsed = 宽限期 − 1ms → 503 + Retry-After 300 + 交还租约（仍在等另一条事件）', async () => {
+    const rec = fakeStore({ elapsedMs: DISPUTE_OUT_OF_ORDER_GRACE_MS - 1 });
+    const { d, sink } = deps(rec, async () => undefined, 900_000, { disputed: disputedApplier() });
+    const out = await handleProviderCallback(d, 'stripe', RAW, disputedEvent());
+    expect(out).toMatchObject({ disposition: 'early', status: 503, retryAfter: 300 });
+    expect(rec.released).toEqual(['tok-1']);
+    expect(rec.finished).toHaveLength(0);
+    expect(sink.find('callback_dispute_out_of_order')).toHaveLength(1);
+  });
+
+  it('🔴 elapsed = 宽限期整点 → 2xx + error 级 mismatch（不再无限重发）', async () => {
+    const rec = fakeStore({ elapsedMs: DISPUTE_OUT_OF_ORDER_GRACE_MS });
+    const { d, sink } = deps(rec, async () => undefined, 900_000, { disputed: disputedApplier() });
+    const out = await handleProviderCallback(d, 'stripe', RAW, disputedEvent());
+    expect(out.status).toBe(200);
+    expect(rec.released).toEqual([]);
+    expect(rec.finished[0]?.result).toBe('mismatch:dispute_not_open');
+    expect(sink.find('callback_dispute_out_of_order')).toHaveLength(0);
+    expect(sink.find('callback_settlement_mismatch')[0]?.level).toBe('error');
   });
 });

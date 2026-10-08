@@ -78,3 +78,15 @@ describe('printModel（AJ-407）', () => {
     expect(phoneText('')).toBe('—');
   });
 });
+
+describe('拣货单只打能发货的单（审查 2026-10-09 #5）', () => {
+  it('🔴 paid 但拒付中 / 测试单 → 列入 skipped，不出拣货行', () => {
+    const m = printModel([
+      { ...PAID, has_dispute: true },
+      { ...PAID, order_no: '261007-TEST01', is_test: true },
+      PAID,
+    ]);
+    expect(m.orders.map((o) => o.orderNo)).toEqual([PAID.order_no]);
+    expect(m.skipped).toEqual([PAID.order_no, '261007-TEST01']);
+  });
+});

@@ -145,6 +145,9 @@ export interface ShipBatchResult {
  * `POST /admin/orders/ship-batch`（AJ-401）——逐单结果，与 items 同序。
  * @throws {ApiError} 整次被拒（400 / 40001：超上限 / 重复单号等）或响应形状不符
  */
+/** 批量发货服务端逐单串行（最多 50 单），默认 10s 会先在前端超时而服务端继续发完（审查 2026-10-09 #10）；与导出同一量级。 */
+export const SHIP_BATCH_TIMEOUT_MS = 60_000;
+
 export async function shipOrdersBatch(
   api: AdminApi,
   items: readonly { order_id: string; carrier: string; tracking_no: string }[],
@@ -153,6 +156,7 @@ export async function shipOrdersBatch(
     path: '/api/v1/admin/orders/ship-batch',
     method: 'POST',
     body: { items },
+    timeoutMs: SHIP_BATCH_TIMEOUT_MS,
   });
   const results = (resp as { results?: unknown } | null)?.results;
   if (!Array.isArray(results)) {

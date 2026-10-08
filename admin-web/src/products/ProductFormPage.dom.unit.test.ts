@@ -341,9 +341,9 @@ describe('商品表单：上传中不能保存（A-08）', () => {
       Object.defineProperty(fileInput, 'files', { value: [file] });
       fileInput.dispatchEvent(new Event('change', { bubbles: true }));
       await flush();
-      const save = el.querySelector('button[type="submit"]') as HTMLButtonElement;
+      const save = button(el, '图片上传中…') as HTMLButtonElement;
       expect(save.disabled).toBe(true);
-      save.form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await click(save);
       await flush();
       expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(0);
     } finally {
@@ -600,5 +600,39 @@ describe('商品表单：新手可用性（AJ-410）', () => {
     expect(list).not.toBeNull();
     await click(button(list, 'HS 编码'));
     expect(document.activeElement).toBe(field(el, 'HS 编码'));
+  });
+});
+
+describe('商品表单：返回列表与回车（审查 2026-10-09 #1 / #3）', () => {
+  it('🔴 脏表单点「返回列表」→ 先弹「离开这一页会丢掉未保存的修改」，不回列表；点「放弃修改并离开」才回', async () => {
+    const el = await openWithDirty(SOURCE);
+    await typeInto(field(el, '商品名（面向买家）'), '改过的标题');
+    await click(button(el, '返回列表'));
+    expect(doneCount).toBe(0);
+    expect(el.textContent).toContain('离开这一页会丢掉未保存的修改');
+    await click(button(el, '取消'));
+    expect(doneCount).toBe(0);
+    await click(button(el, '返回列表'));
+    await click(button(el, '放弃修改并离开'));
+    expect(doneCount).toBe(1);
+  });
+
+  it('干净的表单点「返回列表」→ 直接回列表，不弹', async () => {
+    const el = await openWithDirty(SOURCE);
+    await click(button(el, '返回列表'));
+    expect(doneCount).toBe(1);
+    expect(el.textContent).not.toContain('离开这一页会丢掉未保存的修改');
+  });
+
+  it('🔴 表单的隐式提交（单行框里按回车）不写库、不离开：保存只认页底按钮', async () => {
+    const el = await open();
+    await typeInto(field(el, '商品名（面向买家）'), '改过的标题');
+    const form = el.querySelector('form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    expect(calls.filter((c) => c.method === 'PUT' || c.method === 'POST')).toHaveLength(0);
+    expect(doneCount).toBe(0);
+    await click(button(el, '保存'));
+    expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
   });
 });

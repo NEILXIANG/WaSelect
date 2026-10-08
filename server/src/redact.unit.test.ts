@@ -212,12 +212,17 @@ describe('文本兜底正则', () => {
         //    若原主体是 `**`，则 `**@` 作为子串必然仍出现在 `****@` 里——
         //    不变式被"掩码字符与输入字符同字母表"破坏，不是脱敏失效。
         //    （实测命中：local='**' 时 masked='****@a.aa' 含 '**@'，偶发假红灯。）
-        fc.emailAddress().filter((e) => !e.slice(0, e.indexOf('@')).includes('*')),
+        // 单字符本地部分（掩码保留首字母 ⇒ 必然仍含 `x@`）在生成器层过滤，而不是断言层 `if`：
+        //   后者让一部分 numRuns 空跑（审查 2026-10-09 C12）
+        fc
+          .emailAddress()
+          .filter((e) => !e.slice(0, e.indexOf('@')).includes('*'))
+          .filter((e) => e.indexOf('@') > 1),
         (prefix, email) => {
           const text = `${prefix} ${email} tail`;
           const masked = maskText(text);
           const local = email.slice(0, email.indexOf('@'));
-          if (local.length > 1) expect(masked).not.toContain(`${local}@`);
+          expect(masked).not.toContain(`${local}@`);
         },
       ),
       { numRuns: 500 },

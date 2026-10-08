@@ -182,7 +182,9 @@ describe('rateLimiter 中间件（桩）', () => {
     const third = run(deps, '1.1.1.1');
     expect(third.err).toBeInstanceOf(AppError);
     expect((third.err as AppError).code).toBe(42901);
-    expect(Number(third.headers['retry-after'])).toBeGreaterThanOrEqual(1);
+    // 固定时钟 + 60s 窗口：第 3 次命中时 resetAt − now 恰为 60_000ms ⇒ retry-after 必须是 60（不是"≥1"：
+    //   写成 `Math.max(1, …)` 永远回 1 也能过 ≥1，审查 2026-10-09 C4）
+    expect(third.headers['retry-after']).toBe('60');
     const log = sink.find('rate_limited')[0];
     expect(log?.level).toBe('warn');
     expect(log?.['http_path']).toBe('/api/v1/x');

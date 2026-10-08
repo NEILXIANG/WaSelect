@@ -199,3 +199,16 @@ describe('LINK_TYPES 与契约的双向比对', () => {
     for (const t of LINK_TYPES) expect(LINK_LABELS[t], `${t} 缺展示名`).toBeTruthy();
   });
 });
+
+describe('排序只认纯数字（审查 2026-10-09 #6）', () => {
+  it('🔴 空串 / 空格 / 1e2 / 小数 / 负数 → 拒；纯数字通过', () => {
+    for (const bad of ['', '  ', '1e2', '1.5', '-1', '十']) {
+      expect(
+        bannerFormErrors({ ...valid(), sort: bad }).errors['sort'],
+        `sort=${bad}`,
+      ).toBeTruthy();
+    }
+    expect(bannerFormErrors({ ...valid(), sort: ' 12 ' }).ok).toBe(true);
+    expect(toBannerInput({ ...valid(), sort: ' 12 ' })['sort']).toBe(12);
+  });
+});

@@ -61,3 +61,27 @@ describe('BlockedUsers', () => {
     expect(mounted.el.textContent).toContain('最多显示 200 条');
   });
 });
+
+describe('共用父页的 Toast 出口（审查 2026-10-09 #7）', () => {
+  it('🔴 传入 sink 时不自渲染 .toast-stack，提示走父页的 sink', async () => {
+    const errors: string[] = [];
+    const sink = {
+      toasts: [],
+      success: () => undefined,
+      info: () => undefined,
+      error: (t: string) => {
+        errors.push(t);
+      },
+      dismiss: () => undefined,
+    };
+    const api = async (): Promise<unknown> => ({
+      items: [{ id: 'u-9', blocked_at: '2026-10-06T03:00:00Z', order_count: 2 }],
+    });
+    mounted = await mount(createElement(BlockedUsers, { api: api as never, sink }));
+    const el = mounted.el;
+    await click(button(el, '解除拉黑'));
+    await click(button(el, '去确认'));
+    expect(errors).toEqual(['请填写解除原因（会记录下来）']);
+    expect(el.querySelector('.toast-stack')).toBeNull();
+  });
+});

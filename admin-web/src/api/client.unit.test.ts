@@ -394,3 +394,19 @@ describe('token-store（localStorage 真值 + 隐私模式内存降级）', () =
     expect(ts.get()).toBe('');
   });
 });
+
+describe('日志不带 query（审查 2026-10-09 #8）', () => {
+  it('🔴 keyword 里的邮箱 / 收件人不进 api_ok / api_failed 日志', async () => {
+    const ok = fetchSpy(async () => jsonResponse({ items: [] }));
+    const { api, log } = makeApi({ fetchImpl: ok.impl });
+    await api({ path: '/api/v1/admin/customers?keyword=zhang.wei%40example.com' });
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'api_ok', path: '/api/v1/admin/customers' }),
+    );
+    const bad = fetchSpy(async () => jsonResponse({ code: 40001, message: 'x' }, 400));
+    const m2 = makeApi({ fetchImpl: bad.impl });
+    await m2.api({ path: '/api/v1/admin/orders?keyword=Jane%20Doe' }).catch(() => undefined);
+    expect(m2.log).toHaveBeenCalled();
+    for (const call of m2.log.mock.calls) expect(JSON.stringify(call)).not.toContain('Jane');
+  });
+});

@@ -164,3 +164,43 @@ describe('Banner：保存撞上 40914（P2-44）', () => {
     });
   });
 });
+
+describe('Banner：切换编辑对象前拦未保存改动（审查 2026-10-09 #2）', () => {
+  it('🔴 编辑 A 改了排序 → 点 B 的「编辑」先弹提醒、表单仍是 A；放弃后才切到 B', async () => {
+    const puts: Array<{ path: string; body?: unknown }> = [];
+    const api = async (req: {
+      path: string;
+      method?: string;
+      body?: unknown;
+    }): Promise<unknown> => {
+      if (req.method === 'PUT') puts.push(req);
+      return [banner('b-A', 'banners/a.webp'), banner('b-B', 'banners/b.webp')];
+    };
+    mounted = await mount(
+      createElement(BannersPage, {
+        api: api as never,
+        baseUrl: 'http://localhost',
+        getToken: () => 'tk',
+        onUnauthorized: () => undefined,
+      }),
+    );
+    const el = mounted.el;
+    const edits = () => [...el.querySelectorAll('button')].filter((b) => b.textContent === '编辑');
+    await click(edits()[0]);
+    expect(el.textContent).toContain('编辑 Banner（b-A）');
+    await type(el.querySelector('input[inputmode="numeric"]'), '7');
+    await click(edits()[1]);
+    expect(el.textContent).toContain('离开这一页会丢掉未保存的修改');
+    expect(el.textContent).toContain('编辑 Banner（b-A）');
+    await click(button(el, '取消'));
+    expect(el.textContent).toContain('编辑 Banner（b-A）');
+    await click(edits()[1]);
+    await click(button(el, '放弃修改并离开'));
+    expect(el.textContent).toContain('编辑 Banner（b-B）');
+    // 干净状态下切换不弹
+    await click(edits()[0]);
+    expect(el.textContent).not.toContain('离开这一页会丢掉未保存的修改');
+    expect(el.textContent).toContain('编辑 Banner（b-A）');
+    expect(puts).toHaveLength(0);
+  });
+});

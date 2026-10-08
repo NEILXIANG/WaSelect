@@ -474,6 +474,17 @@ describe('已付订单上的第二笔支付（M-02）', () => {
     expect(err.details['reason']).toBe('duplicate_payment');
   });
 
+  it('🔴 已退款（payments.status=refunded）的单又来另一通道的成功回调 → 仍判 duplicate_payment（审查 2026-10-09 C15）', async () => {
+    await paidFirst();
+    await db`update payments set status = 'refunded' where order_id = 'o-mp'`;
+    await db`update orders set status = 'refunded' where id = 'o-mp'`;
+    const err = (await again({ ...OK, channel: 'stripe', providerRef: 'cs_test_other' })) as {
+      details: Record<string, unknown>;
+    };
+    // `in ('succeeded','refunded')` 少了 refunded ⇒ rows 为空 ⇒ 按原分支 {from} 静默吞掉第二笔真实扣款
+    expect(err.details['reason']).toBe('duplicate_payment');
+  });
+
   it('同通道、跨 id 族（登记 cs_、事件回带 pi_）→ 无法比对，按重复通知处理（Stripe 同一笔钱两种事件是常态）', async () => {
     await paidFirst();
     const err = (await again({ ...OK, providerRef: 'pi_test_123' })) as {

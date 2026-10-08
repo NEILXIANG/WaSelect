@@ -330,6 +330,15 @@ describe('create（建 Checkout Session）', () => {
    *      没有这条脾气时，"首次 5xx → 再次发起"在测试里会成功，在真 Stripe 上会一直失败到订单过期。
    *      换一把键就能成功——这正是 B3 的修法；不换键必须仍然失败，否则替身没脾气、B3 会假绿。
    */
+  it('🔴 AJ-414 409 idempotency_key_in_use（同键仍在处理中）→ 抛普通 Error 而**不是** ProviderRejectedError（结果未知，不换键）', async () => {
+    const { http, provider } = build();
+    http.failNext(409, '{"error":{"code":"idempotency_key_in_use","message":"in progress"}}');
+    const err = await provider.create(REQ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ProviderRejectedError);
+    expect((err as Error).message).toMatch(/idempotency_key_in_use/);
+  });
+
   it('同键重放 5xx（替身模拟机构缓存）；换键才建得出来', async () => {
     const { http, provider } = build();
     http.failNext(500, '{"error":{"message":"upstream down"}}');
@@ -1534,19 +1543,31 @@ describe('charge.refunded 的金额口径（AJ-376：债务登记，F12 改口�
     return provider.parseWebhook(raw, headers);
   }
 
-  it('🔴 当前口径：amountMinor 取的是**原扣款全额**（10000），不是退款额（3000）', async () => {
+  it('当前口径（债务，F12）：amountMinor 取的是**原扣款全额**（10000），不是退款额（3000）', async () => {
     const ev = await parse(chargeRefunded());
     expect(ev.outcome).toBe('refunded'); // 前提：确实归一化成了 refunded（否则下面断言的是空集）
     expect(ev.amountMinor).toBe(10_000);
   });
 
-  it('🔴 全额退款时两者相等——所以"取错了"只在**部分退款**时才暴露（最不容易被测到的那种）', async () => {
+  /**
+   * 债务钉子（审查 2026-10-09 C2）：用 `it.fails` 钉住"正确取法"——现在实现取全额 ⇒ 断言失败 ⇒ 用例通过；
+   * F12 把 amountMinor 改成本次退款额那天，这条会红，提醒把它改回普通 `it` 并删掉上面那条"当前口径"。
+   */
+  it.fails(
+    '[债务 F12] amountMinor 应取本次退款额 3000（refunds.data[0].amount）——修好后此 it.fails 会红',
+    async () => {
+      const ev = await parse(chargeRefunded());
+      expect(ev.amountMinor).toBe(3_000);
+    },
+  );
+
+  it('全额退款时两者相等——所以"取错了"只在**部分退款**时才暴露（最不容易被测到的那种）', async () => {
     const ev = await parse(chargeRefunded({ amount_refunded: 10_000, refunded: true }));
     // 全额退款：全额 == 累计已退，取哪个都对 ⇒ 只测全额的用例**永远绿**，测不出这个洞
     expect(ev.amountMinor).toBe(10_000);
   });
 
-  it('🔴 第二次部分退款：amount_refunded 是**累计**（6000），而 amountMinor 仍是全额 10000', async () => {
+  it('当前口径（债务，F12）第二次部分退款：amount_refunded 是**累计**（6000），而 amountMinor 仍是全额 10000', async () => {
     const ev = await parse(
       chargeRefunded({
         amount_refunded: 6_000, // 累计：3000 + 3000
@@ -1567,16 +1588,14 @@ describe('charge.refunded 的金额口径（AJ-376：债务登记，F12 改口�
    *      本次退款额在 `refunds.data[]` 各自那条上，累计在 `amount_refunded`，
    *      是否全额退完在 `refunded` 布尔。**三个都要，缺一个就会在某个场景记错账。**
    */
-  it('载荷里三个口径都在（给 F12 留的取法：本次在 refunds.data[]，累计在 amount_refunded）', async () => {
-    const { http } = build();
+  it('夹具形状自检（不验实现）：载荷里三个口径都在（给 F12 留的取法：本次在 refunds.data[]，累计在 amount_refunded）', () => {
+    // 审查 2026-10-09 C1：这条只钉**夹具**长得像真 Stripe 载荷，被测代码一行不跑——别把它当成实现的覆盖
     const obj = chargeRefunded();
     // 直接验样本形状：这三个键与本组第一条断言用的同一份对象
     expect(obj.amount).toBe(10_000);
     expect(obj.amount_refunded).toBe(3_000);
     expect(obj.refunded).toBe(false);
     expect((obj.refunds.data[0] as { amount: number }).amount).toBe(3_000);
-    // 前提自检：替身确实被建出来了（否则上面几条断言的 provider 可能没走真实现）
-    expect(http).toBeDefined();
   });
 
   it('部分退款的 refunded 布尔是 false——拿它当"已退款"判据会漏掉所有部分退款', async () => {

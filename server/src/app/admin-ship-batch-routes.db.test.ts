@@ -115,6 +115,7 @@ type ItemResult = {
   ok: boolean;
   code?: number;
   reason?: string;
+  message?: string;
   tracking_recognized?: boolean;
 };
 const results = (j: Record<string, unknown>): ItemResult[] => j['results'] as ItemResult[];
@@ -256,6 +257,18 @@ describe('POST /admin/orders/ship-batch：逐单结果（部分成功）', () =>
         ['o-boom', false, 50000],
         ['o-after', true, null],
       ]);
+      // 非 AppError 分支（审查 2026-10-09 C9）：固定文案、reason=internal、error 级日志带 err——
+      //   把触发器原文 'boom' 泄进 message 或降成 warn 都要红
+      const boomRow = results(r.json).find((x) => x.order_id === 'o-boom');
+      expect(boomRow).toMatchObject({ message: '服务器内部错误', reason: 'internal' });
+      // （订单 id 本身叫 o-boom，所以只查 message / reason 两个字段，不查整个响应串）
+      expect(String(boomRow?.message)).not.toContain('boom');
+      const failedLog = srv.sink
+        .find('admin_order_ship_batch_item_failed')
+        .find((l) => l['order_id'] === 'o-boom');
+      expect(failedLog?.level).toBe('error');
+      // 带原始异常（字段名由 logger 的 err 序列化决定，这里只认内容）
+      expect(JSON.stringify(failedLog)).toContain('boom');
       const boom = (
         await db`select status, carrier, shipped_at from orders where id = 'o-boom'`
       )[0];

@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
-import { ToastStack, toastError, useToasts } from '../ui/toast.js';
+import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
 import { formatJst } from '../format.js';
 import { listBlockedUsers, unblockUser, type AdminApi, type BlockedUser } from './api.js';
 import { blockedListTitle } from './view.js';
@@ -24,9 +24,15 @@ export function BlockedUsers({
   api,
   refreshKey = 0,
   onChanged,
+  sink: parentSink,
 }: {
   api: AdminApi;
   refreshKey?: number;
+  /**
+   * 父页的 Toast 出口（审查 2026-10-09 #7）：风控页自己也挂了一个 ToastStack，两个都固定在右下角会重叠，
+   * 且"已拉黑 A"与"已解除 A"会同屏。传入后本组件不再自渲染浮层，成功提示走父页（success 会清屏）。
+   */
+  sink?: ToastSink | undefined;
   /** 解除成功后通知父页（清掉父页上"已拉黑 …"的旧提示，三端联动 UI 模拟 2026-10-08）。 */
   onChanged?: (() => void) | undefined;
 }) {
@@ -34,7 +40,8 @@ export function BlockedUsers({
   const [target, setTarget] = useState('');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
-  const sink = useToasts();
+  const ownSink = useToasts();
+  const sink = parentSink ?? ownSink;
   /** 解除确认弹层（null = 没开）。 */
   const [dialog, setDialog] = useState<ConfirmSpec | null>(null);
   /** 弹层确认后要跑的动作（与订单详情同口径：函数不进 state）。 */
@@ -152,7 +159,7 @@ export function BlockedUsers({
         </div>
       )}
 
-      <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
+      {parentSink === undefined && <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />}
       {dialog !== null && (
         <ConfirmDialog
           spec={dialog}

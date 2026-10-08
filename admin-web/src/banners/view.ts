@@ -169,7 +169,8 @@ export function bannerFormErrors(form: unknown): {
     errors['linkType'] = '跳转类型不对，请从下拉里重新选一个';
   if (f.linkType !== 'none' && f.linkId.trim() === '')
     errors['linkId'] = '选择了跳转就必须填目标 id（否则点了会跳到不存在的页面）';
-  const sort = Number(f.sort);
+  // 只认纯数字串：`Number('')` 是 0、`Number('1e2')` 是 100，都会静默改值（审查 2026-10-09 #6；商品页同口径）
+  const sort = /^\d+$/.test(f.sort.trim()) ? Number(f.sort.trim()) : Number.NaN;
   if (!Number.isInteger(sort) || sort < 0) errors['sort'] = '排序必须是 ≥0 的整数';
   if (f.startsAt !== '' && toIsoJst(f.startsAt) === '')
     errors['startsAt'] = '开始时间格式为 YYYY-MM-DDTHH:mm';
@@ -201,7 +202,7 @@ export function toBannerInput(form: unknown): Record<string, unknown> {
     image_key: f.imageKey.trim(),
     link_type: f.linkType,
     ...(f.linkType === 'none' ? {} : { link_id: f.linkId.trim() }),
-    sort: Number(f.sort),
+    sort: Number(f.sort.trim()),
     active: f.active,
     ...(starts === '' ? {} : { starts_at: starts }),
     ...(ends === '' ? {} : { ends_at: ends }),

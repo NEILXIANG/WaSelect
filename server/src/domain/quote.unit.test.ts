@@ -8,7 +8,7 @@
  * @see domain/quote.ts（被测）；docs/I1阶段开发实施方案.md §3.4
  */
 import { describe, expect, it } from 'vitest';
-import { applyRate, toMinor, toRateInt, toRatioInt } from '@waselect/shared';
+import { toMinor, toRateInt, toRatioInt } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import {
   buildDisplayFromRates,
@@ -153,9 +153,11 @@ describe('computeQuote', () => {
     expect(q.totalJpy).toBe(14_950);
     expect(q.weightG).toBe(1850); // 1600 + 250 包材（D-42）
     expect(q.dutyEstimated).toBe(true);
-    expect(q.dutyJpy).toBe(applyRate(10_000, toRatioInt('0.15000')));
-    expect(q.display['USD']).toBe(toMinor(14_950, toRateInt('0.0067')));
-    expect(q.display['CNY']).toBe(toMinor(14_950, toRateInt('0.049')));
+    // 字面量独立算出（审查 2026-10-09 C10）：用同一函数算期望值只能抓"公式用错了变量"，抓不住取整 / 除数错
+    //   duty = 10,000 × 0.15 = 1,500 円；USD = 14,950 × 0.0067 = 100.165 → 半进 → 10,017 美分；CNY = 14,950 × 0.049 = 732.55 → 73,255 分
+    expect(q.dutyJpy).toBe(1_500);
+    expect(q.display['USD']).toBe(10_017);
+    expect(q.display['CNY']).toBe(73_255);
     expect(q.freeShippingRemainingJpy).toBeNull();
     expect(q.splitHint).toBe(false);
   });

@@ -51,7 +51,9 @@ import {
 } from './view.js';
 import { ProductMainColumn, ProductSideColumn } from './ProductFormSections.js';
 import { productFieldId, productFieldLabel } from './ProductFormParts.js';
-import { useFormDirty } from '../ui/unsaved.js';
+import { useFormDirty, useUnsaved } from '../ui/unsaved.js';
+import { ConfirmDialog } from '../ui/confirm.js';
+import { LEAVE_UNSAVED_SPEC } from '../ui/leave-spec.js';
 import type { AdminProductLike } from './api.js';
 
 export interface ProductFormPageProps {
@@ -123,6 +125,9 @@ export function ProductFormPage({
 
   /** 标签草稿尚未并回 `form`（点了保存才算数），所以它单独算一份脏。 */
   useFormDirty({ form, tagDraft: tagDraft.trim() }, { form: pristine, tagDraft: '' });
+  // 页头「返回列表」不经 App 的 leave()（编辑态不进网址），脏态拦截要在这里自己做（审查 2026-10-09 #1）
+  const { dirty } = useUnsaved();
+  const [leaveAsk, setLeaveAsk] = useState(false);
 
   const set = (key: keyof ProductForm, value: string | string[]) => {
     setForm((prev) => ({ ...prev, [key]: value }) as ProductForm);
@@ -270,9 +275,20 @@ export function ProductFormPage({
     <section className="panel">
       <header className="panel-head">
         <h1 className="title">{editId === null ? '新建商品' : '编辑商品'}</h1>
-        <button type="button" className="link" onClick={() => onDone()}>
+        <button
+          type="button"
+          className="link"
+          onClick={() => (dirty ? setLeaveAsk(true) : onDone())}
+        >
           返回列表
         </button>
+        {leaveAsk && (
+          <ConfirmDialog
+            spec={LEAVE_UNSAVED_SPEC}
+            onConfirm={() => onDone()}
+            onCancel={() => setLeaveAsk(false)}
+          />
+        )}
       </header>
 
       {error !== '' && <p className="error">{error}</p>}
@@ -335,13 +351,9 @@ export function ProductFormPage({
         </p>
       ))}
 
-      <form
-        className="product-grid"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void onSubmit(false);
-        }}
-      >
+      {/* 回车不提交（审查 2026-10-09 #3）：单行输入框里按回车会触发浏览器隐式提交，等于"在售价框按回车 = 直接写库并离开"。
+          与全站约定（ui/keys.ts：回车最多打开确认）同口径——保存只认页底两个按钮的点击。 */}
+      <form className="product-grid" onSubmit={(e) => e.preventDefault()}>
         <ProductMainColumn
           form={form}
           set={set}
@@ -389,9 +401,10 @@ export function ProductFormPage({
           <div className="action-bar">
             {/* 有「保存并上架」时它是主动作（实心），保存降为描边；在售商品只剩「保存」，它就是主动作 */}
             <button
-              type="submit"
+              type="button"
               className={status !== 'active' ? 'btn btn-secondary' : 'btn'}
               disabled={saving || uploading}
+              onClick={() => void onSubmit(false)}
             >
               {saving
                 ? '保存中…'

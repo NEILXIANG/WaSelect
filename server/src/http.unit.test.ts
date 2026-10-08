@@ -13,6 +13,7 @@ import { emitRealSignal } from '../../test/signal-harness.js';
 import { createHttpApp, defaultHost, installShutdownHandlers, listen } from './http.js';
 import { createLogger, type Logger } from './logger.js';
 import { AppError } from './errors.js';
+import { CircuitOpenError } from './ports/circuit-breaker.js';
 import { requireRole, signToken, type AuthConfig } from './app/auth.js';
 
 const RAW_CALLBACK_PATH = '/api/v1/pay/callback/stripe';
@@ -456,6 +457,21 @@ describe('统一错误兜底', () => {
     const row = sink.find('unhandled_error').at(-1);
     expect(row?.err_message).toContain('10.0.0.7');
     expect(typeof row?.err_stack).toBe('string');
+  });
+
+  it('🔴 AJ-414 熔断拒绝 → 503 + 50300 + retry_after_ms；日志是 warn 级 upstream_unavailable，不进 unhandled_error', async () => {
+    const { baseUrl, sink } = await serve((app) => {
+      app.get('/circuit', () => {
+        throw new CircuitOpenError('stripe', 1500);
+      });
+    });
+    const res = await fetch(`${baseUrl}/circuit`);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ code: 50300, data: { retry_after_ms: 1500 } });
+    expect(sink.find('unhandled_error')).toHaveLength(0);
+    const row = sink.find('upstream_unavailable');
+    expect(row).toHaveLength(1);
+    expect(row[0]?.level).toBe('warn');
   });
 
   it('未匹配路由 → 404 + 40400（统一形状，不是 Express 默认 HTML）', async () => {

@@ -47,12 +47,24 @@ export class CircuitOpenError extends Error {
   readonly key: string;
   /** 还要等多少毫秒才可能放行（调用方可以据此提示用户）。 */
   readonly retryAfterMs: number;
+  /**
+   * 被拒之前，这条请求**已经打出去过至少一次**（AJ-414）。
+   * @why fetch-client 在每一轮重试前都问熔断（B4 / AJ-200）：第 1 次尝试超时（结果未知）、第 2 轮才被拒时，
+   *      上游可能已经执行了那次请求。调用方若把它当"一次都没发出去"处理（释放额度 / 换键），
+   *      就会在重试时再执行一次——部分退款正是这样双退的（partial-refund.ts）。
+   *      `false` 才是"一次都没发出去"，可以安全地当失败并换键 / 释放额度。
+   */
+  readonly attempted: boolean;
 
-  constructor(key: string, retryAfterMs: number) {
-    super(`出站请求被熔断拒绝（上游「${key}」最近连续失败）：约 ${retryAfterMs}ms 后重试`);
+  constructor(key: string, retryAfterMs: number, attempted = false) {
+    super(
+      `出站请求被熔断拒绝（上游「${key}」最近连续失败）：约 ${retryAfterMs}ms 后重试` +
+        (attempted ? '（本请求此前已发出过一次，结果未知）' : ''),
+    );
     this.name = 'CircuitOpenError';
     this.key = key;
     this.retryAfterMs = retryAfterMs;
+    this.attempted = attempted;
   }
 }
 

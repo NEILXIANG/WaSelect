@@ -264,6 +264,9 @@ describe('报文与验签（D6：入站方问题 4xx，我们的问题 5xx）', 
     const res = await signedCallback({ wrong_field: 1 });
     expect(res.status).toBe(500);
     await expect(res.json()).resolves.toMatchObject({ code: 50000 });
+    // "不落到 SQL"要真的断言（审查 2026-10-09 S7）：登记表与事件表都没有行
+    expect(await db`select 1 from webhook_events`).toHaveLength(0);
+    expect(await db`select 1 from order_events`).toHaveLength(0);
   });
 
   it('回调验签失败 → 40103（4xx：入站方的问题，不占 5xx），订单状态不变', async () => {

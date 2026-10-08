@@ -18,6 +18,7 @@ import {
   releaseDisputeHold,
   shipOrder,
   shipOrdersBatch,
+  SHIP_BATCH_TIMEOUT_MS,
   updateOrderAddress,
 } from './api.js';
 
@@ -294,5 +295,20 @@ describe('shipOrdersBatch / findOrdersByNo（AJ-401）', () => {
     expect(seen.every((s) => s.url.includes('include_test=true'))).toBe(true);
     expect(m.get('261007-7K3QXA')?.order_id).toBe('o-1');
     expect(m.has('261007-ZZZZZZ')).toBe(false);
+  });
+});
+
+describe('批量发货的超时（审查 2026-10-09 #10）', () => {
+  it('🔴 请求带 60s 超时（50 单串行，10s 默认会先在前端超时而服务端继续发完）', async () => {
+    const seen: Array<{ path: string; timeoutMs?: number }> = [];
+    const fakeApi = (async (req: { path: string; timeoutMs?: number }) => {
+      seen.push(req);
+      return { results: [] };
+    }) as never;
+    await shipOrdersBatch(fakeApi, [
+      { order_id: 'o-1', carrier: 'Japan Post EMS', tracking_no: 'EJ123456789JP' },
+    ]);
+    expect(SHIP_BATCH_TIMEOUT_MS).toBe(60_000);
+    expect(seen[0]).toMatchObject({ path: '/api/v1/admin/orders/ship-batch', timeoutMs: 60_000 });
   });
 });
