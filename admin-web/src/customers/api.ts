@@ -44,3 +44,21 @@ export async function getCustomer(api: AdminApi, id: string): Promise<CustomerDe
   }
   return resp as unknown as CustomerDetailLike;
 }
+
+/**
+ * 删除该客户的全部用户行为记录（AJ-413，契约 0.6.51）——APPI「用户要求删除」的后台路径。
+ * @why 返回值必须是 `{deleted: number}`：形状不符按网络层异常抛，不回落成 0——"删了 0 条"与"接口变了"对运营是两件事。
+ */
+export async function purgeCustomerEvents(
+  api: AdminApi,
+  id: string,
+  reason: string,
+): Promise<{ deleted: number }> {
+  const resp = await api({
+    path: `/api/v1/admin/customers/${encodeURIComponent(id)}/events`,
+    method: 'DELETE',
+    body: { reason },
+  });
+  if (!isRecord(resp) || typeof resp['deleted'] !== 'number') throw shapeError('删除行为记录');
+  return { deleted: resp['deleted'] };
+}

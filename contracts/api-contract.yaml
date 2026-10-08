@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.50
+  version: 0.6.52
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -543,6 +543,17 @@ info:
       ② **鉴权可选**（`security: []`）：带有效买家 token 记 user_id；无 / 无效 / 封禁 / 版本失效一律降级匿名，**不回 401**（不触发小程序重登）。
       ③ product_id / order_id 须真实存在，否则该条**丢弃**（同批其余照收，仍 204）；不收任何自由文本（PII 红线，约束七）。
       ④ 限流：每 IP 每分钟 RATE_LIMIT_QUOTE_PER_MIN（公开写入口同一规则、独立的桶）→ 429 / 42901。
+    0.6.51（AJ-413：用户行为记录的 180 天保留期清理 + APPI 按用户删除——新增端点，老调用方不受影响）：
+      ① 新增 `DELETE /admin/customers/{id}/events`：删掉该客户在 `user_events` 里的**全部**行（不论多旧），
+         `reason` 必填（≤ 500 字，写进 admin_audit.after）；不存在 / 管理员 → 40403；没有记录也回 200 `{deleted: 0}`（请求已兑现，照样留审计）。
+         订单 / 地址 / 审计不动（AJ-292：账务字段走匿名化而非删除）。
+      ② 保留期清理（created_at 早于 180 天的行）由 daily 作业自动做（`user_events_retention`），不经任何接口；
+         匿名行（无 user_id）只能靠它清。隐私政策里"保存 180 天"的数字与服务端 USER_EVENTS_RETENTION_DAYS 同源。
+    0.6.52（AJ-414：部分退款退满实收时订单沿状态机转 refunded——行为口径变更，端点形状不变）：
+      ① `POST /admin/orders/{id}/partial-refunds` / `…/sync`：累计 succeeded 达到实收时，除原有的 `refunded_by_parts` 事件 + 未发货回补库存外，
+         订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
+         completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
+      ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -821,8 +832,8 @@ paths:
       responses: {'202': {description: 'Accepted（succeeded = 已退款，订单 refunded；pending = 机构处理中，订单停在 refunding，再调即查询）', content: {application/json: {schema: {type: object, required: [order_id, outcome], properties: {order_id: {type: string}, outcome: {type: string, enum: [succeeded, pending]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}, '503': {description: '0.6.27 补：50300 出站熔断打开（AJ-313）——这一次请求**一次都没有发出去**，不记 refund_failed 事件、不落 50000，带 retry_after_ms 让管理员稍后重试', content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}}
   /admin/orders/{id}/partial-refunds:
     post:
-      summary: 部分退款（0.6.35 / AJ-383；含订单完成后的售后退款，订单状态不变）
-      description: '准入：订单 paid / shipped / delivered / completed，且无拒付限制（40907），且无在途的部分退款（40902 partial_refund_in_flight）；整单退款中或已退 → 40902。金额按**支付币种最小单位**（与 payments.charge_amount 同口径，例如 USD 的 10.00 = 1000），已退 + 在途 + 本次 ≤ 实收，超出 → 40001（reason exceeds_refundable，日志可见）。机构结果：succeeded / pending（再调 sync 查询）；机构确认失败 → 50000 且这笔释放额度；结果未知 → 50000 且这笔仍占额度（调 sync 用同一把幂等键取回结果）。不回补库存、不发买家邮件。'
+      summary: 部分退款（0.6.35 / AJ-383；含订单完成后的售后退款；0.6.52 起退满实收时订单转 refunded）
+      description: '准入：订单 paid / shipped / delivered / completed，且无拒付限制（40907），且无在途的部分退款（40902 partial_refund_in_flight）；整单退款中或已退 → 40902。金额按**支付币种最小单位**（与 payments.charge_amount 同口径，例如 USD 的 10.00 = 1000），已退 + 在途 + 本次 ≤ 实收，超出 → 40001（reason exceeds_refundable，日志可见）。机构结果：succeeded / pending（再调 sync 查询）；机构确认失败 → 50000 且这笔释放额度；结果未知 → 50000 且这笔仍占额度（调 sync 用同一把幂等键取回结果）；熔断拒绝 → 503 / 50300，首次尝试前被拒释放额度、首次已发出则按未知占额度（0.6.52）。单笔不回补库存、不发买家邮件；**累计退满实收**时（0.6.52 / AJ-414）：记 refunded_by_parts，未发货的单回补库存，订单经 refunding 转 **refunded**（completed 除外），发整单退款邮件。'
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [amount_minor, reason], properties: {amount_minor: {type: integer, minimum: 1}, reason: {type: string, maxLength: 500, description: '与整单退款同一上限（shared REFUND_REASON_MAX_LENGTH）'}}}}}}
       responses: {'202': {description: Accepted, content: {application/json: {schema: {type: object, required: [refund], properties: {refund: {$ref: '#/components/schemas/PartialRefund'}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}, '503': {$ref: '#/components/responses/Err'}}
@@ -969,6 +980,13 @@ paths:
       description: '不存在或是管理员 → 40403。拉黑 / 解除走 POST /admin/users/{id}/block|unblock。'
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AdminCustomer'}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}
+  /admin/customers/{id}/events:
+    delete:
+      summary: 删除该客户的全部用户行为记录（0.6.51 / AJ-413；APPI「用户要求删除」的后台路径）
+      description: '只删 `user_events` 里 user_id = {id} 的行（不论多旧）；订单 / 地址 / 审计不动（AJ-292）。reason 必填（1–500 字；缺 / 空 / 超长 → 40001 purge_reason_required / purge_reason_too_long），写进 admin_audit.after。不存在或管理员 → 40403。没有记录也回 200 {deleted: 0}。180 天保留期清理由 daily 作业自动做，不经此接口。'
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, minLength: 1, maxLength: 500, description: '为什么删（如：买家 2026-10-09 邮件要求删除）；进审计'}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [deleted], properties: {deleted: {type: integer, description: 删除的行数（0 = 本来就没有）}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}
   /admin/settings:
     get:
       summary: 当前生效的非密钥配置（0.6.47 / AJ-404；只读）

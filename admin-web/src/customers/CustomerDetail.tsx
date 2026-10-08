@@ -15,6 +15,7 @@ import { formatJst, moneyText } from '../format.js';
 import { ORDER_STATUS_LABELS } from '../orders/view.js';
 import { getCustomer, type AdminApi } from './api.js';
 import { CustomerRiskActions } from './CustomerRiskActions.js';
+import { CustomerPrivacyActions } from './CustomerPrivacyActions.js';
 import { addressLine, riskText, statsCards, type CustomerDetailLike } from './view.js';
 
 export interface CustomerDetailProps {
@@ -101,6 +102,7 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
             sink={sink}
             onChanged={load}
           />
+          <CustomerPrivacyActions api={api} userId={c.id} sink={sink} />
 
           <span className="label">地址簿</span>
           <table className="table">

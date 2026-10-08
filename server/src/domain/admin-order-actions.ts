@@ -215,6 +215,14 @@ export function releaseReasonGuard(raw: unknown): RefundReasonResult {
   );
 }
 
+/**
+ * 删除客户行为记录的原因准入（AJ-413）：非空、≤ `ADMIN_NOTE_MAX_LENGTH`。
+ * @why 原因必填：这是 APPI 删除请求的兑现记录，审计里没有"为什么删"就无法证明是应请求而删。
+ */
+export function purgeReasonGuard(raw: unknown): RefundReasonResult {
+  return textGuard(raw, ADMIN_NOTE_MAX_LENGTH, 'purge_reason_required', 'purge_reason_too_long');
+}
+
 /** 发货表单的校验结果（AJ-315）：`ok:true` 时承运商**已 trim**、运单号**已归一**（AJ-410）。 */
 export type ShipInfoResult =
   | { ok: true; carrier: string; trackingNo: string }

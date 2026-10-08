@@ -14,6 +14,7 @@
  *      （约束七脱敏红线），而不是只查某一条事件——泄露最常出现在没人盯的那一条（错误上下文、访问日志）。
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
@@ -579,6 +580,123 @@ describe('客户详情页上的拉黑 / 解除（复用 /admin/users/{id}/block|
       const back = await get(url, '/api/v1/admin/customers/u-cust-c', admin);
       expect(back.body['blocked']).toBe(false);
       expect(back.body['blocked_at']).toBeUndefined();
+    });
+  });
+});
+
+/**
+ * AJ-413：`DELETE /admin/customers/{id}/events`——APPI「用户要求删除」的后台路径。
+ * @why 真库 + 真路由：要证明的不只是"回了 200"，而是行真的没了、别人的行还在、admin_audit 里有谁 / 为什么。
+ */
+async function del(
+  url: string,
+  path: string,
+  token: string | undefined,
+  body: unknown,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await fetch(`${url}${path}`, {
+    method: 'DELETE',
+    headers: {
+      'content-type': 'application/json',
+      ...(token === undefined ? {} : { authorization: token }),
+    },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+async function auditRows(target: string): Promise<Record<string, unknown>[]> {
+  // 审计是异步落库（在途表），最多等 2s
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    const rows =
+      await db`select actor, action, target, after, status_code from admin_audit where target = ${target}`;
+    if (rows.length > 0 || Date.now() > deadline) return rows as Record<string, unknown>[];
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+describe('DELETE /admin/customers/{id}/events（AJ-413）', () => {
+  beforeEach(async () => {
+    await db`insert into user_events (user_id, session_id, event, props, created_at)
+             values ('u-cust-a', 's', 'page_view', '{"page":"home"}', now() - interval '1 day'),
+                    ('u-cust-a', 's', 'add_to_cart', '{"product_id":"p-1"}', now() - interval '300 days'),
+                    ('u-cust-b', 's', 'page_view', '{"page":"home"}', now()),
+                    (null, 's', 'page_view', '{"page":"home"}', now())`;
+  });
+
+  it('🔴 删掉该客户全部行为记录（不论多旧）→ 200 {deleted}；别人的与匿名的不动；审计带 actor / reason', async () => {
+    await withServer(async (url, admin) => {
+      const r = await del(url, '/api/v1/admin/customers/u-cust-a/events', admin, {
+        reason: '买家邮件要求删除',
+      });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ deleted: 2 });
+      const left = await db`select user_id from user_events order by user_id nulls first`;
+      expect(left.map((x) => x['user_id'])).toEqual([null, 'u-cust-b']);
+      const audit = await auditRows('u-cust-a');
+      expect(audit).toHaveLength(1);
+      expect(audit[0]).toMatchObject({
+        actor: 'admin:u-admin',
+        action: 'DELETE /admin/customers/:id/events',
+        status_code: 200,
+      });
+      expect(audit[0]?.['after']).toEqual({ reason: '买家邮件要求删除' });
+      const line = sink.find('admin_user_events_purged');
+      expect(line).toHaveLength(1);
+      expect(line[0]?.['ctx']).toMatchObject({ target_user_id: 'u-cust-a', count: 2 });
+    });
+  });
+
+  it('没有记录的客户 → 200 {deleted: 0}（请求已兑现，照样留审计）', async () => {
+    await withServer(async (url, admin) => {
+      const r = await del(url, '/api/v1/admin/customers/u-cust-c/events', admin, {
+        reason: '买家要求',
+      });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ deleted: 0 });
+      expect(await auditRows('u-cust-c')).toHaveLength(1);
+    });
+  });
+
+  it('🔴 原因必填：空 / 非字符串 → 40001，一行不删；超长 → 40001', async () => {
+    await withServer(async (url, admin) => {
+      for (const body of [{}, { reason: '' }, { reason: '   ' }, { reason: 1 }]) {
+        const r = await del(url, '/api/v1/admin/customers/u-cust-a/events', admin, body);
+        expect(r.status).toBe(400);
+        expect(code(r)).toBe(40001);
+      }
+      // 上限恰好值（审查 2026-10-09 C7）：500 放行、501 拒——魔法数 2001 对"上限误写成 2000"也绿
+      const long = await del(url, '/api/v1/admin/customers/u-cust-a/events', admin, {
+        reason: 'x'.repeat(ADMIN_NOTE_MAX_LENGTH + 1),
+      });
+      expect(code(long)).toBe(40001);
+      const edge = await del(url, '/api/v1/admin/customers/u-cust-b/events', admin, {
+        reason: 'x'.repeat(ADMIN_NOTE_MAX_LENGTH),
+      });
+      expect(edge.status).toBe(200);
+      const left = await db`select count(*)::int as n from user_events where user_id = 'u-cust-a'`;
+      expect(left[0]?.['n']).toBe(2);
+    });
+  });
+
+  it('不存在 / 管理员 id → 40403；无 token → 40101；买家 token → 40301', async () => {
+    await withServer(async (url, admin) => {
+      expect(
+        code(await del(url, '/api/v1/admin/customers/u-nope/events', admin, { reason: 'r' })),
+      ).toBe(40403);
+      expect(
+        code(await del(url, '/api/v1/admin/customers/u-admin/events', admin, { reason: 'r' })),
+      ).toBe(40403);
+      expect(
+        code(await del(url, '/api/v1/admin/customers/u-cust-a/events', undefined, { reason: 'r' })),
+      ).toBe(40101);
+      const buyer = await bearer('u-cust-b', 'user');
+      expect(
+        code(await del(url, '/api/v1/admin/customers/u-cust-a/events', buyer, { reason: 'r' })),
+      ).toBe(40301);
+      const left = await db`select count(*)::int as n from user_events`;
+      expect(left[0]?.['n']).toBe(4);
     });
   });
 });

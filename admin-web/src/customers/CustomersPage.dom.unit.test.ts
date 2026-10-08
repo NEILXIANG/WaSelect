@@ -103,6 +103,7 @@ async function open(route: Route, server: { blocked: boolean } = { blocked: fals
       server.blocked = false;
       return { already_unblocked: false };
     }
+    if (req.path.endsWith('/events') && req.method === 'DELETE') return { deleted: 12 };
     if (req.path.startsWith('/api/v1/admin/customers/')) return detail(server.blocked);
     return { items: [ROW], total: 41 };
   };
@@ -203,5 +204,26 @@ describe('客户详情', () => {
     const un = calls.find((c) => c.path.endsWith('/unblock'));
     expect(un?.body).toEqual({ reason: '客服核实为误拉黑' });
     expect(el.textContent).toContain('未拉黑');
+  });
+});
+
+describe('客户详情：删除行为记录（隐私请求，AJ-413）', () => {
+  it('🔴 原因必填（空着不发请求）→ 弹确认（之前不发请求）→ 确认后发 DELETE 带原因 → 提示删除条数', async () => {
+    const { el, calls } = await open(detailRoute());
+    await click(button(el, '删除行为记录'));
+    expect(calls.some((c) => c.path.endsWith('/events'))).toBe(false);
+    expect(el.textContent).toContain('请填写删除原因');
+    await type(el.querySelector('input[name="customer-purge-reason"]'), '买家邮件要求删除');
+    await click(button(el, '删除行为记录'));
+    expect(calls.some((c) => c.path.endsWith('/events'))).toBe(false);
+    expect(el.textContent).toContain('无法恢复');
+    await click(button(el, '确认删除行为记录'));
+    const req = calls.find((c) => c.path.endsWith('/events'));
+    expect(req).toEqual({
+      path: `/api/v1/admin/customers/${ROW.id}/events`,
+      method: 'DELETE',
+      body: { reason: '买家邮件要求删除' },
+    });
+    expect(el.textContent).toContain('已删除 12 条');
   });
 });

@@ -443,6 +443,13 @@ describe('002 加固：约束真的会拦', () => {
     await expect(db`update admin_audit set action = 'x' where target = 'p-1'`).rejects.toThrow(
       /只允许 INSERT/,
     );
+    // 036 给 user_events 换了触发器函数（事务内 GUC 窄口，AJ-413）：普通的 UPDATE / DELETE 必须仍被拒
+    await expect(db`update user_events set event = 'x' where trace_id = 't-1'`).rejects.toThrow(
+      /只允许 INSERT/,
+    );
+    await expect(db`delete from user_events where trace_id = 't-1'`).rejects.toThrow(
+      /只允许 INSERT/,
+    );
   });
 
   it('reconciliation_runs 同样 append-only（对账历史不可改，剩余清单 3-2）', async () => {

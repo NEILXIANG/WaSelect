@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
-import { getCustomer, listCustomers } from './api.js';
+import { getCustomer, listCustomers, purgeCustomerEvents } from './api.js';
 
 function fakeApi(body: unknown) {
   const calls: Array<{ path: string; method?: string }> = [];
@@ -59,5 +59,25 @@ describe('getCustomer', () => {
       const { api } = fakeApi(body);
       await expect(getCustomer(api, 'u-1')).rejects.toBeInstanceOf(ApiError);
     }
+  });
+});
+
+describe('purgeCustomerEvents（AJ-413）', () => {
+  it('DELETE /admin/customers/{id}/events 带 reason；回 {deleted}', async () => {
+    const { api, calls } = fakeApi({ deleted: 12 });
+    const out = await purgeCustomerEvents(api, 'u-1/x', '买家要求删除');
+    expect(out).toEqual({ deleted: 12 });
+    expect(calls[0]).toEqual({
+      path: '/api/v1/admin/customers/u-1%2Fx/events',
+      method: 'DELETE',
+      body: { reason: '买家要求删除' },
+    });
+  });
+
+  it('形状不符（没有 deleted 数字）→ 抛 NETWORK_ERROR_CODE，不当成"删了 0 条"', async () => {
+    const { api } = fakeApi({ ok: true });
+    await expect(purgeCustomerEvents(api, 'u-1', 'r')).rejects.toMatchObject({
+      code: NETWORK_ERROR_CODE,
+    });
   });
 });

@@ -1,7 +1,8 @@
 /**
- * 职责：管理端客户只读端点（AJ-404；对标分析 §4.5）——`GET /admin/customers`、`GET /admin/customers/{id}`。
+ * 职责：管理端客户端点（AJ-404；对标分析 §4.5）——`GET /admin/customers`、`GET /admin/customers/{id}`，
+ *       以及唯一的写操作 `DELETE /admin/customers/{id}/events`（AJ-413：APPI 删除行为记录）。
  *
- * @why 只读：拉黑 / 解除**复用** `/admin/users/{id}/block|unblock`（admin-risk-routes.ts）——
+ * @why 除删除行为记录外只读：拉黑 / 解除**复用** `/admin/users/{id}/block|unblock`（admin-risk-routes.ts）——
  *      同一件事两个入口各写一份，"连带取消在途单"与"作废身份缓存"这两条副作用迟早只剩一份在做。
  * @why 两条路由共用**一个** `requireRole` 守卫实例（与其余管理端路由同口径）。
  * @why 读客户资料**不进 admin_audit**（与订单详情同口径；审计中间件只记写操作，
@@ -23,6 +24,9 @@ import type { Logger } from '../logger.js';
 import type { AuthConfig } from './auth.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import { requireRole } from './auth.js';
+import { withTransaction } from '../adapters/db.js';
+import { purgeUserEventsByUser } from '../adapters/user-events.js';
+import { purgeReasonGuard } from '../domain/admin-order-actions.js';
 import { parseCustomerListQuery } from '../domain/customer-query.js';
 import {
   countCustomerDisputes,
@@ -76,6 +80,33 @@ export function mountAdminCustomerRoutes(app: Express, deps: AdminCustomerRoutes
           ctx: { page: q.page, size: q.size, has_keyword: q.keyword !== null, total },
         });
         res.json({ items: items.map(toListItem), total });
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  /**
+   * APPI「用户要求删除」的后台路径（AJ-413，契约 0.6.51）：删掉该客户在 `user_events` 里的全部行。
+   * @why 原因必填且进审计：`admin_audit` 中间件把请求体记成 after（`{reason}`）、路径 id 记成 target——
+   *      "谁、什么时候、应谁的要求删了谁的记录"全在一行里。
+   * @why 没有记录也回 200 {deleted: 0} 并照样留审计：删除请求已兑现，这件事本身要可证明。
+   * @why 不删订单 / 地址 / 审计：账务字段有保存义务，走匿名化（AJ-292）；这里只管行为流。
+   */
+  app.delete('/api/v1/admin/customers/:id/events', guard, (req, res, next) => {
+    void (async () => {
+      try {
+        const id = String(req.params.id);
+        const reason = purgeReasonGuard((req.body as { reason?: unknown } | null)?.reason);
+        if (!reason.ok) throw new AppError(reason.code, { reason: reason.reason });
+        const c = await findCustomer(deps.db, id);
+        if (c === null) throw new AppError(40403, { target_user_id: id });
+        const deleted = await withTransaction(deps.db, (tx) => purgeUserEventsByUser(tx, id));
+        deps.logger.info('admin_user_events_purged', {
+          result: 'ok',
+          ctx: { target_user_id: id, count: deleted },
+        });
+        res.json({ deleted });
       } catch (e) {
         next(e);
       }

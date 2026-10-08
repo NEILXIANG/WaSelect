@@ -762,6 +762,45 @@ describe('SEC-14：daily 端点走注入时钟（不是 systemClock）', () => {
       expect(body.started_at).toBe(FIXED);
       // run_id 仍来自真 uuid：注入的 idGen 返回固定串，拿它当 runId 会让两轮作业撞键
       expect(body.run_id).not.toBe('');
+      // ⚠️ 必须等这一轮跑完再关服务：202 之后作业在后台持有 daily 的 advisory lock 继续跑，
+      //    关了服务它也不会停（共用同一个池）。不等就会把锁"遗传"给下一条用例——
+      //    2026-10-09 实测：AJ-413 的用例因此被 scheduler_tick_skipped（另一个实例正在执行），单跑绿、整文件红。
+      await waitForDailyHeartbeat();
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+/**
+ * AJ-413：行为流 180 天保留期清理挂在 daily 列表里（生产接线）——单测证明 job 本身，这里证明它真的被跑到，
+ * 且是在 daily 的事务里跑的（append-only 触发器的窄口豁免只在事务内有效，接错位置就是每天一条 42501）。
+ */
+describe('daily 一轮会清理 180 天前的用户行为记录（AJ-413）', () => {
+  it('🔴 181 天前的行被删，179 天前的保留；daily 心跳成功、无 last_error', async () => {
+    await db`insert into user_events (user_id, session_id, event, props, created_at)
+             values ('u-old', 's', 'page_view', '{"page":"home"}', now() - interval '181 days'),
+                    ('u-new', 's', 'page_view', '{"page":"home"}', now() - interval '179 days')`;
+    const srv = await buildServer({ withSecret: true });
+    try {
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      // 上一条用例（SEC-14）触发的 daily 不等心跳就关服务，它可能在**本轮**窗口里先落 last_processed，
+      // 让上面的等待提前返回（2026-10-09 实测：单跑绿、整文件红）。以本服务自己的日志为准再等一次——
+      // 日志在事务内打、提交在后，所以日志出现后再轮询到行真的消失为止（最多 8s；等不到就由下面的断言红）
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        const gone = (await db`select 1 from user_events where user_id = 'u-old'`).length === 0;
+        if (gone && srv.sink.find('user_events_retention').length === 1) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const left = await db`select user_id from user_events order by user_id`;
+      expect(left.map((r) => r['user_id'])).toEqual(['u-new']);
+      const runs = await db`select last_error from job_runs where name = 'daily'`;
+      expect(runs[0]?.['last_error']).toBeNull();
+      const line = srv.sink.find('user_events_retention');
+      expect(line).toHaveLength(1);
+      expect(line[0]?.['count']).toBe(1);
     } finally {
       await srv.close();
     }

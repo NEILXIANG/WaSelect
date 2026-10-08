@@ -23,6 +23,7 @@ import {
   clipRefundReason,
   refundGuard,
   refundReasonGuard,
+  purgeReasonGuard,
   releaseReasonGuard,
   shipGuard,
   shipInfoGuard,
@@ -317,5 +318,21 @@ describe('shipInfoGuard：必填 + 不超过列宽（AJ-315）', () => {
     const r = shipInfoGuard({ ...ok, tracking_no: spaced });
     if (!r.ok) throw new Error(`期望通过，实际 ${r.reason}`);
     expect(r.trackingNo).toBe('T'.repeat(SHIP_MAX_CHARS.tracking_no));
+  });
+});
+
+describe('purgeReasonGuard：删除行为记录的原因必填且有上限（AJ-413）', () => {
+  it('非空 → ok 且已 trim；空 / 空白 / 非字符串 → purge_reason_required；超长 → purge_reason_too_long', () => {
+    const r = purgeReasonGuard('  买家邮件要求删除  ');
+    expect(r).toEqual({ ok: true, reason: '买家邮件要求删除' });
+    for (const bad of ['', '   ', 12, null, undefined]) {
+      const x = purgeReasonGuard(bad);
+      expect(x.ok).toBe(false);
+      if (!x.ok) expect(x).toMatchObject({ code: 40001, reason: 'purge_reason_required' });
+    }
+    expect(purgeReasonGuard('理'.repeat(ADMIN_NOTE_MAX_LENGTH)).ok).toBe(true);
+    const long = purgeReasonGuard('理'.repeat(ADMIN_NOTE_MAX_LENGTH + 1));
+    expect(long.ok).toBe(false);
+    if (!long.ok) expect(long.reason).toBe('purge_reason_too_long');
   });
 });

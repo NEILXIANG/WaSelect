@@ -112,6 +112,19 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     branches: 100,
     statements: 100,
   },
+  // AJ-413：行为记录的受控删除（保留期清理 + APPI 按用户删除）——删数据属严格档
+  'server/src/adapters/user-events.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+  'server/src/app/user-events-retention.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
   'server/src/app/pay-routes.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
   'server/src/app/pay-callback.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
   'server/src/app/mark-paid.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
@@ -121,7 +134,11 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     branches: 100,
     statements: 100,
   },
-  'server/src/app/mark-disputed.ts': { lines: 94, functions: 100, branches: 89, statements: 94 },
+  // 豁免原因（审查 2026-10-09 C14；约束九：没有原因的豁免会让机制失效）：未覆盖的只有三处"不变式违反"分支——
+  //   198 / 415：行锁期间支付行消失（update 未命中 → 50000）；443：重放时 dispute_opened_at 为空的回落。
+  //   三处都是"库被外部改坏"才可达，单测要造它得在 for update 之后删行，没有对应真实形态；其余分支 100%。
+  //   实测 2026-10-09：95.38 / 91.22 / 100 / 95.08，门槛按实测值回收（不再是 94 / 89）。
+  'server/src/app/mark-disputed.ts': { lines: 95, functions: 100, branches: 91, statements: 95 },
   'miniprogram/utils/price-format.js': {
     lines: 100,
     functions: 100,

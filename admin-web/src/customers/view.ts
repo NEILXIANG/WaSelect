@@ -172,3 +172,7 @@ export function customerListQuery(q: { keyword: string; page: number }): string 
 /** 客户详情页拉黑的二次确认正文（与风控页同样写全后果；解除入口就在本页）。 */
 export const CUSTOMER_BLOCK_CONFIRM_TEXT =
   '拉黑后：① 该客户不能再下单；② 其名下未付款的订单（待付款 / 支付中）会被立即取消、库存回补；③ 可在本页或「风控」页解除，但已取消的订单不会恢复。确认继续？';
+
+/** 删除行为记录的二次确认正文（AJ-413）：说清删什么、不删什么、不可恢复。 */
+export const CUSTOMER_PURGE_CONFIRM_TEXT =
+  '只删除该客户在小程序里的浏览、加购、下单、支付等使用记录（隐私政策承诺的"用户要求即删除"）。订单、地址、退款与审计记录不受影响。删除后无法恢复；这次操作与原因会记录下来。';

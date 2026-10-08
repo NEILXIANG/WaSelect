@@ -45,6 +45,7 @@ import { DAILY_JOB_ROW_NAME } from '../ports/scheduler.js';
 import { createDailyReconciliationJob } from './daily-reconciliation.js';
 import { createAutoCompleteJob, createAutoDeliverJob } from './auto-fulfilment.js';
 import { createCleanupLoginAttemptsJob } from './login-attempts-cleanup.js';
+import { createUserEventsRetentionJob } from './user-events-retention.js';
 
 export const INTERNAL_JOBS_PREFIX = '/api/v1/internal/jobs';
 
@@ -162,6 +163,9 @@ export function mountInternalJobsRoutes(
                 fxWarnAfterHours: Math.max(1, deps.config.FX_MAX_AGE_HOURS - 24),
               }),
               createCleanupLoginAttemptsJob(),
+              // AJ-413：行为流 180 天保留期清理，同样放在对账之后——它只删过期的埋点行，不参与任何业务判定；
+              //   必须在 daily 的事务里跑（append-only 触发器的窄口只在事务内有效，见 adapters/user-events.ts）
+              createUserEventsRetentionJob(),
             ],
             { traceId },
           ).catch((e: unknown) => {
