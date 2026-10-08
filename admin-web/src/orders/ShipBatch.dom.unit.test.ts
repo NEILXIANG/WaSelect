@@ -96,9 +96,15 @@ async function confirmWith(el: HTMLElement, count: string): Promise<void> {
 }
 
 describe('订单列表「待发货」：勾选批量发货', () => {
-  it('非待发货页签没有勾选列与批量按钮', async () => {
+  // 测试改动（AJ-407，已批准的行为变更）：原断言"非待发货页签没有勾选列"——AJ-407 起所有页签都可勾选（用于导出所选 / 打印），
+  // 改为断言"勾得了、但没有批量发货与 CSV 导入"，且拒付单在非待发货页签可勾（只导出 / 打印，不发货）。
+  it('非待发货页签：可勾选（导出 / 打印用），但没有批量发货与导入运单号', async () => {
     const el = await open('#/orders');
-    expect(el.querySelector('input[aria-label="选择 261007-7K3QXA"]')).toBeNull();
+    const dispute = el.querySelector('input[aria-label="选择 261007-9P4TZE"]') as HTMLInputElement;
+    expect(dispute.disabled).toBe(false);
+    await click(el.querySelector('input[aria-label="选择 261007-7K3QXA"]'));
+    expect(el.textContent).toContain('已选 1 单');
+    expect(button(el, '批量发货（1）')).toBeNull();
     expect(button(el, '导入运单号（CSV）')).toBeNull();
   });
 

@@ -302,6 +302,22 @@ describe('GET /admin/orders（管理端订单列表）', () => {
     await s.close();
   });
 
+  /**
+   * AJ-407（契约 0.6.48）：行项目带申报价与重量——打印「面单信息」直接读详情，不另开读接口。
+   * @why 申报价是**美分整数**（与契约"金额一律整数最小单位"同口径），不是美元小数：
+   *      报关清单 CSV 才转两位小数（exports.ts），JSON 里给小数会让前端再乘回去时漂 1 分。
+   */
+  it('🔴 详情行项目带 declared_value_usd（美分整数）与 weight_g（AJ-407）', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1' });
+    const r = await adminFetch(s, 'GET', '/api/v1/admin/orders/o-1');
+    expect(r.status).toBe(200);
+    const [line] = r.json['items'] as Array<Record<string, unknown>>;
+    expect(line?.['declared_value_usd']).toBe(7);
+    expect(line?.['weight_g']).toBe(500);
+    await s.close();
+  });
+
   it('status 非法 → 40001；page/size 越界 → 40001', async () => {
     const s = await buildServer();
     expect((await adminFetch(s, 'GET', '/api/v1/admin/orders?status=nope')).status).toBe(400);

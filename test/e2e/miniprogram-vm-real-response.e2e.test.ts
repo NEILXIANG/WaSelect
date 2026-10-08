@@ -134,7 +134,8 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     const d2 = orderDetailView(
       (await call(srv, 'GET', `/api/v1/orders/${orderId}`, { token: buyer })).json,
     );
-    expect(d2.statusText).toBe('已付款');
+    // 测试改动（AJ-407 跑全量 gate 时发现）：M-06 / AJ-405 已批准买家视角文案 paid → "已付款 · 日本采购中"（miniprogram/utils/order-status.js），此处期望值未随之更新
+    expect(d2.statusText).toBe('已付款 · 日本采购中');
     expect(d2.canPay).toBe(false);
     expect(d2.canCancel).toBe(false);
     expect(d2.expiresAtText).toBe(''); // 已付不再显示截止时刻
@@ -143,7 +144,8 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     const rows2 = orderRows(
       (await call(srv, 'GET', '/api/v1/orders', { token: buyer })).json['items'],
     );
-    expect(rows2[0]?.statusText).toBe('已付款');
+    // 同上（M-06 / AJ-405：列表行与详情状态区同一张买家视角词表）
+    expect(rows2[0]?.statusText).toBe('已付款 · 日本采购中');
     expect(rows2[0]?.canPay).toBe(false);
   });
 

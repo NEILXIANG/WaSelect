@@ -11,7 +11,10 @@
  * @why 申报价存的是美分（BIGINT，create-order 用 toMinor 分摊），导出转成两位小数的美元：报关单填的是美元。
  * @limitation 一：不分页、不流式（见 domain/csv.ts）；
  * @limitation 二：表头是英文蛇形（与契约字段同名）：报关代理与运营共用一份，改中文表头要两边确认。
- * @limitation 三：purchase / customs 固定 status = paid（"已付未发"才需要采购和报关），不开放过滤。
+ * @limitation 三：purchase / customs 固定 status = paid（"已付未发"才需要采购和报关），不开放过滤；
+ *              「导出所选」（`orderIds`，AJ-407）与它是 AND——所选里的已发货单不会出现在采购 / 报关表里。
+ * @limitation 四：`orderIds` 只是**过滤**：不存在的 id 静默不出（不报错，与列表筛选同口径）；测试单即便被选中也不出。
+ *              行数不再与"勾了几单"相等——审计里另记 selected（路由层）。
  * @see app/admin-export-routes.ts；domain/csv.ts
  */
 import type { Db } from './db.js';
@@ -36,16 +39,30 @@ const jst = (v: unknown): string | null =>
   v instanceof Date
     ? new Date(v.getTime() + 9 * 3600_000).toISOString().slice(0, 19).replace('T', ' ')
     : null;
+/**
+ * `orderIds` → SQL 片段（AJ-407）：没给 = 不限；给了 = `o.id in (…)`。
+ * @why 三张表共用一个片段：任何一张漏接，"导出所选"就会导出**全部**——多出的单会被当成要采购 / 要报关的单。
+ */
+function idFilter(db: Db, col: 'id' | 'o.id', ids: readonly string[] | undefined) {
+  if (ids === undefined) return db`true`;
+  return col === 'id' ? db`id in ${db([...ids])}` : db`o.id in ${db([...ids])}`;
+}
+
 const usd = (cents: unknown): string | null =>
   cents === null || cents === undefined ? null : (Number(cents) / 100).toFixed(2);
 
-async function ordersTable(db: Db, status: string | undefined): Promise<ExportTable> {
+async function ordersTable(
+  db: Db,
+  status: string | undefined,
+  ids: readonly string[] | undefined,
+): Promise<ExportTable> {
   const rows = await db`
     select order_no, status, created_at, paid_at, shipped_at, items_jpy, shipping_jpy, duty_jpy, total_jpy,
            address_snapshot ->> 'recipient' as recipient, address_snapshot ->> 'state' as state,
            address_snapshot ->> 'country' as country, carrier, tracking_no
       from orders
      where is_test = false and (${status === undefined ? db`true` : db`status = ${status}`})
+       and (${idFilter(db, 'id', ids)})
      order by created_at desc, id desc`;
   return {
     header: [
@@ -83,12 +100,12 @@ async function ordersTable(db: Db, status: string | undefined): Promise<ExportTa
   };
 }
 
-async function purchaseTable(db: Db): Promise<ExportTable> {
+async function purchaseTable(db: Db, ids: readonly string[] | undefined): Promise<ExportTable> {
   const rows = await db`
     select o.order_no, o.paid_at, oi.product_id, oi.title_snapshot, oi.title_ja, oi.jan_code, oi.purchase_source,
            oi.qty, oi.unit_price_jpy, oi.cost_jpy
       from order_items oi join orders o on o.id = oi.order_id
-     where o.status = 'paid' and o.is_test = false
+     where o.status = 'paid' and o.is_test = false and (${idFilter(db, 'o.id', ids)})
      order by o.paid_at, o.id, oi.line_no nulls last, oi.id`;
   return {
     header: [
@@ -118,7 +135,7 @@ async function purchaseTable(db: Db): Promise<ExportTable> {
   };
 }
 
-async function customsTable(db: Db): Promise<ExportTable> {
+async function customsTable(db: Db, ids: readonly string[] | undefined): Promise<ExportTable> {
   const rows = await db`
     select o.order_no, o.address_snapshot as a, oi.qty, oi.weight_g, oi.declared_value_usd,
            coalesce(oi.hs_code, p.hs_code) as hs_code,
@@ -128,7 +145,7 @@ async function customsTable(db: Db): Promise<ExportTable> {
       from order_items oi
       join orders o on o.id = oi.order_id
       join products p on p.id = oi.product_id
-     where o.status = 'paid' and o.is_test = false
+     where o.status = 'paid' and o.is_test = false and (${idFilter(db, 'o.id', ids)})
      order by o.paid_at, o.id, oi.line_no nulls last, oi.id`;
   return {
     header: [
@@ -176,9 +193,9 @@ async function customsTable(db: Db): Promise<ExportTable> {
 export async function exportTable(
   db: Db,
   kind: ExportKind,
-  opts: { status?: string | undefined },
+  opts: { status?: string | undefined; orderIds?: readonly string[] | undefined },
 ): Promise<ExportTable> {
-  if (kind === 'orders') return ordersTable(db, opts.status);
-  if (kind === 'purchase') return purchaseTable(db);
-  return customsTable(db);
+  if (kind === 'orders') return ordersTable(db, opts.status, opts.orderIds);
+  if (kind === 'purchase') return purchaseTable(db, opts.orderIds);
+  return customsTable(db, opts.orderIds);
 }

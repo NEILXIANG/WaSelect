@@ -830,3 +830,42 @@ textarea::placeholder {
   display: block;
   font-size: var(--ws-font-sm);
 }
+
+/* ── 打印拣货单与面单信息（AJ-407）────────────────────────────────
+   @why 用浏览器自带打印（`window.print` + 本段 `@media print`），不生成 PDF、不对接承运商：
+        零依赖；打印时只留打印页本身（侧栏、按钮、Toast 全部隐藏）。
+   @limitation 分页与纸张效果未在真打印机上验证；每单一块尽量不跨页（break-inside: avoid）。 */
+.print-order {
+  border-top: var(--ws-border) solid var(--ws-color-muted);
+  padding-top: var(--ws-space);
+  margin-top: var(--ws-space);
+  break-inside: avoid;
+}
+
+.print-order-no {
+  font-size: var(--ws-font-lg);
+  margin: 0 0 var(--ws-space-sm);
+}
+
+.print-address {
+  line-height: 1.5;
+  margin-bottom: var(--ws-space-sm);
+}
+
+@media print {
+  .sidebar,
+  .no-print,
+  .toast-stack {
+    display: none;
+  }
+
+  .shell {
+    display: block;
+    padding: 0;
+    max-width: none;
+  }
+
+  body {
+    background: var(--ws-color-card);
+  }
+}

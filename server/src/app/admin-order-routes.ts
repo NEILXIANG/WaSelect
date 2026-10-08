@@ -169,6 +169,10 @@ function toAdminOrderItem(i: AdminOrderItemRow, imgBase?: string): Record<string
     title: i.title_snapshot,
     qty: i.qty,
     unit_price_jpy: i.unit_price_jpy,
+    // AJ-407（契约 0.6.48）：打印「面单信息」用——申报价是建单时分摊好的**美分整数**（create-order.ts @limitation 二），
+    // 重量是行项目快照。二者 NOT NULL，恒下发。
+    declared_value_usd: i.declared_value_usd,
+    weight_g: i.weight_g,
     ...(i.title_ja !== null ? { title_ja: i.title_ja } : {}),
     ...(i.jan_code !== null ? { jan_code: i.jan_code } : {}),
     ...(i.purchase_source !== null ? { purchase_source: i.purchase_source } : {}),

@@ -267,6 +267,18 @@ export const SHIP_MAX_CHARS = {
 export const SHIP_BATCH_MAX = 50;
 
 /**
+ * 「导出所选」一次最多几单（AJ-407，契约 0.6.48 `GET /admin/exports/{kind}` 的 `order_ids`）。
+ *
+ * @why 取 100 = 管理端订单列表 `size` 的上限（契约 `GET /admin/orders` size ≤ 100）：勾选只在当前页内（列表重载即清空），
+ *      所以"一页全勾"永远放得下，不会出现"勾得了、导不出"。
+ * @why 要有上限：id 走查询串，没有上限时一次请求可以塞几万个 id 进 `in (…)`；
+ *      而 URL 长度在反代处另有上限（常见 8KB 级，未实测本部署），超了是网关 414、不是我们的 40001——给出确定的上限，错误码才可预期。
+ *      100 × 最长 64 字 ≈ 6.5KB，仍在常见上限内；实际订单 id 远短于 64 字。
+ * @limitation 超过上限整次拒绝（40001），不截断——与 SHIP_BATCH_MAX 同一条理由。
+ */
+export const EXPORT_IDS_MAX = 100;
+
+/**
  * 列表**搜索词**（`keyword`）的字符上限（64；AJ-360 / 第二轮审查 CAT2-07）。
  *
  * @why 它是**唯一**一个客户端可控、且原样进 `ILIKE '%' || kw || '%'` 的输入：

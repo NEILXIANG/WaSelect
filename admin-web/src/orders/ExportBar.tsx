@@ -11,7 +11,7 @@ import { useState } from 'react';
 import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
 import type { AdminApi } from './api.js';
 
-const EXPORTS = [
+export const EXPORTS = [
   { kind: 'orders', label: '导出订单总表' },
   { kind: 'purchase', label: '导出待采购清单' },
   { kind: 'customs', label: '导出报关清单' },
@@ -20,10 +20,10 @@ const EXPORTS = [
 /**
  * 默认下载：链接挂进页面再点、点完移除。
  * @why 扫描 A-01：不挂进 DOM、点完立刻释放 Blob 地址时，Safari 会报 WebKitBlobResource 错误或下载出空文件，
- *      且页面不报任何错；释放推迟到 30 秒后（下载早已开始），见下方 run()。
+ *      且页面不报任何错；释放推迟到 30 秒后（下载早已开始），见下方 requestExport()。
  * @limitation 真浏览器行为未实测（jsdom 不执行下载）；首次部署后在 Safari / Chrome 各导一次确认。
  */
-function defaultDownload(filename: string, url: string): void {
+export function defaultDownload(filename: string, url: string): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
@@ -47,6 +47,37 @@ export interface ExportBarProps {
   onDownload?: (filename: string, url: string) => void;
 }
 
+/**
+ * 发一次导出请求并交给浏览器下载（ExportBar 与「导出所选」SelectionBar 共用，AJ-407）。
+ * @why 抽成函数而不是在 SelectionBar 里抄一份：形状校验（扫描 A-07）、长超时（P2-52）、延迟释放（扫描 A-01）
+ *      三处修过的坑只写一遍，两个入口不会一个修了一个没修。
+ * @param orderIds 给了 = 只导这些单（服务端 `order_ids`，去重后 ≤ EXPORT_IDS_MAX）；不给 = 原有的全部导出。
+ * @throws ApiError 请求失败或响应形状不对（调用方决定怎么提示）。
+ */
+export async function requestExport(
+  api: AdminApi,
+  kind: string,
+  onDownload: (filename: string, url: string) => void,
+  orderIds?: readonly string[],
+): Promise<void> {
+  const qs =
+    orderIds === undefined ? '' : `?order_ids=${orderIds.map(encodeURIComponent).join(',')}`;
+  const r = (await api({
+    path: `/api/v1/admin/exports/${kind}${qs}`,
+    timeoutMs: EXPORT_TIMEOUT_MS,
+  })) as {
+    filename?: unknown;
+    csv?: unknown;
+  } | null;
+  // 扫描 A-07：形状不对就报错，不下载一个叫 undefined、内容是 "undefined" 的文件
+  if (typeof r?.filename !== 'string' || typeof r.csv !== 'string') {
+    throw new ApiError(NETWORK_ERROR_CODE, '导出响应形状与契约不符', '');
+  }
+  const url = URL.createObjectURL(new Blob([r.csv], { type: 'text/csv;charset=utf-8' }));
+  onDownload(r.filename, url);
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
+}
+
 export function ExportBar({ api, onDownload = defaultDownload }: ExportBarProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -55,20 +86,7 @@ export function ExportBar({ api, onDownload = defaultDownload }: ExportBarProps)
     setBusy(true);
     setError('');
     try {
-      const r = (await api({
-        path: `/api/v1/admin/exports/${kind}`,
-        timeoutMs: EXPORT_TIMEOUT_MS,
-      })) as {
-        filename?: unknown;
-        csv?: unknown;
-      } | null;
-      // 扫描 A-07：形状不对就报错，不下载一个叫 undefined、内容是 "undefined" 的文件
-      if (typeof r?.filename !== 'string' || typeof r.csv !== 'string') {
-        throw new ApiError(NETWORK_ERROR_CODE, '导出响应形状与契约不符', '');
-      }
-      const url = URL.createObjectURL(new Blob([r.csv], { type: 'text/csv;charset=utf-8' }));
-      onDownload(r.filename, url);
-      setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
+      await requestExport(api, kind, onDownload);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {

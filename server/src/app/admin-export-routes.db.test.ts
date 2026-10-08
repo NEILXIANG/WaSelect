@@ -14,6 +14,7 @@ import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { signToken } from './auth.js';
+import { EXPORT_IDS_MAX } from '@waselect/shared';
 
 let db: Db;
 let sink: MemorySink;
@@ -216,6 +217,137 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
         (await call(url, 'GET', '/api/v1/admin/exports/orders', undefined, await bearer(false)))
           .status,
       ).toBe(403);
+    } finally {
+      await close();
+    }
+  });
+
+  // ── AJ-407（契约 0.6.48）：导出所选 `order_ids` ──────────────────────────────
+  // @why 三类共用同一个过滤：只测 customs 的话，purchase / orders 漏接这个参数时导出的是**全部**订单，
+  //      而运营以为导的是勾的那几单——多出来的单会被当成"要采购 / 要报关"处理。
+  it('🔴 order_ids：三类都只出所选；未知 id 忽略；测试单即便被选中也不出', async () => {
+    await seedOrder('o-1', 'paid');
+    await seedOrder('o-2', 'paid');
+    await seedOrder('o-t', 'paid', true);
+    const { url, close } = await buildServer();
+    try {
+      const token = await bearer();
+      for (const kind of ['customs', 'purchase', 'orders']) {
+        const r = await call(
+          url,
+          'GET',
+          `/api/v1/admin/exports/${kind}?order_ids=o-2,o-t,o-nope`,
+          undefined,
+          token,
+        );
+        expect(r.status).toBe(200);
+        const ls = lines((r.body as { csv: string }).csv);
+        expect(ls, kind).toHaveLength(2); // 表头 + o-2
+        expect(ls[1], kind).toContain('WSo-2');
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  it('🔴 order_ids 与 status 是 AND（orders）；purchase / customs 仍只出 paid（所选里的已发货单不出）', async () => {
+    await seedOrder('o-1', 'paid');
+    await seedOrder('o-2', 'shipped');
+    const { url, close } = await buildServer();
+    try {
+      const token = await bearer();
+      const both = await call(
+        url,
+        'GET',
+        '/api/v1/admin/exports/orders?order_ids=o-1,o-2&status=shipped',
+        undefined,
+        token,
+      );
+      const ls = lines((both.body as { csv: string }).csv);
+      expect(ls).toHaveLength(2);
+      expect(ls[1]).toContain('WSo-2');
+      const customs = await call(
+        url,
+        'GET',
+        '/api/v1/admin/exports/customs?order_ids=o-1,o-2',
+        undefined,
+        token,
+      );
+      const cl = lines((customs.body as { csv: string }).csv);
+      expect(cl).toHaveLength(2);
+      expect(cl[1]).toContain('WSo-1');
+    } finally {
+      await close();
+    }
+  });
+
+  it('🔴 order_ids 非法 → 40001（空串 / 空段 / 重复参数 / 超长 id / 超过上限），一行都不导、不写审计；恰好上限放行', async () => {
+    await seedOrder('o-1', 'paid');
+    const { url, close } = await buildServer();
+    try {
+      const token = await bearer();
+      const many = (n: number): string =>
+        Array.from({ length: n }, (_, i) => `x-${String(i)}`).join(',');
+      const bad = [
+        'order_ids=',
+        'order_ids=o-1,',
+        'order_ids=o-1,,o-2',
+        'order_ids=o-1&order_ids=o-2',
+        `order_ids=${'x'.repeat(65)}`,
+        `order_ids=${many(EXPORT_IDS_MAX + 1)}`,
+      ];
+      for (const qs of bad) {
+        const r = await call(url, 'GET', `/api/v1/admin/exports/orders?${qs}`, undefined, token);
+        expect(r.status, qs.slice(0, 40)).toBe(400);
+        expect(code(r), qs.slice(0, 40)).toBe(40001);
+      }
+      expect(await db`select 1 from admin_audit`).toHaveLength(0);
+      const edge = await call(
+        url,
+        'GET',
+        `/api/v1/admin/exports/orders?order_ids=${many(EXPORT_IDS_MAX - 1)},o-1`,
+        undefined,
+        token,
+      );
+      expect(edge.status).toBe(200);
+      expect(lines((edge.body as { csv: string }).csv)).toHaveLength(2);
+      // 同一 id 写两次按一次算（去重），不报错
+      const dup = await call(
+        url,
+        'GET',
+        '/api/v1/admin/exports/orders?order_ids=o-1,o-1',
+        undefined,
+        token,
+      );
+      expect(lines((dup.body as { csv: string }).csv)).toHaveLength(2);
+      // 上限按**去重后**计：恰好上限个不同 id 再重复一个，不算超限
+      const atMax = await call(
+        url,
+        'GET',
+        `/api/v1/admin/exports/orders?order_ids=${many(EXPORT_IDS_MAX)},x-0`,
+        undefined,
+        token,
+      );
+      expect(atMax.status).toBe(200);
+    } finally {
+      await close();
+    }
+  });
+
+  it('🔴 导出所选的审计 after 带所选单数（selected）；不带 order_ids 时形状不变', async () => {
+    await seedOrder('o-1', 'paid');
+    await seedOrder('o-2', 'paid');
+    const { url, close } = await buildServer();
+    try {
+      await call(
+        url,
+        'GET',
+        '/api/v1/admin/exports/customs?order_ids=o-1,o-2,o-nope',
+        undefined,
+        await bearer(),
+      );
+      const [a] = await db`select after from admin_audit`;
+      expect(a?.['after']).toEqual({ rows: 2, selected: 3 });
     } finally {
       await close();
     }
