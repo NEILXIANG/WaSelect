@@ -39,6 +39,7 @@ import { requireRole } from './auth.js';
 import { toImageSet } from './product-routes.js';
 import { createCatalogAdminRepo, type AdminProductRow } from '../adapters/catalog-admin.js';
 import { validateProductInput } from '../domain/product-input.js';
+import { fitsShippingTable } from '../domain/shipping-fit.js';
 import { isImageId } from '../domain/upload-image.js';
 import { setAuditTarget } from './admin-audit.js';
 
@@ -184,6 +185,23 @@ export function expectedUpdatedAtOf(body: unknown): string {
 
 export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDeps): void {
   const repo = createCatalogAdminRepo(deps.db);
+
+  /**
+   * P2-30：在售商品"单件 + 包材"必须落在当前生效运费表的最高档内，否则 40918。
+   * @why 放在上架 / 改在售 / 重新上架三处，而不是报价时：报价时才发现，是买家已经加购了。
+   */
+  const assertFitsShipping = async (productId: string | null, weightG: number): Promise<void> => {
+    const maxTier = await repo.maxActiveShippingTierG();
+    if (fitsShippingTable(weightG, deps.config.PACKAGING_WEIGHT_G, maxTier)) return;
+    const details = {
+      product_id: productId,
+      weight_g: weightG,
+      packaging_weight_g: deps.config.PACKAGING_WEIGHT_G,
+      max_tier_weight_g: maxTier,
+    };
+    deps.logger.warn('admin_product_overweight_for_shipping', { result: 'rejected', ctx: details });
+    throw new AppError(40918, details);
+  };
   const guard = requireRole('admin', deps.auth, { identity: deps.identity });
   const imgBase = deps.config.IMG_BASE_URL;
 
@@ -239,6 +257,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
       try {
         const r = validateProductInput(req.body, deps.config.MAX_ORDER_JPY);
         if (!r.ok) rejectInvalid(deps.logger, r.errors);
+        await assertFitsShipping(null, r.value.weight_g); // 新建即上架（status: 'active'）
         const row = await repo.insertProduct({
           id: deps.idGen.uuid(),
           title: r.value.title,
@@ -286,6 +305,9 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         //      也不要它继续"能用"——能用但会丢别人的改动，比不能用危险得多。
         const expected = expectedUpdatedAtOf(req.body);
         const expectedStock = expectedStockOf(req.body, r.value.stock !== undefined);
+        // 只判**在售**的：下架中允许先把真实重量录进来，重新上架时再判（PATCH /status）
+        const current = await repo.findStatusAndWeight(id);
+        if (current?.status === 'active') await assertFitsShipping(id, r.value.weight_g);
         const result = await repo.updateProduct(id, {
           expectedUpdatedAt: expected,
           ...(expectedStock !== undefined ? { expectedStock } : {}),
@@ -342,6 +364,10 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         const status = (req.body as { status?: unknown } | undefined)?.status;
         if (typeof status !== 'string' || !(PRODUCT_STATUS as readonly string[]).includes(status)) {
           throw new AppError(40001, { reason: 'status_invalid' });
+        }
+        if (status === 'active') {
+          const current = await repo.findStatusAndWeight(id);
+          if (current !== null) await assertFitsShipping(id, current.weightG);
         }
         const hit = await repo.setProductStatus(id, status as 'active' | 'offline');
         if (!hit) throw new AppError(40401, { product_id: id });

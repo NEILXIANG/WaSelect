@@ -64,6 +64,7 @@ import { requireRole } from './auth.js';
 import { setAuditBefore, setAuditTarget } from './admin-audit.js';
 import {
   createOpsConfigRepo,
+  ShippingTableTooLightError,
   type FxRateRow,
   type OpsConfigRepo,
   type ShippingRateRow,
@@ -240,6 +241,28 @@ export function mountAdminOpsRoutes(app: Express, deps: AdminOpsRoutesDeps): voi
     })();
   });
 
+  /** 换表；会把在售商品挤出最高档 → 40918（P2-30），`data.product_id` 指出最重的那件。 */
+  const replaceOrReject = async (
+    rows: Parameters<typeof repo.replaceShippingRates>[0],
+  ): Promise<Awaited<ReturnType<typeof repo.replaceShippingRates>>> => {
+    try {
+      return await repo.replaceShippingRates(rows, {
+        packagingWeightG: deps.config.PACKAGING_WEIGHT_G,
+      });
+    } catch (e) {
+      if (!(e instanceof ShippingTableTooLightError)) throw e;
+      deps.logger.warn('admin_shipping_rates_rejected', {
+        result: 'rejected',
+        ctx: { product_id: e.productId, weight_g: e.weightG, max_tier_weight_g: e.maxTierWeightG },
+      });
+      throw new AppError(
+        40918,
+        { product_id: e.productId, weight_g: e.weightG, max_tier_weight_g: e.maxTierWeightG },
+        { product_id: e.productId },
+      );
+    }
+  };
+
   app.put('/api/v1/admin/shipping-rates', guard, (req, res, next) => {
     void (async () => {
       try {
@@ -248,7 +271,7 @@ export function mountAdminOpsRoutes(app: Express, deps: AdminOpsRoutesDeps): voi
         // 🔴 用**仓储在锁内读出的**那一份（AJ-354），不要在这里先读一次：
         //    锁外读的 before 在并发保存时是"最初那张表"，而本次真正覆盖掉的是
         //    "刚才别人提交的那张表"——审计会答错，且错得毫无症状。
-        const { before, after } = await repo.replaceShippingRates(rows);
+        const { before, after } = await replaceOrReject(rows);
         setAuditBefore(res, before.map(toShippingRate)); // 审计流 B 的改前值（AJ-183）：整表替换不可逆
         deps.logger.info('admin_shipping_rates_replaced', {
           result: 'ok',

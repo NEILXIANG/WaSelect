@@ -91,6 +91,24 @@ export interface ShippingRatesReplaced {
   after: ShippingRateRow[];
 }
 
+/**
+ * 换表会把某件**在售**商品挤出最高档（P2-30）：在事务内抛出 ⇒ 整次替换回滚，旧表原样保留。
+ * @why 用专门的错误类而不是改返回值：`replaceShippingRates` 的十余处调用方读 `{before, after}`，
+ *      "失败"本来就该让事务回滚，抛出是 `withTransaction` 回滚的唯一出口。路由把它映射成 40918。
+ */
+export class ShippingTableTooLightError extends Error {
+  constructor(
+    readonly productId: string,
+    readonly weightG: number,
+    readonly maxTierWeightG: number,
+  ) {
+    super(
+      `在售商品 ${productId}（${String(weightG)}g + 包材）超过新运费表最高档 ${String(maxTierWeightG)}g`,
+    );
+    this.name = 'ShippingTableTooLightError';
+  }
+}
+
 export interface OpsConfigRepo {
   /** 全部汇率行（含历史与未来）；排序见 @limitation 一。 */
   listFxRates(): Promise<FxRateRow[]>;
@@ -101,7 +119,10 @@ export interface OpsConfigRepo {
   /** 全部档位（含停用）；carrier 升序、同承运商内上限升序。 */
   listShippingRates(): Promise<ShippingRateRow[]>;
   /** 🔴 事务内整表替换（@why）；返回**替换前后**两张表（@see ShippingRatesReplaced）。 */
-  replaceShippingRates(rows: readonly ShippingRateInput[]): Promise<ShippingRatesReplaced>;
+  replaceShippingRates(
+    rows: readonly ShippingRateInput[],
+    guard?: { packagingWeightG: number },
+  ): Promise<ShippingRatesReplaced>;
 }
 
 /**
@@ -173,7 +194,10 @@ export function createOpsConfigRepo(db: Db): OpsConfigRepo {
 
     listShippingRates: () => selectShippingRates(db),
 
-    async replaceShippingRates(rows: readonly ShippingRateInput[]): Promise<ShippingRatesReplaced> {
+    async replaceShippingRates(
+      rows: readonly ShippingRateInput[],
+      guard?: { packagingWeightG: number },
+    ): Promise<ShippingRatesReplaced> {
       return withTransaction(db, async (tx) => {
         // 🔴 B22 / AJ-204：**整表替换必须串行**（表级排他锁），否则结果是两次输入的**并集**。
         //    READ COMMITTED 下：先到事务 A 的 `delete` + `insert` 都还没提交，
@@ -211,6 +235,30 @@ export function createOpsConfigRepo(db: Db): OpsConfigRepo {
             insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
             values (${r.carrier}, ${r.maxWeightG}, ${r.priceJpy}, ${r.active})
           `;
+        }
+        // P2-30：新表的最高生效档必须装得下每件在售商品（单件 + 包材，与报价同口径）。
+        // @why 在锁内、插入之后判：判的就是即将提交的这张表；不过就抛 ⇒ 回滚，旧表不动。
+        // @why 没有任何生效档时不判（与 domain/shipping-fit.ts 同口径：此时报价本就 50004）。
+        if (guard !== undefined) {
+          const [top] = await tx`
+            select max(max_weight_g)::int as m from shipping_rates where active = true
+          `;
+          const maxTier = top?.['m'] === null || top?.['m'] === undefined ? null : Number(top['m']);
+          if (maxTier !== null) {
+            const [heavy] = await tx`
+              select id, weight_g from products
+               where status = 'active' and weight_g + ${guard.packagingWeightG} > ${maxTier}
+               order by weight_g desc, id
+               limit 1
+            `;
+            if (heavy !== undefined) {
+              throw new ShippingTableTooLightError(
+                String(heavy['id']),
+                Number(heavy['weight_g']),
+                maxTier,
+              );
+            }
+          }
         }
         return { before, after: await selectShippingRates(tx) };
       });

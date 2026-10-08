@@ -593,3 +593,49 @@ describe('PUT /admin/shipping-rates', () => {
     }
   });
 });
+
+/**
+ * P2-30 的另一半：换运费表不能把**在售商品**挤出最高档（否则那件商品从此报不了价）。
+ * 默认 PACKAGING_WEIGHT_G = 250。
+ */
+describe('PUT /admin/shipping-rates 不得装不下在售商品（P2-30 / 40918）', () => {
+  async function seedProduct(id: string, weightG: number, status: string): Promise<void> {
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, status,
+                            customs_desc_en, origin_country, hs_code)
+      values (${id}, ${'重货 ' + id}, 'kitchen', 9800, ${weightG}, 3, ${status},
+              'kitchen knife set', 'JP', '8211.91')
+    `;
+  }
+
+  it('🔴 新表最高 2000、在售商品 1800g（+250 = 2050）→ 409/40918，data 指出是哪件，旧表原样保留', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await db`
+        insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
+        values ('old', 5000, 9200, true)
+      `;
+      await seedProduct('p-heavy', 1800, 'active');
+      const r = await call(url, 'PUT', '/api/v1/admin/shipping-rates', RATES, await bearer());
+      expect(r.status).toBe(409);
+      expect(code(r)).toBe(40918);
+      expect((r.body as { data?: { product_id?: string } }).data?.product_id).toBe('p-heavy');
+      const rows = await db`select carrier, max_weight_g from shipping_rates`;
+      expect(rows.map((x) => [x['carrier'], x['max_weight_g']])).toEqual([['old', 5000]]);
+    } finally {
+      await close();
+    }
+  });
+
+  it('同样重的商品已下架 → 放行（下架品不报价）；1750g 在售（+250 = 2000 恰好最高档）→ 放行', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await seedProduct('p-off', 9000, 'offline');
+      await seedProduct('p-edge', 1750, 'active');
+      const r = await call(url, 'PUT', '/api/v1/admin/shipping-rates', RATES, await bearer());
+      expect(r.status).toBe(200);
+    } finally {
+      await close();
+    }
+  });
+});

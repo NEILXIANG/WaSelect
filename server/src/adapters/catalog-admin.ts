@@ -136,6 +136,14 @@ export interface CatalogAdminRepo {
   updateProduct(id: string, row: AdminProductUpdate): Promise<UpdateProductResult>;
   /** @returns 是否命中（id 不存在 → false） */
   setProductStatus(id: string, status: 'active' | 'offline'): Promise<boolean>;
+  /**
+   * 生效运费档的最高 `max_weight_g`；没有任何生效档 → null（P2-30，@see domain/shipping-fit.ts）。
+   * @limitation 与上架写入不在同一事务：判过之后、写入之前若有人换表，仍可能放进一件装不下的商品——
+   *             换表那一侧在锁内另判一次（ops-config `replaceShippingRates`），两侧合起来只剩这一瞬的窗口。
+   */
+  maxActiveShippingTierG(): Promise<number | null>;
+  /** 某件商品当前的上下架状态与重量（改 / 重新上架前判 P2-30 用）；不存在 → null。 */
+  findStatusAndWeight(id: string): Promise<{ status: string; weightG: number } | null>;
 }
 
 const COLS = `id, title, category, description, images, price_jpy, cost_jpy, weight_g, stock,
@@ -256,6 +264,19 @@ export function createCatalogAdminRepo(db: Db): CatalogAdminRepo {
         update products set status = ${status}, updated_at = now() where id = ${id} returning id
       `;
       return rows.length > 0;
+    },
+
+    async maxActiveShippingTierG() {
+      const [r] =
+        await db`select max(max_weight_g)::int as m from shipping_rates where active = true`;
+      return r?.['m'] === null || r?.['m'] === undefined ? null : Number(r['m']);
+    },
+
+    async findStatusAndWeight(id) {
+      const [r] = await db`select status, weight_g from products where id = ${id}`;
+      return r === undefined
+        ? null
+        : { status: String(r['status']), weightG: Number(r['weight_g']) };
     },
   };
 }

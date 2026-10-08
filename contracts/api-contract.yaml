@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.42
+  version: 0.6.43
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -456,7 +456,7 @@ info:
       ② **一律排除测试单**（`is_test = false`）——工作台是经营数据，审核期的测试单混进"今日销售额"不会报错；
       ③ `orders` 按 `created_at` 落窗，`paid_orders` / `sales_jpy` 按 **`paid_at`** 落窗（跨日的单不算在昨天）；
       ④ `received` / `refunded` / `disputed` **按实际扣款币种分行、不折算**（§8-2：这几个数要和支付机构对账，折算后对不上）；
-      ⑤ `refunded` = 全额退款单（`payments` 被标 refunded 那条的 charge_amount）+ 部分退款 `succeeded` 行（且订单当前非 refunded）——
+      ⑤ `refunded` = 全额退款单（`payments` 被标 refunded 那条的 charge_amount）+ 部分退款 `succeeded` 行（且订单当前非 refunded）〔⚠️ 0.6.43 已订正，见该条 ②〕——
          全额退款**不写** `order_refunds`，只取一个来源必然漏一半；
       ⑥ `fx`（当日生效 USD 展示汇率）**在没有已生效汇率时整键省略**（与 0.6.33 的 urls / seller 同口径：没配就不编占位值）；
       ⑦ `avg_jpy` 在窗口内零收款订单时为 **null 而不是 0**——"0 円客单价"分不清是没单还是算错。
@@ -468,6 +468,13 @@ info:
       ③ `author` 恒为 `admin:<id>`；`author_email` 为作者**当前**邮箱，取不到时**省略键**（与 0.6.40 `actor_email` 同口径）；
       ④ 任何订单状态都可追加（售后沟通常发生在退款之后）；POST 照常进 `admin_audit`；
       ⑤ 仅管理端可见：不进买家侧任何响应，也不发通知。
+    0.6.43（AJ-399：第三轮缺口 P2-30——上架重量对齐运费表；AJ-397 订正 0.6.41 ⑤ 口径）：
+      ① 新增错误码 **40918**（409）：在售商品"单件 + `PACKAGING_WEIGHT_G`"超过**当前生效**运费表的最高档。出口四处：
+         `POST /admin/products`（新建即上架）、`PUT /admin/products/{id}`（仅当该商品在售）、
+         `PATCH /admin/products/{id}/status` → active、`PUT /admin/shipping-rates`（新表装不下某件在售商品；整次替换回滚，
+         `data.product_id` 指出最重的那件）。没有任何生效档时不判（报价本就 50004）。
+      ② 0.6.41 ⑤ `refunded` 口径订正（AJ-397）：整单退款那笔记**实际出账** `charge_amount − 已成功部分退款`，按 `orders.refunded_at` 落窗；
+         部分退款 `succeeded` 行按各自落定时刻落窗，**不再**因订单后来整单退而排除。全时段合计不变，按天的读数由此对上真实出账。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -502,6 +509,7 @@ x-error-codes:
     40914: 这条内容在你打开之后被别人改过了（0.6.18：PUT /admin/products/{id} 的乐观锁冲突；0.6.30 起 PUT /admin/banners/{id} 同用；整行未写，前端须保留表单并提示刷新后对照最新值再保存）
     40916: 店铺暂停接单，请稍后再来（0.6.36：全局停售开关打开时，报价 / 建单 / 发起支付返回本码；回调、退款、发货不受影响）
     40917: 收货地址已达上限（20 个），请先删除不用的地址（0.6.36：POST /addresses）
+    40918: 运费表最高档装不下这件商品（含包材重量）（0.6.43：建 / 改在售商品、重新上架、整表替换运费表；换表时 data.product_id 指出是哪件）
     40915: 这张订单不属于你要拉黑的这个用户（0.6.21：POST /admin/users/{id}/block 带了 order_id 但归属核对不过；整条请求未写）
     42901: 请求过于频繁
     50000: 服务器内部错误
@@ -756,7 +764,7 @@ paths:
       summary: 管理员建商品（响应带 id：前端用它打后续的 PUT /{id}）
       description: 0.6.6 补：上架校验命中任一条即 40001（见 ProductInput.compliance_tags 的七禁标签与 customs_desc_en 词表；weight_g / price_jpy 也在此校验）
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProductInput'}}}}
-      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/products/{id}:
     put:
       summary: 更新商品字段（**不改上下架状态**；stock 省略即不改）；带**乐观锁**：expected_updated_at 对不上 → **40914**
@@ -770,7 +778,7 @@ paths:
       description: 0.6.6 补：status 只收 active / offline，其它值 40001；0 行命中一律 40401（不静默 200）
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {status: {type: string, enum: [active, offline]}}}}}}
-      responses: {'200': {description: 'OK（回 {id, status}：让前端不必为了确认结果再拉一次列表）', content: {application/json: {schema: {type: object, properties: {id: {type: string}, status: {type: string, enum: [active, offline]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+      responses: {'200': {description: 'OK（回 {id, status}：让前端不必为了确认结果再拉一次列表）', content: {application/json: {schema: {type: object, properties: {id: {type: string}, status: {type: string, enum: [active, offline]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/upload:
     post:
       summary: 图片上传（multipart，服务端写对象存储并生成 thumb/card/detail 三档 webp；响应 ImageSet 增带 image_key = detail 档键）
@@ -795,7 +803,7 @@ paths:
       summary: 整表替换运费分档（**事务内** delete + insert；中途失败整表回滚）
       description: 🔴 启用的承运商必须**恰好一家**——否则 resolveSingleActiveCarrier() ≠1 家 → 全站 50004 无法报价（AJ-148 ③）。空表 / 重复档 / 全停用同样 40001。无响应体（契约没定义 body）
       requestBody: {required: true, content: {application/json: {schema: {type: array, minItems: 1, items: {$ref: '#/components/schemas/ShippingRate'}}}}}
-      responses: {'200': {description: 'OK（无响应体：前端保存后重新 GET）'}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+      responses: {'200': {description: 'OK（无响应体：前端保存后重新 GET）'}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/banners:
     get:
       summary: Banner 列表（D-51；**全量**：含停用与未开始的，不过滤时间窗）
@@ -944,7 +952,7 @@ components:
     AdminAuditEntry: {type: object, description: '0.6.32：管理员操作审计一行（不含 before / after）。status_code 缺失 = 当时没记（CLI 路径或迁移 025 之前）', required: [id, actor, action, created_at], properties: {id: {type: integer}, actor: {type: string}, actor_email: {type: string, description: '0.6.40：actor 为 admin:<id> 时的管理员邮箱；CLI / 已删账号省略'}, action: {type: string}, target: {type: string}, status_code: {type: integer}, trace_id: {type: string}, created_at: {type: string, format: date-time}}}
     OrderNote: {type: object, description: '0.6.42：订单内部备注（迁移 034，append-only）', required: [id, author, body, created_at], properties: {id: {type: string}, author: {type: string, description: '恒为 admin:<id>'}, author_email: {type: string, description: '作者当前邮箱；取不到时省略'}, body: {type: string, maxLength: 1000}, created_at: {type: string, format: date-time}}}
     MoneyByCurrency: {type: object, description: '0.6.41：按币种分行的一笔钱。`amount` 恒为该币种的**最小单位**（JPY=円，USD=分），不折算、不跨币种相加', required: [currency, amount], properties: {currency: {type: string, description: 'ISO 4217，如 JPY / USD'}, amount: {type: integer}}}
-    AdminSalesWindow: {type: object, description: '0.6.41：一个窗口（左闭右开，JST 日界）的销售统计', required: [from, to, orders, paid_orders, sales_jpy, received, refunded, disputed], properties: {from: {type: string, format: date-time, description: '含'}, to: {type: string, format: date-time, description: '不含；恒为某个 JST 日的 00:00（今日窗口的 to = 明日 00:00）'}, orders: {type: integer, description: '窗口内创建的订单数（不含测试单）'}, paid_orders: {type: integer, description: '窗口内收款的订单数（paid_at 落窗）'}, sales_jpy: {type: integer, description: '窗口内收款订单的 total_jpy 合计（円）'}, avg_jpy: {type: integer, nullable: true, description: '客单价（円，四舍五入）；窗口内零收款订单时为 **null 而不是 0**'}, received: {type: array, description: '实收：payments 的实扣金额，按扣款币种分行', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, refunded: {type: array, description: '已退：全额退款单 + 部分退款 succeeded 行，按币种分行', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, disputed: {type: array, description: '拒付：机构报的 dispute_amount，按开案时间落窗', items: {$ref: '#/components/schemas/MoneyByCurrency'}}}}
+    AdminSalesWindow: {type: object, description: '0.6.41：一个窗口（左闭右开，JST 日界）的销售统计', required: [from, to, orders, paid_orders, sales_jpy, received, refunded, disputed], properties: {from: {type: string, format: date-time, description: '含'}, to: {type: string, format: date-time, description: '不含；恒为某个 JST 日的 00:00（今日窗口的 to = 明日 00:00）'}, orders: {type: integer, description: '窗口内创建的订单数（不含测试单）'}, paid_orders: {type: integer, description: '窗口内收款的订单数（paid_at 落窗）'}, sales_jpy: {type: integer, description: '窗口内收款订单的 total_jpy 合计（円）'}, avg_jpy: {type: integer, nullable: true, description: '客单价（円，四舍五入）；窗口内零收款订单时为 **null 而不是 0**'}, received: {type: array, description: '实收：payments 的实扣金额，按扣款币种分行', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, refunded: {type: array, description: '已退：整单退款实际出账（charge − 已成功部分退款，按 refunded_at）+ 部分退款 succeeded 行（按落定时刻），按币种分行（0.6.43 订正）', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, disputed: {type: array, description: '拒付：机构报的 dispute_amount，按开案时间落窗', items: {$ref: '#/components/schemas/MoneyByCurrency'}}}}
     AdminSalesOverview: {type: object, description: '0.6.41：`GET /admin/dashboard/sales` 的响应', required: [generated_at, today, last7], properties: {generated_at: {type: string, format: date-time, description: '服务端取钟时刻；两个窗口共用它，故 today ⊆ last7'}, today: {$ref: '#/components/schemas/AdminSalesWindow'}, last7: {$ref: '#/components/schemas/AdminSalesWindow', description: '含当日在内的 7 个自然日'}, fx: {type: object, description: '当日生效的 USD 展示汇率（含缓冲），供前端把円折成 ≈USD 灰字辅显（§8-2）。**没有已生效汇率时整键省略**', required: [usd_rate, usd_effective_from], properties: {usd_rate: {type: number, description: '1 JPY = ? USD；与 `fx_rates.rate` 同值（raw_rate × (1 + buffer)）'}, usd_effective_from: {type: string, format: date-time}}}}}
     Banner: {allOf: [{$ref: '#/components/schemas/BannerInput'}, {type: object, properties: {id: {type: string}, image: {type: string, description: 'img.<domain> 完整 URL'}, updated_at: {type: string, format: date-time, description: '0.6.30：仅 GET /admin/banners 回显，作为 PUT 的 expected_updated_at'}}}]}
     Dispute: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, payment_id: {type: string}, dispute_id: {type: string}, dispute_status: {type: string, enum: [open, won, lost, withdrawn], description: 'withdrawn（0.6.13 / B1 AJ-193）= 机构撤回、未进入正式拒付（查询函 warning_closed / Radar prevented）：解除 has_dispute 限制、不计输赢。lost 是唯一保持限制的结案结果'}, dispute_amount: {type: integer, description: '**最小货币单位**（同 charge_amount）：3350 = $33.50（B43 / AJ-214）'}, charge_currency: {type: string}, opened_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time}}}

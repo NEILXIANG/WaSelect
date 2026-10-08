@@ -611,3 +611,98 @@ describe('AJ-361：管理端按 image_id 存商品图', () => {
     await s.close();
   });
 });
+
+/**
+ * P2-30（第三轮缺口）：在售商品"单件 + 包材"必须落在**当前生效运费表**的最高档内。
+ * @why 商品重量上界 `PRODUCT_MAX_WEIGHT_G` 跟的是运费表**能装多重**（30kg 结构上限），不是**实际配了多重**：
+ *      表只配到 10kg 时 10–29kg 的商品照样能上架，买家加购后报价才撞 40912——问题暴露在最晚、最不该的那一步。
+ * @see domain/shipping-fit.ts；默认 PACKAGING_WEIGHT_G = 250（config.ts）
+ */
+describe('上架重量 vs 运费表最高档（P2-30 / 40918）', () => {
+  async function seedRates(maxes: readonly number[]): Promise<void> {
+    for (const [i, m] of maxes.entries()) {
+      await db`
+        insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
+        values ('Japan Post EMS', ${m}, ${1400 + i * 1000}, true)
+      `;
+    }
+  }
+
+  async function post(s: { url: string }, weight: number): Promise<Response> {
+    return fetch(`${s.url}/api/v1/admin/products`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${await adminToken()}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body({ weight_g: weight })),
+    });
+  }
+
+  it('🔴 建商品：9750g（+250 包材 = 10000，恰好最高档）放行；9751g → 409/40918 且库里没多出行', async () => {
+    await seedRates([2000, 10000]);
+    const s = await buildServer();
+    try {
+      expect((await post(s, 9750)).status).toBe(201);
+      const before = (await db`select count(*)::int as n from products`)[0]?.n;
+      const r = await post(s, 9751);
+      expect(r.status).toBe(409);
+      expect(((await r.json()) as { code: number }).code).toBe(40918);
+      expect((await db`select count(*)::int as n from products`)[0]?.n).toBe(before);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('没有任何生效运费档 → 不判（此时报价本就 50004，不该连商品都建不了）', async () => {
+    const s = await buildServer();
+    try {
+      expect((await post(s, 20000)).status).toBe(201);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('🔴 改在售商品把重量改超 → 40918；下架中的商品改超放行，但重新上架 → 40918', async () => {
+    await seedRates([10000]);
+    const s = await buildServer();
+    try {
+      const id = String(((await (await post(s, 800)).json()) as { id: string }).id);
+      const putWeight = async (w: number): Promise<{ status: number; code: unknown }> => {
+        const at = (
+          (await db`select updated_at from products where id = ${id}`)[0]?.['updated_at'] as Date
+        ).toISOString();
+        const r = await fetch(`${s.url}/api/v1/admin/products/${id}`, {
+          method: 'PUT',
+          headers: {
+            authorization: `Bearer ${await adminToken()}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(body({ weight_g: w, expected_updated_at: at })),
+        });
+        return { status: r.status, code: ((await r.json()) as { code?: unknown }).code };
+      };
+      const setStatus = async (status: string): Promise<{ status: number; code: unknown }> => {
+        const r = await fetch(`${s.url}/api/v1/admin/products/${id}/status`, {
+          method: 'PATCH',
+          headers: {
+            authorization: `Bearer ${await adminToken()}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ status }),
+        });
+        return { status: r.status, code: ((await r.json()) as { code?: unknown }).code };
+      };
+
+      expect(await putWeight(12000)).toEqual({ status: 409, code: 40918 });
+      expect((await db`select weight_g from products where id = ${id}`)[0]?.weight_g).toBe(800);
+
+      expect((await setStatus('offline')).status).toBe(200);
+      expect((await putWeight(12000)).status).toBe(200); // 下架中：允许先把真实重量录进来
+      expect(await setStatus('active')).toEqual({ status: 409, code: 40918 });
+      expect((await db`select status from products where id = ${id}`)[0]?.status).toBe('offline');
+    } finally {
+      await s.close();
+    }
+  });
+});
