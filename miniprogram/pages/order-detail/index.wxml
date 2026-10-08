@@ -40,6 +40,15 @@
           <text class="ws-title head__status-text">{{view.statusText}}</text>
         </view>
         <text class="ws-note hint" wx:if="{{view.nextText}}">{{view.nextText}}</text>
+        <!-- M-12（AJ-408）：进度条（vm utils/order-progress.js）。终态（取消 / 超时 / 退款）= 点亮到发生前那一步 + 分支标签；
+             不带时刻（时区标注放不下，完整时刻见下方时间线） -->
+        <view class="progress" wx:if="{{view.progress.show}}" aria-label="订单进度">
+          <view class="progress__step progress__step--{{item.state}}" wx:for="{{view.progress.steps}}" wx:key="key">
+            <view class="progress__dot"></view>
+            <text class="progress__label">{{item.label}}</text>
+          </view>
+        </view>
+        <text class="ws-tag progress__branch" wx:if="{{view.progress.branch}}">{{view.progress.branch.title}}</text>
         <!-- M-05（AJ-405）：订单号可复制（客服第一句就要单号）；反馈页内"已复制"，不弹 toast -->
         <view class="quote-line order-no" wx:if="{{view.orderNo}}">
           <text class="ws-caption head__no" user-select>订单号 {{view.orderNo}}</text>

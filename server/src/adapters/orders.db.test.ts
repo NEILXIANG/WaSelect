@@ -235,8 +235,18 @@ describe('listOwnedOrders（U5c：归属过滤进 WHERE，不拉回内存再滤�
   it('status 过滤只留匹配态；非法值在路由层已 40001（仓储不重复校验）', async () => {
     await seedFullOrder('o-created');
     await seedFullOrder('o-paid', { status: 'paid' });
-    const rows = await listOwnedOrders(db, 'u-exp', 'paid');
+    // 测试改动（AJ-408）：签名由单值 string 改为状态数组（契约 0.6.49 多状态），期望不变
+    const rows = await listOwnedOrders(db, 'u-exp', ['paid']);
     expect(rows.map((r) => r.id)).toEqual(['o-paid']);
+  });
+
+  it('🔴 AJ-408：多状态任一命中，归属仍在 WHERE（他人同态的单不出现）', async () => {
+    await seedFullOrder('o-created');
+    await seedFullOrder('o-paid', { status: 'paid' });
+    await seedFullOrder('o-shipped', { status: 'shipped' });
+    await seedFullOrder('o-other', { user: 'u-other', status: 'paid' });
+    const rows = await listOwnedOrders(db, 'u-exp', ['paid', 'created']);
+    expect(rows.map((r) => r.id).sort()).toEqual(['o-created', 'o-paid']);
   });
 
   it('fx_snapshot 读出为普通对象（db.json 单重编码写入 → 驱动解析直出；jsonbValue 兜旧行）', async () => {

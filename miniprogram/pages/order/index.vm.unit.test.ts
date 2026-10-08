@@ -12,7 +12,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { STATUS_LABELS, buyerStatus } from '../../utils/order-status.js';
-import { emptyState, orderRows } from './index.vm.js';
+import { emptyState, orderRows, tabsView } from './index.vm.js';
+import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
 
 const ORDERS = [
   {
@@ -45,6 +46,10 @@ describe('orderRows（列表行）', () => {
       statusText: '待付款',
       nextText: buyerStatus('created').next,
       canPay: true,
+      // 测试改动（AJ-408 M-11）：列表行新增下单时间 / 缩略图 / 件数三字段（已批准的新行为），toEqual 整体比对随之补齐
+      createdText: '2026-09-27 09:00（日本时间）',
+      thumb: PLACEHOLDER_IMAGE,
+      itemCountText: '',
     });
   });
 
@@ -99,5 +104,74 @@ describe('与共享状态词表的接线（词表本身在 utils/order-status �
       expect(row?.statusText).toBe(buyerStatus(status).title);
       expect(row?.nextText).toBe(buyerStatus(status).next);
     }
+  });
+});
+
+describe('M-11（AJ-408）：列表行的下单时间、缩略图、件数', () => {
+  it('🔴 下单时间按 JST 显示并标注时区（同详情页 MP3-02 口径；换算在 jst-text 纯函数里）', () => {
+    const [row] = orderRows([
+      { order_id: 'x', status: 'paid', created_at: '2026-10-07T15:30:00.000Z' },
+    ]);
+    expect(row?.createdText).toBe('2026-10-08 00:30（日本时间）');
+  });
+
+  it('⚠️ created_at 缺失 / 带偏移（解析不了）→ 空串（不显示一个错 9 小时的时间）', () => {
+    expect(orderRows([{ order_id: 'x' }])[0]?.createdText).toBe('');
+    expect(
+      orderRows([{ order_id: 'x', created_at: '2026-10-08T00:30:00+09:00' }])[0]?.createdText,
+    ).toBe('');
+  });
+
+  it('🔴 缩略图优先取 thumb 档（列表图小，取 card / detail 是白下大图）', () => {
+    const [row] = orderRows([
+      {
+        order_id: 'x',
+        first_image: {
+          thumb: 'https://img/t.webp',
+          card: 'https://img/c.webp',
+          detail: 'https://img/d.webp',
+        },
+      },
+    ]);
+    expect(row?.thumb).toBe('https://img/t.webp');
+    expect(
+      orderRows([{ order_id: 'x', first_image: { card: 'https://img/c.webp' } }])[0]?.thumb,
+    ).toBe('https://img/c.webp');
+  });
+
+  it('⚠️ 没有首图 / 脏值 → 占位图（不留空白方块，也不把 "[object Object]" 当地址）', () => {
+    expect(orderRows([{ order_id: 'x' }])[0]?.thumb).toBe(PLACEHOLDER_IMAGE);
+    expect(orderRows([{ order_id: 'x', first_image: {} }])[0]?.thumb).toBe(PLACEHOLDER_IMAGE);
+    expect(orderRows([{ order_id: 'x', first_image: 42 }])[0]?.thumb).toBe(PLACEHOLDER_IMAGE);
+  });
+
+  it('件数："共 N 件"；缺失 / 0 / 非整数 → 不显示', () => {
+    expect(orderRows([{ order_id: 'x', item_count: 3 }])[0]?.itemCountText).toBe('共 3 件');
+    expect(orderRows([{ order_id: 'x', item_count: 0 }])[0]?.itemCountText).toBe('');
+    expect(orderRows([{ order_id: 'x', item_count: 2.5 }])[0]?.itemCountText).toBe('');
+    expect(orderRows([{ order_id: 'x', item_count: '3' }])[0]?.itemCountText).toBe('');
+  });
+});
+
+describe('M-10（AJ-408）：页签视图与分页签空态', () => {
+  it('五个页签，当前的那个 active；认不出的 key 回落「全部」', () => {
+    expect(tabsView('to_ship').map((t) => [t.key, t.label, t.active])).toEqual([
+      ['all', '全部', false],
+      ['unpaid', '待付款', false],
+      ['to_ship', '采购中', true],
+      ['shipped', '已发货', false],
+      ['after_sale', '售后·退款', false],
+    ]);
+    expect(tabsView('bogus').find((t) => t.active)?.key).toBe('all');
+  });
+
+  it('🔴 空态文案分页签：「全部」说"还没有订单"；其它页签说"这里暂时没有订单"（不暗示一单都没有）', () => {
+    expect(emptyState([], '', 'all')).toEqual({ showEmpty: true, text: '还没有订单' });
+    expect(emptyState([], '', 'unpaid')).toEqual({
+      showEmpty: true,
+      text: '「待付款」里暂时没有订单',
+    });
+    expect(emptyState([], '')).toEqual({ showEmpty: true, text: '还没有订单' });
+    expect(emptyState([], '网络请求失败', 'unpaid').showEmpty).toBe(false);
   });
 });

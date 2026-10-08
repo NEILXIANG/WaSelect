@@ -37,6 +37,9 @@ import { detailView as productDetailView } from '../../miniprogram/pages/detail/
 import { orderRows } from '../../miniprogram/pages/order/index.vm.js';
 import { detailView as orderDetailView } from '../../miniprogram/pages/order-detail/index.vm.js';
 import { addressRows } from '../../miniprogram/pages/address/index.vm.js';
+import { orderShortcuts } from '../../miniprogram/pages/user/index.vm.js';
+import { tabStatusParam } from '../../miniprogram/utils/order-tabs.js';
+import { PLACEHOLDER_IMAGE } from '../../miniprogram/utils/placeholder.js';
 
 let db: Db;
 let srv: ChainServer;
@@ -147,6 +150,58 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     // 同上（M-06 / AJ-405：列表行与详情状态区同一张买家视角词表）
     expect(rows2[0]?.statusText).toBe('已付款 · 日本采购中');
     expect(rows2[0]?.canPay).toBe(false);
+  });
+
+  it('AJ-408（M-10 / M-11 / M-12）：页签参数真被服务端接受、列表行时间 / 缩略图 / 件数、「我的」角标、详情进度条', async () => {
+    // 第一行商品（p-knife）给一张图；第二行（p-cup）保持无图——首图只看第一行
+    await db`update products set images = ${db.json(['https://img.example.com/knife.jpg'])} where id = 'p-knife'`;
+    const c = await call(srv, 'POST', '/api/v1/orders', {
+      token: buyer,
+      key: 'k-tabs',
+      body: orderBody(),
+    });
+    const orderId = String(c.json['order_id']);
+
+    // ── 页签：vm 生成的查询参数原样发给真服务端（逗号多选），各页签各取各的 ──
+    const list = async (tab: string): Promise<Array<Record<string, unknown>>> => {
+      const q = tabStatusParam(tab);
+      const r = await call(srv, 'GET', `/api/v1/orders${q === '' ? '' : `?status=${q}`}`, {
+        token: buyer,
+      });
+      expect([tab, r.status]).toEqual([tab, 200]);
+      return r.json['items'] as Array<Record<string, unknown>>;
+    };
+    expect((await list('unpaid')).map((o) => o['order_id'])).toEqual([orderId]);
+    expect(await list('to_ship')).toEqual([]);
+    expect(await list('after_sale')).toEqual([]);
+
+    // ── 列表行（M-11）──
+    const [row] = orderRows(await list('all'));
+    expect(row?.itemCountText).toBe('共 3 件'); // knife×1 + cup×2
+    expect(row?.thumb).toBe('https://img.example.com/knife.jpg');
+    expect(row?.thumb).not.toBe(PLACEHOLDER_IMAGE);
+    expect(row?.createdText).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}（日本时间）$/);
+
+    // ── 「我的」角标（M-10 附）：同一次全量列表本地分组 ──
+    expect(orderShortcuts(await list('all')).map((s) => s.badge)).toEqual(['1', '', '', '']);
+
+    // ── 详情进度条（M-12）：待付款 → 付款是当前步；付款后 → 采购是当前步，进「采购中」页签 ──
+    const p1 = orderDetailView(
+      (await call(srv, 'GET', `/api/v1/orders/${orderId}`, { token: buyer })).json,
+    ).progress;
+    expect(p1.steps.map((s) => s.state)).toEqual(['done', 'current', 'todo', 'todo', 'todo']);
+    await call(srv, 'POST', `/api/v1/orders/${orderId}/pay`, {
+      token: buyer,
+      key: 'pay-tabs',
+      body: { channel: 'mock' },
+    });
+    expect((await mockCallback(srv, db, orderId, { eventId: 'evt-tabs' })).status).toBe(200);
+    const p2 = orderDetailView(
+      (await call(srv, 'GET', `/api/v1/orders/${orderId}`, { token: buyer })).json,
+    ).progress;
+    expect(p2.steps.map((s) => s.state)).toEqual(['done', 'done', 'current', 'todo', 'todo']);
+    expect((await list('to_ship')).map((o) => o['order_id'])).toEqual([orderId]);
+    expect(await list('unpaid')).toEqual([]);
   });
 
   it('地址列表：真实响应 → 行视图（id 可点、默认标记、地区摘要）', async () => {

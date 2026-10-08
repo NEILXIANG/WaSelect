@@ -11,6 +11,21 @@
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
 <view class="ws-page ws-page--with-tabbar order">
+  <!-- M-10（AJ-408）：状态页签（vm tabsView；页签 ↔ 状态在 utils/order-tabs.js）。页签上不带计数（列表无 total，见 vm @limitation） -->
+  <view class="ws-gutter order-tabs" aria-role="tablist">
+    <view
+      class="order-tabs__item {{item.active ? 'order-tabs__item--active' : ''}}"
+      wx:for="{{tabs}}"
+      wx:key="key"
+      data-key="{{item.key}}"
+      hover-class="ws-press"
+      bindtap="onTabTap"
+      aria-role="tab"
+      aria-selected="{{item.active}}"
+      aria-label="{{item.label}}"
+    >{{item.label}}</view>
+  </view>
+
   <view class="ws-gutter" wx:if="{{loading}}">
     <view class="ws-card state">
       <text class="ws-note">正在加载订单…</text>
@@ -30,7 +45,7 @@
 
   <view class="ws-gutter" wx:if="{{empty}}">
     <view class="ws-card state">
-      <text class="ws-note">还没有订单</text>
+      <text class="ws-note">{{emptyText}}</text>
       <ws-button text="去逛逛" type="default" bindtap="onGoShopping" />
     </view>
   </view>
@@ -47,6 +62,16 @@
       <view class="order-card__head">
         <text class="ws-caption order-card__no">{{item.orderNo}}</text>
         <text class="ws-tag order-card__status">{{item.statusText}}</text>
+      </view>
+      <!-- M-11（AJ-408）：首件缩略图 + 件数 + 下单时间（JST，带"日本时间"标注；vm 给）。没图时是占位图 -->
+      <view class="order-card__body">
+        <view class="ws-media ws-media--square order-card__thumb">
+          <image class="ws-media__img" src="{{item.thumb}}" mode="aspectFill" lazy-load />
+        </view>
+        <view class="order-card__meta">
+          <text class="ws-caption" wx:if="{{item.itemCountText}}">{{item.itemCountText}}</text>
+          <text class="ws-caption" wx:if="{{item.createdText}}">下单 {{item.createdText}}</text>
+        </view>
       </view>
       <!-- M-06（AJ-405）："下一步会发生什么"（vm 给；列表不知道有没有留邮箱，不承诺邮件） -->
       <text class="ws-caption order-card__next" wx:if="{{item.nextText}}">{{item.nextText}}</text>

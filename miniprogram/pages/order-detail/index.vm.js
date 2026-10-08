@@ -74,6 +74,7 @@ const LATE_PAID_NOTE = '我们已收到你的付款，但这张订单已关闭�
 import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 import { addressSummary } from '../../utils/address-form.js';
 import { jstDateTimeLabeled } from '../../utils/jst-text.js';
+import { orderProgress } from '../../utils/order-progress.js';
 
 /**
  * ISO → 买家可见的 JST 串（**带时区标注**）；解析失败回落原串（数据不能丢，宁可难看）。
@@ -232,5 +233,10 @@ export function detailView(order, opts = undefined) {
      * 不点也没关系：发货满 30 天系统自动签收。
      */
     canConfirmReceipt: status === 'shipped',
+    /**
+     * 进度条（M-12，AJ-408）：五步 + 终态分支，算法在 utils/order-progress.js（纯函数，逐态单测）。
+     * 时间线保留在下方（进度条不带时刻，见 order-progress @tradeoff）。
+     */
+    progress: orderProgress(o),
   };
 }

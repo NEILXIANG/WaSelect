@@ -33,6 +33,26 @@
     </view>
   </view>
 
+  <!-- M-10 附（AJ-408）：四个订单入口（待付款 / 采购中 / 已发货 / 售后·退款），点了进订单页对应页签；
+       角标只数进行中的单（vm orderShortcuts），取数失败时不显示角标 -->
+  <view class="ws-gutter mine__menu-wrap">
+    <view class="ws-card mine__orders">
+      <view
+        class="mine__order-entry"
+        wx:for="{{shortcuts}}"
+        wx:key="key"
+        data-key="{{item.key}}"
+        hover-class="ws-press"
+        bindtap="onShortcutTap"
+        aria-role="link"
+        aria-label="{{item.badge ? item.label + '，' + item.badge + ' 单' : item.label}}"
+      >
+        <text class="mine__order-badge" wx:if="{{item.badge}}">{{item.badge}}</text>
+        <text class="mine__order-label">{{item.label}}</text>
+      </view>
+    </view>
+  </view>
+
   <!-- 入口列表：三个入口进**同一张卡**，用发丝线分隔
        @why 不三个入口三张卡：三张卡之间会露出底色缝，读起来是三块孤立内容；
             一张卡 + 发丝线读起来是"一份菜单"，而菜单正是这一页的东西。 -->

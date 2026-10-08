@@ -9,8 +9,9 @@
  *      单独给读路径开配额是 U7 之后有真实流量数据再定的事。
  *
  * @limitation 一：status 过滤的合法值 = shared `ORDER_STATUS` 10 态全集（契约 0.5.5 起
- *              双词表统一；旧的 unpaid/closed 五值 UI 词已废——unpaid ≈ created+pending_payment
- *              由前端各查一次或不过滤，closed ≈ cancelled+expired 同理）。
+ *              双词表统一；旧的 unpaid/closed 五值 UI 词已废）。0.6.49（AJ-408，M-10）起可**逗号多选**
+ *              （小程序页签"待付款 = created,pending_payment"一次取齐），解析与校验走 shared
+ *              `parseOrderStatusList`——与管理端 `GET /admin/orders`（AJ-400）同一个函数，两端口径不分叉。
  * @limitation 二：无分页（契约无 page/size 参数，adapters/orders.ts @limitation 同口径）。
  *
  * @see app/order-views.ts（响应映射）；adapters/orders.ts（取数）；docs/I1阶段开发实施方案.md §3.5
@@ -28,9 +29,9 @@ import {
   listOrderTimeline,
   listOwnedOrders,
 } from '../adapters/orders.js';
-import { isOneOf, ORDER_STATUS } from '@waselect/shared';
+import { parseOrderStatusList } from '@waselect/shared';
 import type { DisplayCurrency } from '../domain/quote.js';
-import { toOrderDetail, toOrderSummary } from './order-views.js';
+import { toOrderDetail, toOrderListItem } from './order-views.js';
 import { hasLatePaid } from '../adapters/orders-admin.js';
 import { listPartialRefunds } from '../adapters/order-refunds.js';
 
@@ -54,11 +55,19 @@ export function mountOrderQueryRoutes(app: Express, deps: OrderQueryRoutesDeps):
         const sub = req.auth?.sub;
         if (sub === undefined) throw new AppError(40101);
         const raw = req.query['status'];
-        if (raw !== undefined && (typeof raw !== 'string' || !isOneOf(ORDER_STATUS, raw))) {
-          throw new AppError(40001, { reason: 'status_invalid', status: raw });
-        }
-        const rows = await listOwnedOrders(deps.db, sub, raw);
-        res.status(200).json({ items: rows.map((r) => toOrderSummary(r, displayCurrencies)) });
+        // AJ-408（0.6.49）：逗号多选。⚠️ 重复参数（`?status=a&status=b`）Express 解析成数组——
+        // 不是 string 一律非法（同 admin-order-routes，不去猜拼接方式）。
+        const statuses =
+          raw === undefined
+            ? undefined
+            : typeof raw === 'string'
+              ? parseOrderStatusList(raw)
+              : null;
+        if (statuses === null) throw new AppError(40001, { reason: 'status_invalid', status: raw });
+        const rows = await listOwnedOrders(deps.db, sub, statuses);
+        res.status(200).json({
+          items: rows.map((r) => toOrderListItem(r, displayCurrencies, deps.config.IMG_BASE_URL)),
+        });
       } catch (e) {
         next(e);
       }

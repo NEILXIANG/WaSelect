@@ -1,5 +1,5 @@
 /**
- * 职责：订单列表页薄壳——`GET /orders` → vm → 渲染；未付款的可继续去支付。
+ * 职责：订单列表页薄壳——`GET /orders`（按状态页签过滤，M-10）→ vm → 渲染；未付款的可继续去支付。
  *
  * @why 用 `onShow` 而不是 `onLoad` 取数：从支付页返回（尤其是 copylink 在浏览器里
  *      付完再切回来）不会触发 onLoad，只看 onLoad 的表现是
@@ -9,16 +9,24 @@
  * @limitation 一：**不做支付结果轮询**（与支付页 @limitation 一 同一条）：
  *              完成靠服务端回调落库，本页每次进屏拉一次即是"最新真值"。
  *              轮询的代价是弱网下白耗电，且它给出的仍然不是权威状态。
- * @limitation 二：列表行的信息密度**刻意低**（单号 / 状态 / 合计）——
+ * @limitation 二：列表行的信息密度**刻意低**（单号 / 状态 / 合计；M-11 起加首件缩略图、件数、下单时间——找单用）——
  *              时间线 / 运单号 / 地址快照 / 条款版本在详情页（U-H3，`pages/order-detail`），
  *              列表点卡片即达。往列表行里再塞这些，等于把详情页在每张卡片上重复一遍。
  *
  * @limitation 三：下拉刷新（M-04）与 onShow 共用 `load()`，**不做在途去重**——两次几乎同时的取数
  *              以后到的为准；列表是只读的，多取一次的代价只是一次请求。
  *
- * @see ./index.vm.js（状态词表与列表行，9 条单测）
+ * @limitation 四：状态页签（M-10，AJ-408）。「我的」四入口要落到指定页签，但本页是 tab 页，
+ *              `switchTab` **不能带 query**——所以意图走 `app.globalData.orderTab`（一次性：onShow 读走即清空，
+ *              同 `pickedAddressId` 的交接口径，app.js）。没有意图时保留本页上次的页签（tab 页实例常驻）。
+ * @limitation 五：切页签连发请求时用请求序号（utils/request-seq.js）丢弃过期响应——
+ *              先点「全部」再点「采购中」，慢回来的「全部」不许盖住「采购中」。
+ *
+ * @see ./index.vm.js（状态词表、列表行、页签视图）；../../utils/order-tabs.js（页签 ↔ 状态）
  */
-import { emptyState, orderRows } from './index.vm.js';
+import { emptyState, orderRows, tabsView } from './index.vm.js';
+import { resolveOrderTab, tabStatusParam } from '../../utils/order-tabs.js';
+import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -46,15 +54,29 @@ Page({
     error: '',
     /** 空态开关（**请求失败时不亮**，@see index.vm.js 的 emptyState）。 */
     empty: false,
+    /** 空态文案（分页签，M-10）。 */
+    emptyText: '还没有订单',
+    /** 当前页签 key（M-10，utils/order-tabs.js）。 */
+    activeTab: 'all',
+    /** vm `tabsView` 的输出。 */
+    tabs: tabsView('all'),
   },
 
   traceId: '',
+  /** 请求序号（@see @limitation 五；不进 data：渲染不需要它）。 */
+  seq: 0,
 
   onLoad() {
     this.traceId = newTraceId();
   },
 
   onShow() {
+    // @limitation 四：「我的」四入口留下的一次性意图——读走即清空
+    const intent = app.globalData.orderTab;
+    if (typeof intent === 'string' && intent !== '') {
+      app.globalData.orderTab = '';
+      this.setTab(resolveOrderTab(intent));
+    }
     void this.load();
     // S5：注入底部 tabBar 的高亮（本页是第 2 个 tab）。
     setActiveTab(this, 'order');
@@ -62,21 +84,48 @@ Page({
     setCartBadge(this, app.globalData.cart);
   },
 
-  /** 取订单列表。失败**清空列表**并明示错误（留旧数据 = 显示已取消的订单还待付款）。 */
+  /** 切到某个页签（只改视图状态，不取数）。 */
+  setTab(key) {
+    const activeTab = resolveOrderTab(key);
+    this.setData({ activeTab, tabs: tabsView(activeTab) });
+  },
+
+  /**
+   * 取订单列表（按当前页签过滤）。失败**清空列表**并明示错误（留旧数据 = 显示已取消的订单还待付款）。
+   * @why 过期响应直接丢（@limitation 五），连 loading 也不动——收尾归最新那次请求。
+   */
   async load() {
+    this.seq = nextSeq(this.seq);
+    const seq = this.seq;
+    const tab = this.data.activeTab;
+    const status = tabStatusParam(tab);
     this.setData({ loading: true });
     try {
       const res = await app.globalData.api({
-        url: `${app.globalData.apiBase}/api/v1/orders`,
+        url: `${app.globalData.apiBase}/api/v1/orders${status === '' ? '' : `?status=${status}`}`,
         traceId: this.traceId,
       });
+      if (isStale(seq, this.seq)) return;
       const rows = orderRows(res?.items);
-      this.setData({ rows, error: '', empty: emptyState(rows, '').showEmpty });
+      const empty = emptyState(rows, '', tab);
+      this.setData({ rows, error: '', empty: empty.showEmpty, emptyText: empty.text });
     } catch (e) {
+      if (isStale(seq, this.seq)) return;
       this.setData({ rows: [], ...errorFields(e), empty: false });
     } finally {
-      this.setData({ loading: false });
+      if (!isStale(seq, this.seq)) this.setData({ loading: false });
     }
+  },
+
+  /**
+   * 点页签（M-10）。点当前页签也重取一次（等同于"刷新这一栏"，不另做判断）。
+   * @param {WechatMiniprogram.TouchEvent} e `data-key` 来自 wxml
+   */
+  async onTabTap(e) {
+    const key = e?.currentTarget?.dataset?.key;
+    if (typeof key !== 'string') return;
+    this.setTab(key);
+    await this.load();
   },
 
   /**

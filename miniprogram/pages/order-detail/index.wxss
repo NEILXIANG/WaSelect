@@ -138,3 +138,53 @@
 .state__error {
   color: var(--ws-danger);
 }
+
+/* M-12（AJ-408）：进度条——五格等分，圆点 + 文字；done 实心强调色、current 描边强调色、todo 灰、skipped 更淡 */
+.progress {
+  display: flex;
+  margin-top: var(--ws-space-inline);
+}
+
+.progress__step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.progress__dot {
+  width: var(--ws-space-inline);
+  height: var(--ws-space-inline);
+  border-radius: var(--ws-radius-pill);
+  border: var(--ws-hair-thick) solid var(--ws-line-strong);
+  background: var(--ws-surface);
+}
+
+.progress__label {
+  margin-top: var(--ws-space-hair);
+  font-size: var(--ws-f-xs);
+  color: var(--ws-ink-mute);
+}
+
+.progress__step--done .progress__dot {
+  border-color: var(--ws-accent);
+  background: var(--ws-accent);
+}
+
+.progress__step--done .progress__label,
+.progress__step--current .progress__label {
+  color: var(--ws-ink);
+}
+
+.progress__step--current .progress__dot {
+  border-color: var(--ws-accent);
+}
+
+.progress__step--skipped .progress__label {
+  color: var(--ws-ink-faint);
+}
+
+.progress__branch {
+  display: inline-block;
+  margin-top: var(--ws-space-hair);
+}

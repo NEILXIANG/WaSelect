@@ -23,6 +23,30 @@
  *
  * @see ./index.js（跳转表 `PAGE_BY_KEY`）；../../utils/wx-api.js（navigateTo）
  */
+import { ORDER_TABS, orderTabCounts, tabBadgeText } from '../../utils/order-tabs.js';
+
+/**
+ * 「我的」四个订单入口（M-10 附，AJ-408）：订单页除「全部」外的四个页签，带进行中单数角标。
+ *
+ * @param {unknown} items 一次 `GET /orders`（不带 status）的 items；取数失败传 undefined
+ * @returns {Array<{key: string, label: string, badge: string}>}
+ * @why 入口直接取 `ORDER_TABS`（同一份页签定义）：入口与页签各写一份标签，改一处漏一处，
+ *      表现是"点「采购中」进去高亮的是「待发货」"。
+ * @why 角标由**一次**不带过滤的 `GET /orders` 在本地分组得出（`orderTabCounts`），而不是四个页签各请求一次：
+ *      买家列表本就无分页、全量返回（server adapters/orders.ts listOwnedOrders @limitation），一次就有全部状态；
+ *      四次请求换来的是同一份数据。代价见 @limitation。
+ * @limitation 一：单量变大后「我的」每次进屏都拉全量列表——等列表接口加分页时，角标要改为服务端计数（契约变更）。
+ * @limitation 二：取数失败 → 不显示角标（空串），入口照常可点；不显示"0"（0 是"确定没有"，失败时我们不确定）。
+ */
+export function orderShortcuts(items) {
+  const counts = orderTabCounts(items);
+  return ORDER_TABS.filter((t) => t.key !== 'all').map((t) => ({
+    key: t.key,
+    label: t.label,
+    badge: Array.isArray(items) ? tabBadgeText(counts[t.key]) : '',
+  }));
+}
+
 /**
  * 入口清单（顺序即展示顺序）。
  *

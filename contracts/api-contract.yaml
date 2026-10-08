@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.48
+  version: 0.6.49
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -528,6 +528,14 @@ info:
       ② `AdminOrderItem` 增 `declared_value_usd`（integer，**美分**：建单时按商品小计分摊的申报价，与报关清单 CSV 同源，CSV 里转成两位小数美元）
          与 `weight_g`（integer，行项目重量快照）。两列 NOT NULL，恒下发；列表与详情同一形状。
       ③ 下单日期筛选（created_from / created_to）**仍未接入导出**（有条件延期，理由见 AJ-407）。
+    0.6.49（AJ-408：小程序 P1 M-10 / M-11——买家订单页签 + 列表行缩略图与件数；放宽参数、新增字段，老调用方不受影响）：
+      ① `GET /orders` 的 `status` 可**逗号分隔多选**（任一命中），口径与 `GET /admin/orders`（0.6.44）**同一个** shared `parseOrderStatusList`：
+         空串、空段（`paid,`）、任一段不在 `OrderStatus` 里、或重复给参数（`?status=a&status=b`）→ 400 / 40001 `status_invalid`；重复的值去重。单值老写法照旧。
+         归属不变：只返回本人的单（过滤在 WHERE 里与 user_id 同时生效）。
+      ② 列表行由 `OrderSummary` 改为 **`OrderListItem`** = OrderSummary + `item_count`（integer，各行 qty 之和，即"共 N 件"，不是行数）
+         + 可选 `first_image`（ImageSet：**买家下单顺序第一行**商品的现图第一张，生成规则与 `Order.items[].image` 同一函数；
+         第一行商品没图、或图按 image_id 存而 IMG_BASE_URL 未配置 → 整键省略，不拿后面行的图顶替）。
+      ③ `GET /orders/{id}`（Order）**不变**：不带 item_count / first_image。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -693,8 +701,8 @@ paths:
       responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Quote'}}}}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
   /orders:
     get:
-      parameters: [{name: status, in: query, schema: {$ref: '#/components/schemas/OrderStatus'}, description: '按 10 态单词过滤（0.5.5 起双词表统一；旧五值 UI 词的映射见版本说明）'}]
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/OrderSummary'}}}}}}}}
+      parameters: [{name: status, in: query, schema: {type: string, description: '0.6.49：一个或多个 OrderStatus，逗号分隔（任一命中），如 created,pending_payment；空段 / 非法值 / 重复参数 → 40001 status_invalid（0.5.5 起双词表统一）'}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/OrderListItem'}}}}}}}, '400': {$ref: '#/components/responses/Err'}}
     post:
       summary: 建单（不含支付；扣减 stock；写 fx_snapshot 与 expires_at）
       description: 0.6.11（AJ-179）：REVIEW_MODE=on 时只收 REVIEW_SKU_ID，含其它商品整单 40401；审核期建的单 is_test=true
@@ -1023,6 +1031,7 @@ components:
     OrderStatus: {type: string, enum: [created, pending_payment, paid, shipped, delivered, completed, cancelled, expired, refunding, refunded]}
     OrderCreated: {allOf: [{$ref: '#/components/schemas/Quote'}, {type: object, properties: {order_id: {type: string}, order_no: {type: string}, fx_snapshot: {type: object, properties: {USD: {type: number}, CNY: {type: number}}}, status: {$ref: '#/components/schemas/OrderStatus'}, expires_at: {type: string, format: date-time}}}]}
     OrderSummary: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, total_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, status: {$ref: '#/components/schemas/OrderStatus'}, created_at: {type: string, format: date-time}}}
+    OrderListItem: {description: '0.6.49（AJ-408）：买家 GET /orders 的列表行', allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, required: [item_count], properties: {item_count: {type: integer, minimum: 0, description: '各行 qty 之和（共 N 件），不是行数'}, first_image: {$ref: '#/components/schemas/ImageSet', description: '买家下单顺序第一行商品的现图第一张（同 Order.items[].image 的生成规则）；没有 → 整键省略'}}}]}
     Order: {allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, properties: {contact_email: {type: string, format: email, description: '可选收货通知邮箱（D-42 补入）'}, terms_version: {type: string, description: '建单时写入的条款版本（只读，D-43）'}, items: {type: array, items: {$ref: '#/components/schemas/OrderItem'}}, address: {$ref: '#/components/schemas/Address'}, items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer, nullable: true, description: '0.6.30：null = 无法估算（与 Quote.duty_jpy 同口径；此前存 0）'}, expires_at: {type: string, format: date-time}, carrier: {type: string}, tracking_no: {type: string}, tracking_url: {type: string, description: '0.6.32：官方查件链接（日本邮便 S10 单号或承运商为日本邮便时生成，locale=en）；认不出 → 整键省略'}, timeline: {type: array, description: '0.6.10：只含订单状态值（OrderStatus 10 态）；管理事件只在 AdminOrder.events', items: {type: object, properties: {status: {type: string}, at: {type: string, format: date-time}}}}, payment: {type: object, properties: {channel: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer, description: '**最小货币单位**（JPY=円，USD=分）：$86.00 存 8600。展示层必须除以 10^小数位（B43 / AJ-214）'}, paid_amount: {type: integer}, paid_currency: {type: string}}}, late_paid: {type: boolean, description: '0.6.37（P2-11 / AJ-386）：关单后才到的付款（钱已扣）。买家侧据此说"已收到付款，会原路退回"，而不是"未完成付款，请重新下单"'}, partial_refunds: {type: array, description: '0.6.37（P2-12 / AJ-386）：买家视角的部分退款（按发起顺序；没有时为空数组）。AdminOrder 覆盖为带原因 / 操作人的 PartialRefund[]', items: {$ref: '#/components/schemas/BuyerPartialRefund'}}}}]}
     BuyerPartialRefund: {type: object, description: '0.6.37（P2-12）：买家可见的一笔部分退款。只出成功与处理中（initiated / pending / unknown 折成 pending；failed 不出现——钱没动）；**不含** reason / actor / provider_ref（内部信息）。status 不设 enum：AdminOrder 经 allOf 继承本字段，管理端行的 status 是五值', required: [status, currency, amount_minor, created_at], properties: {status: {type: string, description: 'succeeded | pending'}, currency: {type: string}, amount_minor: {type: integer, description: '支付币种最小单位'}, created_at: {type: string, format: date-time}, settled_at: {type: string, format: date-time}}}
     OrderItem: {type: object, description: '订单行项目（**交易视角**：买了什么、多少钱、几件）。⚠️ 采购信息（title_ja / jan_code / purchase_source）**刻意不在这里**——它是内部信息，只在 `AdminOrderItem` 下发；买家可见的响应里出现采购来源等于泄露供应链', properties: {product_id: {type: string}, title: {type: string}, qty: {type: integer}, unit_price_jpy: {type: integer}, image: {$ref: '#/components/schemas/ImageSet'}}}

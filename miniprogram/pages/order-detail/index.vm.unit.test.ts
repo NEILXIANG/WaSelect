@@ -382,3 +382,32 @@ describe('detailView：买家视角状态与下一步（M-06）', () => {
     );
   });
 });
+
+describe('detailView：进度条（M-12，AJ-408；算法在 utils/order-progress，这里只测接线）', () => {
+  it('🔴 已发货 → 发货步为当前，前三步已完成，无分支', () => {
+    const p = detailView(ORDER).progress;
+    expect(p.show).toBe(true);
+    expect(p.steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'current', 'todo']);
+    expect(p.branch).toBeNull();
+  });
+
+  it('🔴 退款单用响应里的时间线决定点亮到哪一步', () => {
+    const p = detailView({
+      ...ORDER,
+      status: 'refunded',
+      timeline: [
+        { status: 'created', at: '2026-09-27T02:00:00.000Z' },
+        { status: 'paid', at: '2026-09-27T02:10:00.000Z' },
+        { status: 'refunding', at: '2026-09-28T02:10:00.000Z' },
+        { status: 'refunded', at: '2026-09-29T02:10:00.000Z' },
+      ],
+    }).progress;
+    expect(p.steps.map((s) => s.state)).toEqual(['done', 'done', 'skipped', 'skipped', 'skipped']);
+    expect(p.branch?.title).toBe('已退款');
+  });
+
+  it('未知状态 / 脏输入 → 不显示进度条', () => {
+    expect(detailView({ ...ORDER, status: 'brand_new' }).progress.show).toBe(false);
+    expect(detailView(null).progress.show).toBe(false);
+  });
+});

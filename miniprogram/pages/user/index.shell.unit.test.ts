@@ -117,3 +117,73 @@ describe('「我的」重新登录（M-17，AJ-406）', () => {
     expect(retry().show).toBe(false);
   });
 });
+
+describe('「我的」四个订单入口（M-10 附，AJ-408）', () => {
+  let g: Record<string, unknown>;
+  let switched: string[];
+  async function openWith(orders: unknown, fail = false): Promise<void> {
+    switched = [];
+    vi.stubGlobal('wx', {
+      navigateTo: () => undefined,
+      switchTab: (o: { url: string }) => switched.push(o.url),
+    });
+    g = {
+      apiBase: 'http://api.test',
+      token: 't',
+      orderTab: '',
+      api: (req: { url?: string }) => {
+        const u = String(req.url);
+        if (u.endsWith('/api/v1/orders')) {
+          return fail ? Promise.reject(new Error('网络请求失败')) : Promise.resolve(orders);
+        }
+        return Promise.resolve({});
+      },
+    };
+    page = await loadPage(new URL('./index.js', import.meta.url).href, { globalData: g });
+    (page['onShow'] as () => void)();
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  }
+  const shortcuts = () => page.data['shortcuts'] as Array<{ key: string; badge: string }>;
+
+  it('🔴 进屏拉一次不带过滤的 GET /orders → 四入口角标（只数进行中）', async () => {
+    await openWith({
+      items: [{ status: 'created' }, { status: 'paid' }, { status: 'refunded' }],
+    });
+    expect(shortcuts().map((s) => [s.key, s.badge])).toEqual([
+      ['unpaid', '1'],
+      ['to_ship', '1'],
+      ['shipped', ''],
+      ['after_sale', ''],
+    ]);
+  });
+
+  it('取数失败 → 入口照常、无角标（静默，不打扰）', async () => {
+    await openWith(undefined, true);
+    expect(shortcuts().map((s) => s.badge)).toEqual(['', '', '', '']);
+  });
+
+  it('🔴 点入口 → 写一次性页签意图 + switchTab 到订单页（tab 页不能带 query）', async () => {
+    await openWith({ items: [] });
+    (page['onShortcutTap'] as (e: unknown) => void)({
+      currentTarget: { dataset: { key: 'after_sale' } },
+    });
+    expect(g['orderTab']).toBe('after_sale');
+    expect(switched).toEqual(['/pages/order/index']);
+  });
+
+  it('⚠️ 认不出的 key → 不跳、不写意图', async () => {
+    await openWith({ items: [] });
+    (page['onShortcutTap'] as (e: unknown) => void)({
+      currentTarget: { dataset: { key: 'constructor' } },
+    });
+    expect(g['orderTab']).toBe('');
+    expect(switched).toEqual([]);
+  });
+
+  it('「我的订单」一行 → 意图为「全部」（否则会停在上次从入口进的页签）', async () => {
+    await openWith({ items: [] });
+    (page['onMenuTap'] as (e: unknown) => void)({ currentTarget: { dataset: { key: 'orders' } } });
+    expect(g['orderTab']).toBe('all');
+    expect(switched).toEqual(['/pages/order/index']);
+  });
+});

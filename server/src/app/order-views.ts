@@ -38,6 +38,7 @@ import type {
   OrderItemReadRow,
   OrderListRow,
   OrderPaymentSummary,
+  OwnedOrderListRow,
 } from '../adapters/orders.js';
 import { toImageSet } from './product-routes.js';
 import type { PartialRefundRow } from '../adapters/order-refunds.js';
@@ -103,6 +104,25 @@ export function toOrderSummary(
     display: snapshotDisplay(row.total_jpy, row.fx_snapshot, displayCurrencies),
     status: row.status,
     created_at: row.created_at.toISOString(),
+  };
+}
+
+/**
+ * 买家列表行（契约 `OrderListItem`，0.6.49 / AJ-408）= OrderSummary + `item_count` + 可选 `first_image`。
+ * @why 首图与详情行项目走**同一个** `toImageSet(images[0], imgBaseUrl)`：三种存储形态
+ *      （image_id / 裸 URL / 三档对象）的处理只有一份，配不出 URL 时整键省略（不给空串、不给裸键）。
+ */
+export function toOrderListItem(
+  row: OwnedOrderListRow,
+  displayCurrencies: readonly DisplayCurrency[],
+  imgBaseUrl: string | undefined,
+): JsonObject {
+  const images = Array.isArray(row.first_images) ? row.first_images : [];
+  const image = images.length > 0 ? toImageSet(images[0], imgBaseUrl) : null;
+  return {
+    ...toOrderSummary(row, displayCurrencies),
+    item_count: row.item_count,
+    ...(image !== null ? { first_image: image } : {}),
   };
 }
 

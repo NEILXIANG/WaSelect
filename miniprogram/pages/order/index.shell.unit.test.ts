@@ -16,6 +16,9 @@ let page: LoadedPage;
 let calls: string[];
 let fail: boolean;
 let hold: ReturnType<typeof deferred<unknown>> | null;
+/** AJ-408：页签用例要改写一次性意图（globalData.orderTab）与"空列表"——setup 只是多留两个句柄，原用例不变。 */
+let gd: Record<string, unknown>;
+let empty: boolean;
 
 const call = <T>(name: string, ...args: unknown[]): T =>
   (page[name] as (...a: unknown[]) => T)(...args);
@@ -27,26 +30,26 @@ beforeEach(async () => {
   calls = [];
   fail = false;
   hold = null;
+  empty = false;
   vi.stubGlobal('wx', {
     stopPullDownRefresh: () => calls.push('stop'),
     navigateTo: () => undefined,
     switchTab: () => undefined,
   });
-  page = await loadPage(new URL('./index.js', import.meta.url).href, {
-    globalData: {
-      apiBase: 'http://api.test',
-      api: async (req: { url: string }) => {
-        calls.push(`GET ${req.url.replace('http://api.test', '')}`);
-        if (hold !== null) return hold.promise;
-        if (fail) throw Object.assign(new Error('网络请求失败'), { code: -1 });
-        return {
-          items: [
-            { order_id: 'o-1', order_no: 'WS-20261008-0001', status: 'paid', total_jpy: 9150 },
-          ],
-        };
-      },
+  gd = {
+    orderTab: '',
+    apiBase: 'http://api.test',
+    api: async (req: { url: string }) => {
+      calls.push(`GET ${req.url.replace('http://api.test', '')}`);
+      if (hold !== null) return hold.promise;
+      if (fail) throw Object.assign(new Error('网络请求失败'), { code: -1 });
+      if (empty) return { items: [] };
+      return {
+        items: [{ order_id: 'o-1', order_no: 'WS-20261008-0001', status: 'paid', total_jpy: 9150 }],
+      };
     },
-  });
+  };
+  page = await loadPage(new URL('./index.js', import.meta.url).href, { globalData: gd });
   call('onLoad');
 });
 
@@ -81,5 +84,58 @@ describe('订单列表：下拉刷新（M-04）', () => {
     expect(calls).toEqual(['GET /api/v1/orders', 'stop']);
     expect(page.data['error']).not.toBe('');
     expect(page.data['rows']).toEqual([]);
+  });
+});
+
+describe('订单列表：状态页签（M-10，AJ-408）', () => {
+  it('🔴 点页签 → 带 status 重取；「全部」不带参数', async () => {
+    await (page['onTabTap'] as (e: unknown) => Promise<void>)({
+      currentTarget: { dataset: { key: 'unpaid' } },
+    });
+    expect(calls).toEqual(['GET /api/v1/orders?status=created,pending_payment']);
+    expect(page.data['activeTab']).toBe('unpaid');
+    expect(
+      (page.data['tabs'] as Array<{ key: string; active: boolean }>).find((t) => t.active)?.key,
+    ).toBe('unpaid');
+    await (page['onTabTap'] as (e: unknown) => Promise<void>)({
+      currentTarget: { dataset: { key: 'all' } },
+    });
+    expect(calls.at(-1)).toBe('GET /api/v1/orders');
+  });
+
+  it('🔴 从「我的」带来的一次性意图：onShow 读走并清空，按它取数', async () => {
+    gd['orderTab'] = 'after_sale';
+    (page['onShow'] as () => void)();
+    await settle();
+    expect(calls.at(-1)).toBe('GET /api/v1/orders?status=refunding,refunded');
+    expect(gd['orderTab']).toBe('');
+    expect(page.data['activeTab']).toBe('after_sale');
+  });
+
+  it('🔴 快速切页签：先发的请求后回来 → 丢弃（不让「全部」的结果盖住「待付款」）', async () => {
+    hold = deferred<unknown>();
+    const slow = (page['onTabTap'] as (e: unknown) => Promise<void>)({
+      currentTarget: { dataset: { key: 'all' } },
+    });
+    await settle();
+    const first = hold;
+    hold = null;
+    await (page['onTabTap'] as (e: unknown) => Promise<void>)({
+      currentTarget: { dataset: { key: 'to_ship' } },
+    });
+    first.resolve({ items: [{ order_id: 'stale', status: 'created' }] });
+    await slow;
+    const rows = page.data['rows'] as Array<{ orderId: string }>;
+    expect(rows.map((r) => r.orderId)).toEqual(['o-1']);
+    expect(page.data['activeTab']).toBe('to_ship');
+  });
+
+  it('分页签空态文案（「待付款」里空着不说"还没有订单"）', async () => {
+    empty = true;
+    await (page['onTabTap'] as (e: unknown) => Promise<void>)({
+      currentTarget: { dataset: { key: 'unpaid' } },
+    });
+    expect(page.data['empty']).toBe(true);
+    expect(page.data['emptyText']).toBe('「待付款」里暂时没有订单');
   });
 });

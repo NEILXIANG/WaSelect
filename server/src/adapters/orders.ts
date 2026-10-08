@@ -435,30 +435,55 @@ export interface OrderListRow {
 }
 
 /**
- * 列出本人的订单（按 created_at 倒序）。
+ * 买家列表行 = 摘要 + 件数 + 第一行商品的现图（AJ-408 / 契约 0.6.49，M-11）。
+ * @why 单独一个类型而不是往 `OrderListRow` 上加：`OrderListRow` 也是详情主行的基类，
+ *      详情响应**不**带这两列（契约只加在列表行）。
+ */
+export interface OwnedOrderListRow extends OrderListRow {
+  /** 各行 qty 之和（"共 N 件"，不是行数）。 */
+  item_count: number;
+  /** 第一行（line_no 最小）商品的 `products.images`（已 JSON.parse）；没有行项目 → null。 */
+  first_images: unknown;
+}
+
+/**
+ * 列出本人的订单（按 created_at 倒序）；`statuses` 给了就只取这些状态（任一命中）。
  *
  * @why 归属过滤进 WHERE 而不是拉回内存再滤：漏写 `user_id=` 时前者是"返回空"，
  *      后者是"把别人的单给了这个用户"——过滤位置选错了就是越权读取。
+ * @why 多状态用 `status in (…)`（AJ-408）：与管理端 `listAdminOrders` 同一写法；
+ *      空数组不会走到这里（shared `parseOrderStatusList` 对空串返回 null → 路由 40001）。
+ * @why 件数与首图用**相关子查询**而不是 join + group by：列表行只要"一个数 + 一张图"，
+ *      join 会把每单的行项目全展开再折回来，还得为首图另写窗口函数；子查询各取所需，
+ *      且 `order_items(order_id)` 有外键索引（db.db.test 结构不变量保证）。
+ * @why 首图取**第一行**（`line_no` = 买家下单顺序，迁移 029；与详情 `listOrderItemsWithImage` 同一排序）
+ *      而不是"第一张有图的"：列表缩略图要代表"这单买的第一样东西"，跳着找图会让缩略图与
+ *      详情第一行对不上；第一行没图就由前端显示占位图（AJ-408 ④）。
+ * @why 件数 `::int`：@measured: 本库 `coalesce(sum(qty),0)::int` 读回 `{"s":3}` typeof number；
+ *      空集读回 `{"s":0}`（2026-10-08 探针，test 库）。不 cast 时 sum(int) 是 bigint，
+ *      驱动对 bigint 的映射取决于连接配置——显式 cast 不赌配置。
  * @limitation 无分页：契约 GET /orders 没有 page/size 参数（MVP 单量下全量返回；
  *              /admin/orders 才有分页）。单用户订单数真成问题的那天，先改契约再加。
+ * @limitation 首图是商品**现图**（同详情行项目的 @why：图是展示素材不是交易事实）。
  */
 export async function listOwnedOrders(
   db: Db,
   userId: string,
-  status?: string,
-): Promise<OrderListRow[]> {
-  const rows =
-    status === undefined
-      ? await db`
-          select id, order_no, status, total_jpy, fx_snapshot, created_at
-            from orders where user_id = ${userId}
-            order by created_at desc
-        `
-      : await db`
-          select id, order_no, status, total_jpy, fx_snapshot, created_at
-            from orders where user_id = ${userId} and status = ${status}
-            order by created_at desc
-        `;
+  statuses?: readonly string[],
+): Promise<OwnedOrderListRow[]> {
+  const rows = await db`
+    select o.id, o.order_no, o.status, o.total_jpy, o.fx_snapshot, o.created_at,
+           (select coalesce(sum(oi.qty), 0)::int from order_items oi where oi.order_id = o.id)
+             as item_count,
+           (select p.images from order_items oi join products p on p.id = oi.product_id
+             where oi.order_id = o.id
+             order by oi.line_no nulls last, oi.id
+             limit 1) as first_images
+      from orders o
+     where o.user_id = ${userId}
+       and ${statuses === undefined ? db`true` : db`o.status in ${db([...statuses])}`}
+     order by o.created_at desc
+  `;
   return rows.map((r) => ({
     id: String(r.id),
     order_no: String(r.order_no),
@@ -466,6 +491,8 @@ export async function listOwnedOrders(
     total_jpy: Number(r.total_jpy),
     fx_snapshot: jsonbValue(r.fx_snapshot),
     created_at: r.created_at as Date,
+    item_count: Number(r.item_count),
+    first_images: r.first_images === null ? null : jsonbValue(r.first_images),
   }));
 }
 

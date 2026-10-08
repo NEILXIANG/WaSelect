@@ -16,9 +16,14 @@
  * @limitation 二：`onShow` 而不是 `onLoad` 读 token：token 可能在别的页面被 relogin 刷新，
  *              只看 onLoad 的表现是"登录成功了，我的页还显示正在登录"。
  *
+ * @limitation 三：四个订单入口（M-10 附，AJ-408）要落到订单页的指定页签，而订单页是 tab 页、`switchTab` 不能带 query，
+ *              所以写一次性意图 `app.globalData.orderTab`（订单页 onShow 读走即清空）。「我的订单」一行写 'all'。
+ *              角标来自进屏时一次不带过滤的 `GET /orders`（失败静默，只是不显示角标）。
+ *
  * @see ./index.vm.js（登录态文案与入口清单，5 条单测）；../../utils/wx-api.js（navigateTo）
  */
-import { MENU_ROWS, loginRetryView, loginState } from './index.vm.js';
+import { MENU_ROWS, loginRetryView, loginState, orderShortcuts } from './index.vm.js';
+import { ORDER_TABS } from '../../utils/order-tabs.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
 import { supportRows } from '../../utils/support.js';
@@ -28,7 +33,7 @@ const app = getApp();
 /** 页面级宿主入口（wx-api 是无状态转发）。 */
 const wxApi = createWxApi();
 
-/** 入口 key → 页面路径。**跳转路径只在这一处出现**。 */
+/** 入口 key → 页面路径。**跳转路径只在这一处出现**（订单页另有 ORDER_PAGE，见下）。 */
 const PAGE_BY_KEY = {
   orders: '/pages/order/index',
   address: '/pages/address/index',
@@ -46,6 +51,14 @@ const PAGE_BY_KEY = {
  */
 const TAB_KEYS = new Set(['orders']);
 
+/**
+ * 订单页（tab 页）——四个订单入口（M-10 附，AJ-408）的跳转目标。
+ * @why 与 `PAGE_BY_KEY.orders` 同值却单列：tab-nav-guard 只能静态解析"字面量 / 常量名"形式的 url
+ *      （`PAGE_BY_KEY.orders` 这种成员访问它解析不了，会被当成未登记的动态路径而红）；
+ *      `PAGE_BY_KEY` 的表形又被 vm 单测按字面量扫描。两处同值由 shell 单测守着（两种入口都断言跳 `/pages/order/index`）。
+ */
+const ORDER_PAGE = '/pages/order/index';
+
 Page({
   data: {
     /** 入口清单（vm `MENU_ROWS`）。 */
@@ -58,6 +71,8 @@ Page({
     support: [],
     /** 刚复制的是哪一行（'' = 没有）。 */
     supportCopied: '',
+    /** M-10 附（AJ-408）：四个订单入口（vm `orderShortcuts`；取到订单前无角标）。 */
+    shortcuts: orderShortcuts(undefined),
   },
 
   onShow() {
@@ -69,6 +84,31 @@ Page({
     // M-14（AJ-406）：购物车角标（每个 tab 页进屏都更新，utils/tabs.js 唯一更新方）
     setCartBadge(this, app.globalData.cart);
     void this.loadSupport();
+    void this.loadOrderBadges();
+  },
+
+  /**
+   * 四入口角标（M-10 附）：一次不带过滤的 `GET /orders`，本地分组（vm orderShortcuts @why）。
+   * @why 失败**静默**（同 loadSupport）：角标是辅助信息，入口本身照常可点。
+   */
+  async loadOrderBadges() {
+    try {
+      const res = await app.globalData.api({ url: `${app.globalData.apiBase}/api/v1/orders` });
+      this.setData({ shortcuts: orderShortcuts(res?.items) });
+    } catch {
+      this.setData({ shortcuts: orderShortcuts(undefined) });
+    }
+  },
+
+  /**
+   * 点订单入口（M-10 附）→ 写一次性页签意图 + 切到订单 tab。
+   * @why 只认 `ORDER_TABS` 里的 key（`find`，不走对象下标——原型键不算）；认不出直接 return（同 onMenuTap）。
+   */
+  onShortcutTap(e) {
+    const key = e?.currentTarget?.dataset?.key;
+    if (typeof key !== 'string' || !ORDER_TABS.some((t) => t.key === key)) return;
+    app.globalData.orderTab = key;
+    wxApi.switchTab({ url: ORDER_PAGE });
   },
 
   /** 本页重试在途（M-17；不进 data：渲染态由 `retry` 表达）。 */
@@ -147,6 +187,8 @@ Page({
     if (typeof url !== 'string') return;
     // S5：tab 页走 switchTab，其余走 navigateTo（用 navigateTo 跳 tab 页会被宿主拒绝）
     if (typeof key === 'string' && TAB_KEYS.has(key)) {
+      // M-10 附：「我的订单」= 全部页签（否则订单页会停在上次从四入口进的那一栏）
+      if (key === 'orders') app.globalData.orderTab = 'all';
       wxApi.switchTab({ url });
       return;
     }

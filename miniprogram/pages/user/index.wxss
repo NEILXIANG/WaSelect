@@ -78,3 +78,33 @@
   margin-top: var(--ws-space-inline);
   color: var(--ws-danger);
 }
+
+/* M-10 附（AJ-408）：四个订单入口一行等分；角标是小号强调色胶囊（只走 token） */
+.mine__orders {
+  display: flex;
+}
+
+.mine__order-entry {
+  flex: 1;
+  min-height: var(--ws-touch-min);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.mine__order-label {
+  font-size: var(--ws-f-sm);
+  color: var(--ws-ink);
+}
+
+.mine__order-badge {
+  min-width: var(--ws-f-sm);
+  padding: 0 var(--ws-space-hair);
+  margin-bottom: var(--ws-space-hair);
+  border-radius: var(--ws-radius-pill);
+  background: var(--ws-accent);
+  color: var(--ws-ink-inverse);
+  font-size: var(--ws-f-xs);
+  text-align: center;
+}

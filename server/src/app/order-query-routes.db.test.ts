@@ -200,6 +200,178 @@ describe('GET /orders（我的订单列表）', () => {
   });
 });
 
+// AJ-408（契约 0.6.49，M-10 / M-11）：买家列表的多状态页签 + 列表行缩略图与件数。
+// @why 严格档（对外契约 + 归属过滤）：页签"待付款 = created + pending_payment"、"售后·退款 = refunding + refunded"
+//      要一次请求取齐；校验口径与管理端同一个 shared `parseOrderStatusList`（AJ-400），两端行为不许分叉。
+describe('AJ-408：GET /orders 多状态过滤（M-10）', () => {
+  async function createOrderAs(url: string, key: string, auth: string): Promise<string> {
+    const res = await fetch(`${url}/api/v1/orders`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${auth}`,
+        'idempotency-key': key,
+      },
+      body: JSON.stringify(auth === token ? BODY : { ...BODY, address_id: 'addr-2' }),
+    });
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { order_id: string }).order_id;
+  }
+  const ids = (r: { json: Record<string, unknown> }): unknown[] =>
+    (r.json['items'] as Array<Record<string, unknown>>).map((i) => i['order_id']);
+
+  it('🔴 逗号多选任一命中、重复值去重；单值老写法照旧', async () => {
+    const srv = await buildServer();
+    try {
+      const a = await createOrderAs(srv.url, 'm1', token);
+      const b = await createOrderAs(srv.url, 'm2', token);
+      await db`update orders set status = 'paid' where id = ${b}`;
+      expect(ids(await get(srv.url, '/api/v1/orders?status=created,pending_payment'))).toEqual([a]);
+      expect(ids(await get(srv.url, '/api/v1/orders?status=paid,created'))).toEqual([b, a]);
+      expect(ids(await get(srv.url, '/api/v1/orders?status=refunding,refunded'))).toEqual([]);
+      expect(ids(await get(srv.url, '/api/v1/orders?status=created,created'))).toEqual([a]);
+      expect(ids(await get(srv.url, '/api/v1/orders?status=paid'))).toEqual([b]);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 非法形态一律 40001 status_invalid：空串 / 空段 / 未知段 / 重复给参数', async () => {
+    const srv = await buildServer();
+    try {
+      await createOrderAs(srv.url, 'm1', token);
+      for (const q of [
+        'status=',
+        'status=created,',
+        'status=,created',
+        'status=created,,paid',
+        'status=created,unpaid',
+        'status=Created',
+        'status=created&status=paid',
+      ]) {
+        const r = await get(srv.url, `/api/v1/orders?${q}`);
+        expect([q, r.status, r.json['code']]).toEqual([q, 400, 40001]);
+      }
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 归属：多状态过滤下也只看得到自己的单（两个买家各有同态订单）', async () => {
+    await db`
+      insert into addresses (id, user_id, recipient, phone, line1, city, state, postal_code, country, is_default)
+      values ('addr-2', 'u-2', 'John Roe', '+12125550188', '350 5th Ave', 'New York', 'NY', '10118', 'US', true)
+    `;
+    const srv = await buildServer();
+    try {
+      const mine = await createOrderAs(srv.url, 'm1', token);
+      const theirs = await createOrderAs(srv.url, 'm2', token2);
+      const q = '/api/v1/orders?status=created,pending_payment';
+      expect(ids(await get(srv.url, q))).toEqual([mine]);
+      expect(ids(await get(srv.url, q, token2))).toEqual([theirs]);
+      expect(ids(await get(srv.url, '/api/v1/orders'))).toEqual([mine]);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+describe('AJ-408：列表行缩略图与件数（M-11）', () => {
+  async function createWith(
+    url: string,
+    key: string,
+    items: Array<{ product_id: string; qty: number }>,
+  ): Promise<string> {
+    const res = await fetch(`${url}/api/v1/orders`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+        'idempotency-key': key,
+      },
+      body: JSON.stringify({ ...BODY, items }),
+    });
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { order_id: string }).order_id;
+  }
+  const row = async (url: string, id: string): Promise<Record<string, unknown> | undefined> =>
+    ((await get(url, '/api/v1/orders')).json['items'] as Array<Record<string, unknown>>).find(
+      (i) => i['order_id'] === id,
+    );
+
+  it('🔴 item_count = 各行 qty 之和（不是行数）；first_image = 买家下单顺序第一行商品的首图', async () => {
+    const srv = await buildServer();
+    try {
+      const id = await createWith(srv.url, 'i1', [
+        { product_id: 'p-knife', qty: 1 },
+        { product_id: 'p-cup', qty: 2 },
+      ]);
+      const r = await row(srv.url, id);
+      expect(r?.['item_count']).toBe(3); // knife×1 + cup×2
+      expect(r?.['first_image']).toEqual({
+        thumb: 'https://img.example.com/knife.jpg',
+        card: 'https://img.example.com/knife.jpg',
+        detail: 'https://img.example.com/knife.jpg',
+      });
+      expect(typeof r?.['created_at']).toBe('string');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 第一行商品没有图 → first_image 整键省略（不拿第二行的图顶替、不给空串）', async () => {
+    const srv = await buildServer();
+    try {
+      const id = await createWith(srv.url, 'i2', [
+        { product_id: 'p-cup', qty: 2 },
+        { product_id: 'p-knife', qty: 1 },
+      ]);
+      const r = await row(srv.url, id);
+      expect(r?.['item_count']).toBe(3);
+      expect(r !== undefined && 'first_image' in r).toBe(false);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 首图按 image_id 存：配了 IMG_BASE_URL → 三档 URL（与详情同一 toImageSet）；没配 → 整键省略', async () => {
+    await db`update products set images = ${db.json([{ image_id: 'img-7qk3m9vz2rx8' }])} where id = 'p-knife'`;
+    const withBase = await buildServer('https://img.example.com');
+    let id = '';
+    try {
+      id = await createWith(withBase.url, 'i3', [{ product_id: 'p-knife', qty: 1 }]);
+      const r = await row(withBase.url, id);
+      expect(r?.['item_count']).toBe(1);
+      expect(r?.['first_image']).toEqual({
+        thumb: 'https://img.example.com/img/img-7qk3m9vz2rx8/thumb.webp',
+        card: 'https://img.example.com/img/img-7qk3m9vz2rx8/card.webp',
+        detail: 'https://img.example.com/img/img-7qk3m9vz2rx8/detail.webp',
+      });
+    } finally {
+      await withBase.close();
+    }
+    const noBase = await buildServer();
+    try {
+      const r = await row(noBase.url, id);
+      expect(r !== undefined && 'first_image' in r).toBe(false);
+    } finally {
+      await noBase.close();
+    }
+  });
+
+  it('详情形状不变：GET /orders/{id} 不带 item_count / first_image（只加在列表行）', async () => {
+    const srv = await buildServer();
+    try {
+      const id = await createWith(srv.url, 'i4', [{ product_id: 'p-knife', qty: 1 }]);
+      const d = await get(srv.url, `/api/v1/orders/${id}`);
+      expect('item_count' in d.json).toBe(false);
+      expect('first_image' in d.json).toBe(false);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
 describe('GET /orders/{id}（订单详情）', () => {
   it('全形状：items（图取商品现图）/address/timeline/金额段；无支付行时省略 payment', async () => {
     const srv = await buildServer();

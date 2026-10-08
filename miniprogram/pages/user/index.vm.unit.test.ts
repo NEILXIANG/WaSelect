@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MENU_ROWS, loginRetryView, loginState } from './index.vm.js';
+import { MENU_ROWS, loginRetryView, loginState, orderShortcuts } from './index.vm.js';
 
 describe('loginState（登录态文案）', () => {
   it('有 token → 已登录', () => {
@@ -124,5 +124,31 @@ describe('loginRetryView（M-17「重新登录」按钮，AJ-406）', () => {
     ]) {
       expect(loginRetryView(s).show, JSON.stringify(s)).toBe(false);
     }
+  });
+});
+
+describe('orderShortcuts（M-10 附，AJ-408：「我的」四个订单入口）', () => {
+  it('四个入口 = 订单页除「全部」外的四个页签，顺序一致', () => {
+    expect(orderShortcuts(undefined).map((r) => [r.key, r.label])).toEqual([
+      ['unpaid', '待付款'],
+      ['to_ship', '采购中'],
+      ['shipped', '已发货'],
+      ['after_sale', '售后·退款'],
+    ]);
+  });
+
+  it('🔴 角标来自同一次 GET /orders 的结果，只数进行中的单', () => {
+    const rows = orderShortcuts([
+      { status: 'created' },
+      { status: 'paid' },
+      { status: 'paid' },
+      { status: 'delivered' },
+      { status: 'refunded' },
+    ]);
+    expect(rows.map((r) => r.badge)).toEqual(['1', '2', '', '']);
+  });
+
+  it('⚠️ 取数失败（undefined）→ 入口照常显示、不带角标（不是"0"，也不隐藏入口）', () => {
+    expect(orderShortcuts(undefined).map((r) => r.badge)).toEqual(['', '', '', '']);
   });
 });

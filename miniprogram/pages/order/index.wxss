@@ -62,3 +62,46 @@
   display: block;
   margin-top: var(--ws-space-hair);
 }
+
+/* M-10（AJ-408）：状态页签条——五格等分，当前格用强调色 + 下划线（只走 token） */
+.order-tabs {
+  display: flex;
+  padding-top: var(--ws-space-inline);
+  border-bottom: var(--ws-border-width) solid var(--ws-line);
+}
+
+.order-tabs__item {
+  flex: 1;
+  min-height: var(--ws-touch-min);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--ws-f-sm);
+  color: var(--ws-ink-mute);
+  border-bottom: var(--ws-hair-thick) solid transparent;
+}
+
+.order-tabs__item--active {
+  color: var(--ws-ink);
+  border-bottom-color: var(--ws-accent);
+}
+
+/* M-11（AJ-408）：左缩略图、右件数与下单时间。图宽用百分比（同订单详情 .item__media：token 里没有"缩略图"一档） */
+.order-card__body {
+  display: flex;
+  align-items: center;
+  margin-top: var(--ws-space-inline);
+}
+
+.order-card__thumb {
+  width: 18%;
+  flex: none;
+}
+
+.order-card__meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  margin-left: var(--ws-space-inline);
+}

@@ -85,6 +85,12 @@ App({
      * @see ../pages/address/index.js @limitation 二（写入侧）；../pages/checkout/index.js（消费侧）
      */
     pickedAddressId: '',
+    /**
+     * 「我的」四个订单入口 → 订单页的**一次性**页签意图（M-10 附，AJ-408；'' = 没有）。
+     * @why 订单页是 tab 页，`switchTab` 不能带 query；交接方式与 `pickedAddressId` 同理，订单页 onShow 读走即清空。
+     * @see ../pages/user/index.js（写入侧）；../pages/order/index.js（消费侧）
+     */
+    orderTab: '',
   },
 
   onLaunch() {

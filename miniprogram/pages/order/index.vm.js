@@ -21,12 +21,32 @@ import { displaySubLine, formatJpy } from '../../utils/price-format.js';
 //    订单详情页也要用，而页面不能 import 页面。与契约的双向比对测试跟着真源一起搬走
 //    （只搬代码不搬测试 = 守护静默消失，见 utils/order-status.unit.test.ts）。
 import { PAYABLE, buyerStatus } from '../../utils/order-status.js';
+import { ORDER_TABS, resolveOrderTab } from '../../utils/order-tabs.js';
+import { jstDateTimeLabeled } from '../../utils/jst-text.js';
+import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
+
+/**
+ * 列表缩略图地址（M-11，AJ-408）：**thumb 档优先**，其次 card / detail；都没有 → 占位图。
+ * @why 不复用 `imageUrl()`：它为卡片 / 详情服务，优先取 card 档；列表行的图只有 20% 宽，取 card 是白下大图。
+ * @why 没图给占位图而不是空串（同详情页 itemRows）：空白方块分不清"没图"和"图没加载出来"。
+ */
+function thumbUrl(image) {
+  const o = image !== null && typeof image === 'object' ? image : {};
+  for (const src of [o.thumb, o.card, o.detail]) {
+    if (typeof src === 'string' && src.trim() !== '') return src.trim();
+  }
+  return PLACEHOLDER_IMAGE;
+}
 
 /**
  * `GET /orders` 的 items → 列表行。
  * @param {unknown} items 契约 `OrderSummary[]`
  * @returns {Array<{orderId: string, orderNo: string, totalJpy: number|null, totalText: string,
- *                  totalSub: string, statusText: string, nextText: string, canPay: boolean}>}
+ *                  totalSub: string, statusText: string, nextText: string, canPay: boolean,
+ *                  createdText: string, thumb: string, itemCountText: string}>}
+ * @why M-11（AJ-408）：行里补下单时间（找单靠它）、首件缩略图与件数（契约 0.6.49 `OrderListItem`）。
+ *      时间走 `jstDateTimeLabeled`（纯整数换算，不读时钟；带"（日本时间）"，同详情页 MP3-02 口径），
+ *      解析不了给空串——列表行不回落原串（详情页才是"数据不能丢"的地方，列表行宁缺不错）。
  * @why M-06（AJ-405）：状态用买家视角词表 `buyerStatus`（"已付款 · 日本采购中"）并带一句"下一步"；
  *      列表行（OrderSummary）不含 contact_email，所以不传 email——不承诺"会发邮件"。
  * @why 同时给 `totalJpy`（整数，交给 `ws-price`）与 `totalText`（已格式化串）：
@@ -53,15 +73,39 @@ export function orderRows(items) {
         statusText: buyer.title,
         nextText: buyer.next,
         canPay: PAYABLE.includes(status),
+        createdText: jstDateTimeLabeled(o.created_at) ?? '',
+        thumb: thumbUrl(o.first_image),
+        itemCountText:
+          Number.isInteger(o.item_count) && o.item_count > 0 ? `共 ${o.item_count} 件` : '',
       };
     });
 }
 
 /**
- * 空态开关。
+ * 空态（开关 + 文案）。
+ * @param {unknown} rows `orderRows` 的输出
+ * @param {unknown} error 错误文案（空串 = 无错误）
+ * @param {unknown} [tabKey] 当前页签（M-10）；缺省 = 「全部」
  * @why 与地址列表同一条口径：请求失败时**不能**说"还没有订单"
  *      （用户会以为订单丢了，那是最坏的暗示）。
+ * @why 分页签的空态不说"还没有订单"（M-10）：「待付款」里空着不等于一单都没有。
  */
-export function emptyState(rows, error) {
-  return { showEmpty: Array.isArray(rows) && rows.length === 0 && error === '' };
+export function emptyState(rows, error, tabKey = undefined) {
+  const showEmpty = Array.isArray(rows) && rows.length === 0 && error === '';
+  const key = resolveOrderTab(tabKey);
+  const tab = ORDER_TABS.find((t) => t.key === key);
+  const text = key === 'all' || tab === undefined ? '还没有订单' : `「${tab.label}」里暂时没有订单`;
+  return { showEmpty, text };
+}
+
+/**
+ * 页签条视图（M-10，AJ-408）。
+ * @param {unknown} activeKey 当前页签；认不出 → 「全部」
+ * @returns {Array<{key: string, label: string, active: boolean}>}
+ * @limitation 页签上**不带计数**：列表接口无分页也无 total，要计数得为每个页签各拉一次全量；
+ *              计数只在「我的」四入口上给（一次全量请求本地分组，见 pages/user/index.vm.js orderShortcuts）。
+ */
+export function tabsView(activeKey) {
+  const key = resolveOrderTab(activeKey);
+  return ORDER_TABS.map((t) => ({ key: t.key, label: t.label, active: t.key === key }));
 }
