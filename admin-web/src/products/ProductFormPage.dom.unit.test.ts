@@ -17,9 +17,10 @@
  *
  * @see ./ProductFormPage.tsx；./api.ts（updateProduct 的 expectedUpdatedAt）；./view.ts（sourceUpdatedAt）
  */
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
+import { UnsavedProvider, useUnsaved } from '../ui/unsaved.js';
 import { button, click, flush, mount, type as typeInto, type Mounted } from '../testing/dom.js';
 import { CATEGORY_LABELS, PRODUCT_CATEGORY } from './view.js';
 import { ProductFormPage } from './ProductFormPage.js';
@@ -84,6 +85,53 @@ function field(el: HTMLElement, label: string): HTMLInputElement {
 }
 
 const pageError = (el: HTMLElement): string => el.querySelector('p.error')?.textContent ?? '';
+
+/**
+ * 脏态探针：把 Provider 那一份 `dirty` 显示在 DOM 上，供断言读取。
+ * @why 不直接读 hook 的返回值——组件内部状态读不到，而把它渲染出来正好就是
+ *      "App 的侧栏按钮看见的那个值"（App.tsx 用同一个 Provider）。
+ */
+function Probe(): JSX.Element {
+  const { dirty } = useUnsaved();
+  return createElement('span', { 'data-testid': 'dirty' }, dirty ? 'yes' : 'no');
+}
+
+function Host(props: Record<string, unknown>): JSX.Element {
+  const [dirty, setDirty] = useState(false);
+  return createElement(
+    UnsavedProvider,
+    { dirty, markDirty: setDirty },
+    createElement(Probe),
+    createElement(ProductFormPage, props as never),
+  );
+}
+
+/** 带脏态 Provider 打开编辑页（返回el 里含 [data-testid=dirty] 探针）。 */
+async function openWithDirty(source: Record<string, unknown> | null): Promise<HTMLElement> {
+  calls = [];
+  doneCount = 0;
+  const api = async (req: { path: string; method?: string; body?: unknown }): Promise<unknown> => {
+    calls.push(req);
+    if (putCode !== 0) throw new ApiError(putCode, '这条内容在你打开之后被别人改过了', 't');
+    return { id: 'p-1' };
+  };
+  mounted = await mount(
+    createElement(Host, {
+      api: api as never,
+      baseUrl: 'http://localhost',
+      getToken: () => 'tk',
+      productId: source === null ? null : String(source['id']),
+      source: source as never,
+      onDone: () => {
+        doneCount += 1;
+      },
+    }),
+  );
+  return mounted.el;
+}
+
+const dirtyOf = (el: HTMLElement): string =>
+  el.querySelector('[data-testid="dirty"]')?.textContent ?? '';
 
 afterEach(async () => {
   await mounted?.unmount();
@@ -298,5 +346,48 @@ describe('商品表单：上传中不能保存（A-08）', () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+/**
+ * 未保存提醒的**上报端**（第一批⑥）。
+ *
+ * @why 这一段才是这层改动真正会跑偏的地方：`ProductFormPage` 要维护"未改动基线"，
+ *      而"什么才算改动"很容易写漏（改了标签草稿算不算？保存成功后要不要复位？）。
+ *      ①②两条把最容易错的两处钉住；App 侧拦截本身在 App.tsx 里只有几行，靠 review。
+ */
+describe('商品表单：未保存改动上报（第一批⑥）', () => {
+  it('刚打开不脏；改一个字段立刻变脏', async () => {
+    const el = await openWithDirty(SOURCE);
+    expect(dirtyOf(el)).toBe('no');
+    await typeInto(field(el, '商品名（面向买家）'), '改过的标题');
+    expect(dirtyOf(el)).toBe('yes');
+  });
+
+  it('改回去（与原值一致）→ 重新变干净：提醒不该为"看了一眼"而弹', async () => {
+    const el = await openWithDirty(SOURCE);
+    const input = field(el, '商品名（面向买家）');
+    const original = input.value;
+    await typeInto(input, '临时改动');
+    expect(dirtyOf(el)).toBe('yes');
+    await typeInto(input, original);
+    expect(dirtyOf(el)).toBe('no');
+  });
+
+  it('🔴 保存成功后必须复位成不脏（否则点侧栏还会被"要离开吗"拦一次）', async () => {
+    const el = await openWithDirty(SOURCE);
+    await typeInto(field(el, '商品名（面向买家）'), '改过的标题');
+    expect(dirtyOf(el)).toBe('yes');
+    await click(button(el, '保存'));
+    expect(doneCount).toBe(1);
+    expect(dirtyOf(el)).toBe('no');
+  });
+
+  it('保存失败（40914）不清表单 → 仍然是脏的（那次改动确实还没保存）', async () => {
+    putCode = 40914;
+    const el = await openWithDirty(SOURCE);
+    await typeInto(field(el, '商品名（面向买家）'), '改过的标题');
+    await click(button(el, '保存'));
+    expect(dirtyOf(el)).toBe('yes');
   });
 });

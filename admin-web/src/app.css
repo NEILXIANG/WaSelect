@@ -367,6 +367,71 @@ body {
   outline-offset: var(--ws-border);
 }
 
+/*
+ * 校验未通过的字段：边框转错误色。
+ * @why 错误必须落在**出错的那一行**，而不是统一跑到页面角落的 Toast 上
+ *      （三端联动模拟 2026-10-08：发货校验的 Toast 出现在距按钮约 960px 的对角）。
+ * @limitation 只加深边框、不改背景——红底配深色字会掉对比度，且和只读态抢视觉。
+ */
+.input-error {
+  border: calc(var(--ws-border) * 2) solid var(--ws-color-error);
+}
+
+/*
+ * 订单详情双栏（第一批④，对标 §4.2）。
+ *
+ * @why 用 `fr` 而不是固定宽度：内容区宽度由浏览器决定（宽屏 / 窄屏差别很大），
+ *      写死一侧宽度会让另一侧在窄屏下被挤成一条。
+ * @why `minmax(0, …)` 而不是直接 `2fr`：fr 的最小值是 auto（不低于内容宽度），
+ *      商品表一宽就把整个栅格顶破、出现横向滚动条；`minmax(0, …)` 才允许它真的收缩。
+ * @why 右栏窄一些（1fr vs 2fr）：它放的是"看一眼就用"的东西与写操作表单，
+ *      两个输入框并排（`.row2`）在 1fr 下仍然够；主区的商品表需要更多宽度。
+ */
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--ws-space);
+  align-items: start;
+}
+
+/* 两个栏各自纵向排列（栏内间距沿用 `.field` 自己的间隔，不再加一层） */
+.detail-main,
+.detail-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space);
+  min-width: 0;
+}
+
+/*
+ * 写操作那一栏：加一条分隔边。
+ * @why 视觉上必须能看出"这一栏是按钮区"——发货与取消在同一个灰底区域里相邻排布时，
+ *      肌肉记忆容易点错（对标报告：误操作面大）。
+ */
+.detail-actions {
+  border-left: var(--ws-border) solid var(--ws-color-muted);
+  padding-left: var(--ws-space);
+}
+
+/* 窄屏塌回单列：竖排两栏会把商品表压到看不清 */
+@media (max-width: 60rem) {
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .detail-actions {
+    border-left: 0;
+    padding-left: 0;
+  }
+}
+
+/* 表单的行内错误区：多条竖排，紧跟在对应字段下方 */
+.field-errors {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space-sm);
+}
+
 .btn {
   font-size: var(--ws-font);
   padding: var(--ws-space-sm) var(--ws-space);

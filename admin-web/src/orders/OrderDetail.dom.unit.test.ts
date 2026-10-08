@@ -511,3 +511,31 @@ describe('订单详情：发货两步确认（P2-51）', () => {
     expect(el.textContent).not.toContain('形状认不出');
   });
 });
+
+/**
+ * 第一批④：**双栏**布局（对标报告 §4.2 的 P0）。
+ *
+ * @why 这两条断言守的是"读"与"写"分家：所有写操作必须活在 `.detail-actions` 里，
+ *      商品表必须活在 `.detail-main` 里。一旦有人把发货表单挪回主区那一列，
+ *      布局变了但没有任何已有用例会响——规格就只剩下口头约定。
+ */
+describe('订单详情双栏（第一批④）', () => {
+  it('🔴 商品表在主区、写操作按钮在操作区，两个容器分开存在', async () => {
+    items = [{ title: '越光米 5kg', qty: 1, unit_price_jpy: 2980 }];
+    const el = await open();
+    const main = el.querySelector('.detail-main');
+    const aside = el.querySelector('.detail-actions');
+    expect(main, '缺少主区容器 .detail-main').not.toBeNull();
+    expect(aside, '缺少操作区容器 .detail-actions').not.toBeNull();
+    // 商品表在主区（联读的地方）
+    expect(main?.querySelector('table.table')).not.toBeNull();
+    // 操作区里至少有一个写操作按钮
+    expect(aside?.querySelectorAll('button').length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('🔴 操作区**不**嵌在主区里（嵌套等于没分栏）', async () => {
+    const el = await open();
+    expect(el.querySelector('.detail-main .detail-actions')).toBeNull();
+    expect(el.querySelector('.detail-actions .detail-main')).toBeNull();
+  });
+});

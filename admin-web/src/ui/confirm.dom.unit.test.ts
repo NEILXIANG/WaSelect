@@ -52,6 +52,36 @@ async function open(spec: ConfirmSpec = SPEC): Promise<HTMLElement> {
 
 const dialogText = (el: HTMLElement): string => el.querySelector('.dialog')?.textContent ?? '';
 
+/**
+ * placeholder 里**不能**出现要校验的答案（2026-10-08 实机缺陷）。
+ *
+ * @why 发货弹层要求重打运单号，修订前 placeholder 就是那个运单号本身：
+ *      框里灰着一行和答案一模一样的字，运营会以为系统已经替他填好了，
+ *      于是直接点「确认发货」——按钮此时 disabled，看起来像"点了没反应"。
+ *      防呆要成立，输入框必须是空的：**答案只出现在 label 里**，由调用方写明。
+ */
+describe('ConfirmDialog：逐字确认的输入框不能自带答案', () => {
+  const SECRET = 'JP1234567890123';
+  const secrets = (el: HTMLElement): HTMLElement =>
+    el.querySelector('.dialog input.input') as HTMLElement;
+
+  it(`🔴 placeholder 不得等于 typeToConfirm（${SECRET}）`, async () => {
+    const el = await open({ ...SPEC, typeToConfirm: SECRET });
+    const input = secrets(el);
+    expect(input).not.toBeNull();
+    expect(input.getAttribute('placeholder') ?? '').not.toContain(SECRET);
+    // 也没有把答案塞进 value / defaultValue 的旁门左上
+    expect((input as HTMLInputElement).value).toBe('');
+  });
+
+  it('placeholder 要给"不会自动填入"的中性提示，而不是一句空话', async () => {
+    const el = await open({ ...SPEC, typeToConfirm: SECRET });
+    const ph = secrets(el).getAttribute('placeholder') ?? '';
+    expect(ph).not.toBe('');
+    expect(ph).toContain('手动');
+  });
+});
+
 afterEach(async () => {
   await mounted?.unmount();
   mounted = undefined;

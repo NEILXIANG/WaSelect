@@ -10,11 +10,21 @@ import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
 import { ApiError } from './api/errors.js';
 
 /**
- * 登录提交前的本地预检；通过返回 ''。
- * @why 服务端对短于 12 位的口令直接拒（契约 minLength），前端先拦，省一次请求、
- *      也不让"口令太短"消耗登录失败计数。只查长度，不做强度规则（强度以服务端为准）。
+ * 登录提交前的本地预检；通过返回 ''。**按表单自上而下的顺序**报错。
+ *
+ * @why 邮箱必须进预检：修订前只查口令与二次验证码（签名里根本没有 email），
+ *      空表单点「登录」时页面**零反馈**——唯一的提示是 `<input required>` 的浏览器原生气泡，
+ *      它随焦点离开即消失，且样式不受控（2026-10-08 实机复现）。
+ * @why 顺序=表单顺序（邮箱→口令→验证码）：管理员看见的第一条就是他最先要改的那一行，
+ *      而不是先被告知"口令太短"、改完再撞下一次。
+ * @limitation 邮箱只查**形状**（非空、有 @、域名里有 .），不做 RFC 5322 全量校验：
+ *      权威判定在服务端（形状 + 账号是否存在）；这里漏放行的最坏后果是多打一次请求，
+ *      而把服务端才懂的规则抄一份到前端，两处必然漂移。
  */
-export function loginPrecheck(password: string, totp = ''): string {
+export function loginPrecheck(email: string, password: string, totp = ''): string {
+  const mail = email.trim();
+  if (mail === '') return '请填写邮箱';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) return '邮箱格式不正确（形如 name@example.com）';
   if (password.length < ADMIN_PASSWORD_MIN_LENGTH)
     return `口令至少 ${ADMIN_PASSWORD_MIN_LENGTH} 位`;
   // P1-5：二次验证码可留空（账号没开 TOTP）；填了就得是 6 位数字——形状不对服务端回 40001，先在这里拦

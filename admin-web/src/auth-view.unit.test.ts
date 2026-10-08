@@ -6,6 +6,9 @@ import { ADMIN_PASSWORD_MIN_LENGTH } from '@waselect/shared';
 import { ApiError } from './api/errors.js';
 import { expiryWarning, jwtExpMs, loginErrorText, loginPrecheck } from './auth-view.js';
 
+/** 形状合格的样本邮箱（只作预检输入，不代表真实账号）。 */
+const EMAIL = 'dev@waselect.test';
+
 describe('loginErrorText（P2-43）', () => {
   it('40101 在登录页说"邮箱、口令或二次验证码不正确"，不说"登录已过期"', () => {
     const t = loginErrorText(new ApiError(40101, '未登录或登录已过期', 'tr-1'));
@@ -31,10 +34,10 @@ describe('loginErrorText（P2-43）', () => {
 describe('loginPrecheck：二次验证码（P1-5）', () => {
   it('🔴 留空放行（没开 TOTP）；填了就必须是 6 位数字', () => {
     const pw = 'x'.repeat(20);
-    expect(loginPrecheck(pw, '')).toBe('');
-    expect(loginPrecheck(pw, '012345')).toBe('');
-    expect(loginPrecheck(pw, '12345')).toContain('6 位数字');
-    expect(loginPrecheck(pw, '12a456')).toContain('6 位数字');
+    expect(loginPrecheck(EMAIL, pw, '')).toBe('');
+    expect(loginPrecheck(EMAIL, pw, '012345')).toBe('');
+    expect(loginPrecheck(EMAIL, pw, '12345')).toContain('6 位数字');
+    expect(loginPrecheck(EMAIL, pw, '12a456')).toContain('6 位数字');
   });
   it('40101 文案提到二次验证码（开了 TOTP 时口令对、码错也是这个答复）', () => {
     expect(loginErrorText(new ApiError(40101, 'x', ''))).toContain('二次验证码');
@@ -43,8 +46,31 @@ describe('loginPrecheck：二次验证码（P1-5）', () => {
 
 describe('loginPrecheck', () => {
   it('短于 ADMIN_PASSWORD_MIN_LENGTH 拦下；恰好等于放行', () => {
-    expect(loginPrecheck('a'.repeat(ADMIN_PASSWORD_MIN_LENGTH - 1))).toContain('至少');
-    expect(loginPrecheck('a'.repeat(ADMIN_PASSWORD_MIN_LENGTH))).toBe('');
+    expect(loginPrecheck(EMAIL, 'a'.repeat(ADMIN_PASSWORD_MIN_LENGTH - 1))).toContain('至少');
+    expect(loginPrecheck(EMAIL, 'a'.repeat(ADMIN_PASSWORD_MIN_LENGTH))).toBe('');
+  });
+});
+
+/**
+ * 邮箱进预检（2026-10-08 实机缺陷）。
+ * @why 修订前签名里没有 email：空表单点「登录」，页面什么都不显示——
+ *      `<input required>` 的原生气泡不在错误区里，管理员看不到。
+ *      这里把它钉成契约：空 / 形状不对都要在错误区给出**本地**文案。
+ */
+describe('loginPrecheck：邮箱（空表单零反馈）', () => {
+  const pw = 'x'.repeat(ADMIN_PASSWORD_MIN_LENGTH);
+  it('🔴 空邮箱与纯空白都报"请填写邮箱"，不再静默无反应', () => {
+    expect(loginPrecheck('', pw)).toBe('请填写邮箱');
+    expect(loginPrecheck('   ', pw)).toBe('请填写邮箱');
+  });
+  it('形状不对（无 @ / 无域名点 / 含空格）说清格式；合格邮箱放行', () => {
+    expect(loginPrecheck('plainstring', pw)).toContain('邮箱格式不正确');
+    expect(loginPrecheck('a@b', pw)).toContain('邮箱格式不正确');
+    expect(loginPrecheck('a b@example.com', pw)).toContain('邮箱格式不正确');
+    expect(loginPrecheck(EMAIL, pw)).toBe('');
+  });
+  it('全部为空时先报邮箱（错误顺序=表单自上而下），而不是先报口令', () => {
+    expect(loginPrecheck('', '')).toBe('请填写邮箱');
   });
 });
 

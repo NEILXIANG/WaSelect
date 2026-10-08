@@ -25,6 +25,7 @@ import {
   productFormWarnings,
   emptyProductForm,
   productFormErrors,
+  productFormSummary,
   productFormModel,
   productRows,
   withStatus,
@@ -264,6 +265,29 @@ describe('productFormErrors（上架预检）', () => {
       errors: {},
       first: '',
     });
+  });
+
+  /**
+   * 顶部错误条**不得**重复第一条原文。
+   * @why 详情已经显示在各自字段下方，顶部再来一遍「商品名必填」，
+   *      同一句在同一屏出现两次——运营会以为有两个同名商品名字段
+   *      （三端联动模拟 2026-10-08 实机）。
+   */
+  it('🔴 多条错误时顶部只报条数，不再复述第一条原文', () => {
+    const empty = productFormErrors({});
+    expect(empty.ok).toBe(false);
+    expect(Object.keys(empty.errors).length).toBeGreaterThan(1);
+    const top = productFormSummary(empty.errors, empty.first);
+    expect(top).not.toContain(empty.first);
+    expect(top).toContain('需要修正');
+    // 条数必须与 errors 的键数一致，不能写一个与实际不符的数字
+    expect(top).toContain(String(Object.keys(empty.errors).length));
+  });
+
+  it('只有一条错误时照旧给原文（聚合没有意义，不该丢了具体原因）', () => {
+    const one = productFormErrors({ ...productFormModel(PRODUCT), title: '   ' });
+    expect(Object.keys(one.errors)).toEqual(['title']);
+    expect(productFormSummary(one.errors, one.first)).toBe(one.first);
   });
 
   it('⚠️ 禁售标签勾上 → 报出来（shared 的 BLOCKED_COMPLIANCE_TAG 是真源）', () => {

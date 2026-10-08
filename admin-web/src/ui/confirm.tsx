@@ -128,12 +128,21 @@ export function ConfirmDialog({
             <span className="label">
               {spec.typeLabel ?? `请再输入一次「${spec.typeToConfirm}」以确认`}
             </span>
+            {/*
+              ⚠️ placeholder **绝不能**就是要校验的那段文字本身（2026-10-08 实机缺陷）：
+              修订前 `placeholder={spec.typeToConfirm}`，发货弹层的框里灰字显示的就是那个运单号，
+              运营会以为"已经帮我填好了 / 照着改就行"，于是只删掉最后一个字符或直接去点主按钮——
+              而主按钮此时是 disabled 的，看上去像"点了没反应"。
+              这里固定给一句中性提示；正确答案只出现在上方的 label 里（由调用方写明）。
+            */}
             <input
               ref={inputRef}
               className="input"
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
-              placeholder={spec.typeToConfirm}
+              placeholder="请手动输入一次（此处不会自动填入）"
+              autoComplete="off"
+              spellCheck={false}
             />
             {/* 只在"填了但不对"时提示：刚打开就报红会让人以为这一格有默认值 */}
             {typed.trim() !== '' && !ok && <span className="error">与上面不一致</span>}

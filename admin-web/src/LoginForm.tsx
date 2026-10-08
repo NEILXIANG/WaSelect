@@ -43,7 +43,8 @@ export function LoginForm({
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault();
     if (busy) return; // 防连点：重复提交打的是同一个登录接口，服务端限流会先受不了
-    const pre = loginPrecheck(password, totp.trim());
+    // ⚠️ email.trim() 也要进预检：空邮箱原本只能靠 <input required> 的原生气泡提示（见 auth-view.loginPrecheck 的 @why）
+    const pre = loginPrecheck(email, password, totp.trim());
     if (pre !== '') {
       setError(pre);
       return;

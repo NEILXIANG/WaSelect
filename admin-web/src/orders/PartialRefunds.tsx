@@ -15,9 +15,9 @@ import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import { ApiError, retryAfterMsSec } from '../api/errors.js';
 import { createPartialRefund, syncPartialRefund, type AdminApi } from './api.js';
 import {
-  parseAmountToMinor,
   partialRefundErrorNotice,
   partialRefundGate,
+  partialRefundInputCheck,
   partialRefundRows,
   refundableMinor,
 } from './partial-refund-view.js';
@@ -39,6 +39,17 @@ export interface PartialRefundsProps {
   onError: (message: string) => void;
   /** 信息性提示（失败后的"下一步怎么办"）；不传则并入错误条。 */
   onNotice?: ((message: string) => void) | undefined;
+  /**
+   * **成功**提示的独立出口。
+   *
+   * @why 必须和 `onNotice`（info 通道）分开：Toast 的清屏规则是"success 清空全部，
+   *      而 info 与 error **刻意并存**"（退款失败时 error 与 info 是同一件事的两半，
+   *      挤掉任何一半都只剩半句）。
+   *      成功话如果走 info 通道，上一次失败的红字会一直挂在屏幕上，
+   *      运营看见"红+绿"两条分不清这次到底成没成（三端联动模拟 2026-10-08 实测）。
+   * @limitation 不传时回落到 `onNotice`（保持旧行为，但也就拿不到清屏）。
+   */
+  onSuccess?: ((message: string) => void) | undefined;
 }
 
 export function PartialRefunds({
@@ -48,6 +59,7 @@ export function PartialRefunds({
   onDone,
   onError,
   onNotice,
+  onSuccess,
 }: PartialRefundsProps) {
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
@@ -72,8 +84,10 @@ export function PartialRefunds({
     setBusy(false);
     const fresh = await onDone();
     if (failure === undefined) {
-      // 成功也要说一句（原先沿用上一个动作的提示，运营会以为"又重发了一封邮件"）
-      onNotice?.('部分退款已提交：结果以上方记录的状态为准（处理中的可点「同步」）');
+      // ⚠️ 成功必须走 success 通道（清屏），不能走 info——
+      //    否则上一次失败的红字留着，屏幕上同时有红有绿（见 onSuccess 的 @why）
+      const say = onSuccess ?? onNotice;
+      say?.('部分退款已提交：结果以上方记录的状态为准（处理中的可点「同步」）');
       return;
     }
     onError(failure instanceof ApiError ? failure.message : String(failure));
@@ -88,20 +102,24 @@ export function PartialRefunds({
   };
 
   const ask = (): void => {
-    const parsed = parseAmountToMinor(amount, currency);
-    if (!parsed.ok) return setHint(parsed.reason);
-    if (reason.trim() === '') return setHint('请填写退款原因（进审计台账）');
+    const check = partialRefundInputCheck({ amount, reason, order });
+    if (!check.ok) return setHint(check.reason);
     setHint('');
     setConfirming(true);
   };
 
   const submit = async (): Promise<void> => {
-    const parsed = parseAmountToMinor(amount, currency);
-    if (!parsed.ok) return setHint(parsed.reason);
+    // 二次确认那一步也要重算：确认期间额度可能已被别的操作占掉（这里的额度来自这份 order 快照）
+    const check = partialRefundInputCheck({ amount, reason, order });
+    if (!check.ok) {
+      setConfirming(false);
+      setHint(check.reason);
+      return;
+    }
     setConfirming(false);
     await run(async () => {
       await createPartialRefund(api, orderId, {
-        amount_minor: parsed.minor,
+        amount_minor: check.minor,
         reason: reason.trim(),
       });
       setAmount('');

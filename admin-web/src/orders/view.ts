@@ -443,6 +443,8 @@ export function shipErrors(form: unknown): {
   ok: boolean;
   errors: Record<string, string>;
   first: string;
+  /** 全部错误拼成一句（`；` 分隔），给 Toast / 摘要用。 */
+  summary: string;
 } {
   const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
   const carrier = typeof f['carrier'] === 'string' ? f['carrier'].trim() : '';
@@ -456,8 +458,19 @@ export function shipErrors(form: unknown): {
   else if (trackingNo.length > SHIP_MAX_CHARS.tracking_no) {
     errors['trackingNo'] = `运单号最多 ${String(SHIP_MAX_CHARS.tracking_no)} 字`;
   }
-  const first = Object.values(errors)[0] ?? '';
-  return { ok: Object.keys(errors).length === 0, errors, first };
+  const list = Object.values(errors);
+  /**
+   * @why 必须能一次拿到**全部**缺失项：只回 `first` 时（修订前 OrderDetail 就是这么用的），
+   *      两个字段都空的表单会先报"承运商必填"，改完再点又报"运单号必填"——
+   *      同一次想法要提交两遍才知道自己错在哪，而发货这类动作每点一次都要重走确认弹层。
+   *      `first` 保留下来是为了"顶部摘要只要一句"的场景（见 @see）。
+   */
+  return {
+    ok: list.length === 0,
+    errors,
+    first: list[0] ?? '',
+    summary: list.join('；'),
+  };
 }
 
 /** 表单 → 契约请求体（键名是服务端的 `tracking_no`，不是表单的 `trackingNo`）。 */

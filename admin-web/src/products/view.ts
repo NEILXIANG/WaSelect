@@ -380,6 +380,23 @@ function asForm(value: unknown): ProductForm {
  * @returns {{ok: boolean, errors: Record<string, string>, first: string}}
  * @why 返回**全部**错误而不是第一条：十几字段的表单一个一个报，运营要提交十几次。
  */
+/**
+ * 表单**顶部**那条错误提示的文案。
+ *
+ * @why 不能直接拿 `first` 当顶部文案（2026-10-08 实机缺陷）：
+ *      每条错误的详细原因已经显示在各自输入框的正下方，顶部再原样写一遍
+ *      「商品名必填」，同一个句子在同一屏出现两次——运营会以为有两个同名商品名字段，
+ *      或者以为上面那条是"另一处还没改"。
+ * @why 多条时只报条数、不报内容：顶部条的作用是"这一屏还没完"的总控信号，
+ *      具体内容属于出错的那一行；一条时（没有聚合的必要）照旧给原文，不让信息量变少。
+ * @limitation 条数按 `errors` 的键数算，所以它假定**每个键都有对应字段在表单里显示出来**；
+ *             一旦加了"只在顶部提示"的错误类型，这里要跟着改。
+ */
+export function productFormSummary(errors: Record<string, string>, first: string): string {
+  const n = Object.keys(errors).length;
+  return n > 1 ? `有 ${String(n)} 项需要修正（见下方标红的字段）` : first;
+}
+
 export function productFormErrors(form: unknown): {
   ok: boolean;
   errors: Record<string, string>;

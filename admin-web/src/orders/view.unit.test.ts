@@ -362,6 +362,23 @@ describe('发货 / 退款表单', () => {
     expect(shipErrors({ carrier: 'Japan Post', trackingNo: '   ' }).ok).toBe(false);
   });
 
+  /**
+   * @why 这条与上一条的区别是关键：上面那条断言的是 `errors`（早已正确），
+   *      而界面读的一直是 `first`——两格都空时只冒「承运商必填」，
+   *      改完再点才蹦出「运单号必填」。函数对、串起来的那一层错，测试一样全绿。
+   *      所以这里补的是**界面真正消费的出口** `summary`。
+   */
+  it('🔴 summary 一次带上全部错误（界面只读它，不再读 first）', () => {
+    const r = shipErrors(emptyShipForm());
+    expect(r.summary).toContain('承运商必填');
+    expect(r.summary).toContain('运单号必填');
+    expect(r.summary.split('；')).toHaveLength(2);
+    // 只错一格时 summary == first，两者不该互相矛盾
+    const one = shipErrors({ carrier: 'Japan Post', trackingNo: '' });
+    expect(one.summary).toBe(one.first);
+    expect(shipErrors({ carrier: 'Japan Post', trackingNo: 'EL123' }).summary).toBe('');
+  });
+
   it('⚠️ toShipBody 换成服务端键名 tracking_no（写成 trackingNo 服务端会 40001）', () => {
     expect(toShipBody({ carrier: ' Japan Post ', trackingNo: ' EL123 ' })).toEqual({
       carrier: 'Japan Post',

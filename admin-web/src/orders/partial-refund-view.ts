@@ -97,6 +97,36 @@ export function partialRefundGate(order: unknown): Gate {
   return { ok: true, reason: `最多可退 ${formatMinor(left.minor, left.currency)}` };
 }
 
+/**
+ * 发起前的**一次性**预检：格式 → 原因 → 可退额度。
+ *
+ * @why 必须比对可退额度：修订前 `ask()` 只查"数字格式"与"原因非空"，从不算额度——
+ *      填 999999 会直接发出去，服务端回通用「参数缺失或格式错误」（40001），
+ *      运营只会以为是格式问题，反复把 999999 改写成 999,999 再试一遍。
+ *      额度前端在同一个地方也算得出（`refundableMinor`），没理由等服务端话说回来。
+ *
+ * @why 顺序=表单自上而下（金额 → 原因 → 额度）：三条一起违反时，
+ *      第一条就是他刚才光标所在的那一行。
+ *
+ * @limitation 这里只做**早一步说清楚**，不是闸门：真正的额度判定仍在服务端
+ *            （并发下额度可能先被别人的一笔占掉），所以这里放行也仍可能被服务端拒。
+ */
+export function partialRefundInputCheck(a: {
+  amount: string;
+  reason: string;
+  order: unknown;
+}): { ok: true; minor: number } | { ok: false; reason: string } {
+  const left = refundableMinor(a.order);
+  const parsed = parseAmountToMinor(a.amount, left?.currency ?? '');
+  if (!parsed.ok) return { ok: false, reason: parsed.reason };
+  if (a.reason.trim() === '') return { ok: false, reason: '请填写退款原因（进审计台账）' };
+  if (left === null) return { ok: false, reason: '这笔订单没有已成功的支付记录，无法退款' };
+  if (parsed.minor > left.minor) {
+    return { ok: false, reason: `最多可退 ${formatMinor(left.minor, left.currency)}` };
+  }
+  return { ok: true, minor: parsed.minor };
+}
+
 export interface PartialRefundRowView {
   id: string;
   amount: string;

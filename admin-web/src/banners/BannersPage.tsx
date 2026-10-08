@@ -41,6 +41,7 @@ import {
   emptyBannerForm,
   toBannerInput,
 } from './view.js';
+import { useFormDirty } from '../ui/unsaved.js';
 
 export interface BannersPageProps {
   api: AdminApi;
@@ -56,6 +57,9 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
   const [raw, setRaw] = useState<BannerLike[]>([]);
   const [editing, setEditing] = useState<BannerLike | null>(null);
   const [form, setForm] = useState(emptyBannerForm());
+  /** 「未改动基线」：新建 / 打开编辑 / 保存成功后跟着 `form` 一起重置（第一批⑥）。 */
+  const [pristine, setPristine] = useState(emptyBannerForm());
+  useFormDirty(form, pristine);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -114,7 +118,9 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
   const startNew = (): void => {
     clearConflict();
     setEditing(null);
-    setForm(emptyBannerForm());
+    const fresh = emptyBannerForm();
+    setForm(fresh);
+    setPristine(fresh);
     setErrors({});
     setPreview('');
   };
@@ -122,7 +128,9 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
   const startEdit = (b: BannerLike): void => {
     clearConflict();
     setEditing(b);
-    setForm(bannerFormModel(b));
+    const model = bannerFormModel(b);
+    setForm(model);
+    setPristine(model);
     setErrors({});
     setPreview(typeof b['image'] === 'string' ? b['image'] : '');
   };

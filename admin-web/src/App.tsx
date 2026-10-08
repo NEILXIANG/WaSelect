@@ -44,6 +44,8 @@ import { ProductsPage } from './products/ProductsPage.js';
 import { ProductFormPage } from './products/ProductFormPage.js';
 import type { AdminProductLike } from './products/api.js';
 import { currentRoute, navigate, subscribe, type PageKey, type Route } from './router.js';
+import { ConfirmDialog } from './ui/confirm.js';
+import { UnsavedProvider, useBeforeUnload } from './ui/unsaved.js';
 
 /** 模块级单例：store 本身无状态（读写直通 localStorage），不需要随组件生命周期重建。 */
 const tokenStore = createTokenStore();
@@ -87,6 +89,11 @@ export function App() {
 function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionControls }) {
   const [route, setRoute] = useState<Route>(currentRoute);
   useEffect(() => subscribe(() => setRoute(currentRoute())), []);
+  /** 当前页面有没有未保存的改动（第一批⑥：由表单页上报，@see ../ui/unsaved.tsx）。 */
+  const [dirty, setDirty] = useState(false);
+  useBeforeUnload(dirty);
+  /** 被脏态拦下的那次导航：点了二次确认才真正走（`@see leave`）。 */
+  const [pendingNav, setPendingNav] = useState<Route | null>(null);
   const go = useCallback((next: Route) => {
     navigate(next); // 地址栏是唯一真源
     // ⚠️ 同时 setRoute 是**乐观更新**，不是第二套真源：`hashchange` 是异步派发的，
@@ -95,6 +102,26 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
     //    那条一红，这里就会开始说谎。
     setRoute(next);
   }, []);
+
+  /**
+   * 带脏态拦截的导航（第一批⑥）。
+   *
+   * @why 必须在**这一处**拦：`go` 是唯一的导航出口（侧栏按钮、看板跳转、订单列表详情都走它），
+   *      在每个调用点各判一次等于复制 N 份且必然漏。
+   * @why 保存成功后**不该**弹：`onDone` 里表单页自己会 reset 脏态（见 useFormDirty），
+   *      所以这里只要跟着 dirty 走就够了，不需要给"刚保存过"单开一个例外。
+   */
+  const leave = useCallback(
+    (next: Route, onLeave?: () => void) => {
+      if (dirty) {
+        setPendingNav(next);
+        return;
+      }
+      onLeave?.();
+      go(next);
+    },
+    [dirty, go],
+  );
   /** 商品保存成功后回到列表时显示一次的提示（三端联动 UI 模拟 2026-10-08）。 */
   const [flash, setFlash] = useState('');
   /** 商品编辑态：**不进网址**（@see @limitation 一）。 */
@@ -116,81 +143,107 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   // 认不出的网址由 `parseHash` 兜成首页（router.ts @limitation：不带 id / query），这里不再兜第二遍
   const view: PageKey = route.page;
 
-  return (
-    <div className="shell">
-      <aside className="sidebar">
-        <span className="brand">WaSelect</span>
-        <nav>
-          {NAV.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              className={t.key === view ? 'nav-item nav-item-on' : 'nav-item'}
-              onClick={() => {
-                setEditing(null);
-                go({ page: t.key, id: '', query: new URLSearchParams() });
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
-        <button type="button" className="link" onClick={logout}>
-          退出登录
-        </button>
-      </aside>
+  const body: JSX.Element = (
+    <>
+      {view === 'dashboard' && <DashboardPage api={api} onNavigate={go} />}
 
-      <main className="main">
-        {view === 'dashboard' && <DashboardPage api={api} onNavigate={go} />}
+      {view === 'orders' && (
+        <OrdersPage
+          api={api}
+          route={{ page: 'orders', id: route.id, query: route.query }}
+          onNavigate={go}
+        />
+      )}
 
-        {view === 'orders' && (
-          <OrdersPage
+      {view === 'ops' && <OpsPage api={api} />}
+
+      {view === 'risk' && <RiskPage api={api} />}
+
+      {view === 'opslog' && <OpsLogPage api={api} />}
+
+      {view === 'banners' && (
+        <BannersPage
+          api={api}
+          baseUrl={baseUrl}
+          getToken={() => tokenStore.get()}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
+
+      {view === 'products' &&
+        (editing === null ? (
+          <ProductsPage
             api={api}
-            route={{ page: 'orders', id: route.id, query: route.query }}
-            onNavigate={go}
+            onEdit={(id, source) => {
+              setFlash('');
+              setEditing({ id, source: source ?? null });
+            }}
+            flash={flash}
           />
-        )}
-
-        {view === 'ops' && <OpsPage api={api} />}
-
-        {view === 'risk' && <RiskPage api={api} />}
-
-        {view === 'opslog' && <OpsLogPage api={api} />}
-
-        {view === 'banners' && (
-          <BannersPage
+        ) : (
+          <ProductFormPage
             api={api}
             baseUrl={baseUrl}
             getToken={() => tokenStore.get()}
             onUnauthorized={onUnauthorized}
+            productId={editing.id}
+            source={editing.source}
+            onDone={(message) => {
+              setFlash(message ?? '');
+              setEditing(null);
+            }}
           />
-        )}
+        ))}
+    </>
+  );
 
-        {view === 'products' &&
-          (editing === null ? (
-            <ProductsPage
-              api={api}
-              onEdit={(id, source) => {
-                setFlash('');
-                setEditing({ id, source: source ?? null });
-              }}
-              flash={flash}
-            />
-          ) : (
-            <ProductFormPage
-              api={api}
-              baseUrl={baseUrl}
-              getToken={() => tokenStore.get()}
-              onUnauthorized={onUnauthorized}
-              productId={editing.id}
-              source={editing.source}
-              onDone={(message) => {
-                setFlash(message ?? '');
-                setEditing(null);
-              }}
-            />
-          ))}
-      </main>
+  return (
+    <div className="shell">
+      <UnsavedProvider dirty={dirty} markDirty={setDirty}>
+        <aside className="sidebar">
+          <span className="brand">WaSelect</span>
+          <nav>
+            {NAV.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                className={t.key === view ? 'nav-item nav-item-on' : 'nav-item'}
+                onClick={() =>
+                  // ⚠️ setEditing(null) 必须在**确认之后**才做：拦下时就把表单清掉，
+                  //    二次确认再点"留在这里"，运营面对的已经是一个空表单了
+                  leave({ page: t.key, id: '', query: new URLSearchParams() }, () =>
+                    setEditing(null),
+                  )
+                }
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
+          <button type="button" className="link" onClick={logout}>
+            退出登录
+          </button>
+        </aside>
+
+        <main className="main">{body}</main>
+      </UnsavedProvider>
+      {pendingNav !== null && (
+        <ConfirmDialog
+          spec={{
+            title: '离开这一页会丢掉未保存的修改',
+            body: '改了但没保存的内容不会被写入（这一页也不做本地草稿）。先回去点「保存」，或直接放弃。',
+            confirmText: '放弃修改并离开',
+            danger: true,
+          }}
+          onConfirm={() => {
+            setEditing(null);
+            setDirty(false);
+            go(pendingNav);
+            setPendingNav(null);
+          }}
+          onCancel={() => setPendingNav(null)}
+        />
+      )}
     </div>
   );
 }

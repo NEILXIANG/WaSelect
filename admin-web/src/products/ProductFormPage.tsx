@@ -27,6 +27,7 @@ import {
   PRODUCT_CATEGORY,
   productConflictRows,
   productFormErrors,
+  productFormSummary,
   productFormModel,
   productFormWarnings,
   sourceUpdatedAt,
@@ -34,6 +35,7 @@ import {
   type ProductForm,
 } from './view.js';
 import { Field, FreeTagInput, ImagePicker, TagPicker } from './ProductFormParts.js';
+import { useFormDirty } from '../ui/unsaved.js';
 import type { AdminProductLike } from './api.js';
 
 export interface ProductFormPageProps {
@@ -64,6 +66,15 @@ export function ProductFormPage({
   const [form, setForm] = useState<ProductForm>(() =>
     source === null ? productFormModel(null) : productFormModel(source),
   );
+  /**
+   * 「未改动基线」：打开这一刻的模型。
+   * @why 脏态不能拿 source 现算——`source` 是列表页带来的那一版，
+   *      而"加载最新值对照"之后表单会被换成别的内容，两者不该混为一谈。
+   *      保存成功后也要跟着更新（下面 `setPristine` 的调用点），否则保存完仍被判为"未保存"。
+   */
+  const [pristine, setPristine] = useState<ProductForm>(() =>
+    source === null ? productFormModel(null) : productFormModel(source),
+  );
   // 打开编辑页那一刻的库存：保存时只有它被改动了才提交 stock（toProductInput @see AJ-175）
   // ⚠️ 可更新：「加载最新值对照」后要换成最新库存（三端联动实测 2026-10-08）——它是 expected_stock 的来源，
   //    不换的话核对后再保存仍带打开时的旧库存，服务端永远 40914，运营只能退出重进。
@@ -85,6 +96,9 @@ export function ProductFormPage({
   const [uploading, setUploading] = useState(false);
   /** 编辑标签框里尚未按回车的草稿（A-04：保存时并入 tags，不悄悄丢掉）。 */
   const [tagDraft, setTagDraft] = useState('');
+
+  /** 标签草稿尚未并回 `form`（点了保存才算数），所以它单独算一份脏。 */
+  useFormDirty({ form, tagDraft: tagDraft.trim() }, { form: pristine, tagDraft: '' });
 
   const set = (key: keyof ProductForm, value: string | string[]) => {
     setForm((prev) => ({ ...prev, [key]: value }) as ProductForm);
@@ -112,7 +126,9 @@ export function ProductFormPage({
     const result = productFormErrors(submitted);
     if (!result.ok) {
       setErrors(result.errors);
-      setError(result.first);
+      // ⚠️ 顶部不重复第一条原文：每条的详情已在对应输入框下方显示，
+      //    再写一遍「商品名必填」会让同一句在同一屏出现两次（见 productFormSummary 的 @why）
+      setError(productFormSummary(result.errors, result.first));
       return;
     }
     setSaving(true);
@@ -131,6 +147,9 @@ export function ProductFormPage({
         }
         await updateProduct(api, productId, body, expectedUpdatedAt);
       }
+      // ⚠️ 保存成功后必须同步基线：表单已提交，它不再是"未保存的改动"
+      //    （不同步的话，点侧栏还会被"未保存提醒"拦一次——而刚保存完显然该放行）
+      setPristine(submitted);
       onDone(
         productId === null
           ? `已创建「${submitted.title.trim()}」`
