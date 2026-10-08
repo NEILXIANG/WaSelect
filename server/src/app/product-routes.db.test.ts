@@ -287,6 +287,33 @@ describe('GET /products/{id}', () => {
     }
   });
 
+  /**
+   * 编辑口径三字段（迁移 020 / AJ-296）——小程序详情页 M-02（AJ-405）直接读它们。
+   * @why 此前没有任何服务端用例钉这三个键：序列化里删掉一行，小程序详情页的"为什么值得买"
+   *      会静默消失（前端按"没撰写"降级，不报错），只有真机才看得出来。
+   */
+  it('🔴 详情带 why / maker / tags；没撰写时 why、maker 整键省略、tags 为 []', async () => {
+    await db`
+      update products set why = '铸铁蓄热足，水温掉得慢', maker = '岩手県 伝統工房',
+             tags = '["南部铁器","手工"]'::jsonb
+       where id = 'p-2'
+    `;
+    const srv = await buildServer();
+    try {
+      const filled = (await get(srv.url, '/api/v1/products/p-2')).json as Record<string, unknown>;
+      expect(filled['why']).toBe('铸铁蓄热足，水温掉得慢');
+      expect(filled['maker']).toBe('岩手県 伝統工房');
+      expect(filled['tags']).toEqual(['南部铁器', '手工']);
+
+      const blank = (await get(srv.url, '/api/v1/products/p-1')).json as Record<string, unknown>;
+      expect('why' in blank).toBe(false);
+      expect('maker' in blank).toBe(false);
+      expect(blank['tags']).toEqual([]);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('下架与不存在同码 40401（不泄露"存在但被下架"）', async () => {
     const srv = await buildServer();
     try {
