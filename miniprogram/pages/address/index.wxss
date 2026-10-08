@@ -58,7 +58,11 @@
 }
 
 .addr__act {
-  font-size: var(--ws-f-sm);
+  /* M-19（AJ-406）：文字动作的触控高度 ≥ --ws-touch-min（约 44pt）；字号从次级正文提到正文 */
+  display: flex;
+  align-items: center;
+  min-height: var(--ws-touch-min);
+  font-size: var(--ws-f-base);
   color: var(--ws-ink-soft);
 }
 

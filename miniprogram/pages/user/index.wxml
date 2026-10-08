@@ -45,6 +45,8 @@
         data-key="{{item.key}}"
         hover-class="ws-press"
         bindtap="onMenuTap"
+        aria-role="link"
+        aria-label="{{item.label}}"
       >
         <text class="mine__entry-text">{{item.label}}</text>
         <!-- 右箭头：用字符 › 而不是图标组件——本页唯一的方向提示，

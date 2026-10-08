@@ -46,6 +46,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* M-19（AJ-406）：入口整行可点，高度 ≥ --ws-touch-min（约 44pt） */
+  min-height: var(--ws-touch-min);
   padding: var(--ws-space-stack) 0;
 }
 

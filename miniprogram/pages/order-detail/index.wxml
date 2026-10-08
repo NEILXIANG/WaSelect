@@ -43,7 +43,8 @@
         <!-- M-05（AJ-405）：订单号可复制（客服第一句就要单号）；反馈页内"已复制"，不弹 toast -->
         <view class="quote-line order-no" wx:if="{{view.orderNo}}">
           <text class="ws-caption head__no" user-select>订单号 {{view.orderNo}}</text>
-          <text class="ws-caption track" bindtap="onCopyOrderNo">{{copied === 'order' ? '已复制' : '复制'}}</text>
+          <!-- M-19（AJ-406）：可点的"复制"改成 view（hover-class 只对 view 生效）并加大触控区 -->
+          <view class="track track--act" hover-class="ws-press" bindtap="onCopyOrderNo" aria-role="button" aria-label="复制订单号">{{copied === 'order' ? '已复制' : '复制'}}</view>
         </view>
         <!-- MP3-04：刚付过款、服务端还没确认——这时不给继续支付也不给取消，只说清在确认中 -->
         <text class="ws-note hint" wx:if="{{view.confirmHint}}">{{view.confirmHint}}</text>
@@ -75,7 +76,7 @@
         <text class="ws-section-kicker">Items</text>
         <view class="item" wx:for="{{view.items}}" wx:key="productId">
           <view class="ws-media ws-media--square item__media">
-            <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" />
+            <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
           </view>
           <view class="item__body">
             <text class="ws-title item__title">{{item.title}}</text>

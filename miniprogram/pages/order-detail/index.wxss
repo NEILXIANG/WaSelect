@@ -111,6 +111,16 @@
   color: var(--ws-accent);
 }
 
+/* M-19：订单号旁的"复制"——触控高度 ≥ --ws-touch-min，字号不小于次级正文 */
+.track--act {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: var(--ws-touch-min);
+  padding-left: var(--ws-space-stack);
+  font-size: var(--ws-f-sm);
+}
+
 /* 底部动作区 */
 .cta {
   padding-bottom: var(--ws-space-section);

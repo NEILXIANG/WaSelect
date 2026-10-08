@@ -83,7 +83,10 @@
 
 /* 条款勾选：整行可点（用 view 不是 button——页面不允许原生可点 button） */
 .terms {
-  padding: var(--ws-space-hair) 0;
+  /* M-19（AJ-406）：条款勾选是提交前必经的一点，触控高度 ≥ --ws-touch-min */
+  display: flex;
+  align-items: center;
+  min-height: var(--ws-touch-min);
 }
 
 .tip {
@@ -94,9 +97,12 @@
 
 /* "查看条款全文"：整行可点（同上，用 view） */
 .act {
-  margin-top: var(--ws-space-inline);
+  /* M-19：文字动作触控高度 ≥ --ws-touch-min，字号提到正文 */
+  display: flex;
+  align-items: center;
+  min-height: var(--ws-touch-min);
   color: var(--ws-accent);
-  font-size: var(--ws-f-sm);
+  font-size: var(--ws-f-base);
 }
 
 /* 底部动作区 */

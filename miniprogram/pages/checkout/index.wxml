@@ -111,7 +111,14 @@
 
   <view class="ws-gutter ws-section">
     <view class="ws-card">
-      <view class="terms" hover-class="ws-press" bindtap="onToggleTerms">
+      <view
+        class="terms"
+        hover-class="ws-press"
+        bindtap="onToggleTerms"
+        aria-role="checkbox"
+        aria-checked="{{termsAccepted}}"
+        aria-label="阅读并同意购买条款"
+      >
         <text class="ws-body">{{termsAccepted ? '✓ 已阅读并同意购买条款' : '阅读并同意购买条款'}}</text>
       </view>
       <text class="ws-caption hint" wx:if="{{termsVersion}}">条款版本 {{termsVersion}}</text>
