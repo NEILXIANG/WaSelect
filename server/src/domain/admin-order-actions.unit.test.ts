@@ -289,4 +289,33 @@ describe('shipInfoGuard：必填 + 不超过列宽（AJ-315）', () => {
     const r = shipInfoGuard({ carrier: '   ', tracking_no: '   ' });
     expect(r.ok).toBe(false);
   });
+
+  /**
+   * @why 运单号原样落库（AJ-410 / N20a）：运营实际打出 `em 123456789 jp`，这一串进了买家的发货邮件与订单页。
+   *      归一放在本函数里——单单发货、批量发货、改运单号三条路径都只经过它，一处改、三处生效。
+   */
+  it.each([
+    ['em 123456789 jp', 'EM123456789JP'],
+    [' ee123456789jp ', 'EE123456789JP'],
+    ['ej\u3000123456789\u3000jp', 'EJ123456789JP'],
+    ['ab\t12-34\ncd', 'AB12-34CD'],
+    ['1234-5678-9012', '1234-5678-9012'],
+  ] as const)('🔴 运单号归一（去所有空白、转大写、保留连字符）：%j → %s', (raw, expected) => {
+    const r = shipInfoGuard({ carrier: 'Japan Post', tracking_no: raw });
+    if (!r.ok) throw new Error('期望通过');
+    expect(r.trackingNo).toBe(expected);
+  });
+
+  it('承运商只 trim、不改大小写（自由文本，"Japan Post" 是写给人看的）', () => {
+    const r = shipInfoGuard({ carrier: ' Japan Post ', tracking_no: 'EE123456789JP' });
+    if (!r.ok) throw new Error('期望通过');
+    expect(r.carrier).toBe('Japan Post');
+  });
+
+  it('🔴 长度按**归一之后**量：去掉空白后不超上限的运单号放行（落库的就是归一值）', () => {
+    const spaced = 'T '.repeat(SHIP_MAX_CHARS.tracking_no); // 归一后恰好等于上限
+    const r = shipInfoGuard({ ...ok, tracking_no: spaced });
+    if (!r.ok) throw new Error(`期望通过，实际 ${r.reason}`);
+    expect(r.trackingNo).toBe('T'.repeat(SHIP_MAX_CHARS.tracking_no));
+  });
 });

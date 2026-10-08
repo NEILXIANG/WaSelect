@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { trackingUrl } from './tracking.js';
 import { trackingNoRecognized } from './tracking.js';
+import { isJapanPostCarrier } from '@waselect/shared';
 
 const JP = (n: string) =>
   `https://trackings.post.japanpost.jp/services/srv/search?requestNo1=${n}&search.x=1&search.y=1&locale=en&startingUrlPatten=`;
@@ -52,5 +53,20 @@ describe('trackingNoRecognized（第三轮缺口 P1-10：发货 / 改单号时�
     ['', '', false],
   ] as const)('%s / %s → %s', (carrier, no, expected) => {
     expect(trackingNoRecognized(carrier, no)).toBe(expected);
+  });
+});
+
+/**
+ * @why 中文运营实际写的是「日本邮政」（简体）/「日本郵政」（繁体·日文旧称），名单原先只有「日本郵便 / 日本邮便」，
+ *      于是这两种写法配上非 S10 单号时不报"认不出"、也给不出查件链接（AJ-410 / N20b）。
+ */
+describe('日本邮便名单含中文常见写法「日本邮政 / 日本郵政」（N20b）', () => {
+  it.each(['日本邮政', '日本郵政', '日本邮政 EMS'])('%s 被认作日本邮便', (carrier) => {
+    expect(isJapanPostCarrier(carrier)).toBe(true);
+    // 认作日本邮便 → 非 S10 单号给出形状警告（false），S10 单号认得出
+    expect(trackingNoRecognized(carrier, '1234-5678-9012')).toBe(false);
+    expect(trackingNoRecognized(carrier, 'EM123456789JP')).toBe(true);
+    // 非 S10 也给日本邮便查件链接（不是 null）
+    expect(trackingUrl(carrier, '123456789012')).toBe(JP('123456789012'));
   });
 });

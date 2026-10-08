@@ -215,3 +215,60 @@ describe('PATCH /admin/orders/:id/shipment（P1-10）', () => {
     expect(r.json['tracking_recognized']).toBe(false);
   });
 });
+
+/**
+ * @why 运单号原样落库（AJ-410 / N20a）：运营打出 `em 123456789 jp`，这一串进了买家的发货邮件与订单页。
+ *      单单发货与改运单号两条路径都要落**归一值**（去空白、转大写），时间线与审计也记归一值——
+ *      审计若仍记请求体，回溯时看到的是一串与库里对不上的单号。
+ */
+describe('运单号服务端归一（N20a）：单单发货 / 改运单号', () => {
+  async function auditAfter(target: string, action: string): Promise<Record<string, unknown>> {
+    let rows: readonly Record<string, unknown>[] = [];
+    for (let i = 0; i < 50 && rows.length === 0; i++) {
+      rows =
+        await db`select after from admin_audit where target = ${target} and action = ${action}`;
+      if (rows.length === 0) await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(rows, `admin_audit 没有 ${action}`).toHaveLength(1);
+    return rows[0]?.['after'] as Record<string, unknown>;
+  }
+
+  it('🔴 单单发货：库、响应、shipped 事件、审计 after 都是归一值', async () => {
+    await seed('o-n1', 'paid');
+    const r = await post('/api/v1/admin/orders/o-n1/ship', {
+      carrier: 'Japan Post',
+      tracking_no: ' em 123456789 jp ',
+    });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ tracking_no: 'EM123456789JP', tracking_recognized: true });
+    const [o] = await db`select tracking_no from orders where id = 'o-n1'`;
+    expect(o?.['tracking_no']).toBe('EM123456789JP');
+    const [ev] =
+      await db`select note from order_events where order_id = 'o-n1' and status = 'shipped'`;
+    expect(ev?.['note']).toBe('Japan Post / EM123456789JP');
+    expect(await auditAfter('o-n1', 'POST /admin/orders/:id/ship')).toMatchObject({
+      carrier: 'Japan Post',
+      tracking_no: 'EM123456789JP',
+    });
+  });
+
+  it('🔴 改运单号：库、响应、shipment_fixed 事件、审计 after 都是归一值（保留连字符）', async () => {
+    await seed('o-n2', 'shipped', { carrier: 'Yamato', tracking: '1234-5678-9011' });
+    const r = await post(
+      '/api/v1/admin/orders/o-n2/shipment',
+      { carrier: 'Yamato', tracking_no: 'ab 1234-5678\u30009012', reason: '单号抄错' },
+      'PATCH',
+    );
+    expect(r.status).toBe(200);
+    expect(r.json['tracking_no']).toBe('AB1234-56789012');
+    const [o] = await db`select tracking_no from orders where id = 'o-n2'`;
+    expect(o?.['tracking_no']).toBe('AB1234-56789012');
+    const [ev] =
+      await db`select note from order_events where order_id = 'o-n2' and status = 'shipment_fixed'`;
+    expect(String(ev?.['note'])).toContain('→ Yamato / AB1234-56789012；');
+    expect(await auditAfter('o-n2', 'PATCH /admin/orders/:id/shipment')).toMatchObject({
+      tracking_no: 'AB1234-56789012',
+      reason: '单号抄错',
+    });
+  });
+});

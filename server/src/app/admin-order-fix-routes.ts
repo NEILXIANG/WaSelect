@@ -12,6 +12,7 @@
  *      只允许 shipped：delivered 之后再改没有意义（货已到），paid 还没发货（走发货）。
  *      改完重发一封发货邮件，幂等键带一次性 `mail_key`——否则服务商按 `order.shipped:<订单>` 去重，新邮件发不出去。
  * @limitation 改运单号不改 `shipped_at`：发货时刻是事实，改的只是单号。
+ * @why 运单号在 shipInfoGuard 里归一（去空白、转大写，AJ-410）；事件 note 与审计 after 都记归一值。
  * @limitation 取消原因进 order_events.note 与 admin_audit；不通知买家（未付单没有付款邮件，买家在订单列表看到"已取消"）。
  * @see app/cancel-order.ts；domain/admin-order-actions.ts（shipInfoGuard / releaseReasonGuard）；契约 0.6.37
  */
@@ -27,7 +28,7 @@ import type { Clock } from '../ports/clock.js';
 import type { EventBus } from '../ports/events.js';
 import type { IdGen } from '../ports/ids.js';
 import type { PaymentRegistry } from '../ports/payment.js';
-import { setAuditBefore } from './admin-audit.js';
+import { setAuditAfter, setAuditBefore } from './admin-audit.js';
 import { requireRole, type AuthConfig } from './auth.js';
 import { assertNoPaidSession, cancelOrder } from './cancel-order.js';
 import { withUnitOfWork } from './unit-of-work.js';
@@ -104,6 +105,12 @@ export function mountAdminOrderFixRoutes(app: Express, deps: AdminOrderFixRoutes
                     ${`${row.carrier ?? '-'} / ${row.tracking_no ?? '-'} → ${ship.carrier} / ${ship.trackingNo}；原因：${reason.reason}`},
                     ${actorOf(req)}, ${at})
           `;
+        });
+        // 审计 after 记落库的归一值（AJ-410：运单号在 shipInfoGuard 里归一，请求体与库不再是同一串）
+        setAuditAfter(res, {
+          carrier: ship.carrier,
+          tracking_no: ship.trackingNo,
+          reason: reason.reason,
         });
         deps.logger.info('admin_order_shipment_fixed', { result: 'ok', order_id: id });
         // 提交后重发发货邮件：一次性 mail_key 让服务商不把它当成首封的重放

@@ -509,6 +509,19 @@ describe('订单详情：发货两步确认（P2-51）', () => {
     expect(shipPosts()[0]?.body).toEqual({ carrier: 'Japan Post', tracking_no: 'EJ123456789JP' });
   });
 
+  /** @why 服务端按归一值落库（AJ-410 / N20a）：确认框按同一口径比，并把"会保存成什么"显示出来。 */
+  it('🔴 重打运单号按归一后比对：表单里写 `em 123456789 jp`、确认框打 `em123456789JP` 也放行', async () => {
+    status = 'paid';
+    const el = await open();
+    await click(button(el, '发货…'));
+    await type(el.querySelector('input[placeholder^="承运商"]'), 'Japan Post');
+    await type(el.querySelector('input[placeholder="运单号"]'), 'em 123456789 jp');
+    await click(button(el, '发货'));
+    expect(el.querySelector('.dialog')?.textContent ?? '').toContain('EM123456789JP');
+    await type(el.querySelector('.dialog input'), 'em123456789JP');
+    expect(button(el, '确认发货')?.disabled).toBe(false);
+  });
+
   it('🔴 运单号形状认不出时，**确认之前**就提示（发货邮件随确认发出，事后提示已晚；三端联动模拟 2026-10-08）', async () => {
     status = 'paid';
     const el = await open();

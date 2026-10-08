@@ -64,7 +64,7 @@ import {
   releaseReasonGuard,
 } from '../domain/admin-order-actions.js';
 import { REFUND_REASON_MAX_LENGTH, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
-import { markAuditCommitted, setAuditBefore } from './admin-audit.js';
+import { markAuditCommitted, setAuditAfter, setAuditBefore } from './admin-audit.js';
 import { parseAddressInput } from '../domain/address-input.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
 import {
@@ -399,7 +399,10 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
     void (async () => {
       try {
         // 整段执行（校验 / 持锁闸门 / 迁移 / 提交后发事件）与批量发货共用一份（AJ-401，ship-order.ts）
-        res.json(await shipOrder(deps, String(req.params.id), req.body, adminActor(req)));
+        const shipped = await shipOrder(deps, String(req.params.id), req.body, adminActor(req));
+        // 审计 after 记**落库的归一值**而不是请求体（AJ-410）：请求体里的 `em 123 jp` 与库里对不上
+        setAuditAfter(res, { carrier: shipped.carrier, tracking_no: shipped.tracking_no });
+        res.json(shipped);
       } catch (e) {
         next(e);
       }

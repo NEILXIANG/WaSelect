@@ -12,6 +12,7 @@
 import { act, createElement, useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { button, click, mount, type, type Mounted } from '../testing/dom.js';
+import { normalizeTrackingNo } from '@waselect/shared';
 import { ConfirmDialog, typedOk, type ConfirmSpec } from './confirm.js';
 
 let mounted: Mounted | undefined;
@@ -198,6 +199,15 @@ describe('ConfirmDialog：要求逐字输入（typeToConfirm）', () => {
     expect(el.querySelector('.dialog input')).toBeNull();
     expect(button(el, '确认退款')?.disabled).toBe(false);
     // 缺陷注入点：把 `want.trim() === ''` 这个早退去掉，这里会渲染出一个输入框且按钮禁用
+  });
+
+  /** @why 运单号服务端去空白、转大写后落库（AJ-410 / N20a）：确认框必须按同一口径比，否则拦的是不存在的差异。 */
+  it('🔴 typedOk：给了 normalize 就按归一后比（运单号大小写 / 空格不同不算不一致）', () => {
+    const spec = { ...SPEC, typeToConfirm: 'EM123456789JP', normalize: normalizeTrackingNo };
+    expect(typedOk(spec, 'em 123456789 jp')).toBe(true);
+    expect(typedOk(spec, 'EM123456789JQ')).toBe(false);
+    // 不给 normalize：仍是逐字（只 trim）
+    expect(typedOk({ ...SPEC, typeToConfirm: 'EM123456789JP' }, 'em123456789jp')).toBe(false);
   });
 
   it('typedOk：空白串按不要求处理；比对前两端 trim', () => {

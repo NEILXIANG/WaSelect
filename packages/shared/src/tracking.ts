@@ -21,6 +21,9 @@ export const JAPAN_POST_NAMES: readonly string[] = [
   'jp post',
   '日本郵便',
   '日本邮便',
+  // 中文运营的实际写法（AJ-410 / N20b）：「邮政」是中国口语对日本邮便的叫法，「郵政」是繁体 / 日文旧称
+  '日本邮政',
+  '日本郵政',
   '国際小包',
   '国际小包',
 ];
@@ -37,7 +40,11 @@ export function isJapanPostCarrier(carrier: string | null | undefined): boolean 
   return JAPAN_POST_NAMES.some((name) => matchesWord(c, name));
 }
 
-/** 归一：去空白、转大写（S10 判定与查件链接共用）。 */
+/**
+ * 归一：去掉**所有**空白（含全角空格）、转大写，保留连字符。
+ * S10 判定、查件链接、以及服务端发货 / 改单号**落库前**（shipInfoGuard，AJ-410）共用这一份；
+ * 管理端"再输一遍确认"也按它比对，否则 `em 123` 与 `EM123` 会被判成两个号。
+ */
 export function normalizeTrackingNo(no: string | null | undefined): string {
   return (no ?? '').replace(/\s+/g, '').toUpperCase();
 }

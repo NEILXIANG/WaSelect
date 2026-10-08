@@ -36,6 +36,7 @@
 import {
   ADMIN_NOTE_MAX_LENGTH,
   REFUND_REASON_MAX_LENGTH,
+  normalizeTrackingNo,
   SHIP_MAX_CHARS,
   type ErrorCode,
   type OrderStatus,
@@ -214,7 +215,7 @@ export function releaseReasonGuard(raw: unknown): RefundReasonResult {
   );
 }
 
-/** 发货表单的校验结果（AJ-315）：`ok:true` 时两个值都**已 trim**。 */
+/** 发货表单的校验结果（AJ-315）：`ok:true` 时承运商**已 trim**、运单号**已归一**（AJ-410）。 */
 export type ShipInfoResult =
   | { ok: true; carrier: string; trackingNo: string }
   | { ok: false; code: ErrorCode; reason: string };
@@ -235,17 +236,27 @@ export type ShipInfoResult =
  *      本函数问"这两个文本能不能落库"。合起来会让"状态不对"与"运单号太长"争同一个码，
  *      而两者的处置完全不同（前者重试也没用，后者改短就行）——
  *      与 `refundGuard` / `refundReasonGuard` 那一对是同一条分工。
+ * @why 运单号在这里**归一**（`normalizeTrackingNo`：去掉所有空白、转大写，保留连字符；AJ-410 / N20a）：
+ *      运营实际打出 `em 123456789 jp`，原样落库后进了买家发货邮件与订单页。放在本函数而不是各路由，
+ *      是因为单单发货、批量发货（ship-order.ts）、改运单号（admin-order-fix-routes.ts）三条路径都只经过它——
+ *      一处归一、三处生效，不会出现"批量归一了、改单号没归一"的漂移。长度按**归一后**量（落库的是归一值）。
+ * @tradeoff 转大写意味着放弃"大小写敏感"的单号：已知承运商（日本邮便 S10、大和、佐川）的单号都是数字或大写字母，
+ *      不存在只靠大小写区分的两个单号；若将来接入区分大小写的承运商，需要在这里按承运商分流。
+ * @limitation 不转半角：全角字母数字原样保留，由形状警告（trackingNoRecognized 认不出）提示运营——
+ *      静默改写全角字符等于替运营猜意图（与 admin-web ship-batch.ts 同口径）。
+ *      承运商只 trim 不改大小写（自由文本，写给人看）。
  * @limitation 按 **UTF-16 码元**量长度（JS 的 `.length`），而 PG 的 `VARCHAR(n)` 按**字符**量：
  *      含 emoji / 部分罕用汉字的运单号会比库口径早一点被拒。方向是保守的——
  *      少收一个字符只是提示早一点，多收一个就是上面那条 40001。
  *
  * @see packages/shared/src/limits.ts（`SHIP_MAX_CHARS` 唯一真源）；
- *      app/admin-order-routes.ts（唯一调用方）；admin-web/src/orders/view.ts（`shipErrors`）
+ *      app/ship-order.ts 与 app/admin-order-fix-routes.ts（调用方）；admin-web/src/orders/view.ts（`shipErrors`）
  */
 export function shipInfoGuard(raw: unknown): ShipInfoResult {
   const b = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
   const carrier = typeof b['carrier'] === 'string' ? b['carrier'].trim() : '';
-  const trackingNo = typeof b['tracking_no'] === 'string' ? b['tracking_no'].trim() : '';
+  const trackingNo =
+    typeof b['tracking_no'] === 'string' ? normalizeTrackingNo(b['tracking_no']) : '';
   if (carrier === '' || trackingNo === '') {
     return { ok: false, code: 40001, reason: 'carrier_tracking_no_required' };
   }

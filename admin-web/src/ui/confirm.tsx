@@ -46,6 +46,12 @@ export interface ConfirmSpec {
   typeToConfirm?: string | undefined;
   /** 输入框上方的说明（默认给一句通用的）。 */
   typeLabel?: string | undefined;
+  /**
+   * 比对前对**两边**都做的归一（默认只 trim）。
+   * @why 运单号服务端会去空白、转大写后落库（AJ-410）：确认框若按原样比，`em123` 与 `EM123` 被判成两个号，
+   *      而它们落库后是同一个——确认框必须与落库口径一致，否则它拦的是一个不存在的差异。
+   */
+  normalize?: ((s: string) => string) | undefined;
 }
 
 /**
@@ -63,7 +69,8 @@ export interface ConfirmSpec {
 export function typedOk(spec: ConfirmSpec, typed: string): boolean {
   const want = spec.typeToConfirm;
   if (typeof want !== 'string' || want.trim() === '') return true;
-  return typed.trim() === want.trim();
+  const norm = spec.normalize ?? ((s: string) => s.trim());
+  return norm(typed) === norm(want);
 }
 
 export interface ConfirmDialogProps {

@@ -374,3 +374,31 @@ describe('POST /admin/orders/ship-batch：并发', () => {
     expect([...published].sort()).toEqual(ids);
   });
 });
+
+/** @why 批量发货走同一份 shipOrder → shipInfoGuard，但"拼起来的缝"要在批量入口自己证一次（AJ-410 / N20a）。 */
+describe('POST /admin/orders/ship-batch：运单号服务端归一（N20a）', () => {
+  it('🔴 每行落库的是归一值（去空白、转大写），逐单结果与审计 after 也是', async () => {
+    await seed('o-n1');
+    await seed('o-n2');
+    const r = await post({
+      items: [
+        { order_id: 'o-n1', carrier: 'Japan Post', tracking_no: 'ej 123456789 jp' },
+        { order_id: 'o-n2', carrier: 'Yamato', tracking_no: ' 1234-5678-9012\t' },
+      ],
+    });
+    expect(r.status).toBe(200);
+    const rows =
+      await db`select id, tracking_no from orders where id in ('o-n1', 'o-n2') order by id`;
+    expect(rows.map((x) => [x['id'], x['tracking_no']])).toEqual([
+      ['o-n1', 'EJ123456789JP'],
+      ['o-n2', '1234-5678-9012'],
+    ]);
+    const res = r.json['results'] as { order_id: string; tracking_no?: string }[];
+    expect(res.map((x) => x.tracking_no)).toEqual(['EJ123456789JP', '1234-5678-9012']);
+    const q = () =>
+      db`select after from admin_audit where action = 'POST /admin/orders/ship-batch'`;
+    await waitUntil(async () => (await q()).length > 0, '批量发货没有审计行');
+    const after = (await q())[0]?.['after'] as { results?: { tracking_no?: string }[] };
+    expect(after.results?.map((x) => x.tracking_no)).toEqual(['EJ123456789JP', '1234-5678-9012']);
+  });
+});

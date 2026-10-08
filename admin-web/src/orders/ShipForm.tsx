@@ -10,7 +10,7 @@
  * @see ./view.ts（shipGate / shipErrors / toShipBody）；../ui/confirm.tsx
  */
 import { useState } from 'react';
-import { SHIP_MAX_CHARS, trackingNoRecognized } from '@waselect/shared';
+import { normalizeTrackingNo, SHIP_MAX_CHARS, trackingNoRecognized } from '@waselect/shared';
 import { useFormDirty } from '../ui/unsaved.js';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { toastError, type ToastSink } from '../ui/toast.js';
@@ -92,10 +92,13 @@ export function ShipForm({
     }
     setDialog({
       title: '发货后不能再改址，运单号录错只能走「订单修正」',
-      body: `承运商 ${ship.carrier.trim()} / 运单号 ${ship.trackingNo.trim()}。确认后发货邮件立即发给买家。`,
+      // 显示**落库后的样子**（服务端去空白、转大写，AJ-410）：买家邮件里看到的就是这一串
+      body: `承运商 ${ship.carrier.trim()} / 运单号 ${normalizeTrackingNo(ship.trackingNo)}。确认后发货邮件立即发给买家。`,
       confirmText: '确认发货',
       danger: true,
-      typeToConfirm: ship.trackingNo.trim(),
+      typeToConfirm: normalizeTrackingNo(ship.trackingNo),
+      // 与服务端同一口径比对：再输一次时大小写、空格不同不算"不一致"
+      normalize: normalizeTrackingNo,
       typeLabel: '请再输入一次运单号（复制来的单号最容易错在首尾字符）',
     });
   };
