@@ -1,6 +1,8 @@
 /**
  * 职责：生成 admin-web 的 tokens.css（F15 单元③）——design token 颜色从 shared 单源物化。
- *      刻意薄：全部逻辑在 checkout-build-lib.ts 的 renderTokensCss（F15 单元①，17 条单测钉住）。
+ *      刻意薄：全部逻辑在 admin-tokens-lib.ts 的 renderAdminTokensCss。
+ *      AJ-411 起管理端用自己的 M3 主题（ADMIN_COLORS），不再用买家端品牌色 WS_COLORS——
+ *      买家端（checkout）仍由 build-checkout 走 renderTokensCss(WS_COLORS)，本脚本不碰它。
  *
  * 产物：admin-web/src/tokens.css（已被 .gitignore 排除——生成物不入库，与 checkout-static/dist 同口径）。
  *
@@ -14,17 +16,21 @@
  *             不红：css import 走 vite/client 的 ambient 模块声明（tsc 不查文件存在性），
  *             vite build 前 prebuild 已生成。这条链任一环节断掉的表现是 vite build 红，不是静默。
  *
- * @see scripts/checkout-build-lib.ts（renderTokensCss）；packages/shared/src/design-tokens.ts（颜色真源）
+ * @see scripts/admin-tokens-lib.ts（renderAdminTokensCss）；packages/shared/src/design-tokens.ts（颜色真源）
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WS_COLORS } from '@waselect/shared';
-import { renderTokensCss } from './checkout-build-lib.js';
+import { ADMIN_COLORS, ADMIN_LEGACY_ALIASES } from '@waselect/shared';
+import { renderAdminTokensCss } from './admin-tokens-lib.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'admin-web', 'src');
 
 mkdirSync(outDir, { recursive: true });
-writeFileSync(join(outDir, 'tokens.css'), renderTokensCss(WS_COLORS, 'gen-admin-tokens'), 'utf8');
+writeFileSync(
+  join(outDir, 'tokens.css'),
+  renderAdminTokensCss(ADMIN_COLORS, ADMIN_LEGACY_ALIASES),
+  'utf8',
+);
 process.stdout.write('[gen-admin-tokens] admin-web/src/tokens.css 已生成\n');

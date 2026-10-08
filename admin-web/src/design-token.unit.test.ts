@@ -12,14 +12,18 @@
  *      它不导出（测试文件自包含），为共享而改造一个 ✅ 单元的代价大于复制；
  *      漂移风险由两边的"扫描器自检"用例各自兜底（同一批脏样本）。
  *
- * @see scripts/checkout-build-lib.ts（collectCssVars / renderTokensCss / BRAND_NAME 复用）；
+ * @see scripts/checkout-build-lib.ts（collectCssVars / BRAND_NAME 复用）；scripts/admin-tokens-lib.ts（管理端 tokens，AJ-411）；
  *      miniprogram/design-token.unit.test.ts（扫描器同源）；docs/地基搭建清单.md F15
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { WS_COLORS } from '@waselect/shared';
-import { BRAND_NAME, collectCssVars, renderTokensCss } from '../../scripts/checkout-build-lib.js';
+import { ADMIN_COLORS, ADMIN_LEGACY_ALIASES, WS_COLORS } from '@waselect/shared';
+import { renderAdminTokensCss } from '../../scripts/admin-tokens-lib.js';
+import { BRAND_NAME, collectCssVars } from '../../scripts/checkout-build-lib.js';
+
+/** 管理端 tokens.css 的现算值（AJ-411 起是管理端自己的 M3 主题，不再是买家端 WS_COLORS）。 */
+const adminTokensCss = (): string => renderAdminTokensCss(ADMIN_COLORS, ADMIN_LEGACY_ALIASES);
 
 const root = resolve(import.meta.dirname, '../..');
 const adminWeb = join(root, 'admin-web');
@@ -91,7 +95,7 @@ describe('页面样式不得写死（约束五）', () => {
   });
 
   it('var(--ws-*) 引用 ⊆ 生成 tokens 的定义 + 页面自身定义（拼错 = 静默失效）', () => {
-    const defined = new Set(collectCssVars(renderTokensCss(WS_COLORS), 'definitions'));
+    const defined = new Set(collectCssVars(adminTokensCss(), 'definitions'));
     const dangling = pageCssFiles.flatMap((f) => {
       const css = readFileSync(f, 'utf8');
       for (const v of collectCssVars(css, 'definitions')) defined.add(v);
@@ -112,7 +116,7 @@ describe('tokens.css 生成链（生成物不入库，链条各环节都要有�
     expect(pkg.scripts['prebuild']).toContain('gen-admin-tokens');
   });
 
-  it('生成物若存在，与 renderTokensCss(WS_COLORS) 现算值逐字相等（改色没重新生成 = 漂移）', () => {
+  it('生成物若存在，与 renderAdminTokensCss 现算值逐字相等（改色没重新生成 = 漂移）', () => {
     const generated = join(adminWeb, GENERATED_TOKENS);
     let exists = true;
     try {
@@ -121,7 +125,20 @@ describe('tokens.css 生成链（生成物不入库，链条各环节都要有�
       exists = false;
     }
     if (!exists) return; // 未生成时不查内容——钩子的存在性由上一条钉住，本条件不构成永绿
-    expect(readFileSync(generated, 'utf8')).toBe(renderTokensCss(WS_COLORS, 'gen-admin-tokens'));
+    expect(readFileSync(generated, 'utf8')).toBe(adminTokensCss());
+  });
+});
+
+describe('管理端主题与买家端品牌色隔离（AJ-411）', () => {
+  it('旧名 --ws-color-* 全部指向 M3 角色，且一个买家端色值都不落进管理端 tokens', () => {
+    const css = adminTokensCss();
+    for (const k of Object.keys(WS_COLORS)) {
+      expect(css, `--ws-color-${k} 没映射`).toMatch(
+        new RegExp(`--ws-color-${k}: var\\(--md-color-[\\w-]+\\);`),
+      );
+    }
+    const leaked = Object.values(WS_COLORS).filter((hex) => hex !== '#ffffff' && css.includes(hex));
+    expect(leaked, '管理端 tokens 里出现了买家端品牌色').toEqual([]);
   });
 });
 

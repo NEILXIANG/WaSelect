@@ -41,3 +41,180 @@ export const WS_COLORS = {
 } as const;
 
 export type WsColorName = keyof typeof WS_COLORS;
+
+/* ── 管理端主题（AJ-411，Material Design 3 角色）──────────────────────────────
+ *
+ * @why 管理端单独一套色，不动上面的 WS_COLORS：WS_COLORS 是**买家**看到的品牌色（D1 轻奢日系暖色，
+ *      小程序 / 支付页 / 法务页三处同源），管理端是运营的内部工具，用户要求"有科技感、参考 Google 设计原则"。
+ *      两个受众、两种目标，共用一份色板只会让其中一方被迫妥协；分开后改管理端不可能误伤买家端。
+ * @why 用 M3 的**角色名**（primary / on-primary / surface-container-low …）而不是用途名：
+ *      角色天然成对（X 与 on-X），对比度检查就可以按"角色对"机器化（ADMIN_CONTRAST_PAIRS）。
+ * @why 色值是**手调**的 M3 色调，种子取靛蓝 #3B5BDB 一系，不是 Material Theme Builder 的导出物：
+ *      不引入第三方生成工具（完全自研），每个值都过了下面的对比度清单（admin-theme.unit.test.ts 机器校验）。
+ * @limitation 只有浅色一套；深色模式延期（AJ-411 反向风险 / 遗留）。
+ * @limitation `success / warn / info` 不是 M3 标准角色（M3 只有 error），是本项目对徽章 / 提示的扩展。
+ */
+export const ADMIN_COLORS = {
+  primary: '#3451c7',
+  'on-primary': '#ffffff',
+  'primary-container': '#dde1ff',
+  'on-primary-container': '#0f1d5c',
+  secondary: '#585e71',
+  'on-secondary': '#ffffff',
+  /** 导航选中项的胶囊底色（M3 navigation drawer 的 active indicator）。 */
+  'secondary-container': '#dce2f9',
+  'on-secondary-container': '#151b2c',
+  tertiary: '#006878',
+  'on-tertiary': '#ffffff',
+  'tertiary-container': '#aeecfc',
+  'on-tertiary-container': '#001f25',
+  /** 页面底色。 */
+  surface: '#f8f9ff',
+  'surface-container-lowest': '#ffffff',
+  'surface-container-low': '#f2f3fa',
+  'surface-container': '#eceef4',
+  'surface-container-high': '#e6e8ee',
+  'surface-container-highest': '#e0e2e9',
+  'on-surface': '#191c21',
+  /** 次要文字（原 muted）。M3 的 on-surface-variant 本身就过 AA，比旧 muted（约 3.3:1）更好读。 */
+  'on-surface-variant': '#43474f',
+  /** 输入框描边、占位符。比 M3 基线稍深一档，让占位符在白底上也过 4.5:1。 */
+  outline: '#6f737b',
+  /** 分隔线、表格行线（装饰性，不承载信息，不要求 3:1）。 */
+  'outline-variant': '#c3c6cf',
+  error: '#ba1a1a',
+  'on-error': '#ffffff',
+  'error-container': '#ffdad6',
+  'on-error-container': '#410002',
+  success: '#1b6c3a',
+  warn: '#8a5100',
+  info: '#00629d',
+  /** 遮罩与阴影的基色（透明度在使用处给，见 admin-tokens-lib）。 */
+  scrim: '#000000',
+  shadow: '#000000',
+} as const;
+
+export type AdminColorRole = keyof typeof ADMIN_COLORS;
+
+/**
+ * 旧名 → M3 角色：组件里 100 多处 `var(--ws-color-*)` 不必逐处改，换主题只在 token 层发生。
+ * @why 键集合与 WS_COLORS 一致（类型钉住）：少映射一个，管理端那一类样式就静默失效。
+ */
+export const ADMIN_LEGACY_ALIASES: Readonly<Record<WsColorName, AdminColorRole>> = {
+  bg: 'surface',
+  card: 'surface-container-lowest',
+  fg: 'on-surface',
+  muted: 'on-surface-variant',
+  error: 'error',
+  success: 'success',
+  warn: 'warn',
+  info: 'info',
+};
+
+/**
+ * 管理端实际用到的"前景 / 背景"组合与最低对比度（WCAG 2.x：正文 4.5，界面元素 / 大字 3）。
+ * @why 清单是**使用处**的事实，不是"所有角色两两组合"：新增一种组合（比如把 warn 字放到 container 底上）
+ *      就在这里加一行，`admin-theme.unit.test.ts` 会算出它过不过线。
+ * @limitation 徽章底色是 `color-mix(… 12%, 白)`，这里按同样的混色算（mixWithWhite），
+ *             与 CSS 的 sRGB 混色同口径；浏览器混色的舍入可能差 ±1 个色阶，对比度影响 < 0.05。
+ */
+export const ADMIN_CONTRAST_PAIRS: ReadonlyArray<{
+  fg: AdminColorRole;
+  bg: AdminColorRole | { tint: AdminColorRole; percent: number };
+  min: 3 | 4.5;
+  use: string;
+}> = [
+  { fg: 'on-primary', bg: 'primary', min: 4.5, use: '主按钮文字' },
+  { fg: 'on-error', bg: 'error', min: 4.5, use: '危险主按钮文字' },
+  { fg: 'on-primary-container', bg: 'primary-container', min: 4.5, use: '主色容器文字' },
+  {
+    fg: 'on-secondary-container',
+    bg: 'secondary-container',
+    min: 4.5,
+    use: '导航选中项 / 选中筛选标签',
+  },
+  { fg: 'on-tertiary-container', bg: 'tertiary-container', min: 4.5, use: '第三色容器文字' },
+  { fg: 'on-error-container', bg: 'error-container', min: 4.5, use: '错误容器文字' },
+  { fg: 'on-surface', bg: 'surface', min: 4.5, use: '正文（页面底）' },
+  { fg: 'on-surface', bg: 'surface-container-low', min: 4.5, use: '正文（卡片 / 侧栏）' },
+  { fg: 'on-surface', bg: 'surface-container-high', min: 4.5, use: '正文（弹层）' },
+  { fg: 'on-surface-variant', bg: 'surface', min: 4.5, use: '次要文字（页面底）' },
+  {
+    fg: 'on-surface-variant',
+    bg: 'surface-container-low',
+    min: 4.5,
+    use: '次要文字 / 表头 / 未选中导航',
+  },
+  {
+    fg: 'on-surface-variant',
+    bg: 'surface-container-lowest',
+    min: 4.5,
+    use: '次要文字（统计卡 / 输入框）',
+  },
+  {
+    fg: 'on-surface-variant',
+    bg: 'surface-container-high',
+    min: 4.5,
+    use: '次要文字（弹层）/ 禁用按钮文字',
+  },
+  {
+    fg: 'on-surface-variant',
+    bg: 'surface-container-highest',
+    min: 4.5,
+    use: '禁用按钮文字（最深底）',
+  },
+  {
+    fg: 'primary',
+    bg: 'surface-container-low',
+    min: 4.5,
+    use: '文字按钮 / 描边按钮 / 链接（卡片上）',
+  },
+  { fg: 'primary', bg: 'surface-container-lowest', min: 4.5, use: '文字按钮（白底）' },
+  { fg: 'primary', bg: 'surface-container-high', min: 4.5, use: '文字按钮（弹层上）' },
+  { fg: 'error', bg: 'surface-container-low', min: 4.5, use: '错误文字（卡片上）' },
+  { fg: 'error', bg: 'surface-container-high', min: 4.5, use: '危险弹层标题' },
+  { fg: 'success', bg: 'surface-container-low', min: 4.5, use: '成功文字' },
+  { fg: 'warn', bg: 'surface-container-low', min: 4.5, use: '提醒文字' },
+  { fg: 'outline', bg: 'surface-container-lowest', min: 4.5, use: '占位符（白底输入框）' },
+  { fg: 'outline', bg: 'surface-container-low', min: 3, use: '输入框 / 描边按钮的边框' },
+  { fg: 'primary', bg: 'surface', min: 3, use: '键盘焦点环' },
+  { fg: 'primary', bg: 'surface-container-low', min: 3, use: '页签选中指示条' },
+  { fg: 'warn', bg: { tint: 'warn', percent: 12 }, min: 4.5, use: '徽章：需要处理 / 待办提醒' },
+  { fg: 'info', bg: { tint: 'info', percent: 12 }, min: 4.5, use: '徽章：进行中' },
+  { fg: 'success', bg: { tint: 'success', percent: 12 }, min: 4.5, use: '徽章：完成' },
+  { fg: 'error', bg: { tint: 'error', percent: 12 }, min: 4.5, use: '徽章：拒付 / 失败' },
+  { fg: 'on-surface', bg: 'surface-container-highest', min: 4.5, use: '徽章：中性' },
+  { fg: 'on-surface-variant', bg: 'surface-container-high', min: 4.5, use: '徽章：弱化' },
+];
+
+/** `#rrggbb` → WCAG 相对亮度。 */
+function luminance(hex: string): number {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** WCAG 2.x 对比度（1～21），只收 `#rrggbb`（简写与带透明度的形状直接抛错，不猜）。 */
+export function contrastRatio(a: string, b: string): number {
+  for (const h of [a, b]) {
+    if (!/^#[0-9a-f]{6}$/i.test(h)) throw new Error(`contrastRatio 只收 #rrggbb：${h}`);
+  }
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** sRGB 下把 `hex` 按 percent% 掺进白色（同 CSS `color-mix(in srgb, X p%, #fff)`）。 */
+export function mixWithWhite(hex: string, percent: number): string {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const p = percent / 100;
+  return `#${[(n >> 16) & 255, (n >> 8) & 255, n & 255]
+    .map((v) =>
+      Math.round(v * p + 255 * (1 - p))
+        .toString(16)
+        .padStart(2, '0'),
+    )
+    .join('')}`;
+}
