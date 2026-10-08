@@ -104,7 +104,7 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
               <div className="row2">
                 <div className="field">
                   <span className="label">订单号</span>
-                  <span>{order.order_no ?? '—'}</span>
+                  <span className="mono">{order.order_no ?? '—'}</span>
                 </div>
                 <div className="field">
                   <span className="label">状态</span>

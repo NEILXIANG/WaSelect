@@ -54,6 +54,7 @@ import {
   type Route,
 } from './router.js';
 import { ConfirmDialog } from './ui/confirm.js';
+import { BrandMark, LogoutIcon, NavIcon } from './ui/icons.js';
 import { UnsavedProvider, useBeforeUnload, useDirtyRegistry } from './ui/unsaved.js';
 
 /** 模块级单例：store 本身无状态（读写直通 localStorage），不需要随组件生命周期重建。 */
@@ -257,14 +258,19 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   return (
     <div className="shell">
       <UnsavedProvider dirty={dirty} markDirty={markDirty}>
+        {/* AJ-411：M3 导航抽屉——图标 + 文字（文字不省，AJ-410），选中项是胶囊底色 + aria-current */}
         <aside className="sidebar">
-          <span className="brand">WaSelect</span>
-          <nav>
+          <span className="brand">
+            <BrandMark />
+            WaSelect
+          </span>
+          <nav aria-label="主导航">
             {NAV.map((t) => (
               <button
                 key={t.key}
                 type="button"
                 className={t.key === view ? 'nav-item nav-item-on' : 'nav-item'}
+                aria-current={t.key === view ? 'page' : undefined}
                 onClick={() =>
                   // ⚠️ setEditing(null) 必须在**确认之后**才做：拦下时就把表单清掉，
                   //    二次确认再点"留在这里"，运营面对的已经是一个空表单了
@@ -273,12 +279,14 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
                   )
                 }
               >
-                {t.label}
+                <NavIcon page={t.key} />
+                <span>{t.label}</span>
               </button>
             ))}
           </nav>
-          <button type="button" className="link" onClick={logout}>
-            退出登录
+          <button type="button" className="nav-logout" onClick={logout}>
+            <LogoutIcon />
+            <span>退出登录</span>
           </button>
         </aside>
 

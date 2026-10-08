@@ -432,7 +432,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
                   }}
                 />
               </td>
-              <td>{row.orderNo}</td>
+              <td className="mono">{row.orderNo}</td>
               <td>
                 {/* AJ-400：彩色徽章（statusText 文案不变，色调见 badges.ts） */}
                 {[
