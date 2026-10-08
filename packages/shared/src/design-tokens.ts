@@ -47,51 +47,59 @@ export type WsColorName = keyof typeof WS_COLORS;
  * @why 管理端单独一套色，不动上面的 WS_COLORS：WS_COLORS 是**买家**看到的品牌色（D1 轻奢日系暖色，
  *      小程序 / 支付页 / 法务页三处同源），管理端是运营的内部工具，用户要求"有科技感、参考 Google 设计原则"。
  *      两个受众、两种目标，共用一份色板只会让其中一方被迫妥协；分开后改管理端不可能误伤买家端。
+ *      ⚠️ AJ-412（2026-10-09 用户反馈「Google 配色风格不好」）：**色值回到品牌暖色系**（墨色主色 / 米白底 / 米色选中），
+ *      布局与交互仍按 M3（导航轨、状态层、焦点环、动效、按钮层级）。角色结构不变，只换色值。
  * @why 用 M3 的**角色名**（primary / on-primary / surface-container-low …）而不是用途名：
  *      角色天然成对（X 与 on-X），对比度检查就可以按"角色对"机器化（ADMIN_CONTRAST_PAIRS）。
- * @why 色值是**手调**的 M3 色调，种子取靛蓝 #3B5BDB 一系，不是 Material Theme Builder 的导出物：
+ * @why 色值是**手调**的（AJ-412 起从品牌 WS_COLORS 同色相派生，只在对比度不足处加深），不是 Material Theme Builder 的导出物：
  *      不引入第三方生成工具（完全自研），每个值都过了下面的对比度清单（admin-theme.unit.test.ts 机器校验）。
  * @limitation 只有浅色一套；深色模式延期（AJ-411 反向风险 / 遗留）。
  * @limitation `success / warn / info` 不是 M3 标准角色（M3 只有 error），是本项目对徽章 / 提示的扩展。
  */
 export const ADMIN_COLORS = {
-  primary: '#3451c7',
+  /** 主按钮 / 选中 / 焦点环：沿用品牌墨色（WS_COLORS.fg），与改版前的实心按钮同色。 */
+  primary: '#2b2a27',
   'on-primary': '#ffffff',
-  'primary-container': '#dde1ff',
-  'on-primary-container': '#0f1d5c',
-  secondary: '#585e71',
+  'primary-container': '#ece5d8',
+  'on-primary-container': '#2b2a27',
+  secondary: '#6b6457',
   'on-secondary': '#ffffff',
-  /** 导航选中项的胶囊底色（M3 navigation drawer 的 active indicator）。 */
-  'secondary-container': '#dce2f9',
-  'on-secondary-container': '#151b2c',
-  tertiary: '#006878',
+  /** 导航选中项的胶囊底色（M3 active indicator），取品牌米色。 */
+  'secondary-container': '#e8e0d0',
+  'on-secondary-container': '#2b2a27',
+  /** 第三色取品牌 info 蓝灰（改版前「已发货」徽章色）。 */
+  tertiary: '#56708a',
   'on-tertiary': '#ffffff',
-  'tertiary-container': '#aeecfc',
-  'on-tertiary-container': '#001f25',
-  /** 页面底色。 */
-  surface: '#f8f9ff',
+  'tertiary-container': '#dfe7ef',
+  'on-tertiary-container': '#1f3346',
+  /** 页面底色：品牌米白（WS_COLORS.bg）。 */
+  surface: '#fbf9f5',
   'surface-container-lowest': '#ffffff',
-  'surface-container-low': '#f2f3fa',
-  'surface-container': '#eceef4',
-  'surface-container-high': '#e6e8ee',
-  'surface-container-highest': '#e0e2e9',
-  'on-surface': '#191c21',
-  /** 次要文字（原 muted）。M3 的 on-surface-variant 本身就过 AA，比旧 muted（约 3.3:1）更好读。 */
-  'on-surface-variant': '#43474f',
-  /** 输入框描边、占位符。比 M3 基线稍深一档，让占位符在白底上也过 4.5:1。 */
-  outline: '#6f737b',
-  /** 分隔线、表格行线（装饰性，不承载信息，不要求 3:1）。 */
-  'outline-variant': '#c3c6cf',
-  error: '#ba1a1a',
+  'surface-container-low': '#f5f1ea',
+  'surface-container': '#efeae1',
+  'surface-container-high': '#e9e3d8',
+  'surface-container-highest': '#e3dccf',
+  'on-surface': '#2b2a27',
+  /** 次要文字：品牌 muted（#8f8a80）同色相加深到过 AA——原值对白约 3.3:1，新手看不清。 */
+  'on-surface-variant': '#5f5a51',
+  /** 输入框描边、占位符：同色相，过 4.5:1。 */
+  outline: '#736d61',
+  /** 分隔线、表格行线（装饰性）。 */
+  'outline-variant': '#d9d2c5',
+  /** 品牌 error（#a2503f）同色相略加深：弹层底上原值 4.38 < 4.5（admin-theme.unit 实测）。 */
+  error: '#984a3a',
   'on-error': '#ffffff',
-  'error-container': '#ffdad6',
-  'on-error-container': '#410002',
-  success: '#1b6c3a',
-  warn: '#8a5100',
-  info: '#00629d',
+  'error-container': '#f6e2dc',
+  'on-error-container': '#4a1d14',
+  /** 品牌 success（#5e7256）同色相略加深：徽章底上原值 4.48 < 4.5（admin-theme.unit 实测）。 */
+  success: '#566a4f',
+  /** 品牌 warn（#a67c4e）作文字对比不足，同色相加深。 */
+  warn: '#85602f',
+  /** 品牌 info（#56708a）同色相略加深：徽章底上原值 4.42 < 4.5（admin-theme.unit 实测）。 */
+  info: '#4e667e',
   /** 遮罩与阴影的基色（透明度在使用处给，见 admin-tokens-lib）。 */
   scrim: '#000000',
-  shadow: '#000000',
+  shadow: '#2b2a27',
 } as const;
 
 export type AdminColorRole = keyof typeof ADMIN_COLORS;

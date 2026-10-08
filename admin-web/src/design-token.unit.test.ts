@@ -137,8 +137,16 @@ describe('管理端主题与买家端品牌色隔离（AJ-411）', () => {
         new RegExp(`--ws-color-${k}: var\\(--md-color-[\\w-]+\\);`),
       );
     }
-    const leaked = Object.values(WS_COLORS).filter((hex) => hex !== '#ffffff' && css.includes(hex));
-    expect(leaked, '管理端 tokens 里出现了买家端品牌色').toEqual([]);
+    // AJ-412：用户决定管理端**回到品牌暖色系**，ADMIN_COLORS 与 WS_COLORS 色值本就有重合，
+    // 原"按色值查泄漏"的断言前提不再成立。要守的不变量是"管理端颜色只从 ADMIN_COLORS 来、
+    // 生成器里没有写死任何买家端色值"——改买家端品牌色不会动到管理端，反之亦然：
+    // 用一套哨兵色渲染，输出里不得出现任何 WS_COLORS 色值（生成器若偷偷读 / 写死品牌色就会红）。
+    const sentinel = Object.fromEntries(Object.keys(ADMIN_COLORS).map((k) => [k, '#123456']));
+    const isolated = renderAdminTokensCss(sentinel, ADMIN_LEGACY_ALIASES);
+    const leaked = Object.values(WS_COLORS).filter(
+      (hex) => hex !== '#ffffff' && isolated.includes(hex),
+    );
+    expect(leaked, '管理端 tokens 生成器里写死了买家端品牌色').toEqual([]);
   });
 });
 

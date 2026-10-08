@@ -1,5 +1,11 @@
 # 管理后台视觉规范（Material Design 3 原则，自研实现）
 
+> ⚠️ **2026-10-09 订正（AJ-412，用户反馈「Google 的配色风格不好」）**：**色值回到品牌暖色系**——主色 = 品牌墨色 `#2b2a27`、页面底 = 米白 `#fbf9f5`、
+> 导航选中 = 米色 `#e8e0d0`，次要文字 / 警示 / 成功 / 信息 / 错误在品牌同色相上**只加深到过 WCAG AA**（原 muted `#8f8a80` 对白仅约 3.3:1）。
+> **布局与交互仍按 Material 3**（导航抽屉 / 导航轨、状态层、焦点环、动效、按钮层级、表格密度）。下文中"靛蓝 #3451c7 / 冷色"的描述以本条为准作废；
+> 角色结构（primary / surface-container-* …）不变，现行色值以 `packages/shared/src/design-tokens.ts` 的 `ADMIN_COLORS` 为唯一来源，对比度由 `admin-theme.unit.test.ts` 机器校验。
+
+
 > 范围：**只管理端**（`admin-web/`）。买家端（小程序 / 支付页 / 法务页）的品牌色 `WS_COLORS`（D1 轻奢日系暖色）不动。
 > 来由：用户 2026-10-08「UI 风格和交互逻辑要有科技感，参考 Google 的设计原则」。决策记录见 `docs/自主决策记录.md` AJ-411。
 > 单一来源：色值 `packages/shared/src/design-tokens.ts`（`ADMIN_COLORS`）；尺寸 / 字号 / 阴影 / 动效 `scripts/admin-tokens-lib.ts`；
