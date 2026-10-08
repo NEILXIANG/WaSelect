@@ -83,7 +83,7 @@ describe('PartialRefunds', () => {
         created_at: '2026-10-06T04:00:00Z',
       },
     ]);
-    expect(el.textContent).toContain('0.50 USD');
+    expect(el.textContent).toContain('0.50 美元');
     await click(button(el, '同步'));
     expect(calls.some((c) => c.path.endsWith('/partial-refunds/rf-u/sync'))).toBe(true);
   });

@@ -308,7 +308,8 @@ body {
 }
 
 /* 表格里的文字按钮（详情 / 编辑 / 改库存）不拆字：原先「详情」被挤成上下两个字 */
-.table td .link {
+.table td .link,
+.table td .btn {
   white-space: nowrap;
 }
 

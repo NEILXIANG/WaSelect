@@ -126,9 +126,10 @@ describe('partialRefundRows', () => {
         ],
       }),
     );
+    // 2026-10-09 浏览器复验（AJ-410 N28 补漏）：记录行也写中文币种名，新手不认识 USD / JPY
     expect(rows.map((r) => [r.id, r.amount, r.statusText, r.canSync])).toEqual([
-      ['rf-1', '10.00 USD', '已退款', false],
-      ['rf-2', '0.50 USD', '结果未知（点同步取回）', true],
+      ['rf-1', '10.00 美元', '已退款', false],
+      ['rf-2', '0.50 美元', '结果未知（点同步取回）', true],
     ]);
   });
 });

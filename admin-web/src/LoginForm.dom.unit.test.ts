@@ -41,6 +41,16 @@ describe('LoginForm：新手可用性（AJ-410）', () => {
     expect(pw()?.type).toBe('password');
   });
 
+  /**
+   * 浏览器复验（2026-10-09）发现：点「显示密码」后焦点停在这个按钮上，新手接着按回车，
+   * 回车触发的是按钮本身（又把密码藏回去），而不是登录——看起来就是"按回车没反应"。
+   */
+  it('🔴 点「显示密码」后焦点回到密码框（接着按回车是登录，不是再切一次）', async () => {
+    const el = await open(async () => undefined);
+    await click(button(el, '显示密码'));
+    expect(el.ownerDocument.activeElement?.id).toBe('login-password');
+  });
+
   it('🔴 密码不对：红字只写原因，锁定规则与报障码各占一行（报障码不进红字）', async () => {
     const el = await open(async () => {
       throw new ApiError(40101, '未登录或登录已过期', 'tr-login-1');

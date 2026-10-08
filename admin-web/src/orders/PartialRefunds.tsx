@@ -152,7 +152,7 @@ export function PartialRefunds({
 
   return (
     <div className="form" onKeyDown={enterClicksPrimary}>
-      <span className="label">部分退款 / 售后退款（订单状态不变，不回补库存）</span>
+      <span className="label">部分退款 / 售后退款（订单状态不变，库存不会加回去）</span>
       {rows.length > 0 && (
         <table className="table">
           <tbody>

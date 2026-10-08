@@ -21,7 +21,7 @@
  *
  * @see contracts/api-contract.yaml /auth/admin/login；./api/endpoints.ts
  */
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { loginErrorText, loginPrecheck, type LoginErrorView } from './auth-view.js';
 import { TraceLine } from './ui/trace.js';
 
@@ -48,6 +48,8 @@ export function LoginForm({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  /** 切换后把焦点还给密码框：焦点留在按钮上时，新手接着按回车会再切一次而不是登录（2026-10-09 浏览器复验）。 */
+  const passwordRef = useRef<HTMLInputElement | null>(null);
   const [totp, setTotp] = useState('');
   const [error, setError] = useState<LoginErrorView>(NO_ERROR);
   const [busy, setBusy] = useState(false);
@@ -98,6 +100,7 @@ export function LoginForm({
         <div className="password-row">
           <input
             id="login-password"
+            ref={passwordRef}
             className="input"
             type={showPassword ? 'text' : 'password'}
             required
@@ -110,7 +113,15 @@ export function LoginForm({
             type="button"
             className="btn btn-secondary"
             aria-pressed={showPassword}
-            onClick={() => setShowPassword((v) => !v)}
+            onClick={() => {
+              setShowPassword((v) => !v);
+              const input = passwordRef.current;
+              if (input !== null) {
+                input.focus();
+                const end = input.value.length;
+                input.setSelectionRange(end, end);
+              }
+            }}
           >
             {showPassword ? '隐藏密码' : '显示密码'}
           </button>

@@ -68,7 +68,7 @@ export function currencyName(currency: string): string {
   );
 }
 
-/** 1005 USD → "10.05 美元"（运营看的提示用中文币种名；记录行仍用 {@link formatMinor}）。 */
+/** 1005 USD → "10.05 美元"（运营看到的提示与记录行都用中文币种名；`formatMinor` 只留给需要币种代码的地方）。 */
 export function formatMinorCn(minor: number, currency: string): string {
   const plain = formatMinor(minor, currency);
   return `${plain.slice(0, plain.length - currency.length)}${currencyName(currency)}`;
@@ -159,7 +159,7 @@ export interface PartialRefundRowView {
 export function partialRefundRows(order: unknown): PartialRefundRowView[] {
   return refundsOf(order).map((r) => ({
     id: String(r.id),
-    amount: formatMinor(Number(r.amount_minor), String(r.currency)),
+    amount: formatMinorCn(Number(r.amount_minor), String(r.currency)),
     statusText: STATUS_TEXT[String(r.status)] ?? String(r.status),
     reason: String(r.reason ?? ''),
     createdAt: String(r.created_at ?? ''),
