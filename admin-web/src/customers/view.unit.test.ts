@@ -99,6 +99,14 @@ describe('riskText', () => {
 });
 
 describe('statsCards', () => {
+  it('没有下单时间：日期卡大字 "—"、不出现时刻小字', () => {
+    const cards = statsCards({ order_count: 0, paid_order_count: 0, paid_total_jpy: 0 } as never);
+    expect(cards.filter((c) => c.label === '首单' || c.label === '最近下单')).toEqual([
+      { label: '首单', value: '—', sub: '' },
+      { label: '最近下单', value: '—', sub: '' },
+    ]);
+  });
+
   it('四张卡：订单数 / 累计实付 / 首单 / 最近下单；测试单单列一句', () => {
     expect(
       statsCards({
@@ -112,8 +120,9 @@ describe('statsCards', () => {
     ).toEqual([
       { label: '订单数', value: '3 单', sub: '已付款 2 单（另有测试单 1 张，不计入）' },
       { label: '累计实付', value: '21,380 円', sub: '已付款订单合计，不扣退款' },
-      { label: '首单', value: '2026-09-01 11:00', sub: '' },
-      { label: '最近下单', value: '2026-10-01 10:00', sub: '' },
+      // 2026-10-09 浏览器验收：大字只放日期（整串大字会折两行），时刻放小字
+      { label: '首单', value: '2026-09-01', sub: '11:00（日本时间）' },
+      { label: '最近下单', value: '2026-10-01', sub: '10:00（日本时间）' },
     ]);
   });
 });

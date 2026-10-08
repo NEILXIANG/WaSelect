@@ -105,6 +105,15 @@ export function customerRows(items: readonly CustomerListItem[]): CustomerRow[] 
   }));
 }
 
+/** 日期卡：`YYYY-MM-DD` 作大字，`HH:mm（日本时间）` 作小字；无值时大字 "—"、小字空。 */
+function dateCard(label: string, iso: unknown): { label: string; value: string; sub: string } {
+  const text = formatJst(iso);
+  const [date = '', time = ''] = text.split(' ');
+  return time === ''
+    ? { label, value: text, sub: '' }
+    : { label, value: date, sub: `${time}（日本时间）` };
+}
+
 export function statsCards(
   s: CustomerStatsLike,
 ): Array<{ label: string; value: string; sub: string }> {
@@ -116,8 +125,9 @@ export function statsCards(
       sub: `已付款 ${String(s.paid_order_count ?? 0)} 单${tests > 0 ? `（另有测试单 ${String(tests)} 张，不计入）` : ''}`,
     },
     { label: '累计实付', value: moneyText(s.paid_total_jpy), sub: '已付款订单合计，不扣退款' },
-    { label: '首单', value: formatJst(s.first_order_at), sub: '' },
-    { label: '最近下单', value: formatJst(s.last_order_at), sub: '' },
+    // 大字只放日期、时刻放小字：整串 "2026-10-08 02:19" 用大字号会被拆成两行（2026-10-09 浏览器验收）
+    dateCard('首单', s.first_order_at),
+    dateCard('最近下单', s.last_order_at),
   ];
 }
 

@@ -1008,6 +1008,11 @@ textarea::placeholder {
 }
 
 /* 危险动作主按钮：与常规 .btn 唯一的差别是底色转错误色——在"保存"和"退款"之间多一次停顿 */
+/* 按钮宽度贴合文字（不被所在的纵向表单拉成整行）：客户详情「拉黑该客户」原先是整行红色实心块（2026-10-09 验收） */
+.btn-fit {
+  align-self: flex-start;
+}
+
 .btn-danger {
   --state-bg: var(--md-color-error);
   color: var(--md-color-on-error);
@@ -1056,8 +1061,10 @@ textarea::placeholder {
   padding: var(--ws-space) calc(var(--ws-space) * 1.25);
   border-radius: var(--md-shape-md);
   background: var(--md-color-surface-container-lowest);
-  min-width: calc(var(--ws-space) * 11);
-  flex: 1 1 calc(var(--ws-space) * 11);
+  /* 15 × space：容得下大字号的 "2026-10-08" 不折行（11 × space 时客户详情的日期卡被拆成两行；2026-10-09 验收）。
+     放不下就整卡换行，而不是把数字拆开 */
+  min-width: calc(var(--ws-space) * 15);
+  flex: 1 1 calc(var(--ws-space) * 15);
 }
 
 .stat-label {
@@ -1067,6 +1074,7 @@ textarea::placeholder {
 }
 
 .stat-value {
+  white-space: nowrap;
   font-size: var(--md-type-headline-l);
   font-weight: 400;
   line-height: 1.25;

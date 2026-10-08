@@ -101,12 +101,22 @@ export function CustomerRiskActions({
             value={reason}
             onChange={(e) => setReason(e.target.value)}
           />
-          <button type="button" className="btn btn-danger" disabled={busy} onClick={askUnblock}>
+          <button
+            type="button"
+            className="btn btn-danger-outline btn-fit"
+            disabled={busy}
+            onClick={askUnblock}
+          >
             解除拉黑
           </button>
         </>
       ) : (
-        <button type="button" className="btn btn-danger" disabled={busy} onClick={askBlock}>
+        <button
+          type="button"
+          className="btn btn-danger-outline btn-fit"
+          disabled={busy}
+          onClick={askBlock}
+        >
           拉黑该客户
         </button>
       )}
