@@ -321,3 +321,37 @@ describe('026 down：存在关税未知的订单时拒绝回滚', () => {
     }
   }, 120_000);
 });
+
+/**
+ * 035（AJ-403）：products.status 增 `draft`。down 要把约束收回两值——库里有草稿时怎么办？
+ * 口径：**草稿改成 offline 再收紧**（不拒绝回滚）。
+ * @why 与 026 相反的取舍，理由也相反：026 的 NULL → 0 会把"不知道关税"说成"关税 0 円"（对买家说假话、涉及钱）；
+ *      draft → offline 两者对买家**同一个样子**（都不可见、不可买），丢的只是"它从没上过架"这一条后台标签。
+ *      回滚通常发生在出事的时候，那时让它因为几条草稿卡住，代价比丢一个标签大。
+ * @why 断言 offline 而不是"down 成功"即可：只断成功的话，把草稿改成 **active** 的写法也会绿——
+ *      那会在回滚时把半成品一次性全部上架，正是 035 要防的事故。
+ */
+describe('035 down：草稿转为 offline 后收紧约束（不拒绝回滚，也不把草稿上架）', () => {
+  it('🔴 有 draft 商品 → 035 down 成功，该商品变 offline；约束回到两值', async () => {
+    const names = migrationNames();
+    const i035 = names.findIndex((n) => n.startsWith('035_'));
+    expect(i035).toBeGreaterThan(0);
+    try {
+      // 退到"035 是最后一条"。⚠️ 035 本身是最后一条时步数为 0，而 node-pg-migrate 的 `down 0` = **全部回滚**
+      // （首跑实测：整库被拆光，下一句报 relation "products" does not exist），所以 0 步时不调用。
+      const steps = names.length - 1 - i035;
+      if (steps > 0) runMigrations('down', steps);
+      await db`insert into products (id, title, category, price_jpy, weight_g, origin_country, status)
+               values ('p-m035', '草稿 南部鉄器 急須', 'kitchen', 9800, 1200, 'JP', 'draft')`;
+      runMigrations('down', 1);
+      const [row] = await db`select status from products where id = 'p-m035'`;
+      expect(row?.['status']).toBe('offline');
+      await expect(db`update products set status = 'draft' where id = 'p-m035'`).rejects.toThrow(
+        /products_status_domain/,
+      );
+    } finally {
+      await db`delete from products where id = 'p-m035'`;
+      runMigrations('up');
+    }
+  }, 120_000);
+});

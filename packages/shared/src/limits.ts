@@ -240,6 +240,14 @@ export const PRODUCT_MAX_CHARS = {
  */
 export const LOW_STOCK_THRESHOLD = 5;
 
+/**
+ * 库存上限 = Postgres `INT` 上界（`products.stock INT`，AJ-403）。
+ * @why 放 shared：服务端 `PATCH /admin/products/{id}/stock` 的入参判定与管理端列表内联改库存的即时提示要同一个数；
+ *      前端再写一份 2147483647 就是第二份真源。
+ * @limitation 是**技术**上界不是业务上界（手滑 30 → 300000 仍会被接受），见 server/src/domain/stock-patch.ts。
+ */
+export const PRODUCT_MAX_STOCK = 2_147_483_647;
+
 export const SHIP_MAX_CHARS = {
   carrier: 32,
   tracking_no: 64,

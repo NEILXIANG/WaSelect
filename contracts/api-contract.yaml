@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.45
+  version: 0.6.46
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -494,6 +494,18 @@ info:
          `order_id` 不是非空字符串或超过 64 字 `order_id_invalid`、同一 `order_id` 出现两次 `duplicate_order_id`。
       ④ 没有幂等键（与单单发货一致）：已发货的单再提交 → 该行 40902 `status_shipped`。两个请求并发发同一单只会成功一次（同一把订单行锁）。
       ⑤ admin_audit 一行，after = 逐单结果（不是请求体）；一单都没成功则不写。
+    0.6.46（AJ-403：管理端第二批 C——商品草稿 + 列表内联改库存；迁移 035）：
+      ① 商品状态增 **`draft`**（草稿）：`AdminProduct.status` ∈ {active, offline, draft}；`GET /admin/products` 的 `status` 可筛 `draft`。
+         买家侧所有入口（列表 / 详情 / 报价 / 建单）对草稿的表现与 offline **完全一致**（只认 active，404 / 40401）。
+      ② ⚠️ 行为变更：`POST /admin/products` **恒建草稿**（不再"新建即上架"；请求体里的 status 忽略），因此**不再**判 40918；
+         上架只走 `PATCH /admin/products/{id}/status` → active（draft → active 时照判 40918）。
+         老调用方若依赖"建完即在售"，须补一次 PATCH。
+      ③ `PATCH /status` 仍只收 active / offline：草稿只能是**起点**，任何状态 → draft 一律 400 / 40001 `status_invalid`。draft → offline 放行。
+      ④ 新增 `PATCH /admin/products/{id}/stock`：`{stock, expected_stock}`（均为 0–2147483647 的整数，均必填）。
+         库存已不是 expected_stock → 409 / 40914（未写入）；id 不存在 → 40401；`stock` 不合法 → 40001 `stock_invalid`，
+         `expected_stock` 缺 / 不合法 → 40001 `expected_stock_required`。200 回 `{id, stock}`。
+         **不刷新** `updated_at`（与下单扣减同口径：库存不是商品信息）。草稿 / 下架商品也可改。
+      ⑤ 图片顺序：`images` 数组顺序即展示顺序、第一张为主图（此前即如此，0.6.46 起写明；服务端原样存、原样读回）。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -525,10 +537,10 @@ x-error-codes:
     40911: 不能拉黑管理员账号
     40912: 包裹超过可配送的重量上限，请拆单（0.6.16：有运费表但超过最大一档；运费表缺失仍是 50004）
     40913: 未付款的订单太多了，请先完成支付或取消后再下单（0.6.16：每用户在途单上限）
-    40914: 这条内容在你打开之后被别人改过了（0.6.18：PUT /admin/products/{id} 的乐观锁冲突；0.6.30 起 PUT /admin/banners/{id} 同用；整行未写，前端须保留表单并提示刷新后对照最新值再保存）
+    40914: 这条内容在你打开之后被别人改过了（0.6.18：PUT /admin/products/{id} 的乐观锁冲突；0.6.30 起 PUT /admin/banners/{id} 同用；0.6.46 起 PATCH /admin/products/{id}/stock 的库存凭据冲突同用；整行未写，前端须保留表单并提示刷新后对照最新值再保存）
     40916: 店铺暂停接单，请稍后再来（0.6.36：全局停售开关打开时，报价 / 建单 / 发起支付返回本码；回调、退款、发货不受影响）
     40917: 收货地址已达上限（20 个），请先删除不用的地址（0.6.36：POST /addresses）
-    40918: 运费表最高档装不下这件商品（含包材重量）（0.6.43：建 / 改在售商品、重新上架、整表替换运费表；换表时 data.product_id 指出是哪件）
+    40918: 运费表最高档装不下这件商品（含包材重量）（0.6.43：改在售商品、上架（0.6.46 起含草稿上架；新建是草稿、不再判）、整表替换运费表；换表时 data.product_id 指出是哪件）
     40915: 这张订单不属于你要拉黑的这个用户（0.6.21：POST /admin/users/{id}/block 带了 order_id 但归属核对不过；整条请求未写）
     42901: 请求过于频繁
     50000: 服务器内部错误
@@ -785,11 +797,11 @@ paths:
   /admin/products:
     get:
       summary: 商品列表（管理端；status 非法或 page/size 非法 → 40001）
-      parameters: [{name: keyword, in: query, schema: {type: string}, description: '0.6.40：商品名 / 日文名 / JAN 码，字面匹配、不区分大小写'}, {name: low_stock, in: query, schema: {type: string, enum: ['true', 'false']}, description: '0.6.40：true = 只出库存 ≤ LOW_STOCK_THRESHOLD（5）'}, {name: status, in: query, schema: {type: string, enum: [active, offline]}}, {name: page, in: query, schema: {type: integer, default: 1}}, {name: size, in: query, schema: {type: integer, default: 50, minimum: 1, maximum: 100}}]
+      parameters: [{name: keyword, in: query, schema: {type: string}, description: '0.6.40：商品名 / 日文名 / JAN 码，字面匹配、不区分大小写'}, {name: low_stock, in: query, schema: {type: string, enum: ['true', 'false']}, description: '0.6.40：true = 只出库存 ≤ LOW_STOCK_THRESHOLD（5）'}, {name: status, in: query, schema: {type: string, enum: [active, offline, draft]}, description: '0.6.46：可筛 draft（草稿）'}, {name: page, in: query, schema: {type: integer, default: 1}}, {name: size, in: query, schema: {type: integer, default: 50, minimum: 1, maximum: 100}}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminProduct'}}, total: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
     post:
-      summary: 管理员建商品（响应带 id：前端用它打后续的 PUT /{id}）
-      description: 0.6.6 补：上架校验命中任一条即 40001（见 ProductInput.compliance_tags 的七禁标签与 customs_desc_en 词表；weight_g / price_jpy 也在此校验）
+      summary: 管理员建商品（**恒建草稿** status=draft，0.6.46；响应带 id：前端用它打后续的 PUT /{id} 与 PATCH /{id}/status）
+      description: 0.6.46：新建即草稿，不再判 40918（上架时判）；请求体里的 status 忽略。0.6.6 补：上架校验命中任一条即 40001（见 ProductInput.compliance_tags 的七禁标签与 customs_desc_en 词表；weight_g / price_jpy 也在此校验）
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProductInput'}}}}
       responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/AdminProduct'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/products/{id}:
@@ -802,10 +814,17 @@ paths:
   /admin/products/{id}/status:
     patch:
       summary: 上架 / 下架；id 不存在 → **40401**
-      description: 0.6.6 补：status 只收 active / offline，其它值 40001；0 行命中一律 40401（不静默 200）
+      description: 0.6.6 补：status 只收 active / offline，其它值 40001；0 行命中一律 40401（不静默 200）。0.6.46：草稿只能是起点——目标为 draft 一律 40001；draft → active 照判 40918
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {status: {type: string, enum: [active, offline]}}}}}}
       responses: {'200': {description: 'OK（回 {id, status}：让前端不必为了确认结果再拉一次列表）', content: {application/json: {schema: {type: object, properties: {id: {type: string}, status: {type: string, enum: [active, offline]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/products/{id}/stock:
+    patch:
+      summary: 列表内联改库存（0.6.46 / AJ-403）；带库存乐观锁：expected_stock 对不上 → **40914**
+      description: 只改 stock，不碰其它字段、**不刷新 updated_at**（库存不是商品信息，与下单扣减同口径）。草稿 / 下架商品也可改。
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [stock, expected_stock], properties: {stock: {type: integer, minimum: 0, maximum: 2147483647, description: '新库存；不合法 → 40001 stock_invalid'}, expected_stock: {type: integer, minimum: 0, maximum: 2147483647, description: '列表上看到的库存（乐观锁凭据）；缺 / 不合法 → 40001 expected_stock_required；与库里不一致 → 409 / 40914（未写入）'}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {id: {type: string}, stock: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /admin/upload:
     post:
       summary: 图片上传（multipart，服务端写对象存储并生成 thumb/card/detail 三档 webp；响应 ImageSet 增带 image_key = detail 档键）
@@ -951,7 +970,7 @@ components:
                maker: {type: string, maxLength: 120, description: '0.6.23：产地 / 工房 / 匠人署名。可选；缺失时前端不渲染这一行'},
                tags: {type: array, items: {type: string}, description: '0.6.23：编辑展示标签（自由文案，给买家看）。⚠️ 与 compliance_tags（能不能寄，封闭枚举）分工不同，不可混填'}}}
     Product: {description: '商品详情。实现不返回 ProductCard.image（缩略图只在列表卡片用，详情用 images）；AdminProduct 另不返回 display / image（0.6.10 ⑦）', allOf: [{$ref: '#/components/schemas/ProductCard'}, {type: object, properties: {description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, weight_g: {type: integer}, compliance_tags: {type: array, items: {type: string}}, hs_code: {type: string}, customs_desc_en: {type: string}, origin_country: {type: string}, ship_within_business_days: {type: integer, minimum: 1, maximum: 30, description: '0.6.11（AJ-180）：发货时限承诺（付款后 N 个工作日内发出，FTC / D-39⑦）；店铺级配置 SHIP_WITHIN_BUSINESS_DAYS'}}}]}
-    AdminProduct: {description: '0.6.11：不返回 ship_within_business_days（店铺级配置，只随买家商品详情下发）', allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time, description: '商品**信息**最后被改的时刻（0.6.18：不含库存变动——下单扣减与取消/关单回补都不刷新它）。同时是 `PUT /admin/products/{id}` 的乐观锁凭据（`expected_updated_at`）与管理端列表的排序键'}}}]}
+    AdminProduct: {description: '0.6.11：不返回 ship_within_business_days（店铺级配置，只随买家商品详情下发）', allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {status: {type: string, enum: [active, offline, draft], description: '0.6.46：增 draft（草稿；新建恒为草稿，买家侧不可见）'}, cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time, description: '商品**信息**最后被改的时刻（0.6.18：不含库存变动——下单扣减与取消/关单回补都不刷新它）。同时是 `PUT /admin/products/{id}` 的乐观锁凭据（`expected_updated_at`）与管理端列表的排序键'}}}]}
     ProductInput: {type: object, required: [title, category, price_jpy, weight_g, customs_desc_en, origin_country, hs_code], properties: {title: {type: string}, category: {type: string, enum: [beauty, daily, kitchen, food]}, description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, price_jpy: {type: integer, minimum: 1}, cost_jpy: {type: integer}, weight_g: {type: integer, minimum: 1}, stock: {type: integer, minimum: 0, description: '可选（0.6.9/AJ-175）：POST 省略 = 0；PUT 省略 = 不改库存（防编辑页打开期间的买家扣减被旧值覆盖）。填了就必须是 ≥0 整数，否则 40001'}, compliance_tags: {type: array, items: {type: string, enum: [liquid, battery, cosmetic, food, flammable, aerosol, electrical, quasi_drug, sunscreen, children_product, alcohol]}, description: 'flammable / aerosol / electrical / quasi_drug / sunscreen / children_product / alcohol 七个标签上架即拒（40001）：前两者为日本邮便航空禁寄品（D-42），electrical 为 MVP 不上电器（D-45），quasi_drug（医薬部外品/薬用）与 sunscreen（SPF）在美国 FDA 口径属 OTC 药品、children_product 需 CPSIA 检测、alcohol 需酒类免许且不可邮寄（D-51）；customs_desc_en 含 medicated/whitening/SPF/sunscreen/drug 亦拒'}, hs_code: {type: string, maxLength: 16, description: '0.6.37：上限 16（迁移 031，带点的美国 10 位 HTS `3304.99.5000` 可存）。报关 HS 码；0.6.31 起**所有商品必填**（缺省 / 空白 → 40001 hs_code_required）。此前仅食品/化妆品必填、其余"由 Zonos 识别"，但 Zonos 从未接入（D-39/D-42，AJ-368）'}, customs_desc_en: {type: string, description: '英文报关品名，上架必填（D-39）'}, origin_country: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', enum: [JP], description: '原产地 ISO 3166-1 alpha-2，必填无默认，按商品包装实录；MVP 仅接受 JP——非 JP 一律 400 拒绝上架（D-42/D-43）'}, title_ja: {type: string, description: '日文品名（采购用）'}, jan_code: {type: string, description: 'JAN 码'}, purchase_source: {type: string, description: '采购渠道'},
                  why: {type: string, maxLength: 200, description: '0.6.23：编辑口径的"为什么值得买"。可选（必填会逼运营编一句假文案）；超 200 字报 40001 why_too_long，**不静默截断**'},
                  maker: {type: string, maxLength: 120, description: '0.6.23：产地 / 工房 / 匠人署名。可选；超 120 字报 40001 maker_too_long（与 DB VARCHAR(120) 同宽）'},

@@ -1,5 +1,7 @@
 /**
- * 职责：商品列表页（分页 / 筛选 / 上下架 / 去编辑）。
+ * 职责：商品列表页（分页 / 筛选 / 上下架 / 去编辑 / 内联改库存）。
+ *
+ * @why 草稿（AJ-403）与下架共用"上架"按钮：两者对买家都不可见，上架都走同一条 PATCH（同一组 40918 判定）。
  *
  * @why 上下架失败**保留列表**并只显示错误：清空列表的表现是"操作失败连商品都没了"，
  *      运营会以为数据丢了，而实际只是那一次 PATCH 没成功。
@@ -16,14 +18,16 @@
 import { LOW_STOCK_THRESHOLD, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
+import { ToastStack, useToasts } from '../ui/toast.js';
 import { listProducts, setProductStatus, type AdminApi, type AdminProductLike } from './api.js';
-import { productRows, withStatus, type ProductRow } from './view.js';
+import { StockCell } from './StockCell.js';
+import { productRows, STATUS_LABELS, withStatus, withStock, type ProductRow } from './view.js';
 
 /** 每页条数（契约默认 50；管理端用 20 让一屏放得下）。 */
 const PAGE_SIZE = 20;
 
-/** 筛选态（`all` 是**前端**概念，服务端只接受 active/offline，所以 all = 不传该参数）。 */
-type StatusFilter = 'all' | 'active' | 'offline';
+/** 筛选态（`all` 是**前端**概念，服务端只接受 active/offline/draft，所以 all = 不传该参数）。 */
+type StatusFilter = 'all' | 'active' | 'offline' | 'draft';
 
 export interface ProductsPageProps {
   api: AdminApi;
@@ -59,6 +63,8 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
    *      原位置换成了另一件商品，连点两下就会误下架（或误上架）另一件。改成两步：点一下出「确认」，再点才生效。
    */
   const [confirmId, setConfirmId] = useState('');
+  /** 内联改库存的反馈出口（AJ-403；本页其余反馈仍是行内，见 ui/adoption 的欠账清单）。 */
+  const sink = useToasts();
 
   /**
    * 请求序号（A-05）：翻页 / 切筛选时，晚到的旧响应不得覆盖新状态。
@@ -121,6 +127,12 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
     [api, load],
   );
 
+  /** 内联改库存成功：就地改这一行（原始条目 + 展示行），不重取列表（StockCell @limitation 一）。 */
+  const onStockSaved = useCallback((id: string, stock: number) => {
+    setRaw((prev) => prev.map((p) => (p.id === id ? { ...p, stock } : p)));
+    setRows((prev) => prev.map((r) => (r.id === id ? withStock(r, stock) : r)));
+  }, []);
+
   const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
@@ -133,7 +145,7 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
       </header>
 
       <div className="filters">
-        {(['all', 'active', 'offline'] as const).map((s) => (
+        {(['all', 'active', 'draft', 'offline'] as const).map((s) => (
           <button
             key={s}
             type="button"
@@ -143,7 +155,7 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
               setPage(1);
             }}
           >
-            {s === 'all' ? '全部' : s === 'active' ? '在售' : '已下架'}
+            {s === 'all' ? '全部' : STATUS_LABELS[s]}
           </button>
         ))}
         <button
@@ -181,6 +193,7 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
         </button>
       </div>
 
+      <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
       {flash !== '' && (
         <p className="ok" role="status">
           {flash}
@@ -217,10 +230,16 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
               <td>{row.title}</td>
               <td className="muted">{row.categoryLabel}</td>
               <td>{row.priceText}</td>
-              <td className={row.lowStock ? 'error' : undefined}>
-                {row.stockText}
-                {row.lowStock ? '（紧张）' : ''}
-              </td>
+              <StockCell
+                api={api}
+                sink={sink}
+                id={row.id}
+                stock={raw.find((r) => r.id === row.id)?.stock}
+                stockText={row.stockText}
+                lowStock={row.lowStock}
+                onSaved={onStockSaved}
+                onRefresh={() => void load()}
+              />
               <td className={row.online ? 'ok' : 'muted'}>{row.statusText}</td>
               <td>
                 <button

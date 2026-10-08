@@ -33,14 +33,22 @@ import {
   COMPLIANCE_TAG,
   PRODUCT_CATEGORY,
   PRODUCT_MAX_CHARS,
+  PRODUCT_MAX_STOCK,
   PRODUCT_MAX_WEIGHT_G,
   type ProductCategory,
 } from '@waselect/shared';
 import { moneyText } from '../format.js';
 
-/** 商品状态（契约 `/admin/products` 的 status 枚举）。 */
-export const PRODUCT_STATUS = ['active', 'offline'] as const;
+/** 商品状态（契约 `AdminProduct.status` 枚举；0.6.46 / AJ-403 增 `draft`，单测与契约双向比对）。 */
+export const PRODUCT_STATUS = ['active', 'offline', 'draft'] as const;
 export type ProductStatus = (typeof PRODUCT_STATUS)[number];
+
+/** 状态展示名（约束五：文案走映射，不在组件里三元）。 */
+export const STATUS_LABELS: Readonly<Record<ProductStatus, string>> = {
+  active: '在售',
+  offline: '已下架',
+  draft: '草稿',
+};
 
 /**
  * 分类（与契约 `/products` 的 category 枚举逐字一致，单测双向比对）。
@@ -91,9 +99,9 @@ export interface ProductRow {
 
 /**
  * `AdminProduct[]` → 列表行。
- * @why 状态文案只有两个值却仍走映射（不写 `status === 'active' ? '上架' : '下架'`）：
- *      契约新增状态时，三元表达式会**静默**把新值当成"下架"——
- *      而"一个已上架的新状态商品被显示成下架"会直接误导运营去重复上架。
+ * @why 状态文案走映射（`STATUS_LABELS`），不写 `status === 'active' ? '上架' : '下架'`：
+ *      契约新增状态时，三元表达式会**静默**把新值当成"下架"——0.6.46 加 `draft` 时正是这条兑现：
+ *      草稿若被显示成"已下架"，运营会以为它曾经卖过、被人下掉了（AJ-403）。
  */
 export function productRows(items: unknown): ProductRow[] {
   if (!Array.isArray(items)) return [];
@@ -101,7 +109,12 @@ export function productRows(items: unknown): ProductRow[] {
     .filter((p): p is Record<string, unknown> => typeof p === 'object' && p !== null)
     .filter((p) => typeof p['id'] === 'string' && p['id'] !== '')
     .map((p) => {
-      const status: ProductStatus = p['status'] === 'active' ? 'active' : 'offline';
+      // 认不出的值按 offline（不在售）显示：把未知状态显示成"在售"会让运营以为买家看得见
+      const raw = p['status'];
+      const status: ProductStatus =
+        typeof raw === 'string' && (PRODUCT_STATUS as readonly string[]).includes(raw)
+          ? (raw as ProductStatus)
+          : 'offline';
       const category = p['category'];
       return {
         id: p['id'] as string,
@@ -112,9 +125,8 @@ export function productRows(items: unknown): ProductRow[] {
             : ((category as string) ?? ''),
         // 与订单页同一个格式化（千分位 + 円；非整数显示 —），P2-52
         priceText: moneyText(p['price_jpy']),
-        stockText: Number.isInteger(p['stock']) ? String(p['stock']) : '—',
         thumb: firstThumb(p['images']),
-        lowStock: Number.isInteger(p['stock']) && (p['stock'] as number) <= LOW_STOCK_THRESHOLD,
+        ...stockFields(p['stock']),
         ...statusFields(status),
       };
     });
@@ -139,9 +151,27 @@ function firstThumb(images: unknown): string {
 function statusFields(status: ProductStatus): Pick<ProductRow, 'status' | 'statusText' | 'online'> {
   return {
     status,
-    statusText: status === 'active' ? '在售' : '已下架',
+    statusText: STATUS_LABELS[status],
     online: status === 'active',
   };
+}
+
+/**
+ * 由库存推出的两个展示字段——**只在这一处算**（与 `statusFields` 同一条理由，AJ-231 / AJ-403）。
+ * @why 列表内联改库存成功后要就地刷新这一行：若另写一份"≤ 阈值标红"，改完库存的那一行
+ *      与刷新后的列表会对"紧张"给出两种答案。
+ */
+function stockFields(stock: unknown): Pick<ProductRow, 'stockText' | 'lowStock'> {
+  const ok = Number.isInteger(stock);
+  return {
+    stockText: ok ? String(stock) : '—',
+    lowStock: ok && (stock as number) <= LOW_STOCK_THRESHOLD,
+  };
+}
+
+/** 把一行的库存改成指定值（列表内联改库存成功后用；不改其它字段）。 */
+export function withStock(row: ProductRow, stock: number): ProductRow {
+  return { ...row, ...stockFields(stock) };
 }
 
 /** 把一行改成指定状态（乐观更新与失败回滚都用它；不改其它字段）。 */
@@ -622,4 +652,38 @@ export function toProductInput(form: unknown, originalStock?: string): Record<st
         : { thumb: img.thumb, card: img.card, detail: img.detail },
     ),
   };
+}
+
+/**
+ * 把第 `from` 张图挪到第 `to` 位（AJ-403：数组顺序即展示顺序，第一张是主图）。
+ * @why 越界（含"第一张再上移 / 最后一张再下移"）**原样返回**而不是夹到边上：
+ *      按钮已在边界处禁用，走到这里说明调用方算错了下标——夹一下会把错误变成一次"看起来合理"的挪动。
+ * @returns 新数组（不改入参：表单 state 要能和"未改动基线"比出差异）
+ */
+export function moveImage<T>(images: readonly T[], from: number, to: number): T[] {
+  const n = images.length;
+  if (from < 0 || from >= n || to < 0 || to >= n || from === to) return [...images];
+  const next = [...images];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved as T);
+  return next;
+}
+
+/** 设为主图 = 挪到第一张（其余相对顺序不变）。 */
+export function makeMainImage<T>(images: readonly T[], index: number): T[] {
+  return moveImage(images, index, 0);
+}
+
+/**
+ * 列表内联改库存的输入判定（AJ-403）：十进制非负整数、≤ `PRODUCT_MAX_STOCK`（与服务端 stock-patch 同源）。
+ * @why 空串单独报"必填"（A-06 同口径）：`Number('') === 0`，清空输入框不该被当成"改成 0、直接售罄"。
+ */
+export function parseStockEdit(
+  raw: string,
+): { ok: true; value: number } | { ok: false; error: string } {
+  if (raw.trim() === '') return { ok: false, error: '库存必填（真的卖完了请填 0）' };
+  const n = plainInt(raw);
+  if (n === null) return { ok: false, error: `库存必须是 ≥0 的整数${sciHint(raw)}` };
+  if (n > PRODUCT_MAX_STOCK) return { ok: false, error: `库存最多 ${PRODUCT_MAX_STOCK}` };
+  return { ok: true, value: n };
 }

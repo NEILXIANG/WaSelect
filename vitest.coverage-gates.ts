@@ -145,6 +145,13 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     statements: 100,
   },
   'server/src/app/unit-of-work.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  // AJ-403：列表内联改库存的入参判定——放过一个负数 / 越界值就是超卖或 50000
+  'server/src/domain/stock-patch.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
 
   // ── 幂等与回调登记：重复扣款、重复落账的最后一道闸 ──
   'server/src/adapters/idempotency.ts': {

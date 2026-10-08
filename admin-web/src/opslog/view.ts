@@ -27,6 +27,7 @@ export const ACTION_LABELS: Readonly<Record<string, string>> = {
   'POST /admin/products': '新建商品',
   'PUT /admin/products/:id': '编辑商品',
   'PATCH /admin/products/:id/status': '商品上下架',
+  'PATCH /admin/products/:id/stock': '改库存',
   'POST /admin/upload': '上传图片',
   'POST /admin/banners': '新建 Banner',
   'PUT /admin/banners/:id': '编辑 Banner',

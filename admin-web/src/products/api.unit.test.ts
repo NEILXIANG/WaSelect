@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAdminApi } from '../api/client.js';
 import { NETWORK_ERROR_CODE } from '../api/errors.js';
-import { listProducts, setProductStatus, updateProduct } from './api.js';
+import { listProducts, setProductStatus, setProductStock, updateProduct } from './api.js';
 
 /** 造一个假 fetch：记录最后一次请求，返回预定响应。 */
 function stubFetch(handler: (url: string, init: RequestInit) => Response) {
@@ -108,5 +108,37 @@ describe('updateProduct / setProductStatus', () => {
     expect(seen[0]?.url).toBe('http://localhost:3000/api/v1/admin/products/p-1/status');
     expect(seen[0]?.init.method).toBe('PATCH');
     expect(JSON.parse(String(seen[0]?.init.body))).toEqual({ status: 'offline' });
+  });
+});
+
+describe('AJ-403：草稿筛选 / 改库存窄接口 / PUT 回整行', () => {
+  it('列表可按 status=draft 筛', async () => {
+    const { impl, seen } = stubFetch(() => json({ items: [], total: 0 }));
+    await listProducts(api(impl), { status: 'draft' });
+    expect(seen[0]?.url).toBe('http://localhost:3000/api/v1/admin/products?status=draft');
+  });
+
+  it('🔴 setProductStock：PATCH /{id}/stock，只发 {stock, expected_stock}，回 {id, stock}', async () => {
+    const { impl, seen } = stubFetch(() => json({ id: 'p 1', stock: 30 }));
+    const r = await setProductStock(api(impl), 'p 1', 30, 3);
+    expect(seen[0]?.url).toBe('http://localhost:3000/api/v1/admin/products/p%201/stock');
+    expect(seen[0]?.init.method).toBe('PATCH');
+    expect(JSON.parse(String(seen[0]?.init.body))).toEqual({ stock: 30, expected_stock: 3 });
+    expect(r).toEqual({ id: 'p 1', stock: 30 });
+  });
+
+  it('⚠️ setProductStock 响应缺 stock → 抛形状错（不让 undefined 流进库存列）', async () => {
+    const { impl } = stubFetch(() => json({ id: 'p-1' }));
+    await expect(setProductStock(api(impl), 'p-1', 30, 3)).rejects.toMatchObject({
+      code: NETWORK_ERROR_CODE,
+    });
+  });
+
+  it('🔴 updateProduct 回服务端整行（编辑页据此换版本凭据，保存后再上架不必回列表）', async () => {
+    const row = { id: 'p-1', status: 'draft', updated_at: '2026-10-07T00:00:00.000Z', stock: 5 };
+    const { impl } = stubFetch(() => json(row));
+    expect(
+      await updateProduct(api(impl), 'p-1', { title: 'x' }, '2026-10-01T00:00:00.000Z'),
+    ).toEqual(row);
   });
 });

@@ -1,6 +1,7 @@
 /**
  * 职责：管理端商品端点（I2 U-A3）——`GET/POST /admin/products`、
- *      `PUT /admin/products/{id}`、`PATCH /admin/products/{id}/status`。
+ *      `PUT /admin/products/{id}`、`PATCH /admin/products/{id}/status`、
+ *      `PATCH /admin/products/{id}/stock`（列表内联改库存，AJ-403）。
  *
  * @why 四条路由共用**一个** `requireAdmin` 守卫实例，而不是每条各写一遍：
  *      守卫抄四遍，将来"要不要加一条审计"就得改四处，漏一处就是
@@ -23,6 +24,16 @@
  *              真要透传需扩契约 `Err` 加 `data`（登记为待办）。
  * @limitation 二：不做删除——`status='offline'` 即下架（商品被订单引用，删了订单说不清卖了什么）。
  *
+ * @why 草稿（035 / AJ-403）：`POST` **恒建草稿**（请求体里的 status 一律忽略），上架只走 `PATCH /status`。
+ *      @why 上架判定（P2-30 运费表 40918）因此只有**一处**入口：若 POST 也能直接建在售，
+ *           判定就得在两处各写一遍，漏一处就是"超重商品从新建那条路直接上架"。
+ *      @why 草稿只能是**起点**：PATCH 只收 active / offline，不收 draft——
+ *           上过架的商品"不卖了"叫下架；退回草稿会让"它曾经卖过"这件事在状态上消失。
+ *      @tradeoff 前端"保存并上架"要打两次请求（POST 再 PATCH）；第二步失败时商品已作为草稿存下，
+ *                运营改好再点上架即可——比"一次失败两样都没有"更不丢活。
+ *      @limitation 草稿与在售走**同一套**字段校验（不允许"先存一半"的不完整草稿）：
+ *                  缺必填照样 40001。对标平台的草稿允许缺字段，我们没做——那要两套校验与"上架前补齐"检查。
+ *
  * @see adapters/catalog-admin.ts（仓储）；domain/product-input.ts（校验）；
  *      contracts/api-contract.yaml（AdminProduct / ProductInput）
  */
@@ -37,14 +48,21 @@ import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
 import { toImageSet } from './product-routes.js';
-import { createCatalogAdminRepo, type AdminProductRow } from '../adapters/catalog-admin.js';
+import {
+  createCatalogAdminRepo,
+  type AdminProductRow,
+  type ProductStatus,
+} from '../adapters/catalog-admin.js';
+import { parseStockPatch } from '../domain/stock-patch.js';
 import { validateProductInput } from '../domain/product-input.js';
 import { fitsShippingTable } from '../domain/shipping-fit.js';
 import { isImageId } from '../domain/upload-image.js';
 import { setAuditTarget } from './admin-audit.js';
 
-/** 契约 `PATCH status` 的两值枚举（下线不发版这条要改时，改这里 + 契约 + 前端三处）。 */
-const PRODUCT_STATUS = ['active', 'offline'] as const;
+/** `PATCH /status` 可设的目标状态（草稿只能是起点，见文件头 @why）。改这里要同步契约 + 前端。 */
+const PATCHABLE_STATUS = ['active', 'offline'] as const;
+/** 列表 `?status=` 可筛的全部状态（035 / AJ-403 增 draft；与库约束 products_status_domain 同一词表）。 */
+const LISTABLE_STATUS = ['active', 'offline', 'draft'] as const satisfies readonly ProductStatus[];
 
 export interface AdminProductRoutesDeps {
   db: Db;
@@ -227,7 +245,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           throw new AppError(40001, { reason: 'page_size_invalid' });
         }
         const status = q.status === undefined ? undefined : String(q.status);
-        if (status !== undefined && !(PRODUCT_STATUS as readonly string[]).includes(status)) {
+        if (status !== undefined && !(LISTABLE_STATUS as readonly string[]).includes(status)) {
           throw new AppError(40001, { reason: 'status_invalid' });
         }
         // 搜索与低库存（三端联动 UI 模拟 2026-10-08）：上限与订单搜索同一个 shared 常量
@@ -241,7 +259,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         const { items, total } = await repo.listAdminProducts({
           page,
           size,
-          status: status as 'active' | 'offline' | undefined,
+          status: status as ProductStatus | undefined,
           ...(keyword !== '' ? { keyword } : {}),
           ...(q.low_stock === 'true' ? { lowStockAt: LOW_STOCK_THRESHOLD } : {}),
         });
@@ -257,7 +275,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
       try {
         const r = validateProductInput(req.body, deps.config.MAX_ORDER_JPY);
         if (!r.ok) rejectInvalid(deps.logger, r.errors);
-        await assertFitsShipping(null, r.value.weight_g); // 新建即上架（status: 'active'）
+        // 不判 P2-30：新建是草稿，买家看不见；判定在 PATCH /status → active 那一步（AJ-403）
         const row = await repo.insertProduct({
           id: deps.idGen.uuid(),
           title: r.value.title,
@@ -275,7 +293,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
           title_ja: r.value.title_ja ?? null,
           jan_code: r.value.jan_code ?? null,
           purchase_source: r.value.purchase_source ?? null,
-          status: 'active',
+          status: 'draft', // AJ-403：恒建草稿，请求体里的 status 忽略（见文件头）
           // 编辑口径三字段（020）：省略 → null / []（"还没撰写"，前端降级）
           why: r.value.why ?? null,
           maker: r.value.maker ?? null,
@@ -362,7 +380,10 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
       try {
         const id = String(req.params.id);
         const status = (req.body as { status?: unknown } | undefined)?.status;
-        if (typeof status !== 'string' || !(PRODUCT_STATUS as readonly string[]).includes(status)) {
+        if (
+          typeof status !== 'string' ||
+          !(PATCHABLE_STATUS as readonly string[]).includes(status)
+        ) {
           throw new AppError(40001, { reason: 'status_invalid' });
         }
         if (status === 'active') {
@@ -372,6 +393,36 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         const hit = await repo.setProductStatus(id, status as 'active' | 'offline');
         if (!hit) throw new AppError(40401, { product_id: id });
         res.json({ id, status });
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  /**
+   * 列表内联改库存（AJ-403）：`{stock, expected_stock}`，库存已不是 expected_stock → 40914。
+   * @why 窄接口而不是整行 PUT：列表行改库存若走 PUT，就得带齐全部字段与 `expected_updated_at`——
+   *      别人改了一下标题，改库存就无辜 40914；而库存真正要护住的只有"期间被下单扣减"这一件事。
+   * @why 不推进 `updated_at`（仓储 setStock 的 @why）：正在编辑同一商品的人不会因此 40914，列表也不跳行。
+   *      编辑页若同时改了库存，它带的 expected_stock 会对不上 → 40914，那正是该拦的冲突。
+   * @limitation 状态不限：草稿 / 下架商品也能改库存（备货本来就在上架之前）。
+   */
+  app.patch('/api/v1/admin/products/:id/stock', guard, (req, res, next) => {
+    void (async () => {
+      try {
+        const id = String(req.params.id);
+        const p = parseStockPatch(req.body);
+        if (!p.ok) throw new AppError(40001, { reason: p.reason });
+        const result = await repo.setStock(id, p.stock, p.expectedStock);
+        if (!result.ok) {
+          if (result.reason === 'not_found') throw new AppError(40401, { product_id: id });
+          deps.logger.warn('admin_product_stock_stale', {
+            result: 'conflict',
+            ctx: { product_id: id, expected_stock: p.expectedStock, action: 'none（未写入）' },
+          });
+          throw new AppError(40914, { product_id: id, expected_stock: p.expectedStock });
+        }
+        res.json({ id, stock: p.stock });
       } catch (e) {
         next(e);
       }

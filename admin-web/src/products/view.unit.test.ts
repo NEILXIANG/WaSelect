@@ -14,6 +14,8 @@ import {
   BLOCKED_COMPLIANCE_TAG,
   COMPLIANCE_TAG,
   PRODUCT_MAX_CHARS,
+  LOW_STOCK_THRESHOLD,
+  PRODUCT_MAX_STOCK,
   PRODUCT_MAX_WEIGHT_G,
 } from '@waselect/shared';
 import {
@@ -30,6 +32,11 @@ import {
   productRows,
   withStatus,
   toProductInput,
+  PRODUCT_STATUS,
+  moveImage,
+  makeMainImage,
+  parseStockEdit,
+  withStock,
 } from './view.js';
 
 /** 像真的商品（约束三：真实日文品名、真实价位与重量）。 */
@@ -599,5 +606,109 @@ describe('productFormErrors：库存必填（A-06）', () => {
   });
   it('库存 0 仍然合法（真的卖完了）', () => {
     expect(productFormErrors({ ...productFormModel(PRODUCT), stock: '0' }).ok).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AJ-403（第二批 C）：草稿状态 / 图片排序 / 列表内联改库存
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('草稿状态（AJ-403）', () => {
+  it('🔴 PRODUCT_STATUS 与契约 AdminProduct.status 枚举逐字一致（双向）', () => {
+    const yaml = readFileSync(
+      resolve(import.meta.dirname, '../../../contracts/api-contract.yaml'),
+      'utf8',
+    );
+    const m = /AdminProduct: .*?status: \{type: string, enum: \[([^\]]+)\]/.exec(yaml);
+    expect(m?.[1], '契约里没找到 AdminProduct.status 的 enum').toBeTruthy();
+    const contract = (m?.[1] ?? '').split(',').map((s) => s.trim());
+    expect([...PRODUCT_STATUS].sort()).toEqual(contract.sort());
+  });
+
+  it('🔴 draft 行：状态列「草稿」、online=false（按钮是"上架"），不被折叠成"已下架"', () => {
+    const row = productRows([{ ...PRODUCT, status: 'draft' }])[0];
+    expect(row).toMatchObject({ status: 'draft', statusText: '草稿', online: false });
+  });
+
+  it('withStatus 草稿 → 在售：三个展示字段一起变', () => {
+    const row = productRows([{ ...PRODUCT, status: 'draft' }])[0]!;
+    expect(withStatus(row, 'active')).toMatchObject({
+      status: 'active',
+      statusText: '在售',
+      online: true,
+    });
+  });
+});
+
+describe('图片排序 moveImage / makeMainImage（AJ-403：数组顺序即展示顺序，第一张是主图）', () => {
+  const img = (k: string) => ({
+    image_id: `img-${k}`,
+    thumb: `${k}.t`,
+    card: `${k}.c`,
+    detail: `${k}.d`,
+  });
+  const A = img('a');
+  const B = img('b');
+  const C = img('c');
+  const ids = (xs: Array<{ image_id?: string }>) => xs.map((x) => x.image_id);
+
+  it.each([
+    [0, 1, ['img-b', 'img-a', 'img-c']], // 下移
+    [2, 1, ['img-a', 'img-c', 'img-b']], // 上移
+    [0, 2, ['img-b', 'img-c', 'img-a']], // 跨两格
+    [0, -1, ['img-a', 'img-b', 'img-c']], // 已在最前再上移：不动
+    [2, 3, ['img-a', 'img-b', 'img-c']], // 已在最后再下移：不动
+    [5, 0, ['img-a', 'img-b', 'img-c']], // 源下标越界：不动
+    [1, 1, ['img-a', 'img-b', 'img-c']], // 原地
+  ])('moveImage(%i → %i)', (from, to, expected) => {
+    const src = [A, B, C];
+    expect(ids(moveImage(src, from, to))).toEqual(expected);
+    expect(ids(src)).toEqual(['img-a', 'img-b', 'img-c']); // 不改入参
+  });
+
+  it('makeMainImage：第三张设为主图 = 移到第一张，其余相对顺序不变', () => {
+    expect(ids(makeMainImage([A, B, C], 2))).toEqual(['img-c', 'img-a', 'img-b']);
+    expect(ids(makeMainImage([A, B, C], 0))).toEqual(['img-a', 'img-b', 'img-c']);
+    expect(ids(makeMainImage([A, B, C], 9))).toEqual(['img-a', 'img-b', 'img-c']);
+  });
+
+  it('🔴 排完序后 toProductInput 按新顺序提交（主图是第一张）', () => {
+    const form = { ...productFormModel(PRODUCT), images: makeMainImage([A, B, C], 2) };
+    expect(toProductInput(form, '12')['images']).toEqual([
+      { image_id: 'img-c' },
+      { image_id: 'img-a' },
+      { image_id: 'img-b' },
+    ]);
+  });
+});
+
+describe('parseStockEdit：列表内联改库存的即时判定（AJ-403）', () => {
+  it.each([
+    ['0', 0],
+    ['30', 30],
+    [' 7 ', 7],
+    [String(PRODUCT_MAX_STOCK), PRODUCT_MAX_STOCK],
+  ])('合法 %j → %i', (raw, value) => {
+    expect(parseStockEdit(raw)).toEqual({ ok: true, value });
+  });
+
+  it.each(['', '  ', '-1', '1.5', '1e3', 'abc', '0x10', String(PRODUCT_MAX_STOCK + 1)])(
+    '不合法 %j → 带人话的错误',
+    (raw) => {
+      const r = parseStockEdit(raw);
+      expect(r.ok).toBe(false);
+      expect(r.ok ? '' : r.error).toMatch(/库存/);
+    },
+  );
+});
+
+describe('withStock：库存的两个展示字段一起改（AJ-403）', () => {
+  it.each([
+    [LOW_STOCK_THRESHOLD, true],
+    [LOW_STOCK_THRESHOLD + 1, false],
+    [0, true],
+  ])('stock=%i → lowStock=%s，stockText 跟着变', (stock, low) => {
+    const row = productRows([{ ...PRODUCT, stock: 100 }])[0]!;
+    expect(withStock(row, stock)).toEqual({ ...row, stockText: String(stock), lowStock: low });
   });
 });

@@ -723,3 +723,51 @@ body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/*
+ * 商品编辑页分组双栏（AJ-403，对标 §4.3「编辑页布局」）。
+ * @why 与订单详情 `.detail-grid` 同一套比例与塌缩点（2fr / 1fr、60rem）：两处都是"主内容 + 看一眼就定的侧栏"，
+ *      用同一组数，后台各页的栏宽看起来是同一个系统。
+ * @why `minmax(0, …)`：同 `.detail-grid` 的说明，否则长 URL / 长标签会把栅格顶破出横向滚动条。
+ */
+.product-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--ws-space);
+  align-items: start;
+}
+
+.product-main,
+.product-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space);
+  min-width: 0;
+}
+
+/* 一组字段一张卡：边框而不是底色——表单本身已在 .panel 的卡片底色上，再叠底色层次就乱了 */
+.form-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space);
+  border: var(--ws-border) solid var(--ws-color-muted);
+  border-radius: var(--ws-radius);
+  padding: var(--ws-space);
+}
+
+.form-card-title {
+  margin: 0;
+  font-size: var(--ws-font);
+}
+
+/* 窄屏塌回单列：侧栏（含提交按钮）落到表单末尾 */
+@media (max-width: 60rem) {
+  .product-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 列表内联改库存的输入框（AJ-403）：只放得下几位数，不占满单元格 */
+.stock-input {
+  width: calc(var(--ws-space) * 6);
+}

@@ -11,7 +11,7 @@
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
-import { button, click, flush, mount, type Mounted } from '../testing/dom.js';
+import { button, click, flush, mount, type as typeInto, type Mounted } from '../testing/dom.js';
 import { ProductsPage } from './ProductsPage.js';
 
 let mounted: Mounted | undefined;
@@ -136,5 +136,124 @@ describe('商品列表：上下架后编辑（A-03）', () => {
     await flush();
     await click(button(el, '编辑'));
     expect(edited.at(-1)?.['updated_at']).toBe('2026-10-05T00:00:00.000Z');
+  });
+});
+
+/**
+ * AJ-403（第二批 C）：草稿筛选 / 草稿上架 / 列表内联改库存。
+ * 假服务端是**有状态**的：库存与状态被 PATCH 改写，列表 GET 回的是改写后的值（与真服务端一致），
+ * 这样"冲突后刷新拿到的是最新库存"才测得到。
+ */
+describe('商品列表：草稿与内联改库存（AJ-403）', () => {
+  let state: { status: string; stock: number };
+  let reqs: Array<{ path: string; method?: string; body?: unknown }>;
+  /** 下一次 PATCH stock 之前，模拟"期间有人下单扣减"。 */
+  let sellBeforeNextStockPatch = false;
+
+  async function openDraft(initial: { status: string; stock: number }): Promise<HTMLElement> {
+    state = { ...initial };
+    reqs = [];
+    sellBeforeNextStockPatch = false;
+    const api = async (req: {
+      path: string;
+      method?: string;
+      body?: unknown;
+    }): Promise<unknown> => {
+      reqs.push(req);
+      if (req.method === 'PATCH' && req.path.endsWith('/stock')) {
+        if (sellBeforeNextStockPatch) {
+          sellBeforeNextStockPatch = false;
+          state.stock -= 1;
+        }
+        const b = req.body as { stock: number; expected_stock: number };
+        if (b.expected_stock !== state.stock)
+          throw new ApiError(40914, '这条内容在你打开之后被别人改过了', 't-stock');
+        state.stock = b.stock;
+        return { id: 'p-1', stock: state.stock };
+      }
+      if (req.method === 'PATCH') {
+        state.status = (req.body as { status: string }).status;
+        return { id: 'p-1', status: state.status };
+      }
+      return {
+        items: [{ ...PRODUCT, ...state, updated_at: '2026-10-01T00:00:00.000Z' }],
+        total: 1,
+      };
+    };
+    mounted = await mount(
+      createElement(ProductsPage, { api: api as never, onEdit: () => undefined }),
+    );
+    return mounted.el;
+  }
+
+  const stockCell = (el: HTMLElement): HTMLTableCellElement =>
+    el.querySelector('tbody tr')!.querySelectorAll('td')[4] as HTMLTableCellElement;
+  const stockInput = (el: HTMLElement): HTMLInputElement | null =>
+    stockCell(el).querySelector('input');
+  const toastText = (el: HTMLElement): string =>
+    [...el.querySelectorAll('.toast')].map((t) => t.textContent ?? '').join('|');
+  const gets = (): number =>
+    reqs.filter((r) => r.method === undefined || r.method === 'GET').length;
+
+  it('🔴 「草稿」筛选 → 请求带 status=draft；草稿行状态列「草稿」、按钮「上架」→ 确认后 PATCH active', async () => {
+    const el = await openDraft({ status: 'draft', stock: 12 });
+    expect(statusCell(el)).toBe('草稿');
+    await click(button(el, '草稿'));
+    expect(reqs.at(-1)?.path).toContain('status=draft');
+    await toggleStatus(el, '上架');
+    expect(reqs.filter((r) => r.method === 'PATCH').map((r) => r.body)).toEqual([
+      { status: 'active' },
+    ]);
+    expect(statusCell(el)).toBe('在售');
+  });
+
+  it('🔴 改库存成功：PATCH /stock 带列表上看到的库存作 expected_stock；单元格与「紧张」标记跟着变；成功走 Toast', async () => {
+    const el = await openDraft({ status: 'active', stock: 3 });
+    expect(stockCell(el).textContent).toContain('紧张');
+    await click(button(el, '改库存'));
+    expect(stockInput(el)?.value).toBe('3');
+    await typeInto(stockInput(el), '30');
+    await click(button(el, '保存库存'));
+    const patch = reqs.find((r) => r.path.endsWith('/stock'));
+    expect(patch?.path).toBe('/api/v1/admin/products/p-1/stock');
+    expect(patch?.body).toEqual({ stock: 30, expected_stock: 3 });
+    expect(stockInput(el)).toBeNull();
+    expect(stockCell(el).textContent).toContain('30');
+    expect(stockCell(el).textContent).not.toContain('紧张');
+    expect(toastText(el)).toContain('30');
+  });
+
+  it('🔴 40914（期间被买走一件）：输入框保留运营填的值、Toast 说清要刷新；点「刷新」后再存带**最新**库存', async () => {
+    const el = await openDraft({ status: 'active', stock: 3 });
+    await click(button(el, '改库存'));
+    await typeInto(stockInput(el), '30');
+    sellBeforeNextStockPatch = true;
+    await click(button(el, '保存库存'));
+    expect(stockInput(el)?.value).toBe('30'); // 没被清、没被改回 3
+    expect(toastText(el)).toContain('刷新');
+    expect(state.stock).toBe(2); // 服务端没被覆盖
+
+    const before = gets();
+    await click(button(el, '刷新'));
+    expect(gets()).toBe(before + 1);
+    expect(stockInput(el)?.value).toBe('30'); // 刷新列表不丢正在填的值
+    await click(button(el, '保存库存'));
+    expect(reqs.filter((r) => r.path.endsWith('/stock')).at(-1)?.body).toEqual({
+      stock: 30,
+      expected_stock: 2,
+    });
+    expect(state.stock).toBe(30);
+  });
+
+  it('不合法输入（-1）：就地提示、不发请求；「放弃」回到原值', async () => {
+    const el = await openDraft({ status: 'active', stock: 3 });
+    await click(button(el, '改库存'));
+    await typeInto(stockInput(el), '-1');
+    await click(button(el, '保存库存'));
+    expect(reqs.filter((r) => r.path.endsWith('/stock'))).toHaveLength(0);
+    expect(stockCell(el).querySelector('.error')?.textContent).toMatch(/库存/);
+    await click(button(el, '放弃'));
+    expect(stockInput(el)).toBeNull();
+    expect(stockCell(el).textContent).toContain('3');
   });
 });

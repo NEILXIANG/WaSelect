@@ -64,7 +64,7 @@ export interface ProductListResp {
 
 /** 列表查询参数（契约：`status` 可选、`page`/`size` 有默认值）。 */
 export interface ProductListQuery {
-  status?: 'active' | 'offline';
+  status?: 'active' | 'offline' | 'draft';
   page?: number;
   size?: number;
   /** 商品名 / 日文名 / JAN 码（契约 0.6.40）。 */
@@ -148,8 +148,8 @@ export async function updateProduct(
   body: Record<string, unknown>,
   expectedUpdatedAt: string,
   traceId?: string,
-): Promise<void> {
-  await api({
+): Promise<AdminProductLike> {
+  const resp = await api({
     path: `/api/v1/admin/products/${encodeURIComponent(id)}`,
     method: 'PUT',
     // ⚠️ 与 `ProductInput` **并列**而不是嵌套：它不属于商品字段（服务端同口径，
@@ -157,6 +157,9 @@ export async function updateProduct(
     body: { ...body, expected_updated_at: expectedUpdatedAt },
     ...(traceId !== undefined ? { traceId } : {}),
   });
+  // AJ-403：回整行（契约本就如此）——编辑页"保存后上架失败"时留在页面，要用它换新的版本凭据
+  assertProduct(resp, traceId ?? '');
+  return resp;
 }
 
 /**
@@ -177,6 +180,35 @@ export async function setProductStatus(
     body: { status },
     ...(traceId !== undefined ? { traceId } : {}),
   });
+}
+
+/**
+ * `PATCH /admin/products/{id}/stock`（列表内联改库存，契约 0.6.46 / AJ-403）。
+ * @param expectedStock 列表上看到的库存；服务端库存已不是它 → 40914（期间有下单扣减或别人改过）。
+ * @why 不走整行 PUT：列表行没有"打开表单那一刻"的完整快照语义，借 PUT 改库存会让任何一次
+ *      无关的标题修改都把它判成冲突（服务端 admin-product-routes.ts 同名 @why）。
+ */
+export async function setProductStock(
+  api: AdminApi,
+  id: string,
+  stock: number,
+  expectedStock: number,
+  traceId?: string,
+): Promise<{ id: string; stock: number }> {
+  const resp = (await api({
+    path: `/api/v1/admin/products/${encodeURIComponent(id)}/stock`,
+    method: 'PATCH',
+    body: { stock, expected_stock: expectedStock },
+    ...(traceId !== undefined ? { traceId } : {}),
+  })) as { id?: unknown; stock?: unknown } | null;
+  if (typeof resp?.id !== 'string' || !Number.isInteger(resp.stock)) {
+    throw new ApiError(
+      NETWORK_ERROR_CODE,
+      '改库存响应形状与契约不符（缺 id / stock）',
+      traceId ?? '',
+    );
+  }
+  return { id: resp.id, stock: resp.stock as number };
 }
 
 /** 列表响应形状校验（@see @limitation 一）。 */

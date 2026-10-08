@@ -16,25 +16,40 @@
  *      现在原地保留表单，给「加载最新值对照」：取最新一版只读摆在旁边（逐字段标出不同），
  *      并把版本凭据换成最新一版——运营核对后再点保存，就是"看过对方改动之后，用我的内容覆盖"。
  *
- * @see ./view.ts（模型与校验真源）；./api.ts（提交与上传）；./ProductFormParts.tsx（字段组件）
+ * @why 草稿（AJ-403）：新建只给「保存为草稿 / 保存并上架」两个按钮，没有含糊的"保存"——
+ *      服务端恒建草稿（契约 0.6.46），「保存并上架」= 保存后再打一次 `PATCH /status → active`
+ *      （上架判定 40918 只在那一处）。第二步失败时商品**已作为草稿存下**：页面留在原地、转为编辑态
+ *      （用 POST / PUT 回来的整行换版本凭据），运营改好再点一次即可，不会重复建一条。
+ *      编辑**在售**商品只有「保存」：上下架仍在列表页（这里再放一个下架按钮，会和保存的乐观锁凭据打架）。
+ *
+ * @see ./view.ts（模型与校验真源）；./api.ts（提交与上传）；./ProductFormParts.tsx（字段组件）；
+ *      ./ProductFormSections.tsx（分组卡片与双栏布局）
  */
 import { useState } from 'react';
 import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
 import { uploadImage } from '../api/upload.js';
-import { createProduct, findProductById, updateProduct, type AdminApi } from './api.js';
 import {
-  CATEGORY_LABELS,
-  PRODUCT_CATEGORY,
+  createProduct,
+  findProductById,
+  setProductStatus,
+  updateProduct,
+  type AdminApi,
+} from './api.js';
+import {
+  makeMainImage,
+  moveImage,
   productConflictRows,
   productFormErrors,
   productFormSummary,
   productFormModel,
   productFormWarnings,
   sourceUpdatedAt,
+  STATUS_LABELS,
   toProductInput,
   type ProductForm,
+  type ProductStatus,
 } from './view.js';
-import { Field, FreeTagInput, ImagePicker, TagPicker } from './ProductFormParts.js';
+import { ProductMainColumn, ProductSideColumn } from './ProductFormSections.js';
 import { useFormDirty } from '../ui/unsaved.js';
 import type { AdminProductLike } from './api.js';
 
@@ -96,6 +111,14 @@ export function ProductFormPage({
   const [uploading, setUploading] = useState(false);
   /** 编辑标签框里尚未按回车的草稿（A-04：保存时并入 tags，不悄悄丢掉）。 */
   const [tagDraft, setTagDraft] = useState('');
+  /**
+   * 新建后"上架失败"留在本页时拿到的商品 id（AJ-403）：此后本页按**编辑态**工作，
+   * 再保存走 PUT 而不是再 POST 一条（否则每重试一次就多一件重复商品）。
+   */
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const editId = productId ?? createdId;
+  /** 当前状态（状态卡显示用；新建未保存为 null）。 */
+  const [status, setStatus] = useState<ProductStatus | null>(() => statusOf(source));
 
   /** 标签草稿尚未并回 `form`（点了保存才算数），所以它单独算一份脏。 */
   useFormDirty({ form, tagDraft: tagDraft.trim() }, { form: pristine, tagDraft: '' });
@@ -110,7 +133,8 @@ export function ProductFormPage({
     });
   };
 
-  const onSubmit = async () => {
+  /** @param publish true = 保存后再上架（「保存并上架」）。 */
+  const onSubmit = async (publish: boolean) => {
     // 图片还在上传时不能保存（A-08）：否则商品建好了却不带这张图，存储里多一套孤儿对象
     if (uploading) return;
     // 标签草稿并入（A-04）：打了字没按回车就点保存，本意就是要这个标签
@@ -126,35 +150,52 @@ export function ProductFormPage({
     const result = productFormErrors(submitted);
     if (!result.ok) {
       setErrors(result.errors);
-      // ⚠️ 顶部不重复第一条原文：每条的详情已在对应输入框下方显示，
-      //    再写一遍「商品名必填」会让同一句在同一屏出现两次（见 productFormSummary 的 @why）
+      // ⚠️ 顶部不重复第一条原文：每条的详情已在对应输入框下方显示（见 productFormSummary 的 @why）
       setError(productFormSummary(result.errors, result.first));
       return;
     }
+    const wasNew = editId === null;
+    const title = submitted.title.trim();
     setSaving(true);
     setError('');
     try {
-      const body = toProductInput(submitted, productId === null ? undefined : originalStock);
-      if (productId === null) {
-        await createProduct(api, body);
+      const body = toProductInput(submitted, wasNew ? undefined : originalStock);
+      let id: string;
+      let row: AdminProductLike;
+      if (wasNew) {
+        row = await createProduct(api, body);
+        id = row.id;
+        setCreatedId(id);
       } else {
-        // ⚠️ 拿不到凭据时**就地拦下**给一句明白话，而不是发出去等服务端 40001：
-        //    "缺 updated_at"的 40001 与"报关品名不合法"的 40001 在运营眼里是同一句
-        //    "请求参数不合法"，他会去改品名、改十遍也改不对（@limitation 一：服务端字段级错误不透传）。
+        // ⚠️ 拿不到凭据时**就地拦下**给一句明白话，而不是发出去等服务端 40001（@limitation 一）
         if (expectedUpdatedAt === '') {
           setError('缺少商品版本信息（updated_at）：请返回列表重新进入编辑，再保存');
           return;
         }
-        await updateProduct(api, productId, body, expectedUpdatedAt);
+        id = editId;
+        row = await updateProduct(api, id, body, expectedUpdatedAt);
       }
       // ⚠️ 保存成功后必须同步基线：表单已提交，它不再是"未保存的改动"
-      //    （不同步的话，点侧栏还会被"未保存提醒"拦一次——而刚保存完显然该放行）
       setPristine(submitted);
-      onDone(
-        productId === null
-          ? `已创建「${submitted.title.trim()}」`
-          : `已保存「${submitted.title.trim()}」`,
-      );
+      // 换成服务端这一版的凭据（只在"上架失败、留在本页"时会用到；回列表时无所谓）
+      setExpectedUpdatedAt(sourceUpdatedAt(row));
+      setOriginalStock(productFormModel(row).stock || submitted.stock);
+      const savedStatus = statusOf(row) ?? (wasNew ? 'draft' : status);
+      setStatus(savedStatus);
+      if (!publish) {
+        onDone(wasNew ? `已保存为草稿「${title}」` : `已保存「${title}」`);
+        return;
+      }
+      try {
+        await setProductStatus(api, id, 'active');
+      } catch (e) {
+        // 第一步已落库：说清"存下了什么"，再说上架为什么没成（AJ-403 文件头）
+        const why = e instanceof ApiError ? e.message : String(e);
+        const kept = savedStatus === 'offline' ? '已保存（仍为已下架）' : '已保存为草稿';
+        setError(`${kept}，但上架失败：${why}。改好后再点「保存并上架」`);
+        return;
+      }
+      onDone(wasNew ? `已创建并上架「${title}」` : `已保存并上架「${title}」`);
     } catch (e) {
       // @see @limitation 一：失败保留表单
       setError(e instanceof ApiError ? e.message : String(e));
@@ -172,10 +213,10 @@ export function ProductFormPage({
   };
 
   const loadLatest = async (): Promise<void> => {
-    if (productId === null) return;
+    if (editId === null) return;
     setLoadingLatest(true);
     try {
-      const fresh = await findProductById(api, productId);
+      const fresh = await findProductById(api, editId);
       if (fresh === null) {
         setError('在商品列表里找不到这条商品（可能已被删除）：你填的内容还在，可复制留存');
         return;
@@ -227,7 +268,7 @@ export function ProductFormPage({
   return (
     <section className="panel">
       <header className="panel-head">
-        <h1 className="title">{productId === null ? '新建商品' : '编辑商品'}</h1>
+        <h1 className="title">{editId === null ? '新建商品' : '编辑商品'}</h1>
         <button type="button" className="link" onClick={() => onDone()}>
           返回列表
         </button>
@@ -282,161 +323,82 @@ export function ProductFormPage({
       ))}
 
       <form
-        className="form"
+        className="product-grid"
         onSubmit={(e) => {
           e.preventDefault();
-          void onSubmit();
+          void onSubmit(false);
         }}
       >
-        <Field
-          label="商品名（面向买家）"
-          value={form.title}
-          onChange={(v) => set('title', v)}
-          error={errors['title'] ?? ''}
-          placeholder="資生堂 クレンジングオイル 200ml"
-        />
-        <Field
-          label="日文品名（采购用）"
-          value={form.titleJa}
-          onChange={(v) => set('titleJa', v)}
-          placeholder="資生堂 クレンジングオイル"
-        />
-        <Field
-          label="英文报关品名（必填，D-39）"
-          value={form.customsDescEn}
-          onChange={(v) => set('customsDescEn', v)}
-          error={errors['customsDescEn'] ?? ''}
-          placeholder="Cleansing oil 200ml"
-        />
-        <Field
-          label="HS 编码（必填）"
-          value={form.hsCode}
-          onChange={(v) => set('hsCode', v)}
-          error={errors['hsCode'] ?? ''}
-          placeholder="3304.99"
-        />
-
-        <div className="row2">
-          <Field
-            label="售价（円）"
-            type="number"
-            value={form.priceJpy}
-            onChange={(v) => set('priceJpy', v)}
-            error={errors['priceJpy'] ?? ''}
-          />
-          <Field
-            label="采购成本（円，可留空）"
-            type="number"
-            value={form.costJpy}
-            onChange={(v) => set('costJpy', v)}
-            error={errors['costJpy'] ?? ''}
-          />
-          <Field
-            label="重量（克）"
-            type="number"
-            value={form.weightG}
-            onChange={(v) => set('weightG', v)}
-            error={errors['weightG'] ?? ''}
-          />
-          <Field
-            label="库存"
-            type="number"
-            value={form.stock}
-            onChange={(v) => set('stock', v)}
-            error={errors['stock'] ?? ''}
-          />
-        </div>
-
-        <label className="field">
-          <span className="label">分类</span>
-          <select
-            className="input"
-            value={form.category}
-            onChange={(e) => set('category', e.target.value)}
-          >
-            {/* ⚠️ 选项由 `PRODUCT_CATEGORY` + `CATEGORY_LABELS` 生成，不写死四个 `<option>`（ADM3-08）：
-                写死时，契约新增分类后 view 层的"与契约 enum 双向比对"会红并被修好，
-                而这个下拉不会跟着变——编辑新分类的商品时，受控 select 的 value 不在选项里，
-                浏览器显示**第一项**、state 里却仍是新分类。运营看到的分类是错的，
-                他若手动选回第一项，就真的把商品改错了（约束五：文案走配置）。 */}
-            {PRODUCT_CATEGORY.map((c) => (
-              <option key={c} value={c}>
-                {CATEGORY_LABELS[c]}
-              </option>
-            ))}
-          </select>
-          {errors['category'] !== undefined && <span className="error">{errors['category']}</span>}
-        </label>
-
-        {/* 原产地只读：MVP 只接受 JP（D-42/D-43），让它可改只会造出必然被拒的请求 */}
-        <Field
-          label="原产地（MVP 固定 JP）"
-          value={form.originCountry}
-          onChange={() => {}}
-          readOnly
-        />
-
-        <Field
-          label="JAN 码"
-          value={form.janCode}
-          onChange={(v) => set('janCode', v)}
-          placeholder="4901872071234"
-        />
-        <Field
-          label="采购渠道"
-          value={form.purchaseSource}
-          onChange={(v) => set('purchaseSource', v)}
-          placeholder="cosme.net"
-        />
-        <Field
-          label="商品描述"
-          multiline
-          value={form.description}
-          onChange={(v) => set('description', v)}
-        />
-
-        {/* ── 编辑口径（020）：印在买家卡片上的内容，与下面的合规标签不是一回事 ── */}
-        <Field
-          label="为什么值得买（买家可见，一句带判断的话）"
-          value={form.editorialWhy}
-          onChange={(v) => set('editorialWhy', v)}
-          error={errors['editorialWhy'] ?? ''}
-          placeholder="铸铁蓄热足，水温掉得慢——但养锅比用锅费事"
-        />
-        <Field
-          label="产地 / 工房 / 匠人（买家可见）"
-          value={form.editorialMaker}
-          onChange={(v) => set('editorialMaker', v)}
-          error={errors['editorialMaker'] ?? ''}
-          placeholder="岩手县 伝統工房"
-        />
-        <FreeTagInput
-          value={form.editorialTags}
-          onChange={(tags) => set('editorialTags', tags)}
-          draft={tagDraft}
-          onDraftChange={setTagDraft}
-          error={errors['editorialTags'] ?? ''}
-        />
-
-        <TagPicker
-          value={form.complianceTags}
-          onChange={(tags) => set('complianceTags', tags)}
-          error={errors['complianceTags'] ?? ''}
-        />
-
-        <ImagePicker
-          images={form.images}
-          onAdd={(file) => void onUpload(file)}
-          onRemove={(i) =>
+        <ProductMainColumn
+          form={form}
+          set={set}
+          errors={errors}
+          tagDraft={tagDraft}
+          onTagDraftChange={setTagDraft}
+          uploading={uploading}
+          onUpload={(file) => void onUpload(file)}
+          onRemoveImage={(i) =>
             setForm((prev) => ({ ...prev, images: prev.images.filter((_, k) => k !== i) }))
           }
-          uploading={uploading}
+          onMoveImage={(from, to) =>
+            setForm((prev) => ({ ...prev, images: moveImage(prev.images, from, to) }))
+          }
+          onMakeMain={(i) =>
+            setForm((prev) => ({ ...prev, images: makeMainImage(prev.images, i) }))
+          }
         />
-
-        <button type="submit" className="btn" disabled={saving || uploading}>
-          {saving ? '保存中…' : uploading ? '图片上传中…' : '保存'}
-        </button>
+        <ProductSideColumn
+          form={form}
+          set={set}
+          errors={errors}
+          statusCard={
+            <>
+              <p>
+                当前：
+                <strong>
+                  {status !== null
+                    ? STATUS_LABELS[status]
+                    : editId === null
+                      ? '新建（保存后为草稿）'
+                      : '未知'}
+                </strong>
+              </p>
+              <p className="muted">
+                {status === 'active'
+                  ? '在售商品的上下架请在列表页操作'
+                  : '草稿与已下架商品买家都看不见；「保存并上架」会先保存，再检查重量是否超出运费表'}
+              </p>
+              <div className="action-bar">
+                <button type="submit" className="btn" disabled={saving || uploading}>
+                  {saving
+                    ? '保存中…'
+                    : uploading
+                      ? '图片上传中…'
+                      : editId === null
+                        ? '保存为草稿'
+                        : '保存'}
+                </button>
+                {status !== 'active' && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={saving || uploading}
+                    onClick={() => void onSubmit(true)}
+                  >
+                    保存并上架
+                  </button>
+                )}
+              </div>
+            </>
+          }
+        />
       </form>
     </section>
   );
+}
+
+/** 行里的 status → 已知状态；认不出 / 没有 → null（状态卡显示"新建"语义只在 source 为 null 时成立）。 */
+function statusOf(p: AdminProductLike | null): ProductStatus | null {
+  const st = p?.status;
+  return st === 'active' || st === 'offline' || st === 'draft' ? st : null;
 }

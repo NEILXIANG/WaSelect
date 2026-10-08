@@ -354,6 +354,17 @@ describe('002 加固：约束真的会拦', () => {
     ).rejects.toThrow(/orders_status_domain/);
   });
 
+  it('🔴 products.status 三值（035 / AJ-403）：active / offline / draft 可写，其它值被 products_status_domain 拒', async () => {
+    for (const [i, st] of ['active', 'offline', 'draft'].entries()) {
+      await db`insert into products (id, title, category, price_jpy, weight_g, origin_country, status)
+               values (${`p-dom-${i}`}, 'dom', 'beauty', 100, 100, 'JP', ${st})`;
+    }
+    await expect(
+      db`insert into products (id, title, category, price_jpy, weight_g, origin_country, status)
+         values ('p-dom-bad', 'dom', 'beauty', 100, 100, 'JP', 'deleted')`,
+    ).rejects.toThrow(/products_status_domain/);
+  });
+
   it('payments.status 写入未登记状态被拒（009 payments_status_domain；三审 P3-C1）', async () => {
     await ensureUser();
     await db`insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, fx_snapshot, address_snapshot, terms_version, expires_at)

@@ -290,10 +290,11 @@ describe('商品编辑：保存撞上 40914（ADM3-02）', () => {
     await typeInto(field(el, 'HS 编码（必填）'), '8211.91');
     // 新建库存默认留空、必填（三端联动 UI 模拟 2026-10-08）：不填先被拦
     expect(field(el, '库存').value).toBe('');
-    await click(button(el, '保存'));
+    // AJ-403：新建的保存按钮叫「保存为草稿」（新建恒为草稿；另有「保存并上架」）
+    await click(button(el, '保存为草稿'));
     expect(calls).toHaveLength(0);
     await typeInto(field(el, '库存'), '30');
-    await click(button(el, '保存'));
+    await click(button(el, '保存为草稿'));
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe('POST');
     expect(calls[0]?.body).toMatchObject({ stock: 30 });
@@ -388,6 +389,169 @@ describe('商品表单：未保存改动上报（第一批⑥）', () => {
     const el = await openWithDirty(SOURCE);
     await typeInto(field(el, '商品名（面向买家）'), '改过的标题');
     await click(button(el, '保存'));
+    expect(dirtyOf(el)).toBe('yes');
+  });
+});
+
+/**
+ * AJ-403（第二批 C）：草稿 / 保存并上架 / 分组布局 / 图片排序。
+ * 假服务端按真服务端的形状回：POST 回整行（status=draft + updated_at），PUT 回整行，PATCH status 回 {id, status}。
+ */
+describe('商品表单：草稿与保存并上架（AJ-403）', () => {
+  let reqs: Array<{ path: string; method?: string; body?: unknown }>;
+  let publishFails: boolean;
+  let doneMsgs: Array<string | undefined>;
+
+  async function openForm(source: Record<string, unknown> | null): Promise<HTMLElement> {
+    reqs = [];
+    doneMsgs = [];
+    const api = async (req: {
+      path: string;
+      method?: string;
+      body?: unknown;
+    }): Promise<unknown> => {
+      reqs.push(req);
+      if (req.method === 'POST')
+        return { id: 'p-new', status: 'draft', stock: 30, updated_at: '2026-10-07T01:00:00.000Z' };
+      if (req.method === 'PUT')
+        return { id: 'p-new', status: 'draft', stock: 30, updated_at: '2026-10-07T02:00:00.000Z' };
+      if (req.method === 'PATCH') {
+        if (publishFails)
+          throw new ApiError(40918, '运费表最高档装不下这件商品（含包材重量）', 't-40918');
+        return { id: 'p-new', status: 'active' };
+      }
+      return { items: [], total: 0 };
+    };
+    mounted = await mount(
+      createElement(ProductFormPage, {
+        api: api as never,
+        baseUrl: 'http://localhost',
+        getToken: () => 'tk',
+        productId: source === null ? null : String(source['id']),
+        source: source as never,
+        onDone: (m?: string) => {
+          doneMsgs.push(m);
+        },
+      }),
+    );
+    return mounted.el;
+  }
+
+  async function fillNew(el: HTMLElement): Promise<void> {
+    await typeInto(field(el, '商品名（面向买家）'), 'Nambu Tekki 南部鉄器 急須 0.65L');
+    await typeInto(field(el, '售价（円）'), '9800');
+    await typeInto(field(el, '重量（克）'), '1200');
+    await typeInto(field(el, '库存'), '30');
+    await typeInto(field(el, '英文报关品名（必填，D-39）'), 'cast iron teapot');
+    await typeInto(field(el, 'HS 编码（必填）'), '7323.91');
+  }
+
+  it('🔴 新建：「保存为草稿」只发 POST，回列表并说"草稿"', async () => {
+    publishFails = false;
+    const el = await openForm(null);
+    expect(button(el, '保存')).toBeNull(); // 新建没有含糊的"保存"：要么草稿、要么上架
+    await fillNew(el);
+    await click(button(el, '保存为草稿'));
+    expect(reqs.map((r) => r.method)).toEqual(['POST']);
+    expect(doneMsgs).toHaveLength(1);
+    expect(doneMsgs[0]).toContain('草稿');
+  });
+
+  it('🔴 新建：「保存并上架」= POST 后 PATCH /{新 id}/status active，回列表并说"上架"', async () => {
+    publishFails = false;
+    const el = await openForm(null);
+    await fillNew(el);
+    await click(button(el, '保存并上架'));
+    expect(reqs.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'POST /api/v1/admin/products',
+      'PATCH /api/v1/admin/products/p-new/status',
+    ]);
+    expect(reqs[1]?.body).toEqual({ status: 'active' });
+    expect(doneMsgs[0]).toContain('上架');
+  });
+
+  it('🔴 新建后上架失败（40918）：留在页面、转为编辑态；再点「保存并上架」走 PUT（不重复建）并带 POST 回来的凭据', async () => {
+    publishFails = true;
+    const el = await openForm(null);
+    await fillNew(el);
+    await click(button(el, '保存并上架'));
+    expect(doneMsgs).toHaveLength(0);
+    expect(pageError(el)).toContain('已保存为草稿');
+    expect(pageError(el)).toContain('运费表最高档装不下');
+    expect(el.querySelector('h1')?.textContent).toBe('编辑商品');
+    publishFails = false;
+    await click(button(el, '保存并上架'));
+    const methods = reqs.map((r) => r.method);
+    expect(methods).toEqual(['POST', 'PATCH', 'PUT', 'PATCH']);
+    expect(reqs[2]?.path).toBe('/api/v1/admin/products/p-new');
+    expect(reqs[2]?.body).toMatchObject({ expected_updated_at: '2026-10-07T01:00:00.000Z' });
+    expect(doneMsgs).toHaveLength(1);
+  });
+
+  it('编辑草稿：有「保存」与「保存并上架」；编辑在售：只有「保存」', async () => {
+    publishFails = false;
+    const draftEl = await openForm({ ...SOURCE, id: 'p-new', status: 'draft' });
+    expect(button(draftEl, '保存')).not.toBeNull();
+    expect(button(draftEl, '保存并上架')).not.toBeNull();
+    await mounted?.unmount();
+    const activeEl = await openForm(SOURCE);
+    expect(button(activeEl, '保存')).not.toBeNull();
+    expect(button(activeEl, '保存并上架')).toBeNull();
+  });
+
+  it('🔴 分组布局：主栏四组（基本信息 / 媒体 / 价格与库存 / 报关与合规），侧栏有状态（显示「草稿」）与分类', async () => {
+    const el = await openForm({ ...SOURCE, status: 'draft' });
+    const titles = (sel: string): string[] =>
+      [...el.querySelectorAll(`${sel} .form-card-title`)].map((h) => (h.textContent ?? '').trim());
+    expect(titles('.product-main')).toEqual(['基本信息', '媒体', '价格与库存', '报关与合规']);
+    expect(titles('.product-side')).toEqual(['状态', '分类与标签', '采购']);
+    expect(el.querySelector('.product-side')?.textContent).toContain('草稿');
+    expect(el.querySelector('.product-side select')).not.toBeNull();
+  });
+});
+
+describe('商品表单：图片排序与主图（AJ-403）', () => {
+  const IMAGES = ['a', 'b', 'c'].map((k) => ({
+    image_id: `img-${k}${k}${k}${k}${k}${k}${k}${k}${k}${k}${k}${k}`,
+    thumb: `https://img.example.com/${k}/thumb.webp`,
+    card: `https://img.example.com/${k}/card.webp`,
+    detail: `https://img.example.com/${k}/detail.webp`,
+  }));
+
+  const sentIds = (): string[] =>
+    (
+      (calls.find((c) => c.method === 'PUT')?.body as { images?: Array<{ image_id: string }> })
+        ?.images ?? []
+    ).map((i) => i.image_id.slice(4, 5));
+
+  it('🔴 第三张「设为主图」→ 保存时 images 顺序为 c, a, b；第一张标「主图」', async () => {
+    const el = await openWith({ ...SOURCE, images: IMAGES });
+    await click(el.querySelector('[aria-label="把第 3 张设为主图"]'));
+    expect(el.querySelector('.thumb')?.textContent).toContain('主图');
+    expect(el.querySelector('.thumb img')?.getAttribute('src')).toContain('/c/');
+    await click(button(el, '保存'));
+    expect(sentIds()).toEqual(['c', 'a', 'b']);
+  });
+
+  it('🔴 上移 / 下移：第一张不能再上移、最后一张不能再下移（按钮禁用）；第 2 张上移 → b, a, c', async () => {
+    const el = await openWith({ ...SOURCE, images: IMAGES });
+    expect(
+      (el.querySelector('[aria-label="把第 1 张上移"]') as HTMLButtonElement | null)?.disabled,
+    ).toBe(true);
+    expect(
+      (el.querySelector('[aria-label="把第 3 张下移"]') as HTMLButtonElement | null)?.disabled,
+    ).toBe(true);
+    await click(el.querySelector('[aria-label="把第 2 张上移"]'));
+    await click(button(el, '保存'));
+    expect(sentIds()).toEqual(['b', 'a', 'c']);
+  });
+
+  it('排序算改动：调了顺序未保存 → 脏（离开要提醒）', async () => {
+    const el = await openWithDirty({ ...SOURCE, images: IMAGES });
+    expect(dirtyOf(el)).toBe('no');
+    await click(el.querySelector('[aria-label="把第 3 张下移"]')); // 禁用：不动
+    expect(dirtyOf(el)).toBe('no');
+    await click(el.querySelector('[aria-label="把第 2 张下移"]'));
     expect(dirtyOf(el)).toBe('yes');
   });
 });

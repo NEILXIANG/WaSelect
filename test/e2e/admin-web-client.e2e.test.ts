@@ -102,6 +102,11 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
     expect(productFormErrors(form).ok).toBe(true);
     const created = await createProduct(api, toProductInput(form));
 
+    // AJ-403（契约 0.6.46）：新建恒为草稿——列表行是「草稿」、买家看不见；上架走 PATCH /status
+    const draftRow = productRows((await listProducts(api)).items).find((r) => r.id === created.id);
+    expect(draftRow).toMatchObject({ statusText: '草稿', online: false });
+    await setProductStatus(api, created.id, 'active');
+
     const row = productRows((await listProducts(api)).items).find((r) => r.id === created.id);
     expect(row).toMatchObject({
       title: 'Deba Knife 出刃包丁 165mm',

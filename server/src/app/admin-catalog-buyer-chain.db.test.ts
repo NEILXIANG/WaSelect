@@ -129,6 +129,61 @@ describe('管理端下架 / 上架 → 买家四个入口一致', () => {
   });
 });
 
+/**
+ * AJ-403：管理端新建 = 草稿。草稿对买家四个入口的表现必须与下架**完全一致**（不是"差不多"）：
+ * 四个入口各有各的查询，任何一个写成 `status <> 'offline'` 而不是 `status = 'active'`，草稿就会从那里漏出去。
+ */
+describe('管理端新建草稿 → 买家四个入口一致不可见；上架后全部可见（AJ-403）', () => {
+  it('🔴 草稿：列表不含、详情/报价/建单一律 40401；PATCH active 后四个入口恢复', async () => {
+    const created = await call(srv, 'POST', '/api/v1/admin/products', {
+      token: admin,
+      body: {
+        title: 'Nambu Tekki Kyusu 南部鉄器 急須 0.65L',
+        category: 'kitchen',
+        price_jpy: 9800,
+        weight_g: 1200,
+        stock: 4,
+        customs_desc_en: 'cast iron teapot',
+        hs_code: '7323.91',
+        origin_country: 'JP',
+      },
+    });
+    expect(created.status).toBe(201);
+    const id = String(created.json['id']);
+    const items = [{ product_id: id, qty: 1 }];
+
+    expect(await listIds()).toEqual(['p-cup', 'p-knife']);
+    const detail = await call(srv, 'GET', `/api/v1/products/${id}`);
+    const quote = await call(srv, 'POST', '/api/v1/orders/quote', {
+      token: buyer,
+      body: { items },
+    });
+    const create = await call(srv, 'POST', '/api/v1/orders', {
+      token: buyer,
+      key: 'k-draft',
+      body: { ...(orderBody() as Record<string, unknown>), items },
+    });
+    expect([detail.json['code'], quote.json['code'], create.json['code']]).toEqual([
+      40401, 40401, 40401,
+    ]);
+    expect((await db`select stock from products where id = ${id}`)[0]?.stock).toBe(4); // 没被扣
+
+    const pub = await call(srv, 'PATCH', `/api/v1/admin/products/${id}/status`, {
+      token: admin,
+      body: { status: 'active' },
+    });
+    expect(pub.status).toBe(200);
+    expect(await listIds()).toEqual(['p-cup', 'p-knife', id].sort());
+    expect((await call(srv, 'GET', `/api/v1/products/${id}`)).status).toBe(200);
+    const again = await call(srv, 'POST', '/api/v1/orders', {
+      token: buyer,
+      key: 'k-draft-again',
+      body: { ...(orderBody() as Record<string, unknown>), items },
+    });
+    expect(again.status).toBe(201);
+  });
+});
+
 describe('管理端编辑商品 × 并发库存变化（AJ-175 拍板：库存省略即不改；PUT 不管上下架）', () => {
   const PRODUCT_BODY = {
     category: 'kitchen',

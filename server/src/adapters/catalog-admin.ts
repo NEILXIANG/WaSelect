@@ -11,14 +11,15 @@
  *
  * @why ⚠️ `updated_at` 的语义是「**商品信息**最后被改的时刻」（= `insertProduct` /
  *      `updateProduct` / `setProductStatus` 三处推进），**不含库存变动**：
- *      `decrementStock` / `incrementStock`（下单扣减、取消与关单回补）刻意不碰它。
+ *      `decrementStock` / `incrementStock`（下单扣减、取消与关单回补）与本文件的 `setStock`
+ *      （管理端列表内联改库存，AJ-403）刻意不碰它。
  *      它同时是管理端列表的排序键（本文件 `order by updated_at desc, id`）与
  *      `updateProduct` 的乐观锁凭据；把"实时余额"的变动算进来，会让每一次成交都
  *      ① 把商品顶到列表第一位 → 翻页漏行重行（DB3-02），
  *      ② 作废运营正在进行的编辑（AJ-175 的"编辑期间下单仍能保存"被打破）。
  *      @see adapters/orders.ts（decrementStock / incrementStock 的同名 @why）
  *
- * @why 列表**不过滤** status（不传时给全部，含 offline）：管理端要能看见已下架商品，
+ * @why 列表**不过滤** status（不传时给全部，含 offline 与 draft）：管理端要能看见已下架商品，
  *      否则"下架"这个动作等于"永久删除视图"——运营再也找不到它来重新上架。
  *
  * @limitation 一：`updateProduct` 是**整行覆盖**（PUT 语义，与契约一致），
@@ -105,11 +106,18 @@ export interface AdminProductRow extends Omit<AdminProductInsert, 'customs_desc_
   updated_at: Date;
 }
 
+/**
+ * 商品状态三值（035 / AJ-403：增 `draft`）。与库约束 `products_status_domain`、契约 `AdminProduct.status` 同一词表。
+ * @why 买家侧**不认识**这个词表：所有买家读取只问"是不是 active"（catalog.ts / orders.ts / quote），
+ *      所以加一个"不在售"的状态不需要改任何买家侧代码——这正是草稿能安全加进来的前提。
+ */
+export type ProductStatus = 'active' | 'offline' | 'draft';
+
 export interface AdminProductListQuery {
   page: number;
   size: number;
-  /** 不传 = 全部（含下架，见文件头 @why）。 */
-  status?: 'active' | 'offline' | undefined;
+  /** 不传 = 全部（含下架与草稿，见文件头 @why）。 */
+  status?: ProductStatus | undefined;
   /** 关键词：商品名 / 日文名 / JAN 码，不区分大小写、按字面匹配（三端联动 UI 模拟 2026-10-08）。 */
   keyword?: string | undefined;
   /** true = 只出库存 ≤ `lowStockAt` 的商品。 */
@@ -136,6 +144,16 @@ export interface CatalogAdminRepo {
   updateProduct(id: string, row: AdminProductUpdate): Promise<UpdateProductResult>;
   /** @returns 是否命中（id 不存在 → false） */
   setProductStatus(id: string, status: 'active' | 'offline'): Promise<boolean>;
+  /**
+   * 列表内联改库存（AJ-403）：`stock = expectedStock` 时才写；**不推进 `updated_at`**（见文件头：库存不是商品信息）。
+   * @returns `ok` / `stale`（库存已不是 expectedStock）/ `not_found`
+   * @why 条件写在同一条 UPDATE 里（不是先读再写）：读与写之间若有下单扣减，先读后写会把扣减抹掉。
+   */
+  setStock(
+    id: string,
+    stock: number,
+    expectedStock: number,
+  ): Promise<{ ok: true } | { ok: false; reason: 'stale' | 'not_found' }>;
   /**
    * 生效运费档的最高 `max_weight_g`；没有任何生效档 → null（P2-30，@see domain/shipping-fit.ts）。
    * @limitation 与上架写入不在同一事务：判过之后、写入之前若有人换表，仍可能放进一件装不下的商品——
@@ -264,6 +282,17 @@ export function createCatalogAdminRepo(db: Db): CatalogAdminRepo {
         update products set status = ${status}, updated_at = now() where id = ${id} returning id
       `;
       return rows.length > 0;
+    },
+
+    async setStock(id, stock, expectedStock) {
+      const rows = await db`
+        update products set stock = ${stock}
+         where id = ${id} and stock = ${expectedStock}
+        returning id
+      `;
+      if (rows.length > 0) return { ok: true };
+      const exists = await db`select 1 as hit from products where id = ${id}`;
+      return { ok: false, reason: exists.length > 0 ? 'stale' : 'not_found' };
     },
 
     async maxActiveShippingTierG() {

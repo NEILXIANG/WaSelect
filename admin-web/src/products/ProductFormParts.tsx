@@ -189,6 +189,10 @@ export interface ImagePickerProps {
   images: ProductImageEntry[];
   onAdd: (file: File) => void;
   onRemove: (index: number) => void;
+  /** 把第 from 张挪到第 to 位（AJ-403；越界由 view.moveImage 原样返回）。 */
+  onMove: (from: number, to: number) => void;
+  /** 设为主图 = 挪到第一张。 */
+  onMakeMain: (index: number) => void;
   uploading: boolean;
   error?: string;
 }
@@ -197,15 +201,57 @@ export interface ImagePickerProps {
  * 图片选择：选文件 → `POST /admin/upload` → 服务端产出 thumb/card/detail 三档。
  * @why 只显示 thumb（最小的那档）：管理端列表只需确认"传的是不是这张图"，
  *      显示 detail 大图会把表单撑得很长，而信息量没有增加。
+ * @why 排序用「↑ / ↓ / 设为主图」按钮而不是拖拽（AJ-403）：数组顺序即展示顺序、第一张是主图，
+ *      按钮在触控板、键盘、读屏下都能用，且每一下的结果可预期；拖拽要另引库或自写命中计算。
+ *      @tradeoff 十张图把最后一张挪到第二位要点多下——实际商品图在 3–6 张，「设为主图」覆盖了最常见的那一下。
+ *      首尾两端的按钮**禁用**而不是隐藏：位置不跳，运营不会点到旁边那张的按钮。
  */
-export function ImagePicker({ images, onAdd, onRemove, uploading, error = '' }: ImagePickerProps) {
+export function ImagePicker({
+  images,
+  onAdd,
+  onRemove,
+  onMove,
+  onMakeMain,
+  uploading,
+  error = '',
+}: ImagePickerProps) {
   return (
     <div className="field">
-      <span className="label">商品图片（{images.length} 张）</span>
+      <span className="label">商品图片（{images.length} 张；第一张是主图）</span>
       <div className="thumbs">
         {images.map((img, i) => (
-          <div key={`${img.thumb}-${i}`} className="thumb">
+          <div key={`${img.image_id ?? img.thumb}-${i}`} className="thumb">
             <img src={img.thumb} alt={`商品图 ${i + 1}`} className="thumb-img" />
+            {i === 0 ? (
+              <span className="chip chip-on">主图</span>
+            ) : (
+              <button
+                type="button"
+                className="link"
+                aria-label={`把第 ${i + 1} 张设为主图`}
+                onClick={() => onMakeMain(i)}
+              >
+                设为主图
+              </button>
+            )}
+            <button
+              type="button"
+              className="link"
+              aria-label={`把第 ${i + 1} 张上移`}
+              disabled={i === 0}
+              onClick={() => onMove(i, i - 1)}
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              className="link"
+              aria-label={`把第 ${i + 1} 张下移`}
+              disabled={i === images.length - 1}
+              onClick={() => onMove(i, i + 1)}
+            >
+              ↓
+            </button>
             <button type="button" className="link" onClick={() => onRemove(i)}>
               移除
             </button>

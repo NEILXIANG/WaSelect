@@ -172,6 +172,7 @@ describe('GET /admin/products（管理端商品列表）', () => {
       ['POST', '/api/v1/admin/products'],
       ['PUT', '/api/v1/admin/products/x'],
       ['PATCH', '/api/v1/admin/products/x/status'],
+      ['PATCH', '/api/v1/admin/products/x/stock'], // AJ-403 新增的第五条
     ];
     for (const [method, path] of cases) {
       const r = await fetch(`${s.url}${path}`, {
@@ -639,16 +640,38 @@ describe('上架重量 vs 运费表最高档（P2-30 / 40918）', () => {
     });
   }
 
-  it('🔴 建商品：9750g（+250 包材 = 10000，恰好最高档）放行；9751g → 409/40918 且库里没多出行', async () => {
+  /** PATCH /status（P2-30 的判定点之一；AJ-403 起草稿上架也走这里）。 */
+  async function patchStatus(
+    s: { url: string },
+    id: string,
+    status: string,
+  ): Promise<{ status: number; code: unknown }> {
+    const r = await fetch(`${s.url}/api/v1/admin/products/${id}/status`, {
+      method: 'PATCH',
+      headers: {
+        authorization: `Bearer ${await adminToken()}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ status }),
+    });
+    return { status: r.status, code: ((await r.json()) as { code?: unknown }).code };
+  }
+
+  // AJ-403：新建 = 草稿，草稿不对买家可见 ⇒ 建的那一刻不判重量；判定挪到"草稿 → 在售"那一步。
+  // 边界值与原用例相同（9750 恰好最高档放行、9751 超一克拒）。
+  it('🔴 建草稿不判重量（9751g 也 201）；草稿上架：9750g 放行、9751g → 409/40918 且仍为草稿', async () => {
     await seedRates([2000, 10000]);
     const s = await buildServer();
     try {
-      expect((await post(s, 9750)).status).toBe(201);
-      const before = (await db`select count(*)::int as n from products`)[0]?.n;
-      const r = await post(s, 9751);
-      expect(r.status).toBe(409);
-      expect(((await r.json()) as { code: number }).code).toBe(40918);
-      expect((await db`select count(*)::int as n from products`)[0]?.n).toBe(before);
+      const okId = String(((await (await post(s, 9750)).json()) as { id: string }).id);
+      const heavy = await post(s, 9751);
+      expect(heavy.status).toBe(201);
+      const heavyId = String(((await heavy.json()) as { id: string }).id);
+      expect(await patchStatus(s, okId, 'active')).toEqual({ status: 200, code: undefined });
+      expect(await patchStatus(s, heavyId, 'active')).toEqual({ status: 409, code: 40918 });
+      expect((await db`select status from products where id = ${heavyId}`)[0]?.status).toBe(
+        'draft',
+      );
     } finally {
       await s.close();
     }
@@ -694,6 +717,8 @@ describe('上架重量 vs 运费表最高档（P2-30 / 40918）', () => {
         return { status: r.status, code: ((await r.json()) as { code?: unknown }).code };
       };
 
+      // AJ-403：新建是草稿，先上架才是本用例要测的"在售商品"
+      expect((await setStatus('active')).status).toBe(200);
       expect(await putWeight(12000)).toEqual({ status: 409, code: 40918 });
       expect((await db`select weight_g from products where id = ${id}`)[0]?.weight_g).toBe(800);
 
@@ -701,6 +726,297 @@ describe('上架重量 vs 运费表最高档（P2-30 / 40918）', () => {
       expect((await putWeight(12000)).status).toBe(200); // 下架中：允许先把真实重量录进来
       expect(await setStatus('active')).toEqual({ status: 409, code: 40918 });
       expect((await db`select status from products where id = ${id}`)[0]?.status).toBe('offline');
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+/**
+ * AJ-403（管理端第二批 C）：商品**草稿**状态。
+ * @why 新建即在售的后果是"半成品被买家看到"：图还没传、文案没写好，买家已经能加购。
+ *      草稿是第三个状态，买家侧四个入口一律按"不在售"处理（与 offline 同口径，见 admin-catalog-buyer-chain）。
+ * @why 草稿只能是**起点**：PATCH 不接受 `draft`——上过架的商品"不卖了"叫下架，
+ *      退回草稿会让"它曾经卖过"这件事在状态上消失。
+ */
+describe('草稿状态（AJ-403）', () => {
+  async function create(
+    s: { url: string },
+    extra: Record<string, unknown> = {},
+  ): Promise<{ status: number; json: Record<string, unknown> }> {
+    const r = await fetch(`${s.url}/api/v1/admin/products`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${await adminToken()}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body(extra)),
+    });
+    return { status: r.status, json: (await r.json()) as Record<string, unknown> };
+  }
+
+  async function patchStatus(s: { url: string }, id: string, status: unknown): Promise<number> {
+    const r = await fetch(`${s.url}/api/v1/admin/products/${id}/status`, {
+      method: 'PATCH',
+      headers: {
+        authorization: `Bearer ${await adminToken()}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ status }),
+    });
+    return r.status;
+  }
+
+  const dbStatus = async (id: string): Promise<unknown> =>
+    (await db`select status from products where id = ${id}`)[0]?.status;
+
+  it('🔴 新建 → 201，响应与库里都是 draft', async () => {
+    const s = await buildServer();
+    try {
+      const r = await create(s);
+      expect(r.status).toBe(201);
+      expect(r.json['status']).toBe('draft');
+      expect(await dbStatus(String(r.json['id']))).toBe('draft');
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('🔴 请求体自带 status=active 也只建草稿（上架只走 PATCH /status，判定只有一处）', async () => {
+    const s = await buildServer();
+    try {
+      const r = await create(s, { status: 'active' });
+      expect(r.status).toBe(201);
+      expect(await dbStatus(String(r.json['id']))).toBe('draft');
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('🔴 PATCH 状态迁移表：draft→active / active→offline / offline→active 放行；任何 → draft 一律 40001 且库里不变', async () => {
+    const s = await buildServer();
+    try {
+      const id = String((await create(s)).json['id']);
+      expect(await patchStatus(s, id, 'draft')).toBe(400); // 草稿 → 草稿：也不收这个值
+      expect(await dbStatus(id)).toBe('draft');
+      expect(await patchStatus(s, id, 'active')).toBe(200);
+      expect(await dbStatus(id)).toBe('active');
+      expect(await patchStatus(s, id, 'draft')).toBe(400);
+      expect(await dbStatus(id)).toBe('active');
+      expect(await patchStatus(s, id, 'offline')).toBe(200);
+      expect(await patchStatus(s, id, 'draft')).toBe(400);
+      expect(await dbStatus(id)).toBe('offline');
+      expect(await patchStatus(s, id, 'active')).toBe(200);
+      // 草稿直接"不要了" → offline 也放行（不强制先上架一次）
+      const id2 = String((await create(s)).json['id']);
+      expect(await patchStatus(s, id2, 'offline')).toBe(200);
+      expect(await dbStatus(id2)).toBe('offline');
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('🔴 GET ?status=draft 只出草稿；?status=active 不含草稿；不传 = 全部', async () => {
+    const s = await buildServer();
+    try {
+      const d = String((await create(s, { title: '草稿甲' })).json['id']);
+      const a = String((await create(s, { title: '在售乙' })).json['id']);
+      expect(await patchStatus(s, a, 'active')).toBe(200);
+      const get = async (qs: string): Promise<string[]> => {
+        const r = await fetch(`${s.url}/api/v1/admin/products${qs}`, {
+          headers: { authorization: `Bearer ${await adminToken()}` },
+        });
+        expect(r.status).toBe(200);
+        return ((await r.json()) as { items: { id: string }[] }).items.map((i) => i.id).sort();
+      };
+      expect(await get('?status=draft')).toEqual([d]);
+      expect(await get('?status=active')).toEqual([a]);
+      expect(await get('')).toEqual([a, d].sort());
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('草稿改重量不判运费表（同下架中：先录真实重量，上架时再判）', async () => {
+    await db`
+      insert into shipping_rates (carrier, max_weight_g, price_jpy, active)
+      values ('Japan Post EMS', 10000, 9000, true)
+    `;
+    const s = await buildServer();
+    try {
+      const id = String((await create(s)).json['id']);
+      const at = (
+        (await db`select updated_at from products where id = ${id}`)[0]?.['updated_at'] as Date
+      ).toISOString();
+      const r = await fetch(`${s.url}/api/v1/admin/products/${id}`, {
+        method: 'PUT',
+        headers: {
+          authorization: `Bearer ${await adminToken()}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body({ weight_g: 12000, expected_updated_at: at })),
+      });
+      expect(r.status).toBe(200);
+      expect(await dbStatus(id)).toBe('draft'); // PUT 不碰状态
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+/**
+ * AJ-403：图片顺序 = 数组顺序，第一张是主图。前端"上移 / 设为主图"只是重排数组再 PUT，
+ * 这条钉的是**服务端不重排、不去重地原样落库并原样读回**——否则前端排得再好，保存一次就打回原形。
+ */
+describe('商品图顺序（AJ-403）', () => {
+  it('🔴 PUT 把图片换个顺序 → 库里与列表读回都是新顺序', async () => {
+    const s = await buildServer('https://img.example.com');
+    try {
+      const imgs = ['img-aaaaaaaaaaaa', 'img-bbbbbbbbbbbb', 'img-cccccccccccc'];
+      const created = await fetch(`${s.url}/api/v1/admin/products`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${await adminToken()}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body({ images: imgs.map((image_id) => ({ image_id })) })),
+      });
+      const id = String(((await created.json()) as { id: string }).id);
+      const at = (
+        (await db`select updated_at from products where id = ${id}`)[0]?.['updated_at'] as Date
+      ).toISOString();
+      const reordered = [imgs[2], imgs[0], imgs[1]] as string[]; // 第三张设为主图
+      const r = await fetch(`${s.url}/api/v1/admin/products/${id}`, {
+        method: 'PUT',
+        headers: {
+          authorization: `Bearer ${await adminToken()}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(
+          body({
+            images: reordered.map((image_id) => ({ image_id })),
+            expected_updated_at: at,
+          }),
+        ),
+      });
+      expect(r.status).toBe(200);
+      expect((await db`select images from products where id = ${id}`)[0]?.images).toEqual(
+        reordered.map((image_id) => ({ image_id })),
+      );
+      const list = await fetch(`${s.url}/api/v1/admin/products`, {
+        headers: { authorization: `Bearer ${await adminToken()}` },
+      });
+      const items = (
+        (await list.json()) as { items: { id: string; images: { image_id: string }[] }[] }
+      ).items;
+      expect(items.find((x) => x.id === id)?.images.map((i) => i.image_id)).toEqual(reordered);
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+/**
+ * AJ-403：列表内联改库存 `PATCH /admin/products/{id}/stock`。
+ * @why 窄接口而不是复用整行 PUT：PUT 要带齐全部字段 + `expected_updated_at`，列表行若拿它改库存，
+ *      任何一次"别人改了标题"都会让改库存 40914；而库存真正需要护住的只有"期间被下单扣减"这一件事。
+ * @why 不推进 `updated_at`：它的语义是"商品**信息**最后被改的时刻"（catalog-admin.ts 文件头），
+ *      库存是余额不是信息；推进它会让正在编辑同一商品的人保存时无辜 40914，列表也会把这一行顶到第一位。
+ */
+describe('PATCH /admin/products/{id}/stock（AJ-403）', () => {
+  async function seedProduct(stock: number): Promise<{ id: string; updatedAt: Date }> {
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, customs_desc_en, origin_country, status)
+      values ('p-stock', '库存测试 白い恋人 12枚', 'food', 1200, 300, ${stock}, 'cookies', 'JP', 'active')
+    `;
+    const at = (await db`select updated_at from products where id = 'p-stock'`)[0]?.['updated_at'];
+    return { id: 'p-stock', updatedAt: at as Date };
+  }
+
+  async function patchStock(
+    s: { url: string },
+    id: string,
+    payload: unknown,
+  ): Promise<{ status: number; json: Record<string, unknown> }> {
+    const r = await fetch(`${s.url}/api/v1/admin/products/${id}/stock`, {
+      method: 'PATCH',
+      headers: {
+        authorization: `Bearer ${await adminToken()}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    return { status: r.status, json: (await r.json()) as Record<string, unknown> };
+  }
+
+  const stockOf = async (id: string): Promise<unknown> =>
+    (await db`select stock from products where id = ${id}`)[0]?.stock;
+
+  it('🔴 expected_stock 对上 → 200 {id, stock}，库里写入；updated_at **不变**', async () => {
+    const s = await buildServer();
+    try {
+      const p = await seedProduct(3);
+      const r = await patchStock(s, p.id, { stock: 30, expected_stock: 3 });
+      expect(r).toEqual({ status: 200, json: { id: p.id, stock: 30 } });
+      expect(await stockOf(p.id)).toBe(30);
+      const after = (await db`select updated_at from products where id = ${p.id}`)[0]?.[
+        'updated_at'
+      ] as Date;
+      expect(after.toISOString()).toBe(p.updatedAt.toISOString());
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('🔴 期间被下单扣减（expected_stock 对不上）→ 409/40914，库存不被覆盖，留 warn', async () => {
+    const sink = new MemorySink();
+    const s = await buildServerWithSink(sink);
+    try {
+      const p = await seedProduct(3);
+      await db`update products set stock = stock - 1 where id = ${p.id}`; // 模拟下单扣减
+      const r = await patchStock(s, p.id, { stock: 30, expected_stock: 3 });
+      expect(r.status).toBe(409);
+      expect(r.json['code']).toBe(40914);
+      expect(await stockOf(p.id)).toBe(2);
+      expect(sink.lines.some((l) => l.includes('admin_product_stock_stale'))).toBe(true);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('🔴 输入边界：缺 expected_stock / 负数 / 小数 / 字符串 / 缺 stock → 40001，库存不变；stock=0 合法', async () => {
+    const s = await buildServer();
+    try {
+      const p = await seedProduct(3);
+      const bad: unknown[] = [
+        { stock: 30 },
+        { stock: -1, expected_stock: 3 },
+        { stock: 1.5, expected_stock: 3 },
+        { stock: '30', expected_stock: 3 },
+        { expected_stock: 3 },
+        { stock: 30, expected_stock: -1 },
+        { stock: 30, expected_stock: '3' },
+        { stock: 2147483648, expected_stock: 3 }, // INT 列上界 + 1（库层兜底也会 40001；精确 reason 由单测钉）
+      ];
+      for (const b of bad) {
+        const r = await patchStock(s, p.id, b);
+        expect(r.status, JSON.stringify(b)).toBe(400);
+        expect(r.json['code'], JSON.stringify(b)).toBe(40001);
+      }
+      expect(await stockOf(p.id)).toBe(3);
+      expect((await patchStock(s, p.id, { stock: 0, expected_stock: 3 })).status).toBe(200);
+      expect(await stockOf(p.id)).toBe(0);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('不存在的 id → 40401（不是 40914：对不上的不是库存，是商品本身）', async () => {
+    const s = await buildServer();
+    try {
+      const r = await patchStock(s, 'p-nope', { stock: 1, expected_stock: 0 });
+      expect(r.status).toBe(404);
+      expect(r.json['code']).toBe(40401);
     } finally {
       await s.close();
     }

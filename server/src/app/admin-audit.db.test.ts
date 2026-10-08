@@ -108,6 +108,22 @@ describe('admin_audit：管理端写接口一处接入（F-02）', () => {
     expect((await db`select 1 from products where id = ${newId}`).length).toBe(1);
   });
 
+  it('🔴 列表内联改库存（PATCH /admin/products/:id/stock，AJ-403）留一行：target = 商品 id，after = {stock, expected_stock}', async () => {
+    const admin = await tokenFor('u-admin', 'admin');
+    const r = await call(srv, 'PATCH', '/api/v1/admin/products/p-cup/stock', {
+      token: admin,
+      body: { stock: 25, expected_stock: 10 },
+    });
+    expect(r.status).toBe(200);
+    await waitUntil(async () => (await audits()).length === 1, '审计行没写进来');
+    expect((await audits())[0]).toMatchObject({
+      actor: 'admin:u-admin',
+      action: 'PATCH /admin/products/:id/stock',
+      target: 'p-cup',
+      after: { stock: 25, expected_stock: 10 },
+    });
+  });
+
   it('失败的写（4xx）、读（GET）、买家 token 都不留审计行', async () => {
     const admin = await tokenFor('u-admin', 'admin');
     expect(
