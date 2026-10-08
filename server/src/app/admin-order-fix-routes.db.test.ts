@@ -116,7 +116,13 @@ describe('POST /admin/orders/:id/cancel（P1-11）', () => {
       await db`select actor, note from order_events where order_id = 'o-c1' and status = 'cancelled'`;
     expect(ev).toMatchObject({ actor: 'admin:u-admin', note: '价格录错，联系买家重新下单' });
     expect(published).toContain('order.cancelled:');
-    const audit = await db`select action from admin_audit where target = 'o-c1'`;
+    // 审计写在响应之后（admin-audit.ts @limitation：客户端拿到 200 时不保证已落库）——
+    // 全量 gate 负载下立即读曾读到空（2026-10-08 实测一次红），轮询等它落库
+    let audit: readonly Record<string, unknown>[] = [];
+    for (let i = 0; i < 50 && audit.length === 0; i++) {
+      audit = await db`select action from admin_audit where target = 'o-c1'`;
+      if (audit.length === 0) await new Promise((r) => setTimeout(r, 20));
+    }
     expect(audit.map((a) => String(a['action']))).toEqual(['POST /admin/orders/:id/cancel']);
   });
 
