@@ -41,6 +41,12 @@ export function StockCell(p: StockCellProps) {
   const [fieldError, setFieldError] = useState('');
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState(false);
+  /**
+   * 打开编辑时看到的库存。刷新后若服务端值变了，就地写出"已从 X 变为 Y"。
+   * @why 只靠 Toast 让人"去刷新"不够：刷新后单元格处在编辑态、原数字被输入框占着，
+   *      运营看不到新库存，再点保存就是盲覆盖——乐观锁"看过再覆盖"的本意落空（2026-10-08 浏览器验收发现）。
+   */
+  const [seen, setSeen] = useState<unknown>(null);
   const canEdit = Number.isInteger(p.stock);
 
   const save = async (): Promise<void> => {
@@ -53,6 +59,7 @@ export function StockCell(p: StockCellProps) {
     try {
       const r = await setProductStock(p.api, p.id, parsed.value, p.stock as number);
       p.onSaved(p.id, r.stock);
+      setSeen(r.stock);
       p.sink.success(`库存已改为 ${String(r.stock)}`);
       setEditing(false);
       setConflict(false);
@@ -83,6 +90,7 @@ export function StockCell(p: StockCellProps) {
           disabled={!canEdit}
           onClick={() => {
             setDraft(String(p.stock));
+            setSeen(p.stock);
             setFieldError('');
             setConflict(false);
             setEditing(true);
@@ -116,6 +124,12 @@ export function StockCell(p: StockCellProps) {
       <button type="button" className="link" disabled={busy} onClick={() => setEditing(false)}>
         放弃
       </button>
+      <span className="muted stock-note">当前库存 {p.stockText}</span>
+      {seen !== p.stock && (
+        <span className="error stock-note">
+          已从 {String(seen)} 变为 {p.stockText}（期间有变动），确认要改成 {draft.trim()} 再保存
+        </span>
+      )}
       {fieldError !== '' && <span className="error">{fieldError}</span>}
     </td>
   );

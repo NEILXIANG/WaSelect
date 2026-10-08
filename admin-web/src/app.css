@@ -771,3 +771,9 @@ body {
 .stock-input {
   width: calc(var(--ws-space) * 6);
 }
+
+/* 改库存时的"当前库存 / 已从 X 变为 Y"说明：各占一行，不挤进按钮行 */
+.stock-note {
+  display: block;
+  font-size: var(--ws-font-sm);
+}

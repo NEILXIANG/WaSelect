@@ -237,6 +237,9 @@ describe('商品列表：草稿与内联改库存（AJ-403）', () => {
     await click(button(el, '刷新'));
     expect(gets()).toBe(before + 1);
     expect(stockInput(el)?.value).toBe('30'); // 刷新列表不丢正在填的值
+    // 「看过再覆盖」：刷新后运营必须**看得见**最新库存与变化，否则再点保存等于盲覆盖（2026-10-08 浏览器验收发现）
+    expect(stockCell(el).textContent).toContain('当前库存 2');
+    expect(stockCell(el).textContent).toContain('已从 3 变为 2');
     await click(button(el, '保存库存'));
     expect(reqs.filter((r) => r.path.endsWith('/stock')).at(-1)?.body).toEqual({
       stock: 30,
