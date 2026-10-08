@@ -57,7 +57,10 @@ export function parseAmountToMinor(
     };
   }
   const minor = Number(m[1]) * 10 ** digits + Number(frac.padEnd(digits, '0') || '0');
-  if (!Number.isSafeInteger(minor) || minor < 1) return { ok: false, reason: '金额必须大于 0' };
+  // 两种失败分开说（模拟走查 2026-10-09）：超出安全整数时说"必须大于 0"会让人去改成正数再试
+  if (!Number.isSafeInteger(minor))
+    return { ok: false, reason: '金额太大，请检查是不是多打了几位' };
+  if (minor < 1) return { ok: false, reason: '金额必须大于 0' };
   return { ok: true, minor };
 }
 

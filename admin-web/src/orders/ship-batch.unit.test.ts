@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { SHIP_BATCH_MAX } from '@waselect/shared';
 import {
+  DUPLICATE_TRACKING_WARNING,
   buildCsvPreview,
   csvOrderNos,
   decodeCsvBytes,
@@ -221,5 +222,31 @@ describe('describeResult', () => {
     [{ ok: false, code: 40001, reason: 'weird', message: '参数错误' }, '参数错误'],
   ])('%j → 含「%s」', (r, text) => {
     expect(describeResult(r).text).toContain(text);
+  });
+});
+
+describe('多单共用运单号 → 黄字警告，不拦（模拟走查 2026-10-09）', () => {
+  it('🔴 两行运单号相同（忽略大小写）→ 两行都带警告、errors 不变；不同则无', () => {
+    const base = {
+      line: 0,
+      orderId: 'o-1',
+      orderNo: '261009-AAAAAA',
+      blockers: [] as string[],
+      carrier: 'Japan Post EMS',
+      trackingNo: 'EJ123456789JP',
+      errors: [] as string[],
+      warnings: [] as string[],
+    };
+    const rows = validateRows([
+      { ...base, orderId: 'o-1', orderNo: '261009-AAAAAA' },
+      { ...base, orderId: 'o-2', orderNo: '261009-BBBBBB', trackingNo: 'ej123456789jp' },
+      { ...base, orderId: 'o-3', orderNo: '261009-CCCCCC', trackingNo: 'EJ123456790JP' },
+    ]);
+    expect(rows.map((r) => r.warnings.includes(DUPLICATE_TRACKING_WARNING))).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(rows.every((r) => r.errors.length === 0)).toBe(true);
   });
 });

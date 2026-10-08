@@ -180,18 +180,28 @@ export function readCsvColumns(
 export function validateRows(rows: readonly BatchRow[]): BatchRow[] {
   const count = new Map<string, number>();
   for (const r of rows) count.set(r.orderNo, (count.get(r.orderNo) ?? 0) + 1);
+  // 同一运单号出现在多单：合并包裹时是真实形态，所以只警告不拦（模拟走查 2026-10-09：此前静默放行，填串行查不出来）
+  const trackingCount = new Map<string, number>();
+  for (const r of rows) {
+    const t = r.trackingNo.trim().toUpperCase();
+    if (t !== '') trackingCount.set(t, (trackingCount.get(t) ?? 0) + 1);
+  }
   return rows.map((r) => {
     const errors = [...r.blockers];
     if (r.orderNo !== '' && (count.get(r.orderNo) ?? 0) > 1) errors.push('同一单号重复出现');
     const field = shipErrors({ carrier: r.carrier, trackingNo: r.trackingNo });
     const fieldErrors = Object.values(field.errors);
-    const warnings =
-      r.trackingNo.trim() !== '' && !trackingNoRecognized(r.carrier, r.trackingNo)
-        ? [TRACKING_SHAPE_WARNING]
-        : [];
+    const warnings: string[] = [];
+    if (r.trackingNo.trim() !== '' && !trackingNoRecognized(r.carrier, r.trackingNo))
+      warnings.push(TRACKING_SHAPE_WARNING);
+    if ((trackingCount.get(r.trackingNo.trim().toUpperCase()) ?? 0) > 1)
+      warnings.push(DUPLICATE_TRACKING_WARNING);
     return { ...r, errors: [...errors, ...fieldErrors], warnings };
   });
 }
+
+/** 多单共用一个运单号时的提醒（只警告：合并包裹是真实形态；填串行时这一行会亮黄）。 */
+export const DUPLICATE_TRACKING_WARNING = '运单号与另一单相同：合并包裹才会这样，请确认没有填串行';
 
 /** 订单级判定（与详情页发货按钮同一个 shipGate）。 */
 function orderBlockers(orderNo: string, order: AdminOrderLike | undefined): string[] {

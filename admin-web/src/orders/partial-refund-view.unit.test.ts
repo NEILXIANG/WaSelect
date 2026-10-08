@@ -164,3 +164,13 @@ describe('partialRefundErrorNotice（P2-49）', () => {
     );
   });
 });
+
+describe('parseAmountToMinor：超大数与 0 分开提示（模拟走查 2026-10-09）', () => {
+  it('🔴 18 位数字 → "金额太大"；0 → "必须大于 0"', () => {
+    expect(parseAmountToMinor('999999999999999999', 'JPY')).toEqual({
+      ok: false,
+      reason: '金额太大，请检查是不是多打了几位',
+    });
+    expect(parseAmountToMinor('0', 'JPY')).toEqual({ ok: false, reason: '金额必须大于 0' });
+  });
+});
