@@ -34,7 +34,7 @@ export function itemRows(items) {
 /**
  * 能否提交（按钮禁用 + 原因）。
  * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null,
- *          emailError?: string, splitRequired?: boolean,
+ *          emailError?: string, contactEmail?: string, splitRequired?: boolean,
  *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean}} state
  * @why `termsReady` / `termsFailed` / `quoteFailed` 三项（AJ-228）：
  *      条款版本没取到时 `orderBody` 会抛一句**给开发者看的**报错，此前闸门不看它，
@@ -60,28 +60,42 @@ export function submitGate(state) {
   // 提交必然 40906。旧实现只把它当一句提示、照样放行——用户点了才知道被拒，
   // 而这个失败还是"看起来像系统问题"的那一类。
   if (s.splitRequired === true) return { ok: false, reason: '已超过单笔上限，请分两单下单' };
-  // 选填邮箱填错了才拦（AJ-180）：排在最后——前四项是"能不能下单"，这一项只是"填的东西对不对"
+  // 邮箱两项排在最后——前面是"能不能下单"，这两项是"填的东西够不够、对不对"。
+  // 先说格式错（AJ-180）：填了但不对时说"请填写"是答非所问。
   if (typeof s.emailError === 'string' && s.emailError !== '')
     return { ok: false, reason: s.emailError };
+  // M-01（AJ-405 / AJ-402 Q1）：前端必填。"传了才生效"（同 termsReady）：不传 = 不检查，老调用方不受影响。
+  if (typeof s.contactEmail === 'string' && s.contactEmail === '')
+    return { ok: false, reason: EMAIL_REQUIRED_TEXT };
   return { ok: true, reason: '' };
 }
 
-/** 邮箱错误文案（与服务端 `contact_email_shape` 40001 同一件事，给用户看的版本）。 */
-const EMAIL_ERROR = '邮箱格式不正确（可留空）';
+/** 邮箱错误文案（与服务端 `contact_email_shape` 40001 同一件事，给用户看的版本）。M-01 起去掉"（可留空）"。 */
+const EMAIL_ERROR = '邮箱格式不正确';
 
 /**
- * 结算页"联系邮箱（选填）"输入 → 要发的值与错误（PRD §3 确认订单 / D-39；提审前必须，AJ-180）。
- * ⚠️ AJ-295：此处原写"收货通知邮箱"——通知链路全库无使用方，那是句不成立的承诺，
- *      文案已改为真实用途（订单有问题时联系买家）。
+ * 没填邮箱时的原因（M-01，AJ-405）：说清**为什么要填**，而不是只说"必填"。
+ * @why 订阅消息未开通（外部阻塞，对标分析 §7），邮件是付款 / 发货 / 退款通知的**唯一**渠道（AJ-369）；
+ *      收集时告知的利用目的要与实际一致（APPI）——这句话与输入框占位说明同一用途。
+ */
+export const EMAIL_REQUIRED_TEXT = '请填写联系邮箱：付款、发货、退款通知都会发到这里，不填将收不到';
+
+/**
+ * 结算页"联系邮箱"输入 → 要发的值与错误（PRD §3 确认订单 / D-39；提审前必须，AJ-180）。
+ * M-01（AJ-405 / AJ-402 Q1）：**前端必填**——空着给出 EMAIL_REQUIRED_TEXT；契约 `contact_email` 与服务端仍为可选
+ * （订阅消息上线后可回调为选填，不用动契约）。
+ * ⚠️ AJ-295：此处原写"收货通知邮箱"——通知链路全库无使用方，那是句不成立的承诺；
+ *      AJ-369 订单邮件上线后，用途说明才改回"付款、发货、退款通知"。
  * @param {unknown} raw 输入框原值
- * @returns {{value: string, error: string}} value 为空串 = 不带 contact_email
+ * @returns {{value: string, error: string}} value 为空串 = 没有可用的邮箱（此时 error 必非空）
  * @why 口径与服务端入口（order-routes.ts contact_email）逐条一致：有 @、无空白、≤255；
  *      不发明更严的邮箱正则——前端比服务端严，会拒掉服务端能收的地址；比服务端松，就是"提交后才报错"。
  * @why 首尾空白先去掉：输入法与粘贴常带空格，这不是用户想表达的内容。
+ * @limitation 只在前端拦：绕过小程序直接调 `POST /orders` 仍可不带邮箱（契约可选，刻意不改，见 AJ-405）。
  */
 export function contactEmailOf(raw) {
   const v = typeof raw === 'string' ? raw.trim() : '';
-  if (v === '') return { value: '', error: '' };
+  if (v === '') return { value: '', error: EMAIL_REQUIRED_TEXT };
   const ok = v.length <= 255 && /^[^\s@]+@[^\s@]+$/.test(v);
   return ok ? { value: v, error: '' } : { value: '', error: EMAIL_ERROR };
 }

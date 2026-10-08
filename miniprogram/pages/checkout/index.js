@@ -79,7 +79,7 @@ Page({
     termsVersion: '',
     /** 条款勾选态（用户侧确认，与"拿到版本"是两件事）。 */
     termsAccepted: false,
-    /** 联系邮箱（选填，AJ-180；AJ-295 改名）：输入框原值与校验错误（空串 = 无错）。 */
+    /** 联系邮箱（AJ-180；AJ-295 改名；M-01 起前端必填）：输入框原值与校验错误（空串 = 无错或还没动过输入框）。 */
     email: '',
     emailError: '',
     /** 提交闸门：{ok, reason}。 */
@@ -259,6 +259,8 @@ Page({
       termsAccepted: this.data.termsAccepted,
       totalJpy: this.data.quote?.totalJpy ?? null,
       emailError: this.data.emailError,
+      // M-01（AJ-405）：邮箱前端必填——没填时闸门说明用途；输入框下的 emailError 只在用户动过输入框后出现
+      contactEmail: contactEmailOf(this.data.email).value,
       // B38 / AJ-221：超过单笔上限时**不放行**（提交必然 40906）
       splitRequired: this.data.quote?.splitRequired === true,
       termsReady: this.data.termsVersion !== '',
@@ -268,7 +270,7 @@ Page({
     this.setData({ gate });
   },
 
-  /** 邮箱输入（选填）：每次输入都重算错误与闸门，错误就近显示在输入框下。 */
+  /** 邮箱输入（M-01 起必填）：每次输入都重算错误与闸门，错误就近显示在输入框下。 */
   onEmailInput(e) {
     const raw = typeof e?.detail?.value === 'string' ? e.detail.value : '';
     this.setData({ email: raw, emailError: contactEmailOf(raw).error });

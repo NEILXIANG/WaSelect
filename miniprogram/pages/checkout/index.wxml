@@ -80,7 +80,9 @@
   </view>
 
   <!--
-    联系邮箱（选填，PRD §3 / D-39；AJ-180）。
+    联系邮箱（PRD §3 / D-39；AJ-180）。M-01（AJ-405 / AJ-402 Q1）起**前端必填**：
+    订阅消息未开通，邮件是付款 / 发货 / 退款通知的唯一渠道；契约与服务端仍可选。
+    没填时提交按钮下方由闸门说明原因（与其余各项同一处），输入框下只在用户动过之后提示。
     ⚠️ AJ-295：这里**曾经**叫"收货通知邮箱"、placeholder 写"用于接收发货通知"——
        但通知链路（MAIL_* / SUBSCRIBE_TMPL_*）全库无使用方，那是一句**不成立的承诺**：
        用户是照着"会收到发货通知"才留下邮箱的。
@@ -90,12 +92,12 @@
   <view class="ws-gutter ws-section">
     <view class="ws-card">
       <text class="ws-section-kicker">Contact</text>
-      <text class="ws-note field__label">联系邮箱（选填）</text>
+      <text class="ws-note field__label">联系邮箱（必填）</text>
       <input
         class="input"
         type="text"
         value="{{email}}"
-        placeholder="接收付款、发货、退款邮件，订单有问题时也用它联系你；可留空"
+        placeholder="接收付款、发货、退款邮件，订单有问题时也用它联系你"
         maxlength="255"
         bindinput="onEmailInput"
       />

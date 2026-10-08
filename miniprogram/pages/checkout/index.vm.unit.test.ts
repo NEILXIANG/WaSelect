@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 import {
   checkoutItems,
   clearsCartAfterOrder,
+  EMAIL_REQUIRED_TEXT,
   contactEmailOf,
   itemRows,
   keyAction,
@@ -131,16 +132,21 @@ describe('orderBody（建单请求体）', () => {
 });
 
 /**
- * 可选联系邮箱（PRD §3 确认订单 / D-39；提审前必须，AJ-180）。
+ * 联系邮箱（PRD §3 确认订单 / D-39；提审前必须，AJ-180；M-01 / AJ-405 起前端必填，契约仍可选）。
  * ⚠️ AJ-295：原名"收货通知邮箱"——通知链路无使用方，改名以匹配真实用途。
- * @why 选填：空着照常下单；填了就必须是服务端会收的形状——否则"提交 → 40001"
+ * @why 必填：订阅消息未开通，不填就收不到付款 / 发货 / 退款通知；填了就必须是服务端会收的形状——否则"提交 → 40001"
  *      给出的是泛化的"参数错误"，用户不知道错在邮箱。口径与服务端入口一致（有 @、无空白、≤255）。
  */
-describe('contactEmailOf（选填邮箱）', () => {
-  it('空 / 纯空白 → 不带（value 为空串）、不拦', () => {
-    expect(contactEmailOf('')).toEqual({ value: '', error: '' });
-    expect(contactEmailOf('   ')).toEqual({ value: '', error: '' });
-    expect(contactEmailOf(undefined)).toEqual({ value: '', error: '' });
+describe('contactEmailOf（联系邮箱，M-01 起前端必填）', () => {
+  // M-01（AJ-405 / AJ-402 Q1）：原断言"空 → 不拦"与新口径（前端必填）相反，按新口径改；契约与服务端仍可选
+  it('🔴 空 / 纯空白 / 非字符串 → 不带（value 为空串），且给出"为什么要填"的原因', () => {
+    for (const raw of ['', '   ', undefined, null, 42]) {
+      const r = contactEmailOf(raw);
+      expect(r.value, String(raw)).toBe('');
+      expect(r.error, String(raw)).toBe(EMAIL_REQUIRED_TEXT);
+    }
+    // 原因要说清用途（APPI：收集时告知的利用目的与实际一致；AJ-369 订单邮件）
+    for (const w of ['付款', '发货', '退款']) expect(EMAIL_REQUIRED_TEXT).toContain(w);
   });
 
   it('去首尾空白后合法 → 带上', () => {
@@ -155,7 +161,8 @@ describe('contactEmailOf（选填邮箱）', () => {
       'ja ne@example.com',
       `${'a'.repeat(250)}@x.com`,
     ]) {
-      expect(contactEmailOf(bad).error, bad).toBe('邮箱格式不正确（可留空）');
+      // M-01：去掉"（可留空）"——必填之后那半句是错的（原断言文案按新口径改）
+      expect(contactEmailOf(bad).error, bad).toBe('邮箱格式不正确');
     }
   });
 
@@ -167,6 +174,29 @@ describe('contactEmailOf（选填邮箱）', () => {
     });
     expect(submitGate({ ...OK, itemCount: 0, emailError: 'x' }).reason).toBe('购物车是空的');
     expect(submitGate({ ...OK, emailError: '' }).ok).toBe(true);
+  });
+
+  it('🔴 M-01 submitGate：传了 contactEmail 且为空 → 不可提交，原因说明邮箱用途；排在其余各项之后', () => {
+    const OK = { itemCount: 2, addressId: 'addr-1', termsAccepted: true, totalJpy: 9150 };
+    expect(submitGate({ ...OK, contactEmail: '' })).toEqual({
+      ok: false,
+      reason: EMAIL_REQUIRED_TEXT,
+    });
+    expect(submitGate({ ...OK, contactEmail: 'jane@example.com' })).toEqual({
+      ok: true,
+      reason: '',
+    });
+    // 能不能下单的前几项先说（空购物车时先说购物车，不先催邮箱）
+    expect(submitGate({ ...OK, itemCount: 0, contactEmail: '' }).reason).toBe('购物车是空的');
+    // 填了但格式错：说格式，不说"请填写"
+    expect(submitGate({ ...OK, contactEmail: '', emailError: '邮箱格式不正确' }).reason).toBe(
+      '邮箱格式不正确',
+    );
+  });
+
+  it('不传 contactEmail = 不检查（老调用方不受影响，与 termsReady 等同一口径）', () => {
+    const OK = { itemCount: 2, addressId: 'addr-1', termsAccepted: true, totalJpy: 9150 };
+    expect(submitGate(OK).ok).toBe(true);
   });
 });
 

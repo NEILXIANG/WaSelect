@@ -124,11 +124,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** 进入结算页、勾选条款，走到"可以提交"。 */
+/**
+ * 进入结算页、勾选条款、填联系邮箱，走到"可以提交"。
+ * M-01（AJ-405）：邮箱改为前端必填后，原先"只勾条款就可提交"的前提不再成立——补上填邮箱这一步（不是放宽断言）。
+ */
 async function ready(): Promise<void> {
   call('onShow');
   await settle();
   call('onToggleTerms');
+  call('onEmailInput', { detail: { value: 'buyer@example.com' } });
   expect(gate()).toEqual({ ok: true, reason: '' });
 }
 
@@ -193,6 +197,44 @@ describe('结算页薄壳：幂等键跟着请求内容走（AJ-228）', () => {
     await settle();
     expect(cartCleared).toBe(true);
     expect(navigations).toEqual(['/pages/pay/index?orderId=o-1']);
+  });
+});
+
+describe('结算页薄壳：联系邮箱必填（M-01）', () => {
+  it('🔴 条款已勾、邮箱没填 → 闸门不放行，原因说明邮箱用途；点提交也发不出去', async () => {
+    call('onShow');
+    await settle();
+    call('onToggleTerms');
+    expect(gate().ok).toBe(false);
+    expect(gate().reason).toContain('邮箱');
+    call('onSubmit');
+    await settle();
+    expect(posts).toHaveLength(0);
+  });
+
+  it('🔴 填了又清空 → 输入框下给出原因、闸门重新关上', async () => {
+    await ready();
+    call('onEmailInput', { detail: { value: '  ' } });
+    expect(gate().ok).toBe(false);
+    expect(String(page.data['emailError'])).toContain('邮箱');
+  });
+
+  it('填好 → 建单请求带上 contact_email（去首尾空白）', async () => {
+    await ready();
+    call('onEmailInput', { detail: { value: ' jane@example.com ' } });
+    call('onSubmit');
+    await settle();
+    expect(posts[0]!.data?.['contact_email']).toBe('jane@example.com');
+  });
+
+  it('🔴 再次 onShow 的那一瞬间（请求还没回来）闸门也不因邮箱为空而放行', async () => {
+    call('onShow');
+    await settle();
+    call('onToggleTerms');
+    call('onShow');
+    expect(gate().ok).toBe(false);
+    await settle();
+    expect(gate().ok).toBe(false);
   });
 });
 
