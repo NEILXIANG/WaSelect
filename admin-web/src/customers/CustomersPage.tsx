@@ -132,10 +132,12 @@ function CustomerList({
             <tr key={r.id}>
               <td className="muted">{r.idText}</td>
               <td>{r.name}</td>
-              <td className="selectable">{r.email}</td>
+              <td className="selectable cell-ellipsis" title={r.email}>
+                {r.email}
+              </td>
               <td className="cell-nowrap">{r.ordersText}</td>
               <td className="cell-nowrap">{r.paidTotalText}</td>
-              <td className="muted cell-nowrap">{r.lastOrderText}</td>
+              <td className="muted">{r.lastOrderText}</td>
               <td>{r.blocked && <Badge tone="danger">已拉黑</Badge>}</td>
               <td>
                 <button

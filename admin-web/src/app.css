@@ -94,6 +94,8 @@ body {
 .main {
   flex: 1;
   min-width: 0;
+  /* 宽表格在主区内横向滚动，而不是撑出整页横向滚动条（1009px 视口下客户表曾溢出、挤掉「操作」列；2026-10-08 验收） */
+  overflow-x: auto;
 }
 
 /* 窄窗口（≤ 56rem）：侧栏躺平到顶部横排——竖排侧栏会把主区挤到只剩一半 */
@@ -305,6 +307,11 @@ body {
   border-bottom: var(--ws-border) solid var(--ws-color-muted);
 }
 
+/* 表格里的文字按钮（详情 / 编辑 / 改库存）不拆字：原先「详情」被挤成上下两个字 */
+.table td .link {
+  white-space: nowrap;
+}
+
 .table th {
   color: var(--ws-color-muted);
   font-weight: normal;
@@ -325,6 +332,14 @@ body {
 
 /* 数字列不折行（验收 2026-10-08：客户列表「1 单（已/付 0）」在 1024–1280px 被拆成三行） */
 .cell-nowrap {
+  white-space: nowrap;
+}
+
+/* 长文本列（邮箱）单行截断、悬停看全文：1009px 视口下客户表曾横向溢出 25px，挤掉「操作」列（2026-10-08 浏览器验收） */
+.cell-ellipsis {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

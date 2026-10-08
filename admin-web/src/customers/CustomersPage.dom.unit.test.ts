@@ -134,6 +134,10 @@ describe('客户列表', () => {
     expect(cells.find((td) => td.textContent === '3 单 · 已付 2')?.className).toContain(
       'cell-nowrap',
     );
+    // 邮箱列单行截断、悬停看全文（验收 2026-10-08：1009px 视口下整表横向溢出、挤掉「操作」列）
+    const mail = cells.find((td) => td.textContent?.trim() === 'zhang.wei@example.com');
+    expect(mail?.className).toContain('cell-ellipsis');
+    expect(mail?.getAttribute('title')).toBe('zhang.wei@example.com');
     expect(text).toContain('21,380 円');
     expect(el.textContent).toContain('第 2 / 3 页 · 共 41 位');
     // 搜索框回显地址栏里的关键字（刷新后不丢）
