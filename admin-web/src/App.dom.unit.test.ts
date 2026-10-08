@@ -17,7 +17,7 @@ import { createElement } from 'react';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TOKEN_STORAGE_KEY } from './api/token-store.js';
-import { button, click, mount, type Mounted } from './testing/dom.js';
+import { button, click, mount, type, type Mounted } from './testing/dom.js';
 import { App } from './App.js';
 
 let mounted: Mounted | undefined;
@@ -163,5 +163,25 @@ describe('App：筛选进地址栏（第一批③工作台的跳转依赖它）'
       select.dispatchEvent(new Event('change', { bubbles: true }));
     });
     expect(location.hash).toBe('#/orders');
+  });
+});
+
+describe('App：后退 / 前进也要过未保存提醒（批次复审发现此前完全绕过）', () => {
+  it('🔴 Banner 表单改了一半按后退 → 地址回滚、弹二次确认；确认后才真正换页', async () => {
+    const el = await open('#/banners');
+    const field = el.querySelector(
+      '.main input[type=text], .main input:not([type]), .main textarea',
+    );
+    expect(field, 'Banner 页应有可输入的字段').not.toBeNull();
+    await type(field, '双十一主图');
+
+    await goHash('#/risk');
+    expect(heading(el), '脏着时不应被 hashchange 直接换走').not.toBe('风控：拒付与拉黑');
+    expect(location.hash, '地址栏应回滚到当前页').toBe('#/banners');
+    expect(el.ownerDocument.querySelector('.dialog')?.textContent ?? '').toContain('未保存');
+
+    await click(button(el.ownerDocument.body, '放弃修改并离开'));
+    expect(heading(el)).toBe('风控：拒付与拉黑');
+    expect(location.hash).toBe('#/risk');
   });
 });

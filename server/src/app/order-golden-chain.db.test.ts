@@ -272,6 +272,12 @@ describe('异常链路：钱与订单状态不一致时，系统必须留下"人
     const orderId = await quoteCreatePay();
     await runExpireJob(db, srv, new Date(Date.now() + 2 * HOUR));
     expect((await orderRow(orderId))['status']).toBe('expired');
+    // 关单连带作废在途支付行是异步的：不等它落定就拍 before，全量 gate 高负载下作废会落在快照之后，
+    // 对比出 initiated → cancelled 的假差异（2026-10-07 全量 gate 实测一次红，单跑 3/3 绿）
+    await waitUntil(
+      async () => (await paymentRows(orderId))[0]?.['status'] === 'cancelled',
+      '关单连带作废在途支付行',
+    );
     const before = await snapshotState(db);
 
     const cb = await mockCallback(srv, db, orderId, { eventId: 'evt-after-expire' });

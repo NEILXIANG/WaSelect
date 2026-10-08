@@ -43,7 +43,14 @@ import { OpsPage } from './ops/OpsPage.js';
 import { ProductsPage } from './products/ProductsPage.js';
 import { ProductFormPage } from './products/ProductFormPage.js';
 import type { AdminProductLike } from './products/api.js';
-import { currentRoute, navigate, subscribe, type PageKey, type Route } from './router.js';
+import {
+  buildHash,
+  currentRoute,
+  navigate,
+  subscribe,
+  type PageKey,
+  type Route,
+} from './router.js';
 import { ConfirmDialog } from './ui/confirm.js';
 import { UnsavedProvider, useBeforeUnload, useDirtyRegistry } from './ui/unsaved.js';
 
@@ -88,7 +95,6 @@ export function App() {
 /** 登录后的壳：侧栏 + 当前页。会话失效时它**不卸载**（AuthGate 盖浮层），state 保留。 */
 function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionControls }) {
   const [route, setRoute] = useState<Route>(currentRoute);
-  useEffect(() => subscribe(() => setRoute(currentRoute())), []);
   /** 当前页面有没有未保存的改动（第一批⑥：由表单页上报，@see ../ui/unsaved.tsx）。 */
   const { dirty, markDirty, clear: clearDirty } = useDirtyRegistry();
   useBeforeUnload(dirty);
@@ -114,8 +120,7 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
    *
    * @why 必须在**这一处**拦：侧栏与订单页（「返回列表」「换一单」、筛选）都经由它导航，
    *      在每个调用点各判一次等于复制 N 份且必然漏。看板没有表单，仍拿未拦截的 `go`。
-   * @limitation 浏览器的后退 / 前进键只改 hash，走 `subscribe` 直接换页，**拦不住**——
-   *      hashchange 不可取消，硬拦要"先换再回滚"，地址栏会闪；关标签页 / 刷新仍有 beforeunload 兜底。
+   * 浏览器后退 / 前进 / 手改地址栏走的是 hashchange，由下方 `subscribe` 那段做同样的拦截。
    * @why 保存成功后**不该**弹：`onDone` 里表单页自己会 reset 脏态（见 useFormDirty），
    *      所以这里只要跟着 dirty 走就够了，不需要给"刚保存过"单开一个例外。
    */
@@ -134,6 +139,34 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   const [flash, setFlash] = useState('');
   /** 商品编辑态：**不进网址**（@see @limitation 一）。 */
   const [editing, setEditing] = useState<Editing | null>(null);
+
+  /**
+   * 地址栏变化（后退 / 前进 / 手改 hash）：同样要过脏态拦截。
+   * @why hashchange 不可取消，只能"先回滚再问"：用 `pushState` 把地址写回当前页（它不触发 hashchange，
+   *      不会自激），再弹同一个二次确认；确认后照常 `go(next)`。批次复审发现此前这条路径完全绕过提醒。
+   * @tradeoff 回滚用 push 而不是 replace：replace 会覆盖掉后退到的那一条历史，再按后退就跳过了它；
+   *           push 的代价是"前进"栈被清空——比丢一条后退记录更可接受。
+   * @why 离开商品页时清掉 `editing`：编辑态不进网址，不清的话再按前进回到 `#/products` 会冒出一张空白基线的表单。
+   */
+  const shownRef = useRef(route);
+  shownRef.current = route;
+  useEffect(
+    () =>
+      subscribe(() => {
+        const next = currentRoute();
+        // 目标就是当前页（例如刚 pushState 回滚后又收到一次 hashchange）：什么都不做，
+        // 否则会把"待去的页"改写成当前页，确认后原地不动
+        if (buildHash(next) === buildHash(shownRef.current)) return;
+        if (dirtyRef.current) {
+          history.pushState(null, '', buildHash(shownRef.current));
+          setPendingNav(next);
+          return;
+        }
+        if (next.page !== 'products') setEditing(null);
+        setRoute(next);
+      }),
+    [],
+  );
   // 40101 的唯一出口：JSON 封装与上传封装共用（KD-13：上传曾不走这里，过期后反复"HTTP 401"）
   const { onUnauthorized, logout } = session;
 
@@ -247,6 +280,8 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
           onConfirm={() => {
             setEditing(null);
             clearDirty();
+            // ref 同步置干净：go 引发的 hashchange 可能先于重渲染到达，读到旧的 dirty 会再拦一次
+            dirtyRef.current = false;
             go(pendingNav);
             setPendingNav(null);
           }}

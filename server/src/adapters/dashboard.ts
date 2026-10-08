@@ -15,7 +15,7 @@
  * | `orders` | `created_at` 落窗 | "今天来了几张单" |
  * | `paid_orders` / `sales_jpy` | `paid_at` 落窗，`total_jpy` 求和 | "今天卖了多少钱"按**收款**时刻，不按下单时刻（跨日的单不该算在昨天） |
  * | `received` | `payments` 的**实扣**金额（`paid_amount` / `paid_currency`，缺失回落 `charge_*`），按扣款币种**分行、不折算** | §8-2：实收要和支付机构对账，折算后对不上。分行而不是求和，是因为 USD 分与円不能直接相加 |
- * | `refunded` | ① 全额退款单：`payments` 被标 `refunded` 那条的 `charge_amount`；② 部分退款：`status='succeeded'` 的行，且**该订单当前不是 `refunded`** | 全额退款**不写** `order_refunds`（只改状态机，见 orders-admin.ts `markRefunded`），只取一个来源必然漏一半；而"先部分退 X 再全额退"时全额那笔实际退的是 `charge - X`（`fullRefundAmount`），两条相加正好等于 `charge`，所以必须排除被全额覆盖的那部分，否则 X 被算两遍 |
+ * | `refunded` | ① 全额退款单：`payments` 被标 `refunded` 那条**实际出账**的 `charge − 已成功部分退款`，按 `orders.refunded_at` 落窗；② 部分退款：`status='succeeded'` 的行，按各自落定时刻落窗（不论订单后来是否整单退） | 全额退款**不写** `order_refunds`（只改状态机，见 orders-admin.ts `markRefunded`），只取一个来源必然漏一半；"先部分退 X 再全额退"时全额那笔实际退的是 `charge - X`（`fullRefundAmount`），两条各按真实出账时间落窗、合计正好 `charge`。初版把整单记成 `charge` 并排除部分退款行：全时段合计碰巧对，但按天看会把 X 挪到整单那天（复审修正） |
  * | `disputed` | `payments.dispute_amount`（**机构报的数**，非订单金额），按 `dispute_opened_at` 落窗 | 对账以机构口径为准（mark-disputed.ts @why）；机构报的币种与 `charge_currency` 不一致时那条会被直接拒绝，所以币种取 `charge_currency` 是安全的 |
  *
  * @limitation 一：**全表扫**。`orders` 上只有 `(user_id, created_at)`、`(status)` 与 032 加的
@@ -133,7 +133,12 @@ async function selectReceived(db: Db, w: JstDayWindow): Promise<MoneyByCurrency[
 async function selectRefunded(db: Db, w: JstDayWindow): Promise<MoneyByCurrency[]> {
   const rows = await db`
     with full_refunds as (
-      select p.charge_currency as currency, p.charge_amount as amount
+      -- 整单那笔实际出账 = charge − 已成功的部分退款（与 domain fullRefundAmount 同式，不足 0 按 0）
+      select p.charge_currency as currency,
+             greatest(0, p.charge_amount - coalesce((
+               select sum(r.amount_minor) from order_refunds r
+                where r.order_id = o.id and r.status = 'succeeded'
+             ), 0)) as amount
         from payments p
         join orders o on o.id = p.order_id
        where o.is_test = false
@@ -146,7 +151,6 @@ async function selectRefunded(db: Db, w: JstDayWindow): Promise<MoneyByCurrency[
         join orders o on o.id = r.order_id
        where o.is_test = false
          and r.status = 'succeeded'
-         and o.status <> 'refunded'
          and coalesce(r.settled_at, r.created_at) >= ${w.from}
          and coalesce(r.settled_at, r.created_at) <  ${w.to}
     )

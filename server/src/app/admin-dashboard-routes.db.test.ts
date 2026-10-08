@@ -474,13 +474,18 @@ describe('GET /api/v1/admin/dashboard/sales（AJ-393）', () => {
     }
   });
 
-  it('🔴 先部分退再全额退不双计（全额那笔已包含此前退过的部分）', async () => {
+  /**
+   * 先部分退 X、再整单退：整单那笔**实际出账**是 `charge − X`（`fullRefundAmount`），各按各的时间落窗。
+   * @why 修订前（AJ-393 初版）把整单记成 `charge`、并把该单的部分退款整行排除：
+   *      全时段合计碰巧对，但"今天退了多少"多算 X、X 所在那天少算 X（WorkBuddy 批次复审发现）。
+   */
+  it('🔴 先部分退再全额退：今日只算整单那笔实际退的余额，部分退款留在它自己那天', async () => {
     await seedOrder({
       id: 'o-both',
       totalJpy: 9000,
       status: 'refunded',
-      createdAt: T_IN_TODAY,
-      paidAt: T_IN_TODAY,
+      createdAt: T_OUTSIDE,
+      paidAt: T_OUTSIDE,
       refundedAt: T_IN_TODAY,
     });
     await seedPayment({
@@ -490,7 +495,7 @@ describe('GET /api/v1/admin/dashboard/sales（AJ-393）', () => {
       currency: 'JPY',
       amount: 9000,
     });
-    // 全额之前先退过 2000；order_refunds 里留着这一行
+    // 昨天先退过 2000（仍在近 7 天）
     await seedPartialRefund({
       id: 'rf-pre',
       orderId: 'o-both',
@@ -501,13 +506,24 @@ describe('GET /api/v1/admin/dashboard/sales（AJ-393）', () => {
       createdAt: T_YESTERDAY,
       settledAt: T_YESTERDAY,
     });
+    // 更早（7 天外）还退过 500：不进任何窗口，但同样要从整单余额里扣掉
+    await seedPartialRefund({
+      id: 'rf-old',
+      orderId: 'o-both',
+      paymentId: 'p-both',
+      currency: 'JPY',
+      amount: 500,
+      status: 'succeeded',
+      createdAt: T_OUTSIDE,
+      settledAt: T_OUTSIDE,
+    });
     const { url, close } = await buildServer();
     try {
       const r = await get(url, '/api/v1/admin/dashboard/sales', await bearer());
-      // 今日窗口：全额退款 9000（那笔 2000 是昨天退的、且已被全额覆盖）
-      expect(moneyOf(win(r.body, 'today').refunded, 'JPY')).toBe(9000);
-      // 近 7 天窗口同样只应是 9000，不能变成 11000（双计）
-      expect(moneyOf(win(r.body, 'last7').refunded, 'JPY')).toBe(9000);
+      // 今日：整单那笔实际退 9000 − 2000 − 500 = 6500
+      expect(moneyOf(win(r.body, 'today').refunded, 'JPY')).toBe(6500);
+      // 近 7 天：6500 + 昨天的 2000 = 8500（7 天外的 500 不进窗口；不能是 9000 或 11000）
+      expect(moneyOf(win(r.body, 'last7').refunded, 'JPY')).toBe(8500);
     } finally {
       await close();
     }

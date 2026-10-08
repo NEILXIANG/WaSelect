@@ -1,7 +1,15 @@
 // 契约驱动的自动异常模拟 —— 回答「怎样更快更全面地发现问题」
 //
-// 用法：node api-fuzz.mjs
+// 用法：node api-fuzz.mjs                 # 默认**只读**：只探 GET 接口 + 不写库的协议层畸形
+//       node api-fuzz.mjs --allow-writes  # 连写接口一起探（会真的改库，只对模拟库 / 一次性库用）
+//       API_FUZZ_BASE=http://127.0.0.1:3001 node api-fuzz.mjs   # 换目标（只允许本机）
 // 前提：server 已在 BASE 运行，且 contracts/api-contract.yaml 存在
+//
+// ⚠️ 写接口为什么默认不跑（批次复审发现）：变异里有一部分本身就是**合法请求**
+//    （「多余字段」= 合法基线 + 两个会被 zod 剥掉的键；「零」「浮点」在不少字段上也合法），
+//    初版拿订单列表第一张真单当路径参数，跑一遍就会把它发货 / 退款 / 取消、打开售卖暂停、覆盖运费表。
+//    --allow-writes 下带 id 的写路由改用**不存在的 id**：body 校验先于取单，仍能探到 400 一侧；
+//    不带 id 的写接口（运费表、售卖暂停、新建商品 / Banner）仍会生效——所以开关必须显式给。
 //
 // 与手写探针的区别（也是「为什么更全」）：
 //   1. 端点、必填字段、maxLength、enum、minimum 全部从 contracts/api-contract.yaml 读出，
@@ -17,7 +25,12 @@ import yaml from 'js-yaml';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
-const BASE = 'http://127.0.0.1:3000';
+const BASE = process.env.API_FUZZ_BASE ?? 'http://127.0.0.1:3000';
+const ALLOW_WRITES = process.argv.includes('--allow-writes');
+if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(BASE).hostname)) {
+  console.error('拒绝：只允许打本机（' + BASE + '）。这个脚本会发大量畸形与（可选）写请求。');
+  process.exit(1);
+}
 const PREFIX = '/api/v1';
 const EMAIL = 'dev@waselect.test';
 const PASS = 'dev-Local-Admin-2026';
@@ -66,7 +79,7 @@ const LEAK =
   /(at Object\.|at async |Error: |SELECT |INSERT |UPDATE |DELETE FROM|pg_|node_modules|BEGIN |ROLLBACK)/i;
 
 const findings = [];
-const stats = { probes: 0, ops: 0 };
+const stats = { probes: 0, ops: 0, skippedWrites: 0 };
 function add(sev, tag, detail) {
   findings.push({ sev, tag, detail });
 }
@@ -214,10 +227,13 @@ console.log(
 );
 
 const PATHVAL = { id: oid, productId: pid, refundId: 'rf-does-not-exist', kind: 'orders' };
-function fillPath(p) {
-  return p.replace(/\{(\w+)\}/g, (_, k) =>
-    PATHVAL[k] !== undefined ? PATHVAL[k] : k === 'id' ? oid : 'x',
-  );
+/** 写路由的路径参数一律用不存在的 id：探得到校验，碰不到真数据。 */
+const FAKE_ID = 'fuzz-does-not-exist';
+function fillPath(p, write) {
+  return p.replace(/\{(\w+)\}/g, (_, k) => {
+    if (write && k !== 'kind') return FAKE_ID;
+    return PATHVAL[k] !== undefined ? PATHVAL[k] : k === 'id' ? oid : 'x';
+  });
 }
 
 // ── 校验 ────────────────────────────────────────────────
@@ -272,13 +288,18 @@ for (const [rawPath, ops] of Object.entries(spec.paths ?? {})) {
   if (!rawPath.startsWith('/admin')) continue;
   for (const [method, op] of Object.entries(ops)) {
     if (!['get', 'post', 'put', 'patch', 'delete'].includes(method)) continue;
+    const write = method !== 'get';
+    if (write && !ALLOW_WRITES) {
+      stats.skippedWrites++;
+      continue;
+    }
     stats.ops++;
     const decl = Object.keys(op.responses ?? {}).map(Number);
     const okSchema = deref(
       op.responses?.['200']?.content?.['application/json']?.schema ??
         op.responses?.['201']?.content?.['application/json']?.schema,
     );
-    const urlPath = PREFIX + fillPath(rawPath);
+    const urlPath = PREFIX + fillPath(rawPath, write);
     const label = method.toUpperCase() + ' ' + rawPath;
 
     const bodySchema = op.requestBody?.content?.['application/json']?.schema;
@@ -331,7 +352,7 @@ console.log('\n');
 
 // ── 附加：协议层（不写业务库的通用畸形）───────────────────
 console.log('协议层畸形 …');
-const protoTarget = PREFIX + '/admin/orders' + (oid ? '/' + oid : '') + (oid ? '/ship' : '');
+const protoTarget = PREFIX + '/admin/orders/' + FAKE_ID + '/ship';
 const protoCases = [
   ['裸数组体', 'PUT', PREFIX + '/admin/shipping-rates', []],
   ['裸字符串体', 'PUT', PREFIX + '/admin/shipping-rates', 'not-json'],
@@ -349,6 +370,7 @@ const protoCases = [
   ['超长 URL', 'GET', PREFIX + '/admin/orders?keyword=' + 'a'.repeat(8000), undefined],
 ];
 for (const [name, m, p, body] of protoCases) {
+  if (m !== 'GET' && m !== 'DELETE' && !ALLOW_WRITES) continue; // PUT 畸形体：只读模式不发
   const r = await req(
     m,
     p,
@@ -366,6 +388,12 @@ const rank = { P0: 0, P1: 0, P2: 0 };
 for (const f of findings) rank[f.sev] = (rank[f.sev] ?? 0) + 1;
 console.log('\n========== 汇总 ==========');
 console.log('覆盖接口 ' + stats.ops + ' 个，发出探测 ' + stats.probes + ' 次');
+if (stats.skippedWrites > 0)
+  console.log(
+    '跳过写接口 ' +
+      stats.skippedWrites +
+      ' 个（只读模式；要探写接口加 --allow-writes，只对模拟库用）',
+  );
 console.log('P0=' + rank.P0 + '  P1=' + rank.P1 + '  P2=' + rank.P2);
 const order2 = ['P0', 'P1', 'P2'];
 for (const sev of order2) {

@@ -75,9 +75,22 @@ export function parseHash(hash: string): Route {
     page,
     // ❗ 页认不出时**不带**它后面的 id 与筛选：`#/nope/o-1` 不是"nope 页的 o-1"，
     //    带着它们会让首页看起来"收到了一个不知所属的条件"，比直接回落更难排查。
-    id: page === first && second !== undefined ? decodeURIComponent(second) : '',
+    id: page === first && second !== undefined ? safeDecode(second) : '',
     query: page === first ? new URLSearchParams(searchPart) : new URLSearchParams(),
   };
+}
+
+/**
+ * 坏的百分号编码（如 `%E0%A4`）解不出 → 当作"没带 id"，回到该页列表态。
+ * @why `decodeURIComponent` 遇坏编码会抛 URIError；初次加载时它在 `useState(currentRoute)` 里执行，
+ *      管理端没有 ErrorBoundary，一抛就整页白屏——正是上面 @why 要防的"粘贴错一个字"（批次复审发现）。
+ */
+function safeDecode(seg: string): string {
+  try {
+    return decodeURIComponent(seg);
+  } catch {
+    return '';
+  }
 }
 
 /** Route → hash（含 `#`）。 */

@@ -62,6 +62,13 @@ describe('parseHash：拒绝侧（认不出的一律回落首页，不白屏）'
     expect(got.query.toString()).toBe('');
   });
 
+  it('id 是坏的百分号编码 → 不抛（会白屏），回到该页列表态', () => {
+    const r = parseHash('#/orders/%E0%A4?status=paid');
+    expect(r.page).toBe('orders');
+    expect(r.id).toBe('');
+    expect(r.query.get('status')).toBe('paid');
+  });
+
   it('认不出的页**不带**它后面的 id（不把 nope/xxx 读成"nope 页的 xxx"）', () => {
     expect(parseHash('#/nope/o-1')).toEqual({
       page: HOME_PAGE,
