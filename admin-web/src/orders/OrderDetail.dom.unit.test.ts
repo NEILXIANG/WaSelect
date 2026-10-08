@@ -90,6 +90,8 @@ beforeEach(() => {
 });
 
 async function submitRefund(el: HTMLElement): Promise<void> {
+  // AJ-398：表单收进抽屉，先点操作条上的「全额退款…」打开它
+  await click(button(el, '全额退款…'));
   await type(el.querySelector('input[placeholder^="退款原因"]'), '缺货');
   // 第一批①：「退款」只打开确认弹层，「确认退款」在弹层里
   await click(button(el, '退款'));
@@ -136,6 +138,7 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     status = 'paid';
     hasDispute = false;
     const el = await open();
+    expect(button(el, '解除拒付限制…')).toBeNull();
     expect(button(el, RELEASE_BTN)).toBeNull();
   });
 
@@ -143,6 +146,7 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     status = 'paid';
     hasDispute = true;
     const el = await open();
+    await click(button(el, '解除拒付限制…'));
     expect(button(el, RELEASE_BTN)).not.toBeNull();
 
     await type(el.querySelector('input[placeholder^="解除理由"]'), '机构已结案但漏发事件');
@@ -161,6 +165,7 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     status = 'paid';
     hasDispute = true;
     const el = await open();
+    await click(button(el, '解除拒付限制…'));
     // 第一批①：校验不过就**进不去弹层**——连"确认解除"这个按钮都不会出现
     await click(button(el, RELEASE_BTN));
     expect(button(el, '确认解除（不可撤销）')).toBeNull();
@@ -177,6 +182,7 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     };
     const el = await open();
     const before = detailFetches();
+    await click(button(el, '解除拒付限制…'));
     await type(el.querySelector('input[placeholder^="解除理由"]'), '已与买家协商和好');
     await click(button(el, RELEASE_BTN));
     await click(button(el, '确认解除（不可撤销）'));
@@ -185,8 +191,9 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     expect(changed).toBe(1);
     expect(el.textContent).toContain('没有结案');
     expect(el.textContent).toContain('不要因为按钮亮了就发');
-    // 锁已解开 → 面板收起，不留一个还能再点的按钮
+    // 锁已解开 → 抽屉收起、操作条上的入口也消失，不留一个还能再点的按钮
     expect(button(el, RELEASE_BTN)).toBeNull();
+    expect(button(el, '解除拒付限制…')).toBeNull();
   });
 
   it('🔴 服务端 40902（本来就没锁）→ 显示服务端的话，**不**显示成功提示', async () => {
@@ -196,6 +203,7 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
       throw new ApiError(40902, '订单状态不允许此操作', 't-3');
     };
     const el = await open();
+    await click(button(el, '解除拒付限制…'));
     await type(el.querySelector('input[placeholder^="解除理由"]'), '链断了');
     await click(button(el, RELEASE_BTN));
     await click(button(el, '确认解除（不可撤销）'));
@@ -458,6 +466,7 @@ describe('订单详情：改址表单预填（A-02）', () => {
       }),
     );
     await flush();
+    await click(button(mounted.el, '改址…'));
     const values = [...mounted.el.querySelectorAll('input')].map((i) => i.value);
     expect(values).toContain('Jane Doe');
     expect(values).toContain('1 Main St');
@@ -476,6 +485,7 @@ describe('订单详情：发货两步确认（P2-51）', () => {
   it('🔴 点「发货」只打开确认弹层、不发请求；弹层里必须重打运单号才发', async () => {
     status = 'paid';
     const el = await open();
+    await click(button(el, '发货…'));
     await type(el.querySelector('input[placeholder^="承运商"]'), 'Japan Post');
     await type(el.querySelector('input[placeholder="运单号"]'), 'EJ123456789JP');
     await click(button(el, '发货'));
@@ -502,6 +512,7 @@ describe('订单详情：发货两步确认（P2-51）', () => {
   it('🔴 运单号形状认不出时，**确认之前**就提示（发货邮件随确认发出，事后提示已晚；三端联动模拟 2026-10-08）', async () => {
     status = 'paid';
     const el = await open();
+    await click(button(el, '发货…'));
     await type(el.querySelector('input[placeholder^="承运商"]'), 'Japan Post EMS');
     await type(el.querySelector('input[placeholder="运单号"]'), 'EM12345678JP'); // 少一位
     // 第一批①：警告在**表单里**就显示，不必先点「发货」（点发货会打开弹层，那时才提示已晚）
@@ -539,5 +550,46 @@ describe('订单详情双栏（第一批④）', () => {
     const el = await open();
     expect(el.querySelector('.detail-main .detail-actions')).toBeNull();
     expect(el.querySelector('.detail-actions .detail-main')).toBeNull();
+  });
+});
+
+/**
+ * AJ-398：写操作收进抽屉。
+ * @why 守"抽屉成功后关上"与"有内容时关抽屉要先问"两件事——前者不守，发货成功后抽屉里还摆着一个空表单；
+ *      后者不守，误点遮罩就把填好的运单号丢了。
+ */
+describe('订单详情：操作抽屉（AJ-398）', () => {
+  beforeEach(() => {
+    status = 'paid';
+    hasDispute = false;
+    refundBehaviour = () => ({ order_id: 'o-1', outcome: 'succeeded' });
+    releaseBehaviour = () => ({ order_id: 'o-1', has_dispute: false });
+  });
+
+  it('打开「发货…」抽屉 → 填写 → 确认 → 发出请求，抽屉关闭', async () => {
+    const el = await open();
+    expect(el.querySelector('.drawer'), '未点之前不该有抽屉').toBeNull();
+    await click(button(el, '发货…'));
+    expect(el.querySelector('.drawer')).not.toBeNull();
+    await type(el.querySelector('.drawer input[placeholder^="承运商"]'), 'Japan Post');
+    await type(el.querySelector('.drawer input[placeholder="运单号"]'), 'EJ123456789JP');
+    await click(button(el, '发货'));
+    await type(el.querySelector('.dialog input'), 'EJ123456789JP');
+    await click(button(el, '确认发货'));
+    const posts = calls.filter((c) => c.path.endsWith('/ship'));
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.body).toEqual({ carrier: 'Japan Post', tracking_no: 'EJ123456789JP' });
+    expect(el.querySelector('.drawer'), '成功后抽屉应关闭').toBeNull();
+    expect(toastText(el)).toContain('已发货');
+  });
+
+  it('填了内容再点「关闭」→ 先问「放弃修改」；确认后才关', async () => {
+    const el = await open();
+    await click(button(el, '全额退款…'));
+    await type(el.querySelector('input[placeholder^="退款原因"]'), '缺货');
+    await click(button(el, '关闭'));
+    expect(el.querySelector('.drawer'), '有内容时不能直接关').not.toBeNull();
+    await click(button(el, '放弃修改'));
+    expect(el.querySelector('.drawer')).toBeNull();
   });
 });

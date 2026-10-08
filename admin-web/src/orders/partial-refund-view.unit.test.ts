@@ -7,6 +7,7 @@ import {
   formatMinor,
   parseAmountToMinor,
   partialRefundGate,
+  partialRefundInputCheck,
   partialRefundRows,
   partialRefundErrorNotice,
   refundableMinor,
@@ -86,6 +87,18 @@ describe('partialRefundGate（与服务端 partialRefundGuard 同口径）', () 
       partialRefundGate(order({ partial_refunds: [{ status: 'succeeded', amount_minor: 8160 }] }))
         .ok,
     ).toBe(false);
+  });
+});
+
+describe('partialRefundInputCheck', () => {
+  it('🔴 没有已成功的支付（币种解析为空）→ 直说"没有已成功的支付记录"，不报金额格式错误', () => {
+    const r = partialRefundInputCheck({
+      amount: 'abc',
+      reason: '',
+      order: order({ payments: [] }),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.reason).toContain('没有已成功的支付记录');
   });
 });
 

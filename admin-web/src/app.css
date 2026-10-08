@@ -425,6 +425,36 @@ body {
   }
 }
 
+/* 订单详情右栏的操作按钮条（AJ-398）：按钮横排、放不下就换行 */
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ws-space-sm);
+}
+
+/*
+ * 操作抽屉（AJ-398）：沿用 .modal 的全屏遮罩，面板贴右、整高、自己滚动。
+ * @why 贴右而不是居中：抽屉从操作条那一侧出来，眼睛不用跳；左边的订单信息仍露在遮罩下可对照。
+ * @why 不用 transform 做动画：带 transform 的祖先会让里面 position: fixed 的确认弹层改按面板定位。
+ */
+/* 双类选择器：.modal 定义在本文件更后面，同权重时它的 center 会盖掉这里 */
+.modal.drawer-wrap {
+  justify-content: flex-end;
+  align-items: stretch;
+}
+
+.drawer {
+  position: relative;
+  background: var(--ws-color-card);
+  width: calc(var(--ws-space) * 28);
+  max-width: 100%;
+  overflow-y: auto;
+  padding: calc(var(--ws-space) * 1.5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space);
+}
+
 /* 表单的行内错误区：多条竖排，紧跟在对应字段下方 */
 .field-errors {
   display: flex;

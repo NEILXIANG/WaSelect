@@ -106,7 +106,8 @@ export function partialRefundGate(order: unknown): Gate {
  *      额度前端在同一个地方也算得出（`refundableMinor`），没理由等服务端话说回来。
  *
  * @why 顺序=表单自上而下（金额 → 原因 → 额度）：三条一起违反时，
- *      第一条就是他刚才光标所在的那一行。
+ *      第一条就是他刚才光标所在的那一行。例外：**没有已成功的支付**排在最前——
+ *      那时金额无论怎么填都不对，先报格式错误等于让人去改一个改不好的东西。
  *
  * @limitation 这里只做**早一步说清楚**，不是闸门：真正的额度判定仍在服务端
  *            （并发下额度可能先被别人的一笔占掉），所以这里放行也仍可能被服务端拒。
@@ -117,10 +118,12 @@ export function partialRefundInputCheck(a: {
   order: unknown;
 }): { ok: true; minor: number } | { ok: false; reason: string } {
   const left = refundableMinor(a.order);
-  const parsed = parseAmountToMinor(a.amount, left?.currency ?? '');
+  // ⚠️ 先判"有没有已成功的支付"（AJ-398）：没有时币种解析为 ''，金额校验会按"缺省 2 位小数"
+  //    报一句格式错误——运营照着改金额永远改不对，真正的原因（没收到钱）被藏在后面。
+  if (left === null) return { ok: false, reason: '这笔订单没有已成功的支付记录，无法退款' };
+  const parsed = parseAmountToMinor(a.amount, left.currency);
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
   if (a.reason.trim() === '') return { ok: false, reason: '请填写退款原因（进审计台账）' };
-  if (left === null) return { ok: false, reason: '这笔订单没有已成功的支付记录，无法退款' };
   if (parsed.minor > left.minor) {
     return { ok: false, reason: `最多可退 ${formatMinor(left.minor, left.currency)}` };
   }

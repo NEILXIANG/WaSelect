@@ -76,7 +76,12 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   );
 
   // ── 以下四项全部由 URL 派生（@see @limitation 四）────────────────────
-  const status = (route.query.get(Q.status) ?? 'all') as OrderStatus | 'all';
+  // 认不出的 `?status=`（手改地址、旧收藏）回落为「全部」（AJ-398）：原样发给服务端会得到 40001，
+  // 而下拉框里又没有这个值可选——页面一片空白、看不出是筛选坏了。
+  const rawStatus = route.query.get(Q.status) ?? 'all';
+  const status: OrderStatus | 'all' = STATUS_FILTER_OPTIONS.some((o) => o.value === rawStatus)
+    ? (rawStatus as OrderStatus | 'all')
+    : 'all';
   const applied = route.query.get(Q.q) ?? '';
   const includeTest = route.query.get(Q.test) === '1';
   const page = Math.max(1, Number(route.query.get(Q.page) ?? '1') || 1);

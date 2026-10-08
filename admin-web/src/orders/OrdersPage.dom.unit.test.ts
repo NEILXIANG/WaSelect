@@ -77,6 +77,15 @@ describe('订单列表："含测试单"开关（剩余清单 3-4）', () => {
   });
 });
 
+describe('订单列表：URL 上认不出的 status（AJ-398）', () => {
+  it('🔴 #/orders?status=foo → 按「全部」请求，不把 foo 发给服务端', async () => {
+    const el = await open('#/orders?status=foo');
+    expect(gets()).toHaveLength(1);
+    expect(gets()[0]?.path).not.toContain('status=');
+    expect((el.querySelector('select') as HTMLSelectElement | null)?.value).toBe('all');
+  });
+});
+
 describe('订单列表：刷新入口（ADM3-09）', () => {
   it('挂载时拉一次列表', async () => {
     await open();
