@@ -17,6 +17,7 @@ import {
   ADDRESS_COUNTRY_DEFAULT,
   ADDRESS_MAX_CHARS,
   ADDRESS_PATTERNS,
+  ENGLISH_ADDRESS_NOTE,
   addressSummary,
   defaultAddressId,
   emptyForm,
@@ -323,5 +324,28 @@ describe('normalizeUsPhone：美国电话常见写法归一成 E.164（P2-37）'
     expect(formErrors(m).errors.phone).toBeUndefined();
     expect(toAddressInput(m).phone).toBe('+14155550123');
     expect(ADDRESS_PATTERNS.phone.test(toAddressInput(m).phone)).toBe(true);
+  });
+});
+
+describe('ENGLISH_ADDRESS_NOTE（M-20 英文填写说明，AJ-406）', () => {
+  it('🔴 每条示例值都能通过本表单的校验（示例自己填不进去 = 说明是错的）', () => {
+    expect(ENGLISH_ADDRESS_NOTE.examples.map((x) => x.key)).toEqual([
+      'recipient',
+      'line1',
+      'line2',
+    ]);
+    const model = { ...ADDR };
+    for (const ex of ENGLISH_ADDRESS_NOTE.examples) {
+      expect(ADDRESS_PATTERNS.ascii.test(ex.value), ex.value).toBe(true);
+      (model as Record<string, unknown>)[ex.key] = ex.value;
+    }
+    expect(formErrors(formModel(model)).errors).toEqual({});
+  });
+
+  it('说明与字段错误同一口径：中文填进去会被拒（说明说"无法提交"必须是真的）', () => {
+    expect(ENGLISH_ADDRESS_NOTE.body).toContain('无法提交');
+    expect(
+      formErrors(formModel({ ...ADDR, line1: '东京都千代田区 1-1' })).errors.line1,
+    ).toBeTruthy();
   });
 });

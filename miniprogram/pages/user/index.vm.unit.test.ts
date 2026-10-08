@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MENU_ROWS, loginState } from './index.vm.js';
+import { MENU_ROWS, loginRetryView, loginState } from './index.vm.js';
 
 describe('loginState（登录态文案）', () => {
   it('有 token → 已登录', () => {
@@ -83,5 +83,46 @@ describe('loginState：自动登录失败（W-08）', () => {
   });
   it('有 token 时忽略失败标记', () => {
     expect(loginState('tk', true)).toEqual({ logged: true, text: '已登录（微信）' });
+  });
+});
+
+describe('loginRetryView（M-17「重新登录」按钮，AJ-406）', () => {
+  const failed = { logged: false, failed: true, available: true };
+
+  it('🔴 启动登录失败 + 可重试 → 显示"重新登录"、可点', () => {
+    expect(loginRetryView(failed)).toEqual({
+      show: true,
+      text: '重新登录',
+      disabled: false,
+      note: '',
+    });
+  });
+
+  it('重试在途 → 按钮禁用并改字（双击不发第二次）', () => {
+    expect(loginRetryView({ ...failed, retrying: true })).toEqual({
+      show: true,
+      text: '正在重新登录…',
+      disabled: true,
+      note: '',
+    });
+  });
+
+  it('重试又失败 → 按钮恢复可点，并说出"还是没成功"（不是点了没反应）', () => {
+    const v = loginRetryView({ ...failed, retryFailed: true });
+    expect(v.disabled).toBe(false);
+    expect(v.note).toBe('还是没有登录成功，请检查网络后再试');
+  });
+
+  it('已登录 / 正在登录（未失败）/ 没有重试入口 / 脏输入 → 不显示', () => {
+    for (const s of [
+      { ...failed, logged: true },
+      { ...failed, failed: false },
+      { ...failed, available: false },
+      null,
+      undefined,
+      {},
+    ]) {
+      expect(loginRetryView(s).show, JSON.stringify(s)).toBe(false);
+    }
   });
 });

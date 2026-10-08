@@ -18,7 +18,7 @@
  *
  * @see ./index.vm.js（登录态文案与入口清单，5 条单测）；../../utils/wx-api.js（navigateTo）
  */
-import { MENU_ROWS, loginState } from './index.vm.js';
+import { MENU_ROWS, loginRetryView, loginState } from './index.vm.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { setActiveTab } from '../../utils/tabs.js';
 import { supportRows } from '../../utils/support.js';
@@ -52,6 +52,8 @@ Page({
     rows: MENU_ROWS,
     /** vm `loginState` 的输出。 */
     login: { logged: false, text: '正在登录…' },
+    /** M-17（AJ-406）：vm `loginRetryView` 的输出（启动登录失败时的"重新登录"按钮）。 */
+    retry: { show: false, text: '', disabled: true, note: '' },
     /** 剩余清单 4-2：客服联系方式（utils/support.js）；空数组 = 客服未配置，不显示整张卡。 */
     support: [],
     /** 刚复制的是哪一行（'' = 没有）。 */
@@ -60,10 +62,49 @@ Page({
 
   onShow() {
     // @see @limitation 二：token 可能在别处被刷新，每次进屏重读
-    this.setData({ login: loginState(app.globalData.token, app.globalData.loginFailed) });
+    this.retryFailed = false;
+    this.renderLogin();
     // S5：注入底部 tabBar 的高亮（本页是第 3 个 tab）。
     setActiveTab(this, 'user');
     void this.loadSupport();
+  },
+
+  /** 本页重试在途（M-17；不进 data：渲染态由 `retry` 表达）。 */
+  retrying: false,
+  /** 上一次本页重试失败了（M-17）。 */
+  retryFailed: false,
+
+  /** 登录态 + 重试按钮（同一次读 globalData，两者不会各说各的）。 */
+  renderLogin() {
+    const login = loginState(app.globalData.token, app.globalData.loginFailed);
+    const retry = loginRetryView({
+      logged: login.logged,
+      failed: app.globalData.loginFailed,
+      retrying: this.retrying,
+      available: typeof app.globalData.retryLogin === 'function',
+      retryFailed: this.retryFailed,
+    });
+    this.setData({ login, retry });
+  },
+
+  /**
+   * 「重新登录」（M-17，AJ-406）：调 app 的 `retryLogin`（与启动自动登录同一跳，utils/auth-session.js loginAndStore）。
+   * @why 在途时直接 return：按钮虽已禁用，但视图层回传有延迟（与结算页 W-03 同一类），双击会穿透。
+   */
+  async onRetryLogin() {
+    if (this.retrying) return;
+    const retryLogin = app.globalData.retryLogin;
+    if (typeof retryLogin !== 'function') return;
+    this.retrying = true;
+    this.renderLogin();
+    let ok = false;
+    try {
+      ok = (await retryLogin())?.ok === true;
+    } finally {
+      this.retrying = false;
+      this.retryFailed = !ok;
+      this.renderLogin();
+    }
   },
 
   /**

@@ -34,6 +34,19 @@
   <!-- 表单区：S4 起每个字段走 `ws-field`（标签 + 控件 + 错误都在同一个容器里）。
        ⚠️ 错误文案放在 field 的 **slot 里**而不是传给组件：错误长什么样（在输入框下方、
           什么颜色）是这个表单自己的口径，不该由 field 决定（@see 组件 @limitation 二）。 -->
+  <!-- M-20（AJ-406）：英文要求放在表单**之前**说（此前只在提交后的字段错误里出现）；字段级 ASCII 校验不变 -->
+  <view class="ws-gutter aedit__note">
+    <view class="ws-card aedit__note-card">
+      <text class="ws-body aedit__note-title">{{englishNote.title}}</text>
+      <text class="ws-note aedit__note-body">{{englishNote.body}}</text>
+      <view class="aedit__note-row" wx:for="{{englishNote.examples}}" wx:key="key">
+        <text class="ws-caption">{{item.label}}：</text>
+        <text class="ws-body aedit__note-value">{{item.value}}</text>
+        <text class="ws-caption">（{{item.hint}}）</text>
+      </view>
+    </view>
+  </view>
+
   <view class="ws-gutter">
     <view class="ws-card aedit__form">
       <ws-field label="收件人">

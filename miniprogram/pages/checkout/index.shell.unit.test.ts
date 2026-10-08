@@ -51,6 +51,13 @@ let navigations: string[];
 let redirects: string[];
 let switches: string[];
 let cartCleared: boolean;
+/**
+ * M-16（AJ-406）：`GET /pay/channels` 的替身——按 currency 返回通道（只声明 USD 的银行卡，与生产 stripe 同形）。
+ * `channelFail` 为 true 时抛错（预告必须静默消失，不顶错误条）。
+ */
+let channelsByCurrency: Record<string, unknown[]>;
+let channelFail: boolean;
+let channelUrls: string[];
 
 const call = <T>(name: string, ...args: unknown[]): T =>
   (page[name] as (...a: unknown[]) => T)(...args);
@@ -76,6 +83,12 @@ beforeEach(async () => {
   redirects = [];
   switches = [];
   cartCleared = false;
+  channelsByCurrency = {
+    JPY: [],
+    USD: [{ channel: 'stripe', label: '银行卡', entryMode: 'copylink' }],
+  };
+  channelFail = false;
+  channelUrls = [];
   vi.stubGlobal('wx', {
     navigateTo: (o: { url: string }) => navigations.push(o.url),
     redirectTo: (o: { url: string }) => {
@@ -109,6 +122,12 @@ beforeEach(async () => {
           if (quoteFail) throw apiError(40401, '商品不存在或已下架');
           if (quoteHold !== null) return quoteHold.promise;
           return quote;
+        }
+        if (req.url.includes('/pay/channels')) {
+          channelUrls.push(req.url);
+          if (channelFail) throw apiError(50000, '服务器内部错误');
+          const cur = new URL(req.url).searchParams.get('currency') ?? '';
+          return { items: channelsByCurrency[cur] ?? [] };
         }
         posts.push(req);
         if (orderHold !== null) return orderHold.promise;
@@ -462,5 +481,40 @@ describe('结算页薄壳：页面已销毁时不再跳转（P2-36）', () => {
     call('onSubmit');
     await settle();
     expect(redirects).toEqual(['/pages/pay/index?orderId=o-1']);
+  });
+});
+
+describe('M-16 扣款币种预告（AJ-406）', () => {
+  it('🔴 银行卡只在 USD 下列出 → 报价区下出现"约 $X（以支付页为准）"，金额取报价 display.USD', async () => {
+    quote = { ...quote, display: { USD: 6_100, CNY: 44_000 } };
+    call('onShow');
+    await settle();
+    expect(page.data['chargePreview']).toEqual(['银行卡将以美元扣款，约 $61.00（以支付页为准）']);
+    // 与支付页同一组查询：按地址国家 + 报价合计，逐币种查
+    expect(channelUrls).toEqual([
+      'http://api.test/api/v1/pay/channels?country=US&currency=JPY&amount_jpy=9150',
+      'http://api.test/api/v1/pay/channels?country=US&currency=USD&amount_jpy=9150',
+    ]);
+  });
+
+  it('报价缺 display（汇率缺失）→ 只说币种，金额指向支付页（不编数字）', async () => {
+    call('onShow');
+    await settle();
+    expect(page.data['chargePreview']).toEqual(['银行卡将以美元扣款，金额以支付页为准']);
+  });
+
+  it('通道查询失败 → 预告静默消失，不顶错误条、不影响提交闸门', async () => {
+    channelFail = true;
+    await ready();
+    expect(page.data['chargePreview']).toEqual([]);
+    expect(page.data['error']).toBe('');
+  });
+
+  it('报价失败 → 不查通道、不显示预告', async () => {
+    quoteFail = true;
+    call('onShow');
+    await settle();
+    expect(channelUrls).toEqual([]);
+    expect(page.data['chargePreview']).toEqual([]);
   });
 });

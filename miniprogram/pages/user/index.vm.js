@@ -55,3 +55,32 @@ export function loginState(token, failed = false) {
   if (failed === true) return { logged: false, text: '登录暂未成功，下次操作时会自动重试' };
   return { logged: false, text: '正在登录…' };
 }
+
+/**
+ * 「重新登录」按钮的视图（M-17，AJ-406）。
+ *
+ * @param {{logged?: unknown, failed?: unknown, retrying?: unknown, available?: unknown, retryFailed?: unknown}|null|undefined} s
+ *   `logged`      `loginState` 的 logged
+ *   `failed`      `app.globalData.loginFailed`（启动登录已失败）
+ *   `retrying`    本页发起的重试在途
+ *   `available`   `app.globalData.retryLogin` 是否可用（没配 API 地址时为 null）
+ *   `retryFailed` 上一次本页重试失败了
+ * @returns {{show: boolean, text: string, disabled: boolean, note: string}}
+ *
+ * @why 只在"确实失败了"时给按钮：正在登录时给按钮，用户一点就是第二个在途登录
+ *      （singleFlight 会合并它，但按钮本身在说"现在需要你做点什么"——那不是事实）。
+ * @why 重试也失败时要说出来（note），而不是按钮恢复原样：否则用户分不清"点了没反应"与"点了但又失败"。
+ * @limitation 失败原因不展示（wx.login 的 errMsg 是给开发者看的）；排障靠实时日志 `retry_login`。
+ */
+export function loginRetryView(s) {
+  const a = s !== null && typeof s === 'object' ? s : {};
+  const show = a.logged !== true && a.failed === true && a.available === true;
+  if (!show) return { show: false, text: '', disabled: true, note: '' };
+  if (a.retrying === true) return { show: true, text: '正在重新登录…', disabled: true, note: '' };
+  return {
+    show: true,
+    text: '重新登录',
+    disabled: false,
+    note: a.retryFailed === true ? '还是没有登录成功，请检查网络后再试' : '',
+  };
+}

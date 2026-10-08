@@ -12,7 +12,7 @@
  * @see ./auth-session.js
  */
 import { describe, expect, it } from 'vitest';
-import { loginWithWechat, singleFlight, wxLoginCode } from './auth-session.js';
+import { loginAndStore, loginWithWechat, singleFlight, wxLoginCode } from './auth-session.js';
 import { createWxApi, type WxLoginOption } from './wx-api.js';
 
 const BASE = 'https://api.example.com';
@@ -144,5 +144,46 @@ describe('singleFlight：启动自动登录与请求层重登共用一个在途�
     await expect(flaky()).rejects.toThrow('first fails');
     expect(await flaky()).toBe('t-2');
     expect(await flaky()).toBe('t-3');
+  });
+});
+
+describe('loginAndStore：启动登录与"重新登录"共用的一跳（M-17，AJ-406）', () => {
+  it('🔴 成功 → 写回 token、不记失败、回 ok:true', async () => {
+    const stored: string[] = [];
+    const fails: unknown[] = [];
+    const r = await loginAndStore({
+      login: () => Promise.resolve('tok-1'),
+      setToken: (t: string) => stored.push(t),
+      onFail: (e: unknown) => fails.push(e),
+    });
+    expect(r).toEqual({ ok: true });
+    expect(stored).toEqual(['tok-1']);
+    expect(fails).toEqual([]);
+  });
+
+  it('🔴 登录失败 → 不抛、记失败、不写 token、回 ok:false', async () => {
+    const stored: string[] = [];
+    const fails: unknown[] = [];
+    const r = await loginAndStore({
+      login: () => Promise.reject(new Error('wx.login 未返回 code')),
+      setToken: (t: string) => stored.push(t),
+      onFail: (e: unknown) => fails.push(e),
+    });
+    expect(r).toEqual({ ok: false });
+    expect(stored).toEqual([]);
+    expect((fails[0] as Error).message).toBe('wx.login 未返回 code');
+  });
+
+  it('token 写不进 storage（setToken 抛）→ 同样按失败记账（"没存上"必须让人知道）', async () => {
+    const fails: unknown[] = [];
+    const r = await loginAndStore({
+      login: () => Promise.resolve('tok-1'),
+      setToken: () => {
+        throw new Error('setStorageSync:fail');
+      },
+      onFail: (e: unknown) => fails.push(e),
+    });
+    expect(r).toEqual({ ok: false });
+    expect(fails).toHaveLength(1);
   });
 });

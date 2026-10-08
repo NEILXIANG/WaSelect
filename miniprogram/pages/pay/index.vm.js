@@ -15,9 +15,8 @@
  */
 import { STATUS_LABELS, canPay, statusText } from '../../utils/order-status.js';
 import { copyFailText } from '../../utils/privacy.js';
-import { payGuide } from '../../utils/pay-plan.js';
+import { channelCountryOf, payGuide } from '../../utils/pay-plan.js';
 import { countdownText } from '../../utils/countdown.js';
-import { ADDRESS_COUNTRY_DEFAULT } from '../../utils/address-form.js';
 
 /**
  * `requestPayment` 的**取消与失败**统一文案（B35 / AJ-218）。
@@ -53,8 +52,8 @@ export const EXPIRED_CLOSED_TEXT = '支付时间已到，该订单未完成付�
  * @why 只收 `^[A-Z]{2}$`：它要拼进查询串，脏值（`U&`）会改写查询参数。
  */
 export function channelCountry(order) {
-  const c = order?.address?.country;
-  return typeof c === 'string' && /^[A-Z]{2}$/.test(c) ? c : ADDRESS_COUNTRY_DEFAULT;
+  // M-16（AJ-406）：判定下沉到 utils/pay-plan.js（结算页预告扣款币种也要按同一个国家查通道）
+  return channelCountryOf(order?.address);
 }
 
 /**

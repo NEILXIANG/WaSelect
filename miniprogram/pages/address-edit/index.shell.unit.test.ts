@@ -105,3 +105,11 @@ describe('地址编辑：下拉定位到已有的州（扫描 W-04）', () => {
     expect(page.data['stateIndex']).toBe(idx);
   });
 });
+
+describe('地址编辑页：英文填写说明（M-20，AJ-406）', () => {
+  it('进页即带说明与三条示例（新增与编辑态同一份，不依赖取数）', () => {
+    const note = page.data['englishNote'] as { title: string; examples: unknown[] };
+    expect(note.title).toBe('请用英文 / 拼音填写');
+    expect(note.examples).toHaveLength(3);
+  });
+});

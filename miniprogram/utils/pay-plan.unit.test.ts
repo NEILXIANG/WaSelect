@@ -12,6 +12,8 @@ import {
   CHARGE_CURRENCY_ORDER,
   channelOptions,
   chargeOptions,
+  chargePreview,
+  channelCountryOf,
   payGuide,
   payNotice,
   payPlan,
@@ -254,5 +256,47 @@ describe('payGuide.steps（4-11）', () => {
     expect(payGuide({ kind: 'auto' }).steps).toEqual([]);
     expect(payGuide({ kind: 'in_app' }).steps).toEqual([]);
     expect(payGuide({ kind: 'unsupported' }).steps).toEqual([]);
+  });
+});
+
+describe('chargePreview：结算页扣款币种预告（M-16，AJ-406）', () => {
+  /** 报价形状（契约 Quote：total_jpy + display，与 Order 同名字段，所以能直接交给 chargeOptions）。 */
+  const QUOTE = { total_jpy: 12_000, display: { USD: 8_040, CNY: 58_800 } };
+  const card = { channel: 'stripe', label: '银行卡', entryMode: 'copylink' };
+  const wechat = { channel: 'wechat', label: '微信支付', entryMode: 'in_app' };
+  const listing = (currency: string, items: unknown[]) => ({ currency, resp: { items } });
+
+  it('🔴 只在 USD 下列出的银行卡 → "约 $80.40（以支付页为准）"，金额取报价 display.USD，不在前端换算', () => {
+    const opts = chargeOptions([listing('JPY', []), listing('USD', [card])], QUOTE);
+    expect(chargePreview(opts)).toEqual(['银行卡将以美元扣款，约 $80.40（以支付页为准）']);
+  });
+
+  it('円通道（微信支付签约后）不写"约"：円就是应付合计本身', () => {
+    const opts = chargeOptions([listing('JPY', [wechat]), listing('USD', [card])], QUOTE);
+    expect(chargePreview(opts)).toEqual([
+      '微信支付将以日元扣款 12,000 円',
+      '银行卡将以美元扣款，约 $80.40（以支付页为准）',
+    ]);
+  });
+
+  it('报价缺 display.USD（汇率缺失降级）→ 不编数字，只说币种并指向支付页', () => {
+    const opts = chargeOptions([listing('USD', [card])], { total_jpy: 12_000 });
+    expect(chargePreview(opts)).toEqual(['银行卡将以美元扣款，金额以支付页为准']);
+  });
+
+  it('没有通道 / 脏输入 → 空数组（不渲染这一块）', () => {
+    expect(chargePreview([])).toEqual([]);
+    expect(chargePreview(null)).toEqual([]);
+    expect(chargePreview([null, { label: 'x' }])).toEqual([]);
+  });
+});
+
+describe('channelCountryOf：查通道的目的国（M-16 下沉自支付页）', () => {
+  it('取地址 country；缺失 / 非两位大写 → 默认国家', () => {
+    expect(channelCountryOf({ country: 'US' })).toBe('US');
+    expect(channelCountryOf({ country: 'CA' })).toBe('CA');
+    for (const a of [null, undefined, {}, { country: 'us' }, { country: 'U&' }, { country: 1 }]) {
+      expect(channelCountryOf(a), JSON.stringify(a)).toBe('US');
+    }
   });
 });

@@ -50,6 +50,15 @@
   margin: var(--ws-space-inline) 0;
 }
 
+/* M-16：扣款币种预告——与报价副行同一档字号，上方留一点距离，读作"合计的补充说明" */
+.charge-preview {
+  margin-top: var(--ws-space-inline);
+}
+
+.charge-preview__line {
+  display: block;
+}
+
 .total {
   display: flex;
   align-items: baseline;

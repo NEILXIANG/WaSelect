@@ -40,6 +40,13 @@ import {
 import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { addressSummary, defaultAddressId } from '../../utils/address-form.js';
 import { quoteView } from '../../utils/quote-view.js';
+import {
+  CHARGE_CURRENCY_ORDER,
+  channelCountryOf,
+  chargeOptions,
+  chargePreview,
+} from '../../utils/pay-plan.js';
+import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { errorFields } from '../../utils/error-text.js';
 import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -88,6 +95,11 @@ Page({
     termsFailed: false,
     /** 报价失败（与"报价还没回来"分开：失败不会再有结果，AJ-228）。 */
     quoteFailed: false,
+    /**
+     * M-16（AJ-406）：扣款币种预告（utils/pay-plan.js `chargePreview`）；空数组 = 不显示。
+     * @why 円是主显示（D-32 / D-69，AJ-402 Q3），银行卡却以美元扣——此前实扣美元金额要到支付页才看到。
+     */
+    chargePreview: [],
     loading: false,
     submitting: false,
     /** 错误文案（空串 = 无错误）。 */
@@ -107,6 +119,12 @@ Page({
    */
   sentBody: null,
   traceId: '',
+  /** 最近一次报价的原始响应（M-16：`chargeOptions` 读它的 total_jpy / display）；null = 没有可用报价。 */
+  quoteRaw: null,
+  /** 当前地址的国家（M-16：查通道用，utils/pay-plan.js `channelCountryOf`）。 */
+  addressCountry: '',
+  /** 扣款预告的请求序号（只接受最新一次；refresh 可能并发）。 */
+  previewSeq: 0,
 
   /** 结算模式（剩余清单 4-4）：'buynow' = 立即购买（只结 globalData.buyNow 那一件）；'' = 结购物车。 */
   mode: '',
@@ -172,11 +190,45 @@ Page({
     this.updateGate();
 
     if (items.length === 0) {
-      this.setData({ loading: false, quote: null });
+      this.quoteRaw = null;
+      this.setData({ loading: false, quote: null, chargePreview: [] });
       return;
     }
     await Promise.all([this.fetchTerms(), this.fetchAddresses(), this.fetchQuote(items)]);
     this.setData({ loading: false });
+    // M-16：要等报价（金额）与地址（国家）都到了才能查通道，所以排在三条并发之后
+    await this.fetchChargePreview();
+  },
+
+  /**
+   * 扣款币种预告（M-16，AJ-406）：按报价合计与地址国家查 `GET /pay/channels`（与支付页同一组查询）。
+   * @why 失败**静默**（清空预告）：它是辅助说明，不是下单前提；支付页的 §14.2 提示条仍会说清实扣金额。
+   *      为它在结算页顶一个错误条，会把"能下单"的页面显示成"有一步没完成"。
+   * @limitation 多出 `CHARGE_CURRENCY_ORDER.length` 个请求（当前 2 个）；只在 refresh 时查，不随输入邮箱等重查。
+   */
+  async fetchChargePreview() {
+    const seq = (this.previewSeq = nextSeq(this.previewSeq));
+    const total = this.quoteRaw?.total_jpy;
+    if (!Number.isInteger(total) || this.addressId === '') {
+      this.setData({ chargePreview: [] });
+      return;
+    }
+    const quote = this.quoteRaw;
+    try {
+      const listings = [];
+      for (const currency of CHARGE_CURRENCY_ORDER) {
+        const resp = await app.globalData.api({
+          url: `${app.globalData.apiBase}/api/v1/pay/channels?country=${this.addressCountry}&currency=${currency}&amount_jpy=${total}`,
+          traceId: this.traceId,
+        });
+        listings.push({ currency, resp });
+      }
+      if (isStale(seq, this.previewSeq)) return;
+      this.setData({ chargePreview: chargePreview(chargeOptions(listings, quote)) });
+    } catch {
+      if (isStale(seq, this.previewSeq)) return;
+      this.setData({ chargePreview: [] });
+    }
   },
 
   /** `GET /terms`：条款版本是**建单必填**（D-43，不一致即 40011）。 */
@@ -222,6 +274,7 @@ Page({
         this.intentKey?.retire();
       }
       this.addressId = id;
+      this.addressCountry = channelCountryOf(found);
       this.setData({ address: found === undefined ? null : addressSummary(found) });
     } catch (e) {
       this.setData({ ...errorFields(e) });
@@ -238,9 +291,11 @@ Page({
         data: { items: items.map((i) => ({ product_id: i.productId, qty: i.qty })) },
         traceId: this.traceId,
       });
+      this.quoteRaw = res !== null && typeof res === 'object' ? res : null;
       this.setData({ quote: quoteView(res), quoteFailed: false });
     } catch (e) {
       const named = namedItemError(e, items); // U9：点名是哪一件
+      this.quoteRaw = null;
       this.setData({
         quote: null,
         quoteFailed: true,
@@ -384,7 +439,8 @@ Page({
         //    此刻 `quote` 还是旧值 ⇒ 闸门以旧合计放行 ⇒ 用户再点一次必然再吃一次 40905
         //    （请求体里的 expected_total_jpy 还是旧的）。弱网下可以循环好几轮。
         //    置空之后闸门落到"运费与合计还在计算中"，把这一轮挡住，等新报价回来再放行。
-        this.setData({ quote: null, quoteFailed: false });
+        this.quoteRaw = null;
+        this.setData({ quote: null, quoteFailed: false, chargePreview: [] });
         // keepError：重报价之后仍要让用户看见"刚才为什么失败"（否则他不知道要重新确认金额）
         void this.refresh({ keepError: true });
       } else if (recoveryFor(code) === 'go_orders') {

@@ -22,6 +22,7 @@
  */
 import {
   ADDRESS_FIELDS,
+  ENGLISH_ADDRESS_NOTE,
   emptyForm,
   formErrors,
   formModel,
@@ -39,6 +40,8 @@ const wxApi = createWxApi();
 
 Page({
   data: {
+    /** M-20（AJ-406）：表单前的"请用英文 / 拼音填写"说明与示例（utils/address-form.js）。 */
+    englishNote: ENGLISH_ADDRESS_NOTE,
     /** 表单模型（`ADDRESS_FIELDS` + is_default）。 */
     form: emptyForm(),
     /** 字段级错误（`{recipient: '…'}`）；空对象 = 无错误。 */

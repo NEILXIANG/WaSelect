@@ -27,6 +27,27 @@
  */
 import { isUsStateCode } from './us-states.js';
 
+/**
+ * 地址编辑页顶部说明（M-20，AJ-406）：先说"为什么要英文"，再给一行示例。
+ *
+ * @why 此前"要用英文"只在提交后的字段错误里出现（`validateAddress` 的"请用英文/数字填写"）——
+ *      首次下单的人填完一整张中文地址才被告知全部重填。说明放在表单之前，错误文案仍保留（预检 + 兜底）。
+ * @why 口径来源：`ADDRESS_PATTERNS.ascii` 与契约 `AddressInput.pattern`（`^[ -~]+$`，可打印 ASCII）——
+ *      这是服务端会拒的硬约束，不是建议；理由是美国面单不接受全角 / 中日文（同上注释）。
+ *      不写"海关要求"之类没有出处的说法；示例只用公开的美国地址书写惯例（门牌 + 街道在第一行，Apt / Suite 在第二行）。
+ * @limitation 只是文案，不做自动转拼音（转写规则因人名而异，自动转错比让用户自己写更糟）。
+ */
+export const ENGLISH_ADDRESS_NOTE = {
+  title: '请用英文 / 拼音填写',
+  body: '地址会打印在美国面单上，派送只认英文字母、数字与半角符号，中文、日文或全角字符无法提交。',
+  /** `value` 必须能通过本文件的校验（单测断言）：示例本身填不进去，说明就是错的。 */
+  examples: [
+    { key: 'recipient', label: '收件人', value: 'Xiaoming Wang', hint: '拼音即可' },
+    { key: 'line1', label: '地址第一行', value: '1234 Market St', hint: '门牌号 + 街道' },
+    { key: 'line2', label: '地址第二行', value: 'Apt 5B', hint: 'Apt / Suite 写这里，没有可留空' },
+  ],
+};
+
 /** MVP 唯一目的国（@see @limitation 一）。 */
 export const ADDRESS_COUNTRY_DEFAULT = 'US';
 

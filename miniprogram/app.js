@@ -27,7 +27,7 @@ import { createWxApi } from './utils/wx-api.js';
 import { ensurePrivacyAuthorized } from './utils/privacy.js';
 import { watchUpdate } from './utils/update.js';
 import { createStorage } from './utils/storage.js';
-import { loginWithWechat, singleFlight } from './utils/auth-session.js';
+import { loginAndStore, loginWithWechat, singleFlight } from './utils/auth-session.js';
 import { createCartStore } from './utils/cart-store.js';
 import { resolveApiBase } from './config.js';
 
@@ -43,6 +43,11 @@ App({
     token: '',
     /** 启动时的自动登录是否已失败（W-08：「我的」页据此不再一直显示"正在登录…"）。 */
     loginFailed: false,
+    /**
+     * 「我的」页"重新登录"调用的入口（M-17，AJ-406）：`() => Promise<{ok: boolean}>`；
+     * null = 不可重试（没配 API 地址时，onLaunch 里不装）。
+     */
+    retryLogin: null,
     /**
      * 当前环境的 API 根地址——**在 onLaunch 里按宿主的 envVersion 解析后写入**。
      * @why 不在模块顶层算：顶层求值时宿主还没准备好（且在 Node 单测里会直接崩）。
@@ -165,14 +170,21 @@ App({
     // 启动时无 token → 后台登一次；失败不阻塞启动（@see @limitation 二）
     // ⚠️ 没配地址时**不做**这一跳：它用的是相对 URL（`/api/v1/...`），必然失败，
     //    而且失败原因会把排障方向引向"登录接口坏了"而不是"域名没填"。
-    if (launchError === null && this.globalData.token === '') {
-      void relogin()
-        .then((t) => this.setToken(t))
-        .catch((e) => {
-          // 记下失败（W-08）：「我的」页据此不再显示"正在登录…"
+    // M-17（AJ-406）：启动自动登录与「我的」页"重新登录"走同一跳（utils/auth-session.js loginAndStore）
+    const loginOnce = (event) =>
+      loginAndStore({
+        login: relogin,
+        setToken: (t) => this.setToken(t),
+        onFail: (e) => {
+          // 记下失败（W-08）：「我的」页据此不再显示"正在登录…"，并给出"重新登录"按钮
           this.globalData.loginFailed = true;
-          log({ event: 'auto_login', result: 'failed', err_msg: e?.message ?? String(e) });
-        });
+          log({ event, result: 'failed', err_msg: e?.message ?? String(e) });
+        },
+      });
+    // 没配地址时不给重试入口（同下：相对 URL 必然失败，重试只会把排障方向引偏）
+    this.globalData.retryLogin = launchError === null ? () => loginOnce('retry_login') : null;
+    if (launchError === null && this.globalData.token === '') {
+      void loginOnce('auto_login');
     }
   },
 

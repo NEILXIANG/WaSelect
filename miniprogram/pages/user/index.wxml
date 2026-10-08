@@ -25,6 +25,11 @@
         <text class="ws-note">登录状态</text>
         <text class="mine__value">{{login.text}}</text>
       </view>
+      <!-- M-17（AJ-406）：启动登录失败时给出路（此前只有一句"下次操作时会自动重试"，没有按钮） -->
+      <view class="mine__retry" wx:if="{{retry.show}}">
+        <ws-button text="{{retry.text}}" type="default" disabled="{{retry.disabled}}" bindtap="onRetryLogin" />
+        <text class="ws-note mine__retry-note" wx:if="{{retry.note}}">{{retry.note}}</text>
+      </view>
     </view>
   </view>
 

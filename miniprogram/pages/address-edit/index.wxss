@@ -18,6 +18,38 @@
   padding-top: var(--ws-space-card);
 }
 
+/* ── M-20：英文填写说明（表单之前；内凹面读作"提示"而不是另一张表单） ── */
+.aedit__note {
+  margin-bottom: var(--ws-space-stack);
+}
+
+.aedit__note-card {
+  padding: var(--ws-space-stack);
+  background: var(--ws-surface-sunk);
+}
+
+.aedit__note-title {
+  display: block;
+  color: var(--ws-ink);
+}
+
+.aedit__note-body {
+  display: block;
+  margin: var(--ws-space-hair) 0;
+}
+
+.aedit__note-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding-top: var(--ws-space-tight);
+}
+
+.aedit__note-value {
+  font-family: var(--ws-font-sans);
+  color: var(--ws-ink);
+}
+
 /* ── 表单 ────────────────────────────────────────────────────── */
 .aedit__form {
   padding: var(--ws-space-stack);

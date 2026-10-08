@@ -65,3 +65,14 @@
   color: var(--ws-ink-faint);
   font-size: var(--ws-f-md);
 }
+
+/* M-17：重新登录按钮与重试失败的说明（与登录态同一张卡） */
+.mine__retry {
+  margin-top: var(--ws-space-stack);
+}
+
+.mine__retry-note {
+  display: block;
+  margin-top: var(--ws-space-inline);
+  color: var(--ws-danger);
+}

@@ -26,6 +26,7 @@
  */
 
 import { formatJpy, formatUsdCents } from './price-format.js';
+import { ADDRESS_COUNTRY_DEFAULT } from './address-form.js';
 
 /** `wx.requestPayment` 需要的五个字段（契约 PaymentIntent.payload 的 wechat 形状）。 */
 const WX_PAY_FIELDS = ['timeStamp', 'nonceStr', 'package', 'signType', 'paySign'];
@@ -235,5 +236,49 @@ export function payNotice(options, order) {
       ? `订单 ${Math.round(ttlMs / 60_000)} 分钟内未支付将自动关闭`
       : '订单超时未支付将自动关闭',
   );
+  return lines;
+}
+
+/**
+ * 查通道用的目的国（P2-39；M-16 起结算页也要用，从支付页 vm 下沉到这里）。
+ * @param {unknown} address 契约 Address（读 `country`）
+ * @returns {string} 两位大写国家码；缺失 / 形状不对 → `ADDRESS_COUNTRY_DEFAULT`
+ * @why 只收 `^[A-Z]{2}$`：它要拼进查询串，脏值（`U&`）会改写查询参数。
+ * @why 放共享层而不是结算页再写一份：两页查到的通道必须是同一份（vm 文件头"确认页说支持、支付页不显示"那一条）。
+ */
+export function channelCountryOf(address) {
+  const c = address !== null && typeof address === 'object' ? address.country : undefined;
+  return typeof c === 'string' && /^[A-Z]{2}$/.test(c) ? c : ADDRESS_COUNTRY_DEFAULT;
+}
+
+/**
+ * 结算页"扣款币种预告"（M-16；AJ-402 Q3 / AJ-406）：各通道将以什么币种扣、约多少。
+ * @param {unknown} options 用**报价**（`POST /orders/quote`）当 order 传给 `chargeOptions` 的结果
+ *        （声明成 unknown：调用方可能在报价失败后传脏值，防御分支要能被测到——同 checkout vm `keyAction` 的说明）
+ * @returns {string[]} 每个通道一行；没有通道 → 空数组（调用方不渲染）
+ *
+ * @why 口径来源（不发明汇率）：
+ *      ① 円是定价锚与记账币（D-32 / D-69），所以主显示不动，只在结算页**预告**实扣币种（Q3 拍板）；
+ *      ② 美元金额是报价的 `display.USD`——服务端 `domain/quote.ts` 用 `toMinor(total_jpy, rate)` 算出的整数分，
+ *         与建单后订单 `display.USD`（支付页 `chargeOf` 读它，服务端按订单 fx_snapshot 扣款）是**同一个换算口**；
+ *         前端不乘任何汇率；
+ *      ③ 扣款币种的判定沿用 `CHARGE_CURRENCY_ORDER`（与服务端 resolveCharge 同口径，见上）。
+ * @why 美元一行写"约 …（以支付页为准）"：报价时刻与建单时刻之间汇率可能换档，
+ *      实扣以建单时订单自己的汇率快照为准，结算页能给的只是近似值。
+ *      円通道（微信支付签约后）不写"约"：円就是应付合计本身，没有换算。
+ * @limitation 通道清单来自 `GET /pay/channels`（按报价合计过滤）——建单后若合计变了，可用通道也可能变；
+ *             所以这里只是预告，支付页的 §14.2 提示条才是付款前的权威说明。
+ */
+export function chargePreview(options) {
+  const opts = Array.isArray(options) ? options : [];
+  const lines = [];
+  for (const o of opts) {
+    const charge = o !== null && typeof o === 'object' ? o.charge : undefined;
+    if (charge === null || typeof charge !== 'object') continue;
+    const name = CURRENCY_NAME[charge.currency] ?? charge.currency;
+    if (charge.amount === null) lines.push(`${o.label}将以${name}扣款，金额以支付页为准`);
+    else if (charge.currency === 'JPY') lines.push(`${o.label}将以${name}扣款 ${charge.text}`);
+    else lines.push(`${o.label}将以${name}扣款，约 ${charge.text}（以支付页为准）`);
+  }
   return lines;
 }

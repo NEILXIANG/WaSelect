@@ -97,3 +97,31 @@ export function singleFlight(fn) {
     return task;
   };
 }
+
+/**
+ * 登一次并写回 token；成功 / 失败都**不抛**，只回结果（启动自动登录与「我的」页"重新登录"共用，M-17）。
+ *
+ * @param {{login: () => Promise<string>, setToken: (t: string) => void, onFail: (e: unknown) => void}} deps
+ *   `login`    通常是 app.js 里 `singleFlight` 包过的那一个（与 40101 重登共用在途登录）
+ *   `setToken` 写回（app.js `setToken`：同时清掉 `loginFailed`）
+ *   `onFail`   失败时记账（app.js 置 `loginFailed = true` 并记实时日志）
+ * @returns {Promise<{ok: boolean}>}
+ *
+ * @why M-17（AJ-406）：启动登录失败后「我的」页此前只有一句"下次操作时会自动重试"，没有按钮——
+ *      用户能做的只有去点一个受保护页碰运气。按钮要调的就是启动时那同一跳；
+ *      写成函数而不是在 app.js 里再复制一遍 then/catch，是为了两处的"失败记账"不漂移
+ *      （漏了 `loginFailed = true`，「我的」页就会回到那句永远不变的"正在登录…"）。
+ * @why 不抛：调用方是按钮（页面要的是"成了没有"）和启动流程（失败不阻塞启动）——两边都不该收到异常。
+ * @limitation `setToken` 抛（storage 写失败）也按失败处理并交给 `onFail`：此时内存里的 token 可能已写上，
+ *             但"没存上"必须让人知道（app.js setToken 的口径），所以仍报失败。
+ */
+export async function loginAndStore(deps) {
+  try {
+    const token = await deps.login();
+    deps.setToken(token);
+    return { ok: true };
+  } catch (e) {
+    deps.onFail(e);
+    return { ok: false };
+  }
+}
