@@ -183,7 +183,7 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
         />
         <button
           type="button"
-          className="btn"
+          className="btn btn-secondary"
           onClick={() => {
             setApplied(keyword.trim());
             setPage(1);
@@ -290,7 +290,7 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
       <footer className="pager">
         <button
           type="button"
-          className="btn"
+          className="btn btn-secondary"
           disabled={page <= 1}
           onClick={() => setPage((p) => Math.max(1, p - 1))}
         >
@@ -301,7 +301,7 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
         </span>
         <button
           type="button"
-          className="btn"
+          className="btn btn-secondary"
           disabled={page >= lastPage}
           onClick={() => setPage((p) => p + 1)}
         >

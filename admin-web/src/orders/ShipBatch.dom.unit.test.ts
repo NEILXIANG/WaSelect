@@ -7,7 +7,7 @@
  * @see ./OrdersPage.tsx；./ShipBatchDrawer.tsx；./CsvShipImport.tsx；./BatchSubmit.tsx
  */
 import { createElement, useCallback, useState } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { OrdersPage } from './OrdersPage.js';
 import { parseHash, type Route } from '../router.js';
@@ -112,9 +112,14 @@ describe('订单列表「待发货」：勾选批量发货', () => {
     await click(button(el, '批量发货（2）'));
     await type(el.querySelector('input[aria-label="统一承运商"]'), 'Japan Post');
     await type(el.querySelector('input[aria-label="261007-7K3QXA 运单号"]'), 'EJ123456789JP');
-    // 第二单不填运单号 → 该行红、不提交
-    expect(el.textContent).toContain('运单号必填');
+    // 第二单不填运单号、也没动过它 → 先不红（验收 2026-10-08：没碰过的行不该一打开就满屏红字）
+    expect(el.textContent).not.toContain('运单号必填');
     expect(button(el, '批量发货 1 单')).not.toBeNull();
+    // 点一次提交：先亮出问题、不弹确认；再点才进确认（单数仍只算干净的那一行）
+    await click(button(el, '批量发货 1 单'));
+    expect(el.textContent).toContain('运单号必填');
+    expect(el.textContent).toContain('有 1 行有问题');
+    expect(el.querySelector('.dialog')).toBeNull();
     await type(el.querySelector('input[aria-label="261007-8M2WRD 运单号"]'), 'ABC');
     // 日本邮便却不是 S10 → 黄色提示，不拦
     expect(el.querySelector('.warn')?.textContent).toContain('形状认不出');
@@ -135,6 +140,39 @@ describe('订单列表「待发货」：勾选批量发货', () => {
     expect(result).toContain('成功 1 单，失败 1 单');
     expect(result).toContain('261007-8M2WRD');
     expect(result).toContain('拒付');
+  });
+});
+
+describe('批量发货：行内错误的显示时机（验收 2026-10-08）', () => {
+  // 上一条用例成功提交后会记住承运商（last-carrier.ts）；本组要从"承运商也空着"开始
+  beforeEach(() => globalThis.localStorage?.removeItem('ws.admin.lastCarrier'));
+  it('🔴 刚打开不显示必填错误；0 单时按钮可点，点了才亮出错误并置灰；编辑过的行立刻显示自己的错误', async () => {
+    const el = await open('#/orders?status=paid');
+    await click(el.querySelector('input[aria-label="选择 261007-7K3QXA"]'));
+    await click(el.querySelector('input[aria-label="选择 261007-8M2WRD"]'));
+    await click(button(el, '批量发货（2）'));
+    expect(el.textContent).not.toContain('必填');
+    expect(el.textContent).not.toContain('行有问题');
+    // 编辑第一行的运单号 → 只有这一行亮出自己的问题（承运商没填）
+    await type(el.querySelector('input[aria-label="261007-7K3QXA 运单号"]'), 'EJ123456789JP');
+    expect(el.querySelectorAll('td .error')).toHaveLength(1);
+    const submit = button(el, '批量发货 0 单');
+    expect(submit?.disabled).toBe(false);
+    await click(submit);
+    expect(el.querySelector('.dialog')).toBeNull();
+    expect(el.textContent).toContain('运单号必填');
+    expect(el.textContent).toContain('有 2 行有问题');
+    expect(button(el, '批量发货 0 单')?.disabled).toBe(true);
+    expect(posts()).toHaveLength(0);
+  });
+
+  it('关抽屉：填了运单号未提交 → 问「放弃修改」', async () => {
+    const el = await open('#/orders?status=paid');
+    await click(el.querySelector('input[aria-label="选择 261007-7K3QXA"]'));
+    await click(button(el, '批量发货（1）'));
+    await type(el.querySelector('input[aria-label="261007-7K3QXA 运单号"]'), 'EJ123456789JP');
+    await click(button(el.querySelector('.drawer') as HTMLElement, '关闭'));
+    expect(button(el, '放弃修改')).not.toBeNull();
   });
 });
 
@@ -175,6 +213,21 @@ describe('导入运单号（CSV）', () => {
     expect(posts()[0]?.body).toEqual({
       items: [{ order_id: 'ord_a', carrier: 'EMS', tracking_no: 'EJ123456789JP' }],
     });
+  });
+
+  it('🔴 粘贴了内容未提交就关 → 问「放弃修改」（验收 2026-10-08：原先直接关掉、内容丢失）；空着关直接关', async () => {
+    const el = await open('#/orders?status=paid');
+    await click(button(el, '导入运单号（CSV）'));
+    const drawer = (): HTMLElement => el.querySelector('.drawer') as HTMLElement;
+    await type(el.querySelector('textarea[aria-label="CSV 内容"]'), 'order_no,tracking_no\n');
+    await click(button(drawer(), '关闭'));
+    expect(button(el, '放弃修改')).not.toBeNull();
+    await click(button(el, '放弃修改'));
+    expect(el.querySelector('.drawer')).toBeNull();
+    // 对照组：没填任何内容 → 不问，直接关
+    await click(button(el, '导入运单号（CSV）'));
+    await click(button(drawer(), '关闭'));
+    expect(el.querySelector('.drawer')).toBeNull();
   });
 
   it('表头认不出 → 文件级错误，不发任何查询', async () => {

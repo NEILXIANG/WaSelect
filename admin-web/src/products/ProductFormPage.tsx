@@ -369,7 +369,12 @@ export function ProductFormPage({
                   : '草稿与已下架商品买家都看不见；「保存并上架」会先保存，再检查重量是否超出运费表'}
               </p>
               <div className="action-bar">
-                <button type="submit" className="btn" disabled={saving || uploading}>
+                {/* 有「保存并上架」时它是主动作（实心），保存降为描边；在售商品只剩「保存」，它就是主动作 */}
+                <button
+                  type="submit"
+                  className={status !== 'active' ? 'btn btn-secondary' : 'btn'}
+                  disabled={saving || uploading}
+                >
                   {saving
                     ? '保存中…'
                     : uploading

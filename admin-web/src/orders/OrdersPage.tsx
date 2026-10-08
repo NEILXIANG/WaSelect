@@ -284,12 +284,12 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
             if (e.key === 'Enter' && !e.nativeEvent.isComposing) search();
           }}
         />
-        <button type="button" className="btn" onClick={search}>
+        <button type="button" className="btn btn-secondary" onClick={search}>
           搜索
         </button>
         <button
           type="button"
-          className="btn"
+          className="btn btn-secondary"
           onClick={() => setReloadTick((t) => t + 1)}
           disabled={loading}
         >
@@ -312,7 +312,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
           >
             批量发货（{selected.size}）
           </button>
-          <button type="button" className="btn" onClick={() => setBatch('csv')}>
+          <button type="button" className="btn btn-secondary" onClick={() => setBatch('csv')}>
             导入运单号（CSV）
           </button>
         </div>
@@ -433,7 +433,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       <footer className="pager">
         <button
           type="button"
-          className="btn"
+          className="btn btn-secondary"
           disabled={page <= 1}
           onClick={() => patch({ page: String(Math.max(1, page - 1)) })}
         >
@@ -444,7 +444,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         </span>
         <button
           type="button"
-          className="btn"
+          className="btn btn-secondary"
           disabled={page >= lastPage}
           onClick={() => patch({ page: String(page + 1) })}
         >

@@ -201,7 +201,7 @@ export function RatesPanel({ api }: RatesPanelProps) {
       <div className="row2">
         <button
           type="button"
-          className="btn"
+          className="btn btn-secondary"
           disabled={!loaded}
           onClick={() => setRows((prev) => [...prev, emptyRateRow(prev[0]?.carrier ?? '')])}
         >

@@ -108,7 +108,7 @@ export function ShipForm({
         {/* maxLength 引 shared 常量（AJ-315）：与服务端同一个上限 */}
         <input
           className={`input${bad('carrier') ? ' input-error' : ''}`}
-          placeholder="承运商（如 Japan Post）"
+          placeholder="承运商（例：Japan Post）"
           maxLength={SHIP_MAX_CHARS.carrier}
           value={ship.carrier}
           aria-invalid={bad('carrier')}

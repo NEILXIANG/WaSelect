@@ -610,3 +610,33 @@ describe('详情页头的状态徽章（AJ-400）', () => {
     ]);
   });
 });
+
+describe('订单详情操作条：主按钮每屏只留一个（对标 §238，验收 2026-10-08）', () => {
+  const solid = (el: HTMLElement): string[] =>
+    [...el.querySelectorAll('.action-bar .btn')]
+      .filter((b) => !/btn-secondary|btn-danger-outline/.test(b.className))
+      .map((b) => (b.textContent ?? '').trim());
+
+  beforeEach(() => {
+    hasDispute = false;
+    events = [];
+    items = [];
+    refundBehaviour = () => ({ order_id: 'o-1', outcome: 'succeeded' });
+    releaseBehaviour = () => ({ order_id: 'o-1', has_dispute: false });
+  });
+
+  it('待发货：只有「发货…」实心；全额退款是红色描边，不是实心红', async () => {
+    status = 'paid';
+    const el = await open();
+    expect(solid(el)).toEqual(['发货…']);
+    expect(button(el, '全额退款…')?.className).toBe('btn btn-danger-outline');
+    expect(el.querySelector('.action-bar .btn-danger')).toBeNull();
+  });
+
+  it('已发货：没有往前推的动作 → 操作条上没有实心按钮', async () => {
+    status = 'shipped';
+    const el = await open();
+    expect(el.querySelectorAll('.action-bar .btn').length).toBeGreaterThan(0);
+    expect(solid(el)).toEqual([]);
+  });
+});

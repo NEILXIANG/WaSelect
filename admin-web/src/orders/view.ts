@@ -165,6 +165,44 @@ export function eventStatusText(raw: unknown): string {
   return EVENT_STATUS_LABELS[raw] ?? raw;
 }
 
+/** 部分退款失败事件 note 里的原因码 → 中文（server/src/app/partial-refund.ts 只写了这一种）。 */
+const PARTIAL_FAIL_REASONS: Readonly<Record<string, string>> = {
+  provider_failed: '支付机构确认失败',
+};
+
+/**
+ * 事件流一行的**备注**文案：部分退款几条事件的 note 是服务端拼的机器串，翻成人话（验收 2026-10-08）。
+ *
+ * 形状（server/src/app/partial-refund.ts）：
+ *   - `partial_refunded`：`{refundId}:{币种}:{最小单位金额}` → `500 円` / `$12.34`
+ *   - `partial_failed`：`{refundId}:{原因码}` → `支付机构确认失败`
+ *   - `refunded_by_parts`：`{币种}:{累计最小单位金额}` → `累计 13,750 円`
+ *
+ * @why 退款编号（rf-…）挪到 `ref`：主文案里一串 uuid 盖过了金额；排查时仍要它，所以由调用方放进 title 悬停可见。
+ * @limitation 形状认不出（服务端改了拼法）→ **原样返回**，与 eventStatusText 同口径：宁可难看，不吞信息。
+ */
+export function eventNoteView(status: unknown, note: unknown): { text: string; ref: string } {
+  const raw = typeof note === 'string' ? note : '';
+  if (status === 'partial_refunded') {
+    const m = /^(.+):([A-Za-z]{3}):(-?\d+)$/.exec(raw);
+    const money = m === null ? '—' : minorMoneyText(Number(m[3]), m[2]);
+    if (m !== null && money !== '—') return { text: money, ref: m[1] ?? '' };
+  }
+  if (status === 'partial_failed') {
+    const i = raw.lastIndexOf(':');
+    if (i > 0) {
+      const reason = raw.slice(i + 1);
+      return { text: PARTIAL_FAIL_REASONS[reason] ?? reason, ref: raw.slice(0, i) };
+    }
+  }
+  if (status === 'refunded_by_parts') {
+    const m = /^([A-Za-z]{3}):(-?\d+)$/.exec(raw);
+    const money = m === null ? '—' : minorMoneyText(Number(m[2]), m[1]);
+    if (money !== '—') return { text: `累计 ${money}`, ref: '' };
+  }
+  return { text: raw, ref: '' };
+}
+
 /** `Order[]` / `AdminOrder[]` → 列表行。 */
 export function orderRows(items: unknown): OrderRow[] {
   if (!Array.isArray(items)) return [];

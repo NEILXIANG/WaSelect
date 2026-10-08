@@ -28,7 +28,7 @@ const events = [
   { status: 'shipped', at: '2026-10-08T03:00:00Z' },
 ];
 
-async function open(): Promise<HTMLElement> {
+async function open(evts: ReadonlyArray<Record<string, string>> = events): Promise<HTMLElement> {
   const api = async (req: Call): Promise<unknown> => {
     calls.push(req);
     if (req.method === 'POST') {
@@ -48,7 +48,7 @@ async function open(): Promise<HTMLElement> {
     createElement(OrderTimeline, {
       api: api as never,
       orderId: 'o-1',
-      events,
+      events: evts,
       onError: (t, id) => errors.push([t, id]),
       onSuccess: (t) => successes.push(t),
     }),
@@ -78,6 +78,22 @@ afterEach(async () => {
 });
 
 describe('订单时间线（AJ-396）', () => {
+  it('🔴 部分退款事件显示人话金额（500 円 / $12.34），退款编号不进正文、只在悬停里（验收 2026-10-08）', async () => {
+    const el = await open([
+      { status: 'partial_refunded', note: 'rf-32d94f7e-1a2b:JPY:500', at: '2026-10-08T01:00:00Z' },
+      { status: 'partial_refunded', note: 'rf-77aa:USD:1234', at: '2026-10-08T02:00:00Z' },
+      { status: 'partial_failed', note: 'rf-88bb:provider_failed', at: '2026-10-08T03:00:00Z' },
+    ]);
+    const text = el.textContent ?? '';
+    expect(text).toContain('部分退款成功 500 円');
+    expect(text).toContain('部分退款成功 $12.34');
+    expect(text).toContain('部分退款失败 支付机构确认失败');
+    expect(text).not.toContain('rf-');
+    expect(text).not.toContain('JPY:500');
+    const titles = [...el.querySelectorAll('[title]')].map((n) => n.getAttribute('title'));
+    expect(titles).toContain('退款编号 rf-32d94f7e-1a2b');
+  });
+
   it('🔴 事件与备注按时间混排；备注显示作者（无邮箱时显示 admin:<id>）', async () => {
     const el = await open();
     const text = el.textContent ?? '';

@@ -493,10 +493,22 @@ describe('商品表单：草稿与保存并上架（AJ-403）', () => {
     const draftEl = await openForm({ ...SOURCE, id: 'p-new', status: 'draft' });
     expect(button(draftEl, '保存')).not.toBeNull();
     expect(button(draftEl, '保存并上架')).not.toBeNull();
+    // 主按钮每屏只留一个（对标 §238）：上架是主动作（实心），保存降为描边
+    expect(button(draftEl, '保存并上架')?.className).toBe('btn');
+    expect(button(draftEl, '保存')?.className).toContain('btn-secondary');
     await mounted?.unmount();
     const activeEl = await openForm(SOURCE);
     expect(button(activeEl, '保存')).not.toBeNull();
     expect(button(activeEl, '保存并上架')).toBeNull();
+    expect(button(activeEl, '保存')?.className).toBe('btn');
+  });
+
+  it('示例占位符都以「例：」开头（验收 2026-10-08：原先像已填好的值）', async () => {
+    const el = await openForm(null);
+    const examples = ['商品名（面向买家）', '日文品名（采购用）', 'HS 编码（必填）'].map(
+      (l) => (field(el, l) as HTMLInputElement | null)?.placeholder ?? '',
+    );
+    for (const p of examples) expect(p.startsWith('例：')).toBe(true);
   });
 
   it('🔴 分组布局：主栏四组（基本信息 / 媒体 / 价格与库存 / 报关与合规），侧栏有状态（显示「草稿」）与分类', async () => {

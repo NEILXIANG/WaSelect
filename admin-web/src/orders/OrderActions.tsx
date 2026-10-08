@@ -51,6 +51,19 @@ export function availableActions(order: AdminOrderLike): Set<ActionKey> {
   return on;
 }
 
+/**
+ * 操作条按钮的视觉层级（对标 §238「主按钮每屏只留一个」）。
+ * @why 实心只给「发货」——它是唯一"往前推订单"的动作；退款 / 解除拒付是危险入口，用红色描边
+ *      （真正执行的实心红按钮在抽屉里，点开后还有一次确认）；改址 / 部分退款 / 修正是次动作，描边。
+ *      发货不可用时（已发货、已退款…）整条操作条没有实心按钮——没有"该往前推"的动作就不该有主按钮。
+ * @limitation 部分退款也会动钱，但它是售后常用动作，用灰色描边而不是红色，避免一屏两颗红按钮互相稀释。
+ */
+export function actionButtonClass(key: ActionKey): string {
+  if (key === 'ship') return 'btn';
+  if (key === 'refund' || key === 'release') return 'btn btn-danger-outline';
+  return 'btn btn-secondary';
+}
+
 export interface OrderActionsProps {
   api: AdminApi;
   id: string;
@@ -136,7 +149,7 @@ export function OrderActions({ api, id, order, sink, reload, onChanged }: OrderA
           <button
             key={a.key}
             type="button"
-            className={a.key === 'refund' || a.key === 'release' ? 'btn btn-danger' : 'btn'}
+            className={actionButtonClass(a.key)}
             onClick={() => setOpen(a.key)}
           >
             {a.button}

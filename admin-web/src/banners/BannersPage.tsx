@@ -237,7 +237,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     <section className="panel">
       <header className="panel-head">
         <h1 className="title">首页 Banner</h1>
-        <button type="button" className="btn" onClick={startNew}>
+        <button type="button" className="btn btn-secondary" onClick={startNew}>
           新建
         </button>
       </header>

@@ -27,6 +27,7 @@ import {
   emptyRefundForm,
   emptyReleaseForm,
   emptyShipForm,
+  eventNoteView,
   eventStatusText,
   orderRows,
   PURCHASE_UNRECORDED,
@@ -714,5 +715,33 @@ describe('refundGate 与服务端 refundGuard 逐格一致（A-01）', () => {
     expect(refundGate(withStatus(status, { has_dispute: dispute })).ok).toBe(
       refundGuard(status, dispute).ok,
     );
+  });
+});
+
+describe('eventNoteView（部分退款事件的机器串 → 人话，验收 2026-10-08）', () => {
+  it('三种形状翻成金额 / 原因，退款编号进 ref；认不出原样返回', () => {
+    expect(eventNoteView('partial_refunded', 'rf-1:JPY:500')).toEqual({
+      text: '500 円',
+      ref: 'rf-1',
+    });
+    expect(eventNoteView('partial_refunded', 'rf-2:USD:1234')).toEqual({
+      text: '$12.34',
+      ref: 'rf-2',
+    });
+    expect(eventNoteView('partial_failed', 'rf-3:provider_failed')).toEqual({
+      text: '支付机构确认失败',
+      ref: 'rf-3',
+    });
+    expect(eventNoteView('refunded_by_parts', 'JPY:13750')).toEqual({
+      text: '累计 13,750 円',
+      ref: '',
+    });
+    // 认不出的形状 / 未知币种 / 其它事件：原样，不吞信息
+    expect(eventNoteView('partial_refunded', 'rf-4:XXX:500')).toEqual({
+      text: 'rf-4:XXX:500',
+      ref: '',
+    });
+    expect(eventNoteView('address_changed', 'by admin')).toEqual({ text: 'by admin', ref: '' });
+    expect(eventNoteView('paid', undefined)).toEqual({ text: '', ref: '' });
   });
 });

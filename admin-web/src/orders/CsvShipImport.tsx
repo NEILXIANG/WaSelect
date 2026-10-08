@@ -12,7 +12,7 @@
 import { useRef, useState } from 'react';
 import { SHIP_BATCH_MAX, SHIP_MAX_CHARS } from '@waselect/shared';
 import { ActionDrawer } from '../ui/drawer.js';
-import { useFormDirty } from '../ui/unsaved.js';
+import { FormDirty } from '../ui/unsaved.js';
 import { toastError } from '../ui/toast.js';
 import { findOrdersByNo, type AdminApi } from './api.js';
 import { BatchSubmit } from './BatchSubmit.js';
@@ -42,7 +42,6 @@ export function CsvShipImport({ api, onClose, onDone, onError }: CsvShipImportPr
   const [fileError, setFileError] = useState('');
   const [checking, setChecking] = useState(false);
   const [done, setDone] = useState(false);
-  useFormDirty(done ? '' : text, '');
 
   /**
    * 输入代次：文本或默认承运商一改就 +1。预检在飞时输入变了，回来的结果属于旧输入，丢弃
@@ -87,6 +86,8 @@ export function CsvShipImport({ api, onClose, onDone, onError }: CsvShipImportPr
 
   return (
     <ActionDrawer wide title="导入运单号（CSV）" onClose={onClose}>
+      {/* 脏态必须在抽屉里面上报（FormDirty @why）；已提交拿到结果后不再算未保存 */}
+      <FormDirty current={done ? '' : text} pristine="" />
       <p className="muted">
         第一行是表头，需含「订单号」「运单号」两列，「承运商」可选（支持 order_no / carrier /
         tracking_no， 以及 注文番号 / 配送業者 / 追跡番号 等写法）。一次最多 {SHIP_BATCH_MAX} 行。

@@ -230,7 +230,7 @@ export function FxPanel({ api }: FxPanelProps) {
             </button>
             <button
               type="button"
-              className="btn"
+              className="btn btn-secondary"
               onClick={() => {
                 setConfirmKey(null);
                 setAckKey(null);

@@ -25,7 +25,7 @@ import {
   type OrderEventLike,
   type OrderNote,
 } from './notes-view.js';
-import { eventStatusText } from './view.js';
+import { eventNoteView, eventStatusText } from './view.js';
 
 export interface OrderTimelineProps {
   api: AdminApi;
@@ -87,10 +87,7 @@ export function OrderTimeline({ api, orderId, events, onError, onSuccess }: Orde
       {entries.length === 0 && <span className="muted">—</span>}
       {entries.map((t, i) =>
         t.kind === 'event' ? (
-          <span className="muted" key={`e${String(i)}`}>
-            {/* `eventStatusText` 而不是 `e.status`：事件流里有一半是"没迁状态、只记一件事"的伪状态 */}
-            {formatJst(t.event.at)} {eventStatusText(t.event.status)} {t.event.note ?? ''}
-          </span>
+          <EventLine key={`e${String(i)}`} event={t.event} />
         ) : (
           <div className="timeline-note" key={`n${t.note.id}`}>
             <span className="muted">
@@ -113,7 +110,7 @@ export function OrderTimeline({ api, orderId, events, onError, onSuccess }: Orde
       {!check.ok && !check.empty && <span className="error">{check.message}</span>}
       <button
         type="button"
-        className="btn"
+        className="btn btn-secondary"
         disabled={busy || !check.ok}
         onClick={() => void submit()}
       >
@@ -121,5 +118,16 @@ export function OrderTimeline({ api, orderId, events, onError, onSuccess }: Orde
       </button>
       <span className="muted">备注提交后不能修改或删除；写错了请再追加一条更正。</span>
     </div>
+  );
+}
+
+/** 时间线里一条系统事件：状态与备注都走 view 的文案层；退款编号只放悬停（eventNoteView @why）。 */
+function EventLine({ event }: { event: OrderEventLike }): React.JSX.Element {
+  const note = eventNoteView(event.status, event.note);
+  return (
+    <span className="muted" title={note.ref !== '' ? `退款编号 ${note.ref}` : undefined}>
+      {/* `eventStatusText` 而不是 `e.status`：事件流里有一半是"没迁状态、只记一件事"的伪状态 */}
+      {formatJst(event.at)} {eventStatusText(event.status)} {note.text}
+    </span>
   );
 }

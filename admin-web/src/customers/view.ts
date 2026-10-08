@@ -86,9 +86,10 @@ export interface CustomerRow {
   blocked: boolean;
 }
 
+/** `3 单 · 已付 2`：短、无括号，配合列表的 .cell-nowrap 一行放下（括号版在窄屏被拆成三行）。 */
 function ordersText(total: number | undefined, paid: number | undefined): string {
   const n = total ?? 0;
-  return n === 0 ? '0 单' : `${String(n)} 单（已付 ${String(paid ?? 0)}）`;
+  return n === 0 ? '0 单' : `${String(n)} 单 · 已付 ${String(paid ?? 0)}`;
 }
 
 export function customerRows(items: readonly CustomerListItem[]): CustomerRow[] {

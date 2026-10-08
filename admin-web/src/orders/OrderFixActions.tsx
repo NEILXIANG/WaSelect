@@ -153,12 +153,12 @@ export function OrderFixActions({
       {mode === '' && (
         <div className="row2">
           {cancel.ok && (
-            <button className="btn" type="button" onClick={() => open('cancel')}>
+            <button className="btn btn-danger-outline" type="button" onClick={() => open('cancel')}>
               取消订单（未付款）
             </button>
           )}
           {fix.ok && (
-            <button className="btn" type="button" onClick={() => open('fix')}>
+            <button className="btn btn-secondary" type="button" onClick={() => open('fix')}>
               修改运单号
             </button>
           )}
@@ -225,7 +225,7 @@ export function OrderFixActions({
                 {busy ? '提交中…' : '确认'}
               </button>
               <button
-                className="btn"
+                className="btn btn-secondary"
                 type="button"
                 disabled={busy}
                 onClick={() => setConfirming(false)}

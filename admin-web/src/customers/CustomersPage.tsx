@@ -109,7 +109,7 @@ function CustomerList({
           value={input}
           onChange={(e) => setInput(e.target.value)}
         />
-        <button type="submit" className="btn">
+        <button type="submit" className="btn btn-secondary">
           搜索
         </button>
       </form>
@@ -133,9 +133,9 @@ function CustomerList({
               <td className="muted">{r.idText}</td>
               <td>{r.name}</td>
               <td className="selectable">{r.email}</td>
-              <td>{r.ordersText}</td>
-              <td>{r.paidTotalText}</td>
-              <td className="muted">{r.lastOrderText}</td>
+              <td className="cell-nowrap">{r.ordersText}</td>
+              <td className="cell-nowrap">{r.paidTotalText}</td>
+              <td className="muted cell-nowrap">{r.lastOrderText}</td>
               <td>{r.blocked && <Badge tone="danger">已拉黑</Badge>}</td>
               <td>
                 <button
@@ -163,7 +163,7 @@ function CustomerList({
       <footer className="pager">
         <button
           type="button"
-          className="btn"
+          className="btn btn-secondary"
           disabled={page <= 1}
           onClick={() => go(keyword, page - 1)}
         >
@@ -174,7 +174,7 @@ function CustomerList({
         </span>
         <button
           type="button"
-          className="btn"
+          className="btn btn-secondary"
           disabled={page >= lastPage}
           onClick={() => go(keyword, page + 1)}
         >

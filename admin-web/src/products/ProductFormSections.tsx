@@ -54,14 +54,14 @@ export function ProductMainColumn(p: MainColumnProps) {
           value={form.title}
           onChange={(v) => set('title', v)}
           error={errors['title'] ?? ''}
-          placeholder="資生堂 クレンジングオイル 200ml"
+          placeholder="例：資生堂 クレンジングオイル 200ml"
         />
         <Field
           label="日文品名（采购用）"
           value={form.titleJa}
           onChange={(v) => set('titleJa', v)}
           error={errors['titleJa'] ?? ''}
-          placeholder="資生堂 クレンジングオイル"
+          placeholder="例：資生堂 クレンジングオイル"
         />
         <Field
           label="商品描述"
@@ -75,14 +75,14 @@ export function ProductMainColumn(p: MainColumnProps) {
           value={form.editorialWhy}
           onChange={(v) => set('editorialWhy', v)}
           error={errors['editorialWhy'] ?? ''}
-          placeholder="铸铁蓄热足，水温掉得慢——但养锅比用锅费事"
+          placeholder="例：铸铁蓄热足，水温掉得慢——但养锅比用锅费事"
         />
         <Field
           label="产地 / 工房 / 匠人（买家可见）"
           value={form.editorialMaker}
           onChange={(v) => set('editorialMaker', v)}
           error={errors['editorialMaker'] ?? ''}
-          placeholder="岩手县 伝統工房"
+          placeholder="例：岩手县 伝統工房"
         />
         <FreeTagInput
           value={form.editorialTags}
@@ -143,14 +143,14 @@ export function ProductMainColumn(p: MainColumnProps) {
           value={form.customsDescEn}
           onChange={(v) => set('customsDescEn', v)}
           error={errors['customsDescEn'] ?? ''}
-          placeholder="Cleansing oil 200ml"
+          placeholder="例：Cleansing oil 200ml"
         />
         <Field
           label="HS 编码（必填）"
           value={form.hsCode}
           onChange={(v) => set('hsCode', v)}
           error={errors['hsCode'] ?? ''}
-          placeholder="3304.99"
+          placeholder="例：3304.99"
         />
         {/* 原产地只读：MVP 只接受 JP（D-42/D-43），让它可改只会造出必然被拒的请求 */}
         <Field
@@ -204,14 +204,14 @@ export function ProductSideColumn({ form, set, errors, statusCard }: SideColumnP
           value={form.janCode}
           onChange={(v) => set('janCode', v)}
           error={errors['janCode'] ?? ''}
-          placeholder="4901872071234"
+          placeholder="例：4901872071234"
         />
         <Field
           label="采购渠道"
           value={form.purchaseSource}
           onChange={(v) => set('purchaseSource', v)}
           error={errors['purchaseSource'] ?? ''}
-          placeholder="cosme.net"
+          placeholder="例：cosme.net"
         />
       </FormCard>
     </aside>

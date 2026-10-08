@@ -24,9 +24,23 @@ export interface BatchSubmitProps {
   onDone: (results: readonly ShipBatchResult[]) => void;
   /** 整次失败（网络 / 400）→ 页面的 Toast（统一反馈出口，ui/adoption 门禁）。 */
   onError: (text: string, traceId: string | undefined) => void;
+  /**
+   * 行内问题是否已经亮出来（勾选抽屉：首次点提交或编辑过该行之后才亮，验收 2026-10-08）。
+   * 默认 true：CSV 预检表本来就逐行显示结果。
+   */
+  revealed?: boolean;
+  /** 还没亮出问题时点了提交 → 先亮出问题、不弹确认（与单单发货"点了才红"同口径）。 */
+  onReveal?: () => void;
 }
 
-export function BatchSubmit({ api, rows, onDone, onError }: BatchSubmitProps): React.JSX.Element {
+export function BatchSubmit({
+  api,
+  rows,
+  onDone,
+  onError,
+  revealed = true,
+  onReveal,
+}: BatchSubmitProps): React.JSX.Element {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<readonly ShipBatchResult[] | null>(null);
@@ -83,12 +97,21 @@ export function BatchSubmit({ api, rows, onDone, onError }: BatchSubmitProps): R
 
   return (
     <div className="form">
-      {skipped > 0 && <p className="error">有 {skipped} 行有问题，不会提交（见上表）</p>}
+      {revealed && skipped > 0 && (
+        <p className="error">有 {skipped} 行有问题，不会提交（见上表）</p>
+      )}
+      {/* @why 还没亮出问题时 0 单也可点：点一下才知道缺什么（单单发货同口径）；亮出之后 0 单才置灰 */}
       <button
         type="button"
         className="btn"
-        disabled={items.length === 0 || busy}
-        onClick={() => setAsking(true)}
+        disabled={busy || (items.length === 0 && revealed)}
+        onClick={() => {
+          if (!revealed && skipped > 0) {
+            onReveal?.();
+            return;
+          }
+          setAsking(true);
+        }}
       >
         批量发货 {items.length} 单
       </button>

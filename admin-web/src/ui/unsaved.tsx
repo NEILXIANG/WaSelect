@@ -137,3 +137,15 @@ export function useFormDirty<T>(current: T, pristine: T): void {
     return () => markDirty(key, false);
   }, [key, dirty, markDirty]);
 }
+
+/**
+ * 组件版 useFormDirty：放进 `<ActionDrawer>` 的 children 里用。
+ *
+ * @why 自己渲染抽屉的组件（批量发货 / CSV 导入）若在**自身**调 useFormDirty，拿到的是抽屉**外层**的登记簿——
+ *      抽屉的"关闭前问一句"只看自己 Provider 里的 local 脏态，于是填了内容关抽屉不问（验收 2026-10-08 实测）。
+ *      挂在 children 里才落进抽屉的 Provider（抽屉再转报外层，侧栏离开同样会拦）。
+ */
+export function FormDirty<T>({ current, pristine }: { current: T; pristine: T }): null {
+  useFormDirty(current, pristine);
+  return null;
+}

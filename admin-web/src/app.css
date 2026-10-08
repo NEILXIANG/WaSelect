@@ -323,6 +323,11 @@ body {
   }
 }
 
+/* 数字列不折行（验收 2026-10-08：客户列表「1 单（已/付 0）」在 1024–1280px 被拆成三行） */
+.cell-nowrap {
+  white-space: nowrap;
+}
+
 /* ── 表格里的次级行（商品下面的采购信息）─────────────────────────────
    @why 采购信息是**执行依据**（照日文原名 / JAN / 采购来源去买），
         与上一行"买了什么、多少钱"是两种用途——所以另起一行、弱化显示，
@@ -423,6 +428,14 @@ body {
   border: var(--ws-border) solid var(--ws-color-muted);
   background: var(--ws-color-card);
   color: var(--ws-color-fg);
+}
+
+/* 示例占位符（验收 2026-10-08）：默认占位色与已填值太接近，「資生堂 クレンジングオイル」看着像填好的。
+   色调取 muted 再掺卡片白，明显浅于正文；文案侧统一加「例：」前缀，颜色不是唯一信号。 */
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--ws-color-muted) 55%, var(--ws-color-card));
+  opacity: 1;
 }
 
 .input:focus {
@@ -673,6 +686,31 @@ body {
 .btn-danger {
   background: var(--ws-color-error);
   color: var(--ws-color-card);
+}
+
+/* 按钮层级（对标 §238「主按钮每屏只留一个」，验收 2026-10-08）：
+   实心 .btn = 本屏唯一的主动作；.btn-secondary = 次动作（描边）；
+   .btn-danger-outline = 危险但不是本屏主线的入口（描边 + 错误色，点开后抽屉里的确认按钮才是实心红）。 */
+.btn-secondary,
+.btn-danger-outline {
+  background: transparent;
+  border: var(--ws-border) solid currentColor;
+  /* 扣掉描边宽度，与实心按钮等高，同一行里不高低错落 */
+  padding: calc(var(--ws-space-sm) - var(--ws-border)) calc(var(--ws-space) - var(--ws-border));
+}
+
+.btn-secondary {
+  color: var(--ws-color-fg);
+}
+
+.btn-danger-outline {
+  color: var(--ws-color-error);
+}
+
+.btn-secondary:disabled,
+.btn-danger-outline:disabled {
+  background: transparent;
+  color: var(--ws-color-muted);
 }
 
 /* ── 工作台统计卡片（第一批③）───────────────────────────────────────── */

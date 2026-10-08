@@ -45,7 +45,7 @@ describe('customerRows', () => {
         idText: 'u-cust-a',
         name: 'Zhang Wei',
         email: 'zhang.wei@example.com',
-        ordersText: '3 单（已付 2）',
+        ordersText: '3 单 · 已付 2',
         paidTotalText: '21,380 円',
         lastOrderText: '2026-10-01 10:00',
         blocked: false,

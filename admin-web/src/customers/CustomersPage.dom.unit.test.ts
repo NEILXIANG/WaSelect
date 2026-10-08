@@ -128,7 +128,12 @@ describe('客户列表', () => {
     expect(text).not.toContain(ROW.id);
     expect(text).toContain('Zhang Wei');
     expect(text).toContain('zhang.wei@example.com');
-    expect(text).toContain('3 单（已付 2）');
+    expect(text).toContain('3 单 · 已付 2');
+    // 数字列不折行（验收 2026-10-08：窄屏下被拆成三行）
+    const cells = [...(el.querySelector('tbody tr')?.querySelectorAll('td') ?? [])];
+    expect(cells.find((td) => td.textContent === '3 单 · 已付 2')?.className).toContain(
+      'cell-nowrap',
+    );
     expect(text).toContain('21,380 円');
     expect(el.textContent).toContain('第 2 / 3 页 · 共 41 位');
     // 搜索框回显地址栏里的关键字（刷新后不丢）
