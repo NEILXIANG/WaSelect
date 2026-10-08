@@ -14,16 +14,40 @@
  *      内部还开着一个确认弹层（`.dialog`）时，ESC 交给那个弹层处理，抽屉不跟着关——
  *      否则在发货确认里按一次 ESC，弹层和抽屉一起消失，填好的运单号也没了。
  *
- * @limitation 一：`busy` 只能由调用方传进来；改址 / 部分退款 / 订单修正三个组件的提交中状态是它们内部的，
- *              提交中关抽屉会卸载组件（请求照样完成，父组件照样刷新与提示，只是表单不在了）。
+ * @why `busy` 两个来源取或：调用方传入（发货 / 全额退款，状态在父组件），或抽屉里的表单用 `useDrawerBusy` 上报
+ *      （改址 / 部分退款 / 订单修正，提交中状态在组件内部）。此前后者锁不住：提交中关抽屉会卸载表单，
+ *      请求照样完成，运营却看不到结果（AJ-398 @limitation 一，本条解除）。
+ * @limitation 一：只锁"关抽屉"；离开整页（侧栏 / 后退）仍由脏态提醒管，不看 busy。
  * @limitation 二：不做焦点陷阱（Tab 能移出抽屉）：管理端是内部工具，键盘用户极少；
  *              真正要防的"误关丢内容"已由二次确认兜住。
  *
  * @see ./confirm.tsx（关闭出口同口径）；./unsaved.tsx（脏态登记）
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { ConfirmDialog } from './confirm.js';
 import { UnsavedProvider, useDirtyRegistry, useUnsaved } from './unsaved.js';
+
+/** 抽屉内表单上报"提交中"（没有抽屉时是空操作）。 */
+const BusyCtx = createContext<(key: string, busy: boolean) => void>(() => undefined);
+
+/** 表单用：提交中时锁住所在抽屉的全部关闭出口。 */
+export function useDrawerBusy(busy: boolean): void {
+  const mark = useContext(BusyCtx);
+  const key = useId();
+  useEffect(() => {
+    mark(key, busy);
+    return () => mark(key, false);
+  }, [key, busy, mark]);
+}
 
 export interface ActionDrawerProps {
   title: string;
@@ -35,10 +59,13 @@ export interface ActionDrawerProps {
 
 export function ActionDrawer({
   title,
-  busy = false,
+  busy: outerBusy = false,
   onClose,
   children,
 }: ActionDrawerProps): React.JSX.Element {
+  // 与脏态同一种按 key 的登记簿：复用实现，语义是"哪几份表单在提交中"
+  const inner = useDirtyRegistry();
+  const busy = outerBusy || inner.dirty;
   const outer = useUnsaved();
   const local = useDirtyRegistry();
   const outerMark = outer.markDirty;
@@ -88,7 +115,7 @@ export function ActionDrawer({
           </button>
         </header>
         <UnsavedProvider dirty={local.dirty} markDirty={markDirty}>
-          {children}
+          <BusyCtx.Provider value={inner.markDirty}>{children}</BusyCtx.Provider>
         </UnsavedProvider>
         {asking && (
           <ConfirmDialog

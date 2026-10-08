@@ -14,6 +14,7 @@
  */
 import { useState } from 'react';
 import { useFormDirty } from '../ui/unsaved.js';
+import { useDrawerBusy } from '../ui/drawer.js';
 import { ApiError } from '../api/errors.js';
 import { updateOrderAddress, type AdminApi, type AdminOrderLike } from './api.js';
 import {
@@ -51,6 +52,7 @@ export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormPro
   const [errors, setErrors] = useState<Partial<Record<AddressField, string>>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  useDrawerBusy(busy); // 提交中锁住所在抽屉的关闭出口
   /**
    * 两步确认（三端联动 UI 模拟 2026-10-08）：改址一点即生效、也没有成功提示——
    * 而它改的是"货寄到哪"，写错就是寄丢。先核对一遍新地址再提交，与发货 / 退款同口径。

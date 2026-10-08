@@ -9,6 +9,7 @@
  */
 import { useState } from 'react';
 import { useFormDirty } from '../ui/unsaved.js';
+import { useDrawerBusy } from '../ui/drawer.js';
 import { ADMIN_NOTE_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { cancelOrder, fixShipment, type AdminApi } from './api.js';
@@ -47,6 +48,7 @@ export function OrderFixActions({
   const [trackingNo, setTrackingNo] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  useDrawerBusy(busy); // 提交中锁住所在抽屉的关闭出口
   /**
    * 脏态：只在展开了「取消 / 改运单」之后才可能脏；改运单的基线是展开时预填的当前运单。
    * @limitation 只比文字输入，不把"展开了但没填"算脏——展开本身不产生要丢的东西。

@@ -12,6 +12,7 @@
  */
 import { useState } from 'react';
 import { useFormDirty } from '../ui/unsaved.js';
+import { useDrawerBusy } from '../ui/drawer.js';
 import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import { ApiError, retryAfterMsSec } from '../api/errors.js';
 import { createPartialRefund, syncPartialRefund, type AdminApi } from './api.js';
@@ -68,6 +69,7 @@ export function PartialRefunds({
   const [confirming, setConfirming] = useState(false);
   const [hint, setHint] = useState('');
   const [busy, setBusy] = useState(false);
+  useDrawerBusy(busy); // 提交中锁住所在抽屉的关闭出口
 
   const gate = partialRefundGate(order);
   const currency = refundableMinor(order)?.currency ?? '';
