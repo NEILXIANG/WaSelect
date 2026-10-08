@@ -24,6 +24,9 @@
  *              @limitation 默认值（`all` / 第 1 页 / 不含测试单）**不写进 URL**：
  *                         写了会让地址栏拖一串没有信息的 `?status=all&page=1&test=0`。
  *
+ * @limitation 五（AJ-401）：「待发货」页签下才有行勾选、「批量发货」与「导入运单号（CSV）」；
+ *              勾选只在当前页内，列表一重载（翻页 / 刷新 / 发货后）勾选即清空——勾选不进 URL（它不是筛选条件）。
+ *
  * @see ./view.ts（行视图与闸门）；./api.ts（接口层）；./OrderDetail.tsx；../router.ts
  */
 import { ExportBar } from './ExportBar.js';
@@ -31,7 +34,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { SEARCH_KEYWORD_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { listOrders, type AdminApi, type AdminOrderLike } from './api.js';
-import { ORDER_STATUS_LABELS, orderRows, type OrderRow } from './view.js';
+import { ORDER_STATUS_LABELS, orderRows, shipGate, type OrderRow } from './view.js';
+import { ShipBatchDrawer } from './ShipBatchDrawer.js';
+import { CsvShipImport } from './CsvShipImport.js';
+import { ToastStack, useToasts } from '../ui/toast.js';
 import { readStatusFilter, resolveDateRange, tabStatusParam } from './list-filter.js';
 import { StatusTabs } from './StatusTabs.js';
 import { DateFilter } from './DateFilter.js';
@@ -115,6 +121,14 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   const [keyword, setKeyword] = useState(applied);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  /** 「待发货」页签下勾选的订单 id（AJ-401；列表重载即清空，@limitation 五）。 */
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [batch, setBatch] = useState<'select' | 'csv' | null>(null);
+  const batchMode = tabKey === 'to_ship';
+  /** 批量发货的整次失败走 Toast（ui/adoption 门禁：新页面不写行内反馈）。 */
+  const sink = useToasts();
+  const batchError = (text: string, traceId: string | undefined): void =>
+    sink.error(text, { traceId });
   /** 当前打开的订单 id（null = 看列表）——来自路径，不是本地 state。 */
   const detailId = route.id === '' ? null : route.id;
 
@@ -162,6 +176,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       });
       if (seq !== reqSeq.current) return;
       setRaw(res.items);
+      setSelected(new Set());
       setRows(orderRows(res.items));
       setTotal(res.total);
       // 扫描 A-02：当前页超出最后一页（例如最后一页唯一一张单刚发货）→ 拉回最后一页，不停在"空页"
@@ -192,6 +207,8 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   }, [load]);
 
   const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  /** 能勾的单：与详情页发货按钮同一个闸门（拒付 / 测试单不能勾）。 */
+  const selectable = raw.filter((o) => shipGate(o).ok).map((o) => o.order_id);
 
   if (detailId !== null) {
     return (
@@ -284,9 +301,54 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       {loading && <p className="muted">加载中…</p>}
       {!loading && rows.length === 0 && error === '' && <p className="muted">没有符合条件的订单</p>}
 
+      {batchMode && (
+        // AJ-401：批量发货 / CSV 导入（抽屉）
+        <div className="filters">
+          <button
+            type="button"
+            className="btn"
+            disabled={selected.size === 0}
+            onClick={() => setBatch('select')}
+          >
+            批量发货（{selected.size}）
+          </button>
+          <button type="button" className="btn" onClick={() => setBatch('csv')}>
+            导入运单号（CSV）
+          </button>
+        </div>
+      )}
+      {batch === 'select' && (
+        <ShipBatchDrawer
+          api={api}
+          orders={raw.filter((o) => selected.has(o.order_id))}
+          onClose={() => setBatch(null)}
+          onDone={() => setReloadTick((t) => t + 1)}
+          onError={batchError}
+        />
+      )}
+      {batch === 'csv' && (
+        <CsvShipImport
+          api={api}
+          onClose={() => setBatch(null)}
+          onDone={() => setReloadTick((t) => t + 1)}
+          onError={batchError}
+        />
+      )}
+      <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
+
       <table className="table">
         <thead>
           <tr>
+            {batchMode && (
+              <th>
+                <input
+                  type="checkbox"
+                  aria-label="全选本页可发货订单"
+                  checked={selectable.length > 0 && selectable.every((id) => selected.has(id))}
+                  onChange={(e) => setSelected(new Set(e.target.checked ? selectable : []))}
+                />
+              </th>
+            )}
             <th>订单号</th>
             <th>状态</th>
             {/* 待采购清单的本体（§2.7：清单 = 本页筛 status=paid） */}
@@ -301,6 +363,22 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.id}>
+              {batchMode && (
+                <td>
+                  <input
+                    type="checkbox"
+                    aria-label={`选择 ${row.orderNo}`}
+                    disabled={!selectable.includes(row.id)}
+                    checked={selected.has(row.id)}
+                    onChange={(e) => {
+                      const next = new Set(selected);
+                      if (e.target.checked) next.add(row.id);
+                      else next.delete(row.id);
+                      setSelected(next);
+                    }}
+                  />
+                </td>
+              )}
               <td>{row.orderNo}</td>
               <td>
                 {/* AJ-400：彩色徽章（statusText 文案不变，色调见 badges.ts） */}

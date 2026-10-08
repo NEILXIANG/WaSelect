@@ -11,11 +11,13 @@ import { describe, expect, it } from 'vitest';
 import { createAdminApi } from '../api/client.js';
 import { NETWORK_ERROR_CODE } from '../api/errors.js';
 import {
+  findOrdersByNo,
   getOrder,
   listOrders,
   refundOrder,
   releaseDisputeHold,
   shipOrder,
+  shipOrdersBatch,
   updateOrderAddress,
 } from './api.js';
 
@@ -250,5 +252,47 @@ describe('updateOrderAddress', () => {
     await updateOrderAddress(api(impl), 'o-2609-0013', body);
     expect(seen[0]?.url).toBe('http://localhost:3000/api/v1/admin/orders/o-2609-0013/address');
     expect(JSON.parse(String(seen[0]?.init.body))).toEqual(body);
+  });
+});
+
+describe('shipOrdersBatch / findOrdersByNo（AJ-401）', () => {
+  it('POST /admin/orders/ship-batch，body = {items}；缺 results → 抛', async () => {
+    const items = [{ order_id: 'o-1', carrier: 'Japan Post', tracking_no: 'EJ123456789JP' }];
+    const { impl, seen } = stubFetch(() =>
+      json({ results: [{ order_id: 'o-1', ok: true }], succeeded: 1, failed: 0 }),
+    );
+    const res = await shipOrdersBatch(api(impl), items);
+    expect(seen[0]?.url).toBe('http://localhost:3000/api/v1/admin/orders/ship-batch');
+    expect(seen[0]?.init.method).toBe('POST');
+    expect(JSON.parse(String(seen[0]?.init.body))).toEqual({ items });
+    expect(res[0]?.ok).toBe(true);
+    const bad = stubFetch(() => json({ succeeded: 0 }));
+    await expect(shipOrdersBatch(api(bad.impl), items)).rejects.toMatchObject({
+      code: NETWORK_ERROR_CODE,
+    });
+  });
+
+  it('按单号逐个查（含测试单），只认 order_no 完全相等的那条；空串与重复只查一次', async () => {
+    const { impl, seen } = stubFetch((url) =>
+      json({
+        items: url.includes('keyword=261007-7K3QXA')
+          ? [
+              { order_id: 'o-long', order_no: '261007-7K3QXA9', status: 'paid' },
+              { order_id: 'o-1', order_no: '261007-7K3QXA', status: 'paid' },
+            ]
+          : [],
+        total: 1,
+      }),
+    );
+    const m = await findOrdersByNo(api(impl), [
+      '261007-7K3QXA',
+      '',
+      '261007-7K3QXA',
+      '261007-ZZZZZZ',
+    ]);
+    expect(seen).toHaveLength(2);
+    expect(seen.every((s) => s.url.includes('include_test=true'))).toBe(true);
+    expect(m.get('261007-7K3QXA')?.order_id).toBe('o-1');
+    expect(m.has('261007-ZZZZZZ')).toBe(false);
   });
 });

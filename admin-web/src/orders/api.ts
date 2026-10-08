@@ -129,6 +129,60 @@ export async function shipOrder(
   });
 }
 
+/** 批量发货的一行结果（契约 0.6.45 `ShipBatchItemResult`）。 */
+export interface ShipBatchResult {
+  order_id: string;
+  ok: boolean;
+  code?: number;
+  message?: string;
+  reason?: string;
+  tracking_recognized?: boolean;
+}
+
+/**
+ * `POST /admin/orders/ship-batch`（AJ-401）——逐单结果，与 items 同序。
+ * @throws {ApiError} 整次被拒（400 / 40001：超上限 / 重复单号等）或响应形状不符
+ */
+export async function shipOrdersBatch(
+  api: AdminApi,
+  items: readonly { order_id: string; carrier: string; tracking_no: string }[],
+): Promise<ShipBatchResult[]> {
+  const resp = await api({
+    path: '/api/v1/admin/orders/ship-batch',
+    method: 'POST',
+    body: { items },
+  });
+  const results = (resp as { results?: unknown } | null)?.results;
+  if (!Array.isArray(results)) {
+    throw new ApiError(NETWORK_ERROR_CODE, '批量发货响应形状与契约不符（缺 results）', '');
+  }
+  return results as ShipBatchResult[];
+}
+
+/**
+ * 按**人看的订单号**逐个查订单（CSV 导入用；AJ-401）。
+ * @why 复用列表接口的 keyword（含测试单），结果里只认 `order_no` **完全相等**的那一条——
+ *      keyword 是模糊匹配，`261007-7K3QXA` 也会命中别单收件人或运单号里恰好含这一串的。
+ * @why 每次最多 4 个并发：CSV 至多 50 行（SHIP_BATCH_MAX），串行太慢，全并发会挤占同一个管理员的其它请求。
+ * @limitation 不新增"按单号批量查"的接口：50 次小查询换零契约改动；量再大时再加。
+ */
+export async function findOrdersByNo(
+  api: AdminApi,
+  orderNos: readonly string[],
+): Promise<Map<string, AdminOrderLike>> {
+  const found = new Map<string, AdminOrderLike>();
+  const queue = [...new Set(orderNos.filter((n) => n !== ''))];
+  const worker = async (): Promise<void> => {
+    for (let no = queue.shift(); no !== undefined; no = queue.shift()) {
+      const res = await listOrders(api, { keyword: no, includeTest: true, size: 20 });
+      const hit = res.items.find((o) => o.order_no === no);
+      if (hit !== undefined) found.set(no, hit);
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  return found;
+}
+
 /**
  * 退款结果（契约 0.6.11：`202 {order_id, outcome}`）。
  *

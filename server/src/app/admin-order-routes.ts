@@ -29,6 +29,8 @@
  *              而管理员手改出来的地址**不属于任何一条地址簿记录**——
  *              沿用旧 id 会让快照声称自己等于一个它已经不等于的地址。
  *
+ * @limitation 四（AJ-401）：发货的执行体在 `ship-order.ts`，本文件的 `/ship` 与 `admin-ship-batch-routes.ts` 共用它。
+ *
  * @see adapters/orders-admin.ts（仓储）；domain/admin-order-actions.ts（准入判定）；
  *      domain/address-input.ts（地址校验）；contracts/api-contract.yaml（AdminOrder / AdminOrderListItem）
  */
@@ -46,7 +48,8 @@ import { executeRefund } from './refund-execution.js';
 import { sumPartialRefunds, listPartialRefunds } from '../adapters/order-refunds.js';
 import { partialRefundView } from './partial-refund-routes.js';
 import { fullRefundAmount } from '../domain/partial-refund.js';
-import { trackingNoRecognized, withTrackingUrl } from '../domain/tracking.js';
+import { withTrackingUrl } from '../domain/tracking.js';
+import { shipOrder } from './ship-order.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
@@ -58,8 +61,6 @@ import {
   refundGuard,
   refundReasonGuard,
   releaseReasonGuard,
-  shipGuard,
-  shipInfoGuard,
 } from '../domain/admin-order-actions.js';
 import { REFUND_REASON_MAX_LENGTH, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { markAuditCommitted, setAuditBefore } from './admin-audit.js';
@@ -78,7 +79,6 @@ import {
   findRefundingReason,
   findRefundProgress,
   markRefunding,
-  markShipped,
   releaseDisputeHold,
   updateAddressSnapshot,
   type AdminOrderItemRow,
@@ -104,7 +104,7 @@ export interface AdminOrderRoutesDeps {
  *      "哪个管理员退的款"的留痕（admin_audit 自 AJ-183 起另有一行，但时间线只看 order_events），不带 id 就无从追责。
  *      `unknown` 只在守卫之后仍拿不到 sub 时出现（理论不可达：requireRole 已验签），保留是为了不抛。
  */
-function adminActor(req: Request): string {
+export function adminActor(req: Request): string {
   return `admin:${req.auth?.sub ?? 'unknown'}`;
 }
 
@@ -380,45 +380,8 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
   app.post('/api/v1/admin/orders/:id/ship', guard, (req, res, next) => {
     void (async () => {
       try {
-        const id = String(req.params.id);
-        // ⚠️ 必填 + **列宽**都在入口判（AJ-315 / 第二轮审查 B24）：此前只判非空，
-        //    超长会撞 PG 的 22001 → 兜底层折成泛化的 40001，运营看到的不是"运单号太长"。
-        const ship = shipInfoGuard(req.body);
-        if (!ship.ok) throw new AppError(ship.code, { reason: ship.reason, order_id: id });
-        await withTransaction(deps.db, async (tx) => {
-          const row = await lockAdminOrder(tx, id);
-          if (row === null) throw new AppError(40400, { order_id: id });
-          const gate = shipGuard(asOrderStatus(row.status), row.has_dispute, row.is_test);
-          if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
-          if (
-            !(await markShipped(
-              tx,
-              id,
-              ship.carrier,
-              ship.trackingNo,
-              deps.clock.now(),
-              adminActor(req),
-            ))
-          ) {
-            throw new AppError(40902, { order_id: id, reason: 'status_raced' });
-          }
-        });
-        deps.logger.info('admin_order_shipped', { result: 'ok', order_id: id });
-        // 事务已提交才发（与 unit-of-work 同口径：回滚了就不该有人收到"已发货"）
-        deps.events.publish({
-          name: 'order.shipped',
-          at: deps.clock.now().toISOString(),
-          orderId: id,
-          payload: { carrier: ship.carrier },
-        });
-        res.json({
-          order_id: id,
-          status: 'shipped',
-          carrier: ship.carrier,
-          tracking_no: ship.trackingNo,
-          // 形状认得出（能生成官方查件链接）才是 true；false 只提示运营核对，不拦（P1-10，AJ-386）
-          tracking_recognized: trackingNoRecognized(ship.carrier, ship.trackingNo),
-        });
+        // 整段执行（校验 / 持锁闸门 / 迁移 / 提交后发事件）与批量发货共用一份（AJ-401，ship-order.ts）
+        res.json(await shipOrder(deps, String(req.params.id), req.body, adminActor(req)));
       } catch (e) {
         next(e);
       }

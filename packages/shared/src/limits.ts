@@ -246,6 +246,19 @@ export const SHIP_MAX_CHARS = {
 } as const;
 
 /**
+ * 批量发货一次最多几单（AJ-401，契约 0.6.45 `POST /admin/orders/ship-batch` 的 `items.maxItems`）。
+ *
+ * @why 取 50：服务端**逐单一个事务、串行**执行（见 admin-ship-batch-routes.ts @why），一单约一次行锁 + 两条写，
+ *      50 单在本机真库上是百毫秒级；再大就开始逼近反代的请求超时（Render / Cloudflare 100 秒级），
+ *      而超时 = 前端拿不到逐单结果、后端却已经发了一部分——运营只能逐单打开去核对。
+ *      同时它与运营真实的"一次打印一批面单"规模同量级（代购单量日均几十单）。
+ * @why 放 shared：管理端勾选 / CSV 导入要在**提交前**就挡住第 51 行（与 SHIP_MAX_CHARS 同一条理由——前端不另写一份）。
+ * @limitation 超过上限是**整次拒绝**（40001 batch_too_large），不是"截前 50 单"：静默截断会让第 51 单以后
+ *             看起来提交了、其实没发。
+ */
+export const SHIP_BATCH_MAX = 50;
+
+/**
  * 列表**搜索词**（`keyword`）的字符上限（64；AJ-360 / 第二轮审查 CAT2-07）。
  *
  * @why 它是**唯一**一个客户端可控、且原样进 `ILIKE '%' || kw || '%'` 的输入：

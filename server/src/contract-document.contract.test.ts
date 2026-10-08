@@ -24,6 +24,7 @@ import {
   ORDER_NOTE_MAX_LENGTH,
   REFUND_REASON_MAX_LENGTH,
   SEARCH_KEYWORD_MAX_LENGTH,
+  SHIP_BATCH_MAX,
   SHIP_MAX_CHARS,
 } from '@waselect/shared';
 import { MAX_CLIENT_KEY_LENGTH } from './ports/idempotency.js';
@@ -190,6 +191,16 @@ describe('契约的输入上限与 shared 常量一致', () => {
     const props = requestProps('/admin/orders/{id}/ship', 'post');
     expect(props['carrier']?.['maxLength']).toBe(SHIP_MAX_CHARS.carrier);
     expect(props['tracking_no']?.['maxLength']).toBe(SHIP_MAX_CHARS.tracking_no);
+  });
+
+  /** AJ-401：批量发货的条数上限与逐项列宽，同一组 shared 常量（前端勾选 / CSV 导入也用它们）。 */
+  it('POST /admin/orders/ship-batch 的 items.maxItems == SHIP_BATCH_MAX，逐项列宽 == SHIP_MAX_CHARS', () => {
+    const items = requestProps('/admin/orders/ship-batch', 'post')['items'] as
+      | { maxItems?: number; items?: { properties?: Record<string, { maxLength?: number }> } }
+      | undefined;
+    expect(items?.maxItems).toBe(SHIP_BATCH_MAX);
+    expect(items?.items?.properties?.['carrier']?.maxLength).toBe(SHIP_MAX_CHARS.carrier);
+    expect(items?.items?.properties?.['tracking_no']?.maxLength).toBe(SHIP_MAX_CHARS.tracking_no);
   });
 
   /**

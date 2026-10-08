@@ -59,6 +59,7 @@ import { mountProductRoutes } from './product-routes.js';
 import { mountHomeRoutes } from './home-routes.js';
 import { mountAdminProductRoutes } from './admin-product-routes.js';
 import { mountAdminOrderRoutes } from './admin-order-routes.js';
+import { mountAdminShipBatchRoutes } from './admin-ship-batch-routes.js';
 import { mountPartialRefundRoutes } from './partial-refund-routes.js';
 import { mountAdminOrderFixRoutes } from './admin-order-fix-routes.js';
 import { mountAdminOrderNoteRoutes } from './admin-order-note-routes.js';
@@ -351,6 +352,15 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     identity,
     registry,
     events,
+  });
+  // ── 批量发货（AJ-401）：逐单复用单单发货的执行体（ship-order.ts），守卫与身份缓存同上 ──
+  mountAdminShipBatchRoutes(app, {
+    db,
+    logger,
+    clock,
+    events,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
   });
   // ── 部分退款 / 完成后售后退款（AJ-383）：与整单退款共用注册表与订单行锁 ──
   mountPartialRefundRoutes(app, {

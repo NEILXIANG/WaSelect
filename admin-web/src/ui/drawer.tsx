@@ -53,6 +53,8 @@ export interface ActionDrawerProps {
   title: string;
   /** 提交中：锁住全部关闭出口（与 ConfirmDialog @limitation 一同口径）。 */
   busy?: boolean;
+  /** 宽版（AJ-401 批量发货：一行四列的可编辑表格放不进默认宽度）。 */
+  wide?: boolean;
   onClose: () => void;
   children?: ReactNode;
 }
@@ -60,6 +62,7 @@ export interface ActionDrawerProps {
 export function ActionDrawer({
   title,
   busy: outerBusy = false,
+  wide = false,
   onClose,
   children,
 }: ActionDrawerProps): React.JSX.Element {
@@ -102,7 +105,7 @@ export function ActionDrawer({
   return (
     <div className="modal drawer-wrap" role="dialog" aria-modal="true" aria-label={title}>
       <div className="modal-backdrop" onClick={() => requestClose.current()} />
-      <div className="drawer" ref={panel}>
+      <div className={wide ? 'drawer drawer-wide' : 'drawer'} ref={panel}>
         <header className="panel-head">
           <h2 className="dialog-title">{title}</h2>
           <button

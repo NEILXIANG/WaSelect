@@ -518,6 +518,16 @@ body {
   gap: var(--ws-space);
 }
 
+/* 宽版抽屉（AJ-401 批量发货）：一行四列的可编辑表格 */
+.drawer.drawer-wide {
+  width: calc(var(--ws-space) * 52);
+}
+
+/* 只提示不拦的警告（运单号形状认不出等） */
+.warn {
+  color: var(--ws-color-warn);
+}
+
 /* 表单的行内错误区：多条竖排，紧跟在对应字段下方 */
 .field-errors {
   display: flex;

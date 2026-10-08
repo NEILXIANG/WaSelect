@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.44
+  version: 0.6.45
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -483,6 +483,17 @@ info:
          40001 `created_from_invalid` 或 `created_to_invalid`；起点晚于终点 → 40001 `created_range_invalid`（不静默对调）。
          与 `status` / `keyword` / `include_test` 是 AND。`total` 与 `items` 同一过滤条件。
       ③ CSV 导出（`/admin/exports/{kind}`）**不变**：不接日期参数。
+    0.6.45（AJ-401：管理端第二批 B——批量发货）：新增 `POST /admin/orders/ship-batch`（新增路径，老调用方不受影响）：
+      ① 请求 `{items: [{order_id, carrier, tracking_no}]}`，1–50 项（shared `SHIP_BATCH_MAX`）。**逐单**执行与 `POST /admin/orders/{id}/ship`
+         **同一份**逻辑（同一组闸门：测试单 / 拒付 40909 / 状态机 / 列宽；同一条 order_events + `order.shipped` 事件 → 发货邮件），
+         每单一个事务、按请求顺序串行，**允许部分成功**：一单失败只回滚那一单，不影响别的单。
+      ② 响应恒 200：`results` 与 `items` 同序，成功项 = 单单发货的 200 响应体 + `ok: true`；失败项 `{order_id, ok: false, code, message, reason}`，
+         `reason` 为机读原因（如 `status_shipped` / `dispute_open` / `test_order` / `not_found` / `tracking_no_too_long` / `status_raced` / `internal`）。
+         另回 `succeeded` / `failed` 计数。
+      ③ 整次拒绝（400 / 40001，一单都不发）：`items` 缺失或不是数组 `items_required`、空数组 `batch_empty`、超过 50 `batch_too_large`、
+         `order_id` 不是非空字符串或超过 64 字 `order_id_invalid`、同一 `order_id` 出现两次 `duplicate_order_id`。
+      ④ 没有幂等键（与单单发货一致）：已发货的单再提交 → 该行 40902 `status_shipped`。两个请求并发发同一单只会成功一次（同一把订单行锁）。
+      ⑤ admin_audit 一行，after = 逐单结果（不是请求体）；一单都没成功则不写。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -706,6 +717,12 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [carrier, tracking_no], properties: {carrier: {type: string, maxLength: 32, description: '0.6.27：orders.carrier 是 VARCHAR(32)，超长 40001 carrier_too_long（AJ-315）'}, tracking_no: {type: string, maxLength: 64, description: '0.6.27：orders.tracking_no 是 VARCHAR(64)，超长 40001 tracking_no_too_long（AJ-315）'}}}}}}
       responses: {'200': {description: 'OK（0.6.27：响应体回 order_id / status / carrier / tracking_no 四个键，status 恒为 shipped；此前契约只写了 description: OK，与 admin-order-routes.ts 不一致）。0.6.37：另回 tracking_recognized', content: {application/json: {schema: {type: object, required: [order_id, status, carrier, tracking_no, tracking_recognized], properties: {order_id: {type: string}, status: {type: string, enum: [shipped]}, carrier: {type: string}, tracking_no: {type: string}, tracking_recognized: {type: boolean, description: '0.6.37（P1-10）：运单号形状认得出（日本邮便 S10 等）为 true；false 只是提示运营核对，已照常保存'}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/orders/ship-batch:
+    post:
+      summary: 批量发货（0.6.45 / AJ-401；逐单复用单单发货逻辑，允许部分成功）
+      description: '1–50 单；逐单一个事务、按顺序串行，闸门与 POST /admin/orders/{id}/ship 相同。结构错误（items 缺失 / 空 / 超 50 / order_id 非法 / 重复）整次 400 / 40001、一单都不发；逐单的失败（40001 / 40400 / 40902 / 40909 / 50000）按行回在 results 里，HTTP 仍 200。'
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items], properties: {items: {type: array, minItems: 1, maxItems: 50, items: {type: object, required: [order_id, carrier, tracking_no], properties: {order_id: {type: string, minLength: 1, maxLength: 64}, carrier: {type: string, maxLength: 32}, tracking_no: {type: string, maxLength: 64}}}}}}}}}
+      responses: {'200': {description: OK（逐单结果，与 items 同序）, content: {application/json: {schema: {type: object, required: [results, succeeded, failed], properties: {succeeded: {type: integer}, failed: {type: integer}, results: {type: array, items: {$ref: '#/components/schemas/ShipBatchItemResult'}}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/cancel:
     post:
       summary: 取消未付订单（0.6.37 / AJ-386，P1-11）
@@ -960,6 +977,7 @@ components:
     PaymentIntent: {type: object, properties: {channel: {type: string, description: '通道 key（同 POST /orders/{id}/pay：任意字符串，见 x-payment-channels）'}, charge: {type: object, properties: {currency: {type: string, enum: [JPY, USD]}, amount: {type: integer}}}, payload: {type: object, additionalProperties: true, description: 'wechat: wx.requestPayment 五参数；stripe: {pay_url, expires_at}（D-49 短链）；mock: {auto, orderId, amountJpy, currency}——auto 为布尔：仅审核模式（服务端会自动确认、响应返回时订单已 paid）为 true，否则 false（0.6.11 / AJ-179；0.5.6 起的 auto:true 恒真已废）'}, expires_at: {type: string, format: date-time}}}
     BannerInput: {type: object, required: [image_key], properties: {image_key: {type: string}, link_type: {type: string, enum: [none, product, category], default: none}, link_id: {type: string, description: 'link_type ≠ none 时必填（缺 → 40001 link_id_required）'}, sort: {type: integer, default: 0, minimum: 0}, active: {type: boolean, default: true}, starts_at: {type: string, format: date-time}, ends_at: {type: string, format: date-time}}}
     AdminAuditEntry: {type: object, description: '0.6.32：管理员操作审计一行（不含 before / after）。status_code 缺失 = 当时没记（CLI 路径或迁移 025 之前）', required: [id, actor, action, created_at], properties: {id: {type: integer}, actor: {type: string}, actor_email: {type: string, description: '0.6.40：actor 为 admin:<id> 时的管理员邮箱；CLI / 已删账号省略'}, action: {type: string}, target: {type: string}, status_code: {type: integer}, trace_id: {type: string}, created_at: {type: string, format: date-time}}}
+    ShipBatchItemResult: {type: object, description: '0.6.45（AJ-401）：批量发货的一行结果。ok=true 时其余键同单单发货 200 响应体；ok=false 时带 code / message / reason', required: [order_id, ok], properties: {order_id: {type: string}, ok: {type: boolean}, status: {type: string, enum: [shipped]}, carrier: {type: string}, tracking_no: {type: string}, tracking_recognized: {type: boolean}, code: {type: integer, description: '失败时：40001 / 40400 / 40902 / 40909 / 50000'}, message: {type: string}, reason: {type: string, description: '失败时的机读原因（status_shipped / dispute_open / test_order / not_found / carrier_tracking_no_required / carrier_too_long / tracking_no_too_long / status_raced / internal 等）'}}}
     OrderNote: {type: object, description: '0.6.42：订单内部备注（迁移 034，append-only）', required: [id, author, body, created_at], properties: {id: {type: string}, author: {type: string, description: '恒为 admin:<id>'}, author_email: {type: string, description: '作者当前邮箱；取不到时省略'}, body: {type: string, maxLength: 1000}, created_at: {type: string, format: date-time}}}
     MoneyByCurrency: {type: object, description: '0.6.41：按币种分行的一笔钱。`amount` 恒为该币种的**最小单位**（JPY=円，USD=分），不折算、不跨币种相加', required: [currency, amount], properties: {currency: {type: string, description: 'ISO 4217，如 JPY / USD'}, amount: {type: integer}}}
     AdminSalesWindow: {type: object, description: '0.6.41：一个窗口（左闭右开，JST 日界）的销售统计', required: [from, to, orders, paid_orders, sales_jpy, received, refunded, disputed], properties: {from: {type: string, format: date-time, description: '含'}, to: {type: string, format: date-time, description: '不含；恒为某个 JST 日的 00:00（今日窗口的 to = 明日 00:00）'}, orders: {type: integer, description: '窗口内创建的订单数（不含测试单）'}, paid_orders: {type: integer, description: '窗口内收款的订单数（paid_at 落窗）'}, sales_jpy: {type: integer, description: '窗口内收款订单的 total_jpy 合计（円）'}, avg_jpy: {type: integer, nullable: true, description: '客单价（円，四舍五入）；窗口内零收款订单时为 **null 而不是 0**'}, received: {type: array, description: '实收：payments 的实扣金额，按扣款币种分行', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, refunded: {type: array, description: '已退：整单退款实际出账（charge − 已成功部分退款，按 refunded_at）+ 部分退款 succeeded 行（按落定时刻），按币种分行（0.6.43 订正）', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, disputed: {type: array, description: '拒付：机构报的 dispute_amount，按开案时间落窗', items: {$ref: '#/components/schemas/MoneyByCurrency'}}}}

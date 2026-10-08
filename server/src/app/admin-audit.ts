@@ -80,10 +80,24 @@ const AUDIT_BEFORE_KEY = 'adminAuditBefore';
 const AUDIT_SKIP_KEY = 'adminAuditSkip';
 const AUDIT_COMMITTED_KEY = 'adminAuditCommitted';
 const AUDIT_TARGET_KEY = 'adminAuditTarget';
+const AUDIT_AFTER_KEY = 'adminAuditAfter';
 
 /** 路由提供"改前值"（只对不可逆操作用，见文件头 @why）。 */
 export function setAuditBefore(res: Response, before: unknown): void {
   res.locals[AUDIT_BEFORE_KEY] = before;
+}
+
+/**
+ * 路由**显式**提供审计的 after（AJ-401）；不调用时 after = 请求体（文件头 @why 的默认口径）。
+ *
+ * @why 批量写（`POST /admin/orders/ship-batch`）允许部分成功：请求体是"要发哪些"，
+ *      而审计要回答的是"**发成了哪些**"。照默认记请求体，一行失败的单也会以"已发货"的面目
+ *      永久留在 append-only 的表里——事后回溯会把失败读成成功（与 markAuditCommitted 防的是同一个方向）。
+ * @why 同样走唯一落库点的 {@link auditPayload}（不在这里脱敏，理由见 @limitation 三：redact 不幂等）。
+ * @limitation 只给"结果与请求不是同一件事"的路由用；普通单对象写操作请求体就是事实，不必调。
+ */
+export function setAuditAfter(res: Response, after: unknown): void {
+  res.locals[AUDIT_AFTER_KEY] = after;
 }
 
 /**
@@ -215,7 +229,8 @@ export function adminAuditMiddleware(deps: {
         // 路由给什么就存什么的话，将来任何一条"改订单"路由传进来的 address_snapshot
         // 会永久锁进 append-only 表（AJ-207 踩过同一个洞，只是当时在 after 上）。
         before: auditPayload(res.locals[AUDIT_BEFORE_KEY]),
-        after: auditPayload(req.body),
+        // AJ-401：路由显式给了 after（批量写的逐单结果）就记它，否则记请求体
+        after: auditPayload(AUDIT_AFTER_KEY in res.locals ? res.locals[AUDIT_AFTER_KEY] : req.body),
         // SEC2-02：把最终状态码一起落库——"提交了但后续失败"与"成功"必须能在同一张表里分开，
         // 否则审计会把一次失败的退款说成成功的（那是比没有审计更坏的方向）。
         statusCode: res.statusCode,

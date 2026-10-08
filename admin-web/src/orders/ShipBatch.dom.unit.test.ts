@@ -1,0 +1,218 @@
+// @vitest-environment jsdom
+/**
+ * 职责：批量发货 / CSV 导入（AJ-401）的**组件接线**用例——勾选 → 抽屉 → 确认（输入单数）→ 请求体 → 逐行结果。
+ *
+ * @why 纯函数（ship-batch.unit.test.ts）全绿也可能接错线：勾了 A 发的是 B、确认框没拦、
+ *      请求体用了 order_no 而不是 order_id——这些只在组件层看得见。
+ * @see ./OrdersPage.tsx；./ShipBatchDrawer.tsx；./CsvShipImport.tsx；./BatchSubmit.tsx
+ */
+import { createElement, useCallback, useState } from 'react';
+import { afterEach, describe, expect, it } from 'vitest';
+import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
+import { OrdersPage } from './OrdersPage.js';
+import { parseHash, type Route } from '../router.js';
+
+interface Call {
+  path: string;
+  method?: string;
+  body?: unknown;
+}
+
+let mounted: Mounted | undefined;
+let calls: Call[];
+/** 设了就让按单号的查询挂起，直到它 resolve（模拟预检在飞）。 */
+let hold: Promise<void> | null = null;
+/** 设了就让批量发货整次失败（模拟 400 / 断网）。 */
+let failBatch = false;
+
+const ORDERS = [
+  {
+    order_id: 'ord_a',
+    order_no: '261007-7K3QXA',
+    status: 'paid',
+    total_jpy: 13750,
+    created_at: '2026-10-07T01:00:00Z',
+  },
+  {
+    order_id: 'ord_b',
+    order_no: '261007-8M2WRD',
+    status: 'paid',
+    total_jpy: 13750,
+    created_at: '2026-10-07T01:00:00Z',
+  },
+  {
+    order_id: 'ord_c',
+    order_no: '261007-9P4TZE',
+    status: 'paid',
+    has_dispute: true,
+    total_jpy: 13750,
+    created_at: '2026-10-07T01:00:00Z',
+  },
+];
+
+function Harness({ initial }: { initial: Route }): React.JSX.Element {
+  const [route, setRoute] = useState<Route>(initial);
+  const onNavigate = useCallback((next: Route) => setRoute(next), []);
+  const api = async (req: Call): Promise<unknown> => {
+    calls.push(req);
+    if (req.method === 'POST' && req.path.endsWith('/ship-batch')) {
+      if (failBatch) throw new Error('一次最多 50 单');
+      const items = (req.body as { items: Array<{ order_id: string }> }).items;
+      const results = items.map((it, i) =>
+        i === 0
+          ? { order_id: it.order_id, ok: true, tracking_recognized: true }
+          : { order_id: it.order_id, ok: false, code: 40909, reason: 'dispute_open', message: 'x' },
+      );
+      return { results, succeeded: 1, failed: results.length - 1 };
+    }
+    const m = /keyword=([^&]+)/.exec(req.path);
+    if (m !== null && hold !== null) await hold;
+    const kw = m?.[1] === undefined ? undefined : decodeURIComponent(m[1]);
+    const items = kw === undefined ? ORDERS : ORDERS.filter((o) => o.order_no === kw);
+    return { items, total: items.length };
+  };
+  return createElement(OrdersPage, { api: api as never, route, onNavigate });
+}
+
+async function open(hash: string): Promise<HTMLElement> {
+  calls = [];
+  mounted = await mount(createElement(Harness, { initial: parseHash(hash) }));
+  return mounted.el;
+}
+
+afterEach(async () => {
+  hold = null;
+  failBatch = false;
+  await mounted?.unmount();
+  mounted = undefined;
+});
+
+const posts = (): Call[] => calls.filter((c) => c.method === 'POST');
+
+async function confirmWith(el: HTMLElement, count: string): Promise<void> {
+  const dialog = el.querySelector('.dialog') as HTMLElement;
+  await type(dialog.querySelector('input'), count);
+  await click(button(dialog, '确认批量发货'));
+}
+
+describe('订单列表「待发货」：勾选批量发货', () => {
+  it('非待发货页签没有勾选列与批量按钮', async () => {
+    const el = await open('#/orders');
+    expect(el.querySelector('input[aria-label="选择 261007-7K3QXA"]')).toBeNull();
+    expect(button(el, '导入运单号（CSV）')).toBeNull();
+  });
+
+  it('🔴 拒付单不能勾；勾两单 → 抽屉每单一行 → 输入单数确认 → 请求体是 order_id，结果按行显示', async () => {
+    const el = await open('#/orders?status=paid');
+    const box = (no: string) =>
+      el.querySelector(`input[aria-label="选择 ${no}"]`) as HTMLInputElement;
+    expect(box('261007-9P4TZE').disabled).toBe(true);
+    await click(box('261007-7K3QXA'));
+    await click(box('261007-8M2WRD'));
+    await click(button(el, '批量发货（2）'));
+    await type(el.querySelector('input[aria-label="统一承运商"]'), 'Japan Post');
+    await type(el.querySelector('input[aria-label="261007-7K3QXA 运单号"]'), 'EJ123456789JP');
+    // 第二单不填运单号 → 该行红、不提交
+    expect(el.textContent).toContain('运单号必填');
+    expect(button(el, '批量发货 1 单')).not.toBeNull();
+    await type(el.querySelector('input[aria-label="261007-8M2WRD 运单号"]'), 'ABC');
+    // 日本邮便却不是 S10 → 黄色提示，不拦
+    expect(el.querySelector('.warn')?.textContent).toContain('形状认不出');
+    await click(button(el, '批量发货 2 单'));
+    // 确认框：单数不对不放行
+    const dialog = el.querySelector('.dialog') as HTMLElement;
+    await type(dialog.querySelector('input'), '1');
+    expect(button(dialog, '确认批量发货')?.disabled).toBe(true);
+    await confirmWith(el, '2');
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.body).toEqual({
+      items: [
+        { order_id: 'ord_a', carrier: 'Japan Post', tracking_no: 'EJ123456789JP' },
+        { order_id: 'ord_b', carrier: 'Japan Post', tracking_no: 'ABC' },
+      ],
+    });
+    const result = el.querySelector('[aria-label="批量发货结果"]')?.textContent ?? '';
+    expect(result).toContain('成功 1 单，失败 1 单');
+    expect(result).toContain('261007-8M2WRD');
+    expect(result).toContain('拒付');
+  });
+});
+
+describe('批量发货整次失败', () => {
+  it('整次失败 → 走页面 Toast（不在抽屉里写行内错误），抽屉不关、可重试', async () => {
+    failBatch = true;
+    const el = await open('#/orders?status=paid');
+    await click(el.querySelector('input[aria-label="选择 261007-7K3QXA"]'));
+    await click(button(el, '批量发货（1）'));
+    await type(el.querySelector('input[aria-label="统一承运商"]'), 'Japan Post');
+    await type(el.querySelector('input[aria-label="261007-7K3QXA 运单号"]'), 'EJ123456789JP');
+    await click(button(el, '批量发货 1 单'));
+    await confirmWith(el, '1');
+    await flush();
+    expect(el.querySelector('.toast-stack')?.textContent).toContain('一次最多 50 单');
+    expect(button(el, '批量发货 1 单')).not.toBeNull();
+  });
+});
+
+describe('导入运单号（CSV）', () => {
+  it('🔴 粘贴 → 预检（按单号查）→ 不存在 / 拒付 / 重复标出 → 只提交干净行', async () => {
+    const el = await open('#/orders?status=paid');
+    await click(button(el, '导入运单号（CSV）'));
+    await type(el.querySelector('input[aria-label="默认承运商"]'), 'EMS');
+    await type(
+      el.querySelector('textarea[aria-label="CSV 内容"]'),
+      '\uFEFF注文番号,追跡番号\r\n261007-7K3QXA,EJ123456789JP\r\n261007-9P4TZE,EJ000000003JP\r\n261007-ZZZZZZ,EJ1\r\n261007-8M2WRD,EJ2\r\n261007-8M2WRD,EJ3\r\n',
+    );
+    await click(button(el, '预检'));
+    await flush();
+    const table = el.querySelector('table[aria-label="预检结果"]')?.textContent ?? '';
+    expect(table).toContain('找不到这个订单号');
+    expect(table).toContain('拒付');
+    expect(table).toContain('同一单号重复出现');
+    // 只有第一行干净
+    await click(button(el, '批量发货 1 单'));
+    await confirmWith(el, '1');
+    expect(posts()[0]?.body).toEqual({
+      items: [{ order_id: 'ord_a', carrier: 'EMS', tracking_no: 'EJ123456789JP' }],
+    });
+  });
+
+  it('表头认不出 → 文件级错误，不发任何查询', async () => {
+    const el = await open('#/orders?status=paid');
+    await click(button(el, '导入运单号（CSV）'));
+    const before = calls.length;
+    await type(el.querySelector('textarea[aria-label="CSV 内容"]'), '收件人,电话\nA,1\n');
+    await click(button(el, '预检'));
+    expect(el.textContent).toContain('表头缺少列');
+    expect(calls.slice(before).filter((c) => c.path.includes('keyword='))).toHaveLength(0);
+  });
+
+  it('改了文本，旧预检作废（必须重新预检才能提交）', async () => {
+    const el = await open('#/orders?status=paid');
+    await click(button(el, '导入运单号（CSV）'));
+    const ta = el.querySelector('textarea[aria-label="CSV 内容"]');
+    await type(ta, 'order_no,carrier,tracking_no\n261007-7K3QXA,EMS,EJ123456789JP\n');
+    await click(button(el, '预检'));
+    expect(button(el, '批量发货 1 单')).not.toBeNull();
+    await type(ta, 'order_no,carrier,tracking_no\n261007-8M2WRD,EMS,EJ123456789JP\n');
+    expect(button(el, '批量发货 1 单')).toBeNull();
+  });
+
+  it('🔴 预检在飞时改了文本：旧预检回来后被丢弃（不把旧文本的结果填回来）', async () => {
+    const el = await open('#/orders?status=paid');
+    await click(button(el, '导入运单号（CSV）'));
+    const ta = el.querySelector('textarea[aria-label="CSV 内容"]');
+    await type(ta, 'order_no,carrier,tracking_no\n261007-7K3QXA,EMS,EJ123456789JP\n');
+    let release = (): void => undefined;
+    hold = new Promise<void>((r) => {
+      release = r;
+    });
+    await click(button(el, '预检'));
+    await type(ta, 'order_no,carrier,tracking_no\n261007-8M2WRD,EMS,EJ123456789JP\n');
+    release();
+    await flush();
+    await flush();
+    expect(el.querySelector('table[aria-label="预检结果"]')).toBeNull();
+    expect(button(el, '批量发货 1 单')).toBeNull();
+  });
+});
