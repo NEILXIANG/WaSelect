@@ -30,6 +30,8 @@ import { createStorage } from './utils/storage.js';
 import { loginAndStore, loginWithWechat, singleFlight } from './utils/auth-session.js';
 import { createCartStore } from './utils/cart-store.js';
 import { resolveApiBase } from './config.js';
+import { newTraceId } from './utils/trace.js';
+import { FLUSH_INTERVAL_MS, beaconHeaders, createBeacon, ensureAnonId } from './utils/beacon.js';
 
 /**
  * token 在本地存储里的键。
@@ -91,6 +93,11 @@ App({
      * @see ../pages/user/index.js（写入侧）；../pages/order/index.js（消费侧）
      */
     orderTab: '',
+    /**
+     * 用户行为埋点（M-21 / AJ-409）：`createBeacon` 的实例；null = 没装（API 地址未配置）。
+     * 页面一律经 `utils/beacon.js` 的 `track(app, …)` 调用，不直接碰它。
+     */
+    beacon: null,
   },
 
   onLaunch() {
@@ -100,7 +107,7 @@ App({
 
     const log = (fields) => {
       if (fields.trace_id) this.globalData.lastTraceId = fields.trace_id;
-      // 当前只用实时日志：ADR-29 的 /beacon 落库上报待 F5 补完
+      // 请求层的运行事件（api_ok / api_failed …）只进实时日志；用户行为五事件走 /beacon 落库（installBeacon，M-21）
       wxApi.getRealtimeLogManager()?.info?.(fields.event ?? 'api', JSON.stringify(fields));
     };
 
@@ -160,6 +167,7 @@ App({
     const relogin = singleFlight(() => loginWithWechat({ wx: wxApi, api: authApi, apiBase }));
 
     const { launchError } = this.globalData;
+    this.installBeacon(wxApi, storage, apiBase, launchError, log);
     this.globalData.api =
       launchError === null
         ? createRequester({
@@ -192,6 +200,45 @@ App({
     if (launchError === null && this.globalData.token === '') {
       void loginOnce('auto_login');
     }
+  },
+
+  /**
+   * 装埋点（M-21 / AJ-409）：队列在 utils/beacon.js，这里只接"怎么发"与"何时发"。
+   * @why 直接用 `wxApi.request` 而**不走** `globalData.api`：后者遇到 40101 会静默重登并重放，
+   *      埋点绝不能触发登录；且后者的失败会进页面错误分层，埋点失败不该被任何页面看见。
+   *      服务端对 beacon 本就不回 401（鉴权可选），这里也不处理响应——发出去即完事。
+   * @why 15 秒链式 setTimeout 冲刷 + 切后台（onHide）全部冲刷：小程序全局白名单只有 setTimeout（见 pay 页 startCountdown）。
+   * @limitation 没配 API 地址时不装（相对 URL 必然失败，且会把排障方向引偏，与自动登录同口径）。
+   */
+  installBeacon(wxApi, storage, apiBase, launchError, log) {
+    if (launchError !== null) return;
+    const beacon = createBeacon({
+      anonId: ensureAnonId(storage),
+      now: () => Date.now(),
+      send: (payload) =>
+        wxApi.request({
+          url: `${apiBase}/api/v1/beacon`,
+          method: 'POST',
+          data: payload,
+          header: beaconHeaders(this.globalData.token, newTraceId()),
+          timeout: 5000,
+          success: () => {},
+          fail: () => {},
+        }),
+      onError: (e) =>
+        log({ event: 'beacon', result: 'send_error', err_msg: e?.message ?? String(e) }),
+    });
+    this.globalData.beacon = beacon;
+    const tick = () => {
+      beacon.flush();
+      setTimeout(tick, FLUSH_INTERVAL_MS);
+    };
+    setTimeout(tick, FLUSH_INTERVAL_MS);
+  },
+
+  /** 切后台：把埋点队列发完（M-21）。 */
+  onHide() {
+    this.globalData.beacon?.flushAll();
   },
 
   /** 写入 token（登录回调与 relogin 调用）。 */

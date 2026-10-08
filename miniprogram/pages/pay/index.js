@@ -47,10 +47,13 @@ import { countdownText } from '../../utils/countdown.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { markExternalPay, recentExternalPay } from '../../utils/external-pay.js';
+import { track } from '../../utils/beacon.js';
 import {
   EXPIRED_CLOSED_TEXT,
   PAY_FAIL_TEXT,
+  abandonOnLeave,
   afterIntent,
+  cashierAbandonReason,
   channelCountry,
   closedScreen,
   copyResult,
@@ -223,6 +226,7 @@ Page({
    *      判断在 `onShowAction`（copylink / 引导屏 / 在途 三种情况不刷新）。
    */
   onShow() {
+    track(app, 'page_view', { page: 'pay' });
     if (this.loaded !== true) return;
     if (this.orderId === '') return;
     const action = onShowAction({
@@ -289,6 +293,17 @@ Page({
   },
 
   onUnload() {
+    // M-21：没付成就离开 = 放弃（back）；判定在 vm（abandonOnLeave）
+    if (
+      abandonOnLeave({
+        orderId: this.orderId,
+        paidAndLeft: this.paidAndLeft === true,
+        closed: this.data.closedText !== '',
+        externalStarted: this.externalStarted === true,
+      })
+    ) {
+      track(app, 'pay_abandon', { order_id: this.orderId, reason: 'back' });
+    }
     if (this.statusTimer !== null) clearTimeout(this.statusTimer);
     this.statusTimer = null;
     this.stopCountdown();
@@ -342,6 +357,7 @@ Page({
     //    必须在 acquire **之前**作废，否则拿到的是旧键。
     if (decision.retireKey) this.intentKey.retire();
     this.lastChannel = decision.channel;
+    track(app, 'pay_start', { order_id: this.orderId, channel: decision.channel });
     const { key } = this.intentKey.acquire();
     void this.startPay(decision.channel, key);
   },
@@ -360,11 +376,22 @@ Page({
       this.run(intent);
     } catch (err) {
       this.setData({ ...errorFields(err) });
+      track(app, 'pay_abandon', { order_id: this.orderId, reason: 'fail' });
       // P2-40：40902 / 40904 多半是这张单已经付了或关了——重查一次，由 payPageView 决定换不换关闭屏
       if (recheckAfterPayError(err?.code)) void this.checkStatus();
     } finally {
       this.setData({ paying: false });
     }
+  },
+
+  /**
+   * 付成之后离开本页（redirectTo），并记下"是付成走的"——onUnload 据此不记放弃（M-21）。
+   * @why 单独成方法而不是在 success 里写块：`requestPayment({...})` 那段由 vm 单测按"到第一个 `});`"截取核对
+   *      success / fail 是否齐全，块体里的 `});` 会把截取提前截断。
+   */
+  leaveAsPaid(url) {
+    this.paidAndLeft = true;
+    wxApi.redirectTo({ url });
   },
 
   /** 按 `payPlan` 的判别联合执行（**不认通道名**，@see 文件头）。 */
@@ -389,22 +416,26 @@ Page({
         //    用户会以为刚才没付上而点它。带上这个标记，详情页在确认前不给出取消与继续支付。
         //    （参数名由 `nav-param-guard` 核对：详情页 `onLoad` 必须真的读它。）
         success: () =>
-          wxApi.redirectTo({
-            url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}&justPaid=1`,
-          }),
+          this.leaveAsPaid(
+            `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}&justPaid=1`,
+          ),
         // @see @limitation 三：取消与失败一视同仁。⚠️ 但不走 errorMessage——
         // 宿主 fail 的形状是 {errMsg}，读出来是 "requestPayment:fail cancel" 这种黑盒文案，
         // 把"用户主动取消"显示成"加载失败"会让人以为付款出了故障。
         // ⚠️ 写进 `payResult` 而不是 `error`（MP3-07）：`error` 会被 `load()` 开头清掉，
         //    而拉起微信收银台会让平台触发 onHide → onShow → reload，
         //    于是"支付未完成，可重新选择支付方式"在用户看到之前就被抹掉了。
-        fail: () => this.setData({ payResult: PAY_FAIL_TEXT }),
+        fail: (err) => {
+          this.setData({ payResult: PAY_FAIL_TEXT });
+          track(app, 'pay_abandon', { order_id: this.orderId, reason: cashierAbandonReason(err) });
+        },
       });
       return;
     }
     if (plan.kind === 'copylink') {
       // 记下"这张单在浏览器里发起过付款"（W-02）：切回来时支付通知往往还没到，
       // 支付页与订单详情据此显示"确认中"，而不是照常给出"继续支付 / 取消订单"。
+      this.externalStarted = true;
       app.globalData.externalPay = markExternalPay(
         app.globalData.externalPay,
         this.orderId,
@@ -421,6 +452,7 @@ Page({
     // ⚠️ auto = 响应到达时订单已 paid（MP3-06）：留下来会同时显示"支付已完成"和还能点的通道，
     //    那是自相矛盾的界面。与微信支付成功同口径——离开这一页，让详情页用服务端数据说话。
     if (leavesAfterAuto(plan)) {
+      this.paidAndLeft = true;
       wxApi.redirectTo({ url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}` });
     }
   },

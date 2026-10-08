@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.49
+  version: 0.6.50
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -536,6 +536,13 @@ info:
          + 可选 `first_image`（ImageSet：**买家下单顺序第一行**商品的现图第一张，生成规则与 `Order.items[].image` 同一函数；
          第一行商品没图、或图按 image_id 存而 IMG_BASE_URL 未配置 → 整键省略，不拿后面行的图顶替）。
       ③ `GET /orders/{id}`（Order）**不变**：不带 item_count / first_image。
+    0.6.50（AJ-409：小程序 M-21 最小用户行为埋点——新增端点，老调用方不受影响）：
+      ① 新增 `POST /beacon`（流 C 用户行为，ADR-29）：一批 1–20 条事件，**白名单事件名**（`BeaconEventName`）+ 每种事件**精确键集**的 props
+         （page_view{page} / add_to_cart{product_id} / checkout_enter{} / pay_start{order_id, channel} / pay_abandon{order_id, reason}），
+         多键、缺键、值不合形状、超 20 条 → 整批 400 / 40001（reason 见端点说明；details 只带 reason 与下标，不回显值）。成功恒 **204**、无响应体。
+      ② **鉴权可选**（`security: []`）：带有效买家 token 记 user_id；无 / 无效 / 封禁 / 版本失效一律降级匿名，**不回 401**（不触发小程序重登）。
+      ③ product_id / order_id 须真实存在，否则该条**丢弃**（同批其余照收，仍 204）；不收任何自由文本（PII 红线，约束七）。
+      ④ 限流：每 IP 每分钟 RATE_LIMIT_QUOTE_PER_MIN（公开写入口同一规则、独立的桶）→ 429 / 42901。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -666,6 +673,20 @@ paths:
         @why 失败**不降级**成 `{banners: []}`：空数组与"取不到"在页面上长得一样，
         吞成空数组等于把一次 DB 故障伪装成"今天没配 banner"，运营会去查配置且永远查不到。
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {banners: {type: array, items: {$ref: '#/components/schemas/Banner'}}, categories: {type: array, items: {type: string}}}}}}}}
+  /beacon:
+    post:
+      security: []
+      summary: 用户行为批量上报（0.6.50 / AJ-409，M-21；流 C → user_events）
+      description: |
+        小程序每 15 秒或攒满 20 条冲刷一次，失败直接丢弃、不重试（埋点有损，不能影响用户流程）。
+        鉴权**可选**：带有效买家 Bearer token 时记 user_id；没有 / 无效 / 被封禁 / 版本失效 → 匿名记录，**不回 401**。
+        `anon_id` 是客户端生成并本地保存的随机串（`an-` + 20 位 Crockford Base32），登录前后都带，用来把同一台设备的漏斗连起来。
+        服务端时间（created_at）为准；`ts` 是客户端时间（epoch 毫秒，只校验形状 2020-01-01～2100-01-01，存进 props.client_ts）。
+        40001 的 reason：beacon_shape（顶层不是对象或多键）/ anon_id_invalid / events_shape（非数组或空）/ events_too_many（> 20）/
+        event_shape（事件多键）/ event_name_invalid / event_ts_invalid / event_props_invalid（缺键、多键或值不合形状）；后四个带 index。
+        product_id / order_id 形状 `[A-Za-z0-9_-]{1,64}` 且须真实存在，不存在的那条丢弃（仍 204）。
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BeaconBatch'}}}}
+      responses: {'204': {description: 已落库（或全部因 id 不存在被丢弃）}, '400': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
   /products:
     get:
       security: []
@@ -1031,6 +1052,33 @@ components:
     OrderStatus: {type: string, enum: [created, pending_payment, paid, shipped, delivered, completed, cancelled, expired, refunding, refunded]}
     OrderCreated: {allOf: [{$ref: '#/components/schemas/Quote'}, {type: object, properties: {order_id: {type: string}, order_no: {type: string}, fx_snapshot: {type: object, properties: {USD: {type: number}, CNY: {type: number}}}, status: {$ref: '#/components/schemas/OrderStatus'}, expires_at: {type: string, format: date-time}}}]}
     OrderSummary: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, total_jpy: {type: integer}, display: {$ref: '#/components/schemas/Display'}, status: {$ref: '#/components/schemas/OrderStatus'}, created_at: {type: string, format: date-time}}}
+    BeaconEventName: {type: string, enum: [page_view, add_to_cart, checkout_enter, pay_start, pay_abandon], description: '0.6.50：事件名白名单（shared BEACON_EVENT；新增事件须同步隐私政策）'}
+    BeaconPage: {type: string, enum: [home, detail, cart, checkout, pay, order, order_detail, user], description: '0.6.50：page_view 的页面键（shared BEACON_PAGE）'}
+    BeaconAbandonReason: {type: string, enum: [back, cancel, fail], description: '0.6.50：pay_abandon 原因——back 离开支付页 / cancel 收银台取消 / fail 发起或收银台失败（shared BEACON_ABANDON_REASON）'}
+    BeaconEvent:
+      type: object
+      additionalProperties: false
+      required: [name, ts]
+      description: '0.6.50：props 按事件名取**精确键集**——page_view {page} / add_to_cart {product_id} / checkout_enter（无 props 或 {}）/ pay_start {order_id, channel} / pay_abandon {order_id, reason}'
+      properties:
+        name: {$ref: '#/components/schemas/BeaconEventName'}
+        ts: {type: integer, format: int64, description: 客户端 epoch 毫秒}
+        props:
+          type: object
+          additionalProperties: false
+          properties:
+            page: {$ref: '#/components/schemas/BeaconPage'}
+            product_id: {type: string, pattern: '^[A-Za-z0-9_-]{1,64}$'}
+            order_id: {type: string, pattern: '^[A-Za-z0-9_-]{1,64}$'}
+            channel: {type: string, description: 'x-payment-channels 登记的 key'}
+            reason: {$ref: '#/components/schemas/BeaconAbandonReason'}
+    BeaconBatch:
+      type: object
+      additionalProperties: false
+      required: [anon_id, events]
+      properties:
+        anon_id: {type: string, pattern: '^an-[0-9A-HJKMNP-TV-Z]{20}$'}
+        events: {type: array, minItems: 1, maxItems: 20, items: {$ref: '#/components/schemas/BeaconEvent'}}
     OrderListItem: {description: '0.6.49（AJ-408）：买家 GET /orders 的列表行', allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, required: [item_count], properties: {item_count: {type: integer, minimum: 0, description: '各行 qty 之和（共 N 件），不是行数'}, first_image: {$ref: '#/components/schemas/ImageSet', description: '买家下单顺序第一行商品的现图第一张（同 Order.items[].image 的生成规则）；没有 → 整键省略'}}}]}
     Order: {allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, properties: {contact_email: {type: string, format: email, description: '可选收货通知邮箱（D-42 补入）'}, terms_version: {type: string, description: '建单时写入的条款版本（只读，D-43）'}, items: {type: array, items: {$ref: '#/components/schemas/OrderItem'}}, address: {$ref: '#/components/schemas/Address'}, items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer, nullable: true, description: '0.6.30：null = 无法估算（与 Quote.duty_jpy 同口径；此前存 0）'}, expires_at: {type: string, format: date-time}, carrier: {type: string}, tracking_no: {type: string}, tracking_url: {type: string, description: '0.6.32：官方查件链接（日本邮便 S10 单号或承运商为日本邮便时生成，locale=en）；认不出 → 整键省略'}, timeline: {type: array, description: '0.6.10：只含订单状态值（OrderStatus 10 态）；管理事件只在 AdminOrder.events', items: {type: object, properties: {status: {type: string}, at: {type: string, format: date-time}}}}, payment: {type: object, properties: {channel: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer, description: '**最小货币单位**（JPY=円，USD=分）：$86.00 存 8600。展示层必须除以 10^小数位（B43 / AJ-214）'}, paid_amount: {type: integer}, paid_currency: {type: string}}}, late_paid: {type: boolean, description: '0.6.37（P2-11 / AJ-386）：关单后才到的付款（钱已扣）。买家侧据此说"已收到付款，会原路退回"，而不是"未完成付款，请重新下单"'}, partial_refunds: {type: array, description: '0.6.37（P2-12 / AJ-386）：买家视角的部分退款（按发起顺序；没有时为空数组）。AdminOrder 覆盖为带原因 / 操作人的 PartialRefund[]', items: {$ref: '#/components/schemas/BuyerPartialRefund'}}}}]}
     BuyerPartialRefund: {type: object, description: '0.6.37（P2-12）：买家可见的一笔部分退款。只出成功与处理中（initiated / pending / unknown 折成 pending；failed 不出现——钱没动）；**不含** reason / actor / provider_ref（内部信息）。status 不设 enum：AdminOrder 经 allOf 继承本字段，管理端行的 status 是五值', required: [status, currency, amount_minor, created_at], properties: {status: {type: string, description: 'succeeded | pending'}, currency: {type: string}, amount_minor: {type: integer, description: '支付币种最小单位'}, created_at: {type: string, format: date-time}, settled_at: {type: string, format: date-time}}}

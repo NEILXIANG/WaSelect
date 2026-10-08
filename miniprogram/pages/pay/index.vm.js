@@ -303,3 +303,31 @@ export function payStartDecision(args) {
   const last = typeof a.lastChannel === 'string' ? a.lastChannel : '';
   return { kind: 'start', channel, retireKey: last !== '' && last !== channel };
 }
+
+/**
+ * 收银台 `fail` → 埋点 `pay_abandon.reason`（M-21 / AJ-409）。
+ * @why 只分 cancel / fail 两档：宿主 fail 的 errMsg 是黑盒文案，用户主动取消的形态是含 `cancel`
+ *      （本页 `run()` 注释里记的 "requestPayment:fail cancel"）；其余一律算失败。
+ * @limitation 【未实测：无 AppID 不能真机拉起收银台】errMsg 的确切形态只来自官方文档描述；
+ *             若真机上取消不含 `cancel`，后果只是取消被记成 fail（统计口径偏，不影响用户）。
+ * @param {unknown} err 宿主 fail 回调的入参
+ * @returns {'cancel'|'fail'}
+ */
+export function cashierAbandonReason(err) {
+  const msg =
+    err !== null && typeof err === 'object' && typeof err.errMsg === 'string' ? err.errMsg : '';
+  return /cancel/i.test(msg) ? 'cancel' : 'fail';
+}
+
+/**
+ * 离开支付页（onUnload）时要不要记一次 `pay_abandon(back)`（M-21 / AJ-409）。
+ * @param {{orderId?: string, paidAndLeft?: boolean, closed?: boolean, externalStarted?: boolean} | undefined} args
+ *   `paidAndLeft` 付成 / auto 之后由本页自己 redirect 离开；`closed` 页面已是关闭屏（已付 / 已关 / 到点）；
+ *   `externalStarted` 本次在浏览器里发起过付款（copylink：多半是去付了，不算放弃）。
+ * @limitation copylink 之后用户其实没去付、直接走了，记不到 back——宁可漏记，不把"去浏览器付款"误记成放弃。
+ */
+export function abandonOnLeave(args) {
+  const a = args && typeof args === 'object' ? args : {};
+  if (typeof a.orderId !== 'string' || a.orderId === '') return false;
+  return a.paidAndLeft !== true && a.closed !== true && a.externalStarted !== true;
+}

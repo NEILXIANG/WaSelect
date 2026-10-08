@@ -27,6 +27,7 @@ import { ORDER_TABS } from '../../utils/order-tabs.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
 import { supportRows } from '../../utils/support.js';
+import { track } from '../../utils/beacon.js';
 
 const app = getApp();
 
@@ -76,6 +77,7 @@ Page({
   },
 
   onShow() {
+    track(app, 'page_view', { page: 'user' }); // M-21 页面曝光
     // @see @limitation 二：token 可能在别处被刷新，每次进屏重读
     this.retryFailed = false;
     this.renderLogin();

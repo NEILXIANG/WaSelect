@@ -29,6 +29,40 @@ export const TERMINAL_ORDER_STATUS = ['completed', 'cancelled', 'expired', 'refu
 export const PAYMENT_CHANNEL = ['mock', 'wechat', 'stripe'] as const;
 export type PaymentChannel = (typeof PAYMENT_CHANNEL)[number];
 
+/**
+ * 用户行为埋点（流 C，M-21 / AJ-409）：`POST /beacon` 接收的事件名白名单。
+ *
+ * @why 白名单而不是"任意事件名"：事件名是**查询面**（转化漏斗按它分组），也是 PII 的潜在入口——
+ *      允许任意字符串，客户端一个 bug 就能把手机号当事件名写进库。新增事件 = 改这里 + 契约 + 隐私政策。
+ * @see contracts/api-contract.yaml `BeaconEventName`（check-contract 双向比对）；
+ *      miniprogram/utils/beacon.js（小程序侧同名常量，由其单测绑回本表）
+ */
+export const BEACON_EVENT = [
+  'page_view',
+  'add_to_cart',
+  'checkout_enter',
+  'pay_start',
+  'pay_abandon',
+] as const;
+export type BeaconEvent = (typeof BEACON_EVENT)[number];
+
+/** `page_view` 的页面键白名单（页面键而不是路径：路径带 query，query 里可能有 id 以外的东西）。 */
+export const BEACON_PAGE = [
+  'home',
+  'detail',
+  'cart',
+  'checkout',
+  'pay',
+  'order',
+  'order_detail',
+  'user',
+] as const;
+export type BeaconPage = (typeof BEACON_PAGE)[number];
+
+/** `pay_abandon` 的原因：back（离开支付页）/ cancel（收银台取消）/ fail（发起或收银台失败）。 */
+export const BEACON_ABANDON_REASON = ['back', 'cancel', 'fail'] as const;
+export type BeaconAbandonReason = (typeof BEACON_ABANDON_REASON)[number];
+
 /** 币种：JPY 是唯一定价锚与记账币；其余只作展示与扣款。 */
 export const CURRENCY = ['JPY', 'CNY', 'USD'] as const;
 export type Currency = (typeof CURRENCY)[number];

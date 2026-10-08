@@ -13,7 +13,9 @@ import {
   EMPTY_GUIDE,
   PAY_FAIL_TEXT,
   UNKNOWN_STATUS_TEXT,
+  abandonOnLeave,
   afterIntent,
+  cashierAbandonReason,
   channelCountry,
   closedScreen,
   copyResult,
@@ -514,5 +516,23 @@ describe('recheckAfterPayError：发起支付被拒后要不要重查订单（P2
     for (const c of [40001, 50300, -1, undefined, '40902']) {
       expect(recheckAfterPayError(c), String(c)).toBe(false);
     }
+  });
+});
+
+describe('埋点：放弃支付的判定（M-21 / AJ-409）', () => {
+  it('收银台 fail：errMsg 含 cancel → cancel；其余（含没有 errMsg）→ fail', () => {
+    expect(cashierAbandonReason({ errMsg: 'requestPayment:fail cancel' })).toBe('cancel');
+    expect(cashierAbandonReason({ errMsg: 'requestPayment:fail (detail message)' })).toBe('fail');
+    expect(cashierAbandonReason(undefined)).toBe('fail');
+  });
+
+  it('离开支付页：只有"单还能付、没付成离开、也没去浏览器付"才算 back', () => {
+    const base = { orderId: 'ord-1', paidAndLeft: false, closed: false, externalStarted: false };
+    expect(abandonOnLeave(base)).toBe(true);
+    expect(abandonOnLeave({ ...base, paidAndLeft: true })).toBe(false);
+    expect(abandonOnLeave({ ...base, closed: true })).toBe(false);
+    expect(abandonOnLeave({ ...base, externalStarted: true })).toBe(false);
+    expect(abandonOnLeave({ ...base, orderId: '' })).toBe(false);
+    expect(abandonOnLeave(undefined)).toBe(false);
   });
 });

@@ -31,6 +31,7 @@ import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
+import { track } from '../../utils/beacon.js';
 
 const app = getApp();
 
@@ -71,6 +72,7 @@ Page({
   },
 
   onShow() {
+    track(app, 'page_view', { page: 'order' }); // M-21 页面曝光
     // @limitation 四：「我的」四入口留下的一次性意图——读走即清空
     const intent = app.globalData.orderTab;
     if (typeof intent === 'string' && intent !== '') {

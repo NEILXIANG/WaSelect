@@ -33,6 +33,7 @@ import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { supportRows } from '../../utils/support.js';
+import { track } from '../../utils/beacon.js';
 
 const app = getApp();
 
@@ -98,6 +99,7 @@ Page({
    * 进屏刷新购买栏的购物车件数（M-13）：从购物车返回本页不触发 onLoad，只看 onLoad 件数会停在旧值。
    */
   onShow() {
+    track(app, 'page_view', { page: 'detail' }); // M-21 页面曝光
     this.renderBar();
   },
 
@@ -153,6 +155,8 @@ Page({
     });
     // ⚠️ 只提示、不跳走：加购后自动跳购物车会打断"继续逛"——用户自己点"去购物车"
     // P2-31：品种已满时 `added=false` + 说明，不假装加上了
+    // M-21：只记真的加上了的（品种已满时 added=false，不算一次加购）
+    if (result?.added === true) track(app, 'add_to_cart', { product_id: this.productId });
     this.setData(addFeedback(result));
     this.renderBar();
   },

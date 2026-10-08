@@ -32,6 +32,7 @@ import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { recentExternalPay } from '../../utils/external-pay.js';
 import { supportRows } from '../../utils/support.js';
+import { track } from '../../utils/beacon.js';
 
 const app = getApp();
 
@@ -106,6 +107,7 @@ Page({
   },
 
   onShow() {
+    track(app, 'page_view', { page: 'order_detail' }); // M-21 页面曝光
     if (this.orderId !== '') void this.load();
   },
 

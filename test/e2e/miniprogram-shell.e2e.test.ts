@@ -52,7 +52,7 @@ let server: StartedServer;
 let base = '';
 let sink: MemorySink;
 
-/** 埋点出口：ADR-29 流 C 的用户行为。/beacon 上报未接（request.js @limitation 三），先在这里收着断言。 */
+/** 请求层运行事件出口（`deps.log`：api_ok / api_failed …，只进实时日志）；用户行为五事件另走 /beacon（utils/beacon.js，M-21），不经这里。 */
 let beacons: Array<Record<string, unknown>>;
 let api: ReturnType<typeof createRequester>;
 let token = '';

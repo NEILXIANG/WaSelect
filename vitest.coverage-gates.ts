@@ -189,6 +189,13 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
 
   // ── 脱敏：漏一行就是个人信息进日志 ──
   'server/src/redact.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  // AJ-409：埋点入口的准入（白名单 + 精确键集）——匿名可达，放过一个自由文本键就是 PII 进 user_events
+  'server/src/domain/beacon-input.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
   // AJ-404：设置页白名单——这里多一项就可能把密钥送进后台页面
   'server/src/app/settings-view.ts': {
     lines: 100,

@@ -127,6 +127,10 @@ const ENUM_TO_CONTRACT_KEY = {
   // D-59：不再指向 schema 里的 `channel` enum（那已是任意字符串），改指向顶层登记表。
   PAYMENT_CHANNEL: 'x-payment-channels',
   COMPLIANCE_TAG: 'compliance_tags: {type: array, items',
+  // 0.6.50（AJ-409）：埋点三张白名单——事件名、页面键、放弃原因
+  BEACON_EVENT: 'BeaconEventName',
+  BEACON_PAGE: 'BeaconPage',
+  BEACON_ABANDON_REASON: 'BeaconAbandonReason',
 };
 
 const sharedEnums = parseSharedEnums(enumsSrc);

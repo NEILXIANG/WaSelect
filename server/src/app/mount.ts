@@ -57,6 +57,7 @@ import { rateLimiter, rateLimitRules } from './rate-limit.js';
 import { mountQuoteRoutes } from './quote-routes.js';
 import { mountProductRoutes } from './product-routes.js';
 import { mountHomeRoutes } from './home-routes.js';
+import { mountBeaconRoutes } from './beacon-routes.js';
 import { mountAdminProductRoutes } from './admin-product-routes.js';
 import { mountAdminOrderRoutes } from './admin-order-routes.js';
 import { mountAdminShipBatchRoutes } from './admin-ship-batch-routes.js';
@@ -323,6 +324,19 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
   // ── 首页聚合（I2 / D-51）：免鉴权，banner 生效判定走**注入的 clock**（F10）——
   //    与 product-routes 同一条理由：它是产品接口不是脚手架，全环境挂载 ──
   mountHomeRoutes(app, { db, clock, config, logger });
+
+  // ── 用户行为上报（流 C / ADR-29；M-21 / AJ-409）：匿名可达（鉴权可选，见 beacon-routes.ts @why），
+  //    所以限流挂在它前面（公开写入口同一规则、独立的桶）；全环境挂载——埋点不是脚手架 ──
+  app.use(
+    '/api/v1/beacon',
+    rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('beacon')),
+  );
+  mountBeaconRoutes(app, {
+    db,
+    logger,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+  });
 
   // ── 管理端操作审计（流 B / ADR-29；F-02 / AJ-183）：**先于**所有管理端路由挂在 /api/v1/admin 前缀上——
   //    新增的管理端写路由自动被审计（admin-audit.ts @why）；挂在后面的话，前面那些路由就漏了 ──

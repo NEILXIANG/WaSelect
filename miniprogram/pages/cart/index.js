@@ -43,6 +43,7 @@ import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
+import { track } from '../../utils/beacon.js';
 
 const app = getApp();
 
@@ -108,6 +109,7 @@ Page({
   },
 
   onShow() {
+    track(app, 'page_view', { page: 'cart' }); // M-21 页面曝光
     this.refresh();
     // S5：注入底部 tabBar 的高亮（本页是第 1 个 tab）。
     // @why 与取数**并列**而不是放进 refresh：refresh 也会被结算成功后调用，

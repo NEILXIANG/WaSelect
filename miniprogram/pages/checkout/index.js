@@ -51,6 +51,7 @@ import { errorFields } from '../../utils/error-text.js';
 import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+import { track } from '../../utils/beacon.js';
 
 const app = getApp();
 
@@ -141,6 +142,7 @@ Page({
 
   /** @param {{mode?: string}} [options] 详情页"立即购买"带 `?mode=buynow` 进来 */
   onLoad(options) {
+    track(app, 'checkout_enter'); // M-21：进结算（每个页面实例一次；onShow 的回访不重复记）
     this.alive = true;
     this.traceId = newTraceId();
     this.intentKey = createIntentIdempotency();
@@ -164,6 +166,7 @@ Page({
   },
 
   onShow() {
+    track(app, 'page_view', { page: 'checkout' }); // M-21 页面曝光
     void this.refresh();
   },
 

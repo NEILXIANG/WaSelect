@@ -25,9 +25,9 @@
  *              测试注入 `createWxApi({ request })`，生产不传就走真实宿主。
  *              这也是"只有第三方才 mock"的边界——`wx` 是宿主能力，
  *              业务代码不为可测性抽象自己的 HTTP 接口，但**宿主本身**要有且只有一个入口。
- * @limitation 三：埋点只走 `deps.log`（默认用封装里的 `getRealtimeLogManager`）。
- *              ADR-29 要求的 `/beacon` 落库上报尚未接入（F5 补完时接），
- *              在此之前小程序端行为只有实时日志，不上报到我们自己的库。
+ * @limitation 三：本模块的运行事件（api_ok / api_failed …）只走 `deps.log`（默认 `getRealtimeLogManager`），
+ *              **不**上报 `/beacon`：那是请求层排障信息，不是用户行为。用户行为五事件（页面曝光 / 加购 / 进结算 /
+ *              发起支付 / 放弃支付）由 `utils/beacon.js` 单独上报落库（M-21 / AJ-409）。
  *
  * @see packages/shared/src/errors.ts（码与 action）；ADR-29（流 C 用户行为）；./wx-api.js（宿主入口）
  */

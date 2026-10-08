@@ -42,6 +42,7 @@ import {
 } from './index.vm.js';
 import { newTraceId } from '../../utils/trace.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
+import { track } from '../../utils/beacon.js';
 
 const app = getApp();
 
@@ -134,6 +135,7 @@ Page({
    *      件数角标改由 tabBar 购物车格显示（utils/tabs.js setCartBadge），首屏多出一行商品位。
    */
   onShow() {
+    track(app, 'page_view', { page: 'home' }); // M-21 页面曝光
     // S5：注入底部 tabBar 的高亮（本页是第 0 个 tab）。
     // @why 必须每次进屏都注入：从别的 tab 切回来会触发 onShow 而不触发 onLoad，
     //      只在 onLoad 注的表现是"切回首页、高亮还停在上一页"。
