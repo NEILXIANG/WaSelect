@@ -67,6 +67,8 @@ import { mountSalesPauseRoutes, salesOpenGuard } from './sales-pause.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAdminBannerRoutes } from './admin-banner-routes.js';
 import { mountAdminRiskRoutes } from './admin-risk-routes.js';
+import { mountAdminCustomerRoutes } from './admin-customer-routes.js';
+import { mountAdminSettingsRoutes } from './admin-settings-routes.js';
 import { mountAdminUploadRoutes } from './admin-upload-routes.js';
 import { mountAddressRoutes } from './address-routes.js';
 import { mountOrderRoutes } from './order-routes.js';
@@ -169,6 +171,7 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     registered: registeredChannels,
     offline: offlineChannels,
     attrSources: channelAttrSources,
+    channels: channelSummaries,
   } = buildPaymentRegistry(
     config,
     {
@@ -450,6 +453,24 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     // B28 / AJ-213：拉黑连带取消在途单并发 `order.cancelled`（作废机构会话）
     events,
     clock,
+  });
+
+  // ── 管理端客户（AJ-404）：只读列表 + 详情；拉黑 / 解除复用上面风控的 /admin/users/{id}/block|unblock ──
+  mountAdminCustomerRoutes(app, {
+    db,
+    logger,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+  });
+  // ── 管理端设置（AJ-404）：当前生效的非密钥配置，只读。通道属性用**装配产物**（与 /pay/channels 同一份）──
+  mountAdminSettingsRoutes(app, {
+    db,
+    logger,
+    config,
+    clock,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+    channels: channelSummaries,
   });
 
   // ── 开发期本地图片（三端联动模拟 2026-10-08）：fs 驱动落盘的图由 API 进程直接提供，仅 development ──

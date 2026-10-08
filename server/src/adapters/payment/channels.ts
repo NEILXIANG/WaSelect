@@ -150,6 +150,23 @@ export interface PaymentAssembly {
    * 这份清单必须在启动日志里可见——"下线通道的在途订单还活着"是运营事实，不该静默。
    */
   offline: string[];
+  /**
+   * 每个已装配通道的**生效属性**（不含 `options`——那里是密钥）。AJ-404：管理端「设置」页只读展示用。
+   * @why 由装配处产出而不是让设置页自己再按"表 > 内置 > 兜底"算一遍：
+   *      两处各算一次优先级，改了一处另一处就会对运营**说谎**（页面显示的不是实际在用的）。
+   */
+  channels: ChannelSummary[];
+}
+
+/** 一个通道的生效属性（`ChannelConfig` 去掉 `options` 与 `icon`，加上属性来源）。 */
+export interface ChannelSummary {
+  channel: string;
+  enabled: boolean;
+  priority: number;
+  label: string;
+  countries: readonly string[];
+  currencies: readonly string[];
+  attrsSource: ChannelAttrSource;
 }
 
 /**
@@ -194,6 +211,7 @@ export function buildPaymentRegistry(
 
   const fromTable = new Map((channelRows ?? []).map((r) => [r.channel, r]));
   const attrSources: Record<string, ChannelAttrSource> = {};
+  const channels: ChannelSummary[] = [];
   const configs: ChannelConfig[] = [...names].map((channel) => {
     const row = fromTable.get(channel);
     const builtin = CHANNEL_DEFAULTS[channel];
@@ -205,7 +223,19 @@ export function buildPaymentRegistry(
      *      日志里写的仍是 `table`，而实际用的是内置值——"接线生效"这个结论
      *      就成了一句谁也证伪不了的话。用对象同一性判定，两者不可能不一致。
      */
-    attrSources[channel] = base === row ? 'table' : base === builtin ? 'builtin' : 'fallback';
+    const source: ChannelAttrSource =
+      base === row ? 'table' : base === builtin ? 'builtin' : 'fallback';
+    attrSources[channel] = source;
+    // AJ-404：设置页用的生效属性，与 attrSources 同一处算（显式挑字段，不带 options——那里是密钥）
+    channels.push({
+      channel,
+      enabled: listed.has(channel),
+      priority: base.priority,
+      label: base.label,
+      countries: base.countries,
+      currencies: base.currencies,
+      attrsSource: source,
+    });
     return {
       channel,
       // 在 `PAYMENT_CHANNELS` 里出现 = 开放新单；不在 = 只保留在途订单的回调/退款（@limitation 三）
@@ -254,7 +284,7 @@ export function buildPaymentRegistry(
   for (const ch of registered) registry.getForCallback(ch);
 
   const offline = registered.filter((c) => !listed.has(c));
-  return { registry, registered, offline, attrSources };
+  return { registry, registered, offline, attrSources, channels };
 }
 
 /**

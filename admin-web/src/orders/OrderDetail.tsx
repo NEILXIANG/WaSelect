@@ -23,6 +23,7 @@ import { formatJst, moneyText } from '../format.js';
 import { OrderActions } from './OrderActions.js';
 import { OrderItems } from './OrderItems.js';
 import { OrderTimeline } from './OrderTimeline.js';
+import { OrderCustomerCard } from './OrderCustomerCard.js';
 import { Badge } from '../ui/badge.js';
 import { detailBadges } from './badges.js';
 import { addressSummary, isDisputeLocked, paymentSummary, statusText } from './view.js';
@@ -161,7 +162,9 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 onChanged={onChanged}
               />
 
-              {/* 以下全是只读：联系邮箱 / 收货地址 / 风险状态 */}
+              {/* 以下全是只读：客户 / 联系邮箱 / 收货地址 / 风险状态 */}
+              {/* 客户卡片（AJ-404，§4.2 第 168 行）：历史单数 + 累计实付 + 进客户页 */}
+              <OrderCustomerCard order={order} />
               {/* 联系邮箱（三端联动 UI 模拟 2026-10-08：客服要联系买家时原先只能去库里查） */}
               <div className="field">
                 <span className="label">联系邮箱</span>

@@ -19,6 +19,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { CUSTOMER_PAGE_SIZE_DEFAULT, CUSTOMER_PAGE_SIZE_MAX } from './domain/customer-query.js';
 import { describe, expect, it } from 'vitest';
 import {
   ORDER_NOTE_MAX_LENGTH,
@@ -159,6 +160,15 @@ describe('契约的输入上限与 shared 常量一致', () => {
       expect(kw, `${path} 没有声明 keyword 参数`).toBeDefined();
       expect(kw?.maxLength, `${path} 的 keyword.maxLength`).toBe(SEARCH_KEYWORD_MAX_LENGTH);
     }
+  });
+
+  it('GET /admin/customers 的 keyword.maxLength / size.maximum 与实现常量一致（0.6.47 / AJ-404）', () => {
+    const kw = queryParam('/admin/customers', 'get', 'keyword');
+    expect(kw?.maxLength).toBe(SEARCH_KEYWORD_MAX_LENGTH);
+    const size = queryParam('/admin/customers', 'get', 'size') as
+      { maximum?: number; default?: number } | undefined;
+    expect(size?.maximum).toBe(CUSTOMER_PAGE_SIZE_MAX);
+    expect(size?.default).toBe(CUSTOMER_PAGE_SIZE_DEFAULT);
   });
 
   it('POST /admin/orders/{id}/refund 的 reason.maxLength == REFUND_REASON_MAX_LENGTH', () => {

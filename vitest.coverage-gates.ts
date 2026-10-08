@@ -153,6 +153,14 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
     statements: 100,
   },
 
+  // AJ-404：客户列表的分页 / 关键字判定——放过一个越界 size 就是一次拖全表
+  'server/src/domain/customer-query.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
+
   // ── 幂等与回调登记：重复扣款、重复落账的最后一道闸 ──
   'server/src/adapters/idempotency.ts': {
     lines: 100,
@@ -181,4 +189,11 @@ export const COVERAGE_THRESHOLDS: Record<string, number | Record<string, number>
 
   // ── 脱敏：漏一行就是个人信息进日志 ──
   'server/src/redact.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+  // AJ-404：设置页白名单——这里多一项就可能把密钥送进后台页面
+  'server/src/app/settings-view.ts': {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  },
 };

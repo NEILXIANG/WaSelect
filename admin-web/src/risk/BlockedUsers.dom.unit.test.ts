@@ -44,6 +44,13 @@ describe('BlockedUsers', () => {
     expect(el.textContent).toContain('没有被拉黑的用户');
   });
 
+  it('AJ-404：每行带「客户详情」链接（拉黑 / 解除的主入口已挪到客户页，风控页保留）', async () => {
+    const items = [{ id: 'u-9', blocked_at: '2026-10-06T03:00:00Z', order_count: 2 }];
+    mounted = await mount(createElement(BlockedUsers, { api: (async () => ({ items })) as never }));
+    const a = [...mounted.el.querySelectorAll('a')].find((x) => x.textContent === '客户详情');
+    expect(a?.getAttribute('href')).toBe('#/customers/u-9');
+  });
+
   it('P2-47 正好 200 行（服务端上限）→ 标题说"最多显示 200 条"，不暗示总数', async () => {
     const items = Array.from({ length: 200 }, (_, i) => ({
       id: `u-${i}`,

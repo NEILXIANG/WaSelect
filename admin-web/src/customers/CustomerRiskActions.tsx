@@ -1,0 +1,123 @@
+/**
+ * 职责：客户详情页的**拉黑 / 解除**（AJ-404：从风控页挪过来的主入口；风控页保留原入口）。
+ *
+ * @why 复用 `risk/api.ts` 的 `blockUser` / `unblockUser`：服务端是同一对接口（连带取消在途单、作废身份缓存都在那边），
+ *      前端再包一份就会出现"两个入口发的请求体不一样"。
+ * @why 这里拉黑**不带 order_id**：风控页带它，是为了核对"拒付那一单属于这个人"（ADM3-01）；
+ *      客户页是从人出发的，没有"哪一单"可核——硬塞一张单号反而是在伪造凭据。
+ * @why 成功后让父组件**重新取详情**（`onChanged`），不在本地把 blocked 翻成 true：以服务端为准（与订单详情 @limitation 一同口径）。
+ * @limitation 解除原因必填、进审计（服务端 releaseReasonGuard）；这里只挡"空着"，长度上限复用 ADMIN_NOTE_MAX_LENGTH。
+ * @see ../risk/RiskPage.tsx；../risk/BlockedUsers.tsx（同一套确认弹层与 Toast）
+ */
+import { useState } from 'react';
+import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
+import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
+import { toastError, type ToastSink } from '../ui/toast.js';
+import { blockUser, unblockUser } from '../risk/api.js';
+import type { AdminApi } from './api.js';
+import { CUSTOMER_BLOCK_CONFIRM_TEXT } from './view.js';
+
+export interface CustomerRiskActionsProps {
+  api: AdminApi;
+  userId: string;
+  blocked: boolean;
+  sink: ToastSink;
+  onChanged: () => Promise<unknown>;
+}
+
+export function CustomerRiskActions({
+  api,
+  userId,
+  blocked,
+  sink,
+  onChanged,
+}: CustomerRiskActionsProps) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [dialog, setDialog] = useState<(ConfirmSpec & { run: () => Promise<void> }) | null>(null);
+
+  const run = async (fn: () => Promise<void>, done: string, fail: string): Promise<void> => {
+    setBusy(true);
+    try {
+      await fn();
+      setDialog(null);
+      await onChanged();
+      sink.success(done);
+    } catch (e) {
+      setDialog(null);
+      const { text, traceId } = toastError(e, fail);
+      sink.error(text, { traceId });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const askBlock = (): void =>
+    setDialog({
+      title: '拉黑会进审计台账，客户此后无法下单',
+      body: `${CUSTOMER_BLOCK_CONFIRM_TEXT}\n\n客户 ${userId}`,
+      confirmText: '确认拉黑',
+      danger: true,
+      run: () =>
+        run(
+          () => blockUser(api, { userId }),
+          `已拉黑 ${userId}：此后无法下单；其名下未付款订单已一并取消`,
+          '拉黑失败',
+        ),
+    });
+
+  const askUnblock = (): void => {
+    const r = reason.trim();
+    if (r === '') {
+      sink.error('请填写解除原因（进审计台账）');
+      return;
+    }
+    setDialog({
+      title: '解除后对方重新登录即可下单',
+      body: `客户 ${userId}。拉黑时被取消的订单不会恢复（库存已回补，恢复会超卖），买家需重新下单。解除原因会进审计台账。`,
+      confirmText: '确认解除',
+      danger: true,
+      run: () =>
+        run(
+          async () => {
+            await unblockUser(api, userId, r);
+            setReason('');
+          },
+          `已解除 ${userId} 的拉黑：对方重新登录即可下单`,
+          '解除拉黑失败',
+        ),
+    });
+  };
+
+  return (
+    <div className="form">
+      {blocked ? (
+        <>
+          <input
+            className="input"
+            name="customer-unblock-reason"
+            placeholder="例：客服核实为误拉黑（进审计台账）"
+            maxLength={ADMIN_NOTE_MAX_LENGTH}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+          <button type="button" className="btn btn-danger" disabled={busy} onClick={askUnblock}>
+            解除拉黑
+          </button>
+        </>
+      ) : (
+        <button type="button" className="btn btn-danger" disabled={busy} onClick={askBlock}>
+          拉黑该客户
+        </button>
+      )}
+      {dialog !== null && (
+        <ConfirmDialog
+          spec={dialog}
+          busy={busy}
+          onConfirm={() => void dialog.run()}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+    </div>
+  );
+}

@@ -72,7 +72,7 @@ afterEach(async () => {
 });
 
 describe('App：侧栏', () => {
-  it('七个一级页都在侧栏里，工作台在最前（新增页面忘挂 = 没人能点进去）', async () => {
+  it('九个一级页都在侧栏里，工作台在最前（新增页面忘挂 = 没人能点进去）', async () => {
     const el = await open('#/orders');
     const labels = [...el.querySelectorAll('.sidebar .nav-item')].map((b) =>
       (b.textContent ?? '').trim(),
@@ -80,11 +80,13 @@ describe('App：侧栏', () => {
     expect(labels).toEqual([
       '工作台',
       '订单管理',
+      '客户',
       '商品管理',
       '运营配置',
       '首页 Banner',
       '风控',
       '运营日志',
+      '设置',
     ]);
   });
 
@@ -119,6 +121,20 @@ describe('App：地址栏 → 页面（刷新 / 分享 / 后退都要成立）',
     const el = await open('#/nope');
     expect(location.hash).toBe('#/nope');
     expect(el.querySelector('.sidebar .nav-item-on')?.textContent?.trim()).toBe('工作台');
+  });
+
+  it('#/customers/:id 打开即客户详情（订单详情与风控页的「客户」链接打到这里，AJ-404）', async () => {
+    const el = await open('#/customers/u-1');
+    expect(heading(el)).toBe('客户详情');
+    expect(requested.some((u) => u.endsWith('/api/v1/admin/customers/u-1'))).toBe(true);
+    await goHash('#/customers');
+    expect(heading(el)).toBe('客户');
+  });
+
+  it('#/settings 打开即设置页（只读，AJ-404）', async () => {
+    const el = await open('#/settings');
+    expect(heading(el)).toBe('设置');
+    expect(requested.some((u) => u.endsWith('/api/v1/admin/settings'))).toBe(true);
   });
 
   it('#/dashboard 打开即工作台（HOME_PAGE）', async () => {

@@ -38,6 +38,8 @@ import { BannersPage } from './banners/BannersPage.js';
 import { DashboardPage } from './dashboard/DashboardPage.js';
 import { OrdersPage } from './orders/OrdersPage.js';
 import { RiskPage } from './risk/RiskPage.js';
+import { CustomersPage } from './customers/CustomersPage.js';
+import { SettingsPage } from './settings/SettingsPage.js';
 import { OpsLogPage } from './opslog/OpsLogPage.js';
 import { OpsPage } from './ops/OpsPage.js';
 import { ProductsPage } from './products/ProductsPage.js';
@@ -65,11 +67,13 @@ const tokenStore = createTokenStore();
 const NAV: ReadonlyArray<{ key: PageKey; label: string }> = [
   { key: 'dashboard', label: '工作台' },
   { key: 'orders', label: '订单管理' },
+  { key: 'customers', label: '客户' },
   { key: 'products', label: '商品管理' },
   { key: 'ops', label: '运营配置' },
   { key: 'banners', label: '首页 Banner' },
   { key: 'risk', label: '风控' },
   { key: 'opslog', label: '运营日志' },
+  { key: 'settings', label: '设置' },
 ];
 
 /** 编辑目标：id 为 null = 新建；source 是列表页带过来的原始数据（@see @limitation 一）。 */
@@ -196,6 +200,17 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
           onNavigate={leave}
         />
       )}
+
+      {/* AJ-404：客户（只读 + 详情页拉黑 / 解除）与设置（只读）；客户详情是真深链接 `#/customers/:id` */}
+      {view === 'customers' && (
+        <CustomersPage
+          api={api}
+          route={{ page: 'customers', id: route.id, query: route.query }}
+          onNavigate={leave}
+        />
+      )}
+
+      {view === 'settings' && <SettingsPage api={api} />}
 
       {view === 'ops' && <OpsPage api={api} />}
 

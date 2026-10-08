@@ -31,11 +31,13 @@
 export const PAGES = [
   'dashboard',
   'orders',
+  'customers',
   'products',
   'ops',
   'banners',
   'risk',
   'opslog',
+  'settings',
 ] as const;
 
 export type PageKey = (typeof PAGES)[number];
@@ -46,7 +48,7 @@ export const HOME_PAGE: PageKey = 'dashboard';
 export interface Route {
   /** 一级页面。 */
   page: PageKey;
-  /** 二级 id（订单内部 id）。空串 = 列表态。 */
+  /** 二级 id（订单 / 客户的内部 id，AJ-404 起客户详情也是真深链接）。空串 = 列表态。 */
   id: string;
   /** 查询参数（筛选条件）。 */
   query: URLSearchParams;

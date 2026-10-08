@@ -109,6 +109,12 @@ export function BlockedUsers({
                 <td>{formatJst(u.blocked_at)}</td>
                 <td>{u.order_count} 单</td>
                 <td>
+                  {/* AJ-404：拉黑 / 解除的主入口已挪到客户详情；这里保留解除，并链过去看全貌 */}
+                  <a className="link" href={`#/customers/${encodeURIComponent(u.id)}`}>
+                    客户详情
+                  </a>
+                </td>
+                <td>
                   <button type="button" className="link" onClick={() => setTarget(u.id)}>
                     解除拉黑
                   </button>

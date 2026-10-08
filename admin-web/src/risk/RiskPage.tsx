@@ -223,6 +223,10 @@ export function RiskPage({ api }: RiskPageProps) {
                 order_no 缺失时退化到 UUID：宁可显示一个看不懂的串，也不要显示一个空档。 */}
             订单 {orderNo !== '' ? orderNo : orderId} · 用户 {userId}
           </span>
+          {/* AJ-404：拉黑前先看这个人的全貌（历史单数、地址簿、其它拒付）——客户页是新的主入口 */}
+          <a className="link" href={`#/customers/${encodeURIComponent(userId)}`}>
+            查看客户
+          </a>
           <button type="button" className="btn btn-danger" disabled={busy} onClick={askBlock}>
             拉黑用户
           </button>
