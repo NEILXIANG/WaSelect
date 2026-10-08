@@ -33,6 +33,7 @@
  * @see ./view.ts（闸门与请求体）；./api.ts；../../../contracts/api-contract.yaml（AdminOrder）
  */
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { useFormDirty } from '../ui/unsaved.js';
 import { ADMIN_NOTE_MAX_LENGTH, REFUND_REASON_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
 import { ApiError, retryAfterMsSec } from '../api/errors.js';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
@@ -104,6 +105,11 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
   const [refund, setRefund] = useState(emptyRefundForm);
   /** 解除拒付限制的表单（B1b / AJ-194；不可逆，契约没有"重新上锁"）。 */
   const [release, setRelease] = useState(emptyReleaseForm);
+  /** 未保存离开提醒（第一批⑥ 补齐到订单页）：三份草稿任一非空即算脏；成功后各自 reset 回空，脏态自然消失。 */
+  useFormDirty(
+    { ship, refund, release },
+    { ship: emptyShipForm(), refund: emptyRefundForm(), release: emptyReleaseForm() },
+  );
   const [busy, setBusy] = useState('');
   /**
    * 当前打开的确认弹层（null = 没开）。发货 / 退款 / 解除拒付**共用一个出口**。

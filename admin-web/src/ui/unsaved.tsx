@@ -17,7 +17,15 @@
  *
  * @see ../../docs/管理后台对标分析-成熟电商平台-2026-10-08.md §8-1⑥；./confirm.tsx（二次确认弹层）
  */
-import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useState,
+  type ReactNode,
+} from 'react';
 
 /** 两份表单模型是否一致；认不出（循环引用等）按**不一致**处理——宁可多提醒一次。 */
 export function sameForm(a: unknown, b: unknown): boolean {
@@ -31,8 +39,12 @@ export function sameForm(a: unknown, b: unknown): boolean {
 export interface UnsavedContext {
   /** 当前是否有未保存的改动。 */
   dirty: boolean;
-  /** 由**表单页**调用：变脏 / 恢复干净。 */
-  markDirty: (dirty: boolean) => void;
+  /**
+   * 由**表单**调用：`key` 这一份表单变脏 / 恢复干净。
+   * @why 按 key 记而不是一个布尔：订单详情一页同时挂着发货、退款、改址、备注好几份表单，
+   *      单布尔下"B 恢复干净 / B 卸载"会把"A 还脏着"一并抹掉——提醒在最该弹的时候不弹。
+   */
+  markDirty: (key: string, dirty: boolean) => void;
 }
 
 /**
@@ -45,13 +57,36 @@ export const UnsavedCtx = createContext<UnsavedContext>({
   markDirty: () => undefined,
 });
 
+/**
+ * 脏态登记簿（App 与 DOM 用例共用）：哪几份表单脏着，任意一份脏 = 整页脏。
+ * @returns `clear` 供"确认放弃并离开"一次性清空（表单随后卸载，各自的清理是幂等的）。
+ */
+export function useDirtyRegistry(): {
+  dirty: boolean;
+  markDirty: (key: string, dirty: boolean) => void;
+  clear: () => void;
+} {
+  const [keys, setKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const markDirty = useCallback((key: string, dirty: boolean) => {
+    setKeys((prev) => {
+      if (prev.has(key) === dirty) return prev; // 不变就返回原对象：避免无谓重渲染
+      const next = new Set(prev);
+      if (dirty) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+  const clear = useCallback(() => setKeys(new Set()), []);
+  return { dirty: keys.size > 0, markDirty, clear };
+}
+
 export function useUnsaved(): UnsavedContext {
   return useContext(UnsavedCtx);
 }
 
 export interface UnsavedProviderProps {
   dirty: boolean;
-  markDirty: (dirty: boolean) => void;
+  markDirty: (key: string, dirty: boolean) => void;
   /**
    * ⚠️ 必须是**可选**：`createElement(UnsavedProvider, props, ...children)` 这一种调用
    *    在 children 必填时落不到正确的重载上（TS2769），而 App.tsx 里的 `<UnsavedProvider …/>` 写法不受影响。
@@ -95,9 +130,10 @@ export function useBeforeUnload(dirty: boolean): void {
  */
 export function useFormDirty<T>(current: T, pristine: T): void {
   const { markDirty } = useUnsaved();
+  const key = useId();
   const dirty = !sameForm(current, pristine);
   useEffect(() => {
-    markDirty(dirty);
-    return () => markDirty(false);
-  }, [dirty, markDirty]);
+    markDirty(key, dirty);
+    return () => markDirty(key, false);
+  }, [key, dirty, markDirty]);
 }

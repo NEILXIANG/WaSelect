@@ -17,10 +17,10 @@
  *
  * @see ./ProductFormPage.tsx；./api.ts（updateProduct 的 expectedUpdatedAt）；./view.ts（sourceUpdatedAt）
  */
-import { createElement, useState } from 'react';
+import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
-import { UnsavedProvider, useUnsaved } from '../ui/unsaved.js';
+import { UnsavedProvider, useDirtyRegistry, useUnsaved } from '../ui/unsaved.js';
 import { button, click, flush, mount, type as typeInto, type Mounted } from '../testing/dom.js';
 import { CATEGORY_LABELS, PRODUCT_CATEGORY } from './view.js';
 import { ProductFormPage } from './ProductFormPage.js';
@@ -97,10 +97,10 @@ function Probe(): JSX.Element {
 }
 
 function Host(props: Record<string, unknown>): JSX.Element {
-  const [dirty, setDirty] = useState(false);
+  const { dirty, markDirty } = useDirtyRegistry();
   return createElement(
     UnsavedProvider,
-    { dirty, markDirty: setDirty },
+    { dirty, markDirty },
     createElement(Probe),
     createElement(ProductFormPage, props as never),
   );

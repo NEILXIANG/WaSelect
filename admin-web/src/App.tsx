@@ -28,7 +28,7 @@
  * @see ./AuthGate.tsx（登录态与重新登录浮层）；./api/client.ts（40101 → onUnauthorized 的语义）；
  *      ./router.ts（网址路由）；docs/地基搭建清单.md F15
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AuthGate, type SessionControls } from './AuthGate.js';
 import { createAdminApi } from './api/client.js';
 import { resolveApiBase } from './api/config.js';
@@ -45,7 +45,7 @@ import { ProductFormPage } from './products/ProductFormPage.js';
 import type { AdminProductLike } from './products/api.js';
 import { currentRoute, navigate, subscribe, type PageKey, type Route } from './router.js';
 import { ConfirmDialog } from './ui/confirm.js';
-import { UnsavedProvider, useBeforeUnload } from './ui/unsaved.js';
+import { UnsavedProvider, useBeforeUnload, useDirtyRegistry } from './ui/unsaved.js';
 
 /** 模块级单例：store 本身无状态（读写直通 localStorage），不需要随组件生命周期重建。 */
 const tokenStore = createTokenStore();
@@ -90,8 +90,14 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   const [route, setRoute] = useState<Route>(currentRoute);
   useEffect(() => subscribe(() => setRoute(currentRoute())), []);
   /** 当前页面有没有未保存的改动（第一批⑥：由表单页上报，@see ../ui/unsaved.tsx）。 */
-  const [dirty, setDirty] = useState(false);
+  const { dirty, markDirty, clear: clearDirty } = useDirtyRegistry();
   useBeforeUnload(dirty);
+  /**
+   * `leave` 读 ref 而不是闭包里的 `dirty`：它要传给 OrdersPage 当 `onNavigate`，
+   * 而 OrdersPage 的 `patch` → `load` 依赖它——身份随脏态变，就会在"打一个字"时重拉列表。
+   */
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
   /** 被脏态拦下的那次导航：点了二次确认才真正走（`@see leave`）。 */
   const [pendingNav, setPendingNav] = useState<Route | null>(null);
   const go = useCallback((next: Route) => {
@@ -106,21 +112,23 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   /**
    * 带脏态拦截的导航（第一批⑥）。
    *
-   * @why 必须在**这一处**拦：`go` 是唯一的导航出口（侧栏按钮、看板跳转、订单列表详情都走它），
-   *      在每个调用点各判一次等于复制 N 份且必然漏。
+   * @why 必须在**这一处**拦：侧栏与订单页（「返回列表」「换一单」、筛选）都经由它导航，
+   *      在每个调用点各判一次等于复制 N 份且必然漏。看板没有表单，仍拿未拦截的 `go`。
+   * @limitation 浏览器的后退 / 前进键只改 hash，走 `subscribe` 直接换页，**拦不住**——
+   *      hashchange 不可取消，硬拦要"先换再回滚"，地址栏会闪；关标签页 / 刷新仍有 beforeunload 兜底。
    * @why 保存成功后**不该**弹：`onDone` 里表单页自己会 reset 脏态（见 useFormDirty），
    *      所以这里只要跟着 dirty 走就够了，不需要给"刚保存过"单开一个例外。
    */
   const leave = useCallback(
     (next: Route, onLeave?: () => void) => {
-      if (dirty) {
+      if (dirtyRef.current) {
         setPendingNav(next);
         return;
       }
       onLeave?.();
       go(next);
     },
-    [dirty, go],
+    [go],
   );
   /** 商品保存成功后回到列表时显示一次的提示（三端联动 UI 模拟 2026-10-08）。 */
   const [flash, setFlash] = useState('');
@@ -151,7 +159,8 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
         <OrdersPage
           api={api}
           route={{ page: 'orders', id: route.id, query: route.query }}
-          onNavigate={go}
+          // 走 leave 而非 go：订单详情里有发货 / 退款 / 改址 / 备注草稿，「返回列表」「换一单」都要拦
+          onNavigate={leave}
         />
       )}
 
@@ -199,7 +208,7 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
 
   return (
     <div className="shell">
-      <UnsavedProvider dirty={dirty} markDirty={setDirty}>
+      <UnsavedProvider dirty={dirty} markDirty={markDirty}>
         <aside className="sidebar">
           <span className="brand">WaSelect</span>
           <nav>
@@ -237,7 +246,7 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
           }}
           onConfirm={() => {
             setEditing(null);
-            setDirty(false);
+            clearDirty();
             go(pendingNav);
             setPendingNav(null);
           }}

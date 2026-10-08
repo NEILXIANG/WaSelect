@@ -13,6 +13,7 @@
  * @see ./address-view.ts（校验与请求体）；./api.ts（updateOrderAddress）
  */
 import { useState } from 'react';
+import { useFormDirty } from '../ui/unsaved.js';
 import { ApiError } from '../api/errors.js';
 import { updateOrderAddress, type AdminApi, type AdminOrderLike } from './api.js';
 import {
@@ -45,6 +46,8 @@ export interface OrderAddressFormProps {
 
 export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormProps) {
   const [form, setForm] = useState(() => addressFormModel(order));
+  // 基线就是当前订单地址：保存成功后父组件按新地址换 key 重挂，脏态随卸载清掉
+  useFormDirty(form, addressFormModel(order));
   const [errors, setErrors] = useState<Partial<Record<AddressField, string>>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);

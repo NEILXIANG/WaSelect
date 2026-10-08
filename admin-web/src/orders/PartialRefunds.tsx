@@ -11,6 +11,7 @@
  * @see ./partial-refund-view.ts；server/src/app/partial-refund-routes.ts
  */
 import { useState } from 'react';
+import { useFormDirty } from '../ui/unsaved.js';
 import { REFUND_REASON_MAX_LENGTH } from '@waselect/shared';
 import { ApiError, retryAfterMsSec } from '../api/errors.js';
 import { createPartialRefund, syncPartialRefund, type AdminApi } from './api.js';
@@ -63,6 +64,7 @@ export function PartialRefunds({
 }: PartialRefundsProps) {
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
+  useFormDirty({ amount: amount.trim(), reason: reason.trim() }, { amount: '', reason: '' });
   const [confirming, setConfirming] = useState(false);
   const [hint, setHint] = useState('');
   const [busy, setBusy] = useState(false);

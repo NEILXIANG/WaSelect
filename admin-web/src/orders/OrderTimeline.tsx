@@ -13,6 +13,7 @@
  * @see ./notes-view.ts；./api.ts（listOrderNotes / addOrderNote）；server/src/app/admin-order-note-routes.ts
  */
 import { useCallback, useEffect, useState } from 'react';
+import { useFormDirty } from '../ui/unsaved.js';
 import { ORDER_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { formatJst } from '../format.js';
 import { toastError } from '../ui/toast.js';
@@ -39,6 +40,8 @@ export function OrderTimeline({ api, orderId, events, onError, onSuccess }: Orde
   /** 取备注失败的行内说明（含报障码）；'' = 没失败。 */
   const [loadErr, setLoadErr] = useState('');
   const [draft, setDraft] = useState('');
+  // 只填空格不算草稿（与「添加备注」按钮的禁用口径一致）
+  useFormDirty(draft.trim(), '');
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async (): Promise<void> => {
