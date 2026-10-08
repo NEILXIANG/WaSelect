@@ -13,6 +13,9 @@
  *              时间线 / 运单号 / 地址快照 / 条款版本在详情页（U-H3，`pages/order-detail`），
  *              列表点卡片即达。往列表行里再塞这些，等于把详情页在每张卡片上重复一遍。
  *
+ * @limitation 三：下拉刷新（M-04）与 onShow 共用 `load()`，**不做在途去重**——两次几乎同时的取数
+ *              以后到的为准；列表是只读的，多取一次的代价只是一次请求。
+ *
  * @see ./index.vm.js（状态词表与列表行，9 条单测）
  */
 import { emptyState, orderRows } from './index.vm.js';
@@ -94,6 +97,16 @@ Page({
     const id = e?.currentTarget?.dataset?.id;
     if (typeof id !== 'string' || id === '') return;
     wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${id}` });
+  },
+
+  /**
+   * 下拉刷新（M-04，AJ-405）：重取列表，**取完**再收起动画（成功失败都收）。
+   * @why 没有推送时，买家查"发货了没"的本能动作就是下拉（对标分析 §3.7）；onShow 只在切回本页时刷新。
+   * @why `load()` 自己吞掉错误并落到 `error`，所以这里 await 完一定走得到 stop——失败路径不会一直转圈。
+   */
+  async onPullDownRefresh() {
+    await this.load();
+    wxApi.stopPullDownRefresh();
   },
 
   /** 错误态的"重试"（P2-38）：重新取列表。 */

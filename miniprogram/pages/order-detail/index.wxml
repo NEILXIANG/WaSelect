@@ -35,9 +35,15 @@
   <block wx:if="{{view}}">
     <view class="ws-gutter ws-section">
       <view class="ws-card">
+        <!-- M-06（AJ-405）：状态用买家视角文案（vm 给），下面一句"下一步会发生什么" -->
         <view class="head">
-          <text class="ws-caption head__no">{{view.orderNo}}</text>
-          <text class="ws-tag head__status">{{view.statusText}}</text>
+          <text class="ws-title head__status-text">{{view.statusText}}</text>
+        </view>
+        <text class="ws-note hint" wx:if="{{view.nextText}}">{{view.nextText}}</text>
+        <!-- M-05（AJ-405）：订单号可复制（客服第一句就要单号）；反馈页内"已复制"，不弹 toast -->
+        <view class="quote-line order-no" wx:if="{{view.orderNo}}">
+          <text class="ws-caption head__no" user-select>订单号 {{view.orderNo}}</text>
+          <text class="ws-caption track" bindtap="onCopyOrderNo">{{copied === 'order' ? '已复制' : '复制'}}</text>
         </view>
         <!-- MP3-04：刚付过款、服务端还没确认——这时不给继续支付也不给取消，只说清在确认中 -->
         <text class="ws-note hint" wx:if="{{view.confirmHint}}">{{view.confirmHint}}</text>
@@ -47,6 +53,20 @@
           不标时区时这一行会被读成本地时间（PDT 与 JST 差 16 小时）→ 以为还有一整天。
         -->
         <text class="ws-caption hint" wx:if="{{view.expiresAtText}}">请在 {{view.expiresAtText}} 前完成支付</text>
+      </view>
+    </view>
+
+    <!--
+      M-05（AJ-405）：客服卡上移到状态区下方（原在页面最底部）。剩余清单 4-2：服务端未配置时不显示；长按可选中复制。
+    -->
+    <view class="ws-gutter ws-section" wx:if="{{support.length > 0}}">
+      <view class="ws-card">
+        <text class="ws-note">对订单有疑问？联系客服</text>
+        <text class="ws-caption hint">联系客服时请提供订单号</text>
+        <view class="quote-line" wx:for="{{support}}" wx:key="key">
+          <text class="ws-note">{{item.label}}</text>
+          <text class="ws-body" user-select>{{item.value}}</text>
+        </view>
       </view>
     </view>
 
@@ -191,16 +211,5 @@
   <!-- 剩余清单 4-10：缺货整单退款说明（仅已付款未发货） -->
   <view class="ws-gutter ws-section" wx:if="{{view.stockRefundNote}}">
     <text class="ws-note">{{view.stockRefundNote}}</text>
-  </view>
-
-  <!-- 剩余清单 4-2：联系客服（服务端未配置时不显示；长按可选中复制） -->
-  <view class="ws-gutter ws-section" wx:if="{{support.length > 0}}">
-    <view class="ws-card">
-      <text class="ws-note">对订单有疑问？联系客服</text>
-      <view class="quote-line" wx:for="{{support}}" wx:key="key">
-        <text class="ws-note">{{item.label}}</text>
-        <text class="ws-body" user-select>{{item.value}}</text>
-      </view>
-    </view>
   </view>
 </view>

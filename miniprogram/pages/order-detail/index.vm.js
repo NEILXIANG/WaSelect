@@ -30,7 +30,13 @@
  *      ../../utils/jst-text.js（UTC → JST 纯函数）；
  *      ../../../contracts/api-contract.yaml（Order / POST /orders/{id}/cancel）
  */
-import { PAYABLE, STOCK_REFUND_NOTE, canPay, statusText } from '../../utils/order-status.js';
+import {
+  PAYABLE,
+  STOCK_REFUND_NOTE,
+  buyerStatus,
+  canPay,
+  statusText,
+} from '../../utils/order-status.js';
 import {
   displaySubLine,
   formatCnyFen,
@@ -164,11 +170,19 @@ export function detailView(order, opts = undefined) {
   const confirming = confirmingJustPaid(payable, options.justPaid === true);
   const hasTotal = Number.isInteger(o.total_jpy);
   const trackingNo = typeof o.tracking_no === 'string' ? o.tracking_no.trim() : '';
+  const contactEmail = typeof o.contact_email === 'string' ? o.contact_email : '';
+  // M-06（AJ-405）：状态区用买家视角词表；时间线仍用 statusText 短词（历史，@see utils/order-status.js BUYER_STATUS @why）
+  const buyer = buyerStatus(status, { email: contactEmail !== '' });
 
   return {
     orderId: typeof o.order_id === 'string' ? o.order_id : '',
     orderNo: typeof o.order_no === 'string' ? o.order_no : '',
-    statusText: statusText(status),
+    statusText: buyer.title,
+    /**
+     * "下一步会发生什么"（M-06）。确认中（justPaid）不给：pending 的下一步是"请继续支付"，
+     * 与"支付结果确认中"的提示正相反——用户刚付过，再引导他付就是第二笔钱（MP3-04 同一条）。
+     */
+    nextText: confirming ? '' : buyer.next,
     // ⚠️ 确认中不给出「继续支付」：用户刚付过一次，再点就是第二笔钱（MP3-04）。
     canPay: payable && !confirming,
     /**
@@ -193,7 +207,7 @@ export function detailView(order, opts = undefined) {
     totalLabel: payable ? '应付合计' : '订单合计',
     totalSub: displaySubLine(o.display),
     address: o.address !== null && typeof o.address === 'object' ? addressSummary(o.address) : null,
-    contactEmail: typeof o.contact_email === 'string' ? o.contact_email : '',
+    contactEmail,
     termsVersion: typeof o.terms_version === 'string' ? o.terms_version : '',
     carrier: typeof o.carrier === 'string' ? o.carrier : '',
     trackingNo,

@@ -21,7 +21,7 @@
  *              ⚠️ 唯一的例外是 MP3-04 的确认窗口：从支付页带 `justPaid=1` 过来时，
  *              最多**退避重查两次**（见 scheduleRecheck）——那是"钱已动、只等确认"的几秒，
  *              且两次之后一定放弃假设、把按钮还给用户，不是常规轮询。
- * @limitation 三：运单号复制成功只改"已复制"文案，不做 toast
+ * @limitation 三：订单号 / 运单号复制成功只改"已复制"文案，不做 toast
  *              （`wx.showToast` 刻意未登记，@see utils/wx-api.js @limitation 九）。
  *
  * @see ./index.vm.js（视图逻辑真源，17 条单测）；../../utils/wx-api.js（showModal / setClipboardData）
@@ -53,7 +53,7 @@ Page({
     /** 取消请求在途（ws-button 会吞掉这期间的连点）。 */
     cancelling: false,
     confirmingReceipt: false,
-    /** 刚复制的是哪一个：'no' 运单号 / 'url' 查件链接 / '' 都没有（两行各自显示「已复制」，@see @limitation 三）。 */
+    /** 刚复制的是哪一个：'order' 订单号（M-05）/ 'no' 运单号 / 'url' 查件链接 / '' 都没有（各自显示「已复制」，@see @limitation 三）。 */
     copied: '',
     /** 剩余清单 4-2：客服联系方式（utils/support.js）；空数组 = 未配置，不显示。 */
     support: [],
@@ -107,6 +107,15 @@ Page({
 
   onShow() {
     if (this.orderId !== '') void this.load();
+  },
+
+  /**
+   * 下拉刷新（M-04，AJ-405）：重取这张单，**取完**再收起动画（成功失败都收）。
+   * @why 没有 id 时不发请求（@limitation 一），但动画仍要收起——否则顶部一直转圈。
+   */
+  async onPullDownRefresh() {
+    if (this.orderId !== '') await this.load();
+    wxApi.stopPullDownRefresh();
   },
 
   /** 取详情。失败**清空视图**并明示错误（留旧数据 = 把旧状态当真值）。 */
@@ -173,6 +182,22 @@ Page({
       data: no,
       success: () => this.setData({ copied: kind }),
       fail: () => this.setData({ error: '复制失败，请长按运单号手动复制', errorRef: '' }),
+    });
+  },
+
+  /**
+   * 复制订单号（M-05，AJ-405）：买家联系客服时要报单号，此前它是普通 text、长按也选不中。
+   * @why 复制 `order_no`（买家与客服都认的那串），不是内部 `order_id`。
+   * @why 反馈用页内"已复制"而不是 toast（与运单号同口径，@see @limitation 三；对标分析 §6 保持页内提示）。
+   */
+  onCopyOrderNo() {
+    const no = this.data.view?.orderNo;
+    if (typeof no !== 'string' || no === '') return;
+    wxApi.setClipboardData({
+      data: no,
+      success: () => this.setData({ copied: 'order' }),
+      fail: () =>
+        this.setData({ copied: '', error: '复制失败，请长按订单号手动复制', errorRef: '' }),
     });
   },
 

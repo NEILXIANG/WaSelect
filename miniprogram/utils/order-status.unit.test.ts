@@ -9,7 +9,16 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PAYABLE, STATUS_LABELS, canPay, statusText } from './order-status.js';
+import { ORDER_STATUS } from '@waselect/shared';
+import {
+  BUYER_STATUS,
+  PAYABLE,
+  STATUS_LABELS,
+  STOCK_REFUND_NOTE,
+  buyerStatus,
+  canPay,
+  statusText,
+} from './order-status.js';
 
 describe('statusText（状态文案）', () => {
   it('词表内 → 中文', () => {
@@ -70,5 +79,75 @@ describe('STATUS_LABELS 与契约 OrderStatus 的双向比对', () => {
     for (const [status, label] of Object.entries(STATUS_LABELS)) {
       expect(label, `${status} 的文案为空`).not.toBe('');
     }
+  });
+});
+
+/**
+ * M-06（AJ-405 / AJ-402 Q4）：买家视角的当前状态文案 + "下一步会发生什么"。
+ * @why 代购的付款—发货空档有好几天，系统态直译"已付款"挂着不动会被读成卡住；
+ *      这组断言钉住三件**错了不报错**的事：漏一个状态（静默落"状态未知"）、
+ *      文案里冒出未实测的时效数字、与退款 / 缺货口径说法不一致。
+ */
+describe('buyerStatus（买家视角状态与下一步，M-06）', () => {
+  it('🔴 词表覆盖 shared ORDER_STATUS 全部状态，且与 STATUS_LABELS 同一集合（契约比对见上）', () => {
+    expect(Object.keys(BUYER_STATUS).sort()).toEqual([...ORDER_STATUS].sort());
+    expect(Object.keys(BUYER_STATUS).sort()).toEqual(Object.keys(STATUS_LABELS).sort());
+  });
+
+  it('每个状态的 title 与 next 都非空（空串 = 真机上空白一行）', () => {
+    for (const s of ORDER_STATUS) {
+      const b = buyerStatus(s);
+      expect(b.title, s).not.toBe('');
+      expect(b.next, s).not.toBe('');
+    }
+  });
+
+  it('代购视角的三个关键态', () => {
+    expect(buyerStatus('paid').title).toBe('已付款 · 日本采购中');
+    expect(buyerStatus('shipped').title).toBe('已发货 · 国际运输中');
+    expect(buyerStatus('delivered').title).toBe('已送达');
+    expect(buyerStatus('created').title).toBe('待付款');
+  });
+
+  it('🔴 已付款：留了邮箱才说"会发邮件"；没留 / 不知道（列表无此字段）→ 只说"在订单详情查看"', () => {
+    expect(buyerStatus('paid', { email: true }).next).toContain('邮件');
+    expect(buyerStatus('paid', { email: false }).next).not.toContain('邮件');
+    expect(buyerStatus('paid').next).not.toContain('邮件');
+    expect(buyerStatus('paid', { email: false }).next).toContain('运单号');
+  });
+
+  it('🔴 已发货：给出"确认收货 / 到期自动确认"的去处（AJ-387）；天数是服务端配置 AUTO_DELIVER_DAYS，不写死', () => {
+    const n = buyerStatus('shipped').next;
+    expect(n).toContain('确认收货');
+    expect(n).toContain('自动');
+    expect(n).not.toMatch(/[0-9]/);
+  });
+
+  it('🔴 退款两态的到账时间与缺货退款说明同口径（5–10 个工作日）', () => {
+    expect(STOCK_REFUND_NOTE).toContain('5–10 个工作日');
+    expect(buyerStatus('refunding').next).toContain('5–10 个工作日');
+    expect(buyerStatus('refunded').next).toContain('5–10 个工作日');
+  });
+
+  it('🔴 不写未实测的送达时效（AJ-402 Q2）', () => {
+    for (const s of ORDER_STATUS) {
+      for (const w of ['天内送达', '天送达', '日达', '预计送达']) {
+        expect(buyerStatus(s, { email: true }).next, `${s}:${w}`).not.toContain(w);
+      }
+    }
+  });
+
+  it('⚠️ 不在词表 / 脏输入 → "状态未知" + 指向客服（不是空白）', () => {
+    for (const bad of ['brand_new', '', null, 42, undefined]) {
+      expect(buyerStatus(bad)).toEqual({
+        title: '状态未知',
+        next: '如有疑问，请联系客服并提供订单号',
+      });
+    }
+  });
+
+  it('opts 脏值（null / 字符串）按"不知道有没有邮箱"处理，不抛', () => {
+    expect(buyerStatus('paid', null as unknown as undefined).next).not.toContain('邮件');
+    expect(buyerStatus('paid', 'x' as unknown as undefined).next).not.toContain('邮件');
   });
 });

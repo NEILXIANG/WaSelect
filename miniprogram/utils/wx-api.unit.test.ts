@@ -36,7 +36,12 @@ function stubHost(
   const payments: Array<{ package?: string }> = [];
   const clipped: string[] = [];
   const redirected: string[] = [];
+  let pullStops = 0;
   vi.stubGlobal('wx', {
+    stopPullDownRefresh: () => {
+      seen.push('stopPull');
+      pullStops += 1;
+    },
     request: (o: unknown) => {
       seen.push('request');
       requested.push(o);
@@ -89,7 +94,18 @@ function stubHost(
       ? {}
       : { getAccountInfoSync: () => over.accountInfo as WxAccountInfo }),
   });
-  return { seen, storage, requested, navigated, backDelta, modals, payments, clipped, redirected };
+  return {
+    seen,
+    storage,
+    requested,
+    navigated,
+    backDelta,
+    modals,
+    payments,
+    clipped,
+    redirected,
+    pullStops: () => pullStops,
+  };
 }
 
 describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => {
@@ -116,6 +132,7 @@ describe('宿主缺失时必须响亮失败（不是静默 undefined）', () => 
     expect(() => api.setClipboardData({ data: 'x' })).toThrow(/wx 宿主不存在/);
     expect(() => api.redirectTo({ url: '/pages/order/index' })).toThrow(/wx 宿主不存在/);
     expect(() => api.getAccountInfoSync()).toThrow(/wx 宿主不存在/);
+    expect(() => api.stopPullDownRefresh()).toThrow(/wx 宿主不存在/);
   });
 
   it('**import 时不取宿主**——只有调用才取（否则 Node 侧连 import 都做不到）', () => {
@@ -271,6 +288,13 @@ describe('走真实宿主时的行为', () => {
     const { clipped } = stubHost();
     createWxApi().setClipboardData({ data: 'https://pay.test/l/abc' });
     expect(clipped).toEqual(['https://pay.test/l/abc']);
+  });
+
+  it('stopPullDownRefresh 转发给宿主（M-04：不停的话下拉动画一直挂着）', () => {
+    const h = stubHost();
+    createWxApi().stopPullDownRefresh();
+    expect(h.pullStops()).toBe(1);
+    expect(h.seen).toEqual(['stopPull']);
   });
 
   it('redirectTo 原样转发 url（不补前缀——@limitation 十二，同 navigateTo）', () => {

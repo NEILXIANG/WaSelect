@@ -48,6 +48,8 @@
         <text class="ws-caption order-card__no">{{item.orderNo}}</text>
         <text class="ws-tag order-card__status">{{item.statusText}}</text>
       </view>
+      <!-- M-06（AJ-405）："下一步会发生什么"（vm 给；列表不知道有没有留邮箱，不承诺邮件） -->
+      <text class="ws-caption order-card__next" wx:if="{{item.nextText}}">{{item.nextText}}</text>
 
       <view class="order-card__amount">
         <text class="ws-note">合计</text>

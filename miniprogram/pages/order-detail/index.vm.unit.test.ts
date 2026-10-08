@@ -8,7 +8,7 @@
  *      ④ 行项目缺图时留白（用户分不清"没图"和"图没加载出来"）。
  */
 import { describe, expect, it } from 'vitest';
-import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
+import { STOCK_REFUND_NOTE, buyerStatus } from '../../utils/order-status.js';
 import { amountLines, detailView, itemRows, timelineRows } from './index.vm.js';
 
 const ORDER = {
@@ -56,7 +56,8 @@ describe('detailView（整体）', () => {
   it('字段透传 + 状态 + 金额', () => {
     const v = detailView(ORDER);
     expect(v.orderNo).toBe('WS-20260927-0001');
-    expect(v.statusText).toBe('已发货');
+    // M-06（AJ-405）：当前状态改用买家视角文案（原断言 '已发货'，口径已按 AJ-402 Q4 改）
+    expect(v.statusText).toBe('已发货 · 国际运输中');
     expect(v.canPay).toBe(false);
     expect(v.canCancel).toBe(false);
     expect(v.totalJpy).toBe(9150);
@@ -338,5 +339,46 @@ describe('detailView：部分退款与迟到付款（P2-11 / P2-12，AJ-386）',
   it('🔴 late_paid → 给一句"已收到付款，会原路退回"；否则空串', () => {
     expect(detailView({ status: 'expired', late_paid: true }).latePaidNote).toContain('原路退回');
     expect(detailView({ status: 'expired' }).latePaidNote).toBe('');
+  });
+});
+
+/**
+ * M-06（AJ-405）：状态区的"下一步会发生什么"。
+ * @why 时间线是**历史**（"那时候发生了什么"），保留短词；状态区是**现在**，用代购视角文案 + 下一步。
+ *      两者混用的后果：时间线里"已付款 · 日本采购中"挂在一张早已发货的单上，读起来像还在采购。
+ */
+describe('detailView：买家视角状态与下一步（M-06）', () => {
+  it('🔴 已付款 + 留了邮箱 → 标题"日本采购中"，下一步说会发邮件告知运单号', () => {
+    const v = detailView({ ...ORDER, status: 'paid' });
+    expect(v.statusText).toBe('已付款 · 日本采购中');
+    expect(v.nextText).toBe(buyerStatus('paid', { email: true }).next);
+    expect(v.nextText).toContain('邮件');
+  });
+
+  it('🔴 已付款 + 没留邮箱 → 不承诺邮件', () => {
+    const v = detailView({ ...ORDER, status: 'paid', contact_email: undefined });
+    expect(v.nextText).toBe(buyerStatus('paid', { email: false }).next);
+    expect(v.nextText).not.toContain('邮件');
+  });
+
+  it('时间线仍用短词（历史记录，不随当前状态变）', () => {
+    expect(detailView({ ...ORDER, status: 'delivered' }).timeline.map((t) => t.statusText)).toEqual(
+      ['待付款', '已付款', '已发货'],
+    );
+  });
+
+  it('未知状态 → "状态未知" + 指向客服', () => {
+    const v = detailView({ ...ORDER, status: 'brand_new' });
+    expect(v.statusText).toBe('状态未知');
+    expect(v.nextText).toBe('如有疑问，请联系客服并提供订单号');
+  });
+
+  it('🔴 刚付过款确认中（justPaid）→ 不显示"请继续支付"那句下一步（与确认提示矛盾）', () => {
+    const v = detailView({ ...ORDER, status: 'pending_payment' }, { justPaid: true });
+    expect(v.confirming).toBe(true);
+    expect(v.nextText).toBe('');
+    expect(detailView({ ...ORDER, status: 'pending_payment' }).nextText).toBe(
+      buyerStatus('pending_payment').next,
+    );
   });
 });

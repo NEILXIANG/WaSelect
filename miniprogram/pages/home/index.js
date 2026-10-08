@@ -14,10 +14,9 @@
  *      这里只负责"拼路径 + 调宿主"。@why 路径常量 `DETAIL_PAGE` 落在本文件而不是 vm：
  *      vm 不认识页面路径，才能在 Node 里被测（约束十一的硬规则④不发请求、③不做 IO 同源）。
  *
- * @limitation 一：**没有下拉刷新**。`onPullDownRefresh` 要配 `wx.stopPullDownRefresh`
- *              （又一个宿主能力要登记）+ json 开 `enablePullDownRefresh`，而切分类 / 搜索
- *              已经覆盖"重新拉一遍"的场景——为一个等价入口多登记一个 API 属于提前做。
- *              真要加时：wx-api 登记 + 本页 json 开关 + handler，三步都不动 vm。
+ * @limitation 一：**没有下拉刷新**。切分类 / 搜索已经覆盖"重新拉一遍"的场景（对标分析 §4：首页不做）。
+ *              `stopPullDownRefresh` 已随 M-04 在 wx-api 登记（订单列表 / 详情在用）；
+ *              真要加时：本页 json 开关 + handler（参照 pages/order/index.js），不动 vm。
  * @limitation 二：`page / loaded / total / category / traceId` 放在 **this 上而不是 data**：
  *              它们不参与渲染，进 data 只会让每次 `setData` 多拷贝一遍、多一次 diff。
  *              ⚠️ 代价是它们**不是响应式的**——wxml 读不到；若哪天要把"第几页"显示出来，

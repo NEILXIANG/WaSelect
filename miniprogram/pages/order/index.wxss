@@ -56,3 +56,9 @@
 .state__error {
   color: var(--ws-danger);
 }
+
+/* M-06：状态下一句"下一步会发生什么" */
+.order-card__next {
+  display: block;
+  margin-top: var(--ws-space-hair);
+}

@@ -14,7 +14,8 @@
  *
  * @limitation 一：**只声明当前真用到的能力**（request / getStorageSync / setStorageSync /
  *              removeStorageSync / getRealtimeLogManager / navigateTo / switchTab / login /
- *              navigateBack / showModal / requestPayment / setClipboardData / redirectTo）。
+ *              navigateBack / showModal / requestPayment / setClipboardData / redirectTo /
+ *              stopPullDownRefresh）。
  *              新增一个 wx API 就在这里加一个方法——
  *              不要预先铺满官方 API，铺了就会有人依赖上没被测试过的封装（本项目多次踩过"提前做是猜"）。
  * @limitation 二：`getStorageSync` 的契约是**只取字符串**：读到的不是字符串时一律当"没存过"（返回空串）。
@@ -232,6 +233,13 @@ export interface WxApi {
    */
   setClipboardData(option: WxClipboardOption): void;
   /**
+   * 收起下拉刷新动画（`wx.stopPullDownRefresh`）——M-04（AJ-405）订单列表 / 订单详情下拉刷新。
+   * @why 页面 json 开了 `enablePullDownRefresh` 后，宿主在用户下拉时调 `onPullDownRefresh` 并显示加载动画，
+   *      **不会自己收起**；不调它的表现是顶部一直转圈（尤其是取数失败那条路，最容易漏）。
+   * @limitation 十六：只登记不兜底（无参、无回调，官方签名也只有可选回调，我们不读）。
+   */
+  stopPullDownRefresh(): void;
+  /**
    * 当前账号信息（`wx.getAccountInfoSync`）——只用来取 `miniProgram.envVersion`（B4）。
    *
    * @why 小程序**没有**构建期环境注入（`process.env` 在小程序里根本不存在，
@@ -314,6 +322,7 @@ interface WxHost {
   requestPayment(option: WxRequestPaymentOption): void;
   setClipboardData(option: WxClipboardOption): void;
   redirectTo(option: WxRedirectOption): void;
+  stopPullDownRefresh(): void;
   /** ⚠️ 可选：基础库 < 2.2.2 的宿主没有这个同步 API（@see WxApi.getAccountInfoSync @limitation 十四）。 */
   getAccountInfoSync?: () => WxAccountInfo;
   /** ⚠️ 可选（@see WxApi.getPlatform）：新基础库才有 getDeviceInfo；只读 `platform`。 */
@@ -389,6 +398,9 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     },
     redirectTo: (option) => {
       host().redirectTo(option);
+    },
+    stopPullDownRefresh: () => {
+      host().stopPullDownRefresh();
     },
     getAccountInfoSync: () => host().getAccountInfoSync?.(),
     getPlatform: () => {

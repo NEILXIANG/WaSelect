@@ -20,13 +20,15 @@ import { displaySubLine, formatJpy } from '../../utils/price-format.js';
 // ⚠️ 状态词表与可付态的真源在 `../../utils/order-status.js`（U-H3 下沉）：
 //    订单详情页也要用，而页面不能 import 页面。与契约的双向比对测试跟着真源一起搬走
 //    （只搬代码不搬测试 = 守护静默消失，见 utils/order-status.unit.test.ts）。
-import { PAYABLE, STATUS_LABELS } from '../../utils/order-status.js';
+import { PAYABLE, buyerStatus } from '../../utils/order-status.js';
 
 /**
  * `GET /orders` 的 items → 列表行。
  * @param {unknown} items 契约 `OrderSummary[]`
  * @returns {Array<{orderId: string, orderNo: string, totalJpy: number|null, totalText: string,
- *                  totalSub: string, statusText: string, canPay: boolean}>}
+ *                  totalSub: string, statusText: string, nextText: string, canPay: boolean}>}
+ * @why M-06（AJ-405）：状态用买家视角词表 `buyerStatus`（"已付款 · 日本采购中"）并带一句"下一步"；
+ *      列表行（OrderSummary）不含 contact_email，所以不传 email——不承诺"会发邮件"。
  * @why 同时给 `totalJpy`（整数，交给 `ws-price`）与 `totalText`（已格式化串）：
  *      `ws-price` 只收整数（对非整数**响亮失败**：空白 + 控制台报错），
  *      而"没有合计"的订单连组件都不该渲染——所以整数是 null 而不是 0
@@ -39,6 +41,7 @@ export function orderRows(items) {
     .map((o) => {
       const status = typeof o.status === 'string' ? o.status : '';
       const hasTotal = Number.isInteger(o.total_jpy);
+      const buyer = buyerStatus(status);
       return {
         orderId: o.order_id,
         orderNo: typeof o.order_no === 'string' ? o.order_no : '',
@@ -47,7 +50,8 @@ export function orderRows(items) {
         totalSub: displaySubLine(o.display),
         // ⚠️ 不在词表里的状态给 '状态未知' 而不是空串：
         //    空串在真机上就是一个空白的标签，用户无法区分"没状态"和"渲染错了"
-        statusText: STATUS_LABELS[status] ?? '状态未知',
+        statusText: buyer.title,
+        nextText: buyer.next,
         canPay: PAYABLE.includes(status),
       };
     });

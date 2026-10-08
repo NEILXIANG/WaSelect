@@ -23,6 +23,17 @@
   margin-left: var(--ws-space-inline);
 }
 
+/* M-06：状态区标题（买家视角文案较长，单独一行） */
+.head__status-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* M-05：订单号 + 复制 */
+.order-no {
+  margin-top: var(--ws-space-inline);
+}
+
 .hint {
   display: block;
   margin-top: var(--ws-space-hair);
