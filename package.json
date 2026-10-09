@@ -49,6 +49,7 @@
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "audit": "npm audit",
     "gate:fast": "npm run check:node && npm run format:check && npm run lint && npm run typecheck && npm run test:fast && npm run test:guards",
+    "gate:log": "node scripts/run-gate.mjs",
     "gate": "npm run check:node && npm run format:check && npm run lint && npm run typecheck && npm run build && npm run build:checkout && npm run check:contract && npm run test:lint && npm run audit:prod && npm run cov && npm run check:coverage-floor"
   },
   "comment:audit": "**只把生产面审计（`audit:prod`）放进 gate**，全量审计（`audit`）留在人工跑。@why 当前 `miniprogram-simulate` 传递依赖了一个有高危公告的 postcss，而 `npm audit fix --force` 会把 simulate 降到 0.0.1（破坏性的**降级**）——那会直接毁掉组件级测试。把 dev-only 的传递漏洞挂进 gate 的后果是「发布被一个进不了生产的东西卡死」，于是有人会去点 `--force`，那才是真正的事故。生产面（server 的运行时依赖）当前 0 漏洞，这条守的是「它保持 0」。两个审计面分开，是刻意的：进 gate 的必须是我们能且必须修的那一半。",

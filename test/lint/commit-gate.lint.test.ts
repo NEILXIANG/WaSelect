@@ -16,14 +16,28 @@ const root = join(__dirname, '..', '..');
 
 describe('提交门禁接线（N18）', () => {
   const hook = readFileSync(join(root, 'scripts', 'pre-commit'), 'utf8');
+  const pkgScripts = (
+    JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>;
+    }
+  ).scripts;
+  /**
+   * AJ-423：钩子只调用 `npm run gate:fast`（不再抄写步骤），下面"跑快速单测 / 保留 lint 与 typecheck"
+   * 两条性质改在唯一真源 gate:fast 上断言——不是放宽：钩子调用 gate:fast 由第一条钉住，步骤由后两条钉住。
+   */
+  const fast = (pkgScripts?.['gate:fast'] ?? '').split('&&').map((x) => x.trim());
+
+  it('pre-commit 调用 gate:fast（单一真源）', () => {
+    expect(hook).toContain('npm run gate:fast');
+  });
 
   it('pre-commit 跑快速单测（test:fast）——提交时就要红，不等 CI', () => {
-    expect(hook).toContain('npm run test:fast');
+    expect(fast).toContain('npm run test:fast');
   });
 
   it('pre-commit 保留 lint 与 typecheck（回归：加新检查不能挤掉旧的）', () => {
-    expect(hook).toContain('npm run lint');
-    expect(hook).toContain('npm run typecheck');
+    expect(fast).toContain('npm run lint');
+    expect(fast).toContain('npm run typecheck');
   });
 
   it('pre-commit 可执行（ chmod 丢了钩子就静默失效）', () => {

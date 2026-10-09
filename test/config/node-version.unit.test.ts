@@ -83,10 +83,11 @@ describe('闸门接线（写了脚本却没人调 = 没有闸门）', () => {
     expect((pkg.scripts['gate'] ?? '').startsWith('npm run check:node && ')).toBe(true);
   });
 
-  it('pre-commit 也先过这一步', () => {
+  it('pre-commit 也先过这一步（钩子只调 gate:fast，gate:fast 的第一步是 check:node，AJ-423）', () => {
     const hook = read('scripts/pre-commit');
     const lines = hook.split('\n').filter((l) => /^npm run /.test(l));
-    expect(lines[0]).toBe('npm run check:node');
+    expect(lines).toEqual(['npm run gate:fast']);
+    expect((pkg.scripts['gate:fast'] ?? '').startsWith('npm run check:node && ')).toBe(true);
   });
 });
 

@@ -164,13 +164,24 @@ describe('gate 这道门禁本身必须完整', () => {
 describe('pre-commit 钩子', () => {
   const hook = readFileSync(resolve(import.meta.dirname, '../../scripts/pre-commit'), 'utf8');
   const steps = hook.split('\n').filter((l) => /^npm run /.test(l));
+  const fast = (pkg.scripts['gate:fast'] ?? '')
+    .split('&&')
+    .map((x) => x.trim().replace(/^npm run /, ''));
+
+  /**
+   * AJ-423（统一结论 5.6 / U7 副本即负债）：钩子原先把 gate:fast 的 6 步逐条抄了一遍——两份清单迟早漂移。
+   * 现在钩子**只调用** `gate:fast`；"查格式 / 跑守卫 / 先过 Node 版本"这些性质改在唯一真源 gate:fast 上断言（不是放宽）。
+   */
+  it('🔴 钩子只调用 npm run gate:fast（不再抄写步骤）', () => {
+    expect(steps).toEqual(['npm run gate:fast']);
+  });
 
   it('查格式', () => {
-    expect(steps).toContain('npm run format:check');
+    expect(fast).toContain('format:check');
   });
 
   it('固定跑一遍扫描型守卫（不依赖 --changed）', () => {
-    expect(steps).toContain('npm run test:guards');
+    expect(fast).toContain('test:guards');
     const guards = pkg.scripts['test:guards'] ?? '';
     expect(guards).toMatch(/--project unit/);
     expect(guards).toContain('test/config');

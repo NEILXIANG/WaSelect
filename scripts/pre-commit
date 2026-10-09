@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
-# F0 提交门禁（薄转发，单一事实来源 = 根 package.json 的 scripts）：
-# 只跑快速检查；完整门禁是 npm run gate（F1 起接入测试），由 CI 与交付前执行。
-# N18：test:fast 必须在这里——"提交时绿、CI 才红"的反馈环慢几十分钟，
-# 且 test:fast 只跑 --changed 关联用例，成本是秒级（没改动时按设计放空，见 vitest.config.mts T4）。
+# F0 提交门禁（薄转发，单一事实来源 = 根 package.json 的 gate:fast）：
+# 只跑快速档；完整门禁是 npm run gate（推荐 npm run gate:log，日志尾行即结论），由 CI 与交付前执行。
+# AJ-423：原先在这里把 gate:fast 的 6 步逐条抄了一遍（check:node / format:check / lint / typecheck /
+#   test:fast / test:guards）——两份清单迟早漂移（统一结论 5.6）。现在只调用 gate:fast，
+#   各步骤存在的理由（N18 / INF3-07 / TST3-04 / AJ-238）写在 test/config/gate-scripts.unit.test.ts 与 node-version.unit.test.ts。
 # @see docs/地基搭建清单.md F0/F1
 set -e
 cd "$(dirname "$0")/.."
-# AJ-238：Node 主版本不对时，下面三步跑出来的结果都不算数——先过这一步
-npm run check:node
-# INF3-07：gate 第二步就是格式检查，钩子不查的后果是"提交时绿、gate 才红"
-npm run format:check
-npm run lint
-npm run typecheck
-npm run test:fast
-# TST3-04：扫描型守卫不在 import 图上，--changed 触发不了它们，这里固定跑一遍（毫秒级）
-npm run test:guards
+npm run gate:fast
