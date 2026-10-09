@@ -32,6 +32,7 @@ import { createCartStore } from './utils/cart-store.js';
 import { resolveApiBase } from './config.js';
 import { newTraceId } from './utils/trace.js';
 import { FLUSH_INTERVAL_MS, beaconHeaders, createBeacon, ensureAnonId } from './utils/beacon.js';
+import { createErrorLog } from './utils/client-error.js';
 
 /**
  * token 在本地存储里的键。
@@ -39,6 +40,12 @@ import { FLUSH_INTERVAL_MS, beaconHeaders, createBeacon, ensureAnonId } from './
  *      而它不报错——表现为"每次重登都成功，但一进 App 又是未登录"。
  */
 const TOKEN_KEY = 'token';
+
+/**
+ * 前端报错 → 实时日志（AJ-421）。模块级创建：`onError` 可能早于 `onLaunch` 里的装配完成就触发。
+ * 日志器每次现取（`createWxApi` 是无状态转发，不在模块加载时碰宿主）。
+ */
+const errorLog = createErrorLog({ logger: () => createWxApi().getRealtimeLogManager() });
 
 App({
   globalData: {
@@ -234,6 +241,16 @@ App({
       setTimeout(tick, FLUSH_INTERVAL_MS);
     };
     setTimeout(tick, FLUSH_INTERVAL_MS);
+  },
+
+  /** 未捕获的脚本错误（AJ-421）：微信给的是含调用栈的字符串。 */
+  onError(msg) {
+    errorLog.record('error', msg);
+  },
+
+  /** 未处理的 Promise 拒绝（AJ-421）：`res.reason` 可能是 Error、字符串或任意对象。 */
+  onUnhandledRejection(res) {
+    errorLog.record('rejection', res?.reason);
   },
 
   /** 切后台：把埋点队列发完（M-21）。 */
