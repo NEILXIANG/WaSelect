@@ -67,11 +67,20 @@ export function detailBadges(order: unknown): BadgeSpec[] {
   return [...out, ...flagBadges(order)];
 }
 
-/** 两个标记（列表与详情共用）：拒付中 = danger，测试单 = muted。 */
+/**
+ * 标记（列表与详情共用）：拒付中 = danger，测试单 = muted；
+ * AJ-425：售后中 = warn（有人在等处理）、用户已拉黑 = danger（发货前要判断退款还是照发）。
+ */
 export function flagBadges(order: unknown): BadgeSpec[] {
-  const o = order as { is_test?: unknown } | null;
+  const o = order as {
+    is_test?: unknown;
+    after_sale_open?: unknown;
+    user_blocked?: unknown;
+  } | null;
   return [
     ...(isDisputeLocked(order) ? [{ text: '拒付中', tone: 'danger' as const }] : []),
+    ...(o?.after_sale_open === true ? [{ text: '售后中', tone: 'warn' as const }] : []),
+    ...(o?.user_blocked === true ? [{ text: '用户已拉黑', tone: 'danger' as const }] : []),
     ...(o?.is_test === true ? [{ text: '测试单', tone: 'muted' as const }] : []),
   ];
 }

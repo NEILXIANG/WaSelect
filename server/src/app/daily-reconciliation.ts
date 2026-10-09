@@ -15,7 +15,9 @@
  *      ⑤ 卡住的回调：登记了却没有任何结果、租约已过期（KD-2 / AJ-175，见 scanUnfinishedCallbacks）；
  *      ⑥ 退款滞留：订单停在 refunding 超过 24 小时（F-03 / AJ-178，见 scanStuckRefunds）；
  *      ⑧ 部分退款滞留：order_refunds 在途超过 24 小时（AJ-383，见 scanStuckPartialRefunds）；
- *      ⑦ 审核模式仍在生产开启：临到期或已过期（A7 / AJ-378，见 reviewWindowAnomaly）。
+ *      ⑦ 审核模式仍在生产开启：临到期或已过期（A7 / AJ-378，见 reviewWindowAnomaly）；
+ *      ⑪ 迟到付款未退：钱已扣、订单已关，尚未退款（AJ-425，不设回看上界，见 scanLatePaidUnrefunded）；
+ *      ⑫ 售后申请等待：提交超过 24 小时仍在 open / processing（AJ-425，见 scanAfterSalesWaiting）。
  *      自动修任何一类都需要业务裁决（退不退？发不发？），MVP 把它留给人——
  *      但没有这个 job，这些行就只能在库里静默躺着（欠账①被评为致命级的原因）。
  *
@@ -35,6 +37,7 @@
  *
  * @see app/internal-jobs-routes.ts（触发端点）；app/expire-orders.ts（同一框架的兄弟 job）
  */
+import { AFTER_SALE_OPEN_STATUSES } from '@waselect/shared';
 import type { Db } from '../adapters/db.js';
 import { insertReconciliationRun } from '../adapters/ops-log.js';
 import {
@@ -79,6 +82,9 @@ export const UNFINISHED_CALLBACK_MINUTES = 15;
  *      （买家多久到账是发卡行的事，与退款对象的状态无关，不拿来当阈值。）
  */
 export const STUCK_REFUND_HOURS = 24;
+
+/** 售后申请等待阈值（小时）：提交超过这么久仍未结案 → 报 after_sales_waiting（AJ-425）。 */
+export const AFTER_SALE_WAITING_HOURS = 24;
 
 /**
  * 心跳停滞阈值：**tick**（常驻调度器，60s 一轮）超过这个分钟数没有成功心跳 = 卡了。
@@ -345,6 +351,40 @@ async function scanStuckRefunds(ctx: JobContext<Db>): Promise<AnomalyClass> {
 }
 
 /**
+ * 第十一类：**迟到付款未退**（AJ-425，统一结论 5.1）——有 `late_paid` 事件、订单不在退款中 / 已退款。
+ * @why 第三类只回看 48 小时，迟到付款在那之后就再也不会被报出；而它是"钱已扣、承诺原路退回"的单，必须有人去退。
+ *      所以本类**不设回看上界**：退掉之前每天都报。
+ */
+async function scanLatePaidUnrefunded(ctx: JobContext<Db>): Promise<AnomalyClass> {
+  const rows = await ctx.tx<{ id: string; total: string }[]>`
+    select o.id, count(*) over ()::text as total
+      from orders o
+     where o.status not in ('refunding', 'refunded')
+       and exists (select 1 from order_events e where e.order_id = o.id and e.status = 'late_paid')
+     order by o.id
+     limit ${RECONCILE_IDS_CAP + 1}
+  `;
+  return { key: 'late_paid_unrefunded', ...toAnomaly(rows) };
+}
+
+/**
+ * 第十二类：**售后申请等待**（AJ-425）——提交超过 AFTER_SALE_WAITING_HOURS 仍在 open / processing。
+ * @why 买家提交售后后运营没有任何推送；待办条能看见，但没人打开后台时只有对账（告警邮件 / Sentry）会响。
+ * @why 样本给订单 id（运营按单处理），起点取 `created_at`（提交时刻），"处理中"不算重新计时——它仍然是买家在等。
+ */
+async function scanAfterSalesWaiting(ctx: JobContext<Db>): Promise<AnomalyClass> {
+  const rows = await ctx.tx<{ order_id: string; total: string }[]>`
+    select a.order_id, count(*) over ()::text as total
+      from after_sale_requests a
+     where a.status in ${ctx.tx([...AFTER_SALE_OPEN_STATUSES])}
+       and a.created_at <= ${ctx.startedAt}::timestamptz - make_interval(hours => ${AFTER_SALE_WAITING_HOURS})
+     order by a.order_id
+     limit ${RECONCILE_IDS_CAP + 1}
+  `;
+  return { key: 'after_sales_waiting', ...toAnomaly(rows, 'order_id') };
+}
+
+/**
  * 第八类：**部分退款滞留**（AJ-383）——`order_refunds` 里 initiated / pending / unknown 超过 24 小时。
  * @why 部分退款**不改订单状态**，所以第六类（看 orders.status = refunding）永远看不见它；
  *      停在在途的那一笔还占着额度、挡着下一笔，买家在等钱。与第六类同阈值、同"不设回看上界"口径。
@@ -426,6 +466,8 @@ export function createDailyReconciliationJob(input: {
         await scanUnfinishedCallbacks(ctx),
         await scanStuckRefunds(ctx),
         await scanStuckPartialRefunds(ctx),
+        await scanLatePaidUnrefunded(ctx),
+        await scanAfterSalesWaiting(ctx),
         await scanProviderRefundUnrecorded(ctx),
         await scanFxRateAging(ctx, input.fxWarnAfterHours ?? 48),
         reviewWindowAnomaly({

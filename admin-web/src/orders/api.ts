@@ -26,7 +26,7 @@
  * @see ../../../contracts/api-contract.yaml（/admin/orders*）；./view.ts（请求体的生产者）
  */
 import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
-import type { OrderStatus } from '@waselect/shared';
+import type { OrderAttention, OrderStatus } from '@waselect/shared';
 import type { OrderNote } from './notes-view.js';
 
 export type AdminApi = ReturnType<typeof import('../api/client.js').createAdminApi>;
@@ -72,6 +72,8 @@ export interface OrderListQuery {
   includeTest?: boolean;
   /** 排序（契约 0.6.53：`total_jpy` / `-total_jpy` / `created_at` / `-created_at`；不传 = 下单时间倒序）。 */
   sort?: string;
+  /** 待处理筛选（契约 0.6.58 / AJ-425）：售后待处理 / 迟到付款待退 / 拉黑用户的已付单。 */
+  attention?: OrderAttention;
 }
 
 /**
@@ -93,6 +95,7 @@ export async function listOrders(
   if (query.size !== undefined) params.set('size', String(query.size));
   if (query.includeTest === true) params.set('include_test', 'true');
   if (query.sort !== undefined && query.sort !== '') params.set('sort', query.sort);
+  if (query.attention !== undefined) params.set('attention', query.attention);
   const qs = params.toString();
   const resp = await api({
     path: `/api/v1/admin/orders${qs === '' ? '' : `?${qs}`}`,

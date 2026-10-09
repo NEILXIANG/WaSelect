@@ -1,5 +1,7 @@
 /** 职责：运营日志页的纯函数（剩余清单 3-2）。 */
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { RECONCILE_CLASS_LABELS, auditRows, reconciliationView } from './view.js';
 
 describe('auditRows', () => {
@@ -94,18 +96,24 @@ describe('reconciliationView', () => {
     ]);
   });
 
-  it('各类异常都配了中文名（服务端 daily-reconciliation.ts 的 key；AJ-383 加部分退款滞留）', () => {
-    expect(Object.keys(RECONCILE_CLASS_LABELS).sort()).toEqual([
-      'callback_anomalies_48h',
-      'dangling_initiated_payments',
-      'fx_rate_aging',
-      'paid_without_succeeded_payment',
-      'provider_refund_unrecorded',
-      'stalled_heartbeats',
-      'stuck_partial_refunds',
-      'stuck_refunds',
-      'unfinished_callbacks',
-    ]);
+  /**
+   * AJ-425：类名清单不再手抄——直接从服务端 `daily-reconciliation.ts` 收集所有 `key: '…'` 字面量（双向比对）。
+   * @why 手抄那份曾漏了审核模式三类（review_mode_no_deadline / _expired / _closing），运营日志页一直原样显示英文，
+   *      而测试是绿的：它只核对"管理端这份清单 = 测试里抄的那份"，从没和服务端对过（统一结论 U7 副本即负债）。
+   * @limitation 只认 `key: '字面量'` 形态；`review_mode` 是"未开启 / 无异常"的占位类（count 恒 0，永不显示），排除。
+   */
+  it('🔴 服务端对账的每一类都配了中文名，管理端也没有多出来的', () => {
+    const src = readFileSync(
+      resolve(import.meta.dirname, '../../../server/src/app/daily-reconciliation.ts'),
+      'utf8',
+    );
+    const serverKeys = [
+      ...new Set([...src.matchAll(/key: '([a-z0-9_]+)'/g)].map((m) => m[1] ?? '')),
+    ]
+      .filter((k) => k !== 'review_mode')
+      .sort();
+    expect(serverKeys.length).toBeGreaterThanOrEqual(12);
+    expect(Object.keys(RECONCILE_CLASS_LABELS).sort()).toEqual(serverKeys);
   });
 });
 

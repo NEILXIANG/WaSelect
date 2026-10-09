@@ -110,6 +110,15 @@ describe('orderRows', () => {
     expect(row?.isTest).toBe(true);
     expect(row?.hasDispute).toBe(true);
   });
+
+  it('AJ-425：售后中 / 用户已拉黑原样带出；字段缺失（旧版响应）按 false，不凭空挂徽章', () => {
+    const [on] = orderRows([{ ...ORDER, after_sale_open: true, user_blocked: true }]);
+    expect(on?.afterSaleOpen).toBe(true);
+    expect(on?.userBlocked).toBe(true);
+    const [off] = orderRows([ORDER]);
+    expect(off?.afterSaleOpen).toBe(false);
+    expect(off?.userBlocked).toBe(false);
+  });
 });
 
 /**

@@ -55,6 +55,7 @@
  *      migrations/001_init.sql（orders / order_items / payments / order_events）；
  *      domain/admin-order-actions.ts（三条写路径的准入判定）；app/admin-order-routes.ts（唯一调用方）
  */
+import { AFTER_SALE_OPEN_STATUSES, type OrderAttention } from '@waselect/shared';
 import type { Db, JSONValue } from './db.js';
 
 /** 列表行（`AdminOrderListItem`：OrderSummary + 管理端专有列）。 */
@@ -71,6 +72,10 @@ export interface AdminOrderListRow {
   is_test: boolean;
   /** 有迟到付款凭据（`late_paid` 事件，剩余清单 1-5）：已关单也可退款。 */
   late_paid: boolean;
+  /** 有进行中的售后申请（open / processing，AJ-425）。 */
+  after_sale_open: boolean;
+  /** 下单人已被拉黑（AJ-425）：已付单由运营判断退款还是照发。 */
+  user_blocked: boolean;
   created_at: Date;
   /**
    * 收件人（地址快照里的 recipient；0.6.9 / KD-14）。
@@ -101,6 +106,11 @@ export interface AdminOrderListQuery {
   createdTo?: Date | undefined;
   /** 单号 / 收件人 / 运单号 子串匹配（三列 OR，大小写无关）。 */
   keyword?: string | undefined;
+  /**
+   * 待处理筛选（AJ-425，shared `ORDER_ATTENTIONS`）：与其它条件是"且"的关系。
+   * @why 三类单都是"设计上交给运营处理、却没有入口能发现"的（统一结论 U10）。
+   */
+  attention?: OrderAttention | undefined;
   /**
    * 排序（评估 4.5，2026-10-09；shared `LIST_SORT_KEYS.orders`）：不传 = 下单时间倒序。
    * @limitation `total_jpy` 排序没有专用索引：订单百级到千级时是内存排序，量起来再看 EXPLAIN 是否要 (is_test, total_jpy) 索引。
@@ -237,6 +247,27 @@ function normalizeKeyword(raw: string | undefined): string | null {
  * @why 抽成函数而不是在两条 SQL 里各写一遍：分页的两条语句一旦条件漂移，
  *      表现是"第 1 页显示 3 条、total 说 5 条"——没人会怀疑是两条 SQL 不一致。
  */
+/**
+ * 待处理筛选的条件片段（AJ-425）。
+ * @why "进行中售后"取 shared `AFTER_SALE_OPEN_STATUSES`（与部分唯一索引同口径）；"迟到付款待退"排除退款中 / 已退款；
+ *      "拉黑用户的已付单"只看 `paid`——已发货的货已经出去了，那是另一类处置（拒付 / 售后），不在这里混。
+ */
+function attentionWhere(db: Db, a: OrderAttention | undefined) {
+  switch (a) {
+    case undefined:
+      return db`true`;
+    case 'after_sale':
+      return db`exists (select 1 from after_sale_requests a
+                         where a.order_id = orders.id and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])})`;
+    case 'late_paid':
+      return db`status not in ('refunding', 'refunded')
+                and exists (select 1 from order_events e where e.order_id = orders.id and e.status = 'late_paid')`;
+    case 'blocked':
+      return db`status = 'paid'
+                and exists (select 1 from users u where u.id = orders.user_id and u.blocked_at is not null)`;
+  }
+}
+
 function buildWhere(db: Db, q: AdminOrderListQuery) {
   const kw = normalizeKeyword(q.keyword);
   const hideTest = q.includeTest !== true && kw === null;
@@ -245,6 +276,7 @@ function buildWhere(db: Db, q: AdminOrderListQuery) {
       and (${hideTest ? db`is_test = false` : db`true`})
       and (${q.createdFrom === undefined ? db`true` : db`created_at >= ${q.createdFrom}`})
       and (${q.createdTo === undefined ? db`true` : db`created_at < ${q.createdTo}`})
+      and (${attentionWhere(db, q.attention)})
       ${
         kw === null
           ? db``
@@ -269,6 +301,8 @@ function toListRow(r: Record<string, unknown>): AdminOrderListRow {
     has_dispute: bool(r.has_dispute),
     is_test: bool(r.is_test),
     late_paid: bool(r.late_paid),
+    after_sale_open: bool(r.after_sale_open),
+    user_blocked: bool(r.user_blocked),
     created_at: r.created_at as Date,
     recipient: strOrNull(r.recipient),
   };
@@ -298,7 +332,11 @@ export async function listAdminOrders(
   const rows = await db`
     select ${db([...LIST_COLS])}, address_snapshot ->> 'recipient' as recipient,
            exists (select 1 from order_events e
-                    where e.order_id = orders.id and e.status = 'late_paid') as late_paid
+                    where e.order_id = orders.id and e.status = 'late_paid') as late_paid,
+           exists (select 1 from after_sale_requests a
+                    where a.order_id = orders.id and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])}) as after_sale_open,
+           exists (select 1 from users u
+                    where u.id = orders.user_id and u.blocked_at is not null) as user_blocked
       from orders
     ${buildWhere(db, q)}
      ${orderListOrderBy(db, q.sort)}

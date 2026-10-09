@@ -1,5 +1,5 @@
 /**
- * 职责：订单页顶部的"待办"计数（三端联动 UI 模拟 2026-10-08）——待发货 / 退款中 / 待付款，点一下即筛到那一类。
+ * 职责：工作台的"待办"计数（三端联动 UI 模拟 2026-10-08）——待发货 / 退款中 / 待付款，以及 AJ-425 的三类待处理，点一下即筛到那一类。
  *
  * @why 主流电商后台的首屏都是"今天要处理什么"：原先运营要自己在状态下拉里逐个切，才知道有几张单等着发货。
  *      待发货是最要紧的一类（发货时限承诺，SHIP_WITHIN_BUSINESS_DAYS），退款中是机构侧没落定的钱。
@@ -9,13 +9,30 @@
  * @see ./OrdersPage.tsx
  */
 import { useEffect, useState } from 'react';
-import type { OrderStatus } from '@waselect/shared';
+import {
+  ORDER_ATTENTION_LABELS,
+  ORDER_ATTENTIONS,
+  type OrderAttention,
+  type OrderStatus,
+} from '@waselect/shared';
 import { listOrders, type AdminApi } from './api.js';
 
-const TODO: ReadonlyArray<{ status: OrderStatus; label: string }> = [
-  { status: 'paid', label: '待发货' },
-  { status: 'refunding', label: '退款中' },
-  { status: 'pending_payment', label: '待付款' },
+/** 待办格对应的查询条件：按订单状态，或按待处理类（AJ-425）。 */
+export type TodoQuery = { status: OrderStatus } | { attention: OrderAttention };
+
+/**
+ * @why AJ-425（统一结论 5.1 / U10）：售后申请、迟到付款、拉黑用户的已付单都是"交给运营处理、却没有入口能发现"的单，
+ *      进待办条——工作台第一眼就能看见。文案取 shared `ORDER_ATTENTION_LABELS`，与服务端白名单同源。
+ */
+const TODO: ReadonlyArray<{ key: string; query: TodoQuery; label: string }> = [
+  { key: 'paid', query: { status: 'paid' }, label: '待发货' },
+  { key: 'refunding', query: { status: 'refunding' }, label: '退款中' },
+  { key: 'pending_payment', query: { status: 'pending_payment' }, label: '待付款' },
+  ...ORDER_ATTENTIONS.map((a) => ({
+    key: `attention:${a}`,
+    query: { attention: a } as TodoQuery,
+    label: ORDER_ATTENTION_LABELS[a],
+  })),
 ];
 
 /**
@@ -38,7 +55,7 @@ export function TodoBar({
   refreshKey?: number;
   /** 当前筛选状态（对应那一格高亮）。 */
   current: OrderStatus | 'all';
-  onPick: (status: OrderStatus) => void;
+  onPick: (query: TodoQuery) => void;
 }) {
   const [counts, setCounts] = useState<Record<string, number | null>>({});
 
@@ -46,9 +63,9 @@ export function TodoBar({
     let alive = true;
     void Promise.all(
       TODO.map((t) =>
-        listOrders(api, { status: t.status, size: 1 })
-          .then((r) => [t.status, r.total] as const)
-          .catch(() => [t.status, null] as const),
+        listOrders(api, { ...t.query, size: 1 })
+          .then((r) => [t.key, r.total] as const)
+          .catch(() => [t.key, null] as const),
       ),
     ).then((pairs) => {
       if (alive) setCounts(Object.fromEntries(pairs));
@@ -61,13 +78,13 @@ export function TodoBar({
   return (
     <div className="chips" aria-label="待办">
       {TODO.map((t) => {
-        const n = counts[t.status];
+        const n = counts[t.key];
         return (
           <button
-            key={t.status}
+            key={t.key}
             type="button"
-            className={todoChipClass(current === t.status, n)}
-            onClick={() => onPick(t.status)}
+            className={todoChipClass('status' in t.query && current === t.query.status, n)}
+            onClick={() => onPick(t.query)}
           >
             {t.label} {n === undefined ? '…' : n === null ? '—' : n} · 去处理 →
           </button>

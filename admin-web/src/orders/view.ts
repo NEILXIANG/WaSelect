@@ -123,6 +123,9 @@ export interface OrderRow {
   purchaseLines: string[];
   hasDispute: boolean;
   isTest: boolean;
+  /** AJ-425：有进行中的售后申请 / 下单用户已被拉黑（列表徽章用；字段缺失按 false）。 */
+  afterSaleOpen: boolean;
+  userBlocked: boolean;
   actions: { ship: Gate; refund: Gate; address: Gate };
 }
 
@@ -236,6 +239,8 @@ export function orderRows(items: unknown): OrderRow[] {
         purchaseLines: purchaseLines(o),
         hasDispute: o['has_dispute'] === true,
         isTest: o['is_test'] === true,
+        afterSaleOpen: o['after_sale_open'] === true,
+        userBlocked: o['user_blocked'] === true,
         actions: { ship: shipGate(o), refund: refundGate(o), address: addressGate(o) },
       };
     });

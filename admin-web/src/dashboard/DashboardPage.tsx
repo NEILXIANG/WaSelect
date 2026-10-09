@@ -134,8 +134,8 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
         <TodoBar
           api={api}
           current="all"
-          onPick={(status) => {
-            onNavigate({ page: 'orders', id: '', query: new URLSearchParams({ status }) });
+          onPick={(q) => {
+            onNavigate({ page: 'orders', id: '', query: new URLSearchParams(q) });
           }}
         />
       </section>

@@ -34,7 +34,13 @@
  */
 import { ExportBar } from './ExportBar.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LIST_SORT_KEYS, SEARCH_KEYWORD_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
+import {
+  isOrderAttention,
+  LIST_SORT_KEYS,
+  ORDER_ATTENTION_LABELS,
+  SEARCH_KEYWORD_MAX_LENGTH,
+  type OrderStatus,
+} from '@waselect/shared';
 import { DEFAULT_PAGE_SIZE, PageSizeSelect, readListParams, SortTh } from '../ui/list-controls.js';
 import { listOrders, type AdminApi, type AdminOrderLike } from './api.js';
 import { ORDER_STATUS_LABELS, orderRows, shipGate, type OrderRow } from './view.js';
@@ -66,6 +72,8 @@ const Q = {
   /** 评估 4.5 / 4.6（2026-10-09）：排序与每页条数同样进地址栏（ui/list-controls.tsx）。 */
   sort: 'sort',
   size: 'size',
+  /** AJ-425：待处理筛选（工作台待办"售后待处理 / 迟到付款待退 / 拉黑用户的已付单"跳进来时带上）。 */
+  attention: 'attention',
 } as const;
 
 export interface OrdersPageProps {
@@ -120,6 +128,9 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   const createdFrom = dates.createdFrom;
   const createdTo = dates.createdTo;
   const applied = route.query.get(Q.q) ?? '';
+  // AJ-425：认不出的值不发给服务端（与 `status` 同口径：换一个 40001 只会让页面空白、看不出是筛选坏了）
+  const attentionRaw = route.query.get(Q.attention);
+  const attention = isOrderAttention(attentionRaw) ? attentionRaw : undefined;
   const includeTest = route.query.get(Q.test) === '1';
   const { sortKey, sortDir, size: pageSize } = readListParams(route.query, LIST_SORT_KEYS.orders);
   /** 改排序 / 条数都回到第 1 页（第 3 页在新顺序下是另一批单，停在那里只会让人困惑）。 */
@@ -194,6 +205,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         ...(statusKey === '' ? {} : { status: statusKey.split(',') as OrderStatus[] }),
         ...(createdFrom !== undefined ? { createdFrom } : {}),
         ...(createdTo !== undefined ? { createdTo } : {}),
+        ...(attention !== undefined ? { attention } : {}),
         includeTest,
       });
       if (seq !== reqSeq.current) return;
@@ -229,6 +241,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
     pageSize,
     sortKey,
     sortDir,
+    attention,
   ]);
 
   useEffect(() => {
@@ -301,6 +314,20 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         <p className="muted">
           当前筛选：{statuses.map((s) => ORDER_STATUS_LABELS[s]).join('、')}{' '}
           <button type="button" className="link" onClick={() => patch({ status: '', page: '1' })}>
+            清除
+          </button>
+        </p>
+      )}
+
+      {attention !== undefined && (
+        // AJ-425：从工作台待办跳进来时说清"现在只看哪一类"，并给出口（不清掉的话运营会以为列表就这么几单）
+        <p className="muted">
+          只看：{ORDER_ATTENTION_LABELS[attention]}{' '}
+          <button
+            type="button"
+            className="link"
+            onClick={() => patch({ attention: '', page: '1' })}
+          >
             清除
           </button>
         </p>
@@ -475,7 +502,12 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
                 {/* AJ-400：彩色徽章（statusText 文案不变，色调见 badges.ts） */}
                 {[
                   statusBadge(raw.find((o) => o.order_id === row.id) ?? { status: '' }),
-                  ...flagBadges({ has_dispute: row.hasDispute, is_test: row.isTest }),
+                  ...flagBadges({
+                    has_dispute: row.hasDispute,
+                    is_test: row.isTest,
+                    after_sale_open: row.afterSaleOpen,
+                    user_blocked: row.userBlocked,
+                  }),
                 ].map((b) => (
                   <Badge key={b.text} tone={b.tone}>
                     {b.text}

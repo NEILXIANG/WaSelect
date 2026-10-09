@@ -523,6 +523,65 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
     }
   });
 
+  /**
+   * AJ-425（统一结论 5.1 / U10）：迟到付款是"钱已扣、要原路退"的单，此前只在第三类（近 48h 回调异常）里出现一次，
+   * 48 小时后就再也不会被报出——而它恰恰需要人去退。本类不设回看上界，退款中 / 已退款的不报。
+   */
+  it('🔴 迟到付款未退：5 天前到账、仍未退款的报 late_paid_unrefunded；已退款的不报', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      await db`
+        insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                            total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
+        values ('o-lp', 'W-LP-1', 'u-recon', 'expired', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now() - interval '6 days'),
+               ('o-lp-done', 'W-LP-2', 'u-recon', 'refunded', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now() - interval '6 days')`;
+      await db`
+        insert into order_events (order_id, status, note, actor, at)
+        values ('o-lp', 'late_paid', 'evt-1', 'provider:mock', now() - interval '5 days'),
+               ('o-lp-done', 'late_paid', 'evt-2', 'provider:mock', now() - interval '5 days')`;
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const hit = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'late_paid_unrefunded');
+      expect(hit, '迟到付款超过 48 小时也必须继续报').toBeDefined();
+      const ctx = hit?.['ctx'] as Record<string, unknown>;
+      expect([ctx['count'], ctx['sample_ids']]).toEqual([1, ['o-lp']]);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  /**
+   * AJ-425：售后申请提交后运营没有任何通知，等待超过 24 小时的（open / processing）进对账——跟着告警邮件 / Sentry 走。
+   */
+  it('🔴 售后等待：提交超过 24h 仍在 open / processing 的报 after_sales_waiting；23h 的、已结案的不报', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      await db`
+        insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                            total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
+        values ('o-as1', 'W-AS-1', 'u-recon', 'delivered', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now()),
+               ('o-as2', 'W-AS-2', 'u-recon', 'delivered', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now()),
+               ('o-as3', 'W-AS-3', 'u-recon', 'delivered', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now())`;
+      await db`
+        insert into after_sale_requests (id, order_id, user_id, reason, description, status, created_at, updated_at)
+        values ('as-old', 'o-as1', 'u-recon', 'damaged', '破了', 'processing', now() - interval '25 hours', now()),
+               ('as-new', 'o-as2', 'u-recon', 'damaged', '破了', 'open', now() - interval '23 hours', now()),
+               ('as-done', 'o-as3', 'u-recon', 'damaged', '破了', 'resolved', now() - interval '3 days', now())`;
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const hit = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'after_sales_waiting');
+      expect(hit, '等待超过 24 小时的售后必须报').toBeDefined();
+      const ctx = hit?.['ctx'] as Record<string, unknown>;
+      expect([ctx['count'], ctx['sample_ids']]).toEqual([1, ['o-as1']]);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('🔴 部分退款滞留：pending / unknown / initiated 超过 24h 报 stuck_partial_refunds；succeeded 与 23h 的不报', async () => {
     const srv = await buildServer({ withSecret: true });
     try {

@@ -68,3 +68,13 @@ describe('detailBadges（详情页头）', () => {
     ]);
   });
 });
+
+describe('flagBadges：待处理标记（AJ-425）', () => {
+  it('🔴 有进行中售后 → 售后中；下单人已拉黑 → 用户已拉黑；都没有 → 不出', () => {
+    expect(flagBadges({ after_sale_open: true }).map((b) => b.text)).toEqual(['售后中']);
+    expect(flagBadges({ user_blocked: true }).map((b) => [b.text, b.tone])).toEqual([
+      ['用户已拉黑', 'danger'],
+    ]);
+    expect(flagBadges({ after_sale_open: false, user_blocked: false })).toEqual([]);
+  });
+});

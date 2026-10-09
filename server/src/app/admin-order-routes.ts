@@ -68,7 +68,11 @@ import {
   refundReasonGuard,
   releaseReasonGuard,
 } from '../domain/admin-order-actions.js';
-import { REFUND_REASON_MAX_LENGTH, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
+import {
+  isOrderAttention,
+  REFUND_REASON_MAX_LENGTH,
+  SEARCH_KEYWORD_MAX_LENGTH,
+} from '@waselect/shared';
 import { markAuditCommitted, setAuditAfter, setAuditBefore } from './admin-audit.js';
 import { parseAddressInput } from '../domain/address-input.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
@@ -150,6 +154,9 @@ function toListItem(
     has_dispute: r.has_dispute,
     is_test: r.is_test,
     late_paid: r.late_paid,
+    // AJ-425（契约 0.6.58）：列表里一眼看见"这单有进行中的售后 / 下单人已被拉黑"
+    after_sale_open: r.after_sale_open,
+    user_blocked: r.user_blocked,
     created_at: r.created_at.toISOString(),
   };
 }
@@ -279,6 +286,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           created_from?: unknown;
           created_to?: unknown;
           sort?: unknown;
+          attention?: unknown;
         };
         const { page, size } = readPaging(q);
         // 评估 4.5（契约 0.6.53）：白名单排序；非法 → 40001（不静默按默认排，否则运营以为排过了）
@@ -293,6 +301,11 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           throw new AppError(40001, { reason: 'include_test_invalid' });
         }
         const includeTest = q.include_test === 'true';
+        // AJ-425（契约 0.6.58）：待处理筛选，白名单取自 shared；非法 → 40001（不静默当成"不筛"，否则运营以为筛过了）
+        if (q.attention !== undefined && !isOrderAttention(q.attention)) {
+          throw new AppError(40001, { reason: 'attention_invalid' });
+        }
+        const attention = q.attention;
         // AJ-400（契约 0.6.44）：逗号分隔的多状态（页签"售后·退款" = refunding,refunded）。
         // ⚠️ 重复参数（`?status=a&status=b`）Express 解析成数组——不是 string 一律非法，不去猜拼接方式。
         const statuses =
@@ -321,6 +334,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           ...(range.from !== null ? { createdFrom: range.from } : {}),
           ...(range.to !== null ? { createdTo: range.to } : {}),
           ...(sort.key !== null ? { sort: { key: sort.key, dir: sort.dir } } : {}),
+          ...(attention !== undefined ? { attention } : {}),
           includeTest,
         });
         // 行项目**一次批量**取（N+1 的反面）：`listOrderItemsFor` 一条 `in (…)` 拿全部，

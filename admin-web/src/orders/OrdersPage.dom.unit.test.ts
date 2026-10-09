@@ -426,3 +426,44 @@ describe('订单列表：排序与每页条数', () => {
     expect(gets().at(-1)?.path).toContain('size=100');
   });
 });
+
+describe('订单列表：待处理筛选（AJ-425）', () => {
+  it('🔴 网址带 attention → 列表请求带上它，并显示"只看：…"与清除按钮；清除后不再带', async () => {
+    const el = await open('#/orders?attention=after_sale');
+    await flush();
+    expect(gets().at(-1)?.path).toContain('attention=after_sale');
+    expect(el.textContent).toContain('只看：售后待处理');
+    await click(button(el, '清除'));
+    await flush();
+    expect(gets().at(-1)?.path).not.toContain('attention=');
+  });
+
+  // 浏览器走查 2026-10-09：badges.unit 直接调 flagBadges 是绿的，但列表行只把 has_dispute / is_test
+  // 传给它，"售后中"在页面上从未出现——这条用例验的是接线，不是 flagBadges 本身。
+  it('🔴 列表行带 after_sale_open / user_blocked → 状态列真的显示「售后中」「用户已拉黑」', async () => {
+    calls = [];
+    const row = {
+      order_id: 'o-1',
+      order_no: 'NO-1',
+      status: 'paid',
+      total_jpy: 1000,
+      created_at: '2026-01-02T00:00:00.000Z',
+      after_sale_open: true,
+      user_blocked: true,
+    };
+    apiImpl = async (req: Call): Promise<unknown> => {
+      calls.push(req);
+      return { items: [row], total: 1 };
+    };
+    mounted = await mount(createElement(Harness, { initial: parseHash('#/orders') }));
+    const tr = mounted.el.querySelector('tbody tr');
+    expect(tr?.textContent).toContain('售后中');
+    expect(tr?.textContent).toContain('用户已拉黑');
+  });
+
+  it('网址里认不出的 attention 不发给服务端（不换一个 40001）', async () => {
+    await open('#/orders?attention=everything');
+    await flush();
+    expect(gets().at(-1)?.path).not.toContain('attention=');
+  });
+});
