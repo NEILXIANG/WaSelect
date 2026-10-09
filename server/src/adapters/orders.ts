@@ -24,7 +24,7 @@
  * @see app/expire-orders.ts（消费方：超时关单 job）；migrations/001_init.sql（orders 表）；
  *      docs/I1阶段开发实施方案.md §3.2；D-33（30 分钟超时关单）
  */
-import { ORDER_STATUS } from '@waselect/shared';
+import { AFTER_SALE_OPEN_STATUSES, ORDER_STATUS } from '@waselect/shared';
 import type { Db, JSONValue } from './db.js';
 import { PRODUCT_ID_LOCK_COLLATION } from '../domain/stock-lock.js';
 
@@ -111,6 +111,9 @@ const AUTO_ADVANCE = {
  * @param at 迁移时刻（写进时间戳列与事件；来自注入时钟）
  * @returns 本次真正迁走的订单 id
  * @why 排除 `has_dispute`：拒付未决时"签收 / 完成"会关掉售后与举证窗口，那要人判断（AJ-182）。
+ * @why 排除有**进行中售后**（open / processing）的单（AJ-424，统一结论 5.1）：买家报了"没收到 / 破损"、运营还没结案时，
+ *      系统替他"签收 / 完成"会让两边看到的进度互相矛盾。结案后下一轮照常推进（计时列不重置——到期就迁）。
+ *      "进行中"取 shared `AFTER_SALE_OPEN_STATUSES`，与部分唯一索引 `uq_after_sale_requests_open` 同口径，不在这里另写一份。
  * @why `for update skip locked` + 迁移时再判一次 `status`：与关单同口径——并发的人工操作（退款、发货改址）
  *      持着行锁时本轮跳过它，下一轮再看；已被别人迁走的行 0 命中，不写事件。
  */
@@ -124,6 +127,10 @@ export async function autoAdvanceOrders(
     with due as (
       select id from orders
        where status = ${m.from} and has_dispute = false and ${tx(m.since)} <= ${opts.dueBefore}
+         and not exists (
+           select 1 from after_sale_requests a
+            where a.order_id = orders.id and a.status in ${tx([...AFTER_SALE_OPEN_STATUSES])}
+         )
        order by ${tx(m.since)}
        limit ${opts.limit}
        for update skip locked

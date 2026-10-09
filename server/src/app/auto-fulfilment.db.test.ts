@@ -150,3 +150,36 @@ describe('自动完成（delivered → completed，AUTO_COMPLETE_DAYS）', () =>
     expect((await state('o-old')).status).toBe('delivered');
   });
 });
+
+/**
+ * 统一结论 5.1（AJ-424）：买家报了"没收到货 / 破损"等售后、运营还没结案时，系统不能替他"签收"或"完成"——
+ * 那会把一张正在处理问题的单推进成"已签收 / 已完成"，买家与运营看到的进度互相矛盾。
+ * 结案（resolved / rejected）之后照常推进：@why 防止排除条件写宽（例如把所有有过售后的单都卡住）。
+ */
+describe('进行中的售后申请：不自动签收、不自动完成（AJ-424）', () => {
+  async function afterSale(orderId: string, status: string) {
+    await db`
+      insert into after_sale_requests (id, order_id, user_id, reason, description, status, created_at, updated_at)
+      values (${`as-${orderId}`}, ${orderId}, 'u-f', 'not_received', '一个月了还没收到', ${status}, ${ago(DAY)}, ${ago(DAY)})`;
+  }
+
+  it('🔴 open / processing 的单两段都不动；resolved / rejected 的单照常推进', async () => {
+    await seed('o-ship-open', 'shipped', { shipped: ago(31 * DAY) });
+    await afterSale('o-ship-open', 'open');
+    await seed('o-ship-done', 'shipped', { shipped: ago(31 * DAY) });
+    await afterSale('o-ship-done', 'rejected');
+    await seed('o-dlv-proc', 'delivered', { shipped: ago(40 * DAY), delivered: ago(8 * DAY) });
+    await afterSale('o-dlv-proc', 'processing');
+    await seed('o-dlv-done', 'delivered', { shipped: ago(40 * DAY), delivered: ago(8 * DAY) });
+    await afterSale('o-dlv-done', 'resolved');
+
+    await run([createAutoDeliverJob({ afterDays: 30 }), createAutoCompleteJob({ afterDays: 7 })]);
+
+    expect([
+      (await state('o-ship-open')).status,
+      (await state('o-ship-done')).status,
+      (await state('o-dlv-proc')).status,
+      (await state('o-dlv-done')).status,
+    ]).toEqual(['shipped', 'delivered', 'delivered', 'completed']);
+  });
+});
