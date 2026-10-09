@@ -471,3 +471,27 @@ describe('再次购买（A7，AJ-416）', () => {
     expect(buyAgainItems(null)).toEqual([]);
   });
 });
+
+describe('detailView · 售后卡片（AJ-420）', () => {
+  it('🔴 已签收无申请 → 给入口；有进行中的申请 → 显示进度、不给入口；待发货 → 不出卡片', () => {
+    expect(detailView({ status: 'delivered' }).afterSale).toEqual({
+      show: true,
+      canApply: true,
+      current: null,
+    });
+    const open = detailView({
+      status: 'delivered',
+      after_sale: {
+        id: 'as-1',
+        reason: 'wrong_item',
+        description: '收到的是抹茶味，下单的是原味',
+        status: 'open',
+        created_at: '2026-10-08T03:00:00.000Z',
+        updated_at: '2026-10-08T03:00:00.000Z',
+      },
+    }).afterSale;
+    expect(open).toMatchObject({ show: true, canApply: false });
+    expect(open.current).toMatchObject({ reasonText: '发错商品', statusText: '已提交，等待处理' });
+    expect(detailView({ status: 'paid' }).afterSale.show).toBe(false);
+  });
+});

@@ -75,6 +75,7 @@ import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 import { addressSummary } from '../../utils/address-form.js';
 import { jstDateTimeLabeled } from '../../utils/jst-text.js';
 import { orderProgress } from '../../utils/order-progress.js';
+import { afterSaleCard } from '../../utils/after-sale.js';
 
 /**
  * ISO → 买家可见的 JST 串（**带时区标注**）；解析失败回落原串（数据不能丢，宁可难看）。
@@ -283,5 +284,10 @@ export function detailView(order, opts = undefined) {
      * 时间线保留在下方（进度条不带时刻，见 order-progress @tradeoff）。
      */
     progress: orderProgress(o),
+    /**
+     * 售后卡片（AJ-420）：已发货 / 已签收 / 已完成的单给「申请售后」入口；有申请时显示最新一条的进度与处理说明。
+     * 不放进底栏：底栏已有确认收货 / 再次购买，售后是"出了问题才找"的低频入口。
+     */
+    afterSale: afterSaleCard(o),
   };
 }

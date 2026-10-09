@@ -12,7 +12,8 @@
 -->
 <view class="ws-page">
   <!-- 区块标题（S4：走组件，不再每页各写一份 kicker + 主标） -->
-  <ws-section-head class="ws-gutter addr__head" kicker="Address Book" title="收货地址" />
+  <!-- 外边距放在包一层的 view 上：类名写在自定义组件标签上时页面的 ws-gutter 不生效（模拟器截图实测：标题贴左边） -->
+  <view class="ws-gutter addr__head"><ws-section-head kicker="Address Book" title="收货地址" /></view>
 
   <!-- 状态块（S4：走 `ws-state-block` 的三段式） -->
   <ws-state-block wx:if="{{loading}}" kind="loading" title="正在加载地址" compact="{{true}}" />

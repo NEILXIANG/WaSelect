@@ -44,6 +44,8 @@ const PAY_PAGE = '/pages/pay/index';
 /** A7：再次购买后去购物车（tab 页，只能 switchTab）；点商品行进详情。 */
 const CART_PAGE = '/pages/cart/index';
 const DETAIL_PAGE = '/pages/detail/index';
+/** 售后申请页（AJ-420）；提交后出栈回本页，onShow 重取即看到进度。 */
+const AFTER_SALE_PAGE = '/pages/after-sale/index';
 
 Page({
   data: {
@@ -195,6 +197,12 @@ Page({
     const id = e?.currentTarget?.dataset?.id;
     if (typeof id !== 'string' || id === '') return;
     wxApi.navigateTo({ url: `${DETAIL_PAGE}?id=${encodeURIComponent(id)}` });
+  },
+
+  /** 申请售后（AJ-420，仅 `afterSale.canApply`）。用 order_id（内部 id）而不是订单号：接口按 id 定位。 */
+  onApplyAfterSale() {
+    if (this.orderId === '' || this.data.view?.afterSale?.canApply !== true) return;
+    wxApi.navigateTo({ url: `${AFTER_SALE_PAGE}?id=${encodeURIComponent(this.orderId)}` });
   },
 
   /** 继续支付（仅 `canPay`；不传金额，支付页自己向服务端要权威金额）。 */

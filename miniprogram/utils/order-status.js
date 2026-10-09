@@ -76,9 +76,9 @@ export const BUYER_STATUS = {
   },
   delivered: {
     title: '已送达',
-    next: '如果实际没有收到，或商品有问题，请联系客服并提供订单号。',
+    next: '如果实际没有收到，或商品有问题，可在订单详情里申请售后，处理结果也会在那里回复。',
   },
-  completed: { title: '已完成', next: '订单已完成。商品有问题请联系客服并提供订单号。' },
+  completed: { title: '已完成', next: '订单已完成。商品有问题可在订单详情里申请售后。' },
   cancelled: { title: '已取消', next: '订单已取消，需要的话可以重新下单。' },
   expired: { title: '已超时关闭', next: '超过支付时间，订单已自动关闭；需要的话可以重新下单。' },
   refunding: {

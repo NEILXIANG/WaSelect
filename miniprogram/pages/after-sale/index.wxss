@@ -1,0 +1,59 @@
+/**
+ * 售后申请页样式（AJ-420）：沿用地址编辑页的控件口径（内凹输入面、砖红错误字、底部说明居中）。
+ * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件）。
+ */
+.as__head {
+  padding-top: var(--ws-space-card);
+}
+
+.as__form {
+  padding: var(--ws-space-stack);
+}
+
+.input {
+  display: block;
+  padding: var(--ws-space-inline) var(--ws-space-stack);
+  border: var(--ws-border-width) solid var(--ws-line);
+  border-radius: var(--ws-radius-sm);
+  background: var(--ws-surface-sunk);
+  color: var(--ws-ink);
+  font-size: var(--ws-f-base);
+}
+
+/* 描述框：多行。textarea 默认宽 300px，不撑满卡片；高度用宿主默认（约 150px，够写几句话） */
+.as__desc {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.as__count {
+  display: block;
+  margin-top: var(--ws-space-hair);
+  text-align: right;
+}
+
+.as__count--over {
+  color: var(--ws-danger);
+}
+
+.field__error {
+  display: block;
+  margin-bottom: var(--ws-space-inline);
+  color: var(--ws-danger);
+  font-size: var(--ws-f-xs);
+}
+
+.as__foot {
+  margin-top: var(--ws-space-section);
+  padding-bottom: var(--ws-space-section);
+}
+
+.tip {
+  display: block;
+  margin-top: var(--ws-space-inline);
+  text-align: center;
+}
+
+.ph {
+  color: var(--ws-ink-faint);
+}

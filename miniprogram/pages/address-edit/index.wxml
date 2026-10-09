@@ -13,11 +13,8 @@
   服务端拒单也走同一条错误区：前端预检不是权威，只信预检会变成"说对但提交失败"。
 -->
 <view class="ws-page">
-  <ws-section-head
-    class="ws-gutter aedit__head"
-    kicker="Address"
-    title="{{editing ? '编辑地址' : '新增地址'}}"
-  />
+  <!-- 外边距放在包一层的 view 上：类名写在自定义组件标签上时页面的 ws-gutter 不生效（模拟器截图实测：标题贴左边） -->
+  <view class="ws-gutter aedit__head"><ws-section-head kicker="Address" title="{{editing ? '编辑地址' : '新增地址'}}" /></view>
 
   <ws-state-block wx:if="{{loading}}" kind="loading" title="正在加载地址" compact="{{true}}" />
 

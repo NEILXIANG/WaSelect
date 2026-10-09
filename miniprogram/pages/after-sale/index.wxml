@@ -1,0 +1,55 @@
+<!--
+  售后申请（AJ-420）：选问题类型 + 描述 → 提交 → 回订单详情看进度。
+  版式沿用地址编辑页的设计体系（ws-section-head / ws-card / ws-field / ws-button），不引入新样式语言。
+  ⚠️ 错误在页面内显示，不弹 toast（与地址编辑页同口径）。
+-->
+<view class="ws-page">
+  <!-- 外边距放在包一层的 view 上：类名写在自定义组件标签上时页面的 ws-gutter 不生效（模拟器截图实测：标题贴左边） -->
+  <view class="ws-gutter as__head"><ws-section-head kicker="After-sales" title="申请售后" /></view>
+
+  <ws-state-block
+    wx:if="{{error}}"
+    kind="fail"
+    title="打不开售后申请"
+    reason="{{error}}"
+    altText="返回"
+    bindalt="onBack"
+  />
+
+  <block wx:if="{{!error}}">
+    <view class="ws-gutter">
+      <view class="ws-card as__form">
+        <ws-field label="问题类型">
+          <picker mode="selector" range="{{reasonLabels}}" value="{{form.reasonIndex < 0 ? 0 : form.reasonIndex}}" bindchange="onReasonPick">
+            <view class="input {{view.reasonText ? '' : 'ph'}}">{{view.reasonText || '请选择'}}</view>
+          </picker>
+        </ws-field>
+
+        <ws-field label="问题描述">
+          <textarea
+            class="input as__desc"
+            value="{{form.description}}"
+            maxlength="{{max}}"
+            bindinput="onInput"
+            placeholder="例：外箱压扁，抹茶罐凹了一块，粉洒出来一些"
+            placeholder-class="ph"
+          />
+          <text class="ws-caption as__count {{view.overLimit ? 'as__count--over' : ''}}">{{view.countText}}</text>
+        </ws-field>
+      </view>
+    </view>
+
+    <view class="ws-gutter as__foot">
+      <text class="field__error" wx:if="{{saveError}}">{{saveError}}</text>
+      <text class="ws-caption" wx:if="{{saveErrorRef}}" user-select>{{saveErrorRef}}</text>
+      <ws-button
+        text="{{submitting ? '提交中…' : '提交申请'}}"
+        type="primary"
+        disabled="{{submitting || !view.canSubmit}}"
+        loading="{{submitting}}"
+        bindtap="onSubmit"
+      />
+      <text class="ws-note tip">提交后我们会在订单详情里回复处理结果；需要补充照片请联系客服并提供订单号。</text>
+    </view>
+  </block>
+</view>

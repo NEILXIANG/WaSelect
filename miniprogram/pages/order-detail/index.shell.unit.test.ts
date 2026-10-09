@@ -197,3 +197,32 @@ describe('订单详情：再次购买 / 商品可点（A7，AJ-416）', () => {
     expect(nav).toEqual(['/pages/detail/index?id=p-2']);
   });
 });
+
+describe('订单详情：申请售后入口（AJ-420）', () => {
+  it('🔴 可申请时 → 带内部 order_id 进售后申请页', async () => {
+    order = { ...ORDER, status: 'delivered' };
+    await open();
+    call('onApplyAfterSale');
+    expect(nav).toEqual(['/pages/after-sale/index?id=o-1']);
+  });
+
+  it('不可申请（待发货 / 已有进行中的申请）→ 点了也不跳', async () => {
+    await open();
+    call('onApplyAfterSale');
+    order = {
+      ...ORDER,
+      status: 'delivered',
+      after_sale: { id: 'as-1', reason: 'damaged', description: 'x', status: 'processing' },
+    };
+    await open();
+    call('onApplyAfterSale');
+    expect(nav).toEqual([]);
+  });
+
+  it('wxml 里入口绑的是 onApplyAfterSale，且只在 canApply 时出现', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    expect(wxml).toMatch(
+      /wx:if="\{\{view\.afterSale\.canApply\}\}"[\s\S]{0,120}bindtap="onApplyAfterSale"/,
+    );
+  });
+});

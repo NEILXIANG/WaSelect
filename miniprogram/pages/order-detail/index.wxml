@@ -80,6 +80,32 @@
       </view>
     </view>
 
+    <!--
+      售后（AJ-420）：入口 + 最新一条申请的进度。放在客服卡之后：两者都是"订单有问题时找谁"。
+    -->
+    <view class="ws-gutter ws-section" wx:if="{{view.afterSale.show}}">
+      <view class="ws-card">
+        <text class="ws-note">售后</text>
+        <block wx:if="{{view.afterSale.current}}">
+          <view class="quote-line">
+            <text class="ws-body">{{view.afterSale.current.reasonText}}</text>
+            <text class="ws-tag">{{view.afterSale.current.statusText}}</text>
+          </view>
+          <text class="ws-caption hint" user-select>{{view.afterSale.current.description}}</text>
+          <text class="ws-body hint" wx:if="{{view.afterSale.current.note}}" user-select>处理说明：{{view.afterSale.current.note}}</text>
+          <text class="ws-caption hint">提交于 {{view.afterSale.current.atText}}</text>
+        </block>
+        <view
+          class="track track--act"
+          wx:if="{{view.afterSale.canApply}}"
+          hover-class="ws-press"
+          bindtap="onApplyAfterSale"
+          aria-role="button"
+          aria-label="申请售后"
+        >{{view.afterSale.current ? '还有问题？再次申请售后' : '收到的商品有问题？申请售后'}}</view>
+      </view>
+    </view>
+
     <view class="ws-gutter ws-section" wx:if="{{view.items.length > 0}}">
       <view class="ws-card">
         <text class="ws-section-kicker">Items</text>

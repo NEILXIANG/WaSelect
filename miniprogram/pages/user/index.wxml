@@ -16,7 +16,8 @@
 -->
 <view class="ws-page ws-page--with-tabbar">
   <!-- 页头（S4：走 `ws-section-head` 组件，与其余页头同一份实现） -->
-  <ws-section-head class="ws-gutter mine__head" kicker="Mine" title="我的" />
+  <!-- 外边距放在包一层的 view 上：类名写在自定义组件标签上时页面的 ws-gutter 不生效（模拟器截图实测：标题贴左边） -->
+  <view class="ws-gutter mine__head"><ws-section-head kicker="Mine" title="我的" /></view>
 
   <!-- 登录态：一行，左标签右值。
        小程序评估（AJ-416）：只在"正在登录 / 没登上 / 要重试"时出现——登录成功后"已登录"一行没有信息量，
