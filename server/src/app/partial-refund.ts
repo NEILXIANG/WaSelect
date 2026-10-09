@@ -24,6 +24,7 @@ import {
   sumPartialRefunds,
 } from '../adapters/order-refunds.js';
 import { restoreStockForOrder } from '../adapters/orders.js';
+import { isOutOfStockRefundReason } from '@waselect/shared';
 import { markRefunded, markRefunding } from '../adapters/orders-admin.js';
 import type { EventBus } from '../ports/events.js';
 import { AppError } from '../errors.js';
@@ -189,6 +190,7 @@ async function applyOutcome(
 /**
  * 部分退款累计**退满实收**时的收尾（第三轮缺口 P2-1，AJ-385）：记 `refunded_by_parts` 事件；
  * 未发货（`shipped_at is null` 且 `paid_at` 非空）的单回补库存——与整单退款 `settle` 同一口径；
+ * 已成功的几笔里有一笔理由是「缺货」预设则不回补（AJ-427：回补是整单的，没法只还有货的那几件；少记比多记安全）；
  * 并把订单**沿状态机**迁到 refunded（AJ-414：`paid | shipped | delivered → refunding → refunded`，同一事务）。
  * @why 要迁状态：此前只记事件不改状态，"钱已全退"的单仍是 paid——发货闸门放行、待采购 / 报关清单照出、
  *      列表「待发货」照列，而库存又已回补 ⇒ 运营会把一张全退的单采购发出，钱货两空、库存多卖一件。
@@ -230,8 +232,13 @@ async function closeOutIfFullyRefunded(
       `${String(o['charge_currency'])}:${String(sums.succeededMinor)}`,
       at,
     );
-    if (o['shipped_at'] === null && o['paid_at'] !== null)
-      await restoreStockForOrder(tx, plan.orderId);
+    // AJ-427：退满的几笔里只要有一笔是「缺货」就不回补（回补是整单的，没法只还"有货"的那几件）
+    const reasons = await tx<{ reason: string }[]>`
+      select reason from order_refunds where order_id = ${plan.orderId} and status = 'succeeded'
+    `;
+    const outOfStock = reasons.some((r) => isOutOfStockRefundReason(r.reason));
+    const restock = o['shipped_at'] === null && o['paid_at'] !== null && !outOfStock;
+    if (restock) await restoreStockForOrder(tx, plan.orderId);
     // AJ-414：沿状态机迁到 refunded；completed 没有边 → markRefunding 返回 false，状态保持（@limitation）
     const moved =
       (await markRefunding(tx, plan.orderId, 'refunded_by_parts', at, plan.actor)) &&
@@ -247,7 +254,8 @@ async function closeOutIfFullyRefunded(
       result: 'ok',
       order_id: plan.orderId,
       ctx: {
-        restocked: o['shipped_at'] === null && o['paid_at'] !== null,
+        restocked: restock,
+        out_of_stock: outOfStock,
         status_moved: moved,
       },
     });

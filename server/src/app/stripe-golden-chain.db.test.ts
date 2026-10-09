@@ -454,11 +454,11 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
     expect((await completeCheckout(orderId, `evt_${tag}`)).status).toBe(200);
     return orderId;
   }
-  const refund = async (orderId: string, key: string) =>
+  const refund = async (orderId: string, key: string, reason = '缺货') =>
     call(srv, 'POST', `/api/v1/admin/orders/${orderId}/refund`, {
       token: await tokenFor('u-admin', 'admin'),
       key,
-      body: { reason: '缺货' },
+      body: { reason },
     });
   const refundKeys = () =>
     stripeCalls('/v1/refunds').map((c) => c.headers?.['idempotency-key'] ?? '');
@@ -497,8 +497,8 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
 
   /**
    * 退款回补库存（剩余清单 1-1 / C32）：未发货的单退款后，库存要还回去。
-   * @why 原来只有关单、取消、拉黑会回补；缺货退款恰恰是最常见的退款原因，
-   *      退完库存却停在扣减后的值——运营要记得手动改库存，否则这件商品"少了"几件。
+   * @why 原来只有关单、取消、拉黑会回补；退完库存却停在扣减后的值——运营要记得手动改库存，否则这件商品"少了"几件。
+   * @why 例外是「缺货」（AJ-427，统一结论 5.2）：货本来就没有，加回去等于重新开卖一件买不到的东西。
    * @why 已发货的单**不**回补：货已经寄出去了，退款不代表货回来了。
    */
   const stockOf = async (): Promise<number> => {
@@ -511,7 +511,7 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
     const before = await stockOf();
     const orderId = await paidOrder('rs1');
     expect(await stockOf()).toBeLessThan(before);
-    const r = await refund(orderId, 'rf-rs1');
+    const r = await refund(orderId, 'rf-rs1', '买家取消：改主意了');
     expect(r.json['outcome']).toBe('succeeded');
     expect(await stockOf()).toBe(before);
     // 剩余清单 2-1：退款落定发 order.refunded（进业务日志，邮件订阅者据此发信）
@@ -529,7 +529,7 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
   it('🔴 同一笔退款第二次落定（已 refunded）→ 不再回补库存', async () => {
     const before = await stockOf();
     const orderId = await paidOrder('rs3');
-    expect((await refund(orderId, 'rf-rs3')).json['outcome']).toBe('succeeded');
+    expect((await refund(orderId, 'rf-rs3', '买家取消')).json['outcome']).toBe('succeeded');
     expect(await stockOf()).toBe(before);
     const [pay] = await db`select id from payments where order_id = ${orderId}`;
     const provider: PaymentProvider = {
@@ -590,6 +590,36 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
       token: await tokenFor('u-admin', 'admin'),
     });
     expect(admin.json['tracking_url']).toBe(jp);
+  });
+
+  it('🔴 AJ-427「缺货」退款（未发货）→ 库存不回补；单照常 refunded、照常发 order.refunded', async () => {
+    const orderId = await paidOrder('rs4');
+    const after = await stockOf();
+    const r = await refund(orderId, 'rf-rs4', '缺货：供应商断货');
+    expect(r.json['outcome']).toBe('succeeded');
+    expect(await orderStatus(orderId)).toBe('refunded');
+    expect(await stockOf()).toBe(after);
+    expect(
+      srv.sink.find('order_restock_skipped').filter((l) => l['order_id'] === orderId)[0]?.['ctx'],
+    ).toEqual({ reason: 'out_of_stock_refund' });
+    const logged = srv.sink
+      .find('business_event')
+      .filter((l) => l['order_id'] === orderId)
+      .map((l) => (l['ctx'] as { domain_event?: string }).domain_event);
+    expect(logged).toContain('order.refunded');
+  });
+
+  it('🔴 AJ-427「缺货」退款先 pending、下一次查询才落定 → 仍不回补（落定时认的是首次登记的理由）', async () => {
+    const orderId = await paidOrder('rs5');
+    const after = await stockOf();
+    fake.nextRefundStatus('pending');
+    expect((await refund(orderId, 'rf-rs5-1', '缺货')).json['outcome']).toBe('pending');
+    const ref = String((await events(orderId, 'refund_pending'))[0]?.['note']);
+    fake.settleRefund(ref, 'succeeded');
+    // 第二次点击时运营换了一个理由：落定只认首次登记的（机构请求同样沿用首次，见路由 KD-4）
+    expect((await refund(orderId, 'rf-rs5-2', '买家取消')).json['outcome']).toBe('succeeded');
+    expect(await orderStatus(orderId)).toBe('refunded');
+    expect(await stockOf()).toBe(after);
   });
 
   it('已发货的单退款成功 → 库存不回补（货已经寄出）', async () => {

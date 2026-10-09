@@ -277,6 +277,29 @@ describe('部分退款的买家通知与"退满"收尾（第三轮缺口 P2-1 / 
     });
   });
 
+  it('🔴 AJ-427 累计退满（未发货），其中**更早的一笔**是「缺货」→ 不回补库存；单照常 refunded', async () => {
+    await db`insert into products (id, title, category, price_jpy, weight_g, stock, origin_country)
+             values ('p-pr', '抹茶粉', 'food', 10000, 400, 5, 'JP')`;
+    await db`insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd)
+             values ('oi-pr', 'o-p', 'p-pr', '抹茶粉', 2, 5000, 400, 3400)`;
+    await db`update orders set status = 'paid', paid_at = now(), shipped_at = null where id = 'o-p'`;
+    await db`insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, settled_at)
+             values ('rf-0', 'o-p', 'pay-p', 'USD', 4000, '缺货：抹茶粉', 'succeeded', 'admin:u-admin', now())`;
+    await db`update order_refunds set amount_minor = 4160, reason = '破损：外盒压坏' where id = 'rf-1'`;
+    const { d } = deps();
+    const f = fake({ providerRef: 'cs_test_p', refundRef: 're_full', outcome: 'succeeded' });
+    await executePartialRefund(d, f.provider, {
+      ...PLAN,
+      amountMinor: 4160,
+      reason: '破损：外盒压坏',
+    });
+    expect(await events()).toContainEqual(['refunded_by_parts', 'USD:8160']);
+    const [p] = await db`select stock from products where id = 'p-pr'`;
+    expect(p?.['stock']).toBe(5);
+    const [o] = await db`select status from orders where id = 'o-p'`;
+    expect(o?.['status']).toBe('refunded');
+  });
+
   it('退满但已发货 → 记事件、不回补库存（货已寄出，退货入库是人工流程）', async () => {
     await db`insert into products (id, title, category, price_jpy, weight_g, stock, origin_country)
              values ('p-pr', '抹茶粉', 'food', 10000, 400, 5, 'JP')`;

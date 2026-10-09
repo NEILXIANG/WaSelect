@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.58
+  version: 0.6.59
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,10 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.59（AJ-427：「缺货」退款不回补库存——请求与响应形状不变，只改落定时的库存行为）：
+      `POST /admin/orders/{id}/refund` 与部分退款累计退满：未发货的单原本一律回补库存；现在理由为「缺货」预设
+      （整串 = `缺货`，或以 `缺货：` 开头；整单退款认**首次**登记的理由，部分退款只要有一笔是缺货）时不回补——
+      货本来就没有，加回去等于重新开卖一件买不到的东西。其它理由照旧回补。判定唯一真源 = shared `isOutOfStockRefundReason`。
     0.6.58（AJ-425：运营可见性——列表新增可选筛选与两个只读标记，老调用方不受影响）：
       ① `GET /admin/orders` 新增 `attention`：after_sale（有进行中售后）/ late_paid（迟到付款且未退款）/ blocked（下单人已拉黑的已付款未发货单），
          与其它条件"且"；非法 → 40001 attention_invalid。
@@ -876,7 +880,7 @@ paths:
       description: 订单 has_dispute=true 时拒绝（40907，D-50）；has_dispute=true 时**发货**也拒（40909，AJ-145）。⚠️ 0.6.10① 起 `has_dispute` 的语义是「**有未解除的拒付限制**」（进行中，或已败诉）：拒付结案时**仅胜诉与 withdrawn 复位**、闸门随之解锁，**败诉保持 true、闸门继续拦**（U-F4 / AJ-176；本句取代 0.6.7 的旧口径，那条已作废）。0.6.9（AJ-175/KD-4）：状态为 **refunding**（上次机构调用失败）时允许再调重试，沿用首次退款原因与同一机构幂等键；refunded 仍 40902。0.6.11（AJ-178 / F-03）：上一笔机构退款在途（refund_pending）时再调只查询该笔、不再发起；机构确认失败后换新机构幂等键重新发起；结果未知（超时 / 机构报错）仍沿用同键
       summary: 全额退款（MVP；按 charge_currency / charge_amount 原币退；缺货场景整单退款）
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500, description: '0.6.12（B7 / AJ-191）：上限 500（机构 metadata 值上限）；超限 40001 + reason refund_reason_too_long。上限唯一真源 = shared REFUND_REASON_MAX_LENGTH，由契约测试双向比对'}}}}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500, description: '0.6.12（B7 / AJ-191）：上限 500（机构 metadata 值上限）；超限 40001 + reason refund_reason_too_long。上限唯一真源 = shared REFUND_REASON_MAX_LENGTH，由契约测试双向比对。0.6.59（AJ-427）：「缺货」预设（= 缺货 / 以「缺货：」开头）落定时不回补库存'}}}}}}
       responses: {'202': {description: 'Accepted（succeeded = 已退款，订单 refunded；pending = 机构处理中，订单停在 refunding，再调即查询）', content: {application/json: {schema: {type: object, required: [order_id, outcome], properties: {order_id: {type: string}, outcome: {type: string, enum: [succeeded, pending]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}, '503': {description: '0.6.27 补：50300 出站熔断打开（AJ-313）——这一次请求**一次都没有发出去**，不记 refund_failed 事件、不落 50000，带 retry_after_ms 让管理员稍后重试', content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}}}}}}}
   /admin/orders/{id}/partial-refunds:
     post:

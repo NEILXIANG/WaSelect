@@ -618,6 +618,17 @@ describe('订单详情：操作抽屉（AJ-398）', () => {
     await click(button(el, '放弃修改'));
     expect(el.querySelector('.drawer')).toBeNull();
   });
+
+  // AJ-427：服务端对「缺货」不回补库存——运营在点之前就要知道，补货了得自己去商品管理改
+  it('🔴 退款原因选「缺货」→ 抽屉里说明"不会把库存加回去"；换成「破损」→ 说明消失', async () => {
+    const el = await open();
+    await click(button(el, '全额退款…'));
+    const select = el.querySelector('select[aria-label="退款原因"]');
+    await type(select, '缺货');
+    expect(el.querySelector('.drawer')?.textContent).toContain('不会把库存加回去');
+    await type(select, '破损');
+    expect(el.querySelector('.drawer')?.textContent).not.toContain('不会把库存加回去');
+  });
 });
 
 describe('详情页头的状态徽章（AJ-400）', () => {
