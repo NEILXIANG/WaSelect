@@ -28,6 +28,9 @@ import {
   buyNowItem,
   detailView,
   shareCard,
+  addLimit,
+  retryableLoadError,
+  stillAdded,
 } from './index.vm.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -70,6 +73,8 @@ Page({
 
   /** 上一次被接受的加购时刻（P2-37 连点守卫；不进 data：不是渲染状态）。 */
   lastAddAt: 0,
+  /** 上一次被接受的"立即购买"时刻（审查 2026-10-09：连点会压入两个结算页）。 */
+  lastBuyAt: 0,
 
   productId: '',
   /** 一次"看一个商品"是一条链：详情页只有一次取数，链路从 onLoad 开始。 */
@@ -104,8 +109,22 @@ Page({
   },
 
   /** 购买栏 = 购物车件数 + 本次加购结果 + 售罄态（vm `buyBarView`）。 */
+  /** 购物车里这件已有几件（加购上限与"已加入"复位共用）。 */
+  inCartQty() {
+    const cart = app.globalData.cart;
+    const line =
+      typeof cart?.items === 'function'
+        ? cart.items().find((i) => i.productId === this.productId)
+        : undefined;
+    return line === undefined ? 0 : line.qty;
+  },
+
   renderBar() {
     const cart = app.globalData.cart;
+    // 去购物车删掉这件再回来："已加入"不再成立（审查 2026-10-09）
+    if (this.data.added && !stillAdded(this.data.added, this.inCartQty())) {
+      this.setData({ added: false });
+    }
     this.setData({
       bar: buyBarView({
         cartCount: typeof cart?.count === 'function' ? cart.count() : 0,
@@ -126,7 +145,7 @@ Page({
       this.setData({ product: detailView(res) });
       this.renderBar();
     } catch (e) {
-      this.setData({ product: null, ...errorFields(e), retryable: true });
+      this.setData({ product: null, ...errorFields(e), retryable: retryableLoadError(e) });
     } finally {
       this.setData({ loading: false });
     }
@@ -146,6 +165,11 @@ Page({
     const now = Date.now();
     if (!acceptAddTap(this.lastAddAt, now)) return;
     this.lastAddAt = now;
+    const limit = addLimit({ stock: p.stock, inCart: this.inCartQty() });
+    if (!limit.ok) {
+      this.setData(addFeedback({ added: false, reason: limit.reason, stock: limit.stock }));
+      return;
+    }
     const result = app.globalData.cart.add({
       productId: this.productId,
       qty: 1,
@@ -182,6 +206,10 @@ Page({
   onBuyNow() {
     const item = buyNowItem(this.data.product, this.productId);
     if (item === null) return;
+    // 连点守卫（审查 2026-10-09）：navigateTo 是异步的，双击会压入两个结算页、埋点也记两次
+    const now = Date.now();
+    if (!acceptAddTap(this.lastBuyAt, now)) return;
+    this.lastBuyAt = now;
     app.globalData.buyNow = item;
     wxApi.navigateTo({ url: CHECKOUT_BUY_NOW });
   },

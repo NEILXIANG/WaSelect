@@ -354,12 +354,17 @@ Page({
   apply(res, { reset, page }) {
     const incoming = productCards(res?.items);
     const cards = mergeCards(this.data.cards, incoming, reset);
-    const loaded = reset ? incoming.length : cards.length;
+    // `loaded` 是**服务端偏移**（已取走多少条），不是去重后的卡片数：按卡片数算的话，
+    //   去掉一张重复卡就让 hasMore 提前变 false，末尾那件永远加载不到（审查 2026-10-09）
+    const loaded = reset ? incoming.length : (this.loaded ?? 0) + incoming.length;
     this.page = page;
     this.loaded = loaded;
     this.total = res?.total;
     this.setData({
       cards,
+      // 取数成功 = 上一次"加载更多"的失败已经不成立，错误块要一起收掉（审查 2026-10-09）
+      error: '',
+      errorRef: '',
       empty: cards.length === 0,
       // `nextPage` 返回 null（没有更多）时置 false；total 缺失 / 非整数同样是 false
       hasMore: nextPage({ page, loaded, total: this.total }) !== null,

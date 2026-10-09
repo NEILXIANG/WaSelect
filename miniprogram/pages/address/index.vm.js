@@ -51,3 +51,17 @@ export function addressRows(list) {
 export function emptyState(rows, error) {
   return { showEmpty: Array.isArray(rows) && rows.length === 0 && error === '' };
 }
+
+const ERROR_TITLES = {
+  load: '没能取到地址',
+  delete: '删除没有成功，地址还在',
+  default: '设为默认没有成功',
+};
+
+/**
+ * 错误块的标题（审查 2026-10-09）：删除 / 设默认失败此前也写"没能取到地址"，用户不知道删没删掉。
+ * @param {unknown} kind 'load' | 'delete' | 'default'；不认识 → 'load' 的说法
+ */
+export function errorTitle(kind) {
+  return ERROR_TITLES[kind] ?? ERROR_TITLES.load;
+}

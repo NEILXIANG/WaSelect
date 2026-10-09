@@ -35,7 +35,7 @@ export function itemRows(items) {
  * 能否提交（按钮禁用 + 原因）。
  * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null,
  *          emailError?: string, contactEmail?: string, splitRequired?: boolean,
- *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean}} state
+ *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean, buyNow?: boolean}} state
  * @why `termsReady` / `termsFailed` / `quoteFailed` 三项（AJ-228）：
  *      条款版本没取到时 `orderBody` 会抛一句**给开发者看的**报错，此前闸门不看它，
  *      于是那句话被原样摆到用户面前；报价**失败**与报价**还没回来**此前是同一句"还在计算中"，
@@ -54,7 +54,13 @@ export function submitGate(state) {
   if (s.termsReady === false) return { ok: false, reason: '正在加载购买条款…' };
   if (s.termsAccepted !== true) return { ok: false, reason: '请先阅读并同意购买条款' };
   // 失败排在"计算中"之前：失败了就不会再有结果，说"计算中"是让人白等
-  if (s.quoteFailed === true) return { ok: false, reason: '报价失败，请返回购物车检查商品后重试' };
+  // 立即购买时那件商品不在购物车里（审查 2026-10-09）：说"返回购物车"是一条走不通的路
+  if (s.quoteFailed === true)
+    return {
+      ok: false,
+      reason:
+        s.buyNow === true ? '报价失败，请返回商品页后重试' : '报价失败，请返回购物车检查商品后重试',
+    };
   if (!Number.isInteger(s.totalJpy)) return { ok: false, reason: '运费与合计还在计算中' };
   // B38 / AJ-221：`split_hint` 为 true = **已经超过**单笔上限（服务端 `total > maxOrderJpy`），
   // 提交必然 40906。旧实现只把它当一句提示、照样放行——用户点了才知道被拒，
@@ -273,6 +279,11 @@ const NAMED_ITEM_TEXT = {
   40401: '已下架或不存在，请返回购物车移除后再下单',
   40901: '库存不足，请返回购物车减少数量后再下单',
 };
+/** 立即购买模式（那件商品不在购物车里，审查 2026-10-09）。 */
+const NAMED_ITEM_TEXT_BUY_NOW = {
+  40401: '已下架或不存在，暂时不能购买',
+  40901: '库存不足，暂时不能购买',
+};
 
 /**
  * 报价 / 建单失败时点名是哪一件（U9，三端联动模拟 2026-10-08）。
@@ -280,10 +291,10 @@ const NAMED_ITEM_TEXT = {
  *      服务端在 `data.product_id` 里已经指出了那一件，购物车页早就用它标红了（剩余清单 4-7）。
  * @returns {string} 点名文案；码不认识 / 没带 id / id 不在这次的商品里 → 空串（调用方沿用通用文案，不猜）
  */
-export function namedItemError(err, items) {
+export function namedItemError(err, items, opts) {
   const code = err !== null && typeof err === 'object' ? err.code : undefined;
   const id = err !== null && typeof err === 'object' ? err.data?.product_id : undefined;
-  const text = NAMED_ITEM_TEXT[code];
+  const text = (opts?.buyNow === true ? NAMED_ITEM_TEXT_BUY_NOW : NAMED_ITEM_TEXT)[code];
   if (text === undefined || typeof id !== 'string') return '';
   const hit = Array.isArray(items) ? items.find((i) => i?.productId === id) : undefined;
   const title = typeof hit?.title === 'string' && hit.title !== '' ? hit.title : '';

@@ -19,6 +19,9 @@ import {
   buyNowItem,
   detailView,
   shareCard,
+  addLimit,
+  retryableLoadError,
+  stillAdded,
 } from './index.vm.js';
 
 /** 像真的商品（契约 Product 全形状：报关字段在，但视图不该透出它们）。 */
@@ -309,5 +312,33 @@ describe('buyBarView（M-13 底部固定购买栏，AJ-406）', () => {
       cartAria: '购物车，去购物车',
       disabled: false,
     });
+  });
+});
+
+describe('addLimit / stillAdded / retryableLoadError（审查 2026-10-09）', () => {
+  it('addLimit：购物车已有 = 库存 → 拦；少一件 → 放；库存未知 → 放（交给报价兜底）', () => {
+    expect(addLimit({ stock: 2, inCart: 2 })).toEqual({ ok: false, reason: 'stock', stock: 2 });
+    expect(addLimit({ stock: 2, inCart: 1 })).toEqual({ ok: true });
+    expect(addLimit({ stock: null, inCart: 99 })).toEqual({ ok: true });
+    expect(addLimit({ stock: 0, inCart: undefined })).toEqual({
+      ok: false,
+      reason: 'stock',
+      stock: 0,
+    });
+  });
+  it('stillAdded：只有"加过且车里还有"才算', () => {
+    expect(stillAdded(true, 1)).toBe(true);
+    expect(stillAdded(true, 0)).toBe(false);
+    expect(stillAdded(false, 3)).toBe(false);
+  });
+  it('retryableLoadError：40401 不给重试，其余给', () => {
+    expect(retryableLoadError({ code: 40401 })).toBe(false);
+    expect(retryableLoadError({ code: -1 })).toBe(true);
+    expect(retryableLoadError(null)).toBe(true);
+  });
+  it('detailView.stock：整数且 ≥0 才保留，否则 null', () => {
+    expect(detailView({ stock: 3 }).stock).toBe(3);
+    expect(detailView({ stock: -1 }).stock).toBeNull();
+    expect(detailView({}).stock).toBeNull();
   });
 });

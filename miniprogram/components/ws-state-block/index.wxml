@@ -24,9 +24,16 @@
   <text wx:if="{{refText}}" class="ws-state__ref" user-select>{{refText}}</text>
 
   <!-- 第三段：下一步怎么办（至多两个动作，主次分明） -->
-  <view wx:if="{{actionText}}" class="ws-state__actions">
+  <!-- 只有次要动作也要渲染（审查 2026-10-09：地址编辑页只传 altText，"返回列表"此前永远不出现） -->
+  <view wx:if="{{actionText || altText}}" class="ws-state__actions">
     <!-- ⚠️ 走 ws-button 而不是原生 button：连点防线只有一份（@see index.js @limitation 一） -->
-    <ws-button class="ws-state__action" text="{{actionText}}" type="default" bindtap="onAction" />
+    <ws-button
+      wx:if="{{actionText}}"
+      class="ws-state__action"
+      text="{{actionText}}"
+      type="default"
+      bindtap="onAction"
+    />
     <!-- ⚠️ 用 view 不是 text：hover-class 对 text 不生效（@see index.js @limitation 二） -->
     <view wx:if="{{altText}}" class="ws-state__alt" hover-class="ws-press" bindtap="onAlt">
       {{altText}}

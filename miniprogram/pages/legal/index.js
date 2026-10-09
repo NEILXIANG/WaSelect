@@ -71,7 +71,14 @@ Page({
 
   /** 取 `GET /terms`。失败**清空链接**并明示错误（留旧链接 = 给用户一个可能已经失效的地址）。 */
   async load() {
-    this.setData({ loading: true });
+    // 重试时立刻进入"加载中"并收起旧错误（审查 2026-10-09）：页面渲染看的是 `state`，
+    //   只设 loading 的话失败块原样挂到请求返回，"重试"看起来像没反应
+    this.setData({
+      loading: true,
+      error: '',
+      errorRef: '',
+      state: legalState({ loading: true, langCount: 0 }),
+    });
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/terms`,

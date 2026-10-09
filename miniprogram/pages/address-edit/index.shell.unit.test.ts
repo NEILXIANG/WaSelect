@@ -113,3 +113,28 @@ describe('地址编辑页：英文填写说明（M-20，AJ-406）', () => {
     expect(note.examples).toHaveLength(3);
   });
 });
+
+describe('地址编辑：地址已不存在 / 还在加载（审查 2026-10-09）', () => {
+  it('🔴 编辑的地址已被删除 → 点保存不发请求（不会 PUT 到已删除的 id）', async () => {
+    call('onLoad', { id: 'addr-gone' });
+    hold = null;
+    await settle(); // GET /addresses 返回 {id:'addr-1'}（不是数组）→ 找不到
+    expect(page.data['error']).toBe('这个地址已不存在（可能已被删除）');
+    page.setData({ form: { ...FORM } });
+    const before = posts.length;
+    call('onSave');
+    await settle();
+    expect(posts.length).toBe(before);
+  });
+
+  it('🔴 加载中 → 点保存不发请求；用户先输入的内容不被回来的数据覆盖（加载期间表单不可编辑）', async () => {
+    hold = deferred();
+    call('onLoad', { id: 'addr-1' });
+    await settle();
+    expect(page.data['loading']).toBe(true);
+    const before = posts.length;
+    call('onSave');
+    await settle();
+    expect(posts.length).toBe(before);
+  });
+});

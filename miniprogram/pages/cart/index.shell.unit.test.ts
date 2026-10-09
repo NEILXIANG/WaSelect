@@ -30,6 +30,8 @@ let quoteCalls: number;
 let quoteFail: (Error & { code?: number }) | null;
 let navigations: string[];
 let badges: unknown[];
+/** 非空 = 报价请求挂在这个 Promise 上（编排"报价在途时删光"）。 */
+let quoteHold: Promise<void> | null;
 
 const call = (name: string, ...args: unknown[]): unknown =>
   (page[name] as (...a: unknown[]) => unknown)(...args);
@@ -52,6 +54,7 @@ beforeEach(async () => {
   quoteFail = null;
   navigations = [];
   badges = [];
+  quoteHold = null;
   const disk = new Map<string, unknown>();
   cart = createCartStore({
     storage: {
@@ -71,6 +74,7 @@ beforeEach(async () => {
       cart,
       api: async () => {
         quoteCalls += 1;
+        if (quoteHold !== null) await quoteHold;
         if (quoteFail !== null) throw quoteFail;
         return { items_jpy: 41_000, shipping_jpy: 1_150, total_jpy: 42_150, split_hint: false };
       },
@@ -160,5 +164,33 @@ describe('M-14 报价失败重试 / 点行进详情 / 角标', () => {
     expect(lastBadge()).toEqual({ cartBadge: '3' });
     call('onRemove', tapId(OIL.productId));
     expect(lastBadge()).toEqual({ cartBadge: '2' });
+  });
+});
+
+describe('报价在途 / 防抖窗口（审查 2026-10-09）', () => {
+  it('🔴 改数量的那一刻「去结算」就禁用（不等 400ms 防抖才变）', async () => {
+    await quoted();
+    expect((page.data['gate'] as { disabled: boolean }).disabled).toBe(false);
+    call('onPlus', tapId(OIL.productId));
+    expect((page.data['gate'] as { disabled: boolean }).disabled).toBe(true);
+    await quoted();
+    expect((page.data['gate'] as { disabled: boolean }).disabled).toBe(false);
+  });
+
+  it('🔴 报价在途时删光最后一件 → 不再挂着「正在计算运费…」（quoting 复位）', async () => {
+    await quoted();
+    let release: () => void = () => undefined;
+    quoteHold = new Promise<void>((r) => {
+      release = r;
+    });
+    call('onPlus', tapId(OIL.productId));
+    await vi.advanceTimersByTimeAsync(400); // 报价发出，挂起
+    expect(page.data['quoting']).toBe(true);
+    call('onRemove', tapId(OIL.productId));
+    call('onRemove', tapId(KNIFE.productId));
+    expect(page.data['quoting']).toBe(false);
+    release();
+    await settle();
+    expect(page.data['quoting']).toBe(false);
   });
 });

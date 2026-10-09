@@ -70,12 +70,15 @@ Page({
 
   /** 编辑的地址 id（空串 = 新增）。 */
   addressId: '',
+  /** 已成功取到原地址的 id（编辑态保存的前提；审查 2026-10-09）。 */
+  loadedId: '',
   traceId: '',
 
   /** @param {{id?: string}} options 列表页带来的 `?id=…` */
   onLoad(options) {
     this.traceId = newTraceId();
     this.addressId = typeof options?.id === 'string' ? options.id : '';
+    this.loadedId = '';
     this.setData({ editing: this.addressId !== '' });
     if (this.addressId === '') return;
     void this.loadAddress();
@@ -97,6 +100,7 @@ Page({
         return;
       }
       const form = formModel(found);
+      this.loadedId = this.addressId;
       this.setData({ form, stateIndex: Math.max(0, stateIndexOf(form.state)) });
     } catch (e) {
       this.setData({ ...errorFields(e) });
@@ -156,6 +160,10 @@ Page({
   onSave() {
     // 保存在途时忽略（W-03）：POST /addresses 没有幂等键，双击会建出两条一样的地址
     if (this.data.saving === true) return;
+    // 编辑态必须先成功取到原地址（审查 2026-10-09）：还在取 → 表单会被回来的数据覆盖；
+    //   已不存在 → 会 PUT 到一个已删除的 id（40400）。这不是连点守卫，是"表单有没有底"的判断；
+    //   wxml 同时把表单收起（loading / error 时不显示）。
+    if (this.addressId !== '' && this.loadedId !== this.addressId) return;
     const result = formErrors(this.data.form);
     if (!result.ok) {
       this.setData({ errors: result.errors, first: result.first });

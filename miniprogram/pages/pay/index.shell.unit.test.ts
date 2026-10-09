@@ -419,6 +419,27 @@ describe('支付页：回前台后倒计时继续（扫描 W-01）', () => {
       vi.useRealTimers();
     }
   });
+
+  it('🔴 发起支付在途时切后台再回来：倒计时照样重启（onShowAction 为 none 时也不能停在离开那一秒）', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      vi.setSystemTime(new Date('2026-09-29T01:20:00.000Z'));
+      expiresAt = '2026-09-29T01:30:00.000Z';
+      call('onRetry');
+      await settle();
+      page.setData({ paying: true }); // 发起支付还在等机构
+      call('onHide');
+      vi.setSystemTime(new Date('2026-09-29T01:25:00.000Z'));
+      call('onShow');
+      await settle();
+      expect(page.data['countdown']).toBe('请在 05:00 内完成支付');
+      vi.advanceTimersByTime(1000);
+      expect(page.data['countdown']).toBe('请在 04:59 内完成支付');
+      call('onUnload');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 /** P2-35：倒计时走到 0 时只改了文案，通道按钮还能点。 */

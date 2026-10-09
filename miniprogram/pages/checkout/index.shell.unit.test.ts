@@ -518,3 +518,22 @@ describe('M-16 扣款币种预告（AJ-406）', () => {
     expect(page.data['chargePreview']).toEqual([]);
   });
 });
+
+describe('结算页：两次并发报价，旧的后到（审查 2026-10-09）', () => {
+  it('🔴 改价前发出的报价后到，不许把新合计盖回旧值', async () => {
+    call('onShow');
+    await settle();
+    const first = deferred<unknown>();
+    quoteHold = first;
+    call('onShow'); // 第一次刷新：报价挂起（旧价）
+    await settle();
+    quoteHold = null;
+    quote = { ...quote, shipping_jpy: 1650, total_jpy: 9650 }; // 店家改了运费
+    call('onShow'); // 第二次刷新：立刻拿到新价
+    await settle();
+    expect((page.data['quote'] as { totalJpy: number }).totalJpy).toBe(9650);
+    first.resolve({ items_jpy: 8000, shipping_jpy: 1150, total_jpy: 9150, split_hint: false });
+    await settle();
+    expect((page.data['quote'] as { totalJpy: number }).totalJpy).toBe(9650);
+  });
+});

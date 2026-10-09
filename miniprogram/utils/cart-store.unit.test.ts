@@ -257,3 +257,20 @@ describe('restore（撤销删除放回原位，M-14 / AJ-406）', () => {
     expect(cart.restore(null as never, 0)).toBe(false);
   });
 });
+
+describe('持久化读回去重（审查 2026-10-09）', () => {
+  it('🔴 存储里同一商品两行（旧版本 / 损坏）→ 合并成一行、数量相加；toOrderItems 不再带重复 product_id', () => {
+    const { storage, data } = memStorage();
+    storage.setJson('cart', [
+      { productId: 'p-1', qty: 1, title: 'A', image: '', priceJpy: 100 },
+      { productId: 'p-1', qty: 2, title: 'A', image: '', priceJpy: 100 },
+      { productId: 'p-2', qty: 1, title: 'B', image: '', priceJpy: 200 },
+    ]);
+    void data;
+    const cart = createCartStore({ storage });
+    expect(cart.toOrderItems()).toEqual([
+      { product_id: 'p-1', qty: 3 },
+      { product_id: 'p-2', qty: 1 },
+    ]);
+  });
+});

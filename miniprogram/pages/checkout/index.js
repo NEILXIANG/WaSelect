@@ -126,6 +126,8 @@ Page({
   addressCountry: '',
   /** 扣款预告的请求序号（只接受最新一次；refresh 可能并发）。 */
   previewSeq: 0,
+  /** 报价请求序号（审查 2026-10-09：两次并发报价，旧的后到不许盖新的）。 */
+  quoteSeq: 0,
 
   /** 结算模式（剩余清单 4-4）：'buynow' = 立即购买（只结 globalData.buyNow 那一件）；'' = 结购物车。 */
   mode: '',
@@ -287,6 +289,9 @@ Page({
 
   /** `POST /orders/quote`：合计的**唯一**来源。 */
   async fetchQuote(items) {
+    // 领号（审查 2026-10-09）：40905 恢复路径的 refresh 与切回前台的 refresh 会并发两次报价，
+    //   改价前发出的那次若后到，会把新合计盖回旧值——再提交又吃一次 40905（扣款预告早已这么做）
+    const seq = (this.quoteSeq = nextSeq(this.quoteSeq));
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/quote`,
@@ -294,10 +299,12 @@ Page({
         data: { items: items.map((i) => ({ product_id: i.productId, qty: i.qty })) },
         traceId: this.traceId,
       });
+      if (isStale(seq, this.quoteSeq)) return;
       this.quoteRaw = res !== null && typeof res === 'object' ? res : null;
       this.setData({ quote: quoteView(res), quoteFailed: false });
     } catch (e) {
-      const named = namedItemError(e, items); // U9：点名是哪一件
+      if (isStale(seq, this.quoteSeq)) return;
+      const named = namedItemError(e, items, { buyNow: this.mode === BUY_NOW_MODE }); // U9：点名是哪一件
       this.quoteRaw = null;
       this.setData({
         quote: null,
@@ -312,6 +319,7 @@ Page({
   /** 重算提交闸门（三条取数各自完成后都要调一次）。 */
   updateGate() {
     const gate = submitGate({
+      buyNow: this.mode === BUY_NOW_MODE,
       itemCount: this.data.rows.length,
       addressId: this.addressId,
       termsAccepted: this.data.termsAccepted,
@@ -431,7 +439,7 @@ Page({
     } catch (e) {
       const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
       // ⚠️ 默认**不** retire：键留给重试（弱网下用户看到错误再点一次必须还是同一个键）
-      const named = namedItemError(e, this.items()); // U9：点名是哪一件
+      const named = namedItemError(e, this.items(), { buyNow: this.mode === BUY_NOW_MODE }); // U9：点名是哪一件
       this.setData({ ...errorFields(e), ...(named !== '' ? { error: named } : {}) });
       // B37 / AJ-220：执行错误码登记表里写明的恢复动作——
       // 不执行的话 40905（管理员改价）会变成"再点还是 40905，只能退出重进"。

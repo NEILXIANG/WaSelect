@@ -409,3 +409,25 @@ describe('namedItemError（U9，三端联动模拟 2026-10-08）', () => {
     expect(namedItemError(null, items)).toBe('');
   });
 });
+
+describe('立即购买模式的失败文案（审查 2026-10-09）', () => {
+  const items = [{ productId: 'p-1', qty: 1, title: '南部鉄器 急須' }];
+  it('🔴 buyNow：点名文案不让人"返回购物车"（那件商品根本不在购物车里）', () => {
+    const e40401 = { code: 40401, data: { product_id: 'p-1' } };
+    const e40901 = { code: 40901, data: { product_id: 'p-1' } };
+    expect(namedItemError(e40401, items, { buyNow: true })).toBe(
+      '「南部鉄器 急須」已下架或不存在，暂时不能购买',
+    );
+    expect(namedItemError(e40901, items, { buyNow: true })).toBe(
+      '「南部鉄器 急須」库存不足，暂时不能购买',
+    );
+    expect(namedItemError(e40401, items)).toContain('请返回购物车');
+  });
+  it('🔴 buyNow：报价失败的闸门说法不提购物车', () => {
+    const OK = { itemCount: 1, addressId: 'addr-1', termsAccepted: true, totalJpy: 9150 };
+    expect(submitGate({ ...OK, quoteFailed: true, buyNow: true }).reason).toBe(
+      '报价失败，请返回商品页后重试',
+    );
+    expect(submitGate({ ...OK, quoteFailed: true }).reason).toContain('返回购物车');
+  });
+});

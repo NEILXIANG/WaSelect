@@ -152,6 +152,8 @@ Page({
       }
       this.quoteSeq = nextSeq(this.quoteSeq);
       this.setData({
+        // 在途那次报价回来会被判过期、它的 finally 不再清 quoting——这里必须自己清（审查 2026-10-09）
+        quoting: false,
         quote: null,
         quoteError: '',
         quoteErrorCode: 0,
@@ -164,6 +166,8 @@ Page({
 
   /** 防抖地打一次报价（连点 +/- 只打最后一次，@why 见文件头）。 */
   requestQuote() {
+    // 防抖窗口（400ms）内旧合计已不作数：「去结算」立刻禁用，不等定时器触发才变（审查 2026-10-09）
+    this.setData({ gate: checkoutGate({ quoting: true }) });
     if (this.quoteTimer !== null) clearTimeout(this.quoteTimer);
     this.quoteTimer = setTimeout(() => {
       this.quoteTimer = null;

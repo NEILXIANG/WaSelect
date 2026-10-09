@@ -196,7 +196,13 @@ export function nextPage({ page, loaded, total }) {
  *      美妆分类下出现厨刀，只会觉得这个站不靠谱，没人会想到是前端没清列表。
  */
 export function mergeCards(existing, incoming, reset) {
-  return reset ? incoming : existing.concat(incoming);
+  if (reset) return incoming;
+  // 偏移分页 + 浏览途中上新（审查 2026-10-09）：下一页的第一件可能就是上一页的最后一件——
+  //   重复的卡片会让 wx:key 冲突、同一件显示两次。已在列表里的 id 一律丢掉，保留先到的那张。
+  //   没有 id 的条目不参与去重（认不出是不是同一件，就不替它做决定）
+  const idOf = (c) => (typeof c?.id === 'string' && c.id !== '' ? c.id : null);
+  const seen = new Set(existing.map(idOf).filter((x) => x !== null));
+  return existing.concat(incoming.filter((c) => idOf(c) === null || !seen.has(idOf(c))));
 }
 
 /**

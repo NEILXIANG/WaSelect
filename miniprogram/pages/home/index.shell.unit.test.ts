@@ -332,3 +332,31 @@ describe('轮播点击的下标必须来自「可见 banner」列表（防复发
     );
   });
 });
+
+describe('首页薄壳：加载更多（审查 2026-10-09）', () => {
+  it('🔴 第 2 页失败后再触底成功 → 错误块消失', async () => {
+    await enter();
+    call('onReachBottom');
+    calls[1]!.d.reject(Object.assign(new Error('timeout'), { code: -1 }));
+    await settle();
+    expect(page.data['error']).not.toBe('');
+    call('onReachBottom');
+    calls[2]!.d.resolve(listOf('all', 2, 60));
+    await settle();
+    expect(page.data['error']).toBe('');
+    expect(ids()).toHaveLength(40);
+  });
+
+  it('🔴 第 2 页与第 1 页重叠一件（中途上新）→ 不重复显示；hasMore 按服务端偏移算，不因去重提前变 false', async () => {
+    await enter(); // 第 1 页 20 件，total 40
+    call('onReachBottom');
+    const p2 = listOf('all', 2, 41); // 上新一件后 total=41
+    p2.items[0] = { ...listOf('all', 1).items[19]! }; // 第 2 页第一件 = 第 1 页最后一件
+    calls[1]!.d.resolve(p2);
+    await settle();
+    const list = ids();
+    expect(new Set(list).size).toBe(list.length);
+    expect(list).toHaveLength(39);
+    expect(page.data['hasMore']).toBe(true); // 服务端已给 40 条（偏移 40）< 41
+  });
+});

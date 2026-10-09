@@ -159,7 +159,7 @@ function confirmingJustPaid(payable, justPaid) {
 /**
  * `GET /orders/{id}` → 详情页视图。
  * @param {unknown} order 契约 `Order`；也可能是任何东西
- * @param {unknown} [opts] `{ justPaid?: boolean }`——刚从支付页过来（MP3-04，见上）。
+ * @param {unknown} [opts] `{ justPaid?: boolean, nowMs?: number }`——刚从支付页过来（MP3-04，见上）；`nowMs` = 当前时刻（截止判定用，不传则不判）。
  *       可选：不传与传脏值都等于"没刚付过"（存量调用方不必改）。
  * @returns 见各字段注释
  */
@@ -167,7 +167,12 @@ export function detailView(order, opts = undefined) {
   const o = order && typeof order === 'object' ? order : {};
   const options = opts && typeof opts === 'object' ? opts : {};
   const status = typeof o.status === 'string' ? o.status : '';
-  const payable = canPay(status);
+  // 截止已过（审查 2026-10-09）：关单作业每分钟才跑一次，到点后最多约 1 分钟状态仍是待付款——
+  //   这时给「继续支付」，点进去支付页立刻是关闭屏，自相矛盾。时间由入参给（vm 不读时钟，约束十一）。
+  const expiresMs = typeof o.expires_at === 'string' ? Date.parse(o.expires_at) : Number.NaN;
+  const expired =
+    Number.isFinite(options.nowMs) && Number.isFinite(expiresMs) && options.nowMs >= expiresMs;
+  const payable = canPay(status) && !expired;
   const confirming = confirmingJustPaid(payable, options.justPaid === true);
   const hasTotal = Number.isInteger(o.total_jpy);
   const trackingNo = typeof o.tracking_no === 'string' ? o.tracking_no.trim() : '';
@@ -183,7 +188,11 @@ export function detailView(order, opts = undefined) {
      * "下一步会发生什么"（M-06）。确认中（justPaid）不给：pending 的下一步是"请继续支付"，
      * 与"支付结果确认中"的提示正相反——用户刚付过，再引导他付就是第二笔钱（MP3-04 同一条）。
      */
-    nextText: confirming ? '' : buyer.next,
+    nextText: confirming
+      ? ''
+      : expired && canPay(status)
+        ? '支付时间已到，订单将自动关闭；如需购买请重新下单'
+        : buyer.next,
     // ⚠️ 确认中不给出「继续支付」：用户刚付过一次，再点就是第二笔钱（MP3-04）。
     canPay: payable && !confirming,
     /**
@@ -192,7 +201,7 @@ export function detailView(order, opts = undefined) {
      * ⚠️ 唯一的例外就是"刚付过款未确认"：那时本地状态仍是可付/可取消，
      *    但取消会把一张可能已付款的单关掉——这一支由 `confirming` 单独排除。
      */
-    canCancel: PAYABLE.includes(status) && !confirming,
+    canCancel: PAYABLE.includes(status) && !confirming && !expired,
     /** 确认屏：告诉用户"钱在确认中"，而不是让他自己猜刚才付没付上。 */
     confirming,
     confirmHint: confirming ? '支付结果确认中，请稍后刷新' : '',

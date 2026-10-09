@@ -25,8 +25,10 @@
  *              两者都停在支付页，订单仍是 pending_payment，用户可再点一次。
  *              解析宿主 fail 的文案去区分"取消 vs 失败"等于把宿主文案当契约。
  * @limitation 四：幂等键**一次意图一个、重试复用**（`intentKey.acquire()`），
- *              与结算页同一口径（A5，2026-09-29）。两处会作废键：
- *              **换通道**（同键重放会拿回上一个通道的凭据）与支付已发起成功。
+ *              与结算页同一口径（A5，2026-09-29）。**只有换通道会作废键**
+ *              （同键重放会拿回上一个通道的凭据）。发起成功后**不**作废：同通道再点一次是同键重放，
+ *              服务端复用同一个支付意图、只换一条短链 token，不建第二个会话（审查 2026-10-09 订正：
+ *              此处原写"发起成功也作废"，代码从未这么做，且这么做反而会让同通道重点建出第二个会话）。
  *              发起失败**不**作废——弱网下用户再点一次必须还是同一个键，
  *              否则同一张单会发起两次支付。
  * @limitation 五：**在途不再发起**（B6 / AJ-201）：上一次 `POST /orders/{id}/pay`
@@ -238,10 +240,11 @@ Page({
       loading: this.data.loading === true,
     });
     if (action === 'reload') void this.load();
-    else if (action === 'status') {
-      // 扫描 W-01：onHide 停了表，"只查状态"这条路不走 load()——不在这里重启，倒计时就停在离开那一秒
+    else {
+      // 扫描 W-01：onHide 停了表，不走 load() 的两条路（只查状态 / 在途时什么都不做）都要在这里重启，
+      //   否则倒计时停在离开那一秒、到点也不收起支付方式（审查 2026-10-09：发起支付或重取在途时切后台）
       if (this.expiresAt !== undefined && this.data.closedText === '') this.startCountdown();
-      void this.checkStatus();
+      if (action === 'status') void this.checkStatus();
     }
   },
 

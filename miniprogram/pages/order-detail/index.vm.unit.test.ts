@@ -411,3 +411,26 @@ describe('detailView：进度条（M-12，AJ-408；算法在 utils/order-progres
     expect(detailView(null).progress.show).toBe(false);
   });
 });
+
+describe('过了支付截止时间（审查 2026-10-09）', () => {
+  const pending = {
+    order_id: 'ord-1',
+    order_no: '261009-K7Q2MN',
+    status: 'pending_payment',
+    total_jpy: 9150,
+    created_at: '2026-10-09T01:00:00.000Z',
+    expires_at: '2026-10-09T01:30:00.000Z',
+  };
+  it('🔴 截止已过（关单作业还没跑）→ 不给「继续支付 / 取消订单」，下一步说明支付时间已到', () => {
+    const v = detailView(pending, { nowMs: Date.parse('2026-10-09T01:30:00.000Z') });
+    expect(v.canPay).toBe(false);
+    expect(v.canCancel).toBe(false);
+    expect(v.nextText).toBe('支付时间已到，订单将自动关闭；如需购买请重新下单');
+  });
+  it('截止前 1 秒 → 仍可付可取消；不传 nowMs → 按原行为（老调用方不受影响）', () => {
+    const v = detailView(pending, { nowMs: Date.parse('2026-10-09T01:29:59.000Z') });
+    expect(v.canPay).toBe(true);
+    expect(v.canCancel).toBe(true);
+    expect(detailView(pending).canPay).toBe(true);
+  });
+});

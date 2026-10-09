@@ -104,6 +104,7 @@ function editorialTags(v) {
  * @param {unknown} product 契约 `Product`（请求失败时页面根本不会调这里）
  * @returns {{title: string, priceJpy: unknown, subPrice: string, images: string[],
  *            description: string, specs: Array<{label: string, value: string}>, soldOut: boolean,
+ *            stock: number|null,
  *            why: string, maker: string, tags: string[],
  *            guarantees: Array<{key: string, tag: string, detail: string}>,
  *            shippingSteps: Array<{key: string, title: string, detail: string}>}}
@@ -122,6 +123,8 @@ export function detailView(product) {
     description: typeof p.description === 'string' ? p.description.trim() : '',
     specs: specsOf(p),
     soldOut: Number(p.stock) === 0,
+    /** 库存数（审查 2026-10-09：加购上限用）；缺失 / 非法 → null（不知道就不拦，交给报价兜底）。 */
+    stock: Number.isInteger(p.stock) && p.stock >= 0 ? p.stock : null,
     why: optionalText(p.why),
     maker: optionalText(p.maker),
     tags: editorialTags(p.tags),
@@ -225,6 +228,9 @@ export function acceptAddTap(lastAtMs, nowMs) {
 export function addFeedback(result) {
   const r = result !== null && typeof result === 'object' ? result : {};
   if (r.added === true) return { added: true, addNote: '' };
+  if (r.reason === 'stock' && Number.isInteger(r.stock)) {
+    return { added: false, addNote: `库存只剩 ${String(r.stock)} 件，购物车里已经放满了` };
+  }
   if (r.reason === 'full') {
     return {
       added: false,
@@ -255,4 +261,32 @@ export function buyBarView(s) {
     cartAria: badge === '' ? `${base}，去购物车` : `${base}，共 ${badge} 件，去购物车`,
     disabled: a.soldOut === true,
   };
+}
+
+/**
+ * 加购前的库存上限（审查 2026-10-09）：购物车里这件的数量已达库存 → 不加。
+ * @why 此前每点一次 +1、没有上限，要到结算报价才 409——用户在购物车里攒了 5 件，结算时才被告知只有 2 件。
+ * @limitation 库存是**进页时**的快照；别人同时买走的那部分仍由报价 / 建单兜底，这里只挡"明知不够还加"。
+ * @param {{stock: unknown, inCart: unknown}} a `stock` 详情的库存（null = 不知道）；`inCart` 购物车里这件已有几件
+ * @returns {{ok: true} | {ok: false, reason: 'stock', stock: number}}
+ */
+export function addLimit(a) {
+  const stock = a?.stock;
+  const inCart = Number.isInteger(a?.inCart) ? a.inCart : 0;
+  if (!Number.isInteger(stock)) return { ok: true };
+  return inCart >= stock ? { ok: false, reason: 'stock', stock } : { ok: true };
+}
+
+/**
+ * 回到详情页时"已加入购物车"还算不算数（审查 2026-10-09）：去购物车把这件删了再回来，
+ * 按钮仍写"已加入购物车"、角标却是 0——两处说法相反。购物车里已没有这件 → 复位。
+ */
+export function stillAdded(added, inCart) {
+  return added === true && Number.isInteger(inCart) && inCart > 0;
+}
+
+/** 取详情失败能不能"重试"（审查 2026-10-09）：已下架 / 不存在（40401）重试一万次也一样，不给按钮。 */
+export function retryableLoadError(err) {
+  const code = err !== null && typeof err === 'object' ? err.code : undefined;
+  return code !== 40401;
 }

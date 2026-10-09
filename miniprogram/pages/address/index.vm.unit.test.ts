@@ -6,7 +6,7 @@
  *      ② 空的空态开关在**请求失败**时也亮 → 用户以为自己没存过地址（说假话）。
  */
 import { describe, expect, it } from 'vitest';
-import { addressRows, emptyState } from './index.vm.js';
+import { addressRows, emptyState, errorTitle } from './index.vm.js';
 
 const LIST = [
   {
@@ -83,5 +83,14 @@ describe('emptyState（空态开关）', () => {
     // @why 用户会以为自己没存过，于是再存一遍 → 两条一样的地址。
     expect(emptyState([], 'error').showEmpty).toBe(false);
     expect(emptyState([], '').showEmpty).toBe(true);
+  });
+});
+
+describe('errorTitle：错误块的标题说清是哪一步失败（审查 2026-10-09）', () => {
+  it('🔴 取列表 / 删除 / 设默认 各自一句；不认识 → 取列表的说法', () => {
+    expect(errorTitle('load')).toBe('没能取到地址');
+    expect(errorTitle('delete')).toBe('删除没有成功，地址还在');
+    expect(errorTitle('default')).toBe('设为默认没有成功');
+    expect(errorTitle('x')).toBe('没能取到地址');
   });
 });

@@ -18,6 +18,8 @@ const MATCHA = {
 let page: LoadedPage;
 let cart: ReturnType<typeof createCartStore>;
 let stock: number;
+let navs: string[];
+let fail: (Error & { code?: number }) | null;
 const call = (name: string, ...args: unknown[]): unknown =>
   (page[name] as (...a: unknown[]) => unknown)(...args);
 const settle = async (): Promise<void> => {
@@ -27,6 +29,8 @@ const bar = () => page.data['bar'] as { cartText: string; disabled: boolean };
 
 beforeEach(async () => {
   stock = 4;
+  navs = [];
+  fail = null;
   const disk = new Map<string, unknown>();
   cart = createCartStore({
     storage: {
@@ -35,13 +39,17 @@ beforeEach(async () => {
     },
   } as never);
   cart.add(MATCHA);
-  vi.stubGlobal('wx', { navigateTo: () => undefined, switchTab: () => undefined });
+  vi.stubGlobal('wx', {
+    navigateTo: (o: { url: string }) => navs.push(o.url),
+    switchTab: () => undefined,
+  });
   page = await loadPage(new URL('./index.js', import.meta.url).href, {
     globalData: {
       apiBase: 'http://api.test',
       cart,
-      api: async (req: { url: string }) =>
-        req.url.endsWith('/support')
+      api: async (req: { url: string }) => {
+        if (!req.url.endsWith('/support') && fail !== null) throw fail;
+        return req.url.endsWith('/support')
           ? {}
           : {
               id: 'p-sakai-gyuto-210',
@@ -50,7 +58,8 @@ beforeEach(async () => {
               stock,
               images: [],
               description: '',
-            },
+            };
+      },
     },
   });
   call('onLoad', { id: 'p-sakai-gyuto-210' });
@@ -74,5 +83,48 @@ describe('详情页底部购买栏（M-13，AJ-406）', () => {
     call('onLoad', { id: 'p-sakai-gyuto-210' });
     await settle();
     expect(bar().disabled).toBe(true);
+  });
+});
+
+describe('详情页加购与立即购买（审查 2026-10-09）', () => {
+  it('🔴 库存 4：购物车里已有 4 件时再点加购 → 不加，提示库存上限', () => {
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        call('onAddToCart');
+        vi.advanceTimersByTime(1000);
+      }
+      const line = cart.items().find((x) => x.productId === 'p-sakai-gyuto-210');
+      expect(line?.qty).toBe(4);
+      expect(page.data['addNote']).toBe('库存只剩 4 件，购物车里已经放满了');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('🔴 加购后去购物车删掉这件、再回来 → 不再显示"已加入购物车"', () => {
+    call('onAddToCart');
+    expect(page.data['added']).toBe(true);
+    cart.setQty('p-sakai-gyuto-210', 0);
+    call('onShow');
+    expect(page.data['added']).toBe(false);
+    expect(bar().cartText).toBe('购物车 · 2');
+  });
+
+  it('🔴 立即购买连点两下 → 只打开一个结算页', () => {
+    call('onBuyNow');
+    call('onBuyNow');
+    expect(navs).toHaveLength(1);
+  });
+
+  it('🔴 商品已下架（40401）→ 不给"重试"；网络错误仍给', async () => {
+    fail = Object.assign(new Error('商品不存在或已下架'), { code: 40401 });
+    call('onLoad', { id: 'p-sakai-gyuto-210' });
+    await settle();
+    expect(page.data['retryable']).toBe(false);
+    fail = Object.assign(new Error('timeout'), { code: -1 });
+    call('onRetry');
+    await settle();
+    expect(page.data['retryable']).toBe(true);
   });
 });

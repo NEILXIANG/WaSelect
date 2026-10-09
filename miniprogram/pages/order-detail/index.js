@@ -130,7 +130,7 @@ Page({
       });
       this.lastOrder = res;
       this.setData({
-        view: detailView(res, { justPaid: this.justPaid }),
+        view: detailView(res, { justPaid: this.justPaid, nowMs: Date.now() }),
         error: '',
         copied: '',
       });
@@ -159,7 +159,7 @@ Page({
     if (this.recheckCount >= 2) {
       // 两次都没确认下来 → 放弃"刚付过"这个假设，恢复常规按钮
       this.justPaid = false;
-      this.setData({ view: detailView(this.lastOrder, { justPaid: false }) });
+      this.setData({ view: detailView(this.lastOrder, { justPaid: false, nowMs: Date.now() }) });
       return;
     }
     this.recheckCount += 1;

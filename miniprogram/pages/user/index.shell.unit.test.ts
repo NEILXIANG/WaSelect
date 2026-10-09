@@ -187,3 +187,52 @@ describe('「我的」四个订单入口（M-10 附，AJ-408）', () => {
     expect(switched).toEqual(['/pages/order/index']);
   });
 });
+
+describe('「我的」登录态跟着变（审查 2026-10-09）', () => {
+  it('🔴 进屏时自动登录还在途 → 登录完成后页面自己变成"已登录"，不用切走再回来', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('wx', { navigateTo: () => undefined, switchTab: () => undefined });
+      const g: Record<string, unknown> = {
+        apiBase: 'http://api.test',
+        token: '',
+        loginFailed: false,
+        retryLogin: () => Promise.resolve(),
+        api: () => Promise.resolve({}),
+      };
+      page = await loadPage(new URL('./index.js', import.meta.url).href, { globalData: g });
+      (page['onShow'] as () => void)();
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+      expect((page.data['login'] as { logged: boolean }).logged).toBe(false);
+      g['token'] = 'tok-after-login'; // 启动登录此刻完成
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((page.data['login'] as { logged: boolean }).logged).toBe(true);
+      (page['onHide'] as () => void)();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('自动登录失败 → 页面同样自己变成"重新登录"按钮', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('wx', { navigateTo: () => undefined, switchTab: () => undefined });
+      const g: Record<string, unknown> = {
+        apiBase: 'http://api.test',
+        token: '',
+        loginFailed: false,
+        retryLogin: () => Promise.resolve(),
+        api: () => Promise.resolve({}),
+      };
+      page = await loadPage(new URL('./index.js', import.meta.url).href, { globalData: g });
+      (page['onShow'] as () => void)();
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+      g['loginFailed'] = true;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((page.data['retry'] as { show: boolean }).show).toBe(true);
+      (page['onHide'] as () => void)();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

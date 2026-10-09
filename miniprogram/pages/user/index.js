@@ -81,6 +81,7 @@ Page({
     // @see @limitation 二：token 可能在别处被刷新，每次进屏重读
     this.retryFailed = false;
     this.renderLogin();
+    this.watchLogin();
     // S5：注入底部 tabBar 的高亮（本页是第 3 个 tab）。
     setActiveTab(this, 'user');
     // M-14（AJ-406）：购物车角标（每个 tab 页进屏都更新，utils/tabs.js 唯一更新方）
@@ -100,6 +101,8 @@ Page({
     } catch {
       this.setData({ shortcuts: orderShortcuts(undefined) });
     }
+    // 这次请求可能触发了 40101 静默重登：登录态以请求之后的 globalData 为准（审查 2026-10-09）
+    this.renderLogin();
   },
 
   /**
@@ -111,6 +114,46 @@ Page({
     if (typeof key !== 'string' || !ORDER_TABS.some((t) => t.key === key)) return;
     app.globalData.orderTab = key;
     wxApi.switchTab({ url: ORDER_PAGE });
+  },
+
+  /** 等启动登录落定的定时器（审查 2026-10-09）。 */
+  loginWatchTimer: null,
+
+  /**
+   * 启动自动登录还在途时，每 500ms 看一眼，落定（拿到 token 或失败）就重画一次并停表（审查 2026-10-09）。
+   * @why 此前登录态只在 onShow / 点重试时画：刚启动就进「我的」，要切走再回来才从"正在登录…"变过来。
+   * @why 用短轮询而不是在 app.js 里加订阅：app.js 是装配层、不可测；而"读 globalData 判断落没落定"
+   *      本来就是 renderLogin 的口径，轮询只是让它多跑几次。最多 60 次（30 秒）后停，不常驻。
+   * @limitation 小程序页面全局白名单只有 setTimeout（见 pay 页 startCountdown），所以是链式 setTimeout。
+   */
+  watchLogin() {
+    this.stopWatchLogin();
+    let left = 60;
+    const tick = () => {
+      this.loginWatchTimer = null;
+      const settled = app.globalData.token !== '' || app.globalData.loginFailed === true;
+      if (settled) {
+        this.renderLogin();
+        return;
+      }
+      left -= 1;
+      if (left > 0) this.loginWatchTimer = setTimeout(tick, 500);
+    };
+    const settledNow = app.globalData.token !== '' || app.globalData.loginFailed === true;
+    if (!settledNow) this.loginWatchTimer = setTimeout(tick, 500);
+  },
+
+  stopWatchLogin() {
+    if (this.loginWatchTimer !== null) clearTimeout(this.loginWatchTimer);
+    this.loginWatchTimer = null;
+  },
+
+  onHide() {
+    this.stopWatchLogin();
+  },
+
+  onUnload() {
+    this.stopWatchLogin();
   },
 
   /** 本页重试在途（M-17；不进 data：渲染态由 `retry` 表达）。 */

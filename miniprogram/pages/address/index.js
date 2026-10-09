@@ -20,7 +20,7 @@
  *
  * @see ./index.vm.js（视图逻辑真源）；../../utils/address-form.js（请求体与摘要真源）
  */
-import { addressRows, emptyState } from './index.vm.js';
+import { addressRows, emptyState, errorTitle } from './index.vm.js';
 import { formModel, toAddressInput } from '../../utils/address-form.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -39,6 +39,8 @@ Page({
     /** vm `addressRows` 的输出。 */
     rows: [],
     loading: false,
+    /** 错误块标题（vm `errorTitle`：取列表 / 删除 / 设默认各自一句）。 */
+    errorTitle: errorTitle('load'),
     /** 错误文案（空串 = 无错误）。 */
     error: '',
     /** 空态开关（**请求失败时不亮**，@see index.vm.js 的 emptyState）。 */
@@ -72,10 +74,10 @@ Page({
       const list = Array.isArray(res) ? res : [];
       this.rawList = list;
       const rows = addressRows(list);
-      this.setData({ rows, error: '', empty: emptyState(rows, '').showEmpty });
+      this.setData({ rows, error: '', errorRef: '', empty: emptyState(rows, '').showEmpty });
     } catch (e) {
       this.rawList = [];
-      this.setData({ rows: [], ...errorFields(e), empty: false });
+      this.setData({ rows: [], ...errorFields(e), errorTitle: errorTitle('load'), empty: false });
     } finally {
       this.setData({ loading: false });
     }
@@ -125,7 +127,7 @@ Page({
         traceId: this.traceId,
       });
     } catch (err) {
-      this.setData({ ...errorFields(err) });
+      this.setData({ ...errorFields(err), errorTitle: errorTitle('delete') });
       return;
     }
     await this.load();
@@ -149,7 +151,7 @@ Page({
         traceId: this.traceId,
       });
     } catch (err) {
-      this.setData({ ...errorFields(err) });
+      this.setData({ ...errorFields(err), errorTitle: errorTitle('default') });
       return;
     }
     await this.load();

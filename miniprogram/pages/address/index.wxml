@@ -20,7 +20,7 @@
   <ws-state-block
     wx:if="{{error}}"
     kind="fail"
-    title="没能取到地址"
+    title="{{errorTitle}}"
     reason="{{error}}"
     refText="{{errorRef}}"
     actionText="重试"

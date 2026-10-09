@@ -212,7 +212,7 @@ export function createCartStore(deps) {
  */
 function normalize(raw) {
   if (!Array.isArray(raw)) return [];
-  return raw
+  const rows = raw
     .filter((i) => i && typeof i === 'object')
     .filter((i) => typeof i.productId === 'string' && i.productId !== '')
     .filter((i) => Number.isInteger(i.qty) && i.qty >= 1)
@@ -223,4 +223,13 @@ function normalize(raw) {
       image: typeof i.image === 'string' ? i.image : '',
       priceJpy: i.priceJpy,
     }));
+  // 同一商品出现两行（旧版本写入 / 损坏）→ 合并、数量相加（审查 2026-10-09）：
+  //   不合并的话 toOrderItems 带重复 product_id，报价永远 40001，购物车卡在"合计未能获取"，重试也没用
+  const merged = [];
+  for (const r of rows) {
+    const found = merged.find((m) => m.productId === r.productId);
+    if (found === undefined) merged.push(r);
+    else found.qty += r.qty;
+  }
+  return merged;
 }

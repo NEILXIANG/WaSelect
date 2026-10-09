@@ -549,3 +549,13 @@ describe('searchKeyword（P2-32：服务端 >64 字符一律 40001）', () => {
     expect(q['keyword']).toHaveLength(SEARCH_KEYWORD_MAX);
   });
 });
+
+describe('mergeCards：翻页去重（审查 2026-10-09）', () => {
+  it('🔴 追加时丢掉已在列表里的 id（浏览途中有新品上架，偏移分页会把上一页末尾那件再给一次）', () => {
+    const a = { id: 'p1' };
+    const b = { id: 'p2' };
+    const b2 = { id: 'p2', name: 'dup' };
+    const c = { id: 'p3' };
+    expect(mergeCards([a, b] as never, [b2, c] as never, false)).toEqual([a, b, c]);
+  });
+});
