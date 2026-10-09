@@ -35,3 +35,7 @@ var/uploads/
 
 # Claude Code 并行分身的工作树（整仓副本，合并后即删）
 .claude/worktrees/
+
+# 协作工具（WorkBuddy）的本地记忆：含与工程无关的公司 / 个人信息，不进版本库（AJ-422）。
+# 只是不再跟踪；历史提交里的旧版本是否清理由用户决定（需改写历史，不在本单元做）。
+.workbuddy/
