@@ -19,6 +19,7 @@ describe('parseCustomerListQuery：分页', () => {
       page: 1,
       size: CUSTOMER_PAGE_SIZE_DEFAULT,
       keyword: null,
+      sort: null,
     });
     expect(CUSTOMER_PAGE_SIZE_DEFAULT).toBe(20);
     expect(CUSTOMER_PAGE_SIZE_MAX).toBe(100);
@@ -48,6 +49,7 @@ describe('parseCustomerListQuery：分页', () => {
       page: 3,
       size: 50,
       keyword: null,
+      sort: null,
     });
   });
 });
@@ -85,6 +87,19 @@ describe('parseCustomerListQuery：关键字', () => {
     expect(parseCustomerListQuery({ keyword: { x: '1' } })).toEqual({
       ok: false,
       reason: 'keyword_invalid',
+    });
+  });
+});
+
+describe('parseCustomerListQuery：排序（评估 4.5，2026-10-09）', () => {
+  it('🔴 -paid_total_jpy → 降序；last_order_at → 升序；白名单外 → sort_invalid', () => {
+    const a = parseCustomerListQuery({ sort: '-paid_total_jpy' });
+    expect(a.ok && a.sort).toEqual({ key: 'paid_total_jpy', dir: 'desc' });
+    const b = parseCustomerListQuery({ sort: 'last_order_at' });
+    expect(b.ok && b.sort).toEqual({ key: 'last_order_at', dir: 'asc' });
+    expect(parseCustomerListQuery({ sort: 'total_jpy' })).toEqual({
+      ok: false,
+      reason: 'sort_invalid',
     });
   });
 });

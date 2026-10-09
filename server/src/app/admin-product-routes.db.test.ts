@@ -1022,3 +1022,52 @@ describe('PATCH /admin/products/{id}/stock（AJ-403）', () => {
     }
   });
 });
+
+/** 评估 4.5（2026-10-09）：商品列表排序（库存 / 售价 / 更新时间），默认仍是更新时间倒序。 */
+describe('GET /admin/products?sort', () => {
+  it('🔴 sort=stock 库存从少到多（补货视角）；sort=-price_jpy 售价从高到低；非法键 → 40001', async () => {
+    const s = await buildServer();
+    try {
+      const tk = await adminToken();
+      const mk = async (title: string, extra: Record<string, unknown>) =>
+        fetch(`${s.url}/api/v1/admin/products`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${tk}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body({ title, ...extra })),
+        });
+      await mk('南部铁器 铁壶', { stock: 3, price_jpy: 12_800 });
+      await mk('白色恋人 12 枚', { stock: 40, price_jpy: 2160 });
+      await mk('宇治抹茶 40g', { stock: 12, price_jpy: 2980 });
+      const titles = async (qs: string) =>
+        (
+          (await (
+            await fetch(`${s.url}/api/v1/admin/products?${qs}`, {
+              headers: { authorization: `Bearer ${tk}` },
+            })
+          ).json()) as { items: { title: string }[] }
+        ).items.map((i) => i.title);
+      expect(await titles('sort=stock')).toEqual([
+        '南部铁器 铁壶',
+        '宇治抹茶 40g',
+        '白色恋人 12 枚',
+      ]);
+      expect(await titles('sort=-price_jpy')).toEqual([
+        '南部铁器 铁壶',
+        '宇治抹茶 40g',
+        '白色恋人 12 枚',
+      ]);
+      expect(await titles('sort=price_jpy')).toEqual([
+        '白色恋人 12 枚',
+        '宇治抹茶 40g',
+        '南部铁器 铁壶',
+      ]);
+      const bad = await fetch(`${s.url}/api/v1/admin/products?sort=total_jpy`, {
+        headers: { authorization: `Bearer ${tk}` },
+      });
+      expect(bad.status).toBe(400);
+      expect(((await bad.json()) as { code: number }).code).toBe(40001);
+    } finally {
+      await s.close();
+    }
+  });
+});

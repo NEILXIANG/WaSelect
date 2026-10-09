@@ -375,3 +375,43 @@ describe('订单列表：物流列分两行、采购信息有全文提示（AJ-4
     );
   });
 });
+
+/** 评估 4.5 / 4.6（2026-10-09）：排序与每页条数进地址栏、带进请求。 */
+describe('订单列表：排序与每页条数', () => {
+  it('🔴 #/orders?sort=-total_jpy&size=50&page=2 → 请求带 sort / size / page；金额列标为降序', async () => {
+    const el = await open('#/orders?sort=-total_jpy&size=50&page=2');
+    // 看**第一次**请求：替身返回 0 条，随后页码会按 A-02 拉回第 1 页（那是另一条既有行为）
+    const p = gets()[0]?.path ?? '';
+    expect(p).toContain('sort=-total_jpy');
+    expect(p).toContain('size=50');
+    expect(p).toContain('page=2');
+    const th = [...el.querySelectorAll('th')].find((t) => t.textContent?.includes('金额'));
+    expect(th?.getAttribute('aria-sort')).toBe('descending');
+  });
+
+  it('🔴 点「金额」表头 → 按金额降序重新取、回到第 1 页；再点 → 升序', async () => {
+    const el = await open('#/orders?page=3');
+    const amount = (): HTMLButtonElement =>
+      [...el.querySelectorAll('th button')].find((b) =>
+        b.textContent?.includes('金额'),
+      ) as HTMLButtonElement;
+    await click(amount());
+    let p = gets().at(-1)?.path ?? '';
+    expect(p).toContain('sort=-total_jpy');
+    expect(p).not.toContain('page=3');
+    await click(amount());
+    p = gets().at(-1)?.path ?? '';
+    expect(p).toContain('sort=total_jpy');
+    expect(p).not.toContain('sort=-total_jpy');
+  });
+
+  it('🔴 每页条数选 100 → 请求 size=100；默认 20 不写进地址', async () => {
+    const el = await open();
+    expect(gets().at(-1)?.path).toContain('size=20');
+    const sel = el.querySelector('select[aria-label="每页显示条数"]') as HTMLSelectElement;
+    sel.value = '100';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    await flush();
+    expect(gets().at(-1)?.path).toContain('size=100');
+  });
+});

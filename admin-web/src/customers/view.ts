@@ -160,11 +160,20 @@ export function addressLine(a: CustomerAddressLike): string {
 }
 
 /** 列表查询串（空关键字 / 第 1 页不带，地址栏保持干净）。 */
-export function customerListQuery(q: { keyword: string; page: number }): string {
+export function customerListQuery(q: {
+  keyword: string;
+  page: number;
+  /** 评估 4.5：`-paid_total_jpy` 之类；空 / 不传 = 默认（最近下单倒序）。 */
+  sort?: string;
+  /** 评估 4.6：每页条数；20（默认）不写。 */
+  size?: number;
+}): string {
   const p = new URLSearchParams();
   const kw = q.keyword.trim();
   if (kw !== '') p.set('keyword', kw);
   if (q.page > 1) p.set('page', String(q.page));
+  if (q.sort !== undefined && q.sort !== '') p.set('sort', q.sort);
+  if (q.size !== undefined && q.size !== 20) p.set('size', String(q.size));
   const s = p.toString();
   return s === '' ? '' : `?${s}`;
 }

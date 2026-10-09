@@ -231,3 +231,38 @@ describe('GET /api/v1/admin/reconciliation/latest（3-2）', () => {
     }
   });
 });
+
+/** 评估 P2（2026-10-09）：运营日志按日期范围筛（日本时间、两端含当天；口径同订单列表 created_from / created_to）。 */
+describe('GET /api/v1/admin/audit?created_from&created_to', () => {
+  it('🔴 只出范围内的记录（JST 日界）；范围倒置 / 格式不对 → 40001', async () => {
+    // JST 10-02 00:00 = UTC 10-01 15:00；JST 10-03 23:59 = UTC 10-03 14:59
+    await audit(1, 'admin:u-a', 'POST /admin/x', '2026-10-01T14:59:59Z'); // JST 10-01 23:59:59 → 范围外
+    await audit(2, 'admin:u-a', 'POST /admin/x', '2026-10-01T15:00:00Z'); // JST 10-02 00:00 → 范围内
+    await audit(3, 'admin:u-a', 'POST /admin/x', '2026-10-03T14:59:59Z'); // JST 10-03 23:59:59 → 范围内
+    await audit(4, 'admin:u-a', 'POST /admin/x', '2026-10-03T15:00:00Z'); // JST 10-04 00:00 → 范围外
+    const { url, close } = await buildServer();
+    try {
+      const r = await call(
+        url,
+        'GET',
+        '/api/v1/admin/audit?created_from=2026-10-02&created_to=2026-10-03',
+        undefined,
+        await bearer(),
+      );
+      expect(r.status).toBe(200);
+      const body = r.body as { items: Array<Record<string, unknown>>; total: number };
+      expect(body.total).toBe(2);
+      expect(body.items.map((i) => i['target'])).toEqual(['o-3', 'o-2']);
+      for (const qs of [
+        'created_from=2026-10-05&created_to=2026-10-01',
+        'created_from=10/02/2026',
+      ]) {
+        const bad = await call(url, 'GET', `/api/v1/admin/audit?${qs}`, undefined, await bearer());
+        expect(bad.status).toBe(400);
+        expect((bad.body as { code: number }).code).toBe(40001);
+      }
+    } finally {
+      await close();
+    }
+  });
+});

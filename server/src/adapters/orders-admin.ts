@@ -101,6 +101,11 @@ export interface AdminOrderListQuery {
   createdTo?: Date | undefined;
   /** 单号 / 收件人 / 运单号 子串匹配（三列 OR，大小写无关）。 */
   keyword?: string | undefined;
+  /**
+   * 排序（评估 4.5，2026-10-09；shared `LIST_SORT_KEYS.orders`）：不传 = 下单时间倒序。
+   * @limitation `total_jpy` 排序没有专用索引：订单百级到千级时是内存排序，量起来再看 EXPLAIN 是否要 (is_test, total_jpy) 索引。
+   */
+  sort?: { key: 'created_at' | 'total_jpy'; dir: 'asc' | 'desc' } | undefined;
   /** true = 连 `is_test` 的审核期 mock 单一起返回（见文件头 @limitation 三）。 */
   includeTest?: boolean | undefined;
 }
@@ -269,6 +274,22 @@ function toListRow(r: Record<string, unknown>): AdminOrderListRow {
   };
 }
 
+/**
+ * 排序键 → 固定 SQL 片段（白名单已由 shared `parseListSort` 把关；这里再用 switch 兜一次，绝不拼接外来字符串）。
+ * 次序键一律带 `id`：同金额 / 同时刻的行在翻页时位置稳定，不会一行出现在两页、另一行哪页都没有。
+ */
+function orderListOrderBy(db: Db, sort: AdminOrderListQuery['sort']) {
+  const desc = sort?.dir !== 'asc';
+  switch (sort?.key) {
+    case 'total_jpy':
+      return desc ? db`order by total_jpy desc, id desc` : db`order by total_jpy asc, id asc`;
+    case 'created_at':
+    case undefined:
+    default:
+      return desc ? db`order by created_at desc, id desc` : db`order by created_at asc, id asc`;
+  }
+}
+
 /** 分页列表 + 总数（两条 SQL 共用 buildWhere）。 */
 export async function listAdminOrders(
   db: Db,
@@ -280,7 +301,7 @@ export async function listAdminOrders(
                     where e.order_id = orders.id and e.status = 'late_paid') as late_paid
       from orders
     ${buildWhere(db, q)}
-     order by created_at desc, id desc
+     ${orderListOrderBy(db, q.sort)}
      limit ${q.size} offset ${(q.page - 1) * q.size}
   `;
   const counts = await db`

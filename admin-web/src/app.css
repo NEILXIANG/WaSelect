@@ -639,6 +639,46 @@ td .thumb {
   color: var(--md-color-success);
 }
 
+/* 列表控件（评估 4.5 / 4.6 / P2，2026-10-09）：表头排序按钮、每页条数、行内带标签的日期框 */
+.th-sort {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ws-space-xs);
+  font: inherit;
+  color: inherit;
+  border-radius: var(--md-shape-xs);
+}
+
+/* `all: unset` 会把全局 :where(button):focus-visible 的焦点环一起抹掉（:where 特异度为 0），这里按同一组 token 补回 */
+.th-sort:focus-visible {
+  outline: var(--md-focus-ring) solid var(--md-color-primary);
+  outline-offset: var(--md-focus-ring);
+}
+
+.th-sort-on {
+  color: var(--md-color-on-surface);
+  font-weight: 700;
+}
+
+.th-sort-arrow {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+.page-size,
+.field-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ws-space-sm);
+}
+
+.input-compact {
+  width: auto;
+  min-width: 0;
+}
+
 .pager {
   display: flex;
   align-items: center;

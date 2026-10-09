@@ -122,6 +122,8 @@ export interface AdminProductListQuery {
   keyword?: string | undefined;
   /** true = 只出库存 ≤ `lowStockAt` 的商品。 */
   lowStockAt?: number | undefined;
+  /** 排序（评估 4.5，2026-10-09；shared `LIST_SORT_KEYS.products`）：不传 = 更新时间倒序（原口径）。 */
+  sort?: { key: 'updated_at' | 'stock' | 'price_jpy'; dir: 'asc' | 'desc' } | undefined;
 }
 
 /**
@@ -202,6 +204,25 @@ function toRow(r: Record<string, unknown>): AdminProductRow {
   };
 }
 
+/**
+ * 排序键 → 固定 SQL 片段（白名单由 shared `parseListSort` 把关，这里 switch 兜底，不拼外来字符串）。
+ * 次序键带 `id`：同库存 / 同价的行翻页时位置稳定。
+ * @limitation 商品百级，库存 / 售价排序是内存排序，没有专用索引。
+ */
+function productListOrderBy(db: Db, sort: AdminProductListQuery['sort']) {
+  const asc = sort?.dir === 'asc';
+  switch (sort?.key) {
+    case 'stock':
+      return asc ? db`order by stock asc, id` : db`order by stock desc, id`;
+    case 'price_jpy':
+      return asc ? db`order by price_jpy asc, id` : db`order by price_jpy desc, id`;
+    case 'updated_at':
+    case undefined:
+    default:
+      return asc ? db`order by updated_at asc, id` : db`order by updated_at desc, id`;
+  }
+}
+
 export function createCatalogAdminRepo(db: Db): CatalogAdminRepo {
   return {
     async listAdminProducts(q) {
@@ -220,7 +241,7 @@ export function createCatalogAdminRepo(db: Db): CatalogAdminRepo {
       const rows = await db`
         select ${db(COLS.split(',').map((c) => c.trim()))} from products
          ${where}
-         order by updated_at desc, id
+         ${productListOrderBy(db, q.sort)}
          limit ${q.size} offset ${(q.page - 1) * q.size}
       `;
       const counts = await db`

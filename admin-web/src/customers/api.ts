@@ -21,7 +21,7 @@ function shapeError(what: string): ApiError {
 
 export async function listCustomers(
   api: AdminApi,
-  q: { keyword: string; page: number },
+  q: { keyword: string; page: number; sort?: string; size?: number },
 ): Promise<{ items: CustomerListItem[]; total: number }> {
   const resp = await api({ path: `/api/v1/admin/customers${customerListQuery(q)}` });
   if (!isRecord(resp) || !Array.isArray(resp['items']) || typeof resp['total'] !== 'number') {

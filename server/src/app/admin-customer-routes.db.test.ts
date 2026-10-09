@@ -700,3 +700,23 @@ describe('DELETE /admin/customers/{id}/events（AJ-413）', () => {
     });
   });
 });
+
+/** 评估 4.5（2026-10-09）：客户列表排序（累计实付 / 最近下单），默认仍是最近下单倒序。 */
+describe('GET /admin/customers?sort', () => {
+  it('🔴 sort=paid_total_jpy 累计实付从少到多；sort=last_order_at 最近下单从早到晚（没下过单的始终排最后）；非法键 → 40001', async () => {
+    await withServer(async (url, admin) => {
+      const ids = async (qs: string) =>
+        (
+          (await get(url, `/api/v1/admin/customers?${qs}`, admin)).body['items'] as Array<{
+            id: string;
+          }>
+        ).map((i) => i.id);
+      expect(await ids('sort=paid_total_jpy')).toEqual(['u-cust-c', 'u-cust-b', 'u-cust-a']);
+      expect(await ids('sort=-paid_total_jpy')).toEqual(['u-cust-a', 'u-cust-b', 'u-cust-c']);
+      expect(await ids('sort=last_order_at')).toEqual(['u-cust-b', 'u-cust-a', 'u-cust-c']);
+      const bad = await get(url, '/api/v1/admin/customers?sort=stock', admin);
+      expect(bad.status).toBe(400);
+      expect(code(bad)).toBe(40001);
+    });
+  });
+});

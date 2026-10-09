@@ -38,7 +38,12 @@
  *      contracts/api-contract.yaml（AdminProduct / ProductInput）
  */
 import type { Express } from 'express';
-import { LOW_STOCK_THRESHOLD, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
+import {
+  LOW_STOCK_THRESHOLD,
+  SEARCH_KEYWORD_MAX_LENGTH,
+  LIST_SORT_KEYS,
+  parseListSort,
+} from '@waselect/shared';
 import { AppError } from '../errors.js';
 import type { Db } from '../adapters/db.js';
 import type { Logger } from '../logger.js';
@@ -256,12 +261,16 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         if (q.low_stock !== undefined && q.low_stock !== 'true' && q.low_stock !== 'false') {
           throw new AppError(40001, { reason: 'low_stock_invalid' });
         }
+        // 评估 4.5（契约 0.6.53）：白名单排序；非法 → 40001
+        const sort = parseListSort((req.query as { sort?: unknown }).sort, LIST_SORT_KEYS.products);
+        if (!sort.ok) throw new AppError(40001, { reason: sort.reason });
         const { items, total } = await repo.listAdminProducts({
           page,
           size,
           status: status as ProductStatus | undefined,
           ...(keyword !== '' ? { keyword } : {}),
           ...(q.low_stock === 'true' ? { lowStockAt: LOW_STOCK_THRESHOLD } : {}),
+          ...(sort.key !== null ? { sort: { key: sort.key, dir: sort.dir } } : {}),
         });
         res.json({ items: items.map((r) => toAdminProduct(r, imgBase)), total });
       } catch (e) {

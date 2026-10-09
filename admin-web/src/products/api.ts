@@ -71,6 +71,8 @@ export interface ProductListQuery {
   keyword?: string;
   /** true = 只看库存紧张的（≤ shared LOW_STOCK_THRESHOLD）。 */
   lowStock?: boolean;
+  /** 排序（契约 0.6.53：stock / price_jpy / updated_at，`-` 前缀降序；不传 = 更新时间倒序）。 */
+  sort?: string;
 }
 
 /**
@@ -88,6 +90,7 @@ export async function listProducts(
   if (query.size !== undefined) params.set('size', String(query.size));
   if (query.keyword !== undefined && query.keyword !== '') params.set('keyword', query.keyword);
   if (query.lowStock === true) params.set('low_stock', 'true');
+  if (query.sort !== undefined && query.sort !== '') params.set('sort', query.sort);
   const qs = params.toString();
   const resp = await api({
     path: `/api/v1/admin/products${qs === '' ? '' : `?${qs}`}`,

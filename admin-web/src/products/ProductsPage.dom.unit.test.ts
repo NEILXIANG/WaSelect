@@ -298,6 +298,18 @@ describe('商品列表：筛选与页码进地址栏', () => {
     expect(el.textContent).toContain('第 3 / 6 页');
   });
 
+  it('🔴 sort=stock&size=50 → 请求带 sort / size；点「售价」→ 地址栏 sort=-price_jpy 并回到第 1 页（评估 4.5 / 4.6）', async () => {
+    const { el, listCalls, navs } = await openAt('sort=stock&size=50&page=2');
+    const first = listCalls[0] ?? '';
+    expect(first).toContain('sort=stock');
+    expect(first).toContain('size=50');
+    const priceBtn = [...el.querySelectorAll('th button')].find((b) =>
+      b.textContent?.includes('售价'),
+    ) as HTMLButtonElement;
+    await click(priceBtn);
+    expect(navs.at(-1)).toBe('sort=-price_jpy&size=50');
+  });
+
   it('🔴 点筛选 / 下一页 → 改地址栏（页码回到 1 时不写 page，默认值不进地址）', async () => {
     const { el, navs } = await openAt('page=2');
     await click(button(el, '已下架'));

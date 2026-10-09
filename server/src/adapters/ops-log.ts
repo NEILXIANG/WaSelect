@@ -14,6 +14,12 @@ export interface AuditListQuery {
   size: number;
   actor?: string | undefined;
   target?: string | undefined;
+  /**
+   * 操作时间窗（评估 P2，2026-10-09）：`created_at >= createdFrom` 且 `< createdTo`（左闭右开；
+   * JST 日界由 shared `parseJstDateRange` 算好，与订单列表的下单日期同一函数）。
+   */
+  createdFrom?: Date | undefined;
+  createdTo?: Date | undefined;
 }
 
 export interface AuditRow {
@@ -48,7 +54,9 @@ export async function listAdminAudit(
         : db`a.actor = ${q.actor}`;
   const where = db`
     where (${actorCond})
-      and (${q.target === undefined ? db`true` : db`a.target = ${q.target}`})`;
+      and (${q.target === undefined ? db`true` : db`a.target = ${q.target}`})
+      and (${q.createdFrom === undefined ? db`true` : db`a.created_at >= ${q.createdFrom}`})
+      and (${q.createdTo === undefined ? db`true` : db`a.created_at < ${q.createdTo}`})`;
   const rows = await db`
     select a.id, a.actor, a.action, a.target, a.status_code, a.trace_id, a.created_at, u.email as actor_email
       from admin_audit a

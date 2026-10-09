@@ -70,6 +70,8 @@ export interface OrderListQuery {
   size?: number;
   /** true = 连审核期测试单一起列（契约 0.6.32 include_test，剩余清单 3-4）。 */
   includeTest?: boolean;
+  /** 排序（契约 0.6.53：`total_jpy` / `-total_jpy` / `created_at` / `-created_at`；不传 = 下单时间倒序）。 */
+  sort?: string;
 }
 
 /**
@@ -90,6 +92,7 @@ export async function listOrders(
   if (query.page !== undefined) params.set('page', String(query.page));
   if (query.size !== undefined) params.set('size', String(query.size));
   if (query.includeTest === true) params.set('include_test', 'true');
+  if (query.sort !== undefined && query.sort !== '') params.set('sort', query.sort);
   const qs = params.toString();
   const resp = await api({
     path: `/api/v1/admin/orders${qs === '' ? '' : `?${qs}`}`,

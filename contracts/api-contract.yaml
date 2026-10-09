@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.52
+  version: 0.6.53
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,13 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.53（评估 4.5 / P2：管理端列表排序 + 运营日志日期范围——新增可选参数，老调用方不受影响）：
+      ① `GET /admin/orders` / `/admin/products` / `/admin/customers` 新增 `sort`：`<键>` 升序、`-<键>` 降序；白名单
+         orders = created_at / total_jpy，products = updated_at / stock / price_jpy，customers = last_order_at / paid_total_jpy
+         （唯一真源 shared `LIST_SORT_KEYS`）；白名单外 / 非字符串 → 400 / 40001 `sort_invalid`。不传 = 原默认排序。
+         次序键一律带 id（翻页时同值的行位置稳定）；customers 的 last_order_at 两个方向都 nulls last（没下过单的排最后）。
+      ② `GET /admin/audit` 新增 `created_from` / `created_to`（JST 日历日 YYYY-MM-DD、两端含当天；口径与订单列表同一函数 parseJstDateRange）；
+         格式不对 / 倒置 → 40001。
 servers:
   - url: https://api.example.com/api/v1
 security:
@@ -779,6 +786,7 @@ paths:
         - {name: created_to, in: query, schema: {type: string, format: date, description: '0.6.44：下单日期上界，JST 日历日 YYYY-MM-DD（含当日）；非法 → 40001 created_to_invalid；早于 created_from → 40001 created_range_invalid'}}
         - {name: page, in: query, schema: {type: integer, default: 1}}
         - {name: size, in: query, schema: {type: integer, default: 20, maximum: 100}}
+        - {name: sort, in: query, schema: {type: string, enum: [created_at, '-created_at', total_jpy, '-total_jpy']}, description: '0.6.53：排序（-前缀 = 降序）；不传 = 下单时间倒序；白名单外 → 40001 sort_invalid'}
         - {name: include_test, in: query, schema: {type: string, enum: ['true', 'false'], default: 'false'}, description: '0.6.32：true = 连审核期测试单（is_test）一起列出（默认过滤；给了 keyword 时本来就不过滤）。其它取值 → 40001'}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminOrderListItem'}}, total: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}:
@@ -859,7 +867,7 @@ paths:
   /admin/products:
     get:
       summary: 商品列表（管理端；status 非法或 page/size 非法 → 40001）
-      parameters: [{name: keyword, in: query, schema: {type: string}, description: '0.6.40：商品名 / 日文名 / JAN 码，字面匹配、不区分大小写'}, {name: low_stock, in: query, schema: {type: string, enum: ['true', 'false']}, description: '0.6.40：true = 只出库存 ≤ LOW_STOCK_THRESHOLD（5）'}, {name: status, in: query, schema: {type: string, enum: [active, offline, draft]}, description: '0.6.46：可筛 draft（草稿）'}, {name: page, in: query, schema: {type: integer, default: 1}}, {name: size, in: query, schema: {type: integer, default: 50, minimum: 1, maximum: 100}}]
+      parameters: [{name: keyword, in: query, schema: {type: string}, description: '0.6.40：商品名 / 日文名 / JAN 码，字面匹配、不区分大小写'}, {name: low_stock, in: query, schema: {type: string, enum: ['true', 'false']}, description: '0.6.40：true = 只出库存 ≤ LOW_STOCK_THRESHOLD（5）'}, {name: status, in: query, schema: {type: string, enum: [active, offline, draft]}, description: '0.6.46：可筛 draft（草稿）'}, {name: page, in: query, schema: {type: integer, default: 1}}, {name: size, in: query, schema: {type: integer, default: 50, minimum: 1, maximum: 100}}, {name: sort, in: query, schema: {type: string, enum: [updated_at, '-updated_at', stock, '-stock', price_jpy, '-price_jpy']}, description: '0.6.53：排序（-前缀 = 降序）；不传 = 更新时间倒序；白名单外 → 40001 sort_invalid'}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminProduct'}}, total: {type: integer}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
     post:
       summary: 管理员建商品（**恒建草稿** status=draft，0.6.46；响应带 id：前端用它打后续的 PUT /{id} 与 PATCH /{id}/status）
@@ -972,7 +980,7 @@ paths:
     get:
       summary: 客户列表（0.6.47 / AJ-404；只读）
       description: '客户 = 非管理员用户（含只登录过、没下过单的）。统计一律排除测试单，口径见 info 0.6.47 ①。keyword 匹配订单号 / 联系邮箱 / 订单收件人 / 地址簿收件人 / 用户 id（字面子串、不区分大小写，含测试单）。参数不合法 → 40001。'
-      parameters: [{name: keyword, in: query, schema: {type: string, maxLength: 64}}, {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}, {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}]
+      parameters: [{name: keyword, in: query, schema: {type: string, maxLength: 64}}, {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}, {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}, {name: sort, in: query, schema: {type: string, enum: [last_order_at, '-last_order_at', paid_total_jpy, '-paid_total_jpy']}, description: '0.6.53：排序（-前缀 = 降序）；不传 = 最近下单倒序；last_order_at 两个方向都把没下过单的排最后；白名单外 → 40001 sort_invalid'}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [items, total], properties: {total: {type: integer}, items: {type: array, items: {$ref: '#/components/schemas/AdminCustomerListItem'}}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/customers/{id}:
     get:
@@ -996,7 +1004,7 @@ paths:
     get:
       summary: 运营日志——管理员操作审计分页（0.6.32，剩余清单 3-2）
       description: 按 created_at 倒序。`actor` / `target` 精确过滤（非字符串或空串 → 40001，不静默当成"不过滤"）。🈲 不下发 before / after（改动前后的业务快照可能含地址等业务数据；要看细节去库里按 id 查）。只读：审计表 append-only。
-      parameters: [{name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}, {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}, {name: actor, in: query, schema: {type: string}, description: '如 admin:u-xxx / cli:admin-create；0.6.40 起含 @ 时按管理员邮箱筛'}, {name: target, in: query, schema: {type: string}, description: '如订单 id / 商品 id'}]
+      parameters: [{name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}, {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}, {name: actor, in: query, schema: {type: string}, description: '如 admin:u-xxx / cli:admin-create；0.6.40 起含 @ 时按管理员邮箱筛'}, {name: target, in: query, schema: {type: string}, description: '如订单 id / 商品 id'}, {name: created_from, in: query, schema: {type: string, format: date}, description: '0.6.53：操作日期下界，JST 日历日 YYYY-MM-DD（含当日）；非法 → 40001'}, {name: created_to, in: query, schema: {type: string, format: date}, description: '0.6.53：操作日期上界，JST 日历日（含当日）；早于下界 → 40001'}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [total, items], properties: {total: {type: integer}, items: {type: array, items: {$ref: '#/components/schemas/AdminAuditEntry'}}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/exports/{kind}:
     get:

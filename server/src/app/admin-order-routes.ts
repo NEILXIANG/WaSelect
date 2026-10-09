@@ -54,7 +54,12 @@ import { findCustomer } from '../adapters/customers-admin.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
-import { parseJstDateRange, parseOrderStatusList } from '@waselect/shared';
+import {
+  parseJstDateRange,
+  parseOrderStatusList,
+  LIST_SORT_KEYS,
+  parseListSort,
+} from '@waselect/shared';
 import { asOrderStatus } from '../domain/order.js';
 import {
   ADMIN_NOTE_MAX_LENGTH,
@@ -271,8 +276,12 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           include_test?: unknown;
           created_from?: unknown;
           created_to?: unknown;
+          sort?: unknown;
         };
         const { page, size } = readPaging(q);
+        // 评估 4.5（契约 0.6.53）：白名单排序；非法 → 40001（不静默按默认排，否则运营以为排过了）
+        const sort = parseListSort(q.sort, LIST_SORT_KEYS.orders);
+        if (!sort.ok) throw new AppError(40001, { reason: sort.reason });
         // 剩余清单 3-4（契约 0.6.32）：只认 'true' / 'false'，其它 → 40001（不静默当成"不含"）
         if (
           q.include_test !== undefined &&
@@ -309,6 +318,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           ...(rawKw !== undefined && rawKw !== '' ? { keyword: rawKw } : {}),
           ...(range.from !== null ? { createdFrom: range.from } : {}),
           ...(range.to !== null ? { createdTo: range.to } : {}),
+          ...(sort.key !== null ? { sort: { key: sort.key, dir: sort.dir } } : {}),
           includeTest,
         });
         // 行项目**一次批量**取（N+1 的反面）：`listOrderItemsFor` 一条 `in (…)` 拿全部，

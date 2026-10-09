@@ -227,3 +227,17 @@ describe('客户详情：删除行为记录（隐私请求，AJ-413）', () => {
     expect(el.textContent).toContain('已删除 12 条');
   });
 });
+
+describe('客户列表：排序与每页条数（评估 4.5 / 4.6）', () => {
+  it('🔴 地址栏 sort=-paid_total_jpy&size=50 → 请求带上；点「最近下单」→ 换成 -last_order_at 并回到第 1 页', async () => {
+    const { el, calls, navigated } = await open(listRoute('sort=-paid_total_jpy&size=50&page=3'));
+    const req = calls.find((c) => c.path.startsWith('/api/v1/admin/customers?'))?.path ?? '';
+    expect(req).toContain('sort=-paid_total_jpy');
+    expect(req).toContain('size=50');
+    const btn = [...el.querySelectorAll('th button')].find((b) =>
+      b.textContent?.includes('最近下单'),
+    ) as HTMLButtonElement;
+    await click(btn);
+    expect(navigated.at(-1)?.query.toString()).toBe('sort=-last_order_at&size=50');
+  });
+});

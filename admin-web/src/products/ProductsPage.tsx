@@ -16,16 +16,14 @@
  *
  * @see ./view.ts（行视图与校验的真源）；./api.ts（接口层）
  */
-import { LOW_STOCK_THRESHOLD, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
+import { LIST_SORT_KEYS, LOW_STOCK_THRESHOLD, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
+import { DEFAULT_PAGE_SIZE, PageSizeSelect, readListParams, SortTh } from '../ui/list-controls.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import type { Route } from '../router.js';
 import { listProducts, setProductStatus, type AdminApi, type AdminProductLike } from './api.js';
 import { StockCell } from './StockCell.js';
 import { productRows, STATUS_LABELS, withStatus, withStock, type ProductRow } from './view.js';
-
-/** 每页条数（契约默认 50；管理端用 20 让一屏放得下）。 */
-const PAGE_SIZE = 20;
 
 /** 筛选态（`all` 是**前端**概念，服务端只接受 active/offline/draft，所以 all = 不传该参数）。 */
 type StatusFilter = 'all' | 'active' | 'offline' | 'draft';
@@ -48,7 +46,14 @@ export interface ProductsPageProps {
 }
 
 /** 地址栏里的参数名（短：地址栏是给人看和复制的）。 */
-const Q = { status: 'status', q: 'q', low: 'low', page: 'page' } as const;
+const Q = {
+  status: 'status',
+  q: 'q',
+  low: 'low',
+  page: 'page',
+  sort: 'sort',
+  size: 'size',
+} as const;
 const STATUS_VALUES: readonly StatusFilter[] = ['all', 'active', 'offline', 'draft'];
 
 export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: ProductsPageProps) {
@@ -67,6 +72,9 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
   const page = Number.isInteger(pageRaw) && pageRaw >= 1 ? pageRaw : 1;
   const applied = query.get(Q.q) ?? '';
   const lowStock = query.get(Q.low) === '1';
+  // 评估 4.5 / 4.6（2026-10-09）：排序与每页条数同样进地址栏（ui/list-controls.tsx）
+  const { sortKey, sortDir, size: pageSize } = readListParams(query, LIST_SORT_KEYS.products);
+  const sortStr = sortKey === null ? '' : `${sortDir === 'desc' ? '-' : ''}${sortKey}`;
   /**
    * 改地址栏参数（与订单页 `patch` 同口径）：等于默认值的键直接删掉；改筛选时页码回到 1 由调用方传 `page: '1'`。
    * ⚠️ 进了 `load` 的依赖：必须稳定——`query` 在同一路由下是同一个实例，`onNavigate` 由外层固定。
@@ -80,7 +88,8 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
           value === '' ||
           (key === Q.status && value === 'all') ||
           (key === Q.page && value === '1') ||
-          (key === Q.low && value === '0');
+          (key === Q.low && value === '0') ||
+          (key === Q.size && value === String(DEFAULT_PAGE_SIZE));
         if (drop) q.delete(key);
         else q.set(key, value);
       }
@@ -123,7 +132,8 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
     try {
       const res = await listProducts(api, {
         page,
-        size: PAGE_SIZE,
+        size: pageSize,
+        ...(sortStr !== '' ? { sort: sortStr } : {}),
         ...(status === 'all' ? {} : { status }),
         ...(applied !== '' ? { keyword: applied } : {}),
         ...(lowStock ? { lowStock: true } : {}),
@@ -134,7 +144,7 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
       setTotal(res.total);
       setFailed(false);
       // 扫描 A-02：当前页超出最后一页（例如在"已下架"筛选里把最后一页唯一一件上架）→ 拉回最后一页
-      const last = Math.max(1, Math.ceil(res.total / PAGE_SIZE));
+      const last = Math.max(1, Math.ceil(res.total / pageSize));
       if (page > last) patch({ [Q.page]: String(last) });
     } catch (e) {
       if (seq !== reqSeq.current) return;
@@ -145,7 +155,7 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
-  }, [api, page, status, applied, lowStock, patch, sink.error]);
+  }, [api, page, status, applied, lowStock, patch, sink.error, pageSize, sortStr]);
 
   useEffect(() => {
     void load();
@@ -181,7 +191,8 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
     setRows((prev) => prev.map((r) => (r.id === id ? withStock(r, stock) : r)));
   }, []);
 
-  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  const onSort = (s: string): void => patch({ [Q.sort]: s, [Q.page]: '1' });
 
   return (
     <section className="panel">
@@ -243,8 +254,20 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
             <th aria-label="图片" />
             <th>商品</th>
             <th>分类</th>
-            <th>售价</th>
-            <th>库存</th>
+            <SortTh
+              label="售价"
+              sortKey="price_jpy"
+              currentKey={sortKey ?? 'updated_at'}
+              currentDir={sortDir}
+              onSort={onSort}
+            />
+            <SortTh
+              label="库存"
+              sortKey="stock"
+              currentKey={sortKey ?? 'updated_at'}
+              currentDir={sortDir}
+              onSort={onSort}
+            />
             <th>状态</th>
             <th>操作</th>
           </tr>
@@ -331,6 +354,10 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
         <span className="muted">
           第 {page} / {lastPage} 页 · 共 {total} 件
         </span>
+        <PageSizeSelect
+          size={pageSize}
+          onChange={(n) => patch({ [Q.size]: String(n), [Q.page]: '1' })}
+        />
         <button
           type="button"
           className="btn btn-secondary"

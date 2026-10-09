@@ -13,6 +13,9 @@ export interface AuditQuery {
   actor: string;
   /** 精确匹配订单 / 商品 id；空串 = 不过滤。 */
   target: string;
+  /** 操作日期下界 / 上界（`YYYY-MM-DD`，日本时间、含当天；契约 0.6.53）；空串 / 不传 = 不限。 */
+  from?: string;
+  to?: string;
 }
 
 export const AUDIT_PAGE_SIZE = 50;
@@ -24,6 +27,9 @@ export async function listAudit(
   const params = new URLSearchParams({ page: String(q.page), size: String(AUDIT_PAGE_SIZE) });
   if (q.actor.trim() !== '') params.set('actor', q.actor.trim());
   if (q.target.trim() !== '') params.set('target', q.target.trim());
+  // 评估 P2（契约 0.6.53）：操作日期范围（JST 日历日、两端含当天）
+  if (q.from !== undefined && q.from !== '') params.set('created_from', q.from);
+  if (q.to !== undefined && q.to !== '') params.set('created_to', q.to);
   const resp = (await api({ path: `/api/v1/admin/audit?${params.toString()}` })) as {
     items?: unknown;
     total?: unknown;

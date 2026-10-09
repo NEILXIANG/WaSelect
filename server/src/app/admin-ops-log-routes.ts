@@ -9,6 +9,7 @@
  * @see adapters/ops-log.ts；contracts/api-contract.yaml 0.6.32
  */
 import type { Express } from 'express';
+import { parseJstDateRange } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import type { Db } from '../adapters/db.js';
 import type { IdentityCheck } from '../adapters/identity.js';
@@ -48,11 +49,18 @@ export function mountAdminOpsLogRoutes(app: Express, deps: AdminOpsLogRoutesDeps
         ) {
           throw new AppError(40001, { reason: 'page_size_invalid' });
         }
+        // 评估 P2（契约 0.6.53）：日期范围，口径同订单列表（JST 日历日、两端都含；格式不对 / 倒置 → 40001）
+        const asStr = (v: unknown): string | undefined =>
+          typeof v === 'string' ? v : v === undefined ? undefined : '';
+        const range = parseJstDateRange(asStr(q['created_from']), asStr(q['created_to']));
+        if (!range.ok) throw new AppError(40001, { reason: range.reason });
         const r = await listAdminAudit(deps.db, {
           page,
           size,
           actor: optionalExact(q['actor'], 'actor'),
           target: optionalExact(q['target'], 'target'),
+          ...(range.from !== null ? { createdFrom: range.from } : {}),
+          ...(range.to !== null ? { createdTo: range.to } : {}),
         });
         res.json({
           total: r.total,

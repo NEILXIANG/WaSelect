@@ -10,6 +10,7 @@
  * @see ./view.ts；./api.ts
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { parseJstDateRange } from '@waselect/shared';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { AUDIT_PAGE_SIZE, latestReconciliation, listAudit, type AdminApi } from './api.js';
 import {
@@ -30,8 +31,11 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
   const [page, setPage] = useState(1);
   const [actor, setActor] = useState('');
   const [target, setTarget] = useState('');
+  /** 操作日期范围（评估 P2，2026-10-09）：日本时间日历日、两端都含当天，口径同订单列表的下单日期。 */
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
   /** 已提交的过滤条件（输入框改了不立刻查，点"查询"才生效）。 */
-  const [filter, setFilter] = useState({ actor: '', target: '' });
+  const [filter, setFilter] = useState({ actor: '', target: '', from: '', to: '' });
   /** 本页反馈出口（原两行红字：核对结果加载失败 / 操作记录加载失败）。 */
   const sink = useToasts();
   const seq = useRef(0);
@@ -98,12 +102,42 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
           value={target}
           onChange={(e) => setTarget(e.target.value)}
         />
+        <label className="field-inline">
+          <span className="muted">从</span>
+          <input
+            className="input"
+            type="date"
+            aria-label="开始日期（日本时间）"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+        </label>
+        <label className="field-inline">
+          <span className="muted">到</span>
+          <input
+            className="input"
+            type="date"
+            aria-label="结束日期（日本时间）"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+          />
+        </label>
         <button
           type="button"
           className="btn"
           onClick={() => {
+            // 先在本地把明显的错挡掉（说中文、不发请求）；最终仍以服务端 40001 为准
+            const range = parseJstDateRange(from || undefined, to || undefined);
+            if (!range.ok) {
+              sink.error(
+                range.reason === 'created_range_invalid'
+                  ? '开始日期不能晚于结束日期'
+                  : '日期格式不对，请用日期选择器重新选',
+              );
+              return;
+            }
             setPage(1);
-            setFilter({ actor, target });
+            setFilter({ actor, target, from, to });
           }}
         >
           查询

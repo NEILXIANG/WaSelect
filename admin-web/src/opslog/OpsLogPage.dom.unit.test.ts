@@ -64,3 +64,30 @@ describe('运营日志页（3-2）', () => {
     expect(paths.at(-1)).toContain('page=2');
   });
 });
+
+describe('运营日志：按日期范围查（评估 P2，2026-10-09）', () => {
+  it('🔴 选了开始 / 结束日期点查询 → 请求带 created_from / created_to（日本时间日历日）', async () => {
+    const el = await open();
+    const set = async (label: string, v: string) => {
+      await type(el.querySelector(`input[aria-label="${label}"]`), v);
+    };
+    await set('开始日期（日本时间）', '2026-10-02');
+    await set('结束日期（日本时间）', '2026-10-03');
+    await click(button(el, '查询'));
+    const last = paths.filter((p) => p.includes('/admin/audit')).at(-1) ?? '';
+    expect(last).toContain('created_from=2026-10-02');
+    expect(last).toContain('created_to=2026-10-03');
+  });
+
+  it('🔴 开始晚于结束 → 不发请求，提示"开始日期不能晚于结束日期"', async () => {
+    const el = await open();
+    await type(el.querySelector('input[aria-label="开始日期（日本时间）"]'), '2026-10-05');
+    await type(el.querySelector('input[aria-label="结束日期（日本时间）"]'), '2026-10-01');
+    const before = paths.length;
+    await click(button(el, '查询'));
+    expect(paths.length).toBe(before);
+    expect(el.querySelector('.toast[data-kind="error"]')?.textContent).toContain(
+      '开始日期不能晚于结束日期',
+    );
+  });
+});

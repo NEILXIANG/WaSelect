@@ -34,7 +34,8 @@
  */
 import { ExportBar } from './ExportBar.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { SEARCH_KEYWORD_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
+import { LIST_SORT_KEYS, SEARCH_KEYWORD_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
+import { DEFAULT_PAGE_SIZE, PageSizeSelect, readListParams, SortTh } from '../ui/list-controls.js';
 import { listOrders, type AdminApi, type AdminOrderLike } from './api.js';
 import { ORDER_STATUS_LABELS, orderRows, shipGate, type OrderRow } from './view.js';
 import { ShipBatchDrawer } from './ShipBatchDrawer.js';
@@ -52,7 +53,6 @@ import { OrderDetail } from './OrderDetail.js';
 import type { Route } from '../router.js';
 
 /** 每页条数（契约默认 20；与商品管理同口径，一屏放得下）。 */
-const PAGE_SIZE = 20;
 
 /** 四个查询参数的键（改这里要同步改 @limitation 四 与 router 的用法说明）。 */
 const Q = {
@@ -63,6 +63,9 @@ const Q = {
   range: 'range',
   from: 'from',
   to: 'to',
+  /** 评估 4.5 / 4.6（2026-10-09）：排序与每页条数同样进地址栏（ui/list-controls.tsx）。 */
+  sort: 'sort',
+  size: 'size',
 } as const;
 
 export interface OrdersPageProps {
@@ -88,7 +91,8 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
           value === '' ||
           (key === Q.status && value === 'all') || // 旧收藏里的 `status=all` 也当默认
           (key === Q.page && value === '1') ||
-          (key === Q.test && value === '0');
+          (key === Q.test && value === '0') ||
+          (key === Q.size && value === String(DEFAULT_PAGE_SIZE));
         if (drop) query.delete(key);
         else query.set(key, value);
       }
@@ -117,6 +121,9 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   const createdTo = dates.createdTo;
   const applied = route.query.get(Q.q) ?? '';
   const includeTest = route.query.get(Q.test) === '1';
+  const { sortKey, sortDir, size: pageSize } = readListParams(route.query, LIST_SORT_KEYS.orders);
+  /** 改排序 / 条数都回到第 1 页（第 3 页在新顺序下是另一批单，停在那里只会让人困惑）。 */
+  const onSort = (sort: string): void => patch({ [Q.sort]: sort, [Q.page]: '1' });
   const page = Math.max(1, Number(route.query.get(Q.page) ?? '1') || 1);
   const [rows, setRows] = useState<OrderRow[]>([]);
   /** 服务端原始条目：详情页要先拿到 has_dispute 才知道能不能退款（@see @limitation 一）。 */
@@ -181,8 +188,9 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
     try {
       const res = await listOrders(api, {
         page,
-        size: PAGE_SIZE,
+        size: pageSize,
         keyword: applied,
+        ...(sortKey !== null ? { sort: `${sortDir === 'desc' ? '-' : ''}${sortKey}` } : {}),
         ...(statusKey === '' ? {} : { status: statusKey.split(',') as OrderStatus[] }),
         ...(createdFrom !== undefined ? { createdFrom } : {}),
         ...(createdTo !== undefined ? { createdTo } : {}),
@@ -195,7 +203,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       setTotal(res.total);
       setFailed(false);
       // 扫描 A-02：当前页超出最后一页（例如最后一页唯一一张单刚发货）→ 拉回最后一页，不停在"空页"
-      const last = Math.max(1, Math.ceil(res.total / PAGE_SIZE));
+      const last = Math.max(1, Math.ceil(res.total / pageSize));
       if (page > last) patch({ page: String(last) });
     } catch (e) {
       if (seq !== reqSeq.current) return;
@@ -218,13 +226,16 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
     createdTo,
     dateError,
     sink.error,
+    pageSize,
+    sortKey,
+    sortDir,
   ]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
   /** 能勾的单：「待发货」页签与详情页发货按钮同一个闸门（拒付 / 测试单不能勾）；其它页签全部可勾（只用于导出 / 打印）。 */
   const selectable = (batchMode ? raw.filter((o) => shipGate(o).ok) : raw).map((o) => o.order_id);
   /** 按列表顺序的所选 id（导出 / 打印按这个顺序）。 */
@@ -414,8 +425,20 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
             <th>状态</th>
             {/* 待采购清单的本体（§2.7：清单 = 本页筛 status=paid） */}
             <th>采购信息</th>
-            <th>金额</th>
-            <th>下单时间</th>
+            <SortTh
+              label="金额"
+              sortKey="total_jpy"
+              currentKey={sortKey ?? 'created_at'}
+              currentDir={sortDir}
+              onSort={onSort}
+            />
+            <SortTh
+              label="下单时间"
+              sortKey="created_at"
+              currentKey={sortKey ?? 'created_at'}
+              currentDir={sortDir}
+              onSort={onSort}
+            />
             <th>收件人</th>
             <th>物流</th>
             <th>操作</th>
@@ -518,6 +541,10 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         <span className="muted">
           第 {page} / {lastPage} 页 · 共 {total} 单
         </span>
+        <PageSizeSelect
+          size={pageSize}
+          onChange={(n) => patch({ [Q.size]: String(n), [Q.page]: '1' })}
+        />
         <button
           type="button"
           className="btn btn-secondary"

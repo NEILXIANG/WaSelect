@@ -10,14 +10,19 @@
  * @limitation 关键字只做"去空白 + 转小写"的归一；不做全角半角、空格合并——
  *             收件人是 ASCII（addresses_recipient CHECK），邮箱大小写不敏感，单号是 ASCII，三者都够用。
  */
-import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
+import { LIST_SORT_KEYS, parseListSort, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 
 export const CUSTOMER_PAGE_SIZE_DEFAULT = 20;
 export const CUSTOMER_PAGE_SIZE_MAX = 100;
 
+export type CustomerSort = { key: 'last_order_at' | 'paid_total_jpy'; dir: 'asc' | 'desc' };
+
 export type CustomerListQuery =
-  | { ok: true; page: number; size: number; keyword: string | null }
-  | { ok: false; reason: 'page_size_invalid' | 'keyword_too_long' | 'keyword_invalid' };
+  | { ok: true; page: number; size: number; keyword: string | null; sort: CustomerSort | null }
+  | {
+      ok: false;
+      reason: 'page_size_invalid' | 'keyword_too_long' | 'keyword_invalid' | 'sort_invalid';
+    };
 
 /** 缺省 → 默认值；其余必须是正整数的十进制串（数组 / 空串 / 小数 → NaN 或非整数）。 */
 function intParam(v: unknown, dflt: number): number {
@@ -38,10 +43,14 @@ export function parseCustomerListQuery(q: Record<string, unknown>): CustomerList
   ) {
     return { ok: false, reason: 'page_size_invalid' };
   }
+  // 评估 4.5（契约 0.6.53）：白名单排序（shared `LIST_SORT_KEYS.customers`）
+  const s = parseListSort(q['sort'], LIST_SORT_KEYS.customers);
+  if (!s.ok) return { ok: false, reason: s.reason };
+  const sort = s.key === null ? null : { key: s.key, dir: s.dir };
   const raw = q['keyword'];
-  if (raw === undefined) return { ok: true, page, size, keyword: null };
+  if (raw === undefined) return { ok: true, page, size, keyword: null, sort };
   if (typeof raw !== 'string') return { ok: false, reason: 'keyword_invalid' };
   if (raw.length > SEARCH_KEYWORD_MAX_LENGTH) return { ok: false, reason: 'keyword_too_long' };
   const k = raw.trim().toLowerCase();
-  return { ok: true, page, size, keyword: k === '' ? null : k };
+  return { ok: true, page, size, keyword: k === '' ? null : k, sort };
 }

@@ -32,6 +32,7 @@
  *      contracts/api-contract.yaml 0.6.47（AdminCustomer*）
  */
 import type { Db } from './db.js';
+import type { CustomerSort } from '../domain/customer-query.js';
 
 export const ORDER_HISTORY_LIMIT = 50;
 
@@ -119,15 +120,36 @@ function customerWhere(db: Db, keyword: string | null) {
     }`;
 }
 
+/**
+ * 排序键 → 固定 SQL 片段（白名单由 shared `parseListSort` 把关）。
+ * @why `last_order_at` 两个方向都 `nulls last`：没下过单的客户在"最近下单"排序里没有可比的值，
+ *      放在最前面会让升序的第一页全是"从没下过单"的人。
+ */
+function customerListOrderBy(db: Db, sort: CustomerSort | null | undefined) {
+  const asc = sort?.dir === 'asc';
+  switch (sort?.key) {
+    case 'paid_total_jpy':
+      return asc
+        ? db`order by s.paid_total_jpy asc, u.created_at desc, u.id desc`
+        : db`order by s.paid_total_jpy desc, u.created_at desc, u.id desc`;
+    case 'last_order_at':
+      if (asc) return db`order by s.last_order_at asc nulls last, u.created_at desc, u.id desc`;
+      return db`order by s.last_order_at desc nulls last, u.created_at desc, u.id desc`;
+    case undefined:
+    default:
+      return db`order by s.last_order_at desc nulls last, u.created_at desc, u.id desc`;
+  }
+}
+
 export async function listCustomers(
   db: Db,
-  q: { page: number; size: number; keyword: string | null },
+  q: { page: number; size: number; keyword: string | null; sort?: CustomerSort | null },
 ): Promise<{ items: CustomerListRow[]; total: number }> {
   const rows = await db`
     select u.id, u.created_at, u.blocked_at, s.*, le.contact_email, lo.recipient
       from users u ${db.unsafe(STATS_LATERAL)}
     ${customerWhere(db, q.keyword)}
-     order by s.last_order_at desc nulls last, u.created_at desc, u.id desc
+     ${customerListOrderBy(db, q.sort)}
      limit ${q.size} offset ${(q.page - 1) * q.size}
   `;
   const counts = await db`select count(*)::int as n from users u ${customerWhere(db, q.keyword)}`;

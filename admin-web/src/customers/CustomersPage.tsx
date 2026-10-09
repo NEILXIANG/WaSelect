@@ -7,6 +7,8 @@
  * @see ./CustomerDetail.tsx；./view.ts；./api.ts
  */
 import { useCallback, useEffect, useState } from 'react';
+import { LIST_SORT_KEYS } from '@waselect/shared';
+import { PageSizeSelect, readListParams, SortTh } from '../ui/list-controls.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { Badge } from '../ui/badge.js';
 import type { Route } from '../router.js';
@@ -14,17 +16,14 @@ import { listCustomers, type AdminApi } from './api.js';
 import { CustomerDetail } from './CustomerDetail.js';
 import { customerListQuery, customerRows, type CustomerRow } from './view.js';
 
-/** 与服务端默认 size 一致（契约 0.6.47：默认 20）。 */
-const PAGE_SIZE = 20;
-
 export interface CustomersPageProps {
   api: AdminApi;
   route: Route;
   onNavigate: (next: Route) => void;
 }
 
-function toQuery(keyword: string, page: number): URLSearchParams {
-  return new URLSearchParams(customerListQuery({ keyword, page }).replace(/^\?/, ''));
+function toQuery(keyword: string, page: number, sort = '', size = 20): URLSearchParams {
+  return new URLSearchParams(customerListQuery({ keyword, page, sort, size }).replace(/^\?/, ''));
 }
 
 export function CustomersPage({ api, route, onNavigate }: CustomersPageProps) {
@@ -60,6 +59,9 @@ function CustomerList({
   const keyword = query.get('keyword') ?? '';
   const pageRaw = Number(query.get('page') ?? '1');
   const page = Number.isInteger(pageRaw) && pageRaw >= 1 ? pageRaw : 1;
+  // 评估 4.5 / 4.6（2026-10-09）：排序与每页条数进地址栏（ui/list-controls.tsx）
+  const { sortKey, sortDir, size } = readListParams(query, LIST_SORT_KEYS.customers);
+  const sortStr = sortKey === null ? '' : `${sortDir === 'desc' ? '-' : ''}${sortKey}`;
   const [input, setInput] = useState(keyword);
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -69,7 +71,12 @@ function CustomerList({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await listCustomers(api, { keyword, page });
+      const r = await listCustomers(api, {
+        keyword,
+        page,
+        size,
+        ...(sortStr !== '' ? { sort: sortStr } : {}),
+      });
       setRows(customerRows(r.items));
       setTotal(r.total);
     } catch (e) {
@@ -78,15 +85,16 @@ function CustomerList({
     } finally {
       setLoading(false);
     }
-  }, [api, keyword, page, sink.error]);
+  }, [api, keyword, page, size, sortStr, sink.error]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const go = (kw: string, p: number): void =>
-    onNavigate({ page: 'customers', id: '', query: toQuery(kw, p) });
-  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const go = (kw: string, p: number, s = sortStr, n = size): void =>
+    onNavigate({ page: 'customers', id: '', query: toQuery(kw, p, s, n) });
+  const onSort = (s: string): void => go(keyword, 1, s);
+  const lastPage = Math.max(1, Math.ceil(total / size));
 
   return (
     <section className="panel">
@@ -121,8 +129,20 @@ function CustomerList({
             <th>最近收件人</th>
             <th>联系邮箱</th>
             <th>订单</th>
-            <th>累计实付</th>
-            <th>最近下单（日本时间）</th>
+            <SortTh
+              label="累计实付"
+              sortKey="paid_total_jpy"
+              currentKey={sortKey ?? 'last_order_at'}
+              currentDir={sortDir}
+              onSort={onSort}
+            />
+            <SortTh
+              label="最近下单（日本时间）"
+              sortKey="last_order_at"
+              currentKey={sortKey ?? 'last_order_at'}
+              currentDir={sortDir}
+              onSort={onSort}
+            />
             <th>状态</th>
             <th>操作</th>
           </tr>
@@ -174,6 +194,7 @@ function CustomerList({
         <span className="muted">
           第 {page} / {lastPage} 页 · 共 {total} 位
         </span>
+        <PageSizeSelect size={size} onChange={(n) => go(keyword, 1, sortStr, n)} />
         <button
           type="button"
           className="btn btn-secondary"

@@ -955,3 +955,56 @@ describe('POST /admin/orders/{id}/address（发货前改址）', () => {
     await s.close();
   });
 });
+
+/** 评估 4.5（2026-10-09）：列表排序 `sort`（白名单；`-键` 降序），默认仍是下单时间倒序。 */
+describe('GET /admin/orders?sort', () => {
+  async function seedThree(): Promise<void> {
+    for (const [id, total, mins] of [
+      ['o-a', 9800, 30],
+      ['o-b', 1650, 20],
+      ['o-c', 24_300, 10],
+    ] as const) {
+      await seedOrder({ id });
+      await db`update orders set total_jpy = ${total}, created_at = now() - ${`${mins} minutes`}::interval
+               where id = ${id}`;
+    }
+  }
+  const ids = (j: Record<string, unknown>): unknown[] =>
+    (j.items as Array<{ order_id: string }>).map((i) => i.order_id);
+
+  it('🔴 sort=-total_jpy → 金额从大到小；sort=total_jpy → 从小到大；不传 → 下单时间倒序', async () => {
+    const s = await buildServer();
+    await seedThree();
+    expect(ids((await adminFetch(s, 'GET', '/api/v1/admin/orders?sort=-total_jpy')).json)).toEqual([
+      'o-c',
+      'o-a',
+      'o-b',
+    ]);
+    expect(ids((await adminFetch(s, 'GET', '/api/v1/admin/orders?sort=total_jpy')).json)).toEqual([
+      'o-b',
+      'o-a',
+      'o-c',
+    ]);
+    expect(ids((await adminFetch(s, 'GET', '/api/v1/admin/orders')).json)).toEqual([
+      'o-c',
+      'o-b',
+      'o-a',
+    ]);
+    expect(ids((await adminFetch(s, 'GET', '/api/v1/admin/orders?sort=created_at')).json)).toEqual([
+      'o-a',
+      'o-b',
+      'o-c',
+    ]);
+    await s.close();
+  });
+
+  it('🔴 白名单外的键 → 400 / 40001（不静默按默认排）', async () => {
+    const s = await buildServer();
+    for (const bad of ['stock', 'id;drop', '--total_jpy']) {
+      const r = await adminFetch(s, 'GET', `/api/v1/admin/orders?sort=${encodeURIComponent(bad)}`);
+      expect(r.status).toBe(400);
+      expect(r.json.code).toBe(40001);
+    }
+    await s.close();
+  });
+});
