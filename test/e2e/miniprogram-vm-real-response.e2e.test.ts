@@ -13,8 +13,12 @@
  *      期望值独立写出（不调用被测的格式化函数算期望），否则就是自证。
  *
  * @limitation 一：WXML 绑定、组件渲染、真机样式不在这里（约束十一：那些只能真机验）。
- * @limitation 二：只覆盖"读"方向的主页面（首页卡片、商品详情、订单列表、订单详情、地址列表）；
+ * @limitation 二：覆盖首页卡片、商品详情、订单列表 / 详情、地址列表，以及（测试审计 T-2，2026-10-09 补）
+ *              报价区（购物车 / 结算共用的 quote-view + 购物车按报价刷新单价 + 扣款预告）、支付页（通道按钮、
+ *              支付意图分流）、同类推荐（列表响应进详情页）、再次购买（订单响应进购物车再报价）。
  *              结算页的 `orderBody` 是"写"方向，其请求体被服务端接受已由 miniprogram-shell.e2e 覆盖。
+ * @why T-2 的真实案例：同类推荐按详情的 `images[]` 读了列表的 `image`，测试数据也照着错的形状写，
+ *      单测全绿、模拟器里图全是占位——这一类只有"真服务端响应喂 vm"能拦住。
  *
  * @see miniprogram/pages/{home,detail,order,order-detail,address}/index.vm.js；
  *      test/helpers/chain-server.ts；docs/自主决策记录.md AJ-174
@@ -25,6 +29,7 @@ import { ensureTestDb, resetTestDb, testDb } from '../db/test-db.js';
 import {
   buildChainServer,
   call,
+  CHAIN_ITEMS,
   CHAIN_TOTAL_JPY,
   mockCallback,
   orderBody,
@@ -40,6 +45,14 @@ import { addressRows } from '../../miniprogram/pages/address/index.vm.js';
 import { orderShortcuts } from '../../miniprogram/pages/user/index.vm.js';
 import { tabStatusParam } from '../../miniprogram/utils/order-tabs.js';
 import { PLACEHOLDER_IMAGE } from '../../miniprogram/utils/placeholder.js';
+import { quoteView } from '../../miniprogram/utils/quote-view.js';
+import { createCartStore } from '../../miniprogram/utils/cart-store.js';
+import { createStorage } from '../../miniprogram/utils/storage.js';
+import { createWxApi } from '../../miniprogram/utils/wx-api.js';
+import { chargeOptions, chargePreview, payPlan } from '../../miniprogram/utils/pay-plan.js';
+import { payPageView } from '../../miniprogram/pages/pay/index.vm.js';
+import { relatedCards } from '../../miniprogram/pages/detail/index.vm.js';
+import { buyAgainItems } from '../../miniprogram/pages/order-detail/index.vm.js';
 
 let db: Db;
 let srv: ChainServer;
@@ -216,5 +229,184 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     expect(rows[0]?.defaultText).toBe('默认');
     expect(rows[0]?.region).toContain('Cupertino');
     expect(rows[0]?.region).toContain('95014');
+  });
+});
+
+/** 购物车：与小程序同一份 cart-store + 同一份 storage 封装，只把宿主存储换成内存（与 cart-store 单测同法）。 */
+function memoryCart(): ReturnType<typeof createCartStore> {
+  const data: Record<string, string> = {};
+  const wx = createWxApi({
+    getStorageSync: (k) => data[k] ?? '',
+    setStorageSync: (k, v) => {
+      data[k] = String(v);
+    },
+    removeStorageSync: (k) => {
+      delete data[k];
+    },
+  });
+  return createCartStore({ storage: createStorage({ wx }) });
+}
+
+/** 支付页 / 结算页查通道的同一组请求（JPY、USD 各一次，与 pay/index.js、checkout/index.js 同参）。 */
+async function channelListings(
+  s: ChainServer,
+  token: string,
+  totalJpy: unknown,
+): Promise<Array<{ currency: string; resp: unknown }>> {
+  const out: Array<{ currency: string; resp: unknown }> = [];
+  for (const currency of ['JPY', 'USD']) {
+    const r = await call(
+      s,
+      'GET',
+      `/api/v1/pay/channels?country=US&currency=${currency}&amount_jpy=${String(totalJpy)}`,
+      { token },
+    );
+    expect([currency, r.status]).toEqual([currency, 200]);
+    out.push({ currency, resp: r.json });
+  }
+  return out;
+}
+
+describe('真服务端响应 → 购物车 / 结算 / 支付 / 推荐 / 再次购买（测试审计 T-2）', () => {
+  it('报价区：购物车请求体被接受、各行与合计是整数円文案、购物车按报价刷新过期单价、结算页扣款预告', async () => {
+    const cart = memoryCart();
+    cart.add({ productId: 'p-knife', qty: 1, title: 'Chef Knife', priceJpy: 8800 });
+    cart.add({ productId: 'p-cup', qty: 2, title: 'Tea Cup', priceJpy: 3000 }); // 加购后店家改过价
+    const q = await call(srv, 'POST', '/api/v1/orders/quote', {
+      token: buyer,
+      body: { items: cart.toOrderItems() },
+    });
+    expect(q.status).toBe(200);
+    const v = quoteView(q.json);
+    expect(v.lines.map((l) => l.label)).toEqual(['商品合计', '运费', '预估关税（含在商品价内）']);
+    expect(v.lines.slice(0, 2).map((l) => l.value)).toEqual(['15,200 円', '4,950 円']);
+    expect(v.lines[2]?.value).toMatch(/^\d{1,3}(,\d{3})* 円$/);
+    expect([v.hasTotal, v.totalJpy, v.totalText]).toEqual([true, CHAIN_TOTAL_JPY, '20,150 円']);
+    expect(v.totalSub).toMatch(/^≈ \$\d+\.\d{2} · ≈ ¥\d+(\.\d{2})?$/);
+    expect(v.splitRequired).toBe(false);
+
+    // 报价 lines 刷新购物车快照价（契约 0.6.39）：3000 → 3200，行价与合计对得上
+    expect(cart.syncPrices(q.json['lines'])).toBe(true);
+    expect(cart.items().map((i) => [i.productId, i.priceJpy])).toEqual([
+      ['p-knife', 8800],
+      ['p-cup', 3200],
+    ]);
+
+    // 结算页扣款预告（M-16）：报价 + 真实通道清单
+    const listings = await channelListings(srv, buyer, q.json['total_jpy']);
+    expect(chargePreview(chargeOptions(listings, q.json))).toEqual([
+      '模拟支付将以日元扣款 20,150 円',
+    ]);
+  });
+
+  it('支付页：按钮带实扣金额；非审核模式的模拟支付意图**绝不**判成"已完成"；审核模式判 auto，付完显示已付款', async () => {
+    const c = await call(srv, 'POST', '/api/v1/orders', {
+      token: buyer,
+      key: 'k-pay',
+      body: orderBody(),
+    });
+    const orderId = String(c.json['order_id']);
+    const order = (await call(srv, 'GET', `/api/v1/orders/${orderId}`, { token: buyer })).json;
+    expect(payPageView(order, Date.parse(String(order['created_at'])))).toEqual({
+      payable: true,
+      closedText: '',
+      goHome: false,
+    });
+    const options = chargeOptions(await channelListings(srv, buyer, order['total_jpy']), order);
+    expect(options.map((o) => o.buttonText)).toEqual(['模拟支付（20,150 円）']);
+
+    // 非审核模式：服务端不会自动确认（payload.auto=false）→ 前端只能说"不可用"（AJ-179）
+    const intent = await call(srv, 'POST', `/api/v1/orders/${orderId}/pay`, {
+      token: buyer,
+      key: 'pay-k',
+      body: { channel: 'mock' },
+    });
+    expect(intent.status).toBe(200);
+    expect(payPlan(intent.json).kind).toBe('unsupported');
+
+    // 审核模式（MOCK_AUTO_CONFIRM=on）：同一条真实链路判 auto，响应回来时订单已是已付款
+    const auto = await buildChainServer(db, { MOCK_AUTO_CONFIRM: 'on' });
+    try {
+      const c2 = await call(auto, 'POST', '/api/v1/orders', {
+        token: buyer,
+        key: 'k-pay-auto',
+        body: orderBody(),
+      });
+      const id2 = String(c2.json['order_id']);
+      const it2 = await call(auto, 'POST', `/api/v1/orders/${id2}/pay`, {
+        token: buyer,
+        key: 'pay-auto',
+        body: { channel: 'mock' },
+      });
+      expect(payPlan(it2.json)).toEqual({ kind: 'auto' });
+      const paid = (await call(auto, 'GET', `/api/v1/orders/${id2}`, { token: buyer })).json;
+      expect(payPageView(paid, Date.parse(String(paid['created_at'])))).toEqual({
+        payable: false,
+        closedText: '已付款，无需再支付',
+        goHome: false,
+      });
+    } finally {
+      await auto.close();
+    }
+  });
+
+  it('同类推荐：详情的分类 → 列表响应 → 卡片（排除本品、售罄与别的分类；图取列表行的单张 image）', async () => {
+    await db`update products set images = ${db.json(['https://img.example.com/cup.jpg'])} where id = 'p-cup'`;
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status)
+      values ('p-pan', 'Iron Pan', 'kitchen', 6600, 1500, 0, 'JP', 'active'),
+             ('p-soap', 'Rice Soap', 'beauty', 1200, 100, 8, 'JP', 'active')`;
+    const detail = productDetailView(
+      (await call(srv, 'GET', '/api/v1/products/p-knife', { token: buyer })).json,
+    );
+    expect(detail.category).toBe('kitchen');
+    const list = await call(srv, 'GET', `/api/v1/products?category=${detail.category}&size=10`, {
+      token: buyer,
+    });
+    expect(list.status).toBe(200);
+    expect(relatedCards(list.json['items'], 'p-knife')).toEqual([
+      { id: 'p-cup', title: 'Tea Cup', image: 'https://img.example.com/cup.jpg', priceJpy: 3200 },
+    ]);
+  });
+
+  it('再次购买：订单响应 → 购物车条目 → 真实报价通过且合计一致；改价后以新价为准', async () => {
+    await db`update products set images = ${db.json(['https://img.example.com/cup.jpg'])} where id = 'p-cup'`;
+    const c = await call(srv, 'POST', '/api/v1/orders', {
+      token: buyer,
+      key: 'k-again',
+      body: orderBody(),
+    });
+    const orderId = String(c.json['order_id']);
+    const order = (await call(srv, 'GET', `/api/v1/orders/${orderId}`, { token: buyer })).json;
+
+    const cart = memoryCart();
+    for (const i of buyAgainItems(order)) expect(cart.add(i)).toEqual({ added: true });
+    expect(
+      cart
+        .items()
+        .map((i) => [i.productId, i.qty, i.image])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    ).toEqual([
+      ['p-cup', 2, 'https://img.example.com/cup.jpg'],
+      ['p-knife', 1, ''], // 没有图的商品存空串，购物车行显示占位图
+    ]);
+    expect(cart.toOrderItems().sort((a, b) => a.product_id.localeCompare(b.product_id))).toEqual(
+      [...CHAIN_ITEMS].sort((a, b) => a.product_id.localeCompare(b.product_id)),
+    );
+    const q1 = await call(srv, 'POST', '/api/v1/orders/quote', {
+      token: buyer,
+      body: { items: cart.toOrderItems() },
+    });
+    expect([q1.status, quoteView(q1.json).totalJpy]).toEqual([200, order['total_jpy']]);
+
+    // 店家改价：再次购买不带旧价，报价以新价为准（buyAgainItems @why）
+    await db`update products set price_jpy = 9000 where id = 'p-knife'`;
+    const q2 = await call(srv, 'POST', '/api/v1/orders/quote', {
+      token: buyer,
+      body: { items: cart.toOrderItems() },
+    });
+    expect(quoteView(q2.json).lines[0]?.value).toBe('15,400 円'); // 9000 + 3200×2
+    expect(cart.syncPrices(q2.json['lines'])).toBe(true);
+    expect(cart.items().find((i) => i.productId === 'p-knife')?.priceJpy).toBe(9000);
   });
 });

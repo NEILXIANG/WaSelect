@@ -49,11 +49,14 @@ export const MAX_CART_LINES = 50;
  * @typedef {object} CartItem
  * @property {string} productId 商品 id（服务端 slug）
  * @property {number} [qty] 数量（>= 1；缺省 1）
- * @property {string} [title] 加购时的标题快照（@see @limitation 一）
+ * @property {string} [title] 加购时的标题快照（见文件头局限一）
  * @property {string} [image] 加购时的主图快照（可为占位图路径）
- * @property {number} [priceJpy] 加购时的日元价快照（**不许用它算合计**，见 @limitation 一）
+ * @property {number} [priceJpy] 加购时的日元价快照（**不许用它算合计**，见文件头局限一）
  * @property {boolean} [selected] 是否勾选去结算（A3，AJ-416；缺省 = 勾选）
  */
+// ⚠️ 上面这个 typedef 的属性说明里不要写"at 符号 + 标签名"：TypeScript 读 JSDoc 时把行内的 see 标签当成新标签，
+//    typedef 在那里截断、其后的属性全部丢失。实测（2026-10-09，tsc）：title 的说明带 see 标签时报
+//    "Property 'priceJpy' does not exist on type '{ selected: boolean; productId: string; qty?: number; title?: string; }'"。
 
 /**
  * 造一个购物车。
