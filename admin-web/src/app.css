@@ -1419,3 +1419,8 @@ textarea::placeholder {
   flex-wrap: wrap;
   gap: var(--ws-space-xs);
 }
+
+/* 页面级错误边界的标记节点（AJ-421）：不参与布局，`.main` 的 flex 间距照旧作用在页面面板上 */
+.page-boundary {
+  display: contents;
+}

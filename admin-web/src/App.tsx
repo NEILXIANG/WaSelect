@@ -54,6 +54,8 @@ import {
   type Route,
 } from './router.js';
 import { ConfirmDialog } from './ui/confirm.js';
+import { ErrorBoundary } from './ui/ErrorBoundary.js';
+import { createErrorReporter, describeThrown } from './ui/error-report.js';
 import { LEAVE_UNSAVED_SPEC } from './ui/leave-spec.js';
 import { BrandMark, LogoutIcon, NavIcon } from './ui/icons.js';
 import { UnsavedProvider, useBeforeUnload, useDirtyRegistry } from './ui/unsaved.js';
@@ -190,6 +192,42 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   // 认不出的网址由 `parseHash` 兜成首页（router.ts @limitation：不带 id / query），这里不再兜第二遍
   const view: PageKey = route.page;
 
+  /**
+   * 前端报错上报（AJ-421）：**单独的请求实例**，不接 `onUnauthorized`——会话过期时上报安静失败，
+   * 不会凭空弹出"重新登录"浮层（上报是顺便的事，不能产生用户可见的副作用）。
+   */
+  const reporter = useMemo(() => {
+    const reportApi = createAdminApi({ baseUrl, getToken: () => tokenStore.get() });
+    return createErrorReporter({
+      send: (body) => reportApi({ path: '/api/v1/admin/client-errors', method: 'POST', body }),
+    });
+  }, [baseUrl]);
+  /** 全局监听读 ref：监听只挂一次，页名要取"出错那一刻"的当前页。 */
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  // 错误边界只接得住渲染期异常；事件处理函数与异步回调里的错误走这两个全局事件（ErrorBoundary @limitation 一）
+  useEffect(() => {
+    const onError = (e: ErrorEvent): void => {
+      const d = describeThrown(e.error ?? e.message);
+      reporter.report({ kind: 'error', message: d.message, stack: d.stack, page: viewRef.current });
+    };
+    const onRejection = (e: Event): void => {
+      const d = describeThrown((e as Event & { reason?: unknown }).reason);
+      reporter.report({
+        kind: 'rejection',
+        message: d.message,
+        stack: d.stack,
+        page: viewRef.current,
+      });
+    };
+    addEventListener('error', onError);
+    addEventListener('unhandledrejection', onRejection);
+    return () => {
+      removeEventListener('error', onError);
+      removeEventListener('unhandledrejection', onRejection);
+    };
+  }, [reporter]);
+
   const body: JSX.Element = (
     <>
       {view === 'dashboard' && <DashboardPage api={api} onNavigate={go} />}
@@ -294,7 +332,12 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
           </button>
         </aside>
 
-        <main className="main">{body}</main>
+        <main className="main">
+          {/* 页面级错误边界（AJ-421）：一页坏了只换这一块，侧栏照常；换页 / 换一单即复位 */}
+          <ErrorBoundary page={view} resetKey={`${view}/${route.id}`} reporter={reporter}>
+            {body}
+          </ErrorBoundary>
+        </main>
       </UnsavedProvider>
       {pendingNav !== null && (
         <ConfirmDialog

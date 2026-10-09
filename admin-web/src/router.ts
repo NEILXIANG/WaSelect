@@ -85,7 +85,8 @@ export function parseHash(hash: string): Route {
 /**
  * 坏的百分号编码（如 `%E0%A4`）解不出 → 当作"没带 id"，回到该页列表态。
  * @why `decodeURIComponent` 遇坏编码会抛 URIError；初次加载时它在 `useState(currentRoute)` 里执行，
- *      管理端没有 ErrorBoundary，一抛就整页白屏——正是上面 @why 要防的"粘贴错一个字"（批次复审发现）。
+ *      它在壳层（AdminShell 的 `useState` 初始化）里执行，在页面级错误边界（AJ-421，只包当前页）**之外**，
+ *      一抛就整页白屏——正是上面 @why 要防的"粘贴错一个字"（批次复审发现）。
  */
 function safeDecode(seg: string): string {
   try {

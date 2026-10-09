@@ -222,3 +222,80 @@ describe('App：后退 / 前进也要过未保存提醒（批次复审发现此�
     expect(location.hash).toBe('#/risk');
   });
 });
+
+describe('App：前端报错可见（AJ-421）', () => {
+  it('🔴 当前页包在错误边界里（换页后边界跟着换页名）', async () => {
+    const el = await open('#/orders');
+    expect(el.querySelector('.main > .page-boundary')?.getAttribute('data-page')).toBe('orders');
+    await goHash('#/risk');
+    expect(el.querySelector('.main > .page-boundary')?.getAttribute('data-page')).toBe('risk');
+  });
+
+  it('🔴 全局未处理错误 / 未处理拒绝 → POST /admin/client-errors（带当前页名）；同一消息只报一次', async () => {
+    const posts: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal('fetch', async (url: unknown, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        posts.push({ url: String(url), body: JSON.parse(String(init.body)) as unknown });
+        return new Response(null, { status: 204 });
+      }
+      const w = { from: 'x', to: 'y', orders: 0, paid_orders: 0, sales_jpy: 0, avg_jpy: null };
+      return new Response(JSON.stringify({ items: [], total: 0, today: w, last7: w }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    await open('#/customers');
+    await act(async () => {
+      dispatchEvent(
+        new ErrorEvent('error', { error: new Error('click handler broke'), message: 'x' }),
+      );
+      dispatchEvent(
+        new ErrorEvent('error', { error: new Error('click handler broke'), message: 'x' }),
+      );
+      const rejection = new Event('unhandledrejection') as Event & { reason?: unknown };
+      rejection.reason = new Error('async load broke');
+      dispatchEvent(rejection);
+    });
+    expect(posts.map((p) => [p.url.replace(/^https?:\/\/[^/]+/, ''), p.body])).toEqual([
+      [
+        '/api/v1/admin/client-errors',
+        expect.objectContaining({
+          kind: 'error',
+          message: 'click handler broke',
+          page: 'customers',
+        }),
+      ],
+      [
+        '/api/v1/admin/client-errors',
+        expect.objectContaining({
+          kind: 'rejection',
+          message: 'async load broke',
+          page: 'customers',
+        }),
+      ],
+    ]);
+  });
+
+  it('🔴 上报撞上会话过期（40101）→ 不弹"重新登录"浮层、不清令牌（上报不能有用户可见的副作用）', async () => {
+    vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ code: 40101, message: '未登录或登录已过期' }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      const w = { from: 'x', to: 'y', orders: 0, paid_orders: 0, sales_jpy: 0, avg_jpy: null };
+      return new Response(JSON.stringify({ items: [], total: 0, today: w, last7: w }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const el = await open('#/orders');
+    await act(async () => {
+      dispatchEvent(new ErrorEvent('error', { error: new Error('late failure') }));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(el.ownerDocument.querySelector('[aria-label="重新登录"]')).toBeNull();
+    expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBe('test-token');
+  });
+});
