@@ -44,3 +44,17 @@ describe('正方形图位（ws-media--square）', () => {
     expect(bad, '正方形图位上挂了别的类（可能限宽 → 竖条）').toEqual([]);
   });
 });
+
+describe('图位是定位容器（三端联动走查 2026-10-08）', () => {
+  /**
+   * 🔴 `.ws-media` 基础类自带 `position: relative`。
+   * @why 首页卡片的"仅剩 N 件 / 已售罄"角标是 absolute 定位、挂在图位里；`ws-media--scene` 原先没有
+   *      定位上下文，角标一路逃到页面左上角，压在"日本選品"字标上（几张卡的角标还叠在同一处）——
+   *      模拟器里换上真实库存数据后才看见。只给某一档补会漏下一档，所以补在基础类上。
+   */
+  it('🔴 app.wxss 的 .ws-media 声明了 position: relative', () => {
+    const css = readFileSync(join(root, 'app.wxss'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const block = /\.ws-media\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(block).toMatch(/position:\s*relative/);
+  });
+});

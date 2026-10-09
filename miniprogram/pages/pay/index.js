@@ -410,7 +410,7 @@ Page({
       // ⚠️ 换通道必须先把上一次的短链收掉（MP3-03）：服务端已经作废了那个银行卡支付行，
       //    这条短链再被复制去浏览器就是失效页；浏览器里早先开着的托管页仍可付款，
       //    与微信里这一笔撞车会多出一笔迟到款。
-      this.setData(afterIntent(plan));
+      this.setData(afterIntent(plan, { channelCount: this.data.channels.length }));
       wxApi.requestPayment({
         ...plan.params,
         // B35 / AJ-218：成功必须**离开这一页**——以前没有 success 回调，
@@ -453,11 +453,11 @@ Page({
       // ⚠️ 不自动复制：剪贴板是用户的东西，未经动作就改写它是越界。用户点"复制链接"再复制。
       // ⚠️ `copied` 必须复位（AJ-227）：服务端每次发起都**轮换**短链 token，
       //    这是一条新链接；按钮若还写着"已复制"，用户会去浏览器粘贴刚失效的那条。
-      this.setData(afterIntent(plan));
+      this.setData(afterIntent(plan, { channelCount: this.data.channels.length }));
       return;
     }
     // auto / unsupported：不该留着上一次的短链与"已复制"（与 copylink 同一条口径）
-    this.setData(afterIntent(plan));
+    this.setData(afterIntent(plan, { channelCount: this.data.channels.length }));
     // ⚠️ auto = 响应到达时订单已 paid（MP3-06）：留下来会同时显示"支付已完成"和还能点的通道，
     //    那是自相矛盾的界面。与微信支付成功同口径——离开这一页，让详情页用服务端数据说话。
     if (leavesAfterAuto(plan)) {

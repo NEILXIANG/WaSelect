@@ -566,6 +566,39 @@ td .thumb {
   background: color-mix(in srgb, var(--md-color-on-surface) var(--md-state-hover), transparent);
 }
 
+/* 部分退款确认前的复述句（走查 2026-10-08）：钱的事要在点下去之前看清——正文字号、加粗，不用红（不是出错） */
+.refund-pending {
+  margin: var(--ws-space-sm) 0;
+  font-weight: 600;
+  color: var(--md-color-on-surface);
+}
+
+/* 操作列预留宽度（走查 2026-10-08）：商品 / Banner 列表点「下架」「删除」后行内冒出「确认… / 取消」，
+   操作列变宽 → 整表重排，分类、价格、状态突然折成两行，正要点的按钮也跟着挪了位置。
+   一开始就按"确认态"留够宽度并禁止折行，冒出确认时列宽不变。 */
+.table-actions-reserve th:last-child,
+.table-actions-reserve td:last-child {
+  min-width: calc(var(--ws-space) * 12);
+  white-space: nowrap;
+}
+
+/* 操作列固定在右侧（走查 2026-10-08）：窄窗口（约 800px）下订单表横向溢出，「发货 / 详情」被挤出视野，
+   要横向滚到底才找得到。背景必须实色（同表格底色），否则滚过去的单元格会从它底下透出来；
+   左侧一道细线标出"这一列是浮在上面的"。表头那一格同时保留吸顶（z-index 比普通表头高一层）。 */
+.table-sticky-actions th:last-child,
+.table-sticky-actions td:last-child {
+  position: sticky;
+  /* 同表头吸顶的 top：粘性矩形按滚动容器的内容框算，抵掉 .main 的内边距，否则右边留一条缝露出后面的列（2026-10-08 实测） */
+  right: calc(var(--ws-space) * -1.5);
+  background: var(--md-color-surface-container-lowest);
+  box-shadow: calc(var(--ws-border) * -1) 0 0 var(--md-color-outline-variant);
+}
+
+.table-sticky-actions thead th:last-child {
+  z-index: 2;
+  background: var(--md-color-surface-container);
+}
+
 /* 表格里的文字按钮（详情 / 编辑 / 改库存）不拆字 */
 .table td .link,
 .table td .btn {

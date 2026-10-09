@@ -318,3 +318,10 @@ describe('商品列表：筛选与页码进地址栏', () => {
     expect(navs.at(-1)).toBe('page=3');
   });
 });
+
+describe('商品列表：行内确认不让整表跳（走查 2026-10-08）', () => {
+  it('🔴 表格带"操作列预留宽度"标记（点「下架」冒出「确认下架 / 取消」时列宽不再重排）', async () => {
+    const el = await open();
+    expect(el.querySelector('table')?.className).toContain('table-actions-reserve');
+  });
+});

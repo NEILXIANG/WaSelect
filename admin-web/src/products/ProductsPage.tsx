@@ -248,7 +248,7 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
         <p className="muted">{applied !== '' || lowStock ? '没有符合条件的商品' : '还没有商品'}</p>
       )}
 
-      <table className="table">
+      <table className="table table-actions-reserve">
         <thead>
           <tr>
             <th aria-label="图片" />
@@ -283,8 +283,8 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
                 )}
               </td>
               <td>{row.title}</td>
-              <td className="muted">{row.categoryLabel}</td>
-              <td>{row.priceText}</td>
+              <td className="muted cell-nowrap">{row.categoryLabel}</td>
+              <td className="cell-nowrap">{row.priceText}</td>
               <StockCell
                 api={api}
                 sink={sink}
@@ -295,7 +295,9 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
                 onSaved={onStockSaved}
                 onRefresh={() => void load()}
               />
-              <td className={row.online ? 'ok' : 'muted'}>{row.statusText}</td>
+              <td className={row.online ? 'ok cell-nowrap' : 'muted cell-nowrap'}>
+                {row.statusText}
+              </td>
               <td>
                 <button
                   type="button"

@@ -110,13 +110,20 @@ function tooManyLines(code, lineCount) {
   return code === 40001 && Number.isInteger(lineCount) && lineCount > MAX_CART_LINES;
 }
 
+/** 商品下架 / 不存在（契约 40401）。 */
+const DELISTED_CODE = 40401;
+
 /** 报价失败提示：区分"稍后重试就好"与"必须改购物车"（MP3-09 / P2-31）。 */
 export function quoteErrorHint(code, lineCount) {
   if (tooManyLines(code, lineCount)) return TOO_MANY_LINES_TEXT;
   // 停售（40916）：不是"稍后重试"能解决的，也不是购物车的问题（三端联动模拟 2026-10-08）
   if (code === SALES_PAUSED_CODE) return '店铺暂停接单中，恢复后即可结算';
+  // 走查 2026-10-08：A3 之后「取消勾选」是最省事的出路，提示里要给到（原句只说调整数量或移除）。
+  //   下架（行内已标红，等不回来）→ 指向标红那件；库存不足仍走"稍后重试"（别人取消会回补，见上方 MP3-09 的口径）；
+  //   整车超限（超重 / 超金额）没有标红行 → 仍说调整数量
+  if (code === DELISTED_CODE) return '有商品无法购买：移除或取消勾选标红的商品后再结算';
   return MUST_CHANGE_CART.has(code)
-    ? '报价未通过，请调整数量或移除商品'
+    ? '报价未通过：请调整数量，或移除 / 取消勾选部分商品'
     : '合计未能获取，请稍后重试';
 }
 

@@ -323,3 +323,19 @@ describe('勾选结算（A3，AJ-416）', () => {
     });
   });
 });
+
+describe('报价失败的出路要说全（三端联动走查 2026-10-08）', () => {
+  it('🔴 下架 / 库存不足这类"必须改购物车"的失败：提示里给出"取消勾选"这条路（A3 之后它最省事）', () => {
+    expect(checkoutGate({ hasError: true, errorCode: 40401, lineCount: 2 }).hint).toBe(
+      '有商品无法购买：移除或取消勾选标红的商品后再结算',
+    );
+  });
+
+  it('🔴 行内标红与报价错误的链路号各占一行（原先"3,850 円已下架…"、"…已下架错误码 40401"粘在一起）', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    expect(wxml).toMatch(
+      /<text class="[^"]*\bline-block\b[^"]*" wx:if="\{\{item\.invalidText\}\}"/,
+    );
+    expect(wxml).toMatch(/<text class="[^"]*\bline-block\b[^"]*" wx:if="\{\{quoteErrorRef\}\}"/);
+  });
+});

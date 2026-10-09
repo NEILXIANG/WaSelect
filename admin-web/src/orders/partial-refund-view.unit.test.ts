@@ -174,3 +174,26 @@ describe('parseAmountToMinor：超大数与 0 分开提示（模拟走查 2026-1
     expect(parseAmountToMinor('0', 'JPY')).toEqual({ ok: false, reason: '金额必须大于 0' });
   });
 });
+
+describe('parseAmountToMinor：运营的常见写法（三端联动走查 2026-10-08）', () => {
+  it('🔴 千分位逗号照收（"2,000" 是运营最自然的写法）：位置对的才收', () => {
+    expect(parseAmountToMinor('2,000', 'JPY')).toEqual({ ok: true, minor: 2000 });
+    expect(parseAmountToMinor('12,345.67', 'USD')).toEqual({ ok: true, minor: 1234567 });
+    expect(parseAmountToMinor('1,234,567', 'JPY')).toEqual({ ok: true, minor: 1234567 });
+    // 位置不对的逗号不猜：可能是欧式小数点（1,5 = 1.5），猜成 15 就是多退十倍
+    expect(parseAmountToMinor('1,5', 'JPY').ok).toBe(false);
+    expect(parseAmountToMinor('20,00', 'USD').ok).toBe(false);
+    expect(parseAmountToMinor(',200', 'JPY').ok).toBe(false);
+  });
+
+  it('🔴 格式错的提示按币种举例：日元说"例如 2000"，不再拿 10.50 当日元的例子（标签写着"整数"）', () => {
+    expect(parseAmountToMinor('两千', 'JPY')).toEqual({
+      ok: false,
+      reason: '金额只能是数字，例如 2000',
+    });
+    expect(parseAmountToMinor('ten', 'USD')).toEqual({
+      ok: false,
+      reason: '金额只能是数字，例如 10.50',
+    });
+  });
+});

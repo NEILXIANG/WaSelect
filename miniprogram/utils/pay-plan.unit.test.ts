@@ -300,3 +300,15 @@ describe('channelCountryOf：查通道的目的国（M-16 下沉自支付页）'
     }
   });
 });
+
+describe('无法支付时给的出路要真的存在（三端联动走查 2026-10-08）', () => {
+  it('🔴 只有一种支付方式时不说"改用其他支付方式"（没有其他方式）——改说稍后再试 / 联系客服', () => {
+    const one = payGuide(payPlan({ payload: {} }), { channelCount: 1 });
+    expect(one.body).not.toContain('其他支付方式');
+    expect(one.body).toBe('该支付方式当前不可用，请稍后再试；仍不行可在「我的」页联系客服。');
+    const two = payGuide(payPlan({ payload: {} }), { channelCount: 2 });
+    expect(two.body).toBe('该支付方式当前不可用，请改用其他支付方式。');
+    // 不传数量（老调用方）= 按只有一种处理：宁可不给一条不存在的路
+    expect(payGuide(payPlan({ payload: {} })).body).not.toContain('其他支付方式');
+  });
+});

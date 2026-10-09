@@ -111,6 +111,8 @@ function closedTextFor(status, latePaid) {
   }
   // 其余（paid / shipped / delivered / completed）：钱已经付了，这句才成立
   // 小程序评估 A1（2026-10-09）：先说结果（付成了），再说不用再付——原先只有否定式的一句
+  // 走查 2026-10-08：已付款时状态词就是"已付款"，再报一遍成了"付款已完成，该订单已付款"——只在状态往前走了（已发货等）才报
+  if (status === 'paid') return '已付款，无需再支付';
   return `付款已完成，该订单${label}，无需再支付`;
 }
 
@@ -243,12 +245,13 @@ export function copyResult(ok, privacy = undefined) {
  * @why `copied` 一律复位：服务端每次发起都**轮换**短链 token，这是一条新链接；
  *      "已复制"若挂着，用户会去粘贴刚失效的那条（AJ-227 同一条理由，这里扩到所有分支）。
  * @limitation 只产出"这一屏显示什么"，**不发起支付、不跳转**：`requestPayment` / `redirectTo` 在薄壳里。
+ * @param {{channelCount?: number}} [opts] 透传给 `payGuide`
  */
-export function afterIntent(plan) {
+export function afterIntent(plan, opts = undefined) {
   const p = plan !== null && typeof plan === 'object' ? plan : {};
   // 只有 copylink 才该有短链：其余任何分支留着上一次的短链，都是一条已经作废的链接
   const payUrl = p.kind === 'copylink' && typeof p.url === 'string' ? p.url : '';
-  return { payUrl, guide: payGuide(p), copied: false };
+  return { payUrl, guide: payGuide(p, opts), copied: false };
 }
 
 /**

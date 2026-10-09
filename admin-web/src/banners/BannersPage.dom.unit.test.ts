@@ -204,3 +204,18 @@ describe('Banner：切换编辑对象前拦未保存改动（审查 2026-10-09 #
     expect(puts).toHaveLength(0);
   });
 });
+
+describe('Banner 列表：行内确认不让整表跳（走查 2026-10-08）', () => {
+  it('🔴 列表表格带"操作列预留宽度"标记（点「删除」冒出「确认删除 / 取消」时列宽不再重排）', async () => {
+    const api = async (): Promise<unknown> => [banner('b-A', 'banners/a.webp')];
+    mounted = await mount(
+      createElement(BannersPage, {
+        api: api as never,
+        baseUrl: 'http://localhost',
+        getToken: () => 'tk',
+        onUnauthorized: () => undefined,
+      }),
+    );
+    expect(mounted.el.querySelector('table')?.className).toContain('table-actions-reserve');
+  });
+});

@@ -355,7 +355,8 @@ describe('支付页薄壳：银行卡付款后的确认中（W-02）', () => {
     call('onRefreshPaid');
     await settle();
     expect(orderFetches()).toBe(before + 1);
-    expect(page.data['closedText']).toContain('付款已完成');
+    // 走查 2026-10-08 文案去重后：已付款态是"已付款，无需再支付"（精确断言，不放宽）
+    expect(page.data['closedText']).toBe('已付款，无需再支付');
     expect(page.data['payUrl']).toBe('');
   });
 

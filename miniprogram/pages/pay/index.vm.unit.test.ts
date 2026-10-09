@@ -224,6 +224,13 @@ describe('payPageView：这张单还能不能走支付流程（B35 / AJ-218）',
     }
   });
 
+  it('🔴 已付款时不说两遍"付款"（走查 2026-10-08：原文"付款已完成，该订单已付款，无需再支付"）；已发货等仍报当前状态', () => {
+    expect(payPageView({ status: 'paid' }).closedText).toBe('已付款，无需再支付');
+    expect(payPageView({ status: 'shipped' }).closedText).toBe(
+      '付款已完成，该订单已发货，无需再支付',
+    );
+  });
+
   it('🔴 真正已付的四态仍然说"无需再支付"（这条不能改坏了）', () => {
     for (const s of ['paid', 'shipped', 'delivered', 'completed']) {
       expect(payPageView({ status: s }).closedText, s).toContain('无需再支付');

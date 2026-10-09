@@ -50,7 +50,7 @@ import { DateFilter } from './DateFilter.js';
 import { Badge } from '../ui/badge.js';
 import { flagBadges, statusBadge } from './badges.js';
 import { OrderDetail } from './OrderDetail.js';
-import type { Route } from '../router.js';
+import { buildHash, type Route } from '../router.js';
 
 /** 每页条数（契约默认 20；与商品管理同口径，一屏放得下）。 */
 
@@ -410,7 +410,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       )}
       <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
 
-      <table className="table">
+      <table className="table table-sticky-actions">
         <thead>
           <tr>
             <th>
@@ -461,7 +461,16 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
                   }}
                 />
               </td>
-              <td className="mono">{row.orderNo}</td>
+              <td className="mono">
+                {/* 走查 2026-10-08：单号本身就是去详情的链接——运营点单号没反应只能找最右边的「详情」；
+                    用真链接（不是按钮）：Cmd / Ctrl 点击可在新标签打开，逐单核对时常用。带上列表筛选，回来不丢 */}
+                <a
+                  className="link"
+                  href={buildHash({ page: 'orders', id: row.id, query: route.query })}
+                >
+                  {row.orderNo}
+                </a>
+              </td>
               <td>
                 {/* AJ-400：彩色徽章（statusText 文案不变，色调见 badges.ts） */}
                 {[

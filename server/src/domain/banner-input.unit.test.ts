@@ -49,6 +49,32 @@ describe('parseBannerInput', () => {
     expect(reasonOf(() => parseBannerInput({}))).toBe('image_key_required');
   });
 
+  /**
+   * 🔴 三端联动走查 2026-10-08：模拟库里 8 张轮播有 4 张是空白——image_key 是 "テスト" 与 200 多个 "x"，
+   *    此前只校验"非空"，什么都收；买家首页的轮播就停在空白页上。
+   */
+  it('🔴 image_key 形状：像对象存储路径（ASCII 字母数字 / _ . -，≤200，不含 ..）；上传接口给的 key 照收', () => {
+    expect(
+      parseBannerInput({ image_key: 'img/1f59f733-f694-466f-a8cf-8b17dc716a1f/detail.webp' })
+        .imageKey,
+    ).toBe('img/1f59f733-f694-466f-a8cf-8b17dc716a1f/detail.webp');
+    expect(parseBannerInput(OK).imageKey).toBe('banners/2026/a.png');
+    for (const bad of [
+      'テスト',
+      'x'.repeat(201),
+      'img/a b/detail.webp',
+      '../etc/passwd',
+      'img/../secret.webp',
+      '/abs.png',
+    ]) {
+      expect(
+        reasonOf(() => parseBannerInput({ image_key: bad })),
+        bad.slice(0, 20),
+      ).toBe('image_key_invalid');
+    }
+    expect(parseBannerInput({ image_key: 'x'.repeat(200) }).imageKey).toHaveLength(200); // 边界：200 收、201 拒
+  });
+
   it('link_type 不在枚举内 → 40001；缺省 = none', () => {
     // ⚠️ 必须**带上 link_id**：否则"枚举外"和"缺 link_id"两条守卫同时命中，
     // 而它们同码 40001——注入"枚举放宽"时用例仍绿（覆盖假象，第三次踩到同一个坑）。

@@ -29,6 +29,7 @@ import {
   partialRefundRows,
   refundableMinor,
   currencyName,
+  formatMinorCn,
 } from './partial-refund-view.js';
 import { enterClicksPrimary, blockEnter } from '../ui/keys.js';
 import { mouseOnlyHint } from '../ui/confirm.js';
@@ -131,10 +132,19 @@ export function PartialRefunds({
     return check.ok ? { ok: true, minor: check.minor, reason: composed.reason } : check;
   };
 
+  /**
+   * 走查 2026-10-08：确认这一步要把钱复述出来——原先只有一个「确认部分退款」按钮，
+   * 运营点下去之前看不到"到底退多少、按什么原因"，而退款提交后撤不回。
+   */
+  const [pendingText, setPendingText] = useState('');
+
   const ask = (): void => {
     const check = inputCheck();
     if (!check.ok) return setHint(check.reason);
     setHint('');
+    setPendingText(
+      `将退给买家 ${formatMinorCn(check.minor, currency)}（${check.reason}）· 提交后不能撤回`,
+    );
     setConfirming(true);
   };
 
@@ -212,6 +222,7 @@ export function PartialRefunds({
         }}
         noteName="partial-reason"
       />
+      {confirming && <p className="refund-pending">{pendingText}</p>}
       {confirming ? (
         <div className="row2">
           <button

@@ -224,6 +224,18 @@ describe('listActiveProducts / findProductDetail（U5a）', () => {
     expect(typeof r.items[0]?.price_jpy).toBe('number');
   });
 
+  it('🔴 售罄的沉到最后（三端联动走查 2026-10-08：首页第一张卡是售罄商品）；同为有货 / 同为售罄时仍新到旧', async () => {
+    await db`
+      insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status, created_at)
+      values ('s-old', 'Old In Stock', 'food', 1000, 300, 4, 'JP', 'active', now() - interval '3 days'),
+             ('s-gone-new', 'New Sold Out', 'food', 1500, 350, 0, 'JP', 'active', now()),
+             ('s-new', 'New In Stock', 'food', 1200, 300, 9, 'JP', 'active', now() - interval '1 day'),
+             ('s-gone-old', 'Old Sold Out', 'food', 900, 200, 0, 'JP', 'active', now() - interval '5 days')
+    `;
+    const r = await repo.listActiveProducts({ page: 1, size: 20, category: 'food' });
+    expect(r.items.map((p) => p.id)).toEqual(['s-new', 's-old', 's-gone-new', 's-gone-old']);
+  });
+
   it('分页：size=1 时两页各一条，total 不变', async () => {
     await seedProducts();
     const p1 = await repo.listActiveProducts({ page: 1, size: 1 });

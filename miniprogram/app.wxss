@@ -596,6 +596,9 @@ page {
 
 /* ── 图片容器：统一比例，防止占位图变形 ─────────────────────────── */
 .ws-media {
+  /* 走查 2026-10-08：图位必须是定位容器——卡片角标（仅剩 N 件 / 已售罄）absolute 挂在这里，
+     没有它角标会逃到页面左上角（@see media-square.unit.test.ts） */
+  position: relative;
   width: 100%;
   overflow: hidden;
   background: var(--ws-surface-sunk);

@@ -141,6 +141,11 @@
   text-align: center;
 }
 
+/* 走查 2026-10-08：行内标红、链路号各占一行（<text> 默认行内，会与前一段粘成「3,850 円已下架…」） */
+.line-block {
+  display: block;
+}
+
 .state__error {
   color: var(--ws-danger);
 }

@@ -27,6 +27,16 @@ import { AppError } from '../errors.js';
 import { tryParseRfc3339Ms } from './time-input.js';
 import { optionalBool } from './bool-input.js';
 
+/**
+ * `image_key` 的形状：对象存储路径（契约 0.6.55 / AJ-417）。
+ * @why 三端联动走查 2026-10-08：此前只校验非空，模拟库里攒下 "テスト"、200 多个 "x" 这类 key，
+ *      买家首页 8 张轮播空白 4 张——没有任何一方报错（与本文件 @why 里"错了不响"同类）。
+ *      上传接口给的 key 是 `img/<image_id>/detail.webp`，旧式 `banners/2026/a.png` 也在此形状内。
+ * @limitation 只验形状，不验"对象真的存在"（那要查存储，见 @limitation 二同一理由）；
+ *              不以 `/` 开头、不含 `..` 段，防拼进 URL 后跳出图片目录。
+ */
+const IMAGE_KEY_SHAPE = /^[A-Za-z0-9][A-Za-z0-9/_.-]{0,199}$/;
+
 /** 契约 `BannerInput.link_type` 枚举（单测与契约双向比对）。 */
 export const BANNER_LINK_TYPES = ['none', 'product', 'category'] as const;
 export type BannerLinkType = (typeof BANNER_LINK_TYPES)[number];
@@ -71,6 +81,9 @@ export function parseBannerInput(body: unknown): BannerInputValue {
 
   const imageKey = typeof b['image_key'] === 'string' ? b['image_key'].trim() : '';
   if (imageKey === '') throw new AppError(40001, { reason: 'image_key_required' });
+  if (!IMAGE_KEY_SHAPE.test(imageKey) || imageKey.split('/').includes('..')) {
+    throw new AppError(40001, { reason: 'image_key_invalid' });
+  }
 
   const rawType = b['link_type'];
   const linkType =

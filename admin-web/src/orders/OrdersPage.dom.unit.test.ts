@@ -222,6 +222,17 @@ describe('订单列表：采购信息列（0.6.26）', () => {
     created_at: '2026-01-02T00:00:00.000Z',
   };
 
+  it('🔴 订单号本身就是去详情的链接（走查 2026-10-08：运营点单号没反应，只能找最右边的「详情」）', async () => {
+    const el = await openWith([{ ...ORDER, order_id: 'ord-72c6', order_no: '261009-76PJP4' }]);
+    const a = [...el.querySelectorAll('tbody a')].find((x) => x.textContent === '261009-76PJP4');
+    expect(a?.getAttribute('href')).toBe('#/orders/ord-72c6');
+  });
+
+  it('🔴 操作列固定在右侧（窄屏横向滚动时「详情 / 发货」不被挤出视野）', async () => {
+    const el = await openWith([ORDER]);
+    expect(el.querySelector('table')?.className).toContain('table-sticky-actions');
+  });
+
   it('列表页真的渲染出「采购信息」列，且内容含采购来源与 JAN 码', async () => {
     const el = await openWith([
       {

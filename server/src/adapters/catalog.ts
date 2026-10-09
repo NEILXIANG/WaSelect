@@ -202,6 +202,12 @@ export function createCatalogRepo(db: Db): CatalogRepo {
       }));
     },
 
+    /**
+     * 买家商品列表（首页 / 分类 / 搜索）。
+     * @why 售罄的沉到最后（三端联动走查 2026-10-08）：原先纯按新到旧，刚上架就卖完的商品顶在首页第一张卡，
+     *      买家第一眼看到的是买不了的东西。`(stock = 0)` 在 PG 里 false 排在 true 前；同组内仍新到旧、id 兜底（翻页稳定）。
+     * @limitation 只看 `stock = 0`；"仅剩 1 件"仍按上架时间排（低库存是事实提示，不降权）。
+     */
     async listActiveProducts(
       q: ProductListQuery,
     ): Promise<{ items: ProductListRow[]; total: number }> {
@@ -214,7 +220,7 @@ export function createCatalogRepo(db: Db): CatalogRepo {
          where status = 'active'
            ${q.category !== undefined ? db`and category = ${q.category}` : db``}
            ${kw !== undefined && kw !== '' ? db`and title ilike ${'%' + kw + '%'}` : db``}
-         order by created_at desc, id
+         order by (stock = 0), created_at desc, id
          limit ${q.size} offset ${(q.page - 1) * q.size}
       `;
       const counts = await db`

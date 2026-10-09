@@ -262,7 +262,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
       {loading && <p className="muted">加载中…</p>}
       <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
 
-      <table className="table">
+      <table className="table table-actions-reserve">
         <thead>
           <tr>
             <th>排序</th>

@@ -77,7 +77,7 @@ export function payPlan(intent) {
   if (typeof payload.pay_url === 'string' && payload.pay_url !== '') {
     return { kind: 'copylink', url: payload.pay_url };
   }
-  return { kind: 'unsupported', reason: '该支付方式当前不可用，请改用其他支付方式' };
+  return { kind: 'unsupported', reason: '该支付方式当前不可用' };
 }
 
 /** payload 是否齐了 `wx.requestPayment` 五参数。 */
@@ -94,8 +94,12 @@ function hasWxPay(payload) {
  *               （`url` 本函数不读，列出来是因为判别联合的调用方会带进来）
  * @why 文案在**这里**而不是 wxml 里写死：D-49 的口径是"短链 → 外部浏览器完成"，
  *      这段话会随 Stripe 托管页的实际表现调整；写在 wxml 里改一次要动 zh/ja 两处。
+ * @param {unknown} plan `payPlan` 的输出
+ * @param {{channelCount?: number}} [opts] 可选通道数（决定"无法支付"时给哪条出路）
  */
-export function payGuide(plan) {
+export function payGuide(plan, opts = undefined) {
+  // 走查 2026-10-08：只有一种支付方式时"改用其他支付方式"是一条不存在的路——按可选通道数给出路（不传 = 按一种）
+  const channelCount = Number.isInteger(opts?.channelCount) ? opts.channelCount : 1;
   const p = plan && typeof plan === 'object' ? plan : {};
   if (p.kind === 'copylink') {
     return {
@@ -126,7 +130,9 @@ export function payGuide(plan) {
   }
   return {
     title: '暂时无法支付',
-    body: typeof p.reason === 'string' ? p.reason : '该支付方式当前不可用，请改用其他支付方式。',
+    body: `${typeof p.reason === 'string' ? p.reason : '该支付方式当前不可用'}，${
+      channelCount > 1 ? '请改用其他支付方式。' : '请稍后再试；仍不行可在「我的」页联系客服。'
+    }`,
     actionText: '返回订单',
     steps: [],
   };

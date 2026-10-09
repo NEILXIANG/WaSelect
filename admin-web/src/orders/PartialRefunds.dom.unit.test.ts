@@ -49,6 +49,17 @@ async function open(
   return { el: mounted.el, calls, done };
 }
 
+describe('PartialRefunds：确认这一步把钱说清楚（走查 2026-10-08）', () => {
+  it('🔴 点「部分退款」后、确认之前：一句话复述退多少、什么原因，且说明提交后不能撤回', async () => {
+    const { el, calls } = await open();
+    await type(el.querySelector('input[name="partial-amount"]'), '10.50');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '破损');
+    await click(button(el, '部分退款'));
+    expect(el.textContent).toContain('将退给买家 10.50 美元（破损）· 提交后不能撤回');
+    expect(calls.some((c) => c.path.endsWith('/partial-refunds'))).toBe(false);
+  });
+});
+
 describe('PartialRefunds', () => {
   it('填 10.50 美元 + 原因 → 两步确认 → 请求体 amount_minor = 1050；完成后通知父组件刷新', async () => {
     const { el, calls, done } = await open();

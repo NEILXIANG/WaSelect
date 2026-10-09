@@ -41,14 +41,25 @@ function refundsOf(order: unknown): RefundLike[] {
   return Array.isArray(list) ? (list as RefundLike[]) : [];
 }
 
-/** "10.05" → 1005（USD）；格式不对 / ≤0 / 小数位超出币种精度 → 拒。 */
+/**
+ * 位置正确的千分位（"2,000" / "12,345.67"）。
+ * @why 三端联动走查 2026-10-08：运营最自然的写法是 "2,000"，原先一律拒、提示还举 "10.50" 当日元的例子。
+ * @why **只收位置对的逗号**：`1,5` 在欧式写法里是 1.5，猜成 15 就是多退十倍——钱的输入宁拒不猜。
+ */
+const GROUPED = /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
+
+/** "10.05" → 1005（USD）；"2,000" → 2000（JPY）；格式不对 / ≤0 / 小数位超出币种精度 → 拒。 */
 export function parseAmountToMinor(
   raw: string,
   currency: string,
 ): { ok: true; minor: number } | { ok: false; reason: string } {
   const digits = digitsOf(currency);
-  const m = /^(\d+)(?:\.(\d+))?$/.exec(raw.trim());
-  if (m === null) return { ok: false, reason: '金额只能是数字，例如 10.50' };
+  const trimmed = raw.trim();
+  const plain = GROUPED.test(trimmed) ? trimmed.replace(/,/g, '') : trimmed;
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(plain);
+  if (m === null) {
+    return { ok: false, reason: `金额只能是数字，例如 ${digits === 0 ? '2000' : '10.50'}` };
+  }
   const frac = m[2] ?? '';
   if (frac.length > digits) {
     return {
