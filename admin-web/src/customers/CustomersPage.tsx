@@ -130,7 +130,7 @@ function CustomerList({
             <th>联系邮箱</th>
             <th>订单</th>
             <SortTh
-              label="累计实付"
+              label={<span title="已付款订单合计，不扣退款">累计付款</span>}
               sortKey="paid_total_jpy"
               currentKey={sortKey ?? 'last_order_at'}
               currentDir={sortDir}

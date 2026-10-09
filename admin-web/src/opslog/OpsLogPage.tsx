@@ -162,7 +162,15 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
                 {r.action}
                 {r.action !== r.actionRaw && <span className="muted"> · {r.actionRaw}</span>}
               </td>
-              <td>{r.targetText}</td>
+              <td>
+                {r.targetHref === '' ? (
+                  r.targetText
+                ) : (
+                  <a className="link mono" href={r.targetHref}>
+                    {r.targetText}
+                  </a>
+                )}
+              </td>
               <td className={r.failed ? 'error' : 'muted'}>{r.statusText}</td>
             </tr>
           ))}

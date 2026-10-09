@@ -108,3 +108,42 @@ describe('reconciliationView', () => {
     ]);
   });
 });
+
+describe('运营日志：对象可点（走查 2026-10-08）', () => {
+  it('🔴 订单类操作的对象 → 订单详情链接；客户 / 拉黑类 → 客户详情；其它（商品、Banner）不给链接', () => {
+    const rows = auditRows([
+      {
+        id: 1,
+        action: 'POST /admin/orders/:id/partial-refunds',
+        target: 'ord-8645ff12',
+        created_at: '2026-10-09T04:57:00.000Z',
+      },
+      {
+        id: 2,
+        action: 'POST /admin/users/:id/block',
+        target: 'u-307ae3f3',
+        created_at: '2026-10-09T04:57:00.000Z',
+      },
+      {
+        id: 3,
+        action: 'DELETE /admin/customers/:id/events',
+        target: 'u-307ae3f3',
+        created_at: '2026-10-09T04:57:00.000Z',
+      },
+      {
+        id: 4,
+        action: 'PATCH /admin/products/:id/status',
+        target: '345e9f9e',
+        created_at: '2026-10-09T04:57:00.000Z',
+      },
+      { id: 5, action: 'POST /admin/orders/:id/ship', created_at: '2026-10-09T04:57:00.000Z' },
+    ]);
+    expect(rows.map((r) => r.targetHref)).toEqual([
+      '#/orders/ord-8645ff12',
+      '#/customers/u-307ae3f3',
+      '#/customers/u-307ae3f3',
+      '',
+      '',
+    ]);
+  });
+});

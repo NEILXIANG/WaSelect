@@ -19,7 +19,7 @@ export function OrderCustomerCard({ order }: { order: AdminOrderLike }) {
       <span className="label">客户</span>
       {c !== undefined && (
         <span>
-          历史 {c.order_count ?? 0} 单 · 累计实付 {moneyText(c.paid_total_jpy)}
+          历史 {c.order_count ?? 0} 单 · 累计付款 {moneyText(c.paid_total_jpy)}
           {c.blocked === true && (
             <>
               {' · '}

@@ -124,7 +124,8 @@ export function statsCards(
       value: `${String(s.order_count ?? 0)} 单`,
       sub: `已付款 ${String(s.paid_order_count ?? 0)} 单${tests > 0 ? `（另有测试单 ${String(tests)} 张，不计入）` : ''}`,
     },
-    { label: '累计实付', value: moneyText(s.paid_total_jpy), sub: '已付款订单合计，不扣退款' },
+    // 走查 2026-10-08："实付"会被读成已扣退款（实际不扣），改叫"累计付款"
+    { label: '累计付款', value: moneyText(s.paid_total_jpy), sub: '已付款订单合计，不扣退款' },
     // 大字只放日期、时刻放小字：整串 "2026-10-08 02:19" 用大字号会被拆成两行（2026-10-09 浏览器验收）
     dateCard('首单', s.first_order_at),
     dateCard('最近下单', s.last_order_at),

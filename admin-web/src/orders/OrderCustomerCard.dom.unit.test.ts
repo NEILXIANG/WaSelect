@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 职责：订单详情右栏的**客户卡片**（AJ-404；对标分析 §4.2 第 168 行）——历史单数、累计实付、是否拉黑、进客户页的链接。
+ * 职责：订单详情右栏的**客户卡片**（AJ-404；对标分析 §4.2 第 168 行）——历史单数、累计付款（不扣退款）、是否拉黑、进客户页的链接。
  *
  * @why 挂整个 `OrderDetail` 而不是只挂卡片组件：要证明的是"详情页真的把服务端的 `customer` 交给了卡片"，
  *      卡片自己渲染对了而详情页没接线，单测全绿、页面上什么都没有。
@@ -51,12 +51,12 @@ function customerField(el: HTMLElement): Element | undefined {
 }
 
 describe('订单详情 · 客户卡片', () => {
-  it('单数 + 累计实付 + 链到客户页', async () => {
+  it('单数 + 累计付款 + 链到客户页', async () => {
     const el = await open({
       customer: { user_id: 'u-cust-a', order_count: 3, paid_total_jpy: 21380, blocked: false },
     });
     const f = customerField(el);
-    expect(f?.textContent).toContain('历史 3 单 · 累计实付 21,380 円');
+    expect(f?.textContent).toContain('历史 3 单 · 累计付款 21,380 円'); // 走查 2026-10-08：与客户页同一说法
     expect(f?.textContent).not.toContain('已拉黑');
     expect(f?.querySelector('a')?.getAttribute('href')).toBe('#/customers/u-cust-a');
   });

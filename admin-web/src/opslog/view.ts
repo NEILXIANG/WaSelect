@@ -62,9 +62,23 @@ export interface AuditRowView {
   /** 原始 action（小字附在旁边，查日志 / 对代码用）。 */
   actionRaw: string;
   targetText: string;
+  /** 对象能点去哪（走查 2026-10-08）：订单 / 客户详情的 hash；其它（商品编辑不进网址、Banner 无详情）为空串。 */
+  targetHref: string;
   statusText: string;
   /** 状态码 ≥ 400：这次操作没成功（例如退款调机构失败），行标红。 */
   failed: boolean;
+}
+
+/**
+ * action 路由 → 对象详情的页面（走查 2026-10-08：对象列只有内部 id，运营认不出是哪张单）。
+ * @limitation 只给订单与客户：商品编辑态不进网址（App.tsx @limitation），Banner 没有详情页。
+ */
+function targetPage(action: string): 'orders' | 'customers' | null {
+  if (action.includes('/admin/orders/:id')) return 'orders';
+  if (action.includes('/admin/customers/:id') || action.includes('/admin/users/:id')) {
+    return 'customers';
+  }
+  return null;
 }
 
 export function auditRows(items: readonly unknown[]): AuditRowView[] {
@@ -83,6 +97,11 @@ export function auditRows(items: readonly unknown[]): AuditRowView[] {
         action: ACTION_LABELS[String(i['action'] ?? '')] ?? String(i['action'] ?? ''),
         actionRaw: String(i['action'] ?? ''),
         targetText: typeof i['target'] === 'string' && i['target'] !== '' ? i['target'] : '—',
+        targetHref: ((): string => {
+          const target = typeof i['target'] === 'string' ? i['target'] : '';
+          const page = targetPage(String(i['action'] ?? ''));
+          return page === null || target === '' ? '' : `#/${page}/${encodeURIComponent(target)}`;
+        })(),
         statusText: status === null ? '—' : String(status),
         failed: status !== null && status >= 400,
       };
