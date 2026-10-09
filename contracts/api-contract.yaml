@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.56
+  version: 0.6.57
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,9 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.57（AJ-421：管理端前端报错上报——新增一个写接口，只写运行日志）：
+      `POST /admin/client-errors`：管理端错误边界 / 全局 error / 未处理拒绝的报错 → 服务端 error 级运行日志 `admin_client_error`
+      （经统一脱敏，进 Sentry 分流）→ 204。不进 admin_audit、不落 user_events。仅管理员。
     0.6.56（AJ-420：售后申请最小闭环——新增两个写接口 + 两个详情字段，老客户端忽略即可）：
       ① `POST /orders/{id}/after-sales`（买家）：订单须为 shipped / delivered / completed；同一订单同时只能有一条进行中（open / processing）。
       ② `POST /admin/orders/{id}/after-sales/{rid}/resolve`（运营）：open → processing / resolved / rejected，processing → resolved / rejected；结案后不能再改。
@@ -795,6 +798,12 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason, description], properties: {reason: {type: string, enum: [not_received, damaged, wrong_item, quality, other]}, description: {type: string, minLength: 1, maxLength: 500}}}}}}
       responses: {'201': {description: Created, content: {application/json: {schema: {type: object, required: [after_sale], properties: {after_sale: {$ref: '#/components/schemas/AfterSaleRequest'}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/client-errors:
+    post:
+      summary: 管理端前端报错上报（0.6.57 / AJ-421）
+      description: '只写服务端 error 级运行日志 admin_client_error（消息 / 调用栈经统一脱敏，单字段 512 字符截断），进而进 Sentry 分流；不写 admin_audit，不落 user_events。kind 非枚举 → 40001 kind_invalid；message 去首尾空白后 1–500 字（空 → message_required，超长 → message_too_long）；stack ≤ 2000（stack_too_long）；page 须形如 ^[a-z][a-z0-9-]{0,31}$（page_invalid）。前端每次页面加载最多报 10 条并去重。'
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [kind, message], properties: {kind: {type: string, enum: [render, error, rejection]}, message: {type: string, minLength: 1, maxLength: 500}, stack: {type: string, maxLength: 2000}, page: {type: string, pattern: '^[a-z][a-z0-9-]{0,31}$'}}}}}}
+      responses: {'204': {description: 已记录}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/orders:
     get:
       parameters:

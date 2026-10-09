@@ -66,6 +66,7 @@ import { mountPartialRefundRoutes } from './partial-refund-routes.js';
 import { mountAdminOrderFixRoutes } from './admin-order-fix-routes.js';
 import { mountAdminOrderNoteRoutes } from './admin-order-note-routes.js';
 import { mountAfterSaleRoutes } from './after-sale-routes.js';
+import { mountAdminClientErrorRoutes } from './admin-client-error-routes.js';
 import { mountSalesPauseRoutes, salesOpenGuard } from './sales-pause.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAdminBannerRoutes } from './admin-banner-routes.js';
@@ -420,6 +421,12 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     identity,
     idGen: systemIdGen,
     events,
+  });
+  // ── 管理端前端报错上报（AJ-421）：只写 error 级运行日志（经 redact、进 Sentry 分流），不进审计 ──
+  mountAdminClientErrorRoutes(app, {
+    logger,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
   });
   // ── CSV 导出（剩余清单 3-3）：订单 / 待采购 / 待发货报关；导出动作显式进审计 ──
   mountAdminExportRoutes(app, {
