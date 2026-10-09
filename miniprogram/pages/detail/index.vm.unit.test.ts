@@ -22,6 +22,8 @@ import {
   addLimit,
   retryableLoadError,
   stillAdded,
+  stepQty,
+  relatedCards,
 } from './index.vm.js';
 
 /** 像真的商品（契约 Product 全形状：报关字段在，但视图不该透出它们）。 */
@@ -340,5 +342,69 @@ describe('addLimit / stillAdded / retryableLoadError（审查 2026-10-09）', ()
     expect(detailView({ stock: 3 }).stock).toBe(3);
     expect(detailView({ stock: -1 }).stock).toBeNull();
     expect(detailView({}).stock).toBeNull();
+  });
+});
+
+describe('选数量（A9，AJ-416）', () => {
+  const view = detailView({ title: '出刃包丁 165mm', price_jpy: 12800, stock: 3, images: [] });
+
+  it('🔴 stepQty：1 起步；不超过库存（库存未知时上限 99）；脏值回到 1', () => {
+    expect(stepQty(1, -1, 3)).toBe(1);
+    expect(stepQty(1, 1, 3)).toBe(2);
+    expect(stepQty(3, 1, 3)).toBe(3);
+    expect(stepQty(98, 1, null)).toBe(99);
+    expect(stepQty(99, 1, null)).toBe(99);
+    expect(stepQty(Number.NaN, 1, 3)).toBe(1);
+  });
+
+  it('🔴 立即购买带上选的数量；不传数量 = 1（老调用方不变）', () => {
+    expect(buyNowItem(view, 'p-knife', 2)?.qty).toBe(2);
+    expect(buyNowItem(view, 'p-knife')?.qty).toBe(1);
+    expect(buyNowItem(view, 'p-knife', 0)?.qty).toBe(1);
+  });
+
+  it('🔴 加购上限算上这次要加的数量：车里 2 件 + 这次 2 件 > 库存 3 → 拦', () => {
+    expect(addLimit({ stock: 3, inCart: 2, qty: 2 })).toEqual({
+      ok: false,
+      reason: 'stock',
+      stock: 3,
+    });
+    expect(addLimit({ stock: 3, inCart: 1, qty: 2 })).toEqual({ ok: true });
+    // 不传 qty = 1（原口径：车里 = 库存才拦）
+    expect(addLimit({ stock: 3, inCart: 2 })).toEqual({ ok: true });
+  });
+});
+
+describe('同类推荐（A10，AJ-416）', () => {
+  it('🔴 详情视图带分类（取同类推荐用）；认不出的分类 → 空串', () => {
+    expect(detailView({ title: 'x', price_jpy: 100, category: 'kitchen' }).category).toBe(
+      'kitchen',
+    );
+    expect(detailView({ title: 'x', price_jpy: 100 }).category).toBe('');
+  });
+
+  it('🔴 relatedCards：排除当前这件与售罄的，最多 4 件；价格非整数的不出（ws-price 只收整数）', () => {
+    const list = [
+      { id: 'p-now', title: '当前', price_jpy: 100, stock: 3, images: [] },
+      // 契约 ProductCard：列表行是单张 `image`（ImageSet），不是详情的 `images[]`——三端联动走查实测拿错过一次
+      {
+        id: 'p-a',
+        title: '南部铁器 急须',
+        price_jpy: 12800,
+        stock: 2,
+        image: { thumb: 'https://img/a.webp', card: 'https://img/a-card.webp' },
+      },
+      { id: 'p-b', title: '售罄的', price_jpy: 900, stock: 0, images: [] },
+      { id: 'p-c', title: '坏价', price_jpy: 'x', stock: 1, images: [] },
+      { id: 'p-d', title: 'd', price_jpy: 1, stock: 1, images: [] },
+      { id: 'p-e', title: 'e', price_jpy: 2, stock: 1, images: [] },
+      { id: 'p-f', title: 'f', price_jpy: 3, stock: 1, images: [] },
+      { id: 'p-g', title: 'g', price_jpy: 4, stock: 1, images: [] },
+    ];
+    const cards = relatedCards(list, 'p-now');
+    expect(cards.map((c) => c.id)).toEqual(['p-a', 'p-d', 'p-e', 'p-f']);
+    expect(cards[0]).toMatchObject({ title: '南部铁器 急须', priceJpy: 12800 });
+    expect(cards[0]?.image).toBe('https://img/a-card.webp'); // 小卡取 card 档（imageUrl 同口径）
+    expect(relatedCards(null, 'p-now')).toEqual([]);
   });
 });

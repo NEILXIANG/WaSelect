@@ -88,6 +88,31 @@ function timeText(iso) {
 }
 
 /**
+ * 「再次购买」出现的状态（A7，AJ-416）：订单已经走完（送达 / 完成）或没买成（取消 / 超时 / 已退款）。
+ * @why 进行中的单不给：已付款 / 已发货的单再买一份多半是误点，且会和「确认收货」挤在同一条底栏里。
+ */
+const BUY_AGAIN_STATUSES = ['delivered', 'completed', 'cancelled', 'expired', 'refunded'];
+
+/**
+ * 「再次购买」要放回购物车的条目（A7，AJ-416）。
+ * @returns {Array<{productId: string, qty: number, title: string, image: string}>}
+ * @why **不带价格**：订单里是当时的成交价，放进购物车当快照会让人以为还是这个价——
+ *      价格以购物车重新报价为准（cart-store @limitation 一）。下架的商品照样放回，由报价标出"已下架，请移除"。
+ */
+export function buyAgainItems(order) {
+  const o = order && typeof order === 'object' ? order : {};
+  if (!Array.isArray(o.items)) return [];
+  return o.items
+    .filter((i) => i && typeof i.product_id === 'string' && i.product_id !== '')
+    .map((i) => ({
+      productId: i.product_id,
+      qty: Number.isInteger(i.qty) && i.qty >= 1 ? i.qty : 1,
+      title: typeof i.title === 'string' ? i.title : '',
+      image: imageUrl(i.image),
+    }));
+}
+
+/**
  * 行项目（**含单价**：详情页是"这单当时买了什么"的凭据，与结算页"行里不带价格"相反——
  * 那里的价格会过期，这里的是快照，恰恰是它存在的意义）。
  */
@@ -179,6 +204,10 @@ export function detailView(order, opts = undefined) {
   const contactEmail = typeof o.contact_email === 'string' ? o.contact_email : '';
   // M-06（AJ-405）：状态区用买家视角词表；时间线仍用 statusText 短词（历史，@see utils/order-status.js BUYER_STATUS @why）
   const buyer = buyerStatus(status, { email: contactEmail !== '' });
+  const showPay = payable && !confirming;
+  const showCancel = PAYABLE.includes(status) && !confirming && !expired;
+  const showConfirmReceipt = status === 'shipped';
+  const showBuyAgain = BUY_AGAIN_STATUSES.includes(status);
 
   return {
     orderId: typeof o.order_id === 'string' ? o.order_id : '',
@@ -194,14 +223,14 @@ export function detailView(order, opts = undefined) {
         ? '支付时间已到，订单将自动关闭；如需购买请重新下单'
         : buyer.next,
     // ⚠️ 确认中不给出「继续支付」：用户刚付过一次，再点就是第二笔钱（MP3-04）。
-    canPay: payable && !confirming,
+    canPay: showPay,
     /**
      * 可取消态与可付态**故意同源**（PAYABLE，@see utils/order-status.js @limitation 二）：
      * 两边各写一份的话，"能付但取消不了"这种半开状态没有任何测试能抓住。
      * ⚠️ 唯一的例外就是"刚付过款未确认"：那时本地状态仍是可付/可取消，
      *    但取消会把一张可能已付款的单关掉——这一支由 `confirming` 单独排除。
      */
-    canCancel: PAYABLE.includes(status) && !confirming && !expired,
+    canCancel: showCancel,
     /** 确认屏：告诉用户"钱在确认中"，而不是让他自己猜刚才付没付上。 */
     confirming,
     confirmHint: confirming ? '支付结果确认中，请稍后刷新' : '',
@@ -241,7 +270,14 @@ export function detailView(order, opts = undefined) {
      * 确认收货（P2-13）：只在已发货时给。拒付中的单服务端回 40902（买家视图不含 has_dispute，不在前端猜）。
      * 不点也没关系：发货满 30 天系统自动签收。
      */
-    canConfirmReceipt: status === 'shipped',
+    canConfirmReceipt: showConfirmReceipt,
+    /**
+     * 底部操作栏出不出现（A2，AJ-416）：三个动作任一可做才出栏。
+     * @why 没有动作时也留一条空栏，等于在屏幕底部白占一截，还让人以为"按钮没加载出来"。
+     */
+    hasActions: showPay || showCancel || showConfirmReceipt || showBuyAgain,
+    /** A7（AJ-416）：结束了的单给「再次购买」（同样的商品与数量放回购物车）。 */
+    canBuyAgain: showBuyAgain,
     /**
      * 进度条（M-12，AJ-408）：五步 + 终态分支，算法在 utils/order-progress.js（纯函数，逐态单测）。
      * 时间线保留在下方（进度条不带时刻，见 order-progress @tradeoff）。

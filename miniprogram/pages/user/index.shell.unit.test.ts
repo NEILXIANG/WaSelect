@@ -1,6 +1,7 @@
 /**
  * 职责：「我的」页薄壳（剩余清单 4-2：客服入口）——进屏拉 /support、只在有值时显示、点一行复制。
  */
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 
@@ -234,5 +235,12 @@ describe('「我的」登录态跟着变（审查 2026-10-09）', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('「我的」模板：登录成功后不再占一行（小程序评估，AJ-416）', () => {
+  it('🔴 登录态卡片只在"没登上 / 正在登 / 要重试"时出现——登录成功后那行"已登录"没有信息量', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    expect(wxml).toMatch(/class="ws-gutter"[^>]*wx:if="\{\{!login\.logged \|\| retry\.show\}\}"/);
   });
 });

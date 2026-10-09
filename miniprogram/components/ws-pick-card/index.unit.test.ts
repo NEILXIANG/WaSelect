@@ -99,3 +99,25 @@ describe('ws-pick-card：缺价格不能显示 0 円（P1-6）', () => {
     expect(comp.dom.textContent ?? '').toContain('8,800 円');
   });
 });
+
+describe('ws-pick-card：内嵌价格不报空金额（三端联动走查 2026-10-08）', () => {
+  it('🔴 传了 priceJpy 渲染后控制台没有"金额必须是整数円"——空金额只该在真漏传时出现', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const comp = simulate.render(loadOnce(), {
+        name: '南部鉄器 急須',
+        why: '一生用',
+        priceJpy: 12800,
+      }) as unknown as CompLike;
+      comp.attach(document.body);
+      expect(comp.dom.textContent).toContain('12,800');
+      const logged = spy.mock.calls
+        .flat()
+        .map((c) => String(c))
+        .join('\n');
+      expect(logged).not.toMatch(/金额必须是整数円/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

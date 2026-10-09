@@ -27,6 +27,7 @@ import {
   formErrors,
   formModel,
   toAddressInput,
+  phoneForInput,
 } from '../../utils/address-form.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -100,6 +101,7 @@ Page({
         return;
       }
       const form = formModel(found);
+      form.phone = phoneForInput(form.phone); // 数字键盘打不出 +（A12）
       this.loadedId = this.addressId;
       this.setData({ form, stateIndex: Math.max(0, stateIndexOf(form.state)) });
     } catch (e) {

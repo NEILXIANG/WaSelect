@@ -272,7 +272,13 @@ Page({
       // 显示"确认中"并有限次重查；两次之后放弃假设，不让页面永远停在"确认中"。
       if (recentExternalPay(app.globalData.externalPay, this.orderId, Date.now())) {
         if (this.statusRetries >= 2) {
-          this.setData({ confirmNote: '' });
+          // 小程序评估 A1（2026-10-09）：自动重查到此为止，但**不撤掉**"确认中"——
+          //   撤掉后页面只剩支付按钮，回调慢时买家会以为没付成、再付一次（窗口内仍是"刚在浏览器付过"）。
+          //   给一个手动出口：按钮「我已付款，刷新状态」/ 下拉刷新。
+          this.setData({
+            confirmNote:
+              '如已在浏览器完成付款，结果可能还在确认中：可点下方「我已付款，刷新状态」再查一次（请勿重复付款）',
+          });
           return;
         }
         this.setData({
@@ -506,9 +512,32 @@ Page({
    *      而订单已经建好了，支付页的历史使命结束。
    */
   onViewOrders() {
-    // ⚠️ 同上：订单列表也是 tabBar 页，必须 switchTab。
-    //    这一处尤其要紧——copylink 场景里"支付完成后回到这里查看订单"是用户**唯一的退路**，
-    //    它被宿主拒绝的表现是"点了没反应"，而那时他已经在浏览器里付完钱了（MP-02 / AJ-366）。
+    // 小程序评估 A1（2026-10-09）：去**这一单**的详情，而不是订单列表——付完款回来要看的就是这一单。
+    //   订单详情不是 tabBar 页，redirectTo 可用（订单列表是 tabBar 页，那时才必须 switchTab，MP-02 / AJ-366）。
+    if (this.orderId !== '') {
+      wxApi.redirectTo({ url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}` });
+      return;
+    }
     wxApi.switchTab({ url: ORDER_PAGE });
+  },
+
+  /**
+   * 「我已付款，刷新状态」（小程序评估 A1）：立刻再查一次订单状态（只查状态，不重取支付方式、不换掉短链）。
+   * @why 支付完成的真值在服务端回调里、本页不轮询；用户在浏览器付完回来最想做的就是"再看一眼付上没有"。
+   */
+  onRefreshPaid() {
+    if (this.orderId === '') return;
+    this.statusRetries = 0;
+    void this.checkStatus();
+  },
+
+  /** 下拉刷新（A1）：与「我已付款，刷新状态」同一件事，完了收起下拉动画。 */
+  onPullDownRefresh() {
+    if (this.orderId === '') {
+      wxApi.stopPullDownRefresh();
+      return;
+    }
+    this.statusRetries = 0;
+    void this.checkStatus().finally(() => wxApi.stopPullDownRefresh());
   },
 });

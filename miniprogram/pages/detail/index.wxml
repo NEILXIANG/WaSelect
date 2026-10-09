@@ -11,10 +11,11 @@
   出现硬编码色值 / 尺寸字面量会直接红）。
 -->
 <view class="ws-page detail {{product ? 'ws-page--with-buybar' : ''}}">
-  <view class="ws-gutter" wx:if="{{loading && !product}}">
-    <view class="ws-card state">
-      <text class="ws-note">加载中…</text>
-    </view>
+  <!-- 小程序评估 B（AJ-416）：首次加载出骨架（大图位 + 标题 / 价格行），不再是一张"加载中…"卡片 -->
+  <view class="ws-gutter" wx:if="{{loading && !product}}" aria-label="正在加载商品">
+    <view class="ws-media ws-media--hero ws-skeleton" />
+    <view class="ws-skeleton skel-line" />
+    <view class="ws-skeleton skel-line skel-line--short" />
   </view>
 
   <!-- P2-38：错误态走三段式组件并给"重试"（以前只有一行红字，用户只能退出重进） -->
@@ -24,8 +25,8 @@
     title="没能取到这件商品"
     reason="{{error}}"
     refText="{{errorRef}}"
-    actionText="{{retryable ? '重试' : ''}}"
-    bindaction="onRetry"
+    actionText="{{retryable ? '重试' : '去首页逛逛'}}"
+    bindaction="onStateAction"
   />
 
   <block wx:if="{{product}}">
@@ -50,7 +51,8 @@
         <text class="detail__why-text">{{product.why}}</text>
       </view>
       <ws-price jpy="{{product.priceJpy}}" size="lg" />
-      <text class="ws-note" wx:if="{{product.subPrice}}">{{product.subPrice}}</text>
+      <!-- 走查 2026-10-08：与价格之间留一点空（原先"9,800 円≈ $67.63"粘在一起） -->
+      <text class="ws-note detail__sub-price" wx:if="{{product.subPrice}}">{{product.subPrice}}</text>
       <text class="ws-tag ws-tag--danger detail__tag" wx:if="{{product.soldOut}}">已售罄</text>
       <view class="detail__tags" wx:if="{{product.tags.length > 0}}">
         <text class="ws-tag" wx:for="{{product.tags}}" wx:key="*this">{{item}}</text>
@@ -62,6 +64,16 @@
       -->
       <view class="detail__tags">
         <text class="ws-tag ws-tag--green" wx:for="{{product.guarantees}}" wx:key="key">{{item.tag}}</text>
+      </view>
+
+      <!-- A9（AJ-416）：数量——加入购物车与立即购买都按它来（1 起步，不超过库存）。售罄时不出现 -->
+      <view class="qty-row" wx:if="{{!product.soldOut}}">
+        <text class="ws-note">数量</text>
+        <view class="qty-row__ctl">
+          <view class="step" hover-class="ws-press" bindtap="onQtyMinus" aria-role="button" aria-label="减少数量">−</view>
+          <text class="qty-row__value" aria-label="数量 {{qty}}">{{qty}}</text>
+          <view class="step" hover-class="ws-press" bindtap="onQtyPlus" aria-role="button" aria-label="增加数量">＋</view>
+        </view>
       </view>
 
       <view class="specs" wx:if="{{product.specs.length > 0}}">
@@ -114,6 +126,29 @@
         <view class="spec" wx:for="{{support}}" wx:key="key">
           <text class="ws-note spec__k">{{item.label}}</text>
           <text class="ws-body spec__v" user-select>{{item.value}}</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- A10（AJ-416）：同类推荐（最多 4 件，两列小卡）；取不到就整块不出现 -->
+    <view class="ws-gutter ws-section" wx:if="{{related.length > 0}}">
+      <text class="ws-section-kicker">More Like This</text>
+      <view class="related">
+        <view
+          class="related__item"
+          wx:for="{{related}}"
+          wx:key="id"
+          data-id="{{item.id}}"
+          bindtap="onOpenRelated"
+          hover-class="ws-press"
+          aria-role="link"
+          aria-label="查看 {{item.title}}"
+        >
+          <view class="ws-media ws-media--square">
+            <image class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
+          </view>
+          <text class="ws-body related__title">{{item.title}}</text>
+          <ws-price jpy="{{item.priceJpy}}" size="sm" />
         </view>
       </view>
     </view>

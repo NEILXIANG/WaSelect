@@ -102,7 +102,7 @@ function editorialTags(v) {
 /**
  * `GET /products/{id}` 的 Product → 详情视图数据。
  * @param {unknown} product 契约 `Product`（请求失败时页面根本不会调这里）
- * @returns {{title: string, priceJpy: unknown, subPrice: string, images: string[],
+ * @returns {{title: string, category: string, priceJpy: unknown, subPrice: string, images: string[],
  *            description: string, specs: Array<{label: string, value: string}>, soldOut: boolean,
  *            stock: number|null,
  *            why: string, maker: string, tags: string[],
@@ -117,6 +117,11 @@ export function detailView(product) {
   const p = product && typeof product === 'object' ? product : {};
   return {
     title: typeof p.title === 'string' ? p.title : '',
+    // A10（AJ-416）：取同类推荐用。只收"像个分类键"的值（拼进请求地址前先挡住脏值），具体有哪些分类由服务端说了算
+    category:
+      typeof p.category === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(p.category)
+        ? p.category
+        : '',
     priceJpy: p.price_jpy,
     subPrice: displaySubLine(p.display),
     images: imagesOf(p.images),
@@ -160,16 +165,51 @@ function specsOf(p) {
  * @returns {{productId: string, qty: number, title: string, image: string, priceJpy: unknown} | null}
  *          null = 不能买（售罄 / 没 id / 商品没拿到），页面据此不跳转。
  */
-export function buyNowItem(view, productId) {
+export function buyNowItem(view, productId, qty = 1) {
   if (view === null || typeof view !== 'object' || view.soldOut === true) return null;
   if (typeof productId !== 'string' || productId === '') return null;
   return {
     productId,
-    qty: 1,
+    // A9（AJ-416）：带上页面选的数量；脏值 / < 1 → 1
+    qty: Number.isInteger(qty) && qty >= 1 ? qty : 1,
     title: view.title,
     image: Array.isArray(view.images) ? (view.images[0] ?? '') : '',
     priceJpy: view.priceJpy,
   };
+}
+
+/** 同类推荐最多几件（A10）：一屏两行两列，再多就成了第二个首页。 */
+const RELATED_MAX = 4;
+
+/**
+ * 同类推荐（A10，AJ-416）：`GET /products?category=` 的结果 → 小卡片。
+ * @why 排除当前这件与售罄的：推荐一件点进去就买不了的，比不推荐更糟。
+ * @why 价格非整数的不出：`ws-price` 对非整数响亮失败（空白 + 报错），推荐位不该冒出一个空白价。
+ * @returns {Array<{id: string, title: string, image: string, priceJpy: number}>}
+ */
+export function relatedCards(list, currentId) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter(
+      (p) =>
+        p &&
+        typeof p.id === 'string' &&
+        p.id !== '' &&
+        p.id !== currentId &&
+        Number.isInteger(p.price_jpy) &&
+        !(Number.isInteger(p.stock) && p.stock <= 0),
+    )
+    .slice(0, RELATED_MAX)
+    .map((p) => {
+      // 契约 ProductCard：列表行是单张 `image`（ImageSet），不是详情的 `images[]`
+      const first = imageUrl(p.image);
+      return {
+        id: p.id,
+        title: typeof p.title === 'string' ? p.title : '',
+        image: first !== '' ? first : PLACEHOLDER_IMAGE,
+        priceJpy: p.price_jpy,
+      };
+    });
 }
 
 /** 分享卡片的品牌兜底标题（商品没拿到时）。 */
@@ -229,6 +269,13 @@ export function addFeedback(result) {
   const r = result !== null && typeof result === 'object' ? result : {};
   if (r.added === true) return { added: true, addNote: '' };
   if (r.reason === 'stock' && Number.isInteger(r.stock)) {
+    // A9（AJ-416）：一次加多件时，车里没满也会超库存——说清楚还能加几件，而不是"已经放满了"
+    if (Number.isInteger(r.inCart) && r.inCart < r.stock) {
+      return {
+        added: false,
+        addNote: `库存只剩 ${String(r.stock)} 件，购物车里已有 ${String(r.inCart)} 件，最多再加 ${String(r.stock - r.inCart)} 件`,
+      };
+    }
     return { added: false, addNote: `库存只剩 ${String(r.stock)} 件，购物车里已经放满了` };
   }
   if (r.reason === 'full') {
@@ -267,14 +314,34 @@ export function buyBarView(s) {
  * 加购前的库存上限（审查 2026-10-09）：购物车里这件的数量已达库存 → 不加。
  * @why 此前每点一次 +1、没有上限，要到结算报价才 409——用户在购物车里攒了 5 件，结算时才被告知只有 2 件。
  * @limitation 库存是**进页时**的快照；别人同时买走的那部分仍由报价 / 建单兜底，这里只挡"明知不够还加"。
- * @param {{stock: unknown, inCart: unknown}} a `stock` 详情的库存（null = 不知道）；`inCart` 购物车里这件已有几件
+ * @param {{stock: unknown, inCart: unknown, qty?: unknown}} a `stock` 详情的库存（null = 不知道）；`inCart` 购物车里这件已有几件；
+ *        `qty` 这次要加几件（A9，缺省 1）
  * @returns {{ok: true} | {ok: false, reason: 'stock', stock: number}}
  */
 export function addLimit(a) {
   const stock = a?.stock;
   const inCart = Number.isInteger(a?.inCart) ? a.inCart : 0;
+  const qty = Number.isInteger(a?.qty) && a.qty >= 1 ? a.qty : 1;
   if (!Number.isInteger(stock)) return { ok: true };
-  return inCart >= stock ? { ok: false, reason: 'stock', stock } : { ok: true };
+  return inCart + qty > stock ? { ok: false, reason: 'stock', stock } : { ok: true };
+}
+
+/** 库存未知时数量步进的上限（与购物车步进不设上限不同：这里是"一次加几件"，99 足够）。 */
+const QTY_CAP_UNKNOWN_STOCK = 99;
+
+/**
+ * 详情页数量步进（A9，AJ-416）：1 起步，不超过库存（库存未知时 99）。
+ * @why 原先「立即购买」恒为 1 件——想买两件的人只能先结一件、再回来买一件，或绕道购物车改数量。
+ * @param {unknown} current 当前数量
+ * @param {number} delta +1 / -1
+ * @param {unknown} stock 库存（null = 不知道）
+ */
+export function stepQty(current, delta, stock) {
+  // 当前值是脏的 → 回到 1（不在一个不知道是多少的数上再加减）
+  if (!Number.isInteger(current) || current < 1) return 1;
+  const base = current;
+  const cap = Number.isInteger(stock) && stock >= 1 ? stock : QTY_CAP_UNKNOWN_STOCK;
+  return Math.min(Math.max(base + delta, 1), cap);
 }
 
 /**

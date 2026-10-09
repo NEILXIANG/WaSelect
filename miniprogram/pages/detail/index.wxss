@@ -138,6 +138,60 @@
   word-break: break-all;
 }
 
+/* 换算价跟在日元价后面：留一点空，不粘在"円"上 */
+.detail__sub-price {
+  margin-left: var(--ws-space-hair);
+}
+
+/* A10（AJ-416）：同类推荐——两列小卡（48% 宽 + 两列间留缝，不用 gap：基础库支持不一致） */
+.related {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.related__item {
+  width: 48%;
+  margin-top: var(--ws-space-inline);
+}
+
+.related__title {
+  display: block;
+  margin-top: var(--ws-space-hair);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A9（AJ-416）：数量行（与购物车的步进同尺寸：触控区 ≥ --ws-touch-min） */
+.qty-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--ws-space-stack);
+}
+
+.qty-row__ctl {
+  display: flex;
+  align-items: center;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--ws-touch-min);
+  min-height: var(--ws-touch-min);
+  color: var(--ws-ink);
+  font-size: var(--ws-f-lg);
+}
+
+.qty-row__value {
+  padding: 0 var(--ws-space-inline);
+  color: var(--ws-ink);
+  font-size: var(--ws-f-base);
+}
+
 /* M-13（AJ-406）：底部固定购买栏。
    @why 栏高走 --ws-buybar-h（页面留白 `.ws-page--with-buybar` 用同一个 token），安全区单独加在内边距里，
         所以 iPhone 底部手势条不会压住按钮。 */

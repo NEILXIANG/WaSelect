@@ -25,6 +25,7 @@ import {
   formErrors,
   formModel,
   toAddressInput,
+  phoneForInput,
 } from './address-form.js';
 import { US_ADDRESSES, US_ADDRESS_INVALID, formatUsPhone } from '../../test/factories/catalog.js';
 import { ADDRESS_MAX_CHARS as SERVER_MAX } from '../../server/src/domain/address-input.js';
@@ -347,5 +348,15 @@ describe('ENGLISH_ADDRESS_NOTE（M-20 英文填写说明，AJ-406）', () => {
     expect(
       formErrors(formModel({ ...ADDR, line1: '东京都千代田区 1-1' })).errors.line1,
     ).toBeTruthy();
+  });
+});
+
+describe('电话用数字键盘（小程序评估 A12，2026-10-09）', () => {
+  it('🔴 phoneForInput 去掉开头的 +（数字键盘打不出 +）；normalizeUsPhone 把它还原成 +1 开头', () => {
+    expect(phoneForInput('+14155550123')).toBe('14155550123');
+    expect(phoneForInput('4155550123')).toBe('4155550123');
+    expect(phoneForInput(undefined)).toBe('');
+    expect(normalizeUsPhone(phoneForInput('+14155550123'))).toBe('+14155550123');
+    expect(normalizeUsPhone('4155550123')).toBe('+14155550123');
   });
 });

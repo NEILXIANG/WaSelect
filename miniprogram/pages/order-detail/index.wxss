@@ -121,15 +121,6 @@
   font-size: var(--ws-f-sm);
 }
 
-/* 底部动作区 */
-.cta {
-  padding-bottom: var(--ws-space-section);
-}
-
-.cancel-btn {
-  margin-top: var(--ws-space-inline);
-}
-
 /* 加载 / 错误 */
 .state {
   text-align: center;

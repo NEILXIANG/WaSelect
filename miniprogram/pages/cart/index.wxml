@@ -13,7 +13,7 @@
 
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
-<view class="ws-page ws-page--with-tabbar cart">
+<view class="ws-page {{rows.length > 0 ? 'ws-page--with-tabbar-buybar' : 'ws-page--with-tabbar'}} cart">
   <view class="ws-gutter" wx:if="{{empty}}">
     <view class="ws-card state">
       <text class="ws-note">购物车是空的</text>
@@ -31,15 +31,30 @@
         </view>
         <view class="ws-card row-item">
           <view class="row-item__main">
-            <!-- M-14：点图或标题进详情（步进 / 删除是独立点击区，不会误触跳走）；M-18：列表图懒加载 -->
+            <!-- A3（AJ-416）：勾选去结算。整块 ≥ 触控下限，点框不会误触到图片跳详情 -->
             <view
-              class="ws-media ws-media--square row-item__media"
+              class="pick"
+              data-id="{{item.productId}}"
+              hover-class="ws-press"
+              bindtap="onToggleSelect"
+              aria-role="checkbox"
+              aria-checked="{{item.selected}}"
+              aria-label="{{item.selected ? '取消勾选' : '勾选'}} {{item.title}}"
+            >
+              <text class="pick__box {{item.selected ? 'pick__box--on' : ''}}">{{item.selected ? '☑' : '☐'}}</text>
+            </view>
+            <!-- M-14：点图或标题进详情（步进 / 删除是独立点击区，不会误触跳走）；M-18：列表图懒加载 -->
+            <!-- 外层管宽度、里层管正方形（padding 百分比按父容器宽度算，@see media-square.unit.test.ts） -->
+            <view
+              class="row-item__media"
               data-id="{{item.productId}}"
               bindtap="onOpenDetail"
               aria-role="link"
               aria-label="查看 {{item.title}} 详情"
             >
-              <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
+              <view class="ws-media ws-media--square">
+                <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
+              </view>
             </view>
             <view class="row-item__body">
               <text class="ws-title row-item__title" data-id="{{item.productId}}" bindtap="onOpenDetail">{{item.title}}</text>
@@ -106,15 +121,38 @@
       B36 / AJ-219：提示语由 vm 的 checkoutGate 按状态给——
       "在途（改了数量）"与"报价失败"是两件不同的事，以前被同一句"还在计算中"盖住，
       后者的结果是用户一直等一个永远算不出来的合计。
+      A2（AJ-416）：固定在底部、垫在 tabBar 上方；左边是同一个权威合计（没出来时显示"—"，不显示快照价）。
     -->
-    <view class="ws-gutter ws-section cart__cta" wx:if="{{rows.length > 0}}">
-      <ws-button
-        text="去结算"
-        type="primary"
-        disabled="{{gate.disabled}}"
-        bindtap="onCheckout"
-      />
-      <text class="ws-caption checkout-hint" wx:if="{{gate.hint}}">{{gate.hint}}</text>
+    <view class="ws-buybar ws-buybar--over-tabbar" wx:if="{{rows.length > 0}}">
+      <text class="ws-caption ws-buybar__note" wx:if="{{gate.hint}}">{{gate.hint}}</text>
+      <view class="ws-buybar__row">
+        <!-- A3：全选（与行内勾选框同一套符号） -->
+        <view
+          class="pick pick--all"
+          hover-class="ws-press"
+          bindtap="onToggleAll"
+          aria-role="checkbox"
+          aria-checked="{{bar.allSelected}}"
+          aria-label="全选"
+        >
+          <text class="pick__box {{bar.allSelected ? 'pick__box--on' : ''}}">{{bar.allSelected ? '☑' : '☐'}}</text>
+          <text class="ws-note pick__label">全选</text>
+        </view>
+        <view class="ws-buybar__sum">
+          <text class="ws-note ws-buybar__label">合计</text>
+          <ws-price wx:if="{{quote && quote.hasTotal}}" jpy="{{quote.totalJpy}}" size="md" />
+          <text class="ws-note" wx:else>—</text>
+        </view>
+        <view class="ws-buybar__btn">
+          <ws-button
+            text="{{bar.ctaText}}"
+            type="primary"
+            block="{{true}}"
+            disabled="{{gate.disabled}}"
+            bindtap="onCheckout"
+          />
+        </view>
+      </view>
     </view>
   </block>
 </view>

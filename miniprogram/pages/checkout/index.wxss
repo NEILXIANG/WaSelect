@@ -12,14 +12,26 @@
 
 .item {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   padding: var(--ws-space-hair) 0;
+}
+
+/* A6：缩略图——与订单列表同宽（18%），比购物车小：这里只是"认一下是哪件"，不是逛 */
+.item__thumb {
+  width: 18%;
+  flex: none;
+  margin-right: var(--ws-space-inline);
 }
 
 .item__title {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .item__qty {
@@ -89,12 +101,6 @@
   min-height: var(--ws-touch-min);
 }
 
-.tip {
-  display: block;
-  margin-top: var(--ws-space-inline);
-  text-align: center;
-}
-
 /* "查看条款全文"：整行可点（同上，用 view） */
 .act {
   /* M-19：文字动作触控高度 ≥ --ws-touch-min，字号提到正文 */
@@ -103,11 +109,6 @@
   min-height: var(--ws-touch-min);
   color: var(--ws-accent);
   font-size: var(--ws-f-base);
-}
-
-/* 底部动作区 */
-.cta {
-  padding-bottom: var(--ws-space-section);
 }
 
 /* 空态 / 错误 */

@@ -70,6 +70,13 @@ const LEGAL_PAGE = '/pages/legal/index';
 const ORDER_PAGE = '/pages/order/index';
 /** 首页（tab 页，剩余清单 4-8 空态出口）。 */
 const HOME_PAGE = '/pages/home/index';
+/**
+ * 上次下单用的联系邮箱（A5，AJ-416）：再次结算时自动填上。
+ * @why 邮箱是必填（M-01），每单重输一遍是纯摩擦；只在**下单成功后**记——填错被拦下的不记。
+ * @limitation 存在本机（`ws:` 前缀，utils/storage.js），换手机 / 清缓存后要重填；
+ *             不去服务端取"上一单的邮箱"——那要多一个接口，而本机记住已覆盖绝大多数回头客。
+ */
+const EMAIL_KEY = 'checkout_email';
 
 Page({
   data: {
@@ -149,6 +156,8 @@ Page({
     this.traceId = newTraceId();
     this.intentKey = createIntentIdempotency();
     this.mode = options?.mode === BUY_NOW_MODE ? BUY_NOW_MODE : '';
+    const remembered = app.globalData.storage?.getString(EMAIL_KEY) ?? '';
+    if (remembered !== '' && this.data.email === '') this.setData({ email: remembered });
     // 扫描附记：立即购买的单件丢了（进程被回收）时，空态不能说"购物车是空的"——用户的购物车可能并不空
     this.setData({
       emptyText:
@@ -427,8 +436,13 @@ Page({
       });
       // @see @limitation 一：建单成功即清车（订单已存在，支付失败可去订单页继续）
       // 立即购买不清车（剩余清单 4-4，vm `clearsCartAfterOrder`）；单件条目用完即弃
-      if (clearsCartAfterOrder(this.mode)) app.globalData.cart.clear();
-      else app.globalData.buyNow = null;
+      // A3（AJ-416）：只移除这次买走的那几件（没勾的留在车里），不是整车清空
+      if (clearsCartAfterOrder(this.mode)) {
+        app.globalData.cart.removeMany(body.items.map((i) => i.product_id));
+      } else app.globalData.buyNow = null;
+      if (typeof body.contact_email === 'string' && body.contact_email !== '') {
+        app.globalData.storage?.setString(EMAIL_KEY, body.contact_email);
+      }
       // 意图已完成：作废键。再点一次是**新的一张单**，沿用旧键会被重放成刚才那张
       this.intentKey?.retire();
       // P2-36：用户已经离开这一页（按了返回）→ 不再把他拽进支付页；订单可在「我的订单」里继续付

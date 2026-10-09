@@ -70,7 +70,8 @@
           value="{{form.phone}}"
           data-field="phone"
           bindinput="onInput"
-          placeholder="+14155550123"
+          type="number"
+          placeholder="例：4155550123（美国 10 位号码）"
           placeholder-class="ph"
         />
         <text class="field__error" wx:if="{{errors.phone}}">{{errors.phone}}</text>

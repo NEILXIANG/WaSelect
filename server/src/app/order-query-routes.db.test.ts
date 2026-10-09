@@ -308,6 +308,8 @@ describe('AJ-408：列表行缩略图与件数（M-11）', () => {
       ]);
       const r = await row(srv.url, id);
       expect(r?.['item_count']).toBe(3); // knife×1 + cup×2
+      // A8（AJ-416，契约 0.6.54）：第一行商品的**下单快照**标题（买家看到的那个名字，不是现名、不是日文采购名）
+      expect(r?.['first_title']).toBe('Chef Knife');
       expect(r?.['first_image']).toEqual({
         thumb: 'https://img.example.com/knife.jpg',
         card: 'https://img.example.com/knife.jpg',
@@ -329,6 +331,10 @@ describe('AJ-408：列表行缩略图与件数（M-11）', () => {
       const r = await row(srv.url, id);
       expect(r?.['item_count']).toBe(3);
       expect(r !== undefined && 'first_image' in r).toBe(false);
+      expect(r?.['first_title']).toBe('Tea Cup'); // 首行是 cup（下单顺序），标题跟着首行走
+      // 改了商品名之后列表仍是下单时的名字（快照，与详情行项目同口径）
+      await db`update products set title = 'Tea Cup (Renamed)' where id = 'p-cup'`;
+      expect((await row(srv.url, id))?.['first_title']).toBe('Tea Cup');
     } finally {
       await srv.close();
     }
@@ -366,6 +372,7 @@ describe('AJ-408：列表行缩略图与件数（M-11）', () => {
       const d = await get(srv.url, `/api/v1/orders/${id}`);
       expect('item_count' in d.json).toBe(false);
       expect('first_image' in d.json).toBe(false);
+      expect('first_title' in d.json).toBe(false);
     } finally {
       await srv.close();
     }

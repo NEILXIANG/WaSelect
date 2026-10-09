@@ -143,7 +143,8 @@ describe('持久化（D-52）', () => {
     const cart = createCartStore({ storage });
     cart.add(OIL);
     const roundTrip = JSON.parse(data['ws:cart'] ?? '[]');
-    expect(roundTrip).toEqual([OIL]);
+    // A3（AJ-416）起每条多落一个勾选状态
+    expect(roundTrip).toEqual([{ ...OIL, selected: true }]);
   });
 
   it('⚠️ 持久化坏数据 → 坏条目**丢弃**，不让整个购物车打不开', () => {
@@ -156,7 +157,7 @@ describe('持久化（D-52）', () => {
       { productId: 'p-3', qty: 1.5 }, // 非整数 qty → 丢
     ]);
     const cart = createCartStore({ storage });
-    expect(cart.items()).toEqual([OIL]);
+    expect(cart.items()).toEqual([{ ...OIL, selected: true }]);
   });
 
   it('整段 JSON 损坏（storage.getJson 兜底返回 undefined）→ 空购物车', () => {
@@ -272,5 +273,60 @@ describe('持久化读回去重（审查 2026-10-09）', () => {
       { product_id: 'p-1', qty: 3 },
       { product_id: 'p-2', qty: 1 },
     ]);
+  });
+});
+
+describe('勾选结算（A3，AJ-416）', () => {
+  const KNIFE = {
+    productId: 'p-knife-210mm',
+    qty: 1,
+    title: '堺孝行 柳刃包丁 210mm',
+    image: '',
+    priceJpy: 18000,
+  };
+
+  it('🔴 默认全选；取消勾选的不进报价 / 建单的 items；勾选状态落盘，重开购物车还在', () => {
+    const { storage } = memStorage();
+    const cart = createCartStore({ storage });
+    cart.add(OIL);
+    cart.add(KNIFE);
+    expect(cart.selectedCount()).toBe(2);
+    cart.setSelected(KNIFE.productId, false);
+    expect(cart.toOrderItems()).toEqual([{ product_id: OIL.productId, qty: 1 }]);
+    expect(cart.selectedCount()).toBe(1);
+    // 角标仍按全部件数（没勾的也还在车里）
+    expect(cart.count()).toBe(2);
+    const reopened = createCartStore({ storage });
+    expect(reopened.items().map((i) => i.selected)).toEqual([true, false]);
+  });
+
+  it('全选 / 全不选；再次加购同一件 → 自动勾上（用户刚表示要它）', () => {
+    const { storage } = memStorage();
+    const cart = createCartStore({ storage });
+    cart.add(OIL);
+    cart.add(KNIFE);
+    cart.setAllSelected(false);
+    expect(cart.toOrderItems()).toEqual([]);
+    cart.add({ ...KNIFE, qty: 1 });
+    expect(cart.toOrderItems()).toEqual([{ product_id: KNIFE.productId, qty: 2 }]);
+    cart.setAllSelected(true);
+    expect(cart.selectedCount()).toBe(2);
+  });
+
+  it('🔴 下单后只移除买走的那几件（removeMany），没勾的留在车里', () => {
+    const { storage } = memStorage();
+    const cart = createCartStore({ storage });
+    cart.add(OIL);
+    cart.add(KNIFE);
+    cart.setSelected(KNIFE.productId, false);
+    cart.removeMany([OIL.productId]);
+    expect(cart.items().map((i) => i.productId)).toEqual([KNIFE.productId]);
+  });
+
+  it('旧版本存下的条目没有勾选字段 → 按已勾选读（升级后购物车不会突然一件都没选）', () => {
+    const { storage } = memStorage({ 'ws:cart': JSON.stringify([{ productId: 'p-1', qty: 2 }]) });
+    const cart = createCartStore({ storage });
+    expect(cart.items()[0]?.selected).toBe(true);
+    expect(cart.toOrderItems()).toEqual([{ product_id: 'p-1', qty: 2 }]);
   });
 });

@@ -38,6 +38,8 @@ let orderHold: ReturnType<typeof deferred<unknown>> | null;
 let payFails: boolean;
 /** `wx.redirectTo` 的落点（MP3-06：auto 之后必须离开这一页）。 */
 let redirects: string[];
+/** `wx.stopPullDownRefresh` 被调次数（A1：下拉刷新后必须收起动画）。 */
+let stops: number;
 /**
  * 订单的 `expires_at`。默认"现在起 30 分钟后"（P2-35 起已过期的待付款单直接是关闭屏，
  * 固定写死一个过去的时刻会让所有用例都落在关闭屏上）；倒计时用例自己改成固定时刻 + 假时钟。
@@ -84,6 +86,7 @@ beforeEach(async () => {
   orderHold = null;
   payFails = false;
   redirects = [];
+  stops = 0;
   expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
   country = 'US';
   postError = null;
@@ -94,6 +97,9 @@ beforeEach(async () => {
     },
     redirectTo: (o: { url: string }) => {
       redirects.push(o.url);
+    },
+    stopPullDownRefresh: () => {
+      stops += 1;
     },
     navigateTo: () => undefined,
     // in_app 分支会真的调它（MP3-03 / MP3-07 用例要用）；用开关决定走 success 还是 fail
@@ -323,7 +329,8 @@ describe('支付页薄壳：银行卡付款后的确认中（W-02）', () => {
     expect(page.data['confirmNote']).toBe('');
   });
 
-  it('重查两次仍未确认 → 不再显示确认中（不让页面永远停在"确认中"）', async () => {
+  it('🔴 重查两次仍未确认 → 不再自动重查，但"确认中"不撤掉、改为给出手动刷新的出口（小程序评估 A1）', async () => {
+    // @why 原先两次重查（约 6 秒）后清掉提示，页面只剩支付按钮——回调慢时买家会以为没付成、再付一次
     await toCopylinkScreen();
     vi.useFakeTimers();
     call('onShow');
@@ -332,8 +339,39 @@ describe('支付页薄壳：银行卡付款后的确认中（W-02）', () => {
     await settle();
     await vi.advanceTimersByTimeAsync(4000);
     await settle();
-    expect(page.data['confirmNote']).toBe('');
+    const fetches = orderFetches();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle();
+    expect(orderFetches()).toBe(fetches); // 不再自动轮询
+    expect(page.data['confirmNote']).toContain('请勿重复付款');
+    expect(page.data['confirmNote']).toContain('刷新状态');
     expect(page.data['payUrl']).toBe('https://pay.test/o/link-1');
+  });
+
+  it('🔴 「我已付款，刷新状态」→ 立刻再查一次；已付 → 收起支付方式', async () => {
+    await toCopylinkScreen();
+    orderStatus = 'paid';
+    const before = orderFetches();
+    call('onRefreshPaid');
+    await settle();
+    expect(orderFetches()).toBe(before + 1);
+    expect(page.data['closedText']).toContain('付款已完成');
+    expect(page.data['payUrl']).toBe('');
+  });
+
+  it('🔴 下拉刷新 → 同样只查状态（不重取支付方式、不换掉短链）并收起下拉动画', async () => {
+    await toCopylinkScreen();
+    const channels = channelFetches();
+    call('onPullDownRefresh');
+    await settle();
+    expect(stops).toBe(1);
+    expect(channelFetches()).toBe(channels);
+    expect(page.data['payUrl']).toBe('https://pay.test/o/link-1');
+  });
+
+  it('🔴 「查看订单」→ 去这一单的详情（不是订单列表）', async () => {
+    call('onViewOrders');
+    expect(redirects.at(-1)).toBe(`/pages/order-detail/index?id=${ORDER_ID}`);
   });
 });
 

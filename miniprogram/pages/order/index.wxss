@@ -105,3 +105,12 @@
   flex-direction: column;
   margin-left: var(--ws-space-inline);
 }
+
+/* A8：首件商品名，最多两行（长日文名不撑高卡片） */
+.order-card__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}

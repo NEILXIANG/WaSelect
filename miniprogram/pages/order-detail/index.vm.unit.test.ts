@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { STOCK_REFUND_NOTE, buyerStatus } from '../../utils/order-status.js';
-import { amountLines, detailView, itemRows, timelineRows } from './index.vm.js';
+import { amountLines, buyAgainItems, detailView, itemRows, timelineRows } from './index.vm.js';
 
 const ORDER = {
   order_id: 'o-1',
@@ -432,5 +432,42 @@ describe('过了支付截止时间（审查 2026-10-09）', () => {
     expect(v.canPay).toBe(true);
     expect(v.canCancel).toBe(true);
     expect(detailView(pending).canPay).toBe(true);
+  });
+});
+
+describe('底部操作栏出不出现（A2，AJ-416）', () => {
+  it('🔴 hasActions = 能付 / 能取消 / 能确认收货 任一成立；已付款未发货、刚付过确认中时没有栏', () => {
+    expect(detailView({ ...ORDER, status: 'pending_payment' }).hasActions).toBe(true);
+    expect(detailView({ ...ORDER, status: 'shipped' }).hasActions).toBe(true);
+    expect(detailView({ ...ORDER, status: 'paid' }).hasActions).toBe(false);
+    expect(detailView({ ...ORDER, status: 'pending_payment' }, { justPaid: true }).hasActions).toBe(
+      false,
+    );
+  });
+});
+
+describe('再次购买（A7，AJ-416）', () => {
+  it('🔴 已送达 / 已完成 / 已取消 / 超时关闭 / 已退款 → 给「再次购买」（并因此出底栏）；进行中的单不给', () => {
+    for (const status of ['delivered', 'completed', 'cancelled', 'expired', 'refunded']) {
+      const v = detailView({ ...ORDER, status });
+      expect(v.canBuyAgain, status).toBe(true);
+      expect(v.hasActions, status).toBe(true);
+    }
+    for (const status of ['created', 'pending_payment', 'paid', 'shipped', 'refunding']) {
+      expect(detailView({ ...ORDER, status }).canBuyAgain, status).toBe(false);
+    }
+  });
+
+  it('🔴 再次购买的条目：商品 id + 原数量 + 标题 / 图快照（不带价格：价格以重新报价为准）', () => {
+    const items = buyAgainItems({
+      items: [
+        { product_id: 'p-1', title: '白色恋人 12 枚装', qty: 2, unit_price_jpy: 2160, image: null },
+        { product_id: '', title: '坏行', qty: 1 },
+      ],
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ productId: 'p-1', qty: 2, title: '白色恋人 12 枚装' });
+    expect(Object.keys(items[0] ?? {})).not.toContain('priceJpy');
+    expect(buyAgainItems(null)).toEqual([]);
   });
 });

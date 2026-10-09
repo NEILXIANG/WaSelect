@@ -19,7 +19,10 @@
  *      ../../../contracts/api-contract.yaml（Quote / OrderCreated / POST /orders）
  */
 
-/** 商品行（**不带价格**：价格只信 quote，@see @limitation 一）。 */
+/**
+ * 商品行（**不带价格**：价格只信 quote，@see @limitation 一）。
+ * A6（AJ-416）：带加购时的主图快照——只有文字时，同款不同规格的两件认不出来。图是快照、过期无害（不参与算钱）。
+ */
 export function itemRows(items) {
   if (!Array.isArray(items)) return [];
   return items
@@ -28,6 +31,7 @@ export function itemRows(items) {
       productId: i.productId,
       title: typeof i.title === 'string' ? i.title : '',
       qty: Number.isInteger(i.qty) ? i.qty : 1,
+      image: typeof i.image === 'string' ? i.image : '',
     }));
 }
 
@@ -255,6 +259,8 @@ export const BUY_NOW_MODE = 'buynow';
  * 结算的条目来源（剩余清单 4-4）：立即购买只结那一件，否则结购物车。
  * @why 立即购买的单件丢了（小程序进程被回收后 globalData 清空）时返回**空**而不是回落到购物车：
  *      回落的后果是用户点了"立即购买 A"，结算页却是购物车里的 B、C——他未必细看就付了。空态至少是诚实的。
+ * @param {{mode?: string, buyNow?: unknown, cartItems?: unknown}} args
+ * @returns {Array<{productId: string, qty: number, title?: string, image?: string, selected?: boolean}>}
  */
 export function checkoutItems(args) {
   if (args?.mode === BUY_NOW_MODE) {
@@ -266,10 +272,13 @@ export function checkoutItems(args) {
       ? [b]
       : [];
   }
-  return Array.isArray(args?.cartItems) ? args.cartItems : [];
+  // A3（AJ-416）：只结勾选的；缺字段 = 勾选（与 cart-store @limitation 五同口径）
+  return Array.isArray(args?.cartItems)
+    ? args.cartItems.filter((i) => i && i.selected !== false)
+    : [];
 }
 
-/** 建单成功后是否清空购物车：立即购买不清（车里的东西用户没打算现在买）。 */
+/** 建单成功后是否从购物车移除买走的那几件（A3 起只移除勾选结算的）：立即购买不动购物车（车里的东西用户没打算现在买）。 */
 export function clearsCartAfterOrder(mode) {
   return mode !== BUY_NOW_MODE;
 }

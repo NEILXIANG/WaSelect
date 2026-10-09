@@ -25,6 +25,7 @@ import {
   undoAvailable,
   undoView,
   UNDO_WINDOW_MS,
+  selectionBar,
 } from './index.vm.js';
 
 const ITEMS = [
@@ -46,6 +47,7 @@ describe('cartRows（行视图）', () => {
       image: 'https://img.example.com/p1/card.jpg',
       qty: 2,
       priceText: '3,600 円',
+      selected: true, // A3（AJ-416）
     });
     // ⚠️ 没有 subtotal 字段：行内小计 = "算合计"的半成品，走缓存价就破了红线
     expect(Object.keys(row ?? {})).not.toContain('subtotalText');
@@ -283,5 +285,41 @@ describe('M-14 购物车：行进详情 / 删除撤销 / 报价重试（AJ-406�
       expect(quoteRetryable(code, 1), String(code)).toBe(false);
     expect(quoteRetryable(40001, 51)).toBe(false);
     expect(quoteRetryable(40001, 3)).toBe(true);
+  });
+});
+
+describe('勾选结算（A3，AJ-416）', () => {
+  it('🔴 行带勾选状态（缺字段 = 已勾选）', () => {
+    const rows = cartRows([
+      { productId: 'p-1', qty: 1, title: 'a' },
+      { productId: 'p-2', qty: 1, title: 'b', selected: false },
+    ]);
+    expect(rows.map((r) => r.selected)).toEqual([true, false]);
+  });
+
+  it('🔴 底栏：全选状态 + 「去结算 (N)」——N 是勾选的品种数；一件没勾时按钮只写"去结算"', () => {
+    expect(selectionBar([{ selected: true }, { selected: true }])).toEqual({
+      allSelected: true,
+      selectedCount: 2,
+      ctaText: '去结算 (2)',
+    });
+    expect(selectionBar([{ selected: true }, { selected: false }])).toEqual({
+      allSelected: false,
+      selectedCount: 1,
+      ctaText: '去结算 (1)',
+    });
+    expect(selectionBar([{ selected: false }])).toEqual({
+      allSelected: false,
+      selectedCount: 0,
+      ctaText: '去结算',
+    });
+    expect(selectionBar(null)).toEqual({ allSelected: false, selectedCount: 0, ctaText: '去结算' });
+  });
+
+  it('🔴 一件没勾 → 去结算不可点，并说清楚为什么（优先于"还在计算"）', () => {
+    expect(checkoutGate({ noneSelected: true, quoting: true })).toEqual({
+      disabled: true,
+      hint: '请勾选要结算的商品',
+    });
   });
 });

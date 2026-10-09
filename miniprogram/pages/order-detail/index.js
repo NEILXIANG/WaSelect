@@ -26,7 +26,7 @@
  *
  * @see ./index.vm.js（视图逻辑真源，17 条单测）；../../utils/wx-api.js（showModal / setClipboardData）
  */
-import { detailView } from './index.vm.js';
+import { buyAgainItems, detailView } from './index.vm.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -41,12 +41,17 @@ const wxApi = createWxApi();
 
 /** 支付页路径（跳转路径只在这一处出现）。 */
 const PAY_PAGE = '/pages/pay/index';
+/** A7：再次购买后去购物车（tab 页，只能 switchTab）；点商品行进详情。 */
+const CART_PAGE = '/pages/cart/index';
+const DETAIL_PAGE = '/pages/detail/index';
 
 Page({
   data: {
     /** vm `detailView` 的输出；null = 还没拉到（此时只显示加载/错误）。 */
     view: null,
     loading: false,
+    /** A7：再次购买放不进购物车时的说明（空串 = 不显示）。 */
+    buyAgainNote: '',
     /** 错误态是否给"重试"（P2-38）：链接里没有订单 id 时为 false。 */
     retryable: false,
     /** 错误文案（空串 = 无错误）。 */
@@ -165,6 +170,31 @@ Page({
     this.recheckCount += 1;
     if (this.recheckTimer !== null) clearTimeout(this.recheckTimer);
     this.recheckTimer = setTimeout(() => void this.load(), 1500 * this.recheckCount);
+  },
+
+  /**
+   * 再次购买（A7，AJ-416）：这单的商品与数量放回购物车，然后去购物车（重新报价、重新勾选结算）。
+   * @why 放不进去（品种已满）就**留在本页说清楚**：跳到购物车却少了几件，用户会以为是这一单的商品下架了。
+   * @limitation 已在车里的同款会**合并数量**（cart-store add 同口径），不是另起一行。
+   */
+  onBuyAgain() {
+    const cart = app.globalData.cart;
+    const rejected = buyAgainItems(this.lastOrder).filter((i) => cart.add(i)?.added !== true);
+    if (rejected.length > 0) {
+      this.setData({
+        buyAgainNote: `购物车商品种类已满，${rejected.length} 件没放进去，请先清理购物车`,
+      });
+      return;
+    }
+    this.setData({ buyAgainNote: '' });
+    wxApi.switchTab({ url: CART_PAGE });
+  },
+
+  /** 点商品行进详情（A7）：看看现在还卖不卖、什么价。 */
+  onOpenItem(e) {
+    const id = e?.currentTarget?.dataset?.id;
+    if (typeof id !== 'string' || id === '') return;
+    wxApi.navigateTo({ url: `${DETAIL_PAGE}?id=${encodeURIComponent(id)}` });
   },
 
   /** 继续支付（仅 `canPay`；不传金额，支付页自己向服务端要权威金额）。 */

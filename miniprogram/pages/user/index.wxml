@@ -18,8 +18,10 @@
   <!-- 页头（S4：走 `ws-section-head` 组件，与其余页头同一份实现） -->
   <ws-section-head class="ws-gutter mine__head" kicker="Mine" title="我的" />
 
-  <!-- 登录态：一行，左标签右值 -->
-  <view class="ws-gutter">
+  <!-- 登录态：一行，左标签右值。
+       小程序评估（AJ-416）：只在"正在登录 / 没登上 / 要重试"时出现——登录成功后"已登录"一行没有信息量，
+       还把订单入口往下挤了一截。 -->
+  <view class="ws-gutter" wx:if="{{!login.logged || retry.show}}">
     <view class="ws-card mine__card">
       <view class="mine__row">
         <text class="ws-note">登录状态</text>

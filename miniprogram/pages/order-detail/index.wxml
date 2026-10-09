@@ -14,7 +14,7 @@
 
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
-<view class="ws-page order-detail">
+<view class="ws-page {{view.hasActions ? 'ws-page--with-buybar' : ''}} order-detail">
   <!-- P2-38：错误态给"重试"；链接里没有订单 id 时重试也没用，不给按钮（retryable） -->
   <ws-state-block
     wx:if="{{error}}"
@@ -83,9 +83,21 @@
     <view class="ws-gutter ws-section" wx:if="{{view.items.length > 0}}">
       <view class="ws-card">
         <text class="ws-section-kicker">Items</text>
-        <view class="item" wx:for="{{view.items}}" wx:key="productId">
-          <view class="ws-media ws-media--square item__media">
-            <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
+        <!-- A7（AJ-416）：商品行可点进详情（看看现在还卖不卖、什么价） -->
+        <view
+          class="item"
+          wx:for="{{view.items}}"
+          wx:key="productId"
+          data-id="{{item.productId}}"
+          bindtap="onOpenItem"
+          hover-class="ws-press"
+          aria-role="link"
+          aria-label="查看 {{item.title}} 详情"
+        >
+          <view class="item__media">
+            <view class="ws-media ws-media--square">
+              <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
+            </view>
           </view>
           <view class="item__body">
             <text class="ws-title item__title">{{item.title}}</text>
@@ -181,24 +193,44 @@
       </view>
     </view>
 
-    <view class="ws-gutter ws-section cta">
-      <ws-button wx:if="{{view.canPay}}" text="继续支付" type="primary" bindtap="onPay" />
-      <!-- P2-13（AJ-387）：确认收货；不点也会在发货 30 天后自动签收 -->
-      <ws-button
-        wx:if="{{view.canConfirmReceipt}}"
-        text="{{confirmingReceipt ? '提交中…' : '确认收货'}}"
-        type="primary"
-        loading="{{confirmingReceipt}}"
-        bindtap="onConfirmReceiptTap"
-      />
-      <ws-button
-        wx:if="{{view.canCancel}}"
-        class="cancel-btn"
-        text="{{cancelling ? '取消中…' : '取消订单'}}"
-        type="default"
-        loading="{{cancelling}}"
-        bindtap="onCancelTap"
-      />
+    <!--
+      A2（AJ-416）：操作固定在底部（有可做的动作才出栏，vm hasActions）。
+      次要动作（取消订单，描边）在左、主要动作（继续支付 / 确认收货，实心）在右——右手拇指先够到的是主动作。
+    -->
+    <view class="ws-buybar" wx:if="{{view.hasActions}}">
+      <text class="ws-note state__error ws-buybar__note" wx:if="{{buyAgainNote}}">{{buyAgainNote}}</text>
+      <view class="ws-buybar__row">
+        <view class="ws-buybar__sum">
+          <text class="ws-note ws-buybar__label" wx:if="{{view.canPay && view.totalJpy !== null}}">应付</text>
+          <ws-price wx:if="{{view.canPay && view.totalJpy !== null}}" jpy="{{view.totalJpy}}" size="md" />
+        </view>
+        <view class="ws-buybar__btn" wx:if="{{view.canCancel}}">
+          <ws-button
+            text="{{cancelling ? '取消中…' : '取消订单'}}"
+            type="default"
+            block="{{true}}"
+            loading="{{cancelling}}"
+            bindtap="onCancelTap"
+          />
+        </view>
+        <view class="ws-buybar__btn" wx:if="{{view.canPay}}">
+          <ws-button text="继续支付" type="primary" block="{{true}}" bindtap="onPay" />
+        </view>
+        <!-- A7（AJ-416）：结束了的单（送达 / 完成 / 取消 / 超时 / 已退款）→ 同样的商品放回购物车 -->
+        <view class="ws-buybar__btn" wx:if="{{view.canBuyAgain}}">
+          <ws-button text="再次购买" type="primary" block="{{true}}" bindtap="onBuyAgain" />
+        </view>
+        <!-- P2-13（AJ-387）：确认收货；不点也会在发货 30 天后自动签收 -->
+        <view class="ws-buybar__btn" wx:if="{{view.canConfirmReceipt}}">
+          <ws-button
+            text="{{confirmingReceipt ? '提交中…' : '确认收货'}}"
+            type="primary"
+            block="{{true}}"
+            loading="{{confirmingReceipt}}"
+            bindtap="onConfirmReceiptTap"
+          />
+        </view>
+      </view>
     </view>
   </block>
 

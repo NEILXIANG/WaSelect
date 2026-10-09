@@ -10,7 +10,7 @@
 
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
-<view class="ws-page checkout">
+<view class="ws-page {{rows.length > 0 ? 'ws-page--with-buybar' : ''}} checkout">
   <!-- P2-38：错误态给"重新加载"（重取条款 / 地址 / 报价；不会重复下单——建单只由「提交订单」触发） -->
   <ws-state-block
     wx:if="{{error}}"
@@ -27,6 +27,12 @@
     <view class="ws-card">
       <text class="ws-section-kicker">Items</text>
       <view class="item" wx:for="{{rows}}" wx:key="productId">
+        <!-- A6（AJ-416）：缩略图（外层管宽度、里层管正方形，@see media-square.unit.test.ts） -->
+        <view class="item__thumb">
+          <view class="ws-media ws-media--square">
+            <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
+          </view>
+        </view>
         <text class="ws-body item__title">{{item.title}}</text>
         <text class="ws-note item__qty">× {{item.qty}}</text>
       </view>
@@ -50,7 +56,8 @@
         <text class="ws-body line">{{address.region}}</text>
       </block>
       <text class="ws-note line" wx:else>还没有地址，点这里新增</text>
-      <text class="ws-caption hint">点此切换地址</text>
+      <!-- 走查 2026-10-08：没有地址时上一行已经说"点这里新增"，再写"切换地址"是自相矛盾 -->
+      <text class="ws-caption hint" wx:if="{{address}}">点此切换地址</text>
     </view>
   </view>
 
@@ -119,7 +126,8 @@
         aria-checked="{{termsAccepted}}"
         aria-label="阅读并同意购买条款"
       >
-        <text class="ws-body">{{termsAccepted ? '✓ 已阅读并同意购买条款' : '阅读并同意购买条款'}}</text>
+        <!-- A5（AJ-416）：未勾选也画出框——原先未勾选只有一行字，看不出这是能点的勾选框 -->
+        <text class="ws-body">{{termsAccepted ? '☑ 我已阅读并同意购买条款' : '☐ 我已阅读并同意购买条款'}}</text>
       </view>
       <text class="ws-caption hint" wx:if="{{termsVersion}}">条款版本 {{termsVersion}}</text>
       <!--
@@ -141,14 +149,29 @@
     <text class="ws-note">{{stockRefundNote}}</text>
   </view>
 
-  <view class="ws-gutter ws-section cta">
-    <ws-button
-      text="{{submitting ? '提交中…' : '提交订单'}}"
-      type="primary"
-      disabled="{{!gate.ok || submitting}}"
-      loading="{{submitting}}"
-      bindtap="onSubmit"
-    />
-    <text class="ws-caption tip" wx:if="{{gate.reason}}">{{gate.reason}}</text>
+  <!--
+    A2（AJ-416）：合计 + 提交订单固定在底部——原先要滑过商品、地址、合计、邮箱、条款才看得到按钮。
+    禁用原因（gate.reason）放在栏的最上方一行，紧挨按钮（禁用不说为什么会被读成"这站坏了"）。
+    合计只用权威报价（quote.hasTotal），没出来时显示"—"。没有商品时不出栏（空态卡片里有"去逛逛"）。
+  -->
+  <view class="ws-buybar" wx:if="{{rows.length > 0}}">
+    <text class="ws-caption ws-buybar__note" wx:if="{{gate.reason}}">{{gate.reason}}</text>
+    <view class="ws-buybar__row">
+      <view class="ws-buybar__sum">
+        <text class="ws-note ws-buybar__label">应付</text>
+        <ws-price wx:if="{{quote && quote.hasTotal}}" jpy="{{quote.totalJpy}}" size="md" />
+        <text class="ws-note" wx:else>—</text>
+      </view>
+      <view class="ws-buybar__btn">
+        <ws-button
+          text="{{submitting ? '提交中…' : '提交订单'}}"
+          type="primary"
+          block="{{true}}"
+          disabled="{{!gate.ok || submitting}}"
+          loading="{{submitting}}"
+          bindtap="onSubmit"
+        />
+      </view>
+    </view>
   </view>
 </view>

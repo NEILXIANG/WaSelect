@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.53
+  version: 0.6.54
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,9 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.54（小程序评估 A8 / AJ-416：订单列表行带首件商品名——新增可选字段，老客户端忽略即可）：
+      `OrderListItem.first_title`：买家下单顺序第一行的**下单快照**标题（order_items.title_snapshot，与 `first_image` 同一首行排序）；
+      没有行项目 / 空串 → 整键省略。详情 `GET /orders/{id}` 不带（只加在列表行）。
     0.6.53（评估 4.5 / P2：管理端列表排序 + 运营日志日期范围——新增可选参数，老调用方不受影响）：
       ① `GET /admin/orders` / `/admin/products` / `/admin/customers` 新增 `sort`：`<键>` 升序、`-<键>` 降序；白名单
          orders = created_at / total_jpy，products = updated_at / stock / price_jpy，customers = last_order_at / paid_total_jpy
@@ -1105,7 +1108,7 @@ components:
       properties:
         anon_id: {type: string, pattern: '^an-[0-9A-HJKMNP-TV-Z]{20}$'}
         events: {type: array, minItems: 1, maxItems: 20, items: {$ref: '#/components/schemas/BeaconEvent'}}
-    OrderListItem: {description: '0.6.49（AJ-408）：买家 GET /orders 的列表行', allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, required: [item_count], properties: {item_count: {type: integer, minimum: 0, description: '各行 qty 之和（共 N 件），不是行数'}, first_image: {$ref: '#/components/schemas/ImageSet', description: '买家下单顺序第一行商品的现图第一张（同 Order.items[].image 的生成规则）；没有 → 整键省略'}}}]}
+    OrderListItem: {description: '0.6.49（AJ-408）：买家 GET /orders 的列表行', allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, required: [item_count], properties: {item_count: {type: integer, minimum: 0, description: '各行 qty 之和（共 N 件），不是行数'}, first_image: {$ref: '#/components/schemas/ImageSet', description: '买家下单顺序第一行商品的现图第一张（同 Order.items[].image 的生成规则）；没有 → 整键省略'}, first_title: {type: string, description: '0.6.54（AJ-416）：第一行的下单快照标题（不随商品改名变化）；没有 → 整键省略'}}}]}
     Order: {allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, properties: {contact_email: {type: string, format: email, description: '可选收货通知邮箱（D-42 补入）'}, terms_version: {type: string, description: '建单时写入的条款版本（只读，D-43）'}, items: {type: array, items: {$ref: '#/components/schemas/OrderItem'}}, address: {$ref: '#/components/schemas/Address'}, items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer, nullable: true, description: '0.6.30：null = 无法估算（与 Quote.duty_jpy 同口径；此前存 0）'}, expires_at: {type: string, format: date-time}, carrier: {type: string}, tracking_no: {type: string}, tracking_url: {type: string, description: '0.6.32：官方查件链接（日本邮便 S10 单号或承运商为日本邮便时生成，locale=en）；认不出 → 整键省略'}, timeline: {type: array, description: '0.6.10：只含订单状态值（OrderStatus 10 态）；管理事件只在 AdminOrder.events', items: {type: object, properties: {status: {type: string}, at: {type: string, format: date-time}}}}, payment: {type: object, properties: {channel: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer, description: '**最小货币单位**（JPY=円，USD=分）：$86.00 存 8600。展示层必须除以 10^小数位（B43 / AJ-214）'}, paid_amount: {type: integer}, paid_currency: {type: string}}}, late_paid: {type: boolean, description: '0.6.37（P2-11 / AJ-386）：关单后才到的付款（钱已扣）。买家侧据此说"已收到付款，会原路退回"，而不是"未完成付款，请重新下单"'}, partial_refunds: {type: array, description: '0.6.37（P2-12 / AJ-386）：买家视角的部分退款（按发起顺序；没有时为空数组）。AdminOrder 覆盖为带原因 / 操作人的 PartialRefund[]', items: {$ref: '#/components/schemas/BuyerPartialRefund'}}}}]}
     BuyerPartialRefund: {type: object, description: '0.6.37（P2-12）：买家可见的一笔部分退款。只出成功与处理中（initiated / pending / unknown 折成 pending；failed 不出现——钱没动）；**不含** reason / actor / provider_ref（内部信息）。status 不设 enum：AdminOrder 经 allOf 继承本字段，管理端行的 status 是五值', required: [status, currency, amount_minor, created_at], properties: {status: {type: string, description: 'succeeded | pending'}, currency: {type: string}, amount_minor: {type: integer, description: '支付币种最小单位'}, created_at: {type: string, format: date-time}, settled_at: {type: string, format: date-time}}}
     OrderItem: {type: object, description: '订单行项目（**交易视角**：买了什么、多少钱、几件）。⚠️ 采购信息（title_ja / jan_code / purchase_source）**刻意不在这里**——它是内部信息，只在 `AdminOrderItem` 下发；买家可见的响应里出现采购来源等于泄露供应链', properties: {product_id: {type: string}, title: {type: string}, qty: {type: integer}, unit_price_jpy: {type: integer}, image: {$ref: '#/components/schemas/ImageSet'}}}

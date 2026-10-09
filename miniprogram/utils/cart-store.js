@@ -24,6 +24,9 @@
  *              客户端不拦的表现是第 51 种照常加进来，到购物车页才撞 40001，提示还是"请稍后重试"——永远重试不好。
  *              ⚠️ 只拦**新增品种**；已存在的商品加数量照常（那受库存约束，归服务端）。
  *              ⚠️ 旧版本已攒下 >50 种的购物车**不截断**（截掉哪些都是替用户做决定），由购物车页说清"请移除一些"。
+ * @limitation 五：**勾选结算**（A3，AJ-416）：每条带 `selected`，报价 / 建单的 items（`toOrderItems`）只取勾选的；
+ *              角标（`count`）仍按全部件数——没勾的也还在车里。旧版本存下的条目没有这个字段，按**已勾选**读
+ *              （升级后购物车不会突然一件都没选、"去结算"变灰却不知为何）。
  * @limitation 三：持久化走 `storage` 封装（`ws:` 前缀、JSON、损坏兜底），
  *              **不直接碰宿主 storage**（storage-guard 会扫）。
  *
@@ -49,6 +52,7 @@ export const MAX_CART_LINES = 50;
  * @property {string} [title] 加购时的标题快照（@see @limitation 一）
  * @property {string} [image] 加购时的主图快照（可为占位图路径）
  * @property {number} [priceJpy] 加购时的日元价快照（**不许用它算合计**，见 @limitation 一）
+ * @property {boolean} [selected] 是否勾选去结算（A3，AJ-416；缺省 = 勾选）
  */
 
 /**
@@ -70,7 +74,8 @@ export function createCartStore(deps) {
   return {
     /** 读全部条目（**返回副本**：调用方改返回数组不该悄悄改到购物车）。 */
     items() {
-      return items.map((i) => ({ ...i }));
+      // 缺勾选字段 = 已勾选（@see @limitation 五）；统一在出口补齐，调用方只认布尔
+      return items.map((i) => ({ ...i, selected: i.selected !== false }));
     },
 
     /** 件数合计（角标用）。 */
@@ -98,6 +103,7 @@ export function createCartStore(deps) {
       const found = items.find((i) => i.productId === item.productId);
       if (found !== undefined) {
         found.qty += qty;
+        found.selected = true; // 再次加购 = 用户刚表示要它（A3）
       } else {
         if (items.length >= MAX_CART_LINES) return { added: false, reason: 'full' };
         items.push({
@@ -106,6 +112,7 @@ export function createCartStore(deps) {
           title: typeof item.title === 'string' ? item.title : '',
           image: typeof item.image === 'string' ? item.image : '',
           priceJpy: item.priceJpy,
+          selected: true,
         });
       }
       persist();
@@ -161,16 +168,46 @@ export function createCartStore(deps) {
           title: typeof item.title === 'string' ? item.title : '',
           image: typeof item.image === 'string' ? item.image : '',
           priceJpy: item.priceJpy,
+          selected: item.selected !== false,
         });
       }
       persist();
       return true;
     },
 
-    /** 清空（建单成功后调用）。 */
+    /** 清空。 */
     clear() {
       items = [];
       persist();
+    },
+
+    /**
+     * 移除一批商品（A3：建单成功后只移除买走的那几件，没勾的留在车里）。
+     * @param {string[]} productIds
+     */
+    removeMany(productIds) {
+      const gone = new Set(Array.isArray(productIds) ? productIds : []);
+      items = items.filter((i) => !gone.has(i.productId));
+      persist();
+    },
+
+    /** 勾选 / 取消勾选一件（不存在 = 空操作）。A3 */
+    setSelected(productId, selected) {
+      const found = items.find((i) => i.productId === productId);
+      if (found === undefined) return;
+      found.selected = selected === true;
+      persist();
+    },
+
+    /** 全选 / 全不选。A3 */
+    setAllSelected(selected) {
+      for (const i of items) i.selected = selected === true;
+      persist();
+    },
+
+    /** 勾选了几**种**商品（底栏"去结算 (N)"用）。A3 */
+    selectedCount() {
+      return items.filter((i) => i.selected !== false).length;
     },
 
     /**
@@ -197,9 +234,11 @@ export function createCartStore(deps) {
       return changed;
     },
 
-    /** 组装 quote / 建单的 items 形状（契约 OrderItemsInput）。 */
+    /** 组装 quote / 建单的 items 形状（契约 OrderItemsInput）——**只取勾选的**（A3，@see @limitation 五）。 */
     toOrderItems() {
-      return items.map((i) => ({ product_id: i.productId, qty: i.qty }));
+      return items
+        .filter((i) => i.selected !== false)
+        .map((i) => ({ product_id: i.productId, qty: i.qty }));
     },
   };
 }
@@ -222,6 +261,7 @@ function normalize(raw) {
       title: typeof i.title === 'string' ? i.title : '',
       image: typeof i.image === 'string' ? i.image : '',
       priceJpy: i.priceJpy,
+      selected: i.selected !== false,
     }));
   // 同一商品出现两行（旧版本写入 / 损坏）→ 合并、数量相加（审查 2026-10-09）：
   //   不合并的话 toOrderItems 带重复 product_id，报价永远 40001，购物车卡在"合计未能获取"，重试也没用

@@ -36,6 +36,7 @@ import {
   nextPage,
   productCards,
   searchKeyword,
+  emptyCopy,
 } from './index.vm.js';
 import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
@@ -557,5 +558,18 @@ describe('mergeCards：翻页去重（审查 2026-10-09）', () => {
     const b2 = { id: 'p2', name: 'dup' };
     const c = { id: 'p3' };
     expect(mergeCards([a, b] as never, [b2, c] as never, false)).toEqual([a, b, c]);
+  });
+});
+
+describe('emptyCopy：空态说清楚是"搜不到"还是"分类里没有"（小程序评估 A4，2026-10-09）', () => {
+  it('🔴 有搜索词 → 点名搜的词、指出口；没有 → 原分类空态文案', () => {
+    expect(emptyCopy('抹茶')).toEqual({
+      title: '没有找到「抹茶」相关的商品',
+      reason: '换个词试试，或点上方「清除搜索」看全部商品',
+    });
+    expect(emptyCopy('  ')).toEqual({
+      title: '这个分类下暂时没有商品',
+      reason: '换个分类看看',
+    });
   });
 });

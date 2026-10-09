@@ -50,6 +50,7 @@ describe('orderRows（列表行）', () => {
       createdText: '2026-09-27 09:00（日本时间）',
       thumb: PLACEHOLDER_IMAGE,
       itemCountText: '',
+      titleText: '', // A8（AJ-416，契约 0.6.54）：首件商品名
     });
   });
 
@@ -143,6 +144,14 @@ describe('M-11（AJ-408）：列表行的下单时间、缩略图、件数', () 
     expect(orderRows([{ order_id: 'x' }])[0]?.thumb).toBe(PLACEHOLDER_IMAGE);
     expect(orderRows([{ order_id: 'x', first_image: {} }])[0]?.thumb).toBe(PLACEHOLDER_IMAGE);
     expect(orderRows([{ order_id: 'x', first_image: 42 }])[0]?.thumb).toBe(PLACEHOLDER_IMAGE);
+  });
+
+  it('🔴 A8：行里有首件商品名（只看缩略图认不出买的是哪单）；缺失 / 脏值 → 空串不显示', () => {
+    expect(orderRows([{ order_id: 'x', first_title: '白色恋人 12 枚装' }])[0]?.titleText).toBe(
+      '白色恋人 12 枚装',
+    );
+    expect(orderRows([{ order_id: 'x' }])[0]?.titleText).toBe('');
+    expect(orderRows([{ order_id: 'x', first_title: 42 }])[0]?.titleText).toBe('');
   });
 
   it('件数："共 N 件"；缺失 / 0 / 非整数 → 不显示', () => {

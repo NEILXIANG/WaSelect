@@ -65,10 +65,14 @@
       </view>
       <!-- M-11（AJ-408）：首件缩略图 + 件数 + 下单时间（JST，带"日本时间"标注；vm 给）。没图时是占位图 -->
       <view class="order-card__body">
-        <view class="ws-media ws-media--square order-card__thumb">
-          <image class="ws-media__img" src="{{item.thumb}}" mode="aspectFill" lazy-load />
+        <view class="order-card__thumb">
+          <view class="ws-media ws-media--square">
+            <image class="ws-media__img" src="{{item.thumb}}" mode="aspectFill" lazy-load />
+          </view>
         </view>
         <view class="order-card__meta">
+          <!-- A8（AJ-416）：首件商品名（两行截断） -->
+          <text class="ws-body order-card__title" wx:if="{{item.titleText}}">{{item.titleText}}</text>
           <text class="ws-caption" wx:if="{{item.itemCountText}}">{{item.itemCountText}}</text>
           <text class="ws-caption" wx:if="{{item.createdText}}">下单 {{item.createdText}}</text>
         </view>

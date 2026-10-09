@@ -43,7 +43,7 @@ function thumbUrl(image) {
  * @param {unknown} items 契约 `OrderSummary[]`
  * @returns {Array<{orderId: string, orderNo: string, totalJpy: number|null, totalText: string,
  *                  totalSub: string, statusText: string, nextText: string, canPay: boolean,
- *                  createdText: string, thumb: string, itemCountText: string}>}
+ *                  createdText: string, thumb: string, itemCountText: string, titleText: string}>}
  * @why M-11（AJ-408）：行里补下单时间（找单靠它）、首件缩略图与件数（契约 0.6.49 `OrderListItem`）。
  *      时间走 `jstDateTimeLabeled`（纯整数换算，不读时钟；带"（日本时间）"，同详情页 MP3-02 口径），
  *      解析不了给空串——列表行不回落原串（详情页才是"数据不能丢"的地方，列表行宁缺不错）。
@@ -77,6 +77,8 @@ export function orderRows(items) {
         thumb: thumbUrl(o.first_image),
         itemCountText:
           Number.isInteger(o.item_count) && o.item_count > 0 ? `共 ${o.item_count} 件` : '',
+        // A8（AJ-416，契约 0.6.54）：首件商品名（下单快照）——只看缩略图分不清两张都是饼干的单
+        titleText: typeof o.first_title === 'string' ? o.first_title : '',
       };
     });
 }

@@ -39,6 +39,7 @@ import {
   mergeCards,
   nextPage,
   productCards,
+  emptyCopy,
 } from './index.vm.js';
 import { newTraceId } from '../../utils/trace.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
@@ -62,6 +63,14 @@ Page({
     cards: [],
     /** 搜索框内容（受控：只存值，触发请求在 `onSearch`）。 */
     keyword: '',
+    /** 当前列表是哪个搜索词的结果（空串 = 没在搜索；A4：页面上要看得出"现在在搜什么"）。 */
+    searching: '',
+    /** 空态文案（vm `emptyCopy`：搜不到 vs 分类里没有）。 */
+    emptyTitle: '这个分类下暂时没有商品',
+    emptyReason: '换个分类看看',
+    /** 加载**下一页**失败（A11）：只在页脚提示并给重试，不占整块错误、不清列表。 */
+    moreError: '',
+    moreErrorRef: '',
     /** 首屏加载中（触底加载是另一个标志，二者不共用——共用会让首屏转圈盖住已加载的列表）。 */
     loading: false,
     /** 触底加载中（wxml 用它在列表底部显示"加载中…"）。 */
@@ -231,6 +240,17 @@ Page({
     this.reload(this.category);
   },
 
+  /** 清除搜索（A4）：清空词、按当前分类重新取全部。 */
+  onClearSearch() {
+    this.setData({ keyword: '' });
+    this.reload(this.category);
+  },
+
+  /** 页脚"加载失败，点此重试"（A11）：只重拉下一页，不回第 1 页。 */
+  onMoreRetry() {
+    void this.loadMore();
+  },
+
   /**
    * 点商品卡 → 跳详情。
    * @param {WechatMiniprogram.TouchEvent} e `data-id` 来自 wxml
@@ -279,10 +299,16 @@ Page({
     // 上一代列表的"下一页"（若在途）从此过期：它的标志位由这里统一复位，
     // 过期请求自己的 finally **不再碰**标志位（否则会清掉新一代"下一页"的标志）。
     this.loadingMore = false;
+    const copy = emptyCopy(keyword);
     this.setData({
       loading: true,
       loadingMore: false,
       error: '',
+      moreError: '',
+      moreErrorRef: '',
+      searching: keyword.trim(),
+      emptyTitle: copy.title,
+      emptyReason: copy.reason,
       tabs: categoryTabs(this.homeCategories, category),
     });
     try {
@@ -334,8 +360,9 @@ Page({
       this.apply(res, { reset: false, page: next });
     } catch (e) {
       if (isStale(seq, this.seq)) return;
-      // 追加失败**不清列表**（已加载的商品还在），只提示；用户再触底会自然重试
-      this.setData({ ...errorFields(e) });
+      // 追加失败**不清列表**（已加载的商品还在），只在页脚提示并给"点此重试"（A11）：
+      //   原先写进整块的 `error`，点那块的"重试"会从第 1 页重来，用户翻到的位置就丢了
+      this.setData({ ...errorFields(e, 'moreError') });
     } finally {
       // ⚠️ 过期的"下一页"**两个标志都不碰**：reload 已经把它们复位了，
       //    而此刻实例标志可能属于新一代的"下一页"——清掉它会让同一页被发两次。
@@ -365,6 +392,8 @@ Page({
       // 取数成功 = 上一次"加载更多"的失败已经不成立，错误块要一起收掉（审查 2026-10-09）
       error: '',
       errorRef: '',
+      moreError: '',
+      moreErrorRef: '',
       empty: cards.length === 0,
       // `nextPage` 返回 null（没有更多）时置 false；total 缺失 / 非整数同样是 false
       hasMore: nextPage({ page, loaded, total: this.total }) !== null,

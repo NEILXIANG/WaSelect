@@ -20,6 +20,9 @@ let cart: ReturnType<typeof createCartStore>;
 let stock: number;
 let navs: string[];
 let fail: (Error & { code?: number }) | null;
+/** A10：同类推荐列表请求的地址（null = 没发）。 */
+let listUrl: string | null;
+let switches: string[];
 const call = (name: string, ...args: unknown[]): unknown =>
   (page[name] as (...a: unknown[]) => unknown)(...args);
 const settle = async (): Promise<void> => {
@@ -31,6 +34,8 @@ beforeEach(async () => {
   stock = 4;
   navs = [];
   fail = null;
+  listUrl = null;
+  switches = [];
   const disk = new Map<string, unknown>();
   cart = createCartStore({
     storage: {
@@ -41,13 +46,28 @@ beforeEach(async () => {
   cart.add(MATCHA);
   vi.stubGlobal('wx', {
     navigateTo: (o: { url: string }) => navs.push(o.url),
-    switchTab: () => undefined,
+    switchTab: (o: { url: string }) => switches.push(o.url),
   });
   page = await loadPage(new URL('./index.js', import.meta.url).href, {
     globalData: {
       apiBase: 'http://api.test',
       cart,
       api: async (req: { url: string }) => {
+        if (req.url.includes('/products?')) {
+          listUrl = req.url;
+          return {
+            items: [
+              { id: 'p-sakai-gyuto-210', title: '本品', price_jpy: 18_700, stock: 4, images: [] },
+              {
+                id: 'p-nambu-kyusu',
+                title: '南部铁器 急须',
+                price_jpy: 12_800,
+                stock: 2,
+                images: [],
+              },
+            ],
+          };
+        }
         if (!req.url.endsWith('/support') && fail !== null) throw fail;
         return req.url.endsWith('/support')
           ? {}
@@ -58,6 +78,7 @@ beforeEach(async () => {
               stock,
               images: [],
               description: '',
+              category: 'kitchen',
             };
       },
     },
@@ -126,5 +147,62 @@ describe('详情页加购与立即购买（审查 2026-10-09）', () => {
     call('onRetry');
     await settle();
     expect(page.data['retryable']).toBe(true);
+  });
+});
+
+describe('详情页选数量（A9，AJ-416）', () => {
+  it('🔴 选 2 件 → 加购加 2 件；立即购买的结算条目也是 2 件', () => {
+    call('onQtyPlus');
+    expect(page.data['qty']).toBe(2);
+    call('onAddToCart');
+    expect(cart.items().find((x) => x.productId === 'p-sakai-gyuto-210')?.qty).toBe(2);
+    call('onBuyNow');
+    const app = (
+      globalThis as unknown as { getApp: () => { globalData: { buyNow: { qty: number } } } }
+    ).getApp();
+    expect(app.globalData.buyNow.qty).toBe(2);
+    expect(navs).toHaveLength(1);
+  });
+
+  it('🔴 数量不超过库存（库存 4：点到 4 再点不涨）；减到 1 不再减', () => {
+    for (let i = 0; i < 6; i += 1) call('onQtyPlus');
+    expect(page.data['qty']).toBe(4);
+    for (let i = 0; i < 6; i += 1) call('onQtyMinus');
+    expect(page.data['qty']).toBe(1);
+  });
+
+  it('🔴 车里已有 3 件、这次要加 2 件、库存 4 → 不加，并说清楚"最多再加 1 件"', () => {
+    // 与 MATCHA 同写法（先成常量再传）：对象字面量直传时 typecheck 报 `image` 不在 CartItem 上——原因未查清（typedef 里明明有），先按既有写法规避
+    const GYUTO = {
+      productId: 'p-sakai-gyuto-210',
+      qty: 3,
+      title: '堺孝行 牛刀 210mm',
+      image: '',
+      priceJpy: 18_700,
+    };
+    cart.add(GYUTO);
+    call('onQtyPlus');
+    call('onAddToCart');
+    expect(cart.items().find((x) => x.productId === 'p-sakai-gyuto-210')?.qty).toBe(3);
+    expect(page.data['addNote']).toBe('库存只剩 4 件，购物车里已有 3 件，最多再加 1 件');
+  });
+});
+
+describe('详情页同类推荐 / 下架去首页（A10，AJ-416）', () => {
+  it('🔴 详情到了之后按分类取同类，排除本品；点推荐 → 进那件的详情', () => {
+    expect(listUrl).toContain('/api/v1/products?category=kitchen');
+    expect((page.data['related'] as Array<{ id: string }>).map((r) => r.id)).toEqual([
+      'p-nambu-kyusu',
+    ]);
+    call('onOpenRelated', { currentTarget: { dataset: { id: 'p-nambu-kyusu' } } });
+    expect(navs.at(-1)).toBe('/pages/detail/index?id=p-nambu-kyusu');
+  });
+
+  it('🔴 已下架（40401，不给重试）→ 错误态的按钮是"去首页逛逛"，点了回首页', async () => {
+    fail = Object.assign(new Error('商品不存在或已下架'), { code: 40401 });
+    call('onLoad', { id: 'p-sakai-gyuto-210' });
+    await settle();
+    call('onStateAction');
+    expect(switches).toEqual(['/pages/home/index']);
   });
 });

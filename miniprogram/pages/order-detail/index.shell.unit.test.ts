@@ -25,6 +25,12 @@ let calls: string[];
 let fail: boolean;
 let clipFail: boolean;
 let hold: ReturnType<typeof deferred<unknown>> | null;
+/** A7：每次打开详情返回的订单（默认 ORDER）。 */
+let order: Record<string, unknown>;
+/** A7：再次购买时加进购物车的条目；`full` 为 true 时购物车拒收新品种。 */
+let added: unknown[];
+let full: boolean;
+let nav: string[];
 
 const call = <T>(name: string, ...args: unknown[]): T =>
   (page[name] as (...a: unknown[]) => T)(...args);
@@ -42,7 +48,14 @@ async function open(id = 'o-1'): Promise<void> {
         if (path.endsWith('/support')) return { wechat: 'waselect_cs' };
         if (hold !== null) return hold.promise;
         if (fail) throw Object.assign(new Error('网络请求失败'), { code: -1 });
-        return ORDER;
+        return order;
+      },
+      cart: {
+        add: (item: unknown) => {
+          if (full) return { added: false, reason: 'full' };
+          added.push(item);
+          return { added: true };
+        },
       },
     },
   });
@@ -58,6 +71,10 @@ beforeEach(() => {
   fail = false;
   clipFail = false;
   hold = null;
+  order = ORDER;
+  added = [];
+  full = false;
+  nav = [];
   vi.stubGlobal('wx', {
     stopPullDownRefresh: () => calls.push('stop'),
     setClipboardData: (o: { data: string; success?: () => void; fail?: () => void }) => {
@@ -65,7 +82,8 @@ beforeEach(() => {
       if (clipFail) o.fail?.();
       else o.success?.();
     },
-    navigateTo: () => undefined,
+    navigateTo: (o: { url: string }) => nav.push(o.url),
+    switchTab: (o: { url: string }) => nav.push(o.url),
     showModal: () => undefined,
   });
 });
@@ -139,5 +157,43 @@ describe('订单详情：复制订单号（M-05）', () => {
     expect(page.data['support']).toEqual([
       { key: 'wechat', label: '客服微信', value: 'waselect_cs', copyable: true },
     ]);
+  });
+});
+
+describe('订单详情：再次购买 / 商品可点（A7，AJ-416）', () => {
+  const DONE = {
+    ...ORDER,
+    status: 'completed',
+    items: [
+      { product_id: 'p-1', title: '白色恋人 12 枚装', qty: 2, unit_price_jpy: 2160 },
+      { product_id: 'p-2', title: '南部铁器 急须', qty: 1, unit_price_jpy: 12800 },
+    ],
+  };
+
+  it('🔴 再次购买：原样的商品与数量放回购物车，然后去购物车（tab 页用 switchTab）', async () => {
+    order = DONE;
+    await open();
+    call('onBuyAgain');
+    expect(added).toMatchObject([
+      { productId: 'p-1', qty: 2 },
+      { productId: 'p-2', qty: 1 },
+    ]);
+    expect(nav).toEqual(['/pages/cart/index']);
+  });
+
+  it('🔴 购物车品种已满放不进去 → 留在本页说清楚，不假装成功地跳走', async () => {
+    order = DONE;
+    full = true;
+    await open();
+    call('onBuyAgain');
+    expect(nav).toEqual([]);
+    expect(page.data['buyAgainNote']).toContain('购物车');
+  });
+
+  it('🔴 点商品行 → 进商品详情（看看现在还卖不卖、什么价）', async () => {
+    order = DONE;
+    await open();
+    call('onOpenItem', { currentTarget: { dataset: { id: 'p-2' } } });
+    expect(nav).toEqual(['/pages/detail/index?id=p-2']);
   });
 });

@@ -26,7 +26,13 @@
  * @see ../../waselect-design/styles/tokens.wxss（S1 迁移源：①的唯一真源在那边，改色请去那里改）
  */
 
-page {
+/*
+ * ⚠️ token 同时挂在 `.ws-tabbar` 上（三端联动走查 2026-10-08，AJ-416）：自定义 tabBar **不在 page 节点之下**，
+ *    继承不到 page 上的变量——模拟器实测 tabBar 背景、顶线、文字色与字号全部失效，透明地压在商品卡片上。
+ *    页面级的非变量属性（底色 / 字体）在下面单独的 `page {}` 里，不会被套到 tabBar 上。
+ */
+page,
+.ws-tabbar {
   /* ══ ① 设计体系 token（S1 迁入，真实定义）═══════════════════════════════
      ⚠️ 这一段是**从设计原型原样迁入**的，修改请回原型仓改，否则两边会漂移。 */
 
@@ -136,7 +142,7 @@ page {
   /* ── 字阶：编辑层级 ────────────────────────────────────────────
      @why 八档。骨架版只有三档（24/28/36），撑不出"标题/引言/正文/注释"的杂志层级——
           而"渐进式阅读"正是本设计的核心手法（PDP 四层）。 */
-  --ws-f-caption: 20rpx; /* 图注、角标 */
+  --ws-f-caption: 22rpx; /* 图注、角标、提示语。AJ-416：20→22（约 11pt，提示语要读得清；原型仓 tokens.wxss 待同步） */
   --ws-f-xs: 22rpx; /* 辅助说明 */
   --ws-f-sm: 24rpx; /* 次级正文、标签 */
   --ws-f-base: 28rpx; /* 正文 */
@@ -202,7 +208,9 @@ page {
   /* 无对应（原型体系里线宽恒为 1rpx，只有线的**颜色**是 token）⇒ 保留字面量。
      ⚠️ 本文件是唯一被允许写字面量的样式文件（design-token.unit.test.ts 豁免）。 */
   --ws-border-width: 1rpx;
+}
 
+page {
   background: var(--ws-canvas);
   color: var(--ws-ink);
   font-family: var(--ws-font-sans);
@@ -288,6 +296,67 @@ page {
 /* M-13：带底部固定购买栏的非 tab 页（详情页）。与 tabBar 页同一算法：栏高 + 呼吸 + 安全区。 */
 .ws-page--with-buybar {
   padding-bottom: calc(var(--ws-buybar-h) + 40rpx + env(safe-area-inset-bottom));
+}
+
+/* A2（AJ-416）：tab 页（购物车）上再叠一条底栏——留白 = tabBar + 底栏 + 呼吸 + 安全区。 */
+.ws-page--with-tabbar-buybar {
+  padding-bottom: calc(
+    var(--ws-tabbar-h) + var(--ws-buybar-h) + 40rpx + env(safe-area-inset-bottom)
+  );
+}
+
+/**
+ * 底部固定操作栏（A2，AJ-416）：购物车 / 结算 / 订单详情共用"左边合计、右边主按钮"。
+ *
+ * @why 收成全局类而不是每页一份：三页的栏高、阴影、安全区必须一致，且栏高与页面留白
+ *      共用 `--ws-buybar-h`（改一处两边一起变）。详情页的 `.buy-bar` 是同一形态的先例（M-13）。
+ * @limitation 栏上方那行提示（`__note`）会把栏撑高约一行，页面留白里的 40rpx 呼吸量只够一行；
+ *             提示写成两行会挡住最后一点内容——提示文案保持一句话。
+ */
+.ws-buybar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0 var(--ws-space-gutter) env(safe-area-inset-bottom);
+  background: var(--ws-surface);
+  border-top: var(--ws-border-width) solid var(--ws-line);
+  box-shadow: var(--ws-shadow-float);
+  z-index: 900;
+}
+
+/* 垫在自定义 tabBar 上方（tabBar 自己吃掉了安全区，这里不再重复加） */
+.ws-buybar--over-tabbar {
+  bottom: calc(var(--ws-tabbar-h) + env(safe-area-inset-bottom));
+  padding-bottom: 0;
+}
+
+.ws-buybar__note {
+  display: block;
+  padding-top: var(--ws-space-hair);
+}
+
+.ws-buybar__row {
+  display: flex;
+  align-items: center;
+  min-height: var(--ws-buybar-h);
+}
+
+.ws-buybar__sum {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+}
+
+.ws-buybar__label {
+  margin-right: var(--ws-space-hair);
+}
+
+.ws-buybar__btn {
+  flex: none;
+  min-width: var(--ws-btn-min);
+  margin-left: var(--ws-space-hair);
 }
 
 .ws-gutter {
@@ -566,6 +635,16 @@ page {
   background: var(--ws-surface-sunk);
   border-radius: var(--ws-radius-sm);
   animation: ws-shimmer 1.4s var(--ws-ease) infinite;
+}
+
+/* 骨架里的一行字（AJ-416）：高度 = 正文字号，短行 = 六成宽（像标题 + 价格的长短差） */
+.skel-line {
+  height: var(--ws-f-lg);
+  margin-top: var(--ws-space-inline);
+}
+
+.skel-line--short {
+  width: 60%;
 }
 
 @keyframes ws-shimmer {

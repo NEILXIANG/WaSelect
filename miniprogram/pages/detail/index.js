@@ -31,6 +31,8 @@ import {
   addLimit,
   retryableLoadError,
   stillAdded,
+  stepQty,
+  relatedCards,
 } from './index.vm.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -49,6 +51,11 @@ const wxApi = createWxApi();
  *      表现是"点了没反应"，日志里只有一行宿主文案）。
  */
 const CART_PAGE = '/pages/cart/index';
+/** A10：同类推荐点进去 / 下架时回首页。 */
+const DETAIL_PAGE = '/pages/detail/index';
+const HOME_PAGE = '/pages/home/index';
+/** 同类推荐多取几件，排掉本品与售罄后仍够 4 件（vm RELATED_MAX）。 */
+const RELATED_FETCH_SIZE = 10;
 /** 结算页（立即购买带 mode=buynow，剩余清单 4-4）。 */
 const CHECKOUT_BUY_NOW = '/pages/checkout/index?mode=buynow';
 
@@ -57,6 +64,10 @@ Page({
     /** vm `detailView` 的输出；null = 还没拿到数据（wxml 显示加载态）。 */
     product: null,
     loading: false,
+    /** A9（AJ-416）：这次要加 / 要买几件（vm `stepQty`）。 */
+    qty: 1,
+    /** A10（AJ-416）：同类推荐（vm `relatedCards`）；空数组 = 不显示那一块。 */
+    related: [],
     /** 错误文案（空串 = 无错误）。缺 id / 40401（下架或不存在）都会落到这里。 */
     error: '',
     /** true = 本次加购已成功（页内提示，不弹 toast——又一个宿主 API 不值得登记）。 */
@@ -142,8 +153,10 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/products/${this.productId}`,
         traceId: this.traceId,
       });
-      this.setData({ product: detailView(res) });
+      const view = detailView(res);
+      this.setData({ product: view });
       this.renderBar();
+      void this.loadRelated(view.category);
     } catch (e) {
       this.setData({ product: null, ...errorFields(e), retryable: retryableLoadError(e) });
     } finally {
@@ -152,7 +165,42 @@ Page({
   },
 
   /**
-   * 加入购物车（qty=1；改数量在购物车页做）。
+   * 同类推荐（A10，AJ-416）：详情到了之后按分类取一页，排掉本品与售罄的。
+   * @why 不阻塞详情：推荐是"顺便看看"，晚到或取不到都不该让商品本身慢一拍，所以不 await、不进 loading。
+   * @why 取不到就**不显示那一块**、不报错：推荐区出一句"加载失败"会让人以为是这件商品出了问题。
+   * @limitation 只按分类，不做"买了还买"之类的关联（没有足够的订单数据，见 AJ-416）。
+   */
+  async loadRelated(category) {
+    if (typeof category !== 'string' || category === '') return;
+    try {
+      const res = await app.globalData.api({
+        url: `${app.globalData.apiBase}/api/v1/products?category=${encodeURIComponent(category)}&size=${RELATED_FETCH_SIZE}`,
+        traceId: this.traceId,
+      });
+      this.setData({ related: relatedCards(res?.items, this.productId) });
+    } catch {
+      this.setData({ related: [] });
+    }
+  },
+
+  /** 点同类推荐 → 那件的详情（A10）。 */
+  onOpenRelated(e) {
+    const id = e?.currentTarget?.dataset?.id;
+    if (typeof id !== 'string' || id === '') return;
+    wxApi.navigateTo({ url: `${DETAIL_PAGE}?id=${encodeURIComponent(id)}` });
+  },
+
+  /**
+   * 错误态按钮（A10）：能重试的给"重试"；已下架 / 不存在（重试无用）给"去首页逛逛"——
+   * 原先只剩一句红字和返回键，从分享卡片进来的人连返回都没有地方回。
+   */
+  onStateAction() {
+    if (this.data.retryable) this.onRetry();
+    else wxApi.switchTab({ url: HOME_PAGE });
+  },
+
+  /**
+   * 加入购物车（数量取页面选的 qty，A9；购物车页还能再改）。
    * @why 快照信息（title/image/priceJpy）由这里备好交给 cart-store：
    *      购物车是**本地**状态，离线也要能看到加过什么；而快照价**不许**用来算钱
    *      （cart-store.js @limitation 一）。
@@ -165,14 +213,16 @@ Page({
     const now = Date.now();
     if (!acceptAddTap(this.lastAddAt, now)) return;
     this.lastAddAt = now;
-    const limit = addLimit({ stock: p.stock, inCart: this.inCartQty() });
+    const qty = this.data.qty;
+    const inCart = this.inCartQty();
+    const limit = addLimit({ stock: p.stock, inCart, qty });
     if (!limit.ok) {
-      this.setData(addFeedback({ added: false, reason: limit.reason, stock: limit.stock }));
+      this.setData(addFeedback({ added: false, reason: limit.reason, stock: limit.stock, inCart }));
       return;
     }
     const result = app.globalData.cart.add({
       productId: this.productId,
-      qty: 1,
+      qty,
       title: p.title,
       image: p.images[0] ?? '',
       priceJpy: p.priceJpy,
@@ -203,8 +253,17 @@ Page({
   },
 
   /** 立即购买（剩余清单 4-4）：只结这一件，不进购物车。 */
+  /** A9（AJ-416）：数量步进（1 起步，不超过库存；加购与立即购买都用它）。 */
+  onQtyMinus() {
+    this.setData({ qty: stepQty(this.data.qty, -1, this.data.product?.stock ?? null) });
+  },
+
+  onQtyPlus() {
+    this.setData({ qty: stepQty(this.data.qty, 1, this.data.product?.stock ?? null) });
+  },
+
   onBuyNow() {
-    const item = buyNowItem(this.data.product, this.productId);
+    const item = buyNowItem(this.data.product, this.productId, this.data.qty);
     if (item === null) return;
     // 连点守卫（审查 2026-10-09）：navigateTo 是异步的，双击会压入两个结算页、埋点也记两次
     const now = Date.now();

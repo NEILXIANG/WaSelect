@@ -33,6 +33,34 @@
   -webkit-box-orient: vertical;
 }
 
+/* A3（AJ-416）：勾选框。触控区 ≥ --ws-touch-min；勾上用正文墨色，未勾用浅墨（不引入新颜色） */
+.pick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: var(--ws-touch-min);
+  min-height: var(--ws-touch-min);
+}
+
+.pick--all {
+  justify-content: flex-start;
+  margin-right: var(--ws-space-inline);
+}
+
+.pick__box {
+  color: var(--ws-ink-mute);
+  font-size: var(--ws-f-lg);
+}
+
+.pick__box--on {
+  color: var(--ws-ink);
+}
+
+.pick__label {
+  margin-left: var(--ws-space-hair);
+}
+
 /* 数量步进：不用 flex gap（基础库支持不一致），靠 margin 拉间距 */
 .qty {
   display: flex;
@@ -106,17 +134,6 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-}
-
-/* 底部动作区 */
-.cart__cta {
-  padding-bottom: var(--ws-space-section);
-}
-
-.checkout-hint {
-  display: block;
-  margin-top: var(--ws-space-inline);
-  text-align: center;
 }
 
 /* 空态 / 在途 / 错误 */

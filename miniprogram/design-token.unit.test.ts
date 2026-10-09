@@ -156,4 +156,30 @@ describe('token 定义处的 hygiene', () => {
   it('app.wxss 存在（packOptions 没有把它排除掉）', () => {
     expect(statSync(join(root, TOKEN_FILE)).isFile()).toBe(true);
   });
+
+  /**
+   * 🔴 最小字号不低于 22rpx（约 11pt；小程序评估 B，AJ-416）。
+   * @why `--ws-f-caption` 承载的是"按钮为什么灰了""时间是日本时间""点运单号复制"这类**要读懂才能操作**的话，
+   *      20rpx（约 10pt）在 375pt 宽的手机上需要凑近看。字号再往下就是装饰，不再是信息。
+   */
+  it('🔴 --ws-f-caption ≥ 22rpx（提示语要读得清）', () => {
+    const css = readFileSync(join(root, TOKEN_FILE), 'utf8');
+    const v = Number(/--ws-f-caption:\s*(\d+)rpx/.exec(css)?.[1] ?? 0);
+    expect(v).toBeGreaterThanOrEqual(22);
+  });
+
+  /**
+   * 🔴 token 也要定义在自定义 tabBar 的根节点上，不能只挂在 `page`。
+   * @why 2026-10-08 开发者工具模拟器实测：custom-tab-bar **不在 page 节点之下**，继承不到 `page` 上的
+   *      CSS 变量——tabBar 的背景、顶线、文字色与字号全部失效，透明地压在商品卡片上（三端联动走查发现）。
+   *      页面里的组件都在 page 之下，不受影响；只有 tabBar 这一个"页面外"的节点要单独接上。
+   */
+  it('🔴 token 块的选择器同时覆盖 page 与 .ws-tabbar（自定义 tabBar 在 page 之外）', () => {
+    const css = readFileSync(join(root, TOKEN_FILE), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    // 定义 `--ws-canvas:` 的那个块就是 token 块
+    const head = /([^{}]*)\{[^{}]*--ws-canvas\s*:/.exec(css)?.[1] ?? '';
+    const selectors = head.split(',').map((s) => s.trim());
+    expect(selectors).toContain('page');
+    expect(selectors).toContain('.ws-tabbar');
+  });
 });

@@ -153,6 +153,15 @@ export function normalizeUsPhone(raw) {
 }
 
 /**
+ * 电话框的显示值（小程序评估 A12，2026-10-09）：电话框改用数字键盘后打不出 `+`，
+ * 编辑已有地址时把存着的 `+1…` 去掉开头的 `+` 再放进框里；提交 / 校验时 `normalizeUsPhone` 会还原成 `+1…`。
+ * @param {unknown} phone
+ */
+export function phoneForInput(phone) {
+  return typeof phone === 'string' ? phone.replace(/^\+/, '') : '';
+}
+
+/**
  * 校验表单。
  * @param {unknown} model
  * @returns {{ok: boolean, errors: Record<string, string>, first: string}}

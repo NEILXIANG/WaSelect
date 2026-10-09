@@ -110,7 +110,8 @@ function closedTextFor(status, latePaid) {
     return `该订单${label}，未完成付款；如需购买请重新下单`;
   }
   // 其余（paid / shipped / delivered / completed）：钱已经付了，这句才成立
-  return `该订单${label}，无需再支付`;
+  // 小程序评估 A1（2026-10-09）：先说结果（付成了），再说不用再付——原先只有否定式的一句
+  return `付款已完成，该订单${label}，无需再支付`;
 }
 
 export function payPageView(order, nowMs) {

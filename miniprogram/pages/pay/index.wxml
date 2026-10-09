@@ -152,6 +152,13 @@
 
   <!-- 订单列表随时可去：支付完成的真值在那里（服务端回调落库），不在本页 -->
   <view class="ws-gutter ws-section cta">
+    <!-- A1（2026-10-09）：去浏览器付款后的手动出口；只在短链屏出现（那是唯一会"付了但这里还不知道"的路径） -->
+    <ws-button
+      wx:if="{{payUrl && !closedText}}"
+      text="我已付款，刷新状态"
+      type="default"
+      bindtap="onRefreshPaid"
+    />
     <ws-button text="查看订单" type="primary" bindtap="onViewOrders" />
   </view>
 </view>

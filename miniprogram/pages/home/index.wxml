@@ -50,6 +50,11 @@
     -->
     <ws-button class="home__go" text="搜索" type="primary" bindtap="onSearch" />
   </view>
+  <!-- A4（2026-10-09）：列表是搜索结果时说出来，并给"清除搜索"——否则切分类后看不出词还在生效 -->
+  <view class="ws-gutter home__searching" wx:if="{{searching}}">
+    <text class="ws-caption">搜索「{{searching}}」的结果</text>
+    <view class="ws-caption home__clear" hover-class="ws-press" bindtap="onClearSearch">清除搜索</view>
+  </view>
 
   <!-- ── 轮播（D-51）：`GET /home` 下发的生效中 banner ──────────────────
        @why 整段 `wx:if` 而不是留一个空壳：没有 banner 时（没配 / 都没生效 / 取不到）
@@ -88,13 +93,15 @@
     </view>
   </scroll-view>
 
-  <!-- 首屏加载：只有"列表还是空的 + 在加载"时才整屏占位，追加时不打扰已加载的内容 -->
-  <ws-state-block
-    wx:if="{{loading && cards.length === 0}}"
-    kind="loading"
-    title="正在挑选"
-    compact="{{true}}"
-  />
+  <!-- 首屏加载：只有"列表还是空的 + 在加载"时才整屏占位，追加时不打扰已加载的内容。
+       小程序评估 B（AJ-416）：占位换成骨架——按大卡的真实版式（图位 + 两行字）占位，内容出来时不跳版式 -->
+  <view class="ws-gutter home__list" wx:if="{{loading && cards.length === 0}}" aria-label="正在加载商品">
+    <view class="ws-card home__skel" wx:for="{{[0, 1]}}" wx:key="*this">
+      <view class="ws-media ws-media--scene ws-skeleton" />
+      <view class="ws-skeleton skel-line" />
+      <view class="ws-skeleton skel-line skel-line--short" />
+    </view>
+  </view>
 
   <!-- 商品流：S4 起是**纵向编辑大卡**（图 → 匠人 → 名 → why → 价），不再是两列网格。
        @why 两列网格是卖场形态："先看图、再看价"；而本品牌的判断是
@@ -132,13 +139,20 @@
   <ws-state-block
     wx:elif="{{empty}}"
     kind="empty"
-    title="这个分类下暂时没有商品"
-    reason="换个分类看看，或者清空搜索词"
+    title="{{emptyTitle}}"
+    reason="{{emptyReason}}"
     compact="{{true}}"
   />
 
   <view class="footer" wx:if="{{cards.length > 0}}">
     <text class="ws-caption" wx:if="{{loadingMore}}">加载中…</text>
+    <view
+      class="ws-caption home__more-retry"
+      wx:elif="{{moreError}}"
+      hover-class="ws-press"
+      bindtap="onMoreRetry"
+      >加载失败，点此重试</view
+    >
     <text class="ws-caption" wx:elif="{{hasMore}}">上拉加载更多</text>
     <text class="ws-caption" wx:else>没有更多了</text>
   </view>

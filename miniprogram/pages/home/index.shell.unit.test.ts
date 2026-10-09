@@ -189,7 +189,9 @@ describe('首页薄壳：响应先后（R-04 / AJ-226）', () => {
     calls[1]!.d.reject(new Error('boom'));
     await settle();
     expect(ids()).toHaveLength(20);
-    expect(page.data['error']).not.toBe('');
+    // A11（2026-10-09）：错误改记在页脚 moreError（同样"给出错误"，只是不再占整块错误区）
+    expect(page.data['moreError']).not.toBe('');
+    expect(page.data['error']).toBe('');
     expect(page.data['loadingMore']).toBe(false);
     call('onReachBottom');
     expect(calls).toHaveLength(3);
@@ -334,15 +336,17 @@ describe('轮播点击的下标必须来自「可见 banner」列表（防复发
 });
 
 describe('首页薄壳：加载更多（审查 2026-10-09）', () => {
-  it('🔴 第 2 页失败后再触底成功 → 错误块消失', async () => {
+  it('🔴 第 2 页失败后再触底成功 → 页脚的失败提示消失', async () => {
     await enter();
     call('onReachBottom');
     calls[1]!.d.reject(Object.assign(new Error('timeout'), { code: -1 }));
     await settle();
-    expect(page.data['error']).not.toBe('');
+    // A11（同日稍后）：下一页失败改记在页脚 `moreError`，不再占用整块的 `error`
+    expect(page.data['moreError']).not.toBe('');
     call('onReachBottom');
     calls[2]!.d.resolve(listOf('all', 2, 60));
     await settle();
+    expect(page.data['moreError']).toBe('');
     expect(page.data['error']).toBe('');
     expect(ids()).toHaveLength(40);
   });
@@ -358,5 +362,36 @@ describe('首页薄壳：加载更多（审查 2026-10-09）', () => {
     expect(new Set(list).size).toBe(list.length);
     expect(list).toHaveLength(39);
     expect(page.data['hasMore']).toBe(true); // 服务端已给 40 条（偏移 40）< 41
+  });
+});
+
+describe('首页：搜索状态与加载更多失败（小程序评估 A4 / A11，2026-10-09）', () => {
+  it('🔴 搜索后显示"搜索「xx」的结果"；点「清除搜索」→ 词清空、按全部重新取', async () => {
+    await enter();
+    call('onSearchInput', { detail: { value: '抹茶' } });
+    call('onSearch');
+    expect(page.data['searching']).toBe('抹茶');
+    calls.at(-1)!.d.resolve(listOf('kw', 1, 20));
+    await settle();
+    call('onClearSearch');
+    expect(page.data['keyword']).toBe('');
+    expect(page.data['searching']).toBe('');
+    expect(calls.at(-1)!.data.keyword ?? '').toBe('');
+  });
+
+  it('🔴 加载下一页失败 → 不出整块错误、列表保留；页脚"加载失败，点此重试"只重拉这一页', async () => {
+    await enter();
+    call('onReachBottom');
+    calls[1]!.d.reject(Object.assign(new Error('timeout'), { code: -1 }));
+    await settle();
+    expect(page.data['error']).toBe('');
+    expect(page.data['moreError']).not.toBe('');
+    expect(ids()).toHaveLength(20);
+    call('onMoreRetry');
+    expect(calls.at(-1)!.data.page).toBe(2);
+    calls.at(-1)!.d.resolve(listOf('all', 2));
+    await settle();
+    expect(page.data['moreError']).toBe('');
+    expect(ids()).toHaveLength(40);
   });
 });

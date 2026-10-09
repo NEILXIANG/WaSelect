@@ -32,6 +32,8 @@ let navigations: string[];
 let badges: unknown[];
 /** 非空 = 报价请求挂在这个 Promise 上（编排"报价在途时删光"）。 */
 let quoteHold: Promise<void> | null;
+/** 每次报价的请求体（A3：只报勾选的）。 */
+let quoteBodies: unknown[];
 
 const call = (name: string, ...args: unknown[]): unknown =>
   (page[name] as (...a: unknown[]) => unknown)(...args);
@@ -55,6 +57,7 @@ beforeEach(async () => {
   navigations = [];
   badges = [];
   quoteHold = null;
+  quoteBodies = [];
   const disk = new Map<string, unknown>();
   cart = createCartStore({
     storage: {
@@ -72,8 +75,9 @@ beforeEach(async () => {
     globalData: {
       apiBase: 'http://api.test',
       cart,
-      api: async () => {
+      api: async (req: { data?: unknown }) => {
         quoteCalls += 1;
+        quoteBodies.push(req.data);
         if (quoteHold !== null) await quoteHold;
         if (quoteFail !== null) throw quoteFail;
         return { items_jpy: 41_000, shipping_jpy: 1_150, total_jpy: 42_150, split_hint: false };
@@ -192,5 +196,35 @@ describe('报价在途 / 防抖窗口（审查 2026-10-09）', () => {
     release();
     await settle();
     expect(page.data['quoting']).toBe(false);
+  });
+});
+
+describe('勾选结算（A3，AJ-416）', () => {
+  it('🔴 取消勾选一件 → 只拿勾着的去报价；底栏写"去结算 (1)"、全选框不再是勾上', async () => {
+    call('onToggleSelect', tapId(KNIFE.productId));
+    await quoted();
+    expect(quoteBodies.at(-1)).toEqual({ items: [{ product_id: OIL.productId, qty: 1 }] });
+    expect(page.data['bar']).toEqual({
+      allSelected: false,
+      selectedCount: 1,
+      ctaText: '去结算 (1)',
+    });
+    expect((page.data['rows'] as Array<{ selected: boolean }>).map((r) => r.selected)).toEqual([
+      true,
+      false,
+    ]);
+  });
+
+  it('🔴 全不选 → 不报价（空 items 会 40001）、合计清掉、去结算不可点并说"请勾选"；再全选 → 恢复报价', async () => {
+    const before = quoteCalls;
+    call('onToggleAll'); // 当前全选 → 全不选
+    await quoted();
+    expect(quoteCalls).toBe(before);
+    expect(page.data['quote']).toBeNull();
+    expect(page.data['gate']).toEqual({ disabled: true, hint: '请勾选要结算的商品' });
+    call('onToggleAll'); // 全选
+    await quoted();
+    expect(quoteCalls).toBe(before + 1);
+    expect((page.data['gate'] as { disabled: boolean }).disabled).toBe(false);
   });
 });

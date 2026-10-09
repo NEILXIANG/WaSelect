@@ -444,6 +444,11 @@ export interface OwnedOrderListRow extends OrderListRow {
   item_count: number;
   /** 第一行（line_no 最小）商品的 `products.images`（已 JSON.parse）；没有行项目 → null。 */
   first_images: unknown;
+  /**
+   * 第一行的**下单快照**标题（`order_items.title_snapshot`，A8 / AJ-416，契约 0.6.54）；没有行项目 → null。
+   * @why 快照而不是商品现名：列表是"我买过什么"，店家改名后列表还得认得出当时买的那件（与详情行项目同口径）。
+   */
+  first_title: string | null;
 }
 
 /**
@@ -478,7 +483,11 @@ export async function listOwnedOrders(
            (select p.images from order_items oi join products p on p.id = oi.product_id
              where oi.order_id = o.id
              order by oi.line_no nulls last, oi.id
-             limit 1) as first_images
+             limit 1) as first_images,
+           (select oi.title_snapshot from order_items oi
+             where oi.order_id = o.id
+             order by oi.line_no nulls last, oi.id
+             limit 1) as first_title
       from orders o
      where o.user_id = ${userId}
        and ${statuses === undefined ? db`true` : db`o.status in ${db([...statuses])}`}
@@ -493,6 +502,7 @@ export async function listOwnedOrders(
     created_at: r.created_at as Date,
     item_count: Number(r.item_count),
     first_images: r.first_images === null ? null : jsonbValue(r.first_images),
+    first_title: typeof r.first_title === 'string' ? r.first_title : null,
   }));
 }
 

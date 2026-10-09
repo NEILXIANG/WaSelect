@@ -70,15 +70,22 @@ Component({
   // ⚠️ `attached` 与 `observers` 都要调：
   //    `observers` 只在**属性变化**时触发，若页面一次都没传（初始值缺失），
   //    只剩 `attached` 能让它响亮失败——那正是 @limitation 一 要的行为。
+  //
+  // ⚠️ 挂上页面之前不让 observers 校验（三端联动走查 2026-10-08）：本组件嵌在别的组件里时
+  //    （ws-pick-card），外层组件**先用自己的默认值**（priceJpy = null）实例化模板、触发这里的
+  //    observers，随后才收到页面传入的真实金额——那一刻的 null 不是漏传，却会在控制台留一条
+  //    "金额必须是整数円，收到 null"。模拟器里首页每次加载都报，真正的漏传反而会淹没在里面。
+  //    真漏传仍然在 `attached` 这一刻响亮失败（届时属性已全部就位）。
   attached() {
+    this.mounted = true;
     this.update();
   },
   observers: {
     jpy() {
-      this.update();
+      if (this.mounted) this.update();
     },
     size() {
-      this.update();
+      if (this.mounted) this.update();
     },
   },
 

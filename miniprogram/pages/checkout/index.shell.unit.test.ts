@@ -51,6 +51,8 @@ let navigations: string[];
 let redirects: string[];
 let switches: string[];
 let cartCleared: boolean;
+/** A3：建单成功后从购物车移除的那几件。 */
+let removedIds: string[] | null;
 /**
  * M-16（AJ-406）：`GET /pay/channels` 的替身——按 currency 返回通道（只声明 USD 的银行卡，与生产 stripe 同形）。
  * `channelFail` 为 true 时抛错（预告必须静默消失，不顶错误条）。
@@ -58,6 +60,8 @@ let cartCleared: boolean;
 let channelsByCurrency: Record<string, unknown[]>;
 let channelFail: boolean;
 let channelUrls: string[];
+/** 本地存储替身（A5：记住联系邮箱）。 */
+let stored: Record<string, string>;
 
 const call = <T>(name: string, ...args: unknown[]): T =>
   (page[name] as (...a: unknown[]) => T)(...args);
@@ -83,12 +87,14 @@ beforeEach(async () => {
   redirects = [];
   switches = [];
   cartCleared = false;
+  removedIds = null;
   channelsByCurrency = {
     JPY: [],
     USD: [{ channel: 'stripe', label: '银行卡', entryMode: 'copylink' }],
   };
   channelFail = false;
   channelUrls = [];
+  stored = {};
   vi.stubGlobal('wx', {
     navigateTo: (o: { url: string }) => navigations.push(o.url),
     redirectTo: (o: { url: string }) => {
@@ -105,11 +111,19 @@ beforeEach(async () => {
     globalData: {
       apiBase: 'http://api.test',
       pickedAddressId: '',
+      storage: {
+        getString: (k: string, fallback = '') => stored[k] ?? fallback,
+        setString: (k: string, v: string) => {
+          stored[k] = v;
+        },
+      },
       cart: {
         items: () =>
           cartCleared ? [] : [{ productId: 'p-1', qty: 2, title: '資生堂 クレンジングオイル' }],
-        clear: () => {
-          cartCleared = true;
+        // A3（AJ-416）：建单成功后只移除买走的那几件；车里只有 p-1，移除它 = 车空了
+        removeMany: (ids: string[]) => {
+          removedIds = ids;
+          if (ids.includes('p-1')) cartCleared = true;
         },
       },
       api: async (req: Req) => {
@@ -404,7 +418,7 @@ describe('结算页薄壳：立即购买（4-4）', () => {
         buyNow: { productId: 'p-now', qty: 1, title: '出刃包丁' },
         cart: {
           items: () => [{ productId: 'p-1', qty: 2, title: '購物車里的別的東西' }],
-          clear: () => {
+          removeMany: () => {
             cartCleared = true;
           },
         },
@@ -535,5 +549,44 @@ describe('结算页：两次并发报价，旧的后到（审查 2026-10-09）',
     first.resolve({ items_jpy: 8000, shipping_jpy: 1150, total_jpy: 9150, split_hint: false });
     await settle();
     expect((page.data['quote'] as { totalJpy: number }).totalJpy).toBe(9650);
+  });
+});
+
+describe('结算页薄壳：记住联系邮箱（A5，AJ-416）', () => {
+  it('🔴 下单成功后记下这次用的邮箱；再进结算页自动填上（不用每次重输）', async () => {
+    await ready();
+    call('onSubmit');
+    await settle();
+    expect(stored['checkout_email']).toBe('buyer@example.com');
+    // 新的一次结算：onLoad 读回
+    page.setData({ email: '' });
+    call('onLoad');
+    expect(page.data['email']).toBe('buyer@example.com');
+  });
+
+  it('下单失败不记（填错的邮箱不该被"记住"成下次的默认）', async () => {
+    await ready();
+    orderError = apiError(40905, '价格已变化');
+    call('onSubmit');
+    await settle();
+    expect(stored['checkout_email']).toBeUndefined();
+  });
+});
+
+describe('结算页模板：条款勾选看得出是个勾选框（A5，AJ-416）', () => {
+  it('🔴 未勾选时也有框（☐），勾上是 ☑——原先未勾选只有一行字，看不出能点', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    expect(wxml).toContain(
+      "{{termsAccepted ? '☑ 我已阅读并同意购买条款' : '☐ 我已阅读并同意购买条款'}}",
+    );
+  });
+});
+
+describe('结算页薄壳：只移除买走的（A3，AJ-416）', () => {
+  it('🔴 建单成功后按这次结算的商品 id 移除（没勾的留在购物车里），不是整车清空', async () => {
+    await ready();
+    call('onSubmit');
+    await settle();
+    expect(removedIds).toEqual(['p-1']);
   });
 });

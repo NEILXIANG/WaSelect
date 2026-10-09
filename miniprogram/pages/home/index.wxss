@@ -129,3 +129,18 @@
   padding: var(--ws-space-card);
   text-align: center;
 }
+
+/* A4 / A11（2026-10-09）：搜索状态行与页脚重试。只用既有 token，不引入新颜色 / 新字号 */
+.home__searching {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--ws-space-hair);
+}
+
+.home__clear,
+.home__more-retry {
+  color: var(--ws-ink);
+  text-decoration: underline;
+  padding: var(--ws-space-hair) 0;
+}

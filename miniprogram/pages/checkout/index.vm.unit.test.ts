@@ -33,16 +33,23 @@ const ITEMS = [
 ];
 
 describe('itemRows（商品行）', () => {
-  it('只给标题与数量——⚠️ **没有价格字段**', () => {
+  it('只给标题、数量与主图——⚠️ **没有价格字段**', () => {
     const [row] = itemRows(ITEMS);
     expect(row).toEqual({
       productId: 'p-shiro-cleansing-oil',
       qty: 2,
       title: '資生堂 クレンジングオイル 200ml',
+      image: '',
     });
     // 价格一旦出现在这里，就会有人拿它算合计——而快照价会过期
     expect(Object.keys(row ?? {})).not.toContain('priceJpy');
     expect(Object.keys(row ?? {})).not.toContain('priceText');
+  });
+
+  it('🔴 带加购时的主图快照（A6：结算页商品行要有缩略图，只有文字认不出买的是哪件）', () => {
+    const [row] = itemRows([{ ...ITEMS[0], image: 'https://img.example/c.webp' }]);
+    expect(row?.image).toBe('https://img.example/c.webp');
+    expect(itemRows([{ ...ITEMS[0], image: 42 }])[0]?.image).toBe('');
   });
 
   it('脏输入：非数组 → 空；没 productId 的行丢掉；qty 非整数归一成 1', () => {
@@ -374,6 +381,17 @@ describe('checkoutItems / clearsCartAfterOrder（4-4）', () => {
   it('🔴 buynow 模式 → 只结这一件（不碰购物车）；普通模式 → 购物车', () => {
     expect(checkoutItems({ mode: 'buynow', buyNow: BUY, cartItems: ITEMS })).toEqual([BUY]);
     expect(checkoutItems({ mode: '', buyNow: BUY, cartItems: ITEMS })).toEqual(ITEMS);
+  });
+
+  it('🔴 普通模式只结勾选的（A3，AJ-416）：selected === false 的留在车里；缺字段 = 勾选', () => {
+    const rows = [
+      { productId: 'p-a', qty: 1, title: 'a', selected: true },
+      { productId: 'p-b', qty: 1, title: 'b', selected: false },
+      { productId: 'p-c', qty: 1, title: 'c' },
+    ];
+    expect(
+      checkoutItems({ mode: '', buyNow: null, cartItems: rows }).map((i) => i.productId),
+    ).toEqual(['p-a', 'p-c']);
   });
 
   it('buynow 模式但单件丢了（进程被回收 / 脏值）→ 空数组（结算页显示空态），不回落到购物车', () => {

@@ -34,6 +34,7 @@ import {
   pendingRemoval,
   quoteErrorText,
   quoteRetryable,
+  selectionBar,
   undoAvailable,
   undoView,
 } from './index.vm.js';
@@ -91,6 +92,8 @@ Page({
     undo: { show: false, index: -1, text: '' },
     /** 「去结算」的状态（vm `checkoutGate` 的输出：能不能点 + 说什么）。 */
     gate: { disabled: true, hint: '运费与合计还在计算中' },
+    /** A3（AJ-416）：底栏全选框 + "去结算 (N)"（vm `selectionBar`）。 */
+    bar: { allSelected: false, selectedCount: 0, ctaText: '去结算' },
   },
 
   /** 防抖定时器句柄（不进 data：它不是渲染状态）。 */
@@ -132,15 +135,18 @@ Page({
     const rows = cartRows(app.globalData.cart.items());
     // M-14：删光最后一件时仍要显示"已删除 · 撤销"——此时不能切到空态，否则撤销入口跟着消失
     const undo = undoView(this.pending, Date.now());
+    const bar = selectionBar(rows);
     this.setData({
       rows,
       undo,
+      bar,
       count: app.globalData.cart.count(),
       empty: rows.length === 0 && !undo.show,
     });
     // M-14（AJ-406）：tabBar 角标——进屏与本页每次改动都走这里（utils/tabs.js 唯一更新方）
     setCartBadge(this, app.globalData.cart);
-    if (rows.length === 0) {
+    // A3：一件没勾 = 没东西可报价，与空车同一条路（含清掉挂起的防抖与推进序号），只是原因不同
+    if (rows.length === 0 || bar.selectedCount === 0) {
       // 空车不报价：空 items 会被服务端 40001 拒，而"打开空购物车有个错误提示"是荒谬的
       // ⚠️ 但必须**同时**清掉挂起的防抖定时器并把序号推进（B36 / AJ-219）：
       //    不清的话，刚才连点"+"排上的那次报价仍会在 400ms 后发出——
@@ -157,7 +163,7 @@ Page({
         quote: null,
         quoteError: '',
         quoteErrorCode: 0,
-        gate: checkoutGate({ hasTotal: false }),
+        gate: checkoutGate({ hasTotal: false, noneSelected: rows.length > 0 }),
       });
       return;
     }
@@ -332,6 +338,21 @@ Page({
   },
 
   /** 取 wxml 的 `data-id`（取不到 = 空串，而不是 undefined）。 */
+  /** A3（AJ-416）：勾选 / 取消勾选一行 → 重新报价（只报勾着的）。 */
+  onToggleSelect(e) {
+    const id = this.idOf(e);
+    const row = this.data.rows.find((r) => r.productId === id);
+    if (row === undefined) return;
+    app.globalData.cart.setSelected(id, !row.selected);
+    this.refresh();
+  },
+
+  /** A3：全选框——当前全选则全不选，否则全选。 */
+  onToggleAll() {
+    app.globalData.cart.setAllSelected(!this.data.bar.allSelected);
+    this.refresh();
+  },
+
   idOf(e) {
     const id = e?.currentTarget?.dataset?.id;
     return typeof id === 'string' ? id : '';

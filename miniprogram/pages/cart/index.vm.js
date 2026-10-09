@@ -24,7 +24,7 @@ import { MAX_CART_LINES } from '../../utils/cart-store.js';
 /**
  * 本地条目 → 行视图。
  * @param {Array} items cart-store 的条目（含快照）
- * @returns {Array<{productId: string, title: string, image: string, qty: number, priceText: string}>}
+ * @returns {Array<{productId: string, title: string, image: string, qty: number, priceText: string, selected: boolean}>}
  * @why `priceText` 在这里格式化而不是 wxml 里塞 ws-price：见 @limitation 一。
  */
 export function cartRows(items) {
@@ -35,20 +35,40 @@ export function cartRows(items) {
     image: typeof i.image === 'string' ? i.image : '',
     qty: Number.isInteger(i.qty) ? i.qty : 1,
     priceText: Number.isInteger(i.priceJpy) ? formatJpy(i.priceJpy) : '',
+    // A3（AJ-416）：勾选去结算；缺字段 = 已勾选（与 cart-store @limitation 五同口径）
+    selected: i.selected !== false,
   }));
+}
+
+/**
+ * 底栏的勾选状态与按钮文字（A3，AJ-416）。
+ * @param {Array<{selected?: boolean}>|null|undefined} rows `cartRows` 的输出
+ * @returns {{allSelected: boolean, selectedCount: number, ctaText: string}}
+ * @why 按钮带上勾了几种（"去结算 (2)"）：取消勾选后合计变了，用户要能一眼看出"这次只结两件"，
+ *      否则会以为合计算错了。数的是**品种**不是件数——与勾选框一一对应，数得清。
+ */
+export function selectionBar(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const selectedCount = list.filter((r) => r && r.selected !== false).length;
+  return {
+    allSelected: list.length > 0 && selectedCount === list.length,
+    selectedCount,
+    ctaText: selectedCount > 0 ? `去结算 (${selectedCount})` : '去结算',
+  };
 }
 
 /**
  * 「去结算」按钮的状态与它下面那句话（B36 / AJ-219）。
  *
  * @param {{quoting?: unknown, hasTotal?: unknown, hasError?: unknown,
- *          errorCode?: unknown, splitRequired?: unknown, lineCount?: unknown}|null|undefined} s
+ *          errorCode?: unknown, splitRequired?: unknown, lineCount?: unknown, noneSelected?: unknown}|null|undefined} s
  *   `quoting`       报价在途中（改了数量之后、新合计还没回来）
  *   `hasTotal`      当前 quote 有权威合计（薄壳传 `hasTotal(quote)`）
  *   `hasError`      上一次报价失败了
  *   `errorCode`     失败的业务错误码（MP3-09：区分"重试就好"与"必须改购物车"）
  *   `splitRequired` 服务端 `split_hint`：**已超过**单笔上限（B38 / AJ-221）
  *   `lineCount`     购物车品种数（P2-31：40001 + 超 50 种 → 说"请移除一些"）
+ *   `noneSelected`  一件都没勾选（A3，AJ-416）
  * @returns {{disabled: boolean, hint: string}} hint 空串 = 不渲染那行提示
  *
  * @why 以前 `checkoutHint` 是**一个写死的常量**"运费与合计还在计算中"，
@@ -112,6 +132,8 @@ export function quoteErrorText(code, lineCount, fallback) {
 
 export function checkoutGate(s) {
   const a = s !== null && typeof s === 'object' ? s : {};
+  // A3：一件没勾时不报价（空 items 会 40001），按钮的原因是"没勾"而不是"在计算"
+  if (a.noneSelected === true) return { disabled: true, hint: '请勾选要结算的商品' };
   if (a.quoting === true) return { disabled: true, hint: '数量已改，正在重新计算…' };
   // ⚠️ 失败提示要看**码**：确定性失败（下架 / 超重 / 超上限）说"稍后重试"是句谎话（MP3-09）
   if (a.hasError === true) {
