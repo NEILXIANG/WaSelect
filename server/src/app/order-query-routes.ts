@@ -34,6 +34,8 @@ import type { DisplayCurrency } from '../domain/quote.js';
 import { toOrderDetail, toOrderListItem } from './order-views.js';
 import { hasLatePaid } from '../adapters/orders-admin.js';
 import { listPartialRefunds } from '../adapters/order-refunds.js';
+import { findLatestAfterSale } from '../adapters/after-sales.js';
+import { buyerAfterSaleView } from './after-sale-routes.js';
 
 export interface OrderQueryRoutesDeps {
   db: Db;
@@ -84,23 +86,24 @@ export function mountOrderQueryRoutes(app: Express, deps: OrderQueryRoutesDeps):
         const order = await findOwnedOrder(deps.db, orderId, sub);
         // 非本人与不存在同码（40400）：分开会泄露"这单存在但是别人的"
         if (order === null) throw new AppError(40400, { order_id: orderId });
-        const [items, timeline, payment, latePaid, partialRefunds] = await Promise.all([
+        const [items, timeline, payment, latePaid, partialRefunds, afterSale] = await Promise.all([
           listOrderItemsWithImage(deps.db, orderId),
           listOrderTimeline(deps.db, orderId),
           findLatestPaymentSummary(deps.db, orderId),
           hasLatePaid(deps.db, orderId),
           listPartialRefunds(deps.db, orderId),
+          findLatestAfterSale(deps.db, orderId),
         ]);
-        res
-          .status(200)
-          .json(
-            toOrderDetail(
-              order,
-              { items, timeline, payment, latePaid, partialRefunds },
-              displayCurrencies,
-              deps.config.IMG_BASE_URL,
-            ),
-          );
+        res.status(200).json({
+          ...toOrderDetail(
+            order,
+            { items, timeline, payment, latePaid, partialRefunds },
+            displayCurrencies,
+            deps.config.IMG_BASE_URL,
+          ),
+          // 售后（AJ-420，契约 0.6.56）：只带最新一条；没有 → 整键省略
+          ...(afterSale === null ? {} : { after_sale: buyerAfterSaleView(afterSale) }),
+        });
       } catch (e) {
         next(e);
       }

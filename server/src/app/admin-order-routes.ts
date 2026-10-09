@@ -72,6 +72,8 @@ import { REFUND_REASON_MAX_LENGTH, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/s
 import { markAuditCommitted, setAuditAfter, setAuditBefore } from './admin-audit.js';
 import { parseAddressInput } from '../domain/address-input.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
+import { listAfterSales } from '../adapters/after-sales.js';
+import { adminAfterSaleView } from './after-sale-routes.js';
 import {
   findAdminOrder,
   findLatePaidPayment,
@@ -355,13 +357,14 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         const order = await findAdminOrder(deps.db, id);
         if (order === null) throw new AppError(40400, { order_id: id });
         // 三类附属数据各**一次**批量查询（本页只有一张单，但形态与列表将来共用）
-        const [items, payments, events, partials, customer] = await Promise.all([
+        const [items, payments, events, partials, customer, afterSales] = await Promise.all([
           listOrderItemsFor(deps.db, [id]),
           listPaymentsFor(deps.db, [id]),
           listEventsFor(deps.db, [id]),
           listPartialRefunds(deps.db, id),
           // 客户卡片（AJ-404，§4.2 第 168 行）：口径与客户页同一份（customers-admin.ts 文件头表）
           findCustomer(deps.db, order.user_id),
+          listAfterSales(deps.db, id),
         ]);
         res.json({
           ...toAdminOrder(
@@ -387,6 +390,8 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           ),
           // 部分退款（AJ-383，契约 0.6.35）：按发起顺序；没有时是空数组（形状固定）
           partial_refunds: partials.map(partialRefundView),
+          // 售后申请（AJ-420，契约 0.6.56）：按提交先后；没有时是空数组（形状固定）
+          after_sales: afterSales.map(adminAfterSaleView),
           // 客户卡片（AJ-404，契约 0.6.47）：下单人若是管理员（findCustomer → null）则整键省略
           ...(customer === null
             ? {}

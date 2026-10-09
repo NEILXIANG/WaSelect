@@ -65,6 +65,7 @@ import { mountAdminShipBatchRoutes } from './admin-ship-batch-routes.js';
 import { mountPartialRefundRoutes } from './partial-refund-routes.js';
 import { mountAdminOrderFixRoutes } from './admin-order-fix-routes.js';
 import { mountAdminOrderNoteRoutes } from './admin-order-note-routes.js';
+import { mountAfterSaleRoutes } from './after-sale-routes.js';
 import { mountSalesPauseRoutes, salesOpenGuard } from './sales-pause.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAdminBannerRoutes } from './admin-banner-routes.js';
@@ -409,6 +410,16 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     clock,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity,
+  });
+  // ── 售后申请（AJ-420）：买家发起 + 运营处理；读随两个订单详情下发。审计由中间件自动写（admin 那条）──
+  mountAfterSaleRoutes(app, {
+    db,
+    logger,
+    clock,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+    idGen: systemIdGen,
+    events,
   });
   // ── CSV 导出（剩余清单 3-3）：订单 / 待采购 / 待发货报关；导出动作显式进审计 ──
   mountAdminExportRoutes(app, {
