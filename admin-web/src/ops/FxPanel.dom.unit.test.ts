@@ -174,7 +174,8 @@ describe('汇率面板：保存前核对（A8 残留 / AJ-229）', () => {
     await click(button(el, '保存汇率'));
     expect(posts()).toHaveLength(0);
     expect(confirmButton(el)).toBeNull();
-    expect(el.querySelector('.error')).not.toBeNull();
+    // 审查 2026-10-09：页面级反馈统一走 Toast（只换选择器，断言强度不变）
+    expect(el.querySelector('.toast[data-kind="error"]')).not.toBeNull();
   });
 });
 

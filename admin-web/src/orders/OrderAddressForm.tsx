@@ -9,13 +9,18 @@
  *              MVP 不引这条路，格式对就提交；真地址错了只能靠客户反馈。
  * @limitation 二：提交成功后由父组件刷新详情，**本地不改显示**——
  *              服务端会重写 `address_snapshot`，前端猜的结果可能与库里不一致。
+ * @limitation 三：整次提交的失败（含"第一处不合格"的汇总）走 `ui/Toast`（审查 2026-10-09，ui/adoption 欠账清单），
+ *              七条字段级错误仍在各自输入框下方行内显示。
+ *      @why 用父页（订单详情）传进来的 `sink`：本组件住在抽屉里，再挂一摞浮层会和详情页那摞叠在同一个角落。
+ *      @why 只清**自己报过的**错误（`posted`）：共用出口时，改一格就 `sink.error('')` 会顺手抹掉
+ *           详情页别处报的错误；原先行内红字只属于这张表单，清除范围要与之相同。
  *
  * @see ./address-view.ts（校验与请求体）；./api.ts（updateOrderAddress）
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useFormDirty } from '../ui/unsaved.js';
 import { useDrawerBusy } from '../ui/drawer.js';
-import { ApiError } from '../api/errors.js';
+import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
 import { updateOrderAddress, type AdminApi, type AdminOrderLike } from './api.js';
 import {
   ADDRESS_FIELDS,
@@ -45,14 +50,34 @@ export interface OrderAddressFormProps {
   order: AdminOrderLike;
   /** 保存成功后（父组件刷新详情并显示 `message`）。 */
   onDone: (message: string) => void;
+  /** 父页的 Toast 出口；不传（组件单独挂载，如组件测试）时用自己的并自渲染浮层。 */
+  sink?: ToastSink | undefined;
 }
 
-export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormProps) {
+export function OrderAddressForm({
+  api,
+  id,
+  order,
+  onDone,
+  sink: parentSink,
+}: OrderAddressFormProps) {
   const [form, setForm] = useState(() => addressFormModel(order));
   // 基线就是当前订单地址：保存成功后父组件按新地址换 key 重挂，脏态随卸载清掉
   useFormDirty(form, addressFormModel(order));
   const [errors, setErrors] = useState<Partial<Record<AddressField, string>>>({});
-  const [error, setError] = useState('');
+  const ownSink = useToasts();
+  const sink = parentSink ?? ownSink;
+  /** 当前挂着的错误提示是不是本表单报的（@limitation 三：只清自己的）。 */
+  const posted = useRef(false);
+  const fail = (text: string, traceId?: string): void => {
+    posted.current = true;
+    sink.error(text, { traceId });
+  };
+  const clearMine = (): void => {
+    if (!posted.current) return;
+    posted.current = false;
+    sink.error('');
+  };
   const [busy, setBusy] = useState(false);
   useDrawerBusy(busy); // 提交中锁住所在抽屉的关闭出口
   /**
@@ -67,10 +92,10 @@ export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormPro
     const check = addressFormErrors(form);
     setErrors(check.errors);
     if (!check.ok) {
-      setError(check.first);
+      fail(check.first);
       return;
     }
-    setError('');
+    clearMine();
     setConfirming(true);
   };
 
@@ -78,12 +103,13 @@ export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormPro
     setBusy(true);
     try {
       await updateOrderAddress(api, id, toAddressInput(form));
-      setError('');
+      clearMine();
       setConfirming(false);
       onDone('收货地址已更新（改前地址已归档，可在事件里查）');
     } catch (e) {
       // ⚠️ 失败保留已填内容：清了表单等于让运营把七个字段重新输一遍
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '改址失败');
+      fail(text, traceId);
     } finally {
       setBusy(false);
     }
@@ -111,7 +137,7 @@ export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormPro
                 delete rest[f];
                 return rest;
               });
-              setError('');
+              clearMine();
             }}
           />
           {errors[f] !== undefined && <span className="error">{errors[f]}</span>}
@@ -151,7 +177,7 @@ export function OrderAddressForm({ api, id, order, onDone }: OrderAddressFormPro
         </button>
       )}
       {!gate.ok && <p className="muted">{gate.reason}</p>}
-      {error !== '' && <p className="error">{error}</p>}
+      {parentSink === undefined && <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />}
     </div>
   );
 }

@@ -15,6 +15,9 @@
  *      旧文案让人"取消编辑后重新打开"，那会丢掉表单与刚上传的图。载入后版本凭据换成最新一版，
  *      核对后再保存 = 用你的内容覆盖最新一版。
  *
+ * @limitation 三：页面级反馈（加载 / 保存 / 删除 / 上传的成败）走 `ui/Toast`（审查 2026-10-09，ui/adoption 欠账清单）；
+ *              字段级校验仍在字段旁行内显示（附件 §5：错误要显示在出错的那个字段旁边）。
+ *
  * @see ./view.ts（校验）；./api.ts；../api/upload.ts（图片上传）
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -44,6 +47,7 @@ import {
 import { sameForm, useFormDirty } from '../ui/unsaved.js';
 import { LEAVE_UNSAVED_SPEC } from '../ui/leave-spec.js';
 import { ConfirmDialog } from '../ui/confirm.js';
+import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 
 export interface BannersPageProps {
   api: AdminApi;
@@ -69,7 +73,8 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     else setPendingSwitch(() => fn);
   };
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [error, setError] = useState('');
+  /** 页面级反馈出口（原页面顶部那行红字，审查 2026-10-09 起统一走 Toast）。 */
+  const sink = useToasts();
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState('');
@@ -92,7 +97,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError('');
+    sink.error('');
     try {
       const [items, plist] = await Promise.all([
         listBanners(api),
@@ -107,12 +112,13 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
       setRaw(items);
       setRows(bannerRows(items, (id) => opts.find((o) => o.id === id)?.title));
     } catch (e) {
-      // ⚠️ 失败不清列表（同其它页）：只显示错误
-      setError(e instanceof ApiError ? e.message : String(e));
+      // ⚠️ 失败不清列表（同其它页）：只报错
+      const { text, traceId } = toastError(e, 'Banner 列表加载失败');
+      sink.error(text, { traceId });
     } finally {
       setLoading(false);
     }
-  }, [api]);
+  }, [api, sink.error]);
 
   useEffect(() => {
     void load();
@@ -147,7 +153,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     const check = bannerFormErrors(form);
     setErrors(check.errors);
     if (!check.ok) {
-      setError(check.first);
+      sink.error(check.first);
       return;
     }
     setBusy(true);
@@ -160,7 +166,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
           ...body,
           expected_updated_at: editing.updated_at ?? '',
         });
-      setError('');
+      sink.error('');
       startNew();
       await load();
     } catch (e) {
@@ -170,12 +176,12 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
         setConflict(true);
         setLatest(null);
       }
-      setError(
+      const { text, traceId } = toastError(e, '保存失败');
+      sink.error(
         isConflict
-          ? `${(e as ApiError).message}：你填的内容都还在。请点「加载最新值对照」看对方改了什么，核对后再保存`
-          : e instanceof ApiError
-            ? e.message
-            : String(e),
+          ? `${text}：你填的内容都还在。请点「加载最新值对照」看对方改了什么，核对后再保存`
+          : text,
+        { traceId },
       );
     } finally {
       setBusy(false);
@@ -189,7 +195,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
       const items = await listBanners(api);
       const fresh = items.find((b) => b.id === editing.id);
       if (fresh === undefined) {
-        setError('列表里已找不到这条 Banner（可能已被删除）：你填的内容还在');
+        sink.error('列表里已找不到这条 Banner（可能已被删除）：你填的内容还在');
         return;
       }
       setLatest(fresh);
@@ -198,9 +204,10 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
         ...editing,
         ...(fresh.updated_at !== undefined ? { updated_at: fresh.updated_at } : {}),
       });
-      setError('');
+      sink.error('');
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '取最新值失败');
+      sink.error(text, { traceId });
     } finally {
       setBusy(false);
     }
@@ -213,7 +220,8 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
       setConfirmDelete('');
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '删除失败');
+      sink.error(text, { traceId });
     } finally {
       setBusy(false);
     }
@@ -228,14 +236,15 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
       // 服务端拿它与 IMG_BASE_URL 拼出 Banner.image 的完整 URL。
       const set = await uploadImage({ baseUrl, getToken, onUnauthorized }, file);
       if (formTarget.current !== target) {
-        setError('上传完成时你已切换到另一条 Banner，这张图没有放进当前表单；如需使用请重新选择');
+        sink.error('上传完成时你已切换到另一条 Banner，这张图没有放进当前表单；如需使用请重新选择');
         return;
       }
       setForm((s) => ({ ...s, imageKey: set.image_key }));
       setPreview(set.card ?? set.detail ?? '');
       setErrors((e) => ({ ...e, imageKey: '' }));
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '图片上传失败');
+      sink.error(text, { traceId });
     } finally {
       setBusy(false);
     }
@@ -251,7 +260,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
       </header>
 
       {loading && <p className="muted">加载中…</p>}
-      {error !== '' && <p className="error">{error}</p>}
+      <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
 
       <table className="table">
         <thead>

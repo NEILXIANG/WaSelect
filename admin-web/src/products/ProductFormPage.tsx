@@ -7,7 +7,7 @@
  *      ⚠️ 代价：从别的入口进编辑页（将来若有 URL 直达）需要先补单条接口。
  *
  * @limitation 一：提交失败**保留表单**（不清空、不回列表）——
- *              十几个字段让运营重填一遍是纯粹的惩罚，而失败原因已在错误区显示。
+ *              十几个字段让运营重填一遍是纯粹的惩罚，而失败原因已在右下角的错误提示里（Toast，恒停留）。
  * @limitation 二：**不做本地草稿**（刷新即丢）。理由同 @limitation 一的反面：
  *              草稿要引入"草稿 vs 已保存"两种状态与合并规则，而商品录入是低频操作，
  *              低频 + 复杂状态不划算。
@@ -22,11 +22,17 @@
  *      （用 POST / PUT 回来的整行换版本凭据），运营改好再点一次即可，不会重复建一条。
  *      编辑**在售**商品只有「保存」：上下架仍在列表页（这里再放一个下架按钮，会和保存的乐观锁凭据打架）。
  *
+ * @limitation 三：页面级反馈（校验汇总、保存 / 上架 / 上传 / 取最新值的失败）走 `ui/Toast`（审查 2026-10-09，
+ *              ui/adoption 欠账清单）；字段级错误仍在各自输入框下方，顶部「点一下跳过去」的字段清单与
+ *              冲突对照表（「加载最新值对照」）照旧留在页面里——它们是要操作的东西，不是提示。
+ *              保存成功的提示仍由 `onDone(message)` 带回列表页、在那里走 Toast。
+ *
  * @see ./view.ts（模型与校验真源）；./api.ts（提交与上传）；./ProductFormParts.tsx（字段组件）；
  *      ./ProductFormSections.tsx（分组卡片与双栏布局）
  */
 import { useState } from 'react';
 import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
+import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { uploadImage } from '../api/upload.js';
 import {
   createProduct,
@@ -109,7 +115,8 @@ export function ProductFormPage({
   const [latest, setLatest] = useState<AdminProductLike | null>(null);
   const [loadingLatest, setLoadingLatest] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [error, setError] = useState('');
+  /** 页面级反馈出口（原页面顶部那行红字）。 */
+  const sink = useToasts();
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   /** 编辑标签框里尚未按回车的草稿（A-04：保存时并入 tags，不悄悄丢掉）。 */
@@ -157,13 +164,13 @@ export function ProductFormPage({
     if (!result.ok) {
       setErrors(result.errors);
       // ⚠️ 顶部不重复第一条原文：每条的详情已在对应输入框下方显示（见 productFormSummary 的 @why）
-      setError(productFormSummary(result.errors, result.first));
+      sink.error(productFormSummary(result.errors, result.first));
       return;
     }
     const wasNew = editId === null;
     const title = submitted.title.trim();
     setSaving(true);
-    setError('');
+    sink.error('');
     try {
       const body = toProductInput(submitted, wasNew ? undefined : originalStock);
       let id: string;
@@ -175,7 +182,7 @@ export function ProductFormPage({
       } else {
         // ⚠️ 拿不到凭据时**就地拦下**给一句明白话，而不是发出去等服务端 40001（@limitation 一）
         if (expectedUpdatedAt === '') {
-          setError('缺少商品版本信息（updated_at）：请返回列表重新进入编辑，再保存');
+          sink.error('缺少商品版本信息（updated_at）：请返回列表重新进入编辑，再保存');
           return;
         }
         id = editId;
@@ -196,22 +203,25 @@ export function ProductFormPage({
         await setProductStatus(api, id, 'active');
       } catch (e) {
         // 第一步已落库：说清"存下了什么"，再说上架为什么没成（AJ-403 文件头）
-        const why = e instanceof ApiError ? e.message : String(e);
+        const { text: why, traceId } = toastError(e, '上架失败');
         const kept = savedStatus === 'offline' ? '已保存（仍为已下架）' : '已保存为草稿';
-        setError(`${kept}，但上架失败：${why}。改好后再点「保存并上架」`);
+        sink.error(`${kept}，但上架失败：${why}。改好后再点「保存并上架」`, { traceId });
         return;
       }
       onDone(wasNew ? `已创建并上架「${title}」` : `已保存并上架「${title}」`);
     } catch (e) {
       // @see @limitation 一：失败保留表单
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '保存失败');
       // 40914：表单**没被清**；下一步是"加载最新值对照"，而不是回列表（那会丢掉表单，P2-44）
       if (e instanceof ApiError && e.code === 40914) {
         setConflict(true);
         setLatest(null);
-        setError(
+        sink.error(
           `${e.message}：你填的内容都还在。请点「加载最新值对照」看对方改了什么，核对后再保存`,
+          { traceId },
         );
+      } else {
+        sink.error(text, { traceId });
       }
     } finally {
       setSaving(false);
@@ -224,7 +234,7 @@ export function ProductFormPage({
     try {
       const fresh = await findProductById(api, editId);
       if (fresh === null) {
-        setError('在商品列表里找不到这条商品（可能已被删除）：你填的内容还在，可复制留存');
+        sink.error('在商品列表里找不到这条商品（可能已被删除）：你填的内容还在，可复制留存');
         return;
       }
       setLatest(fresh);
@@ -232,9 +242,10 @@ export function ProductFormPage({
       setExpectedUpdatedAt(sourceUpdatedAt(fresh));
       // 库存凭据同步换成最新值：之后保存 = "看过最新库存后，用我填的数覆盖"（与上一行同一语义）
       setOriginalStock(productFormModel(fresh).stock);
-      setError('');
+      sink.error('');
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '取最新一版失败');
+      sink.error(text, { traceId });
     } finally {
       setLoadingLatest(false);
     }
@@ -242,7 +253,7 @@ export function ProductFormPage({
 
   const onUpload = async (file: File) => {
     setUploading(true);
-    setError('');
+    sink.error('');
     try {
       const imageSet = await uploadImage({ baseUrl, getToken, onUnauthorized }, file);
       // 商品图**存**的是 `image_id`（0.6.29 / AJ-362）——业务表不存存储位置；
@@ -265,7 +276,8 @@ export function ProductFormPage({
         images: [...prev.images, { image_id, thumb, card, detail }],
       }));
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '图片上传失败');
+      sink.error(text, { traceId });
     } finally {
       setUploading(false);
     }
@@ -291,7 +303,7 @@ export function ProductFormPage({
         )}
       </header>
 
-      {error !== '' && <p className="error">{error}</p>}
+      <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
       {/* AJ-410 / N26：列出要改的字段名，点一下跳到那一格并把光标放进去（原先只说"有 N 项需要修正"，要自己往下找）。
           只列字段名不重复原因：原因已在那一格下面（productFormSummary 的 @why：同一句话不在一屏出现两次） */}
       {Object.keys(errors).length > 0 && (

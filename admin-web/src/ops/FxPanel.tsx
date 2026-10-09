@@ -13,10 +13,13 @@
  *              "改错了"只能再提交一条新的覆盖，页面不提供"删除"。
  * @limitation 三：保存前的核对是**前端**的闸（@see ./view.ts `fxSaveStep` @limitation）。
  *
+ * @limitation 四：保存的成败与"格式不对"走 `ui/Toast`（审查 2026-10-09）；输入框下方的「核对：…」是
+ *              **保存前的闸门说明**（与输入值逐字联动），仍留在行内。
+ *
  * @see ./view.ts（校验与请求体）；./api.ts
  */
 import { useCallback, useEffect, useState } from 'react';
-import { ApiError } from '../api/errors.js';
+import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
 import { listFx, setFx, type AdminApi } from './api.js';
 import {
   FX_QUOTES,
@@ -32,9 +35,11 @@ import {
 
 export interface FxPanelProps {
   api: AdminApi;
+  /** 父页（OpsPage）的 Toast 出口：传入后本面板不自渲染浮层（三个面板共用一摞，@see ./OpsPage.tsx）。 */
+  sink?: ToastSink | undefined;
 }
 
-export function FxPanel({ api }: FxPanelProps) {
+export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
   const [rows, setRows] = useState<ReturnType<typeof fxRows>>([]);
   /**
    * 各币种**当前生效**的原始汇率（数值），只用于保存前的倍数核对（取法见 `currentFxRawRates`）。
@@ -45,8 +50,8 @@ export function FxPanel({ api }: FxPanelProps) {
   const [currentRates, setCurrentRates] = useState<Record<string, number>>({});
   const [form, setForm] = useState(emptyFxForm);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [ok, setOk] = useState('');
+  const ownSink = useToasts();
+  const sink = parentSink ?? ownSink;
   /**
    * 确认与勾选各自绑定的**表单指纹**（AJ-229）：不是布尔。
    * 表单一变指纹就变，下面派生出的 `confirming` / `ack` 自动变回 false——
@@ -65,18 +70,19 @@ export function FxPanel({ api }: FxPanelProps) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError('');
+    sink.error('');
     try {
       const list = await listFx(api);
       setRows(fxRows(list));
       // ⚠️ 不传本机时钟：`is_current` 由服务端按自己的时钟判定（ADM3-05），见 view.ts 的 @why
       setCurrentRates(currentFxRawRates(list));
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '汇率列表加载失败');
+      sink.error(text, { traceId });
     } finally {
       setLoading(false);
     }
-  }, [api]);
+  }, [api, sink.error]);
 
   useEffect(() => {
     void load();
@@ -90,16 +96,17 @@ export function FxPanel({ api }: FxPanelProps) {
   const step = fxSaveStep({ form, currentRate, confirmKey, ackKey });
 
   const save = async (): Promise<void> => {
-    setError('');
-    setOk('');
+    sink.error('');
+    sink.success('');
     setSaving(true);
     try {
       await setFx(api, toFxBody(form));
-      setOk(fxSavedText(form));
+      sink.success(fxSavedText(form));
       setForm(emptyFxForm());
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '汇率保存失败');
+      sink.error(text, { traceId });
     } finally {
       setSaving(false);
       setConfirmKey(null);
@@ -118,11 +125,11 @@ export function FxPanel({ api }: FxPanelProps) {
   const attempt = (): void => {
     if (saving) return; // 连点保护（ADM3-04）：按钮的 disabled 之外再兜一次
     if (step.kind === 'invalid') {
-      setError(step.message);
+      sink.error(step.message);
       return;
     }
     if (step.kind === 'confirm') {
-      setError('');
+      sink.error('');
       setConfirmKey(formKey);
       return;
     }
@@ -246,8 +253,7 @@ export function FxPanel({ api }: FxPanelProps) {
         )}
       </div>
 
-      {error !== '' && <p className="error">{error}</p>}
-      {ok !== '' && <p className="ok">{ok}</p>}
+      {parentSink === undefined && <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />}
     </section>
   );
 }

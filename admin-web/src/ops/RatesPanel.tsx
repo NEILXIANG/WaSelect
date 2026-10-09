@@ -15,18 +15,24 @@
  * @limitation 二：`active` 用勾选框而不是删除：停用是"暂时不参与取档"，
  *              删除是"整表替换时不再提交"——后者不可逆（没有历史接口）。
  *
+ * @limitation 三：加载 / 保存的成败走 `ui/Toast`（审查 2026-10-09）；表格里的"档位重复"、表下方的
+ *              `rateErrors` 清单、"没有加载出来，暂时不能编辑"那一行是**字段级 / 闸门说明**，仍留在行内
+ *              （附件 §5：错误要显示在出错的那一行旁边）。
+ *
  * @see ./view.ts（整表校验）；./api.ts；server/src/adapters/catalog.ts（取档唯一实现）
  */
 import { useCallback, useEffect, useState } from 'react';
-import { ApiError } from '../api/errors.js';
+import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
 import { listShippingRates, replaceShippingRates, type AdminApi } from './api.js';
 import { emptyRateRow, rateDuplicates, rateErrors, toRateBody, type RateRow } from './view.js';
 
 export interface RatesPanelProps {
   api: AdminApi;
+  /** 父页（OpsPage）的 Toast 出口：传入后本面板不自渲染浮层（三个面板共用一摞，@see ./OpsPage.tsx）。 */
+  sink?: ToastSink | undefined;
 }
 
-export function RatesPanel({ api }: RatesPanelProps) {
+export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
   const [rows, setRows] = useState<RateRow[]>([]);
   const [loading, setLoading] = useState(false);
   /**
@@ -37,8 +43,8 @@ export function RatesPanel({ api }: RatesPanelProps) {
    *      （给保存按钮再加一道 `!loaded` 注回后没有任何用例变红——测不出来的防护不留。）
    */
   const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState('');
-  const [ok, setOk] = useState('');
+  const ownSink = useToasts();
+  const sink = parentSink ?? ownSink;
   /** 二次确认态（整表替换，@why 见文件头）。 */
   const [confirming, setConfirming] = useState(false);
   /** 整表替换请求在途（P2-47）：连点"确认"会把同一张表 PUT 两次，第二次可能覆盖别人刚做的改动。 */
@@ -46,7 +52,7 @@ export function RatesPanel({ api }: RatesPanelProps) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError('');
+    sink.error('');
     try {
       const raw = await listShippingRates(api);
       setRows(
@@ -60,11 +66,12 @@ export function RatesPanel({ api }: RatesPanelProps) {
       setLoaded(true);
     } catch (e) {
       // ⚠️ 失败**不清空表格**：把已加载的档位清掉会让"改了一半的表"丢失
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '运费档位加载失败');
+      sink.error(text, { traceId });
     } finally {
       setLoading(false);
     }
-  }, [api]);
+  }, [api, sink.error]);
 
   useEffect(() => {
     void load();
@@ -77,18 +84,19 @@ export function RatesPanel({ api }: RatesPanelProps) {
   const save = async (): Promise<void> => {
     if (saving) return;
     if (!check.ok) {
-      setError(check.first);
+      sink.error(check.first);
       return;
     }
-    setError('');
-    setOk('');
+    sink.error('');
+    sink.success('');
     setSaving(true);
     try {
       await replaceShippingRates(api, toRateBody(rows));
-      setOk('已整表替换（下一次报价立即按新档位计算）');
+      sink.success('已整表替换（下一次报价立即按新档位计算）');
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '运费档位保存失败');
+      sink.error(text, { traceId });
     } finally {
       setSaving(false);
       setConfirming(false);
@@ -242,8 +250,7 @@ export function RatesPanel({ api }: RatesPanelProps) {
           ))}
         </div>
       )}
-      {error !== '' && <p className="error">{error}</p>}
-      {ok !== '' && <p className="ok">{ok}</p>}
+      {parentSink === undefined && <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />}
     </section>
   );
 }

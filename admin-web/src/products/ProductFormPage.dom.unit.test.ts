@@ -86,7 +86,9 @@ function field(el: HTMLElement, label: string): HTMLInputElement {
   throw new Error(`找不到字段：${label}`);
 }
 
-const pageError = (el: HTMLElement): string => el.querySelector('p.error')?.textContent ?? '';
+/** 页面级错误提示的文本（审查 2026-10-09：改走右下角 Toast；只取提示正文，不含报障码行与关闭按钮）。 */
+const pageError = (el: HTMLElement): string =>
+  el.querySelector('.toast[data-kind="error"] .toast-text')?.textContent ?? '';
 
 /**
  * 脏态探针：把 Provider 那一份 `dirty` 显示在 DOM 上，供断言读取。

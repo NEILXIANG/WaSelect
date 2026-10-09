@@ -10,12 +10,14 @@
  * @limitation 取数与 PUT 之间仍有极短窗口（不是原子的比较并交换；服务端没有版本号）。
  *             两个人在同一秒反向操作的概率可以忽略；发出去的仍是明确目标值，不会"翻转"成反方向。
  * @limitation 停售只拦"新的钱"（报价 / 建单 / 发起支付）；回调、退款、发货照常，这里明说，免得运营以为全站停了。
+ * @limitation 操作反馈（取数失败 / 缺原因 / 已是该状态 / 提交失败）走 `ui/Toast`（审查 2026-10-09）；
+ *             顶部那条红色「⛔ 已暂停接单」是**状态显示**不是反馈，保持原样常驻。
  * @see server/src/app/sales-pause.ts
  */
 import { useCallback, useEffect, useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
-import { ApiError } from '../api/errors.js';
 import { formatJst } from '../format.js';
+import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
 import type { AdminApi } from './api.js';
 
 interface State {
@@ -27,21 +29,30 @@ interface State {
   updated_at?: string;
 }
 
-export function SalesPausePanel({ api }: { api: AdminApi }) {
+export function SalesPausePanel({
+  api,
+  sink: parentSink,
+}: {
+  api: AdminApi;
+  /** 父页（OpsPage）的 Toast 出口：传入后本面板不自渲染浮层（三个面板共用一摞，@see ./OpsPage.tsx）。 */
+  sink?: ToastSink | undefined;
+}) {
   const [state, setState] = useState<State | null>(null);
   const [reason, setReason] = useState('');
   /** 两步确认的目标值（null = 未进入确认态）：点按钮那一刻按当时显示的状态选定，提交时不再取反。 */
   const [target, setTarget] = useState<boolean | null>(null);
-  const [error, setError] = useState('');
+  const ownSink = useToasts();
+  const sink = parentSink ?? ownSink;
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
       setState((await api({ path: '/api/v1/admin/ops/sales-pause', method: 'GET' })) as State);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '停售状态加载失败');
+      sink.error(text, { traceId });
     }
-  }, [api]);
+  }, [api, sink.error]);
 
   useEffect(() => {
     void load();
@@ -51,9 +62,9 @@ export function SalesPausePanel({ api }: { api: AdminApi }) {
 
   const submit = async (): Promise<void> => {
     if (target === null) return;
-    if (reason.trim() === '') return setError('请填写原因（会记录下来）');
+    if (reason.trim() === '') return sink.error('请填写原因（会记录下来）');
     setBusy(true);
-    setError('');
+    sink.error('');
     try {
       const current = (await api({
         path: '/api/v1/admin/ops/sales-pause',
@@ -62,7 +73,7 @@ export function SalesPausePanel({ api }: { api: AdminApi }) {
       if ((current?.paused === true) === target) {
         setState(current);
         setTarget(null);
-        setError('已经是该状态（可能刚被其他管理员修改）');
+        sink.error('已经是该状态（可能刚被其他管理员修改）');
         return;
       }
       const written = (await api({
@@ -79,7 +90,8 @@ export function SalesPausePanel({ api }: { api: AdminApi }) {
       setReason('');
       setTarget(null);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      const { text, traceId } = toastError(e, '停售开关提交失败');
+      sink.error(text, { traceId });
     } finally {
       setBusy(false);
     }
@@ -130,8 +142,8 @@ export function SalesPausePanel({ api }: { api: AdminApi }) {
             {paused ? '恢复接单' : '暂停接单'}
           </button>
         )}
-        {error !== '' && <p className="error">{error}</p>}
       </div>
+      {parentSink === undefined && <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />}
     </section>
   );
 }

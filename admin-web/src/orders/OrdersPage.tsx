@@ -35,14 +35,13 @@
 import { ExportBar } from './ExportBar.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SEARCH_KEYWORD_MAX_LENGTH, type OrderStatus } from '@waselect/shared';
-import { ApiError } from '../api/errors.js';
 import { listOrders, type AdminApi, type AdminOrderLike } from './api.js';
 import { ORDER_STATUS_LABELS, orderRows, shipGate, type OrderRow } from './view.js';
 import { ShipBatchDrawer } from './ShipBatchDrawer.js';
 import { CsvShipImport } from './CsvShipImport.js';
 import { SelectionBar } from './SelectionBar.js';
 import { PrintSheet } from './PrintSheet.js';
-import { ToastStack, useToasts } from '../ui/toast.js';
+import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { readStatusFilter, resolveDateRange, STATUS_TABS, tabStatusParam } from './list-filter.js';
 import { RowShipDrawer } from './RowShipDrawer.js';
 import { StatusTabs } from './StatusTabs.js';
@@ -126,7 +125,12 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   /** 输入框里的值（未提交）；提交后写进 URL 的 `q`（@limitation 四）。 */
   const [keyword, setKeyword] = useState(applied);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  /**
+   * 列表取数失败（反馈走 Toast；这里只用来区分"没有符合条件的订单"与"取不到"，审查 2026-10-09 / ui/adoption）。
+   * @why 不在每次重载前 `sink.error('')`：本页的 sink 同时承载批量发货 / 打印的失败提示，
+   *      发货后列表会重载，开头一清就把刚报的批量失败抹掉了（与商品列表同口径：错误留到运营关掉或被新错误替换）。
+   */
+  const [failed, setFailed] = useState(false);
   /** 「待发货」页签下勾选的订单 id（AJ-401；列表重载即清空，@limitation 五）。 */
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [batch, setBatch] = useState<'select' | 'csv' | null>(null);
@@ -136,7 +140,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   const shipOrderRow = shipId === null ? undefined : raw.find((o) => o.order_id === shipId);
   /** 打印页（AJ-407）：点击时冻结的所选 id；null = 看列表。 */
   const [printIds, setPrintIds] = useState<string[] | null>(null);
-  /** 批量发货的整次失败走 Toast（ui/adoption 门禁：新页面不写行内反馈）。 */
+  /** 本页反馈出口：列表加载失败、批量发货 / 打印的整次失败（ui/adoption 门禁：页面不写行内反馈）。 */
   const sink = useToasts();
   const batchError = (text: string, traceId: string | undefined): void =>
     sink.error(text, { traceId });
@@ -174,7 +178,6 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
     if (dateError !== '') return; // 自定义日期有误：保留上一次的列表，等运营改对
     const seq = ++reqSeq.current;
     setLoading(true);
-    setError('');
     try {
       const res = await listOrders(api, {
         page,
@@ -190,13 +193,16 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       setSelected(new Set());
       setRows(orderRows(res.items));
       setTotal(res.total);
+      setFailed(false);
       // 扫描 A-02：当前页超出最后一页（例如最后一页唯一一张单刚发货）→ 拉回最后一页，不停在"空页"
       const last = Math.max(1, Math.ceil(res.total / PAGE_SIZE));
       if (page > last) patch({ page: String(last) });
     } catch (e) {
       if (seq !== reqSeq.current) return;
-      // ⚠️ 失败不清列表（同商品管理）：只显示错误，列表保留上一次结果
-      setError(e instanceof ApiError ? e.message : String(e));
+      // ⚠️ 失败不清列表（同商品管理）：只报错，列表保留上一次结果
+      setFailed(true);
+      const { text, traceId } = toastError(e, '订单列表加载失败');
+      sink.error(text, { traceId });
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
@@ -211,6 +217,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
     createdFrom,
     createdTo,
     dateError,
+    sink.error,
   ]);
 
   useEffect(() => {
@@ -333,9 +340,8 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         </button>
       </div>
 
-      {error !== '' && <p className="error">{error}</p>}
       {loading && <p className="muted">加载中…</p>}
-      {!loading && rows.length === 0 && error === '' && <p className="muted">没有符合条件的订单</p>}
+      {!loading && rows.length === 0 && !failed && <p className="muted">没有符合条件的订单</p>}
 
       {batchMode && (
         // AJ-401：批量发货 / CSV 导入（抽屉）

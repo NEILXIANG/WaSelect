@@ -233,6 +233,9 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
         (editing === null ? (
           <ProductsPage
             api={api}
+            // 审查 2026-10-09：筛选 / 页码进地址栏（同订单页）；走 leave 以过脏态拦截
+            route={{ page: 'products', id: '', query: route.query }}
+            onNavigate={leave}
             onEdit={(id, source) => {
               setFlash('');
               setEditing({ id, source: source ?? null });

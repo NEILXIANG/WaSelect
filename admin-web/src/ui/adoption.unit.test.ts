@@ -54,22 +54,20 @@ const hasInline = (f: string): boolean => {
 };
 
 /**
- * 仍未接线 Toast 的页面（第一批① 的**欠账清单**）。
+ * 仍写着行内反馈句式的页面（第一批① 的**欠账清单**；审查 2026-10-09 起其余页面已全部迁完）。
  *
  * 迁移一页 → 从这张表里删一行 → 本文件第二条用例会逼你删（否则它报"清单过期"）。
  * ⚠️ 删之前请确认那一页的反馈**真的**改走 `useToasts()` 了，不要为了让这条变绿而删。
+ * ⚠️ 留在表里的每一行都必须在 `why` 里写明**为什么不迁**（刻意保留的行内闸门说明也算，没有原因的豁免会让机制失效）。
  */
 const PENDING: ReadonlyArray<{ file: string; why: string }> = [
-  { file: 'banners/BannersPage.tsx', why: 'Banner 新建 / 删除的成败反馈' },
-  { file: 'ops/FxPanel.tsx', why: '汇率设置与运费整表替换（后者还要接确认弹层）' },
-  { file: 'ops/RatesPanel.tsx', why: '运费档位保存的成败反馈' },
-  { file: 'ops/SalesPausePanel.tsx', why: '停售 / 复售的成败反馈' },
-  { file: 'opslog/OpsLogPage.tsx', why: '对账任务触发与列表加载的反馈' },
-  { file: 'orders/OrderAddressForm.tsx', why: '改址保存的成败反馈' },
-  { file: 'orders/OrdersPage.tsx', why: '订单列表加载失败' },
-  { file: 'orders/PartialRefunds.tsx', why: '部分退款提交的反馈（闸门 hint 保留行内）' },
-  { file: 'products/ProductFormPage.tsx', why: '商品保存的成败反馈' },
-  { file: 'products/ProductsPage.tsx', why: '上下架 / 删除与列表加载的反馈' },
+  {
+    file: 'orders/PartialRefunds.tsx',
+    why:
+      '不是欠账、是刻意保留：提交的成败已全部经 onError / onNotice / onSuccess 走父页 Toast；' +
+      '剩下的 `hint` 是金额 / 原因的表单闸门说明（超额度、未选原因），必须紧挨金额框、改了就清（N30），' +
+      '其 DOM 用例断言的正是行内 `p.error`（缺陷注入验证过）',
+  },
 ];
 
 const pendingFiles = new Set(PENDING.map((p) => p.file));

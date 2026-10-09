@@ -6,10 +6,11 @@
  * @why 上下架失败**保留列表**并只显示错误：清空列表的表现是"操作失败连商品都没了"，
  *      运营会以为数据丢了，而实际只是那一次 PATCH 没成功。
  *
- * @limitation 一：**不引入 react-router**——管理端一共四五个页面，
- *              路由库带来的是一整套"URL ↔ 视图"的约定与依赖，而这里只需要
- *              "当前看哪个页"一个 state。引入它的唯一理由是"想用浏览器后退键"，
- *              而管理员的后退键预期是"回到上一步操作"，不是"回到上一个 URL"。
+ * @why 筛选 / 关键词 / 库存紧张 / 页码**进地址栏**（`#/products?status=offline&page=3`，与订单页、客户页同口径）：
+ *      此前存在组件 state 里，改完第 8 页的一件商品回到列表就是第 1 页、筛选全丢；筛好的列表也不能发给同事、刷新即丢。
+ *      （原 @limitation 一"不引入 react-router、后退键不该回到上一个 URL"已过时：订单页早已用 hash 路由，运营要的正是这个。）
+ *      不传 `route` 时退回组件内部状态（组件测试与独立挂载用），行为相同、只是不进地址栏。
+ * @limitation 一：**编辑态不进 URL**（App.tsx @limitation 一：没有单条商品接口，深链接兑现不了）。
  * @limitation 二：分页是**页码翻页**不是无限滚动（api.ts @limitation 二 同口径）：
  *              商品量在百级，且翻页让"第几页/共几页"始终可见。
  *
@@ -17,8 +18,8 @@
  */
 import { LOW_STOCK_THRESHOLD, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError } from '../api/errors.js';
-import { ToastStack, useToasts } from '../ui/toast.js';
+import { ToastStack, toastError, useToasts } from '../ui/toast.js';
+import type { Route } from '../router.js';
 import { listProducts, setProductStatus, type AdminApi, type AdminProductLike } from './api.js';
 import { StockCell } from './StockCell.js';
 import { productRows, STATUS_LABELS, withStatus, withStock, type ProductRow } from './view.js';
@@ -40,31 +41,75 @@ export interface ProductsPageProps {
   onEdit: (id: string | null, source?: AdminProductLike) => void;
   /** 编辑页带回来的成功提示（空串 = 不显示）。 */
   flash?: string;
+  /** 当前路由（筛选 / 页码的唯一真源）；不传 = 用组件内部状态（不进地址栏）。 */
+  route?: Route | undefined;
+  /** 改筛选 / 翻页时换地址（App 传 `leave`，脏态拦截同口径）。 */
+  onNavigate?: ((next: Route) => void) | undefined;
 }
 
-export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
+/** 地址栏里的参数名（短：地址栏是给人看和复制的）。 */
+const Q = { status: 'status', q: 'q', low: 'low', page: 'page' } as const;
+const STATUS_VALUES: readonly StatusFilter[] = ['all', 'active', 'offline', 'draft'];
+
+export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: ProductsPageProps) {
   const [rows, setRows] = useState<ProductRow[]>([]);
   /** 服务端原始条目（编辑页要用，@see ProductsPageProps.onEdit）。 */
   const [raw, setRaw] = useState<AdminProductLike[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [status, setStatus] = useState<StatusFilter>('all');
+  /** 不传 route 时的内部"地址栏"。 */
+  const [localQuery, setLocalQuery] = useState(() => new URLSearchParams());
+  const query = route?.query ?? localQuery;
+  const statusRaw = query.get(Q.status) ?? 'all';
+  const status: StatusFilter = (STATUS_VALUES as readonly string[]).includes(statusRaw)
+    ? (statusRaw as StatusFilter)
+    : 'all';
+  const pageRaw = Number(query.get(Q.page) ?? '1');
+  const page = Number.isInteger(pageRaw) && pageRaw >= 1 ? pageRaw : 1;
+  const applied = query.get(Q.q) ?? '';
+  const lowStock = query.get(Q.low) === '1';
+  /**
+   * 改地址栏参数（与订单页 `patch` 同口径）：等于默认值的键直接删掉；改筛选时页码回到 1 由调用方传 `page: '1'`。
+   * ⚠️ 进了 `load` 的依赖：必须稳定——`query` 在同一路由下是同一个实例，`onNavigate` 由外层固定。
+   */
+  const patch = useCallback(
+    (next: Partial<Record<(typeof Q)[keyof typeof Q], string>>): void => {
+      const q = new URLSearchParams(query);
+      for (const [key, value] of Object.entries(next)) {
+        const drop =
+          value === undefined ||
+          value === '' ||
+          (key === Q.status && value === 'all') ||
+          (key === Q.page && value === '1') ||
+          (key === Q.low && value === '0');
+        if (drop) q.delete(key);
+        else q.set(key, value);
+      }
+      if (onNavigate !== undefined) onNavigate({ page: 'products', id: '', query: q });
+      else setLocalQuery(q);
+    },
+    [query, onNavigate],
+  );
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  /** 列表取数失败（反馈走 Toast；这里只用来区分"空"与"取不到"，审查 2026-10-09 / ui/adoption）。 */
+  const [failed, setFailed] = useState(false);
   /** 正在执行上下架的商品 id（按钮禁用态，空串 = 没有）。 */
   const [busyId, setBusyId] = useState('');
   /** 搜索框（未提交）与已生效的关键词；库存紧张筛选（三端联动 UI 模拟 2026-10-08）。 */
-  const [keyword, setKeyword] = useState('');
-  const [applied, setApplied] = useState('');
-  const [lowStock, setLowStock] = useState(false);
+  const [keyword, setKeyword] = useState(applied);
+  // 地址栏里的关键词变了（后退 / 打开别人发来的链接）→ 输入框跟着变
+  useEffect(() => setKeyword(applied), [applied]);
   /**
    * 待确认上下架的商品 id（三端联动模拟 2026-10-08）。
    * @why 原先一点即生效，且生效后列表按更新时间重排、被操作的行跳到第一行——
    *      原位置换成了另一件商品，连点两下就会误下架（或误上架）另一件。改成两步：点一下出「确认」，再点才生效。
    */
   const [confirmId, setConfirmId] = useState('');
-  /** 内联改库存的反馈出口（AJ-403；本页其余反馈仍是行内，见 ui/adoption 的欠账清单）。 */
+  /** 本页全部反馈的出口：内联改库存（AJ-403）、上下架失败、列表加载失败（审查 2026-10-09 起统一走 Toast）。 */
   const sink = useToasts();
+  // 编辑页带回来的"已保存…"同样走 Toast（成功 3 秒自动消失，与本页其余反馈同一出口）
+  useEffect(() => {
+    if (flash !== '') sink.success(flash);
+  }, [flash, sink.success]);
 
   /**
    * 请求序号（A-05）：翻页 / 切筛选时，晚到的旧响应不得覆盖新状态。
@@ -75,7 +120,6 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
   const load = useCallback(async () => {
     const seq = ++reqSeq.current;
     setLoading(true);
-    setError('');
     try {
       const res = await listProducts(api, {
         page,
@@ -88,17 +132,20 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
       setRaw(res.items);
       setRows(productRows(res.items));
       setTotal(res.total);
+      setFailed(false);
       // 扫描 A-02：当前页超出最后一页（例如在"已下架"筛选里把最后一页唯一一件上架）→ 拉回最后一页
       const last = Math.max(1, Math.ceil(res.total / PAGE_SIZE));
-      if (page > last) setPage(last);
+      if (page > last) patch({ [Q.page]: String(last) });
     } catch (e) {
       if (seq !== reqSeq.current) return;
-      // ⚠️ 失败**不清列表**（@why 见文件头）：只显示错误，列表保留上一次的结果
-      setError(e instanceof ApiError ? e.message : String(e));
+      // ⚠️ 失败**不清列表**（@why 见文件头）：只报错，列表保留上一次的结果
+      setFailed(true);
+      const { text, traceId } = toastError(e, '商品列表加载失败');
+      sink.error(text, { traceId });
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
-  }, [api, page, status, applied, lowStock]);
+  }, [api, page, status, applied, lowStock, patch, sink.error]);
 
   useEffect(() => {
     void load();
@@ -119,12 +166,13 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
       } catch (e) {
         // ⚠️ 回滚：不回滚的表现是"UI 说已下架、服务端还在售"，而列表下一次刷新才暴露
         setRows((prev) => prev.map((r) => (r.id === row.id ? withStatus(r, row.status) : r)));
-        setError(e instanceof ApiError ? e.message : String(e));
+        const { text, traceId } = toastError(e, row.online ? '下架失败' : '上架失败');
+        sink.error(text, { traceId });
       } finally {
         setBusyId('');
       }
     },
-    [api, load],
+    [api, load, sink.error],
   );
 
   /** 内联改库存成功：就地改这一行（原始条目 + 展示行），不重取列表（StockCell @limitation 一）。 */
@@ -150,10 +198,7 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
             key={s}
             type="button"
             className={s === status ? 'chip chip-on' : 'chip'}
-            onClick={() => {
-              setStatus(s);
-              setPage(1);
-            }}
+            onClick={() => patch({ [Q.status]: s, [Q.page]: '1' })}
           >
             {s === 'all' ? '全部' : STATUS_LABELS[s]}
           </button>
@@ -161,10 +206,7 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
         <button
           type="button"
           className={lowStock ? 'chip chip-on' : 'chip'}
-          onClick={() => {
-            setLowStock((v) => !v);
-            setPage(1);
-          }}
+          onClick={() => patch({ [Q.low]: lowStock ? '0' : '1', [Q.page]: '1' })}
         >
           库存紧张（≤ {LOW_STOCK_THRESHOLD}）
         </button>
@@ -176,32 +218,22 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
           onChange={(e) => setKeyword(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-              setApplied(keyword.trim());
-              setPage(1);
+              patch({ [Q.q]: keyword.trim(), [Q.page]: '1' });
             }
           }}
         />
         <button
           type="button"
           className="btn btn-secondary"
-          onClick={() => {
-            setApplied(keyword.trim());
-            setPage(1);
-          }}
+          onClick={() => patch({ [Q.q]: keyword.trim(), [Q.page]: '1' })}
         >
           搜索
         </button>
       </div>
 
       <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
-      {flash !== '' && (
-        <p className="ok" role="status">
-          {flash}
-        </p>
-      )}
-      {error !== '' && <p className="error">{error}</p>}
       {loading && <p className="muted">加载中…</p>}
-      {!loading && rows.length === 0 && error === '' && (
+      {!loading && rows.length === 0 && !failed && (
         <p className="muted">{applied !== '' || lowStock ? '没有符合条件的商品' : '还没有商品'}</p>
       )}
 
@@ -292,7 +324,7 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
           type="button"
           className="btn btn-secondary"
           disabled={page <= 1}
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          onClick={() => patch({ [Q.page]: String(Math.max(1, page - 1)) })}
         >
           上一页
         </button>
@@ -303,7 +335,7 @@ export function ProductsPage({ api, onEdit, flash = '' }: ProductsPageProps) {
           type="button"
           className="btn btn-secondary"
           disabled={page >= lastPage}
-          onClick={() => setPage((p) => p + 1)}
+          onClick={() => patch({ [Q.page]: String(page + 1) })}
         >
           下一页
         </button>

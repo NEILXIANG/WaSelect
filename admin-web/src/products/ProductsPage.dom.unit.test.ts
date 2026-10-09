@@ -110,7 +110,8 @@ describe('商品列表：上下架后的状态显示（AJ-231）', () => {
     await toggleStatus(el, '下架');
     expect(statusCell(el)).toBe('在售');
     expect(button(el, '下架')).not.toBeNull();
-    expect(el.querySelector('.error')?.textContent).toContain('服务器内部错误');
+    // 审查 2026-10-09：反馈统一走 Toast（错误恒停留），不再是页面顶部一行红字
+    expect(el.querySelector('.toast[data-kind="error"]')?.textContent).toContain('服务器内部错误');
   });
 
   it('连续两次：下架再上架，状态列每次都跟着变', async () => {
@@ -258,5 +259,50 @@ describe('商品列表：草稿与内联改库存（AJ-403）', () => {
     await click(button(el, '放弃'));
     expect(stockInput(el)).toBeNull();
     expect(stockCell(el).textContent).toContain('3');
+  });
+});
+
+/** 审查 2026-10-09（WorkBuddy 评估 4.1）：筛选 / 关键词 / 库存紧张 / 页码进地址栏，与订单页同口径。 */
+describe('商品列表：筛选与页码进地址栏', () => {
+  async function openAt(q: string) {
+    const listCalls: string[] = [];
+    const navs: string[] = [];
+    const api = async (req: { path: string; method?: string }): Promise<unknown> => {
+      listCalls.push(req.path);
+      return {
+        items: [{ ...PRODUCT, updated_at: '2026-10-01T00:00:00.000Z' }],
+        total: 120,
+        page: 1,
+        size: 20,
+      };
+    };
+    mounted = await mount(
+      createElement(ProductsPage, {
+        api: api as never,
+        onEdit: () => undefined,
+        route: { page: 'products', id: '', query: new URLSearchParams(q) },
+        onNavigate: (next: { query: URLSearchParams }) => navs.push(next.query.toString()),
+      }),
+    );
+    return { el: mounted.el, listCalls, navs };
+  }
+
+  it('🔴 打开 #/products?status=offline&low=1&q=鉄&page=3 → 按这些条件取第 3 页（编辑完回来、刷新、别人发来的链接都一样）', async () => {
+    const { el, listCalls } = await openAt('status=offline&low=1&q=%E9%89%84&page=3');
+    const last = listCalls.at(-1) ?? '';
+    expect(last).toContain('status=offline');
+    expect(last).toContain('low_stock=true');
+    expect(last).toContain('page=3');
+    expect(decodeURIComponent(last)).toContain('keyword=鉄');
+    expect((el.querySelector('input.input') as HTMLInputElement).value).toBe('鉄');
+    expect(el.textContent).toContain('第 3 / 6 页');
+  });
+
+  it('🔴 点筛选 / 下一页 → 改地址栏（页码回到 1 时不写 page，默认值不进地址）', async () => {
+    const { el, navs } = await openAt('page=2');
+    await click(button(el, '已下架'));
+    expect(navs.at(-1)).toBe('status=offline');
+    await click(button(el, '下一页'));
+    expect(navs.at(-1)).toBe('page=3');
   });
 });

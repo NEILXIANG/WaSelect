@@ -8,6 +8,10 @@
  * @why 出错时**先刷新、再报错**（P2-49）：父组件的 `load` 开头会清错误条，旧顺序（先 onError 再 onDone）
  *      让错误一闪就没了；刷新后再按那一行的真实状态给提示（`partialRefundErrorNotice`）。
  *
+ * @limitation 金额 / 原因的校验提示（`hint`）**刻意留在行内**、紧挨金额框：它是这张表单的闸门说明
+ *             （改了金额或原因就清，N30），不是"这次操作成没成"——后者已经全部经 onError / onNotice / onSuccess
+ *             走父页的 Toast。因此本文件仍在 ui/adoption 的 PENDING 清单里（原因写在那一行）。
+ *
  * @see ./partial-refund-view.ts；server/src/app/partial-refund-routes.ts
  */
 import { useState } from 'react';
@@ -16,6 +20,7 @@ import { useDrawerBusy } from '../ui/drawer.js';
 import { composeRefundReason, emptyRefundReason } from './refund-reason.js';
 import { RefundReasonField } from './RefundReasonField.js';
 import { ApiError, retryAfterMsSec } from '../api/errors.js';
+import { toastError } from '../ui/toast.js';
 import { createPartialRefund, syncPartialRefund, type AdminApi } from './api.js';
 import {
   partialRefundErrorNotice,
@@ -44,7 +49,8 @@ export interface PartialRefundsProps {
   order: unknown;
   /** 一次写操作结束（成功或失败都调）：父组件据此刷新详情与列表，返回刷新后的订单（取不到为 null）。 */
   onDone: () => unknown;
-  onError: (message: string) => void;
+  /** 失败提示；`traceId` = 报障码（`ApiError.traceId`，审查 2026-10-09：此前没传，Toast 上看不到报障码）。 */
+  onError: (message: string, traceId?: string) => void;
   /** 信息性提示（失败后的"下一步怎么办"）；不传则并入错误条。 */
   onNotice?: ((message: string) => void) | undefined;
   /**
@@ -104,7 +110,8 @@ export function PartialRefunds({
       say?.('部分退款已提交：结果以上方记录的状态为准（处理中的可点「同步」）');
       return;
     }
-    onError(failure instanceof ApiError ? failure.message : String(failure));
+    const { text, traceId } = toastError(failure, '部分退款失败');
+    onError(text, traceId);
     const notice = partialRefundErrorNotice({
       code: failure instanceof ApiError ? failure.code : 0,
       retryAfterSec: retryAfterMsSec(failure),

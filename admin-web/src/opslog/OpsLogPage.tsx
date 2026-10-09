@@ -4,10 +4,13 @@
  * @why 两件事放一页：都是"出事之后来查"的，运营要回答的问题是"昨晚对账有没有异常、谁动过这张单"。
  * @why 请求序号（同 RiskPage A-05）：快速翻页 / 改过滤时，晚到的旧响应不得覆盖新列表。
  * @limitation 只读；对账里的取样 id 不做跳转（订单页按单号搜即可）。
+ * @limitation 两处加载失败（核对结果 / 操作记录）走同一个 `ui/Toast`（审查 2026-10-09，ui/adoption 欠账清单）。
+ *      @tradeoff 同一 kind 只留最新一条：两处同时失败只看得到后到的那条（多半同一原因：断网 / 登录失效），
+ *                翻页 / 查询会先清掉旧错误——放弃的是"核对结果的加载失败一直挂着"，换来的是重试成功后不残留旧红字。
  * @see ./view.ts；./api.ts
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError } from '../api/errors.js';
+import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { AUDIT_PAGE_SIZE, latestReconciliation, listAudit, type AdminApi } from './api.js';
 import {
   auditRows,
@@ -20,11 +23,8 @@ export interface OpsLogPageProps {
   api: AdminApi;
 }
 
-const errText = (e: unknown): string => (e instanceof ApiError ? e.message : String(e));
-
 export function OpsLogPage({ api }: OpsLogPageProps) {
   const [recon, setRecon] = useState<ReconciliationView | null>(null);
-  const [reconError, setReconError] = useState('');
   const [rows, setRows] = useState<AuditRowView[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -32,27 +32,34 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
   const [target, setTarget] = useState('');
   /** 已提交的过滤条件（输入框改了不立刻查，点"查询"才生效）。 */
   const [filter, setFilter] = useState({ actor: '', target: '' });
-  const [error, setError] = useState('');
+  /** 本页反馈出口（原两行红字：核对结果加载失败 / 操作记录加载失败）。 */
+  const sink = useToasts();
   const seq = useRef(0);
 
   useEffect(() => {
     latestReconciliation(api)
       .then((run) => setRecon(reconciliationView(run)))
-      .catch((e: unknown) => setReconError(errText(e)));
-  }, [api]);
+      .catch((e: unknown) => {
+        const { text, traceId } = toastError(e, '核对结果加载失败');
+        sink.error(text, { traceId });
+      });
+  }, [api, sink.error]);
 
   const load = useCallback(async () => {
     const mine = ++seq.current;
-    setError('');
+    sink.error('');
     try {
       const r = await listAudit(api, { page, ...filter });
       if (mine !== seq.current) return;
       setRows(auditRows(r.items));
       setTotal(r.total);
     } catch (e) {
-      if (mine === seq.current) setError(errText(e));
+      if (mine === seq.current) {
+        const { text, traceId } = toastError(e, '操作记录加载失败');
+        sink.error(text, { traceId });
+      }
     }
-  }, [api, page, filter]);
+  }, [api, page, filter, sink.error]);
 
   useEffect(() => {
     void load();
@@ -64,7 +71,6 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
     // 与其它页同一套卡片样式（三端联动 UI 模拟 2026-10-08：原先没有 panel，标题直接压在背景上）
     <section className="panel">
       <h2 className="title">最近一次自动核对（订单与支付记录）</h2>
-      {reconError !== '' && <p className="error">{reconError}</p>}
       {recon !== null && (
         <div className="form">
           <span className={recon.ok ? 'ok' : 'error'}>{recon.headline}</span>
@@ -103,7 +109,6 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
           查询
         </button>
       </div>
-      {error !== '' && <p className="error">{error}</p>}
       <table className="table">
         <thead>
           <tr>
@@ -157,6 +162,7 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
           下一页
         </button>
       </div>
+      <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
     </section>
   );
 }

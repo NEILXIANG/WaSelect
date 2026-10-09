@@ -105,7 +105,7 @@ export function OrderActions({ api, id, order, sink, reload, onChanged }: OrderA
         orderId={id}
         order={order}
         onDone={refreshed}
-        onError={(m) => sink.error(m)}
+        onError={(m, traceId) => sink.error(m, { traceId })}
         onNotice={(m) => sink.info(m)}
         // ⚠️ 成功单独一条通道：走 info 的话上一次失败的错误条会留着，屏幕上红绿各一条
         onSuccess={(m) => sink.success(m)}
@@ -118,6 +118,7 @@ export function OrderActions({ api, id, order, sink, reload, onChanged }: OrderA
         api={api}
         id={id}
         order={order}
+        sink={sink}
         onDone={(message) => {
           void reload().then(() => sink.success(message));
           onChanged();
