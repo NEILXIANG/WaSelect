@@ -806,3 +806,26 @@ describe('daily 一轮会清理 180 天前的用户行为记录（AJ-413）', ()
     }
   });
 });
+
+/**
+ * AJ-419：漏发邮件补发（mail_sweep）挂在 daily 列表里——单测证明 job 本身（mail-sweep.db.test.ts），这里证明它真的被跑到。
+ * 表为空时补 0 封（首次部署守卫），但"跑过"这件事要在日志里看得见。
+ */
+describe('daily 一轮会跑漏发邮件补发（AJ-419）', () => {
+  it('🔴 daily 触发后日志出现一次 mail_sweep_resent（表为空 → count 0）', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline && srv.sink.find('mail_sweep_resent').length === 0) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const line = srv.sink.find('mail_sweep_resent');
+      expect(line).toHaveLength(1);
+      expect(line[0]?.['count']).toBe(0);
+    } finally {
+      await srv.close();
+    }
+  });
+});

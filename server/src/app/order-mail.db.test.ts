@@ -128,3 +128,58 @@ describe('订单通知邮件（2-2）', () => {
     expect(JSON.stringify(sink.lines)).not.toContain('jane.doe');
   });
 });
+
+/**
+ * E-1（工程分析 2026-10-08）：每次发信的结果落 `mail_deliveries`，daily 补发据此找"该发没发成"的。
+ * @why 事件总线发后不等、进程内（event-bus.ts @limitation 一/二）；邮件是买家唯一的主动通知——
+ *      不留记录就无从知道哪封没到。记录里**不放邮箱**（约束七），只放订单、事件与结果。
+ */
+describe('发信记录（mail_deliveries，E-1）', () => {
+  const row = async (key: string) =>
+    (
+      await db`select order_id, tag, status, attempts, last_error from mail_deliveries
+                where idempotency_key = ${key}`
+    )[0];
+
+  it('🔴 发成功 → 一行 sent、attempts=1，键 = 幂等键', async () => {
+    await seed('o-5', 'jane.doe@example.com');
+    const { bus } = setup();
+    await publish(bus, 'order.shipped', 'o-5');
+    expect(await row('order.shipped:o-5')).toEqual({
+      order_id: 'o-5',
+      tag: 'order.shipped',
+      status: 'sent',
+      attempts: 1,
+      last_error: null,
+    });
+  });
+
+  it('🔴 服务商失败 → failed，错误信息里的邮箱被打码；再发成功 → sent、attempts=2', async () => {
+    await seed('o-6', 'jane.doe@example.com');
+    const failing = setup(new Error('invalid recipient jane.doe@example.com'));
+    await publish(failing.bus, 'order.paid', 'o-6');
+    const failed = await row('order.paid:o-6');
+    expect(failed?.['status']).toBe('failed');
+    expect(String(failed?.['last_error'])).not.toContain('jane.doe@');
+    const ok = setup();
+    await publish(ok.bus, 'order.paid', 'o-6');
+    expect(await row('order.paid:o-6')).toMatchObject({
+      status: 'sent',
+      attempts: 2,
+      last_error: null,
+    });
+  });
+
+  it('已经 sent 的不会被后来的失败降级回 failed（补发与实时同时到时以成功为准）', async () => {
+    await seed('o-7', 'jane.doe@example.com');
+    await publish(setup().bus, 'order.refunded', 'o-7');
+    await publish(setup(new Error('HTTP 500')).bus, 'order.refunded', 'o-7');
+    expect(await row('order.refunded:o-7')).toMatchObject({ status: 'sent', attempts: 2 });
+  });
+
+  it('没留邮箱 → skipped（补发不会去捞它）', async () => {
+    await seed('o-8', null);
+    await publish(setup().bus, 'order.shipped', 'o-8');
+    expect((await row('order.shipped:o-8'))?.['status']).toBe('skipped');
+  });
+});

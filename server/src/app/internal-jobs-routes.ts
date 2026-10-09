@@ -43,6 +43,7 @@ import type { InflightJobs } from './inflight-jobs.js';
 import { runSchedulerOnce } from './scheduler.js';
 import { DAILY_JOB_ROW_NAME } from '../ports/scheduler.js';
 import { createDailyReconciliationJob } from './daily-reconciliation.js';
+import { createMailSweepJob } from './mail-sweep.js';
 import { createAutoCompleteJob, createAutoDeliverJob } from './auto-fulfilment.js';
 import { createCleanupLoginAttemptsJob } from './login-attempts-cleanup.js';
 import { createUserEventsRetentionJob } from './user-events-retention.js';
@@ -162,6 +163,9 @@ export function mountInternalJobsRoutes(
                 // P1-9：真正停售前一天报（最少 1 小时，防 FX_MAX_AGE_HOURS 配得很小时阈值变负）
                 fxWarnAfterHours: Math.max(1, deps.config.FX_MAX_AGE_HOURS - 24),
               }),
+              // AJ-419：补发漏发的订单通知邮件——放在对账之后、清理之前：它只重发事件（提交后由 order-mail 发信），
+              //   不改订单状态；排在自动签收之后，刚被自动签收的单不会触发任何信（delivered 本就不发信）
+              createMailSweepJob(),
               createCleanupLoginAttemptsJob(),
               // AJ-413：行为流 180 天保留期清理，同样放在对账之后——它只删过期的埋点行，不参与任何业务判定；
               //   必须在 daily 的事务里跑（append-only 触发器的窄口只在事务内有效，见 adapters/user-events.ts）

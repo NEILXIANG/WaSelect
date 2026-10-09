@@ -275,12 +275,14 @@ describe('迁移本身', () => {
     // + 1（019 的 order_address_history，AJ-293：改址旧值迁出 append-only）
     // + 1（028 的 reconciliation_runs，剩余清单 3-2：对账结果落库供运营日志页读）
     // + 1（030 的 order_refunds，AJ-383：部分退款 / 完成后售后退款）
-    // + 1（034 的 order_notes，AJ-396：订单内部备注，append-only）= 25。
+    // + 1（034 的 order_notes，AJ-396：订单内部备注，append-only）
+    // + 1（037 的 mail_deliveries，AJ-419：订单通知邮件发信记录，daily 补发据此找漏发）= 26。
     // ✅ 文档侧已同步（2026-09-28，一致性审计 AJ-176）：010 落地后文档一度仍写 17（上一轮"已同步"只到 17），
     //    本轮 jp 技术文档 §3/§3.1、工程框架文档、PRD §5、jp README、本库 README / 测试策略 / 架构设计 / 日志规范 /
     //    地基清单统一改为"以本断言为准"（写数字的地方写 20 并注明真源），避免下一次加表再漂移。
     //    ADR-28 写"13 → 17（新增四张）"那份推演的基准是它成文时的 13 张，现以本断言为准。
-    expect(tables).toHaveLength(25);
+    expect(tables).toHaveLength(26);
+    expect(tables).toContain('mail_deliveries');
     expect(tables).toContain('order_notes');
     expect(tables).toContain('order_refunds');
     expect(tables).toContain('orders');
