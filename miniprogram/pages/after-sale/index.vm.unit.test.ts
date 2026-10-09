@@ -10,7 +10,6 @@ describe('formView / submitBody', () => {
       reasonText: '',
       countText: '0/500',
       overLimit: false,
-      canSubmit: false,
     });
     expect(submitBody(initialForm())).toEqual({ ok: false, error: '请选择问题类型' });
   });
@@ -28,7 +27,6 @@ describe('formView / submitBody', () => {
     expect(formView({ reasonIndex: 1, description: '外箱压扁' })).toMatchObject({
       reasonText: '商品破损',
       countText: '4/500',
-      canSubmit: true,
     });
   });
 
@@ -40,7 +38,6 @@ describe('formView / submitBody', () => {
     });
     expect(formView({ reasonIndex: 0, description: '😀'.repeat(500) })).toMatchObject({
       countText: '500/500',
-      canSubmit: true,
     });
     expect(formView({ reasonIndex: 0, description: 'あ'.repeat(501) }).overLimit).toBe(true);
   });

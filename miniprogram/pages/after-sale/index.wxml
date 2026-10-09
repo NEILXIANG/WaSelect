@@ -2,6 +2,7 @@
   售后申请（AJ-420）：选问题类型 + 描述 → 提交 → 回订单详情看进度。
   版式沿用地址编辑页的设计体系（ws-section-head / ws-card / ws-field / ws-button），不引入新样式语言。
   ⚠️ 错误在页面内显示，不弹 toast（与地址编辑页同口径）。
+  ⚠️ 提交按钮只在提交中禁用：缺项时也要能点，点了由页面内提示说缺什么（统一结论 5.3；禁用的灰按钮不告诉人缺什么）。
 -->
 <view class="ws-page">
   <!-- 外边距放在包一层的 view 上：类名写在自定义组件标签上时页面的 ws-gutter 不生效（模拟器截图实测：标题贴左边） -->
@@ -45,7 +46,7 @@
       <ws-button
         text="{{submitting ? '提交中…' : '提交申请'}}"
         type="primary"
-        disabled="{{submitting || !view.canSubmit}}"
+        disabled="{{submitting}}"
         loading="{{submitting}}"
         bindtap="onSubmit"
       />

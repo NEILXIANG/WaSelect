@@ -116,6 +116,29 @@ describe('buyerStatus（买家视角状态与下一步，M-06）', () => {
     expect(buyerStatus('paid', { email: false }).next).toContain('运单号');
   });
 
+  // 统一结论 5.3：同一句"下一步"在详情页与列表各出现一次——详情页说"去订单详情"是自指；
+  // 列表行没有复制运单号、确认收货、申请售后这些按钮，照搬详情页的话就是让人去找不存在的东西
+  it('🔴 详情页口径（默认）：**任何状态**都不说"在订单详情里…"（人已经在详情页）', () => {
+    for (const s of ORDER_STATUS) {
+      expect(buyerStatus(s).next, s).not.toContain('订单详情');
+      expect(buyerStatus(s, { email: true }).next, s).not.toContain('订单详情');
+    }
+    for (const s of ['delivered', 'completed'])
+      expect(buyerStatus(s).next, s).toContain('申请售后');
+  });
+
+  it('🔴 列表口径（inList）：要在详情页做的事都指向订单详情，不叫人在列表里复制运单号 / 点确认收货', () => {
+    const shipped = buyerStatus('shipped', { inList: true }).next;
+    expect(shipped).not.toContain('复制');
+    expect(shipped).not.toContain('「确认收货」');
+    expect(shipped).toContain('订单详情');
+    for (const s of ['delivered', 'completed']) {
+      expect(buyerStatus(s, { inList: true }).next, s).toContain('订单详情');
+    }
+    // 没有列表专用文案的状态：与详情页同一句
+    expect(buyerStatus('refunded', { inList: true }).next).toBe(buyerStatus('refunded').next);
+  });
+
   it('🔴 已发货：给出"确认收货 / 到期自动确认"的去处（AJ-387）；天数是服务端配置 AUTO_DELIVER_DAYS，不写死', () => {
     const n = buyerStatus('shipped').next;
     expect(n).toContain('确认收货');

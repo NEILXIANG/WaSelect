@@ -119,6 +119,14 @@ describe('detailView（整体）', () => {
     expect(v.needsRecheck).toBe(true);
   });
 
+  it('🔴 重查两次仍未确认（recheckGaveUp）→ 按钮恢复，但提示"可能还没到账、请勿重复付款"', () => {
+    const v = detailView({ ...ORDER, status: 'pending_payment' }, { recheckGaveUp: true });
+    expect(v).toMatchObject({ confirming: false, canPay: true, canCancel: true });
+    expect(v.confirmHint).toContain('请勿重复付款');
+    // 服务端已确认（paid）→ 不再提示
+    expect(detailView({ ...ORDER, status: 'paid' }, { recheckGaveUp: true }).confirmHint).toBe('');
+  });
+
   it('🔴 不带 justPaid 时行为完全不变（这条防线不能误伤日常取消）', () => {
     const v = detailView({ ...ORDER, status: 'pending_payment' });
     expect(v.canCancel).toBe(true);

@@ -22,7 +22,8 @@ export function initialForm() {
 const chars = (s) => [...s].length;
 
 /**
- * 表单展示：选中的原因、字数、能不能提交。
+ * 表单展示：选中的原因、字数、是否超长。
+ * @why 不再给"能不能提交"：按钮缺项时也要能点（由 submitBody 的提示说缺什么），见 index.wxml 注释。
  * @param {{reasonIndex: number, description: string}} form
  */
 export function formView(form) {
@@ -32,7 +33,6 @@ export function formView(form) {
     reasonText: row === undefined ? '' : row.label,
     countText: `${String(n)}/${String(AFTER_SALE_DESCRIPTION_MAX)}`,
     overLimit: n > AFTER_SALE_DESCRIPTION_MAX,
-    canSubmit: row !== undefined && n > 0 && n <= AFTER_SALE_DESCRIPTION_MAX,
   };
 }
 

@@ -56,6 +56,8 @@ export const STATUS_LABELS = {
  * @limitation 一：买家词表与管理端词表各一份（视角不同，允许不同）；收进 `packages/shared` 是 P1（对标分析 §3.7）。
  * @limitation 二：`paid` 的"会发邮件"只在调用方**确知**留了邮箱时出现（详情页有 contact_email；
  *              列表行 OrderSummary 没有这个字段，只能说"在订单详情查看"）。
+ * @why `next` 是**详情页**口径、`nextInList` 是**列表**口径（统一结论 5.3）：详情页再说"在订单详情里…"是自指；
+ *      列表行没有复制运单号 / 确认收货 / 申请售后，照搬详情页的话是叫人去找不存在的按钮。没写 `nextInList` 的状态两处同一句。
  * @limitation 三：发货时限 N（ship_within_business_days）只随**商品详情**下发，Order 里没有——
  *              所以"已付款"这里不写"N 个工作日内发出"；要写需给 Order 加字段（契约变更，未做，见 AJ-405）。
  */
@@ -67,18 +69,26 @@ export const BUYER_STATUS = {
   },
   paid: {
     title: '已付款 · 日本采购中',
-    next: '我们正在日本为你采购，发出后可在订单详情查看承运商和运单号。',
+    next: '我们正在日本为你采购，发出后会在本页显示承运商和运单号。',
+    nextInList: '我们正在日本为你采购，发出后可在订单详情查看承运商和运单号。',
     nextWithEmail: '我们正在日本为你采购，发出后会发邮件告知承运商和运单号。',
   },
   shipped: {
     title: '已发货 · 国际运输中',
     next: '包裹已从日本发出，可复制运单号查件。收到后请点「确认收货」；没点的话，系统会在发货一段时间后自动确认。',
+    nextInList:
+      '包裹已从日本发出。查件、确认收货请进订单详情；没确认的话，系统会在发货一段时间后自动确认。',
   },
   delivered: {
     title: '已送达',
-    next: '如果实际没有收到，或商品有问题，可在订单详情里申请售后，处理结果也会在那里回复。',
+    next: '如果实际没有收到，或商品有问题，可以申请售后，处理结果会在本页回复。',
+    nextInList: '如果实际没有收到，或商品有问题，可进订单详情申请售后。',
   },
-  completed: { title: '已完成', next: '订单已完成。商品有问题可在订单详情里申请售后。' },
+  completed: {
+    title: '已完成',
+    next: '订单已完成。商品有问题可以申请售后。',
+    nextInList: '订单已完成。商品有问题可进订单详情申请售后。',
+  },
   cancelled: { title: '已取消', next: '订单已取消，需要的话可以重新下单。' },
   expired: { title: '已超时关闭', next: '超过支付时间，订单已自动关闭；需要的话可以重新下单。' },
   refunding: {
@@ -97,15 +107,16 @@ const UNKNOWN_BUYER_STATUS = { title: '状态未知', next: '如有疑问，请�
 /**
  * 状态 → 买家视角 `{title, next}`（M-06）。
  * @param {unknown} status 契约 `OrderStatus`；也可能是任何东西
- * @param {{email?: boolean}} [opts] `email: true` = 确知这张单留了联系邮箱（@see BUYER_STATUS @limitation 二）
+ * @param {{email?: boolean, inList?: boolean}} [opts] `inList: true` = 订单列表行（用列表口径）；`email: true` = 确知这张单留了联系邮箱（@see BUYER_STATUS @limitation 二）
  * @returns {{title: string, next: string}}
  */
 export function buyerStatus(status, opts = undefined) {
   const s = typeof status === 'string' ? status : '';
   const b = Object.prototype.hasOwnProperty.call(BUYER_STATUS, s) ? BUYER_STATUS[s] : null;
   if (b === null) return { ...UNKNOWN_BUYER_STATUS };
-  const email = opts !== null && typeof opts === 'object' && opts.email === true;
-  return { title: b.title, next: email && b.nextWithEmail ? b.nextWithEmail : b.next };
+  const o = opts !== null && typeof opts === 'object' ? opts : {};
+  if (o.inList === true && b.nextInList) return { title: b.title, next: b.nextInList };
+  return { title: b.title, next: o.email === true && b.nextWithEmail ? b.nextWithEmail : b.next };
 }
 
 /** 可以继续支付的状态（@see @limitation 二）。 */

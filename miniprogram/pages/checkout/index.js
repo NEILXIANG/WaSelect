@@ -479,7 +479,17 @@ Page({
         //         远小于"点了去订单却没反应"（宿主拒绝 navigateTo 时的表现）。
         //      ⚠️ 若将来要把"回到结算页"找回来，正确做法是让订单页在结案后
         //         `redirectTo` 结算页，而不是把订单从 tabBar 里挪出去。
-        wxApi.switchTab({ url: ORDER_PAGE });
+        // 统一结论 5.3：先弹窗把原因说清，用户点「去处理」才走——原先写完文案立刻 switchTab，
+        //   结算页一关文案就没了，用户只看到被甩到订单页。选「留在本页」时页面内文案仍在。
+        wxApi.showModal({
+          title: '先处理未付款的订单',
+          content: String(this.data.error || '未付款的订单太多了，请先完成支付或取消后再下单'),
+          confirmText: '去处理',
+          cancelText: '留在本页',
+          success: (r) => {
+            if (r?.confirm === true) wxApi.switchTab({ url: ORDER_PAGE });
+          },
+        });
       } else if (recoveryFor(code) === 'reload_terms') {
         // 条款升级：重拉版本并把"已同意"复位（让用户对新条款重新确认，而不是对着旧版本点头）
         this.setData({ termsAccepted: false });

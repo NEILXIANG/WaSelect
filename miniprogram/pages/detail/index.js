@@ -33,6 +33,7 @@ import {
   stillAdded,
   stepQty,
   relatedCards,
+  relatedNavMethod,
 } from './index.vm.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -187,7 +188,10 @@ Page({
   onOpenRelated(e) {
     const id = e?.currentTarget?.dataset?.id;
     if (typeof id !== 'string' || id === '') return;
-    wxApi.navigateTo({ url: `${DETAIL_PAGE}?id=${encodeURIComponent(id)}` });
+    const url = `${DETAIL_PAGE}?id=${encodeURIComponent(id)}`;
+    // 统一结论 5.3：栈满了改 redirectTo（navigateTo 会静默失败）
+    if (relatedNavMethod(wxApi.pageDepth()) === 'redirectTo') wxApi.redirectTo({ url });
+    else wxApi.navigateTo({ url });
   },
 
   /**

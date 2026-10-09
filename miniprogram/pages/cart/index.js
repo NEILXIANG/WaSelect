@@ -265,7 +265,11 @@ Page({
    *      而"连删两件后想撤回第一件"在 5 秒内极少见。
    */
   onRemove(e) {
-    const id = this.idOf(e);
+    this.removeWithUndo(this.idOf(e));
+  },
+
+  /** 删除并挂 5 秒撤销：「删除」按钮与「−」减到 0 共用（统一结论 5.3）。 */
+  removeWithUndo(id) {
     if (id === '') return;
     const cart = app.globalData.cart;
     this.pending = pendingRemoval(cart.items(), id, Date.now());
@@ -321,7 +325,12 @@ Page({
     const cart = app.globalData.cart;
     const current = cart.items().find((i) => i.productId === productId);
     if (current === undefined) return;
-    // ⚠️ 减到 0 由 cart-store 定义为"移除"（setQty 的 @why）；这里不额外判断
+    // 统一结论 5.3：减到 0 = 移除（cart-store setQty 的 @why），走删除那条路——同样给 5 秒撤销；
+    //   原先直接 setQty(0)，行消失、没有撤销，与点「删除」的体验不一致
+    if (current.qty + delta <= 0) {
+      this.removeWithUndo(productId);
+      return;
+    }
     cart.setQty(productId, current.qty + delta);
     this.refresh();
   },

@@ -110,6 +110,26 @@ describe('M-14 删除可撤销（AJ-406）', () => {
     expect((page.data['undo'] as { show: boolean }).show).toBe(false);
   });
 
+  // 统一结论 5.3：数量减到 0 由 cart-store 定义为移除，原先走的是 setQty——行直接消失，没有撤销
+  it('🔴 数量 1 再点「−」→ 与删除同一条路：行消失、出现"已删除「…」"；撤销 → 原位置、数量 1', () => {
+    call('onMinus', tapId(OIL.productId));
+    expect(ids()).toEqual([KNIFE.productId]);
+    expect(page.data['undo']).toEqual({
+      show: true,
+      index: 0,
+      text: '已删除「資生堂 クレンジングオイル 200ml」',
+    });
+    call('onUndo');
+    expect(ids()).toEqual([OIL.productId, KNIFE.productId]);
+    expect(cart.items().find((i) => i.productId === OIL.productId)?.qty).toBe(1);
+  });
+
+  it('数量 2 点「−」→ 只减到 1，不出撤销行', () => {
+    call('onMinus', tapId(KNIFE.productId));
+    expect(cart.items().find((i) => i.productId === KNIFE.productId)?.qty).toBe(1);
+    expect((page.data['undo'] as { show: boolean }).show).toBe(false);
+  });
+
   it('🔴 过了 5 秒 → 撤销行收起；之后再点撤销不放回（删除生效）', async () => {
     call('onRemove', tapId(OIL.productId));
     await vi.advanceTimersByTimeAsync(5000);

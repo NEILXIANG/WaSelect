@@ -177,7 +177,8 @@ export function formErrors(model) {
   // P2-37：先归一常见写法再校验（与 toAddressInput 发出去的是同一个值）
   m.phone = normalizeUsPhone(m.phone);
   if (!ADDRESS_PATTERNS.phone.test(m.phone))
-    errors.phone = '电话格式为 +1 开头加 10 位数字，如 +14155550123';
+    // 统一结论 5.3：电话框是数字键盘（打不出「+」），只说能打出来的写法；+1 由 normalizeUsPhone 补
+    errors.phone = '请填美国 10 位电话号码，如 4155550123（带国家码就是 1 开头 11 位）';
   if (!ADDRESS_PATTERNS.ascii.test(m.line1.trim())) errors.line1 = '地址第一行请用英文/数字填写';
   if (!ADDRESS_PATTERNS.asciiOptional.test(m.line2.trim()))
     errors.line2 = '地址第二行请用英文/数字填写（可留空）';

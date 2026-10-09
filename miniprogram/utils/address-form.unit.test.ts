@@ -100,8 +100,12 @@ describe('formErrors（格式预检）', () => {
     expect(r.first).toContain('收件人');
   });
 
-  it('电话少 +1 / 邮编非 5 位 / 州非两位 → 各自有对应提示', () => {
-    expect(formErrors({ ...formModel(ADDR), phone: '415555012' }).errors.phone).toContain('+1');
+  it('电话位数不对 / 邮编非 5 位 / 州非两位 → 各自有对应提示', () => {
+    // 统一结论 5.3：电话框是数字键盘，打不出「+」——提示只说能打出来的写法（10 位，或 1 开头 11 位），不叫人输 +1
+    const phoneErr = formErrors({ ...formModel(ADDR), phone: '415555012' }).errors.phone ?? '';
+    expect(phoneErr).toContain('10 位');
+    expect(phoneErr).toContain('4155550123');
+    expect(phoneErr).not.toContain('+');
     expect(formErrors({ ...formModel(ADDR), postal_code: '9410' }).errors.postal_code).toContain(
       '5 位',
     );

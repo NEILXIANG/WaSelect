@@ -24,6 +24,8 @@ import {
   stillAdded,
   stepQty,
   relatedCards,
+  relatedNavMethod,
+  PAGE_STACK_MAX,
 } from './index.vm.js';
 
 /** 像真的商品（契约 Product 全形状：报关字段在，但视图不该透出它们）。 */
@@ -381,6 +383,20 @@ describe('同类推荐（A10，AJ-416）', () => {
       'kitchen',
     );
     expect(detailView({ title: 'x', price_jpy: 100 }).category).toBe('');
+  });
+
+  // 统一结论 5.3：每点一次推荐压一层，到 10 层后 navigateTo 静默失败（实测第 9–11 次点击页面不变）
+  it.each([
+    [1, 'navigateTo'],
+    [PAGE_STACK_MAX - 1, 'navigateTo'],
+    [PAGE_STACK_MAX, 'redirectTo'],
+    [PAGE_STACK_MAX + 1, 'redirectTo'],
+  ])('🔴 relatedNavMethod：当前栈 %i 层 → %s', (depth, method) => {
+    expect(relatedNavMethod(depth)).toBe(method);
+  });
+
+  it('PAGE_STACK_MAX = 10（官方：页面栈最多十层）', () => {
+    expect(PAGE_STACK_MAX).toBe(10);
   });
 
   it('🔴 relatedCards：排除当前这件与售罄的，最多 4 件；价格非整数的不出（ws-price 只收整数）', () => {

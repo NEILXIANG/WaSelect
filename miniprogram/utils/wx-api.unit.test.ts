@@ -409,3 +409,18 @@ describe('getPlatform（P2-33：开发版区分模拟器与真机）', () => {
     }
   });
 });
+
+describe('pageDepth（统一结论 5.3：同类推荐别把页面栈压满）', () => {
+  it('🔴 返回 getCurrentPages() 的长度', () => {
+    vi.stubGlobal('getCurrentPages', () => [{}, {}, {}]);
+    try {
+      expect(createWxApi().pageDepth()).toBe(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('宿主没有 getCurrentPages（Node 侧忘了注入）→ 响亮失败，不返回假数字', () => {
+    expect(() => createWxApi().pageDepth()).toThrow(/getCurrentPages/);
+  });
+});

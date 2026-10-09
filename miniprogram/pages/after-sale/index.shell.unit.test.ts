@@ -56,7 +56,7 @@ describe('售后申请页', () => {
   it('🔴 填好提交 → POST /orders/{id}/after-sales（原因值 + 去空白描述）→ 出栈回订单详情', async () => {
     await open();
     fill();
-    expect(page.data['view']).toMatchObject({ reasonText: '商品破损', canSubmit: true });
+    expect(page.data['view']).toMatchObject({ reasonText: '商品破损' });
     call('onSubmit');
     await settle();
     expect(posts).toEqual([
@@ -115,6 +115,15 @@ describe('售后申请页', () => {
     await settle();
     expect(page.data['error']).not.toBe('');
     expect(posts).toEqual([]);
+  });
+
+  // 统一结论 5.3：按钮在缺项时 disabled，上面"没选原因就点"那条逻辑永远轮不到——录屏第 17 帧只见灰按钮、不知缺什么。
+  // 壳层测试渲染不了 WXML，只能直接看绑定：提交按钮只在提交中禁用（与地址编辑页同口径）。
+  it('🔴 提交按钮只在提交中禁用；缺项时照样可点，由页面内提示说缺什么', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    const btn = /<ws-button[^>]*bindtap="onSubmit"[^>]*\/>/s.exec(wxml)?.[0] ?? '';
+    expect(btn).not.toBe('');
+    expect(/disabled="([^"]*)"/.exec(btn)?.[1]).toBe('{{submitting}}');
   });
 
   it('页面已在 app.json 登记', () => {

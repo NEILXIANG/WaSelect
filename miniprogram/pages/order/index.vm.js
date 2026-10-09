@@ -61,7 +61,7 @@ export function orderRows(items) {
     .map((o) => {
       const status = typeof o.status === 'string' ? o.status : '';
       const hasTotal = Number.isInteger(o.total_jpy);
-      const buyer = buyerStatus(status);
+      const buyer = buyerStatus(status, { inList: true });
       return {
         orderId: o.order_id,
         orderNo: typeof o.order_no === 'string' ? o.order_no : '',

@@ -38,7 +38,7 @@ const settle = async (): Promise<void> => {
   for (let i = 0; i < 30; i += 1) await Promise.resolve();
 };
 
-async function open(id = 'o-1'): Promise<void> {
+async function open(id = 'o-1', extra: Record<string, string> = {}): Promise<void> {
   page = await loadPage(new URL('./index.js', import.meta.url).href, {
     globalData: {
       apiBase: 'http://api.test',
@@ -60,7 +60,7 @@ async function open(id = 'o-1'): Promise<void> {
     },
   });
   // 真机生命周期：onLoad → onShow（取单在 onShow）
-  call('onLoad', { id });
+  call('onLoad', { id, ...extra });
   call('onShow');
   await settle();
   calls = [];
@@ -224,5 +224,25 @@ describe('订单详情：申请售后入口（AJ-420）', () => {
     expect(wxml).toMatch(
       /wx:if="\{\{view\.afterSale\.canApply\}\}"[\s\S]{0,120}bindtap="onApplyAfterSale"/,
     );
+  });
+});
+
+describe('支付结果确认中：重查两次仍未确认（统一结论 5.3）', () => {
+  it('🔴 放弃"刚付过"的假设后恢复按钮，同时说清：可能还没到账、请勿重复付款、稍后下拉刷新', async () => {
+    vi.useFakeTimers();
+    try {
+      order = { ...ORDER, status: 'pending_payment', expires_at: '2099-01-01T00:00:00.000Z' };
+      await open('o-1', { justPaid: '1' });
+      expect(page.data['view']).toMatchObject({ confirming: true, canPay: false });
+      await vi.advanceTimersByTimeAsync(1500);
+      await settle();
+      await vi.advanceTimersByTimeAsync(3000);
+      await settle();
+      const view = page.data['view'] as Record<string, unknown>;
+      expect(view).toMatchObject({ confirming: false, canPay: true, canCancel: true });
+      expect(String(view['confirmHint'])).toContain('请勿重复付款');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

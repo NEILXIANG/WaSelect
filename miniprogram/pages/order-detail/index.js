@@ -94,6 +94,7 @@ Page({
       options?.justPaid === '1' ||
       recentExternalPay(app.globalData.externalPay, this.orderId, Date.now());
     this.recheckCount = 0;
+    this.recheckGaveUp = false;
     // @see @limitation 一：空 id 不发请求
     if (this.orderId === '') this.setData({ error: '订单不存在或链接无效', retryable: false });
     else this.setData({ retryable: true });
@@ -137,7 +138,11 @@ Page({
       });
       this.lastOrder = res;
       this.setData({
-        view: detailView(res, { justPaid: this.justPaid, nowMs: Date.now() }),
+        view: detailView(res, {
+          justPaid: this.justPaid,
+          recheckGaveUp: this.recheckGaveUp,
+          nowMs: Date.now(),
+        }),
         error: '',
         copied: '',
       });
@@ -165,8 +170,16 @@ Page({
     if (view === null || view.needsRecheck !== true) return;
     if (this.recheckCount >= 2) {
       // 两次都没确认下来 → 放弃"刚付过"这个假设，恢复常规按钮
+      // 提示留到页面关闭（之后的刷新若仍待付款也照样提示：钱可能仍在路上，统一结论 5.3）
       this.justPaid = false;
-      this.setData({ view: detailView(this.lastOrder, { justPaid: false, nowMs: Date.now() }) });
+      this.recheckGaveUp = true;
+      this.setData({
+        view: detailView(this.lastOrder, {
+          justPaid: false,
+          recheckGaveUp: true,
+          nowMs: Date.now(),
+        }),
+      });
       return;
     }
     this.recheckCount += 1;

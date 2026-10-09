@@ -23,6 +23,8 @@ let fail: (Error & { code?: number }) | null;
 /** A10：同类推荐列表请求的地址（null = 没发）。 */
 let listUrl: string | null;
 let switches: string[];
+let redirects: string[];
+let depth: number;
 const call = (name: string, ...args: unknown[]): unknown =>
   (page[name] as (...a: unknown[]) => unknown)(...args);
 const settle = async (): Promise<void> => {
@@ -36,6 +38,7 @@ beforeEach(async () => {
   fail = null;
   listUrl = null;
   switches = [];
+  redirects = [];
   const disk = new Map<string, unknown>();
   cart = createCartStore({
     storage: {
@@ -47,7 +50,10 @@ beforeEach(async () => {
   vi.stubGlobal('wx', {
     navigateTo: (o: { url: string }) => navs.push(o.url),
     switchTab: (o: { url: string }) => switches.push(o.url),
+    redirectTo: (o: { url: string }) => redirects.push(o.url),
   });
+  depth = 2;
+  vi.stubGlobal('getCurrentPages', () => Array.from({ length: depth }, () => ({})));
   page = await loadPage(new URL('./index.js', import.meta.url).href, {
     globalData: {
       apiBase: 'http://api.test',
@@ -196,6 +202,14 @@ describe('详情页同类推荐 / 下架去首页（A10，AJ-416）', () => {
     ]);
     call('onOpenRelated', { currentTarget: { dataset: { id: 'p-nambu-kyusu' } } });
     expect(navs.at(-1)).toBe('/pages/detail/index?id=p-nambu-kyusu');
+  });
+
+  it('🔴 页面栈已满 10 层 → 点推荐改用 redirectTo（替换当前详情页），不再 navigateTo 静默失败', () => {
+    depth = 10;
+    const before = navs.length;
+    call('onOpenRelated', { currentTarget: { dataset: { id: 'p-nambu-kyusu' } } });
+    expect(navs.length).toBe(before);
+    expect(redirects.at(-1)).toBe('/pages/detail/index?id=p-nambu-kyusu');
   });
 
   it('🔴 已下架（40401，不给重试）→ 错误态的按钮是"去首页逛逛"，点了回首页', async () => {

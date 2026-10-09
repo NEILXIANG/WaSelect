@@ -185,7 +185,8 @@ function confirmingJustPaid(payable, justPaid) {
 /**
  * `GET /orders/{id}` → 详情页视图。
  * @param {unknown} order 契约 `Order`；也可能是任何东西
- * @param {unknown} [opts] `{ justPaid?: boolean, nowMs?: number }`——刚从支付页过来（MP3-04，见上）；`nowMs` = 当前时刻（截止判定用，不传则不判）。
+ * @param {unknown} [opts] `{ justPaid?: boolean, recheckGaveUp?: boolean, nowMs?: number }`——刚从支付页过来（MP3-04，见上）；
+ *       `recheckGaveUp` = 薄壳重查两次仍未确认、已放弃 justPaid 假设；`nowMs` = 当前时刻（截止判定用，不传则不判）。
  *       可选：不传与传脏值都等于"没刚付过"（存量调用方不必改）。
  * @returns 见各字段注释
  */
@@ -234,7 +235,16 @@ export function detailView(order, opts = undefined) {
     canCancel: showCancel,
     /** 确认屏：告诉用户"钱在确认中"，而不是让他自己猜刚才付没付上。 */
     confirming,
-    confirmHint: confirming ? '支付结果确认中，请稍后刷新' : '',
+    /**
+     * 确认屏的提示；重查两次仍未确认（`recheckGaveUp`）后按钮已还给用户，但要说清"可能只是还没到账"——
+     * 统一结论 5.3：原先放弃后直接恢复「继续支付」、一句话都不说，用户只会以为没付上、再付一次。
+     * （同通道再点「继续支付」服务端复用同一个付款链接，已付过的会话付不了第二次——pay-intent.ts 第 4 步；这句话防的是人先慌。）
+     */
+    confirmHint: confirming
+      ? '支付结果确认中，请稍后刷新'
+      : options.recheckGaveUp === true && payable
+        ? '还没收到付款结果。若刚才已完成付款，到账可能要几分钟，请勿重复付款，稍后下拉刷新查看'
+        : '',
     /** 薄壳据此退避重查（最多两次，见 vm 的 @limitation）。 */
     needsRecheck: confirming,
     createdAtText: timeText(o.created_at),

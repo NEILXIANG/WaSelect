@@ -181,6 +181,20 @@ export function buyNowItem(view, productId, qty = 1) {
 /** 同类推荐最多几件（A10）：一屏两行两列，再多就成了第二个首页。 */
 const RELATED_MAX = 4;
 
+/** 小程序页面栈上限（官方："页面栈最多十层"）。 */
+export const PAGE_STACK_MAX = 10;
+
+/**
+ * 点同类推荐用哪种跳转（统一结论 5.3）：栈没满压一层（能按返回回到上一件）；满了替换当前页。
+ * @why 原先一律 navigateTo：第 10 层之后点击静默失败、没有任何提示（模拟器实测第 9–11 次点击页面不变）。
+ * @tradeoff 满栈时 redirectTo 让"返回"跳过当前这一件——比点了没反应好；不清栈（reLaunch 会丢掉来路）。
+ * @param {number} depth 当前页面栈深度（薄壳经 wx-api.pageDepth 取）
+ * @returns {'navigateTo' | 'redirectTo'}
+ */
+export function relatedNavMethod(depth) {
+  return depth < PAGE_STACK_MAX ? 'navigateTo' : 'redirectTo';
+}
+
 /**
  * 同类推荐（A10，AJ-416）：`GET /products?category=` 的结果 → 小卡片。
  * @why 排除当前这件与售罄的：推荐一件点进去就买不了的，比不推荐更糟。

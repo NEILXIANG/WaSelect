@@ -11,11 +11,11 @@
   用户会读成"这家店没有条款"。@see index.vm.js 的 legalState
 -->
 <view class="ws-page">
-  <ws-section-head
-    class="ws-gutter legal__head"
-    kicker="Terms &amp; Policies"
-    title="条款与政策"
-  />
+  <!-- 外边距写在外层 view 上：写在组件标签上落到 inline 宿主，留白不生效（实测标题贴边，见 component-class-guard） -->
+  <!-- kicker 写裸「&」：组件属性里的 &amp; 不解码，原样显示成"&AMP;"（模拟器截图实测 2026-10-09；见 component-class-guard） -->
+  <view class="ws-gutter legal__head">
+    <ws-section-head kicker="Terms & Policies" title="条款与政策" />
+  </view>
 
   <ws-state-block
     wx:if="{{error}}"

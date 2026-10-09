@@ -44,7 +44,7 @@ describe('orderRows（列表行）', () => {
       totalText: '9,150 円',
       totalSub: '≈ $62.20 · ≈ ¥448.00',
       statusText: '待付款',
-      nextText: buyerStatus('created').next,
+      nextText: buyerStatus('created', { inList: true }).next,
       canPay: true,
       // 测试改动（AJ-408 M-11）：列表行新增下单时间 / 缩略图 / 件数三字段（已批准的新行为），toEqual 整体比对随之补齐
       createdText: '2026-09-27 09:00（日本时间）',
@@ -57,7 +57,7 @@ describe('orderRows（列表行）', () => {
   it('🔴 M-06：已付款行用代购视角文案 + 下一步；列表不知道有没有留邮箱 → 不承诺"会发邮件"', () => {
     const [row] = orderRows([{ order_id: 'p', status: 'paid' }]);
     expect(row?.statusText).toBe('已付款 · 日本采购中');
-    expect(row?.nextText).toBe(buyerStatus('paid').next);
+    expect(row?.nextText).toBe(buyerStatus('paid', { inList: true }).next);
     expect(row?.nextText).not.toContain('邮件');
   });
 
@@ -103,7 +103,8 @@ describe('与共享状态词表的接线（词表本身在 utils/order-status �
     for (const status of Object.keys(STATUS_LABELS)) {
       const [row] = orderRows([{ order_id: 'x', status }]);
       expect(row?.statusText).toBe(buyerStatus(status).title);
-      expect(row?.nextText).toBe(buyerStatus(status).next);
+      // 统一结论 5.3：列表行用列表口径（inList）——要在详情页做的事指向订单详情
+      expect(row?.nextText).toBe(buyerStatus(status, { inList: true }).next);
     }
   });
 });

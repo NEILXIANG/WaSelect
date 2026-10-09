@@ -15,7 +15,7 @@
  * @limitation 一：**只声明当前真用到的能力**（request / getStorageSync / setStorageSync /
  *              removeStorageSync / getRealtimeLogManager / navigateTo / switchTab / login /
  *              navigateBack / showModal / requestPayment / setClipboardData / redirectTo /
- *              stopPullDownRefresh）。
+ *              stopPullDownRefresh；另有全局 getCurrentPages → pageDepth）。
  *              新增一个 wx API 就在这里加一个方法——
  *              不要预先铺满官方 API，铺了就会有人依赖上没被测试过的封装（本项目多次踩过"提前做是猜"）。
  * @limitation 二：`getStorageSync` 的契约是**只取字符串**：读到的不是字符串时一律当"没存过"（返回空串）。
@@ -195,6 +195,13 @@ export interface WxApi {
    * @limitation 十二：**只登记不兜底**（与 navigateTo 同一条，@see @limitation 六）。
    */
   redirectTo(option: WxRedirectOption): void;
+  /**
+   * 当前页面栈深度（全局 `getCurrentPages().length`；它不挂在 `wx` 上，但同属宿主能力，一样收在这里便于注入）。
+   * @why 统一结论 5.3：同类推荐每点一次压一层，压满后 `navigateTo` **静默失败**——调用方要先知道栈多深，才能改用 redirectTo。
+   *      @measured: 模拟器里连点同类推荐，第 9–11 次点击页面不变；官方文档"页面栈最多十层"。
+   * @limitation 宿主没有 `getCurrentPages` 时抛错（同 host() 口径：越早炸越好，不返回假数字）。
+   */
+  pageDepth(): number;
   /**
    * 关闭当前页返回（页面栈出栈）。
    * @why I2 地址编辑页保存成功要回列表——用 `navigateTo` 回列表会**再压一层**，
@@ -398,6 +405,13 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     },
     redirectTo: (option) => {
       host().redirectTo(option);
+    },
+    pageDepth: () => {
+      const pages = (globalThis as { getCurrentPages?: () => unknown[] }).getCurrentPages;
+      if (typeof pages !== 'function') {
+        throw new Error('getCurrentPages 不存在：pageDepth 只能在小程序运行时里调用（测试请注入）');
+      }
+      return pages().length;
     },
     stopPullDownRefresh: () => {
       host().stopPullDownRefresh();

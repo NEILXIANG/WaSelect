@@ -50,6 +50,11 @@ let navigations: string[];
 /** 剩余清单 4-8：单独记 redirectTo（结算 → 支付必须"替换"本页，不留空结算页在返回栈里）。 */
 let redirects: string[];
 let switches: string[];
+interface Modal {
+  content?: string;
+  success?: (r: { confirm?: boolean; cancel?: boolean }) => void;
+}
+let modals: Modal[];
 let cartCleared: boolean;
 /** A3：建单成功后从购物车移除的那几件。 */
 let removedIds: string[] | null;
@@ -86,6 +91,7 @@ beforeEach(async () => {
   navigations = [];
   redirects = [];
   switches = [];
+  modals = [];
   cartCleared = false;
   removedIds = null;
   channelsByCurrency = {
@@ -101,6 +107,7 @@ beforeEach(async () => {
       navigations.push(o.url);
       redirects.push(o.url);
     },
+    showModal: (o: Modal) => modals.push(o),
     // S5：订单升为 tab 页，40913 的恢复路径改用 switchTab（navigateTo 到 tab 页会被宿主拒绝）
     switchTab: (o: { url: string }) => {
       navigations.push(o.url);
@@ -358,17 +365,30 @@ describe('结算页薄壳：重报价窗口与两个跳转（MP3-05 / MP3-09 / M
     expect(gate().ok).toBe(true); // 新报价回来后才放行
   });
 
-  it('🔴 40913（在途单已达上限）→ 跳订单列表：文案说了要去处理，就得给一个去处', async () => {
+  // 统一结论 5.3：原先写完错误文案立刻 switchTab，结算页关掉、文案跟着没了——用户只看到被甩到订单页，不知道为什么
+  it('🔴 40913（在途单已达上限）→ 先弹窗说清原因，点「去处理」才跳订单列表；购物车不清', async () => {
     await ready();
     orderError = apiError(40913, '未付款的订单太多了，请先完成支付或取消后再下单');
     call('onSubmit');
     await settle();
-    // S5：订单是 tab 页，走 switchTab（这里两种跳转的 url 都收进同一个数组，
-    //     所以断言不变——变的是"必须是 switchTab"这件事本身，
-    //     它由 project-config 的可达性门禁与真机点一遍共同保证）。
-    expect(navigations).toContain('/pages/order/index');
+    expect(switches).toEqual([]); // 用户还没看到原因之前不跳
+    expect(modals).toHaveLength(1);
+    expect(modals[0]?.content).toContain('未付款的订单太多了');
+    modals[0]?.success?.({ confirm: true });
+    // S5：订单是 tab 页，走 switchTab
+    expect(switches).toContain('/pages/order/index');
     // 建单没成功 ⇒ 购物车不能清（用户处理完还要回来这一单）
     expect(cartCleared).toBe(false);
+  });
+
+  it('🔴 40913 弹窗里选「留在本页」→ 不跳，页面内错误文案仍在', async () => {
+    await ready();
+    orderError = apiError(40913, '未付款的订单太多了，请先完成支付或取消后再下单');
+    call('onSubmit');
+    await settle();
+    modals[0]?.success?.({ confirm: false, cancel: true });
+    expect(switches).toEqual([]);
+    expect(String(page.data['error'])).toContain('未付款的订单太多了');
   });
 
   it('🔴 建单在途时点「收货地址」/「查看条款全文」：不跳（支付页会压在地址页上面）', async () => {
