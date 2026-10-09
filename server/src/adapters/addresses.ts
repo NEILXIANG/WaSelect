@@ -81,6 +81,7 @@ export interface AddressRepo {
  *      后者在旧默认行的锁上等，前者提交后旧行已不是默认，后者跳过它、照常插入一条默认，
  *      撞上部分唯一索引 → 23505 → 500（而前一条其实已经保存了）。连点保存、网络重试都会触发。
  * @why 锁 users 行而不是地址行：新建时还没有地址行可锁；锁序"先 users 后其它"与建单、拉黑一致，不会成环。
+ *      ⚠️ `update` 也必须先调它、再锁地址行（P1-2，2026-10-08 实测旧顺序 40P01）——任何新写路径同样守这个顺序。
  * @limitation 只在 is_default=true 时加锁：不设默认的写入不会撞这个索引，不必串行。
  */
 async function lockUserDefaults(tx: Db, userId: string): Promise<void> {
@@ -124,6 +125,16 @@ export function createAddressRepo(db: Db): AddressRepo {
 
     async update(id: string, userId: string, input: AddressInput): Promise<AddressRow | null> {
       return withTransaction(db, async (tx) => {
+        // ⚠️ 锁序必须与 `create()` 一致：**先 users 行、后地址行**（S-03 / 死锁 P1-2）。
+        //    旧实现是"地址行 for update → 再 lockUserDefaults（users 行）"，与 create（users → 地址）
+        //    构成 AB/BA 锁序反转：并发"把 A 改成默认"（先锁地址行）与"新建并设默认"（先锁 users）
+        //    时，若 A 正是要清掉的旧默认行，两事务互等 → 40P01 死锁 → 50000（非 AppError）。
+        //    把 lockUserDefaults 提到最前，与 create 的锁序统一，成环不再可能。
+        //    ⚠️ 只在 is_default=true 时加锁（与 lockUserDefaults 的 @limitation 同口径）：
+        //       不设默认的写入不碰 users 锁、也不清默认，无需串行。
+        if (input.is_default) {
+          await lockUserDefaults(tx, userId);
+        }
         // ⚠️ B23 / AJ-203：**先确认目标存在**，再动"默认"标记——顺序反了就是静默数据损坏。
         //    曾经先 `update … set is_default = false where user_id = …`（清掉所有默认），
         //    再更新目标行；目标不存在（另一个标签页刚删掉它）时更新 0 行 → 返回 null → 404，
@@ -135,7 +146,6 @@ export function createAddressRepo(db: Db): AddressRepo {
           await tx`select id from addresses where id = ${id} and user_id = ${userId} for update`;
         if (target.length === 0) return null;
         if (input.is_default) {
-          await lockUserDefaults(tx, userId);
           // 先清后设（文件头 @why 的 swap 问题）；把自己也一起清，下一步再设回来，语义不变
           await tx`update addresses set is_default = false where user_id = ${userId} and is_default`;
         }

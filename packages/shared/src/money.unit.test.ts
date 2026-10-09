@@ -165,6 +165,23 @@ describe('toMinor（唯一换算入口，整数运算）', () => {
   });
 });
 
+/**
+ * 最大余额法的"按比例"不变量：每项与精确份额 `total × w / Σw` 相差**小于 1**（只差一次取整）。
+ * @why 只验"和等于总额"挡不住"和对、分错"的缺陷——把余数全堆到第一项、甚至整笔给第一项，和照样对；
+ *      退款拆分里那就是"这件商品多退、那件少退"，对账层也看不出来（2026-10-09 审计 WorkBuddy 补丁时补上）。
+ */
+function expectProportional(
+  parts: readonly number[],
+  total: number,
+  weights: readonly number[],
+): void {
+  const sum = weights.reduce((a, b) => a + b, 0);
+  parts.forEach((p, i) => {
+    const exact = (total * (weights[i] ?? 0)) / sum;
+    expect(Math.abs(p - exact), `第 ${i} 项 ${p} 偏离精确份额 ${exact}`).toBeLessThan(1);
+  });
+}
+
 describe('allocate（最大余额法拆分）', () => {
   /**
    * 属性：各项之和恒等于总额，绝不差 1 分钱。
@@ -184,10 +201,44 @@ describe('allocate（最大余额法拆分）', () => {
           expect(parts.reduce((a, b) => a + b, 0)).toBe(total);
           expect(parts).toHaveLength(weights.length);
           for (const p of parts) expect(Number.isInteger(p)).toBe(true);
+          expectProportional(parts, total, weights);
         },
       ),
       { numRuns: 300 },
     );
+  });
+
+  /**
+   * 🔴 负总额（退款拆分）的同一不变量：`allocate` 声明负总额合法（文件头 @why / D18），
+   *    但"各项之和恒等于总额"这条最资损的不变量此前只 fuzz 正总额——负路径只有两个固定用例在守。
+   *    若有人在负数分支引入 off-by-one（remainder 进位判定在负数下出错），上面的正总额属性测试不会红。
+   *    这里补上负总额的随机对拍：和仍恒等于总额、每项仍为整数。
+   * @limitation 负总额下各项也必须为整数，但**符号**随总额（同为负）——只断言"和等于总额"即可，
+   *             不额外断言每项正负，避免与实现的舍入方向细节耦合。
+   */
+  it('属性：负总额（退款拆分）各项之和同样恒等于总额', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: -100_000_000, max: -1 }),
+        fc.array(fc.integer({ min: 0, max: 1_000_000 }), { minLength: 1, maxLength: 12 }),
+        (total, weights) => {
+          fc.pre(weights.some((w) => w > 0));
+          const parts = allocate(total, weights);
+          expect(parts.reduce((a, b) => a + b, 0)).toBe(total);
+          expect(parts).toHaveLength(weights.length);
+          for (const p of parts) expect(Number.isInteger(p)).toBe(true);
+          // 负总额下每项都不该产出 -0（与 applyRate / toMinor 同口径，DOM3-06③）
+          for (const p of parts) expect(Object.is(p, -0)).toBe(false);
+          expectProportional(parts, total, weights);
+        },
+      ),
+      { numRuns: 300 },
+    );
+  });
+
+  it('总额为 0：各项都是 0（不是 -0），长度不变', () => {
+    expect(allocate(0, [3, 0, 7])).toEqual([0, 0, 0]);
+    for (const p of allocate(0, [1, 2])) expect(Object.is(p, -0)).toBe(false);
   });
 
   it('权重之和为 0 时拒绝（避免除零产生 NaN 静默扩散）', () => {

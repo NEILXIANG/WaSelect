@@ -219,4 +219,59 @@ describe('并发设默认（S-03）', () => {
     const defaults = await db`select id from addresses where user_id = 'u-1' and is_default`;
     expect(defaults).toHaveLength(1);
   });
+
+  /**
+   * 🔴 P1-2：`update`（把**当前默认行**再设为默认）与 `create`（新建并设默认）并发——旧锁序会死锁。
+   * @why 旧实现 update 先锁地址行、后锁 users 行；create 先锁 users 行、清默认时再锁旧默认地址行——AB/BA 反转。
+   *      只有 update 的目标**正是**旧默认行时两边才会争同一把地址行锁，才可能成环；
+   *      目标是非默认行（WorkBuddy 原补丁的写法）结构上成不了环，换回旧锁序也照样绿（2026-10-08 实测）。
+   * @why 用"等对方进入锁等待"控制先后，而不是 sleep 碰运气：挡片持住旧默认行 → update 先排进等待 →
+   *      create 拿到 users 行后也排进等待 → 放开挡片。旧锁序下 update 拿到地址行后去等 users、create 等地址行 → 40P01；
+   *      新锁序下 update 一开始就先拿 users，create 在 users 上排队，放开后顺序完成。
+   * @measured 2026-10-08 临时探针：旧锁序 `["ok","ERR 40P01 deadlock detected"]`；新锁序 `["ok","ok"]`。
+   */
+  it('🔴 改默认（update 目标 = 旧默认行）与新建并设默认（create）并发：零 40P01，恰好 1 条默认', async () => {
+    await repo.create('a-0', 'u-1', input({ is_default: true }));
+    /** 本库里正在等行锁的会话数（只看当前测试库，不受并行 worker 的其它库影响）。 */
+    const lockWaiters = async (): Promise<number> => {
+      const r = await db`
+        select count(*)::int as n from pg_stat_activity
+         where datname = current_database() and wait_event_type = 'Lock'
+      `;
+      return Number(r[0]?.n ?? 0);
+    };
+    const waitFor = async (n: number): Promise<void> => {
+      for (let i = 0; i < 200; i += 1) {
+        if ((await lockWaiters()) >= n) return;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      throw new Error(`等不到 ${n} 个锁等待者`);
+    };
+    let release: () => void = () => undefined;
+    let held: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const holding = new Promise<void>((r) => (held = r));
+    const blocker = db.begin(async (tx) => {
+      await tx`select id from addresses where id = 'a-0' for update`;
+      held();
+      await gate;
+    });
+    await holding;
+    const outcome = (p: Promise<unknown>): Promise<string> =>
+      p.then(
+        () => 'ok',
+        (e: unknown) => `ERR ${String((e as { code?: unknown }).code ?? '')}`,
+      );
+    const upd = outcome(repo.update('a-0', 'u-1', input({ is_default: true })));
+    await waitFor(1);
+    const crt = outcome(
+      repo.create('a-new', 'u-1', input({ recipient: 'Carol Smith', is_default: true })),
+    );
+    await waitFor(2);
+    release();
+    await blocker;
+    expect(await Promise.all([upd, crt])).toEqual(['ok', 'ok']);
+    const defaults = await db`select id from addresses where user_id = 'u-1' and is_default`;
+    expect(defaults).toHaveLength(1);
+  });
 });

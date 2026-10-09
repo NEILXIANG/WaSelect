@@ -334,9 +334,16 @@ describe('订单详情：状态与事件流显示中文（管理端只需要中�
     expect(fieldText(el, '状态')).not.toBe('paid');
   });
 
-  it('🔴 已发货 / 待付款两态同样翻中文（同一个字段，同一条路径）', async () => {
+  it('🔴 已发货一态翻中文（待付款见下一条；原标题写"两态"却只测这一态，2026-10-09 审计改名）', async () => {
     status = 'shipped';
-    expect(fieldText(await opened(), '状态')).toBe('已发货');
+    expect(fieldText(await open(), '状态')).toBe('已发货');
+  });
+
+  it('🔴 待付款一态也翻中文（与上一条合起来覆盖原先声称的两态）', async () => {
+    status = 'pending_payment';
+    const el = await open();
+    expect(fieldText(el, '状态')).toBe('买家正在付款');
+    expect(fieldText(el, '状态')).not.toBe('pending_payment');
   });
 
   it('🔴 事件流：订单状态值翻中文（缺陷注入点：改回 e.status 即红）', async () => {
@@ -441,11 +448,6 @@ describe('订单详情：商品行显示采购信息（D-39）', () => {
     expect(rows[1]?.textContent ?? '').toContain('2222222222222');
   });
 });
-
-/** `open()` 后直接拿到根元素（供单行断言用）。 */
-async function opened(): Promise<HTMLElement> {
-  return open();
-}
 
 /**
  * 从列表点进详情时改址表单要预填当前地址（A-02）。
