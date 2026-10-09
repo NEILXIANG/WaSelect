@@ -371,6 +371,23 @@ export async function syncPartialRefund(
   return (res as { refund?: unknown } | null)?.refund ?? null;
 }
 
+/**
+ * `POST /admin/orders/{id}/after-sales/{rid}/resolve`（售后处理，AJ-420，契约 0.6.56）。
+ * @why 不校验响应形状：成功后父页整页刷新，以 `GET /admin/orders/{id}` 的 `after_sales` 为准。
+ */
+export async function resolveAfterSale(
+  api: AdminApi,
+  id: string,
+  rid: string,
+  body: { status: 'processing' | 'resolved' | 'rejected'; note?: string },
+): Promise<void> {
+  await api({
+    path: `/api/v1/admin/orders/${encodeURIComponent(id)}/after-sales/${encodeURIComponent(rid)}/resolve`,
+    method: 'POST',
+    body,
+  });
+}
+
 /** `OrderNote` 形状校验（契约 0.6.42）：缺 id / body / created_at 的行渲染出来是空气泡。 */
 function isOrderNote(x: unknown): x is OrderNote {
   const n = x as Record<string, unknown> | null;

@@ -41,6 +41,7 @@ export const ACTION_LABELS: Readonly<Record<string, string>> = {
   'POST /admin/orders/:id/partial-refunds': '部分退款',
   'POST /admin/orders/:id/partial-refunds/:refundId/sync': '同步部分退款',
   'POST /admin/orders/:id/dispute/release': '解除拒付限制',
+  'POST /admin/orders/:id/after-sales/:rid/resolve': '处理售后',
   'POST /admin/users/:id/block': '拉黑用户',
   'POST /admin/users/:id/unblock': '解除拉黑',
   'PUT /admin/ops/sales-pause': '停售 / 恢复接单',

@@ -24,6 +24,7 @@ import { OrderActions } from './OrderActions.js';
 import { OrderItems } from './OrderItems.js';
 import { OrderTimeline } from './OrderTimeline.js';
 import { OrderCustomerCard } from './OrderCustomerCard.js';
+import { AfterSales } from './AfterSales.js';
 import { Badge } from '../ui/badge.js';
 import { detailBadges } from './badges.js';
 import { addressSummary, isDisputeLocked, paymentSummary, statusText } from './view.js';
@@ -132,6 +133,16 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                   <span className="muted">{paymentSummary(order)}</span>
                 </div>
               )}
+
+              {/* 售后申请（AJ-420）：买家在小程序提交；没有申请时整块不渲染。放在时间线之前：进行中的申请是"待办" */}
+              <AfterSales
+                api={api}
+                orderId={id}
+                order={order}
+                reload={load}
+                onError={(text, traceId) => sink.error(text, { traceId })}
+                onSuccess={(text) => sink.success(text)}
+              />
 
               {/* 时间线（第一批⑤，AJ-396）：系统事件与内部备注按时间混排，底部追加备注。
                 取数与提交在 OrderTimeline 里，不随详情刷新（备注 append-only，追加后就地并入） */}

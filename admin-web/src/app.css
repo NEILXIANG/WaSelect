@@ -1398,3 +1398,24 @@ textarea::placeholder {
     transition: none !important;
   }
 }
+
+/* 订单详情的「售后申请」（AJ-420）：每条一块；进行中的用强调色描边——它是待办 */
+.after-sale {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ws-space-xs);
+  padding: var(--ws-space-sm);
+  border: var(--ws-border) solid var(--md-color-outline-variant);
+  border-radius: var(--md-shape-sm);
+}
+
+.after-sale-open {
+  border-color: var(--md-color-tertiary);
+  background: var(--md-color-tertiary-container);
+}
+
+.after-sale .row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ws-space-xs);
+}
