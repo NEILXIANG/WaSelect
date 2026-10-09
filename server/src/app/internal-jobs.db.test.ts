@@ -582,6 +582,50 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
     }
   });
 
+  /**
+   * AJ-426：该发的买家通知邮件离开补发窗口（48 小时）仍没有 sent 记录 = 系统已放弃；进对账，运营好换渠道联系买家。
+   * 报告带 = [startedAt − 96h, startedAt − 48h)：每封约报两天，漏跑一天也不丢。
+   */
+  it('🔴 邮件放弃：出了 48h 补发窗口仍未发出的报 order_mail_unsent；已发出 / 仍在窗口内 / 超出报告带 / 没留邮箱 / skipped 的不报', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      const o = (id: string, paidHoursAgo: number, email: string | null) => db`
+        insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy, total_jpy,
+                            weight_g, fx_snapshot, address_snapshot, terms_version, expires_at, contact_email, paid_at)
+        values (${id}, ${`W-${id}`}, 'u-recon', 'paid', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now(),
+                ${email}, now() - make_interval(hours => ${paidHoursAgo}))`;
+      const d = (id: string, status: string, attempts: number, hoursAgo: number) => db`
+        insert into mail_deliveries (idempotency_key, order_id, tag, status, attempts, first_at, last_at)
+        values (${`order.paid:${id}`}, ${id}, 'order.paid', ${status}, ${attempts},
+                now() - make_interval(hours => ${hoursAgo}), now() - make_interval(hours => ${hoursAgo}))`;
+      await o('o-mfloor', 150, 'jane.doe@example.com');
+      await d('o-mfloor', 'sent', 1, 150); // 首次部署守卫的地板：记录从 150h 前开始有
+      await o('o-mf', 60, 'jane.doe@example.com');
+      await d('o-mf', 'failed', 3, 40); // 实时 + 两次补发都失败
+      await o('o-mn', 70, 'jane.doe@example.com'); // 一条记录都没有（进程在发信前退出）
+      await o('o-ms', 60, 'jane.doe@example.com');
+      await d('o-ms', 'sent', 2, 40);
+      await o('o-mw', 30, 'jane.doe@example.com'); // 仍在窗口内：今天的补发还会再试
+      await o('o-mold', 100, 'jane.doe@example.com'); // 超出报告带：前两天已报过
+      await o('o-me', 60, null); // 没留邮箱：本来就不发
+      await o('o-mk', 60, 'jane.doe@example.com');
+      await d('o-mk', 'skipped', 1, 60); // 没配邮件服务、只记了日志：预期行为，不算放弃
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const hit = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'order_mail_unsent');
+      expect(hit).toBeDefined();
+      const ctx = hit?.['ctx'] as Record<string, unknown>;
+      expect([ctx['count'], ctx['sample_ids']]).toEqual([
+        2,
+        ['order.paid:o-mf', 'order.paid:o-mn'],
+      ]);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('🔴 部分退款滞留：pending / unknown / initiated 超过 24h 报 stuck_partial_refunds；succeeded 与 23h 的不报', async () => {
     const srv = await buildServer({ withSecret: true });
     try {

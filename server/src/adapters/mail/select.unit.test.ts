@@ -29,6 +29,28 @@ describe('selectMailer', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('🔴 Resend 分支套了排队（AJ-426）：同时交来 2 封，HTTP 同一时刻最多 1 个在途', async () => {
+    let inFlight = 0;
+    let max = 0;
+    const m = selectMailer(
+      { MAIL_PROVIDER_API_KEY: 're_k', MAIL_FROM: 'f@example.com' },
+      {
+        http: {
+          send: async () => {
+            inFlight += 1;
+            max = Math.max(max, inFlight);
+            await new Promise((r) => setTimeout(r, 5));
+            inFlight -= 1;
+            return { status: 200, body: '{"id":"x"}' };
+          },
+        },
+        logger: createLogger({ env: 'test', destination: new MemorySink() }),
+      },
+    );
+    await Promise.all([m.send(MSG), m.send({ ...MSG, idempotencyKey: 'k2' })]);
+    expect(max).toBe(1);
+  });
+
   it('没有密钥 → 只记日志，一次 HTTP 都不发', async () => {
     const calls: HttpRequest[] = [];
     const m = selectMailer(

@@ -17,7 +17,8 @@
  *      ⑧ 部分退款滞留：order_refunds 在途超过 24 小时（AJ-383，见 scanStuckPartialRefunds）；
  *      ⑦ 审核模式仍在生产开启：临到期或已过期（A7 / AJ-378，见 reviewWindowAnomaly）；
  *      ⑪ 迟到付款未退：钱已扣、订单已关，尚未退款（AJ-425，不设回看上界，见 scanLatePaidUnrefunded）；
- *      ⑫ 售后申请等待：提交超过 24 小时仍在 open / processing（AJ-425，见 scanAfterSalesWaiting）。
+ *      ⑫ 售后申请等待：提交超过 24 小时仍在 open / processing（AJ-425，见 scanAfterSalesWaiting）；
+ *      ⑬ 买家通知邮件已放弃：出了 48 小时补发窗口仍没有发出记录（AJ-426，见 scanOrderMailUnsent）。
  *      自动修任何一类都需要业务裁决（退不退？发不发？），MVP 把它留给人——
  *      但没有这个 job，这些行就只能在库里静默躺着（欠账①被评为致命级的原因）。
  *
@@ -40,6 +41,8 @@
 import { AFTER_SALE_OPEN_STATUSES } from '@waselect/shared';
 import type { Db } from '../adapters/db.js';
 import { insertReconciliationRun } from '../adapters/ops-log.js';
+import { plusMs } from '../adapters/clock.js';
+import { MAIL_SWEEP_WINDOW_HOURS, mailFacts } from './mail-sweep.js';
 import {
   DAILY_JOB_ROW_NAME,
   DAILY_STALL_HOURS,
@@ -85,6 +88,8 @@ export const STUCK_REFUND_HOURS = 24;
 
 /** 售后申请等待阈值（小时）：提交超过这么久仍未结案 → 报 after_sales_waiting（AJ-425）。 */
 export const AFTER_SALE_WAITING_HOURS = 24;
+/** 第十三类的报告带宽度（小时）：出了补发窗口之后再报这么久（scanOrderMailUnsent @why）。 */
+export const MAIL_UNSENT_REPORT_HOURS = 48;
 
 /**
  * 心跳停滞阈值：**tick**（常驻调度器，60s 一轮）超过这个分钟数没有成功心跳 = 卡了。
@@ -385,6 +390,32 @@ async function scanAfterSalesWaiting(ctx: JobContext<Db>): Promise<AnomalyClass>
 }
 
 /**
+ * 第十三类：**买家通知邮件已放弃**（AJ-426，统一结论 5.1）——发生时刻落在 [startedAt − 96h, startedAt − 48h)、
+ * 仍没有 sent 记录（没有记录，或最后一次是 failed）的"该发信"事实。样本是幂等键（`事件:订单[:子键]`，不含邮箱）。
+ * @why 补发作业只看最近 48 小时，出了窗口就不再尝试；原先这一步不留任何痕迹，运营不知道哪位买家没收到通知。
+ * @why 报告带取 48 小时宽（每封约报两天）：daily 偶尔漏跑一天也不丢；不设成"一直报"——邮件补不回来，
+ *      运营换渠道联系过之后没有可以"结案"的动作，一直报只会变成噪声。
+ * @why `skipped`（没配邮件服务，只记了日志）不算放弃：那是开发 / 审核期的预期行为。
+ * @limitation 连续漏跑超过两天时，带外的那几封不会再报。
+ */
+async function scanOrderMailUnsent(ctx: JobContext<Db>): Promise<AnomalyClass> {
+  const from = plusMs(
+    ctx.startedAt,
+    -(MAIL_SWEEP_WINDOW_HOURS + MAIL_UNSENT_REPORT_HOURS) * 3_600_000,
+  );
+  const to = plusMs(ctx.startedAt, -MAIL_SWEEP_WINDOW_HOURS * 3_600_000);
+  const rows = await ctx.tx<{ key: string; total: string }[]>`
+    select c.key, count(*) over ()::text as total
+      from (${mailFacts(ctx.tx, from, to)}) c
+      left join mail_deliveries d on d.idempotency_key = c.key
+     where d.idempotency_key is null or d.status = 'failed'
+     order by c.key
+     limit ${RECONCILE_IDS_CAP + 1}
+  `;
+  return { key: 'order_mail_unsent', ...toAnomaly(rows, 'key') };
+}
+
+/**
  * 第八类：**部分退款滞留**（AJ-383）——`order_refunds` 里 initiated / pending / unknown 超过 24 小时。
  * @why 部分退款**不改订单状态**，所以第六类（看 orders.status = refunding）永远看不见它；
  *      停在在途的那一笔还占着额度、挡着下一笔，买家在等钱。与第六类同阈值、同"不设回看上界"口径。
@@ -468,6 +499,7 @@ export function createDailyReconciliationJob(input: {
         await scanStuckPartialRefunds(ctx),
         await scanLatePaidUnrefunded(ctx),
         await scanAfterSalesWaiting(ctx),
+        await scanOrderMailUnsent(ctx),
         await scanProviderRefundUnrecorded(ctx),
         await scanFxRateAging(ctx, input.fxWarnAfterHours ?? 48),
         reviewWindowAnomaly({

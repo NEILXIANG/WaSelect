@@ -20,6 +20,7 @@ export const RECONCILE_CLASS_LABELS: Readonly<Record<string, string>> = {
   // AJ-425：两类"有人负责却没人看得到"的单，进对账后也要说人话
   late_paid_unrefunded: '迟到付款（钱已扣、订单已关）尚未退款',
   after_sales_waiting: '售后申请等待超过 24 小时',
+  order_mail_unsent: '买家通知邮件已放弃（出了 48 小时补发窗口仍未发出）',
   // AJ-425 回扫：审核模式三类此前漏配，运营日志页一直原样显示英文
   review_mode_no_deadline: '审核模式已开启但没设到期日',
   review_mode_expired: '审核模式已过到期日仍在开启',
