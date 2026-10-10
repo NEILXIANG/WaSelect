@@ -175,6 +175,24 @@ const PARTIAL_FAIL_REASONS: Readonly<Record<string, string>> = {
 };
 
 /**
+ * 服务端写死的英文备注 → 中文（三端联动模拟 2026-10-10）。键是"事件状态 + 备注原文"，只认对应事件：
+ * 同样的字样出现在运营手写的备注里（别的事件）不翻，不改人写的字。
+ * 来源：confirm-receipt-routes.ts（buyer_confirmed）、partial-refund.ts（refunded_by_parts 迁 refunding / refunded）。
+ * @limitation 服务端新增写死的英文备注不会自动进这张表——时间线上会原样露出（宁可难看，不吞信息）。
+ */
+const FIXED_EVENT_NOTES: Readonly<Record<string, string>> = {
+  'delivered|buyer_confirmed': '买家确认收货',
+  'refunding|refunded_by_parts': '部分退款累计已退满整单',
+  'refunded|refunded_by_parts': '部分退款累计已退满整单',
+};
+
+/** auto-fulfilment.ts 的 `auto:{N}d`：按天数自动签收 / 自动完成。 */
+const AUTO_ADVANCE_NOTES: Readonly<Record<string, (days: string) => string>> = {
+  delivered: (d) => `发货满 ${d} 天买家未确认，系统自动签收`,
+  completed: (d) => `签收满 ${d} 天，系统自动完成`,
+};
+
+/**
  * 事件流一行的**备注**文案：部分退款几条事件的 note 是服务端拼的机器串，翻成人话（验收 2026-10-08）。
  *
  * 形状（server/src/app/partial-refund.ts）：
@@ -187,6 +205,11 @@ const PARTIAL_FAIL_REASONS: Readonly<Record<string, string>> = {
  */
 export function eventNoteView(status: unknown, note: unknown): { text: string; ref: string } {
   const raw = typeof note === 'string' ? note : '';
+  const fixed = typeof status === 'string' ? FIXED_EVENT_NOTES[`${status}|${raw}`] : undefined;
+  if (fixed !== undefined) return { text: fixed, ref: '' };
+  const auto = /^auto:(\d+)d$/.exec(raw);
+  const autoText = typeof status === 'string' ? AUTO_ADVANCE_NOTES[status] : undefined;
+  if (auto !== null && autoText !== undefined) return { text: autoText(auto[1] ?? ''), ref: '' };
   if (status === 'partial_refunded') {
     const m = /^(.+):([A-Za-z]{3}):(-?\d+)$/.exec(raw);
     const money = m === null ? '—' : minorMoneyText(Number(m[3]), m[2]);

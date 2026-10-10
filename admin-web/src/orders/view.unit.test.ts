@@ -765,3 +765,38 @@ describe('eventNoteView（部分退款事件的机器串 → 人话，验收 202
     expect(eventNoteView('paid', undefined)).toEqual({ text: '', ref: '' });
   });
 });
+
+describe('eventNoteView：服务端写死的英文备注 → 中文（三端联动模拟 2026-10-10）', () => {
+  // 时间线里原样出现"已签收 buyer_confirmed""已退款 refunded_by_parts"：中文后台里夹英文代号，新手运营读不懂
+  it('🔴 买家确认收货 / 系统自动签收、自动完成 / 部分退款退满', () => {
+    expect(eventNoteView('delivered', 'buyer_confirmed')).toEqual({
+      text: '买家确认收货',
+      ref: '',
+    });
+    expect(eventNoteView('delivered', 'auto:14d')).toEqual({
+      text: '发货满 14 天买家未确认，系统自动签收',
+      ref: '',
+    });
+    expect(eventNoteView('completed', 'auto:7d')).toEqual({
+      text: '签收满 7 天，系统自动完成',
+      ref: '',
+    });
+    expect(eventNoteView('refunding', 'refunded_by_parts')).toEqual({
+      text: '部分退款累计已退满整单',
+      ref: '',
+    });
+    expect(eventNoteView('refunded', 'refunded_by_parts')).toEqual({
+      text: '部分退款累计已退满整单',
+      ref: '',
+    });
+  });
+
+  it('只认对应的事件：同样的字样出现在别的事件 / 运营手写的备注里，原样不动', () => {
+    expect(eventNoteView('refunding', 'buyer_confirmed')).toEqual({
+      text: 'buyer_confirmed',
+      ref: '',
+    });
+    expect(eventNoteView('shipped', 'auto:14d')).toEqual({ text: 'auto:14d', ref: '' });
+    expect(eventNoteView('delivered', 'auto:xd')).toEqual({ text: 'auto:xd', ref: '' });
+  });
+});

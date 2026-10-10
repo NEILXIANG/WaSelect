@@ -119,6 +119,13 @@ describe('订单详情 · 售后结案的二次确认与草稿保护', () => {
   const note = (el: HTMLElement): HTMLTextAreaElement | null =>
     el.querySelector('[aria-label="售后申请"] textarea');
 
+  it('🔴 说明框的示例写日元「円」不写「¥」（D-36：¥ 是人民币；运营照抄示例，买家会读成 1,500 元人民币）', async () => {
+    const { el } = await open([OPEN]);
+    const ph = note(el)?.placeholder ?? '';
+    expect(ph).toContain('1,500 円');
+    expect(ph).not.toContain('¥');
+  });
+
   it('🔴 写好说明点「已处理，结案」→ 先弹确认、不发请求；点「确认结案」才提交，请求体带说明', async () => {
     const { el, calls } = await open([OPEN]);
     await type(note(el), '已安排部分退款 1,500 円');
