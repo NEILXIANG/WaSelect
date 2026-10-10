@@ -11,6 +11,7 @@ import { ApiError } from './api/errors.js';
 import type { TokenStore } from './api/token-store.js';
 import { AuthGate, type SessionControls } from './AuthGate.js';
 import { button, click, flush, mount, type, type Mounted } from './testing/dom.js';
+import { onRelogin } from './ui/session-events.js';
 
 let mounted: Mounted | undefined;
 afterEach(async () => {
@@ -86,6 +87,36 @@ describe('AuthGate（P1-7：过期浮层，不卸载页面）', () => {
     expect(el.querySelector('[role="dialog"]')).toBeNull();
     expect(input()?.value).toBe('資生堂 クレンジングオイル');
     expect(store.value()).toBe('new-token');
+  });
+
+  // 第 24 项（2026-10-10）：浮层里重新登录成功要发出"已重新登录"，页面的提示区据此清掉残留的"登录已过期"
+  it('🔴 浮层里重新登录成功 → 通知一次 relogin；登录失败不通知', async () => {
+    const heard: number[] = [];
+    const off = onRelogin(() => heard.push(1));
+    try {
+      let ok = false;
+      mounted = await mount(
+        createElement(AuthGate, {
+          store: memStore('old-token'),
+          login: async () => {
+            if (!ok) throw new ApiError(40101, '未登录或登录已过期', 'tr-1');
+            return 'new-token';
+          },
+          children: (s: SessionControls) => createElement(DraftPage, { session: s }),
+        }),
+      );
+      const el = mounted.el;
+      await click(button(el, '模拟 40101'));
+      await fillLogin(el);
+      await flush();
+      expect(heard).toEqual([]);
+      ok = true;
+      await fillLogin(el);
+      await flush();
+      expect(heard).toEqual([1]);
+    } finally {
+      off();
+    }
   });
 
   // AJ-410 / N5：文案「口令 / 二次验证码」统一为「密码 / 手机验证码」

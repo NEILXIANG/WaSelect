@@ -16,6 +16,7 @@ import { TRACE_HINT } from './trace.js';
 import { act, createElement, Fragment, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/errors.js';
+import { notifyRelogin } from './session-events.js';
 import { button, click, mount, type Mounted } from '../testing/dom.js';
 import {
   TOAST_AUTO_DISMISS_MS,
@@ -220,5 +221,32 @@ describe('空文本（审查 2026-10-09 #4）', () => {
       sink?.error('   ');
     });
     expect(mounted.el.querySelectorAll('.toast')).toHaveLength(0);
+  });
+});
+
+// 第 24 项（2026-10-10）：会话过期时页面那次请求也弹了"未登录或登录已过期"；浮层里重新登录后它还挂在右下角——
+// 已经登录了还说"未登录"。重新登录成功（notifyRelogin）只清掉这一句，别的错误不动。
+describe('重新登录后清掉残留的"登录已过期"提示', () => {
+  it('🔴 有"未登录或登录已过期" → 重新登录 → 消失', async () => {
+    const el = await open();
+    await act(async () => {
+      sink?.error('未登录或登录已过期', { traceId: 'tr-auth' });
+    });
+    expect(el.textContent).toContain('未登录或登录已过期');
+    await act(async () => {
+      notifyRelogin();
+    });
+    expect(el.textContent).not.toContain('未登录或登录已过期');
+  });
+
+  it('别的错误不受影响（重新登录不等于那件事办成了）', async () => {
+    const el = await open();
+    await act(async () => {
+      sink?.error('服务器内部错误', { traceId: 'tr-42' });
+    });
+    await act(async () => {
+      notifyRelogin();
+    });
+    expect(el.textContent).toContain('服务器内部错误');
   });
 });

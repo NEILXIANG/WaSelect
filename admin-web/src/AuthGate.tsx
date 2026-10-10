@@ -22,6 +22,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { expiryWarning, jwtExpMs } from './auth-view.js';
 import type { TokenStore } from './api/token-store.js';
 import { LoginForm } from './LoginForm.js';
+import { notifyRelogin } from './ui/session-events.js';
 
 export interface SessionControls {
   /** 40101 出口（交给请求封装的 onUnauthorized）：清 token，盖上重新登录浮层，不卸载页面。 */
@@ -68,6 +69,8 @@ export function AuthGate({ store, login, children, now = Date.now }: AuthGatePro
     const jwt = await login(email, password, totp);
     store.set(jwt);
     setToken(jwt);
+    // 第 24 项：浮层里重新登录成功 → 通知各页提示区清掉残留的"登录已过期"（@see ./ui/session-events.ts）
+    if (expired) notifyRelogin();
     setExpired(false);
     setNowMs(now());
   };

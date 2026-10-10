@@ -37,6 +37,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { TraceLine } from './trace.js';
+import { ERROR_CODES } from '@waselect/shared';
+import { onRelogin } from './session-events.js';
+
+/** 会话过期的提示原文（shared 注册表 40101）。 */
+const AUTH_EXPIRED_TEXT: string = ERROR_CODES[40101].message;
 
 /** 成功 / 信息类提示的自动消失时长（毫秒）。 */
 export const TOAST_AUTO_DISMISS_MS = 3000;
@@ -137,6 +142,18 @@ export function useToasts(): ToastSink {
   const dismiss = useCallback((id: number) => {
     setToasts((list) => list.filter((t) => t.id !== id));
   }, []);
+
+  // 第 24 项（2026-10-10）：浮层里重新登录成功 → 清掉残留的"未登录或登录已过期"（已经登录了还挂着它会误导）；
+  // 只清这一句，别的错误不动——重新登录不等于那件事办成了。文案取 shared 错误码注册表，与服务端同源
+  useEffect(
+    () =>
+      onRelogin(() => {
+        setToasts((list) =>
+          list.filter((t) => !(t.kind === 'error' && t.text === AUTH_EXPIRED_TEXT)),
+        );
+      }),
+    [],
+  );
 
   return {
     toasts,
