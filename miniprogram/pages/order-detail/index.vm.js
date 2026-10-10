@@ -183,6 +183,19 @@ function confirmingJustPaid(payable, justPaid) {
 }
 
 /**
+ * 有售后申请时状态区的"下一步"（三端联动模拟 2026-10-10）。
+ * @why 已送达 / 已完成的提示是"可以申请售后"——申请过还这么说，与正下方的售后卡片（"处理中"）打架，
+ *      买家会以为上次没提交成功。只在售后卡片认出了申请（`current` 非空）时接管，其余照旧走订单状态。
+ * @returns {string|null} null = 不接管
+ */
+function afterSaleNext(card) {
+  if (card.current === null) return null;
+  return card.current.open
+    ? '售后申请处理中，处理结果会在本页回复。'
+    : '售后已有处理结果（见下方）；还有问题可以再次申请。';
+}
+
+/**
  * `GET /orders/{id}` → 详情页视图。
  * @param {unknown} order 契约 `Order`；也可能是任何东西
  * @param {unknown} [opts] `{ justPaid?: boolean, recheckGaveUp?: boolean, nowMs?: number }`——刚从支付页过来（MP3-04，见上）；
@@ -210,6 +223,7 @@ export function detailView(order, opts = undefined) {
   const showCancel = PAYABLE.includes(status) && !confirming && !expired;
   const showConfirmReceipt = status === 'shipped';
   const showBuyAgain = BUY_AGAIN_STATUSES.includes(status);
+  const afterSale = afterSaleCard(o);
 
   return {
     orderId: typeof o.order_id === 'string' ? o.order_id : '',
@@ -223,7 +237,7 @@ export function detailView(order, opts = undefined) {
       ? ''
       : expired && canPay(status)
         ? '支付时间已到，订单将自动关闭；如需购买请重新下单'
-        : buyer.next,
+        : (afterSaleNext(afterSale) ?? buyer.next),
     // ⚠️ 确认中不给出「继续支付」：用户刚付过一次，再点就是第二笔钱（MP3-04）。
     canPay: showPay,
     /**
@@ -298,6 +312,6 @@ export function detailView(order, opts = undefined) {
      * 售后卡片（AJ-420）：已发货 / 已签收 / 已完成的单给「申请售后」入口；有申请时显示最新一条的进度与处理说明。
      * 不放进底栏：底栏已有确认收货 / 再次购买，售后是"出了问题才找"的低频入口。
      */
-    afterSale: afterSaleCard(o),
+    afterSale,
   };
 }

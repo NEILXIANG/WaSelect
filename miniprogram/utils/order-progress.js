@@ -27,13 +27,19 @@ export const PROGRESS_STEPS = [
   { key: 'delivered', label: '送达' },
 ];
 
-/** 主线状态 → 当前步下标（5 = 全部完成）。 */
+/**
+ * 主线状态 → 当前步下标（= 已完成的步数；5 = 全部完成）。
+ * @why "当前步"是**正在进行的那一步**：待付款 → 付款、已付款 → 日本采购、已发货 → 送达（国际运输中）、
+ *      已送达 / 已完成 → 全部完成。三端联动模拟（2026-10-10）前 shipped / delivered 各少算一格——
+ *      标题写"已送达"，送达那一步却是空心；且与下方 REACHED_BY_EVENT（分支按时间线点亮）不是同一把尺子。
+ *      两张表的一致性由单测「主线与分支同一把尺子」钉住。
+ */
 const MAINLINE_CURRENT = {
   created: 1,
   pending_payment: 1,
   paid: 2,
-  shipped: 3,
-  delivered: 4,
+  shipped: 4,
+  delivered: 5,
   completed: 5,
 };
 

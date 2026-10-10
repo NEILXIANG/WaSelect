@@ -392,10 +392,10 @@ describe('detailView：买家视角状态与下一步（M-06）', () => {
 });
 
 describe('detailView：进度条（M-12，AJ-408；算法在 utils/order-progress，这里只测接线）', () => {
-  it('🔴 已发货 → 发货步为当前，前三步已完成，无分支', () => {
+  it('🔴 已发货 → 前四步（含发货）已完成，送达为当前（国际运输中），无分支', () => {
     const p = detailView(ORDER).progress;
     expect(p.show).toBe(true);
-    expect(p.steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'current', 'todo']);
+    expect(p.steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'done', 'current']);
     expect(p.branch).toBeNull();
   });
 
@@ -501,5 +501,41 @@ describe('detailView · 售后卡片（AJ-420）', () => {
     expect(open).toMatchObject({ show: true, canApply: false });
     expect(open.current).toMatchObject({ reasonText: '发错商品', statusText: '已提交，等待处理' });
     expect(detailView({ status: 'paid' }).afterSale.show).toBe(false);
+  });
+});
+
+describe('detailView · 状态区提示跟着售后走（三端联动模拟 2026-10-10）', () => {
+  const as = (status: string) => ({
+    id: 'as-1',
+    reason: 'damaged',
+    description: '外箱压扁',
+    status,
+    created_at: '2026-10-08T03:00:00.000Z',
+    updated_at: '2026-10-08T03:00:00.000Z',
+  });
+
+  it('🔴 有进行中的售后：不再说"可以申请售后"，改说处理中（下面就是售后卡片，上下两句不能打架）', () => {
+    for (const s of ['open', 'processing']) {
+      const v = detailView({ status: 'delivered', after_sale: as(s) });
+      expect(v.nextText).toBe('售后申请处理中，处理结果会在本页回复。');
+      expect(v.statusText).toBe('已送达');
+    }
+  });
+
+  it('🔴 售后已结案：提示看下方结果，还有问题可再次申请', () => {
+    for (const s of ['resolved', 'rejected']) {
+      expect(detailView({ status: 'completed', after_sale: as(s) }).nextText).toBe(
+        '售后已有处理结果（见下方）；还有问题可以再次申请。',
+      );
+    }
+  });
+
+  it('没有售后 / 售后状态认不出：照旧用订单状态的提示', () => {
+    expect(detailView({ status: 'delivered' }).nextText).toBe(
+      '如果实际没有收到，或商品有问题，可以申请售后，处理结果会在本页回复。',
+    );
+    expect(detailView({ status: 'delivered', after_sale: as('weird') }).nextText).toBe(
+      '如果实际没有收到，或商品有问题，可以申请售后，处理结果会在本页回复。',
+    );
   });
 });

@@ -29,8 +29,11 @@ describe('orderProgress：主线', () => {
     ['created', ['done', 'current', 'todo', 'todo', 'todo']],
     ['pending_payment', ['done', 'current', 'todo', 'todo', 'todo']],
     ['paid', ['done', 'done', 'current', 'todo', 'todo']],
-    ['shipped', ['done', 'done', 'done', 'current', 'todo']],
-    ['delivered', ['done', 'done', 'done', 'done', 'current']],
+    // 三端联动模拟（2026-10-10）：原先 shipped 的"发货"、delivered 的"送达"是 current（空心）——
+    // 标题写着"已发货 / 已送达"，那一步却没点亮。current 统一为"正在进行的那一步"（同 created / paid）：
+    // 已发货 → 发货已完成、送达进行中（国际运输）；已送达 → 五步全部完成。
+    ['shipped', ['done', 'done', 'done', 'done', 'current']],
+    ['delivered', ['done', 'done', 'done', 'done', 'done']],
     ['completed', ['done', 'done', 'done', 'done', 'done']],
   ])('%s', (status, expected) => {
     const p = orderProgress({ status, timeline: [] });
@@ -119,5 +122,20 @@ describe('orderProgress：兜底', () => {
       'delivered',
     ]);
     expect(p.steps[2]).toEqual({ key: 'purchasing', label: '日本采购', state: 'current' });
+  });
+});
+
+describe('orderProgress：主线与分支同一把尺子（防复发）', () => {
+  it('🔴 某状态在主线上"已完成几步"= 时间线里出现该状态时分支认定的步数', () => {
+    // 两张表各管一半（主线按当前状态、分支按时间线），曾经一张差一格：分支里 delivered 记 5 步，主线 delivered 只亮 4 步
+    for (const s of ['paid', 'shipped', 'delivered']) {
+      const main = states(orderProgress({ status: s, timeline: [] })).filter(
+        (x) => x === 'done',
+      ).length;
+      const branch = states(
+        orderProgress({ status: 'refunded', timeline: [{ status: s }, { status: 'refunding' }] }),
+      ).filter((x) => x === 'done').length;
+      expect([s, main]).toEqual([s, branch]);
+    }
   });
 });
