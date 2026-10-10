@@ -24,7 +24,11 @@ export type CustomerListQuery =
       reason: 'page_size_invalid' | 'keyword_too_long' | 'keyword_invalid' | 'sort_invalid';
     };
 
-/** 缺省 → 默认值；其余必须是正整数的十进制串（数组 / 空串 / 小数 → NaN 或非整数）。 */
+/**
+ * 缺省 → 默认值；否则按 `Number()` 解析，由调用方再判"是不是 ≥1 的整数"（数组 / 空串 / 小数 → 判不合格）。
+ * @limitation `Number()` 也接受 `1e2`（=100）、`0x10`（=16）、`+4`、带空格的 `" 3 "`——结果是合法整数就放行。
+ *             与订单 / 商品 / 运营日志列表的页码解析同口径；语义上并不出错，只是不止十进制串。
+ */
 function intParam(v: unknown, dflt: number): number {
   if (v === undefined) return dflt;
   if (typeof v !== 'string' || v.trim() === '') return Number.NaN;

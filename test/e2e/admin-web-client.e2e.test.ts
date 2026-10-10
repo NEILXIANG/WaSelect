@@ -12,8 +12,8 @@
  *        "HTTP 400/401"的网络错，且不触发 onUnauthorized——运营看到"上传失败（HTTP 401）"却不被带回登录页。
  * @why 期望值独立写出（`'20,150 円'`、`'待发货'`），不调被测的格式化函数算期望。
  *
- * @limitation 一：**登录不在这里**：`POST /auth/admin/login` 服务端尚未实现（审计 P2-11，未开工的业务单元），
- *              token 用与生产同一签发函数直接签（chain-server `tokenFor`）。登录接缝在该路由落地时补。
+ * @limitation 一：**登录不在这里**：token 用与生产同一签发函数直接签（chain-server `tokenFor`）。
+ *              登录本身（`POST /auth/admin/login`，app/admin-auth-routes.ts）由它自己的路由测试覆盖。
  * @limitation 二：React 组件的渲染与交互不在这里（admin-web 无组件测试框架，同小程序约束十一的处境）；
  *              这里验的是组件之下那一层：请求封装 + 纯函数 view-model。
  *

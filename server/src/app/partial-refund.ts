@@ -11,8 +11,8 @@
  * @why 熔断拒绝（CircuitOpenError）记 failed 而不是 unknown：熔断在出发前就拒了，请求**一次都没发出去**，
  *      钱不可能动；留着 unknown 反而会让这一笔永远占着额度、挡住下一笔。原样抛，保留"约 N ms 后重试"。
  * @why 部分退款不改订单状态、不回补库存、不发 `order.refunded`（那是整单退款的通知）。
- * @limitation 买家不会收到部分退款的邮件（订单邮件只订阅 paid / shipped / refunded 三个事件）——
- *             需要时客服另行告知；Stripe 自己的退款回执取决于 Dashboard 配置。已登记为后续项。
+ * @why 买家会收到部分退款邮件：每笔落定发 `order.partially_refunded`，订单邮件订阅了它（app/order-mail.ts）；
+ *      累计退满时另发整单退款那封（`order.refunded`）。Stripe 自己的退款回执取决于 Dashboard 配置。
  * @limitation 不接机构退款回调，pending 靠管理员点"同步"或每日对账报出（与整单退款同口径，见 refund-execution.ts）。
  *
  * @see migrations/030_order_refunds.sql；adapters/order-refunds.ts；app/partial-refund-routes.ts
