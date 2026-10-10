@@ -572,3 +572,19 @@ describe('detailView · 改地址的出路（联动走查·熟手买家 2026-10-
     }
   });
 });
+
+// 第 24 项（2026-10-10）：查件引导——原先只有"复制查件链接"，复制之后该干什么没说（小程序里打不开外部网页）
+describe('detailView · 查件引导', () => {
+  it('🔴 有官方查件链接 → 说清"复制后到手机浏览器粘贴打开"；没有链接 → 复制运单号到承运商官网查', () => {
+    const shipped = { status: 'shipped', carrier: 'Japan Post EMS', tracking_no: 'EJ123456789JP' };
+    expect(
+      detailView({
+        ...shipped,
+        tracking_url: 'https://trackings.post.japanpost.jp/x?n=EJ123456789JP',
+      }).trackingHint,
+    ).toBe('点「复制查件链接」，在手机浏览器（Safari / Chrome）里粘贴打开——是日本邮政官网的查件页');
+    expect(
+      detailView({ ...shipped, carrier: 'Yamato', tracking_no: '1234-5678-9012' }).trackingHint,
+    ).toBe('点运单号复制，到承运商官网粘贴查询');
+  });
+});

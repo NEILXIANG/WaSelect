@@ -286,6 +286,14 @@ export function detailView(order, opts = undefined) {
       typeof o.tracking_url === 'string' && o.tracking_url.startsWith('https://')
         ? o.tracking_url
         : '',
+    /**
+     * 查件引导（第 24 项，2026-10-10）：小程序里打不开外部网页，复制之后要去手机浏览器——原先只写"点运单号复制"，没说下一步。
+     * @why 不写"也可以去 USPS 查"之类：那是没实测过的外部事实（约束十），说错了买家会去一个查不到的地方。
+     */
+    trackingHint:
+      typeof o.tracking_url === 'string' && o.tracking_url.startsWith('https://')
+        ? '点「复制查件链接」，在手机浏览器（Safari / Chrome）里粘贴打开——是日本邮政官网的查件页'
+        : '点运单号复制，到承运商官网粘贴查询',
     timeline: timelineRows(o.timeline),
     /**
      * 改地址的出路（联动走查·熟手买家 2026-10-10）：只在"已付款、还没发货"时说。

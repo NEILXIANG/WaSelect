@@ -194,7 +194,8 @@
             {{copied === 'no' ? '已复制' : view.trackingNo}}
           </text>
         </view>
-        <text class="ws-caption hint">点运单号复制</text>
+        <!-- 第 24 项：查件引导由 vm 给（有官方链接 / 没有，两种说法） -->
+        <text class="ws-caption hint">{{view.trackingHint}}</text>
         <!-- 剩余清单 3-5：官方查件链接（复制后到浏览器打开；小程序内不能直接打开外部网页） -->
         <view class="quote-line" wx:if="{{view.trackingUrl}}">
           <text class="ws-note">查件</text>
@@ -202,6 +203,8 @@
             {{copied === 'url' ? '已复制' : '复制查件链接'}}
           </text>
         </view>
+        <!-- 第 24 项：复制成功后给出下一步——小程序里打不开外部网页，只能去浏览器 -->
+        <text class="ws-caption key-info hint" wx:if="{{copied === 'url'}}">已复制：打开手机浏览器，粘贴到地址栏即可查看物流</text>
       </view>
     </view>
 
