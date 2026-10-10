@@ -341,7 +341,7 @@ export function refundGate(order: unknown): Gate {
     case 'refunded':
       return NO('已退款');
     case 'completed':
-      return NO('已完成的订单请用下方「部分退款」处理售后（可退到全额）');
+      return NO('已完成的订单请用操作条里的「部分退款…」处理售后（可退到全额）');
     case 'cancelled':
       return NO('已取消，未成交无需退款');
     case 'expired':

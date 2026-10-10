@@ -14,7 +14,7 @@
  * @see adapters/exports.ts；domain/csv.ts；contracts/api-contract.yaml 0.6.32 / 0.6.48
  */
 import type { Express } from 'express';
-import { EXPORT_IDS_MAX, ORDER_STATUS } from '@waselect/shared';
+import { EXPORT_IDS_MAX, ORDER_STATUS, jstDateCompact } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import type { Db } from '../adapters/db.js';
 import type { IdentityCheck } from '../adapters/identity.js';
@@ -105,7 +105,8 @@ export function mountAdminExportRoutes(app: Express, deps: AdminExportRoutesDeps
             ctx: { kind, error: e instanceof Error ? e.message : String(e) },
           });
         }
-        const day = deps.clock.now().toISOString().slice(0, 10).replace(/-/g, '');
+        // 文件名与内容同口径：日本时间的日期（统一结论 5.4；原先取 UTC，日本 0–9 点导出会落成前一天）
+        const day = jstDateCompact(deps.clock.now());
         res.json({ filename: `${kind}-${day}.csv`, csv: toCsv(table.header, table.rows) });
       } catch (e) {
         next(e);

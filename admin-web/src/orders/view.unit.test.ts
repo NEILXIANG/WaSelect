@@ -342,6 +342,14 @@ describe('refundGate（退款闸门）', () => {
     expect(refundGate(withStatus('refunded', { late_paid: true })).ok).toBe(false);
   });
 
+  // 统一结论 5.4：被拦的原因写在操作条**下方**，「部分退款…」按钮就在操作条**里**——说"下方"是指错了方向
+  it('🔴 已完成的单：原因指向操作条里的「部分退款…」，不说"下方"', () => {
+    const g = refundGate(withStatus('completed'));
+    expect(g.ok).toBe(false);
+    expect(g.reason).toContain('操作条里的「部分退款…」');
+    expect(g.reason).not.toContain('下方');
+  });
+
   it('终态（cancelled / expired / refunded / completed）全拦且有原因', () => {
     for (const s of ['cancelled', 'expired', 'refunded', 'completed'] as const) {
       const g = refundGate(withStatus(s));

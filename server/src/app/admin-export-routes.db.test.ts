@@ -15,6 +15,8 @@ import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { signToken } from './auth.js';
 import { EXPORT_IDS_MAX } from '@waselect/shared';
+import type { Clock } from '../ports/clock.js';
+import { fixedClock } from '../../../test/helpers/fixed-clock.js';
 
 let db: Db;
 let sink: MemorySink;
@@ -34,7 +36,7 @@ beforeEach(async () => {
   sink = new MemorySink();
 });
 
-async function buildServer(): Promise<{ url: string; close: () => Promise<void> }> {
+async function buildServer(clock?: Clock): Promise<{ url: string; close: () => Promise<void> }> {
   const logger = createLogger({ env: 'test', destination: sink });
   const config = loadConfig({
     NODE_ENV: 'development',
@@ -55,6 +57,7 @@ async function buildServer(): Promise<{ url: string; close: () => Promise<void> 
         db,
         events: createEventBus(logger),
         storage: createMemoryStorage(),
+        ...(clock !== undefined ? { clock } : {}),
       }),
   });
   const server = await listen(app);
@@ -132,6 +135,18 @@ const lines = (csv: string): string[] =>
     .filter((l) => l !== '');
 
 describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
+  // 统一结论 5.4：文件内容按日本时间，文件名原先按 UTC 日期——日本时间 0–9 点导出的文件名会是前一天
+  it('🔴 文件名用日本时间的日期：UTC 10-09 20:00（日本 10-10 05:00）→ orders-20261010.csv', async () => {
+    const { url, close } = await buildServer(fixedClock('2026-10-09T20:00:00.000Z'));
+    try {
+      const r = await call(url, 'GET', '/api/v1/admin/exports/orders', undefined, await bearer());
+      expect(r.status).toBe(200);
+      expect((r.body as { filename: string }).filename).toBe('orders-20261010.csv');
+    } finally {
+      await close();
+    }
+  });
+
   it('🔴 customs：只出 paid 的单（不含测试单），一行一个行项目，带收件地址、HS 码、申报价（美元两位小数）', async () => {
     await seedOrder('o-1', 'paid');
     await seedOrder('o-2', 'shipped');
