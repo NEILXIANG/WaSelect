@@ -7,7 +7,7 @@
  * @see ./error-text.js；../pages/home/index.vm.unit.test.ts（同组断言已随函数迁来此处）
  */
 import { describe, expect, it } from 'vitest';
-import { errorFields, errorMessage, errorRef } from './error-text.js';
+import { contactFields, errorFields, errorMessage, errorRef } from './error-text.js';
 
 describe('errorMessage', () => {
   // 剩余清单 4-6（M9）：错误分层——主文案只给人话，错误码与链路号挪到 errorRef 小字（原先 `code message` 拼在一行）
@@ -132,5 +132,15 @@ describe('停售 40916（三端联动模拟 2026-10-08）', () => {
     expect(t).toContain('暂停接单');
     expect(t).toContain('自动关闭');
     expect(t).toContain('不扣款');
+  });
+});
+
+describe('contactFields（AJ-433）：被拉黑时出口是联系客服', () => {
+  it('🔴 40301 → errorContact: true；其它码 / 网络错 / 脏值 → false', () => {
+    expect(contactFields({ code: 40301 })).toEqual({ errorContact: true });
+    expect(contactFields({ code: 40001 })).toEqual({ errorContact: false });
+    expect(contactFields({ code: -1 })).toEqual({ errorContact: false });
+    expect(contactFields(null)).toEqual({ errorContact: false });
+    expect(contactFields('boom')).toEqual({ errorContact: false });
   });
 });

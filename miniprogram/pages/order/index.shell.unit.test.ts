@@ -15,6 +15,8 @@ import { deferred, loadPage, type LoadedPage } from '../../../test/helpers/mp-pa
 let page: LoadedPage;
 let calls: string[];
 let fail: boolean;
+/** AJ-433：接口回 40301（账号被拉黑）。 */
+let forbidden: boolean;
 let hold: ReturnType<typeof deferred<unknown>> | null;
 /** AJ-408：页签用例要改写一次性意图（globalData.orderTab）与"空列表"——setup 只是多留两个句柄，原用例不变。 */
 let gd: Record<string, unknown>;
@@ -29,12 +31,13 @@ const settle = async (): Promise<void> => {
 beforeEach(async () => {
   calls = [];
   fail = false;
+  forbidden = false;
   hold = null;
   empty = false;
   vi.stubGlobal('wx', {
     stopPullDownRefresh: () => calls.push('stop'),
     navigateTo: () => undefined,
-    switchTab: () => undefined,
+    switchTab: (o: { url: string }) => calls.push(`switchTab ${o.url}`),
   });
   gd = {
     orderTab: '',
@@ -43,6 +46,7 @@ beforeEach(async () => {
       calls.push(`GET ${req.url.replace('http://api.test', '')}`);
       if (hold !== null) return hold.promise;
       if (fail) throw Object.assign(new Error('网络请求失败'), { code: -1 });
+      if (forbidden) throw Object.assign(new Error('无权限'), { code: 40301 });
       if (empty) return { items: [] };
       return {
         items: [{ order_id: 'o-1', order_no: 'WS-20261008-0001', status: 'paid', total_jpy: 9150 }],
@@ -179,5 +183,30 @@ describe('订单列表：「售后·退款」本地过滤', () => {
       'o-as',
       'o-rf',
     ]);
+  });
+});
+
+describe('被拉黑的账号：错误态给「联系客服」而不是「重试」（AJ-433，用户 2026-10-10 授权代决）', () => {
+  it('🔴 40301 → errorContact；点按钮去「我的」（客服联系方式在那里），不再白发一次请求', async () => {
+    forbidden = true;
+    calls = [];
+    await call<Promise<void>>('load');
+    expect(page.data['error']).toBe('账号已被限制使用，如有疑问请联系客服');
+    expect(page.data['errorContact']).toBe(true);
+    calls = [];
+    call('onRetry');
+    await settle();
+    expect(calls).toEqual(['switchTab /pages/user/index']);
+  });
+
+  it('其它错误照旧「重试」：重新取列表', async () => {
+    fail = true;
+    await call<Promise<void>>('load');
+    expect(page.data['errorContact']).toBe(false);
+    calls = [];
+    fail = false;
+    call('onRetry');
+    await settle();
+    expect(calls).toEqual(['GET /api/v1/orders']);
   });
 });

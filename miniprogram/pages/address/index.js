@@ -22,7 +22,7 @@
  */
 import { addressRows, emptyState, errorTitle } from './index.vm.js';
 import { formModel, toAddressInput } from '../../utils/address-form.js';
-import { errorFields } from '../../utils/error-text.js';
+import { contactFields, errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 
@@ -33,6 +33,8 @@ const wxApi = createWxApi();
 
 /** 编辑页路径（跳转路径只在这一处出现）。 */
 const EDIT_PAGE = '/pages/address-edit/index';
+/** 「我的」（tab 页）：客服联系方式在那里（AJ-433）。 */
+const USER_PAGE = '/pages/user/index';
 
 Page({
   data: {
@@ -43,6 +45,8 @@ Page({
     errorTitle: errorTitle('load'),
     /** 错误文案（空串 = 无错误）。 */
     error: '',
+    /** AJ-433：错误态按钮去客服（账号被拉黑）而不是重试。 */
+    errorContact: false,
     /** 空态开关（**请求失败时不亮**，@see index.vm.js 的 emptyState）。 */
     empty: false,
     /** true = 从结算页进来选地址（点条目即回传并出栈）。 */
@@ -74,10 +78,22 @@ Page({
       const list = Array.isArray(res) ? res : [];
       this.rawList = list;
       const rows = addressRows(list);
-      this.setData({ rows, error: '', errorRef: '', empty: emptyState(rows, '').showEmpty });
+      this.setData({
+        rows,
+        error: '',
+        errorRef: '',
+        errorContact: false,
+        empty: emptyState(rows, '').showEmpty,
+      });
     } catch (e) {
       this.rawList = [];
-      this.setData({ rows: [], ...errorFields(e), errorTitle: errorTitle('load'), empty: false });
+      this.setData({
+        rows: [],
+        ...errorFields(e),
+        ...contactFields(e),
+        errorTitle: errorTitle('load'),
+        empty: false,
+      });
     } finally {
       this.setData({ loading: false });
     }
@@ -89,6 +105,11 @@ Page({
    *      ⚠️ 这个判断**不可**照搬到付款类动作：那里的重试必须走幂等键，要单独论证。
    */
   onRetry() {
+    // AJ-433：账号被拉黑（40301）时重试永远不会成功，出口是「我的」里的客服
+    if (this.data.errorContact === true) {
+      wxApi.switchTab({ url: USER_PAGE });
+      return;
+    }
     void this.load();
   },
 
@@ -127,7 +148,11 @@ Page({
         traceId: this.traceId,
       });
     } catch (err) {
-      this.setData({ ...errorFields(err), errorTitle: errorTitle('delete') });
+      this.setData({
+        ...errorFields(err),
+        ...contactFields(err),
+        errorTitle: errorTitle('delete'),
+      });
       return;
     }
     await this.load();
@@ -151,7 +176,11 @@ Page({
         traceId: this.traceId,
       });
     } catch (err) {
-      this.setData({ ...errorFields(err), errorTitle: errorTitle('default') });
+      this.setData({
+        ...errorFields(err),
+        ...contactFields(err),
+        errorTitle: errorTitle('default'),
+      });
       return;
     }
     await this.load();

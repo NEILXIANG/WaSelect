@@ -27,7 +27,7 @@
 import { emptyState, orderRows, tabsView } from './index.vm.js';
 import { resolveOrderTab, tabItems, tabStatusParam } from '../../utils/order-tabs.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
-import { errorFields } from '../../utils/error-text.js';
+import { contactFields, errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
@@ -45,6 +45,8 @@ const PAY_PAGE = '/pages/pay/index';
 const DETAIL_PAGE = '/pages/order-detail/index';
 /** 首页（tab 页，剩余清单 4-8 空态出口）。 */
 const HOME_PAGE = '/pages/home/index';
+/** 「我的」（tab 页）：客服联系方式在那里（AJ-433）。 */
+const USER_PAGE = '/pages/user/index';
 
 Page({
   data: {
@@ -53,6 +55,8 @@ Page({
     loading: false,
     /** 错误文案（空串 = 无错误）。 */
     error: '',
+    /** AJ-433：错误态按钮去客服（账号被拉黑）而不是重试。 */
+    errorContact: false,
     /** 空态开关（**请求失败时不亮**，@see index.vm.js 的 emptyState）。 */
     empty: false,
     /** 空态文案（分页签，M-10）。 */
@@ -111,10 +115,16 @@ Page({
       // AJ-430：「售后·退款」取的是全量，本地只留退款中 / 已退款或有售后申请的单（其它页签原样）
       const rows = orderRows(tabItems(tab, res?.items));
       const empty = emptyState(rows, '', tab);
-      this.setData({ rows, error: '', empty: empty.showEmpty, emptyText: empty.text });
+      this.setData({
+        rows,
+        error: '',
+        errorContact: false,
+        empty: empty.showEmpty,
+        emptyText: empty.text,
+      });
     } catch (e) {
       if (isStale(seq, this.seq)) return;
-      this.setData({ rows: [], ...errorFields(e), empty: false });
+      this.setData({ rows: [], ...errorFields(e), ...contactFields(e), empty: false });
     } finally {
       if (!isStale(seq, this.seq)) this.setData({ loading: false });
     }
@@ -163,8 +173,14 @@ Page({
     wxApi.stopPullDownRefresh();
   },
 
-  /** 错误态的"重试"（P2-38）：重新取列表。 */
+  /**
+   * 错误态的按钮（P2-38）：重新取列表；账号被拉黑（errorContact，AJ-433）时去「我的」找客服——重试永远不会成功。
+   */
   onRetry() {
+    if (this.data.errorContact === true) {
+      wxApi.switchTab({ url: USER_PAGE });
+      return;
+    }
     void this.load();
   },
 

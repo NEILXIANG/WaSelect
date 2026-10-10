@@ -104,15 +104,24 @@
   <view class="ws-gutter ws-section" wx:if="{{channels.length > 0}}">
     <view class="ws-card">
       <text class="ws-section-kicker">Payment Method</text>
-      <view
-        class="channel"
-        wx:for="{{channels}}"
-        wx:key="channel"
-        data-channel="{{item.channel}}"
-        hover-class="ws-press"
-        bindtap="onPay"
-      >
-        <text class="ws-body">{{item.buttonText}}</text>
+      <!--
+        AJ-431：支付方式是按钮（第一个实心、其余描边，档位由 vm 的 buttonType 给）。
+        原先是卡片里的一行字，页面唯一的实心按钮是「查看订单」，买家会去点它而没付款。
+        走 ws-button 也让"付款"这一下有了组件的连点防线（页面另有 payStartDecision 挡在途重复发起）。
+        data-channel 写在组件宿主上，页面 onPay 从 e.currentTarget.dataset 读。
+        @measured 2026-10-10 开发者工具模拟器：对 #pay-mock 调组件的 onTap（真实 triggerEvent 链路）→
+                  页面 onPay 拿到 channel，订单变为 status=paid、payment.channel=mock。
+        id 供自动化选中（自动化选不到组件标签名）。
+      -->
+      <view class="channel" wx:for="{{channels}}" wx:key="channel">
+        <ws-button
+          id="pay-{{item.channel}}"
+          text="{{item.buttonText}}"
+          type="{{item.buttonType}}"
+          block
+          data-channel="{{item.channel}}"
+          bindtap="onPay"
+        />
       </view>
     </view>
   </view>
@@ -159,6 +168,11 @@
       type="default"
       bindtap="onRefreshPaid"
     />
-    <ws-button text="查看订单" type="primary" bindtap="onViewOrders" />
+    <!-- AJ-431：页面上有更该做的事（付款 / 重新下单 / 复制链接）时描边，否则实心——每屏只留一个实心主按钮 -->
+    <ws-button
+      text="查看订单"
+      type="{{channels.length > 0 || goHome || payUrl ? 'default' : 'primary'}}"
+      bindtap="onViewOrders"
+    />
   </view>
 </view>

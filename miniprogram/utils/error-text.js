@@ -102,6 +102,18 @@ export function errorRef(err) {
 }
 
 /**
+ * 错误态的出口该不该是「联系客服」（AJ-433，用户 2026-10-10 授权代决）：`setData({...contactFields(e)})` → `{errorContact}`。
+ * @why 40301 对买家只有一种原因——账号被拉黑（@see FORBIDDEN_CODE）。原先错误态只给「重试」，可重试永远不会成功，
+ *      用户点几次就放弃了；文案里说"请联系客服"，按钮却不通向客服。与 FORBIDDEN_TEXT 同一个判断，不会一个说客服、一个给重试。
+ * @limitation 只给出"该去客服"的布尔；去哪儿（「我的」页的客服卡片）由页面决定。
+ */
+export function contactFields(err) {
+  return {
+    errorContact: err !== null && typeof err === 'object' && err.code === FORBIDDEN_CODE,
+  };
+}
+
+/**
  * 页面一次写入主文案与小字：`setData({...errorFields(e)})` → `{error, errorRef}`。
  * @param {string} [key] 主文案的键名（默认 error；保存错误用 saveError → 同时给 saveErrorRef）
  */

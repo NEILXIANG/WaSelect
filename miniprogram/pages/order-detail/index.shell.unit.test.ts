@@ -23,6 +23,8 @@ const ORDER = {
 let page: LoadedPage;
 let calls: string[];
 let fail: boolean;
+/** AJ-433：接口回 40301（账号被拉黑）。 */
+let forbidden: boolean;
 let clipFail: boolean;
 let hold: ReturnType<typeof deferred<unknown>> | null;
 /** A7：每次打开详情返回的订单（默认 ORDER）。 */
@@ -48,6 +50,7 @@ async function open(id = 'o-1', extra: Record<string, string> = {}): Promise<voi
         if (path.endsWith('/support')) return { wechat: 'waselect_cs' };
         if (hold !== null) return hold.promise;
         if (fail) throw Object.assign(new Error('网络请求失败'), { code: -1 });
+        if (forbidden) throw Object.assign(new Error('无权限'), { code: 40301 });
         return order;
       },
       cart: {
@@ -69,6 +72,7 @@ async function open(id = 'o-1', extra: Record<string, string> = {}): Promise<voi
 beforeEach(() => {
   calls = [];
   fail = false;
+  forbidden = false;
   clipFail = false;
   hold = null;
   order = ORDER;
@@ -279,5 +283,29 @@ describe('订单详情关键信息的对比度', () => {
     const hex =
       new RegExp(`${token ?? '--none'}:\\s*(#[0-9a-fA-F]{6})`).exec(app)?.[1] ?? '#ffffff';
     expect(ratio(hex, '#ffffff')).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe('被拉黑的账号：错误态给「联系客服」（AJ-433，用户 2026-10-10 授权代决）', () => {
+  it('🔴 40301 → errorContact；点按钮去「我的」，不再重取', async () => {
+    forbidden = true;
+    await open();
+    expect(page.data['error']).toBe('账号已被限制使用，如有疑问请联系客服');
+    expect(page.data['errorContact']).toBe(true);
+    call('onRetry');
+    await settle();
+    expect(nav).toEqual(['/pages/user/index']);
+    expect(calls).toEqual([]);
+  });
+
+  it('网络错照旧重试：重取这张单', async () => {
+    fail = true;
+    await open();
+    expect(page.data['errorContact']).toBe(false);
+    fail = false;
+    call('onRetry');
+    await settle();
+    expect(calls[0]).toBe('GET /api/v1/orders/o-1');
+    expect(nav).toEqual([]);
   });
 });

@@ -31,14 +31,9 @@
   margin-top: var(--ws-space-hair);
 }
 
-/* 支付方式条目：整行可点（用 view 不是 button——页面不允许原生可点 button） */
+/* 支付方式（AJ-431）：每个是一个 ws-button；外层 view 只管上下间距（宿主是 inline，间距写在包裹层上才生效） */
 .channel {
-  padding: var(--ws-space-card) 0;
-  border-bottom: var(--ws-border-width) solid var(--ws-line);
-}
-
-.channel:last-child {
-  border-bottom: 0;
+  margin-top: var(--ws-space-inline);
 }
 
 /*

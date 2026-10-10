@@ -27,7 +27,7 @@
  * @see ./index.vm.js（视图逻辑真源，17 条单测）；../../utils/wx-api.js（showModal / setClipboardData）
  */
 import { buyAgainItems, detailView } from './index.vm.js';
-import { errorFields } from '../../utils/error-text.js';
+import { contactFields, errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { recentExternalPay } from '../../utils/external-pay.js';
@@ -46,6 +46,8 @@ const CART_PAGE = '/pages/cart/index';
 const DETAIL_PAGE = '/pages/detail/index';
 /** 售后申请页（AJ-420）；提交后出栈回本页，onShow 重取即看到进度。 */
 const AFTER_SALE_PAGE = '/pages/after-sale/index';
+/** 「我的」（tab 页）：客服联系方式在那里（AJ-433）。 */
+const USER_PAGE = '/pages/user/index';
 
 Page({
   data: {
@@ -58,6 +60,8 @@ Page({
     retryable: false,
     /** 错误文案（空串 = 无错误）。 */
     error: '',
+    /** AJ-433：错误态按钮去客服（账号被拉黑）而不是重试。 */
+    errorContact: false,
     /** 取消请求在途（ws-button 会吞掉这期间的连点）。 */
     cancelling: false,
     confirmingReceipt: false,
@@ -110,7 +114,12 @@ Page({
   },
 
   /** 错误态的"重试"（P2-38）：重新取这张单（没有 id 时 wxml 不给按钮）。 */
+  /** 错误态按钮：重取这张单；账号被拉黑（errorContact，AJ-433）时去「我的」找客服——重试永远不会成功。 */
   onRetry() {
+    if (this.data.errorContact === true) {
+      wxApi.switchTab({ url: USER_PAGE });
+      return;
+    }
     if (this.orderId !== '') void this.load();
   },
 
@@ -144,11 +153,12 @@ Page({
           nowMs: Date.now(),
         }),
         error: '',
+        errorContact: false,
         copied: '',
       });
       this.scheduleRecheck();
     } catch (e) {
-      this.setData({ view: null, ...errorFields(e) });
+      this.setData({ view: null, ...errorFields(e), ...contactFields(e) });
     } finally {
       this.setData({ loading: false });
     }
@@ -290,7 +300,7 @@ Page({
       });
       await this.load();
     } catch (e) {
-      this.setData({ ...errorFields(e) });
+      this.setData({ ...errorFields(e), ...contactFields(e) });
     } finally {
       this.setData({ confirmingReceipt: false });
     }
@@ -307,7 +317,7 @@ Page({
       });
       await this.load();
     } catch (e) {
-      this.setData({ ...errorFields(e) });
+      this.setData({ ...errorFields(e), ...contactFields(e) });
     } finally {
       this.setData({ cancelling: false });
     }

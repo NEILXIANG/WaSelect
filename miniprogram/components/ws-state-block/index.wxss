@@ -138,14 +138,27 @@
   transform: rotate(-45deg);
 }
 
-/* 失败：一个未闭合的圆（"这件事没走完"），不用感叹号 */
+/*
+  失败：闭合的圆 + 中间一道短横（"这件事停住了"），不用感叹号（保持安静的语气）。
+  AJ-432：原先是缺一角的圆——那是最常见的加载转圈形状，静止时也会被读成"还在加载"。
+*/
 .ws-state__glyph--fail {
   width: var(--ws-mark-box);
   height: var(--ws-mark-box);
   border-width: var(--ws-hair-thick);
   border-radius: 50%;
-  border-left-color: transparent;
-  transform: rotate(-30deg);
+  position: relative;
+}
+
+.ws-state__glyph--fail::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--ws-mark-dot) * 3);
+  height: var(--ws-hair-thick);
+  background: var(--ws-line-strong);
+  transform: translate(-50%, -50%);
 }
 
 /* ── 三段文本 ───────────────────────────────────────────────── */

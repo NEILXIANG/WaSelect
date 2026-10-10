@@ -154,11 +154,14 @@ export const CHARGE_CURRENCY_ORDER = ['JPY', 'USD'];
  * @param {unknown} listings `[{currency, resp}]`，resp 为 `GET /pay/channels` 响应
  * @param {unknown} order `GET /orders/{id}` 响应（读 total_jpy / display）
  * @returns {Array<{channel: string, label: string, entryMode: string,
- *           charge: {currency: string, amount: number|null, text: string}, buttonText: string}>}
+ *           charge: {currency: string, amount: number|null, text: string}, buttonText: string,
+ *           buttonType: 'primary'|'default'}>}
  * @why 同一通道在多个币种下都列出时**先到先得**（与服务端同样取 JPY），不重复出现。
  * @why 美元金额取订单的 `display.USD`：它与服务端扣款用的是同一个换算（订单自己的 fx_snapshot → toMinor），
  *      不在前端再乘一次汇率；缺了就不编数字（amount=null，文案指向支付页）。
  * @limitation 顺序：先 JPY 列出的、再只在 USD 下列出的；ChannelView 不带 priority，跨币种无法按优先级合并。
+ * @why `buttonType`（AJ-431）：每屏只留一个实心主按钮——第一个支付方式是主按钮，其余描边。
+ *      原先支付方式是卡片里的一行字、页面唯一的实心按钮是「查看订单」，买家会去点"查看订单"而没付款。
  */
 export function chargeOptions(listings, order) {
   if (!Array.isArray(listings)) return [];
@@ -183,6 +186,7 @@ export function chargeOptions(listings, order) {
         entryMode: c.entryMode,
         charge,
         buttonText: charge.amount === null ? label : `${label}（${charge.text}）`,
+        buttonType: out.length === 0 ? 'primary' : 'default',
       });
     }
   }

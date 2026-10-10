@@ -24,7 +24,7 @@
     title="{{errorTitle}}"
     reason="{{error}}"
     refText="{{errorRef}}"
-    actionText="重试"
+    actionText="{{errorContact ? '联系客服' : '重试'}}"
     bindaction="onRetry"
   />
 

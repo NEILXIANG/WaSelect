@@ -172,6 +172,7 @@ describe('chargeOptions（多币种列出 → 带实扣币种与金额的选项�
         entryMode: 'in_app',
         charge: { currency: 'JPY', amount: 12_000, text: '12,000 円' },
         buttonText: '微信支付（12,000 円）',
+        buttonType: 'primary',
       },
       {
         channel: 'stripe',
@@ -179,7 +180,34 @@ describe('chargeOptions（多币种列出 → 带实扣币种与金额的选项�
         entryMode: 'copylink',
         charge: { currency: 'USD', amount: 8_040, text: '$80.40' },
         buttonText: '银行卡（$80.40）',
+        buttonType: 'default',
       },
+    ]);
+  });
+
+  it('🔴 每屏只有一个实心主按钮：第一个支付方式是主按钮，其余描边（用户 2026-10-10 授权代决，AJ-431）', () => {
+    // 原先支付方式是卡片里的一行字，页面唯一的实心按钮是「查看订单」——小白会点错
+    const one = chargeOptions(
+      [listing('JPY', [{ channel: 'mock', entryMode: 'in_app', label: '模拟支付' }])],
+      ORDER,
+    );
+    expect(one.map((o) => o.buttonType)).toEqual(['primary']);
+    const three = chargeOptions(
+      [
+        listing('JPY', [
+          { channel: 'a', entryMode: 'in_app', label: 'A' },
+          { channel: 'b', entryMode: 'redirect', label: 'B' },
+          { channel: 'c', entryMode: 'in_app', label: 'C' },
+        ]),
+        listing('USD', [{ channel: 'd', entryMode: 'copylink', label: 'D' }]),
+      ],
+      ORDER,
+    );
+    // 被过滤掉的（redirect）不占"第一个"的位置
+    expect(three.map((o) => [o.channel, o.buttonType])).toEqual([
+      ['a', 'primary'],
+      ['c', 'default'],
+      ['d', 'default'],
     ]);
   });
 

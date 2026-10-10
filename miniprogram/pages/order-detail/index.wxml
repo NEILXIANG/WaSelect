@@ -22,7 +22,7 @@
     title="订单信息没能取到或操作没有完成"
     reason="{{error}}"
     refText="{{errorRef}}"
-    actionText="{{retryable ? '重试' : ''}}"
+    actionText="{{errorContact ? '联系客服' : retryable ? '重试' : ''}}"
     bindaction="onRetry"
   />
 
@@ -149,6 +149,21 @@
           <ws-price wx:if="{{view.totalJpy !== null}}" jpy="{{view.totalJpy}}" size="lg" />
         </view>
         <text class="ws-caption" wx:if="{{view.totalSub}}">{{view.totalSub}}</text>
+        <!--
+          P2-12（AJ-386）部分退款（成功 / 处理中）。AJ-434：放进金额卡、紧跟订单合计——
+          原先是页面最底部单独一张卡，买家核对"付了多少、退了多少"要上下翻。
+          金额前不加负号：认不出的币种显示"EUR（金额以银行账单为准）"，带负号读不通。
+        -->
+        <block wx:if="{{view.partialRefunds.length > 0}}">
+          <view class="ws-hair total__rule" />
+          <view wx:for="{{view.partialRefunds}}" wx:for-item="r" wx:key="key">
+            <view class="quote-line">
+              <text class="ws-note">部分退款 · {{r.statusText}}</text>
+              <text class="ws-body">{{r.amountText}}</text>
+            </view>
+            <text class="ws-caption">{{r.atText}}</text>
+          </view>
+        </block>
       </view>
     </view>
 
@@ -259,17 +274,6 @@
       </view>
     </view>
   </block>
-
-  <!-- P2-12（AJ-386）：部分退款（成功 / 处理中） -->
-  <view class="ws-gutter ws-section" wx:if="{{view.partialRefunds.length > 0}}">
-    <view class="ws-card">
-      <text class="ws-note">部分退款</text>
-      <view class="quote-line" wx:for="{{view.partialRefunds}}" wx:for-item="r" wx:key="key">
-        <text class="ws-body">{{r.amountText}} · {{r.statusText}}</text>
-        <text class="ws-caption">{{r.atText}}</text>
-      </view>
-    </view>
-  </view>
 
   <!-- P2-11（AJ-386）：关单后才到的付款 -->
   <view class="ws-gutter ws-section" wx:if="{{view.latePaidNote}}">

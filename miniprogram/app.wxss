@@ -104,7 +104,7 @@ page,
           于是同一个 App 里的不同异常态给人的严重程度不同——那不是我们想表达的。 */
   --ws-mark: 120rpx; /* 异常态符号的统一外框 */
   --ws-mark-dot: 12rpx; /* 加载三点 */
-  --ws-mark-box: 72rpx; /* 方框 / 未闭合圆 */
+  --ws-mark-box: 72rpx; /* 方框 / 失败的圆 */
   --ws-mark-line: 84rpx; /* 断网横线 / 划掉方框的斜线 */
   --ws-hair-thick: 2rpx; /* 比发丝线重一档：图形的描边 */
   --ws-rule-accent: 4rpx; /* 编辑批注（why）左侧的那条竖线 */
