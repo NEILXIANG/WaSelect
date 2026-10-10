@@ -5,7 +5,8 @@
  * @why §2 第 43 / 106 条：两次把"管道末尾命令的退出码"当成门禁结果。运行器不经管道取退出码，
  *      交付与报告只认它写下的最后一行。
  */
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -15,6 +16,11 @@ const node = process.execPath;
 /** 单测里不回显子进程输出：它们故意打印的"gate-exit=7"会混进外层门禁的屏幕输出与日志。 */
 const quiet = { echo: false } as const;
 const logIn = (): string => join(mkdtempSync(join(tmpdir(), 'run-gate-')), 'nested', 'gate.log');
+/** 本次运行的 .partial（带 pid，严格检查 2026-10-10：两次门禁同时跑时各写各的）。 */
+const partials = (log: string): string[] =>
+  readdirSync(dirname(log)).filter(
+    (f) => f.startsWith(`${basename(log)}.`) && f.endsWith('.partial'),
+  );
 const lastLine = (p: string): string => readFileSync(p, 'utf8').trimEnd().split('\n').at(-1) ?? '';
 
 describe('runLogged', () => {
@@ -62,10 +68,10 @@ describe('runLogged', () => {
     );
     await new Promise((r) => setTimeout(r, 100));
     expect(existsSync(log)).toBe(false);
-    expect(existsSync(`${log}.partial`)).toBe(true);
+    expect(partials(log)).toHaveLength(1);
     expect(await pending).toBe(0);
     expect(existsSync(log)).toBe(true);
-    expect(existsSync(`${log}.partial`)).toBe(false);
+    expect(partials(log)).toEqual([]);
     expect(lastLine(log)).toBe('gate-exit=0');
 
     writeFileSync(log, 'old\ngate-exit=0\n');
@@ -103,5 +109,13 @@ describe('runLogged', () => {
     expect(out.join('')).not.toContain('gate-exit=7');
     expect(out.join('')).not.toContain('noise');
     expect(readFileSync(log, 'utf8')).toContain('gate-exit=7\n');
+  });
+
+  it('🔴 改名失败（.partial 被别的进程拿走）→ 不抛未捕获异常，照常返回真实退出码（严格检查 2026-10-10）', async () => {
+    const log = logIn();
+    const pending = runLogged(node, ['-e', 'setTimeout(() => process.exit(4), 300)'], log, quiet);
+    await new Promise((r) => setTimeout(r, 100));
+    for (const f of partials(log)) rmSync(`${dirname(log)}/${f}`);
+    expect(await pending).toBe(4);
   });
 });

@@ -7,10 +7,10 @@
  *      这里不经过任何管道：退出码取自子进程本身，交付与报告只认日志最后一行。
  * @why 日志写文件而不是只给屏幕：后台运行时会话看不到屏幕，事后要能 `tail -1` 拿到唯一可信的结论。
  * @limitation 一：被测命令自己打印的"gate-exit=…"字样会出现在日志中间——只有**最后一行**是本脚本写的。
- * @why 跑的过程中正式路径上没有文件（输出先写 `<log>.partial`，结束才改名；上一轮的日志一开跑就删）：
+ * @why 跑的过程中正式路径上没有文件（输出先写 `<log>.<pid>.partial`，结束才改名；上一轮的日志一开跑就删）：
  *      三端联动模拟（2026-10-10）中途 `tail -1 .gate/gate.log`，读到的是 run-gate 单测子进程打印的
  *      "gate-exit=7"，被当成了门禁结论。现在中途去读只会得到"文件不存在"，不会是一行像结论的东西。
- *      想看进度读 `.gate/gate.log.partial`。
+ *      想看进度读 `.gate/gate.log.<pid>.partial`（带 pid：同时跑两次门禁时各写各的）。
  * @limitation 二：不解析通过数；报告里的通过数仍要从日志里 vitest 的汇总行读（H6）。
  *
  * 用法：`npm run gate:log`（日志在 `.gate/gate.log`）；`node scripts/run-gate.mjs --log <路径> -- <命令> [参数…]`。
@@ -36,7 +36,8 @@ export function runLogged(cmd, args, logPath, opts = {}) {
   mkdirSync(dirname(logPath), { recursive: true });
   // 跑的过程中正式路径上**没有文件**：先删上一轮的结论，输出写 .partial，写完 gate-exit 才改名过去
   rmSync(logPath, { force: true });
-  const partial = `${logPath}.partial`;
+  // 带 pid（严格检查 2026-10-10）：两次门禁同时跑（如 WorkBuddy 并行）时各写各的 .partial，输出不串、改名不抢
+  const partial = `${logPath}.${String(process.pid)}.partial`;
   const log = createWriteStream(partial);
   return new Promise((resolve) => {
     let settled = false;
@@ -44,7 +45,15 @@ export function runLogged(cmd, args, logPath, opts = {}) {
       if (settled) return;
       settled = true;
       log.end(`gate-exit=${String(code)}\n`, () => {
-        renameSync(partial, logPath);
+        // 改名失败不能吞掉结论（严格检查 2026-10-10）：原先在回调里直接抛 → 未捕获异常、promise 永不 resolve，
+        // 真绿被报成红。退出码照常返回，失败原因写 stderr；日志留在 .partial 里
+        try {
+          renameSync(partial, logPath);
+        } catch (e) {
+          process.stderr.write(
+            `门禁日志改名失败（结论仍以本进程退出码为准）：${e instanceof Error ? e.message : String(e)}\n`,
+          );
+        }
         resolve(code);
       });
     };
