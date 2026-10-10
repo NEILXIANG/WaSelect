@@ -472,6 +472,7 @@ describe('商品已下架（报价 / 建单 40401）：给走得通的出口', (
       itemCount: 1,
       addressId: 'a-1',
       termsAccepted: true,
+      totalJpy: null,
       termsReady: true,
       quoteFailed: true,
       productGone: true,
@@ -486,8 +487,15 @@ describe('商品已下架（报价 / 建单 40401）：给走得通的出口', (
       '报价失败，请返回商品页后重试',
     );
     // 没勾条款、没选地址时也先说下架：买不了的东西不该先让人去勾条款
-    expect(submitGate({ itemCount: 1, productGone: true, buyNow: true }).reason).toBe(
-      '这件商品已下架，请回首页看看其它商品',
-    );
+    expect(
+      submitGate({
+        itemCount: 1,
+        addressId: '',
+        termsAccepted: false,
+        totalJpy: null,
+        productGone: true,
+        buyNow: true,
+      }).reason,
+    ).toBe('这件商品已下架，请回首页看看其它商品');
   });
 });

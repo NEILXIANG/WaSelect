@@ -530,6 +530,17 @@ describe('detailView · 状态区提示跟着售后走（三端联动模拟 2026
     }
   });
 
+  // 严格检查（2026-10-10）：退款中 / 已退款的单讲钱的进度更要紧，且这两态没有申请入口——说"还可以再次申请"是空话；与列表同口径
+  it('🔴 退款中 / 已退款的单有售后记录也不接管：仍说退款进度', () => {
+    for (const st of ['refunding', 'refunded']) {
+      for (const as_ of ['open', 'resolved']) {
+        expect(detailView({ status: st, after_sale: as(as_) }).nextText).toBe(
+          detailView({ status: st }).nextText,
+        );
+      }
+    }
+  });
+
   it('没有售后 / 售后状态认不出：照旧用订单状态的提示', () => {
     expect(detailView({ status: 'delivered' }).nextText).toBe(
       '如果实际没有收到，或商品有问题，可以申请售后，处理结果会在本页回复。',

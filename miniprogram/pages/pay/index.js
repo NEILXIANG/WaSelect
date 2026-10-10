@@ -210,6 +210,8 @@ Page({
       const channels = chargeOptions(listings, order);
       this.setData({
         channels,
+        // 可付的单：拉黑关闭屏的「联系客服」不该留着（严格检查 2026-10-10）
+        contactSupport: false,
         notice: channels.length > 0 ? payNotice(channels, order) : [],
         // 剩余清单 4-8：可付的单却一个通道都没有 → 空态（说明 + 重试 + 联系客服），不是空白屏
         noChannel: channels.length === 0,
@@ -217,8 +219,11 @@ Page({
     } catch (e) {
       if (isStale(seq, this.loadSeq)) return;
       // 账号被拉黑（40301）：不是"取失败了再试试"，是这笔单付不了——换关闭屏 + 联系客服（联动走查 2026-10-10）
-      if (contactFields(e).errorContact) this.setData(blockedScreen());
-      else this.setData({ ...errorFields(e) });
+      if (contactFields(e).errorContact) {
+        // 先停表：否则倒计时 1 秒后写回关闭屏，到点还会把拉黑屏换成"支付时间已到"（严格检查 2026-10-10）
+        this.stopCountdown();
+        this.setData(blockedScreen());
+      } else this.setData({ ...errorFields(e) });
     } finally {
       // 过期请求不能把 loading 清掉（新的还在途中）
       if (!isStale(seq, this.loadSeq)) this.setData({ loading: false });
@@ -392,8 +397,11 @@ Page({
       this.run(intent);
     } catch (err) {
       // 账号被拉黑（40301）：未付款订单已被取消，换关闭屏 + 联系客服，不留"重试"（联动走查 2026-10-10）
-      if (contactFields(err).errorContact) this.setData(blockedScreen());
-      else this.setData({ ...errorFields(err) });
+      if (contactFields(err).errorContact) {
+        // 先停表（同上）：可付的单进页时已起表
+        this.stopCountdown();
+        this.setData(blockedScreen());
+      } else this.setData({ ...errorFields(err) });
       track(app, 'pay_abandon', { order_id: this.orderId, reason: 'fail' });
       // P2-40：40902 / 40904 多半是这张单已经付了或关了——重查一次，由 payPageView 决定换不换关闭屏
       if (recheckAfterPayError(err?.code)) void this.checkStatus();

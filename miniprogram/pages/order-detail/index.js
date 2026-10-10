@@ -113,8 +113,10 @@ Page({
     if (this.recheckTimer !== null) clearTimeout(this.recheckTimer);
   },
 
-  /** 错误态的"重试"（P2-38）：重新取这张单（没有 id 时 wxml 不给按钮）。 */
-  /** 错误态按钮：重取这张单；账号被拉黑（errorContact，AJ-433）时去「我的」找客服——重试永远不会成功。 */
+  /**
+   * 错误态按钮（P2-38）：重取这张单（没有 id 时 wxml 不给按钮）；
+   * 账号被拉黑（errorContact，AJ-433）时去「我的」找客服——重试永远不会成功。
+   */
   onRetry() {
     if (this.data.errorContact === true) {
       wxApi.switchTab({ url: USER_PAGE });

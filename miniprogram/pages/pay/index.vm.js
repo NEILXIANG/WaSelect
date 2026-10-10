@@ -217,6 +217,8 @@ export function blockedScreen() {
     contactSupport: true,
     error: '',
     errorRef: '',
+    // "付款结果确认中"一类提示同样作废：账号已被限制，不会再有确认结果
+    confirmNote: '',
   };
 }
 

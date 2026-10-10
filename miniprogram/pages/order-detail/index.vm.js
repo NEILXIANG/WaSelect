@@ -75,7 +75,7 @@ import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 import { addressSummary } from '../../utils/address-form.js';
 import { jstDateTimeLabeled } from '../../utils/jst-text.js';
 import { orderProgress } from '../../utils/order-progress.js';
-import { afterSaleCard } from '../../utils/after-sale.js';
+import { AFTER_SALE_ORDER_STATUSES, afterSaleCard } from '../../utils/after-sale.js';
 
 /**
  * ISO → 买家可见的 JST 串（**带时区标注**）；解析失败回落原串（数据不能丢，宁可难看）。
@@ -186,10 +186,12 @@ function confirmingJustPaid(payable, justPaid) {
  * 有售后申请时状态区的"下一步"（三端联动模拟 2026-10-10）。
  * @why 已送达 / 已完成的提示是"可以申请售后"——申请过还这么说，与正下方的售后卡片（"处理中"）打架，
  *      买家会以为上次没提交成功。只在售后卡片认出了申请（`current` 非空）时接管，其余照旧走订单状态。
+ * @param {string} status 订单状态：只在 AFTER_SALE_ORDER_STATUSES（发货后三态）接管
  * @returns {string|null} null = 不接管
  */
-function afterSaleNext(card) {
-  if (card.current === null) return null;
+function afterSaleNext(card, status) {
+  // 只在发货后三态接管（严格检查 2026-10-10）：退款中 / 已退款讲钱的进度更要紧，且没有申请入口；与列表同口径
+  if (card.current === null || !AFTER_SALE_ORDER_STATUSES.includes(status)) return null;
   return card.current.open
     ? '售后申请处理中，处理结果会在本页回复。'
     : '售后已有处理结果（见下方）；还有问题可以再次申请。';
@@ -237,7 +239,7 @@ export function detailView(order, opts = undefined) {
       ? ''
       : expired && canPay(status)
         ? '支付时间已到，订单将自动关闭；如需购买请重新下单'
-        : (afterSaleNext(afterSale) ?? buyer.next),
+        : (afterSaleNext(afterSale, status) ?? buyer.next),
     // ⚠️ 确认中不给出「继续支付」：用户刚付过一次，再点就是第二笔钱（MP3-04）。
     canPay: showPay,
     /**

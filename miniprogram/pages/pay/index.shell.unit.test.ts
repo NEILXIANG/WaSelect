@@ -583,6 +583,31 @@ describe('账号被拉黑（40301）：支付页换成关闭屏 + 联系客服',
     expect(page.data['channels']).toEqual([]);
   });
 
+  // 严格检查（2026-10-10）：只在点击后立刻断言，漏了"倒计时还在走"——1 秒后倒计时写回关闭屏，到点又被换成"去首页重新下单"
+  it('🔴 拉黑关闭屏之后倒计时停表：过 1 秒不写回倒计时，到截止也不换成"支付时间已到"', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      vi.setSystemTime(new Date('2026-09-29T01:20:00.000Z'));
+      expiresAt = '2026-09-29T01:30:00.000Z';
+      call('onRetry');
+      await settle();
+      expect(page.data['countdown']).toBe('请在 10 分 00 秒内完成支付');
+      postError = blocked();
+      tapChannel('stripe');
+      await settle();
+      vi.advanceTimersByTime(1000);
+      expect(page.data['countdown']).toBe('');
+      vi.advanceTimersByTime(11 * 60_000);
+      expect(page.data['closedText']).toBe(
+        '账号已被限制使用，这笔订单无法支付（没有扣款）；如有疑问请联系客服',
+      );
+      expect(page.data['contactSupport']).toBe(true);
+      expect(page.data['goHome']).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('其它支付错误不受影响：仍是错误提示 + 支付方式还在', async () => {
     postError = Object.assign(new Error('服务器内部错误'), { code: 50000 });
     tapChannel('stripe');

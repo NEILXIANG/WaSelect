@@ -626,7 +626,14 @@ describe('商品已下架：错误态按钮换成走得通的出口（联动走�
     expect(switches).toEqual(['/pages/cart/index']);
   });
 
-  it('报价成功 → productGone 为假，错误态（若有）仍是「重新加载」', async () => {
+  // 严格检查（2026-10-10）：原用例初值本来就是 false，等于没验——改为先 40401 再恢复，看它真的被复位
+  it('🔴 先 40401（productGone）→ 商品恢复上架、重报价成功 → productGone 复位、闸门不再说下架', async () => {
+    quoteFail = true;
+    call('onLoad');
+    call('onShow');
+    await settle();
+    expect(page.data['productGone']).toBe(true);
+    quoteFail = false;
     await ready();
     expect(page.data['productGone']).toBe(false);
   });

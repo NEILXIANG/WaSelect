@@ -36,19 +36,6 @@ export function itemRows(items) {
 }
 
 /**
- * 能否提交（按钮禁用 + 原因）。
- * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null,
- *          emailError?: string, contactEmail?: string, splitRequired?: boolean,
- *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean, buyNow?: boolean}} state
- * @why `termsReady` / `termsFailed` / `quoteFailed` 三项（AJ-228）：
- *      条款版本没取到时 `orderBody` 会抛一句**给开发者看的**报错，此前闸门不看它，
- *      于是那句话被原样摆到用户面前；报价**失败**与报价**还没回来**此前是同一句"还在计算中"，
- *      前者永远等不到结果，用户没有出路。三项都是"传了才生效"：不传等于不检查（老调用方不受影响）。
- * @returns {{ok: boolean, reason: string}}
- * @why 返回**原因**而不是只给 ok：禁用但不说为什么的按钮会被读成"这站坏了"，
- *      而原因文案必须由逻辑给（wxml 里写死一串 `wx:if` 会让四条判断各漂移一次）。
- */
-/**
  * 商品已下架或不存在（报价 / 建单 40401）时的出口（联动走查·跨角色 2026-10-10）。
  * @why 运营在买家结算途中下架了商品：提交得 40401、重报价还是 40401，原先只给「重新加载」、底部说"请返回商品页后重试"——
  *      两条都走不通（商品页也显示已下架）。立即购买就回首页挑别的；从购物车来就回购物车把它删掉。
@@ -65,6 +52,20 @@ export function goneExit(buyNow) {
     : { actionText: '回购物车调整', hint: '有商品已下架，请回购物车删掉它再结算', target: 'cart' };
 }
 
+/**
+ * 能否提交（按钮禁用 + 原因）。
+ * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null,
+ *          emailError?: string, contactEmail?: string, splitRequired?: boolean,
+ *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean, buyNow?: boolean,
+ *          productGone?: boolean}} state
+ * @why `termsReady` / `termsFailed` / `quoteFailed` 三项（AJ-228）：
+ *      条款版本没取到时 `orderBody` 会抛一句**给开发者看的**报错，此前闸门不看它，
+ *      于是那句话被原样摆到用户面前；报价**失败**与报价**还没回来**此前是同一句"还在计算中"，
+ *      前者永远等不到结果，用户没有出路。三项都是"传了才生效"：不传等于不检查（老调用方不受影响）。
+ * @returns {{ok: boolean, reason: string}}
+ * @why 返回**原因**而不是只给 ok：禁用但不说为什么的按钮会被读成"这站坏了"，
+ *      而原因文案必须由逻辑给（wxml 里写死一串 `wx:if` 会让四条判断各漂移一次）。
+ */
 export function submitGate(state) {
   const s = state && typeof state === 'object' ? state : {};
   if (!Number.isInteger(s.itemCount) || s.itemCount < 1)
