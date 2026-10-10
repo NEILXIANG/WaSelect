@@ -107,7 +107,8 @@ describe('订单列表：状态页签（M-10，AJ-408）', () => {
     gd['orderTab'] = 'after_sale';
     (page['onShow'] as () => void)();
     await settle();
-    expect(calls.at(-1)).toBe('GET /api/v1/orders?status=refunding,refunded');
+    // AJ-430：「售后·退款」取全量、本地按 tabItems 过滤（有售后申请的已送达单也要在）
+    expect(calls.at(-1)).toBe('GET /api/v1/orders');
     expect(gd['orderTab']).toBe('');
     expect(page.data['activeTab']).toBe('after_sale');
   });
@@ -137,5 +138,46 @@ describe('订单列表：状态页签（M-10，AJ-408）', () => {
     });
     expect(page.data['empty']).toBe(true);
     expect(page.data['emptyText']).toBe('「待付款」里暂时没有订单');
+  });
+});
+
+// AJ-430：页签过滤在页面里真的接上了（不只是 utils/order-tabs 单测里对）
+describe('订单列表：「售后·退款」本地过滤', () => {
+  it('🔴 取回全量后只显示退款中 / 已退款或有售后申请的单', async () => {
+    gd['api'] = async (req: { url: string }) => {
+      calls.push(`GET ${req.url.replace('http://api.test', '')}`);
+      return {
+        items: [
+          {
+            order_id: 'o-del',
+            order_no: 'N1',
+            status: 'delivered',
+            total_jpy: 1000,
+            after_sale_state: null,
+          },
+          {
+            order_id: 'o-as',
+            order_no: 'N2',
+            status: 'delivered',
+            total_jpy: 1000,
+            after_sale_state: 'open',
+          },
+          {
+            order_id: 'o-rf',
+            order_no: 'N3',
+            status: 'refunded',
+            total_jpy: 1000,
+            after_sale_state: null,
+          },
+        ],
+      };
+    };
+    gd['orderTab'] = 'after_sale';
+    (page['onShow'] as () => void)();
+    await settle();
+    expect((page.data['rows'] as Array<{ orderId: string }>).map((r) => r.orderId)).toEqual([
+      'o-as',
+      'o-rf',
+    ]);
   });
 });

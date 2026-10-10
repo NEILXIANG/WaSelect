@@ -43,7 +43,7 @@ import { orderRows } from '../../miniprogram/pages/order/index.vm.js';
 import { detailView as orderDetailView } from '../../miniprogram/pages/order-detail/index.vm.js';
 import { addressRows } from '../../miniprogram/pages/address/index.vm.js';
 import { orderShortcuts } from '../../miniprogram/pages/user/index.vm.js';
-import { tabStatusParam } from '../../miniprogram/utils/order-tabs.js';
+import { tabItems, tabStatusParam } from '../../miniprogram/utils/order-tabs.js';
 import { PLACEHOLDER_IMAGE } from '../../miniprogram/utils/placeholder.js';
 import { quoteView } from '../../miniprogram/utils/quote-view.js';
 import { createCartStore } from '../../miniprogram/utils/cart-store.js';
@@ -184,9 +184,13 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
       expect([tab, r.status]).toEqual([tab, 200]);
       return r.json['items'] as Array<Record<string, unknown>>;
     };
-    expect((await list('unpaid')).map((o) => o['order_id'])).toEqual([orderId]);
-    expect(await list('to_ship')).toEqual([]);
-    expect(await list('after_sale')).toEqual([]);
+    // 页面的真实路径是 `tabItems(页签, 响应)`：AJ-430 起「售后·退款」不带 status、拿全量再本地按 after_sale_state 筛
+    const shown = async (tab: string) => tabItems(tab, await list(tab));
+    expect((await shown('unpaid')).map((o) => o['order_id'])).toEqual([orderId]);
+    expect(await shown('to_ship')).toEqual([]);
+    expect(tabStatusParam('after_sale')).toBe('');
+    expect((await list('after_sale')).map((o) => o['after_sale_state'])).toEqual([null]);
+    expect(await shown('after_sale')).toEqual([]);
 
     // ── 列表行（M-11）──
     const [row] = orderRows(await list('all'));

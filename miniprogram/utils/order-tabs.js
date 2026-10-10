@@ -27,7 +27,13 @@ export const ORDER_TABS = [
   { key: 'unpaid', label: '待付款', statuses: ['created', 'pending_payment'] },
   { key: 'to_ship', label: '采购中', statuses: ['paid'] },
   { key: 'shipped', label: '已发货', statuses: ['shipped', 'delivered'] },
-  { key: 'after_sale', label: '售后·退款', statuses: ['refunding', 'refunded'] },
+  // AJ-430：withAfterSale = 另收「有售后申请」的单（状态可能仍是已送达 / 已完成），取全量后由 tabItems 本地过滤
+  {
+    key: 'after_sale',
+    label: '售后·退款',
+    statuses: ['refunding', 'refunded'],
+    withAfterSale: true,
+  },
 ];
 
 /** 只在「全部」里出现的状态（终态、买家无事可做；@see 文件头 @why）。 */
@@ -56,10 +62,37 @@ export function resolveOrderTab(key) {
   return ORDER_TABS.some((t) => t.key === key) ? key : DEFAULT_TAB;
 }
 
-/** 页签 → `status` 查询参数值（「全部」= 空串：调用方不带这个参数）。 */
+/**
+ * 页签 → `status` 查询参数值（「全部」= 空串：调用方不带这个参数）。
+ * @why 「售后·退款」也返回空串（AJ-430）：它要「状态是退款中 / 已退款 **或** 有售后申请」，服务端 status 过滤表达不了「或」；
+ *      `GET /orders` 本就不分页、一次取全，取全量后用 {@link tabItems} 在本地过滤，不为此改服务端查询语义。
+ * @limitation 买家订单很多时这一页签多取了无关的单（列表本就全量返回，量级同「全部」页签）。
+ */
 export function tabStatusParam(key) {
   const tab = ORDER_TABS.find((t) => t.key === resolveOrderTab(key));
-  return tab === undefined ? '' : tab.statuses.join(',');
+  return tab === undefined || tab.withAfterSale === true ? '' : tab.statuses.join(',');
+}
+
+/** 列表行是否带售后申请（契约 0.6.60 `after_sale_state`：open / closed）。 */
+function hasAfterSale(o) {
+  const s = o !== null && typeof o === 'object' ? o.after_sale_state : undefined;
+  return s === 'open' || s === 'closed';
+}
+
+/**
+ * 某页签实际要显示的行（AJ-430）。带 `withAfterSale` 的页签：状态命中 **或** 有售后申请（进行中或已结案——买家要回来看结果）；
+ * 其它页签服务端已按 status 过滤，原样返回。
+ * @param {string} key 页签 key
+ * @param {unknown} items 契约 `OrderListItem[]`
+ */
+export function tabItems(key, items) {
+  if (!Array.isArray(items)) return [];
+  const tab = ORDER_TABS.find((t) => t.key === resolveOrderTab(key));
+  if (tab === undefined || tab.withAfterSale !== true) return items;
+  return items.filter((o) => {
+    const status = o !== null && typeof o === 'object' ? o.status : undefined;
+    return tab.statuses.includes(status) || hasAfterSale(o);
+  });
 }
 
 /**
@@ -73,7 +106,13 @@ export function orderTabCounts(items) {
   for (const o of items) {
     const status = o !== null && typeof o === 'object' ? o.status : undefined;
     for (const key of Object.keys(BADGE_STATUSES)) {
-      if (BADGE_STATUSES[key].includes(status)) counts[key] += 1;
+      // AJ-430：「售后·退款」另数「有进行中的售后申请」的单；同一张单两样都占只算一次（|| 短路）
+      const openAfterSale =
+        key === 'after_sale' &&
+        o !== null &&
+        typeof o === 'object' &&
+        o.after_sale_state === 'open';
+      if (BADGE_STATUSES[key].includes(status) || openAfterSale) counts[key] += 1;
     }
   }
   return counts;

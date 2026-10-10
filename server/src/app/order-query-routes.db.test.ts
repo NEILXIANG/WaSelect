@@ -200,6 +200,35 @@ describe('GET /orders（我的订单列表）', () => {
   });
 });
 
+// AJ-430（契约 0.6.60，统一结论 5.3 ④）：「售后·退款」页签要能找到有售后申请、但状态仍是已送达 / 已完成的单。
+// 列表行加只读 `after_sale_state`（open / closed / null），恒下发；不新增查询语义（列表本就不分页、一次取全）。
+describe('AJ-430：GET /orders 列表行带售后状态', () => {
+  it('🔴 有进行中售后 → open；售后已结案 → closed；没有售后 → null（字段恒下发）', async () => {
+    const srv = await buildServer();
+    try {
+      const a = await createOrder(srv.url, 'as-open');
+      const b = await createOrder(srv.url, 'as-closed');
+      const c = await createOrder(srv.url, 'as-none');
+      const [o] = await db`select user_id from orders where id = ${a}`;
+      const uid = String(o?.['user_id']);
+      await db`update orders set status = 'delivered' where id in ${db([a, b, c])}`;
+      await db`
+        insert into after_sale_requests (id, order_id, user_id, reason, description, status, created_at, updated_at)
+        values ('as-1', ${a}, ${uid}, 'damaged', '外箱压扁，罐子凹了', 'processing', now(), now()),
+               ('as-2', ${b}, ${uid}, 'not_received', '物流显示签收但没收到', 'resolved', now(), now())`;
+      const r = await get(srv.url, '/api/v1/orders');
+      const byId = new Map(
+        (r.json['items'] as Array<Record<string, unknown>>).map((i) => [i['order_id'], i]),
+      );
+      expect(byId.get(a)?.['after_sale_state']).toBe('open');
+      expect(byId.get(b)?.['after_sale_state']).toBe('closed');
+      expect(byId.get(c)).toHaveProperty('after_sale_state', null);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
 // AJ-408（契约 0.6.49，M-10 / M-11）：买家列表的多状态页签 + 列表行缩略图与件数。
 // @why 严格档（对外契约 + 归属过滤）：页签"待付款 = created + pending_payment"、"售后·退款 = refunding + refunded"
 //      要一次请求取齐；校验口径与管理端同一个 shared `parseOrderStatusList`（AJ-400），两端行为不许分叉。

@@ -25,7 +25,7 @@
  * @see ./index.vm.js（状态词表、列表行、页签视图）；../../utils/order-tabs.js（页签 ↔ 状态）
  */
 import { emptyState, orderRows, tabsView } from './index.vm.js';
-import { resolveOrderTab, tabStatusParam } from '../../utils/order-tabs.js';
+import { resolveOrderTab, tabItems, tabStatusParam } from '../../utils/order-tabs.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -108,7 +108,8 @@ Page({
         traceId: this.traceId,
       });
       if (isStale(seq, this.seq)) return;
-      const rows = orderRows(res?.items);
+      // AJ-430：「售后·退款」取的是全量，本地只留退款中 / 已退款或有售后申请的单（其它页签原样）
+      const rows = orderRows(tabItems(tab, res?.items));
       const empty = emptyState(rows, '', tab);
       this.setData({ rows, error: '', empty: empty.showEmpty, emptyText: empty.text });
     } catch (e) {

@@ -456,6 +456,12 @@ export interface OwnedOrderListRow extends OrderListRow {
    * @why 快照而不是商品现名：列表是"我买过什么"，店家改名后列表还得认得出当时买的那件（与详情行项目同口径）。
    */
   first_title: string | null;
+  /**
+   * 售后状态（AJ-430，契约 0.6.60）：有进行中（open / processing）的申请 → 'open'；只有已结案的 → 'closed'；没有 → null。
+   * @why 小程序「售后·退款」页签要能找到"有售后、但订单状态仍是已送达 / 已完成"的单；"进行中"取 shared
+   *      `AFTER_SALE_OPEN_STATUSES`，与自动签收（AJ-424）、管理端待办（AJ-425）同口径。
+   */
+  after_sale_state: 'open' | 'closed' | null;
 }
 
 /**
@@ -494,7 +500,12 @@ export async function listOwnedOrders(
            (select oi.title_snapshot from order_items oi
              where oi.order_id = o.id
              order by oi.line_no nulls last, oi.id
-             limit 1) as first_title
+             limit 1) as first_title,
+           case
+             when exists (select 1 from after_sale_requests a
+                           where a.order_id = o.id and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])}) then 'open'
+             when exists (select 1 from after_sale_requests a where a.order_id = o.id) then 'closed'
+           end as after_sale_state
       from orders o
      where o.user_id = ${userId}
        and ${statuses === undefined ? db`true` : db`o.status in ${db([...statuses])}`}
@@ -510,6 +521,8 @@ export async function listOwnedOrders(
     item_count: Number(r.item_count),
     first_images: r.first_images === null ? null : jsonbValue(r.first_images),
     first_title: typeof r.first_title === 'string' ? r.first_title : null,
+    after_sale_state:
+      r.after_sale_state === 'open' || r.after_sale_state === 'closed' ? r.after_sale_state : null,
   }));
 }
 

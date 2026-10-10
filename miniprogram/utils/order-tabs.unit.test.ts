@@ -16,6 +16,7 @@ import {
   resolveOrderTab,
   tabBadgeText,
   tabStatusParam,
+  tabItems,
 } from './order-tabs.js';
 
 describe('ORDER_TABS（页签 ↔ 状态）', () => {
@@ -56,7 +57,8 @@ describe('tabStatusParam / resolveOrderTab', () => {
   it('页签 → 查询参数（逗号拼接；全部 = 空串，不带 status）', () => {
     expect(tabStatusParam('all')).toBe('');
     expect(tabStatusParam('unpaid')).toBe('created,pending_payment');
-    expect(tabStatusParam('after_sale')).toBe('refunding,refunded');
+    // AJ-430：「售后·退款」要收进有售后申请的单（状态可能仍是已送达 / 已完成）——取全量、本地按 tabItems 过滤
+    expect(tabStatusParam('after_sale')).toBe('');
   });
 
   it('⚠️ 认不出的 key / 脏值 → 回落「全部」（不把坏值发给服务端换一个 40001）', () => {
@@ -106,5 +108,29 @@ describe('orderTabCounts（「我的」四入口角标）', () => {
     expect(tabBadgeText(3)).toBe('3');
     expect(tabBadgeText(100)).toBe('99+');
     expect(tabBadgeText(Number.NaN)).toBe('');
+  });
+});
+
+// AJ-430（契约 0.6.60）：列表行带 after_sale_state（open / closed / null）
+describe('「售后·退款」页签收进有售后申请的单', () => {
+  const list = [
+    { order_id: 'a', status: 'refunded', after_sale_state: null },
+    { order_id: 'b', status: 'delivered', after_sale_state: 'open' },
+    { order_id: 'c', status: 'completed', after_sale_state: 'closed' },
+    { order_id: 'd', status: 'delivered', after_sale_state: null },
+    { order_id: 'e', status: 'refunding', after_sale_state: 'open' },
+  ];
+
+  it('🔴 tabItems：退款中 / 已退款，或有任何售后申请（进行中或已结案）的单都在；没有售后的已送达不在', () => {
+    expect(tabItems('after_sale', list).map((o) => o.order_id)).toEqual(['a', 'b', 'c', 'e']);
+  });
+
+  it('其它页签原样返回（服务端已按 status 过滤）；脏输入 → 空数组', () => {
+    expect(tabItems('shipped', list)).toBe(list);
+    expect(tabItems('after_sale', undefined)).toEqual([]);
+  });
+
+  it('🔴 角标：退款中 + 有进行中售后；同一张单两样都占只算一次；已结案的售后不算', () => {
+    expect(orderTabCounts(list).after_sale).toBe(2); // b（进行中售后）+ e（退款中且有售后，只算一次）
   });
 });
