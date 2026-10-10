@@ -197,3 +197,41 @@ describe('parseAmountToMinor：运营的常见写法（三端联动走查 2026-1
     });
   });
 });
+
+// AJ-437（联动走查·小白运营 2026-10-10）：日元金额带单位"円 / 日元"照收（"1,000" 早已收，"1000円"却被拒，同一个人两种写法两种结果）。
+// "¥" 照旧拒：本项目口径 ¥ 是人民币（D-36），"¥1000" 是哪种钱有歧义——钱的输入宁拒不猜。
+describe('parseAmountToMinor：日元带单位（AJ-437）', () => {
+  it.each([
+    ['1000円', 1000],
+    ['1,000円', 1000],
+    ['1000 円', 1000],
+    [' 1000円 ', 1000],
+    ['1000日元', 1000],
+    ['2,500 日元', 2500],
+  ])('🔴 JPY "%s" → %i', (raw, minor) => {
+    expect(parseAmountToMinor(raw, 'JPY')).toEqual({ ok: true, minor });
+  });
+
+  it.each([
+    ['¥1000', 'JPY'],
+    ['1000¥', 'JPY'],
+    ['円', 'JPY'],
+    ['1000円円', 'JPY'],
+    ['1000円日元', 'JPY'],
+    ['円1000', 'JPY'],
+    ['10.5円', 'JPY'],
+    ['1000円', 'USD'],
+    ['10日元', 'USD'],
+    ['1,5円', 'JPY'],
+  ])('拒 "%s"（%s）', (raw, currency) => {
+    expect(parseAmountToMinor(raw, currency).ok).toBe(false);
+  });
+
+  it('带单位的 0 / 超大数照旧分开提示', () => {
+    expect(parseAmountToMinor('0円', 'JPY')).toEqual({ ok: false, reason: '金额必须大于 0' });
+    expect(parseAmountToMinor('99999999999999999999円', 'JPY')).toEqual({
+      ok: false,
+      reason: '金额太大，请检查是不是多打了几位',
+    });
+  });
+});

@@ -48,13 +48,21 @@ function refundsOf(order: unknown): RefundLike[] {
  */
 const GROUPED = /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
 
-/** "10.05" → 1005（USD）；"2,000" → 2000（JPY）；格式不对 / ≤0 / 小数位超出币种精度 → 拒。 */
+/**
+ * 日元金额末尾的单位（AJ-437，联动走查·小白运营 2026-10-10）：只认**一个**"円 / 日元"，前面可有空格。
+ * @why 运营最自然的写法之一是"1000円"；"1,000"早已照收，带单位却被拒——同一个人两种写法两种结果。
+ * @why 不认"¥"：本项目口径 ¥ 是人民币（D-36），"¥1000"是哪种钱有歧义；其它币种也不认这两个字——钱的输入宁拒不猜。
+ */
+const JPY_UNIT = /\s*(?:円|日元)$/;
+
+/** "10.05" → 1005（USD）；"2,000" / "1000円" → 2000 / 1000（JPY）；格式不对 / ≤0 / 小数位超出币种精度 → 拒。 */
 export function parseAmountToMinor(
   raw: string,
   currency: string,
 ): { ok: true; minor: number } | { ok: false; reason: string } {
   const digits = digitsOf(currency);
-  const trimmed = raw.trim();
+  const bare = raw.trim();
+  const trimmed = currency === 'JPY' ? bare.replace(JPY_UNIT, '') : bare;
   const plain = GROUPED.test(trimmed) ? trimmed.replace(/,/g, '') : trimmed;
   const m = /^(\d+)(?:\.(\d+))?$/.exec(plain);
   if (m === null) {
