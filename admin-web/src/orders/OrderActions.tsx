@@ -124,6 +124,12 @@ export function OrderActions({ api, id, order, sink, reload, onChanged }: OrderA
           onChanged();
           close();
         }}
+        // 联动走查（2026-10-10）：确认改址时别人刚发了货 → 刷新详情并收起抽屉，页头立刻变成"已发货"
+        onStale={() => {
+          void reload();
+          onChanged();
+          close();
+        }}
       />
     ),
     fix: () => (

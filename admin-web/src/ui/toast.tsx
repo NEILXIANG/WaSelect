@@ -85,6 +85,15 @@ export interface ToastSink {
  * @why 单独导出：每个页面的 catch 里都要写一遍 `e instanceof ApiError ? e.message : String(e)`，
  *      而**漏掉 traceId** 是这类复制的默认结果（N8 的链路 ID 就此丢掉）。
  */
+/**
+ * 40902（订单状态不允许此操作）在**已经自动刷新了详情**的地方的说法（联动走查·两位运营同时处理同一单 2026-10-10）。
+ * @why 服务端原文"订单状态不允许此操作"说不出原因——改址 / 发货撞上它，最常见的是别人刚发了货，页面还停在旧状态。
+ *      只给真的刷新了详情的两处用（OrderAddressForm / ShipForm）；通用的 toastError 不改：
+ *      其它动作（如解除拒付锁定）的 40902 有各自的含义，测试钉着"显示服务端原话"。
+ */
+export const STATE_CHANGED_REFRESHED_TEXT =
+  '这张单的状态刚变了（可能有人刚处理过），页面已刷新为最新状态，请看清后再操作';
+
 export function toastError(
   e: unknown,
   fallback = '操作失败',

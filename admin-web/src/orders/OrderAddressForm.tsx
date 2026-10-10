@@ -20,7 +20,14 @@
 import { useRef, useState } from 'react';
 import { useFormDirty } from '../ui/unsaved.js';
 import { useDrawerBusy } from '../ui/drawer.js';
-import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
+import { ApiError } from '../api/errors.js';
+import {
+  STATE_CHANGED_REFRESHED_TEXT,
+  ToastStack,
+  toastError,
+  useToasts,
+  type ToastSink,
+} from '../ui/toast.js';
 import { updateOrderAddress, type AdminApi, type AdminOrderLike } from './api.js';
 import {
   ADDRESS_FIELDS,
@@ -52,6 +59,11 @@ export interface OrderAddressFormProps {
   onDone: (message: string) => void;
   /** 父页的 Toast 出口；不传（组件单独挂载，如组件测试）时用自己的并自渲染浮层。 */
   sink?: ToastSink | undefined;
+  /**
+   * 这单状态已变（40902，常见是别人刚发了货）：父页刷新详情、收起抽屉（联动走查 2026-10-10）。
+   * 不传 = 只提示不刷新（组件单独挂载时）。
+   */
+  onStale?: (() => void) | undefined;
 }
 
 export function OrderAddressForm({
@@ -60,6 +72,7 @@ export function OrderAddressForm({
   order,
   onDone,
   sink: parentSink,
+  onStale,
 }: OrderAddressFormProps) {
   const [form, setForm] = useState(() => addressFormModel(order));
   // 基线就是当前订单地址：保存成功后父组件按新地址换 key 重挂，脏态随卸载清掉
@@ -107,6 +120,13 @@ export function OrderAddressForm({
       setConfirming(false);
       onDone('收货地址已更新（改前地址已归档，可在事件里查）');
     } catch (e) {
+      // 别人刚发了货 / 关了单（40902）：核对态收起，交给父页刷新——停在旧页面上运营会一直点「确认改址」
+      if (e instanceof ApiError && e.code === 40902 && onStale !== undefined) {
+        setConfirming(false);
+        fail(STATE_CHANGED_REFRESHED_TEXT, e.traceId);
+        onStale();
+        return;
+      }
       // ⚠️ 失败保留已填内容：清了表单等于让运营把七个字段重新输一遍
       const { text, traceId } = toastError(e, '改址失败');
       fail(text, traceId);

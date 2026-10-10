@@ -20,7 +20,8 @@ import { DEFAULT_CARRIER } from './carrier.js';
 import { CarrierPicker } from './CarrierPicker.js';
 import { useFormDirty } from '../ui/unsaved.js';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
-import { toastError, type ToastSink } from '../ui/toast.js';
+import { ApiError } from '../api/errors.js';
+import { STATE_CHANGED_REFRESHED_TEXT, toastError, type ToastSink } from '../ui/toast.js';
 import { shipOrder, type AdminApi, type AdminOrderLike } from './api.js';
 import { TRACKING_SHAPE_WARNING, trackingWarning } from './fix-view.js';
 import { emptyShipForm, shipErrors, shipGate, toShipBody } from './view.js';
@@ -90,6 +91,13 @@ export function ShipForm({
     } catch (e) {
       setDialog(null);
       setBusy(false);
+      // 别人刚处理过这单（40902）：刷新详情、收起抽屉，并说清"已刷新"（联动走查 2026-10-10）
+      if (e instanceof ApiError && e.code === 40902) {
+        sink.error(STATE_CHANGED_REFRESHED_TEXT, { traceId: e.traceId });
+        void reload();
+        onDone();
+        return;
+      }
       const { text, traceId } = toastError(e, '发货失败');
       sink.error(text, { traceId });
     }

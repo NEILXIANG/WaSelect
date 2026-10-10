@@ -5,6 +5,7 @@
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { button, click, mount, type, type Mounted } from '../testing/dom.js';
+import { ApiError } from '../api/errors.js';
 import { OrderAddressForm } from './OrderAddressForm.js';
 
 let mounted: Mounted | undefined;
@@ -68,6 +69,26 @@ describe('OrderAddressForm', () => {
     await click(button(el, '保存新地址'));
     expect(button(el, '确认改址')).not.toBeNull();
     await type(el.querySelectorAll('input')[3] ?? null, 'Apt 5');
+    expect(button(el, '确认改址')).toBeNull();
+  });
+
+  it('🔴 确认改址时这单已被别人发货（40902）→ 通知页面刷新（onStale），收起核对态', async () => {
+    const stale: number[] = [];
+    mounted = await mount(
+      createElement(OrderAddressForm, {
+        api: (async () => {
+          throw new ApiError(40902, '订单状态不允许此操作', 'tr-x');
+        }) as never,
+        id: 'o-1',
+        order: ORDER as never,
+        onDone: () => undefined,
+        onStale: () => stale.push(1),
+      }),
+    );
+    const el = mounted.el;
+    await click(button(el, '保存新地址'));
+    await click(button(el, '确认改址'));
+    expect(stale).toEqual([1]);
     expect(button(el, '确认改址')).toBeNull();
   });
 });
