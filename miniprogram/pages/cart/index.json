@@ -1,5 +1,6 @@
 {
   "navigationBarTitleText": "WaSelect · 购物车",
+  "enablePullDownRefresh": true,
   "usingComponents": {
     "ws-button": "/components/ws-button/index",
     "ws-price": "/components/ws-price/index"

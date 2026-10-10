@@ -91,6 +91,16 @@ Page({
   },
 
   /**
+   * 下拉刷新（第 24 项，2026-10-10）：重取客服信息与订单角标，**两条都回来**才收起动画。
+   * @why 两者原先只在进屏时取：停在本页时（如从支付页 redirect 回来前后）角标不会自己更新。
+   *      两个取数都吞错误（静默），所以 await 完一定走得到 stop。
+   */
+  async onPullDownRefresh() {
+    await Promise.all([this.loadSupport(), this.loadOrderBadges()]);
+    wxApi.stopPullDownRefresh();
+  },
+
+  /**
    * 四入口角标（M-10 附）：一次不带过滤的 `GET /orders`，本地分组（vm orderShortcuts @why）。
    * @why 失败**静默**（同 loadSupport）：角标是辅助信息，入口本身照常可点。
    */

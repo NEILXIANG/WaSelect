@@ -5,6 +5,7 @@
  *      重试要真的再打一次报价；角标要在每次改动后更新。纯函数各自对，接起来才是用户看到的样子。
  * @see ../../../test/helpers/mp-page.ts；./index.js；./index.vm.js
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 import { createCartStore } from '../../utils/cart-store.js';
@@ -246,5 +247,25 @@ describe('勾选结算（A3，AJ-416）', () => {
     await quoted();
     expect(quoteCalls).toBe(before + 1);
     expect((page.data['gate'] as { disabled: boolean }).disabled).toBe(false);
+  });
+});
+
+// 第 24 项（2026-10-10）：购物车下拉刷新——价格 / 库存 / 运费可能在买家停留期间变了，原先只能切走再切回来
+describe('购物车：下拉刷新', () => {
+  it('🔴 页面 json 开了 enablePullDownRefresh', () => {
+    const json = JSON.parse(readFileSync(new URL('./index.json', import.meta.url), 'utf8')) as {
+      enablePullDownRefresh?: boolean;
+    };
+    expect(json.enablePullDownRefresh).toBe(true);
+  });
+
+  it('🔴 下拉 → 重读购物车并重新报价；读完本地就收起动画（报价有防抖，合计稍后落地）', async () => {
+    const stops: number[] = [];
+    vi.stubGlobal('wx', { stopPullDownRefresh: () => stops.push(1), navigateTo: () => undefined });
+    const before = quoteCalls;
+    call('onPullDownRefresh');
+    expect(stops).toEqual([1]);
+    await quoted();
+    expect(quoteCalls).toBe(before + 1);
   });
 });

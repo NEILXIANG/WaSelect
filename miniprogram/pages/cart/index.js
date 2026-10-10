@@ -130,6 +130,16 @@ Page({
     this.clearUndoTimer();
   },
 
+  /**
+   * 下拉刷新（第 24 项，2026-10-10）：重读购物车并重新报价——价格 / 库存 / 运费可能在买家停留期间变了。
+   * @tradeoff 读完本地就收起动画，不等报价：报价走 400ms 防抖、合计区自己有"计算中"态；
+   *           等报价回来再收会让下拉动画多挂一段，而用户要看的"购物车里有什么"此刻已经是最新的。
+   */
+  onPullDownRefresh() {
+    this.refresh();
+    wxApi.stopPullDownRefresh();
+  },
+
   /** 重读本地购物车并（防抖地）重新报价。 */
   refresh() {
     const rows = cartRows(app.globalData.cart.items());

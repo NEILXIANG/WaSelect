@@ -153,7 +153,17 @@ Page({
   },
 
   /**
-   * 拉 `GET /home`（轮播 + 分类清单）。**只在进屏时拉一次**，切分类 / 搜索不重拉。
+   * 下拉刷新（第 24 项，2026-10-10）：轮播与商品流（当前分类 / 关键词的第 1 页）一起重取，**两条都回来**才收起动画。
+   * @why 订单页 / 详情页早有下拉（M-04），首页没有：运营换了 Banner、上了新品，买家只能杀掉小程序重进。
+   * @why 两个取数各自吞掉错误（loadHome 静默、reload 落到错误态），所以 await 完一定走得到 stop——失败也不会一直转圈。
+   */
+  async onPullDownRefresh() {
+    await Promise.all([this.loadHome(), this.reload(this.category)]);
+    wxApi.stopPullDownRefresh();
+  },
+
+  /**
+   * 拉 `GET /home`（轮播 + 分类清单）。**只在进屏时拉一次**（下拉刷新另算），切分类 / 搜索不重拉。
    *
    * @why 与商品流**并发且互不等待**：等 `/home` 回来再拉 `/products`，首屏就是两次串行往返；
    *      而两块数据之间没有依赖（banner 不影响列表怎么取数）。

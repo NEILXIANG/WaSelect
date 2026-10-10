@@ -395,3 +395,33 @@ describe('首页：搜索状态与加载更多失败（小程序评估 A4 / A11�
     expect(ids()).toHaveLength(40);
   });
 });
+
+// 第 24 项（2026-10-10）：首页下拉刷新——订单页 / 详情页早有（M-04），首页没有：运营改了 Banner / 上新，买家只能杀掉小程序重进
+describe('首页：下拉刷新', () => {
+  it('🔴 页面 json 开了 enablePullDownRefresh', () => {
+    const json = JSON.parse(readFileSync(new URL('./index.json', import.meta.url), 'utf8')) as {
+      enablePullDownRefresh?: boolean;
+    };
+    expect(json.enablePullDownRefresh).toBe(true);
+  });
+
+  it('🔴 下拉 → 轮播与商品流（第 1 页）都重取，两条都回来才收起动画', async () => {
+    const stops: number[] = [];
+    vi.stubGlobal('wx', { stopPullDownRefresh: () => stops.push(1) });
+    call('onLoad');
+    homeCalls[0]?.d.resolve({ banners: [], categories: [] });
+    calls[0]?.d.resolve(listOf('all', 1));
+    await settle();
+    const done = call<Promise<void>>('onPullDownRefresh');
+    await settle();
+    expect(homeCalls).toHaveLength(2);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.data.page).toBe(1);
+    homeCalls[1]?.d.resolve({ banners: [], categories: [] });
+    await settle();
+    expect(stops).toEqual([]);
+    calls[1]?.d.resolve(listOf('all', 1));
+    await done;
+    expect(stops).toEqual([1]);
+  });
+});

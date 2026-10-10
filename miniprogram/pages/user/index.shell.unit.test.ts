@@ -244,3 +244,28 @@ describe('「我的」模板：登录成功后不再占一行（小程序评估�
     expect(wxml).toMatch(/class="ws-gutter"[^>]*wx:if="\{\{!login\.logged \|\| retry\.show\}\}"/);
   });
 });
+
+// 第 24 项（2026-10-10）：「我的」下拉刷新——订单角标与客服信息只在进屏时取，停留在本页时下单 / 付款后角标不更新
+describe('「我的」：下拉刷新', () => {
+  it('🔴 页面 json 开了 enablePullDownRefresh', () => {
+    const json = JSON.parse(readFileSync(new URL('./index.json', import.meta.url), 'utf8')) as {
+      enablePullDownRefresh?: boolean;
+    };
+    expect(json.enablePullDownRefresh).toBe(true);
+  });
+
+  it('🔴 下拉 → 重取客服信息与订单角标，两条都回来才收起动画', async () => {
+    await open({ wechat: 'waselect_cs', items: [] });
+    const stops: number[] = [];
+    vi.stubGlobal('wx', { stopPullDownRefresh: () => stops.push(1) });
+    urls.length = 0;
+    const done = (page['onPullDownRefresh'] as () => Promise<void>)();
+    expect(stops).toEqual([]);
+    await done;
+    expect(urls.sort()).toEqual([
+      'http://api.test/api/v1/orders',
+      'http://api.test/api/v1/support',
+    ]);
+    expect(stops).toEqual([1]);
+  });
+});
