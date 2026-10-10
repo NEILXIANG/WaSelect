@@ -15,7 +15,9 @@ describe('TodoBar', () => {
   it('🔴 按状态 / 待处理类取 total 显示计数；点一格回调对应的查询条件；某格取数失败显示 —，不影响其它格', async () => {
     const totals: Record<string, number> = {
       'status=paid': 3,
-      'status=pending_payment': 1,
+      // 与订单页「待付款」页签同一个状态集合（三端联动模拟 2026-10-10：原先只数 pending_payment，
+      // 工作台说"待付款 0"、点进订单页「待付款」页签却有单）
+      'status=created,pending_payment': 1,
       'attention=after_sale': 2,
       'attention=late_paid': 0,
       'attention=blocked': 1,
@@ -51,6 +53,11 @@ describe('TodoBar', () => {
     expect(button(el, '迟到付款待退 0 · 去处理 →')?.className).not.toContain('todo-chip-due');
     await click(due);
     await click(button(el, '售后待处理 2 · 去处理 →'));
-    expect(picked).toEqual([{ status: 'paid' }, { attention: 'after_sale' }]);
+    await click(button(el, '待付款 1 · 去处理 →'));
+    expect(picked).toEqual([
+      { status: 'paid' },
+      { attention: 'after_sale' },
+      { status: 'created,pending_payment' },
+    ]);
   });
 });
