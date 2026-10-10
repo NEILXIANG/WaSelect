@@ -10,3 +10,6 @@ package-lock.json
 contracts/
 # 并行分身的工作树（整仓副本）
 .claude/
+# docs/ 下的整页 HTML（如合伙人报告）是脚本生成、按发布版逐字节留档的产物：
+# prettier 重排会改动行内元素之间的空白、改变实际显示，且与已发出的版本不再一致
+docs/*.html
