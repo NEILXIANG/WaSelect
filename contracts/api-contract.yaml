@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.60
+  version: 0.6.61
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,9 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.61（AJ-435：买家订单列表行增一个只读字段，老客户端忽略即可）：
+      `OrderListItem.expires_at`：付款截止时刻（ISO 8601），与 `Order.expires_at` 同一列同一格式，恒下发（orders.expires_at NOT NULL）。
+      小程序待付款行据此写明"几点前付款"——此前列表只说"请在截止时间前完成支付"，不说截止是几点；`GET /orders` 的查询语义不变。
     0.6.60（AJ-430：买家订单列表行增一个只读字段，老客户端忽略即可）：
       `OrderListItem.after_sale_state`：有进行中（open / processing）的售后申请 → `open`；只有已结案的 → `closed`；没有 → `null`（恒下发）。
       小程序「售后·退款」页签据此收进"有售后、但订单状态仍是已送达 / 已完成"的单；`GET /orders` 的查询语义不变。
@@ -1152,7 +1155,7 @@ components:
       properties:
         anon_id: {type: string, pattern: '^an-[0-9A-HJKMNP-TV-Z]{20}$'}
         events: {type: array, minItems: 1, maxItems: 20, items: {$ref: '#/components/schemas/BeaconEvent'}}
-    OrderListItem: {description: '0.6.49（AJ-408）：买家 GET /orders 的列表行', allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, required: [item_count, after_sale_state], properties: {item_count: {type: integer, minimum: 0, description: '各行 qty 之和（共 N 件），不是行数'}, after_sale_state: {type: string, nullable: true, enum: [open, closed, null], description: '0.6.60（AJ-430）：open = 有进行中（open / processing）的售后申请；closed = 只有已结案的；null = 没有售后申请。恒下发'}, first_image: {$ref: '#/components/schemas/ImageSet', description: '买家下单顺序第一行商品的现图第一张（同 Order.items[].image 的生成规则）；没有 → 整键省略'}, first_title: {type: string, description: '0.6.54（AJ-416）：第一行的下单快照标题（不随商品改名变化）；没有 → 整键省略'}}}]}
+    OrderListItem: {description: '0.6.49（AJ-408）：买家 GET /orders 的列表行', allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, required: [item_count, after_sale_state, expires_at], properties: {expires_at: {type: string, format: date-time, description: '0.6.61（AJ-435）：付款截止，与 Order.expires_at 同列同格式；恒下发'}, item_count: {type: integer, minimum: 0, description: '各行 qty 之和（共 N 件），不是行数'}, after_sale_state: {type: string, nullable: true, enum: [open, closed, null], description: '0.6.60（AJ-430）：open = 有进行中（open / processing）的售后申请；closed = 只有已结案的；null = 没有售后申请。恒下发'}, first_image: {$ref: '#/components/schemas/ImageSet', description: '买家下单顺序第一行商品的现图第一张（同 Order.items[].image 的生成规则）；没有 → 整键省略'}, first_title: {type: string, description: '0.6.54（AJ-416）：第一行的下单快照标题（不随商品改名变化）；没有 → 整键省略'}}}]}
     Order: {allOf: [{$ref: '#/components/schemas/OrderSummary'}, {type: object, properties: {contact_email: {type: string, format: email, description: '可选收货通知邮箱（D-42 补入）'}, terms_version: {type: string, description: '建单时写入的条款版本（只读，D-43）'}, items: {type: array, items: {$ref: '#/components/schemas/OrderItem'}}, address: {$ref: '#/components/schemas/Address'}, items_jpy: {type: integer}, shipping_jpy: {type: integer}, duty_jpy: {type: integer, nullable: true, description: '0.6.30：null = 无法估算（与 Quote.duty_jpy 同口径；此前存 0）'}, expires_at: {type: string, format: date-time}, carrier: {type: string}, tracking_no: {type: string}, tracking_url: {type: string, description: '0.6.32：官方查件链接（日本邮便 S10 单号或承运商为日本邮便时生成，locale=en）；认不出 → 整键省略'}, timeline: {type: array, description: '0.6.10：只含订单状态值（OrderStatus 10 态）；管理事件只在 AdminOrder.events', items: {type: object, properties: {status: {type: string}, at: {type: string, format: date-time}}}}, payment: {type: object, properties: {channel: {type: string}, charge_currency: {type: string}, charge_amount: {type: integer, description: '**最小货币单位**（JPY=円，USD=分）：$86.00 存 8600。展示层必须除以 10^小数位（B43 / AJ-214）'}, paid_amount: {type: integer}, paid_currency: {type: string}}}, late_paid: {type: boolean, description: '0.6.37（P2-11 / AJ-386）：关单后才到的付款（钱已扣）。买家侧据此说"已收到付款，会原路退回"，而不是"未完成付款，请重新下单"'}, partial_refunds: {type: array, description: '0.6.37（P2-12 / AJ-386）：买家视角的部分退款（按发起顺序；没有时为空数组）。AdminOrder 覆盖为带原因 / 操作人的 PartialRefund[]', items: {$ref: '#/components/schemas/BuyerPartialRefund'}}, after_sale: {$ref: '#/components/schemas/AfterSaleRequest', description: '0.6.56（AJ-420）：最新一条售后申请；没有 → 整键省略（AdminOrder 不带本键，看 after_sales）'}}}]}
     AfterSaleRequest: {type: object, description: '0.6.56（AJ-420）：一条售后申请（买家视角）。原因 / 状态的中文文案在 shared AFTER_SALE_REASON_LABELS / AFTER_SALE_STATUS_LABELS', required: [id, reason, description, status, created_at, updated_at], properties: {id: {type: string}, reason: {type: string, enum: [not_received, damaged, wrong_item, quality, other]}, description: {type: string, maxLength: 500}, status: {type: string, enum: [open, processing, resolved, rejected]}, resolution_note: {type: string, maxLength: 500, description: '运营的处理说明；没有 → 整键省略'}, created_at: {type: string, format: date-time}, updated_at: {type: string, format: date-time}}}
     AdminAfterSaleRequest: {description: '0.6.56：运营视角，多一个处理人', allOf: [{$ref: '#/components/schemas/AfterSaleRequest'}, {type: object, properties: {handled_by: {type: string, description: 'admin:<id>；没人处理过 → 整键省略'}}}]}

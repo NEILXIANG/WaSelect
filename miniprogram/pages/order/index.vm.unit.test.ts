@@ -220,3 +220,31 @@ describe('列表行的提示跟着售后状态走（三端联动模拟 2026-10-1
     );
   });
 });
+
+describe('待付款行写明付款截止时刻（AJ-435，契约 0.6.61 expires_at）', () => {
+  const row = (status: string, expires_at: unknown) =>
+    orderRows([
+      { order_id: 'o-p', order_no: '261010-PPPPPP', status, total_jpy: 5814, expires_at },
+    ])[0];
+
+  it('🔴 待付款 / 付款中：提示里写出截止时刻（日本时间，同详情页口径），两态各保留原来的意思', () => {
+    expect(row('created', '2026-10-10T02:20:00.000Z')?.nextText).toBe(
+      '请在 2026-10-10 11:20（日本时间）前完成支付，超时订单会自动关闭。',
+    );
+    expect(row('pending_payment', '2026-10-10T02:20:00.000Z')?.nextText).toBe(
+      '如果已经完成付款，系统确认后这里会更新；还没付的话，请在 2026-10-10 11:20（日本时间）前继续支付。',
+    );
+  });
+
+  it('截止时刻缺失 / 解析不了：照旧用不带时刻的提示（不编时间）', () => {
+    for (const v of [undefined, null, 'not-a-date', 123]) {
+      expect(row('created', v)?.nextText).toBe(buyerStatus('created', { inList: true }).next);
+    }
+  });
+
+  it('非待付款的单不受影响', () => {
+    expect(row('paid', '2026-10-10T02:20:00.000Z')?.nextText).toBe(
+      buyerStatus('paid', { inList: true }).next,
+    );
+  });
+});

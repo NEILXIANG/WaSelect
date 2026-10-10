@@ -52,6 +52,34 @@ const AFTER_SALE_LIST_HINTS = {
 const AFTER_SALE_HINT_STATUSES = ['shipped', 'delivered', 'completed'];
 
 /**
+ * 待付款行写明付款截止时刻（AJ-435，契约 0.6.61 列表行 `expires_at`）。
+ * @why 原先只说"请在截止时间前完成支付"，却不说截止是几点；时刻用详情页同一个 `jstDateTimeLabeled`（带"（日本时间）"），
+ *      两处说法一致。用绝对时刻而不是"还剩 N 分钟"：列表不跑秒表，相对时间停留几分钟就过时了。
+ * @limitation 截止时刻缺失或解析不了 → 回落到不带时刻的原句（不编时间）。
+ */
+const DEADLINE_HINTS = {
+  created: (at) => `请在 ${at}前完成支付，超时订单会自动关闭。`,
+  pending_payment: (at) =>
+    `如果已经完成付款，系统确认后这里会更新；还没付的话，请在 ${at}前继续支付。`,
+};
+
+/** 一行的"下一步"提示：售后进度 > 付款截止 > 订单状态的列表提示。 */
+function nextTextOf(o, status, buyer) {
+  if (
+    AFTER_SALE_HINT_STATUSES.includes(status) &&
+    (o.after_sale_state === 'open' || o.after_sale_state === 'closed')
+  ) {
+    return AFTER_SALE_LIST_HINTS[o.after_sale_state];
+  }
+  const deadline = Object.prototype.hasOwnProperty.call(DEADLINE_HINTS, status)
+    ? jstDateTimeLabeled(o.expires_at)
+    : null;
+  return typeof deadline === 'string' && deadline !== ''
+    ? DEADLINE_HINTS[status](deadline)
+    : buyer.next;
+}
+
+/**
  * `GET /orders` 的 items → 列表行。
  * @param {unknown} items 契约 `OrderSummary[]`
  * @returns {Array<{orderId: string, orderNo: string, totalJpy: number|null, totalText: string,
@@ -84,11 +112,7 @@ export function orderRows(items) {
         // ⚠️ 不在词表里的状态给 '状态未知' 而不是空串：
         //    空串在真机上就是一个空白的标签，用户无法区分"没状态"和"渲染错了"
         statusText: buyer.title,
-        nextText:
-          AFTER_SALE_HINT_STATUSES.includes(status) &&
-          (o.after_sale_state === 'open' || o.after_sale_state === 'closed')
-            ? AFTER_SALE_LIST_HINTS[o.after_sale_state]
-            : buyer.next,
+        nextText: nextTextOf(o, status, buyer),
         canPay: PAYABLE.includes(status),
         createdText: jstDateTimeLabeled(o.created_at) ?? '',
         thumb: thumbUrl(o.first_image),

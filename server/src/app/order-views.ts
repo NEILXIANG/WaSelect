@@ -127,6 +127,8 @@ export function toOrderListItem(
     ...(row.first_title !== null && row.first_title !== '' ? { first_title: row.first_title } : {}),
     // AJ-430：恒下发（null = 没有售后申请），小程序据此把有售后的单归进「售后·退款」页签
     after_sale_state: row.after_sale_state,
+    // AJ-435：付款截止，与详情 Order.expires_at 同列同格式；待付款行据此写"几点前付款"
+    expires_at: row.expires_at.toISOString(),
   };
 }
 

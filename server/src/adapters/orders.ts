@@ -462,6 +462,11 @@ export interface OwnedOrderListRow extends OrderListRow {
    *      `AFTER_SALE_OPEN_STATUSES`，与自动签收（AJ-424）、管理端待办（AJ-425）同口径。
    */
   after_sale_state: 'open' | 'closed' | null;
+  /**
+   * 付款截止（AJ-435，契约 0.6.61）：与详情同一列 `orders.expires_at`（NOT NULL）。
+   * @why 小程序待付款行写明"几点前付款"——原先只说"请在截止时间前完成支付"，却不说截止是几点。
+   */
+  expires_at: Date;
 }
 
 /**
@@ -490,7 +495,7 @@ export async function listOwnedOrders(
   statuses?: readonly string[],
 ): Promise<OwnedOrderListRow[]> {
   const rows = await db`
-    select o.id, o.order_no, o.status, o.total_jpy, o.fx_snapshot, o.created_at,
+    select o.id, o.order_no, o.status, o.total_jpy, o.fx_snapshot, o.created_at, o.expires_at,
            (select coalesce(sum(oi.qty), 0)::int from order_items oi where oi.order_id = o.id)
              as item_count,
            (select p.images from order_items oi join products p on p.id = oi.product_id
@@ -523,6 +528,7 @@ export async function listOwnedOrders(
     first_title: typeof r.first_title === 'string' ? r.first_title : null,
     after_sale_state:
       r.after_sale_state === 'open' || r.after_sale_state === 'closed' ? r.after_sale_state : null,
+    expires_at: r.expires_at as Date,
   }));
 }
 

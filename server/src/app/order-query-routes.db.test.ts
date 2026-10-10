@@ -229,6 +229,30 @@ describe('AJ-430：GET /orders 列表行带售后状态', () => {
   });
 });
 
+// AJ-435（契约 0.6.61，用户 2026-10-10 授权代决）：列表行带付款截止时刻 `expires_at`，小程序待付款行据此写明"几点前付款"。
+// 与详情 GET /orders/{id} 的 expires_at 是同一列、同一格式（ISO 8601 UTC）；orders.expires_at NOT NULL，所以恒下发。
+describe('AJ-435：GET /orders 列表行带 expires_at', () => {
+  it('🔴 每行都有 expires_at，值与该单详情里的 expires_at 完全一致（含已付款的单）', async () => {
+    const srv = await buildServer();
+    try {
+      const a = await createOrder(srv.url, 'exp-a');
+      const b = await createOrder(srv.url, 'exp-b');
+      await db`update orders set status = 'paid' where id = ${b}`;
+      const r = await get(srv.url, '/api/v1/orders');
+      const items = r.json['items'] as Array<Record<string, unknown>>;
+      expect(items.length).toBe(2);
+      for (const id of [a, b]) {
+        const row = items.find((i) => i['order_id'] === id);
+        const detail = await get(srv.url, `/api/v1/orders/${id}`);
+        expect(row?.['expires_at']).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        expect(row?.['expires_at']).toBe(detail.json['expires_at']);
+      }
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
 // AJ-408（契约 0.6.49，M-10 / M-11）：买家列表的多状态页签 + 列表行缩略图与件数。
 // @why 严格档（对外契约 + 归属过滤）：页签"待付款 = created + pending_payment"、"售后·退款 = refunding + refunded"
 //      要一次请求取齐；校验口径与管理端同一个 shared `parseOrderStatusList`（AJ-400），两端行为不许分叉。

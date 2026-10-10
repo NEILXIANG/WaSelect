@@ -198,6 +198,10 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     expect(row?.thumb).toBe('https://img.example.com/knife.jpg');
     expect(row?.thumb).not.toBe(PLACEHOLDER_IMAGE);
     expect(row?.createdText).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}（日本时间）$/);
+    // AJ-435（契约 0.6.61）：真服务端列表行下发 expires_at，待付款行写出截止时刻
+    expect(row?.nextText).toMatch(
+      /^请在 \d{4}-\d{2}-\d{2} \d{2}:\d{2}（日本时间）前完成支付，超时订单会自动关闭。$/,
+    );
 
     // ── 「我的」角标（M-10 附）：同一次全量列表本地分组 ──
     expect(orderShortcuts(await list('all')).map((s) => s.badge)).toEqual(['1', '', '', '']);
