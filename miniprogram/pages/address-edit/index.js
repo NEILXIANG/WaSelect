@@ -179,12 +179,15 @@ Page({
     const body = toAddressInput(this.data.form);
     try {
       if (this.addressId === '') {
-        await app.globalData.api({
+        const created = await app.globalData.api({
           url: `${app.globalData.apiBase}/api/v1/addresses`,
           method: 'POST',
           data: body,
           traceId: this.traceId,
         });
+        // 三端走查小白视角（2026-10-10）：把"刚新增的那条"交给地址列表——从结算页来的话，列表直接选中它返回结算页
+        const id = created !== null && typeof created === 'object' ? created.id : undefined;
+        app.globalData.justAddedAddressId = typeof id === 'string' ? id : '';
       } else {
         await app.globalData.api({
           url: `${app.globalData.apiBase}/api/v1/addresses/${this.addressId}`,

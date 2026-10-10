@@ -6,6 +6,7 @@
  *         照做会丢掉刚填的整张表单。
  * @see ../../../test/helpers/mp-page.ts；./index.js
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deferred, loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 
@@ -13,6 +14,8 @@ let page: LoadedPage;
 let posts: Array<{ url: string; method?: string }>;
 let hold: ReturnType<typeof deferred<unknown>> | null;
 let fail: Error | null;
+/** 新增成功后的一次性交接要从这里读（结算页 → 新增地址 → 自动选中）。 */
+let gd: Record<string, unknown>;
 
 const call = (name: string, ...args: unknown[]): unknown =>
   (page[name] as (...a: unknown[]) => unknown)(...args);
@@ -36,17 +39,16 @@ beforeEach(async () => {
   hold = null;
   fail = null;
   vi.stubGlobal('wx', { navigateBack: () => undefined });
-  page = await loadPage(new URL('./index.js', import.meta.url).href, {
-    globalData: {
-      apiBase: 'http://api.test',
-      api: async (req: { url: string; method?: string }) => {
-        posts.push(req);
-        if (hold !== null) return hold.promise;
-        if (fail !== null) throw fail;
-        return { id: 'addr-1' };
-      },
+  gd = {
+    apiBase: 'http://api.test',
+    api: async (req: { url: string; method?: string }) => {
+      posts.push(req);
+      if (hold !== null) return hold.promise;
+      if (fail !== null) throw fail;
+      return { id: 'addr-1' };
     },
-  });
+  };
+  page = await loadPage(new URL('./index.js', import.meta.url).href, { globalData: gd });
   call('onLoad', {});
   page.setData({ form: { ...FORM } });
 });
@@ -136,5 +138,30 @@ describe('地址编辑：地址已不存在 / 还在加载（审查 2026-10-09�
     call('onSave');
     await settle();
     expect(posts.length).toBe(before);
+  });
+});
+
+describe('导航栏标题（三端走查小白视角 2026-10-10）', () => {
+  it('🔴 新增与编辑共用本页：导航栏写中性的「收货地址」，页内标题再分新增 / 编辑（原先新增时顶栏写"编辑地址"）', () => {
+    const json = JSON.parse(readFileSync(new URL('./index.json', import.meta.url), 'utf8')) as {
+      navigationBarTitleText?: string;
+    };
+    expect(json.navigationBarTitleText).toBe('收货地址');
+  });
+});
+
+describe('新增成功 → 交给地址列表"刚新增的那条"（三端走查小白视角 2026-10-10）', () => {
+  it('🔴 POST 成功 → globalData.justAddedAddressId = 新地址 id；编辑（PUT）不写', async () => {
+    call('onSave');
+    await settle();
+    expect(posts.map((p) => p.method)).toEqual(['POST']);
+    expect(gd['justAddedAddressId']).toBe('addr-1');
+  });
+
+  it('保存失败不写（不能把没存上的地址当成选中）', async () => {
+    fail = Object.assign(new Error('bad'), { code: 40001 });
+    call('onSave');
+    await settle();
+    expect(gd['justAddedAddressId'] ?? '').toBe('');
   });
 });

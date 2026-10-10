@@ -1,5 +1,5 @@
 {
-  "navigationBarTitleText": "编辑地址",
+  "navigationBarTitleText": "收货地址",
   "usingComponents": {
     "ws-button": "/components/ws-button/index",
     "ws-section-head": "/components/ws-section-head/index",

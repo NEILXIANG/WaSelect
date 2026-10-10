@@ -110,6 +110,9 @@ describe('formErrors（格式预检）', () => {
       '5 位',
     );
     expect(formErrors({ ...formModel(ADDR), state: 'CAL' }).errors.state).toContain('两位');
+    // 三端走查小白视角（2026-10-10）：州是下拉选择，没选时说"两位大写缩写"是术语——只说"请选择州"
+    expect(formErrors({ ...formModel(ADDR), state: '' }).errors.state).toBe('请选择州');
+    expect(formErrors({ ...formModel(ADDR), state: '  ' }).errors.state).toBe('请选择州');
   });
 
   it('⚠️ 全角 / 中文收件人被拒（面单不接受）', () => {

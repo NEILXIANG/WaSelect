@@ -63,7 +63,19 @@ Page({
     this.setData({ pick: options?.pick === '1' });
   },
 
+  /**
+   * 进页取列表。从结算页（选择模式）新增地址回来时直接选中它返回结算页（三端走查小白视角 2026-10-10）。
+   * @why 原先保存后落回本页，还得再点「用这个地址」；页面最显眼的是实心「新增地址」，小白容易再新增一条。
+   *      交接值是一次性的：不论用没用上都读走即清，不留给下一次。
+   */
   onShow() {
+    const added = app.globalData.justAddedAddressId;
+    app.globalData.justAddedAddressId = '';
+    if (this.data.pick && typeof added === 'string' && added !== '') {
+      app.globalData.pickedAddressId = added;
+      wxApi.navigateBack();
+      return;
+    }
     void this.load();
   },
 

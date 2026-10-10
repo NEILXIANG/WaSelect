@@ -183,7 +183,11 @@ export function formErrors(model) {
   if (!ADDRESS_PATTERNS.asciiOptional.test(m.line2.trim()))
     errors.line2 = '地址第二行请用英文/数字填写（可留空）';
   if (!ADDRESS_PATTERNS.ascii.test(m.city.trim())) errors.city = '城市请用英文/数字填写';
-  if (!ADDRESS_PATTERNS.state.test(m.state.trim())) errors.state = '州为两位大写缩写，请从列表选择';
+  // 三端走查小白视角（2026-10-10）：州是下拉选择，没选时只说"请选择州"——"两位大写缩写"对用户是术语；
+  // 形状不对只会来自旧数据，才保留原句
+  if (m.state.trim() === '') errors.state = '请选择州';
+  else if (!ADDRESS_PATTERNS.state.test(m.state.trim()))
+    errors.state = '州为两位大写缩写，请从列表选择';
   // 剩余清单 4-5：两位大写还不够，必须是 USPS 真实州码（与服务端 address-input.ts 同口径）
   else if (!isUsStateCode(m.state.trim().toUpperCase()))
     errors.state = '请从列表选择州（这个州码不存在）';

@@ -95,6 +95,13 @@ App({
      */
     pickedAddressId: '',
     /**
+     * 地址编辑页 → 地址列表页的**一次性**交接：刚新增成功的地址 id（'' = 没有）。
+     * @why 从结算页新增地址后，列表页（选择模式）直接选中它返回结算页，不让小白再点一次「用这个地址」（三端走查 2026-10-10）。
+     *      列表页 onShow 读走即清，与 pickedAddressId 同口径。
+     * @see ../pages/address-edit/index.js（写入侧）；../pages/address/index.js（消费侧）
+     */
+    justAddedAddressId: '',
+    /**
      * 「我的」四个订单入口 → 订单页的**一次性**页签意图（M-10 附，AJ-408；'' = 没有）。
      * @why 订单页是 tab 页，`switchTab` 不能带 query；交接方式与 `pickedAddressId` 同理，订单页 onShow 读走即清空。
      * @see ../pages/user/index.js（写入侧）；../pages/order/index.js（消费侧）
