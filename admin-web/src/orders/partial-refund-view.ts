@@ -10,6 +10,7 @@
  */
 import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
 import { UPSTREAM_UNAVAILABLE_CODE } from '../api/errors.js';
+import { minorMoneyText } from '../format.js';
 import { upstreamUnavailableNotice, type Gate } from './view.js';
 
 interface RefundLike {
@@ -226,4 +227,46 @@ export function partialRefundErrorNotice(a: {
     default:
       return '结果未知，请点「同步」取回结果，不要去 Stripe 后台重复退';
   }
+}
+
+/**
+ * 全额退款确认框的正文（严格检查 A-2，2026-10-10）：写**实际要退的钱**，不是订单合计。
+ *
+ * @why 原先固定写"合计 {total_jpy}"；服务端实退 = 原币实收 − 已成功部分退款（server/src/domain/partial-refund.ts
+ *      `fullRefundAmount`）。先部分退过的单、美元付款的单，确认框里的数都是错的——而这是不可撤销的动作。
+ * @why 只扣**已成功**的部分退款（与服务端同口径）；在途的那几笔服务端会直接拒全额退款（40902 partial_refund_in_flight），
+ *      这里不替它猜。注意这与 `refundableMinor`（部分退款额度，扣掉一切未失败的）口径不同，刻意不复用。
+ * @limitation 没有成功的支付记录（旧数据 / 详情没带 payments）时不编数字：写合计并说明以支付机构为准。
+ */
+export function fullRefundConfirmBody(order: unknown): string {
+  const o = (order ?? {}) as { order_no?: unknown; order_id?: unknown; total_jpy?: unknown };
+  const no = typeof o.order_no === 'string' ? o.order_no : String(o.order_id ?? '');
+  const tail = '退款原因会记录下来。';
+  const pays = (order as { payments?: unknown } | null)?.payments;
+  const pay = (Array.isArray(pays) ? pays : []).find(
+    (p: { status?: unknown }) => p?.status === 'succeeded',
+  ) as { charge_currency?: unknown; charge_amount?: unknown } | undefined;
+  if (
+    pay === undefined ||
+    !Number.isInteger(pay.charge_amount) ||
+    typeof pay.charge_currency !== 'string'
+  ) {
+    return `订单 ${no}：合计 ${minorMoneyText(o.total_jpy, 'JPY')}（实际可退金额以支付机构为准）。${tail}`;
+  }
+  const currency = pay.charge_currency;
+  const charged = pay.charge_amount as number;
+  const succeeded = refundsOf(order)
+    .filter((r) => r.status === 'succeeded')
+    .reduce((s, r) => s + (Number.isInteger(r.amount_minor) ? (r.amount_minor as number) : 0), 0);
+  const refund = Math.max(0, charged - succeeded);
+  if (refund === 0) return `订单 ${no}：部分退款已退满实收，已无可退金额。`;
+  const notes = [
+    ...(succeeded > 0
+      ? [
+          `实收 ${minorMoneyText(charged, currency)}，已部分退 ${minorMoneyText(succeeded, currency)}`,
+        ]
+      : []),
+    ...(currency.toUpperCase() !== 'JPY' ? ['按买家付款的币种退'] : []),
+  ];
+  return `订单 ${no}：将原路退回 ${minorMoneyText(refund, currency)}${notes.length > 0 ? `（${notes.join('；')}）` : ''}。${tail}`;
 }

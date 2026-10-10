@@ -5,11 +5,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatMinor,
+  fullRefundConfirmBody,
   parseAmountToMinor,
+  partialRefundErrorNotice,
   partialRefundGate,
   partialRefundInputCheck,
   partialRefundRows,
-  partialRefundErrorNotice,
   refundableMinor,
 } from './partial-refund-view.js';
 
@@ -233,5 +234,66 @@ describe('parseAmountToMinor：日元带单位（AJ-437）', () => {
       ok: false,
       reason: '金额太大，请检查是不是多打了几位',
     });
+  });
+});
+
+// 严格检查 A-2（2026-10-10）：全额退款确认框原先固定写"合计 {total_jpy}"，而服务端实退 = 原币实收 − 已成功部分退款
+// （server/src/domain/partial-refund.ts fullRefundAmount）。不可撤销的动作上，运营核对的必须是真正要退的那个数。
+describe('fullRefundConfirmBody：确认框写实际要退的钱', () => {
+  const order = (over: Record<string, unknown> = {}) => ({
+    order_no: '261009-9H4QTF',
+    total_jpy: 18_550,
+    payments: [{ status: 'succeeded', charge_currency: 'JPY', charge_amount: 18_550 }],
+    partial_refunds: [],
+    ...over,
+  });
+
+  it.each([
+    [
+      '没有部分退款（日元）',
+      order(),
+      '订单 261009-9H4QTF：将原路退回 18,550 円。退款原因会记录下来。',
+    ],
+    [
+      '已成功部分退 2,000 円（sim 实例）',
+      order({ partial_refunds: [{ status: 'succeeded', amount_minor: 2000 }] }),
+      '订单 261009-9H4QTF：将原路退回 16,550 円（实收 18,550 円，已部分退 2,000 円）。退款原因会记录下来。',
+    ],
+    [
+      '在途的部分退款不扣（只扣已成功的，与服务端 fullRefundAmount 同口径；在途时服务端会直接拒全额退款）',
+      order({
+        partial_refunds: [
+          { status: 'succeeded', amount_minor: 2000 },
+          { status: 'initiated', amount_minor: 1000 },
+        ],
+      }),
+      '订单 261009-9H4QTF：将原路退回 16,550 円（实收 18,550 円，已部分退 2,000 円）。退款原因会记录下来。',
+    ],
+    [
+      '失败的部分退款不扣',
+      order({ partial_refunds: [{ status: 'failed', amount_minor: 5000 }] }),
+      '订单 261009-9H4QTF：将原路退回 18,550 円。退款原因会记录下来。',
+    ],
+    [
+      '美元付款 → 按美元写，并说明按付款币种退',
+      order({ payments: [{ status: 'succeeded', charge_currency: 'USD', charge_amount: 12_788 }] }),
+      '订单 261009-9H4QTF：将原路退回 $127.88（按买家付款的币种退）。退款原因会记录下来。',
+    ],
+  ])('🔴 %s', (_name, o, text) => {
+    expect(fullRefundConfirmBody(o)).toBe(text);
+  });
+
+  it('没有成功的支付记录 → 不编数字，写合计并说明以支付机构为准', () => {
+    expect(fullRefundConfirmBody(order({ payments: [] }))).toBe(
+      '订单 261009-9H4QTF：合计 18,550 円（实际可退金额以支付机构为准）。退款原因会记录下来。',
+    );
+  });
+
+  it('部分退款已退满 → 说"已无可退金额"（服务端会拒，确认框不该再写一个数）', () => {
+    expect(
+      fullRefundConfirmBody(
+        order({ partial_refunds: [{ status: 'succeeded', amount_minor: 18_550 }] }),
+      ),
+    ).toBe('订单 261009-9H4QTF：部分退款已退满实收，已无可退金额。');
   });
 });

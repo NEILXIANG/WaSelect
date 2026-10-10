@@ -16,8 +16,8 @@ import { useState } from 'react';
 import { useFormDirty } from '../ui/unsaved.js';
 import { ApiError, retryAfterMsSec } from '../api/errors.js';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
-import { moneyText } from '../format.js';
 import { refundOrder } from './api.js';
+import { fullRefundConfirmBody } from './partial-refund-view.js';
 import type { OrderActionFormProps } from './ShipForm.js';
 import { fullRefundErrorNotice, refundErrors, refundGate, toRefundBody } from './view.js';
 import { composeRefundReason, emptyRefundReason } from './refund-reason.js';
@@ -107,7 +107,8 @@ export function RefundForm({
     }
     setDialog({
       title: '全额退款：原币退，不可撤销',
-      body: `订单 ${order.order_no ?? id}，合计 ${moneyText(order.total_jpy)}。退款原因会记录下来。`,
+      // 严格检查 A-2：写实际要退的钱（原币实收 − 已成功部分退款），不是订单合计
+      body: fullRefundConfirmBody({ ...order, order_no: order.order_no ?? id }),
       confirmText: '确认退款',
       danger: true,
     });
