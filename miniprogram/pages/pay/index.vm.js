@@ -193,7 +193,7 @@ export function closedScreen(view) {
     payUrl: '',
     guide: { ...EMPTY_GUIDE },
     copied: false,
-    // 扫描 W-02 / W-03：倒计时与上一次支付结果同样作废——"已付款"旁边不能挂着"请在 12:34 内完成支付"或"支付未完成"
+    // 扫描 W-02 / W-03：倒计时与上一次支付结果同样作废——"已付款"旁边不能挂着"请在 12 分 34 秒内完成支付"或"支付未完成"
     countdown: '',
     payResult: '',
   };

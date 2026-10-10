@@ -409,12 +409,12 @@ describe('支付页：待付款倒计时（4-11）', () => {
       expiresAt = '2026-09-29T01:30:00.000Z';
       call('onRetry');
       await settle();
-      expect(page.data['countdown']).toBe('请在 10:00 内完成支付');
+      expect(page.data['countdown']).toBe('请在 10 分 00 秒内完成支付');
       vi.advanceTimersByTime(1000);
-      expect(page.data['countdown']).toBe('请在 09:59 内完成支付');
+      expect(page.data['countdown']).toBe('请在 9 分 59 秒内完成支付');
       call('onUnload');
       vi.advanceTimersByTime(5000);
-      expect(page.data['countdown']).toBe('请在 09:59 内完成支付');
+      expect(page.data['countdown']).toBe('请在 9 分 59 秒内完成支付');
     } finally {
       vi.useRealTimers();
     }
@@ -452,7 +452,7 @@ describe('支付页：回前台后倒计时继续（扫描 W-01）', () => {
       vi.advanceTimersByTime(1000);
       call('onShow');
       await settle();
-      expect(page.data['countdown']).toBe('请在 04:59 内完成支付');
+      expect(page.data['countdown']).toBe('请在 4 分 59 秒内完成支付');
       call('onUnload');
     } finally {
       vi.useRealTimers();
@@ -471,9 +471,9 @@ describe('支付页：回前台后倒计时继续（扫描 W-01）', () => {
       vi.setSystemTime(new Date('2026-09-29T01:25:00.000Z'));
       call('onShow');
       await settle();
-      expect(page.data['countdown']).toBe('请在 05:00 内完成支付');
+      expect(page.data['countdown']).toBe('请在 5 分 00 秒内完成支付');
       vi.advanceTimersByTime(1000);
-      expect(page.data['countdown']).toBe('请在 04:59 内完成支付');
+      expect(page.data['countdown']).toBe('请在 4 分 59 秒内完成支付');
       call('onUnload');
     } finally {
       vi.useRealTimers();

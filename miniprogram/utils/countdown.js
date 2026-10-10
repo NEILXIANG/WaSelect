@@ -39,6 +39,9 @@ export function countdownText(expiresAt, nowMs) {
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
-  const clock = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-  return { text: `请在 ${clock} 内完成支付`, expired: false };
+  // 用"分 / 秒"字样而不是 mm:ss（三端联动模拟 2026-10-10）："请在 17:08 内完成支付"读起来像钟点"17:08 前"。
+  // 秒数补零：每秒跳动时字宽不抖（"4 分 05 秒"→"4 分 04 秒"）。
+  const left =
+    h > 0 ? `${h} 小时 ${pad(m)} 分 ${pad(s)} 秒` : m > 0 ? `${m} 分 ${pad(s)} 秒` : `${s} 秒`;
+  return { text: `请在 ${left}内完成支付`, expired: false };
 }
