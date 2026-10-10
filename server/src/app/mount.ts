@@ -45,7 +45,7 @@ import { mountDevImages } from './dev-images.js';
 import { mountPayRoutes } from './pay-routes.js';
 import type { CallbackPipelineDeps } from './pay-callback.js';
 import { createAutoConfirm } from './auto-confirm.js';
-import { mountAdminAuthRoutes } from './admin-auth-routes.js';
+import { adminTotpRequired, mountAdminAuthRoutes } from './admin-auth-routes.js';
 import { adminAuditMiddleware } from './admin-audit.js';
 import { createAdminAuditStore } from '../adapters/admin-audit.js';
 import { AppError } from '../errors.js';
@@ -632,6 +632,8 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     authConfig: { secret: config.JWT_SECRET, issuer: 'waselect' },
     loginLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).adminLogin),
     identity,
+    // 严格检查 S-2（AJ-442）：生产 / staging 不给没开 TOTP 的管理员签 token
+    requireTotp: adminTotpRequired(config.NODE_ENV),
   });
 
   // ── 每日作业触发（I1-U7b / D-43）：Render Cron 的 HTTP 入口；异步执行走同一套调度器框架 ──

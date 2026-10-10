@@ -165,4 +165,42 @@ describe('AuthGate（P1-7：过期浮层，不卸载页面）', () => {
     );
     expect(mounted.el.textContent).toContain('约 5 分钟后过期');
   });
+
+  it('🔴 主动退出（AJ-442）：先拿当前 token 通知服务端作废，再清本地、回整页登录', async () => {
+    const store = memStore('tok-live');
+    const revoked: string[] = [];
+    mounted = await mount(
+      createElement(AuthGate, {
+        store,
+        login: async () => 't',
+        revoke: async (t: string) => {
+          revoked.push(t);
+        },
+        children: (s: SessionControls) =>
+          createElement('button', { type: 'button', onClick: s.logout }, '退出'),
+      }),
+    );
+    await click(button(mounted.el, '退出'));
+    expect(revoked).toEqual(['tok-live']);
+    expect(store.value()).toBe('');
+    expect(mounted.el.textContent).toContain('WaSelect 管理后台');
+  });
+
+  it('退出时服务端作废失败（断网）→ 本地照样退出，不卡在已登录界面', async () => {
+    const store = memStore('tok-live');
+    mounted = await mount(
+      createElement(AuthGate, {
+        store,
+        login: async () => 't',
+        revoke: async () => {
+          throw new Error('network down');
+        },
+        children: (s: SessionControls) =>
+          createElement('button', { type: 'button', onClick: s.logout }, '退出'),
+      }),
+    );
+    await click(button(mounted.el, '退出'));
+    expect(store.value()).toBe('');
+    expect(mounted.el.textContent).toContain('WaSelect 管理后台');
+  });
 });

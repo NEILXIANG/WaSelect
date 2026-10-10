@@ -61,7 +61,13 @@ import {
   ADMIN_LOGIN_MAX_FAILURES,
   ADMIN_PASSWORD_MIN_LENGTH,
 } from '@waselect/shared';
-import { PASSWORD_MAX_CHARS, signToken, verifyPassword, type AuthConfig } from './auth.js';
+import {
+  PASSWORD_MAX_CHARS,
+  requireRole,
+  signToken,
+  verifyPassword,
+  type AuthConfig,
+} from './auth.js';
 import type { CachedIdentityCheck } from '../adapters/identity.js';
 import { ipKeyForLogin } from './rate-limit.js';
 import { verifyTotp } from '../adapters/totp.js';
@@ -143,9 +149,52 @@ export interface AdminAuthRoutesDeps {
    *      标成必有，忘接就是编译错误。
    */
   identity: CachedIdentityCheck;
+  /**
+   * 没开 TOTP 的管理员能不能拿到 token（严格检查 S-2，AJ-442）：true = 不能。装配处用 `adminTotpRequired(NODE_ENV)`。
+   * 缺省 false 只为存量直接挂载的用例口径不变；生产装配一律显式传。
+   */
+  requireTotp?: boolean;
+}
+
+/**
+ * 哪些环境强制管理员开 TOTP（AJ-442）：production 与 staging。
+ * @why staging 也强制：它是公网可达的，没开第二因素的管理员口令一旦泄露，同样能进后台；
+ *      沿用 config 的口径——"安全洞"类规则 staging 同拒（1c / 3b），"部署正确性"类才只看生产。
+ * @tradeoff 开发 / 测试不强制：本机联调每次登录都要掏手机，代价大于收益（本机库里没有真钱）。
+ */
+export function adminTotpRequired(nodeEnv: string): boolean {
+  return nodeEnv === 'production' || nodeEnv === 'staging';
 }
 
 export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): void {
+  /**
+   * 退出登录（严格检查 A-8，AJ-442）：`token_ver + 1`，本人已签出的 token 全部失效。
+   * @why 此前退出只清浏览器里的 token，服务端 12 小时内仍认它——公用电脑上"退出"不等于失效。
+   * @tradeoff 作废的是**这个管理员所有设备**上的 token，不只是这一台：token 里没有会话 id，
+   *      只有版本号；要做到"只退这一台"得建会话表。管理员只有一两人、同时多处登录少见，代价可接受。
+   * @why 守卫只认管理员角色（requireRole 的 admin 档；注释里不写成调用形，免得被 require-role-identity 文本门禁误认）：买家 token 拿不到 403 以外的结果，不能借这个口把别人踢下线；
+   *      作废对象只取 token 里的 sub，不收任何参数。
+   * @limitation 只作废**本进程**的身份缓存（多实例时其它实例等缓存 TTL，与登录处同一条 @limitation）。
+   */
+  app.post(
+    '/api/v1/auth/admin/logout',
+    requireRole('admin', deps.authConfig, { identity: deps.identity }),
+    (req, res, next) => {
+      void (async () => {
+        try {
+          const sub = req.auth?.sub;
+          if (sub === undefined) throw new AppError(40101, { reason: 'no_sub' });
+          await deps.db`update users set token_ver = token_ver + 1 where id = ${sub}`;
+          deps.identity.invalidate(sub);
+          deps.logger.info('admin_logout', { result: 'ok', target_user_id: sub });
+          res.status(204).end();
+        } catch (e) {
+          next(e);
+        }
+      })();
+    },
+  );
+
   app.post('/api/v1/auth/admin/login', deps.loginLimiter, (req, res, next) => {
     void (async () => {
       try {
@@ -304,6 +353,20 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
             ctx: { is_admin: cred.isAdmin, blocked: cred.blocked },
           });
           throw new AppError(40301, { reason: 'admin_login_not_admin_or_blocked' });
+        }
+
+        // ②b 强制第二因素（严格检查 S-2，AJ-442）：生产 / staging 不给没开 TOTP 的管理员签 token。
+        //    @why 放在口令与角色都验过之后：口令错的人只会看到 40101，得不到"这个号没开 TOTP"这条信息。
+        //    @why 用 40301 而不是新码：登录口的 40301 本就是"口令对但不让进"（非管理员 / 已停用），
+        //         管理端把三种原因合成一句提示；具体是哪种只进日志（reason），不多开一个可探测的分支。
+        //    出路：`npm run admin:totp` 为该账号开通后再登录。
+        if (deps.requireTotp === true && cred.totpSecret === null) {
+          deps.logger.warn('admin_login_forbidden', {
+            result: 'rejected',
+            target_user_id: cred.id,
+            ctx: { reason: 'totp_required' },
+          });
+          throw new AppError(40301, { reason: 'admin_totp_required' });
         }
 
         // ③ 签发**之前**先作废本进程的身份缓存（SEC2-06）。

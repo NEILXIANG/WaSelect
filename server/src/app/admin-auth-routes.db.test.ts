@@ -29,7 +29,14 @@ import {
   ADMIN_LOGIN_GLOBAL_MAX_FAILURES,
   ADMIN_LOGIN_LOCK_MINUTES,
   ADMIN_LOGIN_MAX_FAILURES,
+  adminTotpRequired,
+  mountAdminAuthRoutes,
 } from './admin-auth-routes.js';
+import { createHttpApp, listen } from '../http.js';
+import { createLogger } from '../logger.js';
+import { MemorySink } from '../../../test/helpers/memory-sink.js';
+import { systemClock } from '../adapters/clock.js';
+import { createIdentityCheck, withIdentityCache } from '../adapters/identity.js';
 
 const EMAIL = 'Ops.Admin@Example.com';
 const PASSWORD = 'correct horse battery staple';
@@ -633,5 +640,107 @@ describe('P1-5（AJ-386）：TOTP 第二因素', () => {
       '198.51.100.7',
     );
     expect(r.status).toBe(429);
+  });
+});
+
+/**
+ * 严格检查 S-2（AJ-442）：生产 / staging 不给**没开 TOTP** 的管理员签 token。
+ * @why 管理员有直接退款权；口令泄露 = 单因素失守。此前没开 TOTP 的账号口令对即签 12 小时 token，
+ *      config 与每日对账都不检查（sim 库 2 个管理员 0 个开了 TOTP）。
+ * @why 直接挂 `mountAdminAuthRoutes` 而不走 chain-server：chain-server 是开发配置（带 WECHAT_DEV_LOGIN），
+ *      staging / 生产配置会拒启它；"环境 → 是否强制"的映射由 `adminTotpRequired` 单测钉住。
+ */
+describe('S-2（AJ-442）：生产 / staging 强制管理员 TOTP', () => {
+  const SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+  let strict: { url: string; close: () => Promise<void>; sink: MemorySink };
+  beforeEach(async () => {
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'test', destination: sink });
+    const app = createHttpApp({
+      logger,
+      mount: (a) =>
+        mountAdminAuthRoutes(a, {
+          db,
+          logger,
+          clock: systemClock,
+          authConfig: { secret: 'admin-totp-required-test-'.repeat(3), issuer: 'waselect' },
+          loginLimiter: (_req, _res, next) => next(),
+          identity: withIdentityCache(createIdentityCheck(db)),
+          requireTotp: true,
+        }),
+    });
+    const s = await listen(app);
+    strict = { url: `http://127.0.0.1:${String(s.port)}`, close: s.close, sink };
+    srv = strict as unknown as ChainServer; // 让外层 afterEach 统一关闭
+  });
+
+  it('环境映射：production / staging 强制，development / test 不强制', () => {
+    expect(adminTotpRequired('production')).toBe(true);
+    expect(adminTotpRequired('staging')).toBe(true);
+    expect(adminTotpRequired('development')).toBe(false);
+    expect(adminTotpRequired('test')).toBe(false);
+  });
+
+  it('🔴 没开 TOTP、口令对 → 403 / 40301，不签 token；日志写明原因 totp_required', async () => {
+    const r = await call(strict, 'POST', '/api/v1/auth/admin/login', {
+      body: { email: EMAIL, password: PASSWORD },
+    });
+    expect(r.status).toBe(403);
+    expect(r.json['code']).toBe(40301);
+    expect(r.json['token']).toBeUndefined();
+    expect(strict.sink.find('admin_login_ok')).toHaveLength(0);
+    const w = strict.sink.find('admin_login_forbidden');
+    expect(w).toHaveLength(1);
+    expect(w[0]?.['ctx']).toMatchObject({ reason: 'totp_required' });
+  });
+
+  it('没开 TOTP、口令错 → 仍是 40101（口令验过之前不透露"这个号没开 TOTP"）', async () => {
+    const r = await call(strict, 'POST', '/api/v1/auth/admin/login', {
+      body: { email: EMAIL, password: 'definitely-not-it' },
+    });
+    expect(r.json['code']).toBe(40101);
+  });
+
+  it('开了 TOTP、码对 → 200 签 token', async () => {
+    await db`update users set totp_secret = ${SECRET} where id = 'u-adm'`;
+    const r = await call(strict, 'POST', '/api/v1/auth/admin/login', {
+      body: { email: EMAIL, password: PASSWORD, totp: totpAt(SECRET, Date.now()) },
+    });
+    expect(r.status).toBe(200);
+    expect(typeof r.json['token']).toBe('string');
+  });
+});
+
+/**
+ * 严格检查 A-8（AJ-442）：退出登录在服务端作废 token。
+ * @why 此前退出只清浏览器里的 token，服务端 12 小时内仍认它——公用电脑上退出不等于失效。
+ */
+describe('A-8（AJ-442）：POST /auth/admin/logout 作废 token', () => {
+  beforeEach(async () => {
+    srv = await buildChainServer(db, { RATE_LIMIT_LOGIN_PER_15MIN: '1000' });
+  });
+
+  it('🔴 退出 → 204；同一 token 再访问管理端 → 401；token_ver +1；日志 admin_logout', async () => {
+    const token = String((await login(EMAIL, PASSWORD)).json['token']);
+    expect((await call(srv, 'GET', '/api/v1/admin/orders', { token })).status).toBe(200);
+    const [before] = await db`select token_ver from users where id = 'u-adm'`;
+    const out = await call(srv, 'POST', '/api/v1/auth/admin/logout', { token });
+    expect(out.status).toBe(204);
+    const [after] = await db`select token_ver from users where id = 'u-adm'`;
+    expect(Number(after?.['token_ver'])).toBe(Number(before?.['token_ver']) + 1);
+    expect((await call(srv, 'GET', '/api/v1/admin/orders', { token })).status).toBe(401);
+    expect(srv.sink.find('admin_logout')).toHaveLength(1);
+    // 退出后重新登录照常可用（新 token 带新版本）
+    const again = String((await login(EMAIL, PASSWORD)).json['token']);
+    expect((await call(srv, 'GET', '/api/v1/admin/orders', { token: again })).status).toBe(200);
+  });
+
+  it('没带 token → 401；买家 token → 403（不能借这个口把别人踢下线）', async () => {
+    expect((await call(srv, 'POST', '/api/v1/auth/admin/logout')).status).toBe(401);
+    await db`insert into users (id, openid) values ('u-buyer', 'o-buyer')`;
+    const buyer = await tokenFor('u-buyer', 'user');
+    expect((await call(srv, 'POST', '/api/v1/auth/admin/logout', { token: buyer })).status).toBe(
+      403,
+    );
   });
 });

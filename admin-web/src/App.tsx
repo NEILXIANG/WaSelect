@@ -32,7 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AuthGate, type SessionControls } from './AuthGate.js';
 import { createAdminApi } from './api/client.js';
 import { resolveApiBase } from './api/config.js';
-import { login } from './api/endpoints.js';
+import { adminLogout, login } from './api/endpoints.js';
 import { createTokenStore } from './api/token-store.js';
 import { BannersPage } from './banners/BannersPage.js';
 import { DashboardPage } from './dashboard/DashboardPage.js';
@@ -94,6 +94,9 @@ export function App() {
     <AuthGate
       store={tokenStore}
       login={(email, password, totp) => login(loginApi, { email, password, totp })}
+      // 退出时服务端作废（AJ-442）：单独的请求实例，token 取调用时那一枚（本地随后就清掉了）；
+      // 不接 onUnauthorized——这枚 token 若已失效，401 不该再弹"重新登录"浮层
+      revoke={(t) => adminLogout(createAdminApi({ baseUrl, getToken: () => t }))}
     >
       {(session) => <AdminShell baseUrl={baseUrl} session={session} />}
     </AuthGate>

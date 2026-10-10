@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.63
+  version: 0.6.64
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,10 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.64（AJ-442：管理员登录口径收紧 + 新增退出端点）：
+      ① `POST /auth/admin/login`：**production / staging** 下，口令对但账号没开 TOTP → 403 / 40301（不签 token；开发 / 测试不变）。
+         开通：`npm run admin:totp`。口令错仍是 40101（口令验过之前不透露是否开了 TOTP）。
+      ② `POST /auth/admin/logout`（管理员 token）→ 204：`token_ver + 1`，本人所有已签出的管理端 token 立即失效（所有设备）。
     0.6.63（AJ-440：新增管理端写端点 + 一封买家邮件，不影响任何已有调用）：
       ① `POST /admin/orders/{id}/shipment/revert` `{reason}`：撤销发货，订单 **shipped → paid**，清空承运商 / 运单号 / 发货时刻。
          准入：shipped、发货后 72 小时内、无拒付限制（40909）、无进行中售后（40902 after_sale_open）；原因必填（≤500）。
@@ -665,9 +669,14 @@ paths:
     post:
       security: []
       summary: 管理端（admin-web）邮箱密码登录；仅 is_admin 且未封禁的账号，JWT 12 小时（aud=admin，ver=users.token_ver）；防爆破三层——IP 限流（5 次 / 15 分钟）、来源桶（同邮箱 × 同来源失败 5 次 / 15 分钟窗口）、邮箱桶（同邮箱不分来源合计 30 次 / 15 分钟窗口），任一层超限即锁 15 分钟（锁定期 429 / 42901 + Retry-After，0.6.20 订正，AJ-243）；初始管理员由启动时 seed（ADMIN_EMAIL + ADMIN_INITIAL_PASSWORD，只建不改）
-      description: 0.6.11（AJ-181）实现落地。不存在的邮箱与口令错同为 40101（不作邮箱探测器）；口令对了才判是否管理员 / 是否封禁（40301）；IP 维度另有 RATE_LIMIT_LOGIN_PER_15MIN 限流（D-52）
+      description: 0.6.11（AJ-181）实现落地。不存在的邮箱与口令错同为 40101（不作邮箱探测器）；口令对了才判是否管理员 / 是否封禁（40301）；0.6.64（AJ-442）：production / staging 下没开 TOTP 的管理员同为 40301；IP 维度另有 RATE_LIMIT_LOGIN_PER_15MIN 限流（D-52）
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 12}, totp: {type: string, pattern: '^\d{6}$', description: '0.6.37（P1-5 / AJ-386）：TOTP 6 位码。账号开了第二因素（npm run admin:totp）时必填；码错 / 已用过（防重放）与口令错同为 40101；没开的账号带了也忽略。形状不对 → 40001'}}}}}}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {token: {type: string}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}}
+  /auth/admin/logout:
+    post:
+      summary: 管理员退出登录（0.6.64 / AJ-442，严格检查 A-8）
+      description: '服务端作废：users.token_ver + 1，本人所有已签出的管理端 token 立即失效（token 里只有版本号、没有会话 id，所以是所有设备一起退）。无请求体。没带 token → 401 / 40101；非管理员 token → 403 / 40301。'
+      responses: {'204': {description: 已退出}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /fx:
     get:
       security: []

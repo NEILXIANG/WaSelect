@@ -27,7 +27,7 @@ import { notifyRelogin } from './ui/session-events.js';
 export interface SessionControls {
   /** 40101 出口（交给请求封装的 onUnauthorized）：清 token，盖上重新登录浮层，不卸载页面。 */
   onUnauthorized: () => void;
-  /** 主动退出：清 token，回整页登录（这是有意离开，页面状态不保留）。 */
+  /** 主动退出：通知服务端作废 token（AJ-442），清本地 token，回整页登录（这是有意离开，页面状态不保留）。 */
   logout: () => void;
 }
 
@@ -36,6 +36,13 @@ export interface AuthGateProps {
   /** 用邮箱口令换 JWT（失败抛 ApiError，由 LoginForm 展示）。 */
   login: (email: string, password: string, totp: string) => Promise<string>;
   children: (session: SessionControls) => ReactNode;
+  /**
+   * 服务端作废这枚 token（`POST /auth/admin/logout`，严格检查 A-8 / AJ-442）。
+   * @why 此前退出只清本地，服务端 12 小时内仍认它——公用电脑上"退出"不等于失效。
+   * @limitation 发出即不等：断网 / 服务端出错时本地照样退出（不能把人卡在已登录界面），
+   *             这一枚 token 仍要等自然过期；失败不提示（人已经走了，提示没人看）。
+   */
+  revoke?: (token: string) => Promise<void>;
   /** 时钟（测试注入；默认 Date.now）。 */
   now?: () => number;
 }
@@ -43,7 +50,7 @@ export interface AuthGateProps {
 /** 过期提醒的刷新间隔：分钟级提示，30 秒一跳足够。 */
 const TICK_MS = 30_000;
 
-export function AuthGate({ store, login, children, now = Date.now }: AuthGateProps) {
+export function AuthGate({ store, login, children, revoke, now = Date.now }: AuthGateProps) {
   const [token, setToken] = useState<string>(() => store.get());
   /** 会话中途失效（区别于"从没登录过"）：此时页面保持挂载，只盖浮层。 */
   const [expired, setExpired] = useState(false);
@@ -60,10 +67,13 @@ export function AuthGate({ store, login, children, now = Date.now }: AuthGatePro
   }, [store]);
 
   const logout = useCallback((): void => {
+    // 先取 token 再清：清完就拿不到要作废的那一枚了
+    const current = store.get();
+    if (revoke !== undefined && current !== '') void revoke(current).catch(() => undefined);
     store.clear();
     setExpired(false);
     setToken('');
-  }, [store]);
+  }, [store, revoke]);
 
   const doLogin = async (email: string, password: string, totp: string): Promise<void> => {
     const jwt = await login(email, password, totp);

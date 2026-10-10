@@ -103,3 +103,13 @@ describe('jwtExpMs / expiryWarning（P1-7 过期前提醒）', () => {
     expect(expiryWarning(null, 0)).toBe('');
   });
 });
+
+describe('loginErrorText：40301（AJ-442 起含"正式环境没开手机验证"）', () => {
+  it('说清三种可能，并给出开通手机验证的出路', () => {
+    const t = loginErrorText(new ApiError(40301, '无权限', 'tr-9'));
+    expect(t.text).toContain('不能登录后台');
+    expect(t.text).toContain('手机验证');
+    expect(t.hint).toContain('npm run admin:totp');
+    expect(t.traceId).toBe('tr-9');
+  });
+});

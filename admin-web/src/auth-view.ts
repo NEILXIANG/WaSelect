@@ -69,6 +69,15 @@ export function loginErrorText(err: unknown): LoginErrorView {
       traceId,
     };
   }
+  // 登录口的 40301 = 口令对但不让进（AJ-442）：不是管理员 / 已停用 / 正式环境没开手机验证。
+  // 服务端刻意不区分是哪一种（具体原因只进日志），这里把三种都说出来，并给出最常见那种的出路
+  if (err.code === 40301) {
+    return {
+      text: '这个账号不能登录后台：不是管理员、已被停用，或（正式环境）还没开启手机验证',
+      hint: '没开手机验证的：请在服务器上运行 npm run admin:totp 为该账号开通，再用验证码登录',
+      traceId,
+    };
+  }
   if (err.code === 42901) {
     const sec = err.retryAfterSec;
     const text =

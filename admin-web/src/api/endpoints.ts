@@ -33,6 +33,14 @@ function isLoginResp(value: unknown): value is LoginResp {
  * @throws {ApiError} 40101 邮箱或密码错 / 40301 非管理员；
  *         响应形状与契约不符时 NETWORK_ERROR_CODE（契约被改了的信号，不是"登录失败"）
  */
+/**
+ * `POST /auth/admin/logout`（AJ-442）：服务端 `token_ver + 1`，本人所有管理端 token 立即失效。
+ * @param api 调用方须传一个 getToken 固定返回**要作废的那一枚**的实例（调用时本地 store 已经清掉了）。
+ */
+export async function adminLogout(api: AdminApi): Promise<void> {
+  await api({ path: '/api/v1/auth/admin/logout', method: 'POST' });
+}
+
 export async function login(
   api: AdminApi,
   cred: { email: string; password: string; totp?: string },

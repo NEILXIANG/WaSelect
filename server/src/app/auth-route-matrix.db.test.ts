@@ -95,7 +95,10 @@ function classify(routes: readonly RouteRef[]): { kind: Kind; route: RouteRef }[
   const out: { kind: Kind; route: RouteRef }[] = [];
   for (const r of routes) {
     if (open.has(`${r.method} ${r.path}`)) continue;
-    out.push({ kind: r.path.startsWith('/admin/') ? 'admin' : 'buyer', route: r });
+    // `/auth/admin/*` 里受保护的（登录本身是公开的、已被上面排除）同属管理端守卫——
+    // AJ-442 新增退出端点前这里只认 `/admin/` 前缀，退出端点被误判成买家路由
+    const isAdmin = r.path.startsWith('/admin/') || r.path.startsWith('/auth/admin/');
+    out.push({ kind: isAdmin ? 'admin' : 'buyer', route: r });
   }
   return out;
 }

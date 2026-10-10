@@ -21,6 +21,7 @@ import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'n
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
+import { hashPassword } from './app/auth.js';
 import { bootstrap, type Runtime } from './main.js';
 import { PAY_CALLBACK_PREFIX, PAY_CHANNELS_PATH } from './app/pay-routes.js';
 import { recordPaymentIntent } from './app/payment-intent.js';
@@ -795,6 +796,32 @@ describe('生产装配路径（NODE_ENV=production 的真 bootstrap）', () => {
       expect(alarm).toContain('"result":"unprotected"');
       // 后果必须指名道姓到那个入口：泛指"源站未校验"的告警没人知道要去看哪里
       expect(alarm).toContain('/api/v1/auth/admin/login');
+
+      // ⑥ 严格检查 S-2（AJ-442）：生产装配真的打开了"没开 TOTP 不签 token"。
+      //    @why 路由级用例是直接挂载并显式传 requireTotp 的，测不到装配处有没有接上——
+      //         装配漏传时那组用例全绿，生产却照旧口令对即签 token。
+      const adminDb = testDb();
+      try {
+        await adminDb`
+          insert into users (id, email, password_hash, is_admin)
+          values ('u-prod-link-adm', 'prod-link-admin@waselect.jp',
+                  ${await hashPassword('prod-link-admin-password-01')}, true)
+          on conflict (id) do nothing`;
+        const login = await fetch(`${base}/api/v1/auth/admin/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            email: 'prod-link-admin@waselect.jp',
+            password: 'prod-link-admin-password-01',
+          }),
+        });
+        expect(login.status).toBe(403);
+        await expect(login.json()).resolves.toMatchObject({ code: 40301 });
+      } finally {
+        await adminDb`delete from login_attempts`;
+        await adminDb`delete from users where id = 'u-prod-link-adm'`;
+        await adminDb.end();
+      }
     } finally {
       rt?.uninstallSignals();
       rt?.uninstallProcessErrors();
