@@ -306,6 +306,24 @@ export async function fixShipment(
   });
 }
 
+/**
+ * `POST /admin/orders/{id}/shipment/revert`（撤销发货，原因必填；AJ-440）。
+ * 订单回到 paid、运单清空，服务端给买家发一封更正邮件。
+ */
+export async function revertShipment(
+  api: AdminApi,
+  id: string,
+  body: { reason: string },
+  traceId?: string,
+): Promise<void> {
+  await api({
+    path: `/api/v1/admin/orders/${encodeURIComponent(id)}/shipment/revert`,
+    method: 'POST',
+    body,
+    ...(traceId !== undefined ? { traceId } : {}),
+  });
+}
+
 /** `POST /admin/orders/{id}/address`（发货前改址；请求体是 `AddressInput`）。 */
 export async function updateOrderAddress(
   api: AdminApi,

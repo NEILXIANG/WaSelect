@@ -3,6 +3,7 @@
  *
  * - `POST  /admin/orders/:id/cancel`   `{ reason }` → 200：取消**未付**订单（created / pending_payment）。
  * - `PATCH /admin/orders/:id/shipment` `{ carrier, tracking_no, reason }` → 200：改**已发货**订单的承运商 / 运单号。
+ * - `POST  /admin/orders/:id/shipment/revert` `{ reason }` → 200：**撤销发货**，订单回到 paid（严格检查 P0 A-1，AJ-440）。
  *
  * @why 取消：价格录错后，已建好的未付单原先只能等 30 分钟过期，或拉黑买家（连带取消，副作用过大）；
  *      停售开关挡不住"恢复接单后这张错价单照样能付"。直接复用买家取消的同一条用例（cancelOrder）：
@@ -14,13 +15,24 @@
  * @limitation 改运单号不改 `shipped_at`：发货时刻是事实，改的只是单号。
  * @why 运单号在 shipInfoGuard 里归一（去空白、转大写，AJ-410）；事件 note 与审计 after 都记归一值。
  * @limitation 取消原因进 order_events.note 与 admin_audit；不通知买家（未付单没有付款邮件，买家在订单列表看到"已取消"）。
+ * @why 撤销发货：点错单 / 录错单把还没交运的单标成了已发货，原先唯一出路是改库；买家已收到一封带错号的发货邮件。
+ *      准入见 revertShipmentGuard（72 小时内、无拒付、无进行中售后）；撤销后给买家发一封更正邮件
+ *      （`order.shipment_reverted`，一次性键 `revert-<n>`），再发货时发货邮件用 `reship-<n>`（ship-order.ts）。
+ * @limitation 撤销邮件与再发货邮件不进 daily 补发（mail-sweep 只按 orders 列推"该发什么"，推不出第几次撤销）：
+ *             实时发送失败就只有 `mail_deliveries` 里一条 failed，要人工看。
  * @see app/cancel-order.ts；domain/admin-order-actions.ts（shipInfoGuard / releaseReasonGuard）；契约 0.6.37
  */
 import type { Express, Request } from 'express';
 import { withTransaction, type Db } from '../adapters/db.js';
 import type { IdentityCheck } from '../adapters/identity.js';
-import { lockAdminOrder } from '../adapters/orders-admin.js';
-import { releaseReasonGuard, shipInfoGuard } from '../domain/admin-order-actions.js';
+import { hasOpenAfterSale } from '../adapters/after-sales.js';
+import { lockAdminOrder, revertShipment } from '../adapters/orders-admin.js';
+import {
+  releaseReasonGuard,
+  revertShipmentGuard,
+  shipInfoGuard,
+} from '../domain/admin-order-actions.js';
+import { asOrderStatus } from '../domain/order.js';
 import { trackingNoRecognized } from '../domain/tracking.js';
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
@@ -126,6 +138,52 @@ export function mountAdminOrderFixRoutes(app: Express, deps: AdminOrderFixRoutes
           tracking_no: ship.trackingNo,
           tracking_recognized: trackingNoRecognized(ship.carrier, ship.trackingNo),
         });
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  app.post('/api/v1/admin/orders/:id/shipment/revert', guard, (req, res, next) => {
+    void (async () => {
+      try {
+        const id = String(req.params.id);
+        const reason = releaseReasonGuard((req.body as { reason?: unknown } | null)?.reason);
+        if (!reason.ok) throw new AppError(reason.code, { reason: reason.reason, order_id: id });
+        const at = deps.clock.now();
+        const n = await withTransaction(deps.db, async (tx) => {
+          const row = await lockAdminOrder(tx, id);
+          if (row === null) throw new AppError(40400, { order_id: id });
+          const gate = revertShipmentGuard({
+            status: asOrderStatus(row.status),
+            hasDispute: row.has_dispute,
+            afterSaleOpen: await hasOpenAfterSale(tx, id),
+            shippedAt: row.shipped_at,
+            now: at,
+          });
+          if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
+          setAuditBefore(res, {
+            status: row.status,
+            carrier: row.carrier,
+            tracking_no: row.tracking_no,
+            shipped_at: row.shipped_at?.toISOString() ?? null,
+          });
+          // 不再以"撤销发货"开头：管理端时间线已把事件名显示成「撤销发货」，重复一遍读着像两件事
+          const note = `原 ${row.carrier ?? '-'} / ${row.tracking_no ?? '-'}；原因：${reason.reason}`;
+          const done = await revertShipment(tx, id, at, actorOf(req), note);
+          if (done === false) throw new AppError(40902, { order_id: id, reason: 'status_raced' });
+          return done;
+        });
+        setAuditAfter(res, { status: 'paid', reason: reason.reason });
+        deps.logger.info('admin_order_shipment_reverted', { result: 'ok', order_id: id });
+        // 提交后才发（回滚了就不该有人收到更正邮件）；键带第几次撤销，重放时不变、第二次撤销不撞第一次
+        deps.events.publish({
+          name: 'order.shipment_reverted',
+          at: at.toISOString(),
+          orderId: id,
+          payload: { mail_key: `revert-${String(n)}` },
+        });
+        res.json({ order_id: id, status: 'paid' });
       } catch (e) {
         next(e);
       }

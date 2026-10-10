@@ -23,6 +23,8 @@ import { maskText } from '../redact.js';
 export const MAIL_EVENTS = [
   'order.paid',
   'order.shipped',
+  // AJ-440：撤销发货后的更正信（买家已收到一封带运单号的发货邮件）
+  'order.shipment_reverted',
   'order.partially_refunded',
   'order.refunded',
 ] as const;
@@ -118,7 +120,8 @@ async function notify(
 }
 
 /**
- * 同一订单同一事件可能发多封的区分键：部分退款按笔（`refund_id`），改运单号后重发发货邮件（`mail_key`，AJ-386）。
+ * 同一订单同一事件可能发多封的区分键：部分退款按笔（`refund_id`），改运单号后重发发货邮件（`mail_key`，AJ-386），
+ * 撤销发货的更正信与其后的再发货（`revert-<n>` / `reship-<n>`，AJ-440）。
  * 没有则 undefined（幂等键退回 `事件:订单`，与原口径一致）。
  */
 function mailSubKey(payload: Record<string, unknown> | undefined): string | undefined {

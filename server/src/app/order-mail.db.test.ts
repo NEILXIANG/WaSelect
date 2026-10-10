@@ -55,10 +55,11 @@ const publish = async (bus: ReturnType<typeof createEventBus>, name: string, ord
 };
 
 describe('订单通知邮件（2-2）', () => {
-  it('订阅的正是四类：付款成功 / 已发货 / 部分退款（P2-12）/ 已退款', () => {
+  it('订阅的正是五类：付款成功 / 已发货 / 撤销发货更正（AJ-440）/ 部分退款（P2-12）/ 已退款', () => {
     expect([...MAIL_EVENTS]).toEqual([
       'order.paid',
       'order.shipped',
+      'order.shipment_reverted',
       'order.partially_refunded',
       'order.refunded',
     ]);
@@ -96,6 +97,27 @@ describe('订单通知邮件（2-2）', () => {
     // 业务日志能回答"发了没有"，但日志里没有邮箱
     expect(sink.find('order_mail_sent')).toHaveLength(1);
     expect(JSON.stringify(sink.lines)).not.toContain('jane.doe');
+  });
+
+  it('🔴 撤销发货（AJ-440）：发更正信，幂等键带 revert-<n>，正文不复述原运单号', async () => {
+    await seed('o-5', 'jane.doe@example.com');
+    const { bus, sent } = setup();
+    for (const k of ['revert-1', 'revert-2']) {
+      bus.publish({
+        name: 'order.shipment_reverted',
+        at: '2026-10-10T00:00:00.000Z',
+        orderId: 'o-5',
+        payload: { mail_key: k },
+      });
+    }
+    expect(await bus.drain(2000)).toBe(0);
+    // 两封并发发出、先后不定（订阅者 async、总线发后不等）：按集合比
+    expect(sent.map((m) => m.idempotencyKey).sort()).toEqual([
+      'order.shipment_reverted:o-5:revert-1',
+      'order.shipment_reverted:o-5:revert-2',
+    ]);
+    expect(sent[0]?.subject).toContain('has not shipped yet');
+    expect(sent[0]?.text).not.toContain('EM123456789JP');
   });
 
   it('付款成功 / 已退款各发一封，主题各不相同', async () => {

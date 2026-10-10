@@ -25,6 +25,8 @@ import {
   refundReasonGuard,
   purgeReasonGuard,
   releaseReasonGuard,
+  revertShipmentGuard,
+  SHIPMENT_REVERT_WINDOW_MS,
   shipGuard,
   shipInfoGuard,
 } from './admin-order-actions.js';
@@ -334,5 +336,65 @@ describe('purgeReasonGuard：删除行为记录的原因必填且有上限（AJ-
     const long = purgeReasonGuard('理'.repeat(ADMIN_NOTE_MAX_LENGTH + 1));
     expect(long.ok).toBe(false);
     if (!long.ok) expect(long.reason).toBe('purge_reason_too_long');
+  });
+});
+
+/**
+ * 撤销发货（严格检查 P0 A-1，AJ-440）：发错单 / 点错单后让订单回到待发货的唯一出口。
+ * @why 时间窗边界用表钉死：窗口内可撤、恰好到点不可撤（与关单"到点即过期"同一口径：含等号算超时）。
+ */
+describe('revertShipmentGuard：只撤 72 小时内、无拒付、无进行中售后的已发货单（AJ-440）', () => {
+  const shippedAt = new Date('2026-10-10T00:00:00.000Z');
+  const at = (ms: number): Date => new Date(shippedAt.getTime() + ms);
+  const base = {
+    status: 'shipped' as OrderStatus,
+    hasDispute: false,
+    afterSaleOpen: false,
+    shippedAt,
+  };
+
+  it('窗口是 72 小时（文档数字直接进断言）', () => {
+    expect(SHIPMENT_REVERT_WINDOW_MS).toBe(72 * 3_600_000);
+  });
+
+  it.each([
+    ['刚发货', 0, true],
+    ['71:59:59.999', SHIPMENT_REVERT_WINDOW_MS - 1, true],
+    ['恰好 72 小时', SHIPMENT_REVERT_WINDOW_MS, false],
+    ['72 小时零 1 毫秒', SHIPMENT_REVERT_WINDOW_MS + 1, false],
+    ['时钟偏差：发货时刻在"未来"', -60_000, true],
+  ])('边界：%s → ok=%s', (_n, delta, ok) => {
+    const g = revertShipmentGuard({ ...base, now: at(delta) });
+    expect(g.ok).toBe(ok);
+    if (!g.ok) expect(g).toMatchObject({ code: 40902, reason: 'revert_window_passed' });
+  });
+
+  it('十态全遍历：只有 shipped 能撤', () => {
+    for (const s of ORDER_STATUS) {
+      const g = revertShipmentGuard({ ...base, status: s, now: at(0) });
+      if (s === 'shipped') expect(g.ok, s).toBe(true);
+      else expect(g, s).toEqual({ ok: false, code: 40902, reason: `status_${s}` });
+    }
+  });
+
+  it('拒付在途 → 40909（与发货闸门同码）；售后进行中 → 40902 after_sale_open', () => {
+    expect(revertShipmentGuard({ ...base, hasDispute: true, now: at(0) })).toEqual({
+      ok: false,
+      code: 40909,
+      reason: 'dispute_open',
+    });
+    expect(revertShipmentGuard({ ...base, afterSaleOpen: true, now: at(0) })).toEqual({
+      ok: false,
+      code: 40902,
+      reason: 'after_sale_open',
+    });
+  });
+
+  it('shipped 却没有发货时刻（脏数据）→ 拒，不当成"刚发货"放行', () => {
+    expect(revertShipmentGuard({ ...base, shippedAt: null, now: at(0) })).toEqual({
+      ok: false,
+      code: 40902,
+      reason: 'shipped_at_missing',
+    });
   });
 });

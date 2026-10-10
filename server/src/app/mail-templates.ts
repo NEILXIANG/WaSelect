@@ -34,6 +34,11 @@ export const MAIL_TEMPLATES: Readonly<Record<string, (o: MailOrderFacts) => Mail
       `Your order ${o.orderNo} has shipped.\n` +
       `Carrier: ${o.carrier ?? '-'}\nTracking number: ${o.trackingNo ?? '-'}${SIGN_OFF}`,
   }),
+  // AJ-440：撤销发货（点错 / 录错单）。不复述原运单号：库里已清空，且那个号可能属于别人的包裹
+  'order.shipment_reverted': (o) => ({
+    subject: `Correction: order ${o.orderNo} has not shipped yet`,
+    text: `We sent you a shipping notice for order ${o.orderNo} by mistake. Your order has not shipped yet, so please disregard the tracking number in that email. We will email you again with the correct tracking number once it ships.${SIGN_OFF}`,
+  }),
   // 第三轮缺口 P2-12：部分退款（AJ-383）此前买家完全不可见——没有邮件、订单状态也不变
   'order.partially_refunded': (o) => ({
     subject: `Partial refund issued for order ${o.orderNo}`,

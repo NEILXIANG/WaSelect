@@ -481,6 +481,8 @@ export interface AdminOrderLockRow {
   is_test: boolean;
   carrier: string | null;
   tracking_no: string | null;
+  /** 撤销发货的时间窗要它（AJ-440）；未发货为 null。 */
+  shipped_at: Date | null;
 }
 
 /**
@@ -492,7 +494,7 @@ export interface AdminOrderLockRow {
  */
 export async function lockAdminOrder(tx: Db, orderId: string): Promise<AdminOrderLockRow | null> {
   const rows = await tx`
-    select id, order_no, user_id, status, total_jpy, has_dispute, is_test, carrier, tracking_no
+    select id, order_no, user_id, status, total_jpy, has_dispute, is_test, carrier, tracking_no, shipped_at
       from orders where id = ${orderId} for update
   `;
   const r = rows[0] as Record<string, unknown> | undefined;
@@ -507,6 +509,7 @@ export async function lockAdminOrder(tx: Db, orderId: string): Promise<AdminOrde
     is_test: bool(r.is_test),
     carrier: strOrNull(r.carrier),
     tracking_no: strOrNull(r.tracking_no),
+    shipped_at: r.shipped_at instanceof Date ? r.shipped_at : null,
   };
 }
 
@@ -617,6 +620,43 @@ export async function markShipped(
     values (${orderId}, 'shipped', ${`${carrier} / ${trackingNo}`}, ${actor}, ${at})
   `;
   return true;
+}
+
+/**
+ * 撤销发货：`shipped → paid`，清空承运商 / 运单号 / 发货时刻，并记 `shipment_reverted` 事件（同一事务；AJ-440）。
+ * @returns 这是本单第几次撤销（1 起，供一次性邮件键用）；false = 状态已被抢先迁走。
+ * @why 显式 SQL 而不是走状态机表：见 `domain/admin-order-actions.ts` revertShipmentGuard 的 @why（表里加
+ *      `shipped → paid` 会让迟到 / 重复的到账回调把已发货单重新标已付）。
+ * @why 原运单号写进事件 note：库里的列被清空了，"当时发的是哪个号"只剩这一处（买家可能已拿着它去查）。
+ * @limitation `paid_at` 不动：撤销的是发货，不是收款。
+ */
+export async function revertShipment(
+  tx: Db,
+  orderId: string,
+  at: Date,
+  actor: string,
+  note: string,
+): Promise<number | false> {
+  const updated = await tx`
+    update orders set status = 'paid', carrier = null, tracking_no = null, shipped_at = null, updated_at = now()
+     where id = ${orderId} and status = 'shipped'
+  `;
+  if (updated.count === 0) return false;
+  await tx`
+    insert into order_events (order_id, status, note, actor, at)
+    values (${orderId}, 'shipment_reverted', ${note}, ${actor}, ${at})
+  `;
+  return countShipmentReverts(tx, orderId);
+}
+
+/**
+ * 本单被撤销发货的次数（AJ-440）：再发货时据此给发货邮件一个新的一次性键（`reship-<n>`）。
+ * @why 键由次数推出而不是摇 UUID：同一次再发货被重放（进程重启后补发）时键不变，服务商侧仍能去重。
+ */
+export async function countShipmentReverts(tx: Db, orderId: string): Promise<number> {
+  const [r] = await tx`
+    select count(*)::int as n from order_events where order_id = ${orderId} and status = 'shipment_reverted'`;
+  return Number(r?.['n'] ?? 0);
 }
 
 /**

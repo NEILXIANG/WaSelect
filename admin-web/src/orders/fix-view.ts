@@ -1,5 +1,5 @@
 /**
- * 职责：订单"修正"动作的纯逻辑（P1-10 改运单号 / P1-11 取消未付单，AJ-386）——门槛、表单校验、提示文案。
+ * 职责：订单"修正"动作的纯逻辑（P1-10 改运单号 / P1-11 取消未付单，AJ-386；撤销发货，AJ-440）——门槛、表单校验、提示文案。
  *
  * @why 门槛与服务端同口径：取消只认 created / pending_payment（已付款的单要退款，取消不退钱）；
  *      改运单号只认 shipped（delivered 之后改了也没人看，且物流状态已闭环）。前端先拦，省一次 409。
@@ -8,7 +8,11 @@
  *             承运商五花八门，前端写一份形状规则必然与服务端漂移。
  * @see server/src/app/admin-order-fix-routes.ts；server/src/domain/tracking.ts（trackingNoRecognized）
  */
-import { ADMIN_NOTE_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
+import {
+  ADMIN_NOTE_MAX_LENGTH,
+  SHIP_MAX_CHARS,
+  SHIPMENT_REVERT_WINDOW_HOURS,
+} from '@waselect/shared';
 
 const str = (o: unknown, k: string): string => {
   const v = (o as Record<string, unknown> | null)?.[k];
@@ -29,6 +33,33 @@ export function shipmentFixGate(
 ): { ok: true; carrier: string; trackingNo: string } | { ok: false } {
   if (str(order, 'status') !== 'shipped') return { ok: false };
   return { ok: true, carrier: str(order, 'carrier'), trackingNo: str(order, 'tracking_no') };
+}
+
+/**
+ * 撤销发货按钮的门槛（AJ-440），与服务端 `revertShipmentGuard` 同口径、同顺序。
+ * @returns null = 不是已发货单，不显示按钮；否则给出能否撤销与**不能的原因**（按钮禁用时显示在旁边）。
+ * @why 已发货但不能撤时仍显示（禁用 + 原因），而不是藏起来：运营最常问的是"为什么撤不了"，
+ *      藏起按钮等于让人去翻文档；超时的引导到「修改运单号」，那是超时后录错单号的正路。
+ * @limitation `nowMs` 是浏览器时钟；与服务器偏差几分钟时，临界处可能按钮可点而服务端拒（409 原样转述）。
+ */
+export function shipmentRevertGate(
+  order: unknown,
+  nowMs: number,
+): { ok: boolean; reason: string } | null {
+  if (str(order, 'status') !== 'shipped') return null;
+  const o = order as Record<string, unknown>;
+  if (o['has_dispute'] === true) return { ok: false, reason: '有拒付限制，不能撤销发货' };
+  const sales = Array.isArray(o['after_sales']) ? (o['after_sales'] as unknown[]) : [];
+  if (sales.some((a) => ['open', 'processing'].includes(str(a, 'status'))))
+    return { ok: false, reason: '有进行中的售后，先处理售后再撤销' };
+  const at = Date.parse(str(order, 'shipped_at'));
+  if (!Number.isFinite(at)) return { ok: false, reason: '缺发货时间，不能撤销' };
+  if (nowMs - at >= SHIPMENT_REVERT_WINDOW_HOURS * 3_600_000)
+    return {
+      ok: false,
+      reason: `发货已满 ${String(SHIPMENT_REVERT_WINDOW_HOURS)} 小时，不能撤销；运单号录错请用「修改运单号」`,
+    };
+  return { ok: true, reason: '' };
 }
 
 export function shipmentFixErrors(f: {
@@ -57,4 +88,18 @@ export function trackingWarning(resp: unknown): string {
   return (resp as { tracking_recognized?: unknown } | null)?.tracking_recognized === false
     ? '已保存，但这个运单号的形状认不出（如日本邮便应为 EM123456789JP），请再核对一遍；录错可在「修改运单号」里改'
     : '';
+}
+
+/**
+ * 修正动作完成后的提示。
+ * @why 邮件只发给 `contact_email`（服务端 order-mail.ts：没留邮箱只记 skipped）；没留邮箱时还说"已发邮件"，
+ *      运营会以为买家已被通知而不再另行联系（2026-10-11 模拟实测撞到）。
+ * @limitation 只看订单上有没有邮箱，不知道服务商最终有没有送达（那在 mail_deliveries 里）。
+ */
+export function fixDoneNotice(mode: 'cancel' | 'fix' | 'revert', order: unknown): string {
+  if (mode === 'cancel') return '订单已取消，库存已回补';
+  const hasEmail = str(order, 'contact_email').trim() !== '';
+  if (mode === 'revert')
+    return `已撤销发货：订单回到待发货，运单已清空；${hasEmail ? '已给买家发更正邮件' : '买家未留邮箱，没有发更正邮件，请另行告知'}`;
+  return `运单号已更新；${hasEmail ? '已给买家重发发货邮件' : '买家未留邮箱，没有重发发货邮件'}`;
 }

@@ -113,3 +113,13 @@ export async function updateAfterSale(
   if (r === undefined) throw new Error('after_sale_requests update returned no row');
   return toRow(r);
 }
+
+/**
+ * 本单有没有**进行中**的售后（open / processing；AJ-440 撤销发货闸门用）。
+ * @why 口径与部分唯一索引 `uq_after_sale_requests_open` 一致：那条索引定义了什么叫"进行中"。
+ */
+export async function hasOpenAfterSale(db: Db, orderId: string): Promise<boolean> {
+  const rows = await db`
+    select 1 from after_sale_requests where order_id = ${orderId} and status in ('open', 'processing') limit 1`;
+  return rows.length > 0;
+}

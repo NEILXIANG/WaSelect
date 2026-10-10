@@ -677,9 +677,13 @@ export async function listOrderTimeline(
   orderId: string,
 ): Promise<{ status: string; at: Date }[]> {
   const rows = await db`
-    select status, at from order_events
-     where order_id = ${orderId} and status = any(${[...ORDER_STATUS]})
-     order by at asc, id asc
+    select e.status, e.at from order_events e
+     where e.order_id = ${orderId} and e.status = any(${[...ORDER_STATUS]})
+       -- 被撤销的那次"已发货"不给买家看（AJ-440）：状态已回到待发货，留着它时间线自相矛盾
+       and not (e.status = 'shipped' and exists (
+             select 1 from order_events r
+              where r.order_id = e.order_id and r.status = 'shipment_reverted' and r.at >= e.at))
+     order by e.at asc, e.id asc
   `;
   return rows.map((r) => ({ status: String(r.status), at: r.at as Date }));
 }

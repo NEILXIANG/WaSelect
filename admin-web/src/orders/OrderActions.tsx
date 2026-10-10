@@ -36,7 +36,7 @@ const ACTIONS: ReadonlyArray<{ key: ActionKey; button: string; title: string }> 
   { key: 'partial', button: '部分退款…', title: '部分退款 / 售后退款' },
   { key: 'release', button: '解除拒付限制…', title: '解除拒付限制（退款与发货已被锁）' },
   { key: 'address', button: '改址…', title: '发货前改址' },
-  { key: 'fix', button: '订单修正…', title: '取消订单 / 修改运单号' },
+  { key: 'fix', button: '订单修正…', title: '取消订单 / 修改运单号 / 撤销发货' },
 ];
 
 /** 当前订单下哪些动作可用（纯函数，闸门全部复用 view / fix-view / partial-refund-view）。 */

@@ -92,6 +92,8 @@ export const EVENT_STATUS_LABELS: Readonly<Record<string, string>> = {
   partial_failed: '部分退款失败',
   // 三端联动模拟 2026-10-08：这三条原先原样显示英文
   shipment_fixed: '改运单号',
+  // AJ-440：撤销发货（note 里有原运单号与原因）
+  shipment_reverted: '撤销发货',
   refunded_by_parts: '部分退款已退满',
   test_archived: '测试单归档',
 };

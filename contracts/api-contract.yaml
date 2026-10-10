@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.62
+  version: 0.6.63
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,11 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.63（AJ-440：新增管理端写端点 + 一封买家邮件，不影响任何已有调用）：
+      ① `POST /admin/orders/{id}/shipment/revert` `{reason}`：撤销发货，订单 **shipped → paid**，清空承运商 / 运单号 / 发货时刻。
+         准入：shipped、发货后 72 小时内、无拒付限制（40909）、无进行中售后（40902 after_sale_open）；原因必填（≤500）。
+      ② 买家收到一封更正邮件（不复述原运单号）；撤销后再发货，发货邮件照常发出（新的一次性幂等键）。
+      ③ 买家订单详情 `timeline` 不再包含被撤销的那次 shipped（撤销后再发货的那次照常出现）。
     0.6.62（AJ-438：新增管理端只读端点，不影响任何已有调用）：
       `GET /admin/dashboard/funnel?days=1|7|30`（默认 7）：转化漏斗六步人数——进店 → 看详情 → 有购买意向（加购或进结算）→ 进结算 → 发起支付 → 付款成功。
       按人去重、逐步嵌套；付款成功以订单表为准（非测试单）。days 不在白名单 → 40001。口径唯一出处 server/src/adapters/funnel.ts。
@@ -865,6 +870,13 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [carrier, tracking_no, reason], properties: {carrier: {type: string, maxLength: 32}, tracking_no: {type: string, maxLength: 64, description: '服务端落库前归一：去掉所有空白（含全角空格）、字母转大写、保留连字符（AJ-410）；响应、订单详情、发货邮件里都是归一后的值。长度按归一后量'}, reason: {type: string, maxLength: 500}}}}}}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [order_id, carrier, tracking_no, tracking_recognized], properties: {order_id: {type: string}, carrier: {type: string}, tracking_no: {type: string}, tracking_recognized: {type: boolean}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
+  /admin/orders/{id}/shipment/revert:
+    post:
+      summary: 撤销发货（0.6.63 / AJ-440，严格检查 P0 A-1）
+      description: '仅 shipped 且发货后未满 72 小时（恰好 72 小时起拒）；其余状态或超时 → 409 / 40902（data.reason = status_<状态> / revert_window_passed）；有拒付限制 → 409 / 40909；有进行中（open / processing）售后 → 409 / 40902 after_sale_open。原因必填（去首尾空白后 1–500 字，shared ADMIN_NOTE_MAX_LENGTH），空 → 40001。订单回到 paid、清空 carrier / tracking_no / shipped_at（paid_at 不动）；写 order_events(shipment_reverted，含原承运商 / 运单号与原因) 与 admin_audit（含改前值）；给买家发一封更正邮件。不在状态机迁移表里（迁移表的 shipped → paid 会让重复到账回调把已发货单重新标已付），只有本端点能做。'
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [order_id, status], properties: {order_id: {type: string}, status: {type: string, enum: [paid]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/orders/{id}/notes:
     get:
       summary: 订单内部备注列表（0.6.42 / AJ-396）

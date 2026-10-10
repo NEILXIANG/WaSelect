@@ -38,6 +38,8 @@ export const LOGGED_EVENTS: readonly string[] = [
   'order.dispute_closed',
   // 剩余清单 2-1：履约与退款事件（payload 只有承运商名，无 PII；运单号不进事件）
   'order.shipped',
+  // AJ-440：撤销发货（payload 只有一次性邮件键）
+  'order.shipment_reverted',
   'order.delivered',
   'order.refunded',
   // 第三轮缺口 P2-12：部分退款成功（payload 只有 refund_id）

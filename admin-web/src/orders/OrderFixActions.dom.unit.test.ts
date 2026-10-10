@@ -88,4 +88,41 @@ describe('OrderFixActions', () => {
     // 确认那一步就提示形状认不出（发邮件之前）
     expect(el.textContent).not.toContain('形状认不出'); // 已提交后确认区收起
   });
+
+  it('🔴 撤销发货（AJ-440）：原因必填 → 二次确认写明会发更正邮件 → POST /shipment/revert {reason}', async () => {
+    const { el, calls, notices, done } = await open({
+      status: 'shipped',
+      carrier: 'EMS',
+      tracking_no: 'EM123456789JP',
+      shipped_at: new Date(Date.now() - 3_600_000).toISOString(),
+      after_sales: [],
+    });
+    await click(button(el, '撤销发货'));
+    await click(button(el, '撤销这次发货'));
+    expect(el.textContent).toContain('撤销原因必填');
+    expect(calls).toHaveLength(0);
+    await type(el.querySelector('input'), '点错单，还没打包');
+    await click(button(el, '撤销这次发货'));
+    expect(el.textContent).toContain('更正邮件');
+    await click(button(el, '确认'));
+    expect(calls[0]).toMatchObject({
+      path: '/api/v1/admin/orders/o-1/shipment/revert',
+      method: 'POST',
+      body: { reason: '点错单，还没打包' },
+    });
+    expect(done.n).toBe(1);
+    expect(notices.at(-1)).toContain('已撤销发货');
+  });
+
+  it('撤销发货超过 72 小时：按钮禁用并写明原因，引导去改运单号', async () => {
+    const { el } = await open({
+      status: 'shipped',
+      carrier: 'EMS',
+      tracking_no: 'EM123456789JP',
+      shipped_at: new Date(Date.now() - 80 * 3_600_000).toISOString(),
+    });
+    const b = button(el, '撤销发货') as HTMLButtonElement;
+    expect(b.disabled).toBe(true);
+    expect(el.textContent).toContain('72 小时');
+  });
 });

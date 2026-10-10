@@ -38,6 +38,7 @@ import {
   REFUND_REASON_MAX_LENGTH,
   normalizeTrackingNo,
   SHIP_MAX_CHARS,
+  SHIPMENT_REVERT_WINDOW_HOURS,
   type ErrorCode,
   type OrderStatus,
 } from '@waselect/shared';
@@ -130,6 +131,44 @@ export function refundGuard(
  */
 export function addressGuard(status: OrderStatus): AdminGateResult {
   return status === 'paid' ? OK : deny(40902, `status_${status}`);
+}
+
+/**
+ * 撤销发货的时间窗：发货后 **72 小时**内（数值唯一真源 shared `SHIPMENT_REVERT_WINDOW_HOURS`）（不含第 72 小时整点，与关单"到点即过期"同一口径）。
+ * @why 撤销的前提是"货其实还没交给承运商"（点错单 / 录错单）。真交运了的包裹，72 小时后承运商侧通常已有轨迹，
+ *      此时让订单回到待发货 = 系统说没发、物流说在路上，两边各执一词；那种情形该走改运单号或售后。
+ * @tradeoff 72 而不是 24：周末发货、周一才发现点错的情形要盖住；代价是窗口内真的交运了的包裹也能被撤——
+ *      这一步只能靠运营自己判断（原因必填、进审计与时间线，事后能查是谁撤的）。
+ */
+export const SHIPMENT_REVERT_WINDOW_MS = SHIPMENT_REVERT_WINDOW_HOURS * 3_600_000;
+
+/**
+ * 撤销发货准入（严格检查 P0 A-1，AJ-440）：`shipped → paid` 的**唯一**入口。
+ *
+ * @why 不进 `ORDER_TRANSITIONS`（`domain/order.ts`）：`mark-paid.ts` 用 `canTransition(from, 'paid')`
+ *      判断"这笔到账能不能把订单标为已付"。表里一旦有 `shipped → paid`，同一笔钱的重复通知、
+ *      或换通道后旧会话又被付了一次，都会把已发货的单重新"标已付"（改写 paid_at、再发一封付款邮件），
+ *      并绕开 `isAnotherPayment` 那道"第二笔真实扣款"的识别。撤销是**人工纠错**，不是业务流转，
+ *      所以在这里单独判、在 SQL 里单独写（`revertShipment` 的 `where status = 'shipped'`）。
+ * @why 判定顺序：状态 → 拒付 → 售后 → 时间窗。状态不对时其余条件没有意义；拒付与发货闸门同码（40909），
+ *      运营看到的提示与"发货被拒付挡住"一致；售后进行中（如买家报"没收到"）先处理售后，否则撤完时间线对不上。
+ * @limitation 只看订单自身：承运商侧是否已有轨迹，系统不知道（没有接物流查询）。
+ * @param i.shippedAt `orders.shipped_at`；shipped 却为 null 是脏数据，拒（不当成"刚发货"放行）。
+ * @param i.now 注入时钟（与关单 job 同源，不用 DB now()）。
+ */
+export function revertShipmentGuard(i: {
+  status: OrderStatus;
+  hasDispute: boolean;
+  afterSaleOpen: boolean;
+  shippedAt: Date | null;
+  now: Date;
+}): AdminGateResult {
+  if (i.status !== 'shipped') return deny(40902, `status_${i.status}`);
+  if (i.hasDispute) return deny(40909, 'dispute_open');
+  if (i.afterSaleOpen) return deny(40902, 'after_sale_open');
+  if (i.shippedAt === null) return deny(40902, 'shipped_at_missing');
+  const elapsed = i.now.getTime() - i.shippedAt.getTime();
+  return elapsed < SHIPMENT_REVERT_WINDOW_MS ? OK : deny(40902, 'revert_window_passed');
 }
 
 /**

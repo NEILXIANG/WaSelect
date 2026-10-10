@@ -324,3 +324,11 @@ export const SEARCH_KEYWORD_MAX_LENGTH = 64;
  * @limitation 只管条数，不管写入频率；频率限制仍是登记项（G8 后半）。
  */
 export const MAX_ADDRESSES_PER_USER = 20;
+
+/**
+ * 撤销发货的时间窗（小时，AJ-440）：发货后未满这么多小时才能撤销（恰好到点起拒）。
+ * @why 放 shared：服务端闸门（`revertShipmentGuard`）与管理端按钮（`shipmentRevertGate`）读同一个数，
+ *      前端写一份 72 就是第二份，改一处忘一处时按钮可点、服务端却拒。
+ * @see server/src/domain/admin-order-actions.ts（取值理由与取舍写在那里）
+ */
+export const SHIPMENT_REVERT_WINDOW_HOURS = 72;

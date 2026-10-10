@@ -52,7 +52,7 @@ beforeEach(async () => {
   });
   const events = createEventBus(logger);
   published = [];
-  for (const n of ['order.cancelled', 'order.shipped']) {
+  for (const n of ['order.cancelled', 'order.shipped', 'order.shipment_reverted']) {
     events.subscribe(n, (e) => {
       published.push(`${e.name}:${String(e.payload?.['mail_key'] ?? '')}`);
     });
@@ -71,8 +71,10 @@ beforeEach(async () => {
 async function seed(
   id: string,
   status: string,
-  extra: { carrier?: string; tracking?: string } = {},
+  extra: { carrier?: string; tracking?: string; shippedHoursAgo?: number } = {},
 ): Promise<void> {
+  const shippedAt =
+    status === 'shipped' ? new Date(Date.now() - (extra.shippedHoursAgo ?? 0) * 3_600_000) : null;
   await db`insert into users (id, openid) values (${`u-${id}`}, ${`o-${id}`}) on conflict do nothing`;
   await db`insert into products (id, title, category, price_jpy, weight_g, stock, origin_country)
            values (${`p-${id}`}, '抹茶粉', 'food', 5000, 400, 3, 'JP') on conflict do nothing`;
@@ -82,7 +84,7 @@ async function seed(
     values (${id}, ${`W-${id}`}, ${`u-${id}`}, ${status}, 10000, 2000, 1500, 12000, 900, ${db.json({ USD: 0.0068 })},
             ${db.json({ recipient: 'Jane Doe', phone: '+14155550123', line1: '1 Main St', city: 'Cupertino', state: 'CA', postal_code: '95014', country: 'US' })},
             'TOS-2026-09-20', now() + interval '30 minutes', ${extra.carrier ?? null}, ${extra.tracking ?? null},
-            ${status === 'shipped' ? new Date() : null})
+            ${shippedAt})
   `;
   await db`insert into order_items (id, order_id, product_id, title_snapshot, qty, unit_price_jpy, weight_g, declared_value_usd)
            values (${`oi-${id}`}, ${id}, ${`p-${id}`}, '抹茶粉', 2, 5000, 400, 3400)`;
@@ -270,5 +272,112 @@ describe('运单号服务端归一（N20a）：单单发货 / 改运单号', () 
       tracking_no: 'AB1234-56789012',
       reason: '单号抄错',
     });
+  });
+});
+
+/**
+ * 撤销发货（严格检查 P0 A-1，AJ-440）：点错单 / 发错单后，订单原先没有回到"待发货"的出口。
+ * @why 断言买家侧时间线：撤销后买家不该再看到那条"已发货"（状态已回到待发货，留着它会自相矛盾）。
+ */
+describe('POST /admin/orders/:id/shipment/revert（AJ-440）', () => {
+  const REVERT = (id: string) => `/api/v1/admin/orders/${id}/shipment/revert`;
+
+  it('🔴 已发货 → paid、清空承运商/运单号/发货时刻、事件记原运单号与原因、审计、发更正邮件事件', async () => {
+    await seed('o-r1', 'paid');
+    expect(
+      (
+        await post('/api/v1/admin/orders/o-r1/ship', {
+          carrier: 'EMS',
+          tracking_no: 'EE123456789JP',
+        })
+      ).status,
+    ).toBe(200);
+    const r = await post(REVERT('o-r1'), { reason: '点错单，这张还没打包' });
+    expect(r.status).toBe(200);
+    expect(r.json).toEqual({ order_id: 'o-r1', status: 'paid' });
+    const [o] =
+      await db`select status, carrier, tracking_no, shipped_at from orders where id = 'o-r1'`;
+    expect(o).toMatchObject({ status: 'paid', carrier: null, tracking_no: null, shipped_at: null });
+    const [ev] = await db`
+      select note, actor from order_events where order_id = 'o-r1' and status = 'shipment_reverted'`;
+    expect(ev?.['actor']).toBe('admin:u-admin');
+    expect(ev?.['note']).toBe('原 EMS / EE123456789JP；原因：点错单，这张还没打包');
+    expect(published).toContain('order.shipment_reverted:revert-1');
+    let audit: readonly Record<string, unknown>[] = [];
+    for (let i = 0; i < 50 && audit.length === 0; i++) {
+      audit = await db`select before, after from admin_audit
+                        where target = 'o-r1' and action = 'POST /admin/orders/:id/shipment/revert'`;
+      if (audit.length === 0) await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(audit).toHaveLength(1);
+    expect(audit[0]?.['before']).toMatchObject({ status: 'shipped', tracking_no: 'EE123456789JP' });
+    expect(audit[0]?.['after']).toMatchObject({ status: 'paid', reason: '点错单，这张还没打包' });
+  });
+
+  it('🔴 撤销后再发货：发货邮件用新的一次性键（否则被当成首封重放吞掉）；买家时间线不再出现被撤的那次"已发货"', async () => {
+    await seed('o-r2', 'paid');
+    await post('/api/v1/admin/orders/o-r2/ship', { carrier: 'EMS', tracking_no: 'EE111111111JP' });
+    await post(REVERT('o-r2'), { reason: '发错单' });
+    const again = await post('/api/v1/admin/orders/o-r2/ship', {
+      carrier: 'EMS',
+      tracking_no: 'EE222222222JP',
+    });
+    expect(again.status).toBe(200);
+    expect(published.filter((p) => p.startsWith('order.shipped:'))).toEqual([
+      'order.shipped:',
+      'order.shipped:reship-1',
+    ]);
+    const { listOrderTimeline } = await import('../adapters/orders.js');
+    const tl = await listOrderTimeline(db, 'o-r2');
+    expect(tl.filter((t) => t.status === 'shipped')).toHaveLength(1);
+    // 第二次撤销 + 再发：键递增，不撞第一次
+    await post(REVERT('o-r2'), { reason: '又发错了' });
+    await post('/api/v1/admin/orders/o-r2/ship', { carrier: 'EMS', tracking_no: 'EE333333333JP' });
+    expect(published).toContain('order.shipment_reverted:revert-2');
+    expect(published).toContain('order.shipped:reship-2');
+  });
+
+  it('🔴 超过 72 小时 / 未发货 / 已签收 → 40902；拒付中 → 40909；售后进行中 → 40902；原因为空 → 40001；不存在 → 40400', async () => {
+    await seed('o-r3', 'shipped', {
+      carrier: 'EMS',
+      tracking: 'EE123456789JP',
+      shippedHoursAgo: 73,
+    });
+    expect((await post(REVERT('o-r3'), { reason: 'x' })).json).toMatchObject({ code: 40902 });
+    await seed('o-r4', 'paid');
+    expect((await post(REVERT('o-r4'), { reason: 'x' })).json['code']).toBe(40902);
+    await seed('o-r5', 'delivered', { carrier: 'EMS', tracking: 'EE123456789JP' });
+    expect((await post(REVERT('o-r5'), { reason: 'x' })).json['code']).toBe(40902);
+    await seed('o-r6', 'shipped', { carrier: 'EMS', tracking: 'EE123456789JP' });
+    await db`update orders set has_dispute = true where id = 'o-r6'`;
+    expect((await post(REVERT('o-r6'), { reason: 'x' })).json['code']).toBe(40909);
+    await seed('o-r7', 'shipped', { carrier: 'EMS', tracking: 'EE123456789JP' });
+    await db`insert into after_sale_requests (id, order_id, user_id, reason, description, created_at, updated_at)
+             values ('as-r7', 'o-r7', 'u-o-r7', 'not_received', '一直没收到', now(), now())`;
+    expect((await post(REVERT('o-r7'), { reason: 'x' })).json['code']).toBe(40902);
+    await seed('o-r8', 'shipped', { carrier: 'EMS', tracking: 'EE123456789JP' });
+    expect((await post(REVERT('o-r8'), { reason: ' ' })).json['code']).toBe(40001);
+    expect((await post(REVERT('o-none'), { reason: 'x' })).json['code']).toBe(40400);
+    // 被拒的单一律原样不动
+    const rows =
+      await db`select id, status, tracking_no from orders where id in ('o-r3','o-r6','o-r7','o-r8') order by id`;
+    expect(rows.map((x) => [x['status'], x['tracking_no']])).toEqual([
+      ['shipped', 'EE123456789JP'],
+      ['shipped', 'EE123456789JP'],
+      ['shipped', 'EE123456789JP'],
+      ['shipped', 'EE123456789JP'],
+    ]);
+    expect(published.filter((p) => p.startsWith('order.shipment_reverted'))).toEqual([]);
+  });
+
+  it('🔴 adapter 兜底：不是 shipped 的单直接调 revertShipment → false，订单与事件都不动（闸门之外的第二道）', async () => {
+    const { revertShipment } = await import('../adapters/orders-admin.js');
+    await seed('o-r9', 'delivered', { carrier: 'EMS', tracking: 'EE123456789JP' });
+    expect(await revertShipment(db, 'o-r9', new Date(), 'admin:u-admin', 'x')).toBe(false);
+    const [o] = await db`select status, tracking_no from orders where id = 'o-r9'`;
+    expect(o).toMatchObject({ status: 'delivered', tracking_no: 'EE123456789JP' });
+    expect(
+      await db`select 1 from order_events where order_id = 'o-r9' and status = 'shipment_reverted'`,
+    ).toHaveLength(0);
   });
 });

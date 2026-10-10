@@ -14,6 +14,8 @@
  *              代价是"已提交、发事件之前进程崩溃"会少一封邮件——与搬家前一致，订单状态仍正确。
  * @limitation 二：没有幂等键：同一单再发一次是 40902（`status_shipped`），不是"幂等成功"。
  *              批量重提（网络断开后再点一次）时，上一次已成功的行会显示 40902，前端按 reason 转述为"已发货"。
+ * @limitation 三：撤销发货（AJ-440）之后再发货，发货邮件的幂等键带 `reship-<n>`（n = 本单撤销次数）——
+ *              否则服务商按首封的 `order.shipped:<订单>` 去重，带新运单号的那封发不出去。
  * @see domain/admin-order-actions.ts（shipGuard / shipInfoGuard）；adapters/orders-admin.ts（lockAdminOrder / markShipped）
  */
 import { AppError } from '../errors.js';
@@ -25,7 +27,7 @@ import type { EventBus } from '../ports/events.js';
 import { asOrderStatus } from '../domain/order.js';
 import { shipGuard, shipInfoGuard } from '../domain/admin-order-actions.js';
 import { trackingNoRecognized } from '../domain/tracking.js';
-import { lockAdminOrder, markShipped } from '../adapters/orders-admin.js';
+import { countShipmentReverts, lockAdminOrder, markShipped } from '../adapters/orders-admin.js';
 
 export interface ShipOrderDeps {
   db: Db;
@@ -60,7 +62,7 @@ export async function shipOrder(
   //    超长会撞 PG 的 22001 → 兜底层折成泛化的 40001，运营看到的不是"运单号太长"。
   const ship = shipInfoGuard(raw);
   if (!ship.ok) throw new AppError(ship.code, { reason: ship.reason, order_id: id });
-  await withTransaction(deps.db, async (tx) => {
+  const reverts = await withTransaction(deps.db, async (tx) => {
     const row = await lockAdminOrder(tx, id);
     if (row === null) throw new AppError(40400, { order_id: id, reason: 'not_found' });
     const gate = shipGuard(asOrderStatus(row.status), row.has_dispute, row.is_test);
@@ -68,6 +70,7 @@ export async function shipOrder(
     if (!(await markShipped(tx, id, ship.carrier, ship.trackingNo, deps.clock.now(), actor))) {
       throw new AppError(40902, { order_id: id, reason: 'status_raced' });
     }
+    return countShipmentReverts(tx, id);
   });
   deps.logger.info('admin_order_shipped', {
     result: 'ok',
@@ -79,7 +82,10 @@ export async function shipOrder(
     name: 'order.shipped',
     at: deps.clock.now().toISOString(),
     orderId: id,
-    payload: { carrier: ship.carrier },
+    payload: {
+      carrier: ship.carrier,
+      ...(reverts > 0 ? { mail_key: `reship-${String(reverts)}` } : {}),
+    },
   });
   return {
     order_id: id,
