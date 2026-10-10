@@ -46,6 +46,8 @@ export interface AdminOrderLike {
   tracking_no?: string;
   has_dispute?: boolean;
   is_test?: boolean;
+  /** 列表行（契约 0.6.58 / AJ-425）：下单人已被拉黑；详情形状里在 customer.blocked。 */
+  user_blocked?: boolean;
   address?: Record<string, unknown>;
   items?: Array<Record<string, unknown>>;
   payment?: Record<string, unknown>;

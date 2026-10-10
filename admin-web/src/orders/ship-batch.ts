@@ -32,6 +32,8 @@ export interface BatchRow {
   trackingNo: string;
   /** 订单级问题（找不到 / 不可发货），构造行时定下，编辑承运商 / 运单号不改变它。 */
   blockers: string[];
+  /** 订单级提醒（只提示不拦，如下单人已拉黑），构造行时定下；validateRows 每次带进 warnings。 */
+  orderWarnings: string[];
   /** = blockers + 重复 + 字段错误（由 validateRows 重算）；非空即不提交。 */
   errors: string[];
   warnings: string[];
@@ -191,7 +193,7 @@ export function validateRows(rows: readonly BatchRow[]): BatchRow[] {
     if (r.orderNo !== '' && (count.get(r.orderNo) ?? 0) > 1) errors.push('同一单号重复出现');
     const field = shipErrors({ carrier: r.carrier, trackingNo: r.trackingNo });
     const fieldErrors = Object.values(field.errors);
-    const warnings: string[] = [];
+    const warnings: string[] = [...r.orderWarnings];
     if (r.trackingNo.trim() !== '' && !trackingNoRecognized(r.carrier, r.trackingNo))
       warnings.push(TRACKING_SHAPE_WARNING);
     if ((trackingCount.get(r.trackingNo.trim().toUpperCase()) ?? 0) > 1)
@@ -202,6 +204,18 @@ export function validateRows(rows: readonly BatchRow[]): BatchRow[] {
 
 /** 多单共用一个运单号时的提醒（只警告：合并包裹是真实形态；填串行时这一行会亮黄）。 */
 export const DUPLICATE_TRACKING_WARNING = '运单号与另一单相同：合并包裹才会这样，请确认没有填串行';
+
+/**
+ * 下单人已被拉黑（联动走查·熟手运营 2026-10-10）。
+ * @why 勾选里混进拉黑用户的已付单时，批量抽屉里那一行与别的单一模一样——列表上的「用户已拉黑」徽章到这里就看不见了。
+ *      只提示不拦：这类单可能照发（AJ-425：发货前要判断退款还是照发），但不能没看见就发出去。
+ */
+export const BLOCKED_USER_WARNING = '下单人已被拉黑：请先确认是退款还是照常发货';
+
+/** 订单级提醒（不拦提交）。 */
+function orderWarnings(order: AdminOrderLike | undefined): string[] {
+  return order?.user_blocked === true ? [BLOCKED_USER_WARNING] : [];
+}
 
 /** 订单级判定（与详情页发货按钮同一个 shipGate）。 */
 function orderBlockers(orderNo: string, order: AdminOrderLike | undefined): string[] {
@@ -266,6 +280,7 @@ export function buildCsvPreview(
       carrier: ownCarrier === '' ? defaultCarrier.trim() : ownCarrier,
       trackingNo: (cells[cols.trackingNo] ?? '').trim(),
       blockers: orderBlockers(orderNo, order),
+      orderWarnings: orderWarnings(order),
       errors: [],
       warnings: [],
     };
@@ -285,6 +300,7 @@ export function selectionRows(
     carrier: defaultCarrier.trim(),
     trackingNo: '',
     blockers: orderBlockers(o.order_no ?? o.order_id, o),
+    orderWarnings: orderWarnings(o),
     errors: [],
     warnings: [],
   }));

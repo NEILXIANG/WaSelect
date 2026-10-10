@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { SHIP_BATCH_MAX } from '@waselect/shared';
 import {
+  BLOCKED_USER_WARNING,
   DUPLICATE_TRACKING_WARNING,
   buildCsvPreview,
   csvOrderNos,
@@ -232,6 +233,7 @@ describe('多单共用运单号 → 黄字警告，不拦（模拟走查 2026-10
       orderId: 'o-1',
       orderNo: '261009-AAAAAA',
       blockers: [] as string[],
+      orderWarnings: [] as string[],
       carrier: 'Japan Post EMS',
       trackingNo: 'EJ123456789JP',
       errors: [] as string[],
@@ -248,5 +250,45 @@ describe('多单共用运单号 → 黄字警告，不拦（模拟走查 2026-10
       false,
     ]);
     expect(rows.every((r) => r.errors.length === 0)).toBe(true);
+  });
+});
+
+// 联动走查·熟手运营（2026-10-10）：勾选里混进拉黑用户的已付单，批量抽屉里那一行与别的单一模一样、「提示」栏是空的。
+// 只提示不拦：拉黑用户的已付单可能照发（AJ-425：发货前要判断退款还是照发），但不能让人没看见就发出去。
+describe('批量发货：下单人已拉黑 → 该行黄字提醒，不拦', () => {
+  it('🔴 勾选模式：user_blocked 的那一行带提醒；填了运单号照样进提交体', () => {
+    const rows = validateRows(
+      selectionRows(
+        [
+          { order_id: 'ord_a', order_no: '261007-7K3QXA', status: 'paid' },
+          { order_id: 'ord_t', order_no: '261010-BH89TJ', status: 'paid', user_blocked: true },
+        ],
+        'EMS',
+      ),
+    );
+    expect(rows.map((r) => r.warnings.includes(BLOCKED_USER_WARNING))).toEqual([false, true]);
+    expect(rows[1]?.blockers).toEqual([]);
+    const filled = validateRows(rows.map((r) => ({ ...r, trackingNo: 'EJ123456789JP' })));
+    expect(filled[1]?.warnings).toContain(BLOCKED_USER_WARNING);
+    expect(toBatchItems(filled).map((i) => i.order_id)).toEqual(['ord_a', 'ord_t']);
+  });
+
+  it('🔴 CSV 导入：表里那单的下单人已拉黑 → 同一句提醒', () => {
+    const blocked: OrderLookup = new Map([
+      [
+        '261010-BH89TJ',
+        { order_id: 'ord_t', order_no: '261010-BH89TJ', status: 'paid', user_blocked: true },
+      ],
+    ]);
+    const p = buildCsvPreview(
+      rec([
+        ['订单号', '运单号'],
+        ['261010-BH89TJ', 'EJ123456789JP'],
+      ]),
+      blocked,
+      'EMS',
+    );
+    expect(p.rows[0]?.warnings).toContain(BLOCKED_USER_WARNING);
+    expect(p.rows[0]?.errors).toEqual([]);
   });
 });
