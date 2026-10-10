@@ -179,3 +179,11 @@
   display: inline-block;
   margin-top: var(--ws-space-hair);
 }
+
+/*
+ * 关键信息（订单号、建单时间、付款截止、"请提供订单号"）：买家要照着做的信息不能用最弱的 caption 色。
+ * ink-faint 在白卡上只有 2.18:1；ink-soft 是 7.54:1（WCAG 公式，统一结论 5.3 / AJ-429）。只改颜色，不改字号。
+ */
+.key-info {
+  color: var(--ws-ink-soft);
+}

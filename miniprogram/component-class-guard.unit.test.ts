@@ -31,8 +31,6 @@ const EXEMPT: Record<string, string> = {
     'flex 子项被块化（实测 display=block），margin-left 生效',
   'components/ws-state-block/index.wxml:ws-button:ws-state__action':
     '读码：父级 .ws-state__actions 是 flex 列（display:flex; flex-direction:column），子项被块化，min-width 生效（未在模拟器实测）',
-  'pages/home/index.wxml:ws-pick-card:home__pick':
-    '已知不生效（实测 inline，margin-top 不参与布局）；修了会让首页卡片间距变大 = 视觉改动，小程序 UI 冻结期待用户决定（统一结论 5.3）',
   'pages/index/index.wxml:ws-button:btn':
     '行走骨架停用页，未在 app.json 登记；`.btn` 也没有样式规则',
 };

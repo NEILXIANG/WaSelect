@@ -108,21 +108,22 @@
             "先看值不值、再看多少钱"，`why` 那一整段需要横向的篇幅才读得下去。
             原型的设计规范里，首页/发现/分类**都是**纵向大卡，两列是例外。 -->
   <view class="ws-gutter home__list" wx:if="{{!loading || cards.length > 0}}">
-    <ws-pick-card
-      wx:for="{{cards}}"
-      wx:key="id"
-      class="home__pick"
-      data-id="{{item.id}}"
-      image="{{item.image}}"
-      maker="{{item.maker}}"
-      name="{{item.title}}"
-      why="{{item.why}}"
-      priceJpy="{{item.priceJpy}}"
-      usdText="{{item.subPrice}}"
-      stock="{{item.stock}}"
-      tags="{{item.tags}}"
-      bindtap="onProductTap"
-    />
+    <!-- 卡片间距写在外层 view 上：写在组件标签上落到 inline 宿主，上外边距不生效（实测，见 component-class-guard / AJ-429）。
+         点击与 data-id 仍在组件上，行为不变 -->
+    <view class="home__pick" wx:for="{{cards}}" wx:key="id">
+      <ws-pick-card
+        data-id="{{item.id}}"
+        image="{{item.image}}"
+        maker="{{item.maker}}"
+        name="{{item.title}}"
+        why="{{item.why}}"
+        priceJpy="{{item.priceJpy}}"
+        usdText="{{item.subPrice}}"
+        stock="{{item.stock}}"
+        tags="{{item.tags}}"
+        bindtap="onProductTap"
+      />
+    </view>
   </view>
 
   <!-- 错误 / 空态：走组件（三段式），不再每页各写一块 -->

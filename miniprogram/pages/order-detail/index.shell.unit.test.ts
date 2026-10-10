@@ -246,3 +246,38 @@ describe('支付结果确认中：重查两次仍未确认（统一结论 5.3）
     }
   });
 });
+
+// 统一结论 5.3（用户授权代决，AJ-429）：订单号、建单时间、付款截止、"请提供订单号"是买家要照着做的信息，
+// 原先用 .ws-caption（ink-faint）——白卡上对比度只有 2.18:1。改用已有的 ink-soft，不加新色、不改字号
+describe('订单详情关键信息的对比度', () => {
+  const wcag = (hex: string): number => {
+    const c = [0, 2, 4].map((i) => parseInt(hex.slice(1 + i, 3 + i), 16) / 255);
+    const l = c.map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * (l[0] ?? 0) + 0.7152 * (l[1] ?? 0) + 0.0722 * (l[2] ?? 0);
+  };
+  const ratio = (a: string, b: string): number => {
+    const [hi, lo] = [wcag(a), wcag(b)].sort((x, y) => y - x);
+    return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+  };
+
+  it('🔴 四处关键信息都带 key-info，且 key-info 的颜色在白卡上 ≥ 4.5:1', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    for (const text of [
+      '订单号 {{view.orderNo}}',
+      '建单 {{view.createdAtText}}',
+      '前完成支付',
+      '联系客服时请提供订单号',
+    ]) {
+      const tag = new RegExp(
+        `<text class="([^"]*)"[^>]*>[^<]*${text.replace(/[{}.]/g, '\\$&')}`,
+      ).exec(wxml);
+      expect(tag?.[1], text).toContain('key-info');
+    }
+    const wxss = readFileSync(new URL('./index.wxss', import.meta.url), 'utf8');
+    const token = /\.key-info\s*\{[^}]*color:\s*var\((--ws-[a-z-]+)\)/.exec(wxss)?.[1];
+    const app = readFileSync(new URL('../../app.wxss', import.meta.url), 'utf8');
+    const hex =
+      new RegExp(`${token ?? '--none'}:\\s*(#[0-9a-fA-F]{6})`).exec(app)?.[1] ?? '#ffffff';
+    expect(ratio(hex, '#ffffff')).toBeGreaterThanOrEqual(4.5);
+  });
+});
