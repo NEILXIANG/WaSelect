@@ -88,11 +88,19 @@ export interface ToastSink {
 /**
  * 40902（订单状态不允许此操作）在**已经自动刷新了详情**的地方的说法（联动走查·两位运营同时处理同一单 2026-10-10）。
  * @why 服务端原文"订单状态不允许此操作"说不出原因——改址 / 发货撞上它，最常见的是别人刚发了货，页面还停在旧状态。
- *      只给真的刷新了详情的两处用（OrderAddressForm / ShipForm）；通用的 toastError 不改：
+ *      只给真的刷新了详情的两处用（OrderAddressForm 经 OrderActions / ShipForm），且等刷新结果回来再选文案；通用的 toastError 不改：
  *      其它动作（如解除拒付锁定）的 40902 有各自的含义，测试钉着"显示服务端原话"。
  */
 export const STATE_CHANGED_REFRESHED_TEXT =
   '这张单的状态刚变了（可能有人刚处理过），页面已刷新为最新状态，请看清后再操作';
+/** 同上，但刷新没成功（严格检查 2026-10-10：没刷新成功时不能说"已刷新"）。 */
+export const STATE_CHANGED_TEXT =
+  '这张单的状态刚变了（可能有人刚处理过），请刷新页面看最新状态后再操作';
+
+/** 40902 之后刷新详情的结果 → 提示文案（刷新成功才说"已刷新"）。 */
+export function staleNotice(refreshed: boolean): string {
+  return refreshed ? STATE_CHANGED_REFRESHED_TEXT : STATE_CHANGED_TEXT;
+}
 
 export function toastError(
   e: unknown,

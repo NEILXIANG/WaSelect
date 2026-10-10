@@ -15,10 +15,10 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { ActionDrawer } from '../ui/drawer.js';
-import type { ToastSink } from '../ui/toast.js';
 import type { AdminApi, AdminOrderLike } from './api.js';
 import { cancelGate, shipmentFixGate } from './fix-view.js';
 import { OrderAddressForm } from './OrderAddressForm.js';
+import { staleNotice, type ToastSink } from '../ui/toast.js';
 import { OrderFixActions } from './OrderFixActions.js';
 import { PartialRefunds } from './PartialRefunds.js';
 import { partialRefundGate, partialRefundRows } from './partial-refund-view.js';
@@ -125,8 +125,8 @@ export function OrderActions({ api, id, order, sink, reload, onChanged }: OrderA
           close();
         }}
         // 联动走查（2026-10-10）：确认改址时别人刚发了货 → 刷新详情并收起抽屉，页头立刻变成"已发货"
-        onStale={() => {
-          void reload();
+        onStale={(traceId) => {
+          void reload().then((fresh) => sink.error(staleNotice(fresh !== null), { traceId }));
           onChanged();
           close();
         }}

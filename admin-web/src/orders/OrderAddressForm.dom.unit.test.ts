@@ -82,7 +82,7 @@ describe('OrderAddressForm', () => {
         id: 'o-1',
         order: ORDER as never,
         onDone: () => undefined,
-        onStale: () => stale.push(1),
+        onStale: (traceId: string | undefined) => stale.push(traceId === 'tr-x' ? 1 : 0),
       }),
     );
     const el = mounted.el;

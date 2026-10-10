@@ -21,13 +21,7 @@ import { useRef, useState } from 'react';
 import { useFormDirty } from '../ui/unsaved.js';
 import { useDrawerBusy } from '../ui/drawer.js';
 import { ApiError } from '../api/errors.js';
-import {
-  STATE_CHANGED_REFRESHED_TEXT,
-  ToastStack,
-  toastError,
-  useToasts,
-  type ToastSink,
-} from '../ui/toast.js';
+import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
 import { updateOrderAddress, type AdminApi, type AdminOrderLike } from './api.js';
 import {
   ADDRESS_FIELDS,
@@ -63,7 +57,7 @@ export interface OrderAddressFormProps {
    * 这单状态已变（40902，常见是别人刚发了货）：父页刷新详情、收起抽屉（联动走查 2026-10-10）。
    * 不传 = 只提示不刷新（组件单独挂载时）。
    */
-  onStale?: (() => void) | undefined;
+  onStale?: ((traceId: string | undefined) => void) | undefined;
 }
 
 export function OrderAddressForm({
@@ -123,8 +117,8 @@ export function OrderAddressForm({
       // 别人刚发了货 / 关了单（40902）：核对态收起，交给父页刷新——停在旧页面上运营会一直点「确认改址」
       if (e instanceof ApiError && e.code === 40902 && onStale !== undefined) {
         setConfirming(false);
-        fail(STATE_CHANGED_REFRESHED_TEXT, e.traceId);
-        onStale();
+        // 提示交给父页：它刷新完再说"已刷新"还是"请刷新"（严格检查 2026-10-10）
+        onStale(e.traceId);
         return;
       }
       // ⚠️ 失败保留已填内容：清了表单等于让运营把七个字段重新输一遍
