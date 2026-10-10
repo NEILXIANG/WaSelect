@@ -53,6 +53,24 @@ export function goneExit(buyNow) {
 }
 
 /**
+ * `GET /terms` 响应 → 结算页的条款状态（严格检查 M-1b，AJ-441）。
+ * @why 就绪要求**版本 + 可打开的地址**两样都有：此前只看版本号，服务端没配条款地址时 `urls` 整键省略，
+ *      结算页照样放行"已阅读并同意"——买家同意的是一份打不开的条款。服务端生产已拒启这种配置（config 规则 9c），
+ *      这里是客户端的同口径一道（开发 / staging 没配时也能在页面上看出来）。
+ * @why 只看 `urls.zh`：结算页的"查看条款"进的是中文法务页；ja / en 缺失不影响这位买家读条款。
+ * @limitation 只看"给了地址"，不看地址打不打得开（那要发请求，vm 不做 IO）。
+ * @param {unknown} res
+ * @returns {{termsVersion: string, termsFailed: boolean}}
+ */
+export function termsFromResponse(res) {
+  const o = res !== null && typeof res === 'object' ? res : {};
+  const version = typeof o.version === 'string' ? o.version : '';
+  const urls = o.urls !== null && typeof o.urls === 'object' ? o.urls : {};
+  const hasUrl = typeof urls.zh === 'string' && urls.zh.trim() !== '';
+  return { termsVersion: version, termsFailed: version === '' || !hasUrl };
+}
+
+/**
  * 能否提交（按钮禁用 + 原因）。
  * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null,
  *          emailError?: string, contactEmail?: string, splitRequired?: boolean,

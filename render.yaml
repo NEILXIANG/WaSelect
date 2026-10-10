@@ -176,7 +176,9 @@ services:
       - key: ALERT_EMAIL
         sync: false
       # 剩余清单 4-1 / 4-2：法务页基址（留空用 CHECKOUT_BASE_URL）、特商法商家信息、客服联系方式——
-      #    公司登记 / 客服账号确定前都留空：未配置的字段服务端不下发，小程序不显示（不编占位值）
+      #    特商法字段在公司登记前留空：未配置的字段服务端不下发，小程序不显示（不编占位值）
+      #    ⚠️ 规则 9c（AJ-441）：SUPPORT_EMAIL / SUPPORT_WECHAT 至少配一个，且 LEGAL_BASE_URL 与 CHECKOUT_BASE_URL
+      #       至少有一个，否则生产拒启——审核期只开 mock 时没有 CHECKOUT_BASE_URL，必须配 LEGAL_BASE_URL
       - key: LEGAL_BASE_URL
         sync: false
       - key: SELLER_NAME

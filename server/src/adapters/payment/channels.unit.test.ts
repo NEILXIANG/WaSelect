@@ -427,6 +427,7 @@ describe('buildPaymentRegistry：生产环境的 mock 门（三审 S1）', () =>
       CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
       CORS_ORIGINS: 'https://admin.waselect.jp',
       SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // config 规则 9b：生产至少一个告警通道
+      SUPPORT_EMAIL: 'support@waselect.jp', // config 规则 9c：生产至少一种客服联系方式（AJ-441）
     });
     // 绕过配置层（模拟规则 1b 被放宽）：直接注入残留密钥
     const a = buildPaymentRegistry(

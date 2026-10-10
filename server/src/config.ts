@@ -1120,6 +1120,28 @@ const crossField = (now: Date) =>
           '生产必须至少配置一个告警通道：SENTRY_DSN 或 ALERT_EMAIL（两者都没有时，对账异常与每日作业停跑没人会知道）',
         );
       }
+      // 9c.（严格检查 P0 M-1，AJ-441）生产必须能把买家引到"人"和"条款"那里。
+      //     @why 客服：被拉黑、无支付方式、发货后改地址、售后等多处提示都写"联系客服"，而客服卡片在没配置时
+      //          整块消失（GET /support 不下发未配置的项）——这些出口全部指向空处，且启动、运行都不报错。
+      //          只认邮箱 / 微信：SUPPORT_HOURS 是"什么时候找"，不是"怎么找"。
+      //     @why 条款：`/terms` 的地址 = LEGAL_BASE_URL ?? CHECKOUT_BASE_URL；开 stripe 的生产本就要求后者，
+      //          漏网的是**审核期**（只开 mock，可以不配 CHECKOUT_BASE_URL）——结算页没有条款链接却放行"已阅读并同意"，
+      //          而审核员看到的恰恰是审核期。
+      //     @tradeoff 拒启而不是 warn：与 9b 同理（MVP 没有必达的告警通道）；代价是公司登记 / 客服账号定下来之前
+      //          生产起不来——这本来就是上线前必须有的东西，没有它上线等于让买家出错时无处可去。
+      //     @limitation 只查"配了"，不查"能联系上"（邮箱是否有人收、微信号是否存在，机器判断不了）。
+      if (c.SUPPORT_EMAIL === undefined && c.SUPPORT_WECHAT === undefined) {
+        add(
+          'SUPPORT_EMAIL',
+          '生产必须至少配置一种客服联系方式：SUPPORT_EMAIL 或 SUPPORT_WECHAT（多处出错提示写着"联系客服"，不配则无处可联系）',
+        );
+      }
+      if (c.LEGAL_BASE_URL === undefined && c.CHECKOUT_BASE_URL === undefined) {
+        add(
+          'LEGAL_BASE_URL',
+          '生产必须能给出条款地址：配置 LEGAL_BASE_URL（或 CHECKOUT_BASE_URL）——否则结算页没有条款链接却要买家勾选"已阅读并同意"',
+        );
+      }
       // 9.（扫描 S-02）配了告警收件人却没配邮件服务：告警只记日志，谁都收不到，而日志看起来一切正常
       if (c.ALERT_EMAIL !== undefined && c.MAIL_PROVIDER_API_KEY === undefined) {
         add(

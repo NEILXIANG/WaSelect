@@ -37,6 +37,7 @@ import {
   recoveryFor,
   resolveAddressId,
   submitGate,
+  termsFromResponse,
 } from './index.vm.js';
 import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { addressSummary, defaultAddressId } from '../../utils/address-form.js';
@@ -258,8 +259,8 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/terms`,
         traceId: this.traceId,
       });
-      const version = typeof res?.version === 'string' ? res.version : '';
-      this.setData({ termsVersion: version, termsFailed: version === '' });
+      // 版本 + 条款地址都要有才算就绪（AJ-441）：没有地址时放行"已阅读并同意"等于同意一份打不开的条款
+      this.setData(termsFromResponse(res));
     } catch (e) {
       // ⚠️ 拿不到版本 = 不能下单：由闸门拦住并说明（termsFailed），不留给提交时再失败
       this.setData({ termsVersion: '', termsFailed: true, ...errorFields(e) });

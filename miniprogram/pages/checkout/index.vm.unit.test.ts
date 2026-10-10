@@ -26,7 +26,7 @@ import {
   goneExit,
   submitGate,
 } from './index.vm.js';
-import { namedItemError } from './index.vm.js';
+import { namedItemError, termsFromResponse } from './index.vm.js';
 
 const ITEMS = [
   { productId: 'p-shiro-cleansing-oil', qty: 2, title: '資生堂 クレンジングオイル 200ml' },
@@ -497,5 +497,31 @@ describe('商品已下架（报价 / 建单 40401）：给走得通的出口', (
         buyNow: true,
       }).reason,
     ).toBe('这件商品已下架，请回首页看看其它商品');
+  });
+});
+
+/**
+ * 条款就绪 = 有版本**且**有可打开的条款地址（严格检查 M-1b，AJ-441）。
+ * @why 此前只看版本号：服务端没配条款地址时 `/terms` 整键省略 urls，结算页仍放行"已阅读并同意"——
+ *      买家同意了一份打不开的条款。服务端生产已拒启这种配置（config 规则 9c），这里是客户端那一道。
+ */
+describe('termsFromResponse', () => {
+  const URLS = { zh: 'https://legal.waselect.jp/legal/terms/#zh', ja: 'x', en: 'y' };
+  it('有版本有地址 → 就绪', () => {
+    expect(termsFromResponse({ version: 'TOS-2026-09-20', urls: URLS })).toEqual({
+      termsVersion: 'TOS-2026-09-20',
+      termsFailed: false,
+    });
+  });
+  it.each([
+    ['没有 urls（服务端未配条款地址）', { version: 'TOS-2026-09-20' }],
+    ['urls.zh 是空白', { version: 'TOS-2026-09-20', urls: { zh: '  ' } }],
+    ['没有版本', { urls: URLS }],
+    ['响应不是对象', null],
+  ])('%s → 不就绪（闸门说"条款暂时取不到"，不放行同意）', (_n, res) => {
+    expect(termsFromResponse(res).termsFailed).toBe(true);
+  });
+  it('没有地址时版本仍原样给出（建单回传用），只是标记失败', () => {
+    expect(termsFromResponse({ version: 'TOS-2026-09-20' }).termsVersion).toBe('TOS-2026-09-20');
   });
 });

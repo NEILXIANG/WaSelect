@@ -86,6 +86,7 @@ describe('NODE_ENV（D17）', () => {
       STRIPE_WEBHOOK_SECRET: 'whsec_dummy',
       CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
       SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // 规则 9b：生产至少一个告警通道
+      SUPPORT_EMAIL: 'support@waselect.jp', // config 规则 9c：生产至少一种客服联系方式（AJ-441）
     };
     expect(loadConfig(prod).NODE_ENV).toBe('production');
   });
@@ -285,6 +286,7 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
     CORS_ORIGINS: 'https://admin.waselect.jp',
     SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // 规则 9b：生产至少一个告警通道
+    SUPPORT_EMAIL: 'support@waselect.jp', // config 规则 9c：生产至少一种客服联系方式（AJ-441）
     ...extra,
   });
 
@@ -701,6 +703,7 @@ describe('🔴 生产对外域名不得是占位值（规则 4c，B9 闸门 / AJ
     CORS_ORIGINS: 'https://admin.waselect.jp',
     CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
     SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // 规则 9b
+    SUPPORT_EMAIL: 'support@waselect.jp', // config 规则 9c：生产至少一种客服联系方式（AJ-441）
     ...extra,
   });
 
@@ -904,6 +907,7 @@ describe('配置形状（N11）', () => {
     CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
     CORS_ORIGINS: 'https://admin.waselect.jp',
     SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // 规则 9b：生产至少一个告警通道
+    SUPPORT_EMAIL: 'support@waselect.jp', // config 规则 9c：生产至少一种客服联系方式（AJ-441）
     ...extra,
   });
 
@@ -1194,5 +1198,69 @@ describe('mockAutoConfirmEnabled（本地模拟付款，AJ-373）', () => {
     expect(mockAutoConfirmEnabled({ MOCK_AUTO_CONFIRM: 'off', NODE_ENV: 'development' })).toBe(
       false,
     );
+  });
+});
+
+/**
+ * 规则 9c（严格检查 P0 M-1，AJ-441）：生产必须能把买家引到"人"和"条款"那里。
+ * @why 多处出错提示都写"联系客服"（被拉黑、无支付方式、发货后改地址、售后），客服卡片却在没配置时整块消失——
+ *      这些出口全部指向空处；条款链接没配时结算页照样放行"已阅读并同意"，而审核员看到的正是审核期（只开 mock、可以不配 CHECKOUT_BASE_URL）。
+ */
+describe('🔴 规则 9c：生产必须有客服联系方式与条款地址（M-1，AJ-441）', () => {
+  const prod = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
+    ...baseEnv,
+    NODE_ENV: 'production',
+    APP_ID: 'wx-prod-like',
+    APP_SECRET: 'prod-like-app-secret',
+    DATABASE_URL: 'postgresql://app@db.internal:5432/japan_shop',
+    PAYMENT_CHANNELS: 'stripe',
+    STRIPE_SECRET_KEY: 'sk_live_x',
+    STRIPE_WEBHOOK_SECRET: 'whsec_x',
+    CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
+    CORS_ORIGINS: 'https://admin.waselect.jp',
+    SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42',
+    SUPPORT_EMAIL: 'support@waselect.jp',
+    ...extra,
+  });
+  const review = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
+    prod({
+      PAYMENT_CHANNELS: 'mock',
+      STRIPE_SECRET_KEY: '',
+      STRIPE_WEBHOOK_SECRET: '',
+      CHECKOUT_BASE_URL: '',
+      REVIEW_MODE: 'on',
+      REVIEW_SKU_ID: 'sku-1',
+      REVIEW_MODE_UNTIL: '2026-11-20',
+      MOCK_CALLBACK_SECRET: 'review-mock-callback-secret-2026-period',
+      LEGAL_BASE_URL: 'https://legal.waselect.jp',
+      ...extra,
+    });
+  const DAY = new Date('2026-11-15T00:00:00Z');
+
+  it('基线：stripe 生产（邮箱客服 + 条款回落 CHECKOUT_BASE_URL）与审核期（LEGAL_BASE_URL）都能启动', () => {
+    expect(loadConfig(prod()).SUPPORT_EMAIL).toBe('support@waselect.jp');
+    expect(loadConfig(review(), DAY).LEGAL_BASE_URL).toBe('https://legal.waselect.jp');
+  });
+
+  it('客服邮箱与微信都没配 → 拒启；只配客服时间不算（那不是联系方式）；只配微信 → 放行', () => {
+    expect(expectReject(prod({ SUPPORT_EMAIL: '' })).join('\n')).toContain('SUPPORT_EMAIL');
+    expect(
+      expectReject(prod({ SUPPORT_EMAIL: '', SUPPORT_HOURS: '工作日 10:00–18:00（JST）' })).join(
+        '\n',
+      ),
+    ).toContain('SUPPORT_EMAIL');
+    expect(
+      loadConfig(prod({ SUPPORT_EMAIL: '', SUPPORT_WECHAT: 'waselect-cs' })).SUPPORT_WECHAT,
+    ).toBe('waselect-cs');
+  });
+
+  it('审核期：LEGAL_BASE_URL 与 CHECKOUT_BASE_URL 都没配 → 拒启（/terms 不给地址，结算页却放行同意）', () => {
+    expect(expectReject(review({ LEGAL_BASE_URL: '' }), DAY).join('\n')).toContain(
+      'LEGAL_BASE_URL',
+    );
+  });
+
+  it('非生产不要求（开发 / staging 照常启动）', () => {
+    expect(loadConfig({ ...baseEnv, NODE_ENV: 'development' }).SUPPORT_EMAIL).toBeUndefined();
   });
 });

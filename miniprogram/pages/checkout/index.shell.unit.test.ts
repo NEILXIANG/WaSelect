@@ -39,6 +39,13 @@ let page: LoadedPage;
 let posts: Req[];
 let quote: Record<string, unknown>;
 let termsFail: boolean;
+/** 服务端没配条款地址（`/terms` 整键省略 urls，AJ-441）。 */
+let termsNoUrl: boolean;
+const TERMS_URLS = {
+  zh: 'https://legal.waselect.jp/legal/terms/#zh',
+  ja: 'https://legal.waselect.jp/legal/terms/#ja',
+  en: 'https://legal.waselect.jp/legal/terms/#en',
+};
 let quoteFail: boolean;
 /** 建单接口的下一次行为：抛这个错；为 null 则成功。 */
 let orderError: (Error & { code?: number }) | null;
@@ -84,6 +91,7 @@ beforeEach(async () => {
   posts = [];
   quote = { items_jpy: 8000, shipping_jpy: 1150, total_jpy: 9150, split_hint: false };
   termsFail = false;
+  termsNoUrl = false;
   quoteFail = false;
   orderError = null;
   quoteHold = null;
@@ -136,7 +144,10 @@ beforeEach(async () => {
       api: async (req: Req) => {
         if (req.url.endsWith('/terms')) {
           if (termsFail) throw apiError(50000, '服务器内部错误');
-          return { version: 'TOS-TEST-1' };
+          // 契约形状：配了条款地址的服务端会带 urls（AJ-441 起结算页要求它在）
+          return termsNoUrl
+            ? { version: 'TOS-TEST-1' }
+            : { version: 'TOS-TEST-1', urls: TERMS_URLS };
         }
         if (req.url.endsWith('/addresses')) return [ADDR];
         if (req.url.endsWith('/orders/quote')) {
@@ -301,6 +312,18 @@ describe('结算页薄壳：闸门在每个时刻都完整（AJ-228）', () => {
     await settle();
   });
 
+  it('🔴 服务端没给条款地址（urls 缺失，AJ-441）：勾了同意也不放行，提交发不出去', async () => {
+    termsNoUrl = true;
+    call('onShow');
+    await settle();
+    call('onToggleTerms');
+    expect(gate().ok).toBe(false);
+    expect(gate().reason).toContain('取不到');
+    call('onSubmit');
+    await settle();
+    expect(posts).toHaveLength(0);
+  });
+
   it('🔴 条款版本没取到：闸门拦住并说明原因；不会把 vm 里给开发者看的报错摆到用户面前', async () => {
     termsFail = true;
     call('onShow');
@@ -443,7 +466,7 @@ describe('结算页薄壳：立即购买（4-4）', () => {
           },
         },
         api: async (req: Req) => {
-          if (req.url.endsWith('/terms')) return { version: 'TOS-TEST-1' };
+          if (req.url.endsWith('/terms')) return { version: 'TOS-TEST-1', urls: TERMS_URLS };
           if (req.url.endsWith('/addresses')) return [ADDR];
           if (req.url.endsWith('/orders/quote')) {
             posts.push(req);

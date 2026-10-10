@@ -59,6 +59,7 @@ const prodEnv: NodeJS.ProcessEnv = {
   CHECKOUT_BASE_URL: 'https://checkout.waselect.jp',
   CORS_ORIGINS: 'https://admin.waselect.jp',
   SENTRY_DSN: 'https://abc123@o1.ingest.sentry.io/42', // config 规则 9b：生产至少一个告警通道
+  SUPPORT_EMAIL: 'support@waselect.jp', // config 规则 9c：生产至少一种客服联系方式（AJ-441）
 };
 
 const KEY = 'img/probe/detail.webp';
