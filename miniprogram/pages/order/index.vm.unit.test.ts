@@ -185,3 +185,38 @@ describe('M-10（AJ-408）：页签视图与分页签空态', () => {
     expect(emptyState([], '网络请求失败', 'unpaid').showEmpty).toBe(false);
   });
 });
+
+describe('列表行的提示跟着售后状态走（三端联动模拟 2026-10-10，接 AJ-430 的 after_sale_state）', () => {
+  const row = (status: string, after_sale_state: unknown) =>
+    orderRows([
+      { order_id: 'ord-a', order_no: '261010-AAAAAA', status, total_jpy: 5450, after_sale_state },
+    ])[0];
+
+  it('🔴 已提交售后（open）：不再提示"可申请售后"，改说处理中——否则买家会再去申请一次', () => {
+    for (const s of ['shipped', 'delivered', 'completed']) {
+      const r = row(s, 'open');
+      expect(r?.nextText).toBe('售后申请处理中，结果会在订单详情回复。');
+      expect(r?.nextText).not.toContain('可进订单详情申请售后');
+      expect(r?.statusText).toBe(buyerStatus(s, { inList: true }).title);
+    }
+  });
+
+  it('🔴 售后已结案（closed）：提示去详情看结果', () => {
+    expect(row('delivered', 'closed')?.nextText).toBe('售后已有处理结果，可进订单详情查看。');
+  });
+
+  it('没有售后（null / 缺字段 / 脏值）：照旧用状态的列表提示', () => {
+    for (const v of [null, undefined, 'weird', 1]) {
+      expect(row('delivered', v)?.nextText).toBe(buyerStatus('delivered', { inList: true }).next);
+    }
+  });
+
+  it('退款类状态有售后也不改提示：退款进度比售后进度更要紧', () => {
+    expect(row('refunding', 'open')?.nextText).toBe(
+      buyerStatus('refunding', { inList: true }).next,
+    );
+    expect(row('refunded', 'closed')?.nextText).toBe(
+      buyerStatus('refunded', { inList: true }).next,
+    );
+  });
+});

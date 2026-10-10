@@ -39,6 +39,19 @@ function thumbUrl(image) {
 }
 
 /**
+ * 有售后申请时，列表行的提示改说售后进度（三端联动模拟 2026-10-10，用 AJ-430 起列表带的 `after_sale_state`）。
+ * @why 已送达 / 已完成的提示是"可进订单详情申请售后"——买家已经申请过还这么说，会让人再去申请一次（撞重复申请），
+ *      或以为上次没提交成功。
+ * @why 只改发货后三态：退款中 / 已退款的提示讲的是钱，比售后进度更要紧，不让售后盖掉它。
+ * @limitation `closed` 不分"已处理 / 未通过"——列表接口只给开着 / 结了两档，具体结果在详情页售后卡片里。
+ */
+const AFTER_SALE_LIST_HINTS = {
+  open: '售后申请处理中，结果会在订单详情回复。',
+  closed: '售后已有处理结果，可进订单详情查看。',
+};
+const AFTER_SALE_HINT_STATUSES = ['shipped', 'delivered', 'completed'];
+
+/**
  * `GET /orders` 的 items → 列表行。
  * @param {unknown} items 契约 `OrderSummary[]`
  * @returns {Array<{orderId: string, orderNo: string, totalJpy: number|null, totalText: string,
@@ -71,7 +84,11 @@ export function orderRows(items) {
         // ⚠️ 不在词表里的状态给 '状态未知' 而不是空串：
         //    空串在真机上就是一个空白的标签，用户无法区分"没状态"和"渲染错了"
         statusText: buyer.title,
-        nextText: buyer.next,
+        nextText:
+          AFTER_SALE_HINT_STATUSES.includes(status) &&
+          (o.after_sale_state === 'open' || o.after_sale_state === 'closed')
+            ? AFTER_SALE_LIST_HINTS[o.after_sale_state]
+            : buyer.next,
         canPay: PAYABLE.includes(status),
         createdText: jstDateTimeLabeled(o.created_at) ?? '',
         thumb: thumbUrl(o.first_image),
