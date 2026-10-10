@@ -11,7 +11,7 @@
  * @limitation 二：认不出的状态 → neutral + "未知状态"（与 statusText 同口径），不抛。
  * @see ../ui/badge.tsx；./view.ts（ORDER_STATUS_LABELS / isDisputeLocked）
  */
-import { ORDER_STATUS, type OrderStatus } from '@waselect/shared';
+import { AFTER_SALE_OPEN_STATUSES, ORDER_STATUS, type OrderStatus } from '@waselect/shared';
 import type { BadgeTone } from '../ui/badge.js';
 import { ORDER_STATUS_LABELS, isDisputeLocked } from './view.js';
 
@@ -64,7 +64,33 @@ export function detailBadges(order: unknown): BadgeSpec[] {
   if (s === 'paid' || s === 'shipped' || s === 'delivered' || s === 'completed') {
     out.push({ text: ORDER_STATUS_LABELS[s], tone: TONE[s] });
   }
-  return [...out, ...flagBadges(order)];
+  return [...out, ...flagBadges(detailFlags(order))];
+}
+
+/**
+ * 详情形状 → `flagBadges` 认的两个布尔（三端联动模拟 2026-10-10）。
+ * @why 详情接口（AdminOrder）不带列表行的 `user_blocked` / `after_sale_open`，同样的信息在 `customer.blocked`
+ *      与 `after_sales` 里。只认列表字段时，详情页加载完这两枚徽章就消失——运营从「待发货」点进拉黑用户的单，
+ *      页头只有"已付款 · 待发货"，照常发货。"进行中"取 shared 的 AFTER_SALE_OPEN_STATUSES（与服务端同源）。
+ */
+function detailFlags(order: unknown): unknown {
+  if (order === null || typeof order !== 'object') return order;
+  const o = order as {
+    user_blocked?: unknown;
+    after_sale_open?: unknown;
+    customer?: { blocked?: unknown } | null;
+    after_sales?: unknown;
+  };
+  const isOpen = (st: unknown): boolean =>
+    (AFTER_SALE_OPEN_STATUSES as readonly unknown[]).includes(st);
+  return {
+    ...o,
+    user_blocked: o.user_blocked === true || o.customer?.blocked === true,
+    after_sale_open:
+      o.after_sale_open === true ||
+      (Array.isArray(o.after_sales) &&
+        o.after_sales.some((a: { status?: unknown } | null) => isOpen(a?.status))),
+  };
 }
 
 /**

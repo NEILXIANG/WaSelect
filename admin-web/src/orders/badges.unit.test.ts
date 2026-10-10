@@ -69,6 +69,43 @@ describe('detailBadges（详情页头）', () => {
   });
 });
 
+describe('detailBadges：详情页也要有「用户已拉黑 / 售后中」（三端联动模拟 2026-10-10）', () => {
+  // 详情接口（AdminOrder）没有列表的 user_blocked / after_sale_open 两个布尔，信息在 customer.blocked 与 after_sales 里。
+  // 原先详情页头只认列表字段 → 加载完两枚徽章消失；运营从「待发货」点进拉黑用户的单，页头看不出，照常发了货
+  const texts = (o: unknown): string[] => detailBadges(o).map((b) => b.text);
+  it('🔴 customer.blocked → 用户已拉黑', () => {
+    expect(texts({ status: 'paid', customer: { user_id: 'u-1', blocked: true } })).toEqual([
+      '已付款',
+      '待发货',
+      '用户已拉黑',
+    ]);
+    expect(texts({ status: 'paid', customer: { user_id: 'u-1', blocked: false } })).toEqual([
+      '已付款',
+      '待发货',
+    ]);
+  });
+  it('🔴 after_sales 里有 open / processing → 售后中；只有已结案的 → 不出', () => {
+    const as = (status: string) => ({ id: 'a', status });
+    expect(texts({ status: 'delivered', after_sales: [as('resolved'), as('processing')] })).toEqual(
+      ['已付款', '已签收', '售后中'],
+    );
+    expect(texts({ status: 'delivered', after_sales: [as('open')] })).toContain('售后中');
+    expect(texts({ status: 'delivered', after_sales: [as('rejected')] })).not.toContain('售后中');
+    expect(texts({ status: 'delivered', after_sales: 'bad' })).not.toContain('售后中');
+  });
+  it('列表行形状（布尔字段）照旧生效，且同一枚不重复出两次', () => {
+    expect(
+      texts({
+        status: 'paid',
+        user_blocked: true,
+        customer: { blocked: true },
+        after_sale_open: true,
+        after_sales: [{ status: 'open' }],
+      }),
+    ).toEqual(['已付款', '待发货', '售后中', '用户已拉黑']);
+  });
+});
+
 describe('flagBadges：待处理标记（AJ-425）', () => {
   it('🔴 有进行中售后 → 售后中；下单人已拉黑 → 用户已拉黑；都没有 → 不出', () => {
     expect(flagBadges({ after_sale_open: true }).map((b) => b.text)).toEqual(['售后中']);
