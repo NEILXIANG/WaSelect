@@ -122,3 +122,39 @@ describe('自主决策记录（docs/自主决策记录.md）', () => {
     );
   });
 });
+
+/**
+ * §2「被实测推翻的判断」的条目编号（统一结论操作律 6：编号唯一性 lint）。
+ * @why 别处按号引用这些条目（CLAUDE.md「§2 第 8、9 条」「第 38 条」等）；同一个号出现两次，引用就指不清是哪一条。
+ * @why 历史上第 8–23 条重号了两轮（一组旧的、一组标 🆕）。**不改号**：改了会让已有的按号引用全部错位。
+ *      所以冻结成名单：这 16 个号每个最多出现两次；名单外的号必须唯一。缺号（52–56）允许——编号不回收。
+ * @limitation 只看表格第一列的号（去掉 🆕 和"-附"之类后缀前的数字部分作为同一号）；写在表格外的条目管不到。
+ */
+const SEC2_FROZEN_DUPLICATES = new Set(
+  // 不能再往里加：新增条目一律用新号（当前最大号 + 1）。这 16 个是 2026-10-09 实测的全部历史重号
+  Array.from({ length: 16 }, (_, i) => String(i + 8)),
+);
+
+function sec2Numbers(doc: string): string[] {
+  const a = doc.search(/^## 2\. 被实测推翻的判断/m);
+  const b = doc.indexOf('\n## 3.', a);
+  return doc
+    .slice(a, b)
+    .split('\n')
+    .map((line) => /^\|\s*([^|]+?)\s*\|/.exec(line)?.[1] ?? '')
+    .filter((c) => c !== '' && c !== '#' && !/^[-: ]+$/.test(c))
+    .map((c) => c.replace(/\s*🆕/gu, '').trim());
+}
+
+describe('§2 条目编号', () => {
+  it('🔴 编号唯一（冻结的历史重号除外，且每个最多两次）', () => {
+    const nums = sec2Numbers(readDoc());
+    expect(nums.length).toBeGreaterThan(100);
+    const count = new Map<string, number>();
+    for (const n of nums) count.set(n, (count.get(n) ?? 0) + 1);
+    const bad = [...count]
+      .filter(([n, c]) => (SEC2_FROZEN_DUPLICATES.has(n) ? c > 2 : c > 1))
+      .map(([n]) => n);
+    expect(bad, `§2 编号重复：${bad.join('、')}——新条目请用当前最大号 + 1`).toEqual([]);
+  });
+});

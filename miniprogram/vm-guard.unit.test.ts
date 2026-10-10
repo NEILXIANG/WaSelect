@@ -37,9 +37,13 @@ const NEW_DATE = /new\s+Date\s*\(/;
 /** "空断言"：expect 的实参是字面量（true / false / 数字 / 字符串）——断言的是常量，什么都没测。 */
 const TRIVIAL_EXPECT = /expect\s*\(\s*(?:true|false|-?\d+(?:\.\d+)?|'[^']*'|"[^"]*"|`[^`]*`)\s*\)/g;
 
-/** 剥掉注释与"空断言"之后，还有没有真正的 expect(...) 调用。 */
+/** "自证"：同一个变量 / 属性链和它自己比（`expect(v).toBe(v)`），永远成立（统一结论操作律 6）。 */
+const SELF_EXPECT =
+  /expect\s*\(\s*([\w$.]+)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*\1\s*\)/g;
+
+/** 剥掉注释、"空断言"与"自证"之后，还有没有真正的 expect(...) 调用。 */
 function hasRealAssertion(testSrc: string): boolean {
-  return /expect\s*\(/.test(testSrc.replace(TRIVIAL_EXPECT, ''));
+  return /expect\s*\(/.test(testSrc.replace(TRIVIAL_EXPECT, '').replace(SELF_EXPECT, ''));
 }
 
 /** 递归收所有 vm 文件。@see @limitation 三 */
@@ -77,7 +81,7 @@ describe('约束十一：页面 vm（*.vm.js）', () => {
    * @why `existsSync` 只证明"文件在"；空壳文件同样通过"文件存在"检查，却什么都没测——逻辑照样裸奔，而门禁是绿的。
    * @why 只找 `expect(` 字样挡不住 `expect(true).toBe(true)`（WorkBuddy 原补丁的写法，审计时发现）——
    *      先剥掉实参是字面量的"空断言"再找。
-   * @limitation 形态级：`expect(someConst).toBe(someConst)` 这类自证仍能绕过；那是刻意对抗，真要防再升级 AST。
+   * @limitation 形态级：`expect(v).toBe(v)` 这类同名自证已能识别（SELF_EXPECT）；换个别名（`const w = v; expect(v).toBe(w)`）仍能绕过——那是刻意对抗，真要防再升级 AST。
    */
   it('🔴 每个 vm 的配套单测文件里真的有断言（不是空壳）', () => {
     for (const vm of vmFiles) {
@@ -117,6 +121,16 @@ describe('约束十一：页面 vm（*.vm.js）', () => {
       hasRealAssertion("it('x', () => { expect(true).toBe(true); expect(1).toBe(1); });"),
     ).toBe(false);
     expect(hasRealAssertion("describe('x', () => {});")).toBe(false);
+    // 统一结论操作律 6：拿一个值和它自己比，永远成立——同样是空断言
+    expect(hasRealAssertion("it('x', () => { const v = rows(); expect(v).toBe(v); });")).toBe(
+      false,
+    );
+    expect(
+      hasRealAssertion(
+        "it('x', () => { expect(a.b).toEqual(a.b); expect(c).toStrictEqual( c ); });",
+      ),
+    ).toBe(false);
+    expect(hasRealAssertion("it('x', () => { const v = rows(); expect(v).toBe(w); });")).toBe(true);
     expect(hasRealAssertion("it('x', () => { expect(cartRows([])).toEqual([]); });")).toBe(true);
   });
 });
