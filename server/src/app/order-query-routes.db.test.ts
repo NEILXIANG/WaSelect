@@ -227,6 +227,35 @@ describe('AJ-430：GET /orders 列表行带售后状态', () => {
       await srv.close();
     }
   });
+
+  // 严格检查补测（2026-10-10）：真实形态"被驳回后再申请"——同一单一条 rejected + 一条 open；
+  // 以及 open / rejected 原值各自的归类。SQL 先判"进行中"再判"有任何申请"，顺序改坏时这条会红。
+  it('🔴 同一单"驳回后再申请"（rejected + open）→ open；只有 rejected → closed；只有 open → open', async () => {
+    const srv = await buildServer();
+    try {
+      const d = await createOrder(srv.url, 'as-reapply');
+      const e = await createOrder(srv.url, 'as-rejected');
+      const f = await createOrder(srv.url, 'as-open-only');
+      const [o] = await db`select user_id from orders where id = ${d}`;
+      const uid = String(o?.['user_id']);
+      await db`update orders set status = 'delivered' where id in ${db([d, e, f])}`;
+      await db`
+        insert into after_sale_requests (id, order_id, user_id, reason, description, status, created_at, updated_at)
+        values ('as-r1', ${d}, ${uid}, 'damaged', '第一次：外箱压扁', 'rejected', now() - interval '2 days', now() - interval '1 day'),
+               ('as-r2', ${d}, ${uid}, 'quality', '第二次：漏液了一半', 'open', now(), now()),
+               ('as-r3', ${e}, ${uid}, 'other', '不想要了', 'rejected', now(), now()),
+               ('as-r4', ${f}, ${uid}, 'wrong_item', '发错了口味', 'open', now(), now())`;
+      const r = await get(srv.url, '/api/v1/orders');
+      const byId = new Map(
+        (r.json['items'] as Array<Record<string, unknown>>).map((i) => [i['order_id'], i]),
+      );
+      expect(byId.get(d)?.['after_sale_state']).toBe('open');
+      expect(byId.get(e)?.['after_sale_state']).toBe('closed');
+      expect(byId.get(f)?.['after_sale_state']).toBe('open');
+    } finally {
+      await srv.close();
+    }
+  });
 });
 
 // AJ-435（契约 0.6.61，用户 2026-10-10 授权代决）：列表行带付款截止时刻 `expires_at`，小程序待付款行据此写明"几点前付款"。

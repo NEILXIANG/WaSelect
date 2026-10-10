@@ -109,7 +109,8 @@ export function toOrderSummary(
 
 /**
  * 买家列表行（契约 `OrderListItem`，0.6.49 / AJ-408）= OrderSummary + `item_count` + 可选 `first_image`
- * + 可选 `first_title`（0.6.54 / AJ-416 A8：首行快照标题；没有 / 空串 → 整键省略）。
+ * + 可选 `first_title`（0.6.54 / AJ-416 A8：首行快照标题；没有 / 空串 → 整键省略）
+ * + `after_sale_state`（0.6.60 / AJ-430：open / closed / null，恒下发）+ `expires_at`（0.6.61 / AJ-435：ISO，恒下发）。
  * @why 首图与详情行项目走**同一个** `toImageSet(images[0], imgBaseUrl)`：三种存储形态
  *      （image_id / 裸 URL / 三档对象）的处理只有一份，配不出 URL 时整键省略（不给空串、不给裸键）。
  */

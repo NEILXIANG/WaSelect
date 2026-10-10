@@ -442,9 +442,10 @@ export interface OrderListRow {
 }
 
 /**
- * 买家列表行 = 摘要 + 件数 + 第一行商品的现图（AJ-408 / 契约 0.6.49，M-11）。
+ * 买家列表行 = 摘要 + 件数 + 第一行商品的现图与快照标题 + 售后状态 + 付款截止（AJ-408 / AJ-416 / AJ-430 / AJ-435）。
  * @why 单独一个类型而不是往 `OrderListRow` 上加：`OrderListRow` 也是详情主行的基类，
- *      详情响应**不**带这两列（契约只加在列表行）。
+ *      件数 / 首图 / 首行标题 / 售后状态是列表行专有的（契约只加在 OrderListItem）；
+ *      `expires_at` 详情也有，但详情主行（OrderDetailRow）自己声明，这里为列表行单列一份。
  */
 export interface OwnedOrderListRow extends OrderListRow {
   /** 各行 qty 之和（"共 N 件"，不是行数）。 */
@@ -476,6 +477,8 @@ export interface OwnedOrderListRow extends OrderListRow {
  *      后者是"把别人的单给了这个用户"——过滤位置选错了就是越权读取。
  * @why 多状态用 `status in (…)`（AJ-408）：与管理端 `listAdminOrders` 同一写法；
  *      空数组不会走到这里（shared `parseOrderStatusList` 对空串返回 null → 路由 40001）。
+ * @why 售后状态两个 EXISTS（AJ-430）先判"进行中"再判"有任何申请"——顺序反了，"驳回后再申请"的单会被说成已结案；
+ *      两个都走 `idx_after_sale_requests_order (order_id, created_at)`（迁移 038），不扫全表。
  * @why 件数与首图用**相关子查询**而不是 join + group by：列表行只要"一个数 + 一张图"，
  *      join 会把每单的行项目全展开再折回来，还得为首图另写窗口函数；子查询各取所需，
  *      且 `order_items(order_id)` 有外键索引（db.db.test 结构不变量保证）。

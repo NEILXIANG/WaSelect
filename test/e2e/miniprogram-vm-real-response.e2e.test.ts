@@ -198,10 +198,14 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     expect(row?.thumb).toBe('https://img.example.com/knife.jpg');
     expect(row?.thumb).not.toBe(PLACEHOLDER_IMAGE);
     expect(row?.createdText).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}（日本时间）$/);
-    // AJ-435（契约 0.6.61）：真服务端列表行下发 expires_at，待付款行写出截止时刻
-    expect(row?.nextText).toMatch(
-      /^请在 \d{4}-\d{2}-\d{2} \d{2}:\d{2}（日本时间）前完成支付，超时订单会自动关闭。$/,
-    );
+    // AJ-435（契约 0.6.61）：真服务端列表行下发 expires_at，待付款行写出截止时刻。
+    // 严格检查补测（2026-10-10）：只验格式时 vm 误用 created_at 也会过——这里按同一行的 expires_at 独立换算日本时间，整句精确比对
+    const rawRow = (await list('all'))[0];
+    const exp = new Date(Date.parse(String(rawRow?.['expires_at'])) + 9 * 3600_000);
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    const jst = `${String(exp.getUTCFullYear())}-${pad(exp.getUTCMonth() + 1)}-${pad(exp.getUTCDate())} ${pad(exp.getUTCHours())}:${pad(exp.getUTCMinutes())}`;
+    expect(rawRow?.['expires_at']).not.toBe(rawRow?.['created_at']);
+    expect(row?.nextText).toBe(`请在 ${jst}（日本时间）前完成支付，超时订单会自动关闭。`);
 
     // ── 「我的」角标（M-10 附）：同一次全量列表本地分组 ──
     expect(orderShortcuts(await list('all')).map((s) => s.badge)).toEqual(['1', '', '', '']);
