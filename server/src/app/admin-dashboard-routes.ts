@@ -1,6 +1,7 @@
 /**
  * 职责：管理端工作台接口（AJ-393；管理后台对标分析第一批③）。
  *   GET /api/v1/admin/dashboard/sales    今日 + 近 7 日的销售统计（円为主）与当日生效 USD 汇率（辅显用）
+ *   GET /api/v1/admin/dashboard/funnel   转化漏斗：近 1 / 7 / 30 天六步人数（第 25 项，AJ-438；口径见 adapters/funnel.ts）
  *
  * @why 端点名是 **sales** 而不是 `overview` / `dashboard`：响应里只有销售统计与汇率，
  *      没有"待办计数"——后者由管理端复用现有列表接口的 `total` 拿到
@@ -39,6 +40,8 @@ import {
 } from '../adapters/dashboard.js';
 import { createOpsConfigRepo } from '../adapters/ops-config.js';
 import { jstDayWindow, type JstDayWindow } from '@waselect/shared';
+import { FUNNEL_STEPS, loadFunnel } from '../adapters/funnel.js';
+import { AppError } from '../errors.js';
 
 /** "近 7 天"含当日，共 7 个自然日（与工作台卡片上的文案必须一致）。 */
 const LAST7_DAYS = 7;
@@ -82,6 +85,19 @@ function windowView(w: JstDayWindow, s: SalesWindowStats): Record<string, unknow
   };
 }
 
+/**
+ * 漏斗窗口天数（第 25 项）：只收 1 / 7 / 30（与工作台"今日 / 近 7 天"、订单页"近 30 天"同一组档位）。
+ * @why 白名单而不是任意天数：任意天数会让一次请求扫全表（365 天、10000 天），且档位对不上别处的数字。
+ */
+const FUNNEL_DAYS = [1, 7, 30] as const;
+
+function parseFunnelDays(raw: unknown): number | null {
+  if (raw === undefined) return 7;
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  return (FUNNEL_DAYS as readonly number[]).includes(n) ? n : null;
+}
+
 export function mountAdminDashboardRoutes(app: Express, deps: AdminDashboardRoutesDeps): void {
   const guard = requireRole('admin', deps.auth, { identity: deps.identity });
   const opsConfig = createOpsConfigRepo(deps.db);
@@ -112,6 +128,27 @@ export function mountAdminDashboardRoutes(app: Express, deps: AdminDashboardRout
                   usd_effective_from: usd.effective_from.toISOString(),
                 },
               }),
+        });
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  app.get('/api/v1/admin/dashboard/funnel', guard, (req, res, next) => {
+    void (async () => {
+      try {
+        const days = parseFunnelDays(req.query['days']);
+        if (days === null) throw new AppError(40001, { field: 'days', reason: 'days_invalid' });
+        const now = deps.clock.now();
+        const win = jstDayWindow(now, days);
+        const counts = await loadFunnel(deps.db, win);
+        res.json({
+          generated_at: now.toISOString(),
+          days,
+          from: win.from.toISOString(),
+          to: win.to.toISOString(),
+          steps: FUNNEL_STEPS.map((key) => ({ key, visitors: counts[key] })),
         });
       } catch (e) {
         next(e);

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.61
+  version: 0.6.62
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,9 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.62（AJ-438：新增管理端只读端点，不影响任何已有调用）：
+      `GET /admin/dashboard/funnel?days=1|7|30`（默认 7）：转化漏斗六步人数——进店 → 看详情 → 有购买意向（加购或进结算）→ 进结算 → 发起支付 → 付款成功。
+      按人去重、逐步嵌套；付款成功以订单表为准（非测试单）。days 不在白名单 → 40001。口径唯一出处 server/src/adapters/funnel.ts。
     0.6.61（AJ-435：买家订单列表行增一个只读字段，老客户端忽略即可）：
       `OrderListItem.expires_at`：付款截止时刻（ISO 8601），与 `Order.expires_at` 同一列同一格式，恒下发（orders.expires_at NOT NULL）。
       小程序待付款行据此写明"几点前付款"——此前列表只说"请在截止时间前完成支付"，不说截止是几点；`GET /orders` 的查询语义不变。
@@ -1072,6 +1075,12 @@ paths:
       summary: 工作台销售统计（0.6.41 / AJ-393）——今日与近 7 日
       description: '只读聚合，供管理端首页工作台卡片使用。**一律排除测试单**（is_test）。窗口左闭右开、两端取 JST 日界，右端恒为"明日 00:00"（同一天内刷新数字不变，`today` ⊆ `last7` 恒成立）。`orders` 按 created_at 落窗；`paid_orders` / `sales_jpy` / `avg_jpy` 按 **paid_at** 落窗（sales_jpy = 窗口内收款订单的 total_jpy 合计，円）。`received` / `refunded` / `disputed` 按**实际扣款币种分行、原样不折算**（§8-2：这三个数要与支付机构对账）。`refunded` 的两个来源相加：全额退款只改订单状态机、不写 order_refunds，部分退款只取 succeeded 行且该单当前非 refunded（否则"先部分退 X 再全额退"时 X 被算两遍）。`disputed` 是机构报的 dispute_amount，按开案时间落窗。`fx` 为当日生效的 USD 展示汇率（含缓冲），**没有已生效汇率时整键省略**——前端据此不显示 ≈USD 那一行。'
       responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AdminSalesOverview'}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+  /admin/dashboard/funnel:
+    get:
+      summary: 工作台转化漏斗（0.6.62 / AJ-438）——近 1 / 7 / 30 天六步人数
+      description: '只读聚合。窗口左闭右开、两端取 JST 日界（同 /admin/dashboard/sales）。六步按人去重（有 user_id 用 user_id；没有的借同一设备 session 在窗口内登录过的 user_id；都没有算匿名设备），每一步只数上一步也到过的人；"有购买意向"= add_to_cart 或 checkout_enter（立即购买不经过购物车）；"付款成功"= pay_start 所带订单 paid_at 非空且非测试单。只看窗口内到没到过，不看先后顺序。'
+      parameters: [{name: days, in: query, required: false, schema: {type: integer, enum: [1, 7, 30], default: 7}}]
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/AdminFunnel'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /pay/channels:
     get:
       security: []
@@ -1178,6 +1187,7 @@ components:
     OrderNote: {type: object, description: '0.6.42：订单内部备注（迁移 034，append-only）', required: [id, author, body, created_at], properties: {id: {type: string}, author: {type: string, description: '恒为 admin:<id>'}, author_email: {type: string, description: '作者当前邮箱；取不到时省略'}, body: {type: string, maxLength: 1000}, created_at: {type: string, format: date-time}}}
     MoneyByCurrency: {type: object, description: '0.6.41：按币种分行的一笔钱。`amount` 恒为该币种的**最小单位**（JPY=円，USD=分），不折算、不跨币种相加', required: [currency, amount], properties: {currency: {type: string, description: 'ISO 4217，如 JPY / USD'}, amount: {type: integer}}}
     AdminSalesWindow: {type: object, description: '0.6.41：一个窗口（左闭右开，JST 日界）的销售统计', required: [from, to, orders, paid_orders, sales_jpy, received, refunded, disputed], properties: {from: {type: string, format: date-time, description: '含'}, to: {type: string, format: date-time, description: '不含；恒为某个 JST 日的 00:00（今日窗口的 to = 明日 00:00）'}, orders: {type: integer, description: '窗口内创建的订单数（不含测试单）'}, paid_orders: {type: integer, description: '窗口内收款的订单数（paid_at 落窗）'}, sales_jpy: {type: integer, description: '窗口内收款订单的 total_jpy 合计（円）'}, avg_jpy: {type: integer, nullable: true, description: '客单价（円，四舍五入）；窗口内零收款订单时为 **null 而不是 0**'}, received: {type: array, description: '实收：payments 的实扣金额，按扣款币种分行', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, refunded: {type: array, description: '已退：整单退款实际出账（charge − 已成功部分退款，按 refunded_at）+ 部分退款 succeeded 行（按落定时刻），按币种分行（0.6.43 订正）', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, disputed: {type: array, description: '拒付：机构报的 dispute_amount，按开案时间落窗', items: {$ref: '#/components/schemas/MoneyByCurrency'}}}}
+    AdminFunnel: {type: object, description: '0.6.62（AJ-438）：`GET /admin/dashboard/funnel` 的响应', required: [generated_at, days, from, to, steps], properties: {generated_at: {type: string, format: date-time}, days: {type: integer, enum: [1, 7, 30]}, from: {type: string, format: date-time}, to: {type: string, format: date-time}, steps: {type: array, description: '固定六项、固定顺序：visit / view_item / intent / checkout / pay_start / paid；后一步人数不大于前一步', items: {type: object, required: [key, visitors], properties: {key: {type: string, enum: [visit, view_item, intent, checkout, pay_start, paid]}, visitors: {type: integer, minimum: 0}}}}}}
     AdminSalesOverview: {type: object, description: '0.6.41：`GET /admin/dashboard/sales` 的响应', required: [generated_at, today, last7], properties: {generated_at: {type: string, format: date-time, description: '服务端取钟时刻；两个窗口共用它，故 today ⊆ last7'}, today: {$ref: '#/components/schemas/AdminSalesWindow'}, last7: {$ref: '#/components/schemas/AdminSalesWindow', description: '含当日在内的 7 个自然日'}, fx: {type: object, description: '当日生效的 USD 展示汇率（含缓冲），供前端把円折成 ≈USD 灰字辅显（§8-2）。**没有已生效汇率时整键省略**', required: [usd_rate, usd_effective_from], properties: {usd_rate: {type: number, description: '1 JPY = ? USD；与 `fx_rates.rate` 同值（raw_rate × (1 + buffer)）'}, usd_effective_from: {type: string, format: date-time}}}}}
     Banner: {allOf: [{$ref: '#/components/schemas/BannerInput'}, {type: object, properties: {id: {type: string}, image: {type: string, description: 'img.<domain> 完整 URL'}, updated_at: {type: string, format: date-time, description: '0.6.30：仅 GET /admin/banners 回显，作为 PUT 的 expected_updated_at'}}}]}
     Dispute: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, payment_id: {type: string}, dispute_id: {type: string}, dispute_status: {type: string, enum: [open, won, lost, withdrawn], description: 'withdrawn（0.6.13 / B1 AJ-193）= 机构撤回、未进入正式拒付（查询函 warning_closed / Radar prevented）：解除 has_dispute 限制、不计输赢。lost 是唯一保持限制的结案结果'}, dispute_amount: {type: integer, description: '**最小货币单位**（同 charge_amount）：3350 = $33.50（B43 / AJ-214）'}, charge_currency: {type: string}, opened_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time}}}

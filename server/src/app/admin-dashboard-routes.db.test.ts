@@ -683,3 +683,177 @@ describe('GET /api/v1/admin/dashboard/sales（AJ-393）', () => {
     }
   });
 });
+
+// ── 第 25 项（2026-10-10，AJ-438，契约 0.6.62）：转化漏斗 GET /admin/dashboard/funnel ─────────────
+// 口径：按"人"去重（有 user_id 用 user_id；没有的借同一设备 session 在窗口内登录过的 user_id；都没有算匿名设备），
+// 每一步只数"上一步也到过"的人；"有购买意向"= 加购 或 进结算（立即购买不经过购物车）；"付款成功"看 pay_start 那张单
+// 是否 paid_at 非空且不是测试单。
+async function seedEvent(e: {
+  user: string | null;
+  session: string;
+  event: string;
+  props?: Record<string, unknown>;
+  at: string;
+}): Promise<void> {
+  await db`
+    insert into user_events (user_id, session_id, event, props, created_at)
+    values (${e.user}, ${e.session}, ${e.event}, ${db.json((e.props ?? {}) as never)}, ${e.at})
+  `;
+}
+
+async function seedFunnelUsers(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    await db`insert into users (id, openid, email, is_admin) values (${id}, ${`o-${id}`}, null, false)
+             on conflict (id) do nothing`;
+  }
+}
+
+describe('AJ-438：GET /admin/dashboard/funnel 转化漏斗', () => {
+  it('🔴 七类真实路径 → 六步人数（按人去重、逐步嵌套、立即购买算意向、测试单与窗口外不算）', async () => {
+    await seedFunnelUsers(['u-a', 'u-b', 'u-d', 'u-e', 'u-g']);
+    const t = T_IN_TODAY;
+    // A：完整路径，已付款
+    await seedOrder({ id: 'o-a', totalJpy: 5000, status: 'paid', createdAt: t, paidAt: t });
+    for (const [ev, props] of [
+      ['page_view', { page: 'home' }],
+      ['page_view', { page: 'detail' }],
+      ['add_to_cart', { product_id: 'p-1' }],
+      ['checkout_enter', {}],
+      ['pay_start', { order_id: 'o-a', channel: 'mock' }],
+    ] as const)
+      await seedEvent({ user: 'u-a', session: 's-a', event: ev, props, at: t });
+    // B：登录前从分享链接直达详情（匿名），登录后立即购买 → 发起支付但没付
+    await seedOrder({ id: 'o-b', totalJpy: 3000, status: 'pending_payment', createdAt: t });
+    await seedEvent({
+      user: null,
+      session: 's-b',
+      event: 'page_view',
+      props: { page: 'detail' },
+      at: t,
+    });
+    await seedEvent({ user: 'u-b', session: 's-b', event: 'checkout_enter', at: t });
+    await seedEvent({
+      user: 'u-b',
+      session: 's-b',
+      event: 'pay_start',
+      props: { order_id: 'o-b' },
+      at: t,
+    });
+    // C：匿名只看首页
+    await seedEvent({
+      user: null,
+      session: 's-c',
+      event: 'page_view',
+      props: { page: 'home' },
+      at: t,
+    });
+    // D：首页 → 加购，没看过详情（嵌套：第 3 步不算）
+    await seedEvent({
+      user: 'u-d',
+      session: 's-d',
+      event: 'page_view',
+      props: { page: 'home' },
+      at: t,
+    });
+    await seedEvent({
+      user: 'u-d',
+      session: 's-d',
+      event: 'add_to_cart',
+      props: { product_id: 'p-1' },
+      at: t,
+    });
+    // E：看详情、发起支付且已付，但进结算在窗口外（嵌套：止于第 2 步）
+    await seedOrder({ id: 'o-e', totalJpy: 4000, status: 'paid', createdAt: t, paidAt: t });
+    await seedEvent({ user: 'u-e', session: 's-e', event: 'checkout_enter', at: T_OUTSIDE });
+    await seedEvent({
+      user: 'u-e',
+      session: 's-e',
+      event: 'page_view',
+      props: { page: 'detail' },
+      at: t,
+    });
+    await seedEvent({
+      user: 'u-e',
+      session: 's-e',
+      event: 'pay_start',
+      props: { order_id: 'o-e' },
+      at: t,
+    });
+    // G：完整路径，但付的是测试单（付款成功不算）
+    await seedOrder({
+      id: 'o-g',
+      totalJpy: 100,
+      status: 'paid',
+      createdAt: t,
+      paidAt: t,
+      isTest: true,
+    });
+    for (const [ev, props] of [
+      ['page_view', { page: 'detail' }],
+      ['add_to_cart', { product_id: 'p-2' }],
+      ['checkout_enter', {}],
+      ['pay_start', { order_id: 'o-g' }],
+    ] as const)
+      await seedEvent({ user: 'u-g', session: 's-g', event: ev, props, at: t });
+    // 窗口外：整条路径都在 7 天之前
+    await seedEvent({
+      user: null,
+      session: 's-old',
+      event: 'page_view',
+      props: { page: 'home' },
+      at: T_OUTSIDE,
+    });
+
+    const srv = await buildServer();
+    try {
+      const r = await get(srv.url, '/api/v1/admin/dashboard/funnel', await bearer());
+      expect(r.status).toBe(200);
+      expect(r.body['days']).toBe(7);
+      expect(r.body['from']).toBe(LAST7_FROM);
+      expect(r.body['to']).toBe(TODAY_TO);
+      expect(r.body['steps']).toEqual([
+        { key: 'visit', visitors: 6 },
+        { key: 'view_item', visitors: 4 },
+        { key: 'intent', visitors: 3 },
+        { key: 'checkout', visitors: 3 },
+        { key: 'pay_start', visitors: 3 },
+        { key: 'paid', visitors: 1 },
+      ]);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 days=1 只看今天；days 只收 1 / 7 / 30（其它 → 40001）；非管理员 → 403', async () => {
+    await seedEvent({
+      user: null,
+      session: 's-y',
+      event: 'page_view',
+      props: { page: 'home' },
+      at: T_YESTERDAY,
+    });
+    await seedEvent({
+      user: null,
+      session: 's-t',
+      event: 'page_view',
+      props: { page: 'home' },
+      at: T_IN_TODAY,
+    });
+    const srv = await buildServer();
+    try {
+      const today = await get(srv.url, '/api/v1/admin/dashboard/funnel?days=1', await bearer());
+      expect(today.body['from']).toBe(TODAY_FROM);
+      expect((today.body['steps'] as Array<{ visitors: number }>)[0]?.visitors).toBe(1);
+      const week = await get(srv.url, '/api/v1/admin/dashboard/funnel?days=7', await bearer());
+      expect((week.body['steps'] as Array<{ visitors: number }>)[0]?.visitors).toBe(2);
+      for (const bad of ['2', '0', 'abc', '7.5', '365']) {
+        const r = await get(srv.url, `/api/v1/admin/dashboard/funnel?days=${bad}`, await bearer());
+        expect([bad, r.status, r.body['code']]).toEqual([bad, 400, 40001]);
+      }
+      const user = await get(srv.url, '/api/v1/admin/dashboard/funnel', await bearer(false));
+      expect(user.status).toBe(403);
+    } finally {
+      await srv.close();
+    }
+  });
+});

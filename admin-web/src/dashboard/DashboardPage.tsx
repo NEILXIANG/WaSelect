@@ -27,6 +27,7 @@ import { toMinor, toRateInt } from '@waselect/shared';
 import { moneyText, minorMoneyText } from '../format.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { TodoBar } from '../orders/TodoBar.js';
+import { FunnelCard } from './FunnelCard.js';
 import {
   getSalesOverview,
   type AdminApi,
@@ -193,6 +194,9 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
           />
         </div>
       </section>
+
+      {/* 第 25 项（AJ-438）：转化漏斗——客人卡在哪一步 */}
+      <FunnelCard api={api} />
 
       <section className="panel">
         <h2 className="title">今日实收 / 已退 / 拒付</h2>

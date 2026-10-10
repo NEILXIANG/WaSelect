@@ -1424,3 +1424,43 @@ textarea::placeholder {
 .page-boundary {
   display: contents;
 }
+
+/*
+  工作台转化漏斗（第 25 项，AJ-438）：一行一步——名称 / 条 / 人数 / 比上一步。
+  条长由组件按第 1 步的百分比给（style width），颜色走主色容器，空的轨道用浅底，看得出"还剩多少"。
+*/
+.funnel {
+  list-style: none;
+  margin: var(--ws-space) 0;
+  padding: 0;
+  display: grid;
+  gap: var(--ws-space-sm);
+}
+
+.funnel-row {
+  display: grid;
+  /* 人数与比例两列定宽：第 1 步没有"比上一步"，列宽随内容走的话六条轨道右端对不齐 */
+  grid-template-columns: minmax(0, 14em) minmax(0, 1fr) 5em 8em;
+  align-items: center;
+  gap: var(--ws-space-sm);
+}
+
+.funnel-track {
+  display: block;
+  height: var(--ws-space);
+  border-radius: var(--md-shape-sm);
+  background: var(--md-color-surface-container-high);
+  overflow: hidden;
+}
+
+.funnel-bar {
+  display: block;
+  height: 100%;
+  background: var(--md-color-primary);
+}
+
+.funnel-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+}

@@ -68,3 +68,30 @@ export async function getSalesOverview(
   }
   return resp as unknown as SalesOverviewLike;
 }
+
+/** 转化漏斗（契约 AdminFunnel，0.6.62 / AJ-438）。 */
+export interface FunnelLike {
+  days: number;
+  from: string;
+  to: string;
+  steps: Array<{ key: string; visitors: number }>;
+}
+
+/**
+ * `GET /admin/dashboard/funnel?days=`（第 25 项）。
+ * @throws {ApiError} `steps` 不是数组（形状与契约不符）——缺步 / 乱序由 funnel-view 兜底补 0，这里只拦"根本不是漏斗"
+ */
+export async function getFunnel(
+  api: AdminApi,
+  days: 1 | 7 | 30,
+  traceId?: string,
+): Promise<FunnelLike> {
+  const resp = await api({
+    path: `/api/v1/admin/dashboard/funnel?days=${String(days)}`,
+    ...(traceId !== undefined ? { traceId } : {}),
+  });
+  if (!isRecord(resp) || !Array.isArray(resp['steps'])) {
+    throw new ApiError(NETWORK_ERROR_CODE, '漏斗统计响应形状与契约不符', traceId ?? '');
+  }
+  return resp as unknown as FunnelLike;
+}
