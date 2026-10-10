@@ -539,3 +539,25 @@ describe('detailView · 状态区提示跟着售后走（三端联动模拟 2026
     );
   });
 });
+
+describe('detailView · 改地址的出路（联动走查·熟手买家 2026-10-10）', () => {
+  it('🔴 已付款未发货：收货地址下说明"发货前改地址找客服"（买家端没有自助改址，管理端有「改址」）', () => {
+    expect(detailView({ status: 'paid' }).addressChangeHint).toBe(
+      '发货前需要改地址，请联系客服并提供订单号；发货后无法更改。',
+    );
+  });
+
+  it('其它状态不说：待付款可以取消重下，已发货之后已经改不了', () => {
+    for (const s of [
+      'created',
+      'pending_payment',
+      'shipped',
+      'delivered',
+      'completed',
+      'cancelled',
+      'refunded',
+    ]) {
+      expect(detailView({ status: s }).addressChangeHint).toBe('');
+    }
+  });
+});

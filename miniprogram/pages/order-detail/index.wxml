@@ -174,6 +174,8 @@
         <text class="ws-body line">{{view.address.line1}}</text>
         <text class="ws-body line" wx:if="{{view.address.line2}}">{{view.address.line2}}</text>
         <text class="ws-body line">{{view.address.region}}</text>
+        <!-- 联动走查·熟手买家：已付款未发货时说明改地址的出路（买家端没有自助改址） -->
+        <text class="ws-caption key-info line" wx:if="{{view.addressChangeHint}}">{{view.addressChangeHint}}</text>
       </view>
     </view>
 

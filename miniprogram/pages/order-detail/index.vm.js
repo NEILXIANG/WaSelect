@@ -285,6 +285,13 @@ export function detailView(order, opts = undefined) {
         ? o.tracking_url
         : '',
     timeline: timelineRows(o.timeline),
+    /**
+     * 改地址的出路（联动走查·熟手买家 2026-10-10）：只在"已付款、还没发货"时说。
+     * @why 买家端没有自助改址（管理端有「改址」，发货前可改）；付款后发现地址写错的买家在页面上找不到任何说法，
+     *      不知道还能不能改、找谁改。待付款的单可以取消重下，已发货的改不了，所以只在 paid 说。
+     */
+    addressChangeHint:
+      status === 'paid' ? '发货前需要改地址，请联系客服并提供订单号；发货后无法更改。' : '',
     /** 只在"已付款、还没发货"时说（剩余清单 4-10）：那是唯一可能因缺货而退款的阶段。 */
     stockRefundNote: status === 'paid' ? STOCK_REFUND_NOTE : '',
     /** 部分退款（P2-12）：成功 / 处理中；服务端已滤掉失败的那几笔。 */
