@@ -32,7 +32,16 @@ describe('支付页按钮档位（AJ-431）', () => {
     const view = buttonWith('text="查看订单"');
     expect(view).not.toContain('type="primary"');
     expect(view).toContain(
-      `type="{{channels.length > 0 || goHome || payUrl ? 'default' : 'primary'}}"`,
+      `type="{{channels.length > 0 || goHome || payUrl || contactSupport ? 'default' : 'primary'}}"`,
     );
+  });
+});
+
+describe('账号被拉黑的关闭屏（联动走查·跨角色 2026-10-10）', () => {
+  it('🔴 关闭屏里有「联系客服」主按钮，只在 contactSupport 时出现，点击走 onContact', () => {
+    const contact = buttonWith('text="联系客服"');
+    expect(contact).toContain('type="primary"');
+    expect(contact).toContain('bindtap="onContact"');
+    expect(wxml).toMatch(/wx:if="\{\{contactSupport\}\}"[\s\S]{0,200}text="联系客服"/);
   });
 });

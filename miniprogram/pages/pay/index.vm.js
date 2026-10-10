@@ -196,6 +196,27 @@ export function closedScreen(view) {
     // 扫描 W-02 / W-03：倒计时与上一次支付结果同样作废——"已付款"旁边不能挂着"请在 12 分 34 秒内完成支付"或"支付未完成"
     countdown: '',
     payResult: '',
+    // 联动走查（2026-10-10）：只有"账号被拉黑"这一种关闭屏给「联系客服」，其它关闭屏都把它清掉
+    contactSupport: false,
+  };
+}
+
+/** 账号被拉黑时关闭屏的说明（没扣款要说清：买家第一个担心的是钱）。 */
+export const BLOCKED_CLOSED_TEXT =
+  '账号已被限制使用，这笔订单无法支付（没有扣款）；如有疑问请联系客服';
+/**
+ * 账号被拉黑（40301）时支付页的关闭屏（联动走查·跨角色 2026-10-10）。
+ * @why 拉黑会立即取消该用户未付款的订单，但停在支付页的买家仍看到倒计时与支付按钮，点了报"账号已被限制使用"、
+ *      按钮却是「重试」——永远不会成功。这里换成关闭屏：收起支付方式与倒计时，说明没扣款，给「联系客服」。
+ * @why 不重查订单：被拉黑的账号 `GET /orders/{id}` 也是 40301，重查只会再报一次错。
+ * @returns 直接喂给 setData 的形状（含清空 error，免得错误卡片与关闭屏两处各说一遍）
+ */
+export function blockedScreen() {
+  return {
+    ...closedScreen({ closedText: BLOCKED_CLOSED_TEXT, goHome: false }),
+    contactSupport: true,
+    error: '',
+    errorRef: '',
   };
 }
 

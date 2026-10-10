@@ -348,6 +348,7 @@ describe('closedScreen：订单已不需要支付时要清掉的全部内容（A
       // 扫描 W-02 / W-03：关单屏还要清掉倒计时与上一次支付结果（否则"已付款"旁边挂着"请在 12 分 34 秒内完成支付"）
       countdown: '',
       payResult: '',
+      contactSupport: false,
     });
   });
 

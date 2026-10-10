@@ -44,7 +44,7 @@
 import { CHARGE_CURRENCY_ORDER, chargeOptions, payNotice, payPlan } from '../../utils/pay-plan.js';
 import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
-import { errorFields } from '../../utils/error-text.js';
+import { contactFields, errorFields } from '../../utils/error-text.js';
 import { countdownText } from '../../utils/countdown.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -57,6 +57,7 @@ import {
   afterIntent,
   cashierAbandonReason,
   channelCountry,
+  blockedScreen,
   closedScreen,
   copyResult,
   leavesAfterAuto,
@@ -85,6 +86,8 @@ const ORDER_DETAIL_PAGE = '/pages/order-detail/index';
  *      switchTab 同样会把支付页移出返回栈。（复核 2026-10-06 订正原"用 redirectTo"。）
  */
 const HOME_PAGE = '/pages/home/index';
+/** 「我的」（tab 页）：客服联系方式在那里（账号被拉黑时的出口）。 */
+const USER_PAGE = '/pages/user/index';
 
 Page({
   data: {
@@ -96,6 +99,8 @@ Page({
     notice: [],
     /** 订单已不可支付时的说明（空串 = 正常列通道；B35 / AJ-218）。 */
     closedText: '',
+    /** 账号被拉黑的关闭屏：给「联系客服」。 */
+    contactSupport: false,
     /** 没付成时才为真：给一个"去首页重新下单"的出口（MP3-01；文案与按钮必须同生共死）。 */
     goHome: false,
     /** 订单合计（JPY 整数）；null = 还没拿到。 */
@@ -211,7 +216,9 @@ Page({
       });
     } catch (e) {
       if (isStale(seq, this.loadSeq)) return;
-      this.setData({ ...errorFields(e) });
+      // 账号被拉黑（40301）：不是"取失败了再试试"，是这笔单付不了——换关闭屏 + 联系客服（联动走查 2026-10-10）
+      if (contactFields(e).errorContact) this.setData(blockedScreen());
+      else this.setData({ ...errorFields(e) });
     } finally {
       // 过期请求不能把 loading 清掉（新的还在途中）
       if (!isStale(seq, this.loadSeq)) this.setData({ loading: false });
@@ -384,7 +391,9 @@ Page({
       });
       this.run(intent);
     } catch (err) {
-      this.setData({ ...errorFields(err) });
+      // 账号被拉黑（40301）：未付款订单已被取消，换关闭屏 + 联系客服，不留"重试"（联动走查 2026-10-10）
+      if (contactFields(err).errorContact) this.setData(blockedScreen());
+      else this.setData({ ...errorFields(err) });
       track(app, 'pay_abandon', { order_id: this.orderId, reason: 'fail' });
       // P2-40：40902 / 40904 多半是这张单已经付了或关了——重查一次，由 payPageView 决定换不换关闭屏
       if (recheckAfterPayError(err?.code)) void this.checkStatus();
@@ -479,6 +488,11 @@ Page({
   /** 错误态 / 无通道空态的"重试"（剩余清单 4-8）：重新取订单与通道。 */
   onRetry() {
     void this.load();
+  },
+
+  /** 账号被拉黑时的出口：「我的」页有客服联系方式（联动走查 2026-10-10）。 */
+  onContact() {
+    wxApi.switchTab({ url: USER_PAGE });
   },
 
   onCopy() {

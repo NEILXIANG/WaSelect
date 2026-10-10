@@ -49,6 +49,10 @@ let expiresAt: string;
 let country: string;
 /** 非空 = `POST /orders/{id}/pay` 抛这个错（P2-40）。 */
 let postError: (Error & { code?: number }) | null;
+/** 非空 = `GET /orders/{id}` 抛这个错（联动走查：账号被拉黑 → 40301）。 */
+let orderFetchError: (Error & { code?: number }) | null;
+/** `wx.switchTab` 的落点（联系客服去「我的」）。 */
+let tabs: string[];
 
 const ORDER_ID = 'o-1';
 
@@ -90,7 +94,12 @@ beforeEach(async () => {
   expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
   country = 'US';
   postError = null;
+  orderFetchError = null;
+  tabs = [];
   vi.stubGlobal('wx', {
+    switchTab: (o: { url: string }) => {
+      tabs.push(o.url);
+    },
     setClipboardData: (o: { data: string; success?: () => void }) => {
       clipboard.push(o.data);
       o.success?.();
@@ -137,6 +146,7 @@ beforeEach(async () => {
           return { payload: { pay_url: `https://pay.test/o/link-${String(linkSeq)}` } };
         }
         if (failOrderFetch) throw new Error('network down');
+        if (orderFetchError !== null) throw orderFetchError;
         if (orderHold !== null) return orderHold.promise;
         return order();
       },
@@ -537,5 +547,47 @@ describe('支付页：发起被拒后重查订单（P2-40）', () => {
     await settle();
     expect(page.data['error']).not.toBe('');
     expect(orderFetches()).toBe(before);
+  });
+});
+
+// 联动走查·跨角色（2026-10-10）：买家停在支付页时被运营拉黑——拉黑会立即取消未付款订单，
+// 但支付页仍挂着倒计时与支付按钮，点了报"账号已被限制使用"、按钮却是「重试」，永远不会成功。
+describe('账号被拉黑（40301）：支付页换成关闭屏 + 联系客服', () => {
+  const blocked = () => Object.assign(new Error('无权限'), { code: 40301 });
+
+  it('🔴 发起支付回 40301 → 收起支付方式与倒计时，说明原因，给「联系客服」；点它去「我的」', async () => {
+    expect(page.data['channels']).toHaveLength(1);
+    postError = blocked();
+    tapChannel('stripe');
+    await settle();
+    expect(page.data['channels']).toEqual([]);
+    expect(page.data['countdown']).toBe('');
+    expect(page.data['closedText']).toBe(
+      '账号已被限制使用，这笔订单无法支付（没有扣款）；如有疑问请联系客服',
+    );
+    expect(page.data['contactSupport']).toBe(true);
+    expect(page.data['error']).toBe('');
+    call('onContact');
+    expect(tabs).toEqual(['/pages/user/index']);
+  });
+
+  it('🔴 进页取订单就回 40301 → 直接是同一个关闭屏（不显示"重试"）', async () => {
+    orderFetchError = blocked();
+    call('onLoad', { orderId: ORDER_ID });
+    await settle();
+    expect(page.data['closedText']).toBe(
+      '账号已被限制使用，这笔订单无法支付（没有扣款）；如有疑问请联系客服',
+    );
+    expect(page.data['contactSupport']).toBe(true);
+    expect(page.data['error']).toBe('');
+    expect(page.data['channels']).toEqual([]);
+  });
+
+  it('其它支付错误不受影响：仍是错误提示 + 支付方式还在', async () => {
+    postError = Object.assign(new Error('服务器内部错误'), { code: 50000 });
+    tapChannel('stripe');
+    await settle();
+    expect(page.data['contactSupport']).toBe(false);
+    expect(page.data['channels']).toHaveLength(1);
   });
 });

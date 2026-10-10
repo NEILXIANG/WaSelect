@@ -98,6 +98,10 @@
       <view class="cta-inner" wx:if="{{goHome}}">
         <ws-button text="去首页重新下单" type="primary" bindtap="onGoHome" />
       </view>
+      <!-- 账号被拉黑（40301）：出口是客服，不是重试（联动走查 2026-10-10） -->
+      <view class="cta-inner" wx:if="{{contactSupport}}">
+        <ws-button text="联系客服" type="primary" bindtap="onContact" />
+      </view>
     </view>
   </view>
 
@@ -168,10 +172,10 @@
       type="default"
       bindtap="onRefreshPaid"
     />
-    <!-- AJ-431：页面上有更该做的事（付款 / 重新下单 / 复制链接）时描边，否则实心——每屏只留一个实心主按钮 -->
+    <!-- AJ-431：页面上有更该做的事（付款 / 重新下单 / 复制链接 / 联系客服）时描边，否则实心——每屏只留一个实心主按钮 -->
     <ws-button
       text="查看订单"
-      type="{{channels.length > 0 || goHome || payUrl ? 'default' : 'primary'}}"
+      type="{{channels.length > 0 || goHome || payUrl || contactSupport ? 'default' : 'primary'}}"
       bindtap="onViewOrders"
     />
   </view>
