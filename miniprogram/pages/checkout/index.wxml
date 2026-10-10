@@ -18,7 +18,7 @@
     title="有一步没有完成"
     reason="{{error}}"
     refText="{{errorRef}}"
-    actionText="重新加载"
+    actionText="{{productGone ? goneActionText : '重新加载'}}"
     compact="{{true}}"
     bindaction="onRetry"
   />

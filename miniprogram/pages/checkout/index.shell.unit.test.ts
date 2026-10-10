@@ -610,3 +610,24 @@ describe('结算页薄壳：只移除买走的（A3，AJ-416）', () => {
     expect(removedIds).toEqual(['p-1']);
   });
 });
+
+describe('商品已下架：错误态按钮换成走得通的出口（联动走查·跨角色 2026-10-10）', () => {
+  it('🔴 报价回 40401 → productGone；按钮是「回购物车调整」，点了切到购物车、不再重报价', async () => {
+    quoteFail = true;
+    call('onLoad');
+    call('onShow');
+    await settle();
+    expect(page.data['productGone']).toBe(true);
+    expect(gate().reason).toBe('有商品已下架，请回购物车删掉它再结算');
+    expect(page.data['goneActionText']).toBe('回购物车调整');
+    switches.length = 0;
+    call('onRetry');
+    await settle();
+    expect(switches).toEqual(['/pages/cart/index']);
+  });
+
+  it('报价成功 → productGone 为假，错误态（若有）仍是「重新加载」', async () => {
+    await ready();
+    expect(page.data['productGone']).toBe(false);
+  });
+});

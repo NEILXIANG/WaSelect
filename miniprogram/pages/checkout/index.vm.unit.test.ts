@@ -23,6 +23,7 @@ import {
   orderBody,
   recoveryFor,
   resolveAddressId,
+  goneExit,
   submitGate,
 } from './index.vm.js';
 import { namedItemError } from './index.vm.js';
@@ -447,5 +448,46 @@ describe('立即购买模式的失败文案（审查 2026-10-09）', () => {
       '报价失败，请返回商品页后重试',
     );
     expect(submitGate({ ...OK, quoteFailed: true }).reason).toContain('返回购物车');
+  });
+});
+
+// 联动走查·跨角色（2026-10-10）：买家停在结算页时运营下架了商品——提交得 40401，重报价也是 40401，
+// 页面只给「重新加载」、底部说"请返回商品页后重试"，两条都走不通（商品页也是"已下架"）。
+describe('商品已下架（报价 / 建单 40401）：给走得通的出口', () => {
+  it('🔴 立即购买 → 回首页看其它商品；购物车结算 → 回购物车删掉它', () => {
+    expect(goneExit(true)).toEqual({
+      actionText: '回首页看看其它商品',
+      hint: '这件商品已下架，请回首页看看其它商品',
+      target: 'home',
+    });
+    expect(goneExit(false)).toEqual({
+      actionText: '回购物车调整',
+      hint: '有商品已下架，请回购物车删掉它再结算',
+      target: 'cart',
+    });
+  });
+
+  it('🔴 闸门：商品已下架时说下架，不说"报价失败请重试"', () => {
+    const base = {
+      itemCount: 1,
+      addressId: 'a-1',
+      termsAccepted: true,
+      termsReady: true,
+      quoteFailed: true,
+      productGone: true,
+    };
+    expect(submitGate({ ...base, buyNow: true }).reason).toBe(
+      '这件商品已下架，请回首页看看其它商品',
+    );
+    expect(submitGate({ ...base, buyNow: false }).reason).toBe(
+      '有商品已下架，请回购物车删掉它再结算',
+    );
+    expect(submitGate({ ...base, productGone: false, buyNow: true }).reason).toBe(
+      '报价失败，请返回商品页后重试',
+    );
+    // 没勾条款、没选地址时也先说下架：买不了的东西不该先让人去勾条款
+    expect(submitGate({ itemCount: 1, productGone: true, buyNow: true }).reason).toBe(
+      '这件商品已下架，请回首页看看其它商品',
+    );
   });
 });

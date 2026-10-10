@@ -48,10 +48,30 @@ export function itemRows(items) {
  * @why 返回**原因**而不是只给 ok：禁用但不说为什么的按钮会被读成"这站坏了"，
  *      而原因文案必须由逻辑给（wxml 里写死一串 `wx:if` 会让四条判断各漂移一次）。
  */
+/**
+ * 商品已下架或不存在（报价 / 建单 40401）时的出口（联动走查·跨角色 2026-10-10）。
+ * @why 运营在买家结算途中下架了商品：提交得 40401、重报价还是 40401，原先只给「重新加载」、底部说"请返回商品页后重试"——
+ *      两条都走不通（商品页也显示已下架）。立即购买就回首页挑别的；从购物车来就回购物车把它删掉。
+ * @param {unknown} buyNow 是否"立即购买"进来的
+ * @returns {{actionText: string, hint: string, target: 'home'|'cart'}}
+ */
+export function goneExit(buyNow) {
+  return buyNow === true
+    ? {
+        actionText: '回首页看看其它商品',
+        hint: '这件商品已下架，请回首页看看其它商品',
+        target: 'home',
+      }
+    : { actionText: '回购物车调整', hint: '有商品已下架，请回购物车删掉它再结算', target: 'cart' };
+}
+
 export function submitGate(state) {
   const s = state && typeof state === 'object' ? state : {};
   if (!Number.isInteger(s.itemCount) || s.itemCount < 1)
     return { ok: false, reason: '购物车是空的' };
+  // 商品已下架（40401）排在地址 / 条款之前：买不了的东西，先让人勾条款再告诉他买不了是白折腾；
+  // 也不说"报价失败请重试"——重试不会好（联动走查 2026-10-10）
+  if (s.productGone === true) return { ok: false, reason: goneExit(s.buyNow).hint };
   if (typeof s.addressId !== 'string' || s.addressId === '')
     return { ok: false, reason: '请选择收货地址' };
   if (s.termsFailed === true) return { ok: false, reason: '购买条款暂时取不到，请稍后再试' };

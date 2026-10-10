@@ -29,13 +29,14 @@ import {
   checkoutItems,
   clearsCartAfterOrder,
   contactEmailOf,
+  goneExit,
   itemRows,
   keyAction,
+  namedItemError,
   orderBody,
   recoveryFor,
   resolveAddressId,
   submitGate,
-  namedItemError,
 } from './index.vm.js';
 import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { addressSummary, defaultAddressId } from '../../utils/address-form.js';
@@ -70,6 +71,8 @@ const LEGAL_PAGE = '/pages/legal/index';
 const ORDER_PAGE = '/pages/order/index';
 /** 首页（tab 页，剩余清单 4-8 空态出口）。 */
 const HOME_PAGE = '/pages/home/index';
+/** 购物车（tab 页）：商品已下架时回这里删掉它（联动走查 2026-10-10）。 */
+const CART_PAGE = '/pages/cart/index';
 /**
  * 上次下单用的联系邮箱（A5，AJ-416）：再次结算时自动填上。
  * @why 邮箱是必填（M-01），每单重输一遍是纯摩擦；只在**下单成功后**记——填错被拦下的不记。
@@ -103,6 +106,9 @@ Page({
     termsFailed: false,
     /** 报价失败（与"报价还没回来"分开：失败不会再有结果，AJ-228）。 */
     quoteFailed: false,
+    /** 报价 / 建单回 40401（商品已下架）：错误态按钮换成去首页 / 购物车。 */
+    productGone: false,
+    goneActionText: '',
     /**
      * M-16（AJ-406）：扣款币种预告（utils/pay-plan.js `chargePreview`）；空数组 = 不显示。
      * @why 円是主显示（D-32 / D-69，AJ-402 Q3），银行卡却以美元扣——此前实扣美元金额要到支付页才看到。
@@ -310,7 +316,7 @@ Page({
       });
       if (isStale(seq, this.quoteSeq)) return;
       this.quoteRaw = res !== null && typeof res === 'object' ? res : null;
-      this.setData({ quote: quoteView(res), quoteFailed: false });
+      this.setData({ quote: quoteView(res), quoteFailed: false, productGone: false });
     } catch (e) {
       if (isStale(seq, this.quoteSeq)) return;
       const named = namedItemError(e, items, { buyNow: this.mode === BUY_NOW_MODE }); // U9：点名是哪一件
@@ -318,6 +324,9 @@ Page({
       this.setData({
         quote: null,
         quoteFailed: true,
+        // 40401 = 商品已下架或不存在：重试不会好，错误态按钮换成去首页 / 购物车（联动走查 2026-10-10）
+        productGone: e?.code === 40401,
+        goneActionText: goneExit(this.mode === BUY_NOW_MODE).actionText,
         ...errorFields(e),
         ...(named !== '' ? { error: named } : {}),
       });
@@ -341,6 +350,7 @@ Page({
       termsReady: this.data.termsVersion !== '',
       termsFailed: this.data.termsFailed === true,
       quoteFailed: this.data.quoteFailed === true,
+      productGone: this.data.productGone === true,
     });
     this.setData({ gate });
   },
@@ -510,6 +520,13 @@ Page({
    */
   onRetry() {
     if (this.data.submitting === true) return;
+    // 商品已下架：重报价不会好——立即购买回首页，购物车结算回购物车删掉它（联动走查 2026-10-10）
+    if (this.data.productGone === true) {
+      if (goneExit(this.mode === BUY_NOW_MODE).target === 'home')
+        wxApi.switchTab({ url: HOME_PAGE });
+      else wxApi.switchTab({ url: CART_PAGE });
+      return;
+    }
     void this.refresh();
   },
 
