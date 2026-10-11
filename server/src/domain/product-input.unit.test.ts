@@ -65,6 +65,25 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     expect(v.stock).toBeUndefined();
   });
 
+  // AJ-490（三端模拟测试 2026-10-11，用户截图指出）：后台列表里商品名显示成「<b>加粗</b> 测试 <script>alert(1)</script> 抹茶」——
+  //   转义是对的（不会执行），但这串符号买家会原样看到；运营从网页复制商品名时最容易带进来。录入时就拦
+  it('🔴 买家看得到的文字字段里有网页标签 → html_not_allowed（逐字段报）；"<5cm""a < b" 这类正常文字不拦', () => {
+    for (const field of ['title', 'title_ja', 'description', 'why', 'maker'] as const) {
+      const r = validateProductInput({ ...base(), [field]: '抹茶 <b>限定</b>' }, 180_000);
+      expect(r.ok, field).toBe(false);
+      if (!r.ok) expect(r.errors, field).toContainEqual({ field, reason: 'html_not_allowed' });
+    }
+    const tags = validateProductInput(
+      { ...base(), tags: ['产地直送', '<script>alert(1)</script>'] },
+      180_000,
+    );
+    expect(tags.ok).toBe(false);
+    if (!tags.ok) expect(tags.errors).toContainEqual({ field: 'tags', reason: 'html_not_allowed' });
+    for (const fine of ['杯口直径 <5cm', '甜度 a < b 也行', '3>2 的口感', '<<限定>>']) {
+      expect(validateProductInput({ ...base(), title: fine }, 180_000).ok, fine).toBe(true);
+    }
+  });
+
   it('非对象 / null → 拒绝（reason: not_object）', () => {
     expect(reasons(null)).toContain('not_object');
     expect(reasons('x')).toContain('not_object');

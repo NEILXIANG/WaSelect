@@ -80,6 +80,7 @@ export function ProductMainColumn(p: MainColumnProps) {
           multiline
           value={form.description}
           onChange={(v) => set('description', v)}
+          error={errors['description'] ?? ''}
         />
         {/* 编辑口径（020）：印在买家卡片上的内容，与侧栏的合规标签不是一回事 */}
         <Field

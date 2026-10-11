@@ -508,6 +508,18 @@ export function productFormErrors(form: unknown): {
   if (f.editorialTags.some((t) => t.trim() === ''))
     errors['editorialTags'] = '编辑标签不能有空标签（会被服务端判定为非法值）';
 
+  // AJ-490：买家看得到的文字里不收网页代码（与服务端 product-input.ts 的 HTML_TAG 同口径；先报出来，不等服务端拒）
+  for (const [k, v] of [
+    ['title', f.title],
+    ['titleJa', f.titleJa],
+    ['description', f.description],
+    ['editorialWhy', f.editorialWhy],
+    ['editorialMaker', f.editorialMaker],
+    ['editorialTags', f.editorialTags.join(' ')],
+  ] as const) {
+    if (errors[k] === undefined && HTML_TAG.test(v)) errors[k] = HTML_TEXT;
+  }
+
   // 报关品名敏感词（D-51：会被美国 FDA 当成功效宣称 / OTC 药品）
   const lower = f.customsDescEn.toLowerCase();
   const hit = BLOCKED_CUSTOMS_WORDS.filter((w) => lower.includes(w));
@@ -709,6 +721,11 @@ const SERVER_FIELDS: Readonly<Record<string, { key: string; label: string }>> = 
   images: { key: 'images', label: '图片' },
 };
 
+/** 网页标签（与服务端 product-input.ts `HTML_TAG` 同一条正则：< 后紧跟字母或 /）。 */
+const HTML_TAG = /<\/?[A-Za-z][^<>]*>/;
+const HTML_TEXT =
+  '含有网页代码（如 <b>、<br>、<script>），买家会原样看到这些符号——请删掉，只留文字';
+
 /** 服务端原因码（server/src/domain/product-input.ts 的 fail(...)）→ 怎么改。认不出的走通用说法。 */
 const SERVER_REASONS: Readonly<Record<string, string>> = {
   price_too_large: '售价超过单笔订单上限，买家无法下单——请调低售价',
@@ -722,6 +739,7 @@ const SERVER_REASONS: Readonly<Record<string, string>> = {
   title_too_long: '商品名太长（最多 255 字）',
   title_ja_too_long: '日文原名太长（最多 255 字）',
   image_invalid: '有图片地址无效，请删掉后重新上传',
+  html_not_allowed: HTML_TEXT,
 };
 
 /**

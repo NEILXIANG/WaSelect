@@ -762,3 +762,39 @@ describe('titleLengthHint：标题过长的非阻断提示', () => {
     expect(titleLengthHint('🍵'.repeat(60))).toBe('');
   });
 });
+
+// AJ-490（用户截图指出）：商品名「<b>加粗</b> 测试 <script>alert(1)</script> 抹茶」——买家会原样看到这串符号
+describe('网页标签预检（与服务端 html_not_allowed 同口径）', () => {
+  const base = (): ReturnType<typeof productFormModel> => productFormModel(PRODUCT);
+
+  it('🔴 买家看得到的文字字段含 <b> / <script> → 对应输入框报错并说清怎么改；"<5cm" 不拦', () => {
+    const r = productFormErrors({
+      ...base(),
+      title: '<b>加粗</b> 抹茶',
+      titleJa: '抹茶 <br>',
+      description: '<img src=x>',
+      editorialWhy: '<i>好喝</i>',
+      editorialMaker: '<span>宇治</span>',
+      editorialTags: ['<b>限定</b>'],
+    });
+    for (const k of [
+      'title',
+      'titleJa',
+      'description',
+      'editorialWhy',
+      'editorialMaker',
+      'editorialTags',
+    ]) {
+      expect(r.errors[k], k).toContain('网页代码');
+    }
+    expect(
+      productFormErrors({ ...base(), title: '杯口直径 <5cm' }).errors['title'],
+    ).toBeUndefined();
+  });
+
+  it('服务端 html_not_allowed 也翻成同一句人话', () => {
+    expect(
+      serverFieldError({ field: 'title', reason: 'html_not_allowed', count: 1 })?.text,
+    ).toContain('网页代码');
+  });
+});

@@ -240,6 +240,15 @@ function readImages(v: unknown): readonly ProductImageEntry[] | 'invalid' {
  *
  * @returns 通过时 `value` 是白名单字段的归一化对象；不通过时 `errors` 含**全部**问题。
  */
+/**
+ * 网页标签（`<b>` / `</b>` / `<script>` / `<img …>`）：买家看得到的文字字段里一律不收（AJ-490）。
+ * @why 三端模拟测试 2026-10-11（用户截图指出）：后台列表里商品名是「<b>加粗</b> 测试 <script>alert(1)</script> 抹茶」——
+ *      渲染端都按文字转义了（不会执行），但这串符号买家会原样看到；运营从网页复制商品名时最容易带进来。
+ *      安全靠的仍是渲染端转义，这里拦的是"给买家看的字不该有代码"。
+ * @limitation 只认"< 后紧跟字母或 /"的写法：「<5cm」「a < b」「<<限定>>」照收；`&lt;b&gt;` 这种实体写法不拦（它显示出来就是 <b>，但极少有人这样贴）。
+ */
+const HTML_TAG = /<\/?[A-Za-z][^<>]*>/;
+
 export function validateProductInput(raw: unknown, maxPriceJpy: number): ProductInputResult {
   if (raw === null || typeof raw !== 'object') {
     return { ok: false, errors: [{ field: 'body', reason: 'not_object' }] };
@@ -258,6 +267,7 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   //    少了它 TS 会认为下面 `title.length` 仍可能是 undefined（实测 TS18048）。
   if (title === undefined || isBlank(title)) fail('title', 'title_required');
   else if (title.length > PRODUCT_MAX_CHARS.title) fail('title', 'title_too_long');
+  else if (HTML_TAG.test(title)) fail('title', 'html_not_allowed');
 
   const category = b.category;
   if (category === undefined) fail('category', 'category_required');
@@ -338,12 +348,14 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   const titleJa = strField(b, 'title_ja', fail);
   if (titleJa !== undefined && titleJa.length > PRODUCT_MAX_CHARS.title_ja) {
     fail('title_ja', 'title_ja_too_long');
-  }
+  } else if (titleJa !== undefined && HTML_TAG.test(titleJa)) fail('title_ja', 'html_not_allowed');
   const source = strField(b, 'purchase_source', fail);
   if (source !== undefined && source.length > PRODUCT_MAX_CHARS.purchase_source) {
     fail('purchase_source', 'purchase_source_too_long');
   }
   const description = strField(b, 'description', fail);
+  if (description !== undefined && HTML_TAG.test(description))
+    fail('description', 'html_not_allowed');
 
   const images = readImages(b.images);
   if (images === 'invalid') fail('images', 'image_invalid');
@@ -368,10 +380,11 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   //      被兜底折成泛化的 40001「参数缺失或格式错误」——提示指向错误的字段。
   const why = strField(b, 'why', fail);
   if (why !== undefined && why.length > PRODUCT_MAX_CHARS.why) fail('why', 'why_too_long');
+  else if (why !== undefined && HTML_TAG.test(why)) fail('why', 'html_not_allowed');
   const maker = strField(b, 'maker', fail);
   if (maker !== undefined && maker.length > PRODUCT_MAX_CHARS.maker) {
     fail('maker', 'maker_too_long');
-  }
+  } else if (maker !== undefined && HTML_TAG.test(maker)) fail('maker', 'html_not_allowed');
 
   // tags：自由文案字符串数组（与 compliance_tags 的封闭枚举**分工不同**，见迁移注释）
   // @why 逐项判"必须是非空字符串"而不是整体判 Array.isArray：
@@ -383,6 +396,7 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
     else {
       const list = (b.tags as unknown[]).map((t) => (typeof t === 'string' ? t.trim() : ''));
       if (list.some((t) => t === '')) fail('tags', 'tags_invalid');
+      else if (list.some((t) => HTML_TAG.test(t))) fail('tags', 'html_not_allowed');
       else editorialTags = list;
     }
   }
