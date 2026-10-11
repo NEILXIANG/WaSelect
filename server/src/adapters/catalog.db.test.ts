@@ -254,6 +254,24 @@ describe('listActiveProducts / findProductDetail（U5a）', () => {
     expect(byKw.items.map((p) => p.id)).toEqual(['p-1']); // ilike：小写命中大写
   });
 
+  // AJ-487（三端模拟测试 2026-10-11）：买家常按日文品牌名搜（資生堂 / ロイズ），标题是简体中文 → 扑空
+  it('🔴 keyword 也匹配日文原名 title_ja（大小写无关）；不匹配 JAN 码（采购信息不当搜索入口）；下架的仍不出', async () => {
+    await db`
+      insert into products (id, title, title_ja, jan_code, category, price_jpy, weight_g, stock, origin_country, status)
+      values ('j-1', '资生堂 护手霜', '資生堂 ハンドクリーム', '4998888915485', 'beauty', 880, 80, 9, 'JP', 'active'),
+             ('j-2', 'ROYCE 生巧克力', 'ロイズ 生チョコレート Matcha', null, 'food', 1080, 160, 3, 'JP', 'active'),
+             ('j-3', '下架的资生堂', '資生堂 旧品', null, 'beauty', 500, 50, 1, 'JP', 'offline')
+    `;
+    const ids = async (keyword: string): Promise<string[]> =>
+      (await repo.listActiveProducts({ page: 1, size: 20, keyword })).items.map((p) => p.id);
+    expect(await ids('資生堂')).toEqual(['j-1']);
+    expect(await ids('ロイズ')).toEqual(['j-2']);
+    expect(await ids('matcha')).toEqual(['j-2']);
+    expect(await ids('4998888915485')).toEqual([]);
+    const total = await repo.listActiveProducts({ page: 1, size: 20, keyword: '資生堂' });
+    expect(total.total).toBe(1);
+  });
+
   it('keyword 里的 % 与 _ 被转义（不当通配符）', async () => {
     await seedProducts();
     const r = await repo.listActiveProducts({ page: 1, size: 20, keyword: '%' });

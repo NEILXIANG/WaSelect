@@ -214,12 +214,19 @@ export function createCatalogRepo(db: Db): CatalogRepo {
       // ILIKE 通配符必须转义：不转义的话搜 "100%" 会变成"以 100 开头的任何东西"——
       // 静默错配，而且只有用户搜到怪结果才会被发现
       const kw = q.keyword?.replace(/[\\%_]/g, (m) => `\\${m}`);
+      // AJ-487：也匹配日文原名——买家常按日文品牌名搜（資生堂 / ロイズ），中文标题里没有这几个字就扑空。
+      //   不匹配 jan_code：那是采购信息，不当买家搜索入口。列表与计数共用同一个条件（每次调用新建片段，不复用同一对象）
+      const kwWhere = () => {
+        if (kw === undefined || kw === '') return db``;
+        const like = '%' + kw + '%';
+        return db`and (title ilike ${like} or title_ja ilike ${like})`;
+      };
       const rows = await db`
         select id, title, category, price_jpy, images, stock, why, maker, tags
           from products
          where status = 'active'
            ${q.category !== undefined ? db`and category = ${q.category}` : db``}
-           ${kw !== undefined && kw !== '' ? db`and title ilike ${'%' + kw + '%'}` : db``}
+           ${kwWhere()}
          order by (stock = 0), created_at desc, id
          limit ${q.size} offset ${(q.page - 1) * q.size}
       `;
@@ -228,7 +235,7 @@ export function createCatalogRepo(db: Db): CatalogRepo {
           from products
          where status = 'active'
            ${q.category !== undefined ? db`and category = ${q.category}` : db``}
-           ${kw !== undefined && kw !== '' ? db`and title ilike ${'%' + kw + '%'}` : db``}
+           ${kwWhere()}
       `;
       return {
         items: rows.map((r) => ({
