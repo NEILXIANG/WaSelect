@@ -145,6 +145,8 @@ export function OrderActions({ api, id, order, sink, reload, onChanged }: OrderA
   };
 
   const ship = shipGate(order);
+  // 三端模拟测试 2026-10-11：只有待发货的单才需要解释"为什么不能发货"——已签收的拒付单写"先处理拒付再发货"，货早发了，只会让人困惑
+  const awaitingShipment = (order as { status?: unknown } | null)?.status === 'paid';
   const refund = refundGate(order);
   const spec = ACTIONS.find((a) => a.key === current);
 
@@ -163,7 +165,7 @@ export function OrderActions({ api, id, order, sink, reload, onChanged }: OrderA
           </button>
         ))}
       </div>
-      {!ship.ok && <p className="muted">发货：{ship.reason}</p>}
+      {!ship.ok && awaitingShipment && <p className="muted">发货：{ship.reason}</p>}
       {!refund.ok && <p className="muted">全额退款：{refund.reason}</p>}
       {current !== null && spec !== undefined && (
         <ActionDrawer title={spec.title} busy={busy} onClose={close}>

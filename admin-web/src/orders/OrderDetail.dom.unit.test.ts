@@ -683,6 +683,20 @@ describe('订单详情操作条：主按钮每屏只留一个（对标 §238，�
     expect(el.querySelectorAll('.action-bar .btn').length).toBeGreaterThan(0);
     expect(solid(el)).toEqual([]);
   });
+
+  // 三端模拟测试 2026-10-11：已签收的拒付单，操作区写着"发货：有拒付进行中，先处理拒付再发货"——货早发了，这句只会让人困惑
+  it('🔴 只有待发货的单才解释"为什么不能发货"；已发出 / 已关的单不出这行', async () => {
+    status = 'delivered';
+    hasDispute = true;
+    const el = await open();
+    expect(el.textContent).not.toContain('发货：');
+    await mounted?.unmount();
+    mounted = undefined;
+    status = 'paid';
+    hasDispute = true;
+    const el2 = await open();
+    expect(el2.textContent).toContain('发货：有拒付进行中');
+  });
 });
 
 /** AJ-410（新手走查）：发货抽屉的标签 / 焦点 / 回车，确认框的回车，技术编号的位置，改址红字。 */
