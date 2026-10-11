@@ -66,9 +66,9 @@ describe('errorRef / errorFields（4-6）', () => {
     expect(errorRef(null)).toBe('');
   });
 
-  it('网络层失败 → 小字里带上宿主原始原因（排障唯一线索），主文案不带', () => {
+  it('🔴 网络层失败 → 小字里带上宿主原始原因（排障唯一线索）、标明是网络原因；不显示 -1 / -3 这种内部码（三端模拟测试 2026-10-11：买家看不懂）', () => {
     expect(errorRef({ code: -1, message: 'request:fail timeout', traceId: 't1' })).toBe(
-      '联系客服时请提供：-1 · t1 · request:fail timeout',
+      '联系客服时请提供：t1 · 网络原因：request:fail timeout',
     );
   });
 
@@ -89,7 +89,7 @@ describe('网关错误（扫描 W-06）', () => {
   it('🔴 -3（有响应无业务码）→ 说"服务暂时不可用"，不说"检查网络"；小字带 HTTP 状态', () => {
     const e = { code: -3, message: '请求失败（HTTP 502）', traceId: 'abcdef1234' };
     expect(errorMessage(e)).toBe('服务暂时不可用，请稍后重试');
-    expect(errorRef(e)).toBe('联系客服时请提供：-3 · abcdef12 · 请求失败（HTTP 502）');
+    expect(errorRef(e)).toBe('联系客服时请提供：abcdef12 · 网络原因：请求失败（HTTP 502）');
   });
 });
 

@@ -104,12 +104,13 @@ const SALES_PAUSED_TEXT =
  */
 export function errorRef(err) {
   if (err === null || typeof err !== 'object' || !Number.isInteger(err.code)) return '';
-  const parts = [`联系客服时请提供：${String(err.code)}`];
+  // 网络层失败（负数码）不显示码本身：-1 / -3 是端内约定，买家看不懂、客服也查不到（三端模拟测试 2026-10-11）
+  const parts = err.code < 0 ? [] : [String(err.code)];
   if (typeof err.traceId === 'string' && err.traceId !== '') parts.push(err.traceId.slice(0, 8));
   if (err.code < 0 && typeof err.message === 'string' && err.message.trim() !== '') {
-    parts.push(err.message.trim());
+    parts.push(`网络原因：${err.message.trim()}`);
   }
-  return parts.join(' · ');
+  return parts.length === 0 ? '' : `联系客服时请提供：${parts.join(' · ')}`;
 }
 
 /**
