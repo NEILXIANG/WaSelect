@@ -275,6 +275,28 @@ services:
       - type: rewrite # SPA 回落：没有它，`/orders/xxx` 刷新就是 404
         source: /*
         destination: /index.html
+    # 安全响应头（严格检查遗留项「token 存 localStorage、未配 CSP」，AJ-445）。
+    # @measured(render.com/schema/render.yaml.json, 2026-10-11)：静态站 `headers` 每项 path / name / value 三者必填；
+    #      `/*` 匹配全部路径（render.com/docs/static-site-headers）。Blueprint 不会删掉控制台里另配的头规则。
+    # @why script-src 只许本站：token 明文存 localStorage，注入的脚本不能执行是它缺的那一层。
+    # @tradeoff connect-src / img-src 放行 `https:` 而不是写死 API 与图床域名：两者随环境变（VITE_API_BASE_URL /
+    #      IMG_BASE_URL），写死就得每个环境各维护一份头；代价是被注入的脚本（若能执行）可外连任意 https——
+    #      但 script-src 'self' 已让它执行不了。域名定下来（B9）后可收紧成具体域名。
+    # @measured（2026-10-11 本机实测，同一条策略 + sim API）：工作台 / 漏斗 / 订单 / 商品 / 导出均零拦截；
+    #      反向：页面里插内联 <script> 与 <img onerror> 都被拦（script-src-elem / script-src-attr），注入代码未执行。
+    headers:
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https:; connect-src 'self' https:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+      - path: /*
+        name: X-Content-Type-Options
+        value: 'nosniff'
+      - path: /*
+        name: X-Frame-Options
+        value: 'DENY'
+      - path: /*
+        name: Referrer-Policy
+        value: 'no-referrer'
     envVars:
       - key: NODE_VERSION
         value: '22'

@@ -29,6 +29,7 @@
  * @see ../../render.yaml；../../server/src/config.ts；docs/地基搭建清单.md F16
  */
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CONFIG_KEYS, REQUIRED_ENV_KEYS, SECRET_KEYS } from '../../server/src/config.js';
@@ -504,5 +505,52 @@ describe('render.yaml ↔ 配置 schema 一致', () => {
     const parsed = parseEnvEntries(sample);
     expect(parsed.map((e) => e.key)).toEqual(['NODE_ENV', 'JWT_SECRET', 'DATABASE_URL']);
     expect(parsed.map((e) => e.literal)).toEqual([true, false, false]);
+  });
+});
+
+/**
+ * 严格检查遗留项（2026-10-10 文档 §3.5「管理端 token 存 localStorage、未配 CSP」）：管理端静态站带 CSP 等安全头。
+ * @why token 明文存 localStorage（token-store.ts @limitation 二），一旦页面被注入脚本即可被读走；
+ *      `script-src 'self'` 让注入的内联脚本与外站脚本都不执行——这是 localStorage 方案缺的那一层。
+ * @measured（2026-10-11，本机：admin-web 生产构建 + 同一条 CSP 头托管，连 sim API）：
+ *      工作台 / 漏斗（React style 宽度 62% → 228.773px 生效）/ 订单列表与详情 / 商品列表（图床图片）/
+ *      导出（blob: 生成 orders-20261011.csv）全程 securitypolicyviolation 零条、控制台无拒绝记录；
+ *      反向：插入内联 <script> 与 <img onerror> 均被拦（script-src-elem / script-src-attr），注入代码未执行。
+ */
+describe('管理端静态站安全响应头（CSP）', () => {
+  // 用 YAML 解析而不是正则截段：静态站里还有 `routes: - type: rewrite`，按 "- type:" 截段会提前停（首版就这样红过）
+  const { load } = createRequire(import.meta.url)('js-yaml') as { load: (s: string) => unknown };
+  const services = (load(renderYaml) as { services: Array<Record<string, unknown>> }).services;
+  const admin = services.find((x) => x['name'] === 'waselect-admin');
+  const headers = (admin?.['headers'] ?? []) as Array<{
+    path: string;
+    name: string;
+    value: string;
+  }>;
+  const header = (name: string): string | undefined =>
+    headers.find((h) => h.path === '/*' && h.name.toLowerCase() === name.toLowerCase())?.value;
+
+  it('🔴 全站 CSP：脚本只许本站、不许 unsafe-inline / unsafe-eval；禁止被嵌入；禁 object', () => {
+    expect(admin, 'render.yaml 里找不到 waselect-admin').toBeDefined();
+    const csp = header('Content-Security-Policy');
+    expect(csp, 'waselect-admin 缺 Content-Security-Policy 头').toBeDefined();
+    const directives = Object.fromEntries(
+      (csp ?? '').split(';').map((d) => {
+        const [k, ...v] = d.trim().split(/\s+/);
+        return [k, v];
+      }),
+    );
+    expect(directives['script-src']).toEqual(["'self'"]);
+    expect(directives['frame-ancestors']).toEqual(["'none'"]);
+    expect(directives['object-src']).toEqual(["'none'"]);
+    expect(directives['base-uri']).toEqual(["'self'"]);
+    expect(csp).not.toContain('unsafe-inline');
+    expect(csp).not.toContain('unsafe-eval');
+  });
+
+  it('配套头：nosniff、禁止被嵌入（老浏览器）、不外泄来源地址', () => {
+    expect(header('X-Content-Type-Options')).toBe('nosniff');
+    expect(header('X-Frame-Options')).toBe('DENY');
+    expect(header('Referrer-Policy')).toBe('no-referrer');
   });
 });
