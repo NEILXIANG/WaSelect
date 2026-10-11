@@ -19,8 +19,8 @@
  * @limitation 一：**不做 30 分钟倒计时**。倒计时要 `setInterval`（又一个要登记的宿主能力）
  *              + 时钟读数（vm 禁读），骨架期只显示 `expires_at` 的**时刻**；
  *              到期后订单列表会显示"已超时关闭"（服务端过期 job 是权威）。
- * @limitation 二：关税行在 `duty_jpy` 为整数时显示"预估关税（含在商品价内）"——
- *              契约 Order 里它是建单时记下的估值，**信息字段**（D-32 商品价已含关税），
+ * @limitation 二：关税在 `duty_jpy` 为整数时于合计下方说"其中预估关税 X（已含在商品价内）"（MP-11 起不再与
+ *              商品合计 / 运费并列成一行）——契约 Order 里它是建单时记下的估值，**信息字段**（D-32 商品价已含关税），
  *              不许显示成"关税：另收"。
  * @limitation 三：`terms_version` 原样展示（如 `TOS-2026-09-20`）。
  *              它是"你当时同意的是哪一版"的唯一凭证，比"已同意"三个字值钱；
@@ -71,7 +71,37 @@ function partialRefundRows(list) {
 }
 
 const LATE_PAID_NOTE = '我们已收到你的付款，但这张订单已关闭；款项会原路退回，无需重新付款。';
+
+/**
+ * 迟到付款要在**顶部**说的状态（OPS-4，第二轮审计 2026-10-11）：订单已关闭、钱还没退。
+ * @why 原先这两态顶部的下一步是"如需购买请重新下单"、底栏给「再次购买」，页底却说"无需重新付款"——
+ *      同一屏两种相反的指引，买家可能再付一笔，然后等两笔里的一笔退回来。
+ *      关闭态把说明提到顶部（替换那句"请重新下单"）、收起「再次购买」；退款中 / 已退款讲的是钱的进度，说明留在页底。
+ */
+const LATE_PAID_TOP_STATUSES = ['expired', 'cancelled'];
+
+/**
+ * 取消 / 确认收货失败后的去向（MP-7，第二轮审计 2026-10-11）。
+ * @why 40902（状态已变）/ 40904（已过期）说明的是"页面上的按钮已经过期"——错误码注册表给的动作就是"刷新订单"。
+ *      原先只摆出服务端原文"订单状态不允许此操作"、按钮原样留着，再点还是同一个错。改为重取订单 + 一句人话。
+ * @why 40902 的话留了"如仍无法操作请联系客服"：确认收货遇到拒付冻结也是 40902（reason 不下发给买家），
+ *      重取后按钮还在——只说"已刷新"会让人以为再点一次就好。
+ * @limitation 其余错误（网络 / 5xx / 拉黑）不接管，仍走页面的通用错误态。
+ * @param {unknown} err 请求封装抛出的错误
+ * @returns {{reload: boolean, note: string}}
+ */
+const ACTION_STALE_NOTES = {
+  40902: '订单状态有更新，已为你刷新到最新状态；如仍无法操作，请联系客服',
+  40904: '订单已超过支付时间，已为你刷新到最新状态',
+};
+export function actionFailure(err) {
+  const code = err !== null && typeof err === 'object' ? err.code : undefined;
+  const hit =
+    Number.isInteger(code) && Object.prototype.hasOwnProperty.call(ACTION_STALE_NOTES, code);
+  return hit ? { reload: true, note: ACTION_STALE_NOTES[code] } : { reload: false, note: '' };
+}
 import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
+import { dutyNoteText } from '../../utils/quote-view.js';
 import { addressSummary } from '../../utils/address-form.js';
 import { jstDateTimeLabeled } from '../../utils/jst-text.js';
 import { orderProgress } from '../../utils/order-progress.js';
@@ -136,7 +166,7 @@ export function itemRows(items) {
 }
 
 /**
- * 金额行（**不含合计**：合计交给 `ws-price`，@see quote-view.js 同一理由）。
+ * 金额行（**不含合计、不含关税**：合计交给 `ws-price`，@see quote-view.js 同一理由；关税见 `dutyNote`）。
  * @param {unknown} order 契约 `Order`
  */
 export function amountLines(order) {
@@ -146,11 +176,17 @@ export function amountLines(order) {
     lines.push({ label: '商品合计', value: formatJpy(o.items_jpy) });
   if (Number.isInteger(o.shipping_jpy))
     lines.push({ label: '运费', value: formatJpy(o.shipping_jpy) });
-  // @see @limitation 二：关税是信息字段（含在商品价内），不是另收的一行
-  if (Number.isInteger(o.duty_jpy)) {
-    lines.push({ label: '预估关税（含在商品价内）', value: formatJpy(o.duty_jpy) });
-  }
   return lines;
+}
+
+/**
+ * 关税说明（MP-11）：合计下方一句；`duty_jpy` 不是整数（null = 无法估算）→ 空串，不显示。
+ * @see @limitation 二：关税是信息字段（含在商品价内），不是另收的一笔；句子与购物车 / 结算页同源（quote-view.js）
+ * @param {unknown} order 契约 `Order`
+ */
+export function dutyNote(order) {
+  const o = order && typeof order === 'object' ? order : {};
+  return Number.isInteger(o.duty_jpy) ? dutyNoteText(o.duty_jpy) : '';
 }
 
 /** 时间线行：状态中文 + JST 时刻。 */
@@ -224,7 +260,9 @@ export function detailView(order, opts = undefined) {
   const showPay = payable && !confirming;
   const showCancel = PAYABLE.includes(status) && !confirming && !expired;
   const showConfirmReceipt = status === 'shipped';
-  const showBuyAgain = BUY_AGAIN_STATUSES.includes(status);
+  // OPS-4：迟到付款的关闭单（钱还没退）不给「再次购买」，说明提到顶部
+  const latePaidTop = o.late_paid === true && LATE_PAID_TOP_STATUSES.includes(status);
+  const showBuyAgain = BUY_AGAIN_STATUSES.includes(status) && !latePaidTop;
   const afterSale = afterSaleCard(o);
 
   return {
@@ -237,9 +275,11 @@ export function detailView(order, opts = undefined) {
      */
     nextText: confirming
       ? ''
-      : expired && canPay(status)
-        ? '支付时间已到，订单将自动关闭；如需购买请重新下单'
-        : (afterSaleNext(afterSale, status) ?? buyer.next),
+      : latePaidTop
+        ? LATE_PAID_NOTE
+        : expired && canPay(status)
+          ? '支付时间已到，订单将自动关闭；如需购买请重新下单'
+          : (afterSaleNext(afterSale, status) ?? buyer.next),
     // ⚠️ 确认中不给出「继续支付」：用户刚付过一次，再点就是第二笔钱（MP3-04）。
     canPay: showPay,
     /**
@@ -264,13 +304,19 @@ export function detailView(order, opts = undefined) {
     /** 薄壳据此退避重查（最多两次，见 vm 的 @limitation）。 */
     needsRecheck: confirming,
     createdAtText: timeText(o.created_at),
-    // ⚠️ 截止时刻只在可付时显示（@see @limitation 一：骨架期不做倒计时）
-    expiresAtText: payable ? timeText(o.expires_at) : '',
+    // ⚠️ 截止时刻只在可付时显示（@see @limitation 一：骨架期不做倒计时）；
+    //    确认中（刚付过）也不显示（F1，第二轮审计 2026-10-11）：刚付过的人读到"请在…前完成支付"会以为没付上
+    expiresAtText: payable && !confirming ? timeText(o.expires_at) : '',
     items: itemRows(o.items),
     amountLines: amountLines(o),
+    /** MP-11：关税说明（合计下方一句；空串 = 不显示）。 */
+    dutyNote: dutyNote(o),
     totalJpy: hasTotal ? o.total_jpy : null,
-    /** 只有还能付的单才叫"应付合计"（W-04）；已付 / 已退的单写"应付"会被读成"还要再付"。 */
-    totalLabel: payable ? '应付合计' : '订单合计',
+    /**
+     * 只有还能付的单才叫"应付合计"（W-04）；已付 / 已退的单写"应付"会被读成"还要再付"。
+     * 确认中同理（F1）：钱可能已经付了，只是还没确认下来。
+     */
+    totalLabel: payable && !confirming ? '应付合计' : '订单合计',
     totalSub: displaySubLine(o.display),
     address: o.address !== null && typeof o.address === 'object' ? addressSummary(o.address) : null,
     contactEmail,
@@ -306,8 +352,11 @@ export function detailView(order, opts = undefined) {
     stockRefundNote: status === 'paid' ? STOCK_REFUND_NOTE : '',
     /** 部分退款（P2-12）：成功 / 处理中；服务端已滤掉失败的那几笔。 */
     partialRefunds: partialRefundRows(o.partial_refunds),
-    /** 关单后才到的付款（P2-11）：钱已扣，告诉买家会原路退回，别再下一单。 */
-    latePaidNote: o.late_paid === true ? LATE_PAID_NOTE : '',
+    /**
+     * 关单后才到的付款（P2-11）：钱已扣，告诉买家会原路退回，别再下一单。
+     * 关闭态已在顶部下一步说过（OPS-4），页底不再重复。
+     */
+    latePaidNote: o.late_paid === true && !latePaidTop ? LATE_PAID_NOTE : '',
     /**
      * 确认收货（P2-13）：只在已发货时给。拒付中的单服务端回 40902（买家视图不含 has_dispute，不在前端猜）。
      * 不点也没关系：发货满 30 天系统自动签收。

@@ -40,6 +40,8 @@
           <text class="ws-title head__status-text">{{view.statusText}}</text>
         </view>
         <text class="ws-note hint" wx:if="{{view.nextText}}">{{view.nextText}}</text>
+        <!-- MP-7（第二轮审计）：取消 / 确认收货时状态已变 → 已重取，这里说一句为什么按钮变了 -->
+        <text class="ws-note state__error hint" wx:if="{{actionNote}}">{{actionNote}}</text>
         <!-- M-12（AJ-408）：进度条（vm utils/order-progress.js）。终态（取消 / 超时 / 退款）= 点亮到发生前那一步 + 分支标签；
              不带时刻（时区标注放不下，完整时刻见下方时间线） -->
         <view class="progress" wx:if="{{view.progress.show}}" aria-label="订单进度">
@@ -55,6 +57,8 @@
           <!-- M-19（AJ-406）：可点的"复制"改成 view（hover-class 只对 view 生效）并加大触控区 -->
           <view class="track track--act" hover-class="ws-press" bindtap="onCopyOrderNo" aria-role="button" aria-label="复制订单号">{{copied === 'order' ? '已复制' : '复制'}}</view>
         </view>
+        <!-- F9：复制失败就近说，不弹顶部错误态 -->
+        <text class="ws-note state__error hint" wx:if="{{copyErrorAt === 'order'}}">{{copyError}}</text>
         <!-- MP3-04：刚付过款、服务端还没确认——这时不给继续支付也不给取消，只说清在确认中 -->
         <text class="ws-note hint" wx:if="{{view.confirmHint}}">{{view.confirmHint}}</text>
         <text class="ws-caption key-info hint" wx:if="{{view.createdAtText}}">建单 {{view.createdAtText}}</text>
@@ -149,6 +153,8 @@
           <ws-price wx:if="{{view.totalJpy !== null}}" jpy="{{view.totalJpy}}" size="lg" />
         </view>
         <text class="ws-caption" wx:if="{{view.totalSub}}">{{view.totalSub}}</text>
+        <!-- MP-11（第二轮审计）：关税是含在商品价里的信息，放合计下方一句，不与商品 / 运费并列成一行 -->
+        <text class="ws-caption" wx:if="{{view.dutyNote}}">{{view.dutyNote}}</text>
         <!--
           P2-12（AJ-386）部分退款（成功 / 处理中）。AJ-434：放进金额卡、紧跟订单合计——
           原先是页面最底部单独一张卡，买家核对"付了多少、退了多少"要上下翻。
@@ -190,7 +196,7 @@
           <text class="ws-note">运单号</text>
           <!-- ⚠️ 用 text 不是 view：`hover-class` 只支持 view/button/navigator，
                而这里要的是"可长按选择的等宽文本"，按下反馈对它不适用。 -->
-          <text class="ws-body track" data-no="{{view.trackingNo}}" data-kind="no" bindtap="onCopyTracking">
+          <text class="ws-body track" data-no="{{view.trackingNo}}" data-kind="no" bindtap="onCopyTracking" user-select>
             {{copied === 'no' ? '已复制' : view.trackingNo}}
           </text>
         </view>
@@ -205,6 +211,8 @@
         </view>
         <!-- 第 24 项：复制成功后给出下一步——小程序里打不开外部网页，只能去浏览器 -->
         <text class="ws-caption key-info hint" wx:if="{{copied === 'url'}}">已复制：打开手机浏览器，粘贴到地址栏即可查看物流</text>
+        <!-- F9：复制失败就近说；运单号文本可长按选中（user-select） -->
+        <text class="ws-note state__error hint" wx:if="{{copyErrorAt === 'tracking'}}">{{copyError}}</text>
       </view>
     </view>
 

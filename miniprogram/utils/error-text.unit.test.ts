@@ -144,3 +144,15 @@ describe('contactFields（AJ-433）：被拉黑时出口是联系客服', () => 
     expect(contactFields('boom')).toEqual({ errorContact: false });
   });
 });
+
+describe('登录失效 40101（F3，第二轮审计 2026-10-11）', () => {
+  it('🔴 静默重登仍失败而抛到页面的 40101 → 说"登录状态已失效、重试会自动重新登录"，不是服务端原文', () => {
+    const text = errorMessage({ code: 40101, message: '未登录或登录已过期' });
+    expect(text).toContain('登录状态已失效');
+    expect(text).toContain('重新登录');
+    // 报障小字照旧带码
+    expect(errorRef({ code: 40101, message: 'x', traceId: 'abcdef1234' })).toBe(
+      '错误码 40101 · 链路 abcdef12',
+    );
+  });
+});

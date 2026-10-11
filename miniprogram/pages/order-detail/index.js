@@ -26,13 +26,15 @@
  *
  * @see ./index.vm.js（视图逻辑真源，17 条单测）；../../utils/wx-api.js（showModal / setClipboardData）
  */
-import { buyAgainItems, detailView } from './index.vm.js';
+import { actionFailure, buyAgainItems, detailView } from './index.vm.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { recentExternalPay } from '../../utils/external-pay.js';
 import { supportRows } from '../../utils/support.js';
 import { track } from '../../utils/beacon.js';
+import { isStale, nextSeq } from '../../utils/request-seq.js';
+import { serverNowMs } from '../../utils/server-clock.js';
 
 const app = getApp();
 
@@ -67,6 +69,14 @@ Page({
     confirmingReceipt: false,
     /** 刚复制的是哪一个：'order' 订单号（M-05）/ 'no' 运单号 / 'url' 查件链接 / '' 都没有（各自显示「已复制」，@see @limitation 三）。 */
     copied: '',
+    /**
+     * 复制失败的提示与位置（F9，第二轮审计 2026-10-11）：'order' 订单号旁 / 'tracking' 物流卡里。
+     * @why 原先写进 `error`，页面顶部弹出"订单信息没能取到或操作没有完成"——订单明明好好的，只是剪贴板没写进去。
+     */
+    copyError: '',
+    copyErrorAt: '',
+    /** 取消 / 确认收货撞上 40902 / 40904 后重取订单，给一句说明（MP-7，vm `actionFailure`）。 */
+    actionNote: '',
     /** 剩余清单 4-2：客服联系方式（utils/support.js）；空数组 = 未配置，不显示。 */
     support: [],
   },
@@ -88,6 +98,11 @@ Page({
   recheckTimer: null,
   /** 最近一次拿到的订单原文（放弃 justPaid 假设后要按它重渲染）。 */
   lastOrder: null,
+  /**
+   * 取数序号（F12，第二轮审计 2026-10-11）：onShow、下拉刷新、复核定时器、操作后重取会并发 `load`，
+   * 先发后到的旧响应会把新状态盖回去（例如刚取消成功，又被一次在途的旧响应盖回"待付款"）。
+   */
+  loadSeq: 0,
 
   onLoad(options) {
     this.orderId = typeof options?.id === 'string' ? options.id : '';
@@ -135,34 +150,41 @@ Page({
    * @why 没有 id 时不发请求（@limitation 一），但动画仍要收起——否则顶部一直转圈。
    */
   async onPullDownRefresh() {
+    this.setData({ actionNote: '' });
     if (this.orderId !== '') await this.load();
     wxApi.stopPullDownRefresh();
   },
 
   /** 取详情。失败**清空视图**并明示错误（留旧数据 = 把旧状态当真值）。 */
   async load() {
+    const seq = (this.loadSeq = nextSeq(this.loadSeq));
     this.setData({ loading: true });
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}`,
         traceId: this.traceId,
       });
+      if (isStale(seq, this.loadSeq)) return;
       this.lastOrder = res;
       this.setData({
         view: detailView(res, {
           justPaid: this.justPaid,
           recheckGaveUp: this.recheckGaveUp,
-          nowMs: Date.now(),
+          // MP-8：截止判定用校准过的时刻（手机时钟偏快时不会提前判"已过期"）
+          nowMs: serverNowMs(Date.now(), app.globalData.clockSkewMs),
         }),
         error: '',
         errorContact: false,
         copied: '',
+        copyError: '',
+        copyErrorAt: '',
       });
       this.scheduleRecheck();
     } catch (e) {
+      if (isStale(seq, this.loadSeq)) return;
       this.setData({ view: null, ...errorFields(e), ...contactFields(e) });
     } finally {
-      this.setData({ loading: false });
+      if (!isStale(seq, this.loadSeq)) this.setData({ loading: false });
     }
   },
 
@@ -189,7 +211,7 @@ Page({
         view: detailView(this.lastOrder, {
           justPaid: false,
           recheckGaveUp: true,
-          nowMs: Date.now(),
+          nowMs: serverNowMs(Date.now(), app.globalData.clockSkewMs),
         }),
       });
       return;
@@ -245,8 +267,14 @@ Page({
     if (typeof no !== 'string' || no === '') return;
     wxApi.setClipboardData({
       data: no,
-      success: () => this.setData({ copied: kind }),
-      fail: () => this.setData({ error: '复制失败，请长按运单号手动复制', errorRef: '' }),
+      success: () => this.setData({ copied: kind, copyError: '', copyErrorAt: '' }),
+      // F9：就近提示，不动顶部错误态（订单本身没问题）；运单号 / 链接文本可长按选中（wxml user-select）
+      fail: () =>
+        this.setData({
+          copied: '',
+          copyError: '复制失败，请长按运单号手动复制',
+          copyErrorAt: 'tracking',
+        }),
     });
   },
 
@@ -260,9 +288,13 @@ Page({
     if (typeof no !== 'string' || no === '') return;
     wxApi.setClipboardData({
       data: no,
-      success: () => this.setData({ copied: 'order' }),
+      success: () => this.setData({ copied: 'order', copyError: '', copyErrorAt: '' }),
       fail: () =>
-        this.setData({ copied: '', error: '复制失败，请长按订单号手动复制', errorRef: '' }),
+        this.setData({
+          copied: '',
+          copyError: '复制失败，请长按订单号手动复制',
+          copyErrorAt: 'order',
+        }),
     });
   },
 
@@ -293,7 +325,7 @@ Page({
   },
 
   async confirmReceipt() {
-    this.setData({ confirmingReceipt: true, error: '' });
+    this.setData({ confirmingReceipt: true, error: '', actionNote: '' });
     try {
       await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}/confirm-receipt`,
@@ -302,15 +334,30 @@ Page({
       });
       await this.load();
     } catch (e) {
-      this.setData({ ...errorFields(e), ...contactFields(e) });
+      await this.afterActionFailure(e);
     } finally {
       this.setData({ confirmingReceipt: false });
     }
   },
 
+  /**
+   * 取消 / 确认收货失败（MP-7，第二轮审计 2026-10-11）：状态已变（40902）/ 已过期（40904）→ 重取订单再说明，
+   * 不把过期的按钮留在页面上；其余错误走通用错误态。
+   * @why 说明在重取**之后**写：`load` 成功会清 `error`，先写后取会被抹掉。
+   */
+  async afterActionFailure(e) {
+    const f = actionFailure(e);
+    if (!f.reload) {
+      this.setData({ ...errorFields(e), ...contactFields(e) });
+      return;
+    }
+    await this.load();
+    this.setData({ actionNote: f.note });
+  },
+
   /** 发取消请求；成功后**原地重取**（@see 文件头 @why）。 */
   async cancel() {
-    this.setData({ cancelling: true, error: '' });
+    this.setData({ cancelling: true, error: '', actionNote: '' });
     try {
       await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}/cancel`,
@@ -319,7 +366,7 @@ Page({
       });
       await this.load();
     } catch (e) {
-      this.setData({ ...errorFields(e), ...contactFields(e) });
+      await this.afterActionFailure(e);
     } finally {
       this.setData({ cancelling: false });
     }

@@ -73,7 +73,8 @@
     circular
   >
     <swiper-item wx:for="{{slides}}" wx:key="id">
-      <view class="home__slide-hit" data-index="{{index}}" hover-class="ws-press" bindtap="onBannerTap">
+      <!-- MP-1（第二轮审计）：没有跳转目标的 banner 不给按下态（vm tappable，与 intentForBanner 同一判断） -->
+      <view class="home__slide-hit" data-index="{{index}}" hover-class="{{item.tappable ? 'ws-press' : 'none'}}" bindtap="onBannerTap">
         <image class="home__slide" src="{{item.image}}" mode="aspectFill" />
       </view>
     </swiper-item>

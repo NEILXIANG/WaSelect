@@ -242,8 +242,9 @@ describe('首页薄壳：`GET /home`（轮播与分类，D-51）', () => {
     calls[0]!.d.resolve(listOf('all', 1));
     home([BANNER], ['food', 'beauty']);
     await settle();
+    // MP-1：slides 带 tappable（这张 banner 有跳转目标）
     expect(page.data['slides']).toEqual([
-      { id: 'b-1', image: 'https://img.example.com/banners/a.png' },
+      { id: 'b-1', image: 'https://img.example.com/banners/a.png', tappable: true },
     ]);
     expect((page.data['tabs'] as Array<{ key: string }>).map((t) => t.key)).toEqual([
       '',

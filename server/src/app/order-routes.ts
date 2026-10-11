@@ -25,6 +25,7 @@
  *      contracts/api-contract.yaml（OrderCreated）；docs/I1阶段开发实施方案.md §3.5
  */
 import type { Express, RequestHandler } from 'express';
+import { isContactEmailShape } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 import type { Db } from '../adapters/db.js';
@@ -92,17 +93,10 @@ function parseBody(body: unknown): {
     //    于是 `a\u0000@b` 一路走到 SQL，PG 拒收 0x00 → 22021 → 兜底 500 + error 日志，
     //    恰好违背上面这行注释自己写的"应是 40001，不是 PG 报错 → 50000"。
     //    （兜底层已把 22 类统一映射成 40001，这里是**入口这一层**的兑现：能挡的先挡。）
-    const email = b['contact_email'];
-    if (
-      typeof email !== 'string' ||
-      email.length === 0 ||
-      email.length > 255 ||
-      // ⚠️ 下面那条正则**故意**含控制字符（ORD3-04）：本条规则防的是"手滑写进去"，
-      //    这里是刻意的白名单补洞——PG 拒收 0x00，但 BEL 等其它控制字符会被 PG **收下**
-      //    并入库（实测旧实现返回 201），所以必须显式排除。
-      // eslint-disable-next-line no-control-regex
-      !/^[^\s@\u0000-\u001f\u007f]+@[^\s@\u0000-\u001f\u007f]+$/.test(email)
-    ) {
+    // MP-9（AJ-479）：判据收到 shared `isContactEmailShape`（长度 / 控制字符 / 单个 @ 照旧，另要求域名像域名：
+    //   有点、无空节、后缀 ≥ 2 且非纯数字）——原判据放行 `a@b`，邮件是唯一通知渠道，填错 = 买家失联。
+    //   小程序结算页镜像同一判据（miniprogram/utils/email-shape.js，同一张判例表比对）。
+    if (!isContactEmailShape(b['contact_email'])) {
       throw new AppError(40001, { reason: 'contact_email_shape' });
     }
   }

@@ -661,3 +661,25 @@ describe('商品已下架：错误态按钮换成走得通的出口（联动走�
     expect(page.data['productGone']).toBe(false);
   });
 });
+
+describe('结算页薄壳：邮箱错误的时机与拼错提示（F7 / MP-9，第二轮审计 2026-10-11）', () => {
+  it('🔴 输入中不抢先报格式错；失焦才报；改对了立即消失', async () => {
+    await ready();
+    call('onEmailInput', { detail: { value: 'jane@' } });
+    expect(page.data['emailError']).toBe('');
+    expect(gate().ok).toBe(false); // 闸门照样不放行（值不合法）
+    call('onEmailBlur');
+    expect(page.data['emailError']).toBe('邮箱格式不正确');
+    call('onEmailInput', { detail: { value: 'jane@example.com' } });
+    expect(page.data['emailError']).toBe('');
+  });
+
+  it('🔴 常见拼错给提示但不拦：gmial.com 仍可提交', async () => {
+    await ready();
+    call('onEmailInput', { detail: { value: 'jane@gmial.com' } });
+    expect(String(page.data['emailHint'])).toContain('jane@gmail.com');
+    call('onSubmit');
+    await settle();
+    expect(posts[0]!.data?.['contact_email']).toBe('jane@gmial.com');
+  });
+});

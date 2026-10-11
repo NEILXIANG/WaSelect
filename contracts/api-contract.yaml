@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.67
+  version: 0.6.68
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.68（严格检查第二轮 · 第四批，MP-9 / AJ-479）：`POST /orders` 的 `contact_email` 判据收紧——域名必须有点、无空段（连点 / 点开头结尾）、后缀 ≥ 2 且非纯数字，否则 40001 contact_email_shape（此前 `a@b` 也放行）。判据真源 shared `isContactEmailShape`，小程序结算页镜像同一判据。
     0.6.67（严格检查第二轮 · 第二批，服务端 + 管理端）：
       ① `GET /admin/orders`：`sort` 白名单加 `paid_at` / `-paid_at`（AJ-453，未付的单排最后）；`attention` 加 `partial_refund`（AJ-454：有 failed 以外的部分退款且订单未整单退掉）。
       ② `AdminOrder.address_history`（AJ-455）：改址历史 `[{id, snapshot, actor?, at}]`，snapshot 是改前完整地址；没改过为空数组。改址的 admin_audit.after 只记 `archive_id`（S-2：新地址不进 append-only 审计表）。
@@ -808,7 +809,7 @@ paths:
       summary: 建单（不含支付；扣减 stock；写 fx_snapshot 与 expires_at）
       description: 0.6.11（AJ-179）：REVIEW_MODE=on 时只收 REVIEW_SKU_ID，含其它商品整单 40401；审核期建的单 is_test=true
       parameters: [{$ref: '#/components/parameters/IdemKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items, address_id, terms_version], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}, address_id: {type: string}, expected_total_jpy: {type: integer, description: '可选：前端确认页看到的合计；不等则 40905 价格已变动'}, contact_email: {type: string, format: email, maxLength: 255, description: '0.6.27：orders.contact_email 是 VARCHAR(255)，超长 40001。可选：收货通知兜底邮箱（D-39）'}, terms_version: {type: string, description: '建单时刻生效的条款版本（如 TOS-2026-09-20）；服务端与 TERMS_VERSION（GET /terms 返回的 version）不一致则 40011，缺失或不匹配一律拒单（D-43）'}}}}}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [items, address_id, terms_version], properties: {items: {$ref: '#/components/schemas/OrderItemsInput'}, address_id: {type: string}, expected_total_jpy: {type: integer, description: '可选：前端确认页看到的合计；不等则 40905 价格已变动'}, contact_email: {type: string, format: email, maxLength: 255, description: '0.6.27：orders.contact_email 是 VARCHAR(255)，超长 40001。0.6.68：域名须有点、无空段、后缀 ≥ 2 且非纯数字（shared isContactEmailShape），否则 40001 contact_email_shape。可选：收货通知兜底邮箱（D-39）'}, terms_version: {type: string, description: '建单时刻生效的条款版本（如 TOS-2026-09-20）；服务端与 TERMS_VERSION（GET /terms 返回的 version）不一致则 40011，缺失或不匹配一律拒单（D-43）'}}}}}}
       responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/OrderCreated'}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '429': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
   /orders/{id}:
     get:

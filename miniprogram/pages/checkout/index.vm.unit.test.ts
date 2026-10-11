@@ -18,6 +18,7 @@ import {
   clearsCartAfterOrder,
   EMAIL_REQUIRED_TEXT,
   contactEmailOf,
+  emailInputError,
   itemRows,
   keyAction,
   orderBody,
@@ -523,5 +524,41 @@ describe('termsFromResponse', () => {
   });
   it('没有地址时版本仍原样给出（建单回传用），只是标记失败', () => {
     expect(termsFromResponse({ version: 'TOS-2026-09-20' }).termsVersion).toBe('TOS-2026-09-20');
+  });
+});
+
+describe('第二轮审计 2026-10-11：结算页（F4 / F5 / F7 / MP-9）', () => {
+  const OK = { itemCount: 1, addressId: 'a-1', termsAccepted: true, totalJpy: 9150 };
+
+  it('🔴 F4 报价失败的原因按码说：停售 / 账号受限不说"返回购物车重试"', () => {
+    const fail = (quoteErrorCode: number) =>
+      submitGate({ ...OK, totalJpy: null, quoteFailed: true, quoteErrorCode }).reason;
+    expect(fail(40916)).toContain('暂停接单');
+    expect(fail(40916)).not.toContain('重试');
+    expect(fail(40301)).toContain('账号');
+    expect(fail(40301)).not.toContain('重试');
+    expect(fail(50000)).toContain('购物车');
+  });
+
+  it('🔴 F5 地址没取到 → 说"没取到"，不说"请选择收货地址"（用户会以为自己没有地址）', () => {
+    const g = submitGate({ ...OK, addressId: '', addressFailed: true });
+    expect(g.ok).toBe(false);
+    expect(g.reason).toContain('没取到');
+    expect(submitGate({ ...OK, addressId: '' }).reason).toBe('请选择收货地址');
+  });
+
+  it('🔴 F7 输入中不抢先报格式错；已经报过错时，改对了立即消失、没改对继续显示', () => {
+    expect(emailInputError('jane@', '')).toBe('');
+    expect(emailInputError('jane@example.com', '邮箱格式不正确')).toBe('');
+    expect(emailInputError('jane@', '邮箱格式不正确')).toBe('邮箱格式不正确');
+    // 清空是用户主动删掉的：立即说明为什么要填（M-01 口径不变）
+    expect(emailInputError('   ', '')).toBe(EMAIL_REQUIRED_TEXT);
+  });
+
+  it('🔴 MP-9 contactEmailOf 用收紧后的判据：a@b / 连点 / 后缀太短 → 格式不正确', () => {
+    for (const bad of ['a@b', 'x@b..com', 'x@b.c', 'x@b.123']) {
+      expect(contactEmailOf(bad).error, bad).toBe('邮箱格式不正确');
+    }
+    expect(contactEmailOf('li.wei@163.com')).toEqual({ value: 'li.wei@163.com', error: '' });
   });
 });

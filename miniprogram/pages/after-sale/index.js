@@ -33,9 +33,16 @@ Page({
 
   orderId: '',
   traceId: '',
+  /**
+   * 页面是否还活着（MP-13，第二轮审计 2026-10-11；与结算页 P2-36 同口径）：onUnload 置 false。
+   * @why 提交 / 保存在途时用户按了返回，宿主已经出栈一次；响应回来再 navigateBack 会把他从上一页再退一层
+   *      （从订单详情退回订单列表、从地址列表退回结算页之前）。
+   */
+  alive: true,
 
   /** @param {{id?: string}} options 订单详情带来的 `?id=…` */
   onLoad(options) {
+    this.alive = true;
     this.traceId = newTraceId();
     this.orderId = typeof options?.id === 'string' ? options.id : '';
     if (this.orderId === '') this.setData({ error: '没有找到要申请售后的订单，请从订单详情进入' });
@@ -43,6 +50,10 @@ Page({
 
   onBack() {
     wxApi.navigateBack();
+  },
+
+  onUnload() {
+    this.alive = false;
   },
 
   setForm(form) {
@@ -88,6 +99,7 @@ Page({
     } finally {
       this.setData({ submitting: false });
     }
-    wxApi.navigateBack();
+    // MP-13：用户已按返回离开 → 不再出栈（@see alive）；申请已提交，回到详情页 onShow 即可看到
+    if (this.alive) wxApi.navigateBack();
   },
 });

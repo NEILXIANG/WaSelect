@@ -248,3 +248,33 @@ describe('待付款行写明付款截止时刻（AJ-435，契约 0.6.61 expires_
     );
   });
 });
+
+describe('列表「继续支付」看付款截止（MP-14，第二轮审计 2026-10-11）', () => {
+  const ROW = {
+    order_id: 'o-1',
+    status: 'pending_payment',
+    total_jpy: 1000,
+    expires_at: '2026-10-10T03:00:00.000Z',
+  };
+  const DEADLINE = Date.parse('2026-10-10T03:00:00.000Z');
+
+  it('🔴 截止已到（关单作业每分钟才跑，状态仍是待付款）→ 不给「继续支付」，下一步说"支付时间已到"', () => {
+    for (const status of ['created', 'pending_payment']) {
+      const [r] = orderRows([{ ...ROW, status }], DEADLINE);
+      expect(r?.canPay, status).toBe(false);
+      expect(r?.nextText, status).toContain('支付时间已到');
+    }
+  });
+
+  it('截止前一毫秒 → 照常给；不传时刻 → 不判截止（与详情页 nowMs 同口径）', () => {
+    expect(orderRows([ROW], DEADLINE - 1)[0]?.canPay).toBe(true);
+    expect(orderRows([ROW])[0]?.canPay).toBe(true);
+    expect(orderRows([{ ...ROW, expires_at: 'garbage' }], DEADLINE)[0]?.canPay).toBe(true);
+  });
+
+  it('已付款的单过了"截止"也不受影响（截止只对可付态有意义）', () => {
+    const [r] = orderRows([{ ...ROW, status: 'paid' }], DEADLINE + 60_000);
+    expect(r?.canPay).toBe(false);
+    expect(r?.nextText).not.toContain('支付时间已到');
+  });
+});

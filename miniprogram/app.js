@@ -22,6 +22,7 @@
  *              「我的」页的"登录态"展示由它落地时消费 globalData.token。
  */
 import { createRequester } from './utils/request.js';
+import { skewFromHeaders } from './utils/server-clock.js';
 import { createUnconfiguredApi } from './utils/unconfigured-api.js';
 import { createWxApi } from './utils/wx-api.js';
 import { ensurePrivacyAuthorized } from './utils/privacy.js';
@@ -50,8 +51,17 @@ const errorLog = createErrorLog({ logger: () => createWxApi().getRealtimeLogMana
 App({
   globalData: {
     token: '',
-    /** 启动时的自动登录是否已失败（W-08：「我的」页据此不再一直显示"正在登录…"）。 */
+    /**
+     * 启动时的自动登录是否已失败（W-08：「我的」页据此不再一直显示"正在登录…"）。
+     * F3（第二轮审计 2026-10-11）：请求层 40101 触发的静默重登失败也记在这里——原先只有启动那一次会记，
+     * 之后 token 过期、重登失败时「我的」页仍显示"已登录"，买家找不到"重新登录"。成功写 token 时复位（setToken）。
+     */
     loginFailed: false,
+    /**
+     * 服务端时刻 − 本机时刻（毫秒，MP-8）：每个响应的 `Date` 头更新一次（utils/server-clock.js）。
+     * 0 = 还没有响应 / 没校准过；判付款截止的页面用 `serverNowMs(Date.now(), clockSkewMs)`。
+     */
+    clockSkewMs: 0,
     /**
      * 「我的」页"重新登录"调用的入口（M-17，AJ-406）：`() => Promise<{ok: boolean}>`；
      * null = 不可重试（没配 API 地址时，onLaunch 里不装）。
@@ -190,8 +200,21 @@ App({
             // ⚠️ relogin 与 setToken 要**成对**：relogin 拿到的新 token 只有经 setToken 写回，
             //    getToken 才会在重放时返回它（@see utils/request.js @limitation 一）
             setToken: (t) => this.setToken(t),
-            relogin,
+            // F3：重登失败记下来（「我的」页据此给"重新登录"），错误照抛给页面
+            relogin: async () => {
+              try {
+                return await relogin();
+              } catch (e) {
+                this.globalData.loginFailed = true;
+                throw e;
+              }
+            },
             log,
+            // MP-8：用响应头 Date 校准"判付款截止"的时刻（解析不了就不动，沿用上一次的值）
+            onHeaders: (header) => {
+              const skew = skewFromHeaders(header, Date.now());
+              if (skew !== null) this.globalData.clockSkewMs = skew;
+            },
           })
         : createUnconfiguredApi(launchError);
 

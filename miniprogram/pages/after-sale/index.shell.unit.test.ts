@@ -133,3 +133,18 @@ describe('售后申请页', () => {
     expect(app.pages).toContain('pages/after-sale/index');
   });
 });
+
+describe('提交途中按了返回（MP-13，第二轮审计 2026-10-11）', () => {
+  it('🔴 页面已卸载 → 提交成功后不再 navigateBack（否则会把用户从上一页再退一层）', async () => {
+    const hold = deferred<unknown>();
+    reply = () => hold.promise;
+    await open();
+    fill();
+    call('onSubmit');
+    await settle();
+    call('onUnload'); // 用户按了返回：宿主已经出栈一次
+    hold.resolve({});
+    await settle();
+    expect(back).toBe(0);
+  });
+});

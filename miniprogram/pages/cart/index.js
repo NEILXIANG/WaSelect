@@ -104,6 +104,8 @@ Page({
   quoteSeq: 0,
   /** M-14：最近一次删除的可撤销状态（vm `pendingRemoval`）；null = 没有。不进 data：渲染态是 `undo`。 */
   pending: null,
+  /** 这次报价的起因（F2）：'enter' 进屏 / 下拉 / 重试，'change' 购物车变了——只影响"计算中"那句提示。 */
+  quoteReason: 'enter',
   /** M-14：撤销窗口到点后收起那一行的定时器（只管"收起"，能否撤销以时刻为准，见 vm `undoAvailable`）。 */
   undoTimer: null,
 
@@ -113,7 +115,7 @@ Page({
 
   onShow() {
     track(app, 'page_view', { page: 'cart' }); // M-21 页面曝光
-    this.refresh();
+    this.refresh('enter');
     // S5：注入底部 tabBar 的高亮（本页是第 1 个 tab）。
     // @why 与取数**并列**而不是放进 refresh：refresh 也会被结算成功后调用，
     //      而"更新高亮"是进屏的事，混进"重读购物车"会让两件事的触发时机绑在一起。
@@ -136,12 +138,16 @@ Page({
    *           等报价回来再收会让下拉动画多挂一段，而用户要看的"购物车里有什么"此刻已经是最新的。
    */
   onPullDownRefresh() {
-    this.refresh();
+    this.refresh('enter');
     wxApi.stopPullDownRefresh();
   },
 
-  /** 重读本地购物车并（防抖地）重新报价。 */
-  refresh() {
+  /**
+   * 重读本地购物车并（防抖地）重新报价。
+   * @param {'enter'|'change'} [reason] 'enter' = 进屏 / 下拉刷新（提示"正在计算"）；默认 = 购物车变了（提示"重新计算"，F2）
+   */
+  refresh(reason = 'change') {
+    this.quoteReason = reason;
     const rows = cartRows(app.globalData.cart.items());
     // M-14：删光最后一件时仍要显示"已删除 · 撤销"——此时不能切到空态，否则撤销入口跟着消失
     const undo = undoView(this.pending, Date.now());
@@ -183,7 +189,7 @@ Page({
   /** 防抖地打一次报价（连点 +/- 只打最后一次，@why 见文件头）。 */
   requestQuote() {
     // 防抖窗口（400ms）内旧合计已不作数：「去结算」立刻禁用，不等定时器触发才变（审查 2026-10-09）
-    this.setData({ gate: checkoutGate({ quoting: true }) });
+    this.setData({ gate: checkoutGate({ quoting: true, reason: this.quoteReason }) });
     if (this.quoteTimer !== null) clearTimeout(this.quoteTimer);
     this.quoteTimer = setTimeout(() => {
       this.quoteTimer = null;
@@ -200,7 +206,7 @@ Page({
       quoting: true,
       quoteError: '',
       quoteRetry: false,
-      gate: checkoutGate({ quoting: true }),
+      gate: checkoutGate({ quoting: true, reason: this.quoteReason }),
     });
     try {
       const res = await app.globalData.api({
@@ -320,6 +326,7 @@ Page({
   onRetryQuote() {
     if (this.data.quoting === true) return;
     if (this.data.rows.length === 0) return;
+    this.quoteReason = 'enter'; // F2：重试不是"购物车变了"
     void this.fetchQuote();
   },
 

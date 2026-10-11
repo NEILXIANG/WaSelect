@@ -188,7 +188,7 @@ Page({
       this.homeCategories = categories;
       this.banners = Array.isArray(res?.banners) ? res.banners : [];
       this.setData({
-        slides: bannerSlides(res?.banners),
+        slides: bannerSlides(res?.banners, categories),
         // ⚠️ 用**当前**分类重算 tab：`/home` 可能在用户已经切过分类之后才回来，
         //    这里传空会让高亮跳回「全部」（表现为"我刚点了美妆，它自己跳回去了"）。
         tabs: categoryTabs(categories, this.category),
@@ -312,6 +312,8 @@ Page({
     this.setData({
       loading: true,
       loadingMore: false,
+      // F10（第二轮审计 2026-10-11）：上一次失败留下的 empty=true 不清，加载中会同时显示"空态"与"加载中"
+      empty: false,
       error: '',
       moreError: '',
       moreErrorRef: '',

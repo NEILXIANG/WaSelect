@@ -97,6 +97,8 @@ export function selectionBar(rows) {
 const MUST_CHANGE_CART = new Set([40401, 40906, 40912]);
 /** 全局停售（AJ-384）。 */
 const SALES_PAUSED_CODE = 40916;
+/** 账号被限制（拉黑，F4；与 utils/error-text.js FORBIDDEN_CODE 同码）。 */
+const FORBIDDEN_CODE = 40301;
 
 /**
  * 品种超限时的文案（P2-31）。
@@ -116,6 +118,8 @@ const DELISTED_CODE = 40401;
 /** 报价失败提示：区分"稍后重试就好"与"必须改购物车"（MP3-09 / P2-31）。 */
 export function quoteErrorHint(code, lineCount) {
   if (tooManyLines(code, lineCount)) return TOO_MANY_LINES_TEXT;
+  // F4（第二轮审计 2026-10-11）：账号受限（40301）不是"稍后重试"能解决的
+  if (code === FORBIDDEN_CODE) return '账号已被限制使用，暂时无法结算，如有疑问请联系客服';
   // 停售（40916）：不是"稍后重试"能解决的，也不是购物车的问题（三端联动模拟 2026-10-08）
   if (code === SALES_PAUSED_CODE) return '店铺暂停接单中，恢复后即可结算';
   // 走查 2026-10-08：A3 之后「取消勾选」是最省事的出路，提示里要给到（原句只说调整数量或移除）。
@@ -141,7 +145,14 @@ export function checkoutGate(s) {
   const a = s !== null && typeof s === 'object' ? s : {};
   // A3：一件没勾时不报价（空 items 会 40001），按钮的原因是"没勾"而不是"在计算"
   if (a.noneSelected === true) return { disabled: true, hint: '请勾选要结算的商品' };
-  if (a.quoting === true) return { disabled: true, hint: '数量已改，正在重新计算…' };
+  // F2（第二轮审计 2026-10-11）：进页面的首次报价说"正在计算"；改了购物车（数量 / 勾选 / 删除）才说"重新计算"——
+  //   原句"数量已改"在用户什么都没改、或只是改了勾选时都不成立
+  if (a.quoting === true) {
+    return {
+      disabled: true,
+      hint: a.reason === 'enter' ? '正在计算运费与合计…' : '购物车有变动，正在重新计算…',
+    };
+  }
   // ⚠️ 失败提示要看**码**：确定性失败（下架 / 超重 / 超上限）说"稍后重试"是句谎话（MP3-09）
   if (a.hasError === true) {
     return { disabled: true, hint: quoteErrorHint(a.errorCode, a.lineCount) };
@@ -239,6 +250,6 @@ export function undoView(pending, nowMs) {
  */
 export function quoteRetryable(code, lineCount) {
   if (tooManyLines(code, lineCount)) return false;
-  if (code === SALES_PAUSED_CODE) return false;
+  if (code === SALES_PAUSED_CODE || code === FORBIDDEN_CODE) return false;
   return !MUST_CHANGE_CART.has(code);
 }

@@ -31,6 +31,7 @@ import {
   addLimit,
   retryableLoadError,
   stillAdded,
+  qtyCapText,
   stepQty,
   relatedCards,
   relatedNavMethod,
@@ -67,6 +68,8 @@ Page({
     loading: false,
     /** A9（AJ-416）：这次要加 / 要买几件（vm `stepQty`）。 */
     qty: 1,
+    /** F8：点「＋」点不动时的说明（vm `qtyCapText`）；空串 = 不显示。 */
+    qtyNote: '',
     /** A10（AJ-416）：同类推荐（vm `relatedCards`）；空数组 = 不显示那一块。 */
     related: [],
     /** 错误文案（空串 = 无错误）。缺 id / 40401（下架或不存在）都会落到这里。 */
@@ -259,11 +262,17 @@ Page({
   /** 立即购买（剩余清单 4-4）：只结这一件，不进购物车。 */
   /** A9（AJ-416）：数量步进（1 起步，不超过库存；加购与立即购买都用它）。 */
   onQtyMinus() {
-    this.setData({ qty: stepQty(this.data.qty, -1, this.data.product?.stock ?? null) });
+    this.setData({
+      qty: stepQty(this.data.qty, -1, this.data.product?.stock ?? null),
+      qtyNote: '',
+    });
   },
 
+  /** F8：加不上去（已到上限）时说明原因，而不是没有任何反应。 */
   onQtyPlus() {
-    this.setData({ qty: stepQty(this.data.qty, 1, this.data.product?.stock ?? null) });
+    const stock = this.data.product?.stock ?? null;
+    const qty = stepQty(this.data.qty, 1, stock);
+    this.setData({ qty, qtyNote: qty === this.data.qty ? qtyCapText(qty, stock) : '' });
   },
 
   onBuyNow() {

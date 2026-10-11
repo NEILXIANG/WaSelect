@@ -299,6 +299,11 @@ describe('限流接线（真请求，防"组件对了但没挂上"）', () => {
       const url = `http://127.0.0.1:${server.port}/api/v1/orders/quote`;
       const post = () =>
         fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      // ⚠️ 避开整分钟边界（第二轮审计 2026-10-11 gate:fast 偶发红：第 31 次得到 401 而不是 429）：
+      //    限流是按整分钟对齐的固定窗口（ports/rate-limit.ts `windowStartOf`），这里走真实时钟；
+      //    31 次请求约 0.6 秒，恰好跨过整分钟时计数清零、第 31 次被放行。离边界不足 3 秒就等到下一分钟开头再打。
+      const msToNextMinute = 60_000 - (Date.now() % 60_000);
+      if (msToNextMinute < 3_000) await new Promise((r) => setTimeout(r, msToNextMinute + 50));
       // 默认 RATE_LIMIT_QUOTE_PER_MIN=30：前 30 次穿过限流，被 requireRole 拦成 40101
       for (let i = 0; i < 30; i += 1) {
         const res = await post();

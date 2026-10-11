@@ -616,3 +616,19 @@ describe('账号被拉黑（40301）：支付页换成关闭屏 + 联系客服',
     expect(page.data['channels']).toHaveLength(1);
   });
 });
+
+describe('链接里没有订单 id（F11，第二轮审计 2026-10-11）', () => {
+  it('🔴 不发请求；错误态按钮去订单列表，而不是拿空 id 去请求（会撞上订单列表接口）', async () => {
+    await settle(); // beforeEach 已用订单号打开过一次：等它收尾再清账
+    requests = [];
+    call('onLoad', {});
+    await settle();
+    expect(requests).toEqual([]);
+    expect(page.data['noOrderId']).toBe(true);
+    expect(String(page.data['error'])).toContain('订单');
+    call('onRetry');
+    await settle();
+    expect(requests).toEqual([]);
+    expect(tabs).toEqual(['/pages/order/index']);
+  });
+});

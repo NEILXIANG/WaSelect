@@ -13,6 +13,8 @@ import { deferred, loadPage, type LoadedPage } from '../../../test/helpers/mp-pa
 let page: LoadedPage;
 let posts: Array<{ url: string; method?: string }>;
 let hold: ReturnType<typeof deferred<unknown>> | null;
+/** MP-13：navigateBack 被调了几次。 */
+let backs: number;
 let fail: Error | null;
 /** 新增成功后的一次性交接要从这里读（结算页 → 新增地址 → 自动选中）。 */
 let gd: Record<string, unknown>;
@@ -38,7 +40,8 @@ beforeEach(async () => {
   posts = [];
   hold = null;
   fail = null;
-  vi.stubGlobal('wx', { navigateBack: () => undefined });
+  backs = 0;
+  vi.stubGlobal('wx', { navigateBack: () => (backs += 1) });
   gd = {
     apiBase: 'http://api.test',
     api: async (req: { url: string; method?: string }) => {
@@ -163,5 +166,24 @@ describe('新增成功 → 交给地址列表"刚新增的那条"（三端走查
     call('onSave');
     await settle();
     expect(gd['justAddedAddressId'] ?? '').toBe('');
+  });
+});
+
+describe('保存途中按了返回（MP-13，第二轮审计 2026-10-11）', () => {
+  it('🔴 页面已卸载 → 保存成功后不再 navigateBack；没卸载照常出栈', async () => {
+    hold = deferred();
+    call('onSave');
+    await settle();
+    call('onUnload');
+    hold.resolve({ id: 'addr-1' });
+    await settle();
+    expect(backs).toBe(0);
+
+    hold = null;
+    call('onLoad', {});
+    page.setData({ form: { ...FORM } });
+    call('onSave');
+    await settle();
+    expect(backs).toBe(1);
   });
 });

@@ -117,6 +117,12 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   dirtyRef.current = dirty;
   /** 被脏态拦下的那次导航：点了二次确认才真正走（`@see leave`）。 */
   const [pendingNav, setPendingNav] = useState<Route | null>(null);
+  /**
+   * 被拦下的这次导航是不是来自地址栏（后退 / 前进 / 手改 hash，下方 subscribe 那段）。
+   * @why 那条路径已经"先回滚"压了一条当前页（pushState）；确认离开时要**退回**那一步，而不是再 go 一次——
+   *      再 go 会多压一条，按后退离开、确认之后再按后退，又回到刚离开的那页（代理 S7，第二轮审计浏览器实测）。
+   */
+  const pendingFromHistoryRef = useRef(false);
   const go = useCallback((next: Route) => {
     navigate(next); // 地址栏是唯一真源
     // ⚠️ 同时 setRoute 是**乐观更新**，不是第二套真源：`hashchange` 是异步派发的，
@@ -138,6 +144,7 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   const leave = useCallback(
     (next: Route, onLeave?: () => void) => {
       if (dirtyRef.current) {
+        pendingFromHistoryRef.current = false;
         setPendingNav(next);
         return;
       }
@@ -156,7 +163,7 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
    * @why hashchange 不可取消，只能"先回滚再问"：用 `pushState` 把地址写回当前页（它不触发 hashchange，
    *      不会自激），再弹同一个二次确认；确认后照常 `go(next)`。批次复审发现此前这条路径完全绕过提醒。
    * @tradeoff 回滚用 push 而不是 replace：replace 会覆盖掉后退到的那一条历史，再按后退就跳过了它；
-   *           push 的代价是"前进"栈被清空——比丢一条后退记录更可接受。
+   *           push 的代价是"前进"栈被清空——比丢一条后退记录更可接受。确认离开时 `history.back()` 退掉这条（@see pendingFromHistoryRef）。
    * @why 离开商品页时清掉 `editing`：编辑态不进网址，不清的话再按前进回到 `#/products` 会冒出一张空白基线的表单。
    */
   const shownRef = useRef(route);
@@ -170,6 +177,7 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
         if (buildHash(next) === buildHash(shownRef.current)) return;
         if (dirtyRef.current) {
           history.pushState(null, '', buildHash(shownRef.current));
+          pendingFromHistoryRef.current = true;
           setPendingNav(next);
           return;
         }
@@ -350,10 +358,21 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
             clearDirty();
             // ref 同步置干净：go 引发的 hashchange 可能先于重渲染到达，读到旧的 dirty 会再拦一次
             dirtyRef.current = false;
-            go(pendingNav);
+            if (pendingFromHistoryRef.current) {
+              // 地址栏来的：退回守卫压的那一条，地址落在原本要去的那页（不多压历史）；
+              // 同时乐观 setRoute（同 go 的理由），随后到达的 hashchange 发现已是当前页即不再处理
+              pendingFromHistoryRef.current = false;
+              setRoute(pendingNav);
+              history.back();
+            } else {
+              go(pendingNav);
+            }
             setPendingNav(null);
           }}
-          onCancel={() => setPendingNav(null)}
+          onCancel={() => {
+            pendingFromHistoryRef.current = false;
+            setPendingNav(null);
+          }}
         />
       )}
     </div>

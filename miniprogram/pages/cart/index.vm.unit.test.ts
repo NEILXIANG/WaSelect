@@ -277,11 +277,12 @@ describe('M-14 购物车：行进详情 / 删除撤销 / 报价重试（AJ-406�
     expect(undoView(p, T0).text).toBe('已删除 1 件商品');
   });
 
-  it('quoteRetryable：网络 / 5xx / 库存不足给重试；下架、超重、超上限、品种超限、停售不给', () => {
+  it('quoteRetryable：网络 / 5xx / 库存不足给重试；下架、超重、超上限、品种超限、停售、账号受限不给', () => {
     expect(quoteRetryable(-1, 1)).toBe(true);
     expect(quoteRetryable(50000, 1)).toBe(true);
     expect(quoteRetryable(40901, 1)).toBe(true);
-    for (const code of [40401, 40906, 40912, 40916])
+    // F4（第二轮审计 2026-10-11）：40301 = 账号被限制，重试永远不会成功
+    for (const code of [40401, 40906, 40912, 40916, 40301])
       expect(quoteRetryable(code, 1), String(code)).toBe(false);
     expect(quoteRetryable(40001, 51)).toBe(false);
     expect(quoteRetryable(40001, 3)).toBe(true);
@@ -337,5 +338,24 @@ describe('报价失败的出路要说全（三端联动走查 2026-10-08）', ()
       /<text class="[^"]*\bline-block\b[^"]*" wx:if="\{\{item\.invalidText\}\}"/,
     );
     expect(wxml).toMatch(/<text class="[^"]*\bline-block\b[^"]*" wx:if="\{\{quoteErrorRef\}\}"/);
+  });
+});
+
+describe('第二轮审计 2026-10-11：购物车结算提示（F2 / F4）', () => {
+  it('🔴 F2 进页面首次报价：说"正在计算"，不说"数量已改"（用户什么都没改）', () => {
+    const enter = checkoutGate({ quoting: true, reason: 'enter' });
+    expect(enter.disabled).toBe(true);
+    expect(enter.hint).toBe('正在计算运费与合计…');
+    // 改了购物车（数量 / 勾选 / 删除）：仍说"重新计算"，且不再只说"数量"（勾选变化也走这条）
+    const changed = checkoutGate({ quoting: true });
+    expect(changed.hint).toContain('重新计算');
+    expect(changed.hint).not.toContain('数量已改');
+  });
+
+  it('🔴 F4 账号受限（40301）：提示说账号受限，不说"稍后重试"', () => {
+    const g = checkoutGate({ hasError: true, errorCode: 40301, lineCount: 1 });
+    expect(g.disabled).toBe(true);
+    expect(g.hint).toContain('账号');
+    expect(g.hint).not.toContain('稍后重试');
   });
 });

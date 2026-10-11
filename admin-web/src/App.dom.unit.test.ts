@@ -221,6 +221,22 @@ describe('App：后退 / 前进也要过未保存提醒（批次复审发现此�
     expect(heading(el)).toBe('风控：拒付与拉黑');
     expect(location.hash).toBe('#/risk');
   });
+
+  it('🔴 确认离开后历史不多出一条（代理 S7，第二轮审计浏览器实测）：再按后退回到更早那页，不是刚离开的页', async () => {
+    const el = await open('#/banners');
+    const field = el.querySelector(
+      '.main input[type=text], .main input:not([type]), .main textarea',
+    );
+    await type(field, '双十一主图');
+    const before = history.length;
+    await goHash('#/risk'); // 地址栏走到 risk（+1），守卫回滚写回 banners（+1）
+    await click(button(el.ownerDocument.body, '放弃修改并离开'));
+    await new Promise((r) => setTimeout(r, 50)); // history.back 是异步的
+    expect(heading(el)).toBe('风控：拒付与拉黑');
+    expect(location.hash).toBe('#/risk');
+    // 原实现确认时再 go 一次（+1）：栈里是 banners → risk → banners → risk，后退会回到刚离开的 banners
+    expect(history.length).toBe(before + 2);
+  });
 });
 
 describe('App：前端报错可见（AJ-421）', () => {

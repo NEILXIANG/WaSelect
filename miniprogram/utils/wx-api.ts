@@ -41,6 +41,8 @@
 export interface WxRequestSuccess {
   statusCode: number;
   data: unknown;
+  /** 响应头（MP-8：读 `Date` 做服务端时间校准，utils/server-clock.js）；键名大小写由宿主决定，按不区分大小写读。 */
+  header?: Record<string, string>;
 }
 
 /** `wx.request` 的失败回调参数。 */

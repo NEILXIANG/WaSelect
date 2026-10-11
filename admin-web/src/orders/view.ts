@@ -786,10 +786,12 @@ export function amountBreakdown(order: unknown): Array<{ label: string; value: s
   const out: Array<{ label: string; value: string }> = [];
   if (Number.isInteger(o['items_jpy']))
     out.push({ label: '商品合计', value: moneyText(o['items_jpy']) });
+  // 关税紧跟商品合计、写"其中"（与小程序 MP-11 同口径）：它含在商品价里，与运费并列会被读成另收的第三笔
+  //   ——第二轮审计浏览器验收时看到 864 + 4,950 + 130 ≠ 实付 5,814
+  if (Number.isInteger(o['duty_jpy']))
+    out.push({ label: '其中预估关税（含在商品价内）', value: moneyText(o['duty_jpy']) });
   if (Number.isInteger(o['shipping_jpy']))
     out.push({ label: '运费', value: moneyText(o['shipping_jpy']) });
-  if (Number.isInteger(o['duty_jpy']))
-    out.push({ label: '预估关税（含在商品价内）', value: moneyText(o['duty_jpy']) });
   const p = (
     typeof o['payment'] === 'object' && o['payment'] !== null ? o['payment'] : {}
   ) as Record<string, unknown>;

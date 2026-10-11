@@ -290,9 +290,10 @@ describe('真服务端响应 → 购物车 / 结算 / 支付 / 推荐 / 再次�
     });
     expect(q.status).toBe(200);
     const v = quoteView(q.json);
-    expect(v.lines.map((l) => l.label)).toEqual(['商品合计', '运费', '预估关税（含在商品价内）']);
-    expect(v.lines.slice(0, 2).map((l) => l.value)).toEqual(['15,200 円', '4,950 円']);
-    expect(v.lines[2]?.value).toMatch(/^\d{1,3}(,\d{3})* 円$/);
+    // MP-11（第二轮审计）：关税不再与商品 / 运费并列成第三行，改为合计下方一句（hints 第一句）
+    expect(v.lines.map((l) => l.label)).toEqual(['商品合计', '运费']);
+    expect(v.lines.map((l) => l.value)).toEqual(['15,200 円', '4,950 円']);
+    expect(v.hints[0]).toMatch(/^其中预估关税 \d{1,3}(,\d{3})* 円（已含在商品价内）$/);
     expect([v.hasTotal, v.totalJpy, v.totalText]).toEqual([true, CHAIN_TOTAL_JPY, '20,150 円']);
     expect(v.totalSub).toMatch(/^≈ \$\d+\.\d{2} · ≈ ¥\d+(\.\d{2})?$/);
     expect(v.splitRequired).toBe(false);

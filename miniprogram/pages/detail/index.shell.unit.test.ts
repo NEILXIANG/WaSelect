@@ -173,8 +173,11 @@ describe('详情页选数量（A9，AJ-416）', () => {
   it('🔴 数量不超过库存（库存 4：点到 4 再点不涨）；减到 1 不再减', () => {
     for (let i = 0; i < 6; i += 1) call('onQtyPlus');
     expect(page.data['qty']).toBe(4);
+    // F8（第二轮审计）：点不动时说为什么（原先没有任何反馈，像按钮坏了）
+    expect(page.data['qtyNote']).toBe('库存只剩 4 件，最多买 4 件');
     for (let i = 0; i < 6; i += 1) call('onQtyMinus');
     expect(page.data['qty']).toBe(1);
+    expect(page.data['qtyNote']).toBe('');
   });
 
   it('🔴 车里已有 3 件、这次要加 2 件、库存 4 → 不加，并说清楚"最多再加 1 件"', () => {

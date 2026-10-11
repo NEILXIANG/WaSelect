@@ -142,6 +142,14 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   const { sortKey, sortDir, size: pageSize } = readListParams(route.query, LIST_SORT_KEYS.orders);
   /** 改排序 / 条数都回到第 1 页（第 3 页在新顺序下是另一批单，停在那里只会让人困惑）。 */
   const onSort = (sort: string): void => patch({ [Q.sort]: sort, [Q.page]: '1' });
+  /**
+   * 表头标哪一列为"当前排序"（第二轮审计浏览器验收）。
+   * @why 没带 sort 时请求用的是页签默认排序（待发货 = 付款时间从早到晚，AJ-453），而付款时间没有表头列；
+   *      原先仍把「下单时间 ↓」标成当前排序——运营会以为最新的单在最前。默认排序不落在任何表头列上时，一列都不标，
+   *      改在表格上方用一句话说明。
+   */
+  const pageDefaultSort = sortKey === null ? defaultSortFor(statusKey) : null;
+  const headSortKey = sortKey ?? (pageDefaultSort === null ? 'created_at' : '');
   const page = Math.max(1, Number(route.query.get(Q.page) ?? '1') || 1);
   const [rows, setRows] = useState<OrderRow[]>([]);
   /** 服务端原始条目：详情页要先拿到 has_dispute 才知道能不能退款（@see @limitation 一）。 */
@@ -469,6 +477,9 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       )}
       <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
 
+      {pageDefaultSort === 'paid_at' && (
+        <p className="muted">按付款时间从早到晚排列（等得最久的在最前）；点表头可改用其他排序</p>
+      )}
       <table className="table table-sticky-actions">
         <thead>
           <tr>
@@ -487,14 +498,14 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
             <SortTh
               label="金额"
               sortKey="total_jpy"
-              currentKey={sortKey ?? 'created_at'}
+              currentKey={headSortKey}
               currentDir={sortDir}
               onSort={onSort}
             />
             <SortTh
               label="下单时间"
               sortKey="created_at"
-              currentKey={sortKey ?? 'created_at'}
+              currentKey={headSortKey}
               currentDir={sortDir}
               onSort={onSort}
             />

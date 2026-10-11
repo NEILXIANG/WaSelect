@@ -22,6 +22,7 @@ import {
   addLimit,
   retryableLoadError,
   stillAdded,
+  qtyCapText,
   stepQty,
   relatedCards,
   relatedNavMethod,
@@ -428,5 +429,19 @@ describe('同类推荐（A10，AJ-416）', () => {
     expect(stepQty(98, 1, 500)).toBe(99);
     expect(stepQty(99, 1, 500)).toBe(99);
     expect(stepQty(3, 1, 4)).toBe(4);
+  });
+});
+
+describe('数量到上限时说明原因（F8，第二轮审计 2026-10-11）', () => {
+  it('🔴 被库存卡住 → 说库存只剩几件；被单件上限卡住 → 说最多 99 件', () => {
+    expect(qtyCapText(4, 4)).toBe('库存只剩 4 件，最多买 4 件');
+    expect(qtyCapText(99, 500)).toBe('每件商品一次最多买 99 件');
+    expect(qtyCapText(99, null)).toBe('每件商品一次最多买 99 件');
+  });
+
+  it('没到上限 / 脏值 → 空串（不说）', () => {
+    expect(qtyCapText(3, 4)).toBe('');
+    expect(qtyCapText(98, null)).toBe('');
+    expect(qtyCapText(undefined, 4)).toBe('');
   });
 });

@@ -18,6 +18,7 @@
  * @see ../../utils/cart-store.js（本地状态）；../../utils/pay-plan.js（支付部分）；
  *      ../../../contracts/api-contract.yaml（Quote / OrderCreated / POST /orders）
  */
+import { isContactEmailShape } from '../../utils/email-shape.js';
 
 /**
  * 商品行（**不带价格**：价格只信 quote，@see @limitation 一）。
@@ -75,7 +76,10 @@ export function termsFromResponse(res) {
  * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null,
  *          emailError?: string, contactEmail?: string, splitRequired?: boolean,
  *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean, buyNow?: boolean,
- *          productGone?: boolean}} state
+ *          productGone?: boolean, quoteErrorCode?: number, addressFailed?: boolean}} state
+ * @why `quoteErrorCode`（F4，第二轮审计 2026-10-11）：停售（40916）/ 账号受限（40301）的报价失败，原先也说"返回购物车检查商品后重试"——
+ *      两种都不是购物车的问题、重试也不会好。`addressFailed`（F5）：地址列表没取到时说"请选择收货地址"，
+ *      买家会以为自己的地址丢了、去重新填一遍。
  * @why `termsReady` / `termsFailed` / `quoteFailed` 三项（AJ-228）：
  *      条款版本没取到时 `orderBody` 会抛一句**给开发者看的**报错，此前闸门不看它，
  *      于是那句话被原样摆到用户面前；报价**失败**与报价**还没回来**此前是同一句"还在计算中"，
@@ -91,19 +95,29 @@ export function submitGate(state) {
   // 商品已下架（40401）排在地址 / 条款之前：买不了的东西，先让人勾条款再告诉他买不了是白折腾；
   // 也不说"报价失败请重试"——重试不会好（联动走查 2026-10-10）
   if (s.productGone === true) return { ok: false, reason: goneExit(s.buyNow).hint };
-  if (typeof s.addressId !== 'string' || s.addressId === '')
-    return { ok: false, reason: '请选择收货地址' };
+  if (typeof s.addressId !== 'string' || s.addressId === '') {
+    return {
+      ok: false,
+      reason:
+        s.addressFailed === true ? '收货地址没取到，请点上方「重新加载」再试' : '请选择收货地址',
+    };
+  }
   if (s.termsFailed === true) return { ok: false, reason: '购买条款暂时取不到，请稍后再试' };
   if (s.termsReady === false) return { ok: false, reason: '正在加载购买条款…' };
   if (s.termsAccepted !== true) return { ok: false, reason: '请先阅读并同意购买条款' };
   // 失败排在"计算中"之前：失败了就不会再有结果，说"计算中"是让人白等
   // 立即购买时那件商品不在购物车里（审查 2026-10-09）：说"返回购物车"是一条走不通的路
-  if (s.quoteFailed === true)
+  if (s.quoteFailed === true) {
+    // F4：按码说——停售 / 账号受限不是购物车的问题，也不是重试能解决的
+    if (s.quoteErrorCode === 40916) return { ok: false, reason: '店铺暂停接单中，恢复后即可下单' };
+    if (s.quoteErrorCode === 40301)
+      return { ok: false, reason: '账号已被限制使用，暂时无法下单，如有疑问请联系客服' };
     return {
       ok: false,
       reason:
         s.buyNow === true ? '报价失败，请返回商品页后重试' : '报价失败，请返回购物车检查商品后重试',
     };
+  }
   if (!Number.isInteger(s.totalJpy)) return { ok: false, reason: '运费与合计还在计算中' };
   // B38 / AJ-221：`split_hint` 为 true = **已经超过**单笔上限（服务端 `total > maxOrderJpy`），
   // 提交必然 40906。旧实现只把它当一句提示、照样放行——用户点了才知道被拒，
@@ -137,16 +151,31 @@ export const EMAIL_REQUIRED_TEXT = '请填写联系邮箱：付款、发货、�
  *      AJ-369 订单邮件上线后，用途说明才改回"付款、发货、退款通知"。
  * @param {unknown} raw 输入框原值
  * @returns {{value: string, error: string}} value 为空串 = 没有可用的邮箱（此时 error 必非空）
- * @why 口径与服务端入口（order-routes.ts contact_email）逐条一致：有 @、无空白、≤255；
- *      不发明更严的邮箱正则——前端比服务端严，会拒掉服务端能收的地址；比服务端松，就是"提交后才报错"。
+ * @why 口径与服务端入口（order-routes.ts contact_email）**同一判据**：MP-9（AJ-479）起两边都用
+ *      `isContactEmailShape`（服务端 shared、这里是镜像，同一张判例表比对）——前端比服务端严，会拒掉服务端能收的地址；
+ *      比服务端松，就是"提交后才报错"。原判据只要求有 @、无空白，`a@b` 也放行（邮件是唯一通知渠道，填错 = 失联）。
  * @why 首尾空白先去掉：输入法与粘贴常带空格，这不是用户想表达的内容。
  * @limitation 只在前端拦：绕过小程序直接调 `POST /orders` 仍可不带邮箱（契约可选，刻意不改，见 AJ-405）。
  */
 export function contactEmailOf(raw) {
   const v = typeof raw === 'string' ? raw.trim() : '';
   if (v === '') return { value: '', error: EMAIL_REQUIRED_TEXT };
-  const ok = v.length <= 255 && /^[^\s@]+@[^\s@]+$/.test(v);
-  return ok ? { value: v, error: '' } : { value: '', error: EMAIL_ERROR };
+  return isContactEmailShape(v) ? { value: v, error: '' } : { value: '', error: EMAIL_ERROR };
+}
+
+/**
+ * 输入过程中要不要显示邮箱错误（F7，第二轮审计 2026-10-11）。
+ * @why 原先每敲一个字就判一次：输到 `jane@` 就红一句"邮箱格式不正确"，人还没写完就被说错。
+ *      改为：**格式错**等失焦再判；已经报过错时才在输入中实时重判——改对了立即消失。
+ *      **清空**照旧立即说明为什么要填（M-01）：那是用户主动删掉的，不是"还没写完"。
+ * @param {unknown} raw 输入框原值
+ * @param {unknown} shown 当前显示着的错误（空串 = 没在显示）
+ * @returns {string} 要显示的错误（空串 = 不显示）
+ */
+export function emailInputError(raw, shown) {
+  const { error } = contactEmailOf(raw);
+  if (error === EMAIL_REQUIRED_TEXT) return error;
+  return typeof shown === 'string' && shown !== '' ? error : '';
 }
 
 /**

@@ -37,6 +37,7 @@ export function errorMessage(err) {
   if (isObj && err.code === BUSY_CODE) return busyText(err.data);
   if (isObj && err.code === FORBIDDEN_CODE) return FORBIDDEN_TEXT;
   if (isObj && err.code === SALES_PAUSED_CODE) return SALES_PAUSED_TEXT;
+  if (isObj && err.code === LOGIN_EXPIRED_CODE) return LOGIN_EXPIRED_TEXT;
   const fromMessage = isObj && typeof err.message === 'string' ? err.message.trim() : '';
   const fromErrMsg =
     fromMessage === '' && isObj && typeof err.errMsg === 'string' ? err.errMsg.trim() : '';
@@ -73,6 +74,15 @@ function busyText(data) {
  */
 const FORBIDDEN_CODE = 40301;
 const FORBIDDEN_TEXT = '账号已被限制使用，如有疑问请联系客服';
+
+/**
+ * 40101 到了页面（F3，第二轮审计 2026-10-11）：请求层已经静默重登并重放过一次（utils/request.js @limitation 一），
+ * 还是 40101 或重登本身失败，才会抛到这里。
+ * @why 服务端原文"未登录或登录已过期"没有下一步；页面的「重试」会再走一次静默重登（失败的重登不会被缓存），
+ *      所以照实说"重试会自动重新登录"。重登失败同时记进 globalData.loginFailed，「我的」页给"重新登录"按钮（app.js）。
+ */
+const LOGIN_EXPIRED_CODE = 40101;
+const LOGIN_EXPIRED_TEXT = '登录状态已失效，请点「重试」，会自动重新登录';
 
 /**
  * 40916 全局停售（AJ-384）。

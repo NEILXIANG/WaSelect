@@ -70,11 +70,14 @@
       <view class="qty-row" wx:if="{{!product.soldOut}}">
         <text class="ws-note">数量</text>
         <view class="qty-row__ctl">
-          <view class="step" hover-class="ws-press" bindtap="onQtyMinus" aria-role="button" aria-label="减少数量">−</view>
+          <!-- MP-12（第二轮审计）：类名原为 .step，与下方"运输流程"的 .step 同名，后写的规则把流程行套成了居中大字 -->
+          <view class="qty-step" hover-class="ws-press" bindtap="onQtyMinus" aria-role="button" aria-label="减少数量">−</view>
           <text class="qty-row__value" aria-label="数量 {{qty}}">{{qty}}</text>
-          <view class="step" hover-class="ws-press" bindtap="onQtyPlus" aria-role="button" aria-label="增加数量">＋</view>
+          <view class="qty-step" hover-class="ws-press" bindtap="onQtyPlus" aria-role="button" aria-label="增加数量">＋</view>
         </view>
       </view>
+      <!-- F8：点「＋」点不动时说为什么 -->
+      <text class="ws-note" wx:if="{{qtyNote}}">{{qtyNote}}</text>
 
       <view class="specs" wx:if="{{product.specs.length > 0}}">
         <view class="spec" wx:for="{{product.specs}}" wx:for-item="row" wx:key="label">

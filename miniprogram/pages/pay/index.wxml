@@ -18,8 +18,8 @@
     <view class="ws-card state">
       <text class="ws-note state__error">{{error}}</text>
       <text class="ws-caption" wx:if="{{errorRef}}" user-select>{{errorRef}}</text>
-      <!-- 剩余清单 4-8：错误态给出下一步（原先只有一行红字） -->
-      <ws-button text="重试" type="default" bindtap="onRetry" />
+      <!-- 剩余清单 4-8：错误态给出下一步（原先只有一行红字）。F11：链接里没有订单 id 时重试无用，改去订单列表 -->
+      <ws-button text="{{noOrderId ? '查看我的订单' : '重试'}}" type="default" bindtap="onRetry" />
     </view>
   </view>
 

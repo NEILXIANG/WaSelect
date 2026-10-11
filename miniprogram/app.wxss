@@ -479,6 +479,15 @@ page {
   color: var(--ws-ink-faint);
 }
 
+/*
+ * MP-6（第二轮审计 2026-10-11）：底栏上方那一行（结算页"按钮为什么不能点"、购物车"去结算"的原因）是买家要照着做的话，
+ * 不能用最弱的 caption 色——ink-faint 在白底只有 2.18:1，ink-soft 是 7.54:1（AJ-429 同一组实算）。
+ * 只改颜色不改字号（小程序 UI 冻结：只做可读性修复）。复合选择器：比单个 .ws-caption 更具体，且不影响别处的 caption。
+ */
+.ws-caption.ws-buybar__note {
+  color: var(--ws-ink-soft);
+}
+
 /* 价格：衬线 + 稍大，读作"标价"而不是"数字" */
 .ws-price {
   font-family: var(--ws-font-serif);

@@ -315,10 +315,10 @@ describe('bannerSlides（首页轮播）', () => {
     },
   ];
 
-  it('正常：只取 id 与 image（渲染不需要 image_key / link_*）', () => {
-    expect(bannerSlides(BANNERS)).toEqual([
-      { id: 'b-1', image: 'https://img.example.com/banners/a.png' },
-      { id: 'b-2', image: 'https://img.example.com/banners/b.png' },
+  it('正常：只取 id / image 与"能不能点"（渲染不需要 image_key / link_*；MP-1 起带 tappable）', () => {
+    expect(bannerSlides(BANNERS, ['kitchen'])).toEqual([
+      { id: 'b-1', image: 'https://img.example.com/banners/a.png', tappable: true },
+      { id: 'b-2', image: 'https://img.example.com/banners/b.png', tappable: true },
     ]);
   });
 
@@ -571,5 +571,25 @@ describe('emptyCopy：空态说清楚是"搜不到"还是"分类里没有"（小
       title: '这个分类下暂时没有商品',
       reason: '换个分类看看',
     });
+  });
+});
+
+describe('banner 能不能点（MP-1，第二轮审计 2026-10-11）', () => {
+  const B = { id: 'b-1', image: 'https://img.example.com/a.png' };
+
+  it('🔴 没有跳转目标的 banner 标成不可点（原先有按下态、点了没反应——"假按钮"）', () => {
+    expect(bannerSlides([{ ...B, link_type: 'none' }])[0]?.tappable).toBe(false);
+    expect(bannerSlides([{ ...B, link_type: 'product', link_id: '' }])[0]?.tappable).toBe(false);
+    // 指向不存在的分类：intentForBanner 不跳，所以也不可点
+    expect(
+      bannerSlides([{ ...B, link_type: 'category', link_id: 'nope' }], ['kitchen'])[0]?.tappable,
+    ).toBe(false);
+  });
+
+  it('🔴 能跳的 banner 标成可点（与 intentForBanner 同一个判断，不会一个说能点、一个不跳）', () => {
+    expect(bannerSlides([{ ...B, link_type: 'product', link_id: 'p-1' }])[0]?.tappable).toBe(true);
+    expect(
+      bannerSlides([{ ...B, link_type: 'category', link_id: 'kitchen' }], ['kitchen'])[0]?.tappable,
+    ).toBe(true);
   });
 });

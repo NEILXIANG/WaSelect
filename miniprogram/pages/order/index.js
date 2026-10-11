@@ -27,6 +27,7 @@
 import { emptyState, orderRows, tabsView } from './index.vm.js';
 import { resolveOrderTab, tabItems, tabStatusParam } from '../../utils/order-tabs.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
+import { serverNowMs } from '../../utils/server-clock.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -113,7 +114,11 @@ Page({
       });
       if (isStale(seq, this.seq)) return;
       // AJ-430：「售后·退款」取的是全量，本地只留退款中 / 已退款或有售后申请的单（其它页签原样）
-      const rows = orderRows(tabItems(tab, res?.items));
+      // MP-14：截止已到的待付款行不给「继续支付」（时刻经服务端 Date 头校准，MP-8）
+      const rows = orderRows(
+        tabItems(tab, res?.items),
+        serverNowMs(Date.now(), app.globalData.clockSkewMs),
+      );
       const empty = emptyState(rows, '', tab);
       this.setData({
         rows,

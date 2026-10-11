@@ -63,6 +63,9 @@ const DEADLINE_HINTS = {
     `如果已经完成付款，系统确认后这里会更新；还没付的话，请在 ${at}前继续支付。`,
 };
 
+/** 截止已到、还没关单时的下一步（与订单详情 vm 同一句）。 */
+const EXPIRED_NEXT = '支付时间已到，订单将自动关闭；如需购买请重新下单';
+
 /** 一行的"下一步"提示：售后进度 > 付款截止 > 订单状态的列表提示。 */
 function nextTextOf(o, status, buyer) {
   if (
@@ -82,6 +85,7 @@ function nextTextOf(o, status, buyer) {
 /**
  * `GET /orders` 的 items → 列表行。
  * @param {unknown} items 契约 `OrderSummary[]`
+ * @param {number} [nowMs] 当前时刻（判付款截止，MP-14）；不传 = 不判（时间由入参给，vm 不读时钟）
  * @returns {Array<{orderId: string, orderNo: string, totalJpy: number|null, totalText: string,
  *                  totalSub: string, statusText: string, nextText: string, canPay: boolean,
  *                  createdText: string, thumb: string, itemCountText: string, titleText: string}>}
@@ -95,7 +99,7 @@ function nextTextOf(o, status, buyer) {
  *      而"没有合计"的订单连组件都不该渲染——所以整数是 null 而不是 0
  *      （`0 円` 会被读成"这单不要钱"）。
  */
-export function orderRows(items) {
+export function orderRows(items, nowMs = undefined) {
   if (!Array.isArray(items)) return [];
   return items
     .filter((o) => o && typeof o.order_id === 'string' && o.order_id !== '')
@@ -103,6 +107,13 @@ export function orderRows(items) {
       const status = typeof o.status === 'string' ? o.status : '';
       const hasTotal = Number.isInteger(o.total_jpy);
       const buyer = buyerStatus(status, { inList: true });
+      // MP-14（第二轮审计 2026-10-11）：截止已到但关单作业还没跑（最多约 1 分钟）——与详情页同口径，不再给「继续支付」
+      const expiresMs = typeof o.expires_at === 'string' ? Date.parse(o.expires_at) : Number.NaN;
+      const expired =
+        PAYABLE.includes(status) &&
+        Number.isFinite(nowMs) &&
+        Number.isFinite(expiresMs) &&
+        nowMs >= expiresMs;
       return {
         orderId: o.order_id,
         orderNo: typeof o.order_no === 'string' ? o.order_no : '',
@@ -112,8 +123,8 @@ export function orderRows(items) {
         // ⚠️ 不在词表里的状态给 '状态未知' 而不是空串：
         //    空串在真机上就是一个空白的标签，用户无法区分"没状态"和"渲染错了"
         statusText: buyer.title,
-        nextText: nextTextOf(o, status, buyer),
-        canPay: PAYABLE.includes(status),
+        nextText: expired ? EXPIRED_NEXT : nextTextOf(o, status, buyer),
+        canPay: PAYABLE.includes(status) && !expired,
         createdText: jstDateTimeLabeled(o.created_at) ?? '',
         thumb: thumbUrl(o.first_image),
         itemCountText:

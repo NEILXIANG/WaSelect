@@ -26,6 +26,8 @@ let fail: boolean;
 /** AJ-433：接口回 40301（账号被拉黑）。 */
 let forbidden: boolean;
 let clipFail: boolean;
+/** MP-7：POST（取消 / 确认收货）抛这个错；null = 成功。 */
+let postError: unknown;
 let hold: ReturnType<typeof deferred<unknown>> | null;
 /** A7：每次打开详情返回的订单（默认 ORDER）。 */
 let order: Record<string, unknown>;
@@ -44,9 +46,13 @@ async function open(id = 'o-1', extra: Record<string, string> = {}): Promise<voi
   page = await loadPage(new URL('./index.js', import.meta.url).href, {
     globalData: {
       apiBase: 'http://api.test',
-      api: async (req: { url: string }) => {
+      api: async (req: { url: string; method?: string }) => {
         const path = req.url.replace('http://api.test', '');
-        calls.push(`GET ${path}`);
+        calls.push(`${req.method ?? 'GET'} ${path}`);
+        if (req.method === 'POST') {
+          if (postError !== null) throw postError;
+          return {};
+        }
         if (path.endsWith('/support')) return { wechat: 'waselect_cs' };
         if (hold !== null) return hold.promise;
         if (fail) throw Object.assign(new Error('网络请求失败'), { code: -1 });
@@ -74,6 +80,7 @@ beforeEach(() => {
   fail = false;
   forbidden = false;
   clipFail = false;
+  postError = null;
   hold = null;
   order = ORDER;
   added = [];
@@ -141,12 +148,14 @@ describe('订单详情：复制订单号（M-05）', () => {
     expect(page.data['copied']).toBe('order');
   });
 
-  it('🔴 复制失败 → 告诉用户长按手动复制（不是什么都不发生）', async () => {
+  it('🔴 复制失败 → 就近告诉用户长按手动复制（不是什么都不发生）；不弹顶部错误态（F9：订单本身没问题）', async () => {
     await open();
     clipFail = true;
     call('onCopyOrderNo');
     expect(page.data['copied']).toBe('');
-    expect(String(page.data['error'])).toContain('订单号');
+    expect(String(page.data['copyError'])).toContain('订单号');
+    expect(page.data['copyErrorAt']).toBe('order');
+    expect(page.data['error']).toBe('');
   });
 
   it('订单还没取到（没有订单号）→ 不调剪贴板', async () => {
@@ -307,5 +316,63 @@ describe('被拉黑的账号：错误态给「联系客服」（AJ-433，用户 
     await settle();
     expect(calls[0]).toBe('GET /api/v1/orders/o-1');
     expect(nav).toEqual([]);
+  });
+});
+
+describe('取消 / 确认收货撞上状态已变（MP-7，第二轮审计 2026-10-11）', () => {
+  const PENDING = { ...ORDER, status: 'pending_payment', expires_at: '2099-01-01T00:00:00.000Z' };
+  const view = (): Record<string, unknown> => page.data['view'] as Record<string, unknown>;
+
+  it('🔴 取消时 40902（服务端那边已付款）→ 重取这张单，按钮随新状态更新，并说一句为什么', async () => {
+    order = PENDING;
+    await open();
+    expect(view()['canCancel']).toBe(true);
+    postError = Object.assign(new Error('订单状态不允许此操作'), { code: 40902 });
+    order = { ...ORDER, status: 'paid' };
+    await call<Promise<void>>('cancel');
+    await settle();
+    expect(calls).toEqual(['POST /api/v1/orders/o-1/cancel', 'GET /api/v1/orders/o-1']);
+    expect(view()['canCancel']).toBe(false);
+    expect(page.data['error']).toBe('');
+    expect(String(page.data['actionNote'])).toContain('已为你刷新');
+    expect(page.data['cancelling']).toBe(false);
+  });
+
+  it('🔴 确认收货时 40902（如拒付冻结）→ 同样重取并说明，且提示可联系客服', async () => {
+    order = { ...ORDER, status: 'shipped' };
+    await open();
+    postError = Object.assign(new Error('订单状态不允许此操作'), { code: 40902 });
+    await call<Promise<void>>('confirmReceipt');
+    await settle();
+    expect(calls).toEqual(['POST /api/v1/orders/o-1/confirm-receipt', 'GET /api/v1/orders/o-1']);
+    expect(String(page.data['actionNote'])).toContain('联系客服');
+  });
+
+  it('网络错 → 仍走通用错误态，不重取', async () => {
+    order = PENDING;
+    await open();
+    postError = Object.assign(new Error('网络请求失败'), { code: -1 });
+    await call<Promise<void>>('cancel');
+    await settle();
+    expect(calls).toEqual(['POST /api/v1/orders/o-1/cancel']);
+    expect(String(page.data['error'])).not.toBe('');
+    expect(page.data['actionNote']).toBe('');
+  });
+});
+
+describe('并发取数只认最后一次（F12，第二轮审计 2026-10-11）', () => {
+  it('🔴 先发的旧请求后回来 → 丢弃，不把新状态盖回去', async () => {
+    await open();
+    const slow = deferred<unknown>();
+    hold = slow;
+    const first = call<Promise<void>>('load'); // 旧请求挂住
+    hold = null;
+    order = { ...ORDER, status: 'cancelled' };
+    await call<Promise<void>>('load'); // 新请求先回来：已取消
+    slow.resolve({ ...ORDER, status: 'pending_payment' }); // 旧响应后到
+    await first;
+    await settle();
+    expect((page.data['view'] as Record<string, unknown>)['statusText']).toBe('已取消');
+    expect(page.data['loading']).toBe(false);
   });
 });

@@ -357,6 +357,23 @@ export function stepQty(current, delta, stock) {
 }
 
 /**
+ * 数量到上限时的说明（F8，第二轮审计 2026-10-11）：点「＋」点不动时说为什么。
+ * @why 原先到上限后再点没有任何反馈，像按钮坏了。库存数此处照说（加购提示 `addNote` 已经在说"库存只剩 N 件"，口径一致）。
+ * @param {unknown} qty 当前数量
+ * @param {unknown} stock 库存（null = 不知道 → 只受单件上限 99 约束）
+ * @returns {string} 空串 = 没到上限（不说）
+ */
+export function qtyCapText(qty, stock) {
+  if (!Number.isInteger(qty)) return '';
+  const byStock = Number.isInteger(stock) && stock >= 1 && stock < MAX_LINE_QTY;
+  const cap = byStock ? stock : MAX_LINE_QTY;
+  if (qty < cap) return '';
+  return byStock
+    ? `库存只剩 ${String(stock)} 件，最多买 ${String(stock)} 件`
+    : `每件商品一次最多买 ${String(MAX_LINE_QTY)} 件`;
+}
+
+/**
  * 回到详情页时"已加入购物车"还算不算数（审查 2026-10-09）：去购物车把这件删了再回来，
  * 按钮仍写"已加入购物车"、角标却是 0——两处说法相反。购物车里已没有这件 → 复位。
  */

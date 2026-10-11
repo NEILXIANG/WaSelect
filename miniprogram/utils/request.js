@@ -86,6 +86,8 @@ export class ApiError extends Error {
  * @param {Function} [deps.relogin] 静默重登：`() => Promise<string>` 返回新 token。
  *                   不传 → 收到 40101 时**不重放**（原样抛出）：没有重登手段时重放注定还是 40101
  * @param {Function} [deps.log] 埋点出口，收到 `{ event, ...fields }`
+ * @param {Function} [deps.onHeaders] 每个**有 HTTP 响应**的请求都把 `res.header` 交给它（MP-8 服务端时间校准，
+ *                   见 app.js / utils/server-clock.js）；它抛错不影响请求结果
  */
 export function createRequester(deps = {}) {
   const wxApi = deps.wx ?? createWxApi();
@@ -154,6 +156,12 @@ export function createRequester(deps = {}) {
         header,
         timeout: opts.timeout ?? 10000,
         success: (res) => {
+          // MP-8：业务失败的响应同样带着服务端时刻，所以在判成败之前交出去；校准是附带的，出错也不能让请求失败
+          try {
+            deps.onHeaders?.(res.header);
+          } catch {
+            // 静默：校准失败 = 沿用本机时钟（旧行为）
+          }
           const status = res.statusCode;
           const body = res.data;
           const code = typeof body?.code === 'number' ? body.code : undefined;

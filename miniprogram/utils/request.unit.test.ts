@@ -391,3 +391,51 @@ describe('ApiError 携带 traceId 与 data（4-6 / 4-7）', () => {
     });
   });
 });
+
+describe('响应头交给 onHeaders（MP-8 服务端时间校准，第二轮审计 2026-10-11）', () => {
+  /** 带响应头的假宿主（上面的 fakeWx 不给 header）。 */
+  function wxWithHeader(statusCode: number, data: unknown, header: Record<string, string>) {
+    const request = (opts: WxRequestOption): void => {
+      opts.success?.({ statusCode, data, header });
+    };
+    return createWxApi({ request });
+  }
+
+  it('🔴 成功与业务失败的响应都把 header 交出去（失败响应同样带着服务端时刻）', async () => {
+    const seen: unknown[] = [];
+    const onHeaders = (h: unknown): void => {
+      seen.push(h);
+    };
+    const ok = createRequester({
+      wx: wxWithHeader(200, { ok: true }, { Date: 'Sat, 10 Oct 2026 14:03:07 GMT' }),
+      log: () => undefined,
+      onHeaders,
+    });
+    await ok({ url: 'https://api.test/a' });
+    const bad = createRequester({
+      wx: wxWithHeader(
+        409,
+        { code: 40902, message: 'x' },
+        { date: 'Sat, 10 Oct 2026 14:03:08 GMT' },
+      ),
+      log: () => undefined,
+      onHeaders,
+    });
+    await expect(bad({ url: 'https://api.test/b' })).rejects.toBeInstanceOf(ApiError);
+    expect(seen).toEqual([
+      { Date: 'Sat, 10 Oct 2026 14:03:07 GMT' },
+      { date: 'Sat, 10 Oct 2026 14:03:08 GMT' },
+    ]);
+  });
+
+  it('onHeaders 自己抛错也不影响请求结果（校准是附带的，不能让请求失败）', async () => {
+    const api = createRequester({
+      wx: wxWithHeader(200, { ok: true }, { date: 'x' }),
+      log: () => undefined,
+      onHeaders: () => {
+        throw new Error('boom');
+      },
+    });
+    await expect(api({ url: 'https://api.test/a' })).resolves.toEqual({ ok: true });
+  });
+});

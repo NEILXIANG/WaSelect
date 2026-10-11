@@ -257,10 +257,19 @@ export function visibleBanners(banners) {
   return out;
 }
 
-export function bannerSlides(banners) {
+/**
+ * 轮播渲染数据。
+ * @param {unknown} banners `GET /home` 的 banners
+ * @param {unknown} [categories] 当前已知分类 key（同 `intentForBanner`）
+ * @why `tappable`（MP-1，第二轮审计 2026-10-11）：没有跳转目标的 banner（管理端默认 link_type=none）
+ *      原先也有按下态、点了没反应——"假按钮"。是否可点与 `intentForBanner` 用**同一个判断**，
+ *      不会出现"看着能点、点了不跳"或反过来。
+ */
+export function bannerSlides(banners, categories = undefined) {
   return visibleBanners(banners).map((b) => ({
     id: String(b.id),
     image: String(b.image).trim(),
+    tappable: intentForBanner(b, categories) !== null,
   }));
 }
 

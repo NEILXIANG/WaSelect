@@ -46,6 +46,7 @@ import { createIntentIdempotency } from '../../utils/idempotency.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
 import { countdownText } from '../../utils/countdown.js';
+import { serverNowMs } from '../../utils/server-clock.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { markExternalPay, recentExternalPay } from '../../utils/external-pay.js';
@@ -91,6 +92,8 @@ const USER_PAGE = '/pages/user/index';
 
 Page({
   data: {
+    /** F11：链接里没有订单 id（错误态按钮去订单列表，而不是重试）。 */
+    noOrderId: false,
     /** `chargeOptions` 的输出：每个通道带实扣币种与金额（§14.2，AJ-180）。 */
     channels: [],
     /** 剩余清单 4-8：取到通道但一个都没有（金额 / 地区不支持）→ 显示空态而不是一片空白。 */
@@ -152,7 +155,11 @@ Page({
     this.intentKey = createIntentIdempotency();
     this.orderId = typeof options?.orderId === 'string' ? options.orderId : '';
     if (this.orderId === '') {
-      this.setData({ error: '缺少订单 id' });
+      // F11：说人话 + 按钮改成去订单列表（重试拿不到 id）
+      this.setData({
+        error: '没有找到要支付的订单，请到「订单」里找到这一单继续支付',
+        noOrderId: true,
+      });
       return;
     }
     void this.load();
@@ -181,7 +188,8 @@ Page({
       const total = Number.isInteger(order?.total_jpy) ? order.total_jpy : null;
       // B35 / AJ-218：已付 / 已关 / 已退款的单**不列支付方式**（点了就是 40902）
       // P2-35：待付款但已过 expires_at 同样不列（时间由这里传入，vm 不读时钟）
-      const view = payPageView(order, Date.now());
+      // MP-8（第二轮审计 2026-10-11）：截止判定用校准过的时刻——手机时钟偏快时不会提前判"已过期"、收起支付按钮
+      const view = payPageView(order, serverNowMs(Date.now(), app.globalData.clockSkewMs));
       this.setData({ totalJpy: total, closedText: view.closedText });
       if (!view.payable) {
         // 整个 view 交出去：文案与"给不给重新下单的出口"是同一次判断的两个产物
@@ -274,7 +282,7 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}`,
         traceId: this.traceId,
       });
-      const view = payPageView(order, Date.now());
+      const view = payPageView(order, serverNowMs(Date.now(), app.globalData.clockSkewMs));
       if (!view.payable) {
         this.stopCountdown();
         this.setData({ ...closedScreen(view), confirmNote: '' });
@@ -338,7 +346,7 @@ Page({
   startCountdown() {
     this.stopCountdown();
     const tick = () => {
-      const c = countdownText(this.expiresAt, Date.now());
+      const c = countdownText(this.expiresAt, serverNowMs(Date.now(), app.globalData.clockSkewMs));
       if (c.expired) {
         // P2-35：到点不只是改文案——收起通道换关闭屏（按钮还能点 = 付款落成迟到款），
         // 再向服务端核对一次真值（可能其实已付，那就换成"无需再支付"）。
@@ -493,8 +501,16 @@ Page({
    *      链接文本本身也在页面上（`user-select`，见 index.wxml）。
    * @limitation 失败文案由 `copyResult` 产出（约束十一：文案不在薄壳里写死）。
    */
-  /** 错误态 / 无通道空态的"重试"（剩余清单 4-8）：重新取订单与通道。 */
+  /**
+   * 错误态 / 无通道空态的"重试"（剩余清单 4-8）：重新取订单与通道。
+   * F11（第二轮审计 2026-10-11）：链接里没有订单 id 时重试只会去请求 `GET /orders/`（撞上列表路由）——
+   * 这时去订单列表找这一单，而不是重试。
+   */
   onRetry() {
+    if (this.orderId === '') {
+      wxApi.switchTab({ url: ORDER_PAGE });
+      return;
+    }
     void this.load();
   },
 

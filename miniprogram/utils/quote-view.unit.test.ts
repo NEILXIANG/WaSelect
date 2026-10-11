@@ -26,38 +26,47 @@ const QUOTE = {
 };
 
 describe('quoteView（报价区）', () => {
-  it('完整报价：商品合计 + 运费 + 预估关税行 + 合计（三币）', () => {
+  it('完整报价：商品合计 + 运费两行 + 合计（三币）；关税在合计下方的说明里（MP-11）', () => {
     const v = quoteView(QUOTE);
     expect(v.lines).toEqual([
       { label: '商品合计', value: '7,200 円' },
       { label: '运费', value: '1,950 円' },
-      { label: '预估关税（含在商品价内）', value: '936 円' },
     ]);
     expect(v.totalText).toBe('9,150 円');
     expect(v.hasTotal).toBe(true);
     expect(v.totalJpy).toBe(9150);
     expect(v.totalSub).toBe('≈ $62.20 · ≈ ¥448.00');
-    expect(v.hints).toEqual([]);
+    // MP-11（第二轮审计 2026-10-11）：关税并列成第三行时三行相加 ≠ 合计，买家会以为算错；改为合计下方一句说明
+    expect(v.hints).toEqual(['其中预估关税 936 円（已含在商品价内）']);
   });
 
   it('⚠️ duty_estimate=false（或 duty_jpy=null）→ **不显示关税行**', () => {
     // @why 契约明说 duty 是信息字段；估值都没有时显示"关税：—"，
     //      用户会读成"没算关税 = 不收关税"——那是两种完全不同的事。
-    expect(quoteView({ ...QUOTE, duty_estimate: false, duty_jpy: null }).lines).toHaveLength(2);
-    expect(quoteView({ ...QUOTE, duty_estimate: true, duty_jpy: null }).lines).toHaveLength(2);
+    // MP-11 起关税不在 lines 里，改查 hints（说明行）
+    const dutyHint = (q: Record<string, unknown>) =>
+      quoteView(q).hints.some((h: string) => h.includes('关税'));
+    expect(dutyHint({ ...QUOTE, duty_estimate: false, duty_jpy: null })).toBe(false);
+    expect(dutyHint({ ...QUOTE, duty_estimate: true, duty_jpy: null })).toBe(false);
     // ⚠️ 上面两条**同时**把 duty_jpy 也改成了 null，只覆盖了"数字都没有"这一种；
     //    "duty_jpy 有数字但不是估值"才是真正会骗人的那一档（有数所以敢显示）——
     //    缺陷注入（去掉 duty_estimate===true 判断）曾因这两条而**未变红**，故补此行。
-    expect(quoteView({ ...QUOTE, duty_estimate: false, duty_jpy: 936 }).lines).toHaveLength(2);
-    expect(quoteView({ ...QUOTE, duty_estimate: false, duty_jpy: 936 }).lines).not.toContainEqual({
-      label: '预估关税（含在商品价内）',
-      value: '936 円',
-    });
+    expect(dutyHint({ ...QUOTE, duty_estimate: false, duty_jpy: 936 })).toBe(false);
+    expect(dutyHint(QUOTE)).toBe(true);
+    for (const q of [QUOTE, { ...QUOTE, duty_estimate: false, duty_jpy: 936 }]) {
+      expect(quoteView(q).lines.some((l: { label: string }) => l.label.includes('关税'))).toBe(
+        false,
+      );
+    }
   });
 
   it('免邮差额 > 0 → 提示"再买 X 免运费"；split_hint → 拆单提示', () => {
     const v = quoteView({ ...QUOTE, free_shipping_remaining_jpy: 1200, split_hint: true });
-    expect(v.hints).toEqual(['再买 1,200 円 免运费', '已超过单笔上限，请分两单下单']);
+    expect(v.hints).toEqual([
+      '其中预估关税 936 円（已含在商品价内）',
+      '再买 1,200 円 免运费',
+      '已超过单笔上限，请分两单下单',
+    ]);
   });
 
   describe('split_hint（B38 / AJ-221：它是"已超过"，不是"接近"）', () => {
@@ -66,7 +75,11 @@ describe('quoteView（报价区）', () => {
       //      "接近上限，建议拆单"把既成事实写成提醒，页面还放行提交，
       //      于是用户提交必然吃 40906（看起来像系统问题）。
       const v = quoteView({ ...QUOTE, split_hint: true });
-      expect(v.hints).toEqual(['已超过单笔上限，请分两单下单']);
+      // MP-11：QUOTE 带关税估值，说明行第一句是关税（与本条无关，照实列出以保持精确相等）
+      expect(v.hints).toEqual([
+        '其中预估关税 936 円（已含在商品价内）',
+        '已超过单笔上限，请分两单下单',
+      ]);
       expect(v.hints.join('')).not.toContain('接近');
     });
 

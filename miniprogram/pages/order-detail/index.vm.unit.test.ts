@@ -9,7 +9,15 @@
  */
 import { describe, expect, it } from 'vitest';
 import { STOCK_REFUND_NOTE, buyerStatus } from '../../utils/order-status.js';
-import { amountLines, buyAgainItems, detailView, itemRows, timelineRows } from './index.vm.js';
+import {
+  actionFailure,
+  amountLines,
+  buyAgainItems,
+  detailView,
+  dutyNote,
+  itemRows,
+  timelineRows,
+} from './index.vm.js';
 
 const ORDER = {
   order_id: 'o-1',
@@ -225,20 +233,24 @@ describe('itemRows（行项目）', () => {
 });
 
 describe('amountLines（金额行）', () => {
-  it('商品合计 / 运费 / 关税三行，且关税**必须带"含在商品价内"**', () => {
+  it('🔴 MP-11（第二轮审计 2026-10-11）：只有商品合计 / 运费两行——关税不再与它们并列（三行相加 ≠ 合计）', () => {
     expect(amountLines(ORDER)).toEqual([
       { label: '商品合计', value: '8,000 円' },
       { label: '运费', value: '1,150 円' },
-      { label: '预估关税（含在商品价内）', value: '1,200 円' },
     ]);
   });
 
-  it('⚠️ duty_jpy 不是整数 → 关税行整条消失（信息字段缺失时显示"关税：—" = 暗示"不收关税"）', () => {
+  it('🔴 MP-11：关税改成合计下方一句说明，且**必须带"含在商品价内"**（信息字段，不是另收）', () => {
+    expect(dutyNote(ORDER)).toBe('其中预估关税 1,200 円（已含在商品价内）');
+    expect(detailView(ORDER).dutyNote).toBe('其中预估关税 1,200 円（已含在商品价内）');
+  });
+
+  it('⚠️ duty_jpy 不是整数 → 不说关税（信息字段缺失时显示"关税：—" = 暗示"不收关税"）；0 照实说', () => {
     expect(amountLines({ items_jpy: 8000, shipping_jpy: 1150, duty_jpy: null })).toHaveLength(2);
-    expect(amountLines({ items_jpy: 8000, duty_jpy: 0 })).toEqual([
-      { label: '商品合计', value: '8,000 円' },
-      { label: '预估关税（含在商品价内）', value: '0 円' },
-    ]);
+    expect(dutyNote({ items_jpy: 8000, duty_jpy: null })).toBe('');
+    expect(dutyNote({ items_jpy: 8000, duty_jpy: '1200' })).toBe('');
+    expect(dutyNote(null)).toBe('');
+    expect(dutyNote({ items_jpy: 8000, duty_jpy: 0 })).toBe('其中预估关税 0 円（已含在商品价内）');
   });
 });
 
@@ -277,10 +289,12 @@ describe('detailView：无法估算的关税不显示（W-05）', () => {
       shipping_jpy: 500,
       total_jpy: 1500,
     };
+    // MP-11：关税从金额行挪到合计下方的说明（dutyNote）；金额行任何时候都不带关税
     const labels = (o: Record<string, unknown>) =>
       detailView(o).amountLines.map((l: { label: string }) => l.label);
-    expect(labels({ ...base, duty_jpy: null }).some((l: string) => l.includes('关税'))).toBe(false);
-    expect(labels({ ...base, duty_jpy: 150 }).some((l: string) => l.includes('关税'))).toBe(true);
+    expect(labels({ ...base, duty_jpy: 150 }).some((l: string) => l.includes('关税'))).toBe(false);
+    expect(detailView({ ...base, duty_jpy: null }).dutyNote).toBe('');
+    expect(detailView({ ...base, duty_jpy: 150 }).dutyNote).toContain('关税');
   });
 });
 
@@ -344,8 +358,10 @@ describe('detailView：部分退款与迟到付款（P2-11 / P2-12，AJ-386）',
     expect(v.partialRefunds[0]?.amountText).toBe('EUR（金额以银行账单为准）');
   });
 
-  it('🔴 late_paid → 给一句"已收到付款，会原路退回"；否则空串', () => {
-    expect(detailView({ status: 'expired', late_paid: true }).latePaidNote).toContain('原路退回');
+  it('🔴 late_paid → 说"已收到付款，会原路退回"（关闭态放顶部下一步，其余放页底）；否则空串', () => {
+    // OPS-4（第二轮审计 2026-10-11）：关闭态原先页底说"无需重新付款"、顶部却说"如需购买请重新下单"
+    expect(detailView({ status: 'expired', late_paid: true }).nextText).toContain('原路退回');
+    expect(detailView({ status: 'refunding', late_paid: true }).latePaidNote).toContain('原路退回');
     expect(detailView({ status: 'expired' }).latePaidNote).toBe('');
   });
 });
@@ -586,5 +602,53 @@ describe('detailView · 查件引导', () => {
     expect(
       detailView({ ...shipped, carrier: 'Yamato', tracking_no: '1234-5678-9012' }).trackingHint,
     ).toBe('点运单号复制，到承运商官网粘贴查询');
+  });
+});
+
+describe('第二轮审计 2026-10-11：订单详情（OPS-4 / F1 / MP-7）', () => {
+  it('🔴 OPS-4 迟到付款的已关闭单：不给「再次购买」，顶部说"会原路退回"而不是"请重新下单"，页底不再重复', () => {
+    for (const status of ['expired', 'cancelled']) {
+      const v = detailView({ ...ORDER, status, late_paid: true });
+      expect(v.canBuyAgain, status).toBe(false);
+      expect(v.nextText, status).toContain('原路退回');
+      expect(v.nextText, status).not.toContain('重新下单');
+      expect(v.latePaidNote, status).toBe('');
+    }
+    // 钱已退回（refunded）：再次购买照常给，页底说明保留
+    const refunded = detailView({ ...ORDER, status: 'refunded', late_paid: true });
+    expect(refunded.canBuyAgain).toBe(true);
+    expect(refunded.latePaidNote).toContain('原路退回');
+    // 不带 late_paid 的超时单：行为不变（仍给再次购买）
+    expect(detailView({ ...ORDER, status: 'expired' }).canBuyAgain).toBe(true);
+  });
+
+  it('🔴 F1 确认中（justPaid）：不显示付款截止，合计不叫"应付合计"（刚付过的人读到"应付"会以为还要付）', () => {
+    const v = detailView({ ...ORDER, status: 'pending_payment' }, { justPaid: true });
+    expect(v.confirming).toBe(true);
+    expect(v.expiresAtText).toBe('');
+    expect(v.totalLabel).toBe('订单合计');
+    // 常规待付款不受影响
+    const plain = detailView({ ...ORDER, status: 'pending_payment' });
+    expect(plain.expiresAtText).not.toBe('');
+    expect(plain.totalLabel).toBe('应付合计');
+  });
+
+  it('🔴 MP-7 取消 / 确认收货撞上 40902 / 40904 → 重取订单 + 一句人话；其它错误不接管', () => {
+    const stale = actionFailure({ code: 40902 });
+    expect(stale.reload).toBe(true);
+    expect(stale.note).toContain('已为你刷新');
+    expect(stale.note).not.toContain('不允许此操作');
+    expect(actionFailure({ code: 40904 })).toMatchObject({ reload: true });
+    for (const e of [
+      { code: 50000 },
+      { code: -1 },
+      { code: 40301 },
+      { code: 'x' },
+      null,
+      'x',
+      {},
+    ]) {
+      expect(actionFailure(e)).toEqual({ reload: false, note: '' });
+    }
   });
 });

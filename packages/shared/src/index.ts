@@ -25,3 +25,4 @@ export * from './shipping-fingerprint.js';
 export * from './after-sale.js';
 export * from './order-attention.js';
 export * from './refund-reason.js';
+export * from './email-shape.js';

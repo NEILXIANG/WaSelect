@@ -176,7 +176,9 @@
   align-items: center;
 }
 
-.step {
+/* MP-12（第二轮审计 2026-10-11）：原名 .step，与上方"运输流程"的 .step 同名——本条在后，覆盖了流程行的
+   align-items 并加上居中 / 触控下限 / 大字号。改名后两处互不影响（样式值本身不动）。 */
+.qty-step {
   display: flex;
   align-items: center;
   justify-content: center;

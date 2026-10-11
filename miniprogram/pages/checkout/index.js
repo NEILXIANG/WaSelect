@@ -29,6 +29,7 @@ import {
   checkoutItems,
   clearsCartAfterOrder,
   contactEmailOf,
+  emailInputError,
   goneExit,
   itemRows,
   keyAction,
@@ -49,7 +50,8 @@ import {
   chargePreview,
 } from '../../utils/pay-plan.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
-import { errorFields } from '../../utils/error-text.js';
+import { contactFields, errorFields } from '../../utils/error-text.js';
+import { emailTypoHint } from '../../utils/email-shape.js';
 import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -74,6 +76,8 @@ const ORDER_PAGE = '/pages/order/index';
 const HOME_PAGE = '/pages/home/index';
 /** 购物车（tab 页）：商品已下架时回这里删掉它（联动走查 2026-10-10）。 */
 const CART_PAGE = '/pages/cart/index';
+/** 「我的」（tab 页）：客服联系方式在那里（F4：账号受限时错误态去这里）。 */
+const USER_PAGE = '/pages/user/index';
 /**
  * 上次下单用的联系邮箱（A5，AJ-416）：再次结算时自动填上。
  * @why 邮箱是必填（M-01），每单重输一遍是纯摩擦；只在**下单成功后**记——填错被拦下的不记。
@@ -101,12 +105,20 @@ Page({
     /** 联系邮箱（AJ-180；AJ-295 改名；M-01 起前端必填）：输入框原值与校验错误（空串 = 无错或还没动过输入框）。 */
     email: '',
     emailError: '',
+    /** 常见拼错提示（MP-9，不拦；空串 = 不显示）。 */
+    emailHint: '',
     /** 提交闸门：{ok, reason}。 */
     gate: { ok: false, reason: '' },
     /** `GET /terms` 失败（闸门据此说明原因，而不是让提交时抛开发者报错，AJ-228）。 */
     termsFailed: false,
     /** 报价失败（与"报价还没回来"分开：失败不会再有结果，AJ-228）。 */
     quoteFailed: false,
+    /** 报价失败的错误码（F4：停售 / 账号受限按码说原因）。 */
+    quoteErrorCode: 0,
+    /** `GET /addresses` 失败（F5：闸门说"没取到"，地址卡不说"还没有地址"）。 */
+    addressFailed: false,
+    /** 错误态按钮去客服而不是重新加载（F4：40301 账号受限，重新加载永远不会好）。 */
+    errorContact: false,
     /** 报价 / 建单回 40401（商品已下架）：错误态按钮换成去首页 / 购物车。 */
     productGone: false,
     goneActionText: '',
@@ -202,7 +214,7 @@ Page({
    */
   async refresh(opts) {
     const keepError = opts !== null && typeof opts === 'object' && opts.keepError === true;
-    this.setData(keepError ? { loading: true } : { loading: true, error: '' });
+    this.setData(keepError ? { loading: true } : { loading: true, error: '', errorContact: false });
     const items = this.items();
     this.setData({ rows: itemRows(items) });
 
@@ -296,9 +308,13 @@ Page({
       }
       this.addressId = id;
       this.addressCountry = channelCountryOf(found);
-      this.setData({ address: found === undefined ? null : addressSummary(found) });
+      this.setData({
+        address: found === undefined ? null : addressSummary(found),
+        addressFailed: false,
+      });
     } catch (e) {
-      this.setData({ ...errorFields(e) });
+      // F5：取失败 ≠ 没有地址——闸门与地址卡据此说"没取到"，而不是"请选择 / 点这里新增"
+      this.setData({ addressFailed: true, ...errorFields(e), ...contactFields(e) });
     }
     this.updateGate();
   },
@@ -317,7 +333,12 @@ Page({
       });
       if (isStale(seq, this.quoteSeq)) return;
       this.quoteRaw = res !== null && typeof res === 'object' ? res : null;
-      this.setData({ quote: quoteView(res), quoteFailed: false, productGone: false });
+      this.setData({
+        quote: quoteView(res),
+        quoteFailed: false,
+        quoteErrorCode: 0,
+        productGone: false,
+      });
     } catch (e) {
       if (isStale(seq, this.quoteSeq)) return;
       const named = namedItemError(e, items, { buyNow: this.mode === BUY_NOW_MODE }); // U9：点名是哪一件
@@ -325,10 +346,13 @@ Page({
       this.setData({
         quote: null,
         quoteFailed: true,
+        // F4：闸门按码说原因（停售 / 账号受限不说"返回购物车重试"）
+        quoteErrorCode: Number.isInteger(e?.code) ? e.code : 0,
         // 40401 = 商品已下架或不存在：重试不会好，错误态按钮换成去首页 / 购物车（联动走查 2026-10-10）
         productGone: e?.code === 40401,
         goneActionText: goneExit(this.mode === BUY_NOW_MODE).actionText,
         ...errorFields(e),
+        ...contactFields(e),
         ...(named !== '' ? { error: named } : {}),
       });
     }
@@ -351,15 +375,37 @@ Page({
       termsReady: this.data.termsVersion !== '',
       termsFailed: this.data.termsFailed === true,
       quoteFailed: this.data.quoteFailed === true,
+      quoteErrorCode: this.data.quoteErrorCode,
+      addressFailed: this.data.addressFailed === true,
       productGone: this.data.productGone === true,
     });
     this.setData({ gate });
   },
 
-  /** 邮箱输入（M-01 起必填）：每次输入都重算错误与闸门，错误就近显示在输入框下。 */
+  /**
+   * 邮箱输入（M-01 起必填）：重算闸门；错误只在**已经报过**时实时重判（F7，vm `emailInputError`）——
+   * 没写完就红一句"格式不正确"是在打断人。拼错提示（MP-9）随输入更新、不拦。
+   */
   onEmailInput(e) {
     const raw = typeof e?.detail?.value === 'string' ? e.detail.value : '';
-    this.setData({ email: raw, emailError: contactEmailOf(raw).error });
+    this.setData({
+      email: raw,
+      emailError: emailInputError(raw, this.data.emailError),
+      emailHint: emailTypoHint(raw),
+    });
+    this.updateGate();
+  },
+
+  /**
+   * 邮箱失焦（F7）：这时才判格式并就近显示。
+   * 空着的不在这里新报（只是点进来又离开，闸门那一行已说明为什么要填）；清空时 onEmailInput 已经报过的保留。
+   */
+  onEmailBlur() {
+    const raw = typeof this.data.email === 'string' ? this.data.email : '';
+    this.setData({
+      emailError: raw.trim() === '' ? this.data.emailError : contactEmailOf(raw).error,
+      emailHint: emailTypoHint(raw),
+    });
     this.updateGate();
   },
 
@@ -436,7 +482,7 @@ Page({
    * @param {object} body `onSubmit` 组好的请求体（与取键时比对的是同一份）
    */
   async createOrder(idemKey, body) {
-    this.setData({ submitting: true, error: '' });
+    this.setData({ submitting: true, error: '', errorContact: false });
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders`,
@@ -465,7 +511,11 @@ Page({
       const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
       // ⚠️ 默认**不** retire：键留给重试（弱网下用户看到错误再点一次必须还是同一个键）
       const named = namedItemError(e, this.items(), { buyNow: this.mode === BUY_NOW_MODE }); // U9：点名是哪一件
-      this.setData({ ...errorFields(e), ...(named !== '' ? { error: named } : {}) });
+      this.setData({
+        ...errorFields(e),
+        ...contactFields(e),
+        ...(named !== '' ? { error: named } : {}),
+      });
       // B37 / AJ-220：执行错误码登记表里写明的恢复动作——
       // 不执行的话 40905（管理员改价）会变成"再点还是 40905，只能退出重进"。
       if (recoveryFor(code) === 'requote') {
@@ -521,6 +571,11 @@ Page({
    */
   onRetry() {
     if (this.data.submitting === true) return;
+    // F4：账号受限（40301）——重新加载永远不会好，去「我的」找客服
+    if (this.data.errorContact === true) {
+      wxApi.switchTab({ url: USER_PAGE });
+      return;
+    }
     // 商品已下架：重报价不会好——立即购买回首页，购物车结算回购物车删掉它（联动走查 2026-10-10）
     if (this.data.productGone === true) {
       if (goneExit(this.mode === BUY_NOW_MODE).target === 'home')

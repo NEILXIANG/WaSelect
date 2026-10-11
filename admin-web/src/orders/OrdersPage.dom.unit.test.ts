@@ -484,3 +484,21 @@ describe('订单列表：待处理筛选（AJ-425）', () => {
     });
   });
 });
+
+describe('待发货默认按付款时间排（AJ-453）时表头不能说谎（第二轮审计浏览器验收）', () => {
+  it('🔴 #/orders?status=paid → 请求 sort=paid_at；「下单时间」表头不标为当前排序，表格上方写明按付款时间', async () => {
+    const el = await open('#/orders?status=paid');
+    expect(gets()[0]?.path ?? '').toContain('sort=paid_at');
+    const th = [...el.querySelectorAll('th')].find((t) => t.textContent?.includes('下单时间'));
+    // 原实现：没带 sort 时一律把「下单时间 ↓」标成当前排序——而列表实际是按付款时间从早到晚
+    expect(th?.getAttribute('aria-sort')).toBe('none');
+    expect(el.textContent).toContain('按付款时间从早到晚');
+  });
+
+  it('全部订单（无默认排序）照旧：「下单时间」标为降序，不出那句说明', async () => {
+    const el = await open('#/orders');
+    const th = [...el.querySelectorAll('th')].find((t) => t.textContent?.includes('下单时间'));
+    expect(th?.getAttribute('aria-sort')).toBe('descending');
+    expect(el.textContent).not.toContain('按付款时间从早到晚');
+  });
+});

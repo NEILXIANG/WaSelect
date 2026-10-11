@@ -22,6 +22,7 @@
  */
 import {
   ADDRESS_FIELDS,
+  ADDRESS_MAX_CHARS,
   ENGLISH_ADDRESS_NOTE,
   emptyForm,
   formErrors,
@@ -43,6 +44,13 @@ Page({
   data: {
     /** M-20（AJ-406）：表单前的"请用英文 / 拼音填写"说明与示例（utils/address-form.js）。 */
     englishNote: ENGLISH_ADDRESS_NOTE,
+    /**
+     * 各输入框的 maxlength（MP-5，第二轮审计 2026-10-11）：与前端校验、服务端 ADDRESS_MAX_CHARS 同一张表。
+     * @why 微信 `input` 不写 maxlength 时默认 140（官方组件文档）——地址两行的上限是 200，
+     *      超过 140 的部分会被**静默截掉**；其余字段则是"输超长、提交后才被拒"。
+     * @limitation 默认 140 来自官方文档，未在真机实测（AppID 未下来，F14 外部阻塞）。
+     */
+    max: ADDRESS_MAX_CHARS,
     /** 表单模型（`ADDRESS_FIELDS` + is_default）。 */
     form: emptyForm(),
     /** 字段级错误（`{recipient: '…'}`）；空对象 = 无错误。 */
@@ -73,10 +81,21 @@ Page({
   addressId: '',
   /** 已成功取到原地址的 id（编辑态保存的前提；审查 2026-10-09）。 */
   loadedId: '',
+  /**
+   * 页面是否还活着（MP-13，第二轮审计 2026-10-11；与结算页 P2-36 同口径）：onUnload 置 false。
+   * @why 提交 / 保存在途时用户按了返回，宿主已经出栈一次；响应回来再 navigateBack 会把他从上一页再退一层
+   *      （从订单详情退回订单列表、从地址列表退回结算页之前）。
+   */
+  alive: true,
+
+  onUnload() {
+    this.alive = false;
+  },
   traceId: '',
 
   /** @param {{id?: string}} options 列表页带来的 `?id=…` */
   onLoad(options) {
+    this.alive = true;
     this.traceId = newTraceId();
     this.addressId = typeof options?.id === 'string' ? options.id : '';
     this.loadedId = '';
@@ -204,6 +223,7 @@ Page({
     } finally {
       this.setData({ saving: false });
     }
-    wxApi.navigateBack();
+    // MP-13：用户已按返回离开 → 不再出栈（@see alive）；地址已保存，列表 onShow 会重取
+    if (this.alive) wxApi.navigateBack();
   },
 });
