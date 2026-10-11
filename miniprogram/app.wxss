@@ -680,3 +680,10 @@ page {
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
 }
+
+/* 独占一行的提示文字。@why <text> 默认行内，相邻两段会粘成一句（走查 2026-10-08 购物车「3,850 円已下架…」；
+   三端模拟测试 2026-10-11 结算页「≈ $2,585.88 · ≈ ¥18,823.66其中预估关税…已超过单笔上限…」）。
+   守卫：caption-glue.unit.test.ts */
+.line-block {
+  display: block;
+}

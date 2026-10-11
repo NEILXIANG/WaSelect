@@ -152,9 +152,9 @@
           <text class="ws-note">{{view.totalLabel}}</text>
           <ws-price wx:if="{{view.totalJpy !== null}}" jpy="{{view.totalJpy}}" size="lg" />
         </view>
-        <text class="ws-caption" wx:if="{{view.totalSub}}">{{view.totalSub}}</text>
+        <text class="ws-caption line-block" wx:if="{{view.totalSub}}">{{view.totalSub}}</text>
         <!-- MP-11（第二轮审计）：关税是含在商品价里的信息，放合计下方一句，不与商品 / 运费并列成一行 -->
-        <text class="ws-caption" wx:if="{{view.dutyNote}}">{{view.dutyNote}}</text>
+        <text class="ws-caption line-block" wx:if="{{view.dutyNote}}">{{view.dutyNote}}</text>
         <!--
           P2-12（AJ-386）部分退款（成功 / 处理中）。AJ-434：放进金额卡、紧跟订单合计——
           原先是页面最底部单独一张卡，买家核对"付了多少、退了多少"要上下翻。

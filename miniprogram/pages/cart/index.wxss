@@ -141,10 +141,7 @@
   text-align: center;
 }
 
-/* 走查 2026-10-08：行内标红、链路号各占一行（<text> 默认行内，会与前一段粘成「3,850 円已下架…」） */
-.line-block {
-  display: block;
-}
+/* `.line-block` 已挪到 app.wxss（三端模拟测试 2026-10-11：结算 / 订单详情 / 支付页同病，守卫 caption-glue.unit.test.ts） */
 
 .state__error {
   color: var(--ws-danger);

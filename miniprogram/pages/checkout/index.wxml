@@ -77,8 +77,8 @@
         <text class="ws-note">应付合计</text>
         <ws-price wx:if="{{quote.hasTotal}}" jpy="{{quote.totalJpy}}" size="lg" />
       </view>
-      <text class="ws-note" wx:if="{{quote.totalSub}}">{{quote.totalSub}}</text>
-      <text class="ws-caption" wx:for="{{quote.hints}}" wx:for-item="hint" wx:key="*this">{{hint}}</text>
+      <text class="ws-note line-block" wx:if="{{quote.totalSub}}">{{quote.totalSub}}</text>
+      <text class="ws-caption line-block" wx:for="{{quote.hints}}" wx:for-item="hint" wx:key="*this">{{hint}}</text>
       <!-- M-16（AJ-406）：扣款币种预告——円为主显示（AJ-402 Q3），银行卡以美元扣；金额来自报价 display，写"约" -->
       <view class="charge-preview" wx:if="{{chargePreview.length > 0}}">
         <text class="ws-note charge-preview__line" wx:for="{{chargePreview}}" wx:for-item="line" wx:key="*this">{{line}}</text>

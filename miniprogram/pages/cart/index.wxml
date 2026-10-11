@@ -96,8 +96,8 @@
           <text class="ws-note">应付合计</text>
           <ws-price wx:if="{{quote.hasTotal}}" jpy="{{quote.totalJpy}}" size="lg" />
         </view>
-        <text class="ws-note" wx:if="{{quote.totalSub}}">{{quote.totalSub}}</text>
-        <text class="ws-caption" wx:for="{{quote.hints}}" wx:for-item="hint" wx:key="*this">{{hint}}</text>
+        <text class="ws-note line-block" wx:if="{{quote.totalSub}}">{{quote.totalSub}}</text>
+        <text class="ws-caption line-block" wx:for="{{quote.hints}}" wx:for-item="hint" wx:key="*this">{{hint}}</text>
       </view>
     </view>
 
