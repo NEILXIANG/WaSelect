@@ -105,6 +105,13 @@ App({
      */
     pickedAddressId: '',
     /**
+     * 支付页 → 订单详情的**一次性**交接（MP-10，第二轮审计 2026-10-11）：`{orderId, justPaid}`；null = 没有。
+     * @why 从详情进支付、付完 navigateBack 回原详情（不再 redirectTo 出第二张），navigateBack 带不了参数。
+     *      详情页 onShow 只认本单的、读走即清（与 pickedAddressId 同口径）。
+     * @see ../pages/pay/index.js leaveToDetail / onViewOrders（写入侧）；../pages/order-detail/index.js adoptPaidReturn（消费侧）
+     */
+    paidReturn: null,
+    /**
      * 地址编辑页 → 地址列表页的**一次性**交接：刚新增成功的地址 id（'' = 没有）。
      * @why 从结算页新增地址后，列表页（选择模式）直接选中它返回结算页，不让小白再点一次「用这个地址」（三端走查 2026-10-10）。
      *      列表页 onShow 读走即清，与 pickedAddressId 同口径。

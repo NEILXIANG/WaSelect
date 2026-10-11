@@ -634,7 +634,9 @@ function normalizeError(err: unknown): {
     };
   }
   if (isBodyParseError(err)) {
-    const appErr = new AppError(40001, { reason: parseErrorReason(err) });
+    // S-9（AJ-482）：超限单独成 413 / 41301；其余报文问题仍是 40001（原因照旧逐类给）
+    const tooLarge = (err as { type?: string } | null)?.type === 'entity.too.large';
+    const appErr = new AppError(tooLarge ? 41301 : 40001, { reason: parseErrorReason(err) });
     const { status, body } = toErrorResponse(appErr);
     return {
       status,

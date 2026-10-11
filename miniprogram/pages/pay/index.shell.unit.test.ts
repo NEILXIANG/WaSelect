@@ -53,6 +53,10 @@ let postError: (Error & { code?: number }) | null;
 let orderFetchError: (Error & { code?: number }) | null;
 /** `wx.switchTab` 的落点（联系客服去「我的」）。 */
 let tabs: string[];
+/** MP-10：`wx.navigateBack` 被调了几次。 */
+let backs: number;
+/** MP-4：非空 = `POST /orders/{id}/pay` 挂住，直到手动 resolve。 */
+let postHold: { promise: Promise<unknown>; resolve: (v: unknown) => void } | null;
 
 const ORDER_ID = 'o-1';
 
@@ -96,6 +100,8 @@ beforeEach(async () => {
   postError = null;
   orderFetchError = null;
   tabs = [];
+  backs = 0;
+  postHold = null;
   vi.stubGlobal('wx', {
     switchTab: (o: { url: string }) => {
       tabs.push(o.url);
@@ -111,6 +117,9 @@ beforeEach(async () => {
       stops += 1;
     },
     navigateTo: () => undefined,
+    navigateBack: () => {
+      backs += 1;
+    },
     // in_app 分支会真的调它（MP3-03 / MP3-07 用例要用）；用开关决定走 success 还是 fail
     requestPayment: (o: { success?: () => void; fail?: () => void }) => {
       if (payFails) o.fail?.();
@@ -129,6 +138,7 @@ beforeEach(async () => {
             : { items: [] };
         }
         if (req.method === 'POST') {
+          if (postHold !== null) await postHold.promise;
           if (postError !== null) throw postError;
           linkSeq += 1;
           if (postPlan === 'in_app') {
@@ -630,5 +640,57 @@ describe('链接里没有订单 id（F11，第二轮审计 2026-10-11）', () =>
     await settle();
     expect(requests).toEqual([]);
     expect(tabs).toEqual(['/pages/order/index']);
+  });
+});
+
+describe('从订单详情进来的支付：付完退回原详情（MP-10，第二轮审计 2026-10-11）', () => {
+  const gd = (): Record<string, unknown> =>
+    (globalThis as unknown as { getApp: () => { globalData: Record<string, unknown> } }).getApp()
+      .globalData;
+
+  it('🔴 微信支付成功 → navigateBack 回原来那张详情（不再 redirectTo 出第二张），并交回"刚付过"', async () => {
+    call('onLoad', { orderId: ORDER_ID, from: 'detail' });
+    await settle();
+    postPlan = 'in_app';
+    tapChannel('wechat');
+    await settle();
+    expect(backs).toBe(1);
+    expect(redirects).toEqual([]);
+    expect(gd()['paidReturn']).toEqual({ orderId: ORDER_ID, justPaid: true });
+  });
+
+  it('审核期 auto 从详情来 → 同样退回（不是"刚付过"：响应到达时服务端已确认）', async () => {
+    call('onLoad', { orderId: ORDER_ID, from: 'detail' });
+    await settle();
+    postPlan = 'auto';
+    tapChannel('mock');
+    await settle();
+    expect(backs).toBe(1);
+    expect(redirects).toEqual([]);
+    expect(gd()['paidReturn']).toEqual({ orderId: ORDER_ID, justPaid: false });
+  });
+
+  it('🔴 不是从详情来的（结算页 redirect 进来）→ 照旧 redirectTo 详情并带 justPaid=1', async () => {
+    postPlan = 'in_app';
+    tapChannel('wechat');
+    await settle();
+    expect(backs).toBe(0);
+    expect(redirects).toEqual([`/pages/order-detail/index?id=${ORDER_ID}&justPaid=1`]);
+  });
+});
+
+describe('点了支付方式后那个按钮显示加载中（MP-4，第二轮审计 2026-10-11）', () => {
+  it('🔴 发起在途 → 被点的通道 payingChannel 有值；回来后清空', async () => {
+    let release: (v: unknown) => void = () => undefined;
+    postHold = { promise: new Promise((r) => (release = r)), resolve: (v) => release(v) };
+    tapChannel('stripe');
+    await settle();
+    expect(page.data['paying']).toBe(true);
+    expect(page.data['payingChannel']).toBe('stripe');
+    postHold.resolve(undefined);
+    postHold = null;
+    await settle();
+    expect(page.data['paying']).toBe(false);
+    expect(page.data['payingChannel']).toBe('');
   });
 });

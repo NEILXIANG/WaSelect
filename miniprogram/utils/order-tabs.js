@@ -1,5 +1,5 @@
 /**
- * 职责：买家订单**页签**的唯一真源（M-10，AJ-408）——页签 ↔ 状态集合、查询参数、「我的」四入口角标。
+ * 职责：买家订单**页签**的唯一真源（M-10，AJ-408）——页签 ↔ 状态集合、列表查询串（S-7 起分页）、角标文案。
  *
  * @why 页签按**买家关心的阶段**分组而不是十态各一个（同管理端 AJ-400 的思路，视角不同）：
  *      买家问的是"有没有要付的""买到了没""发了没""退款怎样了"。一个页签对应几个状态，
@@ -16,8 +16,8 @@
  *      显式登记而不是"没分到就算全部"：单测据此断言契约 10 态"恰好一处"，服务端新增状态时立刻红。
  * @limitation 一：小程序不能 import `@waselect/shared`（无构建步骤），状态名是手写副本；
  *              单测从 shared 取 ORDER_STATUS 做全覆盖比对，漂移会红。
- * @limitation 二：角标只数**进行中**的单（BADGE_STATUSES），与页签内容不完全相同（页签还含已送达 / 已退款）——
- *              见 BADGE_STATUSES 的 @why。
+ * @limitation 二：「我的」角标的**计数**由服务端 `GET /orders/counts` 给（S-7，口径 shared `ORDER_BADGE_STATUSES`）：
+ *              列表分页后本地只拿得到第一页，数不全。这里只留角标文案（tabBadgeText）。
  * @see ./order-status.js；../pages/order/index.vm.js；../pages/user/index.vm.js；docs/自主决策记录.md AJ-408
  */
 
@@ -27,7 +27,7 @@ export const ORDER_TABS = [
   { key: 'unpaid', label: '待付款', statuses: ['created', 'pending_payment'] },
   { key: 'to_ship', label: '采购中', statuses: ['paid'] },
   { key: 'shipped', label: '已发货', statuses: ['shipped', 'delivered'] },
-  // AJ-430：withAfterSale = 另收「有售后申请」的单（状态可能仍是已送达 / 已完成），取全量后由 tabItems 本地过滤
+  // AJ-430：withAfterSale = 另收「有售后申请」的单（状态可能仍是已送达 / 已完成）；S-7 起由服务端 include_after_sale=1 筛
   {
     key: 'after_sale',
     label: '售后·退款',
@@ -38,18 +38,6 @@ export const ORDER_TABS = [
 
 /** 只在「全部」里出现的状态（终态、买家无事可做；@see 文件头 @why）。 */
 export const ALL_ONLY_STATUSES = ['completed', 'cancelled', 'expired'];
-
-/**
- * 「我的」四入口角标：每个入口只数**还在进行中**的状态。
- * @why 已送达 / 已退款是结果不是待办：算进去的话角标永远不归零（每张历史单都占一个数），
- *      角标就失去"有事要看"的意思。每一项都是对应页签状态的子集（单测断言）。
- */
-export const BADGE_STATUSES = {
-  unpaid: ['created', 'pending_payment'],
-  to_ship: ['paid'],
-  shipped: ['shipped'],
-  after_sale: ['refunding'],
-};
 
 const DEFAULT_TAB = 'all';
 
@@ -64,13 +52,33 @@ export function resolveOrderTab(key) {
 
 /**
  * 页签 → `status` 查询参数值（「全部」= 空串：调用方不带这个参数）。
- * @why 「售后·退款」也返回空串（AJ-430）：它要「状态是退款中 / 已退款 **或** 有售后申请」，服务端 status 过滤表达不了「或」；
- *      `GET /orders` 本就不分页、一次取全，取全量后用 {@link tabItems} 在本地过滤，不为此改服务端查询语义。
- * @limitation 买家订单很多时这一页签多取了无关的单（列表本就全量返回，量级同「全部」页签）。
+ * @why S-7（契约 0.6.69）起「售后·退款」也带自己的状态：「或有售后申请」由 `include_after_sale=1` 交给服务端
+ *      （原先返回空串、取全量后本地滤——列表一分页，本地就只能滤第一页了）。
  */
 export function tabStatusParam(key) {
   const tab = ORDER_TABS.find((t) => t.key === resolveOrderTab(key));
-  return tab === undefined || tab.withAfterSale === true ? '' : tab.statuses.join(',');
+  return tab === undefined ? '' : tab.statuses.join(',');
+}
+
+/** 买家订单列表每页条数（S-7；服务端上限 50，与商品列表默认同为 20）。 */
+export const ORDER_PAGE_SIZE = 20;
+
+/**
+ * 页签 + 页码 → `GET /orders` 的查询串（S-7，契约 0.6.69）。
+ * @param {unknown} key 页签 key（认不出 → 全部）
+ * @param {unknown} page 页码（脏值 → 1）
+ * @returns {string} 以 `?` 开头
+ */
+export function orderListQuery(key, page) {
+  const tabKey = resolveOrderTab(key);
+  const tab = ORDER_TABS.find((t) => t.key === tabKey);
+  const status = tabStatusParam(tabKey);
+  const p = Number.isInteger(page) && page >= 1 ? page : 1;
+  const parts = [];
+  if (status !== '') parts.push(`status=${status}`);
+  if (tab?.withAfterSale === true) parts.push('include_after_sale=1');
+  parts.push(`page=${String(p)}`, `size=${String(ORDER_PAGE_SIZE)}`);
+  return `?${parts.join('&')}`;
 }
 
 /** 列表行是否带售后申请（契约 0.6.60 `after_sale_state`：open / closed）。 */
@@ -93,29 +101,6 @@ export function tabItems(key, items) {
     const status = o !== null && typeof o === 'object' ? o.status : undefined;
     return tab.statuses.includes(status) || hasAfterSale(o);
   });
-}
-
-/**
- * `GET /orders` 的 items → 四个入口的进行中单数。
- * @param {unknown} items 契约 `OrderListItem[]`
- * @returns {{unpaid: number, to_ship: number, shipped: number, after_sale: number}}
- */
-export function orderTabCounts(items) {
-  const counts = { unpaid: 0, to_ship: 0, shipped: 0, after_sale: 0 };
-  if (!Array.isArray(items)) return counts;
-  for (const o of items) {
-    const status = o !== null && typeof o === 'object' ? o.status : undefined;
-    for (const key of Object.keys(BADGE_STATUSES)) {
-      // AJ-430：「售后·退款」另数「有进行中的售后申请」的单；同一张单两样都占只算一次（|| 短路）
-      const openAfterSale =
-        key === 'after_sale' &&
-        o !== null &&
-        typeof o === 'object' &&
-        o.after_sale_state === 'open';
-      if (BADGE_STATUSES[key].includes(status) || openAfterSale) counts[key] += 1;
-    }
-  }
-  return counts;
 }
 
 /** 角标文案：0 / 脏值不显示；超过 99 显示 `99+`（同购物车角标 `cartBadgeText` 口径）。 */

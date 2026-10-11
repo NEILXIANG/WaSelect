@@ -24,7 +24,7 @@
  * @see app/expire-orders.ts（消费方：超时关单 job）；migrations/001_init.sql（orders 表）；
  *      docs/I1阶段开发实施方案.md §3.2；D-33（30 分钟超时关单）
  */
-import { AFTER_SALE_OPEN_STATUSES, ORDER_STATUS } from '@waselect/shared';
+import { AFTER_SALE_OPEN_STATUSES, ORDER_BADGE_STATUSES, ORDER_STATUS } from '@waselect/shared';
 import type { Db, JSONValue } from './db.js';
 import { PRODUCT_ID_LOCK_COLLATION } from '../domain/stock-lock.js';
 
@@ -488,14 +488,17 @@ export interface OwnedOrderListRow extends OrderListRow {
  * @why 件数 `::int`：@measured: 本库 `coalesce(sum(qty),0)::int` 读回 `{"s":3}` typeof number；
  *      空集读回 `{"s":0}`（2026-10-08 探针，test 库）。不 cast 时 sum(int) 是 bigint，
  *      驱动对 bigint 的映射取决于连接配置——显式 cast 不赌配置。
- * @limitation 无分页：契约 GET /orders 没有 page/size 参数（MVP 单量下全量返回；
- *              /admin/orders 才有分页）。单用户订单数真成问题的那天，先改契约再加。
+ * @why 分页（S-7，契约 0.6.69）：`opts.limit / offset` 给了才分页（路由恒给）；不给 = 全量（只剩本文件的存量单测这样用）。
+ *      原先无分页——复购多的买家一次拉回全部订单，每行 4 个子查询，小程序一次 setData 也有上限。
+ * @why `opts.includeAfterSale`（S-7）：「售后·退款」页签的口径——状态命中 **或** 有任何售后申请。
+ *      原先由小程序取全量后本地过滤；一分页，本地就只能滤第一页了。
  * @limitation 首图是商品**现图**（同详情行项目的 @why：图是展示素材不是交易事实）。
  */
 export async function listOwnedOrders(
   db: Db,
   userId: string,
   statuses?: readonly string[],
+  opts?: OwnedOrderQuery,
 ): Promise<OwnedOrderListRow[]> {
   const rows = await db`
     select o.id, o.order_no, o.status, o.total_jpy, o.fx_snapshot, o.created_at, o.expires_at,
@@ -515,9 +518,9 @@ export async function listOwnedOrders(
              when exists (select 1 from after_sale_requests a where a.order_id = o.id) then 'closed'
            end as after_sale_state
       from orders o
-     where o.user_id = ${userId}
-       and ${statuses === undefined ? db`true` : db`o.status in ${db([...statuses])}`}
-     order by o.created_at desc
+     where ${ownedOrderFilter(db, userId, statuses, opts?.includeAfterSale === true)}
+     order by o.created_at desc, o.id desc
+     limit ${opts?.limit ?? null} offset ${opts?.offset ?? 0}
   `;
   return rows.map((r) => ({
     id: String(r.id),
@@ -533,6 +536,83 @@ export async function listOwnedOrders(
       r.after_sale_state === 'open' || r.after_sale_state === 'closed' ? r.after_sale_state : null,
     expires_at: r.expires_at as Date,
   }));
+}
+
+/** `listOwnedOrders` / `countOwnedOrders` 的可选条件（S-7）。 */
+export interface OwnedOrderQuery {
+  /** 状态命中「或」有任何售后申请（「售后·退款」页签口径）。 */
+  includeAfterSale?: boolean;
+  /**
+   * 每页条数；不给 = 不分页（SQL 里传 `limit null`）。
+   * @measured(2026-10-11 test 库，postgres.js 参数化)：`generate_series(1,3) limit ${null} offset ${0}` → [1,2,3]；
+   *   `limit ${2} offset ${1}` → [2,3]。
+   */
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * 买家订单的过滤条件（列表与计数共用一份，二者的 total 与行才不会对不上）。
+ * @why 归属 `o.user_id = …` 永远在最外层 AND 上：`includeAfterSale` 的 OR 只在括号里，漏了括号就会把别人的单 OR 进来。
+ */
+function ownedOrderFilter(
+  db: Db,
+  userId: string,
+  statuses: readonly string[] | undefined,
+  includeAfterSale: boolean,
+) {
+  const status = statuses === undefined ? null : db`o.status in ${db([...statuses])}`;
+  const hasAfterSale = db`exists (select 1 from after_sale_requests a where a.order_id = o.id)`;
+  const cond = includeAfterSale
+    ? status === null
+      ? hasAfterSale
+      : db`(${status} or ${hasAfterSale})`
+    : (status ?? db`true`);
+  return db`o.user_id = ${userId} and ${cond}`;
+}
+
+/** 与 `listOwnedOrders` 同条件的总数（分页的 total，S-7）。 */
+export async function countOwnedOrders(
+  db: Db,
+  userId: string,
+  statuses?: readonly string[],
+  opts?: Pick<OwnedOrderQuery, 'includeAfterSale'>,
+): Promise<number> {
+  const [r] = await db`
+    select count(*)::int as n from orders o
+     where ${ownedOrderFilter(db, userId, statuses, opts?.includeAfterSale === true)}
+  `;
+  return Number(r?.['n'] ?? 0);
+}
+
+/**
+ * 「我的」四入口角标（S-7，`GET /orders/counts`）：口径 shared `ORDER_BADGE_STATUSES`。
+ * @why 一条聚合查询（`count(*) filter`）而不是四次计数：四个数来自同一个快照，不会出现"刚付款，待付款减了、待发货没加"。
+ * @why 「售后·退款」= 状态命中 **或** 有进行中售后（AFTER_SALE_OPEN_STATUSES）；`filter` 是逐行判断，同一张单两样都占只算一次。
+ */
+export async function countOrderBadges(
+  db: Db,
+  userId: string,
+): Promise<{ unpaid: number; to_ship: number; shipped: number; after_sale: number }> {
+  const S = ORDER_BADGE_STATUSES;
+  const [r] = await db`
+    select
+      count(*) filter (where o.status in ${db([...S.unpaid])})::int as unpaid,
+      count(*) filter (where o.status in ${db([...S.to_ship])})::int as to_ship,
+      count(*) filter (where o.status in ${db([...S.shipped])})::int as shipped,
+      count(*) filter (where o.status in ${db([...S.after_sale])}
+                          or exists (select 1 from after_sale_requests a
+                                      where a.order_id = o.id
+                                        and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])}))::int as after_sale
+      from orders o
+     where o.user_id = ${userId}
+  `;
+  return {
+    unpaid: Number(r?.['unpaid'] ?? 0),
+    to_ship: Number(r?.['to_ship'] ?? 0),
+    shipped: Number(r?.['shipped'] ?? 0),
+    after_sale: Number(r?.['after_sale'] ?? 0),
+  };
 }
 
 /** 订单详情主行（address_snapshot 已 JSON.parse）。 */

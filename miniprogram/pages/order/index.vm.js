@@ -163,3 +163,29 @@ export function tabsView(activeKey) {
   const key = resolveOrderTab(activeKey);
   return ORDER_TABS.map((t) => ({ key: t.key, label: t.label, active: t.key === key }));
 }
+
+/**
+ * 合并列表行（S-7：订单列表分页）。
+ * @param {Array<{orderId: string}>} existing 已有的行
+ * @param {Array<{orderId: string}>} incoming 这一页的行（已过 `orderRows`）
+ * @param {boolean} reset true = 替换（首屏 / 切页签 / 下拉刷新）；false = 追加（触底加载）
+ * @why 去重：偏移分页时翻页途中来了新单，下一页第一条会是上一页最后一条——重复会让 `wx:key` 冲突、同一单显示两次。
+ *      保留先到的那条（与首页 `mergeCards` 同口径）。
+ */
+export function mergeOrderRows(existing, incoming, reset) {
+  const next = Array.isArray(incoming) ? incoming : [];
+  if (reset) return next;
+  const prev = Array.isArray(existing) ? existing : [];
+  const seen = new Set(prev.map((r) => r.orderId));
+  return prev.concat(next.filter((r) => !seen.has(r.orderId)));
+}
+
+/**
+ * 还有没有下一页（S-7）。
+ * @param {unknown} loaded 已从服务端取走的条数（**服务端偏移**，不是去重后的行数——按行数算会让末尾那条永远取不到）
+ * @param {unknown} total 响应里的 `total`
+ * @why 没有 total（老服务端 / 脏响应）→ 当作没有下一页：宁可少翻一页，也不在一个不知道有多长的列表上无限触底请求。
+ */
+export function hasMoreOrders(loaded, total) {
+  return Number.isInteger(loaded) && Number.isInteger(total) && loaded < total;
+}

@@ -32,7 +32,7 @@
  * @see ../../docs/管理后台对标分析-成熟电商平台-2026-10-08.md §8-1①；./toast.tsx（操作反馈）
  */
 import { useEffect, useRef, useState } from 'react';
-import { blockEnter } from './keys.js';
+import { blockEnter, trapTab } from './keys.js';
 
 /** 危险确认按钮下面的提示（N21）。 */
 export function mouseOnlyHint(confirmText: string): string {
@@ -143,8 +143,10 @@ export function ConfirmDialog({
         className="modal-body dialog"
         ref={bodyRef}
         tabIndex={-1}
-        // 危险确认：弹层里任何地方的回车都不执行（也不冒泡到背后的表单，N21）
+        // 危险确认：弹层里任何地方的回车都不执行（也不冒泡到背后的表单，N21）；
+        // Tab 关在弹层里（S9：否则几下 Tab 就到了背后页面的按钮）
         onKeyDown={(e) => {
+          trapTab(e);
           if (danger && e.key === 'Enter') {
             blockEnter(e);
             e.stopPropagation();

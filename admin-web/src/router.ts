@@ -17,11 +17,9 @@
  * @why 形状是 `{ path, query }` 而不是一整串 hash 字符串：页面要读的是"页 / id / 筛选"这三样，
  *      让每个页面各自去 split 字符串，等于把解析规则复制七份（且必然漂移）。
  *
- * @limitation 一：**编辑商品不进 URL**。契约没有 `GET /admin/products/{id}`，
- *              编辑态的原始数据由列表页带过来（`App.tsx` @limitation 一）；
- *              给它一个 `#/products/:id/edit` 的深链接，是承诺一个**兑现不了**的地址
- *              （刷新后表单是空的，运营会以为商品丢了）。宁可让刷新回到列表。
- *              ⚠️ 这与订单详情相反——详情有 `GET /admin/orders/{id}`，所以 `#/orders/:id` 是真深链接。
+ * @limitation 一：商品编辑 `#/products/<id>`（`new` = 新建）自第二轮审计（代理 G8，2026-10-11）起进 URL。
+ *              契约仍没有 `GET /admin/products/{id}`：刷新 / 链接打开时由 products/ProductEditRoute.tsx 翻列表按 id 找，
+ *              找不到就明说，不给一张空表单（那会被当成"商品数据丢了"）。订单详情则有单条接口。
  * @limitation 二：只认 `#/` 开头的 hash；`#` 后面不是 `/` 时（锚点）按首页处理，不报错。
  *
  * @see ../../docs/管理后台对标分析-成熟电商平台-2026-10-08.md §8-1②；./App.tsx

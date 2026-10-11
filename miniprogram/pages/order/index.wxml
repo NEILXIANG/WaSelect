@@ -95,4 +95,18 @@
       </view>
     </view>
   </view>
+
+  <!-- S-7（第二轮审计）：分页后的页脚——与首页同一套说法与样式（加载中 / 失败点此重试 / 上拉加载更多 / 没有更多了） -->
+  <view class="footer" wx:if="{{rows.length > 0}}">
+    <text class="ws-caption" wx:if="{{loadingMore}}">加载中…</text>
+    <view
+      class="ws-caption order__more-retry"
+      wx:elif="{{moreError}}"
+      hover-class="ws-press"
+      bindtap="onMoreRetry"
+      >加载失败，点此重试</view
+    >
+    <text class="ws-caption" wx:elif="{{hasMore}}">上拉加载更多</text>
+    <text class="ws-caption" wx:else>没有更多了</text>
+  </view>
 </view>

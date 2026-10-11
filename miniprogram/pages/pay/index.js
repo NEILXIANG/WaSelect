@@ -94,6 +94,8 @@ Page({
   data: {
     /** F11：链接里没有订单 id（错误态按钮去订单列表，而不是重试）。 */
     noOrderId: false,
+    /** MP-4：正在发起的那个通道（那一个按钮显示加载中；空串 = 没有在途）。 */
+    payingChannel: '',
     /** `chargeOptions` 的输出：每个通道带实扣币种与金额（§14.2，AJ-180）。 */
     channels: [],
     /** 剩余清单 4-8：取到通道但一个都没有（金额 / 地区不支持）→ 显示空态而不是一片空白。 */
@@ -154,6 +156,8 @@ Page({
     this.traceId = newTraceId();
     this.intentKey = createIntentIdempotency();
     this.orderId = typeof options?.orderId === 'string' ? options.orderId : '';
+    // MP-10：从订单详情进来的（详情页带 from=detail）→ 付完退回那张详情，而不是 redirectTo 再压一张
+    this.fromDetail = options?.from === 'detail';
     if (this.orderId === '') {
       // F11：说人话 + 按钮改成去订单列表（重试拿不到 id）
       this.setData({
@@ -393,7 +397,7 @@ Page({
 
   async startPay(channel, idemKey) {
     // 新的一次发起 → 上一次的"支付结果"不再成立（它描述的是上一次动作）
-    this.setData({ paying: true, error: '', payResult: '' });
+    this.setData({ paying: true, payingChannel: channel, error: '', payResult: '' });
     try {
       const intent = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}/pay`,
@@ -414,18 +418,34 @@ Page({
       // P2-40：40902 / 40904 多半是这张单已经付了或关了——重查一次，由 payPageView 决定换不换关闭屏
       if (recheckAfterPayError(err?.code)) void this.checkStatus();
     } finally {
-      this.setData({ paying: false });
+      this.setData({ paying: false, payingChannel: '' });
     }
   },
 
   /**
-   * 付成之后离开本页（redirectTo），并记下"是付成走的"——onUnload 据此不记放弃（M-21）。
+   * 付成之后去订单详情，并记下"是付成走的"——onUnload 据此不记放弃（M-21）。
+   * @param {boolean} justPaid 微信支付在宿主侧成功、服务端可能还没确认（MP3-04）→ 详情页先显示"确认中"
+   * @why MP-10（第二轮审计 2026-10-11）：从订单详情进来的（`fromDetail`）→ **退回**那张详情，"刚付过"经 globalData 交回
+   *      （navigateBack 不能带参数）；原先一律 redirectTo，返回栈里出现两张同样的详情，按返回像"没退出去"。
+   *      从结算页 redirect 进来的照旧 redirectTo（栈里没有详情可退）。
    * @why 单独成方法而不是在 success 里写块：`requestPayment({...})` 那段由 vm 单测按"到第一个 `});`"截取核对
    *      success / fail 是否齐全，块体里的 `});` 会把截取提前截断。
    */
-  leaveAsPaid(url) {
+  leaveToDetail(justPaid) {
     this.paidAndLeft = true;
-    wxApi.redirectTo({ url });
+    if (this.fromDetail === true) {
+      app.globalData.paidReturn = { orderId: this.orderId, justPaid: justPaid === true };
+      wxApi.navigateBack();
+      return;
+    }
+    // 两条 URL 各写一次字面量：tab-nav-guard 与 nav-param-guard 都按 `${XX_PAGE}?name=` 静态解析，三元拼接它们看不见
+    if (justPaid === true) {
+      wxApi.redirectTo({
+        url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}&justPaid=1`,
+      });
+    } else {
+      wxApi.redirectTo({ url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}` });
+    }
   },
 
   /** 按 `payPlan` 的判别联合执行（**不认通道名**，@see 文件头）。 */
@@ -449,10 +469,7 @@ Page({
         //    `payments` 行可能还没被回调推进——订单详情若照常规口径给「取消订单」，
         //    用户会以为刚才没付上而点它。带上这个标记，详情页在确认前不给出取消与继续支付。
         //    （参数名由 `nav-param-guard` 核对：详情页 `onLoad` 必须真的读它。）
-        success: () =>
-          this.leaveAsPaid(
-            `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}&justPaid=1`,
-          ),
+        success: () => this.leaveToDetail(true),
         // @see @limitation 三：取消与失败一视同仁。⚠️ 但不走 errorMessage——
         // 宿主 fail 的形状是 {errMsg}，读出来是 "requestPayment:fail cancel" 这种黑盒文案，
         // 把"用户主动取消"显示成"加载失败"会让人以为付款出了故障。
@@ -485,10 +502,7 @@ Page({
     this.setData(afterIntent(plan, { channelCount: this.data.channels.length }));
     // ⚠️ auto = 响应到达时订单已 paid（MP3-06）：留下来会同时显示"支付已完成"和还能点的通道，
     //    那是自相矛盾的界面。与微信支付成功同口径——离开这一页，让详情页用服务端数据说话。
-    if (leavesAfterAuto(plan)) {
-      this.paidAndLeft = true;
-      wxApi.redirectTo({ url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}` });
-    }
+    if (leavesAfterAuto(plan)) this.leaveToDetail(false);
   },
 
   /**
@@ -552,6 +566,12 @@ Page({
   onViewOrders() {
     // 小程序评估 A1（2026-10-09）：去**这一单**的详情，而不是订单列表——付完款回来要看的就是这一单。
     //   订单详情不是 tabBar 页，redirectTo 可用（订单列表是 tabBar 页，那时才必须 switchTab，MP-02 / AJ-366）。
+    if (this.orderId !== '' && this.fromDetail === true) {
+      // MP-10：从那张详情进来的 → 退回去（不再压第二张）；"刚在浏览器付过"由详情页按本机记录判断（adoptPaidReturn）
+      app.globalData.paidReturn = { orderId: this.orderId, justPaid: false };
+      wxApi.navigateBack();
+      return;
+    }
     if (this.orderId !== '') {
       wxApi.redirectTo({ url: `${ORDER_DETAIL_PAGE}?id=${encodeURIComponent(this.orderId)}` });
       return;

@@ -59,3 +59,32 @@ describe('ActionDrawer：表单上报提交中 → 关闭出口全部失效', ()
     expect(closed).toBe(1);
   });
 });
+
+describe('抽屉：键盘焦点留在抽屉里（代理 S9，第二轮审计 2026-10-11）', () => {
+  it('🔴 在抽屉最后一个可聚焦元素上按 Tab → 回到抽屉第一个（「关闭」），不跑到背后页面', async () => {
+    closed = 0;
+    mounted = await mount(
+      createElement(ActionDrawer, {
+        title: '改址',
+        onClose: () => undefined,
+        children: createElement(
+          'div',
+          null,
+          createElement('input', { 'aria-label': '收件人' }),
+          createElement('button', { type: 'button' }, '提交改址'),
+        ),
+      }),
+    );
+    const el = mounted.el;
+    const submit = button(el, '提交改址');
+    expect(submit, '抽屉里应有「提交改址」按钮').not.toBeNull();
+    if (submit === null) return;
+    submit.focus();
+    await act(async () => {
+      submit.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }),
+      );
+    });
+    expect(document.activeElement).toBe(button(el, '关闭'));
+  });
+});

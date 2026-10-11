@@ -7,12 +7,12 @@
  *      ③ 「我的」角标把历史单（已退款 / 已送达）也算进去 → 角标永远不归零，等于没有角标。
  */
 import { describe, expect, it } from 'vitest';
-import { ORDER_STATUS } from '@waselect/shared';
+import { ORDER_BADGE_STATUSES, ORDER_STATUS } from '@waselect/shared';
 import {
   ALL_ONLY_STATUSES,
-  BADGE_STATUSES,
+  ORDER_PAGE_SIZE,
   ORDER_TABS,
-  orderTabCounts,
+  orderListQuery,
   resolveOrderTab,
   tabBadgeText,
   tabStatusParam,
@@ -57,8 +57,8 @@ describe('tabStatusParam / resolveOrderTab', () => {
   it('页签 → 查询参数（逗号拼接；全部 = 空串，不带 status）', () => {
     expect(tabStatusParam('all')).toBe('');
     expect(tabStatusParam('unpaid')).toBe('created,pending_payment');
-    // AJ-430：「售后·退款」要收进有售后申请的单（状态可能仍是已送达 / 已完成）——取全量、本地按 tabItems 过滤
-    expect(tabStatusParam('after_sale')).toBe('');
+    // S-7（契约 0.6.69）：「售后·退款」带自己的状态，"有售后申请"由 include_after_sale 交给服务端（原先取全量本地滤）
+    expect(tabStatusParam('after_sale')).toBe('refunding,refunded');
   });
 
   it('⚠️ 认不出的 key / 脏值 → 回落「全部」（不把坏值发给服务端换一个 40001）', () => {
@@ -72,35 +72,18 @@ describe('tabStatusParam / resolveOrderTab', () => {
   });
 });
 
-describe('orderTabCounts（「我的」四入口角标）', () => {
-  const items = [
-    { status: 'created' },
-    { status: 'pending_payment' },
-    { status: 'paid' },
-    { status: 'shipped' },
-    { status: 'delivered' },
-    { status: 'refunding' },
-    { status: 'refunded' },
-    { status: 'completed' },
-    { status: 'brand_new' },
-    null,
-  ];
-
-  it('🔴 只数"还在进行中"的单：已送达 / 已退款 / 已完成不计（否则角标永不归零）', () => {
-    expect(orderTabCounts(items)).toEqual({ unpaid: 2, to_ship: 1, shipped: 1, after_sale: 1 });
-  });
-
-  it('角标状态 ⊆ 该页签状态（角标数的单，点进页签必须看得到）', () => {
-    for (const [key, statuses] of Object.entries(BADGE_STATUSES)) {
+describe('「我的」角标口径（S-7 起由服务端 GET /orders/counts 计数，口径 shared ORDER_BADGE_STATUSES）', () => {
+  it('角标状态 ⊆ 该页签状态（角标数的单，点进页签必须看得到）；且只数"还在进行中"的状态', () => {
+    for (const [key, statuses] of Object.entries(ORDER_BADGE_STATUSES)) {
       const tab = ORDER_TABS.find((t) => t.key === key);
       expect(tab, key).toBeDefined();
       for (const s of statuses) expect(tab!.statuses).toContain(s);
     }
-  });
-
-  it('非数组 / 空 → 全 0', () => {
-    expect(orderTabCounts(undefined)).toEqual({ unpaid: 0, to_ship: 0, shipped: 0, after_sale: 0 });
-    expect(orderTabCounts([])).toEqual({ unpaid: 0, to_ship: 0, shipped: 0, after_sale: 0 });
+    // 已送达 / 已退款 / 已完成是结果不是待办：算进去角标永远不归零
+    const counted = Object.values(ORDER_BADGE_STATUSES).flat() as string[];
+    for (const s of ['delivered', 'refunded', 'completed', 'cancelled', 'expired']) {
+      expect(counted, s).not.toContain(s);
+    }
   });
 
   it('角标文案：0 不显示、超过 99 显示 99+', () => {
@@ -129,8 +112,22 @@ describe('「售后·退款」页签收进有售后申请的单', () => {
     expect(tabItems('shipped', list)).toBe(list);
     expect(tabItems('after_sale', undefined)).toEqual([]);
   });
+});
 
-  it('🔴 角标：退款中 + 有进行中售后；同一张单两样都占只算一次；已结案的售后不算', () => {
-    expect(orderTabCounts(list).after_sale).toBe(2); // b（进行中售后）+ e（退款中且有售后，只算一次）
+describe('orderListQuery（S-7：买家订单列表分页，契约 0.6.69）', () => {
+  it('🔴 每个页签的查询串：分页恒带；「售后·退款」带 include_after_sale=1 交给服务端筛', () => {
+    expect(ORDER_PAGE_SIZE).toBe(20);
+    expect(orderListQuery('all', 1)).toBe('?page=1&size=20');
+    expect(orderListQuery('unpaid', 2)).toBe('?status=created,pending_payment&page=2&size=20');
+    expect(orderListQuery('after_sale', 1)).toBe(
+      '?status=refunding,refunded&include_after_sale=1&page=1&size=20',
+    );
+  });
+
+  it('脏页码 → 第 1 页；认不出的页签 → 全部', () => {
+    for (const p of [0, -1, 1.5, Number.NaN, undefined]) {
+      expect(orderListQuery('all', p as number), String(p)).toBe('?page=1&size=20');
+    }
+    expect(orderListQuery('constructor', 3)).toBe('?page=3&size=20');
   });
 });

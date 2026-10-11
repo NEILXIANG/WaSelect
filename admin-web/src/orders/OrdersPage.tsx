@@ -272,11 +272,22 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   const selectable = (batchMode ? raw.filter((o) => shipGate(o).ok) : raw).map((o) => o.order_id);
   /** 按列表顺序的所选 id（导出 / 打印按这个顺序）。 */
   const selectedIds = rows.map((r) => r.id).filter((id) => selected.has(id));
-  const selectedPaid = raw.filter((o) => selected.has(o.order_id) && o.status === 'paid').length;
+  /**
+   * 所选里能打印的单数（代理 S1，第二轮审计 2026-10-11）：与打印页、发货按钮同一个闸门 `shipGate`
+   * （测试单 / 拒付中的不算）。原先按 `status === 'paid'` 数，「全部」页签勾了测试单时按钮写（2）、打印页只列 1 单。
+   */
+  const selectedPaid = raw.filter((o) => selected.has(o.order_id) && shipGate(o).ok).length;
+  const orderNoOf = (id: string): string => raw.find((o) => o.order_id === id)?.order_no ?? id;
 
   if (printIds !== null) {
     return (
-      <PrintSheet api={api} ids={printIds} onBack={() => setPrintIds(null)} onError={batchError} />
+      <PrintSheet
+        api={api}
+        ids={printIds}
+        labelOf={orderNoOf}
+        onBack={() => setPrintIds(null)}
+        onError={batchError}
+      />
     );
   }
 

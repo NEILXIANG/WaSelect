@@ -73,10 +73,10 @@ describe('订单列表：下拉刷新（M-04）', () => {
     hold = deferred<unknown>();
     const done = call<Promise<void>>('onPullDownRefresh');
     await settle();
-    expect(calls).toEqual(['GET /api/v1/orders']);
+    expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20']);
     hold.resolve({ items: [{ order_id: 'o-2', status: 'shipped' }] });
     await done;
-    expect(calls).toEqual(['GET /api/v1/orders', 'stop']);
+    expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20', 'stop']);
     expect((page.data['rows'] as Array<{ statusText: string }>)[0]?.statusText).toBe(
       '已发货 · 国际运输中',
     );
@@ -85,7 +85,7 @@ describe('订单列表：下拉刷新（M-04）', () => {
   it('🔴 取数失败也要收起下拉动画，并显示错误（不能一直转圈）', async () => {
     fail = true;
     await call<Promise<void>>('onPullDownRefresh');
-    expect(calls).toEqual(['GET /api/v1/orders', 'stop']);
+    expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20', 'stop']);
     expect(page.data['error']).not.toBe('');
     expect(page.data['rows']).toEqual([]);
   });
@@ -96,7 +96,7 @@ describe('订单列表：状态页签（M-10，AJ-408）', () => {
     await (page['onTabTap'] as (e: unknown) => Promise<void>)({
       currentTarget: { dataset: { key: 'unpaid' } },
     });
-    expect(calls).toEqual(['GET /api/v1/orders?status=created,pending_payment']);
+    expect(calls).toEqual(['GET /api/v1/orders?status=created,pending_payment&page=1&size=20']);
     expect(page.data['activeTab']).toBe('unpaid');
     expect(
       (page.data['tabs'] as Array<{ key: string; active: boolean }>).find((t) => t.active)?.key,
@@ -104,15 +104,17 @@ describe('订单列表：状态页签（M-10，AJ-408）', () => {
     await (page['onTabTap'] as (e: unknown) => Promise<void>)({
       currentTarget: { dataset: { key: 'all' } },
     });
-    expect(calls.at(-1)).toBe('GET /api/v1/orders');
+    expect(calls.at(-1)).toBe('GET /api/v1/orders?page=1&size=20');
   });
 
   it('🔴 从「我的」带来的一次性意图：onShow 读走并清空，按它取数', async () => {
     gd['orderTab'] = 'after_sale';
     (page['onShow'] as () => void)();
     await settle();
-    // AJ-430：「售后·退款」取全量、本地按 tabItems 过滤（有售后申请的已送达单也要在）
-    expect(calls.at(-1)).toBe('GET /api/v1/orders');
+    // S-7（契约 0.6.69）：「售后·退款」由服务端筛（状态命中或有售后申请），不再取全量本地滤
+    expect(calls.at(-1)).toBe(
+      'GET /api/v1/orders?status=refunding,refunded&include_after_sale=1&page=1&size=20',
+    );
     expect(gd['orderTab']).toBe('');
     expect(page.data['activeTab']).toBe('after_sale');
   });
@@ -207,6 +209,61 @@ describe('被拉黑的账号：错误态给「联系客服」而不是「重试�
     fail = false;
     call('onRetry');
     await settle();
-    expect(calls).toEqual(['GET /api/v1/orders']);
+    expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20']);
+  });
+});
+
+describe('订单列表：分页与触底加载（S-7，第二轮审计 2026-10-11）', () => {
+  const row = (i: number) => ({
+    order_id: `o-${i}`,
+    order_no: `WS-${i}`,
+    status: 'paid',
+    total_jpy: 1000,
+  });
+
+  it('🔴 第 1 页 20 条、共 25 → 触底取第 2 页并追加；取完就不再取；跨页重复的单只留一份', async () => {
+    gd['api'] = async (req: { url: string }) => {
+      const url = req.url.replace('http://api.test', '');
+      calls.push(`GET ${url}`);
+      if (url.includes('page=1&'))
+        return { items: Array.from({ length: 20 }, (_, i) => row(i)), total: 25 };
+      // 翻页途中来了一张新单：第 2 页第一条与第 1 页最后一条是同一张
+      return { items: [row(19), ...Array.from({ length: 5 }, (_, i) => row(20 + i))], total: 26 };
+    };
+    calls = [];
+    await call<Promise<void>>('load');
+    expect(page.data['rows']).toHaveLength(20);
+    expect(page.data['hasMore']).toBe(true);
+    await call<Promise<void>>('onReachBottom');
+    expect(calls.at(-1)).toBe('GET /api/v1/orders?page=2&size=20');
+    const ids = (page.data['rows'] as Array<{ orderId: string }>).map((r) => r.orderId);
+    expect(ids).toHaveLength(25);
+    expect(new Set(ids).size).toBe(25);
+    // 服务端偏移已取满 26（20 + 6），不再有下一页
+    expect(page.data['hasMore']).toBe(false);
+    const n = calls.length;
+    await call<Promise<void>>('onReachBottom');
+    expect(calls.length).toBe(n);
+  });
+
+  it('🔴 追加失败不清列表，页脚给"点此重试"，重试取的仍是第 2 页', async () => {
+    let failMore = true;
+    gd['api'] = async (req: { url: string }) => {
+      const url = req.url.replace('http://api.test', '');
+      calls.push(`GET ${url}`);
+      if (url.includes('page=1&'))
+        return { items: Array.from({ length: 20 }, (_, i) => row(i)), total: 30 };
+      if (failMore) throw Object.assign(new Error('网络请求失败'), { code: -1 });
+      return { items: Array.from({ length: 10 }, (_, i) => row(20 + i)), total: 30 };
+    };
+    await call<Promise<void>>('load');
+    await call<Promise<void>>('onReachBottom');
+    expect(page.data['rows']).toHaveLength(20);
+    expect(String(page.data['moreError'])).not.toBe('');
+    failMore = false;
+    await call<Promise<void>>('onMoreRetry');
+    expect(calls.at(-1)).toBe('GET /api/v1/orders?page=2&size=20');
+    expect(page.data['rows']).toHaveLength(30);
+    expect(page.data['moreError']).toBe('');
   });
 });

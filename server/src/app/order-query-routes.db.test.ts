@@ -732,3 +732,157 @@ describe('E-8：GET /orders 与 /orders/{id} 的响应形状 = 契约 OrderListI
     }
   });
 });
+
+/**
+ * 第二轮审计 S-7（契约 0.6.69，AJ-481）：买家订单列表分页、「售后·退款」页签改由服务端筛选、「我的」角标改由服务端计数。
+ * @why 原接口一次返回该买家全部订单（每行 4 个子查询），复购多的买家越积越慢，小程序一次 setData 的数据量也有上限；
+ *      「我的」角标靠取全量在本地数——列表一分页，本地就数不全了，所以计数必须同时搬到服务端。
+ */
+describe('S-7：GET /orders 分页 + 售后筛选；GET /orders/counts 角标计数', () => {
+  /** 直接插库造单（接口建单会扣测试库存）：created_at 依次递增，i 越大越新。 */
+  async function seedOrders(userId: string, statuses: readonly string[], prefix: string) {
+    const ids: string[] = [];
+    for (const [i, status] of statuses.entries()) {
+      const id = `${prefix}-${String(i).padStart(3, '0')}`;
+      ids.push(id);
+      await db`
+        insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy, total_jpy,
+                            weight_g, fx_snapshot, address_snapshot, terms_version, expires_at, created_at)
+        values (${id}, ${`WS${id}`}, ${userId}, ${status}, 12800, 4950, null, 17750, 900,
+                '{}'::jsonb, '{}'::jsonb, 'T', now() + interval '30 minutes',
+                now() - make_interval(mins => ${statuses.length - i}))`;
+    }
+    return ids;
+  }
+  async function afterSale(id: string, orderId: string, userId: string, status: string) {
+    await db`
+      insert into after_sale_requests (id, order_id, user_id, reason, description, status, created_at, updated_at)
+      values (${id}, ${orderId}, ${userId}, 'damaged', '外箱压扁，罐子凹了', ${status}, now(), now())`;
+  }
+  const ids = (j: Record<string, unknown>) =>
+    (j['items'] as Array<Record<string, unknown>>).map((i) => String(i['order_id']));
+
+  it('🔴 25 单：默认每页 20、最新在前，带 total；第 2 页 5 单；超出页为空但 total 照给；两页无重叠', async () => {
+    const all = await seedOrders(
+      'u-1',
+      Array.from({ length: 25 }, () => 'paid'),
+      'pg',
+    );
+    const srv = await buildServer();
+    try {
+      const p1 = await get(srv.url, '/api/v1/orders');
+      expect(p1.status).toBe(200);
+      expect(p1.json['total']).toBe(25);
+      expect(ids(p1.json)).toEqual([...all].reverse().slice(0, 20));
+      const p2 = await get(srv.url, '/api/v1/orders?page=2');
+      expect(p2.json['total']).toBe(25);
+      expect(ids(p2.json)).toEqual([...all].reverse().slice(20));
+      const p3 = await get(srv.url, '/api/v1/orders?page=3');
+      expect(ids(p3.json)).toEqual([]);
+      expect(p3.json['total']).toBe(25);
+      const big = await get(srv.url, '/api/v1/orders?size=50');
+      expect(ids(big.json)).toHaveLength(25);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 page / size 非法 → 40001 page_size_invalid（size 上限 50，与商品列表同口径）', async () => {
+    const srv = await buildServer();
+    try {
+      for (const q of [
+        'page=0',
+        'page=-1',
+        'page=1.5',
+        'page=abc',
+        'size=0',
+        'size=51',
+        'size=x',
+      ]) {
+        const r = await get(srv.url, `/api/v1/orders?${q}`);
+        expect(r.status, q).toBe(400);
+        expect(r.json['code'], q).toBe(40001);
+      }
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 include_after_sale=1：状态命中「或」有售后申请（进行中或已结案）都收；只认 "1"', async () => {
+    const [refunding, delivOpen, delivClosed, delivNone, completedOpen] = await seedOrders(
+      'u-1',
+      ['refunding', 'delivered', 'delivered', 'delivered', 'completed'],
+      'as',
+    );
+    await afterSale('asr-1', String(delivOpen), 'u-1', 'open');
+    await afterSale('asr-2', String(delivClosed), 'u-1', 'resolved');
+    await afterSale('asr-3', String(completedOpen), 'u-1', 'processing');
+    const srv = await buildServer();
+    try {
+      const r = await get(srv.url, '/api/v1/orders?status=refunding,refunded&include_after_sale=1');
+      expect(r.status).toBe(200);
+      expect(new Set(ids(r.json))).toEqual(
+        new Set([refunding, delivOpen, delivClosed, completedOpen]),
+      );
+      expect(ids(r.json)).not.toContain(delivNone);
+      expect(r.json['total']).toBe(4);
+      // 不带 status：只收有售后申请的
+      const onlyAs = await get(srv.url, '/api/v1/orders?include_after_sale=1');
+      expect(new Set(ids(onlyAs.json))).toEqual(new Set([delivOpen, delivClosed, completedOpen]));
+      for (const bad of ['0', 'true', 'yes', '']) {
+        const b = await get(srv.url, `/api/v1/orders?include_after_sale=${bad}`);
+        expect(b.status, bad).toBe(400);
+        expect(b.json['code'], bad).toBe(40001);
+      }
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 归属：别人带售后申请的单不会被 include_after_sale 的「或」带进来（漏括号 = 越权读）', async () => {
+    const [mine] = await seedOrders('u-1', ['refunding'], 'own');
+    const [theirs] = await seedOrders('u-2', ['delivered'], 'theirs');
+    await afterSale('own-as', String(theirs), 'u-2', 'open');
+    const srv = await buildServer();
+    try {
+      const r = await get(srv.url, '/api/v1/orders?status=refunding,refunded&include_after_sale=1');
+      expect(ids(r.json)).toEqual([mine]);
+      expect(r.json['total']).toBe(1);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 GET /orders/counts：四个入口的进行中单数；有进行中售后的单算进售后·退款且只算一次；他人的单不算', async () => {
+    const [, , , , refunding, delivOpen, delivClosed] = await seedOrders(
+      'u-1',
+      [
+        'created',
+        'pending_payment',
+        'paid',
+        'shipped',
+        'refunding',
+        'delivered',
+        'delivered',
+        'completed',
+      ],
+      'ct',
+    );
+    await afterSale('cta-1', String(refunding), 'u-1', 'open'); // 退款中 + 进行中售后：只算一次
+    await afterSale('cta-2', String(delivOpen), 'u-1', 'processing');
+    await afterSale('cta-3', String(delivClosed), 'u-1', 'rejected'); // 已结案：不算
+    await seedOrders('u-2', ['created', 'paid', 'refunding'], 'other');
+    const srv = await buildServer();
+    try {
+      const r = await get(srv.url, '/api/v1/orders/counts');
+      expect(r.status).toBe(200);
+      expect(r.json).toEqual({ unpaid: 2, to_ship: 1, shipped: 1, after_sale: 2 });
+      const other = await get(srv.url, '/api/v1/orders/counts', token2);
+      expect(other.json).toEqual({ unpaid: 1, to_ship: 1, shipped: 0, after_sale: 1 });
+      const anon = await fetch(`${srv.url}/api/v1/orders/counts`);
+      expect(anon.status).toBe(401);
+    } finally {
+      await srv.close();
+    }
+  });
+});

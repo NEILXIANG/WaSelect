@@ -315,3 +315,106 @@ describe('App：前端报错可见（AJ-421）', () => {
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBe('test-token');
   });
 });
+
+describe('商品编辑进地址栏（代理 G8，第二轮审计 2026-10-11）', () => {
+  const PRODUCT = {
+    id: 'p-1',
+    title: '宇治抹茶 100g',
+    category: 'food',
+    price_jpy: 3200,
+    weight_g: 150,
+    stock: 8,
+    status: 'active',
+    images: [],
+    updated_at: '2026-10-01T00:00:00.000Z',
+  };
+  function stubProducts(items: unknown[] = [PRODUCT]): void {
+    const window = { from: 'x', to: 'y', orders: 0, paid_orders: 0, sales_jpy: 0, avg_jpy: null };
+    vi.stubGlobal('fetch', async (url: unknown) => {
+      const u = String(url);
+      requested.push(u);
+      const body = u.includes('/api/v1/admin/products')
+        ? { items, total: items.length }
+        : { items: [], total: 0, today: window, last7: window };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+  }
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+  };
+
+  it('🔴 #/products/p-1 直接打开（刷新 / 同事发来的链接）→ 这件商品的编辑表单（原先回到列表）', async () => {
+    stubProducts();
+    const el = await open('#/products/p-1');
+    await settle();
+    expect(heading(el)).toBe('编辑商品');
+    expect(
+      [...el.querySelectorAll('input')].some(
+        (i) => (i as HTMLInputElement).value === '宇治抹茶 100g',
+      ),
+    ).toBe(true);
+  });
+
+  it('🔴 列表点「编辑」→ 地址栏 #/products/p-1；点「返回列表」→ 回 #/products', async () => {
+    stubProducts();
+    const el = await open('#/products');
+    await settle();
+    await click(button(el, '编辑'));
+    expect(location.hash).toBe('#/products/p-1');
+    expect(heading(el)).toBe('编辑商品');
+    await click(button(el, '返回列表'));
+    expect(location.hash).toBe('#/products');
+    expect(heading(el)).toBe('商品管理');
+  });
+
+  it('#/products/new → 新建表单', async () => {
+    stubProducts();
+    const el = await open('#/products/new');
+    await settle();
+    expect(heading(el)).toBe('新建商品');
+  });
+
+  it('取数失败 → 说没取到并给「重试」；重试成功后进编辑表单', async () => {
+    let down = true;
+    const window = { from: 'x', to: 'y', orders: 0, paid_orders: 0, sales_jpy: 0, avg_jpy: null };
+    vi.stubGlobal('fetch', async (url: unknown) => {
+      const u = String(url);
+      requested.push(u);
+      if (u.includes('/api/v1/admin/products') && down) {
+        return new Response(JSON.stringify({ code: 50000, message: '服务器内部错误' }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      const body = u.includes('/api/v1/admin/products')
+        ? { items: [PRODUCT], total: 1 }
+        : { items: [], total: 0, today: window, last7: window };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const el = await open('#/products/p-1');
+    await settle();
+    expect(el.textContent).toContain('商品信息没取到');
+    down = false;
+    await click(button(el, '重试'));
+    await settle();
+    expect(heading(el)).toBe('编辑商品');
+  });
+
+  it('🔴 #/products/p-gone（已删除 / 不存在）→ 明说没找到并给「返回列表」，不显示一张空表单', async () => {
+    stubProducts();
+    const el = await open('#/products/p-gone');
+    await settle();
+    expect(el.textContent).toContain('没找到这件商品');
+    expect(heading(el)).not.toBe('编辑商品');
+    await click(button(el, '返回列表'));
+    expect(location.hash).toBe('#/products');
+  });
+});

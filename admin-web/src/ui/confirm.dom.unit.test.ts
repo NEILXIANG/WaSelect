@@ -243,3 +243,36 @@ describe('ConfirmDialog：危险度是业务判断，不是排版偏好', () => 
     expect(el.querySelector('.dialog-title')?.className ?? '').toContain('error');
   });
 });
+
+describe('键盘焦点留在弹层里（代理 S9，第二轮审计 2026-10-11）', () => {
+  /** 在当前焦点元素上按 Tab（React 合成事件从这里冒泡到弹层的 onKeyDown）。 */
+  const tab = async (shift = false): Promise<void> => {
+    const target = document.activeElement as HTMLElement;
+    await act(async () => {
+      target.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Tab',
+          shiftKey: shift,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+  };
+
+  it('🔴 危险确认框里在最后一个按钮上按 Tab → 回到弹层第一个可聚焦元素，不跑到背后页面的按钮上', async () => {
+    const el = await open({ ...SPEC, typeToConfirm: 'EJ123456789JP' });
+    const items = [
+      ...el.querySelectorAll<HTMLElement>('.dialog input, .dialog button:not([disabled])'),
+    ];
+    expect(items.length).toBeGreaterThanOrEqual(2);
+    const first = items[0]!;
+    const last = items[items.length - 1]!;
+    last.focus();
+    await tab();
+    expect(document.activeElement).toBe(first);
+    // Shift+Tab 在第一个上 → 去最后一个
+    await tab(true);
+    expect(document.activeElement).toBe(last);
+  });
+});

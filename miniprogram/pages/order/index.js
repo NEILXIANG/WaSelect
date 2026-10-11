@@ -24,8 +24,8 @@
  *
  * @see ./index.vm.js（状态词表、列表行、页签视图）；../../utils/order-tabs.js（页签 ↔ 状态）
  */
-import { emptyState, orderRows, tabsView } from './index.vm.js';
-import { resolveOrderTab, tabItems, tabStatusParam } from '../../utils/order-tabs.js';
+import { emptyState, hasMoreOrders, mergeOrderRows, orderRows, tabsView } from './index.vm.js';
+import { orderListQuery, resolveOrderTab, tabItems } from '../../utils/order-tabs.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { serverNowMs } from '../../utils/server-clock.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
@@ -66,11 +66,30 @@ Page({
     activeTab: 'all',
     /** vm `tabsView` 的输出。 */
     tabs: tabsView('all'),
+    /** S-7：还有下一页（vm `hasMoreOrders`）。 */
+    hasMore: false,
+    /** S-7：触底加载在途（页脚"加载中…"）。 */
+    loadingMore: false,
+    /** S-7：触底加载失败的文案（空串 = 无；页脚给"点此重试"，不动已加载的行）。 */
+    moreError: '',
   },
 
   traceId: '',
-  /** 请求序号（@see @limitation 五；不进 data：渲染不需要它）。 */
+  /** 请求序号（@see @limitation 五；不进 data：渲染不需要它）。只有 load（新一代列表）领号，loadMore 借号。 */
   seq: 0,
+  /** S-7：已加载到第几页。 */
+  page: 0,
+  /** S-7：已从服务端取走的条数（服务端偏移，判断还有没有下一页用；不是去重后的行数）。 */
+  loaded: 0,
+  /** S-7：响应里的 total。 */
+  total: 0,
+  /** S-7：触底加载在途标志（滚动事件没有按钮可挂 ws-button 的连点防线，只能用标志位挡）。 */
+  loadingMorePage: false,
+  /**
+   * S-7：整页重取（新一代列表）在途。此时 loaded / total 还是上一代的，触底翻页会把旧页签的下一页
+   * 用新一代的序号取回来、追加进新页签——所以重取在途时不翻页（同首页 `reloading`）。
+   */
+  reloadingList: false,
 
   onLoad() {
     this.traceId = newTraceId();
@@ -105,23 +124,24 @@ Page({
     this.seq = nextSeq(this.seq);
     const seq = this.seq;
     const tab = this.data.activeTab;
-    const status = tabStatusParam(tab);
-    this.setData({ loading: true });
+    // 新一代列表：上一代在途的"下一页"从此过期，它的标志位由这里复位（同首页 reload / loadMore 的规则）
+    this.loadingMorePage = false;
+    this.reloadingList = true;
+    this.setData({ loading: true, loadingMore: false, moreError: '' });
     try {
       const res = await app.globalData.api({
-        url: `${app.globalData.apiBase}/api/v1/orders${status === '' ? '' : `?status=${status}`}`,
+        url: `${app.globalData.apiBase}/api/v1/orders${orderListQuery(tab, 1)}`,
         traceId: this.traceId,
       });
       if (isStale(seq, this.seq)) return;
-      // AJ-430：「售后·退款」取的是全量，本地只留退款中 / 已退款或有售后申请的单（其它页签原样）
-      // MP-14：截止已到的待付款行不给「继续支付」（时刻经服务端 Date 头校准，MP-8）
-      const rows = orderRows(
-        tabItems(tab, res?.items),
-        serverNowMs(Date.now(), app.globalData.clockSkewMs),
-      );
+      const rows = this.toRows(tab, res);
+      this.page = 1;
+      this.loaded = Array.isArray(res?.items) ? res.items.length : 0;
+      this.total = res?.total;
       const empty = emptyState(rows, '', tab);
       this.setData({
         rows,
+        hasMore: hasMoreOrders(this.loaded, this.total),
         error: '',
         errorContact: false,
         empty: empty.showEmpty,
@@ -129,10 +149,79 @@ Page({
       });
     } catch (e) {
       if (isStale(seq, this.seq)) return;
-      this.setData({ rows: [], ...errorFields(e), ...contactFields(e), empty: false });
+      this.setData({
+        rows: [],
+        hasMore: false,
+        ...errorFields(e),
+        ...contactFields(e),
+        empty: false,
+      });
     } finally {
-      if (!isStale(seq, this.seq)) this.setData({ loading: false });
+      if (!isStale(seq, this.seq)) {
+        this.reloadingList = false;
+        this.setData({ loading: false });
+      }
     }
+  },
+
+  /**
+   * 响应 → 列表行。
+   * @why 「售后·退款」仍过一遍 tabItems：服务端已按 include_after_sale 筛过（S-7），这里只是同一口径的防御，
+   *      服务端将来口径变了也不会把无关的单显示进这个页签。
+   * @why MP-14：截止已到的待付款行不给「继续支付」（时刻经服务端 Date 头校准，MP-8）。
+   */
+  toRows(tab, res) {
+    return orderRows(
+      tabItems(tab, res?.items),
+      serverNowMs(Date.now(), app.globalData.clockSkewMs),
+    );
+  },
+
+  /**
+   * 触底追加下一页（S-7）。借当前号不领新号：切页签 / 下拉刷新（load 换号）后，在途的这一页自动作废，
+   * 不会把上一个页签的第 2 页追加到新页签里。
+   */
+  async loadMore() {
+    if (this.loadingMorePage || this.reloadingList) return;
+    if (!hasMoreOrders(this.loaded, this.total)) return;
+    const seq = this.seq;
+    const tab = this.data.activeTab;
+    const next = this.page + 1;
+    this.loadingMorePage = true;
+    this.setData({ loadingMore: true, moreError: '' });
+    try {
+      const res = await app.globalData.api({
+        url: `${app.globalData.apiBase}/api/v1/orders${orderListQuery(tab, next)}`,
+        traceId: this.traceId,
+      });
+      if (isStale(seq, this.seq)) return;
+      this.page = next;
+      this.loaded += Array.isArray(res?.items) ? res.items.length : 0;
+      this.total = res?.total;
+      this.setData({
+        rows: mergeOrderRows(this.data.rows, this.toRows(tab, res), false),
+        hasMore: hasMoreOrders(this.loaded, this.total),
+      });
+    } catch (e) {
+      if (isStale(seq, this.seq)) return;
+      // 追加失败**不清列表**（已加载的行还在），只在页脚给"点此重试"——整块报错的"重试"会从第 1 页重来
+      this.setData({ ...errorFields(e, 'moreError') });
+    } finally {
+      if (!isStale(seq, this.seq)) {
+        this.loadingMorePage = false;
+        this.setData({ loadingMore: false });
+      }
+    }
+  },
+
+  /** 触底（S-7）。 */
+  async onReachBottom() {
+    await this.loadMore();
+  },
+
+  /** 页脚"加载失败，点此重试"（S-7）：重取的仍是下一页，不从第 1 页重来。 */
+  async onMoreRetry() {
+    await this.loadMore();
   },
 
   /**

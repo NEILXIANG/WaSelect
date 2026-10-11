@@ -1308,8 +1308,10 @@ describe('错误归类：解析错误 vs 服务端 bug', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ pad: 'x'.repeat(120 * 1024) }),
     });
-    expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toMatchObject({ code: 40001 });
+    // S-9（第二轮审计 2026-10-11，AJ-482）：超限是 413 / 41301，不再折成 400 / 40001——
+    //    客户端（管理端保存超长商品描述）据此能说"内容太大"，而不是"参数缺失或格式错误"
+    expect(res.status).toBe(413);
+    await expect(res.json()).resolves.toMatchObject({ code: 41301 });
     expect(sink.find('unhandled_error')).toHaveLength(0);
     const rejected = sink.find('request_rejected');
     expect(rejected).toHaveLength(1);

@@ -14,6 +14,10 @@ import { parseHash, type Route } from '../router.js';
 
 let mounted: Mounted | undefined;
 let paths: string[];
+/** S1：这些单的详情请求失败（模拟网络抖动）。 */
+let failIds: Set<string>;
+/** S1：列表返回的行（默认 LIST）。 */
+let listItems: unknown[];
 
 const BASE = { status: 'paid', total_jpy: 13750, created_at: '2026-10-07T01:00:00Z' };
 const LIST = [
@@ -84,14 +88,20 @@ function Harness({ initial }: { initial: Route }): React.JSX.Element {
       return Promise.resolve({ filename: 'customs-20261008.csv', csv: '﻿a\r\n' });
     }
     const m = /^\/api\/v1\/admin\/orders\/([^?/]+)$/.exec(req.path);
-    if (m !== null) return Promise.resolve(DETAIL[decodeURIComponent(m[1] ?? '')]);
-    return Promise.resolve({ items: LIST, total: LIST.length });
+    if (m !== null) {
+      const id = decodeURIComponent(m[1] ?? '');
+      if (failIds.has(id)) return Promise.reject(new Error('网络请求失败'));
+      return Promise.resolve(DETAIL[id]);
+    }
+    return Promise.resolve({ items: listItems, total: listItems.length });
   };
   return createElement(OrdersPage, { api: api as never, route, onNavigate });
 }
 
 async function open(hash: string): Promise<HTMLElement> {
   paths = [];
+  failIds ??= new Set();
+  listItems ??= LIST;
   mounted = await mount(createElement(Harness, { initial: parseHash(hash) }));
   return mounted.el;
 }
@@ -105,6 +115,8 @@ afterEach(async () => {
   await mounted?.unmount();
   mounted = undefined;
   vi.unstubAllGlobals();
+  failIds = new Set();
+  listItems = LIST;
 });
 
 describe('导出所选 / 打印（AJ-407）', () => {
@@ -164,5 +176,39 @@ describe('导出所选 / 打印（AJ-407）', () => {
     expect(prints).toHaveLength(1);
     await click(button(el, '返回列表'));
     expect(el.textContent).toContain('订单管理');
+  });
+});
+
+describe('打印拣货单：计数与取数失败（代理 S1，第二轮审计 2026-10-11）', () => {
+  it('🔴 按钮上的数 = 实际能打印的单数（测试单 / 拒付中的不算，与打印页同一个发货闸门）', async () => {
+    listItems = [{ ...LIST[0], is_test: true }, LIST[1], LIST[2]];
+    // 「全部」页签什么单都能勾（待发货页签里测试单本来就勾不上）
+    const el = await open('#/orders');
+    await pickTwo(el);
+    // 原先按 status === 'paid' 数：显示（2），点进去却只列 1 单
+    expect(button(el, '打印拣货单与面单信息（1）')).not.toBeNull();
+  });
+
+  it('🔴 一单取数失败 → 不整页退回列表：已取到的留着，列出没取到的、可只重试这几单；取齐前不能打印', async () => {
+    failIds = new Set(['ord_b']);
+    const el = await open('#/orders?status=paid');
+    await pickTwo(el);
+    await click(button(el, '打印拣货单与面单信息（2）'));
+    await flush();
+    expect(el.textContent).toContain('拣货单与面单信息');
+    expect(el.textContent).toContain('没取到');
+    expect(el.textContent).toContain('261007-8M2WRD');
+    expect((button(el, '打印') as HTMLButtonElement).disabled).toBe(true);
+    // 不打半张：没取齐时一单都不排版
+    expect(el.querySelector('[aria-label="打印 261007-7K3QXA"]')).toBeNull();
+    const before = paths.filter((p) => p === '/api/v1/admin/orders/ord_a').length;
+    failIds = new Set();
+    await click(button(el, '重试没取到的单'));
+    await flush();
+    // 只重取失败的那单
+    expect(paths.filter((p) => p === '/api/v1/admin/orders/ord_a').length).toBe(before);
+    expect(el.querySelector('[aria-label="打印 261007-8M2WRD"]')).not.toBeNull();
+    expect(el.querySelector('[aria-label="打印 261007-7K3QXA"]')).not.toBeNull();
+    expect((button(el, '打印') as HTMLButtonElement).disabled).toBe(false);
   });
 });

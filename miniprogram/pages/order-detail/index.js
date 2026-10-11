@@ -142,7 +142,28 @@ Page({
 
   onShow() {
     track(app, 'page_view', { page: 'order_detail' }); // M-21 页面曝光
+    this.adoptPaidReturn();
     if (this.orderId !== '') void this.load();
+  },
+
+  /**
+   * 支付页退回本页时交回的"刚付过"（MP-10，第二轮审计 2026-10-11）。
+   * @why 支付页从本页进去、付完 navigateBack 回来（不再 redirectTo 出第二张详情），而 navigateBack 带不了参数——
+   *      "刚付过"经 `globalData.paidReturn` 交回；只认本单的，读完即清（别的单的不动，那是别的详情页的）。
+   * @why 银行卡（copylink）路径"查看订单"退回时不带 justPaid，但本机记过"刚在浏览器发起付款"——照 onLoad 同一判断补上。
+   */
+  adoptPaidReturn() {
+    const r = app.globalData.paidReturn;
+    if (r === null || typeof r !== 'object' || r.orderId !== this.orderId) return;
+    app.globalData.paidReturn = null;
+    if (
+      r.justPaid === true ||
+      recentExternalPay(app.globalData.externalPay, this.orderId, Date.now())
+    ) {
+      this.justPaid = true;
+      this.recheckCount = 0;
+      this.recheckGaveUp = false;
+    }
   },
 
   /**
@@ -254,7 +275,8 @@ Page({
 
   /** 继续支付（仅 `canPay`；不传金额，支付页自己向服务端要权威金额）。 */
   onPay() {
-    wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${this.orderId}` });
+    // MP-10：带 from=detail，支付页付完退回本页（不再 redirectTo 出第二张详情）
+    wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${this.orderId}&from=detail` });
   },
 
   /**

@@ -34,6 +34,7 @@ import {
   type ReactNode,
 } from 'react';
 import { ConfirmDialog } from './confirm.js';
+import { trapTab } from './keys.js';
 import { UnsavedProvider, useDirtyRegistry, useUnsaved } from './unsaved.js';
 
 /** 抽屉内表单上报"提交中"（没有抽屉时是空操作）。 */
@@ -105,7 +106,8 @@ export function ActionDrawer({
   return (
     <div className="modal drawer-wrap" role="dialog" aria-modal="true" aria-label={title}>
       <div className="modal-backdrop" onClick={() => requestClose.current()} />
-      <div className={wide ? 'drawer drawer-wide' : 'drawer'} ref={panel}>
+      {/* S9（第二轮审计）：Tab 关在抽屉里；抽屉里的确认框自己关自己的（trapTab 会停止冒泡） */}
+      <div className={wide ? 'drawer drawer-wide' : 'drawer'} ref={panel} onKeyDown={trapTab}>
         <header className="panel-head">
           <h2 className="dialog-title">{title}</h2>
           <button

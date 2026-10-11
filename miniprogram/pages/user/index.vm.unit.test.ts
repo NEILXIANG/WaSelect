@@ -137,15 +137,14 @@ describe('orderShortcuts（M-10 附，AJ-408：「我的」四个订单入口）
     ]);
   });
 
-  it('🔴 角标来自同一次 GET /orders 的结果，只数进行中的单', () => {
-    const rows = orderShortcuts([
-      { status: 'created' },
-      { status: 'paid' },
-      { status: 'paid' },
-      { status: 'delivered' },
-      { status: 'refunded' },
-    ]);
-    expect(rows.map((r) => r.badge)).toEqual(['1', '2', '', '']);
+  it('🔴 角标来自服务端计数 GET /orders/counts（S-7：列表分页后本地数不全）', () => {
+    const rows = orderShortcuts({ unpaid: 1, to_ship: 2, shipped: 0, after_sale: 120 });
+    expect(rows.map((r) => r.badge)).toEqual(['1', '2', '', '99+']);
+  });
+
+  it('计数里某一项缺失 / 不是整数 → 那一项不显示角标（不编一个 0）', () => {
+    const rows = orderShortcuts({ unpaid: '3', to_ship: 1.5, shipped: null });
+    expect(rows.map((r) => r.badge)).toEqual(['', '', '', '']);
   });
 
   it('⚠️ 取数失败（undefined）→ 入口照常显示、不带角标（不是"0"，也不隐藏入口）', () => {

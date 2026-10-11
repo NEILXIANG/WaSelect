@@ -114,3 +114,15 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
+
+/* S-7（第二轮审计 2026-10-11）：分页页脚，与首页 .footer / .home__more-retry 同值（只用既有 token） */
+.footer {
+  padding: var(--ws-space-card);
+  text-align: center;
+}
+
+.order__more-retry {
+  color: var(--ws-ink);
+  text-decoration: underline;
+  padding: var(--ws-space-hair) 0;
+}

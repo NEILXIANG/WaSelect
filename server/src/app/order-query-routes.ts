@@ -28,7 +28,10 @@ import {
   listOrderItemsWithImage,
   listOrderTimeline,
   listOwnedOrders,
+  countOwnedOrders,
+  countOrderBadges,
 } from '../adapters/orders.js';
+import { parsePageSize } from './product-routes.js';
 import { parseOrderStatusList } from '@waselect/shared';
 import type { DisplayCurrency } from '../domain/quote.js';
 import { toOrderDetail, toOrderListItem } from './order-views.js';
@@ -66,10 +69,37 @@ export function mountOrderQueryRoutes(app: Express, deps: OrderQueryRoutesDeps):
               ? parseOrderStatusList(raw)
               : null;
         if (statuses === null) throw new AppError(40001, { reason: 'status_invalid', status: raw });
-        const rows = await listOwnedOrders(deps.db, sub, statuses);
+        // S-7（契约 0.6.69）：分页（默认 20、上限 50，与商品列表同一个解析）+ 「售后·退款」页签口径由服务端筛
+        const { page, size } = parsePageSize(req.query);
+        const includeAfterSale = parseIncludeAfterSale(req.query['include_after_sale']);
+        const [rows, total] = await Promise.all([
+          listOwnedOrders(deps.db, sub, statuses, {
+            includeAfterSale,
+            limit: size,
+            offset: (page - 1) * size,
+          }),
+          countOwnedOrders(deps.db, sub, statuses, { includeAfterSale }),
+        ]);
         res.status(200).json({
           items: rows.map((r) => toOrderListItem(r, displayCurrencies, deps.config.IMG_BASE_URL)),
+          total,
         });
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  /**
+   * 「我的」四入口角标（S-7，契约 0.6.69）：口径 shared `ORDER_BADGE_STATUSES`。
+   * ⚠️ 必须注册在 `/orders/:id` **之前**：否则 `counts` 被当成订单 id，回 40400。
+   */
+  app.get('/api/v1/orders/counts', guard, (req, res, next) => {
+    void (async () => {
+      try {
+        const sub = req.auth?.sub;
+        if (sub === undefined) throw new AppError(40101);
+        res.status(200).json(await countOrderBadges(deps.db, sub));
       } catch (e) {
         next(e);
       }
@@ -109,4 +139,14 @@ export function mountOrderQueryRoutes(app: Express, deps: OrderQueryRoutesDeps):
       }
     })();
   });
+}
+
+/**
+ * `include_after_sale`（S-7）：只认字符串 `"1"`；不带 = false。
+ * @why 其它写法（`true` / `0` / 重复参数）一律 40001，不去猜——与 `status` 同口径：猜错的代价是页面静默少了一批单。
+ */
+function parseIncludeAfterSale(raw: unknown): boolean {
+  if (raw === undefined) return false;
+  if (raw === '1') return true;
+  throw new AppError(40001, { reason: 'include_after_sale_invalid' });
 }

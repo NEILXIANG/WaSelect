@@ -24,7 +24,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { UPLOAD_ACCEPT, uploadImage } from '../api/upload.js';
 import { PRODUCT_CATEGORY } from '@waselect/shared';
-import { listProducts } from '../products/api.js';
+import { listProducts, type AdminProductLike } from '../products/api.js';
 import { CATEGORY_LABELS } from '../products/view.js';
 import {
   createBanner,
@@ -86,6 +86,12 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
    * 取前 100 件（管理端商品量在百级，与 findProductById 同口径）；取不到就退回手填。
    */
   const [products, setProducts] = useState<{ id: string; title: string; online: boolean }[]>([]);
+  /**
+   * 目标商品的搜索（代理 S5，第二轮审计 2026-10-11）：下拉框只装得下一页（服务端 size 上限 100）。
+   * @why 商品一多，排在 100 件之后的商品原先根本选不到；编辑一条指向它的 Banner 时下拉框显示"请选择商品"，像没选。
+   */
+  const [productQuery, setProductQuery] = useState('');
+  const [productTotal, setProductTotal] = useState(0);
   /** 当前表单图片的预览（上传结果或正在编辑那条的现图）。 */
   const [preview, setPreview] = useState('');
   /**
@@ -95,6 +101,20 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
   const formTarget = useRef('new');
   formTarget.current = editing?.id ?? 'new';
 
+  /** 按商品名搜目标商品（S5）：结果替换下拉框选项；失败只报错、不清已有选项。 */
+  const searchProducts = async (): Promise<void> => {
+    try {
+      const keyword = productQuery.trim();
+      const res = await listProducts(api, { size: 100, ...(keyword === '' ? {} : { keyword }) });
+      const opts = toProductOptions(res.items);
+      setProducts(opts);
+      setProductTotal(Number.isInteger(res.total) ? res.total : opts.length);
+    } catch (e) {
+      const { text, traceId } = toastError(e, '商品搜索失败');
+      sink.error(text, { traceId });
+    }
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     sink.error('');
@@ -103,12 +123,9 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
         listBanners(api),
         listProducts(api, { size: 100 }).catch(() => ({ items: [], total: 0 })),
       ]);
-      const opts = plist.items.map((p) => ({
-        id: String(p['id']),
-        title: String(p['title'] ?? ''),
-        online: p['status'] === 'active',
-      }));
+      const opts = toProductOptions(plist.items);
       setProducts(opts);
+      setProductTotal(Number.isInteger(plist.total) ? plist.total : opts.length);
       setRaw(items);
       setRows(bannerRows(items, (id) => opts.find((o) => o.id === id)?.title));
     } catch (e) {
@@ -370,6 +387,39 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
             </select>
           </label>
           {form.linkType === 'product' && products.length > 0 && (
+            <div className="field">
+              <span className="label">搜索商品</span>
+              <div className="row">
+                <input
+                  className="input"
+                  aria-label="搜索商品"
+                  placeholder="按商品名搜索"
+                  value={productQuery}
+                  onChange={(e) => setProductQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      void searchProducts();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => void searchProducts()}
+                >
+                  搜索商品
+                </button>
+              </div>
+              {productTotal > products.length && (
+                <span className="muted">
+                  下拉框里只列出 {products.length} 件（共 {productTotal}{' '}
+                  件），找不到请先按商品名搜索
+                </span>
+              )}
+            </div>
+          )}
+          {form.linkType === 'product' && products.length > 0 && (
             <label className="field">
               <span className="label">目标商品</span>
               <select
@@ -378,6 +428,10 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
                 onChange={(e) => setForm((s) => ({ ...s, linkId: e.target.value }))}
               >
                 <option value="">请选择商品</option>
+                {/* S5：当前指向的商品不在这一页里（排在后面 / 搜索结果没有它）→ 仍列出来，下拉框不至于显示"请选择商品" */}
+                {form.linkId !== '' && !products.some((p) => p.id === form.linkId) && (
+                  <option value={form.linkId}>当前：{form.linkId}</option>
+                )}
                 {products.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.title}
@@ -515,4 +569,15 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
       )}
     </section>
   );
+}
+
+/** 商品列表行 → 下拉框选项（S5：首屏与搜索共用一份映射）。 */
+function toProductOptions(
+  items: ReadonlyArray<Pick<AdminProductLike, 'id' | 'title' | 'status'>>,
+): { id: string; title: string; online: boolean }[] {
+  return items.map((p) => ({
+    id: String(p.id),
+    title: String(p.title ?? ''),
+    online: p.status === 'active',
+  }));
 }

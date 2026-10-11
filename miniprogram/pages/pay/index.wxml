@@ -124,6 +124,7 @@
           type="{{item.buttonType}}"
           block
           data-channel="{{item.channel}}"
+          loading="{{paying && payingChannel === item.channel}}"
           bindtap="onPay"
         />
       </view>

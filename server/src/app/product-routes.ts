@@ -108,8 +108,8 @@ function imagesOf(
   return raw.map((it) => toImageSet(it, imgBaseUrl)).filter((s) => s !== null);
 }
 
-/** 分页参数：page >= 1、size 1..50（契约束 size maximum 50）。 */
-function parsePageSize(query: unknown): { page: number; size: number } {
+/** 分页参数：page >= 1、size 1..50（契约束 size maximum 50）。买家订单列表（S-7）同口径复用。 */
+export function parsePageSize(query: unknown): { page: number; size: number } {
   const q = query as { page?: unknown; size?: unknown };
   const page = q.page === undefined ? 1 : Number(q.page);
   const size = q.size === undefined ? 20 : Number(q.size);

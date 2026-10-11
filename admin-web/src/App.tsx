@@ -14,12 +14,9 @@
  *      改成网址后这两件都成立：`#/orders?status=paid` 可以直接复制、刷新、后退。
  * @why 用 hash 而不是 History 路径：@see ./router.ts 文件头（静态站、零服务端依赖）。
  *
- * @limitation 一：**编辑态的原始数据由列表页带过来**（`editing.source`）——
- *              契约没有 `GET /admin/products/{id}`，表单页没有单条接口可用。
- *              这个形状是**被接口形状逼出来的**，不是设计偏好；将来补了单条接口，
- *              这里应改成传 id、由表单页自己取数。
- *              ⚠️ 因此**编辑商品刻意不进网址**：给一个兑现不了的深链接
- *              （刷新后表单是空的）比不给更糟（@see router.ts @limitation 一）。
+ * @limitation 一：商品编辑进网址（代理 G8，第二轮审计 2026-10-11）：`#/products/<id>` / `#/products/new`。
+ *              从列表点进来时原始数据由列表带过来（`editSource`，不多发请求）；刷新 / 链接打开的由
+ *              products/ProductEditRoute.tsx 用 `findProductById` 取数后再挂表单（契约仍没有按 id 取单件的接口）。
  * @limitation 二：路由订阅用 `useState + hashchange` 而不是 `useSyncExternalStore`——
  *              后者的 `getSnapshot` 每次都返回一个**新对象**，会被判成"一直在变"而反复重渲染；
  *              这里只在 hashchange 时换一次 route，同一个网址下 route 是同一个实例
@@ -43,7 +40,7 @@ import { SettingsPage } from './settings/SettingsPage.js';
 import { OpsLogPage } from './opslog/OpsLogPage.js';
 import { OpsPage } from './ops/OpsPage.js';
 import { ProductsPage } from './products/ProductsPage.js';
-import { ProductFormPage } from './products/ProductFormPage.js';
+import { NEW_PRODUCT_ROUTE_ID, ProductEditRoute } from './products/ProductEditRoute.js';
 import type { AdminProductLike } from './products/api.js';
 import {
   buildHash,
@@ -79,12 +76,6 @@ const NAV: ReadonlyArray<{ key: PageKey; label: string }> = [
   { key: 'opslog', label: '运营日志' },
   { key: 'settings', label: '设置' },
 ];
-
-/** 编辑目标：id 为 null = 新建；source 是列表页带过来的原始数据（@see @limitation 一）。 */
-interface Editing {
-  id: string | null;
-  source: AdminProductLike | null;
-}
 
 export function App() {
   const baseUrl = useMemo(() => resolveApiBase(import.meta.env), []);
@@ -155,8 +146,8 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   );
   /** 商品保存成功后回到列表时显示一次的提示（三端联动 UI 模拟 2026-10-08）。 */
   const [flash, setFlash] = useState('');
-  /** 商品编辑态：**不进网址**（@see @limitation 一）。 */
-  const [editing, setEditing] = useState<Editing | null>(null);
+  /** 从列表点「编辑」时带过来的那一版（id 与网址对得上才用，@see @limitation 一）。 */
+  const editSource = useRef<AdminProductLike | null>(null);
 
   /**
    * 地址栏变化（后退 / 前进 / 手改 hash）：同样要过脏态拦截。
@@ -164,7 +155,6 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
    *      不会自激），再弹同一个二次确认；确认后照常 `go(next)`。批次复审发现此前这条路径完全绕过提醒。
    * @tradeoff 回滚用 push 而不是 replace：replace 会覆盖掉后退到的那一条历史，再按后退就跳过了它；
    *           push 的代价是"前进"栈被清空——比丢一条后退记录更可接受。确认离开时 `history.back()` 退掉这条（@see pendingFromHistoryRef）。
-   * @why 离开商品页时清掉 `editing`：编辑态不进网址，不清的话再按前进回到 `#/products` 会冒出一张空白基线的表单。
    */
   const shownRef = useRef(route);
   shownRef.current = route;
@@ -181,7 +171,6 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
           setPendingNav(next);
           return;
         }
-        if (next.page !== 'products') setEditing(null);
         setRoute(next);
       }),
     [],
@@ -279,7 +268,7 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
       )}
 
       {view === 'products' &&
-        (editing === null ? (
+        (route.id === '' ? (
           <ProductsPage
             api={api}
             // 审查 2026-10-09：筛选 / 页码进地址栏（同订单页）；走 leave 以过脏态拦截
@@ -287,21 +276,25 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
             onNavigate={leave}
             onEdit={(id, source) => {
               setFlash('');
-              setEditing({ id, source: source ?? null });
+              editSource.current = source ?? null;
+              // G8：编辑进网址（列表的筛选一并带上，回列表时还原）
+              go({ page: 'products', id: id ?? NEW_PRODUCT_ROUTE_ID, query: route.query });
             }}
             flash={flash}
           />
         ) : (
-          <ProductFormPage
+          <ProductEditRoute
+            key={route.id}
             api={api}
             baseUrl={baseUrl}
             getToken={() => tokenStore.get()}
             onUnauthorized={onUnauthorized}
-            productId={editing.id}
-            source={editing.source}
+            routeId={route.id}
+            cached={editSource.current}
             onDone={(message) => {
               setFlash(message ?? '');
-              setEditing(null);
+              editSource.current = null;
+              go({ page: 'products', id: '', query: route.query });
             }}
           />
         ))}
@@ -324,13 +317,7 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
                 type="button"
                 className={t.key === view ? 'nav-item nav-item-on' : 'nav-item'}
                 aria-current={t.key === view ? 'page' : undefined}
-                onClick={() =>
-                  // ⚠️ setEditing(null) 必须在**确认之后**才做：拦下时就把表单清掉，
-                  //    二次确认再点"留在这里"，运营面对的已经是一个空表单了
-                  leave({ page: t.key, id: '', query: new URLSearchParams() }, () =>
-                    setEditing(null),
-                  )
-                }
+                onClick={() => leave({ page: t.key, id: '', query: new URLSearchParams() })}
               >
                 <NavIcon page={t.key} />
                 <span>{t.label}</span>
@@ -354,7 +341,6 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
         <ConfirmDialog
           spec={LEAVE_UNSAVED_SPEC}
           onConfirm={() => {
-            setEditing(null);
             clearDirty();
             // ref 同步置干净：go 引发的 hashchange 可能先于重渲染到达，读到旧的 dirty 会再拦一次
             dirtyRef.current = false;

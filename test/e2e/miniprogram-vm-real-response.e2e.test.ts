@@ -43,7 +43,7 @@ import { orderRows } from '../../miniprogram/pages/order/index.vm.js';
 import { detailView as orderDetailView } from '../../miniprogram/pages/order-detail/index.vm.js';
 import { addressRows } from '../../miniprogram/pages/address/index.vm.js';
 import { orderShortcuts } from '../../miniprogram/pages/user/index.vm.js';
-import { tabItems, tabStatusParam } from '../../miniprogram/utils/order-tabs.js';
+import { orderListQuery, tabItems } from '../../miniprogram/utils/order-tabs.js';
 import { PLACEHOLDER_IMAGE } from '../../miniprogram/utils/placeholder.js';
 import { quoteView } from '../../miniprogram/utils/quote-view.js';
 import { createCartStore } from '../../miniprogram/utils/cart-store.js';
@@ -175,22 +175,22 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     });
     const orderId = String(c.json['order_id']);
 
-    // ── 页签：vm 生成的查询参数原样发给真服务端（逗号多选），各页签各取各的 ──
+    // ── 页签：vm 生成的查询串（S-7 起含分页与 include_after_sale）原样发给真服务端，各页签各取各的 ──
     const list = async (tab: string): Promise<Array<Record<string, unknown>>> => {
-      const q = tabStatusParam(tab);
-      const r = await call(srv, 'GET', `/api/v1/orders${q === '' ? '' : `?status=${q}`}`, {
+      const r = await call(srv, 'GET', `/api/v1/orders${orderListQuery(tab, 1)}`, {
         token: buyer,
       });
       expect([tab, r.status]).toEqual([tab, 200]);
+      expect(Number.isInteger(r.json['total'])).toBe(true);
       return r.json['items'] as Array<Record<string, unknown>>;
     };
-    // 页面的真实路径是 `tabItems(页签, 响应)`：AJ-430 起「售后·退款」不带 status、拿全量再本地按 after_sale_state 筛
+    // 页面的真实路径是 `tabItems(页签, 响应)`：S-7 起「售后·退款」由服务端按 include_after_sale 筛，本地只是同口径防御
     const shown = async (tab: string) => tabItems(tab, await list(tab));
     expect((await shown('unpaid')).map((o) => o['order_id'])).toEqual([orderId]);
     expect(await shown('to_ship')).toEqual([]);
-    expect(tabStatusParam('after_sale')).toBe('');
-    expect((await list('after_sale')).map((o) => o['after_sale_state'])).toEqual([null]);
-    expect(await shown('after_sale')).toEqual([]);
+    expect(orderListQuery('after_sale', 1)).toContain('include_after_sale=1');
+    // 待付款、没有售后申请的单：服务端就不该把它放进「售后·退款」
+    expect(await list('after_sale')).toEqual([]);
 
     // ── 列表行（M-11）──
     const [row] = orderRows(await list('all'));
@@ -207,8 +207,10 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     expect(rawRow?.['expires_at']).not.toBe(rawRow?.['created_at']);
     expect(row?.nextText).toBe(`请在 ${jst}（日本时间）前完成支付，超时订单会自动关闭。`);
 
-    // ── 「我的」角标（M-10 附）：同一次全量列表本地分组 ──
-    expect(orderShortcuts(await list('all')).map((s) => s.badge)).toEqual(['1', '', '', '']);
+    // ── 「我的」角标（S-7 起服务端计数 GET /orders/counts）──
+    const counts = await call(srv, 'GET', '/api/v1/orders/counts', { token: buyer });
+    expect(counts.status).toBe(200);
+    expect(orderShortcuts(counts.json).map((s) => s.badge)).toEqual(['1', '', '', '']);
 
     // ── 详情进度条（M-12）：待付款 → 付款是当前步；付款后 → 采购是当前步，进「采购中」页签 ──
     const p1 = orderDetailView(

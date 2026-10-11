@@ -255,3 +255,70 @@ describe('Banner 列表：行内确认不让整表跳（走查 2026-10-08）', (
     });
   });
 });
+
+describe('Banner 目标商品：超出前 100 件也能选、能搜（代理 S5，第二轮审计 2026-10-11）', () => {
+  const productsPage = (n: number) => ({
+    items: Array.from({ length: n }, (_, i) => ({
+      id: `p-${String(i)}`,
+      title: `商品${String(i)}`,
+      status: 'active',
+    })),
+    total: 150,
+  });
+  const productSelect = (el: HTMLElement): HTMLSelectElement =>
+    [...el.querySelectorAll('select')].find((s) =>
+      [...s.options].some((o) => o.text === '请选择商品'),
+    ) as HTMLSelectElement;
+  const mountWith = async (
+    api: (req: { path: string; method?: string }) => Promise<unknown>,
+  ): Promise<HTMLElement> => {
+    mounted = await mount(
+      createElement(BannersPage, {
+        api: api as never,
+        baseUrl: 'http://localhost',
+        getToken: () => 'tk',
+        onUnauthorized: () => undefined,
+      }),
+    );
+    return mounted.el;
+  };
+
+  it('🔴 正在编辑的 Banner 指向第 100 件之后的商品 → 下拉框仍选中它（原先显示"请选择商品"，像没选）', async () => {
+    const el = await mountWith(async (req) => {
+      if (req.path.startsWith('/api/v1/admin/products')) return productsPage(100);
+      return [{ ...banner('b-A', 'banners/a.webp'), link_type: 'product', link_id: 'p-far' }];
+    });
+    const edit = [...el.querySelectorAll('button')].find((b) => b.textContent === '编辑');
+    await click(edit);
+    const sel = productSelect(el);
+    expect(sel).toBeDefined();
+    expect(sel.value).toBe('p-far');
+    expect(sel.options[sel.selectedIndex]?.text).toContain('p-far');
+    // 只列了前 100 件：要告诉运营可以搜
+    expect(el.textContent).toContain('搜索');
+  });
+
+  it('🔴 输入关键词点「搜索商品」→ 带 keyword 重新取，选项换成搜索结果', async () => {
+    const paths: string[] = [];
+    const el = await mountWith(async (req) => {
+      if (req.path.startsWith('/api/v1/admin/products')) {
+        paths.push(req.path);
+        return req.path.includes('keyword=')
+          ? { items: [{ id: 'p-hit', title: '宇治抹茶 100g', status: 'active' }], total: 1 }
+          : productsPage(100);
+      }
+      return [];
+    });
+    const linkType = [...el.querySelectorAll('select')].find((s) =>
+      [...s.options].some((o) => o.value === 'product'),
+    ) as HTMLSelectElement;
+    linkType.value = 'product';
+    linkType.dispatchEvent(new Event('change', { bubbles: true }));
+    await flush();
+    await type(el.querySelector('input[aria-label="搜索商品"]'), '抹茶');
+    await click(button(el, '搜索商品'));
+    await flush();
+    expect(decodeURIComponent(paths.at(-1) ?? '')).toContain('keyword=抹茶');
+    expect([...productSelect(el).options].map((o) => o.text)).toContain('宇治抹茶 100g');
+  });
+});

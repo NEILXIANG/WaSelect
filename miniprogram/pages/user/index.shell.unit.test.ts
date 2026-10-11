@@ -134,7 +134,7 @@ describe('「我的」四个订单入口（M-10 附，AJ-408）', () => {
       orderTab: '',
       api: (req: { url?: string }) => {
         const u = String(req.url);
-        if (u.endsWith('/api/v1/orders')) {
+        if (u.endsWith('/api/v1/orders/counts')) {
           return fail ? Promise.reject(new Error('网络请求失败')) : Promise.resolve(orders);
         }
         return Promise.resolve({});
@@ -146,10 +146,8 @@ describe('「我的」四个订单入口（M-10 附，AJ-408）', () => {
   }
   const shortcuts = () => page.data['shortcuts'] as Array<{ key: string; badge: string }>;
 
-  it('🔴 进屏拉一次不带过滤的 GET /orders → 四入口角标（只数进行中）', async () => {
-    await openWith({
-      items: [{ status: 'created' }, { status: 'paid' }, { status: 'refunded' }],
-    });
+  it('🔴 进屏拉一次 GET /orders/counts → 四入口角标（S-7：服务端计数）', async () => {
+    await openWith({ unpaid: 1, to_ship: 1, shipped: 0, after_sale: 0 });
     expect(shortcuts().map((s) => [s.key, s.badge])).toEqual([
       ['unpaid', '1'],
       ['to_ship', '1'],
@@ -263,7 +261,7 @@ describe('「我的」：下拉刷新', () => {
     expect(stops).toEqual([]);
     await done;
     expect(urls.sort()).toEqual([
-      'http://api.test/api/v1/orders',
+      'http://api.test/api/v1/orders/counts',
       'http://api.test/api/v1/support',
     ]);
     expect(stops).toEqual([1]);

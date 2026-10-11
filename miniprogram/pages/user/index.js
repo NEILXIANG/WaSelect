@@ -101,13 +101,15 @@ Page({
   },
 
   /**
-   * 四入口角标（M-10 附）：一次不带过滤的 `GET /orders`，本地分组（vm orderShortcuts @why）。
+   * 四入口角标（M-10 附）：`GET /orders/counts` 服务端计数（S-7，vm orderShortcuts @why）。
    * @why 失败**静默**（同 loadSupport）：角标是辅助信息，入口本身照常可点。
    */
   async loadOrderBadges() {
     try {
-      const res = await app.globalData.api({ url: `${app.globalData.apiBase}/api/v1/orders` });
-      this.setData({ shortcuts: orderShortcuts(res?.items) });
+      const res = await app.globalData.api({
+        url: `${app.globalData.apiBase}/api/v1/orders/counts`,
+      });
+      this.setData({ shortcuts: orderShortcuts(res) });
     } catch {
       this.setData({ shortcuts: orderShortcuts(undefined) });
     }

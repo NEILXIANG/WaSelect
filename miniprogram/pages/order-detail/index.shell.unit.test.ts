@@ -376,3 +376,41 @@ describe('并发取数只认最后一次（F12，第二轮审计 2026-10-11）',
     expect(page.data['loading']).toBe(false);
   });
 });
+
+describe('支付后退回原详情（MP-10，第二轮审计 2026-10-11）', () => {
+  const gd = (): Record<string, unknown> =>
+    (globalThis as unknown as { getApp: () => { globalData: Record<string, unknown> } }).getApp()
+      .globalData;
+  const PENDING = { ...ORDER, status: 'pending_payment', expires_at: '2099-01-01T00:00:00.000Z' };
+  const view = (): Record<string, unknown> => page.data['view'] as Record<string, unknown>;
+
+  it('🔴 去支付时带 from=detail（支付页据此付完退回本页，而不是再压一张详情）', async () => {
+    order = PENDING;
+    await open();
+    call('onPay');
+    expect(nav.at(-1)).toBe('/pages/pay/index?orderId=o-1&from=detail');
+  });
+
+  it('🔴 onShow 读到本单的 paidReturn（刚付过）→ 显示确认中，不给取消 / 继续支付；读完即清', async () => {
+    order = PENDING;
+    await open();
+    expect(view()['canCancel']).toBe(true);
+    gd()['paidReturn'] = { orderId: 'o-1', justPaid: true };
+    call('onShow');
+    await settle();
+    expect(view()['confirming']).toBe(true);
+    expect(view()['canCancel']).toBe(false);
+    expect(gd()['paidReturn']).toBeNull();
+    call('onUnload'); // 停掉确认中的重查定时器
+  });
+
+  it('别的单的 paidReturn 不认、也不清（那是别的详情页的）', async () => {
+    order = PENDING;
+    await open();
+    gd()['paidReturn'] = { orderId: 'o-other', justPaid: true };
+    call('onShow');
+    await settle();
+    expect(view()['confirming']).toBe(false);
+    expect(gd()['paidReturn']).toEqual({ orderId: 'o-other', justPaid: true });
+  });
+});
