@@ -171,7 +171,7 @@ describe('contactEmailOf（联系邮箱，M-01 起前端必填）', () => {
       `${'a'.repeat(250)}@x.com`,
     ]) {
       // M-01：去掉"（可留空）"——必填之后那半句是错的（原断言文案按新口径改）
-      expect(contactEmailOf(bad).error, bad).toBe('邮箱格式不正确');
+      expect(contactEmailOf(bad).error, bad).toBe('邮箱格式不正确，应类似 name@gmail.com');
     }
   });
 
@@ -198,9 +198,10 @@ describe('contactEmailOf（联系邮箱，M-01 起前端必填）', () => {
     // 能不能下单的前几项先说（空购物车时先说购物车，不先催邮箱）
     expect(submitGate({ ...OK, itemCount: 0, contactEmail: '' }).reason).toBe('购物车是空的');
     // 填了但格式错：说格式，不说"请填写"
-    expect(submitGate({ ...OK, contactEmail: '', emailError: '邮箱格式不正确' }).reason).toBe(
-      '邮箱格式不正确',
-    );
+    expect(
+      submitGate({ ...OK, contactEmail: '', emailError: '邮箱格式不正确，应类似 name@gmail.com' })
+        .reason,
+    ).toBe('邮箱格式不正确，应类似 name@gmail.com');
   });
 
   it('不传 contactEmail = 不检查（老调用方不受影响，与 termsReady 等同一口径）', () => {
@@ -549,15 +550,17 @@ describe('第二轮审计 2026-10-11：结算页（F4 / F5 / F7 / MP-9）', () =
 
   it('🔴 F7 输入中不抢先报格式错；已经报过错时，改对了立即消失、没改对继续显示', () => {
     expect(emailInputError('jane@', '')).toBe('');
-    expect(emailInputError('jane@example.com', '邮箱格式不正确')).toBe('');
-    expect(emailInputError('jane@', '邮箱格式不正确')).toBe('邮箱格式不正确');
+    expect(emailInputError('jane@example.com', '邮箱格式不正确，应类似 name@gmail.com')).toBe('');
+    expect(emailInputError('jane@', '邮箱格式不正确，应类似 name@gmail.com')).toBe(
+      '邮箱格式不正确，应类似 name@gmail.com',
+    );
     // 清空是用户主动删掉的：立即说明为什么要填（M-01 口径不变）
     expect(emailInputError('   ', '')).toBe(EMAIL_REQUIRED_TEXT);
   });
 
   it('🔴 MP-9 contactEmailOf 用收紧后的判据：a@b / 连点 / 后缀太短 → 格式不正确', () => {
     for (const bad of ['a@b', 'x@b..com', 'x@b.c', 'x@b.123']) {
-      expect(contactEmailOf(bad).error, bad).toBe('邮箱格式不正确');
+      expect(contactEmailOf(bad).error, bad).toBe('邮箱格式不正确，应类似 name@gmail.com');
     }
     expect(contactEmailOf('li.wei@163.com')).toEqual({ value: 'li.wei@163.com', error: '' });
   });

@@ -23,6 +23,7 @@ import {
   emptyForm,
   normalizeUsPhone,
   formErrors,
+  zipMatchesState,
   formModel,
   toAddressInput,
   phoneForInput,
@@ -98,6 +99,26 @@ describe('formErrors（格式预检）', () => {
     // `first` 按**校验顺序**取第一条（= 字段顺序），不是按字母序
     expect(r.first).toBe(r.errors.recipient);
     expect(r.first).toContain('收件人');
+  });
+
+  // 三端模拟测试 2026-10-11（新用户首单）：什么都没填就点保存，收件人提示"请用英文/数字填写"——
+  //   用户一个字没写，却被说"写的不是英文"。空的说"请填写"，填了中文才说"请用英文"
+  it('🔴 空字段说"请填写××"（带英文示例）；填了中文才说"请用英文"', () => {
+    const empty = formErrors(emptyForm()).errors;
+    expect(empty.recipient).toBe('请填写收件人姓名（英文，如 Ken Tanaka）');
+    expect(empty.phone).toBe('请填写美国电话号码（10 位，如 4155550123）');
+    expect(empty.line1).toBe('请填写街道地址（英文，如 350 5th Ave）');
+    expect(empty.city).toBe('请填写城市（英文，如 New York）');
+    expect(empty.postal_code).toBe('请填写邮编（5 位，如 94105）');
+    const zh = formErrors({
+      ...emptyForm(),
+      recipient: '张三',
+      line1: '朝阳区',
+      city: '北京',
+    }).errors;
+    expect(zh.recipient).toContain('请用英文');
+    expect(zh.line1).toContain('请用英文');
+    expect(zh.city).toContain('请用英文');
   });
 
   it('电话位数不对 / 邮编非 5 位 / 州非两位 → 各自有对应提示', () => {
@@ -365,5 +386,32 @@ describe('电话用数字键盘（小程序评估 A12，2026-10-09）', () => {
     expect(phoneForInput(undefined)).toBe('');
     expect(normalizeUsPhone(phoneForInput('+14155550123'))).toBe('+14155550123');
     expect(normalizeUsPhone('4155550123')).toBe('+14155550123');
+  });
+});
+
+// 三端模拟测试 2026-10-11（新用户首单）：州下拉误选成内华达（NV），邮编填纽约的 10013，照样存上了——
+//   面单写成 "New York, NV, 10013"，包裹会延误或退回。邮编首位数字对应固定的几个州（USPS 国家分区），拦得住选错州
+describe('邮编与州对得上（zipMatchesState）', () => {
+  it('🔴 首位数字与州不符 → 报在邮编上，说清是哪个州', () => {
+    const r = formErrors({ ...formModel(ADDR), state: 'NV', postal_code: '10013' });
+    expect(r.errors.postal_code).toBe('邮编 10013 不属于 Nevada（NV）——请检查州或邮编');
+  });
+
+  it('对得上的不拦；例外照顾到（宁可少拦，不误拦合法地址）', () => {
+    for (const [state, zip] of [
+      ['NY', '10013'],
+      ['NY', '06390'], // Fishers Island，纽约州却用 0 开头
+      ['TX', '88510'], // El Paso，得州却用 8 开头
+      ['CA', '94105-1234'],
+      ['PR', '00901'],
+      ['AE', '09021'],
+      ['AP', '96205'],
+      ['AA', '34001'],
+      ['DC', '20500'],
+    ] as const) {
+      expect(zipMatchesState(zip, state), `${state} ${zip}`).toBe(true);
+    }
+    expect(zipMatchesState('10013', 'NV')).toBe(false);
+    expect(zipMatchesState('90210', 'NY')).toBe(false);
   });
 });

@@ -134,7 +134,8 @@ export function submitGate(state) {
 }
 
 /** 邮箱错误文案（与服务端 `contact_email_shape` 40001 同一件事，给用户看的版本）。M-01 起去掉"（可留空）"。 */
-const EMAIL_ERROR = '邮箱格式不正确';
+// 三端模拟测试 2026-10-11：只说不正确不说长什么样，新用户不知道怎么改——带一个示例
+const EMAIL_ERROR = '邮箱格式不正确，应类似 name@gmail.com';
 
 /**
  * 没填邮箱时的原因（M-01，AJ-405）：说清**为什么要填**，而不是只说"必填"。

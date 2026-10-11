@@ -25,7 +25,7 @@
  * @see ../../contracts/api-contract.yaml（AddressInput：pattern 的**真源**）；
  *      ../pages/address/index.vm.js（列表行）；../pages/checkout/（建单时用它摘要）
  */
-import { isUsStateCode } from './us-states.js';
+import { isUsStateCode, US_STATE_ROWS } from './us-states.js';
 
 /**
  * 地址编辑页顶部说明（M-20，AJ-406）：先说"为什么要英文"，再给一行示例。
@@ -169,20 +169,58 @@ export function phoneForInput(phone) {
  * @why 返回**全部**错误而不是只返第一条：七字段表单一个一个报，用户要提交七次。
  *      `first` 另给一份是因为 toast 只能显示一句——两者不冲突。
  */
+/**
+ * 邮编首位数字（USPS 国家分区）→ 可能的州。只用来拦"明显选错州"，不做精确的邮编库。
+ * @why 三端模拟测试 2026-10-11：州下拉误选成 NV、邮编是纽约的 10013，照样存上——面单写成 "New York, NV, 10013"。
+ * @measured 2026-10-11 网页检索（zip-codes.com / USPS 分区表）：0 = CT MA ME NH NJ NY(仅 Fishers Island) PR RI VT VI + 军邮 AE；
+ *           8 = AZ CO ID NM NV UT WY；与下表一致。
+ * @limitation 例外只照顾已知的几处（纽约 06390 / 00501、得州 El Paso 885xx、华盛顿特区 569xx）；
+ *             宁可少拦——表里多放一个州只是漏拦一种选错，少放一个就是合法地址存不上。
+ */
+const ZIP_AREA_STATES = [
+  ['CT', 'MA', 'ME', 'NH', 'NJ', 'NY', 'PR', 'RI', 'VT', 'VI', 'AE'],
+  ['DE', 'NY', 'PA'],
+  ['DC', 'MD', 'NC', 'SC', 'VA', 'WV'],
+  ['AL', 'FL', 'GA', 'MS', 'TN', 'AA'],
+  ['IN', 'KY', 'MI', 'OH'],
+  ['IA', 'MN', 'MT', 'ND', 'SD', 'WI', 'DC'],
+  ['IL', 'KS', 'MO', 'NE'],
+  ['AR', 'LA', 'OK', 'TX'],
+  ['AZ', 'CO', 'ID', 'NM', 'NV', 'UT', 'WY', 'TX'],
+  ['AK', 'CA', 'HI', 'OR', 'WA', 'AS', 'GU', 'MP', 'MH', 'FM', 'PW', 'AP'],
+];
+
+/** 邮编与州对得上吗（只看首位数字）。邮编或州形状不对时返回 true——那由各自的格式校验去报。 */
+export function zipMatchesState(zip, state) {
+  const d = /^(\d)\d{4}(-\d{4})?$/.exec(String(zip).trim());
+  const st = String(state).trim().toUpperCase();
+  if (d === null || !isUsStateCode(st)) return true;
+  return ZIP_AREA_STATES[Number(d[1])].includes(st);
+}
+
 export function formErrors(model) {
   const m = formModel(model);
   const errors = {};
-  if (!ADDRESS_PATTERNS.ascii.test(m.recipient.trim()))
+  // 三端模拟测试 2026-10-11（新用户首单）：空字段说"请填写"，填了中文 / 全角才说"请用英文"——
+  //   原先一个字没写也提示"请用英文/数字填写"，用户以为是自己写错了格式
+  const blank = (v) => v.trim() === '';
+  if (blank(m.recipient)) errors.recipient = '请填写收件人姓名（英文，如 Ken Tanaka）';
+  else if (!ADDRESS_PATTERNS.ascii.test(m.recipient.trim()))
     errors.recipient = '收件人请用英文/数字填写（面单不支持中文或全角）';
   // P2-37：先归一常见写法再校验（与 toAddressInput 发出去的是同一个值）
+  const phoneBlank = blank(m.phone);
   m.phone = normalizeUsPhone(m.phone);
-  if (!ADDRESS_PATTERNS.phone.test(m.phone))
+  if (phoneBlank) errors.phone = '请填写美国电话号码（10 位，如 4155550123）';
+  else if (!ADDRESS_PATTERNS.phone.test(m.phone))
     // 统一结论 5.3：电话框是数字键盘（打不出「+」），只说能打出来的写法；+1 由 normalizeUsPhone 补
     errors.phone = '请填美国 10 位电话号码，如 4155550123（带国家码就是 1 开头 11 位）';
-  if (!ADDRESS_PATTERNS.ascii.test(m.line1.trim())) errors.line1 = '地址第一行请用英文/数字填写';
+  if (blank(m.line1)) errors.line1 = '请填写街道地址（英文，如 350 5th Ave）';
+  else if (!ADDRESS_PATTERNS.ascii.test(m.line1.trim()))
+    errors.line1 = '地址第一行请用英文/数字填写';
   if (!ADDRESS_PATTERNS.asciiOptional.test(m.line2.trim()))
     errors.line2 = '地址第二行请用英文/数字填写（可留空）';
-  if (!ADDRESS_PATTERNS.ascii.test(m.city.trim())) errors.city = '城市请用英文/数字填写';
+  if (blank(m.city)) errors.city = '请填写城市（英文，如 New York）';
+  else if (!ADDRESS_PATTERNS.ascii.test(m.city.trim())) errors.city = '城市请用英文/数字填写';
   // 三端走查小白视角（2026-10-10）：州是下拉选择，没选时只说"请选择州"——"两位大写缩写"对用户是术语；
   // 形状不对只会来自旧数据，才保留原句
   if (m.state.trim() === '') errors.state = '请选择州';
@@ -191,8 +229,19 @@ export function formErrors(model) {
   // 剩余清单 4-5：两位大写还不够，必须是 USPS 真实州码（与服务端 address-input.ts 同口径）
   else if (!isUsStateCode(m.state.trim().toUpperCase()))
     errors.state = '请从列表选择州（这个州码不存在）';
-  if (!ADDRESS_PATTERNS.postal.test(m.postal_code.trim()))
+  if (blank(m.postal_code)) errors.postal_code = '请填写邮编（5 位，如 94105）';
+  else if (!ADDRESS_PATTERNS.postal.test(m.postal_code.trim()))
     errors.postal_code = '邮编为 5 位或 ZIP+4，如 94105 或 94105-1234';
+  // 邮编与州各自合法、但对不上（多半是州下拉选错了）——报在邮编上，说清当前选的是哪个州
+  if (
+    errors.postal_code === undefined &&
+    errors.state === undefined &&
+    !zipMatchesState(m.postal_code, m.state)
+  ) {
+    const st = m.state.trim().toUpperCase();
+    const name = US_STATE_ROWS.find((r) => r.code === st)?.name ?? st;
+    errors.postal_code = `邮编 ${m.postal_code.trim()} 不属于 ${name}（${st}）——请检查州或邮编`;
+  }
   for (const k of Object.keys(ADDRESS_MAX_CHARS)) {
     if (errors[k] === undefined && m[k].trim().length > ADDRESS_MAX_CHARS[k])
       errors[k] = `最多 ${ADDRESS_MAX_CHARS[k]} 个字符`;

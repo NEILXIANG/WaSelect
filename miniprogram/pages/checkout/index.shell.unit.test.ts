@@ -669,7 +669,7 @@ describe('结算页薄壳：邮箱错误的时机与拼错提示（F7 / MP-9，�
     expect(page.data['emailError']).toBe('');
     expect(gate().ok).toBe(false); // 闸门照样不放行（值不合法）
     call('onEmailBlur');
-    expect(page.data['emailError']).toBe('邮箱格式不正确');
+    expect(page.data['emailError']).toBe('邮箱格式不正确，应类似 name@gmail.com');
     call('onEmailInput', { detail: { value: 'jane@example.com' } });
     expect(page.data['emailError']).toBe('');
   });
