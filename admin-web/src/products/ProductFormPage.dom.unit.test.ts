@@ -45,6 +45,7 @@ const SOURCE = {
 let mounted: Mounted | undefined;
 let calls: Array<{ path: string; method?: string; body?: unknown }>;
 let putCode = 0; // 0 = 成功
+let putData: Record<string, unknown> | undefined;
 let doneCount = 0;
 
 async function openWith(source: Record<string, unknown> | null): Promise<HTMLElement> {
@@ -53,7 +54,12 @@ async function openWith(source: Record<string, unknown> | null): Promise<HTMLEle
   const api = async (req: { path: string; method?: string; body?: unknown }): Promise<unknown> => {
     calls.push(req);
     if (putCode !== 0)
-      throw new ApiError(putCode, '这条内容在你打开之后被别人改过了', 'trace-40914');
+      throw new ApiError(
+        putCode,
+        putCode === 40001 ? '参数缺失或格式错误' : '这条内容在你打开之后被别人改过了',
+        'trace-40914',
+        putData === undefined ? undefined : { data: putData },
+      );
     return { id: 'p-1' };
   };
   mounted = await mount(
@@ -141,6 +147,25 @@ afterEach(async () => {
   await mounted?.unmount();
   mounted = undefined;
   putCode = 0;
+  putData = undefined;
+});
+
+// AJ-488（三端模拟测试 2026-10-11）：售价填 999,999 保存只见"参数缺失或格式错误"
+describe('商品编辑：服务端校验失败（40001 带 field / reason）', () => {
+  it('🔴 出错的输入框下标出原因；顶部说清改哪一项、还有几处；不显示原因码', async () => {
+    putCode = 40001;
+    putData = { field: 'price_jpy', reason: 'price_too_large', count: 2 };
+    const el = await open();
+    await click(button(el, '保存'));
+    const msg = pageError(el);
+    expect(msg).toContain('售价超过单笔订单上限');
+    expect(msg).toContain('还有 1 处');
+    expect(msg).not.toContain('price_too_large');
+    expect(field(el, '售价（日元）').closest('label.field')?.textContent).toContain(
+      '售价超过单笔订单上限',
+    );
+    expect(doneCount).toBe(0);
+  });
 });
 
 describe('商品编辑：保存撞上 40914（ADM3-02）', () => {

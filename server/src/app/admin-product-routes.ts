@@ -151,16 +151,35 @@ function toAdminProduct(
   };
 }
 
-/** 校验失败 → 40001，字段明细写日志（@limitation 一）。 */
+/**
+ * 校验失败 → 40001，字段明细写日志（@limitation 一）。
+ * AJ-488（契约 0.6.73）：响应 `data` 带**第一个**出错的字段与原因码 + 出错总数——后台把售价填成 999,999
+ * 只看到"参数缺失或格式错误"，运营不知道是哪一项。只给第一个：表单一次改一处，多给反而难排版；全部明细仍在日志。
+ * @why 这是管理员接口，字段名与原因码不含任何买家数据，暴露无风险；原因码到人话的翻译在管理端（文案不进服务端）。
+ */
 function rejectInvalid(
   logger: Logger,
   errors: readonly { field: string; reason: string }[],
+  maxPriceJpy: number,
 ): never {
   logger.warn('admin_product_input_rejected', {
     result: 'rejected',
     ctx: { errors },
   });
-  throw new AppError(40001, { errors });
+  const first = errors[0];
+  throw new AppError(
+    40001,
+    { errors },
+    first === undefined
+      ? undefined
+      : {
+          field: first.field,
+          reason: first.reason,
+          count: errors.length,
+          // 售价超限时带上上限：运营要知道"最多能填多少"（上限是服务端配置，前端不知道）
+          ...(first.reason === 'price_too_large' ? { limit: maxPriceJpy } : {}),
+        },
+  );
 }
 
 /** 服务端下发的 `updated_at` 恒为 `toISOString()`：毫秒 + `Z`，别的一律不认。 */
@@ -283,7 +302,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
     void (async () => {
       try {
         const r = validateProductInput(req.body, deps.config.MAX_ORDER_JPY);
-        if (!r.ok) rejectInvalid(deps.logger, r.errors);
+        if (!r.ok) rejectInvalid(deps.logger, r.errors, deps.config.MAX_ORDER_JPY);
         // 不判 P2-30：新建是草稿，买家看不见；判定在 PATCH /status → active 那一步（AJ-403）
         const row = await repo.insertProduct({
           id: deps.idGen.uuid(),
@@ -322,7 +341,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
       try {
         const id = String(req.params.id);
         const r = validateProductInput(req.body, deps.config.MAX_ORDER_JPY);
-        if (!r.ok) rejectInvalid(deps.logger, r.errors);
+        if (!r.ok) rejectInvalid(deps.logger, r.errors, deps.config.MAX_ORDER_JPY);
         // ── 乐观锁凭据（ADM3-02 / AJ-258，契约 0.6.18）───────────────────────────
         // ⚠️ 必须在 `validateProductInput` **之后**单独取：它不属于 `ProductInput`
         //    （商品字段与"你看到的是哪一版"是两件事，混进同一个 schema 会让

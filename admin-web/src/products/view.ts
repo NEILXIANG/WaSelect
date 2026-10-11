@@ -687,3 +687,63 @@ export function parseStockEdit(
   if (n > PRODUCT_MAX_STOCK) return { ok: false, error: `库存最多 ${PRODUCT_MAX_STOCK}` };
   return { ok: true, value: n };
 }
+
+/** 服务端字段名（契约 ProductInput）→ 表单键与中文字段名。 */
+const SERVER_FIELDS: Readonly<Record<string, { key: string; label: string }>> = {
+  title: { key: 'title', label: '商品名' },
+  title_ja: { key: 'titleJa', label: '日文原名' },
+  category: { key: 'category', label: '分类' },
+  price_jpy: { key: 'priceJpy', label: '售价' },
+  cost_jpy: { key: 'costJpy', label: '成本价' },
+  weight_g: { key: 'weightG', label: '重量' },
+  stock: { key: 'stock', label: '库存' },
+  customs_desc_en: { key: 'customsDescEn', label: '英文报关品名' },
+  hs_code: { key: 'hsCode', label: 'HS 编码' },
+  origin_country: { key: 'originCountry', label: '原产地' },
+  jan_code: { key: 'janCode', label: 'JAN 码' },
+  purchase_source: { key: 'purchaseSource', label: '采购来源' },
+  compliance_tags: { key: 'complianceTags', label: '合规标签' },
+  tags: { key: 'editorialTags', label: '卖点标签' },
+  why: { key: 'editorialWhy', label: '推荐理由' },
+  maker: { key: 'editorialMaker', label: '产地 / 工坊' },
+  images: { key: 'images', label: '图片' },
+};
+
+/** 服务端原因码（server/src/domain/product-input.ts 的 fail(...)）→ 怎么改。认不出的走通用说法。 */
+const SERVER_REASONS: Readonly<Record<string, string>> = {
+  price_too_large: '售价超过单笔订单上限，买家无法下单——请调低售价',
+  weight_too_large: `重量超过单件上限 ${String(PRODUCT_MAX_WEIGHT_G)} 克（已为包材留出余量）——请核对单位是不是克`,
+  customs_desc_forbidden:
+    '英文报关品名含禁用词（如 medicated / whitening / SPF / sunscreen / drug），请换一种说法',
+  customs_desc_too_long: '英文报关品名太长，请精简',
+  hs_code_too_long: 'HS 编码太长，请核对',
+  tag_blocked: '勾选了禁售标签，这件商品不能上架',
+  origin_invalid: '原产地目前只支持日本（JP）',
+  title_too_long: '商品名太长（最多 255 字）',
+  title_ja_too_long: '日文原名太长（最多 255 字）',
+  image_invalid: '有图片地址无效，请删掉后重新上传',
+};
+
+/**
+ * AJ-488：服务端 40001 的 `data`（`{field, reason, count}`）→ 落到哪个输入框、显示什么。
+ * @why 三端模拟测试 2026-10-11：售价填 999,999 保存，只看到"参数缺失或格式错误"——上限在服务端配置里，
+ *      前端校验不知道它，于是只能靠服务端告诉"是哪一项"。原因码不直接显示：运营读不懂 `price_too_large`。
+ * @limitation 服务端只给**第一个**出错字段；`more` 告诉运营还有几处，改完一处再保存会看到下一处。
+ * @returns null = 没有可用的 data（页面退回原来的笼统提示）
+ */
+export function serverFieldError(
+  data: unknown,
+): { key: string; text: string; more: number } | null {
+  const d = data as
+    { field?: unknown; reason?: unknown; count?: unknown; limit?: unknown } | null | undefined;
+  if (d === null || d === undefined || typeof d.field !== 'string' || typeof d.reason !== 'string')
+    return null;
+  const f = SERVER_FIELDS[d.field] ?? { key: d.field, label: d.field };
+  // 售价超限带上上限（契约 0.6.73 `data.limit`）：运营要知道"最多能填多少"（用户截图指出）
+  const text =
+    d.reason === 'price_too_large' && typeof d.limit === 'number' && Number.isInteger(d.limit)
+      ? `售价超过单笔订单上限（最多 ${moneyText(d.limit)}），买家无法下单——请调低售价`
+      : (SERVER_REASONS[d.reason] ?? `${f.label}填写不符合要求，请检查后再保存`);
+  const count = typeof d.count === 'number' && Number.isInteger(d.count) ? d.count : 1;
+  return { key: f.key, text, more: Math.max(0, count - 1) };
+}

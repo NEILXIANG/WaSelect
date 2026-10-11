@@ -54,6 +54,7 @@ import {
   toProductInput,
   type ProductForm,
   type ProductStatus,
+  serverFieldError,
 } from './view.js';
 import { ProductMainColumn, ProductSideColumn } from './ProductFormSections.js';
 import { productFieldId, productFieldLabel } from './ProductFormParts.js';
@@ -220,6 +221,16 @@ export function ProductFormPage({
           `${e.message}：你填的内容都还在。请点「加载最新值对照」看对方改了什么，核对后再保存`,
           { traceId },
         );
+      } else if (e instanceof ApiError && e.code === 40001 && serverFieldError(e.data) !== null) {
+        // AJ-488：服务端说清是哪一项（如售价超过单笔上限——上限在服务端配置里，前端校验不知道）
+        const f = serverFieldError(e.data);
+        if (f !== null) {
+          setErrors({ [f.key]: f.text });
+          sink.error(
+            `保存失败：${f.text}${f.more > 0 ? `（还有 ${String(f.more)} 处，改好这一处再保存会提示下一处）` : ''}`,
+            { traceId },
+          );
+        }
       } else {
         sink.error(text, { traceId });
       }

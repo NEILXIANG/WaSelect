@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.72
+  version: 0.6.73
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.73（三端模拟测试，AJ-488）：`POST /admin/products`、`PUT /admin/products/{id}` 校验失败（40001）的响应 `data` 带 `{field, reason, count}`（售价超限另带 `limit`）——此前只有"参数缺失或格式错误"，运营不知道是哪一项。
     0.6.72（三端模拟测试，AJ-487）：`GET /products?keyword=` 也匹配日文原名（`title_ja`）——买家常按日文品牌名搜（資生堂 / ロイズ）。响应形状不变。
     0.6.71（三端模拟测试，AJ-485 / AJ-486）：① `GET /admin/orders?attention=` 加 `dispute_open`（拒付待处理：`payments.dispute_status = open`）。② `GET /admin/orders` 加 `user_id` 查询参数（按买家筛）。
     0.6.70（三端模拟测试，AJ-483 / AJ-484）：① `GET /admin/orders?attention=partial_refund` 收窄为**部分退款还在处理中**（initiated / pending / unknown，要去同步）；已成功但未退满的历史单不再算待处理（中等规模数据下 73 张永远挂在待办里）。② `attention` 加 `ship_overdue`（超时未发货，JST 工作日口径 shared `shipOverdueCutoff`）；`AdminOrderListItem` 与 `AdminOrder` 加 `ship_overdue` 布尔。
@@ -1167,7 +1168,7 @@ components:
   parameters:
     IdemKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 128, description: '客户端段上限 128 字符（0.6.0②）；超限 40001 + reason idempotency_key_too_long'}}
   responses:
-    Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}, data: {type: object, description: '0.6.33：可对外的结构化数据（只有抛错处显式标注的字段）。40401 / 40901（报价与建单）带 product_id 指出是哪一件（剩余清单 4-7）；50300 带 retry_after_ms', properties: {product_id: {type: string}, retry_after_ms: {type: integer}}}}}}}}
+    Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}, data: {type: object, description: '0.6.33：可对外的结构化数据（只有抛错处显式标注的字段）。40401 / 40901（报价与建单）带 product_id 指出是哪一件（剩余清单 4-7）；50300 带 retry_after_ms。0.6.73（AJ-488）：管理端商品新建 / 编辑的 40001 带 field / reason / count（第一个出错的字段、原因码、出错总数），price_too_large 时另带 limit（售价上限，円）', properties: {product_id: {type: string}, retry_after_ms: {type: integer}, field: {type: string}, reason: {type: string}, count: {type: integer}, limit: {type: integer}}}}}}}}
   schemas:
     AuthResp: {type: object, properties: {token: {type: string}, user: {type: object, properties: {id: {type: string}, isAdmin: {type: boolean}}}}}
     Display: {type: object, description: 展示价，整数分（后端按当日汇率计算）, properties: {USD: {type: integer}, CNY: {type: integer}}}

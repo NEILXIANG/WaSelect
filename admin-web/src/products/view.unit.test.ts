@@ -37,6 +37,7 @@ import {
   makeMainImage,
   parseStockEdit,
   withStock,
+  serverFieldError,
 } from './view.js';
 
 /** 像真的商品（约束三：真实日文品名、真实价位与重量）。 */
@@ -710,5 +711,41 @@ describe('withStock：库存的两个展示字段一起改（AJ-403）', () => {
   ])('stock=%i → lowStock=%s，stockText 跟着变', (stock, low) => {
     const row = productRows([{ ...PRODUCT, stock: 100 }])[0]!;
     expect(withStock(row, stock)).toEqual({ ...row, stockText: String(stock), lowStock: low });
+  });
+});
+
+// AJ-488（三端模拟测试 2026-10-11）：售价填 999,999 保存只见"参数缺失或格式错误"；服务端 40001 现带 {field, reason, count}
+describe('serverFieldError：服务端校验原因 → 表单字段 + 人话', () => {
+  it('🔴 认得出的原因落到对应输入框，文案说清怎么改；多处出错时提示还有几处', () => {
+    // 用户截图指出：只说"超过上限"不说上限是多少，运营不知道该调到多少
+    expect(
+      serverFieldError({ field: 'price_jpy', reason: 'price_too_large', count: 1, limit: 180000 }),
+    ).toEqual({
+      key: 'priceJpy',
+      text: '售价超过单笔订单上限（最多 180,000 円），买家无法下单——请调低售价',
+      more: 0,
+    });
+    // 没带上限（旧服务端）：仍说清原因，只是不报数字
+    expect(
+      serverFieldError({ field: 'price_jpy', reason: 'price_too_large', count: 1 })?.text,
+    ).toBe('售价超过单笔订单上限，买家无法下单——请调低售价');
+    expect(
+      serverFieldError({ field: 'customs_desc_en', reason: 'customs_desc_forbidden', count: 3 }),
+    ).toMatchObject({ key: 'customsDescEn', more: 2 });
+    expect(
+      serverFieldError({ field: 'weight_g', reason: 'weight_too_large', count: 1 })?.text,
+    ).toContain('重量');
+  });
+
+  it('认不出的原因：仍落到字段上，文案给通用说法（不吞掉、不显示原因码）', () => {
+    const r = serverFieldError({ field: 'title', reason: 'brand_new_reason', count: 1 });
+    expect(r?.key).toBe('title');
+    expect(r?.text).not.toContain('brand_new_reason');
+    expect(r?.text).toContain('商品名');
+  });
+
+  it('没有 data / 形状不对 → null（页面退回原来的笼统提示）', () => {
+    expect(serverFieldError(undefined)).toBeNull();
+    expect(serverFieldError({ reason: 'x' })).toBeNull();
   });
 });

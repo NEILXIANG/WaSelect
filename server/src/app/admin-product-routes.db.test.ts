@@ -293,6 +293,36 @@ describe('POST /admin/products（建商品）', () => {
     expect(r.status).toBe(400);
     await s.close();
   });
+
+  // AJ-488（三端模拟测试 2026-10-11）：后台把售价填成 999,999 保存，只看到"参数缺失或格式错误"，不知道是哪一项。
+  //   响应带第一个出错的字段与原因码（只给管理员接口；全部明细仍只进日志）
+  it('🔴 校验失败 → data 带 {field, reason, count}：运营能知道是哪一项错了', async () => {
+    const s = await buildServer();
+    const post = async (b: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const r = await fetch(`${s.url}/api/v1/admin/products`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${await adminToken()}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(b),
+      });
+      expect(r.status).toBe(400);
+      return (await r.json()) as Record<string, unknown>;
+    };
+    const big = await post(body({ price_jpy: 999_999 }));
+    expect(big['code']).toBe(40001);
+    // limit：上限是服务端配置（MAX_ORDER_JPY，默认 180000），运营要知道"最多能填多少"（用户截图指出：只说超了不说上限）
+    expect(big['data']).toEqual({
+      field: 'price_jpy',
+      reason: 'price_too_large',
+      count: 1,
+      limit: 180_000,
+    });
+    const two = await post(body({ price_jpy: 999_999, customs_desc_en: 'sunscreen SPF50' }));
+    expect((two['data'] as { count?: number }).count).toBe(2);
+    await s.close();
+  });
 });
 
 describe('PUT /admin/products/{id} 与 PATCH status', () => {
