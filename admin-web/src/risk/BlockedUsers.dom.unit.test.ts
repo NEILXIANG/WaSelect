@@ -44,6 +44,32 @@ describe('BlockedUsers', () => {
     expect(el.textContent).toContain('没有被拉黑的用户');
   });
 
+  // 三端模拟测试 2026-10-11（用户要求：运营看不懂的 id 不进正文）：有收件人 / 邮箱就不再拼 36 位 id；都没有时显示缩短的 id
+  it('🔴 有收件人的行不显示客户 id；没有收件人时显示缩短 id（悬停看全文）', async () => {
+    const api = async (): Promise<unknown> => ({
+      items: [
+        {
+          id: 'u-2bc71278-6054-4cad-8527-e6582d252a9d',
+          blocked_at: '2026-10-06T03:00:00Z',
+          order_count: 3,
+          last_recipient: 'Karen Wong',
+          last_contact_email: 'k@example.com',
+        },
+        {
+          id: 'u-5e526b79-91ca-42e2-96a7-41363673a061',
+          blocked_at: '2026-10-06T03:00:00Z',
+          order_count: 0,
+        },
+      ],
+    });
+    mounted = await mount(createElement(BlockedUsers, { api: api as never }));
+    const rows = [...mounted.el.querySelectorAll('tbody tr')].map((r) => r.textContent ?? '');
+    expect(rows[0]).toContain('Karen Wong');
+    expect(rows[0]).not.toContain('u-2bc71278');
+    expect(rows[1]).toContain('u-5e526b79…');
+    expect(rows[1]).not.toContain('91ca-42e2');
+  });
+
   it('AJ-404：每行带「客户详情」链接（拉黑 / 解除的主入口已挪到客户页，风控页保留）', async () => {
     const items = [{ id: 'u-9', blocked_at: '2026-10-06T03:00:00Z', order_count: 2 }];
     mounted = await mount(createElement(BlockedUsers, { api: (async () => ({ items })) as never }));

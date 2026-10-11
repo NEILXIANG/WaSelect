@@ -44,7 +44,6 @@ export function afterSaleRows(order: unknown): AfterSaleRowView[] {
     if (a === null || typeof a['id'] !== 'string' || !isStatus(a['status'])) return [];
     const reason = String(a['reason'] ?? '');
     const note = typeof a['resolution_note'] === 'string' ? a['resolution_note'] : '';
-    const by = typeof a['handled_by'] === 'string' ? a['handled_by'] : '';
     return [
       {
         id: a['id'],
@@ -55,7 +54,8 @@ export function afterSaleRows(order: unknown): AfterSaleRowView[] {
         statusText: AFTER_SALE_STATUS_LABELS[a['status']],
         description: typeof a['description'] === 'string' ? a['description'] : '',
         timeText: typeof a['created_at'] === 'string' ? formatJst(a['created_at']) : '—',
-        resolutionText: note === '' ? '' : by === '' ? note : `${note}（${by}）`,
+        // 不拼 handled_by：它是内部账号 id（admin:adm-…），运营读不懂；谁处理的看时间线（那里显示邮箱）
+        resolutionText: note,
         open: a['status'] === 'open' || a['status'] === 'processing',
         canMarkProcessing: afterSaleTransitionAllowed(a['status'], 'processing'),
       },

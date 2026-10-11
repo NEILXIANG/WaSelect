@@ -5,7 +5,7 @@
  * @limitation 对账类名的中文映射是**文案层**：服务端新增一类而这里没跟上时原样显示英文 key（看得见，不吞信息）。
  * @see ../../../server/src/app/daily-reconciliation.ts（类名真源）；contracts/api-contract.yaml 0.6.32
  */
-import { formatJst } from '../format.js';
+import { formatJst, shortRef } from '../format.js';
 
 export const RECONCILE_CLASS_LABELS: Readonly<Record<string, string>> = {
   dangling_initiated_payments: '发起支付后长时间无结果',
@@ -77,6 +77,8 @@ export interface AuditRowView {
   /** 原始 action（小字附在旁边，查日志 / 对代码用）。 */
   actionRaw: string;
   targetText: string;
+  /** 对象全文（悬停看；正文是 shortRef 缩短过的）。 */
+  targetTitle: string;
   /** 对象能点去哪（走查 2026-10-08）：订单 / 客户详情的 hash；其它（商品编辑不进网址、Banner 无详情）为空串。 */
   targetHref: string;
   statusText: string;
@@ -111,7 +113,9 @@ export function auditRows(items: readonly unknown[]): AuditRowView[] {
             : String(i['actor'] ?? ''),
         action: ACTION_LABELS[String(i['action'] ?? '')] ?? String(i['action'] ?? ''),
         actionRaw: String(i['action'] ?? ''),
-        targetText: typeof i['target'] === 'string' && i['target'] !== '' ? i['target'] : '—',
+        targetText:
+          typeof i['target'] === 'string' && i['target'] !== '' ? shortRef(i['target']) : '—',
+        targetTitle: typeof i['target'] === 'string' ? i['target'] : '',
         targetHref: ((): string => {
           const target = typeof i['target'] === 'string' ? i['target'] : '';
           const page = targetPage(String(i['action'] ?? ''));
@@ -141,7 +145,8 @@ export interface ReconciliationView {
   lines: { text: string; samples: ReconcileSample[] }[];
 }
 
-const ORDER_ID = /\bord-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/;
+// 不用前导 \b：迟到付款的取样是 `evt_late_ord-<uuid>`，`_ord` 之间不是词边界
+const ORDER_ID = /ord-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/;
 
 /**
  * 取样 id → 可点的链接。
@@ -152,7 +157,7 @@ const ORDER_ID = /\bord-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 function toSample(raw: string): ReconcileSample {
   const id = ORDER_ID.exec(raw)?.[0];
   return id === undefined
-    ? { label: raw, href: '' }
+    ? { label: shortRef(raw), href: '' }
     : { label: `${id.slice(0, 12)}…`, href: `#/orders/${encodeURIComponent(id)}` };
 }
 

@@ -322,3 +322,38 @@ describe('Banner 目标商品：超出前 100 件也能选、能搜（代理 S5�
     expect([...productSelect(el).options].map((o) => o.text)).toContain('宇治抹茶 100g');
   });
 });
+
+// 三端模拟测试 2026-10-11：商品候选只取前 100 件；221 件商品时，链到较早商品的 Banner 显示「商品：<36 位 id>」
+describe('Banner：跳转商品不在前 100 件里', () => {
+  it('🔴 列表照样显示商品名（按 id 往后翻页找），而不是原始 id', async () => {
+    const filler = Array.from({ length: 100 }, (_, i) => ({
+      id: `p-${String(i)}`,
+      title: `商品 ${String(i)}`,
+      status: 'active',
+    }));
+    const api = async (req: { path: string; method?: string }): Promise<unknown> => {
+      if (req.path.includes('/admin/products')) {
+        return req.path.includes('page=2')
+          ? {
+              items: [{ id: 'p-old-0001', title: '六花亭 葡萄夹心（老商品）', status: 'active' }],
+              total: 101,
+            }
+          : { items: filler, total: 101 };
+      }
+      return [{ ...banner('b-A', 'banners/a.webp'), link_type: 'product', link_id: 'p-old-0001' }];
+    };
+    mounted = await mount(
+      createElement(BannersPage, {
+        api: api as never,
+        baseUrl: 'http://localhost',
+        getToken: () => 'tk',
+        onUnauthorized: () => undefined,
+      }),
+    );
+    await flush();
+    await flush();
+    const text = mounted.el.querySelector('tbody')?.textContent ?? '';
+    expect(text).toContain('商品：六花亭 葡萄夹心（老商品）');
+    expect(text).not.toContain('p-old-0001');
+  });
+});

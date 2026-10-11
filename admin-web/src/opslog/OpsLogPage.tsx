@@ -173,14 +173,14 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
               <td className="muted">{r.timeText}</td>
               <td>{r.actor}</td>
               <td>
-                {r.action}
-                {r.action !== r.actionRaw && <span className="muted"> · {r.actionRaw}</span>}
+                {/* 三端模拟测试 2026-10-11（用户要求）：接口路径运营读不懂，挪进悬停（查日志 / 对代码时仍看得到） */}
+                <span title={r.action !== r.actionRaw ? r.actionRaw : undefined}>{r.action}</span>
               </td>
               <td>
                 {r.targetHref === '' ? (
-                  r.targetText
+                  <span title={r.targetTitle}>{r.targetText}</span>
                 ) : (
-                  <a className="link mono" href={r.targetHref}>
+                  <a className="link mono" href={r.targetHref} title={r.targetTitle}>
                     {r.targetText}
                   </a>
                 )}

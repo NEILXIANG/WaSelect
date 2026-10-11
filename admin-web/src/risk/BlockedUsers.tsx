@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
-import { formatJst } from '../format.js';
+import { formatJst, shortRef } from '../format.js';
 import { listBlockedUsers, unblockUser, type AdminApi, type BlockedUser } from './api.js';
 import { blockedListTitle } from './view.js';
 
@@ -111,7 +111,14 @@ export function BlockedUsers({
                 <td className="selectable">
                   {u.last_recipient ?? '（无订单）'}
                   {u.last_contact_email !== undefined ? ` · ${u.last_contact_email}` : ''}
-                  <span className="muted"> · {u.id}</span>
+                  {/* 三端模拟测试 2026-10-11（用户要求）：有名字 / 邮箱就不拼 36 位 id（运营读不懂）；
+                      都没有时给缩短 id 认人，全文悬停可见。完整 id 在客户详情里 */}
+                  {u.last_recipient === undefined && u.last_contact_email === undefined && (
+                    <span className="muted" title={u.id}>
+                      {' '}
+                      · {shortRef(u.id)}
+                    </span>
+                  )}
                 </td>
                 <td>{formatJst(u.blocked_at)}</td>
                 <td>{u.order_count} 单</td>

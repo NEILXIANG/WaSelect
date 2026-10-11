@@ -31,6 +31,24 @@ describe('auditRows', () => {
     expect(rows[1]).toMatchObject({ targetText: '—', statusText: '—', failed: false });
   });
 
+  // 三端模拟测试 2026-10-11（用户要求：运营看不懂的 id 不进正文）：长 id 缩短显示，全文进 targetTitle（悬停）
+  it('🔴 对象是 36 位 id → 正文缩短、悬停给全文；短的原样', () => {
+    const [r] = auditRows([
+      {
+        id: 1,
+        actor: 'admin:u-a',
+        action: 'POST /api/v1/admin/orders/:id/ship',
+        target: 'ord-0f3508cf-69ac-4599-a99d-62ae4cdf8058',
+        status_code: 200,
+        created_at: '2026-10-05T15:00:00.000Z',
+      },
+    ]);
+    expect(r).toMatchObject({
+      targetText: 'ord-0f3508cf…',
+      targetTitle: 'ord-0f3508cf-69ac-4599-a99d-62ae4cdf8058',
+    });
+  });
+
   it('形状不对的元素（非对象）被跳过，不渲染成一行 undefined', () => {
     expect(auditRows([null, 'x', { id: 1, actor: 'a', action: 'b', created_at: '' }])).toHaveLength(
       1,
@@ -114,6 +132,22 @@ describe('reconciliationView', () => {
     expect(v.lines.map((l) => l.samples)).toEqual([
       [{ label: 'ord-09236ad4…', href: `#/orders/${id}` }],
       [{ label: 'ord-09236ad4…', href: `#/orders/${id}` }],
+    ]);
+  });
+
+  it('🔴 迟到付款的取样 evt_late_ord-<uuid> 也认出订单；pay-<uuid> 认不出订单 → 缩短显示、不给链接', () => {
+    const id = 'ord-70d4257d-9d05-4502-869e-422ac19ade1a';
+    const v = reconciliationView({
+      ran_at: '2026-10-05T18:00:00.000Z',
+      counts: { late_paid_unrefunded: 1, dangling_initiated_payments: 1 },
+      samples: {
+        late_paid_unrefunded: [`evt_late_${id}`],
+        dangling_initiated_payments: ['pay-6cfc82a4-3ced-4b19-a89a-9b830e179960'],
+      },
+    });
+    expect(v.lines.map((l) => l.samples)).toEqual([
+      [{ label: 'ord-70d4257d…', href: `#/orders/${id}` }],
+      [{ label: 'pay-6cfc82a4…', href: '' }],
     ]);
   });
 

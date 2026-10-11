@@ -24,7 +24,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { UPLOAD_ACCEPT, uploadImage } from '../api/upload.js';
 import { PRODUCT_CATEGORY } from '@waselect/shared';
-import { listProducts, type AdminProductLike } from '../products/api.js';
+import { findProductById, listProducts, type AdminProductLike } from '../products/api.js';
 import { CATEGORY_LABELS } from '../products/view.js';
 import {
   createBanner,
@@ -126,8 +126,25 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
       const opts = toProductOptions(plist.items);
       setProducts(opts);
       setProductTotal(Number.isInteger(plist.total) ? plist.total : opts.length);
+      // 三端模拟测试 2026-10-11：候选只有前 100 件，链到更早商品的 Banner 会退回显示 36 位 id——缺的按 id 往后翻页补名字
+      //   （Banner 只有几条，逐个补的请求量可以忽略；补不到的仍退回显示 id，不编名字）
+      const titles = new Map(opts.map((o) => [o.id, o.title]));
+      const missing = [
+        ...new Set(
+          (Array.isArray(items) ? (items as unknown as Array<Record<string, unknown>>) : [])
+            .filter((b) => b['link_type'] === 'product' && typeof b['link_id'] === 'string')
+            .map((b) => b['link_id'] as string)
+            .filter((id) => !titles.has(id)),
+        ),
+      ];
+      const found = await Promise.allSettled(missing.map((id) => findProductById(api, id)));
+      found.forEach((r, i) => {
+        const id = missing[i];
+        if (r.status === 'fulfilled' && r.value !== null && id !== undefined)
+          titles.set(id, String(r.value.title ?? ''));
+      });
       setRaw(items);
-      setRows(bannerRows(items, (id) => opts.find((o) => o.id === id)?.title));
+      setRows(bannerRows(items, (id) => titles.get(id)));
     } catch (e) {
       // ⚠️ 失败不清列表（同其它页）：只报错
       const { text, traceId } = toastError(e, 'Banner 列表加载失败');

@@ -26,7 +26,7 @@ import {
   type OrderEventLike,
   type OrderNote,
 } from './notes-view.js';
-import { eventActorText, eventNoteView, eventStatusText } from './view.js';
+import { eventActorText, eventNoteView, eventRefLabel, eventStatusText } from './view.js';
 
 export interface OrderTimelineProps {
   api: AdminApi;
@@ -133,7 +133,10 @@ export function OrderTimeline({ api, orderId, events, onError, onSuccess }: Orde
 function EventLine({ event }: { event: OrderEventLike }): React.JSX.Element {
   const note = eventNoteView(event.status, event.note);
   return (
-    <span className="muted" title={note.ref !== '' ? `退款编号 ${note.ref}` : undefined}>
+    <span
+      className="muted"
+      title={note.ref !== '' ? `${eventRefLabel(event.status)} ${note.ref}` : undefined}
+    >
       {/* `eventStatusText` 而不是 `e.status`：事件流里有一半是"没迁状态、只记一件事"的伪状态 */}
       {formatJst(event.at)} {eventStatusText(event.status)} {note.text}
       {/* ADM-1（AJ-466）：操作者——此前只有备注显示作者，发货 / 退款这类资金操作反而看不出是谁做的 */}

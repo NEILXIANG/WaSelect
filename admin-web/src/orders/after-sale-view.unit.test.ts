@@ -26,7 +26,7 @@ describe('afterSaleRows', () => {
     expect(r?.timeText).toContain('2026');
   });
 
-  it('处理中不能再"标记处理中"；结案行不再 open，说明带处理人', () => {
+  it('🔴 处理中不能再"标记处理中"；结案行不再 open；说明不拼内部账号 id（谁处理的看时间线，那里是邮箱）', () => {
     const rows = afterSaleRows({
       after_sales: [
         { ...base, id: 'a', status: 'processing' },
@@ -43,7 +43,8 @@ describe('afterSaleRows', () => {
       ['a', true, false],
       ['b', false, false],
     ]);
-    expect(rows[1]?.resolutionText).toBe('已部分退款（admin:u-1）');
+    // 三端模拟测试 2026-10-11（用户截图指出）：原先拼成「已部分退款（admin:adm-d2b4185c-…）」，运营读不懂
+    expect(rows[1]?.resolutionText).toBe('已部分退款');
   });
 
   it('认不出的行（缺 id / 状态不在枚举）丢掉；没有 after_sales 键 → 空', () => {

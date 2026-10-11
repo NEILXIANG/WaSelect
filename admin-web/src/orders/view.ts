@@ -245,12 +245,35 @@ export function eventNoteView(status: unknown, note: unknown): { text: string; r
       return { text: PARTIAL_FAIL_REASONS[reason] ?? reason, ref: raw.slice(0, i) };
     }
   }
+  // 三端模拟测试 2026-10-11：处理售后的 note 结尾是「（售后 #uuid）」（after-sale-routes.ts 拼的；事件表只追加、改不了历史），
+  //   一串 36 位 id 跟在说明后面运营读不懂——挪进 ref（悬停可见），正文只留结果与说明
+  if (status === 'after_sale_handled') {
+    const m = /^([\s\S]*)（售后 #([^）]+)）$/.exec(raw);
+    if (m !== null) return { text: m[1] ?? '', ref: m[2] ?? '' };
+  }
+  // 迟到付款 / 已退款的 note 是支付机构流水号（mark-paid.ts / 退款落账写的），一整串机器号进正文运营读不懂——挪进 ref。
+  //   只认"不含空白与中文的单个长串"：人写的退款原因照常显示
+  if (
+    (status === 'late_paid' || status === 'refunded') &&
+    /^[\w.:-]{8,}$/.test(raw) &&
+    /\d/.test(raw)
+  ) {
+    return { text: '', ref: raw };
+  }
   if (status === 'refunded_by_parts') {
     const m = /^([A-Za-z]{3}):(-?\d+)$/.exec(raw);
     const money = m === null ? '—' : minorMoneyText(Number(m[2]), m[1]);
     if (money !== '—') return { text: `累计 ${money}`, ref: '' };
   }
   return { text: raw, ref: '' };
+}
+
+/** 时间线悬停里 ref 的名字（eventNoteView 挪进 ref 的东西不止退款编号）。 */
+export function eventRefLabel(status: unknown): string {
+  if (status === 'after_sale_handled') return '售后编号';
+  if (status === 'late_paid') return '支付流水号';
+  if (status === 'refunded') return '退款流水号';
+  return '退款编号';
 }
 
 /** `Order[]` / `AdminOrder[]` → 列表行。 */

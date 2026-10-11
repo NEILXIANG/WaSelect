@@ -28,6 +28,7 @@ import {
   emptyReleaseForm,
   emptyShipForm,
   eventNoteView,
+  eventRefLabel,
   eventStatusText,
   orderRows,
   PURCHASE_UNRECORDED,
@@ -737,6 +738,42 @@ describe('refundGate 与服务端 refundGuard 逐格一致（A-01）', () => {
     expect(refundGate(withStatus(status, { has_dispute: dispute })).ok).toBe(
       refundGuard(status, dispute).ok,
     );
+  });
+});
+
+describe('eventNoteView：处理售后事件（三端模拟测试 2026-10-11，用户截图指出）', () => {
+  it('🔴 结尾的「（售后 #uuid）」挪进 ref，正文只留处理结果与说明；认不出原样返回', () => {
+    expect(
+      eventNoteView(
+        'after_sale_handled',
+        '已处理：已退断裂那一支唇膏的货款 3,780 円。（售后 #ab72c24e-7e8e-4d77-af80-70864eecccfd）',
+      ),
+    ).toEqual({
+      text: '已处理：已退断裂那一支唇膏的货款 3,780 円。',
+      ref: 'ab72c24e-7e8e-4d77-af80-70864eecccfd',
+    });
+    expect(eventNoteView('after_sale_handled', '处理中（售后 #a-1）')).toEqual({
+      text: '处理中',
+      ref: 'a-1',
+    });
+    expect(eventNoteView('after_sale_handled', '处理中')).toEqual({ text: '处理中', ref: '' });
+  });
+
+  it('🔴 迟到付款 / 已退款的 note 是支付机构流水号（一整串机器号）→ 挪进 ref；悬停标签按事件种类给', () => {
+    expect(eventNoteView('late_paid', 'mock_2acc0478-2bbc-41da-83b8-0bbeb4fad111')).toEqual({
+      text: '',
+      ref: 'mock_2acc0478-2bbc-41da-83b8-0bbeb4fad111',
+    });
+    expect(eventNoteView('refunded', 're_3PqXyZ123456')).toEqual({
+      text: '',
+      ref: 're_3PqXyZ123456',
+    });
+    // 有空格 / 中文的是人写的说明，不动
+    expect(eventNoteView('refunded', '买家要求取消')).toEqual({ text: '买家要求取消', ref: '' });
+    expect(eventRefLabel('after_sale_handled')).toBe('售后编号');
+    expect(eventRefLabel('late_paid')).toBe('支付流水号');
+    expect(eventRefLabel('refunded')).toBe('退款流水号');
+    expect(eventRefLabel('partial_refunded')).toBe('退款编号');
   });
 });
 

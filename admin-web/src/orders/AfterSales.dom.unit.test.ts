@@ -109,7 +109,9 @@ describe('订单详情 · 售后申请', () => {
       { ...OPEN, status: 'rejected', resolution_note: '照片显示外箱完好', handled_by: 'admin:u-1' },
     ]);
     const panel = el.querySelector('[aria-label="售后申请"]');
-    expect(panel?.textContent).toContain('处理说明：照片显示外箱完好（admin:u-1）');
+    expect(panel?.textContent).toContain('处理说明：照片显示外箱完好');
+    // 三端模拟测试 2026-10-11（用户截图指出）：不拼内部账号 id；谁处理的看时间线（邮箱）
+    expect(panel?.textContent).not.toContain('admin:');
     expect(panel?.querySelectorAll('button')).toHaveLength(0);
   });
 });

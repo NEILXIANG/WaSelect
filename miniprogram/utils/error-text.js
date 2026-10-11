@@ -94,7 +94,9 @@ const SALES_PAUSED_TEXT =
   '店铺暂停接单中，暂时无法下单或付款；未付款的订单到期会自动关闭（不扣款），恢复后重新下单即可';
 
 /**
- * 报障小字（剩余清单 4-6 / M9）：`错误码 40002 · 链路 abcdef12`（网络层再附宿主原因）。
+ * 报障小字（剩余清单 4-6 / M9）：`联系客服时请提供：40002 · abcdef12`（网络层再附宿主原因）。
+ * @why 三端模拟测试 2026-10-11（用户要求：买家看不懂的信息算缺陷）：原写「错误码 40002 · 链路 abcdef12」，
+ *      "链路"是技术词，买家既看不懂、也不知道这串号拿来干什么；直接说用途，号码本身不变（客服照样凭它查日志）。
  * @why 主文案给人看、小字给客服看：用户截图发给客服时，客服凭链路号能在日志里找到这一次请求的全部记录；
  *      而把码与英文原因拼进主文案，用户读到的是一串看不懂的东西。
  * @why 链路号只取前 8 位：够在日志里检索（trace_id 前缀匹配），又不至于一行放不下。
@@ -102,9 +104,8 @@ const SALES_PAUSED_TEXT =
  */
 export function errorRef(err) {
   if (err === null || typeof err !== 'object' || !Number.isInteger(err.code)) return '';
-  const parts = [`错误码 ${String(err.code)}`];
-  if (typeof err.traceId === 'string' && err.traceId !== '')
-    parts.push(`链路 ${err.traceId.slice(0, 8)}`);
+  const parts = [`联系客服时请提供：${String(err.code)}`];
+  if (typeof err.traceId === 'string' && err.traceId !== '') parts.push(err.traceId.slice(0, 8));
   if (err.code < 0 && typeof err.message === 'string' && err.message.trim() !== '') {
     parts.push(err.message.trim());
   }

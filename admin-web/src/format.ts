@@ -90,3 +90,17 @@ const LOCAL_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 export function toIsoJst(local: string): string {
   return LOCAL_DATETIME.test(local) ? `${local}:00+09:00` : '';
 }
+
+/**
+ * 长 id 缩短给人看：`ord-0f3508cf-69ac-…` → `ord-0f3508cf…`（前缀 + 8 位）；短的原样。
+ * @why 三端模拟测试 2026-10-11（用户要求）：36 位 uuid 进正文运营读不懂，还把一行撑成两行。
+ *      全文仍要留给排查——调用方放进 title（悬停）或复制按钮，这里只管正文。
+ * @limitation 只认"字母前缀 + uuid"的形状；别的长串截到 16 位，不保证截在有意义的边界上。
+ */
+export function shortRef(id: string): string {
+  const m = /^([A-Za-z]+[-_])?([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(
+    id,
+  );
+  if (m !== null) return `${m[1] ?? ''}${m[2] ?? ''}…`;
+  return id.length > 20 ? `${id.slice(0, 16)}…` : id;
+}

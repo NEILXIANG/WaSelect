@@ -57,18 +57,18 @@ describe('errorMessage', () => {
 });
 
 describe('errorRef / errorFields（4-6）', () => {
-  it('🔴 有码有链路 → `错误码 40002 · 链路 <前 8 位>`；只有码 → 只有码；什么都没有 → 空串（页面不显示小字）', () => {
+  it('🔴 有码有链路 → `联系客服时请提供：40002 · <链路前 8 位>`（三端模拟测试 2026-10-11：原写「错误码 … · 链路 …」，买家不知道这串号是干什么的）；只有码 → 只有码；什么都没有 → 空串（页面不显示小字）', () => {
     expect(errorRef({ code: 40002, message: 'x', traceId: 'abcdef1234567890' })).toBe(
-      '错误码 40002 · 链路 abcdef12',
+      '联系客服时请提供：40002 · abcdef12',
     );
-    expect(errorRef({ code: 40002, message: 'x' })).toBe('错误码 40002');
+    expect(errorRef({ code: 40002, message: 'x' })).toBe('联系客服时请提供：40002');
     expect(errorRef(new Error('x'))).toBe('');
     expect(errorRef(null)).toBe('');
   });
 
   it('网络层失败 → 小字里带上宿主原始原因（排障唯一线索），主文案不带', () => {
     expect(errorRef({ code: -1, message: 'request:fail timeout', traceId: 't1' })).toBe(
-      '错误码 -1 · 链路 t1 · request:fail timeout',
+      '联系客服时请提供：-1 · t1 · request:fail timeout',
     );
   });
 
@@ -76,11 +76,11 @@ describe('errorRef / errorFields（4-6）', () => {
     const e = { code: 40002, message: '地址格式不对', traceId: 'abcdef1234' };
     expect(errorFields(e)).toEqual({
       error: '地址格式不对',
-      errorRef: '错误码 40002 · 链路 abcdef12',
+      errorRef: '联系客服时请提供：40002 · abcdef12',
     });
     expect(errorFields(e, 'saveError')).toEqual({
       saveError: '地址格式不对',
-      saveErrorRef: '错误码 40002 · 链路 abcdef12',
+      saveErrorRef: '联系客服时请提供：40002 · abcdef12',
     });
   });
 });
@@ -89,7 +89,7 @@ describe('网关错误（扫描 W-06）', () => {
   it('🔴 -3（有响应无业务码）→ 说"服务暂时不可用"，不说"检查网络"；小字带 HTTP 状态', () => {
     const e = { code: -3, message: '请求失败（HTTP 502）', traceId: 'abcdef1234' };
     expect(errorMessage(e)).toBe('服务暂时不可用，请稍后重试');
-    expect(errorRef(e)).toBe('错误码 -3 · 链路 abcdef12 · 请求失败（HTTP 502）');
+    expect(errorRef(e)).toBe('联系客服时请提供：-3 · abcdef12 · 请求失败（HTTP 502）');
   });
 });
 
@@ -121,7 +121,7 @@ describe('按码给出可执行的话（P2-40）', () => {
 
   it('报障小字照旧带码（客服仍能对照）', () => {
     expect(errorRef({ code: 40301, message: '无权限', traceId: 'abcdef1234' })).toBe(
-      '错误码 40301 · 链路 abcdef12',
+      '联系客服时请提供：40301 · abcdef12',
     );
   });
 });
@@ -152,7 +152,7 @@ describe('登录失效 40101（F3，第二轮审计 2026-10-11）', () => {
     expect(text).toContain('重新登录');
     // 报障小字照旧带码
     expect(errorRef({ code: 40101, message: 'x', traceId: 'abcdef1234' })).toBe(
-      '错误码 40101 · 链路 abcdef12',
+      '联系客服时请提供：40101 · abcdef12',
     );
   });
 });
