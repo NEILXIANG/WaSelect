@@ -81,10 +81,12 @@
   </swiper>
 
   <!-- 分类 tab：横向可滚（分类数超过一屏时不出界、不断行） -->
-  <scroll-view class="tabs ws-gutter" scroll-x enable-flex>
+  <!-- 选中项自动滚进可视区（三端模拟测试 2026-10-11：分类多了以后点最右边的一个，选中项看不见；vm tabIntoView） -->
+  <scroll-view class="tabs ws-gutter" scroll-x enable-flex scroll-into-view="{{tabView}}" scroll-with-animation>
     <view
       wx:for="{{tabs}}"
       wx:key="key"
+      id="tab-{{index}}"
       class="tab {{item.active ? 'tab--active' : ''}}"
       data-key="{{item.key}}"
       hover-class="ws-press"
@@ -92,6 +94,7 @@
     >
       {{item.label}}
     </view>
+    <view class="tabs__end" />
   </scroll-view>
 
   <!-- 首屏加载：只有"列表还是空的 + 在加载"时才整屏占位，追加时不打扰已加载的内容。

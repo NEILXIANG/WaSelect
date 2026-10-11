@@ -37,6 +37,7 @@
  * @see adapters/catalog-admin.ts（仓储）；domain/product-input.ts（校验）；
  *      contracts/api-contract.yaml（AdminProduct / ProductInput）
  */
+import { categoryExists } from '../adapters/categories.js';
 import type { Express } from 'express';
 import {
   LOW_STOCK_THRESHOLD,
@@ -303,6 +304,14 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
       try {
         const r = validateProductInput(req.body, deps.config.MAX_ORDER_JPY);
         if (!r.ok) rejectInvalid(deps.logger, r.errors, deps.config.MAX_ORDER_JPY);
+        // AJ-491：分类在后台可配置，存在与否只能查库（外键是兜底，这里先给运营说人话）
+        if (!(await categoryExists(deps.db, r.value.category))) {
+          rejectInvalid(
+            deps.logger,
+            [{ field: 'category', reason: 'category_unknown' }],
+            deps.config.MAX_ORDER_JPY,
+          );
+        }
         // 不判 P2-30：新建是草稿，买家看不见；判定在 PATCH /status → active 那一步（AJ-403）
         const row = await repo.insertProduct({
           id: deps.idGen.uuid(),
@@ -342,6 +351,14 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         const id = String(req.params.id);
         const r = validateProductInput(req.body, deps.config.MAX_ORDER_JPY);
         if (!r.ok) rejectInvalid(deps.logger, r.errors, deps.config.MAX_ORDER_JPY);
+        // AJ-491：分类在后台可配置，存在与否只能查库（外键是兜底，这里先给运营说人话）
+        if (!(await categoryExists(deps.db, r.value.category))) {
+          rejectInvalid(
+            deps.logger,
+            [{ field: 'category', reason: 'category_unknown' }],
+            deps.config.MAX_ORDER_JPY,
+          );
+        }
         // ── 乐观锁凭据（ADM3-02 / AJ-258，契约 0.6.18）───────────────────────────
         // ⚠️ 必须在 `validateProductInput` **之后**单独取：它不属于 `ProductInput`
         //    （商品字段与"你看到的是哪一版"是两件事，混进同一个 schema 会让

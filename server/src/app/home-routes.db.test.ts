@@ -83,7 +83,11 @@ async function getHome(url: string): Promise<{ status: number; body: unknown }> 
   return { status: res.status, body: (await res.json()) as unknown };
 }
 
-type HomeBody = { banners: Array<Record<string, unknown>>; categories: string[] };
+type HomeBody = {
+  banners: Array<Record<string, unknown>>;
+  categories: string[];
+  category_tabs: Array<{ key: string; name: string }>;
+};
 
 /** 一条此刻生效的配置（起止把 NOW 包在中间）。 */
 const W: BannerWrite = {
@@ -109,13 +113,26 @@ describe('GET /home', () => {
     }
   });
 
-  it('空表：banners = []，categories 仍是完整清单（没有 banner ≠ 没有分类）', async () => {
+  // AJ-491（用户 2026-10-11）：分类改为后台可配置，"分类里没有商品就不需要显示"——只给启用且有在售商品的分类，带中文名。
+  //   按在售判、不按库存（售罄仍在售）：分类不会随库存上下跳
+  it('🔴 categories / category_tabs 只含启用且有在售商品的分类（按排序，带中文名）；没有商品 → 空', async () => {
     const { url, close } = await buildServer({ clock: mutableClock(NOW).clock });
     try {
+      const empty = (await getHome(url)).body as HomeBody;
+      expect(empty.banners).toEqual([]);
+      expect(empty.categories).toEqual([]);
+      expect(empty.category_tabs).toEqual([]);
+      await db`insert into products (id, title, category, price_jpy, weight_g, origin_country, status, stock)
+               values ('h-food', '茶', 'food', 1000, 100, 'JP', 'active', 0),
+                      ('h-beauty', '霜', 'beauty', 1000, 100, 'JP', 'active', 3),
+                      ('h-daily', '杯', 'daily', 1000, 100, 'JP', 'draft', 3)`;
       const { status, body } = await getHome(url);
       expect(status).toBe(200);
-      expect((body as HomeBody).banners).toEqual([]);
-      expect((body as HomeBody).categories).toEqual(['beauty', 'daily', 'kitchen', 'food']);
+      expect((body as HomeBody).categories).toEqual(['beauty', 'food']);
+      expect((body as HomeBody).category_tabs).toEqual([
+        { key: 'beauty', name: '美妆护肤' },
+        { key: 'food', name: '食品' },
+      ]);
     } finally {
       await close();
     }

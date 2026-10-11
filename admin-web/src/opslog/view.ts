@@ -37,6 +37,10 @@ export const ACTION_LABELS: Readonly<Record<string, string>> = {
   'PATCH /admin/products/:id/status': '商品上下架',
   'PATCH /admin/products/:id/stock': '改库存',
   'POST /admin/upload': '上传图片',
+  // AJ-491：商品分类改为后台可配置
+  'POST /admin/categories': '新建分类',
+  'PUT /admin/categories/:key': '编辑分类',
+  'DELETE /admin/categories/:key': '删除分类',
   'POST /admin/banners': '新建 Banner',
   'PUT /admin/banners/:id': '编辑 Banner',
   'DELETE /admin/banners/:id': '删除 Banner',

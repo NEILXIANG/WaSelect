@@ -7,12 +7,11 @@
  *      分成两个的代价是首屏要么等两次、要么先出一半——而"先出商品流、banner 后补"
  *      在真机上是列表往上顶一下，属于用户能看见的抖动。
  *
- * @why `categories` 取 shared 的 `PRODUCT_CATEGORY`，**不查库里"有货的分类"**：
- *      契约里它是**分类清单**，不是库存概览。按库里有没有货来出，分类栏会随商品
- *      上下架**跳动**——用户第二次进来发现少了一个 tab，只会觉得这个站不稳定。
- *      更要紧的是 `GET /products?category` 的合法性校验用的**也是**这份枚举：
- *      两边不一致就会出现"tab 上有这个分类、点下去 40001"，且不报错。
- *      （这份枚举由 `packages/shared/src/enums.unit.test.ts` 与契约文本双向比对守着。）
+ * @why 分类来自后台维护的 product_categories（AJ-491，用户 2026-10-11 要求可加分类、空分类不显示）：
+ *      只给**启用且至少有一件在售商品**的分类，按排序；`category_tabs` 带中文名，`categories` 保留键数组给旧版小程序。
+ *      按"在售"判、不按库存：售罄的商品仍在售，分类不会随库存跳动；整类没有在售商品才隐藏。
+ *      （此前取 shared 全量四类、刻意不按商品过滤，理由是怕 tab 随上下架跳动——现在按在售判已化解，且用户明确要隐藏空分类。）
+ *      `GET /products?category` 只校验键的形状，不存在 / 停用 → 空列表，不会出现"tab 上有、点下去 40001"。
  *
  * @why 生效判定（`active` + 起止时间窗）**只在本端点做一次**，前端不得自行再判：
  *      与 `FxRate.is_current` 同一条口径——"此刻生效吗"是**服务端时钟**的事实，
@@ -46,7 +45,7 @@ import type { Clock } from '../ports/clock.js';
 import type { AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
 import { createBannersRepo } from '../adapters/banners.js';
-import { PRODUCT_CATEGORY } from '@waselect/shared';
+import { listVisibleCategories } from '../adapters/categories.js';
 import { toBannerView } from './banner-view.js';
 
 export interface HomeRoutesDeps {
@@ -72,9 +71,12 @@ export function mountHomeRoutes(app: Express, deps: HomeRoutesDeps): void {
       try {
         // ⚠️ 时间来自注入的 clock（F10）："到点自动下架"必须是可测的确定量
         const rows = await banners.listActiveBanners(deps.clock.now());
+        // AJ-491：只给启用且有在售商品的分类（按排序），category_tabs 带中文名；categories 保留键数组给旧版小程序
+        const tabs = await listVisibleCategories(deps.db);
         res.json({
           banners: rows.map((r) => toBannerView(r, deps.config.IMG_BASE_URL)),
-          categories: [...PRODUCT_CATEGORY],
+          categories: tabs.map((t) => t.key),
+          category_tabs: tabs,
         });
       } catch (e) {
         next(e);

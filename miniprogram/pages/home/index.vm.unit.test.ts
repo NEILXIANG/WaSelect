@@ -18,15 +18,15 @@
  * @see ../index.vm.js；../../../CLAUDE.md 约束十一；../../../contracts/api-contract.yaml
  */
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  CATEGORIES,
   PAGE_SIZE,
   SEARCH_KEYWORD_MAX,
   bannerAt,
   bannerSlides,
   categoryTabs,
+  tabIntoView,
+  tabsState,
   intentForBanner,
   visibleBanners,
   hasMore,
@@ -72,46 +72,59 @@ const ITEMS = [
   },
 ];
 
+// AJ-491（用户 2026-10-11）：分类改为后台可配置，小程序按 /home 的 category_tabs（键 + 中文名）渲染；
+//   没有在售商品的分类服务端不下发。不再用本地写死的四类兜底：分类栏是横向的，/home 回来前只有「全部」，
+//   回来后横向补出——高度不变、页面不往上顶；而本地兜底会先显示一个空分类、再让它消失。
 describe('categoryTabs（分类 tab）', () => {
-  it('未选分类时"全部"选中，四个分类都不选中', () => {
-    // 第一个参数为空 = "服务端还没下发"（首屏 / /home 未回来）→ 本地常量兜底
-    const tabs = categoryTabs([], '');
-    expect(tabs.map((t) => t.label)).toEqual(['全部', '美妆护肤', '生活百货', '厨房餐具', '食品']);
+  const TABS = [
+    { key: 'beauty', name: '美妆护肤' },
+    { key: 'baby_care', name: '母婴用品' },
+    { key: 'food', name: '食品' },
+  ];
+
+  it('🔴 按服务端 category_tabs 渲染（顺序、名称都以它为准），"全部"在最前', () => {
+    const tabs = categoryTabs(TABS, '');
+    expect(tabs.map((t) => t.label)).toEqual(['全部', '美妆护肤', '母婴用品', '食品']);
     expect(tabs.filter((t) => t.active).map((t) => t.key)).toEqual(['']);
   });
 
-  it('选中 kitchen 时只有它 active（其余全 false，不会出现两个高亮）', () => {
-    const tabs = categoryTabs([], 'kitchen');
-    expect(tabs.filter((t) => t.active)).toEqual([
-      { key: 'kitchen', label: '厨房餐具', active: true },
+  it('选中某类时只有它 active（不会出现两个高亮）', () => {
+    expect(categoryTabs(TABS, 'baby_care').filter((t) => t.active)).toEqual([
+      { key: 'baby_care', label: '母婴用品', active: true },
     ]);
   });
 
-  it('非字符串 / 未传 → 与"全部"同一形态（不是抛错，也不是全部不高亮）', () => {
-    // @why 分类来自 wxml 的 `data-key`，取不到时是 undefined——那一跳若没有 tab 高亮，
-    //      用户会以为"点了个寂寞"，而页面上没有任何报错。
-    expect(categoryTabs([], undefined).find((t) => t.active)?.key).toBe('');
-    expect(categoryTabs([], null).find((t) => t.active)?.key).toBe('');
+  it('非字符串 / 未传的 active → 与"全部"同一形态', () => {
+    expect(categoryTabs(TABS, undefined).find((t) => t.active)?.key).toBe('');
+    expect(categoryTabs(TABS, null).find((t) => t.active)?.key).toBe('');
   });
 
-  it('服务端下发了分类清单 → **以它为准**（否则 /home 的 categories 是没人消费的死数据）', () => {
-    const tabs = categoryTabs(['food', 'beauty'], '');
-    expect(tabs.map((t) => t.key)).toEqual(['', 'food', 'beauty']);
-    expect(tabs.map((t) => t.label)).toEqual(['全部', '食品', '美妆护肤']);
+  it('🔴 服务端还没回来 / 失败 / 没有任何分类 → 只有「全部」（不用本地写死的分类兜底）', () => {
+    for (const v of [[], undefined, 'not-an-array', null]) {
+      expect(categoryTabs(v, '').map((t) => t.key)).toEqual(['']);
+    }
   });
 
-  it('服务端下发了一个前端不认识的新分类 → 展示名回落到 key，不让它从分类栏消失', () => {
-    // @why @limitation 一：消失的话运营会以为"配了没生效"，而它只是缺一个展示名。
-    const tabs = categoryTabs(['kitchenware'], '');
-    expect(tabs).toContainEqual({ key: 'kitchenware', label: 'kitchenware', active: false });
+  // 三端模拟测试 2026-10-11：分类有 9 个时，点了最右边的「健康食品」，分类栏不滚，选中项在屏幕外看不见
+  it('🔴 tabIntoView：选中项滚进可视区——定位到它前一个（留出上下文），「全部」选中时回到最左', () => {
+    expect(tabIntoView(categoryTabs(TABS, 'food'))).toBe('tab-2');
+    expect(tabIntoView(categoryTabs(TABS, 'beauty'))).toBe('tab-0');
+    expect(tabIntoView(categoryTabs(TABS, ''))).toBe('tab-0');
+    expect(tabIntoView([])).toBe('tab-0');
+    expect(tabsState(TABS, 'food')).toEqual({ tabs: categoryTabs(TABS, 'food'), tabView: 'tab-2' });
   });
 
-  it('服务端给了空数组 / 非数组 → 回落到本地 CATEGORIES（首屏不等网络，分类栏不抖）', () => {
-    // @why 等 /home 回来再渲染的话，首屏会先只显示「全部」再补出四个分类——
-    //      分类栏往上顶一下是用户能看见的抖动，而它们是常量，没理由等一次往返。
-    expect(categoryTabs([], '').map((t) => t.key)).toEqual(['', ...CATEGORIES]);
-    expect(categoryTabs(undefined, '').map((t) => t.key)).toEqual(['', ...CATEGORIES]);
-    expect(categoryTabs('not-an-array', '').map((t) => t.key)).toEqual(['', ...CATEGORIES]);
+  it('旧版服务端只给键数组 → 名称回落到键（不让分类消失）；条目缺键 / 形状不对的丢掉', () => {
+    expect(categoryTabs(['food'], '')).toContainEqual({
+      key: 'food',
+      label: 'food',
+      active: false,
+    });
+    expect(
+      categoryTabs([{ name: '无键' }, { key: '' }, 3, { key: 'tea', name: '' }], '').map(
+        (t) => t.label,
+      ),
+    ).toEqual(['全部', 'tea']);
   });
 });
 
@@ -412,24 +425,7 @@ describe('intentForBanner（轮播跳转）', () => {
   });
 });
 
-describe('分类枚举与契约同源（防前端 tab 静默漂移）', () => {
-  it('`CATEGORIES` 与契约 `/products` 的 category enum 完全一致（顺序也一致）', () => {
-    const yaml = readFileSync(
-      resolve(import.meta.dirname, '../../../contracts/api-contract.yaml'),
-      'utf8',
-    );
-    const line = yaml.split('\n').find((l) => l.includes('name: category') && l.includes('enum:'));
-    expect(line, '契约里没找到 /products 的 category 枚举——契约改版式了？').toBeDefined();
-    const enumText = /enum:\s*\[([^\]]+)\]/.exec(line ?? '')?.[1] ?? '';
-    const contract = enumText
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s) => s !== '');
-    expect(contract.length, '解析出的枚举是空的——正则失配了，这条会假绿').toBeGreaterThan(0);
-    // 双向：契约多一个 → 前端少一个 tab（点了没反应）；前端多一个 → 点了永远是空的
-    expect(CATEGORIES).toEqual(contract);
-  });
-});
+// AJ-491：分类改为后台可配置，原「CATEGORIES 与契约 enum 同源」一条随之取消（契约已无分类枚举）
 
 /**
  * 防复发：B36 的病根**在薄壳**（`reload` / `loadMore` 都不看序号），
@@ -516,9 +512,9 @@ describe('轮播下标必须与「可见 banner」同源（点第 N 张跳第 N 
     expect(slides).toHaveLength(visible.length);
     slides.forEach((s, i) => {
       expect(s.id).toBe(String(visible[i].id));
-      expect(intentForBanner(bannerAt(WITH_GAP, i), CATEGORIES)).toEqual(
-        intentForBanner(visible[i], CATEGORIES),
-      );
+      expect(
+        intentForBanner(bannerAt(WITH_GAP, i), ['beauty', 'daily', 'kitchen', 'food']),
+      ).toEqual(intentForBanner(visible[i], ['beauty', 'daily', 'kitchen', 'food']));
     });
   });
 });

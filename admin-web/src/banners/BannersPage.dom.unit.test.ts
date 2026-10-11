@@ -7,10 +7,17 @@
  * @see ./BannersPage.tsx
  */
 import { createElement } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { primeCategoryCache } from '../categories/useCategories.js';
+import { TEST_CATEGORIES } from '../testing/categories.js';
 import { ApiError } from '../api/errors.js';
 import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { BannersPage } from './BannersPage.js';
+
+// AJ-491：页面会取后台分类列表——预置缓存，让本文件的假接口与调用计数不必为它改
+beforeEach(() => {
+  primeCategoryCache(TEST_CATEGORIES);
+});
 
 let mounted: Mounted | undefined;
 

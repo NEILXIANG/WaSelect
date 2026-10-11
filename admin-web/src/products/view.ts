@@ -15,12 +15,8 @@
  *      ⚠️ 但**服务端仍是权威**：这里是"预检"，不是"放行"；
  *      两处名单不一致由单测与 shared / 契约的双向比对钉住。
  *
- * @limitation 一：分类展示名落**本文件**而不是服务端下发——契约只给 key。
- *              分类 **key** 自第三轮缺口 §4 起从 shared 引（`PRODUCT_CATEGORY`），不再自备一份；
- *              但**展示名**仍与小程序 `pages/home/index.vm.js` 的 CATEGORY_LABELS 是**两份真源**
- *              （daily 两端统一叫「生活百货」，用户 2026-10-07 拍板），
- *              由各自的"与契约 enum 双向比对"守着；多语言（本项目有 zh/ja/en）落地时
- *              两处要一起改成下发式，届时这条 @limitation 应被删除。
+ * @limitation 一：分类改为后台可配置（AJ-491）——键与展示名都来自 `/admin/categories`（../categories/），
+ *              本文件不再自备分类清单；需要名称的函数由调用方传 `nameOf`（默认原样显示键）。
  * @limitation 二：**不做图片裁剪/尺寸校验**（那是 `POST /admin/upload` 与 R2 的事），
  *              本层只按契约 `ImageSet` 的形状（thumb/card/detail）收口。
  *
@@ -31,11 +27,9 @@ import {
   BLOCKED_COMPLIANCE_TAG,
   LOW_STOCK_THRESHOLD,
   COMPLIANCE_TAG,
-  PRODUCT_CATEGORY,
   PRODUCT_MAX_CHARS,
   PRODUCT_MAX_STOCK,
   PRODUCT_MAX_WEIGHT_G,
-  type ProductCategory,
 } from '@waselect/shared';
 import { moneyText } from '../format.js';
 
@@ -54,15 +48,6 @@ export const STATUS_LABELS: Readonly<Record<ProductStatus, string>> = {
  * 分类（与契约 `/products` 的 category 枚举逐字一致，单测双向比对）。
  * @why 从 shared 再导出而不是自备一份（第三轮缺口 §4）：三端同一个枚举只该有一处定义。
  */
-export { PRODUCT_CATEGORY, type ProductCategory };
-
-/** 分类展示名（@see @limitation 一）。 */
-export const CATEGORY_LABELS: Readonly<Record<ProductCategory, string>> = {
-  beauty: '美妆护肤',
-  daily: '生活百货', // 与小程序同名（用户 2026-10-07 拍板）
-  kitchen: '厨房餐具',
-  food: '食品',
-};
 
 /**
  * 报关英文品名里的**敏感词**：命中即拒（契约 ProductInput.customs_desc_en 的说明）。
@@ -81,7 +66,8 @@ export const BLOCKED_CUSTOMS_WORDS = [
 export interface ProductRow {
   id: string;
   title: string;
-  categoryLabel: string;
+  /** 分类键（展示名由页面用分类列表查，@see @limitation 一）。 */
+  category: string;
   priceText: string;
   stockText: string;
   status: ProductStatus;
@@ -119,10 +105,7 @@ export function productRows(items: unknown): ProductRow[] {
       return {
         id: p['id'] as string,
         title: typeof p['title'] === 'string' ? p['title'] : '',
-        categoryLabel:
-          typeof category === 'string' && category in CATEGORY_LABELS
-            ? CATEGORY_LABELS[category as ProductCategory]
-            : ((category as string) ?? ''),
+        category: typeof category === 'string' ? category : '',
         // 与订单页同一个格式化（千分位 + 円；非整数显示 —），P2-52
         priceText: moneyText(p['price_jpy']),
         thumb: firstThumb(p['images']),
@@ -272,7 +255,8 @@ export interface ProductImageEntry {
 export function emptyProductForm(): ProductForm {
   return {
     title: '',
-    category: PRODUCT_CATEGORY[0],
+    // AJ-491：分类可配置后不再默认第一类——新建时让运营自己选（下拉第一项是「请选择分类」）
+    category: '',
     priceJpy: '',
     costJpy: '',
     weightG: '',
@@ -308,7 +292,7 @@ export function productFormModel(p: unknown): ProductForm {
       : [];
   return {
     title: str('title'),
-    category: str('category', PRODUCT_CATEGORY[0]),
+    category: str('category', ''),
     priceJpy: num('price_jpy'),
     costJpy: num('cost_jpy'),
     weightG: num('weight_g'),
@@ -436,8 +420,8 @@ export function productFormErrors(form: unknown): {
   const errors: Record<string, string> = {};
 
   if (f.title.trim() === '') errors['title'] = '商品名必填';
-  if (!PRODUCT_CATEGORY.includes(f.category as ProductCategory))
-    errors['category'] = '请选择一个分类';
+  // AJ-491：存在与否由服务端查分类表（category_unknown）；这里只管"选了没有"
+  if (f.category.trim() === '') errors['category'] = '请选择一个分类';
 
   // ⚠️ 数值一律走 `plainInt`（P2-51）：`Number('1e3') === 1000` 是整数，旧写法会放行科学计数法，
   //    而 `<input type="number">` 恰恰允许输入 e——运营手滑多按一个 e，售价就成了另一个数。
@@ -582,7 +566,11 @@ export interface ConflictRow {
  *      现在表单原地保留，最新值只读摆在旁边，运营自己决定保留哪边。
  * @limitation 图片只比**张数**（URL / id 逐张比对在这里没有可读的展示方式）。
  */
-export function productConflictRows(form: unknown, latest: unknown): ConflictRow[] {
+export function productConflictRows(
+  form: unknown,
+  latest: unknown,
+  nameOf: (key: string) => string = (k) => k,
+): ConflictRow[] {
   const mine = asForm(form);
   const theirs = productFormModel(latest);
   const fields: Array<[string, keyof ProductForm]> = [
@@ -606,7 +594,7 @@ export function productConflictRows(form: unknown, latest: unknown): ConflictRow
   const text = (v: unknown): string => (Array.isArray(v) ? v.join('、') : String(v ?? ''));
   // 分类显示中文名（三端联动模拟 2026-10-08：对照表里原样显示 daily）
   const show = (key: keyof ProductForm, v: unknown): string =>
-    key === 'category' ? (CATEGORY_LABELS[v as ProductCategory] ?? text(v)) : text(v);
+    key === 'category' ? nameOf(text(v)) : text(v);
   const rows = fields.map(([label, key]) => {
     const a = show(key, mine[key]);
     const b = show(key, theirs[key]);

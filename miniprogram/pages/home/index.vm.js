@@ -11,18 +11,8 @@
  *      跳转是副作用，留在 `index.js`（宿主能力走 `utils/wx-api.ts`）。
  *      这样本文件能被 Node 直接 import 测试，也避免"页面路径"混进展示逻辑。
  *
- * @limitation 一：**分类展示名落在前端这一处**（`CATEGORY_LABELS`）。
- *              后端 `GET /home` 的 `categories` 与 `GET /products` 的 `category` 都**只给 key**
- *              （契约现状，无 label 字段），所以展示名目前只能由前端持有。
- *              ⚠️ `/home` 下发了一个前端不认识的新分类时，展示名**回落到 key 本身**
- *              （`CATEGORY_LABELS[key] ?? key`）——宁可显示一串英文 key，
- *              也不要让它从分类栏里**消失**：消失的话运营会以为"配了没生效"，
- *              而实际上它只是缺一个展示名。
- *              @why 仍然集中在一处而不是写进 wxml：写进 wxml 就是四个 tab 各写一遍，
- *              "这个分类忘了译"不会有任何报错。后端给了 label 之后改这里一处即可。
- *              @tradeoff 与"UI 不写死"（约束五）的边界：这是**文案**，不是口径
- *              （不是金额 / 税率 / 国家 / 承运商），且当前没有第二个来源——
- *              宁可留一处写明的欠账，也不要假装它不存在。
+ * @limitation 一：分类来自后台（AJ-491）：`/home` 的 `category_tabs`（键 + 中文名，只含启用且有在售商品的分类）。
+ *              本文件不再持有分类清单与展示名；旧版服务端只给键数组时，名称回落到键（宁可显示键，也不让分类消失）。
  * @limitation 二：**占位图是本地资源，不是商品图**（用户 2026-09-26 拍板"占位图先跑通，不等 R2"）。
  *              真图要等云存储与 CDN（风险 R2），在那之前 `image` 缺失或为空一律回落到
  *              `PLACEHOLDER_IMAGE`。@why 不留给空 src：`<image>` 拿到空 src 会刷控制台警告并留白，
@@ -40,23 +30,6 @@
 import { displaySubLine } from '../../utils/price-format.js';
 import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
 
-/**
- * 契约 `/products` 的 category 枚举。
- * @why 与服务端 `PRODUCT_CATEGORIES` 是**同一份词汇表的两处副本**——
- *      小程序不能 import server 代码（不同构建产物），所以只能各持一份；
- *      两处漂移的表现是"前端有个分类点了永远是空的"，且不报错。
- *      由 `index.vm.unit.test.ts` 里与契约文本的双向比对守着（缺一即红）。
- */
-export const CATEGORIES = ['beauty', 'daily', 'kitchen', 'food'];
-
-/** 分类 key → 展示名。@see @limitation 一 */
-export const CATEGORY_LABELS = {
-  beauty: '美妆护肤',
-  daily: '生活百货',
-  kitchen: '厨房餐具',
-  food: '食品',
-};
-
 /** 每页条数（契约 `/products` 的 size 默认值；上限 50，见契约 `maximum`）。 */
 export const PAGE_SIZE = 20;
 
@@ -72,29 +45,48 @@ function imageOf(image) {
 }
 
 /**
- * 分类 tab（`全部` + 各分类）。
- * @param {unknown} [categories] `GET /home` 下发的分类清单；空 / 非数组 → **回落到本地 `CATEGORIES`**。
- *        @why 兜底而不是"等 `/home` 回来再渲染"：等的话首屏会先只显示一个「全部」、
- *        再补出四个分类——分类栏**往上顶一下**是用户能看见的抖动，而分类是四个常量，
- *        没有任何理由让它们等一次网络往返。
- *        @why 但 `/home` 回来后**以它为准**：否则 `categories` 就是没人消费的死数据，
- *        将来服务端加了第五个分类，前端会一直看不见（且不报错）。
+ * 分类 tab（`全部` + 各分类，AJ-491）。
+ * @param {unknown} [tabs] `GET /home` 的 `category_tabs`（`[{key, name}]`）；旧版服务端给的键数组也认（名称回落到键）。
+ *        空 / 非数组 / 还没回来 → 只有「全部」。
+ *        @why 不再用本地写死的分类兜底：分类在后台可增删、空分类服务端不下发，本地兜底会先显示一个空分类再让它消失；
+ *        分类栏是横向滚动的，/home 回来后在同一行里补出分类，高度不变、页面不往上顶。
  * @param {unknown} [active] 当前选中的分类 key；空 / 非字符串 = 未选（= 全部）。
- *        ⚠️ 类型是 `unknown` 而不是 `string`：它来自 wxml 的 `data-key`，取不到时是 `undefined`，
- *        类型上收紧成 string 会让"必须判空"这件事消失，而那正是要守的行为。
+ *        ⚠️ 类型是 `unknown`：它来自 wxml 的 `data-key`，取不到时是 `undefined`，必须判空。
  * @returns {Array<{key: string, label: string, active: boolean}>}
  */
-export function categoryTabs(categories, active) {
+export function categoryTabs(tabs, active) {
   const cur = text(active);
-  const fromServer = Array.isArray(categories)
-    ? categories.filter((k) => typeof k === 'string' && k !== '')
+  const list = Array.isArray(tabs)
+    ? tabs.flatMap((t) => {
+        if (typeof t === 'string') return t !== '' ? [{ key: t, label: t }] : [];
+        const key = text(t?.key);
+        if (key === '') return [];
+        const name = text(t?.name);
+        return [{ key, label: name === '' ? key : name }];
+      })
     : [];
-  // 服务端没给（首屏 / /home 失败）→ 本地常量兜底（@see 上一条 @why）
-  const keys = fromServer.length > 0 ? fromServer : CATEGORIES;
   return [
     { key: '', label: '全部', active: cur === '' },
-    ...keys.map((key) => ({ key, label: CATEGORY_LABELS[key] ?? key, active: key === cur })),
+    ...list.map((t) => ({ ...t, active: t.key === cur })),
   ];
+}
+
+/**
+ * 分类栏要滚到哪一项（`scroll-view` 的 `scroll-into-view`，配合 wxml 里每个 tab 的 `id="tab-{{index}}"`）。
+ * @why 三端模拟测试 2026-10-11：分类有 9 个时，点了最右边的一个，分类栏不动，选中项在屏幕外看不见。
+ *      定位到选中项的**前一个**：选中项不贴最左边，左边留一个让用户知道还能往回滑。「全部」/ 没选 → 最左。
+ * @param {Array<{active: boolean}>} tabs `categoryTabs` 的输出
+ * @returns {string}
+ */
+export function tabIntoView(tabs) {
+  const i = Array.isArray(tabs) ? tabs.findIndex((t) => t?.active === true) : -1;
+  return `tab-${String(Math.max(0, i - 1))}`;
+}
+
+/** 分类栏的 setData 片段：`{tabs, tabView}` 一起给（页面壳三处都要，免得漏了滚动位置）。 */
+export function tabsState(serverTabs, active) {
+  const tabs = categoryTabs(serverTabs, active);
+  return { tabs, tabView: tabIntoView(tabs) };
 }
 
 /**

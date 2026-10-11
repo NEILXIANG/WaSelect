@@ -77,6 +77,14 @@ describe('auditRows：中文操作名与操作人邮箱（三端联动 UI 模拟
   });
 });
 
+describe('ACTION_LABELS：分类操作（AJ-491）', () => {
+  it('新建 / 编辑 / 删除分类显示中文，不显示接口路径', () => {
+    expect(ACTION_LABELS['POST /admin/categories']).toBe('新建分类');
+    expect(ACTION_LABELS['PUT /admin/categories/:key']).toBe('编辑分类');
+    expect(ACTION_LABELS['DELETE /admin/categories/:key']).toBe('删除分类');
+  });
+});
+
 describe('reconciliationView', () => {
   // AJ-410：「对账」改白话「自动核对」
   it('没跑过 → 明确说"还没有自动核对记录"', () => {

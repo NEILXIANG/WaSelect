@@ -199,8 +199,19 @@ describe('首页薄壳：响应先后（R-04 / AJ-226）', () => {
 });
 
 /** 进屏时发起了 `/home`（轮播 + 分类）与商品流**两个**请求。 */
+/** 分类中文名（AJ-491：新版 /home 下发 category_tabs，键 + 名称）。 */
+const NAMES: Record<string, string> = {
+  beauty: '美妆护肤',
+  daily: '生活百货',
+  kitchen: '厨房餐具',
+  food: '食品',
+};
 const home = (banners: unknown[], categories: string[]): void => {
-  homeCalls[0]!.d.resolve({ banners, categories });
+  homeCalls[0]!.d.resolve({
+    banners,
+    categories,
+    category_tabs: categories.map((key) => ({ key, name: NAMES[key] ?? key })),
+  });
 };
 
 describe('首页薄壳：`GET /home`（轮播与分类，D-51）', () => {
@@ -227,14 +238,8 @@ describe('首页薄壳：`GET /home`（轮播与分类，D-51）', () => {
     expect(ids()).toHaveLength(20);
     expect(page.data['error']).toBe('');
     expect(page.data['slides']).toEqual([]);
-    // 分类 tab 用本地常量兜底（首屏不等网络，分类栏不抖）
-    expect((page.data['tabs'] as Array<{ key: string }>).map((t) => t.key)).toEqual([
-      '',
-      'beauty',
-      'daily',
-      'kitchen',
-      'food',
-    ]);
+    // AJ-491：不再用本地写死的分类兜底——/home 失败只剩「全部」（商品流照常，搜索照常）
+    expect((page.data['tabs'] as Array<{ key: string }>).map((t) => t.key)).toEqual(['']);
   });
 
   it('`/home` 成功 → 轮播落地，且分类 tab **改用服务端下发的清单**', async () => {

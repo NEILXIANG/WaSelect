@@ -30,6 +30,8 @@
  * @see ./view.ts（模型与校验真源）；./api.ts（提交与上传）；./ProductFormParts.tsx（字段组件）；
  *      ./ProductFormSections.tsx（分组卡片与双栏布局）
  */
+import { useCategories } from '../categories/useCategories.js';
+import { categoryName, categoryOptions } from '../categories/view.js';
 import { useState } from 'react';
 import { ApiError, NETWORK_ERROR_CODE } from '../api/errors.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
@@ -88,6 +90,8 @@ export function ProductFormPage({
   source,
   onDone,
 }: ProductFormPageProps) {
+  // AJ-491：分类来自后台分类列表（下拉选项与冲突对照里的名称）
+  const { list: categories } = useCategories(api);
   const [form, setForm] = useState<ProductForm>(() =>
     source === null ? productFormModel(null) : productFormModel(source),
   );
@@ -353,7 +357,7 @@ export function ProductFormPage({
               </tr>
             </thead>
             <tbody>
-              {productConflictRows(form, latest).map((r) => (
+              {productConflictRows(form, latest, (k) => categoryName(categories, k)).map((r) => (
                 <tr key={r.label} className={r.differs ? 'error' : undefined}>
                   <td>
                     {r.differs ? '≠ ' : ''}
@@ -396,6 +400,7 @@ export function ProductFormPage({
           }
         />
         <ProductSideColumn
+          categoryOptions={categoryOptions(categories, form.category)}
           form={form}
           set={set}
           errors={errors}

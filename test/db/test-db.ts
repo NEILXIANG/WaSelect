@@ -275,13 +275,28 @@ export function ensureTestDb(): Promise<void> {
  *              2026-09-25 做缺陷注入时就真实踩到过一次（临时把配置表放回清空名单 → 跑完 seed 没了）。
  *              **注入类操作结束后要检查的不只是代码，还有数据库状态。**
  */
+/**
+ * 清表时保留的表（迁移账本、看门狗心跳、配置 / 字典表）。**唯一一份**：scripts/seed-lib.ts 的清表也引用它。
+ * @why AJ-491 加 product_categories 时只改了这里、漏了 seed-lib 的那份抄本——灌数用例把分类表清空，
+ *      共用测试库的后续用例插商品全撞外键（66 条红）。两份合成一份，下次加字典表只改这里。
+ */
+export const PRESERVED_TABLES = [
+  'pgmigrations',
+  'job_runs',
+  'country_profiles',
+  'duty_rates',
+  'payment_channels',
+  'app_config',
+  'product_categories',
+] as const;
+
 async function truncateTargets(db: Db): Promise<readonly string[]> {
   if (cachedTables !== undefined) return cachedTables;
   const rows = await db`
     select tablename
     from pg_tables
     where schemaname = 'public'
-      and tablename not in ('pgmigrations', 'job_runs', 'country_profiles', 'duty_rates', 'payment_channels', 'app_config')
+      and tablename not in ${db([...PRESERVED_TABLES])}
     order by tablename`;
   const tables = rows.map((r) => String(r.tablename));
   if (tables.length === 0) {

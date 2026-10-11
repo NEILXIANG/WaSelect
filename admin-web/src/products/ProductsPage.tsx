@@ -16,6 +16,8 @@
  *
  * @see ./view.ts（行视图与校验的真源）；./api.ts（接口层）
  */
+import { useCategories } from '../categories/useCategories.js';
+import { categoryName } from '../categories/view.js';
 import { LIST_SORT_KEYS, LOW_STOCK_THRESHOLD, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { DEFAULT_PAGE_SIZE, PageSizeSelect, readListParams, SortTh } from '../ui/list-controls.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -58,6 +60,8 @@ const STATUS_VALUES: readonly StatusFilter[] = ['all', 'active', 'offline', 'dra
 
 export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: ProductsPageProps) {
   const [rows, setRows] = useState<ProductRow[]>([]);
+  // AJ-491：分类列显示名称（来自后台分类列表；认不出原样显示键）
+  const { list: categories } = useCategories(api);
   /** 服务端原始条目（编辑页要用，@see ProductsPageProps.onEdit）。 */
   const [raw, setRaw] = useState<AdminProductLike[]>([]);
   const [total, setTotal] = useState(0);
@@ -285,7 +289,7 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
                 )}
               </td>
               <td>{row.title}</td>
-              <td className="muted cell-nowrap">{row.categoryLabel}</td>
+              <td className="muted cell-nowrap">{categoryName(categories, row.category)}</td>
               <td className="cell-nowrap">{row.priceText}</td>
               <StockCell
                 api={api}

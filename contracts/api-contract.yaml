@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.73
+  version: 0.6.74
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.74（AJ-491，用户 2026-10-11 要求）：商品分类改为后台可配置（迁移 039 `product_categories`）。① 新增 `GET/POST /admin/categories`、`PUT/DELETE /admin/categories/{key}`，新错误码 40404（分类不存在）/ 40919（分类下还有商品，不能删）。② `GET /home` 加 `category_tabs`（键 + 中文名）；`categories` / `category_tabs` 只含启用且有在售商品的分类。③ `GET /products?category`、`ProductInput.category` 去掉四值 enum，改为键的 pattern；`ProductInput.category` 不存在 → 40001 category_unknown。
     0.6.73（三端模拟测试，AJ-488）：`POST /admin/products`、`PUT /admin/products/{id}` 校验失败（40001）的响应 `data` 带 `{field, reason, count}`（售价超限另带 `limit`）——此前只有"参数缺失或格式错误"，运营不知道是哪一项。
     0.6.72（三端模拟测试，AJ-487）：`GET /products?keyword=` 也匹配日文原名（`title_ja`）——买家常按日文品牌名搜（資生堂 / ロイズ）。响应形状不变。
     0.6.71（三端模拟测试，AJ-485 / AJ-486）：① `GET /admin/orders?attention=` 加 `dispute_open`（拒付待处理：`payments.dispute_status = open`）。② `GET /admin/orders` 加 `user_id` 查询参数（按买家筛）。
@@ -645,6 +646,7 @@ x-error-codes:
     40400: 请求的资源不存在（含他人资源：订单 / 地址按归属判定，与不存在同码防探测；未知路径也归此码）
     40402: 该 Banner 不存在或已被删除
     40403: 该用户不存在
+    40404: 该分类不存在或已被删除（0.6.74：PUT / DELETE /admin/categories/{key}）
     40401: 商品不存在或已下架
     40901: 库存不足
     40902: 订单状态不允许此操作
@@ -663,6 +665,7 @@ x-error-codes:
     40916: 店铺暂停接单，请稍后再来（0.6.36：全局停售开关打开时，报价 / 建单 / 发起支付返回本码；回调、退款、发货不受影响）
     40917: 收货地址已达上限（20 个），请先删除不用的地址（0.6.36：POST /addresses）
     40918: 运费表最高档装不下这件商品（含包材重量）（0.6.43：改在售商品、上架（0.6.46 起含草稿上架；新建是草稿、不再判）、整表替换运费表；换表时 data.product_id 指出是哪件）
+    40919: 这个分类下还有商品，不能删除（0.6.74：DELETE /admin/categories/{key}）
     41301: 提交的内容太大（0.6.69：请求体超过大小上限；此前折成 40001）
     40915: 这张订单不属于你要拉黑的这个用户（0.6.21：POST /admin/users/{id}/block 带了 order_id 但归属核对不过；整条请求未写）
     42901: 请求过于频繁
@@ -758,12 +761,12 @@ paths:
         @why 生效判定**只在服务端做一次**（`active` + 时间窗，两端闭区间，starts_at/ends_at 为 null = 该侧不限制）：
         前端拿本机时钟再判一次，时钟偏的用户会看到"该下架的还在 / 该上线的没来"，
         而这种表现是**随机的**——排查不会往时钟方向走（与 FxRate.is_current 同一条口径）。
-        @why `categories` 是**分类清单**（shared PRODUCT_CATEGORY 全量），不是"库里有货的分类"：
-        后者会让分类栏随商品上下架跳动（用户第二次进来发现少了一个 tab）；
-        且 `GET /products?category` 的校验用同一份枚举——两份不一致就会出现"tab 上有、点了 40001"。
+        @why 0.6.74（AJ-491）：分类改为后台可配置（`/admin/categories`）。`categories` / `category_tabs` 只含**启用且至少有一件在售商品**的分类，按排序；
+        `category_tabs` 带中文名（小程序按它渲染分类栏），`categories` 是同序的键数组（保留给旧版小程序）。
+        按"在售"判、不按库存：售罄商品仍在售，分类不随库存跳动。`GET /products?category` 只校验键的形状，不存在 / 停用 → 空列表。
         @why 失败**不降级**成 `{banners: []}`：空数组与"取不到"在页面上长得一样，
         吞成空数组等于把一次 DB 故障伪装成"今天没配 banner"，运营会去查配置且永远查不到。
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {banners: {type: array, items: {$ref: '#/components/schemas/Banner'}}, categories: {type: array, items: {type: string}}}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {banners: {type: array, items: {$ref: '#/components/schemas/Banner'}}, categories: {type: array, items: {type: string}}, category_tabs: {type: array, description: '0.6.74（AJ-491）：可见分类（键 + 中文名），按排序', items: {type: object, required: [key, name], properties: {key: {type: string}, name: {type: string}}}}}}}}}}
   /beacon:
     post:
       security: []
@@ -784,7 +787,7 @@ paths:
       parameters:
         - {name: page, in: query, schema: {type: integer, default: 1}}
         - {name: size, in: query, schema: {type: integer, default: 20, maximum: 50}}
-        - {name: category, in: query, schema: {type: string, enum: [beauty, daily, kitchen, food]}}
+        - {name: category, in: query, schema: {type: string, pattern: '^[a-z][a-z0-9_]{1,31}$', description: '0.6.74（AJ-491）：分类键（后台可配置，不再是固定四值）；形状不对 → 40001；不存在 / 停用 → 空列表'}}
         - {name: keyword, in: query, schema: {type: string, maxLength: 64, description: '商品名（中文）或日文原名的子串，字面匹配、不区分大小写；不匹配 JAN 码（0.6.72 / AJ-487 起含日文原名）'}}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/ProductCard'}}, total: {type: integer}}}}}}}
   /products/{id}:
@@ -1028,6 +1031,25 @@ paths:
       parameters: [{name: expected, in: query, required: false, schema: {type: string, pattern: '^[0-9a-f]{8}$'}, description: '0.6.67（AJ-458）：读表时算的指纹（shared shippingRatesFingerprint）；服务端在表锁内比对，不符 → 409 / 40914 且整表不动；不带不校验'}]
       requestBody: {required: true, content: {application/json: {schema: {type: array, minItems: 1, items: {$ref: '#/components/schemas/ShippingRate'}}}}}
       responses: {'200': {description: 'OK（无响应体：前端保存后重新 GET）'}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}, '500': {$ref: '#/components/responses/Err'}}
+  /admin/categories:
+    get:
+      summary: 商品分类列表（管理端，0.6.74 / AJ-491）——含停用分类，带在售 / 全部商品数，按排序
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/AdminCategory'}}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+    post:
+      summary: 新建商品分类（0.6.74 / AJ-491）
+      description: |
+        键建好后不能改（商品、Banner、埋点都存键）。校验失败 / 键或名称重复 → 40001，`data {field, reason, count}`（reason：key_invalid / name_required / name_too_long / html_not_allowed / sort_invalid / duplicate）。
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CategoryInput'}}}}
+      responses: {'201': {description: 已创建, content: {application/json: {schema: {type: object, properties: {key: {type: string}, name: {type: string}, sort: {type: integer}, active: {type: boolean}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+  /admin/categories/{key}:
+    parameters: [{name: key, in: path, required: true, schema: {type: string}}]
+    put:
+      summary: 改分类名称 / 排序 / 启停（0.6.74 / AJ-491）；不存在 → 40404；给了 key → 40001 key_immutable；一项都没给 → 40001 empty_patch
+      requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {name: {type: string, maxLength: 10}, sort: {type: integer, minimum: 0, maximum: 9999}, active: {type: boolean, description: 停用 = 买家端不显示，商品不受影响}}}}}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, properties: {key: {type: string}, name: {type: string}, sort: {type: integer}, active: {type: boolean}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}}
+    delete:
+      summary: 删除分类（0.6.74 / AJ-491）——只允许没有任何商品（含草稿 / 下架）的分类；还有商品 → 40919；不存在 → 40404
+      responses: {'204': {description: 已删除}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
   /admin/banners:
     get:
       summary: Banner 列表（D-51；**全量**：含停用与未开始的，不过滤时间窗）
@@ -1179,7 +1201,7 @@ components:
                tags: {type: array, items: {type: string}, description: '0.6.23：编辑展示标签（自由文案，给买家看）。⚠️ 与 compliance_tags（能不能寄，封闭枚举）分工不同，不可混填'}}}
     Product: {description: '商品详情。实现不返回 ProductCard.image（缩略图只在列表卡片用，详情用 images）；AdminProduct 另不返回 display / image（0.6.10 ⑦）', allOf: [{$ref: '#/components/schemas/ProductCard'}, {type: object, properties: {description: {type: string, nullable: true, description: '0.6.65：未填为 null'}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, weight_g: {type: integer}, compliance_tags: {type: array, items: {type: string}}, hs_code: {type: string, nullable: true, description: '0.6.65：未填为 null'}, customs_desc_en: {type: string, nullable: true, description: '0.6.65：未填为 null'}, origin_country: {type: string}, ship_within_business_days: {type: integer, minimum: 1, maximum: 30, description: '0.6.11（AJ-180）：发货时限承诺（付款后 N 个工作日内发出，FTC / D-39⑦）；店铺级配置 SHIP_WITHIN_BUSINESS_DAYS'}}}]}
     AdminProduct: {description: '0.6.11：不返回 ship_within_business_days（店铺级配置，只随买家商品详情下发）', allOf: [{$ref: '#/components/schemas/Product'}, {type: object, properties: {status: {type: string, enum: [active, offline, draft], description: '0.6.46：增 draft（草稿；新建恒为草稿，买家侧不可见）'}, cost_jpy: {type: integer}, title_ja: {type: string}, jan_code: {type: string}, purchase_source: {type: string}, updated_at: {type: string, format: date-time, description: '商品**信息**最后被改的时刻（0.6.18：不含库存变动——下单扣减与取消/关单回补都不刷新它）。同时是 `PUT /admin/products/{id}` 的乐观锁凭据（`expected_updated_at`）与管理端列表的排序键'}}}]}
-    ProductInput: {type: object, required: [title, category, price_jpy, weight_g, customs_desc_en, origin_country, hs_code], properties: {title: {type: string}, category: {type: string, enum: [beauty, daily, kitchen, food]}, description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, price_jpy: {type: integer, minimum: 1}, cost_jpy: {type: integer}, weight_g: {type: integer, minimum: 1}, stock: {type: integer, minimum: 0, description: '可选（0.6.9/AJ-175）：POST 省略 = 0；PUT 省略 = 不改库存（防编辑页打开期间的买家扣减被旧值覆盖）。填了就必须是 ≥0 整数，否则 40001'}, compliance_tags: {type: array, items: {type: string, enum: [liquid, battery, cosmetic, food, flammable, aerosol, electrical, quasi_drug, sunscreen, children_product, alcohol]}, description: 'flammable / aerosol / electrical / quasi_drug / sunscreen / children_product / alcohol 七个标签上架即拒（40001）：前两者为日本邮便航空禁寄品（D-42），electrical 为 MVP 不上电器（D-45），quasi_drug（医薬部外品/薬用）与 sunscreen（SPF）在美国 FDA 口径属 OTC 药品、children_product 需 CPSIA 检测、alcohol 需酒类免许且不可邮寄（D-51）；customs_desc_en 含 medicated/whitening/SPF/sunscreen/drug 亦拒'}, hs_code: {type: string, maxLength: 16, description: '0.6.37：上限 16（迁移 031，带点的美国 10 位 HTS `3304.99.5000` 可存）。报关 HS 码；0.6.31 起**所有商品必填**（缺省 / 空白 → 40001 hs_code_required）。此前仅食品/化妆品必填、其余"由 Zonos 识别"，但 Zonos 从未接入（D-39/D-42，AJ-368）'}, customs_desc_en: {type: string, description: '英文报关品名，上架必填（D-39）'}, origin_country: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', enum: [JP], description: '原产地 ISO 3166-1 alpha-2，必填无默认，按商品包装实录；MVP 仅接受 JP——非 JP 一律 400 拒绝上架（D-42/D-43）'}, title_ja: {type: string, description: '日文品名（采购用）'}, jan_code: {type: string, description: 'JAN 码'}, purchase_source: {type: string, description: '采购渠道'},
+    ProductInput: {type: object, required: [title, category, price_jpy, weight_g, customs_desc_en, origin_country, hs_code], properties: {title: {type: string}, category: {type: string, pattern: '^[a-z][a-z0-9_]{1,31}$', description: '0.6.74（AJ-491）：分类键，须在 /admin/categories 里存在（否则 40001，data.reason = category_unknown）'}, description: {type: string}, images: {type: array, items: {$ref: '#/components/schemas/ImageSet'}}, price_jpy: {type: integer, minimum: 1}, cost_jpy: {type: integer}, weight_g: {type: integer, minimum: 1}, stock: {type: integer, minimum: 0, description: '可选（0.6.9/AJ-175）：POST 省略 = 0；PUT 省略 = 不改库存（防编辑页打开期间的买家扣减被旧值覆盖）。填了就必须是 ≥0 整数，否则 40001'}, compliance_tags: {type: array, items: {type: string, enum: [liquid, battery, cosmetic, food, flammable, aerosol, electrical, quasi_drug, sunscreen, children_product, alcohol]}, description: 'flammable / aerosol / electrical / quasi_drug / sunscreen / children_product / alcohol 七个标签上架即拒（40001）：前两者为日本邮便航空禁寄品（D-42），electrical 为 MVP 不上电器（D-45），quasi_drug（医薬部外品/薬用）与 sunscreen（SPF）在美国 FDA 口径属 OTC 药品、children_product 需 CPSIA 检测、alcohol 需酒类免许且不可邮寄（D-51）；customs_desc_en 含 medicated/whitening/SPF/sunscreen/drug 亦拒'}, hs_code: {type: string, maxLength: 16, description: '0.6.37：上限 16（迁移 031，带点的美国 10 位 HTS `3304.99.5000` 可存）。报关 HS 码；0.6.31 起**所有商品必填**（缺省 / 空白 → 40001 hs_code_required）。此前仅食品/化妆品必填、其余"由 Zonos 识别"，但 Zonos 从未接入（D-39/D-42，AJ-368）'}, customs_desc_en: {type: string, description: '英文报关品名，上架必填（D-39）'}, origin_country: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', enum: [JP], description: '原产地 ISO 3166-1 alpha-2，必填无默认，按商品包装实录；MVP 仅接受 JP——非 JP 一律 400 拒绝上架（D-42/D-43）'}, title_ja: {type: string, description: '日文品名（采购用）'}, jan_code: {type: string, description: 'JAN 码'}, purchase_source: {type: string, description: '采购渠道'},
                  why: {type: string, maxLength: 200, description: '0.6.23：编辑口径的"为什么值得买"。可选（必填会逼运营编一句假文案）；超 200 字报 40001 why_too_long，**不静默截断**'},
                  maker: {type: string, maxLength: 120, description: '0.6.23：产地 / 工房 / 匠人署名。可选；超 120 字报 40001 maker_too_long（与 DB VARCHAR(120) 同宽）'},
                  tags: {type: array, items: {type: string, minLength: 1}, description: '0.6.23：编辑展示标签。**PUT 是整行覆盖**：带了（含空数组）= 覆盖，省略在新建路径按 [] 处理；逐项不得为空串（空串会渲染出一个空色块）'}}}
@@ -1244,6 +1266,8 @@ components:
     AdminSalesWindow: {type: object, description: '0.6.41：一个窗口（左闭右开，JST 日界）的销售统计', required: [from, to, orders, paid_orders, sales_jpy, received, refunded, disputed], properties: {from: {type: string, format: date-time, description: '含'}, to: {type: string, format: date-time, description: '不含；恒为某个 JST 日的 00:00（今日窗口的 to = 明日 00:00）'}, orders: {type: integer, description: '窗口内创建的订单数（不含测试单）'}, paid_orders: {type: integer, description: '窗口内收款的订单数（paid_at 落窗）'}, sales_jpy: {type: integer, description: '窗口内收款订单的 total_jpy 合计（円）'}, avg_jpy: {type: integer, nullable: true, description: '客单价（円，四舍五入）；窗口内零收款订单时为 **null 而不是 0**'}, received: {type: array, description: '实收：payments 的实扣金额，按扣款币种分行', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, refunded: {type: array, description: '已退：整单退款实际出账（charge − 已成功部分退款，按 refunded_at）+ 部分退款 succeeded 行（按落定时刻），按币种分行（0.6.43 订正）', items: {$ref: '#/components/schemas/MoneyByCurrency'}}, disputed: {type: array, description: '拒付：机构报的 dispute_amount，按开案时间落窗', items: {$ref: '#/components/schemas/MoneyByCurrency'}}}}
     AdminFunnel: {type: object, description: '0.6.62（AJ-438）：`GET /admin/dashboard/funnel` 的响应', required: [generated_at, days, from, to, steps], properties: {generated_at: {type: string, format: date-time}, days: {type: integer, enum: [1, 7, 30]}, from: {type: string, format: date-time}, to: {type: string, format: date-time}, steps: {type: array, description: '固定六项、固定顺序：visit / view_item / intent / checkout / pay_start / paid；后一步人数不大于前一步', items: {type: object, required: [key, visitors], properties: {key: {type: string, enum: [visit, view_item, intent, checkout, pay_start, paid]}, visitors: {type: integer, minimum: 0}}}}}}
     AdminSalesOverview: {type: object, description: '0.6.41：`GET /admin/dashboard/sales` 的响应', required: [generated_at, today, last7], properties: {generated_at: {type: string, format: date-time, description: '服务端取钟时刻；两个窗口共用它，故 today ⊆ last7'}, today: {$ref: '#/components/schemas/AdminSalesWindow'}, last7: {$ref: '#/components/schemas/AdminSalesWindow', description: '含当日在内的 7 个自然日'}, fx: {type: object, description: '当日生效的 USD 展示汇率（含缓冲），供前端把円折成 ≈USD 灰字辅显（§8-2）。**没有已生效汇率时整键省略**', required: [usd_rate, usd_effective_from], properties: {usd_rate: {type: number, description: '1 JPY = ? USD；与 `fx_rates.rate` 同值（raw_rate × (1 + buffer)）'}, usd_effective_from: {type: string, format: date-time}}}}}
+    CategoryInput: {type: object, required: [key, name], properties: {key: {type: string, pattern: '^[a-z][a-z0-9_]{1,31}$', description: 小写字母开头，只含小写字母 / 数字 / 下划线；建好后不能改}, name: {type: string, minLength: 1, maxLength: 10, description: 买家看到的分类名，去首尾空格后 1–10 字，不收网页代码}, sort: {type: integer, minimum: 0, maximum: 9999, default: 100, description: 越小越靠前}}}
+    AdminCategory: {type: object, description: '0.6.74（AJ-491）', required: [key, name, sort, active, active_product_count, product_count], properties: {key: {type: string}, name: {type: string}, sort: {type: integer}, active: {type: boolean}, active_product_count: {type: integer, description: 在售商品数（0 时买家端不显示该分类）}, product_count: {type: integer, description: 全部商品数（含草稿 / 下架；> 0 时不能删）}}}
     Banner: {allOf: [{$ref: '#/components/schemas/BannerInput'}, {type: object, properties: {id: {type: string}, image: {type: string, description: 'img.<domain> 完整 URL'}, updated_at: {type: string, format: date-time, description: '0.6.30：仅 GET /admin/banners 回显，作为 PUT 的 expected_updated_at'}}}]}
     Dispute: {type: object, properties: {order_id: {type: string}, order_no: {type: string}, payment_id: {type: string}, dispute_id: {type: string}, dispute_status: {type: string, enum: [open, won, lost, withdrawn], description: 'withdrawn（0.6.13 / B1 AJ-193）= 机构撤回、未进入正式拒付（查询函 warning_closed / Radar prevented）：解除 has_dispute 限制、不计输赢。lost 是唯一保持限制的结案结果'}, dispute_amount: {type: integer, description: '**最小货币单位**（同 charge_amount）：3350 = $33.50（B43 / AJ-214）'}, charge_currency: {type: string}, opened_at: {type: string, format: date-time}, closed_at: {type: string, format: date-time}}}
     FxRate: {type: object, properties: {quote: {type: string}, rate: {type: number}, raw_rate: {type: number}, buffer: {type: number}, effective_from: {type: string, format: date-time}, is_current: {type: boolean, description: '0.6.19：这一行是否**当前已生效**，由服务端按自己的时钟判定（`effective_from <= now` 的同币种最新一行）。同币种至多一行为 true；全部行都未生效时为 false。🈲 消费方不得拿本机时钟自行推断——管理员电脑的时钟偏差会让"刚保存的立即生效行"被当成未来行'}}}

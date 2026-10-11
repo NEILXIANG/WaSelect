@@ -16,7 +16,6 @@
  *
  * @see ../../../contracts/api-contract.yaml（BannerInput / Banner）；../format.ts
  */
-import { CATEGORY_LABELS } from '../products/view.js';
 import { formatJst, toIsoJst } from '../format.js';
 
 /** 契约 `BannerInput.link_type` 枚举（单测与契约双向比对）。 */
@@ -96,6 +95,8 @@ export interface BannerRow {
 export function bannerRows(
   items: unknown,
   titleOf: (productId: string) => string | undefined = () => undefined,
+  // AJ-491：分类可配置，名称来自后台分类列表（../categories/），认不出原样显示键
+  categoryNameOf: (key: string) => string = (k) => k,
 ): BannerRow[] {
   if (!Array.isArray(items)) return [];
   return items
@@ -115,7 +116,7 @@ export function bannerRows(
                 type === 'product'
                   ? (titleOf(id) ?? id)
                   : type === 'category'
-                    ? ((CATEGORY_LABELS as Record<string, string>)[id] ?? id)
+                    ? categoryNameOf(id)
                     : id
               }`,
         sortText: Number.isInteger(b['sort']) ? String(b['sort']) : '0',

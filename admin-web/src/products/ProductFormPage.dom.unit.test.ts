@@ -18,11 +18,12 @@
  * @see ./ProductFormPage.tsx；./api.ts（updateProduct 的 expectedUpdatedAt）；./view.ts（sourceUpdatedAt）
  */
 import { createElement } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
 import { UnsavedProvider, useDirtyRegistry, useUnsaved } from '../ui/unsaved.js';
 import { button, click, flush, mount, type as typeInto, type Mounted } from '../testing/dom.js';
-import { CATEGORY_LABELS, PRODUCT_CATEGORY } from './view.js';
+import { primeCategoryCache } from '../categories/useCategories.js';
+import { TEST_CATEGORIES } from '../testing/categories.js';
 import { ProductFormPage } from './ProductFormPage.js';
 
 /** 一条带 `updated_at` 的商品（编辑页的 source；`updated_at` 是乐观锁凭据的来源）。 */
@@ -93,6 +94,11 @@ function field(el: HTMLElement, label: string): HTMLInputElement {
 }
 
 /** 页面级错误提示的文本（审查 2026-10-09：改走右下角 Toast；只取提示正文，不含报障码行与关闭按钮）。 */
+/** 选分类（AJ-491：新建时分类留空、必须手选）。 */
+async function pickCategory(el: HTMLElement, key: string): Promise<void> {
+  await typeInto(el.querySelector('select'), key);
+}
+
 const pageError = (el: HTMLElement): string =>
   el.querySelector('.toast[data-kind="error"] .toast-text')?.textContent ?? '';
 
@@ -142,6 +148,10 @@ async function openWithDirty(source: Record<string, unknown> | null): Promise<HT
 
 const dirtyOf = (el: HTMLElement): string =>
   el.querySelector('[data-testid="dirty"]')?.textContent ?? '';
+
+beforeEach(() => {
+  primeCategoryCache(TEST_CATEGORIES);
+});
 
 afterEach(async () => {
   await mounted?.unmount();
@@ -300,14 +310,27 @@ describe('商品编辑：保存撞上 40914（ADM3-02）', () => {
     expect(doneCount).toBe(0);
   });
 
-  it('🔴 分类下拉由 PRODUCT_CATEGORY 生成（ADM3-08：新增分类时它必须跟着变）', async () => {
+  // AJ-491：分类改为后台可配置——下拉来自 /admin/categories：只列启用的，名称来自后台（ADM3-08：新增分类时它跟着变）
+  it('🔴 分类下拉来自后台分类列表：启用的按排序，停用的不出现；新建时第一项是「请选择分类」', async () => {
     const el = await openWith(SOURCE);
     const opts = [...el.querySelectorAll('select option')];
-    expect(opts.map((o) => (o as HTMLOptionElement).value)).toEqual([...PRODUCT_CATEGORY]);
-    // 文案也来自 CATEGORY_LABELS（约束五：不写死在组件里）
-    expect(opts.map((o) => (o.textContent ?? '').trim())).toEqual(
-      PRODUCT_CATEGORY.map((c) => CATEGORY_LABELS[c]),
-    );
+    expect(opts.map((o) => (o as HTMLOptionElement).value)).toEqual([
+      'beauty',
+      'daily',
+      'kitchen',
+      'food',
+    ]);
+    expect(opts.map((o) => (o.textContent ?? '').trim())).toEqual([
+      '美妆护肤',
+      '生活百货',
+      '厨房餐具',
+      '食品',
+    ]);
+    await mounted?.unmount();
+    mounted = undefined;
+    const fresh = await openWith(null);
+    const first = fresh.querySelector('select option') as HTMLOptionElement;
+    expect([first.value, first.textContent]).toEqual(['', '请选择分类']);
   });
 
   it('新建态不要求凭据：POST 体里**没有** expected_updated_at', async () => {
@@ -317,6 +340,7 @@ describe('商品编辑：保存撞上 40914（ADM3-02）', () => {
     await typeInto(field(el, '重量（克）'), '540');
     await typeInto(field(el, '英文报关品名'), 'kitchen knife');
     await typeInto(field(el, 'HS 编码'), '8211.91');
+    await pickCategory(el, 'kitchen'); // AJ-491：新建必须手选分类
     // 新建库存默认留空、必填（三端联动 UI 模拟 2026-10-08）：不填先被拦
     expect(field(el, '库存').value).toBe('');
     // AJ-403：新建的保存按钮叫「保存为草稿」（新建恒为草稿；另有「保存并上架」）
@@ -473,6 +497,8 @@ describe('商品表单：草稿与保存并上架（AJ-403）', () => {
     await typeInto(field(el, '库存'), '30');
     await typeInto(field(el, '英文报关品名'), 'cast iron teapot');
     await typeInto(field(el, 'HS 编码'), '7323.91');
+    // AJ-491：新建时分类留空、必须手选（不再默认第一类）
+    await pickCategory(el, 'kitchen');
   }
 
   it('🔴 新建：「保存为草稿」只发 POST，回列表并说"草稿"', async () => {

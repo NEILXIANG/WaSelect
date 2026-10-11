@@ -7,8 +7,8 @@
  *
  * @why 首页刻意**没有 Banner 段**（用户 2026-09-26 拍板"接受无 Banner 版"）：
  *      后端 `GET /home` 尚未实现（契约 0.6.0 里它没有 `x-implemented`），前端接一个不存在的端点
- *      等于"看起来能用、实际是坏的"——那比明确没有更贵。分类项直接来自契约 `/products`
- *      的 category 枚举（vm 里的 `CATEGORIES`，与契约文本有双向比对守着），不依赖 `/home`。
+ *      等于"看起来能用、实际是坏的"——那比明确没有更贵。（Banner 已于 D-51 落地。）
+ *      分类自 AJ-491 起来自 `/home` 的 `category_tabs`（后台可配置、空分类不下发），/home 回来前只有「全部」。
  *
  * @why 商品卡的跳转**只拿意图、不写判断**（`intentForProduct`）：vm 返回 `{go:'detail', id}`，
  *      这里只负责"拼路径 + 调宿主"。@why 路径常量 `DETAIL_PAGE` 落在本文件而不是 vm：
@@ -32,6 +32,7 @@ import {
   bannerAt,
   bannerSlides,
   categoryTabs,
+  tabsState,
   intentForBanner,
   intentForProduct,
   listQuery,
@@ -56,6 +57,8 @@ Page({
   data: {
     /** 分类 tab（vm `categoryTabs` 的输出，含 active 标记）。 */
     tabs: [],
+    /** 分类栏滚到哪一项（vm `tabIntoView`，scroll-view 的 scroll-into-view）。 */
+    tabView: 'tab-0',
     /** 首页轮播（vm `bannerSlides` 的输出）；空数组 = 整个轮播段不渲染。 */
     slides: [],
     /** 商品卡（vm `productCards` 的输出）。 */
@@ -97,6 +100,8 @@ Page({
    *      "tab 上有这个分类、banner 点下去却不跳"。
    */
   homeCategories: [],
+  /** `/home` 下发的分类键（Banner 跳分类时判断目标在不在，AJ-491）。 */
+  homeCategoryKeys: [],
   /**
    * `GET /home` 的 **`banners` 原始数组**（不参与渲染）。
    * @why 轮播渲染只需要 `{id, image}`（vm `bannerSlides` 的输出），但点击时要按
@@ -128,8 +133,8 @@ Page({
   activeKeyword: '',
 
   onLoad() {
-    // tab 先渲染（本地常量兜底，不需要等网络）——首屏至少有东西可点，而不是一整页白
-    this.setData({ tabs: categoryTabs(this.homeCategories, '') });
+    // tab 先渲染「全部」（AJ-491：不再用本地写死的分类兜底；/home 回来后在同一行里补出分类，高度不变）
+    this.setData(tabsState(this.homeCategories, ''));
     // 轮播与商品流**并发**拉取、互不等待（@see loadHome @why）
     void this.loadHome();
     this.reload('');
@@ -184,14 +189,23 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/home`,
         traceId: newTraceId(),
       });
-      const categories = Array.isArray(res?.categories) ? res.categories : [];
-      this.homeCategories = categories;
+      // AJ-491：分类来自后台——优先 category_tabs（键 + 中文名）；旧版服务端只给 categories 键数组时退回它
+      const tabs = Array.isArray(res?.category_tabs)
+        ? res.category_tabs
+        : Array.isArray(res?.categories)
+          ? res.categories
+          : [];
+      this.homeCategories = tabs;
+      const keys = categoryTabs(tabs, '')
+        .map((t) => t.key)
+        .filter((k) => k !== '');
+      this.homeCategoryKeys = keys;
       this.banners = Array.isArray(res?.banners) ? res.banners : [];
       this.setData({
-        slides: bannerSlides(res?.banners, categories),
+        slides: bannerSlides(res?.banners, keys),
         // ⚠️ 用**当前**分类重算 tab：`/home` 可能在用户已经切过分类之后才回来，
         //    这里传空会让高亮跳回「全部」（表现为"我刚点了美妆，它自己跳回去了"）。
-        tabs: categoryTabs(categories, this.category),
+        ...tabsState(tabs, this.category),
       });
     } catch (e) {
       // 静默（@why 见上）。`void e` 而不是空块：空 catch 会被 lint 判为"吞错"，
@@ -211,7 +225,7 @@ Page({
     //    跳过时才相等。只要有一张 banner 没图，后面每张整体前移一位 ⇒ 点第 2 张跳到
     //    第 3 张的链接（图是对的，只有链接错，没有任何一方报错）。
     const banner = bannerAt(this.banners, index);
-    const intent = intentForBanner(banner, this.homeCategories);
+    const intent = intentForBanner(banner, this.homeCategoryKeys);
     // 不可跳（link_type=none / 目标缺失 / 分类不在清单里）→ 点了不动，不跳空页
     if (intent === null) return;
     if (intent.go === 'detail') {
@@ -320,7 +334,7 @@ Page({
       searching: keyword.trim(),
       emptyTitle: copy.title,
       emptyReason: copy.reason,
-      tabs: categoryTabs(this.homeCategories, category),
+      ...tabsState(this.homeCategories, category),
     });
     try {
       const res = await this.fetch(listQuery({ page: 1, category, keyword }), traceId);

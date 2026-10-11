@@ -32,6 +32,7 @@ import { resolveApiBase } from './api/config.js';
 import { adminLogout, login } from './api/endpoints.js';
 import { createTokenStore } from './api/token-store.js';
 import { BannersPage } from './banners/BannersPage.js';
+import { CategoriesPage } from './categories/CategoriesPage.js';
 import { DashboardPage } from './dashboard/DashboardPage.js';
 import { OrdersPage } from './orders/OrdersPage.js';
 import { RiskPage } from './risk/RiskPage.js';
@@ -70,6 +71,8 @@ const NAV: ReadonlyArray<{ key: PageKey; label: string }> = [
   { key: 'orders', label: '订单管理' },
   { key: 'customers', label: '客户' },
   { key: 'products', label: '商品管理' },
+  // AJ-491：分类改为后台可配置（用户 2026-10-11），紧跟商品管理
+  { key: 'categories', label: '商品分类' },
   { key: 'ops', label: '运营配置' },
   { key: 'banners', label: '首页 Banner' },
   { key: 'risk', label: '风控' },
@@ -253,6 +256,8 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
       {view === 'settings' && <SettingsPage api={api} />}
 
       {view === 'ops' && <OpsPage api={api} />}
+
+      {view === 'categories' && <CategoriesPage api={api} />}
 
       {view === 'risk' && <RiskPage api={api} />}
 

@@ -1476,3 +1476,24 @@ textarea::placeholder {
   margin-top: var(--ws-space-xs);
   font-size: var(--md-type-body-m);
 }
+
+/* 商品分类页（AJ-491）：新建表单三个字段 + 按钮一行，窄屏折行；字段底部对齐（提示文字在框下） */
+.category-create {
+  align-items: flex-start;
+}
+.category-create > .field {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.category-create > .btn {
+  margin-top: calc(var(--ws-space) * 1.25);
+}
+/* 行内编辑的排序框：只放几位数字 */
+.input-narrow {
+  width: calc(var(--ws-space) * 5);
+}
+/* 操作列的几个文字按钮之间留空 */
+.action-cell {
+  display: flex;
+  gap: var(--ws-space-sm);
+}

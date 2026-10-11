@@ -31,6 +31,7 @@ export const PAGES = [
   'orders',
   'customers',
   'products',
+  'categories',
   'ops',
   'banners',
   'risk',

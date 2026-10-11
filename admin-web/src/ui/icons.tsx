@@ -61,6 +61,15 @@ const NAV_PATHS: Record<PageKey, ReactNode> = {
       <path d="M3.5 7.5 12 11.5l8.5-4M12 11.5v9" />
     </>
   ),
+  // 商品分类：四宫格（AJ-491）
+  categories: (
+    <>
+      <rect x="4" y="4" width="7" height="7" rx="1.5" />
+      <rect x="13" y="4" width="7" height="7" rx="1.5" />
+      <rect x="4" y="13" width="7" height="7" rx="1.5" />
+      <rect x="13" y="13" width="7" height="7" rx="1.5" />
+    </>
+  ),
   // 运营配置：滑杆
   ops: (
     <>

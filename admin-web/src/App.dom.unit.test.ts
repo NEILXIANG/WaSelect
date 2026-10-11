@@ -16,9 +16,16 @@
 import { createElement } from 'react';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { primeCategoryCache } from './categories/useCategories.js';
+import { TEST_CATEGORIES } from './testing/categories.js';
 import { TOKEN_STORAGE_KEY } from './api/token-store.js';
 import { button, click, mount, type, type Mounted } from './testing/dom.js';
 import { App } from './App.js';
+
+// AJ-491：页面会取后台分类列表——预置缓存，让本文件的假接口与调用计数不必为它改
+beforeEach(() => {
+  primeCategoryCache(TEST_CATEGORIES);
+});
 
 let mounted: Mounted | undefined;
 /** 所有页面发出的请求（假 fetch 记录）。 */
@@ -72,7 +79,7 @@ afterEach(async () => {
 });
 
 describe('App：侧栏', () => {
-  it('九个一级页都在侧栏里，工作台在最前（新增页面忘挂 = 没人能点进去）', async () => {
+  it('十个一级页都在侧栏里，工作台在最前（新增页面忘挂 = 没人能点进去；AJ-491 加「商品分类」）', async () => {
     const el = await open('#/orders');
     const labels = [...el.querySelectorAll('.sidebar .nav-item')].map((b) =>
       (b.textContent ?? '').trim(),
@@ -82,6 +89,7 @@ describe('App：侧栏', () => {
       '订单管理',
       '客户',
       '商品管理',
+      '商品分类',
       '运营配置',
       '首页 Banner',
       '风控',

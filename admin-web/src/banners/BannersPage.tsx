@@ -20,12 +20,12 @@
  *
  * @see ./view.ts（校验）；./api.ts；../api/upload.ts（图片上传）
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCategories } from '../categories/useCategories.js';
+import { categoryName, categoryOptions } from '../categories/view.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError } from '../api/errors.js';
 import { UPLOAD_ACCEPT, uploadImage } from '../api/upload.js';
-import { PRODUCT_CATEGORY } from '@waselect/shared';
 import { findProductById, listProducts, type AdminProductLike } from '../products/api.js';
-import { CATEGORY_LABELS } from '../products/view.js';
 import {
   createBanner,
   deleteBanner,
@@ -59,8 +59,20 @@ export interface BannersPageProps {
 }
 
 export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersPageProps) {
-  const [rows, setRows] = useState<ReturnType<typeof bannerRows>>([]);
   const [raw, setRaw] = useState<BannerLike[]>([]);
+  /** 商品 id → 商品名（列表与按 id 补查合在一起）。 */
+  const [titles, setTitles] = useState<ReadonlyMap<string, string>>(new Map());
+  // AJ-491：分类名称与「目标分类」下拉来自后台分类列表；分类晚到时列表文案跟着更新（所以 rows 在渲染时算）
+  const { list: categories } = useCategories(api);
+  const rows = useMemo(
+    () =>
+      bannerRows(
+        raw,
+        (id) => titles.get(id),
+        (k) => categoryName(categories, k),
+      ),
+    [raw, titles, categories],
+  );
   const [editing, setEditing] = useState<BannerLike | null>(null);
   const [form, setForm] = useState(emptyBannerForm());
   /** 「未改动基线」：新建 / 打开编辑 / 保存成功后跟着 `form` 一起重置（第一批⑥）。 */
@@ -144,7 +156,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
           titles.set(id, String(r.value.title ?? ''));
       });
       setRaw(items);
-      setRows(bannerRows(items, (id) => titles.get(id)));
+      setTitles(titles);
     } catch (e) {
       // ⚠️ 失败不清列表（同其它页）：只报错
       const { text, traceId } = toastError(e, 'Banner 列表加载失败');
@@ -467,9 +479,9 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
                 onChange={(e) => setForm((s) => ({ ...s, linkId: e.target.value }))}
               >
                 <option value="">请选择分类</option>
-                {PRODUCT_CATEGORY.map((c) => (
-                  <option key={c} value={c}>
-                    {CATEGORY_LABELS[c]}
+                {categoryOptions(categories, form.linkId).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
                   </option>
                 ))}
               </select>

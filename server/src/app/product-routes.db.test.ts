@@ -259,9 +259,14 @@ describe('GET /products（公开，不鉴权）', () => {
     try {
       expect((await get(srv.url, '/api/v1/products?page=0')).json['code' as never]).toBe(40001);
       expect((await get(srv.url, '/api/v1/products?size=51')).json['code' as never]).toBe(40001);
-      expect((await get(srv.url, '/api/v1/products?category=weapon')).json['code' as never]).toBe(
+      // AJ-491：分类可配置后只校验键的形状；形状对、但不存在 / 已停用的分类 → 空列表（不报错：可能是旧链接）
+      expect((await get(srv.url, '/api/v1/products?category=Weapon!')).json['code' as never]).toBe(
         40001,
       );
+      const unknown = (await get(srv.url, '/api/v1/products?category=weapon')).json as {
+        items: unknown[];
+      };
+      expect(unknown.items).toEqual([]);
       const ok = (await get(srv.url, '/api/v1/products?category=beauty')).json as {
         items: unknown[];
       };

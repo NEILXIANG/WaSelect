@@ -7,8 +7,7 @@
  *         一键灌数据的全部风险是"对着远程库（尤其 Render 生产）跑了 truncate"——
  *         那一步不可逆。把 host 钉死在本机，"误连生产"在第一步就被拦下。
  *      ② **库名拒 prod**：粗粒度但有效的最后一道（哪怕有人把生产 URL 指到本机代理）。
- *      ③ **清表保留配置表**：truncate 排除 `country_profiles` / `duty_rates` / `payment_channels` /
- *         `app_config` / `job_runs` / `pgmigrations`——配置表是"环境的一部分"，
+ *      ③ **清表保留配置表**：truncate 排除 test/db/test-db.ts 的 `PRESERVED_TABLES`（配置 / 字典表、迁移账本、心跳）——配置表是"环境的一部分"，
  *         清了 dev 库就与生产不同构（与 test-db.ts 同类口径）。
  *
  * @why 幂等靠"先清业务表再灌"而不是 `ON CONFLICT DO NOTHING`：
@@ -30,6 +29,7 @@ import { createIds } from '../test/factories/entities.js';
 import { demoShop, fullCatalog, type SeedBundle } from '../test/factories/scenarios.js';
 import { insertBundle } from '../test/factories/seed-bundle.js';
 import type { Db } from '../server/src/adapters/db.js';
+import { PRESERVED_TABLES } from '../test/db/test-db.js';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
@@ -64,13 +64,13 @@ export function assertSafeTarget(url: string): void {
   }
 }
 
-/** 闸门③：清空业务表，保留配置表（country_profiles / duty_rates / payment_channels / app_config）与迁移账本、看门狗心跳。 */
+/** 闸门③：清空业务表，保留配置 / 字典表与迁移账本、看门狗心跳（名单唯一一份：test/db/test-db.ts PRESERVED_TABLES）。 */
 export async function clearBusinessTables(db: Db): Promise<number> {
   // 与 test-db.ts 的 truncateTargets 同源（见 @limitation 二）：排除配置表与迁移账本
   const rows = await db`
     select tablename from pg_tables
     where schemaname = 'public'
-      and tablename not in ('pgmigrations', 'job_runs', 'country_profiles', 'duty_rates', 'payment_channels', 'app_config')
+      and tablename not in ${db([...PRESERVED_TABLES])}
     order by tablename`;
   const tables = rows.map((r) => String(r.tablename));
   for (const t of tables) {

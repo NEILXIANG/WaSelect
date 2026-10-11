@@ -70,6 +70,7 @@ import { mountAdminClientErrorRoutes } from './admin-client-error-routes.js';
 import { mountSalesPauseRoutes, salesOpenGuard } from './sales-pause.js';
 import { mountAdminOpsRoutes } from './admin-ops-routes.js';
 import { mountAdminBannerRoutes } from './admin-banner-routes.js';
+import { mountAdminCategoryRoutes } from './admin-category-routes.js';
 import { mountAdminRiskRoutes } from './admin-risk-routes.js';
 import { mountAdminCustomerRoutes } from './admin-customer-routes.js';
 import { mountAdminSettingsRoutes } from './admin-settings-routes.js';
@@ -473,6 +474,13 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     logger,
     config,
     idGen: systemIdGen,
+    auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
+    identity,
+  });
+  // ── 管理端商品分类（AJ-491）：分类改为后台可配置；审计走前缀中间件（目标 = 键）──
+  mountAdminCategoryRoutes(app, {
+    db,
+    logger,
     auth: { secret: config.JWT_SECRET, issuer: 'waselect' },
     identity,
   });

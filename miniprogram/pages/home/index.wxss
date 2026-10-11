@@ -104,6 +104,15 @@
   font-size: var(--ws-f-sm);
 }
 
+/* 三端模拟测试 2026-10-11：分类多到要横滑时，滚到底最后一个 tab 右边被裁。
+   @measured 开发者工具模拟器：最后一个 tab 加 margin-right 16px（getStyles 读到已生效）后仍被裁——
+   横向滚动容器的末端 padding / 末元素 margin 都不计入可滚动宽度。改为末尾放一个有宽度的占位块（.tabs__end） */
+.tabs__end {
+  display: inline-block;
+  width: var(--ws-space-gutter);
+  height: var(--ws-border-width);
+}
+
 .tab--active {
   background: var(--ws-accent);
   border-color: var(--ws-accent);

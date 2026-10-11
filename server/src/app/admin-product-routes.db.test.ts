@@ -280,6 +280,26 @@ describe('POST /admin/products（建商品）', () => {
     await s.close();
   });
 
+  // AJ-491：分类改为后台可配置——形状对但分类表里没有的键，由路由查库拒（库的外键是兜底）
+  it('🔴 分类不在分类表里 → 40001，data 指明 category / category_unknown', async () => {
+    const s = await buildServer();
+    const r = await fetch(`${s.url}/api/v1/admin/products`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${await adminToken()}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body({ category: 'books' })),
+    });
+    expect(r.status).toBe(400);
+    expect(((await r.json()) as { data?: unknown }).data).toEqual({
+      field: 'category',
+      reason: 'category_unknown',
+      count: 1,
+    });
+    await s.close();
+  });
+
   it('报关品名含禁词（SPF）→ 40001', async () => {
     const s = await buildServer();
     const r = await fetch(`${s.url}/api/v1/admin/products`, {

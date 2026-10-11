@@ -197,8 +197,11 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
   });
 
   // ── 枚举与产地 ──────────────────────────────────────────────────────────
-  it('category 不在四值枚举 → 拒绝', () => {
-    expect(reasons({ ...base(), category: 'beauty2' })).toContain('category_invalid');
+  // AJ-491：分类改为后台可配置——这里只判键的形状（与 product_categories CHECK 同口径），存在与否由路由查库
+  it('category 形状不对 → category_invalid；形状对就放行（存在与否由路由查分类表）', () => {
+    expect(reasons({ ...base(), category: 'Beauty!' })).toContain('category_invalid');
+    expect(reasons({ ...base(), category: 'b' })).toContain('category_invalid');
+    expect(ok({ ...base(), category: 'baby_care' }).category).toBe('baby_care');
     for (const c of ['beauty', 'daily', 'kitchen', 'food']) {
       expect(ok({ ...base(), category: c }).category).toBe(c);
     }

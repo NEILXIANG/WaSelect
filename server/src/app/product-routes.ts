@@ -10,9 +10,8 @@
  *      还不存在）。字符串条目 → 三尺寸同源的 ImageSet 占位；已是 {thumb,card,detail}
  *      形状的条目原样透传——两种存量都不得炸。
  *
- * ~~@limitation 一：category 合法值照抄契约枚举~~ **已解决（I2-U-A1）**：已提炼进
- *              shared 的 `PRODUCT_CATEGORY`（与契约 `GET /products?category` 由单测双向比对），
- *              本文件不再手抄——管理端上架是第二个消费方，两份手抄必然漂移。
+ * @limitation 一：category 只校验键的形状（`CATEGORY_KEY`，与 product_categories 的 CHECK 同口径，AJ-491）；
+ *              分类在后台可配置，不存在 / 停用的键查出来就是空列表（旧链接不报错）。
  * @limitation 二：GET /terms 的 urls / documents 是法务静态页的**绝对地址**（剩余清单 4-1，基址未配则省略）；正文待律师定稿；
  *              updated_at 没有真实来源（TERMS_VERSION 来自环境变量，无时间维度），省略不编。
  * @limitation 三：GET /fx 的 rates 缺币时**省略该币**（降级同 display）；
@@ -37,12 +36,10 @@ import type { Clock } from '../ports/clock.js';
 import type { AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
 import { createCatalogRepo } from '../adapters/catalog.js';
-import { PRODUCT_CATEGORY, SEARCH_KEYWORD_MAX_LENGTH, toMinor, toRateInt } from '@waselect/shared';
+import { SEARCH_KEYWORD_MAX_LENGTH, toMinor, toRateInt } from '@waselect/shared';
+import { CATEGORY_KEY } from '../domain/product-input.js';
 import type { DisplayCurrency } from '../domain/quote.js';
 import { imageObjectKey, isImageId } from '../domain/upload-image.js';
-
-// category 合法值：来自 shared（契约词汇表的唯一出处），本文件不再手抄一份。
-const PRODUCT_CATEGORIES = PRODUCT_CATEGORY;
 
 /**
  * images JSONB 条目 → 契约 ImageSet（@why 见文件头）。U5c 起订单详情也复用（app→app helper 同 parseItems 先例）。
@@ -225,10 +222,8 @@ export function mountProductRoutes(app: Express, deps: ProductRoutesDeps): void 
         const { page, size } = parsePageSize(req.query);
         const q = req.query as { category?: unknown; keyword?: unknown };
         if (q.category !== undefined) {
-          if (
-            typeof q.category !== 'string' ||
-            !(PRODUCT_CATEGORIES as readonly string[]).includes(q.category)
-          ) {
+          // AJ-491：分类可配置后只判键的形状；形状对、但不存在 / 已停用的分类 → 查出来就是空列表（可能是旧链接，不报错）
+          if (typeof q.category !== 'string' || !CATEGORY_KEY.test(q.category)) {
             throw new AppError(40001, { reason: 'category_invalid' });
           }
         }

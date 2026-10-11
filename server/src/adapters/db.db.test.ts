@@ -277,13 +277,15 @@ describe('迁移本身', () => {
     // + 1（030 的 order_refunds，AJ-383：部分退款 / 完成后售后退款）
     // + 1（034 的 order_notes，AJ-396：订单内部备注，append-only）
     // + 1（037 的 mail_deliveries，AJ-419：订单通知邮件发信记录，daily 补发据此找漏发）
-    // + 1（038 的 after_sale_requests，AJ-420：买家售后申请）= 27。
+    // + 1（038 的 after_sale_requests，AJ-420：买家售后申请）
+    // + 1（039 的 product_categories，AJ-491：商品分类改为后台可配置）= 28。
     // ✅ 文档侧已同步（2026-09-28，一致性审计 AJ-176）：010 落地后文档一度仍写 17（上一轮"已同步"只到 17），
     //    本轮 jp 技术文档 §3/§3.1、工程框架文档、PRD §5、jp README、本库 README / 测试策略 / 架构设计 / 日志规范 /
     //    地基清单统一改为"以本断言为准"（写数字的地方写 20 并注明真源），避免下一次加表再漂移。
     //    ADR-28 写"13 → 17（新增四张）"那份推演的基准是它成文时的 13 张，现以本断言为准。
-    expect(tables).toHaveLength(27);
+    expect(tables).toHaveLength(28);
     expect(tables).toContain('after_sale_requests');
+    expect(tables).toContain('product_categories');
     expect(tables).toContain('mail_deliveries');
     expect(tables).toContain('order_notes');
     expect(tables).toContain('order_refunds');
@@ -738,15 +740,16 @@ describe('结构不变量：对新表自动生效', () => {
       expect(String((e as Error).message)).toContain('banners_link_type_domain');
     });
 
-    it('🔴 商品的 category 出枚举就被拒（否则 tab 上没有它，只能靠搜索找到）', async () => {
+    // AJ-491（039）：分类从写死的 CHECK 改为外键引用 product_categories——"不在分类表里的键"仍被库拒，只是错误码变成外键违约
+    it('🔴 商品的 category 不在分类表里就被拒（否则 tab 上没有它，只能靠搜索找到）', async () => {
       const e = await tryWrite(
         (tx) => tx`
           insert into products (id, title, category, price_jpy, weight_g, origin_country)
           values ('probe-product', 'probe', 'books', 100, 100, 'JP')
         `,
       );
-      expect(codeOf(e), 'category=books 应被 products_category_domain 拒').toBe('23514');
-      expect(String((e as Error).message)).toContain('products_category_domain');
+      expect(codeOf(e), 'category=books 应被 products_category_fk 拒').toBe('23503');
+      expect(String((e as Error).message)).toContain('products_category_fk');
     });
 
     it('🔴 运费档：price_jpy 为负被拒；为 0 放行（免运费档是合法配置）', async () => {

@@ -27,12 +27,11 @@
  *              那是通関業者的职责。
  *
  * @see contracts/api-contract.yaml（ProductInput）；packages/shared/src/enums.ts
- *      （PRODUCT_CATEGORY / COMPLIANCE_TAG / BLOCKED_COMPLIANCE_TAG）
+ *      （COMPLIANCE_TAG / BLOCKED_COMPLIANCE_TAG；分类自 AJ-491 起改为查 product_categories 表）
  */
 import {
   BLOCKED_COMPLIANCE_TAG,
   COMPLIANCE_TAG,
-  PRODUCT_CATEGORY,
   PRODUCT_MAX_CHARS,
   PRODUCT_MAX_WEIGHT_G,
   isOneOf,
@@ -247,7 +246,10 @@ function readImages(v: unknown): readonly ProductImageEntry[] | 'invalid' {
  *      安全靠的仍是渲染端转义，这里拦的是"给买家看的字不该有代码"。
  * @limitation 只认"< 后紧跟字母或 /"的写法：「<5cm」「a < b」「<<限定>>」照收；`&lt;b&gt;` 这种实体写法不拦（它显示出来就是 <b>，但极少有人这样贴）。
  */
-const HTML_TAG = /<\/?[A-Za-z][^<>]*>/;
+/** 分类键的形状（与迁移 039 product_categories_key_check 同口径）。 */
+export const CATEGORY_KEY = /^[a-z][a-z0-9_]{1,31}$/;
+
+export const HTML_TAG = /<\/?[A-Za-z][^<>]*>/;
 
 export function validateProductInput(raw: unknown, maxPriceJpy: number): ProductInputResult {
   if (raw === null || typeof raw !== 'object') {
@@ -271,7 +273,10 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
 
   const category = b.category;
   if (category === undefined) fail('category', 'category_required');
-  else if (!isOneOf(PRODUCT_CATEGORY, category)) fail('category', 'category_invalid');
+  // AJ-491：分类改为后台可配置（product_categories）——这里只判键的形状（与表的 CHECK 同口径），
+  //   存在与否由路由查库（categoryExists → category_unknown）；纯函数不碰库
+  else if (typeof category !== 'string' || !CATEGORY_KEY.test(category))
+    fail('category', 'category_invalid');
 
   // 缺（required）与"填了但不合法"分开报：这两类错误的修法不同（补填 vs 改正），
   // 合成一个 reason 会让运营看不出"我到底是没填还是填错了"

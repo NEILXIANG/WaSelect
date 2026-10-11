@@ -14,7 +14,7 @@
  * @see ./ProductFormPage.tsx；./ProductFormParts.tsx；../app.css（.product-grid / .form-card）
  */
 import type { ReactNode } from 'react';
-import { CATEGORY_LABELS, PRODUCT_CATEGORY, type ProductForm, titleLengthHint } from './view.js';
+import { type ProductForm, titleLengthHint } from './view.js';
 import {
   Field,
   FreeTagInput,
@@ -193,12 +193,20 @@ export function ProductMainColumn(p: MainColumnProps) {
 }
 
 export interface SideColumnProps extends SectionProps {
+  /** 分类下拉的选项（AJ-491：来自 /admin/categories，../categories/view.ts categoryOptions）。 */
+  categoryOptions: ReadonlyArray<{ value: string; label: string }>;
   /** 状态卡的内容（当前状态 + 提交按钮），由页面给：它依赖提交状态。 */
   statusCard: ReactNode;
 }
 
 /** 侧栏：状态 / 分类与标签 / 采购。 */
-export function ProductSideColumn({ form, set, errors, statusCard }: SideColumnProps) {
+export function ProductSideColumn({
+  form,
+  set,
+  errors,
+  statusCard,
+  categoryOptions,
+}: SideColumnProps) {
   return (
     <aside className="product-side">
       <FormCard title="状态">{statusCard}</FormCard>
@@ -214,11 +222,12 @@ export function ProductSideColumn({ form, set, errors, statusCard }: SideColumnP
             value={form.category}
             onChange={(e) => set('category', e.target.value)}
           >
-            {/* ⚠️ 选项由 `PRODUCT_CATEGORY` + `CATEGORY_LABELS` 生成，不写死（ADM3-08）：
-                写死时契约新增分类后受控 select 的 value 不在选项里，浏览器显示第一项、state 里却是新分类。 */}
-            {PRODUCT_CATEGORY.map((c) => (
-              <option key={c} value={c}>
-                {CATEGORY_LABELS[c]}
+            {/* ⚠️ 选项来自后台分类列表（AJ-491），不写死；当前值是停用 / 已删除的分类时也保留一项（ADM3-08：
+                否则受控 select 的 value 不在选项里，浏览器显示第一项、state 里却是旧值）。 */}
+            {form.category === '' && <option value="">请选择分类</option>}
+            {categoryOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
               </option>
             ))}
           </select>
