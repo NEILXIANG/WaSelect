@@ -466,4 +466,21 @@ describe('订单列表：待处理筛选（AJ-425）', () => {
     await flush();
     expect(gets().at(-1)?.path).not.toContain('attention=');
   });
+
+  describe('G4 / G5（AJ-471）：关键字搜索时说明含测试单；订单页自带待处理筛选入口', () => {
+    it('有关键字且未勾"显示测试订单" → 提示"搜索结果含测试单"；没关键字不提示', async () => {
+      const el = await open('#/orders?q=261010');
+      expect(el.textContent).toContain('含测试单');
+      await mounted?.unmount();
+      const el2 = await open('#/orders');
+      expect(el2.textContent).not.toContain('含测试单');
+    });
+    it('订单页有待处理筛选按钮（售后 / 迟到付款 / 拉黑 / 部分退款），点一个 → URL 带 attention', async () => {
+      const el = await open('#/orders');
+      const chip = button(el, '售后待处理');
+      expect(chip).not.toBeNull();
+      await click(chip);
+      expect(gets().at(-1)?.path).toContain('attention=after_sale');
+    });
+  });
 });

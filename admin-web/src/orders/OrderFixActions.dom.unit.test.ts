@@ -4,6 +4,7 @@
  */
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ApiError } from '../api/errors.js';
 import { button, click, mount, type, type Mounted } from '../testing/dom.js';
 import { OrderFixActions } from './OrderFixActions.js';
 
@@ -124,5 +125,29 @@ describe('OrderFixActions', () => {
     const b = button(el, '撤销发货') as HTMLButtonElement;
     expect(b.disabled).toBe(true);
     expect(el.textContent).toContain('72 小时');
+  });
+
+  describe('G3（AJ-476）：修正动作失败时把报障码交给上层', () => {
+    it('取消失败（ApiError 带 traceId）→ onError(文案, traceId)', async () => {
+      const errors: Array<[string, string | undefined]> = [];
+      mounted = await mount(
+        createElement(OrderFixActions, {
+          api: (async () => {
+            throw new ApiError(40902, '订单状态不允许此操作', 'tr-77');
+          }) as never,
+          orderId: 'o-1',
+          order: { status: 'pending_payment' },
+          onDone: () => undefined,
+          onError: (m: string, traceId?: string) => errors.push([m, traceId]),
+          onNotice: () => undefined,
+        }),
+      );
+      const el = mounted.el;
+      await click(button(el, '取消订单（未付款）'));
+      await type(el.querySelector('input'), '价格录错');
+      await click(button(el, '取消这张订单'));
+      await click(button(el, '确认'));
+      expect(errors).toEqual([['订单状态不允许此操作', 'tr-77']]);
+    });
   });
 });

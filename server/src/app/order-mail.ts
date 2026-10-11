@@ -129,6 +129,9 @@ function mailSubKey(payload: Record<string, unknown> | undefined): string | unde
   return typeof k === 'string' ? k : undefined;
 }
 
+/** 补发事件名（AJ-450）：`payload.tag` 指明原事件，模板与幂等键都按原事件算。 */
+export const MAIL_RESEND_EVENT = 'mail.resend';
+
 export function registerOrderMail(bus: EventBus, deps: OrderMailDeps): void {
   for (const name of MAIL_EVENTS) {
     bus.subscribe(name, (event) =>
@@ -137,4 +140,11 @@ export function registerOrderMail(bus: EventBus, deps: OrderMailDeps): void {
         : notify(deps, name, event.orderId, mailSubKey(event.payload)),
     );
   }
+  // 补发（mail-sweep.ts）：tag 不在 MAIL_EVENTS 里的一律忽略——补发作业只会发这几类，这里只防御
+  bus.subscribe(MAIL_RESEND_EVENT, (event) => {
+    const tag = event.payload?.['tag'];
+    if (event.orderId === undefined || typeof tag !== 'string') return undefined;
+    if (!(MAIL_EVENTS as readonly string[]).includes(tag)) return undefined;
+    return notify(deps, tag, event.orderId, mailSubKey(event.payload));
+  });
 }

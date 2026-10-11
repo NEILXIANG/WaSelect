@@ -36,7 +36,7 @@ import { requireRole, type AuthConfig } from './auth.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import { scopeKey, type IdempotencyExecutor } from '../ports/idempotency.js';
 import type { PaymentRegistry } from '../ports/payment.js';
-import { createOrder } from './create-order.js';
+import { createOrder, createOrderErrorFor } from './create-order.js';
 import { assertNoPaidSession, cancelOrder } from './cancel-order.js';
 import { withUnitOfWork } from './unit-of-work.js';
 import { parseItems } from './quote-routes.js';
@@ -195,7 +195,7 @@ export function mountOrderRoutes(app: Express, deps: OrderRoutesDeps): void {
           deps.events.publishAll(pendingEvents);
           res.status(result.status).json(result.body);
         } catch (e) {
-          next(e);
+          next(createOrderErrorFor(e)); // AJ-465：等商品行锁超时 → 50300 稍后重试
         }
       })();
     },

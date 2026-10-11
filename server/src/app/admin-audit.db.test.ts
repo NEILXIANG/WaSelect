@@ -161,7 +161,12 @@ describe('拉黑即时生效（F-06）', () => {
 
     const admin = await tokenFor('u-admin', 'admin');
     expect(
-      (await call(srv, 'POST', '/api/v1/admin/users/u-1/block', { token: admin })).status,
+      (
+        await call(srv, 'POST', '/api/v1/admin/users/u-1/block', {
+          token: admin,
+          body: { reason: '测试拉黑' },
+        })
+      ).status,
     ).toBe(200);
     const after = await call(srv, 'GET', '/api/v1/orders', { token: buyer });
     expect([401, 403]).toContain(after.status);

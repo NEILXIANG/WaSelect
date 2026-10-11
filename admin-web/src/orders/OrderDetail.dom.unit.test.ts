@@ -12,6 +12,7 @@
  * @see ./OrderDetail.tsx；./view.ts（`refundFailureNotice`）；../testing/dom.ts
  */
 import { OTHER_CARRIER } from './carrier.js';
+import { saveLastCarrier } from './last-carrier.js';
 import { pressEnter } from '../testing/keys.js';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -47,6 +48,8 @@ let events: Array<Record<string, unknown>>;
 /** 服务端此刻的行项目（采购信息用例会往里塞 title_ja / jan_code / purchase_source）。 */
 let items: Array<Record<string, unknown>>;
 
+/** 用例可往里塞物流 / 金额拆分 / 改址历史等字段（A-9 / A-4，AJ-467）。 */
+let extra: Record<string, unknown>;
 const order = () => ({
   order_id: 'o-1',
   order_no: 'W260930-ABC123',
@@ -55,6 +58,7 @@ const order = () => ({
   has_dispute: hasDispute,
   items,
   events,
+  ...extra,
 });
 
 async function open(): Promise<HTMLElement> {
@@ -95,8 +99,11 @@ function fieldText(el: HTMLElement, label: string): string {
 }
 
 beforeEach(() => {
+  // AJ-473：单单发货也会记住上次的承运商（localStorage），用例之间不能互相带默认值
+  globalThis.localStorage?.clear();
   events = [];
   items = [];
+  extra = {};
 });
 
 async function submitRefund(el: HTMLElement): Promise<void> {
@@ -737,5 +744,92 @@ describe('订单详情：新手可用性（AJ-410）', () => {
     expect(field?.querySelector('.error')).not.toBeNull();
     await type(recipient, 'Jane Doe');
     expect(field?.querySelector('.error')).toBeNull();
+  });
+
+  describe('A-9 / A-4（AJ-467）：详情页物流块、金额拆分、改址历史；找不到的单给空态', () => {
+    it('🔴 已发货的单：物流块显示承运商 / 运单号 / 发货时间与查件链接；金额拆成商品 / 运费 / 关税 / 实付', async () => {
+      status = 'shipped';
+      extra = {
+        carrier: 'Japan Post EMS',
+        tracking_no: 'EJ123456789JP',
+        tracking_url: 'https://trackings.post.japanpost.jp/x',
+        shipped_at: '2026-10-09T01:00:00Z',
+        items_jpy: 8000,
+        shipping_jpy: 1150,
+        duty_jpy: 600,
+        payment: { channel: 'stripe', charge_currency: 'USD', charge_amount: 6120 },
+      };
+      const el = await open();
+      expect(fieldText(el, '物流')).toContain('EJ123456789JP');
+      expect(fieldText(el, '物流')).toContain('Japan Post EMS');
+      expect(el.querySelector('a[href="https://trackings.post.japanpost.jp/x"]')).not.toBeNull();
+      expect(fieldText(el, '商品合计')).toBe('8,000 円');
+      expect(fieldText(el, '运费')).toBe('1,150 円');
+      expect(fieldText(el, '预估关税（含在商品价内）')).toBe('600 円');
+      expect(fieldText(el, '买家实付')).toContain('$61.20');
+    });
+
+    it('🔴 改过地址：显示改址历史（改前收件人与地址、谁、何时）；没改过不显示该块', async () => {
+      extra = {
+        address_history: [
+          {
+            id: 7,
+            snapshot: {
+              recipient: 'Jane Doe',
+              line1: '1 Infinite Loop',
+              city: 'Cupertino',
+              state: 'CA',
+              postal_code: '95014',
+              country: 'US',
+            },
+            actor: 'admin:u-1',
+            at: '2026-10-09T02:00:00Z',
+          },
+        ],
+      };
+      const el = await open();
+      expect(el.textContent).toContain('改址历史');
+      expect(el.textContent).toContain('Jane Doe');
+      expect(el.textContent).toContain('1 Infinite Loop');
+      await mounted?.unmount();
+      extra = { address_history: [] };
+      const el2 = await open();
+      expect(el2.textContent).not.toContain('改址历史');
+    });
+
+    it('🔴 G7：订单不存在（40400）→ 页面给"找不到这张订单"空态与返回入口，不是一片空白', async () => {
+      calls = [];
+      const api = async (req: Call): Promise<unknown> => {
+        calls.push(req);
+        if (req.path.endsWith('/notes')) return { items: [] };
+        throw new ApiError(40400, '请求的资源不存在', 'tr-404');
+      };
+      mounted = await mount(
+        createElement(OrderDetail, {
+          api: api as never,
+          id: 'o-ghost',
+          source: null,
+          onBack: () => undefined,
+          onChanged: () => undefined,
+        }),
+      );
+      await flush();
+      expect(mounted.el.textContent).toContain('找不到这张订单');
+    });
+  });
+
+  describe('S2（AJ-473）：单单发货记住上次用的承运商', () => {
+    it('上次批量 / 单单发货选过的承运商 → 这次打开发货抽屉默认就是它', async () => {
+      saveLastCarrier('Yamato');
+      status = 'paid';
+      const el = await open();
+      await click(button(el, '发货…'));
+      expect((el.querySelector('.drawer select') as HTMLSelectElement | null)?.value).toBe(
+        OTHER_CARRIER,
+      );
+      expect(
+        (el.querySelector('input[aria-label="承运商名称"]') as HTMLInputElement | null)?.value,
+      ).toBe('Yamato');
+    });
   });
 });

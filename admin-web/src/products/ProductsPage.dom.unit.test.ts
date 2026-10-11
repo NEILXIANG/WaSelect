@@ -324,4 +324,21 @@ describe('商品列表：行内确认不让整表跳（走查 2026-10-08）', ()
     const el = await open();
     expect(el.querySelector('table')?.className).toContain('table-actions-reserve');
   });
+
+  describe('S4（AJ-474）：按状态筛空时的空态文案', () => {
+    it('筛「草稿」且一条都没有 → 说"没有符合条件的商品"，不说"还没有商品"', async () => {
+      const seen: Array<{ path: string; method?: string }> = [];
+      const api = async (req: { path: string; method?: string }): Promise<unknown> => {
+        seen.push(req);
+        return { items: [], total: 0, page: 1, size: 20 };
+      };
+      mounted = await mount(
+        createElement(ProductsPage, { api: api as never, onEdit: () => undefined }),
+      );
+      const el = mounted.el;
+      await click(button(el, '草稿'));
+      expect(el.textContent).toContain('没有符合条件的商品');
+      expect(el.textContent).not.toContain('还没有商品');
+    });
+  });
 });

@@ -6,7 +6,7 @@
  * @why 这里拉黑**不带 order_id**：风控页带它，是为了核对"拒付那一单属于这个人"（ADM3-01）；
  *      客户页是从人出发的，没有"哪一单"可核——硬塞一张单号反而是在伪造凭据。
  * @why 成功后让父组件**重新取详情**（`onChanged`），不在本地把 blocked 翻成 true：以服务端为准（与订单详情 @limitation 一同口径）。
- * @limitation 解除原因必填、进审计（服务端 releaseReasonGuard）；这里只挡"空着"，长度上限复用 ADMIN_NOTE_MAX_LENGTH。
+ * @limitation 拉黑 / 解除原因都必填、进审计（服务端 releaseReasonGuard，AJ-449）；这里只挡"空着"，长度上限复用 ADMIN_NOTE_MAX_LENGTH。
  * @see ../risk/RiskPage.tsx；../risk/BlockedUsers.tsx（同一套确认弹层与 Toast）
  */
 import { useState } from 'react';
@@ -52,19 +52,28 @@ export function CustomerRiskActions({
     }
   };
 
-  const askBlock = (): void =>
+  const askBlock = (): void => {
+    const r = reason.trim();
+    if (r === '') {
+      sink.error('请填写拉黑原因（会记录下来）');
+      return;
+    }
     setDialog({
       title: '拉黑后客户无法再下单（这次操作会记录下来）',
-      body: `${CUSTOMER_BLOCK_CONFIRM_TEXT}\n\n客户 ${userId}`,
+      body: `${CUSTOMER_BLOCK_CONFIRM_TEXT}\n\n客户 ${userId}\n原因：${r}`,
       confirmText: '确认拉黑',
       danger: true,
       run: () =>
         run(
-          () => blockUser(api, { userId }),
+          async () => {
+            await blockUser(api, { userId, reason: r });
+            setReason('');
+          },
           `已拉黑 ${userId}：此后无法下单；其名下未付款订单已一并取消`,
           '拉黑失败',
         ),
     });
+  };
 
   const askUnblock = (): void => {
     const r = reason.trim();
@@ -111,14 +120,24 @@ export function CustomerRiskActions({
           </button>
         </>
       ) : (
-        <button
-          type="button"
-          className="btn btn-danger-outline btn-fit"
-          disabled={busy}
-          onClick={askBlock}
-        >
-          拉黑该客户
-        </button>
+        <>
+          <input
+            className="input"
+            name="customer-block-reason"
+            placeholder="拉黑原因（必填，会记录下来），例：同一张卡 30 天内 3 次拒付"
+            maxLength={ADMIN_NOTE_MAX_LENGTH}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn btn-danger-outline btn-fit"
+            disabled={busy}
+            onClick={askBlock}
+          >
+            拉黑该客户
+          </button>
+        </>
       )}
       {dialog !== null && (
         <ConfirmDialog

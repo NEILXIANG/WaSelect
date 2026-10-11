@@ -21,6 +21,7 @@ export * from './reserved-domains.js';
 export * from './tracking.js';
 export * from './order-list-filter.js';
 export * from './list-sort.js';
+export * from './shipping-fingerprint.js';
 export * from './after-sale.js';
 export * from './order-attention.js';
 export * from './refund-reason.js';

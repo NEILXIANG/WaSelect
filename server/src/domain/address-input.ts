@@ -83,7 +83,11 @@ export function parseAddressInput(body: unknown): AddressInputValue {
     recipient: b['recipient'] as string,
     phone: b['phone'] as string,
     line1: b['line1'] as string,
-    line2: b['line2'] === undefined || b['line2'] === null ? null : String(b['line2']),
+    // 空串 / 纯空白归 null（S-8 / AJ-461）：契约 0.6.65 写"没填为 null"，此前 '' 会原样入库回显
+    line2:
+      b['line2'] === undefined || b['line2'] === null || String(b['line2']).trim() === ''
+        ? null
+        : String(b['line2']),
     city: b['city'] as string,
     state: b['state'] as string,
     postal_code: b['postal_code'] as string,

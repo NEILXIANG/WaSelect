@@ -268,4 +268,23 @@ describe('POST /admin/orders/:id/after-sales/:rid/resolve（运营处理）', ()
     expect((await call(admin, 'GET', '/api/v1/admin/orders/o-r5')).json['after_sales']).toEqual([]);
     expect((await call(buyer, 'GET', '/api/v1/orders/o-r5')).json).not.toHaveProperty('after_sale');
   });
+
+  it('🔴 ADM-5（AJ-452）：处理售后写进订单时间线（after_sale_handled，actor=admin:<sub>，note 含结果与说明）', async () => {
+    await seedOrder('o-ev', 'delivered');
+    const rid = String(((await apply(buyer, 'o-ev')).json['after_sale'] as { id: string }).id);
+    await resolve('o-ev', rid, { status: 'processing' });
+    await resolve('o-ev', rid, { status: 'resolved', note: '已补发一件' });
+    const ev = await db`select status, actor, note from order_events
+                         where order_id = 'o-ev' and status = 'after_sale_handled' order by id`;
+    expect(ev).toHaveLength(2);
+    expect(ev[0]?.['actor']).toBe('admin:u-admin');
+    expect(String(ev[0]?.['note'])).toContain('处理中');
+    expect(String(ev[1]?.['note'])).toContain('已处理');
+    expect(String(ev[1]?.['note'])).toContain('已补发一件');
+    // 买家时间线只认订单状态值，这条伪状态不会外泄
+    const buyerDetail = await call(buyer, 'GET', '/api/v1/orders/o-ev');
+    expect(
+      (buyerDetail.json['timeline'] as Array<{ status: string }>).map((t) => t.status),
+    ).not.toContain('after_sale_handled');
+  });
 });

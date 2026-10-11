@@ -204,10 +204,12 @@ describe('POST /admin/orders/ship-batch：逐单结果（部分成功）', () =>
     });
     expect(r.status).toBe(200);
     const q = () =>
-      db`select action, after from admin_audit where action = 'POST /admin/orders/ship-batch'`;
+      db`select action, target, after from admin_audit where action = 'POST /admin/orders/ship-batch'`;
     await waitUntil(async () => (await q()).length > 0, '批量发货没有审计行');
     const rows = await q();
     expect(rows).toHaveLength(1);
+    // ADM-8（AJ-470）：对象列此前为空，运营日志里这一行认不出是什么
+    expect(rows[0]?.['target']).toBe('batch:1/2');
     const after = rows[0]?.['after'] as { results?: ItemResult[] };
     expect(after.results?.map((x) => [x.order_id, x.ok])).toEqual([
       ['o-a', true],

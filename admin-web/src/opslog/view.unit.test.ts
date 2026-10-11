@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { RECONCILE_CLASS_LABELS, auditRows, reconciliationView } from './view.js';
+import { ACTION_LABELS, RECONCILE_CLASS_LABELS, auditRows, reconciliationView } from './view.js';
 
 describe('auditRows', () => {
   it('时间转 JST、缺失字段给 "—"、状态码 ≥400 标为失败', () => {
@@ -153,5 +153,17 @@ describe('运营日志：对象可点（走查 2026-10-08）', () => {
       '',
       '',
     ]);
+  });
+
+  describe('ADM-8（AJ-470）：三类此前显示英文的操作有中文名；新端点也登记', () => {
+    it.each([
+      ['POST /admin/orders/:id/notes', '添加备注'],
+      ['POST /admin/orders/ship-batch', '批量发货'],
+      ['DELETE /admin/customers/:id/events', '删除客户行为记录'],
+      ['POST /admin/orders/:id/shipment/revert', '撤销发货'],
+      ['CLI admin.revoke', '命令行撤销管理员'],
+    ])('%s → %s', (action, label) => {
+      expect(ACTION_LABELS[action]).toBe(label);
+    });
   });
 });

@@ -367,4 +367,23 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
       await close();
     }
   });
+
+  it('🔴 ADM-3（AJ-451）：订单总表带买家实付币种与金额（paid_currency / paid_amount，按币种小数位展示）', async () => {
+    await seedOrder('o-usd', 'paid');
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+             values ('pay-usd', 'o-usd', 'stripe', 'succeeded', 'USD', 8600)`;
+    await seedOrder('o-nopay', 'paid');
+    const { url, close } = await buildServer();
+    try {
+      const r = await call(url, 'GET', '/api/v1/admin/exports/orders', undefined, await bearer());
+      const rows = lines((r.body as { csv: string }).csv);
+      expect(rows[0]).toContain('paid_currency,paid_amount');
+      const usd = rows.find((l) => l.startsWith('WSo-usd'));
+      expect(usd?.endsWith(',USD,86.00')).toBe(true); // 行末两列
+      const none = rows.find((l) => l.startsWith('WSo-nopay'));
+      expect(none?.endsWith(',,')).toBe(true); // 没有成功支付行：两列为空，不编 0
+    } finally {
+      await close();
+    }
+  });
 });

@@ -77,6 +77,7 @@ import { markAuditCommitted, setAuditAfter, setAuditBefore } from './admin-audit
 import { parseAddressInput } from '../domain/address-input.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
 import { listAfterSales } from '../adapters/after-sales.js';
+import { listAddressHistory } from '../adapters/orders-admin.js';
 import { adminAfterSaleView } from './after-sale-routes.js';
 import {
   findAdminOrder,
@@ -371,15 +372,17 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         const order = await findAdminOrder(deps.db, id);
         if (order === null) throw new AppError(40400, { order_id: id });
         // 三类附属数据各**一次**批量查询（本页只有一张单，但形态与列表将来共用）
-        const [items, payments, events, partials, customer, afterSales] = await Promise.all([
-          listOrderItemsFor(deps.db, [id]),
-          listPaymentsFor(deps.db, [id]),
-          listEventsFor(deps.db, [id]),
-          listPartialRefunds(deps.db, id),
-          // 客户卡片（AJ-404，§4.2 第 168 行）：口径与客户页同一份（customers-admin.ts 文件头表）
-          findCustomer(deps.db, order.user_id),
-          listAfterSales(deps.db, id),
-        ]);
+        const [items, payments, events, partials, customer, afterSales, addressHistory] =
+          await Promise.all([
+            listOrderItemsFor(deps.db, [id]),
+            listPaymentsFor(deps.db, [id]),
+            listEventsFor(deps.db, [id]),
+            listPartialRefunds(deps.db, id),
+            // 客户卡片（AJ-404，§4.2 第 168 行）：口径与客户页同一份（customers-admin.ts 文件头表）
+            findCustomer(deps.db, order.user_id),
+            listAfterSales(deps.db, id),
+            listAddressHistory(deps.db, id),
+          ]);
         res.json({
           ...toAdminOrder(
             order,
@@ -399,6 +402,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
               status: e.status,
               ...(e.note !== null ? { note: e.note } : {}),
               ...(e.actor !== null ? { actor: e.actor } : {}),
+              ...(e.actor_email !== null ? { actor_email: e.actor_email } : {}),
               at: e.at.toISOString(),
             })),
           ),
@@ -406,6 +410,13 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           partial_refunds: partials.map(partialRefundView),
           // 售后申请（AJ-420，契约 0.6.56）：按提交先后；没有时是空数组（形状固定）
           after_sales: afterSales.map(adminAfterSaleView),
+          // 改址历史（AJ-455，契约 0.6.67）：改前完整地址；没改过是空数组
+          address_history: addressHistory.map((h) => ({
+            id: h.id,
+            snapshot: h.snapshot,
+            ...(h.actor !== null ? { actor: h.actor } : {}),
+            at: h.at.toISOString(),
+          })),
           // 客户卡片（AJ-404，契约 0.6.47）：下单人若是管理员（findCustomer → null）则整键省略
           ...(customer === null
             ? {}
@@ -484,11 +495,20 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           //      余额不会变，重试的金额与首次一致（同键同参）。
           const partials = await sumPartialRefunds(tx, id);
           if (partials.inFlight) {
-            throw new AppError(40902, { order_id: id, reason: 'partial_refund_in_flight' });
+            // data.reason 公开（AJ-456）：管理端据此说"先去部分退款点同步"，而不是一句"状态不允许"
+            throw new AppError(
+              40902,
+              { order_id: id, reason: 'partial_refund_in_flight' },
+              { reason: 'partial_refund_in_flight' },
+            );
           }
           const refundAmountMinor = fullRefundAmount(pay.charge_amount, partials.succeededMinor);
           if (refundAmountMinor === 0) {
-            throw new AppError(40902, { order_id: id, reason: 'fully_refunded_by_partials' });
+            throw new AppError(
+              40902,
+              { order_id: id, reason: 'fully_refunded_by_partials' },
+              { reason: 'fully_refunded_by_partials' },
+            );
           }
           // ── B8（AJ-192）：通道**必须在事务内、落 refunding 之前**解析 ──
           // @why 通道查找是纯配置查找（`registry.getForRefund`），没有任何理由放在事务外，
@@ -698,23 +718,25 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           postal_code: input.postal_code,
           country: input.country,
         };
-        await withTransaction(deps.db, async (tx) => {
+        const archiveId = await withTransaction(deps.db, async (tx) => {
           const row = await lockAdminOrder(tx, id);
           if (row === null) throw new AppError(40400, { order_id: id });
           const gate = addressGuard(asOrderStatus(row.status));
           if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
-          if (
-            !(await updateAddressSnapshot(
-              tx,
-              id,
-              snapshot as never,
-              adminActor(req),
-              deps.clock.now(),
-            ))
-          ) {
+          const archived = await updateAddressSnapshot(
+            tx,
+            id,
+            snapshot as never,
+            adminActor(req),
+            deps.clock.now(),
+          );
+          if (archived === false)
             throw new AppError(40902, { order_id: id, reason: 'status_raced' });
-          }
+          return archived;
         });
+        // S-2（AJ-455）：审计 after 只记归档号。审计表 append-only、不可匿名化，新地址（含城市 / 州 / 收件人）
+        //   不该进去——改前地址在 019 专门迁出了这类表，改后地址再写回去等于白迁。要看地址：详情 address_history 与 orders 本身。
+        setAuditAfter(res, { archive_id: archiveId });
         deps.logger.info('admin_order_address_changed', { result: 'ok', order_id: id });
         res.json({ order_id: id, address: snapshot });
       } catch (e) {

@@ -13,7 +13,8 @@
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
-import { button, click, flush, mount, type Mounted } from '../testing/dom.js';
+import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
+import { UnsavedProvider } from '../ui/unsaved.js';
 import { RatesPanel } from './RatesPanel.js';
 
 let mounted: Mounted | undefined;
@@ -116,5 +117,33 @@ describe('运费分档面板：确认替换的在途保护（P2-47）', () => {
     release();
     await flush();
     expect(el.textContent).toContain('已整表替换');
+  });
+
+  describe('G2（AJ-477）：运费表接未保存守卫，并有"放弃修改"', () => {
+    it('改了一格 → 注册为脏；点"放弃修改"→ 重新加载、恢复干净', async () => {
+      const dirty: Record<string, boolean> = {};
+      const api = async (req: { path: string; method?: string }): Promise<unknown> =>
+        req.method === 'PUT' ? {} : list;
+      mounted = await mount(
+        createElement(
+          UnsavedProvider,
+          {
+            dirty: false,
+            markDirty: (k: string, v: boolean) => {
+              dirty[k] = v;
+            },
+          },
+          createElement(RatesPanel, { api: api as never }),
+        ),
+      );
+      const el = mounted.el;
+      const price = el.querySelectorAll('tbody input')[2] as HTMLInputElement | null;
+      expect(price).not.toBeNull();
+      await type(price, '9999');
+      expect(Object.values(dirty).some(Boolean)).toBe(true);
+      await click(button(el, '放弃修改'));
+      await flush();
+      expect(Object.values(dirty).some(Boolean)).toBe(false);
+    });
   });
 });

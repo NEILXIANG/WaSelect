@@ -60,6 +60,12 @@ export const ACTION_LABELS: Readonly<Record<string, string>> = {
   'CLI admin.password.reset': '命令行改密',
   'CLI admin.totp.enable': '开通手机验证',
   'CLI admin.totp.disable': '关闭手机验证',
+  // 严格检查 A-5 / ADM-8（AJ-470）：此前显示英文原文的三类 + 之后新增的端点
+  'POST /admin/orders/:id/notes': '添加备注',
+  'POST /admin/orders/ship-batch': '批量发货',
+  'DELETE /admin/customers/:id/events': '删除客户行为记录',
+  'POST /admin/orders/:id/shipment/revert': '撤销发货',
+  'CLI admin.revoke': '命令行撤销管理员',
 };
 
 export interface AuditRowView {

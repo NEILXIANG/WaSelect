@@ -69,4 +69,11 @@ describe('ExportBar（3-3）', () => {
     expect(mounted.el.textContent).toContain('服务器开小差了');
     expect(clicked).toEqual([]);
   });
+
+  it('ADM-2（AJ-468）：导出按钮旁写明"不受上方筛选影响"，并指向"导出所选"', async () => {
+    mounted = await mount(createElement(ExportBar, { api: (async () => ({})) as never }));
+    const el = mounted.el;
+    expect(el.textContent).toContain('不受上方筛选');
+    expect(el.textContent).toContain('导出所选');
+  });
 });

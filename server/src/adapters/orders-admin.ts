@@ -115,7 +115,7 @@ export interface AdminOrderListQuery {
    * 排序（评估 4.5，2026-10-09；shared `LIST_SORT_KEYS.orders`）：不传 = 下单时间倒序。
    * @limitation `total_jpy` 排序没有专用索引：订单百级到千级时是内存排序，量起来再看 EXPLAIN 是否要 (is_test, total_jpy) 索引。
    */
-  sort?: { key: 'created_at' | 'total_jpy'; dir: 'asc' | 'desc' } | undefined;
+  sort?: { key: 'created_at' | 'total_jpy' | 'paid_at'; dir: 'asc' | 'desc' } | undefined;
   /** true = 连 `is_test` 的审核期 mock 单一起返回（见文件头 @limitation 三）。 */
   includeTest?: boolean | undefined;
 }
@@ -206,6 +206,8 @@ export interface AdminOrderEventRow {
   status: string;
   note: string | null;
   actor: string | null;
+  /** actor 是 `admin:<id>` 时回填的邮箱（ADM-1 / AJ-466；与备注 author_email 同一手法）。 */
+  actor_email: string | null;
   at: Date;
 }
 
@@ -265,6 +267,10 @@ function attentionWhere(db: Db, a: OrderAttention | undefined) {
     case 'blocked':
       return db`status = 'paid'
                 and exists (select 1 from users u where u.id = orders.user_id and u.blocked_at is not null)`;
+    // AJ-454：有部分退款（failed 以外都算：在途要同步，已成功的要让接手的人知道）且订单没整单退掉
+    case 'partial_refund':
+      return db`status not in ('refunding', 'refunded')
+                and exists (select 1 from order_refunds r where r.order_id = orders.id and r.status <> 'failed')`;
   }
 }
 
@@ -317,6 +323,11 @@ function orderListOrderBy(db: Db, sort: AdminOrderListQuery['sort']) {
   switch (sort?.key) {
     case 'total_jpy':
       return desc ? db`order by total_jpy desc, id desc` : db`order by total_jpy asc, id asc`;
+    // AJ-453：按付款时间；未付的单（paid_at 为空）一律排最后——它们不是"最久没发"的
+    case 'paid_at':
+      return desc
+        ? db`order by paid_at desc nulls last, id desc`
+        : db`order by paid_at asc nulls last, id asc`;
     case 'created_at':
     case undefined:
     default:
@@ -454,15 +465,18 @@ export async function listEventsFor(
 ): Promise<AdminOrderEventRow[]> {
   if (orderIds.length === 0) return [];
   const rows = await db`
-    select order_id, status, note, actor, at
-      from order_events where order_id in ${db([...orderIds])}
-     order by order_id, at, id
+    select e.order_id, e.status, e.note, e.actor, u.email as actor_email, e.at
+      from order_events e
+      left join users u on 'admin:' || u.id = e.actor
+     where e.order_id in ${db([...orderIds])}
+     order by e.order_id, e.at, e.id
   `;
   return rows.map((r) => ({
     order_id: String(r.order_id),
     status: String(r.status),
     note: strOrNull(r.note),
     actor: strOrNull(r.actor),
+    actor_email: strOrNull(r.actor_email),
     at: r.at as Date,
   }));
 }
@@ -763,13 +777,23 @@ export async function markRefunding(
   at: Date,
   /** `admin:<sub>`（同 markShipped）。 */
   actor: string,
+  /**
+   * `fromCompleted`（AJ-447）：允许 **completed → refunding**。只有"部分退款累计退满实收"的收尾调用它：
+   * 钱已全部退回却仍显示"已完成"是口径错误。整单退款路由不传——它由 refundGuard 按状态机拦在前面，
+   * completed 的单仍不能整单退款（契约 0.6.66 ③）。
+   */
+  opts: { fromCompleted?: boolean } = {},
 ): Promise<boolean> {
   // expired / cancelled 只在有迟到付款凭据时可迁（剩余清单 1-5）：与 refundGuard 同口径，
   //    这里再写一次是 SQL 层的最后一道——闸门之外的调用方也绕不过去
+  const from =
+    opts.fromCompleted === true
+      ? ['paid', 'shipped', 'delivered', 'completed']
+      : ['paid', 'shipped', 'delivered'];
   const updated = await tx`
     update orders set status = 'refunding', updated_at = now()
      where id = ${orderId}
-       and (status in ${tx(['paid', 'shipped', 'delivered'])}
+       and (status in ${tx(from)}
             or (status in ${tx(['expired', 'cancelled'])}
                 and exists (select 1 from order_events
                              where order_id = ${orderId} and status = 'late_paid')))
@@ -915,7 +939,7 @@ export async function updateAddressSnapshot(
   snapshot: JSONValue,
   actor: string,
   at: Date,
-): Promise<boolean> {
+): Promise<number | false> {
   // B12 / AJ-208：先把**旧快照**读出来——它是"改址前发给谁"的唯一证据。
   // `for update` 是为了让本函数自洽（不依赖调用方是否先调过 lockAdminOrder）：
   // UPDATE 也会取同一把行锁，这里提前取只是把"读旧值"与"写新值"之间的窗口彻底关掉。
@@ -947,5 +971,29 @@ export async function updateAddressSnapshot(
     insert into order_events (order_id, status, note, actor, at)
     values (${orderId}, 'address_changed', ${`改址：改前地址已归档（#${String(archiveId)}）`}, ${actor}, ${at})
   `;
-  return true;
+  // 返回归档号（AJ-455）：路由把它写进审计 after——新地址本身不进 append-only 的审计表（S-2）
+  return Number(archiveId);
+}
+
+/** 管理端详情的改址历史（AJ-455）：改前完整地址、谁、何时；按时间正序（第一条 = 最初的收货地址）。 */
+export interface AddressHistoryRow {
+  id: number;
+  snapshot: Record<string, unknown>;
+  actor: string | null;
+  at: Date;
+}
+
+/**
+ * 读 `order_address_history`（019）——此前只有写入没有读取（严格检查 A-4），改错了只能查库。
+ * @limitation 019 之前改址的旧地址写在 `order_events.note` 里（`{"from":…}` 全文），这里不解析它们（存量，且那张表删不掉）。
+ */
+export async function listAddressHistory(db: Db, orderId: string): Promise<AddressHistoryRow[]> {
+  const rows = await db`
+    select id, snapshot, actor, at from order_address_history where order_id = ${orderId} order by at asc, id asc`;
+  return rows.map((r) => ({
+    id: Number(r['id']),
+    snapshot: (r['snapshot'] ?? {}) as Record<string, unknown>,
+    actor: strOrNull(r['actor']),
+    at: r['at'] as Date,
+  }));
 }

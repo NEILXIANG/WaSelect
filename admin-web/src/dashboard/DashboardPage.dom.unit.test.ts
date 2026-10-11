@@ -104,13 +104,15 @@ describe('工作台：今日数据', () => {
     });
     expect(cardValue(el, '今日数据', '销售额')).toBe('16,800 円');
     // 16800 × 0.0067 = 112.56 USD（最小单位 11256 分）
-    expect(cardSub(el, '今日数据', '销售额')).toBe('≈ $112.56');
+    // AJ-469：辅行还写明口径（含退款、展示汇率），≈USD 仍在最前
+    expect(cardSub(el, '今日数据', '销售额')).toMatch(/^≈ \$112\.56/);
   });
 
   it('🔴 没有汇率时不显示 ≈ 那一行（不是显示 ≈ $0.00）', async () => {
     const el = await open();
     expect(cardValue(el, '今日数据', '销售额')).toBe('16,800 円');
-    expect(cardSub(el, '今日数据', '销售额')).toBeNull();
+    // AJ-469 起辅行总在（写口径），但没有汇率时不出现 ≈ 金额
+    expect(cardSub(el, '今日数据', '销售额')).not.toContain('≈');
   });
 
   it('🔴 客单价为 null（窗口内零收款订单）显示「—」而不是 0 円', async () => {
@@ -178,5 +180,19 @@ describe('工作台：待办点即跳到筛好的列表', () => {
     expect(navigated[0]?.page).toBe('orders');
     expect(navigated[0]?.id).toBe('');
     expect(navigated[0]?.query.get('status')).toBe('paid');
+  });
+
+  describe('ADM-7 / S3（AJ-469）：销售额卡片注明口径', () => {
+    it('销售额的辅行写明"含后来退款的单"，≈USD 注明是展示汇率（含缓冲）', async () => {
+      const el = await open({
+        today: WINDOW,
+        last7: WINDOW,
+        fx: { usd_rate: 0.0067, usd_effective_from: '2026-10-07T00:00:00Z' },
+      });
+      const sub = cardSub(el, '今日数据', '销售额') ?? '';
+      expect(sub).toContain('含');
+      expect(sub).toContain('退款');
+      expect(sub).toContain('展示汇率');
+    });
   });
 });

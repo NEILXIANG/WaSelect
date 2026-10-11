@@ -31,6 +31,7 @@
 import { z } from 'zod';
 import { systemClock } from './adapters/clock.js';
 import { daysUntil, parseReviewUntil, utcDay } from './review-window.js';
+import { DEFAULT_IDLE_IN_TX_TIMEOUT_MS } from './adapters/db.js';
 import { parseSentryDsn } from './sentry-dsn.js';
 import {
   ADMIN_PASSWORD_MIN_LENGTH,
@@ -732,6 +733,14 @@ export function shutdownWorstCaseMs(
 const crossField = (now: Date) =>
   schema.superRefine((c, ctx) => {
     const isProd = c.NODE_ENV === 'production';
+    // 9d（AJ-459）：所有环境。60000 取自 adapters/db.ts DEFAULT_IDLE_IN_TX_TIMEOUT_MS（那边是唯一真源，这里只引用）。
+    if (c.HTTP_TOTAL_BUDGET_MS >= DEFAULT_IDLE_IN_TX_TIMEOUT_MS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['HTTP_TOTAL_BUDGET_MS'],
+        message: `HTTP_TOTAL_BUDGET_MS 必须小于 ${String(DEFAULT_IDLE_IN_TX_TIMEOUT_MS)}（发起支付在事务内调机构；超过闲事务超时会被 PG 杀掉，会话建成了但 payments 行回滚）`,
+      });
+    }
     const add = (path: string, message: string): void => {
       ctx.addIssue({ code: 'custom', path: [path], message });
     };
@@ -1120,6 +1129,9 @@ const crossField = (now: Date) =>
           '生产必须至少配置一个告警通道：SENTRY_DSN 或 ALERT_EMAIL（两者都没有时，对账异常与每日作业停跑没人会知道）',
         );
       }
+      // 9d.（严格检查第二轮 S-5，AJ-459）HTTP 总预算必须小于闲事务超时（db.ts 60s）：发起支付在事务内调机构，
+      //     预算 ≥ 60s 时 Stripe 变慢会让 PG 杀掉事务——会话建成了、payments 行却回滚（AJ-93 的事故形态）。
+      //     ⚠️ 放在 isProd 块外：本机也会撞。
       // 9c.（严格检查 P0 M-1，AJ-441）生产必须能把买家引到"人"和"条款"那里。
       //     @why 客服：被拉黑、无支付方式、发货后改地址、售后等多处提示都写"联系客服"，而客服卡片在没配置时
       //          整块消失（GET /support 不下发未配置的项）——这些出口全部指向空处，且启动、运行都不报错。

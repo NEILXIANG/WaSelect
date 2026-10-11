@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { formatJst } from '../format.js';
 import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
+import { useFormDirty } from '../ui/unsaved.js';
 import type { AdminApi } from './api.js';
 
 interface State {
@@ -39,6 +40,7 @@ export function SalesPausePanel({
 }) {
   const [state, setState] = useState<State | null>(null);
   const [reason, setReason] = useState('');
+  useFormDirty(reason, ''); // G2（AJ-477）
   /** 两步确认的目标值（null = 未进入确认态）：点按钮那一刻按当时显示的状态选定，提交时不再取反。 */
   const [target, setTarget] = useState<boolean | null>(null);
   const ownSink = useToasts();

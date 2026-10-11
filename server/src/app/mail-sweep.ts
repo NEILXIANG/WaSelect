@@ -96,11 +96,14 @@ export function createMailSweepJob(): SchedulerJob<Db> {
          order by c.at, c.order_id
          limit ${MAIL_SWEEP_BATCH_LIMIT}`;
       for (const r of rows) {
+        // AJ-450（严格检查 S-3）：补发走专用事件 `mail.resend`，不再冒充 `order.paid` 等业务事件——
+        //   否则业务事件日志重复计数、`close-session-events` 等别的订阅者会再跑一遍无效外部调用。
+        //   `payload.tag` 是原事件名，order-mail 据此选模板与幂等键（键与首发完全一致，服务商侧仍能去重）。
         ctx.emit({
-          name: r.tag,
+          name: 'mail.resend',
           at: ctx.startedAt.toISOString(),
           orderId: r.order_id,
-          ...(r.sub === null ? {} : { payload: { refund_id: r.sub } }),
+          payload: { tag: r.tag, ...(r.sub === null ? {} : { refund_id: r.sub }) },
         });
       }
       ctx.log.info('mail_sweep_resent', {

@@ -10,6 +10,8 @@
  * @see app/daily-reconciliation.ts（事件来源）；ports/mailer.ts
  */
 import { createHash } from 'node:crypto';
+import { jstDate } from '@waselect/shared';
+import { fromIso } from '../adapters/clock.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../ports/events.js';
 import type { Mailer } from '../ports/mailer.js';
@@ -40,7 +42,8 @@ export function registerOpsAlertMail(bus: EventBus, deps: OpsAlertMailDeps): voi
     const counts = Object.entries(event.payload ?? {}).filter(
       (e): e is [string, number] => typeof e[1] === 'number' && e[1] > 0,
     );
-    const day = event.at.slice(0, 10);
+    // S-6（AJ-460）：按日本时间取日——运营看到的页面全是 JST，UTC 日会让主题少一天
+    const day = jstDate(fromIso(event.at));
     if (deps.to === undefined) {
       deps.logger.info('ops_alert_skipped', {
         result: 'skipped',

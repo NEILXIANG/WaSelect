@@ -87,9 +87,10 @@ describe('address-input（地址校验，I2 U-B2c）', () => {
     expect(parseAddressInput({ ...OK_ADDR, recipient: 'ZHANG SAN' }).recipient).toBe('ZHANG SAN');
   });
 
-  it('line2：非 ASCII 拒，空串与缺失都放行（可空字段不等于必填）', () => {
+  it('line2：非 ASCII 拒，空串与缺失都放行（可空字段不等于必填）；空串 / 纯空白归 null（S-8 / AJ-461：与契约"没填为 null"一致）', () => {
     expect(fail({ ...OK_ADDR, line2: '号楼' }).field).toBe('line2');
-    expect(parseAddressInput({ ...OK_ADDR, line2: '' }).line2).toBe('');
+    expect(parseAddressInput({ ...OK_ADDR, line2: '' }).line2).toBeNull();
+    expect(parseAddressInput({ ...OK_ADDR, line2: '   ' }).line2).toBeNull();
     expect(parseAddressInput({ ...OK_ADDR, line2: null }).line2).toBeNull();
     expect(parseAddressInput({ ...OK_ADDR, line2: 'Apt 3B' }).line2).toBe('Apt 3B');
   });

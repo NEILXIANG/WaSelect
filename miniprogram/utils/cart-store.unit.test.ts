@@ -11,7 +11,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { MAX_QUOTE_ITEMS } from '../../server/src/domain/quote.js';
-import { MAX_CART_LINES, createCartStore } from './cart-store.js';
+import { MAX_CART_LINES, MAX_LINE_QTY, createCartStore } from './cart-store.js';
+import { MAX_LINE_QTY as SHARED_MAX_LINE_QTY } from '@waselect/shared';
 import { createStorage } from './storage.js';
 import { createWxApi } from './wx-api.js';
 
@@ -328,5 +329,16 @@ describe('勾选结算（A3，AJ-416）', () => {
     const cart = createCartStore({ storage });
     expect(cart.items()[0]?.selected).toBe(true);
     expect(cart.toOrderItems()).toEqual([{ product_id: 'p-1', qty: 2 }]);
+  });
+
+  it('🔴 单行数量封顶 MAX_LINE_QTY（AJ-448）：add 合并超过上限 → 停在上限；setQty 超上限 → 上限', () => {
+    const c = createCartStore(memStorage());
+    c.add({ productId: 'p-1', qty: 60 });
+    c.add({ productId: 'p-1', qty: 60 });
+    expect(c.items()[0]?.qty).toBe(MAX_LINE_QTY);
+    c.setQty('p-1', 500);
+    expect(c.items()[0]?.qty).toBe(MAX_LINE_QTY);
+    // 小程序运行时进不了 shared（纯 JS），常量各存一份，由这里钉住同值
+    expect(MAX_LINE_QTY).toBe(SHARED_MAX_LINE_QTY);
   });
 });

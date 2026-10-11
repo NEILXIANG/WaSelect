@@ -16,9 +16,10 @@
  *              按真实价算（建单的 `expected_total_jpy` 不等会 40905），
  *              本地快照只负责"离线也能看到购物车长什么样"。
  *              ⚠️ 因此页面**不许**拿缓存价算合计——合计永远走 quote。
- * @limitation 二：数量上限不做业务限制（服务端建单会按库存拒）。
- *              客户端限了等于在两个地方各定一次规则，漂移时表现为
- *              "客户端说能买 99 件、服务端说库存只有 3"——那不如只有服务端一处。
+ * @limitation 二：**库存**不在本地判（服务端建单会按库存拒）：客户端限了等于在两个地方各定一次规则，
+ *              漂移时表现为"客户端说能买 99 件、服务端说库存只有 3"。
+ *              但单行**件数**有封顶 `MAX_LINE_QTY`（AJ-448，与服务端契约 `qty.maximum` 同值）：
+ *              超过它服务端一律 40001，本地不封顶的表现是"加到 100 件后结算报'参数错误'"——那不是库存问题。
  * @limitation 四：**品种数**有上限 `MAX_CART_LINES`（P2-31），与 @limitation 二的"件数不限"不矛盾：
  *              报价 / 建单端对 >50 个**不同**商品一律 40001（server/src/domain/quote.ts `MAX_QUOTE_ITEMS`），
  *              客户端不拦的表现是第 51 种照常加进来，到购物车页才撞 40001，提示还是"请稍后重试"——永远重试不好。
@@ -43,6 +44,8 @@ const CART_KEY = 'cart';
  *      所以这里是第二份真值，由 `cart-store.unit.test.ts` 直接 import 服务端常量比对，漂移即红。
  */
 export const MAX_CART_LINES = 50;
+/** 单行件数上限（AJ-448）：与 `packages/shared/src/limits.ts` 的 `MAX_LINE_QTY` 同值（小程序进不了 shared，由单测钉住相等）。 */
+export const MAX_LINE_QTY = 99;
 
 /**
  * 购物车条目。
@@ -105,13 +108,13 @@ export function createCartStore(deps) {
       }
       const found = items.find((i) => i.productId === item.productId);
       if (found !== undefined) {
-        found.qty += qty;
+        found.qty = Math.min(found.qty + qty, MAX_LINE_QTY);
         found.selected = true; // 再次加购 = 用户刚表示要它（A3）
       } else {
         if (items.length >= MAX_CART_LINES) return { added: false, reason: 'full' };
         items.push({
           productId: item.productId,
-          qty,
+          qty: Math.min(qty, MAX_LINE_QTY),
           title: typeof item.title === 'string' ? item.title : '',
           image: typeof item.image === 'string' ? item.image : '',
           priceJpy: item.priceJpy,
@@ -135,7 +138,7 @@ export function createCartStore(deps) {
       } else {
         const found = items.find((i) => i.productId === productId);
         if (found === undefined) return; // 改一个不存在的条目 = 空操作，不是错误
-        found.qty = qty;
+        found.qty = Math.min(qty, MAX_LINE_QTY);
       }
       persist();
     },
@@ -160,14 +163,14 @@ export function createCartStore(deps) {
       if (!Number.isInteger(item.qty) || item.qty < 1) return false;
       const found = items.find((i) => i.productId === item.productId);
       if (found !== undefined) {
-        found.qty += item.qty;
+        found.qty = Math.min(found.qty + item.qty, MAX_LINE_QTY);
       } else {
         if (items.length >= MAX_CART_LINES) return false;
         const at =
           Number.isInteger(index) && index >= 0 ? Math.min(index, items.length) : items.length;
         items.splice(at, 0, {
           productId: item.productId,
-          qty: item.qty,
+          qty: Math.min(item.qty, MAX_LINE_QTY),
           title: typeof item.title === 'string' ? item.title : '',
           image: typeof item.image === 'string' ? item.image : '',
           priceJpy: item.priceJpy,

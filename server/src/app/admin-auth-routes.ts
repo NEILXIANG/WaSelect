@@ -100,6 +100,12 @@ export const ADMIN_LOGIN_WINDOW_MINUTES = 15;
  * @measured(node -e bcryptjs.hashSync, 2026-09-29)：cost 10 一次约 100ms 量级——不比对就是可测的时间差。
  * 值本身无意义（任何口令都比不上），只要是合法的 bcrypt 串、成本与真哈希同档。
  */
+/**
+ * 绕行桶的"来源"占位（AJ-446）：与真实来源桶共用 `loginAttemptSourceKey`，但来源串固定，
+ * 于是同一邮箱的全部绕行尝试落在同一只桶里；它不可能与任何真实来源撞键（真实来源是 IP 形状）。
+ */
+const TOTP_BYPASS_SOURCE = 'totp-bypass';
+
 const DUMMY_HASH = '$2b$10$v0B4o0iWhgKRl/BcEw7snObpnEcHc3rKZuiTQ6KW7PN1Efy62ZZ1S';
 
 /**
@@ -246,6 +252,12 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
         //   @limitation 绕行模式下"有没有开 TOTP"不经响应泄露：没开 / 码错 / 口令错都是同一个 40101。
         const totpBypass = emailLock !== null && totp !== undefined;
         if (emailLock !== null && !totpBypass) await rejectLocked('email', emailLock);
+        // 绕行桶（严格检查 SEC-2，AJ-446）：绕行模式原来**不计任何邮箱维度的桶**，于是攻击者可以先用
+        //   6 个来源把邮箱桶锁死，再从更多来源以"每来源 5 次"无上限地猜口令——"30 次 / 15 分钟"的全局封顶失效。
+        //   现在绕行走自己的一只桶（同一邮箱、同样 30 次 / 15 分钟），真管理员登录一次就清掉它；
+        //   攻击者把它也打满时，正确的码同样 429——与"没锁时"同一封顶，不多不少。
+        //   @why 不直接计进邮箱桶：那把锁是攻击者上的，绕行本来就是为了绕过它；计进去等于永远绕不过。
+        const bypassKey = loginAttemptSourceKey(email, TOTP_BYPASS_SOURCE);
 
         // ① 先扣额度（原子），两层都要拿到：来源桶（5）+ 邮箱桶（30）。
         //    任一已锁 → 42901，且不跑 bcrypt。来源桶在前：攻击者被锁在自己的来源上时，
@@ -258,13 +270,14 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
           globalKey,
         );
         const byEmail =
-          bySource.kind === 'locked' || totpBypass
+          bySource.kind === 'locked'
             ? bySource
             : await claimLoginAttempt(
                 deps.db,
-                globalKey,
+                totpBypass ? bypassKey : globalKey,
                 now,
                 policy(ADMIN_LOGIN_GLOBAL_MAX_FAILURES),
+                totpBypass ? globalKey : null, // 绕行桶归邮箱桶的作用域：改密一并清掉
               );
         if (bySource.kind === 'locked' || byEmail.kind === 'locked') {
           const locked = bySource.kind === 'locked' ? bySource : byEmail;
@@ -318,9 +331,13 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
         );
         // 绕行模式不碰邮箱桶：那把锁是攻击者上的，清掉它只会让攻击者立刻重新开始计数；
         // 没开 TOTP 的账号仍受它保护（P1-5）。
-        const clearedEmail = totpBypass
-          ? 'cleared'
-          : await clearLoginAttempt(deps.db, globalKey, now, byEmail.lockedUntil);
+        //   绕行模式清的是绕行桶（AJ-446）：真管理员登上来了，他自己的那只桶归零。
+        const clearedEmail = await clearLoginAttempt(
+          deps.db,
+          totpBypass ? bypassKey : globalKey,
+          now,
+          byEmail.lockedUntil,
+        );
         if (clearedSource === 'locked' || clearedEmail === 'locked') {
           // SEC2-08：这个出口（"比对口令的 100ms 里被别的请求上了锁"）曾经**不设** retry-after，
           //    于是同一个 42901 有两种响应形状。契约（0.6.20）写的是"锁定期 429 / 42901 + Retry-After"，

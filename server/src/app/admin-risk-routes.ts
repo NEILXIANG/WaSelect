@@ -153,6 +153,11 @@ export function mountAdminRiskRoutes(app: Express, deps: AdminRiskRoutesDeps): v
         // 可选的订单凭据（ADM3-01 纵深防御 / AJ-290）：**传了才校验**，不传不加约束。
         // ⚠️ 非字符串（数字 / 数组 / 对象）一律 40001，不静默当成"没传"——
         //    "静默退化成不校验"正是纵深防御最容易烂掉的方式（看起来在校验，实际没有）。
+        // 拉黑原因必填（AJ-449，严格检查 A-7）：拉黑不可逆、有连带取消，事后要答得出"为什么"；
+        //   原因进 admin_audit（审计中间件记请求体）与连带取消的订单事件 note。与解除拉黑同一把尺（releaseReasonGuard）。
+        const reason = releaseReasonGuard((req.body as { reason?: unknown } | null)?.reason);
+        if (!reason.ok)
+          throw new AppError(reason.code, { reason: reason.reason, target_user_id: id });
         const rawOrderId = (req.body as { order_id?: unknown } | null)?.order_id;
         let orderId: string | undefined;
         if (rawOrderId !== undefined) {
@@ -163,7 +168,12 @@ export function mountAdminRiskRoutes(app: Express, deps: AdminRiskRoutesDeps): v
         }
         const outcome = await blockUser(
           { db: deps.db, events: deps.events, clock: deps.clock, logger: deps.logger, repo },
-          { userId: id, ...(orderId === undefined ? {} : { orderId }) },
+          {
+            userId: id,
+            ...(orderId === undefined ? {} : { orderId }),
+            actor: `admin:${req.auth?.sub ?? 'unknown'}`,
+            note: `拉黑：${reason.reason}`,
+          },
         );
         if (outcome.kind === 'not_found') throw new AppError(40403, { target_user_id: id });
         if (outcome.kind === 'is_admin') throw new AppError(40911, { target_user_id: id });

@@ -19,7 +19,7 @@
 import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors.js';
-import { button, click, mount, type Mounted } from '../testing/dom.js';
+import { button, click, mount, type, type Mounted } from '../testing/dom.js';
 import { RiskPage } from './RiskPage.js';
 
 interface Call {
@@ -125,6 +125,10 @@ describe('风控页：拉黑串单（ADM3-01）', () => {
     const blockedLoads = (): number => calls.filter((c) => c.path.includes('blocked=true')).length;
     const before = blockedLoads();
     // 第一批①：面板上只有「拉黑用户」，后果与「确认拉黑」在弹层里
+    // AJ-449：原因必填——不填直接点，不弹层也不发请求
+    await click(button(el, '拉黑用户'));
+    expect(button(el, '确认拉黑')).toBeNull();
+    await type(el.querySelector('input[name="block-reason"]'), '同一张卡 3 次拒付');
     await click(button(el, '拉黑用户'));
     await click(button(el, '确认拉黑'));
     // P2-47：拉黑成功后「已拉黑用户」重新取数（新拉黑的人立刻出现）
@@ -133,7 +137,11 @@ describe('风控页：拉黑串单（ADM3-01）', () => {
     // 带 order_id：服务端据此核对"这张单属于这个人"（ADM3-01 纵深防御 / AJ-290）。
     // ❗ 少了 body 这一项，"页面真的把凭据发出去了"就没人守——服务端那条校验会永远拿不到调用。
     expect(blocks()).toEqual([
-      { path: '/api/v1/admin/users/user-A/block', method: 'POST', body: { order_id: 'ord-A' } },
+      {
+        path: '/api/v1/admin/users/user-A/block',
+        method: 'POST',
+        body: { reason: '同一张卡 3 次拒付', order_id: 'ord-A' },
+      },
     ]);
     expect(el.textContent).toContain('已拉黑');
     // 上一次失败留下的红字必须被清掉（"已拉黑"和"请求超时"同屏会让人以为没成功）。
@@ -155,6 +163,7 @@ describe('风控页：确认弹层说清全部后果', () => {
   it('🔴 点确认之前看得到"连带取消未付款订单"（缺陷注入点：弹层 body 换回旧文案即红）', async () => {
     const el = await open();
     await click(handle(el, 0));
+    await type(el.querySelector('input[name="block-reason"]'), '三次拒付');
     await click(button(el, '拉黑用户'));
     // 第一批①：后果从"面板里的一行红字"搬进了弹层——断言也跟着搬，
     // 仍守同一件事：**点下去之前**要看得见（而不是成功之后才知道）。
@@ -170,6 +179,7 @@ describe('风控页：确认弹层说清全部后果', () => {
   it('🔴 拉黑成功后的提示同样提到"已一并取消"（结果不是只有"不能下单"这一件事）', async () => {
     const el = await open();
     await click(handle(el, 0));
+    await type(el.querySelector('input[name="block-reason"]'), '三次拒付');
     await click(button(el, '拉黑用户'));
     await click(button(el, '确认拉黑'));
     expect(el.textContent).toContain('未付款订单已一并取消');

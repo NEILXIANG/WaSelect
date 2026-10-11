@@ -73,6 +73,10 @@ export interface BlockUserInput {
    * 带了就在封号**之前**核对它属于 `userId`（ADM3-01 纵深防御 / AJ-290）。
    */
   orderId?: string | undefined;
+  /** 连带取消事件的 actor（`admin:<sub>`，AJ-449）；不传沿用旧口径 `admin:block`（只为存量直接调用的用例）。 */
+  actor?: string | undefined;
+  /** 连带取消事件的 note（拉黑原因，AJ-449）。 */
+  note?: string | null | undefined;
 }
 
 /**
@@ -115,9 +119,12 @@ export async function blockUser(
     const orderIds = await lockPayableOrdersOfUser(tx, userId);
     const cancelled: string[] = [];
     let voided = 0;
+    // AJ-449：连带取消事件记操作人与原因；不传沿用旧口径（存量直接调用的用例）
+    const actor = input.actor ?? 'admin:block';
+    const note = input.note ?? null;
     for (const orderId of orderIds) {
       // false = 被并发抢先迁走（恰好落账/关单），不是错误、不发事件（与 expire-orders 同口径）
-      if (!(await markOrderCancelled(tx, orderId, userId, at, 'admin:block'))) continue;
+      if (!(await markOrderCancelled(tx, orderId, userId, at, actor, note))) continue;
       cancelled.push(orderId);
       voided += await voidInitiatedPayment(tx, orderId);
       emit({ name: 'order.cancelled', at: at.toISOString(), orderId });

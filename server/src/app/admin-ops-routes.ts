@@ -64,6 +64,7 @@ import { requireRole } from './auth.js';
 import { setAuditBefore, setAuditTarget } from './admin-audit.js';
 import {
   createOpsConfigRepo,
+  ShippingTableStaleError,
   ShippingTableTooLightError,
   type FxRateRow,
   type OpsConfigRepo,
@@ -244,12 +245,22 @@ export function mountAdminOpsRoutes(app: Express, deps: AdminOpsRoutesDeps): voi
   /** 换表；会把在售商品挤出最高档 → 40918（P2-30），`data.product_id` 指出最重的那件。 */
   const replaceOrReject = async (
     rows: Parameters<typeof repo.replaceShippingRates>[0],
+    expectedFingerprint: string | undefined,
   ): Promise<Awaited<ReturnType<typeof repo.replaceShippingRates>>> => {
     try {
       return await repo.replaceShippingRates(rows, {
         packagingWeightG: deps.config.PACKAGING_WEIGHT_G,
+        expectedFingerprint,
       });
     } catch (e) {
+      // ADM-4（AJ-458）：表已被别人改过 → 40914（与商品 / Banner 的乐观锁同码），表一行没动
+      if (e instanceof ShippingTableStaleError) {
+        deps.logger.warn('admin_shipping_rates_stale', {
+          result: 'rejected',
+          ctx: { expected: e.expected, current: e.current },
+        });
+        throw new AppError(40914, { expected: e.expected, current: e.current });
+      }
       if (!(e instanceof ShippingTableTooLightError)) throw e;
       deps.logger.warn('admin_shipping_rates_rejected', {
         result: 'rejected',
@@ -267,11 +278,17 @@ export function mountAdminOpsRoutes(app: Express, deps: AdminOpsRoutesDeps): voi
     void (async () => {
       try {
         const rows = parseShippingRates(req.body);
+        // `expected`（契约 0.6.67）：管理端读表时算的指纹；形状不对按"没带"（老调用方不受影响）
+        const rawExpected = req.query['expected'];
+        const expected =
+          typeof rawExpected === 'string' && /^[0-9a-f]{8}$/.test(rawExpected)
+            ? rawExpected
+            : undefined;
         // 改前整表进日志：整表替换不可逆，没有 before 就再也答不出"之前是多少"。
         // 🔴 用**仓储在锁内读出的**那一份（AJ-354），不要在这里先读一次：
         //    锁外读的 before 在并发保存时是"最初那张表"，而本次真正覆盖掉的是
         //    "刚才别人提交的那张表"——审计会答错，且错得毫无症状。
-        const { before, after } = await replaceOrReject(rows);
+        const { before, after } = await replaceOrReject(rows, expected);
         setAuditBefore(res, before.map(toShippingRate)); // 审计流 B 的改前值（AJ-183）：整表替换不可逆
         deps.logger.info('admin_shipping_rates_replaced', {
           result: 'ok',

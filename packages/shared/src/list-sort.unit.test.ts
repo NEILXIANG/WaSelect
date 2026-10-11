@@ -48,7 +48,7 @@ describe('parseListSort', () => {
 
   it('三张列表的白名单（改它要同步改服务端 SQL 映射与管理端表头）', () => {
     expect(LIST_SORT_KEYS).toEqual({
-      orders: ['created_at', 'total_jpy'],
+      orders: ['created_at', 'total_jpy', 'paid_at'], // paid_at：AJ-453（服务端映射 + 管理端待发货默认）
       products: ['updated_at', 'stock', 'price_jpy'],
       customers: ['last_order_at', 'paid_total_jpy'],
     });

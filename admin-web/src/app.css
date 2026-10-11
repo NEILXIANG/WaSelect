@@ -740,6 +740,11 @@ td .thumb {
   line-height: 1.3;
 }
 
+.dialog .muted {
+  /* S6（AJ-478）：确认框正文用 \n 分段（后果清单 / 客户 id），不保留换行会挤成一行 */
+  white-space: pre-wrap;
+}
+
 .muted {
   margin: 0;
   color: var(--md-color-on-surface-variant);

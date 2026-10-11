@@ -92,10 +92,12 @@ export async function listShippingRates(
 export async function replaceShippingRates(
   api: AdminApi,
   rows: Array<Record<string, unknown>>,
+  /** 读表时算的指纹（AJ-458）：服务端在锁内比对，表已被别人改过 → 40914 */
+  expected?: string,
   traceId?: string,
 ): Promise<void> {
   await api({
-    path: '/api/v1/admin/shipping-rates',
+    path: `/api/v1/admin/shipping-rates${expected === undefined ? '' : `?expected=${expected}`}`,
     method: 'PUT',
     body: rows,
     ...(traceId !== undefined ? { traceId } : {}),

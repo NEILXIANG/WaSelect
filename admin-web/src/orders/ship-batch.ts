@@ -193,6 +193,9 @@ export function validateRows(rows: readonly BatchRow[]): BatchRow[] {
     if (r.orderNo !== '' && (count.get(r.orderNo) ?? 0) > 1) errors.push('同一单号重复出现');
     const field = shipErrors({ carrier: r.carrier, trackingNo: r.trackingNo });
     const fieldErrors = Object.values(field.errors);
+    // A-10（AJ-464）：Excel 把长数字运单号改成科学计数法（1.23457E+11）——这不是"形状认不出"的黄字，而是**一定错**的号：
+    //   原号已经丢了几位，进了买家的发货邮件就是一个查不到的单号。直接拦，并告诉运营怎么修。
+    if (SCIENTIFIC_NOTATION.test(r.trackingNo.trim())) errors.push(SCIENTIFIC_TRACKING_ERROR);
     const warnings: string[] = [...r.orderWarnings];
     if (r.trackingNo.trim() !== '' && !trackingNoRecognized(r.carrier, r.trackingNo))
       warnings.push(TRACKING_SHAPE_WARNING);
@@ -201,6 +204,11 @@ export function validateRows(rows: readonly BatchRow[]): BatchRow[] {
     return { ...r, errors: [...errors, ...fieldErrors], warnings };
   });
 }
+
+/** `1.23457E+11` / `1.2E11` 这类形态 = Excel 的科学计数法，原号已丢位。 */
+const SCIENTIFIC_NOTATION = /^\d+(?:\.\d+)?E\+?\d+$/i;
+export const SCIENTIFIC_TRACKING_ERROR =
+  '运单号被 Excel 改成了科学计数法（如 1.23457E+11），原号已丢失：请在 Excel 里把该列设为"文本"后重新导出';
 
 /** 多单共用一个运单号时的提醒（只警告：合并包裹是真实形态；填串行时这一行会亮黄）。 */
 export const DUPLICATE_TRACKING_WARNING = '运单号与另一单相同：合并包裹才会这样，请确认没有填串行';

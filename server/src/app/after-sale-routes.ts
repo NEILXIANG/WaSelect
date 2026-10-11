@@ -20,6 +20,7 @@
  */
 import type { Express, Request } from 'express';
 import {
+  AFTER_SALE_STATUS_LABELS,
   AFTER_SALE_ORDER_STATUSES,
   afterSaleTransitionAllowed,
   type AfterSaleStatus,
@@ -149,13 +150,21 @@ export function mountAfterSaleRoutes(app: Express, deps: AfterSaleRoutesDeps): v
                   : 'after_sale_closed',
               );
             }
-            return updateAfterSale(tx, {
+            const updated = await updateAfterSale(tx, {
               id: rid,
               status: input.status,
               note: input.note,
               handledBy: `admin:${req.auth?.sub ?? 'unknown'}`,
               at,
             });
+            // ADM-5（AJ-452）：处理过程进订单时间线（伪状态 after_sale_handled；买家时间线只认订单状态值，不会外泄）。
+            //   售后表只保留最后一次处理结果（038 @limitation 一），没有这条，"何时谁把它改成处理中"只能翻审计。
+            await tx`
+              insert into order_events (order_id, status, note, actor, at)
+              values (${orderId}, 'after_sale_handled',
+                      ${`${AFTER_SALE_STATUS_LABELS[input.status as AfterSaleStatus]}${input.note === null || input.note === undefined ? '' : `：${input.note}`}（售后 #${rid}）`},
+                      ${`admin:${req.auth?.sub ?? 'unknown'}`}, ${at})`;
+            return updated;
           });
           deps.logger.info('after_sale_resolved', {
             result: 'ok',

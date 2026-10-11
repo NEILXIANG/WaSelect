@@ -222,7 +222,13 @@ describe('POST /admin/users/{id}/block', () => {
     const { url, close } = await buildServer();
     try {
       const before = await db`select token_ver from users where id = 'u-1'`;
-      const r = await call(url, 'POST', '/api/v1/admin/users/u-1/block', undefined, await bearer());
+      const r = await call(
+        url,
+        'POST',
+        '/api/v1/admin/users/u-1/block',
+        { reason: '测试拉黑' },
+        await bearer(),
+      );
       expect(r.status).toBe(200);
       expect(r.body).toBeNull();
       const after = await db`select token_ver, blocked_at from users where id = 'u-1'`;
@@ -240,7 +246,7 @@ describe('POST /admin/users/{id}/block', () => {
         url,
         'POST',
         '/api/v1/admin/users/nope/block',
-        undefined,
+        { reason: '测试拉黑' },
         await bearer(),
       );
       expect(r.status).toBe(404);
@@ -259,7 +265,13 @@ describe('POST /admin/users/{id}/block', () => {
     const { url, close } = await buildServer();
     try {
       await db`update users set is_admin = true where id = 'u-1'`;
-      const r = await call(url, 'POST', '/api/v1/admin/users/u-1/block', undefined, await bearer());
+      const r = await call(
+        url,
+        'POST',
+        '/api/v1/admin/users/u-1/block',
+        { reason: '测试拉黑' },
+        await bearer(),
+      );
       expect(r.status).toBe(409);
       expect(code(r)).toBe(40911);
       const row = await db`select blocked_at from users where id = 'u-1'`;
@@ -273,9 +285,15 @@ describe('POST /admin/users/{id}/block', () => {
     const { url, close } = await buildServer();
     try {
       const token = await bearer();
-      await call(url, 'POST', '/api/v1/admin/users/u-1/block', undefined, token);
+      await call(url, 'POST', '/api/v1/admin/users/u-1/block', { reason: '测试拉黑' }, token);
       const mid = await db`select blocked_at from users where id = 'u-1'`;
-      const again = await call(url, 'POST', '/api/v1/admin/users/u-1/block', undefined, token);
+      const again = await call(
+        url,
+        'POST',
+        '/api/v1/admin/users/u-1/block',
+        { reason: '测试拉黑' },
+        token,
+      );
       expect(again.status).toBe(200);
       const end = await db`select blocked_at from users where id = 'u-1'`;
       expect((end[0]?.['blocked_at'] as Date | null)?.getTime()).toBe(
@@ -295,7 +313,7 @@ describe('POST /admin/users/{id}/block', () => {
         url,
         'POST',
         '/api/v1/admin/users/u-1/block',
-        { order_id: 'o-2' },
+        { order_id: 'o-2', reason: '测试拉黑' },
         await bearer(),
       );
       expect(r.status).toBe(409);
@@ -319,7 +337,7 @@ describe('POST /admin/users/{id}/block', () => {
         url,
         'POST',
         '/api/v1/admin/users/u-1/block',
-        { order_id: 'o-none' },
+        { order_id: 'o-none', reason: '测试拉黑' },
         await bearer(),
       );
       expect(r.status).toBe(409);
@@ -340,7 +358,7 @@ describe('POST /admin/users/{id}/block', () => {
           url,
           'POST',
           '/api/v1/admin/users/u-1/block',
-          { order_id: bad },
+          { order_id: bad, reason: '测试拉黑' },
           token,
         );
         expect(r.status, `order_id=${JSON.stringify(bad)}`).toBe(400);
@@ -361,7 +379,7 @@ describe('POST /admin/users/{id}/block', () => {
         url,
         'POST',
         '/api/v1/admin/users/u-1/block',
-        { order_id: 'o-1' },
+        { order_id: 'o-1', reason: '测试拉黑' },
         await bearer(),
       );
       expect(r.status).toBe(200);
@@ -377,10 +395,48 @@ describe('POST /admin/users/{id}/block', () => {
     }
   });
 
+  it('🔴 AJ-449 拉黑必填原因：缺原因 → 40001 且库里一点没动；带原因 → 连带取消的事件 actor=admin:<sub>、note 记原因', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await seedOrderOf('o-1', 'u-1');
+      const bad = await call(
+        url,
+        'POST',
+        '/api/v1/admin/users/u-1/block',
+        { reason: '  ' },
+        await bearer(),
+      );
+      expect(bad.status).toBe(400);
+      expect(
+        (await db`select blocked_at from users where id = 'u-1'`)[0]?.['blocked_at'],
+      ).toBeNull();
+      const r = await call(
+        url,
+        'POST',
+        '/api/v1/admin/users/u-1/block',
+        { reason: '同一张卡 30 天内 3 次拒付' },
+        await bearer(),
+      );
+      expect(r.status).toBe(200);
+      const [ev] =
+        await db`select actor, note from order_events where order_id = 'o-1' and status = 'cancelled'`;
+      expect(ev?.['actor']).toBe('admin:u-admin');
+      expect(String(ev?.['note'])).toContain('同一张卡 30 天内 3 次拒付');
+    } finally {
+      await close();
+    }
+  });
+
   it('拉黑写业务日志（含 target_user_id；**不得**写保留键 actor）', async () => {
     const { url, close } = await buildServer();
     try {
-      const r = await call(url, 'POST', '/api/v1/admin/users/u-1/block', undefined, await bearer());
+      const r = await call(
+        url,
+        'POST',
+        '/api/v1/admin/users/u-1/block',
+        { reason: '测试拉黑' },
+        await bearer(),
+      );
       expect(r.status).toBe(200);
       const rows = sink.find('admin_user_blocked');
       expect(rows).toHaveLength(1);
@@ -410,7 +466,15 @@ describe('POST /admin/users/{id}/unblock + GET /admin/users?blocked=true', () =>
       const admin = await bearer(true);
       await seedOrderOf('o-ub', 'u-ub');
       expect(
-        (await call(srv.url, 'POST', '/api/v1/admin/users/u-ub/block', {}, admin)).status,
+        (
+          await call(
+            srv.url,
+            'POST',
+            '/api/v1/admin/users/u-ub/block',
+            { reason: '测试拉黑' },
+            admin,
+          )
+        ).status,
       ).toBe(200);
 
       const listed = await call(

@@ -245,7 +245,9 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
       <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
       {loading && <p className="muted">加载中…</p>}
       {!loading && rows.length === 0 && !failed && (
-        <p className="muted">{applied !== '' || lowStock ? '没有符合条件的商品' : '还没有商品'}</p>
+        <p className="muted">
+          {applied !== '' || lowStock || status !== 'all' ? '没有符合条件的商品' : '还没有商品'}
+        </p>
       )}
 
       <table className="table table-actions-reserve">

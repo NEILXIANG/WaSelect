@@ -13,6 +13,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from '../adapters/db.js';
+import { shippingRatesFingerprint } from '@waselect/shared';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { createLogger } from '../logger.js';
@@ -420,6 +421,45 @@ describe('PUT /admin/shipping-rates', () => {
       expect(ctx.before_count).toBe(1);
       expect(ctx.after_count).toBe(2);
       expect(ctx.before).toHaveLength(1);
+    } finally {
+      await close();
+    }
+  });
+
+  it('🔴 ADM-4（AJ-458）：带 expected 指纹的整表替换——指纹对上 → 200；用过期指纹再存 → 40914 且表不动；不带指纹照旧放行', async () => {
+    const { url, close } = await buildServer();
+    try {
+      await db`insert into shipping_rates (carrier, max_weight_g, price_jpy, active) values ('old', 1000, 3000, true)`;
+      const current = shippingRatesFingerprint([
+        { carrier: 'old', max_weight_g: 1000, price_jpy: 3000, active: true },
+      ]);
+      const ok = await call(
+        url,
+        'PUT',
+        `/api/v1/admin/shipping-rates?expected=${current}`,
+        RATES,
+        await bearer(),
+      );
+      expect(ok.status).toBe(200);
+      const stale = await call(
+        url,
+        'PUT',
+        `/api/v1/admin/shipping-rates?expected=${current}`,
+        [{ carrier: 'x', max_weight_g: 500, price_jpy: 1, active: true }],
+        await bearer(),
+      );
+      expect(stale.status).toBe(409);
+      expect((stale.body as { code: number }).code).toBe(40914);
+      const rows = await db`select carrier from shipping_rates order by max_weight_g`;
+      expect(rows.map((x) => String(x['carrier']))).toEqual(['placeholder', 'placeholder']);
+      const noExpected = await call(
+        url,
+        'PUT',
+        '/api/v1/admin/shipping-rates',
+        RATES,
+        await bearer(),
+      );
+      expect(noExpected.status).toBe(200);
     } finally {
       await close();
     }

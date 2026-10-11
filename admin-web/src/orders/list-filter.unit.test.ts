@@ -4,7 +4,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import { ORDER_STATUS } from '@waselect/shared';
-import { STATUS_TABS, readStatusFilter, resolveDateRange, tabStatusParam } from './list-filter.js';
+import {
+  defaultSortFor,
+  STATUS_TABS,
+  readStatusFilter,
+  resolveDateRange,
+  tabStatusParam,
+} from './list-filter.js';
 
 describe('状态页签', () => {
   it('除「全部」外的页签恰好覆盖十态各一次（不漏不重）', () => {
@@ -88,5 +94,11 @@ describe('日期预设（JST 日界）', () => {
       error: '开始日期晚于结束日期',
     });
     expect(resolveDateRange('custom', '2026-02-30', '', now)).toEqual({ error: '日期格式不对' });
+  });
+
+  it('ADM-6（AJ-453）：「待发货」没有显式排序时默认按付款时间正序；其它页签沿用服务端默认', () => {
+    expect(defaultSortFor('paid')).toBe('paid_at');
+    expect(defaultSortFor('')).toBeNull();
+    expect(defaultSortFor('refunding,refunded')).toBeNull();
   });
 });

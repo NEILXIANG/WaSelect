@@ -22,6 +22,7 @@ import { createRequire } from 'node:module';
 import { CUSTOMER_PAGE_SIZE_DEFAULT, CUSTOMER_PAGE_SIZE_MAX } from './domain/customer-query.js';
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_LINE_QTY,
   ORDER_NOTE_MAX_LENGTH,
   REFUND_REASON_MAX_LENGTH,
   SEARCH_KEYWORD_MAX_LENGTH,
@@ -233,6 +234,13 @@ describe('契约的输入上限与 shared 常量一致', () => {
       { maxItems?: number } | undefined;
     expect(items, 'components.schemas.OrderItemsInput 不存在').toBeDefined();
     expect(items?.maxItems).toBe(MAX_QUOTE_ITEMS);
+  });
+
+  it('🔴 OrderItemsInput.items.qty.maximum == MAX_LINE_QTY（AJ-448：单行数量上限）', () => {
+    const doc = loadYaml(TEXT) as Doc;
+    const items = doc.components['schemas']?.['OrderItemsInput'] as
+      { items?: { properties?: Record<string, { maximum?: number }> } } | undefined;
+    expect(items?.items?.properties?.['qty']?.maximum).toBe(MAX_LINE_QTY);
   });
 
   /** DB2-04：地址各字段上限逐字段比对（ADDRESS_MAX_CHARS 是唯一真源）。 */

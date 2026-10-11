@@ -262,9 +262,10 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     await seedPaidOrder('o-1');
     const next = { id: 'a-2', recipient: 'SAN ZHANG', line1: '2 Main St' };
     await withTransaction(db, async (tx) => {
-      expect(await updateAddressSnapshot(tx, 'o-1', next as never, 'admin:u-9', new Date())).toBe(
-        true,
-      );
+      // AJ-455：返回归档号（路由写进审计），不再是 boolean
+      expect(
+        typeof (await updateAddressSnapshot(tx, 'o-1', next as never, 'admin:u-9', new Date())),
+      ).toBe('number');
     });
     const rows = await db`select status, address_snapshot from orders where id = 'o-1'`;
     expect(String(rows[0]?.status)).toBe('paid');
@@ -292,9 +293,10 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     ];
     const next = { id: 'a-2', recipient: 'SAN ZHANG', line1: '2 Main St' };
     await withTransaction(db, async (tx) => {
-      expect(await updateAddressSnapshot(tx, 'o-1', next as never, 'admin:u-9', new Date())).toBe(
-        true,
-      );
+      // AJ-455：返回归档号（路由写进审计），不再是 boolean
+      expect(
+        typeof (await updateAddressSnapshot(tx, 'o-1', next as never, 'admin:u-9', new Date())),
+      ).toBe('number');
     });
     const evs =
       await db`select note from order_events where order_id = 'o-1' and status = 'address_changed'`;

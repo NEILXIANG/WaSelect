@@ -22,7 +22,7 @@
  * @see docs/I1阶段开发实施方案.md §3.4；adapters/catalog.ts（输入解析）；
  *      packages/shared/src/money.ts（toMinor / applyRate 唯一取整口）；ADR-09（JPY 唯一锚）
  */
-import { applyRate, toMinor, toRatioInt } from '@waselect/shared';
+import { applyRate, MAX_LINE_QTY, toMinor, toRatioInt } from '@waselect/shared';
 import { AppError } from '../errors.js';
 
 /** 锚之外的展示币（JPY 是锚、恒显示，见 country_profiles.display_currencies 的注释口径）。 */
@@ -147,6 +147,14 @@ export function summarizeQuoteItems(
   for (const item of items) {
     if (!Number.isInteger(item.qty) || item.qty < 1) {
       throw new AppError(40001, { reason: 'qty_invalid', product_id: item.productId });
+    }
+    // 单行上限（AJ-448）：形状校验，不是业务拒绝——库存与单笔上限另有 40901 / 40906
+    if (item.qty > MAX_LINE_QTY) {
+      throw new AppError(40001, {
+        reason: 'qty_too_large',
+        product_id: item.productId,
+        max: MAX_LINE_QTY,
+      });
     }
     if (seen.has(item.productId)) {
       throw new AppError(40001, { reason: 'product_id_duplicated', product_id: item.productId });

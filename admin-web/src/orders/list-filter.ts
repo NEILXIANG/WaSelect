@@ -44,6 +44,14 @@ export const STATUS_TABS: readonly StatusTab[] = [
 ];
 
 /** 页签 → URL 的 `status` 值（「全部」= 空串，由页面删掉这个键）。 */
+/**
+ * 没有显式排序时各页签的默认排序（ADM-6 / AJ-453）：
+ * 「待发货」按付款时间正序——最早付款、最久没发的在最前；其它页签沿用服务端默认（下单时间倒序，返回 null）。
+ */
+export function defaultSortFor(statusParam: string): string | null {
+  return statusParam === 'paid' ? 'paid_at' : null;
+}
+
 export function tabStatusParam(tab: StatusTab): string {
   return tab.statuses.join(',');
 }

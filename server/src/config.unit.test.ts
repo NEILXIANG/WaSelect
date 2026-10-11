@@ -1263,4 +1263,15 @@ describe('🔴 规则 9c：生产必须有客服联系方式与条款地址（M-
   it('非生产不要求（开发 / staging 照常启动）', () => {
     expect(loadConfig({ ...baseEnv, NODE_ENV: 'development' }).SUPPORT_EMAIL).toBeUndefined();
   });
+
+  describe('🔴 S-5（AJ-459）：HTTP_TOTAL_BUDGET_MS 必须小于闲事务超时（60 秒）', () => {
+    it('≥ 60000 → 拒启（发起支付在事务内调机构，超过会被 PG 杀掉、会话建了行却回滚）；59999 放行', () => {
+      expect(expectReject({ ...baseEnv, HTTP_TOTAL_BUDGET_MS: '60000' }).join('\n')).toContain(
+        'HTTP_TOTAL_BUDGET_MS',
+      );
+      expect(loadConfig({ ...baseEnv, HTTP_TOTAL_BUDGET_MS: '59999' }).HTTP_TOTAL_BUDGET_MS).toBe(
+        59999,
+      );
+    });
+  });
 });

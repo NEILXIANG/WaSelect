@@ -175,9 +175,10 @@ describe('eventStatusText（事件流：订单状态 + 管理事件伪状态）'
     expect(eventStatusText('partial_failed')).toBe('部分退款失败');
   });
 
-  it('十四种伪状态全部配了文案（服务端新增一种而这里没跟 → 那一行退回英文，看得见但仍是缺口）', () => {
+  it('十五种伪状态全部配了文案（服务端新增一种而这里没跟 → 那一行退回英文，看得见但仍是缺口）', () => {
     expect(Object.keys(EVENT_STATUS_LABELS).sort()).toEqual([
       'address_changed',
+      'after_sale_handled',
       'dispute_closed',
       'dispute_opened',
       'dispute_released',
@@ -799,5 +800,25 @@ describe('eventNoteView：服务端写死的英文备注 → 中文（三端联�
     });
     expect(eventNoteView('shipped', 'auto:14d')).toEqual({ text: 'auto:14d', ref: '' });
     expect(eventNoteView('delivered', 'auto:xd')).toEqual({ text: 'auto:xd', ref: '' });
+  });
+
+  describe('G1（AJ-456）：整单退款闸门看部分退款在途；40902 的 data.reason 转成下一步', () => {
+    it('有一笔部分退款在途 → 不放行并说"先同步"；只有已成功 / 失败的 → 放行', () => {
+      const base = { status: 'paid', has_dispute: false };
+      expect(refundGate({ ...base, partial_refunds: [{ status: 'pending' }] }).ok).toBe(false);
+      expect(refundGate({ ...base, partial_refunds: [{ status: 'pending' }] }).reason).toContain(
+        '同步',
+      );
+      expect(refundGate({ ...base, partial_refunds: [{ status: 'initiated' }] }).ok).toBe(false);
+      expect(
+        refundGate({ ...base, partial_refunds: [{ status: 'succeeded' }, { status: 'failed' }] })
+          .ok,
+      ).toBe(true);
+    });
+    it('refundFailureNotice 按 reason 给出下一步：in_flight → 去部分退款点同步；fully_refunded_by_partials → 已退满', () => {
+      expect(refundFailureNotice(40902, undefined, 'partial_refund_in_flight')).toContain('同步');
+      expect(refundFailureNotice(40902, undefined, 'fully_refunded_by_partials')).toContain('退满');
+      expect(refundFailureNotice(40902)).toBe('');
+    });
   });
 });

@@ -139,4 +139,23 @@ describe('订单时间线（AJ-396）', () => {
     expect(el.querySelector('.trace-line')?.textContent).toBe(`${TRACE_HINT}trace-abc`);
     expect(el.textContent).toContain('已发货');
   });
+
+  it('🔴 ADM-1（AJ-466）：事件行显示操作者——管理员显示邮箱（没有邮箱时显示 admin:<id>）、支付机构 / 系统各有中文', async () => {
+    const el = await open([
+      { status: 'paid', at: '2026-10-08T01:00:00Z', actor: 'provider:stripe' },
+      {
+        status: 'shipped',
+        at: '2026-10-08T03:00:00Z',
+        actor: 'admin:u-1',
+        actor_email: 'ops@example.com',
+      },
+      { status: 'shipment_fixed', at: '2026-10-08T04:00:00Z', actor: 'admin:u-2' },
+      { status: 'expired', at: '2026-10-08T05:00:00Z', actor: 'job:expire-orders' },
+    ]);
+    const text = el.textContent ?? '';
+    expect(text).toContain('ops@example.com');
+    expect(text).toContain('admin:u-2');
+    expect(text).toContain('支付机构');
+    expect(text).toContain('系统');
+  });
 });

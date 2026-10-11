@@ -46,6 +46,8 @@ export async function listDisputes(
 export interface BlockUserInput {
   /** 要拉黑的用户（订单详情里的 `user_id`）。 */
   userId: string;
+  /** 拉黑原因（AJ-449 起服务端必填：进审计与连带取消的订单事件）。 */
+  reason: string;
   /**
    * **可选**：发起这次拉黑的那一单（面板上那一单）。
    * @why 带上它的唯一理由是让服务端核对"这张单属于这个人"（ADM3-01 纵深防御，契约 0.6.21）：
@@ -80,7 +82,10 @@ export async function blockUser(
     // 空串当"没带"，而不是发一个 `order_id: ""` 去撞 40001：
     // 面板只在拿到 orderId 时才出现，走到这里而 orderId 为空属于不该发生的分支，
     // 但真发生了也该照常拉黑——凭据是**加**上去的保险，不是拉黑的前置条件。
-    ...(orderId === undefined || orderId === '' ? {} : { body: { order_id: orderId } }),
+    body: {
+      reason: input.reason.trim(),
+      ...(orderId === undefined || orderId === '' ? {} : { order_id: orderId }),
+    },
     ...(traceId !== undefined ? { traceId } : {}),
   });
 }

@@ -17,6 +17,7 @@
  * @see ./view.ts；./api.ts；../orders/api.ts（getOrder）；契约 D-50
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { getOrder } from '../orders/api.js';
@@ -49,6 +50,8 @@ export function RiskPage({ api }: RiskPageProps) {
   /** 面板上显示的订单号（`order_no`），不是 UUID——运营是按订单号认单的（ADM3-01）。 */
   const [orderNo, setOrderNo] = useState('');
   const [userId, setUserId] = useState('');
+  /** 拉黑原因（AJ-449）：必填，进审计与连带取消的订单事件；面板收起时清空。 */
+  const [blockReason, setBlockReason] = useState('');
   const [busy, setBusy] = useState(false);
   /** 拉黑成功后递增，让下方「已拉黑用户」重新取数（P2-47）。 */
   const [blockedTick, setBlockedTick] = useState(0);
@@ -118,12 +121,13 @@ export function RiskPage({ api }: RiskPageProps) {
       // 拉黑不可逆、没有解除接口，多一道凭据核对的成本是请求体里多一个字段。
       // ⚠️ 它**不是**"防手滑"——防手滑靠的是 prepare 清空待确认态（AJ-256）；
       //    这里防的是"order_id 与 user_id 配错"这类请求级错误。
-      await blockUser(api, { userId, orderId });
+      await blockUser(api, { userId, orderId, reason: blockReason });
       sink.success(blockDoneText(userId, orderNo));
       setBlockedTick((t) => t + 1);
       setOrderId('');
       setOrderNo('');
       setUserId('');
+      setBlockReason('');
       setDialog(null);
     } catch (e) {
       setDialog(null);
@@ -136,12 +140,16 @@ export function RiskPage({ api }: RiskPageProps) {
 
   /** 打开拉黑确认弹层（第一批①：拉黑此前是行内「确认拉黑 / 取消」，与"保存"同款按钮）。 */
   const askBlock = (): void => {
+    if (blockReason.trim() === '') {
+      sink.error('请填写拉黑原因（会记录下来）');
+      return;
+    }
     setDialog({
       title: '拉黑后用户无法再下单（这次操作会记录下来）',
       // ⚠️ 正文直接引 view.ts 的常量，不在这里重写一遍：
       //    它连"未付款订单会被取消、库存回补"都写全了，重写的必然是缩水版，
       //    而后果清单缩水正是这类弹层最危险的失效方式。
-      body: `${BLOCK_CONFIRM_TEXT}\n\n订单 ${orderNo !== '' ? orderNo : orderId} · 用户 ${userId}`,
+      body: `${BLOCK_CONFIRM_TEXT}\n\n订单 ${orderNo !== '' ? orderNo : orderId} · 用户 ${userId}\n原因：${blockReason.trim()}`,
       confirmText: '确认拉黑',
       danger: true,
     });
@@ -227,6 +235,14 @@ export function RiskPage({ api }: RiskPageProps) {
           <a className="link" href={`#/customers/${encodeURIComponent(userId)}`}>
             查看客户
           </a>
+          <input
+            className="input"
+            name="block-reason"
+            placeholder="拉黑原因（必填，会记录下来），例：同一张卡 30 天内 3 次拒付"
+            maxLength={ADMIN_NOTE_MAX_LENGTH}
+            value={blockReason}
+            onChange={(e) => setBlockReason(e.target.value)}
+          />
           <button type="button" className="btn btn-danger" disabled={busy} onClick={askBlock}>
             拉黑用户
           </button>

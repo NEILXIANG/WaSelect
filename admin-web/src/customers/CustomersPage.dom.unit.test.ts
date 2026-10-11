@@ -176,8 +176,11 @@ describe('客户详情', () => {
     expect(testRow?.textContent).toContain('测试单');
   });
 
-  it('拉黑：先弹确认（之前不发请求）→ 确认后发 block（不带 order_id）→ 重新取详情显示已拉黑', async () => {
+  it('拉黑：原因必填 → 先弹确认（之前不发请求）→ 确认后发 block（带原因、不带 order_id）→ 重新取详情显示已拉黑', async () => {
     const { el, calls } = await open(detailRoute());
+    await click(button(el, '拉黑该客户'));
+    expect(el.querySelector('.dialog')).toBeNull(); // AJ-449：没填原因不弹层
+    await type(el.querySelector('input[name="customer-block-reason"]'), '多次拒付');
     await click(button(el, '拉黑该客户'));
     expect(calls.some((c) => c.path.endsWith('/block'))).toBe(false);
     expect(el.querySelector('.dialog')?.textContent).toContain('未付款的订单');
@@ -187,7 +190,7 @@ describe('客户详情', () => {
       path: `/api/v1/admin/users/${encodeURIComponent(ROW.id)}/block`,
       method: 'POST',
     });
-    expect(block?.body).toBeUndefined();
+    expect(block?.body).toEqual({ reason: '多次拒付' });
     expect(calls.filter((c) => c.path === `/api/v1/admin/customers/${ROW.id}`)).toHaveLength(2);
     expect(el.textContent).toContain('已拉黑（2026-10-07 10:00）');
     expect(button(el, '拉黑该客户')).toBeNull();

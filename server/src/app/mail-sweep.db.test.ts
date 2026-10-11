@@ -76,16 +76,10 @@ async function sweep(): Promise<DomainEvent[]> {
   const logger = createLogger({ env: 'test', destination: sink });
   const bus = createEventBus(logger);
   const seen: DomainEvent[] = [];
-  for (const name of [
-    'order.paid',
-    'order.shipped',
-    'order.refunded',
-    'order.partially_refunded',
-  ]) {
-    bus.subscribe(name, (e) => {
-      seen.push(e);
-    });
-  }
+  // AJ-450：补发走专用事件 `mail.resend`（payload.tag 是原事件名），不再冒充业务事件
+  bus.subscribe('mail.resend', (e) => {
+    seen.push(e);
+  });
   await runSchedulerOnce(
     createSchedulerDeps(db, bus, fixedClock(NOW.toISOString()), logger, {
       name: 'sweep-test',
@@ -100,10 +94,11 @@ async function sweep(): Promise<DomainEvent[]> {
 const keys = (events: DomainEvent[]): string[] =>
   events
     .map((e) => {
-      const rid = (e.payload as { refund_id?: string } | undefined)?.refund_id;
-      return rid === undefined
-        ? `${e.name}:${String(e.orderId)}`
-        : `${e.name}:${String(e.orderId)}:${rid}`;
+      const p = e.payload as { tag?: string; refund_id?: string } | undefined;
+      expect(e.name).toBe('mail.resend');
+      return p?.refund_id === undefined
+        ? `${String(p?.tag)}:${String(e.orderId)}`
+        : `${String(p?.tag)}:${String(e.orderId)}:${p.refund_id}`;
     })
     .sort();
 

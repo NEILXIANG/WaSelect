@@ -52,7 +52,13 @@ export interface AdminOrderLike {
   items?: Array<Record<string, unknown>>;
   payment?: Record<string, unknown>;
   payments?: Array<Record<string, unknown>>;
-  events?: Array<{ status?: string; note?: string; actor?: string; at?: string }>;
+  events?: Array<{
+    status?: string;
+    note?: string;
+    actor?: string;
+    actor_email?: string;
+    at?: string;
+  }>;
 }
 
 export interface OrderListResp {

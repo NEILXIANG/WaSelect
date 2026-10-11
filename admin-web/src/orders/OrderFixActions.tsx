@@ -32,7 +32,7 @@ export interface OrderFixActionsProps {
   orderId: string;
   order: unknown;
   onDone: () => unknown;
-  onError: (message: string) => void;
+  onError: (message: string, traceId?: string) => void;
   onNotice: (message: string) => void;
 }
 
@@ -124,6 +124,7 @@ export function OrderFixActions({
     setBusy(true);
     onNotice(''); // 上一个动作的提示不留到这次（三端联动模拟：改单号的提示挂到了部分退款之后）
     let message = '';
+    let traceId: string | undefined;
     let warn = '';
     try {
       if (mode === 'cancel') {
@@ -142,12 +143,14 @@ export function OrderFixActions({
     } catch (e) {
       setConfirming(false);
       message = e instanceof ApiError ? e.message : String(e);
+      traceId = e instanceof ApiError ? e.traceId : undefined;
     } finally {
       setBusy(false);
     }
     // 先刷新再提示：父组件的 load 开头会清错误条 / 提示（与 PartialRefunds 同一个 P2-49 顺序）
     await onDone();
-    if (message !== '') onError(message);
+    if (message !== '')
+      onError(message, traceId); // G3（AJ-476）：带报障码
     else onNotice(warn !== '' ? warn : fixDoneNotice(mode === '' ? 'fix' : mode, order));
   };
 

@@ -37,6 +37,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isOrderAttention,
   LIST_SORT_KEYS,
+  ORDER_ATTENTIONS,
   ORDER_ATTENTION_LABELS,
   SEARCH_KEYWORD_MAX_LENGTH,
   type OrderStatus,
@@ -49,7 +50,13 @@ import { CsvShipImport } from './CsvShipImport.js';
 import { SelectionBar } from './SelectionBar.js';
 import { PrintSheet } from './PrintSheet.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
-import { readStatusFilter, resolveDateRange, STATUS_TABS, tabStatusParam } from './list-filter.js';
+import {
+  defaultSortFor,
+  readStatusFilter,
+  resolveDateRange,
+  STATUS_TABS,
+  tabStatusParam,
+} from './list-filter.js';
 import { RowShipDrawer } from './RowShipDrawer.js';
 import { StatusTabs } from './StatusTabs.js';
 import { DateFilter } from './DateFilter.js';
@@ -201,7 +208,11 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         page,
         size: pageSize,
         keyword: applied,
-        ...(sortKey !== null ? { sort: `${sortDir === 'desc' ? '-' : ''}${sortKey}` } : {}),
+        ...(sortKey !== null
+          ? { sort: `${sortDir === 'desc' ? '-' : ''}${sortKey}` }
+          : defaultSortFor(statusKey) !== null
+            ? { sort: String(defaultSortFor(statusKey)) }
+            : {}),
         ...(statusKey === '' ? {} : { status: statusKey.split(',') as OrderStatus[] }),
         ...(createdFrom !== undefined ? { createdFrom } : {}),
         ...(createdTo !== undefined ? { createdTo } : {}),
@@ -331,6 +342,27 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
             清除
           </button>
         </p>
+      )}
+
+      {attention === undefined && (
+        // G5（AJ-471）：订单页自带待处理入口——此前只有工作台待办能进 attention 筛选，客服在订单页找不到买家售后
+        <p className="muted">
+          待处理：
+          {ORDER_ATTENTIONS.map((a) => (
+            <button
+              key={a}
+              type="button"
+              className="link"
+              onClick={() => patch({ attention: a, page: '1' })}
+            >
+              {ORDER_ATTENTION_LABELS[a]}
+            </button>
+          ))}
+        </p>
+      )}
+      {applied !== '' && !includeTest && (
+        // G4（AJ-471）：有关键字时服务端不隐藏测试单（按单号搜就是要找到它）——明说，别让勾选框撒谎
+        <p className="muted">搜索结果含测试单（按关键字查找时不过滤测试订单）</p>
       )}
 
       {/* 剩余清单 3-3：CSV 导出（订单总表 / 待采购 / 报关） */}

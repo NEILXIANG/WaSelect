@@ -49,6 +49,15 @@ export interface DashboardPageProps {
  *      那是"汇率配错了"，它已经有服务端与运维侧的告警；
  *      工作台**少显示一行 ≈USD** 是对的降级，让整页崩掉是错的降级。
  */
+/**
+ * 销售额卡片的辅行（ADM-7 / S3，AJ-469）：
+ * ① 按收款时刻求和、**含后来整单退款的单**（退掉的在下方「已退」）；② ≈USD 用的是含缓冲的展示汇率，不是市场价。
+ */
+export function salesSubText(jpy: unknown, rate: unknown): string {
+  const usd = usdApproxText(jpy, rate);
+  return `${usd === null ? '' : `${usd}（按含缓冲的展示汇率）· `}含后来退款的单，退款见下方「已退」`;
+}
+
 export function usdApproxText(jpy: unknown, rate: unknown): string | null {
   if (typeof jpy !== 'number' || typeof rate !== 'number') return null;
   try {
@@ -147,7 +156,7 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
           <Card
             label="销售额"
             value={today === undefined ? (failed ? '—' : '…') : moneyText(today.sales_jpy ?? 0)}
-            sub={usdApproxText(today?.sales_jpy ?? 0, rate)}
+            sub={salesSubText(today?.sales_jpy ?? 0, rate)}
           />
           <Card
             label="已付款订单"
@@ -174,7 +183,7 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
           <Card
             label="销售额"
             value={last7 === undefined ? (failed ? '—' : '…') : moneyText(last7.sales_jpy ?? 0)}
-            sub={usdApproxText(last7?.sales_jpy ?? 0, rate)}
+            sub={salesSubText(last7?.sales_jpy ?? 0, rate)}
           />
           <Card
             label="已付款订单"

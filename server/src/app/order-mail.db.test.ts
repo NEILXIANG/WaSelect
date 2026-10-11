@@ -84,6 +84,29 @@ describe('订单通知邮件（2-2）', () => {
     expect(sent[0]?.subject).toContain('Partial refund');
   });
 
+  it('🔴 AJ-450 补发事件 mail.resend：按 payload.tag 发信，幂等键与首发完全一致（服务商侧仍能去重）', async () => {
+    await seed('o-6', 'jane.doe@example.com');
+    const { bus, sent } = setup();
+    bus.publish({
+      name: 'mail.resend',
+      at: '2026-10-11T00:00:00.000Z',
+      orderId: 'o-6',
+      payload: { tag: 'order.shipped' },
+    });
+    bus.publish({
+      name: 'mail.resend',
+      at: '2026-10-11T00:00:00.000Z',
+      orderId: 'o-6',
+      payload: { tag: 'order.partially_refunded', refund_id: 'rf-z' },
+    });
+    expect(await bus.drain(2000)).toBe(0);
+    expect(sent.map((m) => m.idempotencyKey).sort()).toEqual([
+      'order.partially_refunded:o-6:rf-z',
+      'order.shipped:o-6',
+    ]);
+    expect(sent.find((m) => m.tag === 'order.shipped')?.subject).toContain('has shipped');
+  });
+
   it('🔴 已发货：发给 contact_email，正文含单号、承运商与运单号；幂等键 = 事件:订单', async () => {
     await seed('o-1', 'jane.doe@example.com');
     const { bus, sent, sink } = setup();

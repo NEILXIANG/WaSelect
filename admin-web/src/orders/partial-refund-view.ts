@@ -62,7 +62,8 @@ export function parseAmountToMinor(
   currency: string,
 ): { ok: true; minor: number } | { ok: false; reason: string } {
   const digits = digitsOf(currency);
-  const bare = raw.trim();
+  // S8（AJ-475）：全角数字（输入法）归一；`.5` / `1000.` 这类手误按数字收
+  const bare = raw.normalize('NFKC').trim().replace(/^\./, '0.').replace(/\.$/, '');
   const trimmed = currency === 'JPY' ? bare.replace(JPY_UNIT, '') : bare;
   const plain = GROUPED.test(trimmed) ? trimmed.replace(/,/g, '') : trimmed;
   const m = /^(\d+)(?:\.(\d+))?$/.exec(plain);

@@ -132,6 +132,15 @@ describe('buildCsvPreview', () => {
     ]);
   });
 
+  it('🔴 A-10（AJ-464）：运单号被 Excel 改成科学计数法（1.23457E+11）→ 直接判错、不进提交（不是只给黄字）', () => {
+    const csv =
+      'order_no,carrier,tracking_no\r\n261007-7K3QXA,Japan Post,1.23457E+11\r\n261007-B6GHJK,Japan Post,1.2E11\r\n';
+    const p = buildCsvPreview(parseCsvRecords(csv), lookup, 'Japan Post');
+    expect(p.rows[0]?.errors.join()).toContain('科学计数');
+    expect(p.rows[1]?.errors.join()).toContain('科学计数');
+    expect(toBatchItems(p.rows)).toEqual([]);
+  });
+
   /**
    * 🔴 续作复核时发现（AJ-401）：行号按"第几条记录 + 2"算，文件中间有空行、或引号字段里有换行时，
    *    预检表报的行号与运营在 Excel / 编辑器里看到的行号对不上——她会去改错的那一行。

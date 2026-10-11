@@ -20,6 +20,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
+import { useFormDirty } from '../ui/unsaved.js';
 import { listFx, setFx, type AdminApi } from './api.js';
 import {
   FX_QUOTES,
@@ -49,6 +50,7 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
    */
   const [currentRates, setCurrentRates] = useState<Record<string, number>>({});
   const [form, setForm] = useState(emptyFxForm);
+  useFormDirty(form, emptyFxForm()); // G2（AJ-477）：填了一半切页签要有提醒
   const [loading, setLoading] = useState(false);
   const ownSink = useToasts();
   const sink = parentSink ?? ownSink;

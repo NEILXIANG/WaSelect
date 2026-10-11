@@ -263,18 +263,42 @@ describe('部分退款的买家通知与"退满"收尾（第三轮缺口 P2-1 / 
     expect(gate).toMatchObject({ ok: false, code: 40902, reason: 'status_refunded' });
   });
 
-  it('AJ-414 已完成（completed）的单退满 → 只记事件，状态保持 completed（状态机无退款边）', async () => {
+  it('🔴 AJ-447 已完成（completed）的单退满 → 同样迁到 refunded（钱已全退，不能继续显示"已完成"）', async () => {
     await db`update orders set status = 'completed', paid_at = now(), shipped_at = now() where id = 'o-p'`;
     await db`update order_refunds set amount_minor = 8160 where id = 'rf-1'`;
     const { d, sink } = deps();
     const f = fake({ providerRef: 'cs_test_p', refundRef: 're_full', outcome: 'succeeded' });
     await executePartialRefund(d, f.provider, { ...PLAN, amountMinor: 8160 });
     expect(await events()).toContainEqual(['refunded_by_parts', 'USD:8160']);
-    const [o] = await db`select status from orders where id = 'o-p'`;
-    expect(o?.['status']).toBe('completed');
+    const [o] = await db`select status, refunded_at from orders where id = 'o-p'`;
+    expect(o?.['status']).toBe('refunded');
+    expect(o?.['refunded_at']).not.toBeNull();
+    const [p] = await db`select status from payments where id = 'pay-p'`;
+    expect(p?.['status']).toBe('refunded');
+    expect((await events()).map((e) => e[0])).toEqual(
+      expect.arrayContaining(['refunding', 'refunded']),
+    );
     expect(sink.find('admin_partial_refund_fully_refunded')[0]?.['ctx']).toMatchObject({
-      status_moved: false,
+      status_moved: true,
     });
+  });
+
+  it('🔴 S-1（AJ-457）：行已 succeeded 但收尾没做（落定与收尾不是一个事务，中途失败）→ 同步时补做收尾：单迁 refunded、发 order.refunded', async () => {
+    // 模拟"落定那一步成功、收尾那一步失败"留下的状态：行 succeeded 且金额已达实收，但没有 refunded_by_parts 事件
+    await db`update order_refunds set amount_minor = 8160, status = 'succeeded', provider_ref = 're_x', settled_at = now() where id = 'rf-1'`;
+    const { d, published } = deps();
+    const f = fake({ providerRef: 'cs_test_p', refundRef: 're_x', outcome: 'succeeded' });
+    expect(await syncPartialRefund(d, f.provider, { ...PLAN, amountMinor: 8160 })).toBe(
+      'succeeded',
+    );
+    expect(f.calls).toHaveLength(0); // 已落定：不调机构
+    const [o] = await db`select status from orders where id = 'o-p'`;
+    expect(o?.['status']).toBe('refunded');
+    expect(await events()).toContainEqual(['refunded_by_parts', 'USD:8160']);
+    expect(published.map((p) => p.name)).toEqual(['order.refunded']);
+    // 再同步一次：收尾幂等，不重复发事件
+    await syncPartialRefund(d, f.provider, { ...PLAN, amountMinor: 8160 });
+    expect(published.map((p) => p.name)).toEqual(['order.refunded']);
   });
 
   it('🔴 AJ-427 累计退满（未发货），其中**更早的一笔**是「缺货」→ 不回补库存；单照常 refunded', async () => {

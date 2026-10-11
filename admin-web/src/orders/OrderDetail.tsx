@@ -27,7 +27,15 @@ import { OrderCustomerCard } from './OrderCustomerCard.js';
 import { AfterSales } from './AfterSales.js';
 import { Badge } from '../ui/badge.js';
 import { detailBadges } from './badges.js';
-import { addressSummary, isDisputeLocked, paymentSummary, statusText } from './view.js';
+import {
+  addressHistoryRows,
+  addressSummary,
+  amountBreakdown,
+  isDisputeLocked,
+  logisticsView,
+  paymentSummary,
+  statusText,
+} from './view.js';
 
 export interface OrderDetailProps {
   api: AdminApi;
@@ -89,6 +97,15 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
       </header>
 
       {loading && <p className="muted">加载中…</p>}
+      {/* G7（AJ-467）：取不到这张单时给空态与出口——此前只剩标题 + 右下角 toast，关掉就是一片空白 */}
+      {!loading && order === null && (
+        <p className="muted">
+          找不到这张订单（链接可能有误，或订单已不存在）。
+          <button type="button" className="link" onClick={onBack}>
+            返回列表
+          </button>
+        </p>
+      )}
       {/* 第一批①：反馈统一走右下角 Toast（@see @limitation 二）。抽屉里的表单也走这一个出口 */}
       <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
 
@@ -127,10 +144,43 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
 
               <OrderItems items={items} />
 
+              {/* A-9（AJ-467）：金额拆分——客服回答"退了多少 / 运费多少"原先要去翻时间线 */}
+              <div className="row2">
+                {amountBreakdown(order).map((line) => (
+                  <div className="field" key={line.label}>
+                    <span className="label">{line.label}</span>
+                    <span>{line.value}</span>
+                  </div>
+                ))}
+              </div>
+
               {paymentSummary(order) !== '—' && (
                 <div className="field">
                   <span className="label">支付</span>
                   <span className="muted">{paymentSummary(order)}</span>
+                </div>
+              )}
+
+              {/* A-9（AJ-467）：物流块——运单号此前只在时间线备注里 */}
+              {logisticsView(order) !== null && (
+                <div className="field">
+                  <span className="label">物流</span>
+                  <span>
+                    {logisticsView(order)?.text}
+                    {logisticsView(order)?.url !== '' && (
+                      <>
+                        {' '}
+                        <a
+                          className="link"
+                          href={logisticsView(order)?.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          查件
+                        </a>
+                      </>
+                    )}
+                  </span>
                 </div>
               )}
 
@@ -194,6 +244,21 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 <span className="label">收货地址</span>
                 <span>{addressSummary(order)}</span>
               </div>
+              {/* A-4（AJ-467）：改址历史——此前只有写入没有读取，成功提示却说"可在事件里查" */}
+              {addressHistoryRows(order).length > 0 && (
+                <div className="field">
+                  <span className="label">改址历史</span>
+                  <span className="muted">
+                    {addressHistoryRows(order).map((h) => (
+                      <span key={h.id} className="timeline-note-body">
+                        {h.atText} 改前：{h.text}
+                        {h.actor !== '' ? `（${h.actor}）` : ''}
+                        <br />
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              )}
 
               <div className="field">
                 <span className="label">风险状态</span>

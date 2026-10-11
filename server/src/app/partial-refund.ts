@@ -123,7 +123,21 @@ export async function syncPartialRefund(
   if (current === undefined) {
     throw new AppError(40400, { order_id: plan.orderId, refund_id: plan.refundId });
   }
-  if (current.status === 'succeeded' || current.status === 'failed') return current.status;
+  if (current.status === 'succeeded') {
+    // S-1（AJ-457）：落定 → 事件 → 收尾是三段各自提交的写（本文件 @limitation），中间一步失败时行已是 succeeded
+    //   而收尾（退满 → 回补库存 → 迁 refunded）没做；再点"同步"原来直接返回，这张单永远停在 paid。
+    //   收尾本身幂等（事件已存在就跳过），所以同步时无条件再跑一次；补做成功才补发 order.refunded。
+    const closed = await closeOutIfFullyRefunded(deps, plan, deps.clock.now());
+    if (closed) {
+      deps.events.publish({
+        name: 'order.refunded',
+        at: deps.clock.now().toISOString(),
+        orderId: plan.orderId,
+      });
+    }
+    return current.status;
+  }
+  if (current.status === 'failed') return current.status;
   if (current.status === 'pending' && current.provider_ref !== null) {
     if (provider.refundStatus === undefined) {
       throw new AppError(50000, { order_id: plan.orderId, reason: 'refund_not_supported' });
@@ -198,8 +212,10 @@ async function applyOutcome(
  * @why 走 `markRefunding` + `markRefunded` 而不是直接 UPDATE 成 refunded：状态机没有 `paid → refunded` 的边，
  *      两步走让 `order_events` 留下与整单退款一致的轨迹，`payments.status` 也同步成 refunded
  *      （工作台"已退"口径 ①：全额那笔 = charge − 已成功部分退款 = 0，部分退款行各自按落定时刻计——合计不重不漏）。
- * @limitation completed 的单没有退款边（completed: []）：只记事件 + 日志，状态不变——它已不会再被发货，
- *             但仍会出现在"已完成"里；真要改口径需要先给状态机加边（技术文档 §1）。
+ * @why completed 的单退满**同样迁到 refunded**（AJ-447，严格检查 OPS-2）：此前只记事件、状态保持 completed，
+ *      买家端显示"已完成"但钱已全退，管理端落在「已完成」页签而不是「售后·退款」，且仍可再发起售后。
+ *      不改状态机表（completed: [] 保持），只在 markRefunding 上开一个仅此处使用的 `fromCompleted` 口子——
+ *      整单退款路由仍被 refundGuard 按表拦住，completed 不能整单退款。
  * @why 订单行锁 + "事件已存在就跳过"：两笔并发同步不可能都走到这里（一次只允许一笔在途），锁只是兜底，
  *      但回补不幂等，必须只做一次。
  * @returns 是否本次完成了收尾（调用方据此决定发哪个事件）。
@@ -239,9 +255,11 @@ async function closeOutIfFullyRefunded(
     const outOfStock = reasons.some((r) => isOutOfStockRefundReason(r.reason));
     const restock = o['shipped_at'] === null && o['paid_at'] !== null && !outOfStock;
     if (restock) await restoreStockForOrder(tx, plan.orderId);
-    // AJ-414：沿状态机迁到 refunded；completed 没有边 → markRefunding 返回 false，状态保持（@limitation）
+    // AJ-414：沿 refunding → refunded 两步迁；completed 由 fromCompleted 放行（AJ-447，见文件头 @why）
     const moved =
-      (await markRefunding(tx, plan.orderId, 'refunded_by_parts', at, plan.actor)) &&
+      (await markRefunding(tx, plan.orderId, 'refunded_by_parts', at, plan.actor, {
+        fromCompleted: true,
+      })) &&
       (await markRefunded(
         tx,
         plan.orderId,

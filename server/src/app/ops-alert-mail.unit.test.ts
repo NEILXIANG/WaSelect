@@ -38,13 +38,15 @@ describe('对账异常告警邮件（2-4）', () => {
     expect(await bus.drain(1000)).toBe(0);
     expect(sent).toHaveLength(1);
     expect(sent[0]?.to).toBe('ops@example.com');
-    expect(sent[0]?.subject).toContain('2026-10-06');
+    // S-6（AJ-460）：日期按日本时间（18:00Z 已是 JST 10-07），与运营看到的页面同口径
+    expect(sent[0]?.subject).toContain('2026-10-07');
+    expect(sent[0]?.subject).not.toContain('2026-10-06');
     expect(sent[0]?.subject).toContain('2');
     expect(sent[0]?.text).toContain('stuck_refunds: 2');
     expect(sent[0]?.text).toContain('callback_anomalies_48h: 1');
     expect(sent[0]?.text).not.toContain('dangling_payments');
     // 扫描 S-04：键带计数摘要——同一天重跑、数字变了要能再发；数字没变（重放）仍去重
-    expect(sent[0]?.idempotencyKey).toMatch(/^reconciliation:2026-10-06:[0-9a-f]{12}$/);
+    expect(sent[0]?.idempotencyKey).toMatch(/^reconciliation:2026-10-07:[0-9a-f]{12}$/);
   });
 
   it('没配 ALERT_EMAIL → 不发，记 ops_alert_skipped', async () => {

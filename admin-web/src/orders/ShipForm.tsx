@@ -16,6 +16,7 @@
 import { useState } from 'react';
 import { normalizeTrackingNo, SHIP_MAX_CHARS, trackingNoRecognized } from '@waselect/shared';
 import { enterClicksPrimary } from '../ui/keys.js';
+import { readLastCarrier, saveLastCarrier } from './last-carrier.js';
 import { DEFAULT_CARRIER } from './carrier.js';
 import { CarrierPicker } from './CarrierPicker.js';
 import { useFormDirty } from '../ui/unsaved.js';
@@ -52,9 +53,10 @@ export function ShipForm({
   onBusy,
 }: OrderActionFormProps) {
   // 承运商默认 EMS（N18）：基线也是它，只打开不填不算"未保存"
+  // S2（AJ-473）：上次用过的承运商优先（批量 / CSV 已这样做，单单发货此前固定 EMS）；没记录才用默认
   const initial = (): ReturnType<typeof emptyShipForm> => ({
     ...emptyShipForm(),
-    carrier: DEFAULT_CARRIER,
+    carrier: readLastCarrier() !== '' ? readLastCarrier() : DEFAULT_CARRIER,
   });
   const [ship, setShip] = useState(initial);
   useFormDirty(ship, initial());
@@ -78,6 +80,7 @@ export function ShipForm({
     setBusy(true);
     try {
       const resp = await shipOrder(api, id, toShipBody(ship));
+      saveLastCarrier(ship.carrier); // S2（AJ-473）：下一单默认用它
       setShip(initial());
       setDialog(null);
       await reload();

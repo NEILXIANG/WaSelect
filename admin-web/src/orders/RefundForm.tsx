@@ -92,9 +92,13 @@ export function RefundForm({
       onChanged();
       sink.error(message, { traceId });
       // 按刷新后的真实状态说话（P2-49）：已退成 / 机构确认失败 / 结果未知 / 50300 未发出
-      sink.info(fullRefundErrorNotice({ code, retryAfterSec: retryAfterMsSec(e), order: fresh }), {
-        sticky: true,
-      });
+      const reason = e instanceof ApiError ? e.data?.['reason'] : undefined;
+      sink.info(
+        fullRefundErrorNotice({ code, retryAfterSec: retryAfterMsSec(e), reason, order: fresh }),
+        {
+          sticky: true,
+        },
+      );
       setBusy(false);
     }
   };

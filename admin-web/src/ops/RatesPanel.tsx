@@ -23,6 +23,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
+import { shippingRatesFingerprint } from '@waselect/shared';
+import { useFormDirty } from '../ui/unsaved.js';
 import { listShippingRates, replaceShippingRates, type AdminApi } from './api.js';
 import { emptyRateRow, rateDuplicates, rateErrors, toRateBody, type RateRow } from './view.js';
 
@@ -49,20 +51,35 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
   const [confirming, setConfirming] = useState(false);
   /** 整表替换请求在途（P2-47）：连点"确认"会把同一张表 PUT 两次，第二次可能覆盖别人刚做的改动。 */
   const [saving, setSaving] = useState(false);
+  /** 读到这张表时的指纹（AJ-458）：保存时带上，别人改过就 40914，不静默覆盖。 */
+  const [loadedFingerprint, setLoadedFingerprint] = useState<string | undefined>(undefined);
+  /** 读到时的那张表（G2 / AJ-477）：未保存守卫的基线；「放弃修改」也回到它。 */
+  const [loadedRows, setLoadedRows] = useState<RateRow[]>([]);
+  useFormDirty(rows, loadedRows);
 
   const load = useCallback(async () => {
     setLoading(true);
     sink.error('');
     try {
       const raw = await listShippingRates(api);
-      setRows(
-        raw.map((r) => ({
-          carrier: r.carrier ?? '',
-          maxWeightG: Number.isInteger(r.max_weight_g) ? String(r.max_weight_g) : '',
-          priceJpy: Number.isInteger(r.price_jpy) ? String(r.price_jpy) : '',
-          active: r.active !== false,
-        })),
+      setLoadedFingerprint(
+        shippingRatesFingerprint(
+          raw.map((r) => ({
+            carrier: r.carrier ?? '',
+            max_weight_g: Number(r.max_weight_g),
+            price_jpy: Number(r.price_jpy),
+            active: r.active !== false,
+          })),
+        ),
       );
+      const fresh = raw.map((r) => ({
+        carrier: r.carrier ?? '',
+        maxWeightG: Number.isInteger(r.max_weight_g) ? String(r.max_weight_g) : '',
+        priceJpy: Number.isInteger(r.price_jpy) ? String(r.price_jpy) : '',
+        active: r.active !== false,
+      }));
+      setRows(fresh);
+      setLoadedRows(fresh);
       setLoaded(true);
     } catch (e) {
       // ⚠️ 失败**不清空表格**：把已加载的档位清掉会让"改了一半的表"丢失
@@ -91,7 +108,7 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
     sink.success('');
     setSaving(true);
     try {
-      await replaceShippingRates(api, toRateBody(rows));
+      await replaceShippingRates(api, toRateBody(rows), loadedFingerprint);
       sink.success('已整表替换（下一次报价立即按新档位计算）');
       await load();
     } catch (e) {
@@ -214,6 +231,14 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
           onClick={() => setRows((prev) => [...prev, emptyRateRow(prev[0]?.carrier ?? '')])}
         >
           新增一档
+        </button>
+        <button
+          type="button"
+          className="link"
+          disabled={!loaded || saving}
+          onClick={() => setRows(loadedRows)}
+        >
+          放弃修改
         </button>
         {confirming ? (
           <>

@@ -332,3 +332,12 @@ export const MAX_ADDRESSES_PER_USER = 20;
  * @see server/src/domain/admin-order-actions.ts（取值理由与取舍写在那里）
  */
 export const SHIPMENT_REVERT_WINDOW_HOURS = 72;
+
+/**
+ * 订单**单行**数量上限（AJ-448）。
+ * @why 契约此前只有 `minimum: 1`，没有上限：fx / page size / stock 都有，唯独 qty 没有——输入校验维度的缺口。
+ *      现实里一行 99 件已远超一次跨境包裹的合理件数；更大的量按库存与单笔金额上限（40906）拦，但那两道是
+ *      "业务拒绝"，不是"输入形状"，拿它们顶替形状校验等于让一个畸形请求走到报价才被挡。
+ * @limitation 小程序运行时进不了 shared（纯 JS），`miniprogram/utils/cart-store.js` 另存一份同值，由其单测钉住相等。
+ */
+export const MAX_LINE_QTY = 99;

@@ -571,7 +571,7 @@ describe('客户详情页上的拉黑 / 解除（复用 /admin/users/{id}/block|
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           })
         ).status;
-      expect(await post('/api/v1/admin/users/u-cust-c/block')).toBe(200);
+      expect(await post('/api/v1/admin/users/u-cust-c/block', { reason: '测试拉黑' })).toBe(200);
       const after = await get(url, '/api/v1/admin/customers/u-cust-c', admin);
       expect(after.body['blocked']).toBe(true);
       expect(

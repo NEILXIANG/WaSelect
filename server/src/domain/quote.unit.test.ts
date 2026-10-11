@@ -7,6 +7,7 @@
  *
  * @see domain/quote.ts（被测）；docs/I1阶段开发实施方案.md §3.4
  */
+import { MAX_LINE_QTY } from '@waselect/shared';
 import { describe, expect, it } from 'vitest';
 import { toMinor, toRateInt, toRatioInt } from '@waselect/shared';
 import { AppError } from '../errors.js';
@@ -46,6 +47,20 @@ function codeOf(fn: () => unknown): number {
 describe('summarizeQuoteItems', () => {
   it('空 items → 40001', () => {
     expect(codeOf(() => summarizeQuoteItems([], []))).toBe(40001);
+  });
+
+  it('🔴 qty 超过 MAX_LINE_QTY → 40001 qty_too_large；恰好等于上限放行（AJ-448）', () => {
+    expect(MAX_LINE_QTY).toBe(99);
+    const err = codeOf(() =>
+      summarizeQuoteItems(
+        [{ productId: 'p-1', qty: MAX_LINE_QTY + 1 }],
+        [product({ stock: 1000 })],
+      ),
+    );
+    expect(err).toBe(40001);
+    expect(() =>
+      summarizeQuoteItems([{ productId: 'p-1', qty: MAX_LINE_QTY }], [product({ stock: 1000 })]),
+    ).not.toThrow();
   });
 
   it('qty 非法（0 / 负 / 小数）→ 40001', () => {

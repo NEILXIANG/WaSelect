@@ -94,9 +94,28 @@ export const EVENT_STATUS_LABELS: Readonly<Record<string, string>> = {
   shipment_fixed: '改运单号',
   // AJ-440：撤销发货（note 里有原运单号与原因）
   shipment_reverted: '撤销发货',
+  // AJ-452：处理售后（note = 结果：说明（售后 #id））
+  after_sale_handled: '处理售后',
   refunded_by_parts: '部分退款已退满',
   test_archived: '测试单归档',
 };
+
+/**
+ * 事件行的操作者文案（ADM-1 / AJ-466）：服务端一直写全了 actor，前端此前不渲染——
+ * "谁写了备注"看得见、"谁发的货 / 谁退的款"看不见，资金操作反而不可追溯。
+ * - `admin:<id>` → 邮箱（详情接口 0.6.68 起按 id 回填 `actor_email`）；没有邮箱时显示原串，至少可检索；
+ * - `provider:<name>` → 支付机构；`job:*` / `system` / `cli:*` → 系统；`user:*` → 买家；
+ * - 没有 actor（早期事件）→ 空串，不编。
+ */
+export function eventActorText(e: { actor?: unknown; actor_email?: unknown }): string {
+  if (typeof e.actor_email === 'string' && e.actor_email !== '') return e.actor_email;
+  const a = typeof e.actor === 'string' ? e.actor : '';
+  if (a === '') return '';
+  if (a.startsWith('admin:')) return a;
+  if (a.startsWith('provider:')) return `支付机构 ${a.slice('provider:'.length)}`;
+  if (a.startsWith('user:') || a === 'buyer') return '买家';
+  return '系统';
+}
 
 /** 闸门结果：不能操作时必须有**具体原因**（按钮禁用也要能 tooltip 出来）。 */
 export interface Gate {
@@ -106,6 +125,8 @@ export interface Gate {
 
 const OK: Gate = { ok: true, reason: '' };
 const NO = (reason: string): Gate => ({ ok: false, reason });
+/** 部分退款的在途状态（与 partial-refund-view.ts IN_FLIGHT 同一组）。 */
+const REFUND_IN_FLIGHT: ReadonlySet<string> = new Set(['initiated', 'pending', 'unknown']);
 
 /** 列表行视图。 */
 export interface OrderRow {
@@ -330,6 +351,14 @@ export function refundGate(order: unknown): Gate {
   if (disputed && status !== 'refunding')
     return NO('买家正在通过银行要回货款（拒付），现在不能退款；请先到「风控」页处理这条拒付');
   // 迟到付款（剩余清单 1-5）：已关单收到了钱，服务端凭 late_paid 放行；与服务端 refundGuard 同口径
+  // G1（AJ-456）：有一笔部分退款在途（服务端会 40902 partial_refund_in_flight）——先去部分退款面板点「同步」
+  const partials = (order as { partial_refunds?: unknown } | null)?.partial_refunds;
+  if (
+    Array.isArray(partials) &&
+    partials.some((p: { status?: unknown }) => REFUND_IN_FLIGHT.has(String(p?.status)))
+  ) {
+    return NO('有一笔部分退款还在处理中：先到「部分退款」点「同步」拿到结果，再决定是否整单退款');
+  }
   const latePaid = (order as { late_paid?: unknown } | null)?.late_paid === true;
   if (latePaid && (status === 'expired' || status === 'cancelled')) {
     return {
@@ -606,8 +635,17 @@ export function toRefundBody(form: unknown): { reason: string } {
  * @limitation 前端分不出"5xx 发生在落 refunding 之前还是之后"，所以一律提醒并**同时刷新详情**——
  *              以刷新后的订单状态为准，文案也是这么说的。
  */
-export function refundFailureNotice(code: unknown, retryAfterSec?: number): string {
+export function refundFailureNotice(
+  code: unknown,
+  retryAfterSec?: number,
+  /** 服务端 40902 的 `data.reason`（AJ-456）：有它才能说清下一步 */
+  reason?: unknown,
+): string {
   const c = typeof code === 'number' ? code : 0;
+  if (c === 40902 && reason === 'partial_refund_in_flight')
+    return '有一笔部分退款还在处理中：先到「部分退款」点「同步」拿到结果，再整单退款。';
+  if (c === 40902 && reason === 'fully_refunded_by_partials')
+    return '部分退款已退满实收，这张单没有可退金额了（刷新后应显示「已退款」）。';
   // 50300 单独说（P2-49）：熔断在出发前就拒了，请求**没有发到机构**——说"结果未知"会把人吓去机构后台
   if (c === UPSTREAM_UNAVAILABLE_CODE) return upstreamUnavailableNotice(retryAfterSec);
   const unknownOutcome = c < 0 || c >= 50000;
@@ -637,9 +675,11 @@ export function upstreamUnavailableNotice(retryAfterSec?: number): string {
 export function fullRefundErrorNotice(a: {
   code: unknown;
   retryAfterSec?: number | undefined;
+  reason?: unknown;
   order: unknown;
 }): string {
-  const base = refundFailureNotice(a.code, a.retryAfterSec);
+  const base = refundFailureNotice(a.code, a.retryAfterSec, a.reason);
+  if (a.code === 40902 && base !== '') return base;
   if (base === '' || a.code === UPSTREAM_UNAVAILABLE_CODE || a.order === null) return base;
   const status = readStatus(a.order);
   if (status === 'refunded') return '刷新后订单已是「已退款」：这笔退款实际已完成，无需再操作。';
@@ -739,3 +779,56 @@ export const RELEASE_DONE_NOTICE =
   '⚠️ 已解除本单的拒付限制：现在可以发货 / 退款了。' +
   '但拒付**本身没有结案**——风控列表里仍然看得到它，机构仍可能判定败诉并把钱收回。' +
   '是否发货请按业务判断，不要因为按钮亮了就发。';
+
+/** 金额拆分（A-9 / AJ-467）：只列订单上真有的字段；买家实付按支付币种（最小单位 → 人话）。 */
+export function amountBreakdown(order: unknown): Array<{ label: string; value: string }> {
+  const o = (order ?? {}) as Record<string, unknown>;
+  const out: Array<{ label: string; value: string }> = [];
+  if (Number.isInteger(o['items_jpy']))
+    out.push({ label: '商品合计', value: moneyText(o['items_jpy']) });
+  if (Number.isInteger(o['shipping_jpy']))
+    out.push({ label: '运费', value: moneyText(o['shipping_jpy']) });
+  if (Number.isInteger(o['duty_jpy']))
+    out.push({ label: '预估关税（含在商品价内）', value: moneyText(o['duty_jpy']) });
+  const p = (
+    typeof o['payment'] === 'object' && o['payment'] !== null ? o['payment'] : {}
+  ) as Record<string, unknown>;
+  if (typeof p['charge_currency'] === 'string' && Number.isInteger(p['charge_amount'])) {
+    out.push({
+      label: '买家实付',
+      value: minorMoneyText(p['charge_amount'], p['charge_currency']),
+    });
+  }
+  return out;
+}
+
+/** 物流块（A-9 / AJ-467）：没发货（没有运单号）→ null，整块不渲染。 */
+export function logisticsView(order: unknown): { text: string; url: string } | null {
+  const o = (order ?? {}) as Record<string, unknown>;
+  const tracking = typeof o['tracking_no'] === 'string' ? o['tracking_no'] : '';
+  if (tracking === '') return null;
+  const carrier = typeof o['carrier'] === 'string' ? o['carrier'] : '';
+  const shippedAt = typeof o['shipped_at'] === 'string' ? formatJst(o['shipped_at']) : '';
+  return {
+    text: [carrier, tracking, shippedAt === '' ? '' : `发货于 ${shippedAt}`]
+      .filter((x) => x !== '')
+      .join(' · '),
+    url: typeof o['tracking_url'] === 'string' ? o['tracking_url'] : '',
+  };
+}
+
+/** 改址历史行（A-4 / AJ-467，契约 0.6.67 `address_history`）：改前地址摘要 + 谁 + 何时。 */
+export function addressHistoryRows(
+  order: unknown,
+): Array<{ id: string; text: string; actor: string; atText: string }> {
+  const list = (order as { address_history?: unknown } | null)?.address_history;
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((h): h is Record<string, unknown> => typeof h === 'object' && h !== null)
+    .map((h) => ({
+      id: String(h['id'] ?? ''),
+      text: addressSummary({ address: h['snapshot'] }),
+      actor: typeof h['actor'] === 'string' ? h['actor'] : '',
+      atText: typeof h['at'] === 'string' ? formatJst(h['at']) : '',
+    }));
+}

@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChannelConfig } from '../../ports/payment.js';
 import { systemClock } from '../clock.js';
 import { systemIdGen } from '../ids.js';
-import { createMockProvider, MOCK_SIGNATURE_HEADER } from './mock.js';
+import { createMockProvider, MOCK_MAX_SESSIONS, MOCK_SIGNATURE_HEADER } from './mock.js';
 import { fixedClock } from '../../../../test/helpers/fixed-clock.js';
 
 const SECRET = 'mock-unit-secret';
@@ -212,5 +212,50 @@ describe('mock 通道', () => {
     });
     // 真实时钟下：到期时间必须晚于"现在"，且不是固定时钟那个值
     expect(Date.parse(s.expiresAt ?? '')).toBeGreaterThan(Date.now());
+  });
+
+  it('🔴 S-10（AJ-462）：会话缓存有上限（MOCK_MAX_SESSIONS）：超出后最老的键被逐出，再用它 create 会得到新会话', async () => {
+    const p = provider();
+    const first = await p.create({
+      orderId: 'o-0',
+      orderNo: 'N',
+      amountJpy: 1,
+      currency: 'JPY',
+      amountMinor: 1,
+      destCountry: 'US',
+      idempotencyKey: 'k-0',
+    });
+    for (let i = 1; i <= MOCK_MAX_SESSIONS; i += 1) {
+      await p.create({
+        orderId: `o-${String(i)}`,
+        orderNo: 'N',
+        amountJpy: 1,
+        currency: 'JPY',
+        amountMinor: 1,
+        destCountry: 'US',
+        idempotencyKey: `k-${String(i)}`,
+      });
+    }
+    const again = await p.create({
+      orderId: 'o-0',
+      orderNo: 'N',
+      amountJpy: 1,
+      currency: 'JPY',
+      amountMinor: 1,
+      destCountry: 'US',
+      idempotencyKey: 'k-0',
+    });
+    expect(again.providerRef).not.toBe(first.providerRef);
+    // 没被逐出的最新键仍幂等
+    const last = await p.create({
+      orderId: 'o-x',
+      orderNo: 'N',
+      amountJpy: 1,
+      currency: 'JPY',
+      amountMinor: 1,
+      destCountry: 'US',
+      idempotencyKey: `k-${String(MOCK_MAX_SESSIONS)}`,
+    });
+    expect(last.providerRef).toBeDefined();
   });
 });

@@ -88,7 +88,12 @@ export function ExportBar({ api, onDownload = defaultDownload }: ExportBarProps)
     try {
       await requestExport(api, kind, onDownload);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      // G3（AJ-476）：报障码跟着文案走，不然这类失败查不到日志
+      setError(
+        e instanceof ApiError
+          ? `${e.message}${e.traceId !== '' ? `（报障码 ${e.traceId}）` : ''}`
+          : String(e),
+      );
     } finally {
       setBusy(false);
     }
@@ -108,6 +113,10 @@ export function ExportBar({ api, onDownload = defaultDownload }: ExportBarProps)
         </button>
       ))}
       {error !== '' && <span className="error">{error}</span>}
+      {/* ADM-2（AJ-468）：@limitation 此前只在代码注释里——运营筛完条件点导出拿到的是全量 */}
+      <span className="muted">
+        导出的是全部订单，不受上方筛选影响；只导出筛选结果请勾选行后用「导出所选」
+      </span>
     </div>
   );
 }

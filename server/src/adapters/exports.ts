@@ -19,6 +19,7 @@
  */
 import type { Db } from './db.js';
 import { asText, type CsvCell } from '../domain/csv.js';
+import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
 
 export const EXPORT_KINDS = ['orders', 'purchase', 'customs'] as const;
 export type ExportKind = (typeof EXPORT_KINDS)[number];
@@ -57,13 +58,20 @@ async function ordersTable(
   ids: readonly string[] | undefined,
 ): Promise<ExportTable> {
   const rows = await db`
-    select order_no, status, created_at, paid_at, shipped_at, items_jpy, shipping_jpy, duty_jpy, total_jpy,
-           address_snapshot ->> 'recipient' as recipient, address_snapshot ->> 'state' as state,
-           address_snapshot ->> 'country' as country, carrier, tracking_no
-      from orders
-     where is_test = false and (${status === undefined ? db`true` : db`status = ${status}`})
-       and (${idFilter(db, 'id', ids)})
-     order by created_at desc, id desc`;
+    select o.order_no, o.status, o.created_at, o.paid_at, o.shipped_at, o.items_jpy, o.shipping_jpy, o.duty_jpy, o.total_jpy,
+           o.address_snapshot ->> 'recipient' as recipient, o.address_snapshot ->> 'state' as state,
+           o.address_snapshot ->> 'country' as country, o.carrier, o.tracking_no,
+           -- ADM-3（AJ-451）：买家实付币种与金额 = 最新一条成功支付行；没有成功支付行两列为空（不编 0）
+           p.charge_currency as paid_currency, p.charge_amount as paid_minor
+      from orders o
+      left join lateral (
+        select charge_currency, charge_amount from payments
+         where order_id = o.id and status in ('succeeded', 'refunded')
+         order by created_at desc, id desc limit 1
+      ) p on true
+     where o.is_test = false and (${status === undefined ? db`true` : db`status = ${status}`})
+       and (${idFilter(db, 'o.id', ids)})
+     order by o.created_at desc, o.id desc`;
   return {
     header: [
       'order_no',
@@ -80,6 +88,8 @@ async function ordersTable(
       'country',
       'carrier',
       'tracking_no',
+      'paid_currency',
+      'paid_amount',
     ],
     rows: rows.map((r) => [
       str(r['order_no']),
@@ -96,8 +106,25 @@ async function ordersTable(
       str(r['country']),
       str(r['carrier']),
       asText(str(r['tracking_no'])),
+      str(r['paid_currency']),
+      paidAmount(r['paid_currency'], r['paid_minor']),
     ]),
   };
+}
+
+/** 最小单位 → 币种习惯写法（USD 8600 → "86.00"，JPY 1650 → "1650"）；币种不认识时原样给最小单位。 */
+function paidAmount(currency: unknown, minor: unknown): string | null {
+  if (minor === null || minor === undefined) return null;
+  const digits =
+    typeof currency === 'string' && currency in CURRENCY_MINOR_DIGITS
+      ? CURRENCY_MINOR_DIGITS[currency as CurrencyCode]
+      : 0;
+  const n = Number(minor);
+  if (digits === 0) return String(n);
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  const base = 10 ** digits;
+  return `${sign}${String(Math.floor(abs / base))}.${String(abs % base).padStart(digits, '0')}`;
 }
 
 async function purchaseTable(db: Db, ids: readonly string[] | undefined): Promise<ExportTable> {

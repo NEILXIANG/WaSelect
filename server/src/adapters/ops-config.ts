@@ -41,6 +41,7 @@
 import type { Db } from './db.js';
 import { withTransaction } from './db.js';
 import type { ShippingRateInput } from '../domain/shipping-rates-input.js';
+import { shippingRatesFingerprint } from '@waselect/shared';
 
 /** 汇率行（与契约 `FxRate` 逐字段同形；NUMERIC 已转成 number）。 */
 export interface FxRateRow {
@@ -96,6 +97,17 @@ export interface ShippingRatesReplaced {
  * @why 用专门的错误类而不是改返回值：`replaceShippingRates` 的十余处调用方读 `{before, after}`，
  *      "失败"本来就该让事务回滚，抛出是 `withTransaction` 回滚的唯一出口。路由把它映射成 40918。
  */
+/** 整表替换时表已被别人改过（AJ-458）：路由折成 40914。 */
+export class ShippingTableStaleError extends Error {
+  constructor(
+    readonly expected: string,
+    readonly current: string,
+  ) {
+    super(`shipping_rates 已被修改：期望指纹 ${expected}，当前 ${current}`);
+    this.name = 'ShippingTableStaleError';
+  }
+}
+
 export class ShippingTableTooLightError extends Error {
   constructor(
     readonly productId: string,
@@ -121,7 +133,7 @@ export interface OpsConfigRepo {
   /** 🔴 事务内整表替换（@why）；返回**替换前后**两张表（@see ShippingRatesReplaced）。 */
   replaceShippingRates(
     rows: readonly ShippingRateInput[],
-    guard?: { packagingWeightG: number },
+    guard?: { packagingWeightG: number; expectedFingerprint?: string | undefined },
   ): Promise<ShippingRatesReplaced>;
 }
 
@@ -196,7 +208,7 @@ export function createOpsConfigRepo(db: Db): OpsConfigRepo {
 
     async replaceShippingRates(
       rows: readonly ShippingRateInput[],
-      guard?: { packagingWeightG: number },
+      guard?: { packagingWeightG: number; expectedFingerprint?: string | undefined },
     ): Promise<ShippingRatesReplaced> {
       return withTransaction(db, async (tx) => {
         // 🔴 B22 / AJ-204：**整表替换必须串行**（表级排他锁），否则结果是两次输入的**并集**。
@@ -224,6 +236,21 @@ export function createOpsConfigRepo(db: Db): OpsConfigRepo {
         //    `lock table` 才排队，但它若先读，那次读发生在 A 提交之前 ⇒ 还是旧表）；
         //    delete 之后读则已经是空表。
         const before = await selectShippingRates(tx);
+        // ADM-4（AJ-458）：乐观并发——管理端带上"我读到的那张表"的指纹，在锁内与当前表比对；
+        //   不等就拒（40914），表不动。不带指纹照旧放行（老调用方 / 脚本）。
+        if (guard?.expectedFingerprint !== undefined) {
+          const current = shippingRatesFingerprint(
+            before.map((r) => ({
+              carrier: r.carrier,
+              max_weight_g: r.max_weight_g,
+              price_jpy: r.price_jpy,
+              active: r.active,
+            })),
+          );
+          if (current !== guard.expectedFingerprint) {
+            throw new ShippingTableStaleError(guard.expectedFingerprint, current);
+          }
+        }
         await tx`delete from shipping_rates`;
         // ⚠️ 逐条插入而不是批量 `values ${tx([[…]])}`：postgres.js 的多行 helper 类型
         //    （`EscapableArray`）只接受 string/number/Date，**不含 boolean**，

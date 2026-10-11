@@ -33,3 +33,11 @@ export const systemClock: Clock = {
 export function plusMs(base: Date, ms: number): Date {
   return new Date(base.getTime() + ms);
 }
+
+/**
+ * ISO 字符串 → Date（AJ-460）。业务侧禁止 `new Date()`（F10 lint），把"字符串转时刻"收在这里：
+ * 它不读当前时间，只是形状转换，所以不违反"时间只从 Clock 来"的本意。
+ */
+export function fromIso(iso: string): Date {
+  return new Date(iso);
+}

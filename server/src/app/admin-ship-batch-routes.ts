@@ -31,7 +31,7 @@ import { AppError } from '../errors.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
-import { setAuditAfter, skipAudit } from './admin-audit.js';
+import { setAuditAfter, setAuditTarget, skipAudit } from './admin-audit.js';
 import { adminActor } from './admin-order-routes.js';
 import { shipOrder, type ShipOrderDeps, type ShippedView } from './ship-order.js';
 
@@ -116,7 +116,11 @@ export function mountAdminShipBatchRoutes(
           ctx: { total: results.length, succeeded, failed },
         });
         if (succeeded === 0) skipAudit(res);
-        else setAuditAfter(res, { results });
+        else {
+          // ADM-8（AJ-470）：运营日志的"对象"列此前为空——批量没有单个 id，记成功数 / 总数
+          setAuditTarget(res, `batch:${String(succeeded)}/${String(results.length)}`);
+          setAuditAfter(res, { results });
+        }
         res.json({ results, succeeded, failed });
       } catch (e) {
         next(e);

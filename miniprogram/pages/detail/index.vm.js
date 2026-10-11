@@ -28,7 +28,7 @@
 
 import { displaySubLine } from '../../utils/price-format.js';
 import { PLACEHOLDER_IMAGE, imageUrl } from '../../utils/placeholder.js';
-import { MAX_CART_LINES } from '../../utils/cart-store.js';
+import { MAX_CART_LINES, MAX_LINE_QTY } from '../../utils/cart-store.js';
 import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
 import { cartBadgeText } from '../../utils/tabs.js';
 
@@ -340,11 +340,8 @@ export function addLimit(a) {
   return inCart + qty > stock ? { ok: false, reason: 'stock', stock } : { ok: true };
 }
 
-/** 库存未知时数量步进的上限（与购物车步进不设上限不同：这里是"一次加几件"，99 足够）。 */
-const QTY_CAP_UNKNOWN_STOCK = 99;
-
 /**
- * 详情页数量步进（A9，AJ-416）：1 起步，不超过库存（库存未知时 99）。
+ * 详情页数量步进（A9，AJ-416）：1 起步，不超过库存，且不超过单行上限 99（AJ-448）。
  * @why 原先「立即购买」恒为 1 件——想买两件的人只能先结一件、再回来买一件，或绕道购物车改数量。
  * @param {unknown} current 当前数量
  * @param {number} delta +1 / -1
@@ -354,7 +351,8 @@ export function stepQty(current, delta, stock) {
   // 当前值是脏的 → 回到 1（不在一个不知道是多少的数上再加减）
   if (!Number.isInteger(current) || current < 1) return 1;
   const base = current;
-  const cap = Number.isInteger(stock) && stock >= 1 ? stock : QTY_CAP_UNKNOWN_STOCK;
+  // 封顶 = min(库存, 单行上限)：库存 500 也只能加到 99（AJ-448，与服务端契约 qty.maximum 同值）
+  const cap = Math.min(Number.isInteger(stock) && stock >= 1 ? stock : MAX_LINE_QTY, MAX_LINE_QTY);
   return Math.min(Math.max(base + delta, 1), cap);
 }
 

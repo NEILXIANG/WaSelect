@@ -598,6 +598,23 @@ function sqlDataExceptionCode(err: unknown): string | null {
   return typeof code === 'string' && code.length === 5 && code.startsWith('22') ? code : null;
 }
 
+/**
+ * 22 类里只有这几种是"客户端送了库不收的值"（S-3 / AJ-463）：字符串超列宽、文本转数值 / 日期失败、日期越界、
+ * 文本里的非法字节（22021：PG text 拒收 0x00——无鉴权的 `/pay/link/%00` 就能触发，pay-link-routes.db.test 钉住）。
+ * 其余（22003 溢出、22012 除零、22023 参数非法…）是我们自己算错或拼错——折成 40001 + warn 会把服务端 bug
+ * 伪装成客户端错误，且进不了 Sentry（只收 error）。
+ */
+const CLIENT_DATA_SQLSTATES: ReadonlySet<string> = new Set([
+  '22001',
+  '22P02',
+  '22007',
+  '22008',
+  '22021',
+]);
+export function sqlDataExceptionAppCode(sqlstate: string): 40001 | 50000 {
+  return CLIENT_DATA_SQLSTATES.has(sqlstate) ? 40001 : 50000;
+}
+
 /** 把各类异常归一成 {status, body, logFields}：解析错误也要有业务码，不能裸 500。 */
 function normalizeError(err: unknown): {
   status: number;
@@ -626,7 +643,7 @@ function normalizeError(err: unknown): {
     };
   }
   const sqlClass22 = sqlDataExceptionCode(err);
-  if (sqlClass22 !== null) {
+  if (sqlClass22 !== null && sqlDataExceptionAppCode(sqlClass22) === 40001) {
     // ⚠️ 与上面同一条理由（客户端送了库不收的值），但 reason 带 SQLSTATE 以便区分（见 @limitation）
     const appErr = new AppError(40001, { reason: `sql_data_exception:${sqlClass22}` });
     const { status, body } = toErrorResponse(appErr);

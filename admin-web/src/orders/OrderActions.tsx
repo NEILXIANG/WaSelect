@@ -138,7 +138,7 @@ export function OrderActions({ api, id, order, sink, reload, onChanged }: OrderA
         orderId={id}
         order={order}
         onDone={refreshed}
-        onError={(m) => sink.error(m)}
+        onError={(m, traceId) => sink.error(m, { traceId })}
         onNotice={(m) => sink.info(m)}
       />
     ),

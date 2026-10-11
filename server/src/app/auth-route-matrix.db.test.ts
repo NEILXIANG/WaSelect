@@ -217,7 +217,7 @@ describe('受保护路由 × 身份状态：守卫结论表（路由清单取自
         'content-type': 'application/json',
         'idempotency-key': 'block-u2',
       },
-      body: '{}',
+      body: JSON.stringify({ reason: '测试拉黑' }), // AJ-449：拉黑原因必填
     });
     expect(block.status).toBeLessThan(300);
     await setup.close();

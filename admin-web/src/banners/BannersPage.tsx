@@ -218,6 +218,8 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     try {
       await deleteBanner(api, id);
       setConfirmDelete('');
+      // G6（AJ-472）：删的正是在编辑的那条 → 表单回到"新建"，否则再保存会 PUT 一个不存在的 id（40402）
+      if (editing?.id === id) startNew();
       await load();
     } catch (e) {
       const { text, traceId } = toastError(e, '删除失败');

@@ -423,4 +423,10 @@ describe('同类推荐（A10，AJ-416）', () => {
     expect(cards[0]?.image).toBe('https://img/a-card.webp'); // 小卡取 card 档（imageUrl 同口径）
     expect(relatedCards(null, 'p-now')).toEqual([]);
   });
+
+  it('🔴 stepQty 封顶 = min(库存, MAX_LINE_QTY)：库存 500 也只能加到 99（AJ-448）', () => {
+    expect(stepQty(98, 1, 500)).toBe(99);
+    expect(stepQty(99, 1, 500)).toBe(99);
+    expect(stepQty(3, 1, 4)).toBe(4);
+  });
 });

@@ -34,7 +34,7 @@
  */
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
 import type { Db } from '../adapters/db.js';
-import { withSavepoint } from '../adapters/db.js';
+import { withSavepoint, isLockNotAvailable } from '../adapters/db.js';
 import { plusMs } from '../adapters/clock.js';
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
@@ -332,4 +332,22 @@ export async function createOrder(
     },
   });
   return { orderId, orderNo, expiresAt, q, fxSnapshot };
+}
+
+/**
+ * 建单路径的错误归类（S-4 / AJ-465）：等商品行锁超时（55P03）→ 50300「稍后重试」而不是 50000「内部错误」。
+ * @why 关单 tick / 拉黑事务会持有热销商品行（回补库存），买家此刻建单等锁超过 `lock_timeout`（5s）是正常并发，
+ *      不是我们的故障：按 50000 记会刷错误预算与告警，买家看到的也是答非所问的"服务器内部错误"。
+ * @limitation 只识别 55P03；其它错误原样返回（不吞）。retry_after_ms 取 1 秒：持锁事务通常毫秒级结束。
+ */
+export function createOrderErrorFor(e: unknown): unknown {
+  if (e instanceof AppError) return e;
+  if (isLockNotAvailable(e)) {
+    return new AppError(
+      50300,
+      { reason: 'lock_wait_timeout', where: 'create-order' },
+      { retry_after_ms: 1000 },
+    );
+  }
+  return e;
 }

@@ -218,4 +218,40 @@ describe('Banner 列表：行内确认不让整表跳（走查 2026-10-08）', (
     );
     expect(mounted.el.querySelector('table')?.className).toContain('table-actions-reserve');
   });
+
+  describe('G6（AJ-472）：删除正在编辑的 Banner 后表单回到"新建"', () => {
+    it('编辑 A → 删除 A（确认）→ 标题不再是"编辑 Banner"，再保存走新建', async () => {
+      const calls: Array<{ path: string; method?: string }> = [];
+      let list = [banner('b-A', 'banners/a.webp'), banner('b-B', 'banners/b.webp')];
+      const api = async (req: {
+        path: string;
+        method?: string;
+        body?: unknown;
+      }): Promise<unknown> => {
+        calls.push(req);
+        if (req.method === 'DELETE') {
+          list = list.filter((b) => !req.path.endsWith(b.id));
+          return undefined;
+        }
+        return list;
+      };
+      mounted = await mount(
+        createElement(BannersPage, {
+          api: api as never,
+          baseUrl: 'http://localhost',
+          getToken: () => 'tk',
+          onUnauthorized: () => undefined,
+        }),
+      );
+      const el = mounted.el;
+      const edits = [...el.querySelectorAll('button')].filter((b) => b.textContent === '编辑');
+      await click(edits[0]);
+      expect(el.textContent).toContain('编辑 Banner');
+      const dels = [...el.querySelectorAll('button')].filter((b) => b.textContent === '删除');
+      await click(dels[0]);
+      await click(button(el, '确认删除'));
+      await flush();
+      expect(el.textContent).not.toContain('编辑 Banner');
+    });
+  });
 });

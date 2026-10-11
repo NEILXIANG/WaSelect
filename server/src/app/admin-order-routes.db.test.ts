@@ -1007,4 +1007,113 @@ describe('GET /admin/orders?sort', () => {
     }
     await s.close();
   });
+
+  describe('严格检查第二轮 · 第二批（服务端）', () => {
+    it('🔴 ADM-6（AJ-453）：sort=paid_at → 最早付款的在前（待发货页签按它排，最久未发货的先处理）', async () => {
+      const s = await buildServer();
+      for (const [id, paidAt] of [
+        ['o-late', '2026-10-09T03:00:00Z'],
+        ['o-early', '2026-10-07T03:00:00Z'],
+        ['o-mid', '2026-10-08T03:00:00Z'],
+      ] as const) {
+        await seedOrder({ id });
+        await db`update orders set paid_at = ${paidAt} where id = ${id}`;
+      }
+      const ids = (j: Record<string, unknown>): string[] =>
+        (j['items'] as Array<{ order_id: string }>).map((i) => i.order_id);
+      expect(ids((await adminFetch(s, 'GET', '/api/v1/admin/orders?sort=paid_at')).json)).toEqual([
+        'o-early',
+        'o-mid',
+        'o-late',
+      ]);
+      expect(ids((await adminFetch(s, 'GET', '/api/v1/admin/orders?sort=-paid_at')).json)).toEqual([
+        'o-late',
+        'o-mid',
+        'o-early',
+      ]);
+      await s.close();
+    });
+
+    it('🔴 OPS-3（AJ-454）：attention=partial_refund 列出有部分退款（在途或已成功但未退满）的单；已整单退款的不出现', async () => {
+      const s = await buildServer();
+      await seedOrder({ id: 'o-pr' });
+      await db`insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, created_at)
+             values ('rf-pr', 'o-pr', 'pay-o-pr', 'JPY', 300, '破损', 'succeeded', 'admin:u-a', now())`;
+      await seedOrder({ id: 'o-inflight' });
+      await db`insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, created_at)
+             values ('rf-if', 'o-inflight', 'pay-o-inflight', 'JPY', 300, '破损', 'pending', 'admin:u-a', now())`;
+      await seedOrder({ id: 'o-failed-only' });
+      await db`insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, created_at)
+             values ('rf-f', 'o-failed-only', 'pay-o-failed-only', 'JPY', 300, '破损', 'failed', 'admin:u-a', now())`;
+      await seedOrder({ id: 'o-refunded', status: 'refunded' });
+      await db`insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, created_at)
+             values ('rf-r', 'o-refunded', 'pay-o-refunded', 'JPY', 1650, '破损', 'succeeded', 'admin:u-a', now())`;
+      await seedOrder({ id: 'o-plain' });
+      const r = await adminFetch(s, 'GET', '/api/v1/admin/orders?attention=partial_refund');
+      expect(r.status).toBe(200);
+      expect(
+        (r.json['items'] as Array<{ order_id: string }>).map((i) => i.order_id).sort(),
+      ).toEqual(['o-inflight', 'o-pr']);
+      await s.close();
+    });
+
+    it('🔴 A-4（AJ-455）：改址后详情带 address_history（改前完整地址、谁、何时）；审计 after 只记归档号、不含地址字段', async () => {
+      const s = await buildServer();
+      await seedOrder({ id: 'o-1' });
+      const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/address', ADDR);
+      expect(r.status).toBe(200);
+      const d = await adminFetch(s, 'GET', '/api/v1/admin/orders/o-1');
+      const hist = d.json['address_history'] as Array<Record<string, unknown>>;
+      expect(hist).toHaveLength(1);
+      expect(hist[0]?.['snapshot']).toMatchObject({
+        recipient: 'Jane Doe',
+        line1: '1 Infinite Loop',
+      });
+      expect(hist[0]?.['actor']).toMatch(/^admin:/);
+      expect(typeof hist[0]?.['at']).toBe('string');
+      let audit: readonly Record<string, unknown>[] = [];
+      for (let i = 0; i < 50 && audit.length === 0; i++) {
+        audit =
+          await db`select after from admin_audit where target = 'o-1' and action = 'POST /admin/orders/:id/address'`;
+        if (audit.length === 0) await new Promise((r) => setTimeout(r, 20));
+      }
+      const after = JSON.stringify(audit[0]?.['after']);
+      expect(after).toContain('archive_id');
+      for (const k of ['recipient', 'line1', 'city', 'state', 'phone', 'SAN ZHANG', 'Cupertino']) {
+        expect(after, `审计 after 不该含 ${k}`).not.toContain(k);
+      }
+      await s.close();
+    });
+
+    it('🔴 G1（AJ-456）：有部分退款在途时整单退款 → 40902 且 data.reason=partial_refund_in_flight（管理端据此给下一步）', async () => {
+      const s = await buildServer();
+      await seedOrder({ id: 'o-1' });
+      await db`insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, created_at)
+             values ('rf-1', 'o-1', 'pay-o-1', 'JPY', 300, '破损', 'pending', 'admin:u-a', now())`;
+      const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/refund', { reason: '缺货' });
+      expect(r.status).toBe(409);
+      expect(r.json.code).toBe(40902);
+      expect((r.json as { data?: { reason?: string } }).data?.reason).toBe(
+        'partial_refund_in_flight',
+      );
+      await s.close();
+    });
+  });
+
+  describe('ADM-1（AJ-466）：详情事件带操作者邮箱', () => {
+    it('actor=admin:<id> 的事件回填 actor_email；系统 / 机构事件不带', async () => {
+      const s = await buildServer();
+      await seedOrder({ id: 'o-1' });
+      await db`insert into users (id, openid, email, is_admin) values ('u-ops', 'o-ops', 'ops@example.com', true) on conflict (id) do nothing`;
+      await db`insert into order_events (order_id, status, actor, at) values
+             ('o-1', 'shipped', 'admin:u-ops', now()), ('o-1', 'paid', 'provider:mock', now() - interval '1 minute')`;
+      const r = await adminFetch(s, 'GET', '/api/v1/admin/orders/o-1');
+      const events = r.json['events'] as Array<Record<string, unknown>>;
+      expect(events.find((e) => e['status'] === 'shipped')?.['actor_email']).toBe(
+        'ops@example.com',
+      );
+      expect(events.find((e) => e['status'] === 'paid')).not.toHaveProperty('actor_email');
+      await s.close();
+    });
+  });
 });

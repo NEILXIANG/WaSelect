@@ -10,7 +10,13 @@ import { Buffer } from 'node:buffer';
 import { connect } from 'node:net';
 import { MemorySink } from '../../test/helpers/memory-sink.js';
 import { emitRealSignal } from '../../test/signal-harness.js';
-import { createHttpApp, defaultHost, installShutdownHandlers, listen } from './http.js';
+import {
+  createHttpApp,
+  defaultHost,
+  installShutdownHandlers,
+  listen,
+  sqlDataExceptionAppCode,
+} from './http.js';
 import { createLogger, type Logger } from './logger.js';
 import { AppError } from './errors.js';
 import { CircuitOpenError } from './ports/circuit-breaker.js';
@@ -1444,5 +1450,20 @@ describe('安全响应头（5-1）', () => {
     } finally {
       await s.close();
     }
+  });
+
+  describe('S-3（AJ-463）：SQLSTATE 22 类只把"客户端送了库不收的值"折成 40001，其余是我们的 bug → 50000', () => {
+    it.each([
+      ['22001', 40001], // 字符串超列宽
+      ['22P02', 40001], // 文本转数值失败
+      ['22007', 40001], // 日期格式
+      ['22008', 40001], // 日期越界
+      ['22021', 40001], // 文本含 NUL 等非法字节（/pay/link/%00）
+      ['22003', 50000], // 数值溢出（聚合 / 乘法溢出是服务端算错）
+      ['22012', 50000], // 除零
+      ['22023', 50000], // 函数参数非法
+    ])('%s → %s', (sqlstate, code) => {
+      expect(sqlDataExceptionAppCode(sqlstate)).toBe(code);
+    });
   });
 });

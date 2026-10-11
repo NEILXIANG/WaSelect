@@ -101,6 +101,8 @@ async function open(hash: string): Promise<HTMLElement> {
 }
 
 afterEach(async () => {
+  // AJ-473：单单发货也会记住上次的承运商（localStorage），用例之间不能互相带默认值
+  globalThis.localStorage?.clear();
   hold = null;
   failBatch = false;
   await mounted?.unmount();

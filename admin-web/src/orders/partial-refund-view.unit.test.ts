@@ -296,4 +296,12 @@ describe('fullRefundConfirmBody：确认框写实际要退的钱', () => {
       ),
     ).toBe('订单 261009-9H4QTF：部分退款已退满实收，已无可退金额。');
   });
+
+  describe('S8（AJ-475）：金额输入对输入法常见形态宽容', () => {
+    it('全角数字 / 前导点 / 尾随点都按数字解析', () => {
+      expect(parseAmountToMinor('１０００', 'JPY')).toEqual({ ok: true, minor: 1000 });
+      expect(parseAmountToMinor('.5', 'USD')).toEqual({ ok: true, minor: 50 });
+      expect(parseAmountToMinor('1000.', 'JPY')).toEqual({ ok: true, minor: 1000 });
+    });
+  });
 });

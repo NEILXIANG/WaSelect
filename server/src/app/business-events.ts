@@ -44,6 +44,8 @@ export const LOGGED_EVENTS: readonly string[] = [
   'order.refunded',
   // 第三轮缺口 P2-12：部分退款成功（payload 只有 refund_id）
   'order.partially_refunded',
+  // AJ-450：邮件补发（payload 只有原事件名与 refund_id）
+  'mail.resend',
   // 剩余清单 2-4：对账异常汇总（payload 只有各类计数）
   'reconciliation.anomalies_found',
 ];

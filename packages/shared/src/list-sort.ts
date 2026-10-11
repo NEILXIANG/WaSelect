@@ -11,7 +11,8 @@
  */
 
 export const LIST_SORT_KEYS = {
-  orders: ['created_at', 'total_jpy'],
+  // paid_at（AJ-453）：待发货页签按付款时间正序——最早付款、最久没发的先处理；null（未付）排最后
+  orders: ['created_at', 'total_jpy', 'paid_at'],
   products: ['updated_at', 'stock', 'price_jpy'],
   customers: ['last_order_at', 'paid_total_jpy'],
 } as const;

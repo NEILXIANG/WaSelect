@@ -73,6 +73,8 @@ export interface MockProviderDeps {
 const MOCK_REFUND_PREFIX = 'mock_re_';
 /** 审核模式自签确认的事件 id 前缀（`auto:<机构单号>`，AJ-179）。 */
 export const MOCK_AUTO_EVENT_PREFIX = 'auto:';
+/** 会话缓存上限（S-10 / AJ-462）：超过就逐出最老的键——Map 保持插入序，第一个键即最老。审核期 / 开发用量远低于此。 */
+export const MOCK_MAX_SESSIONS = 500;
 
 /** 从配置里取密钥：缺失要在**装配期**炸，而不是等到第一个回调验签失败。 */
 function secretOf(cfg: ChannelConfig): string {
@@ -135,6 +137,10 @@ export function createMockProvider(cfg: ChannelConfig, deps: MockProviderDeps): 
         expiresAt: new Date(deps.clock.now().getTime() + 30 * 60 * 1000).toISOString(),
       };
       sessions.set(req.idempotencyKey, session);
+      if (sessions.size > MOCK_MAX_SESSIONS) {
+        // size > 上限 ≥ 1 ⇒ 第一个键必然存在；断言而不是判空（判空那一支永远走不到，只会是一条测不到的分支）
+        sessions.delete(sessions.keys().next().value as string);
+      }
       return session;
     },
 

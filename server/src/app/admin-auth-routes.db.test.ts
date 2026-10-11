@@ -623,6 +623,28 @@ describe('P1-5（AJ-386）：TOTP 第二因素', () => {
     );
   });
 
+  it('🔴 绕行有自己的 30 次封顶（SEC-2 / AJ-446）：邮箱桶锁着，6 个来源各错 5 次后，第 7 个来源带正确码也 429', async () => {
+    await lockEmailBucket();
+    for (let s = 1; s <= 6; s += 1) {
+      for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
+        expect(
+          (
+            await loginWith(
+              { email: EMAIL, password: 'definitely-not-it', totp: String(100000 + i) },
+              `198.51.100.${String(s)}`,
+            )
+          ).status,
+        ).toBe(401);
+      }
+    }
+    const r = await loginWith(
+      { email: EMAIL, password: PASSWORD, totp: totpAt(SECRET, Date.now()) },
+      '198.51.100.9',
+    );
+    expect(r.status).toBe(429);
+    expect(r.headers.get('retry-after')).not.toBeNull();
+  });
+
   it('🔴 邮箱桶锁着时带码绕行仍受**来源桶**封顶：同一来源错 5 次后，正确的码也 429', async () => {
     await lockEmailBucket();
     for (let i = 1; i <= ADMIN_LOGIN_MAX_FAILURES; i += 1) {
