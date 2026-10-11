@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DevUpStepError,
+  devLinkHints,
   ensureDatabase,
   ensureEnvFile,
   localOsRole,
@@ -363,5 +364,51 @@ describe('runSteps：步骤编排', () => {
       caught = e;
     }
     expect((caught as DevUpStepError).completed).toEqual([]);
+  });
+});
+
+/**
+ * E-7（工程缺口 2026-10-08）：本地联调的两个"静默卡住"——起服务时把原因说出来。
+ * @why 一：没开 MOCK_AUTO_CONFIRM 时小程序里模拟付款永远到不了"已付款"，看起来像 bug（走查实测撞过）；
+ *      二：小程序开发版写死连 `http://localhost:3000`，服务起在别的端口时模拟器报 ERR_CONNECTION_REFUSED（用户 2026-10-09 撞过）。
+ */
+describe('devLinkHints：起服务时的联调提示（E-7）', () => {
+  const base = {
+    NODE_ENV: 'development' as const,
+    PORT: 3000,
+    PAYMENT_CHANNELS: ['mock' as const],
+    REVIEW_MODE: 'off' as const,
+    MOCK_AUTO_CONFIRM: 'on' as const,
+  };
+  const MINI = 'http://localhost:3000';
+
+  it('默认组合（3000 + 模拟付款自动确认）→ 没有提示', () => {
+    expect(devLinkHints(base, MINI)).toEqual([]);
+  });
+
+  it('mock 通道开着但没开 MOCK_AUTO_CONFIRM → 提示怎么开', () => {
+    const h = devLinkHints({ ...base, MOCK_AUTO_CONFIRM: undefined }, MINI);
+    expect(h).toHaveLength(1);
+    expect(h[0]).toContain('MOCK_AUTO_CONFIRM=on');
+  });
+
+  it('审核模式开着时不提示（审核期 mock 会话本来就由审核员手动确认）；没开 mock 通道也不提示', () => {
+    expect(
+      devLinkHints({ ...base, MOCK_AUTO_CONFIRM: undefined, REVIEW_MODE: 'on' }, MINI),
+    ).toEqual([]);
+    expect(
+      devLinkHints(
+        { ...base, MOCK_AUTO_CONFIRM: undefined, PAYMENT_CHANNELS: ['stripe' as const] },
+        MINI,
+      ),
+    ).toEqual([]);
+  });
+
+  it('服务端口与小程序开发版地址不一致 → 提示两边各是多少、改哪里', () => {
+    const h = devLinkHints({ ...base, PORT: 3001 }, MINI);
+    expect(h).toHaveLength(1);
+    expect(h[0]).toContain('3001');
+    expect(h[0]).toContain('http://localhost:3000');
+    expect(h[0]).toContain('miniprogram/config.js');
   });
 });

@@ -26,6 +26,7 @@ import { closeDb, createDb } from '../server/src/adapters/db.js';
 import { bootstrap } from '../server/src/main.js';
 import {
   DevUpStepError,
+  devLinkHints,
   ensureDatabase,
   ensureDevFxStep,
   ensureEnvFile,
@@ -37,6 +38,7 @@ import {
   type DevUpStep,
 } from './dev-up-lib.js';
 import { defaultDevUrl } from './seed-lib.js';
+import { API_BASES } from '../miniprogram/config.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -146,6 +148,8 @@ async function main(): Promise<void> {
       hint: '单独起：npx tsx server/src/main.ts；配置问题会逐行列出（ConfigError）',
       run: async () => {
         const runtime = await bootstrap();
+        // E-7：两种"静默卡住"在启动这一刻说出来（模拟付款到不了已付款 / 小程序连错端口）
+        for (const h of devLinkHints(runtime.config, API_BASES.develop)) out(`⚠️ ${h}`);
         return `listening on http://${runtime.config.HOST}:${runtime.config.PORT}（Ctrl+C 优雅停机）`;
       },
     });

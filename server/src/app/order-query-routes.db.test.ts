@@ -17,6 +17,7 @@ import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { makeShippingRates } from '../../../test/factories/entities.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
+import { checkShape, contractSchema } from '../../../test/helpers/contract-schema.js';
 import { createLogger } from '../logger.js';
 import { loadConfig } from '../config.js';
 import { createEventBus } from '../adapters/event-bus.js';
@@ -689,6 +690,43 @@ describe('AJ-361：订单行项目图按 image_id 存', () => {
         card: 'https://img.example.com/img/img-7qk3m9vz2rx8/card.webp',
         detail: 'https://img.example.com/img/img-7qk3m9vz2rx8/detail.webp',
       });
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+/**
+ * E-8（工程缺口 2026-10-08）：买家订单接口的响应形状按契约 schema 校验。
+ * @why 用一张"字段尽量满"的单（已发货 + 成功支付 + 部分退款 + 售后 + 迟到付款凭据），
+ *      让可选键尽量都出现——只出现了的键才会被校验，空单验不到它们。
+ */
+describe('E-8：GET /orders 与 /orders/{id} 的响应形状 = 契约 OrderListItem / Order', () => {
+  it('字段尽量满的一张单：列表行符合 OrderListItem，详情符合 Order', async () => {
+    const srv = await buildServer();
+    try {
+      const orderId = await createOrder(srv.url, 'e8');
+      await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount, paid_amount, paid_currency)
+               values ('pay-e8', ${orderId}, 'mock', 'succeeded', 'USD', 14000, 14000, 'USD')`;
+      await db`update orders set status = 'shipped', paid_at = now(), shipped_at = now(),
+                                 carrier = 'Japan Post', tracking_no = 'EM123456789JP',
+                                 contact_email = 'jane.doe@example.com'
+                where id = ${orderId}`;
+      await db`insert into order_events (order_id, status, actor) values (${orderId}, 'paid', 'provider:mock'), (${orderId}, 'shipped', 'admin:u-a')`;
+      await db`insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, created_at)
+               values ('rf-e8', ${orderId}, 'pay-e8', 'USD', 1200, '破损', 'succeeded', 'admin:u-a', now())`;
+      await db`insert into after_sale_requests (id, order_id, user_id, reason, description, created_at, updated_at)
+               select 'as-e8', id, user_id, 'damaged', '外箱压坏', now(), now() from orders where id = ${orderId}`;
+      const all = contractSchema();
+      const list = (await get(srv.url, '/api/v1/orders')).json['items'] as unknown[];
+      expect(list.length).toBeGreaterThan(0);
+      list.forEach((it, i) =>
+        expect(checkShape(all, 'OrderListItem', it), `items[${String(i)}]`).toEqual([]),
+      );
+      const detail = (await get(srv.url, `/api/v1/orders/${orderId}`)).json;
+      expect(detail['tracking_url']).toBeDefined(); // 确认可选键真的出现了，否则下面那条验不到它
+      expect(detail['after_sale']).toBeDefined();
+      expect(checkShape(all, 'Order', detail)).toEqual([]);
     } finally {
       await srv.close();
     }

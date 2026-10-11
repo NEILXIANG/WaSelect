@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
+import { checkShape, contractSchema } from '../../../test/helpers/contract-schema.js';
 import { createLogger } from '../logger.js';
 import { loadConfig } from '../config.js';
 import { createEventBus } from '../adapters/event-bus.js';
@@ -516,6 +517,31 @@ describe('AJ-361：images 条目按 image_id 存 → 读侧拼出三档 URL', ()
       const body = r.json as { images: Array<{ thumb: string }> };
       // 只剩旧形态那一条：按 id 存的渲染不出来 ⇒ 整键省略，不是吐一个拼不出域名的裸键
       expect(body.images).toEqual([{ thumb: 'a.webp', card: 'b.webp', detail: 'c.webp' }]);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+/**
+ * E-8（工程缺口 2026-10-08）：公开商品接口的响应形状按契约 schema 校验。
+ * @why 字段改名 / 多出契约外的键此前没有机械检查（同类推荐按详情的 images[] 读列表的 image，模拟器里才发现）。
+ */
+describe('E-8：GET /products 与 /products/{id} 的响应形状 = 契约 ProductCard / Product', () => {
+  it('列表每一项符合 ProductCard，详情符合 Product（含编辑口径字段）', async () => {
+    await db`
+      update products set why = '铸铁蓄热足', maker = '岩手県 伝統工房', tags = '["南部铁器"]'::jsonb
+       where id = 'p-2'`;
+    const srv = await buildServer();
+    try {
+      const all = contractSchema();
+      const list = (await get(srv.url, '/api/v1/products')).json as { items: unknown[] };
+      expect(list.items.length).toBeGreaterThan(0);
+      list.items.forEach((it, i) =>
+        expect(checkShape(all, 'ProductCard', it), `items[${String(i)}]`).toEqual([]),
+      );
+      const detail = (await get(srv.url, '/api/v1/products/p-2')).json;
+      expect(checkShape(all, 'Product', detail)).toEqual([]);
     } finally {
       await srv.close();
     }

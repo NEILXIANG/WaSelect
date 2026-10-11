@@ -414,3 +414,53 @@ export async function ensureDevFxStep(
     ? '汇率都在有效期内，无需补录'
     : `已补录开发汇率 ${added.join(' / ')}（仅本地报价用，不是真实汇率）`;
 }
+
+/**
+ * 起服务时的联调提示（E-7，工程缺口 2026-10-08）：把两种"静默卡住"在启动那一刻说出来。
+ *
+ * @why 一：开发环境开着 mock 通道却没开 `MOCK_AUTO_CONFIRM` 时，小程序里的模拟付款永远到不了"已付款"
+ *      （pay-plan 判 unsupported），看起来像 bug——走查当天靠仓库外的临时脚本打开才走通。
+ *      新生成的 .env 会自动填 on，但**老的 .env 不会被改**（ensureEnvFile 已有一个字不动），所以要提示。
+ * @why 二：小程序开发版写死连 `API_BASES.develop`（`http://localhost:3000`），服务起在别的端口时
+ *      开发者工具只报 ERR_CONNECTION_REFUSED，不说是端口对不上（用户 2026-10-09 撞过）。
+ * @limitation 只提示、不改任何配置：端口与开关都是开发者自己的选择（例如同时起两套服务就得用两个端口）。
+ * @param cfg 生效后的配置（bootstrap 之后的 runtime.config）
+ * @param miniDevelopBase 小程序开发版的 API 根地址（miniprogram/config.js `API_BASES.develop`）
+ * @returns 要打印的提示行；空数组 = 一切对得上
+ */
+export function devLinkHints(
+  cfg: {
+    NODE_ENV: string;
+    PORT: number;
+    PAYMENT_CHANNELS: readonly string[];
+    REVIEW_MODE: string;
+    MOCK_AUTO_CONFIRM?: string | undefined;
+  },
+  miniDevelopBase: string,
+): string[] {
+  const hints: string[] = [];
+  if (
+    cfg.NODE_ENV === 'development' &&
+    cfg.PAYMENT_CHANNELS.includes('mock') &&
+    cfg.REVIEW_MODE !== 'on' &&
+    cfg.MOCK_AUTO_CONFIRM !== 'on'
+  ) {
+    hints.push(
+      '小程序里的模拟付款不会自动变成"已付款"：要走通付款，在 .env 里设 MOCK_AUTO_CONFIRM=on 后重启（只在本地生效）',
+    );
+  }
+  let miniPort = '';
+  try {
+    const u = new URL(miniDevelopBase);
+    miniPort = u.port !== '' ? u.port : u.protocol === 'https:' ? '443' : '80';
+  } catch {
+    miniPort = '';
+  }
+  if (miniPort !== '' && miniPort !== String(cfg.PORT)) {
+    hints.push(
+      `服务起在 :${String(cfg.PORT)}，而小程序开发版连的是 ${miniDevelopBase}——模拟器会报 ERR_CONNECTION_REFUSED。` +
+        `二选一：把 .env 的 PORT 改回 ${miniPort}，或在本地改 miniprogram/config.js 的 API_BASES.develop（不要提交）`,
+    );
+  }
+  return hints;
+}
