@@ -151,18 +151,20 @@ describe('formatUsdCents / formatCnyFen（整数分 → 两位小数）', () => 
 });
 
 describe('displaySubLine（副行文案，D-36 三币口径的展示侧）', () => {
-  it('USD + CNY 都在 → `≈ $… · ≈ ¥…`（首页卡片与详情页共用这一份）', () => {
-    expect(displaySubLine({ USD: 2450, CNY: 17600 })).toBe('≈ $24.50 · ≈ ¥176.00');
+  // 三端模拟测试 2026-10-11（报告 §7-2）：实测副行是「≈ $47.63 · ≈ ¥346.70」，紧挨着「6,800 円」，¥ 会被读成日元。
+  //   D-36 原文就是「≈ 人民币 ¥176」——实现漏了「人民币」三个字，补回来（符号分配不变）
+  it('🔴 USD + CNY 都在 → `≈ $… · ≈ 人民币 ¥…`（D-36 原文；首页卡片与详情页共用这一份）', () => {
+    expect(displaySubLine({ USD: 2450, CNY: 17600 })).toBe('≈ $24.50 · ≈ 人民币 ¥176.00');
   });
 
   it('缺一个币 → 只显示另一个（fx 缺失时 display 会少键，AJ-108 降级口径）', () => {
     expect(displaySubLine({ USD: 2450 })).toBe('≈ $24.50');
-    expect(displaySubLine({ CNY: 17600 })).toBe('≈ ¥176.00');
+    expect(displaySubLine({ CNY: 17600 })).toBe('≈ 人民币 ¥176.00');
   });
 
   it('⚠️ 非整数跳过该币而**不抛**：浏览页抛会让整页渲染失败，比少一行参考价贵', () => {
     // @why 服务端返回小数是服务端 bug，由契约测试与日志去暴露，不由首页 UI 承担。
-    expect(displaySubLine({ USD: 24.5, CNY: 17600 })).toBe('≈ ¥176.00');
+    expect(displaySubLine({ USD: 24.5, CNY: 17600 })).toBe('≈ 人民币 ¥176.00');
   });
 
   it('空对象 / 缺失 / 形态不对 → 空串（调用方用 wx:if 整行隐藏，不留孤零零一个 ≈）', () => {
@@ -172,7 +174,7 @@ describe('displaySubLine（副行文案，D-36 三币口径的展示侧）', () 
   });
 
   it('0 分也显示（`$0.00` 是真实换算结果，不是缺失——缺失走的是"没有键"那条路）', () => {
-    expect(displaySubLine({ USD: 0, CNY: 0 })).toBe('≈ $0.00 · ≈ ¥0.00');
+    expect(displaySubLine({ USD: 0, CNY: 0 })).toBe('≈ $0.00 · ≈ 人民币 ¥0.00');
   });
 });
 

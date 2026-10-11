@@ -16,8 +16,8 @@ const wxml = readFileSync(resolve(import.meta.dirname, 'index.wxml'), 'utf8').re
 
 describe('订单详情：部分退款的位置（AJ-434）', () => {
   it('🔴 部分退款在「金额」卡里（订单合计之后、收货地址之前），页面上只出现一次', () => {
-    const amount = wxml.indexOf('>Amount<');
-    const shipping = wxml.indexOf('>Shipping to<');
+    const amount = wxml.indexOf('>金额<');
+    const shipping = wxml.indexOf('>收货地址<');
     const refunds = wxml.indexOf('view.partialRefunds');
     expect(amount).toBeGreaterThan(0);
     expect(refunds).toBeGreaterThan(wxml.indexOf('view.totalSub', amount));

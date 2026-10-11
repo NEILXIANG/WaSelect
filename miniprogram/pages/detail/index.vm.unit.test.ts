@@ -60,7 +60,7 @@ describe('detailView（主数据）', () => {
     const v = detailView(PRODUCT);
     expect(v.title).toBe('資生堂 クレンジングオイル 200ml');
     expect(v.priceJpy).toBe(3600);
-    expect(v.subPrice).toBe('≈ $24.50 · ≈ ¥176.00');
+    expect(v.subPrice).toBe('≈ $24.50 · ≈ 人民币 ¥176.00');
     expect(v.soldOut).toBe(false);
   });
 

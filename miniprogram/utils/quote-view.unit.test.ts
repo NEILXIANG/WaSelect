@@ -35,7 +35,7 @@ describe('quoteView（报价区）', () => {
     expect(v.totalText).toBe('9,150 円');
     expect(v.hasTotal).toBe(true);
     expect(v.totalJpy).toBe(9150);
-    expect(v.totalSub).toBe('≈ $62.20 · ≈ ¥448.00');
+    expect(v.totalSub).toBe('≈ $62.20 · ≈ 人民币 ¥448.00');
     // MP-11（第二轮审计 2026-10-11）：关税并列成第三行时三行相加 ≠ 合计，买家会以为算错；改为合计下方一句说明
     expect(v.hints).toEqual(['其中预估关税 936 円（已含在商品价内）']);
   });
@@ -60,13 +60,13 @@ describe('quoteView（报价区）', () => {
     }
   });
 
-  it('免邮差额 > 0 → 提示"再买 X 免运费"；split_hint → 拆单提示', () => {
+  // 三端模拟测试 2026-10-11（报告 §7-3，AJ-489）：拆单提示原与关税说明同为灰色小字，挡住提交的原因被埋在说明里；
+  //   拆成 blocker 单独一行用错误色，hints 只放说明性文字
+  it('🔴 免邮差额 > 0 → 提示"再买 X 免运费"；split_hint → 拆单提示进 blocker（不混在说明里）', () => {
     const v = quoteView({ ...QUOTE, free_shipping_remaining_jpy: 1200, split_hint: true });
-    expect(v.hints).toEqual([
-      '其中预估关税 936 円（已含在商品价内）',
-      '再买 1,200 円 免运费',
-      '已超过单笔上限，请分两单下单',
-    ]);
+    expect(v.hints).toEqual(['其中预估关税 936 円（已含在商品价内）', '再买 1,200 円 免运费']);
+    expect(v.blocker).toBe('已超过单笔上限，请分两单下单');
+    expect(quoteView({ ...QUOTE, split_hint: false }).blocker).toBe('');
   });
 
   describe('split_hint（B38 / AJ-221：它是"已超过"，不是"接近"）', () => {
@@ -76,16 +76,14 @@ describe('quoteView（报价区）', () => {
       //      于是用户提交必然吃 40906（看起来像系统问题）。
       const v = quoteView({ ...QUOTE, split_hint: true });
       // MP-11：QUOTE 带关税估值，说明行第一句是关税（与本条无关，照实列出以保持精确相等）
-      expect(v.hints).toEqual([
-        '其中预估关税 936 円（已含在商品价内）',
-        '已超过单笔上限，请分两单下单',
-      ]);
-      expect(v.hints.join('')).not.toContain('接近');
+      expect(v.blocker).toBe('已超过单笔上限，请分两单下单');
+      expect(v.hints).toEqual(['其中预估关税 936 円（已含在商品价内）']);
+      expect(v.blocker).not.toContain('接近');
     });
 
     it('⚠️ 不提"申报"：为规避申报而拆单的措辞有审核与合规敏感性', () => {
       const v = quoteView({ ...QUOTE, split_hint: true });
-      expect(v.hints.join('')).not.toContain('申报');
+      expect(v.hints.join('') + v.blocker).not.toContain('申报');
     });
 
     it('splitRequired 与 split_hint 同步（闸门的输入，不是只给一句话）', () => {

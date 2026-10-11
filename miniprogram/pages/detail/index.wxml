@@ -89,7 +89,7 @@
 
     <view class="ws-gutter ws-section" wx:if="{{product.description}}">
       <view class="ws-card">
-        <text class="ws-section-kicker">Description</text>
+        <text class="ws-section-kicker">商品介绍</text>
         <text class="ws-body">{{product.description}}</text>
       </view>
     </view>
@@ -97,7 +97,7 @@
     <!-- M-03：购买保障逐条说明（与价格下的标签一一对应） -->
     <view class="ws-gutter ws-section">
       <view class="ws-card">
-        <text class="ws-section-kicker">Guarantee</text>
+        <text class="ws-section-kicker">购物保障</text>
         <view class="assure" wx:for="{{product.guarantees}}" wx:key="key">
           <text class="ws-body assure__tag">{{item.tag}}</text>
           <text class="ws-note">{{item.detail}}</text>
@@ -111,7 +111,7 @@
     -->
     <view class="ws-gutter ws-section">
       <view class="ws-card">
-        <text class="ws-section-kicker">Shipping</text>
+        <text class="ws-section-kicker">配送流程</text>
         <view class="step" wx:for="{{product.shippingSteps}}" wx:key="key">
           <text class="ws-tag ws-tag--ghost step__no">{{index + 1}}</text>
           <view class="step__body">
@@ -135,7 +135,7 @@
 
     <!-- A10（AJ-416）：同类推荐（最多 4 件，两列小卡）；取不到就整块不出现 -->
     <view class="ws-gutter ws-section" wx:if="{{related.length > 0}}">
-      <text class="ws-section-kicker">More Like This</text>
+      <text class="ws-section-kicker">相似推荐</text>
       <view class="related">
         <view
           class="related__item"

@@ -112,7 +112,7 @@
 
     <view class="ws-gutter ws-section" wx:if="{{view.items.length > 0}}">
       <view class="ws-card">
-        <text class="ws-section-kicker">Items</text>
+        <text class="ws-section-kicker">商品</text>
         <!-- A7（AJ-416）：商品行可点进详情（看看现在还卖不卖、什么价） -->
         <view
           class="item"
@@ -142,7 +142,7 @@
 
     <view class="ws-gutter ws-section">
       <view class="ws-card">
-        <text class="ws-section-kicker">Amount</text>
+        <text class="ws-section-kicker">金额</text>
         <view class="quote-line" wx:for="{{view.amountLines}}" wx:for-item="line" wx:key="label">
           <text class="ws-note">{{line.label}}</text>
           <text class="ws-body">{{line.value}}</text>
@@ -175,7 +175,7 @@
 
     <view class="ws-gutter ws-section" wx:if="{{view.address}}">
       <view class="ws-card">
-        <text class="ws-section-kicker">Shipping to</text>
+        <text class="ws-section-kicker">收货地址</text>
         <text class="ws-body line">{{view.address.recipient}} · {{view.address.phone}}</text>
         <text class="ws-body line">{{view.address.line1}}</text>
         <text class="ws-body line" wx:if="{{view.address.line2}}">{{view.address.line2}}</text>
@@ -187,7 +187,7 @@
 
     <view class="ws-gutter ws-section" wx:if="{{view.hasTracking}}">
       <view class="ws-card">
-        <text class="ws-section-kicker">Tracking</text>
+        <text class="ws-section-kicker">物流</text>
         <view class="quote-line" wx:if="{{view.carrier}}">
           <text class="ws-note">承运商</text>
           <text class="ws-body">{{view.carrier}}</text>
@@ -218,8 +218,8 @@
 
     <view class="ws-gutter ws-section" wx:if="{{view.timeline.length > 0}}">
       <view class="ws-card">
-        <text class="ws-section-kicker">Progress</text>
-        <text class="ws-note timeline__title">订单进展</text>
+        <!-- AJ-489：原为英文 Progress + 下方「订单进展」小字，两行说一件事；合成一个中文小标题 -->
+        <text class="ws-section-kicker">订单进展</text>
         <view class="quote-line" wx:for="{{view.timeline}}" wx:for-item="t" wx:key="key">
           <text class="ws-body">{{t.statusText}}</text>
           <text class="ws-caption">{{t.atText}}</text>

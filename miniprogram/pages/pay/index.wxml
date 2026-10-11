@@ -58,18 +58,16 @@
     @why 单已经付过了（或根本没付成），"应付"两个字是错的——用户会读成"我还要再付这么多"。
          金额本身留着：它是用户核对"付了多少钱"的凭据，收掉反而更糟。
   -->
-  <!-- 剩余清单 4-11（A24）：待付款倒计时 -->
-  <view class="ws-gutter" wx:if="{{countdown}}">
-    <text class="ws-note">{{countdown}}</text>
-  </view>
 
   <view class="ws-gutter ws-section" wx:if="{{totalJpy !== null}}">
     <view class="ws-card">
-      <text class="ws-section-kicker">{{closedText ? 'Order Total' : 'Amount Due'}}</text>
+      <text class="ws-section-kicker">金额</text>
       <view class="total">
         <text class="ws-note">{{closedText ? '订单合计' : '应付合计'}}</text>
         <ws-price jpy="{{totalJpy}}" size="lg" />
       </view>
+      <!-- 剩余清单 4-11（A24）：待付款倒计时。AJ-489：原在页顶一行灰色小字，离金额和按钮都远，挪到金额正下方 -->
+      <text class="ws-body countdown line-block" wx:if="{{countdown}}">{{countdown}}</text>
     </view>
   </view>
 
@@ -107,7 +105,7 @@
 
   <view class="ws-gutter ws-section" wx:if="{{channels.length > 0}}">
     <view class="ws-card">
-      <text class="ws-section-kicker">Payment Method</text>
+      <text class="ws-section-kicker">支付方式</text>
       <!--
         AJ-431：支付方式是按钮（第一个实心、其余描边，档位由 vm 的 buttonType 给）。
         原先是卡片里的一行字，页面唯一的实心按钮是「查看订单」，买家会去点它而没付款。

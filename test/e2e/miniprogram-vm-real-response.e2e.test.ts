@@ -85,7 +85,7 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     const cup = cards.find((c) => c.id === 'p-cup');
     expect(knife?.title).toBe('Chef Knife');
     expect(knife?.priceJpy).toBe(8800); // 整数：交给 ws-price 的必须是整数
-    expect(knife?.subPrice).toMatch(/^≈ \$\d+\.\d{2} · ≈ ¥\d+(\.\d{2})?$/); // 两个展示币都在
+    expect(knife?.subPrice).toMatch(/^≈ \$\d+\.\d{2} · ≈ 人民币 ¥\d+(\.\d{2})?$/); // 两个展示币都在
     expect(knife?.soldOut).toBe(false);
     expect(cup?.soldOut).toBe(true);
 
@@ -297,7 +297,7 @@ describe('真服务端响应 → 购物车 / 结算 / 支付 / 推荐 / 再次�
     expect(v.lines.map((l) => l.value)).toEqual(['15,200 円', '4,950 円']);
     expect(v.hints[0]).toMatch(/^其中预估关税 \d{1,3}(,\d{3})* 円（已含在商品价内）$/);
     expect([v.hasTotal, v.totalJpy, v.totalText]).toEqual([true, CHAIN_TOTAL_JPY, '20,150 円']);
-    expect(v.totalSub).toMatch(/^≈ \$\d+\.\d{2} · ≈ ¥\d+(\.\d{2})?$/);
+    expect(v.totalSub).toMatch(/^≈ \$\d+\.\d{2} · ≈ 人民币 ¥\d+(\.\d{2})?$/);
     expect(v.splitRequired).toBe(false);
 
     // 报价 lines 刷新购物车快照价（契约 0.6.39）：3000 → 3200，行价与合计对得上

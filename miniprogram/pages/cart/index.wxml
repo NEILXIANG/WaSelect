@@ -98,6 +98,8 @@
         </view>
         <text class="ws-note line-block" wx:if="{{quote.totalSub}}">{{quote.totalSub}}</text>
         <text class="ws-caption line-block" wx:for="{{quote.hints}}" wx:for-item="hint" wx:key="*this">{{hint}}</text>
+        <!-- AJ-489：挡住提交的原因用错误色单独一行（原混在灰色说明里） -->
+        <text class="ws-note state__error line-block" wx:if="{{quote.blocker}}">{{quote.blocker}}</text>
       </view>
     </view>
 

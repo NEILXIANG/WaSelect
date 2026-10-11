@@ -69,7 +69,7 @@ describe('detailView（整体）', () => {
     expect(v.canPay).toBe(false);
     expect(v.canCancel).toBe(false);
     expect(v.totalJpy).toBe(9150);
-    expect(v.totalSub).toBe('≈ $62.20 · ≈ ¥448.00');
+    expect(v.totalSub).toBe('≈ $62.20 · ≈ 人民币 ¥448.00');
     expect(v.termsVersion).toBe('TOS-2026-09-20');
     expect(v.contactEmail).toBe('buyer@example.com');
   });

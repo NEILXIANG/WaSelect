@@ -119,7 +119,7 @@ describe('productCards（列表加工）', () => {
   it('正常商品：图取 card、副行 USD · CNY 都显示、stock>0 不售罄', () => {
     const [card] = productCards(ITEMS);
     expect(card?.image).toBe('https://img.example.com/p1/card.jpg');
-    expect(card?.subPrice).toBe('≈ $24.50 · ≈ ¥176.00');
+    expect(card?.subPrice).toBe('≈ $24.50 · ≈ 人民币 ¥176.00');
     expect(card?.soldOut).toBe(false);
     expect(card?.id).toBe('p-shiro-cleansing-oil');
   });
@@ -130,7 +130,9 @@ describe('productCards（列表加工）', () => {
   });
 
   it('汇率缺失时只显示能算出的币种（少 USD → 只剩 CNY，不显示 0.00）', () => {
-    expect(productCards([{ ...ITEMS[0], display: { CNY: 17600 } }])[0]?.subPrice).toBe('≈ ¥176.00');
+    expect(productCards([{ ...ITEMS[0], display: { CNY: 17600 } }])[0]?.subPrice).toBe(
+      '≈ 人民币 ¥176.00',
+    );
   });
 
   it('display 为空对象 / 缺失 / 非对象 → 副行空串（wxml 整行隐藏，不留 `≈ ` 孤零零一个符号）', () => {
@@ -143,7 +145,7 @@ describe('productCards（列表加工）', () => {
     // @why 服务端 bug（返回小数）不该让首页整列空白：这里宁可少一行参考价。
     //      @see index.vm.js @limitation 三（降级 ≠ 吞错）
     const [card] = productCards([{ ...ITEMS[0], display: { USD: 24.5, CNY: 17600 } }]);
-    expect(card?.subPrice).toBe('≈ ¥176.00');
+    expect(card?.subPrice).toBe('≈ 人民币 ¥176.00');
   });
 
   it('image 缺 / 空串 / 三键皆空 → 落到占位图（不留空 src）', () => {

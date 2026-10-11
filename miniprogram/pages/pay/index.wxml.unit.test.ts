@@ -45,3 +45,19 @@ describe('账号被拉黑的关闭屏（联动走查·跨角色 2026-10-10）', 
     expect(wxml).toMatch(/wx:if="\{\{contactSupport\}\}"[\s\S]{0,200}text="联系客服"/);
   });
 });
+
+/**
+ * AJ-489（用户 2026-10-11 授权代决）：倒计时原是页顶一行灰色小字，离金额和支付按钮都远（三端模拟测试报告 §7-4）；
+ * 成熟商城把"还剩多久"贴着应付金额放。
+ */
+describe('支付页：倒计时的位置（AJ-489）', () => {
+  it('🔴 倒计时在金额卡里、ws-price 之后；页面上只出现一次', () => {
+    const price = wxml.indexOf('<ws-price jpy="{{totalJpy}}"');
+    const countdown = wxml.indexOf('{{countdown}}</text>');
+    const notice = wxml.indexOf('notice.length > 0');
+    expect(price).toBeGreaterThan(0);
+    expect(countdown).toBeGreaterThan(price);
+    expect(countdown).toBeLessThan(notice);
+    expect(wxml.match(/\{\{countdown\}\}<\/text>/g)).toHaveLength(1);
+  });
+});

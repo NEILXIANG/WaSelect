@@ -63,3 +63,9 @@
 .state__error {
   color: var(--ws-danger);
 }
+
+/* AJ-489：倒计时贴着应付金额，正文字号 + 品牌深棕（沿用现有 token，不新增颜色）——提醒"还剩多久"，但不用报错红吓人 */
+.countdown {
+  margin-top: var(--ws-space-hair);
+  color: var(--ws-accent-deep);
+}

@@ -132,6 +132,7 @@ export function displaySubLine(display) {
   if (!display || typeof display !== 'object') return '';
   const parts = [];
   if (Number.isInteger(display.USD)) parts.push(`≈ ${formatUsdCents(display.USD)}`);
-  if (Number.isInteger(display.CNY)) parts.push(`≈ ${formatCnyFen(display.CNY)}`);
+  // D-36 原文「≈ 人民币 ¥176」：¥ 紧挨着日元价格会被读成日元，「人民币」三个字不能省（三端模拟测试 2026-10-11 补回）
+  if (Number.isInteger(display.CNY)) parts.push(`≈ 人民币 ${formatCnyFen(display.CNY)}`);
   return parts.join(' · ');
 }

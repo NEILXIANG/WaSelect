@@ -14,7 +14,7 @@
  * @see ./ProductFormPage.tsx；./ProductFormParts.tsx；../app.css（.product-grid / .form-card）
  */
 import type { ReactNode } from 'react';
-import { CATEGORY_LABELS, PRODUCT_CATEGORY, type ProductForm } from './view.js';
+import { CATEGORY_LABELS, PRODUCT_CATEGORY, type ProductForm, titleLengthHint } from './view.js';
 import {
   Field,
   FreeTagInput,
@@ -63,6 +63,7 @@ export function ProductMainColumn(p: MainColumnProps) {
           value={form.title}
           onChange={(v) => set('title', v)}
           error={errors['title'] ?? ''}
+          hint={titleLengthHint(form.title)}
           placeholder="例：資生堂 クレンジングオイル 200ml"
         />
         <Field

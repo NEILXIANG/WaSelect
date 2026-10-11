@@ -67,8 +67,9 @@ export function quoteView(quote) {
     // 旧文案写"接近上限，建议拆成两单"是**把既成事实写成提醒**，还放行提交，
     // 于是用户提交必然吃 40906。措辞必须说"已超过"，且页面必须**不放行**（见 splitRequired）。
     // ⚠️ 不提"申报"：为规避申报而拆单的措辞有审核与合规敏感性，只说"单笔上限"。
-    hints.push('已超过单笔上限，请分两单下单');
+    // AJ-489（三端模拟测试 2026-10-11）：不再混进 hints——hints 是灰色说明，挡住提交的原因单独给 blocker，页面用错误色
   }
+  const blocker = q.split_hint === true ? '已超过单笔上限，请分两单下单' : '';
   /**
    * `hasTotal` 是给 wxml 的开关：合计交给 `ws-price`（口径组件），
    * 而它对非整数会**响亮失败**（空白 + 控制台报错）——那是"报价缺字段"时不该付的代价。
@@ -82,6 +83,7 @@ export function quoteView(quote) {
     totalText,
     totalSub,
     hints,
+    blocker,
     splitRequired: q.split_hint === true,
   };
 }

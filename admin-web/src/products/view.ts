@@ -747,3 +747,19 @@ export function serverFieldError(
   const count = typeof d.count === 'number' && Number.isInteger(d.count) ? d.count : 1;
   return { key: f.key, text, more: Math.max(0, count - 1) };
 }
+
+/** 标题建议长度（字符数）。超过只提示、不拦：上限仍是 PRODUCT_MAX_CHARS.title。 */
+export const TITLE_SOFT_MAX = 60;
+
+/**
+ * AJ-489：标题过长的非阻断提示（三端模拟测试 2026-10-11：255 字标题在小程序商品页占满第一屏，价格要往下翻）。
+ * @why 改录入端而不是在小程序里折叠标题：问题的根子是标题写得太长，成熟商城的标题普遍在 60 字以内；
+ *      折叠会让买家看不全商品名。只提示不拦——有的商品名确实长（套装、礼盒），由运营判断。
+ * @limitation 按字符数（码点）算，不按显示宽度；英文字母与汉字同算一个字，偏松。
+ */
+export function titleLengthHint(title: string): string {
+  const n = [...title.trim()].length;
+  return n > TITLE_SOFT_MAX
+    ? `已 ${String(n)} 字：超过 ${String(TITLE_SOFT_MAX)} 字时，小程序商品页的第一屏会被标题占满（价格要往下翻才看得到），建议精简`
+    : '';
+}

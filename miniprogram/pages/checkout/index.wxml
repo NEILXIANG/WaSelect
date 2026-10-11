@@ -25,7 +25,7 @@
 
   <view class="ws-gutter ws-section" wx:if="{{rows.length > 0}}">
     <view class="ws-card">
-      <text class="ws-section-kicker">Items</text>
+      <text class="ws-section-kicker">商品</text>
       <view class="item" wx:for="{{rows}}" wx:key="productId">
         <!-- A6（AJ-416）：缩略图（外层管宽度、里层管正方形，@see media-square.unit.test.ts） -->
         <view class="item__thumb">
@@ -48,7 +48,7 @@
 
   <view class="ws-gutter ws-section">
     <view class="ws-card" hover-class="ws-press" bindtap="onPickAddress">
-      <text class="ws-section-kicker">Shipping to</text>
+      <text class="ws-section-kicker">收货地址</text>
       <block wx:if="{{address}}">
         <text class="ws-body line">{{address.recipient}} · {{address.phone}}</text>
         <text class="ws-body line">{{address.line1}}</text>
@@ -65,7 +65,7 @@
 
   <view class="ws-gutter ws-section" wx:if="{{quote}}">
     <view class="ws-card">
-      <text class="ws-section-kicker">Order Summary</text>
+      <text class="ws-section-kicker">费用明细</text>
       <view class="quote-line" wx:for="{{quote.lines}}" wx:for-item="line" wx:key="label">
         <text class="ws-note">{{line.label}}</text>
         <text class="ws-body">{{line.value}}</text>
@@ -79,6 +79,8 @@
       </view>
       <text class="ws-note line-block" wx:if="{{quote.totalSub}}">{{quote.totalSub}}</text>
       <text class="ws-caption line-block" wx:for="{{quote.hints}}" wx:for-item="hint" wx:key="*this">{{hint}}</text>
+      <!-- AJ-489：挡住提交的原因用错误色单独一行（原混在灰色说明里） -->
+      <text class="ws-note state__error line-block" wx:if="{{quote.blocker}}">{{quote.blocker}}</text>
       <!-- M-16（AJ-406）：扣款币种预告——円为主显示（AJ-402 Q3），银行卡以美元扣；金额来自报价 display，写"约" -->
       <view class="charge-preview" wx:if="{{chargePreview.length > 0}}">
         <text class="ws-note charge-preview__line" wx:for="{{chargePreview}}" wx:for-item="line" wx:key="*this">{{line}}</text>
@@ -104,7 +106,7 @@
   -->
   <view class="ws-gutter ws-section">
     <view class="ws-card">
-      <text class="ws-section-kicker">Contact</text>
+      <text class="ws-section-kicker">联系方式</text>
       <text class="ws-note field__label">联系邮箱（必填）</text>
       <input
         class="input"

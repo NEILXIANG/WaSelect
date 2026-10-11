@@ -38,6 +38,7 @@ import {
   parseStockEdit,
   withStock,
   serverFieldError,
+  titleLengthHint,
 } from './view.js';
 
 /** 像真的商品（约束三：真实日文品名、真实价位与重量）。 */
@@ -747,5 +748,17 @@ describe('serverFieldError：服务端校验原因 → 表单字段 + 人话', (
   it('没有 data / 形状不对 → null（页面退回原来的笼统提示）', () => {
     expect(serverFieldError(undefined)).toBeNull();
     expect(serverFieldError({ reason: 'x' })).toBeNull();
+  });
+});
+
+// AJ-489（三端模拟测试 2026-10-11，报告 §7-5，用户授权代决）：255 字标题在小程序详情页占满首屏，价格被挤到下面
+describe('titleLengthHint：标题过长的非阻断提示', () => {
+  it('🔴 超过 60 字给提示（说清后果），60 字以内不提示；按字符数算（表情算一个）', () => {
+    expect(titleLengthHint('資生堂 洗面奶')).toBe('');
+    expect(titleLengthHint('一'.repeat(60))).toBe('');
+    const t = titleLengthHint('一'.repeat(61));
+    expect(t).toContain('61 字');
+    expect(t).toContain('第一屏');
+    expect(titleLengthHint('🍵'.repeat(60))).toBe('');
   });
 });
