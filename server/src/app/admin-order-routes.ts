@@ -291,8 +291,17 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           created_to?: unknown;
           sort?: unknown;
           attention?: unknown;
+          user_id?: unknown;
         };
         const { page, size } = readPaging(q);
+        // AJ-486：按买家筛（客户详情"查看全部订单"）。形状白名单：会进日志与 SQL 参数，挡掉空格 / 引号 / 超长（七类 G）
+        if (
+          q.user_id !== undefined &&
+          (typeof q.user_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(q.user_id))
+        ) {
+          throw new AppError(40001, { reason: 'user_id_invalid' });
+        }
+        const userId = q.user_id;
         // 评估 4.5（契约 0.6.53）：白名单排序；非法 → 40001（不静默按默认排，否则运营以为排过了）
         const sort = parseListSort(q.sort, LIST_SORT_KEYS.orders);
         if (!sort.ok) throw new AppError(40001, { reason: sort.reason });
@@ -339,6 +348,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           ...(range.to !== null ? { createdTo: range.to } : {}),
           ...(sort.key !== null ? { sort: { key: sort.key, dir: sort.dir } } : {}),
           ...(attention !== undefined ? { attention } : {}),
+          ...(userId !== undefined ? { userId } : {}),
           // AJ-484：超时未发货截止按注入的时钟算（JST 工作日，shared shipOverdueCutoff）
           shipOverdueCutoff: shipOverdueCutoff(
             deps.clock.now(),

@@ -81,7 +81,12 @@ const Q = {
   size: 'size',
   /** AJ-425：待处理筛选（工作台待办"售后待处理 / 迟到付款待退 / 拉黑用户的已付单"跳进来时带上）。 */
   attention: 'attention',
+  /** AJ-486：按买家筛（客户详情"查看全部订单"跳进来时带上）。 */
+  user: 'user',
 } as const;
+
+/** 与服务端 `user_id` 同一形状白名单（契约 0.6.71）：形状不对不发，免得换一个 40001、页面空白看不出是筛选坏了。 */
+const USER_ID_SHAPE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export interface OrdersPageProps {
   api: AdminApi;
@@ -138,6 +143,8 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   // AJ-425：认不出的值不发给服务端（与 `status` 同口径：换一个 40001 只会让页面空白、看不出是筛选坏了）
   const attentionRaw = route.query.get(Q.attention);
   const attention = isOrderAttention(attentionRaw) ? attentionRaw : undefined;
+  const userRaw = route.query.get(Q.user);
+  const userId = userRaw !== null && USER_ID_SHAPE.test(userRaw) ? userRaw : undefined;
   const includeTest = route.query.get(Q.test) === '1';
   const { sortKey, sortDir, size: pageSize } = readListParams(route.query, LIST_SORT_KEYS.orders);
   /** 改排序 / 条数都回到第 1 页（第 3 页在新顺序下是另一批单，停在那里只会让人困惑）。 */
@@ -225,6 +232,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         ...(createdFrom !== undefined ? { createdFrom } : {}),
         ...(createdTo !== undefined ? { createdTo } : {}),
         ...(attention !== undefined ? { attention } : {}),
+        ...(userId !== undefined ? { userId } : {}),
         includeTest,
       });
       if (seq !== reqSeq.current) return;
@@ -261,6 +269,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
     sortKey,
     sortDir,
     attention,
+    userId,
   ]);
 
   useEffect(() => {
@@ -344,6 +353,16 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         <p className="muted">
           当前筛选：{statuses.map((s) => ORDER_STATUS_LABELS[s]).join('、')}{' '}
           <button type="button" className="link" onClick={() => patch({ status: '', page: '1' })}>
+            清除
+          </button>
+        </p>
+      )}
+
+      {userId !== undefined && (
+        // AJ-486：从客户详情跳进来时说清"只看这位客户"，并给出口
+        <p className="muted">
+          只看这位客户：<span className="mono">{userId}</span>{' '}
+          <button type="button" className="link" onClick={() => patch({ user: '', page: '1' })}>
             清除
           </button>
         </p>

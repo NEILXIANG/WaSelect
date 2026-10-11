@@ -493,6 +493,27 @@ describe('订单列表：待处理筛选（AJ-425）', () => {
     expect(trs[1]?.textContent).toContain('迟到付款待退');
   });
 
+  // AJ-486：客户详情"查看全部订单"跳进来带 ?user=；页面说清只看这位客户，并能清除
+  it('🔴 ?user= → 请求带 user_id；页头写「只看这位客户」；点清除后不再带', async () => {
+    const el = await open('#/orders?user=u-065bf2d9-7815');
+    await flush();
+    expect(gets().at(-1)?.path).toContain('user_id=u-065bf2d9-7815');
+    expect(el.textContent).toContain('只看这位客户');
+    const clear = [...el.querySelectorAll('button')].find(
+      (b) =>
+        b.textContent === '清除' && (b.parentElement?.textContent ?? '').includes('只看这位客户'),
+    );
+    await click(clear ?? null);
+    await flush();
+    expect(gets().at(-1)?.path).not.toContain('user_id=');
+  });
+
+  it('网址里形状不对的 user 不发给服务端（不换一个 40001）', async () => {
+    await open('#/orders?user=' + encodeURIComponent("u 1'--"));
+    await flush();
+    expect(gets().at(-1)?.path).not.toContain('user_id=');
+  });
+
   it('网址里认不出的 attention 不发给服务端（不换一个 40001）', async () => {
     await open('#/orders?attention=everything');
     await flush();

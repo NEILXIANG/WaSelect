@@ -125,7 +125,15 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
             </tbody>
           </table>
 
-          <span className="label">订单（最近 50 张，新的在前）</span>
+          <span className="label">
+            订单（最近 50 张，新的在前）{' '}
+            {/* AJ-486：超过 50 张的看不到——给到订单页按人筛的入口（契约 0.6.71 `user_id`） */}
+            <a className="link" href={`#/orders?user=${encodeURIComponent(c.id)}`}>
+              {(c.stats.order_count ?? 0) > c.orders.length
+                ? `共 ${String(c.stats.order_count)} 单，在订单页查看全部 →`
+                : '在订单页查看 →'}
+            </a>
+          </span>
           <table className="table">
             <thead>
               <tr>

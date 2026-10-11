@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.70
+  version: 0.6.71
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.71（三端模拟测试，AJ-485 / AJ-486）：① `GET /admin/orders?attention=` 加 `dispute_open`（拒付待处理：`payments.dispute_status = open`）。② `GET /admin/orders` 加 `user_id` 查询参数（按买家筛）。
     0.6.70（三端模拟测试，AJ-483 / AJ-484）：① `GET /admin/orders?attention=partial_refund` 收窄为**部分退款还在处理中**（initiated / pending / unknown，要去同步）；已成功但未退满的历史单不再算待处理（中等规模数据下 73 张永远挂在待办里）。② `attention` 加 `ship_overdue`（超时未发货，JST 工作日口径 shared `shipOverdueCutoff`）；`AdminOrderListItem` 与 `AdminOrder` 加 `ship_overdue` 布尔。
     0.6.69（严格检查第二轮 · 未修项复判，S-7 / S-9，AJ-481 / AJ-482）：
       ① `GET /orders` **分页**：`page`（≥1，默认 1）/ `size`（1..50，默认 20）；响应加 `total`（同条件总数）。原先一次返回全部订单。非法 → 40001 page_size_invalid。
@@ -870,7 +871,8 @@ paths:
       parameters:
         - {name: status, in: query, schema: {type: string, description: '0.6.44：一个或多个 OrderStatus，逗号分隔（任一命中），如 refunding,refunded；空段 / 非法值 → 40001 status_invalid'}}
         - {name: keyword, in: query, schema: {type: string, maxLength: 64, description: order_no / 收件人 / 运单号}}
-        - {name: attention, in: query, schema: {type: string, enum: [ship_overdue, after_sale, late_paid, blocked, partial_refund], description: '0.6.70（AJ-484）ship_overdue 已付款且付款超过 SHIP_WITHIN_BUSINESS_DAYS 个工作日（JST 周一至周五，不扣节假日）仍未发货。0.6.58（AJ-425）：待处理筛选——after_sale 有进行中售后（open / processing）；late_paid 迟到付款且未退款 / 退款中；blocked 下单人已拉黑且订单为 paid；0.6.67（AJ-454）partial_refund，0.6.70（AJ-483）收窄为有处理中（initiated / pending / unknown）的部分退款且订单不在 refunding / refunded。与其它条件"且"；非法 → 40001 attention_invalid'}}
+        - {name: user_id, in: query, schema: {type: string, pattern: '^[A-Za-z0-9_-]{1,64}$', description: '0.6.71（AJ-486）：只列这位买家的单（客户详情只列最近 50 张，其余从这里看全）。形状不符 → 400 / 40001；不存在的 id → 空列表'}}
+        - {name: attention, in: query, schema: {type: string, enum: [ship_overdue, dispute_open, after_sale, late_paid, blocked, partial_refund], description: '0.6.71（AJ-485）dispute_open 支付上的拒付仍为 open（待举证）；won / lost / withdrawn 不算。0.6.70（AJ-484）ship_overdue 已付款且付款超过 SHIP_WITHIN_BUSINESS_DAYS 个工作日（JST 周一至周五，不扣节假日）仍未发货。0.6.58（AJ-425）：待处理筛选——after_sale 有进行中售后（open / processing）；late_paid 迟到付款且未退款 / 退款中；blocked 下单人已拉黑且订单为 paid；0.6.67（AJ-454）partial_refund，0.6.70（AJ-483）收窄为有处理中（initiated / pending / unknown）的部分退款且订单不在 refunding / refunded。与其它条件"且"；非法 → 40001 attention_invalid'}}
         - {name: created_from, in: query, schema: {type: string, format: date, description: '0.6.44：下单日期下界，JST 日历日 YYYY-MM-DD（含当日）；非法 → 40001 created_from_invalid'}}
         - {name: created_to, in: query, schema: {type: string, format: date, description: '0.6.44：下单日期上界，JST 日历日 YYYY-MM-DD（含当日）；非法 → 40001 created_to_invalid；早于 created_from → 40001 created_range_invalid'}}
         - {name: page, in: query, schema: {type: integer, default: 1}}

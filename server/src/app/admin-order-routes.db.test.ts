@@ -1089,6 +1089,56 @@ describe('GET /admin/orders?sort', () => {
       await s.close();
     });
 
+    it('🔴 AJ-485：拒付待处理——attention=dispute_open 只列支付上拒付还开着（open）的单；已胜诉 / 已败诉 / 已撤回不算', async () => {
+      const s = await buildServer();
+      for (const [id, st] of [
+        ['o-open', 'open'],
+        ['o-won', 'won'],
+        ['o-lost', 'lost'],
+        ['o-withdrawn', 'withdrawn'],
+      ] as const) {
+        await seedOrder({ id, hasDispute: st === 'open' || st === 'lost' });
+        await db`update payments set dispute_id = ${`dp_${id}`}, dispute_status = ${st} where order_id = ${id}`;
+      }
+      await seedOrder({ id: 'o-none' });
+      const r = await adminFetch(s, 'GET', '/api/v1/admin/orders?attention=dispute_open');
+      expect(r.status).toBe(200);
+      expect((r.json['items'] as Array<{ order_id: string }>).map((i) => i.order_id)).toEqual([
+        'o-open',
+      ]);
+      await s.close();
+    });
+
+    it('🔴 AJ-486：user_id 只列这位买家的单（客户详情"查看全部订单"）；形状不对 → 40001（日志 reason=user_id_invalid）', async () => {
+      const s = await buildServer();
+      await seedOrder({ id: 'o-a1' });
+      await seedOrder({ id: 'o-a2' });
+      await seedOrder({ id: 'o-b1' });
+      await db`update orders set user_id = 'u-o-a1' where id = 'o-a2'`;
+      const r = await adminFetch(s, 'GET', '/api/v1/admin/orders?user_id=u-o-a1&size=50');
+      expect(r.status).toBe(200);
+      expect(
+        (r.json['items'] as Array<{ order_id: string }>).map((i) => i.order_id).sort(),
+      ).toEqual(['o-a1', 'o-a2']);
+      expect(r.json['total']).toBe(2);
+      // 不存在的买家：空列表，不是 404（筛选条件，不是资源）
+      const none = await adminFetch(s, 'GET', '/api/v1/admin/orders?user_id=u-nobody');
+      expect(none.status).toBe(200);
+      expect(none.json['total']).toBe(0);
+      for (const bad of ['u o', 'u-' + 'x'.repeat(80), "u-1'--", '']) {
+        const b = await adminFetch(
+          s,
+          'GET',
+          `/api/v1/admin/orders?user_id=${encodeURIComponent(bad)}`,
+        );
+        expect(b.status, bad).toBe(400);
+        expect(b.json['code'], bad).toBe(40001);
+        // reason 只进日志（AppError 的 details 不进响应体）
+        expect(s.sink.lines.join('\n'), bad).toContain('user_id_invalid');
+      }
+      await s.close();
+    });
+
     it('🔴 A-4（AJ-455）：改址后详情带 address_history（改前完整地址、谁、何时）；审计 after 只记归档号、不含地址字段', async () => {
       const s = await buildServer();
       await seedOrder({ id: 'o-1' });

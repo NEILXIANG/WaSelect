@@ -82,6 +82,8 @@ export interface OrderListQuery {
   sort?: string;
   /** 待处理筛选（契约 0.6.58 / AJ-425）：售后待处理 / 迟到付款待退 / 拉黑用户的已付单。 */
   attention?: OrderAttention;
+  /** AJ-486（契约 0.6.71）：只看某位买家的单（客户详情"查看全部订单"）。 */
+  userId?: string;
 }
 
 /**
@@ -104,6 +106,7 @@ export async function listOrders(
   if (query.includeTest === true) params.set('include_test', 'true');
   if (query.sort !== undefined && query.sort !== '') params.set('sort', query.sort);
   if (query.attention !== undefined) params.set('attention', query.attention);
+  if (query.userId !== undefined) params.set('user_id', query.userId);
   const qs = params.toString();
   const resp = await api({
     path: `/api/v1/admin/orders${qs === '' ? '' : `?${qs}`}`,

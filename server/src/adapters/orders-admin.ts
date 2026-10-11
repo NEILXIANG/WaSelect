@@ -114,6 +114,11 @@ export interface AdminOrderListQuery {
    */
   attention?: OrderAttention | undefined;
   /**
+   * 只看某位买家的单（AJ-486）：客户详情只列最近 50 张，其余从这里看全。走 `(user_id, created_at)` 索引。
+   * 形状由路由校验；不存在的 id 得到空列表（这是筛选条件，不是资源）。
+   */
+  userId?: string | undefined;
+  /**
    * 超时未发货的截止（AJ-484，shared `shipOverdueCutoff(now, SHIP_WITHIN_BUSINESS_DAYS)`）：付款早于它的待发货单已超时。
    * 由路由按注入的时钟算好传进来（adapter 不读时钟）；不传 = 列表行的 `ship_overdue` 恒 false、`attention=ship_overdue` 不命中。
    */
@@ -268,6 +273,9 @@ function attentionWhere(db: Db, a: OrderAttention | undefined, cutoff: Date | un
     // AJ-484：已付款、付款早于截止（N 个 JST 工作日前的 00:00）仍未发货
     case 'ship_overdue':
       return cutoff === undefined ? db`false` : db`status = 'paid' and paid_at < ${cutoff}`;
+    // AJ-485：拒付还开着（要去举证）；胜诉 / 败诉 / 撤回不算
+    case 'dispute_open':
+      return db`exists (select 1 from payments p where p.order_id = orders.id and p.dispute_status = 'open')`;
     case 'after_sale':
       return db`exists (select 1 from after_sale_requests a
                          where a.order_id = orders.id and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])})`;
@@ -295,6 +303,7 @@ function buildWhere(db: Db, q: AdminOrderListQuery) {
       and (${q.createdFrom === undefined ? db`true` : db`created_at >= ${q.createdFrom}`})
       and (${q.createdTo === undefined ? db`true` : db`created_at < ${q.createdTo}`})
       and (${attentionWhere(db, q.attention, q.shipOverdueCutoff)})
+      and (${q.userId === undefined ? db`true` : db`user_id = ${q.userId}`})
       ${
         kw === null
           ? db``
