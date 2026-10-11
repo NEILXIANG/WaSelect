@@ -76,6 +76,8 @@ export interface AdminOrderListRow {
   after_sale_open: boolean;
   /** 下单人已被拉黑（AJ-425）：已付单由运营判断退款还是照发。 */
   user_blocked: boolean;
+  /** AJ-484：已付款、超过承诺的 N 个工作日仍未发货（同 `attention=ship_overdue` 口径）。 */
+  ship_overdue: boolean;
   created_at: Date;
   /**
    * 收件人（地址快照里的 recipient；0.6.9 / KD-14）。
@@ -111,6 +113,11 @@ export interface AdminOrderListQuery {
    * @why 三类单都是"设计上交给运营处理、却没有入口能发现"的（统一结论 U10）。
    */
   attention?: OrderAttention | undefined;
+  /**
+   * 超时未发货的截止（AJ-484，shared `shipOverdueCutoff(now, SHIP_WITHIN_BUSINESS_DAYS)`）：付款早于它的待发货单已超时。
+   * 由路由按注入的时钟算好传进来（adapter 不读时钟）；不传 = 列表行的 `ship_overdue` 恒 false、`attention=ship_overdue` 不命中。
+   */
+  shipOverdueCutoff?: Date | undefined;
   /**
    * 排序（评估 4.5，2026-10-09；shared `LIST_SORT_KEYS.orders`）：不传 = 下单时间倒序。
    * @limitation `total_jpy` 排序没有专用索引：订单百级到千级时是内存排序，量起来再看 EXPLAIN 是否要 (is_test, total_jpy) 索引。
@@ -254,10 +261,13 @@ function normalizeKeyword(raw: string | undefined): string | null {
  * @why "进行中售后"取 shared `AFTER_SALE_OPEN_STATUSES`（与部分唯一索引同口径）；"迟到付款待退"排除退款中 / 已退款；
  *      "拉黑用户的已付单"只看 `paid`——已发货的货已经出去了，那是另一类处置（拒付 / 售后），不在这里混。
  */
-function attentionWhere(db: Db, a: OrderAttention | undefined) {
+function attentionWhere(db: Db, a: OrderAttention | undefined, cutoff: Date | undefined) {
   switch (a) {
     case undefined:
       return db`true`;
+    // AJ-484：已付款、付款早于截止（N 个 JST 工作日前的 00:00）仍未发货
+    case 'ship_overdue':
+      return cutoff === undefined ? db`false` : db`status = 'paid' and paid_at < ${cutoff}`;
     case 'after_sale':
       return db`exists (select 1 from after_sale_requests a
                          where a.order_id = orders.id and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])})`;
@@ -267,10 +277,12 @@ function attentionWhere(db: Db, a: OrderAttention | undefined) {
     case 'blocked':
       return db`status = 'paid'
                 and exists (select 1 from users u where u.id = orders.user_id and u.blocked_at is not null)`;
-    // AJ-454：有部分退款（failed 以外都算：在途要同步，已成功的要让接手的人知道）且订单没整单退掉
+    // AJ-483（原 AJ-454 口径收窄）：只算**还在处理中**的部分退款（要去同步结果）。已成功但未退满的历史单不再挂待办——
+    //   中等规模数据下这类单有几十张、永远不归零，待办就失去"有事要做"的意思；退过多少在订单详情金额区照样看得到
     case 'partial_refund':
       return db`status not in ('refunding', 'refunded')
-                and exists (select 1 from order_refunds r where r.order_id = orders.id and r.status <> 'failed')`;
+                and exists (select 1 from order_refunds r where r.order_id = orders.id
+                             and r.status in ('initiated', 'pending', 'unknown'))`;
   }
 }
 
@@ -282,7 +294,7 @@ function buildWhere(db: Db, q: AdminOrderListQuery) {
       and (${hideTest ? db`is_test = false` : db`true`})
       and (${q.createdFrom === undefined ? db`true` : db`created_at >= ${q.createdFrom}`})
       and (${q.createdTo === undefined ? db`true` : db`created_at < ${q.createdTo}`})
-      and (${attentionWhere(db, q.attention)})
+      and (${attentionWhere(db, q.attention, q.shipOverdueCutoff)})
       ${
         kw === null
           ? db``
@@ -309,6 +321,7 @@ function toListRow(r: Record<string, unknown>): AdminOrderListRow {
     late_paid: bool(r.late_paid),
     after_sale_open: bool(r.after_sale_open),
     user_blocked: bool(r.user_blocked),
+    ship_overdue: bool(r.ship_overdue),
     created_at: r.created_at as Date,
     recipient: strOrNull(r.recipient),
   };
@@ -347,7 +360,8 @@ export async function listAdminOrders(
            exists (select 1 from after_sale_requests a
                     where a.order_id = orders.id and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])}) as after_sale_open,
            exists (select 1 from users u
-                    where u.id = orders.user_id and u.blocked_at is not null) as user_blocked
+                    where u.id = orders.user_id and u.blocked_at is not null) as user_blocked,
+           coalesce(status = 'paid' and paid_at < ${q.shipOverdueCutoff ?? null}::timestamptz, false) as ship_overdue
       from orders
     ${buildWhere(db, q)}
      ${orderListOrderBy(db, q.sort)}

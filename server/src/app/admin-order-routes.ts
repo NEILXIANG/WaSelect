@@ -72,6 +72,7 @@ import {
   isOrderAttention,
   REFUND_REASON_MAX_LENGTH,
   SEARCH_KEYWORD_MAX_LENGTH,
+  shipOverdueCutoff,
 } from '@waselect/shared';
 import { markAuditCommitted, setAuditAfter, setAuditBefore } from './admin-audit.js';
 import { parseAddressInput } from '../domain/address-input.js';
@@ -158,6 +159,8 @@ function toListItem(
     // AJ-425（契约 0.6.58）：列表里一眼看见"这单有进行中的售后 / 下单人已被拉黑"
     after_sale_open: r.after_sale_open,
     user_blocked: r.user_blocked,
+    // AJ-484（契约 0.6.70）：超时未发货
+    ship_overdue: r.ship_overdue,
     created_at: r.created_at.toISOString(),
   };
 }
@@ -336,6 +339,11 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           ...(range.to !== null ? { createdTo: range.to } : {}),
           ...(sort.key !== null ? { sort: { key: sort.key, dir: sort.dir } } : {}),
           ...(attention !== undefined ? { attention } : {}),
+          // AJ-484：超时未发货截止按注入的时钟算（JST 工作日，shared shipOverdueCutoff）
+          shipOverdueCutoff: shipOverdueCutoff(
+            deps.clock.now(),
+            deps.config.SHIP_WITHIN_BUSINESS_DAYS,
+          ),
           includeTest,
         });
         // 行项目**一次批量**取（N+1 的反面）：`listOrderItemsFor` 一条 `in (…)` 拿全部，
@@ -383,7 +391,16 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
             listAfterSales(deps.db, id),
             listAddressHistory(deps.db, id),
           ]);
+        // AJ-484：与列表同一个截止口径（同一个时钟、同一份配置）
+        const overdueCutoff = shipOverdueCutoff(
+          deps.clock.now(),
+          deps.config.SHIP_WITHIN_BUSINESS_DAYS,
+        );
         res.json({
+          ship_overdue:
+            order.status === 'paid' &&
+            order.paid_at !== null &&
+            order.paid_at.getTime() < overdueCutoff.getTime(),
           ...toAdminOrder(
             order,
             items.map((i) => toAdminOrderItem(i, deps.config.IMG_BASE_URL)),

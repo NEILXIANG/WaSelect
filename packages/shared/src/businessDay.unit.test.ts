@@ -9,6 +9,7 @@ import {
   jstDate,
   jstDateCompact,
   jstDayWindow,
+  shipOverdueCutoff,
   startOfJstDayUtc,
   startOfJstDayUtcMinusDays,
   toJstParts,
@@ -157,5 +158,44 @@ describe('jstDayWindow（含当日的 N 日窗口，左闭右开）', () => {
       ),
       { numRuns: 200 },
     );
+  });
+});
+
+/**
+ * 超时未发货的截止（三端模拟测试 2026-10-11，AJ-484）：付款日之后第 N 个工作日（JST 周一至周五）当天结束前要发出，
+ * 之后仍未发就是超时。`shipOverdueCutoff(now, N)` = 一个时刻：付款早于它的待发货单已超时。
+ * 2026-10-05 是周一（JST）。
+ */
+describe('shipOverdueCutoff（超时未发货的截止，JST 工作日）', () => {
+  const jst = (s: string): Date => new Date(`${s}+09:00`);
+  const overdue = (paid: string, now: string, n = 7): boolean =>
+    jst(paid).getTime() < shipOverdueCutoff(jst(now), n).getTime();
+
+  it('🔴 周一付款、7 个工作日：截止是下周三当天，周四起超时', () => {
+    expect(overdue('2026-10-05T10:00:00', '2026-10-14T23:59:00')).toBe(false); // 下周三
+    expect(overdue('2026-10-05T10:00:00', '2026-10-15T00:01:00')).toBe(true); // 下周四
+  });
+
+  it('🔴 周六付款：周末不算，截止是第 2 周的周二，周三起超时', () => {
+    expect(overdue('2026-10-10T15:00:00', '2026-10-20T20:00:00')).toBe(false); // 周二
+    expect(overdue('2026-10-10T15:00:00', '2026-10-21T08:00:00')).toBe(true); // 周三
+  });
+
+  it('今天是周末：不会因为周末多算出超时（周五截止的单，周六周日仍算在周五之后一天）', () => {
+    // 周四（10-08）付款 → 截止 10-19（周一）
+    expect(overdue('2026-10-08T09:00:00', '2026-10-17T12:00:00')).toBe(false); // 周六
+    expect(overdue('2026-10-08T09:00:00', '2026-10-19T23:00:00')).toBe(false); // 周一当天
+    expect(overdue('2026-10-08T09:00:00', '2026-10-20T00:30:00')).toBe(true); // 周二
+  });
+
+  it('跨 JST 日界：JST 周一 00:30 付款（UTC 仍是周日）按 JST 周一算', () => {
+    expect(overdue('2026-10-05T00:30:00', '2026-10-14T23:00:00')).toBe(false);
+    expect(overdue('2026-10-05T00:30:00', '2026-10-15T00:10:00')).toBe(true);
+  });
+
+  it('N 不是 ≥ 1 的整数 → 抛错（静默当成 0 会把所有待发货单都算超时）', () => {
+    for (const n of [0, -1, 1.5, Number.NaN]) {
+      expect(() => shipOverdueCutoff(jst('2026-10-15T10:00:00'), n), String(n)).toThrow(RangeError);
+    }
   });
 });

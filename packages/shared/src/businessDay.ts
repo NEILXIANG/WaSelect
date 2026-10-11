@@ -106,3 +106,33 @@ export function jstDayWindow(at: Date, days: number): JstDayWindow {
     to: new Date(todayStart.getTime() + 86_400_000),
   };
 }
+
+/**
+ * 超时未发货的截止时刻（三端模拟测试 2026-10-11，AJ-484）：**付款早于它**的待发货单已超过承诺的 N 个工作日。
+ *
+ * 口径：付款日（JST）之后的第 N 个工作日当天结束前要发出，之后仍未发出即超时。
+ * 等价写法（便于直接进 SQL）：从今天（JST）往前数 N 个工作日，那一天的 00:00 JST 就是截止——
+ * 付款早于它的单，到今天已经过了 N 个完整的工作日。
+ *
+ * @why 买家在商品详情看到的是"付款后 N 个工作日内发出"（服务端 SHIP_WITHIN_BUSINESS_DAYS，美国 FTC 邮购规则要求按承诺发货，
+ *      做不到要通知买家并给取消选项）；后台此前对超时没有任何提示，127 张待发货里谁已超时只能自己数日子。
+ * @why 放 shared、纯算术（时刻由调用方传入）：服务端业务层禁 `new Date()`（F10），且后台展示与服务端筛选要同一个口径。
+ * @limitation 一：工作日 = JST 周一至周五，**不扣日本法定节假日**（每年约 16 天）。节假日前后会早报一两天超时——
+ *              宁可早提醒，不能漏提醒。真要扣节假日需维护日历表。
+ * @limitation 二：按 24 小时整挪（JST 无夏令时，同本文件其它函数）。
+ * @throws {RangeError} `days` 不是 ≥ 1 的整数（静默当成 0 会把所有待发货单都算超时）
+ */
+export function shipOverdueCutoff(now: Date, days: number): Date {
+  if (!Number.isInteger(days) || days < 1) {
+    throw new RangeError(`工作日数必须是 ≥ 1 的整数，收到 ${String(days)}`);
+  }
+  let t = startOfJstDayUtc(now).getTime();
+  let counted = 0;
+  while (counted < days) {
+    t -= 86_400_000;
+    // t 是某个 JST 日的 00:00（UTC 表示）；加 9 小时后的 UTC 星期即 JST 星期
+    const weekday = new Date(t + JST_OFFSET_MIN * 60_000).getUTCDay();
+    if (weekday !== 0 && weekday !== 6) counted += 1;
+  }
+  return new Date(t);
+}

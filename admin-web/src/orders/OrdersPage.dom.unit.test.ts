@@ -461,6 +461,38 @@ describe('订单列表：待处理筛选（AJ-425）', () => {
     expect(tr?.textContent).toContain('用户已拉黑');
   });
 
+  // 三端模拟测试 2026-10-11（AJ-484）：badges.unit 里「超时未发货」「迟到付款待退」是绿的，筛选也筛对了，
+  // 但列表页把行转成视图模型时只挑了四个布尔再交给 flagBadges——新标记在列表上一个都不出现（同 10-09 那次接缝）。
+  it('🔴 列表行带 ship_overdue / late_paid → 状态列显示「超时未发货」「迟到付款待退」（flagBadges 拿到的是原始行）', async () => {
+    calls = [];
+    const rows = [
+      {
+        order_id: 'o-1',
+        order_no: 'NO-1',
+        status: 'paid',
+        total_jpy: 1000,
+        created_at: '2026-01-02T00:00:00.000Z',
+        ship_overdue: true,
+      },
+      {
+        order_id: 'o-2',
+        order_no: 'NO-2',
+        status: 'expired',
+        total_jpy: 1000,
+        created_at: '2026-01-02T00:00:00.000Z',
+        late_paid: true,
+      },
+    ];
+    apiImpl = async (req: Call): Promise<unknown> => {
+      calls.push(req);
+      return { items: rows, total: 2 };
+    };
+    mounted = await mount(createElement(Harness, { initial: parseHash('#/orders') }));
+    const trs = mounted.el.querySelectorAll('tbody tr');
+    expect(trs[0]?.textContent).toContain('超时未发货');
+    expect(trs[1]?.textContent).toContain('迟到付款待退');
+  });
+
   it('网址里认不出的 attention 不发给服务端（不换一个 40001）', async () => {
     await open('#/orders?attention=everything');
     await flush();

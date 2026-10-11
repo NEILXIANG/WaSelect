@@ -553,16 +553,12 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
                 </a>
               </td>
               <td>
-                {/* AJ-400：彩色徽章（statusText 文案不变，色调见 badges.ts） */}
-                {[
-                  statusBadge(raw.find((o) => o.order_id === row.id) ?? { status: '' }),
-                  ...flagBadges({
-                    has_dispute: row.hasDispute,
-                    is_test: row.isTest,
-                    after_sale_open: row.afterSaleOpen,
-                    user_blocked: row.userBlocked,
-                  }),
-                ].map((b) => (
+                {/* AJ-400：彩色徽章（statusText 文案不变，色调见 badges.ts）。
+                    AJ-484：标记直接吃服务端原始行——之前在这里挑四个布尔转交，flagBadges 新增的标记
+                    （超时未发货、迟到付款待退）单测全绿、列表上却一个不出现；原始行交过去就不会再漏 */}
+                {((r) => [statusBadge(r), ...flagBadges(r)])(
+                  raw.find((o) => o.order_id === row.id) ?? { status: '' },
+                ).map((b) => (
                   <Badge key={b.text} tone={b.tone}>
                     {b.text}
                   </Badge>

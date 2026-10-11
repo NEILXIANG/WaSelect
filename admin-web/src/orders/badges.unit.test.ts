@@ -115,3 +115,40 @@ describe('flagBadges：待处理标记（AJ-425）', () => {
     expect(flagBadges({ after_sale_open: false, user_blocked: false })).toEqual([]);
   });
 });
+
+describe('迟到付款标记（三端模拟测试 2026-10-11）', () => {
+  it('🔴 已过期 / 已取消且收到迟到付款 → 「迟到付款待退」（原先只写"已过期"，要读到时间线最后一行才知道钱到了）', () => {
+    for (const status of ['expired', 'cancelled']) {
+      expect(flagBadges({ status, late_paid: true }), status).toContainEqual({
+        text: '迟到付款待退',
+        tone: 'danger',
+      });
+    }
+  });
+
+  it('已退款 / 退款中 / 没有迟到付款 → 不显示', () => {
+    for (const o of [
+      { status: 'refunded', late_paid: true },
+      { status: 'refunding', late_paid: true },
+      { status: 'expired', late_paid: false },
+      { status: 'expired' },
+    ]) {
+      expect(
+        flagBadges(o).map((b) => b.text),
+        JSON.stringify(o),
+      ).not.toContain('迟到付款待退');
+    }
+  });
+});
+
+describe('超时未发货标记（AJ-484）', () => {
+  it('🔴 ship_overdue=true → 「超时未发货」（红）；false / 缺省 → 不显示', () => {
+    expect(flagBadges({ status: 'paid', ship_overdue: true })).toContainEqual({
+      text: '超时未发货',
+      tone: 'danger',
+    });
+    for (const o of [{ status: 'paid', ship_overdue: false }, { status: 'paid' }]) {
+      expect(flagBadges(o).map((b) => b.text)).not.toContain('超时未发货');
+    }
+  });
+});

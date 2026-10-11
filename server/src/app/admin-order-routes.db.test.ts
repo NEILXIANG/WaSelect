@@ -1034,7 +1034,7 @@ describe('GET /admin/orders?sort', () => {
       await s.close();
     });
 
-    it('🔴 OPS-3（AJ-454）：attention=partial_refund 列出有部分退款（在途或已成功但未退满）的单；已整单退款的不出现', async () => {
+    it('🔴 OPS-3（AJ-454 → AJ-483）：attention=partial_refund 只列部分退款还在处理中的单（要去同步）；已成功的历史单不再挂待办', async () => {
       const s = await buildServer();
       await seedOrder({ id: 'o-pr' });
       await db`insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, created_at)
@@ -1051,9 +1051,41 @@ describe('GET /admin/orders?sort', () => {
       await seedOrder({ id: 'o-plain' });
       const r = await adminFetch(s, 'GET', '/api/v1/admin/orders?attention=partial_refund');
       expect(r.status).toBe(200);
+      // AJ-483（三端模拟测试）：中等规模数据下"已成功但未退满"的历史单有 73 张、永远挂在待办里——待办只放要人动手的事；
+      //   退过一部分款这件事在订单详情金额区照样看得到
       expect(
         (r.json['items'] as Array<{ order_id: string }>).map((i) => i.order_id).sort(),
-      ).toEqual(['o-inflight', 'o-pr']);
+      ).toEqual(['o-inflight']);
+      await s.close();
+    });
+
+    it('🔴 AJ-484：超时未发货——attention=ship_overdue 只列付款超过 N 个工作日仍未发货的单；列表与详情带同口径的 ship_overdue', async () => {
+      const s = await buildServer();
+      await seedOrder({ id: 'o-old-paid' });
+      await db`update orders set paid_at = now() - interval '20 days' where id = 'o-old-paid'`;
+      await seedOrder({ id: 'o-new-paid' });
+      await db`update orders set paid_at = now() - interval '1 hour' where id = 'o-new-paid'`;
+      await seedOrder({ id: 'o-old-shipped', status: 'shipped' });
+      await db`update orders set paid_at = now() - interval '20 days' where id = 'o-old-shipped'`;
+      const r = await adminFetch(s, 'GET', '/api/v1/admin/orders?attention=ship_overdue');
+      expect(r.status).toBe(200);
+      expect((r.json['items'] as Array<{ order_id: string }>).map((i) => i.order_id)).toEqual([
+        'o-old-paid',
+      ]);
+      const all = await adminFetch(s, 'GET', '/api/v1/admin/orders?size=50');
+      const flag = new Map(
+        (all.json['items'] as Array<{ order_id: string; ship_overdue: boolean }>).map((i) => [
+          i.order_id,
+          i.ship_overdue,
+        ]),
+      );
+      expect(flag.get('o-old-paid')).toBe(true);
+      expect(flag.get('o-new-paid')).toBe(false);
+      expect(flag.get('o-old-shipped')).toBe(false);
+      const d = await adminFetch(s, 'GET', '/api/v1/admin/orders/o-old-paid');
+      expect(d.json['ship_overdue']).toBe(true);
+      const d2 = await adminFetch(s, 'GET', '/api/v1/admin/orders/o-new-paid');
+      expect(d2.json['ship_overdue']).toBe(false);
       await s.close();
     });
 
