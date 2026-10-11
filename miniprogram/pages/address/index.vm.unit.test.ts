@@ -41,7 +41,7 @@ describe('addressRows（列表行）', () => {
     expect(row).toEqual({
       id: 'addr-1',
       recipient: 'Ken Tanaka',
-      phone: '+14155550123',
+      phone: '+1 (415) 555-0123',
       line1: '1234 Market St',
       line2: '',
       region: 'San Francisco, CA, 94102',

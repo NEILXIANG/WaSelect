@@ -281,13 +281,23 @@ export function toAddressInput(model) {
  * @why 摘要在**这里**拼而不是 wxml 里拼字符串：WXML 里做字符串拼接与空值判断
  *      会产出"San Francisco, , CA"这种双逗号，而它在真机上的样子就是"地址显示错了"。
  */
+/**
+ * E.164 美国号 → 美国习惯写法 `+1 (617) 555-0123`（只用于显示；提交给服务端的仍是 E.164）。
+ * @why 三端模拟测试 2026-10-11：地址列表 / 结算 / 订单详情显示 "+16175550123"，一串数字核对起来容易看错。
+ * @limitation 只认 `+1` 加 10 位；其它形状（旧数据、别国号码）原样返回，不硬套格式。
+ */
+function displayUsPhone(v) {
+  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(v);
+  return m === null ? v : `+1 (${m[1]}) ${m[2]}-${m[3]}`;
+}
+
 export function addressSummary(addr) {
   const a = addr && typeof addr === 'object' ? addr : {};
   const text = (v) => (typeof v === 'string' ? v.trim() : '');
   const region = [text(a.city), text(a.state), text(a.postal_code)].filter((s) => s !== '');
   return {
     recipient: text(a.recipient),
-    phone: text(a.phone),
+    phone: displayUsPhone(text(a.phone)),
     line1: text(a.line1),
     line2: text(a.line2),
     region: region.join(', '),

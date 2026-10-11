@@ -177,14 +177,19 @@ describe('toAddressInput（请求体）', () => {
 });
 
 describe('addressSummary（摘要行）', () => {
-  it('region = 城市, 州, 邮编', () => {
+  // 三端模拟测试 2026-10-11：地址列表 / 结算 / 订单详情显示 "+16175550123"，一串数字不好读；美国习惯 (617) 555-0123
+  it('🔴 region = 城市, 州, 邮编；电话按美国习惯分段显示（提交给服务端的仍是 E.164，见 toAddressInput）', () => {
     expect(addressSummary(ADDR)).toEqual({
       recipient: 'Ken Tanaka',
-      phone: '+14155550123',
+      phone: '+1 (415) 555-0123',
       line1: '1234 Market St',
       line2: 'Apt 5B',
       region: 'San Francisco, CA, 94102-1234',
     });
+  });
+
+  it('形状认不出的电话原样显示（旧数据 / 别国号码不硬套格式）', () => {
+    expect(addressSummary({ ...ADDR, phone: '+819012345678' }).phone).toBe('+819012345678');
   });
 
   it('⚠️ 缺 city / 空 line2 → 不出现双逗号', () => {

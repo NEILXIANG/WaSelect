@@ -32,10 +32,15 @@
 }
 
 .addr__name {
-  flex: none;
+  /* 三端模拟测试 2026-10-11：原为 flex: none——超长姓名不让缩，挤压全落在「默认」标签上，标签被压成竖排两行。
+     改为姓名可换行、标签不缩不折 */
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .addr__default {
+  flex: none;
+  white-space: nowrap;
   margin-left: var(--ws-space-inline);
 }
 
