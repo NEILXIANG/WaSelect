@@ -64,6 +64,8 @@ export interface FxRow {
   rateText: string;
   rawRateText: string;
   bufferText: string;
+  /** 「100 円 ≈ ¥5.10」：运营看汇率时最直接的核对方式（三端模拟测试 2026-10-11：0.050985 读不出是多少）。 */
+  exampleText: string;
   effectiveText: string;
   /**
    * 服务端判定的"这一行当前已生效"（ADM3-05）。
@@ -88,11 +90,31 @@ export function fxRows(items: unknown): FxRow[] {
         quote,
         rateText: num(x['rate']),
         rawRateText: num(x['raw_rate']),
-        bufferText: num(x['buffer']),
+        bufferText: percent(x['buffer']),
+        exampleText: example(quote, x['rate']),
         effectiveText: formatJst(x['effective_from']),
         isCurrent: x['is_current'] === true,
       };
     });
+}
+
+/** 0.03 → `3%`（与设置页同口径；三端模拟测试 2026-10-11：这里原写 0.03、设置页写 3%）。 */
+function percent(v: unknown): string {
+  return typeof v === 'number' && Number.isFinite(v)
+    ? `${String(Math.round(v * 10000) / 100)}%`
+    : '—';
+}
+
+/**
+ * 100 円 按生效汇率折成多少（两位小数）。美元写 `$0.66`；人民币写 `5.10 元`（日元店里 ¥ 会被读成日元）；
+ * 认不出的币种把代码写在后面，不猜符号。
+ */
+function example(quote: string, rate: unknown): string {
+  if (typeof rate !== 'number' || !Number.isFinite(rate)) return '—';
+  const v = (rate * 100).toFixed(2);
+  if (quote === 'USD') return `100 円 ≈ $${v}`;
+  if (quote === 'CNY') return `100 円 ≈ ${v} 元`;
+  return `100 円 ≈ ${v} ${quote}`;
 }
 
 function num(v: unknown): string {

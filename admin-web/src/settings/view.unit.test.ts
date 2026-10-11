@@ -17,6 +17,16 @@ describe('itemLabel / groupTitle', () => {
 });
 
 describe('valueText', () => {
+  // 三端模拟测试 2026-10-11（运营看不懂的字）：设置页显示「审核模式 off」
+  it('🔴 审核模式 on / off → 开启 / 关闭', () => {
+    expect(valueText({ key: 'review_mode', value: 'off', source: 'env', apply: 'restart' })).toBe(
+      '关闭',
+    );
+    expect(valueText({ key: 'review_mode', value: 'on', source: 'env', apply: 'restart' })).toBe(
+      '开启（只收模拟支付，审核用）',
+    );
+  });
+
   // AJ-410 / N31：「未配置」改为告诉运营下一步（找技术人员）
   it('null → 未填写（请技术人员配置）；edit_page → 指向运营配置页', () => {
     expect(valueText({ key: 'seller_address', value: null, source: 'env', apply: 'restart' })).toBe(

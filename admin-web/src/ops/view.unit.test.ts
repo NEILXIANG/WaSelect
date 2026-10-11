@@ -45,7 +45,8 @@ const formRow = (max: string, price: string, active = true): Record<string, unkn
 });
 
 describe('fxRows', () => {
-  it('映射出五个展示列（生效时间是 JST）', () => {
+  // 三端模拟测试 2026-10-11（运营看不懂的数）：缓冲写 0.03（设置页写 3%），汇率 0.050985 不说是"1 円 兑多少"
+  it('🔴 映射出展示列：缓冲按百分比，另给"100 円 ≈ …"的折算示例（生效时间是 JST）', () => {
     const [row] = fxRows([
       {
         quote: 'USD',
@@ -60,10 +61,34 @@ describe('fxRows', () => {
       quote: 'USD',
       rateText: '0.0066',
       rawRateText: '0.0067',
-      bufferText: '0.01',
+      bufferText: '1%',
+      exampleText: '100 円 ≈ $0.66',
       effectiveText: '2026-09-27 09:00',
       isCurrent: false,
     });
+  });
+
+  it('人民币示例写「元」（日元店里 ¥ 会被读成日元）；认不出的币种把代码写在后面', () => {
+    const rows = fxRows([
+      {
+        quote: 'CNY',
+        rate: 0.050985,
+        raw_rate: 0.0495,
+        buffer: 0.03,
+        effective_from: '2026-09-27T00:00:00Z',
+      },
+      {
+        quote: 'EUR',
+        rate: 0.0061,
+        raw_rate: 0.006,
+        buffer: 0,
+        effective_from: '2026-09-27T00:00:00Z',
+      },
+    ]);
+    expect(rows.map((r) => [r.exampleText, r.bufferText])).toEqual([
+      ['100 円 ≈ 5.10 元', '3%'],
+      ['100 円 ≈ 0.61 EUR', '0%'],
+    ]);
   });
 
   it('is_current 原样转述（服务端说当前生效就是当前生效，前端不重判）', () => {

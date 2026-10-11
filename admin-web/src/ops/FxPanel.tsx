@@ -152,6 +152,7 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
             <th>生效汇率</th>
             <th>原始汇率</th>
             <th>缓冲</th>
+            <th>折算示例</th>
             <th>生效时间（日本时间）</th>
           </tr>
         </thead>
@@ -162,6 +163,7 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
               <td>{r.rateText}</td>
               <td>{r.rawRateText}</td>
               <td className="muted">{r.bufferText}</td>
+              <td>{r.exampleText}</td>
               {/* ⚠️ "当前生效"由服务端标（ADM3-05）：这张表是只能追加的历史视图，
                   不标的话运营只能靠生效时间去推哪一行正在起作用（ADM-10）。 */}
               <td className="muted">

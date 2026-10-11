@@ -105,6 +105,10 @@ export function valueText(item: SettingItemLike): string {
   if (item.edit_page === 'ops') return '在「运营配置」页查看与修改';
   if (v === null || v === undefined) return NOT_SET;
   if (typeof v === 'boolean') return v ? '已开通' : '未开通，上线前请让技术人员配置';
+  // 三端模拟测试 2026-10-11：原样显示 on / off，运营看不懂；审核期只许模拟通道（config.ts 启动闸门）
+  if (item.key === 'review_mode' && (v === 'on' || v === 'off')) {
+    return v === 'on' ? '开启（只收模拟支付，审核用）' : '关闭';
+  }
   if (item.key === 'fx_buffer_rate' && typeof v === 'number') {
     return `${ratePercent(String(v))}%`;
   }
