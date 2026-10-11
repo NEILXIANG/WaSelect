@@ -224,6 +224,14 @@ describe('商品列表：草稿与内联改库存（AJ-403）', () => {
     expect(toastText(el)).toContain('30');
   });
 
+  // 三端模拟测试 2026-10-11：库存 0 的商品显示「0（紧张）」——0 是卖完了，不是紧张
+  it('库存 0 → 单元格写「售罄」而不是「紧张」（仍标红）', async () => {
+    const el = await openDraft({ status: 'active', stock: 0 });
+    expect(stockCell(el).textContent).toContain('售罄');
+    expect(stockCell(el).textContent).not.toContain('紧张');
+    expect(stockCell(el).className).toContain('error');
+  });
+
   it('🔴 40914（期间被买走一件）：输入框保留运营填的值、Toast 说清要刷新；点「刷新」后再存带**最新**库存', async () => {
     const el = await openDraft({ status: 'active', stock: 3 });
     await click(button(el, '改库存'));

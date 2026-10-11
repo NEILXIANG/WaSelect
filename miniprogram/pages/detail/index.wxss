@@ -4,20 +4,23 @@
  * ⚠️ 颜色与尺寸一律走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件，
  * 硬编码色值 / 非 0 尺寸字面量直接红）。
  *
- * @limitation 轮播**不显式给高度**（沿用 swiper 默认）：给死高需要一个"详情页主图高"的档位，
- *             而真实商品图比例未定，现在定档等于替未来的运营决策拍板。
- *             代价是不同图的展示高度一致但取景不同（`aspectFit` 保证全图可见）。
+ * @limitation 主图位定为正方形（`--ws-gallery-h`，屏宽）：竖长图、横宽图在里面都会留白；
+ *             占首屏约一半高度，换来"看得到整张图"。
+ *             （更正 2026-10-11：此前写"不显式给高度、aspectFit 保证全图可见"不成立——
+ *             swiper 默认 150px、image 默认 240px，模拟器实测图被裁掉下半截；守卫见 `swiper-height.unit.test.ts`。）
  */
 
 /* 轮播：aspectFit 让非一比一的商品图完整可见（详情页看全图比填满更重要，
    与首页 aspectFill 裁切的取舍不同——那里是列表要整齐，这里是主图要看全）。 */
 .gallery {
   width: 100%;
+  height: var(--ws-gallery-h);
   background: var(--ws-surface);
 }
 
 .gallery-image {
   width: 100%;
+  height: 100%;
   display: block;
 }
 

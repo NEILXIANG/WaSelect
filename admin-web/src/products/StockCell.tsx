@@ -83,7 +83,7 @@ export function StockCell(p: StockCellProps) {
     return (
       <td className={p.lowStock ? 'error' : undefined}>
         {p.stockText}
-        {p.lowStock ? '（紧张）' : ''}
+        {p.stock === 0 ? '（售罄）' : p.lowStock ? '（紧张）' : ''}
         <button
           type="button"
           className="link"

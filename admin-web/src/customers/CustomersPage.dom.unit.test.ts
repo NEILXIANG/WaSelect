@@ -135,6 +135,10 @@ describe('客户列表', () => {
     expect(cells.find((td) => td.textContent === '3 单 · 已付 2')?.className).toContain(
       'cell-nowrap',
     );
+    // 打码 id 与最近下单时间不折行（三端模拟测试 2026-10-11：「u-」在连字符处断到上一行，各行高低不齐）
+    expect(cells.find((td) => td.textContent === 'u-3f6c2a9e…')?.className).toContain(
+      'cell-nowrap',
+    );
     // 邮箱列单行截断、悬停看全文（验收 2026-10-08：1009px 视口下整表横向溢出、挤掉「操作」列）
     const mail = cells.find((td) => td.textContent?.trim() === 'zhang.wei@example.com');
     expect(mail?.className).toContain('cell-ellipsis');

@@ -129,10 +129,31 @@ export interface ReconciliationRun {
   samples: Record<string, string[]>;
 }
 
+/** 一条取样：认得出订单 id 时链到订单详情（`href` 非空），否则原样显示。 */
+export interface ReconcileSample {
+  label: string;
+  href: string;
+}
+
 export interface ReconciliationView {
   headline: string;
   ok: boolean;
-  lines: string[];
+  lines: { text: string; samples: ReconcileSample[] }[];
+}
+
+const ORDER_ID = /\bord-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/;
+
+/**
+ * 取样 id → 可点的链接。
+ * @why 三端模拟测试 2026-10-11：取样原样拼成一长串 36 位 id，运营认不出、也打不开是哪张单。
+ *      服务端取样有两种形状：`ord-<uuid>`（订单类异常）与 `order.paid:ord-<uuid>`（通知键），都从中认出订单 id。
+ * @limitation 取样里只有 id、没有单号，所以显示缩短的 id 而不是单号；要显示单号得让服务端取样带上它。
+ */
+function toSample(raw: string): ReconcileSample {
+  const id = ORDER_ID.exec(raw)?.[0];
+  return id === undefined
+    ? { label: raw, href: '' }
+    : { label: `${id.slice(0, 12)}…`, href: `#/orders/${encodeURIComponent(id)}` };
 }
 
 export function reconciliationView(run: ReconciliationRun | null): ReconciliationView {
@@ -144,9 +165,9 @@ export function reconciliationView(run: ReconciliationRun | null): Reconciliatio
   return {
     headline: `最近一次自动核对 ${when}：发现 ${String(bad.length)} 类异常，需要人工处理`,
     ok: false,
-    lines: bad.map(([k, n]) => {
-      const ids = run.samples[k] ?? [];
-      return `${RECONCILE_CLASS_LABELS[k] ?? k}：${String(n)}${ids.length > 0 ? `（${ids.join('、')}）` : ''}`;
-    }),
+    lines: bad.map(([k, n]) => ({
+      text: `${RECONCILE_CLASS_LABELS[k] ?? k}：${String(n)}`,
+      samples: (run.samples[k] ?? []).map(toSample),
+    })),
   };
 }

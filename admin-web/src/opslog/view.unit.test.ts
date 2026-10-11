@@ -91,8 +91,29 @@ describe('reconciliationView', () => {
     expect(v.ok).toBe(false);
     expect(v.headline).toContain('2 类异常');
     expect(v.lines).toEqual([
-      `${RECONCILE_CLASS_LABELS['stuck_refunds'] ?? ''}：2（o-1、o-2）`,
-      'brand_new_class：1（x）',
+      {
+        text: `${RECONCILE_CLASS_LABELS['stuck_refunds'] ?? ''}：2`,
+        samples: [
+          { label: 'o-1', href: '' },
+          { label: 'o-2', href: '' },
+        ],
+      },
+      { text: 'brand_new_class：1', samples: [{ label: 'x', href: '' }] },
+    ]);
+  });
+
+  // 三端模拟测试 2026-10-11：取样是 `ord-<uuid>` 或 `order.paid:ord-<uuid>`，原样拼成一长串、点不了，
+  // 运营认不出也打不开是哪张单（71 条通知放弃 → 20 个 36 位 id 连成一段）
+  it('🔴 取样里认出订单 id → 链到订单详情，显示缩短的 id；带前缀的通知键也认', () => {
+    const id = 'ord-09236ad4-ddc6-4818-802b-a435108392cf';
+    const v = reconciliationView({
+      ran_at: '2026-10-05T18:00:00.000Z',
+      counts: { stuck_refunds: 1, notification_dead: 1 },
+      samples: { stuck_refunds: [id], notification_dead: [`order.paid:${id}`] },
+    });
+    expect(v.lines.map((l) => l.samples)).toEqual([
+      [{ label: 'ord-09236ad4…', href: `#/orders/${id}` }],
+      [{ label: 'ord-09236ad4…', href: `#/orders/${id}` }],
     ]);
   });
 

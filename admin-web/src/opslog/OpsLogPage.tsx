@@ -79,8 +79,22 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
         <div className="form">
           <span className={recon.ok ? 'ok' : 'error'}>{recon.headline}</span>
           {recon.lines.map((l) => (
-            <span key={l} className="muted">
-              {l}
+            <span key={l.text} className="muted">
+              {l.text}
+              {l.samples.length > 0 && '（'}
+              {l.samples.map((s, i) => (
+                <span key={`${s.label}-${String(i)}`}>
+                  {i > 0 && '、'}
+                  {s.href === '' ? (
+                    s.label
+                  ) : (
+                    <a className="link mono" href={s.href}>
+                      {s.label}
+                    </a>
+                  )}
+                </span>
+              ))}
+              {l.samples.length > 0 && '）'}
             </span>
           ))}
         </div>
