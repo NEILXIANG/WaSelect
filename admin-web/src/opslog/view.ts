@@ -139,10 +139,10 @@ export interface ReconcileSample {
   href: string;
 }
 
-export interface ReconciliationView {
-  headline: string;
-  ok: boolean;
-  lines: { text: string; samples: ReconcileSample[] }[];
+/** 一条取样：认得出订单 id 时链到订单详情（`href` 非空），否则原样显示。 */
+export interface ReconcileSample {
+  label: string;
+  href: string;
 }
 
 // 不用前导 \b：迟到付款的取样是 `evt_late_ord-<uuid>`，`_ord` 之间不是词边界
@@ -161,18 +161,149 @@ function toSample(raw: string): ReconcileSample {
     : { label: `${id.slice(0, 12)}…`, href: `#/orders/${encodeURIComponent(id)}` };
 }
 
+/** 谁来处理：运营（有入口能直接做）/ 技术人员 / 留意即可（多为正常现象，持续增多再查）。 */
+export type ReconcileOwner = 'ops' | 'tech' | 'watch';
+
+export interface ReconcileRow {
+  key: string;
+  label: string;
+  count: number;
+  owner: ReconcileOwner;
+  /** 怎么处理（一句人话）。 */
+  advice: string;
+  /** 「去处理」的入口（订单筛选 / 配置页）；空串 = 没有可直接操作的页面。 */
+  href: string;
+  /** 示例最多 3 个（排查用）；`more` = 其余条数。 */
+  samples: ReconcileSample[];
+  more: number;
+}
+
+export interface ReconciliationView {
+  headline: string;
+  ok: boolean;
+  /** 「2 类需要运营处理，1 类请转技术人员」；无异常时为空串。 */
+  summary: string;
+  rows: ReconcileRow[];
+}
+
+/**
+ * 每类异常：谁处理、怎么处理、去哪处理；`money` = 涉及钱，排最前。
+ * @why 三端模拟测试 2026-10-11（用户截图）：原先每类后面铺一墙 ord-… 链接，运营看不出先做什么、谁来做。
+ *      成熟电商后台的做法是"异常看板"：一类一行、给处理建议与入口，明细进列表页看。
+ * @limitation 入口只能指到已有的筛选（attention / status / 配置页）；没有对应筛选的类（邮件、心跳等）只给建议与示例。
+ */
+const GUIDE: Readonly<
+  Record<string, { owner: ReconcileOwner; advice: string; href?: string; money?: boolean }>
+> = {
+  late_paid_unrefunded: {
+    owner: 'ops',
+    money: true,
+    advice: '买家的钱已经扣了、订单却已关闭：逐单全额退款',
+    href: '#/orders?attention=late_paid',
+  },
+  stuck_refunds: {
+    owner: 'ops',
+    money: true,
+    advice: '退款发出超过 24 小时还没结果：到订单详情点「同步」看支付机构的结果',
+    href: '#/orders?status=refunding',
+  },
+  stuck_partial_refunds: {
+    owner: 'ops',
+    money: true,
+    advice: '部分退款超过 24 小时还没结果：到订单详情的部分退款里点「同步」',
+    href: '#/orders?attention=partial_refund',
+  },
+  callback_anomalies_48h: {
+    owner: 'ops',
+    money: true,
+    advice: '支付结果与订单对不上（多为关单后才付款）：逐单核对，该退的退',
+    href: '#/orders?attention=late_paid',
+  },
+  provider_refund_unrecorded: {
+    owner: 'tech',
+    money: true,
+    advice: '支付机构那边已退款、本地没有记录：这些单先不要发货，请技术人员补记',
+  },
+  paid_without_succeeded_payment: {
+    owner: 'tech',
+    money: true,
+    advice: '订单显示已付款，却查不到成功的支付记录：先不要发货，请技术人员核对',
+  },
+  after_sales_waiting: {
+    owner: 'ops',
+    advice: '买家已经等了超过 24 小时：在订单详情里回复处理结果',
+    href: '#/orders?attention=after_sale',
+  },
+  fx_rate_aging: { owner: 'ops', advice: '展示汇率快过期：去运营配置录入新汇率', href: '#/ops' },
+  order_mail_unsent: {
+    owner: 'tech',
+    advice:
+      '付款 / 发货通知邮件没发出去，买家没收到：请技术人员检查邮件配置；着急的单可在订单详情里找到联系邮箱手工联系',
+  },
+  unfinished_callbacks: { owner: 'tech', advice: '支付机构的通知登记后没处理完：请技术人员检查' },
+  stalled_heartbeats: {
+    owner: 'tech',
+    advice: '定时任务可能停了，过期关单、自动签收都不会执行：请技术人员检查',
+  },
+  review_mode_no_deadline: {
+    owner: 'tech',
+    advice: '审核模式开着却没设到期日：请技术人员补上',
+    href: '#/settings',
+  },
+  review_mode_expired: {
+    owner: 'tech',
+    advice: '审核模式已过到期日仍开着：请技术人员关闭',
+    href: '#/settings',
+  },
+  review_mode_closing: {
+    owner: 'tech',
+    advice: '审核模式快到期：确认审核是否已通过',
+    href: '#/settings',
+  },
+  dangling_initiated_payments: {
+    owner: 'watch',
+    advice: '多为买家打开付款页后放弃，订单到期会自动关闭；持续增多时请技术人员看看支付通道',
+  },
+};
+
+const OWNER_RANK: Readonly<Record<ReconcileOwner, number>> = { ops: 0, tech: 1, watch: 2 };
+
 export function reconciliationView(run: ReconciliationRun | null): ReconciliationView {
-  if (run === null) return { headline: '还没有自动核对记录', ok: false, lines: [] };
+  if (run === null) return { headline: '还没有自动核对记录', ok: false, summary: '', rows: [] };
   const when = formatJst(run.ran_at);
   const bad = Object.entries(run.counts).filter(([, n]) => n > 0);
   if (bad.length === 0)
-    return { headline: `最近一次自动核对 ${when}：无异常`, ok: true, lines: [] };
+    return { headline: `最近一次自动核对 ${when}：无异常`, ok: true, summary: '', rows: [] };
+  const rows = bad
+    .map(([k, n]): ReconcileRow & { money: boolean } => {
+      const g = GUIDE[k] ?? { owner: 'tech' as const, advice: '请技术人员查看' };
+      const all = (run.samples[k] ?? []).map(toSample);
+      return {
+        key: k,
+        label: RECONCILE_CLASS_LABELS[k] ?? k,
+        count: n,
+        owner: g.owner,
+        advice: g.advice,
+        href: g.href ?? '',
+        samples: all.slice(0, 3),
+        more: Math.max(0, n - Math.min(3, all.length)),
+        money: g.money === true,
+      };
+    })
+    .sort((a, b) => Number(b.money) - Number(a.money) || OWNER_RANK[a.owner] - OWNER_RANK[b.owner])
+    .map(({ money: _money, ...r }) => r);
+  const ops = rows.filter((r) => r.owner === 'ops').length;
+  const tech = rows.filter((r) => r.owner === 'tech').length;
+  const summary = [
+    ops > 0 ? `${String(ops)} 类需要运营处理` : '',
+    tech > 0 ? `${String(tech)} 类请转技术人员` : '',
+  ]
+    .filter((x) => x !== '')
+    .join('，');
   return {
-    headline: `最近一次自动核对 ${when}：发现 ${String(bad.length)} 类异常，需要人工处理`,
+    headline: `最近一次自动核对 ${when}：发现 ${String(bad.length)} 类异常`,
     ok: false,
-    lines: bad.map(([k, n]) => ({
-      text: `${RECONCILE_CLASS_LABELS[k] ?? k}：${String(n)}`,
-      samples: (run.samples[k] ?? []).map(toSample),
-    })),
+    summary,
+    rows,
   };
 }

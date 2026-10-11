@@ -11,6 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { parseJstDateRange } from '@waselect/shared';
+import { Badge } from '../ui/badge.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { AUDIT_PAGE_SIZE, latestReconciliation, listAudit, type AdminApi } from './api.js';
 import {
@@ -23,6 +24,10 @@ import {
 export interface OpsLogPageProps {
   api: AdminApi;
 }
+
+/** 谁处理 → 徽标文案与色调（运营 = 要动手，技术人员 = 转交，留意 = 多为正常现象）。 */
+const OWNER_TEXT = { ops: '运营', tech: '技术人员', watch: '留意即可' } as const;
+const OWNER_TONE = { ops: 'warn', tech: 'info', watch: 'muted' } as const;
 
 export function OpsLogPage({ api }: OpsLogPageProps) {
   const [recon, setRecon] = useState<ReconciliationView | null>(null);
@@ -78,25 +83,61 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
       {recon !== null && (
         <div className="form">
           <span className={recon.ok ? 'ok' : 'error'}>{recon.headline}</span>
-          {recon.lines.map((l) => (
-            <span key={l.text} className="muted">
-              {l.text}
-              {l.samples.length > 0 && '（'}
-              {l.samples.map((s, i) => (
-                <span key={`${s.label}-${String(i)}`}>
-                  {i > 0 && '、'}
-                  {s.href === '' ? (
-                    s.label
-                  ) : (
-                    <a className="link mono" href={s.href}>
-                      {s.label}
-                    </a>
-                  )}
-                </span>
-              ))}
-              {l.samples.length > 0 && '）'}
-            </span>
-          ))}
+          {recon.summary !== '' && <span className="muted">{recon.summary}</span>}
+          {/* 三端模拟测试 2026-10-11（用户截图）：原先每类后面铺一墙订单链接——改成异常看板：
+              一类一行，说清怎么处理、谁处理，能筛的给「去处理」；示例最多 3 个（排查用） */}
+          {recon.rows.length > 0 && (
+            <table className="table recon-table">
+              <thead>
+                <tr>
+                  <th>异常</th>
+                  <th>数量</th>
+                  <th>怎么处理</th>
+                  <th>谁处理</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recon.rows.map((r) => (
+                  <tr key={r.key}>
+                    <td>{r.label}</td>
+                    <td className="cell-nowrap">{r.count}</td>
+                    <td>
+                      {r.advice}
+                      {r.samples.length > 0 && (
+                        <span className="muted recon-samples">
+                          示例：
+                          {r.samples.map((s, i) => (
+                            <span key={`${s.label}-${String(i)}`}>
+                              {i > 0 && '、'}
+                              {s.href === '' ? (
+                                <span className="mono">{s.label}</span>
+                              ) : (
+                                <a className="link mono" href={s.href}>
+                                  {s.label}
+                                </a>
+                              )}
+                            </span>
+                          ))}
+                          {r.more > 0 && ` 等，共 ${String(r.count)} 条`}
+                        </span>
+                      )}
+                    </td>
+                    <td className="cell-nowrap">
+                      <Badge tone={OWNER_TONE[r.owner]}>{OWNER_TEXT[r.owner]}</Badge>
+                    </td>
+                    <td className="cell-nowrap">
+                      {r.href !== '' && (
+                        <a className="link" href={r.href}>
+                          去处理 →
+                        </a>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 

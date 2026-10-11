@@ -1469,3 +1469,10 @@ textarea::placeholder {
   font-weight: 600;
   text-align: right;
 }
+
+/* 运营日志 · 自动核对异常看板（三端模拟测试 2026-10-11）：示例单号另起一行小字，不和处理建议挤在一起 */
+.recon-samples {
+  display: block;
+  margin-top: var(--ws-space-xs);
+  font-size: var(--md-type-body-m);
+}

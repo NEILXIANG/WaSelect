@@ -49,6 +49,15 @@ describe('运营日志页（3-2）', () => {
     const el = await open();
     expect(el.textContent).toContain('发现 1 类异常');
     expect(el.textContent).toContain('o-9');
+    // 三端模拟测试 2026-10-11（用户截图）：异常看板——一类一行、说清谁处理、给「去处理」入口
+    const row = [...el.querySelectorAll('.recon-table tbody tr')].map((r) => r.textContent ?? '');
+    expect(row).toHaveLength(1);
+    expect(row[0]).toContain('退款滞留超过 24 小时');
+    expect(row[0]).toContain('运营');
+    const go = [...el.querySelectorAll('.recon-table a')].find((a) =>
+      a.textContent?.includes('去处理'),
+    );
+    expect(go?.getAttribute('href')).toBe('#/orders?status=refunding');
     expect(el.textContent).toContain('PUT /api/v1/admin/products/:id');
     expect(el.textContent).toContain('第 1 / 3 页，共 120 条');
     expect(paths.some((p) => p.startsWith('/api/v1/admin/audit?page=1&size=50'))).toBe(true);

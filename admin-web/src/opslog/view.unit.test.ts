@@ -83,7 +83,8 @@ describe('reconciliationView', () => {
     expect(reconciliationView(null)).toEqual({
       headline: '还没有自动核对记录',
       ok: false,
-      lines: [],
+      summary: '',
+      rows: [],
     });
   });
 
@@ -96,59 +97,70 @@ describe('reconciliationView', () => {
     expect(v).toEqual({
       headline: '最近一次自动核对 2026-10-06 03:00：无异常',
       ok: true,
-      lines: [],
+      summary: '',
+      rows: [],
     });
   });
 
-  it('🔴 有异常 → 只列非零类，中文类名 + 计数 + 取样 id；不认识的类名原样显示', () => {
+  // 三端模拟测试 2026-10-11（用户截图：一墙 ord-… 链接，看不出先做什么、谁来做）——改成成熟后台的异常看板：
+  //   每类一行：说清怎么处理、谁处理（运营 / 技术人员 / 留意即可），能筛的给「去处理」；涉及钱的排最前；示例最多 3 个
+  it('🔴 有异常 → 每类一行：中文名、数量、怎么处理、谁处理、去处理入口；只列非零类；钱相关的排在前面', () => {
     const v = reconciliationView({
       ran_at: '2026-10-05T18:00:00.000Z',
-      counts: { stuck_refunds: 2, dangling_initiated_payments: 0, brand_new_class: 1 },
-      samples: { stuck_refunds: ['o-1', 'o-2'], brand_new_class: ['x'] },
+      counts: {
+        order_mail_unsent: 71,
+        after_sales_waiting: 30,
+        late_paid_unrefunded: 3,
+        stuck_refunds: 0,
+      },
+      samples: {},
     });
     expect(v.ok).toBe(false);
-    expect(v.headline).toContain('2 类异常');
-    expect(v.lines).toEqual([
-      {
-        text: `${RECONCILE_CLASS_LABELS['stuck_refunds'] ?? ''}：2`,
-        samples: [
-          { label: 'o-1', href: '' },
-          { label: 'o-2', href: '' },
-        ],
-      },
-      { text: 'brand_new_class：1', samples: [{ label: 'x', href: '' }] },
+    expect(v.headline).toContain('3 类异常');
+    expect(v.rows.map((r) => [r.key, r.count, r.owner, r.href])).toEqual([
+      ['late_paid_unrefunded', 3, 'ops', '#/orders?attention=late_paid'],
+      ['after_sales_waiting', 30, 'ops', '#/orders?attention=after_sale'],
+      ['order_mail_unsent', 71, 'tech', ''],
     ]);
+    expect(v.rows[0]?.label).toBe(RECONCILE_CLASS_LABELS['late_paid_unrefunded']);
+    expect(v.rows[0]?.advice).toContain('退款');
+    expect(v.summary).toBe('2 类需要运营处理，1 类请转技术人员');
   });
 
-  // 三端模拟测试 2026-10-11：取样是 `ord-<uuid>` 或 `order.paid:ord-<uuid>`，原样拼成一长串、点不了，
-  // 运营认不出也打不开是哪张单（71 条通知放弃 → 20 个 36 位 id 连成一段）
-  it('🔴 取样里认出订单 id → 链到订单详情，显示缩短的 id；带前缀的通知键也认', () => {
-    const id = 'ord-09236ad4-ddc6-4818-802b-a435108392cf';
+  it('不认识的类名原样显示、归"请转技术人员"（看得见，不静默丢）', () => {
     const v = reconciliationView({
       ran_at: '2026-10-05T18:00:00.000Z',
-      counts: { stuck_refunds: 1, notification_dead: 1 },
-      samples: { stuck_refunds: [id], notification_dead: [`order.paid:${id}`] },
+      counts: { brand_new_class: 1 },
+      samples: { brand_new_class: ['x'] },
     });
-    expect(v.lines.map((l) => l.samples)).toEqual([
-      [{ label: 'ord-09236ad4…', href: `#/orders/${id}` }],
-      [{ label: 'ord-09236ad4…', href: `#/orders/${id}` }],
+    expect(v.rows.map((r) => [r.label, r.owner, r.samples])).toEqual([
+      ['brand_new_class', 'tech', [{ label: 'x', href: '' }]],
     ]);
   });
 
-  it('🔴 迟到付款的取样 evt_late_ord-<uuid> 也认出订单；pay-<uuid> 认不出订单 → 缩短显示、不给链接', () => {
-    const id = 'ord-70d4257d-9d05-4502-869e-422ac19ade1a';
+  it('🔴 示例最多 3 个、其余计数；认出订单 id 链到订单详情（含 order.paid: / evt_late_ 前缀），pay- 缩短不给链接', () => {
+    const id = (n: number): string => `ord-0923${String(n)}ad4-ddc6-4818-802b-a435108392cf`;
     const v = reconciliationView({
       ran_at: '2026-10-05T18:00:00.000Z',
-      counts: { late_paid_unrefunded: 1, dangling_initiated_payments: 1 },
+      counts: { order_mail_unsent: 71, late_paid_unrefunded: 1, dangling_initiated_payments: 1 },
       samples: {
-        late_paid_unrefunded: [`evt_late_${id}`],
+        order_mail_unsent: [1, 2, 3, 4, 5].map((n) => `order.paid:${id(n)}`),
+        late_paid_unrefunded: [`evt_late_${id(7)}`],
         dangling_initiated_payments: ['pay-6cfc82a4-3ced-4b19-a89a-9b830e179960'],
       },
     });
-    expect(v.lines.map((l) => l.samples)).toEqual([
-      [{ label: 'ord-70d4257d…', href: `#/orders/${id}` }],
-      [{ label: 'pay-6cfc82a4…', href: '' }],
+    const mail = v.rows.find((r) => r.key === 'order_mail_unsent');
+    expect(mail?.samples).toEqual(
+      [1, 2, 3].map((n) => ({ label: `ord-0923${String(n)}ad4…`, href: `#/orders/${id(n)}` })),
+    );
+    expect(mail?.more).toBe(68);
+    expect(v.rows.find((r) => r.key === 'late_paid_unrefunded')?.samples).toEqual([
+      { label: 'ord-09237ad4…', href: `#/orders/${id(7)}` },
     ]);
+    expect(v.rows.find((r) => r.key === 'dangling_initiated_payments')).toMatchObject({
+      owner: 'watch',
+      samples: [{ label: 'pay-6cfc82a4…', href: '' }],
+    });
   });
 
   /**
