@@ -88,12 +88,11 @@ export function ShipBatchDrawer({ api, orders, onClose, onDone, onError }: ShipB
               <tr key={r.orderId ?? r.orderNo}>
                 <td>{r.orderNo}</td>
                 <td>
-                  <input
-                    className="input"
-                    aria-label={`${r.orderNo} 承运商`}
-                    maxLength={SHIP_MAX_CHARS.carrier}
+                  {/* 全入口点击测试 2026-10-11：与顶部「统一承运商」同一个下拉（原为自由文本框，容易打错承运商名） */}
+                  <CarrierPicker
+                    id={`batch-carrier-${String(i)}`}
                     value={r.carrier}
-                    onChange={(e) => edit(i, { carrier: e.target.value })}
+                    onChange={(v) => edit(i, { carrier: v })}
                   />
                 </td>
                 <td>

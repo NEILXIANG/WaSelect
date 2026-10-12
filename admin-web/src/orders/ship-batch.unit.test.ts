@@ -301,3 +301,13 @@ describe('批量发货：下单人已拉黑 → 该行黄字提醒，不拦', ()
     expect(p.rows[0]?.errors).toEqual([]);
   });
 });
+
+// 全入口点击测试 2026-10-11：成功行原写"发货邮件已发出"——邮件只发给留了邮箱的买家，且此刻只是排进发送队列；
+// 运营据此告诉买家"邮件已经发了"就是错话。改为说清条件
+describe('describeResult：成功行不夸大邮件', () => {
+  it('🔴 写"留了邮箱的买家会收到发货邮件"，不写"已发出"', () => {
+    const t = describeResult({ ok: true, tracking_recognized: true }).text;
+    expect(t).toBe('已发货（留了邮箱的买家会收到发货邮件）');
+    expect(t).not.toContain('已发出');
+  });
+});

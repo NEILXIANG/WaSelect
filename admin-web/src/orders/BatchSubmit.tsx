@@ -114,12 +114,18 @@ export function BatchSubmit({
           setAsking(true);
         }}
       >
-        批量发货 {items.length} 单
+        {/* 全入口点击测试 2026-10-11：0 单时不写"批量发货 0 单"（像是能发、点了却没发）——说缺什么 / 说没有可发的 */}
+        {items.length > 0
+          ? `批量发货 ${String(items.length)} 单`
+          : revealed
+            ? '没有可发货的单（见上表提示）'
+            : '批量发货（还没填运单号）'}
       </button>
       {asking && (
         <ConfirmDialog
           spec={{
-            title: `将发货 ${String(items.length)} 单：发货后不能再改址，发货邮件立即发给买家`,
+            // 全入口点击测试 2026-10-11：邮件只发给留了邮箱的买家（原写"立即发给买家"）
+            title: `将发货 ${String(items.length)} 单：发货后不能再改址，留了邮箱的买家会收到发货邮件`,
             body: '运单号录错只能逐单走「订单修正」改，并会再发一封邮件。有问题的行已跳过。',
             confirmText: '确认批量发货',
             danger: true,

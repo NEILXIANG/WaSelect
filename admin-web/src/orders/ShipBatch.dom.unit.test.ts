@@ -186,13 +186,16 @@ describe('批量发货：行内错误的显示时机（验收 2026-10-08）', ()
     // 编辑第一行的运单号 → 只有这一行亮出自己的问题（承运商没填）
     await type(el.querySelector('input[aria-label="261007-7K3QXA 运单号"]'), 'EJ123456789JP');
     expect(el.querySelectorAll('td .error')).toHaveLength(1);
-    const submit = button(el, '批量发货 0 单');
+    // 全入口点击测试 2026-10-11：0 单时不写"批量发货 0 单"（像是能发、点了却没发）——还没亮出问题时说缺什么，点一下亮出；
+    // 亮出之后置灰并说"没有可发货的单"。每行承运商与顶部同一个下拉（原为自由文本框，容易打错）
+    expect(el.querySelector('select#batch-carrier-0')).not.toBeNull();
+    const submit = button(el, '批量发货（还没填运单号）');
     expect(submit?.disabled).toBe(false);
     await click(submit);
     expect(el.querySelector('.dialog')).toBeNull();
     expect(el.textContent).toContain('运单号必填');
     expect(el.textContent).toContain('有 2 行有问题');
-    expect(button(el, '批量发货 0 单')?.disabled).toBe(true);
+    expect(button(el, '没有可发货的单（见上表提示）')?.disabled).toBe(true);
     expect(posts()).toHaveLength(0);
   });
 

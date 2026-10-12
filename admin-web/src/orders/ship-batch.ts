@@ -338,7 +338,8 @@ export function describeResult(r: {
   if (r.ok === true) {
     return r.tracking_recognized === false
       ? { ok: true, text: '已发货；但运单号形状认不出，请核对（录错可在详情「修改运单号」里改）' }
-      : { ok: true, text: '已发货，发货邮件已发出' };
+      : // 全入口点击测试 2026-10-11：原写"发货邮件已发出"——只发给留了邮箱的买家，且此刻只是排进发送队列
+        { ok: true, text: '已发货（留了邮箱的买家会收到发货邮件）' };
   }
   const reason = typeof r.reason === 'string' ? r.reason : '';
   const fixed: Record<string, string> = {
