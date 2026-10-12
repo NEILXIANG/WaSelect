@@ -332,6 +332,11 @@ export function detailView(order, opts = undefined) {
     // ⚠️ 截止时刻只在可付时显示（@see @limitation 一：骨架期不做倒计时）；
     //    确认中（刚付过）也不显示（F1，第二轮审计 2026-10-11）：刚付过的人读到"请在…前完成支付"会以为没付上
     expiresAtText: payable && !confirming ? timeText(o.expires_at) : '',
+    // 全入口点击测试 2026-10-11：剩余分钟（买家在美国，只给日本时间的截止时刻要自己换算）；向上取整，不出现"0 分钟"
+    payLeftText:
+      payable && !confirming && Number.isFinite(options.nowMs) && Number.isFinite(expiresMs)
+        ? `请在 ${String(Math.ceil((expiresMs - options.nowMs) / 60_000))} 分钟内完成支付`
+        : '',
     items: itemRows(o.items),
     amountLines: amountLines(o),
     /** MP-11：关税说明（合计下方一句；空串 = 不显示）。 */

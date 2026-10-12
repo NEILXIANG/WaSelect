@@ -370,7 +370,7 @@ Page({
   onConfirmReceiptTap() {
     wxApi.showModal({
       title: '确认收货',
-      content: '确认已收到全部商品？确认后订单进入售后期，有问题仍可联系客服。',
+      content: '确认已收到全部商品？确认后有问题，仍可在本页「申请售后」。',
       confirmText: '已收到',
       cancelText: '还没收到',
       success: (r) => {

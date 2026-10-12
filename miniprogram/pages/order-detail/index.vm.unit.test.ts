@@ -708,3 +708,27 @@ describe('afterSaleBrief（交给售后申请页的订单摘要）', () => {
     expect(afterSaleBrief('o-1', null)).toBeNull();
   });
 });
+
+// 全入口点击测试 2026-10-11：待付款只写"请在 2026-10-12 14:38（日本时间）前完成支付"——买家在美国，要自己换算时差才知道还剩多久；
+// 支付页写的是"请在 29 分 33 秒内完成支付"。详情页补一句剩余分钟（截止时刻仍在下一行）
+describe('detailView：待付款剩余时间', () => {
+  const pending = {
+    order_id: 'o-1',
+    status: 'pending_payment',
+    total_jpy: 2480,
+    expires_at: '2026-10-12T05:38:00Z',
+  };
+  it('🔴 剩余分钟向上取整（剩 20 秒也写 1 分钟，不出现"0 分钟"）', () => {
+    const at = Date.parse('2026-10-12T05:38:00Z');
+    expect(detailView(pending, { nowMs: at - 29 * 60_000 - 30_000 }).payLeftText).toBe(
+      '请在 30 分钟内完成支付',
+    );
+    expect(detailView(pending, { nowMs: at - 20_000 }).payLeftText).toBe('请在 1 分钟内完成支付');
+  });
+  it('已付 / 没给时间 / 已过截止 → 空串', () => {
+    const at = Date.parse('2026-10-12T05:38:00Z');
+    expect(detailView({ ...pending, status: 'paid' }, { nowMs: at - 60_000 }).payLeftText).toBe('');
+    expect(detailView(pending).payLeftText).toBe('');
+    expect(detailView(pending, { nowMs: at + 1 }).payLeftText).toBe('');
+  });
+});

@@ -332,7 +332,8 @@ describe('订单详情关键信息的对比度', () => {
     for (const text of [
       '订单号 {{view.orderNo}}',
       '下单时间 {{view.createdAtText}}', // 2026-10-11：「建单」是内部用语，买家看到的改为「下单时间」
-      '前完成支付',
+      '截止 {{view.expiresAtText}}', // 2026-10-11：原"请在 … 前完成支付"，改为先写剩余分钟、截止时刻放下一行
+      '{{view.payLeftText}}',
       '联系客服时请提供订单号',
     ]) {
       const tag = new RegExp(

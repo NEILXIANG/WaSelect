@@ -66,7 +66,9 @@
           MP3-02：`expiresAtText` 自带"（日本时间）"。收货人是美国地址的用户，
           不标时区时这一行会被读成本地时间（PDT 与 JST 差 16 小时）→ 以为还有一整天。
         -->
-        <text class="ws-caption key-info hint" wx:if="{{view.expiresAtText}}">请在 {{view.expiresAtText}} 前完成支付</text>
+        <!-- 全入口点击测试 2026-10-11：先说还剩多久（买家在美国），截止时刻放下一行 -->
+        <text class="ws-body key-info hint" wx:if="{{view.payLeftText}}">{{view.payLeftText}}</text>
+        <text class="ws-caption key-info hint" wx:if="{{view.expiresAtText}}">截止 {{view.expiresAtText}}</text>
       </view>
     </view>
 
