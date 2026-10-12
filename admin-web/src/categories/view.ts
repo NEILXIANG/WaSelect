@@ -61,6 +61,8 @@ const REASONS: Readonly<Record<string, string>> = {
   name_too_long: '分类名称最多 10 个字',
   html_not_allowed: '分类名称里不能有网页代码（如 <b>）',
   sort_invalid: `排序填 0–${String(SORT_MAX)} 的整数`,
+  // 删分类被拒：有 Banner 跳到它（40919，三天提交复查 2026-10-12）
+  banner_ref: '有首页 Banner 跳到这个分类：先到「首页 Banner」改掉或删除那条，再删分类',
 };
 
 /** 服务端 40001 的 data → {字段, 人话}；重复单独说清是哪一项。null = 没有可用的 data。 */

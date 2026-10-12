@@ -119,7 +119,6 @@ export function buyerStatus(status, opts = undefined) {
   return { title: b.title, next: o.email === true && b.nextWithEmail ? b.nextWithEmail : b.next };
 }
 
-/** 可以继续支付的状态（@see @limitation 二）。 */
 /**
  * 拒付期间买家看的话（AJ-500，用户 2026-10-12 同意；服务端 `payment_dispute`，契约 0.6.82）。
  * @why 原先拒付期间只写"已付款 · 日本采购中"——买家多是没认出扣款名目就去银行争议，写明"银行正在处理、暂不发货"，
@@ -137,11 +136,36 @@ export const DISPUTE_STATUS = {
   },
 };
 
-/** `payment_dispute` → `{title, next}`；没有 / 认不出 → null。 */
-export function disputeStatus(raw) {
-  return raw === 'open' || raw === 'lost' ? DISPUTE_STATUS[raw] : null;
+/**
+ * 已发出的单被拒付时的说法（三天提交复查 2026-10-12）：包裹已在路上 / 已送达，不能再说"暂不发货 / 不会发货"。
+ */
+const DISPUTE_STATUS_SHIPPED = {
+  open: {
+    title: '付款争议处理中',
+    next: '你的银行正在处理这笔付款的争议。如果是误会（比如没认出扣款名目），可以联系银行撤回，或联系客服。',
+  },
+  lost: {
+    title: '货款已由银行退回',
+    next: '你的银行已把这笔付款退回给你。如有疑问请联系客服。',
+  },
+};
+
+/** 已经发出的状态（拒付说法不再提"发货"）。 */
+const SHIPPED_STATUSES = ['shipped', 'delivered', 'completed'];
+
+/**
+ * `payment_dispute` → `{title, next}`；没有 / 认不出 → null。
+ * @param {unknown} raw `payment_dispute`
+ * @param {unknown} [status] 订单状态：已发出的单不说"暂不发货 / 不会发货"
+ */
+export function disputeStatus(raw, status) {
+  if (raw !== 'open' && raw !== 'lost') return null;
+  return SHIPPED_STATUSES.includes(/** @type {string} */ (status))
+    ? DISPUTE_STATUS_SHIPPED[raw]
+    : DISPUTE_STATUS[raw];
 }
 
+/** 可以继续支付的状态（@see @limitation 二）。 */
 export const PAYABLE = ['created', 'pending_payment'];
 
 /**

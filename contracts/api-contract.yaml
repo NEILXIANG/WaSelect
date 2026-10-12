@@ -554,7 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
-    0.6.89（规律排查 2026-10-12）：① `FxRate` 当前行增 `stale_at` / `stale`——生效满 `FX_MAX_AGE_HOURS` 的汇率报价与下单当它缺失（整店 50003），运营页原先照样标"当前生效"。② `/admin/exports/purchase` 在「成本（日元）」后增「备注」列（拒付锁定：暂不发货，先别采购 / 买家已拉黑：发货前先核实）；`/admin/exports/customs` 不再列拒付锁定（has_dispute）的单——服务端不许发货（40909）。③ `ship_overdue`（列表 / 详情 / attention 筛选）不含拒付锁定的单。④ `ProductInput`：报关品名禁词改按词首匹配（SPF50+ 等亦拒）、`hs_code` 加形状（hs_code_shape），两条规则移入 shared 供服务端与管理端共用；补写服务端早已执行的 maxLength（title / title_ja / purchase_source 255，customs_desc_en 120，jan_code 13）与 weight_g 上限 29000。⑤ `BannerInput.link_id`：服务端补形状（link_id_invalid）与目标存在性（link_target_missing，data.reason 对外）——原先只判非空。⑥ 所有分页列表的 `page` 上限 10000（shared LIST_PAGE_MAX），超出 40001 page_size_invalid——原先超大页码在库里报错成 500。⑦ `/admin/exports/orders` 在「实付金额」后增「已退金额」（原先实付不扣退款、按总表对账会把退款算成收入）。⑧ `AdminOrderListItem` 与 `AdminOrder`（管理端详情）增 `payment_dispute`（open / lost）——`has_dispute` 对进行中与已败诉都是 true，后台原先一律写"拒付中"。⑨ 导出：采购单「售价 / 成本」改名「单价 / 单件成本」；报关单末尾加 `line_weight_g`（weight_g 是单件、declared_value_usd 是整行，数量 >1 时原先一行两个口径）。⑩ `AdminOrder.customer` 增 `paid_order_count`（卡片写"历史 N 单（已付 M）"）。
+    0.6.89（规律排查 2026-10-12）：① `FxRate` 当前行增 `stale_at` / `stale`——生效满 `FX_MAX_AGE_HOURS` 的汇率报价与下单当它缺失（整店 50003），运营页原先照样标"当前生效"。② `/admin/exports/purchase` 在「成本（日元）」后增「备注」列（拒付锁定：暂不发货，先别采购 / 买家已拉黑：发货前先核实）；`/admin/exports/customs` 不再列拒付锁定（has_dispute）的单——服务端不许发货（40909）。③ `ship_overdue`（列表 / 详情 / attention 筛选）不含拒付锁定的单。④ `ProductInput`：报关品名禁词改按词首匹配（SPF50+ 等亦拒）、`hs_code` 加形状（hs_code_shape），两条规则移入 shared 供服务端与管理端共用；补写服务端早已执行的 maxLength（title / title_ja / purchase_source 255，customs_desc_en 120，jan_code 13）与 weight_g 上限 29000。⑤ `BannerInput.link_id`：服务端补形状（link_id_invalid）与目标存在性（link_target_missing，data.reason 对外）——原先只判非空。⑥ 所有分页列表的 `page` 上限 10000（shared LIST_PAGE_MAX），超出 40001 page_size_invalid——原先超大页码在库里报错成 500。⑦ `/admin/exports/orders` 在「实付金额」后增「已退金额」（原先实付不扣退款、按总表对账会把退款算成收入）。⑧ `AdminOrderListItem` 与 `AdminOrder`（管理端详情）增 `payment_dispute`（open / lost）——`has_dispute` 对进行中与已败诉都是 true，后台原先一律写"拒付中"。⑨ 导出：采购单「售价 / 成本」改名「单价 / 单件成本」；报关单末尾加 `line_weight_g`（weight_g 是单件、declared_value_usd 是整行，数量 >1 时原先一行两个口径）。⑩ `AdminOrder.customer` 增 `paid_order_count`（卡片写"历史 N 单（已付 M）"）。⑪ `DELETE /admin/categories/{key}`：有 Banner 跳到这个分类时也拒（40919，data = {field: key, reason: banner_ref}），40919 文案改为"还在使用中（有商品或首页 Banner 指向它）"。
     0.6.88（两端逐页走查 2026-10-12）：买家 `OrderListItem` 增 `line_count`（几种商品）——原先只有首件名 + 总件数，两种商品的单看起来像同一件买了 2 份。
     0.6.87（两端逐页走查 2026-10-12）：`GET /admin/reconciliation/latest` 的 run 增 `sample_orders`——取样存的是内部编号，运营在后台找不到；读时换成订单号。
     0.6.86（两端逐页走查 2026-10-12）：`AdminSettingItem` 增可选 `value_label`——设置页的审核商品原先只有编号，看不出是哪件、能不能下单。
@@ -680,7 +680,7 @@ x-error-codes:
     40916: 店铺暂停接单，请稍后再来（0.6.36：全局停售开关打开时，报价 / 建单 / 发起支付返回本码；回调、退款、发货不受影响）
     40917: 收货地址已达上限（20 个），请先删除不用的地址（0.6.36：POST /addresses）
     40918: 运费表最高档装不下这件商品（含包材重量）（0.6.43：改在售商品、上架（0.6.46 起含草稿上架；新建是草稿、不再判）、整表替换运费表；换表时 data.product_id 指出是哪件）
-    40919: 这个分类下还有商品，不能删除（0.6.74：DELETE /admin/categories/{key}）
+    40919: 这个分类还在使用中（有商品或首页 Banner 指向它），不能删除（0.6.74：DELETE /admin/categories/{key}；0.6.89 起有 Banner 指向时也拒，data.reason = banner_ref）
     41301: 提交的内容太大（0.6.69：请求体超过大小上限；此前折成 40001）
     40915: 这张订单不属于你要拉黑的这个用户（0.6.21：POST /admin/users/{id}/block 带了 order_id 但归属核对不过；整条请求未写）
     42901: 请求过于频繁

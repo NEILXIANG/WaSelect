@@ -227,6 +227,16 @@ describe('detailView：拒付（payment_dispute）', () => {
     expect(v.statusText).toBe('货款已由银行退回');
     expect(v.nextText).toBe('你的银行已把这笔付款退回给你，这张订单不会发货。如有疑问请联系客服。');
   });
+  // 三天提交复查 2026-10-12：发货后才被拒付的单，原先也写"处理结束前我们暂不发货 / 不会发货"——物流卡上包裹早已在路上
+  it('🔴 已发出 / 已送达的单：不说"暂不发货 / 不会发货"', () => {
+    for (const status of ['shipped', 'delivered', 'completed']) {
+      const open = detailView({ ...ORDER, status, payment_dispute: 'open' });
+      expect(open.statusText).toBe('付款争议处理中');
+      expect(open.nextText).not.toContain('发货');
+      const lost = detailView({ ...ORDER, status, payment_dispute: 'lost' });
+      expect(lost.nextText).not.toContain('发货');
+    }
+  });
   it('没有拒付 → 照常', () => {
     const v = detailView({ ...ORDER, status: 'paid' });
     expect(v.statusText).toBe('已付款 · 日本采购中');

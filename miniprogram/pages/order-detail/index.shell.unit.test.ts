@@ -483,3 +483,29 @@ describe('支付后退回原详情（MP-10，第二轮审计 2026-10-11）', () 
     expect(gd()['paidReturn']).toEqual({ orderId: 'o-other', justPaid: true });
   });
 });
+
+// 三天提交复查 2026-10-12：64560e0 把付款截止改成"请在 N 分钟内完成支付"，但只在取数时算一次——
+//   页面开着，过了 20 分钟还写"28 分钟"（原先写的是绝对时刻，不会过时）
+describe('待付款剩余分钟随时间走', () => {
+  it('🔴 开着页面 3 分钟后，剩余分钟跟着减少；离开页面停表', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
+    try {
+      order = { ...ORDER, status: 'pending_payment', expires_at: '2026-10-12T10:10:00.000Z' };
+      await open('o-1');
+      expect(String((page.data['view'] as Record<string, unknown>)['payLeftText'])).toContain(
+        '10 分钟',
+      );
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      expect(String((page.data['view'] as Record<string, unknown>)['payLeftText'])).toContain(
+        '7 分钟',
+      );
+      call('onHide');
+      const before = (page.data['view'] as Record<string, unknown>)['payLeftText'];
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      expect((page.data['view'] as Record<string, unknown>)['payLeftText']).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

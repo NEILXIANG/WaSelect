@@ -92,6 +92,8 @@ Page({
     quoteErrorCode: 0,
     /** M-14（AJ-406）：报价失败时给不给"重试"（vm `quoteRetryable`）。 */
     quoteRetry: false,
+    /** 报价失败是因为售罄（底栏说"移除或取消勾选"，不说"稍后重试"；三天提交复查 2026-10-12）。 */
+    quoteSoldOut: false,
     /** M-14：删除后"已删除 · 撤销"那一行（vm `undoView`）。 */
     undo: { show: false, index: -1, text: '' },
     /** 「去结算」的状态（vm `checkoutGate` 的输出：能不能点 + 说什么）。 */
@@ -210,6 +212,7 @@ Page({
       quoting: true,
       quoteError: '',
       quoteRetry: false,
+      quoteSoldOut: false,
       gate: checkoutGate({ quoting: true, reason: this.quoteReason }),
     });
     try {
@@ -284,6 +287,9 @@ Page({
           quoteError:
             title === '' ? '有商品已售罄，移除后才能结算' : `「${title}」已售罄，移除后才能结算`,
           quoteErrorRef: '',
+          // 售罄重试一万次也一样：不给「重试」，底栏也不说"稍后重试"（三天提交复查 2026-10-12）
+          quoteRetry: false,
+          quoteSoldOut: true,
         });
       }
     } finally {
@@ -295,6 +301,7 @@ Page({
             hasTotal: hasTotal(this.data.quote),
             hasError: this.data.quoteError !== '',
             errorCode: this.data.quoteErrorCode,
+            soldOut: this.data.quoteSoldOut === true,
             lineCount: this.data.rows.length,
             splitRequired: this.data.quote?.splitRequired === true,
           }),
@@ -308,6 +315,15 @@ Page({
    * @param {Array<object>} rows `cartRows` 的输出
    */
   withStockNote(rows) {
+    // 已不在购物车里的那件，说明一并作废（三天提交复查 2026-10-12：结算移出后再加回，旧说明又挂回来；
+    //   购物车是 tab 页、不卸载，说明原先只在"动这一行"时清）
+    const inCart = new Set(rows.map((r) => r.productId));
+    if (this.stockNote != null && !inCart.has(this.stockNote.productId)) this.stockNote = null;
+    if (this.priceNotes != null) {
+      this.priceNotes = Object.fromEntries(
+        Object.entries(this.priceNotes).filter(([id]) => inCart.has(id)),
+      );
+    }
     const note = this.stockNote ?? null;
     const prices = this.priceNotes ?? {};
     return rows.map((r) => ({
@@ -417,7 +433,8 @@ Page({
     const capNote = lineMaxNote(current.qty, delta);
     if (capNote !== '') {
       this.stockNote = { productId, text: capNote };
-      this.refresh();
+      // 数量没变：只重画这一行的说明，不重新报价（三天提交复查 2026-10-12：原先 refresh() 会闪"正在重新计算…"）
+      this.setData({ rows: this.withStockNote(cartRows(cart.items())) });
       return;
     }
     cart.setQty(productId, current.qty + delta);

@@ -107,6 +107,13 @@ export function mountAdminCategoryRoutes(app: Express, deps: AdminCategoryRoutes
       const r = await deleteCategory(deps.db, key);
       if (r === 'not_found') throw new AppError(40404, { key });
       if (r === 'in_use') throw new AppError(40919, { key });
+      // 对外带 field / reason：后台按它说清"先改掉那条 Banner"（三天提交复查 2026-10-12）
+      if (r === 'banner_ref')
+        throw new AppError(
+          40919,
+          { key, reason: 'banner_ref' },
+          { field: 'key', reason: 'banner_ref' },
+        );
       deps.logger.info('admin_category_deleted', { result: 'ok', ctx: { key } });
       res.status(204).end();
     }),

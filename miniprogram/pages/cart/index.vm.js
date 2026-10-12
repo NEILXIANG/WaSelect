@@ -61,7 +61,9 @@ export function selectionBar(rows) {
  * 「去结算」按钮的状态与它下面那句话（B36 / AJ-219）。
  *
  * @param {{quoting?: unknown, hasTotal?: unknown, hasError?: unknown,
- *          errorCode?: unknown, splitRequired?: unknown, lineCount?: unknown, noneSelected?: unknown}|null|undefined} s
+ *          errorCode?: unknown, splitRequired?: unknown, lineCount?: unknown, noneSelected?: unknown,
+ *          soldOut?: unknown}|null|undefined} s
+ *   `soldOut`       报价失败是因为售罄（三天提交复查 2026-10-12：不说"稍后重试"）
  *   `quoting`       报价在途中（改了数量之后、新合计还没回来）
  *   `hasTotal`      当前 quote 有权威合计（薄壳传 `hasTotal(quote)`）
  *   `hasError`      上一次报价失败了
@@ -155,6 +157,8 @@ export function checkoutGate(s) {
   }
   // ⚠️ 失败提示要看**码**：确定性失败（下架 / 超重 / 超上限）说"稍后重试"是句谎话（MP3-09）
   if (a.hasError === true) {
+    // 售罄（40901 且库存 0）：不是"稍后重试"能解决的（三天提交复查 2026-10-12；错误条已说是哪件）
+    if (a.soldOut === true) return { disabled: true, hint: '有商品已售罄：移除或取消勾选后再结算' };
     return { disabled: true, hint: quoteErrorHint(a.errorCode, a.lineCount) };
   }
   // B38 / AJ-221：已超单笔上限 → 结算页会 40906，在购物车就把入口关掉

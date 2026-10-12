@@ -106,6 +106,11 @@ Page({
   recheckCount: 0,
   /** 复核定时器（onUnload 必清，否则页面销毁后还在 setData）。 */
   recheckTimer: null,
+  /**
+   * 剩余分钟的走表（三天提交复查 2026-10-12：原先只在取数时算一次，开着页面会一直写"28 分钟"）。
+   * 只在待付款且有剩余分钟时走；离开页面（onHide / onUnload）就停。
+   */
+  payTick: null,
   /** 最近一次拿到的订单原文（放弃 justPaid 假设后要按它重渲染）。 */
   lastOrder: null,
   /**
@@ -141,6 +146,37 @@ Page({
 
   onUnload() {
     if (this.recheckTimer !== null) clearTimeout(this.recheckTimer);
+    this.stopPayTick();
+  },
+
+  onHide() {
+    this.stopPayTick();
+  },
+
+  stopPayTick() {
+    if (this.payTick !== null) clearTimeout(this.payTick);
+    this.payTick = null;
+  },
+
+  /**
+   * 每 30 秒按最新时刻重算一次视图（只改剩余分钟这类随时间变的字）；分钟走完就重取一次订单（服务端会关单）。
+   * @why 链式 setTimeout 而不是 setInterval：与支付页倒计时同口径（小程序端 eslint 全局白名单只登记了 setTimeout）。
+   */
+  startPayTick() {
+    this.stopPayTick();
+    if (this.data.view?.payLeftText === '' || this.data.view?.payLeftText === undefined) return;
+    this.payTick = setTimeout(() => {
+      this.payTick = null;
+      if (this.lastOrder === null) return;
+      const view = detailView(this.lastOrder, {
+        justPaid: this.justPaid,
+        recheckGaveUp: this.recheckGaveUp,
+        nowMs: serverNowMs(Date.now(), app.globalData.clockSkewMs),
+      });
+      this.setData({ view });
+      if (view.payLeftText === '') void this.load();
+      else this.startPayTick();
+    }, 30_000);
   },
 
   /**
@@ -222,6 +258,7 @@ Page({
         copyErrorAt: '',
       });
       this.scheduleRecheck();
+      this.startPayTick();
     } catch (e) {
       if (isStale(seq, this.loadSeq)) return;
       this.setData({ view: null, ...errorFields(e), ...contactFields(e), ...orderNotFound(e) });

@@ -322,7 +322,7 @@ export function addFeedback(result) {
  *
  * @param {{cartCount?: unknown, added?: unknown, soldOut?: unknown}|null|undefined} s
  *   `cartCount` cart-store `count()`；`added` 本次已加购；`soldOut` 详情的售罄态
- * @returns {{cartText: string, cartAria: string, cartLabel: string, cartBadge: string, disabled: boolean}}
+ * @returns {{cartText: string, cartAria: string, cartLabel: string, cartBadge: string, addText: string, disabled: boolean}}
  * @why 购物车入口**常驻**在栏里，取代原先"加购成功后才冒出来的「去购物车」按钮"：
  *      两个去购物车的入口同屏就是重复（对标分析 M-14 同一条），而常驻入口在加购前也能用。
  * @why 加购反馈写进这个入口（"已加入购物车 · 3"）而不是另起一行：反馈在按钮旁边（§4"位置在按钮附近即可"），
@@ -337,9 +337,12 @@ export function buyBarView(s) {
     cartText: badge === '' ? base : `${base} · ${badge}`,
     cartAria: badge === '' ? `${base}，去购物车` : `${base}，共 ${badge} 件，去购物车`,
     // 全入口点击测试 2026-10-11：底部栏左侧改为"购物车格子"（短文字 + 角标），长串 cartText 放不进格子（仍留作 aria / 兼容）。
-    // 文字固定「购物车」：它是去购物车的入口，"已加入"读不出能点；加购反馈靠角标 + toast（主流做法）
+    // 文字固定「购物车」：它是去购物车的入口，"已加入"读不出能点。
     cartLabel: '购物车',
     cartBadge: badge,
+    // 加购成功的反馈写在「加入购物车」按钮上（三天提交复查 2026-10-12：本项目不用 toast，wx-api @limitation 九；
+    //   只靠角标的话角标已是 99+ 时什么都不变）。再点照样加。
+    addText: a.added === true ? '已加入购物车' : '加入购物车',
     disabled: a.soldOut === true,
   };
 }

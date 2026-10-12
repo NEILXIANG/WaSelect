@@ -134,9 +134,9 @@ export function orderRows(items, nowMs = undefined) {
         // ⚠️ 不在词表里的状态给 '状态未知' 而不是空串：
         //    空串在真机上就是一个空白的标签，用户无法区分"没状态"和"渲染错了"
         // AJ-500：拒付期间说"付款争议处理中 / 货款已由银行退回"，不再说"日本采购中"
-        statusText: disputeStatus(o.payment_dispute)?.title ?? buyer.title,
+        statusText: disputeStatus(o.payment_dispute, o.status)?.title ?? buyer.title,
         nextText:
-          disputeStatus(o.payment_dispute)?.next ??
+          disputeStatus(o.payment_dispute, o.status)?.next ??
           (expired ? EXPIRED_NEXT : nextTextOf(o, status, buyer)),
         canPay: PAYABLE.includes(status) && !expired,
         createdText: jstDateTimeLabeled(o.created_at) ?? '',

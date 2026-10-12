@@ -322,6 +322,7 @@ describe('buyBarView（M-13 底部固定购买栏，AJ-406）', () => {
       cartAria: '购物车，共 3 件，去购物车',
       cartLabel: '购物车',
       cartBadge: '3',
+      addText: '加入购物车',
       disabled: false,
     });
     expect(buyBarView({ cartCount: 4, added: true }).cartText).toBe('已加入购物车 · 4');
@@ -337,6 +338,13 @@ describe('buyBarView（M-13 底部固定购买栏，AJ-406）', () => {
     expect(buyBarView({ cartCount: 120 }).cartBadge).toBe('99+');
   });
 
+  // 三天提交复查 2026-10-12：格子文字固定后，加购成功只剩角标数字一变——角标已是"99+"时什么都不变；
+  //   注释说"靠 toast"，但本项目不用 toast（wx-api @limitation 九，提示走页面内）
+  it('🔴 加购成功后「加入购物车」按钮写"已加入购物车"（再点照样加）', () => {
+    expect(buyBarView({ cartCount: 4, added: true }).addText).toBe('已加入购物车');
+    expect(buyBarView({ cartCount: 4, added: false }).addText).toBe('加入购物车');
+  });
+
   it('空车不显示 · 0；超过 99 件显示 99+（与 tabBar 角标同一函数）', () => {
     expect(buyBarView({ cartCount: 0 }).cartText).toBe('购物车');
     expect(buyBarView({ cartCount: 120 }).cartText).toBe('购物车 · 99+');
@@ -349,6 +357,7 @@ describe('buyBarView（M-13 底部固定购买栏，AJ-406）', () => {
       cartAria: '购物车，去购物车',
       cartLabel: '购物车',
       cartBadge: '',
+      addText: '加入购物车',
       disabled: false,
     });
   });

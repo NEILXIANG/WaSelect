@@ -159,7 +159,7 @@
 
     <!--
       M-13（AJ-406）：底部固定购买栏。剩余清单 4-4："立即购买"只结这一件、不动购物车（结算页 ?mode=buynow）；
-      "加入购物车"为次按钮。左侧价格下面是常驻的购物车入口（带件数；加购后变"已加入购物车 · N"）。
+      "加入购物车"为次按钮（加购成功后按钮写"已加入购物车"，再点照样加）。左侧是常驻的购物车格子（文字固定、件数进角标）。
       加不进去的原因（品种已满，P2-31）在栏的最上方一行，紧挨按钮。
     -->
     <view class="buy-bar">
@@ -178,7 +178,7 @@
           <text class="buy-bar__cart-badge" wx:if="{{bar.cartBadge}}">{{bar.cartBadge}}</text>
         </view>
         <view class="buy-bar__btn">
-          <ws-button text="加入购物车" type="default" block="{{true}}" disabled="{{bar.disabled}}" bindtap="onAddToCart" />
+          <ws-button text="{{bar.addText}}" type="default" block="{{true}}" disabled="{{bar.disabled}}" bindtap="onAddToCart" />
         </view>
         <view class="buy-bar__btn">
           <ws-button text="立即购买" type="primary" block="{{true}}" disabled="{{bar.disabled}}" bindtap="onBuyNow" />

@@ -67,3 +67,12 @@ describe('categoryServerError', () => {
     expect(categoryServerError(undefined)).toBeNull();
   });
 });
+
+// 三天提交复查 2026-10-12：服务端删分类时发现有 Banner 跳到它（40919 banner_ref）——说清先去改那条 Banner
+describe('categoryServerError：Banner 引用', () => {
+  it('🔴 banner_ref → 先到「首页 Banner」改掉或删除那条', () => {
+    expect(categoryServerError({ field: 'key', reason: 'banner_ref' })?.text).toBe(
+      '有首页 Banner 跳到这个分类：先到「首页 Banner」改掉或删除那条，再删分类',
+    );
+  });
+});

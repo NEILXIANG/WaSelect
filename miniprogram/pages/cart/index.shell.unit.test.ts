@@ -300,6 +300,11 @@ describe('库存不足：改到可买件数（AJ-493，全入口点击测试 202
     expect(knife()?.invalidText).toBe('已售罄，请移除');
     expect(String(page.data['quoteError'])).toContain('已售罄');
     expect(page.data['quoteErrorRef']).toBe('');
+    // 三天提交复查 2026-10-12：同屏还挂着「重试」、底栏说"合计未能获取，请稍后重试"——售罄重试一万次也一样
+    expect(page.data['quoteRetry']).toBe(false);
+    expect((page.data['gate'] as { hint: string }).hint).toBe(
+      '有商品已售罄：移除或取消勾选后再结算',
+    );
   });
 
   it('改过数量后再动这一行 → 说明消失', async () => {
@@ -329,14 +334,48 @@ describe('库存不足：改到可买件数（AJ-493，全入口点击测试 202
 
 // 规律排查 2026-10-12：数量到 99 再点「＋」——数字不动、什么也不说（详情页 F8 早就修了同一件事，购物车没跟上）
 describe('购物车：数量到单件上限', () => {
-  it('🔴 99 件再点「＋」→ 那一行说"每件商品一次最多买 99 件"', () => {
+  it('🔴 99 件再点「＋」→ 那一行说"每件商品一次最多买 99 件"', async () => {
     cart.setQty(OIL.productId, 99);
     call('onShow');
+    await vi.advanceTimersByTimeAsync(1000);
+    const before = quoteCalls;
     call('onPlus', tapId(OIL.productId));
+    await vi.advanceTimersByTimeAsync(1000);
+    // 三天提交复查 2026-10-12：数量没变，不该重新报价、也不该闪"购物车有变动，正在重新计算…"
+    expect(quoteCalls).toBe(before);
     const row = (
       page.data['rows'] as Array<{ productId: string; noteText: string; qty: number }>
     ).find((r) => r.productId === OIL.productId);
     expect(row?.qty).toBe(99);
     expect(row?.noteText).toBe('每件商品一次最多买 99 件');
+  });
+});
+
+// 三天提交复查 2026-10-12：行上的库存 / 变价说明只在"动这一行"时清——结算把这件移出购物车后，
+//   买家下次再加同一件，旧说明（"库存只剩 1 件，已改为 1 件"）又挂回来
+describe('购物车：说明不跨"移出再加回"', () => {
+  it('🔴 结算移出后再加回同一件 → 不带旧说明', async () => {
+    const quotedOnce = async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(400);
+      await Promise.resolve();
+    };
+    quoteFail = Object.assign(new Error('库存不足'), {
+      code: 40901,
+      data: { product_id: KNIFE.productId, stock: 1 },
+    });
+    call('onPlus', tapId(KNIFE.productId));
+    await quotedOnce();
+    quoteFail = null;
+    await quotedOnce();
+    const knifeRow = () =>
+      (page.data['rows'] as Array<{ productId: string; noteText?: string }>).find(
+        (r) => r.productId === KNIFE.productId,
+      );
+    expect(knifeRow()?.noteText).toBe('库存只剩 1 件，已改为 1 件');
+    cart.removeMany([KNIFE.productId]); // 结算页下单成功后移出
+    call('onShow');
+    cart.add(KNIFE);
+    call('onShow');
+    expect(knifeRow()?.noteText).toBe('');
   });
 });

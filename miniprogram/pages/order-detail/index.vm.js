@@ -290,7 +290,7 @@ export function detailView(order, opts = undefined) {
   const latePaidTop = o.late_paid === true && LATE_PAID_TOP_STATUSES.includes(status);
   const showBuyAgain = BUY_AGAIN_STATUSES.includes(status) && !latePaidTop;
   const afterSale = afterSaleCard(o);
-  const dispute = disputeStatus(o.payment_dispute);
+  const dispute = disputeStatus(o.payment_dispute, o.status);
 
   return {
     orderId: typeof o.order_id === 'string' ? o.order_id : '',
@@ -338,8 +338,13 @@ export function detailView(order, opts = undefined) {
     //    确认中（刚付过）也不显示（F1，第二轮审计 2026-10-11）：刚付过的人读到"请在…前完成支付"会以为没付上
     expiresAtText: payable && !confirming ? timeText(o.expires_at) : '',
     // 全入口点击测试 2026-10-11：剩余分钟（买家在美国，只给日本时间的截止时刻要自己换算）；向上取整，不出现"0 分钟"
+    //   时间到了（≤0）不写"请在 0 / -3 分钟内"，交给薄壳重取（服务端会关单）
     payLeftText:
-      payable && !confirming && Number.isFinite(options.nowMs) && Number.isFinite(expiresMs)
+      payable &&
+      !confirming &&
+      Number.isFinite(options.nowMs) &&
+      Number.isFinite(expiresMs) &&
+      expiresMs > options.nowMs
         ? `请在 ${String(Math.ceil((expiresMs - options.nowMs) / 60_000))} 分钟内完成支付`
         : '',
     items: itemRows(o.items),

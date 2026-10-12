@@ -118,16 +118,25 @@ export async function updateCategory(
   }
 }
 
-/** 删除：还有商品（任何状态）→ in_use，不删。先查后删之间的并发插入由外键 RESTRICT 兜底（23503 照抛）。 */
+/**
+ * 删除：还有商品（任何状态）→ in_use；还有 Banner 跳到它 → banner_ref；都不删。
+ * 先查后删之间的并发插入商品由外键 RESTRICT 兜底（23503 照抛）。
+ * @why banner_ref（三天提交复查 2026-10-12）：Banner 到分类没有外键；删了分类，跳到它的 Banner 点进去是空页，
+ *      且那条 Banner 再保存会被 link_target_missing 拒（AJ-512），运营连关都关不掉。
+ * @limitation 先查后删之间新建指向它的 Banner 拦不住（没有外键）；那条 Banner 保存时已校验目标存在，窗口只有毫秒级。
+ */
 export async function deleteCategory(
   db: Db,
   key: string,
-): Promise<'deleted' | 'in_use' | 'not_found'> {
+): Promise<'deleted' | 'in_use' | 'banner_ref' | 'not_found'> {
   const used = await db`select 1 from products where category = ${key} limit 1`;
   if (used.length > 0) {
     const exists = await categoryExists(db, key);
     return exists ? 'in_use' : 'not_found';
   }
+  const linked =
+    await db`select 1 from banners where link_type = 'category' and link_id = ${key} limit 1`;
+  if (linked.length > 0) return 'banner_ref';
   const gone = await db`delete from product_categories where key = ${key} returning key`;
   return gone.length > 0 ? 'deleted' : 'not_found';
 }

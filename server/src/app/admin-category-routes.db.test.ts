@@ -261,4 +261,23 @@ describe('后台商品分类接口', () => {
     expect([missing.status, code(missing)]).toEqual([404, 40404]);
     await s.close();
   });
+
+  // 三天提交复查 2026-10-12：删分类只查商品不查 Banner——删掉后跳到它的 Banner 点进去是空页，
+  //   且那条 Banner 再保存会被 link_target_missing 拒（AJ-512），运营关不掉它
+  it('🔴 有 Banner 跳到这个分类 → 409 / 40919（data.reason = banner_ref）且没删', async () => {
+    const s = await buildServer();
+    const t = await bearer();
+    await call(s.url, 'POST', '/api/v1/admin/categories', { key: 'probe_c', name: '丙类' }, t);
+    await db`insert into banners (id, image_key, link_type, link_id, sort, active)
+             values ('bn-probe-c', 'banners/x.png', 'category', 'probe_c', 1, true)`;
+    try {
+      const r = await call(s.url, 'DELETE', '/api/v1/admin/categories/probe_c', undefined, t);
+      expect([r.status, code(r)]).toEqual([409, 40919]);
+      expect((r.body as { data?: { reason?: string } }).data?.reason).toBe('banner_ref');
+      expect((await db`select 1 from product_categories where key = 'probe_c'`).length).toBe(1);
+    } finally {
+      await db`delete from banners where id = 'bn-probe-c'`;
+      await s.close();
+    }
+  });
 });
