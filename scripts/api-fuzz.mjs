@@ -3,6 +3,7 @@
 // 用法：node api-fuzz.mjs                 # 默认**只读**：只探 GET 接口 + 不写库的协议层畸形
 //       node api-fuzz.mjs --allow-writes  # 连写接口一起探（会真的改库，只对模拟库 / 一次性库用）
 //       API_FUZZ_BASE=http://127.0.0.1:3001 node api-fuzz.mjs   # 换目标（只允许本机）
+//       API_FUZZ_TOKEN=<管理员 token> …        # 预发口径（staging 没有 dev 管理员口令）时直接给 token，跳过登录
 // 前提：server 已在 BASE 运行，且 contracts/api-contract.yaml 存在
 //
 // ⚠️ 写接口为什么默认不跑（批次复审发现）：变异里有一部分本身就是**合法请求**
@@ -195,10 +196,13 @@ if (process.argv.includes('--selftest')) {
 }
 
 // ── 登录 ────────────────────────────────────────────────
-const lr = await req('POST', PREFIX + '/auth/admin/login', { email: EMAIL, password: PASS });
-const token = jparse(lr)?.token ?? '';
-console.log('登录: ' + lr.status + ' token=' + (token ? 'yes' : 'NO ' + lr.body.slice(0, 80)));
-if (!token) process.exit(1);
+let token = process.env.API_FUZZ_TOKEN ?? '';
+if (token === '') {
+  const lr = await req('POST', PREFIX + '/auth/admin/login', { email: EMAIL, password: PASS });
+  token = jparse(lr)?.token ?? '';
+  console.log('登录: ' + lr.status + ' token=' + (token ? 'yes' : 'NO ' + lr.body.slice(0, 80)));
+  if (!token) process.exit(1);
+}
 
 // ── 真实样本 id（路径参数）───────────────────────────────
 async function firstOf(urlPath, listKey) {

@@ -158,6 +158,10 @@ describe('早到与超期（N4/AJ-32 的双层结构）', () => {
     });
     expect(sink.find('callback_early')).toHaveLength(1);
     expect(sink.find('callback_early')[0]?.level).toBe('warn');
+    // 预发严格测试 2026-10-12：设计内的"稍后重发"不得以 error 级进访问日志（error 会被 Sentry 分流上报）
+    expect(sink.find('http_request').map((r) => [r.level, r.result])).toEqual([
+      ['warn', 'retry_later'],
+    ]);
     // processed_at 必须保持 NULL：这是对账信号，也是"同一 event_id 重发时能补上"的前提
     const rows = await db`select processed_at from webhook_events where event_id = 'evt-grace'`;
     expect(rows[0]?.processed_at).toBeNull();
@@ -494,6 +498,13 @@ describe('N22：并发重复投递只有一个持有者（processing_until 租�
       expect(mid[0]?.processed_at).toBeNull();
       expect(mid[0]?.lease_live).toBe(true);
       expect(s.sink.find('webhook_inflight')).toHaveLength(1);
+      // 预发严格测试 2026-10-12：机构重投撞上"处理中"是常态，访问日志不得记 error（会进 Sentry）
+      expect(
+        s.sink
+          .find('http_request')
+          .filter((r) => r.http_status === 503)
+          .map((r) => [r.level, r.result]),
+      ).toEqual([['warn', 'retry_later']]);
 
       // 放行 A
       gate.release();

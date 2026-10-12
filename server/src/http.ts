@@ -334,6 +334,14 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
    * @why 另挂 `close` 兜底：连接被销毁且从未 `end()` 时也要留一条
    *      `result: 'client_aborted'`（http_status 用 0 表示"没有真实状态码"，
    *      不用默认的 200——200 会把中断伪装成成功，污染可用性统计）。
+   * @why **带 `Retry-After` 的 503 记 warn**（`result: 'retry_later'`），其余 5xx 仍记 error：
+   *      这类 503 是"请稍后重发"的设计内应答——目前只有支付回调管线发（同一事件正在处理 / 回调早于订单可见 /
+   *      拒付事件乱序，pay-callback.ts），它们的业务日志已按各自轻重分级（webhook_inflight 是 info）。
+   *      访问日志一律按 error 记，就把这份分级抹平了：error 会被 Sentry 分流上报，机构的每次重投都成了一次告警，
+   *      把每分钟 30 条的上报额度吃掉（预发严格测试 2026-10-12：同一回调并发 10 次 → 9 条 error 级访问日志）。
+   *      @tradeoff 判据是响应头而不是路由：以后哪里也发"带 Retry-After 的 503"，都按设计内应答处理——
+   *      要它告警，就在业务处自己记 error（如 callback_unmatched），不靠访问日志兜。
+   *      熔断拒绝（50300）不带这个头，仍是 error：那一路另有 http_outbound_circuit_open（error），本条不改它。
    */
   app.use((req, res, next) => {
     const startedAt = performance.now();
@@ -344,6 +352,7 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
       if (silentPaths.includes(req.path)) return;
       const aborted = !res.writableEnded;
       const status = aborted ? 0 : res.statusCode;
+      const retryLater = status === 503 && res.hasHeader('retry-after');
       const fields = {
         http_method: req.method,
         http_path: req.path,
@@ -351,18 +360,20 @@ export function createHttpApp(opts: CreateHttpAppOptions): Express {
         duration_ms: Math.round(performance.now() - startedAt),
         result: aborted
           ? 'client_aborted'
-          : status >= 500
-            ? 'error'
-            : status >= 400
-              ? 'client_error'
-              : 'ok',
+          : retryLater
+            ? 'retry_later'
+            : status >= 500
+              ? 'error'
+              : status >= 400
+                ? 'client_error'
+                : 'ok',
         user_agent: req.header('user-agent'),
         // D22：限流按 IP 计时、风控看来源、审计要还原"谁从哪来"——三者都靠 client_ip。
         // 注意它**只在访问日志里出现**，不进业务事件，避免 PII 扩散到各处。
         client_ip: req.ip,
         resp_bytes: responseBytes(res),
       };
-      if (aborted) httpLog.warn('http_request', fields);
+      if (aborted || retryLater) httpLog.warn('http_request', fields);
       else if (status >= 500) httpLog.error('http_request', fields);
       else if (status >= 400) httpLog.warn('http_request', fields);
       else httpLog.info('http_request', fields);

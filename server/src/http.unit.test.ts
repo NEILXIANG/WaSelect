@@ -579,6 +579,29 @@ describe('访问日志（请求维度）', () => {
   });
 
   /**
+   * 预发严格测试 2026-10-12：同一回调并发 10 次 → 1 次 200 + 9 次 503（webhook_inflight，业务记 info），
+   * 访问日志却把这 9 条记成 error——上线后每次机构重投都进 Sentry，与回调管线刻意的分级相反。
+   */
+  it('🔴 带 Retry-After 的 503（"请稍后重发"，设计内应答）→ 访问日志 warn；不带的 5xx 仍是 error', async () => {
+    const { baseUrl, sink } = await serve((app) => {
+      app.post('/later', (_req, res) => {
+        res.set('retry-after', '10');
+        res.status(503).json({ received: false, reason: 'already_processing' });
+      });
+      app.post('/down', (_req, res) => {
+        res.status(503).json({ received: false });
+      });
+    });
+    await fetch(`${baseUrl}/later`, { method: 'POST' });
+    await fetch(`${baseUrl}/down`, { method: 'POST' });
+    const byPath = Object.fromEntries(
+      sink.find('http_request').map((r) => [r.http_path, { level: r.level, result: r.result }]),
+    );
+    expect(byPath['/later']).toEqual({ level: 'warn', result: 'retry_later' });
+    expect(byPath['/down']).toEqual({ level: 'error', result: 'error' });
+  });
+
+  /**
    * INF-14 / AJ-206：访问日志挂 **`prefinish`** 而不是 `finish`——客户端断开时不能整条丢失。
    *
    * @why 丢掉的恰恰是最该看的那一条：退款/发货同步调外部要 6 秒，用户在窗口里关掉页签
