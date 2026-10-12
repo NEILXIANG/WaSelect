@@ -389,8 +389,7 @@ export function refundGate(order: unknown): Gate {
   //    拒付期间再点只会查询在途那笔或同键重放，不会动第二笔钱；"换新键重新发起"由服务端拦。
   //    先判拒付的旧写法会把 refunding + 拒付 的单永久锁在退款中。
   const disputed = (order as { has_dispute?: unknown } | null)?.has_dispute === true;
-  if (disputed && status !== 'refunding')
-    return NO('买家正在通过银行要回货款（拒付），现在不能退款；请先到「风控」页处理这条拒付');
+  if (disputed && status !== 'refunding') return NO(DISPUTE_REFUND_BLOCKED);
   // 迟到付款（剩余清单 1-5）：已关单收到了钱，服务端凭 late_paid 放行；与服务端 refundGuard 同口径
   // G1（AJ-456）：有一笔部分退款在途（服务端会 40902 partial_refund_in_flight）——先去部分退款面板点「同步」
   const partials = (order as { partial_refunds?: unknown } | null)?.partial_refunds;
@@ -794,6 +793,51 @@ export function fullRefundErrorNotice(a: {
 export function isDisputeLocked(order: unknown): boolean {
   return (order as { has_dispute?: unknown } | null)?.has_dispute === true;
 }
+
+/**
+ * 拒付限制是哪一种：进行中 / 已败诉 / 看不出（列表行没有时间线）。
+ * @why 规律排查 2026-10-12：`has_dispute` 的含义是"有未解除的拒付限制（进行中，或已败诉）"（服务端 mark-disputed.ts，
+ *      契约 0.6.10），后台原先一律写"拒付中 / 有进行中的拒付"——已败诉的单运营去风控页"处理"，发现早已结案。
+ * @why 按时间线里**最后一条**开案 / 结案事件判：败诉后又开新案的，以新案为准。
+ * @limitation 只认结案备注 `<id>:lost`（服务端写法）；时间线缺失时返回 'locked'，文案写两种情况都对的说法。
+ */
+export function disputeLockState(order: unknown): 'open' | 'lost' | 'locked' | null {
+  if (!isDisputeLocked(order)) return null;
+  const events = (order as { events?: unknown }).events;
+  if (!Array.isArray(events)) return 'locked';
+  const last = [...events]
+    .reverse()
+    .find(
+      (e: { status?: unknown }) => e?.status === 'dispute_opened' || e?.status === 'dispute_closed',
+    ) as { status?: unknown; note?: unknown } | undefined;
+  if (last === undefined) return 'locked';
+  if (last.status === 'dispute_opened') return 'open';
+  return typeof last.note === 'string' && last.note.endsWith(':lost') ? 'lost' : 'locked';
+}
+
+/** 拒付限制的徽章字与右栏「风险状态」一句话（与 {@link disputeLockState} 同口径）。 */
+export const DISPUTE_LOCK_TEXT: Record<
+  'open' | 'lost' | 'locked',
+  { badge: string; detail: string }
+> = {
+  open: {
+    badge: '拒付中',
+    detail: '有进行中的拒付：退款与发货已锁（可在「解除拒付限制…」人工解除）',
+  },
+  lost: {
+    badge: '拒付已败诉',
+    detail:
+      '拒付已败诉（货款已被银行退回买家）：退款与发货已锁，不要再发货（可在「解除拒付限制…」人工解除）',
+  },
+  locked: {
+    badge: '拒付锁定',
+    detail: '有未解除的拒付限制：退款与发货已锁（可在「解除拒付限制…」人工解除）',
+  },
+};
+
+/** 拒付限制下的退款提示：出口是本单的「解除拒付限制…」，风控页只有拉黑（规律排查 2026-10-12）。 */
+export const DISPUTE_REFUND_BLOCKED =
+  '这单有拒付限制（进行中的由银行裁决，已败诉的货款已退回买家），现在不能退款；确需解除请点本单的「解除拒付限制…」';
 
 /** 解除拒付限制的表单（契约 `required: [reason]`）。 */
 export interface ReleaseForm {

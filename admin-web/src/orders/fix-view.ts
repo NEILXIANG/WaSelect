@@ -81,7 +81,7 @@ export function shipmentFixErrors(f: {
 
 /** 确认发货 / 确认改单号之前的提示（形状规则与服务端同一份：shared trackingNoRecognized）。 */
 export const TRACKING_SHAPE_WARNING =
-  '⚠️ 这个运单号的形状认不出（日本邮便应为 2 字母 + 9 位数字 + JP，如 EM123456789JP）：确认后会立刻发邮件给买家，请先核对';
+  '⚠️ 这个运单号的形状认不出（日本邮便应为 2 字母 + 9 位数字 + JP，如 EM123456789JP）：确认后买家就会看到这个运单号，请先核对';
 
 /** 发货 / 改运单号的响应里 `tracking_recognized === false` → 给一句核对提示（已保存，不回滚）。 */
 export function trackingWarning(resp: unknown): string {
@@ -102,6 +102,18 @@ export function fixDoneNotice(mode: 'cancel' | 'fix' | 'revert', order: unknown)
   if (mode === 'revert')
     return `已撤销发货：订单回到待发货，运单已清空；${hasEmail ? '已给买家发更正邮件' : '买家未留邮箱，没有发更正邮件，请另行告知'}`;
   return `运单号已更新；${hasEmail ? '已给买家重发发货邮件' : '买家未留邮箱，没有重发发货邮件'}`;
+}
+
+/**
+ * 撤销发货 / 改运单号 / 取消的确认句（规律排查 2026-10-12：完成提示早已按邮箱说，确认句却一律说会发邮件）。
+ * @limitation 同 `fixDoneNotice`：只看订单上有没有邮箱。
+ */
+export function fixConfirmText(mode: 'cancel' | 'fix' | 'revert', order: unknown): string {
+  if (mode === 'cancel') return '确认取消？不可撤销，库存会回补。';
+  const hasEmail = str(order, 'contact_email').trim() !== '';
+  if (mode === 'revert')
+    return `确认撤销？订单回到待发货、运单号清空，${hasEmail ? '并给买家发一封更正邮件。' : '买家没留邮箱，不会收到更正邮件，请另行告知。'}`;
+  return `确认修改？${hasEmail ? '会给买家重发一封发货邮件。' : '买家没留邮箱，不会收到新的发货邮件。'}`;
 }
 
 /**

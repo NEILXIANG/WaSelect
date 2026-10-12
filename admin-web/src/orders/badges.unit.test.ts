@@ -60,12 +60,26 @@ describe('detailBadges（详情页头）', () => {
     expect(texts({ status: 'nope' })).toEqual(['未知状态']);
   });
   it('拒付 = danger、测试单 = muted，追加在后', () => {
+    // 列表行没有时间线：只知道"有拒付限制"，不知道是进行中还是已败诉 → 写"拒付锁定"（两种都对）
     expect(detailBadges({ status: 'shipped', has_dispute: true, is_test: true })).toEqual([
       { text: '已付款', tone: 'success' },
       { text: '已发货', tone: 'info' },
-      { text: '拒付中', tone: 'danger' },
+      { text: '拒付锁定', tone: 'danger' },
       { text: '测试单', tone: 'muted' },
     ]);
+  });
+  // 规律排查 2026-10-12：has_dispute 的含义是"有未解除的拒付限制（进行中，或已败诉）"（mark-disputed.ts），
+  //   原先一律写"拒付中"——已败诉的单也显示拒付中，运营去风控页"处理"，发现早已结案
+  it('🔴 有时间线时分清进行中 / 已败诉', () => {
+    const opened = { status: 'dispute_opened', note: 'dp_1', at: '2026-10-01T00:00:00Z' };
+    const lost = { status: 'dispute_closed', note: 'dp_1:lost', at: '2026-10-08T00:00:00Z' };
+    const flag = (events: unknown[]): string | undefined =>
+      texts({ status: 'paid', has_dispute: true, events }).find((t) => t.startsWith('拒付'));
+    expect(flag([opened])).toBe('拒付中');
+    expect(flag([opened, lost])).toBe('拒付已败诉');
+    // 败诉后又开了一单新的拒付
+    expect(flag([opened, lost, { ...opened, note: 'dp_2' }])).toBe('拒付中');
+    expect(flag([])).toBe('拒付锁定');
   });
 });
 

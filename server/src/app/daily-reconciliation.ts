@@ -486,6 +486,11 @@ export interface LaunchReadinessInput {
   reviewSkuId: string | null;
   /** 判"已生效"的时刻（汇率 effective_from ≤ 它）。 */
   at: Date;
+  /**
+   * 买家通知邮件能不能真发出去（规律排查 2026-10-12）：生产没配 MAIL_PROVIDER_API_KEY 时只用记日志的发信器，
+   * 而两端多处写着"会发邮件"。staging / 开发不要求（不该给真实买家发信）。缺省视为已配（旧调用方）。
+   */
+  mailConfigured?: boolean;
 }
 
 /**
@@ -504,10 +509,13 @@ export function launchReadinessInput(c: {
   DISPLAY_CURRENCIES: readonly string[];
   REVIEW_MODE: string;
   REVIEW_SKU_ID?: string | undefined;
+  NODE_ENV?: string | undefined;
+  MAIL_PROVIDER_API_KEY?: string | undefined;
 }): Omit<LaunchReadinessInput, 'at'> {
   return {
     fxQuotes: c.DISPLAY_CURRENCIES.filter((q) => q !== 'JPY'),
     reviewSkuId: c.REVIEW_MODE === 'on' ? (c.REVIEW_SKU_ID ?? null) : null,
+    mailConfigured: c.NODE_ENV !== 'production' || c.MAIL_PROVIDER_API_KEY !== undefined,
   };
 }
 
@@ -541,6 +549,10 @@ export async function scanLaunchReadiness(
     else if (p.status !== 'active') ids.push(`审核商品「${p.title}」没有上架${tail}`);
     else if (Number(p.stock) <= 0) ids.push(`审核商品「${p.title}」库存为 0${tail}`);
   }
+  if (input.mailConfigured === false)
+    ids.push(
+      '没有配置邮件服务（MAIL_PROVIDER_API_KEY）：买家收不到付款 / 发货 / 退款邮件，而小程序与后台都写着会发邮件',
+    );
   return { key: 'launch_not_ready', count: ids.length, ids: ids.slice(0, RECONCILE_IDS_CAP) };
 }
 

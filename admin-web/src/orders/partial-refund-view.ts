@@ -11,7 +11,7 @@
 import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
 import { UPSTREAM_UNAVAILABLE_CODE } from '../api/errors.js';
 import { minorMoneyText } from '../format.js';
-import { upstreamUnavailableNotice, type Gate } from './view.js';
+import { DISPUTE_REFUND_BLOCKED, upstreamUnavailableNotice, type Gate } from './view.js';
 
 interface RefundLike {
   id?: unknown;
@@ -132,7 +132,7 @@ export function partialRefundGate(order: unknown): Gate {
   if ((order as { has_dispute?: unknown }).has_dispute === true) {
     return {
       ok: false,
-      reason: '买家正在通过银行要回货款（拒付），现在不能退款；请先到「风控」页处理',
+      reason: DISPUTE_REFUND_BLOCKED,
     };
   }
   if (refundsOf(order).some((r) => IN_FLIGHT.has(String(r.status)))) {

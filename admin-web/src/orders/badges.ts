@@ -13,7 +13,7 @@
  */
 import { AFTER_SALE_OPEN_STATUSES, ORDER_STATUS, type OrderStatus } from '@waselect/shared';
 import type { BadgeTone } from '../ui/badge.js';
-import { ORDER_STATUS_LABELS, isDisputeLocked } from './view.js';
+import { DISPUTE_LOCK_TEXT, ORDER_STATUS_LABELS, disputeLockState } from './view.js';
 
 export interface BadgeSpec {
   text: string;
@@ -109,8 +109,11 @@ export function flagBadges(order: unknown): BadgeSpec[] {
   // 三端模拟测试（2026-10-11）：关单后才到账的钱要退——原先列表与详情头只写"已过期"，要读到时间线最后一行才知道
   const latePaidPending =
     o?.late_paid === true && (o.status === 'expired' || o.status === 'cancelled');
+  const dispute = disputeLockState(order);
   return [
-    ...(isDisputeLocked(order) ? [{ text: '拒付中', tone: 'danger' as const }] : []),
+    ...(dispute !== null
+      ? [{ text: DISPUTE_LOCK_TEXT[dispute].badge, tone: 'danger' as const }]
+      : []),
     ...(latePaidPending ? [{ text: '迟到付款待退', tone: 'danger' as const }] : []),
     // AJ-484：付款超过承诺的 N 个工作日仍未发货（服务端按 JST 工作日算好的 ship_overdue）
     ...(o?.ship_overdue === true ? [{ text: '超时未发货', tone: 'danger' as const }] : []),

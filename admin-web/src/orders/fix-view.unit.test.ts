@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { ADMIN_NOTE_MAX_LENGTH, SHIP_MAX_CHARS } from '@waselect/shared';
 import {
   cancelGate,
+  fixConfirmText,
+  TRACKING_SHAPE_WARNING,
   shipmentFixErrors,
   shipmentFixGate,
   fixDoneNotice,
@@ -112,6 +114,23 @@ describe('fixDoneNotice', () => {
     ['cancel', undefined, '库存已回补'],
   ] as const)('%s / 邮箱=%s → 含「%s」', (mode, email, want) => {
     expect(fixDoneNotice(mode, { contact_email: email })).toContain(want);
+  });
+});
+
+// 规律排查 2026-10-12：完成提示早已按邮箱说，确认句却一律写"给买家发一封更正邮件 / 重发一封发货邮件"；
+//   运单号形状提示也一律写"确认后会立刻发邮件给买家"
+describe('fixConfirmText（撤销发货 / 改运单号的确认句）', () => {
+  it.each([
+    ['revert', 'a@example.com', '并给买家发一封更正邮件'],
+    ['revert', '', '买家没留邮箱，不会收到更正邮件'],
+    ['fix', 'a@example.com', '会给买家重发一封发货邮件'],
+    ['fix', '', '买家没留邮箱，不会收到新的发货邮件'],
+    ['cancel', '', '库存会回补'],
+  ] as const)('🔴 %s / 邮箱=%s → 含「%s」', (mode, email, want) => {
+    expect(fixConfirmText(mode, { contact_email: email })).toContain(want);
+  });
+  it('🔴 运单号形状提示不再一律说"会立刻发邮件"', () => {
+    expect(TRACKING_SHAPE_WARNING).not.toContain('发邮件');
   });
 });
 

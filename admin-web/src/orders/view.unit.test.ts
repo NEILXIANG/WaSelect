@@ -349,7 +349,9 @@ describe('refundGate（退款闸门）', () => {
     const g = refundGate(withStatus('paid', { has_dispute: true }));
     expect(g.ok).toBe(false);
     expect(g.reason).toContain('拒付');
-    expect(g.reason).toContain('风控');
+    // 规律排查 2026-10-12：原断言要求"风控"——风控页只有「拉黑买家…」，真正的出口是本单的「解除拒付限制…」
+    expect(g.reason).toContain('「解除拒付限制…」');
+    expect(g.reason).not.toContain('风控');
     expect(g.reason).not.toMatch(/\d{5}/);
   });
 

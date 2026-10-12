@@ -722,6 +722,7 @@ describe('详情页头的状态徽章（AJ-400）', () => {
   it('待发货 + 拒付中：页头出「已付款」「待发货」「拒付中」三枚，色调各自对应', async () => {
     status = 'paid';
     hasDispute = true;
+    events = [{ status: 'dispute_opened', note: 'dp_1', at: '2026-10-01T00:00:00Z' }];
     const el = await open();
     const badges = [...el.querySelectorAll('[aria-label="订单状态徽章"] .badge')].map((b) => [
       b.textContent,
@@ -732,6 +733,24 @@ describe('详情页头的状态徽章（AJ-400）', () => {
       ['待发货', 'badge badge-warn'],
       ['拒付中', 'badge badge-danger'],
     ]);
+  });
+});
+
+// 规律排查 2026-10-12：已败诉的拒付（has_dispute 仍为 true）右栏写"有进行中的拒付"，退款提示叫人"先到「风控」页处理"——
+//   风控页只有「拉黑买家…」，真正的出口是本单的「解除拒付限制…」
+describe('拒付已败诉：右栏与退款提示说实话', () => {
+  it('🔴 右栏写已败诉，不写"进行中"；出口按钮在', async () => {
+    status = 'shipped';
+    hasDispute = true;
+    events = [
+      { status: 'dispute_opened', note: 'dp_1', at: '2026-10-01T00:00:00Z' },
+      { status: 'dispute_closed', note: 'dp_1:lost', at: '2026-10-08T00:00:00Z' },
+    ];
+    const el = await open();
+    expect(fieldText(el, '风险状态')).toContain('拒付已败诉');
+    expect(fieldText(el, '风险状态')).not.toContain('进行中');
+    // 退款按钮此时不出现（闸门不过），出口按钮在
+    expect(button(el, '解除拒付限制…')).not.toBeNull();
   });
 });
 

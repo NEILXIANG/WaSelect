@@ -30,7 +30,12 @@ import {
   RESULT_MISMATCH_PREFIX,
   RESULT_STATUS_CONFLICT,
 } from './webhook-results.js';
-import { RECONCILE_IDS_CAP, reportLaunchReadiness } from './daily-reconciliation.js';
+import {
+  launchReadinessInput,
+  RECONCILE_IDS_CAP,
+  reportLaunchReadiness,
+  scanLaunchReadiness,
+} from './daily-reconciliation.js';
 
 let db: Db;
 const JOB_SECRET = 'internal-job-secret-'.padEnd(40, 'x');
@@ -600,6 +605,27 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
       at: new Date(),
     });
     expect(sink.find('launch_ready')).toHaveLength(1);
+  });
+
+  // 规律排查 2026-10-12：生产不配 MAIL_PROVIDER_API_KEY 也能启动（只用记日志的发信器），
+  //   而小程序与后台多处写着"付款、发货、退款时会收到邮件"——买家一封都收不到，也没人发现
+  it('🔴 生产没配邮件服务 → 就绪检查报一条；配了不报；staging 不要求', async () => {
+    await db`insert into shipping_rates (carrier, max_weight_g, price_jpy, active) values ('Japan Post EMS', 2000, 4950, true)`;
+    await db`insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)
+             values ('USD', 0.0070, 0.0068, 0.03, now() - interval '1 hour')`;
+    const base = { DISPLAY_CURRENCIES: ['JPY', 'USD'], REVIEW_MODE: 'off' };
+    const scan = (c: Record<string, unknown>) =>
+      scanLaunchReadiness(db, {
+        ...launchReadinessInput(c as Parameters<typeof launchReadinessInput>[0]),
+        at: new Date(),
+      });
+    expect((await scan({ ...base, NODE_ENV: 'production' })).ids).toEqual([
+      '没有配置邮件服务（MAIL_PROVIDER_API_KEY）：买家收不到付款 / 发货 / 退款邮件，而小程序与后台都写着会发邮件',
+    ]);
+    expect(
+      (await scan({ ...base, NODE_ENV: 'production', MAIL_PROVIDER_API_KEY: 're_x' })).count,
+    ).toBe(0);
+    expect((await scan({ ...base, NODE_ENV: 'staging' })).count).toBe(0);
   });
 
   it('开发环境不跑上线就绪检查（测试库 / 本地库的运费表常是空的，报了只是噪音）', async () => {

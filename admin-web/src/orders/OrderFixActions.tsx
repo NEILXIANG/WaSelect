@@ -20,6 +20,7 @@ import { cancelOrder, fixShipment, revertShipment, type AdminApi } from './api.j
 import { trackingNoRecognized } from '@waselect/shared';
 import {
   cancelGate,
+  fixConfirmText,
   fixDoneNotice,
   shipmentFixErrors,
   shipmentFixGate,
@@ -245,13 +246,7 @@ export function OrderFixActions({
           </label>
           {confirming ? (
             <div className="row2">
-              <span className="muted">
-                {mode === 'cancel'
-                  ? '确认取消？不可撤销，库存会回补。'
-                  : mode === 'revert'
-                    ? '确认撤销？订单回到待发货、运单号清空，并给买家发一封更正邮件。'
-                    : '确认修改？会给买家重发一封发货邮件。'}
-              </span>
+              <span className="muted">{fixConfirmText(mode, order)}</span>
               {mode === 'fix' && !trackingNoRecognized(carrier, trackingNo) && (
                 <span className="error">{TRACKING_SHAPE_WARNING}</span>
               )}

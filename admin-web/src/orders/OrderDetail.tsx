@@ -32,6 +32,8 @@ import {
   addressHistoryRows,
   addressSummary,
   amountBreakdown,
+  DISPUTE_LOCK_TEXT,
+  disputeLockState,
   isDisputeLocked,
   logisticsView,
   paymentSummary,
@@ -275,9 +277,10 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
               <div className="field">
                 <span className="label">风险状态</span>
                 <span className={isDisputeLocked(order) ? 'error' : 'muted'}>
-                  {isDisputeLocked(order)
-                    ? '有进行中的拒付：退款与发货已锁（可在「解除拒付限制…」人工解除）'
-                    : '无进行中的拒付'}
+                  {(() => {
+                    const d = disputeLockState(order);
+                    return d === null ? '无拒付限制' : DISPUTE_LOCK_TEXT[d].detail;
+                  })()}
                 </span>
               </div>
             </aside>
