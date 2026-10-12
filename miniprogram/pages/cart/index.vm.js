@@ -274,3 +274,23 @@ export function quoteRetryable(code, lineCount) {
   if (code === SALES_PAUSED_CODE || code === FORBIDDEN_CODE) return false;
   return !MUST_CHANGE_CART.has(code);
 }
+
+/**
+ * 行上的变价说明（两端逐页走查第三轮 2026-10-12：改价后行价被悄悄刷新，买家不知道多付了钱）。
+ * @param {number} from 加购时的单价
+ * @param {number} to 当前单价
+ * @returns {string}
+ */
+export function priceChangeNote(from, to) {
+  return `价格已由 ${formatJpy(from)}调整为 ${formatJpy(to)}`;
+}
+
+/**
+ * 下架（40401）时错误条的话（两端逐页走查第三轮 2026-10-12）：与售罄同口径——说是哪件、怎么办，不带报障编号
+ * （下架是正常状态，不是故障；原先写"商品不存在或已下架"并附编号，像是系统坏了）。
+ * @param {string} title 那一行的商品名（找不到给空串）
+ * @returns {string}
+ */
+export function goneQuoteError(title) {
+  return title === '' ? '有商品已下架，移除后才能结算' : `「${title}」已下架，移除后才能结算`;
+}

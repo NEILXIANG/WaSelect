@@ -65,6 +65,31 @@ describe('syncPrices（契约 0.6.39 Quote.lines；三端联动模拟 2026-10-08
   });
 });
 
+// 两端逐页走查第三轮 2026-10-12：店家改价后行价被报价悄悄刷新——加购时 1,980、现在 2,480，买家多付 500 却没有任何提示
+describe('priceChanges：同步之前算出哪些商品变了价（不改购物车）', () => {
+  it('🔴 只列快照价与当前价不同的行；脏行 / 不在车里 / 没有快照价的不列；调用后购物车不变', () => {
+    const cart = createCartStore({ storage: memStorage().storage });
+    cart.add({ productId: 'p-1', title: '宇治抹茶 生巧克力', image: '', priceJpy: 1980 } as never);
+    cart.add({ productId: 'p-2', title: '香蕉蛋糕', image: '', priceJpy: 1400 } as never);
+    cart.add({ productId: 'p-3', title: '无快照', image: '' } as never);
+    expect(
+      cart.priceChanges([
+        { product_id: 'p-1', unit_price_jpy: 2480 },
+        { product_id: 'p-2', unit_price_jpy: 1400 },
+        { product_id: 'p-3', unit_price_jpy: 900 },
+        { product_id: 'p-x', unit_price_jpy: 1 },
+        null,
+      ]),
+    ).toEqual([{ productId: 'p-1', from: 1980, to: 2480 }]);
+    expect(cart.items().map((i) => (i as { priceJpy?: number }).priceJpy)).toEqual([
+      1980,
+      1400,
+      undefined,
+    ]);
+    expect(cart.priceChanges(undefined)).toEqual([]);
+  });
+});
+
 describe('add（加购与合并）', () => {
   it('新商品进一行；读出来的 items 是副本（改返回值不改购物车）', () => {
     const cart = createCartStore({ storage: memStorage().storage });

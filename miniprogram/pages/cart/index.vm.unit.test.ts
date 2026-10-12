@@ -27,6 +27,8 @@ import {
   UNDO_WINDOW_MS,
   selectionBar,
   stockAdjust,
+  priceChangeNote,
+  goneQuoteError,
 } from './index.vm.js';
 
 const ITEMS = [
@@ -392,5 +394,24 @@ describe('stockAdjust（库存不足时改到可买件数）', () => {
     expect(stockAdjust(rows, err({ product_id: 'p-9', stock: 1 }))).toBeNull();
     expect(stockAdjust(rows, err({ product_id: 'p-2', stock: 3 }))).toBeNull();
     expect(stockAdjust(null as never, null)).toBeNull();
+  });
+});
+
+// 两端逐页走查第三轮 2026-10-12：改价后行价被悄悄刷新，买家不知道多付了钱
+describe('priceChangeNote', () => {
+  it('🔴 涨价 / 降价都说清从多少变成多少', () => {
+    expect(priceChangeNote(1980, 2480)).toBe('价格已由 1,980 日元调整为 2,480 日元');
+    expect(priceChangeNote(2480, 1980)).toBe('价格已由 2,480 日元调整为 1,980 日元');
+  });
+});
+
+// 两端逐页走查第三轮 2026-10-12：下架时错误条写"商品不存在或已下架"并带报障编号——下架是正常状态，不是故障；
+//   售罄早已改成"「名称」已售罄，移除后才能结算"（AJ-493），两者同口径
+describe('goneQuoteError', () => {
+  it('🔴 写明是哪件下架了、怎么办；名称缺失时给通用说法', () => {
+    expect(goneQuoteError('有田烧 名窑 染付 大花瓶 尺二')).toBe(
+      '「有田烧 名窑 染付 大花瓶 尺二」已下架，移除后才能结算',
+    );
+    expect(goneQuoteError('')).toBe('有商品已下架，移除后才能结算');
   });
 });

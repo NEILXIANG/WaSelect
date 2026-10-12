@@ -260,6 +260,28 @@ export function createCartStore(deps) {
       return changed;
     },
 
+    /**
+     * 同步之前算出哪些商品变了价（不改购物车；两端逐页走查第三轮 2026-10-12）。
+     * @why `syncPrices` 会把行价悄悄换成当前价——加购时 1,980、现在 2,480，买家多付 500 却没有任何提示。
+     *      页面拿这份清单在那一行说一句"价格已由…调整为…"。
+     * @param {unknown} lines 报价的 `lines`
+     * @returns {Array<{productId: string, from: number, to: number}>}
+     * @limitation 没有快照价的旧条目（老版本加购的）不列：不知道"从多少"就不说。
+     */
+    priceChanges(lines) {
+      if (!Array.isArray(lines)) return [];
+      const out = [];
+      for (const l of lines) {
+        const id = l?.product_id;
+        const price = l?.unit_price_jpy;
+        if (typeof id !== 'string' || !Number.isInteger(price) || price <= 0) continue;
+        const found = items.find((i) => i.productId === id);
+        if (found !== undefined && Number.isInteger(found.priceJpy) && found.priceJpy !== price)
+          out.push({ productId: id, from: found.priceJpy, to: price });
+      }
+      return out;
+    },
+
     /** 组装 quote / 建单的 items 形状（契约 OrderItemsInput）——**只取勾选的**（A3，@see @limitation 五）。 */
     toOrderItems() {
       return items

@@ -35,6 +35,8 @@ import {
   quoteErrorText,
   quoteRetryable,
   stockAdjust,
+  priceChangeNote,
+  goneQuoteError,
   selectionBar,
   undoAvailable,
   undoView,
@@ -220,6 +222,10 @@ Page({
       const quote = quoteView(res);
       // 行价跟着报价走（契约 0.6.39 lines；三端联动模拟 2026-10-08）：店家改价后快照价过期，
       // 原先同一屏"行价 1,400 円 / 商品合计 1,600 円"对不上
+      // 变价先记下再同步（两端逐页走查第三轮 2026-10-12：原先行价被悄悄换掉，买家不知道多付了钱）
+      for (const c of app.globalData.cart.priceChanges(res?.lines)) {
+        this.priceNotes = { ...this.priceNotes, [c.productId]: priceChangeNote(c.from, c.to) };
+      }
       const repriced = app.globalData.cart.syncPrices(res?.lines);
       this.setData({
         quote,
@@ -261,6 +267,12 @@ Page({
         quoteRetry: quoteRetryable(code, lineCount),
         gate: checkoutGate({ hasError: true, errorCode: code, lineCount }),
       });
+      // 下架（40401）且服务端指出了是哪件：与售罄同口径，说名称、不带报障编号（两端逐页走查第三轮）
+      const goneId = code === 40401 ? e?.data?.product_id : undefined;
+      if (typeof goneId === 'string') {
+        const title = this.data.rows.find((r) => r.productId === goneId)?.title ?? '';
+        this.setData({ quoteError: goneQuoteError(title), quoteErrorRef: '' });
+      }
       // AJ-493：库存为 0 → 那一行标"已售罄，请移除"，错误条说人话、不出错误码（售罄是正常状态，不是故障）
       if (adj !== null && adj.qty === 0) {
         const title = this.data.rows.find((r) => r.productId === adj.productId)?.title ?? '';
@@ -296,15 +308,24 @@ Page({
    */
   withStockNote(rows) {
     const note = this.stockNote ?? null;
+    const prices = this.priceNotes ?? {};
     return rows.map((r) => ({
       ...r,
-      noteText: note !== null && note.productId === r.productId ? note.text : '',
+      // 库存说明优先（它解释了数量为什么被改）；否则说变价（两端逐页走查第三轮）
+      noteText:
+        note !== null && note.productId === r.productId ? note.text : (prices[r.productId] ?? ''),
     }));
   },
 
   /** 用户动了那一行（改数量 / 删除）→ 说明作废。 */
   clearStockNote(productId) {
     if (this.stockNote?.productId === productId) this.stockNote = null;
+    // 变价说明同样留到买家动这一行为止
+    if (this.priceNotes?.[productId] !== undefined) {
+      const rest = { ...this.priceNotes };
+      delete rest[productId];
+      this.priceNotes = rest;
+    }
   },
 
   /** - / + 改数量（本地立刻生效，报价走防抖）。 */
