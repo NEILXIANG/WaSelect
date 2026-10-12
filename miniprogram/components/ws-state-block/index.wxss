@@ -18,6 +18,8 @@
   flex-direction: column;
   align-items: center;
   padding: var(--ws-space-section) var(--ws-space-gutter);
+  /* 全入口点击测试 2026-10-11：整页空状态贴着页顶、下面大半屏空白——上方多留一些，视觉重心落在页面中上部 */
+  padding-top: calc(var(--ws-space-section) * 2.5);
   text-align: center;
 }
 

@@ -32,11 +32,15 @@
 
   <!-- 搜索：输入框 + 按钮。⚠️ 仍是首页原地筛选（生产没有独立搜索页），
        与原型那个跳搜索页的 navigator 形态不同，这里**不改行为只改样式**。 -->
-  <view class="ws-gutter home__search-row">
+  <!-- 用户 2026-10-11 截图指出：原先输入框只占半行、「搜索」是同宽的黑色实心大按钮，喧宾夺主、圆角也对不上。
+       参照成熟微信商城：一整条胶囊搜索框，左放大镜、中输入、右端嵌一个小号「搜索」（键盘上的"搜索"键同样能提交） -->
+  <view class="ws-gutter">
+  <view class="home__searchbox">
+    <view class="home__glass" />
     <input
       class="home__search"
       value="{{keyword}}"
-      placeholder="搜索商品"
+      placeholder="搜商品名或品牌，中日文都行"
       maxlength="64"
       confirm-type="search"
       bindinput="onSearchInput"
@@ -48,7 +52,8 @@
       用户输入了新词点搜索却毫无反应，列表还是旧结果，看起来就是"搜索坏了"。
       在途状态由列表区显示；正确性由 reload 的序号保证（@see ./index.js B36）。
     -->
-    <ws-button class="home__go" text="搜索" type="primary" bindtap="onSearch" />
+    <view class="home__go" hover-class="ws-press" bindtap="onSearch" aria-role="button">搜索</view>
+  </view>
   </view>
   <!-- A4（2026-10-09）：列表是搜索结果时说出来，并给"清除搜索"——否则切分类后看不出词还在生效 -->
   <view class="ws-gutter home__searching" wx:if="{{searching}}">
@@ -66,7 +71,7 @@
        ⚠️ hover-class 放在 swiper-item **里面**那层 view 上（P2-41）：官方只给 view / button / navigator
             支持 hover-class，写在 swiper-item 上不生效（点了没有按下反馈）。tap 也随之放到内层 view。 -->
   <swiper
-    wx:if="{{slides.length > 0}}"
+    wx:if="{{slides.length > 0 && !searching}}"
     class="home__swiper ws-gutter"
     indicator-dots="{{slides.length > 1}}"
     autoplay="{{slides.length > 1}}"
@@ -80,22 +85,45 @@
     </swiper-item>
   </swiper>
 
-  <!-- 分类 tab：横向可滚（分类数超过一屏时不出界、不断行） -->
-  <!-- 选中项自动滚进可视区（三端模拟测试 2026-10-11：分类多了以后点最右边的一个，选中项看不见；vm tabIntoView） -->
-  <scroll-view class="tabs ws-gutter" scroll-x enable-flex scroll-into-view="{{tabView}}" scroll-with-animation>
+  <!-- 分类：文字 + 选中下划线（与订单页页签、底部标签栏同一套语言；用户 2026-10-11 截图问"是否主流"——原为描边胶囊，一排框太吵）。
+       横向可滚；分类多时右侧「分类 ▾」展开全部分类网格（主流商城的"全部分类"入口），右缘渐隐提示还能滑 -->
+  <view class="ws-gutter home__cats">
+    <scroll-view class="tabs" scroll-x enable-flex scroll-into-view="{{tabView}}" scroll-with-animation>
+      <view
+        wx:for="{{tabs}}"
+        wx:key="key"
+        id="tab-{{index}}"
+        class="tab {{item.active ? 'tab--active' : ''}}"
+        data-key="{{item.key}}"
+        hover-class="ws-press"
+        bindtap="onCategoryTap"
+      >
+        {{item.label}}
+      </view>
+      <view class="tabs__end" />
+    </scroll-view>
+    <view
+      class="home__cats-all"
+      wx:if="{{tabs.length > 6}}"
+      hover-class="ws-press"
+      bindtap="onToggleCats"
+      aria-role="button"
+      aria-label="{{catsOpen ? '收起全部分类' : '展开全部分类'}}"
+    >
+      <text>{{catsOpen ? '收起' : '分类'}}</text>
+      <view class="home__cats-caret {{catsOpen ? 'home__cats-caret--up' : ''}}" />
+    </view>
+  </view>
+  <view class="ws-gutter home__cat-panel" wx:if="{{catsOpen}}">
     <view
       wx:for="{{tabs}}"
       wx:key="key"
-      id="tab-{{index}}"
-      class="tab {{item.active ? 'tab--active' : ''}}"
+      class="home__cat-cell {{item.active ? 'home__cat-cell--active' : ''}}"
       data-key="{{item.key}}"
       hover-class="ws-press"
       bindtap="onCategoryTap"
-    >
-      {{item.label}}
-    </view>
-    <view class="tabs__end" />
-  </scroll-view>
+    >{{item.label}}</view>
+  </view>
 
   <!-- 首屏加载：只有"列表还是空的 + 在加载"时才整屏占位，追加时不打扰已加载的内容。
        小程序评估 B（AJ-416）：占位换成骨架——按大卡的真实版式（图位 + 两行字）占位，内容出来时不跳版式 -->

@@ -1,5 +1,5 @@
 {
-  "navigationBarTitleText": "WaSelect",
+  "navigationBarTitleText": "商品详情",
   "usingComponents": {
     "ws-price": "/components/ws-price/index",
     "ws-button": "/components/ws-button/index",

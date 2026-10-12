@@ -39,24 +39,53 @@
 }
 
 /* ── 搜索行 ────────────────────────────────────────────────────── */
-.home__search-row {
+/* 搜索栏（用户 2026-10-11 截图指出比例失调）：一整条胶囊，输入框占满，右端小号「搜索」嵌在框里 */
+.home__searchbox {
   display: flex;
   align-items: center;
+  padding: var(--ws-space-hair) var(--ws-space-hair) var(--ws-space-hair) var(--ws-space-stack);
+  background: var(--ws-surface-sunk);
+  border-radius: var(--ws-radius-pill);
+}
+
+/* 放大镜：一个圆环 + 斜柄，用边框画（不引图片资源） */
+.home__glass {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  width: var(--ws-space-stack);
+  height: var(--ws-space-stack);
+  margin-right: var(--ws-space-inline);
+  border: calc(var(--ws-border-width) * 2) solid var(--ws-ink-mute);
+  border-radius: 50%;
+}
+
+.home__glass::after {
+  content: '';
+  position: absolute;
+  right: calc(var(--ws-space-tight) * -1.5);
+  bottom: calc(var(--ws-space-tight) * -1);
+  width: var(--ws-space-hair);
+  height: calc(var(--ws-border-width) * 2);
+  background: var(--ws-ink-mute);
+  transform: rotate(45deg);
 }
 
 .home__search {
   flex: 1;
   min-width: 0;
-  padding: var(--ws-space-inline) var(--ws-space-stack);
   font-size: var(--ws-f-base);
   color: var(--ws-ink);
-  background: var(--ws-surface-sunk);
-  border-radius: var(--ws-radius-pill);
 }
 
 .home__go {
   flex: none;
-  margin-left: var(--ws-space-inline);
+  margin-left: var(--ws-space-hair);
+  padding: var(--ws-space-hair) var(--ws-space-stack);
+  font-size: var(--ws-f-sm);
+  color: var(--ws-ink-inverse);
+  background: var(--ws-accent);
+  border-radius: var(--ws-radius-pill);
 }
 
 /* ── 轮播（D-51）──────────────────────────────────────────────────
@@ -88,35 +117,92 @@
 }
 
 /* ── 分类 tab ──────────────────────────────────────────────────── */
-.tabs {
-  white-space: nowrap;
+.home__cats {
+  display: flex;
+  align-items: stretch;
   margin-top: var(--ws-space-card);
+  border-bottom: var(--ws-border-width) solid var(--ws-line);
 }
 
+.tabs {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* 文字页签（与订单页 .order-tabs__item 同一套：灰字 → 选中墨色 + 强调色下划线） */
 .tab {
   display: inline-block;
-  padding: var(--ws-space-hair) var(--ws-space-inline);
-  margin-right: var(--ws-space-inline);
-  border: var(--ws-border-width) solid var(--ws-line);
-  border-radius: var(--ws-radius-pill);
-  background: var(--ws-surface);
+  min-height: var(--ws-touch-min);
+  line-height: var(--ws-touch-min);
+  margin-right: var(--ws-space-card);
+  color: var(--ws-ink-mute);
+  font-size: var(--ws-f-base);
+  border-bottom: var(--ws-hair-thick) solid transparent;
+}
+
+.tab--active {
+  color: var(--ws-ink);
+  font-weight: 600;
+  border-bottom-color: var(--ws-accent);
+}
+
+/* 右侧「分类 ▾」：底色同页面，左侧渐隐盖住滚出去的页签，提示"还能往右滑" */
+.home__cats-all {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding-left: var(--ws-space-inline);
+  color: var(--ws-ink-soft);
+  font-size: var(--ws-f-sm);
+  background: var(--ws-canvas);
+}
+
+.home__cats-all::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  width: var(--ws-space-section);
+  background: linear-gradient(to right, transparent, var(--ws-canvas));
+}
+
+.home__cats-caret {
+  width: 0;
+  height: 0;
+  margin-left: var(--ws-space-tight);
+  border-left: var(--ws-space-tight) solid transparent;
+  border-right: var(--ws-space-tight) solid transparent;
+  border-top: var(--ws-space-hair) solid var(--ws-ink-soft);
+}
+
+.home__cats-caret--up {
+  transform: rotate(180deg);
+}
+
+/* 全部分类面板：四列网格，选中项强调色 */
+.home__cat-panel {
+  display: flex;
+  flex-wrap: wrap;
+  padding-top: var(--ws-space-inline);
+  padding-bottom: var(--ws-space-inline);
+  border-bottom: var(--ws-border-width) solid var(--ws-line);
+}
+
+.home__cat-cell {
+  width: 25%;
+  min-height: var(--ws-touch-min);
+  line-height: var(--ws-touch-min);
+  text-align: center;
   color: var(--ws-ink-soft);
   font-size: var(--ws-f-sm);
 }
 
-/* 三端模拟测试 2026-10-11：分类多到要横滑时，滚到底最后一个 tab 右边被裁。
-   @measured 开发者工具模拟器：最后一个 tab 加 margin-right 16px（getStyles 读到已生效）后仍被裁——
-   横向滚动容器的末端 padding / 末元素 margin 都不计入可滚动宽度。改为末尾放一个有宽度的占位块（.tabs__end） */
-.tabs__end {
-  display: inline-block;
-  width: var(--ws-space-gutter);
-  height: var(--ws-border-width);
-}
-
-.tab--active {
-  background: var(--ws-accent);
-  border-color: var(--ws-accent);
-  color: var(--ws-ink-inverse);
+.home__cat-cell--active {
+  color: var(--ws-accent-deep);
+  font-weight: 600;
 }
 
 /* ── 商品流（S4 起：纵向编辑大卡，不再是两列网格）─────────────────────

@@ -31,7 +31,7 @@
       wx:if="{{actionText}}"
       class="ws-state__action"
       text="{{actionText}}"
-      type="default"
+      type="{{kind === 'empty' ? 'primary' : 'default'}}"
       bindtap="onAction"
     />
     <!-- ⚠️ 用 view 不是 text：hover-class 对 text 不生效（@see index.js @limitation 二） -->

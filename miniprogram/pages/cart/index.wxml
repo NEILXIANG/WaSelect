@@ -14,12 +14,16 @@
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
 <view class="ws-page {{rows.length > 0 ? 'ws-page--with-tabbar-buybar' : 'ws-page--with-tabbar'}} cart">
-  <view class="ws-gutter" wx:if="{{empty}}">
-    <view class="ws-card state">
-      <text class="ws-note">购物车是空的</text>
-      <ws-button text="去逛逛" type="default" bindtap="onGoShopping" />
-    </view>
-  </view>
+  <!-- 全入口点击测试 2026-10-11：原先页顶一张小卡片写"购物车是空的"、下面整屏空白；
+       改用全站统一的空状态组件（居中、说明下一步、主按钮），与订单页 / 地址页的空态一致 -->
+  <ws-state-block
+    wx:if="{{empty}}"
+    kind="empty"
+    title="购物车还是空的"
+    reason="去首页挑几件日本好物，加入购物车后在这里一起结算"
+    actionText="去逛逛"
+    bindaction="onGoShopping"
+  />
 
   <block wx:else>
     <view class="ws-gutter cart__list">

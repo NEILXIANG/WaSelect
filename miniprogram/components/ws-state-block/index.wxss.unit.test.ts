@@ -27,3 +27,20 @@ describe('ws-state-block：失败符号', () => {
     expect(rule('.ws-state__glyph--fail::after')).toContain('content:');
   });
 });
+
+// 全入口点击测试 2026-10-11：空购物车的「去逛逛」是白底次要按钮、整块贴在页顶——空状态时它就是唯一该做的事
+describe('空状态的行动按钮与位置', () => {
+  const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8').replace(
+    /<!--[\s\S]*?-->/g,
+    '',
+  );
+  it('🔴 行动按钮在 empty 时是主按钮（实心），其它状态（重试等）保持次要', () => {
+    const btn = /<ws-button\b[^>]*class="ws-state__action"[^>]*>/.exec(wxml)?.[0] ?? '';
+    expect(btn).toContain("type=\"{{kind === 'empty' ? 'primary' : 'default'}}\"");
+  });
+  it('🔴 整页（非 compact）空状态上方留出更多空间，不贴页顶', () => {
+    const css = readFileSync(new URL('./index.wxss', import.meta.url), 'utf8');
+    const block = /\.ws-state\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(block).toMatch(/padding-top:\s*calc\(var\(--ws-space-section\)\s*\*\s*2/);
+  });
+});

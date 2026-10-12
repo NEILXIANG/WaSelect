@@ -307,14 +307,57 @@ describe('首页薄壳：`GET /home`（轮播与分类，D-51）', () => {
  * @why 写成源码守卫而不是行为用例：薄壳测试不渲染 wxml，`loading` 接在组件上时
  *      行为探针看不见它。而这条的形态特征很硬——"搜索按钮的标签里不得出现 loading="。
  */
+// 用户 2026-10-11 截图问分类栏是否主流：改为文字 + 下划线（与订单页页签同一套），右侧「分类 ▾」展开全部分类网格
+describe('首页分类：展开全部分类面板', () => {
+  it('🔴 onToggleCats 打开 / 收起；在面板里选了分类后面板自动收起', async () => {
+    call('onLoad');
+    calls[0]!.d.resolve(listOf('all', 1));
+    await settle();
+    expect(page.data['catsOpen']).toBe(false);
+    call('onToggleCats');
+    expect(page.data['catsOpen']).toBe(true);
+    call('onToggleCats');
+    expect(page.data['catsOpen']).toBe(false);
+    call('onToggleCats');
+    tapCategory('food');
+    expect(page.data['catsOpen']).toBe(false);
+  });
+
+  it('🔴 模板：分类多于 5 个才出现展开按钮；面板里的格子与分类栏同一个点击处理', () => {
+    const src = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8').replace(
+      /<!--[\s\S]*?-->/g,
+      '',
+    );
+    expect(src).toMatch(
+      /wx:if="\{\{tabs\.length > 6\}\}"[^>]*bindtap="onToggleCats"|bindtap="onToggleCats"[^>]*wx:if="\{\{tabs\.length > 6\}\}"/,
+    );
+    const panel =
+      /<view\b[^>]*wx:if="\{\{catsOpen\}\}"[\s\S]*?<\/view>\s*<\/view>/.exec(src)?.[0] ?? '';
+    expect(panel).toContain('bindtap="onCategoryTap"');
+  });
+});
+
+// 2026-10-11 全入口点击测试：搜出结果后大幅轮播仍挡在结果上方，买家要往下翻才看到结果——搜索时收起轮播
+describe('首页搜索时收起轮播', () => {
+  it('🔴 swiper 的显示条件里带 !searching', () => {
+    const src = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8').replace(
+      /<!--[\s\S]*?-->/g,
+      '',
+    );
+    const swiper = /<swiper\b[^>]*?wx:if="([^"]*)"/.exec(src)?.[1] ?? '';
+    expect(swiper).toContain('!searching');
+  });
+});
+
 describe('首页搜索按钮：不得用 loading 吞掉点击（MP3-08）', () => {
   const src = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
 
-  it('🔴 bindtap 是 onSearch 的那个 ws-button 里没有 loading=', () => {
-    const tags = src.match(/<ws-button\b[^>]*>/g) ?? [];
-    const search = tags.filter((t) => t.includes('bindtap="onSearch"'));
-    expect(search.length, '至少有一个搜索按钮').toBeGreaterThan(0);
-    for (const t of search) expect(t, t).not.toMatch(/\sloading=/);
+  // 2026-10-11（用户截图指出搜索栏比例失调）：搜索入口从 ws-button 改为嵌在搜索框里的小号文字按钮（view），
+  //   规则不变——不管是什么标签，绑定 onSearch 的那个都不得带 loading / disabled（会吞掉点击）
+  it('🔴 bindtap 是 onSearch 的那个标签里没有 loading= / disabled=', () => {
+    const tags = src.match(/<[a-z-]+\b[^>]*bindtap="onSearch"[^>]*>/g) ?? [];
+    expect(tags.length, '至少有一个搜索按钮').toBeGreaterThan(0);
+    for (const t of tags) expect(t, t).not.toMatch(/\s(loading|disabled)=/);
   });
 
   it('搜索按钮仍然存在，且键盘确认键走同一个处理函数（两个入口行为一致）', () => {

@@ -59,6 +59,8 @@ Page({
     tabs: [],
     /** 分类栏滚到哪一项（vm `tabIntoView`，scroll-view 的 scroll-into-view）。 */
     tabView: 'tab-0',
+    /** 「全部分类」网格面板开着吗（分类多于 5 个时右侧有展开按钮）。 */
+    catsOpen: false,
     /** 首页轮播（vm `bannerSlides` 的输出）；空数组 = 整个轮播段不渲染。 */
     slides: [],
     /** 商品卡（vm `productCards` 的输出）。 */
@@ -244,7 +246,14 @@ Page({
    * 切分类。
    * @param {WechatMiniprogram.TouchEvent} e `data-key` 来自 wxml（空串 = 全部）
    */
+  /** 展开 / 收起「全部分类」面板。 */
+  onToggleCats() {
+    this.setData({ catsOpen: !this.data.catsOpen });
+  },
+
   onCategoryTap(e) {
+    // 在面板里点了分类：选完就收起（不论是否与当前相同）
+    if (this.data.catsOpen) this.setData({ catsOpen: false });
     const key =
       typeof e?.currentTarget?.dataset?.key === 'string' ? e.currentTarget.dataset.key : '';
     // 点已选中的分类不做任何事：重复请求的结果是列表闪一下 + 白花一次流量

@@ -27,8 +27,6 @@ const MP = resolve(import.meta.dirname);
  * @why 原因必须能被复查：写"它在 flex 容器里"就要真的在 flex 容器里（@measured 见文件头）。
  */
 const EXEMPT: Record<string, string> = {
-  'pages/home/index.wxml:ws-button:home__go':
-    'flex 子项被块化（实测 display=block），margin-left 生效',
   'components/ws-state-block/index.wxml:ws-button:ws-state__action':
     '读码：父级 .ws-state__actions 是 flex 列（display:flex; flex-direction:column），子项被块化，min-width 生效（未在模拟器实测）',
   'pages/index/index.wxml:ws-button:btn':
