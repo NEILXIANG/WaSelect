@@ -110,6 +110,13 @@ function AfterSaleRow({
             onChange={(e) => setNote(e.target.value)}
           />
           {hint !== null && note !== '' && <span className="error">{hint}</span>}
+          {/* 还没写时用灰字说明按钮为什么点不了（第三轮走查 2026-10-12：禁用却不说原因，运营点了没反应）；
+              不用红字：还没开始写不算出错 */}
+          {note === '' && (
+            <span className="muted after-sale-hint">
+              写好处理说明才能结案（买家会在订单详情里看到这句话）
+            </span>
+          )}
           <span className="row-actions">
             {row.canMarkProcessing && (
               <button

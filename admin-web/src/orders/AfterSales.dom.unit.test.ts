@@ -85,6 +85,10 @@ describe('订单详情 · 售后申请', () => {
     expect(button(el, '已处理，结案')?.disabled).toBe(true);
     expect(button(el, '不予处理，结案')?.disabled).toBe(true);
     expect(button(el, '标记处理中')?.disabled).toBe(false);
+    // 第三轮走查 2026-10-12：按钮禁用却没说为什么，运营点了没反应
+    expect(panel?.querySelector('.muted.after-sale-hint')?.textContent).toBe(
+      '写好处理说明才能结案（买家会在订单详情里看到这句话）',
+    );
   });
 
   it('点"标记处理中"：发 resolve {status: processing}，不带 note；之后刷新详情', async () => {
