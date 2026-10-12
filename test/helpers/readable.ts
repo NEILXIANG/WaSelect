@@ -15,7 +15,7 @@
 
 /** 不上屏的键：标识、链接、图片、跳转意图、原始数值。 */
 const SKIP_KEY =
-  /(^id$|Id$|^ids$|Ids$|url$|Url$|^src$|image|Image|thumb|Thumb|^go$|^query$|^path$|^key$|Key$|^ref$|^raw|Raw$|^code$|^status$|Jpy$|Minor$|^qty$|^currency$|^channel$|^postal|^zip|^phone)/;
+  /(^id$|Id$|^ids$|Ids$|url$|Url$|href$|Href$|^src$|image|Image|thumb|Thumb|^go$|^query$|^path$|^key$|Key$|^ref$|^raw|Raw$|^code$|^status$|Jpy$|Minor$|^qty$|^currency$|^channel$|^postal|^zip|^phone)/;
 
 export interface Finding {
   path: string;

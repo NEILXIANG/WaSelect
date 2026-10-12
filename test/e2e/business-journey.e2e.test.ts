@@ -36,6 +36,16 @@ import {
   type ChainServer,
 } from '../helpers/chain-server.js';
 import { unreadable } from '../helpers/readable.js';
+import { getCustomer, listCustomers } from '../../admin-web/src/customers/api.js';
+import {
+  addressLine,
+  customerLabel,
+  customerRows,
+  riskText,
+  statsCards,
+} from '../../admin-web/src/customers/view.js';
+import { listAudit } from '../../admin-web/src/opslog/api.js';
+import { auditRows } from '../../admin-web/src/opslog/view.js';
 import { markDisputeClosed } from '../../server/src/app/mark-disputed.js';
 import { listDisputes } from '../../admin-web/src/risk/api.js';
 import { blockDoneText, disputeRows } from '../../admin-web/src/risk/view.js';
@@ -768,5 +778,40 @@ describe('拒付：开案锁住发货 → 风控页看得懂 → 结案后放行
     expect(row?.hasDispute).toBe(false);
     expect(row?.actions.ship.ok).toBe(true);
     expect(d).toMatchObject({ statusText: '已发货 · 国际运输中', trackingNo: 'EJ987654321JP' });
+  });
+});
+
+/**
+ * 收尾：前面几条旅程攒下了像真的数据（退款、超时、取消、改址、拒付、售后、导出……），
+ * 把后台每个列表页都过一遍「看得懂」判据——不只查旅程走到的那几步，列表里每一行都查。
+ */
+describe('后台各列表页过一遍「看得懂」（用旅程攒下的真实数据）', () => {
+  it('⑮ 订单 / 商品 / 客户列表与详情 / 拒付 / 运营日志：展示文字里没有内部码', async () => {
+    const orders = adminOrderRows((await listOrders(admin())).items);
+    const products = productRows((await listProducts(admin())).items);
+    const customers = customerRows((await listCustomers(admin(), { keyword: '', page: 1 })).items);
+    const detail = await getCustomer(admin(), BUYER_ID);
+    const customer = {
+      title: customerLabel(detail),
+      stats: statsCards(detail.stats),
+      risk: riskText(detail),
+      addresses: (detail.addresses ?? []).map(addressLine),
+    };
+    const disputes = disputeRows(await listDisputes(admin()));
+    const audit = auditRows((await listAudit(admin(), { page: 1, actor: '', target: '' })).items);
+    expect(orders.length).toBeGreaterThanOrEqual(6);
+    expect(audit.length).toBeGreaterThan(5);
+    // @limitation 运营日志"对象"列的订单 / 商品仍是缩短的内部编号（换成订单号要服务端回带，记为未做）——
+    //   单列出来断言现状：哪天修了，这里会红，提醒把这条豁免删掉
+    // targetTitle 是悬停时给技术人员复制的全文 id（刻意保留），不是正文
+    const auditShown = audit.map(({ targetText, targetTitle: _hover, ...rest }) => ({
+      ...rest,
+      targetText: /^(ord-|[0-9a-f]{8}…)/.test(targetText) ? '（内部编号，已知未做）' : targetText,
+    }));
+    expect(audit.some((a) => /^ord-/.test(a.targetText))).toBe(true);
+    show('客户详情（看得懂）', customer);
+    expectReadable({ orders, products, customers, customer, disputes, audit: auditShown });
+    expect(customer.title).toBe('Jing Chen');
+    expect(customer.addresses[0]).toBe('1288 Stockton St, Apt 3B, San Francisco, CA 94133, US');
   });
 });

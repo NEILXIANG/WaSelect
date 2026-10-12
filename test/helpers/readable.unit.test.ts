@@ -47,6 +47,7 @@ describe('visibleTexts：给程序用的键不算展示文字', () => {
       productId: '3f2a9c1e-8b7d-4e6f-a1b2-c3d4e5f60718',
       image: '/assets/placeholder.png',
       trackingUrl: 'https://example.test/?id=1',
+      targetHref: '#/orders/ord-52673684-5517-4f6b-a920-4c62e4f45498',
       go: 'detail',
       totalJpy: 39600,
       status: 'paid',
