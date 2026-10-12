@@ -90,6 +90,22 @@ describe('运费分档面板：加载失败时不可编辑（AJ-232）', () => {
   });
 });
 
+describe('运费分档面板：出错的格子标红（全入口点击测试 2026-10-12）', () => {
+  it('🔴 新增一档留空 → 那一行的重量与运费两格标红（aria-invalid），合法的格子不标', async () => {
+    listFails = false;
+    list = [{ carrier: 'JP_POST_EMS', max_weight_g: 500, price_jpy: 2950, active: true }];
+    const el = await open();
+    await click(button(el, '新增一档'));
+    const rows = [...el.querySelectorAll('tbody tr')];
+    const invalid = (tr: Element | undefined) =>
+      [...(tr?.querySelectorAll('input.input') ?? [])].map(
+        (i) => i.getAttribute('aria-invalid') === 'true' && i.classList.contains('input-error'),
+      );
+    expect(invalid(rows[0])).toEqual([false, false, false]);
+    expect(invalid(rows[1])).toEqual([false, true, true]); // 承运商有默认值，不标
+  });
+});
+
 describe('运费分档面板：确认替换的在途保护（P2-47）', () => {
   it('🔴 PUT 在途时"确认"按钮禁用，连点只发一次', async () => {
     list = [{ carrier: 'JP_POST_EMS', max_weight_g: 500, price_jpy: 2950, active: true }];

@@ -292,6 +292,24 @@ describe('rateRows', () => {
 describe('rateErrors（整表校验）', () => {
   it('一张合法表全过', () => {
     expect(rateErrors([formRow('500', '2200'), formRow('2000', '4050')]).ok).toBe(true);
+    expect(rateErrors([formRow('500', '2200')]).cells).toEqual([]);
+  });
+
+  // 全入口点击测试 2026-10-12：错误清单写"第 10 档：重量上限必填"，但表里哪一格没标出来——档位多了要自己数行
+  it('🔴 cells 指出出错的格子（行下标:字段），供表格标红', () => {
+    const r = rateErrors([
+      formRow('500', '2200'),
+      { ...formRow('', ''), carrier: '' },
+      formRow('99999', '1400'),
+      formRow('2000', '999999'),
+    ]);
+    expect(r.cells).toEqual([
+      '1:carrier',
+      '1:maxWeightG',
+      '1:priceJpy',
+      '2:maxWeightG',
+      '3:priceJpy',
+    ]);
   });
 
   it('⚠️ 空表 → 拒（空表 = 所有订单无法报价）', () => {

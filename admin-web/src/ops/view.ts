@@ -471,9 +471,16 @@ function parseCount(v: unknown): number | null {
  * 整表校验（@see @limitation 一）。
  * @returns 全部问题（不是第一条）：整表替换一次提交，逐条报要提交很多次。
  */
-export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; first: string } {
+export function rateErrors(rows: unknown): {
+  ok: boolean;
+  errors: string[];
+  first: string;
+  /** 出错的格子 `行下标:字段`（carrier / maxWeightG / priceJpy），供表格标红（全入口点击测试 2026-10-12）。 */
+  cells: string[];
+} {
   const list = Array.isArray(rows) ? rows : [];
   const errors: string[] = [];
+  const cells: string[] = [];
   if (list.length === 0) errors.push('至少保留一档运费（空表会让所有订单无法报价）');
 
   // ⚠️ 判重**复用** `rateDuplicates`，不在这里自己拼 key（ADM3-06）。
@@ -491,9 +498,14 @@ export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; firs
     const max = parseCount(maxRaw);
     const price = parseCount(priceRaw);
     const at = `第 ${i + 1} 档`;
-    if (carrier === '') errors.push(`${at}：承运商必填`);
+    if (carrier === '') {
+      errors.push(`${at}：承运商必填`);
+      cells.push(`${String(i)}:carrier`);
+    }
     // ⚠️ "没填"与"填错了"要分开报：合并成一句的话，运营看到"必须是 ≥0 的整数"
     //    会以为自己填了非法值，而实际是**根本没填**——后者才是真正的静默事故。
+    if (max === null || max < 1 || max > SHIPPING_RATE_BOUNDS.maxWeightG)
+      cells.push(`${String(i)}:maxWeightG`);
     if (max === null) {
       errors.push(
         typeof maxRaw === 'string' && maxRaw.trim() === ''
@@ -508,6 +520,8 @@ export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; firs
         `${at}：重量上限不能超过 ${SHIPPING_RATE_BOUNDS.maxWeightG} 克（承运商单件上限 30kg；请检查是否多打了 0）`,
       );
     }
+    if (price === null || price > SHIPPING_RATE_BOUNDS.priceJpy)
+      cells.push(`${String(i)}:priceJpy`);
     if (price === null) {
       errors.push(
         typeof priceRaw === 'string' && priceRaw.trim() === ''
@@ -541,7 +555,7 @@ export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; firs
       `启用中的档位只能属于同一家承运商（现在有 ${[...activeCarriers].join('、')}）：请停用其他承运商的档位，或改成同一个承运商名`,
     );
 
-  return { ok: errors.length === 0, errors, first: errors[0] ?? '' };
+  return { ok: errors.length === 0, errors, first: errors[0] ?? '', cells };
 }
 
 /** 表单行 → 契约 `ShippingRate`（键名换成服务端 snake_case）。 */

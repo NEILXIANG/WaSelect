@@ -97,6 +97,12 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
   const check = rateErrors(rows);
   // 按**表格行的原顺序**给出"是否重复"（不能拿排过序的视图按下标对，AJ-232）
   const duplicates = rateDuplicates(rows);
+  /** 出错的格子标红（与下方错误清单同一份 `rateErrors`，全入口点击测试 2026-10-12）。 */
+  const bad = new Set(check.cells);
+  const cellProps = (i: number, field: 'carrier' | 'maxWeightG' | 'priceJpy') =>
+    bad.has(`${String(i)}:${field}`)
+      ? { className: 'input input-error', 'aria-invalid': true as const }
+      : { className: 'input' };
 
   const save = async (): Promise<void> => {
     if (saving) return;
@@ -149,7 +155,7 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
             <tr key={i}>
               <td>
                 <input
-                  className="input"
+                  {...cellProps(i, 'carrier')}
                   value={r.carrier}
                   onChange={(e) =>
                     setRows((prev) =>
@@ -160,7 +166,7 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
               </td>
               <td>
                 <input
-                  className="input"
+                  {...cellProps(i, 'maxWeightG')}
                   value={r.maxWeightG}
                   onChange={(e) =>
                     setRows((prev) =>
@@ -171,7 +177,7 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
               </td>
               <td>
                 <input
-                  className="input"
+                  {...cellProps(i, 'priceJpy')}
                   value={r.priceJpy}
                   onChange={(e) =>
                     setRows((prev) =>
