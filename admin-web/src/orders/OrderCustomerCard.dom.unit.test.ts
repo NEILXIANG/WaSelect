@@ -61,6 +61,22 @@ describe('订单详情 · 客户卡片', () => {
     expect(f?.querySelector('a')?.getAttribute('href')).toBe('#/customers/u-cust-a');
   });
 
+  // 规律排查 2026-10-12：「历史 3 单」含未付款 / 关单的单，「累计付款」只算已付且不扣退款——两个数并排读成"3 单一共这么多"
+  it('🔴 有已付单数时写"历史 3 单（已付 2）· 累计付款 …（不扣退款）"', async () => {
+    const el = await open({
+      customer: {
+        user_id: 'u-cust-a',
+        order_count: 3,
+        paid_order_count: 2,
+        paid_total_jpy: 21380,
+        blocked: false,
+      },
+    });
+    expect(customerField(el)?.textContent).toContain(
+      '历史 3 单（已付 2）· 累计付款 21,380 日元（不扣退款）',
+    );
+  });
+
   it('已拉黑的客户：卡片里标红', async () => {
     const el = await open({
       customer: { user_id: 'u-cust-a', order_count: 1, paid_total_jpy: 4980, blocked: true },

@@ -774,3 +774,13 @@ describe('商品表单：返回列表与回车（审查 2026-10-09 #1 / #3）', 
     expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
   });
 });
+
+// 规律排查 2026-10-12：重量框只写"重量（克）"——报价时系统会另加包材重量，运营若填带包装的重量，包材就算了两遍
+describe('商品表单：重量写明是单件净重', () => {
+  it('🔴 重量框旁说明"单件商品净重，不含包装材料"', async () => {
+    const el = await openWith(null);
+    expect(field(el, '重量（克）').closest('label.field')?.textContent).toContain(
+      '单件商品净重，不含包装材料',
+    );
+  });
+});

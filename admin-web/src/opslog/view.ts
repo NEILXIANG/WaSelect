@@ -344,7 +344,8 @@ const OWNER_RANK: Readonly<Record<ReconcileOwner, number>> = { ops: 0, tech: 1, 
 
 export function reconciliationView(run: ReconciliationRun | null): ReconciliationView {
   if (run === null) return { headline: '还没有自动核对记录', ok: false, summary: '', rows: [] };
-  const when = formatJst(run.ran_at);
+  // 写明时区（规律排查 2026-10-12：在中国的同事读差一小时）
+  const when = `${formatJst(run.ran_at)}（日本时间）`;
   const bad = Object.entries(run.counts).filter(([, n]) => n > 0);
   if (bad.length === 0)
     return { headline: `最近一次自动核对 ${when}：无异常`, ok: true, summary: '', rows: [] };

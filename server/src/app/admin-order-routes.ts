@@ -466,6 +466,8 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
                 customer: {
                   user_id: customer.id,
                   order_count: customer.stats.orderCount,
+                  // 规律排查 2026-10-12：卡片要写"已付几单"，order_count 含未付款 / 关单的单
+                  paid_order_count: customer.stats.paidOrderCount,
                   paid_total_jpy: customer.stats.paidTotalJpy,
                   blocked: customer.blockedAt !== null,
                 },

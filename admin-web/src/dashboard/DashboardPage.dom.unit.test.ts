@@ -232,3 +232,13 @@ describe('工作台：店铺暂停接单时置顶提示', () => {
     expect(banner?.querySelector('a')?.getAttribute('href')).toBe('#/ops');
   });
 });
+
+// 规律排查 2026-10-12：服务端按日本时间切天（jstDayWindow），页面没说——在中国的同事看到"今天"在晚上 11 点就换了
+describe('工作台：日期口径写明日本时间', () => {
+  it('🔴 今日数据 / 近 7 天 / 今日实收三块都写明按日本时间', async () => {
+    const el = await open();
+    for (const t of ['今日数据', '近 7 天', '今日实收 / 已退 / 拒付']) {
+      expect(panelByTitle(el, t)?.textContent, t).toContain('日本时间');
+    }
+  });
+});

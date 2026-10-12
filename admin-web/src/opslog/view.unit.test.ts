@@ -165,7 +165,8 @@ describe('reconciliationView', () => {
       samples: {},
     });
     expect(v).toEqual({
-      headline: '最近一次自动核对 2026-10-06 03:00：无异常',
+      // 规律排查 2026-10-12：只写时刻不写时区，在中国的同事读差一小时
+      headline: '最近一次自动核对 2026-10-06 03:00（日本时间）：无异常',
       ok: true,
       summary: '',
       rows: [],

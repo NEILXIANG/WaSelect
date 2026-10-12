@@ -795,7 +795,8 @@ describe('订单详情操作条：主按钮每屏只留一个（对标 §238，�
     status = 'paid';
     hasDispute = true;
     const el2 = await open();
-    expect(el2.textContent).toContain('发货：有拒付进行中');
+    // 规律排查 2026-10-12：has_dispute 对已败诉也成立，不能只说"进行中"
+    expect(el2.textContent).toContain('发货：有拒付限制（进行中或已败诉）');
   });
 });
 

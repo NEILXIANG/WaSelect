@@ -361,7 +361,7 @@ export function describeResult(r: {
   const reason = typeof r.reason === 'string' ? r.reason : '';
   const fixed: Record<string, string> = {
     status_shipped: '这一单已是「已发货」，没有重复发货',
-    dispute_open: '有拒付进行中，不能发货',
+    dispute_open: '有拒付限制（进行中或已败诉），不能发货',
     test_order: '审核期测试单，不得发货',
     not_found: '订单不存在',
     status_raced: '状态刚被别人改了，请刷新列表再看',

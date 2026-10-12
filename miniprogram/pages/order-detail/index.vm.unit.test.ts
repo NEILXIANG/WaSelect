@@ -721,7 +721,8 @@ describe('afterSaleBrief（交给售后申请页的订单摘要）', () => {
       orderId: 'o-1',
       orderNo: '261012-GQY6QY',
       title: '虎屋 抹茶粉 40g',
-      moreText: '等 2 件',
+      // 规律排查 2026-10-12：原断言"等 2 件"——2 是商品种数（订单列表早已写"等 N 种商品"）
+      moreText: '等 2 种商品',
       image: 'https://img.test/a.webp',
     });
     expect(

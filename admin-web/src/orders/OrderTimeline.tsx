@@ -95,7 +95,7 @@ export function OrderTimeline({
 
   return (
     <div className="field">
-      <span className="label">时间线</span>
+      <span className="label">时间线（日本时间）</span>
       {entries.length === 0 && <span className="muted">—</span>}
       {entries.map((t, i) =>
         t.kind === 'event' ? (

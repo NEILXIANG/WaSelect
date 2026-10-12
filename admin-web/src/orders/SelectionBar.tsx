@@ -79,6 +79,8 @@ export function SelectionBar(p: SelectionBarProps) {
       >
         打印拣货单与面单信息（{p.paidCount}）
       </button>
+      {/* 原因只在悬停里（规律排查 2026-10-12）：按钮灰着、运营看不出为什么 */}
+      {p.paidCount === 0 && <span className="muted">所选里没有待发货的单，拣货单只打待发货的</span>}
     </div>
   );
 }

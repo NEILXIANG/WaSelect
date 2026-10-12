@@ -437,7 +437,8 @@ export function afterSaleBrief(orderId, view) {
     orderId,
     orderNo: typeof v.orderNo === 'string' ? v.orderNo : '',
     title: typeof first.title === 'string' ? first.title : '',
-    moreText: items.length > 1 ? `等 ${String(items.length)} 件` : '',
+    // 种数不是件数（规律排查 2026-10-12；与订单列表"等 N 种商品"同口径）
+    moreText: items.length > 1 ? `等 ${String(items.length)} 种商品` : '',
     image: typeof first.image === 'string' ? first.image : '',
   };
 }

@@ -37,6 +37,7 @@ import {
   itemNames,
   firstRefundReason,
   amountBreakdown,
+  logisticsView,
   refundErrors,
   refundFailureNotice,
   fullRefundErrorNotice,
@@ -987,5 +988,17 @@ describe('amountBreakdown：部分退款汇总', () => {
         partial_refunds: [{ status: 'failed', currency: 'JPY', amount_minor: 800 }],
       }).map((r) => r.label),
     ).toEqual(['商品合计', '运费', '买家实付']);
+  });
+});
+
+// 规律排查 2026-10-12：发货时刻没写时区（页面其它时刻都标"日本时间"）
+describe('logisticsView：发货时刻写明日本时间', () => {
+  it('🔴 "发货于 … （日本时间）"', () => {
+    const v = logisticsView({
+      carrier: 'Japan Post EMS',
+      tracking_no: 'EJ123456789JP',
+      shipped_at: '2026-10-11T07:36:00.000Z',
+    });
+    expect(v?.text).toContain('发货于 2026-10-11 16:36（日本时间）');
   });
 });

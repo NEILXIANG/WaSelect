@@ -141,6 +141,8 @@ export function ProductMainColumn(p: MainColumnProps) {
           <Field
             label="重量（克）"
             required
+            // 报价时系统另加包材重量（PACKAGING_WEIGHT_G）——填带包装的重量，包材就算了两遍（规律排查 2026-10-12）
+            hint="单件商品净重，不含包装材料（下单时系统会另加包材重量）"
             fieldKey="weightG"
             type="number"
             value={form.weightG}

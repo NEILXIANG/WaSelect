@@ -19,7 +19,11 @@ export function OrderCustomerCard({ order }: { order: AdminOrderLike }) {
       <span className="label">客户</span>
       {c !== undefined && (
         <span>
-          历史 {c.order_count ?? 0} 单 · 累计付款 {moneyText(c.paid_total_jpy)}
+          {/* 已付单数与"不扣退款"写出来（规律排查 2026-10-12：历史单数含未付款 / 关单的单，与累计付款并排会被读成同一批单）；
+              旧服务端没有 paid_order_count 时照旧 */}
+          {typeof c.paid_order_count === 'number'
+            ? `历史 ${String(c.order_count ?? 0)} 单（已付 ${String(c.paid_order_count)}）· 累计付款 ${moneyText(c.paid_total_jpy)}（不扣退款）`
+            : `历史 ${String(c.order_count ?? 0)} 单 · 累计付款 ${moneyText(c.paid_total_jpy)}`}
           {c.blocked === true && (
             <>
               {' · '}

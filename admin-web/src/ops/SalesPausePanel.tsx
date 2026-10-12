@@ -133,7 +133,7 @@ export function SalesPausePanel({
       ) : paused ? (
         <p className="error">
           ⛔ 已暂停接单：买家无法报价、下单、付款。原因：{state.reason ?? '—'}（
-          {state.actor_email ?? state.actor ?? '—'}，{formatJst(state.updated_at)}）
+          {state.actor_email ?? state.actor ?? '—'}，{formatJst(state.updated_at)}（日本时间））
         </p>
       ) : (
         <p className="muted">

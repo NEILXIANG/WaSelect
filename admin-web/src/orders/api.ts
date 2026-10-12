@@ -41,7 +41,13 @@ export interface AdminOrderLike {
   contact_email?: string;
   user_id?: string;
   /** 客户卡片（契约 0.6.47 / AJ-404）；下单人是管理员或旧服务端时缺省。 */
-  customer?: { user_id?: string; order_count?: number; paid_total_jpy?: number; blocked?: boolean };
+  customer?: {
+    user_id?: string;
+    order_count?: number;
+    paid_order_count?: number;
+    paid_total_jpy?: number;
+    blocked?: boolean;
+  };
   carrier?: string;
   tracking_no?: string;
   has_dispute?: boolean;

@@ -185,6 +185,8 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
 
       <section className="panel">
         <h2 className="title">今日数据</h2>
+        {/* 服务端按日本时间切天（jstDayWindow）——在中国的同事看到的"今天"晚上 11 点就换了（规律排查 2026-10-12） */}
+        <p className="muted">按日本时间算（每天 0 点起算）</p>
         <div className="stat-cards">
           <Card
             label="销售额"
@@ -212,6 +214,7 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
 
       <section className="panel">
         <h2 className="title">近 7 天</h2>
+        <p className="muted">含今天，按日本时间算</p>
         <div className="stat-cards">
           <Card
             label="销售额"
@@ -243,7 +246,7 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
       <section className="panel">
         <h2 className="title">今日实收 / 已退 / 拒付</h2>
         <p className="muted">
-          按买家实际付款用的币种显示（付的是美元就显示美元，不换算成日元），方便和支付平台后台的记录一笔一笔核对。
+          按买家实际付款用的币种显示（付的是美元就显示美元，不换算成日元），方便和支付平台后台的记录一笔一笔核对。「今日」按日本时间算。
         </p>
         <div className="form">
           {(

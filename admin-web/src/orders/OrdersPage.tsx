@@ -682,6 +682,10 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
                   >
                     发货
                   </button>
+                )}
+                {/* 不能发的行说原因（规律排查 2026-10-12：勾选框灰着、没有「发货」按钮，原先什么也不说） */}
+                {batchMode && !row.actions.ship.ok && row.actions.ship.reason !== '' && (
+                  <span className="muted ship-blocked">{row.actions.ship.reason}</span>
                 )}{' '}
                 <button
                   type="button"

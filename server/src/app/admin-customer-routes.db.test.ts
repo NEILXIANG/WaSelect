@@ -546,6 +546,8 @@ describe('订单详情的客户卡片（§4.2 第 168 行）', () => {
       expect(r.body['customer']).toEqual({
         user_id: 'u-cust-a',
         order_count: 3,
+        // 规律排查 2026-10-12：卡片写"历史 3 单（已付 2）"
+        paid_order_count: 2,
         paid_total_jpy: 21380,
         blocked: false,
       });
@@ -553,6 +555,7 @@ describe('订单详情的客户卡片（§4.2 第 168 行）', () => {
       expect(b.body['customer']).toEqual({
         user_id: 'u-cust-b',
         order_count: 1,
+        paid_order_count: 1,
         paid_total_jpy: 4980,
         blocked: true,
       });

@@ -349,7 +349,8 @@ export function shipGate(order: unknown): Gate {
   if ((order as { is_test?: unknown } | null)?.is_test === true)
     return NO('审核期测试单，不得采购发货');
   if ((order as { has_dispute?: unknown } | null)?.has_dispute === true)
-    return NO('有拒付进行中，先处理拒付再发货（发货后钱货两空）');
+    // 已败诉同样锁着（has_dispute 两者都是 true，规律排查 2026-10-12）
+    return NO('有拒付限制（进行中或已败诉），不能发货（发货后钱货两空）');
   switch (status) {
     case 'paid':
       return OK;
@@ -968,7 +969,7 @@ export function logisticsView(order: unknown): { text: string; url: string } | n
   const carrier = typeof o['carrier'] === 'string' ? o['carrier'] : '';
   const shippedAt = typeof o['shipped_at'] === 'string' ? formatJst(o['shipped_at']) : '';
   return {
-    text: [carrier, tracking, shippedAt === '' ? '' : `发货于 ${shippedAt}`]
+    text: [carrier, tracking, shippedAt === '' ? '' : `发货于 ${shippedAt}（日本时间）`]
       .filter((x) => x !== '')
       .join(' · '),
     url: typeof o['tracking_url'] === 'string' ? o['tracking_url'] : '',

@@ -711,3 +711,29 @@ describe('批量发货：勾选超过一次的上限', () => {
     expect(el.textContent).toContain('一次最多 50 单');
   });
 });
+
+// 规律排查 2026-10-12：待发货页签里拒付锁定 / 测试单的行，勾选框灰着、没有「发货」按钮，也不说为什么
+describe('待发货：不能发的行说清原因', () => {
+  it('🔴 拒付锁定的行在操作列写不能发货的原因', async () => {
+    calls = [];
+    apiImpl = async (req: Call): Promise<unknown> => {
+      calls.push(req);
+      return {
+        items: [
+          {
+            order_id: 'o-d',
+            order_no: '261012-DDDDDD',
+            status: 'paid',
+            total_jpy: 1000,
+            has_dispute: true,
+            created_at: '2026-10-02T00:00:00.000Z',
+          },
+        ],
+        total: 1,
+      };
+    };
+    mounted = await mount(createElement(Harness, { initial: parseHash('#/orders?status=paid') }));
+    const row = mounted.el.querySelector('tbody tr');
+    expect(row?.querySelector('.ship-blocked')?.textContent ?? '').toContain('拒付');
+  });
+});

@@ -187,6 +187,16 @@ describe('打印拣货单：计数与取数失败（代理 S1，第二轮审计 
     await pickTwo(el);
     // 原先按 status === 'paid' 数：显示（2），点进去却只列 1 单
     expect(button(el, '打印拣货单与面单信息（1）')).not.toBeNull();
+    expect(el.textContent).not.toContain('所选里没有待发货的单');
+  });
+
+  // 规律排查 2026-10-12：勾的全是不能打印的单时按钮灰着，原因只在悬停里
+  it('🔴 所选里没有能打印的单 → 按钮旁写明原因', async () => {
+    listItems = [{ ...LIST[0], is_test: true }, { ...LIST[1], is_test: true }, LIST[2]];
+    const el = await open('#/orders');
+    await pickTwo(el);
+    expect(button(el, '打印拣货单与面单信息（0）')?.disabled).toBe(true);
+    expect(el.textContent).toContain('所选里没有待发货的单');
   });
 
   it('🔴 一单取数失败 → 不整页退回列表：已取到的留着，列出没取到的、可只重试这几单；取齐前不能打印', async () => {
