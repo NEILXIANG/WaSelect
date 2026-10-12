@@ -92,6 +92,8 @@ describe('商品列表：上下架两步确认（三端联动模拟 2026-10-08�
     await click(button(el, '下架'));
     expect(patches).toHaveLength(0);
     expect(button(el, '确认下架')).not.toBeNull();
+    // 全入口点击测试 2026-10-11：确认下架是"会让买家买不到"的动作，用危险色（原与「编辑」长得一样）
+    expect(button(el, '确认下架')?.className).toBe('link link-danger');
     await click(button(el, '取消'));
     expect(button(el, '确认下架')).toBeNull();
     expect(patches).toHaveLength(0);

@@ -393,6 +393,12 @@ input[type='radio'] {
 }
 
 /* 文字按钮（M3 text button：编辑 / 下架 / 返回）：主色字 + 状态层，不抢主按钮的视觉重量 */
+/* 全入口点击测试 2026-10-11：行内的危险确认（如「确认下架」）——与普通链接区分开 */
+.link.link-danger {
+  color: var(--md-color-error);
+  font-weight: 600;
+}
+
 .link {
   --state-bg: transparent;
   display: inline-flex;

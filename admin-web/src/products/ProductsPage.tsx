@@ -321,7 +321,8 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
                   <>
                     <button
                       type="button"
-                      className="link"
+                      // 全入口点击测试 2026-10-11：确认下架用危险色（会让买家买不到；原与「编辑」长得一样）
+                      className={row.online ? 'link link-danger' : 'link'}
                       disabled={busyId === row.id}
                       onClick={() => {
                         setConfirmId('');
