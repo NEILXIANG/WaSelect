@@ -99,3 +99,34 @@
 .ph {
   color: var(--ws-ink-faint);
 }
+
+/* 全入口点击测试 2026-10-11：电话框左侧固定 +1（美国号，框里只填 10 位） */
+.phone-row {
+  display: flex;
+  align-items: center;
+}
+
+.phone-cc {
+  flex: none;
+  margin-right: var(--ws-space-inline);
+  font-size: var(--ws-f-base);
+  color: var(--ws-ink-soft);
+}
+
+.phone-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 州下拉：右侧「▾」表明是选择，不是打字 */
+.input--picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.picker-caret {
+  flex: none;
+  margin-left: var(--ws-space-inline);
+  color: var(--ws-ink-soft);
+}

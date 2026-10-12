@@ -63,8 +63,11 @@
       </ws-field>
 
       <ws-field label="电话">
+        <!-- 全入口点击测试 2026-10-11：左侧固定 +1（美国号），框里只填 10 位 -->
+        <view class="phone-row">
+        <text class="phone-cc">+1</text>
         <input
-          class="input"
+          class="input phone-input"
           value="{{form.phone}}"
           data-field="phone"
           maxlength="{{max.phone}}"
@@ -73,6 +76,7 @@
           placeholder="例：4155550123（美国 10 位号码）"
           placeholder-class="ph"
         />
+        </view>
         <text class="field__error" wx:if="{{errors.phone}}">{{errors.phone}}</text>
       </ws-field>
 
@@ -118,7 +122,11 @@
       <!-- 剩余清单 4-5：州改为下拉（只给 USPS 真实州码），不再手输 -->
       <ws-field label="州">
         <picker mode="selector" range="{{stateLabels}}" value="{{stateIndex}}" bindchange="onStatePick">
-          <view class="input {{form.state ? '' : 'ph'}}">{{form.state || '请选择州'}}</view>
+          <!-- 全入口点击测试 2026-10-11：原先与文字框长得一样，买家会去打字；加「▾」表明是下拉 -->
+          <view class="input input--picker {{form.state ? '' : 'ph'}}">
+            <text>{{form.state || '请选择州'}}</text>
+            <text class="picker-caret">▾</text>
+          </view>
         </picker>
         <text class="field__error" wx:if="{{errors.state}}">{{errors.state}}</text>
       </ws-field>

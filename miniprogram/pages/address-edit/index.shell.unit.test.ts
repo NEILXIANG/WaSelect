@@ -187,3 +187,19 @@ describe('保存途中按了返回（MP-13，第二轮审计 2026-10-11）', () 
     expect(backs).toBe(1);
   });
 });
+
+// 全入口点击测试 2026-10-11：电话框左侧固定写 +1（框里只填 10 位）；州是下拉选择，原先长得和文字框一模一样，加「▾」
+describe('地址编辑页：电话前缀与州下拉的样子（全入口点击测试 2026-10-11）', () => {
+  const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8').replace(
+    /<!--[\s\S]*?-->/g,
+    '',
+  );
+  it('🔴 电话框左侧有固定的 +1', () => {
+    expect(wxml).toMatch(/<view class="phone-row">\s*<text class="phone-cc">\+1<\/text>\s*<input/);
+  });
+  it('🔴 州的下拉右侧有「▾」', () => {
+    expect(wxml).toMatch(
+      /<picker[^>]*bindchange="onStatePick"[\s\S]*?<text class="picker-caret">▾<\/text>[\s\S]*?<\/picker>/,
+    );
+  });
+});

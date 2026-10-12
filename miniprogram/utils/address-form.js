@@ -154,11 +154,15 @@ export function normalizeUsPhone(raw) {
 
 /**
  * 电话框的显示值（小程序评估 A12，2026-10-09）：电话框改用数字键盘后打不出 `+`，
- * 编辑已有地址时把存着的 `+1…` 去掉开头的 `+` 再放进框里；提交 / 校验时 `normalizeUsPhone` 会还原成 `+1…`。
+ * 编辑已有地址时把存着的号码去掉 `+` 再放进框里；提交 / 校验时 `normalizeUsPhone` 会还原成 `+1…`。
+ * @why 全入口点击测试 2026-10-11：美国号（`+1` + 10 位）只放 10 位——框左侧固定写着 +1，示例也是 10 位；
+ *      原先放 "16175550197"（11 位），与示例对不上，买家会以为多了一位。
  * @param {unknown} phone
  */
 export function phoneForInput(phone) {
-  return typeof phone === 'string' ? phone.replace(/^\+/, '') : '';
+  if (typeof phone !== 'string') return '';
+  if (/^\+1\d{10}$/.test(phone)) return phone.slice(2);
+  return phone.replace(/^\+/, '');
 }
 
 /**

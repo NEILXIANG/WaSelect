@@ -65,3 +65,16 @@ const ERROR_TITLES = {
 export function errorTitle(kind) {
   return ERROR_TITLES[kind] ?? ERROR_TITLES.load;
 }
+
+/**
+ * 删除确认框的正文（全入口点击测试 2026-10-11）：说清删的是哪一条。
+ * @why 原先只写"删除后不可恢复，确定删除？"——地址多时点错了行，确认框里看不出来。
+ * @param {unknown} row `addressRows` 的一行（找不到时传 undefined）
+ * @returns {string}
+ */
+export function deleteConfirmText(row) {
+  const r = row !== null && typeof row === 'object' ? row : {};
+  const parts = [r.recipient, r.line1].filter((v) => typeof v === 'string' && v !== '');
+  if (parts.length === 0) return '删除后不可恢复，确定删除？';
+  return `将删除「${parts.join(' · ')}」，删除后不可恢复。`;
+}

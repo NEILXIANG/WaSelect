@@ -20,7 +20,7 @@
  *
  * @see ./index.vm.js（视图逻辑真源）；../../utils/address-form.js（请求体与摘要真源）
  */
-import { addressRows, emptyState, errorTitle } from './index.vm.js';
+import { addressRows, deleteConfirmText, emptyState, errorTitle } from './index.vm.js';
 import { formModel, toAddressInput } from '../../utils/address-form.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -142,7 +142,7 @@ Page({
     if (id === '') return;
     wxApi.showModal({
       title: '删除地址',
-      content: '删除后不可恢复，确定删除？',
+      content: deleteConfirmText(this.data.rows.find((r) => r.id === id)),
       confirmText: '删除',
       cancelText: '取消',
       success: (res) => {

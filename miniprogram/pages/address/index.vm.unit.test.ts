@@ -6,7 +6,7 @@
  *      ② 空的空态开关在**请求失败**时也亮 → 用户以为自己没存过地址（说假话）。
  */
 import { describe, expect, it } from 'vitest';
-import { addressRows, emptyState, errorTitle } from './index.vm.js';
+import { addressRows, deleteConfirmText, emptyState, errorTitle } from './index.vm.js';
 
 const LIST = [
   {
@@ -92,5 +92,17 @@ describe('errorTitle：错误块的标题说清是哪一步失败（审查 2026-
     expect(errorTitle('delete')).toBe('删除没有成功，地址还在');
     expect(errorTitle('default')).toBe('设为默认没有成功');
     expect(errorTitle('x')).toBe('没能取到地址');
+  });
+});
+
+// 全入口点击测试 2026-10-11：删除确认框只写"删除后不可恢复，确定删除？"，不说删的是哪一条——地址多时点错行看不出来
+describe('deleteConfirmText（删除确认说清是哪一条）', () => {
+  it('🔴 带上收件人与第一行地址', () => {
+    expect(
+      deleteConfirmText({ id: 'a-1', recipient: 'Cindy Chen', line1: '3898 Clement St' }),
+    ).toBe('将删除「Cindy Chen · 3898 Clement St」，删除后不可恢复。');
+  });
+  it('找不到这一行 → 退回通用说法', () => {
+    expect(deleteConfirmText(undefined)).toBe('删除后不可恢复，确定删除？');
   });
 });

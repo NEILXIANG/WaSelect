@@ -385,8 +385,11 @@ describe('ENGLISH_ADDRESS_NOTE（M-20 英文填写说明，AJ-406）', () => {
 });
 
 describe('电话用数字键盘（小程序评估 A12，2026-10-09）', () => {
-  it('🔴 phoneForInput 去掉开头的 +（数字键盘打不出 +）；normalizeUsPhone 把它还原成 +1 开头', () => {
-    expect(phoneForInput('+14155550123')).toBe('14155550123');
+  // 全入口点击测试 2026-10-11：编辑页电话显示成 "16175550197"（11 位），与输入框示例"4155550123（美国 10 位号码）"对不上；
+  // 框左侧固定写 +1，框里只放 10 位本地号
+  it('🔴 phoneForInput：美国号去掉 +1 只留 10 位（框左侧固定写 +1）；其它去掉开头的 +；normalizeUsPhone 还原成 +1 开头', () => {
+    expect(phoneForInput('+14155550123')).toBe('4155550123');
+    expect(phoneForInput('+8613800138000')).toBe('8613800138000');
     expect(phoneForInput('4155550123')).toBe('4155550123');
     expect(phoneForInput(undefined)).toBe('');
     expect(normalizeUsPhone(phoneForInput('+14155550123'))).toBe('+14155550123');
