@@ -25,7 +25,8 @@ describe('auditRows', () => {
     expect(rows[0]).toMatchObject({
       timeText: '2026-10-06 00:00',
       targetText: 'o-1',
-      statusText: '500',
+      statusText: '出错', // 原断言 '500'：把裸状态码锁成了对的（全入口点击测试 2026-10-12）
+      statusTitle: 'HTTP 500',
       failed: true,
     });
     expect(rows[1]).toMatchObject({ targetText: '—', statusText: '—', failed: false });
@@ -47,6 +48,31 @@ describe('auditRows', () => {
       targetText: 'ord-0f3508cf…',
       targetTitle: 'ord-0f3508cf-69ac-4599-a99d-62ae4cdf8058',
     });
+  });
+
+  // 全入口点击测试 2026-10-12：结果列写 200 / 201 / 202；对象列写 purchase、health、img/…、batch:1/1、编辑分类却是"—"
+  it('🔴 结果列说人话：2xx 成功、202 已提交（结果见订单详情）、4xx 被拒绝、5xx 出错；状态码留在悬停里', () => {
+    const at = (status_code: number) =>
+      auditRows([{ id: 1, actor: 'a', action: 'x', status_code, created_at: '' }])[0];
+    expect(at(200)).toMatchObject({ statusText: '成功', statusTitle: 'HTTP 200', failed: false });
+    expect(at(201)?.statusText).toBe('成功');
+    expect(at(202)?.statusText).toBe('已提交（结果见订单详情）');
+    expect(at(409)).toMatchObject({ statusText: '被拒绝', failed: true });
+    expect(at(502)).toMatchObject({ statusText: '出错', failed: true });
+  });
+
+  it('🔴 对象列说人话：导出写表名、分类写分类名、上传写"图片"、批量发货写"成功 N / 共 M 单"', () => {
+    const row = (action: string, target: string) =>
+      auditRows([{ id: 1, actor: 'a', action, target, status_code: 200, created_at: '' }], {
+        categoryNames: { health: '健康食品' },
+      })[0]?.targetText;
+    expect(row('GET /admin/exports/:kind', 'purchase')).toBe('待采购清单');
+    expect(row('GET /admin/exports/:kind', 'orders')).toBe('订单总表');
+    expect(row('GET /admin/exports/:kind', 'customs')).toBe('报关表');
+    expect(row('POST /admin/categories', 'health')).toBe('健康食品');
+    expect(row('PUT /admin/categories/:key', 'gone_key')).toBe('gone_key'); // 已删的分类：原样给键
+    expect(row('POST /admin/upload', 'img/f566a40c-560a-4b1e-9c1a-0e7f1d2c3b4a')).toBe('图片');
+    expect(row('POST /admin/orders/ship-batch', 'batch:3/4')).toBe('成功 3 / 共 4 单');
   });
 
   it('形状不对的元素（非对象）被跳过，不渲染成一行 undefined', () => {

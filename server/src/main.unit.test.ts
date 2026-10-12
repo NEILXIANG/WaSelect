@@ -63,7 +63,9 @@ describe('isSelfEntry（N21）', () => {
   });
 
   it('argv[1] 是指向自身的软链 → true（npm link / bin 软链场景）', () => {
-    const link = join(tmpdir(), `entry-link-${process.pid}.js`);
+    // 链接放进每次新建的临时目录（2026-10-12：原放在系统临时目录根、按 pid 命名且不清理——
+    // 攒了 686 个，pid 一复用 symlinkSync 就 EEXIST，正是 gate:fast 偶发那一条红）
+    const link = join(mkdtempSync(join(tmpdir(), 'entry-link-')), 'main.js');
     symlinkSync(self, link);
     expect(isSelfEntry(self, link)).toBe(true);
   });

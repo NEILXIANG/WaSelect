@@ -86,6 +86,8 @@ export interface AuditRowView {
   /** 对象能点去哪（走查 2026-10-08）：订单 / 客户详情的 hash；其它（商品编辑不进网址、Banner 无详情）为空串。 */
   targetHref: string;
   statusText: string;
+  /** 原始状态码（悬停看，查日志用）；没有时为空串。 */
+  statusTitle: string;
   /** 状态码 ≥ 400：这次操作没成功（例如退款调机构失败），行标红。 */
   failed: boolean;
 }
@@ -102,7 +104,50 @@ function targetPage(action: string): 'orders' | 'customers' | null {
   return null;
 }
 
-export function auditRows(items: readonly unknown[]): AuditRowView[] {
+/**
+ * 结果列（全入口点击测试 2026-10-12：原写 200 / 201 / 202，运营看不懂）。
+ * @why 202 单列：退款类是"已提交给支付机构"，这一行记的是提交那一刻；最终结果（成功 / 失败）在订单详情里。
+ *      说"成功"会让人以为钱已经退了，说"处理中"又会让已经退完的单看着像还没好。
+ */
+function resultText(status: number | null): string {
+  if (status === null) return '—';
+  if (status === 202) return '已提交（结果见订单详情）';
+  if (status >= 200 && status < 300) return '成功';
+  if (status >= 400 && status < 500) return '被拒绝';
+  if (status >= 500) return '出错';
+  return String(status);
+}
+
+const EXPORT_KIND_LABELS: Readonly<Record<string, string>> = {
+  orders: '订单总表',
+  purchase: '待采购清单',
+  customs: '报关表',
+};
+
+/**
+ * 对象列（全入口点击测试 2026-10-12：原写 purchase、health、img/…、batch:1/1）。
+ * @limitation 订单 / 商品 / 客户仍是缩短的内部编号（订单与客户可点进详情）：换成订单号 / 商品名要服务端回带，未做。
+ */
+function targetLabel(
+  action: string,
+  target: string,
+  categoryNames: Readonly<Record<string, string>>,
+): string {
+  if (action === 'GET /admin/exports/:kind') return EXPORT_KIND_LABELS[target] ?? target;
+  if (action.startsWith('POST /admin/categories') || action.includes('/admin/categories/:key'))
+    return categoryNames[target] ?? target;
+  if (action === 'POST /admin/upload') return '图片';
+  const batch = /^batch:(\d+)\/(\d+)$/.exec(target);
+  if (action === 'POST /admin/orders/ship-batch' && batch !== null)
+    return `成功 ${batch[1] ?? ''} / 共 ${batch[2] ?? ''} 单`;
+  return shortRef(target);
+}
+
+export function auditRows(
+  items: readonly unknown[],
+  opts: { categoryNames?: Readonly<Record<string, string>> } = {},
+): AuditRowView[] {
+  const categoryNames = opts.categoryNames ?? {};
   return items
     .filter((i): i is Record<string, unknown> => typeof i === 'object' && i !== null)
     .map((i) => {
@@ -118,14 +163,17 @@ export function auditRows(items: readonly unknown[]): AuditRowView[] {
         action: ACTION_LABELS[String(i['action'] ?? '')] ?? String(i['action'] ?? ''),
         actionRaw: String(i['action'] ?? ''),
         targetText:
-          typeof i['target'] === 'string' && i['target'] !== '' ? shortRef(i['target']) : '—',
+          typeof i['target'] === 'string' && i['target'] !== ''
+            ? targetLabel(String(i['action'] ?? ''), i['target'], categoryNames)
+            : '—',
         targetTitle: typeof i['target'] === 'string' ? i['target'] : '',
         targetHref: ((): string => {
           const target = typeof i['target'] === 'string' ? i['target'] : '';
           const page = targetPage(String(i['action'] ?? ''));
           return page === null || target === '' ? '' : `#/${page}/${encodeURIComponent(target)}`;
         })(),
-        statusText: status === null ? '—' : String(status),
+        statusText: resultText(status),
+        statusTitle: status === null ? '' : `HTTP ${String(status)}`,
         failed: status !== null && status >= 400,
       };
     });

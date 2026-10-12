@@ -9,7 +9,8 @@
  *                翻页 / 查询会先清掉旧错误——放弃的是"核对结果的加载失败一直挂着"，换来的是重试成功后不残留旧红字。
  * @see ./view.ts；./api.ts
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCategories } from '../categories/useCategories.js';
 import { parseJstDateRange } from '@waselect/shared';
 import { Badge } from '../ui/badge.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
@@ -44,6 +45,12 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
   /** 本页反馈出口（原两行红字：核对结果加载失败 / 操作记录加载失败）。 */
   const sink = useToasts();
   const seq = useRef(0);
+  /** 分类键 → 名称（对象列写分类名，全入口点击测试 2026-10-12）。 */
+  const { list: categories } = useCategories(api);
+  const categoryNames = useMemo(
+    () => Object.fromEntries(categories.map((c) => [c.key, c.name])),
+    [categories],
+  );
 
   useEffect(() => {
     latestReconciliation(api)
@@ -60,7 +67,7 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
     try {
       const r = await listAudit(api, { page, ...filter });
       if (mine !== seq.current) return;
-      setRows(auditRows(r.items));
+      setRows(auditRows(r.items, { categoryNames }));
       setTotal(r.total);
     } catch (e) {
       if (mine === seq.current) {
@@ -68,7 +75,7 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
         sink.error(text, { traceId });
       }
     }
-  }, [api, page, filter, sink.error]);
+  }, [api, page, filter, sink.error, categoryNames]);
 
   useEffect(() => {
     void load();
@@ -226,7 +233,9 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
                   </a>
                 )}
               </td>
-              <td className={r.failed ? 'error' : 'muted'}>{r.statusText}</td>
+              <td className={r.failed ? 'error' : 'muted'} title={r.statusTitle || undefined}>
+                {r.statusText}
+              </td>
             </tr>
           ))}
           {rows.length === 0 && (
