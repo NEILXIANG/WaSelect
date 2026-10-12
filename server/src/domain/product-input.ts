@@ -36,6 +36,7 @@ import {
   PRODUCT_MAX_STOCK,
   PRODUCT_MAX_WEIGHT_G,
   isOneOf,
+  janShapeOk,
 } from '@waselect/shared';
 import { isImageId } from './upload-image.js';
 
@@ -378,6 +379,9 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   //    运营与日志都分不清。其余五个字段的长度 reason 本来就是 `_too_long`，这次是补齐。
   if (jan !== undefined && jan.length > PRODUCT_MAX_CHARS.jan_code) {
     fail('jan_code', 'jan_code_too_long');
+  } else if (jan !== undefined && !janShapeOk(jan)) {
+    // 形状（两端输入测试 2026-10-12）：原先只判长度，"123abc" 能存进去；校验位不在这里判（@see shared jan-code.ts）
+    fail('jan_code', 'jan_code_shape');
   }
   if (hs !== undefined && hs.length > PRODUCT_MAX_CHARS.hs_code) {
     fail('hs_code', 'hs_code_too_long');

@@ -348,6 +348,19 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     ).toEqual([{ image_id: 'img-abc' }]);
   });
 
+  // 两端输入测试 2026-10-12：JAN 码原先只判长度，"123abc" 能存进去——采购按它对货、按它搜，都对不上
+  it.each(['123abc', '4901872 07123', '490187207123', '1234567', '４９０１８７２０７１２３４'])(
+    '🔴 jan_code 不是 8 位或 13 位数字 → jan_code_shape：%j',
+    (jan) => {
+      expect(reasons({ ...base(), jan_code: jan })).toContain('jan_code_shape');
+    },
+  );
+
+  it('jan_code 8 位 / 13 位数字放行（校验位不在服务端判：错了只提醒，见后台 productFormWarnings）', () => {
+    expect(ok({ ...base(), jan_code: '49123456' }).jan_code).toBe('49123456');
+    expect(ok({ ...base(), jan_code: '4901234567890' }).jan_code).toBe('4901234567890');
+  });
+
   it('jan_code 超 13 字符 → 拒绝（DB VARCHAR(13)；超长会在入库时才炸）', () => {
     expect(reasons({ ...base(), jan_code: '1'.repeat(14) })).toContain('jan_code_too_long');
     expect(ok({ ...base(), jan_code: '1'.repeat(13) }).jan_code).toBe('1'.repeat(13));

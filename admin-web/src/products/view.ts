@@ -29,11 +29,18 @@ import {
   COMPLIANCE_TAG,
   PRODUCT_MAX_CHARS,
   PRODUCT_MAX_STOCK,
+  janCheckDigitOk,
+  janShapeOk,
+  normalizeJan,
   PRODUCT_MAX_WEIGHT_G,
 } from '@waselect/shared';
 import { moneyText } from '../format.js';
 
 /** 商品状态（契约 `AdminProduct.status` 枚举；0.6.46 / AJ-403 增 `draft`，单测与契约双向比对）。 */
+/** JAN 码形状不对 / 校验位不对的提示（两端输入测试 2026-10-12）。 */
+const JAN_SHAPE_TEXT = 'JAN 码是 8 位或 13 位数字（条形码下面那串），请核对';
+const JAN_CHECK_DIGIT_TEXT = 'JAN 码最后一位（校验位）对不上，可能抄错了一位——请对着条形码再核一遍';
+
 /** 库存超上限的提示（表单校验、列表内联改库存、服务端 stock_too_large 三处共用）。 */
 const STOCK_TOO_LARGE_TEXT = `库存最多 ${String(PRODUCT_MAX_STOCK)}`;
 
@@ -477,13 +484,18 @@ export function productFormErrors(form: unknown): {
     ['customsDescEn', f.customsDescEn, PRODUCT_MAX_CHARS.customs_desc_en, '英文报关品名'],
     ['hsCode', f.hsCode, PRODUCT_MAX_CHARS.hs_code, 'HS 编码'],
     ['titleJa', f.titleJa, PRODUCT_MAX_CHARS.title_ja, '日文品名'],
-    ['janCode', f.janCode, PRODUCT_MAX_CHARS.jan_code, 'JAN 码'],
+    // JAN 量的是归一之后（空格 / 横线 / 全角会在提交前去掉，原样量会把"抄成分段"的合法 JAN 误报超长）
+    ['janCode', normalizeJan(f.janCode.trim()), PRODUCT_MAX_CHARS.jan_code, 'JAN 码'],
     ['purchaseSource', f.purchaseSource, PRODUCT_MAX_CHARS.purchase_source, '采购来源'],
   ] as const;
   for (const [key, value, max, label] of LENGTH_CHECKS) {
     if (errors[key] === undefined && value.length > max)
       errors[key] = `${label}最多 ${max} 字（当前 ${value.length} 字）`;
   }
+  // JAN 形状与服务端 jan_code_shape 同源（shared janShapeOk；两端输入测试 2026-10-12）。留空合法：手作商品没有 JAN
+  const jan = normalizeJan(f.janCode.trim());
+  if (errors['janCode'] === undefined && jan !== '' && !janShapeOk(jan))
+    errors['janCode'] = JAN_SHAPE_TEXT;
 
   // ── 编辑口径三列的预检（020）───────────────────────────────────────────────
   // @why 上限**从 shared 取**而不是在这里写 200 / 120：写死就等于把
@@ -555,6 +567,9 @@ export function productFormWarnings(form: unknown): string[] {
   const price = plainInt(f.priceJpy);
   const cost = f.costJpy.trim() === '' ? null : plainInt(f.costJpy);
   const out: string[] = [];
+  // 校验位只提醒（@see shared jan-code.ts：真货的 JAN 校验位一定对，错了多半抄错一位；旧测试数据有编出来的）
+  const jan = normalizeJan(f.janCode.trim());
+  if (janShapeOk(jan) && !janCheckDigitOk(jan)) out.push(JAN_CHECK_DIGIT_TEXT);
   if (price !== null && cost !== null && cost >= price)
     out.push(
       `采购成本（${cost} 日元）不低于售价（${price} 日元）：每卖一件都不赚钱，请确认没有填反`,
@@ -643,7 +658,7 @@ export function toProductInput(form: unknown, originalStock?: string): Record<st
     origin_country: 'JP',
     hs_code: f.hsCode.trim(),
     title_ja: f.titleJa.trim(),
-    jan_code: f.janCode.trim(),
+    jan_code: normalizeJan(f.janCode.trim()),
     purchase_source: f.purchaseSource.trim(),
     compliance_tags: f.complianceTags,
     // ⚠️ 编辑口径三列**恒带**（含空数组 / 空串）：PUT 是整行覆盖，
@@ -729,6 +744,7 @@ const SERVER_REASONS: Readonly<Record<string, string>> = {
   price_too_large: '售价超过单笔订单上限，买家无法下单——请调低售价',
   cost_too_large: '成本价超过单笔订单上限——请核对是不是多打了 0',
   stock_too_large: STOCK_TOO_LARGE_TEXT,
+  jan_code_shape: JAN_SHAPE_TEXT,
   weight_too_large: `重量超过单件上限 ${String(PRODUCT_MAX_WEIGHT_G)} 克（已为包材留出余量）——请核对单位是不是克`,
   customs_desc_forbidden:
     '英文报关品名含禁用词（如 medicated / whitening / SPF / sunscreen / drug），请换一种说法',

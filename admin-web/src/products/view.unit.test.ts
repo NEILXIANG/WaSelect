@@ -271,6 +271,23 @@ describe('P2-51 数值不收科学计数法 / HS 编码形状 / 成本≥售价�
     );
   });
 
+  // 两端输入测试 2026-10-12：JAN 码填 "123abc" 前端不拦、服务端照存
+  it('🔴 JAN 码：先归一（全角、空格、横线）；不是 8 / 13 位数字 → 拦；校验位不对 → 只提醒', () => {
+    expect(productFormErrors({ ...base(), janCode: '123abc' }).errors['janCode']).toBe(
+      'JAN 码是 8 位或 13 位数字（条形码下面那串），请核对',
+    );
+    const typed = { ...base(), janCode: '４９０１８７２ ０７１２３-４' };
+    expect(productFormErrors(typed).errors['janCode']).toBe(undefined);
+    expect(toProductInput(typed)['jan_code']).toBe('4901872071234');
+    expect(productFormWarnings({ ...base(), janCode: '4901872071235' })).toContain(
+      'JAN 码最后一位（校验位）对不上，可能抄错了一位——请对着条形码再核一遍',
+    );
+    expect(productFormWarnings({ ...base(), janCode: '4901872071234' })).toEqual([]);
+    expect(serverFieldError({ field: 'jan_code', reason: 'jan_code_shape', count: 1 })?.text).toBe(
+      'JAN 码是 8 位或 13 位数字（条形码下面那串），请核对',
+    );
+  });
+
   it('成本 ≥ 售价只提醒不拦截', () => {
     const f = { ...base(), priceJpy: '1000', costJpy: '1000' };
     expect(productFormErrors(f).ok).toBe(true);
