@@ -136,7 +136,8 @@ Page({
       success: () => this.setData({ copied: key, copyError: '' }),
       // @see @limitation 二：失败要说一句话，并给出兜底动作
       // 复制失败与"取不到条款"分开（W-07）：条款列表还在，只是剪贴板没写进去
-      fail: () => this.setData({ copied: '', copyError: '复制失败，请长按上方链接手动复制' }),
+      // 全入口点击测试 2026-10-11：网址平时不显示，复制失败时才出现在各语种下面——提示随之改为"下面的链接"
+      fail: () => this.setData({ copied: '', copyError: '复制失败，请长按下面的链接手动复制' }),
     });
   },
 });

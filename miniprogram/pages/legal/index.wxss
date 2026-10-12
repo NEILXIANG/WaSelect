@@ -72,3 +72,13 @@
   font-size: var(--ws-f-xs);
   word-break: break-all;
 }
+
+/* 全入口点击测试 2026-10-11：页顶一句说明；文档卡之间留间距（原先卡与卡贴在一起） */
+.legal__hint {
+  display: block;
+  margin-top: var(--ws-space-stack);
+}
+
+.legal__doc {
+  margin-top: var(--ws-space-stack);
+}

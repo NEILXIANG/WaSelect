@@ -49,11 +49,18 @@
     </view>
   </view>
 
+  <!--
+    全入口点击测试 2026-10-11：说明只在这里说一次（原先挂在每张卡标题后面，读成"用户协议复制链接后…"一句话）；
+    网址只在复制失败时出现（原先每行都挂完整网址，整页三屏长）；卡与卡之间留间距（legal__doc）。
+  -->
+  <view class="ws-gutter" wx:if="{{state.showList}}">
+    <text class="ws-note legal__hint">小程序里打不开网页：点「复制链接」，到手机浏览器（Safari / Chrome）粘贴即可查看全文</text>
+  </view>
+
   <!-- 剩余清单 4-1：四类法务文档各一张卡（服务端给了 documents 时）；没给时退回下面只有用户协议的那张 -->
-  <view class="ws-gutter" wx:for="{{docs}}" wx:for-item="doc" wx:key="key">
+  <view class="ws-gutter legal__doc" wx:for="{{docs}}" wx:for-item="doc" wx:key="key">
     <view class="ws-card legal__card">
       <text class="doc-label">{{doc.title}}</text>
-      <text class="ws-note">复制链接后在浏览器中打开查看全文</text>
       <view class="doc" wx:for="{{doc.langs}}" wx:key="key">
         <view class="doc-head">
           <text class="doc-label">{{item.label}}</text>
@@ -65,7 +72,7 @@
             bindtap="onCopy"
           >{{copied === item.key ? '已复制' : '复制链接'}}</view>
         </view>
-        <text class="doc-url" user-select>{{item.url}}</text>
+        <text class="doc-url" wx:if="{{copyError}}" user-select>{{item.url}}</text>
       </view>
     </view>
   </view>
@@ -81,9 +88,8 @@
     </view>
   </view>
 
-  <view class="ws-gutter" wx:if="{{state.showList && docs.length === 0}}">
+  <view class="ws-gutter legal__doc" wx:if="{{state.showList && docs.length === 0}}">
     <view class="ws-card legal__card">
-      <text class="ws-note">复制链接后在浏览器中打开查看全文</text>
 
       <!-- 语种块之间用发丝线分隔：三块共用一个 card，不加线时
            "复制链接"这个动作会和上一个语种的 url 读成一条 -->
@@ -103,7 +109,7 @@
         <!-- ⚠️ url 保持 <text> 且带 user-select：复制失败时它是唯一的兜底手段，
              所以必须能长按选中——view 里的文字长按选不中（这也是它与上面那个
              动作区分开的原因：一个要"选中"，一个要"点"）。 -->
-        <text class="doc-url" user-select>{{item.url}}</text>
+        <text class="doc-url" wx:if="{{copyError}}" user-select>{{item.url}}</text>
       </view>
     </view>
   </view>
