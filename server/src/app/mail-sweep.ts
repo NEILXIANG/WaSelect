@@ -19,7 +19,9 @@
  *      `scanOrderMailUnsent`）报出来，运营换渠道联系买家。候选口径共用 {@link mailFacts}，两边不会分叉。
  * @limitation 一：部分退款退满后只发了整单退款那封（partial-refund.ts），所以"单已退满"的部分退款行不补——
  *              退满之前漏掉的那几封部分退款信补不回来；整单退款信会补。
- * @limitation 二：改运单号后的重发（`mail_key`，AJ-386）不补——补发只认首封发货信的键。
+ * @limitation 二：改运单号后的重发（`fix-<uuid>`，AJ-386）与撤销发货的更正信（`revert-<n>`）不补；
+ *              撤销后重新发货认 `reship-<撤销次数>`（与 ship-order.ts 同口径，三天提交复查 2026-10-12），
+ *              不再拿首封发货信的键去补——首封失败时原先会把新运单号的信再发一遍。
  * @limitation 三：补的是"没成功交给服务商"的；交给服务商之后的退信 / 进垃圾箱看不见（resend.ts @limitation）。
  * @limitation 四：单轮上限 MAIL_SWEEP_BATCH_LIMIT，积压分多天消化（与 AUTO_ADVANCE_BATCH_LIMIT 同口径）。
  * @see app/order-mail.ts（发信与记录）；migrations/037_mail_deliveries.sql
@@ -63,7 +65,12 @@ export function mailFacts(tx: Db, from: Date, to: Date) {
           from orders o
          where o.paid_at >= ${from} and o.paid_at < ${to} and coalesce(o.contact_email, '') <> ''
         union all
-        select 'order.shipped', o.id, null, o.shipped_at
+        -- 撤销后重新发货：实时路径的键是 order.shipped:<id>:reship-<撤销次数>（ship-order.ts），这里同口径
+        --   （三天提交复查 2026-10-12：原先只认首封的键，首封失败时会把新运单号的信再发一遍）
+        select 'order.shipped', o.id,
+               (select case when count(*) > 0 then 'reship-' || count(*) end
+                  from order_events e where e.order_id = o.id and e.status = 'shipment_reverted'),
+               o.shipped_at
           from orders o
          where o.shipped_at >= ${from} and o.shipped_at < ${to} and coalesce(o.contact_email, '') <> ''
         union all
@@ -103,7 +110,15 @@ export function createMailSweepJob(): SchedulerJob<Db> {
           name: 'mail.resend',
           at: ctx.startedAt.toISOString(),
           orderId: r.order_id,
-          payload: { tag: r.tag, ...(r.sub === null ? {} : { refund_id: r.sub }) },
+          // 发货信的子键是 reship-N（mail_key），部分退款的子键是退款编号（refund_id）——与实时路径各自同名
+          payload: {
+            tag: r.tag,
+            ...(r.sub === null
+              ? {}
+              : r.tag === 'order.shipped'
+                ? { mail_key: r.sub }
+                : { refund_id: r.sub }),
+          },
         });
       }
       ctx.log.info('mail_sweep_resent', {

@@ -30,6 +30,7 @@ import {
   ADMIN_LOGIN_LOCK_MINUTES,
   ADMIN_LOGIN_MAX_FAILURES,
   adminTotpRequired,
+  TOTP_BYPASS_SOURCE,
   mountAdminAuthRoutes,
 } from './admin-auth-routes.js';
 import { createHttpApp, listen } from '../http.js';
@@ -764,5 +765,58 @@ describe('A-8（AJ-442）：POST /auth/admin/logout 作废 token', () => {
     expect((await call(srv, 'POST', '/api/v1/auth/admin/logout', { token: buyer })).status).toBe(
       403,
     );
+  });
+});
+
+/**
+ * 三天提交复查 2026-10-12：AJ-446 让绕行模式改用自己的桶（bypassKey），但"比对期间被锁"出口的 Retry-After
+ * 仍回读 globalKey——绕行模式下邮箱桶本来就锁着（那正是绕行的起因），于是报的是攻击者上的那把长锁，而不是绕行桶自己的。
+ */
+describe('绕行模式下"比对期间被锁"：Retry-After 取绕行桶', () => {
+  const SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+  const BYPASS_KEY = loginAttemptSourceKey(EMAIL, TOTP_BYPASS_SOURCE);
+  const BYPASS_LOCK_SECONDS = 300;
+  beforeEach(async () => {
+    await db`update users set totp_secret = ${SECRET} where id = 'u-adm'`;
+    // 攻击者把邮箱桶锁了 15 分钟
+    await db`
+      insert into login_attempts (key_hash, failed_count, locked_until, first_failed_at, last_failed_at)
+      values (${ADMIN_KEY}, 0, now() + interval '15 minutes', now(), now())
+      on conflict (key_hash) do update set locked_until = now() + interval '15 minutes'`;
+    let armed = true;
+    const passthrough = (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown> =>
+      (db as unknown as (s: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>)(
+        strings,
+        ...values,
+      );
+    const proxy = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (!armed || !strings.join(' ').includes('lower(email) =')) {
+        return passthrough(strings, ...values);
+      }
+      armed = false;
+      // 并发者在比对期间把**绕行桶**锁了 5 分钟
+      return db`
+        update login_attempts
+           set locked_until = ${new Date(Date.now() + BYPASS_LOCK_SECONDS * 1000)},
+               failed_count = ${ADMIN_LOGIN_MAX_FAILURES}
+         where key_hash = ${BYPASS_KEY}
+      `.then(() => passthrough(strings, ...values));
+    }) as unknown as Db;
+    srv = await buildChainServer(proxy, {
+      RATE_LIMIT_LOGIN_PER_15MIN: '1000',
+      TRUST_PROXY_HOPS: '1',
+    });
+  });
+
+  it('🔴 Retry-After 是绕行桶剩下的约 5 分钟，不是邮箱桶的 15 分钟', async () => {
+    const r = await call(srv, 'POST', '/api/v1/auth/admin/login', {
+      body: { email: EMAIL, password: PASSWORD, totp: totpAt(SECRET, Date.now()) },
+      headers: { 'x-forwarded-for': '203.0.113.20' },
+    });
+    expect(r.status).toBe(429);
+    const retryAfter = Number(r.headers.get('retry-after'));
+    expect(retryAfter).toBeGreaterThan(1);
+    // +1：锁是在服务端取 now 之后才打上的，向上取整会多出 1 秒；仍远小于邮箱桶的 900
+    expect(retryAfter).toBeLessThanOrEqual(BYPASS_LOCK_SECONDS + 1);
   });
 });

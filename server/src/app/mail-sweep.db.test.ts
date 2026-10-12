@@ -119,6 +119,24 @@ describe('daily 补发漏发的订单通知邮件（E-1）', () => {
     expect(keys(await sweep())).toEqual(['order.paid:o-paid', 'order.shipped:o-shipped-lost']);
   });
 
+  // 三天提交复查 2026-10-12：撤销发货后重新发货，实时路径用 `order.shipped:<id>:reship-1` 发新信；
+  //   补发却只认 `order.shipped:<id>`——首封若失败，新运单号的信会被再发一遍（买家收到两封发货信）
+  it('🔴 撤销后重新发货：补发认重新发货那封的键，不再补首封', async () => {
+    await floor();
+    await order('o-reship', { paid: ago(30 * HOUR), shipped: ago(HOUR) });
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-reship', 'shipment_reverted', 'x', 'admin:u-a', ${ago(2 * HOUR)})`;
+    await delivery('order.paid:o-reship', 'o-reship', 'sent');
+    await delivery('order.shipped:o-reship', 'o-reship', 'failed', 1);
+    await delivery('order.shipped:o-reship:reship-1', 'o-reship', 'sent');
+    expect(keys(await sweep())).toEqual([]);
+    // 重新发货那封也失败了 → 补的是它（带 mail_key），不是首封
+    await db`update mail_deliveries set status = 'failed' where idempotency_key = 'order.shipped:o-reship:reship-1'`;
+    await db`update job_runs set last_processed = null where name = 'sweep-test'`;
+    const again = await sweep();
+    expect(again.map((e) => (e.payload as { mail_key?: string }).mail_key)).toEqual(['reship-1']);
+  });
+
   it('🔴 failed 在重试上限内 → 补；到上限（5 次）→ 不再补（避免对一个坏地址天天发）', async () => {
     await floor();
     await order('o-retry', { paid: ago(HOUR) });

@@ -104,7 +104,7 @@ export const ADMIN_LOGIN_WINDOW_MINUTES = 15;
  * 绕行桶的"来源"占位（AJ-446）：与真实来源桶共用 `loginAttemptSourceKey`，但来源串固定，
  * 于是同一邮箱的全部绕行尝试落在同一只桶里；它不可能与任何真实来源撞键（真实来源是 IP 形状）。
  */
-const TOTP_BYPASS_SOURCE = 'totp-bypass';
+export const TOTP_BYPASS_SOURCE = 'totp-bypass';
 
 const DUMMY_HASH = '$2b$10$v0B4o0iWhgKRl/BcEw7snObpnEcHc3rKZuiTQ6KW7PN1Efy62ZZ1S';
 
@@ -347,7 +347,9 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
           const until =
             [
               await peekLoginAttemptLock(deps.db, sourceKey, now),
-              await peekLoginAttemptLock(deps.db, globalKey, now),
+              // 绕行模式回读绕行桶（三天提交复查 2026-10-12）：与上面 clear 用的是同一只桶；邮箱桶在绕行模式下
+              //   本来就锁着（那是攻击者上的），回读它会把攻击者那把长锁报给真管理员
+              await peekLoginAttemptLock(deps.db, totpBypass ? bypassKey : globalKey, now),
             ]
               .filter((d): d is Date => d !== null)
               .reduce<Date | null>((acc, d) => (acc === null || d > acc ? d : acc), null) ?? now;
