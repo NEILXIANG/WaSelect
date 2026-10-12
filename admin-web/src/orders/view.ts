@@ -159,6 +159,8 @@ export interface OrderRow {
   trackingUrl: string;
   /** 采购信息（每个行项目一行；空数组 = 服务端没给 items，列表显示"—"）。 */
   purchaseLines: string[];
+  /** 每个行项目的"中文名 × 件数"（与 purchaseLines 同序）。 */
+  itemNames: string[];
   hasDispute: boolean;
   isTest: boolean;
   /** AJ-425：有进行中的售后申请 / 下单用户已被拉黑（列表徽章用；字段缺失按 false）。 */
@@ -321,6 +323,7 @@ export function orderRows(items: unknown): OrderRow[] {
           ? readString(o, 'tracking_url')
           : '',
         purchaseLines: purchaseLines(o),
+        itemNames: itemNames(o),
         hasDispute: o['has_dispute'] === true,
         isTest: o['is_test'] === true,
         afterSaleOpen: o['after_sale_open'] === true,
@@ -548,6 +551,26 @@ export function purchaseLine(item: unknown): string {
  *
  * @returns 每个行项目一行；没有 `items`（旧服务端 / 形状外）→ `[]`，由调用方显示"—"。
  */
+/**
+ * 列表行里每个商品的"中文名 × 件数"（与 {@link purchaseLines} 一一对应，同序）。
+ * @why 两端逐页走查 2026-10-12：列表原先只有采购信息（日文原名 / JAN / 采购来源）——没有件数，采购员看不出要买几件；
+ *      全部 / 已发货页签里运营也只能读日文猜卖了什么。
+ * @limitation 名称缺失写「（商品名缺失）」：行项目的 title 是下单时快照，缺了说明数据异常，不留空让人以为没商品。
+ */
+export function itemNames(order: unknown): string[] {
+  const o = (typeof order === 'object' && order !== null ? order : {}) as Record<string, unknown>;
+  const items = o['items'];
+  if (!Array.isArray(items)) return [];
+  return items.map((raw) => {
+    const it = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+    const title =
+      typeof it['title'] === 'string' && it['title'].trim() !== ''
+        ? it['title'].trim()
+        : '（商品名缺失）';
+    return `${title} × ${String(it['qty'] ?? '?')}`;
+  });
+}
+
 export function purchaseLines(order: unknown): string[] {
   const o = (typeof order === 'object' && order !== null ? order : {}) as Record<string, unknown>;
   const items = o['items'];

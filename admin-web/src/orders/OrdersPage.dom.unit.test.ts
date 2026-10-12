@@ -288,15 +288,21 @@ describe('订单列表：采购信息列（0.6.26）', () => {
       {
         ...ORDER,
         items: [
-          { title: '包丁', purchase_source: 'Amazon JP' },
-          { title: '茶碗', purchase_source: '楽天市場' },
+          { title: '包丁', qty: 1, purchase_source: 'Amazon JP' },
+          { title: '茶碗', qty: 2, purchase_source: '楽天市場' },
         ],
       },
     ]);
-    const lines = [...el.querySelectorAll('.purchase-cell div')].map((d) => d.textContent ?? '');
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain('Amazon JP');
-    expect(lines[1]).toContain('楽天市場');
+    // 两端逐页走查 2026-10-12：每个商品一块——先"中文名 × 件数"，再采购依据
+    const items = [...el.querySelectorAll('.purchase-cell .purchase-item')].map((d) => [
+      d.querySelector('.purchase-name')?.textContent ?? '',
+      d.querySelector('.purchase-line')?.textContent ?? '',
+    ]);
+    expect(items).toHaveLength(2);
+    expect(items[0]?.[0]).toBe('包丁 × 1');
+    expect(items[0]?.[1]).toContain('Amazon JP');
+    expect(items[1]?.[0]).toBe('茶碗 × 2');
+    expect(items[1]?.[1]).toContain('楽天市場');
   });
 
   it('🧷 服务端没给 items（旧版响应）→ 显示「—」，不抛也不谎称"未记录"', async () => {
@@ -389,6 +395,8 @@ describe('订单列表：物流列分两行、采购信息有全文提示（AJ-4
             tracking_url: 'https://trackings.post.japanpost.jp/x',
             items: [
               {
+                title: '新潟产越光免洗米 5kg',
+                qty: 1,
                 title_ja: '新潟産コシヒカリ 無洗米 5kg',
                 jan_code: '4901234567890',
                 purchase_source: '新潟 JA',
@@ -410,8 +418,11 @@ describe('订单列表：物流列分两行、采购信息有全文提示（AJ-4
       'EM300000001JP',
     );
     const purchase = el.querySelector('tbody td.purchase-cell');
+    // 悬停全文 = 每个商品的名称行与采购行依次相接（与格子里看到的两行同序）
     expect(purchase?.getAttribute('title')).toBe(
-      [...(purchase?.querySelectorAll('div') ?? [])].map((d) => d.textContent).join('\n'),
+      [...(purchase?.querySelectorAll('.purchase-name, .purchase-line') ?? [])]
+        .map((d) => d.textContent)
+        .join('\n'),
     );
   });
 });

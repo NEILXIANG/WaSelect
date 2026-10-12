@@ -721,11 +721,24 @@ td .thumb {
   gap: var(--ws-space-sm);
 }
 
-.purchase-cell > div {
+.purchase-item + .purchase-item {
+  margin-top: var(--ws-space-xs);
+}
+
+/* 商品名一行（主信息，正文色），采购依据最多两行小字；悬停看全文（title） */
+.purchase-name {
+  color: var(--md-color-on-surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.purchase-line {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  font-size: var(--md-type-label-m);
 }
 
 .ok {

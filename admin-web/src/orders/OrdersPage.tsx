@@ -569,7 +569,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
             <th>订单号</th>
             <th>状态</th>
             {/* 待采购清单的本体（§2.7：清单 = 本页筛 status=paid） */}
-            <th>采购信息</th>
+            <th>商品 / 采购信息</th>
             <SortTh
               label="金额"
               sortKey="total_jpy"
@@ -628,13 +628,22 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
                   </Badge>
                 ))}
               </td>
-              <td className="purchase-cell" title={row.purchaseLines.join('\n')}>
+              <td
+                className="purchase-cell"
+                title={row.purchaseLines
+                  .map((l, i) => `${row.itemNames[i] ?? ''}\n${l}`)
+                  .join('\n')}
+              >
                 {row.purchaseLines.length === 0 ? (
                   '—'
                 ) : (
                   <>
+                    {/* 每个商品先写"中文名 × 件数"，下面一行小字是采购依据（两端逐页走查 2026-10-12：原先没有件数） */}
                     {row.purchaseLines.map((line, i) => (
-                      <div key={i}>{line}</div>
+                      <div key={i} className="purchase-item">
+                        <div className="purchase-name">{row.itemNames[i]}</div>
+                        <div className="purchase-line">{line}</div>
+                      </div>
                     ))}
                   </>
                 )}

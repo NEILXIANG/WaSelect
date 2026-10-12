@@ -34,6 +34,7 @@ import {
   PURCHASE_UNRECORDED,
   purchaseLine,
   purchaseLines,
+  itemNames,
   refundErrors,
   refundFailureNotice,
   fullRefundErrorNotice,
@@ -667,6 +668,23 @@ describe('purchaseLine（D-39 待采购清单 / 迁移 021）', () => {
     //      顺带提醒改契约的人：给买家加上这一列 = 泄露供应链。
     expect(PURCHASE_UNRECORDED).toBe('未记录');
     expect(purchaseLine({ purchase_source: '京都 錦市場 直送' })).toContain('京都 錦市場 直送');
+  });
+});
+
+// 两端逐页走查 2026-10-12：列表"采购信息"一格只有日文原名 / JAN / 采购来源——没有中文名，也没有件数，
+//   采购员看不出这单要买几件；全部 / 已发货页签里运营也看不出卖了什么
+describe('itemNames：列表每个商品一行"中文名 × 件数"', () => {
+  it('🔴 按 items 顺序给出名称与件数；缺名称写「（商品名缺失）」不留空', () => {
+    expect(
+      itemNames({
+        items: [
+          { title: '卡乐比 拌饭料 6 种', qty: 2 },
+          { title: '无印良品 敏感肌乳液 200mL', qty: 1 },
+          { qty: 3 },
+        ],
+      }),
+    ).toEqual(['卡乐比 拌饭料 6 种 × 2', '无印良品 敏感肌乳液 200mL × 1', '（商品名缺失） × 3']);
+    expect(itemNames({ order_id: 'o-1' })).toEqual([]);
   });
 });
 
