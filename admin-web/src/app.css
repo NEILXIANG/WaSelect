@@ -1334,6 +1334,12 @@ textarea::placeholder {
   border-radius: var(--md-shape-md);
 }
 
+/* 全入口点击测试 2026-10-11：0 单的格收淡（没有可处理的事），仍可点 */
+.todo-chip-zero {
+  color: var(--md-color-on-surface-variant);
+  border-color: var(--md-color-outline-variant);
+}
+
 .todo-chip-due {
   --state-bg: color-mix(
     in srgb,

@@ -174,8 +174,8 @@ describe('工作台：实收 / 已退 / 拒付', () => {
 describe('工作台：待办点即跳到筛好的列表', () => {
   it('🔴 点「待发货」→ 跳到 `#/orders?status=paid`（附件 §3.1：待办每一项都可点直达）', async () => {
     const el = await open();
-    // AJ-410 / N7：按钮文字带「去处理 →」（原为「待发货 0」）
-    await click(button(el, '待发货 0 · 去处理 →'));
+    // AJ-410 / N7：有单时按钮文字带「去处理 →」；全入口点击测试 2026-10-11 起 0 单只写「待发货 0」（仍可点、仍跳过去）
+    await click(button(el, '待发货 0'));
     expect(navigated).toHaveLength(1);
     expect(navigated[0]?.page).toBe('orders');
     expect(navigated[0]?.id).toBe('');

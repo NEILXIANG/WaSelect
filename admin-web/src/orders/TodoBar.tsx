@@ -59,7 +59,17 @@ const TODO: ReadonlyArray<{ key: string; query: TodoQuery; label: string }> = [
  */
 export function todoChipClass(on: boolean, n: number | null | undefined): string {
   const base = on ? 'chip chip-on todo-chip' : 'chip todo-chip';
+  if (n === 0) return `${base} todo-chip-zero`;
   return typeof n === 'number' && n > 0 ? `${base} todo-chip-due` : base;
+}
+
+/**
+ * 待办格的文字（全入口点击测试 2026-10-11）：0 单不写「去处理 →」——没有可处理的事，写了像是"这里有事"。
+ * 加载中 / 取数失败仍写（点了能去看），文字里的计数分别是"…"与"—"。
+ */
+export function todoChipText(label: string, n: number | null | undefined): string {
+  if (n === 0) return `${label} 0`;
+  return `${label} ${n === undefined ? '…' : n === null ? '—' : String(n)} · 去处理 →`;
 }
 
 export function TodoBar({
@@ -108,7 +118,7 @@ export function TodoBar({
             className={todoChipClass('status' in t.query && current === t.query.status, n)}
             onClick={() => onPick(t.query)}
           >
-            {t.label} {n === undefined ? '…' : n === null ? '—' : n} · 去处理 →
+            {todoChipText(t.label, n)}
           </button>
         );
       })}

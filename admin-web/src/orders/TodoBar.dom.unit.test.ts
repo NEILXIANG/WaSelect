@@ -50,7 +50,11 @@ describe('TodoBar', () => {
     const due = button(el, '待发货 3 · 去处理 →');
     expect(due?.className).toContain('todo-chip-due');
     expect(button(el, '退款中 — · 去处理 →')?.className).not.toContain('todo-chip-due');
-    expect(button(el, '迟到付款待退 0 · 去处理 →')?.className).not.toContain('todo-chip-due');
+    // 全入口点击测试 2026-10-11：0 单的格不写「去处理 →」（没有可处理的事），样式收淡；仍可点（筛到那一类）
+    const zero = button(el, '迟到付款待退 0');
+    expect(zero?.className).not.toContain('todo-chip-due');
+    expect(zero?.className).toContain('todo-chip-zero');
+    expect(button(el, '迟到付款待退 0 · 去处理 →')).toBeNull();
     await click(due);
     await click(button(el, '售后待处理 2 · 去处理 →'));
     await click(button(el, '待付款 1 · 去处理 →'));
