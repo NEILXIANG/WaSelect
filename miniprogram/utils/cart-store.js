@@ -211,6 +211,26 @@ export function createCartStore(deps) {
       persist();
     },
 
+    /**
+     * 再次购买（全入口点击测试 2026-10-11）：这几件按给定顺序移到最前，只勾它们，其余取消勾选。
+     * @why 原先再次购买的商品排在末尾、原先勾着的也还勾着——「去结算」里混进旧商品，合计跳一大截，买家容易连带结掉不想买的。
+     * @limitation 不认识的 id 忽略（放不进购物车的那几件由调用方另行说明）。
+     * @param {string[]} productIds
+     */
+    focusOn(productIds) {
+      const ids = Array.isArray(productIds) ? productIds : [];
+      const picked = [];
+      for (const id of ids) {
+        const i = items.find((x) => x.productId === id);
+        if (i !== undefined && !picked.includes(i)) picked.push(i);
+      }
+      const rest = items.filter((x) => !picked.includes(x));
+      for (const i of picked) i.selected = true;
+      for (const i of rest) i.selected = false;
+      items.splice(0, items.length, ...picked, ...rest);
+      persist();
+    },
+
     /** 勾选了几**种**商品（底栏"去结算 (N)"用）。A3 */
     selectedCount() {
       return items.filter((i) => i.selected !== false).length;

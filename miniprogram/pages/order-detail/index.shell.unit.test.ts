@@ -36,6 +36,11 @@ let order: Record<string, unknown>;
 /** A7：再次购买时加进购物车的条目；`full` 为 true 时购物车拒收新品种。 */
 let added: unknown[];
 let full: boolean;
+/** 全入口点击测试 2026-10-11：再次购买后 cart.focusOn 收到的 id。 */
+let focused: string[];
+/** 全入口点击测试 2026-10-11：购物车里已有的行（再次购买时改数量，不叠加）。 */
+let inCart: Array<{ productId: string; qty: number }>;
+let qtySet: Array<[string, number]>;
 let nav: string[];
 
 const call = <T>(name: string, ...args: unknown[]): T =>
@@ -68,6 +73,9 @@ async function open(id = 'o-1', extra: Record<string, string> = {}): Promise<voi
           added.push(item);
           return { added: true };
         },
+        focusOn: (ids: string[]) => focused.push(...ids),
+        items: () => inCart,
+        setQty: (id: string, qty: number) => qtySet.push([id, qty]),
       },
     },
   });
@@ -89,6 +97,9 @@ beforeEach(() => {
   order = ORDER;
   added = [];
   full = false;
+  focused = [];
+  inCart = [];
+  qtySet = [];
   nav = [];
   vi.stubGlobal('wx', {
     stopPullDownRefresh: () => calls.push('stop'),
@@ -196,6 +207,22 @@ describe('订单详情：再次购买 / 商品可点（A7，AJ-416）', () => {
       { productId: 'p-2', qty: 1 },
     ]);
     expect(nav).toEqual(['/pages/cart/index']);
+  });
+
+  it('🔴 再次购买的几件排到购物车最上面、只勾它们（全入口点击测试 2026-10-11：原先混进旧的一起结算）', async () => {
+    order = DONE;
+    await open();
+    call('onBuyAgain');
+    expect(focused).toEqual(['p-1', 'p-2']);
+  });
+
+  it('🔴 购物车里已有这件 → 数量改成这单的数量，不再叠加（点两次「再次购买」不会变成双份）', async () => {
+    order = DONE;
+    inCart = [{ productId: 'p-1', qty: 2 }];
+    await open();
+    call('onBuyAgain');
+    expect(qtySet).toEqual([['p-1', 2]]);
+    expect(added).toMatchObject([{ productId: 'p-2', qty: 1 }]);
   });
 
   it('🔴 购物车品种已满放不进去 → 留在本页说清楚，不假装成功地跳走', async () => {

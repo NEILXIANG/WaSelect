@@ -270,7 +270,15 @@ Page({
    */
   onBuyAgain() {
     const cart = app.globalData.cart;
-    const rejected = buyAgainItems(this.lastOrder).filter((i) => cart.add(i)?.added !== true);
+    // 全入口点击测试 2026-10-11：购物车里已有的改成这单的数量，不叠加——点两次「再次购买」原先会变成双份
+    const inCart = new Set(cart.items().map((i) => i.productId));
+    const rejected = buyAgainItems(this.lastOrder).filter((i) => {
+      if (inCart.has(i.productId)) {
+        cart.setQty(i.productId, i.qty);
+        return false;
+      }
+      return cart.add(i)?.added !== true;
+    });
     if (rejected.length > 0) {
       this.setData({
         buyAgainNote: `购物车商品种类已满，${rejected.length} 件没放进去，请先清理购物车`,
@@ -278,6 +286,8 @@ Page({
       return;
     }
     this.setData({ buyAgainNote: '' });
+    // 全入口点击测试 2026-10-11：再次购买的几件排到购物车最上面、只勾它们（原先混进旧商品一起结算）
+    cart.focusOn(buyAgainItems(this.lastOrder).map((i) => i.productId));
     wxApi.switchTab({ url: CART_PAGE });
   },
 

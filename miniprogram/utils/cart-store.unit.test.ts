@@ -342,3 +342,35 @@ describe('勾选结算（A3，AJ-416）', () => {
     expect(MAX_LINE_QTY).toBe(SHARED_MAX_LINE_QTY);
   });
 });
+
+// 全入口点击测试 2026-10-11：「再次购买」把商品加到购物车末尾、且原先勾着的也还勾着——去结算 (4) 里混进了两件旧的，
+// 合计跳到 67,740 円。主流做法：再次购买的商品排到最上面、只勾它们
+describe('focusOn（再次购买：这几件排到最上面、只勾这几件）', () => {
+  it('🔴 按给定顺序移到最前，只勾这几件，其余取消勾选；不认识的 id 忽略', () => {
+    const cart = createCartStore({ storage: memStorage().storage });
+    cart.add({ productId: 'old-1', qty: 1 });
+    cart.add({ productId: 'old-2', qty: 1 });
+    cart.add({ productId: 'p-1', qty: 2 });
+    cart.add({ productId: 'p-2', qty: 1 });
+    cart.focusOn(['p-1', 'p-2', 'ghost']);
+    expect(cart.items().map((i) => [i.productId, i.selected])).toEqual([
+      ['p-1', true],
+      ['p-2', true],
+      ['old-1', false],
+      ['old-2', false],
+    ]);
+  });
+
+  it('落盘（重进购物车顺序与勾选不丢）', () => {
+    const mem = memStorage();
+    const cart = createCartStore({ storage: mem.storage });
+    cart.add({ productId: 'old-1', qty: 1 });
+    cart.add({ productId: 'p-1', qty: 1 });
+    cart.focusOn(['p-1']);
+    const again = createCartStore({ storage: mem.storage });
+    expect(again.items().map((i) => [i.productId, i.selected])).toEqual([
+      ['p-1', true],
+      ['old-1', false],
+    ]);
+  });
+});
