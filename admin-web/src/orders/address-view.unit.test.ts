@@ -205,3 +205,15 @@ describe('州码白名单（工程缺口第二轮 §3.6 #3）', () => {
     expect(addressFormErrors({ ...valid, state: 'PR' }).errors['state']).toBeUndefined();
   });
 });
+
+// 全入口点击测试 2026-10-11：州写错一个字母（NY → NV）原先照样存；与小程序同一道核对，报在邮编上并说清当前州
+describe('addressFormErrors：邮编与州对不上', () => {
+  it('🔴 11220（纽约）+ NV → 邮编报错，说清当前填的州', () => {
+    const r = addressFormErrors({ ...valid(), state: 'NV', postal_code: '11220-7670' });
+    expect(r.ok).toBe(false);
+    expect(r.errors['postal_code']).toBe('邮编 11220-7670 不属于 Nevada（NV）——请检查州或邮编');
+  });
+  it('对得上 → 不报', () => {
+    expect(addressFormErrors({ ...valid(), state: 'NY', postal_code: '11220' }).ok).toBe(true);
+  });
+});

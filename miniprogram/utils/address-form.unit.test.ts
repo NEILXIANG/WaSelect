@@ -423,3 +423,12 @@ describe('邮编与州对得上（zipMatchesState）', () => {
     expect(zipMatchesState('90210', 'NY')).toBe(false);
   });
 });
+
+// 全入口点击测试 2026-10-11：表挪到 shared 给后台用；小程序运行时引不了 shared 包，留副本——两份必须逐项相同
+describe('ZIP_AREA_STATES 与 shared 同一份', () => {
+  it('🔴 逐项相同（漂移就红）', async () => {
+    const shared = await import('@waselect/shared');
+    const mine = await import('./address-form.js');
+    expect(mine.ZIP_AREA_STATES).toEqual(shared.ZIP_AREA_STATES);
+  });
+});

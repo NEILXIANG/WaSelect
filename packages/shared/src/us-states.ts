@@ -81,3 +81,34 @@ const CODES: ReadonlySet<string> = new Set(US_STATES.map((s) => s.code));
 export function isUsStateCode(v: unknown): boolean {
   return typeof v === 'string' && CODES.has(v);
 }
+
+/**
+ * 邮编首位数字（USPS 国家分区）→ 可能的州（全入口点击测试 2026-10-11：由小程序挪来，后台改址也用）。
+ * @why 只用来拦"明显选错 / 写错州"：小程序州下拉误选成 NV、邮编是纽约的 10013，面单会印成 "New York, NV, 10013"；
+ *      后台改址的州是文本框，NY 手滑成 NV 同理。
+ * @measured 2026-10-11 网页检索（zip-codes.com / USPS 分区表）：0 = CT MA ME NH NJ NY(仅 Fishers Island) PR RI VT VI + 军邮 AE；
+ *           8 = AZ CO ID NM NV UT WY；与下表一致。
+ * @limitation 例外只照顾已知的几处（纽约 06390 / 00501、得州 El Paso 885xx、华盛顿特区 569xx）；
+ *             宁可少拦——表里多放一个州只是漏拦一种写错，少放一个就是合法地址存不上。
+ *             小程序运行时引不了本包，留了一份副本（miniprogram/utils/address-form.js），由单测逐项比对。
+ */
+export const ZIP_AREA_STATES: ReadonlyArray<ReadonlyArray<string>> = [
+  ['CT', 'MA', 'ME', 'NH', 'NJ', 'NY', 'PR', 'RI', 'VT', 'VI', 'AE'],
+  ['DE', 'NY', 'PA'],
+  ['DC', 'MD', 'NC', 'SC', 'VA', 'WV'],
+  ['AL', 'FL', 'GA', 'MS', 'TN', 'AA'],
+  ['IN', 'KY', 'MI', 'OH'],
+  ['IA', 'MN', 'MT', 'ND', 'SD', 'WI', 'DC'],
+  ['IL', 'KS', 'MO', 'NE'],
+  ['AR', 'LA', 'OK', 'TX'],
+  ['AZ', 'CO', 'ID', 'NM', 'NV', 'UT', 'WY', 'TX'],
+  ['AK', 'CA', 'HI', 'OR', 'WA', 'AS', 'GU', 'MP', 'MH', 'FM', 'PW', 'AP'],
+];
+
+/** 邮编与州对得上吗（只看首位数字）。邮编或州形状不对时返回 true——那由各自的格式校验去报。 */
+export function zipMatchesState(zip: unknown, state: unknown): boolean {
+  const d = /^(\d)\d{4}(-\d{4})?$/.exec(String(zip).trim());
+  const st = String(state).trim().toUpperCase();
+  if (d === null || !isUsStateCode(st)) return true;
+  return (ZIP_AREA_STATES[Number(d[1])] ?? []).includes(st);
+}

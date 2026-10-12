@@ -19,7 +19,7 @@
  *
  * @see ../../../contracts/api-contract.yaml（AddressInput）；./api.ts（updateOrderAddress）
  */
-import { isUsStateCode } from '@waselect/shared';
+import { US_STATES, isUsStateCode, zipMatchesState } from '@waselect/shared';
 
 /** MVP 唯一目的国（@see @limitation 二）。 */
 export const ADDRESS_COUNTRY_DEFAULT = 'US';
@@ -103,6 +103,16 @@ export function addressFormErrors(form: unknown): {
     errors['state'] = '州请填美国州或领地的两位缩写，如 CA';
   if (!ADDRESS_PATTERNS.postal.test(m.postal_code.trim()))
     errors['postal_code'] = '邮编为 5 位或 ZIP+4，如 94105 或 94105-1234';
+  // 全入口点击测试 2026-10-11：邮编与州各自合法、但对不上（多半是州写错一个字母）——报在邮编上，说清当前州（与小程序同一句）
+  if (
+    errors['postal_code'] === undefined &&
+    errors['state'] === undefined &&
+    !zipMatchesState(m.postal_code, m.state)
+  ) {
+    const st = m.state.trim().toUpperCase();
+    const name = US_STATES.find((r) => r.code === st)?.name ?? st;
+    errors['postal_code'] = `邮编 ${m.postal_code.trim()} 不属于 ${name}（${st}）——请检查州或邮编`;
+  }
   const first = Object.values(errors)[0] ?? '';
   return { ok: Object.keys(errors).length === 0, errors, first };
 }

@@ -181,7 +181,8 @@ export function phoneForInput(phone) {
  * @limitation 例外只照顾已知的几处（纽约 06390 / 00501、得州 El Paso 885xx、华盛顿特区 569xx）；
  *             宁可少拦——表里多放一个州只是漏拦一种选错，少放一个就是合法地址存不上。
  */
-const ZIP_AREA_STATES = [
+// 全入口点击测试 2026-10-11：与 shared `ZIP_AREA_STATES` 同一份（后台改址用 shared 那份；小程序运行时引不了包，留副本，单测逐项比对）
+export const ZIP_AREA_STATES = [
   ['CT', 'MA', 'ME', 'NH', 'NJ', 'NY', 'PR', 'RI', 'VT', 'VI', 'AE'],
   ['DE', 'NY', 'PA'],
   ['DC', 'MD', 'NC', 'SC', 'VA', 'WV'],
