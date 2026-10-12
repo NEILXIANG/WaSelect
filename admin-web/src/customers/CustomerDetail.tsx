@@ -13,6 +13,7 @@ import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { Badge } from '../ui/badge.js';
 import { formatJst, moneyText } from '../format.js';
 import { ORDER_STATUS_LABELS } from '../orders/view.js';
+import { phoneText } from '../orders/print-view.js';
 import { getCustomer, type AdminApi } from './api.js';
 import { CustomerRiskActions } from './CustomerRiskActions.js';
 import { CustomerPrivacyActions } from './CustomerPrivacyActions.js';
@@ -62,7 +63,10 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
   return (
     <section className="panel">
       <header className="panel-head">
-        <h1 className="title">客户详情</h1>
+        {/* 标题带称呼（全入口点击测试 2026-10-12：原只写"客户详情"，名字要到地址簿里找） */}
+        <h1 className="title">
+          {c !== null && customerLabel(c) !== '' ? `客户详情：${customerLabel(c)}` : '客户详情'}
+        </h1>
         {loading && <span className="muted">加载中…</span>}
         <button type="button" className="link" onClick={onBack}>
           返回列表
@@ -104,11 +108,17 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
           <CustomerRiskActions
             api={api}
             userId={c.id}
+            customerName={customerLabel(c)}
             blocked={c.blocked === true}
             sink={sink}
             onChanged={load}
           />
-          <CustomerPrivacyActions api={api} userId={c.id} sink={sink} />
+          <CustomerPrivacyActions
+            api={api}
+            userId={c.id}
+            customerName={customerLabel(c)}
+            sink={sink}
+          />
 
           <span className="label">地址簿</span>
           <table className="table">
@@ -119,7 +129,7 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
                     {a.recipient ?? '—'}
                     {a.is_default === true && <Badge tone="info">默认</Badge>}
                   </td>
-                  <td className="selectable">{a.phone ?? '—'}</td>
+                  <td className="selectable">{phoneText(a.phone)}</td>
                   <td className="selectable">{addressLine(a)}</td>
                 </tr>
               ))}

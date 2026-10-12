@@ -8,8 +8,8 @@
  * @limitation 只删行为记录（服务端口径）；订单 / 地址的匿名化出口尚未提供（AJ-292），文案里如实写"不受影响"。
  * @see ./CustomerRiskActions.tsx（同一套确认弹层与 Toast）；../../../server/src/app/admin-customer-routes.ts
  */
-import { useState } from 'react';
-import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
+import { useRef, useState } from 'react';
+import { ReasonInput } from '../ui/ReasonInput.js';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { toastError, type ToastSink } from '../ui/toast.js';
 import { purgeCustomerEvents, type AdminApi } from './api.js';
@@ -18,22 +18,33 @@ import { CUSTOMER_PURGE_CONFIRM_TEXT } from './view.js';
 export interface CustomerPrivacyActionsProps {
   api: AdminApi;
   userId: string;
+  /** 客户称呼：确认弹层里写它，不写 36 位 id（全入口点击测试 2026-10-12）。 */
+  customerName: string;
   sink: ToastSink;
 }
 
-export function CustomerPrivacyActions({ api, userId, sink }: CustomerPrivacyActionsProps) {
+export function CustomerPrivacyActions({
+  api,
+  userId,
+  customerName,
+  sink,
+}: CustomerPrivacyActionsProps) {
   const [reason, setReason] = useState('');
+  const [reasonError, setReasonError] = useState('');
+  const reasonRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<ConfirmSpec | null>(null);
 
   const ask = (): void => {
     if (reason.trim() === '') {
-      sink.error('请填写删除原因（会记录下来），例：买家邮件要求删除');
+      // 提示标在框下、光标放进去（原先走右下角浮层）
+      setReasonError('请填写删除原因（会记录下来），例：买家邮件要求删除');
+      reasonRef.current?.focus();
       return;
     }
     setDialog({
       title: '删除后无法恢复：该客户的使用记录会被永久清除',
-      body: `${CUSTOMER_PURGE_CONFIRM_TEXT}\n\n客户 ${userId}`,
+      body: `${CUSTOMER_PURGE_CONFIRM_TEXT}\n\n客户：${customerName !== '' ? customerName : '该客户'}`,
       confirmText: '确认删除行为记录',
       danger: true,
     });
@@ -58,13 +69,16 @@ export function CustomerPrivacyActions({ api, userId, sink }: CustomerPrivacyAct
   return (
     <div className="form">
       <span className="label">隐私请求：买家要求删除其使用记录时</span>
-      <input
-        className="input"
+      <ReasonInput
+        ref={reasonRef}
         name="customer-purge-reason"
         placeholder="例：买家 2026-10-09 邮件要求删除"
-        maxLength={ADMIN_NOTE_MAX_LENGTH}
         value={reason}
-        onChange={(e) => setReason(e.target.value)}
+        error={reasonError}
+        onChange={(v) => {
+          setReason(v);
+          if (v.trim() !== '') setReasonError('');
+        }}
       />
       <button
         type="button"

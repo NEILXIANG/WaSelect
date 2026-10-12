@@ -152,9 +152,9 @@ export function riskText(c: Pick<CustomerDetailLike, 'blocked' | 'blocked_at' | 
 
 /** 地址一行（电话另列；美式顺序：街道, 二行, 城市 州 邮编, 国家）。 */
 export function addressLine(a: CustomerAddressLike): string {
-  const cityLine = [a.city, a.state, a.postal_code]
-    .filter((x) => x !== undefined && x !== '')
-    .join(' ');
+  // 美国写法「城市, 州 邮编」（2026-10-12：原为 "New York NY 10118"，与小程序 / 打印页不一致）
+  const stateZip = [a.state, a.postal_code].filter((x) => x !== undefined && x !== '').join(' ');
+  const cityLine = [a.city, stateZip].filter((x) => x !== undefined && x !== '').join(', ');
   return [a.line1, a.line2, cityLine, a.country]
     .filter((x): x is string => x !== undefined && x !== '')
     .join(', ');

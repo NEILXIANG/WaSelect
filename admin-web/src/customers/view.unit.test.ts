@@ -130,7 +130,7 @@ describe('statsCards', () => {
 });
 
 describe('addressLine', () => {
-  it('街道 + 二行 + 城市 州 邮编 + 国家；电话另列', () => {
+  it('街道 + 二行 + 「城市, 州 邮编」（美国写法）+ 国家；电话另列', () => {
     expect(
       addressLine({
         recipient: 'Li Na',
@@ -142,7 +142,7 @@ describe('addressLine', () => {
         postal_code: '90017',
         country: 'US',
       }),
-    ).toBe('1234 Wilshire Blvd Unit 305, Floor 3, Los Angeles CA 90017, US');
+    ).toBe('1234 Wilshire Blvd Unit 305, Floor 3, Los Angeles, CA 90017, US');
   });
   it('没有二行就不留空逗号', () => {
     expect(
@@ -153,7 +153,7 @@ describe('addressLine', () => {
         postal_code: '10118',
         country: 'US',
       }),
-    ).toBe('350 5th Ave Apt 12B, New York NY 10118, US');
+    ).toBe('350 5th Ave Apt 12B, New York, NY 10118, US');
   });
 });
 

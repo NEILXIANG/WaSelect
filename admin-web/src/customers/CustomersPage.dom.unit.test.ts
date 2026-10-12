@@ -194,11 +194,11 @@ describe('客户详情', () => {
   it('资料 / 统计 / 地址簿 / 订单（测试单标出、订单号链到订单详情）/ 风险', async () => {
     const { el, calls } = await open(detailRoute());
     expect(calls[0]?.path).toBe(`/api/v1/admin/customers/${ROW.id}`);
-    expect(el.querySelector('.title')?.textContent).toBe('客户详情');
+    expect(el.querySelector('.title')?.textContent).toBe('客户详情：Zhang Wei'); // 原断言只写"客户详情"（2026-10-12 改）
     expect(el.textContent).toContain(ROW.id); // 详情页给完整 id（可复制去运营日志查）
     expect(el.textContent).toContain('21,380 日元');
-    expect(el.textContent).toContain('+12125550143');
-    expect(el.textContent).toContain('350 5th Ave Apt 12B, New York NY 10118, US');
+    expect(el.textContent).toContain('+1 (212) 555-0143'); // 原断言要裸 E.164（2026-10-12 改）
+    expect(el.textContent).toContain('350 5th Ave Apt 12B, New York, NY 10118, US');
     expect(el.textContent).toContain('拒付 1 笔，进行中 1 笔');
     const links = [...el.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     expect(links).toContain('#/orders/o-a1');
@@ -248,6 +248,42 @@ describe('客户详情', () => {
     const un = calls.find((c) => c.path.endsWith('/unblock'));
     expect(un?.body).toEqual({ reason: '客服核实为误拉黑' });
     expect(el.textContent).toContain('未拉黑');
+  });
+});
+
+// 全入口点击测试 2026-10-12：标题只写"客户详情"（名字要到地址簿里找）；地址簿电话是 +12125550143；
+// 没填原因时提示跑到右下角浮层、光标不动；确认弹层与成功提示写 36 位 id
+describe('客户详情：看得懂、提示就近', () => {
+  it('🔴 标题带客户称呼；地址簿电话按美国写法', async () => {
+    const { el } = await open(detailRoute());
+    expect(el.querySelector('h1')?.textContent).toBe('客户详情：Zhang Wei');
+    expect(el.textContent).toContain('+1 (212) 555-0143');
+    expect(el.textContent).not.toContain('+12125550143');
+  });
+
+  it('🔴 拉黑 / 删除行为记录没填原因：提示标在输入框下并把光标放进去', async () => {
+    const { el } = await open(detailRoute());
+    await click(button(el, '拉黑该客户'));
+    const block = el.querySelector('input[name="customer-block-reason"]');
+    expect(block?.closest('.field')?.textContent).toContain('请填写拉黑原因（会记录下来）');
+    expect(document.activeElement).toBe(block);
+    await click(button(el, '删除行为记录'));
+    const purge = el.querySelector('input[name="customer-purge-reason"]');
+    expect(purge?.closest('.field')?.textContent).toContain('请填写删除原因');
+    expect(document.activeElement).toBe(purge);
+  });
+
+  it('🔴 确认弹层与成功提示写客户称呼，不写内部 id', async () => {
+    const { el } = await open(detailRoute());
+    await type(el.querySelector('input[name="customer-purge-reason"]'), '买家邮件要求删除');
+    await click(button(el, '删除行为记录'));
+    expect(el.querySelector('.dialog')?.textContent).toContain('Zhang Wei');
+    expect(el.querySelector('.dialog')?.textContent).not.toContain(ROW.id);
+    await type(el.querySelector('input[name="customer-block-reason"]'), '多次拒付');
+    await click(button(el, '取消'));
+    await click(button(el, '拉黑该客户'));
+    expect(el.querySelector('.dialog')?.textContent).toContain('Zhang Wei');
+    expect(el.querySelector('.dialog')?.textContent).not.toContain(ROW.id);
   });
 });
 
