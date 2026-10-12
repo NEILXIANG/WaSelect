@@ -26,6 +26,7 @@ import {
   undoView,
   UNDO_WINDOW_MS,
   selectionBar,
+  stockAdjust,
 } from './index.vm.js';
 
 const ITEMS = [
@@ -154,8 +155,8 @@ describe('防复发：购物车薄壳的乱序接线（B36 / AJ-219）', () => {
   });
 
   it('报价必须领号并在结果回来时判过期（连点 +/- 后旧合计不能盖回去）', () => {
-    // 精确值：报价一处 + 清空购物车时作废在途报价一处
-    expect(count('nextSeq(this.quoteSeq)'), '领号两处（报价 + 清空作废）').toBe(2);
+    // 精确值：报价一处 + 清空购物车时作废在途报价一处 + 库存调整后作废本次结果一处（AJ-493）
+    expect(count('nextSeq(this.quoteSeq)'), '领号三处（报价 + 清空作废 + 库存调整作废）').toBe(3);
     expect(count('isStale(seq, this.quoteSeq)'), '判过期三处（成功 / 失败 / finally）').toBe(3);
   });
 
@@ -357,5 +358,39 @@ describe('第二轮审计 2026-10-11：购物车结算提示（F2 / F4）', () =
     expect(g.disabled).toBe(true);
     expect(g.hint).toContain('账号');
     expect(g.hint).not.toContain('稍后重试');
+  });
+});
+
+// 全入口点击测试 2026-10-11（AJ-493）：库存只剩 1 件的商品在购物车里能点到 2，之后整单报价失败、合计消失、
+// 底部说"请稍后重试"。报价的 40901 现在带 stock（可买件数）→ 改到可买件数并说明；0 件 → 标"已售罄，请移除"
+describe('stockAdjust（库存不足时改到可买件数）', () => {
+  const rows = [
+    { productId: 'p-1', qty: 2 },
+    { productId: 'p-2', qty: 1 },
+  ];
+  const err = (data: unknown, code = 40901) => ({ code, data });
+
+  it('🔴 可买件数 < 购物车件数 → 改到可买件数，并给一句说明', () => {
+    expect(stockAdjust(rows, err({ product_id: 'p-1', stock: 1 }))).toEqual({
+      productId: 'p-1',
+      qty: 1,
+      text: '库存只剩 1 件，已改为 1 件',
+    });
+  });
+
+  it('🔴 可买件数为 0 → 不改数量，标"已售罄，请移除"', () => {
+    expect(stockAdjust(rows, err({ product_id: 'p-1', stock: 0 }))).toEqual({
+      productId: 'p-1',
+      qty: 0,
+      text: '已售罄，请移除',
+    });
+  });
+
+  it('不调整：别的码 / 没带 stock / 不在车里 / 可买件数并不少于车里件数（报价后库存又回补）', () => {
+    expect(stockAdjust(rows, err({ product_id: 'p-1', stock: 1 }, 40401))).toBeNull();
+    expect(stockAdjust(rows, err({ product_id: 'p-1' }))).toBeNull();
+    expect(stockAdjust(rows, err({ product_id: 'p-9', stock: 1 }))).toBeNull();
+    expect(stockAdjust(rows, err({ product_id: 'p-2', stock: 3 }))).toBeNull();
+    expect(stockAdjust(null as never, null)).toBeNull();
   });
 });

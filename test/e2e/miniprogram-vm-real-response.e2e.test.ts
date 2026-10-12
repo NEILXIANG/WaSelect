@@ -155,7 +155,8 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     expect(d2.canPay).toBe(false);
     expect(d2.canCancel).toBe(false);
     expect(d2.expiresAtText).toBe(''); // 已付不再显示截止时刻
-    expect(d2.timeline.map((t) => t.statusText)).toHaveLength(3);
+    // 2026-10-11（全入口点击测试）：时间线写事件；付成后「发起支付」那一行不再显示（与付款成功相隔约 1 秒，对买家没有信息）
+    expect(d2.timeline.map((t) => t.statusText)).toEqual(['提交订单', '付款成功']);
     expect(d2.timeline.every((t) => t.atText !== '')).toBe(true); // 时刻被转成了 JST 文案
     const rows2 = orderRows(
       (await call(srv, 'GET', '/api/v1/orders', { token: buyer })).json['items'],

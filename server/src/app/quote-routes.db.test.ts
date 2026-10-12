@@ -175,9 +175,11 @@ describe('POST /orders/quote（接线）', () => {
   /**
    * 剩余清单 4-7（M10）：失效商品要能被定位——响应 `data.product_id` 指出是哪一件。
    * @why 购物车里五件商品、报价回"商品不存在或已下架"，用户只能逐件删掉试；带上 id 前端就能标红那一行。
-   * @why 只带 product_id（买家自己购物车里的 id，不是新信息）；库存数量等内部细节仍只进日志。
+   * @why 只带 product_id（买家自己购物车里的 id，不是新信息）。
+   * @why AJ-493（2026-10-11）：40901 另带 `stock`（当前可买件数）——买家详情接口本就返回同一个数，不是新信息；
+   *      购物车据此把数量改到可买件数，而不是整单报价失败、合计消失。需求量（qty）等其余细节仍只进日志。
    */
-  it('🔴 40401 / 40901 的响应带 data.product_id（指出是哪一件），不带库存数等内部细节', async () => {
+  it('🔴 40401 / 40901 的响应带 data.product_id（指出是哪一件）；40901 另带 stock，不带其余细节', async () => {
     const srv = await buildServer();
     try {
       const ghost = await postQuote(
@@ -192,7 +194,7 @@ describe('POST /orders/quote（接线）', () => {
       );
       expect(ghost.json).toMatchObject({ code: 40401, data: { product_id: 'ghost' } });
       const stock = await postQuote(srv.url, { items: [{ product_id: 'p-knife', qty: 6 }] }, token);
-      expect(stock.json['data']).toEqual({ product_id: 'p-knife' });
+      expect(stock.json['data']).toEqual({ product_id: 'p-knife', stock: 5 });
     } finally {
       await srv.close();
     }

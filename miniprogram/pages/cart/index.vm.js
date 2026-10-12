@@ -187,6 +187,27 @@ export function markInvalid(rows, productId, code) {
 }
 
 /**
+ * 库存不足时改到可买件数（AJ-493，全入口点击测试 2026-10-11）。
+ * @why 库存只剩 1 件的商品在购物车里能点到 2（车里不知道库存），之后整单报价失败、合计消失，底部还说"请稍后重试"——
+ *      方向都是错的。报价的 40901 现在带 `stock`：可买件数 ≥ 1 就改到可买件数并说明（主流购物车同样做法），0 就标"已售罄"。
+ * @limitation 只在可买件数**少于**车里件数时调整：相等或更多说明报价之后库存回补了，交给重报价。
+ * @param {unknown} rows 当前行（要有 productId / qty）
+ * @param {unknown} err 报价失败的错误（`code` + `data.product_id` + `data.stock`）
+ * @returns {{productId: string, qty: number, text: string}|null} qty 为 0 = 不改数量、只标售罄
+ */
+export function stockAdjust(rows, err) {
+  const e = err !== null && typeof err === 'object' ? err : {};
+  const d = e.data !== null && typeof e.data === 'object' ? e.data : {};
+  if (e.code !== 40901 || typeof d.product_id !== 'string' || !Number.isInteger(d.stock))
+    return null;
+  const row = Array.isArray(rows) ? rows.find((r) => r?.productId === d.product_id) : undefined;
+  if (row === undefined || d.stock < 0 || d.stock >= row.qty) return null;
+  if (d.stock === 0) return { productId: d.product_id, qty: 0, text: '已售罄，请移除' };
+  const n = String(d.stock);
+  return { productId: d.product_id, qty: d.stock, text: `库存只剩 ${n} 件，已改为 ${n} 件` };
+}
+
+/**
  * 点行进详情（M-14，AJ-406）：只给意图，不认识路径（与首页 `intentForProduct` 同口径）。
  * @returns {{go: 'detail', id: string} | null}
  */

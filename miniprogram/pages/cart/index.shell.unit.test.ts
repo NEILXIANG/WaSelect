@@ -269,3 +269,60 @@ describe('购物车：下拉刷新', () => {
     expect(quoteCalls).toBe(before + 1);
   });
 });
+
+describe('库存不足：改到可买件数（AJ-493，全入口点击测试 2026-10-11）', () => {
+  const stockErr = (stock: number) =>
+    Object.assign(new Error('库存不足'), {
+      code: 40901,
+      data: { product_id: KNIFE.productId, stock },
+    });
+  const knife = () =>
+    (
+      page.data['rows'] as Array<{ productId: string; noteText?: string; invalidText?: string }>
+    ).find((r) => r.productId === KNIFE.productId);
+
+  it('🔴 报价回 40901 + stock=1 → 车里改成 1 件、行上说明、重报价后合计照常出现', async () => {
+    quoteFail = stockErr(1);
+    call('onPlus', tapId(KNIFE.productId));
+    await quoted();
+    expect(cart.items().find((i) => i.productId === KNIFE.productId)?.qty).toBe(1);
+    quoteFail = null;
+    await quoted();
+    expect(knife()?.noteText).toBe('库存只剩 1 件，已改为 1 件');
+    expect(page.data['quoteError']).toBe('');
+    expect(page.data['quote']).not.toBeNull();
+  });
+
+  it('🔴 stock=0 → 标"已售罄，请移除"，错误条说人话、不出错误码', async () => {
+    quoteFail = stockErr(0);
+    call('onPlus', tapId(KNIFE.productId));
+    await quoted();
+    expect(knife()?.invalidText).toBe('已售罄，请移除');
+    expect(String(page.data['quoteError'])).toContain('已售罄');
+    expect(page.data['quoteErrorRef']).toBe('');
+  });
+
+  it('改过数量后再动这一行 → 说明消失', async () => {
+    quoteFail = stockErr(1);
+    call('onPlus', tapId(KNIFE.productId));
+    await quoted();
+    quoteFail = null;
+    await quoted();
+    call('onPlus', tapId(OIL.productId));
+    await quoted();
+    expect(knife()?.noteText).toBe('库存只剩 1 件，已改为 1 件');
+    call('onPlus', tapId(KNIFE.productId));
+    expect(knife()?.noteText).toBe('');
+  });
+
+  it('🔴 删掉这一行再撤销 → 说明不再挂着（删除也算"动了这一行"）', async () => {
+    quoteFail = stockErr(1);
+    call('onPlus', tapId(KNIFE.productId));
+    await quoted();
+    quoteFail = null;
+    await quoted();
+    call('onRemove', tapId(KNIFE.productId));
+    call('onUndo');
+    expect(knife()?.noteText).toBe('');
+  });
+});

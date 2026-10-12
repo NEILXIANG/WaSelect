@@ -123,6 +123,17 @@ describe('summarizeQuoteItems', () => {
     ).toBe(40401);
   });
 
+  it('🔴 40901 的对外数据带 product_id 与 stock（AJ-493：购物车据此改到可买件数）', () => {
+    let err: unknown;
+    try {
+      summarizeQuoteItems([{ productId: 'p-1', qty: 11 }], [product({ stock: 10 })]);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(AppError);
+    expect((err as AppError).publicData).toEqual({ product_id: 'p-1', stock: 10 });
+  });
+
   it('库存不足 → 40901（恰好等于库存放行）', () => {
     expect(
       codeOf(() => summarizeQuoteItems([{ productId: 'p-1', qty: 11 }], [product({ stock: 10 })])),

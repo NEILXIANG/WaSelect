@@ -45,7 +45,8 @@ const INTERNAL_ERROR_MESSAGE = '服务器内部错误';
  * @param publicData **可对外**的结构化数据（剩余清单 4-7）：原样放进响应的 `data`。
  *        @why 与 details 分成两个参数而不是"details 里挑几个键输出"：哪些能出去必须在抛错处**显式**写，
  *             不能由序列化层按键名猜——猜的那一天，一个叫 product_id 的内部字段就会跟着出去。
- *        ⚠️ 只放请求方本来就知道的东西（如买家自己购物车里的 product_id），不放库存数、SQL、上游细节。
+ *        ⚠️ 只放请求方本来就知道的东西（如买家自己购物车里的 product_id），不放 SQL、上游细节。
+ *           库存数只在 40901 报价时放（AJ-493）：买家商品详情接口本就返回同一个数，不是新信息。
  */
 export class AppError extends Error {
   readonly code: ErrorCode;

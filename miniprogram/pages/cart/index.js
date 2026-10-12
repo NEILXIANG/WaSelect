@@ -34,6 +34,7 @@ import {
   pendingRemoval,
   quoteErrorText,
   quoteRetryable,
+  stockAdjust,
   selectionBar,
   undoAvailable,
   undoView,
@@ -148,7 +149,7 @@ Page({
    */
   refresh(reason = 'change') {
     this.quoteReason = reason;
-    const rows = cartRows(app.globalData.cart.items());
+    const rows = this.withStockNote(cartRows(app.globalData.cart.items()));
     // M-14：删光最后一件时仍要显示"已删除 · 撤销"——此时不能切到空态，否则撤销入口跟着消失
     const undo = undoView(this.pending, Date.now());
     const bar = selectionBar(rows);
@@ -224,7 +225,7 @@ Page({
         quote,
         // 报价通过 → 清掉上一次的失效标记（剩余清单 4-7）
         rows: markInvalid(
-          repriced ? cartRows(app.globalData.cart.items()) : this.data.rows,
+          repriced ? this.withStockNote(cartRows(app.globalData.cart.items())) : this.data.rows,
           undefined,
           0,
         ),
@@ -235,6 +236,17 @@ Page({
       });
     } catch (e) {
       if (isStale(seq, this.quoteSeq)) return;
+      // AJ-493：库存不足且服务端给了可买件数 → 改到可买件数、行上说明、重报价（不再整单失败、合计消失）
+      const adj = stockAdjust(this.data.rows, e);
+      if (adj !== null && adj.qty > 0) {
+        app.globalData.cart.setQty(adj.productId, adj.qty);
+        this.stockNote = { productId: adj.productId, text: adj.text };
+        // 推进序号：本次的 finally 不再按旧合计重开「去结算」（旧合计对应的是改之前的件数）
+        this.quoteSeq = nextSeq(this.quoteSeq);
+        this.setData({ quote: null, quoting: false });
+        this.refresh();
+        return;
+      }
       const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
       const lineCount = this.data.rows.length;
       this.setData({
@@ -249,6 +261,18 @@ Page({
         quoteRetry: quoteRetryable(code, lineCount),
         gate: checkoutGate({ hasError: true, errorCode: code, lineCount }),
       });
+      // AJ-493：库存为 0 → 那一行标"已售罄，请移除"，错误条说人话、不出错误码（售罄是正常状态，不是故障）
+      if (adj !== null && adj.qty === 0) {
+        const title = this.data.rows.find((r) => r.productId === adj.productId)?.title ?? '';
+        this.setData({
+          rows: this.data.rows.map((r) =>
+            r.productId === adj.productId ? { ...r, invalidText: adj.text } : r,
+          ),
+          quoteError:
+            title === '' ? '有商品已售罄，移除后才能结算' : `「${title}」已售罄，移除后才能结算`,
+          quoteErrorRef: '',
+        });
+      }
     } finally {
       // 同首页：过期请求不能把 quoting 清掉（新的还在途中）
       if (!isStale(seq, this.quoteSeq)) {
@@ -264,6 +288,23 @@ Page({
         });
       }
     }
+  },
+
+  /**
+   * 库存调整的说明挂到那一行（AJ-493）。说明留到用户再动这一行为止——一闪而过的话，数量被改了却不知道为什么。
+   * @param {Array<object>} rows `cartRows` 的输出
+   */
+  withStockNote(rows) {
+    const note = this.stockNote ?? null;
+    return rows.map((r) => ({
+      ...r,
+      noteText: note !== null && note.productId === r.productId ? note.text : '',
+    }));
+  },
+
+  /** 用户动了那一行（改数量 / 删除）→ 说明作废。 */
+  clearStockNote(productId) {
+    if (this.stockNote?.productId === productId) this.stockNote = null;
   },
 
   /** - / + 改数量（本地立刻生效，报价走防抖）。 */
@@ -287,6 +328,7 @@ Page({
   /** 删除并挂 5 秒撤销：「删除」按钮与「−」减到 0 共用（统一结论 5.3）。 */
   removeWithUndo(id) {
     if (id === '') return;
+    this.clearStockNote(id);
     const cart = app.globalData.cart;
     this.pending = pendingRemoval(cart.items(), id, Date.now());
     cart.remove(id);
@@ -339,6 +381,7 @@ Page({
 
   changeQty(productId, delta) {
     if (productId === '') return;
+    this.clearStockNote(productId);
     const cart = app.globalData.cart;
     const current = cart.items().find((i) => i.productId === productId);
     if (current === undefined) return;

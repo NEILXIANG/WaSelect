@@ -179,7 +179,9 @@ export function summarizeQuoteItems(
       throw new AppError(
         40901,
         { product_id: item.productId, stock: p.stock, qty: item.qty },
-        { product_id: item.productId },
+        // AJ-493：对外带 stock（当前可买件数）——买家详情接口本就返回同一个数；购物车据此改到可买件数，
+        // 不再整单报价失败。qty 等其余细节仍只进日志
+        { product_id: item.productId, stock: p.stock },
       );
     }
     itemsJpy += p.priceJpy * item.qty;

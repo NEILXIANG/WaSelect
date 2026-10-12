@@ -9,6 +9,17 @@
   padding-top: var(--ws-space-card);
 }
 
+/* 全入口点击测试 2026-10-11：商品卡片之间原先没有间距，边框连成一片；与其它列表页一样留出间距（不用 flex gap：老基础库不认） */
+.cart__list .row-item,
+.cart__list .undo-row {
+  margin-bottom: var(--ws-space-stack);
+}
+
+/* AJ-493：库存调整说明（数量为什么变了）——强调色，与"失效"的错误色区分开 */
+.row-item__note {
+  color: var(--ws-accent);
+}
+
 /* 一行商品：图 + 信息。图固定正方形，右边信息不会随图比例忽高忽低 */
 .row-item__main {
   display: flex;
