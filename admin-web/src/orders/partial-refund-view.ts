@@ -11,7 +11,7 @@
 import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
 import { UPSTREAM_UNAVAILABLE_CODE } from '../api/errors.js';
 import { minorMoneyText } from '../format.js';
-import { DISPUTE_REFUND_BLOCKED, upstreamUnavailableNotice, type Gate } from './view.js';
+import { disputeRefundBlockedText, upstreamUnavailableNotice, type Gate } from './view.js';
 
 interface RefundLike {
   id?: unknown;
@@ -132,7 +132,7 @@ export function partialRefundGate(order: unknown): Gate {
   if ((order as { has_dispute?: unknown }).has_dispute === true) {
     return {
       ok: false,
-      reason: DISPUTE_REFUND_BLOCKED,
+      reason: disputeRefundBlockedText(order),
     };
   }
   if (refundsOf(order).some((r) => IN_FLIGHT.has(String(r.status)))) {

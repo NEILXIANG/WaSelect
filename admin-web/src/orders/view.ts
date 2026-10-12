@@ -393,7 +393,7 @@ export function refundGate(order: unknown): Gate {
   //    拒付期间再点只会查询在途那笔或同键重放，不会动第二笔钱；"换新键重新发起"由服务端拦。
   //    先判拒付的旧写法会把 refunding + 拒付 的单永久锁在退款中。
   const disputed = (order as { has_dispute?: unknown } | null)?.has_dispute === true;
-  if (disputed && status !== 'refunding') return NO(DISPUTE_REFUND_BLOCKED);
+  if (disputed && status !== 'refunding') return NO(disputeRefundBlockedText(order));
   // 迟到付款（剩余清单 1-5）：已关单收到了钱，服务端凭 late_paid 放行；与服务端 refundGuard 同口径
   // G1（AJ-456）：有一笔部分退款在途（服务端会 40902 partial_refund_in_flight）——先去部分退款面板点「同步」
   const partials = (order as { partial_refunds?: unknown } | null)?.partial_refunds;
@@ -829,12 +829,12 @@ export const DISPUTE_LOCK_TEXT: Record<
 > = {
   open: {
     badge: '拒付中',
-    detail: '有进行中的拒付：退款与发货已锁（可在「解除拒付限制…」人工解除）',
+    detail:
+      '有进行中的拒付：退款与发货已锁，等银行结案（只有拒付其实已结束、系统没收到结案时，才用「解除拒付限制…」）',
   },
   lost: {
     badge: '拒付已败诉',
-    detail:
-      '拒付已败诉（货款已被银行退回买家）：退款与发货已锁，不要再发货（可在「解除拒付限制…」人工解除）',
+    detail: '拒付已败诉（货款已被银行退回买家）：不要再发货，也无需退款',
   },
   locked: {
     badge: '拒付锁定',
@@ -842,9 +842,20 @@ export const DISPUTE_LOCK_TEXT: Record<
   },
 };
 
-/** 拒付限制下的退款提示：出口是本单的「解除拒付限制…」，风控页只有拉黑（规律排查 2026-10-12）。 */
-export const DISPUTE_REFUND_BLOCKED =
-  '这单有拒付限制（进行中的由银行裁决，已败诉的货款已退回买家），现在不能退款；确需解除请点本单的「解除拒付限制…」';
+/**
+ * 拒付限制下的退款提示（按进行中 / 已败诉 / 看不出分开说）。
+ * @why 三天提交复查 2026-10-12：99a204b 曾写"确需解除请点本单的「解除拒付限制…」"——解锁后再退款，支付机构对争议中 /
+ *      已被拉回的付款一律拒（mark-disputed.ts 的 @measured：charge_disputed / refund_disputed_payment），订单卡在「退款中」。
+ *      所以这里**不指向解锁**：进行中的等银行结案；已败诉的钱已经回到买家手里，不需要再退。
+ * @limitation 解锁只适用于"拒付其实已结束、系统没收到结案"（见解除表单说明）；那种情况运营要先核实，不在这句提示里引导。
+ */
+export function disputeRefundBlockedText(order: unknown): string {
+  const d = disputeLockState(order);
+  if (d === 'lost') return '拒付已败诉：货款已被银行退回买家，不能也无需再退款';
+  if (d === 'open')
+    return '银行正在处理这笔付款的拒付，现在不能退款（支付机构不接受对争议中的付款退款），请等银行结案';
+  return '这单有拒付限制，现在不能退款（争议中或已被银行拉回的付款无法退款），请等银行结案';
+}
 
 /** 解除拒付限制的表单（契约 `required: [reason]`）。 */
 export interface ReleaseForm {
@@ -939,7 +950,19 @@ export function amountBreakdown(order: unknown): Array<{ label: string; value: s
       value: minorMoneyText(charged['charge_amount'], charged['charge_currency']),
     });
   } else if (pays !== null && pays.length > 0) {
-    out.push({ label: '买家实付', value: '尚未扣款' });
+    // 迟到付款（三天提交复查 2026-10-12）：钱确实到账了，但支付行停在 cancelled（关单时取消、落账回滚，只记 late_paid 事件）——
+    //   不能写"尚未扣款"，那与"迟到付款待退"自相矛盾；取最后一条支付行的金额，并说要退回
+    const last = pays[pays.length - 1] ?? {};
+    if (
+      o['late_paid'] === true &&
+      typeof last['charge_currency'] === 'string' &&
+      Number.isInteger(last['charge_amount'])
+    ) {
+      out.push({
+        label: '买家实付（关单后才到账，需全额退回）',
+        value: minorMoneyText(last['charge_amount'], last['charge_currency']),
+      });
+    } else out.push({ label: '买家实付', value: '尚未扣款' });
   }
   // 部分退款汇总（两端逐页走查第三轮 2026-10-12）：原先只在「部分退款…」抽屉与时间线里，金额区看不出退了多少、还有多少在途
   const refunds = Array.isArray(o['partial_refunds'])

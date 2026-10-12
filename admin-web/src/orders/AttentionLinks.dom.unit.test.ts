@@ -36,3 +36,27 @@ describe('AttentionLinks', () => {
     expect(picked).toEqual(['after_sale']);
   });
 });
+
+// 三天提交复查 2026-10-12：计数只带 attention，点进去的列表却保留了当前的状态 / 关键词 / 日期 / 买家筛选——
+//   "售后待处理 3"点进去只有 1 单
+describe('AttentionLinks：计数带上当前筛选', () => {
+  it('🔴 计数请求带上传入的关键词与状态', async () => {
+    const paths: string[] = [];
+    mounted = await mount(
+      createElement(AttentionLinks, {
+        api: (async (req: { path: string }) => {
+          paths.push(req.path);
+          return { items: [], total: 0 };
+        }) as never,
+        base: { keyword: 'Ken', status: ['paid'] },
+        onPick: () => undefined,
+      }),
+    );
+    await flush();
+    expect(paths.length).toBeGreaterThan(0);
+    for (const p of paths) {
+      expect(p).toContain('keyword=Ken');
+      expect(p).toContain('status=paid');
+    }
+  });
+});

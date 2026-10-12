@@ -350,9 +350,14 @@ describe('refundGate（退款闸门）', () => {
     const g = refundGate(withStatus('paid', { has_dispute: true }));
     expect(g.ok).toBe(false);
     expect(g.reason).toContain('拒付');
-    // 规律排查 2026-10-12：原断言要求"风控"——风控页只有「拉黑买家…」，真正的出口是本单的「解除拒付限制…」
-    expect(g.reason).toContain('「解除拒付限制…」');
+    // 三天提交复查 2026-10-12：99a204b 曾改成"去点「解除拒付限制…」"——解锁后再退款，支付机构对争议中的付款一律拒，
+    //   订单卡在退款中（mark-disputed.ts 的 @measured）。正确的下一步是等银行结案，不是解锁
+    expect(g.reason).not.toContain('解除拒付限制');
     expect(g.reason).not.toContain('风控');
+    expect(g.reason).toContain('等银行结案');
+    const lost = refundGate(withStatus('paid', { has_dispute: true, payment_dispute: 'lost' }));
+    expect(lost.reason).toContain('货款已被银行退回买家');
+    expect(lost.reason).not.toContain('解除拒付限制');
     expect(g.reason).not.toMatch(/\d{5}/);
   });
 
@@ -1013,5 +1018,21 @@ describe('shipGate：拒付三种说法', () => {
     expect(
       shipGate({ status: 'paid', has_dispute: true, ...(pd ? { payment_dispute: pd } : {}) }),
     ).toEqual({ ok: false, reason });
+  });
+});
+
+// 三天提交复查 2026-10-12：d40e54b 只认 succeeded / refunded 的支付行——迟到付款的钱确实到账了，
+//   支付行却停在 cancelled（关单时取消、落账事务回滚，只记 late_paid 事件），金额区写"尚未扣款"，与"迟到付款待退"自相矛盾
+describe('amountBreakdown：迟到付款', () => {
+  it('🔴 late_paid → 写到账金额并说明要退回，不写"尚未扣款"', () => {
+    const rows = amountBreakdown({
+      items_jpy: 3590,
+      shipping_jpy: 4050,
+      status: 'expired',
+      late_paid: true,
+      payments: [{ status: 'cancelled', charge_currency: 'USD', charge_amount: 5400 }],
+    });
+    const paid = rows.find((r) => r.label.startsWith('买家实付'));
+    expect(paid).toEqual({ label: '买家实付（关单后才到账，需全额退回）', value: '$54.00' });
   });
 });

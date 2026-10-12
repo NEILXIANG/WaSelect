@@ -408,6 +408,14 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         <AttentionLinks
           api={api}
           refreshKey={reloadTick}
+          base={{
+            keyword: applied,
+            includeTest,
+            ...(statusKey === '' ? {} : { status: statusKey.split(',') as OrderStatus[] }),
+            ...(createdFrom !== undefined ? { createdFrom } : {}),
+            ...(createdTo !== undefined ? { createdTo } : {}),
+            ...(userId !== undefined ? { userId } : {}),
+          }}
           onPick={(a) => patch({ attention: a, page: '1' })}
         />
       )}
