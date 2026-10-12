@@ -183,6 +183,14 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
       expect(csv).toContain('4900000000011');
       expect(csv).toContain(`"'=HYPERLINK(""x"")"`);
       expect(csv).not.toContain('Jane Doe');
+      // AJ-493 后续 / AJ-494：采购单是内部用表——中文表头；36 位商品 id 挪到最后一列（核对用）
+      expect(lines(csv)[0]).toBe(
+        '订单号,付款时间（日本时间）,商品名,日文原名,JAN 码,采购来源,数量,售价（円）,成本（円）,商品编号（系统）',
+      );
+      // 数据行与表头对齐：第 3 列是商品名，最后一列是商品 id（只看表头的话，数据列错位不会红）
+      const cells = (lines(csv)[1] ?? '').split(',');
+      expect(cells[2]).toBe('Deba Knife 出刃包丁');
+      expect(cells.at(-1)).toBe('p-o-1');
     } finally {
       await close();
     }
@@ -197,7 +205,12 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
       const all = await call(url, 'GET', '/api/v1/admin/exports/orders', undefined, await bearer());
       expect(lines((all.body as { csv: string }).csv)).toHaveLength(3);
       // P2-46：时间列是日本时间（页面全部 JST，导出原先是 UTC Z，跨日统计会错一天）
-      expect(lines((all.body as { csv: string }).csv)[0]).toContain('created_at_jst');
+      // AJ-494：订单总表是内部用表——中文表头、状态写中文（原为 created_at_jst / paid 这类英文字段与代号）
+      expect(lines((all.body as { csv: string }).csv)[0]).toBe(
+        '订单号,状态,下单时间（日本时间）,付款时间（日本时间）,发货时间（日本时间）,商品金额（円）,运费（円）,预估关税（円）,订单合计（円）,收件人,州,国家,承运商,运单号,实付币种,实付金额',
+      );
+      expect((all.body as { csv: string }).csv).toContain(',待发货,');
+      expect((all.body as { csv: string }).csv).not.toMatch(/,paid,/);
       expect((all.body as { csv: string }).csv).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
       expect((all.body as { csv: string }).csv).not.toMatch(/T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
       const shipped = await call(
@@ -377,7 +390,9 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
     try {
       const r = await call(url, 'GET', '/api/v1/admin/exports/orders', undefined, await bearer());
       const rows = lines((r.body as { csv: string }).csv);
-      expect(rows[0]).toContain('paid_currency,paid_amount');
+      expect(rows[0]).toContain(
+        '实付币种,实付金额' /* AJ-494：中文表头（原 paid_currency,paid_amount） */,
+      );
       const usd = rows.find((l) => l.startsWith('WSo-usd'));
       expect(usd?.endsWith(',USD,86.00')).toBe(true); // 行末两列
       const none = rows.find((l) => l.startsWith('WSo-nopay'));

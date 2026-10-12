@@ -10,7 +10,8 @@
  *      快照为 NULL 的历史行用 products 当前值兜底，并在 `snapshot` 列标 `current`，让人知道这一格不是快照。
  * @why 申报价存的是美分（BIGINT，create-order 用 toMinor 分摊），导出转成两位小数的美元：报关单填的是美元。
  * @limitation 一：不分页、不流式（见 domain/csv.ts）；
- * @limitation 二：表头是英文蛇形（与契约字段同名）：报关代理与运营共用一份，改中文表头要两边确认。
+ * @limitation 二：报关表（customs）表头是英文蛇形（与契约字段同名）：报关代理与运营共用一份，改中文表头要两边确认。
+ *              订单总表与采购单是内部用表，AJ-494 起改中文表头、状态写中文（运营在 Excel 里读不懂英文字段与代号）。
  * @limitation 三：purchase / customs 固定 status = paid（"已付未发"才需要采购和报关），不开放过滤；
  *              「导出所选」（`orderIds`，AJ-407）与它是 AND——所选里的已发货单不会出现在采购 / 报关表里。
  * @limitation 四：`orderIds` 只是**过滤**：不存在的 id 静默不出（不报错，与列表筛选同口径）；测试单即便被选中也不出。
@@ -19,7 +20,7 @@
  */
 import type { Db } from './db.js';
 import { asText, type CsvCell } from '../domain/csv.js';
-import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
+import { CURRENCY_MINOR_DIGITS, type CurrencyCode, ORDER_STATUS_LABELS } from '@waselect/shared';
 
 export const EXPORT_KINDS = ['orders', 'purchase', 'customs'] as const;
 export type ExportKind = (typeof EXPORT_KINDS)[number];
@@ -73,27 +74,28 @@ async function ordersTable(
        and (${idFilter(db, 'o.id', ids)})
      order by o.created_at desc, o.id desc`;
   return {
+    // AJ-494：中文表头（内部用表）；"订单号 / 运单号 / 承运商"与导入运单号认的表头同名，改好可直接导回
     header: [
-      'order_no',
-      'status',
-      'created_at_jst',
-      'paid_at_jst',
-      'shipped_at_jst',
-      'items_jpy',
-      'shipping_jpy',
-      'duty_jpy',
-      'total_jpy',
-      'recipient',
-      'state',
-      'country',
-      'carrier',
-      'tracking_no',
-      'paid_currency',
-      'paid_amount',
+      '订单号',
+      '状态',
+      '下单时间（日本时间）',
+      '付款时间（日本时间）',
+      '发货时间（日本时间）',
+      '商品金额（円）',
+      '运费（円）',
+      '预估关税（円）',
+      '订单合计（円）',
+      '收件人',
+      '州',
+      '国家',
+      '承运商',
+      '运单号',
+      '实付币种',
+      '实付金额',
     ],
     rows: rows.map((r) => [
       str(r['order_no']),
-      str(r['status']),
+      statusLabel(r['status']),
       jst(r['created_at']),
       jst(r['paid_at']),
       jst(r['shipped_at']),
@@ -135,22 +137,22 @@ async function purchaseTable(db: Db, ids: readonly string[] | undefined): Promis
      where o.status = 'paid' and o.is_test = false and (${idFilter(db, 'o.id', ids)})
      order by o.paid_at, o.id, oi.line_no nulls last, oi.id`;
   return {
+    // AJ-494：中文表头（内部用表）；36 位商品 id 挪到最后一列（只核对用，采购员不需要看）
     header: [
-      'order_no',
-      'paid_at_jst',
-      'product_id',
-      'title',
-      'title_ja',
-      'jan_code',
-      'purchase_source',
-      'qty',
-      'unit_price_jpy',
-      'cost_jpy',
+      '订单号',
+      '付款时间（日本时间）',
+      '商品名',
+      '日文原名',
+      'JAN 码',
+      '采购来源',
+      '数量',
+      '售价（円）',
+      '成本（円）',
+      '商品编号（系统）',
     ],
     rows: rows.map((r) => [
       str(r['order_no']),
       jst(r['paid_at']),
-      str(r['product_id']),
       str(r['title_snapshot']),
       str(r['title_ja']),
       asText(str(r['jan_code'])),
@@ -158,8 +160,16 @@ async function purchaseTable(db: Db, ids: readonly string[] | undefined): Promis
       num(r['qty']),
       num(r['unit_price_jpy']),
       num(r['cost_jpy']),
+      str(r['product_id']),
     ]),
   };
+}
+
+/** 订单状态 → 中文（shared 词表）；认不出的原样输出（不编）。 */
+function statusLabel(v: unknown): string | null {
+  const s = str(v);
+  if (s === null) return null;
+  return (ORDER_STATUS_LABELS as Record<string, string>)[s] ?? s;
 }
 
 async function customsTable(db: Db, ids: readonly string[] | undefined): Promise<ExportTable> {

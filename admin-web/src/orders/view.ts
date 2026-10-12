@@ -45,19 +45,9 @@ import { UPSTREAM_UNAVAILABLE_CODE } from '../api/errors.js';
 import { formatJst, minorMoneyText, moneyText } from '../format.js';
 
 /** 管理端状态文案（@see @limitation 一：比买家侧更细，十态互不合并）。 */
-export const ORDER_STATUS_LABELS: Readonly<Record<OrderStatus, string>> = {
-  // AJ-410 / N15：白话（原「待付款（未发起）/（支付中）」）；列表、详情、时间线都只读这一处
-  created: '已下单，等待买家付款',
-  pending_payment: '买家正在付款',
-  paid: '待发货',
-  shipped: '已发货',
-  delivered: '已签收',
-  completed: '已完成',
-  cancelled: '已取消',
-  expired: '已过期',
-  refunding: '退款中',
-  refunded: '已退款',
-};
+// AJ-494：词表挪到 shared（服务端导出订单总表也用它），这里原样转出，调用方不用改
+import { ORDER_STATUS_LABELS } from '@waselect/shared';
+export { ORDER_STATUS_LABELS };
 
 // 状态筛选的选项已由 ./list-filter.ts 的 STATUS_TABS 取代（AJ-400：下拉改页签，页签覆盖十态由其单测钉住）。
 

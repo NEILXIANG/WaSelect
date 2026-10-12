@@ -27,3 +27,4 @@ export * from './order-attention.js';
 export * from './refund-reason.js';
 export * from './email-shape.js';
 export * from './order-badges.js';
+export * from './order-status-labels.js';
