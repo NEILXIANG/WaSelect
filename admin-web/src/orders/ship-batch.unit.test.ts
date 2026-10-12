@@ -22,6 +22,29 @@ import {
   type OrderLookup,
 } from './ship-batch.js';
 
+// 两端输入测试 2026-10-12：从 Excel / 表格里复制粘贴进来是 Tab 分隔；中文输入法手打的是全角逗号——
+//   原先都整行当一个格子，报"第 1 行表头缺少列"，运营看不出是分隔符的问题
+describe('分隔符按第一行自动认（逗号 / Tab / 全角逗号）', () => {
+  const want = [
+    { line: 1, cells: ['order_no', 'carrier', 'tracking_no'] },
+    { line: 2, cells: ['261007-7K2M9P', 'Japan Post EMS', 'EE123456789JP'] },
+  ];
+  it.each([
+    [
+      'Tab（Excel 粘贴）',
+      'order_no\tcarrier\ttracking_no\r\n261007-7K2M9P\tJapan Post EMS\tEE123456789JP\r\n',
+    ],
+    ['全角逗号', 'order_no，carrier，tracking_no\n261007-7K2M9P，Japan Post EMS，EE123456789JP\n'],
+    ['逗号', 'order_no,carrier,tracking_no\n261007-7K2M9P,Japan Post EMS,EE123456789JP\n'],
+  ])('🔴 %s', (_n, text) => {
+    expect(parseCsvRecords(text)).toEqual(want);
+  });
+
+  it('逗号文件里引号内的 Tab / 全角逗号原样保留（只按第一行认一次，不混用）', () => {
+    expect(parseCsvRecords('a,b\n"x\ty","p，q"\n')[1]?.cells).toEqual(['x\ty', 'p，q']);
+  });
+});
+
 describe('parseCsv', () => {
   it('BOM + CRLF + 引号里的逗号 / 转义引号 / 换行；尾部空行丢掉', () => {
     const text =

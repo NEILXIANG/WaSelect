@@ -28,6 +28,11 @@ import {
   type BatchRow,
 } from './ship-batch.js';
 
+/**
+ * 表头说明（一整句写在字符串里：原先写在 JSX 里被格式化工具折行，"tracking_no，" 与 "以及" 之间多出一个空格）。
+ */
+const HEADER_HELP = `第一行是表头，需含「订单号」「运单号」两列，「承运商」可选（支持 order_no / carrier / tracking_no，以及注文番号 / 配送業者 / 追跡番号等写法）。一次最多 ${String(SHIP_BATCH_MAX)} 行。`;
+
 export interface CsvShipImportProps {
   api: AdminApi;
   onClose: () => void;
@@ -95,10 +100,7 @@ export function CsvShipImport({ api, onClose, onDone, onError }: CsvShipImportPr
         在 Excel / Numbers / WPS
         里做好表格后，「另存为」选「CSV（逗号分隔）」，再在下面选择这个文件；也可以直接把表格内容复制粘贴到下面的大框里。
       </p>
-      <p className="muted">
-        第一行是表头，需含「订单号」「运单号」两列，「承运商」可选（支持 order_no / carrier /
-        tracking_no， 以及 注文番号 / 配送業者 / 追跡番号 等写法）。一次最多 {SHIP_BATCH_MAX} 行。
-      </p>
+      <p className="muted">{HEADER_HELP}</p>
       <input
         type="file"
         accept=".csv,text/csv"

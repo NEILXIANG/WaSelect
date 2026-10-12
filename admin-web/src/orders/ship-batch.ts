@@ -61,11 +61,28 @@ export interface CsvRecord {
 
 /**
  * RFC 4180 风格解析：引号字段可含逗号 / 换行 / `""`；CRLF、LF、CR 都算换行；全空行丢弃。
+ * 分隔符按第一行自动认（逗号 / Tab / 全角逗号，@see delimiterOf）。
  * @why 每条记录带**物理行号**（AJ-401 续作复核修正）：原先按"第几条记录 + 2"推行号，
  *      文件中间有空行或引号内换行时，预检表报的行号与编辑器 / Excel 里看到的对不上，运营会去改错的那一行。
  */
+/**
+ * 分隔符按**第一个非空行**认一次：有逗号就是逗号；否则有 Tab 用 Tab；否则有全角逗号用全角逗号。
+ * @why 两端输入测试 2026-10-12：从 Excel / 表格复制粘贴进来是 Tab 分隔，中文输入法手打的是全角逗号——
+ *      原先都整行当一个格子，报"第 1 行表头缺少列"，运营看不出是分隔符的问题。
+ * @why 只认一次、不混用：逗号文件里引号内的 Tab / 全角逗号是内容，不能当分隔符。
+ * @limitation 第一行里同时有逗号与 Tab 时按逗号（标准 CSV 优先）；表头本身不含这些字符，实际不会混。
+ */
+function delimiterOf(src: string): string {
+  const first = src.split(/\r\n|\n|\r/).find((l) => l.trim() !== '') ?? '';
+  if (first.includes(',')) return ',';
+  if (first.includes('\t')) return '\t';
+  if (first.includes('，')) return '，';
+  return ',';
+}
+
 export function parseCsvRecords(text: string): CsvRecord[] {
   const src = text.replace(/^\uFEFF/, '');
+  const delim = delimiterOf(src);
   const out: CsvRecord[] = [];
   let row: string[] = [];
   let cell = '';
@@ -89,7 +106,7 @@ export function parseCsvRecords(text: string): CsvRecord[] {
       else cell += ch;
       if (nl) line++;
     } else if (ch === '"') quoted = true;
-    else if (ch === ',') {
+    else if (ch === delim) {
       row.push(cell);
       cell = '';
     } else if (ch === '\r' || ch === '\n') {
