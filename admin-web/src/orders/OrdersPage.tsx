@@ -33,6 +33,7 @@
  * @see ./view.ts（行视图与闸门）；./api.ts（接口层）；./OrderDetail.tsx；../router.ts
  */
 import { ExportBar } from './ExportBar.js';
+import { shortRef } from '../format.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isOrderAttention,
@@ -83,6 +84,8 @@ const Q = {
   attention: 'attention',
   /** AJ-486：按买家筛（客户详情"查看全部订单"跳进来时带上）。 */
   user: 'user',
+  /** 全入口点击测试 2026-10-11：客户称呼（客户详情带过来，只用于显示；不发给服务端）。 */
+  who: 'who',
 } as const;
 
 /** 与服务端 `user_id` 同一形状白名单（契约 0.6.71）：形状不对不发，免得换一个 40001、页面空白看不出是筛选坏了。 */
@@ -145,6 +148,8 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   const attention = isOrderAttention(attentionRaw) ? attentionRaw : undefined;
   const userRaw = route.query.get(Q.user);
   const userId = userRaw !== null && USER_ID_SHAPE.test(userRaw) ? userRaw : undefined;
+  // 只用于显示（React 会转义）；截断防超长链接撑坏版面
+  const who = (route.query.get(Q.who) ?? '').trim().slice(0, 60);
   const includeTest = route.query.get(Q.test) === '1';
   const { sortKey, sortDir, size: pageSize } = readListParams(route.query, LIST_SORT_KEYS.orders);
   /** 改排序 / 条数都回到第 1 页（第 3 页在新顺序下是另一批单，停在那里只会让人困惑）。 */
@@ -361,8 +366,14 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       {userId !== undefined && (
         // AJ-486：从客户详情跳进来时说清"只看这位客户"，并给出口
         <p className="muted">
-          只看这位客户：<span className="mono">{userId}</span>{' '}
-          <button type="button" className="link" onClick={() => patch({ user: '', page: '1' })}>
+          {/* 全入口点击测试 2026-10-11：写称呼（没有就写缩短的编号），并说一共几单——原先是 36 位 id、没有单数 */}
+          只看这位客户：{who !== '' ? who : <span className="mono">{shortRef(userId)}</span>}
+          {loading ? '' : ` · 共 ${String(total)} 单`}{' '}
+          <button
+            type="button"
+            className="link"
+            onClick={() => patch({ user: '', who: '', page: '1' })}
+          >
             清除
           </button>
         </p>
@@ -371,7 +382,8 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       {attention !== undefined && (
         // AJ-425：从工作台待办跳进来时说清"现在只看哪一类"，并给出口（不清掉的话运营会以为列表就这么几单）
         <p className="muted">
-          只看：{ORDER_ATTENTION_LABELS[attention]}{' '}
+          只看：{ORDER_ATTENTION_LABELS[attention]}
+          {loading ? '' : ` · 共 ${String(total)} 单`}{' '}
           <button
             type="button"
             className="link"

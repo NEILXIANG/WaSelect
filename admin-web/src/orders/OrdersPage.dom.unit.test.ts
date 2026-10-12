@@ -508,6 +508,34 @@ describe('订单列表：待处理筛选（AJ-425）', () => {
     expect(gets().at(-1)?.path).not.toContain('user_id=');
   });
 
+  // 全入口点击测试 2026-10-11：原先写"只看这位客户：u-065bf2d9-7815-…"（36 位 id）；改写称呼，并说一共几单
+  it('🔴 ?user=&who= → 写称呼不写 id；筛选行说「共 N 单」', async () => {
+    const el = await open('#/orders?user=u-065bf2d9-7815&who=' + encodeURIComponent('Jason Huang'));
+    await flush();
+    const line = [...el.querySelectorAll('p.muted')].find((p) =>
+      (p.textContent ?? '').includes('只看这位客户'),
+    );
+    expect(line?.textContent).toContain('只看这位客户：Jason Huang');
+    expect(line?.textContent).not.toContain('u-065bf2d9');
+    expect(line?.textContent).toMatch(/共 \d+ 单/);
+  });
+
+  it('🔴 只有 ?user=（老链接）→ 写缩短的编号，不写整串', async () => {
+    const el = await open('#/orders?user=u-065bf2d9-7815-42f7-a9a8-b91843c8406d');
+    await flush();
+    expect(el.textContent).toContain('只看这位客户：u-065bf2d9…');
+    expect(el.textContent).not.toContain('b91843c8406d');
+  });
+
+  it('🔴 待处理筛选行也说「共 N 单」', async () => {
+    const el = await open('#/orders?attention=after_sale');
+    await flush();
+    const line = [...el.querySelectorAll('p.muted')].find((p) =>
+      (p.textContent ?? '').includes('只看：'),
+    );
+    expect(line?.textContent).toMatch(/只看：售后待处理 · 共 \d+ 单/);
+  });
+
   it('网址里形状不对的 user 不发给服务端（不换一个 40001）', async () => {
     await open('#/orders?user=' + encodeURIComponent("u 1'--"));
     await flush();

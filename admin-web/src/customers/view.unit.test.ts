@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addressLine,
+  customerLabel,
   customerListQuery,
   customerRows,
   riskText,
@@ -166,5 +167,24 @@ describe('customerListQuery', () => {
     expect(customerListQuery({ keyword: 'a+b@example.com', page: 1 })).toBe(
       '?keyword=a%2Bb%40example.com',
     );
+  });
+});
+
+// 全入口点击测试 2026-10-11：订单页"只看这位客户"原先显示 36 位用户 id；由客户详情把能认出人的称呼带过去
+describe('customerLabel（订单页"只看这位客户"的称呼）', () => {
+  it('🔴 默认地址收件人 > 第一个地址收件人 > 联系邮箱 > 空串', () => {
+    expect(
+      customerLabel({
+        addresses: [{ recipient: 'Li Na' }, { recipient: 'Zhang Wei', is_default: true }],
+        contact_email: 'z@example.test',
+      }),
+    ).toBe('Zhang Wei');
+    expect(
+      customerLabel({ addresses: [{ recipient: 'Li Na' }], contact_email: 'z@example.test' }),
+    ).toBe('Li Na');
+    expect(customerLabel({ addresses: [], contact_email: 'z@example.test' })).toBe(
+      'z@example.test',
+    );
+    expect(customerLabel({ addresses: [] })).toBe('');
   });
 });

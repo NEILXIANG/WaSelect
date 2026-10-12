@@ -16,7 +16,13 @@ import { ORDER_STATUS_LABELS } from '../orders/view.js';
 import { getCustomer, type AdminApi } from './api.js';
 import { CustomerRiskActions } from './CustomerRiskActions.js';
 import { CustomerPrivacyActions } from './CustomerPrivacyActions.js';
-import { addressLine, riskText, statsCards, type CustomerDetailLike } from './view.js';
+import {
+  addressLine,
+  customerLabel,
+  riskText,
+  statsCards,
+  type CustomerDetailLike,
+} from './view.js';
 
 export interface CustomerDetailProps {
   api: AdminApi;
@@ -128,7 +134,8 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
           <span className="label">
             订单（最近 50 张，新的在前）{' '}
             {/* AJ-486：超过 50 张的看不到——给到订单页按人筛的入口（契约 0.6.71 `user_id`） */}
-            <a className="link" href={`#/orders?user=${encodeURIComponent(c.id)}`}>
+            {/* 全入口点击测试 2026-10-11：带上称呼，订单页写"只看这位客户：Zhang Wei"而不是 36 位 id */}
+            <a className="link" href={ordersOfCustomerHref(c)}>
               {(c.stats.order_count ?? 0) > c.orders.length
                 ? `共 ${String(c.stats.order_count)} 单，在订单页查看全部 →`
                 : '在订单页查看 →'}
@@ -171,4 +178,10 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
       )}
     </section>
   );
+}
+
+/** 订单页"只看这位客户"的链接：用户 id + 称呼（称呼为空就不带）。 */
+function ordersOfCustomerHref(c: Parameters<typeof customerLabel>[0] & { id: string }): string {
+  const who = customerLabel(c);
+  return `#/orders?user=${encodeURIComponent(c.id)}${who !== '' ? `&who=${encodeURIComponent(who)}` : ''}`;
 }

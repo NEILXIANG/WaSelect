@@ -175,7 +175,10 @@ describe('客户详情', () => {
     expect(links).toContain('#/orders/o-a1');
     expect(links).toContain('#/orders/o-a4');
     // AJ-486：详情只列最近 50 张；给出到订单页按人筛的入口（此前注释说"去订单页按人筛"，订单页却筛不了）
-    expect(links).toContain(`#/orders?user=${encodeURIComponent(ROW.id)}`);
+    // 全入口点击测试 2026-10-11：带上称呼（默认地址收件人），订单页不再显示 36 位用户 id
+    expect(links).toContain(
+      `#/orders?user=${encodeURIComponent(ROW.id)}&who=${encodeURIComponent('Zhang Wei')}`,
+    );
     const testRow = [...el.querySelectorAll('tr')].find((tr) =>
       (tr.textContent ?? '').includes('261005-TEST01'),
     );

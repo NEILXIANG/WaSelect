@@ -186,3 +186,18 @@ export const CUSTOMER_BLOCK_CONFIRM_TEXT =
 /** 删除行为记录的二次确认正文（AJ-413）：说清删什么、不删什么、不可恢复。 */
 export const CUSTOMER_PURGE_CONFIRM_TEXT =
   '只删除该客户在小程序里的浏览、加购、下单、支付等使用记录（隐私政策承诺的"用户要求即删除"）。订单、地址、退款与审计记录不受影响。删除后无法恢复；这次操作与原因会记录下来。';
+
+/**
+ * 订单页"只看这位客户"的称呼（全入口点击测试 2026-10-11）：默认地址收件人 > 第一个地址收件人 > 联系邮箱 > 空串。
+ * @why 原先订单页写"只看这位客户：u-065bf2d9-7815-…"（36 位用户 id），运营认不出是谁；客户没有昵称，收件人名最能认出人。
+ */
+export function customerLabel(c: {
+  addresses?: ReadonlyArray<CustomerAddressLike>;
+  contact_email?: string | null;
+}): string {
+  const list = c.addresses ?? [];
+  const pick = list.find((a) => a.is_default === true) ?? list[0];
+  const name = (pick?.recipient ?? '').trim();
+  if (name !== '') return name;
+  return (c.contact_email ?? '').trim();
+}
