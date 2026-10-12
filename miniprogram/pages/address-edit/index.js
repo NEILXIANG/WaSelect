@@ -29,6 +29,7 @@ import {
   formModel,
   toAddressInput,
   phoneForInput,
+  saveErrorFields,
 } from '../../utils/address-form.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -218,7 +219,8 @@ Page({
     } catch (e) {
       // ⚠️ 服务端的拒单（格式/字段）也要显示出来：前端预检不是权威，
       //    只信预检的表现是"前端说对、提交失败"却没有任何提示。
-      this.setData({ ...errorFields(e, 'saveError') });
+      // AJ-498：认得出的 40002 说清是哪一格、什么原因（原为通用的"地址须为英文/拼音或电话格式错误"）
+      this.setData({ ...saveErrorFields(e) });
       return;
     } finally {
       this.setData({ saving: false });

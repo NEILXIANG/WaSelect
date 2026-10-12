@@ -36,6 +36,7 @@ import {
   type ChainServer,
 } from '../helpers/chain-server.js';
 import { unreadable } from '../helpers/readable.js';
+import { addressRejectText } from '@waselect/shared';
 import { createAdminApi } from '../../admin-web/src/api/client.js';
 import { createProduct, listProducts, setProductStatus } from '../../admin-web/src/products/api.js';
 import {
@@ -50,7 +51,13 @@ import {
   refundOrder,
   resolveAfterSale,
   shipOrder,
+  updateOrderAddress,
 } from '../../admin-web/src/orders/api.js';
+import {
+  addressFormErrors,
+  addressFormModel,
+  toAddressInput,
+} from '../../admin-web/src/orders/address-view.js';
 import {
   fullRefundAmountText,
   fullRefundConfirmBody,
@@ -68,7 +75,7 @@ import { afterSaleRows } from '../../admin-web/src/orders/after-sale-view.js';
 import { channelLabelsFrom } from '../../admin-web/src/orders/channel-labels.js';
 import { productCards } from '../../miniprogram/pages/home/index.vm.js';
 import { detailView as productDetailView } from '../../miniprogram/pages/detail/index.vm.js';
-import { cartRows, stockAdjust } from '../../miniprogram/pages/cart/index.vm.js';
+import { cartRows, markInvalid, stockAdjust } from '../../miniprogram/pages/cart/index.vm.js';
 import { orderRows as buyerOrderRows } from '../../miniprogram/pages/order/index.vm.js';
 import { detailView as orderDetailView } from '../../miniprogram/pages/order-detail/index.vm.js';
 import {
@@ -556,5 +563,113 @@ describe('钱走回头路与没付成：未发货全额退款、超时关单、�
     expect(d).toMatchObject({ statusText: '已取消', canPay: false, canBuyAgain: true });
     expect(d.timeline.map((t) => t.statusText)).toEqual(['提交订单', '订单已取消']);
     expect(await stockOf()).toBe(3);
+  });
+});
+
+/** 第三条旅程的共享状态：车里两件，其中一件被下架；另一张已付单在发货前改址。 */
+const M = { keep: 'p-sencha', gone: 'p-yuzu', orderId: '' };
+
+describe('中途变化：车里的商品被下架、发货前改地址——买家与运营各自看到的话', () => {
+  beforeAll(async () => {
+    await db`
+      insert into products (id, title, title_ja, category, price_jpy, weight_g, stock, origin_country, status,
+                            customs_desc_en, hs_code)
+      values (${M.keep}, '丸山园 静冈深蒸煎茶 100g', '丸山園 静岡深蒸し煎茶 100g', 'food', 1620, 130, 20, 'JP',
+              'active', 'green tea leaves', '0902.10'),
+             (${M.gone}, '马路村 柚子醋 500ml', '馬路村 ゆずの村 ぽん酢 500ml', 'food', 980, 620, 20, 'JP',
+              'active', 'yuzu ponzu sauce', '2103.90')`;
+  });
+
+  it('⑪ 加购两件后运营下架其中一件 → 报价 40401 → 购物车标出那一行、说清怎么办', async () => {
+    const rows = cartRows([
+      { productId: M.keep, title: '丸山园 静冈深蒸煎茶 100g', priceJpy: 1620, qty: 1 },
+      { productId: M.gone, title: '马路村 柚子醋 500ml', priceJpy: 980, qty: 1 },
+    ]);
+    await setProductStatus(admin(), M.gone, 'offline');
+    const q = await call(srv, 'POST', '/api/v1/orders/quote', {
+      token: buyer,
+      body: {
+        items: [
+          { product_id: M.keep, qty: 1 },
+          { product_id: M.gone, qty: 1 },
+        ],
+        address_id: 'addr-chen',
+      },
+    });
+    show('报价（含已下架）', { status: q.status, json: q.json });
+    const marked = markInvalid(
+      rows,
+      (q.json['data'] as { product_id?: string } | undefined)?.product_id,
+      q.json['code'],
+    );
+    show('购物车标记', marked);
+    expectReadable(marked);
+    expect(q.json['code']).toBe(40401);
+    // 只标被下架的那一行，另一行不受牵连（标错一行比不标更糟：用户会删掉好好的商品）
+    expect(marked.map((r) => r.invalidText)).toEqual(['', '已下架或不存在，请移除']);
+  });
+
+  it('⑫ 已付单发货前运营改址 → 买家详情是新地址；时间线记"改址"；填 NY + 内华达邮编被拒且说人话', async () => {
+    const c = await call(srv, 'POST', '/api/v1/orders', {
+      token: buyer,
+      key: 'k-readdr',
+      body: {
+        items: [{ product_id: M.keep, qty: 2 }],
+        address_id: 'addr-chen',
+        terms_version: CHAIN_TERMS,
+      },
+    });
+    M.orderId = String(c.json['order_id']);
+    await call(srv, 'POST', `/api/v1/orders/${M.orderId}/pay`, {
+      token: buyer,
+      key: 'pay-readdr',
+      body: { channel: 'mock' },
+    });
+    expect((await mockCallback(srv, db, M.orderId, { eventId: 'evt-readdr' })).status).toBe(200);
+
+    const form = {
+      ...addressFormModel(await getOrder(admin(), M.orderId)),
+      line1: '350 5th Ave',
+      line2: 'Ste 4710',
+      city: 'New York',
+      state: 'NY',
+    };
+    // 先手滑：州改了、邮编还是旧金山的 94133 → 前端预检拦；绕过前端直发也被服务端拒（AJ-496）
+    show('后台改址预检（州与邮编对不上）', addressFormErrors(form));
+    let rejected: unknown = null;
+    try {
+      await updateOrderAddress(admin(), M.orderId, toAddressInput(form));
+    } catch (e) {
+      const err = e as { code?: unknown; message?: unknown; data?: unknown };
+      rejected = { code: err.code, message: err.message, text: addressRejectText(err.data) };
+    }
+    show('服务端拒绝（绕过前端）', rejected);
+
+    await updateOrderAddress(admin(), M.orderId, toAddressInput({ ...form, postal_code: '10118' }));
+    const d = await buyerDetail(M.orderId);
+    show('小程序详情（改址后）', d.address);
+    const order = await getOrder(admin(), M.orderId);
+    const settings = (await call(srv, 'GET', '/api/v1/admin/settings', { token: adminToken })).json;
+    const labels = channelLabelsFrom(settings as never);
+    const events = (
+      ((order as unknown as Record<string, unknown>)['events'] as unknown[]) ?? []
+    ).map((e) => {
+      const ev = e as Record<string, unknown>;
+      return `${eventStatusText(ev['status'])} · ${eventActorText(ev, labels)} · ${eventNoteView(ev['status'], ev['note']).text}`;
+    });
+    show('后台时间线（改址后）', events);
+    expectReadable({ address: d.address, events, rejected });
+    // 前端预检先拦，并说清哪个州、哪个邮编
+    expect(addressFormErrors(form).errors['postal_code']).toBe(
+      '邮编 94133 不属于 New York（NY）——请检查州或邮编',
+    );
+    // 绕过前端：服务端拒（AJ-496），并带出原因，客户端说"邮编和州对不上"而不是"须为英文"（AJ-498）
+    expect(rejected).toMatchObject({ code: 40002, text: '邮编和州对不上：请检查州或邮编' });
+    expect(d.address).toMatchObject({
+      line1: '350 5th Ave',
+      line2: 'Ste 4710',
+      region: 'New York, NY 10118',
+    });
+    expect(events.at(-1)).toBe('改址 · admin@example.com · 改址：改前地址已归档（#1）');
   });
 });

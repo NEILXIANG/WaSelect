@@ -731,7 +731,11 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         // 国家：表驱动的"可下单目的国"（与买家地址簿同一份校验链，只补这一步）
         const profile = await countryProfiles.get(input.country);
         if (profile === null || !profile.active) {
-          throw new AppError(40002, { field: 'country', country: input.country });
+          throw new AppError(
+            40002,
+            { field: 'country', country: input.country },
+            { field: 'country' },
+          );
         }
         // 快照 = 纯地址值：不带 is_default（订单快照没有"默认"），id 恒 null（@limitation 三）
         const snapshot = {

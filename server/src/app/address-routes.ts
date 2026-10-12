@@ -66,7 +66,7 @@ export function mountAddressRoutes(app: Express, deps: AddressRoutesDeps): void 
     // 国家：表驱动的"可下单目的国"检查（@why 见文件头）
     const profile = await countryProfiles.get(input.country);
     if (profile === null || !profile.active) {
-      throw new AppError(40002, { field: 'country', country: input.country });
+      throw new AppError(40002, { field: 'country', country: input.country }, { field: 'country' });
     }
     return input;
   }

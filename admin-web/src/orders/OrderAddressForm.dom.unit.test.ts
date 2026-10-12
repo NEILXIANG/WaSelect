@@ -72,6 +72,29 @@ describe('OrderAddressForm', () => {
     expect(button(el, '确认改址')).toBeNull();
   });
 
+  // AJ-498：服务端 40002 带 {field, reason}——说清是哪一格、什么原因，不再是通用的"地址须为英文/拼音或电话格式错误"；
+  // 填写问题不是技术故障，不给报障编号（同分类重名 4ef8991）
+  it('🔴 服务端说邮编与州对不上（40002 zip_state_mismatch）→ 提示"邮编和州对不上"，不给报障编号', async () => {
+    mounted = await mount(
+      createElement(OrderAddressForm, {
+        api: (async () => {
+          throw new ApiError(40002, '地址须为英文/拼音或电话格式错误', 'tr-z', {
+            data: { field: 'postal_code', reason: 'zip_state_mismatch' },
+          });
+        }) as never,
+        id: 'o-1',
+        order: ORDER as never,
+        onDone: () => undefined,
+      }),
+    );
+    const el = mounted.el;
+    await click(button(el, '保存新地址'));
+    await click(button(el, '确认改址'));
+    expect(el.textContent).toContain('邮编和州对不上：请检查州或邮编');
+    expect(el.textContent).not.toContain('须为英文');
+    expect(el.textContent).not.toContain('发给技术人员');
+  });
+
   it('🔴 确认改址时这单已被别人发货（40902）→ 通知页面刷新（onStale），收起核对态', async () => {
     const stale: number[] = [];
     mounted = await mount(

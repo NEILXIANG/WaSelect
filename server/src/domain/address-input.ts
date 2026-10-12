@@ -67,6 +67,17 @@ const REQUIRED = ['recipient', 'phone', 'line1', 'city', 'state', 'postal_code']
  * 校验并取出地址输入（纯：不查库、不取时钟）。
  * @throws {AppError} 40001 形状 / 40002 格式（见文件头 @limitation 二）
  */
+/**
+ * 格式错（40002）：出错的字段（与可能的原因）同时进日志与对外 `data`（AJ-498）。
+ * @why 原先只进日志、对外只有通用文案"地址须为英文/拼音或电话格式错误"——绕过前端（旧版本小程序、直接调接口）被拒时，
+ *      用户不知道是哪一格；邮编与州对不上也被说成"须为英文"，方向是错的（业务旅程测试 2026-10-12）。
+ *      字段名与原因码不含用户数据，可以对外（契约 Err.data 已有 field / reason）。
+ */
+function bad(field: string, reason?: string): AppError {
+  const data = reason === undefined ? { field } : { field, reason };
+  return new AppError(40002, data, data);
+}
+
 export function parseAddressInput(body: unknown): AddressInputValue {
   const b = body as Record<string, unknown> | null;
   if (b === null || typeof b !== 'object') throw new AppError(40001, { reason: 'body_shape' });
@@ -111,24 +122,24 @@ export function parseAddressInput(body: unknown): AddressInputValue {
   }
 
   // 格式（40002，表单可修正）
-  if (!ASCII_RE.test(input.recipient)) throw new AppError(40002, { field: 'recipient' });
-  if (!ASCII_RE.test(input.line1)) throw new AppError(40002, { field: 'line1' });
+  if (!ASCII_RE.test(input.recipient)) throw bad('recipient');
+  if (!ASCII_RE.test(input.line1)) throw bad('line1');
   if (input.line2 !== null && !ASCII_OR_EMPTY_RE.test(input.line2)) {
-    throw new AppError(40002, { field: 'line2' });
+    throw bad('line2');
   }
-  if (!ASCII_RE.test(input.city)) throw new AppError(40002, { field: 'city' });
-  if (!PHONE_RE.test(input.phone)) throw new AppError(40002, { field: 'phone' });
-  if (!/^[A-Z]{2}$/.test(input.state)) throw new AppError(40002, { field: 'state' });
+  if (!ASCII_RE.test(input.city)) throw bad('city');
+  if (!PHONE_RE.test(input.phone)) throw bad('phone');
+  if (!/^[A-Z]{2}$/.test(input.state)) throw bad('state');
   // 剩余清单 4-5：美国地址的州码必须真实存在（USPS Pub 28 附录 B，shared/us-states.ts）——
   //    只校验"两位大写"时 XX / ZZ 都能过，标签打出去才被承运商退件
   if (input.country === 'US' && !isUsStateCode(input.state)) {
-    throw new AppError(40002, { field: 'state' });
+    throw bad('state');
   }
-  if (!POSTAL_RE.test(input.postal_code)) throw new AppError(40002, { field: 'postal_code' });
+  if (!POSTAL_RE.test(input.postal_code)) throw bad('postal_code');
   // AJ-496：邮编首位与州对不上（NY + 89501）——每个字段都合法、组合起来送不到。原先只有两个前端拦，
   //    绕过前端（旧版本小程序、直接调接口）照样入库。规则与前端同源（shared ZIP_AREA_STATES，宁可少拦）
   if (input.country === 'US' && !zipMatchesState(input.postal_code, input.state)) {
-    throw new AppError(40002, { field: 'postal_code', reason: 'zip_state_mismatch' });
+    throw bad('postal_code', 'zip_state_mismatch');
   }
 
   return input;

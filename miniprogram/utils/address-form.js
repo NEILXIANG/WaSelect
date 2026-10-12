@@ -26,6 +26,7 @@
  *      ../pages/address/index.vm.js（列表行）；../pages/checkout/（建单时用它摘要）
  */
 import { isUsStateCode, US_STATE_ROWS } from './us-states.js';
+import { errorFields } from './error-text.js';
 
 /**
  * 地址编辑页顶部说明（M-20，AJ-406）：先说"为什么要英文"，再给一行示例。
@@ -323,4 +324,36 @@ export function defaultAddressId(list) {
   if (picked !== undefined) return picked.id;
   const first = list.find((a) => a && typeof a.id === 'string');
   return first?.id ?? '';
+}
+
+/**
+ * 地址被服务端拒（40002，`data {field, reason?}`，AJ-498）时的人话——shared `ADDRESS_REJECT_TEXT` 的副本
+ * （运行时引不了 shared 包，单测逐项比对）。
+ * @why 原先显示服务端通用文案"地址须为英文/拼音或电话格式错误"：邮编与州对不上也这么说（业务旅程测试 2026-10-12）。
+ */
+export const ADDRESS_REJECT_TEXT = {
+  zip_state_mismatch: '邮编和州对不上：请检查州或邮编',
+  recipient: '收件人请用英文或拼音（面单是给美国承运商看的）',
+  line1: '街道地址请用英文填写',
+  line2: '门牌 / 公寓号请用英文或数字填写',
+  city: '城市请用英文填写',
+  phone: '电话请填美国号码：10 位数字',
+  state: '请从下拉里选择州',
+  postal_code: '邮编应为 5 位数字（或 5 位加 4 位，如 94133-1234）',
+  country: '暂不支持寄往这个国家或地区',
+};
+
+/**
+ * 地址保存失败 → 页面要写的 `{saveError, saveErrorRef}`。
+ * @why 认得出的 40002 是填写问题，不给报障小字（同后台 4ef8991 / 登录页 3c6d8c8）；其余照旧走 errorFields。
+ * @param {unknown} err 请求层抛出的错误（`{code, message, data, traceId}`）
+ */
+export function saveErrorFields(err) {
+  const e = err !== null && typeof err === 'object' ? err : {};
+  const d = e.data !== null && typeof e.data === 'object' ? e.data : {};
+  const text =
+    e.code === 40002
+      ? (ADDRESS_REJECT_TEXT[d.reason] ?? ADDRESS_REJECT_TEXT[d.field] ?? null)
+      : null;
+  return text !== null ? { saveError: text, saveErrorRef: '' } : errorFields(err, 'saveError');
 }

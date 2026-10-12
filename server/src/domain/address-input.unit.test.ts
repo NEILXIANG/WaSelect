@@ -207,6 +207,35 @@ describe('🔴 邮编与州对不上 → 40002（postal_code）', () => {
   });
 });
 
+/**
+ * AJ-498：40002 对外带 `data {field, reason?}`——绕过前端（旧版本小程序、直接调接口）被拒时，
+ * 客户端能说清是哪一格、什么原因；原先只有通用文案"地址须为英文/拼音或电话格式错误"，邮编与州对不上也这么说（业务旅程测试 2026-10-12）。
+ */
+describe('🔴 40002 对外带出错的字段与原因（AJ-498）', () => {
+  const pub = (body: unknown): unknown => {
+    try {
+      parseAddressInput(body);
+    } catch (e) {
+      return (e as AppError).publicData;
+    }
+    throw new Error('期望被拒，实际通过');
+  };
+  it.each([
+    [{ recipient: '张三' }, { field: 'recipient' }],
+    [{ line1: '南京东路 100 号' }, { field: 'line1' }],
+    [{ city: '旧金山' }, { field: 'city' }],
+    [{ phone: '13800138000' }, { field: 'phone' }],
+    [{ state: 'XX' }, { field: 'state' }],
+    [{ postal_code: '9501' }, { field: 'postal_code' }],
+    [
+      { state: 'NY', postal_code: '89501' },
+      { field: 'postal_code', reason: 'zip_state_mismatch' },
+    ],
+  ])('%j → data %j', (patch, data) => {
+    expect(pub({ ...OK_ADDR, ...patch })).toEqual(data);
+  });
+});
+
 describe('🔴 必填文本：纯空白 ≠ 已填写（面单三要素）', () => {
   /**
    * @why 面单的收件人 / 街道 / 城市三个字段，原来只判 `length > 0`——

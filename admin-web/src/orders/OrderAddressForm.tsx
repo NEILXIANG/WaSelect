@@ -18,6 +18,7 @@
  * @see ./address-view.ts（校验与请求体）；./api.ts（updateOrderAddress）
  */
 import { useRef, useState } from 'react';
+import { addressRejectText } from '@waselect/shared';
 import { useFormDirty } from '../ui/unsaved.js';
 import { useDrawerBusy } from '../ui/drawer.js';
 import { ApiError } from '../api/errors.js';
@@ -122,6 +123,16 @@ export function OrderAddressForm({
         return;
       }
       // ⚠️ 失败保留已填内容：清了表单等于让运营把七个字段重新输一遍
+      // AJ-498：40002 带 {field, reason}——说清是哪一格、什么原因（原为通用的"地址须为英文/拼音或电话格式错误"，
+      //    邮编与州对不上也这么说）；标到那一格下；填写问题不给报障编号
+      const reject = e instanceof ApiError && e.code === 40002 ? addressRejectText(e.data) : null;
+      if (reject !== null) {
+        const field = (e as ApiError & { data?: { field?: unknown } }).data?.field;
+        if (typeof field === 'string' && (ADDRESS_FIELDS as readonly string[]).includes(field))
+          setErrors({ [field]: reject });
+        fail(reject);
+        return;
+      }
       const { text, traceId } = toastError(e, '改址失败');
       fail(text, traceId);
     } finally {

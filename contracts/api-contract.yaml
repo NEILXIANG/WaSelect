@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.78
+  version: 0.6.79
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.79（AJ-498，业务旅程测试 2026-10-12）：`AddressInput` 被拒的 **40002** 响应带 `Err.data {field, reason?}`——`field` 是出错的字段（recipient / line1 / line2 / city / phone / state / postal_code / country），邮编与州对不上另带 `reason: zip_state_mismatch`。买家地址簿与管理端改址同口径。客户端据此说清是哪一格、什么原因（此前只有通用文案"地址须为英文/拼音或电话格式错误"，邮编与州对不上也这么说）。形状只增不改。
     0.6.78（AJ-496，测试缺口复盘 2026-10-12）：`AddressInput`（买家 `POST/PUT /addresses` 与管理端 `POST /admin/orders/{id}/address` 共用）对美国地址再校验**邮编首位与州一致**（shared `ZIP_AREA_STATES`，与小程序 / 后台表单同源；属地与军邮在表内），对不上 → **40002**（原因码 `zip_state_mismatch`，只进日志）。形状不变；此前只有两个前端拦，绕过前端可把 NY + 89501 存进地址簿 / 订单快照。
     0.6.77（AJ-495，用户 2026-10-12）：`/admin/exports/orders` 与 `/admin/exports/purchase` 的金额列表头单位由「円」改为「日元」（商品金额（日元）/ 运费（日元）/ 预估关税（日元）/ 订单合计（日元）/ 售价（日元）/ 成本（日元）），列序与取值不变。用户看到「330 円」问"円是什么意思"，要求后台与小程序一律写「日元」。
     0.6.76（AJ-494，全入口点击测试 2026-10-11）：`GET /admin/exports/orders` 与 `/admin/exports/purchase` 改中文表头（内部用表，运营在 Excel 里读不懂英文字段名），订单总表的状态列写中文（shared `ORDER_STATUS_LABELS`，与后台页面同一份词）；采购单的商品 id 挪到最后一列「商品编号（系统）」。`/admin/exports/customs`（报关代理共用）表头不变。
@@ -1194,7 +1195,7 @@ components:
   parameters:
     IdemKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 128, description: '客户端段上限 128 字符（0.6.0②）；超限 40001 + reason idempotency_key_too_long'}}
   responses:
-    Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}, data: {type: object, description: '0.6.33：可对外的结构化数据（只有抛错处显式标注的字段）。40401 / 40901（报价与建单）带 product_id 指出是哪一件（剩余清单 4-7）；50300 带 retry_after_ms。0.6.73（AJ-488）：管理端商品新建 / 编辑的 40001 带 field / reason / count（第一个出错的字段、原因码、出错总数），price_too_large 时另带 limit（售价上限，円）。0.6.75（AJ-493）：报价的 40901 另带 stock（当前可买件数）', properties: {product_id: {type: string}, stock: {type: integer, minimum: 0}, retry_after_ms: {type: integer}, field: {type: string}, reason: {type: string}, count: {type: integer}, limit: {type: integer}}}}}}}}
+    Err: {description: 业务错误, content: {application/json: {schema: {type: object, properties: {code: {type: integer}, message: {type: string}, data: {type: object, description: '0.6.33：可对外的结构化数据（只有抛错处显式标注的字段）。40401 / 40901（报价与建单）带 product_id 指出是哪一件（剩余清单 4-7）；50300 带 retry_after_ms。0.6.73（AJ-488）：管理端商品新建 / 编辑的 40001 带 field / reason / count（第一个出错的字段、原因码、出错总数），price_too_large 时另带 limit（售价上限，円）。0.6.75（AJ-493）：报价的 40901 另带 stock（当前可买件数）。0.6.79（AJ-498）：地址的 40002 带 field（出错字段）与可选 reason（zip_state_mismatch）', properties: {product_id: {type: string}, stock: {type: integer, minimum: 0}, retry_after_ms: {type: integer}, field: {type: string}, reason: {type: string}, count: {type: integer}, limit: {type: integer}}}}}}}}
   schemas:
     AuthResp: {type: object, properties: {token: {type: string}, user: {type: object, properties: {id: {type: string}, isAdmin: {type: boolean}}}}}
     Display: {type: object, description: 展示价，整数分（后端按当日汇率计算）, properties: {USD: {type: integer}, CNY: {type: integer}}}

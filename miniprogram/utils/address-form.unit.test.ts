@@ -430,6 +430,36 @@ describe('邮编与州对得上（zipMatchesState）', () => {
   });
 });
 
+// AJ-498：服务端 40002 带 {field, reason}；地址保存失败说清是哪一格、什么原因（原为通用的"地址须为英文/拼音或电话格式错误"）
+describe('saveErrorFields（地址保存被服务端拒）', () => {
+  it('🔴 邮编与州对不上 → "邮编和州对不上"，不给报障小字（填写问题不是故障）', async () => {
+    const { saveErrorFields } = await import('./address-form.js');
+    expect(
+      saveErrorFields({
+        code: 40002,
+        message: '地址须为英文/拼音或电话格式错误',
+        traceId: 'abcdef12',
+        data: { field: 'postal_code', reason: 'zip_state_mismatch' },
+      }),
+    ).toEqual({ saveError: '邮编和州对不上：请检查州或邮编', saveErrorRef: '' });
+  });
+
+  it('认不出的错误照旧（原文 + 报障小字）', async () => {
+    const { saveErrorFields } = await import('./address-form.js');
+    const r = saveErrorFields({ code: 50000, message: '服务器内部错误', traceId: 'abcdef12' });
+    expect(r.saveError).toBe('服务器内部错误');
+    expect(r.saveErrorRef).not.toBe('');
+  });
+});
+
+describe('ADDRESS_REJECT_TEXT 与 shared 同一份', () => {
+  it('🔴 逐项相同（漂移就红）', async () => {
+    const shared = await import('@waselect/shared');
+    const mine = await import('./address-form.js');
+    expect(mine.ADDRESS_REJECT_TEXT).toEqual(shared.ADDRESS_REJECT_TEXT);
+  });
+});
+
 // 全入口点击测试 2026-10-11：表挪到 shared 给后台用；小程序运行时引不了 shared 包，留副本——两份必须逐项相同
 describe('ZIP_AREA_STATES 与 shared 同一份', () => {
   it('🔴 逐项相同（漂移就红）', async () => {
