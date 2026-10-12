@@ -682,6 +682,21 @@ td .thumb {
   white-space: nowrap;
 }
 
+/* 长文本最多两行、其余省略（配 title 属性悬停看全文）：商品名等，长礼盒名曾把一行撑成 7 行（2026-10-12）。
+   @limitation 不能直接加在 <td> 上（-webkit-box 会让单元格脱离表格布局），要包一层 */
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.item-with-thumb {
+  display: flex;
+  align-items: center;
+  gap: var(--ws-space-sm);
+}
+
 .purchase-cell > div {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1419,6 +1434,13 @@ textarea::placeholder {
   box-shadow: var(--md-elev-2);
   border-radius: var(--md-shape-md) var(--md-shape-md) 0 0;
   z-index: 1;
+}
+
+/* 按 Tab 跳到下面的输入框时，浏览器只把它滚到可视区底边——正好压在吸底条下面看不见
+   （全入口点击测试 2026-10-12：HS 编码一格被遮住一半）。给滚动容器留出吸底条的高度。
+   @limitation 吸底条若换行变高（窄窗口两个按钮折行）仍可能遮住一截；这里按一行的高度留 */
+.main:has(.sticky-actions) {
+  scroll-padding-bottom: calc(var(--ws-space) * 5);
 }
 
 /* 尊重系统"减少动态效果"：动画与过渡一律关掉（信息不靠动画传达，关掉不丢东西） */

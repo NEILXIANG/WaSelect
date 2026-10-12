@@ -28,10 +28,15 @@ export function OrderItems({ items }: { items: ReadonlyArray<Record<string, unkn
               <Fragment key={i}>
                 <tr>
                   <td>
-                    {itemThumb(it) !== '' && (
-                      <img className="thumb" src={itemThumb(it)} alt="" loading="lazy" />
-                    )}{' '}
-                    {String(it['title'] ?? '')}
+                    {/* 图与名并排；名最多两行、悬停看全文（全入口点击测试 2026-10-12：长礼盒名把一行撑成 7 行） */}
+                    <div className="item-with-thumb">
+                      {itemThumb(it) !== '' && (
+                        <img className="thumb" src={itemThumb(it)} alt="" loading="lazy" />
+                      )}
+                      <span className="item-name clamp-2" title={String(it['title'] ?? '')}>
+                        {String(it['title'] ?? '')}
+                      </span>
+                    </div>
                   </td>
                   <td>× {String(it['qty'] ?? '')}</td>
                   <td>{moneyText(it['unit_price_jpy'])}</td>

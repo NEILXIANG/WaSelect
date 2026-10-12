@@ -64,7 +64,7 @@ export function ProductMainColumn(p: MainColumnProps) {
           onChange={(v) => set('title', v)}
           error={errors['title'] ?? ''}
           hint={titleLengthHint(form.title)}
-          placeholder="例：資生堂 クレンジングオイル 200ml"
+          placeholder="例：资生堂 卸妆油 200ml"
         />
         <Field
           label="日文品名（采购用）"
@@ -97,7 +97,7 @@ export function ProductMainColumn(p: MainColumnProps) {
           value={form.editorialMaker}
           onChange={(v) => set('editorialMaker', v)}
           error={errors['editorialMaker'] ?? ''}
-          placeholder="例：岩手县 伝統工房"
+          placeholder="例：岩手县 南部铁器工房"
         />
         <FreeTagInput
           value={form.editorialTags}

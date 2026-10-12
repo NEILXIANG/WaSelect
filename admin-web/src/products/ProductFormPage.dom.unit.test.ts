@@ -566,6 +566,32 @@ describe('商品表单：草稿与保存并上架（AJ-403）', () => {
     for (const p of examples) expect(p.startsWith('例：')).toBe(true);
   });
 
+  it('🔴 买家可见字段的示例用中文（买家端标题是中文；原「資生堂 クレンジングオイル」像是要填日文）；日文品名才用日文示例', async () => {
+    const el = await openForm(null);
+    const ph = (l: string): string => (field(el, l) as HTMLInputElement | null)?.placeholder ?? '';
+    const kana = /[\u3040-\u30ff]/;
+    expect(ph('商品名（面向买家）')).not.toMatch(kana);
+    expect(ph('商品名（面向买家）')).toContain('资生堂');
+    expect(ph('产地 / 工房 / 匠人（买家可见）')).not.toMatch(/伝/);
+    expect(ph('日文品名（采购用）')).toMatch(kana);
+  });
+
+  it('🔴 没有商品图时状态卡提示（只提示不拦）：上架后买家看到的是占位图；有图或已在售时不提示', async () => {
+    // 每开一次先卸掉上一张（同 id 的输入框留在 document 里会让后面的用例聚焦到旧表单上）
+    const tip = async (source: Record<string, unknown> | null): Promise<string | undefined> => {
+      await mounted?.unmount();
+      const el = await openForm(source);
+      return [...el.querySelectorAll('.warn')]
+        .map((n) => n.textContent ?? '')
+        .find((t) => t.includes('商品图'));
+    };
+    expect(await tip(null)).toContain('占位');
+    expect(await tip({ ...SOURCE, status: 'draft' })).toContain('占位');
+    const img = { image_id: 'img-1', thumb: 't.jpg', card: 'c.jpg', detail: 'd.jpg' };
+    expect(await tip({ ...SOURCE, status: 'draft', images: [img] })).toBeUndefined();
+    expect(await tip({ ...SOURCE, status: 'active' })).toBeUndefined();
+  });
+
   it('🔴 分组布局：主栏四组（基本信息 / 媒体 / 价格与库存 / 报关与合规），侧栏有状态（显示「草稿」）与分类', async () => {
     const el = await openForm({ ...SOURCE, status: 'draft' });
     const titles = (sel: string): string[] =>

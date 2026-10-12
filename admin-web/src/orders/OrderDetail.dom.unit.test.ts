@@ -435,6 +435,19 @@ describe('订单详情：商品行显示采购信息（D-39）', () => {
     expect(row?.textContent ?? '').toContain('楽天 南部鉄器本店');
   });
 
+  it('🔴 长商品名最多两行（clamp-2），悬停看全文（全入口点击测试 2026-10-12）', async () => {
+    const long =
+      '北海道限定 富良野薰衣草 十胜红豆 夕张蜜瓜 白色恋人 六花亭 ROYCE 生巧 综合伴手礼 超大礼盒'.repeat(
+        3,
+      );
+    items = [{ product_id: 'p-1', title: long, qty: 1, unit_price_jpy: 6800 }];
+    const el = await open();
+    const name = el.querySelector('.item-name');
+    expect(name?.className).toContain('clamp-2');
+    expect(name?.getAttribute('title')).toBe(long);
+    expect(name?.textContent).toBe(long);
+  });
+
   it('🔴 历史订单（三样都没有）→ 说清"建于采购信息录入之前"，而不是留白', async () => {
     items = [{ product_id: 'p-1', title: '南部鉄器 急須', qty: 1, unit_price_jpy: 8800 }];
     const el = await open();

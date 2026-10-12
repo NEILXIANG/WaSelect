@@ -85,6 +85,19 @@ async function toggleStatus(el: HTMLElement, label: '下架' | '上架'): Promis
   await click(button(el, `确认${label}`));
 }
 
+describe('商品列表：长商品名（全入口点击测试 2026-10-12）', () => {
+  it('🔴 商品名单元格最多两行（clamp-2），悬停看全文：255 字的礼盒名不再把一行撑成 7 行', async () => {
+    const el = await open();
+    const cell = el
+      .querySelector('tbody tr')
+      ?.querySelectorAll('td')[1]
+      ?.querySelector('.item-name');
+    expect(cell?.className).toContain('clamp-2');
+    expect(cell?.getAttribute('title')).toBe(PRODUCT.title);
+    expect(cell?.textContent).toBe(PRODUCT.title);
+  });
+});
+
 describe('商品列表：上下架两步确认（三端联动模拟 2026-10-08）', () => {
   it('🔴 只点一下「下架」→ 不发请求，出现「确认下架 / 取消」；点取消回到原样', async () => {
     patchFails = false;

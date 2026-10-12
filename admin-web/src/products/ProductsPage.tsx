@@ -288,7 +288,12 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
                   <span className="thumb thumb-empty">无图</span>
                 )}
               </td>
-              <td>{row.title}</td>
+              <td>
+                {/* 最多两行、悬停看全文（全入口点击测试 2026-10-12：255 字的礼盒名把一行撑成 7 行） */}
+                <div className="item-name clamp-2" title={row.title}>
+                  {row.title}
+                </div>
+              </td>
               <td className="muted cell-nowrap">{categoryName(categories, row.category)}</td>
               <td className="cell-nowrap">{row.priceText}</td>
               <StockCell
