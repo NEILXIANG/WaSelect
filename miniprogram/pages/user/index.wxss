@@ -79,9 +79,31 @@
   color: var(--ws-danger);
 }
 
-/* M-10 附（AJ-408）：四个订单入口一行等分；角标是小号强调色胶囊（只走 token） */
+/* M-10 附（AJ-408）：四个订单入口一行等分。
+   全入口点击测试 2026-10-11：卡片上加标题行「我的订单 · 全部订单 ›」，入口行在其下 */
+/* 左右内边距与下方菜单卡片一致：两张卡的标题左边对齐（实测原先差 8px） */
 .mine__orders {
+  padding-left: var(--ws-space-stack);
+  padding-right: var(--ws-space-stack);
+}
+
+.mine__orders-head {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--ws-touch-min);
+  padding-bottom: var(--ws-space-hair);
+  border-bottom: var(--ws-border-width) solid var(--ws-line);
+}
+
+.mine__orders-title {
+  font-size: var(--ws-f-base);
+  color: var(--ws-ink);
+}
+
+.mine__order-row {
+  display: flex;
+  margin-top: var(--ws-space-hair);
 }
 
 .mine__order-entry {
@@ -98,13 +120,22 @@
   color: var(--ws-ink);
 }
 
+/* 全入口点击测试 2026-10-11：角标挂在文字右上、不占位（原先占一行，把文字顶下去、与其它入口对不齐）；
+   与底栏购物车角标同一套（--ws-danger、同尺寸），同一种提醒不该两种颜色 */
+.mine__order-label-wrap {
+  position: relative;
+}
+
 .mine__order-badge {
-  min-width: var(--ws-f-sm);
+  position: absolute;
+  top: calc(-1 * var(--ws-space-stack));
+  left: 100%;
+  min-width: var(--ws-space-card);
   padding: 0 var(--ws-space-hair);
-  margin-bottom: var(--ws-space-hair);
   border-radius: var(--ws-radius-pill);
-  background: var(--ws-accent);
+  background: var(--ws-danger);
   color: var(--ws-ink-inverse);
-  font-size: var(--ws-f-xs);
+  font-size: var(--ws-f-caption);
+  line-height: var(--ws-space-card);
   text-align: center;
 }

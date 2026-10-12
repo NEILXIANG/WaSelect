@@ -26,7 +26,9 @@
   margin-top: var(--ws-space-stack);
 }
 
-.addr__head {
+/* 卡内首行（姓名 · 电话 · 默认）。全入口点击测试 2026-10-11：原与页头同叫 addr__head，页头的 padding-top 也落到了卡内，
+   姓名上方比下方多出一截空白——改名分开 */
+.addr__top {
   display: flex;
   align-items: baseline;
 }
@@ -34,21 +36,34 @@
 .addr__name {
   /* 三端模拟测试 2026-10-11：原为 flex: none——超长姓名不让缩，挤压全落在「默认」标签上，标签被压成竖排两行。
      改为姓名可换行、标签不缩不折 */
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
+}
+
+/* 全入口点击测试 2026-10-11：电话与姓名同一行（主流地址列表的写法），卡片少占一行 */
+.addr__phone {
+  flex: none;
+  white-space: nowrap;
+  margin-left: var(--ws-space-inline);
 }
 
 .addr__default {
   flex: none;
   white-space: nowrap;
-  margin-left: var(--ws-space-inline);
+  margin-left: auto;
+  padding-left: var(--ws-space-inline);
+}
+
+.addr__pick-hint {
+  display: block;
+  margin-top: var(--ws-space-stack);
 }
 
 /* 地址正文四行：行间距用 stack（20rpx）会让 4 行撑得很开，
    这里收一档到 inline（12rpx）——地址是一个整体，读的时候要连着读 */
 .addr__line {
   display: block;
-  margin-top: var(--ws-space-inline);
+  margin-top: var(--ws-space-hair);
 }
 
 /* ── 动作区 ──────────────────────────────────────────────────── */
@@ -78,9 +93,4 @@
 /* 「用这个地址」是选中态页面（?pick=1）的唯一目标动作，给它强调色 */
 .addr__act--accent {
   color: var(--ws-accent);
-}
-
-/* ── 底部新增按钮 ────────────────────────────────────────────── */
-.addr__foot {
-  margin-top: var(--ws-space-section);
 }

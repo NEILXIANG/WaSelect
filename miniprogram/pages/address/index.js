@@ -198,6 +198,16 @@ Page({
     await this.load();
   },
 
+  /**
+   * 点整张地址卡（全入口点击测试 2026-10-11）：选择模式 = 选中它；管理模式 = 进编辑。
+   * @why 原先选择模式要在「编辑 / 删除 / 设为默认 / 用这个地址」四个小字里找最后一个，最该点的反而最不显眼；
+   *      主流（微信 / 京东）选地址都是点整张卡。卡内的动作用 catchtap，不会连带触发这里。
+   */
+  onCardTap(e) {
+    if (this.data.pick === true) this.onPick(e);
+    else this.onEdit(e);
+  },
+
   /** 选择模式：回传给结算页并出栈（@see @limitation 二 的一次性交接）。 */
   onPick(e) {
     const id = this.idOf(e);

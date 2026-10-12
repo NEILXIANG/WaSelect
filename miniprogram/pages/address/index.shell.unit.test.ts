@@ -6,6 +6,7 @@
  *      交接走一次性 `globalData.justAddedAddressId`（编辑页写、本页 onShow 读走即清），与 `pickedAddressId` 同口径。
  * @see ./index.js；../address-edit/index.js；../../app.js
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 
@@ -67,5 +68,39 @@ describe('地址列表：从结算页新增后自动选中', () => {
     call('onShow');
     await settle();
     expect(calls).toEqual(['GET /api/v1/addresses']);
+  });
+});
+
+// 全入口点击测试 2026-10-11：「新增地址」排在列表最后（20 个地址要滑到底）、选择模式要在四个小字里找「用这个地址」。
+// 主流（微信 / 京东）：新增按钮固定在底部；选择模式点整张卡即选中、只留「编辑」；管理模式点卡进编辑
+describe('地址列表：整卡可点、新增固定在底部（全入口点击测试 2026-10-11）', () => {
+  const tapCard = (id: string) => ({ currentTarget: { dataset: { id } } });
+
+  it('🔴 选择模式点整张卡 → 选中并返回结算页', () => {
+    call('onLoad', { pick: '1' });
+    call('onCardTap', tapCard('addr-2'));
+    expect(gd['pickedAddressId']).toBe('addr-2');
+    expect(calls).toEqual(['back']);
+  });
+
+  it('🔴 管理模式点整张卡 → 进编辑页', () => {
+    call('onLoad', {});
+    call('onCardTap', tapCard('addr-2'));
+    expect(gd['pickedAddressId']).toBe('');
+    expect(calls).toEqual(['to /pages/address-edit/index?id=addr-2']);
+  });
+
+  it('🔴 结构：新增按钮在底部固定栏里；卡片绑 onCardTap，卡内动作用 catchtap（不连带触发整卡）；选择模式不出删除 / 设默认', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8').replace(
+      /<!--[\s\S]*?-->/g,
+      '',
+    );
+    expect(wxml).toMatch(/<view class="ws-page ws-page--with-buybar"/);
+    expect(wxml).toMatch(/<view class="ws-buybar">[\s\S]*bindtap="onAdd"[\s\S]*<\/view>/);
+    expect(wxml).toMatch(/class="ws-card addr[^"]*"[^>]*bindtap="onCardTap"/);
+    expect(wxml).not.toMatch(/bindtap="on(Edit|Delete|SetDefault)"/);
+    expect(wxml).toMatch(
+      /wx:if="\{\{!pick\}\}"[^>]*catchtap="onDelete"|catchtap="onDelete"[^>]*wx:if="\{\{!pick\}\}"/,
+    );
   });
 });

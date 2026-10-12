@@ -53,10 +53,16 @@ export function orderShortcuts(counts) {
  *      它就不再是"可在 Node 里被 import 的纯函数"了。
  */
 export const MENU_ROWS = [
-  { key: 'orders', label: '我的订单' },
   { key: 'address', label: '收货地址' },
   { key: 'legal', label: '条款与政策' },
 ];
+
+/**
+ * 订单卡片的标题行（全入口点击测试 2026-10-11）。
+ * @why 原先「我的订单」在下方菜单单列一行，与上面四个订单入口说的是同一件事；主流"我的"页是订单卡片自带标题行
+ *      「我的订单 · 全部订单 ›」。key 仍走 `PAGE_BY_KEY`（与菜单同一张跳转表，双向比对见单测）。
+ */
+export const ORDERS_ENTRY = { key: 'orders', label: '我的订单', actionText: '全部订单' };
 
 /**
  * 本地 token → 登录态文案。

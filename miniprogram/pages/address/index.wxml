@@ -10,7 +10,7 @@
 
   ⚠️ 删除走 showModal 二次确认（不可撤销），不在 wxml 里直接绑删除。
 -->
-<view class="ws-page">
+<view class="ws-page ws-page--with-buybar">
   <!-- 区块标题（S4：走组件，不再每页各写一份 kicker + 主标） -->
   <!-- 外边距放在包一层的 view 上：类名写在自定义组件标签上时页面的 ws-gutter 不生效（模拟器截图实测：标题贴左边） -->
   <view class="ws-gutter addr__head"><ws-section-head kicker="Address Book" title="收货地址" /></view>
@@ -36,34 +36,46 @@
     compact="{{true}}"
   />
 
+  <!-- 全入口点击测试 2026-10-11：选择模式说明"点地址即选用"（整张卡可点，见 onCardTap） -->
+  <view class="ws-gutter" wx:if="{{pick && rows.length > 0}}">
+    <text class="ws-note addr__pick-hint">点一个地址即可选用</text>
+  </view>
   <view class="ws-gutter addr__list">
-    <view class="ws-card addr" wx:for="{{rows}}" wx:key="id">
-      <view class="addr__head">
+    <!--
+      全入口点击测试 2026-10-11：整张卡可点（选择模式 = 选中；管理模式 = 编辑）；卡内动作用 catchtap，不连带触发整卡。
+      卡片收紧：姓名与电话同一行、门牌两行合成一行（原先每张卡占三分之一屏，20 个地址要滑很久）。
+    -->
+    <view
+      class="ws-card addr"
+      wx:for="{{rows}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      hover-class="ws-press"
+      bindtap="onCardTap"
+    >
+      <view class="addr__top">
         <text class="ws-title addr__name">{{item.recipient}}</text>
+        <text class="ws-note addr__phone">{{item.phone}}</text>
         <!-- 默认标记：用 tag 而不是"括号里的字"——括号里的"默认"会和电话读成一行 -->
         <text class="ws-tag addr__default" wx:if="{{item.isDefault}}">{{item.defaultText}}</text>
       </view>
-
-      <text class="ws-note addr__line">{{item.phone}}</text>
-      <text class="ws-body addr__line">{{item.line1}}</text>
-      <text class="ws-body addr__line" wx:if="{{item.line2}}">{{item.line2}}</text>
+      <text class="ws-body addr__line">{{item.line1}}{{item.line2 ? ', ' + item.line2 : ''}}</text>
       <text class="ws-note addr__line">{{item.region}}</text>
-
-      <!-- 操作区：文字动作排一行（用 view 不是 button——页面不允许原生可点 button） -->
+      <!-- 操作区：文字动作排一行（用 view 不是 button——页面不允许原生可点 button）；选择模式只留「编辑」 -->
       <view class="ws-hair addr__rule" />
       <view class="addr__acts">
-        <view class="addr__act" data-id="{{item.id}}" hover-class="ws-press" bindtap="onEdit">
+        <view class="addr__act" data-id="{{item.id}}" hover-class="ws-press" catchtap="onEdit">
           编辑
         </view>
-        <view class="addr__act" data-id="{{item.id}}" hover-class="ws-press" bindtap="onDelete">
+        <view class="addr__act" wx:if="{{!pick}}" data-id="{{item.id}}" hover-class="ws-press" catchtap="onDelete">
           删除
         </view>
         <view
           class="addr__act"
-          wx:if="{{!item.isDefault}}"
+          wx:if="{{!pick && !item.isDefault}}"
           data-id="{{item.id}}"
           hover-class="ws-press"
-          bindtap="onSetDefault"
+          catchtap="onSetDefault"
         >
           设为默认
         </view>
@@ -72,7 +84,7 @@
           wx:if="{{pick}}"
           data-id="{{item.id}}"
           hover-class="ws-press"
-          bindtap="onPick"
+          catchtap="onPick"
         >
           用这个地址
         </view>
@@ -80,7 +92,8 @@
     </view>
   </view>
 
-  <view class="ws-gutter addr__foot">
-    <ws-button text="新增地址" type="primary" bindtap="onAdd" />
+  <!-- 全入口点击测试 2026-10-11：新增按钮固定在底部（原先排在列表最后，地址一多要滑到底才找得到） -->
+  <view class="ws-buybar">
+    <ws-button text="＋ 新增收货地址" type="primary" block="{{true}}" bindtap="onAdd" />
   </view>
 </view>

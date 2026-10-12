@@ -9,7 +9,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MENU_ROWS, loginRetryView, loginState, orderShortcuts } from './index.vm.js';
+import { MENU_ROWS, ORDERS_ENTRY, loginRetryView, loginState, orderShortcuts } from './index.vm.js';
+
+/** 全部入口：订单卡片的标题行 + 下方菜单（全入口点击测试 2026-10-11：「我的订单」由独立一行改为订单卡片的标题行）。 */
+const ALL_ENTRIES = [ORDERS_ENTRY, ...MENU_ROWS];
 
 describe('loginState（登录态文案）', () => {
   it('有 token → 已登录', () => {
@@ -31,12 +34,17 @@ describe('loginState（登录态文案）', () => {
 
 describe('MENU_ROWS（入口清单）', () => {
   it('至少三个入口，且 key 唯一（重复 key 会让 wx:key 报重复、且其中一个永远跳不到）', () => {
-    expect(MENU_ROWS.length).toBeGreaterThanOrEqual(3);
-    expect(new Set(MENU_ROWS.map((r) => r.key)).size).toBe(MENU_ROWS.length);
+    expect(ALL_ENTRIES.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(ALL_ENTRIES.map((r) => r.key)).size).toBe(ALL_ENTRIES.length);
+  });
+
+  it('🔴 「我的订单」不再在菜单里单列（它是订单卡片的标题行「我的订单 · 全部订单 ›」，单列就重复了）', () => {
+    expect(MENU_ROWS.map((r) => r.key)).not.toContain('orders');
+    expect(ORDERS_ENTRY).toEqual({ key: 'orders', label: '我的订单', actionText: '全部订单' });
   });
 
   it('每条的 key 与 label 都非空（空 label = 真机上一个空白的可点区块）', () => {
-    for (const row of MENU_ROWS) {
+    for (const row of ALL_ENTRIES) {
       expect(row.key, '入口 key 为空').not.toBe('');
       expect(row.label, `${row.key} 的文案为空`).not.toBe('');
     }
@@ -63,13 +71,13 @@ describe('MENU_ROWS 与 index.js 跳转表的双向比对', () => {
   });
 
   it('每个入口都有对应路径（缺一个 = 那个入口点了没反应）', () => {
-    for (const row of MENU_ROWS) {
+    for (const row of ALL_ENTRIES) {
       expect(keys, `入口 ${row.key} 在 PAGE_BY_KEY 里没有路径`).toContain(row.key);
     }
   });
 
   it('跳转表里没有多余项（写了没人用的路径，改页面路径时那一处会被漏掉）', () => {
-    expect([...keys].sort()).toEqual(MENU_ROWS.map((r) => r.key).sort());
+    expect([...keys].sort()).toEqual(ALL_ENTRIES.map((r) => r.key).sort());
   });
 });
 

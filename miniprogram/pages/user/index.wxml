@@ -40,6 +40,19 @@
        角标只数进行中的单（vm orderShortcuts），取数失败时不显示角标 -->
   <view class="ws-gutter mine__menu-wrap">
     <view class="ws-card mine__orders">
+      <!-- 全入口点击测试 2026-10-11：标题行「我的订单 · 全部订单 ›」（原先下方菜单另有一行「我的订单」，两处说同一件事） -->
+      <view
+        class="mine__orders-head"
+        data-key="{{ordersEntry.key}}"
+        hover-class="ws-press"
+        bindtap="onMenuTap"
+        aria-role="link"
+        aria-label="{{ordersEntry.label}}，{{ordersEntry.actionText}}"
+      >
+        <text class="mine__orders-title">{{ordersEntry.label}}</text>
+        <text class="ws-note mine__orders-all">{{ordersEntry.actionText}} ›</text>
+      </view>
+      <view class="mine__order-row">
       <view
         class="mine__order-entry"
         wx:for="{{shortcuts}}"
@@ -50,8 +63,12 @@
         aria-role="link"
         aria-label="{{item.badge ? item.label + '，' + item.badge + ' 单' : item.label}}"
       >
-        <text class="mine__order-badge" wx:if="{{item.badge}}">{{item.badge}}</text>
-        <text class="mine__order-label">{{item.label}}</text>
+        <!-- 全入口点击测试 2026-10-11：角标挂在文字右上（absolute），有无角标时文字都在同一高度 -->
+        <view class="mine__order-label-wrap">
+          <text class="mine__order-label">{{item.label}}</text>
+          <text class="mine__order-badge" wx:if="{{item.badge}}">{{item.badge}}</text>
+        </view>
+      </view>
       </view>
     </view>
   </view>

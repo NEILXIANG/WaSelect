@@ -267,3 +267,29 @@ describe('「我的」：下拉刷新', () => {
     expect(stops).toEqual([1]);
   });
 });
+
+// 全入口点击测试 2026-10-11：有角标的入口文字被顶下去一截、与其它三个对不齐；角标颜色与底栏购物车角标不一致；
+// 「我的订单」与四入口卡片重复。改为：订单卡片带标题行「我的订单 · 全部订单 ›」，角标挂在文字右上（不占位）、用同一个红
+describe('「我的」订单卡片（全入口点击测试 2026-10-11）', () => {
+  const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8').replace(
+    /<!--[\s\S]*?-->/g,
+    '',
+  );
+  const wxss = readFileSync(new URL('./index.wxss', import.meta.url), 'utf8');
+
+  it('🔴 订单卡片有标题行：点它走 onMenuTap（key=orders → 全部页签）', () => {
+    expect(wxml).toMatch(
+      /class="mine__orders-head"[^>]*data-key="\{\{ordersEntry.key\}\}"[^>]*bindtap="onMenuTap"/,
+    );
+    expect(wxml).toContain('{{ordersEntry.actionText}}');
+  });
+
+  it('🔴 角标挂在文字右上、不占位（absolute），颜色与底栏购物车角标同为 --ws-danger', () => {
+    expect(wxml).toMatch(
+      /<view class="mine__order-label-wrap">\s*<text class="mine__order-label">/,
+    );
+    const badge = /\.mine__order-badge\s*\{([^}]*)\}/.exec(wxss)?.[1] ?? '';
+    expect(badge).toContain('position: absolute');
+    expect(badge).toContain('background: var(--ws-danger)');
+  });
+});

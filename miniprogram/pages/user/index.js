@@ -22,7 +22,7 @@
  *
  * @see ./index.vm.js（登录态文案与入口清单，5 条单测）；../../utils/wx-api.js（navigateTo）
  */
-import { MENU_ROWS, loginRetryView, loginState, orderShortcuts } from './index.vm.js';
+import { MENU_ROWS, ORDERS_ENTRY, loginRetryView, loginState, orderShortcuts } from './index.vm.js';
 import { ORDER_TABS } from '../../utils/order-tabs.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
@@ -64,6 +64,8 @@ Page({
   data: {
     /** 入口清单（vm `MENU_ROWS`）。 */
     rows: MENU_ROWS,
+    /** 订单卡片标题行（vm `ORDERS_ENTRY`），点它走 onMenuTap。 */
+    ordersEntry: ORDERS_ENTRY,
     /** vm `loginState` 的输出。 */
     login: { logged: false, text: '正在登录…' },
     /** M-17（AJ-406）：vm `loginRetryView` 的输出（启动登录失败时的"重新登录"按钮）。 */
