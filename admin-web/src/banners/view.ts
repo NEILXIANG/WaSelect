@@ -165,18 +165,22 @@ export function bannerFormErrors(form: unknown): {
 } {
   const f = asForm(form);
   const errors: Record<string, string> = {};
-  if (f.imageKey.trim() === '') errors['imageKey'] = '图片必填（先上传，拿到 image_key）';
+  // 提示一律人话（全入口点击测试 2026-10-12：原写"拿到 image_key""必须填目标 id""YYYY-MM-DDTHH:mm"——字段名与格式串运营看不懂）
+  if (f.imageKey.trim() === '') errors['imageKey'] = '请先上传一张 Banner 图片';
   if (!(LINK_TYPES as readonly string[]).includes(f.linkType))
     errors['linkType'] = '跳转类型不对，请从下拉里重新选一个';
   if (f.linkType !== 'none' && f.linkId.trim() === '')
-    errors['linkId'] = '选择了跳转就必须填目标 id（否则点了会跳到不存在的页面）';
+    errors['linkId'] =
+      f.linkType === 'category'
+        ? '选了跳转到分类，请在下拉里选一个分类（否则买家点了会跳到不存在的页面）'
+        : '选了跳转到商品，请在下拉里选一件商品（否则买家点了会跳到不存在的页面）';
   // 只认纯数字串：`Number('')` 是 0、`Number('1e2')` 是 100，都会静默改值（审查 2026-10-09 #6；商品页同口径）
   const sort = /^\d+$/.test(f.sort.trim()) ? Number(f.sort.trim()) : Number.NaN;
   if (!Number.isInteger(sort) || sort < 0) errors['sort'] = '排序必须是 ≥0 的整数';
   if (f.startsAt !== '' && toIsoJst(f.startsAt) === '')
-    errors['startsAt'] = '开始时间格式为 YYYY-MM-DDTHH:mm';
+    errors['startsAt'] = '开始时间没填完整：日期和时刻都要选';
   if (f.endsAt !== '' && toIsoJst(f.endsAt) === '')
-    errors['endsAt'] = '结束时间格式为 YYYY-MM-DDTHH:mm';
+    errors['endsAt'] = '结束时间没填完整：日期和时刻都要选';
   if (
     errors['startsAt'] === undefined &&
     errors['endsAt'] === undefined &&

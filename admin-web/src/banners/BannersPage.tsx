@@ -591,8 +591,10 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
           </table>
         )}
 
-        {Object.values(errors)
-          .filter((v) => v !== '')
+        {/* 图片的提示已标在上传框下，这里不再重复（全入口点击测试 2026-10-12：同一句在一屏里出现三次） */}
+        {Object.entries(errors)
+          .filter(([k, v]) => v !== '' && k !== 'imageKey')
+          .map(([, v]) => v)
           .map((v) => (
             <span className="error" key={v}>
               {v}

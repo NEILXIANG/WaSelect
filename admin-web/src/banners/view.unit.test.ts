@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { unreadable } from '../../../test/helpers/readable.js';
 import {
   LINK_LABELS,
   LINK_TYPES,
@@ -131,6 +132,25 @@ describe('bannerFormErrors', () => {
   it('sort 非整数或负数 → 拒', () => {
     expect(bannerFormErrors({ ...valid(), sort: '-1' }).errors['sort']).toBeTruthy();
     expect(bannerFormErrors({ ...valid(), sort: '1.5' }).errors['sort']).toBeTruthy();
+  });
+
+  // 全入口点击测试 2026-10-12：空表单点保存，三处都写"图片必填（先上传，拿到 image_key）"——image_key 是字段名；
+  // 跳转缺目标写"必须填目标 id"，可页面上是下拉框、运营从没见过 id；时间格式错写 YYYY-MM-DDTHH:mm
+  it('🔴 所有提示都是人话：不出现字段名（image_key / link_id / snake_case）、"id"、格式串', () => {
+    const msgs = [
+      bannerFormErrors({ ...valid(), imageKey: '' }).errors,
+      bannerFormErrors({ ...valid(), linkId: '  ' }).errors,
+      bannerFormErrors({ ...valid(), linkType: 'category', linkId: '' }).errors,
+      bannerFormErrors({ ...valid(), startsAt: '2026/10/01', endsAt: 'x' }).errors,
+    ].flatMap((e) => Object.values(e));
+    expect(msgs.length).toBeGreaterThanOrEqual(5);
+    expect(unreadable(msgs)).toEqual([]);
+    for (const m of msgs) {
+      expect(m, m).not.toMatch(/\b[a-z]+_[a-z_]+\b|\bid\b|YYYY|HH:mm/i);
+    }
+    expect(bannerFormErrors({ ...valid(), imageKey: '' }).errors['imageKey']).toBe(
+      '请先上传一张 Banner 图片',
+    );
   });
 
   it('时间格式不对 → 拒（不是静默变成空）', () => {

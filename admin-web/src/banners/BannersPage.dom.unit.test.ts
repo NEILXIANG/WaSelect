@@ -248,6 +248,14 @@ describe('Banner：点编辑 / 新建要带到表单，标题说人话', () => {
     expect(document.activeElement).toBe(h);
   });
 
+  it('🔴 空表单点保存：「请先上传一张 Banner 图片」在表单里只出现一次（标在上传框下）', async () => {
+    const el = await openTwo();
+    await click(button(el, '保存'));
+    const form = el.querySelector('#banner-form-title')?.parentElement;
+    const n = (form?.textContent ?? '').split('请先上传一张 Banner 图片').length - 1;
+    expect(n).toBe(1);
+  });
+
   it('🔴 「确认删除」用危险色（与商品「确认下架」同）', async () => {
     const el = await openTwo();
     await click([...el.querySelectorAll('button')].filter((b) => b.textContent === '删除')[0]);
