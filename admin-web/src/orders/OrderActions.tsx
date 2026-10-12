@@ -36,7 +36,9 @@ const ACTIONS: ReadonlyArray<{ key: ActionKey; button: string; title: string }> 
   { key: 'partial', button: '部分退款…', title: '部分退款 / 售后退款' },
   { key: 'release', button: '解除拒付限制…', title: '解除拒付限制（退款与发货已被锁）' },
   { key: 'address', button: '改址…', title: '发货前改址' },
-  { key: 'fix', button: '订单修正…', title: '取消订单 / 修改运单号 / 撤销发货' },
+  // 全入口点击测试 2026-10-11：原标题"取消订单 / 修改运单号 / 撤销发货"——已发货的单没有"取消"，标题许诺了做不到的，
+  // 且太长把「关闭」挤到下一行；能做哪几项由抽屉里按状态列出
+  { key: 'fix', button: '订单修正…', title: '订单修正' },
 ];
 
 /** 当前订单下哪些动作可用（纯函数，闸门全部复用 view / fix-view / partial-refund-view）。 */

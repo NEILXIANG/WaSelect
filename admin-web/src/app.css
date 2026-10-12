@@ -444,6 +444,21 @@ input[type='radio'] {
   min-height: var(--md-target-min);
 }
 
+/* 全入口点击测试 2026-10-11：抽屉标题长时「关闭」被挤到下一行（左边）——抽屉里标题可折行、「关闭」固定在右上 */
+.drawer .panel-head {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.drawer .panel-head .dialog-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.drawer .panel-head > button {
+  flex: none;
+}
+
 .form {
   display: flex;
   flex-direction: column;

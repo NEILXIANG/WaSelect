@@ -8,6 +8,7 @@
  * @limitation 失败统一交给父组件的错误条；成功后父组件刷新详情——状态以服务端为准。
  * @see ./fix-view.ts；server/src/app/admin-order-fix-routes.ts
  */
+import { CarrierPicker } from './CarrierPicker.js';
 import { useState } from 'react';
 import { useFormDirty } from '../ui/unsaved.js';
 import { useDrawerBusy } from '../ui/drawer.js';
@@ -156,7 +157,8 @@ export function OrderFixActions({
 
   return (
     <div className="form" onKeyDown={enterClicksPrimary}>
-      <span className="label">订单修正</span>
+      {/* 全入口点击测试 2026-10-11：只在选项页显示（进了某一项再写"选择要做的修正"就过时了） */}
+      {mode === '' && <span className="label">选择要做的修正</span>}
       {mode === '' && (
         <div className="row2">
           {cancel.ok && (
@@ -184,19 +186,22 @@ export function OrderFixActions({
       )}
       {mode === 'fix' && (
         <>
-          <label className="field">
-            <span className="label">承运商</span>
-            <input
-              className="input"
-              maxLength={SHIP_MAX_CHARS.carrier}
+          <div className="field">
+            <label className="label" htmlFor="fix-carrier">
+              承运商
+            </label>
+            {/* 全入口点击测试 2026-10-11：与发货 / 批量发货同一个下拉（原为自由文本框，容易打错承运商名） */}
+            <CarrierPicker
+              id="fix-carrier"
               value={carrier}
-              onChange={(e) => {
-                setCarrier(e.target.value);
+              invalid={errors['carrier'] !== undefined}
+              onChange={(v) => {
+                setCarrier(v);
                 clearError('carrier');
               }}
             />
             {errors['carrier'] !== undefined && <span className="error">{errors['carrier']}</span>}
-          </label>
+          </div>
           <label className="field">
             <span className="label">运单号</span>
             <input
@@ -221,6 +226,13 @@ export function OrderFixActions({
             <input
               className="input"
               maxLength={ADMIN_NOTE_MAX_LENGTH}
+              placeholder={
+                mode === 'fix'
+                  ? '例：运单号录错一位'
+                  : mode === 'revert'
+                    ? '例：包裹被邮局退回，要重新发'
+                    : '例：买家在微信里说不要了'
+              }
               value={reason}
               onChange={(e) => {
                 setReason(e.target.value);

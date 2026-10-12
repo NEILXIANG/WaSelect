@@ -90,6 +90,21 @@ describe('OrderFixActions', () => {
     expect(el.textContent).not.toContain('形状认不出'); // 已提交后确认区收起
   });
 
+  // 全入口点击测试 2026-10-11：改运单号的承运商原是自由文本框（发货 / 批量发货都是下拉）；进了某一项后"选择要做的修正"不再显示；原因框给示例
+  it('🔴 改运单号：承运商用同一个下拉；进入后不再显示"选择要做的修正"；原因框有示例', async () => {
+    const { el } = await open({
+      status: 'shipped',
+      carrier: 'Japan Post EMS',
+      tracking_no: 'EM123456789JP',
+    });
+    expect(el.textContent).toContain('选择要做的修正');
+    await click(button(el, '修改运单号'));
+    expect(el.querySelector('select#fix-carrier')).not.toBeNull();
+    expect(el.textContent).not.toContain('选择要做的修正');
+    const reason = [...el.querySelectorAll('input')].at(-1) as HTMLInputElement;
+    expect(reason.placeholder).toBe('例：运单号录错一位');
+  });
+
   it('🔴 撤销发货（AJ-440）：原因必填 → 二次确认写明会发更正邮件 → POST /shipment/revert {reason}', async () => {
     const { el, calls, notices, done } = await open({
       status: 'shipped',

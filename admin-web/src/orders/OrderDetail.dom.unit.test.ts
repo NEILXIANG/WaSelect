@@ -616,6 +616,15 @@ describe('订单详情：操作抽屉（AJ-398）', () => {
     expect(toastText(el)).toContain('已发货');
   });
 
+  // 全入口点击测试 2026-10-11：订单修正抽屉原标题"取消订单 / 修改运单号 / 撤销发货"——已发货的单只有后两项，标题许诺了做不到的；
+  // 且标题太长把「关闭」挤到下一行。改为"订单修正"，里面按单子状态列出能做的
+  it('🔴 已发货的单打开「订单修正…」→ 抽屉标题是"订单修正"，不再列出做不到的"取消订单"', async () => {
+    status = 'shipped';
+    const el = await open();
+    await click(button(el, '订单修正…'));
+    expect(el.querySelector('.drawer-wrap')?.getAttribute('aria-label')).toBe('订单修正');
+  });
+
   // 全入口点击测试 2026-10-11：抽屉里先写要退多少（原先只有原因与按钮，金额要回页面找）
   it('🔴 打开全额退款抽屉 → 先看到「退款金额」', async () => {
     const el = await open();
