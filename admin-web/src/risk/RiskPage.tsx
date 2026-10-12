@@ -166,19 +166,19 @@ export function RiskPage({ api }: RiskPageProps) {
         证据在 Stripe Dashboard 提交——后台只标红、锁退款、拉黑，不在此处举证。
       </p>
 
+      {/* 筛选片（全入口点击测试 2026-10-12：原为通栏下拉框，与商品页筛选片 / 订单页页签不一致，五个选项也要多点一下） */}
       <div className="filters">
-        <select
-          className="input"
-          value={status}
-          onChange={(e) => setStatus(e.target.value as typeof status)}
-        >
-          <option value="all">全部</option>
-          {DISPUTE_STATUS.map((s) => (
-            <option key={s} value={s}>
-              {DISPUTE_STATUS_LABELS[s]}
-            </option>
-          ))}
-        </select>
+        {(['all', ...DISPUTE_STATUS] as const).map((s) => (
+          <button
+            key={s}
+            type="button"
+            className={s === status ? 'chip chip-on' : 'chip'}
+            aria-pressed={s === status}
+            onClick={() => setStatus(s)}
+          >
+            {s === 'all' ? '全部' : DISPUTE_STATUS_LABELS[s]}
+          </button>
+        ))}
       </div>
 
       <table className="table">

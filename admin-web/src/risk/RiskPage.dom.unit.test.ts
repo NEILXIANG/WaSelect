@@ -88,6 +88,39 @@ afterEach(async () => {
   mounted = undefined;
 });
 
+// 全入口点击测试 2026-10-12：五个状态放在一个通栏下拉框里（商品页是筛选片、订单页是页签）；已拉黑一节的标题是灰色小字
+describe('风控页：版式', () => {
+  it('🔴 拒付状态用筛选片（aria-pressed 标当前）；点「进行中」→ 按 status=open 重取', async () => {
+    const paths: string[] = [];
+    mounted = await mount(
+      createElement(RiskPage, {
+        api: (async (req: Call) => {
+          paths.push(req.path);
+          return req.path.includes('/admin/disputes') ? [] : { items: [] };
+        }) as never,
+      }),
+    );
+    const el = mounted.el;
+    expect(el.querySelector('select')).toBeNull();
+    expect(button(el, '全部')?.getAttribute('aria-pressed')).toBe('true');
+    await click(button(el, '进行中'));
+    expect(button(el, '进行中')?.getAttribute('aria-pressed')).toBe('true');
+    expect(paths.filter((p) => p.includes('/admin/disputes')).at(-1)).toContain('status=open');
+  });
+
+  it('🔴 「已拉黑用户」是一节的标题（h2），不是灰色小字', async () => {
+    mounted = await mount(
+      createElement(RiskPage, {
+        api: (async (req: Call) =>
+          req.path.includes('/admin/disputes') ? [] : { items: [] }) as never,
+      }),
+    );
+    expect([...mounted.el.querySelectorAll('h2')].map((h) => h.textContent)).toContain(
+      '已拉黑用户（0）',
+    );
+  });
+});
+
 describe('风控页：拉黑串单（ADM3-01）', () => {
   it('处理 A 成功 → 再处理 B 且 B 取详情失败 → 确认面板消失（不能停在 A 上）', async () => {
     const el = await open(['ord-B']);

@@ -38,6 +38,8 @@ export function BlockedUsers({
 }) {
   const [rows, setRows] = useState<BlockedUser[]>([]);
   const [target, setTarget] = useState('');
+  /** 解除对象的称呼（收件人 · 邮箱；都没有时缩短 id）——提示里写它，不写 36 位 id（全入口点击测试 2026-10-12）。 */
+  const [targetName, setTargetName] = useState('');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const ownSink = useToasts();
@@ -74,7 +76,7 @@ export function BlockedUsers({
       setDialog(null);
       onChanged?.();
       await load();
-      sink.success(`已解除 ${target} 的拉黑：对方重新登录即可下单`);
+      sink.success(`已解除 ${targetName} 的拉黑：对方重新登录即可下单`);
     } catch (e) {
       setDialog(null);
       const { text, traceId } = toastError(e, '解除拉黑失败');
@@ -92,7 +94,7 @@ export function BlockedUsers({
     dialogRun.current = () => void submit();
     setDialog({
       title: '解除后对方重新登录即可下单',
-      body: `${target}。拉黑时被取消的订单不会恢复（库存已回补，恢复会超卖），买家需重新下单。解除原因会记录下来。`,
+      body: `${targetName}。拉黑时被取消的订单不会恢复（库存已回补，恢复会超卖），买家需重新下单。解除原因会记录下来。`,
       confirmText: '确认解除',
       danger: true,
     });
@@ -100,11 +102,21 @@ export function BlockedUsers({
 
   return (
     <div className="form">
-      <span className="label">{blockedListTitle(rows.length)}</span>
+      {/* 一节的标题（全入口点击测试 2026-10-12：原为灰色小字，与上面的拒付表分不开） */}
+      <h2 className="title">{blockedListTitle(rows.length)}</h2>
       {rows.length === 0 ? (
         <p className="muted">没有被拉黑的用户</p>
       ) : (
         <table className="table">
+          {/* 表头（全入口点击测试 2026-10-12：原先没有，"3 单"与时间不知道是什么） */}
+          <thead>
+            <tr>
+              <th>客户</th>
+              <th>拉黑时间（日本时间）</th>
+              <th>订单数</th>
+              <th colSpan={2}>操作</th>
+            </tr>
+          </thead>
           <tbody>
             {rows.map((u) => (
               <tr key={u.id}>
@@ -129,7 +141,14 @@ export function BlockedUsers({
                   </a>
                 </td>
                 <td>
-                  <button type="button" className="link" onClick={() => setTarget(u.id)}>
+                  <button
+                    type="button"
+                    className="link"
+                    onClick={() => {
+                      setTarget(u.id);
+                      setTargetName(blockedUserName(u));
+                    }}
+                  >
                     解除拉黑
                   </button>
                 </td>
@@ -141,7 +160,8 @@ export function BlockedUsers({
       {target !== '' && (
         <div className="form">
           <p className="muted">
-            解除 {target}：对方重新登录即可下单；拉黑时被取消的订单不会恢复（库存已回补）。
+            解除 {targetName}{' '}
+            的拉黑：对方重新登录即可下单；拉黑时被取消的订单不会恢复（库存已回补）。
           </p>
           <input
             className="input"
@@ -177,4 +197,16 @@ export function BlockedUsers({
       )}
     </div>
   );
+}
+
+/** 列表行 → 称呼（收件人 · 邮箱；都没有时缩短 id）。与表格第一列同一口径。 */
+function blockedUserName(u: {
+  id: string;
+  last_recipient?: string | undefined;
+  last_contact_email?: string | undefined;
+}): string {
+  const parts = [u.last_recipient, u.last_contact_email].filter(
+    (x): x is string => typeof x === 'string' && x !== '',
+  );
+  return parts.length > 0 ? parts.join(' · ') : `客户 ${shortRef(u.id)}`;
 }
