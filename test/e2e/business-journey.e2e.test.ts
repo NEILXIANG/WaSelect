@@ -36,6 +36,9 @@ import {
   type ChainServer,
 } from '../helpers/chain-server.js';
 import { unreadable } from '../helpers/readable.js';
+import { markDisputeClosed } from '../../server/src/app/mark-disputed.js';
+import { listDisputes } from '../../admin-web/src/risk/api.js';
+import { blockDoneText, disputeRows } from '../../admin-web/src/risk/view.js';
 import { addressRejectText } from '@waselect/shared';
 import { createAdminApi } from '../../admin-web/src/api/client.js';
 import { createProduct, listProducts, setProductStatus } from '../../admin-web/src/products/api.js';
@@ -87,6 +90,8 @@ import {
 let db: Db;
 let srv: ChainServer;
 let buyer = '';
+/** 买家 id 用真实形状（u- + 36 位）：短 id（如 u-chen）漏进文案时「看得懂」判据认不出（2026-10-12 拉黑提示就这样漏过一次） */
+const BUYER_ID = 'u-3f2a9c1e-8b7d-4e6f-a1b2-c3d4e5f60718';
 let adminToken = '';
 
 const admin = () =>
@@ -117,12 +122,12 @@ beforeAll(async () => {
   await resetTestDb(db);
   await seedChainFixture(db);
   // 像真的买家：美国华人（收件人须是英文字母——面单给美国承运商看，迁移 001 的 CHECK），加州地址，不留邮箱
-  await db`insert into users (id, openid, email, is_admin) values ('u-chen', 'o-chen', null, false)`;
+  await db`insert into users (id, openid, email, is_admin) values (${BUYER_ID}, 'o-chen', null, false)`;
   await db`
     insert into addresses (id, user_id, recipient, phone, line1, line2, city, state, postal_code, country, is_default)
-    values ('addr-chen', 'u-chen', 'Jing Chen', '+14155550188', '1288 Stockton St', 'Apt 3B',
+    values ('addr-chen', ${BUYER_ID}, 'Jing Chen', '+14155550188', '1288 Stockton St', 'Apt 3B',
             'San Francisco', 'CA', '94133', 'US', true)`;
-  buyer = await tokenFor('u-chen');
+  buyer = await tokenFor(BUYER_ID);
   adminToken = await tokenFor('u-admin', 'admin');
 }, 30_000);
 
@@ -671,5 +676,97 @@ describe('中途变化：车里的商品被下架、发货前改地址——买�
       region: 'New York, NY 10118',
     });
     expect(events.at(-1)).toBe('改址 · admin@example.com · 改址：改前地址已归档（#1）');
+  });
+});
+
+/** 第四条旅程：付款后买家发起拒付 → 后台锁发货、风控列表、拉黑提示 → 结案胜诉 → 放行发货。 */
+const DP = { orderId: '', orderNo: '' };
+
+describe('拒付：开案锁住发货 → 风控页看得懂 → 结案后放行', () => {
+  it('⑬ 已付单被拒付 → 后台列表与发货闸门、风控列表、拉黑提示都说人话', async () => {
+    const c = await call(srv, 'POST', '/api/v1/orders', {
+      token: buyer,
+      key: 'k-dispute',
+      body: {
+        items: [{ product_id: M.keep, qty: 1 }],
+        address_id: 'addr-chen',
+        terms_version: CHAIN_TERMS,
+      },
+    });
+    DP.orderId = String(c.json['order_id']);
+    DP.orderNo = String(c.json['order_no']);
+    await call(srv, 'POST', `/api/v1/orders/${DP.orderId}/pay`, {
+      token: buyer,
+      key: 'pay-dispute',
+      body: { channel: 'mock' },
+    });
+    expect((await mockCallback(srv, db, DP.orderId, { eventId: 'evt-dispute' })).status).toBe(200);
+    // 拒付由 Stripe 回调开案（mock 通道没有拒付事件）：与 admin-buyer-consistency 同口径直接落库
+    await db`update orders set has_dispute = true where id = ${DP.orderId}`;
+    await db`update payments set dispute_id = 'dp_journey', dispute_status = 'open',
+                                 dispute_amount = 3770, dispute_opened_at = now()
+              where order_id = ${DP.orderId}`;
+
+    const row = adminOrderRows((await listOrders(admin())).items).find((r) => r.id === DP.orderId);
+    show('后台订单行（拒付中）', row);
+    let shipErr: unknown = null;
+    try {
+      await shipOrder(admin(), DP.orderId, {
+        carrier: 'Japan Post EMS',
+        tracking_no: 'EJ987654321JP',
+      });
+    } catch (e) {
+      const err = e as { code?: unknown; message?: unknown };
+      shipErr = { code: err.code, message: err.message };
+    }
+    show('拒付中发货', shipErr);
+    const disputes = disputeRows(await listDisputes(admin()));
+    show(
+      '风控拒付行',
+      disputes.filter((d) => d.orderId === DP.orderId),
+    );
+    show('拉黑成功提示（风控页按订单拉黑）', blockDoneText(DP.orderNo));
+    const d = await buyerDetail(DP.orderId);
+    show('小程序详情（拒付中）', { statusText: d.statusText, nextText: d.nextText });
+    expectReadable({ row, shipErr, disputes, d: { s: d.statusText, n: d.nextText } });
+    expect(row?.hasDispute).toBe(true);
+    expect(row?.actions.ship).toEqual({
+      ok: false,
+      reason: '有拒付进行中，先处理拒付再发货（发货后钱货两空）',
+    });
+    expect(shipErr).toMatchObject({ code: 40909 }); // 绕过闸门直发也被服务端拦
+    expect(disputes.find((x) => x.orderId === DP.orderId)).toMatchObject({
+      orderNo: DP.orderNo,
+      statusText: '进行中',
+      amountText: '3,770 日元',
+      urgent: true,
+    });
+    // 拉黑提示认订单号、不写用户 id（2026-10-12 修过）
+    expect(blockDoneText(DP.orderNo)).toBe(
+      `已拉黑 订单 ${DP.orderNo} 的买家：此后无法下单；其名下未付款订单已一并取消（到「订单管理」核对）`,
+    );
+    expectReadable(blockDoneText(DP.orderNo));
+    // @limitation 买家端拒付期间仍显示"已付款 · 日本采购中"（买家 Order 不带拒付标记）——记为未做，见测试缺口复盘 §6
+    expect(d.statusText).toBe('已付款 · 日本采购中');
+  });
+
+  it('⑭ 结案胜诉 → 后台不再标拒付、可以发货；买家看到已发货', async () => {
+    await markDisputeClosed(db, srv.events, DP.orderId, {
+      channel: 'mock',
+      disputeId: 'dp_journey',
+      result: 'won',
+    });
+    const row = adminOrderRows((await listOrders(admin())).items).find((r) => r.id === DP.orderId);
+    show('后台订单行（结案后）', row);
+    await shipOrder(admin(), DP.orderId, {
+      carrier: 'Japan Post EMS',
+      tracking_no: 'EJ987654321JP',
+    });
+    const d = await buyerDetail(DP.orderId);
+    show('小程序详情（结案后发货）', { statusText: d.statusText, trackingNo: d.trackingNo });
+    expectReadable({ row, s: d.statusText });
+    expect(row?.hasDispute).toBe(false);
+    expect(row?.actions.ship.ok).toBe(true);
+    expect(d).toMatchObject({ statusText: '已发货 · 国际运输中', trackingNo: 'EJ987654321JP' });
   });
 });

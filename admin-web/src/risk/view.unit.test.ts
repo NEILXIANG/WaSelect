@@ -153,8 +153,10 @@ describe('拉黑文案：三件后果在点之前必须全部说清', () => {
   });
 
   it('成功提示同样提到连带取消，并给出核对去处（条数拿不到，不能写死数字）', () => {
-    const text = blockDoneText('user-A');
-    expect(text).toContain('已拉黑 user-A');
+    // 业务旅程测试 2026-10-12：原写"已拉黑 订单 X 的买家（<36 位用户 id>）"，原断言要求出现 user-A——把显示 id 锁成了对的
+    const text = blockDoneText('261012-HEXFG3');
+    expect(text).toContain('已拉黑 订单 261012-HEXFG3 的买家：');
+    expect(blockDoneText()).toContain('已拉黑该买家：');
     expect(text).toContain('未付款订单已一并取消');
     expect(text).toContain('订单管理');
     // ❗ 不能出现"已取消 3 单"这类硬编码数字：接口返回空体，前端拿不到条数

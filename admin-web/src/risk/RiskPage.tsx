@@ -122,7 +122,7 @@ export function RiskPage({ api }: RiskPageProps) {
       // ⚠️ 它**不是**"防手滑"——防手滑靠的是 prepare 清空待确认态（AJ-256）；
       //    这里防的是"order_id 与 user_id 配错"这类请求级错误。
       await blockUser(api, { userId, orderId, reason: blockReason });
-      sink.success(blockDoneText(userId, orderNo));
+      sink.success(blockDoneText(orderNo));
       setBlockedTick((t) => t + 1);
       setOrderId('');
       setOrderNo('');

@@ -55,9 +55,10 @@ export const BLOCK_CONFIRM_TEXT =
  * 拉黑成功后的提示（@see {@link BLOCK_CONFIRM_TEXT} 的 @limitation：条数拿不到，
  * 所以只说"已一并取消"，并把核对动作指向订单列表）。
  */
-export function blockDoneText(userId: string, orderNo = ''): string {
-  const who = orderNo !== '' ? `订单 ${orderNo} 的买家（${userId}）` : userId;
-  return `已拉黑 ${who}：此后无法下单；其名下未付款订单已一并取消（到「订单管理」核对）`;
+export function blockDoneText(orderNo = ''): string {
+  // 不写用户 id（业务旅程测试 2026-10-12：原写"订单 X 的买家（<36 位 id>）"，运营认的是订单号）
+  const who = orderNo !== '' ? ` 订单 ${orderNo} 的买家` : '该买家';
+  return `已拉黑${who}：此后无法下单；其名下未付款订单已一并取消（到「订单管理」核对）`;
 }
 
 /** 列表行。 */
