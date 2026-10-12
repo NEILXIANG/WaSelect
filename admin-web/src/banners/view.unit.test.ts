@@ -172,6 +172,12 @@ describe('bannerFormErrors', () => {
 });
 
 describe('toBannerInput', () => {
+  // 两端输入测试 2026-10-12：排序是文本框，全角「１」原先判"排序必须是整数"（实测后台页面）
+  it('🔴 排序认全角数字：校验通过、发出去是数字', () => {
+    expect(bannerFormErrors({ ...valid(), sort: '１２' }).errors['sort']).toBe(undefined);
+    expect(toBannerInput({ ...valid(), sort: '１２' })['sort']).toBe(12);
+  });
+
   it('输出契约 BannerInput 的形状', () => {
     expect(toBannerInput(valid())).toEqual({
       image_key: 'banners/2026/autumn-sale.png',

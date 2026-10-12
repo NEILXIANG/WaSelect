@@ -217,6 +217,13 @@ describe('ConfirmDialog：要求逐字输入（typeToConfirm）', () => {
     expect(typedOk({ ...SPEC, typeToConfirm: 'AB-1' }, 'AB-2')).toBe(false);
   });
 
+  // 两端输入测试 2026-10-12：批量发货要求"输入本次发货的单数"，中文输入法全角模式打出的「２」被判"与上面不一致"
+  it('🔴 typedOk 默认先把全角转半角再比（大小写仍逐字）', () => {
+    expect(typedOk({ ...SPEC, typeToConfirm: '12' }, '１２')).toBe(true);
+    expect(typedOk({ ...SPEC, typeToConfirm: 'AB-1' }, 'ＡＢ－１')).toBe(true);
+    expect(typedOk({ ...SPEC, typeToConfirm: 'AB-1' }, 'ab-1')).toBe(false);
+  });
+
   /**
    * 🔴 typedOk 空串早退的**直接**红灯证据。
    * @why 组件里这条分支走不到（`needsType` 先滤掉了空串），所以只能这样测；

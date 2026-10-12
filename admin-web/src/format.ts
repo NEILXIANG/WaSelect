@@ -21,6 +21,15 @@ import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
 /** JST 相对 UTC 的偏移（毫秒）。 */
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
+/**
+ * 文本框里手填的数字 → 半角并去首尾空白（排序、库存这类用文本框而不是数字框的格子）。
+ * @why 两端输入测试 2026-10-12：中文输入法全角模式打出的「１２」原先一律判"必须是整数"，运营看不出差别。
+ * @limitation 只做 NFKC + trim；"1,000" 这类千分位不在这里处理（排序 / 库存用不到）。
+ */
+export function halfWidth(raw: string): string {
+  return raw.normalize('NFKC').trim();
+}
+
 /** 千分位 + 日元（@see @limitation 一）。 */
 export function moneyText(jpy: unknown): string {
   if (!Number.isInteger(jpy)) return '—';

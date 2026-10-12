@@ -717,6 +717,7 @@ describe('parseStockEdit：列表内联改库存的即时判定（AJ-403）', ()
     ['30', 30],
     [' 7 ', 7],
     [String(PRODUCT_MAX_STOCK), PRODUCT_MAX_STOCK],
+    ['１２', 12], // 两端输入测试 2026-10-12：中文输入法全角模式（这一格是文本框，打得出全角）
   ])('合法 %j → %i', (raw, value) => {
     expect(parseStockEdit(raw)).toEqual({ ok: true, value });
   });

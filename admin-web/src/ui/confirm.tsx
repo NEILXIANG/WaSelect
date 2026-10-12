@@ -79,7 +79,8 @@ export interface ConfirmSpec {
 export function typedOk(spec: ConfirmSpec, typed: string): boolean {
   const want = spec.typeToConfirm;
   if (typeof want !== 'string' || want.trim() === '') return true;
-  const norm = spec.normalize ?? ((s: string) => s.trim());
+  // 默认先 NFKC（两端输入测试 2026-10-12：全角模式打出的「２」原先判"与上面不一致"）；大小写仍逐字
+  const norm = spec.normalize ?? ((s: string) => s.normalize('NFKC').trim());
   return norm(typed) === norm(want);
 }
 

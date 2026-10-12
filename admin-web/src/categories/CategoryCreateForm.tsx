@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { ApiError } from '../api/errors.js';
+import { halfWidth } from '../format.js';
 import { toastError, type ToastSink } from '../ui/toast.js';
 import { createCategory, type AdminApi } from './api.js';
 import { categoryDraftErrors, categoryServerError } from './view.js';
@@ -30,7 +31,7 @@ export function CategoryCreateForm({
       await createCategory(api, {
         key: d.key.trim(),
         name: d.name.trim(),
-        sort: Number(d.sort.trim()),
+        sort: Number(halfWidth(d.sort)),
       });
       sink.success(`已新建分类「${d.name.trim()}」——有在售商品后小程序才会显示它`);
       setD({ key: '', name: '', sort: '100' });

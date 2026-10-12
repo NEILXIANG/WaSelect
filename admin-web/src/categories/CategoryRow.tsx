@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { Badge } from '../ui/badge.js';
+import { halfWidth } from '../format.js';
 import type { AdminCategory } from './api.js';
 import { categoryDraftErrors } from './view.js';
 
@@ -38,7 +39,7 @@ export function CategoryRow({
     const e = categoryDraftErrors({ key: c.key, ...edit }, false);
     setErrors(e);
     if (Object.keys(e).length > 0) return;
-    if (await onSave({ name: edit.name.trim(), sort: Number(edit.sort.trim()) })) setEdit(null);
+    if (await onSave({ name: edit.name.trim(), sort: Number(halfWidth(edit.sort)) })) setEdit(null);
   };
 
   return (

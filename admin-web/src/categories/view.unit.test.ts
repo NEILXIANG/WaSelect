@@ -50,6 +50,13 @@ describe('categoryDraftErrors', () => {
   });
 });
 
+// 两端输入测试 2026-10-12：排序是文本框，中文输入法全角模式打出的「１０」原先判"排序填 0–9999 的整数"
+describe('排序认全角数字', () => {
+  it('🔴 「１０」合法', () => {
+    expect(categoryDraftErrors({ key: 'baby_care', name: '母婴', sort: '１０' }, true)).toEqual({});
+  });
+});
+
 describe('categoryServerError', () => {
   it('重复说清是代码还是名称；其它原因翻人话；没有 data → null', () => {
     expect(categoryServerError({ field: 'name', reason: 'duplicate' })?.text).toContain('同名');

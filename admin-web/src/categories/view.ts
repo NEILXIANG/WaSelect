@@ -5,6 +5,7 @@
  * @why 预检规则与服务端 domain/category-input.ts 同口径（键形状、名称 1–10 字、不收网页代码），先在本地报出来；服务端兜底。
  */
 import { SORT_MAX } from '@waselect/shared';
+import { halfWidth } from '../format.js';
 import type { AdminCategory } from './api.js';
 
 const KEY = /^[a-z][a-z0-9_]{1,31}$/;
@@ -49,7 +50,7 @@ export function categoryDraftErrors(d: CategoryDraft, isNew: boolean): Record<st
   if (name === '') e['name'] = '请填写分类名称';
   else if ([...name].length > 10) e['name'] = '分类名称最多 10 个字（小程序分类栏放不下更长的）';
   else if (HTML_TAG.test(name)) e['name'] = '分类名称里不能有网页代码（如 <b>）';
-  const sort = d.sort.trim();
+  const sort = halfWidth(d.sort); // 全角先转半角（两端输入测试 2026-10-12）
   if (!/^\d{1,4}$/.test(sort)) e['sort'] = '排序填 0–9999 的整数，越小越靠前';
   return e;
 }

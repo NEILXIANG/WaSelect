@@ -706,9 +706,11 @@ export function makeMainImage<T>(images: readonly T[], index: number): T[] {
 export function parseStockEdit(
   raw: string,
 ): { ok: true; value: number } | { ok: false; error: string } {
-  if (raw.trim() === '') return { ok: false, error: '库存必填（真的卖完了请填 0）' };
-  const n = plainInt(raw);
-  if (n === null) return { ok: false, error: `库存必须是 ≥0 的整数${sciHint(raw)}` };
+  // 全角先转半角（两端输入测试 2026-10-12：这一格是文本框，全角模式打出的「１２」原先判"必须是整数"）
+  const text = raw.normalize('NFKC');
+  if (text.trim() === '') return { ok: false, error: '库存必填（真的卖完了请填 0）' };
+  const n = plainInt(text);
+  if (n === null) return { ok: false, error: `库存必须是 ≥0 的整数${sciHint(text)}` };
   if (n > PRODUCT_MAX_STOCK) return { ok: false, error: STOCK_TOO_LARGE_TEXT };
   return { ok: true, value: n };
 }

@@ -17,7 +17,7 @@
  * @see ../../../contracts/api-contract.yaml（BannerInput / Banner）；../format.ts
  */
 import { SORT_MAX } from '@waselect/shared';
-import { formatJst, toIsoJst } from '../format.js';
+import { formatJst, halfWidth, toIsoJst } from '../format.js';
 
 /** 契约 `BannerInput.link_type` 枚举（单测与契约双向比对）。 */
 export const LINK_TYPES = ['none', 'product', 'category'] as const;
@@ -176,7 +176,8 @@ export function bannerFormErrors(form: unknown): {
         ? '选了跳转到分类，请在下拉里选一个分类（否则买家点了会跳到不存在的页面）'
         : '选了跳转到商品，请在下拉里选一件商品（否则买家点了会跳到不存在的页面）';
   // 只认纯数字串：`Number('')` 是 0、`Number('1e2')` 是 100，都会静默改值（审查 2026-10-09 #6；商品页同口径）
-  const sort = /^\d+$/.test(f.sort.trim()) ? Number(f.sort.trim()) : Number.NaN;
+  const sortText = halfWidth(f.sort); // 全角先转半角（两端输入测试 2026-10-12）
+  const sort = /^\d+$/.test(sortText) ? Number(sortText) : Number.NaN;
   // 上界 SORT_MAX 与服务端、分类排序同源（两端输入测试 2026-10-12：填 99999999999 原先放行、服务端 500）
   if (!Number.isInteger(sort) || sort < 0 || sort > SORT_MAX)
     errors['sort'] = `排序填 0–${String(SORT_MAX)} 的整数`;
@@ -210,7 +211,7 @@ export function toBannerInput(form: unknown): Record<string, unknown> {
     image_key: f.imageKey.trim(),
     link_type: f.linkType,
     ...(f.linkType === 'none' ? {} : { link_id: f.linkId.trim() }),
-    sort: Number(f.sort.trim()),
+    sort: Number(halfWidth(f.sort)),
     active: f.active,
     ...(starts === '' ? {} : { starts_at: starts }),
     ...(ends === '' ? {} : { ends_at: ends }),
