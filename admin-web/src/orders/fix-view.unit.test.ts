@@ -10,6 +10,7 @@ import {
   fixDoneNotice,
   shipmentRevertGate,
   trackingWarning,
+  shipMailNotes,
 } from './fix-view.js';
 
 describe('cancelGate', () => {
@@ -111,5 +112,23 @@ describe('fixDoneNotice', () => {
     ['cancel', undefined, '库存已回补'],
   ] as const)('%s / 邮箱=%s → 含「%s」', (mode, email, want) => {
     expect(fixDoneNotice(mode, { contact_email: email })).toContain(want);
+  });
+});
+
+// 全入口点击测试 2026-10-11：单单发货原写"确认后发货邮件立即发给买家""运单号已随发货邮件发给买家"——没留邮箱的买家收不到，
+// 运营会以为买家已被通知（与 fixDoneNotice 同一口径）
+describe('shipMailNotes（单单发货的确认与完成提示）', () => {
+  it('🔴 留了邮箱 → 说会发邮件', () => {
+    expect(shipMailNotes({ contact_email: 'a@b.test' })).toEqual({
+      confirm: '确认后会给买家发发货邮件。',
+      done: '已发货，发货邮件会发到买家留的邮箱',
+    });
+  });
+  it('🔴 没留邮箱 → 说不会收到，请另行联系', () => {
+    expect(shipMailNotes({ contact_email: '' })).toEqual({
+      confirm: '买家没留邮箱，不会收到发货邮件。',
+      done: '已发货；买家没留邮箱，不会收到发货邮件，如需告知请另行联系',
+    });
+    expect(shipMailNotes(null).done).toContain('没留邮箱');
   });
 });

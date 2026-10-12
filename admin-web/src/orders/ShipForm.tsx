@@ -24,7 +24,7 @@ import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { ApiError } from '../api/errors.js';
 import { staleNotice, toastError, type ToastSink } from '../ui/toast.js';
 import { shipOrder, type AdminApi, type AdminOrderLike } from './api.js';
-import { TRACKING_SHAPE_WARNING, trackingWarning } from './fix-view.js';
+import { TRACKING_SHAPE_WARNING, shipMailNotes, trackingWarning } from './fix-view.js';
 import { emptyShipForm, shipErrors, shipGate, toShipBody } from './view.js';
 
 export interface OrderActionFormProps {
@@ -88,7 +88,8 @@ export function ShipForm({
       // P1-10：服务端认不出运单号形状时提醒核对（已保存；录错可在「订单修正」里改）
       const warn = trackingWarning(resp);
       if (warn !== '') sink.info(warn, { sticky: true });
-      else sink.success('已发货，运单号已随发货邮件发给买家');
+      // 全入口点击测试 2026-10-11：按有没有联系邮箱说（原写"运单号已随发货邮件发给买家"，没留邮箱的也这么说）
+      else sink.success(shipMailNotes(order).done);
       setBusy(false);
       onDone();
     } catch (e) {
@@ -118,7 +119,7 @@ export function ShipForm({
     setDialog({
       title: '发货后不能再改址，运单号录错只能走「订单修正」',
       // 显示**落库后的样子**（服务端去空白、转大写，AJ-410）：买家邮件里看到的就是这一串
-      body: `承运商 ${ship.carrier.trim()} / 运单号 ${normalizeTrackingNo(ship.trackingNo)}。确认后发货邮件立即发给买家。`,
+      body: `承运商 ${ship.carrier.trim()} / 运单号 ${normalizeTrackingNo(ship.trackingNo)}。${shipMailNotes(order).confirm}`,
       confirmText: '确认发货',
       danger: true,
       typeToConfirm: normalizeTrackingNo(ship.trackingNo),

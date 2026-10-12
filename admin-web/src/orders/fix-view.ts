@@ -103,3 +103,18 @@ export function fixDoneNotice(mode: 'cancel' | 'fix' | 'revert', order: unknown)
     return `已撤销发货：订单回到待发货，运单已清空；${hasEmail ? '已给买家发更正邮件' : '买家未留邮箱，没有发更正邮件，请另行告知'}`;
   return `运单号已更新；${hasEmail ? '已给买家重发发货邮件' : '买家未留邮箱，没有重发发货邮件'}`;
 }
+
+/**
+ * 单单发货的确认句与完成提示（全入口点击测试 2026-10-11）：按订单有没有联系邮箱说（与 `fixDoneNotice` 同一口径）。
+ * @why 原写"确认后发货邮件立即发给买家""运单号已随发货邮件发给买家"——没留邮箱的买家收不到，运营会以为买家已被通知。
+ * @limitation 只看订单上有没有邮箱，不知道服务商最终有没有送达（那在 mail_deliveries 里）。
+ */
+export function shipMailNotes(order: unknown): { confirm: string; done: string } {
+  const hasEmail = str(order, 'contact_email').trim() !== '';
+  return hasEmail
+    ? { confirm: '确认后会给买家发发货邮件。', done: '已发货，发货邮件会发到买家留的邮箱' }
+    : {
+        confirm: '买家没留邮箱，不会收到发货邮件。',
+        done: '已发货；买家没留邮箱，不会收到发货邮件，如需告知请另行联系',
+      };
+}
