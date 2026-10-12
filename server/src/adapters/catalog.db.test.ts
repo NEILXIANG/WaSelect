@@ -254,6 +254,21 @@ describe('listActiveProducts / findProductDetail（U5a）', () => {
     expect(byKw.items.map((p) => p.id)).toEqual(['p-1']); // ilike：小写命中大写
   });
 
+  // 规律排查 2026-10-12：AJ-491 写明"停用的分类键查出来是空列表"，实现只看商品状态——停用后按分类仍查得到
+  it('🔴 停用的分类按分类查是空列表；「全部」与搜索不受影响（AJ-491 口径）', async () => {
+    await seedProducts();
+    await db`update product_categories set active = false where key = 'beauty'`;
+    try {
+      const byCat = await repo.listActiveProducts({ page: 1, size: 20, category: 'beauty' });
+      expect(byCat).toMatchObject({ items: [], total: 0 });
+      const all = await repo.listActiveProducts({ page: 1, size: 20 });
+      expect(all.items.map((p) => p.id)).toContain('p-2');
+    } finally {
+      // 分类表是保留表（resetTestDb 不清），必须还原
+      await db`update product_categories set active = true where key = 'beauty'`;
+    }
+  });
+
   // AJ-487（三端模拟测试 2026-10-11）：买家常按日文品牌名搜（資生堂 / ロイズ），标题是简体中文 → 扑空
   it('🔴 keyword 也匹配日文原名 title_ja（大小写无关）；不匹配 JAN 码（采购信息不当搜索入口）；下架的仍不出', async () => {
     await db`

@@ -175,6 +175,22 @@ describe('商品分类管理页', () => {
     });
   });
 
+  // 规律排查 2026-10-12：提示说"不想让买家看到可以停用""小程序不再显示它"，可停用只收起首页分类入口，
+  //   商品仍在「全部」和搜索里买得到——运营照提示停用以为商品停卖了
+  it('🔴 停用的提示说清只收起首页分类、商品要停卖请下架', async () => {
+    const el = await open();
+    const beautyDel = [...el.querySelectorAll('tbody tr')][1]?.querySelector(
+      'button[data-act="delete"]',
+    ) as HTMLButtonElement;
+    expect(beautyDel.title).toContain('下架');
+    expect(beautyDel.title).not.toContain('不想让买家看到');
+    await click(
+      [...el.querySelectorAll('tbody tr')][1]?.querySelector('button[data-act="toggle"]'),
+    );
+    expect(el.textContent).toContain('首页不再显示');
+    expect(el.textContent).toContain('仍能在「全部」和搜索里买到');
+  });
+
   it('改名 / 排序：点编辑 → 行内输入 → 保存发 PUT {name, sort}', async () => {
     const el = await open();
     await click([...el.querySelectorAll('tbody tr')][1]?.querySelector('button[data-act="edit"]'));

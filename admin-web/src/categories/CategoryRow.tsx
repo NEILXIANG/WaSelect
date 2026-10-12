@@ -89,7 +89,13 @@ export function CategoryRow({
             >
               编辑
             </button>
-            <button type="button" className="link" disabled={busy} onClick={onToggle}>
+            <button
+              type="button"
+              className="link"
+              data-act="toggle"
+              disabled={busy}
+              onClick={onToggle}
+            >
               {c.active ? '停用' : '启用'}
             </button>
             <button
@@ -99,7 +105,7 @@ export function CategoryRow({
               disabled={busy || c.product_count > 0}
               title={
                 c.product_count > 0
-                  ? `还有 ${String(c.product_count)} 件商品，不能删；不想让买家看到可以停用`
+                  ? `还有 ${String(c.product_count)} 件商品，不能删；不想在首页显示这一类可以停用（商品要停卖请到商品管理下架）`
                   : ''
               }
               onClick={onDelete}

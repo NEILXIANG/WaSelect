@@ -82,7 +82,9 @@ export function CategoriesPage({ api }: { api: AdminApi }): React.JSX.Element {
               onToggle={() =>
                 void run(
                   () => updateCategory(api, c.key, { active: !c.active }),
-                  c.active ? `已停用「${c.name}」，小程序不再显示它` : `已启用「${c.name}」`,
+                  c.active
+                    ? `已停用「${c.name}」：小程序首页不再显示这个分类；其中的商品仍能在「全部」和搜索里买到，要停卖请到商品管理下架`
+                    : `已启用「${c.name}」`,
                   '操作失败',
                 )
               }

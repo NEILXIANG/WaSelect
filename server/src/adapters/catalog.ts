@@ -216,6 +216,13 @@ export function createCatalogRepo(db: Db): CatalogRepo {
       const kw = q.keyword?.replace(/[\\%_]/g, (m) => `\\${m}`);
       // AJ-487：也匹配日文原名——买家常按日文品牌名搜（資生堂 / ロイズ），中文标题里没有这几个字就扑空。
       //   不匹配 jan_code：那是采购信息，不当买家搜索入口。列表与计数共用同一个条件（每次调用新建片段，不复用同一对象）
+      // 按分类查时只认启用的分类（AJ-491 口径："停用的键查出来是空列表"；规律排查 2026-10-12 发现原先只看商品状态）。
+      //   「全部」与搜索不加这一条：停用只收起首页分类入口，商品下不下架由商品状态决定（后台停用提示同口径）
+      const catWhere = () =>
+        q.category === undefined
+          ? db``
+          : db`and category = ${q.category}
+               and exists (select 1 from product_categories c where c.key = ${q.category} and c.active)`;
       const kwWhere = () => {
         if (kw === undefined || kw === '') return db``;
         const like = '%' + kw + '%';
@@ -225,7 +232,7 @@ export function createCatalogRepo(db: Db): CatalogRepo {
         select id, title, category, price_jpy, images, stock, why, maker, tags
           from products
          where status = 'active'
-           ${q.category !== undefined ? db`and category = ${q.category}` : db``}
+           ${catWhere()}
            ${kwWhere()}
          order by (stock = 0), created_at desc, id
          limit ${q.size} offset ${(q.page - 1) * q.size}
@@ -234,7 +241,7 @@ export function createCatalogRepo(db: Db): CatalogRepo {
         select count(*)::int as n
           from products
          where status = 'active'
-           ${q.category !== undefined ? db`and category = ${q.category}` : db``}
+           ${catWhere()}
            ${kwWhere()}
       `;
       return {
