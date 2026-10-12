@@ -756,8 +756,13 @@ describe('拒付：开案锁住发货 → 风控页看得懂 → 结案后放行
       `已拉黑 订单 ${DP.orderNo} 的买家：此后无法下单；其名下未付款订单已一并取消（到「订单管理」核对）`,
     );
     expectReadable(blockDoneText(DP.orderNo));
-    // @limitation 买家端拒付期间仍显示"已付款 · 日本采购中"（买家 Order 不带拒付标记）——记为未做，见测试缺口复盘 §6
-    expect(d.statusText).toBe('已付款 · 日本采购中');
+    // AJ-500（用户 2026-10-12 同意）：买家看到拒付在处理、暂不发货（原先仍写"已付款 · 日本采购中"）
+    expect(d.statusText).toBe('付款争议处理中');
+    expect(d.nextText).toContain('处理结束前我们暂不发货');
+    const listRow = buyerOrderRows(
+      (await call(srv, 'GET', '/api/v1/orders', { token: buyer })).json['items'],
+    ).find((r) => r.orderId === DP.orderId);
+    expect(listRow?.statusText).toBe('付款争议处理中');
   });
 
   it('⑭ 结案胜诉 → 后台不再标拒付、可以发货；买家看到已发货', async () => {

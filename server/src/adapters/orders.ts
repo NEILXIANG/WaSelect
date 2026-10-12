@@ -468,6 +468,33 @@ export interface OwnedOrderListRow extends OrderListRow {
    * @why 小程序待付款行写明"几点前付款"——原先只说"请在截止时间前完成支付"，却不说截止是几点。
    */
   expires_at: Date;
+  /** 拒付状态（AJ-500，契约 0.6.82）：'open' 进行中 / 'lost' 银行已把钱退回买家；没有拒付或已解除 → null。 */
+  payment_dispute: 'open' | 'lost' | null;
+}
+
+/**
+ * 买家可见的拒付状态（AJ-500）：订单仍带拒付标记（`has_dispute`）时，取该单支付行上 open / lost 的那条。
+ * @why 以 `orders.has_dispute` 为门：胜诉 / 撤回会复位它（mark-disputed.ts），那时不该再对买家提拒付；
+ *      败诉保持 true，买家看到"钱已由银行退回、订单不发货"。与管理端发货 / 退款闸门读同一个标记。
+ * @limitation 一单多条支付行都有拒付时取最近开案的那条（实际上一单只会有一笔成功付款）。
+ */
+const buyerDisputeSql = (db: Db) => db`
+  case when o.has_dispute then
+    (select p.dispute_status from payments p
+      where p.order_id = o.id and p.dispute_status in ('open', 'lost')
+      order by p.dispute_opened_at desc nulls last
+      limit 1)
+  end`;
+
+const asDispute = (v: unknown): 'open' | 'lost' | null => (v === 'open' || v === 'lost' ? v : null);
+
+/** 详情用：单张订单的买家可见拒付状态（AJ-500）。 */
+export async function findBuyerDisputeState(
+  db: Db,
+  orderId: string,
+): Promise<'open' | 'lost' | null> {
+  const [r] = await db`select ${buyerDisputeSql(db)} as d from orders o where o.id = ${orderId}`;
+  return asDispute(r?.['d']);
 }
 
 /**
@@ -516,7 +543,8 @@ export async function listOwnedOrders(
              when exists (select 1 from after_sale_requests a
                            where a.order_id = o.id and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])}) then 'open'
              when exists (select 1 from after_sale_requests a where a.order_id = o.id) then 'closed'
-           end as after_sale_state
+           end as after_sale_state,
+           ${buyerDisputeSql(db)} as payment_dispute
       from orders o
      where ${ownedOrderFilter(db, userId, statuses, opts?.includeAfterSale === true)}
      order by o.created_at desc, o.id desc
@@ -535,6 +563,7 @@ export async function listOwnedOrders(
     after_sale_state:
       r.after_sale_state === 'open' || r.after_sale_state === 'closed' ? r.after_sale_state : null,
     expires_at: r.expires_at as Date,
+    payment_dispute: asDispute(r.payment_dispute),
   }));
 }
 

@@ -89,6 +89,29 @@ describe('orderRows（列表行）', () => {
   });
 });
 
+// AJ-500（用户 2026-10-12 同意）：拒付期间原先只写"已付款 · 日本采购中"
+describe('orderRows：拒付（payment_dispute）', () => {
+  it('🔴 进行中 → "付款争议处理中"并说清暂不发货；败诉 → "货款已由银行退回"', () => {
+    const [open, lost] = orderRows([
+      { ...ORDERS[1], payment_dispute: 'open' },
+      { ...ORDERS[1], order_id: 'o-3', payment_dispute: 'lost' },
+    ]);
+    expect(open).toMatchObject({
+      statusText: '付款争议处理中',
+      nextText:
+        '你的银行正在处理这笔付款的争议，处理结束前我们暂不发货。如果是误会（比如没认出扣款名目），可以联系银行撤回，或联系客服。',
+    });
+    expect(lost).toMatchObject({
+      statusText: '货款已由银行退回',
+      nextText: '你的银行已把这笔付款退回给你，这张订单不会发货。如有疑问请联系客服。',
+    });
+  });
+  it('认不出的值 / 没有 → 照常', () => {
+    const [r] = orderRows([{ ...ORDERS[1], payment_dispute: 'weird' }]);
+    expect(r?.statusText).toBe('已付款 · 日本采购中');
+  });
+});
+
 describe('emptyState（空态）', () => {
   it('⚠️ 请求失败时不说"还没有订单"（用户会以为订单丢了）', () => {
     expect(emptyState([], '网络请求失败').showEmpty).toBe(false);

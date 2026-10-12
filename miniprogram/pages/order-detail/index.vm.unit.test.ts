@@ -212,6 +212,28 @@ describe('detailView（整体）', () => {
   });
 });
 
+// AJ-500（用户 2026-10-12 同意）：拒付期间原先只写"已付款 · 日本采购中"——误发起的买家不知道要去撤回
+describe('detailView：拒付（payment_dispute）', () => {
+  it('🔴 进行中 → 状态与下一步说清暂不发货；进度条挂"付款争议处理中"', () => {
+    const v = detailView({ ...ORDER, status: 'paid', payment_dispute: 'open' });
+    expect(v.statusText).toBe('付款争议处理中');
+    expect(v.nextText).toBe(
+      '你的银行正在处理这笔付款的争议，处理结束前我们暂不发货。如果是误会（比如没认出扣款名目），可以联系银行撤回，或联系客服。',
+    );
+    expect(v.progress.branch).toEqual({ status: 'dispute', title: '付款争议处理中' });
+  });
+  it('🔴 败诉 → "货款已由银行退回"、订单不会发货', () => {
+    const v = detailView({ ...ORDER, status: 'paid', payment_dispute: 'lost' });
+    expect(v.statusText).toBe('货款已由银行退回');
+    expect(v.nextText).toBe('你的银行已把这笔付款退回给你，这张订单不会发货。如有疑问请联系客服。');
+  });
+  it('没有拒付 → 照常', () => {
+    const v = detailView({ ...ORDER, status: 'paid' });
+    expect(v.statusText).toBe('已付款 · 日本采购中');
+    expect(v.progress.branch).toBeNull();
+  });
+});
+
 describe('itemRows（行项目）', () => {
   it('单价是快照整数（缺了是 null 不是 0——0 会被读成"送的"）', () => {
     const [a, b] = itemRows(ORDER.items);

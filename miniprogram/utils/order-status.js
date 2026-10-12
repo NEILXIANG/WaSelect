@@ -120,6 +120,28 @@ export function buyerStatus(status, opts = undefined) {
 }
 
 /** 可以继续支付的状态（@see @limitation 二）。 */
+/**
+ * 拒付期间买家看的话（AJ-500，用户 2026-10-12 同意；服务端 `payment_dispute`，契约 0.6.82）。
+ * @why 原先拒付期间只写"已付款 · 日本采购中"——买家多是没认出扣款名目就去银行争议，写明"银行正在处理、暂不发货"，
+ *      误发起的会去撤回；败诉时钱已由银行退回，要说清订单不会发货，免得买家等货。
+ * @limitation 只认 open / lost；胜诉 / 撤回后服务端不再下发，回到正常状态文案。
+ */
+export const DISPUTE_STATUS = {
+  open: {
+    title: '付款争议处理中',
+    next: '你的银行正在处理这笔付款的争议，处理结束前我们暂不发货。如果是误会（比如没认出扣款名目），可以联系银行撤回，或联系客服。',
+  },
+  lost: {
+    title: '货款已由银行退回',
+    next: '你的银行已把这笔付款退回给你，这张订单不会发货。如有疑问请联系客服。',
+  },
+};
+
+/** `payment_dispute` → `{title, next}`；没有 / 认不出 → null。 */
+export function disputeStatus(raw) {
+  return raw === 'open' || raw === 'lost' ? DISPUTE_STATUS[raw] : null;
+}
+
 export const PAYABLE = ['created', 'pending_payment'];
 
 /**

@@ -20,7 +20,7 @@ import { displaySubLine, formatJpy } from '../../utils/price-format.js';
 // ⚠️ 状态词表与可付态的真源在 `../../utils/order-status.js`（U-H3 下沉）：
 //    订单详情页也要用，而页面不能 import 页面。与契约的双向比对测试跟着真源一起搬走
 //    （只搬代码不搬测试 = 守护静默消失，见 utils/order-status.unit.test.ts）。
-import { PAYABLE, buyerStatus } from '../../utils/order-status.js';
+import { PAYABLE, buyerStatus, disputeStatus } from '../../utils/order-status.js';
 import { ORDER_TABS, resolveOrderTab } from '../../utils/order-tabs.js';
 import { jstDateTimeLabeled } from '../../utils/jst-text.js';
 import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
@@ -122,8 +122,11 @@ export function orderRows(items, nowMs = undefined) {
         totalSub: displaySubLine(o.display),
         // ⚠️ 不在词表里的状态给 '状态未知' 而不是空串：
         //    空串在真机上就是一个空白的标签，用户无法区分"没状态"和"渲染错了"
-        statusText: buyer.title,
-        nextText: expired ? EXPIRED_NEXT : nextTextOf(o, status, buyer),
+        // AJ-500：拒付期间说"付款争议处理中 / 货款已由银行退回"，不再说"日本采购中"
+        statusText: disputeStatus(o.payment_dispute)?.title ?? buyer.title,
+        nextText:
+          disputeStatus(o.payment_dispute)?.next ??
+          (expired ? EXPIRED_NEXT : nextTextOf(o, status, buyer)),
         canPay: PAYABLE.includes(status) && !expired,
         createdText: jstDateTimeLabeled(o.created_at) ?? '',
         thumb: thumbUrl(o.first_image),

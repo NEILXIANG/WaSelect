@@ -36,6 +36,7 @@ import {
   STOCK_REFUND_NOTE,
   buyerStatus,
   canPay,
+  disputeStatus,
   timelineText,
 } from '../../utils/order-status.js';
 import {
@@ -289,22 +290,26 @@ export function detailView(order, opts = undefined) {
   const latePaidTop = o.late_paid === true && LATE_PAID_TOP_STATUSES.includes(status);
   const showBuyAgain = BUY_AGAIN_STATUSES.includes(status) && !latePaidTop;
   const afterSale = afterSaleCard(o);
+  const dispute = disputeStatus(o.payment_dispute);
 
   return {
     orderId: typeof o.order_id === 'string' ? o.order_id : '',
     orderNo: typeof o.order_no === 'string' ? o.order_no : '',
-    statusText: buyer.title,
+    // AJ-500：拒付期间状态与下一步都换成拒付的话（不再说"日本采购中"）
+    statusText: dispute?.title ?? buyer.title,
     /**
      * "下一步会发生什么"（M-06）。确认中（justPaid）不给：pending 的下一步是"请继续支付"，
      * 与"支付结果确认中"的提示正相反——用户刚付过，再引导他付就是第二笔钱（MP3-04 同一条）。
      */
     nextText: confirming
       ? ''
-      : latePaidTop
-        ? LATE_PAID_NOTE
-        : expired && canPay(status)
-          ? '支付时间已到，订单将自动关闭；如需购买请重新下单'
-          : (afterSaleNext(afterSale, status) ?? buyer.next),
+      : dispute !== null
+        ? dispute.next
+        : latePaidTop
+          ? LATE_PAID_NOTE
+          : expired && canPay(status)
+            ? '支付时间已到，订单将自动关闭；如需购买请重新下单'
+            : (afterSaleNext(afterSale, status) ?? buyer.next),
     // ⚠️ 确认中不给出「继续支付」：用户刚付过一次，再点就是第二笔钱（MP3-04）。
     canPay: showPay,
     /**
@@ -403,7 +408,10 @@ export function detailView(order, opts = undefined) {
      * 进度条（M-12，AJ-408）：五步 + 终态分支，算法在 utils/order-progress.js（纯函数，逐态单测）。
      * 时间线保留在下方（进度条不带时刻，见 order-progress @tradeoff）。
      */
-    progress: orderProgress(o),
+    progress:
+      dispute === null
+        ? orderProgress(o)
+        : { ...orderProgress(o), branch: { status: 'dispute', title: dispute.title } },
     /**
      * 售后卡片（AJ-420）：已发货 / 已签收 / 已完成的单给「申请售后」入口；有申请时显示最新一条的进度与处理说明。
      * 不放进底栏：底栏已有确认收货 / 再次购买，售后是"出了问题才找"的低频入口。

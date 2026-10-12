@@ -130,6 +130,8 @@ export function toOrderListItem(
     after_sale_state: row.after_sale_state,
     // AJ-435：付款截止，与详情 Order.expires_at 同列同格式；待付款行据此写"几点前付款"
     expires_at: row.expires_at.toISOString(),
+    // AJ-500：拒付进行中 / 败诉；没有就整键省略
+    ...(row.payment_dispute !== null ? { payment_dispute: row.payment_dispute } : {}),
   };
 }
 
@@ -175,6 +177,8 @@ export function toOrderDetail(
     /** 关单后才到的付款（late_paid 事件，P2-11）：买家侧据此说"已收到付款，正在退款"。 */
     latePaid: boolean;
     partialRefunds: readonly PartialRefundRow[];
+    /** 拒付（AJ-500）：open 进行中 / lost 银行已退回；null 省略。 */
+    paymentDispute?: 'open' | 'lost' | null;
   },
   displayCurrencies: readonly DisplayCurrency[],
   imgBaseUrl: string | undefined,
@@ -197,5 +201,6 @@ export function toOrderDetail(
     ...(parts.payment !== null ? { payment: toPaymentView(parts.payment) } : {}),
     late_paid: parts.latePaid,
     partial_refunds: toBuyerPartialRefunds(parts.partialRefunds),
+    ...(parts.paymentDispute != null ? { payment_dispute: parts.paymentDispute } : {}),
   };
 }

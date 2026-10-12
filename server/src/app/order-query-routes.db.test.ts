@@ -574,6 +574,64 @@ describe('买家可见的迟到付款与部分退款（P2-11 / P2-12，AJ-386）
   });
 });
 
+/**
+ * AJ-500（用户 2026-10-12 同意）：拒付期间买家原先只看到"已付款 · 日本采购中"——买家多是没认出扣款名目就去银行争议，
+ * 写明"银行正在处理争议、暂不发货"后，误发起的买家会去撤回。列表与详情都带 payment_dispute。
+ */
+describe('AJ-500：买家看得到拒付状态（payment_dispute）', () => {
+  const dispute = async (orderId: string, status: string, hold: boolean) => {
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount,
+                                   dispute_id, dispute_status, dispute_amount, dispute_opened_at)
+             values (${`pay-${status}`}, ${orderId}, 'mock', 'succeeded', 'JPY', 1000,
+                     ${`dp-${status}`}, ${status}, 1000, now())`;
+    await db`update orders set status = 'paid', has_dispute = ${hold} where id = ${orderId}`;
+  };
+  const listItem = async (url: string, orderId: string) =>
+    ((await get(url, '/api/v1/orders')).json['items'] as Array<Record<string, unknown>>).find(
+      (i) => i['order_id'] === orderId,
+    );
+
+  it('🔴 进行中 → 详情与列表都是 open；败诉（钱已被银行退回）→ lost', async () => {
+    const srv = await buildServer();
+    try {
+      const a = await createOrder(srv.url, 'd1');
+      await dispute(a, 'open', true);
+      expect((await get(srv.url, `/api/v1/orders/${a}`)).json['payment_dispute']).toBe('open');
+      expect((await listItem(srv.url, a))?.['payment_dispute']).toBe('open');
+      await db`update payments set dispute_status = 'lost' where order_id = ${a}`;
+      expect((await get(srv.url, `/api/v1/orders/${a}`)).json['payment_dispute']).toBe('lost');
+      expect((await listItem(srv.url, a))?.['payment_dispute']).toBe('lost');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 胜诉 / 撤回（拒付标记已解除）或从没拒付 → 不带这个键', async () => {
+    const srv = await buildServer();
+    try {
+      const won = await createOrder(srv.url, 'd2');
+      await dispute(won, 'won', false);
+      expect((await get(srv.url, `/api/v1/orders/${won}`)).json).not.toHaveProperty(
+        'payment_dispute',
+      );
+      expect(await listItem(srv.url, won)).not.toHaveProperty('payment_dispute');
+      // 运营人工解除拒付限制（AJ-291）：订单标记清掉、支付行仍是 lost——货会照常发，不能再对买家说"暂不发货"
+      const released = await createOrder(srv.url, 'd4');
+      await dispute(released, 'lost', false);
+      expect((await get(srv.url, `/api/v1/orders/${released}`)).json).not.toHaveProperty(
+        'payment_dispute',
+      );
+      expect(await listItem(srv.url, released)).not.toHaveProperty('payment_dispute');
+      const none = await createOrder(srv.url, 'd3');
+      expect((await get(srv.url, `/api/v1/orders/${none}`)).json).not.toHaveProperty(
+        'payment_dispute',
+      );
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
 describe('fx_snapshot 脏汇率：读路径降级，不许整页 500（AJ-359）', () => {
   // @why 造脏数据用 jsonb_set 只改一个键、其余保持建单链路真值：
   //      "整快照手写"会连带把 CNY 也固定成我猜的值，那就分不清"降级"与"我写错了"。

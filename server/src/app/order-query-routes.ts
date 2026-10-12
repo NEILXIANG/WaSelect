@@ -23,6 +23,7 @@ import type { AppConfig } from '../config.js';
 import { requireRole, type AuthConfig } from './auth.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import {
+  findBuyerDisputeState,
   findLatestPaymentSummary,
   findOwnedOrder,
   listOrderItemsWithImage,
@@ -116,18 +117,20 @@ export function mountOrderQueryRoutes(app: Express, deps: OrderQueryRoutesDeps):
         const order = await findOwnedOrder(deps.db, orderId, sub);
         // 非本人与不存在同码（40400）：分开会泄露"这单存在但是别人的"
         if (order === null) throw new AppError(40400, { order_id: orderId });
-        const [items, timeline, payment, latePaid, partialRefunds, afterSale] = await Promise.all([
-          listOrderItemsWithImage(deps.db, orderId),
-          listOrderTimeline(deps.db, orderId),
-          findLatestPaymentSummary(deps.db, orderId),
-          hasLatePaid(deps.db, orderId),
-          listPartialRefunds(deps.db, orderId),
-          findLatestAfterSale(deps.db, orderId),
-        ]);
+        const [items, timeline, payment, latePaid, partialRefunds, afterSale, paymentDispute] =
+          await Promise.all([
+            listOrderItemsWithImage(deps.db, orderId),
+            listOrderTimeline(deps.db, orderId),
+            findLatestPaymentSummary(deps.db, orderId),
+            hasLatePaid(deps.db, orderId),
+            listPartialRefunds(deps.db, orderId),
+            findLatestAfterSale(deps.db, orderId),
+            findBuyerDisputeState(deps.db, orderId),
+          ]);
         res.status(200).json({
           ...toOrderDetail(
             order,
-            { items, timeline, payment, latePaid, partialRefunds },
+            { items, timeline, payment, latePaid, partialRefunds, paymentDispute },
             displayCurrencies,
             deps.config.IMG_BASE_URL,
           ),
