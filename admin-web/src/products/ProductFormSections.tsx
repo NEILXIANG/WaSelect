@@ -44,7 +44,7 @@ export interface MainColumnProps extends SectionProps {
   tagDraft: string;
   onTagDraftChange: (v: string) => void;
   uploading: boolean;
-  onUpload: (file: File) => void;
+  onUpload: (files: File[]) => void;
   onRemoveImage: (i: number) => void;
   onMoveImage: (from: number, to: number) => void;
   onMakeMain: (i: number) => void;

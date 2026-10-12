@@ -546,11 +546,29 @@ td .thumb {
 }
 
 .thumb-img {
-  /* Banner 是 2.5:1 横图（2026-10-08：原先裁成正方形，看不出整张图） */
+  /* Banner 是 2.5:1 横图（2026-10-08：原先裁成正方形，看不出整张图）；商品图用下面的 .thumb-img-square */
   width: calc(var(--ws-space) * 10);
   height: calc(var(--ws-space) * 4);
   object-fit: cover;
   border-radius: var(--md-shape-sm);
+}
+
+/* 商品图：方图方框（全入口点击测试 2026-10-12：原借用 Banner 的横框，方图被裁成一条）；
+   每张图下两行动作（主图 / 设为主图；← → 移除），宽度按三个文字按钮能排下 */
+.thumb-product {
+  width: calc(var(--ws-space) * 9);
+  gap: 0;
+}
+
+.thumb-img.thumb-img-square {
+  width: calc(var(--ws-space) * 8);
+  height: calc(var(--ws-space) * 8);
+}
+
+.thumb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 /* ── 数据表（M3 data table 的舒适密度）：行线用 outline-variant，悬停行叠状态层 ─────── */

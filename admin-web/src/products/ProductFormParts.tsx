@@ -238,7 +238,8 @@ export function FreeTagInput({
 export interface ImagePickerProps {
   /** 预览只用 `thumb`（最小的那档）；`image_id` 由提交侧负责，这里不读它。 */
   images: ProductImageEntry[];
-  onAdd: (file: File) => void;
+  /** 一次可选多张（按选的顺序逐张上传，由页面负责，全入口点击测试 2026-10-12）。 */
+  onAdd: (files: File[]) => void;
   onRemove: (index: number) => void;
   /** 把第 from 张挪到第 to 位（AJ-403；越界由 view.moveImage 原样返回）。 */
   onMove: (from: number, to: number) => void;
@@ -256,6 +257,8 @@ export interface ImagePickerProps {
  *      按钮在触控板、键盘、读屏下都能用，且每一下的结果可预期；拖拽要另引库或自写命中计算。
  *      @tradeoff 十张图把最后一张挪到第二位要点多下——实际商品图在 3–6 张，「设为主图」覆盖了最常见的那一下。
  *      首尾两端的按钮**禁用**而不是隐藏：位置不跳，运营不会点到旁边那张的按钮。
+ * @why 全入口点击测试 2026-10-12：图从左往右排，按钮改写 ← / →（原 ↑ / ↓ 与排列方向对不上）；缩略图用方框
+ *      （原借用 Banner 的 2.5:1 横框，方图被裁成一条）；动作收成两行（原每个按钮各占一行）；「移除」用危险色；可一次选多张。
  */
 export function ImagePicker({
   images,
@@ -271,41 +274,45 @@ export function ImagePicker({
       <span className="label">商品图片（{images.length} 张；第一张是主图）</span>
       <div className="thumbs">
         {images.map((img, i) => (
-          <div key={`${img.image_id ?? img.thumb}-${i}`} className="thumb">
-            <img src={img.thumb} alt={`商品图 ${i + 1}`} className="thumb-img" />
-            {i === 0 ? (
-              <span className="chip chip-on">主图</span>
-            ) : (
+          <div key={`${img.image_id ?? img.thumb}-${i}`} className="thumb thumb-product">
+            <img src={img.thumb} alt={`商品图 ${i + 1}`} className="thumb-img thumb-img-square" />
+            <div className="thumb-actions">
+              {i === 0 ? (
+                <span className="chip chip-on">主图</span>
+              ) : (
+                <button
+                  type="button"
+                  className="link"
+                  aria-label={`把第 ${i + 1} 张设为主图`}
+                  onClick={() => onMakeMain(i)}
+                >
+                  设为主图
+                </button>
+              )}
+            </div>
+            <div className="thumb-actions">
               <button
                 type="button"
                 className="link"
-                aria-label={`把第 ${i + 1} 张设为主图`}
-                onClick={() => onMakeMain(i)}
+                aria-label={`把第 ${i + 1} 张前移`}
+                disabled={i === 0}
+                onClick={() => onMove(i, i - 1)}
               >
-                设为主图
+                ←
               </button>
-            )}
-            <button
-              type="button"
-              className="link"
-              aria-label={`把第 ${i + 1} 张上移`}
-              disabled={i === 0}
-              onClick={() => onMove(i, i - 1)}
-            >
-              ↑
-            </button>
-            <button
-              type="button"
-              className="link"
-              aria-label={`把第 ${i + 1} 张下移`}
-              disabled={i === images.length - 1}
-              onClick={() => onMove(i, i + 1)}
-            >
-              ↓
-            </button>
-            <button type="button" className="link" onClick={() => onRemove(i)}>
-              移除
-            </button>
+              <button
+                type="button"
+                className="link"
+                aria-label={`把第 ${i + 1} 张后移`}
+                disabled={i === images.length - 1}
+                onClick={() => onMove(i, i + 1)}
+              >
+                →
+              </button>
+              <button type="button" className="link link-danger" onClick={() => onRemove(i)}>
+                移除
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -313,10 +320,11 @@ export function ImagePicker({
         className="input"
         type="file"
         accept={UPLOAD_ACCEPT}
+        multiple
         disabled={uploading}
         onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file !== undefined) onAdd(file);
+          const files = [...(e.target.files ?? [])];
+          if (files.length > 0) onAdd(files);
           // ⚠️ 清空 value：否则连续选同一个文件不会再触发 change（浏览器按"值没变"跳过）
           e.target.value = '';
         }}

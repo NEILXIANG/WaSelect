@@ -626,25 +626,73 @@ describe('商品表单：图片排序与主图（AJ-403）', () => {
     expect(sentIds()).toEqual(['c', 'a', 'b']);
   });
 
-  it('🔴 上移 / 下移：第一张不能再上移、最后一张不能再下移（按钮禁用）；第 2 张上移 → b, a, c', async () => {
+  it('🔴 前移 / 后移：第一张不能再前移、最后一张不能再后移（按钮禁用）；第 2 张前移 → b, a, c', async () => {
     const el = await openWith({ ...SOURCE, images: IMAGES });
     expect(
-      (el.querySelector('[aria-label="把第 1 张上移"]') as HTMLButtonElement | null)?.disabled,
+      (el.querySelector('[aria-label="把第 1 张前移"]') as HTMLButtonElement | null)?.disabled,
     ).toBe(true);
     expect(
-      (el.querySelector('[aria-label="把第 3 张下移"]') as HTMLButtonElement | null)?.disabled,
+      (el.querySelector('[aria-label="把第 3 张后移"]') as HTMLButtonElement | null)?.disabled,
     ).toBe(true);
-    await click(el.querySelector('[aria-label="把第 2 张上移"]'));
+    await click(el.querySelector('[aria-label="把第 2 张前移"]'));
     await click(button(el, '保存'));
     expect(sentIds()).toEqual(['b', 'a', 'c']);
+  });
+
+  // 全入口点击测试 2026-10-12：图是从左往右排的，按钮却写 ↑ / ↓；缩略图用了 Banner 的 2.5:1 横框，方图被裁成一条；
+  // 每个按钮各占一行，三张图的媒体区比整张表单的其它部分还高
+  it('🔴 版式：按钮写 ← / →（与图的排列方向一致）、方形缩略图、「移除」用危险色；可一次选多张', async () => {
+    const el = await openWith({ ...SOURCE, images: IMAGES });
+    const second = [...el.querySelectorAll('.thumb')][1];
+    expect(second?.querySelector('[aria-label="把第 2 张前移"]')?.textContent).toBe('←');
+    expect(second?.querySelector('[aria-label="把第 2 张后移"]')?.textContent).toBe('→');
+    expect(second?.querySelector('img')?.className).toContain('thumb-img-square');
+    expect(button(second as HTMLElement, '移除')?.className).toContain('link-danger');
+    expect((el.querySelector('input[type="file"]') as HTMLInputElement).multiple).toBe(true);
+  });
+
+  it('🔴 一次选两张 → 按选的顺序逐张上传、都加进来；上传期间保存按钮是"图片上传中…"', async () => {
+    const realFetch = globalThis.fetch;
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n += 1;
+      const k = String(n);
+      return new Response(
+        JSON.stringify({
+          image_key: `k${k}`,
+          image_id: `img-new${k}`,
+          thumb: `https://img.example.com/new${k}/thumb.webp`,
+          card: `https://img.example.com/new${k}/card.webp`,
+          detail: `https://img.example.com/new${k}/detail.webp`,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    try {
+      const el = await openWith({ ...SOURCE, images: [] });
+      const fileInput = el.querySelector('input[type="file"]') as HTMLInputElement;
+      const f = (name: string) => new File([new Uint8Array([1])], name, { type: 'image/png' });
+      Object.defineProperty(fileInput, 'files', { value: [f('1.png'), f('2.png')] });
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      await flush();
+      await flush();
+      const srcs = [...el.querySelectorAll('.thumb img')].map((i) => i.getAttribute('src'));
+      expect(srcs).toEqual([
+        'https://img.example.com/new1/thumb.webp',
+        'https://img.example.com/new2/thumb.webp',
+      ]);
+      expect(n).toBe(2);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   it('排序算改动：调了顺序未保存 → 脏（离开要提醒）', async () => {
     const el = await openWithDirty({ ...SOURCE, images: IMAGES });
     expect(dirtyOf(el)).toBe('no');
-    await click(el.querySelector('[aria-label="把第 3 张下移"]')); // 禁用：不动
+    await click(el.querySelector('[aria-label="把第 3 张后移"]')); // 禁用：不动
     expect(dirtyOf(el)).toBe('no');
-    await click(el.querySelector('[aria-label="把第 2 张下移"]'));
+    await click(el.querySelector('[aria-label="把第 2 张后移"]'));
     expect(dirtyOf(el)).toBe('yes');
   });
 });

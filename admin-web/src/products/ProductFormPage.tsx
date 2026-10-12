@@ -266,9 +266,18 @@ export function ProductFormPage({
     }
   };
 
-  const onUpload = async (file: File) => {
+  /** 一次选多张：按选的顺序逐张上传（不并发：顺序就是展示顺序），一张失败不挡后面的（全入口点击测试 2026-10-12）。 */
+  const onUpload = async (files: File[]) => {
     setUploading(true);
     sink.error('');
+    try {
+      for (const file of files) await uploadOne(file);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const uploadOne = async (file: File) => {
     try {
       const imageSet = await uploadImage({ baseUrl, getToken, onUnauthorized }, file);
       // 商品图**存**的是 `image_id`（0.6.29 / AJ-362）——业务表不存存储位置；
@@ -291,10 +300,8 @@ export function ProductFormPage({
         images: [...prev.images, { image_id, thumb, card, detail }],
       }));
     } catch (e) {
-      const { text, traceId } = toastError(e, '图片上传失败');
+      const { text, traceId } = toastError(e, `图片「${file.name}」上传失败`);
       sink.error(text, { traceId });
-    } finally {
-      setUploading(false);
     }
   };
 
@@ -388,7 +395,7 @@ export function ProductFormPage({
           tagDraft={tagDraft}
           onTagDraftChange={setTagDraft}
           uploading={uploading}
-          onUpload={(file) => void onUpload(file)}
+          onUpload={(files) => void onUpload(files)}
           onRemoveImage={(i) =>
             setForm((prev) => ({ ...prev, images: prev.images.filter((_, k) => k !== i) }))
           }
