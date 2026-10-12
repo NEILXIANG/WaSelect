@@ -17,12 +17,12 @@
  * @see ./view.ts；./api.ts；../orders/api.ts（getOrder）；契约 D-50
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { getOrder } from '../orders/api.js';
 import { blockUser, listDisputes, type AdminApi } from './api.js';
 import { BlockedUsers } from './BlockedUsers.js';
+import { ReasonInput } from '../ui/ReasonInput.js';
 import {
   blockDoneText,
   BLOCK_CONFIRM_TEXT,
@@ -62,6 +62,18 @@ export function RiskPage({ api }: RiskPageProps) {
   const [buyerText, setBuyerText] = useState('');
   /** 拉黑原因（AJ-449）：必填，进审计与连带取消的订单事件；面板收起时清空。 */
   const [blockReason, setBlockReason] = useState('');
+  /** 没填原因时标在框下的提示（与客户页同一做法：就近提示、光标进框，第三轮走查 2026-10-12）。 */
+  const [reasonError, setReasonError] = useState('');
+  const reasonRef = useRef<HTMLInputElement>(null);
+  /** 收起面板：原因与提示一并清空——不然再打开别人的面板，框里还是上一个人的原因。 */
+  const closePanel = (): void => {
+    setOrderId('');
+    setOrderNo('');
+    setUserId('');
+    setBuyerText('');
+    setBlockReason('');
+    setReasonError('');
+  };
   const [busy, setBusy] = useState(false);
   /** 拉黑成功后递增，让下方「已拉黑用户」重新取数（P2-47）。 */
   const [blockedTick, setBlockedTick] = useState(0);
@@ -103,9 +115,7 @@ export function RiskPage({ api }: RiskPageProps) {
    */
   const prepare = async (r: DisputeRow): Promise<void> => {
     setBusy(true);
-    setOrderId('');
-    setOrderNo('');
-    setUserId('');
+    closePanel();
     // ⚠️ 不写"响应属于哪一单"的乱序核对：`busy` 已经把"处理"按钮禁用，
     //    同一时刻只可能有一个 `prepare` 在飞，乱序**不会发生**。
     //    加了就是一段永远走不到、也因此永远测不到的分支（约束护栏必须有红灯证据）。
@@ -135,10 +145,7 @@ export function RiskPage({ api }: RiskPageProps) {
       await blockUser(api, { userId, orderId, reason: blockReason });
       sink.success(blockDoneText(orderNo));
       setBlockedTick((t) => t + 1);
-      setOrderId('');
-      setOrderNo('');
-      setUserId('');
-      setBlockReason('');
+      closePanel();
       setDialog(null);
     } catch (e) {
       setDialog(null);
@@ -152,7 +159,8 @@ export function RiskPage({ api }: RiskPageProps) {
   /** 打开拉黑确认弹层（第一批①：拉黑此前是行内「确认拉黑 / 取消」，与"保存"同款按钮）。 */
   const askBlock = (): void => {
     if (blockReason.trim() === '') {
-      sink.error('请填写拉黑原因（会记录下来）');
+      setReasonError('请填写拉黑原因（会记录下来）');
+      reasonRef.current?.focus();
       return;
     }
     setDialog({
@@ -160,7 +168,7 @@ export function RiskPage({ api }: RiskPageProps) {
       // ⚠️ 正文直接引 view.ts 的常量，不在这里重写一遍：
       //    它连"未付款订单会被取消、库存回补"都写全了，重写的必然是缩水版，
       //    而后果清单缩水正是这类弹层最危险的失效方式。
-      body: `${BLOCK_CONFIRM_TEXT}\n\n订单 ${orderNo !== '' ? orderNo : orderId} · 用户 ${userId}\n原因：${blockReason.trim()}`,
+      body: `${BLOCK_CONFIRM_TEXT}\n\n订单 ${orderNo !== '' ? orderNo : orderId} · 买家 ${buyerText !== '' ? buyerText : '（未留姓名与邮箱）'}\n原因：${blockReason.trim()}`,
       confirmText: '确认拉黑',
       danger: true,
     });
@@ -248,25 +256,21 @@ export function RiskPage({ api }: RiskPageProps) {
           <a className="link" href={`#/customers/${encodeURIComponent(userId)}`}>
             查看客户
           </a>
-          <input
-            className="input"
+          <ReasonInput
+            ref={reasonRef}
             name="block-reason"
             placeholder="拉黑原因（必填，会记录下来），例：同一张卡 30 天内 3 次拒付"
-            maxLength={ADMIN_NOTE_MAX_LENGTH}
             value={blockReason}
-            onChange={(e) => setBlockReason(e.target.value)}
+            onChange={(v) => {
+              setBlockReason(v);
+              if (v.trim() !== '') setReasonError('');
+            }}
+            error={reasonError}
           />
           <button type="button" className="btn btn-danger" disabled={busy} onClick={askBlock}>
             拉黑用户
           </button>
-          <button
-            type="button"
-            className="link"
-            onClick={() => {
-              setOrderId('');
-              setUserId('');
-            }}
-          >
+          <button type="button" className="link" onClick={closePanel}>
             取消
           </button>
         </div>

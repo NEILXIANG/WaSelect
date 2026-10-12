@@ -9,12 +9,12 @@
  * @see server/src/app/admin-risk-routes.ts（unblock / GET users?blocked=true）
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
 import { formatJst, shortRef } from '../format.js';
 import { listBlockedUsers, unblockUser, type AdminApi, type BlockedUser } from './api.js';
 import { blockedListTitle } from './view.js';
+import { ReasonInput } from '../ui/ReasonInput.js';
 
 /**
  * @param refreshKey 变了就重新拉列表（P2-47）：风控页拉黑成功后递增它，新拉黑的人立刻出现在这里，
@@ -41,6 +41,16 @@ export function BlockedUsers({
   /** 解除对象的称呼（收件人 · 邮箱；都没有时缩短 id）——提示里写它，不写 36 位 id（全入口点击测试 2026-10-12）。 */
   const [targetName, setTargetName] = useState('');
   const [reason, setReason] = useState('');
+  /** 没填原因时标在框下的提示（与客户页同一做法，第三轮走查 2026-10-12）。 */
+  const [reasonError, setReasonError] = useState('');
+  const reasonRef = useRef<HTMLInputElement>(null);
+  /** 换对象 / 收起：原因与提示一并清空——不然下一个人的框里是上一个人的原因。 */
+  const pick = (id: string, name: string): void => {
+    setTarget(id);
+    setTargetName(name);
+    setReason('');
+    setReasonError('');
+  };
   const [busy, setBusy] = useState(false);
   const ownSink = useToasts();
   const sink = parentSink ?? ownSink;
@@ -64,7 +74,7 @@ export function BlockedUsers({
 
   const submit = async (): Promise<void> => {
     if (reason.trim() === '') {
-      sink.error('请填写解除原因（会记录下来）');
+      setReasonError('请填写解除原因（会记录下来）');
       setDialog(null);
       return;
     }
@@ -88,7 +98,8 @@ export function BlockedUsers({
 
   const askUnblock = (): void => {
     if (reason.trim() === '') {
-      sink.error('请填写解除原因（会记录下来）');
+      setReasonError('请填写解除原因（会记录下来）');
+      reasonRef.current?.focus();
       return;
     }
     dialogRun.current = () => void submit();
@@ -144,10 +155,7 @@ export function BlockedUsers({
                   <button
                     type="button"
                     className="link"
-                    onClick={() => {
-                      setTarget(u.id);
-                      setTargetName(blockedUserName(u));
-                    }}
+                    onClick={() => pick(u.id, blockedUserName(u))}
                   >
                     解除拉黑
                   </button>
@@ -163,13 +171,16 @@ export function BlockedUsers({
             解除 {targetName}{' '}
             的拉黑：对方重新登录即可下单；拉黑时被取消的订单不会恢复（库存已回补）。
           </p>
-          <input
-            className="input"
+          <ReasonInput
+            ref={reasonRef}
             name="unblock-reason"
             placeholder="例：核实是误拉黑，已与买家确认"
-            maxLength={ADMIN_NOTE_MAX_LENGTH}
             value={reason}
-            onChange={(e) => setReason(e.target.value)}
+            onChange={(v) => {
+              setReason(v);
+              if (v.trim() !== '') setReasonError('');
+            }}
+            error={reasonError}
           />
           {/*
             按钮文字用「去确认」而不是再来一个「解除拉黑」：
@@ -180,7 +191,7 @@ export function BlockedUsers({
           <button type="button" className="btn btn-danger" disabled={busy} onClick={askUnblock}>
             去确认
           </button>
-          <button type="button" className="link" onClick={() => setTarget('')}>
+          <button type="button" className="link" onClick={() => pick('', '')}>
             取消
           </button>
         </div>

@@ -44,6 +44,46 @@ describe('BlockedUsers', () => {
     expect(el.textContent).toContain('没有被拉黑的用户');
   });
 
+  // 第三轮走查 2026-10-12：没填原因的提示飘在右下角、光标不动；点「取消」或换一行后上一个人的原因还在框里
+  it('🔴 没填原因：提示标在框下、光标进框；取消 / 换人时原因清空', async () => {
+    const api = async (): Promise<unknown> => ({
+      items: [
+        {
+          id: 'u-9',
+          blocked_at: '2026-10-06T03:00:00Z',
+          order_count: 2,
+          last_recipient: 'Amy Chan',
+        },
+        {
+          id: 'u-8',
+          blocked_at: '2026-10-05T03:00:00Z',
+          order_count: 1,
+          last_recipient: 'Leo Kim',
+        },
+      ],
+    });
+    mounted = await mount(createElement(BlockedUsers, { api: api as never }));
+    const el = mounted.el;
+    const input = (): HTMLInputElement | null =>
+      el.querySelector<HTMLInputElement>('input[name="unblock-reason"]');
+    const rowBtn = (i: number): HTMLButtonElement | null =>
+      [...el.querySelectorAll<HTMLButtonElement>('tbody button')].filter(
+        (b) => b.textContent === '解除拉黑',
+      )[i] ?? null;
+    await click(rowBtn(0));
+    await click(button(el, '去确认'));
+    expect(input()?.closest('.field')?.querySelector('.error')?.textContent).toContain('解除原因');
+    expect(document.activeElement).toBe(input());
+    await type(input(), '误拉黑');
+    expect(input()?.closest('.field')?.querySelector('.error')).toBeNull();
+    await click(rowBtn(1));
+    expect(input()?.value).toBe('');
+    await type(input(), '误拉黑');
+    await click(button(el, '取消'));
+    await click(rowBtn(0));
+    expect(input()?.value).toBe('');
+  });
+
   // 全入口点击测试 2026-10-12：解除表单 / 确认弹层 / 成功提示都写"解除 <36 位 id>"；表格没有表头，"3 单"与时间不知道是什么
   it('🔴 解除拉黑的表单、确认弹层、成功提示都写客户称呼，不写内部 id；表格有表头', async () => {
     const id = '3f2a9c1e-8b7d-4e6f-a1b2-c3d4e5f60718';
@@ -142,14 +182,18 @@ describe('共用父页的 Toast 出口（审查 2026-10-09 #7）', () => {
       },
       dismiss: () => undefined,
     };
-    const api = async (): Promise<unknown> => ({
-      items: [{ id: 'u-9', blocked_at: '2026-10-06T03:00:00Z', order_count: 2 }],
-    });
+    // 第三轮走查后"没填原因"改为框下提示，这里改用一次失败的解除请求来触发提示
+    const api = async (req: { path: string }): Promise<unknown> => {
+      if (req.path.endsWith('/unblock')) throw new Error('network down');
+      return { items: [{ id: 'u-9', blocked_at: '2026-10-06T03:00:00Z', order_count: 2 }] };
+    };
     mounted = await mount(createElement(BlockedUsers, { api: api as never, sink }));
     const el = mounted.el;
     await click(button(el, '解除拉黑'));
+    await type(el.querySelector('input[name="unblock-reason"]'), '误拉黑');
     await click(button(el, '去确认'));
-    expect(errors).toEqual(['请填写解除原因（会记录下来）']);
+    await click(button(el, '确认解除'));
+    expect(errors).toEqual(['network down']);
     expect(el.querySelector('.toast-stack')).toBeNull();
   });
 });

@@ -139,6 +139,32 @@ describe('风控页：拉黑串单（ADM3-01）', () => {
     expect(panel?.textContent).not.toContain('user-A');
   });
 
+  // 第三轮走查续：确认弹层仍写"用户 user-A"；没填原因的提示飘在右下角浮层、光标不动；
+  //   点「取消」后原因留着，再打开别人的面板时上一个人的原因还在框里
+  it('🔴 没填原因：提示标在框下、光标进框；弹层写买家而不是内部编号', async () => {
+    const el = await open();
+    await click(handle(el, 0));
+    await click(button(el, '拉黑用户'));
+    const input = el.querySelector<HTMLInputElement>('input[name="block-reason"]');
+    expect(input?.closest('.field')?.querySelector('.error')?.textContent).toContain('拉黑原因');
+    expect(document.activeElement).toBe(input);
+    await type(input, '三次拒付');
+    expect(input?.closest('.field')?.querySelector('.error')).toBeNull();
+    await click(button(el, '拉黑用户'));
+    const dialogText = el.querySelector('[role="dialog"], [role="alertdialog"]')?.textContent ?? '';
+    expect(dialogText).toContain("Grace O'Brien");
+    expect(dialogText).not.toContain('user-A');
+  });
+
+  it('🔴 点「取消」收起面板时原因一并清空（不带到下一个人）', async () => {
+    const el = await open();
+    await click(handle(el, 0));
+    await type(el.querySelector('input[name="block-reason"]'), '三次拒付');
+    await click(button(el, '取消'));
+    await click(handle(el, 0));
+    expect(el.querySelector<HTMLInputElement>('input[name="block-reason"]')?.value).toBe('');
+  });
+
   it('处理 A 成功 → 再处理 B 且 B 取详情失败 → 确认面板消失（不能停在 A 上）', async () => {
     const el = await open(['ord-B']);
     expect(handle(el, 0)).not.toBeNull();
