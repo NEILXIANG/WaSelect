@@ -38,7 +38,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isOrderAttention,
   LIST_SORT_KEYS,
-  ORDER_ATTENTIONS,
   ORDER_ATTENTION_LABELS,
   SEARCH_KEYWORD_MAX_LENGTH,
   type OrderStatus,
@@ -64,6 +63,7 @@ import { DateFilter } from './DateFilter.js';
 import { Badge } from '../ui/badge.js';
 import { flagBadges, statusBadge } from './badges.js';
 import { OrderDetail } from './OrderDetail.js';
+import { AttentionLinks } from './AttentionLinks.js';
 import { buildHash, type Route } from '../router.js';
 
 /** 每页条数（契约默认 20；与商品管理同口径，一屏放得下）。 */
@@ -400,19 +400,12 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
 
       {attention === undefined && (
         // G5（AJ-471）：订单页自带待处理入口——此前只有工作台待办能进 attention 筛选，客服在订单页找不到买家售后
-        <p className="muted">
-          待处理：
-          {ORDER_ATTENTIONS.map((a) => (
-            <button
-              key={a}
-              type="button"
-              className="link"
-              onClick={() => patch({ attention: a, page: '1' })}
-            >
-              {ORDER_ATTENTION_LABELS[a]}
-            </button>
-          ))}
-        </p>
+        // 第三轮走查 2026-10-12：每一类带单数（AttentionLinks）
+        <AttentionLinks
+          api={api}
+          refreshKey={reloadTick}
+          onPick={(a) => patch({ attention: a, page: '1' })}
+        />
       )}
       {applied !== '' && !includeTest && (
         // G4（AJ-471）：有关键字时服务端不隐藏测试单（按单号搜就是要找到它）——明说，别让勾选框撒谎

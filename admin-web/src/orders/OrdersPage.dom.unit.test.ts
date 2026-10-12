@@ -598,10 +598,15 @@ describe('订单列表：待处理筛选（AJ-425）', () => {
     });
     it('订单页有待处理筛选按钮（售后 / 迟到付款 / 拉黑 / 部分退款），点一个 → URL 带 attention', async () => {
       const el = await open('#/orders');
-      const chip = button(el, '售后待处理');
+      // 第三轮走查后按钮文字带单数（「售后待处理 3」），按类名前缀找
+      const chip =
+        [...el.querySelectorAll('button')].find((b) => b.textContent?.startsWith('售后待处理')) ??
+        null;
       expect(chip).not.toBeNull();
       await click(chip);
-      expect(gets().at(-1)?.path).toContain('attention=after_sale');
+      // 计数请求（size=1）也带 attention：断言的是点完之后那次列表请求
+      const list = gets().filter((g) => !g.path.includes('size=1'));
+      expect(list.at(-1)?.path).toContain('attention=after_sale');
     });
   });
 });
