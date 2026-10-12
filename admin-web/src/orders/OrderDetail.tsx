@@ -37,6 +37,7 @@ import {
   paymentSummary,
   statusText,
 } from './view.js';
+import { phoneText } from './print-view.js';
 
 export interface OrderDetailProps {
   api: AdminApi;
@@ -246,7 +247,14 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
 
               <div className="field">
                 <span className="label">收货地址</span>
-                <span>{addressSummary(order)}</span>
+                <span className="selectable">{addressSummary(order)}</span>
+              </div>
+              {/* 两端逐页走查 2026-10-12：详情原先没有收件人电话——贴面单、联系不上买家时都要它 */}
+              <div className="field">
+                <span className="label">收件人电话</span>
+                <span className="selectable">
+                  {phoneText((order as { address?: { phone?: unknown } }).address?.phone)}
+                </span>
               </div>
               {/* A-4（AJ-467）：改址历史——此前只有写入没有读取，成功提示却说"可在事件里查" */}
               {addressHistoryRows(order).length > 0 && (

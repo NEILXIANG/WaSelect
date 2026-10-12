@@ -468,10 +468,13 @@ export function addressGate(order: unknown): Gate {
 export function addressSummary(order: unknown): string {
   const addr = (order as { address?: unknown } | null)?.address;
   const o = (typeof addr === 'object' && addr !== null ? addr : {}) as Record<string, unknown>;
-  const parts = ['recipient', 'line1', 'line2', 'city', 'state', 'postal_code']
-    .map((k) => (typeof o[k] === 'string' ? (o[k] as string).trim() : ''))
-    .filter((s) => s !== '');
-  return parts.length === 0 ? '—' : parts.join('，');
+  const t = (k: string): string => (typeof o[k] === 'string' ? (o[k] as string).trim() : '');
+  // 美国写法「城市, 州 邮编」，英文逗号（两端逐页走查 2026-10-12：原用中文逗号，与客户页 / 打印面单不一致）
+  const stateZip = [t('state'), t('postal_code')].filter((s) => s !== '').join(' ');
+  const parts = [t('recipient'), t('line1'), t('line2'), t('city'), stateZip].filter(
+    (s) => s !== '',
+  );
+  return parts.length === 0 ? '—' : parts.join(', ');
 }
 
 /** 支付信息 → 一行文案（取 `payment.channel` 与原币扣款额，缺则占位）。 */

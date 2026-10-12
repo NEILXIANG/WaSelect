@@ -221,14 +221,27 @@ describe('eventStatusText（事件流：订单状态 + 管理事件伪状态）'
 });
 
 describe('addressSummary / paymentSummary', () => {
-  it('地址按美式顺序拼一行', () => {
-    expect(addressSummary(ORDER)).toBe('Emily Carter，Seattle，WA');
+  // 两端逐页走查 2026-10-12：原用中文逗号拼（"Brooklyn，NY，11220-7670"），客户页、打印面单早已是美国写法
+  it('🔴 地址按美国写法拼一行：英文逗号，城市后接"州 邮编"', () => {
+    expect(addressSummary(ORDER)).toBe('Emily Carter, Seattle, WA');
+    expect(
+      addressSummary({
+        address: {
+          recipient: 'Jason Huang',
+          line1: '6039 Garfield Ave',
+          line2: '#47',
+          city: 'Brooklyn',
+          state: 'NY',
+          postal_code: '11220-7670',
+        },
+      }),
+    ).toBe('Jason Huang, 6039 Garfield Ave, #47, Brooklyn, NY 11220-7670');
   });
 
-  it('⚠️ line2 为空时不留空逗号（"Seattle，，WA" 会被当成漏字段）', () => {
+  it('⚠️ line2 为空时不留空逗号（"Seattle, , WA" 会被当成漏字段）', () => {
     expect(
       addressSummary({ address: { ...ORDER.address, line1: '500 Union St', line2: '' } }),
-    ).toBe('Emily Carter，500 Union St，Seattle，WA');
+    ).toBe('Emily Carter, 500 Union St, Seattle, WA');
   });
 
   it('⚠️ 完全没地址给占位符（空白会让人以为页面坏了）', () => {

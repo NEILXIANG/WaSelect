@@ -500,6 +500,9 @@ describe('订单详情：改址表单预填（A-02）', () => {
       }),
     );
     await flush();
+    // 两端逐页走查 2026-10-12：右栏的收货地址按美国写法，另有收件人电话（原先没有，贴面单要去别处找）
+    expect(mounted.el.textContent).toContain('Jane Doe, 1 Main St, San Francisco, CA 94105');
+    expect(mounted.el.textContent).toContain('收件人电话+1 (415) 555-0123');
     await click(button(mounted.el, '改址…'));
     const values = [...mounted.el.querySelectorAll('input')].map((i) => i.value);
     expect(values).toContain('Jane Doe');
