@@ -27,7 +27,7 @@ import {
   goneExit,
   submitGate,
 } from './index.vm.js';
-import { namedItemError, termsFromResponse } from './index.vm.js';
+import { namedItemError, rowsWithQuotePrice, termsFromResponse } from './index.vm.js';
 
 const ITEMS = [
   { productId: 'p-shiro-cleansing-oil', qty: 2, title: '資生堂 クレンジングオイル 200ml' },
@@ -77,6 +77,21 @@ describe('submitGate（提交闸门）', () => {
 
   it('脏输入：null → 不可提交，不抛', () => {
     expect(submitGate(null as never).ok).toBe(false);
+  });
+
+  // 全入口点击测试 2026-10-11（用户截图问"提交订单这个按钮符合预期吗"）：浅灰禁用按钮看不出能不能点，
+  // 条款勾选框还在两屏之下。主流做法：按钮常亮，点了把人带到缺的那一项。`fix` 说明"缺的这一项买家在本页能补"。
+  it('🔴 买家在本页能补的三项带 fix：地址 / 条款 / 邮箱；补不了的（报价失败、超上限、条款取不到、地址没取到）fix 为空', () => {
+    expect(submitGate({ ...OK, addressId: '' }).fix).toBe('address');
+    expect(submitGate({ ...OK, termsAccepted: false }).fix).toBe('terms');
+    expect(submitGate({ ...OK, emailError: '邮箱格式不正确' }).fix).toBe('email');
+    expect(submitGate({ ...OK, contactEmail: '' }).fix).toBe('email');
+    expect(submitGate({ ...OK, addressId: '', addressFailed: true }).fix).toBe('');
+    expect(submitGate({ ...OK, termsFailed: true }).fix).toBe('');
+    expect(submitGate({ ...OK, quoteFailed: true }).fix).toBe('');
+    expect(submitGate({ ...OK, splitRequired: true }).fix).toBe('');
+    expect(submitGate({ ...OK, totalJpy: null }).fix).toBe('');
+    expect(submitGate({ ...OK, itemCount: 0 }).fix).toBe('');
   });
 
   it('⚠️ 超过单笔上限（splitRequired）→ 不放行（B38 / AJ-221）', () => {
@@ -180,6 +195,7 @@ describe('contactEmailOf（联系邮箱，M-01 起前端必填）', () => {
     expect(submitGate({ ...OK, emailError: '邮箱格式不正确（可留空）' })).toEqual({
       ok: false,
       reason: '邮箱格式不正确（可留空）',
+      fix: 'email', // 2026-10-11：买家能补的一项，点提交会带到邮箱框
     });
     expect(submitGate({ ...OK, itemCount: 0, emailError: 'x' }).reason).toBe('购物车是空的');
     expect(submitGate({ ...OK, emailError: '' }).ok).toBe(true);
@@ -190,6 +206,7 @@ describe('contactEmailOf（联系邮箱，M-01 起前端必填）', () => {
     expect(submitGate({ ...OK, contactEmail: '' })).toEqual({
       ok: false,
       reason: EMAIL_REQUIRED_TEXT,
+      fix: 'email',
     });
     expect(submitGate({ ...OK, contactEmail: 'jane@example.com' })).toEqual({
       ok: true,
@@ -563,5 +580,34 @@ describe('第二轮审计 2026-10-11：结算页（F4 / F5 / F7 / MP-9）', () =
       expect(contactEmailOf(bad).error, bad).toBe('邮箱格式不正确，应类似 name@gmail.com');
     }
     expect(contactEmailOf('li.wei@163.com')).toEqual({ value: 'li.wei@163.com', error: '' });
+  });
+});
+
+// 全入口点击测试 2026-10-11：商品行只有"× 1"没有单价（主流确认页每行都有单价）。单价只取报价的 lines（服务端当前价），不用购物车快照
+describe('rowsWithQuotePrice（商品行单价，来自报价）', () => {
+  const rows = itemRows(ITEMS);
+  const quote = {
+    total_jpy: 9990,
+    lines: [
+      { product_id: 'p-shiro-cleansing-oil', unit_price_jpy: 2070 },
+      { product_id: 'p-knife-210mm', unit_price_jpy: 12800 },
+    ],
+  };
+
+  it('🔴 按商品 id 配上报价单价，只给展示文字（不给数字字段，免得有人拿它算合计）', () => {
+    const out = rowsWithQuotePrice(rows, quote);
+    expect(out.map((r) => r.priceText)).toEqual(['2,070 円', '12,800 円']);
+    expect(out[0]).toEqual({ ...rows[0], priceText: '2,070 円' });
+  });
+
+  it('🔴 还没报价 / 报价失败 / 报价里没有这一行 / 单价不是整数 → 不显示单价（空串）', () => {
+    expect(rowsWithQuotePrice(rows, null).map((r) => r.priceText)).toEqual(['', '']);
+    expect(
+      rowsWithQuotePrice(rows, {
+        lines: [{ product_id: 'p-knife-210mm', unit_price_jpy: 12.5 }],
+      }).map((r) => r.priceText),
+    ).toEqual(['', '']);
+    expect(rowsWithQuotePrice(rows, { lines: 'x' }).map((r) => r.priceText)).toEqual(['', '']);
+    expect(rowsWithQuotePrice('x', quote)).toEqual([]);
   });
 });

@@ -54,6 +54,7 @@
       <!-- 走查 2026-10-08：与价格之间留一点空（原先"9,800 円≈ $67.63"粘在一起） -->
       <text class="ws-note detail__sub-price" wx:if="{{product.subPrice}}">{{product.subPrice}}</text>
       <text class="ws-tag ws-tag--danger detail__tag" wx:if="{{product.soldOut}}">已售罄</text>
+      <text class="ws-tag ws-tag--danger detail__tag" wx:if="{{product.lowStockText}}">{{product.lowStockText}}</text>
       <view class="detail__tags" wx:if="{{product.tags.length > 0}}">
         <text class="ws-tag" wx:for="{{product.tags}}" wx:key="*this">{{item}}</text>
       </view>
@@ -164,15 +165,17 @@
     <view class="buy-bar">
       <text class="ws-note state__error buy-bar__note" wx:if="{{addNote}}">{{addNote}}</text>
       <view class="buy-bar__row">
-        <view class="buy-bar__info">
-          <ws-price jpy="{{product.priceJpy}}" size="md" />
-          <view
-            class="buy-bar__cart"
-            hover-class="ws-press"
-            bindtap="onGoCart"
-            aria-role="link"
-            aria-label="{{bar.cartAria}}"
-          >{{bar.cartText}} ›</view>
+        <!-- 全入口点击测试 2026-10-11：左侧原为"价格 + 一行小字「购物车 ›」"——价格与上方重复、购物车入口太小不醒目。
+             改为整栏高的购物车格子（短文字 + 件数角标），与京东 / 淘宝详情页底栏同一结构 -->
+        <view
+          class="buy-bar__cart"
+          hover-class="ws-press"
+          bindtap="onGoCart"
+          aria-role="link"
+          aria-label="{{bar.cartAria}}"
+        >
+          <text class="buy-bar__cart-label">{{bar.cartLabel}}</text>
+          <text class="buy-bar__cart-badge" wx:if="{{bar.cartBadge}}">{{bar.cartBadge}}</text>
         </view>
         <view class="buy-bar__btn">
           <ws-button text="加入购物车" type="default" block="{{true}}" disabled="{{bar.disabled}}" bindtap="onAddToCart" />

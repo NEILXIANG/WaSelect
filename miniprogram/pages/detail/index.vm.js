@@ -103,7 +103,7 @@ function editorialTags(v) {
  * `GET /products/{id}` 的 Product → 详情视图数据。
  * @param {unknown} product 契约 `Product`（请求失败时页面根本不会调这里）
  * @returns {{title: string, category: string, priceJpy: unknown, subPrice: string, images: string[],
- *            description: string, specs: Array<{label: string, value: string}>, soldOut: boolean,
+ *            description: string, specs: Array<{label: string, value: string}>, soldOut: boolean, lowStockText: string,
  *            stock: number|null,
  *            why: string, maker: string, tags: string[],
  *            guarantees: Array<{key: string, tag: string, detail: string}>,
@@ -128,6 +128,12 @@ export function detailView(product) {
     description: typeof p.description === 'string' ? p.description.trim() : '',
     specs: specsOf(p),
     soldOut: Number(p.stock) === 0,
+    /**
+     * 库存紧张提示（全入口点击测试 2026-10-11）：1–5 件显示"仅剩 N 件"，与首页卡片 ws-pick-card 的口径一致（≤5）。
+     * @why 原先详情页没有任何提示，买家点「＋」加不上去才知道只剩 1 件。0 件由「已售罄」标签说，不在这里重复。
+     */
+    lowStockText:
+      Number.isInteger(p.stock) && p.stock >= 1 && p.stock <= 5 ? `仅剩 ${String(p.stock)} 件` : '',
     /** 库存数（审查 2026-10-09：加购上限用）；缺失 / 非法 → null（不知道就不拦，交给报价兜底）。 */
     stock: Number.isInteger(p.stock) && p.stock >= 0 ? p.stock : null,
     why: optionalText(p.why),
@@ -306,7 +312,7 @@ export function addFeedback(result) {
  *
  * @param {{cartCount?: unknown, added?: unknown, soldOut?: unknown}|null|undefined} s
  *   `cartCount` cart-store `count()`；`added` 本次已加购；`soldOut` 详情的售罄态
- * @returns {{cartText: string, cartAria: string, disabled: boolean}}
+ * @returns {{cartText: string, cartAria: string, cartLabel: string, cartBadge: string, disabled: boolean}}
  * @why 购物车入口**常驻**在栏里，取代原先"加购成功后才冒出来的「去购物车」按钮"：
  *      两个去购物车的入口同屏就是重复（对标分析 M-14 同一条），而常驻入口在加购前也能用。
  * @why 加购反馈写进这个入口（"已加入购物车 · 3"）而不是另起一行：反馈在按钮旁边（§4"位置在按钮附近即可"），
@@ -320,6 +326,10 @@ export function buyBarView(s) {
   return {
     cartText: badge === '' ? base : `${base} · ${badge}`,
     cartAria: badge === '' ? `${base}，去购物车` : `${base}，共 ${badge} 件，去购物车`,
+    // 全入口点击测试 2026-10-11：底部栏左侧改为"购物车格子"（短文字 + 角标），长串 cartText 放不进格子（仍留作 aria / 兼容）。
+    // 文字固定「购物车」：它是去购物车的入口，"已加入"读不出能点；加购反馈靠角标 + toast（主流做法）
+    cartLabel: '购物车',
+    cartBadge: badge,
     disabled: a.soldOut === true,
   };
 }

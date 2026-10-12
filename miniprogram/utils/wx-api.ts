@@ -15,7 +15,7 @@
  * @limitation 一：**只声明当前真用到的能力**（request / getStorageSync / setStorageSync /
  *              removeStorageSync / getRealtimeLogManager / navigateTo / switchTab / login /
  *              navigateBack / showModal / requestPayment / setClipboardData / redirectTo /
- *              stopPullDownRefresh；另有全局 getCurrentPages → pageDepth）。
+ *              stopPullDownRefresh / pageScrollTo；另有全局 getCurrentPages → pageDepth）。
  *              新增一个 wx API 就在这里加一个方法——
  *              不要预先铺满官方 API，铺了就会有人依赖上没被测试过的封装（本项目多次踩过"提前做是猜"）。
  * @limitation 二：`getStorageSync` 的契约是**只取字符串**：读到的不是字符串时一律当"没存过"（返回空串）。
@@ -249,6 +249,13 @@ export interface WxApi {
    */
   stopPullDownRefresh(): void;
   /**
+   * 页面滚到某个节点（`wx.pageScrollTo`，基础库 2.7.3 起支持 selector）。
+   * @why 结算页点「提交订单」时缺邮箱：把人带到邮箱卡片（全入口点击测试 2026-10-11）——
+   *      原先只在底部写一句原因，输入框可能在屏幕外，新手找不到。
+   * @limitation 只登记 selector + duration 两个参数；不读回调（滚不到也不影响后续：原因文字仍在底部栏）。
+   */
+  pageScrollTo(option: { selector: string; duration?: number }): void;
+  /**
    * 当前账号信息（`wx.getAccountInfoSync`）——只用来取 `miniProgram.envVersion`（B4）。
    *
    * @why 小程序**没有**构建期环境注入（`process.env` 在小程序里根本不存在，
@@ -332,6 +339,7 @@ interface WxHost {
   setClipboardData(option: WxClipboardOption): void;
   redirectTo(option: WxRedirectOption): void;
   stopPullDownRefresh(): void;
+  pageScrollTo(option: { selector: string; duration?: number }): void;
   /** ⚠️ 可选：基础库 < 2.2.2 的宿主没有这个同步 API（@see WxApi.getAccountInfoSync @limitation 十四）。 */
   getAccountInfoSync?: () => WxAccountInfo;
   /** ⚠️ 可选（@see WxApi.getPlatform）：新基础库才有 getDeviceInfo；只读 `platform`。 */
@@ -417,6 +425,9 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     },
     stopPullDownRefresh: () => {
       host().stopPullDownRefresh();
+    },
+    pageScrollTo: (option) => {
+      host().pageScrollTo(option);
     },
     getAccountInfoSync: () => host().getAccountInfoSync?.(),
     getPlatform: () => {

@@ -24,9 +24,24 @@
   margin-right: var(--ws-space-inline);
 }
 
-.item__title {
+/* 标题在上、单价与数量在下（主流确认页的商品行） */
+.item__info {
   flex: 1;
   min-width: 0;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.item__meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: var(--ws-space-hair);
+}
+
+.item__title {
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
@@ -37,6 +52,27 @@
 .item__qty {
   flex: none;
   margin-left: var(--ws-space-inline);
+}
+
+/* 地址卡：左边内容、右边「›」 */
+.addr {
+  display: flex;
+  align-items: center;
+}
+
+.addr__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.addr__go {
+  flex: none;
+  margin-left: var(--ws-space-inline);
+  font-size: var(--ws-f-lg);
+}
+
+.addr__add {
+  color: var(--ws-accent);
 }
 
 /* 地址行 */

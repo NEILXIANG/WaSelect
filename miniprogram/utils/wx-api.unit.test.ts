@@ -297,6 +297,15 @@ describe('走真实宿主时的行为', () => {
     expect(h.seen).toEqual(['stopPull']);
   });
 
+  it('pageScrollTo 原样转发 selector / duration（结算页点提交时带到缺的那一项）', () => {
+    const seen: Array<{ selector: string; duration?: number }> = [];
+    vi.stubGlobal('wx', {
+      pageScrollTo: (o: { selector: string; duration?: number }) => seen.push(o),
+    });
+    createWxApi().pageScrollTo({ selector: '#contact-email', duration: 200 });
+    expect(seen).toEqual([{ selector: '#contact-email', duration: 200 }]);
+  });
+
   it('redirectTo 原样转发 url（不补前缀——@limitation 十二，同 navigateTo）', () => {
     const { redirected } = stubHost();
     createWxApi().redirectTo({ url: '/pages/order/index' });

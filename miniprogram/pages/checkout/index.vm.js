@@ -12,13 +12,15 @@
  *      确认页要**预取**通道列表（先让用户看到可以用什么付），支付页要**执行**，
  *      两边共用同一份纯函数，才不会出现"确认页说支持、支付页不显示"。
  *
- * @limitation 一：商品行**刻意不带价格**。价格只信 `POST /orders/quote`，
+ * @limitation 一：商品行**刻意不带价格数字**。价格只信 `POST /orders/quote`，
  *              一旦行里出现价格字段，就会有人拿它算合计（快照价会过期）。
+ *              行上显示的单价（`rowsWithQuotePrice`）只是报价 `lines` 的**展示文字**，报价没回来就不显示。
  *
  * @see ../../utils/cart-store.js（本地状态）；../../utils/pay-plan.js（支付部分）；
  *      ../../../contracts/api-contract.yaml（Quote / OrderCreated / POST /orders）
  */
 import { isContactEmailShape } from '../../utils/email-shape.js';
+import { formatJpy } from '../../utils/price-format.js';
 
 /**
  * 商品行（**不带价格**：价格只信 quote，@see @limitation 一）。
@@ -34,6 +36,30 @@ export function itemRows(items) {
       qty: Number.isInteger(i.qty) ? i.qty : 1,
       image: typeof i.image === 'string' ? i.image : '',
     }));
+}
+
+/**
+ * 商品行配上单价文字（全入口点击测试 2026-10-11：行上只有"× 1"，主流确认页每行都有单价）。
+ * @why 单价取报价的 `lines`（服务端当前价，契约 0.6.39），不取购物车快照——与合计同一来源，不会出现"行价对不上合计"。
+ * @limitation 只给文字 `priceText`、不给数字：守 @limitation 一。报价没回来 / 失败 / 缺这一行 → 空串，行上不显示单价。
+ * @param {unknown} rows `itemRows` 的输出
+ * @param {unknown} quote 报价原始响应（可为 null）
+ * @returns {Array<{productId: string, title: string, qty: number, image: string, priceText: string}>} 每行多一个 `priceText`
+ */
+export function rowsWithQuotePrice(rows, quote) {
+  if (!Array.isArray(rows)) return [];
+  const lines =
+    quote !== null && typeof quote === 'object' && Array.isArray(quote.lines) ? quote.lines : [];
+  const price = new Map();
+  for (const l of lines) {
+    if (l && typeof l.product_id === 'string' && Number.isInteger(l.unit_price_jpy)) {
+      price.set(l.product_id, l.unit_price_jpy);
+    }
+  }
+  return rows.map((r) => {
+    const p = price.get(r.productId);
+    return { ...r, priceText: p === undefined ? '' : formatJpy(p) };
+  });
 }
 
 /**
@@ -84,11 +110,21 @@ export function termsFromResponse(res) {
  *      条款版本没取到时 `orderBody` 会抛一句**给开发者看的**报错，此前闸门不看它，
  *      于是那句话被原样摆到用户面前；报价**失败**与报价**还没回来**此前是同一句"还在计算中"，
  *      前者永远等不到结果，用户没有出路。三项都是"传了才生效"：不传等于不检查（老调用方不受影响）。
- * @returns {{ok: boolean, reason: string}}
+ * @returns {{ok: boolean, reason: string, fix?: 'address'|'terms'|'email'|''}}
  * @why 返回**原因**而不是只给 ok：禁用但不说为什么的按钮会被读成"这站坏了"，
  *      而原因文案必须由逻辑给（wxml 里写死一串 `wx:if` 会让四条判断各漂移一次）。
+ * @why `fix`（全入口点击测试 2026-10-11，用户截图）：浅灰禁用按钮看不出能不能点，条款勾选框还在两屏之下。
+ *      主流确认页按钮常亮、点了把人带到缺的那一项；`fix` 标出"买家在本页能补"的三项（地址 / 条款 / 邮箱），
+ *      页面据此决定按钮亮不亮、点了去哪。补不了的（报价失败、超上限、条款取不到…）fix 为空，按钮照旧置灰。
+ * @limitation 不通过时一定带 `fix`（空串也带）；通过时不带（形状与旧调用方一致）。
  */
 export function submitGate(state) {
+  const g = gateCore(state);
+  return g.ok ? g : { fix: '', ...g };
+}
+
+/** 闸门本体（`submitGate` 只补默认的 fix）。 */
+function gateCore(state) {
   const s = state && typeof state === 'object' ? state : {};
   if (!Number.isInteger(s.itemCount) || s.itemCount < 1)
     return { ok: false, reason: '购物车是空的' };
@@ -100,11 +136,13 @@ export function submitGate(state) {
       ok: false,
       reason:
         s.addressFailed === true ? '收货地址没取到，请点上方「重新加载」再试' : '请选择收货地址',
+      fix: s.addressFailed === true ? '' : 'address',
     };
   }
   if (s.termsFailed === true) return { ok: false, reason: '购买条款暂时取不到，请稍后再试' };
   if (s.termsReady === false) return { ok: false, reason: '正在加载购买条款…' };
-  if (s.termsAccepted !== true) return { ok: false, reason: '请先阅读并同意购买条款' };
+  if (s.termsAccepted !== true)
+    return { ok: false, reason: '请先阅读并同意购买条款', fix: 'terms' };
   // 失败排在"计算中"之前：失败了就不会再有结果，说"计算中"是让人白等
   // 立即购买时那件商品不在购物车里（审查 2026-10-09）：说"返回购物车"是一条走不通的路
   if (s.quoteFailed === true) {
@@ -126,10 +164,10 @@ export function submitGate(state) {
   // 邮箱两项排在最后——前面是"能不能下单"，这两项是"填的东西够不够、对不对"。
   // 先说格式错（AJ-180）：填了但不对时说"请填写"是答非所问。
   if (typeof s.emailError === 'string' && s.emailError !== '')
-    return { ok: false, reason: s.emailError };
+    return { ok: false, reason: s.emailError, fix: 'email' };
   // M-01（AJ-405 / AJ-402 Q1）：前端必填。"传了才生效"（同 termsReady）：不传 = 不检查，老调用方不受影响。
   if (typeof s.contactEmail === 'string' && s.contactEmail === '')
-    return { ok: false, reason: EMAIL_REQUIRED_TEXT };
+    return { ok: false, reason: EMAIL_REQUIRED_TEXT, fix: 'email' };
   return { ok: true, reason: '' };
 }
 

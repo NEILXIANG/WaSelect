@@ -223,20 +223,33 @@
   min-height: var(--ws-buybar-h);
 }
 
-.buy-bar__info {
-  flex: none;
-  margin-right: var(--ws-space-inline);
-}
-
-/* 购物车入口：次要的文字动作，高度 56rpx（约 28pt）——**未达** 44pt：栏高只有 112rpx，
-   价格 + 88rpx 的入口会把栏撑高、多遮一截内容。主要动作（两个按钮）满足 44pt（M-19）；
-   这一处是取舍，记在 AJ-406，真机手感不行再改成整列可点。 */
+/* 购物车格子（全入口点击测试 2026-10-11）：整栏高、满足 44pt 可点（原为价格下面一行 28pt 的小字，AJ-406 记过的欠账）；
+   件数用角标（与底部 tabBar 同一种形态） */
 .buy-bar__cart {
+  position: relative;
+  flex: none;
   display: flex;
   align-items: center;
-  min-height: var(--ws-space-section);
+  justify-content: center;
+  min-width: calc(var(--ws-touch-min) * 1.2);
+  min-height: var(--ws-touch-min);
+  margin-right: var(--ws-space-hair);
   color: var(--ws-ink-soft);
   font-size: var(--ws-f-sm);
+}
+
+.buy-bar__cart-badge {
+  position: absolute;
+  top: var(--ws-space-tight);
+  right: 0;
+  min-width: var(--ws-space-card);
+  padding: 0 var(--ws-space-tight);
+  line-height: var(--ws-space-card);
+  text-align: center;
+  font-size: var(--ws-f-caption);
+  color: var(--ws-ink-inverse);
+  background: var(--ws-accent);
+  border-radius: var(--ws-radius-pill);
 }
 
 .buy-bar__btn {

@@ -62,6 +62,10 @@ interface Modal {
   success?: (r: { confirm?: boolean; cancel?: boolean }) => void;
 }
 let modals: Modal[];
+/** 全入口点击测试 2026-10-11：点提交时缺邮箱 → 页面滚到邮箱卡片。 */
+let scrolls: string[];
+/** 地址列表为空（新用户）。 */
+let noAddr: boolean;
 let cartCleared: boolean;
 /** A3：建单成功后从购物车移除的那几件。 */
 let removedIds: string[] | null;
@@ -80,8 +84,8 @@ const call = <T>(name: string, ...args: unknown[]): T =>
 const settle = async (): Promise<void> => {
   for (let i = 0; i < 30; i += 1) await Promise.resolve();
 };
-const gate = (): { ok: boolean; reason: string } =>
-  page.data['gate'] as { ok: boolean; reason: string };
+const gate = (): { ok: boolean; reason: string; fix?: string } =>
+  page.data['gate'] as { ok: boolean; reason: string; fix?: string };
 const apiError = (code: number, message: string): Error & { code: number } =>
   Object.assign(new Error(message), { code });
 /** 网络层失败（超时 / 断网）：结果未知——服务端可能已经建单。 */
@@ -100,6 +104,8 @@ beforeEach(async () => {
   redirects = [];
   switches = [];
   modals = [];
+  scrolls = [];
+  noAddr = false;
   cartCleared = false;
   removedIds = null;
   channelsByCurrency = {
@@ -116,6 +122,7 @@ beforeEach(async () => {
       redirects.push(o.url);
     },
     showModal: (o: Modal) => modals.push(o),
+    pageScrollTo: (o: { selector: string }) => scrolls.push(o.selector),
     // S5：订单升为 tab 页，40913 的恢复路径改用 switchTab（navigateTo 到 tab 页会被宿主拒绝）
     switchTab: (o: { url: string }) => {
       navigations.push(o.url);
@@ -149,7 +156,7 @@ beforeEach(async () => {
             ? { version: 'TOS-TEST-1' }
             : { version: 'TOS-TEST-1', urls: TERMS_URLS };
         }
-        if (req.url.endsWith('/addresses')) return [ADDR];
+        if (req.url.endsWith('/addresses')) return noAddr ? [] : [ADDR];
         if (req.url.endsWith('/orders/quote')) {
           if (quoteFail) throw apiError(40401, '商品不存在或已下架');
           if (quoteHold !== null) return quoteHold.promise;
@@ -363,6 +370,82 @@ describe('结算页：连点防线落在 ws-button（约束：页面不得手写
     const tag = /<ws-button[^>]*bindtap="onSubmit"[^>]*\/>/s.exec(wxml)?.[0] ?? '';
     expect(tag, '自检：找到了提交按钮').not.toBe('');
     expect(tag).toContain('loading="{{submitting}}"');
+  });
+
+  it('🔴 缺的是买家能补的项（gate.fix 非空）时按钮不置灰——常亮、点了带过去（全入口点击测试 2026-10-11）', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    const tag = /<ws-button[^>]*bindtap="onSubmit"[^>]*\/>/s.exec(wxml)?.[0] ?? '';
+    expect(tag).toContain('disabled="{{(!gate.ok && !gate.fix) || submitting}}"');
+  });
+});
+
+describe('结算页：点「提交订单」时缺什么就带到哪（全入口点击测试 2026-10-11）', () => {
+  it('🔴 没有地址 → 点提交直接进地址选择页，不发建单', async () => {
+    noAddr = true;
+    call('onShow');
+    await settle();
+    call('onToggleTerms');
+    call('onEmailInput', { detail: { value: 'buyer@example.com' } });
+    expect(gate().fix).toBe('address');
+    call('onSubmit');
+    await settle();
+    expect(navigations).toEqual(['/pages/address/index?pick=1']);
+    expect(posts).toHaveLength(0);
+  });
+
+  it('🔴 没勾条款 → 弹窗请买家同意；点「同意」才勾上并提交（建单带条款版本）', async () => {
+    call('onShow');
+    await settle();
+    call('onEmailInput', { detail: { value: 'buyer@example.com' } });
+    expect(gate().fix).toBe('terms');
+    call('onSubmit');
+    await settle();
+    expect(posts).toHaveLength(0);
+    expect(modals).toHaveLength(1);
+    expect(modals[0]!.content).toContain('购买条款');
+    modals[0]!.success?.({ confirm: true });
+    await settle();
+    expect(page.data['termsAccepted']).toBe(true);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.data?.['terms_version']).toBe('TOS-TEST-1');
+  });
+
+  it('🔴 条款弹窗点「查看条款」→ 进条款页，不勾、不提交', async () => {
+    call('onShow');
+    await settle();
+    call('onEmailInput', { detail: { value: 'buyer@example.com' } });
+    call('onSubmit');
+    await settle();
+    modals[0]!.success?.({ cancel: true });
+    await settle();
+    expect(page.data['termsAccepted']).toBe(false);
+    expect(navigations).toEqual(['/pages/legal/index']);
+    expect(posts).toHaveLength(0);
+  });
+
+  it('🔴 没填邮箱 → 滚到邮箱卡片并在输入框下说明原因，不发建单', async () => {
+    call('onShow');
+    await settle();
+    call('onToggleTerms');
+    call('onSubmit');
+    await settle();
+    expect(scrolls).toEqual(['#contact-email']);
+    expect(String(page.data['emailError'])).toContain('邮箱');
+    expect(posts).toHaveLength(0);
+  });
+
+  it('补不了的原因（报价失败）→ 点了什么都不做（按钮本就置灰）', async () => {
+    quoteFail = true;
+    call('onShow');
+    await settle();
+    call('onToggleTerms');
+    call('onEmailInput', { detail: { value: 'buyer@example.com' } });
+    expect(gate().fix).toBe('');
+    call('onSubmit');
+    await settle();
+    expect(posts).toHaveLength(0);
+    expect(modals).toHaveLength(0);
+    expect(navigations).toEqual([]);
   });
 });
 

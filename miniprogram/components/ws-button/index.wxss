@@ -18,7 +18,9 @@
 }
 
 .ws-button--default {
-  background: var(--ws-color-card);
+  /* 全入口点击测试 2026-10-11：原为卡片白——放在白色底栏 / 卡片上与背景融为一体，「加入购物车」看起来像一行字。
+     次要按钮改为浅米色填充（品牌已有的 --ws-accent-wash），在白底与米白底上都看得出是按钮，主次分明 */
+  background: var(--ws-accent-wash);
   color: var(--ws-color-fg);
 }
 

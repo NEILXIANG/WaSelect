@@ -29,9 +29,11 @@ import {
   checkoutItems,
   clearsCartAfterOrder,
   contactEmailOf,
+  EMAIL_REQUIRED_TEXT,
   emailInputError,
   goneExit,
   itemRows,
+  rowsWithQuotePrice,
   keyAction,
   namedItemError,
   orderBody,
@@ -334,6 +336,7 @@ Page({
       if (isStale(seq, this.quoteSeq)) return;
       this.quoteRaw = res !== null && typeof res === 'object' ? res : null;
       this.setData({
+        rows: rowsWithQuotePrice(this.data.rows, this.quoteRaw),
         quote: quoteView(res),
         quoteFailed: false,
         quoteErrorCode: 0,
@@ -344,6 +347,7 @@ Page({
       const named = namedItemError(e, items, { buyNow: this.mode === BUY_NOW_MODE }); // U9：点名是哪一件
       this.quoteRaw = null;
       this.setData({
+        rows: rowsWithQuotePrice(this.data.rows, null),
         quote: null,
         quoteFailed: true,
         // F4：闸门按码说原因（停售 / 账号受限不说"返回购物车重试"）
@@ -444,6 +448,46 @@ Page({
   },
 
   /**
+   * 点「提交订单」时缺的是买家能补的一项：带过去（全入口点击测试 2026-10-11，vm `submitGate` 的 `fix`）。
+   * @why 主流确认页的做法：按钮常亮，缺地址就进选地址，没同意条款就弹窗请同意，没填邮箱就滚到邮箱框。
+   *      原先按钮浅灰、条款勾选框在两屏之下，新手不知道该点哪。
+   * @why 条款走弹窗而不是替人勾上：同意必须是买家自己点的「同意」（弹窗里另有「查看条款」进全文）；
+   *      点了「同意」才勾选并继续提交——这一下就是买家的同意动作，建单照旧带条款版本。
+   * @limitation fix 为空（补不了的原因）时什么都不做：按钮本就置灰，原因写在底部栏。
+   * @param {string} fix
+   */
+  goFix(fix) {
+    if (fix === 'address') {
+      this.onPickAddress();
+      return;
+    }
+    if (fix === 'terms') {
+      wxApi.showModal({
+        title: '请阅读并同意购买条款',
+        content: `提交订单前需要同意《购买条款》（版本 ${this.data.termsVersion}）。想先看全文可点「查看条款」。`,
+        confirmText: '同意',
+        cancelText: '查看条款',
+        success: (r) => {
+          if (r.confirm) {
+            this.setData({ termsAccepted: true });
+            this.updateGate();
+            this.onSubmit();
+          } else if (r.cancel) {
+            this.onOpenTerms();
+          }
+        },
+      });
+      return;
+    }
+    if (fix === 'email') {
+      const shown = typeof this.data.emailError === 'string' ? this.data.emailError : '';
+      this.setData({ emailError: shown !== '' ? shown : EMAIL_REQUIRED_TEXT });
+      this.updateGate();
+      wxApi.pageScrollTo({ selector: '#contact-email', duration: 200 });
+    }
+  },
+
+  /**
    * 提交建单。
    * @why 键在这里**取**而不是**造**：`acquire()` 首次给新键、之后给同一个键，
    *      于是"上一次失败、用户再点一次"走的是同一个键，服务端认出是重放、
@@ -453,7 +497,11 @@ Page({
     // 建单在途时直接忽略（W-03）：页面的 data 在 setData 后同步更新，而按钮组件的 loading 属性
     // 要等视图层回传——只靠按钮挡，快速双击的第二下会穿透，压入两个支付页。
     if (this.data.submitting === true) return;
-    if (!this.data.gate.ok || this.intentKey === null) return;
+    if (!this.data.gate.ok) {
+      this.goFix(this.data.gate.fix);
+      return;
+    }
+    if (this.intentKey === null) return;
     let body;
     try {
       body = orderBody({

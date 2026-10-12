@@ -73,6 +73,18 @@ describe('detailView（主数据）', () => {
   });
 });
 
+// 全入口点击测试 2026-10-11：库存只剩 1 件的商品，详情页没有任何提示（首页卡片有"仅剩 N 件"）——点「＋」加不上去才知道
+describe('detailView（库存紧张提示）', () => {
+  it('🔴 1–5 件 → "仅剩 N 件"；0 件（售罄另有标签）/ 充足 / 不知道 → 空串', () => {
+    const v = (stock: unknown): string => detailView({ ...PRODUCT, stock }).lowStockText;
+    expect(v(1)).toBe('仅剩 1 件');
+    expect(v(5)).toBe('仅剩 5 件');
+    expect(v(6)).toBe('');
+    expect(v(0)).toBe('');
+    expect(v(undefined)).toBe('');
+  });
+});
+
 describe('detailView（图片）', () => {
   it('每条图取 card；裸字符串条目直接用（存量形态不炸）', () => {
     expect(detailView(PRODUCT).images).toEqual([
@@ -300,9 +312,21 @@ describe('buyBarView（M-13 底部固定购买栏，AJ-406）', () => {
     expect(buyBarView({ cartCount: 3, added: false, soldOut: false })).toEqual({
       cartText: '购物车 · 3',
       cartAria: '购物车，共 3 件，去购物车',
+      cartLabel: '购物车',
+      cartBadge: '3',
       disabled: false,
     });
     expect(buyBarView({ cartCount: 4, added: true }).cartText).toBe('已加入购物车 · 4');
+  });
+
+  // 全入口点击测试 2026-10-11：底部栏改为"购物车格子（文字 + 角标）| 加入购物车 | 立即购买"——长串"已加入购物车 · 4"放不进格子
+  // 实测截图：加购后格子写「已加入」，看不出点它是去购物车；主流（京东 / 淘宝）格子文字固定，变化只体现在角标
+  it('🔴 格子文字固定「购物车」（加购前后都一样），件数进角标', () => {
+    expect(buyBarView({ cartCount: 4, added: true })).toMatchObject({
+      cartLabel: '购物车',
+      cartBadge: '4',
+    });
+    expect(buyBarView({ cartCount: 120 }).cartBadge).toBe('99+');
   });
 
   it('空车不显示 · 0；超过 99 件显示 99+（与 tabBar 角标同一函数）', () => {
@@ -315,6 +339,8 @@ describe('buyBarView（M-13 底部固定购买栏，AJ-406）', () => {
     expect(buyBarView(null)).toEqual({
       cartText: '购物车',
       cartAria: '购物车，去购物车',
+      cartLabel: '购物车',
+      cartBadge: '',
       disabled: false,
     });
   });
