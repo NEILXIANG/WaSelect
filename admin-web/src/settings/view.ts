@@ -19,6 +19,8 @@ export interface SettingItemLike {
   apply: string;
   env?: string;
   edit_page?: string;
+  /** 服务端给的人话说明（审核商品：名称 · 状态 · 库存）。 */
+  value_label?: string;
 }
 
 const GROUP_TITLES: Readonly<Record<string, string>> = {
@@ -100,9 +102,47 @@ function channelTech(ch: Record<string, unknown>): string {
 /** 没填的配置项（N31）。 */
 export const NOT_SET = '未填写，上线前请让技术人员配置';
 
-export function valueText(item: SettingItemLike): string {
+/**
+ * 没填的项按上下文说清（两端逐页走查 2026-10-12）：原先一律"未填写，上线前请让技术人员配置"——
+ * 审核模式关着时审核商品 / 截止日根本不需要，包邮门槛不设就是不包邮，客服微信 / 告警邮箱在已有替代项时可不填；
+ * 运营看到一排"上线前请配置"，会以为有好几件事没做。
+ * @param all 同一页的全部项（判上下文用）；不传 = 按"没有上下文"处理（只给必须项的说法）。
+ */
+function unsetText(item: SettingItemLike, all: readonly SettingItemLike[]): string | null {
+  const val = (k: string): unknown => all.find((i) => i.key === k)?.value;
+  const has = (k: string): boolean => {
+    const x = val(k);
+    return x !== null && x !== undefined && x !== false && x !== '';
+  };
+  switch (item.key) {
+    case 'review_sku_id':
+    case 'review_mode_until':
+      return val('review_mode') === 'off' ? '审核模式关闭时不需要' : null;
+    case 'free_shipping_jpy':
+      return '未设置（不包邮）';
+    case 'support_wechat':
+      return has('support_email') ? '未填写（已有客服邮箱，可不填）' : null;
+    case 'support_email':
+      return has('support_wechat') ? '未填写（已有客服微信，可不填）' : null;
+    case 'support_hours':
+      return '未填写（页面不显示客服时间）';
+    case 'alert_email_configured':
+      return has('sentry_configured') ? '未开通（已有错误上报 Sentry，可不开）' : null;
+    case 'sentry_configured':
+      return has('alert_email_configured') ? '未开通（已有运维告警邮箱，可不开）' : null;
+    default:
+      return null;
+  }
+}
+
+export function valueText(item: SettingItemLike, all: readonly SettingItemLike[] = []): string {
   const v = item.value;
   if (item.edit_page === 'ops') return '在「运营配置」页查看与修改';
+  if (typeof item.value_label === 'string' && item.value_label !== '') return item.value_label;
+  if (v === null || v === undefined || v === false) {
+    const ctx = unsetText(item, all);
+    if (ctx !== null) return ctx;
+  }
   if (v === null || v === undefined) return NOT_SET;
   if (typeof v === 'boolean') return v ? '已开通' : '未开通，上线前请让技术人员配置';
   // 三端模拟测试 2026-10-11：原样显示 on / off，运营看不懂；审核期只许模拟通道（config.ts 启动闸门）
@@ -145,5 +185,8 @@ export function techText(item: SettingItemLike): string {
     return item.value.map((c) => channelTech(c as Record<string, unknown>)).join('；');
   }
   if (item.source === 'db') return '存放在数据库';
+  // 有人话说明的项（审核商品），原值收进技术信息（编号是给技术人员核对的）
+  if (item.value_label !== undefined && item.env !== undefined)
+    return `环境变量 ${item.env} = ${String(item.value)}`;
   return item.env !== undefined ? `环境变量 ${item.env}` : '部署环境变量';
 }

@@ -58,7 +58,12 @@ export function SettingsPage({ api }: { api: AdminApi }) {
               {g.items.map((it) => (
                 <tr key={it.key}>
                   <td>{itemLabel(it.key)}</td>
-                  <td className="selectable">{valueText(it)}</td>
+                  <td className="selectable">
+                    {valueText(
+                      it,
+                      data.groups.flatMap((x) => x.items),
+                    )}
+                  </td>
                   <td className="muted">{applyText(it)}</td>
                   <td>
                     <details className="tech-info">

@@ -28,6 +28,50 @@ describe('valueText', () => {
   });
 
   // AJ-410 / N31：「未配置」改为告诉运营下一步（找技术人员）
+  // 两端逐页走查 2026-10-12：审核模式关着，"审核商品 / 截止日"仍说"上线前请配置"；包邮门槛本可不设也这么说——
+  //   运营以为有好几件事没做
+  it('🔴 没填的可选项按上下文说清：审核模式关时不需要；包邮门槛未设 = 不包邮；已有替代项时说明', () => {
+    const all = (reviewMode: string, extra: Record<string, unknown> = {}) => [
+      { key: 'review_mode', value: reviewMode, source: 'env' as const, apply: 'restart' as const },
+      {
+        key: 'support_email',
+        value: 'cs@waselect.jp',
+        source: 'env' as const,
+        apply: 'restart' as const,
+      },
+      { key: 'sentry_configured', value: true, source: 'env' as const, apply: 'restart' as const },
+      ...Object.entries(extra).map(([key, value]) => ({
+        key,
+        value,
+        source: 'env' as const,
+        apply: 'restart' as const,
+      })),
+    ];
+    const v = (key: string, value: unknown, ctx = all('off')) =>
+      valueText({ key, value, source: 'env', apply: 'restart' } as never, ctx);
+    expect(v('review_sku_id', null)).toBe('审核模式关闭时不需要');
+    expect(v('review_mode_until', null)).toBe('审核模式关闭时不需要');
+    expect(v('review_sku_id', null, all('on'))).toBe(NOT_SET);
+    expect(v('free_shipping_jpy', null)).toBe('未设置（不包邮）');
+    expect(v('support_wechat', null)).toBe('未填写（已有客服邮箱，可不填）');
+    expect(v('support_hours', null)).toBe('未填写（页面不显示客服时间）');
+    expect(v('alert_email_configured', false)).toBe('未开通（已有错误上报 Sentry，可不开）');
+    expect(v('seller_name', null)).toBe(NOT_SET);
+  });
+
+  it('🔴 有 value_label 时显示它（审核商品显示名称与状态，编号收进技术信息）', () => {
+    const it = {
+      key: 'review_sku_id',
+      value: 'p-1',
+      value_label: '「六花亭」· 在售 · 库存 50',
+      source: 'env' as const,
+      apply: 'restart' as const,
+      env: 'REVIEW_SKU_ID',
+    };
+    expect(valueText(it)).toBe('「六花亭」· 在售 · 库存 50');
+    expect(techText(it)).toBe('环境变量 REVIEW_SKU_ID = p-1');
+  });
+
   it('null → 未填写（请技术人员配置）；edit_page → 指向运营配置页', () => {
     expect(valueText({ key: 'seller_address', value: null, source: 'env', apply: 'restart' })).toBe(
       NOT_SET,

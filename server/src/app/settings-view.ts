@@ -46,6 +46,8 @@ export interface SettingItem {
   env?: string;
   /** 后台哪一页能改（目前只有运营配置页）。 */
   edit_page?: 'ops';
+  /** 给人看的说明（目前只有审核商品：名称 · 状态 · 库存；两端逐页走查 2026-10-12）。 */
+  value_label?: string;
 }
 
 export interface SettingGroup {
@@ -57,6 +59,24 @@ export interface SettingsInput {
   config: AppConfig;
   channels: readonly ChannelSummary[];
   dutyRates: readonly DutyRateRow[];
+  /**
+   * `REVIEW_SKU_ID` 指向的商品（路由查库后传入）；null = 查了但没有这件；undefined = 没查（没配 / 单测不关心）。
+   */
+  reviewSku?: { title: string; status: string; stock: number } | null | undefined;
+}
+
+const PRODUCT_STATUS_TEXT: Readonly<Record<string, string>> = {
+  active: '在售',
+  offline: '已下架',
+  draft: '草稿',
+};
+
+/**
+ * 审核商品的说明（两端逐页走查 2026-10-12：设置页原先只有编号，看不出是哪件、能不能下单——与 AJ-505 同一类风险）。
+ */
+function reviewSkuLabel(p: { title: string; status: string; stock: number } | null): string {
+  if (p === null) return '找不到这件商品（编号填错了？审核期将没有能下单的商品）';
+  return `「${p.title}」· ${PRODUCT_STATUS_TEXT[p.status] ?? p.status} · 库存 ${String(p.stock)}`;
 }
 
 /** 一条 env 项（值缺省 → null：未配就说未配，不编占位值）。 */
@@ -107,7 +127,12 @@ export function buildSettingsView(input: SettingsInput): { groups: SettingGroup[
           env('checkout_base_url', 'CHECKOUT_BASE_URL', c.CHECKOUT_BASE_URL),
           env('review_mode', 'REVIEW_MODE', c.REVIEW_MODE),
           env('review_mode_until', 'REVIEW_MODE_UNTIL', c.REVIEW_MODE_UNTIL),
-          env('review_sku_id', 'REVIEW_SKU_ID', c.REVIEW_SKU_ID),
+          {
+            ...env('review_sku_id', 'REVIEW_SKU_ID', c.REVIEW_SKU_ID),
+            ...(c.REVIEW_SKU_ID !== undefined && input.reviewSku !== undefined
+              ? { value_label: reviewSkuLabel(input.reviewSku) }
+              : {}),
+          },
           env('max_order_jpy', 'MAX_ORDER_JPY', c.MAX_ORDER_JPY),
           env('order_payment_ttl_min', 'ORDER_PAYMENT_TTL_MIN', c.ORDER_PAYMENT_TTL_MIN),
         ],

@@ -360,7 +360,7 @@ describe('商品编辑：保存撞上 40914（ADM3-02）', () => {
 describe('商品表单：未按回车的标签草稿（A-04）', () => {
   it('🔴 标签框有草稿时点保存 → 草稿并入 tags 一起提交', async () => {
     const el = await open();
-    const tagInput = el.querySelector('input[placeholder^="输入后按回车添加"]');
+    const tagInput = el.querySelector('input[aria-label="编辑标签"]');
     await typeInto(tagInput, '南部鉄器');
     await click(button(el, '保存'));
     const put = calls.find((c) => c.method === 'PUT');

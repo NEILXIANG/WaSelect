@@ -217,6 +217,8 @@ export function FreeTagInput({
       </div>
       <input
         className="input"
+        // 两端逐页走查 2026-10-12：上面的说明是 span，没和输入框关联，读屏只读出"编辑文本"
+        aria-label="编辑标签"
         value={draft}
         placeholder="输入后按回车添加，如「南部铁器」"
         onChange={(e) => setDraft(e.target.value)}

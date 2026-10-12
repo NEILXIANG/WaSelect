@@ -48,7 +48,21 @@ export function mountAdminSettingsRoutes(app: Express, deps: AdminSettingsRoutes
     void (async () => {
       try {
         const dutyRates = await loadDutyRates(deps.db);
-        const view = buildSettingsView({ config: deps.config, channels: deps.channels, dutyRates });
+        // 审核商品查一下名称与状态（两端逐页走查 2026-10-12：设置页原先只有编号）
+        const skuId = deps.config.REVIEW_SKU_ID;
+        const reviewSku =
+          skuId === undefined
+            ? undefined
+            : ((
+                await deps.db<{ title: string; status: string; stock: number }[]>`
+                  select title, status, stock from products where id = ${skuId}`
+              )[0] ?? null);
+        const view = buildSettingsView({
+          config: deps.config,
+          channels: deps.channels,
+          dutyRates,
+          reviewSku,
+        });
         deps.logger.info('admin_settings_viewed', { result: 'ok' });
         res.json({ generated_at: deps.clock.now().toISOString(), ...view });
       } catch (e) {

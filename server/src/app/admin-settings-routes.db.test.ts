@@ -49,7 +49,9 @@ beforeEach(async () => {
   await db`insert into users (id, openid) values ('u-buyer', 'oWx-openid-settings-buyer')`;
 });
 
-async function buildServer(): Promise<{ url: string; close: () => Promise<void> }> {
+async function buildServer(
+  extra: Record<string, string> = {},
+): Promise<{ url: string; close: () => Promise<void> }> {
   const logger = createLogger({ env: 'test', destination: sink });
   const config = loadConfig({
     NODE_ENV: 'development',
@@ -62,6 +64,7 @@ async function buildServer(): Promise<{ url: string; close: () => Promise<void> 
     TERMS_VERSION: 'TOS-2026-09-20',
     SELLER_NAME: '株式会社ワセレクト',
     ...SECRETS,
+    ...extra,
   });
   const stripe = CHANNEL_DEFAULTS['stripe']!;
   const app = createHttpApp({
@@ -119,6 +122,24 @@ describe('GET /admin/settings', () => {
     } finally {
       await close();
     }
+  });
+
+  // 两端逐页走查 2026-10-12：审核商品原先只有编号——路由查库把名称 / 状态 / 库存带上
+  it('🔴 审核商品：查得到 → value_label 写名称与状态；查不到 → 明说找不到', async () => {
+    await db`insert into products (id, title, category, price_jpy, weight_g, origin_country, status, stock)
+             values ('p-review', '六花亭 葡萄干奶油夹心饼干 5 枚', 'food', 980, 160, 'JP', 'active', 50)`;
+    const label = async (sku: string) => {
+      const { url, close } = await buildServer({ REVIEW_SKU_ID: sku });
+      try {
+        const body = JSON.parse((await get(url, await bearer('u-admin', 'admin'))).text) as Body;
+        return (find(body, 'payment', 'review_sku_id') as { value_label?: string } | undefined)
+          ?.value_label;
+      } finally {
+        await close();
+      }
+    };
+    expect(await label('p-review')).toBe('「六花亭 葡萄干奶油夹心饼干 5 枚」· 在售 · 库存 50');
+    expect(await label('p-missing')).toBe('找不到这件商品（编号填错了？审核期将没有能下单的商品）');
   });
 
   it('生效值：通道属性来自装配产物（表优先）、关税率来自库；完整 HTTP 响应里没有任何密钥片段或密钥名', async () => {

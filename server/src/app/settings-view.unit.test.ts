@@ -231,6 +231,24 @@ describe('白名单内容：当前生效值 + 改它要不要重启', () => {
     expect(item(view, 'payment', 'checkout_base_url').value).toBe('https://pay.waselect.example');
   });
 
+  // 两端逐页走查 2026-10-12：设置页的"审核商品"只有一串编号，看不出是哪件、能不能下单（AJ-505 同一类风险）
+  it('🔴 审核商品带 value_label：找到 → "「名称」· 状态 · 库存 N"；找不到 → 明说；没配 → 不带', () => {
+    const config = loadConfig({ ...BASE_ENV, ...canaryEnv().env, REVIEW_SKU_ID: 'p-review' });
+    const label = (reviewSku: { title: string; status: string; stock: number } | null) =>
+      buildSettingsView({ config, channels: CHANNELS, dutyRates: [], reviewSku })
+        .groups.flatMap((g) => g.items)
+        .find((i) => i.key === 'review_sku_id')?.value_label;
+    expect(label({ title: '六花亭 葡萄干奶油夹心饼干 5 枚', status: 'active', stock: 50 })).toBe(
+      '「六花亭 葡萄干奶油夹心饼干 5 枚」· 在售 · 库存 50',
+    );
+    expect(label({ title: '六花亭', status: 'offline', stock: 0 })).toBe(
+      '「六花亭」· 已下架 · 库存 0',
+    );
+    expect(label(null)).toBe('找不到这件商品（编号填错了？审核期将没有能下单的商品）');
+    const { view } = build();
+    expect(item(view, 'payment', 'review_sku_id')).not.toHaveProperty('value_label');
+  });
+
   it('运费 / 税费 / 汇率：数值原样；库里的项标 db + 立即生效（运费与汇率指向运营配置页）', () => {
     const { view } = build();
     expect(item(view, 'shipping', 'packaging_weight_g').value).toBe(300);
