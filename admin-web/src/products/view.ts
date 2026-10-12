@@ -455,7 +455,10 @@ export function productFormErrors(form: unknown): {
   const blocked = f.complianceTags.filter((t) =>
     (BLOCKED_COMPLIANCE_TAG as readonly string[]).includes(t),
   );
-  if (blocked.length > 0) errors['complianceTags'] = `这些标签上架即拒：${blocked.join('、')}`;
+  // 写中文名 + 下一步（全入口点击测试 2026-10-12：原写"这些标签上架即拒：flammable"——代号运营看不懂，也没说该怎么办）
+  if (blocked.length > 0)
+    errors['complianceTags'] =
+      `${blocked.map((t) => COMPLIANCE_TAG_LABELS[t] ?? t).join('、')}是禁售类，不能上架；取消勾选后再保存`;
   const unknown = f.complianceTags.filter(
     (t) => !(COMPLIANCE_TAG as readonly string[]).includes(t),
   );

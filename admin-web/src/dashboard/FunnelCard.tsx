@@ -53,6 +53,7 @@ export function FunnelCard({ api }: { api: AdminApi }) {
             key={r.days}
             type="button"
             className={r.days === days ? 'chip chip-on' : 'chip'}
+            aria-pressed={r.days === days}
             onClick={() => setDays(r.days)}
           >
             {r.label}

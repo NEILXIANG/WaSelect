@@ -335,6 +335,22 @@ describe('商品列表：筛选与页码进地址栏', () => {
     expect(navs.at(-1)).toBe('');
   });
 
+  it('🔴 筛选片是开关按钮：当前状态与「库存紧张」带 aria-pressed=true（读屏能知道选了哪个）', async () => {
+    mounted = await mount(
+      createElement(ProductsPage, {
+        api: (async () => ({ items: [], total: 0, page: 1, size: 20 })) as never,
+        onEdit: () => undefined,
+        route: { page: 'products', id: '', query: new URLSearchParams('status=draft&low=1') },
+        onNavigate: () => undefined,
+      }),
+    );
+    const pressed = [...mounted.el.querySelectorAll('.filters button[aria-pressed="true"]')].map(
+      (b) => b.textContent,
+    );
+    expect(pressed).toEqual(['草稿', '库存紧张（≤ 5）']);
+    expect(button(mounted.el, '全部')?.getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('没开任何筛选时是"还没有商品"，不给「清除筛选」', async () => {
     mounted = await mount(
       createElement(ProductsPage, {

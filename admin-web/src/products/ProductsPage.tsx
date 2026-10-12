@@ -213,6 +213,7 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
             key={s}
             type="button"
             className={s === status ? 'chip chip-on' : 'chip'}
+            aria-pressed={s === status}
             onClick={() => patch({ [Q.status]: s, [Q.page]: '1' })}
           >
             {s === 'all' ? '全部' : STATUS_LABELS[s]}
@@ -221,6 +222,7 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
         <button
           type="button"
           className={lowStock ? 'chip chip-on' : 'chip'}
+          aria-pressed={lowStock}
           onClick={() => patch({ [Q.low]: lowStock ? '0' : '1', [Q.page]: '1' })}
         >
           库存紧张（≤ {LOW_STOCK_THRESHOLD}）

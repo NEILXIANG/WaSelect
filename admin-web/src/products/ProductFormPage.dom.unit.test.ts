@@ -603,6 +603,17 @@ describe('商品表单：草稿与保存并上架（AJ-403）', () => {
   });
 });
 
+describe('商品表单：可切换的标签告诉读屏选没选（全入口点击测试 2026-10-12）', () => {
+  it('🔴 合规标签是开关按钮：aria-pressed 跟着选中状态变', async () => {
+    const el = await openWith({ ...SOURCE, status: 'draft' });
+    const chip = (name: string) =>
+      [...el.querySelectorAll('.chips button')].find((b) => b.textContent?.startsWith(name));
+    expect(chip('液体')?.getAttribute('aria-pressed')).toBe('false');
+    await click(chip('液体'));
+    expect(chip('液体')?.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
 describe('商品表单：图片排序与主图（AJ-403）', () => {
   const IMAGES = ['a', 'b', 'c'].map((k) => ({
     image_id: `img-${k}${k}${k}${k}${k}${k}${k}${k}${k}${k}${k}${k}`,

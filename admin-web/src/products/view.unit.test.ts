@@ -303,13 +303,15 @@ describe('productFormErrors（上架预检）', () => {
       complianceTags: ['cosmetic', 'sunscreen'],
     });
     expect(r.ok).toBe(false);
-    expect(r.errors['complianceTags']).toContain('sunscreen');
+    // 全入口点击测试 2026-10-12：原断言要求出现代号 sunscreen——把"运营看到英文代号"锁成了对的；改为中文名 + 下一步
+    expect(r.errors['complianceTags']).toBe('防晒（SPF）是禁售类，不能上架；取消勾选后再保存');
   });
 
   it('⚠️ 七个禁售标签**每一个**都被拒（漏一个就是一条静默失效的合规拦截）', () => {
     for (const tag of BLOCKED_COMPLIANCE_TAG) {
       const r = productFormErrors({ ...productFormModel(PRODUCT), complianceTags: [tag] });
       expect(r.ok, `${tag} 没被拒`).toBe(false);
+      expect(r.errors['complianceTags'], `${tag} 的提示里不该出现代号`).not.toContain(tag);
     }
   });
 

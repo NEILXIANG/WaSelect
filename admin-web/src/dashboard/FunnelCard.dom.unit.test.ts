@@ -48,7 +48,9 @@ describe('FunnelCard', () => {
     expect(el.textContent).toContain('200 人');
     expect(el.textContent).toContain('付款成功');
     expect(el.textContent).toContain('比上一步 80%');
+    expect(button(el, '今天')?.getAttribute('aria-pressed')).toBe('false');
     await click(button(el, '今天'));
+    expect(button(el, '今天')?.getAttribute('aria-pressed')).toBe('true'); // 读屏能知道选了哪段（2026-10-12）
     await flush();
     expect(paths).toHaveLength(before + 1);
     expect(paths.at(-1)).toBe('/api/v1/admin/dashboard/funnel?days=1');

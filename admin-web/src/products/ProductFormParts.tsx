@@ -144,6 +144,7 @@ export function TagPicker({ value, onChange, error = '' }: TagPickerProps) {
               key={tag}
               type="button"
               className={on ? 'chip chip-on' : 'chip'}
+              aria-pressed={on}
               onClick={() => onChange(on ? value.filter((t) => t !== tag) : [...value, tag])}
             >
               {COMPLIANCE_TAG_LABELS[tag] ?? tag}
