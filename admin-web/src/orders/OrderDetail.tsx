@@ -23,6 +23,7 @@ import { formatJst, moneyText } from '../format.js';
 import { OrderActions } from './OrderActions.js';
 import { OrderItems } from './OrderItems.js';
 import { OrderTimeline } from './OrderTimeline.js';
+import { useChannelLabels } from './channel-labels.js';
 import { OrderCustomerCard } from './OrderCustomerCard.js';
 import { AfterSales } from './AfterSales.js';
 import { Badge } from '../ui/badge.js';
@@ -48,6 +49,8 @@ export interface OrderDetailProps {
 }
 
 export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailProps) {
+  // 全入口点击测试 2026-10-11：支付通道写中文名（取设置接口，不在前端写死通道名）
+  const channelLabels = useChannelLabels(api);
   const [order, setOrder] = useState<AdminOrderLike | null>(source);
   const [loading, setLoading] = useState(true);
   /** 统一反馈出口（第一批①：@see @limitation 三）。 */
@@ -154,10 +157,10 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 ))}
               </div>
 
-              {paymentSummary(order) !== '—' && (
+              {paymentSummary(order, channelLabels) !== '—' && (
                 <div className="field">
                   <span className="label">支付</span>
-                  <span className="muted">{paymentSummary(order)}</span>
+                  <span className="muted">{paymentSummary(order, channelLabels)}</span>
                 </div>
               )}
 
@@ -202,6 +205,7 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 events={events}
                 onError={(text, traceId) => sink.error(text, { traceId })}
                 onSuccess={(text) => sink.success(text)}
+                channelLabels={channelLabels}
               />
 
               {/* 扫描 A-03：运营日志按"对象 id"查的是内部 id（ord-…），按订单号查永远"没有记录"——所以仍要给出。

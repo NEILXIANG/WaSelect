@@ -362,10 +362,10 @@ describe('订单详情：状态与事件流显示中文（管理端只需要中�
     ];
     const el = await open();
     const text = el.textContent ?? '';
-    // AJ-410 / N15：文案改白话（原「待付款（未发起）/（支付中）」）
-    expect(text).toContain('已下单，等待买家付款');
-    expect(text).toContain('买家正在付款');
-    expect(text).toContain('待发货');
+    // AJ-410 / N15：文案改白话；全入口点击测试 2026-10-11 起时间线用事件词（状态格仍是状态词）
+    expect(text).toContain('下单（等待买家付款）');
+    expect(text).toContain('买家发起付款');
+    expect(text).toContain('付款成功（待发货）');
     // 原文不该再出现（"paid" 会混在别处吗？订单号/地址里没有它，所以这条站得住）
     expect(text).not.toContain('pending_payment');
   });

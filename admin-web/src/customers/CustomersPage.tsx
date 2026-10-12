@@ -125,8 +125,8 @@ function CustomerList({
       <table className="table">
         <thead>
           <tr>
+            {/* 全入口点击测试 2026-10-11：第一列写能认出人的名字（最近收件人），编号挪到操作前、灰字（原第一列是截短的用户 id） */}
             <th>客户</th>
-            <th>最近收件人</th>
             <th>联系邮箱</th>
             <th>订单</th>
             <SortTh
@@ -144,13 +144,13 @@ function CustomerList({
               onSort={onSort}
             />
             <th>状态</th>
+            <th>编号</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
             <tr key={r.id}>
-              <td className="muted cell-nowrap">{r.idText}</td>
               <td>{r.name}</td>
               <td className="selectable cell-ellipsis" title={r.email}>
                 {r.email}
@@ -159,6 +159,7 @@ function CustomerList({
               <td className="cell-nowrap">{r.paidTotalText}</td>
               <td className="muted cell-nowrap">{r.lastOrderText}</td>
               <td>{r.blocked && <Badge tone="danger">已拉黑</Badge>}</td>
+              <td className="muted cell-nowrap">{r.idText}</td>
               <td>
                 <button
                   type="button"

@@ -68,6 +68,24 @@ export { ORDER_STATUS_LABELS };
  *      新增一种管理事件而这里没跟上时，原样显示至少还留着服务端那个可检索的串；
  *      映射成"未知状态"会把"发生过什么事"这层信息直接抹掉——那是静默丢信息。
  */
+/**
+ * 时间线里订单状态的**事件词**（全入口点击测试 2026-10-11）。
+ * @why 时间线讲"那时发生了什么"；原先直接用状态词，付款那一行写"待发货 · 支付机构 mock"，读成"支付机构待发货"。
+ *      页面状态格仍用 `ORDER_STATUS_LABELS`（状态词），时间线用这张（事件词）。
+ */
+export const ORDER_EVENT_LABELS: Readonly<Record<OrderStatus, string>> = {
+  created: '下单（等待买家付款）',
+  pending_payment: '买家发起付款',
+  paid: '付款成功（待发货）',
+  shipped: '已发货',
+  delivered: '已签收',
+  completed: '交易完成',
+  cancelled: '订单取消',
+  expired: '超时未付款，订单关闭',
+  refunding: '开始退款',
+  refunded: '退款完成',
+};
+
 export const EVENT_STATUS_LABELS: Readonly<Record<string, string>> = {
   address_changed: '改址',
   dispute_opened: '拒付开案',
@@ -97,12 +115,19 @@ export const EVENT_STATUS_LABELS: Readonly<Record<string, string>> = {
  * - `provider:<name>` → 支付机构；`job:*` / `system` / `cli:*` → 系统；`user:*` → 买家；
  * - 没有 actor（早期事件）→ 空串，不编。
  */
-export function eventActorText(e: { actor?: unknown; actor_email?: unknown }): string {
+export function eventActorText(
+  e: { actor?: unknown; actor_email?: unknown },
+  channelLabels: Readonly<Record<string, string>> = {},
+): string {
   if (typeof e.actor_email === 'string' && e.actor_email !== '') return e.actor_email;
   const a = typeof e.actor === 'string' ? e.actor : '';
   if (a === '') return '';
   if (a.startsWith('admin:')) return a;
-  if (a.startsWith('provider:')) return `支付机构 ${a.slice('provider:'.length)}`;
+  // 全入口点击测试 2026-10-11：通道写中文名（channel-labels.ts，取设置接口）；认不出的原样显示代号
+  if (a.startsWith('provider:')) {
+    const code = a.slice('provider:'.length);
+    return `支付机构 ${channelLabels[code] ?? code}`;
+  }
   if (a.startsWith('user:') || a === 'buyer') return '买家';
   return '系统';
 }
@@ -177,7 +202,7 @@ export function statusText(order: unknown): string {
 export function eventStatusText(raw: unknown): string {
   if (typeof raw !== 'string' || raw === '') return '';
   if ((ORDER_STATUS as readonly string[]).includes(raw)) {
-    return ORDER_STATUS_LABELS[raw as OrderStatus];
+    return ORDER_EVENT_LABELS[raw as OrderStatus];
   }
   return EVENT_STATUS_LABELS[raw] ?? raw;
 }
@@ -445,10 +470,15 @@ export function addressSummary(order: unknown): string {
 }
 
 /** 支付信息 → 一行文案（取 `payment.channel` 与原币扣款额，缺则占位）。 */
-export function paymentSummary(order: unknown): string {
+export function paymentSummary(
+  order: unknown,
+  channelLabels: Readonly<Record<string, string>> = {},
+): string {
   const p = (order as { payment?: unknown } | null)?.payment;
   const o = (typeof p === 'object' && p !== null ? p : {}) as Record<string, unknown>;
-  const channel = typeof o['channel'] === 'string' ? o['channel'] : '';
+  const code = typeof o['channel'] === 'string' ? o['channel'] : '';
+  // 全入口点击测试 2026-10-11：通道写中文名（原为 mock / stripe 代号）
+  const channel = channelLabels[code] ?? code;
   const currency = typeof o['charge_currency'] === 'string' ? o['charge_currency'] : '';
   // ⚠️ `charge_amount` 是**最小单位**（USD=分）：直接拼就是 `USD 3350`（读大 100 倍，B43 / AJ-214）
   const amount = currency === '' ? '—' : minorMoneyText(o['charge_amount'], currency);

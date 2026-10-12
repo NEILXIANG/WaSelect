@@ -34,9 +34,18 @@ export interface OrderTimelineProps {
   events: readonly OrderEventLike[];
   onError: (text: string, traceId: string | undefined) => void;
   onSuccess: (text: string) => void;
+  /** 支付通道代号 → 中文名（channel-labels.ts）；没给 = 原样显示代号。 */
+  channelLabels?: Readonly<Record<string, string>>;
 }
 
-export function OrderTimeline({ api, orderId, events, onError, onSuccess }: OrderTimelineProps) {
+export function OrderTimeline({
+  api,
+  orderId,
+  events,
+  onError,
+  onSuccess,
+  channelLabels = {},
+}: OrderTimelineProps) {
   const [notes, setNotes] = useState<OrderNote[]>([]);
   /** 取备注失败的行内说明（报障码单独一行，AJ-410 / N5）；text 为 '' = 没失败。 */
   const [loadErr, setLoadErr] = useState<{ text: string; traceId?: string | undefined }>({
@@ -90,7 +99,7 @@ export function OrderTimeline({ api, orderId, events, onError, onSuccess }: Orde
       {entries.length === 0 && <span className="muted">—</span>}
       {entries.map((t, i) =>
         t.kind === 'event' ? (
-          <EventLine key={`e${String(i)}`} event={t.event} />
+          <EventLine key={`e${String(i)}`} event={t.event} channelLabels={channelLabels} />
         ) : (
           <div className="timeline-note" key={`n${t.note.id}`}>
             <span className="muted">
@@ -130,7 +139,13 @@ export function OrderTimeline({ api, orderId, events, onError, onSuccess }: Orde
 }
 
 /** 时间线里一条系统事件：状态与备注都走 view 的文案层；退款编号只放悬停（eventNoteView @why）。 */
-function EventLine({ event }: { event: OrderEventLike }): React.JSX.Element {
+function EventLine({
+  event,
+  channelLabels,
+}: {
+  event: OrderEventLike;
+  channelLabels: Readonly<Record<string, string>>;
+}): React.JSX.Element {
   const note = eventNoteView(event.status, event.note);
   return (
     <span
@@ -140,10 +155,11 @@ function EventLine({ event }: { event: OrderEventLike }): React.JSX.Element {
       {/* `eventStatusText` 而不是 `e.status`：事件流里有一半是"没迁状态、只记一件事"的伪状态 */}
       {formatJst(event.at)} {eventStatusText(event.status)} {note.text}
       {/* ADM-1（AJ-466）：操作者——此前只有备注显示作者，发货 / 退款这类资金操作反而看不出是谁做的 */}
-      {eventActorText(event as { actor?: unknown; actor_email?: unknown }) !== '' && (
+      {eventActorText(event as { actor?: unknown; actor_email?: unknown }, channelLabels) !==
+        '' && (
         <span className="timeline-actor">
           {' '}
-          · {eventActorText(event as { actor?: unknown; actor_email?: unknown })}
+          · {eventActorText(event as { actor?: unknown; actor_email?: unknown }, channelLabels)}
         </span>
       )}
     </span>

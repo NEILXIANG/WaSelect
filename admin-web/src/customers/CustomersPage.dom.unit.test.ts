@@ -253,3 +253,17 @@ describe('客户列表：排序与每页条数（评估 4.5 / 4.6）', () => {
     expect(navigated.at(-1)?.query.toString()).toBe('sort=-last_order_at&size=50');
   });
 });
+
+// 全入口点击测试 2026-10-11：最左、最显眼的「客户」列原是截短的用户 id（u-065bf2d9…），人名排第二列；
+// 主流后台第一列是能认出人的名字。改为：第一列写名字（最近收件人），编号挪到操作前、灰字
+describe('客户列表列序（全入口点击测试 2026-10-11）', () => {
+  it('🔴 第一列是名字，编号列在操作之前', async () => {
+    const { el } = await open(listRoute());
+    const heads = [...el.querySelectorAll('thead th')].map((th) => (th.textContent ?? '').trim());
+    expect(heads[0]).toBe('客户');
+    expect(heads).not.toContain('最近收件人');
+    expect(heads.at(-2)).toBe('编号');
+    const first = el.querySelector('tbody tr td');
+    expect(first?.textContent).toBe(ROW.last_recipient);
+  });
+});

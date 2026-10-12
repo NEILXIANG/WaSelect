@@ -157,11 +157,16 @@ describe('statusText（列表与详情共用的状态文案）', () => {
 });
 
 describe('eventStatusText（事件流：订单状态 + 管理事件伪状态）', () => {
-  it('订单状态值 → 走订单词表（created 而不是 created 原样）', () => {
-    expect(eventStatusText('created')).toBe('已下单，等待买家付款'); // AJ-410 / N15 改白话
-    expect(eventStatusText('paid')).toBe('待发货');
+  // 全入口点击测试 2026-10-11：时间线讲"那时发生了什么"——原先用状态词，付款那一行写"待发货 · 支付机构 mock"，
+  // 读成"支付机构待发货"。改为事件词（覆盖十态，单测比对），与小程序时间线同一思路
+  it('🔴 订单状态值 → 事件词（不是状态词；created 而不是 created 原样）', () => {
+    expect(eventStatusText('created')).toBe('下单（等待买家付款）');
+    expect(eventStatusText('pending_payment')).toBe('买家发起付款');
+    expect(eventStatusText('paid')).toBe('付款成功（待发货）');
     expect(eventStatusText('shipped')).toBe('已发货');
-    expect(eventStatusText('refunded')).toBe('已退款');
+    expect(eventStatusText('refunding')).toBe('开始退款');
+    expect(eventStatusText('refunded')).toBe('退款完成');
+    for (const s of ORDER_STATUS) expect(eventStatusText(s), s).not.toBe(s);
   });
 
   it('🔴 管理事件伪状态 → 中文（缺陷注入点：这里曾直接渲染 e.status 原文）', () => {
