@@ -872,6 +872,26 @@ export function amountBreakdown(order: unknown): Array<{ label: string; value: s
       value: minorMoneyText(p['charge_amount'], p['charge_currency']),
     });
   }
+  // 部分退款汇总（两端逐页走查第三轮 2026-10-12）：原先只在「部分退款…」抽屉与时间线里，金额区看不出退了多少、还有多少在途
+  const refunds = Array.isArray(o['partial_refunds'])
+    ? (o['partial_refunds'] as Array<Record<string, unknown>>)
+    : [];
+  const sumOf = (pick: (s: unknown) => boolean): { minor: number; currency: string } => {
+    let minor = 0;
+    let currency = '';
+    for (const r of refunds) {
+      if (!pick(r['status']) || !Number.isInteger(r['amount_minor'])) continue;
+      minor += r['amount_minor'] as number;
+      if (typeof r['currency'] === 'string') currency = r['currency'];
+    }
+    return { minor, currency };
+  };
+  const done = sumOf((s) => s === 'succeeded');
+  const inFlight = sumOf((s) => s === 'initiated' || s === 'pending' || s === 'unknown');
+  if (done.minor > 0)
+    out.push({ label: '已部分退款', value: minorMoneyText(done.minor, done.currency) });
+  if (inFlight.minor > 0)
+    out.push({ label: '部分退款处理中', value: minorMoneyText(inFlight.minor, inFlight.currency) });
   return out;
 }
 

@@ -36,6 +36,7 @@ import {
   purchaseLines,
   itemNames,
   firstRefundReason,
+  amountBreakdown,
   refundErrors,
   refundFailureNotice,
   fullRefundErrorNotice,
@@ -923,5 +924,38 @@ describe('firstRefundReason', () => {
     expect(firstRefundReason({ events: [{ status: 'refunding', note: '  ' }] })).toBeNull();
     expect(firstRefundReason({ events: [] })).toBeNull();
     expect(firstRefundReason(null)).toBeNull();
+  });
+});
+
+// 两端逐页走查第三轮 2026-10-12：有部分退款的单，金额区只有"买家实付"，退了多少、还有多少在途只在抽屉 / 时间线里
+describe('amountBreakdown：部分退款汇总', () => {
+  const base = {
+    items_jpy: 3590,
+    shipping_jpy: 4050,
+    payment: { charge_currency: 'JPY', charge_amount: 7640 },
+  };
+  it('🔴 成功的合计写"已部分退款"，在途的写"部分退款处理中"；失败的不算', () => {
+    const rows = amountBreakdown({
+      ...base,
+      partial_refunds: [
+        { status: 'succeeded', currency: 'JPY', amount_minor: 1500 },
+        { status: 'succeeded', currency: 'JPY', amount_minor: 500 },
+        { status: 'pending', currency: 'JPY', amount_minor: 1200 },
+        { status: 'failed', currency: 'JPY', amount_minor: 800 },
+      ],
+    });
+    expect(rows.slice(-2)).toEqual([
+      { label: '已部分退款', value: '2,000 日元' },
+      { label: '部分退款处理中', value: '1,200 日元' },
+    ]);
+  });
+  it('没有部分退款 / 全是失败 → 不加行', () => {
+    expect(amountBreakdown(base).map((r) => r.label)).not.toContain('已部分退款');
+    expect(
+      amountBreakdown({
+        ...base,
+        partial_refunds: [{ status: 'failed', currency: 'JPY', amount_minor: 800 }],
+      }).map((r) => r.label),
+    ).toEqual(['商品合计', '运费', '买家实付']);
   });
 });

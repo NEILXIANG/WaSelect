@@ -289,3 +289,23 @@ export function fullRefundAmountText(order: unknown): string {
   ];
   return `将原路退回 ${minorMoneyText(refund, currency)}${notes.length > 0 ? `（${notes.join('；')}）` : ''}`;
 }
+
+/** 同步后那一笔的状态 → 一句结果（与列表里的状态文案不同：这里是"刚刚查到了什么"）。 */
+const SYNC_RESULT: Record<string, string> = {
+  succeeded: '已退款',
+  failed: '机构确认失败（未退，额度已释放）',
+  pending: '仍在机构处理中，稍后再点「同步」',
+  initiated: '仍在机构处理中，稍后再点「同步」',
+  unknown: '结果仍未知，稍后再点「同步」',
+};
+
+/**
+ * 点「同步」之后的提示（两端逐页走查第三轮 2026-10-12）：原先与新建共用"部分退款已提交…"——同步没有提交任何东西，要说查到的结果。
+ * @param fresh 刷新后的订单；拿不到（刷新失败）→ 让运营看上方记录
+ */
+export function partialSyncNotice(fresh: unknown, refundId: string): string {
+  const r = refundsOf(fresh).find((x) => String(x.id) === refundId);
+  if (r === undefined) return '已同步，结果以上方记录为准';
+  const amount = formatMinorCn(Number(r.amount_minor), String(r.currency));
+  return `已同步：${amount}这笔${SYNC_RESULT[String(r.status)] ?? '状态已更新'}`;
+}

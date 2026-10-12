@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  partialSyncNotice,
   formatMinor,
   fullRefundConfirmBody,
   fullRefundAmountText,
@@ -340,5 +341,22 @@ describe('formatMinorCn：日元写「日元」', () => {
   it('🔴 JPY → "5,350 日元"；USD → "81.60 美元"', () => {
     expect(formatMinorCn(5350, 'JPY')).toBe('5,350 日元');
     expect(formatMinorCn(8160, 'USD')).toBe('81.60 美元');
+  });
+});
+
+// 两端逐页走查第三轮 2026-10-12：点「同步」后提示写"部分退款已提交"——那是新建时的话，同步要说结果
+describe('partialSyncNotice', () => {
+  const order = {
+    partial_refunds: [
+      { id: 'rf-1', status: 'succeeded', currency: 'JPY', amount_minor: 1200, reason: '外箱压坏' },
+      { id: 'rf-2', status: 'pending', currency: 'JPY', amount_minor: 800, reason: '少发' },
+    ],
+  };
+  it('🔴 按刷新后那一笔的状态说结果；找不到就说去看记录', () => {
+    expect(partialSyncNotice(order, 'rf-1')).toBe('已同步：1,200 日元这笔已退款');
+    expect(partialSyncNotice(order, 'rf-2')).toBe(
+      '已同步：800 日元这笔仍在机构处理中，稍后再点「同步」',
+    );
+    expect(partialSyncNotice(null, 'rf-9')).toBe('已同步，结果以上方记录为准');
   });
 });

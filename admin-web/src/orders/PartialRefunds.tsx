@@ -24,6 +24,7 @@ import { toastError } from '../ui/toast.js';
 import { createPartialRefund, syncPartialRefund, type AdminApi } from './api.js';
 import {
   partialRefundErrorNotice,
+  partialSyncNotice,
   partialRefundGate,
   partialRefundInputCheck,
   partialRefundRows,
@@ -108,7 +109,12 @@ export function PartialRefunds({
       // ⚠️ 成功必须走 success 通道（清屏），不能走 info——
       //    否则上一次失败的红字留着，屏幕上同时有红有绿（见 onSuccess 的 @why）
       const say = onSuccess ?? onNotice;
-      say?.('部分退款已提交：结果以上方记录的状态为准（处理中的可点「同步」）');
+      // 同步（带 refundId）说查到的结果；新建才说"已提交"（两端逐页走查第三轮 2026-10-12）
+      say?.(
+        refundId !== undefined
+          ? partialSyncNotice(fresh, refundId)
+          : '部分退款已提交：结果以上方记录的状态为准（处理中的可点「同步」）',
+      );
       return;
     }
     const { text, traceId } = toastError(failure, '部分退款失败');
