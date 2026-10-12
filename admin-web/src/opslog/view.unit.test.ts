@@ -104,6 +104,13 @@ describe('auditRows', () => {
     expect(p?.targetText).toBe('南部铁器 铁壶 0.6L');
   });
 
+  it('🔴 命令行操作的操作人写"命令行（服务器上执行）"，不写 cli:admin-password', () => {
+    const [r] = auditRows([
+      { id: 1, actor: 'cli:admin-password', action: 'CLI admin.password.reset', created_at: '' },
+    ]);
+    expect(r?.actor).toBe('命令行（服务器上执行）');
+  });
+
   it('形状不对的元素（非对象）被跳过，不渲染成一行 undefined', () => {
     expect(auditRows([null, 'x', { id: 1, actor: 'a', action: 'b', created_at: '' }])).toHaveLength(
       1,

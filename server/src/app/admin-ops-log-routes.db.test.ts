@@ -195,6 +195,7 @@ describe('GET /api/v1/admin/audit（3-2）', () => {
       [1, 'POST /admin/orders/:id/ship', 'ord-label-1'],
       [2, 'PUT /admin/products/:id', '7f3c2a10-4b5e-4c6d-8e9f-0a1b2c3d4e5f'],
       [3, 'POST /admin/upload', 'img/abc'],
+      [4, 'CLI admin.password.reset', 'u-admin'],
     ] as const) {
       await db`insert into admin_audit (actor, action, target, status_code, created_at)
                values ('admin:u-admin', ${action}, ${target}, 200, ${`2026-10-0${String(i)}T00:00:00Z`})`;
@@ -209,6 +210,8 @@ describe('GET /api/v1/admin/audit（3-2）', () => {
         '南部铁器 铁壶 0.6L',
       );
       expect(label('img/abc')).not.toHaveProperty('target_label');
+      // 对象是账号（命令行改密、拉黑）→ 账号邮箱（有邮箱时；全入口点击测试 2026-10-12：原显示 adm-… / u-… 内部 id）
+      expect(label('u-admin')?.target_label).toBe('u-admin@example.com');
     } finally {
       await close();
     }

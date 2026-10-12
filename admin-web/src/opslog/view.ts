@@ -157,10 +157,13 @@ export function auditRows(
         id: Number(i['id']),
         timeText: formatJst(i['created_at']),
         // 有邮箱显示邮箱（运营认得同事邮箱，不认得内部 id）
+        // 命令行写"命令行（服务器上执行）"，不写 cli:admin-password（全入口点击测试 2026-10-12）
         actor:
           typeof i['actor_email'] === 'string' && i['actor_email'] !== ''
             ? i['actor_email']
-            : String(i['actor'] ?? ''),
+            : String(i['actor'] ?? '').startsWith('cli:')
+              ? '命令行（服务器上执行）'
+              : String(i['actor'] ?? ''),
         action: ACTION_LABELS[String(i['action'] ?? '')] ?? String(i['action'] ?? ''),
         actionRaw: String(i['action'] ?? ''),
         // AJ-499：服务端给了订单号 / 商品名就用它；否则按动作猜（导出表名、分类名、图片…），再不行缩短 id
