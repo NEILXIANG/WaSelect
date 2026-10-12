@@ -378,6 +378,15 @@ describe('addressGate（改址闸门）', () => {
   it('禁用原因里带上当前状态（运营要知道"为什么现在不能改"）', () => {
     expect(addressGate(withStatus('delivered')).reason).toContain('已签收');
   });
+
+  // 业务旅程测试 2026-10-12：已退款 / 超时关闭的单也写着"已发货改址要联系承运商"——那句只对已发货的单有用
+  it('🔴 只有已发货的单才提"联系承运商"；已退款 / 超时关闭 / 待付款不提', () => {
+    expect(addressGate(withStatus('shipped')).reason).toContain('联系承运商');
+    for (const s of ['refunded', 'expired', 'cancelled', 'created', 'pending_payment']) {
+      expect(addressGate(withStatus(s)).reason, s).not.toContain('承运商');
+    }
+    expect(addressGate(withStatus('expired')).reason).toBe('仅"待发货"可改址（当前：超时关闭）');
+  });
 });
 
 describe('发货 / 退款表单', () => {

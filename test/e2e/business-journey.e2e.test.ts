@@ -30,6 +30,7 @@ import {
   call,
   CHAIN_TERMS,
   mockCallback,
+  runExpireJob,
   seedChainFixture,
   tokenFor,
   type ChainServer,
@@ -46,9 +47,15 @@ import {
   createPartialRefund,
   getOrder,
   listOrders,
+  refundOrder,
   resolveAfterSale,
   shipOrder,
 } from '../../admin-web/src/orders/api.js';
+import {
+  fullRefundAmountText,
+  fullRefundConfirmBody,
+} from '../../admin-web/src/orders/partial-refund-view.js';
+import { orderShortcuts } from '../../miniprogram/pages/user/index.vm.js';
 import {
   eventActorText,
   eventNoteView,
@@ -413,5 +420,141 @@ describe('一单的一生：运营上架 → 买家下单付款 → 运营发货
       ',33000,6600,4950,39600,Jing Chen,CA,US,Japan Post EMS,EJ123456789JP,JPY,39600',
     );
     expectReadable(lines);
+  });
+});
+
+/** 第二条旅程的共享状态：一件只有 3 件库存的商品，三张单分别走"退款 / 超时 / 取消"。 */
+const K = { productId: 'p-matcha', refundOrder: '', expireOrder: '', cancelOrder: '' };
+
+const stockOf = async (): Promise<number> => {
+  const [r] = await db`select stock from products where id = ${K.productId}`;
+  return Number(r?.['stock']);
+};
+
+const buyerDetail = async (id: string) =>
+  orderDetailView((await call(srv, 'GET', `/api/v1/orders/${id}`, { token: buyer })).json, {
+    nowMs: Date.now(),
+  });
+
+const placeOrder = async (key: string, qty: number): Promise<string> => {
+  const c = await call(srv, 'POST', '/api/v1/orders', {
+    token: buyer,
+    key,
+    body: {
+      items: [{ product_id: K.productId, qty }],
+      address_id: 'addr-chen',
+      terms_version: CHAIN_TERMS,
+      contact_email: 'jing.chen@gmail.com',
+    },
+  });
+  expect(c.status).toBe(201);
+  return String(c.json['order_id']);
+};
+
+describe('钱走回头路与没付成：未发货全额退款、超时关单、买家取消——库存都要回来，两端说法一致', () => {
+  beforeAll(async () => {
+    await db`
+      insert into products (id, title, title_ja, category, price_jpy, weight_g, stock, origin_country, status,
+                            customs_desc_en, hs_code)
+      values (${K.productId}, '丸久小山园 抹茶 又玄 40g', '丸久小山園 抹茶 又玄 40g', 'food', 3240, 120, 3, 'JP',
+              'active', 'matcha green tea powder', '0902.10')`;
+  });
+
+  it('⑧ 付款后未发货 → 运营全额退款 → 买家看到退款、运营列表状态变、库存回来', async () => {
+    K.refundOrder = await placeOrder('k-refund', 2);
+    expect(await stockOf()).toBe(1); // 下单即占库存
+    await call(srv, 'POST', `/api/v1/orders/${K.refundOrder}/pay`, {
+      token: buyer,
+      key: 'pay-refund',
+      body: { channel: 'mock' },
+    });
+    expect((await mockCallback(srv, db, K.refundOrder, { eventId: 'evt-refund' })).status).toBe(
+      200,
+    );
+    const order = await getOrder(admin(), K.refundOrder);
+    show('全额退款前：后台闸门与确认文案', {
+      gate: adminOrderRows([order])[0]?.actions.refund,
+      confirm: fullRefundConfirmBody(order),
+      amount: fullRefundAmountText(order),
+    });
+    // 确认框写的是要退的钱数，不只是"确定退款吗"（AJ-439）
+    expect(fullRefundConfirmBody(order)).toMatch(
+      /^订单 \d{6}-[0-9A-Z]{6}：将原路退回 8,630 日元。退款原因会记录下来。$/,
+    );
+    const outcome = await refundOrder(admin(), K.refundOrder, { reason: '买家付款后说买错了规格' });
+    show('全额退款结果', outcome);
+    expect(outcome).toBe('succeeded');
+    const d = await buyerDetail(K.refundOrder);
+    show('小程序详情（已退款）', d);
+    const rows = adminOrderRows((await listOrders(admin())).items).filter(
+      (r) => r.id === K.refundOrder,
+    );
+    show('后台列表行（已退款）', rows);
+    show('库存', await stockOf());
+    expectReadable({ d, rows });
+    expect(await stockOf()).toBe(3); // 未发货退款：占的 2 件回到库存
+    expect(d.statusText).toBe('已退款');
+    expect(d.nextText).toBe(
+      '款项已原路退回到你的付款方式，到账通常需要 5–10 个工作日，以银行为准。',
+    );
+    expect(d.timeline.map((t) => t.statusText)).toEqual([
+      '提交订单',
+      '付款成功',
+      '开始退款',
+      '退款完成',
+    ]);
+    expect(rows[0]?.statusText).toBe('已退款');
+    expect(rows[0]?.actions.ship).toEqual({ ok: false, reason: '已退款，不能发货' });
+    // 不提"联系承运商"：这单没发货（复盘 2026-10-12）
+    expect(rows[0]?.actions.address.reason).toBe('仅"待发货"可改址（当前：已退款）');
+  });
+
+  it('⑨ 下单不付 → 到点关单 → 买家看到已关闭、可再次购买；库存回来', async () => {
+    K.expireOrder = await placeOrder('k-expire', 1);
+    const before = await buyerDetail(K.expireOrder);
+    show('小程序详情（待付款）', before);
+    await runExpireJob(db, srv, new Date(Date.now() + 2 * 60 * 60 * 1000));
+    const d = await buyerDetail(K.expireOrder);
+    show('小程序详情（超时关闭）', d);
+    const rows = adminOrderRows((await listOrders(admin())).items).filter(
+      (r) => r.id === K.expireOrder,
+    );
+    show('后台列表行（超时关闭）', rows);
+    show('库存', await stockOf());
+    expectReadable({ before, d, rows });
+    expect(before).toMatchObject({ statusText: '待付款', canPay: true, canCancel: true });
+    expect(before.payLeftText).toMatch(/^请在 \d+ 分钟内完成支付$/); // 买家在美国：给剩余分钟，不只给日本时间截止时刻
+    expect(d).toMatchObject({ statusText: '已超时关闭', canPay: false, canBuyAgain: true });
+    expect(d.nextText).toBe('超过支付时间，订单已自动关闭；需要的话可以重新下单。');
+    expect(d.timeline.map((t) => t.statusText)).toEqual(['提交订单', '超时未付款，订单关闭']);
+    // 后台与买家同一件事同一说法（原写「已过期」，复盘 2026-10-12）
+    expect(rows[0]?.statusText).toBe('超时关闭');
+    expect(await stockOf()).toBe(3);
+  });
+
+  it('⑩ 买家下单后主动取消 → 已取消；库存回来；「我的」角标不再计待付款', async () => {
+    K.cancelOrder = await placeOrder('k-cancel', 1);
+    const counts1 = (await call(srv, 'GET', '/api/v1/orders/counts', { token: buyer })).json;
+    show('我的·角标（取消前）', orderShortcuts(counts1));
+    const r = await call(srv, 'POST', `/api/v1/orders/${K.cancelOrder}/cancel`, {
+      token: buyer,
+      key: 'cancel-1',
+      body: {},
+    });
+    show('取消', { status: r.status, json: r.json });
+    const d = await buyerDetail(K.cancelOrder);
+    show('小程序详情（已取消）', d);
+    const counts2 = (await call(srv, 'GET', '/api/v1/orders/counts', { token: buyer })).json;
+    show('我的·角标（取消后）', orderShortcuts(counts2));
+    show('库存', await stockOf());
+    expectReadable({ d, s1: orderShortcuts(counts1), s2: orderShortcuts(counts2) });
+    expect(r.status).toBe(200);
+    const badge = (s: ReturnType<typeof orderShortcuts>, label: string) =>
+      s.find((x) => x.label === label)?.badge;
+    expect(badge(orderShortcuts(counts1), '待付款')).toBe('1');
+    expect(badge(orderShortcuts(counts2), '待付款')).toBe(''); // 取消后角标消失，不留"0"
+    expect(d).toMatchObject({ statusText: '已取消', canPay: false, canBuyAgain: true });
+    expect(d.timeline.map((t) => t.statusText)).toEqual(['提交订单', '订单已取消']);
+    expect(await stockOf()).toBe(3);
   });
 });

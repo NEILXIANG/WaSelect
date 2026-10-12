@@ -446,7 +446,9 @@ export function addressGate(order: unknown): Gate {
   const status = readStatus(order);
   if (status === null) return NO('订单状态未知，不能操作');
   if (status === 'paid') return OK;
-  return NO(`仅"待发货"可改址（当前：${ORDER_STATUS_LABELS[status]}）——已发货改址要联系承运商`);
+  const base = `仅"待发货"可改址（当前：${ORDER_STATUS_LABELS[status]}）`;
+  // 只有已发货的单"联系承运商"才是下一步；已退款 / 超时关闭的单写这句是误导（业务旅程测试 2026-10-12）
+  return NO(status === 'shipped' ? `${base}——已发货改址要联系承运商` : base);
 }
 
 /**

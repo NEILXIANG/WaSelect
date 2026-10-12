@@ -17,7 +17,8 @@ export const ORDER_STATUS_LABELS: Readonly<Record<OrderStatus, string>> = {
   delivered: '已签收',
   completed: '已完成',
   cancelled: '已取消',
-  expired: '已过期',
+  // 与买家端「已超时关闭」同一件事同一说法；原「已过期」运营要想一下是什么过期了（业务旅程测试 2026-10-12）
+  expired: '超时关闭',
   refunding: '退款中',
   refunded: '已退款',
 };

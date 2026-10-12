@@ -22,7 +22,7 @@ describe('statusBadge（列表）', () => {
       delivered: { text: '已签收', tone: 'info' },
       completed: { text: '已完成', tone: 'success' },
       cancelled: { text: '已取消', tone: 'muted' },
-      expired: { text: '已过期', tone: 'muted' },
+      expired: { text: '超时关闭', tone: 'muted' }, // 与买家端「已超时关闭」同一说法（业务旅程测试 2026-10-12）
       refunding: { text: '退款中', tone: 'warn' },
       refunded: { text: '已退款', tone: 'muted' },
     };
@@ -56,7 +56,7 @@ describe('detailBadges（详情页头）', () => {
   it('未付 / 退款 / 关闭的单只有支付侧一枚', () => {
     expect(texts({ status: 'pending_payment' })).toEqual(['未付款']);
     expect(texts({ status: 'refunding' })).toEqual(['退款中']);
-    expect(texts({ status: 'expired' })).toEqual(['已过期']);
+    expect(texts({ status: 'expired' })).toEqual(['超时关闭']);
     expect(texts({ status: 'nope' })).toEqual(['未知状态']);
   });
   it('拒付 = danger、测试单 = muted，追加在后', () => {
