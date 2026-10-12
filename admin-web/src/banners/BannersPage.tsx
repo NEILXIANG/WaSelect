@@ -354,7 +354,9 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
                 )}
               </td>
               <td>{r.linkText}</td>
-              <td className={r.active ? 'ok' : 'muted'}>{r.active ? '启用' : '停用'}</td>
+              <td className={r.statusText === '展示中' ? 'ok cell-nowrap' : 'muted cell-nowrap'}>
+                {r.statusText}
+              </td>
               <td className="muted">{r.periodText === '' ? '不限' : r.periodText}</td>
               <td>
                 <button

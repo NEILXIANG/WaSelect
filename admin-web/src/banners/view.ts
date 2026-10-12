@@ -85,7 +85,33 @@ export interface BannerRow {
   linkText: string;
   sortText: string;
   active: boolean;
+  /** 「停用 / 未开始 / 展示中 / 已结束」——买家此刻看不看得到（与服务端 `starts_at <= now <= ends_at` 同口径）。 */
+  statusText: string;
   periodText: string;
+}
+
+/**
+ * 按"现在"判 Banner 买家看不看得到。
+ * @why 第三轮逐页走查 2026-10-12：列表原先只按 `active` 写「启用 / 停用」，
+ *      还没到开始时间、已过结束时间的也写「启用」——运营以为买家看得到，实际首页没有。
+ * @limitation 时间取浏览器时钟；与服务端时钟差几秒时，恰在边界上的那一刻两边可能不一致（刷新即对齐）。
+ */
+function bannerStatus(b: Record<string, unknown>, nowMs: number): string {
+  if (b['active'] === false) return '停用';
+  const ms = (v: unknown): number => (typeof v === 'string' ? Date.parse(v) : Number.NaN);
+  if (ms(b['starts_at']) > nowMs) return '未开始';
+  if (ms(b['ends_at']) < nowMs) return '已结束';
+  return '展示中';
+}
+
+/** 起止文案：两端都有 `A → B`；只有一端写「A 起」/「至 B」；都没有为空（页面显示"不限"）。 */
+function periodOf(b: Record<string, unknown>): string {
+  const from = formatJst(b['starts_at']);
+  const to = formatJst(b['ends_at']);
+  if (from !== '—' && to !== '—') return `${from} → ${to}`;
+  if (from !== '—') return `${from} 起`;
+  if (to !== '—') return `至 ${to}`;
+  return '';
 }
 
 /** `Banner[]` → 列表行（按 sort 升序）。 */
@@ -98,6 +124,7 @@ export function bannerRows(
   titleOf: (productId: string) => string | undefined = () => undefined,
   // AJ-491：分类可配置，名称来自后台分类列表（../categories/），认不出原样显示键
   categoryNameOf: (key: string) => string = (k) => k,
+  nowMs: number = Date.now(),
 ): BannerRow[] {
   if (!Array.isArray(items)) return [];
   return items
@@ -122,9 +149,8 @@ export function bannerRows(
               }`,
         sortText: Number.isInteger(b['sort']) ? String(b['sort']) : '0',
         active: b['active'] !== false,
-        periodText: [formatJst(b['starts_at']), formatJst(b['ends_at'])]
-          .filter((s) => s !== '—')
-          .join(' → '),
+        statusText: bannerStatus(b, nowMs),
+        periodText: periodOf(b),
       };
     });
 }

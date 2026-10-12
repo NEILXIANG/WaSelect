@@ -74,6 +74,30 @@ describe('bannerRows', () => {
   it('非数组 → 空列表', () => {
     expect(bannerRows(null)).toEqual([]);
   });
+
+  // 第三轮逐页走查 2026-10-12：未开始 / 已结束的 Banner 状态列原先也写「启用」，运营以为买家看得到
+  describe('状态按"现在"说清买家看不看得到（与服务端闭区间同口径）', () => {
+    const at = (iso: string): number => Date.parse(iso);
+    const cases: Array<[string, Record<string, unknown>, string, string]> = [
+      ['停用优先', { active: false }, '2026-10-05T00:00:00+09:00', '停用'],
+      ['开始前一刻', {}, '2026-09-30T23:59:59+09:00', '未开始'],
+      ['恰好开始（闭区间）', {}, '2026-10-01T00:00:00+09:00', '展示中'],
+      ['恰好结束（闭区间）', {}, '2026-10-15T00:00:00+09:00', '展示中'],
+      ['结束后一刻', {}, '2026-10-15T00:00:01+09:00', '已结束'],
+      ['不限起止', { starts_at: null, ends_at: null }, '2026-10-05T00:00:00+09:00', '展示中'],
+    ];
+    it.each(cases)('%s', (_name, patch, now, want) => {
+      const [row] = bannerRows([{ ...BANNER, ...patch }], undefined, undefined, at(now));
+      expect(row?.statusText).toBe(want);
+    });
+  });
+
+  it('只有一端的起止写"起 / 至"，不留半截箭头', () => {
+    const [from] = bannerRows([{ ...BANNER, ends_at: null }]);
+    const [until] = bannerRows([{ ...BANNER, starts_at: null }]);
+    expect(from?.periodText).toBe('2026-10-01 00:00 起');
+    expect(until?.periodText).toBe('至 2026-10-15 00:00');
+  });
 });
 
 describe('bannerFormModel', () => {
