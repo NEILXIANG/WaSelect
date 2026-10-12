@@ -391,6 +391,27 @@ export function stillAdded(added, inCart) {
   return added === true && Number.isInteger(inCart) && inCart > 0;
 }
 
+/**
+ * 取详情失败时状态块的样子（全入口点击测试 2026-10-11）。
+ * @why 下架商品原先标题"没能取到这件商品"、还挂"联系客服时请提供：40401 · mp-…"——下架是正常状态不是故障，
+ *      买家读成"系统坏了"、去找客服。主流做法：空态"该商品已下架"，按钮去逛别的，不出错误码。
+ * @limitation 只认 40401；其余失败返回错误态的标题，原因与求助编号仍由 errorFields 给（这里不覆盖）。
+ * @param {unknown} err
+ * @returns {{failKind: 'empty'|'fail', failTitle: string, error?: string, errorRef?: string}}
+ */
+export function loadFailView(err) {
+  const code = err !== null && typeof err === 'object' ? err.code : undefined;
+  if (code === 40401) {
+    return {
+      failKind: 'empty',
+      failTitle: '这件商品已下架',
+      error: '商品已停售或不存在，去首页看看别的吧',
+      errorRef: '',
+    };
+  }
+  return { failKind: 'fail', failTitle: '没能取到这件商品' };
+}
+
 /** 取详情失败能不能"重试"（审查 2026-10-09）：已下架 / 不存在（40401）重试一万次也一样，不给按钮。 */
 export function retryableLoadError(err) {
   const code = err !== null && typeof err === 'object' ? err.code : undefined;

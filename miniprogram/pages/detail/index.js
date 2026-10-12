@@ -30,6 +30,7 @@ import {
   shareCard,
   addLimit,
   retryableLoadError,
+  loadFailView,
   stillAdded,
   qtyCapText,
   stepQty,
@@ -80,6 +81,9 @@ Page({
     addNote: '',
     /** 错误态是否给"重试"（P2-38）：缺 id 时重试也没用，不给按钮。 */
     retryable: false,
+    /** 失败状态块的样子与标题（vm `loadFailView`）：下架是空态，其余是错误态。 */
+    failKind: 'fail',
+    failTitle: '没能取到这件商品',
     /** M-03：客服联系方式（utils/support.js）；空数组 = 未配置，不显示。 */
     support: [],
     /** M-13（AJ-406）：底部固定购买栏（vm `buyBarView`）。 */
@@ -162,7 +166,13 @@ Page({
       this.renderBar();
       void this.loadRelated(view.category);
     } catch (e) {
-      this.setData({ product: null, ...errorFields(e), retryable: retryableLoadError(e) });
+      // 全入口点击测试 2026-10-11：40401 走空态（"这件商品已下架"，不出错误码），其余照旧
+      this.setData({
+        product: null,
+        ...errorFields(e),
+        ...loadFailView(e),
+        retryable: retryableLoadError(e),
+      });
     } finally {
       this.setData({ loading: false });
     }

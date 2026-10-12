@@ -21,8 +21,8 @@
   <!-- P2-38：错误态走三段式组件并给"重试"（以前只有一行红字，用户只能退出重进） -->
   <ws-state-block
     wx:if="{{error}}"
-    kind="fail"
-    title="没能取到这件商品"
+    kind="{{failKind}}"
+    title="{{failTitle}}"
     reason="{{error}}"
     refText="{{errorRef}}"
     actionText="{{retryable ? '重试' : '去首页逛逛'}}"

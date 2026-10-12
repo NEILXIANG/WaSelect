@@ -21,6 +21,7 @@ import {
   shareCard,
   addLimit,
   retryableLoadError,
+  loadFailView,
   stillAdded,
   qtyCapText,
   stepQty,
@@ -469,5 +470,23 @@ describe('数量到上限时说明原因（F8，第二轮审计 2026-10-11）', 
     expect(qtyCapText(3, 4)).toBe('');
     expect(qtyCapText(98, null)).toBe('');
     expect(qtyCapText(undefined, 4)).toBe('');
+  });
+});
+
+// 全入口点击测试 2026-10-11：下架商品页标题写"没能取到这件商品"、还挂着"联系客服时请提供：40401 · mp-…"——
+// 下架是正常状态，不是故障；主流做法是空态"该商品已下架" + 去逛别的，不出错误码
+describe('loadFailView（取详情失败的空态 / 错误态）', () => {
+  it('🔴 40401（下架或不存在）→ 空态：标题"这件商品已下架"、说人话、不出错误码', () => {
+    expect(loadFailView({ code: 40401, message: '商品不存在或已下架' })).toEqual({
+      failKind: 'empty',
+      failTitle: '这件商品已下架',
+      error: '商品已停售或不存在，去首页看看别的吧',
+      errorRef: '',
+    });
+  });
+
+  it('其余失败（断网 / 5xx）→ 错误态，原因与求助编号照旧由 errorFields 给', () => {
+    expect(loadFailView({ code: -1 })).toEqual({ failKind: 'fail', failTitle: '没能取到这件商品' });
+    expect(loadFailView(null)).toEqual({ failKind: 'fail', failTitle: '没能取到这件商品' });
   });
 });
