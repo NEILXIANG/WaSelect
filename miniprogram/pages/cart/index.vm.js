@@ -58,35 +58,6 @@ export function selectionBar(rows) {
 }
 
 /**
- * 「去结算」按钮的状态与它下面那句话（B36 / AJ-219）。
- *
- * @param {{quoting?: unknown, hasTotal?: unknown, hasError?: unknown,
- *          errorCode?: unknown, splitRequired?: unknown, lineCount?: unknown, noneSelected?: unknown,
- *          soldOut?: unknown}|null|undefined} s
- *   `soldOut`       报价失败是因为售罄（三天提交复查 2026-10-12：不说"稍后重试"）
- *   `quoting`       报价在途中（改了数量之后、新合计还没回来）
- *   `hasTotal`      当前 quote 有权威合计（薄壳传 `hasTotal(quote)`）
- *   `hasError`      上一次报价失败了
- *   `errorCode`     失败的业务错误码（MP3-09：区分"重试就好"与"必须改购物车"）
- *   `splitRequired` 服务端 `split_hint`：**已超过**单笔上限（B38 / AJ-221）
- *   `lineCount`     购物车品种数（P2-31：40001 + 超 50 种 → 说"请移除一些"）
- *   `noneSelected`  一件都没勾选（A3，AJ-416）
- * @returns {{disabled: boolean, hint: string}} hint 空串 = 不渲染那行提示
- *
- * @why 以前 `checkoutHint` 是**一个写死的常量**"运费与合计还在计算中"，
- *      于是两种完全不同的状态被同一句话盖住：
- *      ① **改了数量、新合计还没回来**——此时页面上显示的合计是**上一次**的，
- *         按钮却还是可点的（旧 quote 还在），点了就带着过期的合计进结算页；
- *      ② **报价失败了**——提示仍说"还在计算中"，而它永远算不出来，
- *         用户只会一直等（@limitation 二说"下一次改动会自然重试"，
- *         但用户不知道要改一下才会重试）。
- *      这两条都是"按钮看起来能用、实际带着错的数据走"，所以按状态分别给话。
- * @why `quoting` 优先于 `hasTotal`：在途时**旧合计已经过期**，
- *      它对应的是改数量之前的那一版——放行等于把过期的 `expected_total_jpy` 带进结算页
- *      （40905 防线会被自己喂一个旧值，而结算页上看不出来）。
- * @limitation 只产出"能不能点 + 说什么"，**不做跳转、不发请求**（约束十一）。
- */
-/**
  * 「重试也没用」的报价失败码（MP3-09）。
  *
  * @why 这三个码的共同点是：**服务端不会自己变好**，只有用户改了购物车才会变——
@@ -143,6 +114,36 @@ export function quoteErrorText(code, lineCount, fallback) {
   return tooManyLines(code, lineCount) ? TOO_MANY_LINES_TEXT : fallback;
 }
 
+/**
+ * 「去结算」按钮的状态与它下面那句话（B36 / AJ-219）。
+ *
+ * @param {{quoting?: unknown, hasTotal?: unknown, hasError?: unknown,
+ *          errorCode?: unknown, splitRequired?: unknown, lineCount?: unknown, noneSelected?: unknown,
+ *          soldOut?: unknown, reason?: unknown}|null|undefined} s
+ *   `reason`        报价在途的起因（'enter' = 进页面首次报价，其余 = 改了购物车；F2）
+ *   `soldOut`       报价失败是因为售罄（三天提交复查 2026-10-12：不说"稍后重试"）
+ *   `quoting`       报价在途中（改了数量之后、新合计还没回来）
+ *   `hasTotal`      当前 quote 有权威合计（薄壳传 `hasTotal(quote)`）
+ *   `hasError`      上一次报价失败了
+ *   `errorCode`     失败的业务错误码（MP3-09：区分"重试就好"与"必须改购物车"）
+ *   `splitRequired` 服务端 `split_hint`：**已超过**单笔上限（B38 / AJ-221）
+ *   `lineCount`     购物车品种数（P2-31：40001 + 超 50 种 → 说"请移除一些"）
+ *   `noneSelected`  一件都没勾选（A3，AJ-416）
+ * @returns {{disabled: boolean, hint: string}} hint 空串 = 不渲染那行提示
+ *
+ * @why 以前 `checkoutHint` 是**一个写死的常量**"运费与合计还在计算中"，
+ *      于是两种完全不同的状态被同一句话盖住：
+ *      ① **改了数量、新合计还没回来**——此时页面上显示的合计是**上一次**的，
+ *         按钮却还是可点的（旧 quote 还在），点了就带着过期的合计进结算页；
+ *      ② **报价失败了**——提示仍说"还在计算中"，而它永远算不出来，
+ *         用户只会一直等（@limitation 二说"下一次改动会自然重试"，
+ *         但用户不知道要改一下才会重试）。
+ *      这两条都是"按钮看起来能用、实际带着错的数据走"，所以按状态分别给话。
+ * @why `quoting` 优先于 `hasTotal`：在途时**旧合计已经过期**，
+ *      它对应的是改数量之前的那一版——放行等于把过期的 `expected_total_jpy` 带进结算页
+ *      （40905 防线会被自己喂一个旧值，而结算页上看不出来）。
+ * @limitation 只产出"能不能点 + 说什么"，**不做跳转、不发请求**（约束十一）。
+ */
 export function checkoutGate(s) {
   const a = s !== null && typeof s === 'object' ? s : {};
   // A3：一件没勾时不报价（空 items 会 40001），按钮的原因是"没勾"而不是"在计算"
@@ -290,12 +291,6 @@ export function priceChangeNote(from, to) {
 }
 
 /**
- * 下架（40401）时错误条的话（两端逐页走查第三轮 2026-10-12）：与售罄同口径——说是哪件、怎么办，不带报障编号
- * （下架是正常状态，不是故障；原先写"商品不存在或已下架"并附编号，像是系统坏了）。
- * @param {string} title 那一行的商品名（找不到给空串）
- * @returns {string}
- */
-/**
  * 「＋」到单件上限时的说明（规律排查 2026-10-12：99 件再点「＋」数字不动、什么也不说；详情页 F8 早已修同一件事）。
  * @param {unknown} qty 这一行现在的件数
  * @param {number} delta 这次改动（+1 / -1）
@@ -307,6 +302,12 @@ export function lineMaxNote(qty, delta) {
     : '';
 }
 
+/**
+ * 下架（40401）时错误条的话（两端逐页走查第三轮 2026-10-12）：与售罄同口径——说是哪件、怎么办，不带报障编号
+ * （下架是正常状态，不是故障；原先写"商品不存在或已下架"并附编号，像是系统坏了）。
+ * @param {string} title 那一行的商品名（找不到给空串）
+ * @returns {string}
+ */
 export function goneQuoteError(title) {
   return title === '' ? '有商品已下架，移除后才能结算' : `「${title}」已下架，移除后才能结算`;
 }

@@ -243,15 +243,15 @@ Page({
     this.reload(intent.key);
   },
 
-  /**
-   * 切分类。
-   * @param {WechatMiniprogram.TouchEvent} e `data-key` 来自 wxml（空串 = 全部）
-   */
   /** 展开 / 收起「全部分类」面板。 */
   onToggleCats() {
     this.setData({ catsOpen: !this.data.catsOpen });
   },
 
+  /**
+   * 切分类。
+   * @param {WechatMiniprogram.TouchEvent} e `data-key` 来自 wxml（空串 = 全部）
+   */
   onCategoryTap(e) {
     // 在面板里点了分类：选完就收起（不论是否与当前相同）
     if (this.data.catsOpen) this.setData({ catsOpen: false });

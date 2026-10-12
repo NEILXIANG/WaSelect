@@ -111,12 +111,6 @@ export function emptyForm() {
 }
 
 /**
- * 服务端 `Address` → 表单模型（编辑态）。
- * @param {unknown} addr 服务端地址；null/undefined → 空表单
- * @why 逐字段取值而不是 `{...addr}`：地址对象是**外部输入**（可能多字段、可能缺字段），
- *      铺进去会把未知字段一路带到请求体里（服务端会 40001），而报错指向请求体不指向表单。
- */
-/**
  * 打字带出来的全角 / 弯引号 / 横线 → ASCII（shared `normalizeTypedAddress` 的副本，单测逐例比对）。
  * @why 两端输入测试 2026-10-12：iPhone 智能标点把 O'Farrell 变成 O’Farrell、全角模式打出 ９４１２３，
  *      原先都被判"请用英文/数字填写"。中文、emoji 原样保留，仍由校验去说。
@@ -131,6 +125,12 @@ export function normalizeTypedAddress(raw) {
     .replace(/[\u2010-\u2015\u2212]/g, '-');
 }
 
+/**
+ * 服务端 `Address` → 表单模型（编辑态）。
+ * @param {unknown} addr 服务端地址；null/undefined → 空表单
+ * @why 逐字段取值而不是 `{...addr}`：地址对象是**外部输入**（可能多字段、可能缺字段），
+ *      铺进去会把未知字段一路带到请求体里（服务端会 40001），而报错指向请求体不指向表单。
+ */
 export function formModel(addr) {
   const a = addr && typeof addr === 'object' ? addr : {};
   // 先归一（@see normalizeTypedAddress）：校验与提交都经过这里，看到的是同一份文字
@@ -183,14 +183,6 @@ export function phoneForInput(phone) {
 }
 
 /**
- * 校验表单。
- * @param {unknown} model
- * @returns {{ok: boolean, errors: Record<string, string>, first: string}}
- *          `errors` 以字段名为键（wxml 可按字段显示），`first` 是第一条提示（弹 toast 用）
- * @why 返回**全部**错误而不是只返第一条：七字段表单一个一个报，用户要提交七次。
- *      `first` 另给一份是因为 toast 只能显示一句——两者不冲突。
- */
-/**
  * 邮编首位数字（USPS 国家分区）→ 可能的州。只用来拦"明显选错州"，不做精确的邮编库。
  * @why 三端模拟测试 2026-10-11：州下拉误选成 NV、邮编是纽约的 10013，照样存上——面单写成 "New York, NV, 10013"。
  * @measured 2026-10-11 网页检索（zip-codes.com / USPS 分区表）：0 = CT MA ME NH NJ NY(仅 Fishers Island) PR RI VT VI + 军邮 AE；
@@ -220,6 +212,14 @@ export function zipMatchesState(zip, state) {
   return ZIP_AREA_STATES[Number(d[1])].includes(st);
 }
 
+/**
+ * 校验表单。
+ * @param {unknown} model
+ * @returns {{ok: boolean, errors: Record<string, string>, first: string}}
+ *          `errors` 以字段名为键（wxml 可按字段显示），`first` 是第一条提示（弹 toast 用）
+ * @why 返回**全部**错误而不是只返第一条：七字段表单一个一个报，用户要提交七次。
+ *      `first` 另给一份是因为 toast 只能显示一句——两者不冲突。
+ */
 export function formErrors(model) {
   const m = formModel(model);
   const errors = {};
@@ -234,8 +234,9 @@ export function formErrors(model) {
   m.phone = normalizeUsPhone(m.phone);
   if (phoneBlank) errors.phone = '请填写美国电话号码（10 位，如 4155550123）';
   else if (!ADDRESS_PATTERNS.phone.test(m.phone))
-    // 统一结论 5.3：电话框是数字键盘（打不出「+」），只说能打出来的写法；+1 由 normalizeUsPhone 补
-    errors.phone = '请填美国 10 位电话号码，如 4155550123（带国家码就是 1 开头 11 位）';
+    // 统一结论 5.3：电话框是数字键盘（打不出「+」），只说能打出来的写法；+1 由 normalizeUsPhone 补。
+    //   2f6619b 起框左侧固定显示 +1、框里只放 10 位，不再提"1 开头 11 位"（三天提交复查 2026-10-12）
+    errors.phone = '请填美国 10 位电话号码，如 4155550123（国家码已固定在框前，不用再填 1）';
   if (blank(m.line1)) errors.line1 = '请填写街道地址（英文，如 350 5th Ave）';
   else if (!ADDRESS_PATTERNS.ascii.test(m.line1.trim()))
     errors.line1 = '地址第一行请用英文/数字填写';
@@ -298,13 +299,6 @@ export function toAddressInput(model) {
 }
 
 /**
- * 地址 → 一行摘要（确认订单页 / 列表项副标题用）。
- * @returns {{recipient: string, phone: string, line1: string, line2: string, region: string}}
- * @why 摘要在**这里**拼而不是 wxml 里拼字符串：WXML 里做字符串拼接与空值判断
- *      会产出"San Francisco, , CA"这种双逗号，而它在真机上的样子就是"地址显示错了"。
- * @why region 按美国写法「San Francisco, CA 94133」：买家在美国，信封、网购表单都是这么写的。
- */
-/**
  * E.164 美国号 → 美国习惯写法 `+1 (617) 555-0123`（只用于显示；提交给服务端的仍是 E.164）。
  * @why 三端模拟测试 2026-10-11：地址列表 / 结算 / 订单详情显示 "+16175550123"，一串数字核对起来容易看错。
  * @limitation 只认 `+1` 加 10 位；其它形状（旧数据、别国号码）原样返回，不硬套格式。
@@ -314,6 +308,13 @@ function displayUsPhone(v) {
   return m === null ? v : `+1 (${m[1]}) ${m[2]}-${m[3]}`;
 }
 
+/**
+ * 地址 → 一行摘要（确认订单页 / 列表项副标题用）。
+ * @returns {{recipient: string, phone: string, line1: string, line2: string, region: string}}
+ * @why 摘要在**这里**拼而不是 wxml 里拼字符串：WXML 里做字符串拼接与空值判断
+ *      会产出"San Francisco, , CA"这种双逗号，而它在真机上的样子就是"地址显示错了"。
+ * @why region 按美国写法「San Francisco, CA 94133」：买家在美国，信封、网购表单都是这么写的。
+ */
 export function addressSummary(addr) {
   const a = addr && typeof addr === 'object' ? addr : {};
   const text = (v) => (typeof v === 'string' ? v.trim() : '');

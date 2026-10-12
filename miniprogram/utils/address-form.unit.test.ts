@@ -128,6 +128,8 @@ describe('formErrors（格式预检）', () => {
     expect(phoneErr).toContain('10 位');
     expect(phoneErr).toContain('4155550123');
     expect(phoneErr).not.toContain('+');
+    // 三天提交复查 2026-10-12：2f6619b 起电话框左侧固定显示 +1、框里只放 10 位——再说"带国家码就是 1 开头 11 位"自相矛盾
+    expect(phoneErr).not.toContain('11 位');
     expect(formErrors({ ...formModel(ADDR), postal_code: '9410' }).errors.postal_code).toContain(
       '5 位',
     );
