@@ -230,7 +230,10 @@ export function payNotice(options, order) {
     lines.push(
       o.charge.amount === null
         ? `${o.label}：将以${name}扣款（金额以支付页为准）`
-        : `${o.label}：将以${name}扣款 ${o.charge.text}`,
+        : o.charge.currency === 'JPY'
+          ? // 金额本身带「日元」，再写"以日元"就重了（"将以日元扣款 12,000 日元"，AJ-495 改单位字后出现）
+            `${o.label}：将扣款 ${o.charge.text}`
+          : `${o.label}：将以${name}扣款 ${o.charge.text}`,
     );
   }
   for (const o of opts) {
@@ -287,7 +290,8 @@ export function chargePreview(options) {
     if (charge === null || typeof charge !== 'object') continue;
     const name = CURRENCY_NAME[charge.currency] ?? charge.currency;
     if (charge.amount === null) lines.push(`${o.label}将以${name}扣款，金额以支付页为准`);
-    else if (charge.currency === 'JPY') lines.push(`${o.label}将以${name}扣款 ${charge.text}`);
+    else if (charge.currency === 'JPY')
+      lines.push(`${o.label}将扣款 ${charge.text}`); // 金额已带「日元」（AJ-495）
     else lines.push(`${o.label}将以${name}扣款，约 ${charge.text}（以支付页为准）`);
   }
   return lines;

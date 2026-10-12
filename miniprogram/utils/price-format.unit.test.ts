@@ -14,33 +14,33 @@ import { displaySubLine, formatCnyFen, formatJpy, formatUsdCents } from './price
 
 describe('千分位', () => {
   it('四位数加一个分隔符', () => {
-    expect(formatJpy(1234)).toBe('1,234 円');
+    expect(formatJpy(1234)).toBe('1,234 日元');
   });
 
-  it('整千位不加尾部空组（`1,000 円` 不是 `1,000, 円`）', () => {
-    expect(formatJpy(1000)).toBe('1,000 円');
+  it('整千位不加尾部空组（`1,000 日元` 不是 `1,000, 日元`）', () => {
+    expect(formatJpy(1000)).toBe('1,000 日元');
   });
 
   it('三位数不加分隔符', () => {
-    expect(formatJpy(123)).toBe('123 円');
+    expect(formatJpy(123)).toBe('123 日元');
   });
 
   it('大金额每一组三个数字', () => {
-    expect(formatJpy(12345678)).toBe('12,345,678 円');
+    expect(formatJpy(12345678)).toBe('12,345,678 日元');
   });
 
-  it('0 → `0 円`（不是空串，也不是占位符）', () => {
-    expect(formatJpy(0)).toBe('0 円');
+  it('0 → `0 日元`（不是空串，也不是占位符）', () => {
+    expect(formatJpy(0)).toBe('0 日元');
   });
 });
 
 describe('负数（退款 / 折扣会真的出现负金额）', () => {
-  it('负号在数字前面、单位在后（`-1,234 円`）', () => {
-    expect(formatJpy(-1234)).toBe('-1,234 円');
+  it('负号在数字前面、单位在后（`-1,234 日元`）', () => {
+    expect(formatJpy(-1234)).toBe('-1,234 日元');
   });
 
-  it('-0 → `0 円`（不带负号：`-0 円` 看起来像出错了）', () => {
-    expect(formatJpy(-0)).toBe('0 円');
+  it('-0 → `0 日元`（不带负号：`-0 日元` 看起来像出错了）', () => {
+    expect(formatJpy(-0)).toBe('0 日元');
   });
 
   /**
@@ -48,8 +48,8 @@ describe('负数（退款 / 折扣会真的出现负金额）', () => {
    * 旧实现输出 `¥1,234`：`¥` 正是 D-36 分配给**人民币**的符号，目标用户是美国华人，
    * 1,234 円 ≈ 60 元会被读成人民币 1,234 元（差 20 倍）；同一页再出现 `人民币 ¥176` 就是两个 ¥ 两种币。
    */
-  it('D-36：日元不用 ¥，单位写 円（¥ 留给副行的人民币）', () => {
-    expect(formatJpy(3600)).toBe('3,600 円');
+  it('D-36：日元不用 ¥，单位写「日元」（D-36 原写「円」，2026-10-12 用户改为「日元」：中文读者认不得「円」；¥ 留给副行的人民币）', () => {
+    expect(formatJpy(3600)).toBe('3,600 日元');
     expect(formatJpy(3600)).not.toContain('¥');
   });
 });

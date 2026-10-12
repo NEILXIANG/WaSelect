@@ -8,7 +8,7 @@
  *      把 `status` 换成另一套词，vm 单测与服务端测试**都会照样绿**，
  *      而真机上用户看到的是空白的金额、"状态未知"的标签、消失的商品图。
  *      miniprogram-shell.e2e 虽然打的是真服务端，但它只验传输层（request.js），**不调任何 vm**。
- * @why 断言的是**最终文案**（`'20,150 円'`、`'待付款'`、`'Cupertino, CA 95014'` 这一级），
+ * @why 断言的是**最终文案**（`'20,150 日元'`、`'待付款'`、`'Cupertino, CA 95014'` 这一级），
  *      而不是"字段存在"：字段在、但单位/格式/映射错了，用户照样看错。
  *      期望值独立写出（不调用被测的格式化函数算期望），否则就是自证。
  *
@@ -76,7 +76,7 @@ beforeEach(async () => {
 });
 
 describe('真服务端响应 → 小程序 view-model → 用户看到的文案', () => {
-  it('首页卡片与商品详情：价格是整数円、有副行汇率、库存 0 显示售罄', async () => {
+  it('首页卡片与商品详情：价格是整数日元、有副行汇率、库存 0 显示售罄', async () => {
     await db`update products set stock = 0 where id = 'p-cup'`;
     const list = await call(srv, 'GET', '/api/v1/products?size=50');
     expect(list.status).toBe(200);
@@ -115,7 +115,7 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
     expect(rows).toHaveLength(1);
     expect(rows[0]?.orderId).toBe(orderId);
     expect(rows[0]?.totalJpy).toBe(CHAIN_TOTAL_JPY);
-    expect(rows[0]?.totalText).toBe('20,150 円');
+    expect(rows[0]?.totalText).toBe('20,150 日元');
     expect(rows[0]?.statusText).not.toBe('状态未知'); // 服务端状态词必须在前端词表里
     expect(rows[0]?.canPay).toBe(true);
 
@@ -132,10 +132,10 @@ describe('真服务端响应 → 小程序 view-model → 用户看到的文案'
         .map((i) => [i.title, i.qty, i.unitPriceText])
         .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
     ).toEqual([
-      ['Chef Knife', 1, '8,800 円'],
-      ['Tea Cup', 2, '3,200 円'],
+      ['Chef Knife', 1, '8,800 日元'],
+      ['Tea Cup', 2, '3,200 日元'],
     ]);
-    expect(d1.amountLines.map((l) => l.value).slice(0, 2)).toEqual(['15,200 円', '4,950 円']);
+    expect(d1.amountLines.map((l) => l.value).slice(0, 2)).toEqual(['15,200 日元', '4,950 日元']);
     expect(d1.address?.recipient).toBe('Jane Doe');
     expect(d1.expiresAtText).not.toBe(''); // 可付时显示截止时刻
     expect(d1.timeline).toHaveLength(1);
@@ -283,7 +283,7 @@ async function channelListings(
 }
 
 describe('真服务端响应 → 购物车 / 结算 / 支付 / 推荐 / 再次购买（测试审计 T-2）', () => {
-  it('报价区：购物车请求体被接受、各行与合计是整数円文案、购物车按报价刷新过期单价、结算页扣款预告', async () => {
+  it('报价区：购物车请求体被接受、各行与合计是整数日元文案、购物车按报价刷新过期单价、结算页扣款预告', async () => {
     const cart = memoryCart();
     cart.add({ productId: 'p-knife', qty: 1, title: 'Chef Knife', priceJpy: 8800 });
     cart.add({ productId: 'p-cup', qty: 2, title: 'Tea Cup', priceJpy: 3000 }); // 加购后店家改过价
@@ -295,9 +295,9 @@ describe('真服务端响应 → 购物车 / 结算 / 支付 / 推荐 / 再次�
     const v = quoteView(q.json);
     // MP-11（第二轮审计）：关税不再与商品 / 运费并列成第三行，改为合计下方一句（hints 第一句）
     expect(v.lines.map((l) => l.label)).toEqual(['商品合计', '运费']);
-    expect(v.lines.map((l) => l.value)).toEqual(['15,200 円', '4,950 円']);
-    expect(v.hints[0]).toMatch(/^其中预估关税 \d{1,3}(,\d{3})* 円（已含在商品价内）$/);
-    expect([v.hasTotal, v.totalJpy, v.totalText]).toEqual([true, CHAIN_TOTAL_JPY, '20,150 円']);
+    expect(v.lines.map((l) => l.value)).toEqual(['15,200 日元', '4,950 日元']);
+    expect(v.hints[0]).toMatch(/^其中预估关税 \d{1,3}(,\d{3})* 日元（已含在商品价内）$/);
+    expect([v.hasTotal, v.totalJpy, v.totalText]).toEqual([true, CHAIN_TOTAL_JPY, '20,150 日元']);
     expect(v.totalSub).toMatch(/^≈ \$\d+\.\d{2} · ≈ 人民币 ¥\d+(\.\d{2})?$/);
     expect(v.splitRequired).toBe(false);
 
@@ -310,9 +310,7 @@ describe('真服务端响应 → 购物车 / 结算 / 支付 / 推荐 / 再次�
 
     // 结算页扣款预告（M-16）：报价 + 真实通道清单
     const listings = await channelListings(srv, buyer, q.json['total_jpy']);
-    expect(chargePreview(chargeOptions(listings, q.json))).toEqual([
-      '模拟支付将以日元扣款 20,150 円',
-    ]);
+    expect(chargePreview(chargeOptions(listings, q.json))).toEqual(['模拟支付将扣款 20,150 日元']);
   });
 
   it('支付页：按钮带实扣金额；非审核模式的模拟支付意图**绝不**判成"已完成"；审核模式判 auto，付完显示已付款', async () => {
@@ -329,7 +327,7 @@ describe('真服务端响应 → 购物车 / 结算 / 支付 / 推荐 / 再次�
       goHome: false,
     });
     const options = chargeOptions(await channelListings(srv, buyer, order['total_jpy']), order);
-    expect(options.map((o) => o.buttonText)).toEqual(['模拟支付（20,150 円）']);
+    expect(options.map((o) => o.buttonText)).toEqual(['模拟支付（20,150 日元）']);
 
     // 非审核模式：服务端不会自动确认（payload.auto=false）→ 前端只能说"不可用"（AJ-179）
     const intent = await call(srv, 'POST', `/api/v1/orders/${orderId}/pay`, {
@@ -421,7 +419,7 @@ describe('真服务端响应 → 购物车 / 结算 / 支付 / 推荐 / 再次�
       token: buyer,
       body: { items: cart.toOrderItems() },
     });
-    expect(quoteView(q2.json).lines[0]?.value).toBe('15,400 円'); // 9000 + 3200×2
+    expect(quoteView(q2.json).lines[0]?.value).toBe('15,400 日元'); // 9000 + 3200×2
     expect(cart.syncPrices(q2.json['lines'])).toBe(true);
     expect(cart.items().find((i) => i.productId === 'p-knife')?.priceJpy).toBe(9000);
   });

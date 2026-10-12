@@ -27,7 +27,7 @@
       <ws-price jpy="{{0}}" />
     </view>
     <view class="row">
-      <text class="label">漏传（应是空白，不是 0 円）</text>
+      <text class="label">漏传（应是空白，不是 0 日元）</text>
       <ws-price />
     </view>
   </view>

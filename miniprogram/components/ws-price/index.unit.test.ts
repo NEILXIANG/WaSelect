@@ -73,13 +73,13 @@ describe('ws-price：渲染真实组件文件', () => {
     //      硬写等于把格式抄第二遍，改格式时要改两个地方；用真函数对照则只钉"组件接上了格式化"。
     const comp = render({ jpy: 1234 });
     expect(comp.dom.textContent).toBe(formatJpy(1234));
-    expect(comp.dom.textContent).toBe('1,234 円');
+    expect(comp.dom.textContent).toBe('1,234 日元');
   });
 
   it('wxml 里**没有**自己拼货币符号（组件不得绕过格式化）', () => {
     const comp = render({ jpy: 1234 });
     // 若 wxml 写成 `{{jpy}} 円`，数值不会被格式化，也不会带千分位
-    expect(comp.dom.textContent).not.toBe('1234 円');
+    expect(comp.dom.textContent).not.toBe('1234 日元');
   });
 
   it('尺寸档位反映到 class 上（不是行内样式）', () => {
@@ -94,24 +94,24 @@ describe('ws-price：渲染真实组件文件', () => {
 
   it('属性变化后文案跟着变（observers 真的接上了）', () => {
     const comp = render({ jpy: 1 });
-    expect(comp.dom.textContent).toBe('1 円');
+    expect(comp.dom.textContent).toBe('1 日元');
     comp.instance.setData({ jpy: 98765 });
-    expect(comp.dom.textContent).toBe('98,765 円');
+    expect(comp.dom.textContent).toBe('98,765 日元');
   });
 
   it('负数（退款 / 折扣）也正常渲染', () => {
-    expect(render({ jpy: -1234 }).dom.textContent).toBe('-1,234 円');
+    expect(render({ jpy: -1234 }).dom.textContent).toBe('-1,234 日元');
   });
 });
 
-describe('ws-price：漏传价格不能显示 0 円', () => {
+describe('ws-price：漏传价格不能显示 0 日元', () => {
   /**
    * @why 生命周期里的异常会被小程序框架的 `safeCallback` 捕获并打到控制台，
    *      **不会**冒泡到调用方。所以"响亮失败"的可断言形态是
    *      「渲染空白 + 控制台一条明确报错」，而不是"抛异常"。
    *      ⚠️ 这一点是实测出来的（我第一版断言 `render()` 抛错，全红）。
    */
-  it('⚠️ 不传 jpy → 渲染**空白**，且控制台有明确报错（不是 0 円）', () => {
+  it('⚠️ 不传 jpy → 渲染**空白**，且控制台有明确报错（不是 0 日元）', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const comp = render({});

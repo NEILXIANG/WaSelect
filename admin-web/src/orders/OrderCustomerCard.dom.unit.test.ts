@@ -56,7 +56,7 @@ describe('订单详情 · 客户卡片', () => {
       customer: { user_id: 'u-cust-a', order_count: 3, paid_total_jpy: 21380, blocked: false },
     });
     const f = customerField(el);
-    expect(f?.textContent).toContain('历史 3 单 · 累计付款 21,380 円'); // 走查 2026-10-08：与客户页同一说法
+    expect(f?.textContent).toContain('历史 3 单 · 累计付款 21,380 日元'); // 走查 2026-10-08：与客户页同一说法
     expect(f?.textContent).not.toContain('已拉黑');
     expect(f?.querySelector('a')?.getAttribute('href')).toBe('#/customers/u-cust-a');
   });

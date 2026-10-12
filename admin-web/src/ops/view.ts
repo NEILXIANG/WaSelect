@@ -64,7 +64,7 @@ export interface FxRow {
   rateText: string;
   rawRateText: string;
   bufferText: string;
-  /** 「100 円 ≈ ¥5.10」：运营看汇率时最直接的核对方式（三端模拟测试 2026-10-11：0.050985 读不出是多少）。 */
+  /** 「100 日元 ≈ 5.10 元」：运营看汇率时最直接的核对方式（三端模拟测试 2026-10-11：0.050985 读不出是多少）。 */
   exampleText: string;
   effectiveText: string;
   /**
@@ -106,15 +106,15 @@ function percent(v: unknown): string {
 }
 
 /**
- * 100 円 按生效汇率折成多少（两位小数）。美元写 `$0.66`；人民币写 `5.10 元`（日元店里 ¥ 会被读成日元）；
+ * 100 日元按生效汇率折成多少（两位小数）。美元写 `$0.66`；人民币写 `5.10 元`（日元店里 ¥ 会被读成日元）；
  * 认不出的币种把代码写在后面，不猜符号。
  */
 function example(quote: string, rate: unknown): string {
   if (typeof rate !== 'number' || !Number.isFinite(rate)) return '—';
   const v = (rate * 100).toFixed(2);
-  if (quote === 'USD') return `100 円 ≈ $${v}`;
-  if (quote === 'CNY') return `100 円 ≈ ${v} 元`;
-  return `100 円 ≈ ${v} ${quote}`;
+  if (quote === 'USD') return `100 日元 ≈ $${v}`;
+  if (quote === 'CNY') return `100 日元 ≈ ${v} 元`;
+  return `100 日元 ≈ ${v} ${quote}`;
 }
 
 function num(v: unknown): string {
@@ -142,7 +142,7 @@ export function fxFormErrors(form: unknown): { ok: boolean; first: string } {
   if (raw < bounds.min || raw > bounds.max)
     return {
       ok: false,
-      first: `${quote} 的汇率应在 ${bounds.min}–${bounds.max} 之间（1 円换 ${quote} 的数；你填的是 ${raw}，请检查小数点或币种）`,
+      first: `${quote} 的汇率应在 ${bounds.min}–${bounds.max} 之间（1 日元换 ${quote} 的数；你填的是 ${raw}，请检查小数点或币种）`,
     };
   if (from !== '' && toIsoJst(from) === '')
     return { ok: false, first: '生效时间格式为 YYYY-MM-DDTHH:mm（留空表示立即生效）' };
@@ -188,7 +188,7 @@ const SAMPLE_JPY = 10_000;
  *      以及"两个币种值串位"这类区间挡不住的错误。阈值取 ≥1.5 或 ≤0.67（约 ±50%）——
  *      日波动超过这个幅度在主要货币对上极罕见。
  *
- * @why 同时给一个**样例金额**（10,000 円 ≈ USD 67.00）而不是只给倍数：
+ * @why 同时给一个**样例金额**（10,000 日元 ≈ USD 67.00）而不是只给倍数：
  *      运营核对的是"这个数看起来像不像我认识的价格"，倍数需要心算，金额一眼就能看出来。
  *
  * @limitation 一：**不做硬拦截**，只标红并要求勾选确认。
@@ -217,8 +217,8 @@ export function fxPreview(args: unknown): {
   }
 
   // 样例金额：¥10,000 折成该币种的主单位（USD / CNY 都是 2 位小数）
-  // 日元写「円」（¥ 在本项目口径里是人民币，D-36）
-  const sampleText = `${SAMPLE_JPY.toLocaleString('en-US')} 円 ≈ ${quote} ${(SAMPLE_JPY * raw).toFixed(2)}`;
+  // 日元写「日元」（¥ 在本项目口径里是人民币，D-36；不写「円」见 format.ts minorMoneyText）
+  const sampleText = `${SAMPLE_JPY.toLocaleString('en-US')} 日元 ≈ ${quote} ${(SAMPLE_JPY * raw).toFixed(2)}`;
 
   if (typeof current !== 'number' || !Number.isFinite(current) || current <= 0) {
     // ⚠️ 没有基准时**不能**当成"不可疑"（AJ-229）：上线前第一次录 USD、或列表没加载出来，
@@ -512,10 +512,12 @@ export function rateErrors(rows: unknown): { ok: boolean; errors: string[]; firs
       errors.push(
         typeof priceRaw === 'string' && priceRaw.trim() === ''
           ? `${at}：运费必填（包邮请显式填 0，不要留空）`
-          : `${at}：运费必须是 ≥0 的整数（円）`,
+          : `${at}：运费必须是 ≥0 的整数（日元）`,
       );
     } else if (price > SHIPPING_RATE_BOUNDS.priceJpy) {
-      errors.push(`${at}：运费不能超过 ${SHIPPING_RATE_BOUNDS.priceJpy} 円（请检查是否多打了 0）`);
+      errors.push(
+        `${at}：运费不能超过 ${SHIPPING_RATE_BOUNDS.priceJpy} 日元（请检查是否多打了 0）`,
+      );
     }
     if (dupFlags[i] === true)
       errors.push(`${at}：与前面某一档的承运商 + 上限重复（DB 唯一约束会拒）`);

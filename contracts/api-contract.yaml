@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.76
+  version: 0.6.77
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.77（AJ-495，用户 2026-10-12）：`/admin/exports/orders` 与 `/admin/exports/purchase` 的金额列表头单位由「円」改为「日元」（商品金额（日元）/ 运费（日元）/ 预估关税（日元）/ 订单合计（日元）/ 售价（日元）/ 成本（日元）），列序与取值不变。用户看到「330 円」问"円是什么意思"，要求后台与小程序一律写「日元」。
     0.6.76（AJ-494，全入口点击测试 2026-10-11）：`GET /admin/exports/orders` 与 `/admin/exports/purchase` 改中文表头（内部用表，运营在 Excel 里读不懂英文字段名），订单总表的状态列写中文（shared `ORDER_STATUS_LABELS`，与后台页面同一份词）；采购单的商品 id 挪到最后一列「商品编号（系统）」。`/admin/exports/customs`（报关代理共用）表头不变。
     0.6.75（AJ-493，全入口点击测试 2026-10-11）：`POST /orders/quote` 的 40901（库存不足）错误响应 `Err.data` 另带 `stock`（当前可买件数）。买家商品详情接口本就返回同一个数，不是新信息；购物车据此把那一件改到可买件数并重报价，不再整单报价失败、合计消失。建单事务里并发扣减失败的 40901 不保证带。
     0.6.74（AJ-491，用户 2026-10-11 要求）：商品分类改为后台可配置（迁移 039 `product_categories`）。① 新增 `GET/POST /admin/categories`、`PUT/DELETE /admin/categories/{key}`，新错误码 40404（分类不存在）/ 40919（分类下还有商品，不能删）。② `GET /home` 加 `category_tabs`（键 + 中文名）；`categories` / `category_tabs` 只含启用且有在售商品的分类。③ `GET /products?category`、`ProductInput.category` 去掉四值 enum，改为键的 pattern；`ProductInput.category` 不存在 → 40001 category_unknown。
@@ -1141,7 +1142,7 @@ paths:
   /admin/exports/{kind}:
     get:
       summary: CSV 导出（0.6.32，剩余清单 3-3）——orders 订单总表 / purchase 待采购清单 / customs 待发货报关
-      description: '0.6.76（AJ-494）：orders / purchase 中文表头（订单总表：订单号, 状态, 下单时间（日本时间）, 付款时间（日本时间）, 发货时间（日本时间）, 商品金额（円）, 运费（円）, 预估关税（円）, 订单合计（円）, 收件人, 州, 国家, 承运商, 运单号, 实付币种, 实付金额；状态写中文。采购单：订单号, 付款时间（日本时间）, 商品名, 日文原名, JAN 码, 采购来源, 数量, 售价（円）, 成本（円）, 商品编号（系统））；customs 仍为英文蛇形表头（报关代理共用）。0.6.37（P1-8 / AJ-386）：时间列名 created_at_jst / paid_at_jst / shipped_at_jst（customs 及 0.6.76 前的 orders / purchase），值为 JST `YYYY-MM-DD HH:mm:ss`；邮编 / 电话 / HS / JAN / 运单号的纯号码值输出为 `="…"`（Excel 不再吃掉前导零、不转科学计数）。响应是 JSON（filename + csv 字符串，csv 以 UTF-8 BOM 开头、CRLF 行尾、以 = + - @ 开头的文本前加单引号防公式注入），由前端存成文件。一律排除 is_test。purchase / customs 固定只出 paid 的单（一行一个行项目，取下单时快照；快照缺失的历史行用商品当前值并在 snapshot 列标 current）；orders 可按 status 过滤。kind 非三者之一或 status 非法 → 40001。⚠️ 含收件地址等 PII：每次导出写一条 admin_audit（target = kind，after.rows = 行数）。'
+      description: '0.6.77（AJ-495）：下列表头里的金额单位「円」改为「日元」，其余不变。0.6.76（AJ-494）：orders / purchase 中文表头（订单总表：订单号, 状态, 下单时间（日本时间）, 付款时间（日本时间）, 发货时间（日本时间）, 商品金额（日元）, 运费（日元）, 预估关税（日元）, 订单合计（日元）, 收件人, 州, 国家, 承运商, 运单号, 实付币种, 实付金额；状态写中文。采购单：订单号, 付款时间（日本时间）, 商品名, 日文原名, JAN 码, 采购来源, 数量, 售价（日元）, 成本（日元）, 商品编号（系统））；customs 仍为英文蛇形表头（报关代理共用）。0.6.37（P1-8 / AJ-386）：时间列名 created_at_jst / paid_at_jst / shipped_at_jst（customs 及 0.6.76 前的 orders / purchase），值为 JST `YYYY-MM-DD HH:mm:ss`；邮编 / 电话 / HS / JAN / 运单号的纯号码值输出为 `="…"`（Excel 不再吃掉前导零、不转科学计数）。响应是 JSON（filename + csv 字符串，csv 以 UTF-8 BOM 开头、CRLF 行尾、以 = + - @ 开头的文本前加单引号防公式注入），由前端存成文件。一律排除 is_test。purchase / customs 固定只出 paid 的单（一行一个行项目，取下单时快照；快照缺失的历史行用商品当前值并在 snapshot 列标 current）；orders 可按 status 过滤。kind 非三者之一或 status 非法 → 40001。⚠️ 含收件地址等 PII：每次导出写一条 admin_audit（target = kind，after.rows = 行数）。'
       parameters: [{name: kind, in: path, required: true, schema: {type: string, enum: [orders, purchase, customs]}}, {name: status, in: query, schema: {$ref: '#/components/schemas/OrderStatus'}, description: '仅 kind=orders 生效'}, {name: order_ids, in: query, schema: {type: string}, description: '0.6.48（AJ-407）：导出所选——逗号分隔的订单内部 id，去重后 1–100 个；与其它条件 AND（purchase / customs 仍只出 paid，测试单不出，未知 id 不出）。非法 → 40001 order_ids_invalid / order_ids_too_many'}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [filename, csv], properties: {filename: {type: string, description: '<kind>-YYYYMMDD.csv'}, csv: {type: string}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/reconciliation/latest:

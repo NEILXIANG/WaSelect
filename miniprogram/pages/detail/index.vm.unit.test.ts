@@ -65,7 +65,7 @@ describe('detailView（主数据）', () => {
     expect(v.soldOut).toBe(false);
   });
 
-  it('⚠️ price_jpy 原样透传，不兜底（补 0 会显示 `0 円`，那会被读成免费）', () => {
+  it('⚠️ price_jpy 原样透传，不兜底（补 0 会显示 `0 日元`，那会被读成免费）', () => {
     expect(detailView({ ...PRODUCT, price_jpy: undefined }).priceJpy).toBeUndefined();
   });
 

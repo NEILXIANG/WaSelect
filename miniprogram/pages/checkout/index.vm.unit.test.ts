@@ -596,8 +596,8 @@ describe('rowsWithQuotePrice（商品行单价，来自报价）', () => {
 
   it('🔴 按商品 id 配上报价单价，只给展示文字（不给数字字段，免得有人拿它算合计）', () => {
     const out = rowsWithQuotePrice(rows, quote);
-    expect(out.map((r) => r.priceText)).toEqual(['2,070 円', '12,800 円']);
-    expect(out[0]).toEqual({ ...rows[0], priceText: '2,070 円' });
+    expect(out.map((r) => r.priceText)).toEqual(['2,070 日元', '12,800 日元']);
+    expect(out[0]).toEqual({ ...rows[0], priceText: '2,070 日元' });
   });
 
   it('🔴 还没报价 / 报价失败 / 报价里没有这一行 / 单价不是整数 → 不显示单价（空串）', () => {

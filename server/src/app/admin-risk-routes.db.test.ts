@@ -15,6 +15,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb, TEST_DB_URL } from '../../../test/db/test-db.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
+import { waitUntil } from '../../../test/helpers/chain-server.js';
 import { createLogger } from '../logger.js';
 import { loadConfig } from '../config.js';
 import { createEventBus } from '../adapters/event-bus.js';
@@ -517,7 +518,11 @@ describe('POST /admin/users/{id}/unblock + GET /admin/users?blocked=true', () =>
         admin,
       );
       expect((after.body as { items: unknown[] }).items).toEqual([]);
-      const audit = await db`select action from admin_audit where target = 'u-ub' order by id`;
+      // 审计行在响应之后写（admin-audit.ts：prefinish 之后）——不等就偶发只读到第一行（gate 2026-10-12 实测撞到一次）
+      const auditOf = async () =>
+        db`select action from admin_audit where target = 'u-ub' order by id`;
+      await waitUntil(async () => (await auditOf()).length === 2, '解除拉黑的审计行没写进来');
+      const audit = await auditOf();
       expect(audit.map((a) => String(a['action']))).toEqual([
         expect.stringContaining('/block'),
         expect.stringContaining('/unblock'),

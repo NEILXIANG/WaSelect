@@ -106,7 +106,7 @@ export function productRows(items: unknown): ProductRow[] {
         id: p['id'] as string,
         title: typeof p['title'] === 'string' ? p['title'] : '',
         category: typeof category === 'string' ? category : '',
-        // 与订单页同一个格式化（千分位 + 円；非整数显示 —），P2-52
+        // 与订单页同一个格式化（千分位 + 日元；非整数显示 —），P2-52
         priceText: moneyText(p['price_jpy']),
         thumb: firstThumb(p['images']),
         ...stockFields(p['stock']),
@@ -427,10 +427,10 @@ export function productFormErrors(form: unknown): {
   //    而 `<input type="number">` 恰恰允许输入 e——运营手滑多按一个 e，售价就成了另一个数。
   const price = plainInt(f.priceJpy);
   if (price === null || price < 1)
-    errors['priceJpy'] = `售价必须是 ≥1 的整数（円）${sciHint(f.priceJpy)}`;
+    errors['priceJpy'] = `售价必须是 ≥1 的整数（日元）${sciHint(f.priceJpy)}`;
   if (f.costJpy.trim() !== '') {
     const cost = plainInt(f.costJpy);
-    if (cost === null) errors['costJpy'] = `成本价必须是 ≥0 的整数（円）${sciHint(f.costJpy)}`;
+    if (cost === null) errors['costJpy'] = `成本价必须是 ≥0 的整数（日元）${sciHint(f.costJpy)}`;
   }
   const weight = plainInt(f.weightG);
   if (weight === null || weight < 1)
@@ -548,7 +548,9 @@ export function productFormWarnings(form: unknown): string[] {
   const cost = f.costJpy.trim() === '' ? null : plainInt(f.costJpy);
   const out: string[] = [];
   if (price !== null && cost !== null && cost >= price)
-    out.push(`采购成本（${cost} 円）不低于售价（${price} 円）：每卖一件都不赚钱，请确认没有填反`);
+    out.push(
+      `采购成本（${cost} 日元）不低于售价（${price} 日元）：每卖一件都不赚钱，请确认没有填反`,
+    );
   return out;
 }
 
@@ -576,8 +578,8 @@ export function productConflictRows(
   const fields: Array<[string, keyof ProductForm]> = [
     ['商品名', 'title'],
     ['分类', 'category'],
-    ['售价（円）', 'priceJpy'],
-    ['采购成本（円）', 'costJpy'],
+    ['售价（日元）', 'priceJpy'],
+    ['采购成本（日元）', 'costJpy'],
     ['重量（克）', 'weightG'],
     ['库存', 'stock'],
     ['英文报关品名', 'customsDescEn'],

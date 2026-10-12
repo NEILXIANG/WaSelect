@@ -96,13 +96,13 @@ afterEach(async () => {
 });
 
 describe('工作台：今日数据', () => {
-  it('销售额以円为主，灰字辅显 ≈USD（§8-2）', async () => {
+  it('销售额以日元为主，灰字辅显 ≈USD（§8-2）', async () => {
     const el = await open({
       today: WINDOW,
       last7: WINDOW,
       fx: { usd_rate: 0.0067, usd_effective_from: '2026-10-07T00:00:00Z' },
     });
-    expect(cardValue(el, '今日数据', '销售额')).toBe('16,800 円');
+    expect(cardValue(el, '今日数据', '销售额')).toBe('16,800 日元');
     // 16800 × 0.0067 = 112.56 USD（最小单位 11256 分）
     // AJ-469：辅行还写明口径（含退款、展示汇率），≈USD 仍在最前
     expect(cardSub(el, '今日数据', '销售额')).toMatch(/^≈ \$112\.56/);
@@ -110,18 +110,18 @@ describe('工作台：今日数据', () => {
 
   it('🔴 没有汇率时不显示 ≈ 那一行（不是显示 ≈ $0.00）', async () => {
     const el = await open();
-    expect(cardValue(el, '今日数据', '销售额')).toBe('16,800 円');
+    expect(cardValue(el, '今日数据', '销售额')).toBe('16,800 日元');
     // AJ-469 起辅行总在（写口径），但没有汇率时不出现 ≈ 金额
     expect(cardSub(el, '今日数据', '销售额')).not.toContain('≈');
   });
 
-  it('🔴 客单价为 null（窗口内零收款订单）显示「—」而不是 0 円', async () => {
+  it('🔴 客单价为 null（窗口内零收款订单）显示「—」而不是 0 日元', async () => {
     const el = await open({
       today: { ...WINDOW, paid_orders: 0, sales_jpy: 0, avg_jpy: null },
       last7: WINDOW,
     });
     expect(cardValue(el, '今日数据', '客单价')).toBe('—');
-    expect(cardValue(el, '今日数据', '销售额')).toBe('0 円'); // 反过来：真的 0 就是 0
+    expect(cardValue(el, '今日数据', '销售额')).toBe('0 日元'); // 反过来：真的 0 就是 0
   });
 
   it('🔴 加载失败显示「—」并出错误 Toast，不显示 0（"取不到"≠"没生意"）', async () => {
@@ -149,7 +149,7 @@ describe('工作台：实收 / 已退 / 拒付', () => {
       last7: WINDOW,
     });
     const text = el.textContent ?? '';
-    expect(text).toContain('10,000 円');
+    expect(text).toContain('10,000 日元');
     expect(text).toContain('$46.12');
     expect(text).toContain('$20.00');
     expect(text).toContain('$81.00');
@@ -164,7 +164,7 @@ describe('工作台：实收 / 已退 / 拒付', () => {
     expect(text).toContain('买家通过银行或信用卡公司把钱要回去');
   });
 
-  it('没有退款 / 拒付时显示「无」（空数组不是"0 円"）', async () => {
+  it('没有退款 / 拒付时显示「无」（空数组不是"0 日元"）', async () => {
     const el = await open();
     const text = el.textContent ?? '';
     expect(text).toContain('拒付：无');

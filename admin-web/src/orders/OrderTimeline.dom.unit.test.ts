@@ -79,14 +79,14 @@ afterEach(async () => {
 });
 
 describe('订单时间线（AJ-396）', () => {
-  it('🔴 部分退款事件显示人话金额（500 円 / $12.34），退款编号不进正文、只在悬停里（验收 2026-10-08）', async () => {
+  it('🔴 部分退款事件显示人话金额（500 日元 / $12.34），退款编号不进正文、只在悬停里（验收 2026-10-08）', async () => {
     const el = await open([
       { status: 'partial_refunded', note: 'rf-32d94f7e-1a2b:JPY:500', at: '2026-10-08T01:00:00Z' },
       { status: 'partial_refunded', note: 'rf-77aa:USD:1234', at: '2026-10-08T02:00:00Z' },
       { status: 'partial_failed', note: 'rf-88bb:provider_failed', at: '2026-10-08T03:00:00Z' },
     ]);
     const text = el.textContent ?? '';
-    expect(text).toContain('部分退款成功 500 円');
+    expect(text).toContain('部分退款成功 500 日元');
     expect(text).toContain('部分退款成功 $12.34');
     expect(text).toContain('部分退款失败 支付机构确认失败');
     expect(text).not.toContain('rf-');

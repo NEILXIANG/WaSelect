@@ -254,12 +254,12 @@ describe('fullRefundConfirmBody：确认框写实际要退的钱', () => {
     [
       '没有部分退款（日元）',
       order(),
-      '订单 261009-9H4QTF：将原路退回 18,550 円。退款原因会记录下来。',
+      '订单 261009-9H4QTF：将原路退回 18,550 日元。退款原因会记录下来。',
     ],
     [
-      '已成功部分退 2,000 円（sim 实例）',
+      '已成功部分退 2,000 日元（sim 实例）',
       order({ partial_refunds: [{ status: 'succeeded', amount_minor: 2000 }] }),
-      '订单 261009-9H4QTF：将原路退回 16,550 円（实收 18,550 円，已部分退 2,000 円）。退款原因会记录下来。',
+      '订单 261009-9H4QTF：将原路退回 16,550 日元（实收 18,550 日元，已部分退 2,000 日元）。退款原因会记录下来。',
     ],
     [
       '在途的部分退款不扣（只扣已成功的，与服务端 fullRefundAmount 同口径；在途时服务端会直接拒全额退款）',
@@ -269,12 +269,12 @@ describe('fullRefundConfirmBody：确认框写实际要退的钱', () => {
           { status: 'initiated', amount_minor: 1000 },
         ],
       }),
-      '订单 261009-9H4QTF：将原路退回 16,550 円（实收 18,550 円，已部分退 2,000 円）。退款原因会记录下来。',
+      '订单 261009-9H4QTF：将原路退回 16,550 日元（实收 18,550 日元，已部分退 2,000 日元）。退款原因会记录下来。',
     ],
     [
       '失败的部分退款不扣',
       order({ partial_refunds: [{ status: 'failed', amount_minor: 5000 }] }),
-      '订单 261009-9H4QTF：将原路退回 18,550 円。退款原因会记录下来。',
+      '订单 261009-9H4QTF：将原路退回 18,550 日元。退款原因会记录下来。',
     ],
     [
       '美元付款 → 按美元写，并说明按付款币种退',
@@ -287,7 +287,7 @@ describe('fullRefundConfirmBody：确认框写实际要退的钱', () => {
 
   it('没有成功的支付记录 → 不编数字，写合计并说明以支付机构为准', () => {
     expect(fullRefundConfirmBody(order({ payments: [] }))).toBe(
-      '订单 261009-9H4QTF：合计 18,550 円（实际可退金额以支付机构为准）。退款原因会记录下来。',
+      '订单 261009-9H4QTF：合计 18,550 日元（实际可退金额以支付机构为准）。退款原因会记录下来。',
     );
   });
 
@@ -318,22 +318,22 @@ describe('fullRefundAmountText（抽屉里写要退多少）', () => {
     ...over,
   });
   it('🔴 与确认框同一个数（去掉单号与结尾那句）', () => {
-    expect(fullRefundAmountText(order())).toBe('将原路退回 18,550 円');
+    expect(fullRefundAmountText(order())).toBe('将原路退回 18,550 日元');
     expect(
       fullRefundAmountText(
         order({ partial_refunds: [{ status: 'succeeded', amount_minor: 2000 }] }),
       ),
-    ).toBe('将原路退回 16,550 円（实收 18,550 円，已部分退 2,000 円）');
+    ).toBe('将原路退回 16,550 日元（实收 18,550 日元，已部分退 2,000 日元）');
     expect(fullRefundAmountText(order({ payments: [] }))).toBe(
-      '合计 18,550 円（实际可退金额以支付机构为准）',
+      '合计 18,550 日元（实际可退金额以支付机构为准）',
     );
   });
 });
 
-// 全入口点击测试 2026-10-11：日元原写"最多还能退 5,350 日元"，全站其它地方写"5,350 円"（D-36）；其它币种照旧写中文名
-describe('formatMinorCn：日元写「円」', () => {
-  it('🔴 JPY → "5,350 円"；USD → "81.60 美元"', () => {
-    expect(formatMinorCn(5350, 'JPY')).toBe('5,350 円');
+// 日元与后台其它金额同一写法"5,350 日元"（2026-10-12 后台不再写「円」）；其它币种照旧写中文名
+describe('formatMinorCn：日元写「日元」', () => {
+  it('🔴 JPY → "5,350 日元"；USD → "81.60 美元"', () => {
+    expect(formatMinorCn(5350, 'JPY')).toBe('5,350 日元');
     expect(formatMinorCn(8160, 'USD')).toBe('81.60 美元');
   });
 });

@@ -170,8 +170,8 @@ describe('chargeOptions（多币种列出 → 带实扣币种与金额的选项�
         channel: 'wechat',
         label: '微信支付',
         entryMode: 'in_app',
-        charge: { currency: 'JPY', amount: 12_000, text: '12,000 円' },
-        buttonText: '微信支付（12,000 円）',
+        charge: { currency: 'JPY', amount: 12_000, text: '12,000 日元' },
+        buttonText: '微信支付（12,000 日元）',
         buttonType: 'primary',
       },
       {
@@ -261,7 +261,7 @@ describe('payNotice（§14.2 提示条文案）', () => {
       ORDER,
     );
     expect(payNotice(opts, ORDER)).toEqual([
-      '微信支付：将以日元扣款 12,000 円',
+      '微信支付：将扣款 12,000 日元',
       '银行卡：将以美元扣款 $80.40',
       '选择「银行卡」需复制支付链接，在手机浏览器中打开完成支付',
       '订单 30 分钟内未支付将自动关闭',
@@ -299,10 +299,10 @@ describe('chargePreview：结算页扣款币种预告（M-16，AJ-406）', () =>
     expect(chargePreview(opts)).toEqual(['银行卡将以美元扣款，约 $80.40（以支付页为准）']);
   });
 
-  it('円通道（微信支付签约后）不写"约"：円就是应付合计本身', () => {
+  it('日元通道（微信支付签约后）不写"约"：日元就是应付合计本身', () => {
     const opts = chargeOptions([listing('JPY', [wechat]), listing('USD', [card])], QUOTE);
     expect(chargePreview(opts)).toEqual([
-      '微信支付将以日元扣款 12,000 円',
+      '微信支付将扣款 12,000 日元',
       '银行卡将以美元扣款，约 $80.40（以支付页为准）',
     ]);
   });

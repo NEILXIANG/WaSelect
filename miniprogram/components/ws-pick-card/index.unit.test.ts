@@ -68,13 +68,13 @@ describe('ws-pick-card：点击事件', () => {
   });
 });
 
-describe('ws-pick-card：缺价格不能显示 0 円（P1-6）', () => {
+describe('ws-pick-card：缺价格不能显示 0 日元（P1-6）', () => {
   /**
    * @why `priceJpy` 曾声明为 `{ type: Number, value: 0 }`：列表接口漏了 `price_jpy` 时
    *      卡片照样渲染 `0 円`，用户读成"免费"。改成 `type: null` 后漏传是 null，
    *      ws-price 走它自己的响亮失败（空白 + 控制台报错）。
    */
-  it('不传 priceJpy → 卡上没有 "0 円"，控制台有报错', () => {
+  it('不传 priceJpy → 卡上没有 "0 日元"，控制台有报错', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const comp = simulate.render(loadOnce(), {
@@ -82,7 +82,7 @@ describe('ws-pick-card：缺价格不能显示 0 円（P1-6）', () => {
         why: '一生用',
       }) as unknown as CompLike;
       comp.attach(document.body);
-      expect(comp.dom.textContent ?? '').not.toContain('0 円');
+      expect(comp.dom.textContent ?? '').not.toContain('0 日元');
       expect(spy.mock.calls.length).toBeGreaterThan(0);
     } finally {
       spy.mockRestore();
@@ -96,7 +96,7 @@ describe('ws-pick-card：缺价格不能显示 0 円（P1-6）', () => {
       priceJpy: 8800,
     }) as unknown as CompLike;
     comp.attach(document.body);
-    expect(comp.dom.textContent ?? '').toContain('8,800 円');
+    expect(comp.dom.textContent ?? '').toContain('8,800 日元');
   });
 });
 

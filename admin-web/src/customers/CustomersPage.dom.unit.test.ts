@@ -143,7 +143,7 @@ describe('客户列表', () => {
     const mail = cells.find((td) => td.textContent?.trim() === 'zhang.wei@example.com');
     expect(mail?.className).toContain('cell-ellipsis');
     expect(mail?.getAttribute('title')).toBe('zhang.wei@example.com');
-    expect(text).toContain('21,380 円');
+    expect(text).toContain('21,380 日元');
     expect(el.textContent).toContain('第 2 / 3 页 · 共 41 位');
     // 搜索框回显地址栏里的关键字（刷新后不丢）
     expect((el.querySelector('input[name="customer-keyword"]') as HTMLInputElement).value).toBe(
@@ -167,7 +167,7 @@ describe('客户详情', () => {
     expect(calls[0]?.path).toBe(`/api/v1/admin/customers/${ROW.id}`);
     expect(el.querySelector('.title')?.textContent).toBe('客户详情');
     expect(el.textContent).toContain(ROW.id); // 详情页给完整 id（可复制去运营日志查）
-    expect(el.textContent).toContain('21,380 円');
+    expect(el.textContent).toContain('21,380 日元');
     expect(el.textContent).toContain('+12125550143');
     expect(el.textContent).toContain('350 5th Ave Apt 12B, New York NY 10118, US');
     expect(el.textContent).toContain('拒付 1 笔，进行中 1 笔');

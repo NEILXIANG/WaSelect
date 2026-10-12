@@ -139,7 +139,7 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
           <tr>
             <th>承运商</th>
             <th>重量上限（g）</th>
-            <th>运费（円）</th>
+            <th>运费（日元）</th>
             <th>启用</th>
             <th>操作</th>
           </tr>

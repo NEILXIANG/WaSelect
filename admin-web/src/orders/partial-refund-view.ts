@@ -94,7 +94,7 @@ export function currencyName(currency: string): string {
 
 /** 1005 USD → "10.05 美元"（运营看到的提示与记录行都用中文币种名；`formatMinor` 只留给需要币种代码的地方）。 */
 export function formatMinorCn(minor: number, currency: string): string {
-  // 全入口点击测试 2026-10-11：日元与全站同一写法"5,350 円"（D-36；原为"5,350 日元"）
+  // 日元与后台其它地方同一写法"5,350 日元"（走 minorMoneyText，2026-10-12 起后台不写「円」）
   if (currency.toUpperCase() === 'JPY') return minorMoneyText(minor, 'JPY');
   const plain = formatMinor(minor, currency);
   return `${plain.slice(0, plain.length - currency.length)}${currencyName(currency)}`;

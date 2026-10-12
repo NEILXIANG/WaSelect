@@ -41,7 +41,7 @@ describe('orderRows（列表行）', () => {
       orderId: 'o-1',
       orderNo: 'WS-20260927-0001',
       totalJpy: 9150,
-      totalText: '9,150 円',
+      totalText: '9,150 日元',
       totalSub: '≈ $62.20 · ≈ 人民币 ¥448.00',
       statusText: '待付款',
       nextText: buyerStatus('created', { inList: true }).next,

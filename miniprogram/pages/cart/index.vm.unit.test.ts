@@ -47,7 +47,7 @@ describe('cartRows（行视图）', () => {
       title: '資生堂 クレンジングオイル 200ml',
       image: 'https://img.example.com/p1/card.jpg',
       qty: 2,
-      priceText: '3,600 円',
+      priceText: '3,600 日元',
       selected: true, // A3（AJ-416）
     });
     // ⚠️ 没有 subtotal 字段：行内小计 = "算合计"的半成品，走缓存价就破了红线
@@ -333,7 +333,7 @@ describe('报价失败的出路要说全（三端联动走查 2026-10-08）', ()
     );
   });
 
-  it('🔴 行内标红与报价错误的链路号各占一行（原先"3,850 円已下架…"、"…已下架错误码 40401"粘在一起）', () => {
+  it('🔴 行内标红与报价错误的链路号各占一行（原先"3,850 日元已下架…"、"…已下架错误码 40401"粘在一起）', () => {
     const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
     expect(wxml).toMatch(
       /<text class="[^"]*\bline-block\b[^"]*" wx:if="\{\{item\.invalidText\}\}"/,

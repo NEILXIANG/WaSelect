@@ -72,7 +72,7 @@ describe('productRows（列表行）', () => {
       id: 'p-shiro-cleansing-oil',
       title: '資生堂 クレンジングオイル 200ml',
       category: 'beauty', // AJ-491：名称由页面用分类列表查（../categories/view.ts categoryName）
-      priceText: '3,600 円', // P2-52：与订单页同一个 moneyText（千分位）
+      priceText: '3,600 日元', // P2-52：与订单页同一个 moneyText（千分位）
       stockText: '12',
       status: 'active',
       statusText: '在售',
@@ -259,7 +259,7 @@ describe('P2-51 数值不收科学计数法 / HS 编码形状 / 成本≥售价�
 
   it('productConflictRows：逐字段对照，标出不同项', () => {
     const rows = productConflictRows({ ...base(), priceJpy: '9999' }, PRODUCT);
-    const price = rows.find((r) => r.label === '售价（円）');
+    const price = rows.find((r) => r.label === '售价（日元）');
     expect(price).toMatchObject({ mine: '9999', differs: true });
     expect(rows.find((r) => r.label === '商品名')?.differs).toBe(false);
   });
@@ -709,7 +709,7 @@ describe('serverFieldError：服务端校验原因 → 表单字段 + 人话', (
       serverFieldError({ field: 'price_jpy', reason: 'price_too_large', count: 1, limit: 180000 }),
     ).toEqual({
       key: 'priceJpy',
-      text: '售价超过单笔订单上限（最多 180,000 円），买家无法下单——请调低售价',
+      text: '售价超过单笔订单上限（最多 180,000 日元），买家无法下单——请调低售价',
       more: 0,
     });
     // 没带上限（旧服务端）：仍说清原因，只是不报数字

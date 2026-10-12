@@ -10,7 +10,7 @@
  *        "不要重复提交"——服务端的修复在界面上**无入口**；
  *      ② `uploadImage` 把服务端的业务码（40001 图片解不开 / 40101 登录过期）一律折成
  *        "HTTP 400/401"的网络错，且不触发 onUnauthorized——运营看到"上传失败（HTTP 401）"却不被带回登录页。
- * @why 期望值独立写出（`'20,150 円'`、`'待发货'`），不调被测的格式化函数算期望。
+ * @why 期望值独立写出（`'20,150 日元'`、`'待发货'`），不调被测的格式化函数算期望。
  *
  * @limitation 一：**登录不在这里**：token 用与生产同一签发函数直接签（chain-server `tokenFor`）。
  *              登录本身（`POST /auth/admin/login`，app/admin-auth-routes.ts）由它自己的路由测试覆盖。
@@ -110,7 +110,7 @@ describe('商品：表单 → 真服务端 → 列表行', () => {
     const row = productRows((await listProducts(api)).items).find((r) => r.id === created.id);
     expect(row).toMatchObject({
       title: 'Deba Knife 出刃包丁 165mm',
-      priceText: '12,800 円',
+      priceText: '12,800 日元',
       stockText: '7',
       statusText: '在售',
       online: true,
@@ -350,12 +350,12 @@ describe('订单：真服务端 → 列表行与闸门；闸门与服务端判�
     return id;
   }
 
-  it('已付单：列表行"待发货 / 20,150 円"、可退；拒付中闸门拦且服务端同样 40907（错误码与链路 ID 带回前端）', async () => {
+  it('已付单：列表行"待发货 / 20,150 日元"、可退；拒付中闸门拦且服务端同样 40907（错误码与链路 ID 带回前端）', async () => {
     const api = adminApi();
     const id = await paidOrder();
     const row = orderRows((await listOrders(api)).items).find((r) => r.id === id);
     expect(row?.statusText).toBe('待发货');
-    expect(row?.totalText).toBe('20,150 円');
+    expect(row?.totalText).toBe('20,150 日元');
     expect(row?.recipientText).toBe('Jane Doe');
     expect(row?.actions.refund.ok).toBe(true);
     expect(row?.actions.ship.ok).toBe(true);

@@ -178,7 +178,7 @@ describe('productCards（列表加工）', () => {
     expect(productCards(ITEMS)[1]?.soldOut).toBe(true);
   });
 
-  it('⚠️ price_jpy 原样透传，不做任何兜底（补 0 会显示 `0 円`，那会被读成免费）', () => {
+  it('⚠️ price_jpy 原样透传，不做任何兜底（补 0 会显示 `0 日元`，那会被读成免费）', () => {
     expect(productCards([{ ...ITEMS[0], price_jpy: 3600 }])[0]?.priceJpy).toBe(3600);
     expect(productCards([{ ...ITEMS[0], price_jpy: undefined }])[0]?.priceJpy).toBeUndefined();
   });

@@ -234,9 +234,9 @@ const AUTO_ADVANCE_NOTES: Readonly<Record<string, (days: string) => string>> = {
  * 事件流一行的**备注**文案：部分退款几条事件的 note 是服务端拼的机器串，翻成人话（验收 2026-10-08）。
  *
  * 形状（server/src/app/partial-refund.ts）：
- *   - `partial_refunded`：`{refundId}:{币种}:{最小单位金额}` → `500 円` / `$12.34`
+ *   - `partial_refunded`：`{refundId}:{币种}:{最小单位金额}` → `500 日元` / `$12.34`
  *   - `partial_failed`：`{refundId}:{原因码}` → `支付机构确认失败`
- *   - `refunded_by_parts`：`{币种}:{累计最小单位金额}` → `累计 13,750 円`
+ *   - `refunded_by_parts`：`{币种}:{累计最小单位金额}` → `累计 13,750 日元`
  *
  * @why 退款编号（rf-…）挪到 `ref`：主文案里一串 uuid 盖过了金额；排查时仍要它，所以由调用方放进 title 悬停可见。
  * @limitation 形状认不出（服务端改了拼法）→ **原样返回**，与 eventStatusText 同口径：宁可难看，不吞信息。

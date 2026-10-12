@@ -99,7 +99,7 @@ function AfterSaleRow({
         <>
           <textarea
             className="input"
-            placeholder="处理说明（买家可见；如：已安排部分退款 1,500 円，3–5 个工作日到账）"
+            placeholder="处理说明（买家可见；如：已安排部分退款 1,500 日元，3–5 个工作日到账）"
             // 浏览器 maxLength 按 UTF-16 码元数，服务端按字数（统一结论 5.4）：
             // @measured: Chrome 152，maxLength=2 的输入框里打两个 😀，只留下 1 个（value.length=2、字数=1）。
             // 放到 2 倍：任何 500 字以内的说明都不超过 1000 码元，不挡合法输入，仍能拦住误粘贴的超长内容；

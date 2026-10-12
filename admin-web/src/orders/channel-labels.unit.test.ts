@@ -43,7 +43,7 @@ describe('带中文名的支付信息与操作者', () => {
         { payment: { channel: 'mock', charge_currency: 'JPY', charge_amount: 13680 } },
         labels,
       ),
-    ).toBe('模拟支付 · 13,680 円');
+    ).toBe('模拟支付 · 13,680 日元');
   });
   it('🔴 时间线操作者写「支付机构 中文名」', () => {
     expect(eventActorText({ actor: 'provider:stripe' }, labels)).toBe('支付机构 银行卡');

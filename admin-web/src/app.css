@@ -1404,6 +1404,17 @@ textarea::placeholder {
   min-height: var(--md-target-min);
   display: flex;
   align-items: center;
+  gap: var(--ws-space-sm);
+}
+
+/* 展开箭头：summary 设了 display:flex 后浏览器自带的 ▸ 就没了，「技术信息」看着像一行普通字、不知道能点开
+   （全入口点击测试 2026-10-12，用户截图圈出） */
+.tech-info summary::before {
+  content: '▸';
+}
+
+.tech-info[open] summary::before {
+  content: '▾';
 }
 
 /* 确认弹层打开时焦点在弹层本体上（N21）：不画焦点框 */

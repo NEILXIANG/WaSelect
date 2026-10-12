@@ -46,7 +46,7 @@ const formRow = (max: string, price: string, active = true): Record<string, unkn
 
 describe('fxRows', () => {
   // 三端模拟测试 2026-10-11（运营看不懂的数）：缓冲写 0.03（设置页写 3%），汇率 0.050985 不说是"1 円 兑多少"
-  it('🔴 映射出展示列：缓冲按百分比，另给"100 円 ≈ …"的折算示例（生效时间是 JST）', () => {
+  it('🔴 映射出展示列：缓冲按百分比，另给"100 日元 ≈ …"的折算示例（生效时间是 JST）', () => {
     const [row] = fxRows([
       {
         quote: 'USD',
@@ -62,7 +62,7 @@ describe('fxRows', () => {
       rateText: '0.0066',
       rawRateText: '0.0067',
       bufferText: '1%',
-      exampleText: '100 円 ≈ $0.66',
+      exampleText: '100 日元 ≈ $0.66',
       effectiveText: '2026-09-27 09:00',
       isCurrent: false,
     });
@@ -86,8 +86,8 @@ describe('fxRows', () => {
       },
     ]);
     expect(rows.map((r) => [r.exampleText, r.bufferText])).toEqual([
-      ['100 円 ≈ 5.10 元', '3%'],
-      ['100 円 ≈ 0.61 EUR', '0%'],
+      ['100 日元 ≈ 5.10 元', '3%'],
+      ['100 日元 ≈ 0.61 EUR', '0%'],
     ]);
   });
 
@@ -244,7 +244,7 @@ describe('fxPreview（A8：保存前的量级核对）', () => {
     expect(p.risky).toBe(true);
     expect(p.ratio).toBeCloseTo(10, 6);
     expect(p.reason).toContain('倍');
-    expect(p.sampleText).toBe('10,000 円 ≈ USD 670.00');
+    expect(p.sampleText).toBe('10,000 日元 ≈ USD 670.00');
   });
 
   it('🔴 小数点错位（1/10）→ 同样标红（少收 90% 的方向更危险）', () => {
@@ -257,7 +257,7 @@ describe('fxPreview（A8：保存前的量级核对）', () => {
     const p = fxPreview({ quote: 'USD', rawRate: '0.0067', currentRate: null });
     expect(p.ratio).toBeNull();
     expect(p.risky).toBe(false);
-    expect(p.sampleText).toBe('10,000 円 ≈ USD 67.00');
+    expect(p.sampleText).toBe('10,000 日元 ≈ USD 67.00');
   });
 
   it('填了非法值 → 给不出预览（由 fxFormErrors 负责报错，这里不重复造文案）', () => {
@@ -275,7 +275,7 @@ describe('rateRows', () => {
 
   it('价格走千分位，启用态原样带出', () => {
     const rows = rateRows(RATES);
-    expect(rows[2]?.priceText).toBe('4,950 円');
+    expect(rows[2]?.priceText).toBe('4,950 日元');
     expect(rows[2]?.active).toBe(true);
   });
 
@@ -358,7 +358,7 @@ describe('rateErrors（整表校验）', () => {
   it('P2-42 重量 / 运费超过 SHIPPING_RATE_BOUNDS → 拒（边界值本身放行）', () => {
     expect(rateErrors([formRow('30000', '100000')]).ok).toBe(true);
     expect(rateErrors([formRow('30001', '2200')]).first).toContain('不能超过 30000 克');
-    expect(rateErrors([formRow('500', '100001')]).first).toContain('不能超过 100000 円');
+    expect(rateErrors([formRow('500', '100001')]).first).toContain('不能超过 100000 日元');
   });
 
   it('⚠️ 全部停用 → 拒（没有启用档 = 没有运费可算）', () => {

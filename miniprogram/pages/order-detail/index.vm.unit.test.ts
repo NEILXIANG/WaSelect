@@ -220,11 +220,11 @@ describe('itemRows（行项目）', () => {
       title: '保温杯',
       qty: 2,
       unitPriceJpy: 2400,
-      unitPriceText: '2,400 円',
+      unitPriceText: '2,400 日元',
       image: 'https://img.example/p1-card.png',
     });
     expect(b?.image).toBe('/assets/placeholder.png'); // 缺图回落占位（留白和没图分不清）
-    expect(b?.unitPriceText).toBe('3,200 円');
+    expect(b?.unitPriceText).toBe('3,200 日元');
     expect(itemRows([{ product_id: 'x' }])[0]?.unitPriceJpy).toBeNull();
   });
 
@@ -237,14 +237,14 @@ describe('itemRows（行项目）', () => {
 describe('amountLines（金额行）', () => {
   it('🔴 MP-11（第二轮审计 2026-10-11）：只有商品合计 / 运费两行——关税不再与它们并列（三行相加 ≠ 合计）', () => {
     expect(amountLines(ORDER)).toEqual([
-      { label: '商品合计', value: '8,000 円' },
-      { label: '运费', value: '1,150 円' },
+      { label: '商品合计', value: '8,000 日元' },
+      { label: '运费', value: '1,150 日元' },
     ]);
   });
 
   it('🔴 MP-11：关税改成合计下方一句说明，且**必须带"含在商品价内"**（信息字段，不是另收）', () => {
-    expect(dutyNote(ORDER)).toBe('其中预估关税 1,200 円（已含在商品价内）');
-    expect(detailView(ORDER).dutyNote).toBe('其中预估关税 1,200 円（已含在商品价内）');
+    expect(dutyNote(ORDER)).toBe('其中预估关税 1,200 日元（已含在商品价内）');
+    expect(detailView(ORDER).dutyNote).toBe('其中预估关税 1,200 日元（已含在商品价内）');
   });
 
   it('⚠️ duty_jpy 不是整数 → 不说关税（信息字段缺失时显示"关税：—" = 暗示"不收关税"）；0 照实说', () => {
@@ -252,7 +252,9 @@ describe('amountLines（金额行）', () => {
     expect(dutyNote({ items_jpy: 8000, duty_jpy: null })).toBe('');
     expect(dutyNote({ items_jpy: 8000, duty_jpy: '1200' })).toBe('');
     expect(dutyNote(null)).toBe('');
-    expect(dutyNote({ items_jpy: 8000, duty_jpy: 0 })).toBe('其中预估关税 0 円（已含在商品价内）');
+    expect(dutyNote({ items_jpy: 8000, duty_jpy: 0 })).toBe(
+      '其中预估关税 0 日元（已含在商品价内）',
+    );
   });
 });
 
@@ -296,7 +298,7 @@ describe('detailView：合计标签（W-04）', () => {
   });
 });
 
-/** 关税无法估算时服务端回 null（W-05 / 契约 0.6.30）：不能显示成"预估关税 0 円"。 */
+/** 关税无法估算时服务端回 null（W-05 / 契约 0.6.30）：不能显示成"预估关税 0 日元"。 */
 describe('detailView：无法估算的关税不显示（W-05）', () => {
   it('duty_jpy=null → 没有关税行；整数 → 有', () => {
     const base = {
@@ -361,7 +363,7 @@ describe('detailView：部分退款与迟到付款（P2-11 / P2-12，AJ-386）',
       ]),
     ).toEqual([
       ['$12.50', '已退回'],
-      ['800 円', '退款处理中'],
+      ['800 日元', '退款处理中'],
     ]);
     expect(detailView({ status: 'paid' }).partialRefunds).toEqual([]);
   });

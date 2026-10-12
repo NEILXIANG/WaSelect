@@ -47,14 +47,14 @@ describe('customerRows', () => {
         name: 'Zhang Wei',
         email: 'zhang.wei@example.com',
         ordersText: '3 单 · 已付 2',
-        paidTotalText: '21,380 円',
+        paidTotalText: '21,380 日元',
         lastOrderText: '2026-10-01 10:00',
         blocked: false,
       },
     ]);
   });
 
-  it('没下过单：名字与邮箱显示占位，累计 0 円（服务端给的就是 0），最近下单 —', () => {
+  it('没下过单：名字与邮箱显示占位，累计 0 日元（服务端给的就是 0），最近下单 —', () => {
     const [r] = customerRows([
       {
         id: 'u-cust-c',
@@ -70,7 +70,7 @@ describe('customerRows', () => {
       name: '（未下单）',
       email: '—',
       ordersText: '0 单',
-      paidTotalText: '0 円',
+      paidTotalText: '0 日元',
       lastOrderText: '—',
       blocked: true,
     });
@@ -121,7 +121,7 @@ describe('statsCards', () => {
     ).toEqual([
       { label: '订单数', value: '3 单', sub: '已付款 2 单（另有测试单 1 张，不计入）' },
       // 走查 2026-10-08："实付"会被读成已扣退款，改为"累计付款"（说明仍写不扣退款）
-      { label: '累计付款', value: '21,380 円', sub: '已付款订单合计，不扣退款' },
+      { label: '累计付款', value: '21,380 日元', sub: '已付款订单合计，不扣退款' },
       // 2026-10-09 浏览器验收：大字只放日期（整串大字会折两行），时刻放小字
       { label: '首单', value: '2026-09-01', sub: '11:00（日本时间）' },
       { label: '最近下单', value: '2026-10-01', sub: '10:00（日本时间）' },

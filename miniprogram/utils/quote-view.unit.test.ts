@@ -29,15 +29,15 @@ describe('quoteView（报价区）', () => {
   it('完整报价：商品合计 + 运费两行 + 合计（三币）；关税在合计下方的说明里（MP-11）', () => {
     const v = quoteView(QUOTE);
     expect(v.lines).toEqual([
-      { label: '商品合计', value: '7,200 円' },
-      { label: '运费', value: '1,950 円' },
+      { label: '商品合计', value: '7,200 日元' },
+      { label: '运费', value: '1,950 日元' },
     ]);
-    expect(v.totalText).toBe('9,150 円');
+    expect(v.totalText).toBe('9,150 日元');
     expect(v.hasTotal).toBe(true);
     expect(v.totalJpy).toBe(9150);
     expect(v.totalSub).toBe('≈ $62.20 · ≈ 人民币 ¥448.00');
     // MP-11（第二轮审计 2026-10-11）：关税并列成第三行时三行相加 ≠ 合计，买家会以为算错；改为合计下方一句说明
-    expect(v.hints).toEqual(['其中预估关税 936 円（已含在商品价内）']);
+    expect(v.hints).toEqual(['其中预估关税 936 日元（已含在商品价内）']);
   });
 
   it('⚠️ duty_estimate=false（或 duty_jpy=null）→ **不显示关税行**', () => {
@@ -64,7 +64,7 @@ describe('quoteView（报价区）', () => {
   //   拆成 blocker 单独一行用错误色，hints 只放说明性文字
   it('🔴 免邮差额 > 0 → 提示"再买 X 免运费"；split_hint → 拆单提示进 blocker（不混在说明里）', () => {
     const v = quoteView({ ...QUOTE, free_shipping_remaining_jpy: 1200, split_hint: true });
-    expect(v.hints).toEqual(['其中预估关税 936 円（已含在商品价内）', '再买 1,200 円 免运费']);
+    expect(v.hints).toEqual(['其中预估关税 936 日元（已含在商品价内）', '再买 1,200 日元 免运费']);
     expect(v.blocker).toBe('已超过单笔上限，请分两单下单');
     expect(quoteView({ ...QUOTE, split_hint: false }).blocker).toBe('');
   });
@@ -77,7 +77,7 @@ describe('quoteView（报价区）', () => {
       const v = quoteView({ ...QUOTE, split_hint: true });
       // MP-11：QUOTE 带关税估值，说明行第一句是关税（与本条无关，照实列出以保持精确相等）
       expect(v.blocker).toBe('已超过单笔上限，请分两单下单');
-      expect(v.hints).toEqual(['其中预估关税 936 円（已含在商品价内）']);
+      expect(v.hints).toEqual(['其中预估关税 936 日元（已含在商品价内）']);
       expect(v.blocker).not.toContain('接近');
     });
 
@@ -97,7 +97,7 @@ describe('quoteView（报价区）', () => {
 
   it('⚠️ 缺字段降级：只缺运费 → 其余行还在（不让整个报价区消失）', () => {
     const v = quoteView({ items_jpy: 7200 });
-    expect(v.lines).toEqual([{ label: '商品合计', value: '7,200 円' }]);
+    expect(v.lines).toEqual([{ label: '商品合计', value: '7,200 日元' }]);
     expect(v.hasTotal).toBe(false);
     expect(v.totalJpy).toBeNull();
     expect(v.totalText).toBe('');

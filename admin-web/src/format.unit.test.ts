@@ -8,10 +8,10 @@ import { describe, expect, it } from 'vitest';
 import { formatJst, minorMoneyText, moneyText, toIsoJst } from './format.js';
 
 describe('moneyText', () => {
-  it('千分位 + 円（不用 toLocaleString：它跟随浏览器语言区）', () => {
-    expect(moneyText(12800)).toBe('12,800 円');
-    expect(moneyText(1234567)).toBe('1,234,567 円');
-    expect(moneyText(0)).toBe('0 円');
+  it('千分位 + 日元（不用 toLocaleString：它跟随浏览器语言区）', () => {
+    expect(moneyText(12800)).toBe('12,800 日元');
+    expect(moneyText(1234567)).toBe('1,234,567 日元');
+    expect(moneyText(0)).toBe('0 日元');
   });
 
   it('⚠️ 非整数金额显示占位符而不是 "NaN 円"', () => {
@@ -34,9 +34,9 @@ describe('minorMoneyText（最小单位 → 主单位，B43）', () => {
   });
 
   it('🔴 JPY 无小数位：最小单位即主单位，不补 .00', () => {
-    // 日元用「円」后缀，不用 ¥（¥ 是人民币，D-36；三端联动模拟 2026-10-08）
-    expect(minorMoneyText(12800, 'JPY')).toBe('12,800 円');
-    expect(minorMoneyText(1234567, 'JPY')).toBe('1,234,567 円');
+    // 日元写「日元」，不用 ¥（¥ 是人民币，D-36）、也不用「円」（中文运营认不得，全入口点击测试 2026-10-12）
+    expect(minorMoneyText(12800, 'JPY')).toBe('12,800 日元');
+    expect(minorMoneyText(1234567, 'JPY')).toBe('1,234,567 日元');
   });
 
   it('CNY 用 CN¥ 而不是 ¥（¥ 已被日元占用，两个币种共一个符号只能靠猜）', () => {

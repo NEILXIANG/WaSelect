@@ -21,10 +21,10 @@ import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
 /** JST 相对 UTC 的偏移（毫秒）。 */
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
-/** 千分位 + 円（@see @limitation 一）。 */
+/** 千分位 + 日元（@see @limitation 一）。 */
 export function moneyText(jpy: unknown): string {
   if (!Number.isInteger(jpy)) return '—';
-  return `${String(jpy).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} 円`;
+  return `${String(jpy).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} 日元`;
 }
 
 /**
@@ -59,9 +59,10 @@ export function minorMoneyText(amount: unknown, currency: unknown): string {
   const [int = '0', frac] = major.split('.');
   const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const body = frac === undefined ? grouped : `${grouped}.${frac}`;
-  // 日元写「円」后缀（三端联动模拟 2026-10-08）：`¥` 在本项目口径里是人民币（D-36），
-  // 管理端详情原先显示 `mock · ¥2,700`，与同页「合计 2,700 円」并排，运营会读成人民币
-  if (key === 'JPY') return `${neg ? '-' : ''}${body} 円`;
+  // 日元写「日元」后缀：`¥` 在本项目口径里是人民币（D-36），管理端详情原先显示 `mock · ¥2,700`，运营会读成人民币（2026-10-08）。
+  // 不写「円」（全入口点击测试 2026-10-12：运营问"円是什么意思"——后台是中文运营看的，日文字认不得；
+  // 小程序价格区的「円」是 D-36 定的，后台不在其列）
+  if (key === 'JPY') return `${neg ? '-' : ''}${body} 日元`;
   return `${neg ? '-' : ''}${symbol}${body}`;
 }
 

@@ -185,7 +185,7 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
       expect(csv).not.toContain('Jane Doe');
       // AJ-493 后续 / AJ-494：采购单是内部用表——中文表头；36 位商品 id 挪到最后一列（核对用）
       expect(lines(csv)[0]).toBe(
-        '订单号,付款时间（日本时间）,商品名,日文原名,JAN 码,采购来源,数量,售价（円）,成本（円）,商品编号（系统）',
+        '订单号,付款时间（日本时间）,商品名,日文原名,JAN 码,采购来源,数量,售价（日元）,成本（日元）,商品编号（系统）',
       );
       // 数据行与表头对齐：第 3 列是商品名，最后一列是商品 id（只看表头的话，数据列错位不会红）
       const cells = (lines(csv)[1] ?? '').split(',');
@@ -207,7 +207,7 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
       // P2-46：时间列是日本时间（页面全部 JST，导出原先是 UTC Z，跨日统计会错一天）
       // AJ-494：订单总表是内部用表——中文表头、状态写中文（原为 created_at_jst / paid 这类英文字段与代号）
       expect(lines((all.body as { csv: string }).csv)[0]).toBe(
-        '订单号,状态,下单时间（日本时间）,付款时间（日本时间）,发货时间（日本时间）,商品金额（円）,运费（円）,预估关税（円）,订单合计（円）,收件人,州,国家,承运商,运单号,实付币种,实付金额',
+        '订单号,状态,下单时间（日本时间）,付款时间（日本时间）,发货时间（日本时间）,商品金额（日元）,运费（日元）,预估关税（日元）,订单合计（日元）,收件人,州,国家,承运商,运单号,实付币种,实付金额',
       );
       expect((all.body as { csv: string }).csv).toContain(',待发货,');
       expect((all.body as { csv: string }).csv).not.toMatch(/,paid,/);

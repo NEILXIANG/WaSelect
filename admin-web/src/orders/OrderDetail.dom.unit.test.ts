@@ -773,7 +773,7 @@ describe('订单详情：新手可用性（AJ-410）', () => {
     const labels = [...el.querySelectorAll('.detail-main .label')].map((l) => l.textContent);
     expect(labels.some((t) => (t ?? '').includes('内部'))).toBe(false);
     const tech = el.querySelector('details.tech-info');
-    expect(tech?.querySelector('summary')?.textContent).toBe('技术信息');
+    expect(tech?.querySelector('summary')?.textContent).toBe('技术信息（排查问题时给技术人员看）');
     expect(tech?.textContent).toContain('o-1');
   });
 
@@ -806,10 +806,10 @@ describe('订单详情：新手可用性（AJ-410）', () => {
       expect(fieldText(el, '物流')).toContain('EJ123456789JP');
       expect(fieldText(el, '物流')).toContain('Japan Post EMS');
       expect(el.querySelector('a[href="https://trackings.post.japanpost.jp/x"]')).not.toBeNull();
-      expect(fieldText(el, '商品合计')).toBe('8,000 円');
-      expect(fieldText(el, '运费')).toBe('1,150 円');
+      expect(fieldText(el, '商品合计')).toBe('8,000 日元');
+      expect(fieldText(el, '运费')).toBe('1,150 日元');
       // MP-11 同口径（第二轮审计浏览器验收）：关税挂在商品合计下面说"其中"，不与运费并列成第三笔
-      expect(fieldText(el, '其中预估关税（含在商品价内）')).toBe('600 円');
+      expect(fieldText(el, '其中预估关税（含在商品价内）')).toBe('600 日元');
       expect(fieldText(el, '买家实付')).toContain('$61.20');
       const labels = [...el.querySelectorAll('.row2 .field .label')].map((n) => n.textContent);
       expect(labels.indexOf('其中预估关税（含在商品价内）')).toBe(labels.indexOf('商品合计') + 1);

@@ -121,10 +121,10 @@ describe('订单详情 · 售后结案的二次确认与草稿保护', () => {
   const note = (el: HTMLElement): HTMLTextAreaElement | null =>
     el.querySelector('[aria-label="售后申请"] textarea');
 
-  it('🔴 说明框的示例写日元「円」不写「¥」（D-36：¥ 是人民币；运营照抄示例，买家会读成 1,500 元人民币）', async () => {
+  it('🔴 说明框的示例写「日元」不写「¥」（D-36：¥ 是人民币；运营照抄示例，买家会读成 1,500 元人民币）', async () => {
     const { el } = await open([OPEN]);
     const ph = note(el)?.placeholder ?? '';
-    expect(ph).toContain('1,500 円');
+    expect(ph).toContain('1,500 日元');
     expect(ph).not.toContain('¥');
   });
 

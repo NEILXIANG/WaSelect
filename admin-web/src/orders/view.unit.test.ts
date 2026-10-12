@@ -75,7 +75,7 @@ describe('orderRows', () => {
       orderNo: 'WS-20260927-0013',
       status: 'paid',
       statusText: '待发货',
-      totalText: '12,800 円',
+      totalText: '12,800 日元',
       createdText: '2026-09-27 13:05',
       recipientText: 'Emily Carter',
     });
@@ -785,7 +785,7 @@ describe('eventNoteView：处理售后事件（三端模拟测试 2026-10-11，�
 describe('eventNoteView（部分退款事件的机器串 → 人话，验收 2026-10-08）', () => {
   it('三种形状翻成金额 / 原因，退款编号进 ref；认不出原样返回', () => {
     expect(eventNoteView('partial_refunded', 'rf-1:JPY:500')).toEqual({
-      text: '500 円',
+      text: '500 日元',
       ref: 'rf-1',
     });
     expect(eventNoteView('partial_refunded', 'rf-2:USD:1234')).toEqual({
@@ -797,7 +797,7 @@ describe('eventNoteView（部分退款事件的机器串 → 人话，验收 202
       ref: 'rf-3',
     });
     expect(eventNoteView('refunded_by_parts', 'JPY:13750')).toEqual({
-      text: '累计 13,750 円',
+      text: '累计 13,750 日元',
       ref: '',
     });
     // 认不出的形状 / 未知币种 / 其它事件：原样，不吞信息

@@ -38,13 +38,16 @@
  * 把日元金额格式化成展示文案。
  *
  * @param {number} amountJpy 日元金额（整数円；非整数按 @limitation 二 抛错）
- * @returns {string} 形如 `1,234 円` / `-1,234 円`
+ * @returns {string} 形如 `1,234 日元` / `-1,234 日元`
  * @throws {Error} 非整数 / 非有限数 / 非数字——@see @limitation 一、二
  *
  * @why 单位写 **`円`**、不用 `¥`（D-36 三审 A1）：口径是"三币并列、符号不共用"——
  *      主行 `3,600 円`，副行 `≈ $24.50 · ≈ 人民币 ¥176`。`¥` 是分配给**人民币**的符号，
  *      目标用户是美国华人，`¥1,234` 会被读成人民币 1,234 元（与 1,234 円 ≈ 60 元差 20 倍），
  *      同一页再出现 `人民币 ¥176` 就是两个 `¥` 两种币——正是 D-36 立项时要防的混淆。
+ * @why 单位字从 `円` 改为 **`日元`**（用户 2026-10-12：看到「330 円」问"円是什么意思"，要求后台与小程序都改）：
+ *      `円` 是日文汉字，中文读者未必认得；`日元` 同样不用 `¥`，D-36"符号不共用"的本意不变。
+ * @tradeoff 多一个字：窄处（首页双列卡片、购物车行）价格更宽，长价格更可能换行——改后已在模拟器逐页看过。
  */
 export function formatJpy(amountJpy) {
   if (typeof amountJpy !== 'number' || !Number.isInteger(amountJpy)) {
@@ -53,7 +56,7 @@ export function formatJpy(amountJpy) {
   const magnitude = Math.abs(amountJpy);
   // ⚠️ 金额为 0（含 -0）时不带负号：`-0 円` 是"看起来像出错了"的文案，而 0 没有方向
   const sign = amountJpy < 0 && magnitude !== 0 ? '-' : '';
-  return `${sign}${group(magnitude)} 円`;
+  return `${sign}${group(magnitude)} 日元`;
 }
 
 /**
