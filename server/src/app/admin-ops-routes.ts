@@ -108,8 +108,20 @@ function fxRowKey(quote: string, at: Date): string {
   return `${quote}|${String(at.getTime())}`;
 }
 
-/** 仓储行 → 契约 `FxRate`（NUMERIC 已是 number；时间统一 ISO 字符串）。 */
-function toFxRate(r: FxRateRow, isCurrent: boolean): Record<string, unknown> {
+/**
+ * 仓储行 → 契约 `FxRate`（NUMERIC 已是 number；时间统一 ISO 字符串）。
+ * @why 当前行另带 `stale_at` / `stale`（规律排查 2026-10-12）：生效满 `FX_MAX_AGE_HOURS` 的汇率，
+ *      报价与下单当它缺失（quote-assembly → findFreshFxRates，整店 50003），运营页原先照样标"当前生效"。
+ *      判据与 findFreshFxRates 同口径：`effective_from <= now − maxAge` 即过期。
+ */
+function toFxRate(
+  r: FxRateRow,
+  isCurrent: boolean,
+  now: Date,
+  maxAgeHours: number,
+): Record<string, unknown> {
+  // eslint-disable-next-line no-restricted-syntax -- 生效时刻 + 配置时长换算成 ISO，不是读取当前时间（F10 的本意）
+  const staleAt = new Date(r.effective_from.getTime() + maxAgeHours * 3_600_000);
   return {
     quote: r.quote,
     rate: r.rate,
@@ -117,6 +129,9 @@ function toFxRate(r: FxRateRow, isCurrent: boolean): Record<string, unknown> {
     buffer: r.buffer,
     effective_from: r.effective_from.toISOString(),
     is_current: isCurrent,
+    ...(isCurrent
+      ? { stale_at: staleAt.toISOString(), stale: staleAt.getTime() <= now.getTime() }
+      : {}),
   };
 }
 
@@ -167,7 +182,16 @@ export function mountAdminOpsRoutes(app: Express, deps: AdminOpsRoutesDeps): voi
         const rows = await repo.listFxRates();
         const now = deps.clock.now(); // @limitation 四：判"当前生效"用服务端时钟
         const current = await currentFxKeys(repo, [...new Set(rows.map((r) => r.quote))], now);
-        res.json(rows.map((r) => toFxRate(r, current.has(fxRowKey(r.quote, r.effective_from)))));
+        res.json(
+          rows.map((r) =>
+            toFxRate(
+              r,
+              current.has(fxRowKey(r.quote, r.effective_from)),
+              now,
+              deps.config.FX_MAX_AGE_HOURS,
+            ),
+          ),
+        );
       } catch (e) {
         next(e);
       }

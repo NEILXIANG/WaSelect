@@ -133,7 +133,8 @@ function paidAmount(currency: unknown, minor: unknown): string | null {
 async function purchaseTable(db: Db, ids: readonly string[] | undefined): Promise<ExportTable> {
   const rows = await db`
     select o.order_no, o.paid_at, oi.product_id, oi.title_snapshot, oi.title_ja, oi.jan_code, oi.purchase_source,
-           oi.qty, oi.unit_price_jpy, oi.cost_jpy
+           oi.qty, oi.unit_price_jpy, oi.cost_jpy, o.has_dispute,
+           exists (select 1 from users u where u.id = o.user_id and u.blocked_at is not null) as user_blocked
       from order_items oi join orders o on o.id = oi.order_id
      where o.status = 'paid' and o.is_test = false and (${idFilter(db, 'o.id', ids)})
      order by o.paid_at, o.id, oi.line_no nulls last, oi.id`;
@@ -149,6 +150,8 @@ async function purchaseTable(db: Db, ids: readonly string[] | undefined): Promis
       '数量',
       '售价（日元）',
       '成本（日元）',
+      // 规律排查 2026-10-12：只看 status = 'paid' 会把拒付锁定（不许发货）的单也列进来，采购员照表买了发不出去
+      '备注',
       '商品编号（系统）',
     ],
     rows: rows.map((r) => [
@@ -161,6 +164,11 @@ async function purchaseTable(db: Db, ids: readonly string[] | undefined): Promis
       num(r['qty']),
       num(r['unit_price_jpy']),
       num(r['cost_jpy']),
+      r['has_dispute'] === true
+        ? '拒付锁定：暂不发货，先别采购'
+        : r['user_blocked'] === true
+          ? '买家已拉黑：发货前先核实'
+          : '',
       str(r['product_id']),
     ]),
   };
@@ -183,7 +191,8 @@ async function customsTable(db: Db, ids: readonly string[] | undefined): Promise
       from order_items oi
       join orders o on o.id = oi.order_id
       join products p on p.id = oi.product_id
-     where o.status = 'paid' and o.is_test = false and (${idFilter(db, 'o.id', ids)})
+     -- 拒付锁定的单不许发货（40909），不进报关表（规律排查 2026-10-12）
+     where o.status = 'paid' and o.is_test = false and not o.has_dispute and (${idFilter(db, 'o.id', ids)})
      order by o.paid_at, o.id, oi.line_no nulls last, oi.id`;
   return {
     header: [

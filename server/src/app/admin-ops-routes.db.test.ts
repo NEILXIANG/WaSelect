@@ -206,6 +206,29 @@ describe('GET /admin/fx', () => {
     }
   });
 
+  // 规律排查 2026-10-12：超过 FX_MAX_AGE_HOURS（默认 72h）没更新的汇率，报价与下单当它缺失（整店 50003），
+  //   运营页却照样标"（当前生效）"——看不出店已经下不了单
+  it('🔴 当前行带过期时刻 stale_at 与 stale（与报价同口径：生效满 72 小时即过期）', async () => {
+    await db`
+      insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)
+      values ('USD', 0.0067, 0.0065, 0.03, now() - interval '73 hours'),
+             ('CNY', 0.049, 0.048, 0.03, now() - interval '1 hour')
+    `;
+    const { url, close } = await buildServer();
+    try {
+      const r = await call(url, 'GET', '/api/v1/admin/fx', undefined, await bearer());
+      const rows = r.body as Array<Record<string, unknown>>;
+      const usd = rows.find((x) => x['quote'] === 'USD');
+      const cny = rows.find((x) => x['quote'] === 'CNY');
+      expect(usd).toMatchObject({ is_current: true, stale: true });
+      expect(cny).toMatchObject({ is_current: true, stale: false });
+      const cnyAt = Date.parse(String(cny?.['effective_from']));
+      expect(Date.parse(String(cny?.['stale_at'])) - cnyAt).toBe(72 * 3_600_000);
+    } finally {
+      await close();
+    }
+  });
+
   it('全部都是未来生效行时没有任何 is_current（前端据此判定"没有基准"，不会拿旧值当基准）', async () => {
     await db`
       insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)

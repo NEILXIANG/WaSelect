@@ -409,6 +409,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         res.json({
           ship_overdue:
             order.status === 'paid' &&
+            !order.has_dispute &&
             order.paid_at !== null &&
             order.paid_at.getTime() < overdueCutoff.getTime(),
           ...toAdminOrder(

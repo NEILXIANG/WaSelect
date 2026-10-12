@@ -186,12 +186,49 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
       expect(csv).not.toContain('Jane Doe');
       // AJ-493 后续 / AJ-494：采购单是内部用表——中文表头；36 位商品 id 挪到最后一列（核对用）
       expect(lines(csv)[0]).toBe(
-        '订单号,付款时间（日本时间）,商品名,日文原名,JAN 码,采购来源,数量,售价（日元）,成本（日元）,商品编号（系统）',
+        '订单号,付款时间（日本时间）,商品名,日文原名,JAN 码,采购来源,数量,售价（日元）,成本（日元）,备注,商品编号（系统）',
       );
       // 数据行与表头对齐：第 3 列是商品名，最后一列是商品 id（只看表头的话，数据列错位不会红）
       const cells = (lines(csv)[1] ?? '').split(',');
       expect(cells[2]).toBe('Deba Knife 出刃包丁');
       expect(cells.at(-1)).toBe('p-o-1');
+    } finally {
+      await close();
+    }
+  });
+
+  // 规律排查 2026-10-12：两张表只看 status = 'paid'——拒付锁定的单服务端不许发货（40909），采购员照表买了发不出去、
+  //   报关表里也列着它；拉黑买家的已付单可以发（AJ 批量发货黄字提醒、不拦），采购表上同样要看得到
+  it('🔴 拒付锁定的单不进报关表、采购表标"先别采购"；拉黑买家的单采购表标出来', async () => {
+    await seedOrder('o-1', 'paid');
+    await seedOrder('o-d', 'paid');
+    await seedOrder('o-b', 'paid');
+    await db`update orders set has_dispute = true where id = 'o-d'`;
+    await db`update users set blocked_at = now() where id = 'u-o-b'`;
+    const { url, close } = await buildServer();
+    try {
+      const customs = (
+        (await call(url, 'GET', '/api/v1/admin/exports/customs', undefined, await bearer()))
+          .body as {
+          csv: string;
+        }
+      ).csv;
+      expect(customs).not.toContain('WSo-d');
+      expect(customs).toContain('WSo-1');
+      const purchase = (
+        (await call(url, 'GET', '/api/v1/admin/exports/purchase', undefined, await bearer()))
+          .body as {
+          csv: string;
+        }
+      ).csv;
+      const note = (no: string): string | undefined =>
+        lines(purchase)
+          .find((l) => l.startsWith(no + ','))
+          ?.split(',')
+          .at(-2);
+      expect(note('WSo-1')).toBe('');
+      expect(note('WSo-d')).toBe('拒付锁定：暂不发货，先别采购');
+      expect(note('WSo-b')).toBe('买家已拉黑：发货前先核实');
     } finally {
       await close();
     }

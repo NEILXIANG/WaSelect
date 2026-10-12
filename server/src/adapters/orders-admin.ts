@@ -271,8 +271,11 @@ function attentionWhere(db: Db, a: OrderAttention | undefined, cutoff: Date | un
     case undefined:
       return db`true`;
     // AJ-484：已付款、付款早于截止（N 个 JST 工作日前的 00:00）仍未发货
+    // 拒付锁定的不算（规律排查 2026-10-12）：服务端不许发货（40909），催发只会让运营白跑一趟
     case 'ship_overdue':
-      return cutoff === undefined ? db`false` : db`status = 'paid' and paid_at < ${cutoff}`;
+      return cutoff === undefined
+        ? db`false`
+        : db`status = 'paid' and paid_at < ${cutoff} and not has_dispute`;
     // AJ-485：拒付还开着（要去举证）；胜诉 / 败诉 / 撤回不算
     case 'dispute_open':
       return db`exists (select 1 from payments p where p.order_id = orders.id and p.dispute_status = 'open')`;
@@ -370,7 +373,8 @@ export async function listAdminOrders(
                     where a.order_id = orders.id and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])}) as after_sale_open,
            exists (select 1 from users u
                     where u.id = orders.user_id and u.blocked_at is not null) as user_blocked,
-           coalesce(status = 'paid' and paid_at < ${q.shipOverdueCutoff ?? null}::timestamptz, false) as ship_overdue
+           coalesce(status = 'paid' and paid_at < ${q.shipOverdueCutoff ?? null}::timestamptz
+                    and not has_dispute, false) as ship_overdue
       from orders
     ${buildWhere(db, q)}
      ${orderListOrderBy(db, q.sort)}

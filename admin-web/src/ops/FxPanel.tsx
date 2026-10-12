@@ -166,9 +166,9 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
               <td>{r.exampleText}</td>
               {/* ⚠️ "当前生效"由服务端标（ADM3-05）：这张表是只能追加的历史视图，
                   不标的话运营只能靠生效时间去推哪一行正在起作用（ADM-10）。 */}
-              <td className="muted">
+              <td className={r.stale ? 'error' : 'muted'}>
                 {r.effectiveText}
-                {r.isCurrent ? '（当前生效）' : ''}
+                {r.currentNote}
               </td>
             </tr>
           ))}

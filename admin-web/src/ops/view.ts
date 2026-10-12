@@ -74,6 +74,13 @@ export interface FxRow {
    *      现在只转述服务端下发的 `is_current`，前端不再有第二份判定。
    */
   isCurrent: boolean;
+  /**
+   * 当前行的说明：何时要更新 / 已过期（规律排查 2026-10-12：过期的汇率报价与下单当它缺失、整店下不了单，
+   * 原先照样写"当前生效"）。取服务端的 `stale_at` / `stale`（0.6.89）；非当前行为空。
+   */
+  currentNote: string;
+  /** 服务端判定已过期（标红用）。 */
+  stale: boolean;
 }
 
 /** `FxRate[]` → 列表行（未知 quote 原样显示，不猜）。 */
@@ -94,8 +101,18 @@ export function fxRows(items: unknown): FxRow[] {
         exampleText: example(quote, x['rate']),
         effectiveText: formatJst(x['effective_from']),
         isCurrent: x['is_current'] === true,
+        currentNote: currentNote(x),
+        stale: x['is_current'] === true && x['stale'] === true,
       };
     });
+}
+
+function currentNote(x: Record<string, unknown>): string {
+  if (x['is_current'] !== true) return '';
+  if (x['stale'] === true) return '（已过期：买家现在下不了单，请立即录入新汇率）';
+  return typeof x['stale_at'] === 'string'
+    ? `（当前生效 · ${formatJst(x['stale_at'])} 前要更新）`
+    : '（当前生效）';
 }
 
 /** 0.03 → `3%`（与设置页同口径；三端模拟测试 2026-10-11：这里原写 0.03、设置页写 3%）。 */

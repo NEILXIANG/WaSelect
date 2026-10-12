@@ -65,7 +65,40 @@ describe('fxRows', () => {
       exampleText: '100 日元 ≈ $0.66',
       effectiveText: '2026-09-27 09:00',
       isCurrent: false,
+      currentNote: '',
+      stale: false,
     });
+  });
+
+  // 规律排查 2026-10-12：过期（满 72 小时）的汇率买家下不了单，运营页原先照样写"（当前生效）"
+  it('🔴 当前行写何时要更新；已过期写清买家现在下不了单', () => {
+    const base = { quote: 'USD', rate: 0.0066, raw_rate: 0.0067, buffer: 0.01 };
+    const [fresh, old] = fxRows([
+      {
+        ...base,
+        effective_from: '2026-10-12T00:00:00Z',
+        is_current: true,
+        stale_at: '2026-10-15T00:00:00Z',
+        stale: false,
+      },
+      {
+        ...base,
+        quote: 'CNY',
+        effective_from: '2026-10-01T00:00:00Z',
+        is_current: true,
+        stale_at: '2026-10-04T00:00:00Z',
+        stale: true,
+      },
+    ]);
+    expect(fresh?.currentNote).toBe('（当前生效 · 2026-10-15 09:00 前要更新）');
+    expect(fresh?.stale).toBe(false);
+    expect(old?.currentNote).toBe('（已过期：买家现在下不了单，请立即录入新汇率）');
+    expect(old?.stale).toBe(true);
+    // 旧服务端没带 stale_at：照旧写"当前生效"
+    expect(
+      fxRows([{ ...base, effective_from: '2026-10-12T00:00:00Z', is_current: true }])[0]
+        ?.currentNote,
+    ).toBe('（当前生效）');
   });
 
   it('人民币示例写「元」（日元店里 ¥ 会被读成日元）；认不出的币种把代码写在后面', () => {
