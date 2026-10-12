@@ -803,6 +803,9 @@ export function isDisputeLocked(order: unknown): boolean {
  */
 export function disputeLockState(order: unknown): 'open' | 'lost' | 'locked' | null {
   if (!isDisputeLocked(order)) return null;
+  // 服务端判定优先（契约 0.6.89 `payment_dispute`，与买家端同一判据；列表行也带）；时间线只作旧服务端的兜底
+  const pd = (order as { payment_dispute?: unknown }).payment_dispute;
+  if (pd === 'open' || pd === 'lost') return pd;
   const events = (order as { events?: unknown }).events;
   if (!Array.isArray(events)) return 'locked';
   const last = [...events]

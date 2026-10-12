@@ -1142,6 +1142,33 @@ describe('GET /admin/orders?sort', () => {
       await s.close();
     });
 
+    // 规律排查 2026-10-12：has_dispute 对进行中与已败诉都是 true，后台原先一律写"拒付中"；
+    //   列表与详情带上与买家端同口径的 payment_dispute（AJ-500），运营分得清哪张还在打、哪张已经输了
+    it('🔴 列表与详情带 payment_dispute（open / lost；胜诉 / 撤回 / 没有拒付不带）', async () => {
+      const s = await buildServer();
+      for (const [id, st] of [
+        ['o-open', 'open'],
+        ['o-lost', 'lost'],
+        ['o-won', 'won'],
+      ] as const) {
+        await seedOrder({ id, hasDispute: st === 'open' || st === 'lost' });
+        await db`update payments set dispute_id = ${`dp_${id}`}, dispute_status = ${st} where order_id = ${id}`;
+      }
+      const all = await adminFetch(s, 'GET', '/api/v1/admin/orders?size=50');
+      const byId = new Map(
+        (all.json['items'] as Array<{ order_id: string; payment_dispute?: string }>).map((i) => [
+          i.order_id,
+          i.payment_dispute,
+        ]),
+      );
+      expect(byId.get('o-open')).toBe('open');
+      expect(byId.get('o-lost')).toBe('lost');
+      expect(byId.get('o-won')).toBeUndefined();
+      const d = await adminFetch(s, 'GET', '/api/v1/admin/orders/o-lost');
+      expect(d.json['payment_dispute']).toBe('lost');
+      await s.close();
+    });
+
     it('🔴 AJ-486：user_id 只列这位买家的单（客户详情"查看全部订单"）；形状不对 → 40001（日志 reason=user_id_invalid）', async () => {
       const s = await buildServer();
       await seedOrder({ id: 'o-a1' });

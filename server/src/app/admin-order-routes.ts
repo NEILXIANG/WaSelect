@@ -80,6 +80,7 @@ import { parseAddressInput } from '../domain/address-input.js';
 import { createCountryProfileRepo } from '../adapters/country-profiles.js';
 import { listAfterSales } from '../adapters/after-sales.js';
 import { listAddressHistory } from '../adapters/orders-admin.js';
+import { findBuyerDisputeState } from '../adapters/orders.js';
 import { adminAfterSaleView } from './after-sale-routes.js';
 import {
   findAdminOrder,
@@ -162,6 +163,8 @@ function toListItem(
     user_blocked: r.user_blocked,
     // AJ-484（契约 0.6.70）：超时未发货
     ship_overdue: r.ship_overdue,
+    // 规律排查 2026-10-12（契约 0.6.89）：拒付进行中 / 已败诉——has_dispute 两种都是 true
+    ...(r.payment_dispute !== null ? { payment_dispute: r.payment_dispute } : {}),
     created_at: r.created_at.toISOString(),
   };
 }
@@ -398,7 +401,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
         const order = await findAdminOrder(deps.db, id);
         if (order === null) throw new AppError(40400, { order_id: id });
         // 三类附属数据各**一次**批量查询（本页只有一张单，但形态与列表将来共用）
-        const [items, payments, events, partials, customer, afterSales, addressHistory] =
+        const [items, payments, events, partials, customer, afterSales, addressHistory, dispute] =
           await Promise.all([
             listOrderItemsFor(deps.db, [id]),
             listPaymentsFor(deps.db, [id]),
@@ -408,6 +411,8 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
             findCustomer(deps.db, order.user_id),
             listAfterSales(deps.db, id),
             listAddressHistory(deps.db, id),
+            // 规律排查 2026-10-12：与买家端同一判据（AJ-500）——has_dispute 对进行中与已败诉都是 true
+            findBuyerDisputeState(deps.db, id),
           ]);
         // AJ-484：与列表同一个截止口径（同一个时钟、同一份配置）
         const overdueCutoff = shipOverdueCutoff(
@@ -415,6 +420,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           deps.config.SHIP_WITHIN_BUSINESS_DAYS,
         );
         res.json({
+          ...(dispute !== null ? { payment_dispute: dispute } : {}),
           ship_overdue:
             order.status === 'paid' &&
             !order.has_dispute &&

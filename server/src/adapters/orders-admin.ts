@@ -57,6 +57,7 @@
  */
 import { AFTER_SALE_OPEN_STATUSES, type OrderAttention } from '@waselect/shared';
 import type { Db, JSONValue } from './db.js';
+import { asDispute, disputeStateSql } from './orders.js';
 
 /** 列表行（`AdminOrderListItem`：OrderSummary + 管理端专有列）。 */
 export interface AdminOrderListRow {
@@ -78,6 +79,8 @@ export interface AdminOrderListRow {
   user_blocked: boolean;
   /** AJ-484：已付款、超过承诺的 N 个工作日仍未发货（同 `attention=ship_overdue` 口径）。 */
   ship_overdue: boolean;
+  /** 拒付状态（规律排查 2026-10-12，与买家端 AJ-500 同一判据）：'open' 进行中 / 'lost' 已败诉；其余 null。 */
+  payment_dispute: 'open' | 'lost' | null;
   created_at: Date;
   /**
    * 收件人（地址快照里的 recipient；0.6.9 / KD-14）。
@@ -334,6 +337,7 @@ function toListRow(r: Record<string, unknown>): AdminOrderListRow {
     after_sale_open: bool(r.after_sale_open),
     user_blocked: bool(r.user_blocked),
     ship_overdue: bool(r.ship_overdue),
+    payment_dispute: asDispute(r.payment_dispute),
     created_at: r.created_at as Date,
     recipient: strOrNull(r.recipient),
   };
@@ -374,7 +378,8 @@ export async function listAdminOrders(
            exists (select 1 from users u
                     where u.id = orders.user_id and u.blocked_at is not null) as user_blocked,
            coalesce(status = 'paid' and paid_at < ${q.shipOverdueCutoff ?? null}::timestamptz
-                    and not has_dispute, false) as ship_overdue
+                    and not has_dispute, false) as ship_overdue,
+           ${disputeStateSql(db, 'orders')} as payment_dispute
       from orders
     ${buildWhere(db, q)}
      ${orderListOrderBy(db, q.sort)}

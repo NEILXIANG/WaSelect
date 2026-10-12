@@ -81,6 +81,15 @@ describe('detailBadges（详情页头）', () => {
     expect(flag([opened, lost, { ...opened, note: 'dp_2' }])).toBe('拒付中');
     expect(flag([])).toBe('拒付锁定');
   });
+
+  it('🔴 服务端给了 payment_dispute（列表行也有）→ 以它为准，不靠时间线', () => {
+    const f = (pd: string): string | undefined =>
+      texts({ status: 'paid', has_dispute: true, payment_dispute: pd }).find((t) =>
+        t.startsWith('拒付'),
+      );
+    expect(f('open')).toBe('拒付中');
+    expect(f('lost')).toBe('拒付已败诉');
+  });
 });
 
 describe('detailBadges：详情页也要有「用户已拉黑 / 售后中」（三端联动模拟 2026-10-10）', () => {

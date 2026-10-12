@@ -480,15 +480,22 @@ export interface OwnedOrderListRow extends OrderListRow {
  *      败诉保持 true，买家看到"钱已由银行退回、订单不发货"。与管理端发货 / 退款闸门读同一个标记。
  * @limitation 一单多条支付行都有拒付时取最近开案的那条（实际上一单只会有一笔成功付款）。
  */
-const buyerDisputeSql = (db: Db) => db`
-  case when o.has_dispute then
+const buyerDisputeSql = (db: Db) => disputeStateSql(db, 'o');
+
+/**
+ * 同一判据按表别名出 SQL 片段（规律排查 2026-10-12：管理端订单列表 / 详情也用它——买家端与管理端说同一件事）。
+ * @param alias 外层 `orders` 的别名（买家查询用 `o`，管理端列表直接写 `orders`）
+ */
+export const disputeStateSql = (db: Db, alias: 'o' | 'orders') => db`
+  case when ${db(alias)}.has_dispute then
     (select p.dispute_status from payments p
-      where p.order_id = o.id and p.dispute_status in ('open', 'lost')
+      where p.order_id = ${db(alias)}.id and p.dispute_status in ('open', 'lost')
       order by p.dispute_opened_at desc nulls last
       limit 1)
   end`;
 
-const asDispute = (v: unknown): 'open' | 'lost' | null => (v === 'open' || v === 'lost' ? v : null);
+export const asDispute = (v: unknown): 'open' | 'lost' | null =>
+  v === 'open' || v === 'lost' ? v : null;
 
 /** 详情用：单张订单的买家可见拒付状态（AJ-500）。 */
 export async function findBuyerDisputeState(
