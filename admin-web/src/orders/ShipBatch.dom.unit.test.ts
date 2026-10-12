@@ -234,9 +234,11 @@ describe('导入运单号（Excel/表格文件）', () => {
       el.querySelector('textarea[aria-label="CSV 内容"]'),
       '\uFEFF注文番号,追跡番号\r\n261007-7K3QXA,EJ123456789JP\r\n261007-9P4TZE,EJ000000003JP\r\n261007-ZZZZZZ,EJ1\r\n261007-8M2WRD,EJ2\r\n261007-8M2WRD,EJ3\r\n',
     );
-    await click(button(el, '预检'));
+    await click(button(el, '先检查（还不会发货）'));
+    // 全入口点击测试 2026-10-11：「预检」改为「先检查（还不会发货）」；订单号单元格不折行（原先折成两行，对单号不方便）
+    expect(el.querySelector('table[aria-label="检查结果"] td.cell-nowrap')).not.toBeNull();
     await flush();
-    const table = el.querySelector('table[aria-label="预检结果"]')?.textContent ?? '';
+    const table = el.querySelector('table[aria-label="检查结果"]')?.textContent ?? '';
     expect(table).toContain('找不到这个订单号');
     expect(table).toContain('拒付');
     expect(table).toContain('同一单号重复出现');
@@ -268,7 +270,7 @@ describe('导入运单号（Excel/表格文件）', () => {
     await click(button(el, '导入运单号（Excel/表格文件）'));
     const before = calls.length;
     await type(el.querySelector('textarea[aria-label="CSV 内容"]'), '收件人,电话\nA,1\n');
-    await click(button(el, '预检'));
+    await click(button(el, '先检查（还不会发货）'));
     expect(el.textContent).toContain('表头缺少列');
     expect(calls.slice(before).filter((c) => c.path.includes('keyword='))).toHaveLength(0);
   });
@@ -278,7 +280,7 @@ describe('导入运单号（Excel/表格文件）', () => {
     await click(button(el, '导入运单号（Excel/表格文件）'));
     const ta = el.querySelector('textarea[aria-label="CSV 内容"]');
     await type(ta, 'order_no,carrier,tracking_no\n261007-7K3QXA,EMS,EJ123456789JP\n');
-    await click(button(el, '预检'));
+    await click(button(el, '先检查（还不会发货）'));
     expect(button(el, '批量发货 1 单')).not.toBeNull();
     await type(ta, 'order_no,carrier,tracking_no\n261007-8M2WRD,EMS,EJ123456789JP\n');
     expect(button(el, '批量发货 1 单')).toBeNull();
@@ -293,12 +295,12 @@ describe('导入运单号（Excel/表格文件）', () => {
     hold = new Promise<void>((r) => {
       release = r;
     });
-    await click(button(el, '预检'));
+    await click(button(el, '先检查（还不会发货）'));
     await type(ta, 'order_no,carrier,tracking_no\n261007-8M2WRD,EMS,EJ123456789JP\n');
     release();
     await flush();
     await flush();
-    expect(el.querySelector('table[aria-label="预检结果"]')).toBeNull();
+    expect(el.querySelector('table[aria-label="检查结果"]')).toBeNull();
     expect(button(el, '批量发货 1 单')).toBeNull();
   });
 });

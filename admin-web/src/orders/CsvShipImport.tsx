@@ -137,11 +137,12 @@ export function CsvShipImport({ api, onClose, onDone, onError }: CsvShipImportPr
         disabled={text.trim() === '' || checking}
         onClick={() => void check()}
       >
-        {checking ? '预检中…' : '预检'}
+        {/* 全入口点击测试 2026-10-11：「预检」是行话，新手不知道点了会不会直接发货 */}
+        {checking ? '检查中…' : '先检查（还不会发货）'}
       </button>
       {rows !== null && (
         <>
-          <table className="table" aria-label="预检结果">
+          <table className="table" aria-label="检查结果">
             <thead>
               <tr>
                 <th>行</th>
@@ -155,7 +156,7 @@ export function CsvShipImport({ api, onClose, onDone, onError }: CsvShipImportPr
               {rows.map((r) => (
                 <tr key={r.line}>
                   <td>{r.line}</td>
-                  <td>{r.orderNo}</td>
+                  <td className="cell-nowrap">{r.orderNo}</td>
                   <td>{r.carrier}</td>
                   <td>{r.trackingNo}</td>
                   <td>
