@@ -58,6 +58,7 @@ import { selectMailer } from './adapters/mail/select.js';
 import { drainEventsThenClose } from './app/shutdown-cleanup.js';
 import { createCleanupIdempotencyJob } from './app/cleanup-idempotency.js';
 import { createDailyHeartbeatWatchJob } from './app/daily-heartbeat-watch.js';
+import { launchReadinessInput, reportLaunchReadiness } from './app/daily-reconciliation.js';
 import { createExpireOrdersJob } from './app/expire-orders.js';
 import {
   createSchedulerDeps,
@@ -406,6 +407,14 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<Runtime> {
       host: config.HOST,
       result: 'ok',
     });
+    // 空库上线演练 2026-10-12：部署后第一眼就说清"买家还能不能下单"（运费表 / 汇率 / 审核商品）；
+    //   只在 staging / production 跑，不阻塞启动（@see reportLaunchReadiness）
+    if (config.NODE_ENV === 'production' || config.NODE_ENV === 'staging') {
+      void reportLaunchReadiness(db, logger, {
+        ...launchReadinessInput(config),
+        at: systemClock.now(),
+      });
+    }
 
     return {
       config,

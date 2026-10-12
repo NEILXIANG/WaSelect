@@ -42,7 +42,7 @@ import { createSchedulerDeps } from './scheduler-start.js';
 import type { InflightJobs } from './inflight-jobs.js';
 import { runSchedulerOnce } from './scheduler.js';
 import { DAILY_JOB_ROW_NAME } from '../ports/scheduler.js';
-import { createDailyReconciliationJob } from './daily-reconciliation.js';
+import { createDailyReconciliationJob, launchReadinessInput } from './daily-reconciliation.js';
 import { createMailSweepJob } from './mail-sweep.js';
 import { createAutoCompleteJob, createAutoDeliverJob } from './auto-fulfilment.js';
 import { createCleanupLoginAttemptsJob } from './login-attempts-cleanup.js';
@@ -162,6 +162,10 @@ export function mountInternalJobsRoutes(
                 },
                 // P1-9：真正停售前一天报（最少 1 小时，防 FX_MAX_AGE_HOURS 配得很小时阈值变负）
                 fxWarnAfterHours: Math.max(1, deps.config.FX_MAX_AGE_HOURS - 24),
+                // 空库上线演练 2026-10-12：只在 staging / production 查（开发 / 测试库的运费表常是空的）
+                ...(deps.config.NODE_ENV === 'production' || deps.config.NODE_ENV === 'staging'
+                  ? { launch: launchReadinessInput(deps.config) }
+                  : {}),
               }),
               // AJ-419：补发漏发的订单通知邮件——放在对账之后、清理之前：它只重发事件（提交后由 order-mail 发信），
               //   不改订单状态；排在自动签收之后，刚被自动签收的单不会触发任何信（delivered 本就不发信）

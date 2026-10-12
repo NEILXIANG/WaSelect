@@ -25,6 +25,8 @@ export const RECONCILE_CLASS_LABELS: Readonly<Record<string, string>> = {
   review_mode_no_deadline: '审核模式已开启但没设到期日',
   review_mode_expired: '审核模式已过到期日仍在开启',
   review_mode_closing: '审核模式临近到期',
+  // 空库上线演练 2026-10-12：买家此刻能不能下单的三项前提
+  launch_not_ready: '上线配置缺项（买家可能下不了单）',
 };
 
 /**
@@ -303,6 +305,12 @@ const GUIDE: Readonly<
   stalled_heartbeats: {
     owner: 'tech',
     advice: '定时任务可能停了，过期关单、自动签收都不会执行：请技术人员检查',
+  },
+  launch_not_ready: {
+    owner: 'ops',
+    advice:
+      '按示例逐条补：运费表与汇率在「运营配置」录入；审核商品在「商品管理」上架、补库存——审核商品编号填错请技术人员改配置后重启',
+    href: '#/ops',
   },
   review_mode_no_deadline: {
     owner: 'tech',

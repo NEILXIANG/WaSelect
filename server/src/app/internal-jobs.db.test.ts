@@ -30,7 +30,7 @@ import {
   RESULT_MISMATCH_PREFIX,
   RESULT_STATUS_CONFLICT,
 } from './webhook-results.js';
-import { RECONCILE_IDS_CAP } from './daily-reconciliation.js';
+import { RECONCILE_IDS_CAP, reportLaunchReadiness } from './daily-reconciliation.js';
 
 let db: Db;
 const JOB_SECRET = 'internal-job-secret-'.padEnd(40, 'x');
@@ -50,6 +50,8 @@ async function buildServer(opts: {
   inflightJobs?: InflightJobs | undefined;
   /** F10：注入时钟。不传 = 用 mount 的默认（`systemClock`），与生产同形。 */
   clock?: Clock | undefined;
+  /** 额外配置（上线就绪检查只在 staging / production 跑，用例用它切到 staging）。 */
+  config?: Record<string, string> | undefined;
 }): Promise<{
   url: string;
   sink: MemorySink;
@@ -66,6 +68,7 @@ async function buildServer(opts: {
     PAYMENT_CHANNELS: 'mock',
     TERMS_VERSION: 'TOS-TEST-1',
     ...(opts.withSecret ? { INTERNAL_JOB_SECRET: JOB_SECRET } : {}),
+    ...opts.config,
   });
   const app = createHttpApp({
     logger,
@@ -501,6 +504,119 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
    * 第三轮缺口 P1-9：汇率超过 FX_MAX_AGE_HOURS（72h）就整店 50003，但此前没有任何预警——
    * 周五录、周一早上已停售一整夜。对账提前 24 小时报（默认 72−24=48h）。
    */
+  /**
+   * 空库上线演练 2026-10-12：全新库里运费表与汇率表都是空的，审核商品 id 在建商品之前就得写进环境变量——
+   * 三者任何一项没配好，买家都下不了单（报价 50004 / 银行卡无法换算 / 审核期唯一能下单的商品不存在），
+   * 而启动、对账、设置页都不报，要等审核员或买家撞上。
+   */
+  it('🔴 staging：运费表空、缺汇率、审核商品不存在 → 报 launch_not_ready 逐条说清；配齐后不报', async () => {
+    const staging = {
+      NODE_ENV: 'staging',
+      MOCK_CALLBACK_SECRET: 'launch-readiness-mock-secret-'.padEnd(40, 'z'),
+      REVIEW_MODE: 'on',
+      REVIEW_SKU_ID: 'p-review-sku',
+      REVIEW_MODE_UNTIL: '2099-12-31',
+    };
+    const srv = await buildServer({ withSecret: true, config: staging });
+    try {
+      await db`delete from shipping_rates`;
+      await db`delete from fx_rates`;
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const hit = srv.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'launch_not_ready');
+      expect(hit, '上线配置缺项必须报').toBeDefined();
+      const ctx = hit?.['ctx'] as { count?: number; sample_ids?: string[] };
+      expect(ctx.count).toBe(4);
+      expect(ctx.sample_ids).toEqual([
+        '运费表没有启用中的档位（买家报价一律"运费不可计算"）',
+        '缺少 CNY 汇率（商品不显示 CNY 折算价）',
+        '缺少 USD 汇率（商品不显示 USD 折算价，银行卡按美元收款无法发起）',
+        '审核商品 p-review-sku 不存在（审核期只有它能下单）',
+      ]);
+    } finally {
+      await srv.close();
+    }
+
+    // 配齐：运费一档、两种汇率、审核商品在售有库存 → 不再报
+    await db`insert into shipping_rates (carrier, max_weight_g, price_jpy, active) values ('Japan Post EMS', 2000, 4950, true)`;
+    await db`insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)
+             values ('USD', 0.0070, 0.0068, 0.03, now() - interval '1 hour'),
+                    ('CNY', 0.0510, 0.0495, 0.03, now() - interval '1 hour')`;
+    await db`insert into products (id, title, category, price_jpy, weight_g, origin_country, status, stock)
+             values ('p-review-sku', '六花亭 葡萄干奶油夹心饼干 5 枚', 'food', 980, 160, 'JP', 'active', 0)`;
+    // 下一轮之前清心跳基线：waitForDailyHeartbeat 认的是"本轮写了 last_processed"
+    await db`update job_runs set last_processed = null where name = 'daily'`;
+    const srv2 = await buildServer({ withSecret: true, config: staging });
+    try {
+      expect((await trigger(srv2.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const still = srv2.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'launch_not_ready');
+      // 只剩"审核商品没库存"一条
+      expect((still?.['ctx'] as { sample_ids?: string[] })?.sample_ids).toEqual([
+        '审核商品「六花亭 葡萄干奶油夹心饼干 5 枚」库存为 0（审核期只有它能下单）',
+      ]);
+    } finally {
+      await srv2.close();
+    }
+    await db`update products set stock = 20 where id = 'p-review-sku'`;
+    // 下一轮之前清心跳基线：waitForDailyHeartbeat 认的是"本轮写了 last_processed"
+    await db`update job_runs set last_processed = null where name = 'daily'`;
+    const srv3 = await buildServer({ withSecret: true, config: staging });
+    try {
+      expect((await trigger(srv3.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const none = srv3.sink
+        .find('reconciliation_anomaly')
+        .find((r) => (r['ctx'] as Record<string, unknown>)?.['class'] === 'launch_not_ready');
+      expect(none).toBeUndefined();
+    } finally {
+      await srv3.close();
+    }
+  });
+
+  it('🔴 启动时的就绪检查：缺项 → error launch_not_ready 带逐条说明；齐了 → info launch_ready', async () => {
+    await db`delete from shipping_rates`;
+    await db`delete from fx_rates`;
+    const sink = new MemorySink();
+    const logger = createLogger({ env: 'test', destination: sink });
+    await reportLaunchReadiness(db, logger, {
+      fxQuotes: ['USD'],
+      reviewSkuId: null,
+      at: new Date(),
+    });
+    const bad = sink.find('launch_not_ready')[0];
+    expect(bad?.['level']).toBe('error');
+    expect((bad?.['ctx'] as { issues?: string[] })?.issues).toHaveLength(2);
+    await db`insert into shipping_rates (carrier, max_weight_g, price_jpy, active) values ('Japan Post EMS', 2000, 4950, true)`;
+    await db`insert into fx_rates (quote, rate, raw_rate, buffer, effective_from)
+             values ('USD', 0.0070, 0.0068, 0.03, now() - interval '1 hour')`;
+    await reportLaunchReadiness(db, logger, {
+      fxQuotes: ['USD'],
+      reviewSkuId: null,
+      at: new Date(),
+    });
+    expect(sink.find('launch_ready')).toHaveLength(1);
+  });
+
+  it('开发环境不跑上线就绪检查（测试库 / 本地库的运费表常是空的，报了只是噪音）', async () => {
+    const srv = await buildServer({ withSecret: true });
+    try {
+      await db`delete from shipping_rates`;
+      expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
+      await waitForDailyHeartbeat();
+      const classes = srv.sink
+        .find('reconciliation_anomaly')
+        .map((r) => (r['ctx'] as Record<string, unknown>)?.['class']);
+      expect(classes).not.toContain('launch_not_ready');
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('🔴 汇率最近一次生效超过 48h → 报 fx_rate_aging 并点名币种；新录的不报', async () => {
     const srv = await buildServer({ withSecret: true });
     try {

@@ -18,7 +18,8 @@
  *      ⑦ 审核模式仍在生产开启：临到期或已过期（A7 / AJ-378，见 reviewWindowAnomaly）；
  *      ⑪ 迟到付款未退：钱已扣、订单已关，尚未退款（AJ-425，不设回看上界，见 scanLatePaidUnrefunded）；
  *      ⑫ 售后申请等待：提交超过 24 小时仍在 open / processing（AJ-425，见 scanAfterSalesWaiting）；
- *      ⑬ 买家通知邮件已放弃：出了 48 小时补发窗口仍没有发出记录（AJ-426，见 scanOrderMailUnsent）。
+ *      ⑬ 买家通知邮件已放弃：出了 48 小时补发窗口仍没有发出记录（AJ-426，见 scanOrderMailUnsent）；
+ *      ⑭ 上线配置缺项：运费表空 / 缺汇率 / 审核商品不可下单（空库上线演练 2026-10-12，见 scanLaunchReadiness；只在 staging / production）。
  *      自动修任何一类都需要业务裁决（退不退？发不发？），MVP 把它留给人——
  *      但没有这个 job，这些行就只能在库里静默躺着（欠账①被评为致命级的原因）。
  *
@@ -59,6 +60,7 @@ import {
   RESULT_STATUS_CONFLICT,
   RESULT_UNMATCHED_PREFIX,
 } from './webhook-results.js';
+import type { Logger } from '../logger.js';
 
 export const DAILY_RECONCILIATION_JOB = 'daily_reconciliation';
 
@@ -474,6 +476,97 @@ export function reviewWindowAnomaly(input: {
   return { key: 'review_mode', count: 0, ids: [] };
 }
 
+/**
+ * 上线就绪检查的入参（只在 staging / production 由装配处传入；开发与测试库的运费表常是空的，报了只是噪音）。
+ */
+export interface LaunchReadinessInput {
+  /** 要求有汇率的币种（`DISPLAY_CURRENCIES` 去掉 JPY）。 */
+  fxQuotes: readonly string[];
+  /** 审核期的审核商品 id；不在审核期传 null。 */
+  reviewSkuId: string | null;
+  /** 判"已生效"的时刻（汇率 effective_from ≤ 它）。 */
+  at: Date;
+}
+
+/**
+ * 第十四类：**上线配置缺项**（空库上线演练 2026-10-12）——买家此刻能不能下单的三项前提。
+ * @why 全新库里运费表与汇率表都是空的，审核商品 id 又得在建商品之前写进环境变量：三者任何一项没配好，
+ *      买家都下不了单（报价 50004「运费不可计算」/ 没有美元汇率银行卡无法发起 / 审核期唯一能下单的商品不存在），
+ *      而启动、对账、设置页原先都不报，要等审核员或买家撞上——审核期撞上就是被拒审。
+ * @why 取样写**人话**而不是 id（与审核模式那类同口径）：这类没有"行"可列，要说的是"缺什么、后果是什么"。
+ * @why 同一函数也在启动时跑一次（main.ts）：部署后第一眼就能在日志 / Sentry 看到，不用等到凌晨对账。
+ * @limitation 只查"有没有"，不查"对不对"（运费档是否覆盖到最重的商品、汇率是否合理由各自的校验与对账类管）。
+ */
+/**
+ * 配置 → 就绪检查入参（对账端点与启动检查共用；只取三个字段，本文件仍不认识整份 config）。
+ */
+export function launchReadinessInput(c: {
+  DISPLAY_CURRENCIES: readonly string[];
+  REVIEW_MODE: string;
+  REVIEW_SKU_ID?: string | undefined;
+}): Omit<LaunchReadinessInput, 'at'> {
+  return {
+    fxQuotes: c.DISPLAY_CURRENCIES.filter((q) => q !== 'JPY'),
+    reviewSkuId: c.REVIEW_MODE === 'on' ? (c.REVIEW_SKU_ID ?? null) : null,
+  };
+}
+
+export async function scanLaunchReadiness(
+  db: Db,
+  input: LaunchReadinessInput,
+): Promise<{ key: string; count: number; ids: string[] }> {
+  const ids: string[] = [];
+  const [rates] = await db<{ n: number }[]>`
+    select count(*)::int as n from shipping_rates where active`;
+  if ((rates?.n ?? 0) === 0) ids.push('运费表没有启用中的档位（买家报价一律"运费不可计算"）');
+  const have = new Set(
+    (
+      await db<{ quote: string }[]>`
+        select distinct quote from fx_rates where effective_from <= ${input.at}::timestamptz`
+    ).map((r) => r.quote),
+  );
+  for (const q of [...input.fxQuotes].sort()) {
+    if (have.has(q)) continue;
+    ids.push(
+      q === 'USD'
+        ? `缺少 USD 汇率（商品不显示 USD 折算价，银行卡按美元收款无法发起）`
+        : `缺少 ${q} 汇率（商品不显示 ${q} 折算价）`,
+    );
+  }
+  if (input.reviewSkuId !== null) {
+    const [p] = await db<{ title: string; status: string; stock: number }[]>`
+      select title, status, stock from products where id = ${input.reviewSkuId}`;
+    const tail = '（审核期只有它能下单）';
+    if (p === undefined) ids.push(`审核商品 ${input.reviewSkuId} 不存在${tail}`);
+    else if (p.status !== 'active') ids.push(`审核商品「${p.title}」没有上架${tail}`);
+    else if (Number(p.stock) <= 0) ids.push(`审核商品「${p.title}」库存为 0${tail}`);
+  }
+  return { key: 'launch_not_ready', count: ids.length, ids: ids.slice(0, RECONCILE_IDS_CAP) };
+}
+
+/**
+ * 启动时跑一次就绪检查并落日志：有缺项 → error `launch_not_ready`（进 Sentry）；齐了 → info `launch_ready`。
+ * @why 部署后第一眼就要看到"还差什么"（空库上线演练 2026-10-12），而不是等凌晨的对账或第一位买家。
+ * @why 检查自身失败只记 warn、不抛：它是提示，不能因为它让服务起不来。
+ */
+export async function reportLaunchReadiness(
+  db: Db,
+  logger: Pick<Logger, 'error' | 'info' | 'warn'>,
+  input: LaunchReadinessInput,
+): Promise<void> {
+  try {
+    const r = await scanLaunchReadiness(db, input);
+    if (r.count > 0)
+      logger.error('launch_not_ready', { result: 'not_ready', ctx: { issues: r.ids } });
+    else logger.info('launch_ready', { result: 'ok' });
+  } catch (e) {
+    logger.warn('launch_readiness_check_failed', {
+      result: 'failed',
+      ctx: { reason: e instanceof Error ? e.message.slice(0, 200) : String(e) },
+    });
+  }
+}
+
 export function createDailyReconciliationJob(input: {
   /**
    * 审核模式是否在**生产**开启（`main` 侧按 `NODE_ENV` + `REVIEW_MODE` 判定后传入）。
@@ -485,6 +578,8 @@ export function createDailyReconciliationJob(input: {
    * 汇率"快过期"预警阈值（小时，P1-9）。装配处传 `FX_MAX_AGE_HOURS − 24`；不传 = 48（默认 72 的提前一天）。
    */
   fxWarnAfterHours?: number;
+  /** 上线就绪检查（@see scanLaunchReadiness）；不传 = 不跑（开发 / 测试环境）。`at` 由本轮开始时刻给。 */
+  launch?: Omit<LaunchReadinessInput, 'at'> | undefined;
 }): SchedulerJob<Db> {
   return {
     name: DAILY_RECONCILIATION_JOB,
@@ -506,6 +601,9 @@ export function createDailyReconciliationJob(input: {
           ...input.reviewMode,
           todayUtc: utcDay(ctx.startedAt),
         }),
+        ...(input.launch === undefined
+          ? []
+          : [await scanLaunchReadiness(ctx.tx, { ...input.launch, at: ctx.startedAt })]),
       ];
       let anomalies = 0;
       for (const c of classes) {
