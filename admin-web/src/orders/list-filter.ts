@@ -3,7 +3,7 @@
  *
  * @why 页签按**运营的工作阶段**分组，而不是十态各一个：运营每天问的是"有几单要发货""有几单在售后"，
  *      不是"有几单 pending_payment"。一个页签对应几个状态（契约 0.6.44 起 `status` 可逗号分隔）：
- *      待付款 = created + pending_payment；已发货 = shipped + delivered；售后·退款 = refunding + refunded；
+ *      待付款 = created + pending_payment；已发货 = shipped + delivered；退款 = refunding + refunded（原名「售后·退款」，2026-10-12 改）；
  *      另加「已关闭」= cancelled + expired——不加的话这两态只能从「全部」里翻，十态就不是全覆盖。
  * @why URL 仍以 `status=` 为唯一真源（不另造 `tab=`）：工作台的待办链接 `#/orders?status=paid`、
  *      已有收藏与"复制链接发同事"都依赖它。页签只是 URL 的一种**读法**：状态集合恰好等于某个页签 → 高亮它；
@@ -39,7 +39,8 @@ export const STATUS_TABS: readonly StatusTab[] = [
   { key: 'to_ship', label: '待发货', statuses: ['paid'] },
   { key: 'shipped', label: '已发货', statuses: ['shipped', 'delivered'] },
   { key: 'completed', label: '已完成', statuses: ['completed'] },
-  { key: 'after_sale', label: '售后·退款', statuses: ['refunding', 'refunded'] },
+  // 规律排查 2026-10-12：原名「售后·退款」——售后申请不在这里（在「售后待处理」筛选），名字如实
+  { key: 'after_sale', label: '退款', statuses: ['refunding', 'refunded'] },
   { key: 'closed', label: '已关闭', statuses: ['cancelled', 'expired'] },
 ];
 

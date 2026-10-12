@@ -63,7 +63,12 @@ async function ordersTable(
            o.address_snapshot ->> 'recipient' as recipient, o.address_snapshot ->> 'state' as state,
            o.address_snapshot ->> 'country' as country, o.carrier, o.tracking_no,
            -- ADM-3（AJ-451）：买家实付币种与金额 = 最新一条成功支付行；没有成功支付行两列为空（不编 0）
-           p.charge_currency as paid_currency, p.charge_amount as paid_minor
+           p.charge_currency as paid_currency, p.charge_amount as paid_minor,
+           -- 已退金额（规律排查 2026-10-12：原先"实付"不扣退款、也没有退款列，按总表对账会把退掉的钱算成收入）：
+           --   整单已退 = 实付；否则 = 成功的部分退款之和（失败 / 在途的不算）
+           case when o.status = 'refunded' then p.charge_amount
+                else (select coalesce(sum(r.amount_minor), 0) from order_refunds r
+                       where r.order_id = o.id and r.status = 'succeeded') end as refunded_minor
       from orders o
       left join lateral (
         select charge_currency, charge_amount from payments
@@ -93,6 +98,7 @@ async function ordersTable(
       '运单号',
       '实付币种',
       '实付金额',
+      '已退金额',
     ],
     rows: rows.map((r) => [
       str(r['order_no']),
@@ -111,6 +117,10 @@ async function ordersTable(
       asText(str(r['tracking_no'])),
       str(r['paid_currency']),
       paidAmount(r['paid_currency'], r['paid_minor']),
+      // 没有成功支付行时与实付两列一样留空（不编 0）
+      r['paid_minor'] === null || r['paid_minor'] === undefined
+        ? null
+        : paidAmount(r['paid_currency'], r['refunded_minor']),
     ]),
   };
 }

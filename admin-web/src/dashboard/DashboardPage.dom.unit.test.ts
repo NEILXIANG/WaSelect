@@ -206,3 +206,29 @@ describe('销售额卡辅行', () => {
     expect(salesSubText(1000, null, '7d')).toContain('不扣退款');
   });
 });
+
+// 规律排查 2026-10-12：全局停售只在「运营配置」页显示——紧急停售后忘了恢复，工作台照常、买家却下不了单
+describe('工作台：店铺暂停接单时置顶提示', () => {
+  it('🔴 暂停中 → 顶部写明原因并给去恢复的入口；正常接单时不出', async () => {
+    const el = await open();
+    expect(el.textContent).not.toContain('已暂停接单');
+    await mounted?.unmount();
+    navigated = [];
+    impl = async (path: string) => {
+      if (path.includes('/admin/ops/sales-pause'))
+        return { paused: true, reason: '价格录错，先停', updated_at: '2026-10-12T01:00:00.000Z' };
+      if (path.includes('/admin/dashboard/sales')) return { today: WINDOW, last7: WINDOW };
+      return { items: [], total: 0 };
+    };
+    mounted = await mount(
+      createElement(DashboardPage, {
+        api: ((req: { path: string }) => impl(req.path)) as never,
+        onNavigate: (next: Route) => navigated.push(next),
+      }),
+    );
+    const banner = mounted.el.querySelector('[role="alert"]');
+    expect(banner?.textContent).toContain('已暂停接单');
+    expect(banner?.textContent).toContain('价格录错，先停');
+    expect(banner?.querySelector('a')?.getAttribute('href')).toBe('#/ops');
+  });
+});

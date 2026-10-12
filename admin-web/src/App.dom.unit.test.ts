@@ -192,7 +192,7 @@ describe('App：筛选进地址栏（第一批③工作台的跳转依赖它）'
   it('🔴 多状态页签进地址栏、再从地址栏读回来（AJ-400：刷新 / 收藏 / 发同事都是同一个列表）', async () => {
     const el = await open('#/orders');
     const tab = [...el.querySelectorAll('[role="tab"]')].find((t) =>
-      (t.textContent ?? '').startsWith('售后·退款'),
+      (t.textContent ?? '').startsWith('退款'),
     );
     await click(tab);
     expect(new URLSearchParams(location.hash.split('?')[1]).get('status')).toBe(
@@ -206,7 +206,7 @@ describe('App：筛选进地址栏（第一批③工作台的跳转依赖它）'
     const list = requested.filter((u) => u.includes('/admin/orders') && !u.includes('size=1'));
     expect(decodeURIComponent(list[0] ?? '')).toContain('status=refunding,refunded');
     expect(again.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain(
-      '售后·退款',
+      '退款',
     );
   });
 });

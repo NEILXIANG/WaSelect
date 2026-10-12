@@ -135,7 +135,15 @@ function unsetText(item: SettingItemLike, all: readonly SettingItemLike[]): stri
   }
 }
 
-export function valueText(item: SettingItemLike, all: readonly SettingItemLike[] = []): string {
+/**
+ * @param todayUtc 今天（UTC，YYYY-MM-DD；与服务端 REVIEW_MODE_UNTIL 同一口径）。只用于判审核期是否已过（规律排查 2026-10-12）；
+ *        不传 = 不判。
+ */
+export function valueText(
+  item: SettingItemLike,
+  all: readonly SettingItemLike[] = [],
+  todayUtc?: string,
+): string {
   const v = item.value;
   if (item.edit_page === 'ops') return '在「运营配置」页查看与修改';
   if (typeof item.value_label === 'string' && item.value_label !== '') return item.value_label;
@@ -147,7 +155,12 @@ export function valueText(item: SettingItemLike, all: readonly SettingItemLike[]
   if (typeof v === 'boolean') return v ? '已开通' : '未开通，上线前请让技术人员配置';
   // 三端模拟测试 2026-10-11：原样显示 on / off，运营看不懂；审核期只许模拟通道（config.ts 启动闸门）
   if (item.key === 'review_mode' && (v === 'on' || v === 'off')) {
-    return v === 'on' ? '开启（只收模拟支付，审核用）' : '关闭';
+    if (v === 'off') return '关闭';
+    // 截止日只在启动时判（config.ts）：进程一直跑着就一直只收模拟支付，下次重启却会被拒启——这里提前说
+    const until = all.find((i) => i.key === 'review_mode_until')?.value;
+    if (typeof until === 'string' && todayUtc !== undefined && until < todayUtc)
+      return `开启（只收模拟支付）——审核期已于 ${until} 到期：服务下次重启会被拒绝启动，请尽快让技术人员关闭审核模式或延长截止日`;
+    return '开启（只收模拟支付，审核用）';
   }
   if (item.key === 'fx_buffer_rate' && typeof v === 'number') {
     return `${ratePercent(String(v))}%`;

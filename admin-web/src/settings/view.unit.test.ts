@@ -27,6 +27,24 @@ describe('valueText', () => {
     );
   });
 
+  // 规律排查 2026-10-12：截止日只在启动时判——进程一直跑着就一直是审核期（只收模拟支付），下次重启却会被拒启；
+  //   设置页原先只写"开启"，截止日另一行写个日期，看不出已经过期
+  it('🔴 审核期过了截止日 → 写明已到期、重启会被拒、找谁处理', () => {
+    const all = [
+      { key: 'review_mode', value: 'on', source: 'env' as const, apply: 'restart' as const },
+      {
+        key: 'review_mode_until',
+        value: '2026-10-10',
+        source: 'env' as const,
+        apply: 'restart' as const,
+      },
+    ];
+    const text = valueText(all[0]!, all, '2026-10-12');
+    expect(text).toContain('已于 2026-10-10 到期');
+    expect(text).toContain('重启');
+    expect(valueText(all[0]!, all, '2026-10-10')).toBe('开启（只收模拟支付，审核用）');
+  });
+
   // AJ-410 / N31：「未配置」改为告诉运营下一步（找技术人员）
   // 两端逐页走查 2026-10-12：审核模式关着，"审核商品 / 截止日"仍说"上线前请配置"；包邮门槛本可不设也这么说——
   //   运营以为有好几件事没做

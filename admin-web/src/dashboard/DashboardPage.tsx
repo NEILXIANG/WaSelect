@@ -133,6 +133,25 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
     };
   }, [api, showError]);
 
+  /**
+   * 全局停售（规律排查 2026-10-12）：原先只在「运营配置」页显示——紧急停售后忘了恢复，工作台照常、买家却下不了单。
+   * @limitation 取失败不提示（工作台主体不受它影响）；只在打开工作台时取一次。
+   */
+  const [pause, setPause] = useState<{ reason?: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api({ path: '/api/v1/admin/ops/sales-pause', method: 'GET' })
+      .then((r) => {
+        const s = r as { paused?: unknown; reason?: unknown } | null;
+        if (alive && s?.paused === true)
+          setPause(typeof s.reason === 'string' ? { reason: s.reason } : {});
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [api]);
+
   const rate = data?.fx?.usd_rate;
   const today = data?.today;
   const last7 = data?.last7;
@@ -140,6 +159,17 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
   return (
     <div>
       <ToastStack toasts={toasts.toasts} onDismiss={(id) => toasts.dismiss(id)} />
+      {pause !== null && (
+        <section className="panel">
+          <p className="error" role="alert">
+            ⛔ 店铺已暂停接单：买家现在无法报价、下单、付款
+            {pause.reason !== undefined ? `（原因：${pause.reason}）` : ''}。{' '}
+            <a className="link" href="#/ops">
+              去「运营配置」恢复接单 →
+            </a>
+          </p>
+        </section>
+      )}
 
       <section className="panel">
         <h2 className="title">今日待办</h2>

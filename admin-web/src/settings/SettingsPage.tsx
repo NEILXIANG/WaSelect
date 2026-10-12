@@ -62,6 +62,7 @@ export function SettingsPage({ api }: { api: AdminApi }) {
                     {valueText(
                       it,
                       data.groups.flatMap((x) => x.items),
+                      new Date().toISOString().slice(0, 10),
                     )}
                   </td>
                   <td className="muted">{applyText(it)}</td>

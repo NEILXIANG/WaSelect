@@ -245,7 +245,7 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
       // P2-46：时间列是日本时间（页面全部 JST，导出原先是 UTC Z，跨日统计会错一天）
       // AJ-494：订单总表是内部用表——中文表头、状态写中文（原为 created_at_jst / paid 这类英文字段与代号）
       expect(lines((all.body as { csv: string }).csv)[0]).toBe(
-        '订单号,状态,下单时间（日本时间）,付款时间（日本时间）,发货时间（日本时间）,商品金额（日元）,运费（日元）,预估关税（日元）,订单合计（日元）,收件人,州,国家,承运商,运单号,实付币种,实付金额',
+        '订单号,状态,下单时间（日本时间）,付款时间（日本时间）,发货时间（日本时间）,商品金额（日元）,运费（日元）,预估关税（日元）,订单合计（日元）,收件人,州,国家,承运商,运单号,实付币种,实付金额,已退金额',
       );
       expect((all.body as { csv: string }).csv).toContain(',待发货,');
       expect((all.body as { csv: string }).csv).not.toMatch(/,paid,/);
@@ -441,9 +441,33 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
         '实付币种,实付金额' /* AJ-494：中文表头（原 paid_currency,paid_amount） */,
       );
       const usd = rows.find((l) => l.startsWith('WSo-usd'));
-      expect(usd?.endsWith(',USD,86.00')).toBe(true); // 行末两列
+      // 行末三列（0.6.89 起多一列「已退金额」）
+      expect(usd?.endsWith(',USD,86.00,0.00')).toBe(true);
       const none = rows.find((l) => l.startsWith('WSo-nopay'));
-      expect(none?.endsWith(',,')).toBe(true); // 没有成功支付行：两列为空，不编 0
+      expect(none?.endsWith(',,,')).toBe(true); // 没有成功支付行：三列为空，不编 0
+    } finally {
+      await close();
+    }
+  });
+
+  // 规律排查 2026-10-12：「实付金额」不扣退款，也没有退款列——按订单总表对账会把退掉的钱算成收入，与工作台对不上
+  it('🔴 订单总表带「已退金额」：部分退款只算成功的；整单退款 = 实付', async () => {
+    await seedOrder('o-part', 'delivered');
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+             values ('pay-part', 'o-part', 'stripe', 'succeeded', 'USD', 8600)`;
+    await db`insert into order_refunds (id, order_id, payment_id, currency, amount_minor, reason, status, actor, created_at)
+             values ('rf-ok', 'o-part', 'pay-part', 'USD', 1000, '破损', 'succeeded', 'admin:u-a', now()),
+                    ('rf-bad', 'o-part', 'pay-part', 'USD', 500, '破损', 'failed', 'admin:u-a', now())`;
+    await seedOrder('o-full', 'refunded');
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+             values ('pay-full', 'o-full', 'stripe', 'refunded', 'JPY', 17750)`;
+    const { url, close } = await buildServer();
+    try {
+      const r = await call(url, 'GET', '/api/v1/admin/exports/orders', undefined, await bearer());
+      const rows = lines((r.body as { csv: string }).csv);
+      expect(rows[0]?.endsWith('实付币种,实付金额,已退金额')).toBe(true);
+      expect(rows.find((l) => l.startsWith('WSo-part'))?.endsWith(',USD,86.00,10.00')).toBe(true);
+      expect(rows.find((l) => l.startsWith('WSo-full'))?.endsWith(',JPY,17750,17750')).toBe(true);
     } finally {
       await close();
     }

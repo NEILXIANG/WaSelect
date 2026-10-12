@@ -120,22 +120,31 @@ describe('订单列表：状态页签与日期筛选（AJ-400）', () => {
       (t.textContent ?? '').startsWith(label),
     ) as HTMLElement;
 
-  it('点「售后·退款」→ 请求带 status=refunding,refunded、回第 1 页，且该页签高亮；每个页签都去取了计数', async () => {
+  // 规律排查 2026-10-12：页签原名「售后·退款」，里面只有退款中 / 已退款——有售后申请的单不在这里（在「售后待处理」筛选里），
+  //   运营点"售后"页签看到没有，以为没有售后；页签改叫「退款」
+  it('🔴 退款页签名如实叫「退款」，不叫「售后·退款」', async () => {
+    const el = await open();
+    const labels = [...el.querySelectorAll('[role="tab"]')].map((t) => t.textContent ?? '');
+    expect(labels.some((l) => l.startsWith('退款'))).toBe(true);
+    expect(labels.some((l) => l.includes('售后'))).toBe(false);
+  });
+
+  it('点「退款」→ 请求带 status=refunding,refunded、回第 1 页，且该页签高亮；每个页签都去取了计数', async () => {
     const el = await open('#/orders?page=3');
-    await click(tab(el, '售后·退款'));
+    await click(tab(el, '退款'));
     const last = decodeURIComponent(gets().at(-1)?.path ?? '');
     expect(last).toContain('status=refunding,refunded');
     expect(last).toContain('page=1');
-    expect(tab(el, '售后·退款').getAttribute('aria-selected')).toBe('true');
+    expect(tab(el, '退款').getAttribute('aria-selected')).toBe('true');
     const countCalls = calls.filter((c) => /[?&]size=1(&|$)/.test(c.path));
     expect(countCalls.length).toBeGreaterThanOrEqual(7);
   });
 
   // AJ-410 / N27：行为变更——单状态链接高亮所属页签（原为不高亮、显示「当前筛选：…」）
-  it('🔴 工作台的单状态链接（status=refunding）照常请求；高亮「售后·退款」并说"只显示：退款中"，可一键看整个页签', async () => {
+  it('🔴 工作台的单状态链接（status=refunding）照常请求；高亮「退款」并说"只显示：退款中"，可一键看整个页签', async () => {
     const el = await open('#/orders?status=refunding');
     expect(gets()[0]?.path).toContain('status=refunding');
-    expect(tab(el, '售后·退款').getAttribute('aria-selected')).toBe('true');
+    expect(tab(el, '退款').getAttribute('aria-selected')).toBe('true');
     expect(el.textContent).toContain('此页签下只显示：退款中');
     await click(button(el, '显示本页签全部'));
     expect(decodeURIComponent(gets().at(-1)?.path ?? '')).toContain('status=refunding,refunded');
