@@ -123,6 +123,34 @@ export function buyerStatus(status, opts = undefined) {
 export const PAYABLE = ['created', 'pending_payment'];
 
 /**
+ * 时间线的事件词（全入口点击测试 2026-10-11）。
+ * @why 时间线讲"那时发生了什么"，原先直接用状态词（待付款 / 付款中 / 已付款），读起来像三个状态而不是三件事；
+ *      主流订单页的时间线写事件（提交订单 / 付款成功 / 已发货）。与 `STATUS_LABELS` 同一组键，单测比对。
+ */
+export const TIMELINE_LABELS = {
+  created: '提交订单',
+  pending_payment: '发起支付',
+  paid: '付款成功',
+  shipped: '已发货',
+  delivered: '已送达',
+  completed: '交易完成',
+  cancelled: '订单已取消',
+  expired: '超时未付款，订单关闭',
+  refunding: '开始退款',
+  refunded: '退款完成',
+};
+
+/**
+ * 时间线事件词；不在词表里的给"状态未知"（同 `statusText` 的理由）。
+ * @param {unknown} status
+ * @returns {string}
+ */
+export function timelineText(status) {
+  const s = typeof status === 'string' ? status : '';
+  return TIMELINE_LABELS[s] ?? '状态未知';
+}
+
+/**
  * 状态 → 展示文案。
  * @param {unknown} status 契约 `OrderStatus`；也可能是任何东西
  * @returns {string}

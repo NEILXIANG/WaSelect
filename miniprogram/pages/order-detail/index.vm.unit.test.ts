@@ -82,7 +82,7 @@ describe('detailView（整体）', () => {
       '2026-09-27 11:05（日本时间）',
       '2026-09-29 00:04（日本时间）',
     ]);
-    expect(v.timeline.map((t) => t.statusText)).toEqual(['待付款', '已付款', '已发货']);
+    expect(v.timeline.map((t) => t.statusText)).toEqual(['提交订单', '付款成功', '已发货']);
   });
 
   /**
@@ -255,14 +255,29 @@ describe('amountLines（金额行）', () => {
 });
 
 describe('timelineRows（时间线）', () => {
-  it('状态走共享词表；脏行丢掉', () => {
+  it('事件走共享词表（TIMELINE_LABELS）；脏行丢掉', () => {
     expect(timelineRows(null)).toEqual([]);
     expect(
       timelineRows([
         { at: '2026-09-27T02:00:00Z' },
         { status: 'paid', at: '2026-09-27T02:05:00Z' },
       ]),
-    ).toEqual([{ key: 'tl-0', statusText: '已付款', atText: '2026-09-27 11:05（日本时间）' }]);
+    ).toEqual([{ key: 'tl-0', statusText: '付款成功', atText: '2026-09-27 11:05（日本时间）' }]);
+  });
+
+  // 全入口点击测试 2026-10-11：「付款中」是发起支付的一瞬间（与付款成功相隔约 1 秒），付成了之后对买家没有信息
+  it('🔴 后面已有「付款成功」时，丢掉「发起支付」那一行；没付成时保留', () => {
+    const rows = timelineRows([
+      { status: 'created', at: '2026-10-12T02:34:00Z' },
+      { status: 'pending_payment', at: '2026-10-12T02:35:00Z' },
+      { status: 'paid', at: '2026-10-12T02:35:01Z' },
+    ]);
+    expect(rows.map((r) => r.statusText)).toEqual(['提交订单', '付款成功']);
+    const unpaid = timelineRows([
+      { status: 'created', at: '2026-10-12T02:34:00Z' },
+      { status: 'pending_payment', at: '2026-10-12T02:35:00Z' },
+    ]);
+    expect(unpaid.map((r) => r.statusText)).toEqual(['提交订单', '发起支付']);
   });
 });
 
@@ -387,7 +402,7 @@ describe('detailView：买家视角状态与下一步（M-06）', () => {
 
   it('时间线仍用短词（历史记录，不随当前状态变）', () => {
     expect(detailView({ ...ORDER, status: 'delivered' }).timeline.map((t) => t.statusText)).toEqual(
-      ['待付款', '已付款', '已发货'],
+      ['提交订单', '付款成功', '已发货'],
     );
   });
 

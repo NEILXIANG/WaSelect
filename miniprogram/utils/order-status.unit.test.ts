@@ -11,6 +11,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ORDER_STATUS } from '@waselect/shared';
 import {
+  TIMELINE_LABELS,
+  timelineText,
   BUYER_STATUS,
   PAYABLE,
   STATUS_LABELS,
@@ -172,5 +174,20 @@ describe('buyerStatus（买家视角状态与下一步，M-06）', () => {
   it('opts 脏值（null / 字符串）按"不知道有没有邮箱"处理，不抛', () => {
     expect(buyerStatus('paid', null as unknown as undefined).next).not.toContain('邮件');
     expect(buyerStatus('paid', 'x' as unknown as undefined).next).not.toContain('邮件');
+  });
+});
+
+// 全入口点击测试 2026-10-11：订单详情的时间线原用状态词（待付款 / 付款中 / 已付款）——
+// 时间线讲"那时发生了什么"，主流写事件（提交订单 / 付款成功 / 商家已发货）
+describe('TIMELINE_LABELS（时间线事件词）', () => {
+  it('🔴 覆盖全部十态（与 STATUS_LABELS 同一集合）；每条非空', () => {
+    expect(Object.keys(TIMELINE_LABELS).sort()).toEqual(Object.keys(STATUS_LABELS).sort());
+    for (const v of Object.values(TIMELINE_LABELS)) expect(v).not.toBe('');
+  });
+
+  it('🔴 事件词：created → 提交订单、paid → 付款成功；不认识的 → 状态未知', () => {
+    expect(timelineText('created')).toBe('提交订单');
+    expect(timelineText('paid')).toBe('付款成功');
+    expect(timelineText('nope')).toBe('状态未知');
   });
 });

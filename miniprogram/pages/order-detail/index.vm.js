@@ -35,7 +35,7 @@ import {
   STOCK_REFUND_NOTE,
   buyerStatus,
   canPay,
-  statusText,
+  timelineText,
 } from '../../utils/order-status.js';
 import {
   displaySubLine,
@@ -189,15 +189,27 @@ export function dutyNote(order) {
   return Number.isInteger(o.duty_jpy) ? dutyNoteText(o.duty_jpy) : '';
 }
 
-/** 时间线行：状态中文 + JST 时刻。 */
+/**
+ * 时间线行：事件词（`TIMELINE_LABELS`）+ JST 时刻。
+ * @why 后面已有「付款成功」时丢掉「发起支付」行（全入口点击测试 2026-10-11）：两行相隔约 1 秒，付成了之后对买家没有信息；
+ *      没付成时保留——那时它说明"支付发起过、还没完成"。
+ */
 export function timelineRows(timeline) {
   if (!Array.isArray(timeline)) return [];
+  const rows = timeline.filter((t) => t && typeof t.status === 'string' && t.status !== '');
   return (
-    timeline
-      .filter((t) => t && typeof t.status === 'string' && t.status !== '')
+    rows
+      .filter(
+        (t, i) =>
+          t.status !== 'pending_payment' || !rows.slice(i + 1).some((n) => n.status === 'paid'),
+      )
       // ⚠️ `key` 是给 wxml 的 `wx:key` 用的：行里没有一个天然唯一且稳定的字段
       //    （同一状态理论上可能出现两次），`wx:key="index"` 会被开发者工具告警。
-      .map((t, i) => ({ key: `tl-${i}`, statusText: statusText(t.status), atText: timeText(t.at) }))
+      .map((t, i) => ({
+        key: `tl-${i}`,
+        statusText: timelineText(t.status),
+        atText: timeText(t.at),
+      }))
   );
 }
 

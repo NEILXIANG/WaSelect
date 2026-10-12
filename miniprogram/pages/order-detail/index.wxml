@@ -61,7 +61,7 @@
         <text class="ws-note state__error hint" wx:if="{{copyErrorAt === 'order'}}">{{copyError}}</text>
         <!-- MP3-04：刚付过款、服务端还没确认——这时不给继续支付也不给取消，只说清在确认中 -->
         <text class="ws-note hint" wx:if="{{view.confirmHint}}">{{view.confirmHint}}</text>
-        <text class="ws-caption key-info hint" wx:if="{{view.createdAtText}}">建单 {{view.createdAtText}}</text>
+        <text class="ws-caption key-info hint" wx:if="{{view.createdAtText}}">下单时间 {{view.createdAtText}}</text>
         <!--
           MP3-02：`expiresAtText` 自带"（日本时间）"。收货人是美国地址的用户，
           不标时区时这一行会被读成本地时间（PDT 与 JST 差 16 小时）→ 以为还有一整天。

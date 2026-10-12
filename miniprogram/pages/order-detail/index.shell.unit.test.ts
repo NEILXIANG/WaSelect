@@ -277,7 +277,7 @@ describe('订单详情关键信息的对比度', () => {
     const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
     for (const text of [
       '订单号 {{view.orderNo}}',
-      '建单 {{view.createdAtText}}',
+      '下单时间 {{view.createdAtText}}', // 2026-10-11：「建单」是内部用语，买家看到的改为「下单时间」
       '前完成支付',
       '联系客服时请提供订单号',
     ]) {
