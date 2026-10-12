@@ -348,9 +348,12 @@ export function shipGate(order: unknown): Gate {
   // 与服务端 shipGuard 同口径（AJ-179）：审核期测试单是"未付款即确认"的，发货 = 真货换假钱
   if ((order as { is_test?: unknown } | null)?.is_test === true)
     return NO('审核期测试单，不得采购发货');
-  if ((order as { has_dispute?: unknown } | null)?.has_dispute === true)
-    // 已败诉同样锁着（has_dispute 两者都是 true，规律排查 2026-10-12）
-    return NO('有拒付限制（进行中或已败诉），不能发货（发货后钱货两空）');
+  // 已败诉同样锁着（has_dispute 两者都是 true，规律排查 2026-10-12）：按服务端的 payment_dispute 分开说，
+  //   看不出是哪种时（旧服务端 / 缺字段）写两种都对的说法
+  const dispute = disputeLockState(order);
+  if (dispute === 'open') return NO('有拒付进行中，先处理拒付再发货（发货后钱货两空）');
+  if (dispute === 'lost') return NO('拒付已败诉（货款已被银行退回买家），不能发货');
+  if (dispute === 'locked') return NO('有拒付限制（进行中或已败诉），不能发货（发货后钱货两空）');
   switch (status) {
     case 'paid':
       return OK;

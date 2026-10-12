@@ -1002,3 +1002,16 @@ describe('logisticsView：发货时刻写明日本时间', () => {
     expect(v?.text).toContain('发货于 2026-10-11 16:36（日本时间）');
   });
 });
+
+// 规律排查 2026-10-12：发货闸门按服务端 payment_dispute 分开说（进行中 / 已败诉 / 看不出）
+describe('shipGate：拒付三种说法', () => {
+  it.each([
+    ['open', '有拒付进行中，先处理拒付再发货（发货后钱货两空）'],
+    ['lost', '拒付已败诉（货款已被银行退回买家），不能发货'],
+    [undefined, '有拒付限制（进行中或已败诉），不能发货（发货后钱货两空）'],
+  ] as const)('🔴 payment_dispute=%s', (pd, reason) => {
+    expect(
+      shipGate({ status: 'paid', has_dispute: true, ...(pd ? { payment_dispute: pd } : {}) }),
+    ).toEqual({ ok: false, reason });
+  });
+});
