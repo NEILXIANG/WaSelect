@@ -195,14 +195,17 @@ export function adminAuditMiddleware(deps: {
      *      而路由层是在**调用 handler 之前**写 `req.params` 的，所以拿得到最终值；
      *      若响应在这一步之内就发完了，writeAudit 已经先跑过一次并写下了快照，这里不再改它
      *      （`undefined` 的判断就是"还没取过"）。
-     * @limitation 只快照 `id`：本中间件能写进 target 的只有路径参数，而全库管理端路由
-     *      的路径参数一律叫 `id`（路由模板已经在 action 里，两者合起来才定位到一次操作）。
+     * @limitation 只快照路径参数：有 `:id` 取 `:id`，没有时取**唯一的**那个路径参数（如分类的 `:key`）。
+     *      ⚠️ AJ-497 订正：原写"全库管理端路由的路径参数一律叫 `id`"——AJ-491 的分类路由用了 `:key`，
+     *      改分类 / 删分类的审计行 target 全是 NULL。现在退到"唯一参数"；多参数又没有 `:id` 的路由取不到，
+     *      由 `admin-audit-target.guard.unit.test.ts` 守着不让这种路由出现（路由模板已经在 action 里，两者合起来才定位到一次操作）。
      */
     let targetId: string | null | undefined;
     const captureTarget = (): void => {
       if (targetId !== undefined) return;
       const id = req.params['id'];
-      targetId = typeof id === 'string' ? id : null;
+      const values = Object.values(req.params).filter((v): v is string => typeof v === 'string');
+      targetId = typeof id === 'string' ? id : values.length === 1 ? (values[0] ?? null) : null;
     };
 
     /** 只跑一次：`prefinish` 与下面的 `end` 兜底是同一件事的两条路径（SEC2-03）。 */

@@ -114,6 +114,17 @@ const code = (r: { body: unknown }): number => Number((r.body as { code?: number
 
 const data = (r: { body: unknown }): unknown => (r.body as { data?: unknown })?.data;
 
+/** 等到某一条审计行落库（审计在响应之后写），返回是否等到。 */
+async function auditHas(action: string, target: string | null): Promise<boolean> {
+  for (let i = 0; i < 50; i++) {
+    const rows =
+      await db`select 1 from admin_audit where action = ${action} and target is not distinct from ${target}`;
+    if (rows.length > 0) return true;
+    await new Promise((res) => setTimeout(res, 20));
+  }
+  return false;
+}
+
 async function auditRows(): Promise<Array<{ action: string; target: string | null }>> {
   for (let i = 0; i < 50; i++) {
     const rows =
@@ -211,6 +222,8 @@ describe('后台商品分类接口', () => {
     );
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ key: 'probe_tea', name: '茶叶', sort: 5, active: false });
+    // AJ-497：路径参数叫 :key 不叫 :id，审计中间件原先只认 :id ⇒ 改分类的审计行 target 是 NULL（运营日志"对象"一栏写"—"）
+    expect(await auditHas('PUT /admin/categories/:key', 'probe_tea')).toBe(true);
     const missing = await call(
       s.url,
       'PUT',
@@ -240,6 +253,7 @@ describe('后台商品分类接口', () => {
     expect(
       (await call(s.url, 'DELETE', '/api/v1/admin/categories/probe_a', undefined, t)).status,
     ).toBe(204);
+    expect(await auditHas('DELETE /admin/categories/:key', 'probe_a')).toBe(true); // AJ-497
     const used = await call(s.url, 'DELETE', '/api/v1/admin/categories/probe_b', undefined, t);
     expect([used.status, code(used)]).toEqual([409, 40919]);
     expect((await db`select 1 from product_categories where key = 'probe_b'`).length).toBe(1);
