@@ -943,6 +943,22 @@ describe('POST /admin/orders/{id}/address（发货前改址）', () => {
     await s.close();
   });
 
+  // AJ-496：原先只有后台表单拦（2b7fcb7），绕过表单（直接调接口）照样把 NY + 95014 写进订单地址快照、面单照打
+  it('🔴 邮编与州对不上（NY + 95014）→ 40002；地址快照不动、不记改址事件', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1' });
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/address', {
+      ...ADDR,
+      state: 'NY',
+    });
+    expect(r.status).toBe(400);
+    expect(r.json.code).toBe(40002);
+    const rows = await db`select address_snapshot from orders where id = 'o-1'`;
+    expect((rows[0]?.address_snapshot as { recipient?: string }).recipient).toBe('Jane Doe');
+    expect(await db`select 1 from order_events where order_id = 'o-1'`).toHaveLength(0);
+    await s.close();
+  });
+
   it('国家不可下单（ZZ）→ 40002（表驱动，不写死 US）', async () => {
     const s = await buildServer();
     await seedOrder({ id: 'o-1' });

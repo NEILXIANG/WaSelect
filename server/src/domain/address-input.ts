@@ -17,14 +17,16 @@
  *              不为它单独开一个分支：那等于承认"两个入口的形状可以不同"，
  *              而它们共享同一个契约 schema。
  * @limitation 二：错误码分两类且与契约一致——**40001**（形状：缺字段 / 超列宽）、
- *              **40002**（格式：非 ASCII / 电话 / 邮编 / state）。
+ *              **40002**（格式：非 ASCII / 电话 / 邮编 / state，以及美国地址邮编与州对不上 `zip_state_mismatch`，AJ-496）。
+ * @limitation 三：邮编与州只看邮编首位（shared `ZIP_AREA_STATES`，与小程序 / 后台同源）——同一首位区内选错州（NY ↔ NJ）拦不住；
+ *              数据库不设对应约束（存量数据可能已不一致、规则不宜写死进 DDL），已存的地址不回头校验。
  *              区分的意义在 action：40002 是"用户改一改就能对"，40001 多半是接口用错了。
  *
  * @see contracts/api-contract.yaml（AddressInput）；app/address-routes.ts；
  *      app/admin-order-routes.ts（第二个消费方）
  */
 import { AppError } from '../errors.js';
-import { isUsStateCode } from '@waselect/shared';
+import { isUsStateCode, zipMatchesState } from '@waselect/shared';
 
 /**
  * 列宽（与 001 的 VARCHAR 一致）：超长属"形状错"（40001），DB 兜底是最后一道。
@@ -123,6 +125,11 @@ export function parseAddressInput(body: unknown): AddressInputValue {
     throw new AppError(40002, { field: 'state' });
   }
   if (!POSTAL_RE.test(input.postal_code)) throw new AppError(40002, { field: 'postal_code' });
+  // AJ-496：邮编首位与州对不上（NY + 89501）——每个字段都合法、组合起来送不到。原先只有两个前端拦，
+  //    绕过前端（旧版本小程序、直接调接口）照样入库。规则与前端同源（shared ZIP_AREA_STATES，宁可少拦）
+  if (input.country === 'US' && !zipMatchesState(input.postal_code, input.state)) {
+    throw new AppError(40002, { field: 'postal_code', reason: 'zip_state_mismatch' });
+  }
 
   return input;
 }

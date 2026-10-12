@@ -195,7 +195,8 @@ describe('US_ADDRESS_INVALID 每一条都被真库拒绝（FX5）', () => {
     const base = US_ADDRESSES[0];
     if (base === undefined) throw new Error('地址样本为空，这条断言没有意义');
 
-    for (const bad of US_ADDRESS_INVALID) {
+    // 只取数据库层的反例；`layer: 'app'`（邮编与州对不上）刻意不设 DB 约束，由应用层用例覆盖（catalog.ts 字段说明）
+    for (const bad of US_ADDRESS_INVALID.filter((c) => c.layer !== 'app')) {
       const row: AddressInsert = {
         recipient: base.recipient,
         phone: formatUsPhone(base.areaCode, 3_000_000),

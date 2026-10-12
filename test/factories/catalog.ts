@@ -540,10 +540,17 @@ export interface InvalidAddressCase {
     line1?: string;
     line2?: string | null;
     city?: string;
+    state?: string;
     postal_code?: string;
   };
-  /** 期望命中的约束名（超长类错误没有约束名，用 SQLSTATE 22001） */
+  /** 期望命中的约束名（超长类错误没有约束名，用 SQLSTATE 22001）；`layer: 'app'` 时是应用层的原因码 */
   expect: string;
+  /**
+   * 在哪一层被拒（缺省 = 数据库约束，`addresses.db.test.ts` 逐条插库验证）。
+   * `'app'` = 只在应用层拦（服务端 `parseAddressInput` + 小程序 / 后台表单），数据库**刻意不设**约束：
+   * 规则表是粗粒度的（只看邮编首位），且存量地址可能已不一致——上 CHECK 要先清数据、还会把规则写死进 DDL。
+   */
+  layer?: 'app';
 }
 
 export const US_ADDRESS_INVALID: readonly InvalidAddressCase[] = [
@@ -586,5 +593,12 @@ export const US_ADDRESS_INVALID: readonly InvalidAddressCase[] = [
     why: '备注栏让用户写配送指示，容易写满；VARCHAR 超限是 SQLSTATE 22001，不是 CHECK',
     patch: { line2: LINE2_OVER_LIMIT },
     expect: '22001',
+  },
+  {
+    name: '邮编与州对不上（NY + 89501）',
+    why: '州下拉手滑选错（NV ↔ NY 挨着）、或照抄旧地址只改了州：面单照打，承运商按邮编分拣后退件（全入口点击测试 2026-10-11 实测撞到）',
+    patch: { state: 'NY', postal_code: '89501' },
+    expect: 'zip_state_mismatch',
+    layer: 'app',
   },
 ];

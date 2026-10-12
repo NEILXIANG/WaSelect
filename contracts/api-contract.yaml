@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.77
+  version: 0.6.78
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.78（AJ-496，测试缺口复盘 2026-10-12）：`AddressInput`（买家 `POST/PUT /addresses` 与管理端 `POST /admin/orders/{id}/address` 共用）对美国地址再校验**邮编首位与州一致**（shared `ZIP_AREA_STATES`，与小程序 / 后台表单同源；属地与军邮在表内），对不上 → **40002**（原因码 `zip_state_mismatch`，只进日志）。形状不变；此前只有两个前端拦，绕过前端可把 NY + 89501 存进地址簿 / 订单快照。
     0.6.77（AJ-495，用户 2026-10-12）：`/admin/exports/orders` 与 `/admin/exports/purchase` 的金额列表头单位由「円」改为「日元」（商品金额（日元）/ 运费（日元）/ 预估关税（日元）/ 订单合计（日元）/ 售价（日元）/ 成本（日元）），列序与取值不变。用户看到「330 円」问"円是什么意思"，要求后台与小程序一律写「日元」。
     0.6.76（AJ-494，全入口点击测试 2026-10-11）：`GET /admin/exports/orders` 与 `/admin/exports/purchase` 改中文表头（内部用表，运营在 Excel 里读不懂英文字段名），订单总表的状态列写中文（shared `ORDER_STATUS_LABELS`，与后台页面同一份词）；采购单的商品 id 挪到最后一列「商品编号（系统）」。`/admin/exports/customs`（报关代理共用）表头不变。
     0.6.75（AJ-493，全入口点击测试 2026-10-11）：`POST /orders/quote` 的 40901（库存不足）错误响应 `Err.data` 另带 `stock`（当前可买件数）。买家商品详情接口本就返回同一个数，不是新信息；购物车据此把那一件改到可买件数并重报价，不再整单报价失败、合计消失。建单事务里并发扣减失败的 40901 不保证带。
@@ -1208,7 +1209,7 @@ components:
                  why: {type: string, maxLength: 200, description: '0.6.23：编辑口径的"为什么值得买"。可选（必填会逼运营编一句假文案）；超 200 字报 40001 why_too_long，**不静默截断**'},
                  maker: {type: string, maxLength: 120, description: '0.6.23：产地 / 工房 / 匠人署名。可选；超 120 字报 40001 maker_too_long（与 DB VARCHAR(120) 同宽）'},
                  tags: {type: array, items: {type: string, minLength: 1}, description: '0.6.23：编辑展示标签。**PUT 是整行覆盖**：带了（含空数组）= 覆盖，省略在新建路径按 [] 处理；逐项不得为空串（空串会渲染出一个空色块）'}}}
-    AddressInput: {description: '0.6.27：各字段补列宽上限（= ADDRESS_MAX_CHARS，与列宽逐字一致），超长 40001；state 补 pattern（不符是 **40002** 不是 40001）', type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, maxLength: 100, pattern: '^[ -~]+$'}, phone: {type: string, maxLength: 20, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, maxLength: 200, pattern: '^[ -~]+$'}, line2: {type: string, nullable: true, maxLength: 200, pattern: '^[ -~]*$', description: '0.6.65：请求可省略或传 null；响应里没填时为 null'}, city: {type: string, maxLength: 100, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', description: '0.6.33：country = US 时必须是 USPS Pub 28 附录 B 的 62 个州码之一（50 州 + DC + 属地 / 自由联系国 + AA/AE/AP），否则 40002（剩余清单 4-5）'}, postal_code: {type: string, maxLength: 10, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
+    AddressInput: {description: '0.6.78（AJ-496）：美国地址邮编首位须与州一致，否则 40002。0.6.27：各字段补列宽上限（= ADDRESS_MAX_CHARS，与列宽逐字一致），超长 40001；state 补 pattern（不符是 **40002** 不是 40001）', type: object, required: [recipient, phone, line1, city, state, postal_code], properties: {recipient: {type: string, maxLength: 100, pattern: '^[ -~]+$'}, phone: {type: string, maxLength: 20, pattern: '^\+1[0-9]{10}$'}, line1: {type: string, maxLength: 200, pattern: '^[ -~]+$'}, line2: {type: string, nullable: true, maxLength: 200, pattern: '^[ -~]*$', description: '0.6.65：请求可省略或传 null；响应里没填时为 null'}, city: {type: string, maxLength: 100, pattern: '^[ -~]+$'}, state: {type: string, minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$', description: '0.6.33：country = US 时必须是 USPS Pub 28 附录 B 的 62 个州码之一（50 州 + DC + 属地 / 自由联系国 + AA/AE/AP），否则 40002（剩余清单 4-5）'}, postal_code: {type: string, maxLength: 10, pattern: '^\d{5}(-\d{4})?$'}, country: {type: string, default: US}, is_default: {type: boolean}}}
     Address: {allOf: [{$ref: '#/components/schemas/AddressInput'}, {type: object, properties: {id: {type: string}}}]}
     OrderItemsInput: {type: array, minItems: 1, maxItems: 50, description: '0.6.27：maxItems 50 = domain/quote.ts 的 MAX_QUOTE_ITEMS（AJ-319）。0.6.34 订正：原写"代码里根本没有数量上限"不成立——路由层自 AJ-107 起就有同值上限（只是 reason 不同）；现已收成一份常量。超出 → 40001（reason items_too_many，日志可见）。0.6.66 订正：小程序购物车自 P2-31 起已有品种上限（cart-store.js MAX_CART_LINES=50，第 51 种在加购时即拦）；原注释写的「没有上限、51 件才撞 40001」已过期', items: {type: object, required: [product_id, qty], properties: {product_id: {type: string}, qty: {type: integer, minimum: 1, maximum: 99, description: '0.6.66（AJ-448）：单行上限 = shared MAX_LINE_QTY；超出 → 40001 qty_too_large。小程序购物车与详情页步进同封顶'}}}}
     # duty_jpy 可空 + duty_estimate（I1-U4 实现口径）：duty_rates 无此 (origin,dest) 行、或目的国/产地

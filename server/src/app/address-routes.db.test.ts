@@ -119,6 +119,7 @@ describe('POST /addresses', () => {
         { ...VALID, postal_code: '123' },
         { ...VALID, state: 'California' },
         { ...VALID, country: 'CA' },
+        { ...VALID, state: 'NV' }, // AJ-496：每个字段都合法，但 95014 不是内华达的邮编
       ]) {
         const r = await call(srv.url, 'POST', '/api/v1/addresses', bad);
         expect(r.json['code'], JSON.stringify(bad)).toBe(40002);

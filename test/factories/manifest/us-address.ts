@@ -178,6 +178,12 @@ export const US_ADDRESS_DIRTY_SHAPES: readonly {
     matches: (c) => c.name.startsWith('line2 超过'),
   },
   {
+    id: 'dirty-zip-state-mismatch',
+    why: '州下拉手滑（NV ↔ NY）或照抄旧地址只改了州：每个字段都合法、组合起来送不到（七类自查 C 组合）',
+    coverage: true,
+    matches: (c) => c.name.startsWith('邮编与州对不上'),
+  },
+  {
     id: 'dirty-state-invalid',
     why: '州码写成 ZZ 目前**能入库**（state/country 在 DB 层无 CHECK，见 F-A1）',
     // ⚠️ 刻意标 n/a：这条不是"数据被拒绝"，而是**已知缺口**，

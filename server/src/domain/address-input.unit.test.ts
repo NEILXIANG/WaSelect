@@ -105,15 +105,20 @@ describe('address-input（地址校验，I2 U-B2c）', () => {
   it('🔴 美国地址的 state 必须在 USPS 州码白名单里（剩余清单 4-5）：XX 拒；DC / PR / AE 收', () => {
     expect(fail({ ...OK_ADDR, state: 'XX' }).field).toBe('state');
     expect(fail({ ...OK_ADDR, state: 'UM' }).field).toBe('state');
-    for (const st of ['DC', 'PR', 'AE'])
-      expect(() => parseAddressInput({ ...OK_ADDR, state: st })).not.toThrow();
+    // 州配真实邮编（AJ-496 起邮编与州要对得上；原先拿 Cupertino 的 95014 配 DC / PR / AE，本身就不是真地址）
+    for (const [st, zip] of [
+      ['DC', '20500'],
+      ['PR', '00901'],
+      ['AE', '09012'],
+    ] as const)
+      expect(() => parseAddressInput({ ...OK_ADDR, state: st, postal_code: zip })).not.toThrow();
   });
 
   it('state 须两个大写字母（小写 / 一位 / 三位都拒）', () => {
     expect(fail({ ...OK_ADDR, state: 'ca' }).field).toBe('state');
     expect(fail({ ...OK_ADDR, state: 'C' }).field).toBe('state');
     expect(fail({ ...OK_ADDR, state: 'CAL' }).field).toBe('state');
-    expect(parseAddressInput({ ...OK_ADDR, state: 'NY' }).state).toBe('NY');
+    expect(parseAddressInput({ ...OK_ADDR, state: 'NY', postal_code: '10118' }).state).toBe('NY');
   });
 
   it('邮编 5 位或 ZIP+4；4 位 / 6 位 / 连字符后不足 4 位都拒', () => {
@@ -161,6 +166,44 @@ describe('US_ADDRESSES / US_ADDRESS_INVALID 样本池（TST3-02）', () => {
   it.each(US_ADDRESS_INVALID.map((c) => [c.name, c] as const))('反例被拒：%s', (_n, c) => {
     // 超长类是"形状错"（40001），其余是格式错（40002）——两者都是应用层拒绝
     expect([40001, 40002]).toContain(fail({ ...OK_ADDR, ...c.patch }).code);
+  });
+});
+
+/**
+ * 邮编与州一致（测试缺口复盘 2026-10-12：原先只有小程序与后台表单拦，绕过前端——旧版本小程序、直接调接口——照样存进 NY + 89501）。
+ * @why 规则与两个前端同源（shared `zipMatchesState`，只看邮编首位）；宁可少拦：属地 / 军邮 / 跨区邮编都在表里（样本池那组用例守着不误拦）。
+ */
+describe('🔴 邮编与州对不上 → 40002（postal_code）', () => {
+  it.each([
+    ['NY', '89501'],
+    ['CA', '10118'],
+    ['TX', '02108'],
+    ['NV', '10118-0110'], // ZIP+4 一样按首位判
+  ])('%s + %s → 40002', (state, postal_code) => {
+    expect(fail({ ...OK_ADDR, state, postal_code })).toMatchObject({
+      code: 40002,
+      field: 'postal_code',
+      reason: 'zip_state_mismatch',
+    });
+  });
+
+  it.each([
+    ['NY', '10118'],
+    ['NJ', '07030'],
+    ['TX', '88510'], // 德州西部用 8 开头，表里第 8 区收了 TX
+    ['PR', '00901'],
+    ['AE', '09012'],
+    ['AP', '96201'],
+  ])('%s + %s 放行（跨区与属地 / 军邮不误拦）', (state, postal_code) => {
+    expect(() => parseAddressInput({ ...OK_ADDR, state, postal_code })).not.toThrow();
+  });
+
+  // 注回验证（约束八）：原用例拿加拿大 ON 试，ON 不是美国州码、规则本来就跳过——把 country 守卫删掉也不红，等于没测。
+  // 要能分辨，得用"外国的地区缩写恰好撞上美国州码"的形态：墨西哥 5 位邮编 + Colima 的缩写 CO（撞科罗拉多）
+  it('非美国地址不套用美国邮编规则：墨西哥 Colima「CO 28000」不因撞上科罗拉多的州码被拒', () => {
+    expect(() =>
+      parseAddressInput({ ...OK_ADDR, country: 'MX', state: 'CO', postal_code: '28000' }),
+    ).not.toThrow();
   });
 });
 
