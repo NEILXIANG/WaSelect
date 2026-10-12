@@ -65,7 +65,12 @@ async function open(failOrderIds: string[] = []): Promise<HTMLElement> {
     if (m !== null) {
       const id = decodeURIComponent(m[1]!);
       if (failOrderIds.includes(id)) throw new ApiError(-1, '请求超时（10000ms）', '');
-      return { order_id: id, user_id: id === 'ord-A' ? 'user-A' : 'user-B' };
+      return {
+        order_id: id,
+        user_id: id === 'ord-A' ? 'user-A' : 'user-B',
+        contact_email: id === 'ord-A' ? 'grace.obrien@yahoo.com' : 'jun.wong@outlook.com',
+        address: { recipient: id === 'ord-A' ? "Grace O'Brien" : 'Jun Wong' },
+      };
     }
     return {};
   };
@@ -73,10 +78,10 @@ async function open(failOrderIds: string[] = []): Promise<HTMLElement> {
   return mounted.el;
 }
 
-/** 第 i 行的"处理"按钮（每次重新查：点完会重渲染）。 */
+/** 第 i 行的"拉黑买家…"按钮（每次重新查：点完会重渲染）。 */
 function handle(el: HTMLElement, i: number): HTMLButtonElement | null {
   const list = [...el.querySelectorAll('button')].filter(
-    (b) => (b.textContent ?? '').trim() === '处理',
+    (b) => (b.textContent ?? '').trim() === '拉黑买家…',
   );
   return (list[i] as HTMLButtonElement | undefined) ?? null;
 }
@@ -122,6 +127,18 @@ describe('风控页：版式', () => {
 });
 
 describe('风控页：拉黑串单（ADM3-01）', () => {
+  // 两端逐页走查第三轮 2026-10-12：行内按钮叫"处理"（已胜诉 / 已败诉的单也写"处理"，点开其实只是拉黑面板）；
+  //   面板写"用户 u-184f90f7-…"内部编号——下方已拉黑列表早已是"姓名 · 邮箱"
+  it('🔴 行内按钮写实为「拉黑买家…」；面板写买家姓名与邮箱，不出内部编号', async () => {
+    const el = await open();
+    await click(handle(el, 0));
+    const panel = [...el.querySelectorAll('.form')].find((f) =>
+      f.textContent?.includes('拉黑用户'),
+    );
+    expect(panel?.textContent).toContain("买家 Grace O'Brien · grace.obrien@yahoo.com");
+    expect(panel?.textContent).not.toContain('user-A');
+  });
+
   it('处理 A 成功 → 再处理 B 且 B 取详情失败 → 确认面板消失（不能停在 A 上）', async () => {
     const el = await open(['ord-B']);
     expect(handle(el, 0)).not.toBeNull();

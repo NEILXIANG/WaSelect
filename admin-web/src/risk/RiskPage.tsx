@@ -33,6 +33,14 @@ import {
   type DisputeRow,
 } from './view.js';
 
+/** 订单详情里的买家：收件人 · 联系邮箱（缺哪个省哪个）。 */
+function buyerLabel(order: unknown): string {
+  const o = (order ?? {}) as { contact_email?: unknown; address?: { recipient?: unknown } };
+  const name = typeof o.address?.recipient === 'string' ? o.address.recipient.trim() : '';
+  const email = typeof o.contact_email === 'string' ? o.contact_email.trim() : '';
+  return [name, email].filter((x) => x !== '').join(' · ');
+}
+
 export interface RiskPageProps {
   api: AdminApi;
 }
@@ -50,6 +58,8 @@ export function RiskPage({ api }: RiskPageProps) {
   /** 面板上显示的订单号（`order_no`），不是 UUID——运营是按订单号认单的（ADM3-01）。 */
   const [orderNo, setOrderNo] = useState('');
   const [userId, setUserId] = useState('');
+  /** 面板上写的买家（姓名 · 邮箱），不写内部编号（两端逐页走查第三轮 2026-10-12）。 */
+  const [buyerText, setBuyerText] = useState('');
   /** 拉黑原因（AJ-449）：必填，进审计与连带取消的订单事件；面板收起时清空。 */
   const [blockReason, setBlockReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -105,6 +115,7 @@ export function RiskPage({ api }: RiskPageProps) {
       setOrderId(r.orderId);
       setOrderNo(r.orderNo);
       setUserId(uid);
+      setBuyerText(buyerLabel(order));
       if (uid === '') sink.error('该订单详情里没有 user_id（拉黑需要它）');
     } catch (e) {
       const { text, traceId } = toastError(e, '取订单详情失败');
@@ -207,7 +218,8 @@ export function RiskPage({ api }: RiskPageProps) {
                   disabled={busy || r.orderId === ''}
                   onClick={() => void prepare(r)}
                 >
-                  处理
+                  {/* 写实：点开就是拉黑面板（两端逐页走查第三轮：原写"处理"，已结案的拒付也写"处理"） */}
+                  拉黑买家…
                 </button>
               </td>
             </tr>
@@ -229,7 +241,8 @@ export function RiskPage({ api }: RiskPageProps) {
             {/* 显示 order_no：列表行给运营看的是订单号，而 order_id 是 UUID——两个对不上，
                 运营没法把面板上这一行和列表里的哪一行对起来（ADM3-01）。
                 order_no 缺失时退化到 UUID：宁可显示一个看不懂的串，也不要显示一个空档。 */}
-            订单 {orderNo !== '' ? orderNo : orderId} · 用户 {userId}
+            订单 {orderNo !== '' ? orderNo : orderId} · 买家{' '}
+            {buyerText !== '' ? buyerText : '（未留姓名与邮箱）'}
           </span>
           {/* AJ-404：拉黑前先看这个人的全貌（历史单数、地址簿、其它拒付）——客户页是新的主入口 */}
           <a className="link" href={`#/customers/${encodeURIComponent(userId)}`}>
