@@ -359,6 +359,14 @@ page {
 
 .ws-buybar__label {
   margin-right: var(--ws-space-hair);
+  white-space: nowrap;
+}
+
+/* 金额区上下两行（左侧被两个按钮挤窄时用）：标签一行、金额一行，金额不换行（两端逐页走查 2026-10-12） */
+.ws-buybar__sum--stack {
+  flex-direction: column;
+  align-items: flex-start;
+  white-space: nowrap;
 }
 
 .ws-buybar__btn {

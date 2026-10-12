@@ -272,7 +272,8 @@
     <view class="ws-buybar" wx:if="{{view.hasActions}}">
       <text class="ws-note state__error ws-buybar__note" wx:if="{{buyAgainNote}}">{{buyAgainNote}}</text>
       <view class="ws-buybar__row">
-        <view class="ws-buybar__sum">
+        <!-- 两个按钮并排时左侧只剩约 190rpx：金额区改上下两行（两端逐页走查 2026-10-12：原先"应付"竖排、金额断成"10,550 日 / 元"） -->
+        <view class="ws-buybar__sum {{view.canCancel && view.canPay ? 'ws-buybar__sum--stack' : ''}}">
           <text class="ws-note ws-buybar__label" wx:if="{{view.canPay && view.totalJpy !== null}}">应付</text>
           <ws-price wx:if="{{view.canPay && view.totalJpy !== null}}" jpy="{{view.totalJpy}}" size="md" />
         </view>
