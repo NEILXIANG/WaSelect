@@ -18,7 +18,8 @@ describe('loginErrorText（P2-43）', () => {
   it('40101 在登录页说"邮箱、密码或手机验证码不正确"，不说"登录已过期"；报障码单独给；提醒锁定规则', () => {
     const t = loginErrorText(new ApiError(40101, '未登录或登录已过期', 'tr-1'));
     expect(t.text).toBe('邮箱、密码或手机验证码不正确');
-    expect(t.traceId).toBe('tr-1');
+    // 全入口点击测试 2026-10-11：输错密码不是技术故障，不再显示"把这串编号发给技术人员"（原为 'tr-1'）
+    expect(t.traceId).toBe('');
     expect(t.hint).toContain(`连续输错 ${ADMIN_LOGIN_MAX_FAILURES} 次`);
     expect(t.hint).toContain(`锁定 ${ADMIN_LOGIN_LOCK_MINUTES} 分钟`);
   });
@@ -101,6 +102,12 @@ describe('jwtExpMs / expiryWarning（P1-7 过期前提醒）', () => {
     expect(expiryWarning(exp, exp - 10 * 60_000)).toContain('约 10 分钟');
     expect(expiryWarning(exp, exp + 1)).toContain('已过期');
     expect(expiryWarning(null, 0)).toBe('');
+  });
+});
+
+describe('loginErrorText：锁定（42901）不出报障码（全入口点击测试 2026-10-11）', () => {
+  it('🔴 输错太多被锁定是用户侧状态，不显示求助编号', () => {
+    expect(loginErrorText(new ApiError(42901, '请求过于频繁', 'tr-5')).traceId).toBe('');
   });
 });
 

@@ -55,6 +55,8 @@ export interface LoginErrorView {
  *      照搬后者，管理员会以为是会话问题去清缓存（P2-43）。
  * @why 42901 读 `retry-after`（秒）换算成分钟（向上取整）；头读不到时只说"稍后再试"，不编数字。
  * @why 报障码不再拼进红字（AJ-410 / N5）：由调用方用 `TraceLine` 单独一行显示。
+ * @why 输错（40101）与锁定（42901）不给报障码（全入口点击测试 2026-10-11）：这两种是用户侧状态，不是技术故障，
+ *      "把这串编号发给技术人员"只会让人以为系统坏了；账号不让进（40301）与未知错误仍给。
  * @why 输错时提醒"连续输错会锁定"（N6），数字来自 shared 常量（与服务端同一个）；
  *      只说**规则**，不说"还剩几次"——后者会给暴力破解者计数（LoginForm @limitation 二）。
  */
@@ -66,7 +68,7 @@ export function loginErrorText(err: unknown): LoginErrorView {
     return {
       text: '邮箱、密码或手机验证码不正确',
       hint: `请看清再输：连续输错 ${ADMIN_LOGIN_MAX_FAILURES} 次会暂时锁定 ${ADMIN_LOGIN_LOCK_MINUTES} 分钟`,
-      traceId,
+      traceId: '',
     };
   }
   // 登录口的 40301 = 口令对但不让进（AJ-442）：不是管理员 / 已停用 / 正式环境没开手机验证。
@@ -84,7 +86,7 @@ export function loginErrorText(err: unknown): LoginErrorView {
       sec !== undefined
         ? `输错次数太多，已暂时锁定，请约 ${Math.max(1, Math.ceil(sec / 60))} 分钟后再试`
         : '输错次数太多，已暂时锁定，请稍后再试';
-    return { text, hint: '', traceId };
+    return { text, hint: '', traceId: '' };
   }
   return { text: err.message, hint: '', traceId };
 }

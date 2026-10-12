@@ -51,7 +51,8 @@ describe('LoginForm：新手可用性（AJ-410）', () => {
     expect(el.ownerDocument.activeElement?.id).toBe('login-password');
   });
 
-  it('🔴 密码不对：红字只写原因，锁定规则与报障码各占一行（报障码不进红字）', async () => {
+  // 全入口点击测试 2026-10-11：输错密码不是技术故障，不再显示报障码行（原先断言有 `${TRACE_HINT}tr-login-1`）
+  it('🔴 密码不对：红字只写原因，锁定规则单独一行；不出报障码', async () => {
     const el = await open(async () => {
       throw new ApiError(40101, '未登录或登录已过期', 'tr-login-1');
     });
@@ -63,7 +64,7 @@ describe('LoginForm：新手可用性（AJ-410）', () => {
     expect(el.textContent).toContain(
       `连续输错 ${ADMIN_LOGIN_MAX_FAILURES} 次会暂时锁定 ${ADMIN_LOGIN_LOCK_MINUTES} 分钟`,
     );
-    const trace = el.querySelector('[role="alert"] .trace-line')?.textContent ?? '';
-    expect(trace).toBe(`${TRACE_HINT}tr-login-1`);
+    expect(el.querySelector('[role="alert"] .trace-line')).toBeNull();
+    expect(el.textContent).not.toContain(TRACE_HINT);
   });
 });
