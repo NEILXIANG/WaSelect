@@ -24,6 +24,7 @@
  *
  * @see ../../docs/管理后台对标分析-成熟电商平台-2026-10-08.md §8-1②；./App.tsx
  */
+import { markPush } from './ui/scroll-memory.js';
 
 /** 一级页面（与侧栏项一一对应；新增管理页就在这里加一项）。 */
 export const PAGES = [
@@ -115,6 +116,8 @@ export function navigate(route: Partial<Route> & { page: PageKey }): void {
     query: route.query ?? new URLSearchParams(),
   });
   if (location.hash === next) return;
+  // 全入口点击测试 2026-10-11：点出来的换页从页顶开始；后退 / 前进回到原处（ui/scroll-memory.ts）
+  markPush();
   location.hash = next;
 }
 

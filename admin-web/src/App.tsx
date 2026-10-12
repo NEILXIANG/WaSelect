@@ -25,7 +25,7 @@
  * @see ./AuthGate.tsx（登录态与重新登录浮层）；./api/client.ts（40101 → onUnauthorized 的语义）；
  *      ./router.ts（网址路由）；docs/地基搭建清单.md F15
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AuthGate, type SessionControls } from './AuthGate.js';
 import { createAdminApi } from './api/client.js';
 import { resolveApiBase } from './api/config.js';
@@ -52,6 +52,7 @@ import {
   type Route,
 } from './router.js';
 import { ConfirmDialog } from './ui/confirm.js';
+import { consumePush, markPush, rememberScroll, scrollTarget } from './ui/scroll-memory.js';
 import { ErrorBoundary } from './ui/ErrorBoundary.js';
 import { createErrorReporter, describeThrown } from './ui/error-report.js';
 import { LEAVE_UNSAVED_SPEC } from './ui/leave-spec.js';
@@ -100,6 +101,36 @@ export function App() {
 /** 登录后的壳：侧栏 + 当前页。会话失效时它**不卸载**（AuthGate 盖浮层），state 保留。 */
 function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionControls }) {
   const [route, setRoute] = useState<Route>(currentRoute);
+  const mainRef = useRef<HTMLElement | null>(null);
+  const routeKey = buildHash(route);
+  // 全入口点击测试 2026-10-11：页面里 `#/…` 链接点击也算"点出来的"（与 navigate 同口径），从页顶开始
+  useEffect(() => {
+    const onClick = (e: MouseEvent): void => {
+      const a = (e.target as Element | null)?.closest?.('a[href^="#/"]');
+      if (a !== null && a !== undefined) markPush();
+    };
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, []);
+  // 换页后：点出来的回页顶；后退 / 前进回到记下的位置（列表要等取数撑开高度，按帧重试最多约 2 秒）。
+  // 以网址串为键：乐观 setRoute 与随后的 hashchange 是同一个网址，只算一次换页
+  useLayoutEffect(() => {
+    const el = mainRef.current;
+    if (el === null) return undefined;
+    const target = scrollTarget(routeKey, consumePush());
+    el.scrollTop = 0;
+    if (target === 0) return undefined;
+    let frames = 0;
+    let raf = 0;
+    const tick = (): void => {
+      const max = el.scrollHeight - el.clientHeight;
+      el.scrollTop = Math.min(target, Math.max(0, max));
+      frames += 1;
+      if (max < target && frames < 120) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [routeKey]);
   /** 当前页面有没有未保存的改动（第一批⑥：由表单页上报，@see ../ui/unsaved.tsx）。 */
   const { dirty, markDirty, clear: clearDirty } = useDirtyRegistry();
   useBeforeUnload(dirty);
@@ -335,7 +366,13 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
           </button>
         </aside>
 
-        <main className="main">
+        <main
+          className="main"
+          ref={mainRef}
+          onScroll={() => {
+            if (mainRef.current !== null) rememberScroll(routeKey, mainRef.current.scrollTop);
+          }}
+        >
           {/* 页面级错误边界（AJ-421）：一页坏了只换这一块，侧栏照常；换页 / 换一单即复位 */}
           <ErrorBoundary page={view} resetKey={`${view}/${route.id}`} reporter={reporter}>
             {body}
