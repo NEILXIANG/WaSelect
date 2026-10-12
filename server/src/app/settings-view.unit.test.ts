@@ -245,6 +245,10 @@ describe('白名单内容：当前生效值 + 改它要不要重启', () => {
       '「六花亭」· 已下架 · 库存 0',
     );
     expect(label(null)).toBe('找不到这件商品（编号填错了？审核期将没有能下单的商品）');
+    // 词表外的状态原样显示（看得见，不静默换成某个已知状态）
+    expect(label({ title: '六花亭', status: 'archived', stock: 3 })).toBe(
+      '「六花亭」· archived · 库存 3',
+    );
     const { view } = build();
     expect(item(view, 'payment', 'review_sku_id')).not.toHaveProperty('value_label');
   });
