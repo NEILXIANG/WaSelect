@@ -31,6 +31,7 @@
  *      ../../../contracts/api-contract.yaml（Order / POST /orders/{id}/cancel）
  */
 import {
+  ORDER_NOT_FOUND_TEXT,
   PAYABLE,
   STOCK_REFUND_NOTE,
   buyerStatus,
@@ -187,6 +188,18 @@ export function amountLines(order) {
 export function dutyNote(order) {
   const o = order && typeof order === 'object' ? order : {};
   return Number.isInteger(o.duty_jpy) ? dutyNoteText(o.duty_jpy) : '';
+}
+
+/**
+ * 取订单失败是不是"订单不存在"（40400，全入口点击测试 2026-10-11）。
+ * @why 原先"请求的资源不存在"+ 40400 + 「重试」——重试一万次也一样；改为说人话、按钮去订单列表、不出错误码（同支付页）。
+ * @param {unknown} err
+ * @returns {{notFound: boolean, error?: string, errorRef?: string}} 喂给 setData；不是 40400 时只给 notFound:false
+ */
+export function orderNotFound(err) {
+  const code = err !== null && typeof err === 'object' ? err.code : undefined;
+  if (code !== 40400) return { notFound: false };
+  return { notFound: true, error: ORDER_NOT_FOUND_TEXT, errorRef: '' };
 }
 
 /**

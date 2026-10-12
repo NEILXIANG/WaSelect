@@ -11,6 +11,7 @@
  *
  * @see ../../../test/helpers/mp-page.ts；./index.js；./index.vm.js（`onShowAction`）
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deferred, loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 
@@ -640,6 +641,26 @@ describe('链接里没有订单 id（F11，第二轮审计 2026-10-11）', () =>
     await settle();
     expect(requests).toEqual([]);
     expect(tabs).toEqual(['/pages/order/index']);
+  });
+});
+
+// 全入口点击测试 2026-10-11：订单号不存在 / 不是本人的（40400）时，原先显示"请求的资源不存在"+ 错误码 + 「重试」——
+// 重试一万次也一样；底下的「查看订单」又进同一张不存在的单。改为：说人话、按钮去订单列表、不出错误码、不给死路按钮
+describe('订单不存在（40400）', () => {
+  it('🔴 说"没找到这张订单"、不出错误码；按钮去订单列表；底部「查看订单」不出现', async () => {
+    await settle();
+    orderFetchError = Object.assign(new Error('请求的资源不存在'), { code: 40400 });
+    call('onLoad', { orderId: 'ord-nope' });
+    await settle();
+    expect(page.data['noOrderId']).toBe(true);
+    expect(String(page.data['error'])).toContain('链接可能已失效');
+    expect(page.data['errorRef']).toBe('');
+    call('onRetry');
+    await settle();
+    expect(tabs).toEqual(['/pages/order/index']);
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    expect(wxml).toMatch(/<view class="ws-gutter ws-section cta" wx:if="\{\{!noOrderId\}\}">/);
+    expect(wxml).toMatch(/<ws-state-block\s+wx:if="\{\{error\}\}"/);
   });
 });
 

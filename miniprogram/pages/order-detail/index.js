@@ -26,7 +26,7 @@
  *
  * @see ./index.vm.js（视图逻辑真源，17 条单测）；../../utils/wx-api.js（showModal / setClipboardData）
  */
-import { actionFailure, buyAgainItems, detailView } from './index.vm.js';
+import { actionFailure, buyAgainItems, detailView, orderNotFound } from './index.vm.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -50,6 +50,8 @@ const DETAIL_PAGE = '/pages/detail/index';
 const AFTER_SALE_PAGE = '/pages/after-sale/index';
 /** 「我的」（tab 页）：客服联系方式在那里（AJ-433）。 */
 const USER_PAGE = '/pages/user/index';
+/** 订单列表（tab 页，只能 switchTab）。 */
+const ORDER_LIST_PAGE = '/pages/order/index';
 
 Page({
   data: {
@@ -60,6 +62,8 @@ Page({
     buyAgainNote: '',
     /** 错误态是否给"重试"（P2-38）：链接里没有订单 id 时为 false。 */
     retryable: false,
+    /** 订单不存在（40400）或链接里没有 id：按钮去订单列表（vm `orderNotFound`）。 */
+    notFound: false,
     /** 错误文案（空串 = 无错误）。 */
     error: '',
     /** AJ-433：错误态按钮去客服（账号被拉黑）而不是重试。 */
@@ -115,7 +119,12 @@ Page({
     this.recheckCount = 0;
     this.recheckGaveUp = false;
     // @see @limitation 一：空 id 不发请求
-    if (this.orderId === '') this.setData({ error: '订单不存在或链接无效', retryable: false });
+    if (this.orderId === '')
+      this.setData({
+        error: '链接里缺少订单信息，可以在「订单」里查看你的全部订单',
+        retryable: false,
+        notFound: true,
+      });
     else this.setData({ retryable: true });
     // 剩余清单 4-2：订单出问题时最需要客服——拉一次联系方式，失败静默（只是不显示这张卡）
     app.globalData
@@ -133,6 +142,11 @@ Page({
    * 账号被拉黑（errorContact，AJ-433）时去「我的」找客服——重试永远不会成功。
    */
   onRetry() {
+    // 订单不存在（40400）/ 链接里没有 id：重取无用，去订单列表（全入口点击测试 2026-10-11）
+    if (this.data.notFound === true) {
+      wxApi.switchTab({ url: ORDER_LIST_PAGE });
+      return;
+    }
     if (this.data.errorContact === true) {
       wxApi.switchTab({ url: USER_PAGE });
       return;
@@ -196,6 +210,7 @@ Page({
         }),
         error: '',
         errorContact: false,
+        notFound: false,
         copied: '',
         copyError: '',
         copyErrorAt: '',
@@ -203,7 +218,7 @@ Page({
       this.scheduleRecheck();
     } catch (e) {
       if (isStale(seq, this.loadSeq)) return;
-      this.setData({ view: null, ...errorFields(e), ...contactFields(e) });
+      this.setData({ view: null, ...errorFields(e), ...contactFields(e), ...orderNotFound(e) });
     } finally {
       if (!isStale(seq, this.loadSeq)) this.setData({ loading: false });
     }

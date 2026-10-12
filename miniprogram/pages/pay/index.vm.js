@@ -13,7 +13,12 @@
  *      ../../utils/order-status.js（PAYABLE：可付状态的唯一真源）；
  *      ../../../server/src/app/pay-intent.ts（服务端对同一件事的护栏）
  */
-import { STATUS_LABELS, canPay, statusText } from '../../utils/order-status.js';
+import {
+  ORDER_NOT_FOUND_TEXT,
+  STATUS_LABELS,
+  canPay,
+  statusText,
+} from '../../utils/order-status.js';
 import { copyFailText } from '../../utils/privacy.js';
 import { channelCountryOf, payGuide } from '../../utils/pay-plan.js';
 import { countdownText } from '../../utils/countdown.js';
@@ -202,6 +207,24 @@ export function closedScreen(view) {
 }
 
 /** 账号被拉黑时关闭屏的说明（没扣款要说清：买家第一个担心的是钱）。 */
+/**
+ * 订单不存在（或不是本人的，40400）时支付页的样子（全入口点击测试 2026-10-11）。
+ * @why 原先显示"请求的资源不存在"+ 错误码 + 「重试」：重试一万次也一样，底部「查看订单」又进同一张不存在的单。
+ *      与"链接里没有订单 id"（F11）同一出口：说人话、按钮去订单列表（`noOrderId` 复用那条路径）、不出错误码。
+ * @limitation 40400 也覆盖"他人的单"（防存在性探测，同码），文案两种都说到，不区分。
+ * @param {unknown} err
+ * @returns {object|null} 直接喂给 setData；不是 40400 → null（照旧走 errorFields）
+ */
+export function notFoundScreen(err) {
+  const code = err !== null && typeof err === 'object' ? err.code : undefined;
+  if (code !== 40400) return null;
+  return {
+    error: ORDER_NOT_FOUND_TEXT,
+    errorRef: '',
+    noOrderId: true,
+  };
+}
+
 export const BLOCKED_CLOSED_TEXT =
   '账号已被限制使用，这笔订单无法支付（没有扣款）；如有疑问请联系客服';
 /**

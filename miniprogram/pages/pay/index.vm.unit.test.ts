@@ -24,6 +24,7 @@ import {
   payPageView,
   payStartDecision,
   recheckAfterPayError,
+  notFoundScreen,
 } from './index.vm.js';
 import { ADDRESS_COUNTRY_DEFAULT } from '../../utils/address-form.js';
 
@@ -542,5 +543,13 @@ describe('埋点：放弃支付的判定（M-21 / AJ-409）', () => {
     expect(abandonOnLeave({ ...base, externalStarted: true })).toBe(false);
     expect(abandonOnLeave({ ...base, orderId: '' })).toBe(false);
     expect(abandonOnLeave(undefined)).toBe(false);
+  });
+});
+
+describe('notFoundScreen（40400，全入口点击测试 2026-10-11）', () => {
+  it('40400 → 去订单列表的出口、不出错误码；其余 → null', () => {
+    expect(notFoundScreen({ code: 40400 })).toMatchObject({ noOrderId: true, errorRef: '' });
+    expect(notFoundScreen({ code: 50000 })).toBeNull();
+    expect(notFoundScreen(undefined)).toBeNull();
   });
 });

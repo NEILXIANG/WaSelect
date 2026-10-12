@@ -25,6 +25,8 @@ let calls: string[];
 let fail: boolean;
 /** AJ-433：接口回 40301（账号被拉黑）。 */
 let forbidden: boolean;
+/** 全入口点击测试 2026-10-11：接口回 40400（订单不存在 / 不是本人的）。 */
+let notFound: boolean;
 let clipFail: boolean;
 /** MP-7：POST（取消 / 确认收货）抛这个错；null = 成功。 */
 let postError: unknown;
@@ -57,6 +59,7 @@ async function open(id = 'o-1', extra: Record<string, string> = {}): Promise<voi
         if (hold !== null) return hold.promise;
         if (fail) throw Object.assign(new Error('网络请求失败'), { code: -1 });
         if (forbidden) throw Object.assign(new Error('无权限'), { code: 40301 });
+        if (notFound) throw Object.assign(new Error('请求的资源不存在'), { code: 40400 });
         return order;
       },
       cart: {
@@ -79,6 +82,7 @@ beforeEach(() => {
   calls = [];
   fail = false;
   forbidden = false;
+  notFound = false;
   clipFail = false;
   postError = null;
   hold = null;
@@ -304,6 +308,20 @@ describe('被拉黑的账号：错误态给「联系客服」（AJ-433，用户 
     call('onRetry');
     await settle();
     expect(nav).toEqual(['/pages/user/index']);
+    expect(calls).toEqual([]);
+  });
+
+  // 全入口点击测试 2026-10-11：原先"请求的资源不存在"+ 40400 + 「重试」——重试一万次也一样
+  it('🔴 订单不存在（40400）：说人话、不出错误码；按钮去订单列表，不再重取', async () => {
+    notFound = true;
+    await open();
+    expect(page.data['notFound']).toBe(true);
+    expect(String(page.data['error'])).toContain('链接可能已失效');
+    expect(page.data['errorRef']).toBe('');
+    calls = [];
+    call('onRetry');
+    await settle();
+    expect(nav).toEqual(['/pages/order/index']);
     expect(calls).toEqual([]);
   });
 

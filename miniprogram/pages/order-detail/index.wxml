@@ -19,10 +19,10 @@
   <ws-state-block
     wx:if="{{error}}"
     kind="fail"
-    title="订单信息没能取到或操作没有完成"
+    title="{{notFound ? '没找到这张订单' : '订单信息没能取到或操作没有完成'}}"
     reason="{{error}}"
     refText="{{errorRef}}"
-    actionText="{{errorContact ? '联系客服' : retryable ? '重试' : ''}}"
+    actionText="{{notFound ? '查看我的订单' : errorContact ? '联系客服' : retryable ? '重试' : ''}}"
     bindaction="onRetry"
   />
 

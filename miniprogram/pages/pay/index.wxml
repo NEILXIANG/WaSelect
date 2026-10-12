@@ -14,14 +14,20 @@
   样式只走 app.wxss 的 `--ws-*` token（design-token 门禁会扫描本文件对应的 wxss）。
 -->
 <view class="ws-page pay">
-  <view class="ws-gutter" wx:if="{{error}}">
-    <view class="ws-card state">
-      <text class="ws-note state__error">{{error}}</text>
-      <text class="ws-caption line-block" wx:if="{{errorRef}}" user-select>{{errorRef}}</text>
-      <!-- 剩余清单 4-8：错误态给出下一步（原先只有一行红字）。F11：链接里没有订单 id 时重试无用，改去订单列表 -->
-      <ws-button text="{{noOrderId ? '查看我的订单' : '重试'}}" type="default" bindtap="onRetry" />
-    </view>
-  </view>
+  <!--
+    剩余清单 4-8：错误态给出下一步（原先只有一行红字）。F11：链接里没有订单 id 时重试无用，改去订单列表。
+    全入口点击测试 2026-10-11：改用三段式状态块（原卡片顶着导航栏、文字与按钮挤在一起）；订单不存在（40400）同走"去订单列表"。
+  -->
+  <ws-state-block
+    wx:if="{{error}}"
+    kind="fail"
+    title="{{noOrderId ? '没找到这张订单' : '支付页没能打开'}}"
+    reason="{{error}}"
+    refText="{{errorRef}}"
+    actionText="{{noOrderId ? '查看我的订单' : '重试'}}"
+    compact="{{true}}"
+    bindaction="onRetry"
+  />
 
   <!-- 剩余清单 4-8：可付的单却没有任何可用支付方式（金额 / 地区不支持） -->
   <ws-state-block
@@ -163,7 +169,8 @@
   </view>
 
   <!-- 订单列表随时可去：支付完成的真值在那里（服务端回调落库），不在本页 -->
-  <view class="ws-gutter ws-section cta">
+  <!-- 订单找不到时不出（它会进同一张不存在的单；状态块里已有"查看我的订单"） -->
+  <view class="ws-gutter ws-section cta" wx:if="{{!noOrderId}}">
     <!-- A1（2026-10-09）：去浏览器付款后的手动出口；只在短链屏出现（那是唯一会"付了但这里还不知道"的路径） -->
     <ws-button
       wx:if="{{payUrl && !closedText}}"

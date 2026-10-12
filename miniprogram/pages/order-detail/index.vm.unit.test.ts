@@ -17,6 +17,7 @@ import {
   dutyNote,
   itemRows,
   timelineRows,
+  orderNotFound,
 } from './index.vm.js';
 
 const ORDER = {
@@ -665,5 +666,17 @@ describe('第二轮审计 2026-10-11：订单详情（OPS-4 / F1 / MP-7）', () 
     ]) {
       expect(actionFailure(e)).toEqual({ reload: false, note: '' });
     }
+  });
+});
+
+describe('orderNotFound（40400，全入口点击测试 2026-10-11）', () => {
+  it('40400 → 说人话、不出错误码；其余 → 只给 notFound:false（原因照旧由 errorFields 给）', () => {
+    expect(orderNotFound({ code: 40400 })).toEqual({
+      notFound: true,
+      error: '链接可能已失效，或这张订单不在当前微信账号下。可以在「订单」里查看你的全部订单',
+      errorRef: '',
+    });
+    expect(orderNotFound({ code: -1 })).toEqual({ notFound: false });
+    expect(orderNotFound(null)).toEqual({ notFound: false });
   });
 });

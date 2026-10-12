@@ -59,6 +59,7 @@ import {
   cashierAbandonReason,
   channelCountry,
   blockedScreen,
+  notFoundScreen,
   closedScreen,
   copyResult,
   leavesAfterAuto,
@@ -161,7 +162,7 @@ Page({
     if (this.orderId === '') {
       // F11：说人话 + 按钮改成去订单列表（重试拿不到 id）
       this.setData({
-        error: '没有找到要支付的订单，请到「订单」里找到这一单继续支付',
+        error: '链接里缺少订单信息，请到「订单」里找到这一单继续支付',
         noOrderId: true,
       });
       return;
@@ -235,7 +236,7 @@ Page({
         // 先停表：否则倒计时 1 秒后写回关闭屏，到点还会把拉黑屏换成"支付时间已到"（严格检查 2026-10-10）
         this.stopCountdown();
         this.setData(blockedScreen());
-      } else this.setData({ ...errorFields(e) });
+      } else this.setData(notFoundScreen(e) ?? { ...errorFields(e) });
     } finally {
       // 过期请求不能把 loading 清掉（新的还在途中）
       if (!isStale(seq, this.loadSeq)) this.setData({ loading: false });
@@ -521,7 +522,8 @@ Page({
    * 这时去订单列表找这一单，而不是重试。
    */
   onRetry() {
-    if (this.orderId === '') {
+    // 链接里没有订单 id（F11）或订单不存在（40400，notFoundScreen）：重试无用，去订单列表
+    if (this.orderId === '' || this.data.noOrderId === true) {
       wxApi.switchTab({ url: ORDER_PAGE });
       return;
     }
