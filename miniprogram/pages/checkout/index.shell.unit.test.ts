@@ -377,6 +377,13 @@ describe('结算页：连点防线落在 ws-button（约束：页面不得手写
     const tag = /<ws-button[^>]*bindtap="onSubmit"[^>]*\/>/s.exec(wxml)?.[0] ?? '';
     expect(tag).toContain('disabled="{{(!gate.ok && !gate.fix) || submitting}}"');
   });
+
+  // 两端逐页走查第三轮 2026-10-12：地址卡原先写死"请点上方「重新加载」"，账号受限时上方只有「联系客服」
+  it('🔴 地址没取到时地址卡的话来自 vm（addressFailedText），不写死', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    expect(wxml).toContain('wx:elif="{{addressFailed}}">{{addressFailedText}}</text>');
+    expect(wxml).not.toContain('收货地址没取到，请点上方「重新加载」');
+  });
 });
 
 describe('结算页：点「提交订单」时缺什么就带到哪（全入口点击测试 2026-10-11）', () => {

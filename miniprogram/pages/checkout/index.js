@@ -40,6 +40,7 @@ import {
   recoveryFor,
   resolveAddressId,
   submitGate,
+  addressFailedText,
   termsFromResponse,
 } from './index.vm.js';
 import { createIntentIdempotency } from '../../utils/idempotency.js';
@@ -119,6 +120,8 @@ Page({
     quoteErrorCode: 0,
     /** `GET /addresses` 失败（F5：闸门说"没取到"，地址卡不说"还没有地址"）。 */
     addressFailed: false,
+    /** 地址没取到时地址卡上的那句话（vm `addressFailedText`；账号受限另有说法）。 */
+    addressFailedText: '',
     /** 错误态按钮去客服而不是重新加载（F4：40301 账号受限，重新加载永远不会好）。 */
     errorContact: false,
     /** 报价 / 建单回 40401（商品已下架）：错误态按钮换成去首页 / 购物车。 */
@@ -316,7 +319,15 @@ Page({
       });
     } catch (e) {
       // F5：取失败 ≠ 没有地址——闸门与地址卡据此说"没取到"，而不是"请选择 / 点这里新增"
-      this.setData({ addressFailed: true, ...errorFields(e), ...contactFields(e) });
+      // 记下错误码：账号受限（40301）时地址卡与闸门说"账号受限"，不叫人去点"重新加载"（两端逐页走查第三轮）
+      const code = e && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
+      this.addressErrorCode = code;
+      this.setData({
+        addressFailed: true,
+        addressFailedText: addressFailedText(code),
+        ...errorFields(e),
+        ...contactFields(e),
+      });
     }
     this.updateGate();
   },
@@ -381,6 +392,7 @@ Page({
       quoteFailed: this.data.quoteFailed === true,
       quoteErrorCode: this.data.quoteErrorCode,
       addressFailed: this.data.addressFailed === true,
+      addressErrorCode: this.addressErrorCode,
       productGone: this.data.productGone === true,
     });
     this.setData({ gate });

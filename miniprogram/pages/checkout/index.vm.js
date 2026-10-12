@@ -97,12 +97,29 @@ export function termsFromResponse(res) {
   return { termsVersion: version, termsFailed: version === '' || !hasUrl };
 }
 
+/** 账号受限（40301）时下单与取地址都不会成功——统一一句，不叫人去点"重新加载"。 */
+const RESTRICTED_TEXT = '账号已被限制使用，暂时无法下单，如有疑问请联系客服';
+
+/**
+ * 地址卡在"没取到"时说什么（两端逐页走查第三轮 2026-10-12）。
+ * @why 账号受限时地址列表也取不到，原先一律说"请点上方「重新加载」"——受限时上方只有「联系客服」，
+ *      买家去找一个不存在的按钮；重新加载也永远不会好。
+ * @param {unknown} code 地址请求失败的错误码
+ * @returns {string}
+ */
+export function addressFailedText(code) {
+  return code === 40301
+    ? '账号已被限制使用，暂时取不到收货地址'
+    : '收货地址没取到，请点上方「重新加载」';
+}
+
 /**
  * 能否提交（按钮禁用 + 原因）。
  * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null,
  *          emailError?: string, contactEmail?: string, splitRequired?: boolean,
  *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean, buyNow?: boolean,
- *          productGone?: boolean, quoteErrorCode?: number, addressFailed?: boolean}} state
+ *          productGone?: boolean, quoteErrorCode?: number, addressFailed?: boolean,
+ *          addressErrorCode?: number}} state
  * @why `quoteErrorCode`（F4，第二轮审计 2026-10-11）：停售（40916）/ 账号受限（40301）的报价失败，原先也说"返回购物车检查商品后重试"——
  *      两种都不是购物车的问题、重试也不会好。`addressFailed`（F5）：地址列表没取到时说"请选择收货地址"，
  *      买家会以为自己的地址丢了、去重新填一遍。
@@ -132,6 +149,8 @@ function gateCore(state) {
   // 也不说"报价失败请重试"——重试不会好（联动走查 2026-10-10）
   if (s.productGone === true) return { ok: false, reason: goneExit(s.buyNow).hint };
   if (typeof s.addressId !== 'string' || s.addressId === '') {
+    if (s.addressFailed === true && s.addressErrorCode === 40301)
+      return { ok: false, reason: RESTRICTED_TEXT };
     return {
       ok: false,
       reason:
@@ -148,8 +167,7 @@ function gateCore(state) {
   if (s.quoteFailed === true) {
     // F4：按码说——停售 / 账号受限不是购物车的问题，也不是重试能解决的
     if (s.quoteErrorCode === 40916) return { ok: false, reason: '店铺暂停接单中，恢复后即可下单' };
-    if (s.quoteErrorCode === 40301)
-      return { ok: false, reason: '账号已被限制使用，暂时无法下单，如有疑问请联系客服' };
+    if (s.quoteErrorCode === 40301) return { ok: false, reason: RESTRICTED_TEXT };
     return {
       ok: false,
       reason:

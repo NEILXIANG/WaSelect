@@ -26,6 +26,7 @@ import {
   resolveAddressId,
   goneExit,
   submitGate,
+  addressFailedText,
 } from './index.vm.js';
 import { namedItemError, rowsWithQuotePrice, termsFromResponse } from './index.vm.js';
 
@@ -574,6 +575,20 @@ describe('第二轮审计 2026-10-11：结算页（F4 / F5 / F7 / MP-9）', () =
     expect(g.ok).toBe(false);
     expect(g.reason).toContain('没取到');
     expect(submitGate({ ...OK, addressId: '' }).reason).toBe('请选择收货地址');
+  });
+
+  // 两端逐页走查第三轮 2026-10-12（造了拉黑买家才走到）：账号受限时地址也取不到，地址卡与底部都说"请点上方「重新加载」"——
+  //   上方只有「联系客服」，买家去找一个不存在的按钮
+  it('🔴 地址没取到且是账号受限（40301）→ 说账号受限，不叫人去点"重新加载"', () => {
+    const g = submitGate({ ...OK, addressId: '', addressFailed: true, addressErrorCode: 40301 });
+    expect(g).toEqual({
+      ok: false,
+      fix: '',
+      reason: '账号已被限制使用，暂时无法下单，如有疑问请联系客服',
+    });
+    expect(addressFailedText(40301)).toBe('账号已被限制使用，暂时取不到收货地址');
+    expect(addressFailedText(50000)).toBe('收货地址没取到，请点上方「重新加载」');
+    expect(addressFailedText(undefined)).toBe('收货地址没取到，请点上方「重新加载」');
   });
 
   it('🔴 F7 输入中不抢先报格式错；已经报过错时，改对了立即消失、没改对继续显示', () => {

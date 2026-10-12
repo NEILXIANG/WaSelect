@@ -93,7 +93,8 @@
   </view>
 
   <!-- 全入口点击测试 2026-10-11：新增按钮固定在底部（原先排在列表最后，地址一多要滑到底才找得到） -->
-  <view class="ws-buybar">
+  <!-- 两端逐页走查第三轮 2026-10-12：账号受限时不出新增按钮（点进去填完也存不上；上面已给「联系客服」） -->
+  <view class="ws-buybar" wx:if="{{!errorContact}}">
     <ws-button text="＋ 新增收货地址" type="primary" block="{{true}}" bindtap="onAdd" />
   </view>
 </view>

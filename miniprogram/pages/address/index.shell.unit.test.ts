@@ -96,7 +96,10 @@ describe('地址列表：整卡可点、新增固定在底部（全入口点击�
       '',
     );
     expect(wxml).toMatch(/<view class="ws-page ws-page--with-buybar"/);
-    expect(wxml).toMatch(/<view class="ws-buybar">[\s\S]*bindtap="onAdd"[\s\S]*<\/view>/);
+    // 两端逐页走查第三轮 2026-10-12：账号受限（errorContact）时不出新增按钮——点进去填完也存不上
+    expect(wxml).toMatch(
+      /<view class="ws-buybar" wx:if="\{\{!errorContact\}\}">[\s\S]*bindtap="onAdd"[\s\S]*<\/view>/,
+    );
     expect(wxml).toMatch(/class="ws-card addr[^"]*"[^>]*bindtap="onCardTap"/);
     expect(wxml).not.toMatch(/bindtap="on(Edit|Delete|SetDefault)"/);
     expect(wxml).toMatch(

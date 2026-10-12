@@ -38,7 +38,8 @@
           <text class="ws-body line">{{address.region}}</text>
         </block>
         <!-- F5（第二轮审计）：取失败 ≠ 没有地址——说"没取到"，不引导用户再新增一条 -->
-        <text class="ws-note line" wx:elif="{{addressFailed}}">收货地址没取到，请点上方「重新加载」</text>
+        <!-- 两端逐页走查第三轮：账号受限时不叫人去点"重新加载"（上方只有「联系客服」；vm addressFailedText） -->
+        <text class="ws-note line" wx:elif="{{addressFailed}}">{{addressFailedText}}</text>
         <text class="ws-body line addr__add" wx:else>＋ 添加收货地址</text>
         <!-- 走查 2026-10-08：没有地址时上一行已经说"添加"，再写"切换地址"是自相矛盾 -->
         <text class="ws-caption hint" wx:if="{{address}}">点此切换地址</text>
