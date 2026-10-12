@@ -1594,3 +1594,9 @@ textarea::placeholder {
   display: flex;
   gap: var(--ws-space-sm);
 }
+
+/* 订单详情商品行：单价下一行小字写小计（第三轮走查 2026-10-12） */
+.line-sub {
+  display: block;
+  font-size: var(--md-type-body-m);
+}

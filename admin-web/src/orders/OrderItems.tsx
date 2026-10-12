@@ -15,6 +15,15 @@ function itemThumb(it: Record<string, unknown>): string {
   return typeof t === 'string' && /^https?:\/\//.test(t) ? t : '';
 }
 
+/** 多件时的这一行小计（单价 × 件数）；一件或字段不全时为 null（不写小计）。 */
+function lineTotal(it: Record<string, unknown>): number | null {
+  const unit = it['unit_price_jpy'];
+  const qty = it['qty'];
+  return Number.isInteger(unit) && Number.isInteger(qty) && (qty as number) > 1
+    ? (unit as number) * (qty as number)
+    : null;
+}
+
 export function OrderItems({ items }: { items: ReadonlyArray<Record<string, unknown>> }) {
   return (
     <div className="field">
@@ -39,7 +48,13 @@ export function OrderItems({ items }: { items: ReadonlyArray<Record<string, unkn
                     </div>
                   </td>
                   <td>× {String(it['qty'] ?? '')}</td>
-                  <td>{moneyText(it['unit_price_jpy'])}</td>
+                  {/* 写明"单价"，多件时再写小计（第三轮走查 2026-10-12：「× 2 2,470 日元」看不出是单价还是小计） */}
+                  <td className="cell-nowrap">
+                    单价 {moneyText(it['unit_price_jpy'])}
+                    {lineTotal(it) !== null && (
+                      <span className="muted line-sub">小计 {moneyText(lineTotal(it))}</span>
+                    )}
+                  </td>
                 </tr>
                 {/* 采购信息另起一行：它是**执行依据**（照这三样去买），
                 与上面那行"买了什么、多少钱"是两种用途，挤在一行里谁都读不清。

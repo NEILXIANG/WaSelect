@@ -478,6 +478,22 @@ describe('订单详情：商品行显示采购信息（D-39）', () => {
     expect(row?.textContent ?? '').toContain('建于采购信息录入之前');
   });
 
+  // 第三轮走查 2026-10-12：行上写"× 2 2,470 日元"，看不出 2,470 是单价还是这一行的小计
+  it('🔴 金额写明是单价；多件时再写这一行的小计', async () => {
+    items = [
+      { product_id: 'p-1', title: 'A', qty: 1, unit_price_jpy: 1980 },
+      { product_id: 'p-2', title: 'B', qty: 2, unit_price_jpy: 2470 },
+    ];
+    const el = await open();
+    const lines = [...el.querySelectorAll('tr:not(.row-sub)')]
+      .map((tr) => tr.textContent ?? '')
+      .filter((t) => t.includes('×'));
+    expect(lines[0]).toContain('单价 1,980 日元');
+    expect(lines[0]).not.toContain('小计');
+    expect(lines[1]).toContain('单价 2,470 日元');
+    expect(lines[1]).toContain('小计 4,940 日元');
+  });
+
   it('每一行商品都有自己那一行采购信息（行数对得上，不会串行）', async () => {
     items = [
       { product_id: 'p-1', title: 'A', qty: 1, unit_price_jpy: 100, jan_code: '1111111111111' },
