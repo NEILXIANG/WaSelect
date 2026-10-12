@@ -172,6 +172,34 @@ describe('Banner：保存撞上 40914（P2-44）', () => {
   });
 });
 
+// 规律排查 2026-10-12：服务端起查跳转目标是否存在（link_target_missing）；后台要说清是哪里不对，不给报障编号
+describe('Banner：跳转目标已不存在', () => {
+  it('🔴 说"跳转的商品或分类已不存在"，不出报障编号，表单保留', async () => {
+    const api = async (req: { path: string; method?: string }): Promise<unknown> => {
+      if (req.method === 'PUT')
+        throw new ApiError(40001, '参数缺失或格式错误', 't-x', {
+          data: { reason: 'link_target_missing' },
+        });
+      if (req.path.includes('/admin/products')) return { items: [], total: 0 };
+      return [banner('b-A', 'banners/a.webp')];
+    };
+    mounted = await mount(
+      createElement(BannersPage, {
+        api: api as never,
+        baseUrl: 'http://localhost',
+        getToken: () => 'tk',
+        onUnauthorized: () => undefined,
+      }),
+    );
+    const el = mounted.el;
+    await click([...el.querySelectorAll('button')].find((b) => b.textContent === '编辑'));
+    await click(button(el, '保存'));
+    expect(el.textContent).toContain('跳转的商品或分类已不存在');
+    expect(el.textContent).not.toContain('发给技术人员');
+    expect(button(el, '保存')).not.toBeNull();
+  });
+});
+
 describe('Banner：切换编辑对象前拦未保存改动（审查 2026-10-09 #2）', () => {
   it('🔴 编辑 A 改了排序 → 点 B 的「编辑」先弹提醒、表单仍是 A；放弃后才切到 B', async () => {
     const puts: Array<{ path: string; body?: unknown }> = [];

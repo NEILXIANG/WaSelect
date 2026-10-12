@@ -45,6 +45,11 @@ export interface BannersAdminRepo {
   listBanners(): Promise<BannerRow[]>;
   /** 按 id 取一行；无 → null。 */
   findBanner(id: string): Promise<BannerRow | null>;
+  /**
+   * 跳转目标在不在（商品不论上下架、分类不论启停——下架 / 停用是可恢复的，见 banners.ts @limitation）。
+   * @why 规律排查 2026-10-12：原先只判 link_id 非空，接口可写入指向不存在商品 / 分类的 Banner，买家点进去是空页。
+   */
+  linkTargetExists(type: 'product' | 'category', id: string): Promise<boolean>;
   /** 插入一行并返回读出行。 */
   insertBanner(row: BannerWrite & { id: string }): Promise<BannerRow>;
   /** 整行覆盖（@limitation 一）；0 行命中 → null。 */
@@ -73,6 +78,14 @@ export function createBannersAdminRepo(db: Db): BannersAdminRepo {
         select ${db.unsafe(COLS)} from banners order by sort asc, created_at asc
       `;
       return rows.map((r) => toRow(r as Record<string, unknown>));
+    },
+
+    async linkTargetExists(type: 'product' | 'category', id: string): Promise<boolean> {
+      const rows =
+        type === 'product'
+          ? await db`select 1 from products where id = ${id}`
+          : await db`select 1 from product_categories where key = ${id}`;
+      return rows.length > 0;
     },
 
     async findBanner(id: string): Promise<BannerRow | null> {

@@ -99,6 +99,22 @@ describe('parseBannerInput', () => {
     expect(parseBannerInput({ ...OK, link_id: 'x' }).linkId).toBe('x');
   });
 
+  // 规律排查 2026-10-12：只判非空——任意长度、任意字符都能写进库（列是 TEXT）
+  it('🔴 link_id 形状：商品 id 只能是字母数字横线下划线、≤64；分类键与分类表同口径', () => {
+    for (const [type, id] of [
+      ['product', 'x'.repeat(65)],
+      ['product', 'p 1; drop'],
+      ['category', 'Food'],
+      ['category', 'a'],
+    ] as const) {
+      expect(
+        reasonOf(() => parseBannerInput({ ...OK, link_type: type, link_id: id })),
+        id,
+      ).toBe('link_id_invalid');
+    }
+    expect(parseBannerInput({ ...OK, link_type: 'category', link_id: 'food' }).linkId).toBe('food');
+  });
+
   it('sort：非整数 / 负数 → 40001；缺省 0；0 合法', () => {
     expect(codeOf(() => parseBannerInput({ ...OK, sort: -1 }))).toBe(40001);
     expect(codeOf(() => parseBannerInput({ ...OK, sort: 1.5 }))).toBe(40001);

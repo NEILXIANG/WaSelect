@@ -41,6 +41,9 @@ afterAll(async () => {
 beforeEach(async () => {
   await resetTestDb(db);
   sink = new MemorySink();
+  // 规律排查 2026-10-12 起服务端查跳转目标是否存在：用例里的 INPUT 链到 p-1，先把它放进库
+  await db`insert into products (id, title, category, price_jpy, weight_g, stock, origin_country, status)
+           values ('p-1', '白色恋人 12 枚', 'food', 1980, 300, 5, 'JP', 'active')`;
 });
 
 /** IMG_BASE_URL 不传即"未配置"（optionalUrl）；传了才拼 image。 */
@@ -243,6 +246,36 @@ describe('POST /admin/banners', () => {
         expect(code(r)).toBe(40001);
       }
       expect((await db`select count(*)::int as n from banners`)[0]?.['n']).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
+// 规律排查 2026-10-12：服务端只判 link_id 非空——后台只能从下拉选，但接口能写入指向不存在的商品 / 分类、
+//   或任意长度的串；买家点进去是空页（后台的错误文案描述的正是这种失效）
+describe('跳转目标必须存在', () => {
+  it('🔴 不存在的商品 / 分类 → 40001 link_target_missing，不落库；存在的分类放行', async () => {
+    const { url, close } = await buildServer();
+    try {
+      const token = await bearer();
+      for (const body of [
+        { ...INPUT, link_id: 'p-nope' },
+        { ...INPUT, link_type: 'category', link_id: 'nope_cat' },
+      ]) {
+        const r = await call(url, 'POST', '/api/v1/admin/banners', body, token);
+        expect(r.status, JSON.stringify(body)).toBe(400);
+        expect((r.body as { data?: { reason?: string } }).data?.reason).toBe('link_target_missing');
+      }
+      expect((await db`select count(*)::int as n from banners`)[0]?.['n']).toBe(0);
+      const ok = await call(
+        url,
+        'POST',
+        '/api/v1/admin/banners',
+        { ...INPUT, link_type: 'category', link_id: 'food' },
+        token,
+      );
+      expect(ok.status).toBe(201);
     } finally {
       await close();
     }

@@ -269,6 +269,15 @@ export const PRODUCT_MAX_STOCK = 2_147_483_647;
 export const SORT_MAX = 9999;
 
 /**
+ * 列表页码上限（所有分页列表同一个数）。
+ * @why 规律排查 2026-10-12 实测：`GET /products?page=9999999999999999999` 回 500——页码只判"≥1 的整数"，
+ *      offset 越过 bigint 在库里报错（error 级进 Sentry），公开接口谁都能触发。AJ-502 补整数上界时没扫到页码。
+ * @tradeoff 1 万页 × 每页最多 100 条 = 100 万行，远超本店量级；上界小，误传的大数在入口就拦下。
+ * @see test/e2e/list-page-bound.e2e.test.ts（新增列表要在那张表里加一行）
+ */
+export const LIST_PAGE_MAX = 10_000;
+
+/**
  * 地址各字段最多几个字符（与 001 的 VARCHAR 一致）：超长属"形状错"（40001），DB 兜底是最后一道。
  * @why 放 shared（两端输入测试 2026-10-12）：原在服务端 `domain/address-input.ts`，管理端改址框因此没有 maxLength——
  *      收件人贴 101 个字只得到"改址失败"+技术编号。小程序另有一份同名常量，由单测与这里比对。

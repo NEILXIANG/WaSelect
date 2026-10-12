@@ -40,6 +40,7 @@
 import { categoryExists } from '../adapters/categories.js';
 import type { Express } from 'express';
 import {
+  LIST_PAGE_MAX,
   LOW_STOCK_THRESHOLD,
   SEARCH_KEYWORD_MAX_LENGTH,
   LIST_SORT_KEYS,
@@ -266,6 +267,7 @@ export function mountAdminProductRoutes(app: Express, deps: AdminProductRoutesDe
         if (
           !Number.isInteger(page) ||
           page < 1 ||
+          page > LIST_PAGE_MAX ||
           !Number.isInteger(size) ||
           size < 1 ||
           size > 100

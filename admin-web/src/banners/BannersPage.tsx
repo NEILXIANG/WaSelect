@@ -234,6 +234,15 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
         setConflict(true);
         setLatest(null);
       }
+      // 规律排查 2026-10-12：服务端查跳转目标（商品 / 分类可能刚被删）——运营能自己改的事，不给报障编号
+      if (
+        e instanceof ApiError &&
+        e.code === 40001 &&
+        (e.data as { reason?: unknown } | undefined)?.reason === 'link_target_missing'
+      ) {
+        sink.error('跳转的商品或分类已不存在（可能刚被删除），请重新选一个再保存');
+        return;
+      }
       const { text, traceId } = toastError(e, '保存失败');
       sink.error(
         isConflict

@@ -9,7 +9,7 @@
  * @see adapters/ops-log.ts；contracts/api-contract.yaml 0.6.32
  */
 import type { Express } from 'express';
-import { parseJstDateRange } from '@waselect/shared';
+import { LIST_PAGE_MAX, parseJstDateRange } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import type { Db } from '../adapters/db.js';
 import type { IdentityCheck } from '../adapters/identity.js';
@@ -43,6 +43,7 @@ export function mountAdminOpsLogRoutes(app: Express, deps: AdminOpsLogRoutesDeps
         if (
           !Number.isInteger(page) ||
           page < 1 ||
+          page > LIST_PAGE_MAX ||
           !Number.isInteger(size) ||
           size < 1 ||
           size > 100

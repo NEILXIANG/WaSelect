@@ -673,3 +673,32 @@ describe('订单详情换单时表单不串单', () => {
     expect(amount === null || amount.value === '').toBe(true);
   });
 });
+
+// 规律排查 2026-10-12：服务端一次最多 50 单（batch_too_large），CSV 导入早就拦了；勾选路径（每页可显示 100 条、
+//   「全选本页可发货订单」）不拦——填完 51 个运单号点提交，整批失败、提示只有"批量发货失败"
+describe('批量发货：勾选超过一次的上限', () => {
+  it('🔴 勾了 51 张可发货的单 → 按钮不可点，就近说一次最多 50 单', async () => {
+    const orders = Array.from({ length: 51 }, (_, i) => ({
+      order_id: `o-${String(i)}`,
+      order_no: `261012-A${String(i).padStart(5, '0')}`,
+      status: 'paid',
+      total_jpy: 1000,
+      created_at: '2026-10-02T00:00:00.000Z',
+    }));
+    calls = [];
+    apiImpl = async (req: Call): Promise<unknown> => {
+      calls.push(req);
+      return { items: orders, total: orders.length };
+    };
+    mounted = await mount(
+      createElement(Harness, { initial: parseHash('#/orders?status=paid&size=100') }),
+    );
+    const el = mounted.el;
+    await click(el.querySelector('input[aria-label="全选本页可发货订单"]'));
+    const btn = [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.startsWith('批量发货（'),
+    );
+    expect(btn?.disabled).toBe(true);
+    expect(el.textContent).toContain('一次最多 50 单');
+  });
+});

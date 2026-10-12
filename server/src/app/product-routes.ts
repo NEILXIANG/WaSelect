@@ -36,7 +36,7 @@ import type { Clock } from '../ports/clock.js';
 import type { AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
 import { createCatalogRepo } from '../adapters/catalog.js';
-import { SEARCH_KEYWORD_MAX_LENGTH, toMinor, toRateInt } from '@waselect/shared';
+import { LIST_PAGE_MAX, SEARCH_KEYWORD_MAX_LENGTH, toMinor, toRateInt } from '@waselect/shared';
 import { CATEGORY_KEY } from '../domain/product-input.js';
 import type { DisplayCurrency } from '../domain/quote.js';
 import { imageObjectKey, isImageId } from '../domain/upload-image.js';
@@ -110,7 +110,15 @@ export function parsePageSize(query: unknown): { page: number; size: number } {
   const q = query as { page?: unknown; size?: unknown };
   const page = q.page === undefined ? 1 : Number(q.page);
   const size = q.size === undefined ? 20 : Number(q.size);
-  if (!Number.isInteger(page) || page < 1 || !Number.isInteger(size) || size < 1 || size > 50) {
+  // 页码上界（规律排查 2026-10-12：超大页码原先一路到库里变 500）
+  if (
+    !Number.isInteger(page) ||
+    page < 1 ||
+    page > LIST_PAGE_MAX ||
+    !Number.isInteger(size) ||
+    size < 1 ||
+    size > 50
+  ) {
     throw new AppError(40001, { reason: 'page_size_invalid' });
   }
   return { page, size };

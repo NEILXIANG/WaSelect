@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_LINE_QTY,
   ORDER_NOTE_MAX_LENGTH,
+  LIST_PAGE_MAX,
   PRODUCT_MAX_CHARS,
   PRODUCT_MAX_WEIGHT_G,
   REFUND_REASON_MAX_LENGTH,
@@ -183,6 +184,24 @@ describe('契约的输入上限与 shared 常量一致', () => {
       .map(([k, v]) => `${k}: 契约 ${String(props?.[k]?.maxLength)} ≠ 代码 ${String(v)}`);
     expect(missing).toEqual([]);
     expect(props?.['weight_g']?.maximum).toBe(PRODUCT_MAX_WEIGHT_G);
+  });
+
+  // 规律排查 2026-10-12：整份契约扫一遍，凡叫 page 的查询参数都要声明 maximum == LIST_PAGE_MAX（新列表自动进入覆盖）
+  it('🔴 每个 page 查询参数的 maximum == LIST_PAGE_MAX', () => {
+    const doc = loadYaml(TEXT) as Doc;
+    const bad: string[] = [];
+    for (const [path, ops] of Object.entries(doc.paths)) {
+      for (const [method, op] of Object.entries(ops as Record<string, unknown>)) {
+        const params = (
+          op as { parameters?: Array<{ name?: string; schema?: { maximum?: number } }> }
+        )?.parameters;
+        for (const p of Array.isArray(params) ? params : []) {
+          if (p.name === 'page' && p.schema?.maximum !== LIST_PAGE_MAX)
+            bad.push(`${method.toUpperCase()} ${path}: ${String(p.schema?.maximum)}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
   });
 
   it('GET /admin/customers 的 keyword.maxLength / size.maximum 与实现常量一致（0.6.47 / AJ-404）', () => {

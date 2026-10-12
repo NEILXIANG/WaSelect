@@ -40,6 +40,7 @@ import {
   LIST_SORT_KEYS,
   ORDER_ATTENTION_LABELS,
   SEARCH_KEYWORD_MAX_LENGTH,
+  SHIP_BATCH_MAX,
   type OrderStatus,
 } from '@waselect/shared';
 import { DEFAULT_PAGE_SIZE, PageSizeSelect, readListParams, SortTh } from '../ui/list-controls.js';
@@ -498,7 +499,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
           <button
             type="button"
             className="btn"
-            disabled={selected.size === 0}
+            disabled={selected.size === 0 || selectedPaid > SHIP_BATCH_MAX}
             // N11：灰着的按钮要说清怎么让它能点
             title={selected.size === 0 ? '先勾选左边方框，选中要发货的订单' : undefined}
             onClick={() => setBatch('select')}
@@ -506,6 +507,12 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
             批量发货（{selected.size}）
           </button>
           {selected.size === 0 && <span className="muted">先勾选左边方框</span>}
+          {/* 服务端一次最多 SHIP_BATCH_MAX 单（规律排查 2026-10-12：勾选路径原先不拦，提交后整批失败） */}
+          {selectedPaid > SHIP_BATCH_MAX && (
+            <span className="error">
+              一次最多 {SHIP_BATCH_MAX} 单，现在选了 {selectedPaid} 张可发货的单，请少选一些分批发
+            </span>
+          )}
           <button type="button" className="btn btn-secondary" onClick={() => setBatch('csv')}>
             导入运单号（Excel/表格文件）
           </button>

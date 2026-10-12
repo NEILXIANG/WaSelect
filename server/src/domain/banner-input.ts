@@ -27,6 +27,7 @@ import { SORT_MAX } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import { tryParseRfc3339Ms } from './time-input.js';
 import { optionalBool } from './bool-input.js';
+import { CATEGORY_KEY } from './product-input.js';
 
 /**
  * `image_key` 的形状：对象存储路径（契约 0.6.55 / AJ-417）。
@@ -37,6 +38,9 @@ import { optionalBool } from './bool-input.js';
  *              不以 `/` 开头、不含 `..` 段，防拼进 URL 后跳出图片目录。
  */
 const IMAGE_KEY_SHAPE = /^[A-Za-z0-9][A-Za-z0-9/_.-]{0,199}$/;
+
+/** 商品 id 形状（UUID 与测试 / 种子里的 `p-…` 都在内）：字母数字、横线、下划线，≤64。 */
+const PRODUCT_LINK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** 契约 `BannerInput.link_type` 枚举（单测与契约双向比对）。 */
 export const BANNER_LINK_TYPES = ['none', 'product', 'category'] as const;
@@ -98,6 +102,14 @@ export function parseBannerInput(body: unknown): BannerInputValue {
   const rawLinkId = typeof b['link_id'] === 'string' ? b['link_id'].trim() : '';
   if (linkType !== 'none' && rawLinkId === '') {
     throw new AppError(40001, { reason: 'link_id_required' });
+  }
+  // 形状（规律排查 2026-10-12）：原先只判非空，任意长度 / 字符都能写进库（列是 TEXT）。
+  //   目标是否**存在**要查库，由路由层判（link_target_missing）
+  if (
+    (linkType === 'product' && !PRODUCT_LINK_ID.test(rawLinkId)) ||
+    (linkType === 'category' && !CATEGORY_KEY.test(rawLinkId))
+  ) {
+    throw new AppError(40001, { reason: 'link_id_invalid' });
   }
 
   const sort = b['sort'] === undefined ? 0 : b['sort'];

@@ -55,6 +55,7 @@ import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
 import {
+  LIST_PAGE_MAX,
   parseJstDateRange,
   parseOrderStatusList,
   LIST_SORT_KEYS,
@@ -268,7 +269,14 @@ function asQueryString(v: unknown): string | undefined {
 function readPaging(q: { page?: unknown; size?: unknown }): { page: number; size: number } {
   const page = q.page === undefined ? 1 : Number(q.page);
   const size = q.size === undefined ? 20 : Number(q.size);
-  if (!Number.isInteger(page) || page < 1 || !Number.isInteger(size) || size < 1 || size > 100) {
+  if (
+    !Number.isInteger(page) ||
+    page < 1 ||
+    page > LIST_PAGE_MAX ||
+    !Number.isInteger(size) ||
+    size < 1 ||
+    size > 100
+  ) {
     throw new AppError(40001, { reason: 'page_size_invalid' });
   }
   return { page, size };

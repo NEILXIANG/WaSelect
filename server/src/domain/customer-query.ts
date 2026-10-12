@@ -10,7 +10,12 @@
  * @limitation 关键字只做"去空白 + 转小写"的归一；不做全角半角、空格合并——
  *             收件人是 ASCII（addresses_recipient CHECK），邮箱大小写不敏感，单号是 ASCII，三者都够用。
  */
-import { LIST_SORT_KEYS, parseListSort, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
+import {
+  LIST_PAGE_MAX,
+  LIST_SORT_KEYS,
+  parseListSort,
+  SEARCH_KEYWORD_MAX_LENGTH,
+} from '@waselect/shared';
 
 export const CUSTOMER_PAGE_SIZE_DEFAULT = 20;
 export const CUSTOMER_PAGE_SIZE_MAX = 100;
@@ -41,6 +46,7 @@ export function parseCustomerListQuery(q: Record<string, unknown>): CustomerList
   if (
     !Number.isInteger(page) ||
     page < 1 ||
+    page > LIST_PAGE_MAX ||
     !Number.isInteger(size) ||
     size < 1 ||
     size > CUSTOMER_PAGE_SIZE_MAX

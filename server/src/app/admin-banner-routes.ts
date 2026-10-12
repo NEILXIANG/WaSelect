@@ -44,7 +44,7 @@ import type { IdentityCheck } from '../adapters/identity.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
 import { setAuditBefore, setAuditTarget, skipAudit } from './admin-audit.js';
-import { createBannersAdminRepo } from '../adapters/banners-admin.js';
+import { createBannersAdminRepo, type BannersAdminRepo } from '../adapters/banners-admin.js';
 import { parseBannerInput } from '../domain/banner-input.js';
 import { toBannerView } from './banner-view.js';
 import { expectedUpdatedAtOf } from './admin-product-routes.js';
@@ -65,6 +65,21 @@ function rejectInvalid(logger: Logger, e: unknown): never {
     ctx: { reason: (e as { details?: unknown }).details },
   });
   throw e;
+}
+
+/** 跳转目标不存在 → 40001 link_target_missing（规律排查 2026-10-12；先校验后写，与 parseBannerInput 同一条口径）。 */
+async function assertLinkTarget(
+  repo: BannersAdminRepo,
+  logger: Logger,
+  type: string,
+  id: string | null,
+): Promise<void> {
+  if ((type !== 'product' && type !== 'category') || id === null) return;
+  if (await repo.linkTargetExists(type, id)) return;
+  rejectInvalid(
+    logger,
+    new AppError(40001, { reason: 'link_target_missing' }, { reason: 'link_target_missing' }),
+  );
 }
 
 export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps): void {
@@ -97,6 +112,7 @@ export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps
         } catch (e) {
           rejectInvalid(deps.logger, e);
         }
+        await assertLinkTarget(repo, deps.logger, input.linkType, input.linkId);
         const row = await repo.insertBanner({
           id: deps.idGen.uuid(),
           imageKey: input.imageKey,
@@ -126,6 +142,7 @@ export function mountAdminBannerRoutes(app: Express, deps: AdminBannerRoutesDeps
         } catch (e) {
           rejectInvalid(deps.logger, e);
         }
+        await assertLinkTarget(repo, deps.logger, input.linkType, input.linkId);
         // 乐观锁凭据（S-09）：编辑页打开那一刻的 updated_at。没有它就分不清是不是覆盖了别人的改动
         const expectedUpdatedAt = expectedUpdatedAtOf(req.body);
         const row = await repo.updateBanner(
