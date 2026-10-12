@@ -82,7 +82,8 @@ const FORBIDDEN_TEXT = '账号已被限制使用，如有疑问请联系客服';
  *      所以照实说"重试会自动重新登录"。重登失败同时记进 globalData.loginFailed，「我的」页给"重新登录"按钮（app.js）。
  */
 const LOGIN_EXPIRED_CODE = 40101;
-const LOGIN_EXPIRED_TEXT = '登录状态已失效，请点「重试」，会自动重新登录';
+// 不点名按钮（规律排查 2026-10-12）：这句会出现在按钮叫「重新加载」「保存」「提交申请」的各页
+const LOGIN_EXPIRED_TEXT = '登录状态已失效，再操作一次会自动重新登录';
 
 /**
  * 40916 全局停售（AJ-384）。

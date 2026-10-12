@@ -621,6 +621,9 @@ describe('fullRefundErrorNotice（P2-49：出错后按刷新后的真实状态�
       const t = fullRefundErrorNotice({ code: -1, order: refunding(ev) });
       expect(t).toContain('结果未知');
       expect(t).toContain('不要去 Stripe 后台重复退');
+      // 规律排查 2026-10-12：原写"再点一次「退款」"——退款中的单抽屉按钮叫「重新提交退款」（AJ-506）
+      expect(t).toContain('「重新提交退款」');
+      expect(t).not.toContain('「退款」');
     }
   });
 

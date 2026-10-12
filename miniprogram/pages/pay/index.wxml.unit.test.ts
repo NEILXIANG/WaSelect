@@ -61,3 +61,9 @@ describe('支付页：倒计时的位置（AJ-489）', () => {
     expect(wxml.match(/\{\{countdown\}\}<\/text>/g)).toHaveLength(1);
   });
 });
+
+describe('错误块标题（规律排查 2026-10-12）', () => {
+  it('🔴 标题取 errorTitle，缺省才是"支付页没能打开"', () => {
+    expect(wxml).toContain("(errorTitle || '支付页没能打开')");
+  });
+});

@@ -7,7 +7,7 @@ import type { ConfirmSpec } from './confirm.js';
 
 export const LEAVE_UNSAVED_SPEC: ConfirmSpec = {
   title: '离开这一页会丢掉未保存的修改',
-  body: '改了但没保存的内容不会被写入（这一页也不做本地草稿）。先回去点「保存」，或直接放弃。',
+  body: '改了但没保存的内容不会被写入（这一页也不做本地草稿）。先回去把修改提交（保存或确认），或直接放弃。',
   confirmText: '放弃修改并离开',
   danger: true,
 };

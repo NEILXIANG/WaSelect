@@ -53,9 +53,12 @@ export interface DashboardPageProps {
  * 销售额卡片的辅行（ADM-7 / S3，AJ-469）：
  * ① 按收款时刻求和、**含后来整单退款的单**（退掉的在下方「已退」）；② ≈USD 用的是含缓冲的展示汇率，不是市场价。
  */
-export function salesSubText(jpy: unknown, rate: unknown): string {
+export function salesSubText(jpy: unknown, rate: unknown, period: 'today' | '7d'): string {
   const usd = usdApproxText(jpy, rate);
-  return `${usd === null ? '' : `${usd}（按含缓冲的展示汇率）· `}含后来退款的单，退款见下方「已退」`;
+  // 规律排查 2026-10-12：下方「已退」只算今天，近 7 天的卡不能指过去
+  const tail =
+    period === 'today' ? '含后来退款的单，退款见下方「已退」' : '含后来退款的单（不扣退款）';
+  return `${usd === null ? '' : `${usd}（按含缓冲的展示汇率）· `}${tail}`;
 }
 
 export function usdApproxText(jpy: unknown, rate: unknown): string | null {
@@ -156,7 +159,7 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
           <Card
             label="销售额"
             value={today === undefined ? (failed ? '—' : '…') : moneyText(today.sales_jpy ?? 0)}
-            sub={salesSubText(today?.sales_jpy ?? 0, rate)}
+            sub={salesSubText(today?.sales_jpy ?? 0, rate, 'today')}
           />
           <Card
             label="已付款订单"
@@ -183,7 +186,7 @@ export function DashboardPage({ api, onNavigate }: DashboardPageProps) {
           <Card
             label="销售额"
             value={last7 === undefined ? (failed ? '—' : '…') : moneyText(last7.sales_jpy ?? 0)}
-            sub={salesSubText(last7?.sales_jpy ?? 0, rate)}
+            sub={salesSubText(last7?.sales_jpy ?? 0, rate, '7d')}
           />
           <Card
             label="已付款订单"

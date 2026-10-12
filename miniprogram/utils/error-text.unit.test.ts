@@ -150,6 +150,9 @@ describe('登录失效 40101（F3，第二轮审计 2026-10-11）', () => {
     const text = errorMessage({ code: 40101, message: '未登录或登录已过期' });
     expect(text).toContain('登录状态已失效');
     expect(text).toContain('重新登录');
+    // 规律排查 2026-10-12：这句会出现在结算（按钮叫「重新加载」）、地址编辑（「保存」）、售后（「提交申请」）等页，
+    //   点名「重试」会让买家找一个不存在的按钮
+    expect(text).not.toContain('「重试」');
     // 报障小字照旧带码
     expect(errorRef({ code: 40101, message: 'x', traceId: 'abcdef1234' })).toBe(
       '联系客服时请提供：40101 · abcdef12',

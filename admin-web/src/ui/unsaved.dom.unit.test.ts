@@ -108,3 +108,11 @@ describe('订单备注草稿进入脏态', () => {
     expect(dirtyText(el)).toBe('yes');
   });
 });
+
+// 规律排查 2026-10-12：离开提醒写"先回去点「保存」"——发货、退款、改址、汇率、售后等表单都没有叫「保存」的按钮
+describe('离开提醒的文案', () => {
+  it('🔴 不点名一个多数表单没有的「保存」按钮', async () => {
+    const { LEAVE_UNSAVED_SPEC } = await import('./leave-spec.js');
+    expect(LEAVE_UNSAVED_SPEC.body).not.toContain('「保存」');
+  });
+});

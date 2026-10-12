@@ -123,6 +123,8 @@ Page({
     paying: false,
     /** 错误文案（空串 = 无错误）。 */
     error: '',
+    /** 错误块标题（空 = 缺省"支付页没能打开"）；发起支付 / 复制失败时页面是开着的，另给标题（规律排查 2026-10-12）。 */
+    errorTitle: '',
     /**
      * **上一次支付动作**的结果（空串 = 没有；MP3-07）。
      * @why 与 `error` 分开：`error` 是"取数出错"，每次重取都要清；
@@ -179,7 +181,7 @@ Page({
     // 清掉上一次的错误：不清的话旧错误会一直挂在重新取回来的内容上面
     // ⚠️ `payResult` **不在这里清**（MP3-07）：它是"上一次支付的结果"，不是"上一次取数的错误"。
     //    微信收银台取消后会触发 onShow → reload，把"支付未完成"抹掉等于什么都没说。
-    this.setData({ loading: true, error: '', errorRef: '', noChannel: false });
+    this.setData({ loading: true, error: '', errorRef: '', errorTitle: '', noChannel: false });
     // ⚠️ 领号（MP3-07）：连续两次切前后台会并发两个 load，
     //    旧的那个若后到，会把"该订单已付款"旁边的支付方式**盖回去**——
     //    首页与购物车在 B36 里已经用序号修过同一类问题，支付页没跟上。
@@ -414,7 +416,7 @@ Page({
         // 先停表（同上）：可付的单进页时已起表
         this.stopCountdown();
         this.setData(blockedScreen());
-      } else this.setData({ ...errorFields(err) });
+      } else this.setData({ ...errorFields(err), errorTitle: '没能发起支付' });
       track(app, 'pay_abandon', { order_id: this.orderId, reason: 'fail' });
       // P2-40：40902 / 40904 多半是这张单已经付了或关了——重查一次，由 payPageView 决定换不换关闭屏
       if (recheckAfterPayError(err?.code)) void this.checkStatus();

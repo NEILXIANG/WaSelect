@@ -250,7 +250,7 @@ export function blockedScreen() {
  *
  * @param {unknown} ok 宿主 `setClipboardData` 的 success 是否触发；任何非 `true` 都当失败
  * @param {unknown} [privacy] `app.globalData.privacy`（utils/privacy.js 的启动授权结果，剩余清单 4-3）
- * @returns {{copied: boolean, error: string, errorRef: string}} 直接喂给 `setData` 的形状
+ * @returns {{copied: boolean, error: string, errorRef: string, errorTitle: string}} 直接喂给 `setData` 的形状
  *
  * @why 支付页这一屏是**微信支付上线前唯一的付款路径**（D-49：银行卡 = 短链 →
  *      Stripe 托管页），而 `setClipboardData` 是**隐私接口**——它可能失败：
@@ -266,12 +266,14 @@ export function blockedScreen() {
  */
 export function copyResult(ok, privacy = undefined) {
   // errorRef 一并清（扫描 W-05）：复制成败与之前的请求错误无关，挂着旧链路号会把客服引向错的日志
-  if (ok === true) return { copied: true, error: '', errorRef: '' };
+  // errorTitle（规律排查 2026-10-12）：错误块默认标题是"支付页没能打开"，复制失败时页面开着、链接就在下面
+  if (ok === true) return { copied: true, error: '', errorRef: '', errorTitle: '' };
   // 剩余清单 4-3：启动时拒绝过隐私授权 → 说清是被微信拦下的（否则用户以为按钮坏了）
   return {
     copied: false,
     error: copyFailText(privacy, '复制失败，请长按下方链接手动复制'),
     errorRef: '',
+    errorTitle: '链接没能复制',
   };
 }
 

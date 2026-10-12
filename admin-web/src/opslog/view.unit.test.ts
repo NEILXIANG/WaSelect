@@ -197,6 +197,17 @@ describe('reconciliationView', () => {
     expect(v.summary).toBe('2 类需要运营处理，1 类请转技术人员');
   });
 
+  // 规律排查 2026-10-12：卡住的全额退款说"到订单详情点「同步」"——「同步」只在部分退款行上有
+  it('🔴 卡住的全额退款指向「全额退款…」→「重新提交退款」', () => {
+    const v = reconciliationView({
+      ran_at: '2026-10-05T18:00:00.000Z',
+      counts: { stuck_refunds: 2 },
+      samples: {},
+    });
+    expect(v.rows[0]?.advice).toContain('「重新提交退款」');
+    expect(v.rows[0]?.advice).not.toContain('「同步」');
+  });
+
   it('不认识的类名原样显示、归"请转技术人员"（看得见，不静默丢）', () => {
     const v = reconciliationView({
       ran_at: '2026-10-05T18:00:00.000Z',

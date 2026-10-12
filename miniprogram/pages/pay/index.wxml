@@ -21,7 +21,7 @@
   <ws-state-block
     wx:if="{{error}}"
     kind="fail"
-    title="{{noOrderId ? '没找到这张订单' : '支付页没能打开'}}"
+    title="{{noOrderId ? '没找到这张订单' : (errorTitle || '支付页没能打开')}}"
     reason="{{error}}"
     refText="{{errorRef}}"
     actionText="{{noOrderId ? '查看我的订单' : '重试'}}"

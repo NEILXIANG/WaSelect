@@ -374,7 +374,7 @@ export function detailView(order, opts = undefined) {
     trackingHint:
       typeof o.tracking_url === 'string' && o.tracking_url.startsWith('https://')
         ? '点「复制查件链接」，在手机浏览器（Safari / Chrome）里粘贴打开——是日本邮政官网的查件页'
-        : '点运单号复制，到承运商官网粘贴查询',
+        : '点运单号旁的「复制」，到承运商官网粘贴查询',
     timeline: timelineRows(o.timeline),
     /**
      * 改地址的出路（联动走查·熟手买家 2026-10-10）：只在"已付款、还没发货"时说。

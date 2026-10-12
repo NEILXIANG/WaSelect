@@ -271,7 +271,8 @@ const GUIDE: Readonly<
   stuck_refunds: {
     owner: 'ops',
     money: true,
-    advice: '退款发出超过 24 小时还没结果：到订单详情点「同步」看支付机构的结果',
+    advice:
+      '退款发出超过 24 小时还没结果：到订单详情点「全额退款…」→「重新提交退款」取回支付机构的结果（只会查询或同键重发，不会退两次）',
     href: '#/orders?status=refunding',
   },
   stuck_partial_refunds: {

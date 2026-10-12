@@ -196,3 +196,13 @@ describe('工作台：待办点即跳到筛好的列表', () => {
     });
   });
 });
+
+// 规律排查 2026-10-12：近 7 天的销售额卡也写"退款见下方「已退」"——下方「已退」只算今天
+describe('销售额卡辅行', () => {
+  it('🔴 近 7 天不指向只算今天的「已退」', async () => {
+    const { salesSubText } = await import('./DashboardPage.js');
+    expect(salesSubText(1000, null, 'today')).toContain('下方「已退」');
+    expect(salesSubText(1000, null, '7d')).not.toContain('下方「已退」');
+    expect(salesSubText(1000, null, '7d')).toContain('不扣退款');
+  });
+});

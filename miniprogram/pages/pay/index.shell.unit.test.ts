@@ -558,6 +558,8 @@ describe('支付页：发起被拒后重查订单（P2-40）', () => {
     await settle();
     expect(page.data['error']).not.toBe('');
     expect(orderFetches()).toBe(before);
+    // 规律排查 2026-10-12：页面已经打开，错误块标题却写"支付页没能打开"
+    expect(page.data['errorTitle']).toBe('没能发起支付');
   });
 });
 

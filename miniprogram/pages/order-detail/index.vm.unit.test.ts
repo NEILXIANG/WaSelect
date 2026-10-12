@@ -642,7 +642,8 @@ describe('detailView · 查件引导', () => {
     ).toBe('点「复制查件链接」，在手机浏览器（Safari / Chrome）里粘贴打开——是日本邮政官网的查件页');
     expect(
       detailView({ ...shipped, carrier: 'Yamato', tracking_no: '1234-5678-9012' }).trackingHint,
-    ).toBe('点运单号复制，到承运商官网粘贴查询');
+      // 规律排查 2026-10-12：原断言"点运单号复制"——运单号文字不能点，能点的是旁边的「复制」
+    ).toBe('点运单号旁的「复制」，到承运商官网粘贴查询');
   });
 });
 

@@ -82,13 +82,20 @@ describe('copyResult × 隐私授权（剩余清单 4-3）', () => {
   it('🔴 启动时拒绝过隐私授权 → 失败文案说清原因（不是只说"复制失败"）', () => {
     expect(copyResult(false, 'denied').error).toContain('隐私保护指引');
     expect(copyResult(false, 'agreed').error).toBe('复制失败，请长按下方链接手动复制');
-    expect(copyResult(true, 'denied')).toEqual({ copied: true, error: '', errorRef: '' });
+    expect(copyResult(true, 'denied')).toEqual({
+      copied: true,
+      error: '',
+      errorRef: '',
+      errorTitle: '',
+    });
+    // 规律排查 2026-10-12：复制失败时错误块标题写"支付页没能打开"——页面开着、链接就在下面
+    expect(copyResult(false, 'agreed').errorTitle).toBe('链接没能复制');
   });
 });
 
 describe('copyResult（复制短链之后页面该显示什么，B34 / AJ-217）', () => {
   it('成功：按钮改"已复制"，且不带错误（成功时不该留下上一次的失败提示）', () => {
-    expect(copyResult(true)).toEqual({ copied: true, error: '', errorRef: '' });
+    expect(copyResult(true)).toEqual({ copied: true, error: '', errorRef: '', errorTitle: '' });
   });
 
   it('失败：给兜底动作，而不是只说"失败"——链接就在屏幕上，长按可选', () => {

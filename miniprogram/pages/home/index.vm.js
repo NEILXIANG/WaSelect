@@ -325,11 +325,19 @@ export function shownKeyword(keyword) {
  * 空态文案（小程序评估 A4，2026-10-09）：有搜索词时说"没找到这个词"，而不是"这个分类下暂时没有商品"——
  * 后者会让人以为分类本身是空的，而真正的出口是"换个词 / 清除搜索"。
  * @param {unknown} keyword 已提交的搜索词
+ * @param {unknown} [categoryLabel] 当前分类的中文名（「全部」传空）
  * @returns {{title: string, reason: string}}
  */
-export function emptyCopy(keyword) {
+export function emptyCopy(keyword, categoryLabel = '') {
   const kw = shownKeyword(keyword);
   if (kw === '') return { title: '这个分类下暂时没有商品', reason: '换个分类看看' };
+  // 规律排查 2026-10-12：搜索只在当前分类里搜，扑空时要点名分类、出口是「全部」（清除搜索只回到这个分类）
+  const cat = text(categoryLabel);
+  if (cat !== '')
+    return {
+      title: `「${cat}」里没有找到「${kw}」相关的商品`,
+      reason: '换个词，或切到「全部」再搜',
+    };
   return {
     title: `没有找到「${kw}」相关的商品`,
     reason: '换个词试试，或点上方「清除搜索」看全部商品',

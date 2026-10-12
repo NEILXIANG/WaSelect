@@ -332,7 +332,9 @@ Page({
     // 上一代列表的"下一页"（若在途）从此过期：它的标志位由这里统一复位，
     // 过期请求自己的 finally **不再碰**标志位（否则会清掉新一代"下一页"的标志）。
     this.loadingMore = false;
-    const copy = emptyCopy(keyword);
+    const tab =
+      this.category === '' ? undefined : this.data.tabs.find((t) => t.key === this.category);
+    const copy = emptyCopy(keyword, tab?.label ?? '');
     this.setData({
       loading: true,
       loadingMore: false,
