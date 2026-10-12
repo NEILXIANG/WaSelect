@@ -33,6 +33,9 @@ import {
   janShapeOk,
   normalizeJan,
   PRODUCT_MAX_WEIGHT_G,
+  CUSTOMS_DESC_BLOCKED_WORDS,
+  customsDescBlockedHits,
+  hsCodeShapeOk,
 } from '@waselect/shared';
 import { moneyText } from '../format.js';
 
@@ -63,14 +66,9 @@ export const STATUS_LABELS: Readonly<Record<ProductStatus, string>> = {
  * 报关英文品名里的**敏感词**：命中即拒（契约 ProductInput.customs_desc_en 的说明）。
  * @why 这五个词的共同点是"会被美国 FDA 当成药品/功效宣称"（D-51），
  *      而运营填英文品名时并不知道自己踩了线——预检把这条前置到输入那一刻。
+ * @why 词表与匹配规则取 shared（规律排查 2026-10-12）：原先这里按子串、服务端按整词，两边结论相反。
  */
-export const BLOCKED_CUSTOMS_WORDS = [
-  'medicated',
-  'whitening',
-  'spf',
-  'sunscreen',
-  'drug',
-] as const;
+export const BLOCKED_CUSTOMS_WORDS = CUSTOMS_DESC_BLOCKED_WORDS;
 
 /** 列表行视图。 */
 export interface ProductRow {
@@ -525,8 +523,7 @@ export function productFormErrors(form: unknown): {
   }
 
   // 报关品名敏感词（D-51：会被美国 FDA 当成功效宣称 / OTC 药品）
-  const lower = f.customsDescEn.toLowerCase();
-  const hit = BLOCKED_CUSTOMS_WORDS.filter((w) => lower.includes(w));
+  const hit = customsDescBlockedHits(f.customsDescEn);
   if (hit.length > 0)
     errors['customsDescEn'] = `英文报关品名含敏感词 ${hit.join('、')}（会被判定为药品/功效宣称）`;
 
@@ -545,18 +542,8 @@ function sciHint(raw: string): string {
   return /e/i.test(raw) ? '；不要用科学计数法（如 1e3）' : '';
 }
 
-/**
- * HS 编码形状（P2-51）：数字，可用点号分段，数字合计 6–10 位（国际 6 位 → 美国 HTS 10 位）。
- * @why 服务端只判"填没填"（product-input.ts @limitation 二），"3304,99" "HS3304" 这类录入会原样进报关单。
- * @why 列宽 16（迁移 031，AJ-386）：带点号的 10 位 HTS（`3304.99.5000`，12 字符）可原样录入，与报关代理写法一致。
- * @limitation 点号位置不校验（`33.0499.5000` 也算合法）；只管"是数字、位数对"。
- */
-export function hsCodeShapeOk(raw: string): boolean {
-  const t = raw.trim();
-  if (!/^\d+(\.\d+)*$/.test(t)) return false;
-  const digits = t.replace(/\./g, '').length;
-  return digits >= 6 && digits <= 10;
-}
+/** HS 编码形状（P2-51）：规则取 shared（规律排查 2026-10-12 起服务端同判）。 */
+export { hsCodeShapeOk };
 
 /**
  * **不拦截**的提醒（P2-51）：成本 ≥ 售价（每卖一件都亏）。
@@ -752,6 +739,7 @@ const SERVER_REASONS: Readonly<Record<string, string>> = {
     '英文报关品名含禁用词（如 medicated / whitening / SPF / sunscreen / drug），请换一种说法',
   customs_desc_too_long: '英文报关品名太长，请精简',
   hs_code_too_long: 'HS 编码太长，请核对',
+  hs_code_shape: 'HS 编码只能是数字（可用点号分段），共 6–10 位数字，如 6912.00 或 3304995000',
   tag_blocked: '勾选了禁售标签，这件商品不能上架',
   origin_invalid: '原产地目前只支持日本（JP）',
   title_too_long: '商品名太长（最多 255 字）',

@@ -24,6 +24,8 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_LINE_QTY,
   ORDER_NOTE_MAX_LENGTH,
+  PRODUCT_MAX_CHARS,
+  PRODUCT_MAX_WEIGHT_G,
   REFUND_REASON_MAX_LENGTH,
   SEARCH_KEYWORD_MAX_LENGTH,
   SHIP_BATCH_MAX,
@@ -161,6 +163,26 @@ describe('契约的输入上限与 shared 常量一致', () => {
       expect(kw, `${path} 没有声明 keyword 参数`).toBeDefined();
       expect(kw?.maxLength, `${path} 的 keyword.maxLength`).toBe(SEARCH_KEYWORD_MAX_LENGTH);
     }
+  });
+
+  /**
+   * 规律排查 2026-10-12：上面几条是**按接口逐个列**的，新字段不会自动进入覆盖——ProductInput 的
+   * title / title_ja / purchase_source / customs_desc_en / jan_code 服务端早就按 PRODUCT_MAX_CHARS 拒，
+   * 契约却一直没写 maxLength，没有任何用例红。这里改成**整表比**：常量表里每一项都必须在契约里有同值的 maxLength。
+   */
+  it('🔴 ProductInput：PRODUCT_MAX_CHARS 的每一项在契约里都有同值 maxLength；weight_g.maximum == PRODUCT_MAX_WEIGHT_G', () => {
+    const doc = loadYaml(TEXT) as Doc;
+    const props = (
+      (doc.components['schemas'] ?? {})['ProductInput'] as {
+        properties?: Record<string, { maxLength?: number; maximum?: number }>;
+      }
+    ).properties;
+    expect(props, 'ProductInput 不存在').toBeDefined();
+    const missing = Object.entries(PRODUCT_MAX_CHARS)
+      .filter(([k, v]) => props?.[k]?.maxLength !== v)
+      .map(([k, v]) => `${k}: 契约 ${String(props?.[k]?.maxLength)} ≠ 代码 ${String(v)}`);
+    expect(missing).toEqual([]);
+    expect(props?.['weight_g']?.maximum).toBe(PRODUCT_MAX_WEIGHT_G);
   });
 
   it('GET /admin/customers 的 keyword.maxLength / size.maximum 与实现常量一致（0.6.47 / AJ-404）', () => {

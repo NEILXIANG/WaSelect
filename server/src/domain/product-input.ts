@@ -18,13 +18,11 @@
  *      代价：契约新增字段时要同步改这里（漏了会静默丢弃）；
  *      收益：不存在"前端多传一个字段就写进库"的注入面。
  *
- * @limitation 一：禁词按**词边界**比（`\b…\b`，大小写不敏感）——"drugstore" 不算命中 "drug"，
- *              但反过来也意味着"drug.store"这种拆写能绕过。**这是刻意不补的洞**：
- *              报关品名由管理员手填且商品量极小，海关侧的最终责任在申报人；
- *              把规则做成"猜运营商怎么写"只会产出误伤。
- * @limitation 二：`hs_code` 只判**填没填**（所有商品必填，剩余清单 1-4 / AJ-368；
- *              此前仅 food / cosmetic 必填，D-39/D-42），不校验它是真实存在的 HS 编码——
- *              那是通関業者的职责。
+ * @limitation 一：禁词按**词首**比（shared `customsDescBlockedHits`，与管理端同一份；规律排查 2026-10-12）——
+ *              原先按整词比，"SPF50+" "sunscreens" "drugs" 全放行；现在 "drugstore" 也会命中（误伤时换写法）。
+ *              拆写（"s.p.f"）仍能绕过，**刻意不补**：报关责任最终在申报人。
+ * @limitation 二：`hs_code` 判填没填（所有商品必填，剩余清单 1-4 / AJ-368）与**形状**（数字、可分段、6–10 位，
+ *              shared `hsCodeShapeOk`，规律排查 2026-10-12），不校验它是真实存在的 HS 编码——那是通関業者的职责。
  *
  * @see contracts/api-contract.yaml（ProductInput）；packages/shared/src/enums.ts
  *      （COMPLIANCE_TAG / BLOCKED_COMPLIANCE_TAG；分类自 AJ-491 起改为查 product_categories 表）
@@ -37,6 +35,8 @@ import {
   PRODUCT_MAX_WEIGHT_G,
   isOneOf,
   janShapeOk,
+  customsDescBlockedHits,
+  hsCodeShapeOk,
 } from '@waselect/shared';
 import { isImageId } from './upload-image.js';
 
@@ -111,9 +111,6 @@ export interface ProductFieldError {
 
 export type ProductInputResult =
   { ok: true; value: ProductInput } | { ok: false; errors: readonly ProductFieldError[] };
-
-/** 报关品名禁词（D-51）：命中即拒，大小写不敏感、按词边界（@limitation 一）。 */
-const FORBIDDEN_DESC = /\b(medicated|whitening|spf|sunscreen|drug)\b/i;
 
 /** 正整数（≥min），非整数/非数字/越界一律 undefined（由调用方转成错误）。 */
 function intAtLeast(v: unknown, min: number): number | undefined {
@@ -302,7 +299,7 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   if (isBlank(b['customs_desc_en'])) fail('customs_desc_en', 'customs_desc_required');
   // `desc !== undefined` 这一半是给"填了但类型不对"兜的：那时 desc 是 undefined，
   // 拿去 test() 会按字符串 "undefined" 比——不炸，但会多出一条毫无道理的 forbidden。
-  else if (desc !== undefined && FORBIDDEN_DESC.test(desc)) {
+  else if (desc !== undefined && customsDescBlockedHits(desc).length > 0) {
     fail('customs_desc_en', 'customs_desc_forbidden');
   }
 
@@ -385,6 +382,9 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
   }
   if (hs !== undefined && hs.length > PRODUCT_MAX_CHARS.hs_code) {
     fail('hs_code', 'hs_code_too_long');
+  } else if (hs !== undefined && !isBlank(hs) && !hsCodeShapeOk(hs)) {
+    // 规律排查 2026-10-12：原先只有管理端判形状，绕过管理端的写入能把 "HS3304" 写进报关单（shared customs.ts）
+    fail('hs_code', 'hs_code_shape');
   }
 
   // ── 编辑口径三字段（020 / AJ-296①）——S4 迁 pick-card 的前置 ──────────────

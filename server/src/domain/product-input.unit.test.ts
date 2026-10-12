@@ -183,8 +183,9 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     expect(reasons({ ...base(), purchase_source: 's'.repeat(256) })).toContain(
       'purchase_source_too_long',
     );
-    // 恰好等于列宽 → 放行（DB 能存下就不该拦）
-    expect(ok({ ...base(), hs_code: '1'.repeat(16) }).hs_code).toBe('1'.repeat(16));
+    // 恰好等于列宽 → 放行（DB 能存下就不该拦）；规律排查 2026-10-12 起形状也要对（数字合计 ≤10 位），
+    //   16 字的合法形状只能是多段点号写法
+    expect(ok({ ...base(), hs_code: '33.0.4.9.9.5.0.0' }).hs_code).toBe('33.0.4.9.9.5.0.0');
   });
 
   it('stock 负数 → 拒绝（0 允许：预售/缺货上架是正常运营动作）', () => {
@@ -267,6 +268,21 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
     expect(reasons({ ...base(), customs_desc_en: 'MEDICATED soap' })).toContain(
       'customs_desc_forbidden',
     );
+  });
+
+  // 规律排查 2026-10-12：原规则按整词比（\bspf\b），日本防晒品名的常见写法 "SPF50+"、复数 "sunscreens" "drugs"
+  //   全部放行——管理端按子串比会拦，两边结论相反；绕过管理端的写入可以把药品宣称写进报关单
+  it('🔴 禁词按词首比：SPF50+ / sunscreens / drugs 都拒（与管理端同一份 shared 规则）', () => {
+    for (const d of ['UV milk SPF50+ PA++++', 'Sunscreens for face', 'OTC drugs']) {
+      expect(reasons({ ...base(), customs_desc_en: d })).toContain('customs_desc_forbidden');
+    }
+  });
+
+  it('🔴 HS 编码形状：只能是数字（可用点号分段）、合计 6–10 位', () => {
+    for (const h of ['HS3304', '3304,99', '33049']) {
+      expect(reasons({ ...base(), hs_code: h })).toContain('hs_code_shape');
+    }
+    expect(ok({ ...base(), hs_code: '3304.99' }).hs_code).toBe('3304.99');
   });
 
   it('禁词作为单词的一部分（classic 含 "ass"? 不在名单）不算命中——只按词边界比，避免误伤', () => {
