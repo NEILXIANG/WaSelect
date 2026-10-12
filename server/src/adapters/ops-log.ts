@@ -117,6 +117,51 @@ export async function latestReconciliation(db: Db): Promise<ReconciliationRunRow
   };
 }
 
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const ORDER_REF = new RegExp(`ord-${UUID}`);
+const PAYMENT_REF = new RegExp(`^pay-${UUID}$`);
+
+/**
+ * 对账取样 → 所属订单（订单号），给运营看（两端逐页走查 2026-10-12）。
+ * @why 取样存的是内部编号（`ord-…`、`pay-…`，以及 `order.paid:ord-…` / `evt_late_ord-…` 这类带前缀的键）——
+ *      运营在后台任何地方都看不到这些编号，"示例"等于没给。读的时候换成订单号，存的仍是编号（对账行 append-only，不改历史）。
+ * @limitation 只认订单与支付两种；订单已删 / 别的形状（时间、整句说明）不出现在结果里，页面退回原样显示。
+ */
+export async function sampleOrders(
+  db: Db,
+  samples: Record<string, string[]>,
+): Promise<Record<string, { order_id: string; order_no: string }>> {
+  const raws = [...new Set(Object.values(samples).flat())];
+  const orderIdOf = new Map<string, string>();
+  const payIds: string[] = [];
+  for (const s of raws) {
+    if (PAYMENT_REF.test(s)) payIds.push(s);
+    else {
+      const m = ORDER_REF.exec(s);
+      if (m !== null) orderIdOf.set(s, m[0]);
+    }
+  }
+  const payRows =
+    payIds.length === 0
+      ? []
+      : await db<{ id: string; order_id: string }[]>`
+          select id, order_id from payments where id in ${db(payIds)}`;
+  for (const p of payRows) orderIdOf.set(p.id, p.order_id);
+  const ids = [...new Set(orderIdOf.values())];
+  const orders =
+    ids.length === 0
+      ? []
+      : await db<{ id: string; order_no: string }[]>`
+          select id, order_no from orders where id in ${db(ids)}`;
+  const noOf = new Map(orders.map((o) => [o.id, o.order_no]));
+  const out: Record<string, { order_id: string; order_no: string }> = {};
+  for (const [raw, oid] of orderIdOf) {
+    const no = noOf.get(oid);
+    if (no !== undefined) out[raw] = { order_id: oid, order_no: no };
+  }
+  return out;
+}
+
 /** 对账作业写一行（append-only，见迁移 028）。 */
 export async function insertReconciliationRun(
   db: Db,

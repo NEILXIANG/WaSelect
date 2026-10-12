@@ -118,7 +118,9 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
                             <span key={`${s.label}-${String(i)}`}>
                               {i > 0 && '、'}
                               {s.href === '' ? (
-                                <span className="mono">{s.label}</span>
+                                <span className={s.plain === true ? undefined : 'mono'}>
+                                  {s.label}
+                                </span>
                               ) : (
                                 <a className="link mono" href={s.href}>
                                   {s.label}

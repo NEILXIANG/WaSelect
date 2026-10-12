@@ -192,18 +192,15 @@ export interface ReconciliationRun {
   ran_at: string;
   counts: Record<string, number>;
   samples: Record<string, string[]>;
+  /** 取样 → 所属订单（服务端按订单 / 支付编号查出订单号，契约 0.6.87）；查不到的不在里面。 */
+  sample_orders?: Record<string, { order_id: string; order_no: string }>;
 }
 
-/** 一条取样：认得出订单 id 时链到订单详情（`href` 非空），否则原样显示。 */
+/** 一条取样：认得出订单时显示订单号、链到详情（`href` 非空）；整句说明 `plain`（原文、不用等宽字体）。 */
 export interface ReconcileSample {
   label: string;
   href: string;
-}
-
-/** 一条取样：认得出订单 id 时链到订单详情（`href` 非空），否则原样显示。 */
-export interface ReconcileSample {
-  label: string;
-  href: string;
+  plain?: true;
 }
 
 // 不用前导 \b：迟到付款的取样是 `evt_late_ord-<uuid>`，`_ord` 之间不是词边界
@@ -213,9 +210,18 @@ const ORDER_ID = /ord-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
  * 取样 id → 可点的链接。
  * @why 三端模拟测试 2026-10-11：取样原样拼成一长串 36 位 id，运营认不出、也打不开是哪张单。
  *      服务端取样有两种形状：`ord-<uuid>`（订单类异常）与 `order.paid:ord-<uuid>`（通知键），都从中认出订单 id。
- * @limitation 取样里只有 id、没有单号，所以显示缩短的 id 而不是单号；要显示单号得让服务端取样带上它。
+ * @limitation 服务端查不到所属订单的（订单已删 / 不是订单类取样）才退回缩短的 id。
  */
-function toSample(raw: string): ReconcileSample {
+function toSample(
+  raw: string,
+  orders: NonNullable<ReconciliationRun['sample_orders']>,
+): ReconcileSample {
+  // 两端逐页走查 2026-10-12：服务端查得到所属订单 → 显示订单号（原先是 ord-70d4257d… / pay-6cfc82a4…，后台找不到）
+  const o = orders[raw];
+  if (o !== undefined)
+    return { label: o.order_no, href: `#/orders/${encodeURIComponent(o.order_id)}` };
+  // 整句说明（AJ-505 上线配置缺项、审核期限）原文显示：截短会把话截成半句
+  if (/[^\x20-\x7e]/.test(raw)) return { label: raw, href: '', plain: true };
   const id = ORDER_ID.exec(raw)?.[0];
   return id === undefined
     ? { label: shortRef(raw), href: '' }
@@ -344,7 +350,9 @@ export function reconciliationView(run: ReconciliationRun | null): Reconciliatio
   const rows = bad
     .map(([k, n]): ReconcileRow & { money: boolean } => {
       const g = GUIDE[k] ?? { owner: 'tech' as const, advice: '请技术人员查看' };
-      const all = (run.samples[k] ?? []).map(toSample);
+      const all = (run.samples[k] ?? []).map((s) => toSample(s, run.sample_orders ?? {}));
+      // 整句说明的类全部列出（它们是"缺什么"的清单，不是排查用的抽样）
+      const shown = all.every((s) => s.plain === true) ? all : all.slice(0, 3);
       return {
         key: k,
         label: RECONCILE_CLASS_LABELS[k] ?? k,
@@ -352,8 +360,8 @@ export function reconciliationView(run: ReconciliationRun | null): Reconciliatio
         owner: g.owner,
         advice: g.advice,
         href: g.href ?? '',
-        samples: all.slice(0, 3),
-        more: Math.max(0, n - Math.min(3, all.length)),
+        samples: shown,
+        more: Math.max(0, n - shown.length),
         money: g.money === true,
       };
     })

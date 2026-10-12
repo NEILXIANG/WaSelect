@@ -208,6 +208,44 @@ describe('reconciliationView', () => {
     ]);
   });
 
+  // 两端逐页走查 2026-10-12：示例写的是 ord-70d4257d… / pay-6cfc82a4…——运营在后台找不到这些编号
+  it('🔴 服务端给了 sample_orders → 示例显示订单号、链到订单详情（含 pay- 取样）', () => {
+    const oid = 'ord-70d4257d-ddc6-4818-802b-a435108392cf';
+    const v = reconciliationView({
+      ran_at: '2026-10-05T18:00:00.000Z',
+      counts: { late_paid_unrefunded: 1, dangling_initiated_payments: 1 },
+      samples: {
+        late_paid_unrefunded: [oid],
+        dangling_initiated_payments: ['pay-6cfc82a4-3ced-4b19-a89a-9b830e179960'],
+      },
+      sample_orders: {
+        [oid]: { order_id: oid, order_no: '261009-F2Z45G' },
+        'pay-6cfc82a4-3ced-4b19-a89a-9b830e179960': { order_id: oid, order_no: '261009-F2Z45G' },
+      },
+    });
+    expect(v.rows.flatMap((r) => r.samples)).toEqual([
+      { label: '261009-F2Z45G', href: `#/orders/${oid}` },
+      { label: '261009-F2Z45G', href: `#/orders/${oid}` },
+    ]);
+  });
+
+  // AJ-505 的取样是整句说明：原先被截成 16 个字加"…"、用等宽字体，且只列 3 条
+  it('🔴 整句说明的取样原文显示、不截短（plain），这一类全部列出', () => {
+    const texts = [
+      '运费表没有启用中的档位（买家报价一律"运费不可计算"）',
+      '缺少 CNY 汇率（商品不显示 CNY 折算价）',
+      '缺少 USD 汇率（商品不显示 USD 折算价，银行卡按美元收款无法发起）',
+      '审核商品 p-review 不存在（审核期只有它能下单）',
+    ];
+    const v = reconciliationView({
+      ran_at: '2026-10-05T18:00:00.000Z',
+      counts: { launch_not_ready: 4 },
+      samples: { launch_not_ready: texts },
+    });
+    expect(v.rows[0]?.samples).toEqual(texts.map((t) => ({ label: t, href: '', plain: true })));
+    expect(v.rows[0]?.more).toBe(0);
+  });
+
   it('🔴 示例最多 3 个、其余计数；认出订单 id 链到订单详情（含 order.paid: / evt_late_ 前缀），pay- 缩短不给链接', () => {
     const id = (n: number): string => `ord-0923${String(n)}ad4-ddc6-4818-802b-a435108392cf`;
     const v = reconciliationView({

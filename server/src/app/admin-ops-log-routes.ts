@@ -13,7 +13,7 @@ import { parseJstDateRange } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import type { Db } from '../adapters/db.js';
 import type { IdentityCheck } from '../adapters/identity.js';
-import { latestReconciliation, listAdminAudit } from '../adapters/ops-log.js';
+import { latestReconciliation, listAdminAudit, sampleOrders } from '../adapters/ops-log.js';
 import type { AuthConfig } from './auth.js';
 import { requireRole } from './auth.js';
 
@@ -91,7 +91,13 @@ export function mountAdminOpsLogRoutes(app: Express, deps: AdminOpsLogRoutesDeps
           run:
             run === null
               ? null
-              : { ran_at: run.ranAt.toISOString(), counts: run.counts, samples: run.samples },
+              : {
+                  ran_at: run.ranAt.toISOString(),
+                  counts: run.counts,
+                  samples: run.samples,
+                  // 取样换成订单号给运营看（两端逐页走查 2026-10-12；@see sampleOrders）
+                  sample_orders: await sampleOrders(deps.db, run.samples),
+                },
         });
       } catch (e) {
         next(e);

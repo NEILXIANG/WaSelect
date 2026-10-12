@@ -295,7 +295,53 @@ describe('GET /api/v1/admin/reconciliation/latest（3-2）', () => {
         await bearer(),
       );
       expect(r.body).toEqual({
-        run: { ran_at: '2026-10-05T18:00:00.000Z', counts: { stuck_refunds: 0 }, samples: {} },
+        run: {
+          ran_at: '2026-10-05T18:00:00.000Z',
+          counts: { stuck_refunds: 0 },
+          samples: {},
+          sample_orders: {},
+        },
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  // 两端逐页走查 2026-10-12：取样是 ord-… / pay-… / order.paid:ord-… / evt_late_ord-…，运营在后台找不到这些编号
+  it('🔴 sample_orders：订单 / 支付 / 带前缀的取样都换成所属订单号；查不到的不带', async () => {
+    await db`insert into users (id, openid) values ('u-buyer', 'o-buyer') on conflict do nothing`;
+    const oid = 'ord-70d4257d-ddc6-4818-802b-a435108392cf';
+    await db`
+      insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
+                          total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
+      values (${oid}, '261009-F2Z45G', 'u-buyer', 'expired', 1000, 0, 0, 1000, 500,
+              '{}'::jsonb, '{}'::jsonb, 'TOS-2026-09-20', now())`;
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount)
+             values ('pay-6cfc82a4-3ced-4b19-a89a-9b830e179960', ${oid}, 'mock', 'initiated', 'JPY', 1000)`;
+    const samples = {
+      late_paid_unrefunded: [oid, `evt_late_${oid}`],
+      order_mail_unsent: [`order.paid:${oid}`],
+      dangling_initiated_payments: ['pay-6cfc82a4-3ced-4b19-a89a-9b830e179960'],
+      launch_not_ready: ['运费表没有启用中的档位'],
+      stuck_refunds: ['ord-00000000-0000-0000-0000-000000000000'],
+    };
+    await db`insert into reconciliation_runs (ran_at, counts, samples)
+             values ('2026-10-06T18:00:00Z', ${db.json({ late_paid_unrefunded: 2 })}, ${db.json(samples)})`;
+    const { url, close } = await buildServer();
+    try {
+      const r = await call(
+        url,
+        'GET',
+        '/api/v1/admin/reconciliation/latest',
+        undefined,
+        await bearer(),
+      );
+      const want = { order_id: oid, order_no: '261009-F2Z45G' };
+      expect((r.body as { run: { sample_orders: unknown } }).run.sample_orders).toEqual({
+        [oid]: want,
+        [`evt_late_${oid}`]: want,
+        [`order.paid:${oid}`]: want,
+        'pay-6cfc82a4-3ced-4b19-a89a-9b830e179960': want,
       });
     } finally {
       await close();

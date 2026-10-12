@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.86
+  version: 0.6.87
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.87（两端逐页走查 2026-10-12）：`GET /admin/reconciliation/latest` 的 run 增 `sample_orders`——取样存的是内部编号，运营在后台找不到；读时换成订单号。
     0.6.86（两端逐页走查 2026-10-12）：`AdminSettingItem` 增可选 `value_label`——设置页的审核商品原先只有编号，看不出是哪件、能不能下单。
     0.6.85（AJ-504，两端输入测试 2026-10-12）：`ProductInput.jan_code` 填了就必须是 8 位或 13 位数字（jan_code_shape）——原先只判长度，"123abc" 能存进去。
     0.6.84（AJ-503，两端输入测试 2026-10-12）：`GET /admin/audit` 的 `target` 也认订单号 / 商品名 / 账号邮箱——对象列显示的是这几样（AJ-499），筛选框原先只认内部 id，照着表格填进去查出 0 条。
@@ -1158,7 +1159,7 @@ paths:
     get:
       summary: 运营日志——最近一次每日对账结果（0.6.32，剩余清单 3-2）
       description: 每日对账每跑一次追加一行（迁移 028，append-only）；这里取最近一行。没跑过 → run 为 null。`counts` 为各类异常计数（零异常也有键），`samples` 只含计数大于 0 的类、每类最多 20 个 id。
-      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [run], properties: {run: {nullable: true, type: object, properties: {ran_at: {type: string, format: date-time}, counts: {type: object, additionalProperties: {type: integer}}, samples: {type: object, additionalProperties: {type: array, items: {type: string}}}}}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [run], properties: {run: {nullable: true, type: object, properties: {ran_at: {type: string, format: date-time}, counts: {type: object, additionalProperties: {type: integer}}, samples: {type: object, additionalProperties: {type: array, items: {type: string}}}, sample_orders: {type: object, description: '0.6.87：取样 → 所属订单（订单 / 支付编号及 order.paid:、evt_late_ 前缀的键）；查不到的不带。给运营显示订单号用', additionalProperties: {type: object, required: [order_id, order_no], properties: {order_id: {type: string}, order_no: {type: string}}}}}}}}}}}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/dashboard/sales:
     get:
       summary: 工作台销售统计（0.6.41 / AJ-393）——今日与近 7 日
