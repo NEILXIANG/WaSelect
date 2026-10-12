@@ -826,3 +826,31 @@ describe('网页标签预检（与服务端 html_not_allowed 同口径）', () =
     ).toContain('网页代码');
   });
 });
+
+// 三天提交复查 2026-10-12：服务端字段名映射写的是"卖点标签 / 推荐理由 / 产地 / 工坊"，表单上叫
+//   "编辑标签 / 为什么值得买 / 产地 / 工房 / 匠人"——运营照提示找不到那一格
+describe('服务端字段错误用的字段名与表单一致', () => {
+  it.each([
+    ['why', '为什么值得买'],
+    ['maker', '产地 / 工房 / 匠人'],
+    ['tags', '编辑标签'],
+    ['title_ja', '日文品名'],
+    ['purchase_source', '采购渠道'],
+  ])('🔴 %s → 「%s」', (field, label) => {
+    const r = serverFieldError({ field, reason: 'something_new', count: 1 });
+    expect(r?.text).toContain(label);
+  });
+});
+
+// 三天提交复查 2026-10-12：标签拼成一串再查网页代码——"<a" 与 "b>" 两个标签分开都无害，拼起来被误判（服务端逐个查）
+describe('编辑标签逐个查网页代码', () => {
+  it('🔴 两个各自无害的标签不误判；单个含网页代码的照拒', () => {
+    const base = productFormModel(PRODUCT);
+    expect(
+      productFormErrors({ ...base, editorialTags: ['<a', 'b>'] }).errors['editorialTags'],
+    ).toBeUndefined();
+    expect(
+      productFormErrors({ ...base, editorialTags: ['<b>限定</b>'] }).errors['editorialTags'],
+    ).toBeDefined();
+  });
+});

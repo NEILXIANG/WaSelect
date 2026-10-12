@@ -256,6 +256,9 @@ describe('reconciliationView', () => {
     });
     expect(v.rows[0]?.samples).toEqual(texts.map((t) => ({ label: t, href: '', plain: true })));
     expect(v.rows[0]?.more).toBe(0);
+    // 三天提交复查 2026-10-12：AJ-509 给这一类加了"没有配置邮件服务"——运营在页面上配不了，建议里要说转技术人员
+    expect(v.rows[0]?.advice).toContain('邮件服务');
+    expect(v.rows[0]?.advice).toContain('技术人员');
   });
 
   it('🔴 示例最多 3 个、其余计数；认出订单 id 链到订单详情（含 order.paid: / evt_late_ 前缀），pay- 缩短不给链接', () => {

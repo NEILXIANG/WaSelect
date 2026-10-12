@@ -71,6 +71,12 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
         raw,
         (id) => titles.get(id),
         (k) => categoryName(categories, k),
+        Date.now(),
+        // 分类列表还没到时不判（不误报）
+        (k) => {
+          const c = categories.find((x) => x.key === k);
+          return c === undefined || (c.active && c.active_product_count > 0);
+        },
       ),
     [raw, titles, categories],
   );

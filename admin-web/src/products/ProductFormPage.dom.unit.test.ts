@@ -171,6 +171,8 @@ describe('商品编辑：服务端校验失败（40001 带 field / reason）', (
     expect(msg).toContain('售价超过单笔订单上限');
     expect(msg).toContain('还有 1 处');
     expect(msg).not.toContain('price_too_large');
+    // 三天提交复查 2026-10-12：填的值不行是运营自己能改的事，不给报障编号（与分类页 4ef8991、登录页 3c6d8c8 同口径）
+    expect(el.textContent).not.toContain('发给技术人员');
     expect(field(el, '售价（日元）').closest('label.field')?.textContent).toContain(
       '售价超过单笔订单上限',
     );
@@ -693,6 +695,52 @@ describe('商品表单：图片排序与主图（AJ-403）', () => {
         'https://img.example.com/new2/thumb.webp',
       ]);
       expect(n).toBe(2);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  // 三天提交复查 2026-10-12：一次选多张时，服务端有原文的错误只显示原文（不带文件名），且后一张的错误盖掉前一张——
+  //   选 5 张坏了第 2、4 张，只看到一句不知道是哪张的话
+  it('🔴 多张里坏了两张 → 一句话列出两张的文件名与张数', async () => {
+    const realFetch = globalThis.fetch;
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n += 1;
+      if (n === 2 || n === 4)
+        return new Response(
+          JSON.stringify({ code: 40001, message: '图片太大（最大 5MB）', trace_id: 't' }),
+          {
+            status: 400,
+            headers: { 'content-type': 'application/json' },
+          },
+        );
+      const k = String(n);
+      return new Response(
+        JSON.stringify({
+          image_key: `k${k}`,
+          image_id: `img-new${k}`,
+          thumb: `https://img.example.com/new${k}/thumb.webp`,
+          card: `https://img.example.com/new${k}/card.webp`,
+          detail: `https://img.example.com/new${k}/detail.webp`,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    try {
+      const el = await openWith({ ...SOURCE, images: [] });
+      const fileInput = el.querySelector('input[type="file"]') as HTMLInputElement;
+      const f = (name: string) => new File([new Uint8Array([1])], name, { type: 'image/png' });
+      Object.defineProperty(fileInput, 'files', {
+        value: [f('a.png'), f('b.png'), f('c.png'), f('d.png'), f('e.png')],
+      });
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      for (let i = 0; i < 6; i += 1) await flush();
+      expect(el.querySelectorAll('.thumb img')).toHaveLength(3);
+      const msg = el.textContent ?? '';
+      expect(msg).toContain('2 张图片没传上');
+      expect(msg).toContain('「b.png」');
+      expect(msg).toContain('「d.png」');
     } finally {
       globalThis.fetch = realFetch;
     }

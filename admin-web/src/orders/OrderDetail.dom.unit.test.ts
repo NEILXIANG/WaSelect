@@ -255,6 +255,22 @@ describe('订单详情：退款提交出错之后（B41 残留 / AJ-230）', () 
     expect(errorToastText(el)).toContain('t-1');
   });
 
+  // 三天提交复查 2026-10-12：第一次退款失败、单已进「退款中」后，抽屉换成重试样式（原因框收起），
+  //   但收起的原因仍算"未保存的修改"——点关闭会问"放弃修改？"，运营不知道改了什么
+  it('🔴 失败后进入退款中：收起的原因不再算未保存，关抽屉不弹"放弃修改"', async () => {
+    status = 'paid';
+    hasDispute = false;
+    refundBehaviour = () => {
+      status = 'refunding';
+      throw new ApiError(50000, '服务器内部错误', 't-1');
+    };
+    const el = await open();
+    await submitRefund(el);
+    await click(button(el, '关闭'));
+    expect(el.querySelector('[role="dialog"]')?.textContent ?? '').not.toContain('未保存');
+    expect(el.querySelector('.drawer')).toBeNull();
+  });
+
   // 两端逐页走查第三轮 2026-10-12（造了退款滞留单才走到）：重试时服务端沿用第一次的原因（机构幂等键按订单固定），
   //   表单却要求再选一次原因——选了也不生效，运营以为改了原因
   it('🔴 退款中的单：不再让选原因，写明沿用第一次的原因；按钮叫「重新提交退款」，提交带的是第一次的原因', async () => {

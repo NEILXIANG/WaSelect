@@ -103,6 +103,10 @@ export function RefundForm({
       setDialog(null);
       const fresh = await reload();
       onChanged();
+      // 进了「退款中」：表单换成重试样式、原因框收起（服务端沿用第一次的原因）——收起的原因不再算未保存
+      //   （三天提交复查 2026-10-12：原先关抽屉会问"放弃修改？"，运营看不到改了什么）
+      if ((fresh as { status?: unknown } | null)?.status === 'refunding')
+        setRefund(emptyRefundReason());
       sink.error(message, { traceId });
       // 按刷新后的真实状态说话（P2-49）：已退成 / 机构确认失败 / 结果未知 / 50300 未发出
       const reason = e instanceof ApiError ? e.data?.['reason'] : undefined;

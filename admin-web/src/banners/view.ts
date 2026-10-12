@@ -125,6 +125,8 @@ export function bannerRows(
   // AJ-491：分类可配置，名称来自后台分类列表（../categories/），认不出原样显示键
   categoryNameOf: (key: string) => string = (k) => k,
   nowMs: number = Date.now(),
+  // 分类买家看不看得到（启用且有在售商品；小程序首页只让这些分类的 Banner 可点）。不传 = 不判
+  categoryVisibleOf: (key: string) => boolean = () => true,
 ): BannerRow[] {
   if (!Array.isArray(items)) return [];
   return items
@@ -144,7 +146,8 @@ export function bannerRows(
                 type === 'product'
                   ? (titleOf(id) ?? id)
                   : type === 'category'
-                    ? categoryNameOf(id)
+                    ? // 三天提交复查 2026-10-12：跳到买家看不到的分类，首页不给点——后台原先照样写"展示中"
+                      `${categoryNameOf(id)}${categoryVisibleOf(id) ? '' : '（买家看不到这个分类，点了没反应）'}`
                     : id
               }`,
         sortText: Number.isInteger(b['sort']) ? String(b['sort']) : '0',

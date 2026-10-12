@@ -230,9 +230,9 @@ export function ProductFormPage({
         const f = serverFieldError(e.data);
         if (f !== null) {
           setErrors({ [f.key]: f.text });
+          // 不带报障编号：填的值不行是运营能自己改的事（三天提交复查 2026-10-12；同分类页 4ef8991、登录页 3c6d8c8）
           sink.error(
             `保存失败：${f.text}${f.more > 0 ? `（还有 ${String(f.more)} 处，改好这一处再保存会提示下一处）` : ''}`,
-            { traceId },
           );
         }
       } else {
@@ -270,14 +270,31 @@ export function ProductFormPage({
   const onUpload = async (files: File[]) => {
     setUploading(true);
     sink.error('');
+    // 失败的攒起来最后一起说（三天提交复查 2026-10-12：原先每张各弹一次、后一张盖掉前一张，
+    //   服务端有原文时还不带文件名——选 5 张坏了 2 张，只看到一句不知道是哪张的话）
+    const failed: Array<{ name: string; text: string; traceId?: string | undefined }> = [];
     try {
-      for (const file of files) await uploadOne(file);
+      for (const file of files) {
+        const r = await uploadOne(file);
+        if (r !== null) failed.push({ name: file.name, ...r });
+      }
     } finally {
       setUploading(false);
     }
+    const [first] = failed;
+    if (first === undefined) return;
+    sink.error(
+      failed.length === 1
+        ? `图片「${first.name}」没传上：${first.text}`
+        : `${String(failed.length)} 张图片没传上：${failed.map((f) => `「${f.name}」`).join('')}（第一张的原因：${first.text}）`,
+      { traceId: first.traceId },
+    );
   };
 
-  const uploadOne = async (file: File) => {
+  /** 传一张；成功返回 null，失败返回原因（由 onUpload 汇总着说）。 */
+  const uploadOne = async (
+    file: File,
+  ): Promise<{ text: string; traceId?: string | undefined } | null> => {
     try {
       const imageSet = await uploadImage({ baseUrl, getToken, onUnauthorized }, file);
       // 商品图**存**的是 `image_id`（0.6.29 / AJ-362）——业务表不存存储位置；
@@ -299,9 +316,9 @@ export function ProductFormPage({
         ...prev,
         images: [...prev.images, { image_id, thumb, card, detail }],
       }));
+      return null;
     } catch (e) {
-      const { text, traceId } = toastError(e, `图片「${file.name}」上传失败`);
-      sink.error(text, { traceId });
+      return toastError(e, '上传失败');
     }
   };
 

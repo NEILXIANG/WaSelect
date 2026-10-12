@@ -517,10 +517,12 @@ export function productFormErrors(form: unknown): {
     ['description', f.description],
     ['editorialWhy', f.editorialWhy],
     ['editorialMaker', f.editorialMaker],
-    ['editorialTags', f.editorialTags.join(' ')],
   ] as const) {
     if (errors[k] === undefined && HTML_TAG.test(v)) errors[k] = HTML_TEXT;
   }
+  // 标签逐个查（与服务端同口径；三天提交复查 2026-10-12：原先拼成一串查，"<a" "b>" 两个无害标签会被误判）
+  if (errors['editorialTags'] === undefined && f.editorialTags.some((t) => HTML_TAG.test(t)))
+    errors['editorialTags'] = HTML_TEXT;
 
   // 报关品名敏感词（D-51：会被美国 FDA 当成功效宣称 / OTC 药品）
   const hit = customsDescBlockedHits(f.customsDescEn);
@@ -705,21 +707,22 @@ export function parseStockEdit(
 /** 服务端字段名（契约 ProductInput）→ 表单键与中文字段名。 */
 const SERVER_FIELDS: Readonly<Record<string, { key: string; label: string }>> = {
   title: { key: 'title', label: '商品名' },
-  title_ja: { key: 'titleJa', label: '日文原名' },
+  // 字段名与表单标签一致（三天提交复查 2026-10-12：原写"卖点标签 / 推荐理由 / 产地 / 工坊"等，运营在表单上找不到）
+  title_ja: { key: 'titleJa', label: '日文品名' },
   category: { key: 'category', label: '分类' },
   price_jpy: { key: 'priceJpy', label: '售价' },
-  cost_jpy: { key: 'costJpy', label: '成本价' },
+  cost_jpy: { key: 'costJpy', label: '采购成本' },
   weight_g: { key: 'weightG', label: '重量' },
   stock: { key: 'stock', label: '库存' },
   customs_desc_en: { key: 'customsDescEn', label: '英文报关品名' },
   hs_code: { key: 'hsCode', label: 'HS 编码' },
   origin_country: { key: 'originCountry', label: '原产地' },
   jan_code: { key: 'janCode', label: 'JAN 码' },
-  purchase_source: { key: 'purchaseSource', label: '采购来源' },
+  purchase_source: { key: 'purchaseSource', label: '采购渠道' },
   compliance_tags: { key: 'complianceTags', label: '合规标签' },
-  tags: { key: 'editorialTags', label: '卖点标签' },
-  why: { key: 'editorialWhy', label: '推荐理由' },
-  maker: { key: 'editorialMaker', label: '产地 / 工坊' },
+  tags: { key: 'editorialTags', label: '编辑标签' },
+  why: { key: 'editorialWhy', label: '为什么值得买' },
+  maker: { key: 'editorialMaker', label: '产地 / 工房 / 匠人' },
   images: { key: 'images', label: '图片' },
 };
 

@@ -742,3 +742,12 @@ describe('rateDuplicates：按表单行原顺序标重复（AJ-232）', () => {
     expect(rateDuplicates(null)).toEqual([]);
   });
 });
+
+// 三天提交复查 2026-10-12：2593097 让排序 / 库存框认全角数字，运费表的重量与运费框漏了——「１２００」仍判"必须是 ≥0 的整数"
+describe('运费表认全角数字', () => {
+  it('🔴 全角重量 / 运费通过校验，并按半角数字提交', () => {
+    const rows = [formRow('１２００', '４９５０')];
+    expect(rateErrors(rows).ok).toBe(true);
+    expect(toRateBody(rows)[0]).toMatchObject({ max_weight_g: 1200, price_jpy: 4950 });
+  });
+});

@@ -338,6 +338,13 @@ describe('Banner 列表：行内确认不让整表跳（走查 2026-10-08）', (
       await click(button(el, '确认删除'));
       await flush();
       expect(el.textContent).not.toContain('编辑第');
+      // 三天提交复查 2026-10-12：be854f6 把断言从"不含「编辑 Banner」"放宽成"不含「编辑第」"——
+      //   删除后若仍停在编辑态，标题会退成"编辑 Banner"，这条照样绿。补上标题题干与"保存走新建"的直接证据
+      expect(el.textContent).not.toContain('编辑 Banner');
+      expect(el.textContent).toContain('新建');
+      await type(el.querySelector('input[placeholder="排序（小的在前）"]'), '7');
+      await click(button(el, '保存'));
+      expect(calls.some((c) => c.method === 'PUT')).toBe(false);
     });
   });
 });

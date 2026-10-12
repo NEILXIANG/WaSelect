@@ -24,6 +24,7 @@ import { toastError } from '../ui/toast.js';
 import { createPartialRefund, syncPartialRefund, type AdminApi } from './api.js';
 import {
   partialRefundErrorNotice,
+  partialSyncFailed,
   partialSyncNotice,
   partialRefundGate,
   partialRefundInputCheck,
@@ -105,6 +106,11 @@ export function PartialRefunds({
     }
     setBusy(false);
     const fresh = await onDone();
+    if (failure === undefined && refundId !== undefined && partialSyncFailed(fresh, refundId)) {
+      // 同步查到机构确认失败：说结果，但走红色（三天提交复查 2026-10-12：原先一律走成功通道）
+      onError(partialSyncNotice(fresh, refundId));
+      return;
+    }
     if (failure === undefined) {
       // ⚠️ 成功必须走 success 通道（清屏），不能走 info——
       //    否则上一次失败的红字留着，屏幕上同时有红有绿（见 onSuccess 的 @why）

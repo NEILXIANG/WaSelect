@@ -269,3 +269,38 @@ describe('PartialRefunds：金额标签、可退额度、过期红字（AJ-410�
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
   });
 });
+
+// 三天提交复查 2026-10-12：a0ce593 让「同步」说出查到的结果，但一律走成功（绿色）通道——"机构确认失败（未退…）"也是绿的
+describe('部分退款「同步」查到失败', () => {
+  it('🔴 查到 failed → 走 onError（红），不走 onSuccess', async () => {
+    const got: string[] = [];
+    const row = {
+      id: 'rf-1',
+      status: 'pending',
+      currency: 'JPY',
+      amount_minor: 600,
+      reason: '破损',
+      created_at: '2026-10-12T00:00:00.000Z',
+    };
+    const order = {
+      status: 'delivered',
+      has_dispute: false,
+      payments: [{ status: 'succeeded', charge_currency: 'JPY', charge_amount: 8160 }],
+      partial_refunds: [row],
+    };
+    mounted = await mount(
+      createElement(PartialRefunds, {
+        api: (async () => ({})) as never,
+        orderId: 'o-1',
+        order,
+        onDone: () => ({ ...order, partial_refunds: [{ ...row, status: 'failed' }] }),
+        onError: (m: string) => got.push(`error:${m}`),
+        onNotice: (m: string) => got.push(`info:${m}`),
+        onSuccess: (m: string) => got.push(`success:${m}`),
+      }),
+    );
+    await click(button(mounted.el, '同步'));
+    expect(got.some((m) => m.startsWith('error:') && m.includes('600'))).toBe(true);
+    expect(got.some((m) => m.startsWith('success:'))).toBe(false);
+  });
+});

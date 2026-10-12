@@ -273,3 +273,26 @@ describe('排序只认纯数字（审查 2026-10-09 #6）', () => {
     expect(toBannerInput({ ...valid(), sort: ' 12 ' })['sort']).toBe(12);
   });
 });
+
+// 三天提交复查 2026-10-12：跳到停用 / 没有在售商品的分类时，小程序首页不给点（只认买家看得到的分类），
+//   后台却照样写"展示中 · 分类：X"
+describe('bannerRows：跳转的分类买家看不到', () => {
+  it('🔴 跳转文字写明"买家看不到这个分类，点了没反应"', () => {
+    const [row] = bannerRows(
+      [{ ...BANNER, link_type: 'category', link_id: 'tea' }],
+      undefined,
+      () => '日本茶',
+      Date.parse('2026-10-05T00:00:00+09:00'),
+      (k) => k !== 'tea',
+    );
+    expect(row?.linkText).toBe('分类：日本茶（买家看不到这个分类，点了没反应）');
+    const [ok] = bannerRows(
+      [{ ...BANNER, link_type: 'category', link_id: 'food' }],
+      undefined,
+      () => '食品',
+      Date.parse('2026-10-05T00:00:00+09:00'),
+      (k) => k !== 'tea',
+    );
+    expect(ok?.linkText).toBe('分类：食品');
+  });
+});

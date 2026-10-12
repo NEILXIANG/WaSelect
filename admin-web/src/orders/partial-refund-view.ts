@@ -303,6 +303,11 @@ const SYNC_RESULT: Record<string, string> = {
  * 点「同步」之后的提示（两端逐页走查第三轮 2026-10-12）：原先与新建共用"部分退款已提交…"——同步没有提交任何东西，要说查到的结果。
  * @param fresh 刷新后的订单；拿不到（刷新失败）→ 让运营看上方记录
  */
+/** 同步后这一笔是不是机构确认失败（三天提交复查 2026-10-12：失败要走红色提示，不能和成功一样是绿的）。 */
+export function partialSyncFailed(fresh: unknown, refundId: string): boolean {
+  return refundsOf(fresh).find((x) => String(x.id) === refundId)?.status === 'failed';
+}
+
 export function partialSyncNotice(fresh: unknown, refundId: string): string {
   const r = refundsOf(fresh).find((x) => String(x.id) === refundId);
   if (r === undefined) return '已同步，结果以上方记录为准';

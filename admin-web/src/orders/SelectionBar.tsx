@@ -74,13 +74,16 @@ export function SelectionBar(p: SelectionBarProps) {
         type="button"
         className="btn btn-secondary"
         disabled={p.paidCount === 0}
-        title={p.paidCount === 0 ? '所选里没有待发货的单' : undefined}
+        title={p.paidCount === 0 ? '所选里没有能打印的单' : undefined}
         onClick={p.onPrint}
       >
         打印拣货单与面单信息（{p.paidCount}）
       </button>
       {/* 原因只在悬停里（规律排查 2026-10-12）：按钮灰着、运营看不出为什么 */}
-      {p.paidCount === 0 && <span className="muted">所选里没有待发货的单，拣货单只打待发货的</span>}
+      {/* paidCount 是"能发货"的单数（待发货且不是测试单、没有拒付限制）——原因要照这个说（三天提交复查 2026-10-12） */}
+      {p.paidCount === 0 && (
+        <span className="muted">所选里没有能打印的单（测试单、有拒付限制的单不打印）</span>
+      )}
     </div>
   );
 }

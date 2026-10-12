@@ -22,7 +22,7 @@
  *      ../format.ts（展示格式）；server/src/adapters/catalog.ts（D-46 取档唯一实现）
  */
 import { FX_RAW_RATE_BOUNDS, SHIPPING_RATE_BOUNDS } from '@waselect/shared';
-import { formatJst, moneyText, toIsoJst } from '../format.js';
+import { formatJst, halfWidth, moneyText, toIsoJst } from '../format.js';
 
 /** 一条运费分档（表单态：数值以字符串存，提交时转）。 */
 export interface RateRow {
@@ -479,7 +479,8 @@ export function rateRows(items: unknown): RateViewRow[] {
 function parseCount(v: unknown): number | null {
   if (typeof v === 'number') return Number.isInteger(v) && v >= 0 ? v : null;
   if (typeof v !== 'string') return null;
-  const t = v.trim();
+  // 全角数字按半角认（三天提交复查 2026-10-12：2593097 修了排序 / 库存，运费表漏了）
+  const t = halfWidth(v);
   if (t === '') return null;
   if (!/^\d+$/.test(t)) return null;
   return Number(t);
