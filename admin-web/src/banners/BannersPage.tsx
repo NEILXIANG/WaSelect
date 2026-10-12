@@ -23,6 +23,7 @@
 import { useCategories } from '../categories/useCategories.js';
 import { categoryName, categoryOptions } from '../categories/view.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { UPLOAD_ACCEPT, uploadImage } from '../api/upload.js';
 import { findProductById, listProducts, type AdminProductLike } from '../products/api.js';
@@ -447,6 +448,8 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
                 <input
                   className="input"
                   aria-label="搜索商品"
+                  // 与商品列表搜索同一上限（两端输入测试 2026-10-12：原先不限长，贴一长串搜索得到"参数缺失或格式错误"）
+                  maxLength={SEARCH_KEYWORD_MAX_LENGTH}
                   placeholder="按商品名搜索"
                   value={productQuery}
                   onChange={(e) => setProductQuery(e.target.value)}

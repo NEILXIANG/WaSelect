@@ -373,6 +373,10 @@ describe('Banner 目标商品：超出前 100 件也能选、能搜（代理 S5�
     linkType.value = 'product';
     linkType.dispatchEvent(new Event('change', { bubbles: true }));
     await flush();
+    // 两端输入测试 2026-10-12：与商品列表搜索同一上限（原先不限长，超长被服务端拒成"参数缺失或格式错误"）
+    expect((el.querySelector('input[aria-label="搜索商品"]') as HTMLInputElement).maxLength).toBe(
+      64,
+    );
     await type(el.querySelector('input[aria-label="搜索商品"]'), '抹茶');
     await click(button(el, '搜索商品'));
     await flush();
