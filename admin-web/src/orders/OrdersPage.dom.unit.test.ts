@@ -10,7 +10,7 @@
  *
  * @see ./OrdersPage.tsx；./api.ts；../testing/dom.ts
  */
-import { createElement, useCallback, useState } from 'react';
+import { act, createElement, useCallback, useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
@@ -626,5 +626,50 @@ describe('待发货默认按付款时间排（AJ-453）时表头不能说谎（�
     const th = [...el.querySelectorAll('th')].find((t) => t.textContent?.includes('下单时间'));
     expect(th?.getAttribute('aria-sort')).toBe('descending');
     expect(el.textContent).not.toContain('按付款时间从早到晚');
+  });
+});
+
+/**
+ * 从一张单的详情直接换到另一张单（地址栏 / 浏览器前进后退）时，抽屉与半填的表单不能跟过去。
+ * @why 规律排查 2026-10-12（"表单状态跟着组件走、没跟着对象走"）实测：在 A 单打开「部分退款」填了 1234，
+ *      地址栏换到 B 单、点「放弃修改并离开」后，抽屉仍开着、金额还是 1234——点提交就是给 B 退 1234。
+ */
+describe('订单详情换单时表单不串单', () => {
+  it('🔴 A 单部分退款填了金额 → 换到 B 单：不留 A 的抽屉与金额', async () => {
+    let go: (r: Route) => void = () => undefined;
+    function SwitchHarness(): React.JSX.Element {
+      const [route, setRoute] = useState<Route>(parseHash('#/orders/o-A'));
+      go = setRoute;
+      const onNavigate = useCallback((next: Route) => setRoute(next), []);
+      return createElement(OrdersPage, { api: apiImpl as never, route, onNavigate });
+    }
+    calls = [];
+    apiImpl = async (req: Call): Promise<unknown> => {
+      calls.push(req);
+      const m = /\/admin\/orders\/(o-[AB])$/.exec(req.path);
+      if (m !== null)
+        return {
+          order_id: m[1],
+          order_no: m[1] === 'o-A' ? '261012-AAAAAA' : '261012-BBBBBB',
+          status: 'paid',
+          total_jpy: 9150,
+          items: [],
+          events: [],
+          payments: [{ status: 'succeeded', charge_amount: 9150, charge_currency: 'JPY' }],
+        };
+      return { items: [], total: 0 };
+    };
+    mounted = await mount(createElement(SwitchHarness));
+    const el = mounted.el;
+    await click(button(el, '部分退款…'));
+    await type(el.querySelector('input[name="partial-amount"]'), '1234');
+    await act(async () => {
+      go(parseHash('#/orders/o-B'));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(el.textContent).toContain('261012-BBBBBB');
+    const amount = el.querySelector<HTMLInputElement>('input[name="partial-amount"]');
+    expect(amount === null || amount.value === '').toBe(true);
   });
 });

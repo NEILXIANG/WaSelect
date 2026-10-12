@@ -30,6 +30,8 @@ export function CustomersPage({ api, route, onNavigate }: CustomersPageProps) {
   if (route.id !== '') {
     return (
       <CustomerDetail
+        // 按客户重挂（规律排查 2026-10-12）：从 A 直接换到 B 时，拉黑 / 解除 / 删除记录的原因框不能带过去
+        key={route.id}
         api={api}
         id={route.id}
         onBack={() => onNavigate({ page: 'customers', id: '', query: new URLSearchParams() })}

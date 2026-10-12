@@ -7,10 +7,10 @@
  *      它们在风控页各有用例，换一个页面就要重新证明一次（组件不同，状态机不同）。
  * @why 详情里**不出现 openid**、订单行是可点的 `#/orders/:id` 链接（订单详情是真深链接，router.ts @limitation 一）。
  */
-import { createElement } from 'react';
+import { act, createElement, useState } from 'react';
 import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { button, click, mount, type, type Mounted } from '../testing/dom.js';
+import { button, click, flush, mount, type, type Mounted } from '../testing/dom.js';
 import { CustomersPage } from './CustomersPage.js';
 import type { Route } from '../router.js';
 
@@ -338,5 +338,36 @@ describe('客户列表列序（全入口点击测试 2026-10-11）', () => {
     expect(heads.at(-2)).toBe('编号');
     const first = el.querySelector('tbody tr td');
     expect(first?.textContent).toBe(ROW.last_recipient);
+  });
+});
+
+// 规律排查 2026-10-12（与订单详情同类）：从 A 客户详情直接换到 B（前进后退 / 地址栏），A 的拉黑原因留在 B 的框里
+describe('客户详情换人时表单不串人', () => {
+  it('🔴 A 的拉黑原因不带到 B', async () => {
+    let go: (r: Route) => void = () => undefined;
+    const api = async (req: Call): Promise<unknown> => {
+      const id = req.path.split('/').at(-1) ?? '';
+      return { ...detail(false), id };
+    };
+    function Harness(): React.JSX.Element {
+      const [route, setRoute] = useState<Route>({
+        page: 'customers',
+        id: 'u-A',
+        query: new URLSearchParams(),
+      });
+      go = setRoute;
+      return createElement(CustomersPage, { api: api as never, route, onNavigate: setRoute });
+    }
+    mounted = await mount(createElement(Harness));
+    const el = mounted.el;
+    await type(el.querySelector('input[name="customer-block-reason"]'), '同一张卡 3 次拒付');
+    await act(async () => {
+      go({ page: 'customers', id: 'u-B', query: new URLSearchParams() });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(el.querySelector<HTMLInputElement>('input[name="customer-block-reason"]')?.value).toBe(
+      '',
+    );
   });
 });

@@ -312,6 +312,9 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   if (detailId !== null) {
     return (
       <OrderDetail
+        // 按单号重挂（规律排查 2026-10-12）：地址栏 / 前进后退从 A 单直接换到 B 单时，
+        // 抽屉与半填的表单（部分退款金额、退款原因、改址…）必须清空，不然提交就落到 B 单上
+        key={detailId}
         api={api}
         id={detailId}
         source={raw.find((o) => o.order_id === detailId) ?? null}
