@@ -37,12 +37,14 @@ export function PrintSheet({ api, ids, onBack, onError, onPrint, labelOf }: Prin
   const [failed, setFailed] = useState<readonly string[]>([]);
   const [loading, setLoading] = useState(true);
   const live = useRef(true);
-  useEffect(
-    () => () => {
+  // 全入口点击测试 2026-10-11：挂载时必须置回 true——StrictMode（开发）会"挂载 → 卸载 → 再挂载"，
+  // 原先只在卸载时置 false、再挂载不置回，取数回来被下面的 `!live.current` 吞掉，页面永远"加载中…"
+  useEffect(() => {
+    live.current = true;
+    return () => {
       live.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   /** 取这几单的详情，合进已取到的；失败的记下来（不整页作废，@see 文件头 @why）。 */
   const fetchSome = async (
