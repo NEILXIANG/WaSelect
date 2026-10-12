@@ -223,6 +223,24 @@ describe('订单详情：申请售后入口（AJ-420）', () => {
     expect(nav).toEqual(['/pages/after-sale/index?id=o-1']);
   });
 
+  it('🔴 进售后页前把订单摘要交过去（全入口点击测试 2026-10-11：售后页要显示是哪一单）', async () => {
+    order = {
+      ...ORDER,
+      status: 'delivered',
+      items: [{ product_id: 'p-1', title: '虎屋 抹茶粉 40g', qty: 1, unit_price_jpy: 2000 }],
+    };
+    await open();
+    call('onApplyAfterSale');
+    const gd = (
+      globalThis as unknown as { getApp: () => { globalData: Record<string, unknown> } }
+    ).getApp().globalData;
+    expect(gd['afterSaleBrief']).toMatchObject({
+      orderId: 'o-1',
+      orderNo: 'WS-20261008-0001',
+      title: '虎屋 抹茶粉 40g',
+    });
+  });
+
   it('不可申请（待发货 / 已有进行中的申请）→ 点了也不跳', async () => {
     await open();
     call('onApplyAfterSale');
@@ -238,9 +256,14 @@ describe('订单详情：申请售后入口（AJ-420）', () => {
 
   it('wxml 里入口绑的是 onApplyAfterSale，且只在 canApply 时出现', () => {
     const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    // 2026-10-11（全入口点击测试）：入口拆成两处（没申请过：与「售后」同一行；申请过：详情下方"再次申请"），两处都以 canApply 为前提
     expect(wxml).toMatch(
-      /wx:if="\{\{view\.afterSale\.canApply\}\}"[\s\S]{0,120}bindtap="onApplyAfterSale"/,
+      /wx:if="\{\{view\.afterSale\.canApply && !view\.afterSale\.current\}\}"[\s\S]{0,120}bindtap="onApplyAfterSale"/,
     );
+    expect(wxml).toMatch(
+      /wx:if="\{\{view\.afterSale\.canApply && view\.afterSale\.current\}\}"[\s\S]{0,120}bindtap="onApplyAfterSale"/,
+    );
+    expect(wxml.match(/bindtap="onApplyAfterSale"/g)).toHaveLength(2);
   });
 });
 

@@ -18,11 +18,29 @@
   />
 
   <block wx:if="{{!error}}">
+    <!-- 全入口点击测试 2026-10-11：顶部显示是哪一单（原先没有，买家会怀疑点错了单） -->
+    <view class="ws-gutter as__brief-wrap" wx:if="{{brief}}">
+      <view class="ws-card as__brief">
+        <view class="as__thumb">
+          <view class="ws-media ws-media--square">
+            <image wx:if="{{brief.image}}" class="ws-media__img" src="{{brief.image}}" mode="aspectFill" />
+          </view>
+        </view>
+        <view class="as__brief-body">
+          <text class="ws-body as__brief-title">{{brief.title}}<text class="ws-note" wx:if="{{brief.moreText}}"> {{brief.moreText}}</text></text>
+          <text class="ws-caption line-block" wx:if="{{brief.orderNo}}">订单号 {{brief.orderNo}}</text>
+        </view>
+      </view>
+    </view>
     <view class="ws-gutter">
       <view class="ws-card as__form">
         <ws-field label="问题类型">
           <picker mode="selector" range="{{reasonLabels}}" value="{{form.reasonIndex < 0 ? 0 : form.reasonIndex}}" bindchange="onReasonPick">
-            <view class="input {{view.reasonText ? '' : 'ph'}}">{{view.reasonText || '请选择'}}</view>
+            <!-- 全入口点击测试 2026-10-11：加「▾」表明是下拉（原先与文字框长得一样） -->
+            <view class="input input--picker {{view.reasonText ? '' : 'ph'}}">
+              <text>{{view.reasonText || '请选择'}}</text>
+              <text class="picker-caret">▾</text>
+            </view>
           </picker>
         </ws-field>
 
@@ -32,7 +50,7 @@
             value="{{form.description}}"
             maxlength="{{max}}"
             bindinput="onInput"
-            placeholder="例：外箱压扁，抹茶罐凹了一块，粉洒出来一些"
+            placeholder="请写清是哪件商品、什么问题，例：外箱压扁，罐子凹了一块"
             placeholder-class="ph"
           />
           <text class="ws-caption as__count {{view.overLimit ? 'as__count--over' : ''}}">{{view.countText}}</text>

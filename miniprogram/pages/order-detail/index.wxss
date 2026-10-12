@@ -187,3 +187,14 @@
 .key-info {
   color: var(--ws-ink-soft);
 }
+
+/* 全入口点击测试 2026-10-11：运单号行（号码在左、「复制」在右，与订单号行同一写法）；查件链接按钮与上一行留出间距 */
+.track-no {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.track-link {
+  margin-top: var(--ws-space-stack);
+}

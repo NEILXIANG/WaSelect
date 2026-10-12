@@ -18,6 +18,7 @@ import {
   itemRows,
   timelineRows,
   orderNotFound,
+  afterSaleBrief,
 } from './index.vm.js';
 
 const ORDER = {
@@ -678,5 +679,32 @@ describe('orderNotFound（40400，全入口点击测试 2026-10-11）', () => {
     });
     expect(orderNotFound({ code: -1 })).toEqual({ notFound: false });
     expect(orderNotFound(null)).toEqual({ notFound: false });
+  });
+});
+
+// 全入口点击测试 2026-10-11：售后申请页不显示是哪一单 / 哪件商品，买家会怀疑点错了单；由详情页把摘要交过去
+describe('afterSaleBrief（交给售后申请页的订单摘要）', () => {
+  it('🔴 订单号、第一件商品名、件数说明、缩略图', () => {
+    const view = {
+      orderNo: '261012-GQY6QY',
+      items: [
+        { title: '虎屋 抹茶粉 40g', image: 'https://img.test/a.webp' },
+        { title: '今治 毛巾', image: 'https://img.test/b.webp' },
+      ],
+    };
+    expect(afterSaleBrief('o-1', view)).toEqual({
+      orderId: 'o-1',
+      orderNo: '261012-GQY6QY',
+      title: '虎屋 抹茶粉 40g',
+      moreText: '等 2 件',
+      image: 'https://img.test/a.webp',
+    });
+    expect(
+      afterSaleBrief('o-1', { orderNo: 'X', items: [{ title: 'A', image: '' }] })?.moreText,
+    ).toBe('');
+  });
+  it('没有商品 → null（售后页就不显示摘要）', () => {
+    expect(afterSaleBrief('o-1', { orderNo: 'X', items: [] })).toBeNull();
+    expect(afterSaleBrief('o-1', null)).toBeNull();
   });
 });

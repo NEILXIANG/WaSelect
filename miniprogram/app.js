@@ -119,6 +119,12 @@ App({
      */
     justAddedAddressId: '',
     /**
+     * 订单详情 → 售后申请页的**一次性**交接：订单摘要（订单号、第一件商品名、件数、缩略图）；null = 没有。
+     * @why 售后页顶部要显示是哪一单（全入口点击测试 2026-10-11），由详情页交过去就不用另发请求。读走即清。
+     * @see ../pages/order-detail/index.js onApplyAfterSale（写入侧）；../pages/after-sale/index.js onLoad（消费侧）
+     */
+    afterSaleBrief: null,
+    /**
      * 「我的」四个订单入口 → 订单页的**一次性**页签意图（M-10 附，AJ-408；'' = 没有）。
      * @why 订单页是 tab 页，`switchTab` 不能带 query；交接方式与 `pickedAddressId` 同理，订单页 onShow 读走即清空。
      * @see ../pages/user/index.js（写入侧）；../pages/order/index.js（消费侧）

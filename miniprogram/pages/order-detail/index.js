@@ -26,7 +26,13 @@
  *
  * @see ./index.vm.js（视图逻辑真源，17 条单测）；../../utils/wx-api.js（showModal / setClipboardData）
  */
-import { actionFailure, buyAgainItems, detailView, orderNotFound } from './index.vm.js';
+import {
+  actionFailure,
+  afterSaleBrief,
+  buyAgainItems,
+  detailView,
+  orderNotFound,
+} from './index.vm.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -285,6 +291,8 @@ Page({
   /** 申请售后（AJ-420，仅 `afterSale.canApply`）。用 order_id（内部 id）而不是订单号：接口按 id 定位。 */
   onApplyAfterSale() {
     if (this.orderId === '' || this.data.view?.afterSale?.canApply !== true) return;
+    // 全入口点击测试 2026-10-11：把订单摘要交给售后页（它顶部显示是哪一单，不另发请求；读走即清）
+    app.globalData.afterSaleBrief = afterSaleBrief(this.orderId, this.data.view);
     wxApi.navigateTo({ url: `${AFTER_SALE_PAGE}?id=${encodeURIComponent(this.orderId)}` });
   },
 

@@ -20,9 +20,12 @@ const settle = async (): Promise<void> => {
   for (let i = 0; i < 30; i += 1) await Promise.resolve();
 };
 
-async function open(id: string | null = 'o-1'): Promise<void> {
+let gd: Record<string, unknown>;
+
+async function open(id: string | null = 'o-1', brief: unknown = null): Promise<void> {
   page = await loadPage(new URL('./index.js', import.meta.url).href, {
-    globalData: {
+    globalData: (gd = {
+      afterSaleBrief: brief,
       apiBase: 'http://api.test',
       api: async (req: { url: string; method?: string; data?: unknown }) => {
         posts.push({
@@ -32,7 +35,7 @@ async function open(id: string | null = 'o-1'): Promise<void> {
         });
         return reply();
       },
-    },
+    }),
   });
   call('onLoad', id === null ? {} : { id });
 }
@@ -146,5 +149,25 @@ describe('提交途中按了返回（MP-13，第二轮审计 2026-10-11）', () 
     hold.resolve({});
     await settle();
     expect(back).toBe(0);
+  });
+});
+
+describe('售后申请页：顶部显示是哪一单（全入口点击测试 2026-10-11）', () => {
+  it('🔴 读走订单详情交来的摘要（读走即清），不另发请求', async () => {
+    const brief = {
+      orderId: 'o-1',
+      orderNo: '261012-GQY6QY',
+      title: '虎屋 抹茶粉 40g',
+      moreText: '',
+      image: '',
+    };
+    await open('o-1', brief);
+    expect(page.data['brief']).toEqual(brief);
+    expect(gd['afterSaleBrief']).toBeNull();
+    expect(posts).toEqual([]);
+  });
+  it('别的单留下的摘要不用', async () => {
+    await open('o-2', { orderId: 'o-1', orderNo: 'N', title: 'T', moreText: '', image: '' });
+    expect(page.data['brief']).toBeNull();
   });
 });

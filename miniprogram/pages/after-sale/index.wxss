@@ -57,3 +57,44 @@
 .ph {
   color: var(--ws-ink-faint);
 }
+
+/* 全入口点击测试 2026-10-11：顶部订单摘要（缩略图 + 商品名 + 订单号） */
+.as__brief-wrap {
+  margin-bottom: var(--ws-space-stack);
+}
+
+.as__brief {
+  display: flex;
+  align-items: center;
+}
+
+.as__thumb {
+  width: 18%;
+  flex: none;
+  margin-right: var(--ws-space-inline);
+}
+
+.as__brief-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.as__brief-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 问题类型下拉：右侧「▾」 */
+.input--picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.picker-caret {
+  flex: none;
+  margin-left: var(--ws-space-inline);
+  color: var(--ws-ink-soft);
+}

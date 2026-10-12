@@ -406,3 +406,25 @@ export function detailView(order, opts = undefined) {
     afterSale,
   };
 }
+
+/**
+ * 交给售后申请页的订单摘要（全入口点击测试 2026-10-11）。
+ * @why 售后申请页原先不显示是哪一单 / 哪件商品，买家会怀疑点错了单；主流售后页顶部都有商品缩略图 + 订单号。
+ *      由详情页交过去（`app.globalData.afterSaleBrief`，读走即清），售后页不另发请求。
+ * @param {string} orderId 内部订单 id（售后页据此认领，别的单留下的不用）
+ * @param {unknown} view `detailView` 的输出
+ * @returns {{orderId: string, orderNo: string, title: string, moreText: string, image: string}|null} 没有商品 → null
+ */
+export function afterSaleBrief(orderId, view) {
+  const v = view !== null && typeof view === 'object' ? view : {};
+  const items = Array.isArray(v.items) ? v.items : [];
+  if (items.length === 0) return null;
+  const first = items[0] ?? {};
+  return {
+    orderId,
+    orderNo: typeof v.orderNo === 'string' ? v.orderNo : '',
+    title: typeof first.title === 'string' ? first.title : '',
+    moreText: items.length > 1 ? `等 ${String(items.length)} 件` : '',
+    image: typeof first.image === 'string' ? first.image : '',
+  };
+}

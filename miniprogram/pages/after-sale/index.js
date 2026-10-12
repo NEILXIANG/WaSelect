@@ -8,7 +8,14 @@
  * @limitation 链接里没有订单 id 时整页显示错误、不给表单（空 id 会撞到别的路由）。
  * @see ./index.vm.js；server/src/app/after-sale-routes.ts
  */
-import { REASON_LABELS, conflictText, formView, initialForm, submitBody } from './index.vm.js';
+import {
+  REASON_LABELS,
+  briefFor,
+  conflictText,
+  formView,
+  initialForm,
+  submitBody,
+} from './index.vm.js';
 import { AFTER_SALE_DESCRIPTION_MAX } from '../../utils/after-sale.js';
 import { errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -45,6 +52,9 @@ Page({
     this.alive = true;
     this.traceId = newTraceId();
     this.orderId = typeof options?.id === 'string' ? options.id : '';
+    // 全入口点击测试 2026-10-11：订单详情交来的摘要（是哪一单），读走即清
+    this.setData({ brief: briefFor(app.globalData.afterSaleBrief, this.orderId) });
+    app.globalData.afterSaleBrief = null;
     if (this.orderId === '') this.setData({ error: '没有找到要申请售后的订单，请从订单详情进入' });
   },
 

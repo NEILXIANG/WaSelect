@@ -64,3 +64,15 @@ export function conflictText(err) {
   if (reason === 'status_not_allowed') return '这笔订单当前不能申请售后（已发货后才可以申请）';
   return null;
 }
+
+/**
+ * 读订单详情交来的订单摘要（全入口点击测试 2026-10-11）：只认本单的。
+ * @why 交接值是全局的：从 A 单进售后、没提交就返回，再从 B 单进来时，A 单的摘要可能还在（写入侧每次都会覆盖，这里再兜一层）。
+ * @param {unknown} handoff `app.globalData.afterSaleBrief`
+ * @param {string} orderId 本页的订单 id
+ * @returns {object|null}
+ */
+export function briefFor(handoff, orderId) {
+  const b = handoff !== null && typeof handoff === 'object' ? handoff : null;
+  return b !== null && b.orderId === orderId ? b : null;
+}

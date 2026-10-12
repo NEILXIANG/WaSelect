@@ -2,7 +2,14 @@
  * 售后申请页 vm（AJ-420）：原因必选、描述 1–500 字（按字符）、两种 40902 的买家说法。
  */
 import { describe, expect, it } from 'vitest';
-import { REASON_LABELS, conflictText, formView, initialForm, submitBody } from './index.vm.js';
+import {
+  REASON_LABELS,
+  briefFor,
+  conflictText,
+  formView,
+  initialForm,
+  submitBody,
+} from './index.vm.js';
 
 describe('formView / submitBody', () => {
   it('🔴 空表单：不能提交，提示先选问题类型', () => {
@@ -56,5 +63,15 @@ describe('conflictText', () => {
     expect(conflictText({ code: 40902, data: { reason: 'other' } })).toBeNull();
     expect(conflictText({ code: 40001, data: { reason: 'after_sale_open' } })).toBeNull();
     expect(conflictText(null)).toBeNull();
+  });
+});
+
+// 全入口点击测试 2026-10-11：订单摘要只认本单的（交接值是全局的，别的单留下的不能拿来用）
+describe('briefFor（读取订单详情交来的摘要）', () => {
+  const brief = { orderId: 'o-1', orderNo: 'N', title: 'T', moreText: '', image: '' };
+  it('🔴 本单 → 给；别的单 / 没有 → null', () => {
+    expect(briefFor(brief, 'o-1')).toEqual(brief);
+    expect(briefFor(brief, 'o-2')).toBeNull();
+    expect(briefFor(null, 'o-1')).toBeNull();
   });
 });
