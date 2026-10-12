@@ -37,6 +37,7 @@ import {
   stockAdjust,
   priceChangeNote,
   goneQuoteError,
+  lineMaxNote,
   selectionBar,
   undoAvailable,
   undoView,
@@ -410,6 +411,13 @@ Page({
     //   原先直接 setQty(0)，行消失、没有撤销，与点「删除」的体验不一致
     if (current.qty + delta <= 0) {
       this.removeWithUndo(productId);
+      return;
+    }
+    // 到单件上限再点「＋」：数字不会动，就近说为什么（规律排查 2026-10-12；详情页 F8 同口径）
+    const capNote = lineMaxNote(current.qty, delta);
+    if (capNote !== '') {
+      this.stockNote = { productId, text: capNote };
+      this.refresh();
       return;
     }
     cart.setQty(productId, current.qty + delta);

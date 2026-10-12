@@ -301,6 +301,13 @@ describe('加购连点守卫与结果文案（P2-37 / P2-31）', () => {
 
   it('加购结果 → 页面文案：成功 / 品种已满', () => {
     expect(addFeedback({ added: true })).toEqual({ added: true, addNote: '' });
+    // 规律排查 2026-10-12：每件商品一次最多 99 件（cart-store MAX_LINE_QTY）
+    expect(addFeedback({ added: false, reason: 'line_max', inCart: 98 }).addNote).toBe(
+      '每件商品一次最多买 99 件，购物车里已有 98 件，最多再加 1 件',
+    );
+    expect(addFeedback({ added: false, reason: 'line_max', inCart: 99 }).addNote).toBe(
+      '每件商品一次最多买 99 件，购物车里已经放满了',
+    );
     const full = addFeedback({ added: false, reason: 'full' });
     expect(full.added).toBe(false);
     expect(full.addNote).toContain('50');
@@ -351,7 +358,18 @@ describe('addLimit / stillAdded / retryableLoadError（审查 2026-10-09）', ()
   it('addLimit：购物车已有 = 库存 → 拦；少一件 → 放；库存未知 → 放（交给报价兜底）', () => {
     expect(addLimit({ stock: 2, inCart: 2 })).toEqual({ ok: false, reason: 'stock', stock: 2 });
     expect(addLimit({ stock: 2, inCart: 1 })).toEqual({ ok: true });
-    expect(addLimit({ stock: null, inCart: 99 })).toEqual({ ok: true });
+    // 规律排查 2026-10-12：原断言"库存未知、车里已 99 件 → 放行"——cart.add 会把超出的截掉却仍报"已加入"
+    expect(addLimit({ stock: null, inCart: 99 })).toEqual({
+      ok: false,
+      reason: 'line_max',
+      inCart: 99,
+    });
+    expect(addLimit({ stock: 500, inCart: 98, qty: 2 })).toEqual({
+      ok: false,
+      reason: 'line_max',
+      inCart: 98,
+    });
+    expect(addLimit({ stock: null, inCart: 98, qty: 1 })).toEqual({ ok: true });
     expect(addLimit({ stock: 0, inCart: undefined })).toEqual({
       ok: false,
       reason: 'stock',

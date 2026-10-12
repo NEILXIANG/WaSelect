@@ -53,6 +53,8 @@ export interface PrintOrder {
   declared: DeclaredLine[];
   /** 申报合计（各行美分相加后再换算，不是各行美元字符串相加）。 */
   declaredTotalText: string;
+  /** 全单商品净重合计（各行单件 × 数量；不含包材）。任一行缺重量 → '—'。 */
+  weightTotalText: string;
 }
 
 export interface PrintModel {
@@ -86,16 +88,23 @@ function toPrintOrder(o: Record<string, unknown>): PrintOrder {
   const addr = rec(o['address']);
   let totalCents = 0;
   let totalKnown = true;
+  let weightTotal = 0;
+  let weightKnown = true;
   const declared = items.map((it): DeclaredLine => {
     const cents = int(it['declared_value_usd']);
     if (cents === null) totalKnown = false;
     else totalCents += cents;
-    const w = int(it['weight_g']);
+    // 整行重量（规律排查 2026-10-12）：订单行上的 weight_g 是**单件**重量，而申报价是**整行**金额——
+    //   同一行两个口径，照抄到报关单（按行填）重量就少了
+    const unit = int(it['weight_g']);
+    const w = unit === null ? null : unit * (int(it['qty']) ?? 0);
+    if (w === null) weightKnown = false;
+    else weightTotal += w;
     return {
       desc: orUnrecorded(it['customs_desc_en']),
       hs: orUnrecorded(it['hs_code']),
       qty: int(it['qty']) ?? 0,
-      weightText: w === null ? '—' : `${String(w)} g`,
+      weightText: w === null ? '—' : `${w.toLocaleString('en-US')} g`,
       valueText: cents === null ? '—' : minorMoneyText(cents, 'USD'),
     };
   });
@@ -114,6 +123,10 @@ function toPrintOrder(o: Record<string, unknown>): PrintOrder {
     phone: phoneText(addr['phone']),
     declared,
     declaredTotalText: totalKnown && items.length > 0 ? minorMoneyText(totalCents, 'USD') : '—',
+    weightTotalText:
+      weightKnown && items.length > 0
+        ? `${weightTotal.toLocaleString('en-US')} g（商品净重，不含包材）`
+        : '—',
   };
 }
 

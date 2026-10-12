@@ -163,8 +163,8 @@ export function PrintSheet({ api, ids, onBack, onError, onPrint, labelOf }: Prin
                 <th>Description</th>
                 <th>HS</th>
                 <th>Qty</th>
-                <th>Weight</th>
-                <th>Value (USD)</th>
+                <th>Weight (line)</th>
+                <th>Value (line, USD)</th>
               </tr>
             </thead>
             <tbody>
@@ -179,7 +179,9 @@ export function PrintSheet({ api, ids, onBack, onError, onPrint, labelOf }: Prin
               ))}
             </tbody>
           </table>
-          <p>申报合计：{o.declaredTotalText}</p>
+          <p>
+            申报合计：{o.declaredTotalText} · 重量合计：{o.weightTotalText}
+          </p>
         </article>
       ))}
     </section>

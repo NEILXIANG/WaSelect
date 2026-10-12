@@ -326,3 +326,17 @@ describe('库存不足：改到可买件数（AJ-493，全入口点击测试 202
     expect(knife()?.noteText).toBe('');
   });
 });
+
+// 规律排查 2026-10-12：数量到 99 再点「＋」——数字不动、什么也不说（详情页 F8 早就修了同一件事，购物车没跟上）
+describe('购物车：数量到单件上限', () => {
+  it('🔴 99 件再点「＋」→ 那一行说"每件商品一次最多买 99 件"', () => {
+    cart.setQty(OIL.productId, 99);
+    call('onShow');
+    call('onPlus', tapId(OIL.productId));
+    const row = (
+      page.data['rows'] as Array<{ productId: string; noteText: string; qty: number }>
+    ).find((r) => r.productId === OIL.productId);
+    expect(row?.qty).toBe(99);
+    expect(row?.noteText).toBe('每件商品一次最多买 99 件');
+  });
+});

@@ -298,6 +298,16 @@ export function addFeedback(result) {
     }
     return { added: false, addNote: `库存只剩 ${String(r.stock)} 件，购物车里已经放满了` };
   }
+  if (r.reason === 'line_max' && Number.isInteger(r.inCart)) {
+    const cap = `每件商品一次最多买 ${String(MAX_LINE_QTY)} 件`;
+    return {
+      added: false,
+      addNote:
+        r.inCart < MAX_LINE_QTY
+          ? `${cap}，购物车里已有 ${String(r.inCart)} 件，最多再加 ${String(MAX_LINE_QTY - r.inCart)} 件`
+          : `${cap}，购物车里已经放满了`,
+    };
+  }
   if (r.reason === 'full') {
     return {
       added: false,
@@ -340,14 +350,16 @@ export function buyBarView(s) {
  * @limitation 库存是**进页时**的快照；别人同时买走的那部分仍由报价 / 建单兜底，这里只挡"明知不够还加"。
  * @param {{stock: unknown, inCart: unknown, qty?: unknown}} a `stock` 详情的库存（null = 不知道）；`inCart` 购物车里这件已有几件；
  *        `qty` 这次要加几件（A9，缺省 1）
- * @returns {{ok: true} | {ok: false, reason: 'stock', stock: number}}
+ * @returns {{ok: true} | {ok: false, reason: 'stock', stock: number} | {ok: false, reason: 'line_max', inCart: number}}
  */
 export function addLimit(a) {
   const stock = a?.stock;
   const inCart = Number.isInteger(a?.inCart) ? a.inCart : 0;
   const qty = Number.isInteger(a?.qty) && a.qty >= 1 ? a.qty : 1;
-  if (!Number.isInteger(stock)) return { ok: true };
-  return inCart + qty > stock ? { ok: false, reason: 'stock', stock } : { ok: true };
+  if (Number.isInteger(stock) && inCart + qty > stock) return { ok: false, reason: 'stock', stock };
+  // 单行上限（规律排查 2026-10-12）：cart.add 会把超过 99 的部分截掉、却仍回 added——买家看到"已加入"，其实没加上
+  if (inCart + qty > MAX_LINE_QTY) return { ok: false, reason: 'line_max', inCart };
+  return { ok: true };
 }
 
 /**

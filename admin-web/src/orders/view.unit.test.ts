@@ -933,6 +933,31 @@ describe('firstRefundReason', () => {
 });
 
 // 两端逐页走查第三轮 2026-10-12：有部分退款的单，金额区只有"买家实付"，退了多少、还有多少在途只在抽屉 / 时间线里
+// 规律排查 2026-10-12：`payment` 是最新一条未取消的支付行（不论状态）——待付款 / 超时关闭的单也显示"买家实付 $80.00"，
+//   订单总表同一单的实付却是空的
+describe('amountBreakdown：买家实付只认已扣款的支付行', () => {
+  const base = { items_jpy: 3590, shipping_jpy: 4050 };
+  it('🔴 只有发起中 / 失败的支付行 → 写"尚未扣款"，不写实付金额', () => {
+    const rows = amountBreakdown({
+      ...base,
+      payment: { charge_currency: 'USD', charge_amount: 8000 },
+      payments: [{ status: 'initiated', charge_currency: 'USD', charge_amount: 8000 }],
+    });
+    expect(rows.find((r) => r.label === '买家实付')?.value).toBe('尚未扣款');
+  });
+  it('有成功的支付行 → 写它的金额', () => {
+    const rows = amountBreakdown({
+      ...base,
+      payment: { charge_currency: 'USD', charge_amount: 8000 },
+      payments: [
+        { status: 'failed', charge_currency: 'USD', charge_amount: 7900 },
+        { status: 'succeeded', charge_currency: 'USD', charge_amount: 8000 },
+      ],
+    });
+    expect(rows.find((r) => r.label === '买家实付')?.value).toBe('$80.00');
+  });
+});
+
 describe('amountBreakdown：部分退款汇总', () => {
   const base = {
     items_jpy: 3590,

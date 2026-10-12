@@ -63,6 +63,14 @@ describe('printModel（AJ-407）', () => {
     expect(o?.declaredTotalText).toBe('$85.77');
   });
 
+  // 规律排查 2026-10-12：重量列是**单件**重量、申报价是**整行**金额，一行里两个口径；照抄到报关单（CN22/23 按行填）
+  //   重量就少报了。改为整行重量（单件 × 数量），并给全单商品净重合计
+  it('🔴 重量写整行（单件 × 数量），另给商品净重合计（不含包材）', () => {
+    const [o] = printModel([PAID]).orders;
+    expect(o?.declared[1]?.weightText).toBe('600 g');
+    expect(o?.weightTotalText).toBe('1,140 g（商品净重，不含包材）');
+  });
+
   it('非 paid 的单列入 skipped（不静默丢）；缺申报价 → 合计显示 —（不拿缺的当 0）', () => {
     const m = printModel([
       { order_id: 'ord_s', order_no: '261001-AAAAAA', status: 'shipped' },

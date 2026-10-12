@@ -29,6 +29,7 @@ import {
   stockAdjust,
   priceChangeNote,
   goneQuoteError,
+  lineMaxNote,
 } from './index.vm.js';
 
 const ITEMS = [
@@ -413,5 +414,13 @@ describe('goneQuoteError', () => {
       '「有田烧 名窑 染付 大花瓶 尺二」已下架，移除后才能结算',
     );
     expect(goneQuoteError('')).toBe('有商品已下架，移除后才能结算');
+  });
+});
+
+describe('lineMaxNote（规律排查 2026-10-12）', () => {
+  it('🔴 99 再加 → 说上限；没到 / 减 → 空', () => {
+    expect(lineMaxNote(99, 1)).toBe('每件商品一次最多买 99 件');
+    expect(lineMaxNote(98, 1)).toBe('');
+    expect(lineMaxNote(99, -1)).toBe('');
   });
 });

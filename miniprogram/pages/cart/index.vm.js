@@ -19,7 +19,7 @@
  *      ../../utils/quote-view.js（报价区视图）；contracts/api-contract.yaml（Quote）
  */
 import { formatJpy } from '../../utils/price-format.js';
-import { MAX_CART_LINES } from '../../utils/cart-store.js';
+import { MAX_CART_LINES, MAX_LINE_QTY } from '../../utils/cart-store.js';
 
 /**
  * 本地条目 → 行视图。
@@ -291,6 +291,18 @@ export function priceChangeNote(from, to) {
  * @param {string} title 那一行的商品名（找不到给空串）
  * @returns {string}
  */
+/**
+ * 「＋」到单件上限时的说明（规律排查 2026-10-12：99 件再点「＋」数字不动、什么也不说；详情页 F8 早已修同一件事）。
+ * @param {unknown} qty 这一行现在的件数
+ * @param {number} delta 这次改动（+1 / -1）
+ * @returns {string} 空串 = 没到上限
+ */
+export function lineMaxNote(qty, delta) {
+  return delta > 0 && Number.isInteger(qty) && qty + delta > MAX_LINE_QTY
+    ? `每件商品一次最多买 ${String(MAX_LINE_QTY)} 件`
+    : '';
+}
+
 export function goneQuoteError(title) {
   return title === '' ? '有商品已下架，移除后才能结算' : `「${title}」已下架，移除后才能结算`;
 }

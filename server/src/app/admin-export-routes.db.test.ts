@@ -174,6 +174,27 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
     }
   });
 
+  // 规律排查 2026-10-12：weight_g 是单件重量、declared_value_usd 是整行金额——一行两个口径，数量 >1 时报关代理会填错。
+  //   表头与报关代理共用，原列不改名、不挪位，末尾加整行重量 line_weight_g
+  it('🔴 customs 末尾加 line_weight_g（单件 × 数量），原有列位置不变', async () => {
+    await seedOrder('o-3', 'paid');
+    await db`update order_items set qty = 3 where order_id = 'o-3'`;
+    const { url, close } = await buildServer();
+    try {
+      const csv = (
+        (await call(url, 'GET', '/api/v1/admin/exports/customs', undefined, await bearer()))
+          .body as {
+          csv: string;
+        }
+      ).csv;
+      const [head, row] = lines(csv);
+      expect(head?.endsWith(',qty,weight_g,declared_value_usd,snapshot,line_weight_g')).toBe(true);
+      expect(row?.endsWith(',3,540,85.76,snapshot,1620')).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
   it('purchase：paid 单的采购快照，公式注入被转义；不含收件地址', async () => {
     await seedOrder('o-1', 'paid');
     const { url, close } = await buildServer();
@@ -186,7 +207,7 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
       expect(csv).not.toContain('Jane Doe');
       // AJ-493 后续 / AJ-494：采购单是内部用表——中文表头；36 位商品 id 挪到最后一列（核对用）
       expect(lines(csv)[0]).toBe(
-        '订单号,付款时间（日本时间）,商品名,日文原名,JAN 码,采购来源,数量,售价（日元）,成本（日元）,备注,商品编号（系统）',
+        '订单号,付款时间（日本时间）,商品名,日文原名,JAN 码,采购来源,数量,单价（日元）,单件成本（日元）,备注,商品编号（系统）',
       );
       // 数据行与表头对齐：第 3 列是商品名，最后一列是商品 id（只看表头的话，数据列错位不会红）
       const cells = (lines(csv)[1] ?? '').split(',');

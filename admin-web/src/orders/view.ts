@@ -910,14 +910,32 @@ export function amountBreakdown(order: unknown): Array<{ label: string; value: s
     out.push({ label: '其中预估关税（含在商品价内）', value: moneyText(o['duty_jpy']) });
   if (Number.isInteger(o['shipping_jpy']))
     out.push({ label: '运费', value: moneyText(o['shipping_jpy']) });
-  const p = (
-    typeof o['payment'] === 'object' && o['payment'] !== null ? o['payment'] : {}
-  ) as Record<string, unknown>;
-  if (typeof p['charge_currency'] === 'string' && Number.isInteger(p['charge_amount'])) {
+  // 买家实付只认**已扣款**的支付行（规律排查 2026-10-12）：`payment` 是最新一条未取消的行、不论状态，
+  //   待付款 / 超时关闭的单原先也显示"买家实付 $80.00"，而订单总表同一单的实付是空的（只认 succeeded / refunded）。
+  //   详情带 `payments[]` 时按它判；列表快照没有这一项时退回 `payment`（列表不显示金额区，只是兜底）
+  const pays = Array.isArray(o['payments'])
+    ? (o['payments'] as Array<Record<string, unknown>>)
+    : null;
+  const charged =
+    pays === null
+      ? ((typeof o['payment'] === 'object' && o['payment'] !== null ? o['payment'] : {}) as Record<
+          string,
+          unknown
+        >)
+      : ([...pays]
+          .reverse()
+          .find((x) => x['status'] === 'succeeded' || x['status'] === 'refunded') ?? null);
+  if (
+    charged !== null &&
+    typeof charged['charge_currency'] === 'string' &&
+    Number.isInteger(charged['charge_amount'])
+  ) {
     out.push({
       label: '买家实付',
-      value: minorMoneyText(p['charge_amount'], p['charge_currency']),
+      value: minorMoneyText(charged['charge_amount'], charged['charge_currency']),
     });
+  } else if (pays !== null && pays.length > 0) {
+    out.push({ label: '买家实付', value: '尚未扣款' });
   }
   // 部分退款汇总（两端逐页走查第三轮 2026-10-12）：原先只在「部分退款…」抽屉与时间线里，金额区看不出退了多少、还有多少在途
   const refunds = Array.isArray(o['partial_refunds'])

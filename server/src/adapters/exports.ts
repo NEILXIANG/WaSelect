@@ -158,8 +158,9 @@ async function purchaseTable(db: Db, ids: readonly string[] | undefined): Promis
       'JAN 码',
       '采购来源',
       '数量',
-      '售价（日元）',
-      '成本（日元）',
+      // 写明单件（规律排查 2026-10-12：原「售价 / 成本」看不出是单件还是整行，采购员会把成本列加总当预算）
+      '单价（日元）',
+      '单件成本（日元）',
       // 规律排查 2026-10-12：只看 status = 'paid' 会把拒付锁定（不许发货）的单也列进来，采购员照表买了发不出去
       '备注',
       '商品编号（系统）',
@@ -222,6 +223,8 @@ async function customsTable(db: Db, ids: readonly string[] | undefined): Promise
       'weight_g',
       'declared_value_usd',
       'snapshot',
+      // 规律排查 2026-10-12：weight_g 是单件、declared_value_usd 是整行；表头与报关代理共用，原列不动，末尾补整行重量
+      'line_weight_g',
     ],
     rows: rows.map((r) => {
       const a = (r['a'] ?? {}) as Record<string, unknown>;
@@ -242,6 +245,9 @@ async function customsTable(db: Db, ids: readonly string[] | undefined): Promise
         num(r['weight_g']),
         usd(r['declared_value_usd']),
         str(r['snapshot']),
+        r['weight_g'] === null || r['weight_g'] === undefined
+          ? null
+          : num(Number(r['weight_g']) * Number(r['qty'])),
       ];
     }),
   };

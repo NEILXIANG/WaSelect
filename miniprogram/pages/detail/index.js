@@ -234,7 +234,7 @@ Page({
     const inCart = this.inCartQty();
     const limit = addLimit({ stock: p.stock, inCart, qty });
     if (!limit.ok) {
-      this.setData(addFeedback({ added: false, reason: limit.reason, stock: limit.stock, inCart }));
+      this.setData(addFeedback({ ...limit, added: false, inCart }));
       return;
     }
     const result = app.globalData.cart.add({
