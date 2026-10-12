@@ -293,3 +293,20 @@ describe('「我的」订单卡片（全入口点击测试 2026-10-11）', () =>
     expect(badge).toContain('background: var(--ws-danger)');
   });
 });
+
+// 全入口点击测试 2026-10-11：客服微信 / 邮箱能点复制，但界面上没有任何"复制"字样；行距也比上面的菜单挤。
+// 改为：可复制的行右侧写「复制」（复制后「已复制」），号码本身不被替换
+describe('「我的」联系客服（全入口点击测试 2026-10-11）', () => {
+  const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8').replace(
+    /<!--[\s\S]*?-->/g,
+    '',
+  );
+  it('🔴 可复制的行有「复制」字样，复制后变「已复制」；号码照常显示', () => {
+    expect(wxml).toMatch(
+      /<text class="mine__support-act" wx:if="\{\{item\.copyable\}\}">\{\{supportCopied === item\.key \? '已复制' : '复制'\}\}<\/text>/,
+    );
+    expect(wxml).toMatch(
+      /<text class="mine__value mine__support-value" user-select>\{\{item\.value\}\}<\/text>/,
+    );
+  });
+});

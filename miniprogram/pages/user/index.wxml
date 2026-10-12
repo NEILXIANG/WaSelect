@@ -100,8 +100,9 @@
   <view class="ws-gutter mine__menu-wrap" wx:if="{{support.length > 0}}">
     <view class="ws-card mine__card">
       <text class="ws-note">联系客服</text>
+      <!-- 全入口点击测试 2026-10-11：可复制的行右侧写「复制」（原先能点却没有任何提示）；行高与上面的菜单一致 -->
       <view
-        class="mine__row"
+        class="mine__row mine__support-row"
         wx:for="{{support}}"
         wx:key="key"
         data-key="{{item.key}}"
@@ -110,7 +111,8 @@
         bindtap="onCopySupport"
       >
         <text class="ws-note">{{item.label}}</text>
-        <text class="mine__value" user-select>{{supportCopied === item.key ? '已复制' : item.value}}</text>
+        <text class="mine__value mine__support-value" user-select>{{item.value}}</text>
+        <text class="mine__support-act" wx:if="{{item.copyable}}">{{supportCopied === item.key ? '已复制' : '复制'}}</text>
       </view>
     </view>
   </view>

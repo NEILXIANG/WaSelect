@@ -139,3 +139,23 @@
   line-height: var(--ws-space-card);
   text-align: center;
 }
+
+/* 全入口点击测试 2026-10-11：联系客服各行——触控高度与菜单一致；值右对齐，可复制的行末尾「复制」 */
+.mine__support-row {
+  min-height: var(--ws-touch-min);
+  align-items: center;
+}
+
+.mine__support-value {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  word-break: break-all;
+}
+
+.mine__support-act {
+  flex: none;
+  margin-left: var(--ws-space-stack);
+  font-size: var(--ws-f-sm);
+  color: var(--ws-accent);
+}
