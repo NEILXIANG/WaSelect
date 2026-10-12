@@ -7,6 +7,7 @@
  * @why 名称不收网页代码（与商品文字同一条规则 HTML_TAG，AJ-490）：买家会原样看到。
  * @limitation 键建好后不能改（patch 里给了 key 就拒）：商品外键、Banner、埋点都存键。
  */
+import { SORT_MAX } from '@waselect/shared';
 import { HTML_TAG } from './product-input.js';
 
 export interface FieldError {
@@ -26,7 +27,7 @@ function nameErrors(raw: unknown, errors: FieldError[]): string | undefined {
 }
 
 function sortOk(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 9999;
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= SORT_MAX;
 }
 
 export function validateCategoryCreate(

@@ -11,6 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SORT_MAX } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import { BANNER_LINK_TYPES, parseBannerInput } from './banner-input.js';
 
@@ -103,6 +104,14 @@ describe('parseBannerInput', () => {
     expect(codeOf(() => parseBannerInput({ ...OK, sort: 1.5 }))).toBe(40001);
     expect(parseBannerInput(OK).sort).toBe(0);
     expect(parseBannerInput({ ...OK, sort: 0 }).sort).toBe(0);
+  });
+
+  // 两端输入测试 2026-10-12：排序填 99999999999 → 500「服务器内部错误」（banners.sort 是 INT，越界在库里才被拒）
+  it('🔴 sort 上界与分类排序同为 SORT_MAX（9999）：超出 → 40001，恰好等于放行', () => {
+    expect(SORT_MAX).toBe(9999);
+    expect(codeOf(() => parseBannerInput({ ...OK, sort: SORT_MAX + 1 }))).toBe(40001);
+    expect(codeOf(() => parseBannerInput({ ...OK, sort: 99_999_999_999 }))).toBe(40001);
+    expect(parseBannerInput({ ...OK, sort: SORT_MAX }).sort).toBe(SORT_MAX);
   });
 
   it('起止时间：非法 → 40001；只给一个合法；缺省 null', () => {

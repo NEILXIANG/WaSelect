@@ -23,6 +23,7 @@
  * @see contracts/api-contract.yaml（BannerInput / Banner）；
  *      admin-web/src/banners/view.ts（前端同一套规则）
  */
+import { SORT_MAX } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import { tryParseRfc3339Ms } from './time-input.js';
 import { optionalBool } from './bool-input.js';
@@ -100,7 +101,8 @@ export function parseBannerInput(body: unknown): BannerInputValue {
   }
 
   const sort = b['sort'] === undefined ? 0 : b['sort'];
-  if (!Number.isInteger(sort) || (sort as number) < 0) {
+  // 上界 SORT_MAX（两端输入测试 2026-10-12）：缺它时 99999999999 越过 banners.sort INT，库里 22003 → 500
+  if (!Number.isInteger(sort) || (sort as number) < 0 || (sort as number) > SORT_MAX) {
     throw new AppError(40001, { reason: 'sort_invalid' });
   }
 

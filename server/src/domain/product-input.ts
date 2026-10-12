@@ -33,6 +33,7 @@ import {
   BLOCKED_COMPLIANCE_TAG,
   COMPLIANCE_TAG,
   PRODUCT_MAX_CHARS,
+  PRODUCT_MAX_STOCK,
   PRODUCT_MAX_WEIGHT_G,
   isOneOf,
 } from '@waselect/shared';
@@ -310,10 +311,16 @@ export function validateProductInput(raw: unknown, maxPriceJpy: number): Product
 
   // ── 可选数值（填了就必须合法；不填用默认）───────────────────────────────
   // 库存省略 = 不改（见 ProductInput.stock 的 @why；⚠️ 曾经写 ProductInputValue——没有这个类型）
+  // 上界（两端输入测试 2026-10-12）：缺它时库存 99999999999 越过 products.stock INT、成本价 1e20 越过 BIGINT，
+  // 都在库里才被拒（22003，按设计归 500）——运营只看到"服务器内部错误"。
   const stock = b.stock === undefined ? undefined : intAtLeast(b.stock, 0);
   if (b.stock !== undefined && stock === undefined) fail('stock', 'stock_invalid');
+  else if (stock !== undefined && stock > PRODUCT_MAX_STOCK) fail('stock', 'stock_too_large');
   const cost = b.cost_jpy === undefined ? undefined : intAtLeast(b.cost_jpy, 0);
   if (b.cost_jpy !== undefined && cost === undefined) fail('cost_jpy', 'cost_invalid');
+  // 成本价借用售价的上界：一件货的进价比单笔订单上限还高，这件商品按任何售价都卖不出去——只能是多打了 0。
+  // @tradeoff 业务上界而不是 BIGINT 上界：后者（9.2e18）早已越过 2^53，JS 里连"等于上界"都表示不准。
+  else if (cost !== undefined && cost > maxPriceJpy) fail('cost_jpy', 'cost_too_large');
 
   // ── 合规标签：未登记 → 拒（拼错 = 拦截静默失效）；七个拦截标签 → 上架即拒 ──
   let tags: readonly string[] = [];

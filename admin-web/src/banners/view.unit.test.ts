@@ -134,6 +134,17 @@ describe('bannerFormErrors', () => {
     expect(bannerFormErrors({ ...valid(), sort: '1.5' }).errors['sort']).toBeTruthy();
   });
 
+  // 两端输入测试 2026-10-12：填 99999999999 前端放行、服务端 500
+  it('🔴 sort 超过 9999 → 拒，提示写明范围（与分类排序同口径）', () => {
+    expect(bannerFormErrors({ ...valid(), sort: '10000' }).errors['sort']).toBe(
+      '排序填 0–9999 的整数',
+    );
+    expect(bannerFormErrors({ ...valid(), sort: '99999999999' }).errors['sort']).toBe(
+      '排序填 0–9999 的整数',
+    );
+    expect(bannerFormErrors({ ...valid(), sort: '9999' }).errors['sort']).toBe(undefined);
+  });
+
   // 全入口点击测试 2026-10-12：空表单点保存，三处都写"图片必填（先上传，拿到 image_key）"——image_key 是字段名；
   // 跳转缺目标写"必须填目标 id"，可页面上是下拉框、运营从没见过 id；时间格式错写 YYYY-MM-DDTHH:mm
   it('🔴 所有提示都是人话：不出现字段名（image_key / link_id / snake_case）、"id"、格式串', () => {

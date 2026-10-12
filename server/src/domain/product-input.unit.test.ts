@@ -14,6 +14,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  PRODUCT_MAX_STOCK,
   PRODUCT_MAX_WEIGHT_G,
   PRODUCT_PACKAGING_HEADROOM_G,
   SHIPPING_RATE_BOUNDS,
@@ -194,6 +195,20 @@ describe('validateProductInput（管理端商品输入，I2）', () => {
   it('cost_jpy 负数 → 拒绝（未填允许：采购价可后补）', () => {
     expect(reasons({ ...base(), cost_jpy: -1 })).toContain('cost_invalid');
     expect(ok({ ...base(), cost_jpy: 2000 }).cost_jpy).toBe(2000);
+  });
+
+  // 两端输入测试 2026-10-12：库存填 99999999999、成本价填 1e20 → 服务端 500「服务器内部错误」
+  // （products.stock 是 INT、cost_jpy 是 BIGINT，越界在库里才被拒，22003 按设计归 500）
+  it('🔴 stock 超过 INT 上界 → stock_too_large；恰好等于上界放行', () => {
+    expect(reasons({ ...base(), stock: PRODUCT_MAX_STOCK + 1 })).toContain('stock_too_large');
+    expect(reasons({ ...base(), stock: 99_999_999_999 })).toContain('stock_too_large');
+    expect(ok({ ...base(), stock: PRODUCT_MAX_STOCK }).stock).toBe(PRODUCT_MAX_STOCK);
+  });
+
+  it('🔴 cost_jpy 超过单件售价上界 → cost_too_large；恰好等于上界放行', () => {
+    expect(reasons({ ...base(), cost_jpy: MAX_PRICE + 1 })).toContain('cost_too_large');
+    expect(reasons({ ...base(), cost_jpy: 1e20 })).toContain('cost_too_large');
+    expect(ok({ ...base(), cost_jpy: MAX_PRICE }).cost_jpy).toBe(MAX_PRICE);
   });
 
   // ── 枚举与产地 ──────────────────────────────────────────────────────────

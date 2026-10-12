@@ -249,6 +249,28 @@ describe('P2-51 数值不收科学计数法 / HS 编码形状 / 成本≥售价�
     );
   });
 
+  // 两端输入测试 2026-10-12：库存填 99999999999 前端放行、服务端 500
+  it('🔴 库存超过上限 → 拒，写明最多多少', () => {
+    const r = productFormErrors({ ...base(), stock: String(PRODUCT_MAX_STOCK + 1) });
+    expect(r.errors['stock']).toBe(`库存最多 ${PRODUCT_MAX_STOCK}`);
+    expect(productFormErrors({ ...base(), stock: String(PRODUCT_MAX_STOCK) }).errors['stock']).toBe(
+      undefined,
+    );
+  });
+
+  it('🔴 服务端 cost_too_large / stock_too_large → 落到对应输入框，成本价带上限', () => {
+    expect(
+      serverFieldError({ field: 'cost_jpy', reason: 'cost_too_large', count: 1, limit: 180000 }),
+    ).toEqual({
+      key: 'costJpy',
+      text: '成本价超过单笔订单上限（最多 180,000 日元）——请核对是不是多打了 0',
+      more: 0,
+    });
+    expect(serverFieldError({ field: 'stock', reason: 'stock_too_large', count: 1 })?.text).toBe(
+      `库存最多 ${PRODUCT_MAX_STOCK}`,
+    );
+  });
+
   it('成本 ≥ 售价只提醒不拦截', () => {
     const f = { ...base(), priceJpy: '1000', costJpy: '1000' };
     expect(productFormErrors(f).ok).toBe(true);

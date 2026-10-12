@@ -257,6 +257,15 @@ export const LOW_STOCK_THRESHOLD = 5;
  */
 export const PRODUCT_MAX_STOCK = 2_147_483_647;
 
+/**
+ * 运营手填"排序"的上限（分类、首页 Banner 同一个数）：0–9999。
+ * @why 两端输入测试 2026-10-12：Banner 排序只判"≥0 的整数"，填 99999999999 越过 `banners.sort INT`，
+ *      在库里才被拒（22003，按设计归 500）——运营看到"服务器内部错误"。分类排序早就是 0–9999，
+ *      Banner 统一到同一个数：两处页面写同一句提示，运营不用记两套规矩。
+ * @tradeoff 业务上界而不是 INT 上界：排序只比大小，四位数足够；上界小，手滑多打几个 0 也能拦下。
+ */
+export const SORT_MAX = 9999;
+
 export const SHIP_MAX_CHARS = {
   carrier: 32,
   tracking_no: 64,

@@ -341,6 +341,18 @@ describe('POST /admin/products（建商品）', () => {
     });
     const two = await post(body({ price_jpy: 999_999, customs_desc_en: 'sunscreen SPF50' }));
     expect((two['data'] as { count?: number }).count).toBe(2);
+    // 两端输入测试 2026-10-12：库存 / 成本价越过列的上界原先在库里才被拒 → 500「服务器内部错误」
+    expect((await post(body({ stock: 99_999_999_999 })))['data']).toEqual({
+      field: 'stock',
+      reason: 'stock_too_large',
+      count: 1,
+    });
+    expect((await post(body({ cost_jpy: 1e20 })))['data']).toEqual({
+      field: 'cost_jpy',
+      reason: 'cost_too_large',
+      count: 1,
+      limit: 180_000,
+    });
     await s.close();
   });
 });

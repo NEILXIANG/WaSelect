@@ -178,7 +178,10 @@ function rejectInvalid(
           reason: first.reason,
           count: errors.length,
           // 售价超限时带上上限：运营要知道"最多能填多少"（上限是服务端配置，前端不知道）
-          ...(first.reason === 'price_too_large' ? { limit: maxPriceJpy } : {}),
+          // 成本价借用同一上界（两端输入测试 2026-10-12），同样带上
+          ...(first.reason === 'price_too_large' || first.reason === 'cost_too_large'
+            ? { limit: maxPriceJpy }
+            : {}),
         },
   );
 }

@@ -34,6 +34,9 @@ import {
 import { moneyText } from '../format.js';
 
 /** 商品状态（契约 `AdminProduct.status` 枚举；0.6.46 / AJ-403 增 `draft`，单测与契约双向比对）。 */
+/** 库存超上限的提示（表单校验、列表内联改库存、服务端 stock_too_large 三处共用）。 */
+const STOCK_TOO_LARGE_TEXT = `库存最多 ${String(PRODUCT_MAX_STOCK)}`;
+
 export const PRODUCT_STATUS = ['active', 'offline', 'draft'] as const;
 export type ProductStatus = (typeof PRODUCT_STATUS)[number];
 
@@ -442,6 +445,8 @@ export function productFormErrors(form: unknown): {
   // 先判空（A-06）：`Number('') === 0`，清空库存框会被当成 0 提交，商品直接售罄
   if (f.stock.trim() === '') errors['stock'] = '库存必填（≥0 的整数；真的卖完了请填 0）';
   else if (plainInt(f.stock) === null) errors['stock'] = `库存必须是 ≥0 的整数${sciHint(f.stock)}`;
+  // 上界与服务端 stock_too_large 同源（两端输入测试 2026-10-12：99999999999 原先放行、服务端 500）
+  else if ((plainInt(f.stock) ?? 0) > PRODUCT_MAX_STOCK) errors['stock'] = STOCK_TOO_LARGE_TEXT;
 
   if (f.customsDescEn.trim() === '') errors['customsDescEn'] = '英文报关品名必填';
   // 剩余清单 1-4（AJ-368）：与服务端 validateProductInput 同口径——所有商品必填，纯空白算没填
@@ -689,7 +694,7 @@ export function parseStockEdit(
   if (raw.trim() === '') return { ok: false, error: '库存必填（真的卖完了请填 0）' };
   const n = plainInt(raw);
   if (n === null) return { ok: false, error: `库存必须是 ≥0 的整数${sciHint(raw)}` };
-  if (n > PRODUCT_MAX_STOCK) return { ok: false, error: `库存最多 ${PRODUCT_MAX_STOCK}` };
+  if (n > PRODUCT_MAX_STOCK) return { ok: false, error: STOCK_TOO_LARGE_TEXT };
   return { ok: true, value: n };
 }
 
@@ -722,6 +727,8 @@ const HTML_TEXT =
 /** 服务端原因码（server/src/domain/product-input.ts 的 fail(...)）→ 怎么改。认不出的走通用说法。 */
 const SERVER_REASONS: Readonly<Record<string, string>> = {
   price_too_large: '售价超过单笔订单上限，买家无法下单——请调低售价',
+  cost_too_large: '成本价超过单笔订单上限——请核对是不是多打了 0',
+  stock_too_large: STOCK_TOO_LARGE_TEXT,
   weight_too_large: `重量超过单件上限 ${String(PRODUCT_MAX_WEIGHT_G)} 克（已为包材留出余量）——请核对单位是不是克`,
   customs_desc_forbidden:
     '英文报关品名含禁用词（如 medicated / whitening / SPF / sunscreen / drug），请换一种说法',
@@ -751,10 +758,13 @@ export function serverFieldError(
     return null;
   const f = SERVER_FIELDS[d.field] ?? { key: d.field, label: d.field };
   // 售价超限带上上限（契约 0.6.73 `data.limit`）：运营要知道"最多能填多少"（用户截图指出）
+  const limit = typeof d.limit === 'number' && Number.isInteger(d.limit) ? d.limit : null;
   const text =
-    d.reason === 'price_too_large' && typeof d.limit === 'number' && Number.isInteger(d.limit)
-      ? `售价超过单笔订单上限（最多 ${moneyText(d.limit)}），买家无法下单——请调低售价`
-      : (SERVER_REASONS[d.reason] ?? `${f.label}填写不符合要求，请检查后再保存`);
+    d.reason === 'price_too_large' && limit !== null
+      ? `售价超过单笔订单上限（最多 ${moneyText(limit)}），买家无法下单——请调低售价`
+      : d.reason === 'cost_too_large' && limit !== null
+        ? `成本价超过单笔订单上限（最多 ${moneyText(limit)}）——请核对是不是多打了 0`
+        : (SERVER_REASONS[d.reason] ?? `${f.label}填写不符合要求，请检查后再保存`);
   const count = typeof d.count === 'number' && Number.isInteger(d.count) ? d.count : 1;
   return { key: f.key, text, more: Math.max(0, count - 1) };
 }

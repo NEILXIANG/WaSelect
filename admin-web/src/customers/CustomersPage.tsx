@@ -7,7 +7,7 @@
  * @see ./CustomerDetail.tsx；./view.ts；./api.ts
  */
 import { useCallback, useEffect, useState } from 'react';
-import { LIST_SORT_KEYS } from '@waselect/shared';
+import { LIST_SORT_KEYS, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { PageSizeSelect, readListParams, SortTh } from '../ui/list-controls.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { Badge } from '../ui/badge.js';
@@ -113,6 +113,7 @@ function CustomerList({
         <input
           className="input"
           name="customer-keyword"
+          maxLength={SEARCH_KEYWORD_MAX_LENGTH}
           placeholder="例：zhang.wei@example.com / 260901-K7Q2MN / Zhang Wei"
           value={input}
           onChange={(e) => setInput(e.target.value)}

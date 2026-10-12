@@ -4,6 +4,7 @@
  * @why 分类改为后台可配置后，商品表单 / 商品列表 / Banner 都从同一份列表取名称与选项（原先各自引 shared 的写死四类）。
  * @why 预检规则与服务端 domain/category-input.ts 同口径（键形状、名称 1–10 字、不收网页代码），先在本地报出来；服务端兜底。
  */
+import { SORT_MAX } from '@waselect/shared';
 import type { AdminCategory } from './api.js';
 
 const KEY = /^[a-z][a-z0-9_]{1,31}$/;
@@ -58,7 +59,7 @@ const REASONS: Readonly<Record<string, string>> = {
   name_required: '请填写分类名称',
   name_too_long: '分类名称最多 10 个字',
   html_not_allowed: '分类名称里不能有网页代码（如 <b>）',
-  sort_invalid: '排序填 0–9999 的整数',
+  sort_invalid: `排序填 0–${String(SORT_MAX)} 的整数`,
 };
 
 /** 服务端 40001 的 data → {字段, 人话}；重复单独说清是哪一项。null = 没有可用的 data。 */

@@ -16,6 +16,7 @@
  *
  * @see ../../../contracts/api-contract.yaml（BannerInput / Banner）；../format.ts
  */
+import { SORT_MAX } from '@waselect/shared';
 import { formatJst, toIsoJst } from '../format.js';
 
 /** 契约 `BannerInput.link_type` 枚举（单测与契约双向比对）。 */
@@ -176,7 +177,9 @@ export function bannerFormErrors(form: unknown): {
         : '选了跳转到商品，请在下拉里选一件商品（否则买家点了会跳到不存在的页面）';
   // 只认纯数字串：`Number('')` 是 0、`Number('1e2')` 是 100，都会静默改值（审查 2026-10-09 #6；商品页同口径）
   const sort = /^\d+$/.test(f.sort.trim()) ? Number(f.sort.trim()) : Number.NaN;
-  if (!Number.isInteger(sort) || sort < 0) errors['sort'] = '排序必须是 ≥0 的整数';
+  // 上界 SORT_MAX 与服务端、分类排序同源（两端输入测试 2026-10-12：填 99999999999 原先放行、服务端 500）
+  if (!Number.isInteger(sort) || sort < 0 || sort > SORT_MAX)
+    errors['sort'] = `排序填 0–${String(SORT_MAX)} 的整数`;
   if (f.startsAt !== '' && toIsoJst(f.startsAt) === '')
     errors['startsAt'] = '开始时间没填完整：日期和时刻都要选';
   if (f.endsAt !== '' && toIsoJst(f.endsAt) === '')

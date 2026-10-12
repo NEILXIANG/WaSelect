@@ -8,6 +8,7 @@
  * @why 详情里**不出现 openid**、订单行是可点的 `#/orders/:id` 链接（订单详情是真深链接，router.ts @limitation 一）。
  */
 import { createElement } from 'react';
+import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { button, click, mount, type, type Mounted } from '../testing/dom.js';
 import { CustomersPage } from './CustomersPage.js';
@@ -175,6 +176,10 @@ describe('客户列表', () => {
     expect(text).toContain('21,380 日元');
     expect(el.textContent).toContain('第 2 / 3 页 · 共 41 位');
     // 搜索框回显地址栏里的关键字（刷新后不丢）
+    // 两端输入测试 2026-10-12：没有上限时贴一长串再搜，服务端拒成"参数缺失或格式错误"+技术编号（订单 / 商品搜索早有上限）
+    expect((el.querySelector('input[name="customer-keyword"]') as HTMLInputElement).maxLength).toBe(
+      SEARCH_KEYWORD_MAX_LENGTH,
+    );
     expect((el.querySelector('input[name="customer-keyword"]') as HTMLInputElement).value).toBe(
       'zhang',
     );

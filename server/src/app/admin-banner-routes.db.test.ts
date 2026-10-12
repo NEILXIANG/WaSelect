@@ -230,6 +230,7 @@ describe('POST /admin/banners', () => {
         { ...INPUT, link_type: 'url' },
         { image_key: 'x', link_type: 'product' }, // 缺 link_id
         { ...INPUT, sort: -1 },
+        { ...INPUT, sort: 99_999_999_999 }, // 两端输入测试 2026-10-12：原先 INT 越界 → 500
         {
           ...INPUT,
           starts_at: '2026-10-02T00:00:00Z',
