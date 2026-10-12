@@ -96,6 +96,11 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
   const confirming = confirmKey === formKey;
   const ack = ackKey === formKey;
   const step = fxSaveStep({ form, currentRate, confirmKey, ackKey });
+  /**
+   * 填写错误标在按钮旁（规律排查 2026-10-12：原先只进右下角浮层）；按表单键记，改了任何一格就自动消失。
+   */
+  const [invalid, setInvalid] = useState<{ key: string; message: string } | null>(null);
+  const invalidText = invalid !== null && invalid.key === formKey ? invalid.message : '';
 
   const save = async (): Promise<void> => {
     sink.error('');
@@ -127,7 +132,7 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
   const attempt = (): void => {
     if (saving) return; // 连点保护（ADM3-04）：按钮的 disabled 之外再兜一次
     if (step.kind === 'invalid') {
-      sink.error(step.message);
+      setInvalid({ key: formKey, message: step.message });
       return;
     }
     if (step.kind === 'confirm') {
@@ -254,6 +259,11 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
           <button type="button" className="btn" onClick={attempt}>
             保存汇率
           </button>
+        )}
+        {invalidText !== '' && (
+          <p className="error" role="alert">
+            {invalidText}
+          </p>
         )}
       </div>
 

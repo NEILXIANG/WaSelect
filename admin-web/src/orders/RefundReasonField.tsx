@@ -13,11 +13,14 @@ export function RefundReasonField({
   value,
   onChange,
   noteName,
+  error = '',
 }: {
   value: RefundReasonInput;
   onChange: (next: RefundReasonInput) => void;
   /** 补充说明输入框的 name（测试与表单定位用）。 */
   noteName?: string;
+  /** 非空 = 标在原因框下的提示（规律排查 2026-10-12：原先全额退款的提示只进浮层）。 */
+  error?: string;
 }) {
   return (
     <>
@@ -38,6 +41,11 @@ export function RefundReasonField({
           ))}
         </select>
       </label>
+      {error !== '' && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
       {value.preset === OUT_OF_STOCK_REFUND_PRESET && (
         <p className="muted">
           选「缺货」不会把库存加回去（货本来就没有）；若之后补到货，请到「商品管理」改库存。

@@ -174,8 +174,8 @@ describe('汇率面板：保存前核对（A8 残留 / AJ-229）', () => {
     await click(button(el, '保存汇率'));
     expect(posts()).toHaveLength(0);
     expect(confirmButton(el)).toBeNull();
-    // 审查 2026-10-09：页面级反馈统一走 Toast（只换选择器，断言强度不变）
-    expect(el.querySelector('.toast[data-kind="error"]')).not.toBeNull();
+    // 规律排查 2026-10-12：填写错误改为标在按钮旁（原先走浮层；只换选择器，断言强度不变）
+    expect(el.querySelector('section [role="alert"]')?.textContent ?? '').not.toBe('');
   });
 });
 
@@ -309,5 +309,18 @@ describe('汇率面板：重复 key 与重复提交（ADM3-04）', () => {
     // ⚠️ 放行的那次状态更新也要包在 act 里（否则 React 会告警"update not wrapped in act"）
     release?.();
     await flush();
+  });
+});
+
+// 规律排查 2026-10-12：汇率没填 / 填错就点「保存汇率」——提示只进浮层，输入框旁边什么都没有
+describe('汇率面板：填写错误就近说', () => {
+  it('🔴 原始汇率空着点保存 → 按钮旁出提示；改了输入提示消失', async () => {
+    const el = await open();
+    await click(button(el, '保存汇率'));
+    const alert = el.querySelector('section [role="alert"]');
+    expect(alert?.textContent ?? '').not.toBe('');
+    expect(posts()).toHaveLength(0);
+    await type(rateInput(el), '0.0068');
+    expect(el.querySelector('section [role="alert"]')).toBeNull();
   });
 });

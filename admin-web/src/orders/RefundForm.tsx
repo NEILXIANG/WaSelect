@@ -63,13 +63,15 @@ export function RefundForm({
   // 退款中的单重试：沿用第一次的原因（服务端也只认它；两端逐页走查第三轮 2026-10-12）
   const retryReason =
     (order as { status?: unknown }).status === 'refunding' ? firstRefundReason(order) : null;
+  /** 原因没填好时标在原因框下（规律排查 2026-10-12：原先只进右下角浮层）。 */
+  const [reasonError, setReasonError] = useState('');
   const reasonCheck = (): ReturnType<typeof checkReason> =>
     retryReason !== null ? { ok: true, first: '', reason: retryReason } : checkReason(refund);
 
   const doRefund = async (): Promise<void> => {
     const check = reasonCheck();
     if (!check.ok) {
-      sink.error(check.first);
+      setReasonError(check.first);
       setDialog(null);
       return;
     }
@@ -117,7 +119,7 @@ export function RefundForm({
   const ask = (): void => {
     const check = reasonCheck();
     if (!check.ok) {
-      sink.error(check.first);
+      setReasonError(check.first);
       return;
     }
     setDialog({
@@ -137,7 +139,14 @@ export function RefundForm({
       {retryReason !== null ? (
         <p className="muted">沿用第一次的退款原因：{retryReason}</p>
       ) : (
-        <RefundReasonField value={refund} onChange={setRefund} />
+        <RefundReasonField
+          value={refund}
+          onChange={(next) => {
+            setRefund(next);
+            setReasonError('');
+          }}
+          error={reasonError}
+        />
       )}
       <button
         type="button"

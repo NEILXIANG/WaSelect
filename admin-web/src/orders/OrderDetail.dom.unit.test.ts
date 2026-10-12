@@ -187,7 +187,8 @@ describe('订单详情：人工解除拒付限制（AJ-291）', () => {
     await click(button(el, RELEASE_BTN));
     expect(button(el, '确认解除（不可撤销）')).toBeNull();
     expect(calls.filter((c) => c.path.endsWith('/dispute/release'))).toHaveLength(0);
-    expect(errorToastText(el)).toContain('解除理由必填');
+    // 规律排查 2026-10-12 起提示标在理由框下（原先进右下角浮层）
+    expect(el.querySelector('.drawer [role="alert"]')?.textContent).toContain('解除理由必填');
   });
 
   it('🔴 成功 → 刷新详情与列表，并明说"拒付没有结案"（否则运营会以为处理完就发货）', async () => {
@@ -947,5 +948,40 @@ describe('订单详情：新手可用性（AJ-410）', () => {
         (el.querySelector('input[aria-label="承运商名称"]') as HTMLInputElement | null)?.value,
       ).toBe('Yamato');
     });
+  });
+});
+
+// 规律排查 2026-10-12：全额退款没选原因就点「退款」——提示只进右下角浮层，下拉框旁边什么都没有（部分退款早已就近提示）
+describe('全额退款：没选原因的提示就近', () => {
+  it('🔴 原因框下出提示、不弹浮层；选了原因提示消失', async () => {
+    status = 'paid';
+    hasDispute = false;
+    extra = { payments: [{ status: 'succeeded', charge_currency: 'JPY', charge_amount: 9150 }] };
+    const el = await open();
+    await click(button(el, '全额退款…'));
+    await click(button(el, '退款'));
+    const drawer = el.querySelector('.drawer');
+    expect(drawer?.querySelector('.error')?.textContent).toBe('请选择退款原因');
+    expect(el.querySelector('.toast-stack')?.textContent ?? '').not.toContain('请选择退款原因');
+    await type(el.querySelector('select[aria-label="退款原因"]'), '破损');
+    expect(drawer?.querySelector('.error')).toBeNull();
+  });
+});
+
+// 规律排查 2026-10-12：解除拒付限制没填理由——提示只进浮层；败诉的单说明仍写"买家正在通过银行要回货款"
+describe('解除拒付限制：提示就近、说明分清进行中 / 已败诉', () => {
+  it('🔴 没填理由 → 框下提示；已败诉的单说明写已败诉', async () => {
+    status = 'shipped';
+    hasDispute = true;
+    extra = { payment_dispute: 'lost' };
+    const el = await open();
+    await click(button(el, '解除拒付限制…'));
+    const drawer = el.querySelector('.drawer');
+    expect(drawer?.textContent).toContain('拒付已败诉');
+    expect(drawer?.textContent).not.toContain('正在通过银行要回货款');
+    await click(button(el, '人工解除拒付限制'));
+    expect(drawer?.querySelector('[role="alert"]')?.textContent).toContain('解除理由必填');
+    await type(el.querySelector('input[name="release-reason"]'), '败诉单另作处置');
+    expect(drawer?.querySelector('[role="alert"]')).toBeNull();
   });
 });

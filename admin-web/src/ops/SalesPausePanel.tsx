@@ -60,10 +60,14 @@ export function SalesPausePanel({
     setTarget(next);
   };
 
+  /** 取状态失败（规律排查 2026-10-12：原先一直写"加载中…"、按钮永远灰着，紧急停售时开关用不了也不知道为什么）。 */
+  const [loadFailed, setLoadFailed] = useState(false);
   const load = useCallback(async () => {
     try {
       setState((await api({ path: '/api/v1/admin/ops/sales-pause', method: 'GET' })) as State);
+      setLoadFailed(false);
     } catch (e) {
+      setLoadFailed(true);
       const { text, traceId } = toastError(e, '停售状态加载失败');
       sink.error(text, { traceId });
     }
@@ -117,7 +121,14 @@ export function SalesPausePanel({
       <header className="panel-head">
         <h1 className="title">全局停售</h1>
       </header>
-      {state === null ? (
+      {state === null && loadFailed ? (
+        <p className="error">
+          停售状态没加载出来，暂时不能切换。{' '}
+          <button type="button" className="link" onClick={() => void load()}>
+            重新加载
+          </button>
+        </p>
+      ) : state === null ? (
         <p className="muted">加载中…</p>
       ) : paused ? (
         <p className="error">

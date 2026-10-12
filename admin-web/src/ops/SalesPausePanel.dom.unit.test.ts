@@ -77,3 +77,23 @@ describe('SalesPausePanel', () => {
     expect(button(el, '恢复接单')?.className).toBe('btn btn-fit');
   });
 });
+
+// 规律排查 2026-10-12：取停售状态失败时页面一直写"加载中…"、按钮永远灰着，只在角落闪一下浮层——
+//   紧急停售那一刻开关用不了，也不知道为什么、怎么办
+describe('SalesPausePanel：状态没取到', () => {
+  it('🔴 说清没加载出来、给「重新加载」；重取成功后按钮可用', async () => {
+    let fail = true;
+    const api = async (): Promise<unknown> => {
+      if (fail) throw new Error('network down');
+      return { paused: false, updated_at: '2026-10-06T03:00:00Z' };
+    };
+    mounted = await mount(createElement(SalesPausePanel, { api: api as never }));
+    const el = mounted.el;
+    expect(el.textContent).not.toContain('加载中…');
+    expect(el.textContent).toContain('停售状态没加载出来');
+    fail = false;
+    await click(button(el, '重新加载'));
+    expect(el.textContent).toContain('正常接单');
+    expect(button(el, '暂停接单')?.disabled).toBe(false);
+  });
+});

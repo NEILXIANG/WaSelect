@@ -16,11 +16,18 @@ import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { toastError } from '../ui/toast.js';
 import { releaseDisputeHold } from './api.js';
 import type { OrderActionFormProps } from './ShipForm.js';
-import { emptyReleaseForm, RELEASE_DONE_NOTICE, releaseErrors, toReleaseBody } from './view.js';
+import {
+  disputeLockState,
+  emptyReleaseForm,
+  RELEASE_DONE_NOTICE,
+  releaseErrors,
+  toReleaseBody,
+} from './view.js';
 
 export function ReleaseForm({
   api,
   id,
+  order,
   sink,
   reload,
   onChanged,
@@ -30,6 +37,8 @@ export function ReleaseForm({
   const [release, setRelease] = useState(emptyReleaseForm);
   useFormDirty(release, emptyReleaseForm());
   const [dialog, setDialog] = useState<ConfirmSpec | null>(null);
+  /** 理由没填好时标在框下（规律排查 2026-10-12：原先只进右下角浮层）。 */
+  const [reasonError, setReasonError] = useState('');
   const [busy, setBusyState] = useState(false);
   const setBusy = (b: boolean): void => {
     setBusyState(b);
@@ -39,7 +48,7 @@ export function ReleaseForm({
   const doRelease = async (): Promise<void> => {
     const check = releaseErrors(release);
     if (!check.ok) {
-      sink.error(check.first);
+      setReasonError(check.first);
       setDialog(null);
       return;
     }
@@ -65,7 +74,7 @@ export function ReleaseForm({
   const ask = (): void => {
     const check = releaseErrors(release);
     if (!check.ok) {
-      sink.error(check.first);
+      setReasonError(check.first);
       return;
     }
     setDialog({
@@ -80,7 +89,10 @@ export function ReleaseForm({
     <div className="form" onKeyDown={enterClicksPrimary}>
       <p className="error">
         ⚠️
-        这张订单的买家正在通过银行要回货款（拒付）：现在退款和发货都被系统锁住了（防止钱和货都没了）。
+        {/* 分清进行中 / 已败诉（规律排查 2026-10-12：has_dispute 两者都是 true，原先一律写"正在要回货款"） */}
+        {disputeLockState(order) === 'lost'
+          ? '这张订单的拒付已败诉（货款已被银行退回买家）：退款和发货都被系统锁住了。'
+          : '这张订单的买家正在通过银行要回货款（拒付）：现在退款和发货都被系统锁住了（防止钱和货都没了）。'}
         若拒付链已断——机构漏发结案事件、或已与买家协商和好、或败诉单另作处置——
         可在这里人工解除限制。
       </p>
@@ -94,8 +106,16 @@ export function ReleaseForm({
           // 硬上限来自 shared（与服务端同一个常量，AJ-291）
           maxLength={ADMIN_NOTE_MAX_LENGTH}
           value={release.reason}
-          onChange={(e) => setRelease({ reason: e.target.value })}
+          onChange={(e) => {
+            setRelease({ reason: e.target.value });
+            setReasonError('');
+          }}
         />
+        {reasonError !== '' && (
+          <span className="error" role="alert">
+            {reasonError}
+          </span>
+        )}
       </label>
       <button
         type="button"
