@@ -14,6 +14,7 @@ import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { signToken } from './auth.js';
+import { seedCreatedOrder } from '../../../test/helpers/seed-order.js';
 
 let db: Db;
 let sink: MemorySink;
@@ -178,6 +179,36 @@ describe('GET /api/v1/admin/audit（3-2）', () => {
       expect(
         (byEmail.body as { items: Array<{ actor: string }> }).items.map((i) => i.actor),
       ).toEqual(['admin:u-admin']);
+    } finally {
+      await close();
+    }
+  });
+
+  // AJ-499：对象列原只有内部 id（ord-… / 商品 uuid），运营认不出是哪张单、哪件商品——带出订单号 / 商品名
+  it('🔴 对象是订单 → target_label 为订单号；是商品 → 商品名；认不出（图片键、分类键）→ 不带', async () => {
+    const tk = await bearer();
+    await db`insert into users (id, openid) values ('u-buyer', 'o-buyer') on conflict do nothing`;
+    await seedCreatedOrder(db, 'ord-label-1', { userId: 'u-buyer' });
+    await db`insert into products (id, title, category, price_jpy, weight_g, origin_country, status)
+             values ('7f3c2a10-4b5e-4c6d-8e9f-0a1b2c3d4e5f', '南部铁器 铁壶 0.6L', 'kitchen', 16500, 1350, 'JP', 'active')`;
+    for (const [i, action, target] of [
+      [1, 'POST /admin/orders/:id/ship', 'ord-label-1'],
+      [2, 'PUT /admin/products/:id', '7f3c2a10-4b5e-4c6d-8e9f-0a1b2c3d4e5f'],
+      [3, 'POST /admin/upload', 'img/abc'],
+    ] as const) {
+      await db`insert into admin_audit (actor, action, target, status_code, created_at)
+               values ('admin:u-admin', ${action}, ${target}, 200, ${`2026-10-0${String(i)}T00:00:00Z`})`;
+    }
+    const { url, close } = await buildServer();
+    try {
+      const r = await call(url, 'GET', '/api/v1/admin/audit', undefined, tk);
+      const items = (r.body as { items: Array<{ target?: string; target_label?: string }> }).items;
+      const label = (t: string) => items.find((i) => i.target === t);
+      expect(label('ord-label-1')?.target_label).toBe('W-ord-label-1');
+      expect(label('7f3c2a10-4b5e-4c6d-8e9f-0a1b2c3d4e5f')?.target_label).toBe(
+        '南部铁器 铁壶 0.6L',
+      );
+      expect(label('img/abc')).not.toHaveProperty('target_label');
     } finally {
       await close();
     }

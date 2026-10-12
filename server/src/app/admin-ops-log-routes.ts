@@ -70,6 +70,8 @@ export function mountAdminOpsLogRoutes(app: Express, deps: AdminOpsLogRoutesDeps
             ...(i.actorEmail !== null ? { actor_email: i.actorEmail } : {}),
             action: i.action,
             ...(i.target !== null ? { target: i.target } : {}),
+            // AJ-499：订单号 / 商品名（认不出不带）
+            ...(i.targetLabel !== null ? { target_label: i.targetLabel } : {}),
             ...(i.statusCode !== null ? { status_code: i.statusCode } : {}),
             ...(i.traceId !== null ? { trace_id: i.traceId } : {}),
             created_at: i.createdAt.toISOString(),

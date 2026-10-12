@@ -75,6 +75,35 @@ describe('auditRows', () => {
     expect(row('POST /admin/orders/ship-batch', 'batch:3/4')).toBe('成功 3 / 共 4 单');
   });
 
+  it('🔴 服务端给了 target_label（订单号 / 商品名，AJ-499）→ 对象列写它，链接与悬停仍用内部 id', () => {
+    const [o, p] = auditRows([
+      {
+        id: 1,
+        actor: 'a',
+        action: 'POST /admin/orders/:id/ship',
+        target: 'ord-0f3508cf-69ac-4599-a99d-62ae4cdf8058',
+        target_label: '261012-EPT8V3',
+        status_code: 200,
+        created_at: '',
+      },
+      {
+        id: 2,
+        actor: 'a',
+        action: 'PUT /admin/products/:id',
+        target: '7f3c2a10-4b5e-4c6d-8e9f-0a1b2c3d4e5f',
+        target_label: '南部铁器 铁壶 0.6L',
+        status_code: 200,
+        created_at: '',
+      },
+    ]);
+    expect(o).toMatchObject({
+      targetText: '261012-EPT8V3',
+      targetHref: '#/orders/ord-0f3508cf-69ac-4599-a99d-62ae4cdf8058',
+      targetTitle: 'ord-0f3508cf-69ac-4599-a99d-62ae4cdf8058',
+    });
+    expect(p?.targetText).toBe('南部铁器 铁壶 0.6L');
+  });
+
   it('形状不对的元素（非对象）被跳过，不渲染成一行 undefined', () => {
     expect(auditRows([null, 'x', { id: 1, actor: 'a', action: 'b', created_at: '' }])).toHaveLength(
       1,

@@ -801,14 +801,11 @@ describe('后台各列表页过一遍「看得懂」（用旅程攒下的真实�
     const audit = auditRows((await listAudit(admin(), { page: 1, actor: '', target: '' })).items);
     expect(orders.length).toBeGreaterThanOrEqual(6);
     expect(audit.length).toBeGreaterThan(5);
-    // @limitation 运营日志"对象"列的订单 / 商品仍是缩短的内部编号（换成订单号要服务端回带，记为未做）——
-    //   单列出来断言现状：哪天修了，这里会红，提醒把这条豁免删掉
     // targetTitle 是悬停时给技术人员复制的全文 id（刻意保留），不是正文
-    const auditShown = audit.map(({ targetText, targetTitle: _hover, ...rest }) => ({
-      ...rest,
-      targetText: /^(ord-|[0-9a-f]{8}…)/.test(targetText) ? '（内部编号，已知未做）' : targetText,
-    }));
-    expect(audit.some((a) => /^ord-/.test(a.targetText))).toBe(true);
+    const auditShown = audit.map(({ targetTitle: _hover, ...rest }) => rest);
+    // AJ-499 起对象列写订单号 / 商品名（原先这里是"已知未做"的豁免，修好后按原设计红了一次、删掉豁免）
+    expect(audit.some((a) => /^(ord-|[0-9a-f]{8}…)/.test(a.targetText))).toBe(false);
+    expect(audit.map((a) => a.targetText)).toContain(DP.orderNo);
     show('客户详情（看得懂）', customer);
     expectReadable({ orders, products, customers, customer, disputes, audit: auditShown });
     expect(customer.title).toBe('Jing Chen');

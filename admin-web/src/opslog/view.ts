@@ -126,7 +126,8 @@ const EXPORT_KIND_LABELS: Readonly<Record<string, string>> = {
 
 /**
  * 对象列（全入口点击测试 2026-10-12：原写 purchase、health、img/…、batch:1/1）。
- * @limitation 订单 / 商品 / 客户仍是缩短的内部编号（订单与客户可点进详情）：换成订单号 / 商品名要服务端回带，未做。
+ * 订单 / 商品优先用服务端回带的 `target_label`（订单号 / 商品名，AJ-499）；这里只管服务端认不出的那些。
+ * @limitation 客户仍是缩短的内部编号（可点进客户详情）。
  */
 function targetLabel(
   action: string,
@@ -162,10 +163,13 @@ export function auditRows(
             : String(i['actor'] ?? ''),
         action: ACTION_LABELS[String(i['action'] ?? '')] ?? String(i['action'] ?? ''),
         actionRaw: String(i['action'] ?? ''),
+        // AJ-499：服务端给了订单号 / 商品名就用它；否则按动作猜（导出表名、分类名、图片…），再不行缩短 id
         targetText:
-          typeof i['target'] === 'string' && i['target'] !== ''
-            ? targetLabel(String(i['action'] ?? ''), i['target'], categoryNames)
-            : '—',
+          typeof i['target_label'] === 'string' && i['target_label'] !== ''
+            ? i['target_label']
+            : typeof i['target'] === 'string' && i['target'] !== ''
+              ? targetLabel(String(i['action'] ?? ''), i['target'], categoryNames)
+              : '—',
         targetTitle: typeof i['target'] === 'string' ? i['target'] : '',
         targetHref: ((): string => {
           const target = typeof i['target'] === 'string' ? i['target'] : '';

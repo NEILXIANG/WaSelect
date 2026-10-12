@@ -29,6 +29,12 @@ export interface AuditRow {
   actorEmail: string | null;
   action: string;
   target: string | null;
+  /**
+   * 对象的人话名（AJ-499）：订单 → 订单号，商品 → 商品名；认不出（图片键、分类键、批量发货摘要……）为 null。
+   * @why 运营日志"对象"列原只有内部 id（ord-… / 商品 uuid），运营认不出是哪张单、哪件商品（全入口点击测试 2026-10-12）。
+   * @limitation 按 target 与 orders.id / products.id 主键相等关联：对象被删了（商品物理删除）就回落为 null，前端照旧显示缩短 id。
+   */
+  targetLabel: string | null;
   statusCode: number | null;
   traceId: string | null;
   createdAt: Date;
@@ -58,9 +64,12 @@ export async function listAdminAudit(
       and (${q.createdFrom === undefined ? db`true` : db`a.created_at >= ${q.createdFrom}`})
       and (${q.createdTo === undefined ? db`true` : db`a.created_at < ${q.createdTo}`})`;
   const rows = await db`
-    select a.id, a.actor, a.action, a.target, a.status_code, a.trace_id, a.created_at, u.email as actor_email
+    select a.id, a.actor, a.action, a.target, a.status_code, a.trace_id, a.created_at, u.email as actor_email,
+           coalesce(o.order_no, p.title) as target_label
       from admin_audit a
       left join users u on a.actor = 'admin:' || u.id
+      left join orders o on o.id = a.target
+      left join products p on p.id = a.target
       ${where}
      order by a.created_at desc, a.id desc
      limit ${q.size} offset ${(q.page - 1) * q.size}`;
@@ -73,6 +82,7 @@ export async function listAdminAudit(
       actorEmail: typeof r['actor_email'] === 'string' ? r['actor_email'] : null,
       action: String(r['action']),
       target: r['target'] === null ? null : String(r['target']),
+      targetLabel: typeof r['target_label'] === 'string' ? r['target_label'] : null,
       statusCode: r['status_code'] === null ? null : Number(r['status_code']),
       traceId: r['trace_id'] === null ? null : String(r['trace_id']),
       createdAt: r['created_at'] as Date,
