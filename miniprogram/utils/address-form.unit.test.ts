@@ -178,13 +178,14 @@ describe('toAddressInput（请求体）', () => {
 
 describe('addressSummary（摘要行）', () => {
   // 三端模拟测试 2026-10-11：地址列表 / 结算 / 订单详情显示 "+16175550123"，一串数字不好读；美国习惯 (617) 555-0123
-  it('🔴 region = 城市, 州, 邮编；电话按美国习惯分段显示（提交给服务端的仍是 E.164，见 toAddressInput）', () => {
+  // 美国写法「城市, 州 邮编」——州与邮编之间是空格不是逗号（测试缺口复盘 2026-10-12：原断言把 "San Francisco, CA, 94102" 锁成了对的）
+  it('🔴 region = 城市, 州 邮编（美国写法）；电话按美国习惯分段显示（提交给服务端的仍是 E.164，见 toAddressInput）', () => {
     expect(addressSummary(ADDR)).toEqual({
       recipient: 'Ken Tanaka',
       phone: '+1 (415) 555-0123',
       line1: '1234 Market St',
       line2: 'Apt 5B',
-      region: 'San Francisco, CA, 94102-1234',
+      region: 'San Francisco, CA 94102-1234',
     });
   });
 
@@ -194,9 +195,14 @@ describe('addressSummary（摘要行）', () => {
 
   it('⚠️ 缺 city / 空 line2 → 不出现双逗号', () => {
     const s = addressSummary({ ...ADDR, city: '', line2: '' });
-    expect(s.region).toBe('CA, 94102-1234');
+    expect(s.region).toBe('CA 94102-1234');
     expect(s.region).not.toContain(', ,');
     expect(s.region).not.toMatch(/,{2}/);
+  });
+
+  it('缺州 → 城市, 邮编；只有城市 → 城市（不留悬空逗号）', () => {
+    expect(addressSummary({ ...ADDR, state: '' }).region).toBe('San Francisco, 94102-1234');
+    expect(addressSummary({ ...ADDR, state: '', postal_code: '' }).region).toBe('San Francisco');
   });
 
   it('脏输入：null → 全空串，不抛', () => {

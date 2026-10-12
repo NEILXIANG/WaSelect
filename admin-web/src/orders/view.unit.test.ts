@@ -161,7 +161,8 @@ describe('eventStatusText（事件流：订单状态 + 管理事件伪状态）'
   // 读成"支付机构待发货"。改为事件词（覆盖十态，单测比对），与小程序时间线同一思路
   it('🔴 订单状态值 → 事件词（不是状态词；created 而不是 created 原样）', () => {
     expect(eventStatusText('created')).toBe('下单（等待买家付款）');
-    expect(eventStatusText('pending_payment')).toBe('买家发起付款');
+    // 后面紧跟「· 买家」（操作人），事件词里再写「买家」就重复了（业务旅程测试 2026-10-12 读出）
+    expect(eventStatusText('pending_payment')).toBe('发起付款');
     expect(eventStatusText('paid')).toBe('付款成功（待发货）');
     expect(eventStatusText('shipped')).toBe('已发货');
     expect(eventStatusText('refunding')).toBe('开始退款');

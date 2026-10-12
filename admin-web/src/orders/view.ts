@@ -75,7 +75,7 @@ export { ORDER_STATUS_LABELS };
  */
 export const ORDER_EVENT_LABELS: Readonly<Record<OrderStatus, string>> = {
   created: '下单（等待买家付款）',
-  pending_payment: '买家发起付款',
+  pending_payment: '发起付款', // 不写"买家"：后面紧跟操作人「· 买家」（业务旅程测试 2026-10-12）
   paid: '付款成功（待发货）',
   shipped: '已发货',
   delivered: '已签收',

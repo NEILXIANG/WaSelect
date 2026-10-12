@@ -285,6 +285,7 @@ export function toAddressInput(model) {
  * @returns {{recipient: string, phone: string, line1: string, line2: string, region: string}}
  * @why 摘要在**这里**拼而不是 wxml 里拼字符串：WXML 里做字符串拼接与空值判断
  *      会产出"San Francisco, , CA"这种双逗号，而它在真机上的样子就是"地址显示错了"。
+ * @why region 按美国写法「San Francisco, CA 94133」：买家在美国，信封、网购表单都是这么写的。
  */
 /**
  * E.164 美国号 → 美国习惯写法 `+1 (617) 555-0123`（只用于显示；提交给服务端的仍是 E.164）。
@@ -299,7 +300,9 @@ function displayUsPhone(v) {
 export function addressSummary(addr) {
   const a = addr && typeof addr === 'object' ? addr : {};
   const text = (v) => (typeof v === 'string' ? v.trim() : '');
-  const region = [text(a.city), text(a.state), text(a.postal_code)].filter((s) => s !== '');
+  // 美国写法「城市, 州 邮编」（USPS 惯例：州与邮编之间是空格）；原写成三段逗号 "San Francisco, CA, 94133"（测试缺口复盘 2026-10-12）
+  const stateZip = [text(a.state), text(a.postal_code)].filter((s) => s !== '').join(' ');
+  const region = [text(a.city), stateZip].filter((s) => s !== '');
   return {
     recipient: text(a.recipient),
     phone: displayUsPhone(text(a.phone)),

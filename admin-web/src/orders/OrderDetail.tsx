@@ -23,7 +23,7 @@ import { formatJst, moneyText } from '../format.js';
 import { OrderActions } from './OrderActions.js';
 import { OrderItems } from './OrderItems.js';
 import { OrderTimeline } from './OrderTimeline.js';
-import { useChannelLabels } from './channel-labels.js';
+import { useChannelLabels } from './use-channel-labels.js';
 import { OrderCustomerCard } from './OrderCustomerCard.js';
 import { AfterSales } from './AfterSales.js';
 import { Badge } from '../ui/badge.js';

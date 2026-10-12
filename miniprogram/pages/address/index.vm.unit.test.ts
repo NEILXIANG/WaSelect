@@ -44,7 +44,7 @@ describe('addressRows（列表行）', () => {
       phone: '+1 (415) 555-0123',
       line1: '1234 Market St',
       line2: '',
-      region: 'San Francisco, CA, 94102',
+      region: 'San Francisco, CA 94102',
       isDefault: true,
       defaultText: '默认',
     });
@@ -68,7 +68,7 @@ describe('addressRows（列表行）', () => {
 
   it('⚠️ 缺 city 的条目仍能渲染，region 里不出现双逗号', () => {
     const row = addressRows([{ ...LIST[0], city: '' }])[0];
-    expect(row?.region).toBe('CA, 94102');
+    expect(row?.region).toBe('CA 94102');
     expect(row?.region).not.toMatch(/,{2}/);
   });
 });
