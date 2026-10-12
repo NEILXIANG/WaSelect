@@ -194,21 +194,64 @@ describe('Banner：切换编辑对象前拦未保存改动（审查 2026-10-09 #
     const el = mounted.el;
     const edits = () => [...el.querySelectorAll('button')].filter((b) => b.textContent === '编辑');
     await click(edits()[0]);
-    expect(el.textContent).toContain('编辑 Banner（b-A）');
+    expect(el.textContent).toContain('编辑第 1 条 Banner');
     await type(el.querySelector('input[inputmode="numeric"]'), '7');
     await click(edits()[1]);
     expect(el.textContent).toContain('离开这一页会丢掉未保存的修改');
-    expect(el.textContent).toContain('编辑 Banner（b-A）');
+    expect(el.textContent).toContain('编辑第 1 条 Banner');
     await click(button(el, '取消'));
-    expect(el.textContent).toContain('编辑 Banner（b-A）');
+    expect(el.textContent).toContain('编辑第 1 条 Banner');
     await click(edits()[1]);
     await click(button(el, '放弃修改并离开'));
-    expect(el.textContent).toContain('编辑 Banner（b-B）');
+    expect(el.textContent).toContain('编辑第 2 条 Banner');
     // 干净状态下切换不弹
     await click(edits()[0]);
     expect(el.textContent).not.toContain('离开这一页会丢掉未保存的修改');
-    expect(el.textContent).toContain('编辑 Banner（b-A）');
+    expect(el.textContent).toContain('编辑第 1 条 Banner');
     expect(puts).toHaveLength(0);
+  });
+});
+
+// 全入口点击测试 2026-10-12：表单在列表下面，点「编辑 / 新建」后页面不动、焦点不动，看着像没反应；
+// 标题写内部 id（编辑 Banner（36 位 id））；「确认删除」与普通链接长得一样
+describe('Banner：点编辑 / 新建要带到表单，标题说人话', () => {
+  const openTwo = async () => {
+    mounted = await mount(
+      createElement(BannersPage, {
+        api: (async () => [
+          banner('b-A', 'banners/a.webp'),
+          banner('b-B', 'banners/b.webp'),
+        ]) as never,
+        baseUrl: 'http://localhost',
+        getToken: () => 'tk',
+        onUnauthorized: () => undefined,
+      }),
+    );
+    return mounted.el;
+  };
+
+  it('🔴 点第 2 条的「编辑」→ 焦点到表单标题「编辑第 2 条 Banner（不跳转）」，标题里没有内部 id', async () => {
+    const el = await openTwo();
+    await click([...el.querySelectorAll('button')].filter((b) => b.textContent === '编辑')[1]);
+    const h = el.querySelector('#banner-form-title');
+    expect(h?.textContent).toBe('编辑第 2 条 Banner（不跳转）');
+    expect(document.activeElement).toBe(h);
+    expect(el.textContent).not.toContain('b-B');
+  });
+
+  it('🔴 点「新建」→ 焦点到表单标题「新建 Banner」', async () => {
+    const el = await openTwo();
+    await click([...el.querySelectorAll('button')].filter((b) => b.textContent === '编辑')[0]);
+    await click(button(el, '新建'));
+    const h = el.querySelector('#banner-form-title');
+    expect(h?.textContent).toBe('新建 Banner');
+    expect(document.activeElement).toBe(h);
+  });
+
+  it('🔴 「确认删除」用危险色（与商品「确认下架」同）', async () => {
+    const el = await openTwo();
+    await click([...el.querySelectorAll('button')].filter((b) => b.textContent === '删除')[0]);
+    expect(button(el, '确认删除')?.className).toContain('link-danger');
   });
 });
 
@@ -227,7 +270,7 @@ describe('Banner 列表：行内确认不让整表跳（走查 2026-10-08）', (
   });
 
   describe('G6（AJ-472）：删除正在编辑的 Banner 后表单回到"新建"', () => {
-    it('编辑 A → 删除 A（确认）→ 标题不再是"编辑 Banner"，再保存走新建', async () => {
+    it('编辑 A → 删除 A（确认）→ 标题不再是"编辑第 N 条"，再保存走新建', async () => {
       const calls: Array<{ path: string; method?: string }> = [];
       let list = [banner('b-A', 'banners/a.webp'), banner('b-B', 'banners/b.webp')];
       const api = async (req: {
@@ -253,12 +296,12 @@ describe('Banner 列表：行内确认不让整表跳（走查 2026-10-08）', (
       const el = mounted.el;
       const edits = [...el.querySelectorAll('button')].filter((b) => b.textContent === '编辑');
       await click(edits[0]);
-      expect(el.textContent).toContain('编辑 Banner');
+      expect(el.textContent).toContain('编辑第 1 条 Banner');
       const dels = [...el.querySelectorAll('button')].filter((b) => b.textContent === '删除');
       await click(dels[0]);
       await click(button(el, '确认删除'));
       await flush();
-      expect(el.textContent).not.toContain('编辑 Banner');
+      expect(el.textContent).not.toContain('编辑第');
     });
   });
 });

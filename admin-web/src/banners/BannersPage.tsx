@@ -84,6 +84,17 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     if (sameForm(form, pristine)) fn();
     else setPendingSwitch(() => fn);
   };
+  /**
+   * 点「新建 / 编辑」后把焦点送到表单标题（全入口点击测试 2026-10-12：表单在列表下面，点了页面不动、
+   * 焦点不动，看着像没反应）。只在用户点按钮时跳；保存 / 删除后内部回到"新建"不跳。
+   */
+  const formTitleRef = useRef<HTMLHeadingElement>(null);
+  const [jump, setJump] = useState(0);
+  useEffect(() => {
+    if (jump === 0) return;
+    formTitleRef.current?.scrollIntoView?.({ block: 'start' });
+    formTitleRef.current?.focus();
+  }, [jump]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   /** 页面级反馈出口（原页面顶部那行红字，审查 2026-10-09 起统一走 Toast）。 */
   const sink = useToasts();
@@ -302,7 +313,16 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
     <section className="panel">
       <header className="panel-head">
         <h1 className="title">首页 Banner</h1>
-        <button type="button" className="btn btn-secondary" onClick={() => guarded(startNew)}>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() =>
+            guarded(() => {
+              startNew();
+              setJump((n) => n + 1);
+            })
+          }
+        >
           新建
         </button>
       </header>
@@ -341,7 +361,11 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
                   className="link"
                   onClick={() => {
                     const found = raw.find((b) => b.id === r.id);
-                    if (found !== undefined) guarded(() => startEdit(found));
+                    if (found !== undefined)
+                      guarded(() => {
+                        startEdit(found);
+                        setJump((n) => n + 1);
+                      });
                   }}
                 >
                   编辑
@@ -350,7 +374,7 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
                   <>
                     <button
                       type="button"
-                      className="link"
+                      className="link link-danger"
                       disabled={busy}
                       onClick={() => void remove(r.id)}
                     >
@@ -379,9 +403,10 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
       </table>
 
       <div className="form">
-        <span className="label">
-          {editing === null ? '新建 Banner' : `编辑 Banner（${editing.id}）`}
-        </span>
+        {/* 标题说"第几条、跳到哪"，不写内部 id（全入口点击测试 2026-10-12） */}
+        <h2 className="title" id="banner-form-title" ref={formTitleRef} tabIndex={-1}>
+          {editing === null ? '新建 Banner' : editingTitle(rows, editing.id)}
+        </h2>
 
         <div className="field">
           <span className="label">图片（建议横图 2.5:1，如 1500×600）</span>
@@ -609,4 +634,11 @@ function toProductOptions(
     title: String(p.title ?? ''),
     online: p.status === 'active',
   }));
+}
+
+/** 编辑态标题：列表里的第几条 + 跳到哪（找不到时只写"编辑 Banner"，不退回内部 id）。 */
+function editingTitle(rows: ReadonlyArray<{ id: string; linkText: string }>, id: string): string {
+  const i = rows.findIndex((r) => r.id === id);
+  const r = rows[i];
+  return r === undefined ? '编辑 Banner' : `编辑第 ${String(i + 1)} 条 Banner（${r.linkText}）`;
 }
