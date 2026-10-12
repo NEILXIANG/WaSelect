@@ -105,6 +105,30 @@ describe('商品分类管理页', () => {
     await type(el.querySelector('input[name="category-key"]'), 'tea2');
     await click(button(el, '新建分类'));
     expect(el.textContent).toContain('已经有同名的分类了');
+    // 填的值不行是运营自己能改的事，不是技术故障：不给报障编号（全入口点击测试 2026-10-12；同登录页 3c6d8c8）
+    expect(el.textContent).not.toContain('发给技术人员');
+  });
+
+  it('🔴 行内改名撞上重名 → 说人话、不给报障编号；仍停在编辑态', async () => {
+    const el = await open();
+    failWith = new ApiError(40001, '参数缺失或格式错误', 't-dup', {
+      data: { field: 'name', reason: 'duplicate', count: 1 },
+    });
+    await click([...el.querySelectorAll('tbody tr')][1]?.querySelector('button[data-act="edit"]'));
+    await type(el.querySelector('input[name="edit-name"]'), '日本茶');
+    await click(button(el, '保存'));
+    expect(el.textContent).toContain('已经有同名的分类了');
+    expect(el.textContent).not.toContain('发给技术人员');
+    expect(el.querySelector('input[name="edit-name"]')).not.toBeNull();
+  });
+
+  it('认不出的服务端错误（如 50000）照旧给报障编号——那才是技术人员要查的', async () => {
+    const el = await open();
+    failWith = new ApiError(50000, '服务器内部错误', 't-500');
+    await type(el.querySelector('input[name="category-name"]'), '零食');
+    await type(el.querySelector('input[name="category-key"]'), 'snack');
+    await click(button(el, '新建分类'));
+    expect(el.textContent).toContain('发给技术人员');
   });
 
   it('🔴 有商品的分类不能删（按钮不可点、提示改为停用）；空分类删除先确认再发 DELETE', async () => {

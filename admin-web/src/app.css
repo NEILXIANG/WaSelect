@@ -425,8 +425,14 @@ input[type='radio'] {
   background: color-mix(in srgb, currentColor var(--md-state-pressed), var(--state-bg));
 }
 
+/* 禁用的文字按钮：用 outline 色（白底约 5.1:1、low 卡片底约 4.55:1，仍 ≥ 4.5 可读）+ 常规字重 + 点线下划线。
+   全入口点击测试 2026-10-12：原用 on-surface-variant（#5f5a51），与可点的主色字（#2b2a27）几乎分不出——
+   分类「删除」点了没反应、也看不出是禁用的。点线下划线是网页里"悬停有说明"的惯例（同 <abbr>），原因在 title 里 */
 .link:disabled {
-  color: var(--md-color-on-surface-variant);
+  color: var(--md-color-outline);
+  font-weight: 400;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
   cursor: not-allowed;
 }
 

@@ -14,7 +14,7 @@
  *             顶部那条红色「⛔ 已暂停接单」是**状态显示**不是反馈，保持原样常驻。
  * @see server/src/app/sales-pause.ts
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
 import { formatJst } from '../format.js';
 import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
@@ -46,6 +46,19 @@ export function SalesPausePanel({
   const ownSink = useToasts();
   const sink = parentSink ?? ownSink;
   const [busy, setBusy] = useState(false);
+  /** 第一步没填原因时标在输入框下（全入口点击测试 2026-10-12：原先进了确认态、点确认才在右下角浮层说缺原因）。 */
+  const [reasonMissing, setReasonMissing] = useState(false);
+  const reasonRef = useRef<HTMLInputElement>(null);
+
+  /** 第一步：没填原因就拦在这一步（同拉黑 AJ-449），填了才进两步确认。 */
+  const ask = (next: boolean): void => {
+    if (reason.trim() === '') {
+      setReasonMissing(true);
+      reasonRef.current?.focus();
+      return;
+    }
+    setTarget(next);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -117,17 +130,34 @@ export function SalesPausePanel({
         </p>
       )}
       <div className="form">
-        <input
-          className="input"
-          name="sales-pause-reason"
-          placeholder={paused ? '恢复接单的原因' : '暂停接单的原因'}
-          maxLength={ADMIN_NOTE_MAX_LENGTH}
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-        />
+        <div className="field">
+          <input
+            ref={reasonRef}
+            className="input"
+            name="sales-pause-reason"
+            placeholder={paused ? '恢复接单的原因' : '暂停接单的原因'}
+            maxLength={ADMIN_NOTE_MAX_LENGTH}
+            value={reason}
+            onChange={(e) => {
+              setReason(e.target.value);
+              if (e.target.value.trim() !== '') setReasonMissing(false);
+            }}
+          />
+          {reasonMissing && (
+            <span className="error" role="alert">
+              请填写原因（会记录下来）
+            </span>
+          )}
+        </div>
         {target !== null ? (
           <div className="row2">
-            <button type="button" className="btn" disabled={busy} onClick={() => void submit()}>
+            {/* 确认暂停是实心危险按钮（店会关门）；确认恢复是普通主按钮 */}
+            <button
+              type="button"
+              className={target ? 'btn btn-danger' : 'btn'}
+              disabled={busy}
+              onClick={() => void submit()}
+            >
               {busy ? '提交中…' : target ? '确认暂停接单' : '确认恢复接单'}
             </button>
             <button type="button" className="link" onClick={() => setTarget(null)}>
@@ -135,11 +165,12 @@ export function SalesPausePanel({
             </button>
           </div>
         ) : (
+          // 按内容宽、暂停用危险描边（原为整行黑色主按钮：页面上最显眼的是"把店关掉"，像这页的主要动作）
           <button
             type="button"
-            className="btn"
+            className={paused ? 'btn btn-fit' : 'btn btn-danger-outline btn-fit'}
             disabled={state === null}
-            onClick={() => setTarget(!paused)}
+            onClick={() => ask(!paused)}
           >
             {paused ? '恢复接单' : '暂停接单'}
           </button>

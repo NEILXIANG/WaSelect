@@ -38,8 +38,12 @@ export function CategoriesPage({ api }: { api: AdminApi }): React.JSX.Element {
       return true;
     } catch (e) {
       const f = e instanceof ApiError ? categoryServerError(e.data) : null;
-      const t = toastError(e, fallback);
-      sink.error(f?.text ?? t.text, { traceId: t.traceId });
+      // 认得出的字段错误（重名、格式）不给报障编号：不是技术故障（同 CategoryCreateForm）
+      if (f !== null) sink.error(f.text);
+      else {
+        const t = toastError(e, fallback);
+        sink.error(t.text, { traceId: t.traceId });
+      }
       return false;
     } finally {
       setBusy(false);

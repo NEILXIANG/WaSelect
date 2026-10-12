@@ -38,8 +38,12 @@ export function CategoryCreateForm({
     } catch (err) {
       const f = err instanceof ApiError ? categoryServerError(err.data) : null;
       if (f !== null) setErrors({ [f.field]: f.text });
-      const t = toastError(err, '新建分类失败');
-      sink.error(f?.text ?? t.text, { traceId: t.traceId });
+      // 认得出的字段错误（重名、格式）是运营自己能改的，不给报障编号（全入口点击测试 2026-10-12；同登录页 3c6d8c8）
+      if (f !== null) sink.error(f.text);
+      else {
+        const t = toastError(err, '新建分类失败');
+        sink.error(t.text, { traceId: t.traceId });
+      }
     } finally {
       setBusy(false);
     }
