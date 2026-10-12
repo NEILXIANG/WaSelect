@@ -53,7 +53,7 @@ import {
 } from '../../utils/pay-plan.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
-import { emailTypoHint } from '../../utils/email-shape.js';
+import { emailTypoHint, normalizeTypedEmail } from '../../utils/email-shape.js';
 import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -395,7 +395,7 @@ Page({
     this.setData({
       email: raw,
       emailError: emailInputError(raw, this.data.emailError),
-      emailHint: emailTypoHint(raw),
+      emailHint: emailTypoHint(normalizeTypedEmail(raw)),
     });
     this.updateGate();
   },
@@ -408,7 +408,7 @@ Page({
     const raw = typeof this.data.email === 'string' ? this.data.email : '';
     this.setData({
       emailError: raw.trim() === '' ? this.data.emailError : contactEmailOf(raw).error,
-      emailHint: emailTypoHint(raw),
+      emailHint: emailTypoHint(normalizeTypedEmail(raw)),
     });
     this.updateGate();
   },

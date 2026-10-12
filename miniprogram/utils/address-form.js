@@ -116,9 +116,25 @@ export function emptyForm() {
  * @why 逐字段取值而不是 `{...addr}`：地址对象是**外部输入**（可能多字段、可能缺字段），
  *      铺进去会把未知字段一路带到请求体里（服务端会 40001），而报错指向请求体不指向表单。
  */
+/**
+ * 打字带出来的全角 / 弯引号 / 横线 → ASCII（shared `normalizeTypedAddress` 的副本，单测逐例比对）。
+ * @why 两端输入测试 2026-10-12：iPhone 智能标点把 O'Farrell 变成 O’Farrell、全角模式打出 ９４１２３，
+ *      原先都被判"请用英文/数字填写"。中文、emoji 原样保留，仍由校验去说。
+ * @param {string} raw
+ * @returns {string}
+ */
+export function normalizeTypedAddress(raw) {
+  return raw
+    .normalize('NFKC')
+    .replace(/[\u2018\u2019\u201B\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201F\u2033]/g, '"')
+    .replace(/[\u2010-\u2015\u2212]/g, '-');
+}
+
 export function formModel(addr) {
   const a = addr && typeof addr === 'object' ? addr : {};
-  const text = (v) => (typeof v === 'string' ? v : '');
+  // 先归一（@see normalizeTypedAddress）：校验与提交都经过这里，看到的是同一份文字
+  const text = (v) => (typeof v === 'string' ? normalizeTypedAddress(v) : '');
   return {
     recipient: text(a.recipient),
     phone: text(a.phone),

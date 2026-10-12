@@ -27,6 +27,7 @@ import {
   formModel,
   toAddressInput,
   phoneForInput,
+  normalizeTypedAddress,
 } from './address-form.js';
 import { US_ADDRESSES, US_ADDRESS_INVALID, formatUsPhone } from '../../test/factories/catalog.js';
 import { ADDRESS_MAX_CHARS as SERVER_MAX } from '../../server/src/domain/address-input.js';
@@ -449,6 +450,54 @@ describe('saveErrorFields（地址保存被服务端拒）', () => {
     const r = saveErrorFields({ code: 50000, message: '服务器内部错误', traceId: 'abcdef12' });
     expect(r.saveError).toBe('服务器内部错误');
     expect(r.saveErrorRef).not.toBe('');
+  });
+});
+
+/**
+ * 两端输入测试 2026-10-12：iPhone 英文键盘默认开"智能标点"，打 O'Farrell St（旧金山常见街名）得到的是弯引号 ’——
+ * 被判"请用英文/数字填写"，买家明明写的就是英文。中文输入法全角模式打出的 ９４１２３ / Ｚｈａｎｇ 同样被拒。
+ */
+const TYPED_CASES: ReadonlyArray<readonly [string, string]> = [
+  ['O\u2019Farrell St', "O'Farrell St"],
+  ['\u201CThe Ivy\u201D Apt 5', '"The Ivy" Apt 5'],
+  ['Apt 5\u2013B', 'Apt 5-B'],
+  ['９４１２３', '94123'],
+  ['Ｚｈａｎｇ\u3000Ｗｅｉ', 'Zhang Wei'],
+  ['＃５', '#5'],
+  ['2847\u00A0Greenwich St', '2847 Greenwich St'],
+  ['张伟', '张伟'], // 中文不动：仍由校验说"请用英文"
+  ['Wei 😀', 'Wei 😀'],
+];
+
+describe('打字带出来的全角 / 弯引号 / 破折号先归一，再校验与提交', () => {
+  it.each(TYPED_CASES)('🔴 normalizeTypedAddress(%j) → %j', (raw, want) => {
+    expect(normalizeTypedAddress(raw)).toBe(want);
+  });
+
+  it('🔴 智能标点的街名、全角邮编能通过校验，发出去的是 ASCII', () => {
+    const form = {
+      recipient: 'Ｚｈａｎｇ Ｗｅｉ',
+      phone: '４１５５５５０１２３',
+      line1: 'O\u2019Farrell St',
+      line2: '',
+      city: 'San Francisco',
+      state: 'CA',
+      postal_code: '９４１０２',
+    };
+    expect(formErrors(form)).toMatchObject({ ok: true });
+    expect(toAddressInput(form)).toMatchObject({
+      recipient: 'Zhang Wei',
+      phone: '+14155550123',
+      line1: "O'Farrell St",
+      postal_code: '94102',
+    });
+  });
+
+  it('🔴 与 shared 的实现逐例相同（后台改址用 shared 那份）', async () => {
+    const shared = await import('@waselect/shared');
+    for (const [raw] of TYPED_CASES) {
+      expect(shared.normalizeTypedAddress(raw), raw).toBe(normalizeTypedAddress(raw));
+    }
   });
 });
 

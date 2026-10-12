@@ -162,6 +162,17 @@ describe('orderBody（建单请求体）', () => {
  *      给出的是泛化的"参数错误"，用户不知道错在邮箱。口径与服务端入口一致（有 @、无空白、≤255）。
  */
 describe('contactEmailOf（联系邮箱，M-01 起前端必填）', () => {
+  // 两端输入测试 2026-10-12：中文输入法常打出全角 ＠ 与句号 。——原先判"格式不正确"；
+  //   而全角字母 ａ@qq.com 反被当成合法邮箱发出去，邮件永远发不到
+  it.each([
+    ['a＠qq.com', 'a@qq.com'],
+    ['a@qq。com', 'a@qq.com'],
+    ['ａｂｃ@ｑｑ．ｃｏｍ', 'abc@qq.com'],
+    ['　jane@example.com　', 'jane@example.com'],
+  ])('🔴 输入法带出来的全角 / 中文句号先归一：%j → %j', (raw, want) => {
+    expect(contactEmailOf(raw)).toEqual({ value: want, error: '' });
+  });
+
   // M-01（AJ-405 / AJ-402 Q1）：原断言"空 → 不拦"与新口径（前端必填）相反，按新口径改；契约与服务端仍可选
   it('🔴 空 / 纯空白 / 非字符串 → 不带（value 为空串），且给出"为什么要填"的原因', () => {
     for (const raw of ['', '   ', undefined, null, 42]) {

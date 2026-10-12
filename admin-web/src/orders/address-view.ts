@@ -19,7 +19,13 @@
  *
  * @see ../../../contracts/api-contract.yaml（AddressInput）；./api.ts（updateOrderAddress）
  */
-import { US_STATES, isUsStateCode, zipMatchesState } from '@waselect/shared';
+import {
+  US_STATES,
+  isUsStateCode,
+  normalizeTypedAddress,
+  normalizeUsPhone,
+  zipMatchesState,
+} from '@waselect/shared';
 
 /** MVP 唯一目的国（@see @limitation 二）。 */
 export const ADDRESS_COUNTRY_DEFAULT = 'US';
@@ -69,7 +75,9 @@ export function emptyAddressForm(): AddressForm {
 export function addressFormModel(order: unknown): AddressForm {
   const src = (order as { address?: unknown } | null)?.address;
   const a = (typeof src === 'object' && src !== null ? src : {}) as Record<string, unknown>;
-  const text = (k: string): string => (typeof a[k] === 'string' ? (a[k] as string) : '');
+  // 先归一（两端输入测试 2026-10-12）：从聊天里复制的地址常带弯引号 / 全角数字，原先一律"请用英文填写"
+  const text = (k: string): string =>
+    typeof a[k] === 'string' ? normalizeTypedAddress(a[k] as string) : '';
   return {
     recipient: text('recipient'),
     phone: text('phone'),
@@ -92,8 +100,9 @@ export function addressFormErrors(form: unknown): {
   const errors: Partial<Record<AddressField, string>> = {};
   if (!ADDRESS_PATTERNS.ascii.test(m.recipient.trim()))
     errors['recipient'] = '收件人请用英文/数字填写（面单不支持中文或全角）';
-  if (!ADDRESS_PATTERNS.phone.test(m.phone.trim()))
-    errors['phone'] = '电话格式为 +1 开头加 10 位数字，如 +14155550123';
+  // 美国日常写法先凑成 +1…（与小程序同一规则，shared normalizeUsPhone；两端输入测试 2026-10-12）
+  if (!ADDRESS_PATTERNS.phone.test(normalizeUsPhone(m.phone)))
+    errors['phone'] = '电话请填美国 10 位号码，如 206 555 0123（可带 +1）';
   if (!ADDRESS_PATTERNS.ascii.test(m.line1.trim())) errors['line1'] = '地址第一行请用英文/数字填写';
   if (!ADDRESS_PATTERNS.asciiOptional.test(m.line2.trim()))
     errors['line2'] = '地址第二行请用英文/数字填写（可留空）';
@@ -128,7 +137,7 @@ export function toAddressInput(form: unknown): Record<string, string> {
   const m = addressFormModel({ address: form });
   return {
     recipient: m.recipient.trim(),
-    phone: m.phone.trim(),
+    phone: normalizeUsPhone(m.phone),
     line1: m.line1.trim(),
     line2: m.line2.trim(),
     city: m.city.trim(),

@@ -19,7 +19,7 @@
  * @see ../../utils/cart-store.js（本地状态）；../../utils/pay-plan.js（支付部分）；
  *      ../../../contracts/api-contract.yaml（Quote / OrderCreated / POST /orders）
  */
-import { isContactEmailShape } from '../../utils/email-shape.js';
+import { isContactEmailShape, normalizeTypedEmail } from '../../utils/email-shape.js';
 import { formatJpy } from '../../utils/price-format.js';
 
 /**
@@ -197,7 +197,8 @@ export const EMAIL_REQUIRED_TEXT = '请填写联系邮箱：付款、发货、�
  * @limitation 只在前端拦：绕过小程序直接调 `POST /orders` 仍可不带邮箱（契约可选，刻意不改，见 AJ-405）。
  */
 export function contactEmailOf(raw) {
-  const v = typeof raw === 'string' ? raw.trim() : '';
+  // 先归一全角 / 中文句号（两端输入测试 2026-10-12；@see utils/email-shape.js normalizeTypedEmail）
+  const v = normalizeTypedEmail(raw);
   if (v === '') return { value: '', error: EMAIL_REQUIRED_TEXT };
   return isContactEmailShape(v) ? { value: v, error: '' } : { value: '', error: EMAIL_ERROR };
 }

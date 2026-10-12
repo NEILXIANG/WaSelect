@@ -83,10 +83,30 @@ describe('addressFormErrors', () => {
     expect(addressFormErrors(valid()).ok).toBe(true);
   });
 
-  it('⚠️ 电话缺 +1 → 报 phone（面单打不出来的典型）', () => {
-    const r = addressFormErrors({ ...valid(), phone: '2065550123' });
-    expect(r.ok).toBe(false);
-    expect(r.errors['phone']).toContain('+1');
+  // 两端输入测试 2026-10-12：原断言"缺 +1 → 报错"。小程序自 P2-37 起就把美国人的日常写法凑成 +1…；
+  //   运营改址时多是从微信聊天里复制买家发来的号码（"(206) 555-0123"），后台却只认 +1 开头——同一个号码两端两种结果。
+  it('🔴 电话的美国日常写法（10 位、带括号横线、1 开头 11 位）→ 凑成 +1…；认不出的才报错', () => {
+    for (const p of ['2065550123', '(206) 555-0123', '1 206 555 0123', '２０６５５５０１２３']) {
+      expect(addressFormErrors({ ...valid(), phone: p }).ok, p).toBe(true);
+      expect(toAddressInput({ ...valid(), phone: p })['phone'], p).toBe('+12065550123');
+    }
+    const r = addressFormErrors({ ...valid(), phone: '206555012' });
+    expect(r.errors['phone']).toContain('10 位');
+  });
+
+  // 两端输入测试 2026-10-12：从聊天里复制的地址常带 iPhone 智能标点（O’Farrell）与全角数字——原先一律"请用英文填写"
+  it('🔴 弯引号 / 全角 / 破折号先归一再校验，提交的是 ASCII', () => {
+    const f = {
+      ...valid(),
+      line1: 'O\u2019Farrell St Apt 5\u2013B',
+      postal_code: '９４１０２',
+      state: 'CA',
+    };
+    expect(addressFormErrors(f).ok).toBe(true);
+    expect(toAddressInput(f)).toMatchObject({
+      line1: "O'Farrell St Apt 5-B",
+      postal_code: '94102',
+    });
   });
 
   it('⚠️ 收件人写中文 → 报 recipient（美国面单不接受非 ASCII）', () => {
@@ -98,8 +118,9 @@ describe('addressFormErrors', () => {
     expect(addressFormErrors({ ...valid(), line2: '' }).ok).toBe(true);
   });
 
+  // 原用全角"１２Ｂ"当中文——两端输入测试 2026-10-12 起全角先归一成 12B（合法），换成真正的中文
   it('⚠️ line2 含中文也要报（可空 ≠ 随便填）', () => {
-    expect(addressFormErrors({ ...valid(), line2: '１２Ｂ' }).errors['line2']).toBeTruthy();
+    expect(addressFormErrors({ ...valid(), line2: '５楼' }).errors['line2']).toBeTruthy();
   });
 
   it('⚠️ 邮编 ZIP+4 合法，邮编少一位不合法', () => {

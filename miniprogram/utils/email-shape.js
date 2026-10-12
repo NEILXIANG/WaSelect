@@ -16,6 +16,18 @@ export const CONTACT_EMAIL_MAX_LENGTH = 255;
 const PART = /^[^\s@\u0000-\u001f\u007f]+$/;
 const DIGITS = /^\d+$/;
 
+/**
+ * 输入法带出来的全角字符与中文句号 → 半角（判形状、提交之前先过一遍）。
+ * @why 两端输入测试 2026-10-12：中文输入法常打出全角 ＠ 与句号 。（a@qq。com），原先判"格式不正确"；
+ *      而全角字母（ａ@qq.com）反被当成合法邮箱发出去，邮件永远发不到。
+ * @limitation 只换"有等价半角"的字符（NFKC + 句号）；中文用户名之类原样保留，由形状判据决定。
+ * @param {unknown} raw
+ * @returns {string}
+ */
+export function normalizeTypedEmail(raw) {
+  return typeof raw === 'string' ? raw.normalize('NFKC').replace(/。/g, '.').trim() : '';
+}
+
 /** 与 shared `isContactEmailShape` 逐行同义（@see 文件头）。 */
 export function isContactEmailShape(v) {
   if (typeof v !== 'string' || v.length === 0 || v.length > CONTACT_EMAIL_MAX_LENGTH) return false;
