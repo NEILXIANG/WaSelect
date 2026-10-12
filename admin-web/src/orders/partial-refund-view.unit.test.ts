@@ -7,6 +7,7 @@ import {
   formatMinor,
   fullRefundConfirmBody,
   fullRefundAmountText,
+  formatMinorCn,
   parseAmountToMinor,
   partialRefundErrorNotice,
   partialRefundGate,
@@ -326,5 +327,13 @@ describe('fullRefundAmountText（抽屉里写要退多少）', () => {
     expect(fullRefundAmountText(order({ payments: [] }))).toBe(
       '合计 18,550 円（实际可退金额以支付机构为准）',
     );
+  });
+});
+
+// 全入口点击测试 2026-10-11：日元原写"最多还能退 5,350 日元"，全站其它地方写"5,350 円"（D-36）；其它币种照旧写中文名
+describe('formatMinorCn：日元写「円」', () => {
+  it('🔴 JPY → "5,350 円"；USD → "81.60 美元"', () => {
+    expect(formatMinorCn(5350, 'JPY')).toBe('5,350 円');
+    expect(formatMinorCn(8160, 'USD')).toBe('81.60 美元');
   });
 });
