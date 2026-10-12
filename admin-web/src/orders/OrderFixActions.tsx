@@ -49,7 +49,9 @@ export function OrderFixActions({
   const fix = shipmentFixGate(order);
   // 浏览器时钟只用来决定按钮能不能点；最终以服务端闸门为准（fix-view @limitation）
   const revert = shipmentRevertGate(order, Date.now());
-  const [mode, setMode] = useState<'' | 'cancel' | 'fix' | 'revert'>('');
+  // 只有"取消"一个选项（未付单）时直接进取消表单（两端逐页走查第三轮 2026-10-12：原先还要先点一次选项）
+  const cancelOnly = cancel.ok && !fix.ok && revert === null;
+  const [mode, setMode] = useState<'' | 'cancel' | 'fix' | 'revert'>(cancelOnly ? 'cancel' : '');
   const [confirming, setConfirming] = useState(false);
   const [reason, setReason] = useState('');
   const [carrier, setCarrier] = useState('');
@@ -281,9 +283,12 @@ export function OrderFixActions({
                     ? '撤销这次发货'
                     : '保存运单号'}
               </button>
-              <button className="link" type="button" onClick={reset}>
-                收起
-              </button>
+              {/* 只有一个选项时不给「收起」：收起后只剩同一个按钮，多一步没有意义 */}
+              {!cancelOnly && (
+                <button className="link" type="button" onClick={reset}>
+                  收起
+                </button>
+              )}
             </div>
           )}
         </>

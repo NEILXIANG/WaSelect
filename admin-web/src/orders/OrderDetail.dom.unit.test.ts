@@ -642,6 +642,16 @@ describe('订单详情：操作抽屉（AJ-398）', () => {
     expect(el.querySelector('.drawer-wrap')?.getAttribute('aria-label')).toBe('订单修正');
   });
 
+  // 两端逐页走查第三轮 2026-10-12（造了待付款单才走到）：操作区说"未付款，请取消订单而不是退款"，
+  //   取消却藏在「订单修正…」里——未付款的单里那个抽屉只有"取消订单"一项
+  it('🔴 未付款的单：按钮直接叫「取消订单…」、抽屉标题"取消订单"；没有「订单修正…」', async () => {
+    status = 'created';
+    const el = await open();
+    expect(button(el, '订单修正…')).toBeNull();
+    await click(button(el, '取消订单…'));
+    expect(el.querySelector('.drawer-wrap')?.getAttribute('aria-label')).toBe('取消订单');
+  });
+
   // 全入口点击测试 2026-10-11：抽屉里先写要退多少（原先只有原因与按钮，金额要回页面找）
   it('🔴 打开全额退款抽屉 → 先看到「退款金额」', async () => {
     const el = await open();

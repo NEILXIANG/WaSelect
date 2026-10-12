@@ -146,6 +146,11 @@ export function OrderActions({ api, id, order, sink, reload, onChanged }: OrderA
     ),
   };
 
+  // 两端逐页走查第三轮 2026-10-12：未付款的单"订单修正"抽屉里只有"取消订单"一项——按钮与标题直接这么叫，
+  //   否则操作区说"请取消订单而不是退款"，运营却找不到取消在哪
+  const cancelOnly = cancelGate(order).ok && !shipmentFixGate(order).ok;
+  const labelOf = (a: (typeof ACTIONS)[number]): { button: string; title: string } =>
+    a.key === 'fix' && cancelOnly ? { button: '取消订单…', title: '取消订单' } : a;
   const ship = shipGate(order);
   // 三端模拟测试 2026-10-11：只有待发货的单才需要解释"为什么不能发货"——已签收的拒付单写"先处理拒付再发货"，货早发了，只会让人困惑
   const awaitingShipment = (order as { status?: unknown } | null)?.status === 'paid';
@@ -163,14 +168,14 @@ export function OrderActions({ api, id, order, sink, reload, onChanged }: OrderA
             className={actionButtonClass(a.key)}
             onClick={() => setOpen(a.key)}
           >
-            {a.button}
+            {labelOf(a).button}
           </button>
         ))}
       </div>
       {!ship.ok && awaitingShipment && <p className="muted">发货：{ship.reason}</p>}
       {!refund.ok && <p className="muted">全额退款：{refund.reason}</p>}
       {current !== null && spec !== undefined && (
-        <ActionDrawer title={spec.title} busy={busy} onClose={close}>
+        <ActionDrawer title={labelOf(spec).title} busy={busy} onClose={close}>
           {body[current]()}
         </ActionDrawer>
       )}

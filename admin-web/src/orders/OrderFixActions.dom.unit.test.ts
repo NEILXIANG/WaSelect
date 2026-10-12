@@ -49,9 +49,12 @@ describe('OrderFixActions', () => {
     expect(el.textContent).toBe('');
   });
 
-  it('🔴 未付单取消：原因必填 → 二次确认 → POST /cancel {reason}，刷新详情', async () => {
+  // 两端逐页走查第三轮 2026-10-12：未付单只有"取消"一个选项，原先还要先点一次「取消订单（未付款）」才出原因框
+  it('🔴 未付单取消：直接是取消表单（不出选项、不出「收起」）→ 原因必填 → 二次确认 → POST /cancel {reason}，刷新详情', async () => {
     const { el, calls, notices, done } = await open({ status: 'pending_payment' });
-    await click(button(el, '取消订单（未付款）'));
+    expect(el.textContent).not.toContain('选择要做的修正');
+    expect(button(el, '取消订单（未付款）')).toBeNull();
+    expect(button(el, '收起')).toBeNull();
     await click(button(el, '取消这张订单'));
     expect(el.textContent).toContain('取消原因必填');
     expect(calls).toHaveLength(0);
@@ -158,7 +161,7 @@ describe('OrderFixActions', () => {
         }),
       );
       const el = mounted.el;
-      await click(button(el, '取消订单（未付款）'));
+      // 未付单直接是取消表单（两端逐页走查第三轮），不再先点选项
       await type(el.querySelector('input'), '价格录错');
       await click(button(el, '取消这张订单'));
       await click(button(el, '确认'));
