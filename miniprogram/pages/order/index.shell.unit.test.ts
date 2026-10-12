@@ -267,3 +267,17 @@ describe('订单列表：分页与触底加载（S-7，第二轮审计 2026-10-1
     expect(page.data['moreError']).toBe('');
   });
 });
+
+// 全入口点击测试 2026-10-11：空页签的卡片顶着页签栏、文字与按钮挤在一起；改用与购物车 / 地址页同一个三段式状态块
+describe('订单页空态的样子（全入口点击测试 2026-10-11）', () => {
+  it('🔴 空态走 ws-state-block（kind=empty），按钮「去逛逛」走 onGoShopping', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8').replace(
+      /<!--[\s\S]*?-->/g,
+      '',
+    );
+    expect(wxml).toMatch(
+      /<ws-state-block\s+wx:if="\{\{empty\}\}"\s+kind="empty"\s+title="\{\{emptyText\}\}"[^>]*actionText="去逛逛"[^>]*bindaction="onGoShopping"/,
+    );
+    expect(wxml).toMatch(/<ws-state-block\s+wx:if="\{\{loading\}\}"\s+kind="loading"/);
+  });
+});

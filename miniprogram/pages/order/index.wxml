@@ -26,11 +26,7 @@
     >{{item.label}}</view>
   </view>
 
-  <view class="ws-gutter" wx:if="{{loading}}">
-    <view class="ws-card state">
-      <text class="ws-note">正在加载订单…</text>
-    </view>
-  </view>
+  <ws-state-block wx:if="{{loading}}" kind="loading" title="正在加载订单" compact="{{true}}" />
 
   <!-- P2-38：错误态给"重试"（以前只有一行红字；本页是 tab 页，切走再切回才会重取，用户想不到） -->
   <ws-state-block
@@ -43,12 +39,15 @@
     bindaction="onRetry"
   />
 
-  <view class="ws-gutter" wx:if="{{empty}}">
-    <view class="ws-card state">
-      <text class="ws-note">{{emptyText}}</text>
-      <ws-button text="去逛逛" type="default" bindtap="onGoShopping" />
-    </view>
-  </view>
+  <!-- 全入口点击测试 2026-10-11：原为手写卡片（顶着页签栏、文字与按钮挤在一起），改用与购物车同一个三段式状态块 -->
+  <ws-state-block
+    wx:if="{{empty}}"
+    kind="empty"
+    title="{{emptyText}}"
+    actionText="去逛逛"
+    compact="{{true}}"
+    bindaction="onGoShopping"
+  />
 
   <view class="ws-gutter order__list" wx:if="{{rows.length > 0}}">
     <view
