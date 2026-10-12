@@ -35,6 +35,7 @@ import {
   purchaseLine,
   purchaseLines,
   itemNames,
+  firstRefundReason,
   refundErrors,
   refundFailureNotice,
   fullRefundErrorNotice,
@@ -903,5 +904,24 @@ describe('eventNoteView：服务端写死的英文备注 → 中文（三端联�
       expect(refundFailureNotice(40902, undefined, 'fully_refunded_by_partials')).toContain('退满');
       expect(refundFailureNotice(40902)).toBe('');
     });
+  });
+});
+
+// 两端逐页走查第三轮 2026-10-12：退款重试沿用第一次的原因——从时间线里取
+describe('firstRefundReason', () => {
+  it('🔴 取最早一条"开始退款"的备注；没有 / 备注为空 → null', () => {
+    expect(
+      firstRefundReason({
+        events: [
+          { status: 'refunding', note: '缺货：东京香蕉', at: '2026-10-06T01:00:00Z' },
+          { status: 'refund_failed', note: 'provider_failed:re_1', at: '2026-10-06T02:00:00Z' },
+          // 第二条备注故意不同：区分"取最早"与"取最后"（注回时曾因两条相同而不红）
+          { status: 'refunding', note: '重试：机构超时', at: '2026-10-07T01:00:00Z' },
+        ],
+      }),
+    ).toBe('缺货：东京香蕉');
+    expect(firstRefundReason({ events: [{ status: 'refunding', note: '  ' }] })).toBeNull();
+    expect(firstRefundReason({ events: [] })).toBeNull();
+    expect(firstRefundReason(null)).toBeNull();
   });
 });

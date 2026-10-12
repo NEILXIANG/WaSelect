@@ -19,7 +19,13 @@ import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { refundOrder } from './api.js';
 import { fullRefundAmountText, fullRefundConfirmBody } from './partial-refund-view.js';
 import type { OrderActionFormProps } from './ShipForm.js';
-import { fullRefundErrorNotice, refundErrors, refundGate, toRefundBody } from './view.js';
+import {
+  firstRefundReason,
+  fullRefundErrorNotice,
+  refundErrors,
+  refundGate,
+  toRefundBody,
+} from './view.js';
 import { composeRefundReason, emptyRefundReason } from './refund-reason.js';
 import { RefundReasonField } from './RefundReasonField.js';
 import { enterClicksPrimary } from '../ui/keys.js';
@@ -54,9 +60,14 @@ export function RefundForm({
     onBusy(b);
   };
   const gate = refundGate(order);
+  // 退款中的单重试：沿用第一次的原因（服务端也只认它；两端逐页走查第三轮 2026-10-12）
+  const retryReason =
+    (order as { status?: unknown }).status === 'refunding' ? firstRefundReason(order) : null;
+  const reasonCheck = (): ReturnType<typeof checkReason> =>
+    retryReason !== null ? { ok: true, first: '', reason: retryReason } : checkReason(refund);
 
   const doRefund = async (): Promise<void> => {
-    const check = checkReason(refund);
+    const check = reasonCheck();
     if (!check.ok) {
       sink.error(check.first);
       setDialog(null);
@@ -104,7 +115,7 @@ export function RefundForm({
   };
 
   const ask = (): void => {
-    const check = checkReason(refund);
+    const check = reasonCheck();
     if (!check.ok) {
       sink.error(check.first);
       return;
@@ -123,7 +134,11 @@ export function RefundForm({
       {/* 硬上限来自 shared（B7 / AJ-191）：超长会被机构拒且订单卡在退款中——按拼好后的整串校验 */}
       {/* 全入口点击测试 2026-10-11：先写要退多少（原先金额要回页面找，确认框里才有；与确认框同一个函数） */}
       <p className="refund-amount">退款金额：{fullRefundAmountText(order)}</p>
-      <RefundReasonField value={refund} onChange={setRefund} />
+      {retryReason !== null ? (
+        <p className="muted">沿用第一次的退款原因：{retryReason}</p>
+      ) : (
+        <RefundReasonField value={refund} onChange={setRefund} />
+      )}
       <button
         type="button"
         className="btn btn-danger"
@@ -131,7 +146,7 @@ export function RefundForm({
         disabled={!gate.ok || busy}
         onClick={ask}
       >
-        退款
+        {retryReason !== null ? '重新提交退款' : '退款'}
       </button>
       {/* 放行时也可能带提示（refunding = 再查询/重发，KD-12） */}
       {gate.reason !== '' && <p className="muted">{gate.reason}</p>}

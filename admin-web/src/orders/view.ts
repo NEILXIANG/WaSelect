@@ -905,3 +905,21 @@ export function addressHistoryRows(
       atText: typeof h['at'] === 'string' ? formatJst(h['at']) : '',
     }));
 }
+
+/**
+ * 第一次全额退款的原因（时间线里最早一条"开始退款"的备注；两端逐页走查第三轮 2026-10-12）。
+ * @why 退款中的单重试时，服务端沿用第一次的原因（机构幂等键按订单固定，换原因 = 同键异参会被机构拒）；
+ *      表单原先还要运营再选一次原因——选了也不生效。拿它在表单里写明"沿用"，提交也带它。
+ * @returns 没有这条事件或备注为空 → null（调用方退回让运营填写）
+ */
+export function firstRefundReason(order: unknown): string | null {
+  const events = (order as { events?: unknown } | null)?.events;
+  if (!Array.isArray(events)) return null;
+  for (const e of events) {
+    const ev = (typeof e === 'object' && e !== null ? e : {}) as Record<string, unknown>;
+    if (ev['status'] !== 'refunding') continue;
+    const note = typeof ev['note'] === 'string' ? ev['note'].trim() : '';
+    return note === '' ? null : note;
+  }
+  return null;
+}

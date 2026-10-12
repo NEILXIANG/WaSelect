@@ -254,6 +254,27 @@ describe('订单详情：退款提交出错之后（B41 残留 / AJ-230）', () 
     expect(errorToastText(el)).toContain('t-1');
   });
 
+  // 两端逐页走查第三轮 2026-10-12（造了退款滞留单才走到）：重试时服务端沿用第一次的原因（机构幂等键按订单固定），
+  //   表单却要求再选一次原因——选了也不生效，运营以为改了原因
+  it('🔴 退款中的单：不再让选原因，写明沿用第一次的原因；按钮叫「重新提交退款」，提交带的是第一次的原因', async () => {
+    status = 'refunding';
+    events = [
+      { status: 'paid', note: null, at: '2026-10-05T01:00:00Z' },
+      { status: 'refunding', note: '买家改主意，全额退款', at: '2026-10-06T01:00:00Z' },
+    ];
+    refundBehaviour = () => ({ order_id: 'o-1', outcome: 'succeeded' });
+    const el = await open();
+    await click(button(el, '全额退款…'));
+    expect(el.querySelector('select[aria-label="退款原因"]')).toBeNull();
+    expect(el.querySelector('.drawer')?.textContent).toContain(
+      '沿用第一次的退款原因：买家改主意，全额退款',
+    );
+    await click(button(el, '重新提交退款'));
+    await click(button(el, '确认退款'));
+    const posts = calls.filter((c) => c.path.endsWith('/refund'));
+    expect(posts[0]?.body).toEqual({ reason: '买家改主意，全额退款' });
+  });
+
   it('P2-49 刷新后发现机构已确认失败（refund_failed provider_failed:…）→ 说可重新发起', async () => {
     status = 'paid';
     refundBehaviour = () => {
