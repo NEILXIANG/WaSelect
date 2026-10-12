@@ -168,7 +168,7 @@ describe('fxFormErrors / toFxBody', () => {
   it('⚠️ 时间格式不对 → 校验先拦住（不让它变成空串发出去）', () => {
     expect(
       fxFormErrors({ quote: 'USD', rawRate: '0.0067', effectiveFrom: '2026/10/01' }).first,
-    ).toContain('生效时间');
+    ).toBe('生效时间没填完整：日期和时刻都要选（留空表示立即生效）');
     expect(toIsoJst('2026/10/01')).toBe('');
     expect(toIsoJst('')).toBe('');
   });
@@ -290,6 +290,14 @@ describe('rateRows', () => {
 });
 
 describe('rateErrors（整表校验）', () => {
+  // 两端输入测试 2026-10-12：承运商名超过 32 字前端放行，服务端拒成泛化的"参数缺失或格式错误"
+  it('🔴 承运商名超过 32 字 → 报错并标红那一格', () => {
+    const r = rateErrors([{ ...formRow('500', '2200'), carrier: 'J'.repeat(33) }]);
+    expect(r.errors).toContain('第 1 档：承运商名最多 32 个字');
+    expect(r.cells).toContain('0:carrier');
+    expect(rateErrors([{ ...formRow('500', '2200'), carrier: 'J'.repeat(32) }]).ok).toBe(true);
+  });
+
   it('一张合法表全过', () => {
     expect(rateErrors([formRow('500', '2200'), formRow('2000', '4050')]).ok).toBe(true);
     expect(rateErrors([formRow('500', '2200')]).cells).toEqual([]);

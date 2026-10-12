@@ -212,6 +212,43 @@ describe('GET /api/v1/admin/audit（3-2）', () => {
       expect(label('img/abc')).not.toHaveProperty('target_label');
       // 对象是账号（命令行改密、拉黑）→ 账号邮箱（有邮箱时；全入口点击测试 2026-10-12：原显示 adm-… / u-… 内部 id）
       expect(label('u-admin')?.target_label).toBe('u-admin@example.com');
+
+      // 两端输入测试 2026-10-12：对象列显示订单号 / 商品名 / 邮箱，筛选框却只认内部 id——照着表格填进去查出 0 条
+      const by = async (t: string) =>
+        (
+          (
+            await call(
+              url,
+              'GET',
+              `/api/v1/admin/audit?target=${encodeURIComponent(t)}`,
+              undefined,
+              tk,
+            )
+          ).body as { items: Array<{ target?: string }> }
+        ).items.map((i) => i.target);
+      expect(await by('W-ord-label-1')).toEqual(['ord-label-1']);
+      expect(await by('南部铁器 铁壶 0.6L')).toEqual(['7f3c2a10-4b5e-4c6d-8e9f-0a1b2c3d4e5f']);
+      expect(await by('U-ADMIN@example.com')).toEqual(['u-admin']);
+      expect(await by('ord-label-1')).toEqual(['ord-label-1']); // 内部 id 照旧可用（订单详情的"操作记录"链接用它）
+      expect(await by('南部铁器')).toEqual([]); // 商品名要整名相同，不做模糊
+    } finally {
+      await close();
+    }
+  });
+
+  it('🔴 订单号不分大小写（运营照着手写或口头报的单号输入小写）', async () => {
+    const tk = await bearer();
+    await db`insert into users (id, openid) values ('u-buyer', 'o-buyer') on conflict do nothing`;
+    await seedCreatedOrder(db, 'ord-case-1', { userId: 'u-buyer' });
+    await db`update orders set order_no = '261009-F2Z45G' where id = 'ord-case-1'`;
+    await db`insert into admin_audit (actor, action, target, status_code, created_at)
+             values ('admin:u-admin', 'POST /admin/orders/:id/ship', 'ord-case-1', 200, '2026-10-01T00:00:00Z')`;
+    const { url, close } = await buildServer();
+    try {
+      const r = await call(url, 'GET', '/api/v1/admin/audit?target=261009-f2z45g', undefined, tk);
+      expect((r.body as { items: Array<{ target?: string }> }).items.map((i) => i.target)).toEqual([
+        'ord-case-1',
+      ]);
     } finally {
       await close();
     }

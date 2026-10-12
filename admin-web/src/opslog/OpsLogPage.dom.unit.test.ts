@@ -72,6 +72,16 @@ describe('运营日志页（3-2）', () => {
     await click(button(el, '下一页'));
     expect(paths.at(-1)).toContain('page=2');
   });
+
+  // 两端输入测试 2026-10-12：筛选框原写"对象 id（订单 / 商品）"——内部 id 在界面上看不到；服务端现认订单号 / 商品名 / 邮箱
+  it('🔴 对象筛选框说清能填什么（订单号 / 商品名 / 账号邮箱），填订单号带 target 参数', async () => {
+    const el = await open();
+    const input = el.querySelector('input[aria-label="对象"]') as HTMLInputElement;
+    expect(input.placeholder).toBe('对象：订单号 / 商品名 / 账号邮箱');
+    await type(input, '261009-F2Z45G');
+    await click(button(el, '查询'));
+    expect(paths.at(-1)).toContain('target=261009-F2Z45G');
+  });
 });
 
 describe('运营日志：按日期范围查（评估 P2，2026-10-09）', () => {

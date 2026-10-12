@@ -56,6 +56,30 @@ describe('OrderAddressForm', () => {
     expect(done[0]).toContain('已更新');
   });
 
+  // 两端输入测试 2026-10-12：输入框不限长，收件人贴 101 个字 → 服务端 40001，页面只弹"改址失败"+技术编号（小程序早有 maxlength）
+  it('🔴 每格限长与列宽一致（收件人 100、电话 20、地址 200、城市 100、州 2、邮编 10）', async () => {
+    mounted = await mount(
+      createElement(OrderAddressForm, {
+        api: (async () => ({})) as never,
+        id: 'o-1',
+        order: ORDER as never,
+        onDone: () => undefined,
+      }),
+    );
+    const max = Object.fromEntries(
+      [...mounted.el.querySelectorAll('input')].map((i) => [i.id, i.maxLength]),
+    );
+    expect(max).toEqual({
+      'addr-recipient': 100,
+      'addr-phone': 20,
+      'addr-line1': 200,
+      'addr-line2': 200,
+      'addr-city': 100,
+      'addr-state': 2,
+      'addr-postal_code': 10,
+    });
+  });
+
   it('核对态下再改字段 → 退出核对（不带着旧核对提交新内容）', async () => {
     mounted = await mount(
       createElement(OrderAddressForm, {

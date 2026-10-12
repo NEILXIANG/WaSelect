@@ -159,8 +159,9 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
         />
         <input
           className="input"
-          aria-label="对象 id"
-          placeholder="对象 id（订单 / 商品）"
+          aria-label="对象"
+          // 两端输入测试 2026-10-12：原写"对象 id"——内部 id 在界面上看不到；服务端现认这三种（内部 id 照旧可用）
+          placeholder="对象：订单号 / 商品名 / 账号邮箱"
           value={target}
           onChange={(e) => setTarget(e.target.value)}
         />

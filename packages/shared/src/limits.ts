@@ -150,6 +150,8 @@ export const FX_RAW_RATE_BOUNDS: Record<'CNY' | 'USD', { min: number; max: numbe
 export const SHIPPING_RATE_BOUNDS = {
   maxWeightG: 30_000,
   priceJpy: 100_000,
+  /** 承运商名最多几个字（= `shipping_rates.carrier VARCHAR(32)`；两端输入测试 2026-10-12 起前端同用这个数）。 */
+  carrierChars: 32,
 } as const;
 
 /**
@@ -265,6 +267,20 @@ export const PRODUCT_MAX_STOCK = 2_147_483_647;
  * @tradeoff 业务上界而不是 INT 上界：排序只比大小，四位数足够；上界小，手滑多打几个 0 也能拦下。
  */
 export const SORT_MAX = 9999;
+
+/**
+ * 地址各字段最多几个字符（与 001 的 VARCHAR 一致）：超长属"形状错"（40001），DB 兜底是最后一道。
+ * @why 放 shared（两端输入测试 2026-10-12）：原在服务端 `domain/address-input.ts`，管理端改址框因此没有 maxLength——
+ *      收件人贴 101 个字只得到"改址失败"+技术编号。小程序另有一份同名常量，由单测与这里比对。
+ */
+export const ADDRESS_MAX_CHARS = {
+  recipient: 100,
+  phone: 20,
+  line1: 200,
+  line2: 200,
+  city: 100,
+  postal_code: 10,
+} as const;
 
 export const SHIP_MAX_CHARS = {
   carrier: 32,

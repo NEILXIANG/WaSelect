@@ -26,21 +26,13 @@
  *      app/admin-order-routes.ts（第二个消费方）
  */
 import { AppError } from '../errors.js';
-import { isUsStateCode, zipMatchesState } from '@waselect/shared';
+import { ADDRESS_MAX_CHARS, isUsStateCode, zipMatchesState } from '@waselect/shared';
 
 /**
- * 列宽（与 001 的 VARCHAR 一致）：超长属"形状错"（40001），DB 兜底是最后一道。
- * 导出供小程序 `utils/address-form.js` 的同名常量做单测比对（TST3-02：前端原来不查长度，
- * 超长 line2 要到服务端才被拒）。
+ * 列宽：真源在 shared（两端输入测试 2026-10-12 挪过去，管理端改址框的 maxLength 同引）。
+ * 这里原名再导出：小程序 `utils/address-form.js` 的同名常量与它做单测比对（TST3-02）。
  */
-export const ADDRESS_MAX_CHARS = {
-  recipient: 100,
-  phone: 20,
-  line1: 200,
-  line2: 200,
-  city: 100,
-  postal_code: 10,
-} as const;
+export { ADDRESS_MAX_CHARS };
 const LEN = ADDRESS_MAX_CHARS;
 
 const ASCII_RE = /^[ -~]+$/;

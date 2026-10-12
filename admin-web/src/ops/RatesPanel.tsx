@@ -23,7 +23,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
-import { shippingRatesFingerprint } from '@waselect/shared';
+import { SHIPPING_RATE_BOUNDS, shippingRatesFingerprint } from '@waselect/shared';
 import { useFormDirty } from '../ui/unsaved.js';
 import { listShippingRates, replaceShippingRates, type AdminApi } from './api.js';
 import { emptyRateRow, rateDuplicates, rateErrors, toRateBody, type RateRow } from './view.js';
@@ -156,6 +156,8 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
               <td>
                 <input
                   {...cellProps(i, 'carrier')}
+                  aria-label={`第 ${String(i + 1)} 档承运商`}
+                  maxLength={SHIPPING_RATE_BOUNDS.carrierChars}
                   value={r.carrier}
                   onChange={(e) =>
                     setRows((prev) =>
@@ -167,6 +169,7 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
               <td>
                 <input
                   {...cellProps(i, 'maxWeightG')}
+                  aria-label={`第 ${String(i + 1)} 档重量上限（克）`}
                   value={r.maxWeightG}
                   onChange={(e) =>
                     setRows((prev) =>
@@ -178,6 +181,7 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
               <td>
                 <input
                   {...cellProps(i, 'priceJpy')}
+                  aria-label={`第 ${String(i + 1)} 档运费（日元）`}
                   value={r.priceJpy}
                   onChange={(e) =>
                     setRows((prev) =>
@@ -189,6 +193,7 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
               <td>
                 <input
                   type="checkbox"
+                  aria-label={`第 ${String(i + 1)} 档启用`}
                   checked={r.active}
                   onChange={(e) =>
                     setRows((prev) =>

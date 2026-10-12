@@ -40,6 +40,7 @@ import {
   nextPage,
   productCards,
   emptyCopy,
+  shownKeyword,
 } from './index.vm.js';
 import { newTraceId } from '../../utils/trace.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
@@ -340,7 +341,8 @@ Page({
       error: '',
       moreError: '',
       moreErrorRef: '',
-      searching: keyword.trim(),
+      // 回显截短（两端输入测试 2026-10-12：长词撑出屏幕、"清除搜索"被挤走）；它只用于显示与 wx:if 判断
+      searching: shownKeyword(keyword),
       emptyTitle: copy.title,
       emptyReason: copy.reason,
       ...tabsState(this.homeCategories, category),

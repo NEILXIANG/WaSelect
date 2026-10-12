@@ -302,6 +302,25 @@ export function intentForBanner(banner, categories) {
   return null;
 }
 
+/** 页面上回显搜索词的最多字数（超出截短加"…"）。 */
+const SHOWN_KEYWORD_MAX = 12;
+
+/**
+ * 页面上回显的搜索词（"搜索「…」的结果"、空态标题）：去首尾空格，超过 12 个字截短加"…"。
+ * @why 两端输入测试 2026-10-12：64 字不带空格的词（粘贴的英文 / 链接）不会换行，把整行撑出屏幕，
+ *      "清除搜索"被挤到屏幕外——而空态文案正让买家去点它。只截**显示**，请求仍用完整的词。
+ * @why 按字符（码点）截：按 UTF-16 码元截会把 emoji 切成半个，显示成乱码方块。
+ * @tradeoff 截短后看不全自己搜的词；输入框里仍是完整的词，要核对看输入框。
+ * @param {unknown} keyword
+ * @returns {string}
+ */
+export function shownKeyword(keyword) {
+  const chars = [...(typeof keyword === 'string' ? keyword.trim() : '')];
+  return chars.length > SHOWN_KEYWORD_MAX
+    ? chars.slice(0, SHOWN_KEYWORD_MAX).join('') + '…'
+    : chars.join('');
+}
+
 /**
  * 空态文案（小程序评估 A4，2026-10-09）：有搜索词时说"没找到这个词"，而不是"这个分类下暂时没有商品"——
  * 后者会让人以为分类本身是空的，而真正的出口是"换个词 / 清除搜索"。
@@ -309,7 +328,7 @@ export function intentForBanner(banner, categories) {
  * @returns {{title: string, reason: string}}
  */
 export function emptyCopy(keyword) {
-  const kw = typeof keyword === 'string' ? keyword.trim() : '';
+  const kw = shownKeyword(keyword);
   if (kw === '') return { title: '这个分类下暂时没有商品', reason: '换个分类看看' };
   return {
     title: `没有找到「${kw}」相关的商品`,

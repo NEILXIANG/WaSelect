@@ -145,7 +145,8 @@ export function fxFormErrors(form: unknown): { ok: boolean; first: string } {
       first: `${quote} 的汇率应在 ${bounds.min}–${bounds.max} 之间（1 日元换 ${quote} 的数；你填的是 ${raw}，请检查小数点或币种）`,
     };
   if (from !== '' && toIsoJst(from) === '')
-    return { ok: false, first: '生效时间格式为 YYYY-MM-DDTHH:mm（留空表示立即生效）' };
+    // 人话（两端输入测试 2026-10-12：原写格式串 YYYY-MM-DDTHH:mm，与 Banner 页同一类问题）
+    return { ok: false, first: '生效时间没填完整：日期和时刻都要选（留空表示立即生效）' };
   return { ok: true, first: '' };
 }
 
@@ -500,6 +501,10 @@ export function rateErrors(rows: unknown): {
     const at = `第 ${i + 1} 档`;
     if (carrier === '') {
       errors.push(`${at}：承运商必填`);
+      cells.push(`${String(i)}:carrier`);
+    } else if (carrier.length > SHIPPING_RATE_BOUNDS.carrierChars) {
+      // 与服务端 carrier_invalid 同一上限（两端输入测试 2026-10-12：原先前端放行、服务端回泛化 40001）
+      errors.push(`${at}：承运商名最多 ${String(SHIPPING_RATE_BOUNDS.carrierChars)} 个字`);
       cells.push(`${String(i)}:carrier`);
     }
     // ⚠️ "没填"与"填错了"要分开报：合并成一句的话，运营看到"必须是 ≥0 的整数"

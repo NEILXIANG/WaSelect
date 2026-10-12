@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.83
+  version: 0.6.84
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.84（AJ-503，两端输入测试 2026-10-12）：`GET /admin/audit` 的 `target` 也认订单号 / 商品名 / 账号邮箱——对象列显示的是这几样（AJ-499），筛选框原先只认内部 id，照着表格填进去查出 0 条。
     0.6.83（AJ-502，两端输入测试 2026-10-12）：三个整数入参补上界——原先只判"≥0 的整数"，越过列的上界在库里才被拒（22003）→ 500「服务器内部错误」。`BannerInput.sort` ≤ 9999（与分类排序同一个数）；`ProductInput.stock` ≤ 2147483647（stock_too_large）；`ProductInput.cost_jpy` ≤ MAX_ORDER_JPY（cost_too_large，`data.limit` 带上限）。
     0.6.82（AJ-500，用户 2026-10-12 同意）：买家 `Order` 与 `OrderListItem` 增可选 `payment_dispute`（open / lost）。拒付期间买家原先只看到"已付款 · 日本采购中"；买家多是没认出扣款名目就去银行争议，写明"银行正在处理争议、暂不发货"后误发起的会去撤回。胜诉 / 撤回（拒付标记解除）后省略。形状只增不改。
     0.6.81（AJ-499 补）：`AdminAuditEntry.target_label` 对账号类对象（命令行改密、拉黑 / 解除）回带账号邮箱（有邮箱时）。
@@ -1143,7 +1144,7 @@ paths:
     get:
       summary: 运营日志——管理员操作审计分页（0.6.32，剩余清单 3-2）
       description: 按 created_at 倒序。`actor` / `target` 精确过滤（非字符串或空串 → 40001，不静默当成"不过滤"）。🈲 不下发 before / after（改动前后的业务快照可能含地址等业务数据；要看细节去库里按 id 查）。只读：审计表 append-only。
-      parameters: [{name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}, {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}, {name: actor, in: query, schema: {type: string}, description: '如 admin:u-xxx / cli:admin-create；0.6.40 起含 @ 时按管理员邮箱筛'}, {name: target, in: query, schema: {type: string}, description: '如订单 id / 商品 id'}, {name: created_from, in: query, schema: {type: string, format: date}, description: '0.6.53：操作日期下界，JST 日历日 YYYY-MM-DD（含当日）；非法 → 40001'}, {name: created_to, in: query, schema: {type: string, format: date}, description: '0.6.53：操作日期上界，JST 日历日（含当日）；早于下界 → 40001'}]
+      parameters: [{name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}, {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}, {name: actor, in: query, schema: {type: string}, description: '如 admin:u-xxx / cli:admin-create；0.6.40 起含 @ 时按管理员邮箱筛'}, {name: target, in: query, schema: {type: string}, description: '0.6.84：认四种写法——内部 id、订单号（兼收小写）、商品名（整名相同）、账号邮箱（不分大小写）；都是整串相等，不做模糊'}, {name: created_from, in: query, schema: {type: string, format: date}, description: '0.6.53：操作日期下界，JST 日历日 YYYY-MM-DD（含当日）；非法 → 40001'}, {name: created_to, in: query, schema: {type: string, format: date}, description: '0.6.53：操作日期上界，JST 日历日（含当日）；早于下界 → 40001'}]
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [total, items], properties: {total: {type: integer}, items: {type: array, items: {$ref: '#/components/schemas/AdminAuditEntry'}}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}}
   /admin/exports/{kind}:
     get:

@@ -208,7 +208,7 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
                 channelLabels={channelLabels}
               />
 
-              {/* 扫描 A-03：运营日志按"对象 id"查的是内部 id（ord-…），按订单号查永远"没有记录"——所以仍要给出。
+              {/* 扫描 A-03：运营日志原先只认内部 id（ord-…），所以要给出；AJ-503 起运营日志也认订单号，这里留给技术人员排查用。
                 AJ-410 / N14：但它是给技术人员的，一长串乱码放在订单号旁边会让新手以为是另一个单号——收进页底折叠的「技术信息」。 */}
               <details className="tech-info">
                 <summary>技术信息（排查问题时给技术人员看）</summary>

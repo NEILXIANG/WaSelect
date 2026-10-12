@@ -18,7 +18,7 @@
  * @see ./address-view.ts（校验与请求体）；./api.ts（updateOrderAddress）
  */
 import { useRef, useState } from 'react';
-import { addressRejectText } from '@waselect/shared';
+import { ADDRESS_MAX_CHARS, addressRejectText } from '@waselect/shared';
 import { useFormDirty } from '../ui/unsaved.js';
 import { useDrawerBusy } from '../ui/drawer.js';
 import { ApiError } from '../api/errors.js';
@@ -151,6 +151,8 @@ export function OrderAddressForm({
           <input
             id={`addr-${f}`}
             className="input"
+            // 与列宽同源（两端输入测试 2026-10-12：原先不限长，超长只得到"改址失败"+技术编号）
+            maxLength={f === 'state' ? 2 : ADDRESS_MAX_CHARS[f]}
             autoFocus={i === 0}
             value={form[f]}
             onChange={(e) => {

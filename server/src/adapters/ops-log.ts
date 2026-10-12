@@ -5,6 +5,7 @@
  *      列表页用不到，而它们可能含地址、改价前后等业务数据——少 select 一列就少一处"顺手下发"的机会。
  * @limitation 过滤只支持 actor / target 精确匹配（两者都有索引：actor+created_at、target+created_at）；
  *             按 action 模糊查需要新索引，等真有需求再加。
+ *             target 认四种写法（内部 id / 订单号 / 商品名 / 账号邮箱），都是整串相等，不做模糊。
  * @see migrations/002_hardening.sql（admin_audit）；migrations/028_reconciliation_runs.sql
  */
 import type { Db } from './db.js';
@@ -58,9 +59,22 @@ export async function listAdminAudit(
       : q.actor.includes('@')
         ? db`a.actor in (select 'admin:' || u2.id from users u2 where lower(u2.email) = ${q.actor.toLowerCase()})`
         : db`a.actor = ${q.actor}`;
+  // 对象可按**页面上看得到的名字**筛（两端输入测试 2026-10-12）：对象列显示订单号 / 商品名 / 账号邮箱（AJ-499），
+  //   筛选框却只认内部 id，照着表格填进去查出 0 条——内部 id 在后台界面上根本看不到。
+  //   与 actorCond 同一做法：先把名字换成 id 集合，仍落在 (target, created_at) 索引上；内部 id 照旧可用（订单详情的链接用它）。
+  //   @limitation 商品名要整名相同（同名商品会一起出来）；订单号兼收小写（单号本身是大写，运营照念的常写小写）。
+  const targetCond =
+    q.target === undefined
+      ? db`true`
+      : db`a.target in (
+          select ${q.target}::text
+          union all select o2.id from orders o2 where o2.order_no in (${q.target}, upper(${q.target}))
+          union all select p2.id from products p2 where p2.title = ${q.target}
+          union all select u3.id from users u3 where lower(u3.email) = ${q.target.toLowerCase()}
+        )`;
   const where = db`
     where (${actorCond})
-      and (${q.target === undefined ? db`true` : db`a.target = ${q.target}`})
+      and (${targetCond})
       and (${q.createdFrom === undefined ? db`true` : db`a.created_at >= ${q.createdFrom}`})
       and (${q.createdTo === undefined ? db`true` : db`a.created_at < ${q.createdTo}`})`;
   const rows = await db`

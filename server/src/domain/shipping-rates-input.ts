@@ -37,8 +37,8 @@ import { SHIPPING_RATE_BOUNDS } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import { optionalBool } from './bool-input.js';
 
-/** 列宽（与 001 的 VARCHAR(32) 一致）：超长属"形状错"（40001），DB 兜底是最后一道。 */
-const MAX_CARRIER_LEN = 32;
+/** 列宽（与 001 的 VARCHAR(32) 一致）：超长属"形状错"（40001），DB 兜底是最后一道。管理端同引 shared 这个数。 */
+const MAX_CARRIER_LEN = SHIPPING_RATE_BOUNDS.carrierChars;
 
 /** 校验后的一档运费（提交给仓储的形状）。 */
 export interface ShippingRateInput {

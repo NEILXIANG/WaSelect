@@ -37,6 +37,7 @@ import {
   productCards,
   searchKeyword,
   emptyCopy,
+  shownKeyword,
 } from './index.vm.js';
 import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
@@ -569,6 +570,17 @@ describe('emptyCopy：空态说清楚是"搜不到"还是"分类里没有"（小
       title: '这个分类下暂时没有商品',
       reason: '换个分类看看',
     });
+  });
+
+  // 两端输入测试 2026-10-12：搜一个 64 字不带空格的词（粘贴的英文 / 链接），"搜索「…」的结果"与空态标题都被撑出屏幕，
+  // "清除搜索"被挤到屏幕外——而空态文案正让买家去点它
+  it('🔴 显示用的词超过 12 个字截短加"…"（按字符数，emoji 不切半）；请求仍用完整的词', () => {
+    expect(shownKeyword('a'.repeat(64))).toBe('a'.repeat(12) + '…');
+    expect(shownKeyword('😀'.repeat(13))).toBe('😀'.repeat(12) + '…');
+    expect(shownKeyword(' 抹茶 ')).toBe('抹茶');
+    expect(shownKeyword('一二三四五六七八九十一二')).toBe('一二三四五六七八九十一二');
+    expect(shownKeyword(undefined)).toBe('');
+    expect(emptyCopy('a'.repeat(64)).title).toBe(`没有找到「${'a'.repeat(12)}…」相关的商品`);
   });
 });
 

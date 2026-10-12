@@ -104,6 +104,23 @@ describe('运费分档面板：出错的格子标红（全入口点击测试 202
     expect(invalid(rows[0])).toEqual([false, false, false]);
     expect(invalid(rows[1])).toEqual([false, true, true]); // 承运商有默认值，不标
   });
+
+  // 两端输入测试 2026-10-12：表格里的输入框没有标签——读屏只读出"编辑文本"，不知道是第几档的哪一列
+  it('🔴 每格输入框带"第 N 档 + 列名"的标签；承运商框限长 32', async () => {
+    listFails = false;
+    list = [{ carrier: 'JP_POST_EMS', max_weight_g: 500, price_jpy: 2950, active: true }];
+    const el = await open();
+    const labels = [...(el.querySelector('tbody tr')?.querySelectorAll('input') ?? [])].map((i) =>
+      i.getAttribute('aria-label'),
+    );
+    expect(labels).toEqual([
+      '第 1 档承运商',
+      '第 1 档重量上限（克）',
+      '第 1 档运费（日元）',
+      '第 1 档启用',
+    ]);
+    expect((el.querySelector('tbody tr input') as HTMLInputElement).maxLength).toBe(32);
+  });
 });
 
 describe('运费分档面板：确认替换的在途保护（P2-47）', () => {

@@ -74,7 +74,11 @@ export function parseAmountToMinor(
   if (frac.length > digits) {
     return {
       ok: false,
-      reason: digits === 0 ? `${currency} 没有小数` : `${currency} 最多 ${digits} 位小数`,
+      // 中文币种名（两端输入测试 2026-10-12：原写"JPY 没有小数"，同处标签早已写中文名，AJ-410）
+      reason:
+        digits === 0
+          ? `${currencyName(currency)}没有小数`
+          : `${currencyName(currency)}最多 ${digits} 位小数`,
     };
   }
   const minor = Number(m[1]) * 10 ** digits + Number(frac.padEnd(digits, '0') || '0');

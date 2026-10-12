@@ -34,6 +34,11 @@ describe('parseAmountToMinor', () => {
     expect(parseAmountToMinor('1200', 'JPY')).toEqual({ ok: true, minor: 1200 });
     expect(parseAmountToMinor('1200.5', 'JPY').ok).toBe(false);
   });
+  // 两端输入测试 2026-10-12：提示写的是"JPY 没有小数 / USD 最多 2 位小数"——同一处的标签早已改写中文币种名（AJ-410）
+  it('🔴 小数位超出的提示写中文币种名，不写币种代码', () => {
+    expect(parseAmountToMinor('1200.5', 'JPY')).toEqual({ ok: false, reason: '日元没有小数' });
+    expect(parseAmountToMinor('10.555', 'USD')).toEqual({ ok: false, reason: '美元最多 2 位小数' });
+  });
   it.each(['', '0', '0.00', '-1', 'abc', '1.234', '1e3', '0x10'])('🔴 %j → 拒', (raw) => {
     expect(parseAmountToMinor(raw, 'USD').ok).toBe(false);
   });
