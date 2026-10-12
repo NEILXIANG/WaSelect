@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatMinor,
   fullRefundConfirmBody,
+  fullRefundAmountText,
   parseAmountToMinor,
   partialRefundErrorNotice,
   partialRefundGate,
@@ -303,5 +304,27 @@ describe('fullRefundConfirmBody：确认框写实际要退的钱', () => {
       expect(parseAmountToMinor('.5', 'USD')).toEqual({ ok: true, minor: 50 });
       expect(parseAmountToMinor('1000.', 'JPY')).toEqual({ ok: true, minor: 1000 });
     });
+  });
+});
+
+// 全入口点击测试 2026-10-11：全额退款抽屉原先不显示要退多少（要回页面去找；确认框里才有）——抽屉里先写一句，与确认框同一口径
+describe('fullRefundAmountText（抽屉里写要退多少）', () => {
+  const order = (over: Record<string, unknown> = {}) => ({
+    order_no: '261009-9H4QTF',
+    total_jpy: 18_550,
+    payments: [{ status: 'succeeded', charge_currency: 'JPY', charge_amount: 18_550 }],
+    partial_refunds: [],
+    ...over,
+  });
+  it('🔴 与确认框同一个数（去掉单号与结尾那句）', () => {
+    expect(fullRefundAmountText(order())).toBe('将原路退回 18,550 円');
+    expect(
+      fullRefundAmountText(
+        order({ partial_refunds: [{ status: 'succeeded', amount_minor: 2000 }] }),
+      ),
+    ).toBe('将原路退回 16,550 円（实收 18,550 円，已部分退 2,000 円）');
+    expect(fullRefundAmountText(order({ payments: [] }))).toBe(
+      '合计 18,550 円（实际可退金额以支付机构为准）',
+    );
   });
 });

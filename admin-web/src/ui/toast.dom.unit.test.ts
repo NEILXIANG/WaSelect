@@ -20,6 +20,7 @@ import { notifyRelogin } from './session-events.js';
 import { button, click, mount, type Mounted } from '../testing/dom.js';
 import {
   TOAST_AUTO_DISMISS_MS,
+  TOAST_ERROR_DISMISS_MS,
   ToastStack,
   toastError,
   useToasts,
@@ -53,6 +54,11 @@ function Host(): React.JSX.Element {
       'button',
       { onClick: () => s.error('服务器内部错误', { traceId: 'tr-42' }) },
       'bad',
+    ),
+    createElement(
+      'button',
+      { onClick: () => s.error('邮编 11220 不属于 Nevada（NV）——请检查州或邮编') },
+      'badLocal',
     ),
     createElement('button', { onClick: () => setTick((t) => t + 1) }, 'rerender'),
     /*
@@ -111,6 +117,20 @@ describe('Toast：消失时机（三类不是三种颜色，是三种处置）',
     await advance(TOAST_AUTO_DISMISS_MS * 10);
     expect(toasts(el)).toHaveLength(1);
     // 缺陷注入点：把 `kind === 'error'` 那个早退删掉，这条必须红
+  });
+
+  // 全入口点击测试 2026-10-11：表单校验错误（没有报障码）在表单关掉后还挂着，压在下一个抽屉上、内容已过时——
+  // 它在表单里本就有行内提示；没有报障码的错误到点消失（比成功提示多给时间），有报障码的照旧停留
+  it('🔴 没有报障码的错误 → 到点消失（TOAST_ERROR_DISMISS_MS）；有报障码的照旧停留', async () => {
+    const el = await open();
+    await click(button(el, 'badLocal'));
+    await advance(TOAST_ERROR_DISMISS_MS - 1);
+    expect(toasts(el)).toHaveLength(1);
+    await advance(1);
+    expect(toasts(el)).toHaveLength(0);
+    await click(button(el, 'bad'));
+    await advance(TOAST_ERROR_DISMISS_MS * 10);
+    expect(toasts(el)).toHaveLength(1);
   });
 
   it('信息默认会消失；声明 sticky 的**必须**停留（退款 pending 那一档写着"下一步怎么办"）', async () => {

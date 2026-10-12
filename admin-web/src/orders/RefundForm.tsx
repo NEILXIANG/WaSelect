@@ -17,7 +17,7 @@ import { useFormDirty } from '../ui/unsaved.js';
 import { ApiError, retryAfterMsSec } from '../api/errors.js';
 import { ConfirmDialog, type ConfirmSpec } from '../ui/confirm.js';
 import { refundOrder } from './api.js';
-import { fullRefundConfirmBody } from './partial-refund-view.js';
+import { fullRefundAmountText, fullRefundConfirmBody } from './partial-refund-view.js';
 import type { OrderActionFormProps } from './ShipForm.js';
 import { fullRefundErrorNotice, refundErrors, refundGate, toRefundBody } from './view.js';
 import { composeRefundReason, emptyRefundReason } from './refund-reason.js';
@@ -121,6 +121,8 @@ export function RefundForm({
   return (
     <div className="form" onKeyDown={enterClicksPrimary}>
       {/* 硬上限来自 shared（B7 / AJ-191）：超长会被机构拒且订单卡在退款中——按拼好后的整串校验 */}
+      {/* 全入口点击测试 2026-10-11：先写要退多少（原先金额要回页面找，确认框里才有；与确认框同一个函数） */}
+      <p className="refund-amount">退款金额：{fullRefundAmountText(order)}</p>
       <RefundReasonField value={refund} onChange={setRefund} />
       <button
         type="button"

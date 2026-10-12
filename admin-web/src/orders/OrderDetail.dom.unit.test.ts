@@ -616,6 +616,13 @@ describe('订单详情：操作抽屉（AJ-398）', () => {
     expect(toastText(el)).toContain('已发货');
   });
 
+  // 全入口点击测试 2026-10-11：抽屉里先写要退多少（原先只有原因与按钮，金额要回页面找）
+  it('🔴 打开全额退款抽屉 → 先看到「退款金额」', async () => {
+    const el = await open();
+    await click(button(el, '全额退款…'));
+    expect(el.querySelector('.drawer .refund-amount')?.textContent).toMatch(/^退款金额：/);
+  });
+
   it('填了内容再点「关闭」→ 先问「放弃修改」；确认后才关', async () => {
     const el = await open();
     await click(button(el, '全额退款…'));

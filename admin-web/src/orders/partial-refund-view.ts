@@ -240,9 +240,21 @@ export function partialRefundErrorNotice(a: {
  * @limitation 没有成功的支付记录（旧数据 / 详情没带 payments）时不编数字：写合计并说明以支付机构为准。
  */
 export function fullRefundConfirmBody(order: unknown): string {
-  const o = (order ?? {}) as { order_no?: unknown; order_id?: unknown; total_jpy?: unknown };
+  const o = (order ?? {}) as { order_no?: unknown; order_id?: unknown };
   const no = typeof o.order_no === 'string' ? o.order_no : String(o.order_id ?? '');
-  const tail = '退款原因会记录下来。';
+  const amount = fullRefundAmountText(order);
+  if (amount === FULLY_REFUNDED_TEXT) return `订单 ${no}：${amount}。`;
+  return `订单 ${no}：${amount}。退款原因会记录下来。`;
+}
+
+const FULLY_REFUNDED_TEXT = '部分退款已退满实收，已无可退金额';
+
+/**
+ * 全额退款实际要退多少（一句话，不带单号）——抽屉里先写这一句，确认框也用它（全入口点击测试 2026-10-11）。
+ * @why 抽屉原先只有原因与按钮，金额要回页面去找、到确认框才看到；两处同一个函数，不会写出两个数。
+ */
+export function fullRefundAmountText(order: unknown): string {
+  const o = (order ?? {}) as { total_jpy?: unknown };
   const pays = (order as { payments?: unknown } | null)?.payments;
   const pay = (Array.isArray(pays) ? pays : []).find(
     (p: { status?: unknown }) => p?.status === 'succeeded',
@@ -252,7 +264,7 @@ export function fullRefundConfirmBody(order: unknown): string {
     !Number.isInteger(pay.charge_amount) ||
     typeof pay.charge_currency !== 'string'
   ) {
-    return `订单 ${no}：合计 ${minorMoneyText(o.total_jpy, 'JPY')}（实际可退金额以支付机构为准）。${tail}`;
+    return `合计 ${minorMoneyText(o.total_jpy, 'JPY')}（实际可退金额以支付机构为准）`;
   }
   const currency = pay.charge_currency;
   const charged = pay.charge_amount as number;
@@ -260,7 +272,7 @@ export function fullRefundConfirmBody(order: unknown): string {
     .filter((r) => r.status === 'succeeded')
     .reduce((s, r) => s + (Number.isInteger(r.amount_minor) ? (r.amount_minor as number) : 0), 0);
   const refund = Math.max(0, charged - succeeded);
-  if (refund === 0) return `订单 ${no}：部分退款已退满实收，已无可退金额。`;
+  if (refund === 0) return FULLY_REFUNDED_TEXT;
   const notes = [
     ...(succeeded > 0
       ? [
@@ -269,5 +281,5 @@ export function fullRefundConfirmBody(order: unknown): string {
       : []),
     ...(currency.toUpperCase() !== 'JPY' ? ['按买家付款的币种退'] : []),
   ];
-  return `订单 ${no}：将原路退回 ${minorMoneyText(refund, currency)}${notes.length > 0 ? `（${notes.join('；')}）` : ''}。${tail}`;
+  return `将原路退回 ${minorMoneyText(refund, currency)}${notes.length > 0 ? `（${notes.join('；')}）` : ''}`;
 }

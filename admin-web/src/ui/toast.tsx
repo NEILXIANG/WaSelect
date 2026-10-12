@@ -46,6 +46,13 @@ const AUTH_EXPIRED_TEXT: string = ERROR_CODES[40101].message;
 /** 成功 / 信息类提示的自动消失时长（毫秒）。 */
 export const TOAST_AUTO_DISMISS_MS = 3000;
 
+/**
+ * 没有报障码的错误提示的停留时长（毫秒）（全入口点击测试 2026-10-11）。
+ * @why 这类多是表单校验错误：表单里本就有行内提示；原先恒停留，表单关掉后还压在下一个抽屉上、内容已过时。
+ *      比成功提示多给时间读完；有报障码的错误（要复制给技术人员）照旧停留到手动关。
+ */
+export const TOAST_ERROR_DISMISS_MS = 8000;
+
 /** 同时最多显示几条（超出丢最旧的，@see @limitation 二）。 */
 export const TOAST_MAX = 3;
 
@@ -188,11 +195,13 @@ function ToastRow({
   dismiss.current = onDismiss;
 
   useEffect(() => {
-    // 错误恒停留（要读完、要复制报障码）；其余按 sticky 声明
-    if (toast.kind === 'error' || toast.sticky === true) return undefined;
-    const timer = setTimeout(() => dismiss.current(toast.id), TOAST_AUTO_DISMISS_MS);
+    // 带报障码的错误恒停留（要读完、要复制报障码）；没有报障码的错误多停一会儿再消失（全入口点击测试 2026-10-11）；其余按 sticky 声明
+    const traced = typeof toast.traceId === 'string' && toast.traceId !== '';
+    if ((toast.kind === 'error' && traced) || toast.sticky === true) return undefined;
+    const ms = toast.kind === 'error' ? TOAST_ERROR_DISMISS_MS : TOAST_AUTO_DISMISS_MS;
+    const timer = setTimeout(() => dismiss.current(toast.id), ms);
     return () => clearTimeout(timer);
-  }, [toast.kind, toast.id, toast.sticky]);
+  }, [toast.kind, toast.id, toast.sticky, toast.traceId]);
 
   const hasTrace = typeof toast.traceId === 'string' && toast.traceId !== '';
 
