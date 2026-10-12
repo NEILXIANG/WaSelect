@@ -16,6 +16,7 @@ import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { signToken } from './auth.js';
+import { waitUntil } from '../../../test/helpers/chain-server.js';
 
 let db: Db;
 const JWT_SECRET = 'sales-pause-route-test-jwt-sec-'.repeat(3);
@@ -118,7 +119,11 @@ describe('全局停售开关', () => {
     expect(
       (await req('POST', '/api/v1/orders/o-x/pay', buyer, { channel: 'mock' })).json['code'],
     ).toBe(40916);
-    const audit = await db`select before from admin_audit where action like '%sales-pause%'`;
+    // 审计行在响应之后写（admin-audit.ts：prefinish 之后），先等它落库再读——不等在全量负载下偶发读空（2026-10-12 复盘）
+    const pauseAudit = async () =>
+      db`select before from admin_audit where action like '%sales-pause%'`;
+    await waitUntil(async () => (await pauseAudit()).length >= 1, '停售的审计行没写进来');
+    const audit = await pauseAudit();
     expect(audit).toHaveLength(1);
     expect(audit[0]?.['before']).toMatchObject({ paused: false });
     // 管理端照常（不是全站停机）

@@ -187,6 +187,9 @@ describe('客户详情', () => {
 
   it('拉黑：原因必填 → 先弹确认（之前不发请求）→ 确认后发 block（带原因、不带 order_id）→ 重新取详情显示已拉黑', async () => {
     const { el, calls } = await open(detailRoute());
+    const detailGets = () =>
+      calls.filter((c) => c.path === `/api/v1/admin/customers/${ROW.id}`).length;
+    const before = detailGets(); // 挂载取详情的次数；测试宿主开 StrictMode，开发模式挂载 effect 双跑，按动作前后的增量数——testing/dom.ts
     await click(button(el, '拉黑该客户'));
     expect(el.querySelector('.dialog')).toBeNull(); // AJ-449：没填原因不弹层
     await type(el.querySelector('input[name="customer-block-reason"]'), '多次拒付');
@@ -200,7 +203,7 @@ describe('客户详情', () => {
       method: 'POST',
     });
     expect(block?.body).toEqual({ reason: '多次拒付' });
-    expect(calls.filter((c) => c.path === `/api/v1/admin/customers/${ROW.id}`)).toHaveLength(2);
+    expect(detailGets()).toBe(before + 1); // 拉黑成功后重取一次详情
     expect(el.textContent).toContain('已拉黑（2026-10-07 10:00）');
     expect(button(el, '拉黑该客户')).toBeNull();
   });

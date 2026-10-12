@@ -16,9 +16,14 @@
  *              组件若监听 keydown / compositionend 之类，这里模拟不到。
  * @limitation 三：不拦网络——组件的 `api` 由用例注入假的；真发请求会被全局的外网闸门拦下。
  *
+ * @why 默认包一层 `StrictMode`，与 `main.tsx` 生产装配一致（测试缺口复盘 2026-10-12）：
+ *      StrictMode 会把每个 effect "挂载 → 卸载 → 再挂载"跑一遍；打印拣货单页的缺陷（卸载时把 live 置 false、
+ *      再挂载时没置回 true，取数结果被吞，页面永远"加载中"）只在这种双跑下出现——测试不开它，就永远测不到。
+ *      代价：用例里注入的 `api` 假实现在挂载时会被调用两次，按"调用次数"断言的用例要按生产口径计。
+ *
  * @see docs/自主决策记录.md AJ-229；docs/全量逐行代码审查报告-2026-09-29.md 第七节机制 4
  */
-import { act, type ReactElement } from 'react';
+import { act, createElement, StrictMode, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 export interface Mounted {
@@ -39,7 +44,7 @@ export async function mount(element: ReactElement): Promise<Mounted> {
   document.body.appendChild(el);
   const root: Root = createRoot(el);
   await act(async () => {
-    root.render(element);
+    root.render(createElement(StrictMode, null, element));
   });
   await flush();
   return {

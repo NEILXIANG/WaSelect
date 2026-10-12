@@ -17,6 +17,7 @@ import { signToken } from './auth.js';
 import { EXPORT_IDS_MAX } from '@waselect/shared';
 import type { Clock } from '../ports/clock.js';
 import { fixedClock } from '../../../test/helpers/fixed-clock.js';
+import { waitUntil } from '../../../test/helpers/chain-server.js';
 
 let db: Db;
 let sink: MemorySink;
@@ -231,6 +232,11 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
     const { url, close } = await buildServer();
     try {
       await call(url, 'GET', '/api/v1/admin/exports/customs', undefined, await bearer());
+      // 审计行在响应之后写（admin-audit.ts：prefinish 之后），先等它落库再读——不等在全量负载下偶发读空（2026-10-12 复盘）
+      await waitUntil(
+        async () => (await db`select 1 from admin_audit`).length >= 1,
+        '导出的审计行没写进来',
+      );
       const [a] = await db`select actor, action, target, after from admin_audit`;
       expect(a).toMatchObject({
         actor: 'admin:u-admin',
@@ -373,6 +379,10 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
         '/api/v1/admin/exports/customs?order_ids=o-1,o-2,o-nope',
         undefined,
         await bearer(),
+      );
+      await waitUntil(
+        async () => (await db`select 1 from admin_audit`).length >= 1,
+        '导出的审计行没写进来',
       );
       const [a] = await db`select after from admin_audit`;
       expect(a?.['after']).toEqual({ rows: 2, selected: 3 });

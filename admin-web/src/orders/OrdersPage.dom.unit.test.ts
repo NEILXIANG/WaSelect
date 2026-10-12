@@ -81,8 +81,8 @@ describe('订单列表："显示测试订单"开关（剩余清单 3-4）', () =
 describe('订单列表：URL 上认不出的 status（AJ-398）', () => {
   it('🔴 #/orders?status=foo → 按「全部」请求，不把 foo 发给服务端', async () => {
     const el = await open('#/orders?status=foo');
-    expect(gets()).toHaveLength(1);
-    expect(gets()[0]?.path).not.toContain('status=');
+    expect(gets().length).toBeGreaterThan(0);
+    for (const g of gets()) expect(g.path).not.toContain('status=');
     // AJ-400：下拉改页签——回落后高亮的是「全部」页签
     expect(el.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('全部');
   });
@@ -140,34 +140,39 @@ describe('订单列表：状态页签与日期筛选（AJ-400）', () => {
 });
 
 describe('订单列表：刷新入口（ADM3-09）', () => {
-  it('挂载时拉一次列表', async () => {
+  // 挂载即拉列表。测试宿主与生产一样开 StrictMode（testing/dom.ts）：开发模式下挂载 effect 双跑，
+  // 会发两次**同样的**请求（生产构建只发一次）——所以这里断言"拉了、且都是同一个请求"，下面各条按"动作前后的增量"数
+  it('挂载时拉列表（StrictMode 双跑时两次是同一个请求）', async () => {
     await open();
-    expect(gets()).toHaveLength(1);
+    expect(gets().length).toBeGreaterThan(0);
+    expect(new Set(gets().map((g) => g.path)).size).toBe(1);
   });
 
   it('🔴 关键词**不变**时连点两次"搜索" → 每次都重新请求（现状：一次都不发）', async () => {
     const el = await open();
-    expect(gets()).toHaveLength(1);
+    const base = gets().length;
     await click(button(el, '搜索'));
-    expect(gets()).toHaveLength(2);
+    expect(gets()).toHaveLength(base + 1);
     await click(button(el, '搜索'));
-    expect(gets()).toHaveLength(3);
+    expect(gets()).toHaveLength(base + 2);
   });
 
   it('🔴 关键词变了再点"搜索"：仍然只加一次请求，且带上新关键词', async () => {
     const el = await open();
+    const base = gets().length;
     await type(keywordInput(el), 'W-2601');
     await click(button(el, '搜索'));
-    expect(gets()).toHaveLength(2);
-    expect(gets()[1]?.path).toContain('keyword=W-2601');
+    expect(gets()).toHaveLength(base + 1);
+    expect(gets()[base]?.path).toContain('keyword=W-2601');
     expect(keywordInput(el).maxLength).toBe(SEARCH_KEYWORD_MAX_LENGTH); // P2-47
     // 关键词已生效后再点一次（不变）→ 仍然重载
     await click(button(el, '搜索'));
-    expect(gets()).toHaveLength(3);
+    expect(gets()).toHaveLength(base + 2);
   });
 
   it('🔴 在搜索框里按回车 = 点"搜索"（三端联动模拟 2026-10-08：原先回车没反应）；输入法选字的回车不算', async () => {
     const el = await open();
+    const base = gets().length;
     const input = keywordInput(el);
     await type(input, 'Kenji');
     const { act } = await import('react');
@@ -176,21 +181,22 @@ describe('订单列表：刷新入口（ADM3-09）', () => {
         new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true }),
       );
     });
-    expect(gets()).toHaveLength(1);
+    expect(gets()).toHaveLength(base);
     await act(async () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
     await flush();
-    expect(gets()).toHaveLength(2);
-    expect(gets()[1]?.path).toContain('keyword=Kenji');
+    expect(gets()).toHaveLength(base + 1);
+    expect(gets()[base]?.path).toContain('keyword=Kenji');
   });
 
   it('🔴 "刷新"按钮：不依赖关键词或页码，点一次就重载一次', async () => {
     const el = await open();
+    const base = gets().length;
     await click(button(el, '刷新'));
-    expect(gets()).toHaveLength(2);
+    expect(gets()).toHaveLength(base + 1);
     await click(button(el, '刷新'));
-    expect(gets()).toHaveLength(3);
+    expect(gets()).toHaveLength(base + 2);
   });
 });
 

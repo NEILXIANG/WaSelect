@@ -41,13 +41,16 @@ describe('FunnelCard', () => {
     );
     await flush();
     const el = mounted.el;
-    expect(paths).toEqual(['/api/v1/admin/dashboard/funnel?days=7']);
+    // 挂载取近 7 天（测试宿主开 StrictMode，开发模式挂载 effect 双跑，按动作前后的增量数——testing/dom.ts）
+    expect(new Set(paths)).toEqual(new Set(['/api/v1/admin/dashboard/funnel?days=7']));
+    const before = paths.length;
     expect(el.textContent).toContain('进店（看过任意页面）');
     expect(el.textContent).toContain('200 人');
     expect(el.textContent).toContain('付款成功');
     expect(el.textContent).toContain('比上一步 80%');
     await click(button(el, '今天'));
     await flush();
+    expect(paths).toHaveLength(before + 1);
     expect(paths.at(-1)).toBe('/api/v1/admin/dashboard/funnel?days=1');
     expect(el.textContent).toContain('5 人');
   });

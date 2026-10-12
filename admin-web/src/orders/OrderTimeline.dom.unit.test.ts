@@ -110,6 +110,7 @@ describe('订单时间线（AJ-396）', () => {
 
   it('🔴 追加备注：POST 去首尾空白的正文，新条目并进时间线（显示作者邮箱），草稿清空，不重取列表', async () => {
     const el = await open();
+    const getsBefore = calls.filter((c) => c.method !== 'POST').length; // 挂载取备注的次数；测试宿主开 StrictMode，开发模式挂载 effect 双跑，按动作前后的增量数——testing/dom.ts
     const area = el.querySelector('textarea');
     await type(area, '  地址先不改\n等买家确认  ');
     await click(button(el, '添加备注'));
@@ -120,7 +121,7 @@ describe('订单时间线（AJ-396）', () => {
     expect(el.textContent).toContain('等买家确认');
     expect((el.querySelector('textarea') as HTMLTextAreaElement).value).toBe('');
     expect(successes).toEqual(['备注已添加']);
-    expect(calls.filter((c) => c.method !== 'POST')).toHaveLength(1);
+    expect(calls.filter((c) => c.method !== 'POST')).toHaveLength(getsBefore); // 加完备注不重取列表
   });
 
   it('只有空白时按钮不可点（不发请求）', async () => {

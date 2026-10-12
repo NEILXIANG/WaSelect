@@ -17,6 +17,7 @@ import { createMemoryStorage } from '../adapters/storage-memory.js';
 import { createHttpApp, listen } from '../http.js';
 import { mountAllRoutes } from './mount.js';
 import { signToken } from './auth.js';
+import { waitUntil } from '../../../test/helpers/chain-server.js';
 
 let db: Db;
 const JWT_SECRET = 'after-sale-route-test-jwt-secret-'.repeat(3);
@@ -232,8 +233,11 @@ describe('POST /admin/orders/:id/after-sales/:rid/resolve（运营处理）', ()
     });
     expect(buyerDetail.json['after_sale']).not.toHaveProperty('handled_by');
     // 审计中间件自动写（处理历史的追溯来源，迁移 038 @limitation 一）
-    const audits = await db`select 1 from admin_audit
+    // 审计行在响应之后写（admin-audit.ts：prefinish 之后），先等它落库再读——不等在全量负载下偶发读空（2026-10-12 复盘）
+    const resolveAudits = async () => db`select 1 from admin_audit
                          where action = 'POST /admin/orders/:id/after-sales/:rid/resolve'`;
+    await waitUntil(async () => (await resolveAudits()).length >= 2, '售后处理的审计行没写进来');
+    const audits = await resolveAudits();
     expect(audits.length).toBe(2);
   });
 

@@ -67,7 +67,7 @@ async function open(resp: unknown): Promise<{ el: HTMLElement; paths: string[] }
 describe('SettingsPage', () => {
   it('按组渲染：组名、项名、值、生效方式；运费项给运营配置页链接', async () => {
     const { el, paths } = await open(BODY);
-    expect(paths).toEqual(['/api/v1/admin/settings']);
+    expect(new Set(paths)).toEqual(new Set(['/api/v1/admin/settings'])); // 只取设置一个接口（测试宿主开 StrictMode，开发模式挂载 effect 双跑，按动作前后的增量数——testing/dom.ts）
     expect(el.querySelector('.title')?.textContent).toBe('设置');
     const titles = [...el.querySelectorAll('.form-card-title')].map((n) => n.textContent);
     expect(titles).toEqual(['店铺信息', '运费', '通知']);
