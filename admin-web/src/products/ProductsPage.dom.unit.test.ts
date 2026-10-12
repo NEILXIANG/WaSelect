@@ -317,6 +317,37 @@ describe('商品列表：筛选与页码进地址栏', () => {
     return { el: mounted.el, listCalls, navs };
   }
 
+  // 全入口点击测试 2026-10-12：「已下架 + 库存紧张」筛出 0 件只写"没有符合条件的商品"——新手不记得开过哪个筛选，
+  // 会以为没有商品；给一键清除（主流后台同样做法）
+  it('🔴 筛空了 → 说没有符合条件的，并给「清除筛选」：点了状态 / 库存紧张 / 关键词全回默认', async () => {
+    const navs: string[] = [];
+    mounted = await mount(
+      createElement(ProductsPage, {
+        api: (async () => ({ items: [], total: 0, page: 1, size: 20 })) as never,
+        onEdit: () => undefined,
+        route: { page: 'products', id: '', query: new URLSearchParams('status=offline&low=1&q=x') },
+        onNavigate: (next: { query: URLSearchParams }) => navs.push(next.query.toString()),
+      }),
+    );
+    const el = mounted.el;
+    expect(el.textContent).toContain('没有符合条件的商品');
+    await click(button(el, '清除筛选'));
+    expect(navs.at(-1)).toBe('');
+  });
+
+  it('没开任何筛选时是"还没有商品"，不给「清除筛选」', async () => {
+    mounted = await mount(
+      createElement(ProductsPage, {
+        api: (async () => ({ items: [], total: 0, page: 1, size: 20 })) as never,
+        onEdit: () => undefined,
+        route: { page: 'products', id: '', query: new URLSearchParams('') },
+        onNavigate: () => undefined,
+      }),
+    );
+    expect(mounted.el.textContent).toContain('还没有商品');
+    expect(button(mounted.el, '清除筛选')).toBeNull();
+  });
+
   it('🔴 打开 #/products?status=offline&low=1&q=鉄&page=3 → 按这些条件取第 3 页（编辑完回来、刷新、别人发来的链接都一样）', async () => {
     const { el, listCalls } = await openAt('status=offline&low=1&q=%E9%89%84&page=3');
     const last = listCalls.at(-1) ?? '';

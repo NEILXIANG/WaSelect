@@ -250,7 +250,21 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
       {loading && <p className="muted">加载中…</p>}
       {!loading && rows.length === 0 && !failed && (
         <p className="muted">
-          {applied !== '' || lowStock || status !== 'all' ? '没有符合条件的商品' : '还没有商品'}
+          {applied !== '' || lowStock || status !== 'all' ? (
+            <>
+              没有符合条件的商品{' '}
+              {/* 一键回到默认（全入口点击测试 2026-10-12：筛空了只说"没有"，新手不记得开过哪个筛选） */}
+              <button
+                type="button"
+                className="link"
+                onClick={() => patch({ [Q.status]: 'all', [Q.low]: '0', [Q.q]: '', [Q.page]: '1' })}
+              >
+                清除筛选
+              </button>
+            </>
+          ) : (
+            '还没有商品'
+          )}
         </p>
       )}
 

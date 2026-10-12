@@ -21,7 +21,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck -w admin-web",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:fast": "vitest run --project unit --changed HEAD~1 --passWithNoTests",
+    "test:fast": "node scripts/test-fast.mjs",
     "test:unit": "vitest run --project unit",
     "test:db": "vitest run --project db",
     "test:contract": "vitest run --project contract",

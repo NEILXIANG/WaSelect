@@ -176,7 +176,24 @@ function CustomerList({
           {rows.length === 0 && !loading && (
             <tr>
               <td className="muted" colSpan={8}>
-                没有符合条件的客户
+                {/* 全入口点击测试 2026-10-12：搜空了给一键清除（与商品 / 订单列表同）；没搜时是"还没有客户" */}
+                {keyword !== '' ? (
+                  <>
+                    没有符合条件的客户{' '}
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() => {
+                        setInput('');
+                        go('', 1);
+                      }}
+                    >
+                      清除搜索
+                    </button>
+                  </>
+                ) : (
+                  '还没有客户'
+                )}
               </td>
             </tr>
           )}

@@ -432,7 +432,7 @@ input[type='radio'] {
   color: var(--md-color-outline);
   font-weight: 400;
   text-decoration: underline dotted;
-  text-underline-offset: 3px;
+  text-underline-offset: var(--ws-space-xs);
   cursor: not-allowed;
 }
 

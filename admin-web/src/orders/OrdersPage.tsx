@@ -151,6 +151,10 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
   // 只用于显示（React 会转义）；截断防超长链接撑坏版面
   const who = (route.query.get(Q.who) ?? '').trim().slice(0, 60);
   const includeTest = route.query.get(Q.test) === '1';
+  /** 开着会让列表变少的筛选（"显示测试订单"让列表变多、排序与每页条数只是"怎么看"，都不算）。 */
+  const hasFilter = [Q.status, Q.q, Q.range, Q.from, Q.to, Q.attention, Q.user].some(
+    (k) => (route.query.get(k) ?? '') !== '',
+  );
   const { sortKey, sortDir, size: pageSize } = readListParams(route.query, LIST_SORT_KEYS.orders);
   /** 改排序 / 条数都回到第 1 页（第 3 页在新顺序下是另一批单，停在那里只会让人困惑）。 */
   const onSort = (sort: string): void => patch({ [Q.sort]: sort, [Q.page]: '1' });
@@ -461,7 +465,36 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       </div>
 
       {loading && <p className="muted">加载中…</p>}
-      {!loading && rows.length === 0 && !failed && <p className="muted">没有符合条件的订单</p>}
+      {!loading && rows.length === 0 && !failed && (
+        <p className="muted">
+          没有符合条件的订单
+          {/* 一键回到默认（全入口点击测试 2026-10-12，与商品列表同）：排序与每页条数是"怎么看"，不算筛选，保留 */}
+          {hasFilter && (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="link"
+                onClick={() =>
+                  patch({
+                    status: '',
+                    q: '',
+                    range: '',
+                    from: '',
+                    to: '',
+                    attention: '',
+                    user: '',
+                    who: '',
+                    page: '1',
+                  })
+                }
+              >
+                清除筛选
+              </button>
+            </>
+          )}
+        </p>
+      )}
 
       {batchMode && (
         // AJ-401：批量发货 / CSV 导入（抽屉）

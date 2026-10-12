@@ -64,6 +64,29 @@ afterEach(async () => {
   mounted = undefined;
 });
 
+// 全入口点击测试 2026-10-12：筛空了只写"没有符合条件的订单"，不说怎么回去；给一键清除（与商品列表同）
+describe('订单列表：筛空了给「清除筛选」', () => {
+  it('🔴 状态 + 关键词 + 日期 + 待处理 + 只看某客户 都清掉；排序与每页条数保留', async () => {
+    const el = await open(
+      '#/orders?status=paid&q=W-2601&range=7d&attention=after_sale&user=u-1&who=Ken&sort=-total_jpy&size=50',
+    );
+    expect(el.textContent).toContain('没有符合条件的订单');
+    await click(button(el, '清除筛选'));
+    const last = decodeURIComponent(gets().at(-1)?.path ?? '');
+    for (const k of ['status=', 'keyword=', 'created_from', 'attention=', 'user_id=']) {
+      expect(last, k).not.toContain(k);
+    }
+    expect(last).toContain('sort=-total_jpy');
+    expect(last).toContain('size=50');
+    expect(keywordInput(el).value).toBe('');
+  });
+
+  it('没开任何筛选时不给「清除筛选」', async () => {
+    const el = await open('#/orders');
+    expect(button(el, '清除筛选')).toBeNull();
+  });
+});
+
 // AJ-410 / N13：开关文案「含测试单」改为「显示测试订单」
 describe('订单列表："显示测试订单"开关（剩余清单 3-4）', () => {
   it('🔴 默认不带 include_test；勾选 → 重新请求且带 include_test=true、回到第 1 页', async () => {

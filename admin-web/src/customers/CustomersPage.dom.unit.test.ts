@@ -120,6 +120,35 @@ async function open(route: Route, server: { blocked: boolean } = { blocked: fals
 const listRoute = (q = ''): Route => ({ page: 'customers', id: '', query: new URLSearchParams(q) });
 const detailRoute = (): Route => ({ page: 'customers', id: ROW.id, query: new URLSearchParams() });
 
+describe('客户列表：搜空了（全入口点击测试 2026-10-12，与商品 / 订单列表同）', () => {
+  const openEmpty = async (q: string) => {
+    const navigated: Route[] = [];
+    mounted = await mount(
+      createElement(CustomersPage, {
+        api: (async () => ({ items: [], total: 0 })) as never,
+        route: listRoute(q),
+        onNavigate: (next: Route) => navigated.push(next),
+      }),
+    );
+    return { el: mounted.el, navigated };
+  };
+
+  it('🔴 有关键词时说"没有符合条件的客户"并给「清除搜索」：回到不带关键词的第 1 页、输入框清空', async () => {
+    const { el, navigated } = await openEmpty('keyword=nobody&page=2');
+    expect(el.textContent).toContain('没有符合条件的客户');
+    await click(button(el, '清除搜索'));
+    expect(navigated.at(-1)?.query.get('keyword') ?? '').toBe('');
+    expect(navigated.at(-1)?.query.get('page') ?? '1').toBe('1');
+    expect((el.querySelector('form input') as HTMLInputElement).value).toBe('');
+  });
+
+  it('没有关键词时是"还没有客户"，不给「清除搜索」', async () => {
+    const { el } = await openEmpty('');
+    expect(el.textContent).toContain('还没有客户');
+    expect(button(el, '清除搜索')).toBeNull();
+  });
+});
+
 describe('客户列表', () => {
   it('按地址栏里的关键字与页码取数；行里是打码 id + 收件人 + 邮箱 + 单数 + 累计', async () => {
     const { el, calls } = await open(listRoute('keyword=zhang&page=2'));
