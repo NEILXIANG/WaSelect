@@ -391,6 +391,8 @@ describe('AJ-408：列表行缩略图与件数（M-11）', () => {
       ]);
       const r = await row(srv.url, id);
       expect(r?.['item_count']).toBe(3); // knife×1 + cup×2
+      // 两端逐页走查 2026-10-12：只给首件名 + 总件数时，"刀 · 共 3 件"看不出还有别的商品——带上种数
+      expect(r?.['line_count']).toBe(2);
       // A8（AJ-416，契约 0.6.54）：第一行商品的**下单快照**标题（买家看到的那个名字，不是现名、不是日文采购名）
       expect(r?.['first_title']).toBe('Chef Knife');
       expect(r?.['first_image']).toEqual({

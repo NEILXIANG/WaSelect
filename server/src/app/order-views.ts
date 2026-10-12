@@ -124,6 +124,8 @@ export function toOrderListItem(
   return {
     ...toOrderSummary(row, displayCurrencies),
     item_count: row.item_count,
+    // 0.6.88：几种商品（小程序据此写"首件名 等 N 种商品"）
+    line_count: row.line_count,
     ...(image !== null ? { first_image: image } : {}),
     ...(row.first_title !== null && row.first_title !== '' ? { first_title: row.first_title } : {}),
     // AJ-430：恒下发（null = 没有售后申请），小程序据此把有售后的单归进「售后·退款」页签

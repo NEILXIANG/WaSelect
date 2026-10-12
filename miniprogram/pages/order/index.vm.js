@@ -83,6 +83,17 @@ function nextTextOf(o, status, buyer) {
 }
 
 /**
+ * 按字符（码点）截短加"…"：标题两行放不下时，保证后面的"等 N 种商品"不被省略号吃掉（两端逐页走查 2026-10-12）。
+ * @param {string} s
+ * @param {number} max
+ * @returns {string}
+ */
+function clipChars(s, max) {
+  const chars = [...s];
+  return chars.length > max ? `${chars.slice(0, max).join('')}…` : s;
+}
+
+/**
  * `GET /orders` 的 items → 列表行。
  * @param {unknown} items 契约 `OrderSummary[]`
  * @param {number} [nowMs] 当前时刻（判付款截止，MP-14）；不传 = 不判（时间由入参给，vm 不读时钟）
@@ -133,7 +144,13 @@ export function orderRows(items, nowMs = undefined) {
         itemCountText:
           Number.isInteger(o.item_count) && o.item_count > 0 ? `共 ${o.item_count} 件` : '',
         // A8（AJ-416，契约 0.6.54）：首件商品名（下单快照）——只看缩略图分不清两张都是饼干的单
-        titleText: typeof o.first_title === 'string' ? o.first_title : '',
+        // 两端逐页走查 2026-10-12：不止一种商品时写"等 N 种商品"——原先只有首件名 + "共 2 件"，买家以为同一件买了 2 份
+        titleText:
+          typeof o.first_title !== 'string'
+            ? ''
+            : Number.isInteger(o.line_count) && o.line_count > 1
+              ? `${clipChars(o.first_title, 20)} 等 ${o.line_count} 种商品`
+              : o.first_title,
       };
     });
 }

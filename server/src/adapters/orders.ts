@@ -450,6 +450,8 @@ export interface OrderListRow {
 export interface OwnedOrderListRow extends OrderListRow {
   /** 各行 qty 之和（"共 N 件"，不是行数）。 */
   item_count: number;
+  /** 行数 = 几种商品（两端逐页走查 2026-10-12：只给首件名 + 总件数，看不出还有别的商品）。 */
+  line_count: number;
   /** 第一行（line_no 最小）商品的 `products.images`（已 JSON.parse）；没有行项目 → null。 */
   first_images: unknown;
   /**
@@ -531,6 +533,7 @@ export async function listOwnedOrders(
     select o.id, o.order_no, o.status, o.total_jpy, o.fx_snapshot, o.created_at, o.expires_at,
            (select coalesce(sum(oi.qty), 0)::int from order_items oi where oi.order_id = o.id)
              as item_count,
+           (select count(*)::int from order_items oi where oi.order_id = o.id) as line_count,
            (select p.images from order_items oi join products p on p.id = oi.product_id
              where oi.order_id = o.id
              order by oi.line_no nulls last, oi.id
@@ -558,6 +561,7 @@ export async function listOwnedOrders(
     fx_snapshot: jsonbValue(r.fx_snapshot),
     created_at: r.created_at as Date,
     item_count: Number(r.item_count),
+    line_count: Number(r.line_count),
     first_images: r.first_images === null ? null : jsonbValue(r.first_images),
     first_title: typeof r.first_title === 'string' ? r.first_title : null,
     after_sale_state:

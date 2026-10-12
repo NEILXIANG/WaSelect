@@ -178,6 +178,25 @@ describe('M-11（AJ-408）：列表行的下单时间、缩略图、件数', () 
     expect(orderRows([{ order_id: 'x', first_title: 42 }])[0]?.titleText).toBe('');
   });
 
+  // 两端逐页走查 2026-10-12：两种商品的单只显示首件名 + "共 2 件"，买家以为同一件买了 2 份
+  it('🔴 不止一种商品 → 标题写"首件名 等 N 种商品"；一种（买了几份）只写首件名', () => {
+    expect(
+      orderRows([
+        { order_id: 'x', first_title: 'KINTO 不锈钢单柄锅 18cm', line_count: 2, item_count: 2 },
+      ])[0],
+    ).toMatchObject({ titleText: 'KINTO 不锈钢单柄锅 18cm 等 2 种商品', itemCountText: '共 2 件' });
+    expect(
+      orderRows([
+        { order_id: 'x', first_title: '柳宗理 天然木筷 5 双', line_count: 1, item_count: 2 },
+      ])[0]?.titleText,
+    ).toBe('柳宗理 天然木筷 5 双');
+    // 标题最多两行：首件名太长时先截到 20 个字，保证"等 N 种商品"不被省略号吃掉
+    const long = '北海道限定 白色恋人 白巧克力夹心饼干 36 枚装 礼盒 附手提袋';
+    expect(
+      orderRows([{ order_id: 'x', first_title: long, line_count: 3, item_count: 4 }])[0]?.titleText,
+    ).toBe(`${[...long].slice(0, 20).join('')}… 等 3 种商品`);
+  });
+
   it('件数："共 N 件"；缺失 / 0 / 非整数 → 不显示', () => {
     expect(orderRows([{ order_id: 'x', item_count: 3 }])[0]?.itemCountText).toBe('共 3 件');
     expect(orderRows([{ order_id: 'x', item_count: 0 }])[0]?.itemCountText).toBe('');
