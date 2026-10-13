@@ -17,6 +17,7 @@ import {
   settlePartialRefund,
 } from '../adapters/order-refunds.js';
 import { CircuitOpenError } from '../ports/circuit-breaker.js';
+import { ProviderRejectedError } from '../ports/payment.js';
 import { shipGuard } from '../domain/admin-order-actions.js';
 import { asOrderStatus } from '../domain/order.js';
 import type { PaymentProvider, RefundRequest, RefundResult } from '../ports/payment.js';
@@ -147,6 +148,19 @@ describe('executePartialRefund', () => {
     });
     expect(await row()).toMatchObject({ status: 'failed' });
     expect(await events()).toEqual([['partial_failed', 'rf-1:provider_failed']]);
+  });
+
+  // 独立排查 2026-10-14 C-2：机构**确定拒绝**（4xx）与"结果未知"原先同落 unknown——这笔永远占额度、sync 同键重放永远同一个 4xx，没有出口
+  it('🔴 机构确定拒绝（ProviderRejectedError）→ 行 failed（释放额度）+ 事件 partial_failed + 抛 50000', async () => {
+    const { d, sink } = deps();
+    const f = fake(
+      new ProviderRejectedError(402, 'stripe 退款失败：HTTP 402 charge_already_refunded'),
+    );
+    await expect(executePartialRefund(d, f.provider, PLAN)).rejects.toMatchObject({ code: 50000 });
+    expect(await row()).toMatchObject({ status: 'failed' });
+    expect(await events()).toEqual([['partial_failed', 'rf-1:provider_rejected:402']]);
+    expect(sink.find('admin_partial_refund_rejected')).toHaveLength(1);
+    expect(sink.find('admin_partial_refund_unknown')).toHaveLength(0);
   });
 
   it('🔴 结果未知（抛错）→ 行 unknown（仍占额度，不当失败）+ error 日志 + 抛 50000', async () => {

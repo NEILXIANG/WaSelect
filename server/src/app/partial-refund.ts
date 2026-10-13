@@ -31,7 +31,11 @@ import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
 import { CircuitOpenError } from '../ports/circuit-breaker.js';
-import type { PaymentProvider, RefundResult } from '../ports/payment.js';
+import {
+  ProviderRejectedError,
+  type PaymentProvider,
+  type RefundResult,
+} from '../ports/payment.js';
 
 export interface PartialRefundDeps {
   db: Db;
@@ -95,6 +99,26 @@ export async function executePartialRefund(
         },
       });
       throw e;
+    }
+    if (e instanceof ProviderRejectedError) {
+      // 独立排查 2026-10-14 C-2：机构**确定拒绝**（4xx）= 这笔一分钱没动，与"机构答复 failed"同一处置：
+      //   行 failed（释放额度）、记 partial_failed 事件、抛 50000。原先与"结果未知"同落 unknown ⇒ 这笔永远占额度，
+      //   sync 同键重放永远拿回同一个 4xx，运营既退不了其余部分、也没有任何出口把它标成失败。
+      await settlePartialRefund(deps.db, plan.refundId, 'failed', null, at);
+      await event(
+        deps.db,
+        plan,
+        'partial_failed',
+        `${plan.refundId}:provider_rejected:${String(e.status)}`,
+        at,
+      );
+      deps.logger.warn('admin_partial_refund_rejected', {
+        result: 'failed',
+        order_id: plan.orderId,
+        ctx: { provider: plan.channel, refund_id: plan.refundId, http_status: e.status },
+        err: e,
+      });
+      throw new AppError(50000, { order_id: plan.orderId, reason: 'partial_refund_rejected' });
     }
     await settlePartialRefund(deps.db, plan.refundId, 'unknown', null, at);
     deps.logger.error('admin_partial_refund_unknown', {

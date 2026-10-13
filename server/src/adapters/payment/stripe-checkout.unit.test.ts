@@ -993,6 +993,16 @@ describe('parseWebhook：归属判定先于取单号（AJ-310）', () => {
   });
 });
 
+/** C-2 用例共用的退款请求（形状同上面各用例）。 */
+const REFUND_REQ = {
+  orderId: REQ.orderId,
+  providerRef: 'pi_1',
+  amountJpy: 12_000,
+  currency: 'JPY',
+  amountMinor: 12_000,
+  reason: '缺货',
+};
+
 describe('refund（原币全额退）', () => {
   /**
    * `refund` 在接口上是**可选**方法（不支持退款的通道没有它）。
@@ -1137,6 +1147,28 @@ describe('refund（原币全额退）', () => {
         reason: '缺货',
       }),
     ).rejects.toThrow(/缺 id/);
+  });
+
+  // 独立排查 2026-10-14 C-2：建会话早已区分"机构确定拒绝"（ProviderRejectedError）与"结果未知"（普通 Error），
+  // 退款路径没有——4xx 也抛普通 Error ⇒ 业务层记 unknown / provider_error、永远同键重放同一个 4xx，额度与订单都卡死。
+  it('🔴 退款 4xx（402 已全退 / 400 金额超出）→ ProviderRejectedError（机构确定拒绝，不是"结果未知"）', async () => {
+    const { http, provider } = build();
+    http.failNext(402, '{"error":{"code":"charge_already_refunded"}}');
+    await expect(mustRefund(provider)(REFUND_REQ)).rejects.toBeInstanceOf(ProviderRejectedError);
+  });
+
+  it('🔴 退款 409 idempotency_key_in_use / 429 / 5xx → 普通 Error（结果未知，保留同键）', async () => {
+    for (const [status, body] of [
+      [409, '{"error":{"code":"idempotency_key_in_use"}}'],
+      [429, '{"error":{"code":"rate_limit"}}'],
+      [502, 'bad gateway'],
+    ] as const) {
+      const { http, provider } = build();
+      http.failNext(status, body);
+      const err = await mustRefund(provider)(REFUND_REQ).catch((e: unknown) => e);
+      expect(err, `HTTP ${String(status)}`).toBeInstanceOf(Error);
+      expect(err, `HTTP ${String(status)}`).not.toBeInstanceOf(ProviderRejectedError);
+    }
   });
 
   it('上游退款失败 → 抛错并带订单号', async () => {

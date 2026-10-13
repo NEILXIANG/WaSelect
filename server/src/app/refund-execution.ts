@@ -50,7 +50,12 @@ import type { EventBus } from '../ports/events.js';
 // 值导入（不是 type）：AJ-313 —— 熔断拒绝必须**按类型**分辨出来原样抛，
 // 折叠成 50000 会把"约 N ms 后可重试"这条信息丢掉（errors.ts 对它映射 50300 + retry_after_ms）
 import { CircuitOpenError } from '../ports/circuit-breaker.js';
-import type { PaymentProvider, RefundRequest, RefundResult } from '../ports/payment.js';
+import {
+  ProviderRejectedError,
+  type PaymentProvider,
+  type RefundRequest,
+  type RefundResult,
+} from '../ports/payment.js';
 
 export interface RefundExecDeps {
   db: Db;
@@ -163,6 +168,13 @@ export async function executeRefund(
         ctx: { provider: plan.channel, retry_after_ms: e.retryAfterMs },
       });
       throw e;
+    }
+    // 独立排查 2026-10-14 C-2：机构**确定拒绝**（4xx，`ProviderRejectedError`）≠ 结果未知——这把键什么都没退出去，
+    //   且同键重放只会拿回同一个 4xx。记成 `provider_failed:rejected:<status>`，`findRefundProgress` 把它计入"确认失败"，
+    //   下一次点击换新键重新发起（与机构答复 failed 同口径）；`provider_error` 仍只给超时 / 5xx / 网络错（KD-4：同键）。
+    //   @limitation 换键后若拒绝原因没变（金额超出），还是会再拒一次——但每次都留下一条带状态码的事件，而不是无声地同键打转。
+    if (e instanceof ProviderRejectedError) {
+      throw await fail(deps, plan, `provider_failed:rejected:${String(e.status)}`, e);
     }
     throw await fail(deps, plan, 'provider_error', e);
   }

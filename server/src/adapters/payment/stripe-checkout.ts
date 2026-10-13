@@ -820,9 +820,18 @@ export function createStripeCheckoutProvider(
         body: form.toString(),
       });
       if (res.status < 200 || res.status >= 300) {
-        throw new Error(
-          `stripe 退款失败：HTTP ${res.status} ${res.body.slice(0, 200)}（order=${req.orderId}）`,
-        );
+        // 独立排查 2026-10-14 C-2：与建会话（B3 / AJ-199）同一条分界——**4xx 是机构的确定答复**（金额超出 /
+        //   已全退 / 参数错 / 鉴权错），什么都没发生；5xx 与网络错是"结果未知"。
+        //   原先一律抛普通 Error ⇒ 业务层把确定拒绝也当 unknown / provider_error、保留同一把幂等键重放，
+        //   而同键重放只会拿回同一个 4xx：部分退款那笔永远占额度、整单退款永远停在 refunding，都没有出口。
+        //   例外三种仍按"未知"处理：408（我方超时语义）、409（Stripe `idempotency_key_in_use`：同键请求仍在处理中，
+        //   与建会话 AJ-414 同口径）、429（限流，稍后同键再试）。
+        //   @measured 无法对真 Stripe 实测（本地无测试密钥，P2-9）；状态码语义取自 Stripe 文档 "Errors"：
+        //   402 = card / charge 类错误（含 charge_already_refunded）、400 = 参数错（含 amount_too_large）、409 = 幂等键冲突。
+        const rejected =
+          res.status >= 400 && res.status < 500 && ![408, 409, 429].includes(res.status);
+        const msg = `stripe 退款失败：HTTP ${res.status} ${res.body.slice(0, 200)}（order=${req.orderId}）`;
+        throw rejected ? new ProviderRejectedError(res.status, msg) : new Error(msg);
       }
       const json = JSON.parse(res.body) as { id?: string; status?: string };
       if (typeof json.id !== 'string') {

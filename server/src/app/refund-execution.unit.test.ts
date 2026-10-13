@@ -28,6 +28,7 @@ import { CircuitOpenError } from '../ports/circuit-breaker.js';
 import type { Db } from '../adapters/db.js';
 import type { PaymentProvider, RefundResult } from '../ports/payment.js';
 import { executeRefund, type RefundExecDeps, type RefundPlan } from './refund-execution.js';
+import { ProviderRejectedError } from '../ports/payment.js';
 
 const CLOCK = fixedClock('2026-01-02T12:00:00.000Z');
 
@@ -173,6 +174,39 @@ describe('executeRefund：被熔断拒绝 ≠ 机构失败（AJ-313）', () => {
     expect(err).toBeInstanceOf(AppError);
     expect((err as AppError).code).toBe(50000);
     expect(counter.n, '结果未知必须留痕（否则下一次点击无从判断换不换键）').toBe(1);
+  });
+});
+
+describe('executeRefund：机构确定拒绝（ProviderRejectedError，独立排查 2026-10-14 C-2）', () => {
+  /**
+   * @why 建会话路径（B3 / AJ-199）早就区分"确定拒绝 → 换键"与"结果未知 → 同键"；退款路径原先把 4xx 也当 provider_error（同键），
+   *      于是机构明确拒过的那把键会被一遍遍重放、拿回同一个 4xx，订单停在 refunding 没有出口。
+   *      确定拒绝要记成 `provider_failed:*`——`findRefundProgress` 只数这一类，下一次点击才会换新键。
+   */
+  it('🔴 4xx 确定拒绝 → 50000 且 refund_failed 的 note 以 provider_failed 开头（下次换键），不是 provider_error', async () => {
+    const notes: string[] = [];
+    const sink = new MemorySink();
+    const db = ((...args: unknown[]) => {
+      // recordRefundFailed 走 tagged template：第二个插值是 note（order_id, status, note, actor, at）
+      const values = args.slice(1);
+      const note = values.find((v) => typeof v === 'string' && /^provider_/.test(v));
+      if (typeof note === 'string') notes.push(note);
+      return Promise.resolve([]);
+    }) as unknown as Db;
+    const d: RefundExecDeps = {
+      db,
+      logger: createLogger({ env: 'test', destination: sink }),
+      clock: CLOCK,
+      events: createEventBus(createLogger({ env: 'test', destination: sink })),
+    };
+    const err = await executeRefund(
+      d,
+      provider(new ProviderRejectedError(400, 'stripe 退款失败：HTTP 400 amount_too_large')),
+      plan(),
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AppError);
+    expect((err as AppError).code).toBe(50000);
+    expect(notes).toEqual(['provider_failed:rejected:400']);
   });
 });
 
