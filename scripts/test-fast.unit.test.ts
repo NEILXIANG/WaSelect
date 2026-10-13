@@ -12,7 +12,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { changedFiles, needsFullUnit, parseNulPaths } from './test-fast.mjs';
+import { changedFiles, contentReadingTests, needsFullUnit, parseNulPaths } from './test-fast.mjs';
 
 /** 仓库根（本文件在 scripts/ 下）。 */
 const root = join(import.meta.dirname, '..');
@@ -69,5 +69,30 @@ describe('needsFullUnit', () => {
     } finally {
       rmSync(probe, { force: true });
     }
+  });
+});
+
+describe('contentReadingTests', () => {
+  const tests = contentReadingTests();
+
+  it('🔴 识别出按内容读 .ts 源码的 shape tests（admin-auth-routes.ts 那次的教训）', () => {
+    // 34c5a41 / a312265：这条用例靠 readFileSync 读 ../app/admin-auth-routes.ts 的源码文本，
+    // 但 vitest --changed 按 import 图挑不到它。test:fast 必须额外固定跑它。
+    expect(tests).toContain('server/src/adapters/admin-auth.unit.test.ts');
+  });
+
+  it('🔴 也识别出按内容读 .js 源码的 shape tests', () => {
+    expect(tests).toContain('miniprogram/review-wording-guard.unit.test.ts');
+  });
+
+  it('不过滤正在工作的 .claude/sim-local 临时文件', () => {
+    // 扫描只从 git ls-files 里取，这些临时文件不被跟踪，自然不在结果里。
+    expect(tests.some((f) => f.startsWith('.claude/'))).toBe(false);
+  });
+
+  it('确实识别出"参数是 join(...) 拼出来"的 .ts 读取（vite.config.ts 那次）', () => {
+    // 设计令牌用例里用 readFileSync(join(adminWeb, 'vite.config.ts'), 'utf8') 读源码，
+    // 扫描靠静态文本匹配，只要参数字面串里出现 .ts 扩展名就命中。
+    expect(tests).toContain('admin-web/src/design-token.unit.test.ts');
   });
 });
