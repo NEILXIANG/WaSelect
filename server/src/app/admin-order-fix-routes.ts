@@ -35,6 +35,7 @@ import {
 import { asOrderStatus } from '../domain/order.js';
 import { trackingNoRecognized } from '../domain/tracking.js';
 import { AppError } from '../errors.js';
+import { gateError } from './admin-order-utils.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
 import type { EventBus } from '../ports/events.js';
@@ -168,11 +169,7 @@ export function mountAdminOrderFixRoutes(app: Express, deps: AdminOrderFixRoutes
             // 原先 reason 只写在第 2 个参数（details，`toErrorResponse` 不输出）上，响应体里
             // 连 `data` 都没有：运营点撤销发货撞上"有进行中售后"时，拿到的只有服务端那句
             // 与状态无关的"订单状态不允许此操作"。第 3 个参数才是响应体的 data（规律排查 2026-10-13）。
-            throw new AppError(
-              gate.code,
-              { order_id: id, reason: gate.reason },
-              { reason: gate.reason },
-            );
+            throw gateError(gate, { order_id: id }, true);
           setAuditBefore(res, {
             status: row.status,
             carrier: row.carrier,
@@ -186,10 +183,10 @@ export function mountAdminOrderFixRoutes(app: Express, deps: AdminOrderFixRoutes
           // reason 一并对外，与上面那条保持**同一种形状**——同一路由的两个 40902 一个有 data 一个没有，
           // 调用方就没法靠"有没有这个字段"判断，只能两个都当"状态不允许"（42901 那两成因正是这个坑）。
           if (done === false)
-            throw new AppError(
-              40902,
-              { order_id: id, reason: 'status_raced' },
-              { reason: 'status_raced' },
+            throw gateError(
+              { ok: false, code: 40902, reason: 'status_raced' },
+              { order_id: id },
+              true,
             );
           return done;
         });

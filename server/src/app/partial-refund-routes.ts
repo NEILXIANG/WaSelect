@@ -30,6 +30,7 @@ import { refundReasonGuard } from '../domain/admin-order-actions.js';
 import { asOrderStatus } from '../domain/order.js';
 import { partialRefundGuard } from '../domain/partial-refund.js';
 import { AppError } from '../errors.js';
+import { gateError } from './admin-order-utils.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
 import type { IdGen } from '../ports/ids.js';
@@ -121,7 +122,7 @@ export function mountPartialRefundRoutes(app: Express, deps: PartialRefundRoutes
               channelSupportsPartial: provider.capabilities.supportsPartialRefund,
               lostDisputeMinor: pay.lost_dispute_minor,
             });
-            if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
+            if (!gate.ok) throw gateError(gate, { order_id: id });
             if (pay.provider_ref === null)
               throw new AppError(50000, { order_id: id, reason: 'provider_ref_missing' });
             const refundId = `rf-${deps.idGen.uuid()}`;

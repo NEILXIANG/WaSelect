@@ -36,6 +36,7 @@
  */
 import type { Express, Request } from 'express';
 import { AppError } from '../errors.js';
+import { gateError } from './admin-order-utils.js';
 import type { Db } from '../adapters/db.js';
 import { withTransaction } from '../adapters/db.js';
 import type { Logger } from '../logger.js';
@@ -517,7 +518,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           const closed = row.status === 'expired' || row.status === 'cancelled';
           const latePaid = closed && (await hasLatePaid(tx, id));
           const gate = refundGuard(asOrderStatus(row.status), row.has_dispute, latePaid);
-          if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
+          if (!gate.ok) throw gateError(gate, { order_id: id });
           // 扫描 M-01：迟到付款单进了 refunding 之后 `closed` 为假，原实现只按 succeeded 找钱——
           //    迟到的支付行永远不是 succeeded（落账事务回滚了），重试就 40902，订单卡死在 refunding。
           //    所以 refunding 时先按常规找，找不到再按迟到付款凭据找（与第一次退款选中的是同一行）。
@@ -785,7 +786,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           const row = await lockAdminOrder(tx, id);
           if (row === null) throw new AppError(40400, { order_id: id });
           const gate = addressGuard(asOrderStatus(row.status));
-          if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
+          if (!gate.ok) throw gateError(gate, { order_id: id });
           const archived = await updateAddressSnapshot(
             tx,
             id,
