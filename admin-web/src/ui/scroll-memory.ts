@@ -39,3 +39,12 @@ export function resetScrollMemory(): void {
   memory.clear();
   pushPending = false;
 }
+
+/**
+ * 这次点击会不会在**当前页**换页（不带修饰键的左键单击）。
+ * @why 三天提交复查 2026-10-12：Cmd / Ctrl / Shift 点链接是在新标签 / 新窗口打开，当前页没换页；
+ *      原先也 markPush，下一次后退 / 前进就被当成"点出来的"、回到页顶而不是原来的位置。
+ */
+export function isPlainLeftClick(e: MouseEvent): boolean {
+  return e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+}

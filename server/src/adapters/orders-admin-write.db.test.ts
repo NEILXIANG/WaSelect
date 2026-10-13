@@ -292,12 +292,12 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
       'address_snapshot'
     ];
     const next = { id: 'a-2', recipient: 'SAN ZHANG', line1: '2 Main St' };
+    let returned: unknown;
     await withTransaction(db, async (tx) => {
       // AJ-455：返回归档号（路由写进审计），不再是 boolean
-      expect(
-        typeof (await updateAddressSnapshot(tx, 'o-1', next as never, 'admin:u-9', new Date())),
-      ).toBe('number');
+      returned = await updateAddressSnapshot(tx, 'o-1', next as never, 'admin:u-9', new Date());
     });
+    expect(typeof returned).toBe('number');
     const evs =
       await db`select note from order_events where order_id = 'o-1' and status = 'address_changed'`;
     expect(evs).toHaveLength(1);
@@ -317,6 +317,9 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     // @why toBeDefined() 断言**不会**帮 TS 收窄类型（vitest 不类型检查，只有 tsc 会拦），
     //      这里必须显式收敛成 string，否则下面 db`...` 的重载匹配不上。
     const archiveId = String(archiveMatch?.[1]);
+    // 三天提交复查 2026-10-12：AJ-455 起只断言"返回的是 number"——返回错的数（事件 id / 行数）审计就指向别的行；
+    //   钉住：返回值 = note 里的归档号 = 历史表里那一行的 id
+    expect(returned).toBe(Number(archiveId));
     const hist = await db`select snapshot from order_address_history where id = ${archiveId}`;
     expect(hist).toHaveLength(1);
     expect(hist[0]?.['snapshot']).toEqual(oldSnap);

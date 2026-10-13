@@ -1221,6 +1221,11 @@ describe('GET /admin/orders?sort', () => {
       }
       const after = JSON.stringify(audit[0]?.['after']);
       expect(after).toContain('archive_id');
+      // 三天提交复查 2026-10-12：只查键名在不在——审计里的归档号要能回查到这一单的历史行
+      const archiveId = (audit[0]?.['after'] as { archive_id?: unknown } | undefined)?.archive_id;
+      const histRow =
+        await db`select order_id from order_address_history where id = ${Number(archiveId)}`;
+      expect(histRow.map((r) => r['order_id'])).toEqual(['o-1']);
       for (const k of ['recipient', 'line1', 'city', 'state', 'phone', 'SAN ZHANG', 'Cupertino']) {
         expect(after, `审计 after 不该含 ${k}`).not.toContain(k);
       }

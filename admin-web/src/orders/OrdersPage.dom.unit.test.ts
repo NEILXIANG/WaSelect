@@ -105,6 +105,8 @@ describe('订单列表：URL 上认不出的 status（AJ-398）', () => {
   it('🔴 #/orders?status=foo → 按「全部」请求，不把 foo 发给服务端', async () => {
     const el = await open('#/orders?status=foo');
     expect(gets().length).toBeGreaterThan(0);
+    // 三天提交复查 2026-10-12：f568e3d 去掉了次数上界——StrictMode 双跑最多 2 次，多于 2 次就是 effect 在反复拉
+    expect(gets().length).toBeLessThanOrEqual(2);
     for (const g of gets()) expect(g.path).not.toContain('status=');
     // AJ-400：下拉改页签——回落后高亮的是「全部」页签
     expect(el.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('全部');
@@ -177,6 +179,7 @@ describe('订单列表：刷新入口（ADM3-09）', () => {
   it('挂载时拉列表（StrictMode 双跑时两次是同一个请求）', async () => {
     await open();
     expect(gets().length).toBeGreaterThan(0);
+    expect(gets().length).toBeLessThanOrEqual(2); // 上界：StrictMode 双跑最多 2 次（三天提交复查 2026-10-12）
     expect(new Set(gets().map((g) => g.path)).size).toBe(1);
   });
 

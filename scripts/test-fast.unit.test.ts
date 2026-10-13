@@ -5,7 +5,7 @@
  *      （测试缺口复盘 2026-10-12）。这里钉住"改 css / wxss / wxml / md / json 就跑全部"。
  */
 import { describe, expect, it } from 'vitest';
-import { needsFullUnit } from './test-fast.mjs';
+import { guardTestFiles, needsFullUnit } from './test-fast.mjs';
 
 describe('needsFullUnit', () => {
   it.each([
@@ -29,5 +29,21 @@ describe('needsFullUnit', () => {
       ]),
     ).toBe(false);
     expect(needsFullUnit([])).toBe(false);
+  });
+
+  // 三天提交复查 2026-10-12：小程序页面薄壳（pages/*/index.js）由壳用例按 URL 动态加载、由守卫按文字读取，
+  //   都不在 import 图里——只改 index.js 时它们一条不跑
+  it('🔴 改了小程序页面薄壳 index.js → 跑全部 unit', () => {
+    expect(needsFullUnit(['miniprogram/pages/cart/index.js'])).toBe(true);
+    expect(needsFullUnit(['miniprogram/pages/cart/index.vm.js'])).toBe(false);
+  });
+});
+
+describe('guardTestFiles', () => {
+  it('🔴 列出按源码文字检查的守卫用例（快速测试每次都补跑它们）', () => {
+    const files = guardTestFiles();
+    expect(files).toContain('server/src/app/admin-audit-target.guard.unit.test.ts');
+    expect(files).toContain('miniprogram/vm-guard.unit.test.ts');
+    expect(files.every((f) => /guard.*\.unit\.test\.ts$/.test(f))).toBe(true);
   });
 });

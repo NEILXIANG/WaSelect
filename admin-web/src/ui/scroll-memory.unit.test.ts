@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  isPlainLeftClick,
   consumePush,
   markPush,
   rememberScroll,
@@ -32,5 +33,26 @@ describe('scroll-memory', () => {
     expect(consumePush()).toBe(true);
     expect(consumePush()).toBe(false);
     expect(scrollTarget('#/customers', false)).toBe(0);
+  });
+});
+
+// 三天提交复查 2026-10-12：按 Cmd / Ctrl / Shift 点链接是在新标签 / 新窗口打开，当前页没有换页——
+//   原先也记成"点出来的"，下一次后退 / 前进就回不到原来的滚动位置
+describe('isPlainLeftClick', () => {
+  it('🔴 只有不带修饰键的左键单击才算换页', () => {
+    const ev = (o: Partial<MouseEvent>) =>
+      ({
+        button: 0,
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        ...o,
+      }) as MouseEvent;
+    expect(isPlainLeftClick(ev({}))).toBe(true);
+    expect(isPlainLeftClick(ev({ metaKey: true }))).toBe(false);
+    expect(isPlainLeftClick(ev({ ctrlKey: true }))).toBe(false);
+    expect(isPlainLeftClick(ev({ shiftKey: true }))).toBe(false);
+    expect(isPlainLeftClick(ev({ button: 1 }))).toBe(false);
   });
 });

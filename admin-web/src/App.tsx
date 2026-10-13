@@ -52,7 +52,13 @@ import {
   type Route,
 } from './router.js';
 import { ConfirmDialog } from './ui/confirm.js';
-import { consumePush, markPush, rememberScroll, scrollTarget } from './ui/scroll-memory.js';
+import {
+  consumePush,
+  isPlainLeftClick,
+  markPush,
+  rememberScroll,
+  scrollTarget,
+} from './ui/scroll-memory.js';
 import { ErrorBoundary } from './ui/ErrorBoundary.js';
 import { createErrorReporter, describeThrown } from './ui/error-report.js';
 import { LEAVE_UNSAVED_SPEC } from './ui/leave-spec.js';
@@ -107,7 +113,8 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   useEffect(() => {
     const onClick = (e: MouseEvent): void => {
       const a = (e.target as Element | null)?.closest?.('a[href^="#/"]');
-      if (a !== null && a !== undefined) markPush();
+      // 带修饰键的点击是在新标签打开，当前页不换页（三天提交复查 2026-10-12）
+      if (a !== null && a !== undefined && isPlainLeftClick(e)) markPush();
     };
     document.addEventListener('click', onClick, true);
     return () => document.removeEventListener('click', onClick, true);
