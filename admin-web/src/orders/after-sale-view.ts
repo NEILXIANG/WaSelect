@@ -11,6 +11,7 @@
  */
 import {
   AFTER_SALE_DESCRIPTION_MAX,
+  AFTER_SALE_OPEN_STATUSES,
   AFTER_SALE_REASON_LABELS,
   AFTER_SALE_STATUS_LABELS,
   afterSaleTransitionAllowed,
@@ -56,7 +57,7 @@ export function afterSaleRows(order: unknown): AfterSaleRowView[] {
         timeText: typeof a['created_at'] === 'string' ? formatJst(a['created_at']) : '—',
         // 不拼 handled_by：它是内部账号 id（admin:adm-…），运营读不懂；谁处理的看时间线（那里显示邮箱）
         resolutionText: note,
-        open: a['status'] === 'open' || a['status'] === 'processing',
+        open: (AFTER_SALE_OPEN_STATUSES as readonly string[]).includes(a['status']),
         canMarkProcessing: afterSaleTransitionAllowed(a['status'], 'processing'),
       },
     ];

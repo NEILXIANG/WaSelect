@@ -31,7 +31,14 @@ export const AFTER_SALE_ORDER_STATUSES = ['shipped', 'delivered', 'completed'];
 /** 问题描述上限（字符）。 */
 export const AFTER_SALE_DESCRIPTION_MAX = 500;
 
-const OPEN = ['open', 'processing'];
+/**
+ * "进行中的售后"（申请尚未结案）。
+ * @why 导出并**沿用 shared 的名字**（`AFTER_SALE_OPEN_STATUSES`）：这条规则在服务端决定"能不能再申请 / 能不能撤销发货"，两边必须是同一个集合。
+ *      它原先是个没名没注释的局部量 `OPEN`（规律②：同一条规则多份实现，四处各写一份）——
+ *      名字对不上时没人会想到它要与 shared 比对，`after-sale.unit.test.ts` 的逐项镜像检查也就漏掉了它。
+ * @see ./after-sale.unit.test.ts（与 shared 比对）
+ */
+export const AFTER_SALE_OPEN_STATUSES = ['open', 'processing'];
 
 /**
  * 订单详情里的售后卡片。
@@ -54,7 +61,7 @@ export function afterSaleCard(order) {
           description: typeof a.description === 'string' ? a.description : '',
           note: typeof a.resolution_note === 'string' ? a.resolution_note : '',
           atText: jstDateTimeLabeled(a.created_at) ?? '',
-          open: OPEN.includes(status),
+          open: AFTER_SALE_OPEN_STATUSES.includes(status),
         };
   const canApply = eligible && (current === null || !current.open);
   return { show: canApply || current !== null, canApply, current };

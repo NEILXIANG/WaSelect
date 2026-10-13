@@ -10,6 +10,7 @@
  */
 import {
   ADMIN_NOTE_MAX_LENGTH,
+  AFTER_SALE_OPEN_STATUSES,
   SHIP_MAX_CHARS,
   SHIPMENT_REVERT_WINDOW_HOURS,
 } from '@waselect/shared';
@@ -50,7 +51,11 @@ export function shipmentRevertGate(
   const o = order as Record<string, unknown>;
   if (o['has_dispute'] === true) return { ok: false, reason: '有拒付限制，不能撤销发货' };
   const sales = Array.isArray(o['after_sales']) ? (o['after_sales'] as unknown[]) : [];
-  if (sales.some((a) => ['open', 'processing'].includes(str(a, 'status'))))
+  // ⚠️ "进行中的售后"取 shared 的 `AFTER_SALE_OPEN_STATUSES`（与服务端 `hasOpenAfterSale` 同一份）：
+  //    原先这里手写 `['open', 'processing']`，是本轮规律②扫到的第 N 份副本——
+  //    shared 将来加一档（如 escalated）时，服务端会拒而这里放行，运营看到的是
+  //    "状态刚变了，请刷新"（其实状态没变，重试永远不会成功）。
+  if (sales.some((a) => (AFTER_SALE_OPEN_STATUSES as readonly string[]).includes(str(a, 'status'))))
     return { ok: false, reason: '有进行中的售后，先处理售后再撤销' };
   const at = Date.parse(str(order, 'shipped_at'));
   if (!Number.isFinite(at)) return { ok: false, reason: '缺发货时间，不能撤销' };

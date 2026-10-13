@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AFTER_SALE_DESCRIPTION_MAX as SHARED_MAX,
+  AFTER_SALE_OPEN_STATUSES as SHARED_OPEN_STATUSES,
   AFTER_SALE_ORDER_STATUSES as SHARED_ORDER_STATUSES,
   AFTER_SALE_REASONS,
   AFTER_SALE_REASON_LABELS,
@@ -11,6 +12,7 @@ import {
 } from '@waselect/shared';
 import {
   AFTER_SALE_DESCRIPTION_MAX,
+  AFTER_SALE_OPEN_STATUSES,
   AFTER_SALE_ORDER_STATUSES,
   AFTER_SALE_REASON_ROWS,
   AFTER_SALE_STATUS_LABELS,
@@ -26,6 +28,15 @@ describe('与 shared 同口径（镜像）', () => {
     expect(AFTER_SALE_STATUS_LABELS).toEqual(SHARED_STATUS_LABELS);
     expect(AFTER_SALE_ORDER_STATUSES).toEqual([...SHARED_ORDER_STATUSES]);
     expect(AFTER_SALE_DESCRIPTION_MAX).toBe(SHARED_MAX);
+  });
+
+  /**
+   * 规律排查（本轮）：`进行中的售后 = ['open','processing']` 这条规则原先是个没名没注释的局部量 `OPEN`，
+   * 于是上一组"逐项比对"漏了它（名字对不上就没人想到要比）。服务端用同一个集合判
+   * "还能不能申请 / 能不能撤销发货"，漂移的表现是"页面给申请入口，提交却 40902"。
+   */
+  it('🔴 进行中的售后（open / processing）与 shared 一致', () => {
+    expect(AFTER_SALE_OPEN_STATUSES).toEqual([...SHARED_OPEN_STATUSES]);
   });
 });
 
