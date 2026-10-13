@@ -126,6 +126,14 @@ function percent(v: unknown): string {
  * 100 日元按生效汇率折成多少（两位小数）。美元写 `$0.66`；人民币写 `5.10 元`（日元店里 ¥ 会被读成日元）；
  * 认不出的币种把代码写在后面，不猜符号。
  */
+/** 主单位金额 → 该币种的习惯写法（USD 前缀 $、CNY 后缀 元、其余带币种码）。 */
+function sampleMinor(quote: string, major: number): string {
+  const v = major.toFixed(2);
+  if (quote === 'USD') return `$${v}`;
+  if (quote === 'CNY') return `${v} 元`;
+  return `${v} ${quote}`;
+}
+
 function example(quote: string, rate: unknown): string {
   if (typeof rate !== 'number' || !Number.isFinite(rate)) return '—';
   const v = (rate * 100).toFixed(2);
@@ -255,7 +263,8 @@ export function fxPreview(args: unknown): {
 
   // 样例金额：¥10,000 折成该币种的主单位（USD / CNY 都是 2 位小数）
   // 日元写「日元」（¥ 在本项目口径里是人民币，D-36；不写「円」见 format.ts minorMoneyText）
-  const sampleText = `${SAMPLE_JPY.toLocaleString('en-US')} 日元 ≈ ${quote} ${(SAMPLE_JPY * raw).toFixed(2)}`;
+  // 体验排查 2026-10-14：与表格里 example() 同一种写法（$67.00 / 67.00 元），不再同屏两种格式；千分位走 moneyText 的口径
+  const sampleText = `${moneyText(SAMPLE_JPY)} ≈ ${sampleMinor(quote, SAMPLE_JPY * raw)}`;
 
   if (typeof current !== 'number' || !Number.isFinite(current) || current <= 0) {
     // ⚠️ 没有基准时**不能**当成"不可疑"（AJ-229）：上线前第一次录 USD、或列表没加载出来，

@@ -287,7 +287,8 @@
           />
         </view>
         <view class="ws-buybar__btn" wx:if="{{view.canPay}}">
-          <ws-button text="继续支付" type="primary" block="{{true}}" bindtap="onPay" />
+          <!-- 体验排查 2026-10-14：取消请求在途时不能同时去付款 -->
+          <ws-button text="继续支付" type="primary" block="{{true}}" disabled="{{cancelling}}" bindtap="onPay" />
         </view>
         <!-- A7（AJ-416）：结束了的单（送达 / 完成 / 取消 / 超时 / 已退款）→ 同样的商品放回购物车 -->
         <view class="ws-buybar__btn" wx:if="{{view.canBuyAgain}}">

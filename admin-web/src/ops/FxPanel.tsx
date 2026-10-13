@@ -22,6 +22,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ToastStack, toastError, useToasts, type ToastSink } from '../ui/toast.js';
 import { useFormDirty } from '../ui/unsaved.js';
 import { listFx, setFx, type AdminApi } from './api.js';
+import { currencyName } from '../orders/partial-refund-view.js';
 import {
   FX_QUOTES,
   currentFxRawRates,
@@ -164,7 +165,7 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.key}>
-              <td>{r.quote}</td>
+              <td>{currencyName(r.quote)}</td>
               <td>{r.rateText}</td>
               <td>{r.rawRateText}</td>
               <td className="muted">{r.bufferText}</td>
@@ -197,7 +198,7 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
           >
             {FX_QUOTES.map((q) => (
               <option key={q} value={q}>
-                {q}
+                {currencyName(q)}
               </option>
             ))}
           </select>
@@ -242,7 +243,7 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
               disabled={saving || (step.kind !== 'invalid' && step.requireAck && !ack)}
               onClick={attempt}
             >
-              {saving ? '保存中…' : `确认保存（${form.quote}）`}
+              {saving ? '保存中…' : `确认保存（${currencyName(form.quote)}）`}
             </button>
             <button
               type="button"

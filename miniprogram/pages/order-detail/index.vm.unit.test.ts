@@ -407,6 +407,13 @@ describe('detailView：部分退款与迟到付款（P2-11 / P2-12，AJ-386）',
     });
     expect(v.partialRefunds).toHaveLength(1);
     expect(v.partialRefunds[0]?.amountText).toBe('EUR（金额以银行账单为准）');
+    // 体验排查 2026-10-14：币种缺失不能显示 undefined
+    expect(
+      detailView({
+        status: 'delivered',
+        partial_refunds: [{ status: 'succeeded', amount_minor: 1 }],
+      }).partialRefunds[0]?.amountText,
+    ).toBe('金额以银行账单为准');
   });
 
   it('🔴 late_paid → 说"已收到付款，会原路退回"（关闭态放顶部下一步，其余放页底）；否则空串', () => {
@@ -649,7 +656,7 @@ describe('detailView · 查件引导', () => {
         ...shipped,
         tracking_url: 'https://trackings.post.japanpost.jp/x?n=EJ123456789JP',
       }).trackingHint,
-    ).toBe('点「复制查件链接」，在手机浏览器（Safari / Chrome）里粘贴打开——是日本邮政官网的查件页');
+    ).toBe('点「复制查件链接」，在手机浏览器（Safari / Chrome）里粘贴打开——是承运商官网的查件页');
     expect(
       detailView({ ...shipped, carrier: 'Yamato', tracking_no: '1234-5678-9012' }).trackingHint,
       // 规律排查 2026-10-12：原断言"点运单号复制"——运单号文字不能点，能点的是旁边的「复制」

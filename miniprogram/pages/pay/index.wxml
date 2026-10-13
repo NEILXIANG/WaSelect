@@ -34,8 +34,8 @@
     wx:if="{{noChannel}}"
     kind="empty"
     title="暂时没有可用的支付方式"
-    reason="这笔订单的金额或收货地区暂不支持在线支付。可以稍后重试，或在「我的」里联系客服"
-    actionText="重试"
+    reason="这笔订单的金额或收货地区暂不支持在线支付。请在「我的」里联系客服；支付方式有调整后可以刷新再试"
+    actionText="刷新"
     bindaction="onRetry"
   />
 

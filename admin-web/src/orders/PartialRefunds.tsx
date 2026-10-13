@@ -239,7 +239,7 @@ export function PartialRefunds({
         <div className="row2">
           <button
             type="button"
-            className="btn"
+            className="btn btn-danger"
             disabled={busy}
             onKeyDown={blockEnter}
             onClick={() => void submit()}

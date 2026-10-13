@@ -21,6 +21,11 @@ describe('errorMessage', () => {
     );
   });
 
+  it('体验排查 2026-10-14：没有中文的 message（英文网关页 / 堆栈）→ 兜底文案，不把英文摆给买家；宿主 errMsg 另有 B35 用例', () => {
+    expect(errorMessage({ code: 50000, message: 'Internal Server Error' })).toBe('加载失败');
+    expect(errorMessage({ code: 50200, message: '<html>502 Bad Gateway</html>' })).toBe('加载失败');
+  });
+
   it('缺 message / message 是空白 → 兜底文案，不显示 undefined', () => {
     expect(errorMessage({ code: 40011 })).toBe('加载失败');
     expect(errorMessage({ code: 40011, message: '   ' })).toBe('加载失败');

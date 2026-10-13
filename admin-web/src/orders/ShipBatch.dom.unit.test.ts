@@ -127,7 +127,7 @@ describe('订单列表「待发货」：勾选批量发货', () => {
     await click(el.querySelector('input[aria-label="选择 261007-7K3QXA"]'));
     expect(el.textContent).toContain('已选 1 单');
     expect(button(el, '批量发货（1）')).toBeNull();
-    expect(button(el, '导入运单号（Excel/表格文件）')).toBeNull();
+    expect(button(el, '导入运单号（CSV 文件）')).toBeNull();
   });
 
   it('🔴 拒付单不能勾；勾两单 → 抽屉每单一行 → 输入单数确认 → 请求体是 order_id，结果按行显示', async () => {
@@ -225,10 +225,10 @@ describe('批量发货整次失败', () => {
   });
 });
 
-describe('导入运单号（Excel/表格文件）', () => {
+describe('导入运单号（CSV 文件）', () => {
   it('🔴 粘贴 → 预检（按单号查）→ 不存在 / 拒付 / 重复标出 → 只提交干净行', async () => {
     const el = await open('#/orders?status=paid');
-    await click(button(el, '导入运单号（Excel/表格文件）'));
+    await click(button(el, '导入运单号（CSV 文件）'));
     await chooseCarrier(el, 'csv-carrier', 'EMS');
     await type(
       el.querySelector('textarea[aria-label="CSV 内容"]'),
@@ -252,7 +252,7 @@ describe('导入运单号（Excel/表格文件）', () => {
 
   it('🔴 粘贴了内容未提交就关 → 问「放弃修改」（验收 2026-10-08：原先直接关掉、内容丢失）；空着关直接关', async () => {
     const el = await open('#/orders?status=paid');
-    await click(button(el, '导入运单号（Excel/表格文件）'));
+    await click(button(el, '导入运单号（CSV 文件）'));
     const drawer = (): HTMLElement => el.querySelector('.drawer') as HTMLElement;
     await type(el.querySelector('textarea[aria-label="CSV 内容"]'), 'order_no,tracking_no\n');
     await click(button(drawer(), '关闭'));
@@ -260,14 +260,14 @@ describe('导入运单号（Excel/表格文件）', () => {
     await click(button(el, '放弃修改'));
     expect(el.querySelector('.drawer')).toBeNull();
     // 对照组：没填任何内容 → 不问，直接关
-    await click(button(el, '导入运单号（Excel/表格文件）'));
+    await click(button(el, '导入运单号（CSV 文件）'));
     await click(button(drawer(), '关闭'));
     expect(el.querySelector('.drawer')).toBeNull();
   });
 
   it('表头认不出 → 文件级错误，不发任何查询', async () => {
     const el = await open('#/orders?status=paid');
-    await click(button(el, '导入运单号（Excel/表格文件）'));
+    await click(button(el, '导入运单号（CSV 文件）'));
     const before = calls.length;
     await type(el.querySelector('textarea[aria-label="CSV 内容"]'), '收件人,电话\nA,1\n');
     await click(button(el, '先检查（还不会发货）'));
@@ -277,7 +277,7 @@ describe('导入运单号（Excel/表格文件）', () => {
 
   it('改了文本，旧预检作废（必须重新预检才能提交）', async () => {
     const el = await open('#/orders?status=paid');
-    await click(button(el, '导入运单号（Excel/表格文件）'));
+    await click(button(el, '导入运单号（CSV 文件）'));
     const ta = el.querySelector('textarea[aria-label="CSV 内容"]');
     await type(ta, 'order_no,carrier,tracking_no\n261007-7K3QXA,EMS,EJ123456789JP\n');
     await click(button(el, '先检查（还不会发货）'));
@@ -288,7 +288,7 @@ describe('导入运单号（Excel/表格文件）', () => {
 
   it('🔴 预检在飞时改了文本：旧预检回来后被丢弃（不把旧文本的结果填回来）', async () => {
     const el = await open('#/orders?status=paid');
-    await click(button(el, '导入运单号（Excel/表格文件）'));
+    await click(button(el, '导入运单号（CSV 文件）'));
     const ta = el.querySelector('textarea[aria-label="CSV 内容"]');
     await type(ta, 'order_no,carrier,tracking_no\n261007-7K3QXA,EMS,EJ123456789JP\n');
     let release = (): void => undefined;

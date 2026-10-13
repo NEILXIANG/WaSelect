@@ -522,7 +522,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
             </span>
           )}
           <button type="button" className="btn btn-secondary" onClick={() => setBatch('csv')}>
-            导入运单号（Excel/表格文件）
+            导入运单号（CSV 文件）
           </button>
           <span className="muted">一次填好多单的运单号：把表格另存为 CSV 后导入</span>
         </div>

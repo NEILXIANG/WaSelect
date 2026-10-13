@@ -251,13 +251,20 @@ export function OrderFixActions({
                 <span className="error">{TRACKING_SHAPE_WARNING}</span>
               )}
               <button
-                className="btn"
+                // 体验排查 2026-10-14：不可逆的取消 / 撤销用危险色，按钮写清它做什么
+                className={mode === 'fix' ? 'btn' : 'btn btn-danger'}
                 type="button"
                 disabled={busy}
                 onKeyDown={blockEnter}
                 onClick={() => void submit()}
               >
-                {busy ? '提交中…' : '确认'}
+                {busy
+                  ? '提交中…'
+                  : mode === 'cancel'
+                    ? '确认取消订单'
+                    : mode === 'revert'
+                      ? '确认撤销发货'
+                      : '确认修改运单号'}
               </button>
               <button
                 className="btn btn-secondary"

@@ -105,8 +105,8 @@ export function fixDoneNotice(mode: 'cancel' | 'fix' | 'revert', order: unknown)
   if (mode === 'cancel') return '订单已取消，库存已回补';
   const hasEmail = str(order, 'contact_email').trim() !== '';
   if (mode === 'revert')
-    return `已撤销发货：订单回到待发货，运单已清空；${hasEmail ? '已给买家发更正邮件' : '买家未留邮箱，没有发更正邮件，请另行告知'}`;
-  return `运单号已更新；${hasEmail ? '已给买家重发发货邮件' : '买家未留邮箱，没有重发发货邮件'}`;
+    return `已撤销发货：订单回到待发货，运单已清空；${hasEmail ? '更正邮件已排入发送（邮件服务未配置时不会发出）' : '买家未留邮箱，没有发更正邮件，请另行告知'}`;
+  return `运单号已更新；${hasEmail ? '发货邮件已排入重发（邮件服务未配置时不会发出）' : '买家未留邮箱，没有重发发货邮件'}`;
 }
 
 /**
@@ -129,7 +129,10 @@ export function fixConfirmText(mode: 'cancel' | 'fix' | 'revert', order: unknown
 export function shipMailNotes(order: unknown): { confirm: string; done: string } {
   const hasEmail = str(order, 'contact_email').trim() !== '';
   return hasEmail
-    ? { confirm: '确认后会给买家发发货邮件。', done: '已发货，发货邮件会发到买家留的邮箱' }
+    ? {
+        confirm: '确认后会给买家发发货邮件。',
+        done: '已发货，发货邮件已排入发送（邮件服务未配置时不会发出）',
+      }
     : {
         confirm: '买家没留邮箱，不会收到发货邮件。',
         done: '已发货；买家没留邮箱，不会收到发货邮件，如需告知请另行联系',

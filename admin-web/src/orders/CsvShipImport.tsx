@@ -92,7 +92,7 @@ export function CsvShipImport({ api, onClose, onDone, onError }: CsvShipImportPr
   };
 
   return (
-    <ActionDrawer wide title="导入运单号（Excel/表格文件）" onClose={onClose}>
+    <ActionDrawer wide title="导入运单号（CSV 文件）" onClose={onClose}>
       {/* 脏态必须在抽屉里面上报（FormDirty @why）；已提交拿到结果后不再算未保存 */}
       <FormDirty current={done ? '' : text} pristine="" />
       {/* AJ-410 / N13：新手不知道 CSV 是什么——先说怎么从 Excel 得到它 */}

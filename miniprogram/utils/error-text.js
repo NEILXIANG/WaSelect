@@ -43,6 +43,9 @@ export function errorMessage(err) {
   const fromMessage = isObj && typeof err.message === 'string' ? err.message.trim() : '';
   const fromErrMsg =
     fromMessage === '' && isObj && typeof err.errMsg === 'string' ? err.errMsg.trim() : '';
+  // 体验排查 2026-10-14：服务端 message 一律是中文；没有中文的 message（英文网关页 / 堆栈）买家读不懂，
+  //   不如说"加载失败"。宿主 errMsg 保持原样（B35 / AJ-218：那是没有码的宿主失败，吞掉就没线索了）
+  if (fromMessage !== '' && !/[\u3400-\u9fff]/.test(fromMessage)) return '加载失败';
   const msg = fromMessage || fromErrMsg;
   return msg === '' ? '加载失败' : msg;
 }

@@ -62,7 +62,9 @@ function partialRefundRows(list) {
       const amountText =
         fmt !== undefined && Number.isInteger(r.amount_minor)
           ? fmt(r.amount_minor)
-          : `${String(r.currency)}（金额以银行账单为准）`;
+          : typeof r.currency === 'string' && r.currency !== ''
+            ? `${r.currency}（金额以银行账单为准）`
+            : '金额以银行账单为准';
       return {
         key: `rf-${i}`,
         amountText,
@@ -378,7 +380,7 @@ export function detailView(order, opts = undefined) {
      */
     trackingHint:
       typeof o.tracking_url === 'string' && o.tracking_url.startsWith('https://')
-        ? '点「复制查件链接」，在手机浏览器（Safari / Chrome）里粘贴打开——是日本邮政官网的查件页'
+        ? '点「复制查件链接」，在手机浏览器（Safari / Chrome）里粘贴打开——是承运商官网的查件页'
         : '点运单号旁的「复制」，到承运商官网粘贴查询',
     timeline: timelineRows(o.timeline),
     /**

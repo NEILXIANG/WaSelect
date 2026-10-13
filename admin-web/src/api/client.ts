@@ -104,7 +104,9 @@ export function createAdminApi(deps: AdminApiDeps) {
       });
       throw new ApiError(
         NETWORK_ERROR_CODE,
-        timedOut ? `请求超时（${timeoutMs}ms）` : '网络请求失败',
+        timedOut
+          ? `请求超时（等了 ${timeoutMs >= 1000 ? `${String(Math.round(timeoutMs / 1000))} 秒` : `${String(timeoutMs)} 毫秒`}），请稍后重试`
+          : '网络请求失败',
         traceId,
       );
     } finally {

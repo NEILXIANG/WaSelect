@@ -60,7 +60,7 @@ describe('OrderFixActions', () => {
     expect(calls).toHaveLength(0);
     await type(el.querySelector('input'), '价格录错');
     await click(button(el, '取消这张订单'));
-    await click(button(el, '确认'));
+    await click(button(el, '确认取消订单'));
     expect(calls[0]).toMatchObject({
       path: '/api/v1/admin/orders/o-1/cancel',
       method: 'POST',
@@ -82,7 +82,7 @@ describe('OrderFixActions', () => {
     await type(inputs[1], 'EM123456789JP');
     await type(inputs[2], '少录一位');
     await click(button(el, '保存运单号'));
-    await click(button(el, '确认'));
+    await click(button(el, '确认修改运单号'));
     expect(calls[0]).toMatchObject({
       path: '/api/v1/admin/orders/o-1/shipment',
       method: 'PATCH',
@@ -123,7 +123,7 @@ describe('OrderFixActions', () => {
     await type(el.querySelector('input'), '点错单，还没打包');
     await click(button(el, '撤销这次发货'));
     expect(el.textContent).toContain('更正邮件');
-    await click(button(el, '确认'));
+    await click(button(el, '确认撤销发货'));
     expect(calls[0]).toMatchObject({
       path: '/api/v1/admin/orders/o-1/shipment/revert',
       method: 'POST',
@@ -164,7 +164,7 @@ describe('OrderFixActions', () => {
       // 未付单直接是取消表单（两端逐页走查第三轮），不再先点选项
       await type(el.querySelector('input'), '价格录错');
       await click(button(el, '取消这张订单'));
-      await click(button(el, '确认'));
+      await click(button(el, '确认取消订单'));
       expect(errors).toEqual([['订单状态不允许此操作', 'tr-77']]);
     });
   });

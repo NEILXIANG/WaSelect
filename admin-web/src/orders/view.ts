@@ -277,6 +277,25 @@ export function eventNoteView(status: unknown, note: unknown): { text: string; r
   ) {
     return { text: '', ref: raw };
   }
+  // 体验排查 2026-10-14：整单退款失败的 note 是机器串（refund-execution.ts 写的）——运营要知道的是"钱动没动、再点会怎样"
+  if (status === 'refund_failed') {
+    if (raw === 'provider_error')
+      return {
+        text: '机构没有答复（结果未知）：再点「退款」会用同一把幂等键重放，不会退两次',
+        ref: '',
+      };
+    const rejected = /^provider_failed:rejected:(\d{3})$/.exec(raw);
+    if (rejected !== null)
+      return {
+        text: `机构拒绝了这笔退款（HTTP ${rejected[1] ?? ''}）：钱没动，再点会换新键重新发起`,
+        ref: '',
+      };
+    if (raw.startsWith('provider_failed:'))
+      return {
+        text: '机构确认这笔退款失败：钱没动，再点会换新键重新发起',
+        ref: raw.slice('provider_failed:'.length),
+      };
+  }
   if (status === 'refunded_by_parts') {
     const m = /^([A-Za-z]{3}):(-?\d+)$/.exec(raw);
     const money = m === null ? '—' : minorMoneyText(Number(m[2]), m[1]);
@@ -290,6 +309,7 @@ export function eventRefLabel(status: unknown): string {
   if (status === 'after_sale_handled') return '售后编号';
   if (status === 'late_paid') return '支付流水号';
   if (status === 'refunded') return '退款流水号';
+  if (status === 'refund_failed') return '机构退款单号';
   return '退款编号';
 }
 

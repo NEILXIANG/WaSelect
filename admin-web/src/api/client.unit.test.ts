@@ -241,7 +241,7 @@ describe('错误收敛（统一 ApiError 形状）', () => {
     const pending = api({ path: '/x', timeoutMs: 50 });
     const assertion = expect(pending).rejects.toMatchObject({
       code: NETWORK_ERROR_CODE,
-      message: '请求超时（50ms）',
+      message: '请求超时（等了 50 毫秒），请稍后重试',
     });
     await vi.advanceTimersByTimeAsync(50);
     await assertion;

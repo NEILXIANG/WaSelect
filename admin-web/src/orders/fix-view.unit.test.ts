@@ -107,9 +107,9 @@ describe('shipmentRevertGate', () => {
 /** 修正完成提示：买家没留邮箱时不能说"已发邮件"（2026-10-11 模拟实测：无邮箱的单也提示"已给买家发更正邮件"）。 */
 describe('fixDoneNotice', () => {
   it.each([
-    ['revert', 'a@example.com', '已给买家发更正邮件'],
+    ['revert', 'a@example.com', '更正邮件已排入发送'],
     ['revert', '', '买家未留邮箱，没有发更正邮件'],
-    ['fix', 'a@example.com', '已给买家重发发货邮件'],
+    ['fix', 'a@example.com', '发货邮件已排入重发'],
     ['fix', undefined, '买家未留邮箱，没有重发发货邮件'],
     ['cancel', undefined, '库存已回补'],
   ] as const)('%s / 邮箱=%s → 含「%s」', (mode, email, want) => {
@@ -140,7 +140,7 @@ describe('shipMailNotes（单单发货的确认与完成提示）', () => {
   it('🔴 留了邮箱 → 说会发邮件', () => {
     expect(shipMailNotes({ contact_email: 'a@b.test' })).toEqual({
       confirm: '确认后会给买家发发货邮件。',
-      done: '已发货，发货邮件会发到买家留的邮箱',
+      done: '已发货，发货邮件已排入发送（邮件服务未配置时不会发出）',
     });
   });
   it('🔴 没留邮箱 → 说不会收到，请另行联系', () => {

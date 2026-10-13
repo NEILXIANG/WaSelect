@@ -37,7 +37,7 @@ import {
   customsDescBlockedHits,
   hsCodeShapeOk,
 } from '@waselect/shared';
-import { moneyText } from '../format.js';
+import { halfWidth, moneyText } from '../format.js';
 
 /** 商品状态（契约 `AdminProduct.status` 枚举；0.6.46 / AJ-403 增 `draft`，单测与契约双向比对）。 */
 /** JAN 码形状不对 / 校验位不对的提示（两端输入测试 2026-10-12）。 */
@@ -535,7 +535,8 @@ export function productFormErrors(form: unknown): {
 
 /** 十进制非负整数字符串 → 数；空 / 小数 / 负数 / 科学计数法 / 十六进制 → null（与 ops/view.ts parseCount 同口径）。 */
 function plainInt(raw: string): number | null {
-  const t = raw.trim();
+  // 体验排查 2026-10-14：价格 / 成本 / 重量 / 库存也认全角数字（运费表、汇率、部分退款早就认）
+  const t = halfWidth(raw);
   return /^\d+$/.test(t) ? Number(t) : null;
 }
 
