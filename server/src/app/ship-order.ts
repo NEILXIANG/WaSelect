@@ -66,7 +66,12 @@ export async function shipOrder(
   const reverts = await withTransaction(deps.db, async (tx) => {
     const row = await lockAdminOrder(tx, id);
     if (row === null) throw new AppError(40400, { order_id: id, reason: 'not_found' });
-    const gate = shipGuard(asOrderStatus(row.status), row.has_dispute, row.is_test);
+    const gate = shipGuard(
+      asOrderStatus(row.status),
+      row.has_dispute,
+      row.is_test,
+      row.lost_dispute_minor,
+    );
     if (!gate.ok) throw gateError(gate, { order_id: id });
     if (!(await markShipped(tx, id, ship.carrier, ship.trackingNo, deps.clock.now(), actor))) {
       throw new AppError(40902, { order_id: id, reason: 'status_raced' });

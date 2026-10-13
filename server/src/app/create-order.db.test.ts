@@ -505,6 +505,11 @@ describe('M-04：收货国家已下线 / 不存在 → 拒单', () => {
       ).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(AppError);
       expect((err as AppError).code).toBe(40002);
+      // 独立排查 2026-10-14 C-3：data 要进响应体（第三参）——地址簿 / 后台改址的 40002 都带 field，这条原先漏了
+      expect((err as AppError).publicData).toMatchObject({
+        field: 'country',
+        reason: 'country_not_served',
+      });
       expect(
         Number((await db`select stock from products where id = 'p-knife'`)[0]?.['stock']),
       ).toBe(5);

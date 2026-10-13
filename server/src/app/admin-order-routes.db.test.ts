@@ -582,6 +582,25 @@ describe('POST /admin/orders/{id}/ship（发货）', () => {
     await s.close();
   });
 
+  // 独立排查 2026-10-14 C-1：败诉拒付 + 人工解除限制后发货——退款侧 AJ-516 拦了，发货侧原先照发（白送货）
+  it('🔴 拒付已败诉且限制已解除（has_dispute=false）→ 发货 40909 dispute_lost，状态不动', async () => {
+    const s = await buildServer();
+    await seedOrder({ id: 'o-1' });
+    await db`
+      update payments set dispute_id = 'dp_o-1', dispute_status = 'lost', dispute_amount = 1650,
+                          dispute_opened_at = now() - interval '40 days', dispute_closed_at = now()
+       where id = 'pay-o-1'
+    `;
+    const r = await adminFetch(s, 'POST', '/api/v1/admin/orders/o-1/ship', {
+      carrier: 'JPPOST',
+      tracking_no: 'TRACK-1',
+    });
+    expect(r.status).toBe(409);
+    expect(r.json.code).toBe(40909);
+    expect((await db`select status from orders where id = 'o-1'`)[0]?.status).toBe('paid');
+    await s.close();
+  });
+
   it('缺 carrier / tracking_no → 40001', async () => {
     const s = await buildServer();
     await seedOrder({ id: 'o-1' });

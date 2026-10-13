@@ -157,7 +157,13 @@ export async function createOrder(
   // 而关税与展示币按"唯一开放的国家"取——收款口径与收货国家对不上。与地址簿同码 40002（field=country）。
   const destProfile = await createCountryProfileRepo(tx).get(address.country);
   if (destProfile === null || !destProfile.active) {
-    throw new AppError(40002, { field: 'country', reason: 'country_not_served' });
+    // ⚠️ 第三参才进响应体（errors.ts @limitation 一；独立排查 2026-10-14 C-3）：地址簿 / 后台改址的 40002 都带 data.field，
+    //    这里原先只写在 details，买家端拿到的是没有 data 的 40002——契约 0.6.79 承诺的形状在这条路径上落空。
+    throw new AppError(
+      40002,
+      { field: 'country', reason: 'country_not_served' },
+      { field: 'country', reason: 'country_not_served' },
+    );
   }
 
   // ── 2b. 审核模式（技术文档 §2.9 / AJ-179）：只有 REVIEW_SKU_ID 能下单 ──────────

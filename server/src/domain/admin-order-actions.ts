@@ -65,14 +65,22 @@ function deny(code: ErrorCode, reason: string): AdminGateResult {
  * @param isTest `orders.is_test`（技术文档 §2.9 / AJ-179）：审核期 mock 单是**未付款即确认**的，
  *        发货 = 真货换假钱。拦在拒付与状态之前：它两样都可能"合格"（paid、无拒付），唯独这条不能放。
  *        缺省 false 只为存量调用口径不变；路由层一律显式传。
+ * @param lostDisputeMinor 这单成功支付行上**已败诉**的拒付金额（`payments.dispute_amount`，没有为 0）：
+ *        > 0 即拒（40909 `dispute_lost`），与退款侧 `fullRefundDisputeLostGuard` 认同一个事实。
  */
 export function shipGuard(
   status: OrderStatus,
   hasDispute: boolean,
   isTest = false,
+  lostDisputeMinor = 0,
 ): AdminGateResult {
   if (isTest) return deny(40902, 'test_order');
   if (hasDispute) return deny(40909, 'dispute_open');
+  // 拒付**已败诉**（独立排查 2026-10-14 C-1）：银行已把钱退回买家，`has_dispute` 被人工解除后这里原先照放——
+  //    发货 = 白送货。退款侧 AJ-516 早已按同一事实拦（40907 dispute_lost），发货侧是同一规则的第二份、漏了。
+  //    @limitation 部分拒付（只输掉一部分金额）也一律拦：买家手里仍有一部分货款，但"发不发"该由人看过金额再定，
+  //    出口是 PATCH /shipment（改运单号）之外没有——真要发，先把败诉那笔的事实弄清，不在闸门里替人判断。
+  if (lostDisputeMinor > 0) return deny(40909, 'dispute_lost');
   return canTransition(status, 'shipped') ? OK : deny(40902, `status_${status}`);
 }
 

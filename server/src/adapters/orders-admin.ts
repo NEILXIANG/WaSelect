@@ -534,6 +534,12 @@ export interface AdminOrderLockRow {
   tracking_no: string | null;
   /** 撤销发货的时间窗要它（AJ-440）；未发货为 null。 */
   shipped_at: Date | null;
+  /**
+   * 成功支付行上已败诉拒付的金额合计（原币最小单位；没有为 0）——独立排查 2026-10-14 C-1。
+   * @why 发货闸门要认它：`has_dispute` 被人工解除后，只看那一列会把银行已退钱的单发出去。
+   *      口径同 `RefundablePaymentRow.lost_dispute_minor`（dispute_amount 缺失按实收全额算）。
+   */
+  lost_dispute_minor: number;
 }
 
 /**
@@ -545,7 +551,9 @@ export interface AdminOrderLockRow {
  */
 export async function lockAdminOrder(tx: Db, orderId: string): Promise<AdminOrderLockRow | null> {
   const rows = await tx`
-    select id, order_no, user_id, status, total_jpy, has_dispute, is_test, carrier, tracking_no, shipped_at
+    select id, order_no, user_id, status, total_jpy, has_dispute, is_test, carrier, tracking_no, shipped_at,
+           (select coalesce(sum(case when p.dispute_status = 'lost' then coalesce(p.dispute_amount, p.charge_amount) else 0 end), 0)
+              from payments p where p.order_id = orders.id and p.status = 'succeeded') as lost_dispute_minor
       from orders where id = ${orderId} for update
   `;
   const r = rows[0] as Record<string, unknown> | undefined;
@@ -561,6 +569,7 @@ export async function lockAdminOrder(tx: Db, orderId: string): Promise<AdminOrde
     carrier: strOrNull(r.carrier),
     tracking_no: strOrNull(r.tracking_no),
     shipped_at: r.shipped_at instanceof Date ? r.shipped_at : null,
+    lost_dispute_minor: Number(r.lost_dispute_minor),
   };
 }
 

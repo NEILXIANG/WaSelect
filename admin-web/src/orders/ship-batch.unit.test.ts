@@ -248,6 +248,7 @@ describe('describeResult', () => {
     [{ ok: false, code: 40902, reason: 'status_shipped' }, '已是「已发货」'],
     [{ ok: false, code: 40902, reason: 'status_refunding' }, '退款中'],
     [{ ok: false, code: 40909, reason: 'dispute_open' }, '拒付'],
+    [{ ok: false, code: 40909, reason: 'dispute_lost' }, '败诉'],
     [{ ok: false, code: 40902, reason: 'test_order' }, '测试单'],
     [{ ok: false, code: 40400, reason: 'not_found' }, '不存在'],
     [{ ok: false, code: 40902, reason: 'status_raced' }, '刷新'],

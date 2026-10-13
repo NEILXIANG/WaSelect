@@ -63,6 +63,19 @@ describe('admin-order-actions（管理端操作准入，I2 U-B2a）', () => {
     expect(shipGuard('paid', false).ok).toBe(true);
   });
 
+  // 独立排查 2026-10-14 C-1：拒付**已败诉**（银行已把钱退回买家）且被人工解除限制（has_dispute=false）后，
+  // 退款那一侧 AJ-516 已拦（40907 dispute_lost），发货这一侧原先只看 has_dispute ⇒ 照发 = 白送货。
+  it('shipGuard：拒付已败诉（lostDisputeMinor > 0）即使 has_dispute 已解除也 → 40909 dispute_lost', () => {
+    const r = shipGuard('paid', false, false, 5000);
+    expect(codeOf(r)).toBe(40909);
+    expect(r.ok ? '' : r.reason).toBe('dispute_lost');
+    // 没有败诉金额照常放行；进行中的拒付仍报 dispute_open（先于败诉判定）
+    expect(shipGuard('paid', false, false, 0).ok).toBe(true);
+    expect(shipGuard('paid', true, false, 5000).ok ? '' : 'x').toBe('x');
+    const open = shipGuard('paid', true, false, 5000);
+    expect(open.ok ? '' : open.reason).toBe('dispute_open');
+  });
+
   it('refundGuard：paid / shipped / delivered 可退，refunding 可**重试**（KD-4），其余六态拦', () => {
     const allowed = ORDER_STATUS.filter((s) => refundGuard(s, false).ok);
     expect(allowed).toEqual(['paid', 'shipped', 'delivered', 'refunding']);
