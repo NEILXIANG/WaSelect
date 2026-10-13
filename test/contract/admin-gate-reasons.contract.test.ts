@@ -41,6 +41,12 @@ interface Entry {
   fn: string;
   /** 该守卫里**对外**的原因挂在哪个码上（只有它会进 `data.reason`）。 */
   code: number;
+  /**
+   * 路由层在守卫之外**另外**对外抛的原因（如锁内判定通过、写入 0 行命中的 `status_raced`）——独立排查 2026-10-14。
+   * @why 第三条用例只拿守卫函数体比对，这类原因会被判"列了不返"；但它确实会返，契约漏列才是错。
+   *      这里要求它以 `reason: '<值>'` 的字面量出现在路由文件里，不是白名单——改名就红。
+   */
+  routeExtra?: { file: string; reasons: string[] };
 }
 
 const ENTRIES: Entry[] = [
@@ -49,6 +55,7 @@ const ENTRIES: Entry[] = [
     file: 'server/src/domain/admin-order-actions.ts',
     fn: 'revertShipmentGuard',
     code: 40902,
+    routeExtra: { file: 'server/src/app/admin-order-fix-routes.ts', reasons: ['status_raced'] },
   },
 ];
 
@@ -185,6 +192,16 @@ describe('契约里逐条列出的 data.reason 清单必须与实现一致（双
       const desc = descriptionOf(yaml, e.path);
       const body = functionBody(readFileSync(resolve(root, e.file), 'utf8'), e.fn);
       const actual = reasonsInBody(body, e.code);
+      if (e.routeExtra !== undefined) {
+        const route = readFileSync(resolve(root, e.routeExtra.file), 'utf8');
+        for (const r of e.routeExtra.reasons) {
+          expect(
+            route.includes(`reason: '${r}'`),
+            `${e.routeExtra.file} 里没有 reason: '${r}'`,
+          ).toBe(true);
+          actual.push(r);
+        }
+      }
       for (const reason of listedInDescription(desc)) {
         if (!actual.some((a) => (reason.endsWith('_') ? a.startsWith(reason) : a === reason)))
           bad.push(`${e.path} 的描述里列了 \`${reason}\`，但 ${e.fn} 不会返回它`);
