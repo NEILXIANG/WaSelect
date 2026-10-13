@@ -996,6 +996,8 @@ describe('解除拒付限制：提示就近、说明分清进行中 / 已败诉'
     const drawer = el.querySelector('.drawer');
     expect(drawer?.textContent).toContain('拒付已败诉');
     expect(drawer?.textContent).not.toContain('正在通过银行要回货款');
+    // 三天提交复查：解除后服务端退款闸门放行（AJ-514 反向风险二）——败诉的钱已被银行退回，再退就是退两次
+    expect(drawer?.textContent).toContain('解除后也不要再退款');
     await click(button(el, '人工解除拒付限制'));
     expect(drawer?.querySelector('[role="alert"]')?.textContent).toContain('解除理由必填');
     await type(el.querySelector('input[name="release-reason"]'), '败诉单另作处置');
