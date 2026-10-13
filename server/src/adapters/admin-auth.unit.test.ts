@@ -176,15 +176,30 @@ describe('登录路由的调用顺序（源码断言）', () => {
    *      于是同一个 42901 有两种响应形状——而契约 0.6.20 写的是"锁定期 429 / 42901 + Retry-After"。
    *      它的触发需要并发（另一个请求在 bcrypt 期间把锁打上），做成真用例必然偶发红，
    *      所以这里守的是**分支里有没有这个头**，不假装测到了并发。
+   * @why 2026-10-13（AJ-519）起，`42901` 这个码**不写在各分支里**了：同一个码有两种成因
+   *      （被锁 / 同一来源抽水被限流），只有"被锁"那一种要对外带 `data.reason`，
+   *      所以收成一个 `loginLocked()`（一处写对、三处用）。断言因此**跟着定义看**——
+   *      只断言分支里有 `42901` 的话，把 `throw loginLocked()` 换成别的 throw 就假绿
+   *      （下面 190 行那条对 `rejectLocked` 用的就是同一套做法）。守的东西没变：
+   *      三处带 `retry-after`、且抛的是那个唯一的"已锁"错误。
    */
+  /** 三个"已锁"出口共用的错误构造处（`const loginLocked = …;` 那两行）。 */
+  const lockedErrorDefinition = (): string => {
+    const code = codeLines.map((l) => l.text).join('\n');
+    const at = code.indexOf('const loginLocked =');
+    expect(at, '找不到 loginLocked 的定义（改名了？那要同步改本文件）').toBeGreaterThanOrEqual(0);
+    return code.slice(at, code.indexOf(';', at));
+  };
+
   it('🔴 三个"已锁"出口都带 retry-after：locked_while_verifying 分支也不例外（SEC2-08）', () => {
     const code = codeLines.map((l) => l.text).join('\n');
     const start = code.indexOf("if (clearedSource === 'locked' || clearedEmail === 'locked') {");
     expect(start).toBeGreaterThanOrEqual(0);
     const end = code.indexOf('\n        }', start);
     const branch = code.slice(start, end === -1 ? code.length : end);
-    expect(branch).toContain('42901');
     expect(branch).toContain('retry-after');
+    expect(branch).toContain('loginLocked(');
+    expect(lockedErrorDefinition()).toContain('42901');
   });
 
   it('拿不到额度时不得再碰 bcrypt：locked 分支里只有 42901，没有一次口令比对', () => {
@@ -203,8 +218,12 @@ describe('登录路由的调用顺序（源码断言）', () => {
     const hs = code.indexOf('const rejectLocked =');
     expect(hs).toBeGreaterThanOrEqual(0);
     const helper = code.slice(hs, code.indexOf('\n        };', hs));
-    expect(helper).toContain('42901');
     expect(helper).toContain('retry-after');
     expect(helper).not.toContain('verifyPassword(');
+    // 错误本身收在 loginLocked() 里（AJ-519），helper 只负责"设头 + 抛它"；码与 reason 都在定义处钉住
+    expect(helper).toContain('loginLocked(');
+    const def = lockedErrorDefinition();
+    expect(def).toContain('42901');
+    expect(def).toContain('admin_account_locked');
   });
 });
