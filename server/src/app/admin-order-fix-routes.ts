@@ -161,7 +161,18 @@ export function mountAdminOrderFixRoutes(app: Express, deps: AdminOrderFixRoutes
             shippedAt: row.shipped_at,
             now: at,
           });
-          if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
+          if (!gate.ok)
+            // 契约（`contracts/api-contract.yaml` /admin/orders/{id}/shipment/revert）**已经写明**
+            // `409 / 40902 data.reason = status_<状态> / revert_window_passed / after_sale_open`——
+            // 也就是说漂移方向是"实现没兑现承诺"，不是契约漏列。
+            // 原先 reason 只写在第 2 个参数（details，`toErrorResponse` 不输出）上，响应体里
+            // 连 `data` 都没有：运营点撤销发货撞上"有进行中售后"时，拿到的只有服务端那句
+            // 与状态无关的"订单状态不允许此操作"。第 3 个参数才是响应体的 data（规律排查 2026-10-13）。
+            throw new AppError(
+              gate.code,
+              { order_id: id, reason: gate.reason },
+              { reason: gate.reason },
+            );
           setAuditBefore(res, {
             status: row.status,
             carrier: row.carrier,
@@ -171,7 +182,15 @@ export function mountAdminOrderFixRoutes(app: Express, deps: AdminOrderFixRoutes
           // 不再以"撤销发货"开头：管理端时间线已把事件名显示成「撤销发货」，重复一遍读着像两件事
           const note = `原 ${row.carrier ?? '-'} / ${row.tracking_no ?? '-'}；原因：${reason.reason}`;
           const done = await revertShipment(tx, id, at, actorOf(req), note);
-          if (done === false) throw new AppError(40902, { order_id: id, reason: 'status_raced' });
+          // 第二道（adapter 的 `where status = 'shipped'` 兜底）：闸门放行但行已不是 shipped。
+          // reason 一并对外，与上面那条保持**同一种形状**——同一路由的两个 40902 一个有 data 一个没有，
+          // 调用方就没法靠"有没有这个字段"判断，只能两个都当"状态不允许"（42901 那两成因正是这个坑）。
+          if (done === false)
+            throw new AppError(
+              40902,
+              { order_id: id, reason: 'status_raced' },
+              { reason: 'status_raced' },
+            );
           return done;
         });
         setAuditAfter(res, { status: 'paid', reason: reason.reason });

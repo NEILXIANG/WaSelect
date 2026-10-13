@@ -21,6 +21,7 @@
 import type { Express, Request } from 'express';
 import {
   AFTER_SALE_STATUS_LABELS,
+  AFTER_SALE_OPEN_STATUSES,
   AFTER_SALE_ORDER_STATUSES,
   afterSaleTransitionAllowed,
   type AfterSaleStatus,
@@ -143,9 +144,14 @@ export function mountAfterSaleRoutes(app: Express, deps: AfterSaleRoutesDeps): v
             const cur = await lockAfterSale(tx, orderId, rid);
             if (cur === null) throw new AppError(40400, { order_id: orderId, after_sale_id: rid });
             if (!afterSaleTransitionAllowed(cur.status, input.status as AfterSaleStatus)) {
+              // 「进行中」的判据只从 shared 取（规律排查 2026-10-13）：原先这里手写
+              // `cur.status === 'open' || cur.status === 'processing'`，是全仓第 5 份副本。
+              // 漂移的后果很具体：shared 将来加一档"进行中"（例如 escalated），这里会把它当成
+              // "已结案"→ 报 `after_sale_closed` → 运营看到"这条申请已经结案（可能别的同事刚处理过）"，
+              // 而它根本没结案，运营据此收手。
               throw conflict(
                 orderId,
-                cur.status === 'open' || cur.status === 'processing'
+                (AFTER_SALE_OPEN_STATUSES as readonly string[]).includes(cur.status)
                   ? 'transition_invalid'
                   : 'after_sale_closed',
               );

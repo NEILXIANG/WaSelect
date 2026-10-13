@@ -258,6 +258,30 @@ describe('POST /admin/orders/:id/after-sales/:rid/resolve（运营处理）', ()
     expect([back.status, back.json['code']]).toEqual([400, 40001]);
   });
 
+  it('🔴 申请还在进行中却不能这样改 → 40902 transition_invalid（不是 after_sale_closed）', async () => {
+    // 两个 reason 的分界取自 shared 的 AFTER_SALE_OPEN_STATUSES（after-sale-routes.ts）：
+    //   还在 open / processing 的申请，非法流转说 transition_invalid（"状态已变化，按最新状态处理"）；
+    //   已结案的才说 after_sale_closed（"这条申请已经结案"）。**写反了运营会以为这单已被别人结案而收手。**
+    // 可达的非法流转只有一种：processing 再改成 processing。parseAfterSaleResolve 的动作集是
+    //   {processing, resolved, rejected}，而 NEXT['processing'] = {resolved, rejected}；
+    //   至于从 open 出发，三个动作都合法，所以 open 那侧走不到这条分支。
+    await seedOrder('o-r6', 'delivered');
+    const rid = String(((await apply(buyer, 'o-r6')).json['after_sale'] as { id: string }).id);
+    expect((await resolve('o-r6', rid, { status: 'processing' })).status).toBe(200);
+    const again = await resolve('o-r6', rid, { status: 'processing' });
+    expect([again.status, again.json['code'], reasonOf(again)]).toEqual([
+      409,
+      40902,
+      'transition_invalid',
+    ]);
+    // 结案之后，同一个请求才该说 after_sale_closed —— 两句话的分界就在 afterSaleTransitionAllowed
+    expect((await resolve('o-r6', rid, { status: 'resolved', note: '已补发一件' })).status).toBe(
+      200,
+    );
+    const closed = await resolve('o-r6', rid, { status: 'processing' });
+    expect([closed.status, reasonOf(closed)]).toEqual([409, 'after_sale_closed']);
+  });
+
   it('结案必须写说明（40001 note_required）；申请不属于该订单 → 40400', async () => {
     await seedOrder('o-r3', 'delivered');
     await seedOrder('o-r4', 'delivered');

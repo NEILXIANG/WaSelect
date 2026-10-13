@@ -8,7 +8,11 @@
  * @limitation 没有分页：一张订单的售后申请是个位数。
  * @see migrations/038_after_sale_requests.sql；app/after-sale-routes.ts
  */
-import type { AfterSaleReason, AfterSaleStatus } from '@waselect/shared';
+import {
+  AFTER_SALE_OPEN_STATUSES,
+  type AfterSaleReason,
+  type AfterSaleStatus,
+} from '@waselect/shared';
 import type { Db } from './db.js';
 
 export interface AfterSaleRow {
@@ -117,9 +121,18 @@ export async function updateAfterSale(
 /**
  * 本单有没有**进行中**的售后（open / processing；AJ-440 撤销发货闸门用）。
  * @why 口径与部分唯一索引 `uq_after_sale_requests_open` 一致：那条索引定义了什么叫"进行中"。
+ * @why 取值**从 shared 取**而不是在 SQL 里写字面量（规律排查 2026-10-13）：原先写死
+ *      `status in ('open', 'processing')`，是全仓第 6 份副本。漂移的后果是撤销发货闸门放行
+ *      "其实还有一条进行中的申请"的单——运营撤了发货，买家那边的售后还在等处理。
+ *      ⚠️ 索引本体（`WHERE status IN (...)`，迁移 038）**仍是另一份**，且迁移不可改写：
+ *      往"进行中"里加一档时，除了 shared 还要**加一条新迁移**改 CHECK 与索引，否则
+ *      唯一索引不再覆盖新状态（两条并存的申请不会被 23505 拦下）。这一点写在门禁的 @limitation 里。
+ * @why 写法与 `adapters/orders.ts` 的三处（132 / 554 / 646，管理端待办、买家售后页签、订单筛选）
+ *      **完全一致**（`in ${db([...AFTER_SALE_OPEN_STATUSES])}`）——那不是巧合，是同一个判据在四个查询里
+ *      共用一种形态，将来再被抄走时也有个"看着眼熟"的样板。
  */
 export async function hasOpenAfterSale(db: Db, orderId: string): Promise<boolean> {
   const rows = await db`
-    select 1 from after_sale_requests where order_id = ${orderId} and status in ('open', 'processing') limit 1`;
+    select 1 from after_sale_requests where order_id = ${orderId} and status in ${db([...AFTER_SALE_OPEN_STATUSES])} limit 1`;
   return rows.length > 0;
 }

@@ -261,6 +261,40 @@ describe('受保护路由 × 身份状态：守卫结论表（路由清单取自
     }
   });
 
+  it('🔴 被封禁的拒绝把成因放进**响应体**（40301 data.reason=blocked），不是只进日志', async () => {
+    // @why 上面那条只断言"结论是 40301"，响应体 `data` 一眼都没看（本文件 @limitation 一写明了
+    //   "只断言守卫的结论"）。可 40301 有多种成因（角色不符 / 未开 TOTP / 封禁 / 源站校验失败），
+    //   响应里不带成因时前端只能猜：小程序原先按码一律说"账号已被限制使用"，改成读 `data.reason`
+    //   之后才分得开（`utils/error-text.js` 的 `isAccountBlocked`）。
+    // ⚠️ `AppError` 的第 2 个参数是 details（**只进日志**，`toErrorResponse` 结构上不输出），
+    //   第 3 个才是 publicData。`auth.ts` 里这个 reason 曾经写在第 2 参上 → 前端判据恒为 false →
+    //   真被拉黑的人被告知"服务暂时不可用"并留下重试按钮（规律排查 2026-10-13）。
+    //   这条用例把"响应里到底有没有这个字段"钉住——纯日志断言（上面那条）拦不住它。
+    const setup = await buildChainServer(db);
+    const block = await fetch(`${setup.url}${API_PREFIX}/admin/users/u-2/block`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${await tokenFor('u-admin', 'admin')}`,
+        'content-type': 'application/json',
+        'idempotency-key': 'block-u2-reason',
+      },
+      body: JSON.stringify({ reason: '测试拉黑' }),
+    });
+    expect(block.status).toBeLessThan(300);
+    await setup.close();
+
+    const srv = await buildChainServer(db); // 新服务 = 身份缓存全冷
+    try {
+      const res = await fetch(`${srv.url}${API_PREFIX}/orders`, {
+        headers: { authorization: `Bearer ${await tokenFor('u-2')}` },
+      });
+      const body = (await res.json()) as { code?: unknown; data?: { reason?: unknown } };
+      expect([res.status, body.code, body.data?.reason]).toEqual([403, 40301, 'blocked']);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('管理端路由：正常管理员放行；买家 token → 40301；被撤管理员 → 40301（not_admin）', async () => {
     await db`insert into users (id, openid, email, is_admin) values ('u-exadmin', 'o-exadmin', 'ex@example.com', false)`;
     const srv = await buildChainServer(db);

@@ -103,6 +103,10 @@ async function post(
   return { status: r.status, json: (await r.json().catch(() => ({}))) as Record<string, unknown> };
 }
 
+/** 服务端 `AppError(code, {...}, {reason})` 里那个 `reason`（同一个码有多因时必须看它，规律⑤）。 */
+const reasonOf = (r: { json: Record<string, unknown> }): unknown =>
+  (r.json['data'] as { reason?: unknown } | undefined)?.reason;
+
 describe('POST /admin/orders/:id/cancel（P1-11）', () => {
   it('🔴 未付单 → cancelled、库存回补、事件 actor=admin 且带原因、发 order.cancelled、写审计', async () => {
     await seed('o-c1', 'created');
@@ -368,6 +372,30 @@ describe('POST /admin/orders/:id/shipment/revert（AJ-440）', () => {
       ['shipped', 'EE123456789JP'],
     ]);
     expect(published.filter((p) => p.startsWith('order.shipment_reverted'))).toEqual([]);
+  });
+
+  it('🔴「进行中」的两个状态都挡撤销发货（open / processing）；已结案的不挡', async () => {
+    // 判据来自 shared 的 AFTER_SALE_OPEN_STATUSES，经 `hasOpenAfterSale` 走 SQL：
+    //   `status in ${db([...AFTER_SALE_OPEN_STATUSES])}`（adapters/after-sales.ts）。
+    // ⚠️ 上面那条用例插入售后时**省了 status** → 默认 'open'，所以 'processing' 这条腿从来没被走过：
+    //   把 SQL 改成只认 'open'、或者把 shared 里的 'processing' 删掉，全都是绿的（规律⑪：造数只覆盖主状态）。
+    //   两个状态各造一单，理由也一并钉住——服务端 40902 有多因（状态不对 / 售后进行中 / 超时…），
+    //   只说"40902"等于没验证是**哪一条**拦下的。
+    for (const [i, st] of ['open', 'processing'].entries()) {
+      const oid = `o-op-${String(i)}`;
+      await seed(oid, 'shipped', { carrier: 'EMS', tracking: 'EE123456789JP' });
+      await db`insert into after_sale_requests (id, order_id, user_id, reason, description, status, created_at, updated_at)
+               values (${`as-${oid}`}, ${oid}, ${`u-${oid}`}, 'not_received', '一直没收到', ${st}, now(), now())`;
+      const blocked = await post(REVERT(oid), { reason: 'x' });
+      expect([st, blocked.json['code'], reasonOf(blocked)]).toEqual([st, 40902, 'after_sale_open']);
+      const [o] = await db`select status from orders where id = ${oid}`;
+      expect([st, o?.['status']]).toEqual([st, 'shipped']);
+    }
+    // 负例：已结案的不挡——否则「有售后就不能撤发货」会退化成一句过宽的规则
+    await seed('o-op-2', 'shipped', { carrier: 'EMS', tracking: 'EE123456789JP' });
+    await db`insert into after_sale_requests (id, order_id, user_id, reason, description, status, created_at, updated_at)
+             values ('as-o-op-2', 'o-op-2', 'u-o-op-2', 'not_received', '一直没收到', 'resolved', now(), now())`;
+    expect((await post(REVERT('o-op-2'), { reason: 'x' })).status).toBe(200);
   });
 
   it('🔴 adapter 兜底：不是 shipped 的单直接调 revertShipment → false，订单与事件都不动（闸门之外的第二道）', async () => {

@@ -109,6 +109,22 @@ export const TOTP_BYPASS_SOURCE = 'totp-bypass';
 const DUMMY_HASH = '$2b$10$v0B4o0iWhgKRl/BcEw7snObpnEcHc3rKZuiTQ6KW7PN1Efy62ZZ1S';
 
 /**
+ * 登录被锁定（来源桶或邮箱桶）→ 42901 + `data.reason`。收成一个函数是因为**这个 reason 只有放对位置才有用**：
+ *
+ * @why `AppError` 的第二个参数是 details（**只进日志**，`toErrorResponse` 结构上不输出它），
+ *      第三个才是 publicData（进响应体的 `data`）。而管理端 `auth-view.ts` 正是靠
+ *      `err.data?.['reason'] === 'admin_account_locked'` 把"口令错太多次被锁"与"IP 抽水被限流"
+ *      分开说的（42901 两种成因共用一个码，第二种是 `rate-limit.ts` 抛的、不带 data）。
+ *      原先两个抛出点都写在第二个参数上 → 响应里根本没有 `data` → 判据恒为 false →
+ *      **锁定期间一律说"登录尝试太频繁，这不是密码问题"**，而它恰恰就是密码问题
+ *      （规律排查 2026-10-13：契约与前端都以为带着这个字段，只有实现在"只进日志"的那一侧）。
+ * @why 收成一处而不是两个抛出点各写一遍：这个"位置"很容易在下次改动里被顺手简化掉，
+ *      而只要有一处退化，那条分支就静默失效（表现是"偶尔说错话"，不会报错）。
+ */
+const loginLocked = (): AppError =>
+  new AppError(42901, { reason: 'admin_account_locked' }, { reason: 'admin_account_locked' });
+
+/**
  * 契约：email 必填；password 的上下限**引用共享常量**（第二轮审查 SEC2-11 ③）。
  *
  * @why 这里曾经是 `min(12).max(1024)` 两个字面量，而改密脚本（`scripts/admin-password-lib.ts`）
@@ -231,7 +247,7 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
             ...(hit !== null ? { target_user_id: hit.id } : {}),
             ctx: { retry_after_sec: retrySec, known_account: hit !== null, scope },
           });
-          throw new AppError(42901, { reason: 'admin_account_locked' });
+          throw loginLocked();
         };
 
         // ⓪ **先只读**邮箱桶（PAY3-04）：已锁就直接 42901，**一次额度都不扣**。
@@ -362,7 +378,7 @@ export function mountAdminAuthRoutes(app: Express, deps: AdminAuthRoutesDeps): v
             target_user_id: cred.id,
             ctx: { reason: 'locked_while_verifying' },
           });
-          throw new AppError(42901, { reason: 'admin_account_locked' });
+          throw loginLocked();
         }
 
         if (!cred.isAdmin || cred.blocked) {

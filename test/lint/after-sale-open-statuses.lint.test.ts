@@ -4,7 +4,7 @@
  * @why 这条规则（`open` / `processing` 两个状态）在服务端决定三件事：
  *      「能不能再提售后申请」（`after-sale-routes.ts` 撞部分唯一索引 → 40902 `after_sale_open`）、
  *      「能不能撤销发货」（`revertShipmentGuard`）、「超时未发货 / 待办要不要算进来」。
- *      本轮规律排查（规律②）在它上面数出**四处副本**：
+ *      本轮规律排查（规律②）在它上面数出**六处副本**：
  *      ① `packages/shared/src/after-sale.ts` 的 `AFTER_SALE_OPEN_STATUSES`（真源）；
  *      ② `admin-web/src/orders/fix-view.ts` 手写 `['open', 'processing']`（撤销发货的门槛）；
  *      ③ `admin-web/src/orders/after-sale-view.ts` 手写 `a.status === 'open' || a.status === 'processing'`
@@ -15,18 +15,39 @@
  *      属于"多写一份而不是引用"；漂移的后果是运营点「撤销发货」→ 服务端 40902 → 前端说
  *      "状态刚变了，请刷新"，而状态根本没变，重试永远不会成功。
  *
+ *      ⚠️ **第一版这条门禁只扫 `admin-web/src` 与 `miniprogram`，于是漏掉了服务端自己的两份**
+ *      （2026-10-13 补上时才发现）：
+ *      ⑤ `server/src/app/after-sale-routes.ts` 的 `cur.status === 'open' || cur.status === 'processing'`
+ *         （选 `transition_invalid` 还是 `after_sale_closed` 当 reason）；漂移的后果是运营看到
+ *         "这条申请已经结案（可能别的同事刚处理过）"，而它根本没结案；
+ *      ⑥ `server/src/adapters/after-sales.ts` 的 `hasOpenAfterSale` SQL 里
+ *         `status in ('open', 'processing')`；漂移的后果是撤销发货放行了"其实还有进行中售后"的单。
+ *      **教训：门禁的扫描根必须包含"真源所在的那一端"**——服务端本来最能 import shared，
+ *      却因为 ROOTS 里没有 `server/src` 而成了唯一没被看住的地方。
+ *
  * @limitation 一：这是**文本扫描**不是 AST，判据是"同一行里同时出现 `'open'` 与 `'processing'` 两个字面量"。
  *              换行分开写、或写成别的等价形式（`Set`、映射表）会漏过。漏过是"少一次保护"，
  *              误红是"多看一眼"，所以判据宁窄勿宽。
- * @limitation 二：只扫 `admin-web/src` 与 `miniprogram`，**不扫 `packages/shared`**——
+ * @limitation 二：扫 `admin-web/src` / `miniprogram` / `server/src`，**不扫 `packages/shared`**——
  *              那是真源，它本来就应该写出这两个字面量。
  * @limitation 三：小程序侧给它留了一个**白名单文件**（不能 import shared：没有构建步骤）。
  *              也就是说这里放行的不是"某一行"，而是"那个文件里的这一份具名镜像"——
  *              白名单之外的任何地方再出现这个状态对都会红。
  * @limitation 四：豁免注释只要求"存在"，不审理由是否成立（同其它注释门禁）。
+ * @limitation 五：**不扫 `migrations/`**。部分唯一索引 `uq_after_sale_requests_open` 与
+ *              `status` 的 CHECK 域（迁移 038）里也有这一对，但迁移是**不可改写的既成事实**：
+ *              往"进行中"里加一档时无论如何都要**新增一条迁移**去改 CHECK 与索引，
+ *              那条新迁移由 `test/lint/migrations.lint.test.ts` 与 db 层把关，不由本文件管。
+ *              也就是说这一对在 DB 侧**始终有一份必须人工同步的副本**（已写进 AJ-518 的下游清单）。
+ * @limitation 六：看不住"**用错了常量**"。`AFTER_SALE_STATUSES`（四个：多 resolved / rejected）
+ *              与 `AFTER_SALE_OPEN_STATUSES`（两个）名字只差一个词，`a.includes(s)` 里传错那个
+ *              照样编译通过、也不会被本文件发现。若要根治，得在 shared 加一个
+ *              `isAfterSaleOpen(status)` 把"哪个常量"这个选择也收进去（本轮未做，因为
+ *              三处调用点的入参有 untyped 也有 typed，改函数签名会把调用点重新炒一遍）。
  *
  * @see packages/shared/src/after-sale.ts（AFTER_SALE_OPEN_STATUSES）；
- *      miniprogram/utils/after-sale.js（小程序镜像）；docs/规律总结与全仓排查-2026-10-12.md §3 规律②
+ *      miniprogram/utils/after-sale.js（小程序镜像）；docs/自主决策记录.md AJ-518；
+ *      docs/规律总结与全仓排查-2026-10-12.md §3 规律②
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -40,7 +61,7 @@ const PAIR = ["'open'", "'processing'"];
 /** 豁免注释（确实要在别处手写这个状态对时用）。 */
 const EXEMPT = 'after-sale-open-mirror-ok:';
 /** 扫描根（相对仓库根）。 */
-const ROOTS = ['admin-web/src', 'miniprogram'];
+const ROOTS = ['admin-web/src', 'miniprogram', 'server/src'];
 /** 不扫的目录：宿主产物与依赖。 */
 const SKIP_DIRS = new Set(['node_modules', 'miniprogram_npm', 'dist']);
 
@@ -115,7 +136,7 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe('「进行中的售后」状态对只能来自 shared（或其具名镜像）', () => {
-  it(`🔴 admin-web / 小程序里不再手写 ${PAIR.join(' + ')}`, () => {
+  it(`🔴 admin-web / 小程序 / 服务端里不再手写 ${PAIR.join(' + ')}`, () => {
     const offenders: string[] = [];
     for (const base of ROOTS) {
       for (const file of sourceFiles(resolve(root, base))) {
@@ -134,7 +155,8 @@ describe('「进行中的售后」状态对只能来自 shared（或其具名镜
     expect(
       offenders,
       `这处手写了"进行中的售后"（open / processing）。改成引用 shared 的 AFTER_SALE_OPEN_STATUSES` +
-        `（admin-web 能直接 import；小程序见 ${MIRROR_FILE} 的具名镜像）；` +
+        `（admin-web / server 能直接 import；SQL 用 \`in \${db([...AFTER_SALE_OPEN_STATUSES])}\`，` +
+        `同 adapters/orders.ts；小程序见 ${MIRROR_FILE} 的具名镜像）；` +
         `确实要在别处手写时，写 \`// ${EXEMPT} <理由>\``,
     ).toEqual([]);
   });

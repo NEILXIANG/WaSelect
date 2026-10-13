@@ -221,7 +221,12 @@ export function requireRole(
           if (record.blockedAt !== null) {
             // 封禁：403 而不是 401。返回 401 会让前端"静默重新登录并重放"，
             // 于是被封禁的用户会陷入无限重登循环——而"你被封禁了"这个事实被完全掩盖。
-            next(new AppError(40301, { reason: 'blocked' }));
+            // ⚠️ `reason` 必须放**第三个参数**（publicData）才进得了响应体：第二个参数是 details，
+            //    `toErrorResponse` 结构上就不输出它（errors.ts @limitation 一）。
+            //    小程序 `utils/error-text.js` 的 `isAccountBlocked` 读的就是响应里的 `data.reason`——
+            //    写在第 2 参时它恒为 undefined，于是**真被拉黑的买家**被告知"服务暂时不可用"、
+            //    还被留下重试按钮（规律排查 2026-10-13：同一个 40301 有两种成因，判据读不到就分不开）。
+            next(new AppError(40301, { reason: 'blocked' }, { reason: 'blocked' }));
             return;
           }
           if (record.tokenVer !== (principal.ver ?? 1)) {

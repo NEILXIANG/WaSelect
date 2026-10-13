@@ -181,6 +181,13 @@ describe('POST /auth/admin/login（账号维度锁定；IP 限流放宽以免混
     expect(locked.status).toBe(429);
     expect(locked.json['code']).toBe(42901);
     expect(Number(locked.headers.get('retry-after'))).toBeGreaterThan(0);
+    // 成因必须进**响应体**，不是只进日志（规律排查 2026-10-13）：管理端 `auth-view.ts` 靠
+    //   `data.reason === 'admin_account_locked'` 把"口令错太多次被锁"与"同一来源抽水被限流"分开说
+    //   ——42901 是**两种成因共用一个码**，后者由 rate-limit.ts 抛、**不带 data**，所以"有没有这个
+    //   字段"本身就是判据。而 `AppError` 的第 2 个参数是 details（只进日志，`toErrorResponse`
+    //   结构上不输出），第 3 个才进响应；这个字段曾经写在第 2 参上 → 判据恒为 false →
+    //   被锁的管理员被告知"这不是密码问题"（恰恰就是密码问题）。见 `loginLocked()` 的注释。
+    expect(locked.json['data']).toEqual({ reason: 'admin_account_locked' });
     expect(srv.sink.find('admin_login_locked')).toHaveLength(1);
 
     await db`update login_attempts set locked_until = now() - interval '1 second' where key_hash = ${ADMIN_SOURCE_KEY}`;
@@ -383,6 +390,12 @@ describe('POST /auth/admin/login（IP 限流，D-52）', () => {
     const third = await login(EMAIL, PASSWORD);
     expect(third.status).toBe(429);
     expect(third.json['code']).toBe(42901);
+    // ⚠️ 与"口令错太多次被锁"的 42901 **必须分得开**：那一种带 `data.reason =
+    //    admin_account_locked`（见上面那条用例），限流这一种**不带 data**（`rate-limit.ts`
+    //    抛的是裸 `AppError(42901)`）。管理端就是靠"有没有这个字段"决定说
+    //    "输错次数太多"还是"登录太频繁，这不是密码问题"。两种都加 data 或都不加，
+    //    前端那句话就会一半场合说反——所以这里把**不带**也钉住。
+    expect(third.json['data']).toBeUndefined();
   });
 });
 
