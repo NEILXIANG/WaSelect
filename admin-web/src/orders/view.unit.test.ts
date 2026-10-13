@@ -42,7 +42,8 @@ import {
   refundFailureNotice,
   fullRefundErrorNotice,
   refundGate,
-  RELEASE_DONE_NOTICE,
+  releaseDoneNotice,
+  riskStatusText,
   releaseErrors,
   isDisputeLocked,
   shipErrors,
@@ -578,9 +579,24 @@ describe('isDisputeLocked / releaseErrors（解除拒付限制，AJ-291）', () 
   it('🔴 成功提示必须说清"拒付**没有**结案"（否则运营会理解成"处理完了"就发货）', () => {
     // @why 这条是文案断言，不是格式化检查：解除之后发货闸门立刻打开，
     //      而"以为拒付已结案 → 发货"正是钱货两空的标准路径。
-    expect(RELEASE_DONE_NOTICE).toContain('没有结案');
-    expect(RELEASE_DONE_NOTICE).toContain('风控列表');
-    expect(RELEASE_DONE_NOTICE).toContain('不要因为按钮亮了就发');
+    expect(releaseDoneNotice('open')).toContain('没有结案');
+    expect(releaseDoneNotice('open')).toContain('风控列表');
+    expect(releaseDoneNotice('open')).toContain('不要因为按钮亮了就发');
+  });
+
+  // AJ-516 页面复核：浮层把 ** 原样显示；败诉单解除后仍说"可以退款了""机构仍可能判定败诉"
+  it('🔴 提示里没有 Markdown 星号（浮层是纯文本，** 会原样显示）', () => {
+    for (const s of ['open', 'lost', 'locked', null] as const) {
+      expect(releaseDoneNotice(s)).not.toContain('*');
+    }
+  });
+  it('🔴 已败诉：说"可以发货"，不说"可以退款了"、不说"仍可能判定败诉"；写明整单退款仍不可用', () => {
+    const t = releaseDoneNotice('lost');
+    expect(t).toContain('现在可以发货');
+    expect(t).not.toContain('退款了');
+    expect(t).not.toContain('可能判定败诉');
+    expect(t).toContain('整单退款仍不可用');
+    expect(t).toContain('不要因为按钮亮了就发');
   });
 });
 
@@ -609,6 +625,30 @@ describe('拒付已败诉且已解除限制：整单退款拦、指向部分退�
   );
   it('refunding（重试同一笔）不拦：与服务端同口径', () => {
     expect(refundGate(lostReleased('refunding')).ok).toBe(true);
+  });
+  it('🔴 银行退回的已是全部实收：说"不需要也不能再退款"，不再指向部分退款（那边额度是 0）', () => {
+    const all = withStatus('delivered', {
+      has_dispute: false,
+      payments: [
+        {
+          status: 'succeeded',
+          charge_currency: 'JPY',
+          charge_amount: 6100,
+          lost_dispute_amount: 6100,
+        },
+      ],
+    });
+    const g = refundGate(all);
+    expect(g.ok).toBe(false);
+    expect(g.reason).toContain('不需要也不能再退款');
+    expect(g.reason).not.toContain('「部分退款」');
+  });
+  it('🔴 风险状态：解除后不写"无拒付限制"，写拒付已败诉、限制已人工解除', () => {
+    const t = riskStatusText(lostReleased('delivered'));
+    expect(t).toContain('拒付已败诉');
+    expect(t).toContain('已人工解除');
+    expect(t).toContain('5,000 日元');
+    expect(riskStatusText(withStatus('delivered', { has_dispute: false }))).toBe('无拒付限制');
   });
   it('服务端回 40907 dispute_lost 时给出同一个出口', () => {
     expect(refundFailureNotice(40907, undefined, 'dispute_lost')).toContain('「部分退款」');

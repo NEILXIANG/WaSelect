@@ -1002,5 +1002,11 @@ describe('解除拒付限制：提示就近、说明分清进行中 / 已败诉'
     expect(drawer?.querySelector('[role="alert"]')?.textContent).toContain('解除理由必填');
     await type(el.querySelector('input[name="release-reason"]'), '败诉单另作处置');
     expect(drawer?.querySelector('[role="alert"]')).toBeNull();
+    // AJ-516 页面复核：败诉单的确认框原先写"仍可能判店铺输""确认后可以被退款"
+    await click(button(el, '人工解除拒付限制'));
+    // 抽屉本身也是 role=dialog；确认框是 aria-label = 标题的那一个
+    const dialog = el.querySelector('[role="dialog"][aria-label^="解除后发货闸门"]');
+    expect(dialog?.textContent).toContain('整单退款仍不可用');
+    expect(dialog?.textContent).not.toContain('仍可能判店铺输');
   });
 });

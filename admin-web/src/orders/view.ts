@@ -397,8 +397,13 @@ export function refundGate(order: unknown): Gate {
   // AJ-516：拒付已败诉、限制已被人工解除——与服务端 fullRefundDisputeLostGuard 同口径（refunding 重试放行）
   const lost = lostDisputeOf(order);
   if (lost !== null && status !== 'refunding') {
+    const amt = minorMoneyText(lost.minor, lost.currency);
+    // 银行退回的已是全部实收：部分退款那边额度也是 0，不再指向它
+    if (lost.chargeMinor !== null && lost.minor >= lost.chargeMinor) {
+      return NO(`拒付已败诉：银行已把 ${amt} 退回买家，已是这笔付款的全部，不需要也不能再退款`);
+    }
     return NO(
-      `拒付已败诉：银行已把 ${minorMoneyText(lost.minor, lost.currency)} 退回买家，整单退款会把这部分再退一次，所以不能用；其余部分如需退给买家，用「部分退款」（额度已扣掉这部分）`,
+      `拒付已败诉：银行已把 ${amt} 退回买家，整单退款会把这部分再退一次，所以不能用；其余部分如需退给买家，用「部分退款」（额度已扣掉这部分）`,
     );
   }
   // 迟到付款（剩余清单 1-5）：已关单收到了钱，服务端凭 late_paid 放行；与服务端 refundGuard 同口径
@@ -862,14 +867,23 @@ export const DISPUTE_LOCK_TEXT: Record<
  * 已败诉拒付被银行退回买家的金额（succeeded 支付行的 `lost_dispute_amount`，契约 0.6.90 / AJ-516）；没有 → null。
  * @why 解除拒付限制后 has_dispute 为 false，只看它的闸门会放行整单退款、额度也按实收算——钱会退两次。
  */
-export function lostDisputeOf(order: unknown): { minor: number; currency: string } | null {
+export function lostDisputeOf(
+  order: unknown,
+): { minor: number; currency: string; chargeMinor: number | null } | null {
   const pays = (order as { payments?: unknown } | null)?.payments;
   const pay = (Array.isArray(pays) ? pays : []).find(
     (p: { status?: unknown }) => p?.status === 'succeeded',
-  ) as { lost_dispute_amount?: unknown; charge_currency?: unknown } | undefined;
+  ) as
+    | { lost_dispute_amount?: unknown; charge_currency?: unknown; charge_amount?: unknown }
+    | undefined;
   const minor = pay?.lost_dispute_amount;
   if (typeof minor !== 'number' || minor <= 0) return null;
-  return { minor, currency: String(pay?.charge_currency) };
+  const charge = pay?.charge_amount;
+  return {
+    minor,
+    currency: String(pay?.charge_currency),
+    chargeMinor: typeof charge === 'number' ? charge : null,
+  };
 }
 
 export function disputeRefundBlockedText(order: unknown): string {
@@ -931,10 +945,34 @@ export function toReleaseBody(form: unknown): { reason: string } {
  * @why 与 `notice` 而不是 `ok` 同层：它是**提示**不是成功确认，
  *      但必须和"已解除"同时出现，不能只闪一条 toast。
  */
-export const RELEASE_DONE_NOTICE =
-  '⚠️ 已解除本单的拒付限制：现在可以发货 / 退款了。' +
-  '但拒付**本身没有结案**——风控列表里仍然看得到它，机构仍可能判定败诉并把钱收回。' +
-  '是否发货请按业务判断，不要因为按钮亮了就发。';
+export function releaseDoneNotice(state: 'open' | 'lost' | 'locked' | null): string {
+  // 浮层是纯文本：原先写的 **本身没有结案** 会把星号原样显示（AJ-516 页面复核）
+  if (state === 'lost') {
+    // 败诉单：钱已被银行退回买家，不会再"判定败诉"；退款仍按败诉金额拦（AJ-516），不能说"可以退款了"
+    return (
+      '⚠️ 已解除本单的拒付限制：现在可以发货了。' +
+      '但拒付已败诉、银行已把钱退回买家——整单退款仍不可用，部分退款只能退银行没退回的部分。' +
+      '是否发货请按业务判断，不要因为按钮亮了就发。'
+    );
+  }
+  return (
+    '⚠️ 已解除本单的拒付限制：现在可以发货 / 退款了。' +
+    '但拒付本身没有结案——风控列表里仍然看得到它，机构仍可能判定败诉并把钱收回。' +
+    '是否发货请按业务判断，不要因为按钮亮了就发。'
+  );
+}
+
+/**
+ * 右栏「风险状态」（AJ-516）：锁着按 DISPUTE_LOCK_TEXT；没锁但有已败诉拒付（被人工解除过）时写实，不写"无拒付限制"。
+ * @why 解除后 has_dispute 为 false，原先一律"无拒付限制"——运营看不出这单的钱已被银行退回、整单退款为何不可用。
+ */
+export function riskStatusText(order: unknown): string {
+  const d = disputeLockState(order);
+  if (d !== null) return DISPUTE_LOCK_TEXT[d].detail;
+  const lost = lostDisputeOf(order);
+  if (lost === null) return '无拒付限制';
+  return `拒付已败诉（限制已人工解除）：银行已把 ${minorMoneyText(lost.minor, lost.currency)} 退回买家，这部分不能再退`;
+}
 
 /** 金额拆分（A-9 / AJ-467）：只列订单上真有的字段；买家实付按支付币种（最小单位 → 人话）。 */
 export function amountBreakdown(order: unknown): Array<{ label: string; value: string }> {

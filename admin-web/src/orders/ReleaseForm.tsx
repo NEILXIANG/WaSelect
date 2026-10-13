@@ -3,10 +3,10 @@
  *
  * @why 这是**逃生口**不是常规操作：`has_dispute` 只能靠机构的 `charge.dispute.closed` 变回 false，
  *      那条链断了（漏发 / 没接住 / 已与买家和好）订单就永久锁死；人工解除留痕、可复核。
- * @why 搬家不改逻辑：校验（`releaseErrors`）、确认文案、成功后的 sticky 警告（RELEASE_DONE_NOTICE）与拆分前一致。
+ * @why 搬家不改逻辑：校验（`releaseErrors`）、确认文案、成功后的 sticky 警告（releaseDoneNotice）与拆分前一致。
  *
  * @limitation 解除的是「限制」不是「事实」：`payments.dispute_*` 不改，拒付仍在风控列表，机构仍可能判败诉。
- * @see ./view.ts（isDisputeLocked / releaseErrors / RELEASE_DONE_NOTICE）
+ * @see ./view.ts（isDisputeLocked / releaseErrors / releaseDoneNotice）
  */
 import { useState } from 'react';
 import { ADMIN_NOTE_MAX_LENGTH } from '@waselect/shared';
@@ -19,7 +19,7 @@ import type { OrderActionFormProps } from './ShipForm.js';
 import {
   disputeLockState,
   emptyReleaseForm,
-  RELEASE_DONE_NOTICE,
+  releaseDoneNotice,
   releaseErrors,
   toReleaseBody,
 } from './view.js';
@@ -53,12 +53,14 @@ export function ReleaseForm({
       return;
     }
     setBusy(true);
+    // 解除前取状态：解除后 has_dispute 为 false，再取就是 null，提示分不出败诉
+    const lockState = disputeLockState(order);
     try {
       await releaseDisputeHold(api, id, toReleaseBody(release));
       setRelease(emptyReleaseForm());
       setDialog(null);
       // ⚠️ 这句是**警告**不是确认：拒付没结案，而发货闸门恰恰在这一刻打开了——所以 sticky
-      sink.info(RELEASE_DONE_NOTICE, { sticky: true });
+      sink.info(releaseDoneNotice(lockState), { sticky: true });
       await reload();
       onChanged();
       setBusy(false);
@@ -79,7 +81,11 @@ export function ReleaseForm({
     }
     setDialog({
       title: '解除后发货闸门立即打开，且不可撤销',
-      body: '拒付本身不会因此结束：这条拒付仍留在风控列表，支付平台仍可能判店铺输、把钱收回。确认后这张单可以被发货、被退款。',
+      // 败诉单：结果已定，不会再"判店铺输"；整单退款仍按败诉金额拦（AJ-516），不能说"可以被退款"
+      body:
+        disputeLockState(order) === 'lost'
+          ? '拒付已败诉的结果不会因此改变：这条拒付仍留在风控列表。确认后这张单可以发货；退款只能退银行没退回的部分（整单退款仍不可用）。'
+          : '拒付本身不会因此结束：这条拒付仍留在风控列表，支付平台仍可能判店铺输、把钱收回。确认后这张单可以被发货、被退款。',
       confirmText: '确认解除（不可撤销）',
       danger: true,
     });

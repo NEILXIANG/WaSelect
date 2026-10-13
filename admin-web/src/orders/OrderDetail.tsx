@@ -32,11 +32,10 @@ import {
   addressHistoryRows,
   addressSummary,
   amountBreakdown,
-  DISPUTE_LOCK_TEXT,
-  disputeLockState,
   isDisputeLocked,
   logisticsView,
   paymentSummary,
+  riskStatusText,
   statusText,
 } from './view.js';
 import { phoneText } from './print-view.js';
@@ -277,10 +276,7 @@ export function OrderDetail({ api, id, source, onBack, onChanged }: OrderDetailP
               <div className="field">
                 <span className="label">风险状态</span>
                 <span className={isDisputeLocked(order) ? 'error' : 'muted'}>
-                  {(() => {
-                    const d = disputeLockState(order);
-                    return d === null ? '无拒付限制' : DISPUTE_LOCK_TEXT[d].detail;
-                  })()}
+                  {riskStatusText(order)}
                 </span>
               </div>
             </aside>
