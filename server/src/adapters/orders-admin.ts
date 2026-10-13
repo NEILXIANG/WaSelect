@@ -213,6 +213,8 @@ export interface AdminPaymentRow {
   paid_currency: string | null;
   settled_jpy: number | null;
   fee_jpy: number | null;
+  /** 已败诉拒付被银行退回买家的金额（最小单位；没有为 0）——AJ-516，口径同 RefundablePaymentRow.lost_dispute_minor。 */
+  lost_dispute_amount: number;
   created_at: Date;
 }
 
@@ -471,7 +473,9 @@ export async function listPaymentsFor(
   if (orderIds.length === 0) return [];
   const rows = await db`
     select order_id, provider, provider_ref, transaction_id, status, charge_currency,
-           charge_amount, paid_amount, paid_currency, settled_jpy, fee_jpy, created_at
+           charge_amount, paid_amount, paid_currency, settled_jpy, fee_jpy, created_at,
+           case when dispute_status = 'lost' then coalesce(dispute_amount, charge_amount) else 0 end
+             as lost_dispute_amount
       from payments where order_id in ${db([...orderIds])}
      order by order_id, created_at
   `;
@@ -487,6 +491,7 @@ export async function listPaymentsFor(
     paid_currency: strOrNull(r.paid_currency),
     settled_jpy: numOrNull(r.settled_jpy),
     fee_jpy: numOrNull(r.fee_jpy),
+    lost_dispute_amount: Number(r.lost_dispute_amount),
     created_at: r.created_at as Date,
   }));
 }
@@ -566,6 +571,11 @@ export interface RefundablePaymentRow {
   provider_ref: string | null;
   charge_currency: string;
   charge_amount: number;
+  /**
+   * 已败诉拒付被银行退回买家的金额（同币种最小单位；没有为 0）——AJ-516。
+   * @why dispute_amount 缺失（理论上 mark-disputed 总会写）按实收全额算：宁可少退，不可多退。
+   */
+  lost_dispute_minor: number;
 }
 
 /**
@@ -600,7 +610,8 @@ export async function findLatePaidPayment(
   orderId: string,
 ): Promise<RefundablePaymentRow | null> {
   const rows = await db`
-    select p.id, p.provider, p.provider_ref, p.charge_currency, p.charge_amount
+    select p.id, p.provider, p.provider_ref, p.charge_currency, p.charge_amount,
+           case when p.dispute_status = 'lost' then coalesce(p.dispute_amount, p.charge_amount) else 0 end as lost_dispute_minor
       from payments p
       join order_events e
         on e.order_id = p.order_id and e.status = 'late_paid'
@@ -618,6 +629,7 @@ export async function findLatePaidPayment(
     provider_ref: strOrNull(r.provider_ref),
     charge_currency: String(r.charge_currency),
     charge_amount: Number(r.charge_amount),
+    lost_dispute_minor: Number(r.lost_dispute_minor),
   };
 }
 
@@ -626,9 +638,10 @@ export async function findRefundablePayment(
   orderId: string,
 ): Promise<RefundablePaymentRow | null> {
   const rows = await db`
-    select id, provider, provider_ref, charge_currency, charge_amount
-      from payments where order_id = ${orderId} and status = 'succeeded'
-     order by created_at desc
+    select p.id, p.provider, p.provider_ref, p.charge_currency, p.charge_amount,
+           case when p.dispute_status = 'lost' then coalesce(p.dispute_amount, p.charge_amount) else 0 end as lost_dispute_minor
+      from payments p where p.order_id = ${orderId} and p.status = 'succeeded'
+     order by p.created_at desc
      limit 1
   `;
   const r = rows[0] as Record<string, unknown> | undefined;
@@ -639,6 +652,7 @@ export async function findRefundablePayment(
     provider_ref: strOrNull(r.provider_ref),
     charge_currency: String(r.charge_currency),
     charge_amount: Number(r.charge_amount),
+    lost_dispute_minor: Number(r.lost_dispute_minor),
   };
 }
 

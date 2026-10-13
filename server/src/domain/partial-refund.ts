@@ -33,6 +33,13 @@ export interface PartialRefundInput {
    * @why 原先所有通道都声明 false、却没有人读它——部分退款照样发出去；下一个真不支持部分退款的通道不会被拦。
    */
   channelSupportsPartial: boolean;
+  /**
+   * 这笔付款上**已败诉**的拒付金额（payments.dispute_amount，同币种最小单位；没有为 0）——AJ-516。
+   * @why 败诉 = 这部分钱已被银行退回买家。人工解除拒付限制（has_dispute → false）后，
+   *      额度若仍按实收算，运营就能把银行已退的钱再退一次。只扣败诉的那部分，不一律拦：
+   *      拒付可以只针对部分金额（docs.stripe.com/disputes/how-disputes-work「Partial disputes」），其余部分仍可能要退。
+   */
+  lostDisputeMinor: number;
 }
 
 /**
@@ -51,9 +58,29 @@ export function partialRefundGuard(i: PartialRefundInput): AdminGateResult {
   if (!Number.isInteger(i.amountMinor) || i.amountMinor < 1) {
     return { ok: false, code: 40001, reason: 'amount_invalid' };
   }
-  if (i.reservedMinor + i.amountMinor > i.chargeAmountMinor) {
+  if (i.reservedMinor + i.lostDisputeMinor + i.amountMinor > i.chargeAmountMinor) {
     return { ok: false, code: 40001, reason: 'exceeds_refundable' };
   }
+  return { ok: true };
+}
+
+/**
+ * 整单退款在**拒付已败诉**时的闸门（AJ-516）：有败诉金额就拒（40907 dispute_lost），refunding 重试放行。
+ *
+ * @why 整单退款退的是余额（含银行已退回买家的那部分）：机构若照退 = 买家拿两次钱；机构若拒
+ *      （对拒付过的付款退款，Stripe 文档列有 charge_disputed）= 订单停在 refunding、要人工收拾（AJ-514 的坑）。
+ *      两条路都错，所以整单退款一律拒；要退未被拒付的其余部分，走部分退款——失败只是一笔记为失败、订单状态不动。
+ * @why refunding 放行：与 refundGuard 的 OPS3-03 同口径——那是同一把幂等键的重试，钱只可能动一次。
+ * @limitation 只看本系统记下的 dispute_status = lost；机构没发结案事件（漏发）时这里不知道，仍靠 has_dispute 那一道。
+ * @limitation 败诉后 Stripe 是否接受对其余部分退款**未实测**（本地没有 Stripe 测试账号）：
+ *      部分退款路径照常发起，若机构拒绝，那笔记为失败、额度释放，运营可见。
+ */
+export function fullRefundDisputeLostGuard(
+  status: OrderStatus,
+  lostDisputeMinor: number,
+): AdminGateResult {
+  if (status === 'refunding') return { ok: true };
+  if (lostDisputeMinor > 0) return { ok: false, code: 40907, reason: 'dispute_lost' };
   return { ok: true };
 }
 

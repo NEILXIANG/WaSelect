@@ -119,6 +119,7 @@ export function mountPartialRefundRoutes(app: Express, deps: PartialRefundRoutes
               inFlight: sums.inFlight,
               amountMinor,
               channelSupportsPartial: provider.capabilities.supportsPartialRefund,
+              lostDisputeMinor: pay.lost_dispute_minor,
             });
             if (!gate.ok) throw new AppError(gate.code, { order_id: id, reason: gate.reason });
             if (pay.provider_ref === null)

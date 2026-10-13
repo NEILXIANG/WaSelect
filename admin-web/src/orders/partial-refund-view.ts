@@ -11,7 +11,12 @@
 import { CURRENCY_MINOR_DIGITS, type CurrencyCode } from '@waselect/shared';
 import { UPSTREAM_UNAVAILABLE_CODE } from '../api/errors.js';
 import { minorMoneyText } from '../format.js';
-import { disputeRefundBlockedText, upstreamUnavailableNotice, type Gate } from './view.js';
+import {
+  disputeRefundBlockedText,
+  lostDisputeOf,
+  upstreamUnavailableNotice,
+  type Gate,
+} from './view.js';
 
 interface RefundLike {
   id?: unknown;
@@ -111,7 +116,10 @@ export function formatMinor(minor: number, currency: string): string {
   return `${major.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${currency}`;
 }
 
-/** 可退额度 = succeeded 支付行实收 − 除 failed 外的部分退款；没有 succeeded 支付行 → null。 */
+/**
+ * 可退额度 = succeeded 支付行实收 − 除 failed 外的部分退款 − 已败诉拒付金额（AJ-516）；没有 succeeded 支付行 → null。
+ * 与服务端 partialRefundGuard 同口径。
+ */
 export function refundableMinor(order: unknown): { currency: string; minor: number } | null {
   const pays = (order as { payments?: unknown } | null)?.payments;
   const pay = (Array.isArray(pays) ? pays : []).find(
@@ -121,7 +129,11 @@ export function refundableMinor(order: unknown): { currency: string; minor: numb
   const used = refundsOf(order)
     .filter((r) => r.status !== 'failed')
     .reduce((s, r) => s + (typeof r.amount_minor === 'number' ? r.amount_minor : 0), 0);
-  return { currency: String(pay.charge_currency), minor: Math.max(0, pay.charge_amount - used) };
+  const lost = lostDisputeOf(order)?.minor ?? 0;
+  return {
+    currency: String(pay.charge_currency),
+    minor: Math.max(0, pay.charge_amount - used - lost),
+  };
 }
 
 export function partialRefundGate(order: unknown): Gate {

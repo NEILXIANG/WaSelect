@@ -394,6 +394,13 @@ export function refundGate(order: unknown): Gate {
   //    先判拒付的旧写法会把 refunding + 拒付 的单永久锁在退款中。
   const disputed = (order as { has_dispute?: unknown } | null)?.has_dispute === true;
   if (disputed && status !== 'refunding') return NO(disputeRefundBlockedText(order));
+  // AJ-516：拒付已败诉、限制已被人工解除——与服务端 fullRefundDisputeLostGuard 同口径（refunding 重试放行）
+  const lost = lostDisputeOf(order);
+  if (lost !== null && status !== 'refunding') {
+    return NO(
+      `拒付已败诉：银行已把 ${minorMoneyText(lost.minor, lost.currency)} 退回买家，整单退款会把这部分再退一次，所以不能用；其余部分如需退给买家，用「部分退款」（额度已扣掉这部分）`,
+    );
+  }
   // 迟到付款（剩余清单 1-5）：已关单收到了钱，服务端凭 late_paid 放行；与服务端 refundGuard 同口径
   // G1（AJ-456）：有一笔部分退款在途（服务端会 40902 partial_refund_in_flight）——先去部分退款面板点「同步」
   const partials = (order as { partial_refunds?: unknown } | null)?.partial_refunds;
@@ -718,6 +725,8 @@ export function refundFailureNotice(
   const c = typeof code === 'number' ? code : 0;
   if (c === 40902 && reason === 'partial_refund_in_flight')
     return '有一笔部分退款还在处理中：先到「部分退款」点「同步」拿到结果，再整单退款。';
+  if (c === 40907 && reason === 'dispute_lost')
+    return '拒付已败诉：银行已把拒付的钱退回买家，不能整单退款；其余部分如需退给买家，用「部分退款」。';
   if (c === 40902 && reason === 'fully_refunded_by_partials')
     return '部分退款已退满实收，这张单没有可退金额了（刷新后应显示「已退款」）。';
   // 50300 单独说（P2-49）：熔断在出发前就拒了，请求**没有发到机构**——说"结果未知"会把人吓去机构后台
@@ -849,6 +858,20 @@ export const DISPUTE_LOCK_TEXT: Record<
  *      所以这里**不指向解锁**：进行中的等银行结案；已败诉的钱已经回到买家手里，不需要再退。
  * @limitation 解锁只适用于"拒付其实已结束、系统没收到结案"（见解除表单说明）；那种情况运营要先核实，不在这句提示里引导。
  */
+/**
+ * 已败诉拒付被银行退回买家的金额（succeeded 支付行的 `lost_dispute_amount`，契约 0.6.90 / AJ-516）；没有 → null。
+ * @why 解除拒付限制后 has_dispute 为 false，只看它的闸门会放行整单退款、额度也按实收算——钱会退两次。
+ */
+export function lostDisputeOf(order: unknown): { minor: number; currency: string } | null {
+  const pays = (order as { payments?: unknown } | null)?.payments;
+  const pay = (Array.isArray(pays) ? pays : []).find(
+    (p: { status?: unknown }) => p?.status === 'succeeded',
+  ) as { lost_dispute_amount?: unknown; charge_currency?: unknown } | undefined;
+  const minor = pay?.lost_dispute_amount;
+  if (typeof minor !== 'number' || minor <= 0) return null;
+  return { minor, currency: String(pay?.charge_currency) };
+}
+
 export function disputeRefundBlockedText(order: unknown): string {
   const d = disputeLockState(order);
   if (d === 'lost') return '拒付已败诉：货款已被银行退回买家，不能也无需再退款';

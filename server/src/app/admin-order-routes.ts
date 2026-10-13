@@ -47,7 +47,7 @@ import type { EventBus } from '../ports/events.js';
 import { executeRefund } from './refund-execution.js';
 import { sumPartialRefunds, listPartialRefunds } from '../adapters/order-refunds.js';
 import { partialRefundView } from './partial-refund-routes.js';
-import { fullRefundAmount } from '../domain/partial-refund.js';
+import { fullRefundAmount, fullRefundDisputeLostGuard } from '../domain/partial-refund.js';
 import { withTrackingUrl } from '../domain/tracking.js';
 import { shipOrder } from './ship-order.js';
 import { findCustomer } from '../adapters/customers-admin.js';
@@ -438,6 +438,8 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
               ...(p.transaction_id !== null ? { transaction_id: p.transaction_id } : {}),
               ...(p.settled_jpy !== null ? { settled_jpy: p.settled_jpy } : {}),
               ...(p.fee_jpy !== null ? { fee_jpy: p.fee_jpy } : {}),
+              // AJ-516：后台可退额度要扣掉它（银行已退回买家的那部分）
+              ...(p.lost_dispute_amount > 0 ? { lost_dispute_amount: p.lost_dispute_amount } : {}),
               created_at: p.created_at.toISOString(),
             })),
             events.map((e) => ({
@@ -530,6 +532,19 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           }
           if (pay.provider_ref === null) {
             throw new AppError(50000, { order_id: id, reason: 'provider_ref_missing' });
+          }
+          // AJ-516：拒付已败诉（银行已把钱退回买家）且被人工解除限制后，has_dispute 已是 false、上面的闸门放行——
+          // 整单退款会把那部分再退一次。要退其余部分走部分退款（额度已扣败诉金额）。data.reason 公开：后台据此说清出口
+          const lostGate = fullRefundDisputeLostGuard(
+            asOrderStatus(row.status),
+            pay.lost_dispute_minor,
+          );
+          if (!lostGate.ok) {
+            throw new AppError(
+              lostGate.code,
+              { order_id: id, reason: lostGate.reason },
+              { reason: lostGate.reason },
+            );
           }
           // ── 部分退款（AJ-383）：整单退款只退**余额**，且不与在途的部分退款并行 ──
           // @why 先部分退过的单，按实收全额去退会被机构以"超出可退金额"拒绝 ⇒ 订单卡死在 refunding。

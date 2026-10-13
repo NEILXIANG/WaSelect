@@ -183,6 +183,50 @@ describe('与整单退款互斥 / 整单退款只退余额', () => {
   });
 });
 
+// AJ-516：拒付已败诉（银行已把 5000 退回买家）后被人工解除限制（has_dispute=false）——
+// 原先两条退款路都只看 has_dispute，解除后整单退款会把 12000 全退（买家拿两次 5000），部分退款额度也按 12000 算。
+async function seedLostAfterRelease(id: string, lostMinor: number): Promise<void> {
+  await seed(id, 'delivered');
+  await db`
+    update payments set dispute_id = ${`dp_${id}`}, dispute_status = 'lost', dispute_amount = ${lostMinor},
+                        dispute_opened_at = now() - interval '40 days', dispute_closed_at = now()
+     where id = ${`pay-${id}`}
+  `;
+}
+
+describe('拒付已败诉、人工解除限制之后（AJ-516）', () => {
+  it('🔴 整单退款 → 40907，data.reason = dispute_lost；订单不动、不写 refunding 事件', async () => {
+    await seedLostAfterRelease('o-l1', 5000);
+    const r = await post('/api/v1/admin/orders/o-l1/refund', { reason: '买家要求退款' });
+    expect(r.json['code']).toBe(40907);
+    expect(r.json['data']).toMatchObject({ reason: 'dispute_lost' });
+    const [o] = await db`select status from orders where id = 'o-l1'`;
+    expect(o?.['status']).toBe('delivered');
+    const ev =
+      await db`select 1 from order_events where order_id = 'o-l1' and status = 'refunding'`;
+    expect(ev.length).toBe(0);
+  });
+
+  it('🔴 部分退款额度扣掉败诉金额：12000 − 5000 = 7000；7001 → 40001，7000 → 202', async () => {
+    await seedLostAfterRelease('o-l2', 5000);
+    expect((await partial('o-l2', 7001)).json['code']).toBe(40001);
+    expect(await partial('o-l2', 7000)).toMatchObject({ status: 202 });
+  });
+
+  it('详情的支付行带出 lost_dispute_amount（后台据此算可退额度）；没有败诉的行不带', async () => {
+    await seedLostAfterRelease('o-l3', 5000);
+    await seed('o-l4', 'delivered');
+    const get = async (id: string) =>
+      (await (
+        await fetch(`${srv.url}/api/v1/admin/orders/${id}`, {
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).json()) as { payments: Record<string, unknown>[] };
+    expect((await get('o-l3')).payments[0]).toMatchObject({ lost_dispute_amount: 5000 });
+    expect((await get('o-l4')).payments[0]).not.toHaveProperty('lost_dispute_amount');
+  });
+});
+
 describe('POST /admin/orders/:id/partial-refunds/:refundId/sync', () => {
   it('结果未知（unknown）的一笔 → 同步后 succeeded', async () => {
     await seed('o-10', 'paid');

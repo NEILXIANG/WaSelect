@@ -72,6 +72,22 @@ describe('refundableMinor', () => {
   it('没有 succeeded 支付行 → null', () => {
     expect(refundableMinor(order({ payments: [] }))).toBeNull();
   });
+  // AJ-516：与服务端 partialRefundGuard 同口径——银行已退回买家的那部分不再算进额度
+  it('🔴 已败诉拒付 3000：额度 = 8160 − 3000 − 已占 1000 = 4160；抽屉说"最多还能退 41.60 美元"', () => {
+    const o = order({
+      payments: [
+        {
+          status: 'succeeded',
+          charge_currency: 'USD',
+          charge_amount: 8160,
+          lost_dispute_amount: 3000,
+        },
+      ],
+      partial_refunds: [{ status: 'succeeded', amount_minor: 1000 }],
+    });
+    expect(refundableMinor(o)).toEqual({ currency: 'USD', minor: 4160 });
+    expect(partialRefundGate(o).reason).toBe('最多还能退 41.60 美元');
+  });
 });
 
 describe('partialRefundGate（与服务端 partialRefundGuard 同口径）', () => {

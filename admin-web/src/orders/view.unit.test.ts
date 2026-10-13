@@ -584,6 +584,37 @@ describe('isDisputeLocked / releaseErrors（解除拒付限制，AJ-291）', () 
   });
 });
 
+// AJ-516：拒付已败诉、被人工解除限制（has_dispute=false）后，服务端整单退款仍拒（40907 dispute_lost）
+describe('拒付已败诉且已解除限制：整单退款拦、指向部分退款', () => {
+  const lostReleased = (status: string) =>
+    withStatus(status, {
+      has_dispute: false,
+      payments: [
+        {
+          status: 'succeeded',
+          charge_currency: 'JPY',
+          charge_amount: 12000,
+          lost_dispute_amount: 5000,
+        },
+      ],
+    });
+  it.each(['paid', 'shipped', 'delivered'])(
+    '🔴 %s → 不可整单退款，说清钱已被银行退回、其余走部分退款',
+    (s) => {
+      const g = refundGate(lostReleased(s));
+      expect(g.ok).toBe(false);
+      expect(g.reason).toContain('5,000 日元');
+      expect(g.reason).toContain('「部分退款」');
+    },
+  );
+  it('refunding（重试同一笔）不拦：与服务端同口径', () => {
+    expect(refundGate(lostReleased('refunding')).ok).toBe(true);
+  });
+  it('服务端回 40907 dispute_lost 时给出同一个出口', () => {
+    expect(refundFailureNotice(40907, undefined, 'dispute_lost')).toContain('「部分退款」');
+  });
+});
+
 describe('refundFailureNotice（B41 残留 / AJ-230）', () => {
   it('🔴 5xx 与网络层失败（负数码）→ 给"结果未知、不要去机构后台手工退"的提醒', () => {
     for (const code of [50000, -1]) {
