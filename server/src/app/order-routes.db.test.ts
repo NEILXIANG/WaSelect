@@ -541,6 +541,11 @@ describe('POST /orders：每用户在途单上限（AJ-240）', () => {
       await db`update users set blocked_at = now() where id = 'u-1'`;
       const r = await create(srv.url, ONE_CUP, 'blk-2');
       expect(r.json['code']).toBe(40301);
+      // ⚠️ 成因必须进**响应体**（规律排查 2026-10-13）：小程序 `utils/error-text.js`
+      //    的 `isAccountBlocked` 读的是 `data.reason`，且白名单只有 `'blocked'`。
+      //    只断言码的话，把 reason 写回第 2 参（details，只进日志）也是全绿——
+      //    而买家会因此读到"服务暂时不可用，请稍后重试"、连客服出口都没有（errorContact 同判据）。
+      expect(r.json['data']).toEqual({ reason: 'blocked' });
       const n = await db`select count(*)::int as n from orders where user_id = 'u-1'`;
       expect(Number(n[0]?.['n'])).toBe(1);
     } finally {

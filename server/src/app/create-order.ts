@@ -106,7 +106,8 @@ function isUniqueViolation(e: unknown): boolean {
  *
  * @throws {AppError} 40011 条款版本缺失/不匹配 | 40400 地址不存在或非本人 |
  *         40401 商品不存在/已下架 | 40901 库存不足 | 40905 价格已变动 |
- *         40906 超单笔上限 | 40912 包裹超重 | 40913 在途单过多 | 40301 已被拉黑 |
+ *         40906 超单笔上限 | 40912 包裹超重 | 40913 在途单过多 | 40301 已被拉黑（对外带 data.reason=blocked）|
+ *         40301 账号已不存在（注销 / 数据清理，**不对外发理由**）
  *         50003 汇率缺失 | 50004 运费表未配置 | 50000 单号三连撞
  */
 export async function createOrder(
@@ -126,8 +127,21 @@ export async function createOrder(
   // ── 1b. 锁用户行：拉黑复核 + 在途单上限（AJ-240）────────────────────────────
   // 放在一切读写之前：这把锁让同一用户的建单串行，后面"数在途单 → 扣库存 → 插入"才不会被并发穿过。
   const gate = await lockUserForOrdering(tx, input.userId);
-  if (gate === null || gate.blocked) {
-    throw new AppError(40301, { reason: gate === null ? 'user_missing' : 'user_blocked' });
+  // 人没了（注销 / 数据清理）：与 auth.ts 回源查身份时的同一个事实（那边抛 40101，让前端重新登录）。
+  // 这里保留 40301（本函数 @throws 的既有口径）且**不对外发理由**——响应体里没有 data，
+  // 前端按"服务端故障"处理。改码的风险大于收益（见 docs/自主决策记录.md AJ-520 反向风险）。
+  if (gate === null) throw new AppError(40301, { reason: 'user_missing' });
+  if (gate.blocked) {
+    // ⚠️ `reason` 必须放**第三个参数**（publicData）才进得了响应体：第二个参数是 details，
+    //    `toErrorResponse` 结构上就不输出它（errors.ts @limitation 一）。
+    //    小程序 `utils/error-text.js` 的 `isAccountBlocked` 读的是 `data.reason`，且白名单里
+    //    **只有 `'blocked'` 一个值**——所以这里对外的值与 `auth.ts:229` 取同一个（同一个事实、同一个名字）。
+    //    原先写在第 2 参且叫 `user_blocked`：两个错一起犯 ⇒ 判据恒为 false ⇒ 刚被拉黑的买家提交订单时
+    //    读到"服务暂时不可用，请稍后重试"、**连客服出口都没有**（errorContact 同判据），而重试永远不会成功。
+    //    这条路径可达（不是毫秒级竞争）：鉴权层的身份有**最长 60 秒缓存**
+    //    （@see adapters/orders.ts lockUserForOrdering 的 @why），窗口内拉黑后仍能通过守卫走到这里。
+    //    `user_blocked` 这个串保留在日志里（Sentry 查询在用），只把**对外**的值对齐 auth.ts。
+    throw new AppError(40301, { reason: 'user_blocked' }, { reason: 'blocked' });
   }
   if (gate.openOrders >= config.MAX_OPEN_ORDERS_PER_USER) {
     throw new AppError(40913, {

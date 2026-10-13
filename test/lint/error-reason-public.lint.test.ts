@@ -16,6 +16,13 @@
  *        （42901 两种成因共用一个码，后者由 `rate-limit.ts` 抛裸 `AppError(42901)`、**不带 data**）。
  *        写在 details 上 ⇒ 判据恒为 false ⇒ 被锁的管理员被明确告知"**这不是密码问题**"——
  *        而它恰恰就是密码问题，且指示他去查一个不存在的 IP 抽水。
+ *      - `server/src/app/create-order.ts` 的 40301：**同一个判据的第二条入口**。与 auth.ts 是
+ *        **同一个事实**（`users.blocked_at is not null`），却既写在第 2 参、值又叫 `user_blocked`
+ *        （前端的白名单只有 `'blocked'`）——两个错一起犯，判据同样恒为 false。它可达是因为
+ *        鉴权层的身份有**最长 60 秒缓存**（`adapters/orders.ts` 的 `lockUserForOrdering` @why），
+ *        窗口内被拉黑的买家仍能通过守卫走到建单事务里。⚠️ 这条是 2026-10-13 那一轮**之后**
+ *        按"同一个码还有别的入口吗"再扫一遍才找到的：批量修复时只扫了 `auth.ts` 一处，
+ *        正是本轮反复出现的"修一处不扫同类"。
  *
  * @why 这两处的共同失效方式是"**静默说错话**"：不报错、不崩溃、测试全绿（单测里前端喂的是
  *      手搓的 `{code, data:{reason}}`，形状比真实服务端**多**了一个字段，规律⑤的典型形态）。
@@ -73,6 +80,13 @@ const ENTRIES: Entry[] = [
     file: 'server/src/app/auth.ts',
     publicDataNeedle: "reason: 'blocked'",
     who: 'miniprogram/utils/error-text.js::isAccountBlocked（读 err.data.reason；读不到会把"被拉黑"说成"服务不可用"）',
+  },
+  {
+    file: 'server/src/app/create-order.ts',
+    publicDataNeedle: "reason: 'blocked'",
+    who:
+      '同上判据的第二条入口（建单事务内复核拉黑，鉴权身份有最长 60 秒缓存所以可达）：' +
+      '只断言 40301 的用例拦不住它写回第 2 参，order-routes.db.test.ts 里另有一条断言响应体的用例',
   },
   {
     file: 'server/src/app/admin-auth-routes.ts',
