@@ -32,6 +32,8 @@ coverage/
 .DS_Store
 Thumbs.db
 var/uploads/
+# 本地整库备份（pg_dump）：含全表数据与管理员口令哈希，绝不进仓库（2026-10-13：ebc7c6a 被整目录 git add 误带进来过）
+var/backup/
 
 # Claude Code 并行分身的工作树（整仓副本，合并后即删）
 .claude/worktrees/

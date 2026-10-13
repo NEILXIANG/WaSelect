@@ -90,7 +90,12 @@ jobs:
       TERMS_VERSION: TOS-CI-1
 
     steps:
+      # fetch-depth: 2——`scripts/test-fast.unit.test.ts` 走真的 git 取改动集（`git diff HEAD~1`，AJ-523）。
+      #   checkout 默认只拉 1 个提交，`HEAD~1` 不存在 → 那条用例报 `ambiguous argument 'HEAD~1'` → 全量 gate 红。
+      #   @measured 2026-10-13：本仓 `git clone --depth 1` 里跑该文件 1 条失败；`--depth 2` 15 条全过。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - uses: actions/setup-node@v4
         with:
