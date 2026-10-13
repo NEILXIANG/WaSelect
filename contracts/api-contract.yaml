@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: 日本直邮小程序 API
-  version: 0.6.90
+  version: 0.6.91
   description: |
     与《技术文档 v0.5》一致的机器可读契约（D-49～D-52：Stripe Checkout 托管页、拒付、banners、合规标签、限流）。金额一律整数最小单位（JPY 整数円、CNY/USD 整数分）。
     0.5.1（D-57）：管理端登录密码 minLength 10→12（对齐 N11/.env.example）；x-provider-events.stripe 补 checkout.session.async_payment_succeeded / async_payment_failed（实现早已识别，契约漏列）。
@@ -554,6 +554,7 @@ info:
          订单 **paid / shipped / delivered → refunding → refunded**（同一事务，payments.status 同步 refunded，orders.refunded_at 写入）；
          completed 没有退款边 → 状态保持。此前状态不变会让"钱已全退、库存已回补"的单仍出现在待发货 / 待采购 / 报关清单并可发货。
       ② 熔断拒绝（503 / 50300）分两种：首次尝试前被拒 → 这笔释放额度（failed）；首次已发出、重试前被拒 → 这笔按 unknown 占额度，调 sync 同键重放。
+    0.6.91（规律排查 2026-10-13 / AJ-520 后续）：`POST /admin/orders/{id}/shipment/revert` 的 40902 `data.reason` 清单补上 `shipped_at_missing`——实现（`domain/admin-order-actions.ts::revertShipmentGuard`）在"状态是 shipped 但 `shipped_at` 为空"这条脏数据路径上早就返回它，契约漏列。**纯文档订正，无行为变化**（该 reason 前端不读；漏列的影响是读契约的人以为这条分支不存在）。
     0.6.90（AJ-516）：拒付已败诉（银行已把拒付金额退回买家）且被人工解除限制后——① `POST /admin/orders/{id}/refund` 仍拒 40907，`data.reason = dispute_lost`（整单退款会把那部分再退一次）；refunding 重试不受影响。② `POST /admin/orders/{id}/partial-refunds` 的可退额度再扣除败诉金额，超出 40001 `exceeds_refundable`。③ `AdminOrder.payments[]` 增可选 `lost_dispute_amount`（原币最小单位，只在有败诉拒付时出现）。
     0.6.89（规律排查 2026-10-12）：① `FxRate` 当前行增 `stale_at` / `stale`——生效满 `FX_MAX_AGE_HOURS` 的汇率报价与下单当它缺失（整店 50003），运营页原先照样标"当前生效"。② `/admin/exports/purchase` 在「成本（日元）」后增「备注」列（拒付锁定：暂不发货，先别采购 / 买家已拉黑：发货前先核实）；`/admin/exports/customs` 不再列拒付锁定（has_dispute）的单——服务端不许发货（40909）。③ `ship_overdue`（列表 / 详情 / attention 筛选）不含拒付锁定的单。④ `ProductInput`：报关品名禁词改按词首匹配（SPF50+ 等亦拒）、`hs_code` 加形状（hs_code_shape），两条规则移入 shared 供服务端与管理端共用；补写服务端早已执行的 maxLength（title / title_ja / purchase_source 255，customs_desc_en 120，jan_code 13）与 weight_g 上限 29000。⑤ `BannerInput.link_id`：服务端补形状（link_id_invalid）与目标存在性（link_target_missing，data.reason 对外）——原先只判非空。⑥ 所有分页列表的 `page` 上限 10000（shared LIST_PAGE_MAX），超出 40001 page_size_invalid——原先超大页码在库里报错成 500。⑦ `/admin/exports/orders` 在「实付金额」后增「已退金额」（原先实付不扣退款、按总表对账会把退款算成收入）。⑧ `AdminOrderListItem` 与 `AdminOrder`（管理端详情）增 `payment_dispute`（open / lost）——`has_dispute` 对进行中与已败诉都是 true，后台原先一律写"拒付中"。⑨ 导出：采购单「售价 / 成本」改名「单价 / 单件成本」；报关单末尾加 `line_weight_g`（weight_g 是单件、declared_value_usd 是整行，数量 >1 时原先一行两个口径）。⑩ `AdminOrder.customer` 增 `paid_order_count`（卡片写"历史 N 单（已付 M）"）。⑪ `DELETE /admin/categories/{key}`：有 Banner 跳到这个分类时也拒（40919，data = {field: key, reason: banner_ref}），40919 文案改为"还在使用中（有商品或首页 Banner 指向它）"。
     0.6.88（两端逐页走查 2026-10-12）：买家 `OrderListItem` 增 `line_count`（几种商品）——原先只有首件名 + 总件数，两种商品的单看起来像同一件买了 2 份。
@@ -934,7 +935,7 @@ paths:
   /admin/orders/{id}/shipment/revert:
     post:
       summary: 撤销发货（0.6.63 / AJ-440，严格检查 P0 A-1）
-      description: '仅 shipped 且发货后未满 72 小时（恰好 72 小时起拒）；其余状态或超时 → 409 / 40902（data.reason = status_<状态> / revert_window_passed）；有拒付限制 → 409 / 40909；有进行中（open / processing）售后 → 409 / 40902 after_sale_open。原因必填（去首尾空白后 1–500 字，shared ADMIN_NOTE_MAX_LENGTH），空 → 40001。订单回到 paid、清空 carrier / tracking_no / shipped_at（paid_at 不动）；写 order_events(shipment_reverted，含原承运商 / 运单号与原因) 与 admin_audit（含改前值）；给买家发一封更正邮件。不在状态机迁移表里（迁移表的 shipped → paid 会让重复到账回调把已发货单重新标已付），只有本端点能做。'
+      description: '仅 shipped 且发货后未满 72 小时（恰好 72 小时起拒）；其余状态或超时 → 409 / 40902（data.reason = status_<状态> / revert_window_passed / shipped_at_missing）；有拒付限制 → 409 / 40909；有进行中（open / processing）售后 → 409 / 40902 after_sale_open。0.6.91：补列最后一条（"状态是 shipped 但 shipped_at 为空"这条脏数据路径，实现早已返回它、契约漏列）。原因必填（去首尾空白后 1–500 字，shared ADMIN_NOTE_MAX_LENGTH），空 → 40001。订单回到 paid、清空 carrier / tracking_no / shipped_at（paid_at 不动）；写 order_events(shipment_reverted，含原承运商 / 运单号与原因) 与 admin_audit（含改前值）；给买家发一封更正邮件。不在状态机迁移表里（迁移表的 shipped → paid 会让重复到账回调把已发货单重新标已付），只有本端点能做。'
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [reason], properties: {reason: {type: string, maxLength: 500}}}}}}
       responses: {'200': {description: OK, content: {application/json: {schema: {type: object, required: [order_id, status], properties: {order_id: {type: string}, status: {type: string, enum: [paid]}}}}}}, '400': {$ref: '#/components/responses/Err'}, '401': {$ref: '#/components/responses/Err'}, '403': {$ref: '#/components/responses/Err'}, '404': {$ref: '#/components/responses/Err'}, '409': {$ref: '#/components/responses/Err'}}
