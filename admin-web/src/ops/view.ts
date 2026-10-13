@@ -139,6 +139,25 @@ function num(v: unknown): string {
 }
 
 /**
+ * 汇率文本框的值 → 数（唯一入口：`fxFormErrors` / `fxPreview` / `toFxBody` 三处共用）。
+ *
+ * @why 先 **NFKC 归一**再 `Number()`（复用 `format.ts` 的 `halfWidth`，与分类排序、Banner 排序、
+ *      运费分档、列表改库存同一做法）：汇率框是**普通文本框**（`FxPanel.tsx` 的 `<input className="input">`，
+ *      没有 `type="number"`，因为要允许小数点），中文输入法全角模式打出的 `０.００６７` 能原样进来，
+ *      而 `Number('０.００６７')` 是 `NaN` ⇒ 运营看到的提示是"原始汇率必须是大于 0 的数字"，
+ *      可他确实填了数字——**同一类漏网第三次**（2593097 修了排序 / 库存，三天提交复查补了运费表）。
+ * @why 归一放在解析处而不是输入框的 onChange：三处解析必须得到同一个数，否则"预览的样例金额"
+ *      与"提交上去的 raw_rate"可能不是一件事（那是这一栏存在的意义）。
+ * @limitation 只做 NFKC + trim；千分位 `1,000` 与科学计数法仍拒（汇率是小数量级，不需要）。
+ */
+function rawRateNumber(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v !== 'string') return Number.NaN;
+  const t = halfWidth(v);
+  return t === '' ? Number.NaN : Number(t);
+}
+
+/**
  * 汇率表单校验。
  * @why raw_rate 要求 **> 0 的有限数**：0 或负数会让展示价变成 0 或负数，
  *      而契约只说 `type: number`——服务端不会替我们挡住 0。
@@ -146,7 +165,7 @@ function num(v: unknown): string {
 export function fxFormErrors(form: unknown): { ok: boolean; first: string } {
   const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
   const quote = typeof f['quote'] === 'string' ? f['quote'] : '';
-  const raw = Number(f['rawRate']);
+  const raw = rawRateNumber(f['rawRate']);
   const from = typeof f['effectiveFrom'] === 'string' ? f['effectiveFrom'] : '';
   if (!(FX_QUOTES as readonly string[]).includes(quote))
     return { ok: false, first: '币种必须是 CNY 或 USD' };
@@ -226,7 +245,7 @@ export function fxPreview(args: unknown): {
 } {
   const a = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
   const quote = typeof a['quote'] === 'string' ? a['quote'] : '';
-  const raw = Number(typeof a['rawRate'] === 'string' ? a['rawRate'].trim() : a['rawRate']);
+  const raw = rawRateNumber(a['rawRate']);
   const current = a['currentRate'];
 
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -297,6 +316,7 @@ export function currentFxRawRates(list: unknown): Record<string, number> {
   for (const x of Array.isArray(list) ? list : []) {
     const o = (typeof x === 'object' && x !== null ? x : {}) as Record<string, unknown>;
     const quote = typeof o['quote'] === 'string' ? o['quote'] : '';
+    // form-number-normalize-ok: 值来自服务端响应（fx_rates.raw_rate），不是用户输入
     const raw = Number(o['raw_rate']);
     if (quote === '' || !Number.isFinite(raw) || raw <= 0) continue; // 脏行逐条跳过
     if (o['is_current'] !== true) continue;
@@ -383,11 +403,12 @@ export function fxSavedText(form: unknown): string {
  */
 export function toFxBody(form: unknown): Record<string, unknown> {
   const f = (typeof form === 'object' && form !== null ? form : {}) as Record<string, unknown>;
-  const raw = typeof f['rawRate'] === 'string' ? f['rawRate'].trim() : '';
+  // 与 fxFormErrors / fxPreview 同一个解析入口：全角按半角认，提交出去的是半角数字
+  const raw = rawRateNumber(f['rawRate']);
   const from = typeof f['effectiveFrom'] === 'string' ? f['effectiveFrom'].trim() : '';
   return {
     quote: typeof f['quote'] === 'string' ? f['quote'] : '',
-    raw_rate: Number(raw),
+    raw_rate: raw,
     ...(from === '' ? {} : { effective_from: toIsoJst(from) }),
   };
 }
@@ -440,6 +461,7 @@ export function rateRows(items: unknown): RateViewRow[] {
     .filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null)
     .map((x) => ({
       carrier: typeof x['carrier'] === 'string' ? x['carrier'] : '',
+      // form-number-normalize-ok: 值来自服务端响应（shipping_rates 行），不是用户输入
       maxWeightG: Number(x['max_weight_g']),
       priceJpy: Number(x['price_jpy']),
       active: x['active'] !== false,

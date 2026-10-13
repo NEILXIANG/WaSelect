@@ -181,6 +181,25 @@ describe('fxFormErrors / toFxBody', () => {
     expect(fxFormErrors({ quote: 'USD', rawRate: 'abc' }).ok).toBe(false);
   });
 
+  /**
+   * 全角数字（中文输入法）——同一类漏网在本轮第三次：
+   * 2593097 修了"排序 / 库存"，三天提交复查补了运费表，汇率的文本框一直没归一。
+   * @why 汇率的框是**普通文本框**（FxPanel.tsx 的 `<input className="input">`，没有 `type="number"`），
+   *      全角字符能原样进来；`Number('０.００６７')` 是 NaN ⇒ 运营看到"必须是大于 0 的数字"，
+   *      而他确实填了数字。
+   */
+  it('🔴 全角数字 / 全角小数点按半角认；提交的是半角数字（不把全角原样发出）', () => {
+    expect(fxFormErrors({ quote: 'USD', rawRate: '０.００６７' }).ok).toBe(true);
+    expect(fxFormErrors({ quote: 'USD', rawRate: '0．0067' }).ok).toBe(true); // 全角小数点
+    expect(toFxBody({ quote: 'USD', rawRate: '０.００６７' }).raw_rate).toBe(0.0067);
+    // 预览（样例金额）也必须按同一个数算，否则"核对"这一栏看到的和存进去的不是一件事
+    expect(
+      fxPreview({ quote: 'USD', rawRate: '０.００６７', currentRate: 0.0067 }).sampleText,
+    ).toContain('USD 67.00');
+    // 归一之后仍要过量纲区间：全角写错一位（0.067）照样拒
+    expect(fxFormErrors({ quote: 'USD', rawRate: '０.０６７' }).ok).toBe(false);
+  });
+
   it('⚠️ effective_from 为空则不带该字段（传空串会被当成非法 date-time）', () => {
     expect(toFxBody({ quote: 'USD', rawRate: ' 0.0067 ' })).toEqual({
       quote: 'USD',

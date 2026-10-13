@@ -324,3 +324,21 @@ describe('汇率面板：填写错误就近说', () => {
     expect(el.querySelector('section [role="alert"]')).toBeNull();
   });
 });
+
+/**
+ * 全角数字（中文输入法）——同一类漏网第三次：2593097 修了"排序 / 库存"，三天提交复查补了运费表，
+ * 汇率的框一直没归一。这是**接线**验证：纯函数用例过了不代表面板不再说"不是数字"。
+ */
+describe('汇率面板：全角数字（输入法）', () => {
+  it('🔴 粘全角 ０.００６８ → 不再判"不是数字"，确认后发出的是半角 0.0068', async () => {
+    const el = await open();
+    await type(rateInput(el), '０.００６８');
+    await click(button(el, '保存汇率'));
+    // 没被当作非法值拦住（旧行为：按钮旁出现"必须是大于 0 的数字"、一格 POST 都没有）
+    expect(el.querySelector('section [role="alert"]')).toBeNull();
+    expect(ackBox(el)).toBeNull(); // 不可疑 → 不要求勾选
+    await click(confirmButton(el));
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]!.body).toMatchObject({ quote: 'USD', raw_rate: 0.0068 });
+  });
+});
