@@ -82,11 +82,21 @@ export function loginErrorText(err: unknown): LoginErrorView {
   }
   if (err.code === 42901) {
     const sec = err.retryAfterSec;
-    const text =
-      sec !== undefined
-        ? `输错次数太多，已暂时锁定，请约 ${Math.max(1, Math.ceil(sec / 60))} 分钟后再试`
-        : '输错次数太多，已暂时锁定，请稍后再试';
-    return { text, hint: '', traceId: '' };
+    const wait =
+      sec !== undefined ? `请约 ${Math.max(1, Math.ceil(sec / 60))} 分钟后再试` : '请稍后再试';
+    // ⚠️ 42901 是**两种情况共用一个码**（三端联调实测 2026-10-12）：
+    //   ① 账号输错锁定——`admin-auth-routes.ts` 抛时带 `data.reason='admin_account_locked'`；
+    //   ② 来源 / IP 限流——`rate-limit.ts` 抛 `AppError(42901)`，**不带 data**（`RATE_LIMIT_LOGIN_PER_15MIN`）。
+    //   以前一律说"输错次数太多，已暂时锁定"：连续登录 5 次被限流的管理员会以为账号被锁、
+    //   有人猜密码，甚至去重置密码——把"IP 抽水"说成"口令问题"是错误归因。
+    const accountLocked = err.data?.['reason'] === 'admin_account_locked';
+    return {
+      text: accountLocked ? `输错次数太多，已暂时锁定，${wait}` : `登录尝试太频繁，${wait}`,
+      // 限流时明说"不是口令问题"：否则运营看到 429 会去重置密码（那是无效动作），
+      // 而真被锁定时不重复这句——那时确实与口令有关。
+      hint: accountLocked ? '' : '这不是密码问题，是同一地点短时间内登录太多次的保护',
+      traceId: '',
+    };
   }
   return { text: err.message, hint: '', traceId };
 }

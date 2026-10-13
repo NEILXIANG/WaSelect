@@ -34,6 +34,37 @@ describe('loginErrorText（P2-43）', () => {
     expect(loginErrorText(new ApiError(42901, 'x', 't')).text).toContain('请稍后再试');
   });
 
+  // 三端联调实测 2026-10-12：42901 被两种情况共用，但前端一律说"输错次数太多"——
+  //   ① 账号输错锁定（服务端带 data.reason='admin_account_locked'）
+  //   ② IP / 来源限流（rate-limit.ts:230 抛 AppError(42901)，不带 data）
+  //   我一次密码都没输错过，只是 15 分钟内登录了 5 次（RATE_LIMIT_LOGIN_PER_15MIN），
+  //   页面却说"输错次数太多，已暂时锁定"——运营会以为账号被锁、甚至去改密码。
+  it('🔴 42901 带 reason=admin_account_locked → 说"输错次数太多"（真锁定）', () => {
+    const t = loginErrorText(
+      new ApiError(42901, 'x', 't', {
+        data: { reason: 'admin_account_locked' },
+        retryAfterSec: 600,
+      }),
+    );
+    expect(t.text).toContain('输错次数太多');
+    expect(t.text).toContain('约 10 分钟后再试');
+  });
+
+  it('🔴 42901 不带 reason（IP 限流）→ 不许说"输错次数太多"，要说"尝试太频繁"', () => {
+    const t = loginErrorText(new ApiError(42901, 'x', 't', { retryAfterSec: 360 }));
+    expect(t.text).not.toContain('输错次数太多');
+    expect(t.text).not.toContain('密码');
+    expect(t.text).toContain('太频繁');
+    expect(t.text).toContain('约 6 分钟后再试');
+  });
+
+  it('🔴 42901 不带 reason 且没有 retry-after → 说"尝试太频繁"，不编分钟数', () => {
+    const t = loginErrorText(new ApiError(42901, 'x', 't'));
+    expect(t.text).not.toContain('输错次数太多');
+    expect(t.text).toContain('太频繁');
+    expect(t.text).not.toMatch(/约 \d+ 分钟/);
+  });
+
   it('其它错误码透出服务端 message；非 ApiError 给通用文案', () => {
     expect(loginErrorText(new ApiError(50000, '服务器内部错误', 't')).text).toContain(
       '服务器内部错误',
