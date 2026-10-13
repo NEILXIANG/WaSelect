@@ -15,8 +15,16 @@ import { deferred, loadPage, type LoadedPage } from '../../../test/helpers/mp-pa
 let page: LoadedPage;
 let calls: string[];
 let fail: boolean;
-/** AJ-433：接口回 40301（账号被拉黑）。 */
+/**
+ * AJ-433：接口回 40301（账号被拉黑）。
+ * ⚠️ 规律排查 2026-10-12：40301 **不止一种成因**，夹具原先只给码、不给 `data.reason`——
+ *    那等于把"被拉黑"当成这个码的唯一样子，于是"源站校验失败也说成账号被限制"这个缺陷
+ *    在每条用例里都看不见（规律⑪：测试数据只覆盖主状态）。这里补上 reason，并另有用例钉另一个成因。
+ */
 let forbidden: boolean;
+
+/** 40301 的成因（服务端 `{ reason }`）：`blocked` = 账号被拉黑；`origin_not_verified` = 源站校验失败。 */
+let forbiddenReason: string;
 let hold: ReturnType<typeof deferred<unknown>> | null;
 /** AJ-408：页签用例要改写一次性意图（globalData.orderTab）与"空列表"——setup 只是多留两个句柄，原用例不变。 */
 let gd: Record<string, unknown>;
@@ -32,6 +40,7 @@ beforeEach(async () => {
   calls = [];
   fail = false;
   forbidden = false;
+  forbiddenReason = 'blocked';
   hold = null;
   empty = false;
   vi.stubGlobal('wx', {
@@ -46,7 +55,11 @@ beforeEach(async () => {
       calls.push(`GET ${req.url.replace('http://api.test', '')}`);
       if (hold !== null) return hold.promise;
       if (fail) throw Object.assign(new Error('网络请求失败'), { code: -1 });
-      if (forbidden) throw Object.assign(new Error('无权限'), { code: 40301 });
+      if (forbidden)
+        throw Object.assign(new Error('无权限'), {
+          code: 40301,
+          data: { reason: forbiddenReason },
+        });
       if (empty) return { items: [] };
       return {
         items: [{ order_id: 'o-1', order_no: 'WS-20261008-0001', status: 'paid', total_jpy: 9150 }],
@@ -207,6 +220,25 @@ describe('被拉黑的账号：错误态给「联系客服」而不是「重试�
     expect(page.data['errorContact']).toBe(false);
     calls = [];
     fail = false;
+    call('onRetry');
+    await settle();
+    expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20']);
+  });
+
+  /**
+   * 规律排查（本轮）：40301 的另一个买家可达成因是**源站校验失败**（`server/src/http.ts` 的
+   * `origin_not_verified`，只接受经 Cloudflare 的流量）。原先这里（以及小程序其它三处）照码判，
+   * 把一次基础设施故障说成"你的账号被限制使用"、并把出口换成客服——
+   * 线上真出这种事时**全体买家**都会去找客服，而客服查不出任何问题（规律①：修一处不扫同类）。
+   */
+  it('🔴 40301 但成因是源站校验失败 → 不说账号被限制，仍走「重试」重新取列表', async () => {
+    forbidden = true;
+    forbiddenReason = 'origin_not_verified';
+    calls = [];
+    await call<Promise<void>>('load');
+    expect(page.data['error']).not.toContain('账号已被限制');
+    expect(page.data['errorContact']).toBe(false);
+    calls = [];
     call('onRetry');
     await settle();
     expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20']);

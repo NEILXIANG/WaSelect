@@ -55,7 +55,7 @@ import {
   chargePreview,
 } from '../../utils/pay-plan.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
-import { contactFields, errorFields } from '../../utils/error-text.js';
+import { contactFields, errorFields, isAccountBlocked } from '../../utils/error-text.js';
 import { emailTypoHint, normalizeTypedEmail } from '../../utils/email-shape.js';
 import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -120,8 +120,14 @@ Page({
     termsFailed: false,
     /** 报价失败（与"报价还没回来"分开：失败不会再有结果，AJ-228）。 */
     quoteFailed: false,
-    /** 报价失败的错误码（F4：停售 / 账号受限按码说原因）。 */
+    /** 报价失败的错误码（F4：停售按码说原因）。 */
     quoteErrorCode: 0,
+    /**
+     * 这次报价失败是不是"账号被拉黑"（规律排查 2026-10-12；闸门据此说"账号受限"）。
+     * @why 与 `quoteErrorCode` 分开存：码有多个成因（40301 里有源站校验失败），
+     *      "是不是该找客服"这个结论只由 `utils/error-text.js` 的 `isAccountBlocked` 下。
+     */
+    quoteBlocked: false,
     /** `GET /addresses` 失败（F5：闸门说"没取到"，地址卡不说"还没有地址"）。 */
     addressFailed: false,
     /** 地址没取到时地址卡上的那句话（vm `addressFailedText`；账号受限另有说法）。 */
@@ -157,6 +163,13 @@ Page({
   traceId: '',
   /** 最近一次报价的原始响应（M-16：`chargeOptions` 读它的 total_jpy / display）；null = 没有可用报价。 */
   quoteRaw: null,
+  /**
+   * `GET /addresses` 那次失败是不是"账号被拉黑"（规律排查 2026-10-12）。
+   * @why 不放在 data 里：它不是渲染数据——地址卡那句话已经在 data 的 `addressFailedText` 上
+   *      （由 vm 用它算出来），闸门在 `updateGate` 里读它。**不存错误码**：40301 有多种成因，
+   *      存码就要在每个读它的人那里再判一次，那正是这条规律要收掉的东西。
+   */
+  addressBlocked: false,
   /** 当前地址的国家（M-16：查通道用，utils/pay-plan.js `channelCountryOf`）。 */
   addressCountry: '',
   /** 扣款预告的请求序号（只接受最新一次；refresh 可能并发）。 */
@@ -224,7 +237,14 @@ Page({
    */
   async refresh(opts) {
     const keepError = opts !== null && typeof opts === 'object' && opts.keepError === true;
-    this.setData(keepError ? { loading: true } : { loading: true, error: '', errorContact: false });
+    this.setData(
+      keepError
+        ? { loading: true }
+        : { loading: true, error: '', errorContact: false, quoteBlocked: false },
+    );
+    // 与上面同一个道理：默认清掉"上次是账号被拉黑"这个结论，由这两条取数各自重新下
+    //   （@see fetchAddresses / fetchQuote；keepError 路径也会重取，所以不必分情况）
+    this.addressBlocked = false;
     const items = this.items();
     this.setData({ rows: itemRows(items) });
 
@@ -324,12 +344,13 @@ Page({
       });
     } catch (e) {
       // F5：取失败 ≠ 没有地址——闸门与地址卡据此说"没取到"，而不是"请选择 / 点这里新增"
-      // 记下错误码：账号受限（40301）时地址卡与闸门说"账号受限"，不叫人去点"重新加载"（两端逐页走查第三轮）
-      const code = e && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
-      this.addressErrorCode = code;
+      // 账号**被拉黑**时地址卡与闸门说"账号受限"，不叫人去点"重新加载"（两端逐页走查第三轮）。
+      // ⚠️ 判据只有一处：error-text.js 的 isAccountBlocked（规律排查 2026-10-12——
+      //    40301 还有"源站校验失败"这种买家同样碰得到的成因，照码判会把它说成用户自己的问题）。
+      this.addressBlocked = isAccountBlocked(e);
       this.setData({
         addressFailed: true,
-        addressFailedText: addressFailedText(code),
+        addressFailedText: addressFailedText(this.addressBlocked),
         ...errorFields(e),
         ...contactFields(e),
       });
@@ -356,6 +377,7 @@ Page({
         quote: quoteView(res),
         quoteFailed: false,
         quoteErrorCode: 0,
+        quoteBlocked: false,
         productGone: false,
       });
     } catch (e) {
@@ -366,8 +388,11 @@ Page({
         rows: rowsWithQuotePrice(this.data.rows, null),
         quote: null,
         quoteFailed: true,
-        // F4：闸门按码说原因（停售 / 账号受限不说"返回购物车重试"）
+        // F4：闸门按码说原因（停售不说"返回购物车重试"）
         quoteErrorCode: Number.isInteger(e?.code) ? e.code : 0,
+        // 规律排查 2026-10-12：40301 里只有"被拉黑"才是"找客服"，源站校验失败仍该重试——
+        //   这个结论由 error-text.js 一处下（本文件、vm 都不再判 40301）
+        quoteBlocked: isAccountBlocked(e),
         // 40401 = 商品已下架或不存在：重试不会好，错误态按钮换成去首页 / 购物车（联动走查 2026-10-10）
         productGone: e?.code === 40401,
         goneActionText: goneExit(this.mode === BUY_NOW_MODE).actionText,
@@ -396,8 +421,9 @@ Page({
       termsFailed: this.data.termsFailed === true,
       quoteFailed: this.data.quoteFailed === true,
       quoteErrorCode: this.data.quoteErrorCode,
+      quoteBlocked: this.data.quoteBlocked === true,
       addressFailed: this.data.addressFailed === true,
-      addressErrorCode: this.addressErrorCode,
+      addressBlocked: this.addressBlocked === true,
       productGone: this.data.productGone === true,
     });
     this.setData({ gate });

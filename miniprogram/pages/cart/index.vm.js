@@ -70,8 +70,6 @@ export function selectionBar(rows) {
 const MUST_CHANGE_CART = new Set([40401, 40906, 40912]);
 /** 全局停售（AJ-384）。 */
 const SALES_PAUSED_CODE = 40916;
-/** 账号被限制（拉黑，F4；与 utils/error-text.js FORBIDDEN_CODE 同码）。 */
-const FORBIDDEN_CODE = 40301;
 
 /**
  * 品种超限时的文案（P2-31）。
@@ -88,11 +86,21 @@ function tooManyLines(code, lineCount) {
 /** 商品下架 / 不存在（契约 40401）。 */
 const DELISTED_CODE = 40401;
 
-/** 报价失败提示：区分"稍后重试就好"与"必须改购物车"（MP3-09 / P2-31）。 */
-export function quoteErrorHint(code, lineCount) {
+/**
+ * 报价失败提示：区分"稍后重试就好"与"必须改购物车"（MP3-09 / P2-31）。
+ * @param {unknown} code 错误码（`ApiError.code`）
+ * @param {unknown} lineCount 购物车当前品种数
+ * @param {unknown} blocked 这次失败是不是"账号被拉黑"（调用方传 `isAccountBlocked(e)`；`utils/error-text.js` 的唯一实现）
+ * @why `blocked` 单独传而不是在这里判 `code === 40301`（规律排查 2026-10-12）：40301 **不止一种成因**，
+ *      源站校验失败（`server/src/http.ts` 的 `origin_not_verified`）买家同样碰得到——那是一次基础设施故障，
+ *      说成"账号已被限制使用"会把人指去客服，而客服查不出任何问题（规律①：修一处不扫同类）。
+ *      ⚠️ 因此本文件**不再出现 40301 字面量**：非拉黑的 40301 落到最后一行（"稍后重试"），与 `errorMessage` 同向。
+ * @limitation `blocked` 为 true 时不再复核码——真源在 `isAccountBlocked`，这里复核等于又写一份判断。
+ */
+export function quoteErrorHint(code, lineCount, blocked) {
   if (tooManyLines(code, lineCount)) return TOO_MANY_LINES_TEXT;
-  // F4（第二轮审计 2026-10-11）：账号受限（40301）不是"稍后重试"能解决的
-  if (code === FORBIDDEN_CODE) return '账号已被限制使用，暂时无法结算，如有疑问请联系客服';
+  // F4（第二轮审计 2026-10-11）：账号被拉黑不是"稍后重试"能解决的
+  if (blocked === true) return '账号已被限制使用，暂时无法结算，如有疑问请联系客服';
   // 停售（40916）：不是"稍后重试"能解决的，也不是购物车的问题（三端联动模拟 2026-10-08）
   if (code === SALES_PAUSED_CODE) return '店铺暂停接单中，恢复后即可结算';
   // 走查 2026-10-08：A3 之后「取消勾选」是最省事的出路，提示里要给到（原句只说调整数量或移除）。
@@ -118,10 +126,11 @@ export function quoteErrorText(code, lineCount, fallback) {
  * 「去结算」按钮的状态与它下面那句话（B36 / AJ-219）。
  *
  * @param {{quoting?: unknown, hasTotal?: unknown, hasError?: unknown,
- *          errorCode?: unknown, splitRequired?: unknown, lineCount?: unknown, noneSelected?: unknown,
+ *          errorCode?: unknown, errorBlocked?: unknown, splitRequired?: unknown, lineCount?: unknown, noneSelected?: unknown,
  *          soldOut?: unknown, reason?: unknown}|null|undefined} s
  *   `reason`        报价在途的起因（'enter' = 进页面首次报价，其余 = 改了购物车；F2）
  *   `soldOut`       报价失败是因为售罄（三天提交复查 2026-10-12：不说"稍后重试"）
+ *   `errorBlocked`  报价失败是因为账号被拉黑（调用方传 `isAccountBlocked(e)`；规律排查 2026-10-12）
  *   `quoting`       报价在途中（改了数量之后、新合计还没回来）
  *   `hasTotal`      当前 quote 有权威合计（薄壳传 `hasTotal(quote)`）
  *   `hasError`      上一次报价失败了
@@ -160,7 +169,7 @@ export function checkoutGate(s) {
   if (a.hasError === true) {
     // 售罄（40901 且库存 0）：不是"稍后重试"能解决的（三天提交复查 2026-10-12；错误条已说是哪件）
     if (a.soldOut === true) return { disabled: true, hint: '有商品已售罄：移除或取消勾选后再结算' };
-    return { disabled: true, hint: quoteErrorHint(a.errorCode, a.lineCount) };
+    return { disabled: true, hint: quoteErrorHint(a.errorCode, a.lineCount, a.errorBlocked) };
   }
   // B38 / AJ-221：已超单笔上限 → 结算页会 40906，在购物车就把入口关掉
   // （让用户在**能改数量**的这一页解决，而不是跳过去再被弹回来）
@@ -273,10 +282,15 @@ export function undoView(pending, nowMs) {
  * @why 只给"重试可能有用"的失败：必须改购物车的码（下架 / 超重 / 超上限）、品种超限、停售——
  *      重试一万次结果都一样，给按钮就是把用户按在一个不会成功的动作上（同 `quoteErrorHint` 的分类）。
  *      库存不足（40901）给：库存会被别人的取消回补。
+ * @param {unknown} blocked 是不是"账号被拉黑"（调用方传 `isAccountBlocked(e)`）
+ * @why `blocked` 单独传而不是判 `code === 40301`（规律排查 2026-10-12）：40301 里 **只有拉黑**重试无用，
+ *      源站校验失败（`origin_not_verified`）修好后重试是有效的——照码判会把"能救回来的"一次拒掉，
+ *      用户连按钮都没有（规律①：修一处不扫同类）。
  */
-export function quoteRetryable(code, lineCount) {
+export function quoteRetryable(code, lineCount, blocked) {
   if (tooManyLines(code, lineCount)) return false;
-  if (code === SALES_PAUSED_CODE || code === FORBIDDEN_CODE) return false;
+  if (blocked === true) return false;
+  if (code === SALES_PAUSED_CODE) return false;
   return !MUST_CHANGE_CART.has(code);
 }
 

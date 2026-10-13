@@ -97,18 +97,25 @@ export function termsFromResponse(res) {
   return { termsVersion: version, termsFailed: version === '' || !hasUrl };
 }
 
-/** 账号受限（40301）时下单与取地址都不会成功——统一一句，不叫人去点"重新加载"。 */
+/**
+ * 账号被拉黑（40301 且 `reason === 'blocked'`）时下单与取地址都不会成功——统一一句，不叫人去点"重新加载"。
+ * @why 判据由 `utils/error-text.js` 的 `isAccountBlocked` 给出（**唯一**一份），这里只消费它的结果：
+ *      本文件原先自己写 `code === 40301`（`addressFailedText` 与 `gateCore` 两处），而 40301 的成因不止一种——
+ *      源站校验失败（`server/src/http.ts` 的 `origin_not_verified`）买家同样碰得到，那是服务端故障，
+ *      说成"你的账号被限制"会让人去找客服，而客服查不出任何问题（规律①：修一处不扫同类）。
+ */
 const RESTRICTED_TEXT = '账号已被限制使用，暂时无法下单，如有疑问请联系客服';
 
 /**
  * 地址卡在"没取到"时说什么（两端逐页走查第三轮 2026-10-12）。
  * @why 账号受限时地址列表也取不到，原先一律说"请点上方「重新加载」"——受限时上方只有「联系客服」，
  *      买家去找一个不存在的按钮；重新加载也永远不会好。
- * @param {unknown} code 地址请求失败的错误码
+ * @param {unknown} blocked 这次失败是不是"账号被拉黑"（调用方传 `isAccountBlocked(e)` 的结果）
  * @returns {string}
+ * @limitation 只认这一个区别：其余失败（网络 / 服务故障 / 源站校验）都还有重试的价值，一律指向「重新加载」。
  */
-export function addressFailedText(code) {
-  return code === 40301
+export function addressFailedText(blocked) {
+  return blocked === true
     ? '账号已被限制使用，暂时取不到收货地址'
     : '收货地址没取到，请点上方「重新加载」';
 }
@@ -119,10 +126,15 @@ export function addressFailedText(code) {
  *          emailError?: string, contactEmail?: string, splitRequired?: boolean,
  *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean, buyNow?: boolean,
  *          productGone?: boolean, quoteErrorCode?: number, addressFailed?: boolean,
- *          addressErrorCode?: number}} state
- * @why `quoteErrorCode`（F4，第二轮审计 2026-10-11）：停售（40916）/ 账号受限（40301）的报价失败，原先也说"返回购物车检查商品后重试"——
- *      两种都不是购物车的问题、重试也不会好。`addressFailed`（F5）：地址列表没取到时说"请选择收货地址"，
+ *          quoteBlocked?: boolean, addressBlocked?: boolean}} state
+ * @why `quoteErrorCode`（F4，第二轮审计 2026-10-11）：停售（40916）的报价失败，原先也说"返回购物车检查商品后重试"——
+ *      不是购物车的问题、重试也不会好。`addressFailed`（F5）：地址列表没取到时说"请选择收货地址"，
  *      买家会以为自己的地址丢了、去重新填一遍。
+ * @why `quoteBlocked` / `addressBlocked`（规律排查 2026-10-12）：**账号被拉黑**是唯一"找客服"的成因，
+ *      而它与另外几个成因共用 40301 这个码（源站校验失败在买家侧同样可达）。
+ *      ⚠️ 判据不在本文件里——调用方传 `isAccountBlocked(e)`（`utils/error-text.js` 的唯一实现），
+ *      本文件**不再出现 40301 这个字面量**：照码判会把基础设施故障说成"你的账号有问题"（规律①）。
+ *      这两个布尔**取代**了原先的 `addressErrorCode`（它当初只用来比对 40301，没有第二个用途）。
  * @why `termsReady` / `termsFailed` / `quoteFailed` 三项（AJ-228）：
  *      条款版本没取到时 `orderBody` 会抛一句**给开发者看的**报错，此前闸门不看它，
  *      于是那句话被原样摆到用户面前；报价**失败**与报价**还没回来**此前是同一句"还在计算中"，
@@ -149,7 +161,7 @@ function gateCore(state) {
   // 也不说"报价失败请重试"——重试不会好（联动走查 2026-10-10）
   if (s.productGone === true) return { ok: false, reason: goneExit(s.buyNow).hint };
   if (typeof s.addressId !== 'string' || s.addressId === '') {
-    if (s.addressFailed === true && s.addressErrorCode === 40301)
+    if (s.addressFailed === true && s.addressBlocked === true)
       return { ok: false, reason: RESTRICTED_TEXT };
     return {
       ok: false,
@@ -165,9 +177,9 @@ function gateCore(state) {
   // 失败排在"计算中"之前：失败了就不会再有结果，说"计算中"是让人白等
   // 立即购买时那件商品不在购物车里（审查 2026-10-09）：说"返回购物车"是一条走不通的路
   if (s.quoteFailed === true) {
-    // F4：按码说——停售 / 账号受限不是购物车的问题，也不是重试能解决的
+    // F4：按码说——停售不是购物车的问题，也不是重试能解决的；账号被拉黑另说（判据由调用方给出）
     if (s.quoteErrorCode === 40916) return { ok: false, reason: '店铺暂停接单中，恢复后即可下单' };
-    if (s.quoteErrorCode === 40301) return { ok: false, reason: RESTRICTED_TEXT };
+    if (s.quoteBlocked === true) return { ok: false, reason: RESTRICTED_TEXT };
     return {
       ok: false,
       reason:

@@ -114,9 +114,29 @@ describe('按码给出可执行的话（P2-40）', () => {
   });
 
   it('40301 → 账号被限制的说明（不是一句"无权限"）', () => {
-    expect(errorMessage({ code: 40301, message: '无权限' })).toBe(
+    expect(errorMessage({ code: 40301, message: '无权限', data: { reason: 'blocked' } })).toBe(
       '账号已被限制使用，如有疑问请联系客服',
     );
+  });
+
+  /**
+   * 规律排查（本轮）：40301 在服务端**至少有五种成因**，只有 `blocked` 是"用户自己那一侧、重试无用"：
+   * - `blocked`（`server/src/app/auth.ts:224`）——买家可达，账号被拉黑；
+   * - `origin_not_verified`（`server/src/http.ts:410`）——**买家也可达**：源站校验中间件（只接受经 Cloudflare 的流量）；
+   * - `not_admin` / `admin_totp_required`（管理端）、角色·受众不符（`auth.ts:155,210`，不带 reason）——买家不可达。
+   * 原先一律读成"账号已被限制"，把一次基础设施故障（CF 头注入失效）说成用户自己的问题，
+   * 并且把重试按钮撤掉（`contactFields`）——买家只能去找客服，而客服那边一切正常。
+   */
+  it('🔴 只有 blocked 才说"账号被限制"；源站校验失败说服务不可用（可重试）', () => {
+    const origin = errorMessage({
+      code: 40301,
+      message: '无权限',
+      data: { reason: 'origin_not_verified' },
+    });
+    expect(origin).toBe('服务暂时不可用，请稍后重试');
+    expect(origin).not.toContain('账号');
+    // 没带 reason 的 40301（角色 / 受众不符）同样不替用户下结论
+    expect(errorMessage({ code: 40301, message: '无权限' })).not.toContain('账号已被限制');
   });
 
   it('报障小字照旧带码（客服仍能对照）', () => {
@@ -136,8 +156,15 @@ describe('停售 40916（三端联动模拟 2026-10-08）', () => {
 });
 
 describe('contactFields（AJ-433）：被拉黑时出口是联系客服', () => {
-  it('🔴 40301 → errorContact: true；其它码 / 网络错 / 脏值 → false', () => {
-    expect(contactFields({ code: 40301 })).toEqual({ errorContact: true });
+  it('🔴 只有 blocked 的 40301 → errorContact: true；其它成因 / 其它码 / 网络错 / 脏值 → false', () => {
+    expect(contactFields({ code: 40301, data: { reason: 'blocked' } })).toEqual({
+      errorContact: true,
+    });
+    // 规律排查（本轮）：源站校验失败（origin_not_verified）不是用户账号的问题，不能把"重试"换成"找客服"
+    expect(contactFields({ code: 40301, data: { reason: 'origin_not_verified' } })).toEqual({
+      errorContact: false,
+    });
+    expect(contactFields({ code: 40301 })).toEqual({ errorContact: false });
     expect(contactFields({ code: 40001 })).toEqual({ errorContact: false });
     expect(contactFields({ code: -1 })).toEqual({ errorContact: false });
     expect(contactFields(null)).toEqual({ errorContact: false });

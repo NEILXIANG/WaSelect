@@ -35,7 +35,9 @@ export function errorMessage(err) {
   }
   // P2-40：两个"服务端原文说不清下一步"的码，换成能照着做的话
   if (isObj && err.code === BUSY_CODE) return busyText(err.data);
-  if (isObj && err.code === FORBIDDEN_CODE) return FORBIDDEN_TEXT;
+  // 40301 有**多种成因**（见 isBlocked 的 @why）：只有"账号被拉黑"才说账号被限制，
+  // 其余（源站校验失败、角色/受众不符）按服务端故障说，且不撤掉重试（见 contactFields）
+  if (isObj && err.code === FORBIDDEN_CODE) return isBlocked(err) ? FORBIDDEN_TEXT : GATEWAY_TEXT;
   if (isObj && err.code === SALES_PAUSED_CODE) return SALES_PAUSED_TEXT;
   if (isObj && err.code === LOGIN_EXPIRED_CODE) return LOGIN_EXPIRED_TEXT;
   const fromMessage = isObj && typeof err.message === 'string' ? err.message.trim() : '';
@@ -68,12 +70,44 @@ function busyText(data) {
 }
 
 /**
- * 40301（P2-40）：买家侧接口返回它几乎只有一种原因——账号被拉黑（create-order / 鉴权层复核 blocked）。
- * @why 原文"无权限"会被读成"我哪里没登录 / 没授权"，用户会去反复重进小程序；真正的出路是找客服。
- * @limitation 鉴权层的"角色不符"也是 40301，但买家小程序不会调管理端接口，不在这里区分。
+ * 40301（P2-40）：服务端这个码**不止一种成因**，其中买家可达的只有两种：
+ * - `blocked`（server/src/app/auth.ts:224）——账号被拉黑：用户自己那一侧的事，重试永远不会成功；
+ * - `origin_not_verified`（server/src/http.ts:410）——源站校验中间件（只接受经 Cloudflare 的流量）
+ *   在请求头上没看到共享密钥。**一次基础设施故障**，与买家账号无关，重试在故障修好后是有效的。
+ * 另有 `not_admin` / `admin_totp_required`（管理端）与角色·受众不符（`auth.ts:155,210`，不带 reason），
+ * 买家小程序碰不到，但也不该被这边猜成"你被封了"。
+ *
+ * @why 判据是**白名单**（只有 `blocked` 才算）：把不确定的成因一律说成"账号被限制"，
+ *      代价是"CF 头注入坏了"这种线上事故里，**全体买家**读到"账号已被限制使用"、并去找客服——
+ *      而客服那边查不出任何问题（用户账号正常）。反过来冤枉成服务故障的代价只是"再点一次"。
+ * @limitation `blocked` 这个字符串在服务端是**手写常量**（`auth.ts:224`），两端没共享
+ *            （`packages/shared/src/errors.ts` 只管码与 action，不含 reason）。服务端改词而这里不改，
+ *            表现是"被拉黑的买家看到服务不可用"——去客服的路没了，需要人工核对（见本轮报告"未共享"项）。
  */
 const FORBIDDEN_CODE = 40301;
 const FORBIDDEN_TEXT = '账号已被限制使用，如有疑问请联系客服';
+/** 40301 里"账号被拉黑"这一种的 reason 值（服务端 auth.ts 的 `{ reason: 'blocked' }`）。 */
+const FORBIDDEN_BLOCKED_REASON = 'blocked';
+
+/** 这个 40301 是不是"账号被拉黑"那一类（其余成因按服务端故障说）。 */
+function isBlocked(err) {
+  const d = err !== null && typeof err === 'object' ? err.data : undefined;
+  return d !== null && typeof d === 'object' && d.reason === FORBIDDEN_BLOCKED_REASON;
+}
+
+/**
+ * 页面共用：这个错误是不是"账号被拉黑"（40301 + `reason === 'blocked'`）。
+ *
+ * @why 这是**唯一**的判据，页面不要再自己写 `code === 40301`：同一个假设原先在四处各写一份
+ *      （`utils/error-text.js`、`pages/checkout/index.vm.js` 两处、`pages/cart/index.vm.js` 两处、
+ *      `pages/pay/index.js`），而 40301 的成因不止一种——照码判会把"源站校验失败"（`http.ts`）
+ *      也当成"你被封了"，把基础设施故障说成用户自己的问题（规律①：修一处不扫同类）。
+ * @param {unknown} err 请求封装抛出的错误
+ * @returns {boolean}
+ */
+export function isAccountBlocked(err) {
+  return err !== null && typeof err === 'object' && err.code === FORBIDDEN_CODE && isBlocked(err);
+}
 
 /**
  * 40101 到了页面（F3，第二轮审计 2026-10-11）：请求层已经静默重登并重放过一次（utils/request.js @limitation 一），
@@ -116,13 +150,15 @@ export function errorRef(err) {
 
 /**
  * 错误态的出口该不该是「联系客服」（AJ-433，用户 2026-10-10 授权代决）：`setData({...contactFields(e)})` → `{errorContact}`。
- * @why 40301 对买家只有一种原因——账号被拉黑（@see FORBIDDEN_CODE）。原先错误态只给「重试」，可重试永远不会成功，
- *      用户点几次就放弃了；文案里说"请联系客服"，按钮却不通向客服。与 FORBIDDEN_TEXT 同一个判断，不会一个说客服、一个给重试。
+ * @why 只有"账号被拉黑"（40301 且 `reason === 'blocked'`）的出口才是客服：它的重试永远不会成功。
+ *      原先按**码**判，于是源站校验失败（同码、不同成因）也被撤掉重试、指向客服——
+ *      文案与按钮必须说同一件事，所以这里与 `errorMessage` 用**同一个判断**（`isBlocked`），
+ *      不会出现"一个说服务不可用、一个给客服按钮"。
  * @limitation 只给出"该去客服"的布尔；去哪儿（「我的」页的客服卡片）由页面决定。
  */
 export function contactFields(err) {
   return {
-    errorContact: err !== null && typeof err === 'object' && err.code === FORBIDDEN_CODE,
+    errorContact: isAccountBlocked(err),
   };
 }
 

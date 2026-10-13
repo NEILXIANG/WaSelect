@@ -23,8 +23,15 @@ const ORDER = {
 let page: LoadedPage;
 let calls: string[];
 let fail: boolean;
-/** AJ-433：接口回 40301（账号被拉黑）。 */
+/**
+ * AJ-433：接口回 40301（账号被拉黑）。
+ * ⚠️ 规律排查 2026-10-12：40301 **不止一种成因**，夹具原先只给码、不给 `data.reason`——
+ *    等于把"被拉黑"当成这个码的唯一样子，缺陷（源站校验失败也被说成账号被限制）在用例里看不见
+ *    （规律⑪：测试数据只覆盖主状态）。这里补上 reason，并另有用例钉另一个成因。
+ */
 let forbidden: boolean;
+/** 40301 的成因（服务端 `{ reason }`）：`blocked` = 账号被拉黑；`origin_not_verified` = 源站校验失败。 */
+let forbiddenReason: string;
 /** 全入口点击测试 2026-10-11：接口回 40400（订单不存在 / 不是本人的）。 */
 let notFound: boolean;
 let clipFail: boolean;
@@ -63,7 +70,11 @@ async function open(id = 'o-1', extra: Record<string, string> = {}): Promise<voi
         if (path.endsWith('/support')) return { wechat: 'waselect_cs' };
         if (hold !== null) return hold.promise;
         if (fail) throw Object.assign(new Error('网络请求失败'), { code: -1 });
-        if (forbidden) throw Object.assign(new Error('无权限'), { code: 40301 });
+        if (forbidden)
+          throw Object.assign(new Error('无权限'), {
+            code: 40301,
+            data: { reason: forbiddenReason },
+          });
         if (notFound) throw Object.assign(new Error('请求的资源不存在'), { code: 40400 });
         return order;
       },
@@ -90,6 +101,7 @@ beforeEach(() => {
   calls = [];
   fail = false;
   forbidden = false;
+  forbiddenReason = 'blocked';
   notFound = false;
   clipFail = false;
   postError = null;
@@ -351,7 +363,7 @@ describe('订单详情关键信息的对比度', () => {
 });
 
 describe('被拉黑的账号：错误态给「联系客服」（AJ-433，用户 2026-10-10 授权代决）', () => {
-  it('🔴 40301 → errorContact；点按钮去「我的」，不再重取', async () => {
+  it('🔴 40301 且是拉黑 → errorContact；点按钮去「我的」，不再重取', async () => {
     forbidden = true;
     await open();
     expect(page.data['error']).toBe('账号已被限制使用，如有疑问请联系客服');
@@ -360,6 +372,26 @@ describe('被拉黑的账号：错误态给「联系客服」（AJ-433，用户 
     await settle();
     expect(nav).toEqual(['/pages/user/index']);
     expect(calls).toEqual([]);
+  });
+
+  /**
+   * 规律排查（本轮）：40301 的另一个买家可达成因是**源站校验失败**（`server/src/http.ts` 的
+   * `origin_not_verified`）。原先照码判 → 把这个基础设施故障说成"你的账号被限制使用"、
+   * 并撤掉重取。真出这种事时全体买家都去找客服，而客服查不出任何问题（规律①：修一处不扫同类）。
+   */
+  it('🔴 40301 但成因是源站校验失败 → 不说账号被限制，仍去重取这张单', async () => {
+    forbidden = true;
+    forbiddenReason = 'origin_not_verified';
+    calls = [];
+    await open();
+    expect(page.data['error']).not.toContain('账号已被限制');
+    expect(page.data['errorContact']).toBe(false);
+    forbidden = false;
+    calls = [];
+    call('onRetry');
+    await settle();
+    expect(nav).toEqual([]);
+    expect(calls).toEqual(['GET /api/v1/orders/o-1']);
   });
 
   // 全入口点击测试 2026-10-11：原先"请求的资源不存在"+ 40400 + 「重试」——重试一万次也一样

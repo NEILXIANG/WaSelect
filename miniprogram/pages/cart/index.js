@@ -43,7 +43,7 @@ import {
   undoView,
 } from './index.vm.js';
 import { quoteView } from '../../utils/quote-view.js';
-import { errorFields, errorMessage } from '../../utils/error-text.js';
+import { errorFields, errorMessage, isAccountBlocked } from '../../utils/error-text.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -90,6 +90,13 @@ Page({
      *      对超重（40912）说"请稍后重试"是句谎话——它不会自己变轻。
      */
     quoteErrorCode: 0,
+    /**
+     * 这次报价失败是不是"账号被拉黑"（规律排查 2026-10-12；vm `quoteErrorHint` / `quoteRetryable` / `checkoutGate` 用它）。
+     * @why 与 `quoteErrorCode` 分开存：40301 有多个成因（源站校验失败在买家侧同样可达），
+     *      "重试有没有用 / 该不该找客服"这个结论只由 `utils/error-text.js` 的 `isAccountBlocked` 下，
+     *      本文件与 `index.vm.js` 都**不再出现 40301 这个字面量**。
+     */
+    quoteBlocked: false,
     /** M-14（AJ-406）：报价失败时给不给"重试"（vm `quoteRetryable`）。 */
     quoteRetry: false,
     /** 报价失败是因为售罄（底栏说"移除或取消勾选"，不说"稍后重试"；三天提交复查 2026-10-12）。 */
@@ -185,6 +192,7 @@ Page({
         quote: null,
         quoteError: '',
         quoteErrorCode: 0,
+        quoteBlocked: false,
         gate: checkoutGate({ hasTotal: false, noneSelected: rows.length > 0 }),
       });
       return;
@@ -259,6 +267,9 @@ Page({
       }
       const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
       const lineCount = this.data.rows.length;
+      // 规律排查 2026-10-12：40301 里有两种买家可达的成因（被拉黑 / 源站校验失败），
+      //   只有"被拉黑"是重试无用、该找客服。这个结论只在 error-text.js 下一份，页面只传结果。
+      const blocked = isAccountBlocked(e);
       this.setData({
         quote: null,
         // 剩余清单 4-7：服务端指出是哪一件（e.data.product_id）→ 标红那一行
@@ -267,9 +278,10 @@ Page({
         // P2-31：品种超限（40001 + >50 行）换成"请移除一些"，否则永远是一句重试不好的错
         quoteError: quoteErrorText(code, lineCount, errorMessage(e)),
         quoteErrorCode: code,
-        // M-14：重试可能有用时才给按钮（下架 / 超重等必须改购物车的不给）
-        quoteRetry: quoteRetryable(code, lineCount),
-        gate: checkoutGate({ hasError: true, errorCode: code, lineCount }),
+        quoteBlocked: blocked,
+        // M-14：重试可能有用时才给按钮（下架 / 超重等必须改购物车的不给；源站校验失败给）
+        quoteRetry: quoteRetryable(code, lineCount, blocked),
+        gate: checkoutGate({ hasError: true, errorCode: code, errorBlocked: blocked, lineCount }),
       });
       // 下架（40401）且服务端指出了是哪件：与售罄同口径，说名称、不带报障编号（两端逐页走查第三轮）
       const goneId = code === 40401 ? e?.data?.product_id : undefined;
@@ -301,6 +313,7 @@ Page({
             hasTotal: hasTotal(this.data.quote),
             hasError: this.data.quoteError !== '',
             errorCode: this.data.quoteErrorCode,
+            errorBlocked: this.data.quoteBlocked === true,
             soldOut: this.data.quoteSoldOut === true,
             lineCount: this.data.rows.length,
             splitRequired: this.data.quote?.splitRequired === true,

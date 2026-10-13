@@ -566,7 +566,14 @@ describe('支付页：发起被拒后重查订单（P2-40）', () => {
 // 联动走查·跨角色（2026-10-10）：买家停在支付页时被运营拉黑——拉黑会立即取消未付款订单，
 // 但支付页仍挂着倒计时与支付按钮，点了报"账号已被限制使用"、按钮却是「重试」，永远不会成功。
 describe('账号被拉黑（40301）：支付页换成关闭屏 + 联系客服', () => {
-  const blocked = () => Object.assign(new Error('无权限'), { code: 40301 });
+  /**
+   * ⚠️ 规律排查 2026-10-12：40301 **不止一种成因**，夹具原先只给码、不给 `data.reason`——
+   * 等于把"被拉黑"当成这个码的唯一样子（规律⑪：测试数据只覆盖主状态）。
+   * 下面另有一条用例钉"成因是源站校验失败"的那一侧。
+   */
+  const forbidden = (reason: string) =>
+    Object.assign(new Error('无权限'), { code: 40301, data: { reason } });
+  const blocked = () => forbidden('blocked');
 
   it('🔴 发起支付回 40301 → 收起支付方式与倒计时，说明原因，给「联系客服」；点它去「我的」', async () => {
     expect(page.data['channels']).toHaveLength(1);
@@ -626,6 +633,22 @@ describe('账号被拉黑（40301）：支付页换成关闭屏 + 联系客服',
     tapChannel('stripe');
     await settle();
     expect(page.data['contactSupport']).toBe(false);
+    expect(page.data['channels']).toHaveLength(1);
+  });
+
+  /**
+   * 规律排查（本轮）：40301 的另一个买家可达成因是**源站校验失败**（`server/src/http.ts` 的
+   * `origin_not_verified`，只接受经 Cloudflare 的流量）。那是基础设施故障，不是"你的账号被限制"——
+   * 原先 `pay/index.js` 两处都读 `contactFields(e).errorContact`，而 `contactFields` 按码判，
+   * 于是 CF 头注入一坏，**全体买家**在支付页都看到"账号已被限制使用、这笔订单无法支付"，
+   * 而订单其实是好的（规律①：修一处不扫同类）。
+   */
+  it('🔴 40301 但成因是源站校验失败 → 不换关闭屏、不说账号被限制（支付方式还在）', async () => {
+    postError = forbidden('origin_not_verified');
+    tapChannel('stripe');
+    await settle();
+    expect(page.data['contactSupport']).toBe(false);
+    expect(String(page.data['closedText'])).not.toContain('账号已被限制');
     expect(page.data['channels']).toHaveLength(1);
   });
 });

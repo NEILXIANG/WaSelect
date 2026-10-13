@@ -563,14 +563,32 @@ describe('termsFromResponse', () => {
 describe('第二轮审计 2026-10-11：结算页（F4 / F5 / F7 / MP-9）', () => {
   const OK = { itemCount: 1, addressId: 'a-1', termsAccepted: true, totalJpy: 9150 };
 
-  it('🔴 F4 报价失败的原因按码说：停售 / 账号受限不说"返回购物车重试"', () => {
-    const fail = (quoteErrorCode: number) =>
-      submitGate({ ...OK, totalJpy: null, quoteFailed: true, quoteErrorCode }).reason;
+  it('🔴 F4 报价失败的原因按码 / 结论说：停售、账号被拉黑都不说"返回购物车重试"', () => {
+    const fail = (quoteErrorCode: number, quoteBlocked = false) =>
+      submitGate({ ...OK, totalJpy: null, quoteFailed: true, quoteErrorCode, quoteBlocked }).reason;
     expect(fail(40916)).toContain('暂停接单');
     expect(fail(40916)).not.toContain('重试');
-    expect(fail(40301)).toContain('账号');
-    expect(fail(40301)).not.toContain('重试');
+    expect(fail(40301, true)).toContain('账号');
+    expect(fail(40301, true)).not.toContain('重试');
     expect(fail(50000)).toContain('购物车');
+  });
+
+  /**
+   * 规律排查（本轮）：40301 的成因不止一种，**源站校验失败**（`server/src/http.ts` 的 `origin_not_verified`）
+   * 买家同样碰得到——那是基础设施故障，不是"你的账号被限制"。
+   * 原先 `gateCore` 照码判（`quoteErrorCode === 40301`），把全体买家引向客服，
+   * 而客服查不出任何问题（规律①：修一处不扫同类）。
+   */
+  it('🔴 40301 但不是拉黑（源站校验失败）→ 不替用户下结论，仍按"报价失败重试"说', () => {
+    const reason = submitGate({
+      ...OK,
+      totalJpy: null,
+      quoteFailed: true,
+      quoteErrorCode: 40301,
+      quoteBlocked: false,
+    }).reason;
+    expect(reason).not.toContain('账号');
+    expect(reason).toContain('重试');
   });
 
   it('🔴 F5 地址没取到 → 说"没取到"，不说"请选择收货地址"（用户会以为自己没有地址）', () => {
@@ -582,16 +600,27 @@ describe('第二轮审计 2026-10-11：结算页（F4 / F5 / F7 / MP-9）', () =
 
   // 两端逐页走查第三轮 2026-10-12（造了拉黑买家才走到）：账号受限时地址也取不到，地址卡与底部都说"请点上方「重新加载」"——
   //   上方只有「联系客服」，买家去找一个不存在的按钮
-  it('🔴 地址没取到且是账号受限（40301）→ 说账号受限，不叫人去点"重新加载"', () => {
-    const g = submitGate({ ...OK, addressId: '', addressFailed: true, addressErrorCode: 40301 });
+  it('🔴 地址没取到且是账号被拉黑 → 说账号受限，不叫人去点"重新加载"', () => {
+    const g = submitGate({ ...OK, addressId: '', addressFailed: true, addressBlocked: true });
     expect(g).toEqual({
       ok: false,
       fix: '',
       reason: '账号已被限制使用，暂时无法下单，如有疑问请联系客服',
     });
-    expect(addressFailedText(40301)).toBe('账号已被限制使用，暂时取不到收货地址');
-    expect(addressFailedText(50000)).toBe('收货地址没取到，请点上方「重新加载」');
+    expect(addressFailedText(true)).toBe('账号已被限制使用，暂时取不到收货地址');
+    expect(addressFailedText(false)).toBe('收货地址没取到，请点上方「重新加载」');
     expect(addressFailedText(undefined)).toBe('收货地址没取到，请点上方「重新加载」');
+  });
+
+  /**
+   * 规律排查（本轮）：地址请求回 40301 但成因是源站校验失败时，地址卡**不能**说"账号被限制"
+   * （闸门同理，见上一条）——两句话必须同进同退，否则出现"底部说服务不可用、地址卡说账号受限"。
+   */
+  it('🔴 地址没取到、成因不是拉黑 → 地址卡与闸门都指向「重新加载」', () => {
+    const g = submitGate({ ...OK, addressId: '', addressFailed: true, addressBlocked: false });
+    expect(g.reason).toContain('重新加载');
+    expect(g.reason).not.toContain('账号');
+    expect(addressFailedText(false)).toContain('重新加载');
   });
 
   it('🔴 F7 输入中不抢先报格式错；已经报过错时，改对了立即消失、没改对继续显示', () => {

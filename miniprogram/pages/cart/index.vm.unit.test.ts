@@ -281,15 +281,28 @@ describe('M-14 购物车：行进详情 / 删除撤销 / 报价重试（AJ-406�
     expect(undoView(p, T0).text).toBe('已删除 1 件商品');
   });
 
-  it('quoteRetryable：网络 / 5xx / 库存不足给重试；下架、超重、超上限、品种超限、停售、账号受限不给', () => {
-    expect(quoteRetryable(-1, 1)).toBe(true);
-    expect(quoteRetryable(50000, 1)).toBe(true);
-    expect(quoteRetryable(40901, 1)).toBe(true);
-    // F4（第二轮审计 2026-10-11）：40301 = 账号被限制，重试永远不会成功
-    for (const code of [40401, 40906, 40912, 40916, 40301])
-      expect(quoteRetryable(code, 1), String(code)).toBe(false);
-    expect(quoteRetryable(40001, 51)).toBe(false);
-    expect(quoteRetryable(40001, 3)).toBe(true);
+  it('quoteRetryable：网络 / 5xx / 库存不足给重试；下架、超重、超上限、品种超限、停售、账号被拉黑不给', () => {
+    expect(quoteRetryable(-1, 1, false)).toBe(true);
+    expect(quoteRetryable(50000, 1, false)).toBe(true);
+    expect(quoteRetryable(40901, 1, false)).toBe(true);
+    // F4（第二轮审计 2026-10-11）：账号被拉黑，重试永远不会成功
+    for (const code of [40401, 40906, 40912, 40916])
+      expect(quoteRetryable(code, 1, false), String(code)).toBe(false);
+    expect(quoteRetryable(40301, 1, true)).toBe(false);
+    expect(quoteRetryable(40001, 51, false)).toBe(false);
+    expect(quoteRetryable(40001, 3, false)).toBe(true);
+  });
+
+  /**
+   * 规律排查（本轮）：40301 里只有"被拉黑"重试无用。另一个买家可达的成因是**源站校验失败**
+   * （`server/src/http.ts` 的 `origin_not_verified`，只接受经 Cloudflare 的流量）——
+   * 那是基础设施故障，修好之后重试是**有效**的。原先这里 `code === 40301` 一律返回 false，
+   * 于是 CF 头注入坏掉时，全体买家不但读到"账号已被限制"，连「重试」按钮都没有——
+   * 只能去找客服，而客服查不出任何问题（规律①：修一处不扫同类）。
+   */
+  it('🔴 40301 但成因不是拉黑（源站校验失败）→ 仍给「重试」；被拉黑才不给', () => {
+    expect(quoteRetryable(40301, 1, false)).toBe(true);
+    expect(quoteRetryable(40301, 1, true)).toBe(false);
   });
 });
 
@@ -356,11 +369,22 @@ describe('第二轮审计 2026-10-11：购物车结算提示（F2 / F4）', () =
     expect(changed.hint).not.toContain('数量已改');
   });
 
-  it('🔴 F4 账号受限（40301）：提示说账号受限，不说"稍后重试"', () => {
-    const g = checkoutGate({ hasError: true, errorCode: 40301, lineCount: 1 });
+  it('🔴 F4 账号被拉黑（40301 + blocked）：提示说账号受限，不说"稍后重试"', () => {
+    const g = checkoutGate({ hasError: true, errorCode: 40301, errorBlocked: true, lineCount: 1 });
     expect(g.disabled).toBe(true);
     expect(g.hint).toContain('账号');
     expect(g.hint).not.toContain('稍后重试');
+  });
+
+  /**
+   * 规律排查（本轮）：40301 的成因不止一种，**源站校验失败**（`origin_not_verified`）买家同样碰得到。
+   * 原先 `quoteErrorHint` 照码判，把一次基础设施故障说成"你的账号被限制使用"——
+   * 买家去找客服，客服那边一切正常（规律①：修一处不扫同类）。
+   */
+  it('🔴 40301 但不是拉黑（源站校验失败）→ 说"稍后重试"，不说账号被限制', () => {
+    const g = checkoutGate({ hasError: true, errorCode: 40301, errorBlocked: false, lineCount: 1 });
+    expect(g.hint).not.toContain('账号');
+    expect(g.hint).toContain('稍后重试');
   });
 });
 
