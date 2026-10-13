@@ -34,7 +34,7 @@
     <swiper class="gallery" indicator-dots>
       <swiper-item wx:for="{{product.images}}" wx:key="*this">
         <!-- M-18（AJ-406）：首张之外的图滑到附近才加载（swiper 内 lazy-load 生效范围【需真机确认】） -->
-        <image class="gallery-image" src="{{item}}" mode="aspectFit" lazy-load="{{index > 0}}" />
+        <image class="gallery-image" src="{{item}}" mode="aspectFit" lazy-load="{{index > 0}}" webp="{{true}}" />
       </swiper-item>
     </swiper>
 
@@ -149,7 +149,7 @@
           aria-label="查看 {{item.title}}"
         >
           <view class="ws-media ws-media--square">
-            <image class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
+            <image class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load webp="{{true}}" />
           </view>
           <text class="ws-body related__title">{{item.title}}</text>
           <ws-price jpy="{{item.priceJpy}}" size="sm" />

@@ -55,7 +55,7 @@
         <!-- A6（AJ-416）：缩略图（外层管宽度、里层管正方形，@see media-square.unit.test.ts） -->
         <view class="item__thumb">
           <view class="ws-media ws-media--square">
-            <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
+            <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load webp="{{true}}" />
           </view>
         </view>
         <!-- 全入口点击测试 2026-10-11：单价来自报价（rowsWithQuotePrice），报价没回来时不显示 -->

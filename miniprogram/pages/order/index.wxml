@@ -66,7 +66,7 @@
       <view class="order-card__body">
         <view class="order-card__thumb">
           <view class="ws-media ws-media--square">
-            <image class="ws-media__img" src="{{item.thumb}}" mode="aspectFill" lazy-load />
+            <image class="ws-media__img" src="{{item.thumb}}" mode="aspectFill" lazy-load webp="{{true}}" />
           </view>
         </view>
         <view class="order-card__meta">

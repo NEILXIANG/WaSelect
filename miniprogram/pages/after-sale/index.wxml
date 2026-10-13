@@ -23,7 +23,7 @@
       <view class="ws-card as__brief">
         <view class="as__thumb">
           <view class="ws-media ws-media--square">
-            <image wx:if="{{brief.image}}" class="ws-media__img" src="{{brief.image}}" mode="aspectFill" />
+            <image wx:if="{{brief.image}}" class="ws-media__img" src="{{brief.image}}" mode="aspectFill" webp="{{true}}" />
           </view>
         </view>
         <view class="as__brief-body">

@@ -57,7 +57,7 @@
               aria-label="查看 {{item.title}} 详情"
             >
               <view class="ws-media ws-media--square">
-                <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load />
+                <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load webp="{{true}}" />
               </view>
             </view>
             <view class="row-item__body">
