@@ -404,6 +404,54 @@ export function checkoutItems(args) {
     : [];
 }
 
+/**
+ * 结算页的**空态文案**：没东西可结有三种成因，必须说三句话。
+ *
+ * @why "结算页没东西可结" ≠ "购物车是空的"，三种成因各自的下一步也不同：
+ *      ① 购物车真的空 → 去逛一逛（说"购物车是空的"是对的）；
+ *      ② **购物车里有货但一件都没勾**（三端联调实测 2026-10-12：车里躺着 3 种共 5 件、
+ *         一件没勾，结算页却写着"购物车是空的"）→ 买家读成"我的东西丢了"，
+ *         而真相是"回购物车勾选"，**文案说错 = 把人指去一个不存在的问题上**；
+ *      ③ 立即购买的单件被进程回收弄丢 → 那件商品本来就不在车里（index.js 已注释的道理）。
+ *      ②③ 是同一条规则的两个分支：都已在本函数内一处收口。
+ *
+ * @why 收在本 vm 而不是留在 `index.js` 里拼接：这是"下一步做什么"的判断，
+ *      属于页面逻辑（约束十一），且必须可测——文案写错的失效形态是静默的
+ *      （谁都不报错，只是买家被指错方向）。
+ *
+ * @param {{mode?: string, cartCount?: unknown}} args `cartCount` = 购物车里的**品种数**
+ * @returns {string} 结算页空态文案
+ * @limitation cartCount 只用于"空或不空"与计数，文案里的数字是**品种数**不是总件数
+ *             （3 种共 5 件时说"3 种"，说"5 件"会让买家对着数量对不上）。
+ */
+export function checkoutEmptyText(args) {
+  const a = args !== null && typeof args === 'object' ? args : {};
+  if (a.mode === BUY_NOW_MODE) {
+    return '这件商品的购买信息已失效，请回到商品页重新点"立即购买"';
+  }
+  const n = Number.isInteger(a.cartCount) ? a.cartCount : 0;
+  if (n > 0) return `购物车里还有 ${n} 种商品，先回购物车勾选要结算的`;
+  return '购物车是空的';
+}
+
+/**
+ * 空态按钮去哪：与 `checkoutEmptyText` 同参数、同分支，**必须一起改**。
+ *
+ * @why 文案说"回购物车勾选"，按钮就得去购物车——"提示里点名的按钮要做它说的事"
+ *      与文案本身是同一条规则（CLAUDE.md 交付自检：文案承诺的结果要真的发生）。
+ *      三端联调截图实测 2026-10-12：文案修完按钮还写着"去逛逛"（跳首页），
+ *      买家照文案找购物车、照按钮回首页，两头都对不上。
+ *
+ * @returns {'cart'|'home'} 车里有货没勾 → `'cart'`（switchTab 购物车）；
+ *                          车真空 / 立即购买失效 → `'home'`（老行为不变）。
+ */
+export function checkoutEmptyAction(args) {
+  const a = args !== null && typeof args === 'object' ? args : {};
+  if (a.mode === BUY_NOW_MODE) return 'home';
+  const n = Number.isInteger(a.cartCount) ? a.cartCount : 0;
+  return n > 0 ? 'cart' : 'home';
+}
+
 /** 建单成功后是否从购物车移除买走的那几件（A3 起只移除勾选结算的）：立即购买不动购物车（车里的东西用户没打算现在买）。 */
 export function clearsCartAfterOrder(mode) {
   return mode !== BUY_NOW_MODE;

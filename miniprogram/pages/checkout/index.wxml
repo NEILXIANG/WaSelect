@@ -73,7 +73,7 @@
   <view class="ws-gutter ws-section" wx:else>
     <view class="ws-card state">
       <text class="ws-note">{{emptyText}}</text>
-      <ws-button text="去逛逛" type="default" bindtap="onGoShopping" />
+      <ws-button text="{{emptyAction === 'cart' ? '回购物车' : '去逛逛'}}" type="default" bindtap="onGoShopping" />
     </view>
   </view>
 

@@ -26,6 +26,8 @@
  */
 import {
   BUY_NOW_MODE,
+  checkoutEmptyAction,
+  checkoutEmptyText,
   checkoutItems,
   clearsCartAfterOrder,
   contactEmailOf,
@@ -77,7 +79,7 @@ const LEGAL_PAGE = '/pages/legal/index';
 const ORDER_PAGE = '/pages/order/index';
 /** 首页（tab 页，剩余清单 4-8 空态出口）。 */
 const HOME_PAGE = '/pages/home/index';
-/** 购物车（tab 页）：商品已下架时回这里删掉它（联动走查 2026-10-10）。 */
+/** 购物车（tab 页）：商品已下架时回这里删掉它（联动走查 2026-10-10）；车里有货没勾时空态也回这里。 */
 const CART_PAGE = '/pages/cart/index';
 /** 「我的」（tab 页）：客服联系方式在那里（F4：账号受限时错误态去这里）。 */
 const USER_PAGE = '/pages/user/index';
@@ -95,6 +97,8 @@ Page({
     stockRefundNote: STOCK_REFUND_NOTE,
     /** 空态文案（立即购买 / 购物车两种模式说法不同）。 */
     emptyText: '购物车是空的',
+    /** 空态按钮去向（'cart' = 回购物车勾选；'home' = 去首页逛）。 */
+    emptyAction: 'home',
     /** vm `itemRows` 的输出（**不含价格**）。 */
     rows: [],
     /** vm `quoteView` 的输出；null = 还没报价。 */
@@ -182,12 +186,13 @@ Page({
     this.mode = options?.mode === BUY_NOW_MODE ? BUY_NOW_MODE : '';
     const remembered = app.globalData.storage?.getString(EMAIL_KEY) ?? '';
     if (remembered !== '' && this.data.email === '') this.setData({ email: remembered });
-    // 扫描附记：立即购买的单件丢了（进程被回收）时，空态不能说"购物车是空的"——用户的购物车可能并不空
+    // 空态文案与按钮去向由 vm 一处收口（checkoutEmptyText / checkoutEmptyAction 同参数同分支）：
+    // "结算页没东西可结"有三种成因（车空 / 车里有货没勾 / 立即购买的单件丢了），各自的下一步不同；
+    // 文案与按钮必须说同一件事（文案指购物车、按钮就不能去首页）。
+    const emptyArgs = { mode: this.mode, cartCount: app.globalData.cart.items().length };
     this.setData({
-      emptyText:
-        this.mode === BUY_NOW_MODE
-          ? '这件商品的购买信息已失效，请回到商品页重新点"立即购买"'
-          : '购物车是空的',
+      emptyText: checkoutEmptyText(emptyArgs),
+      emptyAction: checkoutEmptyAction(emptyArgs),
     });
   },
 
@@ -646,8 +651,11 @@ Page({
     void this.refresh();
   },
 
-  /** 空态"去逛逛"（剩余清单 4-8）：首页是 tab 页，只能 switchTab。 */
+  /** 空态按钮（剩余清单 4-8 + 2026-10-12：车里有货没勾 → 回购物车，其余 → 去首页）。 */
   onGoShopping() {
-    wxApi.switchTab({ url: HOME_PAGE });
+    // ⚠️ 写成 if/else 而不是三元：tab-nav-guard 只认「目标页是常量」的跳转（AJ-366），
+    //    三元里解析不出目标会被记成"未知跳转"（守卫要求每文件最多 1 条，加白名单=削弱守卫）。
+    if (this.data.emptyAction === 'cart') wxApi.switchTab({ url: CART_PAGE });
+    else wxApi.switchTab({ url: HOME_PAGE });
   },
 });

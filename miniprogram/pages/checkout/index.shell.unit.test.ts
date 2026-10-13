@@ -589,9 +589,11 @@ describe('结算页：不留空页与空态出口（4-8）', () => {
     expect(redirects).toEqual(['/pages/pay/index?orderId=o-1']);
   });
 
-  it('🔴 空态点"去逛逛" → switchTab 首页', () => {
+  it('🔴 空态按钮按 emptyAction 走：本夹具车里有货（没勾）→ switchTab 购物车', () => {
+    // @why 2026-10-12 起"车里有货没勾"的空态按钮是「回购物车」（与文案同一句话），
+    //      不再一律跳首页；"车真空 → 首页"的分支由 vm 的 checkoutEmptyAction 单测覆盖。
     call('onGoShopping');
-    expect(switches).toEqual(['/pages/home/index']);
+    expect(switches).toEqual(['/pages/cart/index']);
   });
 });
 
@@ -602,10 +604,15 @@ describe('结算页：缺货退款说明（4-10）', () => {
 });
 
 describe('结算页：立即购买单件丢失时的空态文案（扫描附记）', () => {
-  it('buynow 模式 → 不说"购物车是空的"；普通模式 → 说"购物车是空的"', () => {
-    expect(page.data['emptyText']).toBe('购物车是空的');
+  it('buynow 模式 → 提"立即购买"；普通模式 → 不提（两种模式不同句）', () => {
+    // @why 这里不断言普通模式的具体句子了：本夹具的购物车**并不空**（车里有货、只是没勾），
+    //      原先写死 '购物车是空的' 等于把"有货没勾"这个真实场景断言成"空的"——
+    //      那正是 2026-10-12 三端联调抓到的文案错（买家车里 3 种 5 件，结算页却说空的）。
+    //      "三种成因三句话"由 vm 的 checkoutEmptyText 单测精确覆盖；这条只守「两种模式不同句」。
+    expect(String(page.data['emptyText'])).not.toContain('立即购买');
     call('onLoad', { mode: 'buynow' });
     expect(String(page.data['emptyText'])).toContain('立即购买');
+    call('onLoad', {});
   });
 });
 

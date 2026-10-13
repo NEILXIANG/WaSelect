@@ -14,6 +14,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  BUY_NOW_MODE,
+  checkoutEmptyAction,
+  checkoutEmptyText,
   checkoutItems,
   clearsCartAfterOrder,
   EMAIL_REQUIRED_TEXT,
@@ -635,5 +638,46 @@ describe('rowsWithQuotePrice（商品行单价，来自报价）', () => {
     ).toEqual(['', '']);
     expect(rowsWithQuotePrice(rows, { lines: 'x' }).map((r) => r.priceText)).toEqual(['', '']);
     expect(rowsWithQuotePrice('x', quote)).toEqual([]);
+  });
+});
+
+describe('checkoutEmptyText（结算页空态文案：三种情形三句话）', () => {
+  // @why 三端联调实测 2026-10-12：购物车里躺着 3 种共 5 件、一件都没勾，
+  //      点「去结算」进结算页却写着"购物车是空的"——买家会以为东西丢了。
+  //      这与 buynow 那椿（index.js:185 已修）是**同一条规则的两个分支**：
+  //      "结算页没东西可结"不等于"购物车是空的"。
+  it('🔴 购物车有货但没勾选 → 说"先勾选"，绝不说"空的"', () => {
+    const t = checkoutEmptyText({ cartCount: 3 });
+    expect(t).toContain('勾选');
+    expect(t).not.toContain('空的');
+  });
+
+  it('购物车真的空 → 才说"购物车是空的"（老口径不变）', () => {
+    expect(checkoutEmptyText({ cartCount: 0 })).toBe('购物车是空的');
+  });
+
+  it('立即购买模式：即使购物车有货，也说那一件失效（不复述购物车）', () => {
+    expect(checkoutEmptyText({ mode: BUY_NOW_MODE, cartCount: 3 })).toContain('立即购买');
+  });
+
+  it('脏输入：null / 缺 cartCount → 兜底为"购物车是空的"，不抛', () => {
+    expect(checkoutEmptyText(null as never)).toBe('购物车是空的');
+    expect(checkoutEmptyText({})).toBe('购物车是空的');
+    expect(checkoutEmptyText({ cartCount: '3' })).toBe('购物车是空的');
+  });
+});
+
+describe('checkoutEmptyAction（空态按钮去哪：文案点哪、按钮就去哪）', () => {
+  // @why 三端联调截图实测 2026-10-12：文案刚改成"先回购物车勾选要结算的"，
+  //      按钮却还是"去逛逛"（跳首页）——文案指购物车、按钮去首页，买家两头找不到。
+  //      "文案点名的按钮要做它说的事"与文案本身是同一条规则，必须一起收口。
+  it('🔴 车里有货没勾 → 回购物车（switchTab cart）', () => {
+    expect(checkoutEmptyAction({ cartCount: 3 })).toBe('cart');
+  });
+
+  it('车真空 / 立即购买失效 → 去首页逛（老行为不变）', () => {
+    expect(checkoutEmptyAction({ cartCount: 0 })).toBe('home');
+    expect(checkoutEmptyAction({ mode: BUY_NOW_MODE, cartCount: 3 })).toBe('home');
+    expect(checkoutEmptyAction(null as never)).toBe('home');
   });
 });
