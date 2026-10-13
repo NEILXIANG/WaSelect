@@ -95,13 +95,14 @@ const ENTRIES: Entry[] = [
   },
   {
     file: 'server/src/app/admin-order-fix-routes.ts',
-    publicDataNeedle: 'reason: gate.reason',
-    who: '契约 /admin/orders/{id}/shipment/revert 的 409/40902（data.reason 是契约承诺；读不到只余"状态不允许"）',
+    publicDataNeedle: 'gateError(gate, { order_id: id }, true)',
+    who: '契约 /admin/orders/{id}/shipment/revert 的 409/40902（data.reason 是契约承诺；由 gateError 带 publicReason=true 抛出）',
   },
   {
     file: 'server/src/app/admin-order-fix-routes.ts',
-    publicDataNeedle: "reason: 'status_raced'",
-    who: '同上路由的第二道（与上一条要**同形状**：一个有 data 一个没有，调用方就没法判）',
+    publicDataNeedle:
+      "throw gateError(\n              { ok: false, code: 40902, reason: 'status_raced' },\n              { order_id: id },\n              true,\n            );",
+    who: '同上路由的第二道（与上一条要**同形状**：gateError 同样带 publicReason=true）',
   },
   {
     file: 'server/src/app/admin-order-routes.ts',
@@ -172,16 +173,18 @@ describe('错误成因（reason）必须进响应体才可能被前端读到', (
     const bad: string[] = [];
     for (const e of ENTRIES) {
       const src = readFileSync(resolve(root, e.file), 'utf8');
-      const found = src
-        .split('new AppError')
-        .slice(1)
-        .some((chunk) => {
-          const open = chunk.indexOf('(');
-          if (open < 0) return false;
-          const args = callArgs(chunk, open);
-          const publicData = args[2] ?? '';
-          return publicData.includes(e.publicDataNeedle);
-        });
+      const found = e.publicDataNeedle.includes('gateError')
+        ? src.includes(e.publicDataNeedle)
+        : src
+            .split('new AppError')
+            .slice(1)
+            .some((chunk) => {
+              const open = chunk.indexOf('(');
+              if (open < 0) return false;
+              const args = callArgs(chunk, open);
+              const publicData = args[2] ?? '';
+              return publicData.includes(e.publicDataNeedle);
+            });
       if (!found)
         bad.push(
           `${e.file}：没有一处 AppError 的第 3 个参数含 \`${e.publicDataNeedle}\`` +
