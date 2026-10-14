@@ -125,7 +125,9 @@ function CustomerList({
         </button>
       </form>
 
-      <table className="table">
+      {/* 体验审查 2026-10-15（P2-2）：与订单表 / 商品表同口径——操作列右固定，
+          窄窗口横向滚动时「查看 / 拉黑」不会被挤出视野。 */}
+      <table className="table table-sticky-actions">
         <thead>
           <tr>
             {/* 全入口点击测试 2026-10-11：第一列写能认出人的名字（最近收件人），编号挪到操作前、灰字（原第一列是截短的用户 id） */}
@@ -154,7 +156,11 @@ function CustomerList({
         <tbody>
           {rows.map((r) => (
             <tr key={r.id}>
-              <td>{r.name}</td>
+              {/* 体验审查 2026-10-15（P2-1）：与下面邮箱列同口径——客户名同样是买家自填、
+                  长度不可控。此前只有邮箱做了截断，同一张表里两种处理。 */}
+              <td className="cell-ellipsis" title={r.name}>
+                {r.name}
+              </td>
               <td className="selectable cell-ellipsis" title={r.email}>
                 {r.email}
               </td>

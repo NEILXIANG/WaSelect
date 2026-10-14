@@ -137,7 +137,16 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
                     {a.is_default === true && <Badge tone="info">默认</Badge>}
                   </td>
                   <td className="selectable">{phoneText(a.phone)}</td>
-                  <td className="selectable">{addressLine(a)}</td>
+                  {/* 体验审查 2026-10-15（P2-1）：美式地址（街道, 二行, 城市 州 邮编, 国家）
+                      可长到 80+ 字符，此前既没截断也没 title——看不全只能手动选中复制。
+                      用 clamp-2 而不是 cell-ellipsis：地址要能读到"城市 州"那一段，
+                      单行截断会把最有用的尾巴切掉。⚠️ .clamp-2 不能直接挂在 <td> 上
+                      （-webkit-box 会让单元格脱离表格布局），必须包一层。 */}
+                  <td className="selectable">
+                    <div className="clamp-2" title={addressLine(a)}>
+                      {addressLine(a)}
+                    </div>
+                  </td>
                 </tr>
               ))}
               {c.addresses.length === 0 && (

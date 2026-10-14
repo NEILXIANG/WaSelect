@@ -270,7 +270,11 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
         </p>
       )}
 
-      <table className="table table-actions-reserve">
+      {/* 体验审查 2026-10-15（P2-2）：补 table-sticky-actions——此前只有订单表有右固定操作列。
+          .table-actions-reserve 只给最后一格 min-width（防列宽抖动），不做固定；
+          窗口约 900–1200px 时商品表的「编辑 / 下架」同样会被横向挤出视野，只是因为
+          列数比订单表少（7 列 vs 9 列）而晚一点暴露。两者作用于同一格、不冲突。 */}
+      <table className="table table-actions-reserve table-sticky-actions">
         <thead>
           <tr>
             <th aria-label="图片" />

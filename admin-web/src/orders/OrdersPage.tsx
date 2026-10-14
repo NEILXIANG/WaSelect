@@ -661,7 +661,15 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
               </td>
               <td className="cell-nowrap">{row.totalText}</td>
               <td className="muted cell-nowrap">{row.createdText}</td>
-              <td>{row.recipientText}</td>
+              {/* 体验审查 2026-10-15（P2-1）：本列此前没有任何宽度约束——它是 9 列里唯一裸奔的
+                  （金额 / 下单时间有 cell-nowrap、采购信息有 clamp-2、物流有 ship-cell）。
+                  收件人是买家自填的姓名，长度不可控（美国买家复姓 + 连字符常见），
+                  长名字会把整行撑成 2–3 行——与 app.css .purchase-name 注释里记的
+                  "此列曾被挤成 4–7 行、一屏只剩 3 单"是同一类失效。
+                  截断配 title：客服要照着全名核对，悬停看得到。 */}
+              <td className="cell-ellipsis" title={row.recipientText}>
+                {row.recipientText}
+              </td>
               {/* 承运商与运单号各占一行、不折行：原先 "Japan Post EMS / EM…JP 查件" 被挤成 4 行（2026-10-09 验收） */}
               <td className="muted ship-cell">
                 {row.shipText === ''
