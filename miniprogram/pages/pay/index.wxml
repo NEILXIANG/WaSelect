@@ -120,6 +120,12 @@
         @measured 2026-10-10 开发者工具模拟器：对 #pay-mock 调组件的 onTap（真实 triggerEvent 链路）→
                   页面 onPay 拿到 channel，订单变为 status=paid、payment.channel=mock。
         id 供自动化选中（自动化选不到组件标签名）。
+
+        ⚠️ 在途时（paying）**其它**通道要一并置灰（体验审查 2026-10-15，P3-1）：
+        只有被点那一个转圈时，其余按钮外观完全正常，点了却被 payStartDecision 判 ignore
+        静默返回——用户看到的是"点了没反应"，而页面那个「正在发起支付…」卡片在通道列表下方，
+        视线此刻在按钮上，看不到。
+        loading 与 disabled 按通道二选一：同一个按钮不能既转圈又置灰（disabled 的态会盖掉转圈）。
       -->
       <view class="channel" wx:for="{{channels}}" wx:key="channel">
         <ws-button
@@ -129,6 +135,7 @@
           block
           data-channel="{{item.channel}}"
           loading="{{paying && payingChannel === item.channel}}"
+          disabled="{{paying && payingChannel !== item.channel}}"
           bindtap="onPay"
         />
       </view>
