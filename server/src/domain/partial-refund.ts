@@ -88,6 +88,14 @@ export function fullRefundDisputeLostGuard(
  * 整单退款要退的**余额** = 实收 − 已成功的部分退款；不足 0 按 0（调用方据此拒绝）。
  * @why 先部分退过的单，再按实收全额去退，机构会以"超出可退金额"拒绝——订单就卡死在 refunding。
  */
-export function fullRefundAmount(chargeAmountMinor: number, succeededPartialMinor: number): number {
-  return Math.max(0, chargeAmountMinor - succeededPartialMinor);
+export function fullRefundAmount(
+  chargeAmountMinor: number,
+  succeededPartialMinor: number,
+  lostDisputeMinor = 0,
+): number {
+  // 审计 PAY-09（2026-10-14，AJ-529）：再扣已败诉拒付金额——银行已把那部分退回买家。只有 refunding 的重试能走到这里带着
+  //   败诉金额（非 refunding 的有败诉单被 fullRefundDisputeLostGuard 拦了），原先按实收发起 ⇒ 机构以超额拒绝、订单卡死。
+  // @limitation 同键重放时金额与首次不同，机构会以幂等参数不符拒（4xx）⇒ 记为确认失败、下一次换新键按扣减后的金额发起；
+  //   多一次失败，不会多退（机构按单笔扣款封顶可退金额）。
+  return Math.max(0, chargeAmountMinor - succeededPartialMinor - lostDisputeMinor);
 }

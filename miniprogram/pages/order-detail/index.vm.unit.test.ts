@@ -775,3 +775,19 @@ describe('detailView：待付款剩余时间', () => {
     expect(detailView(pending, { nowMs: at + 1 }).payLeftText).toBe('');
   });
 });
+
+// 审计 BUG-09（2026-10-14）：有进行中的售后申请时不给「确认收货」（服务端也拒 40902 after_sale_open）
+describe('detailView · 售后进行中不给确认收货', () => {
+  it('🔴 shipped + 售后 open / processing → canConfirmReceipt=false；已结案 → true', () => {
+    for (const st of ['open', 'processing']) {
+      expect(
+        detailView({ status: 'shipped', after_sale: { status: st, reason: 'not_received' } })
+          .canConfirmReceipt,
+      ).toBe(false);
+    }
+    expect(
+      detailView({ status: 'shipped', after_sale: { status: 'resolved', reason: 'not_received' } })
+        .canConfirmReceipt,
+    ).toBe(true);
+  });
+});

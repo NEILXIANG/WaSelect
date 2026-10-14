@@ -207,19 +207,21 @@ describe('窄口豁免的四条边（002 的 append-only 防线没被拆）', ()
 });
 
 describe('createUserEventsRepo：写入方的两条边（覆盖率门槛 100% 不许留"没人调过"的分支）', () => {
-  it('append 空批次 → 不发 INSERT、表里零行；existingOrderIds / existingProductIds 空入参 → 空集', async () => {
+  it('append 空批次 → 不发 INSERT、表里零行；ownedOrderIds / existingProductIds 空入参 → 空集', async () => {
     const repo = createUserEventsRepo(db);
     await repo.append({ userId: null, sessionId: 's', traceId: null, reqId: null }, []);
     expect(await count('all')).toBe(0);
-    expect(await repo.existingOrderIds([])).toEqual(new Set());
+    expect(await repo.ownedOrderIds([], 'u-x')).toEqual(new Set());
     expect(await repo.existingProductIds([])).toEqual(new Set());
   });
 
-  it('existingOrderIds 只回真实存在的订单 id（不看归属）', async () => {
+  it('ownedOrderIds 只回本人名下的真实订单 id；匿名（null）→ 空集（审计 PAY-14）', async () => {
     await db`insert into users (id, openid) values ('u-ev', 'o-ev')`;
     await db`insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, fx_snapshot, address_snapshot, terms_version, expires_at)
              values ('o-ev-1', '261009-EVAAAA', 'u-ev', 'created', 100, 100, '{}', '{}', 'TOS', now())`;
     const repo = createUserEventsRepo(db);
-    expect(await repo.existingOrderIds(['o-ev-1', 'o-nope'])).toEqual(new Set(['o-ev-1']));
+    expect(await repo.ownedOrderIds(['o-ev-1', 'o-nope'], 'u-ev')).toEqual(new Set(['o-ev-1']));
+    expect(await repo.ownedOrderIds(['o-ev-1'], 'u-other')).toEqual(new Set());
+    expect(await repo.ownedOrderIds(['o-ev-1'], null)).toEqual(new Set());
   });
 });

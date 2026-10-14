@@ -264,3 +264,17 @@ describe('GET /admin/orders/:id 带出 partial_refunds', () => {
     ]);
   });
 });
+
+// 审计 PAY-09（2026-10-14）：退款中（refunding）的单拒付败诉后再点退款，发给机构的金额要扣掉败诉金额
+describe('refunding + 拒付已败诉 → 整单退款重试金额扣除败诉金额', () => {
+  it('🔴 实收 12000、败诉 5000 → 重试发起 7000', async () => {
+    await seedLostAfterRelease('o-l9', 5000);
+    await db`update orders set status = 'refunding' where id = 'o-l9'`;
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-l9', 'refunding', '买家要求退款', 'admin:u-a', now())`;
+    const r = await post('/api/v1/admin/orders/o-l9/refund', { reason: '买家要求退款' });
+    expect(r.status).toBe(202);
+    const log = srv.sink.find('admin_order_refund_accepted').at(-1);
+    expect((log?.['ctx'] as Record<string, unknown>)['amount_minor']).toBe(7000);
+  });
+});

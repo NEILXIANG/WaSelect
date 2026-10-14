@@ -14,6 +14,7 @@
 import type { Express } from 'express';
 import type { Db } from '../adapters/db.js';
 import type { IdentityCheck } from '../adapters/identity.js';
+import { AFTER_SALE_OPEN_STATUSES } from '@waselect/shared';
 import { AppError } from '../errors.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
@@ -53,6 +54,19 @@ export function mountConfirmReceiptRoutes(app: Express, deps: ConfirmReceiptRout
                 order_id: orderId,
                 reason: row['has_dispute'] === true ? 'dispute_hold' : `status_${s}`,
               });
+            }
+            // 审计 BUG-09（2026-10-14，AJ-529）：有进行中的售后（买家报了"没收到 / 破损"）时不许签收——
+            //   与自动签收作业（adapters/orders.ts autoAdvanceOrders）同一条件，两条签收路径同口径。
+            //   reason 进 data：小程序据此说"售后处理中，结案后再确认"。
+            const [openAs] = await tx`
+              select 1 from after_sale_requests
+               where order_id = ${orderId} and status in ${tx([...AFTER_SALE_OPEN_STATUSES])}`;
+            if (openAs !== undefined) {
+              throw new AppError(
+                40902,
+                { order_id: orderId, reason: 'after_sale_open' },
+                { reason: 'after_sale_open' },
+              );
             }
             await tx`
               update orders set status = 'delivered', delivered_at = ${at}, updated_at = now()

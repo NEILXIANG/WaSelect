@@ -256,3 +256,23 @@ describe('POST /beacon：存储约束与限流', () => {
     );
   });
 });
+
+// 审计 PAY-14（2026-10-14）：order_id 原先只校验存在、不校验归属——匿名或别人都能给任意订单写 pay_start / pay_abandon，污染漏斗
+describe('埋点的 order_id 必须属于当前登录买家', () => {
+  it('🔴 别人的订单 / 匿名带订单 id → 该条丢弃，同批其余照收', async () => {
+    await seedCreatedOrder(db, 'ord-beacon-9', { userId: 'u-1' });
+    await withServer(async (s) => {
+      const ev = (name: string) => ({
+        name,
+        ts: TS,
+        props: { order_id: 'ord-beacon-9', reason: 'back' },
+      });
+      expect(
+        (await beacon(s, { anon_id: ANON, events: [ev('pay_abandon')] }, await tokenFor('u-2')))
+          .status,
+      ).toBe(204);
+      expect((await beacon(s, { anon_id: ANON, events: [ev('pay_abandon')] })).status).toBe(204);
+      expect(await rows()).toHaveLength(0);
+    });
+  });
+});

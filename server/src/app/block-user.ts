@@ -49,6 +49,8 @@ import {
   voidInitiatedPayment,
 } from '../adapters/orders.js';
 import { withUnitOfWork } from './unit-of-work.js';
+import { assertNoPaidSession } from './cancel-order.js';
+import type { PaymentRegistry } from '../ports/payment.js';
 import type { BlockOutcome, RiskAdminRepo } from '../adapters/risk-admin.js';
 
 /** 结果 = 仓储的判别联合 + 连带取消的订单 id（调用方要写日志 / 要能测）。 */
@@ -63,6 +65,12 @@ export interface BlockUserDeps {
   clock: Clock;
   logger: Logger;
   repo: RiskAdminRepo;
+  /**
+   * 审计 PAY-04（2026-10-14，AJ-529）：连带取消前问机构"这张单付了没有"——与买家取消 / 管理端取消同一道
+   * `assertNoPaidSession`。原先第三条取消路径漏了它：买家在托管页已付、回调未到时被拉黑，单被取消、库存回补，
+   * 钱到了只能按迟到付款人工退。
+   */
+  registry: PaymentRegistry;
 }
 
 export interface BlockUserInput {
@@ -90,8 +98,28 @@ export async function blockUser(
   deps: BlockUserDeps,
   input: BlockUserInput,
 ): Promise<BlockUserResult> {
-  const { db, events, clock, logger, repo } = deps;
+  const { db, events, clock, logger, repo, registry } = deps;
   const { userId, orderId } = input;
+
+  // 审计 PAY-04：事务外先问机构（机构调用不进事务，与取消路径同口径）。机构说已付 / 处理中 / 查不到 → 这张单不连带取消：
+  //   已付的等回调落账后进「拉黑用户的已付单」待办；没付的 30 分钟后自动关单。拉黑本身照常生效（下面的事务）。
+  // @limitation 查询与事务之间仍有毫秒级窗口（与取消路径同一个残余，审计 PAY-06）。
+  const held = new Set<string>();
+  const pendingRows = await db<{ id: string }[]>`
+    select id from orders where user_id = ${userId} and status = 'pending_payment'`;
+  for (const r of pendingRows) {
+    try {
+      await assertNoPaidSession({ db, logger, registry }, { orderId: r.id, userId });
+    } catch {
+      held.add(r.id);
+    }
+  }
+  if (held.size > 0) {
+    logger.warn('block_user_orders_held', {
+      result: 'held',
+      ctx: { target_user_id: userId, held: held.size },
+    });
+  }
 
   return withUnitOfWork(db, events, async (tx, emit) => {
     // ── 凭据核对必须在**任何写入之前**（AJ-290）──
@@ -123,6 +151,7 @@ export async function blockUser(
     const actor = input.actor ?? 'admin:block';
     const note = input.note ?? null;
     for (const orderId of orderIds) {
+      if (held.has(orderId)) continue;
       // false = 被并发抢先迁走（恰好落账/关单），不是错误、不发事件（与 expire-orders 同口径）
       if (!(await markOrderCancelled(tx, orderId, userId, at, actor, note))) continue;
       cancelled.push(orderId);

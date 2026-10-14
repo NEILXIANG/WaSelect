@@ -230,10 +230,9 @@ async function recordLatePaid(
     insert into order_events (order_id, status, note, actor, at)
     select ${orderId}, 'late_paid', ${s.providerRef}, ${`provider:${s.channel}`}, ${clock.now()}
      where exists (select 1 from orders where id = ${orderId})
-       and not exists (
-         select 1 from order_events
-          where order_id = ${orderId} and status = 'late_paid' and note = ${s.providerRef}
-       )
+    -- 审计 BUG-13（2026-10-14，AJ-529）：去重交给部分唯一索引 uq_order_events_late_paid（迁移 040）。
+    --   原先 where not exists 在事务外、无锁，并发两条同单号回调都看不到对方 ⇒ 两条凭据。
+    on conflict (order_id, note) where status = 'late_paid' do nothing
   `;
 }
 

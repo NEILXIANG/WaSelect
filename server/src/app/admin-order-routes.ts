@@ -562,7 +562,11 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
               { reason: 'partial_refund_in_flight' },
             );
           }
-          const refundAmountMinor = fullRefundAmount(pay.charge_amount, partials.succeededMinor);
+          const refundAmountMinor = fullRefundAmount(
+            pay.charge_amount,
+            partials.succeededMinor,
+            pay.lost_dispute_minor,
+          );
           if (refundAmountMinor === 0) {
             throw new AppError(
               40902,

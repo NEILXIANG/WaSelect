@@ -41,6 +41,7 @@ import type { Db } from '../adapters/db.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../ports/clock.js';
 import type { EventBus } from '../ports/events.js';
+import type { PaymentRegistry } from '../ports/payment.js';
 import type { AuthConfig } from './auth.js';
 import type { IdentityCheck } from '../adapters/identity.js';
 import { requireRole } from './auth.js';
@@ -58,6 +59,8 @@ export interface AdminRiskRoutesDeps {
   /** 拉黑要发 `order.cancelled`（连带作废机构会话），见 `app/block-user.ts` 文件头。 */
   events: EventBus;
   clock: Clock;
+  /** 审计 PAY-04：拉黑连带取消前查机构会话（@see app/block-user.ts）。 */
+  registry: PaymentRegistry;
 }
 
 /** 仓储行 → 契约 `Dispute`（null / 未知值一律**省略字段**，不填空串或 0）。 */
@@ -167,7 +170,14 @@ export function mountAdminRiskRoutes(app: Express, deps: AdminRiskRoutesDeps): v
           orderId = rawOrderId.trim();
         }
         const outcome = await blockUser(
-          { db: deps.db, events: deps.events, clock: deps.clock, logger: deps.logger, repo },
+          {
+            db: deps.db,
+            events: deps.events,
+            clock: deps.clock,
+            logger: deps.logger,
+            repo,
+            registry: deps.registry,
+          },
           {
             userId: id,
             ...(orderId === undefined ? {} : { orderId }),

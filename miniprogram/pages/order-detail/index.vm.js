@@ -287,11 +287,12 @@ export function detailView(order, opts = undefined) {
   const buyer = buyerStatus(status, { email: contactEmail !== '' });
   const showPay = payable && !confirming;
   const showCancel = PAYABLE.includes(status) && !confirming && !expired;
-  const showConfirmReceipt = status === 'shipped';
+  const afterSale = afterSaleCard(o);
+  // 审计 BUG-09（2026-10-14）：售后进行中不给确认收货（服务端同样拒 40902 after_sale_open）
+  const showConfirmReceipt = status === 'shipped' && afterSale.current?.open !== true;
   // OPS-4：迟到付款的关闭单（钱还没退）不给「再次购买」，说明提到顶部
   const latePaidTop = o.late_paid === true && LATE_PAID_TOP_STATUSES.includes(status);
   const showBuyAgain = BUY_AGAIN_STATUSES.includes(status) && !latePaidTop;
-  const afterSale = afterSaleCard(o);
   const dispute = disputeStatus(o.payment_dispute, o.status);
 
   return {

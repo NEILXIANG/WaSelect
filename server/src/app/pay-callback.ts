@@ -85,6 +85,10 @@ const MISMATCH_REASONS: ReadonlySet<string> = new Set([
 const DISPUTE_OUT_OF_ORDER_REASONS: ReadonlySet<string> = new Set([
   'dispute_id_conflict',
   'dispute_not_open',
+  // 审计 PAY-05（2026-10-14，AJ-529）：拒付比付款落账先到（付款事件处理失败待重发 / 延迟投递）时查不到 succeeded 行。
+  //   原先它直接 mismatch 封口、机构不再重发 ⇒ 付款落账后 has_dispute 永远没人置位，有拒付的单照常可发货。
+  //   宽限期满（24h）仍查不到才落 mismatch——那时才是真的"没收到过钱"。
+  'no_succeeded_payment',
 ]);
 
 /**

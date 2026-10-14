@@ -494,6 +494,8 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
     // B28 / AJ-213：拉黑连带取消在途单并发 `order.cancelled`（作废机构会话）
     events,
     clock,
+    // 审计 PAY-04：连带取消前先问机构会话
+    registry,
   });
 
   // ── 管理端客户（AJ-404）：只读列表 + 详情；拉黑 / 解除复用上面风控的 /admin/users/{id}/block|unblock ──

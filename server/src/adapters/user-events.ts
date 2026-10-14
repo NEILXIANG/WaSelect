@@ -42,23 +42,31 @@ export interface UserEventBatchMeta {
 export interface UserEventsRepo {
   /** 给定 id 里哪些是真实商品（不看上下架：下架商品的详情页也会被看）。 */
   existingProductIds(ids: readonly string[]): Promise<Set<string>>;
-  /** 给定 id 里哪些是真实订单（不看归属，理由见 beacon-routes.ts @limitation）。 */
-  existingOrderIds(ids: readonly string[]): Promise<Set<string>>;
+  /**
+   * 给定 id 里哪些是 **userId 本人的**订单（审计 PAY-14，2026-10-14，AJ-529；原先只看存在不看归属）。
+   * userId 为 null（匿名）→ 空集：匿名请求不能把事件挂到任何订单上。
+   */
+  ownedOrderIds(ids: readonly string[], userId: string | null): Promise<Set<string>>;
   append(meta: UserEventBatchMeta, rows: readonly UserEventRow[]): Promise<void>;
 }
 
 export function createUserEventsRepo(db: Db): UserEventsRepo {
-  const idsIn = async (table: 'products' | 'orders', ids: readonly string[]) => {
+  const productIdsIn = async (ids: readonly string[]) => {
     if (ids.length === 0) return new Set<string>();
-    const found =
-      table === 'products'
-        ? await db<{ id: string }[]>`select id from products where id = any(${[...ids]}::text[])`
-        : await db<{ id: string }[]>`select id from orders where id = any(${[...ids]}::text[])`;
+    const found = await db<
+      { id: string }[]
+    >`select id from products where id = any(${[...ids]}::text[])`;
+    return new Set(found.map((r) => r.id));
+  };
+  const ownedOrderIdsIn = async (ids: readonly string[], userId: string | null) => {
+    if (ids.length === 0 || userId === null) return new Set<string>();
+    const found = await db<{ id: string }[]>`
+      select id from orders where id = any(${[...ids]}::text[]) and user_id = ${userId}`;
     return new Set(found.map((r) => r.id));
   };
   return {
-    existingProductIds: (ids) => idsIn('products', ids),
-    existingOrderIds: (ids) => idsIn('orders', ids),
+    existingProductIds: (ids) => productIdsIn(ids),
+    ownedOrderIds: (ids, userId) => ownedOrderIdsIn(ids, userId),
     async append(meta, rows) {
       if (rows.length === 0) return;
       await db`

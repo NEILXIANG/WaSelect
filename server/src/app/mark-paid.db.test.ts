@@ -508,3 +508,45 @@ describe('已付订单上的第二笔支付（M-02）', () => {
     expect(err.details['reason']).toBeUndefined();
   });
 });
+
+// 审计 BUG-13（2026-10-14）：迟到付款凭据原先用 insert…where not exists 去重，事务外无锁——并发两条同单号回调写出两条。
+describe('迟到付款凭据：同一机构单号只记一条', () => {
+  async function seedOrderAt(id: string, status: string, expiresAt: string): Promise<void> {
+    await db`
+      insert into orders (id, order_no, user_id, status, items_jpy, total_jpy, weight_g,
+                          fx_snapshot, address_snapshot, terms_version, expires_at)
+      values (${id}, ${`W-${id}`}, 'u-mp', ${status}, 1000, 1000, 500,
+              '{}'::jsonb, '{}'::jsonb, 'T', ${expiresAt})
+    `;
+  }
+
+  it('🔴 同一张迟到单并发两次落账 → late_paid 事件恰好一条', async () => {
+    await seedOrderAt('o-late2', 'created', '2026-01-02T00:30:00.000Z');
+    await seedIntent('o-late2');
+    const { events } = bus();
+    const clock = fixedClock('2026-01-02T00:31:00.000Z');
+    const out = await Promise.allSettled([
+      markOrderPaid(db, events, clock, 'o-late2', OK),
+      markOrderPaid(db, events, clock, 'o-late2', OK),
+    ]);
+    // 两次都按"迟到付款"业务冲突返回（回调回 200 转对账），不能有一条变成裸 23505（回调 500、机构重发）
+    for (const r of out) {
+      expect(r.status).toBe('rejected');
+      expect((r as PromiseRejectedResult).reason).toMatchObject({
+        code: 40902,
+        details: { reason: 'late_payment' },
+      });
+    }
+    const evs =
+      await db`select note from order_events where order_id = 'o-late2' and status = 'late_paid'`;
+    expect(evs).toHaveLength(1);
+  });
+
+  it('🔴 库层兜底：直接插入第二条同 (order_id, note) 的 late_paid → 23505', async () => {
+    await seedOrderAt('o-late3', 'created', '2026-01-02T00:30:00.000Z');
+    const ins = () => db`insert into order_events (order_id, status, note, actor, at)
+                         values ('o-late3', 'late_paid', 'pi_dup', 'provider:stripe', now())`;
+    await ins();
+    await expect(ins()).rejects.toMatchObject({ code: '23505' });
+  });
+});

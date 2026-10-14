@@ -28,6 +28,7 @@ import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 import { createRiskAdminRepo } from '../adapters/risk-admin.js';
 import { blockUser, type BlockUserResult } from './block-user.js';
 import { markOrderPaid } from './mark-paid.js';
+import type { PaymentProvider, PaymentRegistry, SessionStatus } from '../ports/payment.js';
 import type { PaidSettlement } from './mark-paid.js';
 
 const NOW = new Date('2026-01-02T12:00:00.000Z');
@@ -83,12 +84,50 @@ async function seedInitiatedPayment(payId: string, orderId: string): Promise<voi
   `;
 }
 
+/** 会报会话状态的 stub 通道（审计 PAY-04：拉黑连带取消前要先问机构）。默认 unpaid = 原有用例口径不变。 */
+function sessionRegistry(status: SessionStatus): PaymentRegistry {
+  const provider = {
+    channel: 'stripe',
+    capabilities: {
+      currencies: ['USD'],
+      countries: ['*'],
+      entryMode: 'copylink',
+      supportsRefund: false,
+      supportsPartialRefund: false,
+      supportsDispute: false,
+      refundableWhenDisabled: false,
+      supportsSessionQuery: true,
+    },
+    create: () => Promise.reject(new Error('unused')),
+    parseWebhook: () => Promise.reject(new Error('unused')),
+    sessionStatus: () => Promise.resolve(status),
+  } as unknown as PaymentProvider;
+  return {
+    register: () => undefined,
+    get: () => provider,
+    getForRefund: () => provider,
+    getForCallback: () => provider,
+    listAvailable: () => [],
+  };
+}
+
 function makeDeps() {
   const logger = createLogger({ env: 'test', destination: sink });
   // ⚠️ 必须**共用同一个总线实例**：各造一个的话，订阅者挂在 A 上、事件发到 B 上，
   //    "事件被分发"这条断言会永远绿（[] 就等于"没收到"，而没人会发现）。
   const events = createEventBus(logger);
-  return { logger, events, deps: { db, events, clock, logger, repo: createRiskAdminRepo(db) } };
+  return {
+    logger,
+    events,
+    deps: {
+      db,
+      events,
+      clock,
+      logger,
+      repo: createRiskAdminRepo(db),
+      registry: sessionRegistry('unpaid'),
+    },
+  };
 }
 
 /** 收窄判别联合：不是 `blocked` 就把测试打红（漏掉这条会让"没封上"静默通过）。 */
@@ -272,5 +311,36 @@ describe('blockUser 的订单凭据（ADM3-01 纵深防御 / AJ-290）', () => {
     const out = await blockUser(deps, { userId: 'u-b' });
     expect(out.kind).toBe('blocked');
     expect(await statusOf('o-a')).toBe('cancelled');
+  });
+});
+
+// 审计 PAY-04（2026-10-14）：买家已在机构托管页付款、回调未到时被拉黑——原先连带取消照做，钱变迟到付款、库存被回补再卖
+describe('拉黑连带取消：机构说已付的待付款单不取消', () => {
+  it('🔴 pending_payment + 在途支付行 + 机构 paid → 订单不取消、库存不回补', async () => {
+    await seedProduct('p-h', 5, 1);
+    await seedOrder('o-held', 'pending_payment');
+    await seedItem('oi-held', 'o-held', 'p-h', 1);
+    await db`insert into payments (id, order_id, provider, provider_ref, status, charge_currency, charge_amount)
+             values ('pay-held', 'o-held', 'stripe', 'cs_held', 'initiated', 'USD', 1000)`;
+    const { deps } = makeDeps();
+    const out = blocked(
+      await blockUser({ ...deps, registry: sessionRegistry('paid') }, { userId: 'u-b' }),
+    );
+    expect(out.cancelledOrderIds).toEqual([]);
+    expect(await statusOf('o-held')).toBe('pending_payment');
+    expect(await stockOf('p-h')).toBe(4);
+  });
+
+  it('机构 unpaid → 照常取消并回补', async () => {
+    await seedProduct('p-u', 5, 1);
+    await seedOrder('o-unp', 'pending_payment');
+    await seedItem('oi-unp', 'o-unp', 'p-u', 1);
+    await db`insert into payments (id, order_id, provider, provider_ref, status, charge_currency, charge_amount)
+             values ('pay-unp', 'o-unp', 'stripe', 'cs_unp', 'initiated', 'USD', 1000)`;
+    const { deps } = makeDeps();
+    const out = blocked(await blockUser(deps, { userId: 'u-b' }));
+    expect(out.cancelledOrderIds).toEqual(['o-unp']);
+    expect(await statusOf('o-unp')).toBe('cancelled');
+    expect(await stockOf('p-u')).toBe(5);
   });
 });

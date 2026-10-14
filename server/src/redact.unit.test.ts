@@ -566,3 +566,20 @@ describe('redact：Date 值（S-02）', () => {
     expect(redact({ at: new Date(Number.NaN) })).toEqual({ at: null });
   });
 });
+
+// 审计 PAY-15（2026-10-14）：自由文本里只认 + 开头的国际电话；运营在备注 / 退款原因里写的本地号码原样进日志与审计
+describe('自由文本里的本地电话也被掩码', () => {
+  it('🔴 中国手机 / 日本手机 / 美国带分隔符号码 → 只留后 4 位', () => {
+    expect(maskText('买家电话 13812345678 说周五后再发')).not.toContain('13812345678');
+    expect(maskText('tel 090-1234-5678')).not.toContain('1234-5678');
+    expect(maskText('call (415) 555-0123 please')).not.toContain('555-0123');
+    expect(maskText('买家电话 13812345678')).toContain('5678');
+  });
+
+  it('不误伤：订单号、时间戳、金额、日期', () => {
+    expect(maskText('W20260922-000001')).toBe('W20260922-000001');
+    expect(maskText('261013-V9B15M')).toBe('261013-V9B15M');
+    expect(maskText('at 1791937351000')).toBe('at 1791937351000');
+    expect(maskText('amount=12800 JPY on 2026-10-13')).toBe('amount=12800 JPY on 2026-10-13');
+  });
+});

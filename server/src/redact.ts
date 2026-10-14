@@ -278,6 +278,15 @@ function isCardLike(raw: string): boolean {
 const INTL_PHONE_RE = /\+\d[\d\s-]{7,}\d/g;
 
 /**
+ * 本地格式电话（审计 PAY-15，2026-10-14，AJ-529）：中国 11 位手机、日本 0X0 手机、美国带分隔符的 10 位号码。
+ * @why 运营在备注 / 退款原因 / 售后说明里写的号码多半不带 `+`，原先只认国际格式 ⇒ 原样进日志与 admin_audit。
+ * @why 两侧要求"非数字"边界：时间戳（13 位）、订单号（W20260922-000001 / 261013-V9B15M）、金额不会被切出一段误伤。
+ * @limitation 不带分隔符的美国 10 位号码不认（与普通 10 位数字分不开）；它在敏感键名下仍由键名层掩码。
+ */
+const LOCAL_PHONE_RE =
+  /(?<![\d-])(?:1[3-9]\d{9}|0[789]0[-\s]?\d{4}[-\s]?\d{4}|\(\d{3}\)\s?\d{3}[-.\s]\d{4}|\d{3}[-.]\d{3}[-.]\d{4})(?![\d-])/g;
+
+/**
  * 微信 openid：**恰好 28 位**，形如 `o6_bmjrPTlm6_2sgVt7hMZOPfL2M`。
  *
  * @why 曾经写成 `o` + 20 位以上任意字符，于是我们自己的内部 ID `o_01J8ZK3M7N5P9QRSTVWXY`
@@ -340,6 +349,7 @@ export function maskText(text: string): string {
     )
     .replace(LONG_DIGITS_RE, (m) => (isCardLike(m) ? maskTail(m) : m))
     .replace(INTL_PHONE_RE, (m) => maskTail(m))
+    .replace(LOCAL_PHONE_RE, (m) => maskTail(m))
     .replace(OPENID_RE, (m) => `${m.slice(0, 2)}***${m.slice(-2)}`)
     .replace(CREDENTIAL_TEXT_RE, (m) => {
       // 保留可辨识的前缀（`sk_live_` / `Bearer ` / `eyJ`），值本体抹掉：排障要知道"是哪一类凭证漏了"

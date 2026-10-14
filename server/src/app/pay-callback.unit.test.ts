@@ -501,3 +501,26 @@ describe('拒付乱序宽限期边界（DISPUTE_OUT_OF_ORDER_GRACE_MS）', () =>
     expect(sink.find('callback_settlement_mismatch')[0]?.level).toBe('error');
   });
 });
+
+// 审计 PAY-05（2026-10-14）：拒付早于付款落账到达时查不到 succeeded 行（no_succeeded_payment）——
+// 那是"付款事件还没到 / 处理失败待重发"的乱序，不是永久不符；原先直接 mismatch 封口、不再重发，has_dispute 永不置位。
+describe('拒付早于付款落账（no_succeeded_payment）也按乱序重试', () => {
+  it('🔴 宽限期内 → 503 + 交还租约，不封口', async () => {
+    const applier = (): OutcomeHandler => ({
+      apply: () => Promise.reject(new AppError(40902, { reason: 'no_succeeded_payment' })),
+      result: RESULT_DISPUTED,
+      disposition: 'disputed',
+    });
+    const rec = fakeStore({ elapsedMs: 60_000 });
+    const { d } = deps(rec, async () => undefined, 900_000, { disputed: applier() });
+    const out = await handleProviderCallback(
+      d,
+      'stripe',
+      RAW,
+      event({ outcome: 'disputed', rawType: 'charge.dispute.created' }),
+    );
+    expect(out).toMatchObject({ disposition: 'early', status: 503 });
+    expect(rec.released).toEqual(['tok-1']);
+    expect(rec.finished).toHaveLength(0);
+  });
+});

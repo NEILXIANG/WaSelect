@@ -138,3 +138,13 @@ describe('fullRefundAmount（整单退款要退的余额）', () => {
     expect(fullRefundAmount(8160, 9000)).toBe(0);
   });
 });
+
+// 审计 PAY-09（2026-10-14）：refunding 的单拒付败诉后，重试整单退款按实收全额发起，机构以超额拒绝、订单卡死在 refunding。
+describe('fullRefundAmount 扣除已败诉拒付金额', () => {
+  it('🔴 实收 12000、部分退款 0、败诉 5000 → 7000；不足 0 按 0', () => {
+    expect(fullRefundAmount(12000, 0, 5000)).toBe(7000);
+    expect(fullRefundAmount(12000, 3000, 5000)).toBe(4000);
+    expect(fullRefundAmount(12000, 8000, 5000)).toBe(0);
+    expect(fullRefundAmount(12000, 1000)).toBe(11000);
+  });
+});

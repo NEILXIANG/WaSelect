@@ -86,3 +86,19 @@ describe('POST /orders/{id}/confirm-receipt（P2-13）', () => {
     expect(o?.['status']).toBe('shipped');
   });
 });
+
+// 审计 BUG-09（2026-10-14）：自动签收作业排除有进行中售后的单，买家手动确认收货却不排除——
+// 买家报了"没收到"还能把单签掉，7 天后自动完成，两条签收路径规则不同。
+describe('确认收货：有进行中的售后申请时拒绝', () => {
+  it('🔴 shipped + 售后 open → 409 40902 after_sale_open，状态不动', async () => {
+    await seed('o-9', 'shipped');
+    await db`insert into after_sale_requests (id, order_id, user_id, reason, description, status, created_at, updated_at)
+             values ('as-o-9', 'o-9', 'u-b', 'not_received', '一直没收到', 'open', now(), now())`;
+    const r = await confirm('o-9');
+    expect(r.status).toBe(409);
+    expect(r.json['code']).toBe(40902);
+    expect(r.json['data']).toMatchObject({ reason: 'after_sale_open' });
+    const [o] = await db`select status from orders where id = 'o-9'`;
+    expect(o?.['status']).toBe('shipped');
+  });
+});

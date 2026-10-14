@@ -13,9 +13,9 @@
  *      丢弃而不整批拒：商品被删、订单 id 来自旧缓存是正常情形，整批拒会连带丢掉同批的合法事件。
  * @why `trace_id` / `req_id` 取本次请求的上下文：小程序发 beacon 时带自己的 `x-trace-id`，
  *      与该用户同一时刻的业务请求是并列的链；事件与业务日志的关联键是 order_id / product_id。
- * @limitation 一：订单存在性**不看归属**（不比对 user_id）：有人往别人的订单 id 上记 pay_abandon，
- *              只会污染统计，不泄露任何东西（响应恒为 204，没有存在性神谕）；按归属过滤还会把
- *              "token 刚过期、降级匿名"的那批支付事件全部丢掉。
+ * @limitation 一：带 order_id 的事件只收**当前登录买家本人**的订单（审计 PAY-14，2026-10-14，AJ-529）。
+ *              原先只看存在不看归属：漏斗"已付款"一步按 order_id 关联订单（adapters/funnel.ts），匿名或别人都能把
+ *              任意已付订单挂到自己的匿名 id 上，抬高转化。代价：token 刚过期、降级匿名的那几条支付事件会被丢弃。
  * @limitation 二：限流沿用公开写入口规则（每 IP 每分钟 RATE_LIMIT_QUOTE_PER_MIN，独立桶 `public.write.beacon`）；
  *              CGNAT 下多人共享出口 IP 会被一起限——埋点本就有损，被限的批次客户端直接丢弃，不重试。
  * @limitation 三：先 await 落库再回 204（不 fire-and-forget）：一条 INSERT + 至多两次主键查询，耗时与普通请求同级；
@@ -67,7 +67,7 @@ export function mountBeaconRoutes(app: Express, deps: BeaconRoutesDeps): void {
           batch.events.flatMap((e) => (typeof e.props[k] === 'string' ? [e.props[k]] : []));
         const [products, orders] = await Promise.all([
           repo.existingProductIds(pick('product_id')),
-          repo.existingOrderIds(pick('order_id')),
+          repo.ownedOrderIds(pick('order_id'), userId),
         ]);
         const kept = batch.events.filter((e) => {
           const p = e.props.product_id;
