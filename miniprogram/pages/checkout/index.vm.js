@@ -126,7 +126,7 @@ export function addressFailedText(blocked) {
  *          emailError?: string, contactEmail?: string, splitRequired?: boolean,
  *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean, buyNow?: boolean,
  *          productGone?: boolean, quoteErrorCode?: number, addressFailed?: boolean,
- *          quoteBlocked?: boolean, addressBlocked?: boolean}} state
+ *          quoteBlocked?: boolean, addressBlocked?: boolean, refreshing?: boolean}} state
  * @why `quoteErrorCode`（F4，第二轮审计 2026-10-11）：停售（40916）的报价失败，原先也说"返回购物车检查商品后重试"——
  *      不是购物车的问题、重试也不会好。`addressFailed`（F5）：地址列表没取到时说"请选择收货地址"，
  *      买家会以为自己的地址丢了、去重新填一遍。
@@ -135,6 +135,11 @@ export function addressFailedText(blocked) {
  *      ⚠️ 判据不在本文件里——调用方传 `isAccountBlocked(e)`（`utils/error-text.js` 的唯一实现），
  *      本文件**不再出现 40301 这个字面量**：照码判会把基础设施故障说成"你的账号有问题"（规律①）。
  *      这两个布尔**取代**了原先的 `addressErrorCode`（它当初只用来比对 40301，没有第二个用途）。
+ * @why `refreshing`（体验审查 2026-10-15，P2-8）：重算（换地址返回 / 看条款返回 / 切后台回来）在途时
+ *      地址、报价、条款可能还是**上一轮**的值，闸门拿旧合计放行 ⇒ 提交必然吃 40905。
+ *      此前这一态只挡在 `onSubmit` 与 wxml 的 `disabled="{{… || loading}}"` 上——
+ *      于是按钮**灰着却不给原因**，与"禁用必须说原因"这条本页自立的铁律（`index.wxml`）冲突；
+ *      且"为什么禁用"劈成两处（闸门 + wxml）迟早会漂。现在交给闸门，与其余每一档同一个出口。
  * @why `termsReady` / `termsFailed` / `quoteFailed` 三项（AJ-228）：
  *      条款版本没取到时 `orderBody` 会抛一句**给开发者看的**报错，此前闸门不看它，
  *      于是那句话被原样摆到用户面前；报价**失败**与报价**还没回来**此前是同一句"还在计算中"，
@@ -171,6 +176,8 @@ function gateCore(state) {
     };
   }
   if (s.termsFailed === true) return { ok: false, reason: '用户协议暂时取不到，请稍后再试' };
+  // P2-8：正在重算时**闸门自己挡**（排在"加载协议中"之后：协议那句更具体，且它自己也在重取）
+  if (s.refreshing === true) return { ok: false, reason: '正在重新计算运费与合计…' };
   if (s.termsReady === false) return { ok: false, reason: '正在加载用户协议…' };
   if (s.termsAccepted !== true)
     return { ok: false, reason: '请先阅读并同意用户协议', fix: 'terms' };

@@ -83,6 +83,32 @@ describe('submitGate（提交闸门）', () => {
     expect(submitGate(null as never).ok).toBe(false);
   });
 
+  /**
+   * 体验审查 2026-10-15（P2-8）：重算在途原本只挡在 `onSubmit` 与 wxml 的 `disabled … || loading` 上，
+   * 于是按钮**灰着却不给原因**——与"禁用必须说原因"这条本页自立的铁律冲突。现在它是闸门的一档。
+   */
+  it('🔴 重算在途（refreshing）→ 闸门关闭并说出原因；旧合计还在也不放行', () => {
+    const g = submitGate({ ...OK, refreshing: true });
+    expect(g.ok).toBe(false);
+    expect(g.reason).toBe('正在重新计算运费与合计…');
+    expect(g.fix).toBe('');
+    // 与"合计还没回来"是两种情形：这一档说的是"正在重算"，不是"还在计算中"
+    expect(g.reason).not.toBe(submitGate({ ...OK, totalJpy: null }).reason);
+  });
+
+  it('🔴 重算在途时优先说"正在重算"：此刻的 quoteFailed 是上一轮留下的旧结论', () => {
+    // @why 40905 的重报价走 `refresh({ keepError: true })`（`keepError` 就是要留住旧的失败文案），
+    //      于是 quoteFailed 与 refreshing 会同时为真。说"报价失败、请点重新加载"是让人对着
+    //      一个**已经在跑**的动作再点一次；说"正在重新计算"才是此刻的事实。
+    expect(submitGate({ ...OK, refreshing: true, quoteFailed: true }).reason).toBe(
+      '正在重新计算运费与合计…',
+    );
+    // 重算结束仍失败 → 回到报价失败那句（有出口）
+    expect(submitGate({ ...OK, refreshing: false, quoteFailed: true }).reason).toBe(
+      '报价失败，请点上方「重新加载」重试',
+    );
+  });
+
   // 全入口点击测试 2026-10-11（用户截图问"提交订单这个按钮符合预期吗"）：浅灰禁用按钮看不出能不能点，
   // 条款勾选框还在两屏之下。主流做法：按钮常亮，点了把人带到缺的那一项。`fix` 说明"缺的这一项买家在本页能补"。
   it('🔴 买家在本页能补的三项带 fix：地址 / 条款 / 邮箱；补不了的（报价失败、超上限、条款取不到、地址没取到）fix 为空', () => {

@@ -174,6 +174,9 @@
   <!--
     A2（AJ-416）：合计 + 提交订单固定在底部——原先要滑过商品、地址、合计、邮箱、条款才看得到按钮。
     禁用原因（gate.reason）放在栏的最上方一行，紧挨按钮（禁用不说为什么会被读成"这站坏了"）。
+    ⚠️ 禁用的**唯一判据是 gate**（体验审查 2026-10-15，P2-8）：原先这里还写着 `|| loading`，
+       而"重算在途"进不了闸门 ⇒ 按钮灰着、原因行却是空的；现在它已是闸门的一档
+       （`submitGate` 的 `refreshing`），两边同源。
     合计只用权威报价（quote.hasTotal），没出来时显示"—"。没有商品时不出栏（空态卡片里有"去逛逛"）。
   -->
   <view class="ws-buybar" wx:if="{{rows.length > 0}}">
@@ -190,7 +193,7 @@
           text="{{submitting ? '提交中…' : '提交订单'}}"
           type="primary"
           block="{{true}}"
-          disabled="{{(!gate.ok && !gate.fix) || submitting || loading}}"
+          disabled="{{(!gate.ok && !gate.fix) || submitting}}"
           loading="{{submitting}}"
           bindtap="onSubmit"
         />

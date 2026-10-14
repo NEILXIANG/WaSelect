@@ -229,6 +229,20 @@ Page({
   },
 
   /**
+   * 下拉刷新（体验审查 2026-10-15，P2-9）。
+   * @why 购物车 / 我的 / 首页 / 订单 / 订单详情 / 支付六个页面都开了下拉刷新，唯独结算页没有——
+   *      而它是下单流程中段：地址 / 条款 / 报价任一项偶发失败，此前唯一的出路是退出重进
+   *      （要重新选地址、重新勾条款）。整页错误态有「重新加载」，但 `addressFailed`（只有一行字）
+   *      与 `quoteBlocked` 这两类**非整页错误**没有任何出口。
+   * @why 取完**再**收起动画：`refresh()` 自己吞掉错误并落到 `error` / 各行提示，
+   *      所以这里 await 完一定走得到 stop（同订单页）——失败路径不会一直转圈。
+   */
+  async onPullDownRefresh() {
+    await this.refresh();
+    wxApi.stopPullDownRefresh();
+  },
+
+  /**
    * 重读购物车 + 并发取三条 + 重算闸门。
    * @param {{keepError?: boolean}} [opts] `keepError=true` = **保留**当前错误文案
    *        （B37 / AJ-220 的恢复路径用：重报价之后还得让用户看见"刚才为什么失败"）。
@@ -258,11 +272,16 @@ Page({
       this.quoteRaw = null;
       this.refreshing = false;
       this.setData({ loading: false, quote: null, chargePreview: [] });
+      this.updateGate(); // 同上：在途标志翻了，闸门要跟着翻
       return;
     }
     await Promise.all([this.fetchTerms(), this.fetchAddresses(), this.fetchQuote(items)]);
     this.refreshing = false;
     this.setData({ loading: false });
+    // ⚠️ 必须**再算一次闸门**（体验审查 2026-10-15，P2-8）：三条取数各自收尾时调的那次
+    //   `updateGate()` 都发生在 `refreshing` 还是 true 的时候 ⇒ 闸门停在"正在重新计算…"，
+    //   数据齐了按钮却仍是灰的。在途标志翻转与闸门翻转不在同一个地方就会这样。
+    this.updateGate();
     // M-16：要等报价（金额）与地址（国家）都到了才能查通道，所以排在三条并发之后
     await this.fetchChargePreview();
   },
@@ -429,6 +448,10 @@ Page({
       addressFailed: this.data.addressFailed === true,
       addressBlocked: this.addressBlocked === true,
       productGone: this.data.productGone === true,
+      // 体验审查 2026-10-15（P2-8）：重算在途也交给闸门（原先只有 `disabled … || loading` 挡着 →
+      //   按钮灰着却不给原因）。@why 与 BUG-01 同一件事的两处兑现：这里管"说不说得清"，
+      //   `onSubmit` 里的 `if (this.refreshing === true) return` 管"点不点得动"。
+      refreshing: this.refreshing === true,
     });
     this.setData({ gate });
   },

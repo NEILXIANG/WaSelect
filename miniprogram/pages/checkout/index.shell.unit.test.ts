@@ -64,6 +64,8 @@ interface Modal {
 let modals: Modal[];
 /** 全入口点击测试 2026-10-11：点提交时缺邮箱 → 页面滚到邮箱卡片。 */
 let scrolls: string[];
+/** 体验审查 2026-10-15（P2-9）：下拉刷新收起动画的调用（'stop'）。 */
+let stops: string[];
 /** 地址列表为空（新用户）。 */
 let noAddr: boolean;
 let cartCleared: boolean;
@@ -107,6 +109,7 @@ beforeEach(async () => {
   switches = [];
   modals = [];
   scrolls = [];
+  stops = [];
   noAddr = false;
   cartCleared = false;
   removeManyThrows = false;
@@ -126,6 +129,8 @@ beforeEach(async () => {
     },
     showModal: (o: Modal) => modals.push(o),
     pageScrollTo: (o: { selector: string }) => scrolls.push(o.selector),
+    // P2-9：下拉刷新的收起动画
+    stopPullDownRefresh: () => stops.push('stop'),
     // S5：订单升为 tab 页，40913 的恢复路径改用 switchTab（navigateTo 到 tab 页会被宿主拒绝）
     switchTab: (o: { url: string }) => {
       navigations.push(o.url);
@@ -379,7 +384,9 @@ describe('结算页：连点防线落在 ws-button（约束：页面不得手写
   it('🔴 缺的是买家能补的项（gate.fix 非空）时按钮不置灰——常亮、点了带过去（全入口点击测试 2026-10-11）', () => {
     const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
     const tag = /<ws-button[^>]*bindtap="onSubmit"[^>]*\/>/s.exec(wxml)?.[0] ?? '';
-    expect(tag).toContain('disabled="{{(!gate.ok && !gate.fix) || submitting || loading}}"');
+    // 体验审查 2026-10-15（P2-8）：`|| loading` 已去掉——"重算在途"现在是闸门的一档
+    //   （`submitGate` 的 `refreshing`），它挡着的时候闸门同时给出原因；留着它就是"灰着不说为什么"。
+    expect(tag).toContain('disabled="{{(!gate.ok && !gate.fix) || submitting}}"');
   });
 
   // 两端逐页走查第三轮 2026-10-12：地址卡原先写死"请点上方「重新加载」"，账号受限时上方只有「联系客服」
@@ -467,9 +474,10 @@ describe('结算页薄壳：重报价窗口与两个跳转（MP3-05 / MP3-09 / M
     orderError = apiError(40905, '价格已变动');
     call('onSubmit');
     await settle();
-    // 重报价在途的这一刻：quote 必须已经被置空，闸门落到"还在计算中"
+    // 重报价在途的这一刻：quote 必须已经被置空，闸门关着（P2-8 起闸门自己知道"正在重算"——
+    //   说的是「正在重新计算运费与合计…」，比原先那句"还在计算中"更贴合此刻的事实）
     expect(gate().ok).toBe(false);
-    expect(gate().reason).toContain('计算中');
+    expect(gate().reason).toContain('正在重新计算');
     expect(page.data['quote']).toBeNull();
     // 旧合计还在时闸门是开的 ⇒ 再点一次就是同一个 40905（弱网下能循环好几轮）
     const before = posts.length;
@@ -803,6 +811,34 @@ describe('结算页：刷新在途时不建单', () => {
     call('onSubmit');
     await settle();
     expect(posts).toHaveLength(1);
+  });
+});
+
+/**
+ * 体验审查 2026-10-15（P2-9）：六个页面都开了下拉刷新，唯独结算页没有——而地址 / 条款 / 报价
+ * 任一项偶发失败时，退出重进要重新选地址、重新勾条款。这两个"不报错"的失效形态只能机器钉：
+ * ① json 没开 → `onPullDownRefresh` 永远不会被调用；② 收起动画早于取数 → 用户以为刷新完了。
+ */
+describe('结算页：下拉刷新（P2-9）', () => {
+  it('🔴 页面 json 开了 enablePullDownRefresh（没开 = onPullDownRefresh 永远不会被调用）', () => {
+    const json = JSON.parse(readFileSync(new URL('./index.json', import.meta.url), 'utf8')) as {
+      enablePullDownRefresh?: boolean;
+    };
+    expect(json.enablePullDownRefresh).toBe(true);
+  });
+
+  it('🔴 下拉 → 重取三条，取完才收起动画（先收后取 = 用户以为刷新完了）', async () => {
+    await ready();
+    quoteHold = deferred();
+    const done = call<Promise<void>>('onPullDownRefresh');
+    await settle();
+    expect(page.data['loading']).toBe(true);
+    expect(stops).toEqual([]); // 还在取 → 动画必须还挂着
+    quoteHold.resolve(quote);
+    quoteHold = null;
+    await done;
+    expect(stops).toEqual(['stop']);
+    expect(page.data['loading']).toBe(false);
   });
 });
 
