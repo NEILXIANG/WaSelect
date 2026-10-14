@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Badge } from '../ui/badge.js';
 import { halfWidth } from '../format.js';
 import type { AdminCategory } from './api.js';
+import { useFormDirty } from '../ui/unsaved.js';
 import { categoryDraftErrors } from './view.js';
 
 export function buyerVisibility(c: AdminCategory): {
@@ -32,6 +33,14 @@ export function CategoryRow({
 }): React.JSX.Element {
   const [edit, setEdit] = useState<{ name: string; sort: string } | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  /**
+   * 行内改到一半也要拦"离开"（体验审查 2026-10-15，P2-11）。
+   * @why 全站 `useFormDirty` 的调用点都在**整页表单**与 ops 面板，这一处"半表单"漏了：
+   *      点「编辑」改完名字、误点侧栏 → 什么都不问，改动静默丢失（且没有任何提示）。
+   * @why 没进编辑态时 `edit` 是 null、参照值也给 null ⇒ 不脏（`sameForm` 是 JSON 深比较，
+   *      所以参照值可以现造，不必 memo）。
+   */
+  useFormDirty(edit, edit === null ? null : { name: c.name, sort: String(c.sort) });
   const vis = buyerVisibility(c);
 
   const save = async (): Promise<void> => {

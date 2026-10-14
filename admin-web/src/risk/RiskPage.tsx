@@ -23,6 +23,7 @@ import { getOrder } from '../orders/api.js';
 import { blockUser, listDisputes, type AdminApi } from './api.js';
 import { BlockedUsers } from './BlockedUsers.js';
 import { ReasonInput } from '../ui/ReasonInput.js';
+import { useFormDirty } from '../ui/unsaved.js';
 import {
   blockDoneText,
   BLOCK_CONFIRM_TEXT,
@@ -64,6 +65,14 @@ export function RiskPage({ api }: RiskPageProps) {
   const [blockReason, setBlockReason] = useState('');
   /** 没填原因时标在框下的提示（与客户页同一做法：就近提示、光标进框，第三轮走查 2026-10-12）。 */
   const [reasonError, setReasonError] = useState('');
+  /**
+   * 填了一半的拉黑原因也要拦"离开"（体验审查 2026-10-15，P2-11）。
+   * @why 风控是"查拒付单 → 填原因 → 确认拉黑"的三步流程，原因要**留档**：
+   *      误点侧栏就白写，运营重写一遍的措辞与第一次不同，而审计记的是第一次想说的那句。
+   * @why 与 `SalesPausePanel` 同一写法（`useFormDirty(reason, '')`）：清空后面板收起，
+   *      hook 会自己把这一条注销（`markDirty(key, false)`）。
+   */
+  useFormDirty(blockReason.trim(), '');
   const reasonRef = useRef<HTMLInputElement>(null);
   /** 收起面板：原因与提示一并清空——不然再打开别人的面板，框里还是上一个人的原因。 */
   const closePanel = (): void => {
