@@ -11,7 +11,7 @@
  * @limitation 二：**缺 `today` / `last7` 就抛**，不回落成 0。
  *              ⚠️ 这里最容易写错的一条是"缺字段当 0"——
  *              那会让"接口挂了"在界面上显示成"今天一分钱没卖出去"，
- *              而这个数字会被拿去做经营判断（§8-2 定的"円为主"正是为了这个判断）。
+ *              而这个数字会被拿去做经营判断（§8-2 定的"日元为主"正是为了这个判断）。
  *
  * @see ../../../contracts/api-contract.yaml（AdminSalesOverview）；
  *      ../../../server/src/adapters/dashboard.ts（服务端口径的唯一出处）

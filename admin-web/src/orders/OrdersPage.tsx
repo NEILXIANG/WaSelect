@@ -446,7 +446,9 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
         </label>
         <input
           className="input"
-          placeholder="单号 / 收件人 / 运单号"
+          // 体验审查 2026-10-15（P3-5）：原来写「单号」，与表头的「订单号」不是一个词——
+          // 同屏两个词指同一个东西，新手会犹豫"这两个是不是一回事"。统一用「订单号」。
+          placeholder="订单号 / 收件人 / 运单号"
           // 与服务端同一个上限（shared）：超长关键词服务端会 40001，前端直接不让输（P2-47）
           maxLength={SEARCH_KEYWORD_MAX_LENGTH}
           value={keyword}

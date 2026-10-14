@@ -39,7 +39,7 @@ export function moneyText(jpy: unknown): string {
 /**
  * 币种符号（只在 {@link minorMoneyText} 里用）。
  * @why CNY 用 `CN¥` 而不是 `¥`：`¥` 同时是日元符号，两个币种共用一个符号时
- *      "¥1,234" 到底是 1,234 円还是 12.34 元人民币，只能靠上下文猜——
+ *      "¥1,234" 到底是 1,234 日元还是 12.34 元人民币，只能靠上下文猜——
  *      而金额猜错的代价是客服给客户报错数字。宁可符号笨一点。
  */
 const CURRENCY_SYMBOL: Readonly<Record<string, string>> = { USD: '$', CNY: 'CN¥' };
@@ -48,7 +48,7 @@ const CURRENCY_SYMBOL: Readonly<Record<string, string>> = { USD: '$', CNY: 'CN¥
  * **最小单位整数** → 带币种符号的展示文案（B43 / AJ-214）：`3350 + USD` → `$33.50`。
  *
  * @why 必须显式区分"最小单位"与"主单位"：库里存的、接口传的**一律是最小单位**
- *      （JPY=円，USD=分），而人读的是主单位。少了这一步的表现是 `USD 3350`——
+ *      （JPY=日元，USD=分），而人读的是主单位。少了这一步的表现是 `USD 3350`——
  *      读大 100 倍，**不报错**，客服拿它答复客户、运营拿它判断是否应诉。
  *      且只有美元单会错（日元无小数位，最小单位=主单位），更难被发现。
  * @why 小数位取自 shared 的 `CURRENCY_MINOR_DIGITS` 而不是在这里写 `{JPY:0,USD:2}`：

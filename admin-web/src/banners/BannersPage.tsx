@@ -625,7 +625,10 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
 
         <div className="row2">
           <button type="button" className="btn" disabled={busy} onClick={() => void save()}>
-            {busy ? '提交中…' : '保存'}
+            {/* 体验审查 2026-10-15（P3-4）：新建时标题写「新建 Banner」、按钮却写「保存」——
+                两句说的是同一件事却不是同一个词，运营会犹豫"这是新建还是覆盖"。
+                与商品表单同口径（那里新建时是「保存为草稿」+「保存并上架」，不含糊）。 */}
+            {busy ? '提交中…' : editing === null ? '创建' : '保存'}
           </button>
           {editing !== null && (
             <button type="button" className="link" onClick={() => guarded(startNew)}>

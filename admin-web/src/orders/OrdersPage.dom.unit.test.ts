@@ -56,8 +56,9 @@ const gets = (): Call[] =>
     (c) =>
       c.method !== 'POST' && c.path.includes('/admin/orders') && !/[?&]size=1(&|$)/.test(c.path),
   );
+// 体验审查 2026-10-15（P3-5）：placeholder 由「单号 / …」改为「订单号 / …」——与表头的列名同一个词
 const keywordInput = (el: HTMLElement): HTMLInputElement =>
-  el.querySelector('input[placeholder^="单号"]') as HTMLInputElement;
+  el.querySelector('input[placeholder^="订单号"]') as HTMLInputElement;
 
 afterEach(async () => {
   await mounted?.unmount();

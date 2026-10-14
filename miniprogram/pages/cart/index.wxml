@@ -147,7 +147,12 @@
           <text class="ws-note pick__label">全选</text>
         </view>
         <view class="ws-buybar__sum">
-          <text class="ws-note ws-buybar__label">合计</text>
+          <!--
+            体验审查 2026-10-15（P3-2）：与上面金额卡里的那个标签**同一个词**（原先这里是「合计」、
+            上面是「应付合计」——同一屏同一笔钱两种叫法）。口径：下单前一律「应付合计」，
+            已付 / 关单后是「订单合计」（支付页关单屏已如此）。
+          -->
+          <text class="ws-note ws-buybar__label">应付合计</text>
           <ws-price wx:if="{{quote && quote.hasTotal}}" jpy="{{quote.totalJpy}}" size="md" />
           <text class="ws-note" wx:else>—</text>
         </view>

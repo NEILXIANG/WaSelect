@@ -184,7 +184,8 @@
     <text class="ws-caption ws-buybar__note" wx:if="{{gate.reason}}">{{gate.reason}}</text>
     <view class="ws-buybar__row">
       <view class="ws-buybar__sum">
-        <text class="ws-note ws-buybar__label">应付</text>
+        <!-- 体验审查 2026-10-15（P3-2）：与上面金额区的「应付合计」同一个词（原先这里只写「应付」） -->
+        <text class="ws-note ws-buybar__label">应付合计</text>
         <ws-price wx:if="{{quote && quote.hasTotal}}" jpy="{{quote.totalJpy}}" size="md" />
         <text class="ws-note" wx:else>—</text>
       </view>

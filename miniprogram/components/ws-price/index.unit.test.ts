@@ -115,13 +115,13 @@ describe('ws-price：漏传价格不能显示 0 日元', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const comp = render({});
-      // 这一条是本组件最贵的性质：`0 円` 会被用户读成"免费"
+      // 这一条是本组件最贵的性质：`0 日元` 会被用户读成"免费"
       expect(comp.dom.textContent).toBe('');
       const logged = spy.mock.calls
         .flat()
         .map((c) => String(c))
         .join('\n');
-      expect(logged).toMatch(/金额必须是整数円/);
+      expect(logged).toMatch(/金额必须是整数日元/);
     } finally {
       spy.mockRestore();
     }
