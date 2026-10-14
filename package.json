@@ -26,7 +26,7 @@
     "test:db": "vitest run --project db",
     "test:contract": "vitest run --project contract",
     "test:e2e": "vitest run --project e2e",
-    "test:lint": "vitest run --project lint",
+    "test:lint": "node scripts/run-clean-node.mjs -- node node_modules/vitest/vitest.mjs run --project lint",
     "cov": "vitest run --project unit --project db --project contract --project e2e --coverage",
     "check:node": "node scripts/assert-node-version.mjs",
     "check:contract": "node scripts/check-contract.mjs",

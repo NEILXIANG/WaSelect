@@ -12,6 +12,7 @@ import { createLogger } from '../logger.js';
 import { createEventBus } from '../adapters/event-bus.js';
 import { insertPartialRefund, settlePartialRefund } from '../adapters/order-refunds.js';
 import { applyProviderRefundProgress } from './refund-progress.js';
+import { settleFullRefundFromProvider } from './refund-execution.js';
 
 let db: Db;
 const clock = fixedClock('2026-10-14T03:00:00.000Z');
@@ -133,5 +134,89 @@ describe('applyProviderRefundProgress', () => {
         outcome: 'pending',
       }),
     ).toBe('noop');
+  });
+});
+
+describe('settleFullRefundFromProvider：三个"对不上就 noop"的幂等分支（直测函数体，非上层提前返回）', () => {
+  /**
+   * @why 上面的用例走 `applyProviderRefundProgress`，pending / 对不上是在**上层**（listPartialRefunds
+   *      之前、第 37 行的 `outcome === 'pending'`、第 42 行的部分退款行已落定）就 return 了，
+   *      `settleFullRefundFromProvider` 函数体内部的三处 noop 分支（L219 / L223 / L236）一行都没执行到。
+   *      它们各自是一个**真实防御分支**——机构回调推进整单退款时，任何"对不上"都该静默跳过，
+   *      不能猜、不能动钱（文件头 @why：回调可能晚于管理员手动同步，也可能是我们不认识的退款）。
+   */
+  it('机构报 pending（在途）→ noop：整单退款回调不处理"在途"，等下一条进展', async () => {
+    await seedOrder('o-sp-pd', 'refunding');
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-sp-pd', 'refund_pending', 're_sp_pd', 'admin:u-a', now())`;
+    const out = await settleFullRefundFromProvider(deps().d, {
+      orderId: 'o-sp-pd',
+      refundRef: 're_sp_pd',
+      outcome: 'pending',
+      actor: 'provider:stripe',
+    });
+    expect(out).toBe('noop');
+    expect(await statusOf('o-sp-pd')).toBe('refunding'); // 状态不动
+  });
+
+  it('订单不在 refunding（如已被管理员手动同步成 refunded）→ noop，不动已落定的单', async () => {
+    await seedOrder('o-sp-paid', 'paid');
+    const out = await settleFullRefundFromProvider(deps().d, {
+      orderId: 'o-sp-paid',
+      refundRef: 're_sp_paid',
+      outcome: 'succeeded',
+      actor: 'provider:stripe',
+    });
+    expect(out).toBe('noop');
+    expect(await statusOf('o-sp-paid')).toBe('paid');
+  });
+
+  it('订单在 refunding、单号匹配，但**没有可退的支付行**（pay 为 null）→ noop，不落账', async () => {
+    // seedOrder 已插了一笔 succeeded 支付行；删掉它制造"找不到 succeeded 支付行"的真实形态
+    // （例：迟到付款的单没有封口支付行，见 orders-admin.ts findRefundablePayment 的 @why）
+    await seedOrder('o-sp-nopay', 'refunding');
+    await db`delete from payments where order_id = 'o-sp-nopay'`;
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-sp-nopay', 'refunding', '买家取消', 'admin:u-a', now()),
+                    ('o-sp-nopay', 'refund_pending', 're_sp_nopay', 'admin:u-a', now())`;
+    const out = await settleFullRefundFromProvider(deps().d, {
+      orderId: 'o-sp-nopay',
+      refundRef: 're_sp_nopay',
+      outcome: 'succeeded',
+      actor: 'provider:stripe',
+    });
+    expect(out).toBe('noop');
+    expect(await statusOf('o-sp-nopay')).toBe('refunding');
+  });
+
+  it('订单在 refunding、单号匹配、有支付行，但**没有 refunding 事件**（reason 为 null）→ noop，不落账', async () => {
+    await seedOrder('o-sp-noreason', 'refunding');
+    // 只有 refund_pending 事件，缺 refunding 事件 → findRefundingReason 返回 null
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-sp-noreason', 'refund_pending', 're_sp_noreason', 'admin:u-a', now())`;
+    const out = await settleFullRefundFromProvider(deps().d, {
+      orderId: 'o-sp-noreason',
+      refundRef: 're_sp_noreason',
+      outcome: 'succeeded',
+      actor: 'provider:stripe',
+    });
+    expect(out).toBe('noop');
+    expect(await statusOf('o-sp-noreason')).toBe('refunding');
+  });
+
+  it('机构报的单号与订单"在途那笔"对不上 → noop（不猜：可能是迟到回调或我们不认识的退款）', async () => {
+    await seedOrder('o-sp-mismatch', 'refunding');
+    // 在途单号是 re_expected，机构报的是 re_other —— 对不上就跳过，不动钱
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-sp-mismatch', 'refunding', '买家取消', 'admin:u-a', now()),
+                    ('o-sp-mismatch', 'refund_pending', 're_expected', 'admin:u-a', now())`;
+    const out = await settleFullRefundFromProvider(deps().d, {
+      orderId: 'o-sp-mismatch',
+      refundRef: 're_other',
+      outcome: 'succeeded',
+      actor: 'provider:stripe',
+    });
+    expect(out).toBe('noop');
+    expect(await statusOf('o-sp-mismatch')).toBe('refunding');
   });
 });

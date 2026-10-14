@@ -35,6 +35,18 @@ export default defineConfig({
      */
     passWithNoTests: false,
     environment: 'node',
+    /**
+     * 把 worker 数 cap 到 4（默认 = CPU 核数）。
+     * @why 本机是 12 核，vitest 默认开 12 个 worker 并行 + v8 coverage 的内存开销，
+     *      全量 `npm run cov`（4 个 project 一起跑）峰值内存/CPU 过高，会触发宿主（IDE/沙盒）的
+     *      资源看门狗，进程被 SIGKILL(137)——表现为"偶发、无输出、连日志都写不全"。
+     *      cap 到 4 后峰值骤降，全量 cov 可稳定跑完。
+     * @measured 2026-10-14：默认 12 worker 跑全量 cov 偶发 SIGKILL(137)；
+     *            `--maxWorkers=4` 跑全量 cov → exit 0、10m25s 稳定完成、负载峰值从 ~11 降到 ~7。
+     * @limitation CI（ubuntu-latest，4 核）默认 worker 本就是 4，cap 到 4 对 CI 是 no-op——
+     *            本地 12 核从 12 降到 4，CI 行为不变，"CI 与本地同一条命令"原则不受影响。
+     */
+    maxWorkers: 4,
     // `.claude/worktrees/`：并行分身的工作树（整仓副本），不排除会把另一份代码的测试一并跑进来
     exclude: ['**/node_modules/**', '**/dist/**', '.claude/**'],
     /**
