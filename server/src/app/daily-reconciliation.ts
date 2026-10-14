@@ -368,6 +368,8 @@ async function scanLatePaidUnrefunded(ctx: JobContext<Db>): Promise<AnomalyClass
       from orders o
      where o.status not in ('refunding', 'refunded')
        and exists (select 1 from order_events e where e.order_id = o.id and e.status = 'late_paid')
+       -- 独立排查 2026-10-14 C-6：拒付已败诉 = 银行已退回买家，不再报「未退」
+       and not exists (select 1 from payments p where p.order_id = o.id and p.dispute_status = 'lost')
      order by o.id
      limit ${RECONCILE_IDS_CAP + 1}
   `;

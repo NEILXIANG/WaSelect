@@ -180,7 +180,7 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
           ))}
           {rows.length === 0 && !loading && (
             <tr>
-              <td className="muted" colSpan={5}>
+              <td className="muted" colSpan={6}>
                 还没有配置汇率（展示价会算不出来）
               </td>
             </tr>
@@ -204,6 +204,7 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
           </select>
           <input
             className="input"
+            aria-label="原始汇率"
             placeholder="原始汇率（如 0.0067）"
             value={form.rawRate}
             onChange={(e) => setForm((s) => ({ ...s, rawRate: e.target.value }))}
@@ -211,6 +212,7 @@ export function FxPanel({ api, sink: parentSink }: FxPanelProps) {
           <input
             className="input"
             type="datetime-local"
+            aria-label="生效时间（日本时间，空着表示立即）"
             value={form.effectiveFrom}
             onChange={(e) => setForm((s) => ({ ...s, effectiveFrom: e.target.value }))}
           />

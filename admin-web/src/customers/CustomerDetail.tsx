@@ -122,6 +122,13 @@ export function CustomerDetail({ api, id, onBack }: CustomerDetailProps) {
 
           <span className="label">地址簿</span>
           <table className="table">
+            <thead>
+              <tr>
+                <th>收件人</th>
+                <th>电话</th>
+                <th>地址</th>
+              </tr>
+            </thead>
             <tbody>
               {c.addresses.map((a, i) => (
                 <tr key={a.id ?? i}>

@@ -84,7 +84,7 @@ export function BatchSubmit({
               const d = describeResult(r);
               return (
                 <tr key={r.order_id}>
-                  <td>{noOf.get(r.order_id) ?? r.order_id}</td>
+                  <td>{noOf.get(r.order_id) ?? `（单号未加载）${r.order_id.slice(0, 8)}…`}</td>
                   <td className={d.ok ? 'ok' : 'error'}>{d.text}</td>
                 </tr>
               );

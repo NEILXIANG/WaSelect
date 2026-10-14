@@ -72,6 +72,8 @@ Page({
     retry: { show: false, text: '', disabled: true, note: '' },
     /** 剩余清单 4-2：客服联系方式（utils/support.js）；空数组 = 客服未配置，不显示整张卡。 */
     support: [],
+    /** 体验排查 2026-10-14：客服接口已回来（可能为空）——空时显示「暂未设置」，别让从别页点「联系客服」过来的人扑空 */
+    supportLoaded: false,
     /** 刚复制的是哪一行（'' = 没有）。 */
     supportCopied: '',
     /** M-10 附（AJ-408）：四个订单入口（vm `orderShortcuts`；取到订单前无角标）。 */
@@ -216,7 +218,7 @@ Page({
   async loadSupport() {
     try {
       const res = await app.globalData.api({ url: `${app.globalData.apiBase}/api/v1/support` });
-      this.setData({ support: supportRows(res) });
+      this.setData({ support: supportRows(res), supportLoaded: true });
     } catch {
       // 静默：见上
     }

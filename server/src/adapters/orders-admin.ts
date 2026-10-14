@@ -288,8 +288,10 @@ function attentionWhere(db: Db, a: OrderAttention | undefined, cutoff: Date | un
       return db`exists (select 1 from after_sale_requests a
                          where a.order_id = orders.id and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])})`;
     case 'late_paid':
+      // 独立排查 2026-10-14 C-6：拒付已败诉的（银行已把钱退回买家）不再提醒「去退」——退款侧会拒（AJ-516），提醒只会白跑
       return db`status not in ('refunding', 'refunded')
-                and exists (select 1 from order_events e where e.order_id = orders.id and e.status = 'late_paid')`;
+                and exists (select 1 from order_events e where e.order_id = orders.id and e.status = 'late_paid')
+                and not exists (select 1 from payments p where p.order_id = orders.id and p.dispute_status = 'lost')`;
     case 'blocked':
       return db`status = 'paid'
                 and exists (select 1 from users u where u.id = orders.user_id and u.blocked_at is not null)`;

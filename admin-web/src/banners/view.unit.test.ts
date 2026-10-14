@@ -46,7 +46,7 @@ describe('bannerRows', () => {
     expect(row).toMatchObject({
       id: 'b-1',
       imageUrl: 'https://img.example.com/banners/2026/autumn-sale.png',
-      linkText: '商品：p-shiro-cleansing-oil',
+      linkText: '商品：（商品不在列表里，打开编辑查看）',
       sortText: '10',
       active: true,
       periodText: '2026-10-01 00:00 → 2026-10-15 00:00',

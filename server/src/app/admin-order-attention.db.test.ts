@@ -95,6 +95,11 @@ async function seedAll(): Promise<void> {
   await latePaid('o-late');
   await order('o-late-done', 'refunded');
   await latePaid('o-late-done');
+  // 独立排查 2026-10-14 C-6：迟到付款但拒付已败诉（银行已把钱退回买家）——不该再提醒去退
+  await order('o-late-lost', 'expired');
+  await latePaid('o-late-lost');
+  await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount, dispute_id, dispute_status, dispute_amount)
+           values ('pay-late-lost', 'o-late-lost', 'stripe', 'succeeded', 'USD', 8600, 'dp_1', 'lost', 8600)`;
   await order('o-blk-paid', 'paid', 'u-b');
   await order('o-blk-ship', 'shipped', 'u-b');
   await order('o-plain', 'paid');
@@ -116,7 +121,7 @@ describe('GET /admin/orders?attention=…（AJ-425）', () => {
     expect([r.status, ids(r), r.json['total']]).toEqual([200, ['o-as-open'], 1]);
   });
 
-  it('🔴 late_paid：只含有迟到付款凭据且尚未退款 / 退款中的单', async () => {
+  it('🔴 late_paid：只含有迟到付款凭据且尚未退款 / 退款中的单；拒付已败诉的不进（C-6）', async () => {
     await seedAll();
     expect(ids(await list('attention=late_paid'))).toEqual(['o-late']);
   });

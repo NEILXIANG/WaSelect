@@ -68,10 +68,12 @@ async function ordersTable(
            --   整单已退 = 实付；否则 = 成功的部分退款之和（失败 / 在途的不算）
            case when o.status = 'refunded' then p.charge_amount
                 else (select coalesce(sum(r.amount_minor), 0) from order_refunds r
-                       where r.order_id = o.id and r.status = 'succeeded') end as refunded_minor
+                       where r.order_id = o.id and r.status = 'succeeded') end as refunded_minor,
+           -- 独立排查 2026-10-14 C-5：拒付败诉被银行退回买家的钱不是我们退的，但对账时同样是流出——单列一栏，不混进「已退金额」
+           case when p.dispute_status = 'lost' then coalesce(p.dispute_amount, p.charge_amount) else 0 end as lost_dispute_minor
       from orders o
       left join lateral (
-        select charge_currency, charge_amount from payments
+        select charge_currency, charge_amount, dispute_status, dispute_amount from payments
          where order_id = o.id and status in ('succeeded', 'refunded')
          order by created_at desc, id desc limit 1
       ) p on true
@@ -99,6 +101,7 @@ async function ordersTable(
       '实付币种',
       '实付金额',
       '已退金额',
+      '拒付退回金额',
     ],
     rows: rows.map((r) => [
       str(r['order_no']),
@@ -121,6 +124,9 @@ async function ordersTable(
       r['paid_minor'] === null || r['paid_minor'] === undefined
         ? null
         : paidAmount(r['paid_currency'], r['refunded_minor']),
+      r['paid_minor'] === null || r['paid_minor'] === undefined
+        ? null
+        : paidAmount(r['paid_currency'], r['lost_dispute_minor']),
     ]),
   };
 }

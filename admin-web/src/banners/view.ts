@@ -144,7 +144,7 @@ export function bannerRows(
             ? LINK_LABELS.none
             : `${(LINK_LABELS as Record<string, string>)[type] ?? type}：${
                 type === 'product'
-                  ? (titleOf(id) ?? id)
+                  ? (titleOf(id) ?? '（商品不在列表里，打开编辑查看）')
                   : type === 'category'
                     ? // 三天提交复查 2026-10-12：跳到买家看不到的分类，首页不给点——后台原先照样写"展示中"
                       `${categoryNameOf(id)}${categoryVisibleOf(id) ? '' : '（买家看不到这个分类，点了没反应）'}`

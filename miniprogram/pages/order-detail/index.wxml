@@ -146,7 +146,7 @@
           </view>
           <text class="ws-caption hint" user-select>{{view.afterSale.current.description}}</text>
           <text class="ws-body hint" wx:if="{{view.afterSale.current.note}}" user-select>处理说明：{{view.afterSale.current.note}}</text>
-          <text class="ws-caption hint">提交于 {{view.afterSale.current.atText}}</text>
+          <text class="ws-caption hint" wx:if="{{view.afterSale.current.atText}}">提交于 {{view.afterSale.current.atText}}</text>
         </block>
         <view
           class="track track--act"

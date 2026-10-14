@@ -669,18 +669,23 @@ describe('POST /internal/jobs/daily（D-43 / D-45）', () => {
    * AJ-425（统一结论 5.1 / U10）：迟到付款是"钱已扣、要原路退"的单，此前只在第三类（近 48h 回调异常）里出现一次，
    * 48 小时后就再也不会被报出——而它恰恰需要人去退。本类不设回看上界，退款中 / 已退款的不报。
    */
-  it('🔴 迟到付款未退：5 天前到账、仍未退款的报 late_paid_unrefunded；已退款的不报', async () => {
+  it('🔴 迟到付款未退：5 天前到账、仍未退款的报 late_paid_unrefunded；已退款的、拒付已败诉的不报', async () => {
     const srv = await buildServer({ withSecret: true });
     try {
       await db`
         insert into orders (id, order_no, user_id, status, items_jpy, shipping_jpy, duty_jpy,
                             total_jpy, weight_g, fx_snapshot, address_snapshot, terms_version, expires_at)
         values ('o-lp', 'W-LP-1', 'u-recon', 'expired', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now() - interval '6 days'),
-               ('o-lp-done', 'W-LP-2', 'u-recon', 'refunded', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now() - interval '6 days')`;
+               ('o-lp-done', 'W-LP-2', 'u-recon', 'refunded', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now() - interval '6 days'),
+               ('o-lp-lost', 'W-LP-3', 'u-recon', 'expired', 1000, 0, 0, 1000, 500, '{}'::jsonb, '{}'::jsonb, 'T', now() - interval '6 days')`;
       await db`
         insert into order_events (order_id, status, note, actor, at)
         values ('o-lp', 'late_paid', 'evt-1', 'provider:mock', now() - interval '5 days'),
-               ('o-lp-done', 'late_paid', 'evt-2', 'provider:mock', now() - interval '5 days')`;
+               ('o-lp-done', 'late_paid', 'evt-2', 'provider:mock', now() - interval '5 days'),
+               ('o-lp-lost', 'late_paid', 'evt-3', 'provider:mock', now() - interval '5 days')`;
+      // 独立排查 2026-10-14 C-6：拒付已败诉 = 钱已被银行退回买家，不再报"未退"
+      await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount, dispute_id, dispute_status, dispute_amount)
+               values ('pay-lp-lost', 'o-lp-lost', 'stripe', 'succeeded', 'JPY', 1000, 'dp_lp', 'lost', 1000)`;
       expect((await trigger(srv.url, JOB_SECRET)).status).toBe(202);
       await waitForDailyHeartbeat();
       const hit = srv.sink
