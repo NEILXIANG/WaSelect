@@ -56,8 +56,11 @@ import {
   consumePush,
   isPlainLeftClick,
   markPush,
+  maxScrollTop,
+  readScrollTop,
   rememberScroll,
   scrollTarget,
+  writeScrollTop,
 } from './ui/scroll-memory.js';
 import { ErrorBoundary } from './ui/ErrorBoundary.js';
 import { createErrorReporter, describeThrown } from './ui/error-report.js';
@@ -121,22 +124,37 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
   }, []);
   // 换页后：点出来的回页顶；后退 / 前进回到记下的位置（列表要等取数撑开高度，按帧重试最多约 2 秒）。
   // 以网址串为键：乐观 setRoute 与随后的 hashchange 是同一个网址，只算一次换页
+  // ⚠️ 一律经 `writeScrollTop` / `maxScrollTop`，不直接写 `el.scrollTop`：
+  //    窄屏（≤56rem）滚的是整个文档，`.main` 不滚——直接写它那边就是"点了新页面却停在原处"
+  //    （体验审查 2026-10-15，P1-3；@see ./ui/scroll-memory.ts 的三个读写函数）。
   useLayoutEffect(() => {
     const el = mainRef.current;
     if (el === null) return undefined;
     const target = scrollTarget(routeKey, consumePush());
-    el.scrollTop = 0;
+    writeScrollTop(el, 0);
     if (target === 0) return undefined;
     let frames = 0;
     let raf = 0;
     const tick = (): void => {
-      const max = el.scrollHeight - el.clientHeight;
-      el.scrollTop = Math.min(target, Math.max(0, max));
+      const max = maxScrollTop(el);
+      writeScrollTop(el, Math.min(target, Math.max(0, max)));
       frames += 1;
       if (max < target && frames < 120) raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
+  }, [routeKey]);
+
+  /**
+   * 记位置：宽屏听 `.main` 的滚动，窄屏听**文档**的滚动（两者不会同时滚，所以两个监听都装上是安全的）。
+   * @why 体验审查 2026-10-15（P1-3）：原先只装了 `.main` 的 `onScroll`（下面的 JSX 属性），
+   *      窄屏下 `.main` 压根不派发 scroll 事件 ⇒ `rememberScroll` 一次都没被调用 ⇒
+   *      "后退回到原处"在所有窄屏上都是假的（宽屏实测好用，所以一直没被发现）。
+   */
+  useEffect(() => {
+    const onScroll = (): void => rememberScroll(routeKey, readScrollTop(mainRef.current));
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
   }, [routeKey]);
   /** 当前页面有没有未保存的改动（第一批⑥：由表单页上报，@see ../ui/unsaved.tsx）。 */
   const { dirty, markDirty, clear: clearDirty } = useDirtyRegistry();
@@ -376,9 +394,8 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
         <main
           className="main"
           ref={mainRef}
-          onScroll={() => {
-            if (mainRef.current !== null) rememberScroll(routeKey, mainRef.current.scrollTop);
-          }}
+          // 宽屏：滚的是这一块（窄屏它不滚，位置由上面 window 的监听记；@see P1-3）
+          onScroll={() => rememberScroll(routeKey, readScrollTop(mainRef.current))}
         >
           {/* 页面级错误边界（AJ-421）：一页坏了只换这一块，侧栏照常；换页 / 换一单即复位 */}
           <ErrorBoundary page={view} resetKey={`${view}/${route.id}`} reporter={reporter}>
