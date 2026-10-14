@@ -40,7 +40,9 @@ const ORIGIN_LABELS = { JP: '日本' };
  * @why 写在 vm 常量而不是 wxml：口径变时改这一处，且被单测钉住（提审前必须项，AJ-176 标注）。
  * @limitation 口径本身是店铺级政策，不随商品变；将来若出现"不含关税"的商品，要改成由契约下发。
  */
-export const DUTY_NOTE = '价格含美国关税，国际运费按重量在结算时计算';
+// 体验排查 2026-10-14（用户授权代决）：结算页把关税标成「预估」，这里说「含」——两句并列时要说清：含是谁付，预估是数值；差额不向买家另收
+export const DUTY_NOTE =
+  '价格已含美国关税（关税金额为预估，差额不向你另收），国际运费按重量在结算时计算';
 
 /**
  * 运输流程分段说明（M-03，AJ-405）——**不写天数**。
@@ -56,7 +58,8 @@ export const SHIPPING_STEPS = [
   {
     key: 'last',
     title: '清关派送',
-    detail: '关税已含在商品价内，清关不需要你另外办理或付费，之后派送到你的收货地址',
+    detail:
+      '关税已含在商品价内（预估差额由我们承担），清关不需要你另外办理或付费，之后派送到你的收货地址',
   },
 ];
 
@@ -84,7 +87,7 @@ function guaranteesOf(p) {
       detail: `付款后 ${days} 个工作日内从日本发出；发出不等于送达，运输过程见下方流程`,
     });
   }
-  list.push({ key: 'refund', tag: '缺货整单全额退款', detail: STOCK_REFUND_NOTE });
+  list.push({ key: 'refund', tag: '缺货退款', detail: STOCK_REFUND_NOTE });
   return list;
 }
 

@@ -159,16 +159,18 @@ describe('detailView（描述与规格）', () => {
  *      前端不编；没有就**不出这一条**（写错的承诺比不写更糟）。
  */
 describe('detailView（购买保障，M-03）', () => {
-  it('四条齐全：日本采购直邮 / 含美国关税 / N 个工作日内发出 / 缺货整单全额退款', () => {
+  it('四条齐全：日本采购直邮 / 含美国关税 / N 个工作日内发出 / 缺货退款', () => {
     const g = detailView({ ...PRODUCT, ship_within_business_days: 7 }).guarantees;
     expect(g.map((x: { tag: string }) => x.tag)).toEqual([
       '日本采购 · 日本直邮',
       '价格含美国关税',
       '付款后 7 个工作日内发出',
-      '缺货整单全额退款',
+      '缺货退款',
     ]);
     // 关税口径的说明沿用 DUTY_NOTE 原句（D-32 / D-69②，提审前必须项）
-    expect(g[1]?.detail).toBe('价格含美国关税，国际运费按重量在结算时计算');
+    expect(g[1]?.detail).toBe(
+      '价格已含美国关税（关税金额为预估，差额不向你另收），国际运费按重量在结算时计算',
+    );
     // 缺货退款的说明与结算页、订单详情同一句（STOCK_REFUND_NOTE 真源）
     expect(g[3]?.detail).toBe(STOCK_REFUND_NOTE);
     for (const x of g) expect(x.detail, x.tag).not.toBe('');
@@ -179,11 +181,7 @@ describe('detailView（购买保障，M-03）', () => {
       const tags = detailView({ ...PRODUCT, ship_within_business_days: bad }).guarantees.map(
         (x: { tag: string }) => x.tag,
       );
-      expect(tags, String(bad)).toEqual([
-        '日本采购 · 日本直邮',
-        '价格含美国关税',
-        '缺货整单全额退款',
-      ]);
+      expect(tags, String(bad)).toEqual(['日本采购 · 日本直邮', '价格含美国关税', '缺货退款']);
     }
   });
 
