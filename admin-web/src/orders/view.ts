@@ -750,6 +750,8 @@ export function refundFailureNotice(
   const c = typeof code === 'number' ? code : 0;
   if (c === 40902 && reason === 'partial_refund_in_flight')
     return '有一笔部分退款还在处理中：先到「部分退款」点「同步」拿到结果，再整单退款。';
+  if (c === 40907 && reason === 'dispute_open_released')
+    return '拒付仍在进行中（只是限制被人工解除了）：现在退款，银行若判买家胜诉会再把钱拉回一次。请等拒付结案后再退款。';
   if (c === 40907 && reason === 'dispute_lost')
     return '拒付已败诉：银行已把拒付的钱退回买家，不能整单退款；其余部分如需退给买家，用「部分退款」。';
   if (c === 40902 && reason === 'fully_refunded_by_partials')

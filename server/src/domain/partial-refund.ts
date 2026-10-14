@@ -78,8 +78,12 @@ export function partialRefundGuard(i: PartialRefundInput): AdminGateResult {
 export function fullRefundDisputeLostGuard(
   status: OrderStatus,
   lostDisputeMinor: number,
+  openDispute = false,
 ): AdminGateResult {
   if (status === 'refunding') return { ok: true };
+  // 审计 PAY-07（2026-10-14，AJ-530）：拒付仍在进行中、只是限制被人工解除——退了之后银行若判买家胜诉会再拉回一次。
+  //   发货仍按解除放行（买家拿到货才可能输掉拒付）；退款等结案。
+  if (openDispute) return { ok: false, code: 40907, reason: 'dispute_open_released' };
   if (lostDisputeMinor > 0) return { ok: false, code: 40907, reason: 'dispute_lost' };
   return { ok: true };
 }

@@ -1107,3 +1107,10 @@ describe('amountBreakdown：迟到付款', () => {
     expect(paid).toEqual({ label: '买家实付（关单后才到账，需全额退回）', value: '$54.00' });
   });
 });
+
+// 审计 PAY-07（2026-10-14）：拒付仍在进行中、只是限制被人工解除——服务端拒 40907 dispute_open_released
+describe('refundFailureNotice · 拒付进行中（限制已解除）', () => {
+  it('🔴 说清要等拒付结案，不是"状态不允许"', () => {
+    expect(refundFailureNotice(40907, undefined, 'dispute_open_released')).toContain('结案');
+  });
+});

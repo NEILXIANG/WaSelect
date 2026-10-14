@@ -30,6 +30,7 @@ import {
   STRIPE_EVENT_TYPES,
   STRIPE_SIGNATURE_HEADER,
   DISPUTE_CREATED_SEC,
+  refund,
 } from '../../../../test/factories/stripe.js';
 import {
   createStripeCheckoutProvider,
@@ -1299,6 +1300,18 @@ describe('expireSession（D-50 关单连带：会话立刻死，不等自然过�
     expect(call?.headers?.['idempotency-key']).toBe('expire:cs_test_123');
   });
 
+  // 审计 PAY-02（2026-10-14）：调用方据此决定停还是退避重试
+  it('🔴 4xx（会话已过期 / 已完成）→ ProviderRejectedError；5xx → 普通 Error', async () => {
+    const a = build();
+    a.http.failNext(400, '{"error":{"message":"session not open"}}');
+    await expect(mustExpire(a.provider)('cs_test_a')).rejects.toBeInstanceOf(ProviderRejectedError);
+    const b = build();
+    b.http.failNext(502, 'bad gateway');
+    const err = await mustExpire(b.provider)('cs_test_b').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ProviderRejectedError);
+  });
+
   it('非 2xx → 抛错带会话号（调用方 best-effort 兜住，错误消息是它 warn 日志的素材）', async () => {
     const { http, provider } = build();
     http.failNext(400, '{"error":{"message":"already expired"}}');
@@ -1636,5 +1649,29 @@ describe('charge.refunded 的金额口径（AJ-376：债务登记，F12 改口�
     // outcome 由**事件类型**决定，与退了多少无关
     expect(ev.outcome).toBe('refunded');
     expect(ev.amountMinor).toBe(10_000);
+  });
+});
+
+// 审计 PAY-03（2026-10-14）：契约订阅了 refund.updated / refund.failed，适配器原先不归一化（落 unknown），
+// 本系统发起的 pending 退款只能等管理员再点一次去查；机构侧失败也没人知道。
+describe('refund.updated / refund.failed → refund_updated（退款进展）', () => {
+  it('🔴 Refund 对象 → outcome refund_updated，providerRef = 退款单号，refundStatus 按 status 映射，金额是本次退款额', async () => {
+    const { provider } = build();
+    const ok = signed('refund.updated', {
+      object: refund({ id: 're_ok', status: 'succeeded', amount: 3000, orderId: 'o-77' }),
+    });
+    const ev = await provider.parseWebhook(ok.raw, ok.headers);
+    expect(ev).toMatchObject({
+      outcome: 'refund_updated',
+      orderId: REQ.orderId, // signed() 助手按既有语义把 order_id 覆盖成 REQ.orderId
+      providerRef: 're_ok',
+      refundStatus: 'succeeded',
+      amountMinor: 3000,
+      currency: 'JPY',
+    });
+    const bad = signed('refund.failed', { object: refund({ id: 're_bad', status: 'failed' }) });
+    expect((await provider.parseWebhook(bad.raw, bad.headers)).refundStatus).toBe('failed');
+    const pend = signed('refund.updated', { object: refund({ status: 'requires_action' }) });
+    expect((await provider.parseWebhook(pend.raw, pend.headers)).refundStatus).toBe('pending');
   });
 });

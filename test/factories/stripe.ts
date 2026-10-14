@@ -281,20 +281,45 @@ export const STRIPE_EVENT_TYPES = {
   payCanceled: 'payment_intent.canceled',
   // ── 售后 ──
   refundSucceeded: 'charge.refunded',
+  // 审计 PAY-03（2026-10-14）：退款进展（对象是 Refund，自带 amount 与 status）
+  refundUpdated: 'refund.updated',
+  refundFailed: 'refund.failed',
   disputeCreated: 'charge.dispute.created',
   disputeClosed: 'charge.dispute.closed',
 } as const;
 
 /** 尚未造样本、但契约已列出的事件（用到时必须补，不能永久豁免）。 */
 export const STRIPE_EVENTS_NOT_SAMPLED: readonly string[] = [
-  'refund.updated',
-  'refund.failed',
   'charge.dispute.funds_withdrawn',
   'charge.dispute.funds_reinstated',
 ];
 
 /** 每个事件对应的 `data.object` 形状工厂：造样本时不必自己判断该用哪个。 */
+/**
+ * `data.object` = Refund 的形状（`refund.updated` / `refund.failed` 用）。
+ * @measured(docs.stripe.com/api/refunds/object, 2026-10-14)：Refund 对象字段 `id`（re_…）、`object: "refund"`、
+ *   `amount`（本次退款额，最小单位）、`currency`（小写）、`status`（pending / requires_action / succeeded / failed / canceled）、
+ *   `payment_intent`、`charge`、`metadata`（创建退款时传入的 metadata 原样在这里）、`created`。
+ * @why 带本系统标记：退款由我们创建（stripe-checkout.ts refund() 写 metadata[order_id] 与 metadata[source]）。
+ */
+export function refund(
+  seed: { id?: string; status?: string; amount?: number; orderId?: string } = {},
+): Record<string, unknown> {
+  return {
+    id: seed.id ?? 're_3P0000000000000000000000',
+    object: 'refund',
+    amount: seed.amount ?? 3_000,
+    currency: 'jpy',
+    status: seed.status ?? 'succeeded',
+    payment_intent: 'pi_3P0000000000000000000000',
+    charge: 'ch_3P0000000000000000000000',
+    created: 1_791_900_000,
+    metadata: { order_id: seed.orderId ?? 'sk-sample-order', source: 'waselect', reason: '破损' },
+  };
+}
+
 export function objectForEvent(type: string): Record<string, unknown> {
+  if (type.startsWith('refund.')) return refund();
   if (type.startsWith('checkout.session.')) return checkoutSession();
   if (type.startsWith('payment_intent.')) return paymentIntent();
   if (type.startsWith('charge.dispute.')) return dispute();

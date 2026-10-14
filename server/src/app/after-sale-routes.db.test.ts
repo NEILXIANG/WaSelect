@@ -316,3 +316,17 @@ describe('POST /admin/orders/:id/after-sales/:rid/resolve（运营处理）', ()
     ).not.toContain('after_sale_handled');
   });
 });
+
+// 审计 BUG-10（2026-10-14）：售后资格只看状态，已完成的单永远能申请——而自动完成的含义正是"售后窗口已关"。
+describe('售后时间窗：已完成后 7 天内可申请，超期拒绝', () => {
+  it('🔴 completed 8 天前 → 409 / 40902 after_sale_window_closed；6 天前 → 201', async () => {
+    await seedOrder('o-old', 'completed');
+    await db`update orders set completed_at = now() - interval '8 days' where id = 'o-old'`;
+    const r = await apply(buyer, 'o-old');
+    expect(r.status).toBe(409);
+    expect(reasonOf(r)).toBe('after_sale_window_closed');
+    await seedOrder('o-new', 'completed');
+    await db`update orders set completed_at = now() - interval '6 days' where id = 'o-new'`;
+    expect((await apply(buyer, 'o-new')).status).toBe(201);
+  });
+});

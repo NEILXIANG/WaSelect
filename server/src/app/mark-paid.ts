@@ -261,6 +261,21 @@ async function settle(
     //    @tradeoff cancelled 也归入 late_payment 而不是新造一个 `closed_payment`：运营动作完全相同（退款），
     //    多一个词只多一条对账分支；区分"是过期还是取消"看 `details.from`，日志里有。
     if (CLOSED_UNPAID.has(from)) {
+      // 审计 BUG-08（2026-10-14，AJ-530）：同通道已有 succeeded 支付行 = 这笔钱早已落过账（审核期测试单付款满 24h 被归档成
+      //   cancelled，支付行不动）。机构重投它不是"迟到付款"——原先会写出假的 late_paid 凭据、进「迟到付款待退」待办，
+      //   退款闸门还会因此放行。按普通状态冲突处理（管线记 ignored:status_conflict）。
+      const settled = await tx`
+        select 1 from payments
+         where order_id = ${orderId} and provider = ${settlement.channel} and status = 'succeeded'
+         limit 1`;
+      if (settled.length > 0) {
+        throw new AppError(40902, {
+          from,
+          to: 'paid',
+          where: 'mark-paid',
+          reason: 'already_settled',
+        });
+      }
       // 先核对再判迟到（第三轮缺口 P2-3，AJ-385）：本机实测金额不符的回调被归为 late_payment、记了 late_paid 凭据，
       // 管理端随后按支付行 charge_amount 退款——而实收是另一个数。对不上的走 mismatch 进对账，不留迟到凭据。
       await assertSettlementMatches(tx, orderId, settlement, from);

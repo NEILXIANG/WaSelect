@@ -12,6 +12,7 @@
  *      反过来做的话，机构调用慢/挂会拖住库内作废——而库内行不废，
  *      `uq_payments_one_initiated` 就还占着"在途"的坑。机构侧失败不重试：
  *      会话有自然过期（建会话时给的 expires_at），作废只是让它**立刻**死。
+ *      ⚠️ 审计 PAY-02（2026-10-14）起：结果未知的失败按退避重试（SessionExpiryDeps.retryDelaysMs），确定拒绝不重试。
  *
  * @limitation 一：订阅者在**事务提交后**分发（withUnitOfWork/job 的既定语义），
  *              关单迁移与支付行作废之间有一个窗口期——窗口内 initiated 行还在。
@@ -34,7 +35,11 @@ import type { Db } from '../adapters/db.js';
 import { voidInitiatedPayment } from '../adapters/orders.js';
 import type { EventBus } from '../ports/events.js';
 import type { Logger } from '../logger.js';
-import type { PaymentRegistry } from '../ports/payment.js';
+import {
+  ProviderRejectedError,
+  type PaymentProvider,
+  type PaymentRegistry,
+} from '../ports/payment.js';
 
 /**
  * 需要连带收尾的事件（新增终态事件时在这里登记）。
@@ -53,6 +58,26 @@ export interface SessionExpiryDeps {
   db: Db;
   logger: Logger;
   registry: PaymentRegistry;
+  /**
+   * 作废失败（结果未知）后的重试间隔（毫秒）——审计 PAY-02（2026-10-14，AJ-530）。
+   * @why Stripe 会话最短活 30 分钟，建会话又晚于建单，订单关闭时会话通常还活着（最多多活约 32 分钟）。
+   *      原先作废失败只记 warn、不再管 ⇒ 关单后的托管页仍可付款：钱进来、订单不落账，只能人工退。
+   *      默认 30s / 1 / 2 / 4 / 8 分钟（共约 15 分钟）。
+   * @limitation 进程内计时器：发布 / 重启会丢掉排队中的重试，剩余窗口由会话自然过期兜底。
+   */
+  retryDelaysMs?: readonly number[];
+  /** 计时器注入（测试用）；默认 setTimeout + unref（不拖住停机）。 */
+  setTimer?: (fn: () => void, ms: number) => void;
+}
+
+/** 默认重试间隔（@see SessionExpiryDeps.retryDelaysMs）。 */
+export const SESSION_EXPIRE_RETRY_DELAYS_MS: readonly number[] = [
+  30_000, 60_000, 120_000, 240_000, 480_000,
+];
+
+function defaultTimer(fn: () => void, ms: number): void {
+  const t = setTimeout(fn, ms);
+  t.unref();
 }
 
 /**
@@ -62,6 +87,43 @@ export interface SessionExpiryDeps {
  */
 export function registerSessionExpiryOnClose(bus: EventBus, deps: SessionExpiryDeps): void {
   const log = deps.logger.child({ module: 'session-expiry' });
+  const delays = deps.retryDelaysMs ?? SESSION_EXPIRE_RETRY_DELAYS_MS;
+  const setTimer = deps.setTimer ?? defaultTimer;
+
+  /**
+   * 作废一个会话；结果未知的失败按 `delays` 退避重试。
+   * @why 机构**确定拒绝**（`ProviderRejectedError`，4xx：会话已过期 / 已完成 / 不存在）不重试——会话已经付不了，再打只是噪音。
+   */
+  const expireOnce = async (
+    provider: PaymentProvider & { expireSession: (ref: string) => Promise<void> },
+    ref: string,
+    orderId: string,
+    channel: string,
+    attempt: number,
+  ): Promise<void> => {
+    try {
+      await provider.expireSession(ref);
+      log.info('pay_session_expire', {
+        order_id: orderId,
+        result: 'ok',
+        ctx: { channel, attempt },
+      });
+    } catch (e) {
+      const definite = e instanceof ProviderRejectedError;
+      const delay = definite ? undefined : delays[attempt];
+      log.warn('pay_session_expire', {
+        order_id: orderId,
+        result: definite ? 'rejected' : delay === undefined ? 'failed' : 'retry_scheduled',
+        ctx: { channel, attempt, ...(delay === undefined ? {} : { retry_in_ms: delay }) },
+        err: e instanceof Error ? e.message : String(e),
+      });
+      if (delay !== undefined) {
+        setTimer(() => {
+          void expireOnce(provider, ref, orderId, channel, attempt + 1);
+        }, delay);
+      }
+    }
+  };
 
   const handler = async (event: { orderId?: string | undefined }): Promise<void> => {
     const orderId = event.orderId;
@@ -98,18 +160,13 @@ export function registerSessionExpiryOnClose(bus: EventBus, deps: SessionExpiryD
         continue;
       }
       if (typeof provider.expireSession !== 'function') continue; // 无会话概念的通道（端口 @why）
-      try {
-        await provider.expireSession(String(pay.provider_ref));
-        log.info('pay_session_expire', { order_id: orderId, result: 'ok', ctx: { channel } });
-      } catch (e) {
-        // 不升级、不重试：自然过期兜底（文件头 @why）；err 统一字段进 ctx 外的 err 槽
-        log.warn('pay_session_expire', {
-          order_id: orderId,
-          result: 'failed',
-          ctx: { channel },
-          err: e instanceof Error ? e.message : String(e),
-        });
-      }
+      await expireOnce(
+        provider as PaymentProvider & { expireSession: (ref: string) => Promise<void> },
+        String(pay.provider_ref),
+        orderId,
+        channel,
+        0,
+      );
     }
   };
 

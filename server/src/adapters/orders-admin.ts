@@ -587,6 +587,11 @@ export interface RefundablePaymentRow {
    * @why dispute_amount 缺失（理论上 mark-disputed 总会写）按实收全额算：宁可少退，不可多退。
    */
   lost_dispute_minor: number;
+  /**
+   * 这笔付款上的拒付**仍在进行中**（`dispute_status = 'open'`）——审计 PAY-07（2026-10-14，AJ-530）。
+   * @why 人工解除限制只把 `orders.has_dispute` 置回 false，机构侧拒付照旧进行；此时退款，银行若判买家胜诉会再拉回一次。
+   */
+  open_dispute: boolean;
 }
 
 /**
@@ -622,7 +627,8 @@ export async function findLatePaidPayment(
 ): Promise<RefundablePaymentRow | null> {
   const rows = await db`
     select p.id, p.provider, p.provider_ref, p.charge_currency, p.charge_amount,
-           case when p.dispute_status = 'lost' then coalesce(p.dispute_amount, p.charge_amount) else 0 end as lost_dispute_minor
+           case when p.dispute_status = 'lost' then coalesce(p.dispute_amount, p.charge_amount) else 0 end as lost_dispute_minor,
+           (p.dispute_status = 'open') as open_dispute
       from payments p
       join order_events e
         on e.order_id = p.order_id and e.status = 'late_paid'
@@ -641,6 +647,7 @@ export async function findLatePaidPayment(
     charge_currency: String(r.charge_currency),
     charge_amount: Number(r.charge_amount),
     lost_dispute_minor: Number(r.lost_dispute_minor),
+    open_dispute: r.open_dispute === true,
   };
 }
 
@@ -650,7 +657,8 @@ export async function findRefundablePayment(
 ): Promise<RefundablePaymentRow | null> {
   const rows = await db`
     select p.id, p.provider, p.provider_ref, p.charge_currency, p.charge_amount,
-           case when p.dispute_status = 'lost' then coalesce(p.dispute_amount, p.charge_amount) else 0 end as lost_dispute_minor
+           case when p.dispute_status = 'lost' then coalesce(p.dispute_amount, p.charge_amount) else 0 end as lost_dispute_minor,
+           (p.dispute_status = 'open') as open_dispute
       from payments p where p.order_id = ${orderId} and p.status = 'succeeded'
      order by p.created_at desc
      limit 1
@@ -664,6 +672,7 @@ export async function findRefundablePayment(
     charge_currency: String(r.charge_currency),
     charge_amount: Number(r.charge_amount),
     lost_dispute_minor: Number(r.lost_dispute_minor),
+    open_dispute: r.open_dispute === true,
   };
 }
 

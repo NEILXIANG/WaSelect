@@ -114,7 +114,8 @@ export function mountPartialRefundRoutes(app: Express, deps: PartialRefundRoutes
             const sums = await sumPartialRefunds(tx, id);
             const gate = partialRefundGuard({
               status,
-              hasDispute: row.has_dispute,
+              // 审计 PAY-07：限制被人工解除但拒付仍在进行中，同样拒（40907）
+              hasDispute: row.has_dispute || pay.open_dispute,
               chargeAmountMinor: pay.charge_amount,
               reservedMinor: sums.reservedMinor,
               inFlight: sums.inFlight,

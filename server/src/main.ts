@@ -477,7 +477,25 @@ export function formatStartupError(e: unknown): string[] {
   return [head];
 }
 
+/**
+ * 进程入口要求显式 `NODE_ENV`（审计 PAY-11，2026-10-14，AJ-530）。
+ * @why config schema 里 NODE_ENV 缺省 `development`：部署时漏传，生产闸门（mock 通道禁用、管理员 TOTP、CORS 必配、
+ *      开发登录禁用）全部静默放开，而服务照样起得来、照样能下单。改 schema 必填会牵连大量直接调 loadConfig 的测试，
+ *      所以只在**进程入口**这一处卡：真实部署一定经过这里。
+ * @limitation `scripts/dev-up.ts` 走 bootstrap()、不经这里——它从 .env 读 NODE_ENV，本就是本机开发用。
+ */
+export function assertExplicitNodeEnv(env: Record<string, string | undefined>): void {
+  const v = env['NODE_ENV'];
+  if (typeof v !== 'string' || v.trim() === '') {
+    throw new Error(
+      'NODE_ENV 未设置：进程入口要求显式给值（production / staging / development / test）。' +
+        '缺省按 development 运行会让生产闸门全部失效，所以这里直接拒绝启动。',
+    );
+  }
+}
+
 async function main(): Promise<void> {
+  assertExplicitNodeEnv(process.env);
   await bootstrap();
 }
 

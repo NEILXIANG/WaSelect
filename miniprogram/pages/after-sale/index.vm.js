@@ -62,6 +62,9 @@ export function conflictText(err) {
   const reason = e.data && typeof e.data === 'object' ? e.data.reason : undefined;
   if (reason === 'after_sale_open') return '这笔订单已有进行中的售后申请，请返回订单详情查看进度';
   if (reason === 'status_not_allowed') return '这笔订单当前不能申请售后（已发货后才可以申请）';
+  // 审计 BUG-10（2026-10-14）：已完成超过 7 天（shared AFTER_SALE_DAYS_AFTER_COMPLETE）
+  if (reason === 'after_sale_window_closed')
+    return '这笔订单已完成超过 7 天，不能在线申请售后了；如有问题请在「我的」里联系客服';
   return null;
 }
 

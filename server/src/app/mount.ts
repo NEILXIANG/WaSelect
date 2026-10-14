@@ -52,7 +52,12 @@ import { AppError } from '../errors.js';
 import { markOrderPaid } from './mark-paid.js';
 import { markDisputeClosed, markOrderDisputed } from './mark-disputed.js';
 import { parseDisputeResult } from '../domain/dispute-input.js';
-import { RESULT_DISPUTED, RESULT_DISPUTE_CLOSED, RESULT_PAID } from './webhook-results.js';
+import {
+  RESULT_DISPUTED,
+  RESULT_DISPUTE_CLOSED,
+  RESULT_PAID,
+  RESULT_REFUND_PROGRESS,
+} from './webhook-results.js';
 import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import { rateLimiter, rateLimitRules } from './rate-limit.js';
 import { mountQuoteRoutes } from './quote-routes.js';
@@ -82,6 +87,7 @@ import { mountConfirmReceiptRoutes } from './confirm-receipt-routes.js';
 import { mountPayIntentRoutes } from './pay-intent-routes.js';
 import { mountPayLinkRoutes } from './pay-link-routes.js';
 import { registerSessionExpiryOnClose } from './close-session-events.js';
+import { applyProviderRefundProgress } from './refund-progress.js';
 import { mountAdminExportRoutes } from './admin-export-routes.js';
 import { mountAdminOpsLogRoutes } from './admin-ops-log-routes.js';
 import { mountAdminDashboardRoutes } from './admin-dashboard-routes.js';
@@ -285,6 +291,25 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
         },
         result: RESULT_DISPUTE_CLOSED,
         disposition: 'dispute_closed',
+      },
+      /**
+       * 退款进展（审计 PAY-03，2026-10-14，AJ-530）：本系统发起的退款在机构侧成功 / 失败了。
+       * @see app/refund-progress.ts（匹配规则与对不上时的处理）
+       */
+      refund_updated: {
+        apply: async (e, channel) => {
+          await applyProviderRefundProgress(
+            { db, logger, clock, events },
+            {
+              orderId: e.orderId,
+              channel,
+              refundRef: e.providerRef,
+              outcome: e.refundStatus ?? 'pending',
+            },
+          );
+        },
+        result: RESULT_REFUND_PROGRESS,
+        disposition: 'refund_progress',
       },
     },
   };

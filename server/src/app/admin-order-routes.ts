@@ -539,6 +539,7 @@ export function mountAdminOrderRoutes(app: Express, deps: AdminOrderRoutesDeps):
           const lostGate = fullRefundDisputeLostGuard(
             asOrderStatus(row.status),
             pay.lost_dispute_minor,
+            pay.open_dispute,
           );
           if (!lostGate.ok) {
             throw new AppError(

@@ -36,6 +36,9 @@
  */
 import { withTransaction, type Db } from '../adapters/db.js';
 import {
+  findRefundablePayment,
+  findRefundingReason,
+  findRefundProgress,
   markRefunded,
   recordRefundFailed,
   recordRefundPending,
@@ -201,6 +204,47 @@ export async function executeRefund(
  *      判定用 `plan.request.reason`：路由在重试时已换成**首次**登记的理由（findRefundingReason），所以 pending 之后才落定也认得出。
  *      （本函数原注释以"缺货是最常见的退款原因"作为回补的理由，那一句的方向是反的，已改。）
  */
+/**
+ * 机构回调推进**整单退款**（审计 PAY-03，2026-10-14，AJ-530）：只认"订单在 refunding 且在途单号就是这笔"。
+ * @why 原先在途（pending）的整单退款只能等管理员再点一次去查；机构侧失败也无人知道。
+ * @why 对不上（订单不在退款中 / 单号不是在途那笔）一律 noop：回调可能晚于管理员手动同步到达，也可能是我们不认识的退款，
+ *      不在这里猜。落定走与管理端同一个 `settle`（markRefunded 带状态条件，重复到达只落一次）。
+ * @limitation 控制台手工退款没有我们的 metadata，适配器判为非本系统事件（unknown），不会走到这里。
+ * @returns 'full' = 本次处理了；'noop' = 对不上或无需处理
+ */
+export async function settleFullRefundFromProvider(
+  deps: RefundExecDeps,
+  i: { orderId: string; refundRef: string; outcome: RefundResult['outcome']; actor: string },
+): Promise<'full' | 'noop'> {
+  if (i.outcome === 'pending') return 'noop';
+  const [o] = await deps.db`select status from orders where id = ${i.orderId}`;
+  if (o?.['status'] !== 'refunding') return 'noop';
+  const progress = await findRefundProgress(deps.db, i.orderId);
+  if (progress.pendingRef !== i.refundRef) return 'noop';
+  if (i.outcome === 'failed') {
+    await recordRefundFailed(
+      deps.db,
+      i.orderId,
+      `provider_failed:${i.refundRef}`,
+      i.actor,
+      deps.clock.now(),
+    );
+    return 'full';
+  }
+  const pay = await findRefundablePayment(deps.db, i.orderId);
+  const reason = await findRefundingReason(deps.db, i.orderId);
+  if (pay === null || reason === null) return 'noop';
+  // settle 只读 orderId / paymentId / request.reason / actor（@see settle）
+  const plan = {
+    orderId: i.orderId,
+    paymentId: pay.id,
+    request: { reason },
+    actor: i.actor,
+  } as unknown as RefundPlan;
+  await settle(deps, plan, i.refundRef);
+  return 'full';
+}
+
 async function settle(deps: RefundExecDeps, plan: RefundPlan, refundRef: string): Promise<void> {
   const at = deps.clock.now();
   const done = await withTransaction(deps.db, async (tx) => {

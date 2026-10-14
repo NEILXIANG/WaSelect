@@ -550,3 +550,26 @@ describe('迟到付款凭据：同一机构单号只记一条', () => {
     await expect(ins()).rejects.toMatchObject({ code: '23505' });
   });
 });
+
+// 审计 BUG-08（2026-10-14）：审核期测试单付款满 24h 被归档成 cancelled，支付行仍是 succeeded；
+// 这时 mock 回调重投被 CLOSED_UNPAID 当成"关闭且未收款"⇒ 写出假的迟到付款凭据、进「迟到付款待退」待办。
+describe('已收过这笔钱的关闭单（归档测试单）不算迟到付款', () => {
+  it('🔴 cancelled + 同通道 succeeded 支付行 → 普通状态冲突，不写 late_paid', async () => {
+    await seedOrder('o-arch');
+    await seedIntent('o-arch');
+    await markOrderPaid(db, bus().events, fixedClock('2026-01-02T00:01:00.000Z'), 'o-arch', OK);
+    await db`update orders set status = 'cancelled', is_test = true where id = 'o-arch'`;
+    const err = await markOrderPaid(
+      db,
+      bus().events,
+      fixedClock('2026-01-03T00:01:00.000Z'),
+      'o-arch',
+      OK,
+    ).catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 40902 });
+    expect((err as { details?: { reason?: string } }).details?.reason).not.toBe('late_payment');
+    const evs =
+      await db`select 1 from order_events where order_id = 'o-arch' and status = 'late_paid'`;
+    expect(evs).toHaveLength(0);
+  });
+});

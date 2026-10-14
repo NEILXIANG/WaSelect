@@ -181,6 +181,8 @@ export type CallbackDisposition =
   | 'disputed'
   /** 拒付已结案（won / lost / withdrawn）。`has_dispute` 只在 won 与 withdrawn 时复位；lost 保持 true（0.6.10①） */
   | 'dispute_closed'
+  /** 退款进展已处理（审计 PAY-03：部分 / 整单退款落定，或对不上而跳过） */
+  | 'refund_progress'
   /** 其它状态冲突（重发也不会变） */
   | 'status_conflict'
   /** 该 outcome 没有注册落账器（@limitation 一） */

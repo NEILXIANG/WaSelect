@@ -236,6 +236,10 @@ export const OUTCOME_BY_TYPE: Readonly<Record<string, ProviderEvent['outcome']>>
   //       `amount_refunded` = "Amount in cents refunded (can be less than the amount attribute
   //       on the charge if a partial refund was issued)"；`refunded` 布尔在部分退款时为 false。
   //     @see 下方 `parseWebhook` 的金额提取（当前取 `amount`，即全额——已由单测钉住，F12 改口径时那条会红）
+  // 审计 PAY-03（2026-10-14，AJ-530）：退款进展。对象是 Refund（自带本次 amount 与 status），
+  //   本系统创建退款时写了 metadata[order_id] 与 metadata[source]，所以归属判定与单号提取走通用分支。
+  'refund.updated': 'refund_updated',
+  'refund.failed': 'refund_updated',
   'charge.dispute.created': 'disputed',
   /**
    * 结案：**开案与结案分开两个 outcome**（@see ports/payment.ts ProviderEvent.outcome）。
@@ -768,6 +772,7 @@ export function createStripeCheckoutProvider(
           ? { occurredAtMs: Math.round(createdSec * 1000) }
           : {}),
         ...(disputeStatus !== undefined ? { disputeStatus } : {}),
+        ...(obj['object'] === 'refund' ? { refundStatus: refundOutcome(obj['status']) } : {}),
         // 事件生成时刻（envelope `created`，M-01）：支付成功事件据此判断"钱是不是在窗口内付的"
         ...(typeof ev.created === 'number' && Number.isFinite(ev.created)
           ? { eventAtMs: Math.round(ev.created * 1000) }
@@ -897,10 +902,12 @@ export function createStripeCheckoutProvider(
         body: '',
       });
       if (res.status < 200 || res.status >= 300) {
-        // 调用方（关单订阅者）按 best-effort 兜住：抛出去只是给它一条 warn 的素材
-        throw new Error(
-          `stripe 会话作废失败：HTTP ${res.status} ${res.body.slice(0, 200)}（session=${providerRef}）`,
-        );
+        // 审计 PAY-02（2026-10-14，AJ-530）：4xx（排除 408 / 409 / 429）= 机构确定答复（会话已过期 / 已完成 / 不存在），
+        //   调用方据此停止重试；5xx / 网络错是结果未知，调用方按退避重试。与退款（AJ-527）同一条分界。
+        const msg = `stripe 会话作废失败：HTTP ${res.status} ${res.body.slice(0, 200)}（session=${providerRef}）`;
+        const rejected =
+          res.status >= 400 && res.status < 500 && ![408, 409, 429].includes(res.status);
+        throw rejected ? new ProviderRejectedError(res.status, msg) : new Error(msg);
       }
     },
   };

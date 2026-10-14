@@ -45,6 +45,13 @@ export const AFTER_SALE_OPEN_STATUSES = ['open', 'processing'] as const;
 /** 可以发起售后的订单状态（@why 第三条）。 */
 export const AFTER_SALE_ORDER_STATUSES = ['shipped', 'delivered', 'completed'] as const;
 
+/**
+ * 已完成的订单还能申请售后的天数（从 completed_at 算，审计 BUG-10，2026-10-14，AJ-530）。
+ * @why 原先只看状态，completed 的单永远可申请；而自动完成（签收后 AUTO_COMPLETE_DAYS 天）本意就是"售后窗口收口"。
+ *      再给 7 天：签收后约两周内都能报问题，与常见电商"签收后 7–15 天"口径一致；超期走客服。
+ */
+export const AFTER_SALE_DAYS_AFTER_COMPLETE = 7;
+
 /** 问题描述 / 处理说明的长度上限（字符）。 */
 export const AFTER_SALE_DESCRIPTION_MAX = 500;
 

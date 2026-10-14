@@ -7,7 +7,7 @@ import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConfigError } from './config.js';
-import { formatStartupError, isSelfEntry } from './main.js';
+import { assertExplicitNodeEnv, formatStartupError, isSelfEntry } from './main.js';
 
 /**
  * N10：启动失败的 stderr 输出必须**逐行列出全部配置问题**。
@@ -82,5 +82,15 @@ describe('isSelfEntry（N21）', () => {
 
   it('argv[1] 指向不存在的路径 → false，不抛（realpathSync 失败必须被吞）', () => {
     expect(isSelfEntry(self, '/nonexistent/path/main.js')).toBe(false);
+  });
+});
+
+// 审计 PAY-11（2026-10-14）：schema 里 NODE_ENV 缺省 development——部署漏传时 mock 通道禁用、管理员 TOTP、CORS 必配等
+// 生产闸门全部静默放开。进程入口要求显式给值（测试与脚本直接调 loadConfig，不受影响）。
+describe('assertExplicitNodeEnv（进程入口）', () => {
+  it('🔴 没有 / 空白 NODE_ENV → 抛错并说清；给了合法值 → 放行', () => {
+    expect(() => assertExplicitNodeEnv({})).toThrow(/NODE_ENV/);
+    expect(() => assertExplicitNodeEnv({ NODE_ENV: '  ' })).toThrow(/NODE_ENV/);
+    expect(() => assertExplicitNodeEnv({ NODE_ENV: 'production' })).not.toThrow();
   });
 });

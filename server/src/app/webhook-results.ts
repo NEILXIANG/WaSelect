@@ -28,6 +28,8 @@ export const RESULT_PAID_ALREADY = 'paid:already';
 export const RESULT_DISPUTED = 'disputed';
 /** 拒付已结案（won / lost / withdrawn；`orders.has_dispute` 只在 won 与 withdrawn 时复位，lost 保持 true）。 */
 export const RESULT_DISPUTE_CLOSED = 'dispute_closed';
+/** 退款进展已处理（审计 PAY-03）：推进了部分 / 整单退款，或对不上而跳过（日志里分得清）。 */
+export const RESULT_REFUND_PROGRESS = 'refund_progress';
 /** 迟到付款：钱扣了但订单已过支付窗口——需人工退款。 */
 export const RESULT_LATE_PAYMENT = 'late_payment';
 /** 落账核对不通过（通道 / 机构单号 / 币种 / 金额 / 无支付意图）：`mismatch:<reason>`。 */

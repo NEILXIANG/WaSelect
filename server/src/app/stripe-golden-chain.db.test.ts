@@ -495,6 +495,37 @@ describe('F-03：退款 pending 的出口（AJ-178）', () => {
     expect(refundKeys()).toHaveLength(1);
   });
 
+  // 审计 PAY-03（2026-10-14）：生产装配下 refund.updated 回调直接推进 pending 的整单退款——不用等管理员再点一次
+  it('🔴 pending 退款 → 机构发 refund.updated(succeeded) 签名回调 → 订单 refunded，webhook_events 记 refund_progress', async () => {
+    const orderId = await paidOrder('f3w');
+    fake.nextRefundStatus('pending');
+    expect((await refund(orderId, 'rf-f3w-1')).json['outcome']).toBe('pending');
+    const pend = await events(orderId, 'refund_pending');
+    const ref = String(pend[0]?.['note']);
+    const res = await postStripeEvent({
+      id: 'evt_chain_refund_ok',
+      type: 'refund.updated',
+      created: Math.floor(Date.now() / 1000),
+      data: {
+        object: {
+          object: 'refund',
+          id: ref,
+          amount: 1,
+          currency: 'usd',
+          status: 'succeeded',
+          payment_intent: 'pi_test',
+          metadata: { order_id: orderId, source: STRIPE_SOURCE_TAG },
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(await orderStatus(orderId)).toBe('refunded');
+    expect((await paymentRow(orderId)).status).toBe('refunded');
+    const logged =
+      await db`select result from webhook_events where event_id = 'evt_chain_refund_ok'`;
+    expect(logged[0]?.['result']).toBe('refund_progress');
+  });
+
   /**
    * 退款回补库存（剩余清单 1-1 / C32）：未发货的单退款后，库存要还回去。
    * @why 原来只有关单、取消、拉黑会回补；退完库存却停在扣减后的值——运营要记得手动改库存，否则这件商品"少了"几件。

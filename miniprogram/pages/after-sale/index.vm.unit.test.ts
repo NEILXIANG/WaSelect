@@ -75,3 +75,12 @@ describe('briefFor（读取订单详情交来的摘要）', () => {
     expect(briefFor(null, 'o-1')).toBeNull();
   });
 });
+
+// 审计 BUG-10（2026-10-14）：服务端新增 after_sale_window_closed（完成后超过 7 天）
+describe('conflictText · 售后期已过', () => {
+  it('🔴 说清期限并指向客服', () => {
+    const t = conflictText({ code: 40902, data: { reason: 'after_sale_window_closed' } });
+    expect(t).toContain('7 天');
+    expect(t).toContain('客服');
+  });
+});

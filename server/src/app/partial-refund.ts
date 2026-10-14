@@ -172,7 +172,8 @@ export async function syncPartialRefund(
   return executePartialRefund(deps, provider, plan);
 }
 
-async function applyOutcome(
+/** 导出给退款进展回调（审计 PAY-03，app/refund-progress.ts）；管理端同步与回调走同一个落定口径。 */
+export async function applyOutcome(
   deps: PartialRefundDeps,
   plan: PartialRefundPlan,
   outcome: Outcome,

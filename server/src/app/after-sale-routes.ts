@@ -22,6 +22,7 @@ import type { Express, Request } from 'express';
 import {
   AFTER_SALE_STATUS_LABELS,
   AFTER_SALE_OPEN_STATUSES,
+  AFTER_SALE_DAYS_AFTER_COMPLETE,
   AFTER_SALE_ORDER_STATUSES,
   afterSaleTransitionAllowed,
   type AfterSaleStatus,
@@ -94,11 +95,21 @@ export function mountAfterSaleRoutes(app: Express, deps: AfterSaleRoutesDeps): v
           const at = deps.clock.now();
           const row = await withUnitOfWork(deps.db, deps.events, async (tx) => {
             const [o] = await tx`
-              select status from orders where id = ${orderId} and user_id = ${sub} for update`;
+              select status, completed_at from orders where id = ${orderId} and user_id = ${sub} for update`;
             if (o === undefined) throw new AppError(40400, { order_id: orderId });
             const status = String(o['status']);
             if (!(AFTER_SALE_ORDER_STATUSES as readonly string[]).includes(status)) {
               throw conflict(orderId, 'status_not_allowed');
+            }
+            // 审计 BUG-10（2026-10-14，AJ-530）：已完成的单只在完成后 AFTER_SALE_DAYS_AFTER_COMPLETE 天内可申请。
+            //   completed_at 为空（老数据）不拦：宁可多收一条申请，也不把没有时间依据的单关在门外。
+            const completedAt = o['completed_at'];
+            if (
+              status === 'completed' &&
+              completedAt instanceof Date &&
+              at.getTime() - completedAt.getTime() > AFTER_SALE_DAYS_AFTER_COMPLETE * 86_400_000
+            ) {
+              throw conflict(orderId, 'after_sale_window_closed');
             }
             const ins = await insertAfterSale(tx, {
               id: deps.idGen.uuid(),

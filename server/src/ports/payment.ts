@@ -201,7 +201,20 @@ export interface ProviderEvent {
    * 谁漏注册谁就走 `ignored:<outcome>`——**看得见**，而不是静默写错。
    */
   outcome:
-    'succeeded' | 'failed' | 'expired' | 'refunded' | 'disputed' | 'dispute_closed' | 'unknown';
+    | 'succeeded'
+    | 'failed'
+    | 'expired'
+    | 'refunded'
+    /** 本系统发起的一笔退款在机构侧有了进展（审计 PAY-03，2026-10-14）：对象是 Refund，`providerRef` = 退款单号。 */
+    | 'refund_updated'
+    | 'disputed'
+    | 'dispute_closed'
+    | 'unknown';
+  /**
+   * `refund_updated` 专用：机构报的退款状态（succeeded / pending / failed，与 RefundResult['outcome'] 同一词表）。
+   * @why 不复用 `disputeStatus` 之类的通用字段：退款与拒付各有词表，混用会让落账器各自再判一遍。
+   */
+  refundStatus?: 'succeeded' | 'pending' | 'failed' | undefined;
   /**
    * 我们自己的订单 id（从机构 metadata 回带）。落账类事件取不到是**设计缺陷**，必须抛；
    * 与订单无关的机构事件（payout / balance 等）允许为空串且 outcome 必为 unknown（全量审计 2026-09-26）。

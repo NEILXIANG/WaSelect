@@ -12,6 +12,7 @@ import { closeDb, type Db } from '../adapters/db.js';
 import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 import { MemorySink } from '../../../test/helpers/memory-sink.js';
 import { createLogger, type Logger } from '../logger.js';
+import { ProviderRejectedError } from '../ports/payment.js';
 import type { EventBus, EventHandler } from '../ports/events.js';
 import type {
   ChannelQuery,
@@ -305,6 +306,8 @@ describe('关单连带：库内 void + 机构 expire', () => {
           expireSession: () => Promise.reject(new Error('HTTP 400 already expired')),
         }),
       ),
+      // 本条钉"不重抛 + 行已作废 + 留 warn"；重试排程另有用例（审计 PAY-02）
+      retryDelaysMs: [],
     });
 
     // 订阅者自己兜住（best-effort）——如果它 rethrow，这里就会抛出来
@@ -349,5 +352,85 @@ describe('关单连带：库内 void + 机构 expire', () => {
 
     expect(await payStatusOf('o-6')).toBe('cancelled');
     expect(called).toBe(0);
+  });
+});
+
+// 审计 PAY-02（2026-10-14）：Stripe 会话最短活 30 分钟，订单关闭时会话往往还活着；作废失败原先只记 warn、不再管，
+// 关单后的托管页仍可付款（钱进来、订单不落账、只能人工退）。改为：结果未知的失败按退避重试，机构确定答复（4xx）即停。
+describe('关单作废会话：失败后按退避重试', () => {
+  function capturingTimer(): {
+    timer: (fn: () => void, ms: number) => void;
+    queue: Array<{ fn: () => void; ms: number }>;
+  } {
+    const queue: Array<{ fn: () => void; ms: number }> = [];
+    return { timer: (fn, ms) => queue.push({ fn, ms }), queue };
+  }
+
+  it('🔴 结果未知（普通 Error）→ 排一次重试；重试成功后不再排', async () => {
+    await seedOrderWithInitiatedPay('o-r1');
+    let calls = 0;
+    const t = capturingTimer();
+    const { bus, handlers } = fakeBus();
+    registerSessionExpiryOnClose(bus, {
+      db,
+      logger,
+      registry: fakeRegistry(
+        fakeProvider({
+          expireSession: () => {
+            calls += 1;
+            return calls === 1 ? Promise.reject(new Error('stripe 502')) : Promise.resolve();
+          },
+        }),
+      ),
+      retryDelaysMs: [30_000, 60_000],
+      setTimer: t.timer,
+    });
+    await handlers.get('order.expired')?.({ name: 'order.expired', at: '', orderId: 'o-r1' });
+    expect(calls).toBe(1);
+    expect(t.queue.map((q) => q.ms)).toEqual([30_000]);
+    t.queue.shift()?.fn();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toBe(2);
+    expect(t.queue).toHaveLength(0);
+  });
+
+  it('🔴 机构确定拒绝（4xx：会话已过期 / 已完成）→ 不重试', async () => {
+    await seedOrderWithInitiatedPay('o-r2');
+    const t = capturingTimer();
+    const { bus, handlers } = fakeBus();
+    registerSessionExpiryOnClose(bus, {
+      db,
+      logger,
+      registry: fakeRegistry(
+        fakeProvider({
+          expireSession: () => Promise.reject(new ProviderRejectedError(400, 'session not open')),
+        }),
+      ),
+      retryDelaysMs: [30_000],
+      setTimer: t.timer,
+    });
+    await handlers.get('order.expired')?.({ name: 'order.expired', at: '', orderId: 'o-r2' });
+    expect(t.queue).toHaveLength(0);
+  });
+
+  it('退避用尽 → 不再排（会话自然过期兜底）', async () => {
+    await seedOrderWithInitiatedPay('o-r3');
+    const t = capturingTimer();
+    const { bus, handlers } = fakeBus();
+    registerSessionExpiryOnClose(bus, {
+      db,
+      logger,
+      registry: fakeRegistry(
+        fakeProvider({ expireSession: () => Promise.reject(new Error('down')) }),
+      ),
+      retryDelaysMs: [10],
+      setTimer: t.timer,
+    });
+    await handlers.get('order.expired')?.({ name: 'order.expired', at: '', orderId: 'o-r3' });
+    expect(t.queue).toHaveLength(1);
+    t.queue.shift()?.fn();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.queue).toHaveLength(0);
   });
 });

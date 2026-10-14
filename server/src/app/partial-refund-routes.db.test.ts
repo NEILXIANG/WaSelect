@@ -278,3 +278,28 @@ describe('refunding + 拒付已败诉 → 整单退款重试金额扣除败诉�
     expect((log?.['ctx'] as Record<string, unknown>)['amount_minor']).toBe(7000);
   });
 });
+
+// 审计 PAY-07（2026-10-14）：拒付仍在进行中（dispute_status = open）、限制被人工解除（has_dispute = false）后，
+// 原先整单 / 部分退款都放行——银行随后判买家胜诉时钱再被拉回一次，钱出去两次。
+describe('拒付仍在进行中、人工解除限制之后：退款仍拒', () => {
+  async function seedOpenAfterRelease(id: string): Promise<void> {
+    await seed(id, 'delivered');
+    await db`
+      update payments set dispute_id = ${`dp_${id}`}, dispute_status = 'open', dispute_amount = 12000,
+                          dispute_opened_at = now() - interval '2 days'
+       where id = ${`pay-${id}`}
+    `;
+  }
+  it('🔴 整单退款 → 40907，data.reason = dispute_open_released；订单不动', async () => {
+    await seedOpenAfterRelease('o-op1');
+    const r = await post('/api/v1/admin/orders/o-op1/refund', { reason: '买家要求退款' });
+    expect(r.json['code']).toBe(40907);
+    expect(r.json['data']).toMatchObject({ reason: 'dispute_open_released' });
+    const [o] = await db`select status from orders where id = 'o-op1'`;
+    expect(o?.['status']).toBe('delivered');
+  });
+  it('🔴 部分退款 → 40907', async () => {
+    await seedOpenAfterRelease('o-op2');
+    expect((await partial('o-op2', 1000)).json['code']).toBe(40907);
+  });
+});
