@@ -310,7 +310,9 @@ describe('订单页空态的样子（全入口点击测试 2026-10-11）', () =>
     expect(wxml).toMatch(
       /<ws-state-block\s+wx:if="\{\{empty\}\}"\s+kind="empty"\s+title="\{\{emptyText\}\}"[^>]*actionText="去逛逛"[^>]*bindaction="onGoShopping"/,
     );
-    expect(wxml).toMatch(/<ws-state-block\s+wx:if="\{\{loading\}\}"\s+kind="loading"/);
+    expect(wxml).toMatch(
+      /<ws-state-block\s+wx:if="\{\{loading && rows.length === 0\}\}"\s+kind="loading"/,
+    );
   });
 });
 

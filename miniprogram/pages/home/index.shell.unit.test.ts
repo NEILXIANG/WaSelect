@@ -250,6 +250,20 @@ describe('首页薄壳：`GET /home`（轮播与分类，D-51）', () => {
     expect((page.data['tabs'] as Array<{ key: string }>).map((t) => t.key)).toEqual(['']);
   });
 
+  it('🔴 `/home` 失败 → 给可点的重试提示；点了只重取 /home，成功后提示消失（审计 UX-02）', async () => {
+    call('onLoad');
+    homeCalls[0]!.d.reject(new Error('home down'));
+    calls[0]!.d.resolve(listOf('all', 1));
+    await settle();
+    expect(page.data['homeFailed']).toBe(true);
+    call('onHomeRetry');
+    expect(homeCalls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
+    homeCalls[1]!.d.resolve({ banners: [], categories: [] });
+    await settle();
+    expect(page.data['homeFailed']).toBe(false);
+  });
+
   it('`/home` 成功 → 轮播落地，且分类 tab **改用服务端下发的清单**', async () => {
     call('onLoad');
     calls[0]!.d.resolve(listOf('all', 1));

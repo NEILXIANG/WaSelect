@@ -211,7 +211,7 @@ describe('M-10（AJ-408）：页签视图与分页签空态', () => {
       ['all', '全部', false],
       ['unpaid', '待付款', false],
       ['to_ship', '采购中', true],
-      ['shipped', '已发货', false],
+      ['shipped', '待收货', false],
       ['after_sale', '售后·退款', false],
     ]);
     expect(tabsView('bogus').find((t) => t.active)?.key).toBe('all');

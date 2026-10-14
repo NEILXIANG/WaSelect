@@ -80,7 +80,7 @@
   <!-- 剩余清单 4-1：特商法商家信息（公司登记前服务端不给，整卡不显示） -->
   <view class="ws-gutter" wx:if="{{seller.length > 0}}">
     <view class="ws-card legal__card">
-      <text class="doc-label">商家信息（特定商取引法）</text>
+      <text class="doc-label">商家信息（日本特定商交易法）</text>
       <view class="legal__row" wx:for="{{seller}}" wx:key="label">
         <text class="ws-note">{{item.label}}</text>
         <text class="ws-body" user-select>{{item.value}}</text>

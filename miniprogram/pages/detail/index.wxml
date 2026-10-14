@@ -34,7 +34,7 @@
     <swiper class="gallery" indicator-dots>
       <swiper-item wx:for="{{product.images}}" wx:key="*this">
         <!-- M-18（AJ-406）：首张之外的图滑到附近才加载（swiper 内 lazy-load 生效范围【需真机确认】） -->
-        <image class="gallery-image" src="{{item}}" mode="aspectFit" lazy-load="{{index > 0}}" webp="{{true}}" />
+        <image class="gallery-image" src="{{item}}" mode="aspectFit" lazy-load="{{index > 0}}" webp="{{true}}" data-index="{{index}}" binderror="onGalleryError" />
       </swiper-item>
     </swiper>
 

@@ -34,6 +34,7 @@ import {
   orderNotFound,
 } from './index.vm.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
+import { copyFailText } from '../../utils/privacy.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { recentExternalPay } from '../../utils/external-pay.js';
@@ -337,7 +338,7 @@ Page({
     if (placed.length > 0) cart.focusOn(placed);
     if (rejected.length > 0) {
       this.setData({
-        buyAgainNote: `购物车商品种类已满，${rejected.length} 件没放进去，请先清理购物车`,
+        buyAgainNote: `购物车商品种类已满，${rejected.length} 种商品没放进去，请先清理购物车`,
       });
       return;
     }
@@ -362,6 +363,8 @@ Page({
 
   /** 继续支付（仅 `canPay`；不传金额，支付页自己向服务端要权威金额）。 */
   onPay() {
+    // 审计 ITX-06：取消在途时不去付款（原生 disabled 在部分基础库仍会触发点击；取消成功后这张单就付不了了）
+    if (this.data.cancelling === true) return;
     // MP-10：带 from=detail，支付页付完退回本页（不再 redirectTo 出第二张详情）
     wxApi.navigateTo({
       url: `${PAY_PAGE}?orderId=${encodeURIComponent(this.orderId)}&from=detail`,
@@ -383,7 +386,7 @@ Page({
       fail: () =>
         this.setData({
           copied: '',
-          copyError: '复制失败，请长按运单号手动复制',
+          copyError: copyFailText(app.globalData.privacy, '复制失败，请长按运单号手动复制'),
           copyErrorAt: 'tracking',
         }),
     });
@@ -403,7 +406,7 @@ Page({
       fail: () =>
         this.setData({
           copied: '',
-          copyError: '复制失败，请长按订单号手动复制',
+          copyError: copyFailText(app.globalData.privacy, '复制失败，请长按订单号手动复制'),
           copyErrorAt: 'order',
         }),
     });

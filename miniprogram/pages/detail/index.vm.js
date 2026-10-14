@@ -84,7 +84,7 @@ function guaranteesOf(p) {
     list.push({
       key: 'ship',
       tag: `付款后 ${days} 个工作日内发出`,
-      detail: `付款后 ${days} 个工作日内从日本发出；发出不等于送达，运输过程见下方流程`,
+      detail: `付款后 ${days} 个工作日内从日本发出（按日本工作日计，不含日本节假日）；发出不等于送达，运输过程见下方流程`,
     });
   }
   list.push({ key: 'refund', tag: '缺货退款', detail: STOCK_REFUND_NOTE });

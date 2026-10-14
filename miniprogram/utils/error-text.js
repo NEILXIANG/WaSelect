@@ -40,15 +40,32 @@ export function errorMessage(err) {
   if (isObj && err.code === FORBIDDEN_CODE) return isBlocked(err) ? FORBIDDEN_TEXT : GATEWAY_TEXT;
   if (isObj && err.code === SALES_PAUSED_CODE) return SALES_PAUSED_TEXT;
   if (isObj && err.code === LOGIN_EXPIRED_CODE) return LOGIN_EXPIRED_TEXT;
+  // 审计 CPY-02：服务端原文是给运营看的（「汇率不可用」「条款版本缺失或已过期」），买家要的是下一步
+  if (isObj && Object.hasOwn(BUYER_TEXT, err.code)) return BUYER_TEXT[err.code];
   const fromMessage = isObj && typeof err.message === 'string' ? err.message.trim() : '';
   const fromErrMsg =
     fromMessage === '' && isObj && typeof err.errMsg === 'string' ? err.errMsg.trim() : '';
   // 体验排查 2026-10-14：服务端 message 一律是中文；没有中文的 message（英文网关页 / 堆栈）买家读不懂，
   //   不如说"加载失败"。宿主 errMsg 保持原样（B35 / AJ-218：那是没有码的宿主失败，吞掉就没线索了）
-  if (fromMessage !== '' && !/[\u3400-\u9fff]/.test(fromMessage)) return '加载失败';
-  const msg = fromMessage || fromErrMsg;
-  return msg === '' ? '加载失败' : msg;
+  if (fromMessage !== '' && !/[\u3400-\u9fff]/.test(fromMessage)) return FALLBACK_TEXT;
+  // 审计 CPY-09：宿主英文 errMsg 不当主文案（买家读不懂），改进报障小字（errorRef），线索不丢
+  if (fromMessage === '' && fromErrMsg !== '') return FALLBACK_TEXT;
+  return fromMessage === '' ? FALLBACK_TEXT : fromMessage;
 }
+
+/**
+ * 兜底主文案（审计 CPY-03）：原为「加载失败」，但同一句也落在保存 / 提交 / 支付失败上
+ * （「保存没有成功：加载失败」），改成不分动作都说得通的一句。
+ */
+const FALLBACK_TEXT = '没有成功，请稍后重试';
+
+/** 服务端原文说不清下一步的码 → 买家文案（审计 CPY-02）。 */
+const BUYER_TEXT = {
+  40011: '用户协议已更新，请点「重新加载」后再下单',
+  40903: '订单还在处理中，请稍后到「我的订单」查看，不要重复付款',
+  50003: '暂时无法计算价格，请稍后再试',
+  50004: '暂时无法计算运费，请稍后再试',
+};
 
 /** 网络层失败的人话（剩余清单 4-6）。 */
 const NETWORK_TEXT = '网络不太稳定，请检查网络后重试';
@@ -141,7 +158,12 @@ const SALES_PAUSED_TEXT =
  * @returns {string} 空串 = 没有可报的信息（页面不显示小字）
  */
 export function errorRef(err) {
-  if (err === null || typeof err !== 'object' || !Number.isInteger(err.code)) return '';
+  if (err === null || typeof err !== 'object') return '';
+  // 审计 CPY-09：宿主失败（只有 errMsg、没有码）把原因放这一行，主文案不再显示英文
+  if (!Number.isInteger(err.code)) {
+    const host = typeof err.errMsg === 'string' ? err.errMsg.trim() : '';
+    return host === '' ? '' : `联系客服时请提供：${host}`;
+  }
   // 网络层失败（负数码）不显示码本身：-1 / -3 是端内约定，买家看不懂、客服也查不到（三端模拟测试 2026-10-11）
   const parts = err.code < 0 ? [] : [String(err.code)];
   if (typeof err.traceId === 'string' && err.traceId !== '') parts.push(err.traceId.slice(0, 8));

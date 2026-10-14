@@ -53,7 +53,7 @@ export function selectionBar(rows) {
   return {
     allSelected: list.length > 0 && selectedCount === list.length,
     selectedCount,
-    ctaText: selectedCount > 0 ? `去结算 (${selectedCount})` : '去结算',
+    ctaText: selectedCount > 0 ? `去结算（${selectedCount}）` : '去结算',
   };
 }
 
@@ -273,7 +273,7 @@ export function undoView(pending, nowMs) {
   return {
     show: true,
     index: Number.isInteger(pending.index) ? pending.index : 0,
-    text: title === '' ? '已删除 1 件商品' : `已删除「${title}」`,
+    text: title === '' ? '已删除这件商品' : `已删除「${title}」`,
   };
 }
 

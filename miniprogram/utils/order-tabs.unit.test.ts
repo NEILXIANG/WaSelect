@@ -25,7 +25,7 @@ describe('ORDER_TABS（页签 ↔ 状态）', () => {
       ['all', '全部'],
       ['unpaid', '待付款'],
       ['to_ship', '采购中'],
-      ['shipped', '已发货'],
+      ['shipped', '待收货'],
       ['after_sale', '售后·退款'],
     ]);
   });

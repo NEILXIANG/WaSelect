@@ -10,7 +10,7 @@ export const ADDRESS_REJECT_TEXT: Readonly<Record<string, string>> = {
   zip_state_mismatch: '邮编和州对不上：请检查州或邮编',
   recipient: '收件人请用英文或拼音（面单是给美国承运商看的）',
   line1: '街道地址请用英文填写',
-  line2: '门牌 / 公寓号请用英文或数字填写',
+  line2: '公寓 / 单元号（Apt / Suite）请用英文或数字填写',
   city: '城市请用英文填写',
   phone: '电话请填美国号码：10 位数字',
   state: '请从下拉里选择州',

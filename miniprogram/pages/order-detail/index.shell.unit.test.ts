@@ -265,7 +265,7 @@ describe('订单详情：再次购买 / 商品可点（A7，AJ-416）', () => {
     call('onBuyAgain');
     expect(focused).toEqual(['p-1']);
     expect(nav).toEqual([]);
-    expect(page.data['buyAgainNote']).toContain('1 件没放进去');
+    expect(page.data['buyAgainNote']).toContain('1 种商品没放进去');
   });
 
   it('🔴 购物车品种已满放不进去 → 留在本页说清楚，不假装成功地跳走', async () => {
@@ -468,6 +468,19 @@ describe('取消 / 确认收货撞上状态已变（MP-7，第二轮审计 2026-
     expect(page.data['error']).toBe('');
     expect(String(page.data['actionNote'])).toContain('已为你刷新');
     expect(page.data['cancelling']).toBe(false);
+  });
+
+  it('🔴 取消在途时点「继续支付」→ 不跳支付页（审计 ITX-06）', async () => {
+    order = PENDING;
+    await open();
+    hold = deferred<unknown>();
+    const done = call<Promise<void>>('cancel');
+    await settle();
+    expect(page.data['cancelling']).toBe(true);
+    call('onPay');
+    expect(nav).toEqual([]);
+    hold.resolve({ ...PENDING, status: 'cancelled' });
+    await done;
   });
 
   it('🔴 确认收货时 40902（如拒付冻结）→ 同样重取并说明，且提示可联系客服', async () => {

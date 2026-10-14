@@ -104,7 +104,7 @@ export const DOC_ROWS = [
   { key: 'terms', title: '用户协议' },
   { key: 'privacy', title: '隐私政策' },
   { key: 'refund', title: '退货与退款政策' },
-  { key: 'tokushoho', title: '特定商取引法表示' },
+  { key: 'tokushoho', title: '日本特定商交易法标示（商家信息）' },
 ];
 
 /**
@@ -133,7 +133,7 @@ export function documentsView(res) {
 
 /** 特商法字段的展示顺序与标签（与静态页 tokushoho 同口径）。 */
 const SELLER_ROWS = [
-  { key: 'name', label: '販売業者' },
+  { key: 'name', label: '销售商（販売業者）' },
   { key: 'representative', label: '负责人' },
   { key: 'address', label: '所在地' },
   { key: 'phone', label: '电话' },

@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
+import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
 import { createCartStore } from '../../utils/cart-store.js';
 
 /** 购物车里已有的一件（像真的：日文商品名、整数円快照价）。 */
@@ -96,6 +97,18 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('详情页轮播图片加载失败（审计 UX-01）', () => {
+  it('🔴 某张图 binderror → 只这一张换占位图', () => {
+    const product = page.data['product'] as Record<string, unknown>;
+    page.setData({
+      product: { ...product, images: ['https://img.test/a.webp', 'https://img.test/b.webp'] },
+    });
+    call('onGalleryError', { currentTarget: { dataset: { index: 1 } } });
+    const images = (page.data['product'] as { images: string[] }).images;
+    expect(images).toEqual(['https://img.test/a.webp', PLACEHOLDER_IMAGE]);
+  });
 });
 
 describe('详情页底部购买栏（M-13，AJ-406）', () => {

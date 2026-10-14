@@ -100,6 +100,21 @@ describe('ws-pick-card：缺价格不能显示 0 日元（P1-6）', () => {
   });
 });
 
+describe('ws-pick-card：图片加载失败（审计 UX-01）', () => {
+  it('🔴 binderror → 收起 <image>，不留破图', () => {
+    const comp = simulate.render(loadOnce(), {
+      name: '南部鉄器 急須',
+      why: '一生用',
+      priceJpy: 8800,
+      image: 'https://img.test/missing.webp',
+    }) as unknown as CompLike & { instance: { onImgError: () => void } };
+    comp.attach(document.body);
+    expect(comp.dom.querySelector('wx-image')).not.toBeNull();
+    comp.instance.onImgError();
+    expect(comp.dom.querySelector('wx-image')).toBeNull();
+  });
+});
+
 describe('ws-pick-card：内嵌价格不报空金额（三端联动走查 2026-10-08）', () => {
   it('🔴 传了 priceJpy 渲染后控制台没有"金额必须是整数円"——空金额只该在真漏传时出现', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});

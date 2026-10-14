@@ -26,7 +26,7 @@ export const ORDER_TABS = [
   { key: 'all', label: '全部', statuses: [] },
   { key: 'unpaid', label: '待付款', statuses: ['created', 'pending_payment'] },
   { key: 'to_ship', label: '采购中', statuses: ['paid'] },
-  { key: 'shipped', label: '已发货', statuses: ['shipped', 'delivered'] },
+  { key: 'shipped', label: '待收货', statuses: ['shipped', 'delivered'] },
   // AJ-430：withAfterSale = 另收「有售后申请」的单（状态可能仍是已送达 / 已完成）；S-7 起由服务端 include_after_sale=1 筛
   {
     key: 'after_sale',

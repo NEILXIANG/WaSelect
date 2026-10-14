@@ -86,6 +86,11 @@ Page({
     hasMore: false,
     /** 错误文案（utils/error-text，真源唯一）；空串 = 无错误。 */
     error: '',
+    /**
+     * `/home` 没取到（审计 UX-02）：商品流正常时页面只剩「全部」一个页签、看不出异常，给一条可点的提示重试。
+     * 商品流也失败时不显示（wxml `!error`）：同屏两条错误只会更难判断坏在哪（@see loadHome @why）。
+     */
+    homeFailed: false,
   },
 
   /**
@@ -205,6 +210,7 @@ Page({
       this.homeCategoryKeys = keys;
       this.banners = Array.isArray(res?.banners) ? res.banners : [];
       this.setData({
+        homeFailed: false,
         slides: bannerSlides(res?.banners, keys),
         // ⚠️ 用**当前**分类重算 tab：`/home` 可能在用户已经切过分类之后才回来，
         //    这里传空会让高亮跳回「全部」（表现为"我刚点了美妆，它自己跳回去了"）。
@@ -214,7 +220,13 @@ Page({
       // 静默（@why 见上）。`void e` 而不是空块：空 catch 会被 lint 判为"吞错"，
       // 而这里是有理由的降级——留一个显式语句，逼后来者先读上面那段再改。
       void e;
+      this.setData({ homeFailed: true });
     }
+  },
+
+  /** 「首页内容没加载出来，点此重试」（审计 UX-02）：只重取 `/home`，不动商品流。 */
+  onHomeRetry() {
+    void this.loadHome();
   },
 
   /**

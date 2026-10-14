@@ -25,7 +25,7 @@
 
   <!--
     全入口点击测试 2026-10-11：地址卡挪到最上面、右侧加「›」——主流确认页（京东 / 淘宝 / 拼多多）都是地址在首位：
-    它是买家唯一必须操作的一项，原先排在商品后面，新用户要往下找；没有地址时用强调色"＋ 添加收货地址"，原先一行灰字看不出能点。
+    它是买家唯一必须操作的一项，原先排在商品后面，新用户要往下找；没有地址时用强调色"＋ 新增收货地址"，原先一行灰字看不出能点。
   -->
   <view class="ws-gutter ws-section">
     <view class="ws-card addr" hover-class="ws-press" bindtap="onPickAddress">
@@ -40,7 +40,7 @@
         <!-- F5（第二轮审计）：取失败 ≠ 没有地址——说"没取到"，不引导用户再新增一条 -->
         <!-- 两端逐页走查第三轮：账号受限时不叫人去点"重新加载"（上方只有「联系客服」；vm addressFailedText） -->
         <text class="ws-note line" wx:elif="{{addressFailed}}">{{addressFailedText}}</text>
-        <text class="ws-body line addr__add" wx:else>＋ 添加收货地址</text>
+        <text class="ws-body line addr__add" wx:else>＋ 新增收货地址</text>
         <!-- 走查 2026-10-08：没有地址时上一行已经说"添加"，再写"切换地址"是自相矛盾 -->
         <text class="ws-caption hint" wx:if="{{address}}">点此切换地址</text>
       </view>
@@ -145,16 +145,16 @@
         bindtap="onToggleTerms"
         aria-role="checkbox"
         aria-checked="{{termsAccepted}}"
-        aria-label="阅读并同意购买条款"
+        aria-label="阅读并同意用户协议"
       >
         <!-- A5（AJ-416）：未勾选也画出框——原先未勾选只有一行字，看不出这是能点的勾选框 -->
-        <text class="ws-body">{{termsAccepted ? '☑ 我已阅读并同意购买条款' : '☐ 我已阅读并同意购买条款'}}</text>
+        <text class="ws-body">{{termsAccepted ? '☑ 我已阅读并同意用户协议' : '☐ 我已阅读并同意用户协议'}}</text>
       </view>
       <!-- F6（第二轮审计）：条款就绪失败（如没有条款地址）时不显示版本号——看起来"就绪"、其实下不了单 -->
       <text class="ws-caption hint" wx:if="{{termsVersion && !termsFailed}}">条款版本 {{termsVersion}}</text>
       <!--
         MP3-11：取不到条款时**不写"加载中"**。闸门此时已经在按钮上方写着
-        "购买条款暂时取不到，请稍后再试"，这一行再说"加载中"就是同屏两种相反的说法
+        "用户协议暂时取不到，请稍后再试"，这一行再说"加载中"就是同屏两种相反的说法
         （一个说失败了、一个说还在来），而它永远不会变成别的字。
       -->
       <text class="ws-caption hint" wx:elif="{{!termsFailed}}">条款版本加载中</text>
@@ -162,7 +162,7 @@
         ⚠️ 勾选框必须配一个"能真的读到条款"的去处：只有勾选没有正文，
         等于让用户同意一份他看不见的文本（我们手上却会有一份"已同意"的记录）。
       -->
-      <view class="act" hover-class="ws-press" bindtap="onOpenTerms">查看条款全文</view>
+      <view class="act" hover-class="ws-press" bindtap="onOpenTerms">查看用户协议全文</view>
     </view>
   </view>
 

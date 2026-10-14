@@ -132,6 +132,29 @@ describe('地址编辑：地址已不存在 / 还在加载（审查 2026-10-09�
     expect(posts.length).toBe(before);
   });
 
+  it('🔴 取地址断网 → 给「重试」；点了重新取，成功后错误消失（审计 UX-04）', async () => {
+    fail = Object.assign(new Error('网络请求失败'), { code: -1 });
+    call('onLoad', { id: 'addr-1' });
+    await settle();
+    expect(page.data['error']).not.toBe('');
+    expect(page.data['gone']).toBe(false);
+    fail = null;
+    gd['api'] = async (req: { url: string }) => {
+      posts.push(req);
+      return [{ id: 'addr-1', ...FORM }];
+    };
+    call('onRetryLoad');
+    await settle();
+    expect(page.data['error']).toBe('');
+    expect((page.data['form'] as { recipient: string }).recipient).toBe('Alice Wang');
+  });
+
+  it('🔴 地址已删除 → gone = true（只给返回，不给重试）', async () => {
+    call('onLoad', { id: 'addr-gone' });
+    await settle();
+    expect(page.data['gone']).toBe(true);
+  });
+
   it('🔴 加载中 → 点保存不发请求；用户先输入的内容不被回来的数据覆盖（加载期间表单不可编辑）', async () => {
     hold = deferred();
     call('onLoad', { id: 'addr-1' });

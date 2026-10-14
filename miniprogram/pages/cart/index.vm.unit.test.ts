@@ -278,7 +278,7 @@ describe('M-14 购物车：行进详情 / 删除撤销 / 报价重试（AJ-406�
 
   it('缺标题 → 通用说法（不显示空引号）', () => {
     const p = pendingRemoval([{ productId: 'p-x', qty: 1 }], 'p-x', T0);
-    expect(undoView(p, T0).text).toBe('已删除 1 件商品');
+    expect(undoView(p, T0).text).toBe('已删除这件商品');
   });
 
   it('quoteRetryable：网络 / 5xx / 库存不足给重试；下架、超重、超上限、品种超限、停售、账号被拉黑不给', () => {
@@ -319,12 +319,12 @@ describe('勾选结算（A3，AJ-416）', () => {
     expect(selectionBar([{ selected: true }, { selected: true }])).toEqual({
       allSelected: true,
       selectedCount: 2,
-      ctaText: '去结算 (2)',
+      ctaText: '去结算（2）',
     });
     expect(selectionBar([{ selected: true }, { selected: false }])).toEqual({
       allSelected: false,
       selectedCount: 1,
-      ctaText: '去结算 (1)',
+      ctaText: '去结算（1）',
     });
     expect(selectionBar([{ selected: false }])).toEqual({
       allSelected: false,

@@ -11,7 +11,8 @@
     <!-- ⚠️ 图为空时不渲染 <image>：空 src 在真机上是一个破图占位，
          而 .ws-media 自带底色，留空就是一块干净的占位面。 -->
     <!-- M-18（AJ-406）：首页列表卡片懒加载（滑到附近才取图）；aspectFill 裁切保持列表整齐 -->
-    <image wx:if="{{image}}" class="ws-media__img" src="{{image}}" mode="aspectFill" lazy-load webp="{{true}}" />
+    <!-- 审计 UX-01：图加载失败（CDN 404 / 域名未登记）同"无图"处理——收起 <image>，留干净的占位面，不留破图 -->
+    <image wx:if="{{image && !imgFailed}}" class="ws-media__img" src="{{image}}" mode="aspectFill" lazy-load webp="{{true}}" binderror="onImgError" />
     <!--
       库存角标两种，都是**事实**不是警告，所以一律用中性色（红在本体系里是"错误/警告"）：
       · 售罄（stock === 0）：不能再买，是最重要的那一句；

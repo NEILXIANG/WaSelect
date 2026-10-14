@@ -170,10 +170,10 @@ function gateCore(state) {
       fix: s.addressFailed === true ? '' : 'address',
     };
   }
-  if (s.termsFailed === true) return { ok: false, reason: '购买条款暂时取不到，请稍后再试' };
-  if (s.termsReady === false) return { ok: false, reason: '正在加载购买条款…' };
+  if (s.termsFailed === true) return { ok: false, reason: '用户协议暂时取不到，请稍后再试' };
+  if (s.termsReady === false) return { ok: false, reason: '正在加载用户协议…' };
   if (s.termsAccepted !== true)
-    return { ok: false, reason: '请先阅读并同意购买条款', fix: 'terms' };
+    return { ok: false, reason: '请先阅读并同意用户协议', fix: 'terms' };
   // 失败排在"计算中"之前：失败了就不会再有结果，说"计算中"是让人白等
   // 立即购买时那件商品不在购物车里（审查 2026-10-09）：说"返回购物车"是一条走不通的路
   if (s.quoteFailed === true) {
@@ -183,7 +183,8 @@ function gateCore(state) {
     return {
       ok: false,
       reason:
-        s.buyNow === true ? '报价失败，请返回商品页后重试' : '报价失败，请返回购物车检查商品后重试',
+        // 审计 CPY-02：与状态块的「重新加载」按钮说同一件事（原写"返回购物车检查商品"，同屏两条指引）
+        '报价失败，请点上方「重新加载」重试',
     };
   }
   if (!Number.isInteger(s.totalJpy)) return { ok: false, reason: '运费与合计还在计算中' };
@@ -261,7 +262,7 @@ export function emailInputError(raw, shown) {
  * @why 优先级必须是 **picked > current > fallback** 三段，缺了 `current` 这一段就会
  *      出现 A6 那个缺陷：每次 `onShow` 都会重算地址，而一次性 `picked` 在第一次就被读走清空了，
  *      于是此后每一次返回结算页都回落到默认地址——用户选了非默认地址 B 之后，
- *      **点"查看条款全文"再返回、进地址页没选就返回、或把小程序切到后台再回来**，
+ *      **点"查看用户协议全文"再返回、进地址页没选就返回、或把小程序切到后台再回来**，
  *      地址就静默回到 A，提交后按 A 发货。页面显示的是 A，而用户已经选过一次，
  *      大多不会再核对。跨境改址要走人工，还有重发成本。
  *
@@ -439,7 +440,7 @@ export function checkoutItems(args) {
 export function checkoutEmptyText(args) {
   const a = args !== null && typeof args === 'object' ? args : {};
   if (a.mode === BUY_NOW_MODE) {
-    return '这件商品的购买信息已失效，请回到商品页重新点"立即购买"';
+    return '这件商品的购买信息已失效，请回到商品页重新点「立即购买」';
   }
   const n = Number.isInteger(a.cartCount) ? a.cartCount : 0;
   if (n > 0) return `购物车里还有 ${n} 种商品，先回购物车勾选要结算的`;

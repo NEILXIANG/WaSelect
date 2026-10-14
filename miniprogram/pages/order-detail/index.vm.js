@@ -52,7 +52,12 @@ import {
  *      一律按 JPY 显示会把 $12.50 写成 1,250 円。
  * @limitation 认不出的币种不编金额（"以银行账单为准"）——比按错的小数位显示一个数字安全。
  */
-const MINOR_FORMATTERS = { USD: formatUsdCents, JPY: formatJpy, CNY: formatCnyFen };
+// 审计 CPY-08：人民币带「人民币」三字（D-36：裸 ¥ 紧挨日元金额会被读成日元，见 price-format displaySubLine）
+const MINOR_FORMATTERS = {
+  USD: formatUsdCents,
+  JPY: formatJpy,
+  CNY: (fen) => `人民币 ${formatCnyFen(fen)}`,
+};
 function partialRefundRows(list) {
   if (!Array.isArray(list)) return [];
   return list

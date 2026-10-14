@@ -400,6 +400,14 @@ describe('detailView：部分退款与迟到付款（P2-11 / P2-12，AJ-386）',
     expect(detailView({ status: 'paid' }).partialRefunds).toEqual([]);
   });
 
+  it('🔴 人民币部分退款带「人民币」，不显示裸 ¥（审计 CPY-08 / D-36）', () => {
+    const v = detailView({
+      status: 'delivered',
+      partial_refunds: [{ status: 'succeeded', currency: 'CNY', amount_minor: 1250 }],
+    });
+    expect(v.partialRefunds[0]?.amountText).toMatch(/^人民币 ¥/);
+  });
+
   it('认不出的币种 / 脏数据：不编金额，行照常列（买家至少知道有一笔退款）', () => {
     const v = detailView({
       status: 'delivered',

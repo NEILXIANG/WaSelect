@@ -36,6 +36,12 @@ const WX_PAY_FIELDS = ['timeStamp', 'nonceStr', 'package', 'signType', 'paySign'
  * @why **不重排**：服务端已按 `priority` 排序（契约明说），前端再排一次
  *      就是"两个地方各定一次顺序"，漂移时表现为"后台改了优先级、小程序没变"。
  */
+/**
+ * 服务端没给 label 时的按钮名（审计 CPY-09）：原先回落到通道键名（stripe / wechat），买家读不懂。
+ * @why 不在小程序里写"通道键 → 中文名"映射：约束四（业务代码不认识具体支付方式），名字由 payment_channels 表下发。
+ */
+const CHANNEL_LABEL_FALLBACK = '在线支付';
+
 export function channelOptions(resp) {
   const items = resp && typeof resp === 'object' && Array.isArray(resp.items) ? resp.items : [];
   return (
@@ -46,7 +52,7 @@ export function channelOptions(resp) {
       .filter((c) => c.entryMode === 'in_app' || c.entryMode === 'copylink')
       .map((c) => ({
         channel: c.channel,
-        label: typeof c.label === 'string' && c.label !== '' ? c.label : c.channel,
+        label: typeof c.label === 'string' && c.label !== '' ? c.label : CHANNEL_LABEL_FALLBACK,
       }))
   );
 }
@@ -178,7 +184,8 @@ export function chargeOptions(listings, order) {
       if (c.entryMode !== 'in_app' && c.entryMode !== 'copylink') continue;
       if (seen.has(c.channel)) continue;
       seen.add(c.channel);
-      const label = typeof c.label === 'string' && c.label !== '' ? c.label : c.channel;
+      const label =
+        typeof c.label === 'string' && c.label !== '' ? c.label : CHANNEL_LABEL_FALLBACK;
       const charge = chargeOf(currency, o);
       out.push({
         channel: c.channel,

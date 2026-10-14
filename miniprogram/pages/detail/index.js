@@ -38,6 +38,7 @@ import {
   relatedNavMethod,
 } from './index.vm.js';
 import { errorFields } from '../../utils/error-text.js';
+import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { supportRows } from '../../utils/support.js';
@@ -206,6 +207,20 @@ Page({
   },
 
   /** 点同类推荐 → 那件的详情（A10）。 */
+  /**
+   * 轮播某张图加载失败（审计 UX-01：CDN 404 / 域名未登记）→ 这一张换成占位图，不留破图。
+   * @param {WechatMiniprogram.CustomEvent} e `data-index` 来自 wxml
+   */
+  onGalleryError(e) {
+    const i = Number(e?.currentTarget?.dataset?.index);
+    const images = this.data.product?.images;
+    if (!Array.isArray(images) || !Number.isInteger(i) || i < 0 || i >= images.length) return;
+    if (images[i] === PLACEHOLDER_IMAGE) return;
+    const next = images.slice();
+    next[i] = PLACEHOLDER_IMAGE;
+    this.setData({ product: { ...this.data.product, images: next } });
+  },
+
   onOpenRelated(e) {
     const id = e?.currentTarget?.dataset?.id;
     if (typeof id !== 'string' || id === '') return;

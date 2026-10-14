@@ -12,7 +12,7 @@ import { contactFields, errorFields, errorMessage, errorRef } from './error-text
 describe('errorMessage', () => {
   // 剩余清单 4-6（M9）：错误分层——主文案只给人话，错误码与链路号挪到 errorRef 小字（原先 `code message` 拼在一行）
   it('🔴 带 code + message → 主文案只有 message（不再把码拼在前面）', () => {
-    expect(errorMessage({ code: 50003, message: '汇率缺失' })).toBe('汇率缺失');
+    expect(errorMessage({ code: 40002, message: '地址格式错误' })).toBe('地址格式错误');
   });
 
   it('🔴 网络层失败（-1 / -2）→ 说人话（检查网络后重试），原始宿主串只进报障小字', () => {
@@ -22,13 +22,17 @@ describe('errorMessage', () => {
   });
 
   it('体验排查 2026-10-14：没有中文的 message（英文网关页 / 堆栈）→ 兜底文案，不把英文摆给买家；宿主 errMsg 另有 B35 用例', () => {
-    expect(errorMessage({ code: 50000, message: 'Internal Server Error' })).toBe('加载失败');
-    expect(errorMessage({ code: 50200, message: '<html>502 Bad Gateway</html>' })).toBe('加载失败');
+    expect(errorMessage({ code: 50000, message: 'Internal Server Error' })).toBe(
+      '没有成功，请稍后重试',
+    );
+    expect(errorMessage({ code: 50200, message: '<html>502 Bad Gateway</html>' })).toBe(
+      '没有成功，请稍后重试',
+    );
   });
 
   it('缺 message / message 是空白 → 兜底文案，不显示 undefined', () => {
-    expect(errorMessage({ code: 40011 })).toBe('加载失败');
-    expect(errorMessage({ code: 40011, message: '   ' })).toBe('加载失败');
+    expect(errorMessage({ code: 40002 })).toBe('没有成功，请稍后重试');
+    expect(errorMessage({ code: 40002, message: '   ' })).toBe('没有成功，请稍后重试');
   });
 
   it('Error 实例（没有 code）→ 只显示 message', () => {
@@ -37,27 +41,34 @@ describe('errorMessage', () => {
 
   it('形状完全不对（undefined / 原始值 / null）→ 兜底文案，不抛', () => {
     for (const e of [undefined, null, 'x', 42]) {
-      expect(errorMessage(e)).toBe('加载失败');
+      expect(errorMessage(e)).toBe('没有成功，请稍后重试');
     }
   });
 
-  it('宿主 fail 的形状（只有 errMsg）→ 读 errMsg，不落到"加载失败"（B35 / AJ-218）', () => {
-    // @why 宿主给的原因（如 navigateTo:fail webview count limit exceed）是排障时唯一的线索，
-    //      在这一层被扔掉的话，页面上只剩四个字。
-    expect(errorMessage({ errMsg: 'navigateTo:fail webview count limit exceed' })).toBe(
-      'navigateTo:fail webview count limit exceed',
-    );
+  it('🔴 宿主 fail 的形状（只有 errMsg）→ 主文案说人话，宿主原因进报障小字（审计 CPY-09；B35 / AJ-218 的线索不丢）', () => {
+    const e = { errMsg: 'navigateTo:fail webview count limit exceed' };
+    expect(errorMessage(e)).toBe('没有成功，请稍后重试');
+    expect(errorRef(e)).toBe('联系客服时请提供：navigateTo:fail webview count limit exceed');
   });
 
-  it('message 优先于 errMsg（顺序固定，不是"谁新谁赢"）', () => {
+  it('message 优先于 errMsg（有中文 message 就用它）', () => {
     expect(errorMessage({ message: '业务说的原因', errMsg: '宿主说的原因' })).toBe('业务说的原因');
-    // message 是空白时仍回落到 errMsg
-    expect(errorMessage({ message: '  ', errMsg: '宿主说的原因' })).toBe('宿主说的原因');
+  });
+
+  it('🔴 服务端原文说不清下一步的码 → 买家文案（审计 CPY-02）', () => {
+    expect(errorMessage({ code: 50003, message: '汇率不可用' })).toBe(
+      '暂时无法计算价格，请稍后再试',
+    );
+    expect(errorMessage({ code: 50004, message: '运费不可计算' })).toBe(
+      '暂时无法计算运费，请稍后再试',
+    );
+    expect(errorMessage({ code: 40011, message: '条款版本缺失或已过期' })).toContain('重新加载');
+    expect(errorMessage({ code: 40903, message: '重复提交' })).toContain('不要重复付款');
   });
 
   it('errMsg 不是字符串 / 是空白 → 仍走兜底，不显示 [object Object]', () => {
-    expect(errorMessage({ errMsg: 42 })).toBe('加载失败');
-    expect(errorMessage({ errMsg: '   ' })).toBe('加载失败');
+    expect(errorMessage({ errMsg: 42 })).toBe('没有成功，请稍后重试');
+    expect(errorMessage({ errMsg: '   ' })).toBe('没有成功，请稍后重试');
   });
 });
 

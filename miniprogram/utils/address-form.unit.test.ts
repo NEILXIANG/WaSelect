@@ -106,7 +106,7 @@ describe('formErrors（格式预检）', () => {
   //   用户一个字没写，却被说"写的不是英文"。空的说"请填写"，填了中文才说"请用英文"
   it('🔴 空字段说"请填写××"（带英文示例）；填了中文才说"请用英文"', () => {
     const empty = formErrors(emptyForm()).errors;
-    expect(empty.recipient).toBe('请填写收件人姓名（英文，如 Ken Tanaka）');
+    expect(empty.recipient).toBe('请填写收件人姓名（英文或拼音，如 Xiaoming Wang）');
     expect(empty.phone).toBe('请填写美国电话号码（10 位，如 4155550123）');
     expect(empty.line1).toBe('请填写街道地址（英文，如 350 5th Ave）');
     expect(empty.city).toBe('请填写城市（英文，如 New York）');

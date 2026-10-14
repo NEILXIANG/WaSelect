@@ -226,7 +226,7 @@ export function formErrors(model) {
   // 三端模拟测试 2026-10-11（新用户首单）：空字段说"请填写"，填了中文 / 全角才说"请用英文"——
   //   原先一个字没写也提示"请用英文/数字填写"，用户以为是自己写错了格式
   const blank = (v) => v.trim() === '';
-  if (blank(m.recipient)) errors.recipient = '请填写收件人姓名（英文，如 Ken Tanaka）';
+  if (blank(m.recipient)) errors.recipient = '请填写收件人姓名（英文或拼音，如 Xiaoming Wang）';
   else if (!ADDRESS_PATTERNS.ascii.test(m.recipient.trim()))
     errors.recipient = '收件人请用英文/数字填写（面单不支持中文或全角）';
   // P2-37：先归一常见写法再校验（与 toAddressInput 发出去的是同一个值）
@@ -352,7 +352,7 @@ export const ADDRESS_REJECT_TEXT = {
   zip_state_mismatch: '邮编和州对不上：请检查州或邮编',
   recipient: '收件人请用英文或拼音（面单是给美国承运商看的）',
   line1: '街道地址请用英文填写',
-  line2: '门牌 / 公寓号请用英文或数字填写',
+  line2: '公寓 / 单元号（Apt / Suite）请用英文或数字填写',
   city: '城市请用英文填写',
   phone: '电话请填美国号码：10 位数字',
   state: '请从下拉里选择州',

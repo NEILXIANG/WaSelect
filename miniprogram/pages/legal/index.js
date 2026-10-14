@@ -29,6 +29,7 @@
  */
 import { documentsView, legalState, sellerRows, termsView } from './index.vm.js';
 import { errorFields } from '../../utils/error-text.js';
+import { copyFailText } from '../../utils/privacy.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 
@@ -136,7 +137,12 @@ Page({
       // @see @limitation 二：失败要说一句话，并给出兜底动作
       // 复制失败与"取不到条款"分开（W-07）：条款列表还在，只是剪贴板没写进去
       // 全入口点击测试 2026-10-11：网址平时不显示，复制失败时才出现在各语种下面——提示随之改为"下面的链接"
-      fail: () => this.setData({ copied: '', copyError: '复制失败，请长按下面的链接手动复制' }),
+      // 审计 ITX-05：没同意隐私指引时说清原因（与支付页同一份 copyFailText）
+      fail: () =>
+        this.setData({
+          copied: '',
+          copyError: copyFailText(app.globalData.privacy, '复制失败，请长按下面的链接手动复制'),
+        }),
     });
   },
 });

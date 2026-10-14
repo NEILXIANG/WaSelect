@@ -481,7 +481,7 @@ Page({
   },
 
   /**
-   * 查看条款全文。
+   * 查看用户协议全文。
    * @why 勾选框的**另一半**：没有去处，"已阅读"这三个字是空的
    *      （@see ./index.wxml 条款区的注释；pages/legal/index.js 文件头）。
    * @why 用 `navigateTo` 而不是 `redirectTo`：看完条款要**回到**结算页继续下单，
@@ -510,8 +510,8 @@ Page({
     }
     if (fix === 'terms') {
       wxApi.showModal({
-        title: '请阅读并同意购买条款',
-        content: `提交订单前需要同意《购买条款》（版本 ${this.data.termsVersion}）。想先看全文可点「查看条款」。`,
+        title: '请阅读并同意用户协议',
+        content: `提交订单前需要同意《用户协议》（版本 ${this.data.termsVersion}）。想先看全文可点「查看用户协议」。`,
         confirmText: '同意',
         cancelText: '查看条款',
         success: (r) => {

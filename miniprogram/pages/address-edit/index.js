@@ -64,6 +64,8 @@ Page({
     saving: false,
     /** **取数**错误文案（空串 = 无错误）；只在编辑态拉地址失败时出现。 */
     error: '',
+    /** 地址已不存在（审计 UX-04：与断网分开——断网给「重试」，已删只给「返回列表」）。 */
+    gone: false,
     /**
      * **保存**错误文案（W-07）：与取数错误分开——保存失败时表单还在，用户要的是改一改再点，
      * 不是"返回列表重开这一页"（照做会丢掉刚填的整张表单）。
@@ -107,7 +109,7 @@ Page({
 
   /** 编辑态：拉列表找自己（@why 见文件头：契约无单条接口，query 传字段要转义）。 */
   async loadAddress() {
-    this.setData({ loading: true });
+    this.setData({ loading: true, error: '', errorRef: '', gone: false });
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/addresses`,
@@ -117,7 +119,7 @@ Page({
       const found = list.find((a) => a && a.id === this.addressId);
       if (found === undefined) {
         // ⚠️ 找不到 = 已被删掉或不属于当前用户：**明示**而不是留一个空表单让用户重填一遍
-        this.setData({ error: '这个地址已不存在（可能已被删除）' });
+        this.setData({ error: '这个地址已不存在（可能已被删除）', gone: true });
         return;
       }
       const form = formModel(found);
@@ -144,6 +146,12 @@ Page({
    */
   onBack() {
     wxApi.navigateBack();
+  },
+
+  /** 取数失败（非"已删除"）时的「重试」（审计 UX-04）：断网恢复后不必退出重进。 */
+  onRetryLoad() {
+    if (this.addressId === '') return;
+    void this.loadAddress();
   },
 
   onInput(e) {

@@ -125,6 +125,8 @@ Page({
     error: '',
     /** 错误块标题（空 = 缺省"支付页没能打开"）；发起支付 / 复制失败时页面是开着的，另给标题（规律排查 2026-10-12）。 */
     errorTitle: '',
+    /** 当前错误是复制失败（vm copyResult；审计 ITX-05）。 */
+    copyFailed: false,
     /**
      * **上一次支付动作**的结果（空串 = 没有；MP3-07）。
      * @why 与 `error` 分开：`error` 是"取数出错"，每次重取都要清；
@@ -181,7 +183,14 @@ Page({
     // 清掉上一次的错误：不清的话旧错误会一直挂在重新取回来的内容上面
     // ⚠️ `payResult` **不在这里清**（MP3-07）：它是"上一次支付的结果"，不是"上一次取数的错误"。
     //    微信收银台取消后会触发 onShow → reload，把"支付未完成"抹掉等于什么都没说。
-    this.setData({ loading: true, error: '', errorRef: '', errorTitle: '', noChannel: false });
+    this.setData({
+      loading: true,
+      error: '',
+      errorRef: '',
+      errorTitle: '',
+      copyFailed: false,
+      noChannel: false,
+    });
     // ⚠️ 领号（MP3-07）：连续两次切前后台会并发两个 load，
     //    旧的那个若后到，会把"该订单已付款"旁边的支付方式**盖回去**——
     //    首页与购物车在 B36 里已经用序号修过同一类问题，支付页没跟上。
@@ -283,7 +292,13 @@ Page({
    *      网络抖一下就在他正在用的短链上面盖一条"加载失败"，比什么都不说更糟。
    *      下一次回到前台还会再查，且"查看订单"始终可点。
    */
-  async checkStatus() {
+  /**
+   * @param {{manual?: boolean}} [opts] `manual` = 买家自己点的「我已付款，刷新状态」/ 下拉：
+   *        失败要说一句（审计 UX-03：原先按下无变化，买家以为没付上、再付一次）；自动重查仍静默。
+   */
+  async checkStatus(opts) {
+    const manual = opts !== null && typeof opts === 'object' && opts.manual === true;
+    if (manual) this.setData({ confirmNote: '' });
     try {
       const order = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/${this.orderId}`,
@@ -316,7 +331,13 @@ Page({
         this.statusTimer = setTimeout(() => void this.checkStatus(), 2000 * this.statusRetries);
       }
     } catch {
-      // 见上：静默
+      // 自动重查静默（不打扰正在用的短链屏）；手动刷新要有反馈，短链与按钮照旧保留
+      if (manual) {
+        this.setData({
+          confirmNote:
+            '没查到最新状态（网络不太稳定），请稍后再点「我已付款，刷新状态」；请勿重复付款',
+        });
+      }
     }
   },
 
@@ -531,6 +552,11 @@ Page({
       wxApi.switchTab({ url: ORDER_PAGE });
       return;
     }
+    // 审计 ITX-05：复制失败时「再复制一次」就是再复制，不重载整页（重载会换掉页面状态，链接还是那条）
+    if (this.data.copyFailed === true) {
+      this.onCopy();
+      return;
+    }
     void this.load();
   },
 
@@ -592,7 +618,7 @@ Page({
   onRefreshPaid() {
     if (this.orderId === '') return;
     this.statusRetries = 0;
-    void this.checkStatus();
+    void this.checkStatus({ manual: true });
   },
 
   /** 下拉刷新（A1）：与「我已付款，刷新状态」同一件事，完了收起下拉动画。 */
@@ -602,6 +628,6 @@ Page({
       return;
     }
     this.statusRetries = 0;
-    void this.checkStatus().finally(() => wxApi.stopPullDownRefresh());
+    void this.checkStatus({ manual: true }).finally(() => wxApi.stopPullDownRefresh());
   },
 });

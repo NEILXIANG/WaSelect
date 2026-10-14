@@ -222,6 +222,26 @@ describe('走真实宿主时的行为', () => {
     expect(navigated).toEqual(['/pages/detail/index?id=p-1']);
   });
 
+  it('🔴 同一地址连点两次 → 只跳一次；换个地址照跳（审计 ITX-01）', () => {
+    const { navigated } = stubHost();
+    const api = createWxApi();
+    api.navigateTo({ url: '/pages/pay/index?orderId=o-1' });
+    api.navigateTo({ url: '/pages/pay/index?orderId=o-1' });
+    api.navigateTo({ url: '/pages/detail/index?id=p-1' });
+    expect(navigated).toEqual(['/pages/pay/index?orderId=o-1', '/pages/detail/index?id=p-1']);
+  });
+
+  it('🔴 页面栈满导致 navigateTo 失败 → 改 redirectTo 到同一地址（审计 ITX-02）', () => {
+    const redirected: string[] = [];
+    vi.stubGlobal('wx', {
+      navigateTo: (o: { fail?: (e: { errMsg: string }) => void }) =>
+        o.fail?.({ errMsg: 'navigateTo:fail webview count limit exceed' }),
+      redirectTo: (o: { url: string }) => redirected.push(o.url),
+    });
+    createWxApi().navigateTo({ url: '/pages/checkout/index?mode=buy_now' });
+    expect(redirected).toEqual(['/pages/checkout/index?mode=buy_now']);
+  });
+
   it('login 原样转发（回调式不包 Promise——Promise 化在 auth-session，一处）', () => {
     stubHost();
     let code = '';

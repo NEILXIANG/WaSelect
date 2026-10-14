@@ -113,8 +113,10 @@ export const BLOCKED_COMPLIANCE_TAG = [
 ] as const satisfies readonly ComplianceTag[];
 
 /**
- * 前端订单展示分组（技术文档 §1 末尾的映射）。
- * @tradeoff 放在 shared 而非前端：管理后台与小程序要显示同一套标签，避免两处文案漂移。
+ * 订单状态的**粗分组**（技术文档 §1 末尾的映射），只作参照。
+ * @limitation 审计 CPY-10（2026-10-14）更正：原注释称"管理后台与小程序都用这一份"，实际两端都不引用——
+ *             小程序进不了 shared，状态词在 `miniprogram/utils/order-status.js`；管理端在 `admin-web/src/orders/view.ts`（见其 @limitation 一）。
+ *             改状态文案要改那两处，改这里不会影响任何页面。
  */
 export const ORDER_STATUS_DISPLAY: Readonly<Record<OrderStatus, string>> = {
   created: '待付款',

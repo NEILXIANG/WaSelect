@@ -228,7 +228,7 @@ describe('勾选结算（A3，AJ-416）', () => {
     expect(page.data['bar']).toEqual({
       allSelected: false,
       selectedCount: 1,
-      ctaText: '去结算 (1)',
+      ctaText: '去结算（1）',
     });
     expect((page.data['rows'] as Array<{ selected: boolean }>).map((r) => r.selected)).toEqual([
       true,

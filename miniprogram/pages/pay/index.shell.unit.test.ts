@@ -31,6 +31,8 @@ let noChannels = false;
 let linkSeq: number;
 let failOrderFetch: boolean;
 let clipboard: string[];
+/** 审计 ITX-05：true = 剪贴板写入失败。 */
+let clipFails = false;
 /** `POST /orders/{id}/pay` 下发的意图形状（切换通道 / auto 两种场景要用）。 */
 let postPlan: 'copylink' | 'in_app' | 'auto';
 /** 非空 = 把 `GET /orders/{id}` 挂起（MP3-07：编排两个 load 的先后）。 */
@@ -91,6 +93,7 @@ beforeEach(async () => {
   linkSeq = 0;
   failOrderFetch = false;
   clipboard = [];
+  clipFails = false;
   postPlan = 'copylink';
   orderHold = null;
   payFails = false;
@@ -107,9 +110,10 @@ beforeEach(async () => {
     switchTab: (o: { url: string }) => {
       tabs.push(o.url);
     },
-    setClipboardData: (o: { data: string; success?: () => void }) => {
+    setClipboardData: (o: { data: string; success?: () => void; fail?: () => void }) => {
       clipboard.push(o.data);
-      o.success?.();
+      if (clipFails) o.fail?.();
+      else o.success?.();
     },
     redirectTo: (o: { url: string }) => {
       redirects.push(o.url);
@@ -379,6 +383,33 @@ describe('支付页薄壳：银行卡付款后的确认中（W-02）', () => {
     // 走查 2026-10-08 文案去重后：已付款态是"已付款，无需再支付"（精确断言，不放宽）
     expect(page.data['closedText']).toBe('已付款，无需再支付');
     expect(page.data['payUrl']).toBe('');
+  });
+
+  it('🔴 「我已付款，刷新状态」查询失败 → 说一句没查到、劝勿重复付款，短链保留（审计 UX-03）', async () => {
+    await toCopylinkScreen();
+    failOrderFetch = true;
+    call('onRefreshPaid');
+    await settle();
+    expect(String(page.data['confirmNote'])).toContain('请勿重复付款');
+    expect(String(page.data['confirmNote'])).toContain('没查到');
+    expect(page.data['payUrl']).toBe('https://pay.test/o/link-1');
+  });
+
+  it('🔴 复制失败 → 按钮写「再复制一次」，点了再复制同一条链接、不重载整页（审计 ITX-05）', async () => {
+    await toCopylinkScreen();
+    clipFails = true;
+    call('onCopy');
+    expect(page.data['copyFailed']).toBe(true);
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    expect(wxml).toContain("copyFailed ? '再复制一次'");
+    clipFails = false;
+    const fetchesBefore = orderFetches();
+    call('onRetry');
+    await settle();
+    expect(clipboard).toEqual(['https://pay.test/o/link-1', 'https://pay.test/o/link-1']);
+    expect(orderFetches()).toBe(fetchesBefore);
+    expect(page.data['copyFailed']).toBe(false);
+    expect(page.data['error']).toBe('');
   });
 
   it('🔴 下拉刷新 → 同样只查状态（不重取支付方式、不换掉短链）并收起下拉动画', async () => {

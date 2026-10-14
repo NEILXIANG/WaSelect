@@ -8,14 +8,16 @@ import { loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 let page: LoadedPage;
 let urls: string[];
 const clip: string[] = [];
+let clipFail = false;
 
 async function open(support: unknown): Promise<void> {
   urls = [];
   clip.length = 0;
   vi.stubGlobal('wx', {
-    setClipboardData: (o: { data: string; success?: () => void }) => {
+    setClipboardData: (o: { data: string; success?: () => void; fail?: () => void }) => {
       clip.push(o.data);
-      o.success?.();
+      if (clipFail) o.fail?.();
+      else o.success?.();
     },
     navigateTo: () => undefined,
     switchTab: () => undefined,
@@ -36,6 +38,7 @@ async function open(support: unknown): Promise<void> {
 
 beforeEach(() => {
   vi.unstubAllGlobals();
+  clipFail = false;
 });
 
 describe('「我的」客服入口（4-2）', () => {
@@ -49,6 +52,18 @@ describe('「我的」客服入口（4-2）', () => {
     });
     expect(clip).toEqual(['waselect_cs']);
     expect(page.data['supportCopied']).toBe('wechat');
+  });
+
+  it('🔴 复制失败 → 那一行说"复制失败，请长按手动复制"，不再静默（审计 ITX-05）', async () => {
+    await open({ wechat: 'waselect_cs' });
+    clipFail = true;
+    (page['onCopySupport'] as (e: unknown) => void)({
+      currentTarget: { dataset: { key: 'wechat', value: 'waselect_cs' } },
+    });
+    expect(page.data['supportCopyFailed']).toBe('wechat');
+    expect(page.data['supportCopied']).toBe('');
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
+    expect(wxml).toContain("supportCopyFailed === item.key ? '复制失败，请长按手动复制'");
   });
 
   it('客服未配置（空对象）或请求失败 → support 为空数组（不显示客服卡，也不报错打扰）', async () => {
@@ -303,7 +318,7 @@ describe('「我的」联系客服（全入口点击测试 2026-10-11）', () =>
   );
   it('🔴 可复制的行有「复制」字样，复制后变「已复制」；号码照常显示', () => {
     expect(wxml).toMatch(
-      /<text class="mine__support-act" wx:if="\{\{item\.copyable\}\}">\{\{supportCopied === item\.key \? '已复制' : '复制'\}\}<\/text>/,
+      /<text class="mine__support-act" wx:if="\{\{item\.copyable\}\}">\{\{supportCopied === item\.key \? '已复制' : supportCopyFailed === item\.key \? '复制失败，请长按手动复制' : '复制'\}\}<\/text>/,
     );
     expect(wxml).toMatch(
       /<text class="mine__value mine__support-value" user-select>\{\{item\.value\}\}<\/text>/,

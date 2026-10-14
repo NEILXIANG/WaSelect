@@ -140,7 +140,7 @@ describe('orderShortcuts（M-10 附，AJ-408：「我的」四个订单入口）
     expect(orderShortcuts(undefined).map((r) => [r.key, r.label])).toEqual([
       ['unpaid', '待付款'],
       ['to_ship', '采购中'],
-      ['shipped', '已发货'],
+      ['shipped', '待收货'],
       ['after_sale', '售后·退款'],
     ]);
   });

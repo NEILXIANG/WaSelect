@@ -77,6 +77,8 @@ Page({
     supportLoaded: false,
     /** 刚复制的是哪一行（'' = 没有）。 */
     supportCopied: '',
+    /** 复制失败的那一行（审计 ITX-05：原先失败静默，按钮还写着「复制」）。 */
+    supportCopyFailed: '',
     /** M-10 附（AJ-408）：四个订单入口（vm `orderShortcuts`；取到订单前无角标）。 */
     shortcuts: orderShortcuts(undefined),
   },
@@ -238,7 +240,10 @@ Page({
     if (typeof value !== 'string' || value === '') return;
     wxApi.setClipboardData({
       data: value,
-      success: () => this.setData({ supportCopied: typeof key === 'string' ? key : '' }),
+      success: () =>
+        this.setData({ supportCopied: typeof key === 'string' ? key : '', supportCopyFailed: '' }),
+      fail: () =>
+        this.setData({ supportCopied: '', supportCopyFailed: typeof key === 'string' ? key : '' }),
     });
   },
 

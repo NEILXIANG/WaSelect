@@ -174,7 +174,11 @@ describe('documentsView（4-1）', () => {
   it('🔴 按固定顺序给四类文档的中文名；每类只留 https 链接；整类没有可用链接的不出现；不认识的文档类不出现', () => {
     const docs = documentsView(RES);
     expect(docs.map((d) => d.key)).toEqual(['terms', 'privacy', 'tokushoho']);
-    expect(docs.map((d) => d.title)).toEqual(['用户协议', '隐私政策', '特定商取引法表示']);
+    expect(docs.map((d) => d.title)).toEqual([
+      '用户协议',
+      '隐私政策',
+      '日本特定商交易法标示（商家信息）',
+    ]);
     expect(docs[1]?.langs.map((l) => l.key)).toEqual(['privacy:zh', 'privacy:en']);
     expect(docs[0]?.langs[0]).toEqual({ key: 'terms:zh', label: '中文', url: `${base}/terms/#zh` });
   });
@@ -193,7 +197,7 @@ describe('sellerRows（4-1）', () => {
         seller: { email: 'support@example.com', name: '株式会社ワセレクト', bogus: 'x' },
       }),
     ).toEqual([
-      { label: '販売業者', value: '株式会社ワセレクト' },
+      { label: '销售商（販売業者）', value: '株式会社ワセレクト' },
       { label: '联系邮箱', value: 'support@example.com' },
     ]);
     expect(sellerRows({ seller: {} })).toEqual([]);

@@ -327,7 +327,7 @@ interface WxHost {
   setStorageSync(key: string, value: unknown): void;
   removeStorageSync(key: string): void;
   getRealtimeLogManager?: () => RealtimeLogger | undefined;
-  navigateTo(option: WxNavigateOption): void;
+  navigateTo(option: WxNavigateOption & { fail?: (err?: { errMsg?: string }) => void }): void;
   /** ⚠️ 与 `WxApi.switchTab` 一一对应：这里漏登记不会红在业务行，
    *      只会红在 `createWxApi` 里那一行 `host().switchTab(...)`——报错位置离根因一屏远。
    *      （本次 S5 引入 `switchTab` 时正好踩到：`WxApi` 与实现都补了，宿主形状漏了。） */
@@ -376,7 +376,11 @@ function host(): WxHost {
  *      其余仍走真实宿主。整体替换的后果是"测试里没替换到的能力静默变成 undefined"，
  *      表现为"这个用例能跑，换个用例就 undefined 崩"。
  */
+/** 同一地址的重复跳转在这段时间内忽略（审计 ITX-01）。 */
+const NAV_DEDUPE_MS = 600;
+
 export function createWxApi(over: Partial<WxApi> = {}): WxApi {
+  const lastNav = { url: '', at: 0 };
   const real: WxApi = {
     request: (option) => {
       host().request(option);
@@ -393,7 +397,21 @@ export function createWxApi(over: Partial<WxApi> = {}): WxApi {
     },
     getRealtimeLogManager: () => host().getRealtimeLogManager?.(),
     navigateTo: (option) => {
-      host().navigateTo(option);
+      // 审计 ITX-01：同一地址 600ms 内只跳一次（双击会压入两个相同页面，要返回两次）
+      const now = Date.now();
+      if (option.url === lastNav.url && now - lastNav.at < NAV_DEDUPE_MS) return;
+      lastNav.url = option.url;
+      lastNav.at = now;
+      host().navigateTo({
+        ...option,
+        // 审计 ITX-02：页面栈满（10 层）时 navigateTo 静默失败 → 改用 redirectTo 替换当前页，至少能到达
+        fail: (err?: { errMsg?: string }) => {
+          lastNav.url = '';
+          if (typeof err?.errMsg === 'string' && /limit/i.test(err.errMsg)) {
+            host().redirectTo({ url: option.url });
+          }
+        },
+      });
     },
     switchTab: (option) => {
       host().switchTab(option);

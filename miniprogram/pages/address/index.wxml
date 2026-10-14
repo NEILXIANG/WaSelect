@@ -16,7 +16,8 @@
   <view class="ws-gutter addr__head"><ws-section-head kicker="Address Book" title="收货地址" /></view>
 
   <!-- 状态块（S4：走 `ws-state-block` 的三段式） -->
-  <ws-state-block wx:if="{{loading}}" kind="loading" title="正在加载地址" compact="{{true}}" />
+  <!-- 审计 UX-05：已有内容时（onShow 刷新）不在列表上方插整块"正在加载"，列表原样留着等新数据替换 -->
+  <ws-state-block wx:if="{{loading && rows.length === 0}}" kind="loading" title="正在加载地址" compact="{{true}}" />
 
   <ws-state-block
     wx:if="{{error}}"

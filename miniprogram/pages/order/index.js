@@ -113,7 +113,9 @@ Page({
   /** 切到某个页签（只改视图状态，不取数）。 */
   setTab(key) {
     const activeTab = resolveOrderTab(key);
-    this.setData({ activeTab, tabs: tabsView(activeTab) });
+    // 审计 UX-05：换了页签就先清掉上一个页签的单（加载块只在列表为空时出现，旧页签的单不能冒充新页签）
+    const changed = activeTab !== this.data.activeTab;
+    this.setData({ activeTab, tabs: tabsView(activeTab), ...(changed ? { rows: [] } : {}) });
   },
 
   /**

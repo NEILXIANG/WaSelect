@@ -119,7 +119,7 @@
       >
         <text class="ws-note">{{item.label}}</text>
         <text class="mine__value mine__support-value" user-select>{{item.value}}</text>
-        <text class="mine__support-act" wx:if="{{item.copyable}}">{{supportCopied === item.key ? '已复制' : '复制'}}</text>
+        <text class="mine__support-act" wx:if="{{item.copyable}}">{{supportCopied === item.key ? '已复制' : supportCopyFailed === item.key ? '复制失败，请长按手动复制' : '复制'}}</text>
       </view>
     </view>
   </view>

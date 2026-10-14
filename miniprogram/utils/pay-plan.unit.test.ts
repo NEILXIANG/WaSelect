@@ -29,7 +29,7 @@ const WX_PAY = {
 };
 
 describe('channelOptions（支付入口）', () => {
-  it('只留 in_app / copylink；label 缺失回落 channel', () => {
+  it('只留 in_app / copylink；label 缺失回落「在线支付」（审计 CPY-09：不显示通道键名）', () => {
     const out = channelOptions({
       items: [
         { channel: 'wechat', entryMode: 'in_app', label: '微信支付' },
@@ -41,7 +41,7 @@ describe('channelOptions（支付入口）', () => {
     expect(out).toEqual([
       { channel: 'wechat', label: '微信支付' },
       { channel: 'stripe', label: '银行卡（Stripe）' },
-      { channel: 'nolabel', label: 'nolabel' },
+      { channel: 'nolabel', label: '在线支付' },
     ]);
   });
 

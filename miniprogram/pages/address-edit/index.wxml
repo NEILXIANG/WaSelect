@@ -24,7 +24,9 @@
     title="没能取到这条地址"
     reason="{{error}}"
     refText="{{errorRef}}"
-    altText="返回列表重开这一页"
+    actionText="{{gone ? '' : '重试'}}"
+    bindaction="onRetryLoad"
+    altText="{{gone ? '返回地址列表' : '返回列表'}}"
     bindalt="onBack"
   />
 
@@ -56,7 +58,7 @@
           data-field="recipient"
           maxlength="{{max.recipient}}"
           bindinput="onInput"
-          placeholder="Ken Tanaka"
+          placeholder="例：Xiaoming Wang"
           placeholder-class="ph"
         />
         <text class="field__error" wx:if="{{errors.recipient}}">{{errors.recipient}}</text>
@@ -87,7 +89,7 @@
           data-field="line1"
           maxlength="{{max.line1}}"
           bindinput="onInput"
-          placeholder="1234 Market St"
+          placeholder="例：1234 Market St"
           placeholder-class="ph"
         />
         <text class="field__error" wx:if="{{errors.line1}}">{{errors.line1}}</text>
@@ -100,7 +102,7 @@
           data-field="line2"
           maxlength="{{max.line2}}"
           bindinput="onInput"
-          placeholder="Apt 5B"
+          placeholder="例：Apt 5B（没有可留空）"
           placeholder-class="ph"
         />
         <text class="field__error" wx:if="{{errors.line2}}">{{errors.line2}}</text>
@@ -113,7 +115,7 @@
           data-field="city"
           maxlength="{{max.city}}"
           bindinput="onInput"
-          placeholder="San Francisco"
+          placeholder="例：San Francisco"
           placeholder-class="ph"
         />
         <text class="field__error" wx:if="{{errors.city}}">{{errors.city}}</text>
@@ -138,7 +140,7 @@
           data-field="postal_code"
           maxlength="{{max.postal_code}}"
           bindinput="onInput"
-          placeholder="94102"
+          placeholder="例：94102"
           placeholder-class="ph"
         />
         <text class="field__error" wx:if="{{errors.postal_code}}">{{errors.postal_code}}</text>
@@ -164,7 +166,7 @@
       loading="{{saving}}"
       bindtap="onSave"
     />
-    <text class="ws-note tip">收件信息请用英文/数字填写（国际面单不支持中文与全角）</text>
+    <text class="ws-note tip">收件信息请用英文/数字填写（美国面单不支持中文与全角）</text>
   </view>
   </block>
 </view>

@@ -24,7 +24,7 @@
     title="{{noOrderId ? '没找到这张订单' : (errorTitle || '支付页没能打开')}}"
     reason="{{error}}"
     refText="{{errorRef}}"
-    actionText="{{noOrderId ? '查看我的订单' : '重试'}}"
+    actionText="{{noOrderId ? '查看我的订单' : copyFailed ? '再复制一次' : '重试'}}"
     compact="{{true}}"
     bindaction="onRetry"
   />

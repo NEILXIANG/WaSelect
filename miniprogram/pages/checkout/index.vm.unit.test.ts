@@ -75,7 +75,7 @@ describe('submitGate（提交闸门）', () => {
   it('⚠️ 每一项缺失都给**具体原因**（禁用按钮不说为什么会被读成"这站坏了"）', () => {
     expect(submitGate({ ...OK, itemCount: 0 }).reason).toBe('购物车是空的');
     expect(submitGate({ ...OK, addressId: '' }).reason).toBe('请选择收货地址');
-    expect(submitGate({ ...OK, termsAccepted: false }).reason).toBe('请先阅读并同意购买条款');
+    expect(submitGate({ ...OK, termsAccepted: false }).reason).toBe('请先阅读并同意用户协议');
     expect(submitGate({ ...OK, totalJpy: null }).reason).toBe('运费与合计还在计算中');
   });
 
@@ -300,16 +300,17 @@ describe('submitGate：条款与报价的失败态（AJ-228）', () => {
   it('🔴 条款取失败 → 拦，且原因说的是条款（不是"请先同意"）', () => {
     const g = submitGate({ ...OK, termsReady: false, termsFailed: true });
     expect(g.ok).toBe(false);
-    expect(g.reason).toContain('条款');
+    expect(g.reason).toContain('用户协议');
     expect(g.reason).not.toContain('同意');
   });
   it('条款还在加载 → 拦，说"正在加载"', () => {
     expect(submitGate({ ...OK, termsReady: false }).reason).toContain('正在加载');
   });
-  it('🔴 报价失败 → 说"报价失败 / 购物车"，不说"计算中"（失败了就不会再有结果）', () => {
+  it('🔴 报价失败 → 指向同屏的「重新加载」，不说"计算中"（失败了就不会再有结果；审计 CPY-02 起不再另指"返回购物车"）', () => {
     const g = submitGate({ ...OK, totalJpy: null, quoteFailed: true });
     expect(g.ok).toBe(false);
-    expect(g.reason).toContain('购物车');
+    expect(g.reason).toContain('重新加载');
+    expect(g.reason).not.toContain('购物车');
     expect(g.reason).not.toContain('计算中');
   });
   it('报价还没回来（没失败）→ 仍说"计算中"', () => {
@@ -479,9 +480,9 @@ describe('立即购买模式的失败文案（审查 2026-10-09）', () => {
   it('🔴 buyNow：报价失败的闸门说法不提购物车', () => {
     const OK = { itemCount: 1, addressId: 'addr-1', termsAccepted: true, totalJpy: 9150 };
     expect(submitGate({ ...OK, quoteFailed: true, buyNow: true }).reason).toBe(
-      '报价失败，请返回商品页后重试',
+      '报价失败，请点上方「重新加载」重试',
     );
-    expect(submitGate({ ...OK, quoteFailed: true }).reason).toContain('返回购物车');
+    expect(submitGate({ ...OK, quoteFailed: true, buyNow: true }).reason).not.toContain('购物车');
   });
 });
 
@@ -518,7 +519,7 @@ describe('商品已下架（报价 / 建单 40401）：给走得通的出口', (
       '有商品已下架，请回购物车删掉它再结算',
     );
     expect(submitGate({ ...base, productGone: false, buyNow: true }).reason).toBe(
-      '报价失败，请返回商品页后重试',
+      '报价失败，请点上方「重新加载」重试',
     );
     // 没勾条款、没选地址时也先说下架：买不了的东西不该先让人去勾条款
     expect(
@@ -570,7 +571,7 @@ describe('第二轮审计 2026-10-11：结算页（F4 / F5 / F7 / MP-9）', () =
     expect(fail(40916)).not.toContain('重试');
     expect(fail(40301, true)).toContain('账号');
     expect(fail(40301, true)).not.toContain('重试');
-    expect(fail(50000)).toContain('购物车');
+    expect(fail(50000)).toContain('重新加载');
   });
 
   /**

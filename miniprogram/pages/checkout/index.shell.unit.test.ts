@@ -413,7 +413,7 @@ describe('结算页：点「提交订单」时缺什么就带到哪（全入口�
     await settle();
     expect(posts).toHaveLength(0);
     expect(modals).toHaveLength(1);
-    expect(modals[0]!.content).toContain('购买条款');
+    expect(modals[0]!.content).toContain('用户协议');
     modals[0]!.success?.({ confirm: true });
     await settle();
     expect(page.data['termsAccepted']).toBe(true);
@@ -508,7 +508,7 @@ describe('结算页薄壳：重报价窗口与两个跳转（MP3-05 / MP3-09 / M
     expect(String(page.data['error'])).toContain('未付款的订单太多了');
   });
 
-  it('🔴 建单在途时点「收货地址」/「查看条款全文」：不跳（支付页会压在地址页上面）', async () => {
+  it('🔴 建单在途时点「收货地址」/「查看用户协议全文」：不跳（支付页会压在地址页上面）', async () => {
     await ready();
     orderHold = deferred();
     call('onSubmit');
@@ -721,7 +721,7 @@ describe('结算页模板：条款勾选看得出是个勾选框（A5，AJ-416�
   it('🔴 未勾选时也有框（☐），勾上是 ☑——原先未勾选只有一行字，看不出能点', () => {
     const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
     expect(wxml).toContain(
-      "{{termsAccepted ? '☑ 我已阅读并同意购买条款' : '☐ 我已阅读并同意购买条款'}}",
+      "{{termsAccepted ? '☑ 我已阅读并同意用户协议' : '☐ 我已阅读并同意用户协议'}}",
     );
   });
 });

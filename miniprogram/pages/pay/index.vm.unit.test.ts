@@ -84,6 +84,7 @@ describe('copyResult × 隐私授权（剩余清单 4-3）', () => {
     expect(copyResult(false, 'agreed').error).toBe('复制失败，请长按下方链接手动复制');
     expect(copyResult(true, 'denied')).toEqual({
       copied: true,
+      copyFailed: false,
       error: '',
       errorRef: '',
       errorTitle: '',
@@ -95,12 +96,19 @@ describe('copyResult × 隐私授权（剩余清单 4-3）', () => {
 
 describe('copyResult（复制短链之后页面该显示什么，B34 / AJ-217）', () => {
   it('成功：按钮改"已复制"，且不带错误（成功时不该留下上一次的失败提示）', () => {
-    expect(copyResult(true)).toEqual({ copied: true, error: '', errorRef: '', errorTitle: '' });
+    expect(copyResult(true)).toEqual({
+      copied: true,
+      copyFailed: false,
+      error: '',
+      errorRef: '',
+      errorTitle: '',
+    });
   });
 
   it('失败：给兜底动作，而不是只说"失败"——链接就在屏幕上，长按可选', () => {
     const r = copyResult(false);
     expect(r.copied).toBe(false);
+    expect(r.copyFailed).toBe(true);
     expect(r.error).toContain('复制失败');
     // ⚠️ 这一句是 B34 的要点：只说"复制失败"等于告诉用户走投无路
     expect(r.error).toContain('长按');

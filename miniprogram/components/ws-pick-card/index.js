@@ -80,7 +80,23 @@ Component({
     tags: { type: Array, value: [] },
   },
 
+  data: {
+    /** 当前这张图加载失败（审计 UX-01）；换了图就复位（observers）。 */
+    imgFailed: false,
+  },
+
+  observers: {
+    image() {
+      this.setData({ imgFailed: false });
+    },
+  },
+
   methods: {
+    /** 图片加载失败 → 按"无图"渲染（审计 UX-01）。 */
+    onImgError() {
+      this.setData({ imgFailed: true });
+    },
+
     onTap() {
       // ⚠️ 不带 detail：本组件没有"点了卡上哪个位置"这类信息可给，
       //    把坐标透传出去只会让页面以为有内容可看（与 ws-button 同口径）。

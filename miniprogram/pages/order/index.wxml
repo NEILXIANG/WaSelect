@@ -26,7 +26,8 @@
     >{{item.label}}</view>
   </view>
 
-  <ws-state-block wx:if="{{loading}}" kind="loading" title="正在加载订单" compact="{{true}}" />
+  <!-- 审计 UX-05：已有内容时（onShow 刷新）不在列表上方插整块"正在加载"，列表原样留着等新数据替换 -->
+  <ws-state-block wx:if="{{loading && rows.length === 0}}" kind="loading" title="正在加载订单" compact="{{true}}" />
 
   <!-- P2-38：错误态给"重试"（以前只有一行红字；本页是 tab 页，切走再切回才会重取，用户想不到） -->
   <ws-state-block
