@@ -20,6 +20,7 @@ import { useCategories } from '../categories/useCategories.js';
 import { categoryName } from '../categories/view.js';
 import { LIST_SORT_KEYS, LOW_STOCK_THRESHOLD, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { DEFAULT_PAGE_SIZE, PageSizeSelect, readListParams, SortTh } from '../ui/list-controls.js';
+import { ListError } from '../ui/list-error.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import type { Route } from '../router.js';
@@ -250,6 +251,8 @@ export function ProductsPage({ api, onEdit, flash = '', route, onNavigate }: Pro
 
       <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
       {loading && <p className="muted">加载中…</p>}
+      {/* 体验审查 2026-10-15（P2-4）：@see ../ui/list-error.jsx（失败时列表保留上一次结果，页内必须说清） */}
+      {!loading && failed && <ListError what="商品列表" />}
       {!loading && rows.length === 0 && !failed && (
         <p className="muted">
           {applied !== '' || lowStock || status !== 'all' ? (

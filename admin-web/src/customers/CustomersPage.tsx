@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LIST_SORT_KEYS, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { PageSizeSelect, readListParams, SortTh } from '../ui/list-controls.js';
+import { ListError } from '../ui/list-error.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { Badge } from '../ui/badge.js';
 import type { Route } from '../router.js';
@@ -68,10 +69,18 @@ function CustomerList({
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  /**
+   * 取数失败（体验审查 2026-10-15，P2-4）。
+   * @why 原先这一页连这个 state 都没有：失败只走 Toast，而列表**保留上一次结果**——
+   *      右下角的红字与表格没有视觉关联，运营会照着一份过期名单去拉黑 / 解除。
+   * @why 只用来点页内标记，不参与空态判断：失败时 `rows` 还是上一次的，空态本来就不会出现。
+   */
+  const [failed, setFailed] = useState(false);
   const sink = useToasts();
 
   const load = useCallback(async () => {
     setLoading(true);
+    setFailed(false);
     try {
       const r = await listCustomers(api, {
         keyword,
@@ -82,6 +91,7 @@ function CustomerList({
       setRows(customerRows(r.items));
       setTotal(r.total);
     } catch (e) {
+      setFailed(true);
       const { text, traceId } = toastError(e, '取客户列表失败');
       sink.error(text, { traceId });
     } finally {
@@ -104,6 +114,8 @@ function CustomerList({
         <h1 className="title">客户</h1>
         {loading && <span className="muted">加载中…</span>}
       </header>
+      {/* 体验审查 2026-10-15（P2-4）：@see ../ui/list-error.jsx */}
+      {!loading && failed && <ListError what="客户列表" />}
 
       <form
         className="filters"
