@@ -317,7 +317,14 @@ function AdminShell({ baseUrl, session }: { baseUrl: string; session: SessionCon
 
       {view === 'risk' && <RiskPage api={api} />}
 
-      {view === 'opslog' && <OpsLogPage api={api} />}
+      {/* 体验审查 2026-10-15（P2-5）：页码 / 每页条数 / 过滤条件进地址栏，与订单 / 商品 / 客户同口径 */}
+      {view === 'opslog' && (
+        <OpsLogPage
+          api={api}
+          route={{ page: 'opslog', id: '', query: route.query }}
+          onNavigate={leave}
+        />
+      )}
 
       {view === 'banners' && (
         <BannersPage

@@ -16,15 +16,25 @@ export interface AuditQuery {
   /** 操作日期下界 / 上界（`YYYY-MM-DD`，日本时间、含当天；契约 0.6.53）；空串 / 不传 = 不限。 */
   from?: string;
   to?: string;
+  /** 每页条数（20 / 50 / 100；不传 = `AUDIT_PAGE_SIZE`）。 */
+  size?: number;
 }
 
+/**
+ * 审计列表的默认每页条数（服务端上限 100，契约 0.6.53）。
+ * @why 比其它列表页的 20 大：这是**日志**，运营翻它是为了"往下扫一段时间"，一屏 20 条要点的次数太多；
+ *      20 / 50 / 100 三档都能选（体验审查 2026-10-15，P2-5 补的 `PageSizeSelect`）。
+ */
 export const AUDIT_PAGE_SIZE = 50;
 
 export async function listAudit(
   api: AdminApi,
   q: AuditQuery,
 ): Promise<{ items: unknown[]; total: number }> {
-  const params = new URLSearchParams({ page: String(q.page), size: String(AUDIT_PAGE_SIZE) });
+  const params = new URLSearchParams({
+    page: String(q.page),
+    size: String(q.size ?? AUDIT_PAGE_SIZE),
+  });
   if (q.actor.trim() !== '') params.set('actor', q.actor.trim());
   if (q.target.trim() !== '') params.set('target', q.target.trim());
   // 评估 P2（契约 0.6.53）：操作日期范围（JST 日历日、两端含当天）

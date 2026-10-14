@@ -7,12 +7,20 @@
  * @limitation 两处加载失败（核对结果 / 操作记录）走同一个 `ui/Toast`（审查 2026-10-09，ui/adoption 欠账清单）。
  *      @tradeoff 同一 kind 只留最新一条：两处同时失败只看得到后到的那条（多半同一原因：断网 / 登录失效），
  *                翻页 / 查询会先清掉旧错误——放弃的是"核对结果的加载失败一直挂着"，换来的是重试成功后不残留旧红字。
+ *      ⚠️ 只走 Toast 不够（体验审查 2026-10-15，P2-4）：失败时列表**保留上一次结果**，
+ *         右下角的 Toast 与表格没有视觉关联，所以表格上方另给一行页内标记 `<ListError>`。
+ * @limitation 页码 / 每页条数 / 过滤条件都在**地址栏**（体验审查 2026-10-15，P2-5）：
+ *              原先只有 `page` 是本地 state —— 刷新、分享、后退全部回第 1 页，与本项目
+ *              "列表状态走 URL"的约定（@see ../orders/OrdersPage.tsx @limitation 四）不一致。
+ *              输入框仍按"点了「查询」才生效"（过滤涉及日期范围，边打字边发请求会打出一串无效查询）。
  * @see ./view.ts；./api.ts
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCategories } from '../categories/useCategories.js';
-import { parseJstDateRange } from '@waselect/shared';
+import { parseJstDateRange, SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
 import { Badge } from '../ui/badge.js';
+import { ListError } from '../ui/list-error.js';
+import { PageSizeSelect, PAGE_SIZE_OPTIONS } from '../ui/list-controls.js';
 import { ToastStack, toastError, useToasts } from '../ui/toast.js';
 import { AUDIT_PAGE_SIZE, latestReconciliation, listAudit, type AdminApi } from './api.js';
 import {
@@ -21,27 +29,89 @@ import {
   type AuditRowView,
   type ReconciliationView,
 } from './view.js';
+import type { Route } from '../router.js';
+
+/** 地址栏参数名（本页只认这六个）。 */
+const Q = {
+  page: 'page',
+  size: 'size',
+  actor: 'actor',
+  target: 'target',
+  from: 'from',
+  to: 'to',
+} as const;
 
 export interface OpsLogPageProps {
   api: AdminApi;
+  /** 当前路由（页码 / 每页条数 / 过滤条件的真源，@see 文件头 @limitation）。 */
+  route: Route;
+  /** 翻页 / 改条数 / 查询：由外层执行真正的地址栏写入。 */
+  onNavigate: (next: Route) => void;
 }
 
 /** 谁处理 → 徽标文案与色调（运营 = 要动手，技术人员 = 转交，留意 = 多为正常现象）。 */
 const OWNER_TEXT = { ops: '运营', tech: '技术人员', watch: '留意即可' } as const;
 const OWNER_TONE = { ops: 'warn', tech: 'info', watch: 'muted' } as const;
 
-export function OpsLogPage({ api }: OpsLogPageProps) {
+export function OpsLogPage({ api, route, onNavigate }: OpsLogPageProps) {
   const [recon, setRecon] = useState<ReconciliationView | null>(null);
   const [rows, setRows] = useState<AuditRowView[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [actor, setActor] = useState('');
-  const [target, setTarget] = useState('');
+  /**
+   * 取数在途（体验审查 2026-10-15，P2-3）。
+   * @why 原先这一页**完全没有** loading 态：点「下一页 / 查询」后有 0.3–2 秒页面纹丝不动
+   *      （表格还留着上一次的内容、分页器还是旧的页码）⇒ 运营连点「下一页」，
+   *      一次跳过多页（中途还会被 `seq` 竞态丢掉一次）。日志页是排查问题用的，误跳页等于漏看记录。
+   */
+  const [loading, setLoading] = useState(false);
+  /** 列表取数失败（页内标记用；@see 文件头 @limitation）。 */
+  const [failed, setFailed] = useState(false);
+  // ── 以下由地址栏派生（P2-5）──────────────────────────────────
+  const page = Math.max(1, Number(route.query.get(Q.page) ?? '1') || 1);
+  const sizeRaw = Number(route.query.get(Q.size) ?? AUDIT_PAGE_SIZE);
+  /** 认不出的值（手改地址、旧收藏）回落为默认——原样发给服务端会得到 40001，页面一片空白。 */
+  const size = (PAGE_SIZE_OPTIONS as readonly number[]).includes(sizeRaw)
+    ? sizeRaw
+    : AUDIT_PAGE_SIZE;
+  const actorQ = route.query.get(Q.actor) ?? '';
+  const targetQ = route.query.get(Q.target) ?? '';
+  const fromQ = route.query.get(Q.from) ?? '';
+  const toQ = route.query.get(Q.to) ?? '';
+
+  /** 改地址栏参数（值等于默认值的键直接删掉，地址是给人看和复制的）。 */
+  const patch = useCallback(
+    (next: Partial<Record<(typeof Q)[keyof typeof Q], string>>): void => {
+      const query = new URLSearchParams(route.query);
+      for (const [key, value] of Object.entries(next)) {
+        const drop =
+          value === undefined ||
+          value === '' ||
+          (key === Q.page && value === '1') ||
+          (key === Q.size && value === String(AUDIT_PAGE_SIZE));
+        if (drop) query.delete(key);
+        else query.set(key, value);
+      }
+      onNavigate({ page: 'opslog', id: '', query });
+    },
+    [route.query, onNavigate],
+  );
+
+  /** 输入框里的值（未提交）；提交后写进地址栏，@see 下面的同步 effect。 */
+  const [actor, setActor] = useState(actorQ);
+  const [target, setTarget] = useState(targetQ);
   /** 操作日期范围（评估 P2，2026-10-09）：日本时间日历日、两端都含当天，口径同订单列表的下单日期。 */
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  /** 已提交的过滤条件（输入框改了不立刻查，点"查询"才生效）。 */
-  const [filter, setFilter] = useState({ actor: '', target: '', from: '', to: '' });
+  const [from, setFrom] = useState(fromQ);
+  const [to, setTo] = useState(toQ);
+  // 地址栏上的过滤条件变了（前进 / 后退 / 收藏打开）→ 输入框跟着变，
+  // 否则会出现"列表是按 abc 筛的，搜索框里却还写着 xyz"（与订单页同一个口径）。
+  // ⚠️ 依赖是四个**字符串**而不是 `route.query` 这个对象：翻页只改 `page`，
+  //    这四个值不变 ⇒ effect 不跑 ⇒ 用户刚打了一半的过滤条件不会被翻页清掉。
+  useEffect(() => {
+    setActor(actorQ);
+    setTarget(targetQ);
+    setFrom(fromQ);
+    setTo(toQ);
+  }, [actorQ, targetQ, fromQ, toQ]);
   /** 本页反馈出口（原两行红字：核对结果加载失败 / 操作记录加载失败）。 */
   const sink = useToasts();
   const seq = useRef(0);
@@ -64,24 +134,38 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
   const load = useCallback(async () => {
     const mine = ++seq.current;
     sink.error('');
+    setLoading(true);
+    setFailed(false);
     try {
-      const r = await listAudit(api, { page, ...filter });
+      const r = await listAudit(api, {
+        page,
+        size,
+        actor: actorQ,
+        target: targetQ,
+        from: fromQ,
+        to: toQ,
+      });
       if (mine !== seq.current) return;
       setRows(auditRows(r.items, { categoryNames }));
       setTotal(r.total);
     } catch (e) {
-      if (mine === seq.current) {
-        const { text, traceId } = toastError(e, '操作记录加载失败');
-        sink.error(text, { traceId });
-      }
+      if (mine !== seq.current) return;
+      // 失败**不清列表**：已加载的记录还在（运营手上的上下文不能丢），
+      // 但要给页内标记（P2-4）——否则他照着一份过期记录往下查。
+      setFailed(true);
+      const { text, traceId } = toastError(e, '操作记录加载失败');
+      sink.error(text, { traceId });
+    } finally {
+      // ⚠️ 过期请求不动 loading：收尾归最新那一次（@why 否则先发的慢请求会把后发的"加载中"提前抹掉）
+      if (mine === seq.current) setLoading(false);
     }
-  }, [api, page, filter, sink.error, categoryNames]);
+  }, [api, page, size, actorQ, targetQ, fromQ, toQ, sink.error, categoryNames]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const pages = Math.max(1, Math.ceil(total / AUDIT_PAGE_SIZE));
+  const pages = Math.max(1, Math.ceil(total / size));
 
   return (
     // 与其它页同一套卡片样式（三端联动 UI 模拟 2026-10-08：原先没有 panel，标题直接压在背景上）
@@ -201,13 +285,17 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
               );
               return;
             }
-            setPage(1);
-            setFilter({ actor, target, from, to });
+            // 过滤条件进地址栏（P2-5）：刷新 / 分享 / 后退都能回到这一屏
+            patch({ actor, target, from, to, page: '1' });
           }}
         >
           查询
         </button>
       </div>
+      {/* P2-3：请求期间页面必须自己说"在取"，否则运营会连点「下一页」跳过好几页 */}
+      {loading && <p className="muted">加载中…</p>}
+      {/* P2-4：失败时列表保留上一次结果，页内必须有一句"这不是最新的" */}
+      {!loading && failed && <ListError what="操作记录" retry="查询" />}
       <table className="table">
         <thead>
           <tr>
@@ -250,27 +338,31 @@ export function OpsLogPage({ api }: OpsLogPageProps) {
           )}
         </tbody>
       </table>
-      <div className="row2">
+      {/* 分页器与订单 / 商品 / 客户三页同一套（P2-5）：`footer.pager` + 次级按钮 + 每页条数。
+          ⚠️ 在途时两个翻页按钮都禁用：连点会一次跳过多页（且中途那次会被 seq 判成过期响应丢掉）。 */}
+      <footer className="pager">
         <button
           type="button"
-          className="link"
-          disabled={page <= 1}
-          onClick={() => setPage(page - 1)}
+          className="btn btn-secondary"
+          disabled={page <= 1 || loading}
+          onClick={() => patch({ [Q.page]: String(Math.max(1, page - 1)) })}
         >
           上一页
         </button>
-        <span className="muted">
-          第 {page} / {pages} 页，共 {total} 条
-        </span>
+        <span className="muted">{loading ? '' : `第 ${page} / ${pages} 页 · 共 ${total} 条`}</span>
+        <PageSizeSelect
+          size={size}
+          onChange={(n) => patch({ [Q.size]: String(n), [Q.page]: '1' })}
+        />
         <button
           type="button"
-          className="link"
-          disabled={page >= pages}
-          onClick={() => setPage(page + 1)}
+          className="btn btn-secondary"
+          disabled={page >= pages || loading}
+          onClick={() => patch({ [Q.page]: String(page + 1) })}
         >
           下一页
         </button>
-      </div>
+      </footer>
       <ToastStack toasts={sink.toasts} onDismiss={sink.dismiss} />
     </section>
   );
