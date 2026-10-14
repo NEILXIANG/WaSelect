@@ -165,7 +165,7 @@ describe('商品分类管理页', () => {
     expect(el.textContent).not.toContain('旧缓存');
   });
 
-  it('停用 / 启用一键切换：PUT {active}', async () => {
+  it('启用一键切换：PUT {active: true}', async () => {
     const el = await open();
     await click(button(el, '启用'));
     expect(calls.find((c) => c.method === 'PUT')).toEqual({
@@ -173,6 +173,36 @@ describe('商品分类管理页', () => {
       method: 'PUT',
       body: { active: true },
     });
+  });
+
+  // 体验审查 2026-10-15（P2-6）：停用一步生效、后果只在**成功之后**的 Toast 里说清——
+  //   运营按下按钮时并不知道会发生什么，而买家端的影响是即时的（首页少一整个分类）。
+  it('🔴 停用要两步：先确认（后果说在确认之前），确认后才发 PUT {active: false}', async () => {
+    const el = await open();
+    await click(
+      [...el.querySelectorAll('tbody tr')][1]?.querySelector('button[data-act="toggle"]'),
+    );
+    // 确认框先出现，且**在按下之前**就说完后果
+    expect(button(el, '确认停用')).not.toBeNull();
+    expect(el.textContent).toContain('停用后小程序首页不再显示这个分类');
+    expect(el.textContent).toContain('要停卖请到商品管理下架');
+    expect(calls.find((c) => c.method === 'PUT')).toBeUndefined();
+    await click(button(el, '确认停用'));
+    expect(calls.find((c) => c.method === 'PUT')).toEqual({
+      path: '/api/v1/admin/categories/beauty',
+      method: 'PUT',
+      body: { active: false },
+    });
+  });
+
+  it('🔴 确认框上点取消 → 不发请求，分类照旧启用', async () => {
+    const el = await open();
+    await click(
+      [...el.querySelectorAll('tbody tr')][1]?.querySelector('button[data-act="toggle"]'),
+    );
+    await click(button(el, '取消'));
+    expect(calls.find((c) => c.method === 'PUT')).toBeUndefined();
+    expect(rows(el)[1]).toContain('显示中');
   });
 
   // 规律排查 2026-10-12：提示说"不想让买家看到可以停用""小程序不再显示它"，可停用只收起首页分类入口，
@@ -187,8 +217,11 @@ describe('商品分类管理页', () => {
     await click(
       [...el.querySelectorAll('tbody tr')][1]?.querySelector('button[data-act="toggle"]'),
     );
+    // 确认框里就说（P2-6），不是等到成功之后的 Toast
     expect(el.textContent).toContain('首页不再显示');
     expect(el.textContent).toContain('仍能在「全部」和搜索里买到');
+    await click(button(el, '确认停用'));
+    expect(el.textContent).toContain('已停用「美妆护肤」');
   });
 
   it('改名 / 排序：点编辑 → 行内输入 → 保存发 PUT {name, sort}', async () => {

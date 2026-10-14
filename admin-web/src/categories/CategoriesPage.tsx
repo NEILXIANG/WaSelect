@@ -2,7 +2,11 @@
  * 职责：后台「商品分类」管理页（AJ-491，用户 2026-10-11 要求分类可配置）。
  *
  * @why 参照成熟电商后台的分类管理：一张表列出全部分类（含停用），说清每类在买家端显不显示、为什么；
- *      顶部新建；行内改名 / 排序；启停一键切换；还有商品的分类不能删（提示改为停用）。
+ *      顶部新建；行内改名 / 排序；还有商品的分类不能删（提示改为停用）。
+ * @why 「停用」要两步（体验审查 2026-10-15，P2-6），且与「删除」同一套 `ConfirmDialog danger`：
+ *      它是**改一个布尔字段**，看着比删除轻，可对买家端的影响是即时的（首页少一整个分类），
+ *      而后果原先只在**成功之后**的 Toast 里才说——运营按下按钮时并不知道会发生什么。
+ *      「启用」是低风险动作（把东西加回来），保持一键。
  * @limitation 只有一级分类；排序靠数字，不支持拖拽（分类是个位到十几个的量级，数字够用）。
  * @see ./CategoryRow.tsx；./CategoryCreateForm.tsx；server/src/app/admin-category-routes.ts
  */
@@ -21,6 +25,8 @@ export function CategoriesPage({ api }: { api: AdminApi }): React.JSX.Element {
   const { list, error } = useCategories(api, { fresh: true });
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<AdminCategory | null>(null);
+  /** 待确认停用的分类（P2-6）；null = 没开确认框。 */
+  const [deactivating, setDeactivating] = useState<AdminCategory | null>(null);
 
   const reload = async (): Promise<void> => {
     await refreshCategories(api).catch((e: unknown) => {
@@ -79,20 +85,44 @@ export function CategoriesPage({ api }: { api: AdminApi }): React.JSX.Element {
               onSave={(patch) =>
                 run(() => updateCategory(api, c.key, patch), `已保存「${patch.name}」`, '保存失败')
               }
-              onToggle={() =>
-                void run(
-                  () => updateCategory(api, c.key, { active: !c.active }),
-                  c.active
-                    ? `已停用「${c.name}」：小程序首页不再显示这个分类；其中的商品仍能在「全部」和搜索里买到，要停卖请到商品管理下架`
-                    : `已启用「${c.name}」`,
-                  '操作失败',
-                )
-              }
+              onToggle={() => {
+                // 停用 = 会立刻改变买家端，先确认（P2-6）；启用是把东西加回来，一键即可
+                if (c.active) setDeactivating(c);
+                else
+                  void run(
+                    () => updateCategory(api, c.key, { active: true }),
+                    `已启用「${c.name}」`,
+                    '操作失败',
+                  );
+              }}
               onDelete={() => setDeleting(c)}
             />
           ))}
         </tbody>
       </table>
+      {deactivating !== null && (
+        <ConfirmDialog
+          spec={{
+            title: `停用分类「${deactivating.name}」`,
+            // ⚠️ 后果说在**确认之前**（P2-6 规律⑦）：原先它在成功之后的 Toast 里，
+            //    而那时买家端已经少了一整个分类。
+            body: '停用后小程序首页不再显示这个分类；其中的商品仍能在「全部」和搜索里买到。要停卖请到商品管理下架。',
+            confirmText: '确认停用',
+            danger: true,
+          }}
+          busy={busy}
+          onConfirm={() => {
+            const c = deactivating;
+            setDeactivating(null);
+            void run(
+              () => updateCategory(api, c.key, { active: false }),
+              `已停用「${c.name}」：其中的商品仍能在「全部」和搜索里买到，要停卖请到商品管理下架`,
+              '操作失败',
+            );
+          }}
+          onCancel={() => setDeactivating(null)}
+        />
+      )}
       {deleting !== null && (
         <ConfirmDialog
           spec={{
