@@ -240,7 +240,7 @@ Page({
     if (intent.key === this.category) return;
     this.setData({ keyword: '' });
     this.category = intent.key;
-    this.reload(intent.key);
+    this.reload(intent.key, '');
   },
 
   /** 展开 / 收起「全部分类」面板。 */
@@ -270,13 +270,13 @@ Page({
 
   /** 触发搜索（键盘确认键与搜索按钮都到这）。 */
   onSearch() {
-    this.reload(this.category);
+    this.reload(this.category, this.data.keyword);
   },
 
   /** 清除搜索（A4）：清空词、按当前分类重新取全部。 */
   onClearSearch() {
     this.setData({ keyword: '' });
-    this.reload(this.category);
+    this.reload(this.category, '');
   },
 
   /** 页脚"加载失败，点此重试"（A11）：只重拉下一页，不回第 1 页。 */
@@ -318,7 +318,7 @@ Page({
    * 重新加载（进入 / 切分类 / 搜索）：一律回到第 1 页并**替换**列表。
    * @param {string} category 当前分类（空串 = 全部）
    */
-  async reload(category) {
+  async reload(category, keyword = this.activeKeyword) {
     const traceId = newTraceId();
     this.traceId = traceId;
     // B36 / AJ-219：领号。切分类/搜索连着点时，只有**最后一次**的结果能落到页面上
@@ -326,7 +326,7 @@ Page({
     //    会把**这次** reload 判成过期——结果被丢弃、loading 永不清。
     //    规则：reload 开启一代新列表（换号），loadMore 属于当前这一代（借号不换号）。
     const seq = (this.seq = nextSeq(this.seq));
-    const keyword = this.data.keyword;
+    // 审计 BUG-06：关键词默认用**已提交**的那个；只有搜索 / 清除才传新词（输入了没按搜索就切分类，不该悄悄按半截词搜）
     this.reloading = true;
     this.activeKeyword = keyword;
     // 上一代列表的"下一页"（若在途）从此过期：它的标志位由这里统一复位，

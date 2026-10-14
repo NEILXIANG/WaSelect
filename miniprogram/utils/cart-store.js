@@ -305,7 +305,7 @@ function normalize(raw) {
     .filter((i) => Number.isInteger(i.qty) && i.qty >= 1)
     .map((i) => ({
       productId: i.productId,
-      qty: i.qty,
+      qty: Math.min(i.qty, MAX_LINE_QTY),
       title: typeof i.title === 'string' ? i.title : '',
       image: typeof i.image === 'string' ? i.image : '',
       priceJpy: i.priceJpy,
@@ -317,7 +317,8 @@ function normalize(raw) {
   for (const r of rows) {
     const found = merged.find((m) => m.productId === r.productId);
     if (found === undefined) merged.push(r);
-    else found.qty += r.qty;
+    // 审计 BUG-04：读回也封顶（存储被改 / 旧版本写入超过上限时，报价会一直 40001）
+    else found.qty = Math.min(found.qty + r.qty, MAX_LINE_QTY);
   }
   return merged;
 }

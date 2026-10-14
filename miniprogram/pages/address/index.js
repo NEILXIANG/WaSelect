@@ -140,7 +140,7 @@ Page({
   onEdit(e) {
     const id = this.idOf(e);
     if (id === '') return;
-    wxApi.navigateTo({ url: `${EDIT_PAGE}?id=${id}` });
+    wxApi.navigateTo({ url: `${EDIT_PAGE}?id=${encodeURIComponent(id)}` });
   },
 
   /** 删除：模态确认 → `DELETE /addresses/{id}`。 */

@@ -164,6 +164,14 @@ describe('首页薄壳：响应先后（R-04 / AJ-226）', () => {
     expect(calls[3]!.data).toMatchObject({ page: 2, keyword: '抹茶' });
   });
 
+  it('🔴 打了字没提交就切分类：新分类按已提交的关键词取，不按半截词搜（审计 BUG-06）', async () => {
+    await enter();
+    call('onSearchInput', { detail: { value: '抹茶' } });
+    call('onCategoryTap', { currentTarget: { dataset: { key: 'food' } } });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.data.keyword ?? '').toBe('');
+  });
+
   it('连点两个分类、先点的后回来：只有最后一次的结果落地（B36 的原始形态，行为化）', async () => {
     await enter();
     tapCategory('food'); // calls[1]

@@ -190,7 +190,7 @@
           text="{{submitting ? '提交中…' : '提交订单'}}"
           type="primary"
           block="{{true}}"
-          disabled="{{(!gate.ok && !gate.fix) || submitting}}"
+          disabled="{{(!gate.ok && !gate.fix) || submitting || loading}}"
           loading="{{submitting}}"
           bindtap="onSubmit"
         />

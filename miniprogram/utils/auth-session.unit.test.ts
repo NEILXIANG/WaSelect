@@ -11,8 +11,14 @@
  *
  * @see ./auth-session.js
  */
-import { describe, expect, it } from 'vitest';
-import { loginAndStore, loginWithWechat, singleFlight, wxLoginCode } from './auth-session.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  WX_LOGIN_TIMEOUT_MS,
+  loginAndStore,
+  loginWithWechat,
+  singleFlight,
+  wxLoginCode,
+} from './auth-session.js';
 import { createWxApi, type WxLoginOption } from './wx-api.js';
 
 const BASE = 'https://api.example.com';
@@ -42,6 +48,28 @@ describe('wxLoginCode', () => {
       /login:fail/,
     );
     await expect(wxLoginCode(wxWith((o) => o.fail?.({})))).rejects.toThrow(/wx.login 失败/);
+  });
+
+  it('🔴 微信一直不回调 → 超时后拒绝（审计 BUG-07：否则「我的」页永远"正在登录…"）', async () => {
+    vi.useFakeTimers();
+    try {
+      const p = wxLoginCode(wxWith(() => undefined));
+      const seen = expect(p).rejects.toThrow(/超时/);
+      vi.advanceTimersByTime(WX_LOGIN_TIMEOUT_MS);
+      await seen;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('回调到了就清掉超时定时器（不留悬挂的表）', async () => {
+    vi.useFakeTimers();
+    try {
+      await wxLoginCode(wxWith((o) => o.success?.({ code: 'c' })));
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

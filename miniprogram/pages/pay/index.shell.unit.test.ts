@@ -441,6 +441,26 @@ describe('支付页：待付款倒计时（4-11）', () => {
     }
   });
 
+  it('🔴 取单在途时离开页面：结果回来后不起倒计时、不改页面（审计 BUG-03）', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      vi.setSystemTime(new Date('2026-09-29T01:20:00.000Z'));
+      expiresAt = '2026-09-29T01:30:00.000Z';
+      call('onUnload'); // 清掉 beforeEach 首屏起的表
+      orderHold = deferred();
+      call('onRetry');
+      await settle();
+      const before = page.data['countdown'];
+      call('onUnload');
+      orderHold.resolve(order());
+      await settle();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(page.data['countdown']).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('已过截止 → 直接是关闭屏（"支付时间已到"、不列通道），且不起表（P2-35）', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     try {

@@ -302,6 +302,22 @@ describe('持久化读回去重（审查 2026-10-09）', () => {
   });
 });
 
+describe('持久化读回封顶（审计 BUG-04）', () => {
+  it('🔴 存储里单行或合并后超过 MAX_LINE_QTY → 读回封顶，不让报价必 40001', () => {
+    const { storage } = memStorage();
+    storage.setJson('cart', [
+      { productId: 'p-1', qty: 500, title: 'A', image: '', priceJpy: 100 },
+      { productId: 'p-2', qty: 60, title: 'B', image: '', priceJpy: 200 },
+      { productId: 'p-2', qty: 60, title: 'B', image: '', priceJpy: 200 },
+    ]);
+    const cart = createCartStore({ storage });
+    expect(cart.toOrderItems()).toEqual([
+      { product_id: 'p-1', qty: MAX_LINE_QTY },
+      { product_id: 'p-2', qty: MAX_LINE_QTY },
+    ]);
+  });
+});
+
 describe('勾选结算（A3，AJ-416）', () => {
   const KNIFE = {
     productId: 'p-knife-210mm',

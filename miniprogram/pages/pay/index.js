@@ -343,6 +343,8 @@ Page({
     if (this.statusTimer !== null) clearTimeout(this.statusTimer);
     this.statusTimer = null;
     this.stopCountdown();
+    // 审计 BUG-03：离开后在途的取单结果作废（否则回来后还会起倒计时 / setData 到已卸载页面）
+    this.loadSeq = nextSeq(this.loadSeq);
   },
 
   /**

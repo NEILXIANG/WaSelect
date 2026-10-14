@@ -67,6 +67,8 @@ let scrolls: string[];
 /** 地址列表为空（新用户）。 */
 let noAddr: boolean;
 let cartCleared: boolean;
+/** 审计 BUG-02：清车时本地存储写失败。 */
+let removeManyThrows: boolean;
 /** A3：建单成功后从购物车移除的那几件。 */
 let removedIds: string[] | null;
 /**
@@ -107,6 +109,7 @@ beforeEach(async () => {
   scrolls = [];
   noAddr = false;
   cartCleared = false;
+  removeManyThrows = false;
   removedIds = null;
   channelsByCurrency = {
     JPY: [],
@@ -144,6 +147,7 @@ beforeEach(async () => {
           cartCleared ? [] : [{ productId: 'p-1', qty: 2, title: '資生堂 クレンジングオイル' }],
         // A3（AJ-416）：建单成功后只移除买走的那几件；车里只有 p-1，移除它 = 车空了
         removeMany: (ids: string[]) => {
+          if (removeManyThrows) throw new Error('setStorageSync:fail exceed storage max size');
           removedIds = ids;
           if (ids.includes('p-1')) cartCleared = true;
         },
@@ -375,7 +379,7 @@ describe('结算页：连点防线落在 ws-button（约束：页面不得手写
   it('🔴 缺的是买家能补的项（gate.fix 非空）时按钮不置灰——常亮、点了带过去（全入口点击测试 2026-10-11）', () => {
     const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8');
     const tag = /<ws-button[^>]*bindtap="onSubmit"[^>]*\/>/s.exec(wxml)?.[0] ?? '';
-    expect(tag).toContain('disabled="{{(!gate.ok && !gate.fix) || submitting}}"');
+    expect(tag).toContain('disabled="{{(!gate.ok && !gate.fix) || submitting || loading}}"');
   });
 
   // 两端逐页走查第三轮 2026-10-12：地址卡原先写死"请点上方「重新加载」"，账号受限时上方只有「联系客服」
@@ -778,5 +782,53 @@ describe('结算页薄壳：邮箱错误的时机与拼错提示（F7 / MP-9，�
     call('onSubmit');
     await settle();
     expect(posts[0]!.data?.['contact_email']).toBe('jane@gmial.com');
+  });
+});
+
+// 审计 BUG-01（2026-10-14）：从地址选择页返回后 refresh 在途、地址列表还没回来时，闸门仍按旧地址放行——
+// 这时点提交，订单按旧地址建、expected_total_jpy 也来自旧报价。刷新在途时提交一律忽略。
+describe('结算页：刷新在途时不建单', () => {
+  it('🔴 已满足条件 → 再次 onShow（报价挂起）→ 立刻点提交 → 不发 POST /orders；刷新完成后可提交', async () => {
+    await ready();
+    quoteHold = deferred();
+    call('onShow');
+    await settle();
+    expect(page.data['loading']).toBe(true);
+    call('onSubmit');
+    await settle();
+    expect(posts).toHaveLength(0);
+    quoteHold.resolve(quote);
+    quoteHold = null;
+    await settle();
+    call('onSubmit');
+    await settle();
+    expect(posts).toHaveLength(1);
+  });
+});
+
+// 审计 BUG-02（2026-10-14）：建单 POST 已成功，清车 / 记邮箱写本地存储抛错（配额满等）——原先落进同一个 catch，
+// 显示「加载失败」、不跳支付页、幂等键也没作废，再点是同键重放、又在同处失败，买家卡在结算页（订单其实已建）。
+describe('结算页：建单成功后本地写入失败不影响跳转', () => {
+  it('🔴 清车抛错 → 仍然跳支付页、不显示错误', async () => {
+    await ready();
+    removeManyThrows = true;
+    call('onSubmit');
+    await settle();
+    expect(posts).toHaveLength(1);
+    expect(redirects.some((u) => u.includes('/pages/pay/index?orderId='))).toBe(true);
+    expect(page.data['error']).toBe('');
+  });
+});
+
+describe('结算页：建单响应缺 order_id（审计 BUG-15）', () => {
+  it('🔴 不带空 id 进支付页，告诉买家订单已提交、去「我的订单」', async () => {
+    await ready();
+    orderHold = deferred();
+    call('onSubmit');
+    await settle();
+    orderHold.resolve({});
+    await settle();
+    expect(redirects).toEqual([]);
+    expect(page.data['error']).toContain('我的订单');
   });
 });

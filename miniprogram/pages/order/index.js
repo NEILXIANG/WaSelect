@@ -255,7 +255,7 @@ Page({
   onPay(e) {
     const id = e?.currentTarget?.dataset?.id;
     if (typeof id !== 'string' || id === '') return;
-    wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${id}` });
+    wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${encodeURIComponent(id)}` });
   },
 
   /**

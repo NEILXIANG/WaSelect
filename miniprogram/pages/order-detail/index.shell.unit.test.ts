@@ -152,6 +152,18 @@ describe('订单详情：下拉刷新（M-04）', () => {
     expect(view.nextText).toContain('确认收货');
   });
 
+  it('🔴 取单在途时离开页面：结果回来后不改页面（审计 BUG-03）', async () => {
+    await open();
+    const before = page.data['view'];
+    hold = deferred<unknown>();
+    const done = call<Promise<void>>('load');
+    await settle();
+    call('onUnload');
+    hold.resolve({ ...ORDER, status: 'shipped' });
+    await done;
+    expect(page.data['view']).toBe(before);
+  });
+
   it('🔴 取数失败也收起动画，并显示错误', async () => {
     await open();
     fail = true;
@@ -230,11 +242,30 @@ describe('订单详情：再次购买 / 商品可点（A7，AJ-416）', () => {
 
   it('🔴 购物车里已有这件 → 数量改成这单的数量，不再叠加（点两次「再次购买」不会变成双份）', async () => {
     order = DONE;
-    inCart = [{ productId: 'p-1', qty: 2 }];
+    inCart = [{ productId: 'p-1', qty: 1 }];
     await open();
     call('onBuyAgain');
     expect(qtySet).toEqual([['p-1', 2]]);
     expect(added).toMatchObject([{ productId: 'p-2', qty: 1 }]);
+  });
+
+  it('🔴 购物车里这件已有更多 → 不往下改（审计 BUG-14：买家自己加的数量不被这单覆盖少）', async () => {
+    order = DONE;
+    inCart = [{ productId: 'p-1', qty: 5 }];
+    await open();
+    call('onBuyAgain');
+    expect(qtySet).toEqual([]);
+  });
+
+  it('🔴 部分放进去了 → 放进去的照样排到最上面并勾选，留在本页说明没放进的件数（审计 BUG-14）', async () => {
+    order = DONE;
+    inCart = [{ productId: 'p-1', qty: 1 }];
+    full = true;
+    await open();
+    call('onBuyAgain');
+    expect(focused).toEqual(['p-1']);
+    expect(nav).toEqual([]);
+    expect(page.data['buyAgainNote']).toContain('1 件没放进去');
   });
 
   it('🔴 购物车品种已满放不进去 → 留在本页说清楚，不假装成功地跳走', async () => {

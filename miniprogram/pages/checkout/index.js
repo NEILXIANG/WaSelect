@@ -237,6 +237,8 @@ Page({
    */
   async refresh(opts) {
     const keepError = opts !== null && typeof opts === 'object' && opts.keepError === true;
+    // 审计 BUG-01：提交闸门看这个实例标志（不看 data.loading：那是按钮的展示态，页面不重复挡连点，见 page-button-guard）
+    this.refreshing = true;
     this.setData(
       keepError
         ? { loading: true }
@@ -254,10 +256,12 @@ Page({
 
     if (items.length === 0) {
       this.quoteRaw = null;
+      this.refreshing = false;
       this.setData({ loading: false, quote: null, chargePreview: [] });
       return;
     }
     await Promise.all([this.fetchTerms(), this.fetchAddresses(), this.fetchQuote(items)]);
+    this.refreshing = false;
     this.setData({ loading: false });
     // M-16：要等报价（金额）与地址（国家）都到了才能查通道，所以排在三条并发之后
     await this.fetchChargePreview();
@@ -540,6 +544,9 @@ Page({
     // 建单在途时直接忽略（W-03）：页面的 data 在 setData 后同步更新，而按钮组件的 loading 属性
     // 要等视图层回传——只靠按钮挡，快速双击的第二下会穿透，压入两个支付页。
     if (this.data.submitting === true) return;
+    // 审计 BUG-01（2026-10-14）：刷新在途（换地址返回 / 看条款返回 / 切后台回来）时地址、报价、条款可能还是旧的——
+    //   原先闸门仍按旧值放行，这一刻提交会按旧地址建单、expected_total_jpy 也来自旧报价。按钮同时置灰（wxml）。
+    if (this.refreshing === true) return;
     if (!this.data.gate.ok) {
       this.goFix(this.data.gate.fix);
       return;
@@ -585,11 +592,18 @@ Page({
       // @see @limitation 一：建单成功即清车（订单已存在，支付失败可去订单页继续）
       // 立即购买不清车（剩余清单 4-4，vm `clearsCartAfterOrder`）；单件条目用完即弃
       // A3（AJ-416）：只移除这次买走的那几件（没勾的留在车里），不是整车清空
-      if (clearsCartAfterOrder(this.mode)) {
-        app.globalData.cart.removeMany(body.items.map((i) => i.product_id));
-      } else app.globalData.buyNow = null;
-      if (typeof body.contact_email === 'string' && body.contact_email !== '') {
-        app.globalData.storage?.setString(EMAIL_KEY, body.contact_email);
+      // 审计 BUG-02（2026-10-14）：订单已在服务端建好——本地写入（清车、记邮箱）失败不能把"成功"变成"失败"。
+      //   原先它们与 POST 同在一个 try 里：存储写失败（配额满等）落进下面的 catch，显示「加载失败」、不跳支付页、
+      //   幂等键也不作废，再点是同键重放、又在同处失败，买家卡在结算页。车里残留的商品最坏是多一次手动删除。
+      try {
+        if (clearsCartAfterOrder(this.mode)) {
+          app.globalData.cart.removeMany(body.items.map((i) => i.product_id));
+        } else app.globalData.buyNow = null;
+        if (typeof body.contact_email === 'string' && body.contact_email !== '') {
+          app.globalData.storage?.setString(EMAIL_KEY, body.contact_email);
+        }
+      } catch {
+        // 刻意吞掉：见上
       }
       // 意图已完成：作废键。再点一次是**新的一张单**，沿用旧键会被重放成刚才那张
       this.intentKey?.retire();
@@ -597,7 +611,13 @@ Page({
       if (!this.alive) return;
       // 剩余清单 4-8：redirectTo 而不是 navigateTo——车已清空，留在返回栈里的结算页只剩"购物车是空的"；
       //    支付页按返回键应回到下单前的页面（购物车 / 商品详情），不是一张空结算页
-      wxApi.redirectTo({ url: `${PAY_PAGE}?orderId=${res?.order_id ?? ''}` });
+      // 审计 BUG-15：响应缺 order_id（形状漂移）→ 不带空 id 进支付页（那里只会白屏 / 报错）；订单已建，指去订单列表
+      const orderId = typeof res?.order_id === 'string' ? res.order_id : '';
+      if (orderId === '') {
+        this.setData({ error: '订单已提交，请到「我的」→「我的订单」查看并付款' });
+        return;
+      }
+      wxApi.redirectTo({ url: `${PAY_PAGE}?orderId=${encodeURIComponent(orderId)}` });
     } catch (e) {
       const code = e !== null && typeof e === 'object' && Number.isInteger(e.code) ? e.code : 0;
       // ⚠️ 默认**不** retire：键留给重试（弱网下用户看到错误再点一次必须还是同一个键）

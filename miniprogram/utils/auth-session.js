@@ -10,10 +10,10 @@
  *      而"什么时候登、code 空怎么办、响应缺 token 怎么办"都是**判断**——
  *      判断必须能被单测钉住（约束十一同一条理由）。
  *
- * @limitation 一：`wx.login` 是**回调式**，这里包一层 Promise；宿主没有超时回调，
- *              超时表现为"什么都不发生"——⚠️ 本模块**不设超时**：给 Promise 加定时器
- *              就要注入时钟，而微信侧超时是极边缘故障；真出现时的表现是
- *              "登录按钮转了但没反应"，可接受，不为此引入复杂度。
+ * @limitation 一：`wx.login` 是**回调式**，这里包一层 Promise；宿主没有超时回调。
+ *              审计 BUG-07（2026-10-14）起加 `WX_LOGIN_TIMEOUT_MS` 超时：微信侧不回调时按失败抛，
+ *              single-flight 随之释放、`loginFailed` 置位，「我的」页能给出"重新登录"，而不是永远"正在登录…"。
+ *              登录 POST 本身由 `wx.request` 的超时兜住，不另加。
  * @limitation 二：429（登录限流）**不重试**，原样抛——登录被限流的正确反应是
  *              让用户稍后再来，客户端自动重试只会把自己限得更死。
  * @limitation 三：token 的**写入**不在本模块（返回 token 字符串，由 app.js 调 `setToken`）。
@@ -31,15 +31,23 @@
  * @why code 为空串按**失败**抛：空 code 发给服务端是 40101，而把"微信没给 code"
  *      表现成"登录被拒"会把排查方向引到服务端——那是两种完全不同的故障。
  */
+/** `wx.login` 无回调时的放弃时限（审计 BUG-07）。 */
+export const WX_LOGIN_TIMEOUT_MS = 10_000;
+
 export function wxLoginCode(wx) {
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('wx.login 超时')), WX_LOGIN_TIMEOUT_MS);
     wx.login({
       success: (res) => {
+        clearTimeout(timer);
         const code = res && typeof res.code === 'string' ? res.code : '';
         if (code === '') reject(new Error('wx.login 未返回 code'));
         else resolve(code);
       },
-      fail: (err) => reject(new Error(err && err.errMsg ? err.errMsg : 'wx.login 失败')),
+      fail: (err) => {
+        clearTimeout(timer);
+        reject(new Error(err && err.errMsg ? err.errMsg : 'wx.login 失败'));
+      },
     });
   });
 }

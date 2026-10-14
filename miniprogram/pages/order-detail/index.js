@@ -152,6 +152,8 @@ Page({
     this.alive = false;
     if (this.recheckTimer !== null) clearTimeout(this.recheckTimer);
     this.stopPayTick();
+    // 审计 BUG-03：在途的详情请求回来后作废，不再起重查 / 付款倒计时
+    this.loadSeq = nextSeq(this.loadSeq);
   },
 
   onHide() {
@@ -308,21 +310,31 @@ Page({
   /**
    * 再次购买（A7，AJ-416）：这单的商品与数量放回购物车，然后去购物车（重新报价、重新勾选结算）。
    * @why 放不进去（品种已满）就**留在本页说清楚**：跳到购物车却少了几件，用户会以为是这一单的商品下架了。
-   * @limitation 已在车里的同款**改成这单的数量**（不叠加；全入口点击测试 2026-10-11，点两次原先会变双份），
-   *             并只勾选这几件——买家原先在车里的数量会被这单的数量覆盖，页面不另行提示。
+   * @limitation 已在车里的同款**调到这单的数量**（不叠加；全入口点击测试 2026-10-11，点两次原先会变双份），
+   *             车里本来更多的不往下改（审计 BUG-14），并只勾选这几件；页面不另行提示数量变化。
    * @limitation 购物车品种已满时部分商品放不进去：已改的数量保留、不聚焦（三天提交复查 2026-10-12 记录，暂不回滚）。
    */
   onBuyAgain() {
     const cart = app.globalData.cart;
     // 全入口点击测试 2026-10-11：购物车里已有的改成这单的数量，不叠加——点两次「再次购买」原先会变成双份
-    const inCart = new Set(cart.items().map((i) => i.productId));
+    // 审计 BUG-14：已在车里的只往上调到这单的数量，不往下改（买家自己加多了的不被覆盖少）
+    const inCart = new Map(cart.items().map((i) => [i.productId, i.qty]));
+    const placed = [];
     const rejected = buyAgainItems(this.lastOrder).filter((i) => {
-      if (inCart.has(i.productId)) {
-        cart.setQty(i.productId, i.qty);
+      const had = inCart.get(i.productId);
+      if (had !== undefined) {
+        if (had < i.qty) cart.setQty(i.productId, i.qty);
+        placed.push(i.productId);
         return false;
       }
-      return cart.add(i)?.added !== true;
+      if (cart.add(i)?.added === true) {
+        placed.push(i.productId);
+        return false;
+      }
+      return true;
     });
+    // 部分放进去了：放进去的照样排到最上面、只勾它们，留在本页说明没放进的件数
+    if (placed.length > 0) cart.focusOn(placed);
     if (rejected.length > 0) {
       this.setData({
         buyAgainNote: `购物车商品种类已满，${rejected.length} 件没放进去，请先清理购物车`,
@@ -330,8 +342,6 @@ Page({
       return;
     }
     this.setData({ buyAgainNote: '' });
-    // 全入口点击测试 2026-10-11：再次购买的几件排到购物车最上面、只勾它们（原先混进旧商品一起结算）
-    cart.focusOn(buyAgainItems(this.lastOrder).map((i) => i.productId));
     wxApi.switchTab({ url: CART_PAGE });
   },
 
@@ -353,7 +363,9 @@ Page({
   /** 继续支付（仅 `canPay`；不传金额，支付页自己向服务端要权威金额）。 */
   onPay() {
     // MP-10：带 from=detail，支付页付完退回本页（不再 redirectTo 出第二张详情）
-    wxApi.navigateTo({ url: `${PAY_PAGE}?orderId=${this.orderId}&from=detail` });
+    wxApi.navigateTo({
+      url: `${PAY_PAGE}?orderId=${encodeURIComponent(this.orderId)}&from=detail`,
+    });
   },
 
   /**
