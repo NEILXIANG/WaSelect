@@ -310,3 +310,30 @@ describe('「我的」联系客服（全入口点击测试 2026-10-11）', () =>
     );
   });
 });
+
+// 独立审查 2026-10-13 【3】：本页原先没有页面级 trace，角标 / 客服两条请求在服务端日志里是孤链
+describe('「我的」：请求带页面级 traceId', () => {
+  it('🔴 onShow 后 /orders/counts 与 /support 都带同一个非空 traceId', async () => {
+    const seen: Array<{ url: string; traceId: string | undefined }> = [];
+    vi.stubGlobal('wx', { navigateTo: () => undefined, switchTab: () => undefined });
+    const p = await loadPage(new URL('./index.js', import.meta.url).href, {
+      globalData: {
+        apiBase: 'http://api.test',
+        token: 't',
+        orderTab: '',
+        api: (req: { url: string; traceId?: string }) => {
+          seen.push({ url: req.url, traceId: req.traceId });
+          return Promise.resolve(req.url.endsWith('/support') ? [] : {});
+        },
+      },
+    });
+    (p['onShow'] as () => void)();
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    const ids = seen
+      .filter((s) => /\/orders\/counts$|\/support$/.test(s.url))
+      .map((s) => s.traceId);
+    expect(ids.length).toBeGreaterThanOrEqual(2);
+    expect(ids.every((t) => typeof t === 'string' && t !== '')).toBe(true);
+    expect(new Set(ids).size).toBe(1);
+  });
+});

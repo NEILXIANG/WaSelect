@@ -18,7 +18,7 @@
  *
  * @limitation 三：四个订单入口（M-10 附，AJ-408）要落到订单页的指定页签，而订单页是 tab 页、`switchTab` 不能带 query，
  *              所以写一次性意图 `app.globalData.orderTab`（订单页 onShow 读走即清空）。「我的订单」一行写 'all'。
- *              角标来自进屏时一次不带过滤的 `GET /orders`（失败静默，只是不显示角标）。
+ *              角标来自进屏时一次 `GET /orders/counts`（服务端计数，S-7；失败静默，只是不显示角标）。
  *
  * @see ./index.vm.js（登录态文案与入口清单，5 条单测）；../../utils/wx-api.js（navigateTo）
  */
@@ -28,6 +28,7 @@ import { createWxApi } from '../../utils/wx-api.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
 import { supportRows } from '../../utils/support.js';
 import { track } from '../../utils/beacon.js';
+import { newTraceId } from '../../utils/trace.js';
 
 const app = getApp();
 
@@ -81,6 +82,8 @@ Page({
   },
 
   onShow() {
+    // 独立审查 2026-10-13 【3】：本页原先没有页面级 trace，角标 / 客服两条请求在服务端日志里是孤链
+    this.traceId = newTraceId();
     track(app, 'page_view', { page: 'user' }); // M-21 页面曝光
     // @see @limitation 二：token 可能在别处被刷新，每次进屏重读
     this.retryFailed = false;
@@ -112,6 +115,7 @@ Page({
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/counts`,
+        traceId: this.traceId,
       });
       this.setData({ shortcuts: orderShortcuts(res) });
     } catch {
@@ -217,7 +221,10 @@ Page({
    */
   async loadSupport() {
     try {
-      const res = await app.globalData.api({ url: `${app.globalData.apiBase}/api/v1/support` });
+      const res = await app.globalData.api({
+        url: `${app.globalData.apiBase}/api/v1/support`,
+        traceId: this.traceId,
+      });
       this.setData({ support: supportRows(res), supportLoaded: true });
     } catch {
       // 静默：见上

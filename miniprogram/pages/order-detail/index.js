@@ -122,6 +122,7 @@ Page({
   onLoad(options) {
     this.orderId = typeof options?.id === 'string' ? options.id : '';
     this.traceId = newTraceId();
+    this.alive = true;
     // 刚从支付页过来（微信支付成功带 justPaid=1），或这张单刚在浏览器里发起过银行卡付款（W-02）：
     // 两种情况支付通知都可能还没到，先显示"确认中"、退避重查，而不是给出"继续支付 / 取消订单"。
     this.justPaid =
@@ -140,11 +141,15 @@ Page({
     // 剩余清单 4-2：订单出问题时最需要客服——拉一次联系方式，失败静默（只是不显示这张卡）
     app.globalData
       .api({ url: `${app.globalData.apiBase}/api/v1/support`, traceId: this.traceId })
-      .then((res) => this.setData({ support: supportRows(res) }))
+      .then((res) => {
+        // 独立审查 2026-10-13 【2】：页面已销毁就不 setData（与定时器必清同一口径）
+        if (this.alive) this.setData({ support: supportRows(res) });
+      })
       .catch(() => undefined);
   },
 
   onUnload() {
+    this.alive = false;
     if (this.recheckTimer !== null) clearTimeout(this.recheckTimer);
     this.stopPayTick();
   },

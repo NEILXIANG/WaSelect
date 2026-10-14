@@ -104,6 +104,7 @@ Page({
    */
   onLoad(options) {
     this.traceId = newTraceId();
+    this.alive = true;
     // ⚠️ 不 decodeURIComponent：商品 id 是服务端生成的 slug（[a-z0-9-]），
     //    decode 对含 % 的恶意串会抛 URIError——原样透传给服务端去拒更安全。
     this.productId = typeof options?.id === 'string' ? options.id : '';
@@ -115,8 +116,15 @@ Page({
     // M-03（AJ-405）：保障区的客服入口——与订单详情同一条 GET /support，失败静默（只是不显示这张卡）
     app.globalData
       .api({ url: `${app.globalData.apiBase}/api/v1/support`, traceId: this.traceId })
-      .then((res) => this.setData({ support: supportRows(res) }))
+      .then((res) => {
+        if (this.alive) this.setData({ support: supportRows(res) });
+      })
       .catch(() => undefined);
+  },
+
+  /** 独立审查 2026-10-13 【2】：即发即忘的请求（客服卡 / 相关推荐）回来时页面可能已销毁，与结算页 `alive` 同口径。 */
+  onUnload() {
+    this.alive = false;
   },
 
   /**
@@ -191,9 +199,9 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/products?category=${encodeURIComponent(category)}&size=${RELATED_FETCH_SIZE}`,
         traceId: this.traceId,
       });
-      this.setData({ related: relatedCards(res?.items, this.productId) });
+      if (this.alive) this.setData({ related: relatedCards(res?.items, this.productId) });
     } catch {
-      this.setData({ related: [] });
+      if (this.alive) this.setData({ related: [] });
     }
   },
 

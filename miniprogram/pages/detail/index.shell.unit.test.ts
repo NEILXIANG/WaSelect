@@ -223,3 +223,28 @@ describe('详情页同类推荐 / 下架去首页（A10，AJ-416）', () => {
     expect(switches).toEqual(['/pages/home/index']);
   });
 });
+
+// 独立审查 2026-10-13 【2】：客服卡 / 相关推荐是即发即忘的请求，用户秒退时回包打到已销毁页面
+describe('商品详情：页面已卸载后不再 setData', () => {
+  it('🔴 onUnload 之后 /support 才回来 → data.support 保持为空', async () => {
+    let resolveSupport: ((v: unknown) => void) | null = null;
+    vi.stubGlobal('wx', { navigateTo: () => undefined, switchTab: () => undefined });
+    const p = await loadPage(new URL('./index.js', import.meta.url).href, {
+      globalData: {
+        apiBase: 'http://api.test',
+        api: (req: { url: string }) => {
+          if (req.url.endsWith('/api/v1/support'))
+            return new Promise((r) => {
+              resolveSupport = r;
+            });
+          return Promise.reject(new Error('下游不在本用例里'));
+        },
+      },
+    });
+    (p['onLoad'] as (o: unknown) => void)({ id: 'p-1' });
+    (p['onUnload'] as () => void)();
+    (resolveSupport as unknown as (v: unknown) => void)({ email: 'a@b.c' });
+    await settle();
+    expect(p.data['support']).toEqual([]);
+  });
+});

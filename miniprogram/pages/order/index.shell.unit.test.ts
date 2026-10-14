@@ -313,3 +313,24 @@ describe('订单页空态的样子（全入口点击测试 2026-10-11）', () =>
     expect(wxml).toMatch(/<ws-state-block\s+wx:if="\{\{loading\}\}"\s+kind="loading"/);
   });
 });
+
+// 独立审查 2026-10-13 【7】：全项目 9 处"?id="跳转里唯一没编码的一处
+describe('订单列表：行点击跳详情的 id 要编码', () => {
+  it('🔴 id 含特殊字符时 URL 被编码，与其余 8 处同口径', async () => {
+    const navs: string[] = [];
+    vi.stubGlobal('wx', {
+      navigateTo: (o: { url: string }) => navs.push(o.url),
+      switchTab: () => undefined,
+    });
+    const p = await loadPage(new URL('./index.js', import.meta.url).href, {
+      globalData: {
+        apiBase: 'http://api.test',
+        token: 't',
+        orderTab: '',
+        api: () => Promise.resolve({ items: [], total: 0 }),
+      },
+    });
+    (p['onRowTap'] as (e: unknown) => void)({ currentTarget: { dataset: { id: 'ord a&b' } } });
+    expect(navs).toEqual(['/pages/order-detail/index?id=ord%20a%26b']);
+  });
+});

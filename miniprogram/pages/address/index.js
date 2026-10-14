@@ -56,10 +56,17 @@ Page({
   /** 服务端原始地址列表（`PUT` 组装请求体要用，@see @limitation 一）。 */
   rawList: [],
   traceId: '',
+  /**
+   * 在途的那一行 id（删除 / 设为默认）——独立审查 2026-10-13 【1】：原先两个动作没有在途守卫，
+   * 连点删除第二次打到已删 id 会显示「删除没有成功，地址还在」（其实已删）；对两行快速连点「设为默认」会发出并发 PUT，
+   * 最终默认地址可能不是最后点的那个，结算页随之预选错地址。有在途就忽略后续点击，wxml 把那一行写成「处理中…」。
+   */
+  busyId: '',
 
   /** @param {{pick?: string}} options `?pick=1` = 选择模式 */
   onLoad(options) {
     this.traceId = newTraceId();
+    this.busyId = '';
     this.setData({ pick: options?.pick === '1' });
   },
 
@@ -153,6 +160,9 @@ Page({
   },
 
   async removeAddress(id) {
+    if (this.busyId !== '') return;
+    this.busyId = id;
+    this.setData({ busyId: id });
     try {
       await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/addresses/${id}`,
@@ -166,6 +176,9 @@ Page({
         errorTitle: errorTitle('delete'),
       });
       return;
+    } finally {
+      this.busyId = '';
+      this.setData({ busyId: '' });
     }
     await this.load();
   },
@@ -180,6 +193,9 @@ Page({
     if (id === '') return;
     const raw = this.rawList.find((a) => a && a.id === id);
     if (raw === undefined) return;
+    if (this.busyId !== '') return;
+    this.busyId = id;
+    this.setData({ busyId: id });
     try {
       await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/addresses/${id}`,
@@ -194,6 +210,9 @@ Page({
         errorTitle: errorTitle('default'),
       });
       return;
+    } finally {
+      this.busyId = '';
+      this.setData({ busyId: '' });
     }
     await this.load();
   },

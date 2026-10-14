@@ -107,3 +107,58 @@ describe('地址列表：整卡可点、新增固定在底部（全入口点击�
     );
   });
 });
+
+// 独立审查 2026-10-13 【1】：删除 / 设为默认原先没有在途守卫——连点删除第二次打到已删 id 显示"地址还在"，
+// 对两行快速连点"设为默认"发出并发 PUT、最终默认可能不是最后点的那个。
+describe('地址列表：删除 / 设为默认的在途守卫', () => {
+  const tap = (id: string) => ({ currentTarget: { dataset: { id } } });
+  it('🔴 请求在途时再点（同一行或别的行）不再发第二个请求；回来后守卫释放', async () => {
+    let release: (() => void) | null = null;
+    const sent: string[] = [];
+    gd['api'] = (req: { url: string; method?: string }) => {
+      sent.push(`${req.method ?? 'GET'} ${req.url.replace('http://api.test', '')}`);
+      if (req.method === 'PUT' || req.method === 'DELETE')
+        return new Promise<unknown>((r) => {
+          release = () => r({});
+        });
+      return Promise.resolve([
+        {
+          id: 'a-1',
+          recipient: 'A',
+          phone: '+14155550101',
+          line1: '1 St',
+          city: 'SF',
+          state: 'CA',
+          postal_code: '94102',
+          country: 'US',
+          is_default: false,
+        },
+        {
+          id: 'a-2',
+          recipient: 'B',
+          phone: '+14155550102',
+          line1: '2 St',
+          city: 'SF',
+          state: 'CA',
+          postal_code: '94103',
+          country: 'US',
+          is_default: false,
+        },
+      ]);
+    };
+    call('onLoad', {});
+    call('onShow');
+    await settle();
+    void call('onSetDefault', tap('a-1'));
+    void call('onSetDefault', tap('a-2'));
+    void call('removeAddress', 'a-2');
+    await settle();
+    expect(sent.filter((s) => s.startsWith('PUT') || s.startsWith('DELETE'))).toEqual([
+      'PUT /api/v1/addresses/a-1',
+    ]);
+    expect(page.data['busyId']).toBe('a-1');
+    (release as unknown as () => void)();
+    await settle();
+    expect(page.data['busyId']).toBe('');
+  });
+});

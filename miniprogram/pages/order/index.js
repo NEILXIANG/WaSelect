@@ -244,7 +244,8 @@ Page({
   onRowTap(e) {
     const id = e?.currentTarget?.dataset?.id;
     if (typeof id !== 'string' || id === '') return;
-    wxApi.navigateTo({ url: `${DETAIL_PAGE}?id=${id}` });
+    // 独立审查 2026-10-13 【7】：与其余 8 处跳转同口径（当前 id 是 uuid 形，编码只是防形态变化时静默传错）
+    wxApi.navigateTo({ url: `${DETAIL_PAGE}?id=${encodeURIComponent(id)}` });
   },
 
   /**
