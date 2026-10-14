@@ -945,6 +945,8 @@ textarea::placeholder {
   width: calc(var(--ws-space) * 28);
   max-width: 100%;
   overflow-y: auto;
+  /* 体验审查 2026-10-15（P1-1）：抽屉里滚到头之后不要把背后主区带着滚 */
+  overscroll-behavior: contain;
   padding: calc(var(--ws-space) * 1.5);
   display: flex;
   flex-direction: column;
@@ -1037,13 +1039,29 @@ textarea::placeholder {
   user-select: all;
 }
 
-/* 遮罩层（重新登录浮层 / 确认弹层 / 抽屉共用）：M3 scrim = 黑 32%（透明度走 token，不写 rgba） */
+/* 遮罩层（重新登录浮层 / 确认弹层 / 抽屉共用）：M3 scrim = 黑 32%（透明度走 token，不写 rgba）
+   @why padding + overflow-y（体验审查 2026-10-15，P1-1）：此前这一层只有居中、没有高度约束，
+        弹层内容一旦高于视口就**上下同时溢出**（align-items: center 的行为），而 fixed 容器本身不滚动
+        ⇒ 多出来的那部分（含 .dialog-actions 里的「确认 / 取消」）滚不到、点不到。
+        真实触发者是 customers/view.ts 的 CUSTOMER_PURGE_CONFIRM_TEXT（约 90 字）与
+        CUSTOMER_BLOCK_CONFIRM_TEXT、risk/view.ts 的 BLOCK_CONFIRM_TEXT：按 .dialog 的内容宽
+        换算，光正文 4–5 行，加标题 / mouseOnlyHint / 按钮 / gap / padding 总高约 400–480px，
+        在 125%~150% 缩放、1024×600 类矮窗口、上下分屏下必然溢出。
+        而危险确认框恰好强制"只能用鼠标点"（mouseOnlyHint），键盘与滚动都救不回来——
+        运营看不见「确认」也看不见「取消」，只能刷新重来。
+   @why overscroll-behavior: contain：弹层里滚到头之后不要把背景带着滚（滚动链），
+        用 CSS 解决而不用 JS 锁 body：宽屏下滚动容器是 .main 不是 body，锁 body 没用。
+   @limitation padding 不影响 .modal-backdrop 的铺满——绝对定位的包含块是**padding box**，
+               inset: 0 相对它解析，仍然盖满整个视口（无边框时 padding box = border box）。 */
 .modal {
   position: fixed;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: var(--ws-space);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   z-index: 10;
 }
 
@@ -1154,6 +1172,15 @@ textarea::placeholder {
   padding: calc(var(--ws-space) * 1.5);
   width: calc(var(--ws-space) * 26);
   max-width: calc(100vw - var(--ws-space) * 2);
+  /* 体验审查 2026-10-15（P1-1）：此前只有宽度约束、没有高度约束。正文一长，
+     整个弹层就高过视口，底部按钮落到视口外且滚不到（@see .modal 的 @why）。
+     有了这两行，超长时是**弹层内部**滚动，确认 / 取消永远在滚动范围内。
+     @why 用 dvh 而不是 vh：移动端地址栏收起/展开时 vh 不会变，dvh 才会——
+          弹层高度跟着实际可视高度走，不会出现"键盘弹起后按钮被顶出屏幕"。
+     @why 减掉的正是 .modal 的上下 padding：两层留白不重复算，否则矮窗口下弹层比可视区还高。 */
+  max-height: calc(100dvh - var(--ws-space) * 2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: var(--ws-space);
