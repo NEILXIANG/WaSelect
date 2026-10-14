@@ -109,6 +109,9 @@ Page({
     } finally {
       this.setData({ submitting: false });
     }
+    // 体验审查 2026-10-15（P1-2）：售后申请会改订单状态（pending → 售后中），
+    //   订单列表已改为"有变化才重取"，这里就是要通知它的那个变化。
+    app.globalData.ordersChanged = true;
     // MP-13：用户已按返回离开 → 不再出栈（@see alive）；申请已提交，回到详情页 onShow 即可看到
     if (this.alive) wxApi.navigateBack();
   },

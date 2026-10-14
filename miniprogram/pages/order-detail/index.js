@@ -446,6 +446,9 @@ Page({
         method: 'POST',
         traceId: this.traceId,
       });
+      // 体验审查 2026-10-15（P1-2）：订单列表已改为"有变化才重取"，这里是那个"变化"——
+      //   不置位的话，本页刚确认收货、返回列表那一行还是「待收货」，且列表不会自己纠正。
+      app.globalData.ordersChanged = true;
       await this.load();
     } catch (e) {
       await this.afterActionFailure(e);
@@ -478,6 +481,8 @@ Page({
         method: 'POST',
         traceId: this.traceId,
       });
+      // 体验审查 2026-10-15（P1-2）：同 confirmReceipt——刚取消的单不能在返回列表后还挂着「继续支付」
+      app.globalData.ordersChanged = true;
       await this.load();
     } catch (e) {
       await this.afterActionFailure(e);

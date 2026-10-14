@@ -364,6 +364,12 @@ Page({
     if (this.statusTimer !== null) clearTimeout(this.statusTimer);
     this.statusTimer = null;
     this.stopCountdown();
+    // 体验审查 2026-10-15（P1-2）：订单列表已改为"有变化才重取"。进过支付页就说明这张单
+    //   可能已经付了（微信内成功、或在浏览器里付完再切回来），列表必须重取才有真值——
+    //   无论从哪条路离开（付成去详情 / 未付按返回 / 去订单列表）。
+    //   @why 放在 onUnload 而不是只在 success 里：copylink 的付款发生在浏览器里，
+    //        本页根本收不到成功回调，只看 success 就漏掉整条银行卡路径。
+    if (this.orderId !== '') app.globalData.ordersChanged = true;
     // 审计 BUG-03：离开后在途的取单结果作废（否则回来后还会起倒计时 / setData 到已卸载页面）
     this.loadSeq = nextSeq(this.loadSeq);
   },

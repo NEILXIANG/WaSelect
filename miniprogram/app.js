@@ -125,6 +125,21 @@ App({
      */
     afterSaleBrief: null,
     /**
+     * 「订单状态已被改过」→ 订单列表的**一次性**信号（`true` = 回来要重取；读走即清）。
+     *
+     * @why 体验审查 2026-10-15（P1-2）：订单列表原先 `onShow` 无条件重取，翻到第 3 页点进详情、
+     *      返回就回到第 1 页、滚动位置归零。改成"有变化才取"之后，必须有个地方告诉列表"变了"——
+     *      否则详情页刚取消的那张单回到列表仍是「待付款」，还能点「继续支付」，这比丢分页严重得多。
+     * @why 与 `orderTab` 同口径（一次性、读走即清）：这类交接留在 globalData 里，
+     *      代价是消费方必须立刻清空，否则下次进列表会拿到过期的"变了"。
+     * @why 只记**布尔**（不记 orderId）：列表要重取的是整个当前页签，按单 id 局部更新
+     *      等于把分页 / 去重的口径再实现一遍，而一次重取只有一次请求。
+     * @see 写入侧：../pages/order-detail/index.js（取消 / 确认收货）、../pages/after-sale/index.js（提交售后）、
+     *      ../pages/pay/index.js（离页，可能已付款）、../pages/checkout/index.js（建单成功，新单已存在）
+     * @see 消费侧：../pages/order/index.js onShow
+     */
+    ordersChanged: false,
+    /**
      * 「我的」四个订单入口 → 订单页的**一次性**页签意图（M-10 附，AJ-408；'' = 没有）。
      * @why 订单页是 tab 页，`switchTab` 不能带 query；交接方式与 `pickedAddressId` 同理，订单页 onShow 读走即清空。
      * @see ../pages/user/index.js（写入侧）；../pages/order/index.js（消费侧）

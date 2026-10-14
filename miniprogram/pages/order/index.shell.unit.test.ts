@@ -50,6 +50,8 @@ beforeEach(async () => {
   });
   gd = {
     orderTab: '',
+    // 体验审查 2026-10-15（P1-2）：一次性"订单变过了"信号（@see app.js globalData.ordersChanged）
+    ordersChanged: false,
     apiBase: 'http://api.test',
     api: async (req: { url: string }) => {
       calls.push(`GET ${req.url.replace('http://api.test', '')}`);
@@ -297,6 +299,89 @@ describe('订单列表：分页与触底加载（S-7，第二轮审计 2026-10-1
     expect(calls.at(-1)).toBe('GET /api/v1/orders?page=2&size=20');
     expect(page.data['rows']).toHaveLength(30);
     expect(page.data['moreError']).toBe('');
+  });
+});
+
+/**
+ * 体验审查 2026-10-15（P1-2）：`onShow` 从"无条件重取"改为"按需重取"。
+ *
+ * @why 这条改动有两个**都不报错**的失效形态，纯函数里看不出来，只能把页面跑起来钉：
+ *      ① 忘了按需 → 从详情返回丢分页与滚动位置（原缺陷，翻不到底）；
+ *      ② 按需过头 → 刚取消 / 刚付款的单回到列表还是旧状态（比 ① 更严重：已取消的单还挂着「继续支付」）。
+ *      所以下面既钉"不该取的时候不取"，也钉"该取的时候一定取"。
+ */
+describe('订单列表：进屏按需重取（体验审查 2026-10-15，P1-2）', () => {
+  /** 造一个"翻到了第 2 页"的列表：第 1 页 20 条、共 25 → 触底取第 2 页。 */
+  const loadedTwoPages = async (): Promise<void> => {
+    const row = (i: number) => ({
+      order_id: `o-${i}`,
+      order_no: `WS-${i}`,
+      status: 'paid',
+      total_jpy: 1000,
+    });
+    gd['api'] = async (req: { url: string }) => {
+      const url = req.url.replace('http://api.test', '');
+      calls.push(`GET ${url}`);
+      if (url.includes('page=1&'))
+        return { items: Array.from({ length: 20 }, (_, i) => row(i)), total: 25 };
+      return { items: Array.from({ length: 5 }, (_, i) => row(20 + i)), total: 25 };
+    };
+    await call<Promise<void>>('load');
+    await call<Promise<void>>('onReachBottom');
+    expect(page.data['rows']).toHaveLength(25);
+    calls = [];
+  };
+
+  it('🔴 从详情返回不重取：翻到第 2 页后进详情、返回，25 行还在、一个请求都不发', async () => {
+    await loadedTwoPages();
+    (page['onShow'] as () => void)();
+    await settle();
+    expect(calls).toEqual([]);
+    expect(page.data['rows']).toHaveLength(25);
+  });
+
+  it('🔴 别处改过订单（globalData.ordersChanged）→ 进屏重取，且读走即清（下次进屏不再取）', async () => {
+    await loadedTwoPages();
+    gd['ordersChanged'] = true;
+    (page['onShow'] as () => void)();
+    await settle();
+    expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20']);
+    expect(gd['ordersChanged']).toBe(false);
+    calls = [];
+    (page['onShow'] as () => void)();
+    await settle();
+    expect(calls).toEqual([]);
+  });
+
+  it('🔴 还没成功取过（首屏）→ 进屏要取；取成功后就不取了', async () => {
+    (page['onShow'] as () => void)();
+    await settle();
+    expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20']);
+    calls = [];
+    (page['onShow'] as () => void)();
+    await settle();
+    expect(calls).toEqual([]);
+  });
+
+  it('🔴 取失败（page 不推进）→ 下次进屏自动再取，不把用户留在错误态里', async () => {
+    fail = true;
+    (page['onShow'] as () => void)();
+    await settle();
+    expect(String(page.data['error'])).not.toBe('');
+    calls = [];
+    fail = false;
+    (page['onShow'] as () => void)();
+    await settle();
+    expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20']);
+    expect(page.data['error']).toBe('');
+  });
+
+  it('🔴 下拉刷新不受"按需"影响：仍然无条件重取并回到第 1 页', async () => {
+    await loadedTwoPages();
+    await call<Promise<void>>('onPullDownRefresh');
+    // 取数是第 1 页，取完才收起动画（M-04 的老用例钉的是这个顺序，这里只多加一层"已翻到第 2 页"的前提）
+    expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20', 'stop']);
+    expect(page.data['rows']).toHaveLength(20);
   });
 });
 

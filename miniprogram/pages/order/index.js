@@ -4,11 +4,16 @@
  * @why 用 `onShow` 而不是 `onLoad` 取数：从支付页返回（尤其是 copylink 在浏览器里
  *      付完再切回来）不会触发 onLoad，只看 onLoad 的表现是
  *      "明明付过了，订单列表还是显示待付款"——而支付完成本来就靠服务端回调，
- *      列表是用户能看到的**唯一真值**，必须每次进屏都刷新。
+ *      列表是用户能看到的**唯一真值**。
+ *      ⚠️ 但"每次进屏都拉"已于体验审查 2026-10-15（P1-2）改为**按需**：
+ *      无条件重取的代价是丢分页与滚动位置（@see onShow）。真值由
+ *      `globalData.ordersChanged` 的一次性信号兜住——付款 / 取消 / 确认收货 / 提交售后 /
+ *      建单这些"真的改了订单"的地方都会置它，进屏读到就重取。
  *
  * @limitation 一：**不做支付结果轮询**（与支付页 @limitation 一 同一条）：
- *              完成靠服务端回调落库，本页每次进屏拉一次即是"最新真值"。
+ *              完成靠服务端回调落库，本页在"订单变过"时拉一次即是"最新真值"。
  *              轮询的代价是弱网下白耗电，且它给出的仍然不是权威状态。
+ *              兜底是下拉刷新（M-04）：没有推送时，买家想核对就自己下拉。
  * @limitation 二：列表行的信息密度**刻意低**（单号 / 状态 / 合计；M-11 起加首件缩略图、件数、下单时间——找单用）——
  *              时间线 / 运单号 / 地址快照 / 条款版本在详情页（U-H3，`pages/order-detail`），
  *              列表点卡片即达。往列表行里再塞这些，等于把详情页在每张卡片上重复一遍。
@@ -95,15 +100,36 @@ Page({
     this.traceId = newTraceId();
   },
 
+  /**
+   * 进屏：只更新 tabBar 与角标，**按需**才重取（体验审查 2026-10-15，P1-2）。
+   * @why 原先这里无条件 `load()`：翻到第 3 页 → 点进详情 → 返回，列表只剩第 1 页 20 条、
+   *      滚动位置归零（买家查"发货了没"的本能动作就是回列表，这条路径每次都被打断；
+   *      订单攒多了永远翻不到底）。换页签清列表是合理的（筛选条件真变了），
+   *      从详情返回**不算**换筛选条件。
+   * @why 但"不重取"不能变成"显示过期状态"——所以取不取看**有没有变化**：
+   *      ① 有一次性页签意图（@limitation 四）；② 别处改过订单（`globalData.ordersChanged`，
+   *      取消 / 确认收货 / 提交售后 / 付款 / 建单，读走即清）；③ 从没成功取过（`page === 0`，
+   *      覆盖首屏与上次失败）。三条都不成立就只更新角标，不动列表。
+   * @why 下拉刷新（M-04）与点页签**仍然无条件重取**：那是用户明确要刷新，回第 1 页正是他要的。
+   */
   onShow() {
     track(app, 'page_view', { page: 'order' }); // M-21 页面曝光
     // @limitation 四：「我的」四入口留下的一次性意图——读走即清空
     const intent = app.globalData.orderTab;
+    let need = false;
     if (typeof intent === 'string' && intent !== '') {
       app.globalData.orderTab = '';
       this.setTab(resolveOrderTab(intent));
+      need = true;
     }
-    void this.load();
+    // 一次性"订单变过了"信号（@see app.js globalData.ordersChanged）：读走即清
+    if (app.globalData.ordersChanged === true) {
+      app.globalData.ordersChanged = false;
+      need = true;
+    }
+    // 从没成功取过：首屏，或上次取失败（失败不推进 this.page）——下次进屏要能自己恢复
+    if (this.page === 0) need = true;
+    if (need) void this.load();
     // S5：注入底部 tabBar 的高亮（本页是第 2 个 tab）。
     setActiveTab(this, 'order');
     // M-14（AJ-406）：购物车角标（每个 tab 页进屏都更新，utils/tabs.js 唯一更新方）
