@@ -29,6 +29,21 @@ import {
   trackingWarning,
 } from './fix-view.js';
 
+/**
+ * 确认按钮的文案（体验审查 2026-10-15，P2-7）。
+ *
+ * @why 抽成函数是因为它要被**两处**用：按钮本身，以及按钮下面那句 `mouseOnlyHint`
+ *      （"请用鼠标点击「X」按钮（按回车不会确认）"）。此前提示里写死 `mouseOnlyHint('确认')`，
+ *      而屏幕上根本没有叫「确认」的按钮——实际是「确认取消订单」/「确认撤销发货」/「确认修改运单号」。
+ *      运营照着提示在屏幕上找「确认」找不到，在"取消订单"这种高压场景里会以为流程坏了。
+ *      两处各写一遍同样的三元，正是漂移的原因（PartialRefunds / OrderAddressForm 传的都是完整文案，
+ *      只有这一处漏了）。
+ * @why 兜底仍是「确认修改运单号」：与抽出来之前的三元末支完全一致，不引入行为变化。
+ */
+function confirmLabel(mode: '' | 'cancel' | 'fix' | 'revert'): string {
+  return mode === 'cancel' ? '确认取消订单' : mode === 'revert' ? '确认撤销发货' : '确认修改运单号';
+}
+
 export interface OrderFixActionsProps {
   api: AdminApi;
   orderId: string;
@@ -258,13 +273,7 @@ export function OrderFixActions({
                 onKeyDown={blockEnter}
                 onClick={() => void submit()}
               >
-                {busy
-                  ? '提交中…'
-                  : mode === 'cancel'
-                    ? '确认取消订单'
-                    : mode === 'revert'
-                      ? '确认撤销发货'
-                      : '确认修改运单号'}
+                {busy ? '提交中…' : confirmLabel(mode)}
               </button>
               <button
                 className="btn btn-secondary"
@@ -274,7 +283,8 @@ export function OrderFixActions({
               >
                 再看看
               </button>
-              <span className="muted">{mouseOnlyHint('确认')}</span>
+              {/* 提示里的按钮名必须等于屏幕上那个按钮的名字（@see confirmLabel 的 @why） */}
+              <span className="muted">{mouseOnlyHint(confirmLabel(mode))}</span>
             </div>
           ) : (
             <div className="row2">
