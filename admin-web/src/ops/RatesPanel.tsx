@@ -167,9 +167,15 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
                 />
               </td>
               <td>
+                {/* 体验审查 2026-10-15（P2-12）：与同表承运商格同口径——触控端弹数字键盘、
+                    长度上限取**已有的** `SHIPPING_RATE_BOUNDS`（不另造一个数字）。
+                    @why 上界 30000 → 5 位：多打一位必然越界，早一步挡住比提交后返工便宜
+                         （这一张表是"一次提交覆盖全站运费"）。 */}
                 <input
                   {...cellProps(i, 'maxWeightG')}
                   aria-label={`第 ${String(i + 1)} 档重量上限（克）`}
+                  inputMode="numeric"
+                  maxLength={String(SHIPPING_RATE_BOUNDS.maxWeightG).length}
                   value={r.maxWeightG}
                   onChange={(e) =>
                     setRows((prev) =>
@@ -182,6 +188,8 @@ export function RatesPanel({ api, sink: parentSink }: RatesPanelProps) {
                 <input
                   {...cellProps(i, 'priceJpy')}
                   aria-label={`第 ${String(i + 1)} 档运费（日元）`}
+                  inputMode="numeric"
+                  maxLength={String(SHIPPING_RATE_BOUNDS.priceJpy).length}
                   value={r.priceJpy}
                   onChange={(e) =>
                     setRows((prev) =>

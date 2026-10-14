@@ -41,6 +41,14 @@ export interface CategoryDraft {
   sort: string;
 }
 
+/**
+ * 分类名称的字数上限（体验审查 2026-10-15，P2-12：原先它只是 `categoryDraftErrors` 里的一个字面量 10，
+ * 而表单的 hint 写着"最多 10 个字"却**不限制输入**——运营能打 50 个字进去，提交才被拦）。
+ * @why 抽成常量：校验、hint、输入框的 `maxLength` 三处都要它，写三遍必然各漂一次。
+ * @why 取 10 的理由不变：小程序分类栏放不下更长的。
+ */
+export const CATEGORY_NAME_MAX_CHARS = 10;
+
 /** 新建 / 修改的本地预检；返回 {字段: 人话}，空对象 = 通过。`isNew` 为 false 时不查键（键不能改）。 */
 export function categoryDraftErrors(d: CategoryDraft, isNew: boolean): Record<string, string> {
   const e: Record<string, string> = {};
@@ -48,7 +56,8 @@ export function categoryDraftErrors(d: CategoryDraft, isNew: boolean): Record<st
     e['key'] = '分类代码用小写英文字母开头，2–32 位，只能有小写字母、数字、下划线（如 baby_care）';
   const name = d.name.trim();
   if (name === '') e['name'] = '请填写分类名称';
-  else if ([...name].length > 10) e['name'] = '分类名称最多 10 个字（小程序分类栏放不下更长的）';
+  else if ([...name].length > CATEGORY_NAME_MAX_CHARS)
+    e['name'] = `分类名称最多 ${String(CATEGORY_NAME_MAX_CHARS)} 个字（小程序分类栏放不下更长的）`;
   else if (HTML_TAG.test(name)) e['name'] = '分类名称里不能有网页代码（如 <b>）';
   const sort = halfWidth(d.sort); // 全角先转半角（两端输入测试 2026-10-12）
   if (!/^\d{1,4}$/.test(sort)) e['sort'] = '排序填 0–9999 的整数，越小越靠前';
@@ -58,7 +67,7 @@ export function categoryDraftErrors(d: CategoryDraft, isNew: boolean): Record<st
 const REASONS: Readonly<Record<string, string>> = {
   key_invalid: '分类代码格式不对：小写英文字母开头，2–32 位，只能有小写字母、数字、下划线',
   name_required: '请填写分类名称',
-  name_too_long: '分类名称最多 10 个字',
+  name_too_long: `分类名称最多 ${String(CATEGORY_NAME_MAX_CHARS)} 个字`,
   html_not_allowed: '分类名称里不能有网页代码（如 <b>）',
   sort_invalid: `排序填 0–${String(SORT_MAX)} 的整数`,
   // 删分类被拒：有 Banner 跳到它（40919，三天提交复查 2026-10-12）

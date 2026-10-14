@@ -17,6 +17,7 @@
  * @see ./api.ts（setProductStock）；./view.ts（parseStockEdit / withStock）
  */
 import { useState } from 'react';
+import { PRODUCT_MAX_STOCK } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { toastError, type ToastSink } from '../ui/toast.js';
 import { setProductStock, type AdminApi } from './api.js';
@@ -106,6 +107,8 @@ export function StockCell(p: StockCellProps) {
       <input
         className="input stock-input"
         inputMode="numeric"
+        // 体验审查 2026-10-15（P2-12）：上限取**已有的** PRODUCT_MAX_STOCK（不另造一个数字）
+        maxLength={String(PRODUCT_MAX_STOCK).length}
         aria-label="新库存"
         value={draft}
         onChange={(e) => {

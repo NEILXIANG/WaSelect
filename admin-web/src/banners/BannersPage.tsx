@@ -23,7 +23,7 @@
 import { useCategories } from '../categories/useCategories.js';
 import { categoryName, categoryOptions } from '../categories/view.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { SEARCH_KEYWORD_MAX_LENGTH } from '@waselect/shared';
+import { SEARCH_KEYWORD_MAX_LENGTH, SORT_MAX } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { UPLOAD_ACCEPT, uploadImage } from '../api/upload.js';
 import { findProductById, listProducts, type AdminProductLike } from '../products/api.js';
@@ -549,6 +549,8 @@ export function BannersPage({ api, baseUrl, getToken, onUnauthorized }: BannersP
             <input
               className="input"
               inputMode="numeric"
+              // 体验审查 2026-10-15（P2-12）：上限取**已有的** SORT_MAX（与分类「排序」同口径）
+              maxLength={String(SORT_MAX).length}
               placeholder="排序（小的在前）"
               value={form.sort}
               onChange={(e) => setForm((s) => ({ ...s, sort: e.target.value }))}

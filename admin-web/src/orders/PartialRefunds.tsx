@@ -217,6 +217,11 @@ export function PartialRefunds({
           className="input"
           name="partial-amount"
           placeholder={amountLabel(currency).example}
+          // 体验审查 2026-10-15（P2-12）：触控端弹数字键盘（这一格既可能是日元整数也可能是两位小数）
+          // @why 不加 `maxLength`：金额的上界是"这一单还能退多少"（每张单不同），
+          //      shared/limits.ts 里没有同源常量，硬编一个数字就是造第二份真源；
+          //      越界由 `parseRefundAmount` 在提交前拦（且输入时旁边就写着还能退多少）。
+          inputMode="decimal"
           value={amount}
           onChange={(e) => {
             setAmount(e.target.value);

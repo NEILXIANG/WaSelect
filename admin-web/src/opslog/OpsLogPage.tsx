@@ -239,6 +239,8 @@ export function OpsLogPage({ api, route, onNavigate }: OpsLogPageProps) {
         <input
           className="input"
           aria-label="操作人"
+          // 体验审查 2026-10-15（P2-12）：与订单页关键字框同一个常量（`SEARCH_KEYWORD_MAX_LENGTH`）
+          maxLength={SEARCH_KEYWORD_MAX_LENGTH}
           placeholder="操作人邮箱（或 admin:内部 id）"
           value={actor}
           onChange={(e) => setActor(e.target.value)}
@@ -246,6 +248,7 @@ export function OpsLogPage({ api, route, onNavigate }: OpsLogPageProps) {
         <input
           className="input"
           aria-label="对象"
+          maxLength={SEARCH_KEYWORD_MAX_LENGTH}
           // 两端输入测试 2026-10-12：原写"对象 id"——内部 id 在界面上看不到；服务端现认这三种（内部 id 照旧可用）
           placeholder="对象：订单号 / 商品名 / 账号邮箱"
           value={target}

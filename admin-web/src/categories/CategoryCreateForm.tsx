@@ -3,11 +3,12 @@
  * @why 代码（键）与名称分开填、写明用途：代码会进小程序网址与 Banner 跳转，建好后不能改；名称是买家看到的字。
  */
 import { useState } from 'react';
+import { SORT_MAX } from '@waselect/shared';
 import { ApiError } from '../api/errors.js';
 import { halfWidth } from '../format.js';
 import { toastError, type ToastSink } from '../ui/toast.js';
 import { createCategory, type AdminApi } from './api.js';
-import { categoryDraftErrors, categoryServerError } from './view.js';
+import { CATEGORY_NAME_MAX_CHARS, categoryDraftErrors, categoryServerError } from './view.js';
 
 export function CategoryCreateForm({
   api,
@@ -50,11 +51,18 @@ export function CategoryCreateForm({
     }
   };
 
+  /**
+   * 一个字段（体验审查 2026-10-15，P2-12：`maxLength` / `inputMode` 由调用方按字段给）。
+   * @why 名称格加长度上限：hint 早就写着"最多 10 个字"，可输入框不限长——运营能打 50 个字进去，
+   *      提交时才被拦（提示还只说"最多 10 个字"，不说是哪一项太长）。
+   * @why 排序格加 `inputMode="numeric"`：触控端弹数字键盘（同站点其它数字格同口径）。
+   */
   const field = (
     name: 'name' | 'key' | 'sort',
     label: string,
     placeholder: string,
     hint: string,
+    input?: { maxLength?: number; inputMode?: 'numeric' | 'text' },
   ) => (
     <label className="field">
       <span className="label">{label}</span>
@@ -63,6 +71,8 @@ export function CategoryCreateForm({
         name={`category-${name}`}
         value={d[name]}
         placeholder={placeholder}
+        maxLength={input?.maxLength}
+        inputMode={input?.inputMode}
         onChange={(e) => setD({ ...d, [name]: e.target.value })}
       />
       {errors[name] !== undefined ? (
@@ -75,9 +85,18 @@ export function CategoryCreateForm({
 
   return (
     <div className="filters category-create">
-      {field('name', '分类名称', '如：母婴用品', '买家在小程序里看到的名字，最多 10 个字')}
+      {field(
+        'name',
+        '分类名称',
+        '如：母婴用品',
+        `买家在小程序里看到的名字，最多 ${String(CATEGORY_NAME_MAX_CHARS)} 个字`,
+        { maxLength: CATEGORY_NAME_MAX_CHARS },
+      )}
       {field('key', '分类代码', '如：baby_care', '小写英文字母开头，建好后不能改')}
-      {field('sort', '排序', '100', '越小越靠前')}
+      {field('sort', '排序', '100', '越小越靠前', {
+        maxLength: String(SORT_MAX).length,
+        inputMode: 'numeric',
+      })}
       <button type="button" className="btn" disabled={busy} onClick={() => void submit()}>
         新建分类
       </button>
