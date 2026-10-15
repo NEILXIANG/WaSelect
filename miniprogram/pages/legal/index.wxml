@@ -61,6 +61,8 @@
   <view class="ws-gutter legal__doc" wx:for="{{docs}}" wx:for-item="doc" wx:key="key">
     <view class="ws-card legal__card">
       <text class="doc-label">{{doc.title}}</text>
+      <!-- 审计 CPY-08：这一份的交叉说明（vm `DOC_ROWS` 的 `note`；其余三类是空串，不渲染） -->
+      <text class="ws-caption line-block" wx:if="{{doc.note}}">{{doc.note}}</text>
       <view class="doc" wx:for="{{doc.langs}}" wx:key="key">
         <view class="doc-head">
           <text class="doc-label">{{item.label}}</text>
@@ -90,6 +92,13 @@
 
   <view class="ws-gutter legal__doc" wx:if="{{state.showList && docs.length === 0}}">
     <view class="ws-card legal__card">
+      <!--
+        审计 CPY-13：**回退分支也要有文档标题**。这一支渲染的是 `termsView` 的 `langs`
+        （服务端只给了 `urls`、没给 `documents`）——它就是**用户协议**的三语链接，
+        与 `DOC_ROWS` 里 terms 那一项同名同物。原先这一支只有语种行与「复制链接」，
+        没有标题时它和上面那几张卡长得不一样，看不出自己是哪份文件。
+      -->
+      <text class="doc-label">用户协议</text>
 
       <!-- 语种块之间用发丝线分隔：三块共用一个 card，不加线时
            "复制链接"这个动作会和上一个语种的 url 读成一条 -->

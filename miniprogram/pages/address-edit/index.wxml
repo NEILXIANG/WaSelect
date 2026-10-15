@@ -18,6 +18,8 @@
 
   <ws-state-block wx:if="{{loading}}" kind="loading" title="正在加载地址" compact="{{true}}" />
 
+  <!-- 审计 CPY-10：次要动作只有一种叫法「返回地址列表」——`gone`（地址已删）的区别只在
+       还该不该给「重试」（已删的重试没有意义），不在这个按钮叫什么、去哪里（都是地址列表） -->
   <ws-state-block
     wx:if="{{error}}"
     kind="fail"
@@ -26,7 +28,7 @@
     refText="{{errorRef}}"
     actionText="{{gone ? '' : '重试'}}"
     bindaction="onRetryLoad"
-    altText="{{gone ? '返回地址列表' : '返回列表'}}"
+    altText="返回地址列表"
     bindalt="onBack"
   />
 

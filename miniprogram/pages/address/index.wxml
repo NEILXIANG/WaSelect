@@ -60,7 +60,13 @@
         <!-- 默认标记：用 tag 而不是"括号里的字"——括号里的"默认"会和电话读成一行 -->
         <text class="ws-tag addr__default" wx:if="{{item.isDefault}}">{{item.defaultText}}</text>
       </view>
-      <text class="ws-body addr__line">{{item.line1}}{{item.line2 ? ', ' + item.line2 : ''}}</text>
+      <!-- 审计 CPY-11：两行地址**分行**渲染（与结算页 / 订单详情同口径）。
+           ① `line1` / `line2` 是面单上两样东西（门牌 / 单元号），拼成一行会把两行读成一条；
+           ② 半角 ", " 是英文的写法，与同页其它中文文案不是一套；
+           ③ `addressSummary` 本身就按"分行"给的（`line1` / `line2` / `region` 三段分开），
+              在模板里再拼一次正是它 @why 里点名的那种双逗号错误。 -->
+      <text class="ws-body addr__line">{{item.line1}}</text>
+      <text class="ws-body addr__line" wx:if="{{item.line2}}">{{item.line2}}</text>
       <text class="ws-note addr__line">{{item.region}}</text>
       <!-- 操作区：文字动作排一行（用 view 不是 button——页面不允许原生可点 button）；选择模式只留「编辑」 -->
       <view class="ws-hair addr__rule" />

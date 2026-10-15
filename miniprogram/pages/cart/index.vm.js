@@ -20,6 +20,8 @@
  */
 import { formatJpy } from '../../utils/price-format.js';
 import { MAX_CART_LINES, MAX_LINE_QTY } from '../../utils/cart-store.js';
+// 审计 CPY-05：这两个码的文案**只在 error-text.js 定一份**（购物车 / 结算页同码同句，不在这里另写）
+import { FORBIDDEN_TEXT, SALES_PAUSED_TEXT } from '../../utils/error-text.js';
 
 /**
  * 本地条目 → 行视图。
@@ -100,9 +102,9 @@ const DELISTED_CODE = 40401;
 export function quoteErrorHint(code, lineCount, blocked) {
   if (tooManyLines(code, lineCount)) return TOO_MANY_LINES_TEXT;
   // F4（第二轮审计 2026-10-11）：账号被拉黑不是"稍后重试"能解决的
-  if (blocked === true) return '账号已被限制使用，暂时无法结算，如有疑问请联系客服';
+  if (blocked === true) return FORBIDDEN_TEXT;
   // 停售（40916）：不是"稍后重试"能解决的，也不是购物车的问题（三端联动模拟 2026-10-08）
-  if (code === SALES_PAUSED_CODE) return '店铺暂停接单中，恢复后即可结算';
+  if (code === SALES_PAUSED_CODE) return SALES_PAUSED_TEXT;
   // 走查 2026-10-08：A3 之后「取消勾选」是最省事的出路，提示里要给到（原句只说调整数量或移除）。
   //   下架（行内已标红，等不回来）→ 指向标红那件；库存不足仍走"稍后重试"（别人取消会回补，见上方 MP3-09 的口径）；
   //   整车超限（超重 / 超金额）没有标红行 → 仍说调整数量

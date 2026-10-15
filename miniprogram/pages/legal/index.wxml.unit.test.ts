@@ -28,4 +28,13 @@ describe('条款页版式', () => {
   it('🔴 文档卡之间有间距（每张卡外层带 legal__doc）', () => {
     expect(wxml).toMatch(/<view class="ws-gutter legal__doc" wx:for="\{\{docs\}\}"/);
   });
+
+  /**
+   * 审计 CPY-13：`documents` 没给时退回只有用户协议三语链接的那张卡，原先**只有语种行**，
+   * 没有标题 —— 它和上面那几张卡长得不一样，看不出自己是哪份文件。
+   */
+  it('🔴 回退分支（docs 为空）也有文档标题：用户协议', () => {
+    const fallback = wxml.slice(wxml.indexOf('docs.length === 0'));
+    expect(fallback).toContain('<text class="doc-label">用户协议</text>');
+  });
 });

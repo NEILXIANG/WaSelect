@@ -447,10 +447,15 @@ describe('saveErrorFields（地址保存被服务端拒）', () => {
     ).toEqual({ saveError: '邮编和州对不上：请检查州或邮编', saveErrorRef: '' });
   });
 
+  // ⚠️ 夹具用 40919（BUYER_TEXT 不覆盖的码）：50000 自 CPY-12 起有买家文案，照旧那条路径钉不住
   it('认不出的错误照旧（原文 + 报障小字）', async () => {
     const { saveErrorFields } = await import('./address-form.js');
-    const r = saveErrorFields({ code: 50000, message: '服务器内部错误', traceId: 'abcdef12' });
-    expect(r.saveError).toBe('服务器内部错误');
+    const r = saveErrorFields({
+      code: 40919,
+      message: '这个分类还在使用中（有商品或首页 Banner 指向它），不能删除',
+      traceId: 'abcdef12',
+    });
+    expect(r.saveError).toBe('这个分类还在使用中（有商品或首页 Banner 指向它），不能删除');
     expect(r.saveErrorRef).not.toBe('');
   });
 });

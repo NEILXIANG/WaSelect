@@ -97,14 +97,24 @@ export function legalState(s) {
 }
 
 /**
- * 四类法务文档（剩余清单 4-1）：固定顺序 + 中文名。键与服务端 `server/src/domain/legal.ts` 的 LEGAL_DOCS 同名。
+ * 四类法务文档（剩余清单 4-1）：固定顺序 + 中文名 + 一句交叉说明（可空）。
+ * 键与服务端 `server/src/domain/legal.ts` 的 LEGAL_DOCS 同名。
  * @why 顺序写死在这里而不是跟随服务端对象的键序：JSON 对象键序不是契约的一部分，按它排会让页面顺序随服务端实现漂移。
+ * @why `note` 一律给（没有就给空串）而不是只给需要的那一行：四类文档是**同一种东西的四份**，
+ *      形状一致时"这一类有没有说明"才是一眼能看出来的差别（也让 `doc.note` 读起来不出 undefined）。
  */
 export const DOC_ROWS = [
-  { key: 'terms', title: '用户协议' },
-  { key: 'privacy', title: '隐私政策' },
-  { key: 'refund', title: '退货与退款政策' },
-  { key: 'tokushoho', title: '日本特定商交易法标示（商家信息）' },
+  { key: 'terms', title: '用户协议', note: '' },
+  { key: 'privacy', title: '隐私政策', note: '' },
+  /**
+   * 审计 CPY-08：这一份在**政策页**叫「退货与退款政策」，在**功能入口**叫「售后」
+   * （订单详情的「申请售后」、订单页签「售后·退款」）——两边一个共同词都没有。
+   * @why 改的是**加一句交叉说明**而不是改标题：标题是这份法务文本自己的名字
+   *      （checkout 静态站上那份 `<title>` 就叫「退货与退款政策」），改名等于让两处指的不是同一份文件。
+   *      补一句说明，从「售后」点进来的人能认出这就是管那件事的那一份。
+   */
+  { key: 'refund', title: '退货与退款政策', note: '订单里的「售后」申请，按这份政策处理' },
+  { key: 'tokushoho', title: '日本特定商交易法标示（商家信息）', note: '' },
 ];
 
 /**
@@ -112,7 +122,7 @@ export const DOC_ROWS = [
  * @why 与 termsView 同一条过滤口径（只留 https 绝对地址，W-06）；整类没有可用链接的文档不出现，
  *      而不是显示一张"没有链接的卡"。不认识的文档类不出现（服务端加一类而这里没跟上 → 只是不显示，不会显示乱码标题）。
  * @why 语种行的 key 带文档前缀（`terms:zh`）：页面的"已复制"按 key 标记，四类文档共用 zh 时不能串。
- * @returns {Array<{key: string, title: string, langs: Array<{key: string, label: string, url: string}>}>}
+ * @returns {Array<{key: string, title: string, note: string, langs: Array<{key: string, label: string, url: string}>}>}
  */
 export function documentsView(res) {
   const o = res !== null && typeof res === 'object' && !Array.isArray(res) ? res : {};
@@ -127,7 +137,7 @@ export function documentsView(res) {
       label: r.label,
       url: typeof urls[r.key] === 'string' ? urls[r.key].trim() : '',
     })).filter((r) => /^https:\/\//.test(r.url));
-    return { key: d.key, title: d.title, langs };
+    return { key: d.key, title: d.title, note: d.note, langs };
   }).filter((d) => d.langs.length > 0);
 }
 

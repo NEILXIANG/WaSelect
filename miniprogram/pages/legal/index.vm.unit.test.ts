@@ -10,7 +10,14 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { LANG_ROWS, documentsView, legalState, sellerRows, termsView } from './index.vm.js';
+import {
+  DOC_ROWS,
+  LANG_ROWS,
+  documentsView,
+  legalState,
+  sellerRows,
+  termsView,
+} from './index.vm.js';
 
 const TERMS = {
   version: 'TOS-2026-09-20',
@@ -187,6 +194,20 @@ describe('documentsView（4-1）', () => {
     expect(documentsView(null)).toEqual([]);
     expect(documentsView({ documents: [] })).toEqual([]);
     expect(documentsView({})).toEqual([]);
+  });
+
+  /**
+   * 审计 CPY-08：政策页这一份叫「退货与退款政策」，功能入口（订单详情「申请售后」、
+   * 订单页签「售后·退款」）叫「售后」——两边一个共同词都没有。
+   * @why 钉的是**说明里出现「售后」**而不是把标题改掉：标题是这份法务文本自己的名字
+   *      （checkout 静态站上那份 `<title>` 同名），改名会让两处指的不再是同一份文件。
+   */
+  it('🔴 退货与退款政策带一句交叉说明，明说它就是订单里「售后」那一件事', () => {
+    const refund = DOC_ROWS.find((d) => d.key === 'refund');
+    expect(refund?.title).toBe('退货与退款政策');
+    expect(refund?.note).toContain('售后');
+    // 其它三类没有说明（空串 = 页面不渲染那一行）
+    for (const d of DOC_ROWS.filter((x) => x.key !== 'refund')) expect(d.note).toBe('');
   });
 });
 
