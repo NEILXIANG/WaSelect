@@ -17,7 +17,8 @@
     "navigationBarTitleText": "WaSelect",
     "navigationBarBackgroundColor": "#ffffff",
     "navigationBarTextStyle": "black",
-    "backgroundTextStyle": "light"
+    "backgroundColor": "#fbf9f5",
+    "backgroundTextStyle": "dark"
   },
   "tabBar": {
     "custom": true,

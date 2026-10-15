@@ -7,6 +7,23 @@
  *            页面想去掉就得写 `margin: 0` 去覆盖——那是"默认值反过来变成负担"的典型。
  */
 .ws-button {
+  /* M-19（AJ-553）：主要动作的触控高度不低于 --ws-touch-min，与全站其它可点元素同一口径。
+     @why 这里的高度**本来是基础库给的**：原生 button 在 style v2 下的 UA 样式是
+          `min-height: 40px` + `padding: 8px 24px` + `line-height: 1.41176471`，
+          组件只覆盖 `font-size`（= --ws-font，14px）→ 行盒约 20px、加纵向 padding 约 36px，
+          被 UA 的 `min-height: 40px` 兜住 = **40px ≈ 80rpx**，比 --ws-touch-min（88rpx）矮 8rpx。
+          更麻烦的是它不归本项目管：`40px` 是 px，屏越宽它相对越矮（414pt 屏上 88rpx≈48.6px，矮 17%）。
+     @why 纵向 padding 一并清零：UA 的 8px 会**叠加**在 min-height 之上（88rpx + 16rpx），
+          且那两截空白不随屏幕缩放。高度交给 min-height + line-height，纵向居中交给行高。
+     @why `line-height` 而不是 flex 居中：原生 button 的 `loading` 转圈是行内内容，
+          改成 flex 会让它和文案变成两个并排的 flex 项、贴在一起（且无 AppID 无法实测）。
+          行高 = 容器高 = --ws-touch-min 就是"单行文案垂直居中"的既有写法
+          （pages/order/index.wxss、pages/home/index.wxss 的文字动作同口径）。
+     @limitation 实际手感与基础库 UA 样式【需真机实测确认】（无 AppID，同 --ws-touch-min 的标注）。 */
+  min-height: var(--ws-touch-min);
+  line-height: var(--ws-touch-min);
+  padding-top: 0;
+  padding-bottom: 0;
   border-radius: var(--ws-radius);
   font-size: var(--ws-font);
 }

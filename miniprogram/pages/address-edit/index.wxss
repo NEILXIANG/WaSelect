@@ -75,8 +75,19 @@
   font-size: var(--ws-f-xs);
 }
 
-/* 默认地址开关：整行可点（用 view 不是 button——页面不允许原生可点 button） */
+/* 默认地址开关：整行可点（用 view 不是 button——页面不允许原生可点 button）
+   UX-005 第四处（AJ-549，2026-10-15）：补触控下限 —— 原来只有一行 .ws-body 高
+   （28rpx × 1.72 ≈ 48rpx）+ 上下 8rpx padding ≈ 64rpx（约 32pt），低于 88rpx（约 44pt）口径。
+   @why 照 `.addr__act`（address/index.wxss）与 `.terms`（checkout/index.wxss）的既有 M-19 修法，
+        不另起一种写法：三处都是"整行可点的文字开关"，形状一致就该长得一致。
+   @why 这里可以放心用 `display:flex` 居中（而不像 legal/.doc-act 那样要回避）：
+        父级 `.aedit__form` 是普通块容器，没有 `align-items: baseline`，不存在基线歧义。
+   @limitation 上下 padding 会让外框到 104rpx（content-box 下 padding 加在 min-height 之外），
+               比触控下限高一头；但这一行没有可见底色，多出的高度看不出来，不改 padding。 */
 .def {
+  display: flex;
+  align-items: center;
+  min-height: var(--ws-touch-min);
   margin-top: var(--ws-space-stack);
   padding: var(--ws-space-hair) 0;
 }

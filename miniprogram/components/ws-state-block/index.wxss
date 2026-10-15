@@ -192,7 +192,32 @@
   min-width: var(--ws-btn-min);
 }
 
+/*
+  UX-009（2026-10-15）：次要动作也要有触控下限——原来只有文字本身那一行高。
+
+  @why 取 touch-min 的 **3/4**（66rpx ≈ 33pt）而不是和主动作同值：
+       主动作是 `<ws-button>`（实心按钮），次要动作是文字链，做成一样高
+       就没了主次层级——"先做哪个"这件事本来就是靠大小说出来的。
+       但它仍然要有一个下限：只有一行文字高（约 40rpx ≈ 20pt）时手指点不中。
+  @limitation ⚠️ 主动作那一侧**不是** 88rpx，`0.75` 的分母不是 --ws-touch-min：
+       `ws-button` 渲染的是原生 `<button>`，`components/ws-button/index.wxss`
+       只声明了圆角与字号、**没有 height**，实际高度来自微信原生默认值
+       （非 size="mini" 约 46px ≈ 92rpx，未真机实测）。
+       故这里的"3/4"是相对原生默认值而言；66rpx 仍明显低一级，主次层级成立。
+       ws-button 缺高度一事已单独报告，不在本次改动范围（改动它属组件口径）。
+  @why 写成 `calc(var(--ws-touch-min) * 0.75)` 而不是新造一个 66rpx：
+       小程序 design-token 门禁（`design-token.unit.test.ts`）只豁免 app.wxss，
+       组件 wxss 里出现非 0 尺寸字面量直接红；而且"次要 = 主要的 3/4"这个**比例关系**
+       挂在同一个 token 上，将来调 --ws-touch-min 时两边一起变，不会有第二处要改。
+       （同口径的既有先例：detail/index.wxss 的 `calc(var(--ws-touch-min) * 1.2)`。）
+  @why `display:flex` 居中：父级 `.ws-state__actions` 是 `align-items: center`（不是 baseline），
+       这里做成 flex 容器没有基线歧义；不加的话 min-height 撑出的高度会让文字贴上边。
+*/
 .ws-state__alt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(var(--ws-touch-min) * 0.75);
   margin-top: var(--ws-space-inline);
   padding: var(--ws-space-hair) var(--ws-space-inline);
   font-size: var(--ws-f-sm);

@@ -38,8 +38,14 @@
   margin-top: var(--ws-space-inline);
 }
 
-/* "继续支付"：整行可点（用 view 不是 button——页面不允许原生可点 button） */
+/* "继续支付"：整行可点（用 view 不是 button——页面不允许原生可点 button）
+   UX-005（2026-10-15）：补触控下限 —— 原来只有一行文字高，手指点不中。
+   口径同订单详情 `.track--act`（M-19）：min-height ≥ --ws-touch-min，右对齐用 justify-content。 */
 .act {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: var(--ws-touch-min);
   margin-top: var(--ws-space-inline);
   padding-top: var(--ws-space-inline);
   border-top: var(--ws-border-width) solid var(--ws-line);
@@ -121,7 +127,12 @@
   text-align: center;
 }
 
+/* UX-005（2026-10-15）：补触控下限。@why 用 min-height + line-height 同一 token（同页 `.tab` / `.home__cat-cell` 的写法），
+   而不是 display:flex：这一行靠父级 `.footer { text-align: center }` 居中，改成 flex 容器会丢掉 text-align 继承、
+   文字跑到左边。两者都给 = 单行时 line-height 撑开、换行时 min-height 兜底。 */
 .order__more-retry {
+  min-height: var(--ws-touch-min);
+  line-height: var(--ws-touch-min);
   color: var(--ws-ink);
   text-decoration: underline;
   padding: var(--ws-space-hair) 0;

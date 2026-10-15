@@ -56,8 +56,16 @@
   font-size: var(--ws-f-sm);
 }
 
-/* "复制链接 / 已复制"：整行可点的文字动作（已改为 view——text 上 hover-class 不生效） */
+/* "复制链接 / 已复制"：整行可点的文字动作（已改为 view——text 上 hover-class 不生效）
+   UX-005（2026-10-15）：补触控下限。
+   @why 这里用 min-height + line-height 而不是别处 M-19 惯用的 `display:flex`：
+        父级 `.doc-head` 是 `align-items: baseline`（版本号要与左侧标签同基线），
+        一旦把 .doc-act 变成 flex 容器，基线就要按"首个 flex 子项的基线"来取，
+        真机上是否照此解析不确定（各基础库有差异）——用 line-height 撑开行盒，
+        基线仍是它自己那一行文字的基线，与左标签的对齐关系不变。 */
 .doc-act {
+  min-height: var(--ws-touch-min);
+  line-height: var(--ws-touch-min);
   flex: none;
   margin-left: var(--ws-space-inline);
   color: var(--ws-accent);

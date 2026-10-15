@@ -78,7 +78,18 @@
   color: var(--ws-ink);
 }
 
+/* UX-005（2026-10-15）：补触控下限。
+   @why `box-sizing: border-box`：默认 content-box 会把 padding 加到 min-height 之外
+        （88 + 上下各 8 = 104rpx），胶囊比触控下限高一头、搜索栏也跟着被撑高；
+        改成 border-box 后 min-height 就是**外框**高度 = --ws-touch-min，padding 只管横向。
+   @why 必须 `display:flex` 居中：这是有实底的胶囊，只给 min-height 的话文字会贴着上边、
+        底下空一截，一眼就看出坏了。 */
 .home__go {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: var(--ws-touch-min);
   flex: none;
   margin-left: var(--ws-space-hair);
   padding: var(--ws-space-hair) var(--ws-space-stack);
@@ -233,8 +244,17 @@
   margin-top: var(--ws-space-hair);
 }
 
+/* UX-005（2026-10-15）：补触控下限。
+   @why 用 min-height + line-height 同一 token —— 与本页 `.tab`（分类页签）、`.home__cat-cell`
+        （分类格子）**同一套写法**，不另起一种。
+   @why 不改成 `display:flex`：这两个类各有两个落点，横向对齐方式**不一样**——
+        `.home__clear` 单独出现在页顶提示里时靠继承左对齐，`.home__more-retry` 在
+        `.footer { text-align: center }` 里居中。改成 flex 容器会丢掉 text-align 继承，
+        只能取一种 justify-content，必然有一处错位；line-height 撑开行盒则两边都不受影响。 */
 .home__clear,
 .home__more-retry {
+  min-height: var(--ws-touch-min);
+  line-height: var(--ws-touch-min);
   color: var(--ws-ink);
   text-decoration: underline;
   padding: var(--ws-space-hair) 0;

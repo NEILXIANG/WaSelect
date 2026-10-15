@@ -187,3 +187,87 @@ describe('ws-button：连点防线（本组件存在的理由）', () => {
     expect(seen).toEqual([]);
   });
 });
+
+/**
+ * ws-button：触控高度下限（AJ-553）。
+ *
+ * @why 这个组件渲染的是**原生 `<button>`**，而 `.ws-button` 这个类只给了 border-radius 与 font-size——
+ *      高度此前完全由微信基础库的默认样式给（`app.wxss` 的 `.ws-btn { height: 88rpx }` 是另一套类名，继承不到）。
+ *      也就是说"手指点得中"这件事**不在我们自己的代码里**：基础库改一次默认样式，主按钮就静默变矮，且代码上看不出来。
+ *      这里把它钉成"我们自己的、被测试守住的事实"。
+ *
+ * @limitation **测不到渲染后的真实高度**：simulate 底下是 jsdom，**没有布局引擎**
+ *            （`node.$$.getBoundingClientRect()` 恒为零），而无 AppID 又上不了开发者工具的
+ *            `Element.getStyles` / `getOffset`（本仓那几处 `@measured` 是 2026-10-09 手工自动化取的）。
+ *            所以这里守的是"**声明值沿 token 解析出来 ≥ 88rpx**"——比"CSS 文本里有没有 min-height"强一层：
+ *            删掉这一行、或者把它指向一个更小的 token、或者 token 改名导致 var() 落空，都会被抓住。
+ *            渲染高度仍然只能真机验收（@see index.wxss 的 @limitation）。
+ */
+describe('ws-button：触控高度下限（AJ-553）', () => {
+  /** M-19 的触控下限：88rpx ≈ 44pt（@see app.wxss --ws-touch-min 的 @why）。 */
+  const MIN_TOUCH_RPX = 88;
+
+  const appCss = readFileSync(join(root, 'app.wxss'), 'utf8');
+  const css = readFileSync(join(root, 'components/ws-button/index.wxss'), 'utf8');
+
+  /** 剥掉块注释——注释里举的反例不能参与解析（同 design-token.unit.test.ts 同一条）。 */
+  const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  /** app.wxss 的 token 表：`--ws-touch-min` → `88rpx`。 */
+  const tokens = new Map(
+    [...strip(appCss).matchAll(/(--ws-[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [
+      m[1] ?? '',
+      (m[2] ?? '').trim(),
+    ]),
+  );
+
+  /** 某个选择器块里的一条声明值；没写 / 选择器不匹配 → null。 */
+  function declaration(selector: string, prop: string): string | null {
+    for (const m of strip(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const sels = (m[1] ?? '').split(',').map((s) => s.trim());
+      if (!sels.includes(selector)) continue;
+      const hit = new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`).exec(m[2] ?? '');
+      if (hit !== null) return (hit[1] ?? '').trim();
+      return null; // 选择器命中但没这条声明 —— 不要继续往下找别的块
+    }
+    return null;
+  }
+
+  /** `var(--ws-x)` → `88rpx`（只解一层：本仓 token 都是直接量）。解析不出来 → 空串。 */
+  function resolve(value: string): string {
+    const m = /var\(\s*(--ws-[a-z0-9-]+)\s*\)/.exec(value);
+    return m === null ? value : (tokens.get(m[1] ?? '') ?? '');
+  }
+
+  /** `88rpx` → 88；不是 rpx 字面量 → null（px / 关键字 / 空串都不算数）。 */
+  function rpx(value: string): number | null {
+    const m = /^(\d*\.?\d+)rpx$/.exec(value.trim());
+    return m === null ? null : Number(m[1]);
+  }
+
+  it('🔴 .ws-button 的 min-height 解析出来 ≥ 88rpx（高度不能只剩微信原生 button 的默认值）', () => {
+    const raw = declaration('.ws-button', 'min-height');
+    expect(raw, '.ws-button 没写 min-height——高度就全靠基础库默认样式了').not.toBeNull();
+    const resolved = resolve(raw ?? '');
+    expect(
+      rpx(resolved),
+      `min-height 解析不出 rpx 字面量（token 改名 / 拼错会让 var() 落空）：${String(raw)} → ${resolved}`,
+    ).toBeGreaterThanOrEqual(MIN_TOUCH_RPX);
+  });
+
+  it('🔴 纵向 padding 清零、line-height 兜到同一个下限（UA 的 8px 会叠加，且文案要垂直居中）', () => {
+    expect(declaration('.ws-button', 'padding-top')).toBe('0');
+    expect(declaration('.ws-button', 'padding-bottom')).toBe('0');
+    expect(rpx(resolve(declaration('.ws-button', 'line-height') ?? ''))).toBeGreaterThanOrEqual(
+      MIN_TOUCH_RPX,
+    );
+  });
+
+  it('自检：解析器抓得到声明值，注释里的不算、别的选择器的不算', () => {
+    const fake = '/* .ws-button { min-height: 1rpx } */\n.ws-button { min-height: 88rpx; }';
+    const stripFake = fake.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(/min-height:\s*([^;]+)/.exec(stripFake)?.[1]?.trim()).toBe('88rpx');
+    expect(declaration('.ws-button--block', 'min-height')).toBeNull();
+    expect(declaration('.ws-button', 'height')).toBeNull();
+  });
+});
