@@ -137,6 +137,16 @@
   font-size: var(--ws-f-base);
 }
 
+/* 占位符：比正文弱一档（--ws-ink-faint），让"示例"和"已填"一眼可分。
+   ⚠️ 本页原先没有 `.ph`——`placeholder-class` 指向的类不存在等于没写，占位与真填同色同重。
+      @why 不自创色值：与 `pages/address-edit/index.wxss` 同一口径，本页若另起一个"弱多少"
+           的标准，占位符在全站就有两档不同的分量。
+   @limitation `.input` / `.ph` 至今仍是逐页各抄一份、`app.wxss` 里没有——下沉要牵动全站样式，
+               不在本次改动里（本次只把结算页补齐到与地址页同一口径）。 */
+.ph {
+  color: var(--ws-ink-faint);
+}
+
 /* 条款勾选：整行可点（用 view 不是 button——页面不允许原生可点 button） */
 .terms {
   /* M-19（AJ-406）：条款勾选是提交前必经的一点，触控高度 ≥ --ws-touch-min */

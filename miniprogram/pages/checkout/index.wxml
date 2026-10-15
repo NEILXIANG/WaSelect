@@ -145,6 +145,7 @@
         type="text"
         value="{{email}}"
         placeholder="接收付款、发货、退款邮件"
+        placeholder-class="ph"
         maxlength="255"
         bindinput="onEmailInput"
         bindblur="onEmailBlur"
