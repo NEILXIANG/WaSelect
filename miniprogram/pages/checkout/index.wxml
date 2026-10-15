@@ -129,15 +129,22 @@
         @why 此前它只存在于 placeholder 与 `EMAIL_REQUIRED_TEXT` 两处**空态**，敲入任意字符后
              `emailError` 变空串 → 说明彻底消失；收集时告知的利用目的要与事实一致（APPI），
              **少说同样是不一致**（AJ-295 的定性口径）。
-        @why 这句如实列出全部用途（付款 / 发货 / 退款三封买家邮件），与 `EMAIL_REQUIRED_TEXT`
-             和 `pages/order-detail/index.wxml:251` 同口径；M-20：前置说，不在提交后的错误里才说。
+        @why 这句如实列出全部三类用途（付款 / 发货 / 退款——服务端那 5 份订单邮件模板都落在这
+             三类里），与 `EMAIL_REQUIRED_TEXT` 和 `pages/order-detail/index.wxml:251` 同口径；
+             M-20：前置说，不在提交后的错误里才说。
       -->
       <text class="ws-note field__purpose">付款、发货、退款通知都会发到这个邮箱</text>
+      <!--
+        UX-013：placeholder 原为 25 字，超出单行可视宽（约 590rpx）⇒ 尾部被截。
+        删掉的那一半「订单有问题时也用它联系你」本身就是**不成立的承诺**——售后链路明示不通知
+        买家，运营告警邮件只发运营，不存在"用它联系你"这条路径（AJ-295 同类）。
+        剩 12 字（约 336rpx），不必为了短再砍掉必要信息。
+      -->
       <input
         class="input"
         type="text"
         value="{{email}}"
-        placeholder="接收付款、发货、退款邮件，订单有问题时也用它联系你"
+        placeholder="接收付款、发货、退款邮件"
         maxlength="255"
         bindinput="onEmailInput"
         bindblur="onEmailBlur"
