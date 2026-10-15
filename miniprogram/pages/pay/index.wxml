@@ -77,10 +77,15 @@
     </view>
   </view>
 
-  <!-- §14.2 支付前明确提示（官方运营规范强制，D-48 / AJ-180）：必须在支付按钮**上方**、点之前就看得到 -->
+  <!--
+    §14.2 支付前明确提示（官方运营规范强制，D-48 / AJ-180）：必须在支付按钮**上方**、点之前就看得到
+    全量审计 CPY-002：这一卡的小标题原是英文装饰 "Before You Pay"——它是全仓 16 处 `ws-section-kicker`
+    里唯一的英文（其余都是「金额」「支付方式」这类中文），而这一卡是**合规提示**，读懂它才有意义
+    （英文只作装饰那一套的前提是旁边有中文标题承接，这里主标「支付前请确认」本来就在）。
+  -->
   <view class="ws-gutter ws-section notice" wx:if="{{notice.length > 0}}">
     <view class="ws-card">
-      <text class="ws-section-kicker">Before You Pay</text>
+      <text class="ws-section-kicker">支付须知</text>
       <text class="ws-title notice__title">支付前请确认</text>
       <text class="ws-body line" wx:for="{{notice}}" wx:key="*this">{{item}}</text>
     </view>
