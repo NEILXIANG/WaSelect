@@ -33,8 +33,9 @@ stripe listen --forward-to localhost:3000/api/v1/pay/callback/stripe
    付款成功类事件（如 `checkout.session.completed`）取不到单号会按"我方缺陷"抛错（500，Stripe 会重发），
    其它与订单无关的类型按 unknown 收下（200 + `ignored:unknown`），见 `adapters/payment/stripe-checkout.ts` 的 `parseWebhook`——要联调**落账**，请走真实链路：
    本地建单 → 发起支付（stripe 通道）→ 打开短链进 Checkout 托管页用测试卡付款。（AJ-176：骨架端点已退役，不再有"骨架演示单"可用）
-   本服务关心的完整事件清单在契约 `x-provider-events.stripe` 里（checkout.session.completed /
-   expired、payment_intent.*、charge.refunded / refund.updated / refund.failed、charge.dispute.*）。
+   本服务关心的完整事件清单在契约 `x-provider-events.stripe` 里，**以契约为准**。
+   （这里**不**另抄一份清单：抄了就是第三份，契约再变要同步三处，而多一份就多一处漂移。
+     逐个列出是运维手册的事——运维要在 Stripe 后台一个个勾；本地 `stripe listen` 转发全部事件，不需要照单勾。）
 
 **生产/预发**：不用 listen，在 Stripe Dashboard 配固定 webhook endpoint
 （`https://api.<domain>/api/v1/pay/callback/stripe`），`STRIPE_WEBHOOK_SECRET` 用 Dashboard 给的固定值。
