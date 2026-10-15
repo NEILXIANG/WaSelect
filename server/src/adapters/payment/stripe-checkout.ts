@@ -10,7 +10,12 @@
  * 业务口径（D-49，以本仓库 `contracts/api-contract.yaml` 为准，不要查旧审计文档）：
  *  - 银行卡入口 = **复制链接 → Stripe Checkout 托管页**（小程序内不做卡表单）；
  *  - 主事件 = `checkout.session.completed / expired`，次路径 `payment_intent.*`；
- *  - 退款/拒付 = `charge.refunded` / `charge.dispute.created`。
+ *  - 拒付 = `charge.dispute.created`；退款 = `refund.updated` / `refund.failed`（落账在 `app/refund-progress.ts`）。
+ *    @why 原写「退款/拒付 = `charge.refunded` / `charge.dispute.created`」（D-49 当时**只有** charge.refunded
+ *         可选）。审计 PAY-03（2026-10-14，AJ-530）起改走 Refund 事件：charge.refunded 的对象是 Charge，
+ *         amount 是原扣款全额、只给累计值 amount_refunded，且带的是 charge id（`ch_…`）而非在途登记
+ *         的 refund id（`re_…`），都推不出"本次退了多少"、也对不上号。它仍订阅，但只作**对账信号**、不落账
+ *         （接住机构后台手工退款）。@see 下方 OUTCOME_BY_TYPE['charge.refunded'] 与运维手册第 8 节。
  *
  * @limitation 一：金额进本适配器时**已经是整数最小单位**（端口口径，JPY=円、USD=分），
  *              这里只做 `String()` 透传。"JPY 零小数不 ×100、USD ×100"的知识唯一存在于
