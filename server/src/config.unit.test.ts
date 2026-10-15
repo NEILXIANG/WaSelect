@@ -449,6 +449,44 @@ describe('跨字段校验：单项合法但组合成事故', () => {
     expect(issues.join('\n')).toContain('残留');
   });
 
+  /**
+   * 🔴 审计 PAY-003（2026-10-15）：规则 1b **原先只判生产**，于是
+   *    `NODE_ENV=staging` + 配了 `MOCK_CALLBACK_SECRET` + `PAYMENT_CHANNELS` 不含 mock
+   *    这一组合能正常启动——而装配层（`channels.ts` 的 `mockRegistered`）会把 mock
+   *    注册成"下线但保留回调"的通道，`POST /api/v1/pay/callback/mock` 随即在**公网可达**
+   *    的 staging 上在线。持密钥者可把任意订单置 paid。
+   *
+   * @why 判据与生产**完全相同**：两边都不存在"mock 的真实在途订单"值得保留回调；
+   *      staging 在本仓的既定口径就是公网环境（规则 1c / 1g 都已按此处理）。
+   *      所以这条断言钉的是"同一条规则必须一致应用"，不是新增一条规则。
+   */
+  it('🔴 staging 未启用 mock 却残留 MOCK_CALLBACK_SECRET → 拒绝（公网环境同生产口径）', () => {
+    const issues = expectReject({
+      ...baseEnv,
+      NODE_ENV: 'staging',
+      // ⚠️ baseEnv 默认带 mock，这里必须显式去掉——测的正是"未列出却残留密钥"
+      PAYMENT_CHANNELS: 'stripe',
+      MOCK_CALLBACK_SECRET: 'left-over-from-review-period-2026-09',
+    });
+    expect(issues.join('\n')).toContain('MOCK_CALLBACK_SECRET');
+    expect(issues.join('\n')).toContain('残留');
+  });
+
+  /**
+   * 反向钉住：规则 1b 收紧到 staging **不能**误伤 staging 上合法的 mock 预生产演练。
+   * @why 只钉"拒绝"那一半的话，把判据写成"非 development 全拒"也会绿
+   *      ——那样 staging 就再也没法用 mock 跑链路了。两边都钉才是不漂移的判据。
+   */
+  it('staging 列出 mock + 显式密钥 → 通过（收紧 1b 不得误伤预生产演练）', () => {
+    const c = loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'staging',
+      PAYMENT_CHANNELS: 'mock',
+      MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
+    });
+    expect(c.MOCK_CALLBACK_SECRET).toBe('explicit-mock-callback-secret-32ch');
+  });
+
   it('生产/staging 配置 WECHAT_DEV_LOGIN → 拒绝（I1-U6b：dev 登录等价无密码登录，公网环境同拒）', () => {
     const prodIssues = expectReject(prod({ WECHAT_DEV_LOGIN: 'dev-' }));
     expect(prodIssues.join('\n')).toContain('WECHAT_DEV_LOGIN');

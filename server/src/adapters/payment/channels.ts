@@ -198,12 +198,22 @@ export function buildPaymentRegistry(
   // mock 的注册条件见 @limitation 三：列出（开发/审核期正常用）或显式配了密钥
   // （未列出但显式配密钥 = 运营有意保留在途回调）。只占位密钥时不注册——公开值不能开门。
   const listed = new Set<string>(config.PAYMENT_CHANNELS);
-  // ⚠️ 生产**不适用**"未列出但有密钥 → 保留回调"（三审 S1）：mock 的在途订单只可能是审核期测试单，
-  //    没有值得保留的回调；保留的只是一扇"持密钥者可伪造支付成功"的门。config 规则 1b 已在启动期
-  //    拒绝这种组合，本处是第二道防线（两道都在，因为它是"能改订单状态的门"）。
+  // ⚠️ **公网环境**（生产 + staging）**不适用**"未列出但有密钥 → 保留回调"：
+  //    mock 的在途订单只可能是审核期测试单，没有值得保留的回调；
+  //    保留的只是一扇"持密钥者可伪造支付成功"的门。
+  //    config 规则 1b 已在启动期拒绝这种组合，本处是第二道防线
+  //    （两道都在，因为它是"能改订单状态的门"）。
+  //
+  // ⚠️ 审计复核（PAY-003，2026-10-15）：此处原先只排除 `production`。
+  //    于是 `staging` + 配了密钥 + 未列出 mock 能一路绿灯启动并注册 mock，
+  //    把审计标题里那一扇"伪造支付成功"的门开在了公网可达的 staging 上——
+  //    而本仓对 staging 的既定口径就是"公网可达环境"
+  //    （config.ts 规则 1c / 1g 都按此处理）。生产与 staging 在此**没有**可成立的差别：
+  //    两边都没有"mock 的真实在途订单"值得保留。
+  //    staging 要用 mock 演练，走"列出 mock + 显式密钥"那条路（规则 3b 会要求密钥），不受影响。
+  const isPublicEnv = config.NODE_ENV === 'production' || config.NODE_ENV === 'staging';
   const mockRegistered =
-    listed.has('mock') ||
-    (config.NODE_ENV !== 'production' && config.MOCK_CALLBACK_SECRET !== undefined);
+    listed.has('mock') || (!isPublicEnv && config.MOCK_CALLBACK_SECRET !== undefined);
 
   const names = new Set<string>(listed);
   if (mockRegistered) names.add('mock');

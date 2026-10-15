@@ -248,7 +248,17 @@ function corsMiddleware(opts: CorsOptions): RequestHandler {
   };
 }
 
-/** 安全响应头（剩余清单 5-1）；值的理由见 createHttpApp 内第 0 段。 */
+/**
+ * 安全响应头（剩余清单 5-1）；值的理由见 createHttpApp 内第 0 段。
+ *
+ * ⚠️ 审计 PAY-004 补记：`cache-control: no-store` 是**全站**生效的，包括支付短链的
+ *    落地跳转。它管不到 Cloudflare 那一次 302（那一次不在本仓，见
+ *    `scripts/checkout-build-lib.ts` 的运维配置项），但**我们自己的那一跳**在这里：
+ *    `GET /api/v1/pay/link/{id}?t=…` 回的 302 其 `Location` 是 Stripe Checkout
+ *    Session URL——它是**不记名凭证**（拿到即可付款），任何中间缓存都不该存它。
+ * @limitation 它对**业务意义**上的缓存（幂等表、通道列表的前端缓存）没有影响：
+ *              本文件只决定 HTTP 层的 `Cache-Control`，不碰任何业务缓存。
+ */
 const SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
   ['x-content-type-options', 'nosniff'],
   ['x-frame-options', 'DENY'],
@@ -256,6 +266,7 @@ const SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
   ['content-security-policy', "default-src 'none'; frame-ancestors 'none'"],
   ['strict-transport-security', 'max-age=31536000; includeSubDomains'],
   ['cross-origin-opener-policy', 'same-origin'],
+  ['cache-control', 'no-store'],
 ];
 
 /** 从请求头取链路 ID：符合形状才沿用，否则新建。 */

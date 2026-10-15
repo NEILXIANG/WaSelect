@@ -11,6 +11,9 @@
  *      ② `POST /pay/callback/:channel` 用 `getForCallback`——**已下线通道的在途回调仍要落账**。
  *      这两条合起来才是"可插拔"：只做①不做②，下线一个通道就吞掉一批已付款订单。
  *
+ * @why 回调入口的**限流**也在这里钉一条（审计 PAY-003）：它是这条路由唯一一道
+ *      "挡住无上界外部流量"的闸，而"忘了挂"是静默失效（不报错、不告警）。
+ *
  * @limitation 不验任何机构的真实报文格式：mock Provider 的报文形状是我们自己约定的；
  *              Stripe 的真实签名口径由 `stripe-checkout.unit.test.ts` 与契约测试覆盖。
  */
@@ -20,10 +23,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createLogger } from '../logger.js';
 import { AppError } from '../errors.js';
 import { createHttpApp, listen } from '../http.js';
+import { loadConfig } from '../config.js';
 import { createPaymentRegistry } from '../adapters/payment/registry.js';
 import { createMockProvider } from '../adapters/payment/mock.js';
+import { createMemoryRateLimitStore } from '../adapters/rate-limit-memory.js';
 import type { ChannelConfig, PaymentRegistry, ProviderCapabilities } from '../ports/payment.js';
 import type { ProviderEvent } from '../ports/payment.js';
+import { rateLimiter, rateLimitRules } from './rate-limit.js';
 import {
   mountPayRoutes,
   PAY_CALLBACK_PREFIX,
@@ -37,6 +43,14 @@ import { fixedClock } from '../../../test/helpers/fixed-clock.js';
 import { stubIdGen } from '../../../test/helpers/stub-id-gen.js';
 
 const SECRET = 'routes-unit-secret';
+
+/** 测试用的最小可启动环境（与 config.unit.test.ts 同口径，只为造一条真实的限流规则）。 */
+const baseEnv: NodeJS.ProcessEnv = {
+  DATABASE_URL: 'postgresql://app@localhost:5432/japan_shop',
+  JWT_SECRET: 'a'.repeat(32),
+  PAYMENT_CHANNELS: 'mock',
+  TERMS_VERSION: 'TOS-2026-09-20',
+};
 
 /** 五个通道，覆盖"国家 / 币种 / 金额 / 下线"四种过滤维度（见 channelTable 的注释）。 */
 interface ChannelSpec {
@@ -112,12 +126,25 @@ async function start(
     /** succeeded 的落账器；用例要验"额外注册的 outcome"时用 {@link appliers} 整体覆盖。 */
     apply?: (e: ProviderEvent) => Promise<void>;
     appliers?: PayRoutesDeps['appliers'];
+    /**
+     * 回调入口的限流配额（次 / 分钟）。默认取**真实规则表**的 `publicWrite` 默认值（30），
+     * 需要触发 429 的用例把它调小。
+     * @why 不手搓一条规则：装配处用的是 `rateLimitRules(config).publicWrite('pay.callback')`，
+     *      这里也走同一个函数，才钉得住"规则名 / 窗口"不漂移。
+     */
+    callbackLimit?: number;
   } = {},
 ): Promise<Started> {
   const sink = new MemorySink();
   const logger = createLogger({ env: 'test', destination: sink });
   const { store, rec } = fakeWebhookStore({});
   const applied: ProviderEvent[] = [];
+  const config = loadConfig({
+    ...baseEnv,
+    ...(opts.callbackLimit === undefined
+      ? {}
+      : { RATE_LIMIT_QUOTE_PER_MIN: String(opts.callbackLimit) }),
+  });
   const app = createHttpApp({
     logger,
     rawBodyPaths: (opts.withRawBody ?? true) ? [PAY_CALLBACK_PREFIX] : [],
@@ -128,6 +155,14 @@ async function start(
         webhooks: store,
         logger,
         graceMs: opts.graceMs ?? 900_000,
+        callbackLimiter: rateLimiter(
+          {
+            store: createMemoryRateLimitStore(),
+            clock: fixedClock('2026-01-02T00:00:00.000Z'),
+            logger,
+          },
+          rateLimitRules(config).publicWrite('pay.callback'),
+        ),
         appliers:
           opts.appliers ??
           ({
@@ -392,6 +427,32 @@ describe('POST /pay/callback/:channel（统一分发）', () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain('"order_id":"sk-1"');
     expect(s.applied).toHaveLength(1);
+  });
+
+  /**
+   * 审计 PAY-003：这条路由没有登录态（验签就是它的鉴权），
+   * 限流是它挡住"无上界外部流量"的唯一一道闸。
+   *
+   * @why 为什么要限流，值得说清：验签在前，刷了也落不了账，所以**不是为了防刷单**；
+   *      防的是**告警放大**——签名格式对但值不对会升 error 级（为了暴露密钥配错），
+   *      不限流时每 IP 每分钟的 error 条数无上界，Sentry 配额与人的注意力都被吃掉。
+   * @why 断言"第 limit+1 次才 429"而不是"随便刷就 429"：
+   *      它同时钉住"配额真的生效"与"配额内不误伤正常回调"两件事——
+   *      误伤机构正常回调的后果是落账延迟，绝不能发生在配额之内。
+   */
+  it('🔒 回调超限 → 42901 + Retry-After；配额内的回调不受影响', async () => {
+    const s = await start({ callbackLimit: 3 });
+    for (let i = 0; i < 3; i += 1) {
+      const res = await postCallback('a', eventBody({ event_id: `evt-${String(i)}` }));
+      expect(res.status, `第 ${String(i + 1)} 次在配额内`).toBe(200);
+    }
+    const limited = await postCallback('a', eventBody({ event_id: 'evt-over' }));
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).not.toBeNull();
+    await expect(limited.json()).resolves.toMatchObject({ code: 42901 });
+    // 被限流的请求没有进管线：不落账、不登记
+    expect(s.applied).toHaveLength(3);
+    expect(s.rec.claimed).toHaveLength(3);
   });
 
   it('回调应答体**不含**任何金额或报文内容（机构报文含 PII，回显等于绕过脱敏）', async () => {

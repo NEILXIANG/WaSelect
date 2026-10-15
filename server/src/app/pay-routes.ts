@@ -11,11 +11,34 @@
  *      它不认识任何机构（没有 `if (channel === 'stripe')`），
  *      判断抽象是否合格的标准就是这一条：加一个通道时本文件是否需要改动。
  *
- * @limitation 一：**不鉴权**。通道列表是公开配置（与 `/terms` / `/fx` 同级），
- *              回调来自机构服务器、它拿不到我们的用户 token。
- *              ⚠️ 因此本路由**绝不能**泄露任何订单信息：
- *                 `GET /pay/channels` 只返回通道名/入口形态/展示名；
- *                 回调的应答体只有 `received` 与处置结果，不含金额、不含收件人。
+ * @limitation 一：**不加登录态中间件**，这是**正确的设计而不是缺陷**——补记在此，因为
+ *              "回调路由的中间件链里没有鉴权"容易被读成"回调没有鉴权"。
+ *      · 机构服务器拿不到我们的 JWT，行业做法本来就是**用 HMAC 验签代替登录态**；
+ *      · 本仓的验签**强制生效且无法绕过**：进入管线的**唯一**入口是
+ *        `provider.parseWebhook(raw, headerBag(req))`（见下方第 2 段），它在任何业务处理、
+ *        任何读库、任何落状态**之前**执行，失败即抛 `AppError(40103)`：
+ *          – mock：`adapters/payment/mock.ts` 的 `parseWebhook` 做的是原始字节上的
+ *            真 HMAC-SHA256 + `timingSafeEqual` 恒定时间比较；
+ *          – stripe：`adapters/payment/stripe-checkout.ts` 的 `parseWebhook` 第一行
+ *            就是 `verify(raw, headers[STRIPE_SIGNATURE_HEADER])`。
+ *        `app/pay-callback.ts` 抬头亦已声明它只接受**已验签**的 `ProviderEvent`。
+ *        所以给这条路由补一个 `requireAuth` 反而是**错的**：机构回调会被 401 全部挡掉。
+ *      ⚠️ 代价（也是本条真正的约束）：**不鉴权 ⇒ 应答体必须零信息**
+ *         ——`GET /pay/channels` 只返回通道名/入口形态/展示名；
+ *         回调的应答体只有 `received` 与处置结果，不含金额、不含收件人（@limitation 四）。
+ * @limitation 一·b：回调**受限流**（`deps.callbackLimiter`，装配处挂
+ *              `rateLimitRules(config).publicWrite('pay.callback')`）。
+ *      · 要防的不是"刷接口"——验签在前，刷了也落不了账——而是**告警/日志放大**：
+ *        `SIGNATURE_MISCONFIG_REASONS` 把"带了格式正确的签名却对不上"升成 **error 级**
+ *        （为了暴露密钥配错），于是这个匿名端点变成
+ *        "一次请求 = 一条 error 级日志 = 一次 Sentry 上报"的放大器，不限流时它无上界。
+ *      · @tradeoff 误伤的代价是**延迟**而不是漏单：429 对机构是**可重试**响应，
+ *        而"回调可重试"正是本管线的设计前提（`early` / `inflight` 处置本来就回
+ *        503 + `Retry-After` 让机构重发），机构按退避重投后仍能落账。
+ *      · @limitation 它不会变成拒绝服务放大器：限流存储超 `RATE_LIMIT_MAX_KEYS` 时是
+ *        **fail-open 驱逐**（adapters/rate-limit-memory.ts），被驱逐的 key 计数归零
+ *        = 拿到更多配额。这与同样匿名、同样 30/分钟/IP 的 `GET /api/v1/orders/quote`
+ *        是同一个暴露面，没有新增风险类别。
  * @limitation 二：`GET /pay/channels` 的三个查询参数**全部必填**（不给默认值）。
  *              "默认美国"就是把国家写死在服务端，正是 ADR-28 明令禁止的形态；
  *              而且默认值会让"前端忘了传"变成"看起来对但市场错了"，静默且难查。
@@ -29,7 +52,7 @@
  * @see ports/payment.ts（通道与 Provider 契约）；app/pay-callback.ts（统一处理管线）；
  *      docs/可扩展架构设计-支付可插拔·多国家·UI可配置.md §2.2；docs/地基搭建清单.md F11
  */
-import type { Express, Request } from 'express';
+import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { AppError } from '../errors.js';
 import { paramId } from '../http.js';
@@ -70,6 +93,15 @@ export interface PayRoutesDeps {
   logger: Logger;
   /** 回调早到宽限期（毫秒）。 */
   graceMs: number;
+  /**
+   * 回调入口的限流中间件（装配处按 `rateLimitRules(config).publicWrite('pay.callback')` 生成）。
+   *
+   * @why 必填而不是可选：这条路由**没有登录态**（见 @limitation 一），
+   *      限流是它唯一一道"挡住无上界外部流量"的闸——做成可选等于允许装配时忘了挂，
+   *      而忘了挂**不报错、不告警**，只能等 Sentry 配额被吃光才被发现
+   *      （与 `linkLimiter` 同为公开入口，同口径）。
+   */
+  callbackLimiter: RequestHandler;
   /**
    * 按 outcome 注册的落账器，原样透传给回调管线。
    *
@@ -165,8 +197,11 @@ export function mountPayRoutes(app: Express, deps: PayRoutesDeps): void {
    * @why 用 `getForCallback` 而不是 `get`：**被下线的通道，其在途支付的回调仍必须能被处理**。
    *      用 `get()` 的后果是"每下线一个通道，就静默吞掉一批已付款订单"，
    *      详见 ports/payment.ts 上 `getForCallback` 的 @why。
+   * @why 限流**先于**验签：超限的请求不该再花力气算 HMAC。被限流的请求没有
+   *      登记行、没有落账（幂等与宽限期都不受影响），机构看到 429 会按退避重投——
+   *      与管线自己的 503 + `Retry-After` 是同一套重发模型。
    */
-  app.post(`${PAY_CALLBACK_PREFIX}/:channel`, (req, res, next) => {
+  app.post(`${PAY_CALLBACK_PREFIX}/:channel`, deps.callbackLimiter, (req, res, next) => {
     void (async () => {
       try {
         const channel = paramId(req.params.channel);

@@ -405,6 +405,43 @@ describe('buildPaymentRegistry：通道下线语义（二次审查 P1-NEW-1）',
     expect(a2.offline).toEqual([]);
     expectChannelError(() => a2.registry.getForCallback('mock'), 'channel_not_configured');
   });
+
+  /**
+   * 🔴 审计 PAY-003（2026-10-15）："未列出但有密钥 ⇒ 保留回调"这条**只该给本机环境**。
+   *    `buildPaymentRegistry` 原先排除的是 `NODE_ENV !== 'production'`，于是 staging 被当成
+   *    "本机"放行——而 staging 是公网可达环境（config 规则 1c / 1g 的既定口径）。
+   *    结果：`POST /api/v1/pay/callback/mock` 在 staging 上在线，持密钥者可把任意订单置 paid。
+   *    本处是**第二道**防线（第一道是 config 规则 1b），所以这条断言钉的是装配层不靠配置层单点。
+   */
+  it('🔴 staging 未列出 mock 却有密钥 → 装配层**不**注册（公网环境第二道防线，不靠配置层单点）', () => {
+    // 先造一份**能过配置层**的 staging 配置（列出 mock + 显式密钥，规则 3b 要求），
+    // 再直接改对象去掉列出项——模拟"将来有人放宽了规则 1b"的情形。
+    // ⚠️ 与上方生产用例同一手法：本条验的是**装配层自己**守不守得住，
+    //    若写成"loadConfig 直接抛"，那验的是配置层，装配层的第二道防线就没人钉。
+    const c = loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'staging',
+      PAYMENT_CHANNELS: 'mock',
+      MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
+    });
+    const a = buildPaymentRegistry({ ...c, PAYMENT_CHANNELS: ['wechat'] }, deps());
+    expect(a.registered).toEqual([]);
+    expect(a.offline).toEqual([]);
+    expectChannelError(() => a.registry.getForCallback('mock'), 'channel_not_configured');
+  });
+
+  it('staging **列出** mock 且有密钥 → 正常注册（预生产演练的合法路径不受影响）', () => {
+    const c = loadConfig({
+      ...baseEnv,
+      NODE_ENV: 'staging',
+      PAYMENT_CHANNELS: 'mock',
+      MOCK_CALLBACK_SECRET: 'explicit-mock-callback-secret-32ch',
+    });
+    const a = buildPaymentRegistry(c, deps());
+    expect(a.registered).toEqual(['mock']);
+    expect(a.offline).toEqual([]);
+    expect(a.registry.getForCallback('mock').channel).toBe('mock');
+  });
 });
 
 describe('buildPaymentRegistry：生产环境的 mock 门（三审 S1）', () => {

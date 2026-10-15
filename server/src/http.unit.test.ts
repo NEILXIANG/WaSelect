@@ -1457,6 +1457,9 @@ describe('安全响应头（5-1）', () => {
     'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
     'strict-transport-security': 'max-age=31536000; includeSubDomains',
     'cross-origin-opener-policy': 'same-origin',
+    // 审计 PAY-004：支付短链落地那一次 302 的 Location 是 Stripe Session URL（不记名凭证），
+    //   任何中间缓存都不该存它。全站 API 一律 no-store——本仓没有任何一处依赖 HTTP 缓存。
+    'cache-control': 'no-store',
   };
 
   it('🔴 健康检查、404、业务错误三种响应都带全部安全头；不带 x-powered-by', async () => {

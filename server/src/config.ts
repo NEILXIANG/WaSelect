@@ -733,6 +733,17 @@ export function shutdownWorstCaseMs(
 const crossField = (now: Date) =>
   schema.superRefine((c, ctx) => {
     const isProd = c.NODE_ENV === 'production';
+    /**
+     * 公网环境：生产 + staging。
+     *
+     * @why 提成一个名字而不是在每条规则里写 `NODE_ENV !== 'production'`：
+     *      三审 S1 那条规则按"生产"写是对的（生产有真实买家与真实钱），
+     *      但同一条**安全判据**套到 staging 上时，写 `!== 'production'` 会把 staging
+     *      当成"本机"放行——而 staging 是**公网可达**的（规则 1c / 1g 的既定口径：
+     *      "staging 是公网可达环境"）。漏一次就是"公网环境上留着一扇门"。
+     *      命名之后，新增跨字段规则时不用再判断"这条该不该带上 staging"。
+     */
+    const isPublic = isProd || c.NODE_ENV === 'staging';
     // 9d（AJ-459）：所有环境。60000 取自 adapters/db.ts DEFAULT_IDLE_IN_TX_TIMEOUT_MS（那边是唯一真源，这里只引用）。
     if (c.HTTP_TOTAL_BUDGET_MS >= DEFAULT_IDLE_IN_TX_TIMEOUT_MS) {
       ctx.addIssue({
@@ -781,14 +792,25 @@ const crossField = (now: Date) =>
       );
     }
 
-    // 1b. 生产**未列出** mock 却残留 MOCK_CALLBACK_SECRET（三审 S1）：装配层"凭据在即注册"的
+    // 1b. 公网环境**未列出** mock 却残留 MOCK_CALLBACK_SECRET（三审 S1）：装配层"凭据在即注册"的
     //     下线语义对 mock 是反向的——审核期结束后残留的密钥 = 伪造"支付成功"回调的门一直开着，
     //     而落账不核对"订单属于哪个通道"，持有该密钥者能把任意真实订单置 paid。
     //     mock 在生产只有"列出 + REVIEW_MODE=on"这一条合法路（规则 1）；其余一律拒启。
-    if (isProd && !c.PAYMENT_CHANNELS.includes('mock') && c.MOCK_CALLBACK_SECRET !== undefined) {
+    //
+    // ⚠️ 审计复核（PAY-003，2026-10-15）：此处原先**只判生产**。于是
+    //    `NODE_ENV=staging` + 配了 `MOCK_CALLBACK_SECRET` + `PAYMENT_CHANNELS` 不含 mock
+    //    这一组合能正常启动，且装配层会把它注册成"下线但保留回调"的通道
+    //    （adapters/payment/channels.ts 的 `mockRegistered`），
+    //    于是 `POST /api/v1/pay/callback/mock` 在公网环境上是在线的。
+    //    这与"生产为什么要排除"的理由**逐字相同**（mock 的在途订单只可能是审核期测试单，
+    //    没有值得保留的回调；保留的只是一扇"持密钥者可伪造支付成功"的门），
+    //    而 staging 在本仓的既定口径里就是公网环境——所以这不是新规则，是同一条规则没一致应用。
+    //    staging 要跑 mock 预生产演练仍有合法路径：把 mock 列进 `PAYMENT_CHANNELS`
+    //    （规则 3b 会要求它同时显式配密钥）。
+    if (isPublic && !c.PAYMENT_CHANNELS.includes('mock') && c.MOCK_CALLBACK_SECRET !== undefined) {
       add(
         'MOCK_CALLBACK_SECRET',
-        '生产环境未启用 mock 通道却配置了 MOCK_CALLBACK_SECRET（审核期残留）：mock 的回调门在生产不得保留，请删除该变量',
+        `${c.NODE_ENV} 环境未启用 mock 通道却配置了 MOCK_CALLBACK_SECRET（审核期残留）：mock 的回调门在公网环境不得保留，请删除该变量（如需在 staging 用 mock，请把 mock 加进 PAYMENT_CHANNELS）`,
       );
     }
 
@@ -816,13 +838,13 @@ const crossField = (now: Date) =>
       );
     }
     // 1g. 本地模拟付款开关只给 development / test：公网环境打开 = 任何人下单都自动"付款成功"（mock 不收钱）
-    if ((isProd || c.NODE_ENV === 'staging') && c.MOCK_AUTO_CONFIRM === 'on') {
+    if (isPublic && c.MOCK_AUTO_CONFIRM === 'on') {
       add(
         'MOCK_AUTO_CONFIRM',
         `${c.NODE_ENV} 环境禁止 MOCK_AUTO_CONFIRM=on（模拟付款自动确认只给本地开发用）`,
       );
     }
-    if ((isProd || c.NODE_ENV === 'staging') && c.WECHAT_DEV_LOGIN !== undefined) {
+    if (isPublic && c.WECHAT_DEV_LOGIN !== undefined) {
       add(
         'WECHAT_DEV_LOGIN',
         `${c.NODE_ENV} 环境禁止配置 WECHAT_DEV_LOGIN（dev 登录等价无密码登录，公网环境不得保留；仅 development/test 可用）`,
@@ -945,12 +967,7 @@ const crossField = (now: Date) =>
     // 3b. mock 密钥：生产启用 mock 只可能发生在审核模式（规则 1 已拦其它情况）；
     //     **staging 同规则**（二次审查 P3-7）——staging 是公网可达环境，占位密钥是仓库里的
     //     公开值，回落 = 任何人都能伪造"支付成功"回调把订单置 paid。development/test 才允许回落。
-    const isStaging = c.NODE_ENV === 'staging';
-    if (
-      (isProd || isStaging) &&
-      c.PAYMENT_CHANNELS.includes('mock') &&
-      c.MOCK_CALLBACK_SECRET === undefined
-    ) {
+    if (isPublic && c.PAYMENT_CHANNELS.includes('mock') && c.MOCK_CALLBACK_SECRET === undefined) {
       add(
         'MOCK_CALLBACK_SECRET',
         `${c.NODE_ENV} 环境启用 mock 必须显式配置 MOCK_CALLBACK_SECRET，不得回落到开发占位值（公网环境，占位值是公开的）`,

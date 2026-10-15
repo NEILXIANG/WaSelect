@@ -313,18 +313,31 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
       },
     },
   };
-  mountPayRoutes(app, { registry, ...callbackPipeline });
-
-  // ── 报价路由（I1-U4）：**每个环境都挂**，与支付路由同理——它是产品接口不是脚手架 ──
   /**
    * 限流（I1-U3）：store 建在挂载处（进程级）——计数必须跨请求存活；
    * 建在中间件里就成"每请求清零"。规则表（rate-limit.ts）是唯一出处。
    * ⚠️ store 在挂载处统一建、所有受限流路由共用同一份：报价/支付等路由全环境挂载，
    *    限流也必须全环境存在（不能只在某个环境才有计数）。
    * ⚠️ 进程内实现只在**单实例**下正确（rate-limit-memory.ts @limitation 一，R-I1-2）。
+   * ⚠️ 位置：必须在 `mountPayRoutes` **之前**——回调路由要拿 `rateLimitDeps` 造限流器
+   *    （`PayRoutesDeps.callbackLimiter`）。它只是**造对象**，不挂中间件，
+   *    所以上移不改变任何 `app.use` 的相对顺序。
    */
   const rateLimitStore = createMemoryRateLimitStore();
   const rateLimitDeps = { store: rateLimitStore, clock, logger };
+  mountPayRoutes(app, {
+    registry,
+    ...callbackPipeline,
+    /**
+     * 回调是**唯一**一个"无登录态且来自公网"的写入口（@see pay-routes.ts @limitation 一），
+     * 限流是它防告警/日志放大的那一道闸：验签失败会升 error 级（为暴露密钥配错），
+     * 不限流则每 IP 每分钟的 error 条数无上界。
+     * 用 `publicWrite('pay.callback')` = 与报价/建单/短链**各自独立**的桶，互不消耗配额。
+     */
+    callbackLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('pay.callback')),
+  });
+
+  // ── 报价路由（I1-U4）：**每个环境都挂**，与支付路由同理——它是产品接口不是脚手架 ──
   app.use(
     '/api/v1/orders/quote',
     rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('orders.quote')),

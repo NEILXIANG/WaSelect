@@ -60,8 +60,54 @@ export function renderRedirects(apiBase: string): string {
     `# CF 语义：查询串不参与匹配；splat 转发路径后缀；状态缺省 302`,
     `/o/* ${trimmed}/api/v1/pay/link/:splat 302`,
     '',
+    ...CF_OPS_HEADERS_NOTES,
   ].join('\n');
 }
+
+/**
+ * 首跳响应头的**运维配置项**（审计 PAY-004）。
+ *
+ * @why 这些头**加不进本文件**：`_redirects` 的语法只有「源 目标 状态码」三列，
+ *      没有第四列响应头；而 CF Pages 的 `_headers` 只作用于**静态资源响应**，
+ *      不作用于 `_redirects` 产生的这一次 302。所以它们只能在
+ *      Cloudflare 侧（Pages 项目 → 自定义响应头，或 Transform Rules →
+ *      Modify Response Header，匹配 `/o/*`）配置。
+ *      ⚠️ 本仓**不**为它造任何代码——写了也只是在假装生效。
+ * @why 但必须写在**运维会看到的地方**：短链 token 等于付款凭证
+ *      （`server/src/app/pay-intent.ts` 的 `issuePayLink`），首跳 URL 的 `?t=` 里就带着它。
+ *      所以写在生成产物的注释里——部署时打开 `_redirects` 的人正好看到。
+ *
+ * 部署清单（CF Pages，对 `/o/*`）：
+ *   ① `Referrer-Policy: no-referrer`
+ *      —— 浏览器跟随这一次 302 时会按**重定向响应**的 Referrer-Policy 决定 Referer；
+ *         不声明时走浏览器默认（现为 `strict-origin-when-cross-origin`，只发源不漏 token），
+ *         但那是**浏览器实现**不是我们的承诺：策略一旦被任何中间层或旧客户端改写，
+ *         带 token 的 URL 就会出现在下一跳的 Referer 里。显式声明才是不依赖默认值的做法。
+ *   ② `Cache-Control: no-store`
+ *      —— 302 若被任何中间缓存存下，等于把"可付款链接"留在缓存里；
+ *         链接本身有 30 分钟窗口且可轮换，但缓存不认这两个约束。
+ *
+ * ⚠️ 另有一条**已登记但未实测**的平台行为（L4 项，见 channels.ts @limitation 四）：
+ *    CF Pages 对「查询串是否随 302 保留」没有文档化承诺。首次部署 CF Pages 时
+ *    必须用带 `?t=` 的真实短链 curl 一遍确认；若确认会丢，短链改 path 形态
+ *    （`/o/:id/:t`），本文件的规则两种形态都已兼容（见 `matchRedirect` 用例）。
+ */
+const CF_OPS_HEADERS_NOTES: readonly string[] = [
+  '# ── ⚠️ 运维配置项：以下两个响应头**不在本仓内**，必须在 Cloudflare 侧手工配置 ──',
+  '#    位置：CF Pages 项目 → 自定义响应头；或 Transform Rules → Modify Response Header',
+  '#    匹配：`/o/*`（即本文件这条 302 本身；API 那一跳已由 server/src/http.ts 全局下发）',
+  '#',
+  '#    Referrer-Policy: no-referrer',
+  '#      理由：首跳 URL 的 ?t= 里是支付短链 token（= 付款凭证）。浏览器跟随 302 时按',
+  '#            重定向响应的该头决定 Referer；显式声明才不依赖浏览器默认值。',
+  '#    Cache-Control: no-store',
+  '#      理由：302 若被中间缓存存下，等于把"可付款链接"留在缓存里，而缓存不认',
+  '#            链接的 30 分钟窗口与"复用即轮换"这两个约束。',
+  '#',
+  '#    为什么不能写进本文件：`_redirects` 只有「源 目标 状态码」三列；CF 的 `_headers`',
+  '#    只作用于静态资源响应，不作用于 `_redirects` 产生的 302（照抄会静默不生效）。',
+  '',
+];
 
 /**
  * 判断本次构建是不是**部署构建**（而非本机/CI 联调构建）。

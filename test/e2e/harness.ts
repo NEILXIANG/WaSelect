@@ -29,17 +29,20 @@ import { RESULT_PAID } from '../../server/src/app/webhook-results.js';
 import type { Db } from '../../server/src/adapters/db.js';
 import { createHttpApp, listen, type StartedServer } from '../../server/src/http.js';
 import { createLogger } from '../../server/src/logger.js';
+import { loadConfig } from '../../server/src/config.js';
 import { mountPayRoutes, PAY_CALLBACK_PREFIX } from '../../server/src/app/pay-routes.js';
 import { createWebhookStore } from '../../server/src/adapters/webhooks.js';
 import { createEventBus } from '../../server/src/adapters/event-bus.js';
 import type { EventBus } from '../../server/src/ports/events.js';
 import { createPaymentRegistry } from '../../server/src/adapters/payment/registry.js';
 import { createMockProvider } from '../../server/src/adapters/payment/mock.js';
+import { createMemoryRateLimitStore } from '../../server/src/adapters/rate-limit-memory.js';
 import { createStripeCheckoutProvider } from '../../server/src/adapters/payment/stripe-checkout.js';
 import type { HttpClient } from '../../server/src/ports/http-client.js';
 import { systemIdGen } from '../../server/src/adapters/ids.js';
 import type { IdGen } from '../../server/src/ports/ids.js';
 import { registerBusinessEventLog } from '../../server/src/app/business-events.js';
+import { rateLimiter, rateLimitRules } from '../../server/src/app/rate-limit.js';
 import { MemorySink } from '../helpers/memory-sink.js';
 import { fixedClock } from '../helpers/fixed-clock.js';
 
@@ -49,6 +52,18 @@ export const E2E_CALLBACK_SECRET = 'mock-callback-secret-for-e2e-harness-2026';
 /** 全程只用一个链路 ID，便于断言"几跳日志是同一条链"。 */
 export const E2E_TRACE = 'e2e-trace-0001';
 export const E2E_USER = 'u-e2e';
+
+/**
+ * 最小可启动环境（只为造**真实**的限流规则；与 config.unit.test.ts 的 baseEnv 同口径）。
+ * @why e2e 的限流必须用真实规则表（rateLimitRules）而不是手搓常量：
+ *      否则"配额改成 5 / 窗口改成 10 分钟"这类漂移在 e2e 层完全看不见。
+ */
+const E2E_ENV: NodeJS.ProcessEnv = {
+  DATABASE_URL: 'postgresql://app@localhost:5432/japan_shop',
+  JWT_SECRET: 'a'.repeat(32),
+  PAYMENT_CHANNELS: 'mock',
+  TERMS_VERSION: 'TOS-2026-09-20',
+};
 
 /**
  * e2e 的"现在"：**固定值**，且刻意远离真实今天。
@@ -164,6 +179,7 @@ export async function startApp(
   const logger = createLogger({ env: 'development', destination: sink });
   const now = opts.now ?? E2E_NOW;
   const idGen = opts.idGen ?? systemIdGen;
+  const config = loadConfig(E2E_ENV);
   const app = createHttpApp({
     logger,
     rawBodyPaths: (opts.withRawBody ?? true) ? [PAY_CALLBACK_PREFIX] : [],
@@ -180,6 +196,15 @@ export async function startApp(
         webhooks: createWebhookStore(db),
         logger,
         graceMs: opts.graceMs ?? 900_000,
+        // 与生产同一条规则（rateLimitRules.publicWrite），配额放宽以免链路用例撞 429
+        callbackLimiter: rateLimiter(
+          {
+            store: createMemoryRateLimitStore(),
+            clock: fixedClock(now),
+            logger,
+          },
+          { ...rateLimitRules(config).publicWrite('pay.callback'), limit: 10_000 },
+        ),
         // 与生产同一条落账路径（含通道/金额核对，三审 S1② / U1）：
         //    落账必须带"钱是怎么来的"——少传就编译不过，想在 e2e 里跳过核对
         //    没有这条路（mark-paid.ts PaidSettlement 的 @why）
