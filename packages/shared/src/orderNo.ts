@@ -21,8 +21,10 @@
  *              本模块只负责生成、不知道是否已存在；重试已在建单用例落地（`server/src/app/create-order.ts`：
  *              savepoint 内捕获唯一约束冲突、换新随机段重试 3 次；一致性审计 C9 更正原"F8 之后接入"）。
  * @limitation 二：`rand` 默认 `Math.random`，**不是密码学安全随机源**。
- *              对"不可预测"要求更高的场景应注入 `crypto.randomInt` 包装；
- *              当前取舍：随机段只防推算与枚举、不承载权限，故用默认源即可（记录在案）。
+ *              默认值只为"不需要不可预测性"的场景留着（单测就靠它注入确定性随机段复现固定单号）；
+ *              生产侧一律**注入 CSPRNG**：服务端在 `adapters/ids.ts` 注入 `node:crypto` 的 `randomInt`
+ *              （PAY-001，2026-10-15）——单号对外暴露（支付短链、订单详情、客服沟通），可预测即枚举入口。
+ *              注入时上界取 {@link ORDER_SEQ_SPACE}，别另写一个 `32 ** 6`。
  * @limitation 三：曾有一个"序号溢出静默截断"的缺陷——`encodeSeq(32⁶)` 与 `encodeSeq(0)` 都返回 `000000`，
  *              注释还写着"不做静默截断"，与实现相反。改成随机段后该问题从根上消失（不存在序号递增）。
  *
@@ -32,6 +34,15 @@
 /** Crockford Base32 字母表：去掉易混淆的 I / L / O / U。 */
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const SEQ_LEN = 6;
+
+/**
+ * 随机段的取值空间（32⁶ ≈ 10.7 亿）：注入 CSPRNG 时用它做上界。
+ * @why 由 `ALPHABET` / `SEQ_LEN` 推出而不是再写一个 `32 ** 6`：上界写小了末位字符取不到（分布偏置），
+ *      写大了又与字母表长度漂移——取值空间只能有一处定义。
+ * @why 上界恰好整除字母表长度（32⁶ 是 32 的倍数），故 `randomInt(ORDER_SEQ_SPACE) / ORDER_SEQ_SPACE`
+ *      映射回字符下标是均匀的，没有取模偏置。
+ */
+export const ORDER_SEQ_SPACE = ALPHABET.length ** SEQ_LEN;
 
 /** 订单号格式：6 位日期 + 连字符 + 6 位随机段。 */
 export const ORDER_NO_PATTERN = /^\d{6}-[0-9A-HJKMNP-TV-Z]{6}$/;
