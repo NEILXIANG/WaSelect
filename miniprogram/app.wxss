@@ -51,9 +51,23 @@ page,
      @why #000000 在浅色长文里对比过冲、显脏；#2b2a27 带一点暖（R>B），
           与米白画布同源，读起来是"纸上的墨"而不是"屏幕上的像素"。 */
   --ws-ink: #2b2a27;
-  --ws-ink-soft: #57544e; /* 正文次级、说明文字 */
-  --ws-ink-mute: #8f8a80; /* 辅助、占位、时间戳 */
-  --ws-ink-faint: #b5afa3; /* 极弱：分隔标题、禁用态文字 */
+  --ws-ink-soft: #57544e; /* 正文次级、说明文字（白底 7.54:1） */
+  /* @why UX-002（2026-10-15）：soft 与 mute 之间缺一档"**要读的**"色。
+           `.ws-caption` / `.ws-note` 同时承担"提示/说明"与"关键信息"两种职责，
+           原来却分别指着最弱的 faint（白底 2.18:1）与 mute（3.43:1），都不到 AA 的 4.5:1。
+     @why **补一档**而不是把 faint / mute 各自调深：
+           ① faint 还被占位符 `.ph`（address-edit / after-sale）与禁用按钮文字用着，
+              调深会让"示例文案"和"真填进去的收件人"长得一样黑——那是 address-edit/index.wxss 明写的既定口径；
+           ② mute 与 `WS_COLORS.muted` 同源（scripts/checkout-build-lib.unit.test.ts 钉着），不能只改小程序这一侧。
+     @why 取 #6d6759：与 #8f8a80 同色相（暖灰，R>G>B），只加深不改调性。
+           实算（WCAG 2.x 相对亮度公式，与本项目既往口径一致）：
+           白卡 #ffffff 5.62:1｜页底 #fbf9f5 5.35:1｜内凹面 #f4f0e9 4.95:1｜极浅底 #efe9df 4.66:1 —— 四种底都过 4.5。
+           比 soft（7.54）浅一档，"提示比正文弱"的层级仍在。
+     @why 不叫 `quiet`：与 `mute` 近义，选错一档就又是一次"看着都对、实际不过 AA"；
+          这里要区分的是**过不过 AA**，名字直接把这件事说出来。 */
+  --ws-ink-readable: #6d6759; /* 要读的提示 / 说明（caption、note）：过 AA */
+  --ws-ink-mute: #8f8a80; /* 辅助、装饰性弱提示、时间戳（白底 3.43:1，不过 AA ⇒ 不承载信息） */
+  --ws-ink-faint: #b5afa3; /* 极弱：占位符、禁用态文字、划线价（白底 2.18:1，纯装饰 / 非激活态） */
   --ws-ink-inverse: #fbf9f5; /* 深底上的文字 */
 
   /* ── 强调色：低饱和自然色 ──────────────────────────────────────
@@ -484,21 +498,34 @@ page {
   color: var(--ws-ink-soft);
 }
 
+/* 提示 / 说明：`.ws-note`（24rpx）与 `.ws-caption`（22rpx）同走 `--ws-ink-readable`。
+   @why UX-002（2026-10-15）：这两类文字承载的**不是装饰**——订单号、"联系客服时请提供订单号"、
+        "首页内容没加载出来，点此重试"、"收件信息请用英文/数字填写"都是要读懂才能操作的句子，
+        原来却只有 3.43:1（note / ink-mute）与 2.18:1（caption / ink-faint），均低于 AA 的 4.5:1。
+   @why 两档**同色**而不再往下拆一档：字号已经把它们分层（24rpx / 22rpx），
+        真正要分的是"信息 vs 装饰"——那件事由 readable / mute / faint 三条线表达；
+        再拆一档只会让"哪一档才过 AA"变成要查表的知识。
+   @why 只改颜色不改字号（小程序 UI 冻结：只做可读性修复）。 */
 .ws-note {
   font-size: var(--ws-f-sm);
   line-height: var(--ws-lh-body);
-  color: var(--ws-ink-mute);
+  color: var(--ws-ink-readable);
 }
 
 .ws-caption {
   font-size: var(--ws-f-caption);
-  color: var(--ws-ink-faint);
+  color: var(--ws-ink-readable);
 }
 
 /*
  * MP-6（第二轮审计 2026-10-11）：底栏上方那一行（结算页"按钮为什么不能点"、购物车"去结算"的原因）是买家要照着做的话，
  * 不能用最弱的 caption 色——ink-faint 在白底只有 2.18:1，ink-soft 是 7.54:1（AJ-429 同一组实算）。
  * 只改颜色不改字号（小程序 UI 冻结：只做可读性修复）。复合选择器：比单个 .ws-caption 更具体，且不影响别处的 caption。
+ *
+ * @why UX-002（2026-10-15）后**保留**这条补丁：本体 `.ws-caption` 已升到 ink-readable（白卡 5.62:1，过 AA），
+ *      所以它在功能上不再是"唯一能读懂的一行"——但**删掉会让这一行变浅**（7.54 → 5.62），
+ *      而"按钮为什么不能点"是全站最该被看到的一句提示，值得比普通 caption 再深一档。
+ *      换句话说：它现在是**强调**，不再是**救命**。上面那段历史引文（2.18 / 7.54）保留——那是当年的决策依据，不是过期注释。
  */
 .ws-caption.ws-buybar__note {
   color: var(--ws-ink-soft);
