@@ -120,8 +120,9 @@
 }
 
 /* CPY-015：邮箱用途说明常驻在 label 下（收集时就要说清用在哪）。
-   ⚠️ 只用 `.ws-note` 那一档字色，不用 `.ws-caption`——后者是 --ws-ink-faint，白底只有 2.18:1
-      （同一个缺陷 UX-002 正在单独修，这里不重复配色）. */
+   @limitation 用 `.ws-note` 而非 `.ws-caption`：这行是**要读的说明**，取较大字号（note 24rpx / caption 22rpx）。
+      ⚠️ 二者自 UX-002（204b53a）起同走 --ws-ink-readable（白底过 AA），仅字号分档——
+         原注释写的「caption 是 --ws-ink-faint、白底 2.18:1」是 UX-002 落地前的旧由，现已不成立。 */
 .field__purpose {
   display: block;
   margin-bottom: var(--ws-space-hair);
