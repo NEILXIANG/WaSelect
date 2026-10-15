@@ -119,6 +119,14 @@
   margin-bottom: var(--ws-space-hair);
 }
 
+/* CPY-015：邮箱用途说明常驻在 label 下（收集时就要说清用在哪）。
+   ⚠️ 只用 `.ws-note` 那一档字色，不用 `.ws-caption`——后者是 --ws-ink-faint，白底只有 2.18:1
+      （同一个缺陷 UX-002 正在单独修，这里不重复配色）. */
+.field__purpose {
+  display: block;
+  margin-bottom: var(--ws-space-hair);
+}
+
 .input {
   display: block;
   padding: var(--ws-space-inline) var(--ws-space-stack);

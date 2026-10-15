@@ -40,6 +40,8 @@
         <!-- F5（第二轮审计）：取失败 ≠ 没有地址——说"没取到"，不引导用户再新增一条 -->
         <!-- 两端逐页走查第三轮：账号受限时不叫人去点"重新加载"（上方只有「联系客服」；vm addressFailedText） -->
         <text class="ws-note line" wx:elif="{{addressFailed}}">{{addressFailedText}}</text>
+        <!-- UX-001：地址**正在取**自成一档（vm ADDRESS_LOADING_TEXT）——弱网下这里曾是「＋ 新增收货地址」 -->
+        <text class="ws-note line" wx:elif="{{addressLoading}}">{{addressLoadingText}}</text>
         <text class="ws-body line addr__add" wx:else>＋ 新增收货地址</text>
         <!-- 走查 2026-10-08：没有地址时上一行已经说"添加"，再写"切换地址"是自相矛盾 -->
         <text class="ws-caption hint" wx:if="{{address}}">点此切换地址</text>
@@ -122,6 +124,15 @@
     <view class="ws-card">
       <text class="ws-section-kicker">联系方式</text>
       <text class="ws-note field__label">联系邮箱（必填）</text>
+      <!--
+        CPY-015（合规核实 2026-10-14）：用途说明必须**常驻**。
+        @why 此前它只存在于 placeholder 与 `EMAIL_REQUIRED_TEXT` 两处**空态**，敲入任意字符后
+             `emailError` 变空串 → 说明彻底消失；收集时告知的利用目的要与事实一致（APPI），
+             **少说同样是不一致**（AJ-295 的定性口径）。
+        @why 这句如实列出全部用途（付款 / 发货 / 退款三封买家邮件），与 `EMAIL_REQUIRED_TEXT`
+             和 `pages/order-detail/index.wxml:251` 同口径；M-20：前置说，不在提交后的错误里才说。
+      -->
+      <text class="ws-note field__purpose">付款、发货、退款通知都会发到这个邮箱</text>
       <input
         class="input"
         type="text"
