@@ -43,6 +43,7 @@ import {
   undoView,
 } from './index.vm.js';
 import { quoteView } from '../../utils/quote-view.js';
+import { markImageFailed } from '../../utils/image-failed.js';
 import { errorFields, errorMessage, isAccountBlocked } from '../../utils/error-text.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { createWxApi } from '../../utils/wx-api.js';
@@ -107,6 +108,15 @@ Page({
     gate: { disabled: true, hint: '运费与合计还在计算中' },
     /** A3（AJ-416）：底栏全选框 + "去结算 (N)"（vm `selectionBar`）。 */
     bar: { allSelected: false, selectedCount: 0, ctaText: '去结算' },
+    /**
+     * 审计 UX-004：第几行的商品图加载失败（下标与 `rows` 对齐；`utils/image-failed.js`）。
+     * @why 每次 `refresh` 重建 `rows` 时清回空：购物车是**可增删**的列表，
+     *      删掉一行之后其余行的下标整体前移——按下标记的标记会套到别的商品上
+     *      （表现为"删了一件，另一件的图没了"）。
+     * @limitation 代价：改数量 / 增删也会走 `refresh`，那一张坏图会先放出来再被标回，
+     *             闪一下。换来的下标永不错位（错位是持续性的，闪一下只在用户动手时）。
+     */
+    imgFailed: [],
   },
 
   /** 防抖定时器句柄（不进 data：它不是渲染状态）。 */
@@ -167,6 +177,8 @@ Page({
     const bar = selectionBar(rows);
     this.setData({
       rows,
+      // `rows` 整份重建 → 上一批行的失败标记作废（下标会随增删错位，@see data.imgFailed）
+      imgFailed: [],
       undo,
       bar,
       count: app.globalData.cart.count(),
@@ -421,6 +433,15 @@ Page({
     if (this.data.rows.length === 0) return;
     this.quoteReason = 'enter'; // F2：重试不是"购物车变了"
     void this.fetchQuote();
+  },
+
+  /**
+   * 商品行某张图加载失败（审计 UX-004）→ 只收起那一行，不留破图。
+   * @param {WechatMiniprogram.CustomEvent} e `data-index` 来自 wxml
+   */
+  onImgError(e) {
+    const next = markImageFailed(this.data.imgFailed, e?.currentTarget?.dataset?.index);
+    if (next !== null) this.setData({ imgFailed: next });
   },
 
   /** 点行（图 / 标题）进详情（M-14）。步进与删除是单独的点击区，不会误触跳走。 */

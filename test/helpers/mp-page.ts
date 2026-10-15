@@ -13,8 +13,11 @@
  *      `setData`（浅合并进 `data`）。页面里其它东西（vm、utils）都是**真的**。
  *
  * @limitation 一：**不渲染 WXML**——绑定写错、样式、真机兼容性它都管不了（约束十一原文同）。
- * @limitation 二：`setData` 只做**浅合并**，不支持 `'a.b': 1` / `'list[0].x'` 这类数据路径。
- *              遇到路径写法会直接抛错（而不是静默当成一个怪键）——页面真用到时再扩，别让它假绿。
+ * @limitation 二：`setData` 只做**浅合并**；`'a.b': 1` / `'list[0].x'` 这类数据路径按路径写进 `data`
+ *              （真机支持，订单详情 `startPayTick` 的 `view.*` 局部更新就是这么写的）。
+ *              路径中间某一级不是对象 / 数组时会直接抛错（而不是静默当成一个怪键）——别让它假绿。
+ *              @limitation 路径写的是**嵌套对象本身**（不深拷贝），与真机"只改那一个字段"不同形；
+ *                          断言一律读 `page.data`，不要拿旧引用对比。
  * @limitation 三：生命周期不会自动触发（`onLoad` / `onShow` 要用例自己调），
  *              也没有页面栈；`wx` 全局由用例按需 `vi.stubGlobal`。
  * @limitation 四：每次 `loadPage` 都 `vi.resetModules()`——页面模块顶层的
@@ -57,12 +60,13 @@ export async function loadPage(moduleUrl: string, opts: LoadPageOptions): Promis
     // 深拷贝初始 data：页面定义里的数组 / 对象不能被上一个用例改脏
     data: structuredClone((data ?? {}) as Record<string, unknown>),
     setData(patch: Record<string, unknown>): void {
-      for (const key of Object.keys(patch)) {
-        if (/[.[]/.test(key)) {
-          throw new Error(`mp-page 不支持数据路径写法 setData({'${key}': …})（见 @limitation 二）`);
-        }
+      const next: Record<string, unknown> = { ...this.data };
+      // 先按路径写，再浅合并普通键：同一个 patch 里 `view` 与 `view.x` 并存时以整棵替换为准（真机同）
+      for (const [key, value] of Object.entries(patch)) {
+        if (/[.[]/.test(key)) assignPath(next, key, value);
+        else next[key] = value;
       }
-      this.data = { ...this.data, ...patch };
+      this.data = next;
     },
   };
   // 方法里的 this 必须是实例本身（真机同）
@@ -70,6 +74,34 @@ export async function loadPage(moduleUrl: string, opts: LoadPageOptions): Promis
     if (typeof v === 'function') page[k] = (v as (...a: unknown[]) => unknown).bind(page);
   }
   return page;
+}
+
+/** `'a.b[0].c'` → `['a','b','0','c']`。 */
+function pathSegments(key: string): string[] {
+  return key
+    .replace(/\[(\d+)\]/g, '.$1')
+    .split('.')
+    .filter((s) => s !== '');
+}
+
+/**
+ * 按数据路径写值（@see 文件头 @limitation 二）。
+ * @throws 路径中间某一级不是对象 / 数组——真机此时是静默失效，这里宁可响亮失败。
+ */
+function assignPath(target: Record<string, unknown>, key: string, value: unknown): void {
+  const segs = pathSegments(key);
+  if (segs.length === 0) throw new Error(`mp-page 收到空的 setData 键：'${key}'`);
+  let node: Record<string, unknown> = target;
+  for (const seg of segs.slice(0, -1)) {
+    const next = node[seg];
+    if (next === null || typeof next !== 'object') {
+      throw new Error(
+        `mp-page 无法在数据路径 '${key}' 上定位 '${seg}'：它不是对象 / 数组（见 @limitation 二）`,
+      );
+    }
+    node = next as Record<string, unknown>;
+  }
+  node[segs[segs.length - 1] ?? ''] = value;
 }
 
 /** 一个可以从外面兑现 / 拒绝的请求：用来精确编排"哪个响应先回来"。 */

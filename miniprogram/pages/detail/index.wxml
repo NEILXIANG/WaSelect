@@ -149,7 +149,10 @@
           aria-label="查看 {{item.title}}"
         >
           <view class="ws-media ws-media--square">
-            <image class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load webp="{{true}}" />
+            <!-- 审计 UX-004：推荐卡的图加载失败 → 收起这一张的 `<image>`，留 `.ws-media` 的底色。
+                 @why 失败标记**按项**记（`imgFailed[index]`）：推荐在 `wx:for` 里，
+                      整页共用一个布尔值时第一张坏图会把四张推荐卡全部收起。 -->
+            <image wx:if="{{!imgFailed[index]}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load webp="{{true}}" data-index="{{index}}" binderror="onImgError" />
           </view>
           <text class="ws-body related__title">{{item.title}}</text>
           <ws-price jpy="{{item.priceJpy}}" size="sm" />

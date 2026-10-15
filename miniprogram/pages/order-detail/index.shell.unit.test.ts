@@ -337,6 +337,84 @@ describe('订单详情：申请售后入口（AJ-420）', () => {
   });
 });
 
+/**
+ * 审计 UX-004：商品图取不到（CDN 404 / 域名未登记 / 图被删）→ 那一行收起 `<image>` 留干净占位。
+ *
+ * @why **这条用例唯一要抓的错写法**是"整页共用一个布尔值"：商品行在 `wx:for` 里，
+ *      一个布尔值会让第一张坏图把这一单全部商品图收起——所以断言必须同时证明
+ *      "坏的那行标上了"和"好的那行没标上"，只验前者测不出这个缺陷（规律⑪：只测主状态）。
+ * @why 顺带证明失败标记没有写进 `view.items`：那里每 30 秒会被 `startPayTick` 重建一次，
+ *      写在里面等于隔半分钟破一次图。
+ * @limitation 不渲染（mp-page @limitation 一）：`<image>` 真的收没收起来，由 index.wxml.unit.test.ts 钉。
+ */
+describe('订单详情：商品图加载失败（审计 UX-004）', () => {
+  const IMG = {
+    ...ORDER,
+    status: 'completed',
+    items: [
+      {
+        product_id: 'p-1',
+        title: '白色恋人 12 枚装',
+        qty: 2,
+        unit_price_jpy: 2160,
+        image: 'https://img.test/a.webp',
+      },
+      {
+        product_id: 'p-2',
+        title: '南部铁器 急须',
+        qty: 1,
+        unit_price_jpy: 12800,
+        image: 'https://img.test/missing.webp',
+      },
+      {
+        product_id: 'p-3',
+        title: '虎屋 抹茶粉 40g',
+        qty: 1,
+        unit_price_jpy: 2000,
+        image: 'https://img.test/c.webp',
+      },
+    ],
+  };
+  const items = (): Array<Record<string, unknown>> =>
+    (page.data['view'] as { items: Array<Record<string, unknown>> }).items;
+
+  it('🔴 第 2 行图 binderror → 只标第 2 行，同单第 1、3 行的图照旧渲染', async () => {
+    order = IMG;
+    await open();
+    expect(items().map((i) => i['image'])).toEqual([
+      'https://img.test/a.webp',
+      'https://img.test/missing.webp',
+      'https://img.test/c.webp',
+    ]);
+
+    call('onItemImgError', { currentTarget: { dataset: { index: 1 } } });
+
+    const failed = page.data['imgFailed'] as boolean[];
+    expect(failed[1]).toBe(true);
+    expect(failed[0]).not.toBe(true);
+    expect(failed[2]).not.toBe(true);
+    // vm 输出没被动过：图 URL 没有被改成占位图 / 空串（写进 view.items 会被 startPayTick 重建抹掉）
+    expect(items()[1]?.['image']).toBe('https://img.test/missing.webp');
+  });
+
+  it('同一个 <image> 连报几次错 → 只标一次（不反复重渲列表）', async () => {
+    order = IMG;
+    await open();
+    call('onItemImgError', { currentTarget: { dataset: { index: 0 } } });
+    const once = page.data['imgFailed'];
+    call('onItemImgError', { currentTarget: { dataset: { index: 0 } } });
+    expect(page.data['imgFailed']).toBe(once);
+  });
+
+  it('取不到 data-index（事件形状变了）→ 不标任何一行', async () => {
+    order = IMG;
+    await open();
+    call('onItemImgError', {});
+    call('onItemImgError', { currentTarget: { dataset: { index: 'x' } } });
+    expect(page.data['imgFailed']).toEqual([]);
+  });
+});
+
 describe('支付结果确认中：重查两次仍未确认（统一结论 5.3）', () => {
   it('🔴 放弃"刚付过"的假设后恢复按钮，同时说清：可能还没到账、请勿重复付款、稍后下拉刷新', async () => {
     vi.useFakeTimers();
@@ -580,6 +658,87 @@ describe('待付款剩余分钟随时间走', () => {
       const before = (page.data['view'] as Record<string, unknown>)['payLeftText'];
       await vi.advanceTimersByTimeAsync(3 * 60_000);
       expect((page.data['view'] as Record<string, unknown>)['payLeftText']).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// AJ-554（P2）：`startPayTick` 每 30 秒重算一次 `detailView`，原先把整棵 `view` 一起 setData——
+//   那棵 view 里 items / timeline / amountLines / progress / address 全都是订单原文的投影，
+//   30 秒里一个字都不会变。整棵替换 = 每半分钟跨线程传几 KB，只为改「请在 N 分钟内完成支付」这一句。
+//   ⚠️ 这里钉的是"传了哪几个键"：漏传一个会随时间变的字段，表现是页面上一处一直显示过期信息，且不报错。
+describe('剩余分钟走表：只 setData 变了的字段（AJ-554）', () => {
+  /** 挂上 setData 窃听器，返回之后每次 setData 的 patch（真机传多少，这里就看到多少）。 */
+  function tapSetData(): Array<Record<string, unknown>> {
+    const seen: Array<Record<string, unknown>> = [];
+    const real = page.setData.bind(page);
+    page.setData = (patch: Record<string, unknown>): void => {
+      seen.push(patch);
+      real(patch);
+    };
+    return seen;
+  }
+
+  const payLeft = (): unknown => (page.data['view'] as Record<string, unknown>)['payLeftText'];
+
+  it('🔴 分钟数变了 → 只传 view.payLeftText 一个键（items / timeline / progress 一个都不重传）', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
+    try {
+      // 10 分 10 秒后截止：t0 取整到 11 分钟，+30s 后取整到 10 分钟——这一支确实有字段变
+      order = { ...ORDER, status: 'pending_payment', expires_at: '2026-10-12T10:10:10.000Z' };
+      await open('o-1');
+      expect(payLeft()).toBe('请在 11 分钟内完成支付');
+
+      const seen = tapSetData();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(seen.length).toBe(1);
+      expect(Object.keys(seen[0] ?? {})).toEqual(['view.payLeftText']);
+      expect(seen[0]?.['view.payLeftText']).toBe('请在 10 分钟内完成支付');
+      // 数据路径写进去了（不是被当成怪键）：页面读到的就是新值
+      expect(payLeft()).toBe('请在 10 分钟内完成支付');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('🔴 30 秒没跨过分钟刻度 → 一次 setData 都不发（向上取整后这句话没变）', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
+    try {
+      order = { ...ORDER, status: 'pending_payment', expires_at: '2026-10-12T10:30:00.000Z' };
+      await open('o-1');
+      const seen = tapSetData();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(payLeft()).toBe('请在 30 分钟内完成支付');
+      expect(seen).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('🔴 跨过截止点 → 跟着翻的字段照样带出去，并立刻重取（服务端会关单）', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-12T10:00:00.000Z'));
+    try {
+      order = { ...ORDER, status: 'pending_payment', expires_at: '2026-10-12T10:00:20.000Z' };
+      await open('o-1');
+      const seen = tapSetData();
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      // 可付 / 可取消 / 截止时刻 / 下一步 / 合计口径 / 底栏 一起翻——少一个就会在过期单上留「继续支付」
+      expect(Object.keys(seen[0] ?? {}).sort()).toEqual([
+        'view.canCancel',
+        'view.canPay',
+        'view.expiresAtText',
+        'view.hasActions',
+        'view.nextText',
+        'view.payLeftText',
+        'view.totalLabel',
+      ]);
+      expect(payLeft()).toBe('');
+      expect(calls).toContain('GET /api/v1/orders/o-1');
     } finally {
       vi.useRealTimers();
     }

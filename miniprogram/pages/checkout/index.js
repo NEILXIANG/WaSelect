@@ -56,6 +56,7 @@ import {
   chargePreview,
 } from '../../utils/pay-plan.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
+import { markImageFailed } from '../../utils/image-failed.js';
 import { contactFields, errorFields, isAccountBlocked } from '../../utils/error-text.js';
 import { emailTypoHint, normalizeTypedEmail } from '../../utils/email-shape.js';
 import { STOCK_REFUND_NOTE } from '../../utils/order-status.js';
@@ -102,6 +103,12 @@ Page({
     emptyAction: 'home',
     /** vm `itemRows` 的输出（**不含价格**）。 */
     rows: [],
+    /**
+     * 审计 UX-004：第几行的商品图加载失败（下标与 `rows` 对齐；`utils/image-failed.js`）。
+     * @why 每次 `refresh` 重建 `rows` 时跟着清回空（@see refresh）——下标是对着行序的，
+     *      换了一批行还留着上一批的下标，会把一张好图当成坏图收起来。
+     */
+    imgFailed: [],
     /** vm `quoteView` 的输出；null = 还没报价。 */
     quote: null,
     /** 当前地址摘要；null = 还没有地址。 */
@@ -278,7 +285,8 @@ Page({
     //   （@see fetchAddresses / fetchQuote；keepError 路径也会重取，所以不必分情况）
     this.addressBlocked = false;
     const items = this.items();
-    this.setData({ rows: itemRows(items) });
+    // `rows` 整份重建 → 上一批行的失败标记作废（@see data.imgFailed）
+    this.setData({ rows: itemRows(items), imgFailed: [] });
 
     // ⚠️ 闸门只有 `updateGate` 一处算（AJ-228）：这里曾另算一遍，漏了"超过单笔上限"与
     //    "邮箱填错"两项——每次 onShow 到请求返回之间，已经被拦住的按钮会重新可点。
@@ -480,6 +488,16 @@ Page({
       refreshing: this.refreshing === true,
     });
     this.setData({ gate });
+  },
+
+  /**
+   * 商品行某张图加载失败（审计 UX-004）→ 只收起那一行，不留破图。
+   * @param {WechatMiniprogram.CustomEvent} e `data-index` 来自 wxml
+   * @why 这一屏是"付钱前最后核对买了什么"的地方，破图会被读成"商品有问题"。
+   */
+  onImgError(e) {
+    const next = markImageFailed(this.data.imgFailed, e?.currentTarget?.dataset?.index);
+    if (next !== null) this.setData({ imgFailed: next });
   },
 
   /**

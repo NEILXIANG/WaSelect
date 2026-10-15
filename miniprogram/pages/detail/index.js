@@ -41,8 +41,10 @@ import { errorFields } from '../../utils/error-text.js';
 import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+import { markImageFailed } from '../../utils/image-failed.js';
 import { supportRows } from '../../utils/support.js';
 import { track } from '../../utils/beacon.js';
+import { isStale, nextSeq } from '../../utils/request-seq.js';
 
 const app = getApp();
 
@@ -89,6 +91,13 @@ Page({
     support: [],
     /** M-13（AJ-406）：底部固定购买栏（vm `buyBarView`）。 */
     bar: { cartText: '购物车', cartAria: '购物车，去购物车', disabled: false },
+    /**
+     * 审计 UX-004：**相似推荐**里第几张图加载失败（下标与 `related` 对齐；`utils/image-failed.js`）。
+     * ⚠️ 只管推荐，不管轮播——轮播那张失败是换成占位图（`onGalleryError`），
+     *    因为它是主图位，收起来整页就空了；推荐是"顺便看看"，收起来才是干净的。
+     * @why 每次重取推荐都跟着清回空：推荐是整份替换的（@see loadRelated）。
+     */
+    imgFailed: [],
   },
 
   /** 上一次被接受的加购时刻（P2-37 连点守卫；不进 data：不是渲染状态）。 */
@@ -99,6 +108,14 @@ Page({
   productId: '',
   /** 一次"看一个商品"是一条链：详情页只有一次取数，链路从 onLoad 开始。 */
   traceId: '',
+  /**
+   * 取详情的序号（审计 BUG-004）：`onLoad` 的首次取数与错误态「重试」会并发两个 `load`，
+   * 先发的慢响应晚到会把后发的结果盖回去（商品张冠李戴，或已下架的旧数据盖住新的）。
+   * @why 与 `pages/order-detail` 同一条口径（utils/request-seq.js）：只判"过不过期"，
+   *      不发 / 不取消请求——本页一次只取一件商品，不值得维护请求句柄那套复杂度。
+   * @limitation 它与 `alive` 各管一件事：序号管"两份响应谁算新"，`alive` 管"这一页还在不在"。
+   */
+  loadSeq: 0,
 
   /**
    * @param {{id?: string}} options 首页跳转带来的 query（`?id=…`）
@@ -126,6 +143,8 @@ Page({
   /** 独立审查 2026-10-13 【2】：即发即忘的请求（客服卡 / 相关推荐）回来时页面可能已销毁，与结算页 `alive` 同口径。 */
   onUnload() {
     this.alive = false;
+    // 审计 BUG-004：在途的取详情结果作废——页面已销毁，回来时不能再 setData / 起重试后的旧视图
+    this.loadSeq = nextSeq(this.loadSeq);
   },
 
   /**
@@ -164,17 +183,21 @@ Page({
 
   /** 取详情。失败**清空商品**并明示错误：留旧数据会让人把别的商品当成这一个。 */
   async load() {
+    const seq = (this.loadSeq = nextSeq(this.loadSeq));
     this.setData({ loading: true, error: '' });
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/products/${this.productId}`,
         traceId: this.traceId,
       });
+      // 审计 BUG-004：已有更新的取数发出（序号过期）、或页面已销毁 → 这次结果不落页面
+      if (isStale(seq, this.loadSeq) || !this.alive) return;
       const view = detailView(res);
       this.setData({ product: view });
       this.renderBar();
       void this.loadRelated(view.category);
     } catch (e) {
+      if (isStale(seq, this.loadSeq) || !this.alive) return;
       // 全入口点击测试 2026-10-11：40401 走空态（"这件商品已下架"，不出错误码），其余照旧
       this.setData({
         product: null,
@@ -183,7 +206,7 @@ Page({
         retryable: retryableLoadError(e),
       });
     } finally {
-      this.setData({ loading: false });
+      if (!isStale(seq, this.loadSeq) && this.alive) this.setData({ loading: false });
     }
   },
 
@@ -200,10 +223,20 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/products?category=${encodeURIComponent(category)}&size=${RELATED_FETCH_SIZE}`,
         traceId: this.traceId,
       });
-      if (this.alive) this.setData({ related: relatedCards(res?.items, this.productId) });
+      if (this.alive)
+        this.setData({ related: relatedCards(res?.items, this.productId), imgFailed: [] });
     } catch {
-      if (this.alive) this.setData({ related: [] });
+      if (this.alive) this.setData({ related: [], imgFailed: [] });
     }
+  },
+
+  /**
+   * 相似推荐里某张图加载失败（审计 UX-004）→ 只收起那一张，不留破图。
+   * @param {WechatMiniprogram.CustomEvent} e `data-index` 来自 wxml
+   */
+  onImgError(e) {
+    const next = markImageFailed(this.data.imgFailed, e?.currentTarget?.dataset?.index);
+    if (next !== null) this.setData({ imgFailed: next });
   },
 
   /** 点同类推荐 → 那件的详情（A10）。 */

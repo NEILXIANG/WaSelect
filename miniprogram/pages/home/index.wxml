@@ -26,7 +26,9 @@
        @why 不放"用户中心"图标在右上角（沿用原型口径）：右上角放头像会把首页变成"App"。
             用户入口在底部 tabBar「我的」（M-14 起首页不再重复放"购物车 / 我的"按钮）。 -->
   <view class="ws-gutter home__bar">
-    <text class="home__mark-cn">日本選品</text>
+    <!-- 审计 CPY-01：「選」是日文汉字 / 繁体字形，全仓仅此一处；改规范简体「选品」后与右侧
+         "Japanese Selection" 仍是同一件事（选品 = 挑出来的东西）。 -->
+    <text class="home__mark-cn">日本选品</text>
     <text class="home__mark-en">Japanese Selection</text>
   </view>
 
@@ -85,7 +87,11 @@
     <swiper-item wx:for="{{slides}}" wx:key="id">
       <!-- MP-1（第二轮审计）：没有跳转目标的 banner 不给按下态（vm tappable，与 intentForBanner 同一判断） -->
       <view class="home__slide-hit" data-index="{{index}}" hover-class="{{item.tappable ? 'ws-press' : 'none'}}" bindtap="onBannerTap">
-        <image class="home__slide" src="{{item.image}}" mode="aspectFill" webp="{{true}}" />
+        <!-- 审计 UX-004：banner 图加载失败（CDN 404 / 域名未登记）→ 收起这一张的 `<image>`，
+             留 `.home__slide-hit` 的底色，不留破图。
+             @why 失败标记必须**按张**记（`imgFailed[index]`）：轮播在 `wx:for` 里，
+                  整页共用一个布尔值时第一张坏图会把**轮播全部**收起，首页顶部只剩一条底色。 -->
+        <image wx:if="{{!imgFailed[index]}}" class="home__slide" src="{{item.image}}" mode="aspectFill" webp="{{true}}" data-index="{{index}}" binderror="onImgError" />
       </view>
     </swiper-item>
   </swiper>

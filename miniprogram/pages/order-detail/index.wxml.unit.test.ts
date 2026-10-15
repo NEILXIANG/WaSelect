@@ -1,5 +1,6 @@
 /**
- * 职责：订单详情模板——部分退款放在「金额」卡里（AJ-434，用户 2026-10-10 授权代决）。
+ * 职责：订单详情模板——部分退款放在「金额」卡里（AJ-434，用户 2026-10-10 授权代决），
+ *       以及商品图加载失败时的 per-item 降级（审计 UX-004）。
  *
  * @why 原先部分退款是页面最底部单独一张卡，离"订单合计"隔着地址、物流、进度、条款四张卡；
  *      买家想核对"付了多少、退了多少"得上下翻，三端走查时就没看到它。
@@ -23,5 +24,27 @@ describe('订单详情：部分退款的位置（AJ-434）', () => {
     expect(refunds).toBeGreaterThan(wxml.indexOf('view.totalSub', amount));
     expect(refunds).toBeLessThan(shipping);
     expect(wxml.match(/wx:for="\{\{view\.partialRefunds\}\}"/g)).toHaveLength(1);
+  });
+});
+
+/**
+ * 审计 UX-004：商品行在 `wx:for` 里，失败标记必须**按行**（带 index 下标）。
+ *
+ * @why 只写 `!imgFailed`（整页一个布尔值）时第一行坏图会把这一单所有商品图一起收起，
+ *      而它在 wxml 上和正确写法只差 `[index]` 六个字符——两种写法肉眼几乎一样，
+ *      所以这里把"`wx:if` 里必须出现 `[index]`"钉成用例。
+ */
+describe('订单详情：商品图加载失败不留破图（审计 UX-004）', () => {
+  it('🔴 商品图绑了 binderror，且 wx:if 是按行的失败标记（不是整页一个布尔值）', () => {
+    const loopStart = wxml.indexOf('wx:for="{{view.items}}"');
+    expect(loopStart).toBeGreaterThan(0);
+    const loopEnd = wxml.indexOf('</view>', wxml.indexOf('class="item__meta"'));
+    const loop = wxml.slice(loopStart, loopEnd);
+
+    expect(loop).toMatch(/<image\b/);
+    expect(loop).toMatch(/binderror="onItemImgError"/);
+    // 按行：会和 `view.items` 的行号一起算——少写 `[index]` 就变成整页共用一个标记
+    expect(loop).toMatch(/wx:if="\{\{item\.image && !imgFailed\[index\]\}\}"/);
+    expect(loop).toMatch(/data-index="\{\{index\}\}"/);
   });
 });

@@ -33,6 +33,7 @@ import { emptyState, hasMoreOrders, mergeOrderRows, orderRows, tabsView } from '
 import { orderListQuery, resolveOrderTab, tabItems } from '../../utils/order-tabs.js';
 import { isStale, nextSeq } from '../../utils/request-seq.js';
 import { serverNowMs } from '../../utils/server-clock.js';
+import { markImageFailed } from '../../utils/image-failed.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
@@ -77,6 +78,12 @@ Page({
     loadingMore: false,
     /** S-7：触底加载失败的文案（空串 = 无；页脚给"点此重试"，不动已加载的行）。 */
     moreError: '',
+    /**
+     * 审计 UX-004：第几行的首件缩略图加载失败（下标与 `rows` 对齐；`utils/image-failed.js`）。
+     * @why 整页重取（`load`）时跟着清回空——那是一份**新的行**；
+     *      触底追加（`loadMore`）**不清**：已加载的行下标没动，清了会把它们的坏图又放出来再破一次。
+     */
+    imgFailed: [],
   },
 
   traceId: '',
@@ -141,7 +148,12 @@ Page({
     const activeTab = resolveOrderTab(key);
     // 审计 UX-05：换了页签就先清掉上一个页签的单（加载块只在列表为空时出现，旧页签的单不能冒充新页签）
     const changed = activeTab !== this.data.activeTab;
-    this.setData({ activeTab, tabs: tabsView(activeTab), ...(changed ? { rows: [] } : {}) });
+    // 清行就一起清失败标记：下标是对着 `rows` 的，行没了标记还留着会套到新页签的行上
+    this.setData({
+      activeTab,
+      tabs: tabsView(activeTab),
+      ...(changed ? { rows: [], imgFailed: [] } : {}),
+    });
   },
 
   /**
@@ -169,6 +181,7 @@ Page({
       const empty = emptyState(rows, '', tab);
       this.setData({
         rows,
+        imgFailed: [],
         hasMore: hasMoreOrders(this.loaded, this.total),
         error: '',
         errorContact: false,
@@ -189,6 +202,7 @@ Page({
       this.total = 0;
       this.setData({
         rows: [],
+        imgFailed: [],
         hasMore: false,
         ...errorFields(e),
         ...contactFields(e),
@@ -271,6 +285,15 @@ Page({
     if (typeof key !== 'string') return;
     this.setTab(key);
     await this.load();
+  },
+
+  /**
+   * 某一行的首件缩略图加载失败（审计 UX-004）→ 只收起那一行，不留破图。
+   * @param {WechatMiniprogram.CustomEvent} e `data-index` 来自 wxml
+   */
+  onImgError(e) {
+    const next = markImageFailed(this.data.imgFailed, e?.currentTarget?.dataset?.index);
+    if (next !== null) this.setData({ imgFailed: next });
   },
 
   /**

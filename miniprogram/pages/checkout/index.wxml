@@ -57,7 +57,11 @@
         <!-- A6（AJ-416）：缩略图（外层管宽度、里层管正方形，@see media-square.unit.test.ts） -->
         <view class="item__thumb">
           <view class="ws-media ws-media--square">
-            <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load webp="{{true}}" />
+            <!-- 审计 UX-004：商品图加载失败 → 收起这一行的 `<image>`，留 `.ws-media` 的底色。
+                 @why 失败标记**按行**记（`imgFailed[index]`）：商品行在 `wx:for` 里，
+                      整页共用一个布尔值时第一件坏图会把这一单**所有商品图**一起收起——
+                      而这一屏正是买家"付钱前最后核对买了什么"的那一屏。 -->
+            <image wx:if="{{item.image && !imgFailed[index]}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load webp="{{true}}" data-index="{{index}}" binderror="onImgError" />
           </view>
         </view>
         <!-- 全入口点击测试 2026-10-11：单价来自报价（rowsWithQuotePrice），报价没回来时不显示 -->
@@ -132,19 +136,31 @@
         @why 这句如实列出全部三类用途（付款 / 发货 / 退款——服务端那 5 份订单邮件模板都落在这
              三类里），与 `EMAIL_REQUIRED_TEXT` 和 `pages/order-detail/index.wxml:251` 同口径；
              M-20：前置说，不在提交后的错误里才说。
+        ⚠️ 前提是生产配了 `MAIL_PROVIDER_API_KEY`（上线运维手册 §1.1）：它是**可选**配置
+           （server/src/config.ts 的 `optionalText()`），没配时发信器退化成只记日志的
+           `createLogOnlyMailer`（server/src/adapters/mail/select.ts）——一封信都不发，
+           这一句就成了又一句不成立的承诺（AJ-295 同类）。
+           @why 前提**只写在这里**不写进正文：正文是输入框上方的常驻提示，要短；加"如已启用
+                邮件通知"会削弱告知的确定性，反而制造"到底会不会发"的疑惑——
+                与 pages/order-detail/index.wxml:245-251 同一条口径（那里也是正文不写、注释写死）。
       -->
       <text class="ws-note field__purpose">付款、发货、退款通知都会发到这个邮箱</text>
       <!--
         UX-013：placeholder 原为 25 字，超出单行可视宽（约 590rpx）⇒ 尾部被截。
-        删掉的那一半「订单有问题时也用它联系你」本身就是**不成立的承诺**——售后链路明示不通知
-        买家，运营告警邮件只发运营，不存在"用它联系你"这条路径（AJ-295 同类）。
-        剩 12 字（约 336rpx），不必为了短再砍掉必要信息。
+        @why 删掉的那一半「订单有问题时也用它联系你」本身就是**不成立的承诺**——售后链路明示
+             不通知买家，运营告警邮件只发运营，不存在"用它联系你"这条路径（AJ-295 同类）。
+        @why 剩下那半句也一并换成**示例**：用途已由上面那行常驻说明负责，框里再说一遍是同屏
+             重复（两边措辞还不一样）；placeholder 回到它的本职——提示**格式**。
+             与 `EMAIL_ERROR` 的示例同形（"应类似 name@gmail.com"），报错时说的和框里看的一致。
+        @why 带「例：」前缀：示例型 placeholder 的既有形态就是它（pages/address-edit 六个框、
+             admin-web LoginForm 的邮箱框同形），checkout 不该是唯一一个例外；更要紧的是——
+             裸写一个合法 gmail 地址，用户第一眼会以为那是"要填进去的内容"，加了前缀才是格式提示。
       -->
       <input
         class="input"
         type="text"
         value="{{email}}"
-        placeholder="接收付款、发货、退款邮件"
+        placeholder="例：name@gmail.com"
         placeholder-class="ph"
         maxlength="255"
         bindinput="onEmailInput"

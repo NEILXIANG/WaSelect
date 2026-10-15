@@ -23,7 +23,9 @@
       <view class="ws-card as__brief">
         <view class="as__thumb">
           <view class="ws-media ws-media--square">
-            <image wx:if="{{brief.image}}" class="ws-media__img" src="{{brief.image}}" mode="aspectFill" webp="{{true}}" />
+            <!-- 审计 UX-004：商品图加载失败同"无图"处理——收起 `<image>`，留干净的占位面，不留破图
+                 （与 `ws-pick-card` 同一口径；本页只有这一张图，所以是单个布尔值不是按项标记） -->
+            <image wx:if="{{brief.image && !imgFailed}}" class="ws-media__img" src="{{brief.image}}" mode="aspectFill" webp="{{true}}" binderror="onImgError" />
           </view>
         </view>
         <view class="as__brief-body">
@@ -38,7 +40,9 @@
           <picker mode="selector" range="{{reasonLabels}}" value="{{form.reasonIndex < 0 ? 0 : form.reasonIndex}}" bindchange="onReasonPick">
             <!-- 全入口点击测试 2026-10-11：加「▾」表明是下拉（原先与文字框长得一样） -->
             <view class="input input--picker {{view.reasonText ? '' : 'ph'}}">
-              <text>{{view.reasonText || '请选择'}}</text>
+              <!-- 审计 CPY-09：占位说清"选什么"（与地址页「请选择州」同粒度），
+                   且与缺项时页面内那句「请选择问题类型」是同一个词 -->
+              <text>{{view.reasonText || '请选择问题类型'}}</text>
               <text class="picker-caret">▾</text>
             </view>
           </picker>

@@ -48,6 +48,33 @@ const app = getApp();
 /** 页面级宿主入口（wx-api 是无状态转发）。 */
 const wxApi = createWxApi();
 
+/**
+ * 重算出来的 `view` 里，**值真的变了**的那几个字段（AJ-554，P2）。
+ *
+ * @why `startPayTick` 每 30 秒按最新时刻重算一次 `detailView`，但那棵 view 里绝大多数分支
+ *      （`items` / `timeline` / `amountLines` / `partialRefunds` / `progress` / `address`…）
+ *      只由订单原文决定——订单没变，它们 30 秒里一个字都不会变。
+ *      整棵替换等于每半分钟把几 KB 数据跨线程传一遍，只为改「请在 N 分钟内完成支付」这一句。
+ * @why 用**逐字段比对**而不是手写一份「会变的字段清单」：清单漏掉一个字段的表现是
+ *      「页面上那一处一直是 30 秒前的值」，既不报错也不会有人发现——它比多传几 KB 严重得多。
+ *      比对不会漏：它只认"值有没有变"，将来 vm 新增随时间变的字段也不用回来改这里。
+ * @limitation 逐字段 `JSON.stringify` 比引用相等慢，但 `view` 是扁平结构（值到对象 / 数组为止），
+ *              一次几十微秒；而 `setData` 是跨线程通信，代价按数据量算——不在一个量级。
+ * @limitation 键的顺序依赖 `detailView` 对象字面量的书写顺序（两次调用走同一个字面量，顺序稳定）。
+ * @param {Record<string, unknown>|null} prev 当前 `data.view`
+ * @param {Record<string, unknown>} next 重算出来的 view
+ * @returns {Record<string, unknown>|null} `{'view.x': …}` 形式的补丁（可能为空对象 = 一个字段都没变）；
+ *          null = 没有可比对的前态，调用方按原样整棵替换
+ */
+function viewPatch(prev, next) {
+  if (prev === null || typeof prev !== 'object') return null;
+  const patch = {};
+  for (const key of Object.keys(next)) {
+    if (JSON.stringify(prev[key]) !== JSON.stringify(next[key])) patch[`view.${key}`] = next[key];
+  }
+  return patch;
+}
+
 /** 支付页路径（跳转路径只在这一处出现）。 */
 const PAY_PAGE = '/pages/pay/index';
 /** A7：再次购买后去购物车（tab 页，只能 switchTab）；点商品行进详情。 */
@@ -90,6 +117,15 @@ Page({
     actionNote: '',
     /** 剩余清单 4-2：客服联系方式（utils/support.js）；空数组 = 未配置，不显示。 */
     support: [],
+    /**
+     * 审计 UX-004：商品图加载失败的行标记——`imgFailed[i] === true` = 第 i 行那张图取不到，
+     * 那一行按"无图"渲染（wxml 收起 `<image>`）。下标与 `view.items` 对齐。
+     * @why **每行一个**标记而不是整页一个布尔值：商品行在 `wx:for` 里，
+     *      整页一个布尔值会让第一张坏图把这一单的全部商品图一起收起。
+     * @limitation 不做"换了图就复位"（ws-pick-card 用 observers 做那条）：本页存活期内
+     *            一张订单的商品行不会变，重取后同一个 URL 大概率还是坏的——复位只是让它再破一次、再抖一下。
+     */
+    imgFailed: [],
   },
 
   /** 订单 id（来自 query；不参与渲染，放 this 上）。 */
@@ -168,7 +204,19 @@ Page({
 
   /**
    * 每 30 秒按最新时刻重算一次视图（只改剩余分钟这类随时间变的字）；分钟走完就重取一次订单（服务端会关单）。
+   *
    * @why 链式 setTimeout 而不是 setInterval：与支付页倒计时同口径（小程序端 eslint 全局白名单只登记了 setTimeout）。
+   * @why **只 setData 变了的字段**（AJ-554）：本 tick 只跑在"待付款且没到截止"这一支上
+   *      （`payLeftText` 非空即 `payable && !confirming && 未过期`），此时订单状态是 created / pending_payment，
+   *      于是下面这些分支**都不可能**在这 30 秒里变——它们要么只看订单原文，要么只在别的订单状态下才有值：
+   *      · `items` / `amountLines` / `dutyNote` / `address` / `timeline` / `partialRefunds`：订单原文的纯投影；
+   *      · `progress`：`orderProgress(o)` 不接 `nowMs`；
+   *      · `afterSale` / `canConfirmReceipt`：售后窗口只在已发货后才可能随时刻翻，而"待付款"的单不在那几个状态里；
+   *      · `canBuyAgain` / `latePaidNote` / `statusText` / `nextText` / `totalLabel`：只由 `status` 决定。
+   *      真正随时刻变的只有 `payLeftText`（向上取整到分钟，所以多数 tick 连它都不变 → 一次 setData 都不发），
+   *      以及截止点被跨过那一瞬间跟着翻的 `canPay` / `canCancel` / `expiresAtText` / `nextText` /
+   *      `totalLabel` / `hasActions`——这一支由 `viewPatch` 照样带出去，紧接着 `load()` 重取（服务端会关单）。
+   * @why 交给 `viewPatch` 比对而不是手写字段清单：见 `viewPatch` 的 @why。
    */
   startPayTick() {
     this.stopPayTick();
@@ -181,7 +229,10 @@ Page({
         recheckGaveUp: this.recheckGaveUp,
         nowMs: serverNowMs(Date.now(), app.globalData.clockSkewMs),
       });
-      this.setData({ view });
+      const patch = viewPatch(this.data.view, view);
+      // 一个字段都没变（30 秒没跨过分钟刻度）：连 setData 都不发——这是最常见的一支
+      if (patch === null) this.setData({ view });
+      else if (Object.keys(patch).length > 0) this.setData(patch);
       if (view.payLeftText === '') void this.load();
       else this.startPayTick();
     }, 30_000);
@@ -344,6 +395,27 @@ Page({
     }
     this.setData({ buyAgainNote: '' });
     wxApi.switchTab({ url: CART_PAGE });
+  },
+
+  /**
+   * 商品行的图加载失败（审计 UX-004：CDN 404 / 域名未登记 / 图被删）→ 只把**这一行**标坏，不留破图。
+   * @param {WechatMiniprogram.CustomEvent} e `data-index` 来自 wxml（这一行在 `view.items` 里的下标）
+   * @why 标记住在 `view` **外面**：`view` 是 vm `detailView` 的输出，`load()` 每次重取都是整棵替换
+   *      （`startPayTick` 现在走 `viewPatch` 增量更新，`items` 多数 tick 重传不了——但那只是"这一 tick 没抹"，
+   *      不是"不会抹"）。写进 `view.items` 的标记会被下一次整棵替换带走，图又破回来；
+   *      失败标记得是**页面自己的**、与 vm 输出正交的一份状态。
+   * @why 顺带：坏一张图只传一个短数组过去，不必为它重写整个 `items`
+   *      （pages/detail 的 `onGalleryError` 改 images 数组是同一招，那边 product 不由 vm 重算）。
+   */
+  onItemImgError(e) {
+    const i = Number(e?.currentTarget?.dataset?.index);
+    if (!Number.isInteger(i) || i < 0) return;
+    const failed = Array.isArray(this.data.imgFailed) ? this.data.imgFailed : [];
+    // 已经标过就别再 setData：同一张图会连着报好几次错，每报一次重渲一次列表
+    if (failed[i] === true) return;
+    const next = failed.slice();
+    next[i] = true;
+    this.setData({ imgFailed: next });
   },
 
   /** 点商品行进详情（A7）：看看现在还卖不卖、什么价。 */

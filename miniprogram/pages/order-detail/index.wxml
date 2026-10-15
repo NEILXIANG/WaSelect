@@ -177,7 +177,16 @@
         >
           <view class="item__media">
             <view class="ws-media ws-media--square">
-              <image wx:if="{{item.image}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load webp="{{true}}" />
+              <!-- 审计 UX-004：商品图加载失败（CDN 404 / 域名未登记 / 图被删）同"无图"处理——
+                   收起这一行的 `<image>`，留 `.ws-media` 自带的底色（app.wxss 里它由 ws-surface-sunk 兜底），不留破图。
+                   @why 失败标记必须**按行**记（`imgFailed[index]`）：商品行在 `wx:for` 里，
+                        整页共用一个布尔值时，第一张图 404 会把这一单所有商品图一起收起——
+                        买家读成"这张单全都没图"，而不是"这一件暂时没图"。
+                   @why 用 `data-index` 而不是把失败标记写进 `view.items`：`view` 是 vm `detailView` 的输出，
+                        `load()` 每次重取都是整棵替换（`startPayTick` 改成 `viewPatch` 增量更新后 `items` 多数 tick
+                        不重传，但那只是"这一 tick 没抹"，不是"不会抹"）——失败标记必须是**页面自己的**、
+                        与 vm 输出正交的一份状态，否则下一次整棵替换就把它带走了。 -->
+              <image wx:if="{{item.image && !imgFailed[index]}}" class="ws-media__img" src="{{item.image}}" mode="aspectFill" lazy-load webp="{{true}}" data-index="{{index}}" binderror="onItemImgError" />
             </view>
           </view>
           <view class="item__body">

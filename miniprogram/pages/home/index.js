@@ -43,6 +43,7 @@ import {
   shownKeyword,
 } from './index.vm.js';
 import { newTraceId } from '../../utils/trace.js';
+import { markImageFailed } from '../../utils/image-failed.js';
 import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
 import { track } from '../../utils/beacon.js';
 
@@ -91,6 +92,12 @@ Page({
      * 商品流也失败时不显示（wxml `!error`）：同屏两条错误只会更难判断坏在哪（@see loadHome @why）。
      */
     homeFailed: false,
+    /**
+     * 审计 UX-004：第几张轮播图加载失败（下标与 `slides` 对齐；`utils/image-failed.js` 的算法）。
+     * @why 每次 `/home` 回来都跟着 `slides` 一起清回空：轮播是**整份替换**的，
+     *      换过图之后还留着上一批的下标，会把一张好图当成坏图收起来。
+     */
+    imgFailed: [],
   },
 
   /**
@@ -212,6 +219,8 @@ Page({
       this.setData({
         homeFailed: false,
         slides: bannerSlides(res?.banners, keys),
+        // 轮播整份换过 → 上一批的失败标记跟着作废（@see data.imgFailed）
+        imgFailed: [],
         // ⚠️ 用**当前**分类重算 tab：`/home` 可能在用户已经切过分类之后才回来，
         //    这里传空会让高亮跳回「全部」（表现为"我刚点了美妆，它自己跳回去了"）。
         ...tabsState(tabs, this.category),
@@ -253,6 +262,15 @@ Page({
     this.setData({ keyword: '' });
     this.category = intent.key;
     this.reload(intent.key, '');
+  },
+
+  /**
+   * 轮播某张图加载失败（审计 UX-004）→ 只收起那一张，不留破图。
+   * @param {WechatMiniprogram.CustomEvent} e `data-index` 来自 wxml
+   */
+  onImgError(e) {
+    const next = markImageFailed(this.data.imgFailed, e?.currentTarget?.dataset?.index);
+    if (next !== null) this.setData({ imgFailed: next });
   },
 
   /** 展开 / 收起「全部分类」面板。 */

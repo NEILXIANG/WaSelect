@@ -496,3 +496,74 @@ describe('首页：下拉刷新', () => {
     expect(stops).toEqual([1]);
   });
 });
+
+/**
+ * 审计 UX-004：轮播图加载失败 → 只收起那一张。
+ *
+ * @why 轮播在 `wx:for` 里，失败标记必须**按张**记：整页共用一个布尔值时，
+ *      第一张坏图会把轮播全部收起，首页顶部只剩一条底色——那是"首页没加载出来"的样子。
+ * @limitation 不渲染 wxml（mp-page @limitation 一），"图真的收起来了"由下面读模板那条钉。
+ */
+describe('首页：轮播图加载失败不留破图（审计 UX-004）', () => {
+  const BANNERS = [
+    { id: 'b1', image: 'https://img.test/b1.webp', link_type: 'none' },
+    { id: 'b2', image: 'https://img.test/b2.webp', link_type: 'none' },
+    { id: 'b3', image: 'https://img.test/b3.webp', link_type: 'none' },
+  ];
+
+  async function enterWithSlides(): Promise<void> {
+    call('onLoad');
+    calls[0]!.d.resolve(listOf('all', 1));
+    homeCalls[0]!.d.resolve({ banners: BANNERS, categories: [] });
+    await settle();
+    expect(page.data['slides']).toHaveLength(3);
+  }
+
+  const fail = (i: number): void =>
+    call('onImgError', { currentTarget: { dataset: { index: String(i) } } });
+
+  /** `page.data` 是 `Record<string, unknown>`，取数组要收窄（同第 44 行 `ids()` 的写法）。 */
+  const imgFailed = (): boolean[] => page.data['imgFailed'] as boolean[];
+
+  it('🔴 第 2 张失败 → 只标第 2 张，第 1 / 第 3 张不受影响', async () => {
+    await enterWithSlides();
+    fail(1);
+    expect(imgFailed()[1]).toBe(true);
+    expect(imgFailed()[0]).toBeFalsy();
+    expect(imgFailed()[2]).toBeFalsy();
+  });
+
+  it('同一张连报几次 → 标记不变（不反复重渲轮播）', async () => {
+    await enterWithSlides();
+    fail(0);
+    const first = page.data['imgFailed'];
+    fail(0);
+    expect(page.data['imgFailed']).toBe(first);
+  });
+
+  it('重取 /home（下拉刷新）→ 失败标记清回空（换过图要能重新显示）', async () => {
+    // onPullDownRefresh 收尾会调宿主的 stopPullDownRefresh（index.js:181）；
+    // 本用例只关心 imgFailed 是否清空，stub 掉它避免 Promise.all 之后炸在 wx 宿主上（同 line 481 的写法）。
+    vi.stubGlobal('wx', { stopPullDownRefresh: () => {} });
+    await enterWithSlides();
+    fail(0);
+    expect(imgFailed()[0]).toBe(true);
+    void call<Promise<void>>('onPullDownRefresh');
+    await settle();
+    homeCalls[1]!.d.resolve({ banners: BANNERS, categories: [] });
+    calls[1]!.d.resolve(listOf('all', 1));
+    await settle();
+    expect(page.data['imgFailed']).toEqual([]);
+  });
+
+  it('模板：轮播 <image> 带 binderror，且 wx:if 是按张的失败标记（不是整页一个布尔值）', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8').replace(
+      /<!--[\s\S]*?-->/g,
+      '',
+    );
+    const loop = wxml.slice(wxml.indexOf('wx:for="{{slides}}"'), wxml.indexOf('</swiper-item>'));
+    expect(loop).toMatch(/binderror="onImgError"/);
+    expect(loop).toMatch(/wx:if="\{\{!imgFailed\[index\]\}\}"/);
+    expect(loop).toMatch(/data-index="\{\{index\}\}"/);
+  });
+});

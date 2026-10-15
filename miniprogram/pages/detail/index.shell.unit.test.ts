@@ -3,7 +3,7 @@
  * @see ../../../test/helpers/mp-page.ts；./index.js；./index.vm.js `buyBarView`
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
+import { deferred, loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
 import { createCartStore } from '../../utils/cart-store.js';
 
@@ -259,5 +259,88 @@ describe('商品详情：页面已卸载后不再 setData', () => {
     (resolveSupport as unknown as (v: unknown) => void)({ email: 'a@b.c' });
     await settle();
     expect(p.data['support']).toEqual([]);
+  });
+});
+
+// 审计 BUG-004：详情页 `load()` 既不领号也不判存活——
+//   ① 慢请求回来时页面可能已 onUnload，setData 打在已销毁的实例上；
+//   ② 并发的两次取数（首次 + 错误态重试）里，先发的慢响应会盖掉后发的新结果。
+describe('商品详情：取详情的存活与乱序（审计 BUG-004）', () => {
+  /** 两件像真的商品：靠标题分辨落到页面上的是哪一份响应。 */
+  const OLD = {
+    id: 'p-old',
+    title: '南部铁器 急须',
+    price_jpy: 12_800,
+    stock: 2,
+    images: [],
+    category: 'kitchen',
+  };
+  const NEW = {
+    id: 'p-new',
+    title: '堺孝行 牛刀 210mm',
+    price_jpy: 18_700,
+    stock: 4,
+    images: [],
+    category: 'kitchen',
+  };
+
+  /**
+   * 取详情的请求**不自动回来**：每发一次就入队一个 deferred，由用例决定谁先兑现——
+   * 这才是"慢请求晚返回"这个条件（用真实延时只能是 sleep，用例会又慢又脆）。
+   */
+  async function openHeld(): Promise<{
+    p: LoadedPage;
+    pending: Array<ReturnType<typeof deferred<unknown>>>;
+  }> {
+    const pending: Array<ReturnType<typeof deferred<unknown>>> = [];
+    vi.stubGlobal('wx', { navigateTo: () => undefined, switchTab: () => undefined });
+    const p = await loadPage(new URL('./index.js', import.meta.url).href, {
+      globalData: {
+        apiBase: 'http://api.test',
+        cart,
+        api: (req: { url: string }) => {
+          if (req.url.includes('/products?')) return Promise.resolve({ items: [] });
+          if (req.url.endsWith('/support')) return Promise.resolve({});
+          const d = deferred<unknown>();
+          pending.push(d);
+          return d.promise;
+        },
+      },
+    });
+    return { p, pending };
+  }
+
+  /** 当前渲染的是哪件商品（null = 还没渲染）。 */
+  const title = (p: LoadedPage): string =>
+    (p.data['product'] as { title: string } | null)?.title ?? '';
+
+  it('🔴 取详情在途时离开页面 → 结果晚回来也不 setData', async () => {
+    const { p, pending } = await openHeld();
+    (p['onLoad'] as (o: unknown) => void)({ id: 'p-old' });
+    await settle();
+    expect(pending).toHaveLength(1);
+    (p['onUnload'] as () => void)();
+    (pending[0] as { resolve: (v: unknown) => void }).resolve(OLD);
+    await settle();
+    expect(p.data['product']).toBeNull();
+    // loading 仍是 true 正是断言的一部分：连 finally 都没跑 ⇒ 这一次返回什么都没写到页面上
+    expect(p.data['loading']).toBe(true);
+  });
+
+  it('🔴 重试后先发的慢响应晚到 → 不覆盖后发的新结果', async () => {
+    const { p, pending } = await openHeld();
+    (p['onLoad'] as (o: unknown) => void)({ id: 'p-old' });
+    await settle();
+    // 首次取数还在途（弱网），用户点了错误态的「重试」→ 第二次取数
+    void (p['load'] as () => Promise<void>)();
+    await settle();
+    expect(pending).toHaveLength(2);
+    (pending[1] as { resolve: (v: unknown) => void }).resolve(NEW); // 后发的先回来
+    await settle();
+    expect(title(p)).toBe('堺孝行 牛刀 210mm');
+    (pending[0] as { resolve: (v: unknown) => void }).resolve(OLD); // 先发的慢响应晚到
+    await settle();
+    expect(title(p)).toBe('堺孝行 牛刀 210mm');
+    expect(p.data['loading']).toBe(false);
   });
 });

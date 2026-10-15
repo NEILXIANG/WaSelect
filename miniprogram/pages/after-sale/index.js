@@ -36,6 +36,14 @@ Page({
     saveError: '',
     saveErrorRef: '',
     submitting: false,
+    /**
+     * 审计 UX-004：顶部那张商品图加载失败了（CDN 404 / 域名未登记）。
+     * @why 本页只有这一张图，所以是**单个布尔值**而不是按项标记
+     *      （列表场景才需要按项，@see ../order-detail/index.js `imgFailed`）。
+     * @limitation 不做"换了图就复位"：`brief` 是进页时从订单详情读来的一次性摘要，
+     *             本页存活期内不会再换一张，复位只是让它再破一次。
+     */
+    imgFailed: false,
   },
 
   orderId: '',
@@ -56,6 +64,11 @@ Page({
     this.setData({ brief: briefFor(app.globalData.afterSaleBrief, this.orderId) });
     app.globalData.afterSaleBrief = null;
     if (this.orderId === '') this.setData({ error: '没有找到要申请售后的订单，请从订单详情进入' });
+  },
+
+  /** 顶部商品图加载失败（审计 UX-004）→ 按"无图"渲染，不留破图。 */
+  onImgError() {
+    this.setData({ imgFailed: true });
   },
 
   onBack() {
