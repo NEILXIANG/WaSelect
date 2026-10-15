@@ -98,8 +98,9 @@ function clipChars(s, max) {
  * @param {unknown} items 契约 `OrderSummary[]`
  * @param {number} [nowMs] 当前时刻（判付款截止，MP-14）；不传 = 不判（时间由入参给，vm 不读时钟）
  * @returns {Array<{orderId: string, orderNo: string, totalJpy: number|null, totalText: string,
- *                  totalSub: string, statusText: string, nextText: string, canPay: boolean,
- *                  createdText: string, thumb: string, itemCountText: string, titleText: string}>}
+ *                  totalSub: string, totalLabel: string, statusText: string, nextText: string,
+ *                  canPay: boolean, createdText: string, thumb: string, itemCountText: string,
+ *                  titleText: string}>}
  * @why M-11（AJ-408）：行里补下单时间（找单靠它）、首件缩略图与件数（契约 0.6.49 `OrderListItem`）。
  *      时间走 `jstDateTimeLabeled`（纯整数换算，不读时钟；带"（日本时间）"，同详情页 MP3-02 口径），
  *      解析不了给空串——列表行不回落原串（详情页才是"数据不能丢"的地方，列表行宁缺不错）。
@@ -131,6 +132,18 @@ export function orderRows(items, nowMs = undefined) {
         totalJpy: hasTotal ? o.total_jpy : null,
         totalText: hasTotal ? formatJpy(o.total_jpy) : '',
         totalSub: displaySubLine(o.display),
+        /**
+         * 金额标签（体验审查 2026-10-15，P3-2）：与订单详情 `totalLabel` 同口径——
+         * 只有还能付的单叫「应付合计」，其余一律「订单合计」。
+         * @why 列表原先写死「合计」，是购物车 / 结算页 / 支付页都已按 P3-2 统一后
+         *      **唯一剩下的离群值**：同一笔钱在四个页面里四种叫法。
+         * @why 已付款 / 退款中 / 已退款的单写「应付」会被读成"还要再付这么多"（W-04，
+         *      详情页 totalLabel 同一条理由）。
+         * @why 不判 `confirming`（详情页有、这里没有）：列表不知道"买家刚付过款"这件事
+         *      （那是支付页 justPaid 才知道的），本页进屏靠 `ordersChanged` 重取，
+         *      不存在"本地仍是可付态但其实已付"的窗口。
+         */
+        totalLabel: PAYABLE.includes(status) && !expired ? '应付合计' : '订单合计',
         // ⚠️ 不在词表里的状态给 '状态未知' 而不是空串：
         //    空串在真机上就是一个空白的标签，用户无法区分"没状态"和"渲染错了"
         // AJ-500：拒付期间说"付款争议处理中 / 货款已由银行退回"，不再说"日本采购中"

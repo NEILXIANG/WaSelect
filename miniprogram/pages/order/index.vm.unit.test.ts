@@ -10,6 +10,7 @@
  *    （含与契约的双向比对）**跟着真源一起搬走了**——这里只剩列表行的集成断言，
  *    不重复测词表本身（只搬代码不搬测试 = 守护静默消失；搬了就只留一份）。
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { STATUS_LABELS, buyerStatus } from '../../utils/order-status.js';
 import { emptyState, orderRows, tabsView } from './index.vm.js';
@@ -43,6 +44,7 @@ describe('orderRows（列表行）', () => {
       totalJpy: 9150,
       totalText: '9,150 日元',
       totalSub: '≈ $62.20 · ≈ 人民币 ¥448.00',
+      totalLabel: '应付合计',
       statusText: '待付款',
       nextText: buyerStatus('created', { inList: true }).next,
       canPay: true,
@@ -318,5 +320,72 @@ describe('列表「继续支付」看付款截止（MP-14，第二轮审计 2026
     const [r] = orderRows([{ ...ROW, status: 'paid' }], DEADLINE + 60_000);
     expect(r?.canPay).toBe(false);
     expect(r?.nextText).not.toContain('支付时间已到');
+  });
+});
+
+/**
+ * 金额标签（体验审查 2026-10-15，P3-2）。
+ *
+ * @why 这是**钱**的标签：写错的表现是"已退款的单显示应付合计"，买家会以为还得再付一次
+ *      （W-04，与订单详情 `totalLabel` 同一条理由）。所以十态逐一钉，不是只挑两个。
+ */
+describe('orderRows：金额标签（体验审查 2026-10-15，P3-2）', () => {
+  const LABELS: Array<[string, string]> = [
+    ['created', '应付合计'],
+    ['pending_payment', '应付合计'],
+    ['paid', '订单合计'],
+    ['shipped', '订单合计'],
+    ['delivered', '订单合计'],
+    ['completed', '订单合计'],
+    ['cancelled', '订单合计'],
+    ['expired', '订单合计'],
+    ['refunding', '订单合计'],
+    ['refunded', '订单合计'],
+  ];
+
+  it('🔴 只有还能付的两态叫「应付合计」，其余八态一律「订单合计」（与订单详情同口径）', () => {
+    for (const [status, label] of LABELS) {
+      expect(orderRows([{ order_id: 'o-1', status }])[0]?.totalLabel, status).toBe(label);
+    }
+  });
+
+  // 契约 0.6.52：部分退款的单状态仍是 paid / shipped / delivered，退满后才转 refunding / refunded
+  it('🔴 部分退款 / 已退款的单不叫「应付」（退款已经发生了，"应付"会被读成还要再付）', () => {
+    for (const status of ['paid', 'shipped', 'delivered', 'refunding', 'refunded']) {
+      expect(orderRows([{ order_id: 'o-1', status }])[0]?.totalLabel, status).toBe('订单合计');
+    }
+  });
+
+  it('🔴 拒付中的单（payment_dispute=open，状态仍是 paid）也不叫「应付」：钱早就付过了', () => {
+    const [r] = orderRows([{ order_id: 'o-1', status: 'paid', payment_dispute: 'open' }]);
+    expect(r?.totalLabel).toBe('订单合计');
+  });
+
+  it('⚠️ 截止已到的待付款单（关单作业还没跑）→ 不叫「应付合计」（与详情页 expired 同口径）', () => {
+    const [r] = orderRows(
+      [{ order_id: 'o-1', status: 'created', expires_at: '2026-10-10T03:00:00.000Z' }],
+      Date.parse('2026-10-10T03:00:00.000Z'),
+    );
+    expect(r?.totalLabel).toBe('订单合计');
+    // 不传时刻 → 不判截止（vm 不读时钟），照常「应付合计」
+    expect(orderRows([{ order_id: 'o-1', status: 'created' }])[0]?.totalLabel).toBe('应付合计');
+  });
+
+  it('⚠️ 认不出的状态 / 缺状态 → 「订单合计」（保守那一侧：不承诺"还能付"）', () => {
+    expect(orderRows([{ order_id: 'x' }])[0]?.totalLabel).toBe('订单合计');
+    expect(orderRows([{ order_id: 'x', status: 'brand_new' }])[0]?.totalLabel).toBe('订单合计');
+  });
+
+  /**
+   * 字段造出来却没接进模板，等于没造——P3-2 里"订单列表「合计」"这个离群值就是这么来的：
+   * 标签当初是模板里的字面量，购物车 / 结算页 / 支付页改了，它没跟上。
+   */
+  it('🔴 标签真的接进了模板：wxml 用 {{item.totalLabel}}，模板里不再写死「合计」', () => {
+    const wxml = readFileSync(new URL('./index.wxml', import.meta.url), 'utf8').replace(
+      /<!--[\s\S]*?-->/g,
+      '',
+    );
+    expect(wxml).toContain('<text class="ws-note">{{item.totalLabel}}</text>');
+    expect(wxml).not.toContain('>合计<');
   });
 });

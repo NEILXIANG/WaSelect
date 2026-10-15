@@ -67,7 +67,10 @@
       <view class="order-card__body">
         <view class="order-card__thumb">
           <view class="ws-media ws-media--square">
-            <image class="ws-media__img" src="{{item.thumb}}" mode="aspectFill" lazy-load webp="{{true}}" />
+            <!-- 审计 UX-004：首件缩略图加载失败 → 收起这一行的 `<image>`，留 `.ws-media` 的底色。
+                 @why 失败标记**按行**记（`imgFailed[index]`）：订单行在 `wx:for` 里，
+                      整页共用一个布尔值时第一单的坏图会把**整页订单**的缩略图全部收起。 -->
+            <image wx:if="{{!imgFailed[index]}}" class="ws-media__img" src="{{item.thumb}}" mode="aspectFill" lazy-load webp="{{true}}" data-index="{{index}}" binderror="onImgError" />
           </view>
         </view>
         <view class="order-card__meta">
@@ -81,7 +84,11 @@
       <text class="ws-caption order-card__next" wx:if="{{item.nextText}}">{{item.nextText}}</text>
 
       <view class="order-card__amount">
-        <text class="ws-note">合计</text>
+        <!--
+          体验审查 2026-10-15（P3-2）：标签取 vm 的 totalLabel，不再写死「合计」
+          ——还能付的单「应付合计」、其余「订单合计」，与购物车 / 结算页 / 支付页同一个词。
+        -->
+        <text class="ws-note">{{item.totalLabel}}</text>
         <ws-price wx:if="{{item.totalJpy !== null}}" jpy="{{item.totalJpy}}" />
       </view>
       <text class="ws-caption" wx:if="{{item.totalSub}}">{{item.totalSub}}</text>
