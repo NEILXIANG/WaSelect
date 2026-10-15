@@ -29,6 +29,9 @@ import { setActiveTab, setCartBadge } from '../../utils/tabs.js';
 import { supportRows } from '../../utils/support.js';
 import { track } from '../../utils/beacon.js';
 import { newTraceId } from '../../utils/trace.js';
+// UX-008（AJ-561）：本页有两个取数槽位（客服 / 订单角标），同一个槽位连着发时只接受最后一次的结果。
+// @why 与另外七页同一套判据（`utils/request-seq.js`），不在这里另立一份。
+import { isStale, nextSeq } from '../../utils/request-seq.js';
 
 const app = getApp();
 
@@ -83,9 +86,28 @@ Page({
     shortcuts: orderShortcuts(undefined),
   },
 
+  /**
+   * 页面是否还活着（UX-008 / AJ-561）：`onUnload` 置 false。
+   * @limitation 只挡"异步回来时页面已销毁"，**不是**两个序号的替代品：
+   *             序号管同一槽位两份响应谁算新，`alive` 管这一页还在不在
+   *             （@see ../pay/index.js `alive` 的 @limitation，同口径）。
+   */
+  alive: true,
+  /**
+   * 客服请求的序号（UX-008 / AJ-561）。
+   * @why **与角标各用一个序号，不共用**：这是两个独立数据源，各自只有自己的响应能推进自己的视图。
+   *      共用一个的后果是"重取客服"会把**在途的角标响应**判成过期——一次下拉刷新（两条同时发）
+   *      就可能让角标永远停在旧值，而角标恰恰是这一页最需要跟上的数（下单 / 付款后要变）。
+   *      @tradeoff 多一个计数器换来的是"两个数据源互不干扰"，代价只是多一行状态。
+   */
+  supportSeq: 0,
+  /** 订单角标请求的序号（UX-008 / AJ-561）；与 `supportSeq` 分开的理由见上。 */
+  badgeSeq: 0,
+
   onShow() {
     // 独立审查 2026-10-13 【3】：本页原先没有页面级 trace，角标 / 客服两条请求在服务端日志里是孤链
     this.traceId = newTraceId();
+    this.alive = true;
     track(app, 'page_view', { page: 'user' }); // M-21 页面曝光
     // @see @limitation 二：token 可能在别处被刷新，每次进屏重读
     this.retryFailed = false;
@@ -114,17 +136,22 @@ Page({
    * @why 失败**静默**（同 loadSupport）：角标是辅助信息，入口本身照常可点。
    */
   async loadOrderBadges() {
+    const seq = (this.badgeSeq = nextSeq(this.badgeSeq));
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/orders/counts`,
         traceId: this.traceId,
       });
+      if (isStale(seq, this.badgeSeq) || !this.alive) return;
       this.setData({ shortcuts: orderShortcuts(res) });
     } catch {
+      if (isStale(seq, this.badgeSeq) || !this.alive) return;
       this.setData({ shortcuts: orderShortcuts(undefined) });
     }
     // 这次请求可能触发了 40101 静默重登：登录态以请求之后的 globalData 为准（审查 2026-10-09）
-    this.renderLogin();
+    // ⚠️ 这一句**不**跟着序号一起跳：它读的是此刻的 globalData，不是这份响应；
+    //    过期的角标响应不该连带把"登录态刚被重登刷新"这个事实也一起丢掉。只挡页面已销毁。
+    if (this.alive) this.renderLogin();
   },
 
   /**
@@ -176,6 +203,10 @@ Page({
 
   onUnload() {
     this.stopWatchLogin();
+    this.alive = false;
+    // 与 ../order-detail/index.js 同口径：把两个序号都推到新值，在途响应回来一律判为过期
+    this.supportSeq = nextSeq(this.supportSeq);
+    this.badgeSeq = nextSeq(this.badgeSeq);
   },
 
   /** 本页重试在途（M-17；不进 data：渲染态由 `retry` 表达）。 */
@@ -222,11 +253,13 @@ Page({
    *      而失败时显示旧值也无妨——联系方式不是会过期的数据。
    */
   async loadSupport() {
+    const seq = (this.supportSeq = nextSeq(this.supportSeq));
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/support`,
         traceId: this.traceId,
       });
+      if (isStale(seq, this.supportSeq) || !this.alive) return;
       this.setData({ support: supportRows(res), supportLoaded: true });
     } catch {
       // 静默：见上

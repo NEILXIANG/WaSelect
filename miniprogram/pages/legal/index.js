@@ -32,6 +32,9 @@ import { errorFields } from '../../utils/error-text.js';
 import { copyFailText } from '../../utils/privacy.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+// UX-008（AJ-556）：同一个"条款槽位"连续发请求时只接受最后一次的结果。
+// @why 与另外六页同一套判据（`utils/request-seq.js`），不在这里另立一份。
+import { isStale, nextSeq } from '../../utils/request-seq.js';
 
 const app = getApp();
 
@@ -60,9 +63,29 @@ Page({
   },
 
   traceId: '',
+  /**
+   * 页面是否还活着（UX-008 / AJ-556）：`onUnload` 置 false。
+   * @limitation 只挡"异步回来时页面已销毁"，**不是** `loadSeq` 的替代品：
+   *             后者管同一页两份响应谁算新，`alive` 管这一页还在不在
+   *             （@see ../pay/index.js `alive` 的 @limitation，同口径）。
+   */
+  alive: true,
+  /**
+   * 取数序号（UX-008 / AJ-556）：本页 `onShow` 每次进屏都重取（条款版本会变），
+   * 快速退出再进屏会并发两个 `load`——先发后到的旧响应会把**旧版本号**盖回去，
+   * 而用户是从结算页"同意条款"跳过来的，看到的就是他刚同意的那一版之外的版本。
+   */
+  loadSeq: 0,
 
   onLoad() {
     this.traceId = newTraceId();
+    this.alive = true;
+  },
+
+  onUnload() {
+    this.alive = false;
+    // 与 ../order-detail/index.js 同口径：把序号推到新值，在途响应回来一律判为过期
+    this.loadSeq = nextSeq(this.loadSeq);
   },
 
   onShow() {
@@ -71,6 +94,7 @@ Page({
 
   /** 取 `GET /terms`。失败**清空链接**并明示错误（留旧链接 = 给用户一个可能已经失效的地址）。 */
   async load() {
+    const seq = (this.loadSeq = nextSeq(this.loadSeq));
     // 重试时立刻进入"加载中"并收起旧错误（审查 2026-10-09）：页面渲染看的是 `state`，
     //   只设 loading 的话失败块原样挂到请求返回，"重试"看起来像没反应
     this.setData({
@@ -84,6 +108,7 @@ Page({
         url: `${app.globalData.apiBase}/api/v1/terms`,
         traceId: this.traceId,
       });
+      if (isStale(seq, this.loadSeq) || !this.alive) return;
       const view = termsView(res);
       const docs = documentsView(res);
       this.setData({
@@ -96,6 +121,7 @@ Page({
         state: legalState({ loading: false, langCount: docs.length + view.langs.length }),
       });
     } catch (e) {
+      if (isStale(seq, this.loadSeq) || !this.alive) return;
       this.setData({
         version: '',
         langs: [],
@@ -105,7 +131,7 @@ Page({
         state: legalState({ loading: false, langCount: 0, ...errorFields(e) }),
       });
     } finally {
-      this.setData({ loading: false });
+      if (!isStale(seq, this.loadSeq) && this.alive) this.setData({ loading: false });
     }
   },
 

@@ -3,7 +3,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
+import { deferred, loadPage, type LoadedPage } from '../../../test/helpers/mp-page.js';
 
 let page: LoadedPage;
 let urls: string[];
@@ -323,6 +323,83 @@ describe('「我的」联系客服（全入口点击测试 2026-10-11）', () =>
     expect(wxml).toMatch(
       /<text class="mine__value mine__support-value" user-select>\{\{item\.value\}\}<\/text>/,
     );
+  });
+});
+
+// UX-008（AJ-561）：本页有两个取数槽位（客服 / 订单角标），`onShow` 与下拉刷新会并发取同一个槽位——
+//   进屏那一刻立刻下拉，就会有两条 /support 与两条 /counts 同时在途，先发后到的旧响应会把新角标盖回去。
+describe('「我的」：两个取数槽位各自领号（UX-008 / AJ-561）', () => {
+  /** 起一个页面；`api` 按 url 分派给两个可手动兑现的请求。 */
+  async function openHeld(): Promise<{
+    support: Array<ReturnType<typeof deferred<unknown>>>;
+    counts: Array<ReturnType<typeof deferred<unknown>>>;
+  }> {
+    const support: Array<ReturnType<typeof deferred<unknown>>> = [];
+    const counts: Array<ReturnType<typeof deferred<unknown>>> = [];
+    vi.stubGlobal('wx', {
+      navigateTo: () => undefined,
+      switchTab: () => undefined,
+      stopPullDownRefresh: () => undefined,
+    });
+    page = await loadPage(new URL('./index.js', import.meta.url).href, {
+      globalData: {
+        apiBase: 'http://api.test',
+        token: 't',
+        orderTab: '',
+        api: (req: { url?: string }) => {
+          const d = deferred<unknown>();
+          if (String(req.url).endsWith('/api/v1/support')) support.push(d);
+          else counts.push(d);
+          return d.promise;
+        },
+      },
+    });
+    return { support, counts };
+  }
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  };
+  const badges = (): string[] =>
+    (page.data['shortcuts'] as Array<{ badge: string }>).map((s) => s.badge);
+
+  it('🔴 角标：先发的慢响应回来时不覆盖后发的快响应', async () => {
+    const { counts } = await openHeld();
+    (page['onShow'] as () => void)();
+    await settle();
+    void (page['onPullDownRefresh'] as () => Promise<void>)();
+    await settle();
+    expect(counts).toHaveLength(2);
+    counts[1]?.resolve({ unpaid: 3, to_ship: 0, shipped: 0, after_sale: 0 });
+    await settle();
+    expect(badges()).toEqual(['3', '', '', '']);
+    counts[0]?.resolve({ unpaid: 1, to_ship: 1, shipped: 0, after_sale: 0 });
+    await settle();
+    expect(badges()).toEqual(['3', '', '', '']); // 旧响应被丢
+  });
+
+  it('🔴 客服：重取客服**不会**把在途的角标响应判成过期（两个槽位各用一个序号）', async () => {
+    const { support, counts } = await openHeld();
+    (page['onShow'] as () => void)();
+    await settle();
+    // 只重取客服：角标那一次还在途，它的序号不该被 support 的新号带成过期
+    void (page['loadSupport'] as () => Promise<void>)();
+    await settle();
+    expect(support).toHaveLength(2);
+    counts[0]?.resolve({ unpaid: 2, to_ship: 0, shipped: 0, after_sale: 0 });
+    await settle();
+    expect(badges()).toEqual(['2', '', '', '']);
+  });
+
+  it('🔴 页面已销毁（onUnload）→ 两条在途响应回来都不改页面', async () => {
+    const { support, counts } = await openHeld();
+    (page['onShow'] as () => void)();
+    await settle();
+    (page['onUnload'] as () => void)();
+    support[0]?.resolve({ wechat: 'waselect_cs' });
+    counts[0]?.resolve({ unpaid: 5, to_ship: 0, shipped: 0, after_sale: 0 });
+    await settle();
+    expect(page.data['support']).toEqual([]);
+    expect(badges()).toEqual(['', '', '', '']);
   });
 });
 

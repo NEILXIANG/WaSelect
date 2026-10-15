@@ -25,6 +25,9 @@ import { formModel, toAddressInput } from '../../utils/address-form.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
+// UX-008（AJ-556）：同一个"列表槽位"连续发请求时只接受最后一次的结果。
+// @why 与另外六页同一套判据（`utils/request-seq.js`），不在这里另立一份。
+import { isStale, nextSeq } from '../../utils/request-seq.js';
 
 const app = getApp();
 
@@ -62,12 +65,34 @@ Page({
    * 最终默认地址可能不是最后点的那个，结算页随之预选错地址。有在途就忽略后续点击，wxml 把那一行写成「处理中…」。
    */
   busyId: '',
+  /**
+   * 页面是否还活着（UX-008 / AJ-556）：`onUnload` 置 false。
+   * @why 删完地址去编辑页、再从编辑页按返回直接退出整条栈是常有的事；
+   *      那时在途的列表请求回来仍会 `setData`（`wx` 侧只会在控制台留一行指向 setData 的报错，
+   *      排查方向会被引偏）。@see ../pay/index.js `alive` 的 @limitation：
+   *      它只挡"异步回来时页面已销毁"，**不是** `loadSeq` 的替代品——
+   *      `loadSeq` 管同一页两份响应谁算新，`alive` 管这一页还在不在。
+   */
+  alive: true,
+  /**
+   * 取数序号（UX-008 / AJ-556）：`onShow` 与"删除 / 设默认后的重取"会并发 `load`，
+   * 先发后到的旧响应会把新列表盖回去（例如删完重取拿到了新列表，随后一条在途的旧响应
+   * 又把已删地址画出来）。
+   */
+  loadSeq: 0,
 
   /** @param {{pick?: string}} options `?pick=1` = 选择模式 */
   onLoad(options) {
     this.traceId = newTraceId();
     this.busyId = '';
+    this.alive = true;
     this.setData({ pick: options?.pick === '1' });
+  },
+
+  onUnload() {
+    this.alive = false;
+    // 与 ../order-detail/index.js 同口径：把序号推到新值，在途响应回来一律判为过期
+    this.loadSeq = nextSeq(this.loadSeq);
   },
 
   /**
@@ -86,14 +111,23 @@ Page({
     void this.load();
   },
 
-  /** 取地址列表。失败**清空列表**并明示错误（留旧数据 = 显示已删掉的地址）。 */
+  /**
+   * 取地址列表。失败**清空列表**并明示错误（留旧数据 = 显示已删掉的地址）。
+   *
+   * @why 领号（UX-008 / AJ-556）：删除 / 设默认成功后都会 `await this.load()`，而那时
+   *      `onShow` 发起的那一次可能还在途——先发后到会把已经删掉的地址再画回来。
+   *      ⚠️ 序号**不会**误伤"删除后重取"这条路：那次 `load()` 是在删除响应**之后**才领号，
+   *      它一定是当时最新的号（@see `removeAddress` / `onSetDefault` 末尾 `await this.load()` 处的注释）。
+   */
   async load() {
+    const seq = (this.loadSeq = nextSeq(this.loadSeq));
     this.setData({ loading: true });
     try {
       const res = await app.globalData.api({
         url: `${app.globalData.apiBase}/api/v1/addresses`,
         traceId: this.traceId,
       });
+      if (isStale(seq, this.loadSeq) || !this.alive) return;
       const list = Array.isArray(res) ? res : [];
       this.rawList = list;
       const rows = addressRows(list);
@@ -105,6 +139,7 @@ Page({
         empty: emptyState(rows, '').showEmpty,
       });
     } catch (e) {
+      if (isStale(seq, this.loadSeq) || !this.alive) return;
       this.rawList = [];
       this.setData({
         rows: [],
@@ -114,7 +149,7 @@ Page({
         empty: false,
       });
     } finally {
-      this.setData({ loading: false });
+      if (!isStale(seq, this.loadSeq) && this.alive) this.setData({ loading: false });
     }
   },
 
@@ -132,7 +167,12 @@ Page({
     void this.load();
   },
 
-  /** 新增（不带 id = 新增态）。 */
+  /**
+   * 新增（不带 id = 新增态）。
+   * @why 不再另加一层连点守卫（`acceptAddTap`）：`utils/wx-api.ts` 的 ITX-01 已在共享层
+   *      对"同一地址 600ms 内只跳一次"做了统一拦截，这里再加一份就是同一条规则的第二份实现
+   *      （约束九 / H7）。真机上双击「新增地址」只进一次编辑页，已由 ITX-01 保证。
+   */
   onAdd() {
     wxApi.navigateTo({ url: EDIT_PAGE });
   },
@@ -180,6 +220,8 @@ Page({
       this.busyId = '';
       this.setData({ busyId: '' });
     }
+    // ⚠️ 这里的重取**必须**照常生效（UX-008 / AJ-556 的回归点）：它此刻才领号，
+    //    序号一定是最新的，不会被判成过期；若把领号提到 `removeAddress` 开头就会反过来。
     await this.load();
   },
 
