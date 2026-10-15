@@ -322,6 +322,8 @@ describe('订单列表：进屏按需重取（体验审查 2026-10-15，P1-2）'
     gd['api'] = async (req: { url: string }) => {
       const url = req.url.replace('http://api.test', '');
       calls.push(`GET ${url}`);
+      // 与默认 api 同口径：分页夹具也要认 fail（否则"翻到第 2 页之后再失败"这条路径造不出来）
+      if (fail) throw Object.assign(new Error('网络请求失败'), { code: -1 });
       if (url.includes('page=1&'))
         return { items: Array.from({ length: 20 }, (_, i) => row(i)), total: 25 };
       return { items: Array.from({ length: 5 }, (_, i) => row(20 + i)), total: 25 };
@@ -363,7 +365,7 @@ describe('订单列表：进屏按需重取（体验审查 2026-10-15，P1-2）'
     expect(calls).toEqual([]);
   });
 
-  it('🔴 取失败（page 不推进）→ 下次进屏自动再取，不把用户留在错误态里', async () => {
+  it('🔴 取失败（page 复位到 0）→ 下次进屏自动再取，不把用户留在错误态里', async () => {
     fail = true;
     (page['onShow'] as () => void)();
     await settle();
@@ -374,6 +376,27 @@ describe('订单列表：进屏按需重取（体验审查 2026-10-15，P1-2）'
     await settle();
     expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20']);
     expect(page.data['error']).toBe('');
+  });
+
+  /**
+   * BUG-003（全量审计 2026-10-14）：上面那条只覆盖了"从没成功过"这一种失败。
+   * 首次成功之后 page 就 ≥1 了，而取失败**不复位**它——于是"翻到第 2 页 → 下拉刷新断了
+   * → 切 tab 走 → 切回来"这条最常见的路径上，三条判据全落空，列表永久停在错误态。
+   */
+  it('🔴 已经翻到第 2 页之后再取失败 → 切走再切回仍然重取（失败把游标复位，不只是首屏能自愈）', async () => {
+    await loadedTwoPages();
+    fail = true;
+    await call<Promise<void>>('onPullDownRefresh');
+    expect(page.data['rows']).toEqual([]);
+    expect(String(page.data['error'])).not.toBe('');
+    // 切走（tab 页只是不再进 onShow）再切回
+    calls = [];
+    fail = false;
+    (page['onShow'] as () => void)();
+    await settle();
+    expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20']);
+    expect(page.data['error']).toBe('');
+    expect(page.data['rows']).toHaveLength(20);
   });
 
   it('🔴 下拉刷新不受"按需"影响：仍然无条件重取并回到第 1 页', async () => {

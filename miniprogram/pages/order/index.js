@@ -127,7 +127,7 @@ Page({
       app.globalData.ordersChanged = false;
       need = true;
     }
-    // 从没成功取过：首屏，或上次取失败（失败不推进 this.page）——下次进屏要能自己恢复
+    // 从没成功取过：首屏，或上次取失败（失败时 load 的 catch 把游标复位）——下次进屏要能自己恢复
     if (this.page === 0) need = true;
     if (need) void this.load();
     // S5：注入底部 tabBar 的高亮（本页是第 2 个 tab）。
@@ -177,6 +177,16 @@ Page({
       });
     } catch (e) {
       if (isStale(seq, this.seq)) return;
+      // 取失败 → 分页游标三个一起复位（@see onShow 判据③）。
+      // @why 列表刚被清空，游标却还说"已加载到第 1 页"：这个自相矛盾的状态会让三条判据
+      //      全部落空——**首次成功之后**再失败（比如翻到第 2 页后下拉刷新网络断了），
+      //      切走 tab 再切回来就再也不重取，列表永久停在这个错误态，只能杀掉小程序。
+      //      不复位的话，只有"从没成功过"那一条路能自愈，而那恰恰是失败最少的路径。
+      // @why 不另立"上次失败了"标志位：那是给同一件事两份状态，漏清一处就原样复发；
+      //      游标复位后它自己就是那个标志——页上是空的，游标就该是 0。
+      this.page = 0;
+      this.loaded = 0;
+      this.total = 0;
       this.setData({
         rows: [],
         hasMore: false,
