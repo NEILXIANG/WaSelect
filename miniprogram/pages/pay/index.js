@@ -54,6 +54,7 @@ import { track } from '../../utils/beacon.js';
 import {
   EXPIRED_CLOSED_TEXT,
   PAY_FAIL_TEXT,
+  EMPTY_GUIDE,
   abandonOnLeave,
   afterIntent,
   cashierAbandonReason,
@@ -145,6 +146,17 @@ Page({
   /** 上一次发起支付用的通道（空串 = 还没发起过）。 */
   lastChannel: '',
   traceId: '',
+  /**
+   * 页面是否还活着（全量审计 BUG-002）：`onUnload` 置 false。
+   * @why 发起支付最长要等 6s（@see @limitation 五），这段时间里用户可能已经按返回离开了这一页；
+   *      响应回来时页面实例已销毁：这里的 `setData` 是打在空壳上，而按 `payPlan` 执行下一步更糟——
+   *      重新拉起微信收银台、或直接把已经离开的用户 `redirectTo` 到订单详情。
+   *      与结算页 P2-36 同一条口径（那里挡的是"把走掉的人拽进支付页"）。
+   * @limitation 只挡"异步回来时页面已销毁"，**不是** `loadSeq` 的替代品：
+   *      后者管的是同一页两份响应谁才算新，`alive` 管的是这一页还在不在。
+   */
+  alive: true,
+
   /** 是否已经取过一次数（`onShow` 的刷新只对"第二次及以后"生效，避免进页面取两遍）。 */
   loaded: false,
   /** 浏览器付款后"确认中"的重查次数与定时器（W-02）。 */
@@ -158,6 +170,7 @@ Page({
 
   /** @param {{orderId?: string}} options 结算页带来的 `?orderId=…` */
   onLoad(options) {
+    this.alive = true;
     this.traceId = newTraceId();
     this.intentKey = createIntentIdempotency();
     this.orderId = typeof options?.orderId === 'string' ? options.orderId : '';
@@ -190,6 +203,15 @@ Page({
       errorTitle: '',
       copyFailed: false,
       noChannel: false,
+      // 全量审计 BUG-005：上一次取到的**内容**也要清，只清错误不够——
+      //   通道 / 提示条 / 短链 / 引导 / 倒计时残留时，这一趟若是取失败了，
+      //   屏幕上就是"一条报错"紧挨着"上一次还能点的付款入口"：看着像这一趟成功了、红字是别处的。
+      //   （`notice` 与 `channels` 由同一次 `chargeOptions` 产出，必须一起清。）
+      channels: [],
+      notice: [],
+      payUrl: '',
+      guide: { ...EMPTY_GUIDE },
+      countdown: '',
     });
     // ⚠️ 领号（MP3-07）：连续两次切前后台会并发两个 load，
     //    旧的那个若后到，会把"该订单已付款"旁边的支付方式**盖回去**——
@@ -217,7 +239,18 @@ Page({
       this.expiresAt = order?.expires_at;
       this.startCountdown();
       if (total === null) {
-        this.setData({ error: '订单金额还没确定，请稍后再试' });
+        // 全量审计 BUG-005：原先这里只 `setData` 一条 error 就 return，绕过整屏重置——
+        //   上一次的通道 / 短链 / 引导 / 倒计时原样留着，与"金额还没确定"这条错误同屏。
+        //   改走关闭屏那一份重置（`closedScreen`）：清场清单只有一处，不会哪天少清一样。
+        this.stopCountdown();
+        this.setData({
+          // ⚠️ 传空 view：**不是**关闭屏——这张单仍然可付（只是金额还没定），
+          //   所以 `closedText` / `goHome` 都保持为假。
+          ...closedScreen({ closedText: '', goHome: false }),
+          // 同上：`payResult` 说的仍是刚刚发生过的那次支付动作，与 load() 开头不清它同一条口径（MP3-07）
+          payResult: this.data.payResult,
+          error: '订单金额还没确定，请稍后再试',
+        });
         return;
       }
       const listings = [];
@@ -350,6 +383,8 @@ Page({
   },
 
   onUnload() {
+    // 全量审计 BUG-002：置 false（发起支付在途时离开 → 异步回来不写页面、不再执行 payPlan）
+    this.alive = false;
     // M-21：没付成就离开 = 放弃（back）；判定在 vm（abandonOnLeave）
     if (
       abandonOnLeave({
@@ -438,8 +473,14 @@ Page({
         idempotencyKey: idemKey,
         traceId: this.traceId,
       });
+      // 全量审计 BUG-002（@see alive）：等待期间用户可能已经离开这一页——
+      //   此时 `run(intent)` 会拉起收银台、或按 auto 把已经不在这一页的用户 redirectTo 到订单详情
+      if (!this.alive) return;
       this.run(intent);
     } catch (err) {
+      // 同上：页面已经卸载，"发起失败"这件事没有地方可说
+      //   （用户是自己走的，`onUnload` 已经记过 `pay_abandon: back`；此时再记 fail 是一件事记两次）
+      if (!this.alive) return;
       // 账号被拉黑（40301）：未付款订单已被取消，换关闭屏 + 联系客服，不留"重试"（联动走查 2026-10-10）
       if (contactFields(err).errorContact) {
         // 先停表（同上）：可付的单进页时已起表
@@ -450,7 +491,8 @@ Page({
       // P2-40：40902 / 40904 多半是这张单已经付了或关了——重查一次，由 payPageView 决定换不换关闭屏
       if (recheckAfterPayError(err?.code)) void this.checkStatus();
     } finally {
-      this.setData({ paying: false, payingChannel: '' });
+      // 同上：页面已卸载就不再写（原先这一步是裸 setData）
+      if (this.alive) this.setData({ paying: false, payingChannel: '' });
     }
   },
 
