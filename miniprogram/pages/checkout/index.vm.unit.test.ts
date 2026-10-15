@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  ADDRESS_LOADING_TEXT,
   BUY_NOW_MODE,
   checkoutEmptyAction,
   checkoutEmptyText,
@@ -122,6 +123,34 @@ describe('submitGate（提交闸门）', () => {
     expect(submitGate({ ...OK, splitRequired: true }).fix).toBe('');
     expect(submitGate({ ...OK, totalJpy: null }).fix).toBe('');
     expect(submitGate({ ...OK, itemCount: 0 }).fix).toBe('');
+  });
+
+  /**
+   * UX-001（体验审查 2026-10-15）：`GET /addresses` 在途时，`addressId` 必然还是空串，
+   * 而"还没回来"与"真的没有地址"此前共用同一句：**弱网下已有默认地址的买家**看见地址卡写着
+   * 「＋ 新增收货地址」、底部写着「请选择收货地址」，于是去重填一条他本来就有的地址
+   * （新增页保存成功会 navigateBack，白走一轮）。在途自成一档才说得清"还在取"。
+   */
+  it('🔴 地址在途 → 说"正在取收货地址"，⚠️ 且不给 fix（给了就是把还只有默认地址的人引去新增）', () => {
+    const g = submitGate({ ...OK, addressId: '', addressLoading: true });
+    expect(g).toEqual({ ok: false, fix: '', reason: ADDRESS_LOADING_TEXT });
+  });
+
+  it('地址到手后（哪怕在途标志还没翻）→ 按旧口径继续判，不再说"正在取"', () => {
+    // @why 这一档只为"还没有地址可显示"服务：有地址时不该被它挡住
+    expect(submitGate({ ...OK, addressLoading: true }).ok).toBe(true);
+  });
+
+  it('地址在途的排位：已失败 / 商品已下架先说（有结论且给得出去处），比"正在重算"更具体', () => {
+    const loading = { addressId: '', addressLoading: true };
+    // 上一轮已经判过"没取到"：那是结论，且指向有用的下一步
+    expect(submitGate({ ...OK, ...loading, addressFailed: true }).reason).toContain('没取到');
+    // 买不了的东西不该先让人等地址
+    expect(submitGate({ ...OK, ...loading, productGone: true, buyNow: true }).reason).toContain(
+      '下架',
+    );
+    // 两条加载态同时成立 → 说更具体的那一条（与"协议加载中排在重算之前"同一条排序纪律）
+    expect(submitGate({ ...OK, ...loading, refreshing: true }).reason).toBe(ADDRESS_LOADING_TEXT);
   });
 
   it('⚠️ 超过单笔上限（splitRequired）→ 不放行（B38 / AJ-221）', () => {
@@ -426,6 +455,11 @@ describe('防复发：结算页薄壳执行恢复动作（B37 / AJ-220）', () =
   it('闸门必须把 splitRequired 传进去（B38 / AJ-221：超上限不能放行）', () => {
     // @why vm 里那条判断再对，薄壳不传这个字段也等于没接。
     expect(code).toContain('splitRequired');
+  });
+
+  it('闸门必须把 addressLoading 传进去（UX-001：不传 = 弱网下把已有地址的人叫去新增）', () => {
+    // @why 同 splitRequired：这一档接不上的表现不是报错，是地址卡上一句**错的**引导。
+    expect(code).toContain('addressLoading');
   });
 
   it('重报价必须连带作废幂等键（价格变了 = 意图内容变了，同键会被拒）', () => {

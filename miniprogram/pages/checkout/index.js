@@ -25,6 +25,7 @@
  *      ../../utils/quote-view.js（报价区）；../../utils/address-form.js（地址摘要）
  */
 import {
+  ADDRESS_LOADING_TEXT,
   BUY_NOW_MODE,
   checkoutEmptyAction,
   checkoutEmptyText,
@@ -142,6 +143,15 @@ Page({
      * @why 円是主显示（D-32 / D-69，AJ-402 Q3），银行卡却以美元扣——此前实扣美元金额要到支付页才看到。
      */
     chargePreview: [],
+    /**
+     * UX-001（体验审查 2026-10-15）：`GET /addresses` 在途（最长 10s）。
+     * @why `data.address`（摘要）在取到之前是 null，而它同时又是"真的没有地址"的画法——
+     *      两个含义挤在一个字段上，弱网下已有默认地址的买家会看见「＋ 新增收货地址」。
+     *      在途要单独一档，地址卡与闸门才说得清"还没到"和"没有"不是一回事。
+     */
+    addressLoading: false,
+    /** 地址在途时地址卡上的那句话（vm `ADDRESS_LOADING_TEXT`；闸门同一句，同一个源头）。 */
+    addressLoadingText: ADDRESS_LOADING_TEXT,
     loading: false,
     submitting: false,
     /** 错误文案（空串 = 无错误）。 */
@@ -255,8 +265,14 @@ Page({
     this.refreshing = true;
     this.setData(
       keepError
-        ? { loading: true }
-        : { loading: true, error: '', errorContact: false, quoteBlocked: false },
+        ? { loading: true, addressLoading: true }
+        : {
+            loading: true,
+            addressLoading: true,
+            error: '',
+            errorContact: false,
+            quoteBlocked: false,
+          },
     );
     // 与上面同一个道理：默认清掉"上次是账号被拉黑"这个结论，由这两条取数各自重新下
     //   （@see fetchAddresses / fetchQuote；keepError 路径也会重取，所以不必分情况）
@@ -271,7 +287,12 @@ Page({
     if (items.length === 0) {
       this.quoteRaw = null;
       this.refreshing = false;
-      this.setData({ loading: false, quote: null, chargePreview: [] });
+      this.setData({
+        loading: false,
+        addressLoading: false,
+        quote: null,
+        chargePreview: [],
+      });
       this.updateGate(); // 同上：在途标志翻了，闸门要跟着翻
       return;
     }
@@ -378,6 +399,9 @@ Page({
         ...contactFields(e),
       });
     }
+    // UX-001：请求**结束**（拿到列表或失败）才收起在途标志——成败两条路都必须翻它，
+    //   否则"还在取"会一直挂到下一次 refresh，闸门永远说不到"没取到 / 请选择"。
+    this.setData({ addressLoading: false });
     this.updateGate();
   },
 
@@ -447,6 +471,8 @@ Page({
       quoteBlocked: this.data.quoteBlocked === true,
       addressFailed: this.data.addressFailed === true,
       addressBlocked: this.addressBlocked === true,
+      // UX-001：地址在途闸门要说"正在取收货地址…"，而不是"请选择收货地址"（@see index.vm.js）
+      addressLoading: this.data.addressLoading === true,
       productGone: this.data.productGone === true,
       // 体验审查 2026-10-15（P2-8）：重算在途也交给闸门（原先只有 `disabled … || loading` 挡着 →
       //   按钮灰着却不给原因）。@why 与 BUG-01 同一件事的两处兑现：这里管"说不说得清"，

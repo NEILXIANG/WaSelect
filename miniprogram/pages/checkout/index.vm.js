@@ -121,12 +121,24 @@ export function addressFailedText(blocked) {
 }
 
 /**
+ * 地址**正在取**时，地址卡与闸门同一句（UX-001，体验审查 2026-10-15）。
+ * @why `GET /addresses` 在途（最长 10s）时，此前只有两种画法：有摘要 / 没有摘要。
+ *      "没有摘要" 与 "真的没有地址" 共用一个分支 ⇒ 弱网下已有默认地址的买家看见
+ *      「＋ 新增收货地址」+ 底部「请选择收货地址」，被引导去重填一条他本来就有的地址
+ *      （新增页保存成功会 navigateBack，白走一轮）。在途**自成一档**才说得清是还在取。
+ * @why 这一句不给 `fix: 'address'`：给了就等于推荐用户现在去新增地址，而此刻只是慢。
+ * @see ./index.js 的 `fetchAddresses`（在途标志在那里翻）；./index.wxml 的地址卡
+ */
+export const ADDRESS_LOADING_TEXT = '正在取收货地址…';
+
+/**
  * 能否提交（按钮禁用 + 原因）。
  * @param {{itemCount: number, addressId: string, termsAccepted: boolean, totalJpy: number|null,
  *          emailError?: string, contactEmail?: string, splitRequired?: boolean,
  *          termsReady?: boolean, termsFailed?: boolean, quoteFailed?: boolean, buyNow?: boolean,
  *          productGone?: boolean, quoteErrorCode?: number, addressFailed?: boolean,
- *          quoteBlocked?: boolean, addressBlocked?: boolean, refreshing?: boolean}} state
+ *          quoteBlocked?: boolean, addressBlocked?: boolean, addressLoading?: boolean,
+ *          refreshing?: boolean}} state
  * @why `quoteErrorCode`（F4，第二轮审计 2026-10-11）：停售（40916）的报价失败，原先也说"返回购物车检查商品后重试"——
  *      不是购物车的问题、重试也不会好。`addressFailed`（F5）：地址列表没取到时说"请选择收货地址"，
  *      买家会以为自己的地址丢了、去重新填一遍。
@@ -168,12 +180,14 @@ function gateCore(state) {
   if (typeof s.addressId !== 'string' || s.addressId === '') {
     if (s.addressFailed === true && s.addressBlocked === true)
       return { ok: false, reason: RESTRICTED_TEXT };
-    return {
-      ok: false,
-      reason:
-        s.addressFailed === true ? '收货地址没取到，请点上方「重新加载」再试' : '请选择收货地址',
-      fix: s.addressFailed === true ? '' : 'address',
-    };
+    if (s.addressFailed === true)
+      return { ok: false, reason: '收货地址没取到，请点上方「重新加载」再试' };
+    // UX-001（体验审查 2026-10-15）：地址**正在取**自成一档，排在"没取到"那两条（已经是结论、
+    // 且给得出去处）之后、"请选择收货地址"之前——在途时还没到下"你没有地址"这个结论的时候。
+    // ⚠️ 不往前提去盖 `productGone` / `addressFailed`：那两句更具体。
+    //    （同一条纪律：`refreshing` 也没有提到最前面，理由见它自己那条注释。）
+    if (s.addressLoading === true) return { ok: false, reason: ADDRESS_LOADING_TEXT };
+    return { ok: false, reason: '请选择收货地址', fix: 'address' };
   }
   if (s.termsFailed === true) return { ok: false, reason: '用户协议暂时取不到，请稍后再试' };
   // P2-8：正在重算时**闸门自己挡**（排在"加载协议中"之后：协议那句更具体，且它自己也在重取）
