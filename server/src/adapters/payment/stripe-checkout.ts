@@ -222,9 +222,16 @@ export const OUTCOME_BY_TYPE: Readonly<Record<string, ProviderEvent['outcome']>>
   //     ⚠️ 复核 AJ-376（2026-10-06）：**不要指望事件里的 `refunds.data[]`**——Stripe 自 API 2022-11-15 起
   //       Charge 不再自动展开 `refunds`（docs.stripe.com/changelog/2022-11-15/deprecates-charges-auto-expand），
   //       而本仓钉的是 2025-03-31.basil，webhook 载荷不能 expand。下面样例 ① 带 refunds，是因为转载方的
-  //       端点版本更旧或样例不完整，不能推到我们的版本上。F12 若要接退款回调，应订阅 `refund.created` /
-  //       `refund.updated`（对象就是 Refund，自带 amount 与 status），或收到 charge.refunded 后再
-  //       `GET /v1/refunds?charge=…` 查。Stripe test mode 联调时以真实载荷为准再定。
+  //       端点版本更旧或样例不完整，不能推到我们的版本上。
+  //     退款回调已经接了（审计 PAY-03，2026-10-14，AJ-530），走的是**订阅 `refund.updated`** 这条路：
+  //       它的 `data.object` 就是 Refund，自带本次 `amount` 与 `status`，语义比 Charge 上那三个字段准
+  //       （Charge 只给累计值 `amount_refunded`，推不出"本次退了多少"）。
+  //     @why 另外两条候选路没走：`refund.created` 在本表里**没有映射**（收到归一化为 unknown，
+  //          且它报的是"退款已创建"、尚未落定，推不进状态机）；收到 charge.refunded 后再
+  //          `GET /v1/refunds?charge=…` 反查**未实现**——Refund 事件自带所需字段，不必多一次查询。
+  //     ⚠️ `charge.refunded` 保留订阅但**不落账**，只作「机构后台手工退款」的对账信号：它带的是
+  //       charge id（`ch_…`），与在途退款登记的单号（`re_…`）不是同一种 id，对不上号
+  //       （@see app/refund-progress.ts；运维手册第 8 节的事件清单）。
   //     @measured ① 真实事件样例（api_version 2023-10-16，MagicBell 公开文档转载的 Stripe 原始载荷——见上方 ⚠️，版本不同不可直接套用）：
   //       data.object = { object:"charge", id:"ch_…", amount:2000, amount_captured:2000,
   //                       amount_refunded:2000, refunded:true, payment_intent:"pi_…",
@@ -236,8 +243,8 @@ export const OUTCOME_BY_TYPE: Readonly<Record<string, ProviderEvent['outcome']>>
   //       `amount_refunded` = "Amount in cents refunded (can be less than the amount attribute
   //       on the charge if a partial refund was issued)"；`refunded` 布尔在部分退款时为 false。
   //     @see 下方 `parseWebhook` 的金额提取（当前取 `amount`，即全额——已由单测钉住，F12 改口径时那条会红）
-  // 审计 PAY-03（2026-10-14，AJ-530）：退款进展。对象是 Refund（自带本次 amount 与 status），
-  //   本系统创建退款时写了 metadata[order_id] 与 metadata[source]，所以归属判定与单号提取走通用分支。
+  // 审计 PAY-03（2026-10-14，AJ-530）：退款进展。本系统创建退款时写了 metadata[order_id] 与
+  //   metadata[source]，所以归属判定与单号提取走通用分支；`status` 由 `refundOutcome` 带出。
   'refund.updated': 'refund_updated',
   'refund.failed': 'refund_updated',
   'charge.dispute.created': 'disputed',
@@ -709,8 +716,9 @@ export function createStripeCheckoutProvider(
        *
        * ⚠️ **`charge.refunded` 走的是第二支，取到的是原扣款全额，不是退款额**
        *    （`amount_refunded` 才是累计已退，且它与"本次退了多少"也不是一回事）。
-       *    这不是实现缺陷而是**尚未决定的口径**：refunded 这个 outcome 目前没有 applier，
-       *    取错也无人报错；该由 F12 售后落账时按它需要的是"累计"还是"本次"来定，
+       *    这不是实现缺陷而是**尚未决定的口径**：refunded 这个 outcome 目前没有 applier
+       *    （登记了 applier 的仍是 succeeded / disputed / dispute_closed / refund_updated 四个），
+       *    取错也无人报错；退款落账已经改走 Refund 事件（见上方 `refund.updated` 的 @why），
        *    所以这里**保留现状并把现状钉成断言**（`stripe-checkout.unit.test.ts` 的
        *    「charge.refunded 的金额口径」一组），F12 改口径时那条会红，逼人确认而不是静默生效。
        *    @see OUTCOME_BY_TYPE['charge.refunded'] 处三个字段的 @measured 语义

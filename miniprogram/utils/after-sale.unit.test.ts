@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AFTER_SALE_DESCRIPTION_MAX as SHARED_MAX,
+  AFTER_SALE_DAYS_AFTER_COMPLETE as SHARED_DAYS,
   AFTER_SALE_OPEN_STATUSES as SHARED_OPEN_STATUSES,
   AFTER_SALE_ORDER_STATUSES as SHARED_ORDER_STATUSES,
   AFTER_SALE_REASONS,
@@ -11,11 +12,13 @@ import {
   AFTER_SALE_STATUS_LABELS as SHARED_STATUS_LABELS,
 } from '@waselect/shared';
 import {
+  AFTER_SALE_DAYS_AFTER_COMPLETE,
   AFTER_SALE_DESCRIPTION_MAX,
   AFTER_SALE_OPEN_STATUSES,
   AFTER_SALE_ORDER_STATUSES,
   AFTER_SALE_REASON_ROWS,
   AFTER_SALE_STATUS_LABELS,
+  AFTER_SALE_WINDOW_CLOSED_NOTE,
   afterSaleCard,
 } from './after-sale.js';
 
@@ -28,6 +31,8 @@ describe('与 shared 同口径（镜像）', () => {
     expect(AFTER_SALE_STATUS_LABELS).toEqual(SHARED_STATUS_LABELS);
     expect(AFTER_SALE_ORDER_STATUSES).toEqual([...SHARED_ORDER_STATUSES]);
     expect(AFTER_SALE_DESCRIPTION_MAX).toBe(SHARED_MAX);
+    // BUG-001：服务端拿这个天数拒超期申请，前端拿它关入口——不是一个数就是"能进、提交必被拒"
+    expect(AFTER_SALE_DAYS_AFTER_COMPLETE).toBe(SHARED_DAYS);
   });
 
   /**
@@ -55,6 +60,7 @@ describe('afterSaleCard', () => {
     expect(afterSaleCard({ status: 'delivered' })).toEqual({
       show: true,
       canApply: true,
+      windowNote: '',
       current: null,
     });
     for (const s of ['paid', 'cancelled', 'refunded', 'pending_payment']) {
@@ -93,5 +99,56 @@ describe('afterSaleCard', () => {
       expect(afterSaleCard({ status: 'delivered', after_sale: req(bad) }).current).toBeNull();
     }
     expect(afterSaleCard(null).show).toBe(false);
+  });
+});
+
+/**
+ * 已完成后 7 天的售后窗口（BUG-001，2026-10-15）。
+ * @why 服务端 0.6.96 起拒超期申请，前端原先没有这一档判据：用户看得见入口、填得完表单，
+ *      提交才被 40902 `after_sale_window_closed` 打回——白填一轮且不知道为什么。
+ */
+describe('afterSaleCard · 完成后的 7 天窗口', () => {
+  const now = Date.parse('2026-10-15T00:00:00.000Z');
+  const daysAgo = (d: number) => new Date(now - d * 86_400_000).toISOString();
+
+  it('🔴 完成 8 天 → 不给入口，但卡片仍出并写明原因；完成 6 天 → 照常给入口', () => {
+    const closed = afterSaleCard({ status: 'completed', completed_at: daysAgo(8) }, now);
+    expect(closed.canApply).toBe(false);
+    // 不能只是把按钮变灰：用户得知道"为什么没有入口"
+    expect(closed.show).toBe(true);
+    expect(closed.windowNote).toBe(AFTER_SALE_WINDOW_CLOSED_NOTE);
+    expect(closed.windowNote).toContain(`完成后 ${AFTER_SALE_DAYS_AFTER_COMPLETE} 天内`);
+
+    const open = afterSaleCard({ status: 'completed', completed_at: daysAgo(6) }, now);
+    expect(open).toMatchObject({ show: true, canApply: true, windowNote: '' });
+  });
+
+  it('🔴 完成时刻 / 当前时刻任一拿不到 → 不拦（与服务端"没有时间依据就不拦"同口径）', () => {
+    // completed_at 缺失（老数据）：静默关入口比"填完被拒"更坏——用户连原因都看不到
+    expect(afterSaleCard({ status: 'completed' }, now).canApply).toBe(true);
+    expect(afterSaleCard({ status: 'completed', completed_at: '不是时间' }, now).canApply).toBe(
+      true,
+    );
+    // 调用方没给 nowMs（vm 不读时钟）：同样不判
+    expect(afterSaleCard({ status: 'completed', completed_at: daysAgo(8) }).canApply).toBe(true);
+  });
+
+  it('🔴 未完成的单不吃这条限制；刚好满 7 天仍在窗口内（与服务端同一条 > 判据）', () => {
+    expect(afterSaleCard({ status: 'delivered', completed_at: daysAgo(30) }, now).canApply).toBe(
+      true,
+    );
+    expect(afterSaleCard({ status: 'completed', completed_at: daysAgo(7) }, now).canApply).toBe(
+      true,
+    );
+  });
+
+  it('🔴 超期且有已结案的历史申请：进度照显示，但不能再申请（服务端同样拒）', () => {
+    const card = afterSaleCard(
+      { status: 'completed', completed_at: daysAgo(8), after_sale: req('rejected') },
+      now,
+    );
+    expect(card).toMatchObject({ show: true, canApply: false });
+    expect(card.current).toMatchObject({ statusText: '未通过' });
+    expect(card.windowNote).toBe(AFTER_SALE_WINDOW_CLOSED_NOTE);
   });
 });
