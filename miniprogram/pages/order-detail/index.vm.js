@@ -117,14 +117,21 @@ import { orderProgress } from '../../utils/order-progress.js';
 import { AFTER_SALE_ORDER_STATUSES, afterSaleCard } from '../../utils/after-sale.js';
 
 /**
- * ISO → 买家可见的 JST 串（**带时区标注**）；解析失败回落原串（数据不能丢，宁可难看）。
+ * ISO → 买家可见的 JST 串（**带时区标注**）；解析不出来 → 空串（页面那一行不显示）。
  *
  * @why 带"（日本时间）"（MP3-02 / AJ-250）：收货人是美国地址的用户，
  *      不给时区时"请在 22:30 前完成支付"会被读成本地时间（PDT 与 JST 差 16 小时）；
  *      用户以为还有一整天，回来时订单已超时关闭——不会报任何错，只会白丢一单。
+ *
+ * @why 解析不出来时**不回落原串**（审计 CPY-03）：原串（`2026-09-27T15:04:26.000Z`、
+ *      乃至 `soon` 这种脏值）换没换算过、带不带时区全看服务端那天给什么，
+ *      而页面上每一行时刻旁边都写着"下单时间 / 截止"——摆出来的就是一个**没标注时区的时间**，
+ *      正是上面那条要防的事。`pages/order/index.vm.js` 与 `utils/after-sale.js` 都是 `?? ''`，
+ *      这里跟着同一口径：换不出来就不显示，而不是显示一个可能读错的值。
+ * @limitation 只影响"服务端给了解析不了的时刻"这一支（脏数据 / 契约变更），正常数据不走这里。
  */
 function timeText(iso) {
-  return jstDateTimeLabeled(iso) ?? (typeof iso === 'string' ? iso : '');
+  return jstDateTimeLabeled(iso) ?? '';
 }
 
 /**
@@ -292,7 +299,9 @@ export function detailView(order, opts = undefined) {
   const buyer = buyerStatus(status, { email: contactEmail !== '' });
   const showPay = payable && !confirming;
   const showCancel = PAYABLE.includes(status) && !confirming && !expired;
-  const afterSale = afterSaleCard(o);
+  // 审计 BUG-001（2026-10-15）：售后 7 天窗口要拿"现在"跟完成时刻比；时刻由入参给（vm 不读时钟，约束十一），
+  //   没给就不判——与服务端"completed_at 为空不拦"同口径，证据不足时不静默关掉入口。
+  const afterSale = afterSaleCard(o, options.nowMs);
   // 审计 BUG-09（2026-10-14）：售后进行中不给确认收货（服务端同样拒 40902 after_sale_open）
   const showConfirmReceipt = status === 'shipped' && afterSale.current?.open !== true;
   // OPS-4：迟到付款的关闭单（钱还没退）不给「再次购买」，说明提到顶部

@@ -139,6 +139,8 @@
             aria-label="申请售后"
           >收到的商品有问题？申请售后 ›</view>
         </view>
+        <!-- BUG-001（2026-10-15）：超期不出入口，但要写明为什么（不是把入口悄悄撤掉） -->
+        <text class="ws-caption hint" wx:if="{{view.afterSale.windowNote}}">{{view.afterSale.windowNote}}</text>
         <block wx:if="{{view.afterSale.current}}">
           <view class="quote-line">
             <text class="ws-body">{{view.afterSale.current.reasonText}}</text>

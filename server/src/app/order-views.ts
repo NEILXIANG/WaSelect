@@ -195,6 +195,9 @@ export function toOrderDetail(
     shipping_jpy: row.shipping_jpy,
     duty_jpy: row.duty_jpy,
     expires_at: row.expires_at.toISOString(),
+    // BUG-001（2026-10-15）：完成时刻下发给小程序——售后 7 天窗口要前端先判，不能让用户填完才被拒。
+    //   未完成 / 老数据（completed_at 为空）→ 整键省略，与服务端"没有时间依据就不拦"同一口径。
+    ...(row.completed_at !== null ? { completed_at: row.completed_at.toISOString() } : {}),
     ...(row.carrier !== null ? { carrier: row.carrier } : {}),
     ...(row.tracking_no !== null ? { tracking_no: row.tracking_no } : {}),
     // 剩余清单 3-5：官方查件链接（认不出承运商 → 整键省略，不猜）

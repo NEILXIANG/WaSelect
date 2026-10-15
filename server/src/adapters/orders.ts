@@ -661,6 +661,8 @@ export interface OrderDetailRow extends OrderListRow {
   shipping_jpy: number;
   /** null = 关税无法估算（W-05 / 迁移 026），不是 0。 */
   duty_jpy: number | null;
+  /** 订单完成时刻（BUG-001，2026-10-15）：null = 未完成 / 老数据没有时间依据。 */
+  completed_at: Date | null;
   contact_email: string | null;
   terms_version: string;
   expires_at: Date;
@@ -682,7 +684,7 @@ export async function findOwnedOrder(
   const rows = await db`
     select id, order_no, status, items_jpy, shipping_jpy, duty_jpy, total_jpy,
            fx_snapshot, address_snapshot, contact_email, terms_version,
-           carrier, tracking_no, expires_at, created_at
+           carrier, tracking_no, expires_at, created_at, completed_at
       from orders where id = ${orderId} and user_id = ${userId}
   `;
   const r = rows[0];
@@ -703,6 +705,7 @@ export async function findOwnedOrder(
     tracking_no: r.tracking_no === null ? null : String(r.tracking_no),
     expires_at: r.expires_at as Date,
     created_at: r.created_at as Date,
+    completed_at: r.completed_at === null ? null : (r.completed_at as Date),
   };
 }
 

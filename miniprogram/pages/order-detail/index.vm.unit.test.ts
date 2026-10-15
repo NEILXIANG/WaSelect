@@ -96,9 +96,10 @@ describe('detailView（整体）', () => {
     expect(pending.createdAtText).toMatch(/日本时间|JST/);
     expect(pending.expiresAtText).toMatch(/日本时间|JST/);
     for (const t of pending.timeline) expect(t.atText, t.statusText).toMatch(/日本时间|JST/);
-    // 换算不出来的时刻**不加**标注：不给"没换算过的时间"盖"日本时间"的章
+    // 换算不出来的时刻**不显示**（审计 CPY-03）：也不回落原串——原串没时区标注，
+    // 摆在一行写着"下单时间"的地方，正是本用例要防的那种读错。（与订单列表 / 售后同一口径 `?? ''`）
     const dirty = detailView({ ...ORDER, created_at: 'soon', status: 'pending_payment' });
-    expect(dirty.createdAtText).toBe('soon');
+    expect(dirty.createdAtText).toBe('');
   });
 
   it('⚠️ 可付时才显示截止时刻，且可付 == 可取消（半开状态没有任何测试能抓，除非同源）', () => {
@@ -181,9 +182,12 @@ describe('detailView（整体）', () => {
     }
   });
 
-  it('⚠️ 解析不了的时刻回落**原串**（数据不能丢，宁可难看）', () => {
+  // 审计 CPY-03：原串没有时区标注，摆在一行写着"下单时间"的地方会被读成本地时间
+  //   （正是 MP3-02 要防的那一类读错）→ 与订单列表 / 售后同口径，换不出来就不显示
+  it('⚠️ 解析不了的时刻 → 空串（不回落原串，也不给它盖"日本时间"的章）', () => {
     const v = detailView({ ...ORDER, created_at: 'soon' });
-    expect(v.createdAtText).toBe('soon');
+    expect(v.createdAtText).toBe('');
+    expect(v.createdAtText).not.toContain('日本时间');
   });
 
   it('运单：有单号 → hasTracking；没有 → 不显示整段', () => {
@@ -567,6 +571,7 @@ describe('detailView · 售后卡片（AJ-420）', () => {
     expect(detailView({ status: 'delivered' }).afterSale).toEqual({
       show: true,
       canApply: true,
+      windowNote: '',
       current: null,
     });
     const open = detailView({
@@ -583,6 +588,19 @@ describe('detailView · 售后卡片（AJ-420）', () => {
     expect(open).toMatchObject({ show: true, canApply: false });
     expect(open.current).toMatchObject({ reasonText: '发错商品', statusText: '已提交，等待处理' });
     expect(detailView({ status: 'paid' }).afterSale.show).toBe(false);
+  });
+
+  it('🔴 完成超过 7 天：不给入口，但卡片写明原因（BUG-001）', () => {
+    const nowMs = Date.parse('2026-10-15T00:00:00.000Z');
+    const card = detailView(
+      {
+        status: 'completed',
+        completed_at: new Date(nowMs - 8 * 86_400_000).toISOString(),
+      },
+      { nowMs },
+    ).afterSale;
+    expect(card.canApply).toBe(false);
+    expect(card.windowNote).toContain('7 天内申请售后');
   });
 });
 
