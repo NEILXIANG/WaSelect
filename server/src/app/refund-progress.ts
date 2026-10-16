@@ -39,6 +39,10 @@ export async function applyProviderRefundProgress(
     (r) => r.provider_ref === i.refundRef,
   );
   if (row !== undefined) {
+    if (row.status === 'succeeded' && i.outcome === 'failed') {
+      failedAfterSuccess(deps, i, 'partial');
+      return 'noop';
+    }
     if (row.status === 'succeeded' || row.status === 'failed') return 'noop';
     const [p] = await deps.db`select provider_ref from payments where id = ${row.payment_id}`;
     const plan = {
@@ -65,10 +69,36 @@ export async function applyProviderRefundProgress(
     outcome: i.outcome,
     actor: `provider:${i.channel}`,
   });
+  if (full === 'noop' && i.outcome === 'failed') {
+    const settled = await deps.db`
+      select 1 from orders o
+       where o.id = ${i.orderId} and o.status = 'refunded'
+         and exists (select 1 from order_events e
+                      where e.order_id = o.id and e.status = 'refunded' and e.note = ${i.refundRef})`;
+    if (settled.length > 0) failedAfterSuccess(deps, i, 'full');
+  }
   deps.logger.info('provider_refund_progress', {
     order_id: i.orderId,
     result: full === 'full' ? 'ok' : 'skipped',
     ctx: { channel: i.channel, kind: full, outcome: i.outcome },
   });
   return full;
+}
+
+/**
+ * 已按"成功"落定的退款又被机构报 failed（四天提交复查 2026-10-16）。
+ * @why 不自动改账：把 refunded 改回去会牵动库存回补、订单状态机与已发出的通知，判断要由人做；
+ *      但也不能静默——买家可能根本没收到钱，而我方账上写着"已退"。打 error 让告警与对账看得见。
+ * @limitation Stripe 是否真会出现 succeeded → failed 未在真实测试账号上实测（本地无密钥）；这里只保证"出现了有人知道"。
+ */
+function failedAfterSuccess(
+  deps: RefundProgressDeps,
+  i: { orderId: string; channel: string; refundRef: string },
+  kind: 'partial' | 'full',
+): void {
+  deps.logger.error('provider_refund_failed_after_success', {
+    result: 'failed',
+    order_id: i.orderId,
+    ctx: { channel: i.channel, kind, refund_ref: i.refundRef },
+  });
 }

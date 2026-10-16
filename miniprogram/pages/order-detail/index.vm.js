@@ -31,6 +31,8 @@
  *      ../../../contracts/api-contract.yaml（Order / POST /orders/{id}/cancel）
  */
 import {
+  LATE_PAID_CLOSED_STATUSES,
+  LATE_PAID_NOTE,
   ORDER_NOT_FOUND_TEXT,
   PAYABLE,
   STOCK_REFUND_NOTE,
@@ -79,7 +81,7 @@ function partialRefundRows(list) {
     });
 }
 
-const LATE_PAID_NOTE = '我们已收到你的付款，但这张订单已关闭；款项会原路退回，无需重新付款。';
+// 迟到付款说明与列表同一份（utils/order-status.js LATE_PAID_NOTE，第二轮审查【1】）
 
 /**
  * 迟到付款要在**顶部**说的状态（OPS-4，第二轮审计 2026-10-11）：订单已关闭、钱还没退。
@@ -87,7 +89,7 @@ const LATE_PAID_NOTE = '我们已收到你的付款，但这张订单已关闭�
  *      同一屏两种相反的指引，买家可能再付一笔，然后等两笔里的一笔退回来。
  *      关闭态把说明提到顶部（替换那句"请重新下单"）、收起「再次购买」；退款中 / 已退款讲的是钱的进度，说明留在页底。
  */
-const LATE_PAID_TOP_STATUSES = ['expired', 'cancelled'];
+const LATE_PAID_TOP_STATUSES = LATE_PAID_CLOSED_STATUSES;
 
 /**
  * 取消 / 确认收货失败后的去向（MP-7，第二轮审计 2026-10-11）。
@@ -303,11 +305,14 @@ export function detailView(order, opts = undefined) {
   //   没给就不判——与服务端"completed_at 为空不拦"同口径，证据不足时不静默关掉入口。
   const afterSale = afterSaleCard(o, options.nowMs);
   // 审计 BUG-09（2026-10-14）：售后进行中不给确认收货（服务端同样拒 40902 after_sale_open）
-  const showConfirmReceipt = status === 'shipped' && afterSale.current?.open !== true;
+  const dispute = disputeStatus(o.payment_dispute, o.status);
+  // 第二轮审查【2】：拒付进行中 / 已败诉时服务端确认收货必回 40902（has_dispute），不给一个必败的按钮。
+  //   @limitation 运营人工解除了拒付限制、但机构侧拒付仍 open 时，服务端其实放行，这里仍不给——买家可等自动签收，不影响钱。
+  const showConfirmReceipt =
+    status === 'shipped' && afterSale.current?.open !== true && dispute === null;
   // OPS-4：迟到付款的关闭单（钱还没退）不给「再次购买」，说明提到顶部
   const latePaidTop = o.late_paid === true && LATE_PAID_TOP_STATUSES.includes(status);
   const showBuyAgain = BUY_AGAIN_STATUSES.includes(status) && !latePaidTop;
-  const dispute = disputeStatus(o.payment_dispute, o.status);
 
   return {
     orderId: typeof o.order_id === 'string' ? o.order_id : '',
@@ -415,7 +420,7 @@ export function detailView(order, opts = undefined) {
      */
     latePaidNote: o.late_paid === true && !latePaidTop ? LATE_PAID_NOTE : '',
     /**
-     * 确认收货（P2-13）：只在已发货时给。拒付中的单服务端回 40902（买家视图不含 has_dispute，不在前端猜）。
+     * 确认收货（P2-13）：只在已发货时给；有进行中售后或拒付（payment_dispute）时不给——服务端会回 40902。
      * 不点也没关系：发货满 30 天系统自动签收。
      */
     canConfirmReceipt: showConfirmReceipt,

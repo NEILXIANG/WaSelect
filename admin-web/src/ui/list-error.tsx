@@ -20,12 +20,19 @@ export interface ListErrorProps {
    * @why '' = 不给具体按钮：多数列表页的「搜索」在关键词没变时写回同一串参数、地址不变 ⇒ 不会重新取数。
    */
   retry?: string;
+  /**
+   * 下面有没有上一次成功加载的数据（四天提交复查 2026-10-16）。
+   * @why 首次取数就失败时列表是空的，再说"下面显示的是上一次成功加载的结果"就是一句不成立的话。
+   */
+  stale: boolean;
 }
 
-export function ListError({ what, retry = '' }: ListErrorProps) {
+export function ListError({ what, retry = '', stale }: ListErrorProps) {
   return (
     <p className="error" role="status">
-      {what}没能刷新，下面显示的是上一次成功加载的结果（可能已过期）。
+      {stale
+        ? `${what}没能刷新，下面显示的是上一次成功加载的结果（可能已过期）。`
+        : `${what}没能加载。`}
       {retry === '' ? '请翻页或改一下筛选重新加载。' : `请点「${retry}」重试。`}
     </p>
   );

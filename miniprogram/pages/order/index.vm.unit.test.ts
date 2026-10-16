@@ -35,6 +35,20 @@ const ORDERS = [
   },
 ];
 
+describe('orderRows：迟到付款（第二轮审查【1】，契约 0.6.98）', () => {
+  it('🔴 已关闭 + late_paid → 下一步说"无需重新付款"，不说"重新下单"；未带 late_paid 照旧', () => {
+    for (const status of ['expired', 'cancelled']) {
+      const [late] = orderRows([{ order_id: 'o-1', status, total_jpy: 1000, late_paid: true }]);
+      expect(late?.nextText).toContain('无需重新付款');
+      expect(late?.nextText).not.toContain('重新下单');
+    }
+    const [plain] = orderRows([
+      { order_id: 'o-2', status: 'expired', total_jpy: 1000, late_paid: false },
+    ]);
+    expect(plain?.nextText).not.toContain('无需重新付款');
+  });
+});
+
 describe('orderRows（列表行）', () => {
   it('字段透传 + 金额三币 + 状态中文', () => {
     const [row] = orderRows(ORDERS);

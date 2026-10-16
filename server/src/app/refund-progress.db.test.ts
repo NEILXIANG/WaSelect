@@ -78,6 +78,49 @@ describe('applyProviderRefundProgress', () => {
     expect(ev).toHaveLength(1);
   });
 
+  it('🔴 已落定成功的退款又被机构报 failed → 不改账，但打 error 日志（钱可能没到买家手里，要人看；四天提交复查 2026-10-16）', async () => {
+    // 部分退款：行已 succeeded
+    await seedOrder('o-sf', 'delivered');
+    await insertPartialRefund(db, {
+      id: 'rf-sf',
+      orderId: 'o-sf',
+      paymentId: 'pay-o-sf',
+      currency: 'USD',
+      amountMinor: 1000,
+      reason: '破损',
+      actor: 'admin:u-a',
+    });
+    await settlePartialRefund(db, 'rf-sf', 'succeeded', 're_sf', clock.now());
+    const a = deps();
+    expect(
+      await applyProviderRefundProgress(a.d, {
+        orderId: 'o-sf',
+        channel: 'stripe',
+        refundRef: 're_sf',
+        outcome: 'failed',
+      }),
+    ).toBe('noop');
+    expect(a.sink.find('provider_refund_failed_after_success')).toHaveLength(1);
+    const [r] = await db`select status from order_refunds where id = 'rf-sf'`;
+    expect(r?.['status']).toBe('succeeded');
+
+    // 整单退款：订单已 refunded，退款单号就是落定那笔
+    await seedOrder('o-ff', 'refunded');
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-ff', 'refunded', 're_ff', 'admin:u-a', now())`;
+    const b = deps();
+    expect(
+      await applyProviderRefundProgress(b.d, {
+        orderId: 'o-ff',
+        channel: 'stripe',
+        refundRef: 're_ff',
+        outcome: 'failed',
+      }),
+    ).toBe('noop');
+    expect(b.sink.find('provider_refund_failed_after_success')).toHaveLength(1);
+    expect(await statusOf('o-ff')).toBe('refunded');
+  });
+
   it('🔴 整单退款 refunding + 在途单号匹配 + 机构 succeeded → 订单 refunded、支付行 refunded', async () => {
     await seedOrder('o-full', 'refunding');
     await db`insert into order_events (order_id, status, note, actor, at)
@@ -93,6 +136,25 @@ describe('applyProviderRefundProgress', () => {
     expect(await statusOf('o-full')).toBe('refunded');
     const [p] = await db`select status from payments where id = 'pay-o-full'`;
     expect(p?.['status']).toBe('refunded');
+  });
+
+  it('🔴 迟到付款单的整单退款（支付行不是 succeeded）+ 机构 succeeded → 同样落定 refunded（四天提交复查 2026-10-16）', async () => {
+    await seedOrder('o-late', 'refunding');
+    // 迟到付款：钱到时订单已关、落账回滚——支付行停在 initiated、paid_at 为空，只有 late_paid 凭据
+    await db`update orders set paid_at = null where id = 'o-late'`;
+    await db`update payments set status = 'initiated' where id = 'pay-o-late'`;
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-late', 'late_paid', 'cs_o-late', 'provider:stripe', now()),
+                    ('o-late', 'refunding', '迟到付款退回', 'admin:u-a', now()),
+                    ('o-late', 'refund_pending', 're_late', 'admin:u-a', now())`;
+    const out = await applyProviderRefundProgress(deps().d, {
+      orderId: 'o-late',
+      channel: 'stripe',
+      refundRef: 're_late',
+      outcome: 'succeeded',
+    });
+    expect(out).toBe('full');
+    expect(await statusOf('o-late')).toBe('refunded');
   });
 
   it('🔴 整单退款机构 failed → 记 refund_failed provider_failed:<单号>，订单仍 refunding（下次点击换新键）', async () => {

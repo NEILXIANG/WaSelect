@@ -621,6 +621,8 @@ const schema = z.object({
   //    改名字不改窗口 = "名字叫 PER_MIN 实际 10 分钟"的失真（rate-limit.ts @limitation 二）。
   RATE_LIMIT_LOGIN_PER_15MIN: int(5, 1),
   RATE_LIMIT_QUOTE_PER_MIN: int(30, 1),
+  // 支付回调（四天提交复查 2026-10-16）：机构从少数固定 IP 发全店的事件，不能沿用买家入口的 30/分钟
+  RATE_LIMIT_CALLBACK_PER_MIN: int(600, 1),
   /**
    * Cron Job 调 POST /internal/jobs/daily 的共享密钥；留空时该端点拒绝执行
    * （50000 internal_job_disabled，路由仍挂载——404 会把"没配密钥"表现成"打错地址"，

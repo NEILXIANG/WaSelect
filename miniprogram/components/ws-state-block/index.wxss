@@ -199,12 +199,10 @@
        主动作是 `<ws-button>`（实心按钮），次要动作是文字链，做成一样高
        就没了主次层级——"先做哪个"这件事本来就是靠大小说出来的。
        但它仍然要有一个下限：只有一行文字高（约 40rpx ≈ 20pt）时手指点不中。
-  @limitation ⚠️ 主动作那一侧**不是** 88rpx，`0.75` 的分母不是 --ws-touch-min：
-       `ws-button` 渲染的是原生 `<button>`，`components/ws-button/index.wxss`
-       只声明了圆角与字号、**没有 height**，实际高度来自微信原生默认值
-       （非 size="mini" 约 46px ≈ 92rpx，未真机实测）。
-       故这里的"3/4"是相对原生默认值而言；66rpx 仍明显低一级，主次层级成立。
-       ws-button 缺高度一事已单独报告，不在本次改动范围（改动它属组件口径）。
+  @limitation 主动作 `ws-button` 自 M-19（AJ-553）起 `min-height: var(--ws-touch-min)`（88rpx），
+       所以这里的"3/4"就是相对 --ws-touch-min 而言；66rpx 明显低一级，主次层级成立。
+       （四天提交复查 2026-10-16 订正：原注释写"ws-button 没有 height、约 92rpx、不在本次范围"，
+        与同一提交里 ws-button 的改动矛盾。两者实际渲染高度都【需真机实测】。）
   @why 写成 `calc(var(--ws-touch-min) * 0.75)` 而不是新造一个 66rpx：
        小程序 design-token 门禁（`design-token.unit.test.ts`）只豁免 app.wxss，
        组件 wxss 里出现非 0 尺寸字面量直接红；而且"次要 = 主要的 3/4"这个**比例关系**

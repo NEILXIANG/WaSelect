@@ -298,7 +298,7 @@ export function OpsLogPage({ api, route, onNavigate }: OpsLogPageProps) {
       {/* P2-3：请求期间页面必须自己说"在取"，否则运营会连点「下一页」跳过好几页 */}
       {loading && <p className="muted">加载中…</p>}
       {/* P2-4：失败时列表保留上一次结果，页内必须有一句"这不是最新的" */}
-      {!loading && failed && <ListError what="操作记录" retry="查询" />}
+      {!loading && failed && <ListError what="操作记录" retry="查询" stale={rows.length > 0} />}
       <table className="table">
         <thead>
           <tr>

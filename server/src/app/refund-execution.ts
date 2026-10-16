@@ -36,9 +36,11 @@
  */
 import { withTransaction, type Db } from '../adapters/db.js';
 import {
+  findLatePaidPayment,
   findRefundablePayment,
   findRefundingReason,
   findRefundProgress,
+  hasLatePaid,
   markRefunded,
   recordRefundFailed,
   recordRefundPending,
@@ -173,11 +175,19 @@ export async function executeRefund(
       throw e;
     }
     // 独立排查 2026-10-14 C-2：机构**确定拒绝**（4xx，`ProviderRejectedError`）≠ 结果未知——这把键什么都没退出去，
-    //   且同键重放只会拿回同一个 4xx。记成 `provider_failed:rejected:<status>`，`findRefundProgress` 把它计入"确认失败"，
+    //   且同键重放只会拿回同一个 4xx。记成 `provider_failed:rejected:<status>:a<attempt>`，`findRefundProgress` 把它计入"确认失败"，
     //   下一次点击换新键重新发起（与机构答复 failed 同口径）；`provider_error` 仍只给超时 / 5xx / 网络错（KD-4：同键）。
     //   @limitation 换键后若拒绝原因没变（金额超出），还是会再拒一次——但每次都留下一条带状态码的事件，而不是无声地同键打转。
+    //   @why note 带 `a<attempt>`（四天提交复查 2026-10-16）：`findRefundProgress` 按**不同 note** 去重计数（OPS3-06），
+    //        原先 note 只有状态码，第二次同码拒绝与第一次同串 → 计数停在 1、之后永远重放第 1 把键。
+    //        带上这把键的序号后，同一把键的并发重复事件仍去重，不同键的拒绝各算一次。
     if (e instanceof ProviderRejectedError) {
-      throw await fail(deps, plan, `provider_failed:rejected:${String(e.status)}`, e);
+      throw await fail(
+        deps,
+        plan,
+        `provider_failed:rejected:${String(e.status)}:a${String(attempt)}`,
+        e,
+      );
     }
     throw await fail(deps, plan, 'provider_error', e);
   }
@@ -231,7 +241,13 @@ export async function settleFullRefundFromProvider(
     );
     return 'full';
   }
-  const pay = await findRefundablePayment(deps.db, i.orderId);
+  // 迟到付款的单（四天提交复查 2026-10-16）：支付行从来不是 succeeded（落账事务回滚），常规查不到——
+  //   与管理端路由同一回退（admin-order-routes.ts：refunding 时找不到 succeeded 就按 late_paid 凭据找）
+  const pay =
+    (await findRefundablePayment(deps.db, i.orderId)) ??
+    ((await hasLatePaid(deps.db, i.orderId))
+      ? await findLatePaidPayment(deps.db, i.orderId)
+      : null);
   const reason = await findRefundingReason(deps.db, i.orderId);
   if (pay === null || reason === null) return 'noop';
   // settle 只读 orderId / paymentId / request.reason / actor（@see settle）

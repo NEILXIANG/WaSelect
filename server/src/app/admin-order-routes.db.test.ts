@@ -1141,6 +1141,21 @@ describe('GET /admin/orders?sort', () => {
       await s.close();
     });
 
+    it('🔴 拒付已败诉、限制被人工解除（has_dispute=false）→ 仍不算超时未发货（发货闸门认败诉，40909；四天提交复查 2026-10-16）', async () => {
+      const s = await buildServer();
+      await seedOrder({ id: 'o-old-lost' });
+      await db`update orders set paid_at = now() - interval '20 days', has_dispute = false where id = 'o-old-lost'`;
+      await db`update payments set dispute_id = 'dp_lost', dispute_status = 'lost' where id = 'pay-o-old-lost'`;
+      const r = await adminFetch(s, 'GET', '/api/v1/admin/orders?attention=ship_overdue');
+      expect((r.json['items'] as Array<{ order_id: string }>).map((i) => i.order_id)).toEqual([]);
+      const all = await adminFetch(s, 'GET', '/api/v1/admin/orders?size=50');
+      const row = (all.json['items'] as Array<{ order_id: string; ship_overdue: boolean }>).find(
+        (i) => i.order_id === 'o-old-lost',
+      );
+      expect(row?.ship_overdue).toBe(false);
+      await s.close();
+    });
+
     it('🔴 AJ-485：拒付待处理——attention=dispute_open 只列支付上拒付还开着（open）的单；已胜诉 / 已败诉 / 已撤回不算', async () => {
       const s = await buildServer();
       for (const [id, st] of [

@@ -43,8 +43,8 @@ export default defineConfig({
      *      cap 到 4 后峰值骤降，全量 cov 可稳定跑完。
      * @measured 2026-10-14：默认 12 worker 跑全量 cov 偶发 SIGKILL(137)；
      *            `--maxWorkers=4` 跑全量 cov → exit 0、10m25s 稳定完成、负载峰值从 ~11 降到 ~7。
-     * @limitation CI（ubuntu-latest，4 核）默认 worker 本就是 4，cap 到 4 对 CI 是 no-op——
-     *            本地 12 核从 12 降到 4，CI 行为不变，"CI 与本地同一条命令"原则不受影响。
+     * @limitation vitest 默认 worker 数是 CPU 数减 1（四天提交复查 2026-10-16 订正：原注释写"CI 默认 4、cap 是 no-op"不对）——
+     *            CI（ubuntu-latest，4 核）从 3 升到 4，本地 12 核从 11 降到 4；两边都跑同一条命令，只是并发数不同。
      */
     maxWorkers: 4,
     // `.claude/worktrees/`：并行分身的工作树（整仓副本），不排除会把另一份代码的测试一并跑进来

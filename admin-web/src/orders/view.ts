@@ -284,7 +284,8 @@ export function eventNoteView(status: unknown, note: unknown): { text: string; r
         text: '机构没有答复（结果未知）：再点「退款」会用同一把幂等键重放，不会退两次',
         ref: '',
       };
-    const rejected = /^provider_failed:rejected:(\d{3})$/.exec(raw);
+    // 带 `:a<序号>`（2026-10-16 起，区分第几把键）；不带的是之前写入的老事件
+    const rejected = /^provider_failed:rejected:(\d{3})(?::a\d+)?$/.exec(raw);
     if (rejected !== null)
       return {
         text: `机构拒绝了这笔退款（HTTP ${rejected[1] ?? ''}）：钱没动，再点会换新键重新发起`,

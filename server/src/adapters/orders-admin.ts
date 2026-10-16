@@ -277,10 +277,12 @@ function attentionWhere(db: Db, a: OrderAttention | undefined, cutoff: Date | un
       return db`true`;
     // AJ-484：已付款、付款早于截止（N 个 JST 工作日前的 00:00）仍未发货
     // 拒付锁定的不算（规律排查 2026-10-12）：服务端不许发货（40909），催发只会让运营白跑一趟
+    // 败诉拒付即使限制被人工解除也不算（四天提交复查 2026-10-16）：发货闸门认败诉（AJ-525），同样发不出去
     case 'ship_overdue':
       return cutoff === undefined
         ? db`false`
-        : db`status = 'paid' and paid_at < ${cutoff} and not has_dispute`;
+        : db`status = 'paid' and paid_at < ${cutoff} and not has_dispute
+                and not exists (select 1 from payments p where p.order_id = orders.id and p.dispute_status = 'lost')`;
     // AJ-485：拒付还开着（要去举证）；胜诉 / 败诉 / 撤回不算
     case 'dispute_open':
       return db`exists (select 1 from payments p where p.order_id = orders.id and p.dispute_status = 'open')`;
@@ -382,7 +384,8 @@ export async function listAdminOrders(
            exists (select 1 from users u
                     where u.id = orders.user_id and u.blocked_at is not null) as user_blocked,
            coalesce(status = 'paid' and paid_at < ${q.shipOverdueCutoff ?? null}::timestamptz
-                    and not has_dispute, false) as ship_overdue,
+                    and not has_dispute
+                    and not exists (select 1 from payments p where p.order_id = orders.id and p.dispute_status = 'lost'), false) as ship_overdue,
            ${disputeStateSql(db, 'orders')} as payment_dispute
       from orders
     ${buildWhere(db, q)}
@@ -914,7 +917,9 @@ export async function releaseDisputeHold(
 }
 
 /**
- * 最近一次进入 refunding 时记下的退款理由（重试沿用它，KD-4）。
+ * **首次**进入 refunding 时记下的退款理由（重试沿用它，KD-4）。
+ * （四天提交复查 2026-10-16：原为 `order by at desc` 取最近一条，与下面的 @why 和后台 `firstRefundReason` 相反；
+ *  现在一张单只会有一条 refunding 事件，行为不变，改的是将来多出一条时的取值方向。）
  * @why 机构退款请求里带着理由（Stripe `metadata[reason]`），而机构侧幂等键按订单固定
  *      （`refund:<orderId>`）——重试时换一句理由就是"同键异参"，Stripe 会 400。
  *      所以重试必须发**首次**的理由，而首次理由唯一的落点就是这条事件的 note。
@@ -924,7 +929,7 @@ export async function findRefundingReason(tx: Db, orderId: string): Promise<stri
   const rows = await tx`
     select note from order_events
      where order_id = ${orderId} and status = 'refunding'
-     order by at desc, id desc
+     order by at asc, id asc
      limit 1
   `;
   const note = rows[0]?.['note'];

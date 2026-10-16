@@ -332,9 +332,9 @@ export function mountAllRoutes(app: Express, ctx: MountContext): void {
      * 回调是**唯一**一个"无登录态且来自公网"的写入口（@see pay-routes.ts @limitation 一），
      * 限流是它防告警/日志放大的那一道闸：验签失败会升 error 级（为暴露密钥配错），
      * 不限流则每 IP 每分钟的 error 条数无上界。
-     * 用 `publicWrite('pay.callback')` = 与报价/建单/短链**各自独立**的桶，互不消耗配额。
+     * 用单独的 `payCallback` 规则（四天提交复查 2026-10-16）：额度按机构出口算，不沿用买家入口的 30/分钟（@see rate-limit.ts）。
      */
-    callbackLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).publicWrite('pay.callback')),
+    callbackLimiter: rateLimiter(rateLimitDeps, rateLimitRules(config).payCallback),
   });
 
   // ── 报价路由（I1-U4）：**每个环境都挂**，与支付路由同理——它是产品接口不是脚手架 ──

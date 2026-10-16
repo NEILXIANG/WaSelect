@@ -796,6 +796,23 @@ describe('结算页薄壳：邮箱错误的时机与拼错提示（F7 / MP-9，�
 // 审计 BUG-01（2026-10-14）：从地址选择页返回后 refresh 在途、地址列表还没回来时，闸门仍按旧地址放行——
 // 这时点提交，订单按旧地址建、expected_total_jpy 也来自旧报价。刷新在途时提交一律忽略。
 describe('结算页：刷新在途时不建单', () => {
+  it('🔴 重算在途但地址已回来且为空（按钮因 fix=address 亮着）→ 点提交去选地址，不是点了没反应（四天提交复查 2026-10-16）', async () => {
+    await ready();
+    noAddr = true;
+    quoteHold = deferred();
+    call('onShow');
+    await settle();
+    expect((page.data['gate'] as { fix: string }).fix).toBe('address');
+    navigations.length = 0;
+    call('onSubmit');
+    await settle();
+    expect(navigations.some((u) => u.includes('/pages/address/'))).toBe(true);
+    expect(posts).toHaveLength(0);
+    quoteHold.resolve(quote);
+    quoteHold = null;
+    await settle();
+  });
+
   it('🔴 已满足条件 → 再次 onShow（报价挂起）→ 立刻点提交 → 不发 POST /orders；刷新完成后可提交', async () => {
     await ready();
     quoteHold = deferred();

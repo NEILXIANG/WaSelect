@@ -255,6 +255,33 @@ describe('GET /api/v1/admin/exports/{kind}（3-3）', () => {
     }
   });
 
+  it('🔴 拒付已败诉、限制被人工解除（has_dispute=false）→ 同样不进报关表、采购表标"先别采购"（四天提交复查 2026-10-16）', async () => {
+    await seedOrder('o-1', 'paid');
+    await seedOrder('o-l', 'paid');
+    await db`insert into payments (id, order_id, provider, status, charge_currency, charge_amount, dispute_id, dispute_status)
+             values ('pay-l', 'o-l', 'stripe', 'succeeded', 'JPY', 1650, 'dp_l', 'lost')`;
+    const { url, close } = await buildServer();
+    try {
+      const customs = (
+        (await call(url, 'GET', '/api/v1/admin/exports/customs', undefined, await bearer()))
+          .body as { csv: string }
+      ).csv;
+      expect(customs).not.toContain('WSo-l');
+      expect(customs).toContain('WSo-1');
+      const purchase = (
+        (await call(url, 'GET', '/api/v1/admin/exports/purchase', undefined, await bearer()))
+          .body as { csv: string }
+      ).csv;
+      const note = lines(purchase)
+        .find((l) => l.startsWith('WSo-l,'))
+        ?.split(',')
+        .at(-2);
+      expect(note).toBe('拒付锁定：暂不发货，先别采购');
+    } finally {
+      await close();
+    }
+  });
+
   it('orders：全部非测试单（可按 status 过滤），一单一行', async () => {
     await seedOrder('o-1', 'paid');
     await seedOrder('o-2', 'shipped');

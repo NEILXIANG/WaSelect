@@ -355,7 +355,7 @@ export const ADDRESS_REJECT_TEXT = {
   line2: '公寓 / 单元号（Apt / Suite）请用英文或数字填写',
   city: '城市请用英文填写',
   phone: '电话请填美国号码：10 位数字',
-  state: '请从下拉里选择州',
+  state: '州不正确：请选择或填写两位州缩写（如 CA）',
   postal_code: '邮编应为 5 位数字（或 5 位加 4 位，如 94133-1234）',
   country: '暂不支持寄往这个国家或地区',
 };

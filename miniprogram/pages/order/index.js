@@ -50,6 +50,8 @@ const PAY_PAGE = '/pages/pay/index';
 
 /** 订单详情页路径（同上）。 */
 const DETAIL_PAGE = '/pages/order-detail/index';
+/** 列表多久算过期（四天提交复查 2026-10-16）：超过就在 onShow 重取，见 onShow 判据④。 */
+const LIST_STALE_MS = 60_000;
 /** 首页（tab 页，剩余清单 4-8 空态出口）。 */
 const HOME_PAGE = '/pages/home/index';
 /** 「我的」（tab 页）：客服联系方式在那里（AJ-433）。 */
@@ -91,6 +93,8 @@ Page({
   seq: 0,
   /** S-7：已加载到第几页。 */
   page: 0,
+  /** 上次第 1 页取成功的时刻（毫秒；onShow 判据④）。 */
+  loadedAt: 0,
   /** S-7：已从服务端取走的条数（服务端偏移，判断还有没有下一页用；不是去重后的行数）。 */
   loaded: 0,
   /** S-7：响应里的 total。 */
@@ -136,6 +140,10 @@ Page({
     }
     // 从没成功取过：首屏，或上次取失败（失败时 load 的 catch 把游标复位）——下次进屏要能自己恢复
     if (this.page === 0) need = true;
+    // ④ 上次成功取数已超过 LIST_STALE_MS（四天提交复查 2026-10-16）：运营发货 / 退款 / 后台取消 / 到期关单
+    //    都不会置 ordersChanged（那只覆盖买家自己在小程序里的操作），不设时限的话买家回到列表永远看旧状态。
+    //    @tradeoff 过期重取回第 1 页、翻页位置丢失——换来"看到的状态不超过一分钟"，查发货的人要的是后者。
+    if (this.page > 0 && Date.now() - this.loadedAt > LIST_STALE_MS) need = true;
     if (need) void this.load();
     // S5：注入底部 tabBar 的高亮（本页是第 2 个 tab）。
     setActiveTab(this, 'order');
@@ -176,6 +184,7 @@ Page({
       if (isStale(seq, this.seq)) return;
       const rows = this.toRows(tab, res);
       this.page = 1;
+      this.loadedAt = Date.now();
       this.loaded = Array.isArray(res?.items) ? res.items.length : 0;
       this.total = res?.total;
       const empty = emptyState(rows, '', tab);

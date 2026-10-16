@@ -181,6 +181,14 @@ export function rateLimitRules(config: AppConfig): {
    *      成百上千用户共享一个出口 IP，共享桶会把无关用户一起拒掉。按入口分桶后配额互不消耗。
    */
   publicWrite: (routeKey: string) => RateLimitRule;
+  /**
+   * 支付回调：RATE_LIMIT_CALLBACK_PER_MIN（默认 600）次 / 分钟 / IP（四天提交复查 2026-10-16）。
+   * @why 回调的来源是**支付机构**而不是买家：Stripe 从少数固定 IP 发出全店所有订单的事件（每笔至少两条），
+   *      沿用买家入口的 30/分钟，积压重投或高峰时会被 429 → 机构指数退避（可到小时级）→ 订单在此期间到期关单，
+   *      钱到了却只能走迟到付款退款。限流在这里只为给"验签失败刷 error 日志"设上界，额度要按机构的出口算。
+   * @limitation 仍是按 IP 计、进程内计数（同 publicWrite）；超限回 429，机构会重投，不丢事件但会延迟。
+   */
+  payCallback: RateLimitRule;
 } {
   return {
     adminLogin: {
@@ -193,6 +201,11 @@ export function rateLimitRules(config: AppConfig): {
       limit: config.RATE_LIMIT_QUOTE_PER_MIN,
       windowMs: 60_000,
     }),
+    payCallback: {
+      routeKey: 'pay.callback',
+      limit: config.RATE_LIMIT_CALLBACK_PER_MIN,
+      windowMs: 60_000,
+    },
   };
 }
 

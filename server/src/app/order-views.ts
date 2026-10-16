@@ -134,6 +134,8 @@ export function toOrderListItem(
     expires_at: row.expires_at.toISOString(),
     // AJ-500：拒付进行中 / 败诉；没有就整键省略
     ...(row.payment_dispute !== null ? { payment_dispute: row.payment_dispute } : {}),
+    // 第二轮审查【1】（契约 0.6.98）：恒下发，与详情同口径
+    late_paid: row.late_paid,
   };
 }
 

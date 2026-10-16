@@ -203,7 +203,7 @@ export async function startApp(
             clock: fixedClock(now),
             logger,
           },
-          { ...rateLimitRules(config).publicWrite('pay.callback'), limit: 10_000 },
+          rateLimitRules(config).payCallback,
         ),
         // 与生产同一条落账路径（含通道/金额核对，三审 S1② / U1）：
         //    落账必须带"钱是怎么来的"——少传就编译不过，想在 e2e 里跳过核对

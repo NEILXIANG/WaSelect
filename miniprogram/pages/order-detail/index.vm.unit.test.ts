@@ -804,6 +804,13 @@ describe('detailView：待付款剩余时间', () => {
 
 // 审计 BUG-09（2026-10-14）：有进行中的售后申请时不给「确认收货」（服务端也拒 40902 after_sale_open）
 describe('detailView · 售后进行中不给确认收货', () => {
+  it('🔴 shipped + 拒付进行中 / 已败诉 → canConfirmReceipt=false（服务端必回 40902；第二轮审查【2】）', () => {
+    for (const d of ['open', 'lost']) {
+      expect(detailView({ status: 'shipped', payment_dispute: d }).canConfirmReceipt).toBe(false);
+    }
+    expect(detailView({ status: 'shipped' }).canConfirmReceipt).toBe(true);
+  });
+
   it('🔴 shipped + 售后 open / processing → canConfirmReceipt=false；已结案 → true', () => {
     for (const st of ['open', 'processing']) {
       expect(

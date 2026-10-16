@@ -206,7 +206,28 @@ describe('executeRefund：机构确定拒绝（ProviderRejectedError，独立排
     ).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AppError);
     expect((err as AppError).code).toBe(50000);
-    expect(notes).toEqual(['provider_failed:rejected:400']);
+    expect(notes).toEqual(['provider_failed:rejected:400:a0']);
+  });
+
+  it('🔴 第二次同码拒绝（已确认失败 1 次）→ note 带这次的尝试序号 a1，与第一次不同（否则去重后计数不涨、永远重放第 1 把键）', async () => {
+    const notes: string[] = [];
+    const sink = new MemorySink();
+    const db = ((...args: unknown[]) => {
+      const note = args.slice(1).find((v) => typeof v === 'string' && /^provider_/.test(v));
+      if (typeof note === 'string') notes.push(note);
+      return Promise.resolve([]);
+    }) as unknown as Db;
+    const d: RefundExecDeps = {
+      db,
+      logger: createLogger({ env: 'test', destination: sink }),
+      clock: CLOCK,
+      events: createEventBus(createLogger({ env: 'test', destination: sink })),
+    };
+    await executeRefund(d, provider(new ProviderRejectedError(400, 'stripe 退款失败：HTTP 400')), {
+      ...plan(),
+      progress: { pendingRef: null, confirmedFailures: 1 },
+    }).catch((e: unknown) => e);
+    expect(notes).toEqual(['provider_failed:rejected:400:a1']);
   });
 });
 

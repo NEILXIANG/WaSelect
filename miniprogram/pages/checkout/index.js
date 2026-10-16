@@ -611,13 +611,16 @@ Page({
     // 建单在途时直接忽略（W-03）：页面的 data 在 setData 后同步更新，而按钮组件的 loading 属性
     // 要等视图层回传——只靠按钮挡，快速双击的第二下会穿透，压入两个支付页。
     if (this.data.submitting === true) return;
-    // 审计 BUG-01（2026-10-14）：刷新在途（换地址返回 / 看条款返回 / 切后台回来）时地址、报价、条款可能还是旧的——
-    //   原先闸门仍按旧值放行，这一刻提交会按旧地址建单、expected_total_jpy 也来自旧报价。按钮同时置灰（wxml）。
-    if (this.refreshing === true) return;
+    // 缺的是买家能补的一项（fix 非空）就先带过去——即使重算还在途（四天提交复查 2026-10-16）：
+    //   闸门在重算中途可能已判出"没有地址"（fix=address），按钮因此亮着；若先判 refreshing 再判闸门，就是"亮着点不动"。
+    //   带过去只是导航 / 弹窗，不建单，没有按旧数据下单的风险。
     if (!this.data.gate.ok) {
       this.goFix(this.data.gate.fix);
       return;
     }
+    // 审计 BUG-01（2026-10-14）：刷新在途（换地址返回 / 看条款返回 / 切后台回来）时地址、报价、条款可能还是旧的——
+    //   这一刻建单会按旧地址、旧报价（expected_total_jpy）下单，所以在建单之前挡住（闸门 refreshing 档同时让按钮写明"正在重新计算"）。
+    if (this.refreshing === true) return;
     if (this.intentKey === null) return;
     let body;
     try {

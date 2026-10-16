@@ -116,7 +116,7 @@ describe('ws-pick-card：图片加载失败（审计 UX-01）', () => {
 });
 
 describe('ws-pick-card：内嵌价格不报空金额（三端联动走查 2026-10-08）', () => {
-  it('🔴 传了 priceJpy 渲染后控制台没有"金额必须是整数円"——空金额只该在真漏传时出现', () => {
+  it('🔴 传了 priceJpy 渲染后控制台没有"金额必须是整数日元"——空金额只该在真漏传时出现', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const comp = simulate.render(loadOnce(), {
@@ -130,7 +130,7 @@ describe('ws-pick-card：内嵌价格不报空金额（三端联动走查 2026-1
         .flat()
         .map((c) => String(c))
         .join('\n');
-      expect(logged).not.toMatch(/金额必须是整数円/);
+      expect(logged).not.toMatch(/金额必须是整数日元/);
     } finally {
       spy.mockRestore();
     }

@@ -115,7 +115,7 @@ function CustomerList({
         {loading && <span className="muted">加载中…</span>}
       </header>
       {/* 体验审查 2026-10-15（P2-4）：@see ../ui/list-error.jsx */}
-      {!loading && failed && <ListError what="客户列表" />}
+      {!loading && failed && <ListError what="客户列表" stale={rows.length > 0} />}
 
       <form
         className="filters"
@@ -138,7 +138,7 @@ function CustomerList({
       </form>
 
       {/* 体验审查 2026-10-15（P2-2）：与订单表 / 商品表同口径——操作列右固定，
-          窄窗口横向滚动时「查看 / 拉黑」不会被挤出视野。 */}
+          窄窗口横向滚动时「详情」不会被挤出视野（拉黑在客户详情页里）。 */}
       <table className="table table-sticky-actions">
         <thead>
           <tr>

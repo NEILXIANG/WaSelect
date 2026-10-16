@@ -551,6 +551,38 @@ describe('买家可见的迟到付款与部分退款（P2-11 / P2-12，AJ-386）
     }
   });
 
+  it('🔴 列表行也带 late_paid：迟到付款的单 true、其余 false（第二轮审查【1】：列表原先说"需要的话可以重新下单"，引导买家再付一笔）', async () => {
+    const srv = await buildServer();
+    try {
+      const late = await createOrder(srv.url, 'q1');
+      const normal = await createOrder(srv.url, 'q2');
+      await db`insert into order_events (order_id, status, actor, note)
+               values (${late}, 'late_paid', 'provider:stripe', 'pay-x')`;
+      const r = await get(srv.url, '/api/v1/orders');
+      const items = r.json['items'] as Array<Record<string, unknown>>;
+      const byId = new Map(items.map((i) => [i['order_id'], i]));
+      expect(byId.get(late)?.['late_paid']).toBe(true);
+      expect(byId.get(normal)?.['late_paid']).toBe(false);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('🔴 详情 completed_at：已完成的单带完成时刻（ISO），未完成 / 没有完成时刻的整键省略（契约 0.6.97，售后 7 天窗口前端据此判）', async () => {
+    const srv = await buildServer();
+    try {
+      const done = await createOrder(srv.url, 'q1');
+      const open = await createOrder(srv.url, 'q2');
+      await db`update orders set status = 'completed', completed_at = '2026-10-01T00:00:00Z' where id = ${done}`;
+      const d = await get(srv.url, `/api/v1/orders/${done}`);
+      expect(d.json['completed_at']).toBe('2026-10-01T00:00:00.000Z');
+      const o = await get(srv.url, `/api/v1/orders/${open}`);
+      expect(Object.prototype.hasOwnProperty.call(o.json, 'completed_at')).toBe(false);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('🔴 部分退款：成功与处理中的带出（不含管理员原因与操作人）；失败的不出现（钱没动）', async () => {
     const srv = await buildServer();
     try {

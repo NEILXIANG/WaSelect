@@ -149,7 +149,10 @@ function paidAmount(currency: unknown, minor: unknown): string | null {
 async function purchaseTable(db: Db, ids: readonly string[] | undefined): Promise<ExportTable> {
   const rows = await db`
     select o.order_no, o.paid_at, oi.product_id, oi.title_snapshot, oi.title_ja, oi.jan_code, oi.purchase_source,
-           oi.qty, oi.unit_price_jpy, oi.cost_jpy, o.has_dispute,
+           oi.qty, oi.unit_price_jpy, oi.cost_jpy,
+           -- 败诉拒付即使限制被人工解除也算锁定（四天提交复查 2026-10-16）：发货闸门认败诉（AJ-525），照表买了也发不出去
+           (o.has_dispute or exists (select 1 from payments p
+                                      where p.order_id = o.id and p.dispute_status = 'lost')) as has_dispute,
            exists (select 1 from users u where u.id = o.user_id and u.blocked_at is not null) as user_blocked
       from order_items oi join orders o on o.id = oi.order_id
      where o.status = 'paid' and o.is_test = false and (${idFilter(db, 'o.id', ids)})
@@ -209,7 +212,9 @@ async function customsTable(db: Db, ids: readonly string[] | undefined): Promise
       join orders o on o.id = oi.order_id
       join products p on p.id = oi.product_id
      -- 拒付锁定的单不许发货（40909），不进报关表（规律排查 2026-10-12）
-     where o.status = 'paid' and o.is_test = false and not o.has_dispute and (${idFilter(db, 'o.id', ids)})
+     where o.status = 'paid' and o.is_test = false and not o.has_dispute
+       and not exists (select 1 from payments p where p.order_id = o.id and p.dispute_status = 'lost')
+       and (${idFilter(db, 'o.id', ids)})
      order by o.paid_at, o.id, oi.line_no nulls last, oi.id`;
   return {
     header: [

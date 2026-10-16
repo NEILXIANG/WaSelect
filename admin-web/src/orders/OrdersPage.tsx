@@ -475,7 +475,7 @@ export function OrdersPage({ api, route, onNavigate }: OrdersPageProps) {
       {loading && <p className="muted">加载中…</p>}
       {/* 体验审查 2026-10-15（P2-4）：失败时列表保留上一次结果（清空会让运营失去手上的上下文），
           所以必须在页内说清"这份不是最新的"——右下角的 Toast 与表格没有视觉关联。 */}
-      {!loading && failed && <ListError what="订单列表" retry="刷新" />}
+      {!loading && failed && <ListError what="订单列表" retry="刷新" stale={rows.length > 0} />}
       {!loading && rows.length === 0 && !failed && (
         <p className="muted">
           没有符合条件的订单

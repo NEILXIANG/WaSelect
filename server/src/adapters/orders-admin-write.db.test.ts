@@ -16,6 +16,7 @@ import { ensureTestDb, resetTestDb, testDb } from '../../../test/db/test-db.js';
 import {
   findRefundablePayment,
   findRefundProgress,
+  findRefundingReason,
   lockAdminOrder,
   markRefunded,
   markRefunding,
@@ -216,6 +217,26 @@ describe('orders-admin 写路径（I2 U-B2b）', () => {
     });
     const evs = await db`select count(*)::int as n from order_events where order_id = 'o-1'`;
     expect(Number(evs[0]?.n)).toBe(1);
+  });
+
+  it('🔴 findRefundingReason：有两条 refunding 事件时取**最早**那条（重试必须发首次的理由，同键异参 Stripe 会 400；与后台 firstRefundReason 同口径）', async () => {
+    await seedPaidOrder('o-1', 'refunding');
+    await db`insert into order_events (order_id, status, note, actor, at)
+             values ('o-1', 'refunding', '首次理由', 'admin:u-a', '2026-09-29T01:00:00Z'),
+                    ('o-1', 'refunding', '后来的理由', 'admin:u-a', '2026-09-29T02:00:00Z')`;
+    expect(await findRefundingReason(db, 'o-1')).toBe('首次理由');
+  });
+
+  it('🔴 findRefundProgress：两把键先后被机构以同一状态码拒绝 → 计 2 次（note 带 :a<序号>，四天提交复查 2026-10-16）', async () => {
+    await seedPaidOrder('o-1', 'refunding');
+    const at = new Date('2026-09-29T01:00:00Z');
+    await recordRefundFailed(db, 'o-1', 'provider_failed:rejected:400:a0', 'admin:u-a', at);
+    expect((await findRefundProgress(db, 'o-1')).confirmedFailures).toBe(1);
+    // 同一把键的并发重复事件仍只算 1 次（OPS3-06 的去重口径不变）
+    await recordRefundFailed(db, 'o-1', 'provider_failed:rejected:400:a0', 'admin:u-a', at);
+    expect((await findRefundProgress(db, 'o-1')).confirmedFailures).toBe(1);
+    await recordRefundFailed(db, 'o-1', 'provider_failed:rejected:400:a1', 'admin:u-a', at);
+    expect((await findRefundProgress(db, 'o-1')).confirmedFailures).toBe(2);
   });
 
   it('findRefundProgress（F-03）：最新一条是 pending → 带出单号；确认失败只数 provider_failed:*，不数 provider_error', async () => {

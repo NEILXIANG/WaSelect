@@ -466,6 +466,11 @@ export interface OwnedOrderListRow extends OrderListRow {
    */
   after_sale_state: 'open' | 'closed' | null;
   /**
+   * 有迟到付款凭据（关单后才到的钱，第二轮审查【1】，契约 0.6.98）：列表据此说"已收到付款，会原路退回"，
+   * 而不是"需要的话可以重新下单"。与详情 `late_paid` 同一判据。
+   */
+  late_paid: boolean;
+  /**
    * 付款截止（AJ-435，契约 0.6.61）：与详情同一列 `orders.expires_at`（NOT NULL）。
    * @why 小程序待付款行写明"几点前付款"——原先只说"请在截止时间前完成支付"，却不说截止是几点。
    */
@@ -554,7 +559,10 @@ export async function listOwnedOrders(
                            where a.order_id = o.id and a.status in ${db([...AFTER_SALE_OPEN_STATUSES])}) then 'open'
              when exists (select 1 from after_sale_requests a where a.order_id = o.id) then 'closed'
            end as after_sale_state,
-           ${buyerDisputeSql(db)} as payment_dispute
+           ${buyerDisputeSql(db)} as payment_dispute,
+           -- 第二轮审查【1】：与详情 hasLatePaid 同一判据（order_events 的 late_paid 凭据）；order_events(order_id) 有外键索引
+           exists (select 1 from order_events e where e.order_id = o.id and e.status = 'late_paid')
+             as late_paid
       from orders o
      where ${ownedOrderFilter(db, userId, statuses, opts?.includeAfterSale === true)}
      order by o.created_at desc, o.id desc
@@ -575,6 +583,7 @@ export async function listOwnedOrders(
       r.after_sale_state === 'open' || r.after_sale_state === 'closed' ? r.after_sale_state : null,
     expires_at: r.expires_at as Date,
     payment_dispute: asDispute(r.payment_dispute),
+    late_paid: r.late_paid === true,
   }));
 }
 

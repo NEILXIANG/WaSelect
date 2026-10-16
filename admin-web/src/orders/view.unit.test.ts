@@ -682,6 +682,16 @@ describe('refundFailureNotice（B41 残留 / AJ-230）', () => {
   });
 });
 
+describe('eventNoteView：机构确定拒绝的整单退款（四天提交复查 2026-10-16）', () => {
+  it('🔴 新格式（带 :a<序号>）与老格式都读成"机构拒绝了这笔退款（HTTP 400）"，不露机器串', () => {
+    for (const note of ['provider_failed:rejected:400:a1', 'provider_failed:rejected:400']) {
+      const v = eventNoteView('refund_failed', note);
+      expect(v.text).toContain('机构拒绝了这笔退款（HTTP 400）');
+      expect(v.text).not.toContain('provider_failed');
+    }
+  });
+});
+
 describe('fullRefundErrorNotice（P2-49：出错后按刷新后的真实状态说话）', () => {
   const refunding = (events: unknown[]): unknown => ({ status: 'refunding', events });
 

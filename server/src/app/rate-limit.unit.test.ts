@@ -226,6 +226,25 @@ describe('rateLimiter 中间件（桩）', () => {
     expect(run(deps, '2.2.2.2').err).toBeUndefined();
   });
 
+  it('🔴 支付回调单独一条规则：默认每 IP 每分钟 600 次，不沿用买家写入口的 30（四天提交复查 2026-10-16）', () => {
+    // @why Stripe 的 webhook 从少数固定 IP 发出，全店所有订单的事件挤在每 IP 一个桶里；
+    //      30/分钟在重投积压时会被 429 → Stripe 指数退避（可到小时级）→ 订单期间到期关单、钱变成迟到付款
+    const base = {
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgres://localhost/x',
+      JWT_SECRET: 'rate-limit-unit-secret-'.repeat(3),
+      PAYMENT_CHANNELS: 'mock',
+      TERMS_VERSION: 'T',
+    };
+    const rule = rateLimitRules(loadConfig(base)).payCallback;
+    expect(rule.limit).toBe(600);
+    expect(rule.windowMs).toBe(60_000);
+    expect(rule.routeKey).toBe('pay.callback');
+    expect(
+      rateLimitRules(loadConfig({ ...base, RATE_LIMIT_CALLBACK_PER_MIN: '50' })).payCallback.limit,
+    ).toBe(50);
+  });
+
   it('publicWrite(routeKey) 每个入口独立桶：报价打满不消耗登录 / 建单的配额（全量审计 P1）', () => {
     const cfg = loadConfig({
       NODE_ENV: 'test',

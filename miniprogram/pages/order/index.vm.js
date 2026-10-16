@@ -20,7 +20,13 @@ import { displaySubLine, formatJpy } from '../../utils/price-format.js';
 // ⚠️ 状态词表与可付态的真源在 `../../utils/order-status.js`（U-H3 下沉）：
 //    订单详情页也要用，而页面不能 import 页面。与契约的双向比对测试跟着真源一起搬走
 //    （只搬代码不搬测试 = 守护静默消失，见 utils/order-status.unit.test.ts）。
-import { PAYABLE, buyerStatus, disputeStatus } from '../../utils/order-status.js';
+import {
+  LATE_PAID_CLOSED_STATUSES,
+  LATE_PAID_NOTE,
+  PAYABLE,
+  buyerStatus,
+  disputeStatus,
+} from '../../utils/order-status.js';
 import { ORDER_TABS, resolveOrderTab } from '../../utils/order-tabs.js';
 import { jstDateTimeLabeled } from '../../utils/jst-text.js';
 import { PLACEHOLDER_IMAGE } from '../../utils/placeholder.js';
@@ -68,6 +74,8 @@ const EXPIRED_NEXT = '支付时间已到，订单将自动关闭；如需购买�
 
 /** 一行的"下一步"提示：售后进度 > 付款截止 > 订单状态的列表提示。 */
 function nextTextOf(o, status, buyer) {
+  // 第二轮审查【1】：关单后才到的付款——钱已扣，不能说"需要的话可以重新下单"（与详情同一句）
+  if (o.late_paid === true && LATE_PAID_CLOSED_STATUSES.includes(status)) return LATE_PAID_NOTE;
   if (
     AFTER_SALE_HINT_STATUSES.includes(status) &&
     (o.after_sale_state === 'open' || o.after_sale_state === 'closed')
@@ -103,7 +111,7 @@ function clipChars(s, max) {
  *                  titleText: string}>}
  * @why M-11（AJ-408）：行里补下单时间（找单靠它）、首件缩略图与件数（契约 0.6.49 `OrderListItem`）。
  *      时间走 `jstDateTimeLabeled`（纯整数换算，不读时钟；带"（日本时间）"，同详情页 MP3-02 口径），
- *      解析不了给空串——列表行不回落原串（详情页才是"数据不能丢"的地方，列表行宁缺不错）。
+ *      解析不了给空串、不回落原串（2026-10-15 起详情页也同一口径：没标注时区的时间比不显示更容易读错）。
  * @why M-06（AJ-405）：状态用买家视角词表 `buyerStatus`（"已付款 · 日本采购中"）并带一句"下一步"；
  *      列表行（OrderSummary）不含 contact_email，所以不传 email——不承诺"会发邮件"。
  * @why 同时给 `totalJpy`（整数，交给 `ws-price`）与 `totalText`（已格式化串）：

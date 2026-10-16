@@ -35,6 +35,7 @@ import {
 } from './index.vm.js';
 import { contactFields, errorFields } from '../../utils/error-text.js';
 import { copyFailText } from '../../utils/privacy.js';
+import { markImageFailed } from '../../utils/image-failed.js';
 import { createWxApi } from '../../utils/wx-api.js';
 import { newTraceId } from '../../utils/trace.js';
 import { recentExternalPay } from '../../utils/external-pay.js';
@@ -408,14 +409,9 @@ Page({
    *      （pages/detail 的 `onGalleryError` 改 images 数组是同一招，那边 product 不由 vm 重算）。
    */
   onItemImgError(e) {
-    const i = Number(e?.currentTarget?.dataset?.index);
-    if (!Number.isInteger(i) || i < 0) return;
-    const failed = Array.isArray(this.data.imgFailed) ? this.data.imgFailed : [];
-    // 已经标过就别再 setData：同一张图会连着报好几次错，每报一次重渲一次列表
-    if (failed[i] === true) return;
-    const next = failed.slice();
-    next[i] = true;
-    this.setData({ imgFailed: next });
+    // 算法只住在 utils/image-failed.js（四天提交复查 2026-10-16：这里原先内联了第二份）；null = 非法下标或已标过
+    const next = markImageFailed(this.data.imgFailed, e?.currentTarget?.dataset?.index);
+    if (next !== null) this.setData({ imgFailed: next });
   },
 
   /** 点商品行进详情（A7）：看看现在还卖不卖、什么价。 */

@@ -176,12 +176,25 @@ describe('运营日志：取数在途要有 loading 态（P2-3）', () => {
 
 // 体验审查 2026-10-15（P2-4）：失败时列表保留上一次结果，只靠右下角 Toast 说不清"这份不是最新的"。
 describe('运营日志：取数失败要在页内说出来（P2-4）', () => {
-  it('🔴 页内给一行红字，说明下面是上一次成功加载的结果', async () => {
+  it('🔴 首次取数就失败（下面没有旧数据）→ 说"没能加载"，不说"下面是上一次成功的结果"（四天提交复查 2026-10-16）', async () => {
     const el = await open(120, '', null, true);
-    expect(el.querySelector('p.error')?.textContent).toContain(
-      '操作记录没能刷新，下面显示的是上一次成功加载的结果',
-    );
-    expect(el.querySelector('p.error')?.textContent).toContain('请点「查询」重试');
+    const t = el.querySelector('p.error')?.textContent ?? '';
+    expect(t).toContain('操作记录没能加载');
+    expect(t).not.toContain('上一次成功加载');
+    expect(t).toContain('请点「查询」重试');
+  });
+
+  it('🔴 失败后条件没变直接点「查询」→ 真的重新取数，成功后红字消失（四天提交复查 2026-10-16）', async () => {
+    const el = await open(120, '', null, true);
+    // 先点一次（仍失败）：把 page=1 等参数写进地址栏——之后再点，写回的是同一串参数
+    (button(el, '查询') as HTMLButtonElement).click();
+    await flush();
+    failAudit = false;
+    const before = paths.filter((p) => p.includes('/admin/audit')).length;
+    (button(el, '查询') as HTMLButtonElement).click();
+    await flush();
+    expect(paths.filter((p) => p.includes('/admin/audit')).length).toBe(before + 1);
+    expect(el.querySelector('p.error')).toBeNull();
   });
 });
 

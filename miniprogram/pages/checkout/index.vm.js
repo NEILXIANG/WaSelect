@@ -103,6 +103,9 @@ export function termsFromResponse(res) {
  *      本文件原先自己写 `code === 40301`（`addressFailedText` 与 `gateCore` 两处），而 40301 的成因不止一种——
  *      源站校验失败（`server/src/http.ts` 的 `origin_not_verified`）买家同样碰得到，那是服务端故障，
  *      说成"你的账号被限制"会让人去找客服，而客服查不出任何问题（规律①：修一处不扫同类）。
+ * @why 文案**刻意**与 error-text 的 `FORBIDDEN_TEXT` 不同（四天提交复查 2026-10-16 核过）：这是提交按钮上方的闸门短句，
+ *      要说的是"这一页下不了单"；FORBIDDEN_TEXT 是通用错误态。停售（40916）同理：这里只说"恢复后即可下单"，
+ *      不用 `SALES_PAUSED_TEXT`——那句讲"未付款的订单到期会自动关闭"，结算页还没有订单。判据仍各只一份。
  */
 const RESTRICTED_TEXT = '账号已被限制使用，暂时无法下单，如有疑问请联系客服';
 
@@ -232,7 +235,8 @@ const EMAIL_ERROR = '邮箱格式不正确，应类似 name@gmail.com';
  * @why 订阅消息未开通（外部阻塞，对标分析 §7），邮件是付款 / 发货 / 退款通知的**唯一**渠道（AJ-369）；
  *      收集时告知的利用目的要与实际一致（APPI）——这句话与输入框占位说明同一用途。
  */
-export const EMAIL_REQUIRED_TEXT = '请填写联系邮箱：付款、发货、退款通知都会发到这里，不填将收不到';
+export const EMAIL_REQUIRED_TEXT =
+  '请填写联系邮箱：付款、发货、退款通知都会发到这里，订单有问题时我们也会用它联系你';
 
 /**
  * 结算页"联系邮箱"输入 → 要发的值与错误（PRD §3 确认订单 / D-39；提审前必须，AJ-180）。

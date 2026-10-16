@@ -26,9 +26,9 @@
        @why 不放"用户中心"图标在右上角（沿用原型口径）：右上角放头像会把首页变成"App"。
             用户入口在底部 tabBar「我的」（M-14 起首页不再重复放"购物车 / 我的"按钮）。 -->
   <view class="ws-gutter home__bar">
-    <!-- 审计 CPY-01：「選」是日文汉字 / 繁体字形，全仓仅此一处；改规范简体「选品」后与右侧
-         "Japanese Selection" 仍是同一件事（选品 = 挑出来的东西）。 -->
-    <text class="home__mark-cn">日本选品</text>
+    <!-- 品牌字标「日本選品」用日文字形是刻意的（2026-10-13 审查处置：品牌字标不改，改为简体属品牌决定、由负责人定）。
+         2026-10-15 曾被改成简体，四天提交复查（2026-10-16）按既有决定改回。 -->
+    <text class="home__mark-cn">日本選品</text>
     <text class="home__mark-en">Japanese Selection</text>
   </view>
 

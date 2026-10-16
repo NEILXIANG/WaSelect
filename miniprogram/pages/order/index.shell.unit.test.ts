@@ -342,6 +342,24 @@ describe('订单列表：进屏按需重取（体验审查 2026-10-15，P1-2）'
     expect(page.data['rows']).toHaveLength(25);
   });
 
+  it('🔴 上次取数超过 60 秒 → 进屏重取（运营发货 / 退款 / 关单不会置 ordersChanged；四天提交复查 2026-10-16）', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-16T01:00:00Z'));
+      await loadedTwoPages();
+      vi.setSystemTime(new Date('2026-10-16T01:00:30Z'));
+      (page['onShow'] as () => void)();
+      await settle();
+      expect(calls, '30 秒内回来不重取（保住翻页与滚动）').toEqual([]);
+      vi.setSystemTime(new Date('2026-10-16T01:01:01Z'));
+      (page['onShow'] as () => void)();
+      await settle();
+      expect(calls).toEqual(['GET /api/v1/orders?page=1&size=20']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('🔴 别处改过订单（globalData.ordersChanged）→ 进屏重取，且读走即清（下次进屏不再取）', async () => {
     await loadedTwoPages();
     gd['ordersChanged'] = true;

@@ -70,7 +70,7 @@ export function minorMoneyText(amount: unknown, currency: unknown): string {
   const body = frac === undefined ? grouped : `${grouped}.${frac}`;
   // 日元写「日元」后缀：`¥` 在本项目口径里是人民币（D-36），管理端详情原先显示 `mock · ¥2,700`，运营会读成人民币（2026-10-08）。
   // 不写「円」（全入口点击测试 2026-10-12：运营问"円是什么意思"——后台是中文运营看的，日文字认不得；
-  // 小程序价格区的「円」是 D-36 定的，后台不在其列）
+  // 同一次起小程序 formatJpy 也改成「日元」，两端同一个单位字）
   if (key === 'JPY') return `${neg ? '-' : ''}${body} 日元`;
   return `${neg ? '-' : ''}${symbol}${body}`;
 }
