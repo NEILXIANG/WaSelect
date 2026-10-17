@@ -1,0 +1,152 @@
+# Render 预发布（staging）部署清单——Infrastructure as Code。
+#
+# 用法见 docs/操作手册-staging搭建与小程序真机-新手版.md：
+#   Render 控制台 → New → Blueprint → 选本仓库 → Blueprint Path 填 `render.staging.yaml` → Deploy Blueprint。
+#
+# @why 与生产清单 render.yaml **分成两份文件**，而不是同一份里改几个值：
+#      ① 名字不同（waselect-staging-*），两套可以同时存在于一个 Render 工作区而不互相覆盖——
+#        Render 对"同名服务"的行为是把清单套用到已有服务上（blueprint-spec，2026-10-16 取回），名字一撞就改到别人身上；
+#      ② 值不同：NODE_ENV=staging、真实通道只开 stripe（用 sk_test_ 测试密钥）、不开审核模式、库名不带 prod、数据库取最小档；
+#      ③ 受 test/config/render-staging.unit.test.ts 守卫：键名拼错、密钥写进清单、名字与生产撞车都会红。
+# @why 能写死的 URL 都写死成 value（它们不是密钥）：Render 对 `sync: false` 的值只在**首次创建 Blueprint 时**弹窗询问，
+#      之后改清单不会再问（blueprint-spec 原话："Render ignores any environment variables with sync: false" on update）。
+#      新手最容易卡在"创建完才发现某个变量没填、之后只能去控制台一项项补"，所以只有真正的密钥才用 sync: false。
+# @why 随机密钥（JWT_SECRET / INTERNAL_JOB_SECRET）用 generateValue：Render 生成 256 位随机值，不用你在终端里敲 openssl。
+#      代价：值只存在于 Render 控制台（能进控制台的人都看得到），staging 可以接受；生产密钥另行处理。
+# @limitation 一：URL 里的服务名（waselect-staging-api 等）假定 `*.onrender.com` 与 `*.pages.dev` 上没被别人占用。
+#      被占用时 Render 会给名字加随机后缀，这几个 URL 就要对着控制台实际显示的地址改（手册第 5.6 节）。
+# @limitation 二：没有配置图片存储（STORAGE_DRIVER / R2_*）：staging 商品没有图，页面显示占位图；要测图片上传再另配 R2。
+# @limitation 三：没有配置邮件（MAIL_*）与错误上报（SENTRY_DSN）：staging 不强制，缺了只是不发信 / 不上报。
+# @limitation 四：APP_ID / APP_SECRET 不在清单里：它们必须成对出现，而测试号可能比 Blueprint 创建得晚，
+#      所以拿到测试号后到控制台 Environment 里**一起**加两项（手册第 9.6 节）。
+# @see render.yaml（生产）；.env.example（变量含义的唯一真源）；server/src/config.ts（staging 的跨字段规则）
+
+services:
+  - type: web
+    name: waselect-staging-api
+    runtime: node
+    region: oregon # 与生产同区；cron 走私网，必须与 web 同区
+    plan: 0.5c-512mb # 最小付费档。禁免费档：休眠后首个请求要几十秒，Stripe 回调会超时重发
+    branch: main
+    buildCommand: npm ci --include=dev && npm run build
+    preDeployCommand: npm run db:migrate
+    startCommand: npm start
+    healthCheckPath: /healthz
+    numInstances: 1
+    envVars:
+      - key: NODE_ENV
+        value: staging # 决定一批"公网环境"闸门：禁开发登录 / 禁自动确认 / 要求显式密钥（server/src/config.ts）
+      - key: NODE_VERSION
+        value: '22'
+      - key: HOST
+        value: 0.0.0.0
+      - key: TRUST_PROXY_HOPS
+        value: 1 # Render 前一层反代。API 域名在 Cloudflare 里必须设"仅 DNS"（灰云），否则层数变 2
+      - key: DATABASE_URL
+        fromDatabase:
+          name: waselect-staging-pg
+          property: connectionString
+      - key: HTTP_TIMEOUT_MS
+        value: 10000
+      - key: HTTP_TOTAL_BUDGET_MS
+        value: 6000
+      - key: CB_FAILURE_THRESHOLD
+        value: 5
+      - key: CB_COOLDOWN_MS
+        value: 30000
+      - key: CB_HALF_OPEN_PROBES
+        value: 1
+      - key: JWT_SECRET
+        generateValue: true
+      - key: INTERNAL_JOB_SECRET
+        generateValue: true
+      - key: TERMS_VERSION
+        value: TOS-2026-09-20
+      - key: PAYMENT_CHANNELS
+        value: stripe # 只开 stripe（sk_test_ 测试密钥）；staging 不留 mock 的门
+      - key: REVIEW_MODE
+        value: 'off'
+      - key: CORS_ORIGINS
+        value: https://waselect-staging-admin.onrender.com # 精确匹配、不支持通配；必须与下面管理端的真实地址一致
+      - key: PUBLIC_API_BASE
+        value: https://waselect-staging-api.onrender.com
+      - key: CHECKOUT_BASE_URL
+        value: https://waselect-checkout-staging.pages.dev # Cloudflare Pages 项目名必须是 waselect-checkout-staging
+      - key: LEGAL_BASE_URL
+        value: https://waselect-checkout-staging.pages.dev
+      - key: STRIPE_SECRET_KEY
+        sync: false # sk_test_…（Stripe 沙盒里的测试密钥）
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false # whsec_ 开头；首次创建时先填一个 whsec_ 开头的占位值，建好 Stripe 端点后到控制台改成真值
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_INITIAL_PASSWORD
+        sync: false # ≥12 位；只建号不改号，建号并换口令后可以从控制台删除
+
+  # 每日作业：对账 / 看门狗 / 卡住的回调。staging 也要跑，否则永远看不到"作业停了"的告警。
+  - type: cron
+    name: waselect-staging-daily
+    runtime: node
+    region: oregon
+    plan: 0.5c-512mb
+    schedule: '10 18 * * *' # UTC 18:10 = JST 03:10
+    branch: main
+    buildCommand: 'true'
+    startCommand: >-
+      node -e "fetch('http://' + process.env.DAILY_JOB_TARGET + '/api/v1/internal/jobs/daily',
+      {method: 'POST', headers: {'x-internal-job-secret': process.env.INTERNAL_JOB_SECRET},
+      signal: AbortSignal.timeout(30000)})
+      .then((r) => { console.log('daily job HTTP', r.status, 'trace', r.headers.get('x-trace-id')); if (r.status !== 202) process.exit(1); })
+      .catch((e) => { console.error(e); process.exit(1); })"
+    envVars:
+      - key: NODE_VERSION
+        value: '22'
+      - key: INTERNAL_JOB_SECRET
+        fromService:
+          type: web
+          name: waselect-staging-api
+          envVarKey: INTERNAL_JOB_SECRET
+      - key: DAILY_JOB_TARGET
+        fromService:
+          type: web
+          name: waselect-staging-api
+          property: hostport
+
+  # 管理端静态站（运营后台）。
+  - type: web
+    name: waselect-staging-admin
+    runtime: static
+    buildCommand: npm ci --include=dev && npm run build -w admin-web
+    staticPublishPath: ./admin-web/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https:; connect-src 'self' https:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+      - path: /*
+        name: X-Content-Type-Options
+        value: 'nosniff'
+      - path: /*
+        name: X-Frame-Options
+        value: 'DENY'
+      - path: /*
+        name: Referrer-Policy
+        value: 'no-referrer'
+    envVars:
+      - key: NODE_VERSION
+        value: '22'
+      - key: DEPLOY_TARGET
+        value: render-static # 构建闸门开关：要求 VITE_API_BASE_URL 是 https 公网地址，漏配则构建失败而不是烤进 localhost
+      - key: VITE_API_BASE_URL
+        value: https://waselect-staging-api.onrender.com # 必须与上面 API 的真实地址、CORS_ORIGINS 同源
+
+databases:
+  - name: waselect-staging-pg
+    region: oregon
+    plan: 0.1c-256mb # 最小档（blueprint-spec 合法值）。staging 数据可重建；禁免费档（30 天过期，到期连库带数据一起删）
+    postgresMajorVersion: '16' # 代码有硬闸门 assertPostgresMajor(>=16)
+    databaseName: japan_shop_staging # 不带 prod、也不叫 japan_shop：seed 的"库名含 prod 就拒"闸门对 staging 不该误触发，也不该被当成本机开发库
+    user: waselect
