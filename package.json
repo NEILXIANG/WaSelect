@@ -49,7 +49,7 @@
     "dev": "tsx scripts/dev-up.ts",
     "smoke": "tsx scripts/smoke.ts",
     "stripe:rehearsal": "tsx scripts/stripe-rehearsal.ts",
-    "mutation": "stryker run",
+    "mutation": "tsx scripts/mutate.ts",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "audit": "npm audit",
     "gate:fast": "npm run check:node && npm run format:check && npm run lint && npm run typecheck && npm run test:fast && npm run test:guards",
@@ -60,8 +60,6 @@
   "comment:deps": "运行时依赖一律声明在**用到它的那个 workspace**（server / packages/shared），根 package.json 只放工具链。@why 曾经把 express/jose/bcryptjs/pino 装在根上：靠 npm workspaces 的扁平提升能跑，但 ① 谁依赖什么不可见，删模块时不敢删依赖；② node-pg-migrate 根本没进 package.json（装的时候被信号打断），npm ci 会装不出迁移工具——这个坑已经踩过一次。",
   "devDependencies": {
     "@eslint/js": "^9.34.0",
-    "@stryker-mutator/core": "^10.0.0",
-    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/node": "^22.18.0",
     "@vitest/coverage-v8": "^5.0.1",
     "eslint": "^9.34.0",

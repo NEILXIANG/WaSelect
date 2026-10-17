@@ -1,6 +1,4 @@
 node_modules
-# Stryker 变异沙盒（整仓副本，不是源码）
-.stryker-tmp
 dist
 coverage
 package-lock.json
