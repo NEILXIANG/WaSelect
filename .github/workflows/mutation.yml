@@ -1,0 +1,40 @@
+name: mutation
+
+# 职责：每周对严格档纯函数模块跑一次变异测试（stryker.config.json），分数低于阈值即红。
+#
+# @why 覆盖率证明"每行都跑过"，证明不了"错了会红"。变异测试自动往代码里塞小错（翻比较符、删分支、改常量），
+#      数有多少个被测试抓住——四天提交复查（2026-10-16）抓到的"反向断言永远为真"就是它能抓、覆盖率抓不到的那类。
+# @why 不进 gate、只按周跑：一轮十几分钟，放进每次提交会拖垮节奏；一周一次足够发现"测试在变弱"的趋势。
+# @why 只跑 unit 项目（不起 Postgres）：被变异的都是纯函数模块，unit 就能判死（见 stryker.config.json）。
+# @limitation 存活的变异不一定是缺陷（可能是等价变异）；红了先看报告（上传为 artifact），别为了分数补无意义断言。
+# @see stryker.config.json；docs/真平台验收清单.md 附录
+
+on:
+  schedule:
+    # UTC 20:00 周日 = 日本时间周一 05:00
+    - cron: '0 20 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 变异测试（严格档纯函数模块）
+        run: npm run mutation
+      - name: 上传报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: var/mutation/report.html
+          if-no-files-found: ignore

@@ -1,0 +1,42 @@
+name: smoke
+
+# 职责：每天对已部署环境（staging / 生产）跑一遍冒烟（scripts/smoke.ts），坏了发到 GitHub 通知。
+#
+# @why 本机的 gate 验代码，验不了部署：环境变量漏填、域名没登记、迁移没跑、每日作业停了——
+#      这些只有打到真环境才看得见，而没人会每天手动去看。定时跑 + 失败即红，是上线后最省心的那道保险。
+# @why 用仓库变量 SMOKE_BASE_URL 当开关：没配（staging 还没搭）时整个 job 跳过，不会天天红。
+# @why 管理层凭据走 Secrets，三项都配才跑管理层（登录 + 对账异常计数）；只配地址就只跑公开层。
+#      TOTP 密钥是 `npm run admin:totp` 打印的 base32 串；建议给冒烟单独建一个管理员账号，泄露时只撤它。
+# @limitation 一：冒烟只看"此刻好不好"，不重试；偶发网络抖动造成的红由下一次定时覆盖（看连续两次才算真坏）。
+# @limitation 二：买家链路（登录 → 下单 → 付款）不在冒烟里：staging 禁用开发登录，真实登录要 AppID。
+#            有 AppID 后那条链由 scripts/stripe-rehearsal.ts 覆盖（人工触发）。
+# @see scripts/smoke-lib.ts；docs/真平台验收清单.md
+
+on:
+  schedule:
+    # UTC 21:30 = 日本时间 06:30：每日作业（JST 03:10）跑完之后、运营上班之前
+    - cron: '30 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: ${{ vars.SMOKE_BASE_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 冒烟（公开层 + 管理层）
+        env:
+          SMOKE_BASE_URL: ${{ vars.SMOKE_BASE_URL }}
+          SMOKE_ADMIN_EMAIL: ${{ secrets.SMOKE_ADMIN_EMAIL }}
+          SMOKE_ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
+          SMOKE_ADMIN_TOTP_SECRET: ${{ secrets.SMOKE_ADMIN_TOTP_SECRET }}
+        run: npm run smoke

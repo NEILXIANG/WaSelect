@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": [
+    "变异测试（上线前自动化方案 2026-10-16）：自动在代码里制造小改动（翻比较符、删分支、改常量），看单测抓不抓得住。",
+    "@why 只开给**严格档**里有纯函数单测的模块：钱（money / 退款额度）、订单号、状态机、报价、脱敏、幂等键。",
+    "     这些模块的 100% 覆盖率门槛证明\"每行都跑过\"，证明不了\"错了会红\"——四天提交复查（2026-10-16）抓到的",
+    "     \"反向断言永远为真\"正是覆盖率看不见、变异测试看得见的那类。",
+    "@why 只跑 vitest 的 unit 项目：db / e2e 每个变异都要重跑一遍 Postgres 用例，一轮要数小时；且这几个模块的",
+    "     判断都在纯函数里，unit 就能判死。适配器层（mark-paid / refund-execution 等）的变异要配 db 项目，另行评估。",
+    "@why 不进 gate：一轮几分钟到十几分钟，放进每次提交会把提交节奏拖垮；按周跑（.github/workflows/mutation.yml），",
+    "     结果低于 thresholds.break 才红。break 先留 null（只出报告不判红）：阈值要按首轮实测取（见 docs/真平台验收清单.md 附录），不是拍的。",
+    "@why ignoreStatic：首轮实测（2026-10-16）1031 个变异里 350 个是模块顶层常量的静态变异，每个都要把 2278 条相关用例整个重跑一遍，占 92% 时间（预估 2.5 小时）；跳过后一轮十几分钟。静态常量（上限、字母表）另有单测直接钉值。",
+    "@why 不变异字符串字面量：这些模块里的字符串多是错误消息与脱敏占位文案，测试刻意不逐字断言（文案归轻量档）；留着只会产出一堆\"存活\"噪音。",
+    "@limitation 存活的变异不一定是缺陷：有些是等价变异（改了但语义不变）；看报告时逐条判断，别为了分数补无意义断言。"
+  ],
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vitest.config.mts",
+    "related": true
+  },
+  "mutate": [
+    "packages/shared/src/money.ts",
+    "packages/shared/src/orderNo.ts",
+    "server/src/domain/order-no.ts",
+    "server/src/domain/order.ts",
+    "server/src/domain/partial-refund.ts",
+    "server/src/domain/quote.ts",
+    "server/src/domain/shipping-fit.ts",
+    "server/src/redact.ts",
+    "server/src/review-window.ts"
+  ],
+  "ignorePatterns": [
+    "dist",
+    "coverage",
+    ".gate",
+    "var",
+    "miniprogram/node_modules",
+    "admin-web/dist"
+  ],
+  "reporters": ["clear-text", "progress", "html"],
+  "htmlReporter": { "fileName": "var/mutation/report.html" },
+  "incremental": true,
+  "incrementalFile": "var/mutation/incremental.json",
+  "coverageAnalysis": "perTest",
+  "ignoreStatic": true,
+  "mutator": { "excludedMutations": ["StringLiteral"] },
+  "thresholds": { "high": 90, "low": 75, "break": null },
+  "timeoutMS": 20000,
+  "dryRunTimeoutMinutes": 25,
+  "concurrency": 4
+}
