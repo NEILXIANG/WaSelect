@@ -67,7 +67,7 @@
     "eslint": "^9.34.0",
     "eslint-config-prettier": "^10.1.8",
     "fast-check": "^4.10.2",
-    "js-yaml": "^4.3.2",
+    "js-yaml": "^5.4.3",
     "jsdom": "^30.1.1",
     "miniprogram-simulate": "^1.6.2",
     "node-pg-migrate": "^9.0.0",
