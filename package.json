@@ -60,7 +60,7 @@
   "comment:deps": "运行时依赖一律声明在**用到它的那个 workspace**（server / packages/shared），根 package.json 只放工具链。@why 曾经把 express/jose/bcryptjs/pino 装在根上：靠 npm workspaces 的扁平提升能跑，但 ① 谁依赖什么不可见，删模块时不敢删依赖；② node-pg-migrate 根本没进 package.json（装的时候被信号打断），npm ci 会装不出迁移工具——这个坑已经踩过一次。",
   "devDependencies": {
     "@eslint/js": "^9.34.0",
-    "@types/node": "^22.18.0",
+    "@types/node": "^26.6.5",
     "@vitest/coverage-v8": "^5.0.1",
     "eslint": "^9.34.0",
     "eslint-config-prettier": "^10.1.8",
