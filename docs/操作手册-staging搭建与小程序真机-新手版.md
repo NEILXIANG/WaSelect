@@ -583,13 +583,13 @@ unset DATABASE_URL
 
 | 承运商 | 重量上限（g） | 运费（日元） |
 |---|---|---|
-| EMS | 100 | 1400 |
-| EMS | 250 | 1650 |
-| EMS | 500 | 2150 |
-| EMS | 1000 | 3150 |
-| EMS | 1500 | 4050 |
-| EMS | 2000 | 4950 |
-| EMS | 3000 | 6600 |
+| Japan Post EMS | 100 | 1400 |
+| Japan Post EMS | 250 | 1650 |
+| Japan Post EMS | 500 | 2150 |
+| Japan Post EMS | 1000 | 3150 |
+| Japan Post EMS | 1500 | 4050 |
+| Japan Post EMS | 2000 | 4950 |
+| Japan Post EMS | 3000 | 6600 |
 
 「启用」都勾上，点「保存」。
 
@@ -624,7 +624,7 @@ unset DATABASE_URL
 
 红色提示的字段是必填的。图片 staging 没配图片存储，**先不传**（页面显示占位图）。保存后点「上架」。再录 1～2 件不同价格的（比如 `1200` 日元 / 30g，用来测小额）。
 
-**④ 看启动状态**：Render → `waselect-staging-api` → Logs，找 `launch_ready`。如果是 `launch_not_ready`，它会逐条列出还缺什么（运费表、哪种汇率…），补齐后在服务页点「Manual Deploy → Restart」。
+**④ 看启动状态**：这项检查只在服务**启动时**跑一次，刚部署时库是空的，那条一定是 `launch_not_ready`，不用管。录完上面几项后，先在服务页点「Manual Deploy → Restart」重启，等回到 Live，再到 Logs 里找 `launch_ready`。重启后仍是 `launch_not_ready` 的，它会逐条列出还缺什么（运费表、哪种汇率…），补齐后再重启一次。
 
 ### 8.6 跑一次冒烟检查【你 / 我】
 
