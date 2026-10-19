@@ -20,8 +20,8 @@
   "devDependencies": {
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^6.1.1",
-    "vite": "^8.3.0"
+    "@vitejs/plugin-react": "^6.1.2",
+    "vite": "^8.3.4"
   },
   "//deps": "@waselect/shared 走 default 条件 = src/index.ts（TS 源码），Vite/Vitest 直接编译，无需先 build:shared。react/react-dom 放 dependencies 而不是 devDependencies：它们是构建产物的**内容**（会被打进 bundle），放 dev 会让 audit:prod 看不见这条供应链。"
 }
