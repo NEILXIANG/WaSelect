@@ -8,15 +8,15 @@
     "@waselect/shared": "*",
     "bcryptjs": "^3.0.3",
     "busboy": "^1.6.0",
-    "express": "^5.2.1",
-    "jose": "^6.2.12",
-    "pino": "^10.3.1",
+    "express": "^5.3.0",
+    "jose": "^6.2.13",
+    "pino": "^10.4.0",
     "postgres": "^3.4.9",
     "sharp": "^0.35.5",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/busboy": "^1.5.4",
+    "@types/busboy": "^1.5.5",
     "@types/express": "^5.0.6"
   },
   "//": "依赖以**本包实际 import** 为准：pino 之前只在根 package.json 里声明（靠 workspaces 提升才可用），npm ci 在只装本包时会缺。node-pg-migrate 是迁移 CLI，属于工具链，声明在根 devDependencies。 @types/express 也放在本包（三审 P3）：它是 express 的类型伴生包，根上只放工具链。",
